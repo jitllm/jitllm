@@ -12,8 +12,8 @@ import (
 // and mapped once whatever instance asks, and the registry they are asked
 // of.
 type Forms struct {
-	// Host is the CPU the forms are mapped onto.
-	Host *cpu.Host
+	// Target is the CPU the forms are mapped onto.
+	Target *cpu.Target
 	mu   sync.Mutex
 	reg  *composer.Registry
 	// reg32 is reg with histories kept at f32 (composer.Registry.WithoutHalves).
@@ -52,7 +52,7 @@ func (c *Forms) Of(req composer.Request, gr *graph.Graph, rows int, apart, whole
 	if err, ok := c.err[key]; ok {
 		return nil, err
 	}
-	f, err := BuildForm(c.Host, gr, codes, rows, apart, whole)
+	f, err := BuildForm(c.Target, gr, codes, rows, apart, whole)
 	if err != nil {
 		c.err[key] = err
 		return nil, err

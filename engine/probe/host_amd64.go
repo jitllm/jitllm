@@ -21,7 +21,7 @@ func (e emitter) hostLanes() int {
 }
 
 // hostCheck refuses an x86 host below the SSE tier.
-func hostCheck(h *cpu.Host) error {
+func hostCheck(h *cpu.Target) error {
 	if t := h.Tier(); t != cpu.TierAVX2 && t != cpu.TierSSE {
 		return fmt.Errorf("probe: the host's measuring kernels need SSE4.1 and SSSE3 at least; this host is %v", t)
 	}

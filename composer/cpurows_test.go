@@ -7,7 +7,6 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
@@ -16,8 +15,8 @@ import (
 )
 
 // cpuDevice is the CPU as the composer forms for it at the shipping width.
-func cpuDevice() Device {
-	return Device{Kind: DeviceCPU, Slots: 6, Lanes: 8, ISA: uint64(cpu.CPU().ISA()), ExactDiv: true}
+func cpuDevice(cpuOn cpuArm) Device {
+	return Device{Kind: DeviceCPU, Slots: 6, Lanes: 8, ISA: uint64(cpuOn.tg.Features().ISA()), ExactDiv: true}
 }
 
 func wordsF32(w []uint32) []float32 { return unsafe.Slice((*float32)(unsafe.Pointer(&w[0])), len(w)) }
@@ -26,7 +25,8 @@ func wordsF32(w []uint32) []float32 { return unsafe.Slice((*float32)(unsafe.Poin
 // over two index rows (their integers) and over two float rows (-0 equal to
 // +0, a NaN equal to nothing), with guard words past the output; with the
 // reference's equality one id off, it must part.
-func TestComposedCPUEqual(t *testing.T) {
+func TestComposedCPUEqual(t *testing.T) { gateComposedCPUEqual(t, hostArm()) }
+func gateComposedCPUEqual(t *testing.T, cpuOn cpuArm) {
 	rng := rand.New(rand.NewSource(3))
 	ran, parted := 0, 0
 	for _, ints := range []bool{true, false} {
@@ -39,7 +39,7 @@ func TestComposedCPUEqual(t *testing.T) {
 			x, y := b.In("x", n), b.In("y", n)
 			b.G.Values[x].Elem, b.G.Values[y].Elem = elem, elem
 			b.Out(b.Emit(graph.OpMap, []graph.ValueID{x, y}, []graph.Result{{Name: "eq", Width: n}}, nil, graph.Attrs{Fn: graph.MapEqual}, nil, nil)[0])
-			_, codes, err := Default().Form(Request{Graph: b.G, Formats: map[jlm.Role]jlm.Type{}, Step: Step{Rows: 1, Page: 64, Keys: 1}, Device: cpuDevice()})
+			_, codes, err := Default().Form(Request{Graph: b.G, Formats: map[jlm.Role]jlm.Type{}, Step: Step{Rows: 1, Page: 64, Keys: 1}, Device: cpuDevice(cpuOn)})
 			if err != nil {
 				t.Fatalf("ints %v width %d: %v", ints, n, err)
 			}
@@ -57,7 +57,7 @@ func TestComposedCPUEqual(t *testing.T) {
 				xs[i], ys[i] = math.Float32bits(fx[xs[i]]), math.Float32bits(fx[ys[i]])
 			}
 			vals := map[graph.ValueID][]uint32{x: xs, y: ys}
-			if err := runCPUValues(codes, b.G, vals, [3][]uint32{}); err != nil {
+			if err := runCPUValues(cpuOn, codes, b.G, vals, [3][]uint32{}); err != nil {
 				t.Fatalf("ints %v width %d: %v", ints, n, err)
 			}
 			got := wordsF32(vals[b.G.Out[0]])
@@ -88,7 +88,8 @@ func TestComposedCPUEqual(t *testing.T) {
 // the oracle's matvec at the selected rows, guard words past the output.
 // With the weight's words moved by one, and with the selection one row off,
 // it must part.
-func TestComposedCPURowsMatVec(t *testing.T) {
+func TestComposedCPURowsMatVec(t *testing.T) { gateComposedCPURowsMatVec(t, hostArm()) }
+func gateComposedCPURowsMatVec(t *testing.T, cpuOn cpuArm) {
 	const k, rows = 256, 300
 	rng := rand.New(rand.NewSource(9))
 	right := 0
@@ -112,7 +113,7 @@ func TestComposedCPURowsMatVec(t *testing.T) {
 			r     *Registry
 			exact bool
 		}{{"float", Default().WithoutInt8(DeviceCPU), true}, {"int8", withCPUInt8(), true}, {"int8 inexact division", withCPUInt8(), false}} {
-			dev := cpuDevice()
+			dev := cpuDevice(cpuOn)
 			dev.ExactDiv = arm.exact
 			for _, p := range []int{1, 3, 8, 17, 64} {
 				name := fmt.Sprintf("%v/%s/%d ids", typ, arm.name, p)
@@ -146,7 +147,7 @@ func TestComposedCPURowsMatVec(t *testing.T) {
 				sel[p-1] = rows + 5
 				run := func(pl [3][]uint32, s []uint32) []float32 {
 					vals := map[graph.ValueID][]uint32{x: f32Words(xs), ids: s}
-					if err := runCPUValues(codes, b.G, vals, pl); err != nil {
+					if err := runCPUValues(cpuOn, codes, b.G, vals, pl); err != nil {
 						t.Fatalf("%s: %v", name, err)
 					}
 					return wordsF32(vals[b.G.Out[0]])

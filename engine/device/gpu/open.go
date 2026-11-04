@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/engine/sched"
 
@@ -172,7 +173,7 @@ func OpenWith(options ...Option) (*GPU, error) {
 // cpu lists the CPU as a device: alone it offers the model to no card, and
 // beside cards it is one more device a block may be placed on. A list without
 // it (and without auto) keeps every block on the cards it names, paging where
-// they do not hold the model (model.WithCPU, AdmitsHost).
+// they do not hold the model (model.WithDevices, ListsCPU).
 func ParseDevices(spec string) ([]Entry, error) {
 	spec = strings.TrimSpace(spec)
 	if spec == "" {
@@ -217,10 +218,14 @@ func ParseDevices(spec string) ([]Entry, error) {
 				spec, text, grammar)
 		}
 		switch e.API {
-		case "cpu", "auto", "all":
+		case "auto", "all":
 			if e.HasSel {
 				return nil, fmt.Errorf("tier: -devices %q: %q takes no device selector, got %q; want %s",
 					spec, body, e.Sel, grammar)
+			}
+		case "cpu":
+			if _, err := cpu.SpecOptions(e.Sel); err != nil {
+				return nil, fmt.Errorf("tier: -devices %q: %w", spec, err)
 			}
 		case "msl":
 			if e.HasSel {
@@ -262,7 +267,7 @@ func ParseDevices(spec string) ([]Entry, error) {
 	return out, nil
 }
 
-const grammar = "auto | all | cpu | gpu[:N] | (cuda|hip|vulkan|metal)[:DEVICE][=BYTES], comma-separated"
+const grammar = "auto | all | cpu[:sse|novnni|nodotprod|perfmap[+...]] | gpu[:N] | (cuda|hip|vulkan|metal)[:DEVICE][=BYTES], comma-separated"
 
 // Entry is one parsed device spec.
 type Entry struct {
@@ -319,12 +324,12 @@ func DeviceName(s string) string { return nn.DeviceName(s) }
 // Device reports whether this entry asks for a device at all: "cpu" does not.
 func (e Entry) Device() bool { return e.API != "cpu" }
 
-// AdmitsHost reports whether a device spec lists the CPU among its devices:
+// ListsCPU reports whether a device spec lists the CPU among its devices:
 // "auto", or a list that names cpu. The engine chooses the CPU for a block --
 // one no card holds, one a relocation or a fault moves -- exactly when this is
-// true (model.WithCPU); a spec of cards alone is a caller keeping the model
-// off the CPU.
-func AdmitsHost(spec string) (bool, error) {
+// true (model.WithDevices); a spec of cards alone is a caller keeping the
+// model off the CPU.
+func ListsCPU(spec string) (bool, error) {
 	es, err := ParseDevices(spec)
 	if err != nil {
 		return false, err

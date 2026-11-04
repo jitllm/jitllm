@@ -31,7 +31,8 @@ import (
 // its weight's words moved by one it must not be. The int8 arm is held to
 // the oracle over the row as the int8 form quantizes it, the float arm to
 // the oracle over the row.
-func TestComposedCPUMatVec(t *testing.T) {
+func TestComposedCPUMatVec(t *testing.T) { gateComposedCPUMatVec(t, hostArm()) }
+func gateComposedCPUMatVec(t *testing.T, cpuOn cpuArm) {
 	const k = 256
 	rng := rand.New(rand.NewSource(5))
 	right, wrong, apart, shared, sized, unformed := 0, 0, 0, 0, 0, map[string]string{}
@@ -58,7 +59,7 @@ func TestComposedCPUMatVec(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%v: %v", typ, err)
 			}
-			host := uint64(cpu.CPU().ISA())
+			host := uint64(cpuOn.tg.Features().ISA())
 			type cpuArm struct {
 				name      string
 				r         *Registry
@@ -131,7 +132,7 @@ func TestComposedCPUMatVec(t *testing.T) {
 					}
 					planes := [3][]uint32{qs, d, sc}
 
-					got, err := runCPU(codes, x, tokens*rows, planes)
+					got, err := runCPU(cpuOn, codes, x, tokens*rows, planes)
 					if err != nil {
 						unformed[name] = err.Error()
 						continue
@@ -150,7 +151,7 @@ func TestComposedCPUMatVec(t *testing.T) {
 							if sp := spaceOf(&c, wk); sp.n > wk {
 								t.Errorf("%s: %s runs %d calls on %d workers: in waves", name, c.Name, sp.n, wk)
 							}
-							got, err := runCPUWorkers(codes, x, tokens*rows, planes, nil, nil, wk)
+							got, err := runCPUWorkers(cpuOn, codes, x, tokens*rows, planes, nil, nil, wk)
 							if err != nil {
 								t.Errorf("%s at %d workers: %v", name, wk, err)
 							} else if e := cpuNMSE(got, want); math.IsNaN(e) || !(e < 1e-9) {
@@ -160,7 +161,7 @@ func TestComposedCPUMatVec(t *testing.T) {
 						}
 					}
 					moved := [3][]uint32{append(qs[1:len(qs):len(qs)], qs[0]), d, sc}
-					bad, err := runCPU(codes, x, tokens*rows, moved)
+					bad, err := runCPU(cpuOn, codes, x, tokens*rows, moved)
 					if err != nil {
 						t.Errorf("%s: the violation did not run: %v", name, err)
 					} else if e := cpuNMSE(bad, want); !(e > 1e-6) {
@@ -233,44 +234,50 @@ func dealtOverWorkers(codes []Code) bool {
 	return false
 }
 
-// sseKernelDir names the directory mapComposed writes each SSE-declared
-// kernel into, for the VEX-leak gate to read back.
-const sseKernelDir = "JITLLM_TEST_SSE_KERNELS"
+// cpuArm is the CPU a composer gate forms and runs its kernels on: the Target
+// whose ISA it lowers for and maps through, and the directory each
+// SSE-declared kernel it maps is kept in for the VEX-leak gate ("" keeps
+// none).
+type cpuArm struct {
+	tg   *cpu.Target
+	kept string
+}
 
-// mapComposed is cpu.Map, keeping each SSE-declared kernel for the VEX-leak
-// gate where it asks for them.
-func mapComposed(code []byte) (*cpu.Code, error) {
-	if need, ok := x86.KernelISA(code); ok && need&x86.ISAAVX2 == 0 {
-		if dir := os.Getenv(sseKernelDir); dir != "" {
-			sum := sha256.Sum256(code)
-			if err := os.WriteFile(filepath.Join(dir, hex.EncodeToString(sum[:])), code, 0o600); err != nil {
-				return nil, err
-			}
+// hostArm is the CPU as it is.
+func hostArm() cpuArm { return cpuArm{tg: cpu.New()} }
+
+// mapComposed is the arm's Target's Map, keeping each SSE-declared kernel
+// where the arm asks for them.
+func (cpuOn cpuArm) mapComposed(code []byte) (*cpu.Code, error) {
+	if need, ok := x86.KernelISA(code); ok && need&x86.ISAAVX2 == 0 && cpuOn.kept != "" {
+		sum := sha256.Sum256(code)
+		if err := os.WriteFile(filepath.Join(cpuOn.kept, hex.EncodeToString(sum[:])), code, 0o600); err != nil {
+			return nil, err
 		}
 	}
-	return cpu.NewHost().Map(code)
+	return cpuOn.tg.Map(code)
 }
 
 // runCPU runs codes in order on the CPU: the row x, an output of n floats,
 // a weight's planes, the composer's scratch and constant blocks, each where
 // its call words say.
-func runCPU(codes []Code, x []float32, n int, planes [3][]uint32) ([]float32, error) {
-	return runCPUVectors(codes, x, n, planes, nil)
+func runCPU(cpuOn cpuArm, codes []Code, x []float32, n int, planes [3][]uint32) ([]float32, error) {
+	return runCPUVectors(cpuOn, codes, x, n, planes, nil)
 }
 
 // runCPUVectors is runCPU with the vector weights vecs binds, by role.
-func runCPUVectors(codes []Code, x []float32, n int, planes [3][]uint32, vecs map[jlm.Role][]float32) ([]float32, error) {
-	return runCPUBound(codes, x, n, planes, vecs, nil)
+func runCPUVectors(cpuOn cpuArm, codes []Code, x []float32, n int, planes [3][]uint32, vecs map[jlm.Role][]float32) ([]float32, error) {
+	return runCPUBound(cpuOn, codes, x, n, planes, vecs, nil)
 }
 
 // runCPUBound is runCPUVectors with bind asked first for each operand: the
 // words it returns, or nil for runCPUVectors' own.
-func runCPUBound(codes []Code, x []float32, n int, planes [3][]uint32, vecs map[jlm.Role][]float32, bind func(Operand) []uint32) ([]float32, error) {
-	return runCPUWorkers(codes, x, n, planes, vecs, bind, harnessWorkers)
+func runCPUBound(cpuOn cpuArm, codes []Code, x []float32, n int, planes [3][]uint32, vecs map[jlm.Role][]float32, bind func(Operand) []uint32) ([]float32, error) {
+	return runCPUWorkers(cpuOn, codes, x, n, planes, vecs, bind, harnessWorkers)
 }
 
 // runCPUWorkers is runCPUBound with a Share code's calls sized for workers.
-func runCPUWorkers(codes []Code, x []float32, n int, planes [3][]uint32, vecs map[jlm.Role][]float32, bind func(Operand) []uint32, workers int) ([]float32, error) {
+func runCPUWorkers(cpuOn cpuArm, codes []Code, x []float32, n int, planes [3][]uint32, vecs map[jlm.Role][]float32, bind func(Operand) []uint32, workers int) ([]float32, error) {
 	const guard = 16
 	out := make([]float32, n+guard)
 	for i := range out {
@@ -282,7 +289,7 @@ func runCPUWorkers(codes []Code, x []float32, n int, planes [3][]uint32, vecs ma
 		if c.CPU == nil {
 			return nil, fmt.Errorf("%s has no CPU code", c.Name)
 		}
-		code, err := mapComposed(c.CPU)
+		code, err := cpuOn.mapComposed(c.CPU)
 		if err != nil {
 			return nil, fmt.Errorf("mapping %s: %w", c.Name, err)
 		}
@@ -506,9 +513,12 @@ func cpuTestWeights(t quant.Type, q layout.Quant, rows, k int, rng *rand.Rand) [
 // and each is right. Its kernels are mapped with the ISA declared, so an
 // instruction past it fails at assembly.
 func TestComposedCPUHonoursTheDevicesISA(t *testing.T) {
+	gateComposedCPUHonoursTheDevicesISA(t, hostArm())
+}
+func gateComposedCPUHonoursTheDevicesISA(t *testing.T, cpuOn cpuArm) {
 	const rows, k = 64, 256
 	rng := rand.New(rand.NewSource(7))
-	isa := uint64(cpu.CPU().ISA()) &^ uint64(x86.ISABMI2)
+	isa := uint64(cpuOn.tg.Features().ISA()) &^ uint64(x86.ISABMI2)
 	r := Default().WithoutInt8(DeviceCPU)
 	right := 0
 	for _, typ := range append([]quant.Type{quant.F32}, quant.PackedTypes()...) {
@@ -543,7 +553,7 @@ func TestComposedCPUHonoursTheDevicesISA(t *testing.T) {
 			t.Errorf("%v without BMI2 does not form: %v", typ, err)
 			continue
 		}
-		got, err := runCPU(codes, x, rows, [3][]uint32{qs, d, sc})
+		got, err := runCPU(cpuOn, codes, x, rows, [3][]uint32{qs, d, sc})
 		if err != nil {
 			t.Errorf("%v: %v", typ, err)
 			continue

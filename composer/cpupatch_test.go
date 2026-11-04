@@ -18,7 +18,7 @@ import (
 func TestComposedCPUPatchify(t *testing.T) {
 	const P, lead = 3, 1
 	r := Default().WithoutInt8(DeviceCPU)
-	dev := Device{Kind: DeviceCPU, Slots: 1, Lanes: 8, ISA: uint64(cpu.CPU().ISA()), ExactDiv: true}
+	dev := Device{Kind: DeviceCPU, Slots: 1, Lanes: 8, ISA: uint64(cpu.Probe().ISA()), ExactDiv: true}
 	ran := 0
 	for _, grid := range [][2]int{{1, 1}, {2, 4}, {2, 3}, {3, 5}, {4, 7}, {5, 6}, {7, 7}, {24, 24}} {
 		gh, gw := grid[0], grid[1]
@@ -57,7 +57,7 @@ func TestComposedCPUPatchify(t *testing.T) {
 		run := func(width int) []float32 {
 			req := make([]uint32, RequestRows+rows)
 			req[RequestGrid] = uint32(width)
-			got, err := runCPUBound(codes, pix, rows*k, [3][]uint32{}, nil, func(o Operand) []uint32 {
+			got, err := runCPUBound(hostArm(), codes, pix, rows*k, [3][]uint32{}, nil, func(o Operand) []uint32 {
 				switch o.Name {
 				case "request":
 					return req
@@ -98,7 +98,7 @@ func TestComposedCPUPatchify(t *testing.T) {
 // row 1 too is the violation it must see.
 func TestComposedCPULeadRow(t *testing.T) {
 	r := Default().WithoutInt8(DeviceCPU)
-	dev := Device{Kind: DeviceCPU, Slots: 1, Lanes: 8, ISA: uint64(cpu.CPU().ISA()), ExactDiv: true}
+	dev := Device{Kind: DeviceCPU, Slots: 1, Lanes: 8, ISA: uint64(cpu.Probe().ISA()), ExactDiv: true}
 	for _, shape := range [][2]int{{2, 8}, {5, 13}, {577, 64}} {
 		rows, e := shape[0], shape[1]
 		b := graph.NewBlock(-1)
@@ -117,7 +117,7 @@ func TestComposedCPULeadRow(t *testing.T) {
 		for i := range cls {
 			cls[i] = -float32(i) - 0.5
 		}
-		got, err := runCPUVectors(codes, in, rows*e, [3][]uint32{}, map[jlm.Role][]float32{jlm.RoleVClassEmbd: cls})
+		got, err := runCPUVectors(hostArm(), codes, in, rows*e, [3][]uint32{}, map[jlm.Role][]float32{jlm.RoleVClassEmbd: cls})
 		if err != nil {
 			t.Fatalf("%dx%d: %v", rows, e, err)
 		}
@@ -140,7 +140,7 @@ func TestComposedCPULeadRow(t *testing.T) {
 // is the violation it must see.
 func TestComposedCPUTailRow(t *testing.T) {
 	r := Default().WithoutInt8(DeviceCPU)
-	dev := Device{Kind: DeviceCPU, Slots: 1, Lanes: 8, ISA: uint64(cpu.CPU().ISA()), ExactDiv: true}
+	dev := Device{Kind: DeviceCPU, Slots: 1, Lanes: 8, ISA: uint64(cpu.Probe().ISA()), ExactDiv: true}
 	for _, shape := range [][2]int{{2, 8}, {5, 13}, {577, 64}} {
 		rows, e := shape[0], shape[1]
 		b := graph.NewBlock(-1)
@@ -162,7 +162,7 @@ func TestComposedCPUTailRow(t *testing.T) {
 		run := func(live int) []float32 {
 			pos := make([]uint32, rows+1)
 			pos[0] = uint32(live)
-			got, err := runCPUBound(codes, in, rows*e, [3][]uint32{}, map[jlm.Role][]float32{jlm.RoleVClassEmbd: cls}, func(o Operand) []uint32 {
+			got, err := runCPUBound(hostArm(), codes, in, rows*e, [3][]uint32{}, map[jlm.Role][]float32{jlm.RoleVClassEmbd: cls}, func(o Operand) []uint32 {
 				if o.Name == "rope.pos" {
 					return pos
 				}
@@ -199,7 +199,7 @@ func TestComposedCPUTailRow(t *testing.T) {
 func TestComposedCPUPosAxes(t *testing.T) {
 	const S, e, lead = 6, 12, 1
 	r := Default().WithoutInt8(DeviceCPU)
-	dev := Device{Kind: DeviceCPU, Slots: 1, Lanes: 8, ISA: uint64(cpu.CPU().ISA()), ExactDiv: true}
+	dev := Device{Kind: DeviceCPU, Slots: 1, Lanes: 8, ISA: uint64(cpu.Probe().ISA()), ExactDiv: true}
 	tab := make([]float32, 2*S*e)
 	for i := range tab {
 		tab[i] = float32(i%97)*0.5 - 7
@@ -228,7 +228,7 @@ func TestComposedCPUPosAxes(t *testing.T) {
 			req := make([]uint32, RequestRows+rows)
 			req[RequestGrid] = uint32(width)
 			words := unsafe.Slice((*uint32)(unsafe.Pointer(&tab[0])), len(tab))
-			got, err := runCPUBound(codes, make([]float32, rows*e), rows*e, [3][]uint32{words}, nil, func(o Operand) []uint32 {
+			got, err := runCPUBound(hostArm(), codes, make([]float32, rows*e), rows*e, [3][]uint32{words}, nil, func(o Operand) []uint32 {
 				switch o.Name {
 				case "request":
 					return req
@@ -273,7 +273,7 @@ func TestComposedCPUPosAxes(t *testing.T) {
 func TestComposedCPUPosResample(t *testing.T) {
 	const S, e = 8, 64
 	r := Default().WithoutInt8(DeviceCPU)
-	dev := Device{Kind: DeviceCPU, Slots: 1, Lanes: 8, ISA: uint64(cpu.CPU().ISA()), ExactDiv: true}
+	dev := Device{Kind: DeviceCPU, Slots: 1, Lanes: 8, ISA: uint64(cpu.Probe().ISA()), ExactDiv: true}
 	for _, c := range []struct {
 		name          string
 		chain, filter uint8

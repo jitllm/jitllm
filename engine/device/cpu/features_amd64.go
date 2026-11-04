@@ -73,24 +73,17 @@ func (f Features) UsableAVX512() bool {
 // UsableAVX2 is AVX2 plus the OS saving YMM state.
 func (f Features) UsableAVX2() bool { return f.OSAVX && f.AVX2 }
 
-// CPU is this CPU's capability set, probed when asked: a caller that asks
-// often holds its Host's (Host.Features). The test instruments take away what
-// they force (feature_force.go).
-func CPU() Features {
-	f := probeFeatures()
-	if forceNoVNNI {
-		f.AVXVNNI, f.AVX512VNNI = false, false
-	}
-	if tierForced {
-		lowerTo(&f, forceTier)
-	}
-	return f
-}
+// Probe is this CPU's capability set, probed when asked: a CPU device states
+// its own through its Target (Target.Features).
+func Probe() Features { return probeFeatures() }
 
-// tierOfHost is the instruction-set tier f runs: TierAVX2 when AVX2, FMA and
+// withoutDotProd has nothing to take away on amd64, which runs no A64 code.
+func withoutDotProd(*Features) {}
+
+// tierOfCPU is the instruction-set tier f runs: TierAVX2 when AVX2, FMA and
 // F16C are usable, TierSSE when the SSE floor holds instead, and TierNone
 // below that. See tier.go.
-func tierOfHost(f Features) Tier { return tierOf(f) }
+func tierOfCPU(f Features) Tier { return tierOf(f) }
 
 // cpuid runs the JIT-compiled CPUID probe and returns EAX, EBX, ECX, EDX
 // (see feature_amd64.go).

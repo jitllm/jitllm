@@ -15,7 +15,7 @@ import (
 // gives that iteration a register; without one the x86 lowering has no
 // address to store at.
 func TestCPUStoreReadsItsIteration(t *testing.T) {
-	if !LowersCPU(uint64(cpu.CPU().ISA())) {
+	if !LowersCPU(uint64(cpu.Probe().ISA())) {
 		t.Skip("no CPU lowering on this host")
 	}
 	for _, c := range []struct{ e, g int }{{8, 2}, {16, 4}, {64, 8}} {
@@ -36,7 +36,7 @@ func TestCPUStoreReadsItsIteration(t *testing.T) {
 			{Name: "best", Width: 2}}, nil, graph.Attrs{TopK: 2}, nil, nil)
 		b.Out(b.Emit(graph.OpTake, []graph.ValueID{x, sel[0]}, []graph.Result{{Name: "w", Width: 2}}, nil, graph.Attrs{}, nil, nil)[0])
 		req := Request{Graph: b.G, Step: Step{Rows: 1, Page: 32, Keys: 128, ActWindow: 32},
-			Device: Device{Kind: DeviceCPU, Slots: 6, Lanes: 8, ISA: uint64(cpu.CPU().ISA()), ExactDiv: true}}
+			Device: Device{Kind: DeviceCPU, Slots: 6, Lanes: 8, ISA: uint64(cpu.Probe().ISA()), ExactDiv: true}}
 		if _, _, err := Default().Form(req); err != nil {
 			t.Errorf("%d experts in %d groups: %v", c.e, c.g, err)
 		}

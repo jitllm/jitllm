@@ -70,7 +70,7 @@ func TestFrontStatesTheModelAsOps(t *testing.T) {
 				t.Fatalf("%d rotary table part(s) of %d parts, where the model states %d rotar(ies)", got, len(parts), wantTables)
 			}
 			for _, d := range []composer.Device{{Kind: composer.DeviceGPU, Slots: 80 * 2048, Lanes: 32}, {Kind: composer.DeviceGPU, Slots: 80 * 2048, Lanes: 8},
-				{Kind: composer.DeviceGPU, Slots: 80 * 2048, Lanes: 1}, composedCPUDevice(cpu.CPU().ISA(), 6)} {
+				{Kind: composer.DeviceGPU, Slots: 80 * 2048, Lanes: 1}, composedCPUDevice(cpu.Probe().ISA(), 6)} {
 				var run []composer.PartPlan
 				for _, p := range parts {
 					run = append(run, composer.PartPlan{Part: p, Device: d})

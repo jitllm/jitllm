@@ -41,7 +41,7 @@ func TestComposedCPUGroupedRouter(t *testing.T) {
 				sel := b.Emit(graph.OpTopK, []graph.ValueID{masked}, []graph.Result{{Name: "sel", Width: K, Elem: graph.ElemU32},
 					{Name: "best", Width: K}}, nil, graph.Attrs{TopK: K}, nil, nil)[0]
 				b.Out(sel)
-				dev := cpuDevice()
+				dev := cpuDevice(hostArm())
 				dev.Slots = slots
 				if !vnni {
 					dev.ISA &^= uint64(x86.ISAVNNI)
@@ -61,7 +61,7 @@ func TestComposedCPUGroupedRouter(t *testing.T) {
 					want = append(want, groupedChoice(row, G, kept, K)...)
 				}
 				vals := map[graph.ValueID][]uint32{score: sw}
-				if err := runCPUGridValues(codes, b.G, vals, [3][]uint32{{0}, {0}, {0}}, nil, func(graph.ValueID) int { return R }, nil); err != nil {
+				if err := runCPUGridValues(hostArm(), codes, b.G, vals, [3][]uint32{{0}, {0}, {0}}, nil, func(graph.ValueID) int { return R }, nil); err != nil {
 					t.Fatalf("%s: %v", name, err)
 				}
 				if got := vals[sel][:R*K]; !slices.Equal(got, want) {

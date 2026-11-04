@@ -105,29 +105,32 @@ func TestOpenHonoursAPageBudget(t *testing.T) {
 // budget, its forms and their folding order the batched path's, so paging is
 // the only variable. A step's rows and a row alone are apart by their forms'
 // order (TestBatchMatchesForward judges that), so decode is not the reference.
-func TestForwardBatchFaultsItsBlocksIn(t *testing.T) {
+func TestForwardBatchFaultsItsBlocksIn(t *testing.T) { forwardBatchFaultsGate(t) }
+
+// forwardBatchFaultsGate is TestForwardBatchFaultsItsBlocksIn with opts on every model it opens.
+func forwardBatchFaultsGate(t *testing.T, opts ...Option) {
 	for name, path := range models() {
 		if name == "stories260K" {
 			continue // its blocks are smaller than a frame; nothing evicts
 		}
-		t.Run(name, func(t *testing.T) { forwardBatchFaultsItsBlocksIn(t, path) })
+		t.Run(name, func(t *testing.T) { forwardBatchFaultsItsBlocksIn(t, path, opts...) })
 	}
 	// The principle fixtures (paging_test.go), one per architecture beyond
 	// the map's.
 	for _, name := range append(principleFixtures(), principleMixtures()...) {
-		t.Run(name, func(t *testing.T) { forwardBatchFaultsItsBlocksIn(t, testmodels.Path(name)) })
+		t.Run(name, func(t *testing.T) { forwardBatchFaultsItsBlocksIn(t, testmodels.Path(name), opts...) })
 	}
 }
 
 // forwardBatchFaultsItsBlocksIn is TestForwardBatchFaultsItsBlocksIn on one
 // model.
-func forwardBatchFaultsItsBlocksIn(t *testing.T, path string) {
+func forwardBatchFaultsItsBlocksIn(t *testing.T, path string, opts ...Option) {
 	p, ok := existingModel(path)
 	if !ok {
 		t.Skipf("model not present: %s", path)
 	}
 	src := jlmOf(t, p)
-	tight, err := Open(src, WithKVF16(false), WithPageBudget(1))
+	tight, err := Open(src, append([]Option{WithKVF16(false), WithPageBudget(1)}, opts...)...)
 	if err != nil {
 		t.Fatalf("Open under a one-page budget: %v", err)
 	}
@@ -166,7 +169,7 @@ func forwardBatchFaultsItsBlocksIn(t *testing.T, path string) {
 		}
 		return b
 	}
-	full, err := Open(src, WithKVF16(false))
+	full, err := Open(src, append([]Option{WithKVF16(false)}, opts...)...)
 	if err != nil {
 		t.Fatalf("Open with no budget: %v", err)
 	}

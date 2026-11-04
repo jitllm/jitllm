@@ -32,7 +32,8 @@ func halvesCase(n int) []float32 {
 // to nearest even, the lower element low, as quant.EncodeHalf rounds them,
 // and each half widened as quant.DecodeHalf reads it. The ties must part
 // from a rounding toward zero, so the gate sees the rounding.
-func TestComposedCPUHalves(t *testing.T) {
+func TestComposedCPUHalves(t *testing.T) { gateComposedCPUHalves(t, hostArm()) }
+func gateComposedCPUHalves(t *testing.T, cpuOn cpuArm) {
 	const R = 5
 	ties := 0
 	for _, W := range []int{2, 6, 18, 40} {
@@ -53,7 +54,7 @@ func TestComposedCPUHalves(t *testing.T) {
 				t.Fatal(err)
 			}
 			_, codes, err := Default().Form(Request{Graph: b.G, Formats: map[jlm.Role]jlm.Type{}, Step: Step{Rows: R, Page: 1, Keys: 1},
-				Device: cpuDevice(), Apart: true})
+				Device: cpuDevice(cpuOn), Apart: true})
 			if err != nil {
 				t.Fatalf("%v at width %d: %v", kind, W, err)
 			}
@@ -62,7 +63,7 @@ func TestComposedCPUHalves(t *testing.T) {
 		run := func(kind graph.OpKind, in []uint32, n int) []uint32 {
 			codes, g, iv, ov := form(kind)
 			vals := map[graph.ValueID][]uint32{iv: in, ov: make([]uint32, n)}
-			if err := runCPUGridValues(codes, g, vals, [3][]uint32{}, nil, func(graph.ValueID) int { return R }, nil); err != nil {
+			if err := runCPUGridValues(cpuOn, codes, g, vals, [3][]uint32{}, nil, func(graph.ValueID) int { return R }, nil); err != nil {
 				t.Fatalf("%v at width %d: %v", kind, W, err)
 			}
 			return vals[ov]

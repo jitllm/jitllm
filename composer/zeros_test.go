@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/composer/ir"
-	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/graph"
 )
 
@@ -90,7 +89,10 @@ func withOneZero(k *Kernel) (m *Kernel, ok bool) {
 // each loop that reads it. The same kernels with their zeros merged into the
 // first are the violation, and must be seen.
 func TestAZeroIsMadeInEveryLoopThatReadsIt(t *testing.T) {
-	dev := Device{Kind: DeviceCPU, Slots: 1, Lanes: 8, ISA: uint64(cpu.CPU().ISA()), ExactDiv: true}
+	gateAZeroIsMadeInEveryLoopThatReadsIt(t, hostArm())
+}
+func gateAZeroIsMadeInEveryLoopThatReadsIt(t *testing.T, cpuOn cpuArm) {
+	dev := Device{Kind: DeviceCPU, Slots: 1, Lanes: 8, ISA: uint64(cpuOn.tg.Features().ISA()), ExactDiv: true}
 	r := Default().WithoutInt8(DeviceCPU)
 	prof := r.Profiles[DeviceCPU]
 	prof.Off = map[string]bool{"inplace": true}

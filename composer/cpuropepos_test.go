@@ -52,7 +52,7 @@ func ropePosOracle(p uint32, marks []ropeMark) [4]uint32 {
 // of no marks, and rows past the live ones untouched by the oracle. A table
 // whose marks are read one too few, or the grid's axes swapped, must part.
 func TestComposedCPURopePos(t *testing.T) {
-	if !LowersCPU(uint64(cpu.CPU().ISA())) {
+	if !LowersCPU(uint64(cpu.Probe().ISA())) {
 		t.Skip("no CPU lowering on this host")
 	}
 	const M = 4
@@ -74,10 +74,10 @@ func TestComposedCPURopePos(t *testing.T) {
 	}
 	// Every row at once, then each alone in a step of one row, the step a
 	// decode's table runs.
-	cpuRopePosAt(t, seqs, rows, marks, off, M, true)
+	cpuRopePosAt(t, hostArm(), seqs, rows, marks, off, M, true)
 	for i := range rows {
 		t.Run(fmt.Sprintf("row %d alone", i), func(t *testing.T) {
-			cpuRopePosAt(t, seqs, rows[i:i+1], marks, off, M, false)
+			cpuRopePosAt(t, hostArm(), seqs, rows[i:i+1], marks, off, M, false)
 		})
 	}
 	// A row far into its sequence under one XD-RoPE picture's mark of a
@@ -88,28 +88,28 @@ func TestComposedCPURopePos(t *testing.T) {
 		jj := uint32(37*w + 1000)
 		one := [][]ropeMark{{{p - jj, 0, graph.MarkGridXD, 1, h, w, 0, 70003}}}
 		buf := append([]uint32{1}, one[0][0][:]...)
-		cpuRopePosAt(t, one, [][2]uint32{{p, 0}}, buf, []uint32{0}, 1, false)
+		cpuRopePosAt(t, hostArm(), one, [][2]uint32{{p, 0}}, buf, []uint32{0}, 1, false)
 		// And at a rotary table's step on one slot, as an instance asks.
-		cpuRopePosIn(t, one, [][2]uint32{{p, 0}}, buf, []uint32{0}, Step{Rows: 1, Page: 64, Keys: 1, Seqs: 1, Marks: 1}, 1, false)
+		cpuRopePosIn(t, hostArm(), one, [][2]uint32{{p, 0}}, buf, []uint32{0}, Step{Rows: 1, Page: 64, Keys: 1, Seqs: 1, Marks: 1}, 1, false)
 	})
 }
 
 // cpuRopePosAt forms OpRopePos on the CPU at a step of len(rows) rows and
 // holds each row's positions to the oracle; violations runs the marks read
 // short, which must part.
-func cpuRopePosAt(t *testing.T, seqs [][]ropeMark, rows [][2]uint32, marks, off []uint32, M int, violations bool) {
-	cpuRopePosIn(t, seqs, rows, marks, off, Step{Rows: len(rows), Page: 16, Keys: 64, Seqs: len(seqs), Marks: M}, 4, violations)
+func cpuRopePosAt(t *testing.T, cpuOn cpuArm, seqs [][]ropeMark, rows [][2]uint32, marks, off []uint32, M int, violations bool) {
+	cpuRopePosIn(t, cpuOn, seqs, rows, marks, off, Step{Rows: len(rows), Page: 16, Keys: 64, Seqs: len(seqs), Marks: M}, 4, violations)
 }
 
 // cpuRopePosIn is cpuRopePosAt at step st on a CPU of slots slots.
-func cpuRopePosIn(t *testing.T, seqs [][]ropeMark, rows [][2]uint32, marks, off []uint32, st Step, slots int, violations bool) {
+func cpuRopePosIn(t *testing.T, cpuOn cpuArm, seqs [][]ropeMark, rows [][2]uint32, marks, off []uint32, st Step, slots int, violations bool) {
 	t.Helper()
 	R := len(rows)
 	b := graph.New()
 	y := b.Emit(graph.OpRopePos, nil, []graph.Result{{Name: "rope.pos", Width: 4, Elem: graph.ElemU32}}, nil, graph.Attrs{}, nil, nil)[0]
 	b.Out(y)
 	_, codes, err := Default().Form(Request{Graph: b.G, Step: st,
-		Device: Device{Kind: DeviceCPU, Slots: slots, Lanes: 8, ISA: uint64(cpu.CPU().ISA()), ExactDiv: true}})
+		Device: Device{Kind: DeviceCPU, Slots: slots, Lanes: 8, ISA: uint64(cpuOn.tg.Features().ISA()), ExactDiv: true}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +138,7 @@ func cpuRopePosIn(t *testing.T, seqs [][]ropeMark, rows [][2]uint32, marks, off 
 			got[i] = 0xdeadbeef
 		}
 		bufs := map[string][]uint32{"rope.rows": desc, "rope.marks": c.marks(marks), b.G.Values[y].Name: got}
-		if err := runCPUCalls(codes, b.G, bufs); err != nil {
+		if err := runCPUCalls(cpuOn, codes, b.G, bufs); err != nil {
 			t.Fatal(err)
 		}
 		bad := 0

@@ -102,7 +102,7 @@ func headWant(t *testing.T, h *headWeights, s graph.Head, x []float32, rows int)
 // storage the last kernel writes, which the CPU's in-place pass makes the
 // input's or a scratch's where the output goes over a value nothing reads
 // after. The input is cloned, for a kernel may run over it.
-func runCPUGraph(codes []Code, g *graph.Graph, rows int, x []float32, h *headWeights) ([]float32, error) {
+func runCPUGraph(cpuOn cpuArm, codes []Code, g *graph.Graph, rows int, x []float32, h *headWeights) ([]float32, error) {
 	x = slices.Clone(x)
 	vals := map[graph.ValueID][]uint32{}
 	nan := math.Float32bits(float32(math.NaN()))
@@ -128,7 +128,7 @@ func runCPUGraph(codes []Code, g *graph.Graph, rows int, x []float32, h *headWei
 		if c.CPU == nil {
 			return nil, fmt.Errorf("%s has no CPU code", c.Name)
 		}
-		code, err := mapComposed(c.CPU)
+		code, err := cpuOn.mapComposed(c.CPU)
 		if err != nil {
 			return nil, fmt.Errorf("mapping %s: %w", c.Name, err)
 		}
@@ -210,7 +210,7 @@ func runCPUGraph(codes []Code, g *graph.Graph, rows int, x []float32, h *headWei
 }
 
 // formHeadOnCPU forms head graph g for the CPU over rows and runs it.
-func formHeadOnCPU(t *testing.T, g *graph.Graph, rows int, x []float32, h *headWeights) ([]float32, error) {
+func formHeadOnCPU(t *testing.T, cpuOn cpuArm, g *graph.Graph, rows int, x []float32, h *headWeights) ([]float32, error) {
 	t.Helper()
 	formats := map[jlm.Role]jlm.Type{jlm.RoleOutput: jlm.TypeF32}
 	for _, o := range g.Ops {
@@ -224,13 +224,13 @@ func formHeadOnCPU(t *testing.T, g *graph.Graph, rows int, x []float32, h *headW
 		Graph:   g,
 		Formats: formats,
 		Step:    Step{Rows: rows, Page: 64, Keys: 1, ActWindow: 32},
-		Device:  Device{Kind: DeviceCPU, Slots: 1, Lanes: 8, ISA: uint64(cpu.CPU().ISA()), ExactDiv: true},
+		Device:  Device{Kind: DeviceCPU, Slots: 1, Lanes: 8, ISA: uint64(cpuOn.tg.Features().ISA()), ExactDiv: true},
 		Apart:   true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("forming: %w", err)
 	}
-	got, err := runCPUGraph(codes, g, rows, x, h)
+	got, err := runCPUGraph(cpuOn, codes, g, rows, x, h)
 	if err != nil {
 		return nil, fmt.Errorf("%w; the head forms into:\n%s", err, describeCodes(codes))
 	}
@@ -264,7 +264,8 @@ func describeCodes(codes []Code) string {
 // graph and must part from the oracle by far more than any arm does: the
 // softcap dropped, the scale inverted, the projection's bias dropped, the
 // norm's bias dropped, and an RMSNorm for the LayerNorm.
-func TestComposedCPUHead(t *testing.T) {
+func TestComposedCPUHead(t *testing.T) { gateComposedCPUHead(t, hostArm()) }
+func gateComposedCPUHead(t *testing.T, cpuOn cpuArm) {
 	const bound, nrows = 1e-9, 4
 	rng := rand.New(rand.NewSource(11))
 	h := newHeadWeights(t, rng)
@@ -304,7 +305,7 @@ func TestComposedCPUHead(t *testing.T) {
 	for _, a := range arms {
 		worst := 0.0
 		for r := range nrows {
-			got, err := formHeadOnCPU(t, a.spec.Build(), 1, row(r), h)
+			got, err := formHeadOnCPU(t, cpuOn, a.spec.Build(), 1, row(r), h)
 			if err != nil {
 				t.Errorf("%s, row %d: %v", a.name, r, err)
 				continue
@@ -318,7 +319,7 @@ func TestComposedCPUHead(t *testing.T) {
 			formed++
 		}
 		t.Logf("%s: worst NMSE %.3e against the oracle over %d rows", a.name, worst, nrows)
-		got, err := formHeadOnCPU(t, a.spec.Build(), nrows, x, h)
+		got, err := formHeadOnCPU(t, cpuOn, a.spec.Build(), nrows, x, h)
 		if err != nil {
 			t.Errorf("%s, %d rows at once: %v", a.name, nrows, err)
 			continue
@@ -345,7 +346,7 @@ func TestComposedCPUHead(t *testing.T) {
 	for _, v := range violations {
 		least := math.Inf(1)
 		for r := range nrows {
-			got, err := formHeadOnCPU(t, v.spec.Build(), 1, row(r), h)
+			got, err := formHeadOnCPU(t, cpuOn, v.spec.Build(), 1, row(r), h)
 			if err != nil {
 				t.Errorf("%s, row %d: %v", v.name, r, err)
 				least = 0
@@ -374,8 +375,9 @@ func TestComposedCPUHead(t *testing.T) {
 // norm's rows a decision model's row taps read (Head.Hidden) are an output
 // of their own. Formed without Apart the norm's rows go over x, the graph's
 // input, and no kernel stores the hidden output where its caller binds it.
-func TestCPUHeadStoresItsOutputs(t *testing.T) {
-	dev := Device{Kind: DeviceCPU, Slots: 6, Lanes: 8, ISA: uint64(cpu.CPU().ISA()), ExactDiv: true}
+func TestCPUHeadStoresItsOutputs(t *testing.T) { gateCPUHeadStoresItsOutputs(t, hostArm()) }
+func gateCPUHeadStoresItsOutputs(t *testing.T, cpuOn cpuArm) {
+	dev := Device{Kind: DeviceCPU, Slots: 6, Lanes: 8, ISA: uint64(cpuOn.tg.Features().ISA()), ExactDiv: true}
 	for _, shape := range [][2]int{{headEmbd, headVocab}, {1024, 4096}} {
 		for _, spec := range []graph.Head{
 			{NEmbd: shape[0], NVocab: shape[1], Eps: headEps, Output: jlm.RoleOutput, Scale: 8},

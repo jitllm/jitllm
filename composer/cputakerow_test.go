@@ -18,7 +18,7 @@ func TestComposedCPUTakeRow(t *testing.T) {
 	const w = 37
 	gr := (&graph.TakeRow{Width: w}).Build()
 	r := Default()
-	cpuDev := Device{Kind: DeviceCPU, Slots: 1, Lanes: 8, ISA: uint64(cpu.CPU().ISA()), ExactDiv: true}
+	cpuDev := Device{Kind: DeviceCPU, Slots: 1, Lanes: 8, ISA: uint64(cpu.Probe().ISA()), ExactDiv: true}
 	for _, rows := range []int{1, 2, 5, 64, 512} {
 		if _, _, err := r.Form(Request{Graph: gr, Step: Step{Rows: rows, Page: 64, Keys: 1, ActWindow: 32},
 			Device: Device{Kind: DeviceGPU, Slots: 80 * 2048, Lanes: 32}}); err != nil {
@@ -35,7 +35,7 @@ func TestComposedCPUTakeRow(t *testing.T) {
 		take := func(at int) []float32 {
 			req := make([]uint32, RequestRows+1)
 			req[RequestRows] = uint32(at)
-			got, err := runCPUBound(codes, x, w, [3][]uint32{}, nil, func(o Operand) []uint32 {
+			got, err := runCPUBound(hostArm(), codes, x, w, [3][]uint32{}, nil, func(o Operand) []uint32 {
 				if o.Name == "request" {
 					return req
 				}

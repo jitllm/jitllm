@@ -13,7 +13,10 @@ import (
 //
 // The first assertion is the one that matters: a cache that quietly stayed f32
 // would pass every numeric check. KVIsF16 reports what the state allocated.
-func TestKVF16IsSelectedAndRuns(t *testing.T) {
+func TestKVF16IsSelectedAndRuns(t *testing.T) { kvF16IsSelectedAndRuns(t) }
+
+// kvF16IsSelectedAndRuns is TestKVF16IsSelectedAndRuns with opts on every model it opens.
+func kvF16IsSelectedAndRuns(t *testing.T, opts ...Option) {
 	paths := modelFiles()
 	var ran int
 	for _, p := range paths {
@@ -25,7 +28,7 @@ func TestKVF16IsSelectedAndRuns(t *testing.T) {
 		if !ok {
 			continue
 		}
-		m, err := Open(dst)
+		m, err := Open(dst, opts...)
 		if err != nil {
 			continue
 		}

@@ -63,7 +63,7 @@ func TestComposedCPUStateConvRows(t *testing.T) {
 			[]graph.Binding{{Role: jlm.RoleSSMConv1d, K: T, Rows: C}}, graph.Attrs{Taps: T},
 			[]graph.StateRef{{State: graph.StateRecConv}}, []graph.StateRef{{State: graph.StateRecConv, Version: 1}})[0])
 		_, codes, err := Default().Form(Request{Graph: b.G, Formats: map[jlm.Role]jlm.Type{jlm.RoleSSMConv1d: jlm.TypeF32},
-			Step: Step{Rows: R, Page: 64, Keys: 1}, Device: cpuDevice()})
+			Step: Step{Rows: R, Page: 64, Keys: 1}, Device: cpuDevice(hostArm())})
 		if err != nil {
 			t.Fatalf("%d taps over %d: %v", T, C, err)
 		}
@@ -116,7 +116,7 @@ func TestComposedCPUStateConvRows(t *testing.T) {
 				for i := range gr.Values {
 					gr.Values[i].Width *= R
 				}
-				if err := runCPUTables(codes, &gr, vals, [3][]uint32{wt}, tables); err != nil {
+				if err := runCPUTables(hostArm(), codes, &gr, vals, [3][]uint32{wt}, tables); err != nil {
 					t.Fatalf("%s: %v", name, err)
 				}
 				got := wordsF32(vals[b.G.Out[0]])
@@ -193,7 +193,7 @@ func TestComposedCPUDeltaRuleRows(t *testing.T) {
 	parted := 0
 	for _, s := range shapes {
 		g := deltaGraph(s)
-		_, codes, err := Default().Form(Request{Graph: g, Formats: map[jlm.Role]jlm.Type{}, Step: Step{Rows: R, Page: 64, Keys: 1}, Device: cpuDevice()})
+		_, codes, err := Default().Form(Request{Graph: g, Formats: map[jlm.Role]jlm.Type{}, Step: Step{Rows: R, Page: 64, Keys: 1}, Device: cpuDevice(hostArm())})
 		if err != nil {
 			t.Fatalf("%+v: %v", s, err)
 		}
@@ -255,7 +255,7 @@ func TestComposedCPUDeltaRuleRows(t *testing.T) {
 				for i := range gr.Values {
 					gr.Values[i].Width *= R
 				}
-				if err := runCPUTables(codes, &gr, vals, [3][]uint32{}, tables); err != nil {
+				if err := runCPUTables(hostArm(), codes, &gr, vals, [3][]uint32{}, tables); err != nil {
 					t.Fatalf("%s: %v", name, err)
 				}
 				got := wordsF32(vals[g.Out[0]])

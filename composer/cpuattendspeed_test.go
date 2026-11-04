@@ -35,7 +35,7 @@ func TestComposedCPUAttendSpeed(t *testing.T) {
 		}
 	}
 	const page = 64
-	isa := uint64(cpu.CPU().ISA())
+	isa := uint64(cpu.Probe().ISA())
 	if os.Getenv("JITLLM_CPU_NOVNNI") != "" {
 		isa &^= uint64(x86.ISAVNNI)
 	}
@@ -77,7 +77,7 @@ func TestComposedCPUAttendSpeed(t *testing.T) {
 	var keep [][]uint32
 	var total time.Duration
 	for _, c := range codes {
-		code, err := cpu.NewHost().Map(c.CPU)
+		code, err := cpu.New().Map(c.CPU)
 		if err != nil {
 			t.Fatal(err)
 		}

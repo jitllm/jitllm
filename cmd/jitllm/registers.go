@@ -40,9 +40,9 @@ func registerReport(w io.Writer, host []model.CPUKernel, devs []gpu.DeviceKernel
 			Tier    string              `json:"cpu_tier"`
 			Host    []model.CPUKernel   `json:"cpu"`
 			Devices []gpu.DeviceKernels `json:"devices"`
-		}{cpu.HostTier().String(), host, devs})
+		}{cpu.New().Tier().String(), host, devs})
 	}
-	fmt.Fprintf(w, "\ncpu (%s)\n  %-48s %8s %6s %7s %5s\n", cpu.HostTier(), "kernel", "vec/file", "stack", "bytes", "forms")
+	fmt.Fprintf(w, "\ncpu (%s)\n  %-48s %8s %6s %7s %5s\n", cpu.New().Tier(), "kernel", "vec/file", "stack", "bytes", "forms")
 	for _, k := range host {
 		vec := "-"
 		if k.Vec >= 0 {

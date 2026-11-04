@@ -10,7 +10,7 @@ import (
 func (e emitter) hostLanes() int { return 4 }
 
 // hostCheck accepts every arm64 host: the measuring kernels are base NEON.
-func hostCheck(*cpu.Host) error { return nil }
+func hostCheck(*cpu.Target) error { return nil }
 
 // emptyKernel returns at once.
 func (e emitter) emptyKernel() ([]byte, error) {

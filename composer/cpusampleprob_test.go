@@ -40,7 +40,7 @@ func TestComposedCPUSampleProb(t *testing.T) {
 			out := g.Out
 			// Apart, as the engine forms it: the dense distribution would take the
 			// window's storage otherwise.
-			_, codes, err := Default().Form(Request{Graph: g, Formats: map[jlm.Role]jlm.Type{}, Step: Step{Rows: 1, Page: 64, Keys: 1}, Device: cpuDevice(), Apart: true})
+			_, codes, err := Default().Form(Request{Graph: g, Formats: map[jlm.Role]jlm.Type{}, Step: Step{Rows: 1, Page: 64, Keys: 1}, Device: cpuDevice(hostArm()), Apart: true})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -67,7 +67,7 @@ func TestComposedCPUSampleProb(t *testing.T) {
 					vals[in["sample.ids"]] = append([]uint32(nil), ids...)
 					vals[in["sample.cut"]] = []uint32{f(invT), f(topp), f(minp), 0}
 				}
-				if err := runCPUValues(codes, g, vals, [3][]uint32{}); err != nil {
+				if err := runCPUValues(hostArm(), codes, g, vals, [3][]uint32{}); err != nil {
 					t.Fatal(err)
 				}
 				p := vals[out[0]]

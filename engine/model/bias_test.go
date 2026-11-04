@@ -90,7 +90,10 @@ func TestAttentionBiasesReachTheModel(t *testing.T) {
 // TestBiasedBatchMatchesForward is the second half: ForwardBatch must apply the
 // same biases as Forward, which the plain batch gate cannot see on unbiased
 // models.
-func TestBiasedBatchMatchesForward(t *testing.T) {
+func TestBiasedBatchMatchesForward(t *testing.T) { biasedBatchMatchesForward(t) }
+
+// biasedBatchMatchesForward is TestBiasedBatchMatchesForward with opts on every model it opens.
+func biasedBatchMatchesForward(t *testing.T, opts ...Option) {
 	for name, path := range models() {
 		if name == "tinyllama" && os.Getenv("JITLLM_SLOW") == "" {
 			continue
@@ -99,7 +102,7 @@ func TestBiasedBatchMatchesForward(t *testing.T) {
 			if _, err := os.Stat(path); err != nil {
 				t.Skipf("model not present: %s", path)
 			}
-			m, err := Open(jlmOf(t, path))
+			m, err := Open(jlmOf(t, path), opts...)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -171,7 +174,7 @@ func TestBiasedBatchMatchesForward(t *testing.T) {
 			// (floatFormsNMSE), far below what a bias applied twice or not at
 			// all reads.
 			t.Run("prefill", func(t *testing.T) {
-				pm, err := Open(jlmOf(t, path), withCPUFloat())
+				pm, err := Open(jlmOf(t, path), append([]Option{withCPUFloat()}, opts...)...)
 				if err != nil {
 					t.Fatal(err)
 				}

@@ -23,7 +23,7 @@ func TestStreamsRefusedPerKernel(t *testing.T) {
 		Graph:   b.G,
 		Formats: map[jlm.Role]jlm.Type{jlm.RoleAttnQ: q4k, jlm.RoleAttnK: q4k, jlm.RoleAttnV: q4k},
 		Step:    Step{Rows: 1, Page: 64, Keys: 1, ActWindow: 32},
-		Device:  Device{Kind: DeviceCPU, Slots: 14, Lanes: 8, ISA: uint64(cpu.CPU().ISA()), ExactDiv: true},
+		Device:  Device{Kind: DeviceCPU, Slots: 14, Lanes: 8, ISA: uint64(cpu.Probe().ISA()), ExactDiv: true},
 	}
 	reg := Default()
 	ks, err := reg.formKernels(req)

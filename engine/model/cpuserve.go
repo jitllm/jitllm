@@ -332,7 +332,7 @@ func composedCPUDevice(isa cpu.ISA, workers int) composer.Device {
 // CPUForm is how the composer forms this host's CPU device
 // (composer.CPUForm).
 func CPUForm() string {
-	return composer.CPUForm(composedCPUDevice(cpu.CPU().ISA(), 1), runtime.GOARCH == "arm64")
+	return composer.CPUForm(composedCPUDevice(cpu.Probe().ISA(), 1), runtime.GOARCH == "arm64")
 }
 
 // composedCPU is this instance's CPU as the composer forms for it, its launch

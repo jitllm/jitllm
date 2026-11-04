@@ -75,7 +75,7 @@ func TestComposedCPUUniform(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, R := range []int{1, 3} {
-			_, codes, err := Default().Form(Request{Graph: g, Formats: map[jlm.Role]jlm.Type{}, Step: Step{Rows: R, Page: 64, Keys: 1}, Device: cpuDevice()})
+			_, codes, err := Default().Form(Request{Graph: g, Formats: map[jlm.Role]jlm.Type{}, Step: Step{Rows: R, Page: 64, Keys: 1}, Device: cpuDevice(hostArm())})
 			if err != nil {
 				t.Fatalf("%d keys at %d rows: %v", w, R, err)
 			}
@@ -88,7 +88,7 @@ func TestComposedCPUUniform(t *testing.T) {
 			}
 			out := make([]uint32, R*w)
 			vals := map[graph.ValueID][]uint32{keys: ks, ctr: cs, u: out}
-			if err := runCPUGridValues(codes, g, vals, [3][]uint32{}, nil, func(graph.ValueID) int { return R }, nil); err != nil {
+			if err := runCPUGridValues(hostArm(), codes, g, vals, [3][]uint32{}, nil, func(graph.ValueID) int { return R }, nil); err != nil {
 				t.Fatalf("%d keys at %d rows: %v", w, R, err)
 			}
 			for r := range R {

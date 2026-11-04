@@ -58,7 +58,7 @@ func cpuForm(t *testing.T, g *graph.Graph, roles []jlm.Role) []composer.Code {
 	reg.Profiles[composer.DeviceCPU] = p
 	_, codes, err := reg.Form(composer.Request{Graph: g, Formats: formats,
 		Step:   composer.Step{Rows: 1, Page: 64, Keys: 1, ActWindow: 32},
-		Device: composer.Device{Kind: composer.DeviceCPU, Slots: 1, Lanes: 8, ISA: uint64(cpu.CPU().ISA()), ExactDiv: true}})
+		Device: composer.Device{Kind: composer.DeviceCPU, Slots: 1, Lanes: 8, ISA: uint64(cpu.Probe().ISA()), ExactDiv: true}})
 	if err != nil {
 		t.Fatalf("forming for the CPU: %v", err)
 	}
@@ -83,7 +83,7 @@ func cpuExec(t *testing.T, codes []composer.Code, vecs map[jlm.Role][]float32, p
 		if c.CPU == nil {
 			t.Fatalf("%s has no CPU code", c.Name)
 		}
-		code, err := cpu.NewHost().Map(c.CPU)
+		code, err := cpu.New().Map(c.CPU)
 		if err != nil {
 			t.Fatalf("mapping %s: %v", c.Name, err)
 		}

@@ -30,7 +30,7 @@ func TestFeaturesAgreeWithTheKernel(t *testing.T) {
 	}
 	has := func(f string) bool { return strings.Contains(flags, " "+f+" ") }
 
-	f := CPU()
+	f := Probe()
 	for _, c := range []struct {
 		name string
 		got  bool
@@ -81,11 +81,11 @@ func TestFeaturesAgreeWithTheKernel(t *testing.T) {
 	case has("sse2") && has("pni") && has("ssse3") && has("sse4_1"):
 		wantTier = TierSSE
 	}
-	if got := HostTier(); got != wantTier {
-		t.Errorf("HostTier() = %v, /proc/cpuinfo says %v", got, wantTier)
+	if got := New().Tier(); got != wantTier {
+		t.Errorf("New().Tier() = %v, /proc/cpuinfo says %v", got, wantTier)
 	}
 	t.Logf("tier=%v isa=[%v] sse2=%v sse3=%v ssse3=%v sse4.1=%v sse4.2=%v popcnt=%v",
-		HostTier(), f.ISA(), f.SSE2, f.SSE3, f.SSSE3, f.SSE41, f.SSE42, f.POPCNT)
+		New().Tier(), f.ISA(), f.SSE2, f.SSE3, f.SSSE3, f.SSE41, f.SSE42, f.POPCNT)
 	t.Logf("avx2=%v fma=%v f16c=%v | avx-vnni=%v avx512-vnni=%v | avx512 f=%v bw=%v dq=%v vl=%v | os avx=%v avx512=%v | usable: avx2=%v avx512=%v",
 		f.AVX2, f.FMA, f.F16C, f.AVXVNNI, f.AVX512VNNI,
 		f.AVX512F, f.AVX512BW, f.AVX512DQ, f.AVX512VL,

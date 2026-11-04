@@ -62,7 +62,7 @@ func rowsForm(t *testing.T, reg *Registry, typ quant.Type, isa uint64, rows int)
 // refuse at eight rows a call halves its rows and keeps Jam's lanes. With
 // Jam off, the halving check must part.
 func TestCPURowJamReadsTheWeightOnce(t *testing.T) {
-	host := uint64(cpu.CPU().ISA())
+	host := uint64(cpu.Probe().ISA())
 	isas := map[string]uint64{"host": host}
 	if vnni := uint64(x86.ISAVNNI); host&vnni != 0 {
 		isas["without vnni"] = host &^ vnni
@@ -121,7 +121,7 @@ func fourRowsRefused() map[string]bool { return map[string]bool{} }
 // step side by side only where they share two or more values. Four rows a
 // call load a quarter of the weight words a row a call loads.
 func TestCPUPromptRunsFourRowsACall(t *testing.T) {
-	host := uint64(cpu.CPU().ISA())
+	host := uint64(cpu.Probe().ISA())
 	vnni := uint64(x86.ISAVNNI)
 	isas := []uint64{host}
 	if host&vnni != 0 {

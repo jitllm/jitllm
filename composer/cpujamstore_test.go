@@ -16,7 +16,8 @@ import (
 // index r*S, the rows jammed into the sum loop's lanes several vectors a
 // trip: each vector stores at its own rows, and at S > 1 each lane at its
 // own place.
-func TestCPUJamStoresAtAFlatIndex(t *testing.T) {
+func TestCPUJamStoresAtAFlatIndex(t *testing.T) { gateCPUJamStoresAtAFlatIndex(t, hostArm()) }
+func gateCPUJamStoresAtAFlatIndex(t *testing.T, cpuOn cpuArm) {
 	U, F := ir.U32, ir.F32
 	const R, K = 64, 32
 	for _, S := range []int{1, 3} {
@@ -30,7 +31,7 @@ func TestCPUJamStoresAtAFlatIndex(t *testing.T) {
 		ix.op(OpMul, U, ix.coord(0), ix.u(uint32(S)))
 		p := Prim{Kind: PrimReduce, Shape: []int{R, K}, In: []Operand{in}, Out: out, Combine: OpAdd, Type: F,
 			Expr: x.e, Index: ix.e, Facts: Facts{Extents: map[int]int{0: R * K}, OutExtent: R * S}}
-		dev := cpuDevice()
+		dev := cpuDevice(cpuOn)
 		reg := Default()
 		kn, err := generate(p)
 		if err != nil {
@@ -68,7 +69,7 @@ func TestCPUJamStoresAtAFlatIndex(t *testing.T) {
 		for i := range got {
 			got[i] = poison
 		}
-		if _, err := runCPUBound(codes, xs, 1, [3][]uint32{}, nil, func(o Operand) []uint32 {
+		if _, err := runCPUBound(cpuOn, codes, xs, 1, [3][]uint32{}, nil, func(o Operand) []uint32 {
 			switch {
 			case o.Name == out.Name:
 				return got
@@ -106,7 +107,8 @@ func TestCPUJamStoresAtAFlatIndex(t *testing.T) {
 // table's entry at a weight word's low bits times x[k][t], the tokens t
 // jammed into lanes: the weight word, the same in every lane, is an address
 // and stays in a general register.
-func TestCPUJamLooksUpByAWeightWord(t *testing.T) {
+func TestCPUJamLooksUpByAWeightWord(t *testing.T) { gateCPUJamLooksUpByAWeightWord(t, hostArm()) }
+func gateCPUJamLooksUpByAWeightWord(t *testing.T, cpuOn cpuArm) {
 	U, F := ir.U32, ir.F32
 	const T, K = 32, 64
 	in := Operand{Kind: OperandValue, Value: 0, Elem: F}
@@ -123,7 +125,7 @@ func TestCPUJamLooksUpByAWeightWord(t *testing.T) {
 	}
 	p := Prim{Kind: PrimReduce, Shape: []int{T, K}, In: []Operand{in, w, tab}, Out: out, Combine: OpAdd, Type: F,
 		Expr: x.e, Facts: Facts{Extents: map[int]int{0: T * K, 1: K, 2: 16}}}
-	dev := cpuDevice()
+	dev := cpuDevice(cpuOn)
 	reg := Default()
 	kn, err := generate(p)
 	if err != nil {
@@ -165,7 +167,7 @@ func TestCPUJamLooksUpByAWeightWord(t *testing.T) {
 	for i := range got {
 		got[i] = poison
 	}
-	if _, err := runCPUBound(codes, xs, 1, [3][]uint32{ws}, nil, func(o Operand) []uint32 {
+	if _, err := runCPUBound(cpuOn, codes, xs, 1, [3][]uint32{ws}, nil, func(o Operand) []uint32 {
 		switch {
 		case o.Name == tab.Name:
 			return table

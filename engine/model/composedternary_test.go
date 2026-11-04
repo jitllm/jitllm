@@ -145,7 +145,7 @@ func TestComposedTernaryMatVecPerToken(t *testing.T) {
 						reg.Profiles[composer.DeviceCPU] = pr
 						_, formed, err := reg.Form(composer.Request{Graph: b.G, Formats: map[jlm.Role]jlm.Type{jlm.RoleAttnQ: jt},
 							Step:   composer.Step{Rows: tokens, Page: 64, Keys: 1, ActWindow: 32},
-							Device: composer.Device{Kind: composer.DeviceCPU, Slots: 1, Lanes: 8, ISA: uint64(cpu.CPU().ISA()), ExactDiv: true}})
+							Device: composer.Device{Kind: composer.DeviceCPU, Slots: 1, Lanes: 8, ISA: uint64(cpu.Probe().ISA()), ExactDiv: true}})
 						if err != nil {
 							unformed[name] = err.Error()
 							continue
@@ -247,7 +247,7 @@ func TestComposedQuantMapsMatchTheReference(t *testing.T) {
 		reg.Profiles[composer.DeviceCPU] = p
 		_, codes, err := reg.Form(composer.Request{Graph: b.G, Formats: map[jlm.Role]jlm.Type{},
 			Step:   composer.Step{Rows: 1, Page: 64, Keys: 1, ActWindow: 32},
-			Device: composer.Device{Kind: composer.DeviceCPU, Slots: 1, Lanes: 8, ISA: uint64(cpu.CPU().ISA()), ExactDiv: true}})
+			Device: composer.Device{Kind: composer.DeviceCPU, Slots: 1, Lanes: 8, ISA: uint64(cpu.Probe().ISA()), ExactDiv: true}})
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}

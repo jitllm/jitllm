@@ -8,8 +8,7 @@ package cpu
 
 // HasDotProd reports FEAT_DotProd for a hardware report. It decides nothing:
 // without it the quantized forms widen SDOT and still run.
-func HasDotProd() bool { return hostDotProd() }
+func HasDotProd() bool { return dotProd() }
 
-// hostDotProd is FEAT_DotProd as Features states it: the probe's answer, but
-// false where a test forces it absent (forceNoDotProd).
-func hostDotProd() bool { return probeDotProd() && !forceNoDotProd }
+// dotProd is FEAT_DotProd as Probe states it.
+func dotProd() bool { return probeDotProd() }

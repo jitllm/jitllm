@@ -34,13 +34,15 @@ type Features struct {
 func (f Features) UsableAVX512() bool { return false }
 func (f Features) UsableAVX2() bool   { return false }
 
-// CPU reports no x86 unit: this is not an x86. On arm64 it states
+// Probe reports no x86 unit: this is not an x86. On arm64 it states
 // FEAT_DotProd.
-func CPU() Features { return Features{DotProd: hostDotProd()} }
+func Probe() Features { return Features{DotProd: dotProd()} }
 
-// tierOfHost is TierNEON on arm64, whose A64 emitters answer to the same
+func withoutDotProd(f *Features) { f.DotProd = false }
+
+// tierOfCPU is TierNEON on arm64, whose A64 emitters answer to the same
 // names the AVX2 tier's do, and TierNone on an architecture with no emitter.
-func tierOfHost(Features) Tier {
+func tierOfCPU(Features) Tier {
 	if runtime.GOARCH == "arm64" {
 		return TierNEON
 	}

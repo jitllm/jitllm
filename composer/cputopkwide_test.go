@@ -53,7 +53,7 @@ func TestComposedCPURouterOverManyExperts(t *testing.T) {
 			wn := b.Emit(graph.OpMap, []graph.ValueID{w, sum}, []graph.Result{{Name: "router.wn", Width: K}}, nil, graph.Attrs{Fn: graph.MapDiv}, nil, nil)[0]
 			b.Out(o[0])
 			b.Out(wn)
-			_, codes, err := arm.r.Form(Request{Graph: b.G, Formats: map[jlm.Role]jlm.Type{}, Step: Step{Rows: 1, Page: 64, Keys: 1}, Device: cpuDevice(), Apart: true})
+			_, codes, err := arm.r.Form(Request{Graph: b.G, Formats: map[jlm.Role]jlm.Type{}, Step: Step{Rows: 1, Page: 64, Keys: 1}, Device: cpuDevice(hostArm()), Apart: true})
 			if err != nil {
 				t.Fatalf("%s/top %d: forming: %v", arm.name, K, err)
 			}
@@ -68,7 +68,7 @@ func TestComposedCPURouterOverManyExperts(t *testing.T) {
 				xs[i] = math.Float32bits(x[i])
 			}
 			vals := map[graph.ValueID][]uint32{in: xs}
-			if err := runCPUValues(codes, b.G, vals, [3][]uint32{}); err != nil {
+			if err := runCPUValues(hostArm(), codes, b.G, vals, [3][]uint32{}); err != nil {
 				t.Fatalf("%s/top %d: %v", arm.name, K, err)
 			}
 			order := sampleOrder(x)

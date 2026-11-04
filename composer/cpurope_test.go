@@ -15,7 +15,8 @@ import (
 // NRot from an Offset) turned in pairs by the row's angles, or back by them
 // where Inverse, held to the definition, and every element left unturned
 // equal to the input's, bit for bit.
-func TestComposedCPURope(t *testing.T) {
+func TestComposedCPURope(t *testing.T) { gateComposedCPURope(t, hostArm()) }
+func gateComposedCPURope(t *testing.T, cpuOn cpuArm) {
 	rng := rand.New(rand.NewSource(9))
 	ran := 0
 	for _, sh := range []struct {
@@ -37,7 +38,7 @@ func TestComposedCPURope(t *testing.T) {
 					capRows = 8
 				}
 				_, codes, err := Default().Form(Request{Graph: b.G, Formats: map[jlm.Role]jlm.Type{},
-					Step: Step{Rows: capRows, Page: 64, Keys: 64, Seqs: 1}, Device: cpuDevice()})
+					Step: Step{Rows: capRows, Page: 64, Keys: 64, Seqs: 1}, Device: cpuDevice(cpuOn)})
 				if err != nil {
 					t.Fatalf("%s: %v", name, err)
 				}
@@ -58,9 +59,9 @@ func TestComposedCPURope(t *testing.T) {
 				}
 				bufs := map[string][]uint32{"x": f32Words(append([]float32(nil), in...)), b.G.Values[y].Name: f32Words(out), "rope.cs": f32Words(cs), "rows.n": {uint32(R)}}
 				if R > 1 {
-					err = runCPURows(codes, b.G, bufs, R)
+					err = runCPURows(cpuOn, codes, b.G, bufs, R)
 				} else {
-					err = runCPUCalls(codes, b.G, bufs)
+					err = runCPUCalls(cpuOn, codes, b.G, bufs)
 				}
 				if err != nil {
 					t.Fatalf("%s: %v", name, err)

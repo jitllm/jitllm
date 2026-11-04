@@ -11,7 +11,7 @@ import (
 // TestHostMeasuresSSE runs the host probe's SSE kernels on any x86 host,
 // the tier forced, and holds them to the orders TestHostMeasures holds.
 func TestHostMeasuresSSE(t *testing.T) {
-	h := cpu.NewHost(cpu.AtTier(cpu.TierSSE))
+	h := cpu.New(cpu.AtTier(cpu.TierSSE))
 	if h.Tier() != cpu.TierSSE {
 		t.Fatalf("a Host at the SSE tier reports %v", h.Tier())
 	}

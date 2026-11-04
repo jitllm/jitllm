@@ -9,4 +9,4 @@ const errNoBaseline jitError = "jit: no host emitter for this architecture"
 func baselineOf(Features) error { return errNoBaseline }
 
 // gate refuses everything: there is no emitter here.
-func (h *Host) gate([]byte) error { return h.baseline }
+func (tg *Target) gate([]byte) error { return tg.baseline }

@@ -68,7 +68,10 @@ func recordedNearTies() map[string]map[string]int {
 // the internal reference is an oracle for kernels, not for the architecture,
 // and only an independent implementation of the model is. It decodes 20 tokens
 // because a wrong graph can get the first few right.
-func TestGreedyMatchesLlamaCpp(t *testing.T) {
+func TestGreedyMatchesLlamaCpp(t *testing.T) { greedyMatchesLlamaCpp(t) }
+
+// greedyMatchesLlamaCpp is TestGreedyMatchesLlamaCpp with extra on every model it opens.
+func greedyMatchesLlamaCpp(t *testing.T, extra ...model.Option) {
 	lcpp := os.Getenv("JITLLM_LCPP")
 	if lcpp == "" {
 		t.Skip("set JITLLM_LCPP to a llama.cpp build directory holding llama-completion")
@@ -196,7 +199,7 @@ func TestGreedyMatchesLlamaCpp(t *testing.T) {
 			if strings.HasPrefix(name, "Hunyuan-A13B") {
 				opts = append(opts, model.WithKVF16(false))
 			}
-			m, err := model.Open(c, opts...)
+			m, err := model.Open(c, append(opts, extra...)...)
 			if err != nil {
 				t.Skipf("open: %v", err)
 			}

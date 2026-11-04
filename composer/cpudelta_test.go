@@ -94,7 +94,8 @@ func deltaOracle(s deltaShape, st []float64, q, k, v, d, beta []float32) []float
 // and the additive rule (no key dot) to the oracle's state-space updates.
 // With the pairing turned, the decay dropped, beta dropped or the key dot
 // taken or left the other way, the form must part from the oracle.
-func TestComposedCPUDeltaRule(t *testing.T) {
+func TestComposedCPUDeltaRule(t *testing.T) { gateComposedCPUDeltaRule(t, hostArm()) }
+func gateComposedCPUDeltaRule(t *testing.T, cpuOn cpuArm) {
 	rng := rand.New(rand.NewSource(7))
 	shapes := []deltaShape{
 		{h: 2, kh: 1, dk: 4, dv: 4},
@@ -129,7 +130,7 @@ func TestComposedCPUDeltaRule(t *testing.T) {
 				fs.additive = !s.additive
 			}
 			g := deltaGraph(fs)
-			_, codes, err := Default().Form(Request{Graph: g, Formats: map[jlm.Role]jlm.Type{}, Step: Step{Rows: 1, Page: 64, Keys: 1}, Device: cpuDevice()})
+			_, codes, err := Default().Form(Request{Graph: g, Formats: map[jlm.Role]jlm.Type{}, Step: Step{Rows: 1, Page: 64, Keys: 1}, Device: cpuDevice(cpuOn)})
 			if err != nil {
 				t.Fatalf("%s: %v", name, err)
 			}
@@ -174,7 +175,7 @@ func TestComposedCPUDeltaRule(t *testing.T) {
 				if fl == noDecay || fl == noBeta {
 					vals[g.In[3]], vals[g.In[4]] = words(rd), words(rb)
 				}
-				if err := runCPUTables(codes, g, vals, [3][]uint32{}, tables); err != nil {
+				if err := runCPUTables(cpuOn, codes, g, vals, [3][]uint32{}, tables); err != nil {
 					t.Fatalf("%s row %d: %v", name, row, err)
 				}
 				want := deltaOracle(s, ref, q, k, v, d, beta)
@@ -216,7 +217,8 @@ func TestComposedCPUDeltaRule(t *testing.T) {
 // says, held to the oracle's convolution at every row's output and at the
 // window after; the slots either side stay untouched. With the window read
 // as zeros every row, it must part.
-func TestComposedCPUStateConv(t *testing.T) {
+func TestComposedCPUStateConv(t *testing.T) { gateComposedCPUStateConv(t, hostArm()) }
+func gateComposedCPUStateConv(t *testing.T, cpuOn cpuArm) {
 	rng := rand.New(rand.NewSource(11))
 	parted := 0
 	for _, sh := range [][2]int{{2, 3}, {3, 1}, {4, 7}, {4, 33}, {3, 64}, {5, 9}} {
@@ -228,7 +230,7 @@ func TestComposedCPUStateConv(t *testing.T) {
 				[]graph.Binding{{Role: jlm.RoleSSMConv1d, K: T, Rows: C}}, graph.Attrs{Taps: T},
 				[]graph.StateRef{{State: graph.StateRecConv}}, []graph.StateRef{{State: graph.StateRecConv, Version: 1}})[0])
 			_, codes, err := Default().Form(Request{Graph: b.G, Formats: map[jlm.Role]jlm.Type{jlm.RoleSSMConv1d: jlm.TypeF32},
-				Step: Step{Rows: 1, Page: 64, Keys: 1}, Device: cpuDevice()})
+				Step: Step{Rows: 1, Page: 64, Keys: 1}, Device: cpuDevice(cpuOn)})
 			if err != nil {
 				t.Errorf("%d taps over %d: %v", T, C, err)
 				continue
@@ -267,7 +269,7 @@ func TestComposedCPUStateConv(t *testing.T) {
 					}
 				}
 				vals := map[graph.ValueID][]uint32{b.G.In[0]: unsafe.Slice((*uint32)(unsafe.Pointer(&in[0])), C)}
-				if err := runCPUTables(codes, b.G, vals, [3][]uint32{wt}, tables); err != nil {
+				if err := runCPUTables(cpuOn, codes, b.G, vals, [3][]uint32{wt}, tables); err != nil {
 					t.Fatalf("%d taps over %d row %d: %v", T, C, row, err)
 				}
 				want := make([]float64, C)

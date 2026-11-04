@@ -28,7 +28,7 @@ func TestComposedCPUEmbedsIndexRows(t *testing.T) {
 	g := b.G
 	_, codes, err := Default().Form(Request{Graph: g, Formats: map[jlm.Role]jlm.Type{jlm.RoleTokenEmbd: jlm.TypeF32},
 		Step:   Step{Rows: R, Page: 1, Keys: 1},
-		Device: Device{Kind: DeviceCPU, Slots: 6, Lanes: 8, ISA: uint64(cpu.CPU().ISA()), ExactDiv: true}})
+		Device: Device{Kind: DeviceCPU, Slots: 6, Lanes: 8, ISA: uint64(cpu.Probe().ISA()), ExactDiv: true}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestComposedCPUEmbedsIndexRows(t *testing.T) {
 		out := make([]float32, R*H*K)
 		bufs := map[string][]uint32{"idx": append([]uint32(nil), ix...), jlm.RoleTokenEmbd.String(): f32Words(table),
 			g.Values[rows].Name: f32Words(out)}
-		if err := runCPUCalls(codes, g, bufs); err != nil {
+		if err := runCPUCalls(hostArm(), codes, g, bufs); err != nil {
 			t.Fatal(err)
 		}
 		return out
@@ -109,7 +109,7 @@ func TestComposedCPUEmbedsTableRowsFrom(t *testing.T) {
 		b.Out(out)
 		_, codes, err := Default().Form(Request{Graph: b.G, Formats: map[jlm.Role]jlm.Type{jlm.RoleNGramTable: jlm.TypeIQ4NL},
 			Step:   Step{Rows: R, Page: 1, Keys: 1},
-			Device: Device{Kind: DeviceCPU, Slots: 6, Lanes: 8, ISA: uint64(cpu.CPU().ISA()), ExactDiv: true}})
+			Device: Device{Kind: DeviceCPU, Slots: 6, Lanes: 8, ISA: uint64(cpu.Probe().ISA()), ExactDiv: true}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -127,7 +127,7 @@ func TestComposedCPUEmbedsTableRowsFrom(t *testing.T) {
 		got := make([]float32, R*K)
 		bufs := map[string][]uint32{"idx": append([]uint32(nil), ids...), jlm.RoleNGramTable.String(): bound,
 			g.Values[out].Name: f32Words(got)}
-		if err := runCPUCalls(codes, g, bufs); err != nil {
+		if err := runCPUCalls(hostArm(), codes, g, bufs); err != nil {
 			t.Fatal(err)
 		}
 		return got

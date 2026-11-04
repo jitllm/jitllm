@@ -14,33 +14,32 @@ import (
 
 // arm64 without FEAT_DotProd at the model level (engine/device/cpu/sdotemu.go): a
 // Cortex-A53/A57/A72/A73 widens every int8 dot to SMULL/ADDP/SADDLP. Each gate
-// forces the probe before a model opens (the CPU device's forms are composed
-// when an instance is made) and asserts the device the composer formed for
-// states no FEAT_DotProd, the bit its arm64 lowering widens by.
+// opens its models on the CPU device without FEAT_DotProd (cpu:nodotprod) and
+// asserts the device the composer formed for states none, the bit its arm64
+// lowering widens by.
 
-// nodotForce makes the probe answer "absent" for the rest of t.
-func nodotForce(t *testing.T) {
-	t.Helper()
-	old := cpu.ForceNoDotProdForTest(true)
-	t.Cleanup(func() { cpu.ForceNoDotProdForTest(old) })
-}
+// noDot is the device list of a CPU without FEAT_DotProd.
+func noDot() Option { return WithDevices("cpu:nodotprod") }
 
-// nodotFormed fails t unless the CPU device the composer forms for states
-// FEAT_DotProd as want says.
-func nodotFormed(t *testing.T, want bool) {
+// nodotFormed fails t unless m's CPU device states FEAT_DotProd as want says.
+func nodotFormed(t *testing.T, m *Model, want bool) {
 	t.Helper()
-	if got := composedCPUDevice(cpu.CPU().ISA(), 1).ISA&uint64(cpu.ISADotProd) != 0; got != want {
+	if got := m.cpuISA()&cpu.ISADotProd != 0; got != want {
 		t.Fatalf("the CPU device states FEAT_DotProd %v, want %v: the arm formed the other int8 dots", got, want)
 	}
 }
 
 // TestNoDotProdModelGates runs the generated-code audit and the llama.cpp
-// golden gate with FEAT_DotProd forced absent.
+// golden gate on a CPU device without FEAT_DotProd.
 func TestNoDotProdModelGates(t *testing.T) {
-	nodotForce(t)
-	nodotFormed(t, false)
-	t.Run("EveryModelRunsGenerated", TestEveryModelRunsGenerated)
-	t.Run("GreedyMatchesLlamaCpp", TestGreedyMatchesLlamaCpp)
+	m, err := Open(jlmOf(t, benchModel(t)), noDot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodotFormed(t, m, false)
+	m.Close()
+	t.Run("EveryModelRunsGenerated", func(t *testing.T) { everyModelRunsGenerated(t, noDot()) })
+	t.Run("GreedyMatchesLlamaCpp", func(t *testing.T) { greedyMatchesLlamaCpp(t, noDot()) })
 }
 
 // TestNoDotProdIsBitIdentical holds the widened kernels to the SDOT ones on
@@ -60,13 +59,14 @@ func TestNoDotProdIsBitIdentical(t *testing.T) {
 	for i := range ids {
 		ids[i] = int32(1 + i)
 	}
-	run := func(t *testing.T, path string) (forced [][]float32, prefill []float32) {
+	run := func(t *testing.T, path string, dot bool, opts ...Option) (forced [][]float32, prefill []float32) {
 		t.Helper()
-		m, err := Open(path)
+		m, err := Open(path, opts...)
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer m.Close()
+		nodotFormed(t, m, dot)
 		s := m.NewInstance(len(ids) + 1)
 		for _, id := range ids {
 			l, err := s.Forward(id)
@@ -96,12 +96,8 @@ func TestNoDotProdIsBitIdentical(t *testing.T) {
 	for _, src := range models {
 		t.Run(filepath.Base(src), func(t *testing.T) {
 			path := jlmOf(t, src)
-			nodotFormed(t, true)
-			dotF, dotP := run(t, path)
-			old := cpu.ForceNoDotProdForTest(true)
-			defer cpu.ForceNoDotProdForTest(old)
-			nodotFormed(t, false)
-			wideF, wideP := run(t, path)
+			dotF, dotP := run(t, path, true)
+			wideF, wideP := run(t, path, false, noDot())
 			for pos := range dotF {
 				if i := same(dotF[pos], wideF[pos]); i >= 0 {
 					t.Fatalf("pos %d logit %d: SDOT %v, widened %v", pos, i, dotF[pos][i], wideF[pos][i])
@@ -115,8 +111,8 @@ func TestNoDotProdIsBitIdentical(t *testing.T) {
 }
 
 // BenchmarkNoDotProdDecode decodes JITLLM_BENCH_MODEL (a GGUF or container
-// path, or a name under JITLLM_MODELS) greedily with the probe forced to "no
-// FEAT_DotProd" ("widened") and as the chip reports it ("sdot"), one sub-
+// path, or a name under JITLLM_MODELS) greedily on a CPU device without
+// FEAT_DotProd ("widened") and as the chip reports it ("sdot"), one sub-
 // benchmark each, so a run on a chip with the feature gives the widened kernels
 // and the SDOT ceiling in one process. It is a harness for the A/B, not a gate:
 // it asserts nothing about time (RULE 4).
@@ -128,12 +124,14 @@ func BenchmarkNoDotProdDecode(b *testing.B) {
 	path := jlmOf(b, testmodels.Resolve(p))
 	for _, arm := range []string{"widened", "sdot"} {
 		b.Run(arm, func(b *testing.B) {
-			old := cpu.ForceNoDotProdForTest(arm == "widened")
-			defer cpu.ForceNoDotProdForTest(old)
+			var opts []Option
+			if arm == "widened" {
+				opts = append(opts, noDot())
+			}
 			if arm == "sdot" && !cpu.HasDotProd() {
 				b.Skip("no FEAT_DotProd on this chip: the widened arm alone")
 			}
-			m, err := Open(path)
+			m, err := Open(path, opts...)
 			if err != nil {
 				b.Fatal(err)
 			}

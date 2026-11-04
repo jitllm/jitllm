@@ -73,7 +73,7 @@ func TestExecuteScalar(t *testing.T) {
 func TestExecuteVPDPBUSD(t *testing.T) {
 	// This one executes VPDPBUSD itself; the AVX2 sequence that replaces it
 	// on a non-VNNI host is gated by TestExecuteVEXDotMatchesVPDPBUSD.
-	requireVNNIHost(t)
+	requireVNNI(t)
 	var a x86.Buf
 	a.MOVLoad(x86.RSI, x86.At(x86.RDI, 16)) // args.A  — unsigned side
 	a.MOVLoad(x86.RDX, x86.At(x86.RDI, 8))  // args.W  — signed side
@@ -85,7 +85,7 @@ func TestExecuteVPDPBUSD(t *testing.T) {
 	a.VZEROUPPER()
 	a.RET()
 
-	code, err := NewHost().Map(asmBytes(t, &a))
+	code, err := New().Map(asmBytes(t, &a))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +117,7 @@ func TestExecuteVPDPBUSD(t *testing.T) {
 // TestExecuteLoop exercises a backward branch, which every kernel inner loop is.
 func TestExecuteLoop(t *testing.T) {
 	// Executes VPDPBUSD (see TestExecuteVPDPBUSD).
-	requireVNNIHost(t)
+	requireVNNI(t)
 	var a x86.Buf
 	a.MOVLoad(x86.RSI, x86.At(x86.RDI, 16)) // A
 	a.MOVLoad(x86.RDX, x86.At(x86.RDI, 8))  // W
@@ -136,7 +136,7 @@ func TestExecuteLoop(t *testing.T) {
 	a.VZEROUPPER()
 	a.RET()
 
-	code, err := NewHost().Map(asmBytes(t, &a))
+	code, err := New().Map(asmBytes(t, &a))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,13 +172,13 @@ func TestExecuteLoop(t *testing.T) {
 
 // TestMapRejects: an empty program must not become an executable page.
 func TestMapRejects(t *testing.T) {
-	if _, err := NewHost().Map(nil); err == nil {
+	if _, err := New().Map(nil); err == nil {
 		t.Error("Map accepted empty code")
 	}
 	var ret x86.Buf
 	ret.DeclareISA(x86.ISASSE2) // a bare ret runs on every x86-64 host
 	ret.RET()
-	c, err := NewHost().Map(asmBytes(t, &ret))
+	c, err := New().Map(asmBytes(t, &ret))
 	if err != nil {
 		t.Fatalf("Map: %v", err)
 	}

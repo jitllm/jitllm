@@ -15,7 +15,7 @@ import (
 func TestComposedCPUReachStatesEachCallsRows(t *testing.T) {
 	_, codes, err := Default().Form(Request{Graph: attendGraph(32, 8, 64),
 		Step:   Step{Rows: 1, Page: 64, Keys: 128, ActWindow: 32, Seqs: 1},
-		Device: Device{Kind: DeviceCPU, Slots: 14, Lanes: 8, ISA: cpuDevice().ISA, ExactDiv: true}})
+		Device: Device{Kind: DeviceCPU, Slots: 14, Lanes: 8, ISA: cpuDevice(hostArm()).ISA, ExactDiv: true}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestComposedCPUReachStatesEachCallsRows(t *testing.T) {
 	_, codes, err = Default().Form(Request{Graph: graph.MatVec(jlm.RoleOutput, 2048, 2048),
 		Formats: map[jlm.Role]jlm.Type{jlm.RoleOutput: jt},
 		Step:    Step{Rows: 1, Page: 64, Keys: 1, ActWindow: 32},
-		Device:  Device{Kind: DeviceCPU, Slots: 14, Lanes: 8, ISA: cpuDevice().ISA, ExactDiv: true}})
+		Device:  Device{Kind: DeviceCPU, Slots: 14, Lanes: 8, ISA: cpuDevice(hostArm()).ISA, ExactDiv: true}})
 	if err != nil {
 		t.Fatal(err)
 	}

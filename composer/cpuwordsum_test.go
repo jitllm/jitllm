@@ -37,9 +37,9 @@ func wordSumPrim(R, S int, bound uint32, carried bool) Prim {
 // runWordSum forms p on the CPU and runs it over words: the sums and the
 // carried floats, each with a guard of poisoned words after it that the
 // code must leave.
-func runWordSum(p Prim, R int, words []uint32) ([]uint32, []float32, error) {
+func runWordSum(cpuOn cpuArm, p Prim, R int, words []uint32) ([]uint32, []float32, error) {
 	const guard = 16
-	dev := cpuDevice()
+	dev := cpuDevice(cpuOn)
 	reg := Default()
 	k, err := generate(p)
 	if err != nil {
@@ -62,7 +62,7 @@ func runWordSum(p Prim, R int, words []uint32) ([]uint32, []float32, error) {
 	for i := range sums {
 		sums[i], carried[i] = poison, poison
 	}
-	if _, err := runCPUBound(codes, []float32{0}, 1, [3][]uint32{}, nil, func(o Operand) []uint32 {
+	if _, err := runCPUBound(cpuOn, codes, []float32{0}, 1, [3][]uint32{}, nil, func(o Operand) []uint32 {
 		switch o.Name {
 		case "ws.words":
 			return words
@@ -118,7 +118,7 @@ func TestComposedCPUWordSums(t *testing.T) {
 				}
 			}
 			name := fmt.Sprintf("%d rows of %d", R, S)
-			got, _, err := runWordSum(wordSumPrim(R, S, bound, false), R, words)
+			got, _, err := runWordSum(hostArm(), wordSumPrim(R, S, bound, false), R, words)
 			if err != nil {
 				t.Errorf("%s: count: %v", name, err)
 				continue
@@ -128,7 +128,7 @@ func TestComposedCPUWordSums(t *testing.T) {
 					t.Errorf("%s: row %d counts %d, want %d", name, r, got[r], count[r])
 				}
 			}
-			lower, _, err := runWordSum(wordSumPrim(R, S, bound-1, false), R, words)
+			lower, _, err := runWordSum(hostArm(), wordSumPrim(R, S, bound-1, false), R, words)
 			if err != nil {
 				t.Errorf("%s: count below %d: %v", name, bound-1, err)
 				continue
@@ -139,7 +139,7 @@ func TestComposedCPUWordSums(t *testing.T) {
 					break
 				}
 			}
-			mx, at, err := runWordSum(wordSumPrim(R, S, 0, true), R, words)
+			mx, at, err := runWordSum(hostArm(), wordSumPrim(R, S, 0, true), R, words)
 			if err != nil {
 				t.Errorf("%s: largest: %v", name, err)
 				continue

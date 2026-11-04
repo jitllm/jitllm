@@ -7,10 +7,10 @@ import (
 	"github.com/jitllm/jitllm/composer/x86"
 )
 
-// requireVNNIHost skips a gate that executes VPDPBUSD directly.
-func requireVNNIHost(t testing.TB) {
+// requireVNNI skips a gate that executes VPDPBUSD directly.
+func requireVNNI(t testing.TB) {
 	t.Helper()
-	if CPU().AVXVNNI {
+	if Probe().AVXVNNI {
 		return
 	}
 	t.Skip("this host has no AVX-VNNI, so VPDPBUSD cannot be executed here -- " +
@@ -23,7 +23,7 @@ func requireVNNIHost(t testing.TB) {
 // broken emitter do not look alike.
 func mustMap(t testing.TB, code []byte) *Code {
 	t.Helper()
-	c, err := NewHost().Map(code)
+	c, err := New().Map(code)
 	if err == nil {
 		return c
 	}

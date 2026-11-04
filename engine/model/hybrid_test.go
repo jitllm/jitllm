@@ -126,6 +126,8 @@ type hyOpt struct {
 	// seed draws different weights at the same shape (7 when zero): two
 	// models a device could mistake for one another by block index.
 	seed int64
+	// extra is options the model is opened with beside the hybrid's own.
+	extra []Option
 }
 
 func hybridModelOpt(t *testing.T, o hyOpt) *Model {
@@ -299,7 +301,7 @@ func hybridModelOpt(t *testing.T, o hyOpt) *Model {
 	if o.budget > 0 {
 		opts = append(opts, WithPageBudget(o.budget))
 	}
-	m, err := Open(dst, opts...)
+	m, err := Open(dst, append(opts, o.extra...)...)
 	if err != nil {
 		t.Fatalf("Open a hybrid container: %v", err)
 	}
@@ -310,8 +312,11 @@ func hybridModelOpt(t *testing.T, o hyOpt) *Model {
 // TestHybridRuns is the load gate: every tensor the architecture needs is
 // bound, every shape agrees, a token comes out finite, and the recurrent state
 // moved (a linear layer that never ran still yields finite logits).
-func TestHybridRuns(t *testing.T) {
-	m := hybridModel(t)
+func TestHybridRuns(t *testing.T) { hybridRuns(t) }
+
+// hybridRuns is TestHybridRuns with opts on every model it opens.
+func hybridRuns(t *testing.T, opts ...Option) {
+	m := hybridModelOpt(t, hyOpt{extra: opts})
 	if !m.Cfg.Hybrid() {
 		t.Fatal("the container's layer map did not survive the load")
 	}
@@ -342,8 +347,11 @@ func TestHybridRuns(t *testing.T) {
 // TestHybridStateIsConstantInContext is the architecture's whole claim, stated
 // as a test: the memory a linear layer keeps does not grow with the
 // conversation. A KV cache fails this on the second token.
-func TestHybridStateIsConstantInContext(t *testing.T) {
-	m := hybridModel(t)
+func TestHybridStateIsConstantInContext(t *testing.T) { hybridStateIsConstantInContext(t) }
+
+// hybridStateIsConstantInContext is TestHybridStateIsConstantInContext with opts on every model it opens.
+func hybridStateIsConstantInContext(t *testing.T, opts ...Option) {
+	m := hybridModelOpt(t, hyOpt{extra: opts})
 	s := m.NewInstance(32)
 	defer s.Close()
 	want := len(s.view.State(0)) + len(s.view.Conv(0))
@@ -359,8 +367,11 @@ func TestHybridStateIsConstantInContext(t *testing.T) {
 
 // TestHybridPrefillMatchesForward and TestHybridBatchMatchesForward: the
 // recurrent state has to be carried identically by all three entry points.
-func TestHybridPrefillMatchesForward(t *testing.T) {
-	m := hybridModel(t)
+func TestHybridPrefillMatchesForward(t *testing.T) { hybridPrefillMatchesForward(t) }
+
+// hybridPrefillMatchesForward is TestHybridPrefillMatchesForward with opts on every model it opens.
+func hybridPrefillMatchesForward(t *testing.T, opts ...Option) {
+	m := hybridModelOpt(t, hyOpt{extra: opts})
 	ids := []int32{3, 9, 1, 14, 6, 2, 11, 4}
 
 	a := m.NewInstance(32)
@@ -383,8 +394,11 @@ func TestHybridPrefillMatchesForward(t *testing.T) {
 	hyCloseState(t, a, b)
 }
 
-func TestHybridBatchMatchesForward(t *testing.T) {
-	m := hybridModel(t)
+func TestHybridBatchMatchesForward(t *testing.T) { hybridBatchMatchesForward(t) }
+
+// hybridBatchMatchesForward is TestHybridBatchMatchesForward with opts on every model it opens.
+func hybridBatchMatchesForward(t *testing.T, opts ...Option) {
+	m := hybridModelOpt(t, hyOpt{extra: opts})
 	const nseq, steps = 3, 6
 	streams := make([][]int32, nseq)
 	for i := range streams {

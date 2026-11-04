@@ -27,19 +27,19 @@ func baselineOf(f Features) error {
 	return fmt.Errorf("%w: missing %s", errNoBaseline, missingNames(f, ISATierSSE))
 }
 
-// gate is Map's question on amd64: can the Host run this kernel.
+// gate is Map's question on amd64: can the Target run this kernel.
 //
 // The declared (or implied) ISA
 // is compared with the host's, and only an undeclared kernel gets the VNNI
 // byte scan: in a legacy-encoded kernel the C4 ... 50 pattern can occur inside
 // a correct instruction (PINSRW is 66 0F C4 /r ib), and a false positive there
 // would remove the only kernel an SSE host has.
-func (h *Host) gate(code []byte) error {
-	if err := isaCheck(h.f, code); err != nil {
+func (tg *Target) gate(code []byte) error {
+	if err := isaCheck(tg.f, code); err != nil {
 		return err
 	}
 	if _, declared := KernelISA(code); !declared {
-		return runnable(h.f, code)
+		return runnable(tg.f, code)
 	}
 	return nil
 }

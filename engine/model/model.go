@@ -1412,16 +1412,8 @@ type loadOpts struct {
 	// preload is how many pages Open keeps in flight behind it; see
 	// WithPreload.
 	preload int
-	// cpuHost states the CPU the model's device maps onto (WithCPUHost).
-	cpuHost []cpu.HostOption
-}
-
-// WithCPUHost states the CPU the model's CPU device maps its forms onto:
-// a perf map (cpu.WithPerfMap), or a lower tier than the CPU's own
-// (cpu.AtTier), which the composer forms for and the device refuses to map
-// past.
-func WithCPUHost(o ...cpu.HostOption) Option {
-	return func(l *loadOpts) { l.cpuHost = append(l.cpuHost, o...) }
+	// devices is the device specs the engine may place on (WithDevices).
+	devices []string
 }
 
 // WithPreload has Open start reading every page in the background, depth
@@ -1475,7 +1467,7 @@ func WithPageBudget(bytes uint64) Option {
 func WithGCPlan(g sched.GCPlan) Option { return func(l *loadOpts) { l.opt.gc = g } }
 
 // cpuISA is the extensions the model's CPU device forms for (its Host's).
-func (m *Model) cpuISA() cpu.ISA { return m.eng.cpuForms.Host.ISA() }
+func (m *Model) cpuISA() cpu.ISA { return m.eng.cpuForms.Target.ISA() }
 
 // MappedBytes is how much of the model's weight memory is held off the Go
 // heap (jlm.File.MappedBytes).
@@ -1532,7 +1524,12 @@ func openContainer(path string, options ...Option) (*Model, error) {
 	for _, o := range options {
 		o(&lo)
 	}
-	h := cpu.NewHost(lo.cpuHost...)
+	cpuOpts, listed, err := cpuOfDevices(lo.devices)
+	if err != nil {
+		return nil, err
+	}
+	lo.opt.noCPU = !listed
+	h := cpu.New(cpuOpts...)
 	// Every op a token runs is generated code; with no lowering for this
 	// architecture there is nothing to run it on.
 	if !composer.LowersCPU(uint64(h.ISA())) {
@@ -1584,7 +1581,7 @@ func openContainer(path string, options ...Option) (*Model, error) {
 	// on the host's memory attached afterwards comes off it (hostheld.go).
 	m.pages.bytes = budget
 	m.eng.pool, m.opt = lo.pool, lo.opt
-	m.eng.cpuForms.Host = h
+	m.eng.cpuForms.Target = h
 	m.actWindow = m.actWindowOf()
 	if lo.opt.kvTypeSet {
 		if err := m.Cfg.KVTypeRefusal(lo.opt.kvType); err != nil {
@@ -1981,7 +1978,7 @@ func (m *Model) Close() error {
 		o.ReleaseModel(m.id)
 	}
 	m.eng.cpuForms.Close()
-	m.eng.cpuForms.Host.Close()
+	m.eng.cpuForms.Target.Close()
 	m.eng.kvArenas.Close()
 	err := m.container.Close()
 	m.eng.devMu.Lock()

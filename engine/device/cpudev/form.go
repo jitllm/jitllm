@@ -240,7 +240,7 @@ func stepsState(gr *graph.Graph) bool {
 // graph's input and output the residual, or with apart each an io place of
 // its own. A whole form is run at its rows and no fewer (a convolutional
 // block's, over its grid), so its kernels need not be held to a call's rows.
-func BuildForm(h *cpu.Host, gr *graph.Graph, codes []composer.Code, rows int, apart, whole bool) (*Form, error) {
+func BuildForm(h *cpu.Target, gr *graph.Graph, codes []composer.Code, rows int, apart, whole bool) (*Form, error) {
 	if apart && len(gr.In)+len(gr.Out) > IO {
 		return nil, fmt.Errorf("a graph of %d inputs and %d outputs, past the %d places the CPU's call site binds", len(gr.In), len(gr.Out), IO)
 	}

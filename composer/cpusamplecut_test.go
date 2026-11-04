@@ -26,7 +26,7 @@ func TestComposedCPUSampleCut(t *testing.T) {
 		in[g.Values[v].Name] = v
 	}
 	tokV := g.Out[0]
-	_, codes, err := Default().Form(Request{Graph: g, Formats: map[jlm.Role]jlm.Type{}, Step: Step{Rows: 1, Page: 64, Keys: 1}, Device: cpuDevice()})
+	_, codes, err := Default().Form(Request{Graph: g, Formats: map[jlm.Role]jlm.Type{}, Step: Step{Rows: 1, Page: 64, Keys: 1}, Device: cpuDevice(hostArm())})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestComposedCPUSampleCut(t *testing.T) {
 			in["sample.cut"]: {math.Float32bits(invT), math.Float32bits(topp), math.Float32bits(minp), math.Float32bits(u)},
 			tokV:             {0},
 		}
-		if err := runCPUValues(codes, g, vals, [3][]uint32{}); err != nil {
+		if err := runCPUValues(hostArm(), codes, g, vals, [3][]uint32{}); err != nil {
 			t.Fatal(err)
 		}
 		return vals[tokV][0]
@@ -122,7 +122,7 @@ func TestComposedCPUSampleCutTopK(t *testing.T) {
 		in[g.Values[v].Name] = v
 	}
 	tokV := g.Out[0]
-	_, codes, err := Default().Form(Request{Graph: g, Formats: map[jlm.Role]jlm.Type{}, Step: Step{Rows: 1, Page: 64, Keys: 1}, Device: cpuDevice()})
+	_, codes, err := Default().Form(Request{Graph: g, Formats: map[jlm.Role]jlm.Type{}, Step: Step{Rows: 1, Page: 64, Keys: 1}, Device: cpuDevice(hostArm())})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +172,7 @@ func TestComposedCPUSampleCutTopK(t *testing.T) {
 			in["sample.cut"]: {f(invT), f(float32(topp)), f(float32(minp)), f(float32(u)), f(float32(k))},
 			tokV:             {0},
 		}
-		if err := runCPUValues(codes, g, vals, [3][]uint32{}); err != nil {
+		if err := runCPUValues(hostArm(), codes, g, vals, [3][]uint32{}); err != nil {
 			t.Fatal(err)
 		}
 		cases++

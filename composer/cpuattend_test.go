@@ -24,14 +24,14 @@ func attendGraph(heads, kv, dim int) *graph.Graph {
 // runCPUCalls runs codes in order on the CPU, each over its calls' space,
 // every operand's words where bufs names it by kind and name (a value by
 // its graph name), the composer's own buffers made here.
-func runCPUCalls(codes []Code, g *graph.Graph, bufs map[string][]uint32) error {
-	return runCPUCallsAt(codes, g, bufs, func(at int) int { return at })
+func runCPUCalls(cpuOn cpuArm, codes []Code, g *graph.Graph, bufs map[string][]uint32) error {
+	return runCPUCallsAt(cpuOn, codes, g, bufs, func(at int) int { return at })
 }
 
 // runCPUCallsAt is runCPUCalls with each kernel's at-th call run at the
 // coordinates of call of(at). A scratch a code binds as its calls' own
 // (Binding.Own) fails it where two calls change one word of it.
-func runCPUCallsAt(codes []Code, g *graph.Graph, bufs map[string][]uint32, of func(int) int) error {
+func runCPUCallsAt(cpuOn cpuArm, codes []Code, g *graph.Graph, bufs map[string][]uint32, of func(int) int) error {
 	own := map[Operand][]uint32{}
 	var keep [][]uint32
 	for _, c := range codes {
@@ -45,7 +45,7 @@ func runCPUCallsAt(codes []Code, g *graph.Graph, bufs map[string][]uint32, of fu
 		if c.CPU == nil {
 			return fmt.Errorf("%s has no CPU code", c.Name)
 		}
-		code, err := mapComposed(c.CPU)
+		code, err := cpuOn.mapComposed(c.CPU)
 		if err != nil {
 			return err
 		}
@@ -182,18 +182,23 @@ func f32Words(x []float32) []uint32 { return unsafe.Slice((*uint32)(unsafe.Point
 // the keys, which attention cannot see), and the first attended row moved by
 // one.
 func TestComposedCPUAttend(t *testing.T) {
-	// The served models' attention shapes: stories15M's, Llama-3.2-1B's and
-	// Qwen3-0.6B's, a pairing of two query heads to a kv head, and groups of
-	// three and six (SmolLM2-360M's, Qwen2.5-1.5B's), a division by a
-	// constant no shift makes.
+	gateComposedCPUAttend(
+		// The served models' attention shapes: stories15M's, Llama-3.2-1B's and
+		// Qwen3-0.6B's, a pairing of two query heads to a kv head, and groups of
+		// three and six (SmolLM2-360M's, Qwen2.5-1.5B's), a division by a
+		// constant no shift makes.
+		t, hostArm())
+}
+func gateComposedCPUAttend(t *testing.T, cpuOn cpuArm) {
+
 	for _, sh := range []struct{ heads, kvh, dim int }{{6, 6, 48}, {32, 8, 64}, {16, 8, 128}, {8, 2, 64}, {15, 5, 64}, {12, 2, 128}} {
 		t.Run(fmt.Sprintf("%dq%dkv%dd", sh.heads, sh.kvh, sh.dim), func(t *testing.T) {
-			composedCPUAttend(t, sh.heads, sh.kvh, sh.dim)
+			composedCPUAttend(t, cpuOn, sh.heads, sh.kvh, sh.dim)
 		})
 	}
 }
 
-func composedCPUAttend(t *testing.T, heads, kvh, dim int) {
+func composedCPUAttend(t *testing.T, cpuOn cpuArm, heads, kvh, dim int) {
 	const page, pos = 32, 70
 	r := Default()
 	g := attendGraph(heads, kvh, dim)
@@ -201,7 +206,7 @@ func composedCPUAttend(t *testing.T, heads, kvh, dim int) {
 	// request states the pools' layout, a position's row of elements.
 	_, codes, err := r.Form(Request{Graph: g,
 		Step:   Step{Rows: 1, Page: page, Keys: 4 * page, ActWindow: 32},
-		Device: Device{Kind: DeviceCPU, Slots: 6, Lanes: 8, ISA: uint64(cpu.CPU().ISA()), ExactDiv: true}})
+		Device: Device{Kind: DeviceCPU, Slots: 6, Lanes: 8, ISA: uint64(cpuOn.tg.Features().ISA()), ExactDiv: true}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -277,7 +282,7 @@ func composedCPUAttend(t *testing.T, heads, kvh, dim int) {
 			"rows": {0, start, pos + 1, pos}, "pages": pages, "q.off": {0},
 			"kv.k": append([]uint32(nil), kpool...), "kv.v": append([]uint32(nil), vpool...)}
 		bufs[g.Values[g.Out[0]].Name] = f32Words(out)
-		if err := runCPUCalls(codes, g, bufs); err != nil {
+		if err := runCPUCalls(cpuOn, codes, g, bufs); err != nil {
 			t.Fatal(err)
 		}
 		return out
@@ -314,7 +319,8 @@ func composedCPUAttend(t *testing.T, heads, kvh, dim int) {
 // model's biased keys), its kernels fused and with none joined to another
 // (as a part the registers refused is formed: the normalising map apart,
 // prescaled). The first attended row moved by one must fail it.
-func TestComposedCPUAttendRows(t *testing.T) {
+func TestComposedCPUAttendRows(t *testing.T) { gateComposedCPUAttendRows(t, hostArm()) }
+func gateComposedCPUAttendRows(t *testing.T, cpuOn cpuArm) {
 	unfused := Default()
 	p := unfused.Profiles[DeviceCPU]
 	p.Off = map[string]bool{"fuse": true}
@@ -326,19 +332,19 @@ func TestComposedCPUAttendRows(t *testing.T) {
 				reg  *Registry
 			}{{"fused", Default()}, {"unfused", unfused}} {
 				t.Run(fmt.Sprintf("%dq%dkv%dd/x%g/%s", sh.heads, sh.kvh, sh.dim, mag, arm.name), func(t *testing.T) {
-					composedCPUAttendRows(t, arm.reg, sh.heads, sh.kvh, sh.dim, mag)
+					composedCPUAttendRows(t, cpuOn, arm.reg, sh.heads, sh.kvh, sh.dim, mag)
 				})
 			}
 		}
 	}
 }
 
-func composedCPUAttendRows(t *testing.T, reg *Registry, heads, kvh, dim int, mag float32) {
+func composedCPUAttendRows(t *testing.T, cpuOn cpuArm, reg *Registry, heads, kvh, dim int, mag float32) {
 	const page, p0, R, capRows = 32, 40, 9, 16
 	g := attendGraph(heads, kvh, dim)
 	_, codes, err := reg.Form(Request{Graph: g,
 		Step:   Step{Rows: capRows, Page: page, Keys: 4 * page, ActWindow: 32, Seqs: 1},
-		Device: Device{Kind: DeviceCPU, Slots: 6, Lanes: 8, ISA: uint64(cpu.CPU().ISA()), ExactDiv: true}})
+		Device: Device{Kind: DeviceCPU, Slots: 6, Lanes: 8, ISA: uint64(cpuOn.tg.Features().ISA()), ExactDiv: true}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -426,7 +432,7 @@ func composedCPUAttendRows(t *testing.T, reg *Registry, heads, kvh, dim int, mag
 			"rows": rows, "pages": {0, 1, 2, 3}, "q.off": make([]uint32, capRows*4), "rows.n": {R},
 			"kv.k": pool(ks), "kv.v": pool(vs)}
 		bufs[g.Values[g.Out[0]].Name] = f32Words(out)
-		if err := runCPURows(codes, g, bufs, R); err != nil {
+		if err := runCPURows(cpuOn, codes, g, bufs, R); err != nil {
 			t.Fatal(err)
 		}
 		// The CPU's in-place pass may leave the output in a scratch the last
@@ -468,7 +474,7 @@ func composedCPUAttendRows(t *testing.T, reg *Registry, heads, kvh, dim int, mag
 
 // runCPURows is runCPUCalls for a form of several rows called for rows of
 // them: each code's calls' leading axis cut to the units the rows reach.
-func runCPURows(codes []Code, g *graph.Graph, bufs map[string][]uint32, rows int) error {
+func runCPURows(cpuOn cpuArm, codes []Code, g *graph.Graph, bufs map[string][]uint32, rows int) error {
 	cut := make([]Code, len(codes))
 	for i, c := range codes {
 		cut[i] = c
@@ -476,5 +482,5 @@ func runCPURows(codes []Code, g *graph.Graph, bufs map[string][]uint32, rows int
 			cut[i].Calls = append([]int{c.LiveUnitsOf(rows)}, c.Calls[1:]...)
 		}
 	}
-	return runCPUCalls(cut, g, bufs)
+	return runCPUCalls(cpuOn, cut, g, bufs)
 }

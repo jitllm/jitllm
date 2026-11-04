@@ -45,7 +45,10 @@ func declinedRefusal(err error) bool {
 // no tokenizer or quantisation in between. Random weights make it sharp: a
 // wiring error is NMSE ~1, not a near-miss. It cannot see a norm on fixtures
 // whose norm weights are all one; qwen3 is the exception.
-func TestSafetensorsMatchTransformers(t *testing.T) {
+func TestSafetensorsMatchTransformers(t *testing.T) { safetensorsMatchTransformers(t) }
+
+// safetensorsMatchTransformers is TestSafetensorsMatchTransformers with opts on every model it opens.
+func safetensorsMatchTransformers(t *testing.T, opts ...Option) {
 	golds, _ := filepath.Glob(filepath.Join("..", "..", "testdata", "golden", "hf", "*.json"))
 	if len(golds) == 0 {
 		t.Fatal("no goldens -- run scripts/hfgold.py; this gate proved nothing")
@@ -79,7 +82,7 @@ func TestSafetensorsMatchTransformers(t *testing.T) {
 			if err := json.Unmarshal(b, &gold); err != nil {
 				t.Fatal(err)
 			}
-			m, err := Open(hfContainer(t, name), WithKVF16(false))
+			m, err := Open(hfContainer(t, name), append([]Option{WithKVF16(false)}, opts...)...)
 			if err != nil {
 				if why, listed := hfGoldDeclined()[name]; listed && strings.Contains(err.Error(), why) {
 					t.Skipf("DECLINED BY NAME, and the golden is kept because it is what the "+

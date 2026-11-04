@@ -363,8 +363,8 @@ func (e *Engine) activate(en *entry) error {
 	// A context that outgrows the card moves blocks to the CPU one at a time
 	// -- only where the device choice lists the CPU, as the CLI's -relocate
 	// does. A choice of cards alone keeps the model off the CPU, so there the
-	// token takes the cards' refusal instead (model.WithCPU).
-	relocate, _ := gpu.AdmitsHost(en.spec)
+	// token takes the cards' refusal instead (model.WithDevices).
+	relocate, _ := gpu.ListsCPU(en.spec)
 	o := server.SessionOptions{ModelID: en.lm.ID(), MaxSeq: window, KeepOffHost: !relocate}
 	cacheOff := "turned off in Settings"
 	if e.st.KVCache.Get() {

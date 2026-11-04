@@ -11,7 +11,7 @@ import (
 // (graph.RopeTable.Grid) for the CPU and for a card at a picture's rows.
 func TestComposedCPUGridTableForms(t *testing.T) {
 	r := Default()
-	dev := Device{Kind: DeviceCPU, Slots: 1, Lanes: 8, ISA: uint64(cpu.CPU().ISA()), ExactDiv: true}
+	dev := Device{Kind: DeviceCPU, Slots: 1, Lanes: 8, ISA: uint64(cpu.Probe().ISA()), ExactDiv: true}
 	for _, hd := range []int{64, 72, 80} {
 		gr := TableGraph(graph.Rotary{NRot: hd, Grid: true}, 0)
 		for _, rows := range []int{1, 16, 1024} {

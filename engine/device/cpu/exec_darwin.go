@@ -11,7 +11,7 @@ type Code struct {
 	page  []byte
 	entry *byte
 	Size  int
-	// Name is the code's name (Host.MapNamed). Darwin's samplers take symbols
+	// Name is the code's name (Target.MapNamed). Darwin's samplers take symbols
 	// from a different mechanism, so it is recorded and otherwise unused.
 	Name string
 }

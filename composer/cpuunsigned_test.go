@@ -79,7 +79,7 @@ func TestCPUCompareIsUnsigned(t *testing.T) {
 			for i := range got {
 				got[i] = 0xdeadbeef
 			}
-			runCPUPrim(t, p, g, map[string][]uint32{"a": as, "b": bs, "o": got})
+			runCPUPrim(t, hostArm(), p, g, map[string][]uint32{"a": as, "b": bs, "o": got})
 			bad := 0
 			for i, pr := range pairs {
 				if want := unsignedWant(pr[0], pr[1]); got[i] != want {
