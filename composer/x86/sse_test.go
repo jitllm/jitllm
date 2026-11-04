@@ -3,7 +3,7 @@
 // amd64 only: these compare emitted x86 bytes against objdump, so they are
 // about an encoding, not a tier.
 
-package cpu
+package x86
 
 import (
 	"os"
@@ -43,7 +43,7 @@ func TestSSEEncodingMatchesObjdump(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			var a Buf
 			c.emit(&a)
-			b := a.Bytes()
+			b := bytesOf(t, &a)
 			if len(b) == 0 {
 				t.Fatal("emitted nothing")
 			}
@@ -71,7 +71,7 @@ func TestSSEThreeOperandLowering(t *testing.T) {
 	lower := func(name string, dst, src1, src2 Reg, commutes bool) []string {
 		var a Buf
 		a.sse3(0x58, 0, m0F, 0, commutes, dst, src1, src2) // addps
-		return disasmAll(t, dir, name, a.Bytes())
+		return disasmAll(t, dir, name, bytesOf(t, &a))
 	}
 	// dst == src1: no copy at all, which is the common accumulator shape.
 	if got := lower("same", Y1, Y1, Y2, true); len(got) != 1 || got[0] != "addps xmm1,xmm2" {
@@ -87,17 +87,13 @@ func TestSSEThreeOperandLowering(t *testing.T) {
 		t.Fatalf("disjoint lowered to %q, want %q", got, want)
 	}
 	// dst aliases src2 on a non-commutative op: a copy would destroy src2 and
-	// the op would read src1 twice, so it must panic.
-	func() {
-		defer func() {
-			if recover() == nil {
-				t.Fatal("dst==src2 on a non-commutative op did NOT panic; it " +
-					"would emit src1 op src1, which is wrong and fast")
-			}
-		}()
-		var d Buf
-		d.sse3(0x5C, 0, m0F, 0, false, Y1, Y2, Y1) // subps: a-b != b-a
-	}()
+	// the op would read src1 twice, so it must be refused.
+	var d Buf
+	d.sse3(0x5C, 0, m0F, 0, false, Y1, Y2, Y1) // subps: a-b != b-a
+	if _, err := d.Bytes(); err == nil {
+		t.Fatal("dst==src2 on a non-commutative op was not refused; it " +
+			"would emit src1 op src1, which is wrong and fast")
+	}
 }
 
 func disasmIntel(t *testing.T, dir, name string, code []byte) string {

@@ -75,6 +75,15 @@ type regUse struct {
 	touched bool
 }
 
+// Regs is the vector registers the buffer names (highest index + 1) and its
+// memory operands off the stack pointer.
+func (a *Buf) Regs() (vec, stack int) {
+	if a.regs.touched {
+		vec = a.regs.vecHigh + 1
+	}
+	return vec, a.regs.stack
+}
+
 func (r *regUse) vec(rs ...Reg) {
 	if !r.touched {
 		r.vecHigh, r.touched = -1, true

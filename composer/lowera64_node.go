@@ -3,9 +3,9 @@ package composer
 import (
 	"math/bits"
 
+	"github.com/jitllm/jitllm/composer/a64"
 	"github.com/jitllm/jitllm/composer/ir"
 	"github.com/jitllm/jitllm/composer/x86"
-	"github.com/jitllm/jitllm/engine/device/cpu"
 )
 
 // node makes node i as x86Lowerer.node does, each operation within 128-bit
@@ -18,7 +18,7 @@ func (e *a64Lowerer) node(i int) {
 		if nd.Reg == 0 && x.reloaded(i) || nd.Spill < 0 {
 			return
 		}
-		e.access(cpu.A64LdrX, uint8(e.xr(i)), a64Mem{cpu.X0, int32(nd.Imm)})
+		e.access(a64.A64LdrX, uint8(e.xr(i)), a64Mem{a64.X0, int32(nd.Imm)})
 	case OpFold:
 		init := k.Nodes[nd.B]
 		switch {
@@ -27,7 +27,7 @@ func (e *a64Lowerer) node(i int) {
 				e.fail("a sum carried on out of its register")
 			}
 		case init.Op == OpConst && init.Imm == 0 && x.gpr(i):
-			a.MOVreg(e.xr(i), cpu.XZR)
+			a.MOVreg(e.xr(i), a64.XZR)
 		case init.Op == OpConst && init.Imm == 0:
 			e.zero(e.reg(i))
 		case init.Op == OpLoad && x.home[nd.B] < 0 && init.Imm > 0:
@@ -55,7 +55,7 @@ func (e *a64Lowerer) node(i int) {
 		home := x.home[i]
 		m := e.addr(nd.Buf, nd.A, nd.Ptr)
 		if x.gpr(i) && !k.Bufs[nd.Buf].Half {
-			e.access(cpu.A64LdrW, uint8(e.xr(i)), m)
+			e.access(a64.A64LdrW, uint8(e.xr(i)), m)
 			return
 		}
 		r := e.reg(i)
@@ -66,8 +66,8 @@ func (e *a64Lowerer) node(i int) {
 				a.MOVIzero(hi(r))
 				return
 			}
-			e.vaccess(cpu.A64LdrD, lo(r), m)
-			e.vaccess(cpu.A64LdrD, hi(r), m.plus(8))
+			e.vaccess(a64.A64LdrD, lo(r), m)
+			e.vaccess(a64.A64LdrD, hi(r), m.plus(8))
 			a.FCVTL(lo(r), lo(r))
 			a.FCVTL(hi(r), hi(r))
 			return
@@ -78,7 +78,7 @@ func (e *a64Lowerer) node(i int) {
 		case x.lanes(home) > 0:
 			e.load8(r, m)
 		default:
-			e.vaccess(cpu.A64LdrS, lo(r), m)
+			e.vaccess(a64.A64LdrS, lo(r), m)
 			a.MOVIzero(hi(r))
 		}
 	case OpBitcast:
@@ -226,7 +226,7 @@ func (e *a64Lowerer) node(i int) {
 			case c == 0:
 				e.mov(r, s)
 			default:
-				each2(r, s, func(d, n cpu.VReg) { a.SSHR4s(d, n, uint8(min(c, 31))) })
+				each2(r, s, func(d, n a64.VReg) { a.SSHR4s(d, n, uint8(min(c, 31))) })
 			}
 		case !x.words[nd.B]:
 			e.shiftBy(r, s, e.xr(nd.B), true, a.SSHL4s)
@@ -363,7 +363,7 @@ func (e *a64Lowerer) node(i int) {
 
 // shiftBy is r = s shifted by the count in general register c, one count
 // for every lane: left, or right where right (a negated count).
-func (e *a64Lowerer) shiftBy(r, s x86.Reg, c cpu.XReg, right bool, op func(d, n, m cpu.VReg)) {
+func (e *a64Lowerer) shiftBy(r, s x86.Reg, c a64.XReg, right bool, op func(d, n, m a64.VReg)) {
 	a := e.a
 	if right {
 		a.NEG(a64Imm, c)
@@ -377,7 +377,7 @@ func (e *a64Lowerer) shiftBy(r, s x86.Reg, c cpu.XReg, right bool, op func(d, n,
 }
 
 // shiftByLanes is r = s shifted by each lane's count in c.
-func (e *a64Lowerer) shiftByLanes(r, s, c x86.Reg, right bool, op func(d, n, m cpu.VReg)) {
+func (e *a64Lowerer) shiftByLanes(r, s, c x86.Reg, right bool, op func(d, n, m a64.VReg)) {
 	if !right {
 		each(r, s, c, op)
 		return
@@ -401,7 +401,7 @@ func (e *a64Lowerer) arith(i int) {
 		if nd.Op == OpAnd {
 			op = a.AND16b
 		}
-		e.withMem(nd.B, a64Halves(r, s), func(h int, v cpu.VReg) { op(pair(r)[h], pair(s)[h], v) })
+		e.withMem(nd.B, a64Halves(r, s), func(h int, v a64.VReg) { op(pair(r)[h], pair(s)[h], v) })
 		return
 	}
 	if (x.words[i] || nd.Type == ir.F32) && nd.Op == OpAnd {
@@ -426,9 +426,9 @@ func (e *a64Lowerer) arith(i int) {
 		case c.Op == OpConst && c.Imm == 0:
 			e.mov(r, s)
 		case c.Op == OpConst && nd.Op == OpShl:
-			each2(r, s, func(d, n cpu.VReg) { a.SHL4s(d, n, uint8(c.Imm)) })
+			each2(r, s, func(d, n a64.VReg) { a.SHL4s(d, n, uint8(c.Imm)) })
 		case c.Op == OpConst:
-			each2(r, s, func(d, n cpu.VReg) { a.USHR4s(d, n, uint8(c.Imm)) })
+			each2(r, s, func(d, n a64.VReg) { a.USHR4s(d, n, uint8(c.Imm)) })
 		case !x.words[nd.B]:
 			e.shiftBy(r, s, e.xr(nd.B), nd.Op == OpShr, a.USHL4s)
 		default:
@@ -449,7 +449,7 @@ func (e *a64Lowerer) arith(i int) {
 		op = a.FMUL4s
 	}
 	r, s := e.reg(i), e.reg(nd.A)
-	e.withMem(nd.B, a64Halves(r, s), func(h int, v cpu.VReg) { op(pair(r)[h], pair(s)[h], v) })
+	e.withMem(nd.B, a64Halves(r, s), func(h int, v a64.VReg) { op(pair(r)[h], pair(s)[h], v) })
 }
 
 // fma is r = a*b + c, fused.
@@ -483,10 +483,10 @@ func (e *a64Lowerer) fma(i int) {
 	switch {
 	case k.Nodes[nd.B].Mem:
 		p := e.reg(nd.A)
-		e.withMem(nd.B, a64Halves(r, p), func(h int, v cpu.VReg) { a.FMLA4s(pair(r)[h], pair(p)[h], v) })
+		e.withMem(nd.B, a64Halves(r, p), func(h int, v a64.VReg) { a.FMLA4s(pair(r)[h], pair(p)[h], v) })
 	case k.Nodes[nd.A].Mem:
 		q := e.reg(nd.B)
-		e.withMem(nd.A, a64Halves(r, q), func(h int, v cpu.VReg) { a.FMLA4s(pair(r)[h], v, pair(q)[h]) })
+		e.withMem(nd.A, a64Halves(r, q), func(h int, v a64.VReg) { a.FMLA4s(pair(r)[h], v, pair(q)[h]) })
 	default:
 		each(r, e.reg(nd.A), e.reg(nd.B), a.FMLA4s)
 	}
@@ -588,15 +588,15 @@ func (e *a64Lowerer) lessGPR(i int) {
 	case k.Nodes[nd.B].Op == OpConst:
 		a.MOVconst(a64Imm, uint64(uint32(k.Nodes[nd.B].Imm)))
 		a.CMPw(e.xr(nd.A), a64Imm)
-		a.CSETMw(e.xr(i), cpu.CondLT)
+		a.CSETMw(e.xr(i), a64.CondLT)
 	case k.Nodes[nd.A].Op == OpConst:
 		a.MOVconst(a64Imm, uint64(uint32(k.Nodes[nd.A].Imm)))
 		a.CMPw(e.xr(nd.B), a64Imm)
-		a.CSETMw(e.xr(i), cpu.CondGT)
+		a.CSETMw(e.xr(i), a64.CondGT)
 	default:
 		p, q := e.xr(nd.A), e.xr(nd.B)
 		a.CMPw(p, q)
-		a.CSETMw(e.xr(i), cpu.CondLT)
+		a.CSETMw(e.xr(i), a64.CondLT)
 	}
 }
 
@@ -618,7 +618,7 @@ func (e *a64Lowerer) andNotGPR(i int) {
 	default:
 		p, q := e.xr(nd.A), e.xr(nd.B)
 		if p == q {
-			a.MOVreg(dst, cpu.XZR)
+			a.MOVreg(dst, a64.XZR)
 		} else {
 			a.BICreg(dst, p, q)
 		}
@@ -627,17 +627,17 @@ func (e *a64Lowerer) andNotGPR(i int) {
 }
 
 // keep is the condition under which a min or max keeps its first operand.
-func keep(nd Node) cpu.A64Cond {
+func keep(nd Node) a64.A64Cond {
 	signed := nd.Type == ir.I32
 	switch {
 	case nd.Op == OpMin && signed:
-		return cpu.CondLE
+		return a64.CondLE
 	case nd.Op == OpMin:
-		return cpu.CondLS
+		return a64.CondLS
 	case signed:
-		return cpu.CondGE
+		return a64.CondGE
 	default:
-		return cpu.CondHS
+		return a64.CondHS
 	}
 }
 
@@ -689,7 +689,7 @@ func (e *a64Lowerer) integer(i int) {
 			return
 		}
 	} else {
-		var p cpu.XReg
+		var p a64.XReg
 		if c := k.Nodes[A]; c.Op == OpConst {
 			p = a64T
 			a.MOVconst(p, uint64(uint32(c.Imm)))
@@ -743,7 +743,7 @@ func (e *a64Lowerer) integer(i int) {
 
 // divConst is dst = src / c, or src % c, for a 32-bit unsigned src and a
 // constant c > 1, as x86Lowerer.divConst makes it.
-func (e *a64Lowerer) divConst(op Op, dst, src cpu.XReg, c uint32) {
+func (e *a64Lowerer) divConst(op Op, dst, src a64.XReg, c uint32) {
 	a := e.a
 	if c&(c-1) == 0 {
 		if op == OpDiv {
@@ -784,15 +784,15 @@ func (e *a64Lowerer) store(i int) {
 			e.fail("store %d: a half from a general register", i)
 			return
 		}
-		e.access(cpu.A64StrW, uint8(e.xr(s.Val)), m)
+		e.access(a64.A64StrW, uint8(e.xr(s.Val)), m)
 		return
 	}
 	r := e.reg(s.Val)
 	switch {
 	case s.Narrow, e.k.Bufs[s.Buf].Half && wide:
-		e.vaccess(cpu.A64StrQ, lo(r), m)
+		e.vaccess(a64.A64StrQ, lo(r), m)
 	case e.k.Bufs[s.Buf].Half:
-		e.vaccess(cpu.A64StrH, lo(r), m)
+		e.vaccess(a64.A64StrH, lo(r), m)
 	case wide && s.Step > 1:
 		// A jammed store whose lanes are Step elements apart: lane by lane,
 		// as x86Lowerer.store makes it.
@@ -800,19 +800,19 @@ func (e *a64Lowerer) store(i int) {
 			t := e.temp(v)
 			for l := range 4 {
 				e.a.DUPs4lane(t, v, uint8(l))
-				e.vaccess(cpu.A64StrS, t, m.plus(int32((4*h+l)*s.Step*4)))
+				e.vaccess(a64.A64StrS, t, m.plus(int32((4*h+l)*s.Step*4)))
 			}
 			e.release(t)
 		}
 	case wide:
-		e.vaccess(cpu.A64StrQ, lo(r), m)
-		e.vaccess(cpu.A64StrQ, hi(r), m.plus(16))
+		e.vaccess(a64.A64StrQ, lo(r), m)
+		e.vaccess(a64.A64StrQ, hi(r), m.plus(16))
 	default:
-		e.vaccess(cpu.A64StrS, lo(r), m)
+		e.vaccess(a64.A64StrS, lo(r), m)
 	}
 }
 
-func (e *a64Lowerer) counter(c int) cpu.XReg {
+func (e *a64Lowerer) counter(c int) a64.XReg {
 	r := e.k.Loops[c].Reg
 	if r == 0 {
 		e.fail("loop %d has no counter", c)
@@ -861,21 +861,21 @@ func (e *a64Lowerer) take(c int) {
 	k, a := e.k, e.a
 	l := k.Loops[c]
 	if it := k.iterOf(c); it >= 0 && k.Nodes[it].Reg > 0 {
-		a.MOVreg(e.xr(it), cpu.XZR)
+		a.MOVreg(e.xr(it), a64.XZR)
 	} else if it >= 0 && k.Nodes[it].Spill > 0 {
-		e.slot(cpu.A64StrX, uint8(cpu.XZR), k.Nodes[it].Spill)
+		e.slot(a64.A64StrX, uint8(a64.XZR), k.Nodes[it].Spill)
 	}
 	zeroed := map[int]bool{}
 	for _, cu := range l.Cursors {
 		if cu.Take && cu.Ptr > 0 && k.Ptrs[cu.Ptr-1].Off > 0 {
 			if off := k.Ptrs[cu.Ptr-1].Off; !zeroed[off] {
-				a.MOVreg(e.gp(x86.Reg(off-1)), cpu.XZR)
+				a.MOVreg(e.gp(x86.Reg(off-1)), a64.XZR)
 				zeroed[off] = true
 			}
 			continue
 		}
 		if cu.Take && cu.Ptr > 0 && k.Ptrs[cu.Ptr-1].Spill > 0 {
-			e.slot(cpu.A64StrX, uint8(e.ptrReg(cu.Buf, cu.From)), k.Ptrs[cu.Ptr-1].Spill)
+			e.slot(a64.A64StrX, uint8(e.ptrReg(cu.Buf, cu.From)), k.Ptrs[cu.Ptr-1].Spill)
 		} else if cu.Take {
 			d := e.ptrReg(cu.Buf, cu.Ptr)
 			a.MOVreg(d, e.ptrReg(cu.Buf, cu.From))
@@ -902,9 +902,9 @@ func (e *a64Lowerer) leave(c int) {
 			stepped[off] = true
 		case cu.Ptr > 0 && k.Ptrs[cu.Ptr-1].Spill > 0:
 			s := k.Ptrs[cu.Ptr-1].Spill
-			e.slot(cpu.A64LdrX, uint8(a64T), s)
+			e.slot(a64.A64LdrX, uint8(a64T), s)
 			e.addConstTo(a64T, a64T, step)
-			e.slot(cpu.A64StrX, uint8(a64T), s)
+			e.slot(a64.A64StrX, uint8(a64T), s)
 		default:
 			p := e.ptrReg(cu.Buf, cu.Ptr)
 			e.addConstTo(p, p, step)
@@ -916,9 +916,9 @@ func (e *a64Lowerer) leave(c int) {
 		e.addConstTo(r, r, step)
 	} else if it >= 0 && k.Nodes[it].Spill > 0 {
 		s := k.Nodes[it].Spill
-		e.slot(cpu.A64LdrX, uint8(a64T), s)
+		e.slot(a64.A64LdrX, uint8(a64T), s)
 		e.addConstTo(a64T, a64T, step)
-		e.slot(cpu.A64StrX, uint8(a64T), s)
+		e.slot(a64.A64StrX, uint8(a64T), s)
 	}
 	if l.once() {
 		return

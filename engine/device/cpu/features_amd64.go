@@ -3,6 +3,8 @@ package cpu
 import (
 	"sync"
 	"unsafe"
+
+	"github.com/jitllm/jitllm/composer/x86"
 )
 
 // Features is what this CPU can execute, probed once and asked by the emitters.
@@ -103,7 +105,7 @@ func HostTier() Tier {
 // cpuid runs the JIT-compiled CPUID probe and returns EAX, EBX, ECX, EDX
 // (see feature_amd64.go).
 func cpuid(leaf, sub int32) (eax, ebx, ecx, edx uint32, ok bool) {
-	code, err := mapExec(cpuidProbe(leaf, sub))
+	code, err := mapProbe(cpuidProbe(leaf, sub))
 	if err != nil {
 		return 0, 0, 0, 0, false
 	}
@@ -114,14 +116,22 @@ func cpuid(leaf, sub int32) (eax, ebx, ecx, edx uint32, ok bool) {
 	return uint32(out[0]), uint32(out[1]), uint32(out[2]), uint32(out[3]), true
 }
 
+// mapProbe maps a probe's code, or passes on the error emitting it met.
+func mapProbe(b []byte, err error) (*Code, error) {
+	if err != nil {
+		return nil, err
+	}
+	return mapExec(b)
+}
+
 // xcr0Probe emits: ECX = 0, XGETBV, store EDX:EAX through Args.Out.
-func xcr0Probe() []byte {
-	var a Buf
-	a.MOVLoad(R10, At(RDI, 0))
-	a.MOVimm32(RCX, 0)
+func xcr0Probe() ([]byte, error) {
+	var a x86.Buf
+	a.MOVLoad(x86.R10, x86.At(x86.RDI, 0))
+	a.MOVimm32(x86.RCX, 0)
 	a.XGETBV()
-	a.MOVStore(At(R10, 0), RAX)
-	a.MOVStore(At(R10, 8), RDX)
+	a.MOVStore(x86.At(x86.R10, 0), x86.RAX)
+	a.MOVStore(x86.At(x86.R10, 8), x86.RDX)
 	a.RET()
 	return a.Bytes()
 }
@@ -151,7 +161,7 @@ func probeFeatures() {
 
 	// XGETBV is only legal when OSXSAVE is set; otherwise it raises #UD.
 	if osxsave {
-		if code, err := mapExec(xcr0Probe()); err == nil {
+		if code, err := mapProbe(xcr0Probe()); err == nil {
 			var out [2]uint64
 			args := Args{Out: (*float32)(unsafe.Pointer(&out[0]))}
 			code.Call(&args)

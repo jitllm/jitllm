@@ -1,6 +1,9 @@
-package cpu
+package a64
 
-import "fmt"
+import (
+	"encoding/binary"
+	"fmt"
+)
 
 // A64 emits ARMv8-A (AArch64) machine code, the arm64 sibling of Buf.
 //
@@ -123,6 +126,9 @@ type A64 struct {
 	b      []byte
 	fixup  []a64fixup
 	labels []int
+	// err is the first instruction the buffer could not encode; Bytes
+	// returns it.
+	err error
 }
 
 // a64fixup is a branch whose target was not yet bound. bits is the width of the
@@ -142,14 +148,22 @@ func (a *A64) w(v uint32) {
 // Bytes returns the emitted code. Panics if a label was used but never bound —
 // a dangling branch is a silent infinite loop or a branch into data, so it must
 // not be possible to get bytes out.
-func (a *A64) Bytes() []byte {
+func (a *A64) Bytes() ([]byte, error) {
 	for _, f := range a.fixup {
 		if f.lbl >= len(a.labels) || a.labels[f.lbl] < 0 {
-			panic("jit: label used but never bound")
+			a.fail("a64: a label used and never bound")
 		}
 	}
-	noteEmitA64(a.b)
-	return a.b
+	if a.err != nil {
+		return nil, a.err
+	}
+	return a.b, nil
+}
+
+func (a *A64) fail(format string, args ...any) {
+	if a.err == nil {
+		a.err = fmt.Errorf(format, args...)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -163,10 +177,10 @@ func (a *A64) Bytes() []byte {
 
 // scaled encodes a 12-bit unsigned offset field, refusing anything the form
 // cannot express.
-func scaled(off int32, size int32, what string) uint32 {
+func (a *A64) scaled(off int32, size int32, what string) uint32 {
 	if off < 0 || off%size != 0 || off/size > 4095 {
-		panic(fmt.Sprintf("jit: %s offset %d must be a non-negative multiple of %d, at most %d",
-			what, off, size, 4095*size))
+		a.fail("a64: %s offset %d must be a non-negative multiple of %d, at most %d",
+			what, off, size, 4095*size)
 	}
 	return uint32(off/size) << 10
 }
@@ -174,9 +188,9 @@ func scaled(off int32, size int32, what string) uint32 {
 // unscaled encodes the signed 9-bit field LDUR/STUR use, which takes ANY byte
 // offset in [-256, 255]. This is what makes a Q4_0 block header addressable:
 // its weights sit at +2 and +18, neither of which is a multiple of 16.
-func unscaled(off int32, what string) uint32 {
+func (a *A64) unscaled(off int32, what string) uint32 {
 	if off < -256 || off > 255 {
-		panic(fmt.Sprintf("jit: %s offset %d is outside the imm9 range [-256,255]", what, off))
+		a.fail("a64: %s offset %d is outside the imm9 range [-256,255]", what, off)
 	}
 	return uint32(off&0x1FF) << 12
 }
@@ -184,9 +198,9 @@ func unscaled(off int32, what string) uint32 {
 // imm12 encodes an ADD/SUB immediate. No lsl #12 form: nothing here needs it,
 // and offering it invites a caller to pass a value that silently loses its low
 // twelve bits.
-func imm12(v int32, what string) uint32 {
+func (a *A64) imm12(v int32, what string) uint32 {
 	if v < 0 || v > 4095 {
-		panic(fmt.Sprintf("jit: %s immediate %d is outside [0,4095]", what, v))
+		a.fail("a64: %s immediate %d is outside [0,4095]", what, v)
 	}
 	return uint32(v) << 10
 }
@@ -196,17 +210,17 @@ func imm12(v int32, what string) uint32 {
 
 // LDRx is ldr xt, [xn, #off]. off is scaled by 8, so 0..32760 in steps of 8.
 func (a *A64) LDRx(rt, rn XReg, off int32) {
-	a.w(0xF9400000 | scaled(off, 8, "ldr x") | uint32(rn)<<5 | uint32(rt))
+	a.w(0xF9400000 | a.scaled(off, 8, "ldr x") | uint32(rn)<<5 | uint32(rt))
 }
 
 // STRx is str xt, [xn, #off].
 func (a *A64) STRx(rt, rn XReg, off int32) {
-	a.w(0xF9000000 | scaled(off, 8, "str x") | uint32(rn)<<5 | uint32(rt))
+	a.w(0xF9000000 | a.scaled(off, 8, "str x") | uint32(rn)<<5 | uint32(rt))
 }
 
 // ADDimm is add xd, xn, #imm.
 func (a *A64) ADDimm(rd, rn XReg, imm int32) {
-	a.w(0x91000000 | imm12(imm, "add") | uint32(rn)<<5 | uint32(rd))
+	a.w(0x91000000 | a.imm12(imm, "add") | uint32(rn)<<5 | uint32(rd))
 }
 
 // ADDreg is add xd, xn, xm. The immediate form is only 12 bits, and a GEMM row
@@ -219,7 +233,7 @@ func (a *A64) ADDreg(rd, rn, rm XReg) {
 // how a row kernel splits a runtime length into its remainders.
 func (a *A64) ANDlow(rd, rn XReg, bits uint32) {
 	if bits < 1 || bits > 63 {
-		panic("a64: ANDlow: width out of range")
+		a.fail("a64: ANDlow: width out of range")
 	}
 	a.w(0x92400000 | (bits-1)<<10 | uint32(rn)<<5 | uint32(rd))
 }
@@ -227,7 +241,7 @@ func (a *A64) ANDlow(rd, rn XReg, bits uint32) {
 // LSRimm is lsr xd, xn, #sh, which arm64 encodes as UBFM xd, xn, #sh, #63.
 func (a *A64) LSRimm(rd, rn XReg, sh uint32) {
 	if sh > 63 {
-		panic("a64: LSRimm: shift out of range")
+		a.fail("a64: LSRimm: shift out of range")
 	}
 	a.w(0xD340_0000 | sh<<16 | 63<<10 | uint32(rn)<<5 | uint32(rd))
 }
@@ -235,7 +249,7 @@ func (a *A64) LSRimm(rd, rn XReg, sh uint32) {
 // SUBimm is sub xd, xn, #imm. Flags are not set: loops branch on CBNZ, which
 // tests the register itself.
 func (a *A64) SUBimm(rd, rn XReg, imm int32) {
-	a.w(0xD1000000 | imm12(imm, "sub") | uint32(rn)<<5 | uint32(rd))
+	a.w(0xD1000000 | a.imm12(imm, "sub") | uint32(rn)<<5 | uint32(rd))
 }
 
 // MOVimm materialises a 64-bit immediate: one MOVZ when it fits a single
@@ -243,7 +257,7 @@ func (a *A64) SUBimm(rd, rn XReg, imm int32) {
 // instruction), otherwise MOVZ then a MOVK per non-zero field.
 func (a *A64) MOVimm(rd XReg, imm int64) {
 	if imm < 0 {
-		panic(fmt.Sprintf("jit: MOVimm %d is negative", imm))
+		a.fail("a64: MOVimm %d is negative", imm)
 	}
 	for sh := 0; sh < 4; sh++ {
 		if v := uint64(imm) >> (16 * sh); v <= 0xFFFF && v<<(16*sh) == uint64(imm) {
@@ -277,7 +291,7 @@ func (a *A64) MOVimm(rd XReg, imm int64) {
 // field. Pinned by TestA64ShiftEncodingsMatchClang.
 func (a *A64) MOVK(rd XReg, imm16 uint16, shift uint8) {
 	if shift > 3 {
-		panic(fmt.Sprintf("jit: MOVK shift %d, want 0..3", shift))
+		a.fail("a64: MOVK shift %d, want 0..3", shift)
 	}
 	a.w(0xF2800000 | uint32(shift)<<21 | uint32(imm16)<<5 | uint32(rd))
 }
@@ -319,7 +333,7 @@ func (a *A64) ST2Post(vt VReg, rn XReg) { a.w(0x4C9F8800 | uint32(rn)<<5 | uint3
 
 // STRd is str dt, [xn, #off]: the low 8 bytes. off is scaled by 8.
 func (a *A64) STRd(vt VReg, rn XReg, off int32) {
-	a.w(0xFD000000 | scaled(off, 8, "str d") | uint32(rn)<<5 | uint32(vt))
+	a.w(0xFD000000 | a.scaled(off, 8, "str d") | uint32(rn)<<5 | uint32(vt))
 }
 
 // USHL4s is ushl vd.4s, vn.4s, vm.4s: each lane shifted left by the matching
@@ -341,7 +355,7 @@ func (a *A64) USHL16b(vd, vn, vm VReg) {
 
 // LDRq is ldr qt, [xn, #off]: 16 bytes. off is scaled by 16 (0..65520).
 func (a *A64) LDRq(vt VReg, rn XReg, off int32) {
-	a.w(0x3DC00000 | scaled(off, 16, "ldr q") | uint32(rn)<<5 | uint32(vt))
+	a.w(0x3DC00000 | a.scaled(off, 16, "ldr q") | uint32(rn)<<5 | uint32(vt))
 }
 
 // LDPq is ldp qt1, qt2, [xn, #off]: thirty-two bytes in one instruction.
@@ -354,7 +368,7 @@ func (a *A64) LDRq(vt VReg, rn XReg, off int32) {
 // -1024..1008 -- much tighter than LDR q's unsigned 0..65520, and it is checked.
 func (a *A64) LDPq(vt1, vt2 VReg, rn XReg, off int32) {
 	if off%16 != 0 || off < -1024 || off > 1008 {
-		panic(fmt.Sprintf("ldp q: offset %d not a multiple of 16 in -1024..1008", off))
+		a.fail("a64: ldp q: offset %d not a multiple of 16 in -1024..1008", off)
 	}
 	imm7 := uint32(off/16) & 0x7F
 	a.w(0xAD400000 | imm7<<15 | uint32(vt2)<<10 | uint32(rn)<<5 | uint32(vt1))
@@ -362,39 +376,39 @@ func (a *A64) LDPq(vt1, vt2 VReg, rn XReg, off int32) {
 
 // STRq is str qt, [xn, #off].
 func (a *A64) STRq(vt VReg, rn XReg, off int32) {
-	a.w(0x3D800000 | scaled(off, 16, "str q") | uint32(rn)<<5 | uint32(vt))
+	a.w(0x3D800000 | a.scaled(off, 16, "str q") | uint32(rn)<<5 | uint32(vt))
 }
 
 // LDURq is ldur qt, [xn, #off]: 16 bytes at any byte offset in [-256,255].
 // This is how quantized weights are read: a Q4_0 block is 18 bytes and a Q8_0
 // block 34, so the payload is never 16-byte aligned.
 func (a *A64) LDURq(vt VReg, rn XReg, off int32) {
-	a.w(0x3CC00000 | unscaled(off, "ldur q") | uint32(rn)<<5 | uint32(vt))
+	a.w(0x3CC00000 | a.unscaled(off, "ldur q") | uint32(rn)<<5 | uint32(vt))
 }
 
 // LDRh is ldr ht, [xn, #off]: 2 bytes into lane 0, upper bits zeroed. The block
 // scale d_w is an f16 at the head of every block. off is scaled by 2.
 func (a *A64) LDRh(vt VReg, rn XReg, off int32) {
-	a.w(0x7D400000 | scaled(off, 2, "ldr h") | uint32(rn)<<5 | uint32(vt))
+	a.w(0x7D400000 | a.scaled(off, 2, "ldr h") | uint32(rn)<<5 | uint32(vt))
 }
 
 // LDRb is ldr bt, [xn, #off]: one byte into lane 0, upper bits zeroed. off is
 // scaled by 1. MXFP4's d plane holds four rows to a word, so a wider load on a
 // tensor's last row would read past the plane.
 func (a *A64) LDRb(vt VReg, rn XReg, off int32) {
-	a.w(0x3D400000 | scaled(off, 1, "ldr b") | uint32(rn)<<5 | uint32(vt))
+	a.w(0x3D400000 | a.scaled(off, 1, "ldr b") | uint32(rn)<<5 | uint32(vt))
 }
 
 // LDRs is ldr st, [xn, #off]: 4 bytes into lane 0. Landing a float32 in lane 0
 // is exactly what the by-element FMLA wants, so this replaces amd64's
 // VBROADCASTSS with no broadcast at all. off is scaled by 4.
 func (a *A64) LDRs(vt VReg, rn XReg, off int32) {
-	a.w(0xBD400000 | scaled(off, 4, "ldr s") | uint32(rn)<<5 | uint32(vt))
+	a.w(0xBD400000 | a.scaled(off, 4, "ldr s") | uint32(rn)<<5 | uint32(vt))
 }
 
 // STRs is str st, [xn, #off]: lane 0 as one float32, the kernel's only output.
 func (a *A64) STRs(vt VReg, rn XReg, off int32) {
-	a.w(0xBD000000 | scaled(off, 4, "str s") | uint32(rn)<<5 | uint32(vt))
+	a.w(0xBD000000 | a.scaled(off, 4, "str s") | uint32(rn)<<5 | uint32(vt))
 }
 
 // ---------------------------------------------------------------------------
@@ -432,7 +446,7 @@ func (a *A64) SDOT(vd, vn, vm VReg) {
 // and getting it wrong silently selects a different k-group.
 func (a *A64) SDOTelem(vd, vn, vm VReg, idx uint8) {
 	if idx > 3 {
-		panic(fmt.Sprintf("jit: SDOTelem index %d, want 0..3", idx))
+		a.fail("a64: SDOTelem index %d, want 0..3", idx)
 	}
 	a.w(0x4F80E000 | uint32(idx&1)<<21 | uint32(idx>>1)<<11 |
 		uint32(vm)<<16 | uint32(vn)<<5 | uint32(vd))
@@ -466,7 +480,7 @@ func (a *A64) SUB16b(vd, vn, vm VReg) {
 // wrong shift.
 func (a *A64) USHR16b(vd, vn VReg, shift uint8) {
 	if shift < 1 || shift > 8 {
-		panic(fmt.Sprintf("jit: USHR16b shift %d, want 1..8", shift))
+		a.fail("a64: USHR16b shift %d, want 1..8", shift)
 	}
 	a.w(0x6F000400 | uint32(16-shift)<<16 | uint32(vn)<<5 | uint32(vd))
 }
@@ -476,7 +490,7 @@ func (a *A64) USHR16b(vd, vn VReg, shift uint8) {
 // encodes 16-shift; getting that backwards shifts by the wrong amount.
 func (a *A64) SHL16b(vd, vn VReg, shift uint8) {
 	if shift > 7 {
-		panic(fmt.Sprintf("jit: SHL16b shift %d, want 0..7", shift))
+		a.fail("a64: SHL16b shift %d, want 0..7", shift)
 	}
 	a.w(0x4F005400 | uint32(8+shift)<<16 | uint32(vn)<<5 | uint32(vd))
 }
@@ -533,7 +547,7 @@ func (a *A64) TBL(vd, vn, vm VReg) {
 // mask; NEON has no such thing, so a two-dword blend is two of these.
 func (a *A64) INSs(vd VReg, to uint8, vn VReg, from uint8) {
 	if to > 3 || from > 3 {
-		panic(fmt.Sprintf("jit: INSs lanes %d,%d, want 0..3", to, from))
+		a.fail("a64: INSs lanes %d,%d, want 0..3", to, from)
 	}
 	imm5 := uint32(to)<<3 | 4
 	a.w(0x6E000400 | imm5<<16 | uint32(from)<<13 | uint32(vn)<<5 | uint32(vd))
@@ -703,7 +717,7 @@ func (a *A64) UZP2h8(vd, vn, vm VReg) {
 // PRFM is prfm pldl1keep, [xn, #off]: a load hint for the line at xn+off that
 // retires without waiting for it. Encoding from llvm-mc.
 func (a *A64) PRFM(rn XReg, off int32) {
-	a.w(0xF9800000 | scaled(off, 8, "prfm") | uint32(rn)<<5)
+	a.w(0xF9800000 | a.scaled(off, 8, "prfm") | uint32(rn)<<5)
 }
 
 // prfmPLDL2KEEP is PRFM's prfop for a load hint into L2 (Rt = 0b00010).
@@ -711,7 +725,7 @@ const prfmPLDL2KEEP = 2
 
 // PRFMop is PRFM with the prfop in Rt: prfm <op>, [xn, #off].
 func (a *A64) PRFMop(op uint32, rn XReg, off int32) {
-	a.w(0xF9800000 | scaled(off, 8, "prfm") | uint32(rn)<<5 | op)
+	a.w(0xF9800000 | a.scaled(off, 8, "prfm") | uint32(rn)<<5 | op)
 }
 
 func (a *A64) FCVTL2(vd, vn VReg) { a.w(0x4E217800 | uint32(vn)<<5 | uint32(vd)) }
@@ -730,7 +744,7 @@ func (a *A64) FMULs(vd, vn, vm VReg) {
 // 4-bit Rm plus M bit), so masking it to four bits would drop v16-v31.
 func (a *A64) FMLAelem(vd, vn, vm VReg, idx uint8) {
 	if idx > 3 {
-		panic(fmt.Sprintf("jit: FMLAelem index %d, want 0..3", idx))
+		a.fail("a64: FMLAelem index %d, want 0..3", idx)
 	}
 	a.w(0x4F801000 | uint32(idx&1)<<21 | uint32(idx>>1)<<11 |
 		uint32(vm)<<16 | uint32(vn)<<5 | uint32(vd))
@@ -756,7 +770,7 @@ func (a *A64) FMLSelem(vd, vn, vm VReg, idx uint8) { a.fmaElem(0x4F805000, vd, v
 
 func (a *A64) fmaElem(base uint32, vd, vn, vm VReg, idx uint8) {
 	if idx > 3 {
-		panic(fmt.Sprintf("jit: by-element index %d, want 0..3", idx))
+		a.fail("a64: by-element index %d, want 0..3", idx)
 	}
 	a.w(base | uint32(idx&1)<<21 | uint32(idx>>1)<<11 |
 		uint32(vm)<<16 | uint32(vn)<<5 | uint32(vd))
@@ -836,7 +850,7 @@ func (a *A64) SUB4s(vd, vn, vm VReg) {
 // size; pinned by TestA64ShiftEncodingsMatchClang.
 func (a *A64) USHR4s(vd, vn VReg, shift uint8) {
 	if shift < 1 || shift > 32 {
-		panic(fmt.Sprintf("jit: USHR4s shift %d, want 1..32", shift))
+		a.fail("a64: USHR4s shift %d, want 1..32", shift)
 	}
 	a.w(0x6F000400 | uint32(64-shift)<<16 | uint32(vn)<<5 | uint32(vd))
 }
@@ -845,7 +859,7 @@ func (a *A64) USHR4s(vd, vn VReg, shift uint8) {
 // U bit clear. The image resampler's fixed-point rounding shift.
 func (a *A64) SSHR4s(vd, vn VReg, shift uint8) {
 	if shift < 1 || shift > 32 {
-		panic(fmt.Sprintf("jit: SSHR4s shift %d, want 1..32", shift))
+		a.fail("a64: SSHR4s shift %d, want 1..32", shift)
 	}
 	a.w(0x4F000400 | uint32(64-shift)<<16 | uint32(vn)<<5 | uint32(vd))
 }
@@ -854,7 +868,7 @@ func (a *A64) SSHR4s(vd, vn VReg, shift uint8) {
 // the f32 exponent field.
 func (a *A64) SHL4s(vd, vn VReg, shift uint8) {
 	if shift > 31 {
-		panic(fmt.Sprintf("jit: SHL4s shift %d, want 0..31", shift))
+		a.fail("a64: SHL4s shift %d, want 0..31", shift)
 	}
 	a.w(0x4F005400 | uint32(32+shift)<<16 | uint32(vn)<<5 | uint32(vd))
 }
@@ -926,7 +940,7 @@ func (a *A64) setDisp(at int, bits uint, tgt int) {
 	d := (tgt - at) / 4
 	lim := 1 << (bits - 1)
 	if d < -lim || d >= lim {
-		panic(fmt.Sprintf("jit: branch displacement %d instructions does not fit in imm%d", d, bits))
+		a.fail("a64: branch displacement %d instructions does not fit in imm%d", d, bits)
 	}
 	mask := uint32(1)<<bits - 1
 	shift := uint(5)
@@ -953,4 +967,19 @@ func (a *A64) patch() {
 		a.setDisp(f.at, f.bits, tgt)
 	}
 	a.fixup = kept
+}
+
+// StackRefs is the loads and stores in code that address off SP: a load or
+// store (op0 = x1x0) whose base register Rn is 31, the literal form (which
+// has no Rn) aside.
+func StackRefs(code []byte) int {
+	n := 0
+	for i := 0; i+4 <= len(code); i += 4 {
+		w := binary.LittleEndian.Uint32(code[i:])
+		literal := (w>>27)&7 == 3 && (w>>24)&1 == 0
+		if (w>>25)&5 == 4 && !literal && (w>>5)&31 == 31 {
+			n++
+		}
+	}
+	return n
 }

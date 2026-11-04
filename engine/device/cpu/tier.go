@@ -1,6 +1,10 @@
 package cpu
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/jitllm/jitllm/composer/x86"
+)
 
 // Tier is the instruction-set tier a host runs and a kernel is generated for.
 //
@@ -55,31 +59,32 @@ func (t Tier) String() string {
 // a host has.
 //
 // It is carried in the kernel's bytes: an SSE-tier kernel begins with a long
-// NOP whose displacement spells the set (DeclareISA, isa.go), so Map can check
-// a buffer against this host with no x86 decoder. A kernel with no
-// declaration is an AVX2-tier kernel and needs AVX2|FMA|F16C.
+// NOP whose displacement spells the set (composer/x86's DeclareISA), so Map
+// can check a buffer against this host with no x86 decoder. A kernel with no
+// declaration is an AVX2-tier kernel and needs AVX2|FMA|F16C. Its x86 bits
+// are the assembler's, which writes the declaration this reads.
 type ISA uint16
 
 const (
-	ISASSE2 ISA = 1 << iota
-	ISASSE3
-	ISASSSE3
-	ISASSE41
-	ISASSE42
-	ISAPOPCNT
+	ISASSE2   = ISA(x86.ISASSE2)
+	ISASSE3   = ISA(x86.ISASSE3)
+	ISASSSE3  = ISA(x86.ISASSSE3)
+	ISASSE41  = ISA(x86.ISASSE41)
+	ISASSE42  = ISA(x86.ISASSE42)
+	ISAPOPCNT = ISA(x86.ISAPOPCNT)
 	// ISAAVX2 is AVX2 WITH the OS saving YMM state (Features.UsableAVX2): the
 	// silicon having the unit is not enough to execute it.
-	ISAAVX2
-	ISAFMA
-	ISAF16C
+	ISAAVX2 = ISA(x86.ISAAVX2)
+	ISAFMA  = ISA(x86.ISAFMA)
+	ISAF16C = ISA(x86.ISAF16C)
 	// ISAVNNI is AVX-VNNI, the VEX-encoded VPDPBUSD.
-	ISAVNNI
+	ISAVNNI = ISA(x86.ISAVNNI)
 	// ISABMI2 is SHRX and SHLX: not in the AVX2 tier's floor, so a CPU
 	// with AVX2 and without BMI2 keeps the AVX2 tier's kernels.
-	ISABMI2
+	ISABMI2 = ISA(x86.ISABMI2)
 	// ISADotProd is arm64's FEAT_DotProd, SDOT: the one bit of the set an
-	// arm64 host states.
-	ISADotProd
+	// arm64 host states, the bit after x86's.
+	ISADotProd = ISABMI2 << 1
 )
 
 // ISATierSSE is the floor of the SSE tier: what every SSE-tier kernel may
@@ -87,10 +92,10 @@ const (
 // tables) and SSE4.1 carries PMOVZX/PMOVSX (the scale unpack); every x86-64
 // part since ~2008 has them. SSE4.2 and POPCNT are
 // probed and named but not assumed.
-const ISATierSSE = ISASSE2 | ISASSE3 | ISASSSE3 | ISASSE41
+const ISATierSSE = ISA(x86.ISATierSSE)
 
 // ISATierAVX2 is what an UNDECLARED kernel needs: the AVX2 tier's floor.
-const ISATierAVX2 = ISAAVX2 | ISAFMA | ISAF16C
+const ISATierAVX2 = ISA(x86.ISATierAVX2)
 
 func isaNames() [12]string {
 	return [...]string{

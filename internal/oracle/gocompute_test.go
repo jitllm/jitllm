@@ -22,8 +22,9 @@ import (
 // hole shaped like it.
 func goComputeAllowed() map[string]string {
 	return map[string]string{
-		// Measurement, not model arithmetic: accounting.
+		// Measurement, not model arithmetic: accounting and the rates measured.
 		"engine/model/hotness.go:ExpertUses": "expert-use accounting for the report",
+		"engine/device/gpu/choose.go:choose": "each device's measured read rate in GB/s, printed when choosing verbosely",
 		// Constants built once at load from the config, like the tables a kernel is
 		// compiled with.
 		"engine/nn/ropetable.go:foldRopeTab": "the rotary table's folded constant planes, once per configuration",

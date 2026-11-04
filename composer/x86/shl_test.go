@@ -1,4 +1,4 @@
-package cpu
+package x86
 
 import (
 	"bytes"
@@ -22,7 +22,7 @@ func TestSHLimmEncoding(t *testing.T) {
 	} {
 		var a Buf
 		c.fn(&a)
-		got := a.Bytes()
+		got := bytesOf(t, &a)
 		if len(got) != len(c.want) {
 			t.Errorf("%s: %d bytes (%x), want %d", c.name, len(got), got, len(c.want))
 			continue
@@ -51,7 +51,7 @@ func TestADDQmemEncoding(t *testing.T) {
 	} {
 		var a Buf
 		a.ADDQmem(tc.dst, At(RDI, 160))
-		if got := a.Bytes(); !bytes.Equal(got, tc.want) {
+		if got := bytesOf(t, &a); !bytes.Equal(got, tc.want) {
 			t.Errorf("ADDQmem(%v, [rdi+160]) = % x, want % x", tc.dst, got, tc.want)
 		}
 	}

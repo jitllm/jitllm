@@ -1,4 +1,4 @@
-package cpu
+package a64
 
 // The int8 dots widened to int16 products and pairwise sums: what the
 // composer forms a dot of with no FEAT_DotProd (lowera64_node.go).

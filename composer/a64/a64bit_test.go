@@ -1,4 +1,4 @@
-package cpu
+package a64
 
 import "testing"
 
@@ -33,7 +33,7 @@ func TestA64BITMatchesClang(t *testing.T) {
 	} {
 		var a A64
 		a.BIT16b(c.vd, c.vn, c.vm)
-		b := a.Bytes()
+		b := bytesOf(t, &a)
 		if len(b) != 4 {
 			t.Fatalf("%s: %d bytes", c.what, len(b))
 		}
@@ -60,8 +60,8 @@ func TestA64BITIsNotItsNeighbours(t *testing.T) {
 	)
 	var a A64
 	a.BIT16b(0, 0, 0)
-	got := uint32(a.Bytes()[0]) | uint32(a.Bytes()[1])<<8 |
-		uint32(a.Bytes()[2])<<16 | uint32(a.Bytes()[3])<<24
+	got := uint32(bytesOf(t, &a)[0]) | uint32(bytesOf(t, &a)[1])<<8 |
+		uint32(bytesOf(t, &a)[2])<<16 | uint32(bytesOf(t, &a)[3])<<24
 	if got != bitW {
 		t.Fatalf("BIT16b(0,0,0) = %08x, want %08x", got, bitW)
 	}
@@ -85,14 +85,14 @@ func TestA64BITIsNotItsNeighbours(t *testing.T) {
 	// family constant above is fiction.
 	var b A64
 	b.AND16b(0, 0, 0)
-	if w := uint32(b.Bytes()[0]) | uint32(b.Bytes()[1])<<8 |
-		uint32(b.Bytes()[2])<<16 | uint32(b.Bytes()[3])<<24; w != andW {
+	if w := uint32(bytesOf(t, &b)[0]) | uint32(bytesOf(t, &b)[1])<<8 |
+		uint32(bytesOf(t, &b)[2])<<16 | uint32(bytesOf(t, &b)[3])<<24; w != andW {
 		t.Errorf("AND16b(0,0,0) = %08x, want %08x", w, andW)
 	}
 	var c A64
 	c.ORR16b(0, 0, 0)
-	if w := uint32(c.Bytes()[0]) | uint32(c.Bytes()[1])<<8 |
-		uint32(c.Bytes()[2])<<16 | uint32(c.Bytes()[3])<<24; w != orrW {
+	if w := uint32(bytesOf(t, &c)[0]) | uint32(bytesOf(t, &c)[1])<<8 |
+		uint32(bytesOf(t, &c)[2])<<16 | uint32(bytesOf(t, &c)[3])<<24; w != orrW {
 		t.Errorf("ORR16b(0,0,0) = %08x, want %08x", w, orrW)
 	}
 }

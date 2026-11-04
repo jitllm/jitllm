@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jitllm/jitllm/composer/x86"
 	"github.com/jitllm/jitllm/engine/device/cpu"
 )
 
@@ -25,23 +26,27 @@ func TestGCNotBlocked(t *testing.T) {
 	if !cpu.CPU().AVXVNNI {
 		t.Skip("this host has no AVX-VNNI, so VPDPBUSD cannot be executed here")
 	}
-	var a cpu.Buf
-	a.MOVLoad(cpu.RSI, cpu.At(cpu.RDI, 16))
-	a.MOVLoad(cpu.RDX, cpu.At(cpu.RDI, 8))
-	a.MOVLoad(cpu.RCX, cpu.At(cpu.RDI, 56))
-	a.MOVLoad(cpu.RAX, cpu.At(cpu.RDI, 40))
-	a.VPXOR(cpu.Y0, cpu.Y0, cpu.Y0)
+	var a x86.Buf
+	a.MOVLoad(x86.RSI, x86.At(x86.RDI, 16))
+	a.MOVLoad(x86.RDX, x86.At(x86.RDI, 8))
+	a.MOVLoad(x86.RCX, x86.At(x86.RDI, 56))
+	a.MOVLoad(x86.RAX, x86.At(x86.RDI, 40))
+	a.VPXOR(x86.Y0, x86.Y0, x86.Y0)
 	top := a.Label()
 	a.Bind(top)
-	a.VMOVDQULoad(cpu.Y1, cpu.At(cpu.RSI, 0))
-	a.VPDPBUSDMem(cpu.Y0, cpu.Y1, cpu.At(cpu.RDX, 0))
-	a.DEC(cpu.RAX)
+	a.VMOVDQULoad(x86.Y1, x86.At(x86.RSI, 0))
+	a.VPDPBUSDMem(x86.Y0, x86.Y1, x86.At(x86.RDX, 0))
+	a.DEC(x86.RAX)
 	a.JNZ(top)
-	a.VMOVDQUStore(cpu.At(cpu.RCX, 0), cpu.Y0)
+	a.VMOVDQUStore(x86.At(x86.RCX, 0), x86.Y0)
 	a.VZEROUPPER()
 	a.RET()
 
-	code, err := cpu.Map(a.Bytes())
+	b, err := a.Bytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, err := cpu.Map(b)
 	if err != nil {
 		t.Fatal(err)
 	}

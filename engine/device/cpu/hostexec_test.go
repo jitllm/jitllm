@@ -3,6 +3,8 @@ package cpu
 import (
 	"errors"
 	"testing"
+
+	"github.com/jitllm/jitllm/composer/x86"
 )
 
 // requireVNNIHost skips a gate that executes VPDPBUSD directly.
@@ -34,4 +36,14 @@ func mustMap(t testing.TB, code []byte) *Code {
 	}
 	t.Fatalf("Map: %v", err)
 	return nil
+}
+
+// asmBytes is a's code, the test failed on any error emitting it met.
+func asmBytes(t testing.TB, a *x86.Buf) []byte {
+	t.Helper()
+	b, err := a.Bytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }

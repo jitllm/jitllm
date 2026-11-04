@@ -89,7 +89,8 @@ func (l cpuLowering) Lower(k *Kernel, d Device) (Lowered, error) {
 	if err != nil {
 		return Lowered{}, err
 	}
-	return Lowered{CPU: code}, nil
+	vec, stack := e.a.Regs()
+	return Lowered{CPU: code, Regs: RegUse{Vec: vec, File: 16, Stack: stack}}, nil
 }
 
 type x86Lowerer struct {

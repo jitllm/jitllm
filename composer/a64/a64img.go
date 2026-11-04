@@ -1,6 +1,4 @@
-package cpu
-
-import "fmt"
+package a64
 
 // The NEON instructions the image path's kernels (imgproc_a64.go) added:
 // float64 lanes for the resampler's sin/cos table, the narrowing chain and
@@ -31,7 +29,7 @@ func (a *A64) FCVTN2s(vd, vn VReg) { a.w(0x0E616800 | uint32(vn)<<5 | uint32(vd)
 // integer.
 func (a *A64) SHL2d(vd, vn VReg, shift uint8) {
 	if shift > 63 {
-		panic(fmt.Sprintf("jit: SHL2d shift %d, want 0..63", shift))
+		a.fail("a64: SHL2d shift %d, want 0..63", shift)
 	}
 	a.w(0x4F005400 | uint32(64+shift)<<16 | uint32(vn)<<5 | uint32(vd))
 }
@@ -42,7 +40,7 @@ func (a *A64) DUPd2(vd, vn VReg) { a.w(0x4E080400 | uint32(vn)<<5 | uint32(vd)) 
 // DUPs4lane is dup vd.4s, vn.s[lane]: one lane broadcast (DUPs4 is lane 0).
 func (a *A64) DUPs4lane(vd, vn VReg, lane uint8) {
 	if lane > 3 {
-		panic(fmt.Sprintf("jit: DUPs4lane lane %d, want 0..3", lane))
+		a.fail("a64: DUPs4lane lane %d, want 0..3", lane)
 	}
 	a.w(0x4E000400 | (uint32(lane)<<3|4)<<16 | uint32(vn)<<5 | uint32(vd))
 }
@@ -67,16 +65,16 @@ func (a *A64) XTN8b(vd, vn VReg) { a.w(0x0E212800 | uint32(vn)<<5 | uint32(vd)) 
 
 // STRb and STRh store lane 0's low byte or halfword: one sample, or two.
 func (a *A64) STRb(vt VReg, rn XReg, off int32) {
-	a.w(0x3D000000 | scaled(off, 1, "str b") | uint32(rn)<<5 | uint32(vt))
+	a.w(0x3D000000 | a.scaled(off, 1, "str b") | uint32(rn)<<5 | uint32(vt))
 }
 func (a *A64) STRh(vt VReg, rn XReg, off int32) {
-	a.w(0x7D000000 | scaled(off, 2, "str h") | uint32(rn)<<5 | uint32(vt))
+	a.w(0x7D000000 | a.scaled(off, 2, "str h") | uint32(rn)<<5 | uint32(vt))
 }
 
 // LDRBw is ldrb wt, [xn, #off]: one byte into a general register, zero
 // extended through the x view -- an index a table is read at.
 func (a *A64) LDRBw(rt, rn XReg, off int32) {
-	a.w(0x39400000 | scaled(off, 1, "ldrb") | uint32(rn)<<5 | uint32(rt))
+	a.w(0x39400000 | a.scaled(off, 1, "ldrb") | uint32(rn)<<5 | uint32(rt))
 }
 
 // LDRqIdx is ldr qt, [xn, xm]: 16 bytes at a byte offset held in a register,
@@ -92,16 +90,16 @@ func (a *A64) LDRsIdx(vt VReg, rn, rm XReg) {
 
 // LD1b and ST1b load or store one byte lane of vt: ld1 {vt.b}[lane], [xn].
 func (a *A64) LD1b(vt VReg, lane uint8, rn XReg) {
-	a.w(0x0D400000 | ld1bLane(lane) | uint32(rn)<<5 | uint32(vt))
+	a.w(0x0D400000 | a.ld1bLane(lane) | uint32(rn)<<5 | uint32(vt))
 }
 func (a *A64) ST1b(vt VReg, lane uint8, rn XReg) {
-	a.w(0x0D000000 | ld1bLane(lane) | uint32(rn)<<5 | uint32(vt))
+	a.w(0x0D000000 | a.ld1bLane(lane) | uint32(rn)<<5 | uint32(vt))
 }
 
 // ld1bLane packs a byte lane into LD1/ST1's Q:S:size fields.
-func ld1bLane(lane uint8) uint32 {
+func (a *A64) ld1bLane(lane uint8) uint32 {
 	if lane > 15 {
-		panic(fmt.Sprintf("jit: byte lane %d, want 0..15", lane))
+		a.fail("a64: byte lane %d, want 0..15", lane)
 	}
 	l := uint32(lane)
 	return (l>>3)<<30 | (l>>2&1)<<12 | (l&3)<<10

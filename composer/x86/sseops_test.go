@@ -1,6 +1,6 @@
 //go:build amd64
 
-package cpu
+package x86
 
 import (
 	"bytes"
@@ -8,7 +8,7 @@ import (
 	"os/exec"
 	"testing"
 
-	"github.com/jitllm/jitllm/internal/ssegate"
+	"github.com/jitllm/jitllm/internal/objdump"
 )
 
 // TestSSEOpsMatchObjdump pins every legacy-SSE method in sse_ops.go against a
@@ -311,7 +311,7 @@ func TestSSEOpsMatchObjdump(t *testing.T) {
 	for _, c := range cases {
 		c.emit(&a)
 	}
-	got := disasmWide(t, t.TempDir(), "sseops", a.Bytes())
+	got := disasmWide(t, t.TempDir(), "sseops", bytesOf(t, &a))
 	if len(got) != len(cases) {
 		t.Errorf("objdump found %d instructions for %d cases", len(got), len(cases))
 	}
@@ -340,14 +340,14 @@ type insn struct {
 func disasmWide(t testing.TB, dir, name string, code []byte) []insn {
 	t.Helper()
 	var got []insn
-	for _, in := range ssegate.Disasm(t, dir, name, code) {
+	for _, in := range objdump.Disasm(t, dir, name, code) {
 		got = append(got, insn{bytes: in.Bytes, text: in.Text})
 	}
 	return got
 }
 
 // TestSSELoweringRefusesWhatItCannotServe extends TestSSEThreeOperandLowering
-// to the named ops: every non-commutative one must panic when dst aliases src2
+// to the named ops: every non-commutative one must be refused when dst aliases src2
 // (a copy there would compute src1 op src1), and the commutative ones must
 // swap rather than copy.
 //
@@ -369,15 +369,11 @@ func TestSSELoweringRefusesWhatItCannotServe(t *testing.T) {
 		"blendps": func(a *Buf, d, s1, s2 Reg) { a.BLENDPS(d, s1, s2, 1) },
 	}
 	for name, f := range nonComm {
-		func() {
-			defer func() {
-				if recover() == nil {
-					t.Errorf("%s: dst == src2 did NOT panic; a copy computes src1 op src1 and a swap reverses the operands", name)
-				}
-			}()
-			var a Buf
-			f(&a, XMM1, XMM2, XMM1)
-		}()
+		var a Buf
+		f(&a, XMM1, XMM2, XMM1)
+		if _, err := a.Bytes(); err == nil {
+			t.Errorf("%s: dst == src2 was not refused; a copy computes src1 op src1 and a swap reverses the operands", name)
+		}
 	}
 	// The commutative ones swap: one instruction, no MOVAPS.
 	for name, f := range map[string]func(a *Buf, d, s1, s2 Reg){
@@ -388,23 +384,20 @@ func TestSSELoweringRefusesWhatItCannotServe(t *testing.T) {
 		f(&a, XMM1, XMM2, XMM1)
 		var b Buf
 		f(&b, XMM1, XMM1, XMM2)
-		if !bytes.Equal(a.Bytes(), b.Bytes()) {
-			t.Errorf("%s: dst == src2 emitted % x, want the swapped single instruction % x", name, a.Bytes(), b.Bytes())
+		if !bytes.Equal(bytesOf(t, &a), bytesOf(t, &b)) {
+			t.Errorf("%s: dst == src2 emitted % x, want the swapped single instruction % x", name, bytesOf(t, &a), bytesOf(t, &b))
 		}
 	}
 	// And the implicit-XMM0 blends refuse to overwrite their own mask.
-	for name, f := range map[string]func(){
-		"blendvps": func() { var a Buf; a.BLENDVPS(XMM0, XMM1, XMM2) },
-		"pblendvb": func() { var a Buf; a.PBLENDVB(XMM0, XMM1, XMM2) },
-		"cmpps 8":  func() { var a Buf; a.CMPPS(XMM1, XMM1, XMM2, 8) },
+	for name, f := range map[string]func(a *Buf){
+		"blendvps": func(a *Buf) { a.BLENDVPS(XMM0, XMM1, XMM2) },
+		"pblendvb": func(a *Buf) { a.PBLENDVB(XMM0, XMM1, XMM2) },
+		"cmpps 8":  func(a *Buf) { a.CMPPS(XMM1, XMM1, XMM2, 8) },
 	} {
-		func() {
-			defer func() {
-				if recover() == nil {
-					t.Errorf("%s did not panic", name)
-				}
-			}()
-			f()
-		}()
+		var a Buf
+		f(&a)
+		if _, err := a.Bytes(); err == nil {
+			t.Errorf("%s was not refused", name)
+		}
 	}
 }
