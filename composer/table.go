@@ -57,6 +57,9 @@ const (
 	// the sequences' rotary marks (graph.OpRopePos).
 	TableRopeRows
 	TableRopeMarks
+	// TablePicture is the step's picture, its decoded samples as words
+	// (graph.OpPicture).
+	TablePicture
 	numTables
 )
 
@@ -116,6 +119,8 @@ func (t Table) String() string {
 		return "rope.rows"
 	case TableRopeMarks:
 		return "rope.marks"
+	case TablePicture:
+		return "picture"
 	}
 	return fmt.Sprintf("table%d", t)
 }

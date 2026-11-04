@@ -64,6 +64,8 @@ const (
 	SrcPlanes
 	// SrcTokens is the step's tokens, a word a row (Call.tok).
 	SrcTokens
+	// SrcPicture is the step's picture, its decoded samples' words.
+	SrcPicture
 	// NumSrc is the sources' count.
 	NumSrc
 )
@@ -448,6 +450,8 @@ func BuildForm(h *cpu.Target, gr *graph.Graph, codes []composer.Code, rows int, 
 					ar.src = SrcZero
 				case t == composer.TableRequest:
 					ar.src = SrcRequest
+				case t == composer.TablePicture:
+					ar.src = SrcPicture
 				case t == composer.TableTokens:
 					ar.src, f.Toks = SrcTokens, true
 				case t == composer.TablePos:

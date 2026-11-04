@@ -11,6 +11,80 @@ import (
 // patches.
 const RequestGrid = 0
 
+// A picture's own request words (graph.OpPicture): its width and height in
+// pixels, and its rows' stride in bytes.
+const (
+	RequestPicW = RequestRows + iota
+	RequestPicH
+	RequestPicStride
+)
+
+// PictureWords is the most words a step's picture holds: a picture 4096
+// pixels square, four bytes a pixel.
+const PictureWords = 4096 * 4096
+
+// decomposePicture is each output pixel's channel of the step's picture:
+// on each axis the two source samples around its centre
+// ((i+0.5)*n/size - 0.5, clamped to the picture), weighted 1-t and t,
+// horizontal first, then the sample read as [0, 1] and normalised by its
+// channel's mean and std; zero past the picture.
+func decomposePicture(o graph.Op, c *Context) ([]Prim, error) {
+	a := o.Attr
+	if len(o.In) != 0 || len(o.Out) != 1 || a.PicW < 1 || a.PicH < 1 || a.Chain != graph.ChainHalfPixel ||
+		a.Filter != graph.FilterLinear || a.Pixels != graph.PixRGBA8 && a.Pixels != graph.PixGray8 {
+		return nil, fmt.Errorf("a picture of format %d resampled to %dx%d by chain %d and filter %d",
+			a.Pixels, a.PicW, a.PicH, a.Chain, a.Filter)
+	}
+	U, F, I := ir.U32, ir.F32, ir.I32
+	sh := c.rows(o.Out[0])
+	W := sh[1]
+	var x exprs
+	u := func(v int) int { return x.u(uint32(v)) }
+	flat := x.op(OpAdd, U, x.op(OpMul, U, x.coord(0), u(W)), x.coord(1))
+	pix, ch := x.op(OpDiv, U, flat, u(3)), x.op(OpRem, U, flat, u(3))
+	oy, ox := x.op(OpDiv, U, pix, u(a.PicW)), x.op(OpRem, U, pix, u(a.PicW))
+	sw := x.op(OpMax, U, x.load(1, u(RequestPicW)), u(1))
+	sh2 := x.op(OpMax, U, x.load(1, u(RequestPicH)), u(1))
+	stride := x.load(1, u(RequestPicStride))
+	// axis is cell's two taps over a source n samples wide into size: the
+	// floor of its centre in integers ((2cell+1)n + size) / 2size - 1, its
+	// fraction in floats, both indices clamped to the source.
+	axis := func(cell, n, size int) (i0, i1, t int) {
+		q := x.op(OpDiv, U, x.op(OpAdd, U, x.op(OpMul, U, x.op(OpAdd, U, x.op(OpMul, U, cell, u(2)), u(1)), n), u(size)), u(2*size))
+		fl := x.op(OpSub, I, x.un(OpBitcast, I, q), x.i(1))
+		at := x.op(OpSub, F, x.op(OpDiv, F, x.op(OpMul, F, x.op(OpAdd, F, x.un(OpCvtF32, F, cell), x.f(0.5)), x.un(OpCvtF32, F, n)),
+			x.f(float32(size))), x.f(0.5))
+		t = x.op(OpSub, F, at, x.un(OpCvtF32, F, fl))
+		last := x.op(OpSub, I, x.un(OpBitcast, I, n), x.i(1))
+		clamp := func(v int) int { return x.un(OpBitcast, U, x.op(OpMin, I, x.op(OpMax, I, v, x.i(0)), last)) }
+		return clamp(fl), clamp(x.op(OpAdd, I, fl, x.i(1))), t
+	}
+	y0, y1, ty := axis(oy, sh2, a.PicH)
+	x0, x1, tx := axis(ox, sw, a.PicW)
+	// sample is the picture's byte for (y, x) and the channel, as a float.
+	sample := func(y, xx int) int {
+		off := x.op(OpAdd, U, x.op(OpMul, U, y, stride), xx)
+		if a.Pixels == graph.PixRGBA8 {
+			off = x.op(OpAdd, U, x.op(OpAdd, U, x.op(OpMul, U, y, stride), x.op(OpMul, U, xx, u(4))), ch)
+		}
+		w := x.load(0, x.op(OpShr, U, off, u(2)))
+		b := x.op(OpAnd, U, x.op(OpShr, U, w, x.op(OpShl, U, x.op(OpAnd, U, off, u(3)), u(3))), u(255))
+		return x.un(OpCvtF32, F, b)
+	}
+	lerp := func(p, q, t int) int {
+		return x.op(OpAdd, F, x.op(OpMul, F, p, x.op(OpSub, F, x.f(1), t)), x.op(OpMul, F, q, t))
+	}
+	v := lerp(lerp(sample(y0, x0), sample(y0, x1), tx), lerp(sample(y1, x0), sample(y1, x1), tx), ty)
+	byChannel := func(m [3]float64) int {
+		return x.sel(F, x.op(OpLess, ir.Pred, ch, u(1)), x.f(float32(m[0])),
+			x.sel(F, x.op(OpLess, ir.Pred, ch, u(2)), x.f(float32(m[1])), x.f(float32(m[2]))))
+	}
+	v = x.op(OpDiv, F, x.op(OpSub, F, x.op(OpDiv, F, v, x.f(255)), byChannel(a.Mean)), byChannel(a.Std))
+	x.sel(F, x.op(OpLess, ir.Pred, pix, u(a.PicW*a.PicH)), v, x.f(0))
+	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{TablePicture.op(), TableRequest.op()}, Out: c.value(o.Out[0]), Expr: x.e,
+		Facts: Facts{Extents: map[int]int{0: PictureWords, 1: RequestPicStride + 1}}}}, nil
+}
+
 // decomposePatchify is each row's patch of the picture, gathered: a row
 // past the Offset before it the patch its position less Offset names, of a
 // grid RequestGrid patches wide, its element c channel c/(P*P), row (c/P)%P
