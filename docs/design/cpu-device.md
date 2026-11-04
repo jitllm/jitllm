@@ -117,6 +117,26 @@ matrices reach the device by role, as the vectors do
    gives a session its view of the card; `MigrateKV` and `MigrateRec`
    move a block's history between it and any other device. Gates: the
    relocation and paging gates of the five principles.
+
+   The card's split is the shape: one device a model (`gpu.GPU`: its
+   forms, its blocks' weights, the history pools) and a view a session
+   (`Attach`: its pages and recurrent state, keyed by the session). The
+   CPU device is two levels the same way: the model's (`cpudev.Forms` and
+   its `cpu.Host` today, joined by the history arenas the model holds as
+   `engineState.kvArenas`) and a session's view (its page tables and
+   recurrent states, which `Session` holds today, and the call record the
+   instance fills from them). In order, each its own commit:
+
+   a. The arenas: `kvArena` and its pool move to `cpudev` as the model
+      level's history memory, keyed by block and page size as now.
+   b. The page tables: a session's `kvPages` for its CPU blocks are its
+      view's, the instance asking the view for a block's table where it
+      binds `SrcPages` today.
+   c. The recurrent states: a linear block's state and convolution rows
+      are the view's, bound as `SrcRecState` and `SrcRecConv` from it.
+   d. The moves: `MigrateKV` and `MigrateRec` on the view, the
+      instance's `migrateKV` calling them, so a block's history leaves and
+      reaches the CPU device as it does a card.
 3. The instance holds devices: a device per block, `onDev` gone, each
    run of consecutive blocks one call on its device, a decline placing
    the block on another device. Gates: as 2, plus the seam gates

@@ -5,6 +5,7 @@ import (
 	"io"
 	"sync"
 
+	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"github.com/jitllm/jitllm/engine/nn"
 )
 
@@ -66,7 +67,7 @@ type sharedPage struct {
 	refs int
 	// arena and slot are the arena slot b is, held for the entry, nil where
 	// b is memory of its own.
-	arena *kvArena
+	arena *cpudev.Arena
 	slot  int
 	// gone means Drop or Prune took it out of the index: no session can
 	// acquire it again, and it is forgotten once the last holder lets go.
@@ -185,7 +186,7 @@ func (m *SharedStore) Refs(cacheId string, layer, index int) int {
 // already holds that page, the session gets the held copy (and keeps
 // ownership of b, which it gives back to its pool); otherwise b becomes the
 // held copy. Either way the session holds one reference to what is returned.
-func (m *SharedStore) publish(k kvStoreKey, b []float32, a *kvArena) []float32 {
+func (m *SharedStore) publish(k kvStoreKey, b []float32, a *cpudev.Arena) []float32 {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if e := m.pages[k]; e != nil {
@@ -200,8 +201,8 @@ func (m *SharedStore) publish(k kvStoreKey, b []float32, a *kvArena) []float32 {
 	e := m.add(k, b)
 	// A slot of an arena is held for the entry until it is forgotten.
 	if a != nil {
-		if i, ok := a.slotOf(b); ok {
-			a.hold(i)
+		if i, ok := a.SlotOf(b); ok {
+			a.Hold(i)
 			e.arena, e.slot = a, i
 		}
 	}
@@ -319,7 +320,7 @@ func (m *SharedStore) forget(e *sharedPage) {
 		delete(m.held, &e.b[0])
 		m.bytes -= 4 * uint64(len(e.b))
 		if e.arena != nil {
-			e.arena.drop(e.slot)
+			e.arena.Drop(e.slot)
 			e.arena = nil
 		}
 	}
@@ -484,7 +485,7 @@ func (kc *kvCache) publishSealed(li, n int, key string) {
 	// its own memory goes back -- its arena slot, or to its spare, where the
 	// next page it needs is taken from (page0). A page of the arena becomes
 	// the store's copy with the slot held for it, so every session that
-	// restores it reads that slot (kvArena).
+	// restores it reads that slot (cpudev.Arena).
 	a := s.arena
 	if !s.arenaPage(n) {
 		a = nil

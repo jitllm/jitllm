@@ -645,7 +645,6 @@ func (s *Instance) Close() error {
 	// and the model's pages get it back once no instance holds the device.
 	s.holdHost(nil)
 	s.m.eng.kvPool.put(s.kv)
-	s.unmapNC()
 	s.unmapOwn()
 	// The blocks this instance ran on the host no longer need their pages for
 	// it. Close may be called twice; cpuHeld makes the second a no-op.

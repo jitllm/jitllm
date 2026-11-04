@@ -1982,7 +1982,7 @@ func (m *Model) Close() error {
 	}
 	m.eng.cpuForms.Close()
 	m.eng.cpuForms.Host.Close()
-	m.unmapKVArenas()
+	m.eng.kvArenas.Close()
 	err := m.container.Close()
 	m.eng.devMu.Lock()
 	m.eng.forgetters, m.eng.owners = nil, nil

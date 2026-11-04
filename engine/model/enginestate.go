@@ -55,8 +55,7 @@ type engineState struct {
 	kvPool kvPagePool
 	// kvArenas is every instance's composed CPU history, a layer and page size
 	// each (kvArenaFor).
-	kvArenas  map[kvArenaKey]*kvArena
-	kvArenaMu sync.Mutex
+	kvArenas cpudev.Arenas
 	// cpuForms is the composed CPU blocks' forms (cpuserve.go), and
 	// cpuComposes the times the composer was asked for one (CPUComposes).
 	cpuForms    cpudev.Forms
