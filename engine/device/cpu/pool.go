@@ -107,6 +107,14 @@ func (p *Pool) Do(n, chunk int, fn func(worker, lo, hi int)) {
 	}
 }
 
+// DoLabeled is Do under the pprof label label while the pool's regions carry
+// labels (SetRegionLabels).
+func (p *Pool) DoLabeled(label string, n, chunk int, fn func(worker, lo, hi int)) {
+	if n > 0 {
+		p.run.DoLabeled(label, n, chunk, fn)
+	}
+}
+
 // Fuse opens a fused region (sched.Pool.Fuse): until Unfuse every region is
 // a phase of one. It reports whether it opened one; a pool another user
 // shares, a NUMA pool and a one-core pool do not fuse.
