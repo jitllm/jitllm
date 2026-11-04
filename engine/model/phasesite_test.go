@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/sched"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
@@ -25,22 +26,14 @@ func TestPhaseSites(t *testing.T) {
 	if v := os.Getenv("JITLLM_MODEL"); v != "" {
 		name = v
 	}
-	m, err := Open(jlmOf(t, testmodels.Path(name)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer m.Close()
-	s := m.NewInstance(64)
-	defer s.Close()
-	for i := 0; i < 4; i++ {
-		if _, err := s.Forward(int32(3 + i)); err != nil {
-			t.Fatal(err)
-		}
-	}
 	sites := map[string]int{}
 	pcs := make([]uintptr, 32)
-	sched.OnPhase = func(total, chunk int) {
-		n := runtime.Callers(3, pcs)
+	survey := false
+	hook := func(total, chunk int) {
+		if !survey {
+			return
+		}
+		n := runtime.Callers(2, pcs)
 		fr := runtime.CallersFrames(pcs[:n])
 		var path []string
 		for {
@@ -53,13 +46,26 @@ func TestPhaseSites(t *testing.T) {
 		}
 		sites[strings.Join(path, " < ")+fmt.Sprintf("  [total %d chunk %d]", total, chunk)]++
 	}
+	m, err := Open(jlmOf(t, testmodels.Path(name)), WithPool(cpu.WithSched(sched.WithPhaseHook(hook))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	s := m.NewInstance(64)
+	defer s.Close()
+	for i := 0; i < 4; i++ {
+		if _, err := s.Forward(int32(3 + i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	survey = true
 	const n = 8
 	for i := 0; i < n; i++ {
 		if _, err := s.Forward(int32(9 + i)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	sched.OnPhase = nil
+	survey = false
 	var keys []string
 	tot := 0
 	for k, v := range sites {

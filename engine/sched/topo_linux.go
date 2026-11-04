@@ -19,11 +19,7 @@ import (
 // Empty means "could not ask" (gVisor, for one), and every caller then falls
 // back: to the topology where /sys has one, to the online list where it does
 // not, and in both cases no wider than the cgroup's CPU quota.
-func allowed() map[int]bool { return affinity() }
-
-// affinity is the mask read; a test replaces it to stand in for a sandbox that
-// does not answer sched_getaffinity.
-var affinity = readAffinity
+func (m machine) allowed() map[int]bool { return m.affinity() }
 
 func readAffinity() map[int]bool {
 	var mask [16]uint64 // 1024 CPUs, the same width pin() used
@@ -43,10 +39,6 @@ func readAffinity() map[int]bool {
 	return out
 }
 
-// sysRoot is where the topology is read from; a test points it at a synthetic
-// tree so the classification can be checked on machines the test runtime does not have access to.
-var sysRoot = "/sys"
-
 // topo is the machine's core layout as sysfs states it: one thread_siblings_list
 // per logical CPU, from cpu0 up to the first gap, and the kernel's own list of
 // efficiency cores where it publishes one.
@@ -56,10 +48,10 @@ type topo struct {
 	smt   bool         // some core has more than one thread
 }
 
-func readTopo() topo {
+func (m machine) readTopo() topo {
 	var t topo
 	for cpu := 0; cpu < 512; cpu++ {
-		b, err := os.ReadFile(fmt.Sprintf("%s/devices/system/cpu/cpu%d/topology/thread_siblings_list", sysRoot, cpu))
+		b, err := os.ReadFile(fmt.Sprintf("%s/devices/system/cpu/cpu%d/topology/thread_siblings_list", m.sys, cpu))
 		if err != nil {
 			break
 		}
@@ -67,7 +59,7 @@ func readTopo() topo {
 		t.sibs = append(t.sibs, s)
 		t.smt = t.smt || multiThread(s)
 	}
-	if b, err := os.ReadFile(sysRoot + "/devices/cpu_atom/cpus"); err == nil {
+	if b, err := os.ReadFile(m.sys + "/devices/cpu_atom/cpus"); err == nil {
 		t.atoms = parseCPUList(strings.TrimSpace(string(b)))
 	}
 	return t
@@ -112,7 +104,7 @@ func parseCPUList(s string) map[int]bool {
 	return out
 }
 
-// PCores returns one logical CPU per physical performance core.
+// pCores returns one logical CPU per physical performance core.
 //
 // Detection is by SMT topology rather than a hardcoded list: on a hybrid part,
 // P-cores are SMT pairs (thread_siblings_list "0-1") and E-cores are
@@ -123,11 +115,11 @@ func parseCPUList(s string) map[int]bool {
 //
 // On a non-hybrid machine every core is an SMT pair and this returns all of
 // them; on one with no SMT at all every core is returned (see topo.efficiency).
-func PCores() []int {
-	t := readTopo()
-	ok := allowed()
+func (m machine) pCores() []int {
+	t := m.readTopo()
+	ok := m.allowed()
 	if len(t.sibs) == 0 {
-		return untopological(ok)
+		return m.untopological(ok)
 	}
 	var out []int
 	seen := map[string]bool{}
@@ -148,7 +140,7 @@ func PCores() []int {
 		out = append(out, cpu)
 	}
 	if len(ok) == 0 {
-		out = underQuota(out)
+		out = m.underQuota(out)
 	}
 	return out
 }
@@ -159,16 +151,16 @@ func PCores() []int {
 // when there is no mask to say otherwise. Every CPU reads as a P-core, since
 // nothing can tell one from another; the cost is a hyperthread pair counted as
 // two cores, the same cost topo_other.go states.
-func untopological(ok map[int]bool) []int {
+func (m machine) untopological(ok map[int]bool) []int {
 	if len(ok) > 0 {
 		return sorted(ok)
 	}
-	if b, err := os.ReadFile(sysRoot + "/devices/system/cpu/online"); err == nil {
+	if b, err := os.ReadFile(m.sys + "/devices/system/cpu/online"); err == nil {
 		if on := parseCPUList(strings.TrimSpace(string(b))); len(on) > 0 {
-			return underQuota(sorted(on))
+			return m.underQuota(sorted(on))
 		}
 	}
-	return underQuota(seq(runtime.NumCPU()))
+	return m.underQuota(seq(runtime.NumCPU()))
 }
 
 func sorted(set map[int]bool) []int {
@@ -183,8 +175,8 @@ func sorted(set map[int]bool) []int {
 // underQuota keeps the first CPUs a cgroup v2 cpu.max allows: a quota of q
 // microseconds per period p runs ceil(q/p) CPUs at once, and a worker past that
 // is throttled behind every barrier. "max" or no file leaves the list whole.
-func underQuota(cpus []int) []int {
-	if n := quotaCPUs(); n > 0 && n < len(cpus) {
+func (m machine) underQuota(cpus []int) []int {
+	if n := m.quotaCPUs(); n > 0 && n < len(cpus) {
 		return cpus[:n]
 	}
 	return cpus
@@ -193,12 +185,12 @@ func underQuota(cpus []int) []int {
 // quotaCPUs is ceil(quota/period) of the process's cgroup, 0 when unlimited or
 // unreadable. The cgroup's own directory is tried first, then the mount's root,
 // which is the process's cgroup inside a container's namespace.
-func quotaCPUs() int {
-	dirs := []string{sysRoot + "/fs/cgroup"}
+func (m machine) quotaCPUs() int {
+	dirs := []string{m.sys + "/fs/cgroup"}
 	if b, err := os.ReadFile("/proc/self/cgroup"); err == nil {
 		for _, ln := range strings.Split(string(b), "\n") {
 			if p, ok := strings.CutPrefix(ln, "0::"); ok && p != "/" && p != "" {
-				dirs = append([]string{sysRoot + "/fs/cgroup" + p}, dirs...)
+				dirs = append([]string{m.sys + "/fs/cgroup" + p}, dirs...)
 			}
 		}
 	}
@@ -221,29 +213,29 @@ func quotaCPUs() int {
 	return 0
 }
 
-// CoreSource says where the pool's CPUs came from, for a report: the topology
+// coreSource says where the pool's CPUs came from, for a report: the topology
 // or not, and whether the affinity mask or a cgroup quota bounded them.
-func CoreSource() string {
+func (m machine) coreSource() string {
 	src := "sysfs topology"
-	if len(readTopo().sibs) == 0 {
+	if len(m.readTopo().sibs) == 0 {
 		src = "no topology, every CPU a P-core"
 	}
-	if len(allowed()) > 0 {
+	if len(m.allowed()) > 0 {
 		return src + ", affinity mask"
 	}
 	src += ", no affinity mask"
-	if n := quotaCPUs(); n > 0 {
+	if n := m.quotaCPUs(); n > 0 {
 		src += fmt.Sprintf(", cgroup quota %d CPU(s)", n)
 	}
 	return src
 }
 
-// ECores returns one logical CPU per efficiency core: single-threaded in the
+// eCores returns one logical CPU per efficiency core: single-threaded in the
 // topology, so no SMT sibling to skip, and an efficiency core by
 // topo.efficiency -- so a homogeneous machine without SMT has none.
-func ECores() []int {
-	t := readTopo()
-	ok := allowed()
+func (m machine) eCores() []int {
+	t := m.readTopo()
+	ok := m.allowed()
 	var out []int
 	for cpu, sibs := range t.sibs {
 		if !multiThread(sibs) && t.efficiency(cpu) && (len(ok) == 0 || ok[cpu]) {
@@ -253,16 +245,16 @@ func ECores() []int {
 	return out
 }
 
-// SMTSiblings returns every logical CPU of every performance core, both threads
+// smtSiblings returns every logical CPU of every performance core, both threads
 // of each. Included so the hyperthread question can be measured rather than
 // assumed -- two threads sharing one core's load ports is a real experiment,
 // not obviously a bad idea. A single-threaded performance core contributes its
 // one thread.
-func SMTSiblings() []int {
-	t := readTopo()
-	ok := allowed()
+func (m machine) smtSiblings() []int {
+	t := m.readTopo()
+	ok := m.allowed()
 	if len(t.sibs) == 0 {
-		return untopological(ok)
+		return m.untopological(ok)
 	}
 	var out []int
 	seen := map[int]bool{}
@@ -284,7 +276,7 @@ func SMTSiblings() []int {
 		}
 	}
 	if len(ok) == 0 {
-		out = underQuota(out)
+		out = m.underQuota(out)
 	}
 	return out
 }

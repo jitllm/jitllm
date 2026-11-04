@@ -17,7 +17,6 @@ import (
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/model"
-	"github.com/jitllm/jitllm/engine/sched"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/capabilities"
 )
@@ -132,7 +131,7 @@ func realDoctorEnv() doctorEnv {
 		form:      model.CPUForm(),
 		jit:       composer.LowersCPU(uint64(cpu.CPU().ISA())),
 		hostErr:   cpu.Baseline(),
-		budget:    sched.MemBudget(),
+		budget:    gcPlan().Budget(),
 		archKnown: jlm.Arch.Valid,
 	}
 	if b, ok := totalRAM(); ok {

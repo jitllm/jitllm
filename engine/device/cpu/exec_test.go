@@ -85,7 +85,7 @@ func TestExecuteVPDPBUSD(t *testing.T) {
 	a.VZEROUPPER()
 	a.RET()
 
-	code, err := Map(asmBytes(t, &a))
+	code, err := NewHost().Map(asmBytes(t, &a))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func TestExecuteLoop(t *testing.T) {
 	a.VZEROUPPER()
 	a.RET()
 
-	code, err := Map(asmBytes(t, &a))
+	code, err := NewHost().Map(asmBytes(t, &a))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,13 +172,13 @@ func TestExecuteLoop(t *testing.T) {
 
 // TestMapRejects: an empty program must not become an executable page.
 func TestMapRejects(t *testing.T) {
-	if _, err := Map(nil); err == nil {
+	if _, err := NewHost().Map(nil); err == nil {
 		t.Error("Map accepted empty code")
 	}
 	var ret x86.Buf
 	ret.DeclareISA(x86.ISASSE2) // a bare ret runs on every x86-64 host
 	ret.RET()
-	c, err := Map(asmBytes(t, &ret))
+	c, err := NewHost().Map(asmBytes(t, &ret))
 	if err != nil {
 		t.Fatalf("Map: %v", err)
 	}

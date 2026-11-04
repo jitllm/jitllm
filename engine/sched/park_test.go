@@ -46,7 +46,7 @@ func TestFuseWhileTheOtherViewIsParked(t *testing.T) {
 // another session prefills on the E-cores; the wide set takes the E crew's
 // lock after its own, so it never drives an E-core beside it.
 func TestECrewDoesNotTakeThePCrewsLockBesideTheWideSet(t *testing.T) {
-	if !CanSplitE() {
+	if !LoadQoS(0).CanSplitE() {
 		t.Skip("no E-cores a thread can be kept on here")
 	}
 	p := Shared(CoreSet("p"))

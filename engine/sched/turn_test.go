@@ -14,7 +14,7 @@ import (
 // with and without more busy goroutines than there are Ps, and every view
 // must finish -- a lost wake-up leaves a waiter queued forever and the test
 // hangs until go test's own deadline names the goroutine. The lock reports
-// each queue and each handoff (onTurnQueue, onTurnGrant), and a queued view
+// each queue and each handoff (turn.onQueue, turn.onGrant), and a queued view
 // must be granted after at most one grant per view queued ahead of it. A
 // count, not a clock. Every region must also cover its range exactly once.
 //
@@ -34,6 +34,8 @@ func turnStress(t *testing.T, procs int, busy bool) {
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(procs))
 	const views, regions = 5, 100
 	cpus := []int{0, 1, 2}
+	// sink is work the regions do that the compiler cannot drop.
+	var sink atomic.Int64
 	vs := make([]*Pool, views)
 	for i := range vs {
 		vs[i] = Shared(cpus)
@@ -48,18 +50,19 @@ func turnStress(t *testing.T, procs int, busy bool) {
 		worst  int64
 		queued int64
 	)
-	onTurnQueue = func(w chan struct{}) {
+	lk := vs[0].crew.mu
+	lk.onQueue = func(w chan struct{}) {
 		at[w] = grants
 		queued++
 	}
-	onTurnGrant = func(w chan struct{}) {
+	lk.onGrant = func(w chan struct{}) {
 		if d := grants - at[w]; d > worst {
 			worst = d
 		}
 		delete(at, w)
 		grants++
 	}
-	defer func() { onTurnQueue, onTurnGrant = nil, nil }()
+	defer func() { lk.onQueue, lk.onGrant = nil, nil }()
 
 	stop := make(chan struct{})
 	var spin sync.WaitGroup
@@ -104,7 +107,7 @@ func turnStress(t *testing.T, procs int, busy bool) {
 						runtime.Gosched()
 					}
 					for k := 0; k < work; k++ {
-						spinSink.Add(0)
+						sink.Add(0)
 					}
 					got.Add(int64(hi - lo))
 				})
@@ -131,5 +134,3 @@ func turnStress(t *testing.T, procs int, busy bool) {
 	}
 	t.Logf("%d queue(s), %d handoff(s); a waiter saw at most %d grants to others", queued, grants, worst)
 }
-
-var spinSink atomic.Int64

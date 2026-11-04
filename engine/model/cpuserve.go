@@ -322,21 +322,22 @@ type cpuBound struct {
 	planes []float32
 }
 
-// composedCPUDevice is the CPU as the composer forms for it.
-func composedCPUDevice(workers int) composer.Device {
-	return composer.Device{Kind: composer.DeviceCPU, Slots: max(workers, 1), Lanes: 8, ISA: uint64(cpu.CPU().ISA()), ExactDiv: true}
+// composedCPUDevice is the CPU of extensions isa as the composer forms for
+// it.
+func composedCPUDevice(isa cpu.ISA, workers int) composer.Device {
+	return composer.Device{Kind: composer.DeviceCPU, Slots: max(workers, 1), Lanes: 8, ISA: uint64(isa), ExactDiv: true}
 }
 
 // CPUForm is how the composer forms this host's CPU device
 // (composer.CPUForm).
 func CPUForm() string {
-	return composer.CPUForm(composedCPUDevice(1), runtime.GOARCH == "arm64")
+	return composer.CPUForm(composedCPUDevice(cpu.CPU().ISA(), 1), runtime.GOARCH == "arm64")
 }
 
 // composedCPU is this instance's CPU as the composer forms for it, its launch
 // cost its probe row's.
 func (s *Instance) composedCPU() composer.Device {
-	d := composedCPUDevice(s.cpu.workers.Workers())
+	d := composedCPUDevice(s.m.cpuISA(), s.cpu.workers.Workers())
 	if !s.cpu.launchSet {
 		if name, err := probe.HostName(); err == nil {
 			if p, ok := hw.Known(name, runtime.GOARCH); ok {

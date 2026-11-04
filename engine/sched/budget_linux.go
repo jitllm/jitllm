@@ -13,8 +13,8 @@ import (
 	"unsafe"
 )
 
-// MemBudget is how many bytes of weights may be resident, when the caller does
-// not say.
+// Budget is how many bytes of weights may be resident under g, when the
+// caller does not say.
 //
 // It is eight tenths of the smallest of three limits, each read from the OS
 // when it is asked (HostMem):
@@ -34,7 +34,7 @@ import (
 // reading the environment (AGENTS.md Scope): every caller that sizes a budget
 // takes an explicit one too (model.WithPageBudget, jitllmd -maxmem and
 // -host-mem).
-func MemBudget() uint64 { return HostMem().Budget() }
+func (g GCPlan) Budget() uint64 { return host().mem().Budget(g) }
 
 // MemLimit is the hard ceiling this process must stay under, or 0 when there is
 // none: the cgroup's, or the bound NUMA nodes' total, whichever is lower -- not
@@ -45,8 +45,10 @@ func MemBudget() uint64 { return HostMem().Budget() }
 // ~36 GiB, which under memory.high means permanent direct reclaim. The caller
 // passes it to debug.SetMemoryLimit, which is process-wide and so not a
 // library's decision. MemBudget is a share of this, for weights.
-func MemLimit() uint64 {
-	h := HostMem()
+func MemLimit() uint64 { return host().memLimit() }
+
+func (m machine) memLimit() uint64 {
+	h := m.mem()
 	return minKnown(h.Cgroup, h.NodeTotal)
 }
 
@@ -72,9 +74,9 @@ func (h HostMemory) Limit() uint64 {
 	return minKnown(minKnown(h.Available, h.Cgroup), h.NodeAvailable)
 }
 
-// Budget is MemBudget's figure from h: eight tenths of Limit, under
-// GCBudgetCap when the weights are on the Go heap.
-func (h HostMemory) Budget() uint64 {
+// Budget is g's Budget from h: eight tenths of Limit, under g's Cap when
+// the weights are on the Go heap.
+func (h HostMemory) Budget(g GCPlan) uint64 {
 	avail := h.Limit()
 	if avail == 0 {
 		return 0 // unknown: the caller decides what that means
@@ -84,9 +86,9 @@ func (h HostMemory) Budget() uint64 {
 	// Eight tenths leaves room and keeps the budget dominated by weights.
 	b := avail / 10 * 8
 	// With the weights on the Go heap, eight tenths can leave the permanently
-	// live page frames on the collector's goal, so GCBudgetCap applies; off
-	// the heap (the default) it is no cap. See SetGCReserve.
-	if cap := gcBudgetCap(); cap > 0 && cap < b {
+	// live page frames on the collector's goal, so the plan's Cap applies; off
+	// the heap (the default) it is no cap. See GCPlan.
+	if cap := g.Cap(); cap > 0 && cap < b {
 		b = cap
 	}
 	return b
@@ -108,21 +110,15 @@ func minKnown(a, b uint64) uint64 {
 	return min(a, b)
 }
 
-// procRoot is where /proc is read from; a test points it, with sysRoot, at a
-// synthetic tree.
-var procRoot = "/proc"
-
-// bindNodes is the node set of this process's memory policy when the policy
-// is a bind, nil otherwise. A test replaces it.
-var bindNodes = kernelBindNodes
-
 // HostMem reads the limits now. Every read is a fresh one: what is available
 // moves, and a load sizes itself from the moment it runs.
-func HostMem() HostMemory {
-	h := HostMemory{Available: meminfoAvailable(), Cgroup: cgroupLimit()}
-	h.Nodes = boundNodes()
+func HostMem() HostMemory { return host().mem() }
+
+func (m machine) mem() HostMemory {
+	h := HostMemory{Available: m.meminfoAvailable(), Cgroup: m.cgroupLimit()}
+	h.Nodes = m.boundNodes()
 	for _, n := range h.Nodes {
-		total, avail := nodeMeminfo(n)
+		total, avail := m.nodeMeminfo(n)
 		h.NodeTotal += total
 		h.NodeAvailable += avail
 	}
@@ -131,8 +127,8 @@ func HostMem() HostMemory {
 
 // boundNodes is the nodes this process may allocate from, or nil when that is
 // every node of the machine (or the machine has one).
-func boundNodes() []int {
-	all := machineNodes()
+func (m machine) boundNodes() []int {
+	all := m.machineNodes()
 	if len(all) < 2 {
 		return nil
 	}
@@ -140,14 +136,14 @@ func boundNodes() []int {
 	for _, n := range all {
 		allowed[n] = true
 	}
-	if ma := memsAllowed(); ma != nil {
+	if ma := m.memsAllowed(); ma != nil {
 		for n := range allowed {
 			if !ma[n] {
 				delete(allowed, n)
 			}
 		}
 	}
-	if b := bindNodes(); b != nil {
+	if b := m.bind(); b != nil {
 		in := map[int]bool{}
 		for _, n := range b {
 			in[n] = true
@@ -170,8 +166,8 @@ func boundNodes() []int {
 }
 
 // machineNodes is every memory node sysfs lists.
-func machineNodes() []int {
-	dirs, _ := filepath.Glob(filepath.Join(sysRoot, "devices/system/node/node[0-9]*"))
+func (m machine) machineNodes() []int {
+	dirs, _ := filepath.Glob(filepath.Join(m.sys, "devices/system/node/node[0-9]*"))
 	var nodes []int
 	for _, d := range dirs {
 		if n, err := strconv.Atoi(strings.TrimPrefix(filepath.Base(d), "node")); err == nil {
@@ -184,8 +180,8 @@ func machineNodes() []int {
 
 // memsAllowed is the cpuset's memory nodes (/proc/self/status
 // Mems_allowed_list), or nil when it is not stated.
-func memsAllowed() map[int]bool {
-	b, err := os.ReadFile(filepath.Join(procRoot, "self/status"))
+func (m machine) memsAllowed() map[int]bool {
+	b, err := os.ReadFile(filepath.Join(m.proc, "self/status"))
 	if err != nil {
 		return nil
 	}
@@ -225,8 +221,8 @@ func kernelBindNodes() []int {
 // nodeMeminfo is node n's MemTotal and what it can hand out: MemFree plus its
 // file pages and reclaimable slab, the per-node counterpart of MemAvailable
 // (which the kernel does not publish per node).
-func nodeMeminfo(n int) (total, avail uint64) {
-	b, err := os.ReadFile(filepath.Join(sysRoot, fmt.Sprintf("devices/system/node/node%d/meminfo", n)))
+func (m machine) nodeMeminfo(n int) (total, avail uint64) {
+	b, err := os.ReadFile(filepath.Join(m.sys, fmt.Sprintf("devices/system/node/node%d/meminfo", n)))
 	if err != nil {
 		return 0, 0
 	}
@@ -253,9 +249,9 @@ func nodeMeminfo(n int) (total, avail uint64) {
 // cgroupLimit is this process's cgroup-v2 memory ceiling, or 0 if there is none.
 // memory.high is used when it is lower than memory.max, because crossing HIGH is
 // what throttles -- reaching MAX only kills, and by then it is too late.
-func cgroupLimit() uint64 {
+func (m machine) cgroupLimit() uint64 {
 	rel := ""
-	if b, err := os.ReadFile(filepath.Join(procRoot, "self/cgroup")); err == nil {
+	if b, err := os.ReadFile(filepath.Join(m.proc, "self/cgroup")); err == nil {
 		for _, ln := range strings.Split(strings.TrimSpace(string(b)), "\n") {
 			// cgroup v2 is the single "0::<path>" line.
 			if strings.HasPrefix(ln, "0::") {
@@ -268,7 +264,7 @@ func cgroupLimit() uint64 {
 	}
 	var lim uint64
 	for _, f := range []string{"memory.high", "memory.max"} {
-		v := readLimit(filepath.Join(sysRoot, "fs/cgroup", rel, f))
+		v := readLimit(filepath.Join(m.sys, "fs/cgroup", rel, f))
 		if v > 0 && (lim == 0 || v < lim) {
 			lim = v
 		}
@@ -293,8 +289,8 @@ func readLimit(path string) uint64 {
 	return v
 }
 
-func meminfoAvailable() uint64 {
-	b, err := os.ReadFile(filepath.Join(procRoot, "meminfo"))
+func (m machine) meminfoAvailable() uint64 {
+	b, err := os.ReadFile(filepath.Join(m.proc, "meminfo"))
 	if err != nil {
 		return 0
 	}

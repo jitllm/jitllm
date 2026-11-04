@@ -14,9 +14,9 @@ import (
 // affinity, and QoS schedules busy default-class threads on performance cores.
 // Dynamic chunk claiming lets a thread that lands on an E-core simply claim
 // fewer chunks.
-func PCores() []int { return seq(perfLevel(0, runtime.NumCPU())) }
+func (m machine) pCores() []int { return seq(perfLevel(0, runtime.NumCPU())) }
 
-func ECores() []int {
+func (m machine) eCores() []int {
 	n := perfLevel(1, 0)
 	p := perfLevel(0, runtime.NumCPU())
 	out := make([]int, n)
@@ -26,8 +26,8 @@ func ECores() []int {
 	return out
 }
 
-// SMTSiblings has nothing to add: no Apple Silicon core is SMT.
-func SMTSiblings() []int { return PCores() }
+// smtSiblings has nothing to add: no Apple Silicon core is SMT.
+func (m machine) smtSiblings() []int { return m.pCores() }
 
 func perfLevel(level, dflt int) int {
 	name := "hw.perflevel0.physicalcpu"
@@ -40,5 +40,5 @@ func perfLevel(level, dflt int) int {
 	return dflt
 }
 
-// CoreSource says where the pool's CPUs came from, for a report.
-func CoreSource() string { return "perflevel sysctls" }
+// coreSource says where the pool's CPUs came from, for a report.
+func (m machine) coreSource() string { return "perflevel sysctls" }

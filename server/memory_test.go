@@ -8,7 +8,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // serveModel is the 1B model jitllmd served when four of them on one NUMA
@@ -36,7 +35,7 @@ func readLedger(e *Engine, lm *LoadedModel) ledger {
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
 	st := e.MemCacheStats(lm)
-	return ledger{heap: ms.HeapAlloc, offHeap: uint64(jlm.OffHeapBytes()), store: st.Store.Bytes,
+	return ledger{heap: ms.HeapAlloc, offHeap: lm.m.MappedBytes(), store: st.Store.Bytes,
 		storeLimit: st.Store.Limit}
 }
 

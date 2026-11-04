@@ -116,7 +116,7 @@ func TestASessionDoesNotStarveThePager(t *testing.T) {
 func TestEveryLoadRederivesTheOffHeapBudget(t *testing.T) {
 	e, a, _ := loadedEngine(t, smallModel, "a", LoadOptions{})
 	var told []uint64
-	e.cfg.OffHeap = func(b uint64) { told = append(told, b) }
+	e.cfg.OffHeap = func(b, _ uint64) { told = append(told, b) }
 	// Every load re-reads the host (rereadHostLocked); held still here, so
 	// the sum is the division's and not the moment's free memory.
 	e.hostAvail = func() uint64 { return 6 << 30 }

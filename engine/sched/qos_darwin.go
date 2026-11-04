@@ -4,8 +4,6 @@ package sched
 
 import (
 	"runtime"
-	"sync"
-	"sync/atomic"
 
 	"github.com/jitllm/jitllm/backend/ffi"
 )
@@ -21,51 +19,44 @@ const (
 	defaultEQoSClass = QoSUtility
 )
 
-var (
-	qosOnce  sync.Once
-	qosSet   func(uint32, int32) int32
-	qosSelf  func() uint32
-	qosReady bool
-	eClass   atomic.Uint32
-)
-
-func qosInit() bool {
-	qosOnce.Do(func() {
-		l, err := ffi.Open("/usr/lib/libSystem.B.dylib")
-		if err != nil || !l.Has("pthread_set_qos_class_self_np") || !l.Has("qos_class_self") {
-			return
-		}
-		qosSet = ffi.Fn2[int32, uint32, int32](l, "pthread_set_qos_class_self_np")
-		qosSelf = ffi.Fn0[uint32](l, "qos_class_self")
-		qosReady = true
-	})
-	return qosReady
+// QoS is the calls that put a thread at a QoS class
+// (pthread_set_qos_class_self_np, qos_class_self), loaded from libSystem by
+// whoever lowers threads, and the class a thread on the E-cores asks for. The
+// zero QoS lowers nothing.
+type QoS struct {
+	set    func(uint32, int32) int32
+	self   func() uint32
+	eClass uint32
 }
 
-// SetEClass picks the QoS class a thread on the E-cores asks for (QoSUtility
-// and the like), for threads that ask after the call, and returns the class
-// it replaces. It exists so a gate can compare classes; the default is the
-// one the measurements chose.
-func SetEClass(class uint32) uint32 {
-	prev := EClass()
-	eClass.Store(class)
-	return prev
+// LoadQoS is the QoS whose threads on the E-cores ask for class eClass, 0
+// the one the measurements chose (QoSUtility).
+func LoadQoS(eClass uint32) QoS {
+	q := QoS{eClass: eClass}
+	if q.eClass == 0 {
+		q.eClass = defaultEQoSClass
+	}
+	l, err := ffi.Open("/usr/lib/libSystem.B.dylib")
+	if err != nil || !l.Has("pthread_set_qos_class_self_np") || !l.Has("qos_class_self") {
+		return q
+	}
+	q.set = ffi.Fn2[int32, uint32, int32](l, "pthread_set_qos_class_self_np")
+	q.self = ffi.Fn0[uint32](l, "qos_class_self")
+	return q
 }
+
+// Ready reports whether q can set a thread's class.
+func (q QoS) Ready() bool { return q.set != nil }
 
 // EClass is the QoS class a thread on the E-cores asks for.
-func EClass() uint32 {
-	if c := eClass.Load(); c != 0 {
-		return c
-	}
-	return defaultEQoSClass
-}
+func (q QoS) EClass() uint32 { return q.eClass }
 
-// QoSSelf is the calling thread's QoS class, 0 where there is none to read.
-func QoSSelf() uint32 {
-	if !qosInit() {
+// Self is the calling thread's QoS class, 0 where there is none to read.
+func (q QoS) Self() uint32 {
+	if q.self == nil {
 		return 0
 	}
-	return qosSelf()
+	return q.self()
 }
 
 // EQoS puts the calling goroutine's thread at the E-core class and locks the
@@ -75,16 +66,17 @@ func QoSSelf() uint32 {
 // would carry the class to whatever ran on it next (the leak RULE 5 records
 // for an affinity mask). A pool's workers call it once (New, on a pool wholly
 // on the E-cores).
-func EQoS() bool {
-	if !qosInit() {
+func (q QoS) EQoS() bool {
+	if !q.Ready() {
 		return false
 	}
 	runtime.LockOSThread()
-	return qosSet(EClass(), 0) == 0
+	return q.set(q.eClass, 0) == 0
 }
 
 // Lowered is a thread taken down to the E-core class by LowerToE.
 type Lowered struct {
+	q   QoS
 	was uint32
 	ok  bool
 }
@@ -96,28 +88,28 @@ type Lowered struct {
 // cannot be raised again is not handed back to the runtime: the goroutine
 // keeps it locked until it exits, which ends the thread rather than leaving
 // a lowered thread in the runtime's pool.
-func LowerToE() Lowered {
-	if !qosInit() {
+func (q QoS) LowerToE() Lowered {
+	if !q.Ready() {
 		return Lowered{}
 	}
 	runtime.LockOSThread()
-	was := qosSelf()
-	return Lowered{was: was, ok: qosSet(EClass(), 0) == 0}
+	was := q.self()
+	return Lowered{q: q, was: was, ok: q.set(q.eClass, 0) == 0}
 }
 
 // Raise undoes LowerToE.
 func (l Lowered) Raise() {
-	if !qosReady {
+	if !l.q.Ready() {
 		return
 	}
-	if !l.ok || (qosSet(l.was, 0) == 0 && qosSelf() == l.was) {
+	if !l.ok || (l.q.set(l.was, 0) == 0 && l.q.self() == l.was) {
 		runtime.UnlockOSThread()
 	}
 }
 
 // CanSplitE reports whether a session can be given the E-cores: a host with
-// them and a way to ask for them.
-func CanSplitE() bool { return len(ECores()) > 0 && qosInit() }
+// them and q able to ask for them.
+func (q QoS) CanSplitE() bool { return len(ECores()) > 0 && q.Ready() }
 
 // allE reports whether every cpu of a pool is an E-core index (ECores).
 func allE(cpus []int) bool {

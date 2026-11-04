@@ -248,7 +248,7 @@ func mapComposed(code []byte) (*cpu.Code, error) {
 			}
 		}
 	}
-	return cpu.Map(code)
+	return cpu.NewHost().Map(code)
 }
 
 // runCPU runs codes in order on the CPU: the row x, an output of n floats,

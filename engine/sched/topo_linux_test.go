@@ -21,7 +21,7 @@ import (
 // The Atom row matters: a Goldmont Atom has four single-threaded cores and no
 // SMT, and "single-threaded => E-core" would leave PCores() empty.
 func TestTopologyClassifiesTheMachinesThisEngineRunsOn(t *testing.T) {
-	ok := allowed()
+	ok := host().allowed()
 	keep := func(cpus []int) []int {
 		var out []int
 		for _, c := range cpus {
@@ -91,8 +91,7 @@ func TestTopologyClassifiesTheMachinesThisEngineRunsOn(t *testing.T) {
 			singles(0, 10), "6-9",
 			[]int{0, 1, 2, 3, 4, 5}, []int{6, 7, 8, 9}, []int{0, 1, 2, 3, 4, 5}},
 	}
-	old := sysRoot
-	defer func() { sysRoot = old }()
+	m := host()
 	for _, c := range cases {
 		root := t.TempDir()
 		for cpu, s := range c.sibs {
@@ -113,17 +112,17 @@ func TestTopologyClassifiesTheMachinesThisEngineRunsOn(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		sysRoot = root
-		if got, want := PCores(), keepCores(c.sibs, c.p); !reflect.DeepEqual(got, want) {
+		m.sys = root
+		if got, want := m.pCores(), keepCores(c.sibs, c.p); !reflect.DeepEqual(got, want) {
 			t.Errorf("%s: PCores = %v, want %v", c.name, got, want)
 		}
-		if got, want := ECores(), keep(c.e); !reflect.DeepEqual(got, want) {
+		if got, want := m.eCores(), keep(c.e); !reflect.DeepEqual(got, want) {
 			t.Errorf("%s: ECores = %v, want %v", c.name, got, want)
 		}
-		if got, want := SMTSiblings(), keep(c.smt); !reflect.DeepEqual(got, want) {
+		if got, want := m.smtSiblings(), keep(c.smt); !reflect.DeepEqual(got, want) {
 			t.Errorf("%s: SMTSiblings = %v, want %v", c.name, got, want)
 		}
-		if p, want := DecodeCores(), keepCores(c.sibs, c.p); len(want) > 0 && len(p) != len(want) {
+		if p, want := DecodeCores(onMachine(m)), keepCores(c.sibs, c.p); len(want) > 0 && len(p) != len(want) {
 			t.Errorf("%s: DecodeCores = %v, want every P-core %v", c.name, p, want)
 		}
 	}
@@ -151,7 +150,7 @@ func TestPCoresTakesTheThreadTheMaskAllows(t *testing.T) {
 			t.Fatalf("sched_setaffinity: %v", errno)
 		}
 	}
-	was := allowed()
+	was := host().allowed()
 	if !was[4] || !was[5] || !was[6] || !was[7] {
 		t.Skipf("the mask %v does not hold CPUs 4-7 -- this gate proved nothing", was)
 	}
@@ -166,14 +165,13 @@ func TestPCoresTakesTheThreadTheMaskAllows(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	old := sysRoot
-	defer func() { sysRoot = old }()
-	sysRoot = root
+	m := host()
+	m.sys = root
 	setMask(map[int]bool{4: true, 5: true, 6: true, 7: true})
-	if got, want := PCores(), []int{4, 5, 6, 7}; !reflect.DeepEqual(got, want) {
+	if got, want := m.pCores(), []int{4, 5, 6, 7}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("confined to the second thread of each core, PCores = %v, want %v", got, want)
 	}
-	if got := DecodeCores(); len(got) != 4 {
+	if got := DecodeCores(onMachine(m)); len(got) != 4 {
 		t.Fatalf("DecodeCores = %v: four cores are in the mask", got)
 	}
 }
@@ -184,10 +182,6 @@ func TestPCoresTakesTheThreadTheMaskAllows(t *testing.T) {
 // decoded on one worker. The pool now takes the online list, cut to the cgroup
 // quota, and with a mask and no topology the mask.
 func TestPoolWidthWithoutAnAffinityMask(t *testing.T) {
-	oldRoot, oldAff := sysRoot, affinity
-	defer func() { sysRoot, affinity = oldRoot, oldAff }()
-	affinity = func() map[int]bool { return nil }
-
 	tree := func(online, cpuMax string, sibs []string) string {
 		root := t.TempDir()
 		write := func(rel, s string) {
@@ -224,21 +218,24 @@ func TestPoolWidthWithoutAnAffinityMask(t *testing.T) {
 		{"no topology, a mask", tree("0-7", "", nil), map[int]bool{1: true, 3: true, 5: true}, 3, "affinity mask"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			sysRoot = c.root
-			affinity = func() map[int]bool { return c.mask }
-			d := DecodeCores()
+			m := host()
+			m.sys, m.affinity = c.root, func() map[int]bool { return c.mask }
+			d := DecodeCores(onMachine(m))
 			if len(d) != c.want {
-				t.Fatalf("DecodeCores = %v, want %d CPUs (source: %s)", d, c.want, CoreSource())
+				t.Fatalf("DecodeCores = %v, want %d CPUs (source: %s)", d, c.want, m.coreSource())
 			}
 			p := New(d)
 			defer p.Close()
 			if p.N() != c.want {
 				t.Fatalf("pool of %d participants, want %d", p.N(), c.want)
 			}
-			if src := CoreSource(); !strings.Contains(src, c.source) {
+			if src := m.coreSource(); !strings.Contains(src, c.source) {
 				t.Fatalf("CoreSource = %q, want it to name %q", src, c.source)
 			}
-			t.Logf("%d workers from %s", p.N(), CoreSource())
+			t.Logf("%d workers from %s", p.N(), m.coreSource())
 		})
 	}
 }
+
+// onMachine reads the pool's cores from m rather than the running machine.
+func onMachine(m machine) Option { return func(c *config) { c.m = m } }

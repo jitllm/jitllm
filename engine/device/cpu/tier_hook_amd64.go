@@ -3,8 +3,7 @@
 package cpu
 
 // ForceTierForTest makes this package's capability probe report the host as
-// tier t, re-probing immediately, and returns the tier it reported before so a
-// test can restore it:
+// tier t, and returns the tier it reported before so a test can restore it:
 //
 //	old := cpu.ForceTierForTest(cpu.TierSSE)
 //	defer cpu.ForceTierForTest(old)
@@ -13,12 +12,10 @@ package cpu
 // Forcing can only take capabilities away: TierSSE clears every VEX-encoded
 // unit (AVX2, FMA, F16C, AVX-512, both VNNIs and the OS YMM bits), TierNone
 // also clears SSSE3/SSE4.1/SSE4.2 so the refuse-by-name path can run, and
-// TierAVX2 removes the force. It resets Baseline's cached verdict too, so every
-// question derived from the probe -- HostTier, Baseline, Map's ISA check,
-// SupportedNative, SupportedPackedNative, HostDotKind -- answers for the forced
-// host. nn keys its kernel caches by tier, so a forced run cannot reuse an
-// AVX2 kernel an earlier test cached; force BEFORE model.Open/NewState, since a
-// JIT records its tier when it is built.
+// TierAVX2 removes the force. Every question derived from the probe -- CPU,
+// HostTier, Baseline -- answers for the forced host, and so does a Host made
+// after the call: force BEFORE model.Open, since a model's Host keeps the
+// features it was made with.
 //
 // It is behind jitllmtest and is not an option: a release binary has no path
 // to pretend a CPU lacks instructions it has. Legacy SSE executes on every
@@ -26,4 +23,8 @@ package cpu
 // end.
 //
 // It is not safe against concurrent emitters.
-func ForceTierForTest(t Tier) Tier { return retier(t) }
+func ForceTierForTest(t Tier) Tier {
+	old := HostTier()
+	forceTier, tierForced = t, t < TierAVX2
+	return old
+}

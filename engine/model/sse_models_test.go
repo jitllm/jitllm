@@ -18,7 +18,7 @@ import (
 
 // The SSE tier at the model level: every gate here forces the tier before a
 // model opens (nn.NewJIT builds its kernels at construction), asserts the probe
-// took it, and uses cpu.MappedByTier to assert no AVX2 kernel was mapped while
+// took it, and uses its Host's MappedByTier to assert no AVX2 kernel was mapped while
 // it was on. Until every SSE family has landed they fail naming the missing
 // ops rather than skip.
 
@@ -76,6 +76,7 @@ type ssemArm struct {
 	margins []float32
 	steps   [][]float32 // the logits greedy[i] was chosen from
 	workers int
+	mapped  map[cpu.Tier]int64 // the arm's Host's codes by tier
 }
 
 func ssemArgmax(l []float32) (int32, float32) {
@@ -140,6 +141,7 @@ func ssemRun(t *testing.T, path string, ids []int32, gen int, opts ...Option) ss
 		t.Fatalf("ForwardBatch on tier %v: %v", cpu.HostTier(), err)
 	}
 	b.Close()
+	a.mapped = m.eng.cpuForms.Host.MappedByTier()
 	return a
 }
 
@@ -155,7 +157,6 @@ func ssemComposedServes(t *testing.T, path string, ids []int32, forced [][]float
 		t.Fatal(err)
 	}
 	defer m.Close()
-	before := cpu.MappedByTier()
 	s := m.NewInstance(len(ids) + 1)
 	defer s.Close()
 	var worst float64
@@ -170,11 +171,11 @@ func ssemComposedServes(t *testing.T, path string, ids []int32, forced [][]float
 		}
 		worst = math.Max(worst, d)
 	}
-	after := cpu.MappedByTier()
-	if d := after[cpu.TierAVX2] - before[cpu.TierAVX2]; d != 0 {
+	mapped := m.eng.cpuForms.Host.MappedByTier()
+	if d := mapped[cpu.TierAVX2]; d != 0 {
 		t.Fatalf("the composed CPU mapped %d AVX2 kernels on the SSE tier", d)
 	}
-	if after[cpu.TierSSE] == before[cpu.TierSSE] {
+	if mapped[cpu.TierSSE] == 0 {
 		t.Fatal("the composed CPU mapped no SSE-tier kernel")
 	}
 	served, declined := s.CPUBlockSteps()
@@ -265,13 +266,11 @@ func TestEveryModelRunsSSE(t *testing.T) {
 			}
 
 			ssemForce(t)
-			before := cpu.MappedByTier()
 			got := ssemRun(t, path, ids, gen, f32)
-			after := cpu.MappedByTier()
-			if d := after[cpu.TierAVX2] - before[cpu.TierAVX2]; d != 0 {
+			if d := got.mapped[cpu.TierAVX2]; d != 0 {
 				t.Fatalf("%d AVX2 kernels were mapped during the SSE arm -- it did not run the SSE tier", d)
 			}
-			if after[cpu.TierSSE] == before[cpu.TierSSE] {
+			if got.mapped[cpu.TierSSE] == 0 {
 				t.Fatal("the SSE arm mapped no SSE-tier kernel -- it ran nothing it claims to")
 			}
 			ssemComposedServes(t, path, ids, got.forced, band, f32)
@@ -379,8 +378,9 @@ func ssemKVF16(fn func(*testing.T, ...Option)) func(*testing.T) {
 // with the SSE tier forced for all of them. Each is the unchanged gate: what
 // it checks on the AVX2 tier it checks here.
 func TestSSEModelGates(t *testing.T) {
+	// Every model the gates open maps onto a Host at the SSE tier, whose
+	// gate refuses an AVX2 kernel by name: none can be mapped silently.
 	ssemForce(t)
-	before := cpu.MappedByTier()
 	for _, g := range []struct {
 		name string
 		fn   func(*testing.T)
@@ -408,8 +408,5 @@ func TestSSEModelGates(t *testing.T) {
 		{"PagedKVIsTokenIdenticalOnEveryModel", TestPagedKVIsTokenIdenticalOnEveryModel},
 	} {
 		t.Run(g.name, g.fn)
-	}
-	if d := cpu.MappedByTier()[cpu.TierAVX2] - before[cpu.TierAVX2]; d != 0 {
-		t.Errorf("%d AVX2 kernels were mapped while the SSE tier was forced", d)
 	}
 }

@@ -12,7 +12,6 @@ import (
 	"strconv"
 
 	"github.com/jitllm/jitllm/engine/sched"
-	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // Cap tells Go's collector about the cgroup, which it cannot see, and returns
@@ -38,25 +37,31 @@ func Cap() uint64 {
 	}
 	set := lim - sched.GCHeadroom
 	debug.SetMemoryLimit(int64(set))
-	// JITLLM_GC_RESERVE is the bytes the weight budget leaves below the
-	// collector's goal: lower it to hold more weights, raise it if
-	// GODEBUG=gctrace=1 shows cycles that free nothing. JITLLM_GOGC is the
-	// ordinary GOGC, applied after the limit so it composes with it.
-	if v := os.Getenv("JITLLM_GC_RESERVE"); v != "" {
-		if n, err := strconv.ParseUint(v, 10, 64); err == nil {
-			sched.SetGCReserve(n)
-		}
-	}
+	// JITLLM_GOGC is the ordinary GOGC, applied after the limit so it
+	// composes with it.
 	gogc()
 	return set
+}
+
+// Reserve is JITLLM_GC_RESERVE, the bytes a weight budget on the Go heap
+// leaves below the collector's goal (sched.GCPlan.Reserve): lower it to hold
+// more weights, raise it if GODEBUG=gctrace=1 shows cycles that free nothing.
+// 0, unset, is the derived default.
+func Reserve() uint64 {
+	n, err := strconv.ParseUint(os.Getenv("JITLLM_GC_RESERVE"), 10, 64)
+	if err != nil {
+		return 0
+	}
+	return n
 }
 
 // OffHeap re-derives the collector's memory limit for the weight memory off
 // the heap: the runtime cannot see those bytes and the cgroup can, so they come
 // off the limit Cap set. budgets is the page budget the loaded models' frames
 // will grow to -- one model's in cmd/jitllm, every loaded model's summed in
-// jitllmd, which calls it on each load and unload -- and what is mapped
-// already (dense regions, frames faulted) is added on top, conservatively.
+// jitllmd, which calls it on each load and unload -- and mapped what they
+// hold off the heap already (dense regions, frames faulted,
+// model.Model.MappedBytes), added on top, conservatively.
 //
 // The limit is a backstop, set only when it leaves the real heap at least
 // GCHeadroom: where the frames fill the cgroup, a limit just above the heap is
@@ -65,11 +70,10 @@ func Cap() uint64 {
 // off the heap -- the last model unloaded -- the limit is Cap's again; with
 // weights on the heap (JITLLM_OFFHEAP=0) it is left as Cap set it, and
 // JITLLM_GOMEMLIMIT=0 sets none here either.
-func OffHeap(budgets uint64) {
+func OffHeap(budgets, mapped uint64) {
 	if os.Getenv("JITLLM_GOMEMLIMIT") == "0" {
 		return
 	}
-	mapped := uint64(jlm.OffHeapBytes())
 	if mapped == 0 {
 		if budgets == 0 {
 			Cap()

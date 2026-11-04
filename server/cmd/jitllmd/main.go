@@ -36,6 +36,7 @@ import (
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine/sched"
 	"github.com/jitllm/jitllm/internal/cmd/goheap"
 	"github.com/jitllm/jitllm/internal/localserver"
 	"github.com/jitllm/jitllm/server"
@@ -327,6 +328,7 @@ func serve(args []string) {
 		NoOnDemand:       !*onDemand,
 		KVF16:            kvWidth,
 		OffHeap:          goheap.OffHeap,
+		GC:               sched.GCPlan{Reserve: goheap.Reserve()},
 		PromptStore:      store,
 		ModelDir:         *models,
 		MaxBatchRows:     *maxBatch,

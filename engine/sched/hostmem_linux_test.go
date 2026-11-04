@@ -11,10 +11,11 @@ import (
 	"testing"
 )
 
-// fakeHost writes a /proc and /sys for HostMem to read: a two-node machine of
-// 128 GiB a node, avail on the whole machine, a cgroup ceiling cg (0 for none),
-// the cpuset's memory nodes mems and each node's free memory.
-func fakeHost(t *testing.T, avail, cg uint64, mems string, nodeFree [2]uint64) {
+// fakeHost writes a /proc and /sys and is the machine that reads them: two
+// nodes of 128 GiB a node, avail on the whole machine, a cgroup ceiling cg (0
+// for none), the cpuset's memory nodes mems, each node's free memory, and no
+// memory-policy bind.
+func fakeHost(t *testing.T, avail, cg uint64, mems string, nodeFree [2]uint64) machine {
 	t.Helper()
 	proc, sys := t.TempDir(), t.TempDir()
 	write := func(p, s string) {
@@ -44,9 +45,7 @@ func fakeHost(t *testing.T, avail, cg uint64, mems string, nodeFree [2]uint64) {
 			"Node %d MemTotal:       %d kB\nNode %d MemFree:        %d kB\nNode %d Active(file):   %d kB\nNode %d Inactive(file): 0 kB\nNode %d SReclaimable:   0 kB\n",
 			n, 128<<20, n, free/2>>10, n, (free-free/2)>>10, n, n))
 	}
-	oldP, oldS, oldB := procRoot, sysRoot, bindNodes
-	t.Cleanup(func() { procRoot, sysRoot, bindNodes = oldP, oldS, oldB })
-	procRoot, sysRoot, bindNodes = proc, sys, func() []int { return nil }
+	return machine{proc: proc, sys: sys, bind: func() []int { return nil }, affinity: readAffinity}
 }
 
 // TestMemBudgetHonoursEveryLimit: the budget is eight tenths of the smallest of
@@ -77,20 +76,20 @@ func TestMemBudgetHonoursEveryLimit(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			fakeHost(t, c.avail, c.cg, c.mems, c.nodeFree)
+			m := fakeHost(t, c.avail, c.cg, c.mems, c.nodeFree)
 			bind := c.bind
-			bindNodes = func() []int { return bind }
-			h := HostMem()
+			m.bind = func() []int { return bind }
+			h := m.mem()
 			if !slices.Equal(h.Nodes, c.wantNodes) {
 				t.Fatalf("nodes %v, want %v (%v)", h.Nodes, c.wantNodes, h)
 			}
 			if got := h.Limit(); got != c.want {
 				t.Fatalf("limit %.1f GiB, want %.1f GiB (%v)", float64(got)/float64(gib), float64(c.want)/float64(gib), h)
 			}
-			if got, want := MemBudget(), c.want/10*8; WeightsOffHeap() && got != want {
+			if got, want := m.mem().Budget(GCPlan{}), c.want/10*8; !(GCPlan{}).onHeap() && got != want {
 				t.Fatalf("MemBudget %d, want %d", got, want)
 			}
-			if got := MemLimit(); got != c.wantMemLimit {
+			if got := m.memLimit(); got != c.wantMemLimit {
 				t.Fatalf("MemLimit %d, want %d", got, c.wantMemLimit)
 			}
 		})

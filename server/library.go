@@ -8,7 +8,6 @@ import (
 	"slices"
 	"sort"
 
-	"github.com/jitllm/jitllm/engine/sched"
 	"github.com/jitllm/jitllm/internal/localserver"
 )
 
@@ -142,7 +141,7 @@ func (e *Engine) resolveModel(name string) (*LoadedModel, error) {
 	if err != nil {
 		budget := o.PageBudgetBytes
 		if budget == 0 {
-			budget = sched.MemBudget()
+			budget = e.cfg.GC.Budget()
 		}
 		return nil, &LoadError{Model: name, Path: f.Path, Size: f.Size, Budget: budget, Err: err}
 	}

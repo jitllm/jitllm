@@ -93,13 +93,8 @@ func main() {
 	// count from its logger's start.
 	procStart := time.Now()
 	alignGOMAXPROCS()
-	// Page frames and the dense region live off the Go heap (jlm.SetOffHeap).
-	// JITLLM_OFFHEAP=0 puts them back on it, with the budget's collector
-	// reserve: the control arm for a measurement.
-	if os.Getenv("JITLLM_OFFHEAP") == "0" {
-		jlm.SetOffHeap(false)
-		sched.SetWeightsOffHeap(false)
-	}
+	// Page frames and the dense region live off the Go heap; JITLLM_OFFHEAP=0
+	// puts them back on it (gcPlan).
 	if os.Getenv("JITLLM_GCSTATS") == "1" {
 		defer gcSummary()
 	}
@@ -348,7 +343,7 @@ type chatSpec struct {
 	repl   bool
 }
 
-func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram, maxmem uint64, grow, tuneSeam, noFallback, relocate bool, sm *model.Sampler, imgPath string, topts []tok.Option, chat *chatSpec, kvCacheDir string, kvCacheMaxBytes, kvBudget uint64, place *model.Placement, specOpts []model.SpecOption) error {
+func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram, maxmem uint64, grow, tuneSeam, noFallback, relocate bool, sm *model.Sampler, imgPath string, topts []tok.Option, chat *chatSpec, kvCacheDir string, kvCacheMaxBytes, kvBudget uint64, place *model.Placement, specOpts []model.SpecOption, open ...model.Option) error {
 	if v := os.Getenv("JITLLM_N"); v != "" {
 		if p, err := strconv.Atoi(v); err == nil {
 			n = p
@@ -360,7 +355,7 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	// model that fits.
 	asked := maxmem
 	if maxmem == 0 {
-		maxmem = sched.MemBudget()
+		maxmem = gcPlan().Budget()
 	}
 	goheap.Cap()
 	opts := loadOpts(topts, maxmem)
@@ -374,7 +369,7 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 		return err
 	}
 	opts = append(opts, model.WithCPU(listed))
-	m, err := model.Open(path, opts...)
+	m, err := model.Open(path, append(opts, open...)...)
 	// The meter starts at Open, not after placement: on a streamed model
 	// admission is the largest read, and starting later leaves it uncounted.
 	// See model.PhaseRow.
@@ -388,12 +383,12 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 		// the KV cache and the pool's scratch are anonymous, and goheap.Cap
 		// keeps the collector a gigabyte under the same ceiling.
 		//
-		// The raise is also capped by sched.GCBudgetCap: page frames are
+		// The raise is also capped by the plan's Cap: page frames are
 		// permanently live, and a budget near the heap goal makes the
 		// collector run back to back (AGENTS.md RULE 2f).
 		if lim := sched.MemLimit(); lim > 0 {
 			raised := lim / 10 * 9
-			if cap := sched.GCBudgetCap(); cap > 0 && cap < raised {
+			if cap := gcPlan().Cap(); cap > 0 && cap < raised {
 				raised = cap
 			}
 			if raised > maxmem {
@@ -408,7 +403,7 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	if err := preloadWait(m); err != nil {
 		return err
 	}
-	goheap.OffHeap(maxmem)
+	goheap.OffHeap(maxmem, m.MappedBytes())
 	c := m.Cfg
 	fmt.Fprintf(os.Stderr, "%s L=%d d=%d heads=%d/%d head_dim=%d ffn=%d vocab=%d\n",
 		c.Arch, c.NLayer, c.NEmbd, c.NHead, c.NKVHead, c.HeadDim, c.NFFN, c.NVocab)
@@ -1454,7 +1449,6 @@ func runCmd(args []string) error {
 			return err
 		}
 		defer f.Close()
-		sched.SetRegionLabels(true) // attribution for generated code; see sched.regionLabels
 		if err := pprof.StartCPUProfile(f); err != nil {
 			return err
 		}
@@ -1470,7 +1464,7 @@ func runCmd(args []string) error {
 	} else if *placeStrict {
 		return fmt.Errorf("-placement-strict needs -placement")
 	}
-	return run(path, prompt, *n, *depth, *dev, *layers, *vram, *maxmem, *grow, *tuneSeam, *noFallback, *relocate, sm, *imgPath, topts, cs, *kvCache, *kvCacheMax, *kvBudget, place, specOpts)
+	return run(path, prompt, *n, *depth, *dev, *layers, *vram, *maxmem, *grow, *tuneSeam, *noFallback, *relocate, sm, *imgPath, topts, cs, *kvCache, *kvCacheMax, *kvBudget, place, specOpts, regionLabels(*cpuProf != "")...)
 }
 
 // tokenizerOption turns a -tokenizer path into the tok.Option it names, plus the
@@ -1508,10 +1502,11 @@ func preloadWait(m *model.Model) error {
 }
 
 func loadOpts(t []tok.Option, budget uint64) []model.Option {
-	o := make([]model.Option, 0, len(t)+2)
+	o := make([]model.Option, 0, len(t)+3)
 	for _, x := range t {
 		o = append(o, model.WithTokenizerOption(x))
 	}
+	o = append(o, model.WithGCPlan(gcPlan()))
 	if budget > 0 {
 		o = append(o, model.WithPageBudget(budget))
 	}
@@ -1523,7 +1518,11 @@ func loadOpts(t []tok.Option, budget uint64) []model.Option {
 	if n, err := strconv.Atoi(os.Getenv("JITLLM_CHUNK")); err == nil && n >= 1 {
 		o = append(o, model.WithPrefillChunk(n))
 	}
-	cpuConfigure()
+	// JITLLM_PERFMAP=1 has the model's CPU write /tmp/perf-<pid>.map, so perf
+	// resolves generated code by name (cpu.WithPerfMap).
+	if os.Getenv("JITLLM_PERFMAP") != "" {
+		o = append(o, model.WithCPUHost(cpu.WithPerfMap()))
+	}
 	// JITLLM_HUGEPAGES=0 leaves the frames on the kernel's default page size.
 	if os.Getenv("JITLLM_HUGEPAGES") == "0" {
 		o = append(o, model.WithHugePages(false))
@@ -1594,6 +1593,24 @@ func loadOpts(t []tok.Option, budget uint64) []model.Option {
 		o = append(o, model.WithDeviceSample(model.DeviceSampleOff))
 	}
 	return append(o, modelOptions()...)
+}
+
+// regionLabels labels the model's CPU regions for a CPU profile, which
+// attributes generated code by them (sched.WithRegionLabels); nothing when on
+// is false.
+func regionLabels(on bool) []model.Option {
+	if !on {
+		return nil
+	}
+	return []model.Option{model.WithPool(cpu.WithSched(sched.WithRegionLabels(true)))}
+}
+
+// gcPlan is where the weights live and what their budget leaves the Go
+// collector: JITLLM_OFFHEAP=0 puts them on the heap, the control arm for a
+// measurement, with the collector reserve JITLLM_GC_RESERVE states
+// (goheap.Reserve).
+func gcPlan() sched.GCPlan {
+	return sched.GCPlan{OnHeap: os.Getenv("JITLLM_OFFHEAP") == "0", Reserve: goheap.Reserve()}
 }
 
 // modelOptions turns the graph tier's environment variables into model.Options.
@@ -1670,22 +1687,6 @@ func poolOptions() []cpu.PoolOption {
 		o = append(o, cpu.WithParticipants(n))
 	}
 	return o
-}
-
-// cpuConfigure hands engine/device/cpu the process-wide knobs that are not per-JIT: a
-// perf map for the profiler, and the probes that deliberately slow a kernel so
-// one class of operation can be priced against another.
-func cpuConfigure() {
-	n := func(k string) int {
-		v, _ := strconv.Atoi(os.Getenv(k))
-		return v
-	}
-	cpu.Configure(cpu.Config{
-		PerfMap:     os.Getenv("JITLLM_PERFMAP") != "",
-		ScalarProbe: n("JITLLM_SCALAR_PROBE"),
-		LoadProbe:   n("JITLLM_LOAD_PROBE"),
-		VectorProbe: n("JITLLM_VECTOR_PROBE"),
-	})
 }
 
 // benchCmd parses bench's flags. It takes -tokenizer for the same reason run

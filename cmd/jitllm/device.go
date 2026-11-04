@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/jitllm/jitllm/engine/sched"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/nn"
@@ -39,7 +38,7 @@ import (
 // wins.
 func openDevices(spec string, vram, hostBudget uint64, streamGroups, stepRows int) (nn.LayerDevice, func(), string, error) {
 	if hostBudget == 0 {
-		hostBudget = sched.MemBudget()
+		hostBudget = gcPlan().Budget()
 	}
 	es, err := gpu.ParseDevices(spec)
 	if err != nil {

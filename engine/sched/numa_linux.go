@@ -13,16 +13,16 @@ import (
 	"unsafe"
 )
 
-// NUMANodes is the memory nodes whose CPUs this process may run on, ascending.
+// numaNodes is the memory nodes whose CPUs this process may run on, ascending.
 //
 // A two-socket system is two memories and the decode pool spans both, so half of
 // every weight read can cross the socket link. A node none of the process's
 // CPUs are on is left out, so a taskset onto one socket means one node.
 //
 // Empty or one node means there is nothing to decide.
-func NUMANodes() []int {
-	ok := allowed()
-	dirs, _ := filepath.Glob(filepath.Join(sysRoot, "devices/system/node/node[0-9]*"))
+func (m machine) numaNodes() []int {
+	ok := m.allowed()
+	dirs, _ := filepath.Glob(filepath.Join(m.sys, "devices/system/node/node[0-9]*"))
 	var nodes []int
 	for _, d := range dirs {
 		n, err := strconv.Atoi(strings.TrimPrefix(filepath.Base(d), "node"))
@@ -68,10 +68,10 @@ func NodeOf(p unsafe.Pointer) int {
 
 // nodeCPUs is each node of NUMANodes() with the CPUs of it this process may
 // use, in the same order.
-func nodeCPUs() (nodes []int, cpus [][]int) {
-	ok := allowed()
-	for _, n := range NUMANodes() {
-		b, err := os.ReadFile(filepath.Join(sysRoot, fmt.Sprintf("devices/system/node/node%d/cpulist", n)))
+func (m machine) nodeCPUs() (nodes []int, cpus [][]int) {
+	ok := m.allowed()
+	for _, n := range m.numaNodes() {
+		b, err := os.ReadFile(filepath.Join(m.sys, fmt.Sprintf("devices/system/node/node%d/cpulist", n)))
 		if err != nil {
 			return nil, nil
 		}

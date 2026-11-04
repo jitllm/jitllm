@@ -1344,16 +1344,6 @@ func Open(path string, options ...Option) (*Model, error) {
 	if !strings.EqualFold(filepath.Ext(path), Ext) {
 		return nil, &NotConvertedError{Path: path}
 	}
-	// Every op a token runs is generated code; with no lowering for this
-	// architecture there is nothing to run it on.
-	if !composer.LowersCPU(uint64(cpu.CPU().ISA())) {
-		return nil, fmt.Errorf("model: the composer lowers no code for %s/%s", runtime.GOOS, runtime.GOARCH)
-	}
-	// A host the emitter cannot serve (an x86 below SSE4.1+SSSE3) is refused
-	// here, naming what is missing, before any page is read.
-	if err := cpu.Baseline(); err != nil {
-		return nil, fmt.Errorf("model: %w", err)
-	}
 	m, err := openContainer(path, options...)
 	if err != nil {
 		return nil, err
@@ -1422,6 +1412,16 @@ type loadOpts struct {
 	// preload is how many pages Open keeps in flight behind it; see
 	// WithPreload.
 	preload int
+	// cpuHost states the CPU the model's device maps onto (WithCPUHost).
+	cpuHost []cpu.HostOption
+}
+
+// WithCPUHost states the CPU the model's CPU device maps its forms onto:
+// a perf map (cpu.WithPerfMap), or a lower tier than the CPU's own
+// (cpu.AtTier, cpu.WithoutVNNI, cpu.WithoutDotProd), which the composer forms
+// for and the device refuses to map past.
+func WithCPUHost(o ...cpu.HostOption) Option {
+	return func(l *loadOpts) { l.cpuHost = append(l.cpuHost, o...) }
 }
 
 // WithPreload has Open start reading every page in the background, depth
@@ -1459,13 +1459,27 @@ func WithPool(o ...cpu.PoolOption) Option {
 // memory allocated its whole size first and was killed before producing a
 // token (placement.md, "Measurements once cited in engine/model's comments").
 //
-// Zero means "ask the process": sched.MemBudget, which is MemAvailable or the
-// cgroup limit, whichever binds, times eight tenths. A budget that holds every
+// Zero means "ask the process": the model's GCPlan's Budget, which is
+// MemAvailable or the cgroup limit, whichever binds, times eight tenths, under
+// the collector's reserve when the weights are on the heap. A budget that holds every
 // block never evicts, so one larger than the model is the fully-resident
 // configuration and not a second code path.
 func WithPageBudget(bytes uint64) Option {
 	return func(l *loadOpts) { l.pageBudget, l.budgetSet = bytes, true }
 }
+
+// WithGCPlan says where the model's weight memory lives and what a budget
+// it sizes itself leaves the Go collector: the zero plan, the default, keeps
+// the weights off the heap; OnHeap puts them on it (jlm.OnHeap), the control
+// arm for a measurement, with Reserve's collector reserve (AGENTS.md RULE 2f).
+func WithGCPlan(g sched.GCPlan) Option { return func(l *loadOpts) { l.opt.gc = g } }
+
+// cpuISA is the extensions the model's CPU device forms for (its Host's).
+func (m *Model) cpuISA() cpu.ISA { return m.eng.cpuForms.Host.ISA() }
+
+// MappedBytes is how much of the model's weight memory is held off the Go
+// heap (jlm.File.MappedBytes).
+func (m *Model) MappedBytes() uint64 { return m.container.MappedBytes() }
 
 // WithHugePages sets whether this model's page frames are advised onto
 // transparent huge pages. On by default: the plane layout jumps a whole plane
@@ -1518,7 +1532,22 @@ func openContainer(path string, options ...Option) (*Model, error) {
 	for _, o := range options {
 		o(&lo)
 	}
-	c, err := jlm.Open(path)
+	h := cpu.NewHost(lo.cpuHost...)
+	// Every op a token runs is generated code; with no lowering for this
+	// architecture there is nothing to run it on.
+	if !composer.LowersCPU(uint64(h.ISA())) {
+		return nil, fmt.Errorf("model: the composer lowers no code for %s/%s", runtime.GOOS, runtime.GOARCH)
+	}
+	// A host the emitter cannot serve (an x86 below SSE4.1+SSSE3) is refused
+	// here, naming what is missing, before any page is read.
+	if err := h.Baseline(); err != nil {
+		return nil, fmt.Errorf("model: %w", err)
+	}
+	var heap []jlm.OpenOption
+	if lo.opt.gc.OnHeap {
+		heap = append(heap, jlm.OnHeap())
+	}
+	c, err := jlm.Open(path, heap...)
 	if err != nil {
 		return nil, err
 	}
@@ -1526,7 +1555,7 @@ func openContainer(path string, options ...Option) (*Model, error) {
 	// every block gets its own page and nothing is ever evicted.
 	budget := lo.pageBudget
 	if !lo.budgetSet {
-		budget = sched.MemBudget()
+		budget = lo.opt.gc.Budget()
 	}
 	// The budget is bytes, since a container carries page arrays of different
 	// sizes; see jlm.File.SetBudget.
@@ -1555,6 +1584,7 @@ func openContainer(path string, options ...Option) (*Model, error) {
 	// on the host's memory attached afterwards comes off it (hostheld.go).
 	m.pages.bytes = budget
 	m.eng.pool, m.opt = lo.pool, lo.opt
+	m.eng.cpuForms.Host = h
 	m.actWindow = m.actWindowOf()
 	if lo.opt.kvTypeSet {
 		if err := m.Cfg.KVTypeRefusal(lo.opt.kvType); err != nil {
@@ -1951,6 +1981,7 @@ func (m *Model) Close() error {
 		o.ReleaseModel(m.id)
 	}
 	m.eng.cpuForms.Close()
+	m.eng.cpuForms.Host.Close()
 	m.unmapKVArenas()
 	err := m.container.Close()
 	m.eng.devMu.Lock()

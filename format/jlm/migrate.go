@@ -173,7 +173,7 @@ func (f *File) storedBytes(e *Entry) ([]byte, error) {
 // its BatchNorm shift (RoleABNShift becomes dwB*scale + shift, RoleADWB goes).
 // A container with no audio tower changes only its version word, in place.
 func migrate29(path string) error {
-	f, err := openAt(path, 29)
+	f, err := openAt(path, 29, true)
 	if err != nil {
 		return err
 	}
@@ -242,7 +242,7 @@ func migrate29(path string) error {
 // forward by, with no version word to change. A container state reports
 // unchanged is left as it is.
 func Restate(path string, state func(f *File, c *Config) (bool, error)) (bool, error) {
-	f, err := openAt(path, Version)
+	f, err := openAt(path, Version, true)
 	if err != nil {
 		return false, err
 	}
@@ -290,7 +290,7 @@ func (f *File) publish(path string, src *Source, ver uint32) error {
 // TypeIQ4NL (a type code no v28 container carries). Nothing a v28 container
 // holds moved or changed meaning, so only the version word changes, in place.
 func migrate28(path string) error {
-	f, err := openAt(path, 28)
+	f, err := openAt(path, 28, true)
 	if err != nil {
 		return err
 	}
@@ -304,7 +304,7 @@ func migrate28(path string) error {
 // moves every offset after it, so the container is rewritten with every
 // tensor's planes carried as they are.
 func migrate27(path string) error {
-	f, err := openAt(path, 27)
+	f, err := openAt(path, 27, true)
 	if err != nil {
 		return err
 	}
@@ -328,7 +328,7 @@ const scWords26 = 4
 // planes shrink, which moves every offset after the first, so the container
 // is rewritten.
 func migrate26(path string) error {
-	f, err := openAt(path, 26)
+	f, err := openAt(path, 26, true)
 	if err != nil {
 		return err
 	}

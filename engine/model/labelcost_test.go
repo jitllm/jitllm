@@ -9,15 +9,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jitllm/jitllm/engine/sched"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestRegionLabelCost prices what a pprof region label costs a token, in
 // allocations rather than time, so it needs no quiet box. Each labelled region
 // builds its label by concatenation and runs pprof.Do for every participant
-// (a label map and a context each). The arms differ only in
-// sched.SetRegionLabels.
+// (a label map and a context each). The arms differ only in their
+// instance's pool's labels (cpu.Pool.SetRegionLabels).
 func TestRegionLabelCost(t *testing.T) {
 	if os.Getenv("JITLLM_LABELCOST") == "" {
 		t.Skip("set JITLLM_LABELCOST=1 to price the pprof region labels")
@@ -33,10 +32,9 @@ func TestRegionLabelCost(t *testing.T) {
 	// allocs and bytes for `n` decode tokens, after a warm-up that settles the
 	// tuner and the kernel caches so their one-off allocations are not counted.
 	perToken := func(labels bool, n int) (allocs, bytes float64, regions float64) {
-		was := sched.SetRegionLabels(labels)
-		defer sched.SetRegionLabels(was)
 		s := m.NewInstance(64)
 		defer s.Close()
+		s.Pool().SetRegionLabels(labels)
 		for i := 0; i < 8; i++ {
 			if _, err := s.Forward(int32(5 + i)); err != nil {
 				t.Fatal(err)
@@ -102,10 +100,9 @@ func TestRegionLabelRate(t *testing.T) {
 	defer m.Close()
 
 	sample := func(labels bool) float64 {
-		was := sched.SetRegionLabels(labels)
-		defer sched.SetRegionLabels(was)
 		s := m.NewInstance(128)
 		defer s.Close()
+		s.Pool().SetRegionLabels(labels)
 		for i := 0; i < 8; i++ {
 			if _, err := s.Forward(int32(5 + i)); err != nil {
 				t.Fatal(err)

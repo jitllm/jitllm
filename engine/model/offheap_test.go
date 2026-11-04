@@ -6,16 +6,16 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/engine/sched"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
-// TestOffHeapFramesMatchTheHeap is the gate on jlm.SetOffHeap: a model whose
-// frames and dense region are anonymous mappings decodes bit-identically to
-// the same model on the Go heap, under a page budget of one frame so every
-// block is evicted, re-read and re-bound into recycled mappings. It checks
-// the mappings were SELECTED (OffHeapBytes rises once the model opens) and
-// RETURNED (back to where it started once the model closes).
+// TestOffHeapFramesMatchTheHeap is the gate on the off-heap weights: a model
+// whose frames and dense region are anonymous mappings decodes bit-identically
+// to the same model on the Go heap (WithGCPlan, OnHeap), under a page budget of
+// one frame so every block is evicted, re-read and re-bound into recycled
+// mappings. It checks the mappings were SELECTED (the model maps bytes once it
+// opens, and none on the heap) and RETURNED (none left once it closes).
 func TestOffHeapFramesMatchTheHeap(t *testing.T) {
 	paths := []string{benchModel(t)}
 	if p, ok := existingModel(testmodels.Path("Qwen3-MOE-4x0.6B-Q4_K_M.gguf")); ok {
@@ -28,16 +28,14 @@ func TestOffHeapFramesMatchTheHeap(t *testing.T) {
 
 func offHeapGate(t *testing.T, path string) {
 	decode := func(off bool) [][]float32 {
-		was := jlm.SetOffHeap(off)
-		defer jlm.SetOffHeap(was)
-		base := jlm.OffHeapBytes()
-		m, err := Open(path, WithPageBudget(1))
+		m, err := Open(path, WithPageBudget(1), WithGCPlan(sched.GCPlan{OnHeap: !off}))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := jlm.OffHeapBytes() > base; got != off {
+		c := m.container
+		if got := c.MappedBytes() > 0; got != off {
 			m.Close()
-			t.Fatalf("off-heap %v, but the model mapped %d bytes", off, jlm.OffHeapBytes()-base)
+			t.Fatalf("off-heap %v, but the model mapped %d bytes", off, c.MappedBytes())
 		}
 		s := m.NewInstance(64)
 		ids := m.Vocab.Encode("The capital of France is", true)
@@ -54,7 +52,7 @@ func offHeapGate(t *testing.T, path string) {
 		}
 		s.Close()
 		m.Close()
-		if n := jlm.OffHeapBytes() - base; n != 0 {
+		if n := c.MappedBytes(); n != 0 {
 			t.Fatalf("%d off-heap bytes still mapped after Close", n)
 		}
 		return out
@@ -83,7 +81,6 @@ func TestOffHeapMemoryStaysWithinTheBudget(t *testing.T) {
 	if !ok {
 		t.Skip("MODEL MISSING: Qwen3-MOE-4x0.6B-Q4_K_M (set JITLLM_MODELS) -- this gate proved nothing")
 	}
-	before := jlm.OffHeapBytes()
 	m, err := Open(jlmOf(t, p))
 	if err != nil {
 		t.Fatal(err)
@@ -126,8 +123,8 @@ func TestOffHeapMemoryStaysWithinTheBudget(t *testing.T) {
 	}
 	st.Close()
 	m.Close()
-	if after := jlm.OffHeapBytes(); after != before {
-		t.Fatalf("%d off-heap bytes before the model, %d after it closed", before, after)
+	if after := c.MappedBytes(); after != 0 {
+		t.Fatalf("%d off-heap bytes still mapped after the model closed", after)
 	}
 	t.Logf("budget %d, worst %d mapped (dense %d)", budget, worst, c.H.DenseLen)
 }
@@ -137,7 +134,7 @@ func TestOffHeapMemoryStaysWithinTheBudget(t *testing.T) {
 // decoding at the same time. Each must produce what it produces alone, each
 // File's ledger must hold throughout (every mapped byte resident, free or
 // dense), closing one must return exactly its mappings while the other keeps
-// decoding, and closing both must bring the process back to where it started.
+// its own and decodes, and closing both must leave neither mapping anything.
 func TestTwoPagedModelsShareTheProcess(t *testing.T) {
 	var paths []string
 	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen3-MOE-4x0.6B-Q4_K_M.gguf"} {
@@ -186,7 +183,6 @@ func TestTwoPagedModelsShareTheProcess(t *testing.T) {
 		want[i] = decode(m)
 		m.Close()
 	}
-	before := jlm.OffHeapBytes()
 	ms := [2]*Model{open(paths[0]), open(paths[1])}
 	if ms[0].container.MappedBytes() == 0 {
 		ms[0].Close()
@@ -211,15 +207,15 @@ func TestTwoPagedModelsShareTheProcess(t *testing.T) {
 	// Closing the first returns its mappings and only its; the second still runs.
 	second := ms[1].container.MappedBytes()
 	ms[0].Close()
-	if now := jlm.OffHeapBytes(); now != before+int64(second) {
-		t.Fatalf("after closing the first model %d off-heap bytes, want the second's %d over the %d before",
-			now, second, before)
+	if first, now := ms[0].container.MappedBytes(), ms[1].container.MappedBytes(); first != 0 || now != second {
+		t.Fatalf("after closing the first model it maps %d bytes and the second %d, want 0 and the second's %d",
+			first, now, second)
 	}
 	if again := decode(ms[1]); fmt.Sprint(again) != fmt.Sprint(want[1]) {
 		t.Fatalf("the second model after the first closed read %v, want %v", again, want[1])
 	}
 	ms[1].Close()
-	if now := jlm.OffHeapBytes(); now != before {
-		t.Fatalf("both models closed and %d off-heap bytes remain over the %d before", now-before, before)
+	if a, b := ms[0].container.MappedBytes(), ms[1].container.MappedBytes(); a+b != 0 {
+		t.Fatalf("both models closed and they still map %d and %d off-heap bytes", a, b)
 	}
 }

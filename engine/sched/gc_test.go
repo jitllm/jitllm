@@ -3,18 +3,18 @@ package sched
 import "testing"
 
 // TestGCReserveKeepsTheBudgetOffTheGoal gates the collector spiral (see
-// SetGCReserve), which no engine counter shows. The property is arithmetic:
-// whatever MemBudget returns, the collector must be left a share of its usable
+// GCPlan), which no engine counter shows. The property is arithmetic:
+// whatever a plan's Budget is, the collector must be left a share of its usable
 // heap. A nine-tenths budget fails at once. It holds where the weights are on
 // the heap; off it (TestOffHeapWeightsTakeNoReserve) there is no goal to keep
 // them off.
 func TestGCReserveKeepsTheBudgetOffTheGoal(t *testing.T) {
-	defer SetWeightsOffHeap(SetWeightsOffHeap(false))
+	g := GCPlan{OnHeap: true}
 	u := GCUsable()
 	if u == 0 {
 		t.Skip("no cgroup limit here, so the collector is unconstrained and has no goal to sit on")
 	}
-	cap := GCBudgetCap()
+	cap := g.Cap()
 	if cap == 0 {
 		t.Fatalf("a %d-byte usable heap left no budget at all", u)
 	}
@@ -31,30 +31,23 @@ func TestGCReserveKeepsTheBudgetOffTheGoal(t *testing.T) {
 			"measured, 91%% (9.71 of 9.79 GiB) is 458 GC cycles in a two-token run",
 			cap, u, 100*float64(cap)/float64(u), u-cap, want)
 	}
-	if b := MemBudget(); b > cap {
-		t.Fatalf("MemBudget returned %d, above its own cap of %d: the reserve is "+
+	if b := g.Budget(); b > cap {
+		t.Fatalf("Budget returned %d, above its own cap of %d: the reserve is "+
 			"computed and not applied", b, cap)
 	}
-	t.Logf("usable %d, cap %d (%.0f%%), MemBudget %d",
-		u, cap, 100*float64(cap)/float64(u), MemBudget())
+	t.Logf("usable %d, cap %d (%.0f%%), Budget %d",
+		u, cap, 100*float64(cap)/float64(u), g.Budget())
 }
 
 // TestGCReserveIsSettable covers the knob itself.
 func TestGCReserveIsSettable(t *testing.T) {
-	defer SetWeightsOffHeap(SetWeightsOffHeap(false))
 	if GCUsable() == 0 {
 		t.Skip("no cgroup limit here")
 	}
-	was := GCBudgetCap()
-	defer SetGCReserve(0)
-	SetGCReserve(GCUsable() / 2)
-	if got := GCBudgetCap(); got >= was {
+	was := GCPlan{OnHeap: true}.Cap()
+	if got := (GCPlan{OnHeap: true, Reserve: GCUsable() / 2}).Cap(); got >= was {
 		t.Fatalf("a half-heap reserve gave a cap of %d, against %d derived: the "+
-			"setter did not reach gcBudgetCap", got, was)
-	}
-	SetGCReserve(0)
-	if got := GCBudgetCap(); got != was {
-		t.Fatalf("zero did not restore the derived cap: %d against %d", got, was)
+			"reserve did not reach Cap", got, was)
 	}
 }
 
@@ -66,12 +59,13 @@ func TestOffHeapWeightsTakeNoReserve(t *testing.T) {
 	if GCUsable() == 0 {
 		t.Skip("no cgroup limit here, so there is no reserve to drop")
 	}
-	defer SetWeightsOffHeap(SetWeightsOffHeap(true))
+	if !offHeapPlatform {
+		t.Skip("no anonymous mmap here, so the weights are always on the heap")
+	}
 	if c := GCBudgetCap(); c != 0 {
 		t.Fatalf("weights off the heap and the budget is still capped at %d", c)
 	}
-	SetWeightsOffHeap(false)
-	if c := GCBudgetCap(); c == 0 {
+	if c := (GCPlan{OnHeap: true}).Cap(); c == 0 {
 		t.Fatal("weights on the heap and no cap: the reserve is gone for the arm that needs it")
 	}
 }

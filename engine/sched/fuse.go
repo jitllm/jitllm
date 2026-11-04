@@ -91,7 +91,7 @@ func (p *Pool) Fuse() bool { return p.FuseWith(nil) }
 // FuseWith is Fuse with l as the region's idle work (Lookahead): set once the
 // region is this caller's, cleared by Unfuse.
 func (p *Pool) FuseWith(l Lookahead) bool {
-	if p == nil || p.stopped.Load() || regionLabels.Load() {
+	if p == nil || p.stopped.Load() || p.labels {
 		return false
 	}
 	c := p.w()
@@ -187,7 +187,6 @@ func (c *Pool) wakeParked(n int) {
 // done. The chunking is j's, scaled up only when its chunk count would not fit
 // the phase word.
 func (c *Pool) phase(j job, part int) {
-	phaseHook(j.total, j.chunk)
 	total, chunk := j.total, j.chunk
 	n := (total + chunk - 1) / chunk
 	if n > fwMax {

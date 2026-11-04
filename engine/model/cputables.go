@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/jitllm/jitllm/composer"
-	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/graph"
 )
 
@@ -47,7 +46,7 @@ func (s *Instance) cpuPlaceTables() {
 func (s *Instance) cpuComposeTable(hf *cpuHeadForm, g *graph.Graph, rows int) {
 	*hf = cpuHeadForm{composed: true}
 	switch {
-	case !composer.LowersCPU(uint64(cpu.CPU().ISA())):
+	case !composer.LowersCPU(uint64(s.m.cpuISA())):
 		hf.why = composer.DeclineISA
 	case g == nil:
 		hf.why = composer.DeclineNoGraph

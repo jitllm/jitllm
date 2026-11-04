@@ -4,7 +4,6 @@ import (
 	"sync"
 	"unsafe"
 
-	"github.com/jitllm/jitllm/engine/sched"
 	"github.com/jitllm/jitllm/internal/offheap"
 )
 
@@ -162,7 +161,7 @@ func (m *Model) kvArenaFor(li, pp int, latent bool, minSlots int) (*kvArena, err
 	if a := m.eng.kvArenas[k]; a != nil {
 		return a, nil
 	}
-	slots := max(minSlots, int(min(sched.MemBudget()/uint64(4*pp), kvArenaElems/uint64(pp))))
+	slots := max(minSlots, int(min(m.opt.gc.Budget()/uint64(4*pp), kvArenaElems/uint64(pp))))
 	a, err := mapKVArena(pp, slots, latent)
 	if err != nil {
 		return nil, err

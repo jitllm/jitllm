@@ -1,86 +1,6 @@
 package cpu
 
-import (
-	"fmt"
-	"sync"
-	"sync/atomic"
-)
-
-// Baseline reports whether this host can run the engine: whether the
-// composer lowers for this host's tier.
-//
-// It is not Map's gate (Map checks each kernel's declared ISA, isa.go); it
-// answers whether this host has a tier at all. On amd64 an AVX2 host and an
-// SSE4.1+SSSE3 host do; anything below never does. model.Open refuses
-// through it, and the error names which extensions are
-// missing, because the caller prints it.
-//
-// It exists because a pre-AVX2 host would SIGILL on the first token: the
-// quantized path declined correctly, but the elementwise path asked a width
-// question where a capability question belonged. See
-// docs/engineering-history/cpu-kernels.md, "THE SSE TIER".
-//
-// It is a probe, not a knob: there is no way to disable the JIT. The only
-// writer of the force flag below is a _test.go file in this package.
-func Baseline() error {
-	baselineOnce.Do(func() { baselineErr = baseline() })
-	if forceNoBaseline {
-		return errNoBaseline
-	}
-	return baselineErr
-}
-
-var (
-	baselineOnce sync.Once
-	baselineErr  error
-)
-
-// forceNoBaseline makes Baseline report absent. Assigned only from a _test.go
-// file in this package, the same instrument as forceNoVNNI beside it: a shipped
-// binary has no way to set it, so the probe is the only answer there.
-var forceNoBaseline bool
-
-// BaselineForceable reports whether this build can force the baseline absent,
-// so a test needing both tiers skips rather than comparing the fast tier with
-// itself (mirrors nn.Disableable).
-func BaselineForceable() bool { return baselineForceable }
-
-// Map makes code executable, refusing first if this host cannot run this code.
-//
-// The gate is per kernel and reads the kernel's own declaration: an SSE-tier
-// kernel carries its ISA in a leading NOP (isa.go) and an undeclared kernel
-// needs AVX2|FMA|F16C. Every executable byte this package produces passes
-// through here, which is why the check is not at the emitters: a condition
-// consulted in many places gets consulted in most of them.
-//
-// A refusal is a decline the caller already handles: nn's mustMap panics with
-// the kernel's name, and the packed and float builders in nn.NewJIT treat it
-// as "no kernel". mapExec is the ungated form, used only by the CPUID and
-// XGETBV probes, which must run before the gate has an answer.
-func Map(code []byte) (*Code, error) {
-	if err := mapGate(code); err != nil {
-		return nil, err
-	}
-	c, err := mapExec(code)
-	if err == nil {
-		c.tier = KernelTier(code)
-		countMapped(code)
-	}
-	return c, err
-}
-
-// MapNamed is Map plus a perf-map entry, with the same gate.
-func MapNamed(code []byte, name string) (*Code, error) {
-	if err := mapGate(code); err != nil {
-		return nil, err
-	}
-	c, err := mapExecNamed(code, name)
-	if err == nil {
-		c.tier = KernelTier(code)
-		countMapped(code)
-	}
-	return c, err
-}
+import "fmt"
 
 // ErrNoVNNI is Map refusing a kernel that contains VPDPBUSD on a host without
 // AVX-VNNI. It is a decline: the builders in nn skip the kernel (the packed
@@ -119,41 +39,12 @@ func (e *ISAError) Error() string {
 // Is makes errors.Is(err, ErrISA) true for every ISAError.
 func (e *ISAError) Is(target error) bool { return target == ErrISA }
 
-// isaCheck refuses code whose ISA the host does not cover. It is the amd64
-// half of mapGate, factored out so the refusal text is built in one place.
-func isaCheck(code []byte) error {
+// isaCheck refuses code whose ISA f does not cover. It is the amd64 half of
+// Host.gate, factored out so the refusal text is built in one place.
+func isaCheck(f Features, code []byte) error {
 	need, declared := KernelISA(code)
-	f := CPU()
 	if miss := need &^ f.ISA(); miss != 0 {
 		return &ISAError{Need: need, Missing: miss, Declared: declared, detail: missingNames(f, need)}
 	}
 	return nil
-}
-
-// mapped counts successful Maps by the tier the kernel was generated for. It
-// is a selection check: it lets a gate assert that a forced-SSE run mapped
-// zero AVX2 kernels (a cache keyed without the tier would otherwise pass
-// silently).
-var mapped [numTiers]atomic.Int64
-
-func countMapped(code []byte) {
-	t := TierNEON
-	if HostTier() != TierNEON {
-		t = KernelTier(code)
-	}
-	mapped[t].Add(1)
-}
-
-// MappedByTier snapshots how many kernels Map and MapNamed have mapped in this
-// process, keyed by the tier each kernel was generated for. On amd64 that is
-// read from the kernel's own declaration; on arm64 every kernel counts as
-// TierNEON.
-func MappedByTier() map[Tier]int64 {
-	out := make(map[Tier]int64, numTiers)
-	for t := range mapped {
-		if n := mapped[t].Load(); n != 0 {
-			out[Tier(t)] = n
-		}
-	}
-	return out
 }

@@ -13,7 +13,8 @@ import (
 // the E-core class, Raise puts back what was there, and the goroutine is
 // unlocked again, so no lowered thread is left in the runtime's pool.
 func TestLowerToEKeepsTheClassForTheCallOnly(t *testing.T) {
-	if !CanSplitE() {
+	q := LoadQoS(0)
+	if !q.CanSplitE() {
 		t.Skip("no E-cores a thread can be kept on here")
 	}
 	done := make(chan struct{})
@@ -21,13 +22,13 @@ func TestLowerToEKeepsTheClassForTheCallOnly(t *testing.T) {
 		defer close(done)
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
-		was := QoSSelf()
-		l := LowerToE()
-		if got := QoSSelf(); got != EClass() {
-			t.Errorf("lowered thread is at class %#x, want %#x", got, EClass())
+		was := q.Self()
+		l := q.LowerToE()
+		if got := q.Self(); got != q.EClass() {
+			t.Errorf("lowered thread is at class %#x, want %#x", got, q.EClass())
 		}
 		l.Raise()
-		if got := QoSSelf(); got != was {
+		if got := q.Self(); got != was {
 			t.Errorf("after Raise the thread is at class %#x, want %#x it started at", got, was)
 		}
 	}()
@@ -37,7 +38,8 @@ func TestLowerToEKeepsTheClassForTheCallOnly(t *testing.T) {
 // TestAnEPoolsWorkersAskForTheECoreClass: a pool wholly on the E-cores runs its
 // workers at the E-core class and a pool on the P-cores does not.
 func TestAnEPoolsWorkersAskForTheECoreClass(t *testing.T) {
-	if !CanSplitE() {
+	q := LoadQoS(0)
+	if !q.CanSplitE() {
 		t.Skip("no E-cores a thread can be kept on here")
 	}
 	classes := func(cpus []int) map[uint32]int {
@@ -49,7 +51,7 @@ func TestAnEPoolsWorkersAskForTheECoreClass(t *testing.T) {
 			p.Do(len(cpus)*8, 1, func(_, _, _ int) {
 				for t0 := time.Now(); time.Since(t0) < 200*time.Microsecond; {
 				}
-				c := QoSSelf()
+				c := q.Self()
 				mu.Lock()
 				got[c]++
 				mu.Unlock()
@@ -57,10 +59,10 @@ func TestAnEPoolsWorkersAskForTheECoreClass(t *testing.T) {
 		}
 		return got
 	}
-	if got := classes(CoreSet("e")); got[EClass()] == 0 {
-		t.Fatalf("an E-core pool's regions ran at classes %v, none at %#x", got, EClass())
+	if got := classes(CoreSet("e")); got[q.EClass()] == 0 {
+		t.Fatalf("an E-core pool's regions ran at classes %v, none at %#x", got, q.EClass())
 	}
-	if got := classes(CoreSet("p")); got[EClass()] != 0 {
+	if got := classes(CoreSet("p")); got[q.EClass()] != 0 {
 		t.Fatalf("a P-core pool's regions ran at the E-core class: %v", got)
 	}
 }

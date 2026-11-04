@@ -3,7 +3,6 @@
 package nn
 
 import (
-	"errors"
 	"math"
 	"strings"
 	"unsafe"
@@ -1398,12 +1397,17 @@ type BlockMover interface {
 // ErrNotDirect is a BlockMover's answer for a move it cannot make itself --
 // a device that keeps the contiguous cache, a batch's rows -- with nothing
 // changed.
-var ErrNotDirect = errors.New("the block's history cannot move between the devices directly")
+const ErrNotDirect = nnError("the block's history cannot move between the devices directly")
 
 // ErrNotStaged is a BlockMover's answer to a MoveBlock handed no weights for
 // a block StageBlock did not prepare: the caller reads the block and asks
 // again.
-var ErrNotStaged = errors.New("the block was not staged on the target, and no weights came with the move")
+const ErrNotStaged = nnError("the block was not staged on the target, and no weights came with the move")
+
+// nnError is a sentinel error that is a constant.
+type nnError string
+
+func (e nnError) Error() string { return string(e) }
 
 // BlockMoved is what a BlockMover did with one block.
 type BlockMoved struct {

@@ -392,7 +392,7 @@ func cpuRope(t *testing.T, rope nn.Rope, sections [4]int, interleaved bool, at [
 		if c.CPU == nil {
 			t.Fatalf("%s has no CPU code", c.Name)
 		}
-		code, err := cpu.Map(c.CPU)
+		code, err := cpu.NewHost().Map(c.CPU)
 		if err != nil {
 			t.Fatalf("mapping %s: %v", c.Name, err)
 		}

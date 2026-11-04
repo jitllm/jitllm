@@ -38,11 +38,14 @@ func (f Features) UsableAVX2() bool   { return false }
 // FEAT_DotProd.
 func CPU() Features { return Features{DotProd: hostDotProd()} }
 
-// HostTier is TierNEON on arm64, whose A64 emitters answer to the same names
-// the AVX2 tier's do, and TierNone on an architecture with no emitter.
-func HostTier() Tier {
+// tierOfHost is TierNEON on arm64, whose A64 emitters answer to the same
+// names the AVX2 tier's do, and TierNone on an architecture with no emitter.
+func tierOfHost(Features) Tier {
 	if runtime.GOARCH == "arm64" {
 		return TierNEON
 	}
 	return TierNone
 }
+
+// lowerTo takes nothing away off amd64: there is no lower tier to state.
+func lowerTo(*Features, Tier) {}
