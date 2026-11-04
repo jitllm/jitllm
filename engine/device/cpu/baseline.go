@@ -12,7 +12,7 @@ import (
 // It is not Map's gate (Map checks each kernel's declared ISA, isa.go); it
 // answers whether this host has a tier at all. On amd64 an AVX2 host and an
 // SSE4.1+SSSE3 host do; anything below never does. model.Open refuses
-// through it (nn.HostRefusal), and the error names which extensions are
+// through it, and the error names which extensions are
 // missing, because the caller prints it.
 //
 // It exists because a pre-AVX2 host would SIGILL on the first token: the

@@ -18,7 +18,7 @@ import (
 // another element than it writes: half of every row read a partner already
 // turned. The pooled selection's turn is this map.
 func TestCPUMapLoadsAtASelectedIndex(t *testing.T) {
-	if !HostCPULowers() {
+	if !LowersCPU(uint64(cpu.CPU().ISA())) {
 		t.Skip("no CPU lowering on this host")
 	}
 	for _, form := range []string{"partner", "tab0", "table", "turn", "made", "between"} {

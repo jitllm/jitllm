@@ -1745,7 +1745,7 @@ func (s *Instance) cpuWhy(li int) composer.Decline {
 		return s.cpuTowerWhy(g)
 	}
 	switch {
-	case !composer.HostCPULowers():
+	case !composer.LowersCPU(uint64(cpu.CPU().ISA())):
 		return composer.DeclineISA
 	case g == nil:
 		return composer.DeclineNoGraph
@@ -1828,7 +1828,7 @@ func (s *Instance) cpuSideOff(li int) int {
 // format, and its page is the instance's arena.
 func (s *Instance) cpuTowerWhy(g *graph.Graph) composer.Decline {
 	switch {
-	case !composer.HostCPULowers():
+	case !composer.LowersCPU(uint64(cpu.CPU().ISA())):
 		return composer.DeclineISA
 	case g == nil:
 		return composer.DeclineNoGraph

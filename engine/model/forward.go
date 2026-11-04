@@ -13,6 +13,7 @@ import (
 
 	"github.com/jitllm/jitllm/engine/sched"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/graph"
 
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/device/cpu"
@@ -703,12 +704,12 @@ func ropeAxesPlanes(r *nn.Rope, nrot int, split bool) []float32 {
 	if !split {
 		return p
 	}
-	out := make([]float32, cpu.RopeTabBlock(2*n))
-	for k := range 2 * cpu.RopeTabDigits {
-		src, dst := p[cpu.RopeTabPlaneOff(k, n):][:n], out[cpu.RopeTabPlaneOff(k, 2*n):]
+	out := make([]float32, graph.RopeBlock(2*n))
+	for k := range 2 * graph.RopeDigits {
+		src, dst := p[graph.RopePlaneOff(k, n):][:n], out[graph.RopePlaneOff(k, 2*n):]
 		copy(dst[copy(dst, src):], src)
 	}
-	out[cpu.RopeTabScaleOff(2*n)] = p[cpu.RopeTabScaleOff(n)]
+	out[graph.RopeScaleOff(2*n)] = p[graph.RopeScaleOff(n)]
 	return out
 }
 

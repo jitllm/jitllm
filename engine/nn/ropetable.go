@@ -3,7 +3,7 @@ package nn
 import (
 	"math"
 
-	"github.com/jitllm/jitllm/engine/device/cpu"
+	"github.com/jitllm/jitllm/graph"
 )
 
 // Rope is a model's rotary configuration: per-model constants that travel
@@ -101,7 +101,7 @@ func restartingRuns(runs []RopeRun) bool {
 // The frequency uses the float64 table's own recurrence (f *= step, runFreqs),
 // so a comparison between the two is about the kernel, not the frequencies.
 func foldRopeTab(r Rope, npairs int) []float32 {
-	blk := make([]float32, cpu.RopeTabBlock(npairs))
+	blk := make([]float32, graph.RopeBlock(npairs))
 	freqs := runFreqs(r, npairs)
 	// Restarting runs fold each pair at its own run's frequency, as the
 	// multi-axis table turns it (tableAt).
@@ -118,13 +118,13 @@ func foldRopeTab(r Rope, npairs int) []float32 {
 	}
 	for p := 0; p < npairs; p++ {
 		w := math.Mod(freqs[p]*(2/math.Pi), 4)
-		for d := 0; d < cpu.RopeTabDigits; d++ {
+		for d := 0; d < graph.RopeDigits; d++ {
 			if d > 0 {
-				w = math.Mod(w*(1<<cpu.RopeTabDigitBits), 4)
+				w = math.Mod(w*(1<<graph.RopeDigitBits), 4)
 			}
-			h, l := cpu.RopeTabHeadSplit(w)
-			blk[cpu.RopeTabPlaneOff(d, npairs)+p] = h
-			blk[cpu.RopeTabPlaneOff(cpu.RopeTabDigits+d, npairs)+p] = l
+			h, l := graph.RopeHeadSplit(w)
+			blk[graph.RopePlaneOff(d, npairs)+p] = h
+			blk[graph.RopePlaneOff(graph.RopeDigits+d, npairs)+p] = l
 		}
 	}
 	// The pad past npairs is never read -- the ragged tail re-runs the LAST
@@ -134,6 +134,6 @@ func foldRopeTab(r Rope, npairs int) []float32 {
 	if mscale == 0 {
 		mscale = 1
 	}
-	blk[cpu.RopeTabScaleOff(npairs)] = float32(mscale)
+	blk[graph.RopeScaleOff(npairs)] = float32(mscale)
 	return blk
 }

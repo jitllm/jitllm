@@ -157,15 +157,29 @@ func (Siblings) share(k, m *Kernel, g, local int) {
 			rest = k.bin(OpDiv, ir.U32, rest, k.u32(ext))
 		}
 	}
-	// One buffer an operand across the shares, but workgroup memory of each
-	// its own: only one share's body runs in a workgroup.
+	// One buffer an operand across the shares, and workgroup memory one
+	// share's at a time: only one share's body runs in a workgroup, so a
+	// share's flat array takes one an earlier share declared, as large as
+	// either needs, where they agree in kind.
 	bufOf := make([]int, len(m.Bufs))
+	taken := map[int]bool{}
 	for i, b := range m.Bufs {
-		if b.Kind == BufShared {
-			bufOf[i] = k.buf(b)
-		} else {
+		if b.Kind != BufShared {
 			bufOf[i] = k.bufLike(b)
+			continue
 		}
+		bufOf[i] = -1
+		for j, x := range k.Bufs {
+			if x.Kind == BufShared && !taken[j] && x.Shape == nil && b.Shape == nil && x.Elem == b.Elem && x.Half == b.Half && x.Plane == b.Plane {
+				k.Bufs[j].Size, k.Bufs[j].Extent = max(x.Size, b.Size), max(x.Extent, b.Extent)
+				bufOf[i] = j
+				break
+			}
+		}
+		if bufOf[i] < 0 {
+			bufOf[i] = k.buf(b)
+		}
+		taken[bufOf[i]] = true
 	}
 	loopOf := make([]int, len(m.Loops))
 	for i, l := range m.Loops {

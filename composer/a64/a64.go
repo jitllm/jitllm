@@ -983,3 +983,7 @@ func StackRefs(code []byte) int {
 	}
 	return n
 }
+
+// ISADotProd is FEAT_DotProd, SDOT, in a CPU device's ISA: the bit after
+// x86's eleven (composer/x86's ISA), the one an arm64 device states.
+const ISADotProd = 1 << 11

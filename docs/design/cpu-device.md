@@ -38,20 +38,26 @@ holds, counted in a vocabulary of its own.
   read through the instance's devices. No instance-level CPU counter.
 
 - **Two halves, as every card has.** The CPU device's code generation is
-  the composer's, beside each card's emitters: `composer/x86` and an
-  arm64 package beside it hold the assemblers, the ISA the composer
-  forms for and the calling convention generated code keeps. Its runtime
-  is `engine/device/cpu`, beside `engine/device/gpu`: the call boundary
-  (the trampolines), the executable memory, the worker pool, and the CPU
-  device itself -- its forms, scratch, history and counters. The composer
-  imports nothing under `engine/`; the runtime imports the composer.
+  the composer's, beside each card's emitters: `composer/x86` and
+  `composer/a64` hold the assemblers, the ISA bits the composer forms for
+  and the calling convention generated code keeps. Its runtime is two
+  packages, as a card's is `backend` and `engine/device/gpu`:
+  `engine/device/cpu` is the call boundary (the trampolines), the
+  executable memory, the probe of the running CPU and the worker pool;
+  `engine/device/cpudev`, beside `engine/device/gpu`, is the CPU device
+  itself -- its forms, scratch, history and counters. The composer
+  imports nothing under `engine/` (`composer.LowersCPU` takes the ISA the
+  probe states); the device imports the composer and the call boundary.
+  The call boundary cannot be the device's package: the composer's own
+  gates execute what it forms through it, and a device that composes would
+  make each of them an import cycle.
 - **Nothing of the CPU in the instance.** `engine/model` holds no CPU
   form, scratch, counter or call: renaming the instance's CPU state in
   place is the same design under another name.
 
 ## The device, as the card's
 
-    // engine/device/cpu
+    // engine/device/cpudev
     type Device struct { ... }           // the pool, the registry, the placed blocks, Stats
     func Open(opts ...Option) (*Device, error)
     func (d *Device) Attach() *View      // a session's view: its pages, as gpu.GPU.Attach
@@ -65,6 +71,14 @@ the forms bind to an address in the weights it is handed, once: a call
 binds the rows, the rotary tables and the session's pages, never looks a
 weight up. The mapped kernels and their call words (today's `cpuCode`,
 `cpuArg`, `cpuBlockForm`) are the device's.
+
+A call word names where its value comes from as data: the call's own
+buffers, its rows and residual streams, the session's pages and recurrent
+state, the rotary tables, or a weight by role. The call record the device
+binds them from holds addresses and words only -- no layer, page pool or
+session of the model's -- and a weight is a slot the form states once and
+a block's page-in fills (`Model.pageIn` re-points a block's tensors at the
+frame it landed in), never a role looked up at a call.
 
 A block's addresses hold while it is placed, as a card's upload does. The
 host frames the pager fills are the CPU device's memory as VRAM is the
@@ -83,7 +97,7 @@ matrices reach the device by role, as the vectors do
    composer a device description, as a card's runtime does. Gates: the
    composer's CPU suite on the Xeon and on the M4, and
    `cpu.TestNoAssemblyBesidesTheTrampolines`.
-1. The CPU device package: built from what the card is handed -- a
+1. The CPU device package (`engine/device/cpudev`): built from what the card is handed -- a
    block's graph and tables (`nn.LayerPlan`), its weights by role
    (`nn.LayerWeights`, the vector and matrix tables), the input rows',
    head's and sampler's graphs (`nn.Head`) -- composing its own forms for

@@ -1403,12 +1403,12 @@ func Open(path string, options ...Option) (*Model, error) {
 	}
 	// Every op a token runs is generated code; with no lowering for this
 	// architecture there is nothing to run it on.
-	if !composer.HostCPULowers() {
+	if !composer.LowersCPU(uint64(cpu.CPU().ISA())) {
 		return nil, fmt.Errorf("model: the composer lowers no code for %s/%s", runtime.GOOS, runtime.GOARCH)
 	}
 	// A host the emitter cannot serve (an x86 below SSE4.1+SSSE3) is refused
 	// here, naming what is missing, before any page is read.
-	if err := nn.HostRefusal(); err != nil {
+	if err := cpu.Baseline(); err != nil {
 		return nil, fmt.Errorf("model: %w", err)
 	}
 	m, err := openContainer(path, options...)

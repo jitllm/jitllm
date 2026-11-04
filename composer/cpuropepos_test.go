@@ -52,7 +52,7 @@ func ropePosOracle(p uint32, marks []ropeMark) [4]uint32 {
 // of no marks, and rows past the live ones untouched by the oracle. A table
 // whose marks are read one too few, or the grid's axes swapped, must part.
 func TestComposedCPURopePos(t *testing.T) {
-	if !HostCPULowers() {
+	if !LowersCPU(uint64(cpu.CPU().ISA())) {
 		t.Skip("no CPU lowering on this host")
 	}
 	const M = 4

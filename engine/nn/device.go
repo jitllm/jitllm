@@ -666,7 +666,7 @@ type LayerPlan struct {
 	AttnSoftcap float32
 	// ActWin is how many activation elements share one quantization scale. It
 	// must match what the CPU tier uses, because the gate between them is
-	// identical token ids; see cpu.QuantizeQ8Window.
+	// identical token ids.
 	ActWin int
 	// Act is the feed-forward's non-linearity: SiLU (llama), GELU-tanh (gemma,
 	// SmolVLM's tower) or quick-GELU (CLIP's). A device that cannot emit the
