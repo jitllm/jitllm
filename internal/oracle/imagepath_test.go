@@ -28,6 +28,20 @@ func imagePathAllowed() map[string]string {
 	}
 }
 
+// imagePathCallees() is every engine/model function a loop on the image path
+// may call although it does float arithmetic, and why that is no per-element
+// compute: measurement and a block's setup at open (RULE 8b), not a pixel's
+// or a patch's. An entry that no loop calls any more fails the gate.
+func imagePathCallees() map[string]string {
+	return map[string]string{
+		"seamtune.go:seamStep":                  "the seam tuner's timing statistics, once a step (RULE 8b's measurement)",
+		"prefillstream.go:after":                "the prompt streamer's timing of a chunk, once a chunk (RULE 8b's measurement)",
+		"delta.go:delta":                        "a recurrent block's geometry and scale from the config, once a block at open",
+		"front.go:blockGraph":                   "a block's graph stated from the config, once a block at open: its constants are the graph's",
+		"frontstreams.go:streamCollapseGraphAt": "a block's streams' collapse stated as a graph, once a block at open: its constants are the graph's",
+	}
+}
+
 // TestImagePathRunsGeneratedCode is the image path's source gate. A picture
 // enters the model as the graph's ops (OpPatchify and the tower's blocks),
 // so the gate reads every file of engine/model, where any Go of the image
@@ -70,7 +84,8 @@ func TestImagePathRunsGeneratedCode(t *testing.T) {
 			files = append(files, f)
 		}
 	}
-	found := imagePathFindings(t, fset, files, "engine/model", nil)
+	called := map[string]bool{}
+	found := imagePathFindings(t, fset, files, "engine/model", nil, imagePathCallees(), called)
 	var keys []string
 	for k := range found {
 		keys = append(keys, k)
@@ -86,6 +101,11 @@ func TestImagePathRunsGeneratedCode(t *testing.T) {
 	for k, why := range imagePathAllowed() {
 		if _, ok := found[k]; !ok {
 			t.Errorf("imagePathAllowed()[%q] (%s) matches no code any more: take it off the list", k, why)
+		}
+	}
+	for k, why := range imagePathCallees() {
+		if !called[k] {
+			t.Errorf("imagePathCallees()[%q] (%s) is called by no loop any more: take it off the list", k, why)
 		}
 	}
 	t.Logf("%d image-path function(s) with Go arithmetic, all geometry or a constant table", len(found))
@@ -137,7 +157,7 @@ func resizeTo(w, h int) (int, int) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	found := imagePathFindings(t, fset, []*ast.File{f}, "p", []string{"violations.go"})
+	found := imagePathFindings(t, fset, []*ast.File{f}, "p", []string{"violations.go"}, nil, map[string]bool{})
 	for _, want := range []string{"violations.go:axes", "violations.go:posLerp", "violations.go:normalize", "violations.go:omega"} {
 		if len(found[want]) == 0 {
 			t.Errorf("%s was not flagged -- the gate cannot see the shape it exists for (found %v)", want, found)
@@ -152,7 +172,7 @@ func resizeTo(w, h int) (int, int) {
 // imagePathFindings type-checks files as package pkg and returns, keyed
 // "file:func" for the functions of the files only names (every file where
 // only is empty), each finding's line and reason.
-func imagePathFindings(t *testing.T, fset *token.FileSet, files []*ast.File, pkg string, only []string) map[string][]string {
+func imagePathFindings(t *testing.T, fset *token.FileSet, files []*ast.File, pkg string, only []string, callees map[string]string, called map[string]bool) map[string][]string {
 	t.Helper()
 	info := &types.Info{
 		Types: map[ast.Expr]types.TypeAndValue{},
@@ -275,6 +295,11 @@ func imagePathFindings(t *testing.T, fset *token.FileSet, files []*ast.File, pkg
 				ast.Inspect(loop, func(m ast.Node) bool {
 					if c, ok := m.(*ast.CallExpr); ok {
 						if g := callee(c); g != nil && g != fd && arith(g.Body) {
+							k := filepath.Base(fset.Position(g.Pos()).Filename) + ":" + g.Name.Name
+							if _, ok := callees[k]; ok {
+								called[k] = true
+								return true
+							}
 							add(c, "calls "+g.Name.Name+", which does float arithmetic, per iteration")
 						}
 					}

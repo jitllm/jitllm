@@ -397,8 +397,8 @@ func TestSubcommandsRefuseAModelTheyCannotUse(t *testing.T) {
 		return run(path, "hi", 2, 0, "cpu", -1, 0, 1<<30, false, false, false, false,
 			&model.Sampler{}, "x.png", nil, nil, "", 0, 0, nil, nil)
 	})
-	if err == nil || !strings.Contains(err.Error(), "vision tower") {
-		t.Errorf("-image on a model with no tower: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "no tower runs pictures") {
+		t.Errorf("-image: %v", err)
 	}
 	_, _, err = capture(t, func() error {
 		return run(path, "", 2, 8, "cpu", -1, 0, 1<<30, false, false, false, false,
