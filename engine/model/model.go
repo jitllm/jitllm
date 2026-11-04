@@ -1216,6 +1216,13 @@ type Model struct {
 	container *jlm.File
 	// front is the model's graphs as the composer reads them (front.go).
 	front frontState
+	// tower is the container's stated vision tower lowered into graphs
+	// (tower.go), nil for a model with none. Its blocks are layers from
+	// towerBase on, after every text and prediction block; towerDense is its
+	// entry's and head's tensors, which no block holds.
+	tower      *towerGraphs
+	towerBase  int
+	towerDense layer
 
 	// basePlans is ensureBlock's read plan for every text block -- the block's
 	// own weights, without its routed banks -- built once. The entries are
@@ -1597,6 +1604,13 @@ func openContainer(path string, options ...Option) (*Model, error) {
 	}
 	m.id = newModelID()
 	c.OnRecycle(m.forgetCopies)
+	m.towerBase = len(m.layers)
+	if v := c.Vision(); v != nil && v.Tower != nil {
+		if err := m.bindTower(c); err != nil {
+			c.Close()
+			return nil, err
+		}
+	}
 	for i := range m.layers {
 		if err := bindPacked(c, m.Cfg, &m.layers[i]); err != nil {
 			c.Close()
@@ -1619,13 +1633,16 @@ func openContainer(path string, options ...Option) (*Model, error) {
 			bindOne(c, t)
 		}
 	}
-	// A tower's blocks run as the model's own, from what the container states
-	// about its pictures; until that path reads them the tower has no runner.
-	if v := c.Vision(); v != nil {
-		c.Close()
-		return nil, fmt.Errorf("model: the container's vision tower (%v) has no runner: its blocks are to "+
-			"run as the model's own, stated by the front end from the container's description of its pictures",
-			v.Projector)
+	// A tower is the container's statement of it (jlm.Tower), lowered into
+	// graphs and verified here; an unstated one is refused by its family's
+	// name.
+	if c.Vision() != nil {
+		tg, err := m.buildTowerGraphs()
+		if err != nil {
+			c.Close()
+			return nil, err
+		}
+		m.tower = tg
 	}
 	if lo.preload > 0 {
 		m.startPreload(lo.preload)
@@ -2003,6 +2020,51 @@ func (t tensor) name() string {
 		return t.e.Name
 	}
 	return t.e.Role.String()
+}
+
+// entryTensor is the matrix entry e holds, its spans as they are now; bindOne
+// points it at them again once its page is read.
+func entryTensor(c *jlm.File, e *jlm.Entry) (tensor, error) {
+	if e.NDim < 2 {
+		return tensor{}, fmt.Errorf("model: %v has %d dimensions, want 2", e.Role, e.NDim)
+	}
+	typ, ok := jlm.SourceType(e.Type)
+	if !ok || !quant.Dequantable(typ) {
+		return tensor{}, fmt.Errorf("model: %v is %v, which has no dequantizer yet", e.Role, e.Type)
+	}
+	// rows is the product of every trailing dimension: for a 3-D expert
+	// bank ne1 alone would describe one expert, and a matvec would
+	// silently compute expert 0.
+	nrows := 1
+	for d := 1; d < int(e.NDim); d++ {
+		nrows *= int(e.Dims[d])
+	}
+	qs, _, _ := c.Span(e)
+	tn := tensor{e: e, typ: typ, data: qs, rows: nrows, k: int(e.Dims[0])}
+	// Marked packed before the spans exist, since bankExpert and rows()
+	// need the layout; bindOne fills the struct later.
+	if jlm.Packed(e.Type) {
+		tn.packed = &nn.Packed{}
+	}
+	return tn, nil
+}
+
+// entryVector is the vector entry e holds, read once into floats.
+func entryVector(c *jlm.File, e *jlm.Entry) ([]float32, error) {
+	typ, ok := jlm.SourceType(e.Type)
+	if !ok {
+		return nil, fmt.Errorf("model: %v is %v, which has no dequantizer yet", e.Role, e.Type)
+	}
+	n := 1
+	for d := 0; d < int(e.NDim); d++ {
+		n *= int(e.Dims[d])
+	}
+	qs, _, _ := c.Span(e)
+	out := make([]float32, n)
+	if err := quant.Dequant32(typ, qs, out); err != nil {
+		return nil, fmt.Errorf("model: %v: %w", e.Role, err)
+	}
+	return out, nil
 }
 
 // bindOne points a tensor at its already-packed spans in the container.
@@ -2648,26 +2710,9 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 		if !ok {
 			return tensor{}, fmt.Errorf("model: missing %v (block %d, index %d)", role, block, index)
 		}
-		if e.NDim < 2 {
-			return tensor{}, fmt.Errorf("model: %v has %d dimensions, want 2", role, e.NDim)
-		}
-		typ, ok := jlm.SourceType(e.Type)
-		if !ok || !quant.Dequantable(typ) {
-			return tensor{}, fmt.Errorf("model: %v is %v, which has no dequantizer yet", role, e.Type)
-		}
-		// rows is the product of every trailing dimension: for a 3-D expert
-		// bank ne1 alone would describe one expert, and a matvec would
-		// silently compute expert 0.
-		nrows := 1
-		for d := 1; d < int(e.NDim); d++ {
-			nrows *= int(e.Dims[d])
-		}
-		qs, _, _ := c.Span(e)
-		tn := tensor{e: e, typ: typ, data: qs, rows: nrows, k: int(e.Dims[0])}
-		// Marked packed before the spans exist, since bankExpert and rows()
-		// need the layout; bindOne fills the struct later.
-		if jlm.Packed(e.Type) {
-			tn.packed = &nn.Packed{}
+		tn, err := entryTensor(c, e)
+		if err != nil {
+			return tensor{}, err
 		}
 		return tn, nil
 	}
@@ -2700,20 +2745,7 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 		if !ok {
 			return nil, fmt.Errorf("model: missing %v (block %d)", role, block)
 		}
-		typ, ok := jlm.SourceType(e.Type)
-		if !ok {
-			return nil, fmt.Errorf("model: %v is %v, which has no dequantizer yet", role, e.Type)
-		}
-		n := 1
-		for d := 0; d < int(e.NDim); d++ {
-			n *= int(e.Dims[d])
-		}
-		qs, _, _ := c.Span(e)
-		out := make([]float32, n)
-		if err := quant.Dequant32(typ, qs, out); err != nil {
-			return nil, fmt.Errorf("model: %v: %w", role, err)
-		}
-		return out, nil
+		return entryVector(c, e)
 	}
 	// optVec is vec for a tensor that may legitimately be absent; nil is the
 	// answer, not an error.
@@ -2888,7 +2920,14 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 		return nil, err
 	}
 
-	m.layers = make([]layer, cfg.NLayer+cfg.NMTP)
+	// Room for the tower's blocks after the text's (bindTower): a layer's
+	// matrices are recorded by pointers into it (layer.mats), so the slice
+	// is never reallocated once a block is bound.
+	nvis := 0
+	if v := c.Vision(); v != nil && v.Tower != nil {
+		nvis = int(v.NLayer)
+	}
+	m.layers = make([]layer, cfg.NLayer+cfg.NMTP, cfg.NLayer+cfg.NMTP+nvis)
 	for i := range c.Entries() {
 		e := &c.Entries()[i]
 		if e.Index != -1 || !e.Role.Expanded() || e.Role.Vision() || e.Block < 0 || int(e.Block) >= len(m.layers) {
