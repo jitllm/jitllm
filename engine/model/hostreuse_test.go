@@ -101,7 +101,7 @@ func reusedScratchGate(t *testing.T, path string) {
 		// Close: no page comes back to be read stale, and a new history is
 		// fresh memory.
 		for li := s.kv.lo; li < len(s.kv.layers); li++ {
-			if l := &s.kv.layers[li]; l.p > 0 && l.arena == nil {
+			if l := &s.kv.layers[li]; l.p > 0 && l.t == nil {
 				t.Fatalf("block %d's history is in pages, and no page was handed back to the model", li)
 			}
 		}

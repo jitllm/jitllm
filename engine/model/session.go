@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 
 	"github.com/jitllm/jitllm/engine/device/cpu"
+	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"github.com/jitllm/jitllm/engine/nn"
 )
 
@@ -42,6 +43,9 @@ type Session struct {
 	// kv is the paged KV history (see engine/model/kvpage.go). Pages are committed as
 	// the sequence reaches them rather than reserved for the whole context.
 	kv *kvCache
+	// view is the session's view of the CPU device's history: the table each
+	// of its CPU blocks reads its pages through (cpuView).
+	view *cpudev.View
 	// kvErr is the first page fault of the current step that could not be
 	// recovered. It is set inside a pool closure, which has no error path, and
 	// drained by kvCheck at the entry point.
@@ -173,7 +177,7 @@ func (s *Instance) relayout() error {
 	sess.kv.usePool(&s.m.eng.kvPool)
 	sess.kv.reserve(sess.limit)
 	sess.kv.ns, sess.kv.budget = old.ns, old.budget
-	if err := sess.kv.useArenas(sess.limit, s.m.kvArenaFor); err != nil {
+	if err := sess.kv.useArenas(sess.limit, s.m.kvArenaFor, sess.cpuView()); err != nil {
 		return err
 	}
 	s.m.eng.kvPool.put(old)

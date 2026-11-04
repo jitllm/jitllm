@@ -114,10 +114,11 @@ type cpuState struct {
 	served    int
 	declined  [composer.NumDeclines]int
 	formErr   error
-	// fpages is a layer's page table under cpuFaultPage (cpuFaultTable).
-	fpages []uint32
-	rows   [4]uint32
-	zero   []uint32
+	// fpages is a layer's page table under cpuFaultPage (cpuFaultTable), and
+	// nopages a block's that keeps no history (cpuPages).
+	fpages, nopages []uint32
+	rows            [4]uint32
+	zero            []uint32
 	// tok1 is a decode's token, tokTab a call's rows' (all ones for a row
 	// naming none).
 	tok1   [1]uint32
@@ -386,8 +387,12 @@ func (s *Instance) cpuStep(li int, l *layer, cs []float32) (composer.Decline, er
 			return why, nil
 		}
 	}
+	pages, err := s.cpuPages(hl, pg)
+	if err != nil {
+		return composer.DeclineServes, err
+	}
 	b := &s.cpu.bound
-	*b = cpuBound{li: li, l: l, own: s.cpu.dev.Own(cb.f), cs: cs, x: s.resid(), stride: s.c.NEmbd, rows: s.cpu.rows[:], n: 1, kv: pg, pages: pg.table(max(s.nseq, 1)),
+	*b = cpuBound{li: li, l: l, own: s.cpu.dev.Own(cb.f), cs: cs, x: s.resid(), stride: s.c.NEmbd, rows: s.cpu.rows[:], n: 1, kv: pg, pages: pages,
 		recLi: s.cpuRecLi(li), recOf: s.Session, side: s.cpuSide(li)}
 	if b.side != nil {
 		b.side = b.side[cb.sideOff:]
@@ -403,7 +408,7 @@ func (s *Instance) cpuStep(li int, l *layer, cs []float32) (composer.Decline, er
 	s.cpu.call[0] = 1
 	switch s.cpu.fault {
 	case cpuFaultPage:
-		b.pages = s.cpuFaultTable(pg, pos+1)
+		b.pages = s.cpuFaultTable(b.pages, pg, pos+1)
 	case cpuFaultRow, cpuFaultWrite:
 		s.cpuFaultRowWords(s.cpu.rows[:])
 	}
@@ -585,8 +590,13 @@ func (s *Instance) cpuRecRows(li int, l *layer, x, cs []float32, seq, pos []int,
 			clear(o.rstate[li][slot*s.dg.stateStride():][:s.dg.stateStride()])
 			clear(o.rconv[li][slot*s.dg.convStateLen():][:s.dg.convStateLen()])
 		}
+		pages, err := s.cpuPages(li, pg)
+		if err != nil {
+			s.Session = lead
+			return composer.DeclineServes, err
+		}
 		*b = cpuBound{li: li, l: l, own: s.cpu.dev.Own(cb.f), x: x[r*d:], stride: stride, rows: s.cpu.rows[:], n: 1, kv: pg,
-			pages: pg.table(max(s.nseq, 1)), recLi: s.cpuRecLi(li), recOf: o}
+			pages: pages, recLi: s.cpuRecLi(li), recOf: o}
 		// One live row, at its own position, as a decode step's.
 		s.cpu.pos1 = [2]uint32{1, uint32(pos[r])}
 		b.pos = s.cpu.pos1[:]
@@ -799,9 +809,7 @@ func (s *Instance) cpuRowsReady(li int, f *cpudev.Form, pos []int) composer.Decl
 // page holding the history's last position -- its positions read the newest
 // keys, another page's tokens at another rotation. Each layer is pointed into its own arena, so a model
 // whose arenas differ (a sliding layer's beside a global one's) is reached.
-func (s *Instance) cpuFaultTable(pg *kvPages, end int) []uint32 {
-	nseq := max(s.nseq, 1)
-	t := pg.table(nseq)
+func (s *Instance) cpuFaultTable(t []uint32, pg *kvPages, end int) []uint32 {
 	n := len(t)
 	last := (end - 1) / max(pg.p, 1)
 	if s.cpu.fault != cpuFaultPage || n < 2 || pg.p == 0 || end <= pg.p+pg.p/4 || last >= n {
@@ -876,7 +884,12 @@ func (s *Instance) cpuRowsCalls(li int, l *layer, f *cpudev.Form, lo, hi int, x 
 	if f.Toks && tok == nil {
 		return fmt.Errorf("model: block %d reads its rows' tokens, which the step gives none of", li)
 	}
-	pg := &s.kv.layers[s.c.KVSource(li)]
+	hl := s.c.KVSource(li)
+	pg := &s.kv.layers[hl]
+	pages, err := s.cpuPages(hl, pg)
+	if err != nil {
+		return err
+	}
 	d, ns := s.c.NEmbd, s.c.Streams()
 	_, pw := s.cpuSideRows(li)
 	so := s.cpuSideOff(li)
@@ -928,7 +941,7 @@ func (s *Instance) cpuRowsCalls(li int, l *layer, f *cpudev.Form, lo, hi int, x 
 			bside = bside[so:]
 		}
 		*b = cpuBound{li: li, l: l, own: s.cpu.dev.Own(f), cs: cs[r0*nrot:], x: bx, stride: bstride, rows: s.cpu.rowsTab, n: k,
-			kv: pg, pages: s.cpuFaultTable(pg, end), side: bside}
+			kv: pg, pages: s.cpuFaultTable(pages, pg, end), side: bside}
 		if swa != nil {
 			b.csSWA = swa[r0*nswa:]
 		}
@@ -1106,8 +1119,8 @@ func (s *Instance) cpuCallOf(b *cpuBound, f *cpudev.Form) *cpudev.Call {
 	*a = [cpudev.NumSrc]unsafe.Pointer{}
 	a[cpudev.SrcSide] = addr(b.side)
 	a[cpudev.SrcRopeRows], a[cpudev.SrcRopeMarks] = addr(b.ropeRows), addr(b.ropeMarks)
-	if b.kv != nil && b.kv.arena != nil {
-		a[cpudev.SrcKeys], a[cpudev.SrcValues] = addr(b.kv.arena.Keys()), addr(b.kv.arena.Values())
+	if b.kv != nil && b.kv.t != nil {
+		a[cpudev.SrcKeys], a[cpudev.SrcValues] = addr(b.kv.t.Arena().Keys()), addr(b.kv.t.Arena().Values())
 	}
 	a[cpudev.SrcPages], a[cpudev.SrcRows], a[cpudev.SrcCall] = addr(b.pages), addr(b.rows), addr(s.cpu.call[:])
 	if r := b.recOf; r != nil && b.recLi >= 0 && b.recLi < len(r.rstate) && b.recLi < len(r.rconv) {
@@ -1283,7 +1296,7 @@ func (s *Instance) cpuWhy(li int) composer.Decline {
 		// The CPU's profile keeps a history binary16 itself (composer.Halves),
 		// or at f32 without that pass.
 		return composer.DeclineKVFormat
-	case pg.p > 0 && pg.arena == nil:
+	case pg.p > 0 && pg.t == nil:
 		return composer.DeclinePageOut
 	}
 	return composer.DeclineServes
@@ -1678,11 +1691,25 @@ func (l *layer) namedVector(r jlm.Role) ([]float32, bool) {
 
 // arenaSlots is how many pages the layer's arena holds, 0 for none.
 func (s *kvPages) arenaSlots() int {
-	switch {
-	case s.arena == nil:
+	if s.t == nil {
 		return 0
-	case s.reserved > 0:
-		return s.reserved
 	}
-	return s.arena.Slots()
+	return s.t.Slots()
+}
+
+// cpuPages is the table block li's forms read its history pg through: its
+// session's view's (cpudev.View), or a zero table for a block keeping none.
+func (s *Instance) cpuPages(li int, pg *kvPages) ([]uint32, error) {
+	nseq := max(s.nseq, 1)
+	t := s.Session.view.At(li)
+	switch {
+	case t != pg.t:
+		return nil, fmt.Errorf("model: block %d's pages are not its session's view's", li)
+	case t == nil:
+		if len(s.cpu.nopages) < nseq {
+			s.cpu.nopages = make([]uint32, nseq)
+		}
+		return s.cpu.nopages[:nseq], nil
+	}
+	return t.Pages(nseq), nil
 }

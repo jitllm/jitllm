@@ -551,7 +551,7 @@ func (m *Model) newInstanceRange(nseq, maxSeq, lo, hi int) *Instance {
 	s.kv = newKVCacheRange(c, s.m.nextCacheID(), nseq, s.kvl, nil, s.m.opt.kvPage, s.lo, s.hi)
 	s.kv.usePool(&m.eng.kvPool)
 	s.kv.reserve(s.maxSeq)
-	if err := s.kv.useArenas(s.maxSeq, s.m.kvArenaFor); err != nil {
+	if err := s.kv.useArenas(s.maxSeq, s.m.kvArenaFor, s.Session.cpuView()); err != nil {
 		s.cpu.formErr = err
 	}
 	s.cpuPlace()
@@ -2859,7 +2859,7 @@ func (s *Instance) setKVFmt(f cpu.KVFmt) {
 	s.kv.reserve(s.maxSeq)
 	s.kv.ns, s.kv.budget = old.ns, old.budget
 	// The CPU's blocks read the new cache: its arenas, and forms for f32.
-	if err := s.kv.useArenas(s.maxSeq, s.m.kvArenaFor); err != nil {
+	if err := s.kv.useArenas(s.maxSeq, s.m.kvArenaFor, s.Session.cpuView()); err != nil {
 		s.cpu.formErr = err
 	}
 	s.cpuPlace()

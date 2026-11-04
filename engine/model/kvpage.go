@@ -189,12 +189,11 @@ type kvPages struct {
 	shared   []bool
 	sh       *SharedStore
 	cowFault bool
-	// arena, where set, is where every page this layer grows lives
-	// (cpudev.Arena): a composed CPU block's pool, the model's. reserved is the
-	// pages the instance's context spans, and tab its page table (table).
-	arena    *cpudev.Arena
-	reserved int
-	tab      []uint32
+	// t, where set, is the layer's table in its session's view of the CPU
+	// device (cpudev.Table): every page it grows is a slot of the model's
+	// arena, where a composed CPU block reads it, and every page it holds is
+	// named there (setPage).
+	t *cpudev.Table
 }
 
 // keyStart is the first key position pos attends on this layer: the window's
@@ -290,13 +289,22 @@ func (s *kvPages) reserve(maxSeq int) {
 	s.spare = slices.Grow(s.spare, s.spareMax())
 }
 
+// setPage makes page n's key and value k and v, and tells the CPU view's
+// table.
+func (s *kvPages) setPage(n int, k, v []float32) {
+	s.k[n], s.v[n] = k, v
+	if s.t != nil {
+		s.t.Set(n, k)
+	}
+}
+
 // drop lets page n go for good: nothing is to be faulted back into it.
 func (s *kvPages) drop(n int) {
 	s.unshare(n)
 	if s.arenaPage(n) {
 		s.releaseSlot(n)
 	}
-	s.k[n], s.v[n] = nil, nil
+	s.setPage(n, nil, nil)
 	if n < len(s.out) {
 		s.out[n] = false
 	}
@@ -325,21 +333,22 @@ func (s *kvPages) grow(n int) {
 	// leave nil slots inside the slice.
 	if s.k[n] == nil && s.v[n] == nil {
 		if k, v := s.takeSlot(); k != nil {
-			s.k[n], s.v[n] = k, v
+			s.setPage(n, k, v)
 			return
 		}
 	}
-	if s.k[n] == nil {
-		s.k[n] = s.page0()
+	k, v := s.k[n], s.v[n]
+	if k == nil {
+		k = s.page0()
 	}
-	if s.latent {
+	switch {
+	case s.latent:
 		// The value IS the key's prefix; see the field.
-		s.v[n] = s.k[n]
-		return
+		v = k
+	case v == nil:
+		v = s.page0()
 	}
-	if s.v[n] == nil {
-		s.v[n] = s.page0()
-	}
+	s.setPage(n, k, v)
 }
 
 // extend makes index n addressable without making it resident. The fault path
@@ -1830,7 +1839,7 @@ func (kc *kvCache) trim(pos int) {
 			if s.arenaPage(n) {
 				s.releaseSlot(n)
 			}
-			s.k[n], s.v[n] = nil, nil
+			s.setPage(n, nil, nil)
 			s.out[n] = true
 			kc.evicted += 2
 		}
@@ -1849,7 +1858,7 @@ func (kc *kvCache) fault(li, n int) error {
 	// The slot is addressable, not resident (extend, not grow), so every
 	// failure path below leaves it nil: a zeroed page present would read as
 	// history.
-	s.k[n], s.v[n] = nil, nil
+	s.setPage(n, nil, nil)
 	key := kc.pageKey(li, n)
 	if key == "" {
 		return ErrNoPage // nothing names this page, so nothing can hold it
@@ -1887,7 +1896,7 @@ func (kc *kvCache) fault(li, n int) error {
 	if vw.n != len(vw.b) {
 		return miss(shortPage(li, n, vw.n, len(vw.b)))
 	}
-	s.k[n], s.v[n] = k, v
+	s.setPage(n, k, v)
 	s.out[n] = false
 	kc.fetched += 2
 	return nil
@@ -1925,7 +1934,7 @@ func (kc *kvCache) faultFill(li, n, fill int) error {
 		return ErrNoPage
 	}
 	s.extend(n)
-	s.k[n], s.v[n] = nil, nil
+	s.setPage(n, nil, nil)
 	// The buffer is a whole page and the read is its filled prefix; restore's
 	// coverage stops before the zero tail.
 	row := s.pp / s.p
@@ -1959,7 +1968,7 @@ func (kc *kvCache) faultFill(li, n, fill int) error {
 	if vw.n != len(vw.b) {
 		return miss(shortPage(li, n, vw.n, len(vw.b)))
 	}
-	s.k[n], s.v[n] = k, v
+	s.setPage(n, k, v)
 	s.out[n] = false
 	kc.fetched += 2
 	return nil

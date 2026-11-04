@@ -423,7 +423,7 @@ func (s *kvPages) unshare(n int) {
 		s.sh.release(s.v[n])
 	}
 	s.shared[n] = false
-	s.k[n], s.v[n] = nil, nil
+	s.setPage(n, nil, nil)
 }
 
 // cow gives page n private copies of its shared memory before a write: the
@@ -452,7 +452,7 @@ func (s *kvPages) cow(n int) {
 		copy(v, s.v[n])
 	}
 	s.unshare(n)
-	s.k[n], s.v[n] = k, v
+	s.setPage(n, k, v)
 }
 
 // sharedBytes is what this layer's shared pages hold.
@@ -486,9 +486,9 @@ func (kc *kvCache) publishSealed(li, n int, key string) {
 	// next page it needs is taken from (page0). A page of the arena becomes
 	// the store's copy with the slot held for it, so every session that
 	// restores it reads that slot (cpudev.Arena).
-	a := s.arena
-	if !s.arenaPage(n) {
-		a = nil
+	var a *cpudev.Arena
+	if s.arenaPage(n) {
+		a = s.t.Arena()
 	}
 	k := kc.share.publish(kvStoreKey{key, li * 2, n}, s.k[n], a)
 	v := k
@@ -506,7 +506,7 @@ func (kc *kvCache) publishSealed(li, n int, key string) {
 			s.spare = append(s.spare, s.v[n])
 		}
 	}
-	s.k[n], s.v[n] = k, v
+	s.setPage(n, k, v)
 	s.markShared(n, true)
 }
 
@@ -534,7 +534,7 @@ func (kc *kvCache) faultShared(li, n int, key string) error {
 			return ErrNoPage
 		}
 	}
-	s.k[n], s.v[n] = k, v
+	s.setPage(n, k, v)
 	s.out[n] = false
 	s.markShared(n, true)
 	kc.fetched += 2
@@ -549,7 +549,7 @@ func (kc *kvCache) unshareAll() {
 		for n := range s.shared {
 			if s.shared[n] {
 				s.unshare(n)
-				s.k[n], s.v[n] = nil, nil
+				s.setPage(n, nil, nil)
 			}
 		}
 	}
