@@ -905,27 +905,35 @@ JIT and state) was llama.cpp's technical debt, not a property of the model.
   `Model.layers[NBlocks:]`, run through the text runner's block body on the text
   State's JIT and pool. Two pools on six P-cores is the worst configuration this
   engine has. `docs/design/vision-as-blocks.md` is the design.
-- **A picture is a span of the prompt, not a stage before it**, encoded in the
-  State's vision segment or answered by the image cache, and split across steps
-  by blocks, never by rows. It is named by `ImageKey` (sha256 over what the tower
-  reads, known before a block runs), so the prefix cache names the rows after it
-  as it names text.
+- **A picture is a span of the prompt, not a stage before it**: the prefill
+  encodes it through the tower's instance wherever its rows are not restored
+  (`encodePictures`). It is named by a `RowsKey` (sha256 over what the tower
+  reads, known before a block runs), so the prefix cache names the rows after
+  it as it names text, and a restore past the picture runs no tower block
+  (`TestTwoTurnImageChatRestoresPastThePicture`).
+- **A picture of a size of its own** (`jlm.PreSmartResize`) is encoded in the
+  smallest of the squares the entry is formed for at placement, its rows the
+  call's live rows (`composer.TestComposedCPUFoldFollowsTheCall`).
 - **The tower runs on the device** through the one placement path
-  (`State.offerRange`); a block the device cannot express is declined by the
+  (`Instance.offerRange`); a block the device cannot express is declined by the
   device, never withheld by the model (RULE 8a). A vision block is one
   submission: bidirectional attention needs every row's k and v first.
-- Gates: `jlm.TestTowerRefusesWhatItCannotRead`,
-  `convert.TestSmolVLMStatesItsTower`, `TestStatedTowerComposesOnTheCPU`,
-  `TestStatedTowerBlocksArePagedBlocks`, `TestStatedTowerEncodesAPicture`
-  (a warm encode allocates nothing), `TestStatedTowerSeesThePicture` (a blank
-  picture is the violation), `TestChatSpansFollowTheTemplate`,
-  `TestPictureFormatsEncodeAsTheirPixels`, `composer.TestComposedCPUPicture`,
-  `composer.TestComposedCPUPictureFormats`, `composer.TestComposedCPURegroup`;
-  through the front ends `server.TestImageRequestsMatchTheEngine`,
-  `cmd/jitllm.TestImageRunsThroughTheTower` (a run restored past the picture
-  answers alike) and `common/engine.TestAnAttachedPictureReachesTheModel` (a
-  follow-up turn sees the picture in its history). The tower on a card has no
-  gate until its blocks are placed there.
+- Gates: `jlm.TestTowerRefusesWhatItCannotRead`, each stater's
+  `convert.Test*StatesItsTower` (SmolVLM, Gemma 3, llava, InternVL, Qwen2-VL),
+  `TestStatedTowerComposesOnTheCPU`, `TestStatedTowerBlocksArePagedBlocks`,
+  `TestStatedTowerEncodesAPicture`, `TestWarmImageEncodeDoesNotAllocate`,
+  `TestStatedTowerSeesThePicture` and each family's `Test*TowerSeesThePicture`
+  (a blank picture is the violation), `TestStatedTowerRunsOnTheCard` (every
+  block and a partial seam, against the CPU), `TestQwen2VLTowerMatchesTransformers`
+  (the processor's samples, every one, and the tower's rows),
+  `TestQwen2VLMatchesTransformers`, the M-RoPE gates (`TestMRope*`, the text
+  side on transformers' own tower rows), `TestChatSpansFollowTheTemplate`,
+  `TestPictureFormatsEncodeAsTheirPixels`, `composer.TestComposedCPUPicture*`,
+  `composer.TestComposedCPURegroup`; through the front ends
+  `server.TestImageRequestsMatchTheEngine`, `cmd/jitllm.TestImageRunsThroughTheTower`
+  (a run restored past the picture answers alike) and
+  `common/engine.TestAnAttachedPictureReachesTheModel` (a follow-up turn sees
+  the picture in its history).
 
 **The bar for a new projector family**, on top of RULE 7's:
 
