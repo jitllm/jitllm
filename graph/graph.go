@@ -320,10 +320,11 @@ const (
 	// decoded samples (the step's picture table, in Pixels' format, rows of
 	// the request's stride in bytes, its width and height in pixels the
 	// request's words) resampled to PicW x PicH by Chain and Filter's taps on
-	// each axis, each sample read as [0, 1] and channel c normalised as
-	// (v - Mean[c]) / Std[c]. Out[0] is the pixels [y][x][channel] over the
-	// step's rows, as OpPatchify reads them, zero past PicW*PicH*3. A
-	// primitive.
+	// each axis -- where PicLive, to the request's output width and height,
+	// at most PicW x PicH -- each sample read as [0, 1] and channel c
+	// normalised as (v - Mean[c]) / Std[c]. Out[0] is the pixels
+	// [y][x][channel] over the step's rows, as OpPatchify reads them, zero
+	// past the output's pixels. A primitive.
 	OpPicture
 	numOps
 )
@@ -741,10 +742,12 @@ type Attrs struct {
 	// Pixels, PicW, PicH, Mean and Std are OpPicture's: the picture's sample
 	// format, the size it is resampled to, and each channel's mean and std;
 	// PicSide is the most a side of a picture resampled by Pillow's filters
-	// (ChainPIL) may be, whose reduction Taps reaches.
+	// (ChainPIL) may be, whose reduction Taps reaches. PicLive says the size
+	// resampled to is the request's, PicW x PicH the most it is.
 	Pixels     uint8
 	PicW, PicH int
 	PicSide    int
+	PicLive    bool
 	Mean, Std  [3]float64
 }
 

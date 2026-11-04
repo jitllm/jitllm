@@ -16,7 +16,8 @@ const RequestGrid = 0
 // the byte offsets of its second and third planes in the step's picture
 // (YCbCr's chroma, or a palette's entries), and its chroma subsampling: the
 // horizontal and vertical shifts from a pixel to its chroma sample, then a
-// sub-picture's phase on each axis, a byte each.
+// sub-picture's phase on each axis, a byte each; then the width and height
+// it is resampled to, where the op's size is the request's (PicLive).
 const (
 	RequestPicW = RequestRows + iota
 	RequestPicH
@@ -25,6 +26,8 @@ const (
 	RequestPicP2
 	RequestPicP3
 	RequestPicSub
+	RequestPicOW
+	RequestPicOH
 	// RequestPicTaps is where a picture resized by Pillow's filters
 	// (graph.ChainPIL) has its taps: the output's columns' (PILTaps), then
 	// its rows', each entry Taps+1 words.
@@ -59,7 +62,12 @@ func decomposePicture(o graph.Op, c *Context) ([]Prim, error) {
 	u := func(v int) int { return x.u(uint32(v)) }
 	flat := x.op(OpAdd, U, x.op(OpMul, U, x.coord(0), u(W)), x.coord(1))
 	pix, ch := x.op(OpDiv, U, flat, u(3)), x.op(OpRem, U, flat, u(3))
-	oy, ox := x.op(OpDiv, U, pix, u(a.PicW)), x.op(OpRem, U, pix, u(a.PicW))
+	ow, oh := u(a.PicW), u(a.PicH)
+	if a.PicLive {
+		ow = x.op(OpMin, U, x.op(OpMax, U, x.load(1, u(RequestPicOW)), u(1)), u(a.PicW))
+		oh = x.op(OpMin, U, x.op(OpMax, U, x.load(1, u(RequestPicOH)), u(1)), u(a.PicH))
+	}
+	oy, ox := x.op(OpDiv, U, pix, ow), x.op(OpRem, U, pix, ow)
 	sw := x.op(OpMax, U, x.load(1, u(RequestPicW)), u(1))
 	sh2 := x.op(OpMax, U, x.load(1, u(RequestPicH)), u(1))
 	stride := x.load(1, u(RequestPicStride))
@@ -67,17 +75,18 @@ func decomposePicture(o graph.Op, c *Context) ([]Prim, error) {
 	// floor of its centre in integers ((2cell+1)n + size) / 2size - 1, its
 	// fraction in floats, both indices clamped to the source.
 	axis := func(cell, n, size int) (i0, i1, t int) {
-		q := x.op(OpDiv, U, x.op(OpAdd, U, x.op(OpMul, U, x.op(OpAdd, U, x.op(OpMul, U, cell, u(2)), u(1)), n), u(size)), u(2*size))
+		q := x.op(OpDiv, U, x.op(OpAdd, U, x.op(OpMul, U, x.op(OpAdd, U, x.op(OpMul, U, cell, u(2)), u(1)), n), size),
+			x.op(OpMul, U, size, u(2)))
 		fl := x.op(OpSub, I, x.un(OpBitcast, I, q), x.i(1))
 		at := x.op(OpSub, F, x.op(OpDiv, F, x.op(OpMul, F, x.op(OpAdd, F, x.un(OpCvtF32, F, cell), x.f(0.5)), x.un(OpCvtF32, F, n)),
-			x.f(float32(size))), x.f(0.5))
+			x.un(OpCvtF32, F, size)), x.f(0.5))
 		t = x.op(OpSub, F, at, x.un(OpCvtF32, F, fl))
 		last := x.op(OpSub, I, x.un(OpBitcast, I, n), x.i(1))
 		clamp := func(v int) int { return x.un(OpBitcast, U, x.op(OpMin, I, x.op(OpMax, I, v, x.i(0)), last)) }
 		return clamp(fl), clamp(x.op(OpAdd, I, fl, x.i(1))), t
 	}
-	y0, y1, ty := axis(oy, sh2, a.PicH)
-	x0, x1, tx := axis(ox, sw, a.PicW)
+	y0, y1, ty := axis(oy, sh2, oh)
+	x0, x1, tx := axis(ox, sw, ow)
 	// sample is the picture's channel for (y, x), as a float.
 	sample := func(y, xx int) int {
 		return x.un(OpCvtF32, F, pictureSample(&x, a.Pixels, stride, y, xx, ch))
@@ -91,9 +100,9 @@ func decomposePicture(o graph.Op, c *Context) ([]Prim, error) {
 			x.sel(F, x.op(OpLess, ir.Pred, ch, u(2)), x.f(float32(m[1])), x.f(float32(m[2]))))
 	}
 	v = x.op(OpDiv, F, x.op(OpSub, F, x.op(OpDiv, F, v, x.f(255)), byChannel(a.Mean)), byChannel(a.Std))
-	x.sel(F, x.op(OpLess, ir.Pred, pix, u(a.PicW*a.PicH)), v, x.f(0))
+	x.sel(F, x.op(OpLess, ir.Pred, pix, x.op(OpMul, U, ow, oh)), v, x.f(0))
 	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{TablePicture.op(), TableRequest.op()}, Out: c.value(o.Out[0]), Expr: x.e,
-		Facts: Facts{Extents: map[int]int{0: PictureWords, 1: RequestPicSub + 1}}}}, nil
+		Facts: Facts{Extents: map[int]int{0: PictureWords, 1: RequestPicOH + 1}}}}, nil
 }
 
 // pictureSample is channel ch of the picture's pixel (y, xx), the byte its
@@ -192,14 +201,28 @@ func decomposePicturePIL(o graph.Op, c *Context) ([]Prim, error) {
 		return m.sel(F, m.op(OpLess, ir.Pred, mch, mu(1)), m.f(float32(c[0])),
 			m.sel(F, m.op(OpLess, ir.Pred, mch, mu(2)), m.f(float32(c[1])), m.f(float32(c[2]))))
 	}
-	b := m.un(OpCvtF32, F, finish(&m, m.load(0, m.op(OpMin, U, flat, mu(n-1)))))
+	// A live picture is dense in the output and laid at the form's width in
+	// the sums: its pixel (y, x) is sum (y, x) of the reductions above.
+	at, live := flat, mu(n)
+	in := []Operand{vsum}
+	ext := map[int]int{0: n}
+	if a.PicLive {
+		in = append(in, TableRequest.op())
+		ext[1] = reqWords
+		ow := m.op(OpMin, U, m.op(OpMax, U, m.load(1, mu(RequestPicOW)), mu(1)), mu(a.PicW))
+		oh := m.op(OpMin, U, m.op(OpMax, U, m.load(1, mu(RequestPicOH)), mu(1)), mu(a.PicH))
+		pix, ch := m.op(OpDiv, U, flat, mu(3)), m.op(OpRem, U, flat, mu(3))
+		at = m.op(OpAdd, U, m.op(OpMul, U, m.op(OpAdd, U, m.op(OpMul, U, m.op(OpDiv, U, pix, ow), mu(a.PicW)), m.op(OpRem, U, pix, ow)), mu(3)), ch)
+		live = m.op(OpMul, U, m.op(OpMul, U, ow, oh), mu(3))
+	}
+	b := m.un(OpCvtF32, F, finish(&m, m.load(0, m.op(OpMin, U, at, mu(n-1)))))
 	val := m.op(OpDiv, F, m.op(OpSub, F, m.op(OpDiv, F, b, m.f(255)), byChannel(a.Mean)), byChannel(a.Std))
-	m.sel(F, m.op(OpLess, ir.Pred, flat, mu(n)), val, m.f(0))
+	m.sel(F, m.op(OpLess, ir.Pred, flat, live), val, m.f(0))
 	return append(prims,
 		Prim{Kind: PrimReduce, Shape: []int{a.PicH, a.PicW, 3, K}, In: []Operand{TablePicture.op(), TableRequest.op(), hsum},
 			Out: vsum, Combine: OpAdd, Type: I, Expr: v.e, Facts: facts},
-		Prim{Kind: PrimMap, Shape: sh, In: []Operand{vsum}, Out: c.value(o.Out[0]), Expr: m.e,
-			Facts: Facts{Extents: map[int]int{0: n}}}), nil
+		Prim{Kind: PrimMap, Shape: sh, In: in, Out: c.value(o.Out[0]), Expr: m.e,
+			Facts: Facts{Extents: ext}}), nil
 }
 
 // ycbcr is channel ch of the YCbCr pixel (y, xx), its luma at byte at: its
