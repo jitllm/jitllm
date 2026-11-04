@@ -10,10 +10,10 @@ import (
 	"github.com/jitllm/jitllm/graph"
 )
 
-// halvesCase is a step's floats for TestComposedCPUHalves: random values,
+// HalvesCase is a step's floats for TestComposedCPUHalves: random values,
 // ties a rounding to even settles both ways, binary16 subnormals, values
 // past its range and zeros of both signs.
-func halvesCase(n int) []float32 {
+func HalvesCase(n int) []float32 {
 	rng := rand.New(rand.NewSource(9))
 	special := []float32{1 + 1.0/2048, 1 + 3.0/2048, -(1 + 1.0/2048), 6e-8, -3e-6, 7e4, -1e6, 0, float32(math.Copysign(0, -1)), 65504, 65520}
 	f := make([]float32, n)
@@ -37,7 +37,7 @@ func gateComposedCPUHalves(t *testing.T, cpuOn cpuArm) {
 	const R = 5
 	ties := 0
 	for _, W := range []int{2, 6, 18, 40} {
-		floats := halvesCase(R * W)
+		floats := HalvesCase(R * W)
 		form := func(kind graph.OpKind) ([]Code, *graph.Graph, graph.ValueID, graph.ValueID) {
 			b := graph.New()
 			var in, out graph.ValueID

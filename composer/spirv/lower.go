@@ -10,7 +10,6 @@ import (
 // glsl.std.450 instruction numbers, only the ones used.
 const (
 	glslUnpackHalf2x16 = 62
-	glslPackHalf2x16   = 58
 	glslExp            = 27
 	glslSqrt           = 31
 	glslFMin           = 37
@@ -631,11 +630,11 @@ func (l *lowerer) arith(o ir.Op) (uint32, error) {
 	case ir.OpBitcast:
 		inst(&l.m.funcs, opBitcast, t, id, a)
 	case ir.OpPackF16:
-		// The mirror of OpCvtF16H: build a vec2 and let GLSL.std.450 do the
-		// rounding, so no Float16 capability is needed here either.
-		pair := l.m.id()
-		inst(&l.m.funcs, opCompositeConstruct, l.tv2f32, pair, a, b)
-		inst(&l.m.funcs, opExtInst, l.tu32, id, l.glsl, glslPackHalf2x16, pair)
+		// Each half rounded here (halfRTE), the lower element low: no
+		// Float16 capability, and no driver's choice of rounding.
+		hi, sh := l.m.id(), l.halfRTE(b)
+		inst(&l.m.funcs, opShiftLeftLogical, l.tu32, hi, sh, l.u32c(16))
+		inst(&l.m.funcs, opBitwiseOr, l.tu32, id, l.halfRTE(a), hi)
 	case ir.OpCvtF16H:
 		// GLSL.std.450 UnpackHalf2x16 yields a vec2 of 32-bit floats, so no
 		// Float16 capability is needed -- the extension set is already imported
@@ -820,4 +819,38 @@ func sel(isFloat, isSigned bool, fop, sop, uop uint32) uint32 {
 	default:
 		return uop
 	}
+}
+
+// halfRTE is f32 value a's binary16 bits in the low half of a u32, rounded
+// to nearest even: GLSL.std.450's PackHalf2x16 leaves its rounding to the
+// implementation, and a driver that truncates parts from CUDA's and Metal's
+// conversions and from quant.EncodeHalf. Branch-free, as float_to_half_fast3
+// rounds: past binary16's range an infinity (a NaN a quiet NaN); below its
+// smallest normal the value plus 0.5, whose correctly rounded add leaves the
+// subnormal's bits at the bottom; else the exponent rebiased with the
+// rounding bias -- half the dropped bits less one, plus the kept mantissa's
+// lowest bit -- and the bits shifted down. The sign is set last.
+func (l *lowerer) halfRTE(a uint32) uint32 {
+	f := &l.m.funcs
+	op := func(code, t uint32, args ...uint32) uint32 {
+		id := l.m.id()
+		inst(f, code, append([]uint32{t, id}, args...)...)
+		return id
+	}
+	u := func(code uint32, args ...uint32) uint32 { return op(code, l.tu32, args...) }
+	less := func(x, y uint32) uint32 { return op(opULessThan, l.tbool, x, y) }
+	x := u(opBitcast, a)
+	sign := u(opBitwiseAnd, x, l.u32c(0x80000000))
+	ax := u(opBitwiseXor, x, sign)
+	// Infinity or NaN.
+	nan := u(opSelect, less(l.u32c(0x7f800000), ax), l.u32c(0x7e00), l.u32c(0x7c00))
+	// A subnormal or zero half: 0.5 is 126 << 23.
+	sum := op(opFAdd, l.tf32, op(opBitcast, l.tf32, ax), op(opBitcast, l.tf32, l.u32c(0x3f000000)))
+	sub := u(opISub, u(opBitcast, sum), l.u32c(0x3f000000))
+	// A normal half: (15-127) << 23 plus 0xfff, then the odd bit.
+	odd := u(opBitwiseAnd, u(opShiftRightLogical, ax, l.u32c(13)), l.u32c(1))
+	nrm := u(opShiftRightLogical, u(opIAdd, u(opIAdd, ax, l.u32c(0xc8000fff)), odd), l.u32c(13))
+	h := u(opSelect, less(ax, l.u32c(113<<23)), sub, nrm)
+	h = u(opSelect, less(ax, l.u32c(143<<23)), h, nan)
+	return u(opBitwiseOr, h, u(opShiftRightLogical, sign, l.u32c(16)))
 }
