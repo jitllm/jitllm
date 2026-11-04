@@ -66,6 +66,16 @@ func (c *Config) KVTypeRefusal(t KVType) error {
 	if t != KVQ8_0 {
 		return nil
 	}
+	if err := c.kvQ8Inexpressible(); err != nil {
+		return err
+	}
+	// The composer is the only path, and it forms no q8_0 history yet.
+	return fmt.Errorf("model: %s: a q8_0 KV cache is not one the composer forms (binary16 and f32 are)", c.Arch)
+}
+
+// kvQ8Inexpressible is why a q8_0 row cannot hold this model's history, or
+// nil where one can.
+func (c *Config) kvQ8Inexpressible() error {
 	switch {
 	case c.Indexer():
 		return fmt.Errorf("model: %s reads its lightning indexer's key from the cached row: "+
@@ -80,8 +90,7 @@ func (c *Config) KVTypeRefusal(t KVType) error {
 		return fmt.Errorf("model: %s caches MLA's latent row, whose value is a prefix of the key's row: "+
 			"a q8_0 KV cache is not implemented for it", c.Arch)
 	}
-	// The composer is the only path, and it forms no q8_0 history yet.
-	return fmt.Errorf("model: %s: a q8_0 KV cache is not one the composer forms (binary16 and f32 are)", c.Arch)
+	return nil
 }
 
 // SetKVType forces the cache's format for instances this model creates
