@@ -632,3 +632,35 @@ func TestStatedTowerRunsOnTheCard(t *testing.T) {
 		})
 	}
 }
+
+// TestLlavaTowerSeesThePicture runs llava-phi-3-mini's stated tower --
+// Pillow's bicubic resize of the shorter side and its centre, CLIP's 23
+// blocks over a class row and 576 patches, the two-layer projector -- on the
+// CPU device, the picture's 576 rows where Phi-3's string template carries
+// "<image>": its colours are named, and a blank picture's are not.
+func TestLlavaTowerSeesThePicture(t *testing.T) {
+	text := testmodels.Path("llava-phi-3-mini-int4.gguf")
+	mm := testmodels.Path("llava-phi-3-mini-mmproj-f16.gguf")
+	if !sourcePresent(text, mm) {
+		t.Skipf("MODEL MISSING: %s and %s (see docs/testing.md) -- this gate proved nothing", text, mm)
+	}
+	m, err := Open(jlmOfPair(t, text, mm))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	if !m.SeesPictures() || m.tower.out != 576 || m.tower.rows != 577 || len(m.tower.blocks) != 23 || m.tower.short != 336 {
+		t.Fatalf("the tower writes %d rows from %d over %d blocks, the shorter side to %d; want 576 from 577 over 23, 336",
+			m.tower.out, m.tower.rows, len(m.tower.blocks), m.tower.short)
+	}
+	f, err := os.Open(filepath.Join("testdata", "quad-and-disc.png"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	img, err := png.Decode(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seesThePicture(t, m, img)
+}

@@ -4,7 +4,7 @@ import "fmt"
 
 // TowerVersion is the stated tower's revision. A record of a later one is
 // refused, not read as this one.
-const TowerVersion = 2
+const TowerVersion = 3
 
 // Tower is a vision tower as the converter states it: what the engine builds
 // the tower from, with no family's name in it. The converter knows a family
@@ -35,6 +35,14 @@ const (
 	// PreNormalize turns each channel c of a sample read as [0, 1] into
 	// (v - Floats[c]) / Floats[3+c]: the mean, then the std.
 	PreNormalize PreKind = 2
+	// PreResizeShort resamples the picture, aspect kept, so its shorter side
+	// is Ints[0] pixels and its longer int(Ints[0] * long / short), with
+	// filter Ints[1] in arithmetic Ints[2].
+	PreResizeShort PreKind = 3
+	// PreCenterCrop is the Ints[0] x Ints[1] window of the picture as the
+	// step before left it, at ((w - Ints[0]) / 2, (h - Ints[1]) / 2)
+	// truncated.
+	PreCenterCrop PreKind = 4
 )
 
 // Filter is a resampling filter.
@@ -157,11 +165,15 @@ type TowerBlock struct {
 // tokenizer encodes with the prompt beside it, as a reference processor
 // expands its placeholder into a string before tokenizing the whole. The
 // rows are the head's, one a token; Bidir says they attend to each other
-// both ways in the language model.
+// both ways in the language model. Mark is the text a message read as a
+// string carries for each of its pictures, before its text -- what the
+// reference processor's template writes for an image part -- for a chat
+// template that reads no typed parts; empty where the family has none.
 type TowerSpan struct {
 	Before, After         []int32
 	BeforeText, AfterText string
 	Bidir                 bool
+	Mark                  string
 }
 
 // Valid says the record is one this build can read: a known version, known
@@ -177,6 +189,14 @@ func (t *Tower) Valid() error {
 		case PreResize:
 			if len(s.Ints) != 4 || s.Ints[0] <= 0 || s.Ints[1] <= 0 || !resizes(Filter(s.Ints[2]), Precision(s.Ints[3])) {
 				return fmt.Errorf("jlm: the tower's step %d resizes with %v", i, s.Ints)
+			}
+		case PreResizeShort:
+			if len(s.Ints) != 3 || s.Ints[0] <= 0 || !resizes(Filter(s.Ints[1]), Precision(s.Ints[2])) {
+				return fmt.Errorf("jlm: the tower's step %d resizes the shorter side with %v", i, s.Ints)
+			}
+		case PreCenterCrop:
+			if len(s.Ints) != 2 || s.Ints[0] <= 0 || s.Ints[1] <= 0 {
+				return fmt.Errorf("jlm: the tower's step %d crops to %v", i, s.Ints)
 			}
 		case PreNormalize:
 			if len(s.Floats) != 6 {
@@ -337,6 +357,7 @@ func encodeTower(w *wbuf, t *Tower) {
 	w.str(t.Span.BeforeText)
 	w.str(t.Span.AfterText)
 	w.bool(t.Span.Bidir)
+	w.str(t.Span.Mark)
 }
 
 func encodeProgram(w *wbuf, p *Program) {
@@ -393,6 +414,7 @@ func decodeTower(r *rbuf) *Tower {
 	}
 	t.Span.BeforeText, t.Span.AfterText = r.str(), r.str()
 	t.Span.Bidir = r.bool()
+	t.Span.Mark = r.str()
 	return t
 }
 

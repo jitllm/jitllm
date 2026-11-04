@@ -143,3 +143,70 @@ func TestGemma3StatesItsTower(t *testing.T) {
 		t.Errorf("a %d square of %d patches into %d, want 896, 14 and 2560", v.ImageSize, v.PatchSize, v.ProjDim)
 	}
 }
+
+// TestLlavaStatesItsTower converts llava-phi-3-mini's two files and holds the
+// stated tower to CLIPImageProcessor and LlavaForConditionalGeneration:
+// Pillow's BICUBIC resize of the shorter side to the tower's square and its
+// centre cropped, CLIP's patches after a class row and the pre-norm, the
+// file's 23 blocks, the class row dropped and the two-layer projector with
+// transformers' exact GELU; every bound weight a tensor of the container;
+// the picture the processor's "<image>" then a newline.
+func TestLlavaStatesItsTower(t *testing.T) {
+	src := testmodels.Path("llava-phi-3-mini-int4.gguf")
+	mm := testmodels.Path("llava-phi-3-mini-mmproj-f16.gguf")
+	for _, p := range []string{src, mm} {
+		if _, err := os.Stat(p); err != nil {
+			t.Skipf("MODEL MISSING: %v (see docs/testing.md) -- this gate proved nothing", err)
+		}
+	}
+	dst := filepath.Join(t.TempDir(), "llava.jlm")
+	if _, err := FromGGUFs(src, mm, dst, jlm.Fingerprint{Writer: "gate"}); err != nil {
+		t.Fatal(err)
+	}
+	f, err := jlm.Open(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	v := f.Vision()
+	if v == nil || v.Tower == nil {
+		t.Fatal("the container states no tower")
+	}
+	tw := v.Tower
+	if err := tw.Valid(); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range tw.Roles() {
+		if !f.Has(r, jlm.DenseBlock, -1) {
+			t.Errorf("the tower binds %v, which the container does not hold", r)
+		}
+	}
+	if len(tw.Pre) != 3 || tw.Pre[0].Kind != jlm.PreResizeShort || tw.Pre[1].Kind != jlm.PreCenterCrop ||
+		tw.Pre[0].Ints[0] != 336 || jlm.Filter(tw.Pre[0].Ints[1]) != jlm.FilterPILBicubic ||
+		tw.Pre[1].Ints[0] != 336 || tw.Pre[1].Ints[1] != 336 {
+		t.Errorf("the picture's steps are %+v, want Pillow's bicubic of the shorter side to 336 and its 336 centre", tw.Pre)
+	}
+	var entry, head []jlm.OpCode
+	for _, op := range tw.Entry.Ops {
+		entry = append(entry, op.Code)
+	}
+	for _, op := range tw.Head.Ops {
+		head = append(head, op.Code)
+	}
+	if want := []jlm.OpCode{jlm.TOpPatchify, jlm.TOpLinear, jlm.TOpLeadRow, jlm.TOpPosTable, jlm.TOpAdd, jlm.TOpLayerNorm}; !reflect.DeepEqual(entry, want) {
+		t.Errorf("the entry is %v, want %v", entry, want)
+	}
+	if want := []jlm.OpCode{jlm.TOpDropRows, jlm.TOpLinear, jlm.TOpStated, jlm.TOpLinear}; !reflect.DeepEqual(head, want) {
+		t.Errorf("the head is %v, want %v", head, want)
+	}
+	if tw.Entry.Ops[0].Offset != 1 || tw.Head.Ops[0].Offset != 1 || tw.Head.Ops[2].Width != 3072 {
+		t.Errorf("a class row of %d dropped by %d, a projector %d wide; want 1, 1 and 3072",
+			tw.Entry.Ops[0].Offset, tw.Head.Ops[0].Offset, tw.Head.Ops[2].Width)
+	}
+	if v.NLayer != 23 || !v.Flags.Has(jlm.FlagQuickGELU) {
+		t.Errorf("%d blocks, quick-GELU %v; want the file's 23 under CLIP's quick-GELU", v.NLayer, v.Flags.Has(jlm.FlagQuickGELU))
+	}
+	if s := tw.Span; s.Mark != "<image>\n" || s.AfterText != "\n" || s.Bidir {
+		t.Errorf("the picture's span is %+v, want the processor's \"<image>\" and its newline", s)
+	}
+}
