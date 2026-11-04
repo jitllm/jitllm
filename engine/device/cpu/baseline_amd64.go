@@ -2,13 +2,12 @@ package cpu
 
 import "fmt"
 
-// errNoBaseline is the sentinel every below-floor answer wraps, and what the
-// forceNoBaseline test instrument returns as it stands. It names the floor;
-// baseline() adds exactly what this host or this tree lacks.
+// errNoBaseline is the sentinel every below-floor answer wraps. It names the
+// floor; baselineOf adds exactly what this host or this tree lacks.
 const errNoBaseline jitError = "jit: this CPU cannot run the engine (the amd64 floor is the SSE tier: " +
 	"sse2, sse3, ssse3 and sse4.1, with every op generated for it)"
 
-// baseline is the amd64 engine floor, one answer per tier.
+// baselineOf is the amd64 engine floor for f, one answer per tier.
 //
 // AVX2 tier: AVX2, FMA and F16C with the OS saving YMM state -- each
 // load-bearing: vop hardcodes 256-bit forms, the norms and attention emit
@@ -20,8 +19,7 @@ const errNoBaseline jitError = "jit: this CPU cannot run the engine (the amd64 f
 // host with SSE2, SSE3, SSSE3 and SSE4.1 and no usable AVX2.
 //
 // Below that the host is refused naming the SSE-floor extensions it lacks.
-func baseline() error {
-	f := CPU()
+func baselineOf(f Features) error {
 	switch tierOf(f) {
 	case TierAVX2, TierSSE:
 		return nil
@@ -29,24 +27,19 @@ func baseline() error {
 	return fmt.Errorf("%w: missing %s", errNoBaseline, missingNames(f, ISATierSSE))
 }
 
-// mapGate is Map's question on amd64: can this host run this kernel.
+// gate is Map's question on amd64: can the Host run this kernel.
 //
-// forceNoBaseline refuses everything. Otherwise the declared (or implied) ISA
+// The declared (or implied) ISA
 // is compared with the host's, and only an undeclared kernel gets the VNNI
 // byte scan: in a legacy-encoded kernel the C4 ... 50 pattern can occur inside
 // a correct instruction (PINSRW is 66 0F C4 /r ib), and a false positive there
 // would remove the only kernel an SSE host has.
-func mapGate(code []byte) error {
-	if forceNoBaseline {
-		return errNoBaseline
-	}
-	if err := isaCheck(code); err != nil {
+func (h *Host) gate(code []byte) error {
+	if err := isaCheck(h.f, code); err != nil {
 		return err
 	}
 	if _, declared := KernelISA(code); !declared {
-		return runnable(code)
+		return runnable(h.f, code)
 	}
 	return nil
 }
-
-const baselineForceable = true

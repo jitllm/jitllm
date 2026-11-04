@@ -9,7 +9,7 @@ import (
 )
 
 // TestARegionDoesNotWaitForADescheduledWorker: a worker that has seen a
-// region but is kept off a CPU -- here held at onWorkerWake, as an
+// region but is kept off a CPU -- here held at Pool.onWake, as an
 // oversubscribed host holds it for a scheduling slice or many -- must not
 // hold the region up: the caller drains the chunks, closes the gate and
 // returns, and the held worker, once let go, finds the gate closed and
@@ -22,21 +22,19 @@ import (
 // acknowledgement count) never returns while the worker is held: the test
 // hangs and go test's deadline names publish's wait.
 func TestARegionDoesNotWaitForADescheduledWorker(t *testing.T) {
-	p := New([]int{0, 1, 2})
-	defer p.Close()
 	release := make(chan struct{})
 	held := make(chan struct{})
 	var once sync.Once
 	hook := func(q *Pool, id int) {
-		if q == p && id == 0 {
+		if id == 0 {
 			once.Do(func() {
 				close(held)
 				<-release
 			})
 		}
 	}
-	onWorkerWake.Store(&hook)
-	defer onWorkerWake.Store(nil)
+	p := New([]int{0, 1, 2}, func(c *config) { c.onWake = hook })
+	defer p.Close()
 
 	const regions = 200
 	run := func(what string) {

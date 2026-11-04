@@ -11,7 +11,6 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/jitllm/jitllm/engine/sched"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/graph"
 
@@ -520,7 +519,7 @@ func (m *Model) newInstanceRange(nseq, maxSeq, lo, hi int) *Instance {
 	want := m.opt.kvType.fmt()
 	if !m.opt.kvTypeSet {
 		want = cpu.KVF16
-		if composer.NarrowsCPU(composedCPUDevice(1)) {
+		if composer.NarrowsCPU(composedCPUDevice(m.cpuISA(), 1)) {
 			want = cpu.KVF32
 		}
 	}
@@ -558,7 +557,7 @@ func (m *Model) newInstanceRange(nseq, maxSeq, lo, hi int) *Instance {
 	s.cpuPlace()
 	// Read at construction too, because an embedded caller may never call
 	// SetMemBudget; it overrides this with the caller's number.
-	s.memBudget = sched.MemBudget()
+	s.memBudget = s.m.opt.gc.Budget()
 	return s
 }
 

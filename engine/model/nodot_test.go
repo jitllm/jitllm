@@ -29,7 +29,7 @@ func nodotForce(t *testing.T) {
 // FEAT_DotProd as want says.
 func nodotFormed(t *testing.T, want bool) {
 	t.Helper()
-	if got := composedCPUDevice(1).ISA&uint64(cpu.ISADotProd) != 0; got != want {
+	if got := composedCPUDevice(cpu.CPU().ISA(), 1).ISA&uint64(cpu.ISADotProd) != 0; got != want {
 		t.Fatalf("the CPU device states FEAT_DotProd %v, want %v: the arm formed the other int8 dots", got, want)
 	}
 }

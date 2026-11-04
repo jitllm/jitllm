@@ -74,7 +74,7 @@ func SharedBeside(cpus []int, of *Pool, opts ...Option) *Pool {
 		crews.m[key] = c
 	}
 	c.views++
-	v := &Pool{crew: c, wake: make(chan struct{}, 1)}
+	v := &Pool{crew: c, wake: make(chan struct{}, 1), labels: cfg.labels, onPhase: cfg.onPhase}
 	v.beside = of != nil && of.crew != nil && of.crew.mu == c.mu
 	if !v.beside {
 		c.mu.users++

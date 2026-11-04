@@ -278,7 +278,7 @@ func apiName(api string) string {
 // Host reports the host's own memory and cores.
 func (e *Engine) Host() HostInfo {
 	return HostInfo{
-		WeightBudget: sched.MemBudget(),
+		WeightBudget: e.cfg.GC.Budget(),
 		Total:        hostTotal(),
 		Available:    hostAvailable(),
 		DecodeCores:  len(sched.DecodeCores()),

@@ -77,7 +77,7 @@ func TestComposedCPUAttendSpeed(t *testing.T) {
 	var keep [][]uint32
 	var total time.Duration
 	for _, c := range codes {
-		code, err := cpu.Map(c.CPU)
+		code, err := cpu.NewHost().Map(c.CPU)
 		if err != nil {
 			t.Fatal(err)
 		}

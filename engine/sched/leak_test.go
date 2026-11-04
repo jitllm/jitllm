@@ -97,7 +97,7 @@ func TestPoolsDoNotLeakGoroutinesOrThreads(t *testing.T) {
 // narrower than the process mask: a leaked sched_setaffinity mask would pass
 // the count test above.
 func TestPoolLeavesNoThreadMaskedToOneCPU(t *testing.T) {
-	want := len(allowed())
+	want := len(host().allowed())
 	if want == 0 {
 		t.Skip("cannot read the process affinity mask")
 	}

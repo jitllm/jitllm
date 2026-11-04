@@ -21,6 +21,8 @@ type Pool struct {
 	procs sched.ProcsHold
 	cfg   poolConfig
 	onE   bool
+	// qos lowers a served prefill's thread to the E-cores (LowerToE).
+	qos sched.QoS
 }
 
 type poolConfig struct {
@@ -61,6 +63,7 @@ func NewPool(opts ...PoolOption) *Pool {
 		o(&p.cfg)
 	}
 	c := &p.cfg
+	p.qos = sched.QoSOf(c.sched...)
 	p.decode = sched.Shared(sched.DecodeCores(c.sched...), c.sched...)
 	cs := c.prefill
 	if cs == nil && runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
@@ -90,7 +93,7 @@ func (p *Pool) Max() int {
 	if p.prefill != nil {
 		n = max(n, p.prefill.Max())
 	}
-	if p.cfg.split && sched.CanSplitE() {
+	if p.cfg.split && p.qos.CanSplitE() {
 		n = max(n, len(sched.ECores()))
 	}
 	return n
@@ -160,11 +163,12 @@ func (p *Pool) EndPrefill() {
 // prefill on a thread at the E-core class (sched.LowerToE): it is
 // participant 0 of every region.
 func (p *Pool) BeginPrefillE() bool {
-	if p.onE || !p.cfg.split || !sched.CanSplitE() {
+	if p.onE || !p.cfg.split || !p.qos.CanSplitE() {
 		return false
 	}
 	if p.e == nil {
 		p.e = sched.Shared(sched.ECores(), p.cfg.sched...)
+		p.e.SetRegionLabels(p.decode.RegionLabels())
 	}
 	p.decode.Park()
 	p.run, p.onE = p.e, true
@@ -184,6 +188,24 @@ func (p *Pool) EndPrefillE() {
 }
 
 // Close releases the pool's views of the crew.
+// LowerToE puts the calling goroutine's thread at the E-core class for a
+// prefill on the E-cores (sched.QoS.LowerToE).
+func (p *Pool) LowerToE() sched.Lowered { return p.qos.LowerToE() }
+
+// SetRegionLabels turns the pprof region labels of every pool this one runs
+// its regions on on or off (sched.Pool.SetRegionLabels), and reports what
+// they were.
+func (p *Pool) SetRegionLabels(on bool) bool {
+	was := p.decode.SetRegionLabels(on)
+	if p.prefill != nil {
+		p.prefill.SetRegionLabels(on)
+	}
+	if p.e != nil {
+		p.e.SetRegionLabels(on)
+	}
+	return was
+}
+
 func (p *Pool) Close() {
 	p.decode.Close()
 	p.prefill.Close()

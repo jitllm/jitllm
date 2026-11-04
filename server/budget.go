@@ -3,7 +3,6 @@ package server
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/engine/sched"
 )
 
 // backgroundShare is the fraction of the host budget that all backgrounded
@@ -136,7 +135,7 @@ func (e *Engine) availNow() uint64 {
 	if e.hostAvail != nil {
 		return e.hostAvail()
 	}
-	return sched.MemBudget()
+	return e.cfg.GC.Budget()
 }
 
 // sharesLocked divides the host budget between the loaded models, plus extra
@@ -162,18 +161,21 @@ func (e *Engine) rebudget() {
 	e.mu.Lock()
 	sh := e.sharesLocked("")
 	models := make([]*LoadedModel, 0, len(e.models))
-	var sum uint64
+	var sum, mapped uint64
 	for id, lm := range e.models {
 		lm.mu.Lock()
 		lm.budget = sh[id]
 		lm.mu.Unlock()
 		sum += sh[id]
+		if lm.m != nil {
+			mapped += lm.m.MappedBytes()
+		}
 		models = append(models, lm)
 	}
 	// Under e.mu, so two rebudgets cannot hand the limit their sums out of
 	// order.
 	if e.cfg.OffHeap != nil {
-		e.cfg.OffHeap(sum)
+		e.cfg.OffHeap(sum, mapped)
 	}
 	e.mu.Unlock()
 	for _, lm := range models {

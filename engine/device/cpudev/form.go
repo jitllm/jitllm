@@ -234,11 +234,11 @@ func stepsState(gr *graph.Graph) bool {
 	return false
 }
 
-// BuildForm maps codes and plans each call word's source: the graph's
-// input and output the residual, or with apart each an io place of its own.
-// A whole form is run at its rows and no fewer (a convolutional block's,
-// over its grid), so its kernels need not be held to a call's rows.
-func BuildForm(gr *graph.Graph, codes []composer.Code, rows int, apart, whole bool) (*Form, error) {
+// BuildForm maps codes onto h and plans each call word's source: the
+// graph's input and output the residual, or with apart each an io place of
+// its own. A whole form is run at its rows and no fewer (a convolutional
+// block's, over its grid), so its kernels need not be held to a call's rows.
+func BuildForm(h *cpu.Host, gr *graph.Graph, codes []composer.Code, rows int, apart, whole bool) (*Form, error) {
 	if apart && len(gr.In)+len(gr.Out) > IO {
 		return nil, fmt.Errorf("a graph of %d inputs and %d outputs, past the %d places the CPU's call site binds", len(gr.In), len(gr.Out), IO)
 	}
@@ -502,7 +502,7 @@ func BuildForm(gr *graph.Graph, codes []composer.Code, rows int, apart, whole bo
 				cc.slice(buf, reach[o])
 			}
 		}
-		code, err := cpu.MapNamed(c.CPU, c.Name)
+		code, err := h.MapNamed(c.CPU, c.Name)
 		if err != nil {
 			f.Close()
 			return nil, fmt.Errorf("mapping %s: %w", c.Name, err)

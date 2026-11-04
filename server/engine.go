@@ -28,6 +28,7 @@ import (
 	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/engine/sched"
 	"github.com/jitllm/jitllm/tok"
 )
 
@@ -144,11 +145,16 @@ type Config struct {
 	WarmLoads bool
 	// OffHeap is told, after every load, unload, pin and change of priority,
 	// the page budgets every loaded model's frames may grow to, summed: the
-	// off-heap memory the loaded models can reach, 0 with none loaded. The
-	// collector's memory limit is process-wide, so the engine does not set it;
-	// jitllmd hands goheap.OffHeap here, as cmd/jitllm calls it after its one
-	// load (AGENTS.md RULE 2f).
-	OffHeap func(budgets uint64)
+	// off-heap memory the loaded models can reach, 0 with none loaded; and
+	// mapped, what they hold off the heap already. The collector's memory
+	// limit is process-wide, so the engine does not set it; jitllmd hands
+	// goheap.OffHeap here, as cmd/jitllm calls it after its one load
+	// (AGENTS.md RULE 2f).
+	OffHeap func(budgets, mapped uint64)
+	// GC is where the loaded models' weights live and what a budget the
+	// engine sizes leaves the Go collector; the zero plan keeps them off the
+	// heap (sched.GCPlan).
+	GC sched.GCPlan
 
 	// Probe enumerates the hardware. nil takes the real one, which is
 	// expensive and exclusive: backend.Open() opens and closes every backend.
@@ -659,7 +665,7 @@ func (e *Engine) LoadModel(o LoadOptions) (*LoadedModel, error) {
 	// contract is that a row comes out as it does alone, to the bit, so a
 	// seeded sampler draws the same tokens either way
 	// (TestHostBatchSampledRowsEqualAlone).
-	m, err := model.Open(path, opts...)
+	m, err := model.Open(path, append(opts, model.WithGCPlan(e.cfg.GC))...)
 	if err != nil {
 		closeDev()
 		return nil, err

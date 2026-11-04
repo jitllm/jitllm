@@ -9,7 +9,7 @@ import "runtime"
 // runtime.NumCPU counts logical processors, so on an SMT machine this pool is
 // half hyperthreads, a small decode loss, but the honest answer without
 // OS-specific topology. Add a topo file for the OS to do better.
-func PCores() []int {
+func (m machine) pCores() []int {
 	n := runtime.NumCPU()
 	if n < 1 {
 		n = 1
@@ -21,8 +21,8 @@ func PCores() []int {
 	return out
 }
 
-func ECores() []int      { return nil }
-func SMTSiblings() []int { return PCores() }
+func (m machine) eCores() []int      { return nil }
+func (m machine) smtSiblings() []int { return m.pCores() }
 
-// CoreSource says where the pool's CPUs came from, for a report.
-func CoreSource() string { return "runtime.NumCPU" }
+// coreSource says where the pool's CPUs came from, for a report.
+func (m machine) coreSource() string { return "runtime.NumCPU" }

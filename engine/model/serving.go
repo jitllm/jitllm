@@ -99,7 +99,7 @@ func (p *prefillPlace) at() {
 	if e && p.s.cpu.workers.BeginPrefillE() {
 		p.onE, p.started = true, true
 		p.s.ServedOnE++
-		p.low = sched.LowerToE()
+		p.low = p.s.cpu.workers.LowerToE()
 		return
 	}
 	p.s.cpu.workers.BeginPrefill()

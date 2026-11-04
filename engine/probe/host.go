@@ -30,30 +30,35 @@ type cache struct {
 // Host measures the host CPU: its caches' sizes from the operating system,
 // then each level's read bandwidth on one P-core and on every P-core, each
 // class's instruction rate, and an empty call's cost.
-func Host() (cost.Device, error) {
-	if err := hostCheck(); err != nil {
+func Host() (cost.Device, error) { return HostOn(cpu.NewHost()) }
+
+// HostOn is Host for the CPU h states: the SSE tier's kernels where h is at
+// that tier.
+func HostOn(h *cpu.Host) (cost.Device, error) {
+	if err := hostCheck(h); err != nil {
 		return cost.Device{}, err
 	}
+	e := emitter{sse: h.Tier() == cpu.TierSSE}
 	workers := max(1, len(sched.PCores()))
-	d := cost.Device{Device: composer.Device{Kind: composer.DeviceCPU, Slots: workers, Lanes: hostLanes(), ExactDiv: true}}
+	d := cost.Device{Device: composer.Device{Kind: composer.DeviceCPU, Slots: workers, Lanes: e.hostLanes(), ExactDiv: true}}
 	sizes, err := cacheSizes()
 	if err != nil {
 		return d, err
 	}
-	code, err := readKernel()
+	code, err := e.readKernel()
 	if err != nil {
 		return d, err
 	}
-	read, err := cpu.Map(code)
+	read, err := h.Map(code)
 	if err != nil {
 		return d, err
 	}
 	defer read.Close()
-	chase, err := chaseKernel()
+	chase, err := e.chaseKernel()
 	if err != nil {
 		return d, err
 	}
-	walk, err := cpu.Map(chase)
+	walk, err := h.Map(chase)
 	if err != nil {
 		return d, err
 	}
@@ -101,35 +106,35 @@ func Host() (cost.Device, error) {
 		return d, err
 	}
 	for cl := cost.Class(0); cl < cost.NumClasses; cl++ {
-		code, err := rateKernel(cl)
+		code, err := e.rateKernel(cl)
 		if err != nil {
 			return d, err
 		}
 		if code == nil {
 			continue
 		}
-		k, err := cpu.Map(code)
+		k, err := h.Map(code)
 		if err != nil {
 			return d, err
 		}
 		d.Rates[cl] = cost.Rate{Thread: issueRate(k, 8, 1), Total: issueRate(k, 8, workers)}
 		k.Close()
-		code, err = chainKernel(cl)
+		code, err = e.chainKernel(cl)
 		if err != nil {
 			return d, err
 		}
-		k, err = cpu.Map(code)
+		k, err = h.Map(code)
 		if err != nil {
 			return d, err
 		}
 		d.Delay[cl] = 1 / issueRate(k, 8, 1)
 		k.Close()
 	}
-	code, err = mixKernel()
+	code, err = e.mixKernel()
 	if err != nil {
 		return d, err
 	}
-	mix, err := cpu.Map(code)
+	mix, err := h.Map(code)
 	if err != nil {
 		return d, err
 	}
@@ -139,11 +144,11 @@ func Host() (cost.Device, error) {
 	if cl := cost.ClassMem; d.Rates[cl].Thread == 0 && d.Caches[0].Bytes > 0 {
 		d.Rates[cl] = cost.Rate{Thread: d.Caches[0].Rate.Thread / 32, Total: d.Caches[0].Rate.Total / 32}
 	}
-	code, err = emptyKernel()
+	code, err = e.emptyKernel()
 	if err != nil {
 		return d, err
 	}
-	call, err := cpu.Map(code)
+	call, err := h.Map(code)
 	if err != nil {
 		return d, err
 	}
@@ -151,6 +156,10 @@ func Host() (cost.Device, error) {
 	d.Launch = callCost(call)
 	return d, nil
 }
+
+// emitter emits the probe's kernels for a host: on amd64, the SSE tier's
+// legacy-encoded 128-bit forms where sse is set.
+type emitter struct{ sse bool }
 
 // chaseLatency is the seconds one read waits walking a random cycle
 // through the cache lines of set bytes, so the prefetchers cannot run

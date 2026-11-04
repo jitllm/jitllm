@@ -23,7 +23,7 @@ func requireVNNIHost(t testing.TB) {
 // broken emitter do not look alike.
 func mustMap(t testing.TB, code []byte) *Code {
 	t.Helper()
-	c, err := Map(code)
+	c, err := NewHost().Map(code)
 	if err == nil {
 		return c
 	}

@@ -9,7 +9,7 @@ import "testing"
 // limit. It asserts the relationship rather than a value, because the value
 // depends on the cap the suite runs under.
 func TestMemBudgetSeesTheCgroup(t *testing.T) {
-	lim, avail, b := cgroupLimit(), meminfoAvailable(), MemBudget()
+	lim, avail, b := host().cgroupLimit(), host().meminfoAvailable(), MemBudget()
 	t.Logf("cgroup %.2f GB, MemAvailable %.2f GB, budget %.2f GB",
 		float64(lim)/1e9, float64(avail)/1e9, float64(b)/1e9)
 	if avail == 0 {

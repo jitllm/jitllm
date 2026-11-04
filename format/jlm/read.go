@@ -184,11 +184,28 @@ type File struct {
 // Open reads and validates a container's metadata. No page is read.
 //
 // Every offset in the file is checked before it slices anything (RULE 9).
-func Open(path string) (*File, error) { return openAt(path, Version) }
+func Open(path string, opts ...OpenOption) (*File, error) {
+	o := openOpts{offHeap: true}
+	for _, opt := range opts {
+		opt(&o)
+	}
+	return openAt(path, Version, o.offHeap)
+}
+
+// OpenOption is a choice Open makes for the File it opens.
+type OpenOption func(*openOpts)
+
+type openOpts struct{ offHeap bool }
+
+// OnHeap keeps the File's weight memory on the Go heap: the control arm for
+// a measurement (see offheap.go). The budget it is sized against keeps its
+// collector reserve (sched.GCPlan.OnHeap).
+func OnHeap() OpenOption { return func(o *openOpts) { o.offHeap = false } }
 
 // openAt is Open for a container of version want: the current one, or an
-// older one a migration reads (migrate.go).
-func openAt(path string, want uint32) (*File, error) {
+// older one a migration reads (migrate.go), its weight memory off the heap
+// where offHeap asks it and the platform maps.
+func openAt(path string, want uint32, offHeap bool) (*File, error) {
 	fh, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -207,7 +224,7 @@ func openAt(path string, want uint32) (*File, error) {
 		closeDirect(direct)
 		return nil, fmt.Errorf("jlm: %s is %d bytes, shorter than a header", path, size)
 	}
-	f := &File{Path: path, f: fh, direct: direct, offHeap: offHeap.Load()}
+	f := &File{Path: path, f: fh, direct: direct, offHeap: offHeap}
 
 	hb := make([]byte, HeaderBytes)
 	if _, err := fh.ReadAt(hb, 0); err != nil {

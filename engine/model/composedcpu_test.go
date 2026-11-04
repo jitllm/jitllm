@@ -83,7 +83,7 @@ func cpuExec(t *testing.T, codes []composer.Code, vecs map[jlm.Role][]float32, p
 		if c.CPU == nil {
 			t.Fatalf("%s has no CPU code", c.Name)
 		}
-		code, err := cpu.Map(c.CPU)
+		code, err := cpu.NewHost().Map(c.CPU)
 		if err != nil {
 			t.Fatalf("mapping %s: %v", c.Name, err)
 		}

@@ -45,7 +45,6 @@ func (f *File) expFrame(li int, size uint64) []byte {
 	b := f.exp[at : at+size : at+size]
 	placeMemory(b, f.noHuge, f.nodeMask)
 	f.expHeld += size
-	offHeapBytes.Add(int64(size))
 	return b
 }
 
@@ -64,7 +63,6 @@ func (f *File) dropExp(b []byte) {
 	f.retire(b)
 	offheap.DropOffHeap(b[:cap(b)])
 	f.expHeld -= uint64(cap(b))
-	offHeapBytes.Add(-int64(cap(b)))
 }
 
 // unmapExp gives the reservation back at Close. Callers hold f.mu and hold no
@@ -72,7 +70,6 @@ func (f *File) dropExp(b []byte) {
 func (f *File) unmapExp() {
 	if f.exp != nil {
 		offheap.UnmapOffHeap(f.exp)
-		offHeapBytes.Add(-int64(f.expHeld))
 		f.exp, f.expHeld = nil, 0
 	}
 }

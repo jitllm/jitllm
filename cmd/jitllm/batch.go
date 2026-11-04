@@ -3,7 +3,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/jitllm/jitllm/engine/sched"
 	"os"
 	"runtime/pprof"
 	"strings"
@@ -34,7 +33,6 @@ func batchCmd(args []string) error {
 			return err
 		}
 		defer f.Close()
-		sched.SetRegionLabels(true) // attribution for generated code; see sched.regionLabels
 		if err := pprof.StartCPUProfile(f); err != nil {
 			return err
 		}
@@ -46,7 +44,7 @@ func batchCmd(args []string) error {
 	if fs.NArg() < 2 {
 		usage()
 	}
-	m, err := model.Open(fs.Arg(0), loadOpts(nil, 0)...)
+	m, err := model.Open(fs.Arg(0), append(loadOpts(nil, 0), regionLabels(*cpuProf != "")...)...)
 	if err != nil {
 		return err
 	}

@@ -3,16 +3,17 @@ package probe
 import (
 	"github.com/jitllm/jitllm/composer/a64"
 	"github.com/jitllm/jitllm/engine/cost"
+	"github.com/jitllm/jitllm/engine/device/cpu"
 )
 
 // hostLanes is a NEON vector's floats.
-func hostLanes() int { return 4 }
+func (e emitter) hostLanes() int { return 4 }
 
 // hostCheck accepts every arm64 host: the measuring kernels are base NEON.
-func hostCheck() error { return nil }
+func hostCheck(*cpu.Host) error { return nil }
 
 // emptyKernel returns at once.
-func emptyKernel() ([]byte, error) {
+func (e emitter) emptyKernel() ([]byte, error) {
 	var a a64.A64
 	a.RET()
 	return a.Bytes()
@@ -20,7 +21,7 @@ func emptyKernel() ([]byte, error) {
 
 // readKernel sums words [0] for [1] blocks of 256 bytes: sixteen loads a
 // trip into sixteen accumulators, so the loads, not the adds, bind it.
-func readKernel() ([]byte, error) {
+func (e emitter) readKernel() ([]byte, error) {
 	var a a64.A64
 	a.LDRx(a64.X1, a64.X0, 0)
 	a.LDRx(a64.X2, a64.X0, 8)
@@ -44,7 +45,7 @@ func readKernel() ([]byte, error) {
 
 // chaseKernel follows [1] pointers from the address in [0], each read
 // waiting for the one before.
-func chaseKernel() ([]byte, error) {
+func (e emitter) chaseKernel() ([]byte, error) {
 	var a a64.A64
 	a.LDRx(a64.X1, a64.X0, 0)
 	a.LDRx(a64.X2, a64.X0, 8)
@@ -60,7 +61,7 @@ func chaseKernel() ([]byte, error) {
 // rateKernel runs [0] trips of eight independent instructions of class cl
 // on registers, nil for a class with no instruction measured alone. The
 // index class adds a register into four general registers.
-func rateKernel(cl cost.Class) ([]byte, error) {
+func (e emitter) rateKernel(cl cost.Class) ([]byte, error) {
 	var a a64.A64
 	var op func(r int)
 	switch cl {
@@ -77,7 +78,7 @@ func rateKernel(cl cost.Class) ([]byte, error) {
 	default:
 		return nil, nil
 	}
-	return loop(&a, func() {
+	return e.loop(&a, func() {
 		for r := range 8 {
 			op(r)
 		}
@@ -86,7 +87,7 @@ func rateKernel(cl cost.Class) ([]byte, error) {
 
 // chainKernel runs [0] trips of eight instructions of class cl, each using
 // the one before's result, nil for a class rateKernel has none of.
-func chainKernel(cl cost.Class) ([]byte, error) {
+func (e emitter) chainKernel(cl cost.Class) ([]byte, error) {
 	var a a64.A64
 	var op func()
 	switch cl {
@@ -103,7 +104,7 @@ func chainKernel(cl cost.Class) ([]byte, error) {
 	default:
 		return nil, nil
 	}
-	return loop(&a, func() {
+	return e.loop(&a, func() {
 		for range 8 {
 			op()
 		}
@@ -113,9 +114,9 @@ func chainKernel(cl cost.Class) ([]byte, error) {
 // mixKernel runs [0] trips of twenty-four instructions: eight float
 // chains, eight index adds and eight loads from the argument block, so that
 // the rate is what the core issues a second rather than any class's units.
-func mixKernel() ([]byte, error) {
+func (e emitter) mixKernel() ([]byte, error) {
 	var a a64.A64
-	return loop(&a, func() {
+	return e.loop(&a, func() {
 		for j := range 8 {
 			a.FMLA4s(a64.V0+a64.VReg(j), a64.V14, a64.V15)
 			a.ADDreg(a64.X3+a64.XReg(j%4), a64.X3+a64.XReg(j%4), a64.X7)
@@ -126,7 +127,7 @@ func mixKernel() ([]byte, error) {
 
 // loop is body run [0] times, the vector and general registers it uses
 // cleared first.
-func loop(a *a64.A64, body func()) ([]byte, error) {
+func (e emitter) loop(a *a64.A64, body func()) ([]byte, error) {
 	a.LDRx(a64.X2, a64.X0, 0)
 	for r := range 16 {
 		a.MOVIzero(a64.V0 + a64.VReg(r))

@@ -11,9 +11,9 @@ type Code struct {
 	page  []byte
 	entry *byte
 	Size  int
-	// tier is the tier this kernel was generated for, read from its own
-	// declaration when it was mapped; see checkTier.
-	tier Tier
+	// Name is the code's name (Host.MapNamed). Darwin's samplers take symbols
+	// from a different mechanism, so it is recorded and otherwise unused.
+	Name string
 }
 
 // Map makes code executable using the W^X sequence: map read+write, copy, then
@@ -31,11 +31,6 @@ type Code struct {
 // com.apple.security.cs.allow-unsigned-executable-memory. Linker ad-hoc and
 // plain ad-hoc signatures run fine; the arm64 test runs sign with the
 // entitlement anyway, as insurance against someone adding -o runtime.
-//
-// MapNamed is Map plus a symbol name for the JIT profiler map. Darwin's
-// samplers take symbols from a different mechanism, so the name is accepted
-// and ignored here rather than making every caller branch on GOOS.
-func mapExecNamed(code []byte, name string) (*Code, error) { return mapExec(code) }
 
 func mapExec(code []byte) (*Code, error) {
 	if len(code) == 0 {
@@ -85,7 +80,6 @@ func (c *Code) Call(args *Args) {
 	if c.entry == nil {
 		panic("jit: Call on closed code")
 	}
-	checkTier(c)
 	callKernel(c.entry, args)
 	runtime.KeepAlive(c)
 	runtime.KeepAlive(args)

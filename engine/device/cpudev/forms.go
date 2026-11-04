@@ -4,6 +4,7 @@ import (
 	"sync"
 
 	"github.com/jitllm/jitllm/composer"
+	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/graph"
 )
 
@@ -11,8 +12,10 @@ import (
 // and mapped once whatever instance asks, and the registry they are asked
 // of.
 type Forms struct {
-	mu  sync.Mutex
-	reg *composer.Registry
+	// Host is the CPU the forms are mapped onto.
+	Host *cpu.Host
+	mu   sync.Mutex
+	reg  *composer.Registry
 	// reg32 is reg with histories kept at f32 (composer.Registry.WithoutHalves).
 	reg32 *composer.Registry
 	m     map[composer.Key]*Form
@@ -49,7 +52,7 @@ func (c *Forms) Of(req composer.Request, gr *graph.Graph, rows int, apart, whole
 	if err, ok := c.err[key]; ok {
 		return nil, err
 	}
-	f, err := BuildForm(gr, codes, rows, apart, whole)
+	f, err := BuildForm(c.Host, gr, codes, rows, apart, whole)
 	if err != nil {
 		c.err[key] = err
 		return nil, err

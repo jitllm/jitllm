@@ -28,15 +28,25 @@ import (
 type Option func(*config)
 
 type config struct {
+	// m is the machine the cores are read from, the running one but in a
+	// test.
+	m       machine
 	coreset string
 	cores   int
 	spin    time.Duration
 	spinSet bool
 	numa    bool
+	// labels, onWake and onPhase are WithRegionLabels' and the test hooks'
+	// (WithPhaseHook; onWake from a test of this package).
+	labels  bool
+	onWake  func(p *Pool, id int)
+	onPhase func(total, chunk int)
+	// eClass is WithEClass's.
+	eClass uint32
 }
 
 func newConfig(opts []Option) config {
-	var c config
+	c := config{m: host()}
 	for _, o := range opts {
 		o(&c)
 	}
@@ -47,6 +57,26 @@ func newConfig(opts []Option) config {
 // to add the E-cores, "e" for the E-cores alone, "smt" for hyperthread
 // siblings, "all" for everything.
 func WithCoreSet(name string) Option { return func(c *config) { c.coreset = name } }
+
+// WithRegionLabels gives each of the pool's regions a pprof label. Off by
+// default: pprof.Do allocates a label map and a context per participant per
+// region (most of a token's allocations, and on macOS an madvise per span).
+// Only a CPU profile needs them; cmd/jitllm turns them on with -cpuprofile
+// and -tgprofile, and Pool.SetRegionLabels turns them on for a pool already
+// made.
+func WithRegionLabels(on bool) Option { return func(c *config) { c.labels = on } }
+
+// WithEClass is the QoS class a pool's threads on the E-cores ask for
+// (macOS, sys/qos.h's), 0 the one the measurements chose: the knob a gate
+// compares classes with.
+func WithEClass(c uint32) Option { return func(c2 *config) { c2.eClass = c } }
+
+// QoSOf is the QoS opts state (WithEClass), loaded.
+func QoSOf(opts ...Option) QoS { return LoadQoS(newConfig(opts).eClass) }
+
+// WithPhaseHook tells f each fused phase's total and chunk on the caller's
+// goroutine, so a test can name where its phases come from (runtime.Callers).
+func WithPhaseHook(f func(total, chunk int)) Option { return func(c *config) { c.onPhase = f } }
 
 // WithCores caps how many of them to take. It exists to measure scaling, not to
 // tune: a scaling curve tells "memory-bound and saturated" apart from
@@ -90,32 +120,10 @@ func WithSpin(d time.Duration) Option {
 	return func(c *config) { c.spin, c.spinSet = d, true }
 }
 
-// CoreSet returns the CPUs of a named pool layout:
-//
-//	p    physical P-cores only          (default; decode is bandwidth-bound)
-//	pe   P-cores then E-cores
-//	smt  both hyperthreads of each P-core
-//	all  everything the OS reports
-//
-// The non-default sets exist so the claims behind the default stay falsifiable.
-func CoreSet(name string) []int {
-	switch name {
-	case "pe":
-		return append(PCores(), ECores()...)
-	case "e":
-		return ECores()
-	case "smt":
-		return SMTSiblings()
-	case "all":
-		return append(SMTSiblings(), ECores()...)
-	}
-	return PCores()
-}
-
 // DecodeCores is the pool for batch-1 decode: every P-core, or WithCores(n).
 func DecodeCores(opts ...Option) []int {
 	c := newConfig(opts)
-	p := CoreSet(c.coreset)
+	p := c.m.coreSet(c.coreset)
 	if len(p) == 0 {
 		return []int{0}
 	}
@@ -156,6 +164,15 @@ type job struct {
 // docs/engineering-history/scheduling-and-measurement.md). The channel survives
 // only as the parking fallback once the spin budget runs out.
 type Pool struct {
+	// labels is whether the pool's regions carry pprof labels
+	// (WithRegionLabels); onWake and onPhase are its test hooks: onWake runs
+	// in worker id after it has seen a region and before it tries to join it,
+	// standing for a worker the OS keeps off a CPU, and onPhase is
+	// WithPhaseHook's.
+	labels  bool
+	onWake  func(p *Pool, id int)
+	onPhase func(total, chunk int)
+
 	// nParallel and nSerial count Do calls that dispatched and Do calls that
 	// ran inline because the region was too small to be worth waking anyone.
 	nParallel, nSerial atomic.Int64
@@ -252,14 +269,17 @@ func New(cpus []int, opts ...Option) *Pool {
 		cpus = DecodeCores(opts...)
 	}
 	p := &Pool{
-		cpus:   cpus,
-		start:  make([]chan struct{}, len(cpus)-1),
-		parked: make([]atomic.Bool, len(cpus)-1),
+		cpus:    cpus,
+		start:   make([]chan struct{}, len(cpus)-1),
+		parked:  make([]atomic.Bool, len(cpus)-1),
+		labels:  cfg.labels,
+		onWake:  cfg.onWake,
+		onPhase: cfg.onPhase,
 	}
 	p.spinDef = spinBudget(cfg)
 	p.part.Store(int64(len(cpus)))
 	if cfg.numa {
-		p.initNUMA()
+		p.initNUMA(cfg.m)
 		// A longer spin across sockets, unless the caller chose one: waking
 		// parked workers on two sockets costs more than the spin.
 		if p.cpuNode != nil && !cfg.spinSet {
@@ -272,13 +292,14 @@ func New(cpus []int, opts ...Option) *Pool {
 	// (EQoS). That keeps such a pool off the P-cores another session decodes
 	// on, and its cores do not overlap theirs, so it takes turns on a lock of
 	// its own (Shared).
-	e := allE(cpus)
+	var q QoS
+	if e := allE(cpus); e {
+		q = LoadQoS(cfg.eClass)
+	}
 	for i := range p.start {
 		p.start[i] = make(chan struct{}, 1)
 		go func() {
-			if e {
-				EQoS()
-			}
+			q.EQoS()
 			p.worker(i)
 		}()
 	}
@@ -343,7 +364,9 @@ func (p *Pool) worker(id int) {
 		// cannot be reading p.j while Do writes the next job (it once crashed
 		// with a negative index under MoE, whose participant limit swings per
 		// region).
-		workerWake(p, id)
+		if p.onWake != nil {
+			p.onWake(p, id)
+		}
 		if id+1 < int(p.limit.Load()) && p.join(s) {
 			p.run(id + 1)
 			p.left.Add(1)
@@ -508,7 +531,7 @@ func (p *Pool) DoNodes(label string, total, chunk, block, first int, fn func(wor
 		p.DoLabeled(label, total, chunk, fn)
 		return
 	}
-	if !regionLabels.Load() {
+	if !p.labels {
 		label = ""
 	}
 	p.nAffine.Add(1)
@@ -546,8 +569,8 @@ func (p *Pool) NodeIndex(node int) int {
 	return -1
 }
 
-func (p *Pool) initNUMA() {
-	ids, sets := nodeCPUs()
+func (p *Pool) initNUMA(m machine) {
+	ids, sets := m.nodeCPUs()
 	if len(ids) < 2 {
 		return
 	}
@@ -624,25 +647,24 @@ func (p *Pool) claimNode(m, chunk, total, block, first, id int, fn func(worker, 
 }
 
 func (p *Pool) DoLabeled(label string, total, chunk int, fn func(worker, lo, hi int)) {
-	if !regionLabels.Load() {
+	if p == nil || !p.labels {
 		p.do("", total, chunk, fn)
 		return
 	}
 	p.do(label, total, chunk, fn)
 }
 
-// regionLabels is whether a region carries a pprof label at all. Off by
-// default: pprof.Do allocates a label map and a context per participant per
-// region (most of a token's allocations, and on macOS an madvise per span).
-// Only a CPU profile needs them; cmd/jitllm turns them on with -cpuprofile
-// and -tgprofile.
-var regionLabels atomic.Bool
+// SetRegionLabels turns the pool's pprof region labels on or off
+// (WithRegionLabels), and reports what they were. The goroutine driving the
+// pool's regions is the one that reads them.
+func (p *Pool) SetRegionLabels(on bool) bool {
+	was := p.labels
+	p.labels = on
+	return was
+}
 
-// RegionLabels reports whether regions carry pprof labels.
-func RegionLabels() bool { return regionLabels.Load() }
-
-// SetRegionLabels turns pprof region labels on or off, and reports what it was.
-func SetRegionLabels(on bool) bool { return regionLabels.Swap(on) }
+// RegionLabels reports whether the pool's regions carry pprof labels.
+func (p *Pool) RegionLabels() bool { return p.labels }
 
 func (p *Pool) Do(total, chunk int, fn func(worker, lo, hi int)) {
 	p.do("", total, chunk, fn)
@@ -691,6 +713,9 @@ func (p *Pool) dispatch(j job) {
 	part := int(p.part.Load())
 	// Inside a fused region the caller's region is a phase of it (fuse.go).
 	if c := p.w(); c.fz.owner.Load() == p {
+		if p.onPhase != nil {
+			p.onPhase(j.total, j.chunk)
+		}
 		c.phase(j, part)
 		return
 	}

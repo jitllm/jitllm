@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/engine/sched"
 )
 
 // This package reads no environment. cmd/jitllm reads the JITLLM_* names and
@@ -64,6 +65,9 @@ type modelOpts struct {
 	experts string
 	// trialAA makes the stream trial an A/A self-control (WithStreamTrialAA).
 	trialAA bool
+	// gc is where the weights live and what their budget leaves the
+	// collector (WithGCPlan).
+	gc sched.GCPlan
 
 	// chatClock is the clock a chat template's strftime_now reads; nil is the
 	// wall clock.

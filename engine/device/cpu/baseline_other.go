@@ -4,11 +4,9 @@ package cpu
 
 const errNoBaseline jitError = "jit: no host emitter for this architecture"
 
-// baseline always fails off amd64/arm64: there is no emitter, so there is
+// baselineOf always fails off amd64/arm64: there is no emitter, so there is
 // nothing to run a model on.
-func baseline() error { return errNoBaseline }
+func baselineOf(Features) error { return errNoBaseline }
 
-const baselineForceable = false
-
-// mapGate refuses everything: there is no emitter here.
-func mapGate([]byte) error { return Baseline() }
+// gate refuses everything: there is no emitter here.
+func (h *Host) gate([]byte) error { return h.baseline }

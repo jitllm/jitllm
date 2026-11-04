@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/sched"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
@@ -47,7 +48,7 @@ func burners(t *testing.T, n int) func() {
 // splitEnv reads the opt-in A/B's variables: the model, the rounds, the E-core
 // QoS class to compare (JITLLM_QOS_CLASS, as sys/qos.h spells it) and the
 // number of foreign burners.
-func splitEnv(t *testing.T) (path string, rounds, burn int) {
+func splitEnv(t *testing.T) (path string, rounds, burn int, qos []Option) {
 	if os.Getenv("JITLLM_SPLIT_AB") == "" {
 		t.Skip("set JITLLM_SPLIT_AB=1")
 	}
@@ -64,10 +65,11 @@ func splitEnv(t *testing.T) (path string, rounds, burn int) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		t.Logf("E-core QoS class %#x (was %#x)", c, sched.SetEClass(uint32(c)))
+		t.Logf("E-core QoS class %#x", c)
+		qos = append(qos, WithPool(cpu.WithSched(sched.WithEClass(uint32(c)))))
 	}
 	burn, _ = strconv.Atoi(os.Getenv("JITLLM_SPLIT_BURN"))
-	return jlmOf(t, p), rounds, burn
+	return jlmOf(t, p), rounds, burn, qos
 }
 
 // TestServingSplitAB is one session decoding while another prefills, on two
@@ -94,9 +96,9 @@ func splitEnv(t *testing.T) (path string, rounds, burn int) {
 //	JITLLM_SPLIT_AB=1 JITLLM_MODEL=Llama-3.2-1B-Instruct-Q4_K_M.gguf [JITLLM_AB_ROUNDS=20]
 //	  [JITLLM_QOS_CLASS=0x11] [JITLLM_SPLIT_BURN=6]
 func TestServingSplitAB(t *testing.T) {
-	p, rounds, burn := splitEnv(t)
+	p, rounds, burn, qos := splitEnv(t)
 	open := func(o ...Option) *Model {
-		m, err := Open(p, o...)
+		m, err := Open(p, append(qos, o...)...)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -204,7 +206,7 @@ func TestServingSplitAB(t *testing.T) {
 	}
 	// The configuration under test was selected (RULE 10): the split arm took
 	// the E-cores, the base arm never did.
-	if sched.CanSplitE() && (onESplit == 0 || onEBase != 0) {
+	if sched.LoadQoS(0).CanSplitE() && (onESplit == 0 || onEBase != 0) {
 		t.Fatalf("the split arm placed %d prefills on the E-cores and the base arm %d: the A/B did not compare the two layouts",
 			onESplit, onEBase)
 	}
@@ -221,9 +223,9 @@ func TestServingSplitAB(t *testing.T) {
 //
 //	JITLLM_SPLIT_AB=1 JITLLM_MODEL=Llama-3.2-1B-Instruct-Q4_K_M.gguf
 func TestServingSplitSingleSessionUnchanged(t *testing.T) {
-	p, rounds, _ := splitEnv(t)
+	p, rounds, _, qos := splitEnv(t)
 	open := func(o ...Option) *Model {
-		m, err := Open(p, o...)
+		m, err := Open(p, append(qos, o...)...)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -298,7 +300,7 @@ func TestServingSplitSingleSessionUnchanged(t *testing.T) {
 // a prefill alone, a session alone and a model opened WithServingSplit(false)
 // do not; and the answer is the one a prefill alone gives.
 func TestServingSplitIsTakenBesideADecoderOnly(t *testing.T) {
-	if !sched.CanSplitE() {
+	if !sched.LoadQoS(0).CanSplitE() {
 		t.Skip("no E-cores a thread can be kept on here: the serving split has nothing to place")
 	}
 	p := jlmOf(t, "../../testdata/models/stories260K.gguf")

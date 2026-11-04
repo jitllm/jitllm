@@ -17,8 +17,8 @@ package cpu
 //
 //	C4  RXB.mmmmm  W.vvvv.L.pp  50
 //	        mmmmm=00010 (0F38)      pp=01 (66), W=0
-func runnable(code []byte) error {
-	if CPU().AVXVNNI {
+func runnable(f Features, code []byte) error {
+	if f.AVXVNNI {
 		return nil
 	}
 	for i := 0; i+3 < len(code); i++ {

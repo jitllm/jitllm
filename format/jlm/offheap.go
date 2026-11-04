@@ -1,7 +1,6 @@
 package jlm
 
 import (
-	"sync/atomic"
 	"unsafe"
 
 	"github.com/jitllm/jitllm/internal/offheap"
@@ -20,24 +19,8 @@ import (
 //
 // The cost is the collector's safety net: a span into a frame that outlives
 // its File's Close faults instead of keeping the frame alive. Where the
-// platform has no anonymous mmap, buf falls back to the heap.
-var offHeap atomic.Bool
-
-func init() { offHeap.Store(true) }
-
-// SetOffHeap sets whether Files opened after the call keep their weight memory
-// off the Go heap (the default), and reports the previous setting. Off is the
-// control arm for a measurement; a caller turning it off should also call
-// sched.SetWeightsOffHeap(false), so the weight budget keeps its reserve
-// against the collector's goal.
-func SetOffHeap(on bool) bool { return offHeap.Swap(on) }
-
-// offHeapBytes is every live off-heap mapping in the process, all Files.
-var offHeapBytes atomic.Int64
-
-// OffHeapBytes is how much weight memory this process holds outside the Go
-// heap.
-func OffHeapBytes() int64 { return offHeapBytes.Load() }
+// platform has no anonymous mmap, buf falls back to the heap; a File opened
+// OnHeap keeps it there.
 
 // buf is an n-byte weight buffer, Align-aligned for O_DIRECT, on the heap or
 // mapped as the File was opened to do. A mapped one is recorded for Close.
@@ -48,7 +31,6 @@ func (f *File) buf(n int) []byte {
 				f.mapped = map[*byte][]byte{}
 			}
 			f.mapped[unsafe.SliceData(b)] = b
-			offHeapBytes.Add(int64(cap(b)))
 			return b[:n:n]
 		}
 	}
@@ -117,7 +99,6 @@ func (f *File) release(b []byte) {
 	f.retire(b)
 	if m, ok := f.mapped[unsafe.SliceData(b)]; ok {
 		delete(f.mapped, unsafe.SliceData(b))
-		offHeapBytes.Add(-int64(cap(m)))
 		offheap.UnmapOffHeap(m)
 	}
 }
@@ -182,7 +163,6 @@ func (f *File) FreeBytes() uint64 {
 // have already dropped every reference the File holds.
 func (f *File) unmapAll() {
 	for k, m := range f.mapped {
-		offHeapBytes.Add(-int64(cap(m)))
 		offheap.UnmapOffHeap(m)
 		delete(f.mapped, k)
 	}

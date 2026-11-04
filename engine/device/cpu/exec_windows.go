@@ -34,20 +34,9 @@ type Code struct {
 	addr  uintptr
 	entry *byte
 	Size  int
-	Name  string
-	// tier is the tier this kernel was generated for, read from its own
-	// declaration when it was mapped; see checkTier.
-	tier Tier
-}
-
-// MapNamed is Map with a symbol name. Windows samplers do not read a perf-style
-// JIT map, so the name is recorded and otherwise unused.
-func mapExecNamed(code []byte, name string) (*Code, error) {
-	c, err := mapExec(code)
-	if err == nil {
-		c.Name = name
-	}
-	return c, err
+	// Name is the code's name (Host.MapNamed). Windows samplers do not read a
+	// perf-style JIT map, so it is recorded and otherwise unused.
+	Name string
 }
 
 func mapExec(code []byte) (*Code, error) {
@@ -102,7 +91,6 @@ func (c *Code) Call(args *Args) {
 	if c.entry == nil {
 		panic("jit: Call on closed code")
 	}
-	checkTier(c)
 	callKernel(c.entry, args)
 	runtime.KeepAlive(c)
 	runtime.KeepAlive(args)

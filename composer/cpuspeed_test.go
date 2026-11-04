@@ -80,7 +80,7 @@ func TestComposedCPUMatVecSpeed(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			code, err := cpu.Map(c.CPU)
+			code, err := cpu.NewHost().Map(c.CPU)
 			if err != nil {
 				t.Fatal(err)
 			}

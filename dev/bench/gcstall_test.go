@@ -46,7 +46,7 @@ func TestGCNotBlocked(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	code, err := cpu.Map(b)
+	code, err := cpu.NewHost().Map(b)
 	if err != nil {
 		t.Fatal(err)
 	}

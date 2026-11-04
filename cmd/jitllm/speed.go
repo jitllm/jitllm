@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"flag"
 	"fmt"
-	"github.com/jitllm/jitllm/engine/sched"
 	"maps"
 	"os"
 	"runtime"
@@ -124,7 +123,7 @@ func speedCmd(procStart time.Time, args []string) error {
 			// 2 kHz: a prompt is a few hundred ms, and the host's share of it
 			// sits in gaps of a few ms that 100 Hz samples cannot see.
 			runtime.SetCPUProfileRate(2000)
-			sched.SetRegionLabels(true) // attribution for generated code; see sched.regionLabels
+			st.Pool().SetRegionLabels(true) // attribution for generated code; see sched.WithRegionLabels
 			if perr := pprof.StartCPUProfile(f); perr != nil {
 				return 0, 0, perr
 			}
@@ -195,7 +194,7 @@ func speedCmd(procStart time.Time, args []string) error {
 				return 0, 0, perr
 			}
 			defer f.Close()
-			sched.SetRegionLabels(true) // attribution for generated code; see sched.regionLabels
+			st2.Pool().SetRegionLabels(true) // attribution for generated code; see sched.WithRegionLabels
 			if perr := pprof.StartCPUProfile(f); perr != nil {
 				return 0, 0, perr
 			}

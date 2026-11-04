@@ -7,8 +7,6 @@ import (
 	"runtime/debug"
 	"runtime/metrics"
 	"runtime/pprof"
-
-	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // gcSummary is JITLLM_GCSTATS=1's whole-process line: what the collector cost
@@ -28,11 +26,11 @@ func gcSummary() {
 		share = 100 * g.gcCPU / total
 	}
 	fmt.Fprintf(os.Stderr, "gcstats: %d cycle(s), gc cpu %.2f s of %.2f s process cpu (%.1f%%, assist %.2f s), %d pause(s) %.2f ms, "+
-		"heap live %.2f GiB goal %.2f GiB limit %.2f GiB, off-heap %.2f GiB, maxrss %.2f GiB\n",
+		"heap live %.2f GiB goal %.2f GiB limit %.2f GiB, maxrss %.2f GiB\n",
 		g.cycles, g.gcCPU, total, share, g.assistCPU, g.pauses, g.pause*1e3,
 		float64(s[1].Value.Uint64())/(1<<30), float64(g.heapGoal)/(1<<30),
 		float64(debug.SetMemoryLimit(-1))/(1<<30),
-		float64(jlm.OffHeapBytes())/(1<<30), float64(maxRSS)/(1<<30))
+		float64(maxRSS)/(1<<30))
 }
 
 // gcSample is the collector's counters at one instant. Every field is

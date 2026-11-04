@@ -1,7 +1,6 @@
 package cpu
 
 import (
-	"sync"
 	"unsafe"
 
 	"github.com/jitllm/jitllm/composer/x86"
@@ -74,33 +73,24 @@ func (f Features) UsableAVX512() bool {
 // UsableAVX2 is AVX2 plus the OS saving YMM state.
 func (f Features) UsableAVX2() bool { return f.OSAVX && f.AVX2 }
 
-var (
-	featuresOnce sync.Once
-	features     Features
-	// hostTier is tierOf(features), computed inside the same Once so the hot
-	// callers (nn picks its elementwise kernels by tier on every call) pay an
-	// atomic load and nothing else.
-	hostTier Tier
-
-	// probeMu serialises the TEST instruments that re-probe (ForceNoVNNIForTest,
-	// ForceTierForTest, retier). The shipping path never takes it: it reads the
-	// probe through featuresOnce and nothing else.
-	probeMu sync.Mutex
-)
-
-// CPU returns this host's capability set, probed once.
+// CPU is this CPU's capability set, probed when asked: a caller that asks
+// often holds its Host's (Host.Features). The test instruments take away what
+// they force (feature_force.go).
 func CPU() Features {
-	featuresOnce.Do(probeFeatures)
-	return features
+	f := probeFeatures()
+	if forceNoVNNI {
+		f.AVXVNNI, f.AVX512VNNI = false, false
+	}
+	if tierForced {
+		lowerTo(&f, forceTier)
+	}
+	return f
 }
 
-// HostTier is the instruction-set tier this host runs: TierAVX2 when AVX2, FMA
-// and F16C are usable, TierSSE when the SSE floor holds instead, and TierNone
+// tierOfHost is the instruction-set tier f runs: TierAVX2 when AVX2, FMA and
+// F16C are usable, TierSSE when the SSE floor holds instead, and TierNone
 // below that. See tier.go.
-func HostTier() Tier {
-	featuresOnce.Do(probeFeatures)
-	return hostTier
-}
+func tierOfHost(f Features) Tier { return tierOf(f) }
 
 // cpuid runs the JIT-compiled CPUID probe and returns EAX, EBX, ECX, EDX
 // (see feature_amd64.go).
@@ -136,15 +126,16 @@ func xcr0Probe() ([]byte, error) {
 	return a.Bytes()
 }
 
-func probeFeatures() {
+func probeFeatures() Features {
+	var features Features
 	max, _, _, _, ok := cpuid(0, 0)
 	if !ok || max < 1 {
-		return
+		return features
 	}
 	// Leaf 1 ECX: OSXSAVE bit 27, AVX 28, FMA 12, F16C 29.
 	_, _, ecx1, edx1, ok := cpuid(1, 0)
 	if !ok {
-		return
+		return features
 	}
 	// Leaf 1 EDX bit 26 SSE2; ECX bit 0 SSE3 (/proc/cpuinfo's "pni"), 9 SSSE3,
 	// 19 SSE4.1, 20 SSE4.2, 23 POPCNT.
@@ -192,21 +183,13 @@ func probeFeatures() {
 		}
 	}
 
-	// The test instruments, not knobs: see feature_force.go.
-	if forceNoVNNI {
-		features.AVXVNNI = false
-		features.AVX512VNNI = false
-	}
-	if tierForced {
-		applyForcedTier(&features, forceTier)
-	}
-	hostTier = tierOf(features)
+	return features
 }
 
-// applyForcedTier clears what a host of tier t would not have. Forcing can
-// only take capabilities AWAY -- a host cannot be made to execute an
-// instruction it lacks -- so TierAVX2 (the top) clears nothing.
-func applyForcedTier(f *Features, t Tier) {
+// lowerTo clears what a host of tier t would not have (AtTier). It can only
+// take capabilities AWAY -- a host cannot be made to execute an instruction
+// it lacks -- so TierAVX2 (the top) clears nothing.
+func lowerTo(f *Features, t Tier) {
 	if t >= TierAVX2 {
 		return
 	}
@@ -221,27 +204,4 @@ func applyForcedTier(f *Features, t Tier) {
 	// Below the SSE floor: the two extensions the SSE tier assumes, and the
 	// one above them, so the refuse-by-name path can be exercised.
 	f.SSSE3, f.SSE41, f.SSE42 = false, false, false
-}
-
-// retier makes the probe report tier t (or the host's own answer, for
-// TierAVX2), re-probing immediately, and returns the tier the host reported
-// before. It is the test instruments' one implementation: ForceTierForTest
-// (jitllmtest) and this package's own tests call it, and nothing on the
-// shipping path does.
-//
-// It resets every cache derived from the probe, not just the probe: Baseline
-// caches its verdict behind its own Once, and a forced run must not read the
-// real CPU's floor.
-func retier(t Tier) Tier {
-	probeMu.Lock()
-	defer probeMu.Unlock()
-	old := HostTier()
-	forceTier, tierForced = t, t < TierAVX2
-	featuresOnce = sync.Once{}
-	features = Features{}
-	hostTier = TierNone
-	baselineOnce = sync.Once{}
-	baselineErr = nil
-	CPU()
-	return old
 }
