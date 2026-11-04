@@ -78,7 +78,7 @@ func selectPooled(o graph.Op, c *Context, pool Pool, keys Operand, tables func(.
 	prims = append(prims, Prim{Kind: PrimMap, Shape: []int{R, NB, D}, In: []Operand{sums, sumsq, wt}, Out: normed, Expr: kx.e})
 	if a.NRot > 0 {
 		P := a.NRot / 2
-		stride := (P + ropeLanes - 1) &^ (ropeLanes - 1)
+		stride := graph.RopeStride(P)
 		table, err := c.rotaryTable(a)
 		if err != nil {
 			return nil, err

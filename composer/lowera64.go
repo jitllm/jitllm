@@ -8,7 +8,6 @@ import (
 	"github.com/jitllm/jitllm/composer/a64"
 	"github.com/jitllm/jitllm/composer/ir"
 	"github.com/jitllm/jitllm/composer/x86"
-	"github.com/jitllm/jitllm/engine/device/cpu"
 )
 
 // a64Lowerer lowers the CPU profile's ordered, bound kernel to arm64 through
@@ -82,12 +81,13 @@ const (
 	a64Save = -160
 )
 
-// HostCPULowers reports whether the composer's CPU lowering runs on this
-// host: arm64's, or x86's on a host at the AVX2 tier or at the SSE tier
-// below it (SSE4.1 and SSSE3: the narrow passes in the legacy encodings).
-func HostCPULowers() bool {
-	isa := cpu.CPU().ISA()
-	return runtime.GOARCH == "arm64" || isa&cpu.ISATierAVX2 == cpu.ISATierAVX2 || isa&cpu.ISATierSSE == cpu.ISATierSSE
+// LowersCPU reports whether the composer's CPU lowering runs on a CPU of
+// this architecture stating isa: arm64's, or x86's at the AVX2 tier or at
+// the SSE tier below it (SSE4.1 and SSSE3: the narrow passes in the legacy
+// encodings).
+func LowersCPU(isa uint64) bool {
+	avx2, sse := uint64(x86.ISATierAVX2), uint64(x86.ISATierSSE)
+	return runtime.GOARCH == "arm64" || isa&avx2 == avx2 || isa&sse == sse
 }
 
 func lowerA64(k *Kernel, d Device) (lw Lowered, err error) {
@@ -96,7 +96,7 @@ func lowerA64(k *Kernel, d Device) (lw Lowered, err error) {
 	}
 	e := &a64Lowerer{k: k, a: &a64.A64{}, top: map[int]int{}, end: map[int]int{}, preset: map[int]bool{},
 		x:   &x86Lowerer{k: k, home: k.Homes(), words: k.VectorWords()},
-		dot: d.ISA&uint64(cpu.ISADotProd) != 0}
+		dot: d.ISA&a64.ISADotProd != 0}
 	for _, en := range k.Seq {
 		if e.err != nil {
 			break

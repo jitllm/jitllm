@@ -1,8 +1,8 @@
 package composer
 
 import (
+	"github.com/jitllm/jitllm/composer/a64"
 	"github.com/jitllm/jitllm/composer/x86"
-	"github.com/jitllm/jitllm/engine/device/cpu"
 )
 
 // CPUForm describes how the composer forms CPU device d's kernels: on arm64
@@ -11,7 +11,7 @@ import (
 // and its int8 dots by VPDPBUSD where d states AVX-VNNI.
 func CPUForm(d Device, arm64 bool) string {
 	if arm64 {
-		if d.ISA&uint64(cpu.ISADotProd) != 0 {
+		if d.ISA&a64.ISADotProd != 0 {
 			return "arm64 NEON, int8 dots by SDOT"
 		}
 		return "arm64 NEON, int8 dots widened (no FEAT_DotProd)"

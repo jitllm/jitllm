@@ -3,6 +3,7 @@ package cpu
 import (
 	"strings"
 
+	"github.com/jitllm/jitllm/composer/a64"
 	"github.com/jitllm/jitllm/composer/x86"
 )
 
@@ -84,7 +85,7 @@ const (
 	ISABMI2 = ISA(x86.ISABMI2)
 	// ISADotProd is arm64's FEAT_DotProd, SDOT: the one bit of the set an
 	// arm64 host states, the bit after x86's.
-	ISADotProd = ISABMI2 << 1
+	ISADotProd = ISA(a64.ISADotProd)
 )
 
 // ISATierSSE is the floor of the SSE tier: what every SSE-tier kernel may

@@ -15,8 +15,8 @@ import (
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/composer"
+	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/model"
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/engine/sched"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/capabilities"
@@ -115,7 +115,7 @@ type doctorEnv struct {
 	cpuName   string
 	form      string
 	jit       bool
-	hostErr   error // nn.HostRefusal
+	hostErr   error // cpu.Baseline
 	totalRAM  uint64
 	budget    uint64
 	devices   []doctorDevice
@@ -130,8 +130,8 @@ func realDoctorEnv() doctorEnv {
 		version:   buildVersion(),
 		cpuName:   cpuBrand(),
 		form:      model.CPUForm(),
-		jit:       composer.HostCPULowers(),
-		hostErr:   nn.HostRefusal(),
+		jit:       composer.LowersCPU(uint64(cpu.CPU().ISA())),
+		hostErr:   cpu.Baseline(),
 		budget:    sched.MemBudget(),
 		archKnown: jlm.Arch.Valid,
 	}

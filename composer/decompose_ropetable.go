@@ -17,9 +17,9 @@ import (
 // row) and each pair's axis from a block the plan carries (tableAxes).
 
 const (
-	ropeDigits    = 4
-	ropeDigitBits = 7
-	ropeGrid      = 1 << 12
+	ropeDigits    = graph.RopeDigits
+	ropeDigitBits = graph.RopeDigitBits
+	ropeGrid      = graph.RopeGrid
 	ropeLanes     = 8
 	// ropeAxes is a row's positions in a table over several axes, one an
 	// axis the sections can name.
@@ -61,7 +61,7 @@ func decomposeRopeTable(o graph.Op, c *Context) ([]Prim, error) {
 	}
 	U, I := ir.U32, ir.I32
 	P := o.Attr.NRot / 2
-	stride := (P + ropeLanes - 1) &^ (ropeLanes - 1)
+	stride := graph.RopeStride(P)
 	R := c.Step.Rows
 	out := TableAngles.of(o.Attr.Rotary)
 	var axes []uint32

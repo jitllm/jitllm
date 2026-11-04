@@ -5,6 +5,7 @@ import (
 	"unsafe"
 
 	"github.com/jitllm/jitllm/composer"
+	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/graph"
@@ -161,7 +162,7 @@ func (s *Instance) cpuComposeHead(hf *cpuHeadForm, g *graph.Graph, none composer
 func (s *Instance) cpuComposeHeadAs(hf *cpuHeadForm, g *graph.Graph, rows int, over map[jlm.Role]jlm.Type) {
 	*hf = cpuHeadForm{composed: true}
 	switch {
-	case !composer.HostCPULowers():
+	case !composer.LowersCPU(uint64(cpu.CPU().ISA())):
 		hf.why = composer.DeclineISA
 	case g == nil:
 		hf.why = composer.DeclineNoGraph

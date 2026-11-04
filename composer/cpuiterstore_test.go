@@ -15,7 +15,7 @@ import (
 // gives that iteration a register; without one the x86 lowering has no
 // address to store at.
 func TestCPUStoreReadsItsIteration(t *testing.T) {
-	if !HostCPULowers() {
+	if !LowersCPU(uint64(cpu.CPU().ISA())) {
 		t.Skip("no CPU lowering on this host")
 	}
 	for _, c := range []struct{ e, g int }{{8, 2}, {16, 4}, {64, 8}} {
