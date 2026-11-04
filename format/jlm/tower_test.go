@@ -26,12 +26,14 @@ func sampleTower(t *testing.T) *Tower {
 			{Code: TOpAdd, In: []uint16{2, 3}},
 		}},
 		Block: TowerBlock{NHead: 12, NKVHead: 12, HeadDim: 64, Norm: NormLayer, Eps: 1e-6, Act: act},
-		Head: Program{NIn: 1, Out: 3, Ops: []TowerOp{
+		Head: Program{NIn: 1, Out: 4, Ops: []TowerOp{
 			{Code: TOpLayerNorm, In: []uint16{0}, Bind: []Role{RoleVPostNorm, RoleVPostNormBias}, Eps: 1e-6},
 			{Code: TOpRegroup, In: []uint16{1}, Span: 4},
 			{Code: TOpLinear, In: []uint16{2}, Bind: []Role{RoleVProj}},
+			{Code: TOpPool, In: []uint16{1}, Span: 2},
 		}},
-		Span: TowerSpan{Before: []int32{198, 49189, 49152}, After: []int32{49189}},
+		Span: TowerSpan{Before: []int32{198, 49189, 49152}, After: []int32{49189},
+			BeforeText: "\n\n<start_of_image>", AfterText: "<end_of_image>\n\n", Bidir: true},
 	}
 }
 
@@ -78,6 +80,7 @@ func TestTowerRefusesWhatItCannotRead(t *testing.T) {
 		{"a linear with no matrix", "binds 0 weights", func(t *Tower) { t.Head.Ops[2].Bind = nil }},
 		{"an add of one value", "reads 1 values", func(t *Tower) { t.Entry.Ops[3].In = []uint16{2} }},
 		{"a shuffle of nothing", "groups by 0", func(t *Tower) { t.Head.Ops[1].Span = 0 }},
+		{"a pool of nothing", "groups by 0", func(t *Tower) { t.Head.Ops[3].Span = 0 }},
 		{"a norm with no epsilon", "epsilon", func(t *Tower) { t.Head.Ops[0].Eps = 0 }},
 		{"a result past the last value", "past its last", func(t *Tower) { t.Head.Out = 9 }},
 		{"heads over no kv heads", "kv heads", func(t *Tower) { t.Block.NKVHead = 5 }},

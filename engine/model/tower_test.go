@@ -266,58 +266,110 @@ func TestStatedTowerEncodesAPicture(t *testing.T) {
 
 // TestStatedTowerSeesThePicture asks SmolVLM to describe a picture through
 // its stated tower and the CPU device: the coloured quadrants and yellow disc
-// are described with the disc's colour, and a blank grey picture is not
-// called yellow -- a tower wired to nothing still answers fluently, so the
+// are described with one of their colours, and a blank grey picture with
+// none of them -- a tower wired to nothing still answers fluently, so the
 // blank is the violation. The prompt is SmolVLM's own template's, its
 // picture's markers the container's (jlm.TowerSpan), laid out by ChatSpans.
 func TestStatedTowerSeesThePicture(t *testing.T) {
 	m, img := openSmolVLM(t)
 	defer m.Close()
+	seesThePicture(t, m, img)
+}
+
+// seesThePicture asks m to describe img and a blank grey picture in one
+// sentence, each through ChatSpans and a fresh instance: the picture's
+// description names one of its colours -- the quadrants' red, green and
+// blue, the disc's yellow -- and the blank's names none of them.
+func seesThePicture(t *testing.T, m *Model, img image.Image) {
+	t.Helper()
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
-	ask := func(pic image.Image) string {
-		t.Helper()
-		s := m.NewInstance(256)
-		defer s.Close()
-		rows, err := s.EncodePicture(pic)
-		if err != nil {
-			t.Fatal(err)
-		}
-		spans, err := m.ChatSpans([]ChatMessage{{Role: "user", Content: "Describe this image in one sentence.",
-			Images: 1}}, []Span{{Embd: rows}}, true)
-		if err != nil {
-			t.Fatal(err)
-		}
-		lg, err := s.PrefillMixed(spans...)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var out []int32
-		for range 32 {
-			tok := int32(argmax(lg))
-			if m.Vocab.IsEOG(tok) {
-				break
-			}
-			out = append(out, tok)
-			if lg, err = s.Forward(tok); err != nil {
-				t.Fatal(err)
-			}
-		}
-		return strings.ToLower(m.Vocab.Decode(out))
-	}
-	got := ask(img)
 	grey := image.NewGray(image.Rect(0, 0, 384, 384))
 	for i := range grey.Pix {
 		grey.Pix[i] = 128
 	}
-	none := ask(grey)
+	got, none := describePicture(t, m, img, 32), describePicture(t, m, grey, 32)
 	t.Logf("picture %q", got)
 	t.Logf("blank   %q", none)
-	if !strings.Contains(got, "yellow") {
-		t.Errorf("the description does not name the yellow disc: %q", got)
+	if !namesAColour(got) {
+		t.Errorf("the description names none of the picture's colours: %q", got)
 	}
-	if strings.Contains(none, "yellow") {
-		t.Errorf("a blank picture is yellow too (%q): the picture is not what answered", none)
+	if namesAColour(none) {
+		t.Errorf("a blank picture has the picture's colours too (%q): the picture is not what answered", none)
 	}
+}
+
+// namesAColour reports whether a description names one of the test
+// picture's colours.
+func namesAColour(s string) bool {
+	for _, c := range []string{"red", "green", "blue", "yellow"} {
+		if strings.Contains(s, c) {
+			return true
+		}
+	}
+	return false
+}
+
+// describePicture is m's greedy description of pic in one sentence, n tokens
+// at most, lower-cased.
+func describePicture(t *testing.T, m *Model, pic image.Image, n int) string {
+	t.Helper()
+	pspan, err := m.PictureSpan(pic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spans, err := m.ChatSpans([]ChatMessage{{Role: "user", Content: "Describe this image in one sentence.", Images: 1}},
+		[]Span{pspan}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := m.NewInstance(SpanPositions(spans, m.Cfg.NEmbd) + n + 8)
+	defer s.Close()
+	lg, err := s.PrefillMixed(spans...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []int32
+	for range n {
+		tok := int32(argmax(lg))
+		if m.Vocab.IsEOG(tok) {
+			break
+		}
+		out = append(out, tok)
+		if lg, err = s.Forward(tok); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return strings.ToLower(m.Vocab.Decode(out))
+}
+
+// TestGemma3TowerSeesThePicture runs Gemma 3 4B's stated tower -- Pillow's
+// bilinear resize, SigLIP's 27 blocks over 4096 patches, the pooled
+// projector -- on the CPU device, the picture's 256 rows attending both ways
+// in the text model: its colours are named, and a blank picture's are not.
+func TestGemma3TowerSeesThePicture(t *testing.T) {
+	text := testmodels.Path("gemma-3-4b-it-Q4_K_M.gguf")
+	mm := testmodels.Path("vlm/mmproj-gemma-3-4b-it-f16.gguf")
+	if !sourcePresent(text, mm) {
+		t.Skipf("MODEL MISSING: %s and %s (see docs/testing.md) -- this gate proved nothing", text, mm)
+	}
+	m, err := Open(jlmOfPair(t, text, mm))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	if !m.SeesPictures() || m.tower.out != 256 || len(m.tower.blocks) != 27 {
+		t.Fatalf("the tower writes %d rows over %d blocks, want 256 over 27", m.tower.out, len(m.tower.blocks))
+	}
+	f, err := os.Open(filepath.Join("testdata", "quad-and-disc.png"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	img, err := png.Decode(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seesThePicture(t, m, img)
 }
 
 // flatSpans lays spans out as one id sequence with -1 where a picture goes,
