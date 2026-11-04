@@ -4,7 +4,7 @@ import "fmt"
 
 // TowerVersion is the stated tower's revision. A record of a later one is
 // refused, not read as this one.
-const TowerVersion = 3
+const TowerVersion = 4
 
 // Tower is a vision tower as the converter states it: what the engine builds
 // the tower from, with no family's name in it. The converter knows a family
@@ -53,6 +53,13 @@ const (
 	// picture resized to one square. A picture's rows are every tile's in
 	// that order.
 	PreTile PreKind = 5
+	// PreSmartResize resamples the picture to a size of its own, each side a
+	// multiple of Ints[0] pixels: each rounded half to even to one; then,
+	// where the area passes Ints[2] pixels, both scaled down by
+	// sqrt(area / Ints[2]) and floored to one, or where it falls short of
+	// Ints[1], scaled up by sqrt(Ints[1] / area) and ceiled to one
+	// (Qwen2-VL's smart_resize); with filter Ints[3] in arithmetic Ints[4].
+	PreSmartResize PreKind = 6
 )
 
 // Filter is a resampling filter.
@@ -95,8 +102,10 @@ type OpCode uint16
 
 const (
 	// TOpPatchify is the picture's Span x Span patches as rows, raster
-	// order, each patch channel-planar, after Offset rows left for a class
-	// row (graph.OpPatchify).
+	// order -- where Width is set, in the raster order of the grid's Width x
+	// Width windows, each window's patches in raster order -- each patch
+	// channel-planar, after Offset rows left for a class row
+	// (graph.OpPatchify).
 	TOpPatchify OpCode = 1
 	// TOpLinear is In[0] through the matrix Bind[0] (out width its rows),
 	// plus the bias Bind[1] where bound.
@@ -123,8 +132,11 @@ const (
 	TOpStated OpCode = 10
 	// TOpPool is an average pool: each Span x Span block of the grid's rows
 	// their mean, the blocks in raster order.
-	TOpPool  OpCode = 11
-	topCodes OpCode = 12
+	TOpPool OpCode = 11
+	// TOpFold is each Span consecutive rows of In[0] one row (graph.OpFold):
+	// a merge window's patches, which the patch order made consecutive.
+	TOpFold  OpCode = 12
+	topCodes OpCode = 13
 )
 
 // TowerOp is one operation of a program: its inputs are values (a program's
@@ -168,6 +180,27 @@ type TowerBlock struct {
 	// Act is the MLP's activation over its gate and up where gated, its up
 	// alone where not.
 	Act Expr
+	// Rope turns q and k by the rows' places on the picture's grid; none
+	// where it has no runs.
+	Rope TowerRope
+}
+
+// TowerRope is a tower block's rotary over the picture's grid: each head's
+// pairs -- an element and the one half the turned width on (NEOX) where
+// Neox, adjacent elements where not -- turned in runs, run i's Pairs pairs
+// by the row's position on axis Axis (0 its grid row, 1 its column), pair j
+// of a run at frequency Base^(-2(Freq+j)/Dim). The runs cover the head's
+// first 2*sum(Pairs) elements; the rest are not turned.
+type TowerRope struct {
+	Base float32
+	Dim  int32
+	Neox bool
+	Runs []TowerRopeRun
+}
+
+// TowerRopeRun is one run of a tower's rotary.
+type TowerRopeRun struct {
+	Pairs, Axis, Freq int32
 }
 
 // TowerSpan is a picture's place in a prompt: the token ids before its rows,
@@ -184,6 +217,10 @@ type TowerSpan struct {
 	BeforeText, AfterText string
 	Bidir                 bool
 	Mark                  string
+	// GridDiv says the rows are a grid for the language model's rotary
+	// (M-RoPE): the patch grid with each side divided by GridDiv; 0 for rows
+	// that advance as text.
+	GridDiv int32
 }
 
 // Valid says the record is one this build can read: a known version, known
@@ -207,6 +244,11 @@ func (t *Tower) Valid() error {
 		case PreCenterCrop:
 			if len(s.Ints) != 2 || s.Ints[0] <= 0 || s.Ints[1] <= 0 {
 				return fmt.Errorf("jlm: the tower's step %d crops to %v", i, s.Ints)
+			}
+		case PreSmartResize:
+			if len(s.Ints) != 5 || s.Ints[0] <= 0 || s.Ints[1] <= 0 || s.Ints[2] < s.Ints[1] ||
+				!resizes(Filter(s.Ints[3]), Precision(s.Ints[4])) {
+				return fmt.Errorf("jlm: the tower's step %d resizes to its own size with %v", i, s.Ints)
 			}
 		case PreTile:
 			if len(s.Ints) != 3 || s.Ints[0] < 1 || s.Ints[1] < s.Ints[0] || s.Ints[2]&^1 != 0 {
@@ -243,6 +285,21 @@ func (t *Tower) Valid() error {
 	if err := b.Act.Valid(); err != nil {
 		return fmt.Errorf("jlm: the tower's block activation: %w", err)
 	}
+	if r := b.Rope; len(r.Runs) > 0 {
+		pairs := int32(0)
+		for _, run := range r.Runs {
+			if run.Pairs <= 0 || run.Axis < 0 || run.Axis > 1 || run.Freq < 0 {
+				return fmt.Errorf("jlm: the tower's rotary has a run %+v", run)
+			}
+			pairs += run.Pairs
+		}
+		if r.Base <= 0 || r.Dim <= 0 || 2*pairs > int32(b.HeadDim) {
+			return fmt.Errorf("jlm: the tower's rotary turns %d pairs of a %d-wide head at base %v over %d", pairs, b.HeadDim, r.Base, r.Dim)
+		}
+	}
+	if t.Span.GridDiv < 0 {
+		return fmt.Errorf("jlm: the tower's rows are a grid divided by %d", t.Span.GridDiv)
+	}
 	return nil
 }
 
@@ -277,7 +334,7 @@ func (p *Program) valid(name string) error {
 			return fmt.Errorf("jlm: the tower's %s op %d (code %d) reads %d values, want %d", name, i, op.Code, len(op.In), in)
 		case len(op.Bind) < bind[0] || len(op.Bind) > bind[1]:
 			return fmt.Errorf("jlm: the tower's %s op %d (code %d) binds %d weights, want %d to %d", name, i, op.Code, len(op.Bind), bind[0], bind[1])
-		case (op.Code == TOpPatchify || op.Code == TOpRegroup || op.Code == TOpPool) && op.Span <= 0:
+		case (op.Code == TOpPatchify || op.Code == TOpRegroup || op.Code == TOpPool || op.Code == TOpFold) && op.Span <= 0:
 			return fmt.Errorf("jlm: the tower's %s op %d groups by %d", name, i, op.Span)
 		case (op.Code == TOpLayerNorm || op.Code == TOpRMSNorm) && op.Eps <= 0:
 			return fmt.Errorf("jlm: the tower's %s op %d has an epsilon of %v", name, i, op.Eps)
@@ -305,7 +362,7 @@ func (p *Program) valid(name string) error {
 // weights it binds.
 func (op *TowerOp) arity() (in int, bind [2]int) {
 	switch op.Code {
-	case TOpPatchify, TOpDropRows, TOpRegroup, TOpPool:
+	case TOpPatchify, TOpDropRows, TOpRegroup, TOpPool, TOpFold:
 		return 1, [2]int{0, 0}
 	case TOpLinear, TOpLayerNorm:
 		return 1, [2]int{1, 2}
@@ -361,6 +418,15 @@ func encodeTower(w *wbuf, t *Tower) {
 	w.f32(b.Eps)
 	w.f32(b.AttnScale)
 	encodeExpr(w, &b.Act)
+	w.f32(b.Rope.Base)
+	w.i32(b.Rope.Dim)
+	w.bool(b.Rope.Neox)
+	w.u32(uint32(len(b.Rope.Runs)))
+	for _, run := range b.Rope.Runs {
+		w.i32(run.Pairs)
+		w.i32(run.Axis)
+		w.i32(run.Freq)
+	}
 	encodeProgram(w, &t.Head)
 	for _, ids := range [][]int32{t.Span.Before, t.Span.After} {
 		w.u32(uint32(len(ids)))
@@ -372,6 +438,7 @@ func encodeTower(w *wbuf, t *Tower) {
 	w.str(t.Span.AfterText)
 	w.bool(t.Span.Bidir)
 	w.str(t.Span.Mark)
+	w.i32(t.Span.GridDiv)
 }
 
 func encodeProgram(w *wbuf, p *Program) {
@@ -420,6 +487,10 @@ func decodeTower(r *rbuf) *Tower {
 	b.Norm = NormKind(r.u8())
 	b.Eps, b.AttnScale = r.f32(), r.f32()
 	decodeExpr(r, &b.Act)
+	b.Rope.Base, b.Rope.Dim, b.Rope.Neox = r.f32(), r.i32(), r.bool()
+	for range r.count(12) {
+		b.Rope.Runs = append(b.Rope.Runs, TowerRopeRun{Pairs: r.i32(), Axis: r.i32(), Freq: r.i32()})
+	}
 	decodeProgram(r, &t.Head)
 	for _, ids := range []*[]int32{&t.Span.Before, &t.Span.After} {
 		for range r.count(4) {
@@ -429,6 +500,7 @@ func decodeTower(r *rbuf) *Tower {
 	t.Span.BeforeText, t.Span.AfterText = r.str(), r.str()
 	t.Span.Bidir = r.bool()
 	t.Span.Mark = r.str()
+	t.Span.GridDiv = r.i32()
 	return t
 }
 

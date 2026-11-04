@@ -19,6 +19,7 @@ func sampleTower(t *testing.T) *Tower {
 			{Kind: PreResize, Ints: []int32{512, 512, int32(FilterTwoTap), int32(PrecFloat)}},
 			{Kind: PreNormalize, Floats: []float32{0.5, 0.5, 0.5, 0.5, 0.5, 0.5}},
 			{Kind: PreTile, Ints: []int32{1, 12, 1}},
+			{Kind: PreSmartResize, Ints: []int32{28, 3136, 12845056, int32(FilterPILBicubic), int32(PrecPIL)}},
 		},
 		Entry: Program{NIn: 1, Out: 4, Ops: []TowerOp{
 			{Code: TOpPatchify, In: []uint16{0}, Span: 16},
@@ -26,15 +27,17 @@ func sampleTower(t *testing.T) *Tower {
 			{Code: TOpPosTable, Bind: []Role{RoleVPosEmbd}},
 			{Code: TOpAdd, In: []uint16{2, 3}},
 		}},
-		Block: TowerBlock{NHead: 12, NKVHead: 12, HeadDim: 64, Norm: NormLayer, Eps: 1e-6, Act: act},
+		Block: TowerBlock{NHead: 12, NKVHead: 12, HeadDim: 64, Norm: NormLayer, Eps: 1e-6, Act: act,
+			Rope: TowerRope{Base: 10000, Dim: 32, Neox: true, Runs: []TowerRopeRun{{16, 0, 0}, {16, 1, 0}}}},
 		Head: Program{NIn: 1, Out: 4, Ops: []TowerOp{
 			{Code: TOpLayerNorm, In: []uint16{0}, Bind: []Role{RoleVPostNorm, RoleVPostNormBias}, Eps: 1e-6},
 			{Code: TOpRegroup, In: []uint16{1}, Span: 4},
 			{Code: TOpLinear, In: []uint16{2}, Bind: []Role{RoleVProj}},
 			{Code: TOpPool, In: []uint16{1}, Span: 2},
+			{Code: TOpFold, In: []uint16{1}, Span: 4},
 		}},
 		Span: TowerSpan{Before: []int32{198, 49189, 49152}, After: []int32{49189},
-			BeforeText: "\n\n<start_of_image>", AfterText: "<end_of_image>\n\n", Bidir: true, Mark: "<image>\n"},
+			BeforeText: "\n\n<start_of_image>", AfterText: "<end_of_image>\n\n", Bidir: true, Mark: "<image>\n", GridDiv: 2},
 	}
 }
 
@@ -85,6 +88,12 @@ func TestTowerRefusesWhatItCannotRead(t *testing.T) {
 		{"a crop of no height", "crops", func(t *Tower) { t.Pre = append(t.Pre, PreStep{Kind: PreCenterCrop, Ints: []int32{336, 0}}) }},
 		{"fewer tiles at most than at least", "tiles", func(t *Tower) { t.Pre = append(t.Pre, PreStep{Kind: PreTile, Ints: []int32{4, 2, 1}}) }},
 		{"a thumbnail of 2", "tiles", func(t *Tower) { t.Pre = append(t.Pre, PreStep{Kind: PreTile, Ints: []int32{1, 12, 2}}) }},
+		{"a smart resize under its own least", "its own size", func(t *Tower) {
+			t.Pre = append(t.Pre, PreStep{Kind: PreSmartResize, Ints: []int32{28, 3136, 100, int32(FilterPILBicubic), int32(PrecPIL)}})
+		}},
+		{"a fold of nothing", "groups by 0", func(t *Tower) { t.Head.Ops[4].Span = 0 }},
+		{"a rotary on a third axis", "run", func(t *Tower) { t.Block.Rope.Runs[1].Axis = 2 }},
+		{"a rotary wider than the head", "pairs", func(t *Tower) { t.Block.Rope.Runs[0].Pairs = 40 }},
 		{"an unknown op", "does not know", func(t *Tower) { t.Head.Ops[1].Code = topCodes }},
 		{"a value read before it is made", "before it is made", func(t *Tower) { t.Entry.Ops[3].In[1] = 4 }},
 		{"a linear with no matrix", "binds 0 weights", func(t *Tower) { t.Head.Ops[2].Bind = nil }},

@@ -279,3 +279,80 @@ func TestInternVLStatesItsTower(t *testing.T) {
 		t.Errorf("the picture's span is %+v, want <img> (%d) and </img> (%d) for the chat's \"<image>\"", s, img, end)
 	}
 }
+
+// TestQwen2VLStatesItsTower converts synth-qwen2vl's two files
+// (scripts/qwenvlgold.py) and holds the stated tower to Qwen2-VL's: a resize
+// to the picture's own size in multiples of a merge window, within the
+// processor class's bounds; the patches in the windows' order through the
+// one matrix; the blocks' rotary over the grid, half a head's pairs a
+// patch's row and half its column; the merger's LayerNorm, the fold of each
+// window, the two matrices with the exact GELU between; and the picture
+// between the vision markers, its grid the text model's over the merge.
+func TestQwen2VLStatesItsTower(t *testing.T) {
+	src := testmodels.Path("synth-qwen2vl.gguf")
+	mm := testmodels.Path("mmproj-synth-qwen2vl.gguf")
+	for _, p := range []string{src, mm} {
+		if _, err := os.Stat(p); err != nil {
+			t.Skipf("MODEL MISSING: %v (run scripts/qwenvlgold.py synth-qwen2vl) -- this gate proved nothing", err)
+		}
+	}
+	dst := filepath.Join(t.TempDir(), "qwen2vl.jlm")
+	if _, err := FromGGUFs(src, mm, dst, jlm.Fingerprint{Writer: "gate"}); err != nil {
+		t.Fatal(err)
+	}
+	f, err := jlm.Open(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	v := f.Vision()
+	if v == nil || v.Tower == nil {
+		t.Fatal("the container states no tower")
+	}
+	tw := v.Tower
+	if err := tw.Valid(); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range tw.Roles() {
+		if !f.Has(r, jlm.DenseBlock, -1) {
+			t.Errorf("the tower binds %v, which the container does not hold", r)
+		}
+	}
+	if len(tw.Pre) != 2 || tw.Pre[0].Kind != jlm.PreSmartResize ||
+		!reflect.DeepEqual(tw.Pre[0].Ints, []int32{28, 56 * 56, 28 * 28 * 1280, int32(jlm.FilterPILBicubic), int32(jlm.PrecPIL)}) {
+		t.Errorf("the picture's steps are %+v, want a size of its own in 28s within 56^2 and 28^2*1280, Pillow's bicubic", tw.Pre)
+	}
+	if op := tw.Entry.Ops[0]; op.Code != jlm.TOpPatchify || op.Span != 14 || op.Width != 2 || op.Offset != 0 {
+		t.Errorf("the patches are %+v, want 14 a side in 2x2 windows' order", op)
+	}
+	hd := v.NEmbd / v.NHead
+	if r := tw.Block.Rope; r.Base != 10000 || r.Dim != int32(hd/2) || !r.Neox ||
+		!reflect.DeepEqual(r.Runs, []jlm.TowerRopeRun{{Pairs: int32(hd / 4)}, {Pairs: int32(hd / 4), Axis: 1}}) {
+		t.Errorf("the blocks' rotary is %+v, want NEOX at 10000 over %d, %d pairs the row's and %d the column's", r, hd/2, hd/4, hd/4)
+	}
+	var head []jlm.OpCode
+	for _, op := range tw.Head.Ops {
+		head = append(head, op.Code)
+	}
+	if want := []jlm.OpCode{jlm.TOpLayerNorm, jlm.TOpFold, jlm.TOpLinear, jlm.TOpStated, jlm.TOpLinear}; !reflect.DeepEqual(head, want) {
+		t.Errorf("the head is %v, want %v", head, want)
+	}
+	if op := tw.Head.Ops[1]; op.Span != 4 {
+		t.Errorf("a fold of %d rows, want a 2x2 window's 4", op.Span)
+	}
+	var quick jlm.ExprBuilder
+	quick.QuickGELU(jlm.Operand(0))
+	if !reflect.DeepEqual(tw.Block.Act.Terms, quick.T) {
+		t.Errorf("the blocks' activation is %+v, want quick_gelu", tw.Block.Act)
+	}
+	voc, err := tok.New(f.Vocab())
+	if err != nil {
+		t.Fatal(err)
+	}
+	vs, _ := voc.ID("<|vision_start|>")
+	ve, _ := voc.ID("<|vision_end|>")
+	if s := tw.Span; !reflect.DeepEqual(s.Before, []int32{vs}) || !reflect.DeepEqual(s.After, []int32{ve}) ||
+		s.Mark != "<|vision_start|><|image_pad|><|vision_end|>" || s.GridDiv != 2 || s.Bidir {
+		t.Errorf("the picture's span is %+v, want <|vision_start|> (%d) and <|vision_end|> (%d), a grid over 2", s, vs, ve)
+	}
+}

@@ -129,7 +129,7 @@ func (r *Registry) formKernels(req Request) ([]*Kernel, error) {
 			k.Crowded, k.Folds, k.Unvector = sp.crowded[k.at()], foldsAPass(p), sp.unvector[k.Of]
 			k.Apart = req.Apart
 			k.Own = k.ownWrites()
-			k.Capacity = liveOf(p, req.Step, req.Device)
+			k.Capacity = liveOf(p, req.Step, req.Graph)
 			ks = append(ks, k)
 		}
 		ks, err = prof.run(ks, req.Device)
@@ -156,15 +156,37 @@ func slice(g *graph.Graph) string {
 }
 
 // liveOf is the capacity in rows a primitive of a step of several rows is
-// formed for, its leading axis the step's rows: a call runs the rows its
-// table states (tableCall), at most these (Kernel.Capacity) -- a GPU's
-// launch held to them (CallRows), a CPU's calls (RowCalls). 0 for a one-row
-// step's, whose form is decode's, for a scan's, whose launch is its
+// formed for, its leading axis the step's rows or a grid of them: a call
+// runs the rows its table states (tableCall), at most these
+// (Kernel.Capacity) -- a GPU's launch held to them (CallRows), a CPU's calls
+// (RowCalls) -- and a grid's live rows are the call's in proportion. 0 for a
+// one-row step's, whose form is decode's, for a scan's, whose launch is its
 // state rows and whose trips are the step's rows, and for one whose leading
 // axis only measures as many (Facts.Whole).
-func liveOf(p Prim, s Step, d Device) int {
-	if s.Rows < 2 || len(p.Shape) == 0 || p.Shape[0] != s.Rows || p.Kind == PrimScan || p.Facts.Whole {
+func liveOf(p Prim, s Step, g *graph.Graph) int {
+	if s.Rows < 2 || len(p.Shape) == 0 || p.Kind == PrimScan || p.Facts.Whole {
 		return 0
 	}
-	return s.Rows
+	if p.Shape[0] == s.Rows || rowGrid(p, s.Rows, g) {
+		return s.Rows
+	}
+	return 0
+}
+
+// rowGrid says p's leading axis is a value's own rows (graph.Value.Rows)
+// that a strided op made of the step's, each of several of them -- a fold's,
+// a regroup's, a pool's -- so a call's live rows reach its rows in
+// proportion. A value of one row, or of rows that do not divide the step's
+// (a dropped class row's), keeps every row.
+func rowGrid(p Prim, rows int, g *graph.Graph) bool {
+	r := p.Shape[0]
+	if g == nil || r < 2 || r >= rows || rows%r != 0 {
+		return false
+	}
+	for _, o := range append([]Operand{p.Out}, p.In...) {
+		if o.Kind == OperandValue && int(o.Value) < len(g.Values) && g.Values[o.Value].Rows == r {
+			return true
+		}
+	}
+	return false
 }
