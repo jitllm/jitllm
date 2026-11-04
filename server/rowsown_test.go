@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"math"
 	"testing"
 	"time"
@@ -46,13 +47,13 @@ func TestStepRowsAreTheirOwn(t *testing.T) {
 		}
 		long := min(900, int(c.NCtx)-dec-2)
 		a, b, l := mk(1, 61), mk(2, 29), mk(3, long)
-		state := func() *model.Instance {
+		state := func() *model.Session {
 			s, err := gl.e.CreateSession(SessionOptions{ModelID: gl.lm.id})
 			if err != nil {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { gl.e.CloseSession(s.id) })
-			return s.in()
+			return s.ms
 		}
 		// lone runs a step of one instance the server's way (model.StepRuns),
 		// its prompt through Prefill and a token through Forward.
@@ -72,8 +73,17 @@ func TestStepRowsAreTheirOwn(t *testing.T) {
 			}
 			return cp
 		}
-		run := func(st *model.Instance, toks []int32) model.Run {
-			return model.Run{Instance: st, Tokens: toks, Logits: true}
+		// run is a step's run of st's, its session leased for the phase the
+		// server's loop takes for it.
+		run := func(st *model.Session, toks []int32) model.Run {
+			p := model.PhaseGenerate
+			if len(toks) > 1 {
+				p = model.PhasePrefill
+			}
+			if err := st.Acquire(context.Background(), p); err != nil {
+				t.Fatal(err)
+			}
+			return model.Run{Session: st, Tokens: toks, Logits: true}
 		}
 		argmax := func(x []float32) int32 {
 			best := 0
@@ -104,7 +114,7 @@ func TestStepRowsAreTheirOwn(t *testing.T) {
 				}
 				pa = pa[len(pa)-1:]
 			}
-			sts := make([]*model.Instance, len(others))
+			sts := make([]*model.Session, len(others))
 			runs := []model.Run{}
 			next := make([]int32, len(others)+1)
 			for i, o := range others {
