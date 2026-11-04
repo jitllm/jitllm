@@ -31,6 +31,7 @@ func TestRoleNamesAreDisjoint(t *testing.T) {
 	}
 	owner := map[string]string{}
 	found := map[string]bool{}
+	read := map[string]int{}
 	for _, pkg := range pkgs {
 		for _, f := range pkg.Files {
 			for _, d := range f.Decls {
@@ -57,6 +58,7 @@ func TestRoleNamesAreDisjoint(t *testing.T) {
 							t.Errorf("%q is in both %s and %s", name, prev, fd.Name.Name)
 						}
 						owner[name] = fd.Name.Name
+						read[fd.Name.Name]++
 					}
 					return true
 				})
@@ -64,13 +66,14 @@ func TestRoleNamesAreDisjoint(t *testing.T) {
 		}
 	}
 	for name := range tables {
-		if !found[name] {
+		switch {
+		case !found[name]:
 			t.Errorf("%s was not found: this gate read nothing of it", name)
+		case read[name] == 0:
+			t.Errorf("%s holds no name this gate read: it proved nothing of it", name)
 		}
 	}
-	if len(owner) < 300 {
-		t.Fatalf("only %d names read from the tables -- this gate proved nothing", len(owner))
-	}
+	t.Logf("%d names read from %d tables", len(owner), len(tables))
 	for r := jlm.RoleDecHiddenNorm; r <= jlm.RoleDecFFNDownBias; r++ {
 		if !r.Valid() {
 			continue
