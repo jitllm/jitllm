@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/composer"
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/internal/testmodels"
@@ -484,4 +485,98 @@ func (d *ycbcrDst) Set(x, y int, c color.Color) {
 	r, g, b, _ := c.RGBA()
 	yy, cb, cr := color.RGBToYCbCr(uint8(r>>8), uint8(g>>8), uint8(b>>8))
 	d.Y[d.YOffset(x, y)], d.Cb[d.COffset(x, y)], d.Cr[d.COffset(x, y)] = yy, cb, cr
+}
+
+// TestStatedTowerRunsOnTheCard places an instance of SmolVLM on each device,
+// which offers its tower run every tower block: all 12 are placed there, the
+// picture's rows sit within the reduction-order band of the CPU device's
+// (an NMSE of 1e-3 over the 64 rows the head writes), and the description
+// still names the yellow disc where a blank grey picture's does not.
+func TestStatedTowerRunsOnTheCard(t *testing.T) {
+	m, img := openSmolVLM(t)
+	defer m.Close()
+	host := m.NewInstance(256)
+	want, err := host.EncodePicture(img)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = slices.Clone(want)
+	host.Close()
+	for _, dev := range stepDevices() {
+		t.Run(dev, func(t *testing.T) {
+			g, err := openGPU(t, gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff))
+			if err != nil || g == nil {
+				noDevice(t, dev, err)
+			}
+			defer g.Close()
+			s := m.NewInstance(256)
+			defer s.Close()
+			s.SetDeviceFallback(false)
+			if err := s.SetDevice(g); err != nil {
+				t.Fatal(err)
+			}
+			ts := s.tower.s
+			if n := ts.GPULayers(); n != len(m.tower.blocks) {
+				t.Fatalf("%d of the tower's %d blocks placed on %s: %s", n, len(m.tower.blocks), dev, g.Err())
+			}
+			got, err := s.EncodePicture(img)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var num, den float64
+			for i := range want {
+				if math.IsNaN(float64(got[i])) || math.IsInf(float64(got[i]), 0) {
+					t.Fatalf("value %d is %v", i, got[i])
+				}
+				d := float64(got[i] - want[i])
+				num, den = num+d*d, den+float64(want[i])*float64(want[i])
+			}
+			if e := num / den; e > 1e-3 {
+				t.Fatalf("the picture's rows on %s sit at NMSE %.3e from the CPU device's", dev, e)
+			}
+			ask := func(pic image.Image) string {
+				t.Helper()
+				rows, err := s.EncodePicture(pic)
+				if err != nil {
+					t.Fatal(err)
+				}
+				spans, err := m.ChatSpans([]ChatMessage{{Role: "user", Content: "Describe this image in one sentence.",
+					Images: 1}}, []Span{{Embd: rows}}, true)
+				if err != nil {
+					t.Fatal(err)
+				}
+				s.Reset()
+				lg, err := s.PrefillMixed(spans...)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var out []int32
+				for range 32 {
+					tok := int32(argmax(lg))
+					if m.Vocab.IsEOG(tok) {
+						break
+					}
+					out = append(out, tok)
+					if lg, err = s.Forward(tok); err != nil {
+						t.Fatal(err)
+					}
+				}
+				return strings.ToLower(m.Vocab.Decode(out))
+			}
+			grey := image.NewGray(image.Rect(0, 0, 384, 384))
+			for i := range grey.Pix {
+				grey.Pix[i] = 128
+			}
+			pic, none := ask(img), ask(grey)
+			t.Logf("%s: %d tower blocks placed; NMSE %.3e from the CPU device's rows", dev, ts.GPULayers(), num/den)
+			t.Logf("picture %q", pic)
+			t.Logf("blank   %q", none)
+			if !strings.Contains(pic, "yellow") {
+				t.Errorf("the description does not name the yellow disc: %q", pic)
+			}
+			if strings.Contains(none, "yellow") {
+				t.Errorf("a blank picture is yellow too (%q): the picture is not what answered", none)
+			}
+		})
+	}
 }

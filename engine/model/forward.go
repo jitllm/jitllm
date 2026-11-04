@@ -740,6 +740,12 @@ func ropeAxesPlanes(r *nn.Rope, nrot int, split bool) []float32 {
 // placed then), and a device this instance cannot move onto at all.
 func (s *Instance) SetDeviceLayers(d nn.LayerDevice, max int) error {
 	defer s.settleHist()
+	// The tower's blocks go where the text's do, every one offered (tower.go).
+	if s.tower != nil {
+		if err := s.tower.s.SetDeviceLayers(d, -1); err != nil {
+			return fmt.Errorf("model: the tower's blocks: %w", err)
+		}
+	}
 	// MigrateKV moves float32: a binary16 or q8_0 history travels converted
 	// (Instance.migrateKVAs).
 	// An empty binary16 cache steps down to the f32 the device holds; one
@@ -1872,11 +1878,12 @@ func (s *Instance) planFor(li int) *nn.LayerPlan {
 	}
 	s.k3Plan(li, &plan)
 	s.q4ePlan(li, &plan)
-	if c.NonCausal && s.m.IsEmbedding() {
-		// A bidirectional decoder (EmbeddingGemma): its blocks are non-causal
-		// blocks, as an encoder's are -- the sequence one call, every row over
-		// the call's rows, a sliding layer inside each row's symmetric window
-		// (nn.RowWindowDevice; embedstate.go's embedTell). The row windows
+	if c.NonCausal && (s.m.IsEmbedding() || s.m.tower != nil && li >= s.m.towerBase) {
+		// A bidirectional decoder (EmbeddingGemma) and a tower: their blocks
+		// are non-causal blocks, as an encoder's are -- the sequence (a
+		// picture's rows) one call, every row over the call's rows, a sliding
+		// layer inside each row's symmetric window (nn.RowWindowDevice;
+		// embedstate.go's embedTell). The row windows
 		// are the window, so the causal one (SWAWindow) is off: with both, a
 		// 600-row sequence read NaN past the causal window's 512 rows.
 		plan.NonCausal = true
