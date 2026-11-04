@@ -35,7 +35,7 @@ func jlmOfSafetensors(t testing.TB, dir string) string {
 // the gap between the winning logit and the runner-up.
 func greedy(t testing.TB, path, prompt string, n int) (ids []int32, margins []float32, text string) {
 	t.Helper()
-	m, err := Open(path, noTune())
+	m, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}

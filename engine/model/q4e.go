@@ -4,8 +4,6 @@ import (
 	"fmt"
 
 	"github.com/jitllm/jitllm/composer"
-	"github.com/jitllm/jitllm/engine/device/cpu"
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
 )
@@ -81,10 +79,7 @@ func (c *Config) ngramStateLen() int {
 
 // q4eConfig copies and checks a Qwen3.8-Flash-Next container's own fields.
 func q4eConfig(out *Config, c *jlm.Config) error {
-	if c.Arch != jlm.ArchQwen4Exp {
-		if c.HCLowRank != 0 || c.QSARatio != 0 || c.NGramBlock != 0 {
-			return fmt.Errorf("model: %s carries Qwen3.8-Flash-Next's hyper-connections", out.Arch)
-		}
+	if c.HCLowRank == 0 && c.QSARatio == 0 && c.NGramBlock == 0 {
 		return nil
 	}
 	out.HCLowRank, out.QSARatio = int(c.HCLowRank), int(c.QSARatio)
@@ -341,6 +336,3 @@ func (s *Instance) q4eCollapse(x []float32, n int) error {
 func (c *Config) q4eSigmoidGate() bool {
 	return c.DeltaSigmoidGate && c.q4eFault != q4eFaultSiLUGate
 }
-
-// attnSetF32 is a kernel set scoring rows of width w laid back to back.
-func (s *Instance) attnSetF32(w int) *nn.AttnSet { return s.jit.AttnSetFor(w, w, w, cpu.KVF32) }

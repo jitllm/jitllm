@@ -220,18 +220,13 @@ func TestHostBatchConcurrentGeneratesEqualAlone(t *testing.T) {
 
 // TestHostBatchSampledRowsEqualAlone: seeded sampled generates on a host
 // model, admitted together, draw exactly the tokens each draws alone. The
-// host's step across sessions is the alone path's arithmetic, row for row,
-// because a host model the loop runs sums every packed matmul in the
-// matvec's order (LoadModel's GEMMExact; model's
-// TestStepRunsOnTheCPUSharesOnePass reads NMSE 0 under it), so a seeded
-// sampler fed the same logits draws the same tokens. Against rows sharing a
-// random stream, or fed each other's tokens, the draws part; against the
-// shipped prefill arithmetic on a host whose GEMM sums otherwise, they part
-// too (TestHostBatchSampledRowsEqualAlonePreVNNI).
+// host's step across sessions must be the alone path's arithmetic, row for
+// row, for a seeded sampler fed its logits to draw the same tokens. Against
+// rows sharing a random stream, or fed each other's tokens, the draws part.
 func TestHostBatchSampledRowsEqualAlone(t *testing.T) {
 	for _, name := range hostBatchModels() {
 		t.Run(name, func(t *testing.T) {
-			if i, got, want := sampledBatchParts(t, name, false); i >= 0 {
+			if i, got, want := sampledBatchParts(t, name); i >= 0 {
 				t.Fatalf("sampled row %d differs from its run alone\nbatched %v\nalone   %v", i, got, want)
 			}
 		})
@@ -241,9 +236,9 @@ func TestHostBatchSampledRowsEqualAlone(t *testing.T) {
 // sampledBatchParts runs four seeded sampled generates on name alone and then
 // admitted together, and returns the first row whose draws differ with both
 // sequences, or -1 when every row drew the same tokens.
-func sampledBatchParts(t *testing.T, name string, inexact bool) (int, []int32, []int32) {
+func sampledBatchParts(t *testing.T, name string) (int, []int32, []int32) {
 	t.Helper()
-	e, lm, c := hostBatchEngine(t, name, Config{JointSteps: JointAlways, hostInexact: inexact})
+	e, lm, c := hostBatchEngine(t, name, Config{JointSteps: JointAlways})
 	temp, topP := float32(0.9), float32(0.95)
 	reqOf := func(i int) *v1.GenerateRequest {
 		seed := uint64(7 + i)

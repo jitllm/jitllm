@@ -33,7 +33,7 @@ func prefillAgainstHost(t *testing.T, lengths []int, opts ...gpu.Option) {
 	if _, err := os.Stat(p); err != nil {
 		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS) -- this gate proved nothing", err)
 	}
-	m, err := Open(jlmOf(t, p), noTune(), WithKVF16(false))
+	m, err := Open(jlmOf(t, p), WithKVF16(false))
 	if err != nil {
 		t.Fatal(err)
 	}

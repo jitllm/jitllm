@@ -57,9 +57,9 @@ func alignGOMAXPROCS() {
 	if os.Getenv("GOMAXPROCS") != "" {
 		return
 	}
-	// The decode pool's width. A prefill pool wider than it (nn's
-	// Config.PrefillCores) raises GOMAXPROCS for its own phase and puts it
-	// back (nn.JIT.BeginPrefill).
+	// The decode pool's width. A prefill pool wider than it
+	// (cpu.WithPrefillCPUs) raises GOMAXPROCS for its own phase and puts it
+	// back (cpu.Pool.BeginPrefill).
 	if n := len(sched.DecodeCores(schedOptions()...)); n > 0 {
 		runtime.GOMAXPROCS(n)
 	}
@@ -334,11 +334,6 @@ func benchmark(path string, topts []tok.Option) error {
 			}
 		}
 		fmt.Println()
-	}
-	if q, kn, o := nn.ProfileNanos(); q+kn+o > 0 {
-		tot := float64(q + kn + o)
-		fmt.Printf("             serial %.0f%% (quantize %.0f%%, widen %.0f%%)  parallel %.0f%% (kernel)\n",
-			100*float64(q+o)/tot, 100*float64(q)/tot, 100*float64(o)/tot, 100*float64(kn)/tot)
 	}
 	return nil
 }
@@ -1042,7 +1037,7 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	fmt.Fprintf(os.Stderr, "\nprompt %d tok in %v (%s)   decode %d tok in %v (%s)\n",
 		ptok, prefill.Round(time.Millisecond), rateOf(ptok, prefill),
 		len(out), decode.Round(time.Millisecond), rateOf(len(out), decode))
-	if nodes, aff := st.JIT().NUMA(); nodes > 1 {
+	if nodes, aff := st.Pool().NUMA(); nodes > 1 {
 		fmt.Fprintf(os.Stderr, "numa     %d nodes, %d region(s) read node-affine\n", nodes, aff)
 	}
 	// Report what the KV cache did, including zero: a working cache and a
@@ -1144,31 +1139,6 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 			}
 		}
 		fmt.Fprintln(os.Stderr)
-	}
-	// The serial/parallel split, in absolute milliseconds rather than shares:
-	// on a container the kernel and widen buckets are filled only by the GGUF
-	// row-major path, so a share would read "quantize 100%".
-	if q, kn, o := nn.ProfileNanos(); q+kn+o > 0 {
-		ms := func(v int64) float64 { return float64(v) / 1e6 }
-		fmt.Fprintf(os.Stderr, "quantize %.1f ms (activations, host)", ms(q))
-		if kn+o > 0 {
-			fmt.Fprintf(os.Stderr, "   kernel %.1f ms   widen %.1f ms", ms(kn), ms(o))
-		}
-		fmt.Fprintln(os.Stderr)
-	}
-	// The matvec bucket split into packing, kernel and transpose
-	// (JITLLM_MMPROF).
-	if pk, kn, tr, tot, calls, regions := nn.MatMulProfile(); calls > 0 {
-		ms := func(v int64) float64 { return float64(v) / 1e6 }
-		other := tot - pk - kn - tr
-		fmt.Fprintf(os.Stderr,
-			"MatMul: %d calls, %d pool regions, %.0f ms total"+
-				"  (pack %.0f ms %.1f%%, kernel %.0f ms %.1f%%, transpose %.0f ms %.1f%%, other %.0f ms %.1f%%)\n",
-			calls, regions, ms(tot),
-			ms(pk), 100*float64(pk)/float64(tot),
-			ms(kn), 100*float64(kn)/float64(tot),
-			ms(tr), 100*float64(tr)/float64(tot),
-			ms(other), 100*float64(other)/float64(tot))
 	}
 	return nil
 }
@@ -1545,9 +1515,15 @@ func loadOpts(t []tok.Option, budget uint64) []model.Option {
 	if budget > 0 {
 		o = append(o, model.WithPageBudget(budget))
 	}
-	if j := jitOptions(); len(j) > 0 {
-		o = append(o, model.WithJITOptions(j...))
+	if p := poolOptions(); len(p) > 0 {
+		o = append(o, model.WithPool(p...))
 	}
+	// JITLLM_CHUNK pins a prompt chunk's rows on the CPU device
+	// (model.WithPrefillChunk).
+	if n, err := strconv.Atoi(os.Getenv("JITLLM_CHUNK")); err == nil && n >= 1 {
+		o = append(o, model.WithPrefillChunk(n))
+	}
+	cpuConfigure()
 	// JITLLM_HUGEPAGES=0 leaves the frames on the kernel's default page size.
 	if os.Getenv("JITLLM_HUGEPAGES") == "0" {
 		o = append(o, model.WithHugePages(false))
@@ -1579,11 +1555,6 @@ func loadOpts(t []tok.Option, budget uint64) []model.Option {
 	// (model.WithMatVecGroups).
 	if os.Getenv("JITLLM_FUSE_GROUPS") == "0" {
 		o = append(o, model.WithMatVecGroups(false))
-	}
-	// JITLLM_LOOKAHEAD=0 turns off the fused runs' weight lookahead
-	// (model.WithLookahead).
-	if os.Getenv("JITLLM_LOOKAHEAD") == "0" {
-		o = append(o, model.WithLookahead(false))
 	}
 	// JITLLM_FUSE_RESID=1 folds the residual add into the o and down groups
 	// (model.WithResidualFold).
@@ -1684,133 +1655,20 @@ func modelOptions() []model.Option {
 	return o
 }
 
-// jitOptions turns the generated tier's environment variables into nn.Options.
-// They are read here and nowhere else: the libraries read no environment, so an
-// embedded caller can set every knob through options.
-func jitOptions() []nn.Option {
-	var o []nn.Option
+// poolOptions turns the CPU device's workers' environment variables into
+// cpu.PoolOptions. They are read here and nowhere else: the libraries read no
+// environment, so an embedded caller can set every knob through options.
+func poolOptions() []cpu.PoolOption {
+	var o []cpu.PoolOption
 	if s := schedOptions(); len(s) > 0 {
-		o = append(o, nn.WithSched(s...))
-	}
-	if os.Getenv("JITLLM_PROFILE") != "" {
-		o = append(o, nn.WithProfile(true))
-	}
-	// The activation quantizer's Go-loop arm (cpu.QuantizeQ8Window), so both
-	// arms of that comparison are reachable from one binary.
-	if os.Getenv("JITLLM_QUANT_GO") != "" {
-		o = append(o, nn.WithQuantActGo(true))
-	}
-	// The rotary table's Go-loop arm, for the same comparison. It only exists
-	// in a jitllmtest build (engine/nn/ropego.go).
-	if os.Getenv("JITLLM_ROPE_GO") != "" {
-		o = append(o, nn.WithRopeGo(true))
-	}
-	if os.Getenv("JITLLM_MMPROF") != "" {
-		o = append(o, nn.WithMatMulProfile(true))
-	}
-	if os.Getenv("JITLLM_TUNE_QUIET") != "" {
-		o = append(o, nn.WithQuietTuner(true))
-	}
-	switch os.Getenv("JITLLM_TUNE") {
-	case "0":
-		o = append(o, nn.WithTune(nn.TuneOff))
-	case "1":
-		o = append(o, nn.WithTune(nn.TuneForce))
-	}
-	if v := os.Getenv("JITLLM_PACK"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 1 {
-			o = append(o, nn.WithPackWidth(n))
-		}
-	}
-	if v := os.Getenv("JITLLM_FPF"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			o = append(o, nn.WithFusedPrefetch(n))
-		}
-	}
-	if v := os.Getenv("JITLLM_PREFETCH"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			o = append(o, nn.WithPrefetch(n))
-		}
-	}
-	if v := os.Getenv("JITLLM_A64_PF"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			o = append(o, nn.WithA64Prefetch(n))
-		}
-	}
-	if v := os.Getenv("JITLLM_TILE"); v != "" {
-		o = append(o, nn.WithGEMMTile(v))
-	}
-	if v := os.Getenv("JITLLM_CHUNK"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 1 {
-			o = append(o, nn.WithPrefillChunk(n))
-		}
+		o = append(o, cpu.WithSched(s...))
 	}
 	if v := os.Getenv("JITLLM_PREFILL_CORESET"); v != "" {
-		o = append(o, nn.WithPrefillCoreSet(v))
+		o = append(o, cpu.WithPrefillCPUs(sched.CoreSet(v)))
 	}
-	if v := os.Getenv("JITLLM_PART"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 1 {
-			o = append(o, nn.WithParticipants(n))
-		}
+	if n, err := strconv.Atoi(os.Getenv("JITLLM_PART")); err == nil && n >= 1 {
+		o = append(o, cpu.WithParticipants(n))
 	}
-	if v := os.Getenv("JITLLM_ACCS"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 1 {
-			o = append(o, nn.WithAccs(n))
-		}
-	}
-	if v := os.Getenv("JITLLM_FUSED_KSLICES"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			o = append(o, nn.WithFusedKSlices(n))
-		}
-	}
-	// JITLLM_MATVEC_PICK: -1 keeps the fixed rule, n > 0 pins the picker's arm n.
-	if v := os.Getenv("JITLLM_MATVEC_PICK"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			o = append(o, nn.WithMatVecPick(n))
-		}
-	}
-	if v := os.Getenv("JITLLM_MOE_BATCH"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			o = append(o, nn.WithMixtureBatch(n))
-		}
-	}
-	if v := os.Getenv("JITLLM_MVPICK"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			o = append(o, nn.WithMatVecPick(n))
-		}
-	}
-	if v := os.Getenv("JITLLM_FUSED_KSPLIT"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			o = append(o, nn.WithFusedKSplit(n))
-		}
-	}
-	if os.Getenv("JITLLM_GEMM_EXACT") == "1" {
-		o = append(o, nn.WithGEMMExact(true))
-	}
-	if v := os.Getenv("JITLLM_GEMM_ROWS"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			o = append(o, nn.WithGEMMRows(n))
-		}
-	}
-	if v := os.Getenv("JITLLM_GEMM_TOK"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			o = append(o, nn.WithGEMMTokens(n))
-		}
-	}
-	if v := os.Getenv("JITLLM_TILE_TOK"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 1 {
-			o = append(o, nn.WithTileTokens(n))
-		}
-	}
-	if v := os.Getenv("JITLLM_CHUNK_BYTES"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 1 {
-			o = append(o, nn.WithChunkBytes(n))
-		}
-	}
-	if os.Getenv("JITLLM_NO_GEMM") != "" {
-		o = append(o, nn.WithoutGEMM(true))
-	}
-	cpuConfigure()
 	return o
 }
 

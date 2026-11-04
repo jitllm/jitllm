@@ -29,7 +29,7 @@ func openSynthLlama4Q8(t *testing.T) (*Model, *synthLlama4) {
 		testmodels.Missing(t, "%s", "MODEL MISSING: "+testmodels.Path("synth-llama4-q8.gguf")+
 			" (set JITLLM_MODELS to the model directory) -- run Q8=1 scripts/llama4gold.py (RULE 11)")
 	}
-	m, err := Open(jlmOf(t, path), noTune(), WithKVF16(false))
+	m, err := Open(jlmOf(t, path), WithKVF16(false))
 	if err != nil {
 		t.Fatal(err)
 	}

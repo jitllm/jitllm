@@ -82,7 +82,7 @@ func (s *TelemetryService) snapshot(modelID, sessionID string) *v1.GetStatsRespo
 			var par, ser int64
 			var workers int
 			sess.in().With(func(st *model.Instance) {
-				par, ser = st.JIT().Regions()
+				par, ser = st.Pool().Regions()
 				workers = st.Workers()
 			})
 			ss.Pool = &v1.PoolStats{

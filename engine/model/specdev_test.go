@@ -29,7 +29,7 @@ func TestSpecGreedyOnDevice(t *testing.T) {
 	specs := testdevices.Specs("cuda:0", "vulkan:0", "metal") // metal takes no selector
 	for name, path := range specModels(t) {
 		t.Run(name, func(t *testing.T) {
-			m := openSpecModel(t, path, noTune(), WithKVF16(false))
+			m := openSpecModel(t, path, WithKVF16(false))
 			defer m.Close()
 			ran := 0
 			for _, spec := range specs {

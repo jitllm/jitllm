@@ -57,7 +57,7 @@ func TestComposedExpertPagesServe(t *testing.T) {
 				t.Fatalf("MODEL MISSING: %s (set JITLLM_MODELS)", path)
 			}
 			src := jlmOf(t, path)
-			m, err := Open(src, noTune())
+			m, err := Open(src)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -87,7 +87,7 @@ func TestComposedExpertPagesServe(t *testing.T) {
 				t.Run(dev, func(t *testing.T) {
 					decode := func(t *testing.T, budget bool, opts ...gpu.Option) ([][]float32, gpu.Stats, int64) {
 						t.Helper()
-						mo := []Option{noTune(), WithStreamTrial(false)}
+						mo := []Option{WithStreamTrial(false)}
 						if budget {
 							mo = append(mo, WithPageBudget(1))
 						}
@@ -245,7 +245,7 @@ func TestComposedCPUExpertPagesServe(t *testing.T) {
 			fm.Close()
 			want, band := cpuReference(t, path, fixtureSource(testmodels.Path(file)), page, toks)
 			run := func(f cpuFault, opts ...Option) ([][]float32, int64) {
-				m, err := Open(path, append([]Option{noTune()}, opts...)...)
+				m, err := Open(path, opts...)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -323,7 +323,7 @@ func TestComposedCPUExpertPromptsServe(t *testing.T) {
 			path := jlmOf(t, testmodels.Path(file))
 			open := func(opts ...Option) *Model {
 				t.Helper()
-				m, err := Open(path, append([]Option{noTune()}, opts...)...)
+				m, err := Open(path, opts...)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -425,7 +425,7 @@ func TestComposedExpertPagesMoveToTheCPU(t *testing.T) {
 					noDevice(t, dev, err)
 				}
 				defer g.Close()
-				m, err := Open(jlmOf(t, testmodels.Path(name)), noTune(), WithExperts("card"), WithStreamTrial(false))
+				m, err := Open(jlmOf(t, testmodels.Path(name)), WithExperts("card"), WithStreamTrial(false))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -527,7 +527,7 @@ func TestStreamedPromptIsTheSameInASecondSession(t *testing.T) {
 					noDevice(t, dev, err)
 				}
 				defer g.Close()
-				m, err := Open(jlmOf(t, testmodels.Path(name)), noTune(), WithExperts("card"), WithStreamTrial(false),
+				m, err := Open(jlmOf(t, testmodels.Path(name)), WithExperts("card"), WithStreamTrial(false),
 					WithPrefillForwardRows(16))
 				if err != nil {
 					t.Fatal(err)

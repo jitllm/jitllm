@@ -36,7 +36,7 @@ func TestComposedBlocksAtEachLaneCount(t *testing.T) {
 			if _, err := os.Stat(path); err != nil {
 				t.Fatalf("MODEL MISSING: %s (set JITLLM_MODELS)", path)
 			}
-			m, err := Open(jlmOf(t, path), noTune())
+			m, err := Open(jlmOf(t, path))
 			if err != nil {
 				t.Fatal(err)
 			}

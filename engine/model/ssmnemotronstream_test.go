@@ -23,7 +23,7 @@ func TestUngatedStreamedBankMatchesTheResidentOne(t *testing.T) {
 	ids := []int32{1, 2, 3, 4, 5, 6, 7, 8}
 	run := func(stream bool) ([][]float32, gpu.Stats, int) {
 		t.Helper()
-		m, err := Open(path, noTune())
+		m, err := Open(path)
 		if err != nil {
 			t.Fatal(err)
 		}

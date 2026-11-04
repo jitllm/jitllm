@@ -59,7 +59,7 @@ func TestMTPMatchesReference(t *testing.T) {
 			if _, err := os.Stat(testmodels.Path(tc.model)); err != nil {
 				t.Skipf("MODEL MISSING: %v (scripts/mtpgold.py builds it) -- this gate proved nothing", err)
 			}
-			m := openSpecModel(t, tc.model, noTune(), WithKVF16(false))
+			m := openSpecModel(t, tc.model, WithKVF16(false))
 			defer m.Close()
 			clean := mtpLogits(t, m, g.IDS, 0)
 			worst, agree := judgeMTP(t, m, g, clean, tc.exact, "clean")

@@ -21,7 +21,7 @@ func TestMLAOnEveryDevice(t *testing.T) {
 	for _, name := range []string{"synth-deepseek-dense", "synth-deepseek", "synth-deepseek-lite"} {
 		t.Run(name, func(t *testing.T) {
 			src := hfContainer(t, name)
-			m, err := Open(src, noTune(), WithKVF16(false))
+			m, err := Open(src, WithKVF16(false))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -169,7 +169,7 @@ func declineList(st *Instance) []DeviceDecline { return st.DeviceDeclines() }
 func mlaCPUArm(t *testing.T, src string, ids []int32, want [][]float32) {
 	t.Helper()
 	t.Run("cpu", func(t *testing.T) {
-		m, err := Open(src, noTune(), WithKVF16(false))
+		m, err := Open(src, WithKVF16(false))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -219,7 +219,7 @@ func TestMLASeamMovesWithItsHistory(t *testing.T) {
 	defer w.done()
 	ids := []int32{5, 11, 23, 41, 67, 89, 101, 127}
 	src := hfContainer(t, "synth-deepseek-dense")
-	m, err := Open(src, noTune(), WithKVF16(false))
+	m, err := Open(src, WithKVF16(false))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +228,7 @@ func TestMLASeamMovesWithItsHistory(t *testing.T) {
 	want := teacherForce(t, m, ids)
 	// The same container with the CPU's blocks composed: the history moves
 	// between the card's pool and the CPU device's arena.
-	mc, err := Open(src, noTune(), WithKVF16(false))
+	mc, err := Open(src, WithKVF16(false))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -324,7 +324,7 @@ func mlaSeamMoves(t *testing.T, m *Model, gpux *gpu.GPU, ids []int32, want [][]f
 // so a gap between them would be read by every later position.
 func TestMLAOnADeviceWithPoisonedBuffers(t *testing.T) {
 	ids := []int32{5, 11, 23, 41, 67, 89}
-	m, err := Open(hfContainer(t, "synth-deepseek-dense"), noTune(), WithKVF16(false))
+	m, err := Open(hfContainer(t, "synth-deepseek-dense"), WithKVF16(false))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -374,7 +374,7 @@ func TestMLAStepsTheKVDownAtTheRightWidths(t *testing.T) {
 			src := hfContainer(t, name)
 			// The REFERENCE is f16 too: this gate is about the step-down
 			// emitting the right kernels, not about what an f16 cache costs.
-			m, err := Open(src, noTune(), WithKVF16(true))
+			m, err := Open(src, WithKVF16(true))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -437,7 +437,7 @@ func TestNoPEMLAOnEveryDevice(t *testing.T) {
 	ids := []int32{5, 11, 23, 41, 67, 89, 101, 127}
 	const name = "synth-kimilinear"
 	src := hfContainer(t, name)
-	m, err := Open(src, noTune(), WithKVF16(false))
+	m, err := Open(src, WithKVF16(false))
 	if err != nil {
 		t.Fatal(err)
 	}

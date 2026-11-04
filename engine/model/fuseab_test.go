@@ -38,7 +38,7 @@ func TestBlockFusionAB(t *testing.T) {
 	}
 	depth, rounds := num("JITLLM_AB_DEPTH", 64), num("JITLLM_AB_ROUNDS", 20)
 	const run = 16 // decoded tokens an arm's turn
-	m, err := Open(jlmOf(t, p), noTune())
+	m, err := Open(jlmOf(t, p))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -15,7 +15,6 @@ import (
 
 	"github.com/jitllm/jitllm/convert"
 	"github.com/jitllm/jitllm/convert/gguf"
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/internal/testmodels/fresh"
@@ -322,20 +321,6 @@ func convertDir(dir string, q8 bool) (string, error) {
 // The gates' own options: the package reads no environment, so a knob set with
 // t.Setenv would reach nothing. They apply at Open, the only path that reaches a
 // instance's JIT.
-
-// noTune pins the fitted widths so both sides of a comparison run the same
-// kernels: the pack-width tuner advances on Forward and not on
-// ForwardBatch, so the two would otherwise reassociate differently.
-func noTune() Option { return WithJITOptions(nn.WithTune(nn.TuneOff)) }
-
-// noGEMM is the exact arm bit equality against Forward needs: no
-// weight-stationary GEMM, and every packed kernel on its float epilogue
-// (GEMMExact). Without the second, on arm64 the rows a prefill leaves
-// past its last token tile go through the fused kernel, which sums a
-// k-quant super-block in integers, while Forward decodes through the
-// tiled kernel's float chain (TuneOff pins it): qwen2vl and qwen3moe
-// moved up to a logit at an odd row count there.
-func noGEMM() Option { return WithJITOptions(nn.WithoutGEMM(true), nn.WithGEMMExact(true)) }
 
 // benchModel is the model a gate runs against when the caller names none.
 //

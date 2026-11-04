@@ -6,7 +6,6 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
@@ -26,7 +25,7 @@ func TestSessionsShareAnInstance(t *testing.T) {
 			}
 			// The reduction order pinned as hostStepNMSE says: the step runs the
 			// rows' forms and alone runs the one-row forms.
-			m, err := Open(jlmOf(t, path), noTune(), WithKVF16(false), WithJITOptions(nn.WithGEMMExact(true)))
+			m, err := Open(jlmOf(t, path), WithKVF16(false))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -159,7 +158,7 @@ func TestSessionsStepWithinTheBandOnF16KV(t *testing.T) {
 			if !ok {
 				t.Fatalf("model not present: %s (nor its container)", src)
 			}
-			m, err := Open(jlmOf(t, path), noTune(), WithKVF16(true), WithJITOptions(nn.WithGEMMExact(true)))
+			m, err := Open(jlmOf(t, path), WithKVF16(true))
 			if err != nil {
 				t.Fatal(err)
 			}

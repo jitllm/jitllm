@@ -21,7 +21,6 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/model"
-	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // TestTeacherForcedTrace prints the top logits along a teacher-forced chain and
@@ -57,7 +56,7 @@ func TestTeacherForcedTrace(t *testing.T) {
 	out := os.Getenv("JITLLM_TRACE_OUT")
 	f16 := os.Getenv("JITLLM_TRACE_KVF16") == "1"
 	c := jlmOf(t, path)
-	m, err := model.Open(c, model.WithJITOptions(nn.WithGEMMExact(true), nn.WithTune(nn.TuneOff)), model.WithKVF16(f16))
+	m, err := model.Open(c, model.WithKVF16(f16))
 	if err != nil {
 		t.Fatal(err)
 	}

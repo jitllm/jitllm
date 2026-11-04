@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/composer"
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
@@ -35,15 +34,15 @@ func TestBatchMatchesForward(t *testing.T) {
 			// small-margin argmaxes, so that mode is judged by margin and a
 			// gross-error tripwire.
 			t.Run("exact-gemm", func(t *testing.T) {
-				batchVsForward(t, path, true, noTune(), withCPUFloat())
+				batchVsForward(t, path, true, withCPUFloat())
 			})
 			t.Run("shipped", func(t *testing.T) {
-				batchVsForward(t, path, false, noTune())
+				batchVsForward(t, path, false)
 			})
 			// The single sequences and the batch on the composed CPU's
 			// blocks: held to the shipped mode's bar.
 			t.Run("composed-cpu", func(t *testing.T) {
-				batchVsForward(t, path, false, noTune())
+				batchVsForward(t, path, false)
 			})
 		})
 	}
@@ -51,14 +50,12 @@ func TestBatchMatchesForward(t *testing.T) {
 	// experts its rows pick.
 	for _, file := range cpuMixtureRowsModels() {
 		t.Run("mixture/"+file+"/composed-cpu", func(t *testing.T) {
-			batchVsForward(t, testmodels.Path(file), false, noTune())
+			batchVsForward(t, testmodels.Path(file), false)
 		})
 	}
 }
 
 func batchVsForward(t *testing.T, path string, exact bool, opts ...Option) {
-	// Both sides must run the same kernels: the pack-width tuner advances on
-	// Forward and not on ForwardBatch (hence noTune()).
 	m, err := Open(jlmOf(t, path), opts...)
 	if err != nil {
 		t.Fatal(err)
@@ -213,17 +210,17 @@ func TestRaggedBatchMatchesForward(t *testing.T) {
 				t.Skipf("model not present: %s (nor its container)", path)
 			}
 			t.Run("exact-gemm", func(t *testing.T) {
-				raggedVsForward(t, path, true, noTune(), withCPUFloat())
+				raggedVsForward(t, path, true, withCPUFloat())
 			})
 			t.Run("shipped", func(t *testing.T) {
-				raggedVsForward(t, path, false, noTune())
+				raggedVsForward(t, path, false)
 			})
 		})
 	}
 }
 
 func raggedVsForward(t *testing.T, path string, exact bool, opts ...Option) {
-	m, err := Open(jlmOf(t, path), opts...) // noTune(): see batchVsForward
+	m, err := Open(jlmOf(t, path), opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,7 +315,7 @@ func TestPrefillSeqMatchesForward(t *testing.T) {
 			// kernel, which sums a k-quant super-block in integers, where the
 			// single instance decodes through the tiled kernel's float chain
 			// (TuneOff pins it); qwen2vl's admitted row parted at step 5.
-			m, err := Open(jlmOf(t, path), noTune(), WithJITOptions(nn.WithGEMMExact(true)))
+			m, err := Open(jlmOf(t, path))
 			if err != nil {
 				t.Fatal(err)
 			}

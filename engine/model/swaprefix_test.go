@@ -27,7 +27,7 @@ func TestPrefixCacheRestoresAWindowedLayer(t *testing.T) {
 	specs := append([]string{""}, testdevices.Specs("cuda", "vulkan", "metal")...)
 	for _, fx := range prefixWindowFixtures() {
 		t.Run(fx, func(t *testing.T) {
-			m, err := Open(jlmOf(t, testmodels.Path(fx)), noTune())
+			m, err := Open(jlmOf(t, testmodels.Path(fx)))
 			if err != nil {
 				t.Fatal(err)
 			}

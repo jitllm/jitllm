@@ -109,7 +109,7 @@ func TestToolPromptMatchesTransformers(t *testing.T) {
 		// The date the templates print is pinned on both sides (toolGoldDate,
 		// scripts/toolgold.py): a golden rendered on one day must match on the
 		// next.
-		m, err := Open(jlmOf(t, path), noTune(), WithChatClock(func() time.Time { return toolGoldDate() }))
+		m, err := Open(jlmOf(t, path), WithChatClock(func() time.Time { return toolGoldDate() }))
 		if err != nil {
 			t.Fatal(err)
 		}

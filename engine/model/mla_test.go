@@ -18,7 +18,7 @@ func TestMLARunsUnderAPageBudget(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			src := hfContainer(t, name)
 
-			full, err := Open(src, noTune(), WithKVF16(false))
+			full, err := Open(src, WithKVF16(false))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -29,7 +29,7 @@ func TestMLARunsUnderAPageBudget(t *testing.T) {
 
 			// One byte is one frame, the tightest the reader has: every block
 			// is re-bound at every layer of every token.
-			tight, err := Open(src, noTune(), WithKVF16(false), WithPageBudget(1))
+			tight, err := Open(src, WithKVF16(false), WithPageBudget(1))
 			if err != nil {
 				t.Fatalf("Open under a one-page budget: %v", err)
 			}
@@ -109,7 +109,7 @@ func mlaOpen(t *testing.T, name string, opts ...Option) *Model {
 	} else {
 		t.Fatalf("JITLLM_MLA_MODEL=%s: not on this box (RULE 11: fetch it)", name)
 	}
-	m, err := Open(src, append([]Option{noTune(), WithKVF16(false)}, opts...)...)
+	m, err := Open(src, append([]Option{WithKVF16(false)}, opts...)...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -268,7 +268,7 @@ func TestAttnScaleReachesEveryPath(t *testing.T) {
 	// An F32 MLA fixture: exact between the three paths when they agree (so
 	// the bound can be 1e-10 rather than a reassociation band), and the
 	// architecture the divergence is actually about.
-	m, err := Open(hfContainer(t, "synth-deepseek-dense"), noTune(), WithKVF16(false))
+	m, err := Open(hfContainer(t, "synth-deepseek-dense"), WithKVF16(false))
 	if err != nil {
 		t.Fatal(err)
 	}

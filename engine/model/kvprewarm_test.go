@@ -36,7 +36,7 @@ func TestFirstPromptDoesNotGrowTheKVPool(t *testing.T) {
 		used           uint64 // the budget placement spent, before the prompt
 	}
 	run := func(prewarm bool, budget uint64) arm {
-		m, err := Open(p, noTune(), WithKVF16(false), WithKVPrewarm(prewarm))
+		m, err := Open(p, WithKVF16(false), WithKVPrewarm(prewarm))
 		if err != nil {
 			t.Fatal(err)
 		}

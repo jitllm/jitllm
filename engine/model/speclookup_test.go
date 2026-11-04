@@ -140,7 +140,7 @@ func TestSpecLookupMatchesDecode(t *testing.T) {
 	n := specTokens()
 	for _, name := range lookupModels() {
 		t.Run(strings.TrimSuffix(name, ".gguf"), func(t *testing.T) {
-			m := openLookupModel(t, name, noTune(), WithJITOptions(nn.WithGEMMExact(true)))
+			m := openLookupModel(t, name)
 			defer m.Close()
 			var drafted, accepted int64
 			for _, text := range lookupPrompts() {
@@ -177,7 +177,7 @@ func TestSpecLookupGateDiscriminates(t *testing.T) {
 	n := specTokens()
 	for _, name := range lookupModels() {
 		t.Run(strings.TrimSuffix(name, ".gguf"), func(t *testing.T) {
-			m := openLookupModel(t, name, noTune(), WithJITOptions(nn.WithGEMMExact(true)))
+			m := openLookupModel(t, name)
 			defer m.Close()
 			type fault struct {
 				name  string
@@ -230,7 +230,7 @@ func TestSpecLookupOnDevice(t *testing.T) {
 	specs := testdevices.Specs("cuda:0", "vulkan:0", "metal")
 	for _, name := range lookupModels() {
 		t.Run(strings.TrimSuffix(name, ".gguf"), func(t *testing.T) {
-			m := openLookupModel(t, name, noTune(), WithKVF16(false))
+			m := openLookupModel(t, name, WithKVF16(false))
 			defer m.Close()
 			ran := 0
 			for _, spec := range specs {

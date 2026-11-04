@@ -429,7 +429,7 @@ func (s *Instance) PromptChunk() int {
 	if s.devCount() > 0 {
 		return s.deviceChunk()
 	}
-	return MaxPrefillChunk
+	return s.hostChunk()
 }
 
 // HostStepRows is the rows StepRuns has run as host steps across sessions,

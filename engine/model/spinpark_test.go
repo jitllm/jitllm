@@ -21,7 +21,7 @@ func TestThePoolParksOnlyWhileTokensPage(t *testing.T) {
 	if !ok {
 		t.Skip("MODEL MISSING: olmoe-1b-7b-0924-instruct-Q4_K_M (set JITLLM_MODELS) -- this gate proved nothing")
 	}
-	m, err := Open(jlmOf(t, p), noTune())
+	m, err := Open(jlmOf(t, p))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +48,7 @@ func TestThePoolParksOnlyWhileTokensPage(t *testing.T) {
 			t.Fatal(err)
 		}
 		_, in1, _ := m.PageStats()
-		switch spin := st.jit.Spinning(); {
+		switch spin := st.Pool().Spinning(); {
 		case in1 != in0 && spin:
 			t.Fatalf("token %d faulted %d page(s) and left the pool spinning", i, in1-in0)
 		case in1 == in0 && !spin:

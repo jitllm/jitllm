@@ -34,8 +34,9 @@ type modelOpts struct {
 	noServingSplit bool
 	// noGroups runs a fused run's matvecs a phase each; see WithMatVecGroups.
 	noGroups bool
-	// noLook turns off the fused runs' weight lookahead; see WithLookahead.
-	noLook bool
+	// prefillChunk pins a prompt chunk's rows on the CPU device; see
+	// WithPrefillChunk.
+	prefillChunk int
 	// residFold adds the o and down projections into the residual inside
 	// their groups; see WithResidualFold.
 	residFold bool
@@ -155,11 +156,9 @@ func WithServingSplit(on bool) Option { return func(l *loadOpts) { l.opt.noServi
 // (nn.MatVecPackedGroup). On by default, the same bits; off is the A/B arm.
 func WithMatVecGroups(on bool) Option { return func(l *loadOpts) { l.opt.noGroups = !on } }
 
-// WithLookahead sets whether a fused run's workers that find a phase drained
-// hint the next op's weights into the outer caches while the phase's last
-// chunks run (nn.JIT.SetAhead). On by default; it writes nothing a kernel
-// reads, so the bits are the same either way. Off is the A/B arm.
-func WithLookahead(on bool) Option { return func(l *loadOpts) { l.opt.noLook = !on } }
+// WithPrefillChunk pins the rows a prompt chunk carries on the CPU device;
+// 0 takes the rows its forms are composed at.
+func WithPrefillChunk(n int) Option { return func(l *loadOpts) { l.opt.prefillChunk = max(n, 0) } }
 
 // WithResidualFold sets whether a fused run's o and down groups add their rows
 // into the residual as each worker makes them, rather than in an add of its

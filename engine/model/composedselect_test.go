@@ -41,13 +41,13 @@ func selectingBlocks(m *Model) int {
 func TestComposedCPUSelectsKeys(t *testing.T) {
 	const steps, page, bound = 24, 32, 1e-5
 	path := jlmOf(t, testmodels.Path("synth-minimaxm3.gguf"))
-	ref, err := Open(path, noTune(), withCPUFloat())
+	ref, err := Open(path, withCPUFloat())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer ref.Close()
 	ref.setKVPageForTest(page)
-	m, err := Open(path, noTune())
+	m, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -120,7 +120,7 @@ func TestForwardEmbdMatchesForward(t *testing.T) {
 			}
 		}
 		diffBits(t, what, want, got)
-	}, noTune())
+	})
 }
 
 // TestPrefillMixedMatchesPrefill runs with tuning off: on arm64 a timed shape
@@ -169,7 +169,7 @@ func TestPrefillMixedMatchesPrefill(t *testing.T) {
 			t.Fatal(err)
 		}
 		diffBits(t, "Forward after PrefillMixed", want, got)
-	}, noTune())
+	})
 }
 
 func diffBits(t *testing.T, what string, want, got []float32) {

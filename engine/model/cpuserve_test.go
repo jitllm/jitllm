@@ -50,7 +50,7 @@ func TestComposedCPUBlocksServe(t *testing.T) {
 	for _, file := range cpuServedModels() {
 		t.Run(file, func(t *testing.T) {
 			path := jlmOf(t, testmodels.Path(file))
-			m, err := Open(path, noTune())
+			m, err := Open(path)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -203,7 +203,7 @@ func withCPUFloat() Option { return func(l *loadOpts) { l.opt.cpuFloat = true } 
 // history, pages of page positions (withCPUFloat): a gate's reference arm.
 func cpuFloat(t *testing.T, path string, page int) *Model {
 	t.Helper()
-	fm, err := Open(path, noTune(), WithKVF16(false), withCPUFloat())
+	fm, err := Open(path, WithKVF16(false), withCPUFloat())
 	if err != nil {
 		t.Fatal(err)
 	}

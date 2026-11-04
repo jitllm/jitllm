@@ -89,7 +89,7 @@ func openStepDense(t *testing.T) *Model {
 	if _, err := os.Stat(p); err != nil {
 		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
-	m, err := Open(jlmOf(t, p), noTune(), WithKVF16(false))
+	m, err := Open(jlmOf(t, p), WithKVF16(false))
 	if err != nil {
 		t.Fatal(err)
 	}

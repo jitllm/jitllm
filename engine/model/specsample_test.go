@@ -23,7 +23,7 @@ import (
 // see a distribution cut at the wrong temperature (the host's dist read 0.13
 // under a 0.48 floor): TestSpecDistIsTheDrawsDistribution holds that.
 func TestSpecSamplingKeepsTheDistribution(t *testing.T) {
-	m := openSpecModel(t, "synth-qwen35-hybrid-mtp.gguf", noTune(), WithKVF16(false))
+	m := openSpecModel(t, "synth-qwen35-hybrid-mtp.gguf", WithKVF16(false))
 	defer m.Close()
 	for _, c := range []struct {
 		name       string

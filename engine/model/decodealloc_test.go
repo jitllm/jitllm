@@ -84,7 +84,7 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 						noDevice(t, d[0]+","+d[1], err)
 					}
 					defer g.Close()
-					m2, err := Open(jlmOf(t, p), noTune(), resident, WithStreamTrial(false),
+					m2, err := Open(jlmOf(t, p), resident, WithStreamTrial(false),
 						WithPlacement(Placement{Rest: &Place{On: d[1]}, Head: &Place{On: d[0]}}))
 					if err != nil {
 						t.Fatal(err)
@@ -107,11 +107,11 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 			switch name {
 			case "Llama-3.2-1B-Instruct-Q4_K_M.gguf", "olmoe-1b-7b-0924-instruct-Q4_K_M.gguf",
 				"qwen35/Qwen3.5-0.8B-Q4_K_M.gguf":
-				t.Run("two-device-groups", func(t *testing.T) { groupedStepAllocs(t, p, noTune(), resident) })
+				t.Run("two-device-groups", func(t *testing.T) { groupedStepAllocs(t, p, resident) })
 			}
 			// The stream trial pinned off with the tuners: it migrates blocks
 			// between its runs, and a migration's page-ins are not a decode.
-			m, err := Open(jlmOf(t, p), noTune(), resident, WithStreamTrial(false))
+			m, err := Open(jlmOf(t, p), resident, WithStreamTrial(false))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -209,7 +209,7 @@ func composedAllocModels() []string {
 // 1024 positions: a picture's prompt alone (Phi-4-reasoning-vision's 2003)
 // was enough, and every gate decoded short.
 func TestLongDecodeDoesNotAllocate(t *testing.T) {
-	m, err := Open(jlmOf(t, testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf")), noTune())
+	m, err := Open(jlmOf(t, testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -495,8 +495,7 @@ func decodeAllocs(t *testing.T, m *Model, g *gpu.GPU) decodeWindow {
 		c0 = g.Stats()
 	}
 	r0 := m.container.Reads()
-	k0 := s.jit.KSliced()
-	_, a0 := s.jit.NUMA()
+	_, a0 := s.Pool().NUMA()
 	w := countAllocs(func() {
 		for i := range n {
 			if _, err := s.Forward(int32(3 + i%64)); err != nil {
@@ -508,7 +507,7 @@ func decodeAllocs(t *testing.T, m *Model, g *gpu.GPU) decodeWindow {
 	if g != nil {
 		captures = g.Stats().Captures - c0.Captures
 	}
-	_, a1 := s.jit.NUMA()
+	_, a1 := s.Pool().NUMA()
 	if g != nil && s.GPULayers() < placed {
 		t.Fatalf("%d of the %d blocks placed on the device are still there after the window (%s): this arm measured the host", s.GPULayers(), placed, declinesOf(g.Stats()))
 	}
@@ -518,15 +517,15 @@ func decodeAllocs(t *testing.T, m *Model, g *gpu.GPU) decodeWindow {
 			t.Fatalf("the composed CPU served %d of %d block steps (%v): this arm measured main's decode", served, want, s.CPUFormErr())
 		}
 	}
-	dw := decodeWindow{ksliced: s.jit.KSliced() - k0, affine: a1 - a0}
-	allocVerdict(t, fmt.Sprintf("%d of %d blocks placed, %d matvec(s) split over k, %d region(s) node-affine",
-		s.GPULayers(), m.Cfg.NLayer, dw.ksliced, dw.affine), w, n, m.container.Reads()-r0, captures)
+	dw := decodeWindow{affine: a1 - a0}
+	allocVerdict(t, fmt.Sprintf("%d of %d blocks placed, %d region(s) node-affine",
+		s.GPULayers(), m.Cfg.NLayer, dw.affine), w, n, m.container.Reads()-r0, captures)
 	return dw
 }
 
-// decodeWindow is what the host ran over decodeAllocs' window: matvecs split
-// over k (nn.JIT.KSliced) and regions dispatched node-affine (nn.JIT.NUMA).
-type decodeWindow struct{ ksliced, affine int64 }
+// decodeWindow is what the CPU device ran over decodeAllocs' window: regions
+// dispatched node-affine (cpu.Pool.NUMA).
+type decodeWindow struct{ affine int64 }
 
 // allocVerdict reports a window of n tokens or steps and fails it: on an
 // allocation by the engine, on a window the profile cannot account for, and
@@ -726,7 +725,7 @@ func TestOffCardDecodeDoesNotAllocate(t *testing.T) {
 					continue
 				}
 				t.Run(where, func(t *testing.T) {
-					m, err := Open(jlmOf(t, testmodels.Path(name)), noTune(), WithExperts(where), WithStreamTrial(false))
+					m, err := Open(jlmOf(t, testmodels.Path(name)), WithExperts(where), WithStreamTrial(false))
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -771,7 +770,7 @@ func TestOffCardDecodeDoesNotAllocate(t *testing.T) {
 // is bytes on a particular device, so on another card an arm may land
 // elsewhere: CARD TOO SMALL, or a placement with room to spare.
 func TestStepAllocsUnderABudget(t *testing.T) {
-	m, err := Open(jlmOf(t, testmodels.Path("synth-gemma4-moe.gguf")), noTune(), WithStreamTrial(false))
+	m, err := Open(jlmOf(t, testmodels.Path("synth-gemma4-moe.gguf")), WithStreamTrial(false))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -799,13 +798,13 @@ func TestPagedDecodeDoesNotAllocate(t *testing.T) {
 	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen3-0.6B-Q8_0.gguf"} {
 		t.Run(name, func(t *testing.T) {
 			src := jlmOf(t, testmodels.Path(name))
-			probe, err := Open(src, noTune())
+			probe, err := Open(src)
 			if err != nil {
 				t.Fatal(err)
 			}
 			page, nb := probe.PageSize(), uint64(probe.Cfg.NLayer)
 			probe.Close()
-			m, err := Open(src, noTune(), WithPageBudget(page*max(nb/3, 2)), WithStreamTrial(false))
+			m, err := Open(src, WithPageBudget(page*max(nb/3, 2)), WithStreamTrial(false))
 			if err != nil {
 				t.Fatal(err)
 			}

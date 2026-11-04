@@ -113,10 +113,9 @@ func rewriteMixers(m *Model, rw deltaRewrite) (int, func()) {
 	return n, func() { copy(f.blocks, old) }
 }
 
-// linearLogits is m's teacher-forced decode of toks with its attention
-// blocks stated by no graph, so main's kernels run them and the composed
-// CPU its linear blocks alone: every linear block step served, every
-// attention block step declined as having no graph, nothing else.
+// linearLogits is m's teacher-forced decode of toks on the composed CPU,
+// every block step served and none declined; a violation (f) reaches the
+// linear blocks.
 func linearLogits(t *testing.T, m *Model, toks []int32, f cpuFault) [][]float32 {
 	t.Helper()
 	return linearRun(t, m, nil, toks, f)
@@ -126,15 +125,10 @@ func linearLogits(t *testing.T, m *Model, toks []int32, f cpuFault) [][]float32 
 // each step's.
 func linearRun(t *testing.T, m *Model, prompt, toks []int32, f cpuFault) [][]float32 {
 	t.Helper()
-	fs := m.frontGraphs()
-	old := slices.Clone(fs.blocks)
-	defer copy(fs.blocks, old)
 	lin := 0
-	for li := range fs.blocks {
+	for li := range m.Cfg.NLayer {
 		if m.Cfg.LayerKind(li) == jlm.LayerLinearAttn {
 			lin++
-		} else {
-			fs.blocks[li] = nil
 		}
 	}
 	s := m.NewInstance(len(prompt) + len(toks) + 1)
@@ -157,18 +151,17 @@ func linearRun(t *testing.T, m *Model, prompt, toks []int32, f cpuFault) [][]flo
 	}
 	served, declined := s.CPUBlockSteps()
 	for i, n := range declined {
-		if n > 0 && composer.Decline(i) != composer.DeclineNoGraph {
+		if n > 0 {
 			t.Fatalf("%d block steps declined: %s (%v)", n, composer.DeclineName(i), s.CPUFormErr())
 		}
 	}
-	// A prompt's chunk is one block step of each block, its rows the
-	// linear block's one at a time.
-	want := len(toks) * lin
+	// A prompt's chunk is one block step of each block.
+	want := len(toks) * m.Cfg.NLayer
 	if len(prompt) > 0 {
-		want += lin
+		want += m.Cfg.NLayer
 	}
 	if served < want || lin == 0 {
-		t.Fatalf("%d linear block steps served, want at least %d (%d linear blocks)", served, want, lin)
+		t.Fatalf("%d block steps served, want at least %d (%d of %d blocks linear)", served, want, lin, m.Cfg.NLayer)
 	}
 	return out
 }
@@ -185,7 +178,7 @@ func TestComposedCPUDeltaFeaturesAreLoadBearing(t *testing.T) {
 	path := jlmOf(t, testmodels.Path("qwen35/Qwen3.5-0.8B-Q4_K_M.gguf"))
 	open := func(opts ...Option) *Model {
 		t.Helper()
-		m, err := Open(path, append([]Option{noTune()}, opts...)...)
+		m, err := Open(path, opts...)
 		if err != nil {
 			t.Fatal(err)
 		}

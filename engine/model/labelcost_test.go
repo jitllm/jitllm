@@ -44,14 +44,14 @@ func TestRegionLabelCost(t *testing.T) {
 		var a, b runtime.MemStats
 		runtime.GC()
 		runtime.ReadMemStats(&a)
-		r0, _ := s.jit.Regions()
+		r0, _ := s.Pool().Regions()
 		for i := 0; i < n; i++ {
 			if _, err := s.Forward(int32(3 + i%64)); err != nil {
 				t.Fatal(err)
 			}
 		}
 		runtime.ReadMemStats(&b)
-		r1, _ := s.jit.Regions()
+		r1, _ := s.Pool().Regions()
 		return float64(b.Mallocs-a.Mallocs) / float64(n),
 			float64(b.TotalAlloc-a.TotalAlloc) / float64(n),
 			float64(r1-r0) / float64(n)

@@ -13,7 +13,6 @@ import (
 	"github.com/jitllm/jitllm/convert"
 	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/model"
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testdevices"
 )
@@ -63,7 +62,7 @@ func TestTeacherForcedAgainstReference(t *testing.T) {
 		}
 		path = dst
 	}
-	m, err := model.Open(jlmOf(t, path), model.WithJITOptions(nn.WithGEMMExact(true), nn.WithTune(nn.TuneOff)),
+	m, err := model.Open(jlmOf(t, path),
 		model.WithKVF16(os.Getenv("JITLLM_REF_KVF16") == "1"))
 	if err != nil {
 		t.Fatal(err)

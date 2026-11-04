@@ -34,14 +34,14 @@ func TestGemma3nServesComposedOnCPU(t *testing.T) {
 			}
 			toks := g.IDs
 			path := jlmOf(t, testmodels.Path(fx.name+".gguf"))
-			ref, err := Open(path, noTune(), withCPUFloat())
+			ref, err := Open(path, withCPUFloat())
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer ref.Close()
 			ref.setKVPageForTest(page)
 			want := cpuLogits(t, ref, toks, cpuFaultNone, true)
-			m, err := Open(path, noTune())
+			m, err := Open(path)
 			if err != nil {
 				t.Fatal(err)
 			}

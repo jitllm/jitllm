@@ -96,7 +96,7 @@ func splitEnv(t *testing.T) (path string, rounds, burn int) {
 func TestServingSplitAB(t *testing.T) {
 	p, rounds, burn := splitEnv(t)
 	open := func(o ...Option) *Model {
-		m, err := Open(p, append([]Option{noTune()}, o...)...)
+		m, err := Open(p, o...)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -223,7 +223,7 @@ func TestServingSplitAB(t *testing.T) {
 func TestServingSplitSingleSessionUnchanged(t *testing.T) {
 	p, rounds, _ := splitEnv(t)
 	open := func(o ...Option) *Model {
-		m, err := Open(p, append([]Option{noTune()}, o...)...)
+		m, err := Open(p, o...)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -346,12 +346,12 @@ func TestServingSplitIsTakenBesideADecoderOnly(t *testing.T) {
 		}
 		return append([]float32(nil), l...), s.ServedOnE
 	}
-	on, err := Open(p, noTune())
+	on, err := Open(p)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer on.Close()
-	off, err := Open(p, noTune(), WithServingSplit(false))
+	off, err := Open(p, WithServingSplit(false))
 	if err != nil {
 		t.Fatal(err)
 	}

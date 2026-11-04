@@ -51,7 +51,7 @@ func TestComposedCPURowsServe(t *testing.T) {
 			path := jlmOf(t, testmodels.Path(tc.file))
 			open := func(opts ...Option) *Model {
 				t.Helper()
-				m, err := Open(path, append([]Option{noTune()}, opts...)...)
+				m, err := Open(path, opts...)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -346,7 +346,7 @@ func TestComposedCPURowsDoNotAllocate(t *testing.T) {
 	}
 	for _, file := range files {
 		t.Run(file, func(t *testing.T) {
-			m, err := Open(jlmOf(t, testmodels.Path(file)), noTune())
+			m, err := Open(jlmOf(t, testmodels.Path(file)))
 			if err != nil {
 				t.Fatal(err)
 			}

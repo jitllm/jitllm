@@ -20,7 +20,7 @@ import (
 // step of both.
 func TestWindowReleaseGateDiscriminates(t *testing.T) {
 	specs := testdevices.Specs("cuda", "vulkan", "metal")
-	m, err := Open(jlmOf(t, testmodels.Path("synth-exaone4.gguf")), noTune())
+	m, err := Open(jlmOf(t, testmodels.Path("synth-exaone4.gguf")))
 	if err != nil {
 		t.Fatal(err)
 	}

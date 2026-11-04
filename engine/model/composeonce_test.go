@@ -67,7 +67,7 @@ func TestPlacementComposesOnce(t *testing.T) {
 			}
 			path := jlmOf(t, p)
 			t.Run("one-card", func(t *testing.T) {
-				m, err := Open(path, noTune())
+				m, err := Open(path)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -88,7 +88,7 @@ func TestPlacementComposesOnce(t *testing.T) {
 				for li := n / 2; li < n; li++ {
 					up[li] = Place{On: b}
 				}
-				m, err := Open(path, noTune(), WithPlacement(Placement{Blocks: up, Rest: &Place{On: a}, Head: &Place{On: b}, Strict: true}))
+				m, err := Open(path, WithPlacement(Placement{Blocks: up, Rest: &Place{On: a}, Head: &Place{On: b}, Strict: true}))
 				if err != nil {
 					t.Fatal(err)
 				}

@@ -273,6 +273,8 @@ func (c *cpuForms) close() {
 // cpuState is a instance's composed CPU blocks: each block's form and its own
 // buffers, the history tables, and the census.
 type cpuState struct {
+	// workers is the CPU device's workers (cpu.Pool).
+	workers   *cpu.Pool
 	launch    int
 	launchSet bool
 	blocks    []*cpuBlock
@@ -533,11 +535,7 @@ func CPUForm() string {
 // composedCPU is this instance's CPU as the composer forms for it, its launch
 // cost its probe row's.
 func (s *Instance) composedCPU() composer.Device {
-	workers := 1
-	if s.jit != nil {
-		workers = s.jit.Workers()
-	}
-	d := composedCPUDevice(workers)
+	d := composedCPUDevice(s.cpu.workers.Workers())
 	if !s.cpu.launchSet {
 		if name, err := probe.HostName(); err == nil {
 			if p, ok := hw.Known(name, runtime.GOARCH); ok {
@@ -1392,7 +1390,7 @@ func (s *Instance) cpuLaunch(b *cpuBound, c *cpuCode) {
 	if c.share.Share > 0 {
 		_, n = c.share.ShareRows(s.cpu.part)
 	}
-	if n <= 1 || c.serial || s.jit == nil || s.jit.Workers() <= 1 {
+	if n <= 1 || c.serial || s.cpu.part <= 1 {
 		a := &s.cpu.args[0]
 		for i := range max(n, 1) {
 			s.cpuWords(a, b, c, c.callAt(i, live))
@@ -1400,15 +1398,9 @@ func (s *Instance) cpuLaunch(b *cpuBound, c *cpuCode) {
 		}
 		return
 	}
-	// A prefill's pool may be wider than the decode pool the words were
-	// sized for at placement (the P and E cores'): a word block for each of
-	// its workers.
-	if w := s.jit.Workers(); len(s.cpu.args) < w {
-		s.cpu.args = cpuArgBlocks(w)
-	}
 	r := &s.cpu.run
 	r.s, r.b, r.c, r.live = s, b, c, live
-	s.jit.ParallelWorkers(n, 1, r.fn)
+	s.cpu.workers.Do(n, 1, r.fn)
 }
 
 // callAt is the call the i-th of a kernel's calls runs: in order, or for a
@@ -1605,11 +1597,9 @@ func (s *Instance) cpuPlace() {
 	n := max(s.c.NLayer, s.hi)
 	s.cpu.blocks = make([]*cpuBlock, n)
 	s.cpu.composed = make([]int, n)
-	w := 1
-	if s.jit != nil {
-		w = s.jit.Workers()
-	}
-	s.cpu.args = cpuArgBlocks(max(w, 1))
+	// A word block for each worker of the widest region the pool runs, a
+	// prefill's on the P and E cores among them.
+	s.cpu.args = cpuArgBlocks(s.cpu.workers.Max())
 	s.cpu.ends = make([]int, 0, 16)
 	s.cpu.run.fn = s.cpu.run.region
 	s.cpu.run.gfn = s.cpu.run.groupRegion
@@ -2889,32 +2879,26 @@ func (s *Instance) cpuGroup(b *cpuBound, g []cpuCode) {
 		}
 		s.cpu.ends = append(s.cpu.ends, n)
 	}
-	if s.jit == nil || s.jit.Workers() <= 1 {
+	if s.cpu.workers.Workers() <= 1 {
 		s.cpuGroupRun(&s.cpu.args[0], b, g, 0, n)
 		return
 	}
-	if w := s.jit.Workers(); len(s.cpu.args) < w {
-		s.cpu.args = cpuArgBlocks(w)
-	}
 	r := &s.cpu.run
 	r.s, r.b, r.g = s, b, g
-	s.jit.ParallelWorkers(n, 1, r.gfn)
+	s.cpu.workers.Do(n, 1, r.gfn)
 }
 
 // cpuChain runs the kernels g as one phase over the pool, units units:
 // a unit its calls of each kernel in turn (chainPhases).
 func (s *Instance) cpuChain(b *cpuBound, g []cpuCode, units int) {
 	s.cpu.part = s.Workers()
-	if s.jit == nil || s.jit.Workers() <= 1 {
+	if s.cpu.part <= 1 {
 		s.cpuChainRun(&s.cpu.args[0], b, g, units, 0, units)
 		return
 	}
-	if w := s.jit.Workers(); len(s.cpu.args) < w {
-		s.cpu.args = cpuArgBlocks(w)
-	}
 	r := &s.cpu.run
 	r.s, r.b, r.g, r.units = s, b, g, units
-	s.jit.ParallelWorkers(units, 1, r.cfn)
+	s.cpu.workers.Do(units, 1, r.cfn)
 }
 
 // cpuChainRun runs the units [lo, hi) of the kernels g's phase on a.
