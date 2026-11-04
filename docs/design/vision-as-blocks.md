@@ -124,6 +124,23 @@ segment's input rows.
 | entry | `embedRow` (vocabulary row, `EmbdScale`, learned position table) | patch gather (a permutation, setup code) + patch-embed matmul + bias, class row, position table or nothing, pre-LN |
 | head | output norm + vocabulary projection (`nn.Head`, device or host) | post-LN + the projector program |
 
+**The tower is stated, not recognised.** The converter, which may know a
+family (RULE 7), writes the tower down as data in the container (`jlm.Tower`,
+the vision record's last tail): the picture's preprocessing as ordered steps,
+each a named algorithm with its parameters (`PreResize` with a `Filter` and
+the arithmetic it runs in, `PreNormalize`); the ENTRY and the HEAD as short
+programs over value references, in a vocabulary of the container's own
+(`TOpPatchify`, `TOpLinear`, `TOpPosTable`, `TOpAdd`, `TOpLayerNorm`,
+`TOpRegroup`, ...) that the engine maps one for one onto its graph's ops; the
+repeated block as the attributes its inventory cannot say (heads, norm kind,
+epsilon, score scale, the stated activation); and the picture's span as token
+ids resolved at conversion. The engine switches on no `Projector`: a record it
+cannot read (a later revision, an unknown step or op, a value read before it
+is made) refuses the container, and a container converted before towers were
+stated is converted again. SmolVLM (idefics3) is stated first; each family
+after it adds its steps and ops to the vocabulary, never a branch in the
+engine.
+
 The projector is a short program of generated ops, one per family (section 5):
 `Permute` (pixel shuffle / window order), `Pool` (gemma3), `Norm`, `Linear`,
 `Act`, and for MiniCPM a `CrossAttn` that calls the same attention set with its
