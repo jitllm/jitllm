@@ -9,17 +9,15 @@ import (
 )
 
 // derivedTable is the table block history pg's pages are in, laid out from
-// the pages themselves: page j of sequence q names the arena slot pg.k[j]
-// starts, or slot 0.
+// the pages themselves: page j of sequence q names the arena slot page j's
+// key starts, or slot 0.
 func derivedTable(pg *kvPages, nseq int) []uint32 {
-	slots, a := pg.t.Slots(), pg.t.Arena()
+	slots, a := pg.arena().Slots(), pg.arena().Arena()
 	t := make([]uint32, slots*nseq)
 	for j := range slots {
 		i := 0
-		if j < len(pg.k) {
-			if si, ok := a.SlotOf(pg.k[j]); ok {
-				i = si
-			}
+		if si, ok := a.SlotOf(pg.mem.K(j)); ok {
+			i = si
 		}
 		for q := range nseq {
 			t[q*slots+j] = uint32(i*nseq + q)
@@ -35,13 +33,13 @@ func cpuTablesWrong(s *Instance) (error, int) {
 	n := 0
 	for li := s.kv.lo; li < len(s.kv.layers); li++ {
 		pg := &s.kv.layers[li]
-		if pg.t == nil {
+		if pg.arena() == nil {
 			continue
 		}
-		if s.Session.view.At(li) != pg.t {
+		if s.Session.view.At(li) != pg.arena() {
 			return fmt.Errorf("block %d's table is not its session's view's", li), n
 		}
-		if got, want := pg.t.Pages(nseq), derivedTable(pg, nseq); !slices.Equal(got, want) {
+		if got, want := pg.arena().Pages(nseq), derivedTable(pg, nseq); !slices.Equal(got, want) {
 			return fmt.Errorf("block %d's table is %v, its pages are in %v", li, got, want), n
 		}
 		n++
@@ -66,7 +64,7 @@ func checkCPUTables(t *testing.T, s *Instance, when string) {
 // every way a page changes it names the slot each page is in: pages grown by
 // a prompt and a decode, a prefix restored from the shared store, a shared
 // page made private before a write, pages evicted under a budget and faulted
-// back from a store. A page swapped behind the view's back is seen.
+// back from a store. A table told another slot than its page is in is seen.
 func TestCPUPageTablesFollowThePages(t *testing.T) {
 	m, err := Open(jlmOf(t, testmodels.Path("stories15M-q8_0.gguf")))
 	if err != nil {
@@ -121,23 +119,28 @@ func TestCPUPageTablesFollowThePages(t *testing.T) {
 		t.Fatalf("under a two-page budget %d pages were evicted and %d faulted back: nothing paged", s.kv.evicted, s.kv.fetched)
 	}
 
-	// The violation: a page made another slot without the view told.
+	// The violation: the table told another slot than the page is in.
 	pg = &s.kv.layers[firstAttn(s)]
-	j := slices.IndexFunc(pg.k, func(k []float32) bool { return k != nil && pg.inArena(0, k) })
+	j := -1
+	for n := range pg.mem.Len() {
+		if pg.mem.ArenaPage(n) {
+			j = n
+			break
+		}
+	}
 	if j < 0 {
 		t.Fatal("no page of the first attending block is in its arena")
 	}
-	k2, _ := pg.t.Take()
+	k2, _ := pg.mem.Take()
 	if k2 == nil {
-		t.Fatal("the arena had no slot to swap in")
+		t.Fatal("the arena had no slot to name instead")
 	}
-	old := pg.k[j]
-	pg.k[j] = k2
+	pg.arena().Set(j, k2)
 	err, _ = cpuTablesWrong(s)
-	pg.k[j] = old
-	pg.t.Let(k2)
+	pg.arena().Set(j, pg.mem.K(j))
+	pg.mem.Give(k2)
 	if err == nil {
-		t.Fatal("a page swapped behind the view's back was not seen")
+		t.Fatal("a table naming another slot than its page is in was not seen")
 	}
-	t.Logf("%d pages evicted and %d faulted back, every table where its pages are; a swapped page seen: %v", s.kv.evicted, s.kv.fetched, err)
+	t.Logf("%d pages evicted and %d faulted back, every table where its pages are; a wrong table seen: %v", s.kv.evicted, s.kv.fetched, err)
 }

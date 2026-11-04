@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
@@ -59,7 +60,7 @@ func TestPagedKVIsTokenIdenticalToOnePage(t *testing.T) {
 		// boundary at all.
 		pages := 0
 		for li := range s.kv.layers {
-			if n := len(s.kv.layers[li].k); n > pages {
+			if n := s.kv.layers[li].mem.Len(); n > pages {
 				pages = n
 			}
 		}
@@ -306,7 +307,7 @@ func TestFileStoreRefusesAShortPage(t *testing.T) {
 		t.Fatal("a truncated page filled the whole buffer")
 	}
 	// Assert that the fault refuses, not that a constructor builds an error.
-	kc := &kvCache{id: "7", store: fs, layers: []kvPages{{p: 8, pp: len(w.b) / 4}}}
+	kc := &kvCache{id: "7", store: fs, layers: []kvPages{{p: 8, pp: len(w.b) / 4, mem: heldPages(len(w.b) / 4)}}}
 	err = kc.fault(0, 0)
 	// A miss, not a failure, and the key is dropped on the way past: a page left
 	// by a differently-configured process should cost a prefill, not brick that
@@ -1030,8 +1031,7 @@ func TestSealDoesNotClaimPagesItCouldNotStore(t *testing.T) {
 	pg := &kc.layers[0]
 
 	// Pages 0 and 1 exist; page 2 was never written, as a device layer's are not.
-	pg.k = [][]float32{make([]float32, 8), make([]float32, 8), nil, make([]float32, 8)}
-	pg.v = [][]float32{make([]float32, 8), make([]float32, 8), nil, make([]float32, 8)}
+	pg.mem = heldPages(8, true, true, false, true)
 	pg.written = 8 // positions 0..7, i.e. pages 0 and 1, are genuinely full
 
 	kc.seal(16) // cur = 4, so it would like to seal pages 0..3
@@ -1046,7 +1046,7 @@ func TestSealDoesNotClaimPagesItCouldNotStore(t *testing.T) {
 
 	// Fill the gap -- which is what a pull-down from the card does -- and the
 	// mark must now advance past it.
-	pg.k[2], pg.v[2] = make([]float32, 8), make([]float32, 8)
+	pg.mem.Set(2, make([]float32, 8), make([]float32, 8))
 	pg.written = 16
 	kc.seal(16)
 	if pg.lastSealed != 4 {
@@ -1063,8 +1063,7 @@ func TestSealDoesNotClaimPagesItCouldNotStore(t *testing.T) {
 	kc2 := &kvCache{id: "s", store: NewMemStore(), bh: map[int][]string{},
 		layers: []kvPages{{p: 4, pp: 8}}}
 	p2 := &kc2.layers[0]
-	p2.k = [][]float32{make([]float32, 8), make([]float32, 8)}
-	p2.v = [][]float32{make([]float32, 8), make([]float32, 8)}
+	p2.mem = heldPages(8, true, true)
 	p2.written = 6 // page 1 holds positions 4..7 and only 4 and 5 were written
 	kc2.seal(8)    // cur = 2, so it would like to seal pages 0 and 1
 	if p2.lastSealed != 1 {
@@ -1455,7 +1454,7 @@ func kvPagesRelocateWithTheLayer(t *testing.T, path string, kt KVType, w *fuseWa
 		// window of 4) keeps a ring of pages, and a global one carries the rest.
 		most := 0
 		for i := range s.kv.layers {
-			most = max(most, len(s.kv.layers[i].k))
+			most = max(most, s.kv.layers[i].mem.Len())
 		}
 		if most < 3 {
 			t.Fatalf("only %d page(s) after %d tokens: a single-page history cannot show "+
@@ -1708,7 +1707,7 @@ func pagedKVIsTokenIdenticalOnEveryModel(t *testing.T, opts ...Option) {
 				}
 				most := 0
 				for li := range s.kv.layers {
-					if n := len(s.kv.layers[li].k); n > most {
+					if n := s.kv.layers[li].mem.Len(); n > most {
 						most = n
 					}
 				}
@@ -1950,4 +1949,17 @@ func TestMemStoreFillsServeASharedPrefix(t *testing.T) {
 	sameTokens(t, "fills identical-prompt", wantFirst, again)
 	t.Logf("%d SetFills of %d keys; %d of %d shared positions and %d of %d identical-prompt positions restored; tokens identical",
 		store.fills, store.keys, reused, len(shared), whole, len(first))
+}
+
+// heldPages is a block's page memory of pp floats a page, page n resident
+// where held[n] says so, for a gate that builds its history by hand.
+func heldPages(pp int, held ...bool) *cpudev.Pages {
+	p := cpudev.NewView(1).Pages(0, pp, false, nil)
+	for n, h := range held {
+		p.Extend(n)
+		if h {
+			p.Set(n, make([]float32, pp), make([]float32, pp))
+		}
+	}
+	return p
 }

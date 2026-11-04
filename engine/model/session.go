@@ -172,14 +172,13 @@ func (s *Instance) relayout() error {
 	l := s.kvl
 	l.maxSeq = sess.limit
 	old := sess.kv
-	sess.kv = newKVCacheRange(s.c, old.id, 1, l, old.store, s.m.opt.kvPage, s.lo, s.hi)
-	sess.kv.usePool(&s.m.eng.kvPool)
+	sess.kv = newKVCacheRange(s.c, old.id, 1, l, old.store, s.m.opt.kvPage, s.lo, s.hi, sess.cpuView(), &s.m.eng.kvPool)
 	sess.kv.reserve(sess.limit)
 	sess.kv.ns, sess.kv.budget = old.ns, old.budget
-	if err := sess.kv.useArenas(sess.limit, s.m.kvArenaFor, sess.cpuView()); err != nil {
+	if err := sess.kv.useArenas(sess.limit, s.m.kvArenaFor); err != nil {
 		return err
 	}
-	s.m.eng.kvPool.put(old)
+	old.giveBack(&s.m.eng.kvPool)
 	sess.kvFormat = s.kvFmt
 	return nil
 }

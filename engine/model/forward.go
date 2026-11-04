@@ -548,10 +548,9 @@ func (m *Model) newInstanceRange(nseq, maxSeq, lo, hi int) *Instance {
 	s.Session.limit, s.Session.kvFormat, s.Session.span = maxSeq, want, [2]int{lo, hi}
 	s.allocQ4E()
 	// kvl.fmt sizes every page.
-	s.kv = newKVCacheRange(c, s.m.nextCacheID(), nseq, s.kvl, nil, s.m.opt.kvPage, s.lo, s.hi)
-	s.kv.usePool(&m.eng.kvPool)
+	s.kv = newKVCacheRange(c, s.m.nextCacheID(), nseq, s.kvl, nil, s.m.opt.kvPage, s.lo, s.hi, s.Session.cpuView(), &m.eng.kvPool)
 	s.kv.reserve(s.maxSeq)
-	if err := s.kv.useArenas(s.maxSeq, s.m.kvArenaFor, s.Session.cpuView()); err != nil {
+	if err := s.kv.useArenas(s.maxSeq, s.m.kvArenaFor); err != nil {
 		s.cpu.formErr = err
 	}
 	s.cpuPlace()
@@ -644,7 +643,7 @@ func (s *Instance) Close() error {
 	// The history the device gave back was host memory on an integrated GPU,
 	// and the model's pages get it back once no instance holds the device.
 	s.holdHost(nil)
-	s.m.eng.kvPool.put(s.kv)
+	s.kv.giveBack(&s.m.eng.kvPool)
 	s.unmapOwn()
 	// The blocks this instance ran on the host no longer need their pages for
 	// it. Close may be called twice; cpuHeld makes the second a no-op.
@@ -2854,12 +2853,11 @@ func (s *Instance) setKVFmt(f cpu.KVFmt) {
 	// Carry every caller-visible setting into the fresh cache (namespace and
 	// budget); a forgotten one is silently lost.
 	old := s.kv
-	s.kv = newKVCacheRange(s.c, old.id, s.nseq, s.kvl, old.store, s.m.opt.kvPage, s.lo, s.hi)
-	s.kv.usePool(&s.m.eng.kvPool)
+	s.kv = newKVCacheRange(s.c, old.id, s.nseq, s.kvl, old.store, s.m.opt.kvPage, s.lo, s.hi, s.Session.cpuView(), &s.m.eng.kvPool)
 	s.kv.reserve(s.maxSeq)
 	s.kv.ns, s.kv.budget = old.ns, old.budget
 	// The CPU's blocks read the new cache: its arenas, and forms for f32.
-	if err := s.kv.useArenas(s.maxSeq, s.m.kvArenaFor, s.Session.cpuView()); err != nil {
+	if err := s.kv.useArenas(s.maxSeq, s.m.kvArenaFor); err != nil {
 		s.cpu.formErr = err
 	}
 	s.cpuPlace()

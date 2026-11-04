@@ -77,16 +77,11 @@ func reusedScratchGate(t *testing.T, path string) {
 	}
 	poisoned := unsafe.SliceData(h.bh)
 	m.eng.spareMu.Unlock()
-	m.eng.kvPool.mu.Lock()
-	pooled := m.eng.kvPool.bytes
-	for _, l := range m.eng.kvPool.free {
-		for _, b := range l {
-			for i := range b {
-				b[i] = float32(math.NaN())
-			}
+	pooled := m.eng.kvPool.Held(func(b []float32) {
+		for i := range b {
+			b[i] = float32(math.NaN())
 		}
-	}
-	m.eng.kvPool.mu.Unlock()
+	})
 
 	s := m.NewInstance(ctx)
 	lg, err := s.Prefill(short)
@@ -101,12 +96,12 @@ func reusedScratchGate(t *testing.T, path string) {
 		// Close: no page comes back to be read stale, and a new history is
 		// fresh memory.
 		for li := s.kv.lo; li < len(s.kv.layers); li++ {
-			if l := &s.kv.layers[li]; l.p > 0 && l.t == nil {
+			if l := &s.kv.layers[li]; l.p > 0 && l.arena() == nil {
 				t.Fatalf("block %d's history is in pages, and no page was handed back to the model", li)
 			}
 		}
-	} else if m.eng.kvPool.bytes >= pooled {
-		t.Fatalf("the pool still holds %d of %d bytes: the new history did not come from it", m.eng.kvPool.bytes, pooled)
+	} else if held := m.eng.kvPool.Held(nil); held >= pooled {
+		t.Fatalf("the pool still holds %d of %d bytes: the new history did not come from it", held, pooled)
 	}
 	got := [][]float32{append([]float32(nil), lg...)}
 	for i := 0; i < steps; i++ {

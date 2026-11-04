@@ -84,7 +84,7 @@ func TestPagedKVCost(t *testing.T) {
 		d := time.Since(t0)
 		pages := 0
 		for li := range s.kv.layers {
-			if n := len(s.kv.layers[li].k); n > pages {
+			if n := s.kv.layers[li].mem.Len(); n > pages {
 				pages = n
 			}
 		}

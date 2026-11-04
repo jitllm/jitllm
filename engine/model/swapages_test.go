@@ -89,7 +89,7 @@ func TestWindowedLayersHoldTheirWindow(t *testing.T) {
 					for _, li := range win {
 						pg := &s.kv.layers[li]
 						r := 0
-						for j := range pg.k {
+						for j := range pg.mem.Len() {
 							if pg.resident(j) {
 								r++
 							}
@@ -113,7 +113,7 @@ func TestWindowedLayersHoldTheirWindow(t *testing.T) {
 			// The history that must still be whole: a full layer's positions.
 			fl, held := &hs.kv.layers[full[0]], n
 			fullPages := 0
-			for j := range fl.k {
+			for j := range fl.mem.Len() {
 				if fl.resident(j) {
 					fullPages++
 				}

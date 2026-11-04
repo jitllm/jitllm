@@ -23,15 +23,15 @@ func (s *Session) cpuView() *cpudev.View {
 	return s.view
 }
 
-// useArena gives the layer the model's arena for its pages and a table in
-// the view for maxSeq positions. A layer with no history keeps none, and a
-// layer whose pages are already held keeps them where they are.
-func (s *kvPages) useArena(li, maxSeq int, arenaFor func(li, pp int, latent bool, minSlots int) (*cpudev.Arena, error), view *cpudev.View) error {
-	if s.p == 0 || maxSeq <= 0 || s.t != nil {
+// useArena gives the layer the model's arena for its pages and a table for
+// maxSeq positions (cpudev.Pages.UseArena). A layer with no history keeps
+// none, and a layer whose pages are already held keeps them where they are.
+func (s *kvPages) useArena(li, maxSeq int, arenaFor func(li, pp int, latent bool, minSlots int) (*cpudev.Arena, error)) error {
+	if s.p == 0 || maxSeq <= 0 || s.mem.Table() != nil {
 		return nil
 	}
-	for n := range s.k {
-		if s.k[n] != nil {
+	for n := range s.mem.Len() {
+		if s.mem.K(n) != nil {
 			return nil
 		}
 	}
@@ -40,68 +40,30 @@ func (s *kvPages) useArena(li, maxSeq int, arenaFor func(li, pp int, latent bool
 	if err != nil {
 		return err
 	}
-	s.t = view.Table(li, a, slots)
+	s.mem.UseArena(a, slots)
 	return nil
 }
 
-// takeSlot is a fresh slot of the arena for a page this layer writes, held
-// by it, nil where the layer has no arena or every slot is taken.
-func (s *kvPages) takeSlot() (k, v []float32) {
-	if s.t == nil {
-		return nil, nil
-	}
-	return s.t.Take()
-}
-
-// inArena says b is one of the arena's slots.
-func (s *kvPages) inArena(_ int, b []float32) bool {
-	return s.t != nil && s.t.Holds(b)
-}
-
-// arenaPage says page n's key and value are both slots of the arena.
-func (s *kvPages) arenaPage(n int) bool {
-	return n < len(s.k) && s.inArena(n, s.k[n]) && s.inArena(n, s.v[n])
-}
-
-// releaseSlot lets page n's slot go, the layer's own hold on it: the caller
-// has dropped any shared reference first (unshare).
-func (s *kvPages) releaseSlot(n int) {
-	if s.t != nil {
-		s.t.Let(s.k[n])
-	}
-}
-
-// giveSlot lets the layer's hold on the slot b starts go, where b is one.
-func (s *kvPages) giveSlot(b []float32) {
-	if s.t != nil {
-		s.t.Let(b)
-	}
-}
-
 // unmapArena lets every slot the layer holds go; no page of it may be read
-// again. The arena is the model's and stays.
+// again. The arena is the model's and stays. A shared page's slot is the
+// store's, never one the session lets go.
 func (s *kvPages) unmapArena() {
-	if s.t == nil {
+	if s.mem.Table() == nil {
 		return
 	}
-	for n := range s.k {
-		if !s.isShared(n) && s.arenaPage(n) {
-			s.releaseSlot(n)
-		}
-		if s.inArena(n, s.k[n]) || s.inArena(n, s.v[n]) {
-			s.setPage(n, nil, nil)
+	for n := range s.mem.Len() {
+		if !s.isShared(n) && s.mem.ArenaPage(n) {
+			s.mem.Give(s.mem.K(n))
 		}
 	}
-	s.t.Clear()
-	s.t = nil
+	s.mem.Unmap()
 }
 
 // useArenas gives every attending layer of kc the model's arena for its
-// pages (cpudev.Arena) and a table in view, for an instance whose CPU blocks
-// run composed.
-func (kc *kvCache) useArenas(maxSeq int, arenaFor func(li, pp int, latent bool, minSlots int) (*cpudev.Arena, error), view *cpudev.View) error {
+// pages (cpudev.Arena), for an instance whose CPU blocks run composed.
+func (kc *kvCache) useArenas(maxSeq int, arenaFor func(li, pp int, latent bool, minSlots int) (*cpudev.Arena, error)) error {
 	for li := kc.lo; li < len(kc.layers); li++ {
-		if err := kc.layers[li].useArena(li, maxSeq, arenaFor, view); err != nil {
+		if err := kc.layers[li].useArena(li, maxSeq, arenaFor); err != nil {
 			return err
 		}
 	}

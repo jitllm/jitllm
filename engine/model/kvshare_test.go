@@ -244,7 +244,7 @@ func TestSharedPageIsNeverWrittenInPlace(t *testing.T) {
 			n, off := pg.page(3)
 			at := l.slots(off * l.kvDim())
 			for i := range l.slots(l.kvDim()) {
-				pg.k[n][at+i], pg.v[n][at+i] = 9, 9
+				pg.mem.K(n)[at+i], pg.mem.V(n)[at+i] = 9, 9
 			}
 			pg.cowFault = false
 			if !inPlace {

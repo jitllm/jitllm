@@ -13,10 +13,10 @@ func stateBytes(s *Instance) []byte {
 	var b bytes.Buffer
 	for li := s.kv.lo; li < len(s.kv.layers); li++ {
 		pg := &s.kv.layers[li]
-		for n := range pg.k {
-			b.Write(kvBytesOf(pg.k[n]))
+		for n := range pg.mem.Len() {
+			b.Write(kvBytesOf(pg.mem.K(n)))
 			if !pg.latent {
-				b.Write(kvBytesOf(pg.v[n]))
+				b.Write(kvBytesOf(pg.mem.V(n)))
 			}
 		}
 	}

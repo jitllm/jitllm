@@ -109,8 +109,8 @@ func TestKVPageGeometryFollowsTheLayerKind(t *testing.T) {
 		if (kc.layers[li].p > 0) != want {
 			t.Errorf("layer %d: newKVCache gave p=%d", li, kc.layers[li].p)
 		}
-		if !want && len(kc.layers[li].k) != 0 {
-			t.Errorf("layer %d: a linear layer allocated %d page(s)", li, len(kc.layers[li].k))
+		if !want && kc.layers[li].mem.Len() != 0 {
+			t.Errorf("layer %d: a linear layer allocated %d page(s)", li, kc.layers[li].mem.Len())
 		}
 	}
 }
@@ -123,7 +123,7 @@ func TestKVPageGeometryFollowsTheLayerKind(t *testing.T) {
 func TestRelocationCrossesPages(t *testing.T) {
 	const p, kvDim, n = 8, 4, 20 // 20 positions over 8 per page = 3 pages
 	l := kvLayout{nKV: 1, headDim: kvDim, maxSeq: p}
-	pg := kvPages{p: p, pp: l.slots(1 * p * kvDim)}
+	pg := kvPages{p: p, pp: l.slots(1 * p * kvDim), mem: heldPages(l.slots(1 * p * kvDim))}
 
 	// A history arriving from a device: nothing is resident, every page is new.
 	k := make([]float32, l.slots(n*kvDim))
@@ -159,7 +159,7 @@ func TestRelocationCrossesPages(t *testing.T) {
 
 	// An evicted page is a refusal, not a panic: trim nils a slot in place, so
 	// "addressable" and "resident" are different questions.
-	pg.k[1], pg.v[1] = nil, nil
+	pg.mem.Set(1, nil, nil)
 	if pg.gather(l, 0, n, gk, gv) {
 		t.Fatal("gather accepted a history with an evicted page: the caller would have " +
 			"migrated whatever the destination buffer already held")

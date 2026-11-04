@@ -418,9 +418,9 @@ func (s *kvPages) unshare(n int) {
 	if !s.isShared(n) {
 		return
 	}
-	s.sh.release(s.k[n])
+	s.sh.release(s.mem.K(n))
 	if !s.latent {
-		s.sh.release(s.v[n])
+		s.sh.release(s.mem.V(n))
 	}
 	s.shared[n] = false
 	s.setPage(n, nil, nil)
@@ -437,19 +437,19 @@ func (s *kvPages) cow(n int) {
 		return // the violation: write into the shared page in place
 	}
 	// A slot of the layer's arena where it has one, where a composed CPU
-	// block reads it, else from the spare first as a fresh page is (page0):
+	// block reads it, else a spare first as a fresh page is (cpudev.Pages):
 	// the copy overwrites it whole.
-	k, v := s.takeSlot()
+	k, v := s.mem.Take()
 	if k == nil {
-		k = s.page0()
+		k = s.mem.Zeroed()
 		v = k
 		if !s.latent {
-			v = s.page0()
+			v = s.mem.Zeroed()
 		}
 	}
-	copy(k, s.k[n])
+	copy(k, s.mem.K(n))
 	if !s.latent {
-		copy(v, s.v[n])
+		copy(v, s.mem.V(n))
 	}
 	s.unshare(n)
 	s.setPage(n, k, v)
@@ -459,7 +459,7 @@ func (s *kvPages) cow(n int) {
 func (s *kvPages) sharedBytes() uint64 {
 	var n uint64
 	for i := range s.shared {
-		if s.shared[i] && i < len(s.k) && s.k[i] != nil {
+		if s.shared[i] && s.mem.K(i) != nil {
 			n += uint64(s.pp) * 4
 			if !s.latent {
 				n += uint64(s.pp) * 4
@@ -482,28 +482,28 @@ func (kc *kvCache) publishSealed(li, n int, key string) {
 		return // restored from the store: already the held copy
 	}
 	// A page the store holds already: the session reads the held copy, and
-	// its own memory goes back -- its arena slot, or to its spare, where the
-	// next page it needs is taken from (page0). A page of the arena becomes
-	// the store's copy with the slot held for it, so every session that
-	// restores it reads that slot (cpudev.Arena).
+	// its own memory goes back -- its arena slot, or to its spares, where the
+	// next page it needs is taken from (cpudev.Pages). A page of the arena
+	// becomes the store's copy with the slot held for it, so every session
+	// that restores it reads that slot (cpudev.Arena).
 	var a *cpudev.Arena
-	if s.arenaPage(n) {
-		a = s.t.Arena()
+	if s.mem.ArenaPage(n) {
+		a = s.mem.Table().Arena()
 	}
-	k := kc.share.publish(kvStoreKey{key, li * 2, n}, s.k[n], a)
+	k := kc.share.publish(kvStoreKey{key, li * 2, n}, s.mem.K(n), a)
 	v := k
 	if !s.latent {
-		v = kc.share.publish(kvStoreKey{key, li*2 + 1, n}, s.v[n], a)
+		v = kc.share.publish(kvStoreKey{key, li*2 + 1, n}, s.mem.V(n), a)
 	}
 	switch {
 	case a != nil:
-		s.giveSlot(s.k[n])
+		s.mem.Give(s.mem.K(n))
 	default:
-		if &k[0] != &s.k[n][0] {
-			s.spare = append(s.spare, s.k[n])
+		if &k[0] != &s.mem.K(n)[0] {
+			s.mem.Keep(s.mem.K(n))
 		}
-		if !s.latent && &v[0] != &s.v[n][0] {
-			s.spare = append(s.spare, s.v[n])
+		if !s.latent && &v[0] != &s.mem.V(n)[0] {
+			s.mem.Keep(s.mem.V(n))
 		}
 	}
 	s.setPage(n, k, v)
