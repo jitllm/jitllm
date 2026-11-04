@@ -1181,7 +1181,7 @@ func (s *Instance) unmapOwn() {
 // instance's range no device holds, once, at its placement (cpuCompose).
 func (s *Instance) cpuPlace() {
 	for i := range s.cpu.tabPlanes {
-		s.cpu.tabPlanes[i] = s.m.cpuTablePlanes(i)
+		s.cpu.tabPlanes[i] = s.tablePlanes(i)
 	}
 	// A segment's blocks are past the text model's in the one block space.
 	n := max(s.c.NLayer, s.hi)
@@ -1406,9 +1406,9 @@ func (m *Model) formCPUBlock(s *Instance, li int, cb *cpuBlock, rows int) (*cpud
 		Step:    composer.Step{Rows: rows, Page: page, Keys: max(pg.arenaSlots(), 1) * page, ActWindow: s.m.actWindow, Seqs: max(s.nseq, 1)},
 		History: composer.History{ValuesInKeys: pg.latent},
 		Device:  s.composedCPU()}
-	// A block turns by the rotary its rope ops state, of the model's
-	// (composing.Rotaries): each its own table, bound by instance.
-	req.Rotaries = composing{m.container, m}.Rotaries()
+	// A block turns by the rotary its rope ops state, of the instance's
+	// (rotaries): each its own table, bound by instance.
+	req.Rotaries = s.rotaries()
 	return m.cpuFormOf(req, &gr, rows, false, false, s.kvl.fmt == cpu.KVF32)
 }
 

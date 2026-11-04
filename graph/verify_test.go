@@ -269,4 +269,25 @@ func TestVerifierHoldsAGridsRows(t *testing.T) {
 			t.Errorf("%+v: Verify said %v, want an error naming %q", c, err, c.want)
 		}
 	}
+	// A fold of Span consecutive rows states its rows as a regroup does.
+	fold := func(inRows, out int) error {
+		b := NewBlock(-1)
+		x := b.In("x", 4)
+		b.G.Values[x].Rows = inRows
+		b.Out(b.Emit(OpFold, []ValueID{x}, []Result{{Name: "f", Width: 16, Rows: out}}, nil, Attrs{Span: 4}, nil, nil)[0])
+		return Verify(b.G, Facts{})
+	}
+	for _, c := range []struct{ in, out int }{{0, 16}, {64, 16}} {
+		if err := fold(c.in, c.out); err != nil {
+			t.Errorf("a fold of %d rows into %d is refused: %v", c.in, c.out, err)
+		}
+	}
+	for _, c := range []struct {
+		in, out int
+		want    string
+	}{{0, 0, "states no rows"}, {64, 15, "writes 15, not 16"}} {
+		if err := fold(c.in, c.out); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("a fold of %d rows into %d: Verify said %v, want an error naming %q", c.in, c.out, err, c.want)
+		}
+	}
 }

@@ -344,7 +344,7 @@ func gridRowWise(o graph.Op) bool {
 // writes its output's itself, each value at its own grid's rows.
 func ownsItsGrid(k graph.OpKind) bool {
 	switch k {
-	case graph.OpConv, graph.OpUnfold, graph.OpTakeRows, graph.OpRegroup, graph.OpDropRows:
+	case graph.OpConv, graph.OpUnfold, graph.OpTakeRows, graph.OpRegroup, graph.OpFold, graph.OpDropRows:
 		return true
 	}
 	return false
@@ -366,8 +366,8 @@ func (r *Registry) decomposeOps(c *Context, of int) ([]Prim, error) {
 		if !ownsItsGrid(o.Kind) && gridRows(c.Graph, o) {
 			// A row-wise op over a grid of rows of its own runs at that
 			// grid's rows (Verify holds its every value to one grid; a
-			// convolution, an unfold, a row take, a regroup and a row drop
-			// read their input's rows and write their own themselves): the
+			// convolution, an unfold, a row take, a regroup, a fold and a row
+			// drop read their input's rows and write their own themselves): the
 			// step's rows are the grid's for its decomposition. An op that
 			// reads rows across values of other grids is not formed.
 			if !gridRowWise(o) {

@@ -50,8 +50,8 @@ func TestStatedTowerComposesOnTheCPU(t *testing.T) {
 		t.Fatal("Open lowered no tower")
 	case len(tg.blocks) != int(v.NLayer):
 		t.Fatalf("%d block graphs for a tower of %d", len(tg.blocks), v.NLayer)
-	case tg.rows != int(v.ImageSize/v.PatchSize)*int(v.ImageSize/v.PatchSize):
-		t.Fatalf("the entry writes %d rows for %d patches of %d", tg.rows, v.ImageSize, v.PatchSize)
+	case len(tg.classes) != 1 || tg.rows != int(v.ImageSize/v.PatchSize)*int(v.ImageSize/v.PatchSize):
+		t.Fatalf("the entry writes %d rows in %d classes for %d patches of %d", tg.rows, len(tg.classes), v.ImageSize, v.PatchSize)
 	case tg.out != tg.rows/int(v.Scale*v.Scale):
 		t.Fatalf("the head writes %d rows, want %d shuffled by %d", tg.out, tg.rows, v.Scale)
 	}
@@ -67,7 +67,7 @@ func TestStatedTowerComposesOnTheCPU(t *testing.T) {
 			t.Fatalf("%s does not compose for the CPU: %v", name, err)
 		}
 	}
-	for px, g := range tg.entry {
+	for px, g := range tg.classes[0].entry {
 		if !slices.ContainsFunc(g.Ops, func(o graph.Op) bool { return o.Kind == graph.OpPicture && o.Attr.Pixels == px }) {
 			t.Fatalf("the entry for format %d reads no picture of that format", px)
 		}
@@ -77,7 +77,7 @@ func TestStatedTowerComposesOnTheCPU(t *testing.T) {
 		form(fmt.Sprintf("block %d", i), g, tg.rows)
 	}
 	form("the head", tg.head, tg.rows)
-	t.Logf("%d entries, %d blocks over %d rows, a head of %d rows: verified and composed", len(tg.entry), len(tg.blocks), tg.rows, tg.out)
+	t.Logf("%d entries, %d blocks over %d rows, a head of %d rows: verified and composed", len(tg.classes[0].entry), len(tg.blocks), tg.rows, tg.out)
 
 	// The violation: the head's matrix a tensor the container does not hold.
 	saved := v.Tower.Head.Ops[2].Bind[0]

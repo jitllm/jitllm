@@ -26,7 +26,7 @@ type cpuTableState struct {
 // instance's placement.
 func (s *Instance) cpuPlaceTables() {
 	st := &s.cpu.tables
-	tabs := s.m.frontGraphs().tables
+	tabs := s.tableGraphs()
 	st.one, st.many = make([]cpuHeadForm, len(tabs)), make([]cpuHeadForm, len(tabs))
 	widths := [2]int{s.c.RopeW(), s.c.NRotSWA}
 	u := 1
@@ -57,8 +57,9 @@ func (s *Instance) cpuComposeTable(hf *cpuHeadForm, g *graph.Graph, rows int) {
 	case g == nil:
 		hf.why = composer.DeclineNoGraph
 	default:
-		req := composer.Request{Graph: g, Step: composer.Step{Rows: rows, Page: 1, Keys: 1, Seqs: max(s.nseq, 1), Marks: s.m.ropeMarksCap(s.maxSeq),
+		req := composer.Request{Graph: g, Step: composer.Step{Rows: rows, Page: 1, Keys: 1, Seqs: max(s.nseq, 1),
 			ActWindow: s.m.actWindow}, Device: s.composedCPU(), Apart: true}
+		req.Step.Marks = s.marksCap()
 		f, err := s.m.cpuFormOf(req, g, rows, true, false, false)
 		if err != nil {
 			hf.why, hf.err = s.cpuFormDecline(err), err
@@ -66,6 +67,59 @@ func (s *Instance) cpuComposeTable(hf *cpuHeadForm, g *graph.Graph, rows int) {
 		}
 		hf.f = f
 	}
+}
+
+// towered says the instance's blocks are the model's tower's.
+func (s *Instance) towered() bool { return s.m.tower != nil && s.lo >= s.m.towerBase }
+
+// tableGraphs is the rotary tables' graphs the instance's blocks read: its
+// tower's own (towerRotary), none for a tower that turns nothing, the
+// model's for any other instance.
+func (s *Instance) tableGraphs() []*graph.Graph {
+	if !s.towered() {
+		return s.m.frontGraphs().tables
+	}
+	if t := s.m.tower.table; t != nil {
+		return []*graph.Graph{t}
+	}
+	return nil
+}
+
+// rotaries is every rotary the instance's blocks turn by: its tower's own,
+// none for a tower that turns nothing, the model's for any other instance
+// (composing.Rotaries).
+func (s *Instance) rotaries() []graph.Rotary {
+	if !s.towered() {
+		return composing{s.m.container, s.m}.Rotaries()
+	}
+	if b := &s.m.container.Vision().Tower.Block; len(b.Rope.Runs) > 0 {
+		return []graph.Rotary{towerRotaryOf(b)}
+	}
+	return nil
+}
+
+// tablePlanes is rotary table i's planes as the instance's composed tables
+// read them: its tower's, or the model's (cpuTablePlanes).
+func (s *Instance) tablePlanes(i int) []float32 {
+	if !s.towered() {
+		return s.m.cpuTablePlanes(i)
+	}
+	if i == 0 {
+		return s.m.tower.planes
+	}
+	return nil
+}
+
+// marksCap is the most rotary marks a sequence of the instance holds: a
+// tower's picture's one grid, or the model's (ropeMarksCap).
+func (s *Instance) marksCap() int {
+	if !s.towered() {
+		return s.m.ropeMarksCap(s.maxSeq)
+	}
+	if s.m.tower.table != nil {
+		return 1
+	}
+	return 0
 }
 
 // ropeMarksCap is the most rotary marks a sequence of maxSeq positions holds:
@@ -113,7 +167,7 @@ func (s *Instance) cpuTables(marks *ropeMarks, seq, pos []int, cs, csSWA []float
 					q = seq[r]
 				}
 				st.rows[1+2*j] = uint32(pos[r])
-				if marks != nil && s.m.ropeMarksCap(s.maxSeq) > 0 {
+				if marks != nil && s.marksCap() > 0 {
 					st.rows[2+2*j] = uint32(marks.offset(q))
 				}
 			}

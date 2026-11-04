@@ -83,9 +83,10 @@ func Verify(g *Graph, f Facts) error {
 			}
 		}
 		// An op's values are rows of one grid; an op that makes a grid -- a
-		// strided convolution, a regroup of S*S rows into one, a row drop --
-		// states its output's rows, and a regroup's and a drop's follow their
-		// input's where those are the input's own.
+		// strided convolution, a regroup of S*S rows into one, a fold of Span
+		// consecutive rows, a row drop -- states its output's rows, and a
+		// regroup's, a fold's and a drop's follow their input's where those
+		// are the input's own.
 		rows := func(id ValueID) int {
 			if valid(id) {
 				return g.Values[id].Rows
@@ -93,7 +94,7 @@ func Verify(g *Graph, f Facts) error {
 			return 0
 		}
 		strided := (o.Kind == OpConv || o.Kind == OpUnfold) && o.Attr.Stride > 1
-		grid := strided || o.Kind == OpRegroup || o.Kind == OpDropRows
+		grid := strided || o.Kind == OpRegroup || o.Kind == OpFold || o.Kind == OpDropRows
 		for j, id := range o.Out {
 			if r := rows(id); grid && j == 0 && r < 1 {
 				bad("%s: a %s's %%%s states no rows", at, o.Kind, g.Values[id].Name)
@@ -104,6 +105,8 @@ func Verify(g *Graph, f Facts) error {
 			switch o.Kind {
 			case OpRegroup:
 				want = in / max(o.Attr.Span*o.Attr.Span, 1)
+			case OpFold:
+				want = in / max(o.Attr.Span, 1)
 			case OpDropRows:
 				want = in - o.Attr.Offset
 			}

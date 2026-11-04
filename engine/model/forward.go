@@ -820,10 +820,10 @@ func (s *Instance) SetDeviceLayers(d nn.LayerDevice, max int) error {
 		RopeTabSWA: ropeTabPlanes(s.m.ropeSWA, c.NRotSWA),
 		// The tables as the front end states them, and a multi-axis
 		// rotary's planes, for a device that serves them (front.go).
-		Tables:      s.m.frontGraphs().tables,
+		Tables:      s.tableGraphs(),
 		RopeTabAxes: ropeAxesPlanes(&s.m.rope, c.NRot, c.RopeXD),
-		RopeMarks:   s.m.ropeMarksCap(s.maxSeq),
-		Rotaries:    composing{s.m.container, s.m}.Rotaries(),
+		RopeMarks:   s.marksCap(),
+		Rotaries:    s.rotaries(),
 		RopeSplit:   c.RopeXD,
 		// The sliding window itself (TestSlidingWindowRunsOnTheDevice).
 		SWAWindow: windowFor(c, s.maxSeq),
