@@ -1,4 +1,4 @@
-//go:build !linux && !darwin
+//go:build !linux && !darwin && !windows
 
 package offheap
 
@@ -28,6 +28,9 @@ func UnmapOffHeap(b []byte) {}
 
 // ReserveOffHeap has no reservation to make here: the caller does without.
 func ReserveOffHeap(n int) ([]byte, bool, error) { return nil, false, nil }
+
+// CommitOffHeap has no reservation to commit here.
+func CommitOffHeap(b []byte) error { return nil }
 
 // DropOffHeap does nothing where nothing was reserved.
 func DropOffHeap(b []byte) {}

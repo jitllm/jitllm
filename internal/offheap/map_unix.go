@@ -58,6 +58,11 @@ func ReserveOffHeap(n int) ([]byte, bool, error) {
 	return b, true, nil
 }
 
+// CommitOffHeap makes b, a range of a ReserveOffHeap reservation, memory the
+// caller may write. A range here commits when it is written, so there is
+// nothing to do.
+func CommitOffHeap(b []byte) error { return nil }
+
 // DropOffHeap hands the memory behind b, a range of a ReserveOffHeap
 // reservation, back to the system: what it held is gone, and the range is
 // written again before it is read.
