@@ -213,6 +213,9 @@ type composing struct {
 func (m *Model) Composing() composer.Model { return composing{m.container, m} }
 
 func (c composing) BlockGraph(li int) *graph.Graph {
+	if t, b := c.m.tower, c.m.towerBase; t != nil && li >= b && li < b+len(t.blocks) {
+		return t.blocks[li-b]
+	}
 	f := c.m.frontGraphs()
 	if i := li - len(f.blocks); i >= 0 && i < len(f.mtp) {
 		return f.mtp[i]

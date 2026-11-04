@@ -887,9 +887,15 @@ JIT and state) was llama.cpp's technical debt, not a property of the model.
 
 - **GGUF is the converter's input, so the two-file contract dies at
   conversion**: `jitllm convert model.gguf mmproj.gguf out.jlm`. `model.Open`
-  builds the tower when the container carries one (`m.Tower()`); there is no
-  `OpenTower` and no `-mmproj`. A projector width that does not match the text
-  model is refused at conversion, where there is a file in front of a person.
+  builds the tower when the container carries one; there is no `OpenTower`
+  and no `-mmproj`. A projector width that does not match the text model is
+  refused at conversion, where there is a file in front of a person.
+- **The converter states the tower; the engine knows no family.** What a
+  family's reference does -- its preprocessing steps, its entry and head as
+  programs of ops, its block's attributes, its picture's markers -- is written
+  into the container at conversion (`jlm.Tower`), and `model.Open` lowers that
+  record into graphs, never switching on `Projector`. A family the converter
+  does not state yet is refused at Open by name.
 - **Two page arrays, one pager.** Vision block i is at
   `VisDataOff + i*VisPageSize`, because one page size is wrong in both
   directions; vision blocks occupy `NBlocks..NBlocks+NVisBlocks-1` of one block
@@ -908,22 +914,24 @@ JIT and state) was llama.cpp's technical debt, not a property of the model.
   (`State.offerRange`); a block the device cannot express is declined by the
   device, never withheld by the model (RULE 8a). A vision block is one
   submission: bidirectional attention needs every row's k and v first.
-- Gates: `TestOneContainerCarriesTextAndVision`,
-  `TestTowerOffersItsBlocksToTheDevice`, `TestVisionRunsAsBlocksOfTheModel`,
-  `TestTowerOnDeviceMatchesHost` (bounded after ONE block: int8 activations
-  compound), `TestWarmImageEncodeDoesNotAllocate`,
-  `TestTwoTurnImageChatRestoresPastThePicture`.
+- Gates: `jlm.TestTowerRefusesWhatItCannotRead`,
+  `convert.TestSmolVLMStatesItsTower`, `TestStatedTowerComposesOnTheCPU`,
+  `TestStatedTowerBlocksArePagedBlocks`, `TestStatedTowerEncodesAPicture`
+  (a warm encode allocates nothing), `TestStatedTowerSeesThePicture` (a blank
+  picture is the violation), `composer.TestComposedCPUPicture`. The tower on
+  a card, the image cache and the two-turn restore have no gate until their
+  paths run again.
 
 **The bar for a new projector family**, on top of RULE 7's:
 
-- **Its preprocessing is the reference processor's, to the bit**
-  (`engine/model/imageproc.go`), held to transformers' pixel values on real
-  pictures (PNG -- a JPEG's decoders disagree first);
-  `TestPreprocessMatchesTransformers` demands zero differing values. Every
-  pixel and patch passes through generated code (`engine/nn/image.go`): the
-  decoded rows, the resize, the normalisation, the patch gather and the
-  position tables built per grid; what is Go is geometry from the sizes and
-  the tower's constant tables (`TestImagePathRunsGeneratedCode`).
+- **Its preprocessing is the reference processor's, to the bit**, stated as
+  steps (`jlm.PreStep`), held to transformers' pixel values on real pictures
+  (PNG -- a JPEG's decoders disagree first), or a divergence recorded in
+  `docs/divergences.md`. Every pixel and patch passes through generated code
+  (`graph.OpPicture`, `graph.OpPatchify`): the decoded rows, the resize, the
+  normalisation, the patch gather and the position tables built per grid;
+  what is Go is geometry from the sizes and the tower's constant tables
+  (`TestImagePathRunsGeneratedCode`).
 - **A gate against transformers runs the PROJECTOR ALONE too**
   (`TestProjectorMatchesTransformers`): the tower's int8 activations put
   end-to-end features wider than what the projector's own errors move.

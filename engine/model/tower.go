@@ -2,8 +2,12 @@ package model
 
 import (
 	"fmt"
+	"image"
 	"math"
+	"unsafe"
 
+	"github.com/jitllm/jitllm/composer"
+	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/graph"
@@ -21,9 +25,10 @@ type towerGraphs struct {
 	entry  map[uint8]*graph.Graph
 	blocks []*graph.Graph
 	head   *graph.Graph
-	// rows is the patch rows the entry writes and every block reads; out
-	// the rows the head writes, one a token of the picture's span.
-	rows, out int
+	// rows is the patch rows the entry writes and every block reads, side
+	// the patch grid's width; out the rows the head writes, one a token of
+	// the picture's span.
+	rows, side, out int
 }
 
 // bindTower makes the tower's blocks layers of the model from towerBase on,
@@ -122,7 +127,7 @@ func (m *Model) buildTowerGraphs() (*towerGraphs, error) {
 	}
 	dense := m.towerFacts(jlm.DenseBlock)
 	side := int(v.ImageSize / v.PatchSize)
-	tg := &towerGraphs{entry: map[uint8]*graph.Graph{}, rows: side * side}
+	tg := &towerGraphs{entry: map[uint8]*graph.Graph{}, rows: side * side, side: side}
 	for _, px := range []uint8{graph.PixRGBA8, graph.PixGray8} {
 		g, err := towerEntry(t, px, tg.rows, dense)
 		if err != nil {
@@ -349,4 +354,173 @@ func towerBlock(li int, t *jlm.Tower, v *jlm.Vision, f graph.Facts) (*graph.Grap
 	}
 	b.Out(b.Add(x2, b.MatVec(h, jlm.RoleVFC2, d, stored(jlm.RoleVFC2Bias)...)))
 	return b.G, graph.Verify(b.G, f)
+}
+
+// towerConfig is the tower's segment as a Config: its blocks' geometry,
+// attending both ways, with no rotary and no vocabulary. Its block indices
+// are the model's (base on), so a block is asked by the index it runs at.
+func towerConfig(base, rows int, v *jlm.Vision, t *jlm.Tower) *Config {
+	b := &t.Block
+	return &Config{Arch: "tower", NLayer: base + int(v.NLayer), NEmbd: int(v.NEmbd), NHead: int(b.NHead),
+		NKVHead: int(b.NKVHead), HeadDim: int(b.HeadDim), NFFN: int(v.NFFN), NCtx: rows,
+		RMSEps: float64(b.Eps), EmbdScale: 1, AttnFactor: 1, NonCausal: true, NoPosEnc: true,
+		LayerNorm: b.Norm == jlm.NormLayer}
+}
+
+// towerRun is an instance's tower: an instance of its own over the tower's
+// blocks (towerConfig), whose history holds one picture's rows at a time,
+// and the entry's forms (one a sample format) and the head's on it, all
+// composed when the instance is made.
+type towerRun struct {
+	s     *Instance
+	entry map[uint8]*cpudev.Form
+	head  *cpudev.Form
+	// rows is the picture's patch rows at the tower's width, out the head's
+	// at the language model's; seq and pos the rows' sequence and positions,
+	// posTab the step's live rows and positions as the entry reads them.
+	rows, out []float32
+	seq, pos  []int
+	posTab    []uint32
+	req       []uint32
+	// pad holds a picture's samples where its bytes are not whole words.
+	pad []uint32
+}
+
+// newTowerRun is the model's tower run, nil for a model with no tower.
+func (m *Model) newTowerRun() (*towerRun, error) {
+	tg := m.tower
+	if tg == nil {
+		return nil, nil
+	}
+	v := m.container.Vision()
+	n := tg.rows
+	c := towerConfig(m.towerBase, n, v, v.Tower)
+	ts := m.newInstanceOver(c, 1, n, m.towerBase, m.towerBase+len(tg.blocks))
+	if ts.cpu.formErr != nil {
+		ts.Close()
+		return nil, ts.cpu.formErr
+	}
+	tr := &towerRun{s: ts, entry: map[uint8]*cpudev.Form{}, rows: make([]float32, n*c.NEmbd),
+		out: make([]float32, n*int(v.ProjDim)), seq: make([]int, n), pos: make([]int, n),
+		posTab: make([]uint32, 1+n), req: make([]uint32, composer.RequestPicStride+1)}
+	tr.posTab[0] = uint32(n)
+	for i := range n {
+		tr.pos[i], tr.posTab[1+i] = i, uint32(i)
+	}
+	for px, g := range tg.entry {
+		f, err := m.formCPUGraph(ts, g, n, nil)
+		if err != nil {
+			ts.Close()
+			return nil, fmt.Errorf("model: the tower's entry: %w", err)
+		}
+		tr.entry[px] = f
+	}
+	f, err := m.formCPUGraph(ts, tg.head, n, nil)
+	if err != nil {
+		ts.Close()
+		return nil, fmt.Errorf("model: the tower's head: %w", err)
+	}
+	tr.head = f
+	for li := ts.lo; li < ts.hi; li++ {
+		if cb := ts.cpu.blocks[li]; cb == nil || cb.rows == nil {
+			why := composer.DeclineNoGraph
+			if cb != nil {
+				why = max(cb.why, cb.rowsWhy)
+			}
+			ts.Close()
+			return nil, fmt.Errorf("model: the tower's block %d does not run on the CPU: %v", li-m.towerBase, why)
+		}
+	}
+	return tr, nil
+}
+
+// close lets the tower's instance go.
+func (tr *towerRun) close() {
+	if tr != nil {
+		tr.s.Close()
+	}
+}
+
+// pictureWords is a decoded picture's samples as the step's picture table
+// reads them, the format they are in, and the picture's size and row stride
+// in bytes; a picture whose bytes are not whole words is copied into pad,
+// which grows to hold it.
+func pictureWords(img image.Image, pad *[]uint32) (words []uint32, px uint8, w, h, stride int, err error) {
+	var pix []byte
+	switch p := img.(type) {
+	case *image.NRGBA:
+		pix, px, stride = p.Pix, graph.PixRGBA8, p.Stride
+	case *image.RGBA:
+		pix, px, stride = p.Pix, graph.PixRGBA8, p.Stride
+	case *image.Gray:
+		pix, px, stride = p.Pix, graph.PixGray8, p.Stride
+	default:
+		return nil, 0, 0, 0, 0, fmt.Errorf("model: a %T picture has no picture op reading its samples", img)
+	}
+	b := img.Bounds()
+	w, h = b.Dx(), b.Dy()
+	if w <= 0 || h <= 0 || len(pix) == 0 {
+		return nil, 0, 0, 0, 0, fmt.Errorf("model: an empty picture")
+	}
+	if len(pix)%4 == 0 && uintptr(unsafe.Pointer(&pix[0]))%4 == 0 {
+		return unsafe.Slice((*uint32)(unsafe.Pointer(&pix[0])), len(pix)/4), px, w, h, stride, nil
+	}
+	n := (len(pix) + 3) / 4
+	if cap(*pad) < n {
+		*pad = make([]uint32, n)
+	}
+	words = (*pad)[:n]
+	copy(unsafe.Slice((*byte)(unsafe.Pointer(&words[0])), 4*n), pix)
+	return words, px, w, h, stride, nil
+}
+
+// EncodePicture is the rows a picture's span puts in the prompt: the picture
+// through the tower's entry, its blocks over the patch rows as one run
+// attending both ways, and its head, every step on the CPU device's composed
+// forms. The rows are the instance's until its next encode.
+func (s *Instance) EncodePicture(img image.Image) ([]float32, error) {
+	tr := s.tower
+	if tr == nil {
+		return nil, fmt.Errorf("model: the model has no vision tower")
+	}
+	defer s.m.enterPager()()
+	words, px, w, h, stride, err := pictureWords(img, &tr.pad)
+	if err != nil {
+		return nil, err
+	}
+	ts, m := tr.s, s.m
+	tg := m.tower
+	f := tr.entry[px]
+	if why := ts.cpuWeights(f, -1, &m.towerDense); why != composer.DeclineServes {
+		return nil, fmt.Errorf("model: the tower's entry: %v", why)
+	}
+	tr.req[composer.RequestGrid] = uint32(tg.side)
+	tr.req[composer.RequestPicW], tr.req[composer.RequestPicH], tr.req[composer.RequestPicStride] = uint32(w), uint32(h), uint32(stride)
+	b := &ts.cpu.bound
+	*b = cpuBound{li: -1, l: &m.towerDense, own: ts.cpu.dev.Own(f), n: tg.rows, req: tr.req, pos: tr.posTab, pic: words}
+	b.io[0] = unsafe.Pointer(&tr.rows[0])
+	ts.cpuRunForm(b, f)
+	// The blocks: one run over every row, each row's keys every row's.
+	ts.bidir = append(ts.bidir[:0], nn.KeyRun{Lo: 0, Hi: tg.rows})
+	defer func() { ts.bidir = ts.bidir[:0] }()
+	for li := ts.lo; li < ts.hi; li++ {
+		if err := m.pageIn(li); err != nil {
+			return nil, err
+		}
+		why, err := ts.cpuRows(li, &m.layers[li], tr.rows, nil, nil, tr.seq, tr.pos, nil)
+		if err != nil {
+			return nil, err
+		}
+		if why != composer.DeclineServes {
+			return nil, fmt.Errorf("model: the tower's block %d: %v", li-m.towerBase, why)
+		}
+	}
+	f = tr.head
+	if why := ts.cpuWeights(f, -1, &m.towerDense); why != composer.DeclineServes {
+		return nil, fmt.Errorf("model: the tower's head: %v", why)
+	}
+	*b = cpuBound{li: -1, l: &m.towerDense, own: ts.cpu.dev.Own(f), n: tg.rows, req: tr.req, pos: tr.posTab}
+	b.io[0], b.io[1] = unsafe.Pointer(&tr.rows[0]), unsafe.Pointer(&tr.out[0])
+	ts.cpuRunForm(b, f)
+	return tr.out[:tg.out*int(m.container.Vision().ProjDim)], nil
 }
