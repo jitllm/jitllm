@@ -11,10 +11,15 @@ import (
 	"github.com/jitllm/jitllm/internal/oracle"
 )
 
-// gv is a value of the Go evaluator: an integer's bits or a float.
+// gv is a value of the Go evaluator: an integer's bits or a float. A
+// product keeps its operands (pa, pb), so a sum of it is one expression as
+// the packer's reader writes it: Go may fuse x*y - z there (arm64 does), and
+// the evaluator rounds as the reader it is held to.
 type gv struct {
-	u uint32
-	f float32
+	u      uint32
+	f      float32
+	pa, pb float32
+	prod   bool
 }
 
 // planes evaluates the reading rules over a tensor's three word arrays.
@@ -37,9 +42,21 @@ func (planes) F32(a gv) gv                { return gv{f: math.Float32frombits(a.
 func (planes) Int(a gv) gv                { return gv{f: float32(int32(a.u))} }
 func (planes) Float(a gv) gv              { return gv{f: float32(a.u)} }
 func (planes) FConst(x float32) gv        { return gv{f: x} }
-func (planes) FMul(a, b gv) gv            { return gv{f: a.f * b.f} }
-func (planes) FSub(a, b gv) gv            { return gv{f: a.f - b.f} }
-func (planes) FAdd(a, b gv) gv            { return gv{f: a.f + b.f} }
+func (planes) FMul(a, b gv) gv            { return gv{f: a.f * b.f, pa: a.f, pb: b.f, prod: true} }
+
+func (planes) FSub(a, b gv) gv {
+	if a.prod {
+		return gv{f: a.pa*a.pb - b.f}
+	}
+	return gv{f: a.f - b.f}
+}
+
+func (planes) FAdd(a, b gv) gv {
+	if a.prod {
+		return gv{f: a.pa*a.pb + b.f}
+	}
+	return gv{f: a.f + b.f}
+}
 
 func (p planes) Word(pl Plane, i gv) gv {
 	b := [...][]byte{p.qs, p.d, p.sc}[pl]
