@@ -821,7 +821,8 @@ func (s *Instance) SetDeviceLayers(d nn.LayerDevice, max int) error {
 		// The tables as the front end states them, and a multi-axis
 		// rotary's planes, for a device that serves them (front.go).
 		Tables:      s.tableGraphs(),
-		RopeTabAxes: ropeAxesPlanes(&s.m.rope, c.NRot, c.RopeXD),
+		RopeTabAxes: s.axesPlanes(),
+		GridPlanes:  s.gridPlanes(),
 		RopeMarks:   s.marksCap(),
 		Rotaries:    s.rotaries(),
 		RopeSplit:   c.RopeXD,

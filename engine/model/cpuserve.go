@@ -909,7 +909,7 @@ func (s *Instance) cpuRowsCalls(li int, l *layer, f *cpudev.Form, lo, hi int, x 
 					st = max(st, s.bidirStart(p))
 				}
 			}
-			if w := s.cpu.rowWins; w != nil {
+			if w := s.cpu.rowWins; w != nil && !s.wholePicture(li) {
 				st, e = max(st, w[p].Lo), w[p].Hi
 			}
 			end = max(end, p+1)

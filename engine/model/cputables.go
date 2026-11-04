@@ -93,6 +93,26 @@ func (s *Instance) tableGraphs() []*graph.Graph {
 	return nil
 }
 
+// axesPlanes is the planes of the instance's rotary over several position
+// axes, for a device (nn.LayerPlan.RopeTabAxes): the model's, none on a
+// tower's, whose rotary is a grid table (gridPlanes).
+func (s *Instance) axesPlanes() []float32 {
+	if s.towered() {
+		return nil
+	}
+	return ropeAxesPlanes(&s.m.rope, s.c.NRot, s.c.RopeXD)
+}
+
+// gridPlanes is a tower's grid table's planes for a device
+// (nn.LayerPlan.GridPlanes), each pair's axis after them; nil on any other
+// instance and on a tower that turns nothing.
+func (s *Instance) gridPlanes() []float32 {
+	if !s.towered() {
+		return nil
+	}
+	return s.m.tower.planes
+}
+
 // rotaries is every rotary the instance's blocks turn by: its tower's own,
 // none for a tower that turns nothing, the model's for any other instance
 // (composing.Rotaries).
