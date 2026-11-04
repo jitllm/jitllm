@@ -2,9 +2,11 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -152,6 +154,29 @@ func preemptionKeepsEveryAnswer(t *testing.T, cfg Config, check func(e *Engine, 
 		time.Sleep(20 * time.Millisecond)
 	}
 	if n := runtime.NumGoroutine(); n > base {
-		t.Fatalf("%d goroutines after four engines closed, %d before", n, base)
+		t.Fatalf("%d goroutines after four engines closed, %d before; the stacks left:\n%s", n, base, goroutineStacks())
 	}
+}
+
+// goroutineStacks is every goroutine's stack but the caller's, each distinct
+// one with its count, for a gate that finds goroutines left behind.
+func goroutineStacks() string {
+	buf := make([]byte, 1<<22)
+	buf = buf[:runtime.Stack(buf, true)]
+	counts := map[string]int{}
+	var order []string
+	for _, g := range strings.Split(string(buf), "\n\n")[1:] {
+		lines := strings.Split(g, "\n")
+		// The header names the goroutine; its frames are what it runs.
+		key := strings.Join(lines[1:min(len(lines), 9)], "\n")
+		if counts[key] == 0 {
+			order = append(order, key)
+		}
+		counts[key]++
+	}
+	var b strings.Builder
+	for _, k := range order {
+		fmt.Fprintf(&b, "%d x\n%s\n\n", counts[k], k)
+	}
+	return b.String()
 }

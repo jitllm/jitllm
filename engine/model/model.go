@@ -1991,7 +1991,13 @@ func (m *Model) Close() error {
 		<-m.preloadDone
 		m.preloadStop = nil
 	}
-	// The devices give this model's blocks back first, so a device another
+	// The instances it serves read the container: they go first, their
+	// histories off the devices before the model's blocks, and with them
+	// their CPU device's views of its crews.
+	for _, in := range m.eng.insts.take() {
+		in.Close()
+	}
+	// The devices give this model's blocks back next, so a device another
 	// model is offered next is free; then the container's memory goes, and
 	// every copy keyed on it with it (forgetCopies).
 	m.eng.devMu.Lock()
