@@ -76,7 +76,7 @@ func TestAFullCardSpillsABlockOntoTheNextOne(t *testing.T) {
 			}
 			// Fill-first: the proportional plan leaves every card room for the
 			// batched prefill's scratch, far more than this history grows by.
-			d, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff),
+			d, err := openGPU(t, gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff),
 				gpu.WithConfig(func(c *gpu.Config) { c.FillFirst = true }))
 			if err == nil && d != nil && len(d.Placed()) == 2 {
 				return d

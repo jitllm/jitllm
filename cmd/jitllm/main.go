@@ -27,6 +27,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jitllm/jitllm/backend/vulkan"
 	"github.com/jitllm/jitllm/engine/sched"
 	"github.com/jitllm/jitllm/internal/cmd/goheap"
 	"github.com/jitllm/jitllm/internal/localserver"
@@ -92,6 +93,10 @@ func main() {
 	// speed -ttft's load row counts from here, as llama.cpp's log timestamps
 	// count from its logger's start.
 	procStart := time.Now()
+	// A Vulkan driver held for the process's life keeps the ICDs loaded while
+	// devices open and close (vulkan.Driver); nil where there is no loader.
+	keep, _ := vulkan.NewDriver()
+	defer keep.Close()
 	alignGOMAXPROCS()
 	// Page frames and the dense region live off the Go heap; JITLLM_OFFHEAP=0
 	// puts them back on it (gcPlan).

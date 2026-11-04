@@ -105,7 +105,7 @@ func TestC6GreedyOnDeviceHonoursTheHeadBias(t *testing.T) {
 		want[p] = Greedy(lg)
 	}
 	host.Close()
-	gpux, err := gpu.OpenWith(gpu.WithDeviceTune(gpu.TuneOff))
+	gpux, err := openGPU(t, gpu.WithDeviceTune(gpu.TuneOff))
 	if err != nil || gpux == nil {
 		noDevice(t, "device", err)
 	}
@@ -239,7 +239,7 @@ func fixtureOnEveryDeviceCounted(t *testing.T, m *Model, g *c6Golden, vs []c6Vio
 
 	ran := 0
 	for _, spec := range stepDevices() {
-		probe, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
+		probe, err := openGPU(t, gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
 		if err != nil || probe == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue
@@ -256,7 +256,7 @@ func fixtureOnEveryDeviceCounted(t *testing.T, m *Model, g *c6Golden, vs []c6Vio
 				if noGraph {
 					opts = append(opts, gpu.WithConfig(func(c *gpu.Config) { c.NoGraph = true }))
 				}
-				gpux, err := gpu.OpenWith(opts...)
+				gpux, err := openGPU(t, opts...)
 				if err != nil {
 					t.Fatal(err)
 				}

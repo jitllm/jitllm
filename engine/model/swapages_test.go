@@ -167,7 +167,7 @@ func windowOnDevice(t *testing.T, m *Model, spec string, run windowRun, win []in
 	open := func(keep bool) *gpu.GPU {
 		o := append([]gpu.Option{gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff),
 			gpu.WithConfig(func(c *gpu.Config) { c.KVKeepWindow = keep })}, testTierOpts(t)...)
-		g, err := gpu.OpenWith(o...)
+		g, err := openGPU(t, o...)
 		if err != nil || g == nil {
 			noDevice(t, spec, err)
 		}

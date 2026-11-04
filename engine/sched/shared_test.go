@@ -14,13 +14,14 @@ import (
 // chunk, each view keeps its own participant count, and the workers stop when
 // the last view closes.
 func TestSharedViewsTakeTurnsOnOneCrew(t *testing.T) {
+	crews := NewCrews()
 	cpus := []int{0, 1, 2, 3}
 	// Counted by identity, not by runtime.NumGoroutine: a closed pool's
 	// workers exit after Close returns (it does not join), so another test's
 	// stragglers move the process count while this one reads it.
 	g0 := runtime.NumGoroutine()
-	a := Shared(cpus)
-	b := Shared(cpus)
+	a := Shared(cpus, WithCrews(crews))
+	b := Shared(cpus, WithCrews(crews))
 	// A failed check below must not leave this crew registered for the next
 	// run to be handed. Close is idempotent.
 	t.Cleanup(func() { a.Close(); b.Close() })
@@ -91,7 +92,7 @@ func TestSharedViewsTakeTurnsOnOneCrew(t *testing.T) {
 	if g := runtime.NumGoroutine(); g > g0 {
 		t.Fatalf("%d goroutine(s) left after the last view closed", g-g0)
 	}
-	if c := Shared(cpus); c.crew == b.crew {
+	if c := Shared(cpus, WithCrews(crews)); c.crew == b.crew {
 		t.Fatal("a closed crew was handed out again")
 	} else {
 		c.Close()
@@ -100,7 +101,8 @@ func TestSharedViewsTakeTurnsOnOneCrew(t *testing.T) {
 
 // Crews over overlapping cores share their lock; disjoint ones do not.
 func TestOverlappingCrewsShareTheirTurn(t *testing.T) {
-	a, b, c := Shared([]int{0, 1}), Shared([]int{1, 2, 3}), Shared([]int{4, 5})
+	crews := NewCrews()
+	a, b, c := Shared([]int{0, 1}, WithCrews(crews)), Shared([]int{1, 2, 3}, WithCrews(crews)), Shared([]int{4, 5}, WithCrews(crews))
 	defer a.Close()
 	defer b.Close()
 	defer c.Close()
@@ -115,6 +117,7 @@ func TestOverlappingCrewsShareTheirTurn(t *testing.T) {
 // The E-cores alone are a set of their own, disjoint from the P-cores, so a
 // session on them takes turns apart from one decoding on the P-cores.
 func TestECoresAreTheirOwnCrew(t *testing.T) {
+	crews := NewCrews()
 	e := CoreSet("e")
 	if len(ECores()) == 0 {
 		if len(e) != 0 {
@@ -125,7 +128,7 @@ func TestECoresAreTheirOwnCrew(t *testing.T) {
 	if fmt.Sprint(e) != fmt.Sprint(ECores()) {
 		t.Fatalf("the \"e\" set is %v, want ECores %v", e, ECores())
 	}
-	p, ev := Shared(CoreSet("p")), Shared(e)
+	p, ev := Shared(CoreSet("p"), WithCrews(crews)), Shared(e, WithCrews(crews))
 	defer p.Close()
 	defer ev.Close()
 	if p.crew.mu == ev.crew.mu {
@@ -153,9 +156,10 @@ func TestSharedViewsAlternateUnderContention(t *testing.T) {
 }
 
 func alternate(t *testing.T, procs int) {
+	crews := NewCrews()
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(procs))
 	cpus := []int{0, 1, 2}
-	a, b := Shared(cpus), Shared(cpus)
+	a, b := Shared(cpus, WithCrews(crews)), Shared(cpus, WithCrews(crews))
 	defer a.Close()
 	defer b.Close()
 

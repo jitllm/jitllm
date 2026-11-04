@@ -118,7 +118,7 @@ func TestDeviceDecodeRate(t *testing.T) {
 	if os.Getenv("JITLLM_DEV_RESIDENCY") != "" {
 		opts = append(opts, gpu.WithMetalResidency(true))
 	}
-	g, err := gpu.OpenWith(opts...)
+	g, err := openGPU(t, opts...)
 	if err != nil || g == nil {
 		t.Logf("%s: not present (%v)", spec, err)
 		t.Logf("host %.2f tok/s = %.1f GB/s%s over %.0f MiB of weights",

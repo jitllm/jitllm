@@ -103,23 +103,30 @@ type vkError string
 
 func (e vkError) Error() string { return string(e) }
 
-// Vanished reports the device count this process first enumerated and the
-// count of the first later enumeration that found fewer, or (0, 0) when none
-// has. A test binary checks it after its tests, so a device that vanished
-// fails the run even where a test skipped on it.
-func Vanished() (first, now int) {
-	proc.seen.Lock()
-	defer proc.seen.Unlock()
-	if proc.seen.shrunk == 0 {
+// Vanished reports the device count the driver found when made and the count
+// it enumerates now, when now is fewer, or (0, 0); a nil driver, none. A test
+// binary holds a driver for its life and checks it after its tests, so a
+// device that vanished fails the run even where a test skipped on it.
+func (d *Driver) Vanished() (first, now int) {
+	if d == nil || d.inst == 0 {
 		return 0, 0
 	}
-	return proc.seen.first, proc.seen.shrunk
+	var n uint32
+	if check(d.l.vkEnumeratePhysicalDevices(d.inst, &n, nil), "vkEnumeratePhysicalDevices") != nil {
+		return 0, 0
+	}
+	d.seen.Lock()
+	defer d.seen.Unlock()
+	if d.seen.first == 0 || int(n) >= d.seen.first {
+		return 0, 0
+	}
+	return d.seen.first, int(n)
 }
 
-// noteCount records n against the process's first enumeration and refuses a
+// noteCount records n against the driver's first enumeration and refuses a
 // count below it.
-func noteCount(n int) error {
-	seen := &proc.seen
+func (d *Driver) noteCount(n int) error {
+	seen := &d.seen
 	seen.Lock()
 	defer seen.Unlock()
 	if seen.first == 0 {
@@ -131,12 +138,13 @@ func noteCount(n int) error {
 	if seen.shrunk == 0 {
 		seen.shrunk = n
 	}
-	return fmt.Errorf("%w: the loader enumerates %d device(s) where this process first enumerated %d "+
+	return fmt.Errorf("%w: the loader enumerates %d device(s) where this driver first enumerated %d "+
 		"(VK_LOADER_DEBUG=error names the driver that failed to load)", ErrDevicesVanished, n, seen.first)
 }
 
 // enumerate reads every physical device's name, type and compute queue family.
-func (l *Loader) enumerate(inst Instance) ([]candidate, error) {
+func (d *Driver) enumerate() ([]candidate, error) {
+	l, inst := d.l, d.inst
 	var n uint32
 	if err := check(l.vkEnumeratePhysicalDevices(inst, &n, nil), "vkEnumeratePhysicalDevices"); err != nil {
 		return nil, err
@@ -148,7 +156,7 @@ func (l *Loader) enumerate(inst Instance) ([]candidate, error) {
 	if err := check(l.vkEnumeratePhysicalDevices(inst, &n, up(&devs[0])), "vkEnumeratePhysicalDevices"); err != nil {
 		return nil, err
 	}
-	if err := noteCount(int(n)); err != nil {
+	if err := d.noteCount(int(n)); err != nil {
 		return nil, err
 	}
 	cands := make([]candidate, 0, n)
@@ -222,8 +230,8 @@ func describeAll(cands []candidate) string {
 //
 // sel is the caller's selector; "" falls back to pin (Config.Device) and then
 // to the ordering.
-func (l *Loader) pickDevice(inst Instance, sel, pin string) (candidate, error) {
-	cands, err := l.enumerate(inst)
+func (d *Driver) pickDevice(sel, pin string) (candidate, error) {
+	cands, err := d.enumerate()
 	if err != nil {
 		return candidate{}, err
 	}

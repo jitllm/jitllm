@@ -28,7 +28,7 @@ func TestSpecSoftcapGateDiscriminates(t *testing.T) {
 				t.Run(spec, func(t *testing.T) {
 					bound := specCapBound(t, m, spec, prompt, want)
 					var f gpu.Faults
-					g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(spec),
+					g, err := openGPU(t, append([]gpu.Option{gpu.WithDevices(spec),
 						gpu.WithDeviceTune(gpu.TuneOff), gpu.WithFaults(&f)}, testTierOpts(t)...)...)
 					if err != nil || g == nil {
 						noDevice(t, spec, err)

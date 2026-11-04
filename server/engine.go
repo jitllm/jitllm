@@ -25,6 +25,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/jitllm/jitllm/backend/vulkan"
+	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/engine/nn"
@@ -194,6 +196,14 @@ func (c *Config) withDefaults() {
 type Engine struct {
 	cfg     Config
 	started time.Time
+	// crews is the worker crews every model the server loads runs its CPU
+	// device's pools on, so two models on the same cores run one set of
+	// workers, taking turns, and their prefills' GOMAXPROCS are held together.
+	crews *sched.Crews
+	// vk is a Vulkan driver held for the server's life, which keeps the ICDs
+	// loaded while models load and unload their devices (vulkan.Driver); nil
+	// where there is no loader.
+	vk *vulkan.Driver
 
 	// details remembers each container's listing details; see detailsCache.
 	details detailsCache
@@ -253,8 +263,11 @@ func New(cfg Config) *Engine {
 	cfg.withDefaults()
 	// One fetch bound for the whole server, shared by every surface.
 	cfg.Images = cfg.Images.ready()
+	vk, _ := vulkan.NewDriver()
 	return &Engine{
 		pools:    gpu.NewPoolRegistry(),
+		crews:    sched.NewCrews(),
+		vk:       vk,
 		cfg:      cfg,
 		started:  time.Now(),
 		models:   map[string]*LoadedModel{},
@@ -642,7 +655,8 @@ func (e *Engine) LoadModel(o LoadOptions) (*LoadedModel, error) {
 		closeDev()
 		return nil, &DeviceError{err}
 	}
-	opts := []model.Option{model.WithPageBudget(hostBudget), model.WithPreload(preloadDepth), model.WithDevices(devs...)}
+	opts := []model.Option{model.WithPageBudget(hostBudget), model.WithPreload(preloadDepth), model.WithDevices(devs...),
+		model.WithPool(cpu.WithSched(sched.WithCrews(e.crews)))}
 	kv := cmp.Or(o.KVF16, e.cfg.KVF16)
 	if kv != nil {
 		opts = append(opts, model.WithKVF16(*kv))
@@ -960,6 +974,7 @@ func (e *Engine) Close() {
 		lm.m.Close()
 		lm.closeTiers()
 	}
+	e.vk.Close()
 }
 
 func (lm *LoadedModel) closeLoop() {

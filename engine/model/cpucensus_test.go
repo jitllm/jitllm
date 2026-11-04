@@ -201,7 +201,7 @@ func TestCPUComposesOnce(t *testing.T) {
 			// the rest not again, and nothing composed after it.
 			t.Run("relocation", func(t *testing.T) {
 				dev := testdevices.Take(t, 1, "cuda:0")[0]
-				g, err := gpu.OpenWith(gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff))
+				g, err := openGPU(t, gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff))
 				if err != nil || g == nil {
 					noDevice(t, dev, err)
 				}

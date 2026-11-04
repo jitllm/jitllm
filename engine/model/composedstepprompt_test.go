@@ -104,7 +104,7 @@ func matrixTileCount() int {
 // (gpu.Config.MatrixTile).
 func composedPromptAt(t *testing.T, m *Model, ids []int32, parts gpu.Parts, tile int) ([]float32, gpu.Stats, gpu.Stats) {
 	t.Helper()
-	g, err := gpu.OpenWith(gpu.WithDeviceTune(gpu.TuneOff), gpu.WithConfig(func(c *gpu.Config) { c.MatrixTile = tile }))
+	g, err := openGPU(t, gpu.WithDeviceTune(gpu.TuneOff), gpu.WithConfig(func(c *gpu.Config) { c.MatrixTile = tile }))
 	if err != nil || g == nil {
 		noDevice(t, "device", err)
 	}

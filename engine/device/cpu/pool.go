@@ -56,6 +56,15 @@ func WithServingSplit(on bool) PoolOption { return func(c *poolConfig) { c.split
 // WithParticipants caps how many workers drain each region; 0 takes them all.
 func WithParticipants(n int) PoolOption { return func(c *poolConfig) { c.part = n } }
 
+// CrewsOf is the crews opts run their pools on (sched.WithCrews), nil for none.
+func CrewsOf(opts ...PoolOption) *sched.Crews {
+	var c poolConfig
+	for _, o := range opts {
+		o(&c)
+	}
+	return sched.CrewsOf(c.sched...)
+}
+
 // NewPool is the CPU device's workers on the cores opts name.
 func NewPool(opts ...PoolOption) *Pool {
 	p := &Pool{}
@@ -63,6 +72,14 @@ func NewPool(opts ...PoolOption) *Pool {
 		o(&p.cfg)
 	}
 	c := &p.cfg
+	// The pool's views take turns on their crews: those the caller's other
+	// pools run (sched.WithCrews), or the pool's own.
+	crews := sched.CrewsOf(c.sched...)
+	if crews == nil {
+		crews = sched.NewCrews()
+		c.sched = append(c.sched, sched.WithCrews(crews))
+	}
+	p.procs = crews.Hold()
 	p.qos = sched.QoSOf(c.sched...)
 	p.decode = sched.Shared(sched.DecodeCores(c.sched...), c.sched...)
 	cs := c.prefill

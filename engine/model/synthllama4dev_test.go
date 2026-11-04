@@ -78,7 +78,7 @@ func TestSynthLlama4OnEveryDevice(t *testing.T) {
 
 	ran := 0
 	for _, spec := range stepDevices() {
-		probe, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
+		probe, err := openGPU(t, gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
 		if err != nil || probe == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue
@@ -89,7 +89,7 @@ func TestSynthLlama4OnEveryDevice(t *testing.T) {
 			// A fresh tier per arm: a warm tier's scratch is the first plan's,
 			// so planConflict would refuse a violation instead of running it.
 			onDevice := func(c *Config, run func(*Instance) [][]float32) ([][]float32, string) {
-				gpux, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
+				gpux, err := openGPU(t, gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -129,7 +129,7 @@ func TestSynthLlama4OnEveryDevice(t *testing.T) {
 			// chunk, temperature table and kernels (planUnion widens none), so
 			// a second session with another Llama 4 shape must be refused.
 			func() {
-				gpux, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
+				gpux, err := openGPU(t, gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
 				if err != nil {
 					t.Fatal(err)
 				}

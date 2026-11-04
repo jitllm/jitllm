@@ -42,7 +42,7 @@ func TestStepAcrossSessionsLatentMatchesEachAlone(t *testing.T) {
 				// wrote must not reach a real row (RULE 13).
 				for _, poison := range []bool{false, true} {
 					t.Run(fmt.Sprintf("%s/poisoned=%v", dev, poison), func(t *testing.T) {
-						g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff),
+						g, err := openGPU(t, append([]gpu.Option{gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff),
 							gpu.WithPoisonKV(poison), gpu.WithPoisonScratch(poison)}, testTierOpts(t)...)...)
 						if err != nil || g == nil {
 							noDevice(t, dev, err)

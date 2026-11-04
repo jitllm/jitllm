@@ -20,7 +20,7 @@ func TestPoisonedScratchChangesNothing(t *testing.T) {
 		if poison {
 			opts = append(opts, gpu.WithPoisonScratch(true))
 		}
-		g, err := gpu.OpenWith(opts...)
+		g, err := openGPU(t, opts...)
 		if err != nil || g == nil {
 			noDevice(t, "device", err)
 		}

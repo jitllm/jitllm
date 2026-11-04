@@ -108,7 +108,7 @@ func swaTierWith(t *testing.T, extra ...gpu.Option) *gpu.GPU {
 	if testdevices.Selected() {
 		o = append(o, gpu.WithDevices(testdevices.One("")))
 	}
-	g, err := gpu.OpenWith(o...)
+	g, err := openGPU(t, o...)
 	if err != nil || g == nil {
 		noDevice(t, "device", err)
 	}

@@ -50,7 +50,7 @@ func TestPlacementComposesOnce(t *testing.T) {
 		if devices != "" {
 			opts = append(opts, gpu.WithDevices(devices))
 		}
-		g, err := gpu.OpenWith(opts...)
+		g, err := openGPU(t, opts...)
 		if err != nil || g == nil {
 			t.Fatalf("no GPU device: %v", err)
 		}

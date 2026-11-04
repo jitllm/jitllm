@@ -121,7 +121,7 @@ func (eg *evictGate) second(t *testing.T, st *Instance) [][]float32 {
 // in; squeeze then holds the budget at a few pages of slack. cfg, where set,
 // changes the arm's device configuration.
 func (eg *evictGate) open(t *testing.T, squeeze bool, cfg func(*gpu.Config), extra ...gpu.Option) (*gpu.GPU, *Instance, int) {
-	g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(testdevices.Like(t, "cuda:0")), gpu.WithDeviceTune(gpu.TuneOff),
+	g, err := openGPU(t, append([]gpu.Option{gpu.WithDevices(testdevices.Like(t, "cuda:0")), gpu.WithDeviceTune(gpu.TuneOff),
 		gpu.WithConfig(func(c *gpu.Config) {
 			c.KVPage = 64 // the smallest page: several over a short history
 			if cfg != nil {

@@ -60,7 +60,7 @@ func schedulerOnSplit(t *testing.T, p string) {
 		ids[i] = m.Vocab.Encode(pr, true)
 	}
 	open := func(t *testing.T, spec string, paging bool) *gpu.GPU {
-		g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff)},
+		g, err := openGPU(t, append([]gpu.Option{gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff)},
 			testTierOpts(t)...)...)
 		if err != nil || g == nil {
 			noDevice(t, spec, err)
@@ -82,7 +82,7 @@ func schedulerOnSplit(t *testing.T, p string) {
 	// halves the scratch until blocks fit, so a share taken at a wider one
 	// left room for every block and the paging arm paged nothing.
 	var sc uint64
-	if g, err := gpu.OpenWith(gpu.WithDevices(testdevices.Like(t, "cuda:0")), gpu.WithDeviceTune(gpu.TuneOff),
+	if g, err := openGPU(t, gpu.WithDevices(testdevices.Like(t, "cuda:0")), gpu.WithDeviceTune(gpu.TuneOff),
 		gpu.WithConfig(func(c *gpu.Config) { c.PromptRows = 8 })); err == nil && g != nil {
 		sz := newTestBatcher(m, rows, seq)
 		if err := sz.in.SetDeviceLayers(g, -1); err == nil && g.Stats().BudgetUsed > m.WeightBytes() {

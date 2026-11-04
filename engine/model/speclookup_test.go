@@ -235,7 +235,7 @@ func TestSpecLookupOnDevice(t *testing.T) {
 			ran := 0
 			for _, spec := range specs {
 				t.Run(spec, func(t *testing.T) {
-					g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(spec),
+					g, err := openGPU(t, append([]gpu.Option{gpu.WithDevices(spec),
 						gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t)...)...)
 					if err != nil || g == nil {
 						noDevice(t, spec, err)

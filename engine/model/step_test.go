@@ -42,7 +42,7 @@ func TestStepAcrossSessionsMatchesEachAlone(t *testing.T) {
 
 func stepAcrossSessions(t *testing.T, m *Model, spec string) {
 	ctl := orderControl(t, m, spec)
-	g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff)},
+	g, err := openGPU(t, append([]gpu.Option{gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff)},
 		testTierOpts(t)...)...)
 	if err != nil || g == nil {
 		noDevice(t, spec, err)
@@ -189,7 +189,7 @@ func mixtureStepChecks(t *testing.T, m *Model, r stepResult) {
 // form when asked, or skips naming the device.
 func stepTier(t *testing.T, m *Model, dev string, shared bool, extra ...gpu.Option) *gpu.GPU {
 	t.Helper()
-	g, err := gpu.OpenWith(append(append([]gpu.Option{gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff),
+	g, err := openGPU(t, append(append([]gpu.Option{gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff),
 		gpu.WithConfig(func(c *gpu.Config) { c.SharedRec = shared })}, testTierOpts(t)...), extra...)...)
 	if err != nil || g == nil {
 		noDevice(t, dev, err)
@@ -467,7 +467,7 @@ func orderControl(t *testing.T, m *Model, dev string) float64 {
 	const steps = 8 // stepGate's
 	var fed [][]int32
 	arm := func(unsplit bool) [][]float32 {
-		g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff),
+		g, err := openGPU(t, append([]gpu.Option{gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff),
 			gpu.WithConfig(func(c *gpu.Config) { c.ComposedUnsplit = unsplit })}, testTierOpts(t)...)...)
 		if err != nil || g == nil {
 			noDevice(t, dev, err)

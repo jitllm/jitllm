@@ -127,7 +127,7 @@ func bitnetOnEveryDevice(t *testing.T, m *Model, g *c6Golden) {
 
 	ran := 0
 	for _, spec := range stepDevices() {
-		probe, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
+		probe, err := openGPU(t, gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
 		if err != nil || probe == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue
@@ -148,7 +148,7 @@ func bitnetOnEveryDevice(t *testing.T, m *Model, g *c6Golden) {
 				if noGraph {
 					opts = append(opts, gpu.WithConfig(func(c *gpu.Config) { c.NoGraph = true }))
 				}
-				gpux, err := gpu.OpenWith(opts...)
+				gpux, err := openGPU(t, opts...)
 				if err != nil {
 					t.Fatal(err)
 				}

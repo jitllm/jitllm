@@ -70,7 +70,7 @@ func TestStagedGemmPrefillMatchesTheHost(t *testing.T) {
 				noMatrix bool
 			}{{"matrix unit", false}, {"no matrix unit", true}} {
 				t.Run(arm.name, func(t *testing.T) {
-					g, err := gpu.OpenWith(gpu.WithAPI("ptx"), gpu.WithDeviceTune(gpu.TuneOff),
+					g, err := openGPU(t, gpu.WithAPI("ptx"), gpu.WithDeviceTune(gpu.TuneOff),
 						gpu.WithConfig(func(c *gpu.Config) { c.NoMMA = arm.noMatrix }))
 					if err != nil || g == nil {
 						noDevice(t, "cuda", err)

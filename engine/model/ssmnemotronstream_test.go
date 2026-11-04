@@ -36,7 +36,7 @@ func TestUngatedStreamedBankMatchesTheResidentOne(t *testing.T) {
 		if stream {
 			opts = append(opts, gpu.WithConfig(func(c *gpu.Config) { c.StreamExperts = true }))
 		}
-		g, err := gpu.OpenWith(opts...)
+		g, err := openGPU(t, opts...)
 		if err != nil || g == nil {
 			noDevice(t, "device", err)
 		}

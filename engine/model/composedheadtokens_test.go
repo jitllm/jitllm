@@ -49,7 +49,7 @@ func TestComposedHeadTokens(t *testing.T) {
 						name = dev + "/composed head"
 					}
 					t.Run(name, func(t *testing.T) {
-						g, err := gpu.OpenWith(gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff))
+						g, err := openGPU(t, gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff))
 						if err != nil || g == nil {
 							noDevice(t, dev, err)
 						}
@@ -125,7 +125,7 @@ func TestComposedHeadTokens(t *testing.T) {
 							m.front.mu.Lock()
 							set.cpuSample = negatedSample(orig)
 							m.front.mu.Unlock()
-							vg, err := gpu.OpenWith(gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff),
+							vg, err := openGPU(t, gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff),
 								gpu.WithConfig(func(c *gpu.Config) { c.NoGraph = true }))
 							if err != nil || vg == nil {
 								t.Fatalf("%s did not open for the violation: %v", dev, err)
@@ -275,7 +275,7 @@ func TestComposedHeadTokens(t *testing.T) {
 								m.front.mu.Lock()
 								set.cpuWalk = v.f(origWalk)
 								m.front.mu.Unlock()
-								vg, err := gpu.OpenWith(gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff),
+								vg, err := openGPU(t, gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff),
 									gpu.WithConfig(func(c *gpu.Config) { c.NoGraph = true }))
 								if err != nil || vg == nil {
 									t.Fatalf("%s did not open for the violation: %v", dev, err)

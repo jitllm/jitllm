@@ -36,7 +36,7 @@ func TestServedPanicFailsTheStep(t *testing.T) {
 		for _, dev := range stepDevices() {
 			t.Run(dev+"/"+at, func(t *testing.T) {
 				t.Setenv("JITLLM_DEVICE_PANIC_AT", at)
-				g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t)...)...)
+				g, err := openGPU(t, append([]gpu.Option{gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t)...)...)
 				if err != nil || g == nil {
 					noDevice(t, dev, err)
 				}

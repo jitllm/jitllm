@@ -57,7 +57,7 @@ func persistBroken(t *testing.T, deps bool, brk gpu.Option) {
 		if brk != nil {
 			opts = append(opts, brk)
 		}
-		g, err := gpu.OpenWith(opts...)
+		g, err := openGPU(t, opts...)
 		if err != nil || g == nil {
 			t.Skipf("no GPU: %v", err)
 		}

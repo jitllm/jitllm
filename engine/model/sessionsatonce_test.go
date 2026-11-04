@@ -47,7 +47,7 @@ func atOnceTier(t *testing.T, spec string, cfg func(*gpu.Config)) *gpu.GPU {
 	if cfg != nil {
 		opts = append(opts, gpu.WithConfig(cfg))
 	}
-	g, err := gpu.OpenWith(opts...)
+	g, err := openGPU(t, opts...)
 	if err != nil || g == nil {
 		noDevice(t, spec, err)
 	}

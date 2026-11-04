@@ -64,7 +64,7 @@ func TestComposedHeadWritesItsHidden(t *testing.T) {
 // It returns the normed rows read back and the tier's stats.
 func composedHidden(t *testing.T, m *Model, dev string, parts gpu.Parts, k int, fold bool, extra ...gpu.Option) ([]float32, gpu.Stats) {
 	t.Helper()
-	g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff),
+	g, err := openGPU(t, append([]gpu.Option{gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff),
 		gpu.WithConfig(func(c *gpu.Config) { c.PromptRows = 32 })}, extra...)...)
 	if err != nil || g == nil {
 		noDevice(t, dev, err)

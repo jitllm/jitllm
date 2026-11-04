@@ -25,20 +25,25 @@ func noDevice(t *testing.T, what string, err error) {
 	t.Skipf("no %s here: %v", what, err)
 }
 
-// TestMain fails the binary when any Vulkan enumeration in it shrank, which
-// catches an arm that skipped on a vanished device through a path noDevice
-// does not cover.
+// TestMain holds a Vulkan driver for the binary's life, which keeps the ICDs
+// loaded while the gates open and close their own (vulkan.Driver), and fails
+// the binary when the devices it first enumerated have shrunk by the end,
+// which catches an arm that skipped on a vanished device through a path
+// noDevice does not cover.
 func TestMain(m *testing.M) {
 	testdevices.Install(backend.Restrict)
-	os.Exit(vanishedFails(persistRan(m.Run())))
+	keep, _ := vulkan.NewDriver()
+	code := vanishedFails(keep, m.Run())
+	keep.Close()
+	os.Exit(code)
 }
 
 // vanishedFails is code, or a failure naming the Vulkan devices that went
 // missing during the run.
-func vanishedFails(code int) int {
-	if first, now := vulkan.Vanished(); first > 0 {
-		fmt.Fprintf(os.Stderr, "FAIL: the Vulkan loader enumerated %d device(s) first in this process and "+
-			"%d later -- every Vulkan arm after that skipped or ran elsewhere\n", first, now)
+func vanishedFails(keep *vulkan.Driver, code int) int {
+	if first, now := keep.Vanished(); first > 0 {
+		fmt.Fprintf(os.Stderr, "FAIL: the Vulkan loader enumerated %d device(s) when this binary started and "+
+			"%d at its end -- every Vulkan arm after that skipped or ran elsewhere\n", first, now)
 		return 1
 	}
 	return code

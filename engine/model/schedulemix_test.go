@@ -187,7 +187,7 @@ func (c *mixedCase) open() *gpu.GPU {
 	if c.spec == "" {
 		return nil
 	}
-	g, err := gpu.OpenWith(append(append([]gpu.Option{gpu.WithDevices(c.spec), gpu.WithDeviceTune(gpu.TuneOff)},
+	g, err := openGPU(c.t, append(append([]gpu.Option{gpu.WithDevices(c.spec), gpu.WithDeviceTune(gpu.TuneOff)},
 		testTierOpts(c.t)...), c.extra...)...)
 	if err != nil || g == nil {
 		noDevice(c.t, c.spec, err)

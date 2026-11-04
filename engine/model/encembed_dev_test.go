@@ -63,7 +63,7 @@ func TestEmbeddingsOnEveryDevice(t *testing.T) {
 			he.Close()
 			ran := 0
 			for _, spec := range stepDevices() {
-				probe, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
+				probe, err := openGPU(t, gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
 				if err != nil || probe == nil {
 					t.Logf("%s: not present (%v)", spec, err)
 					continue
@@ -72,7 +72,7 @@ func TestEmbeddingsOnEveryDevice(t *testing.T) {
 				ran++
 				t.Run(spec, func(t *testing.T) {
 					arm := func(n int) ([][]float32, int) {
-						gpux, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(spec),
+						gpux, err := openGPU(t, append([]gpu.Option{gpu.WithDevices(spec),
 							gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t)...)...)
 						if err != nil {
 							t.Fatal(err)

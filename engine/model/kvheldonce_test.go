@@ -152,7 +152,7 @@ func TestKVIsHeldOnce(t *testing.T) {
 	}
 	t.Run("host", func(t *testing.T) { arms(t, nil) })
 	for _, spec := range stepDevices() {
-		g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(spec),
+		g, err := openGPU(t, append([]gpu.Option{gpu.WithDevices(spec),
 			gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t)...)...)
 		if err != nil || g == nil {
 			t.Logf("%s: not present (%v)", spec, err)

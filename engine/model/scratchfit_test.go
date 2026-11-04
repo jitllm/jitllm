@@ -120,7 +120,7 @@ func fitTier(t *testing.T, spec string, limit uint64, cfg func(*gpu.Config)) *gp
 	if limit > 0 {
 		spec = fmt.Sprintf("%s=%d", spec, limit)
 	}
-	g, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff), gpu.WithConfig(cfg))
+	g, err := openGPU(t, gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff), gpu.WithConfig(cfg))
 	if err != nil || g == nil {
 		noDevice(t, spec, err)
 	}

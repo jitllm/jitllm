@@ -1,46 +1,40 @@
-//go:build jitllmtest
-
 package model
 
 import (
-	"fmt"
 	"os"
+	"testing"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
 )
 
-// JITLLM_TEST_PERSIST=1 in a jitllmtest build runs every device gate in the
-// binary through the persistent decode path (gpu.PersistByDefaultForTest),
-// and fails the binary when no persistent kernel launched: run one gate per
-// binary invocation and the check is that gate's. JITLLM_TEST_PERSIST=deps
-// orders those kernels with dependency counters (gpu.PersistDepsByDefaultForTest)
-// and fails the binary when none of them launched.
-func init() {
-	if os.Getenv("JITLLM_TEST_PERSIST") != "" {
-		gpu.PersistByDefaultForTest(true)
+// openGPU is gpu.OpenWith for a model gate. With JITLLM_TEST_PERSIST set the
+// tier runs the persistent decode path (gpu.WithPersist), and with
+// JITLLM_TEST_PERSIST=deps orders those kernels with dependency counters
+// (gpu.WithPersistDeps), either before the gate's own options, which still
+// decide; the tier then fails t when it ends if it ran a block's launches down
+// the path and launched no persistent kernel (none ordered by dependency
+// counters, for deps): the gate ran the per-op path.
+func openGPU(t testing.TB, opts ...gpu.Option) (*gpu.GPU, error) {
+	mode := os.Getenv("JITLLM_TEST_PERSIST")
+	switch mode {
+	case "":
+	case "deps":
+		opts = append([]gpu.Option{gpu.WithPersistDeps(true, 0)}, opts...)
+	default:
+		opts = append([]gpu.Option{gpu.WithPersist(true, 0)}, opts...)
 	}
-	if os.Getenv("JITLLM_TEST_PERSIST") == "deps" {
-		gpu.PersistDepsByDefaultForTest(true)
+	g, err := gpu.OpenWith(opts...)
+	if err != nil || g == nil || mode == "" {
+		return g, err
 	}
-}
-
-func persistRan(code int) int {
-	if os.Getenv("JITLLM_TEST_PERSIST") == "" || code != 0 {
-		return code
-	}
-	if n := gpu.PersistLaunchesForTest(); n == 0 {
-		fmt.Fprintln(os.Stderr, "FAIL: JITLLM_TEST_PERSIST is set and no persistent kernel launched: the gate ran the per-op path")
-		return 1
-	} else {
-		fmt.Fprintf(os.Stderr, "persistent path: %d persistent kernels launched\n", n)
-	}
-	if os.Getenv("JITLLM_TEST_PERSIST") == "deps" {
-		if n := gpu.PersistDepLaunchesForTest(); n == 0 {
-			fmt.Fprintln(os.Stderr, "FAIL: JITLLM_TEST_PERSIST=deps is set and no dependency-counter kernel launched")
-			return 1
-		} else {
-			fmt.Fprintf(os.Stderr, "dependency counters: %d kernels launched\n", n)
+	t.Cleanup(func() {
+		runs, launched, deps := g.PersistLaunched()
+		switch {
+		case runs > 0 && launched == 0:
+			t.Errorf("JITLLM_TEST_PERSIST is set and %d runs of a block's launches launched no persistent kernel: the gate ran the per-op path", runs)
+		case mode == "deps" && launched > 0 && deps == 0:
+			t.Errorf("JITLLM_TEST_PERSIST=deps is set and none of %d persistent kernels was ordered by dependency counters", launched)
 		}
-	}
-	return code
+	})
+	return g, err
 }

@@ -42,7 +42,7 @@ func foldsTheHead(t *testing.T, name, spec string) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	g, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
+	g, err := openGPU(t, gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
 	if err != nil || g == nil {
 		noDevice(t, spec, err)
 	}

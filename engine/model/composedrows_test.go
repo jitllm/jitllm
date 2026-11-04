@@ -140,7 +140,7 @@ func composedRowsTokens(t *testing.T, m *Model) {
 // tokens and logits, how many steps ran, and the tier's stats.
 func rowsTokens(t *testing.T, m *Model, ids [][]int32, gen int, opts ...gpu.Option) (toks [][]int32, logits [][]float32, steps int, st gpu.Stats) {
 	t.Helper()
-	g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDeviceTune(gpu.TuneOff)}, opts...)...)
+	g, err := openGPU(t, append([]gpu.Option{gpu.WithDeviceTune(gpu.TuneOff)}, opts...)...)
 	if err != nil || g == nil {
 		noDevice(t, "device", err)
 	}

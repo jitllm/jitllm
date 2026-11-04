@@ -1580,6 +1580,12 @@ func openContainer(path string, options ...Option) (*Model, error) {
 	// The open-time budget is the caller's ask like any later one: a device
 	// on the host's memory attached afterwards comes off it (hostheld.go).
 	m.pages.bytes = budget
+	// Every instance's workers are views of one set of crews, the caller's
+	// (WithPool, sched.WithCrews) or the model's: two instances on the same
+	// cores run on its one set of workers, taking turns.
+	if cpu.CrewsOf(lo.pool...) == nil {
+		lo.pool = append(lo.pool, cpu.WithSched(sched.WithCrews(sched.NewCrews())))
+	}
 	m.eng.pool, m.opt = lo.pool, lo.opt
 	m.eng.cpuForms.Target = h
 	m.actWindow = m.actWindowOf()

@@ -41,7 +41,7 @@ func TestConcurrentMultiDeviceDoesNotLeak(t *testing.T) {
 		defer m.Close()
 
 		// Every device the host reports, not just the fastest.
-		g, err := gpu.OpenWith(gpu.WithDevices("all"), gpu.WithDeviceTune(gpu.TuneOff), gpu.WithCounters(ctr))
+		g, err := openGPU(t, gpu.WithDevices("all"), gpu.WithDeviceTune(gpu.TuneOff), gpu.WithCounters(ctr))
 		if err != nil || g == nil {
 			noDevice(t, "devices", err)
 		}

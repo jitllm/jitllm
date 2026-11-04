@@ -37,7 +37,7 @@ func TestStagedPagedPrefillMatchesDecode(t *testing.T) {
 func stagedPrefillGap(t *testing.T, m *Model, dev string) float64 {
 	t.Helper()
 	ids := m.Vocab.Encode("The clerk counted barrels of salt on the upper floor, and", true)
-	g, err := gpu.OpenWith(gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff))
+	g, err := openGPU(t, gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff))
 	if err != nil || g == nil {
 		noDevice(t, dev, err)
 	}

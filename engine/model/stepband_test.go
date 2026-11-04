@@ -57,7 +57,7 @@ func stepBand(t *testing.T, m *Model, dev string) {
 		"def fibonacci(n):", "The three primary colors are"}
 	const steps = 32
 	open := func(opts ...gpu.Option) *gpu.GPU {
-		g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff)},
+		g, err := openGPU(t, append([]gpu.Option{gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff)},
 			append(opts, testTierOpts(t)...)...)...)
 		if err != nil || g == nil {
 			noDevice(t, dev, err)

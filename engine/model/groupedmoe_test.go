@@ -85,7 +85,7 @@ func batchedMixtureCase(t *testing.T, name string, float, violate bool) float64 
 		if testdevices.Selected() {
 			opts = append(opts, gpu.WithDevices(testdevices.Spec(""))) // a model bigger than one card
 		}
-		g, err := gpu.OpenWith(append(opts,
+		g, err := openGPU(t, append(opts,
 			gpu.WithConfig(func(c *gpu.Config) {
 				c.NoBatch = noBatch
 				// The A/B for the matrix unit: its forms read binary16

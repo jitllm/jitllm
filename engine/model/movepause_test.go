@@ -54,7 +54,7 @@ func TestMovePause(t *testing.T) {
 	// run is one arm on a fresh tier: direct or not, moving when move is set,
 	// teacher-forced on ids when given.
 	run := func(direct, move bool, ids []int32) ([]int32, [][]float32, []BlockMove, [][2]int, []time.Duration) {
-		g, err := gpu.OpenWith(gpu.WithDevices(a+","+b), gpu.WithDeviceTune(gpu.TuneOff))
+		g, err := openGPU(t, gpu.WithDevices(a+","+b), gpu.WithDeviceTune(gpu.TuneOff))
 		if err != nil || g == nil {
 			noDevice(t, a+","+b, err)
 		}

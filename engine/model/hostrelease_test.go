@@ -32,7 +32,7 @@ func TestPlacedBlocksGiveTheirHostPagesBack(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer m.Close()
-			g, err := gpu.OpenWith(gpu.WithDeviceTune(gpu.TuneOff))
+			g, err := openGPU(t, gpu.WithDeviceTune(gpu.TuneOff))
 			if err != nil || g == nil {
 				noDevice(t, "device", err)
 			}

@@ -102,7 +102,7 @@ func composedDecodeWith(t *testing.T, m *Model, dev string, ids, toks []int32, p
 		})},
 		testTierOpts(t)...)
 	opts = append(opts, extra...)
-	g, err := gpu.OpenWith(opts...)
+	g, err := openGPU(t, opts...)
 	if err != nil || g == nil {
 		noDevice(t, dev, err)
 	}
@@ -285,7 +285,7 @@ func TestTierNamesTheRowsItCannotBlock(t *testing.T) {
 			defer m.Close()
 			for _, dev := range stepDevices() {
 				t.Run(dev, func(t *testing.T) {
-					g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t)...)...)
+					g, err := openGPU(t, append([]gpu.Option{gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t)...)...)
 					if err != nil || g == nil {
 						noDevice(t, dev, err)
 					}
@@ -1000,7 +1000,7 @@ func TestComposedPromptIsNotServed(t *testing.T) {
 				run := func(withhold bool) (heads, left, blocks, prompt int) {
 					// Without a recording every step runs every part, so the
 					// counts are the steps'.
-					g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff),
+					g, err := openGPU(t, append([]gpu.Option{gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff),
 						gpu.WithConfig(func(c *gpu.Config) {
 							c.NoGraph = true
 						})},

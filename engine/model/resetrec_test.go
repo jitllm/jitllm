@@ -17,7 +17,7 @@ func TestResetClearsTheRecurrentSummary(t *testing.T) {
 	t.Run("cpu", func(t *testing.T) { resetCase(t, m, nil) })
 	for _, dev := range stepDevices() {
 		t.Run(dev, func(t *testing.T) {
-			g, err := gpu.OpenWith(gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff))
+			g, err := openGPU(t, gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff))
 			if err != nil || g == nil {
 				noDevice(t, dev, err)
 			}

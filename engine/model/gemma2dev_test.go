@@ -48,7 +48,7 @@ func TestGemma2SoftcapOnDevice(t *testing.T) {
 	want := run(host)
 	host.Close()
 
-	g, err := gpu.OpenWith(gpu.WithDevices("gpu:0"), gpu.WithDeviceTune(gpu.TuneOff))
+	g, err := openGPU(t, gpu.WithDevices("gpu:0"), gpu.WithDeviceTune(gpu.TuneOff))
 	if err != nil || g == nil {
 		noDevice(t, "device", err)
 	}

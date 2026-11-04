@@ -254,7 +254,7 @@ func TestKimiK3RealMatchesReference(t *testing.T) {
 			})
 			for _, spec := range stepDevices() {
 				t.Run(spec, func(t *testing.T) {
-					gpux, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(spec),
+					gpux, err := openGPU(t, append([]gpu.Option{gpu.WithDevices(spec),
 						gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t)...)...)
 					if err != nil || gpux == nil {
 						t.Skipf("%s: not present (%v)", spec, err)

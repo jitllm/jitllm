@@ -38,7 +38,7 @@ func TestABatchLeavesAnotherSessionAlone(t *testing.T) {
 func aBatchLeavesAnotherSessionAlone(t *testing.T, m *Model, parts gpu.Parts) {
 	const seq, rows, before, after = 256, 3, 3, 5
 	open := func(t *testing.T, spec string) *gpu.GPU {
-		g, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
+		g, err := openGPU(t, gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
 		if err != nil || g == nil {
 			noDevice(t, spec, err)
 		}

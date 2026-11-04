@@ -489,16 +489,18 @@ type Stats struct {
 	// RecShared counts recurrent pools sized in the shared form (recpool.go):
 	// one resident state a slot and the device's next-state scratch.
 	RecShared int
-	// PersistLaunches counts persistent kernels launched (Config.Persist),
-	// PersistParts the per-op launches they ran, PersistPhases their
+	// PersistRuns counts the collected runs of a block's launches the
+	// persistent path issued (Config.Persist), composed or not;
+	// PersistLaunches the persistent kernels launched, PersistParts the
+	// per-op launches they ran, PersistPhases their
 	// grid-barrier-separated phases, PersistCompiles the compositions built
 	// and PersistFallbacks those that failed and ran per-op; PersistWhy is
 	// why the path is declined on this device.
 	// PersistDepLaunches counts those launched with dependency counters
 	// (Config.PersistDeps), PersistDepTiles their tile-wise edges.
-	PersistLaunches, PersistParts, PersistPhases, PersistCompiles, PersistFallbacks int
-	PersistDepLaunches, PersistDepTiles                                             int
-	PersistWhy                                                                      string
+	PersistRuns, PersistLaunches, PersistParts, PersistPhases, PersistCompiles, PersistFallbacks int
+	PersistDepLaunches, PersistDepTiles                                                          int
+	PersistWhy                                                                                   string
 	// RagHeadOne counts ragged steps whose head projected only the one row
 	// that wanted logits, by decode's own projection or the composer's head at
 	// one row, rather than a batched twin over every row (a prompt chunk's
@@ -846,6 +848,7 @@ func (s *Stats) add(o Stats) {
 	s.PromptSplits += o.PromptSplits
 	s.RecBytes += o.RecBytes
 	s.KVGrows += o.KVGrows
+	s.PersistRuns += o.PersistRuns
 	s.PersistLaunches += o.PersistLaunches
 	s.PersistParts += o.PersistParts
 	s.PersistPhases += o.PersistPhases
@@ -1635,10 +1638,6 @@ func New(slots []Slot, options ...Option) (*GPU, error) {
 		// default) Pack declines immediately.
 		arena: NewArena(o.kb.arena),
 	}
-	// A jitllmtest build can make the persistent path every tier's default
-	// (PersistByDefaultForTest), so the regression gates run through it.
-	cfg.Persist = persistDefault
-	cfg.PersistDeps = persistDepsDefault
 	cfg.Profile = func(d backend.Device) (cost.Profile, bool) { return cost.Known(hw.GPUName(d), d.API()) }
 	for _, f := range o.cfg {
 		f(cfg)

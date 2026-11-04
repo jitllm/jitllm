@@ -89,7 +89,7 @@ func composedFoldParts(t *testing.T, m *Model, dev string) {
 	// Chunks of at most 32 rows: the device reserves and warms the widths up
 	// to 32, each a form of the composer's.
 	var faults gpu.Faults
-	g, err := gpu.OpenWith(gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff),
+	g, err := openGPU(t, gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff),
 		gpu.WithConfig(func(c *gpu.Config) { c.PromptRows = 32 }), gpu.WithFaults(&faults))
 	if err != nil || g == nil {
 		noDevice(t, dev, err)

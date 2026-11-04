@@ -77,7 +77,7 @@ func TestPagedKVAB(t *testing.T) {
 		if mib := num("JITLLM_AB_BUDGET", 0); mib > 0 {
 			opts = append(opts, gpu.WithBudget(uint64(mib)<<20))
 		}
-		g, err := gpu.OpenWith(opts...)
+		g, err := openGPU(t, opts...)
 		if err != nil || g == nil {
 			noDevice(t, spec, err)
 		}
