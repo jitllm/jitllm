@@ -111,7 +111,7 @@ func (d *Device) launch(b *Call, c *Code) {
 	}
 	r := &d.run
 	r.d, r.b, r.c, r.live = d, b, c, live
-	d.workers.Do(n, 1, r.fn)
+	d.workers.DoLabeled(c.label, n, 1, r.fn)
 }
 
 // callAt is the call the i-th of a kernel's calls runs: in order, or for a
@@ -256,7 +256,7 @@ func (d *Device) group(b *Call, g []Code) {
 	}
 	r := &d.run
 	r.d, r.b, r.g = d, b, g
-	d.workers.Do(n, 1, r.gfn)
+	d.workers.DoLabeled(g[0].label, n, 1, r.gfn)
 }
 
 // chain runs the kernels g as one phase over the pool, units units:
@@ -269,7 +269,7 @@ func (d *Device) chain(b *Call, g []Code, units int) {
 	}
 	r := &d.run
 	r.d, r.b, r.g, r.units = d, b, g, units
-	d.workers.Do(units, 1, r.cfn)
+	d.workers.DoLabeled(g[0].label, units, 1, r.cfn)
 }
 
 // chainRun runs the units [lo, hi) of the kernels g's phase on a.

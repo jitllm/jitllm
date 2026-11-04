@@ -3,6 +3,7 @@ package cpudev
 import (
 	"fmt"
 	"slices"
+	"strings"
 	"unsafe"
 
 	"github.com/jitllm/jitllm/composer"
@@ -110,10 +111,11 @@ type Code struct {
 	// tiles is a kernel whose inner calls tile a weight (composer.Code.TileMajor):
 	// its calls run a tile for every live row before the next tile.
 	tiles bool
-	// name is the composer's name for the kernel; nanos and runs its time
-	// and launches under WithProfile; regs and size its register facts and
-	// its code's bytes.
-	name        string
+	// name is the composer's name for the kernel, and label its region's
+	// pprof label: the name, or the names of the kernels its phase runs;
+	// nanos and runs its time and launches under WithProfile; regs and size
+	// its register facts and its code's bytes.
+	name, label string
 	regs        composer.RegUse
 	size        int
 	desc        string
@@ -552,6 +554,7 @@ func BuildForm(h *cpu.Host, gr *graph.Graph, codes []composer.Code, rows int, ap
 		f.chainPhases()
 		f.joinPhases()
 	}
+	f.labelPhases()
 	f.shareOwn(wrote, read)
 	return f, nil
 }
@@ -751,6 +754,24 @@ func (f *Form) joinPhases() {
 		}
 		f.Codes[g].join = j - g - 1
 		g = j
+	}
+}
+
+// labelPhases names each kernel's region for a profile: its own name, or
+// the names of every kernel the phase it heads runs.
+func (f *Form) labelPhases() {
+	for g := 0; g < len(f.Codes); g++ {
+		c := &f.Codes[g]
+		k := c.join + c.chain
+		if k == 0 {
+			c.label = c.name
+			continue
+		}
+		names := make([]string, k+1)
+		for i := range names {
+			names[i] = f.Codes[g+i].name
+		}
+		c.label = strings.Join(names, "+")
 	}
 }
 
