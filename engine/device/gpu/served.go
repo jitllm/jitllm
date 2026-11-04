@@ -64,6 +64,9 @@ const (
 	// partConv is a convolutional tower's block whole, at its input grid's
 	// rows (convblock.go).
 	partConv
+	// partHalves is a binary16 history page's conversion, its floats
+	// narrowed or its halves widened, as a migration moves it (kvhalves.go).
+	partHalves
 	numParts
 )
 
@@ -95,6 +98,8 @@ func (k partKind) String() string {
 		return "streams' collapse"
 	case partConv:
 		return "convolutional block"
+	case partHalves:
+		return "history page's halves"
 	}
 	return ""
 }
@@ -1198,6 +1203,9 @@ const (
 	// ComposedConv serves a convolutional tower's blocks whole from their
 	// graphs (convblock.go).
 	ComposedConv Parts = 1 << partConv
+	// PartHalves selects in Stats.ServedPart a binary16 history page's
+	// conversions a migration ran (kvhalves.go).
+	PartHalves Parts = 1 << partHalves
 	// EveryPart is every part the composer serves, for a count over all of
 	// them.
 	EveryPart Parts = 1<<numParts - 2
