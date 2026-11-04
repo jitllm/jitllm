@@ -129,6 +129,12 @@ func buildGGUF(f, vf *meta.File, src, mmproj string, o options) (*jlm.Source, er
 				return nil, err
 			}
 		}
+		if err := towerFFNByShape(s); err != nil {
+			return nil, err
+		}
+		if s.Vision.Tower, err = statedTower(s); err != nil {
+			return nil, err
+		}
 	}
 	if err := o.applyChatTemplate(s); err != nil {
 		return nil, err

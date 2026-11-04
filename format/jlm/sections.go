@@ -612,7 +612,7 @@ func encodeVision(v *Vision) []byte {
 	// after it is set, so every earlier tower's section is byte-identical.
 	// The pixel bounds of a tower read at its own size come third, and
 	// LFM2-VL's tile size and tolerance fourth.
-	tile := v.TileSize != 0 || v.Tolerance != 0 || v.Audio != nil
+	tile := v.TileSize != 0 || v.Tolerance != 0 || v.Audio != nil || v.Tower != nil
 	pix := v.MinPixels != 0 || v.MaxPixels != 0 || tile
 	if v.MinTiles != 0 || v.MaxTiles != 0 || v.WinPattern != 0 || v.WinSize != 0 || pix {
 		w.u32(v.MinTiles)
@@ -630,8 +630,14 @@ func encodeVision(v *Vision) []byte {
 		w.u32(v.TileSize)
 		w.f32(v.Tolerance)
 	}
-	if v.Audio != nil {
+	switch {
+	case v.Audio != nil:
 		encodeAudio(w, v.Audio)
+	case v.Tower != nil:
+		encodeAudio(w, &Audio{})
+	}
+	if v.Tower != nil {
+		encodeTower(w, v.Tower)
 	}
 	return w.b
 }
@@ -670,10 +676,20 @@ func decodeVision(b []byte) (*Vision, error) {
 		v.TileSize, v.Tolerance = r.u32(), r.f32()
 	}
 	if r.err == nil && len(r.b) > 0 {
-		v.Audio = decodeAudio(r)
+		if v.Audio = decodeAudio(r); v.Audio.NLayer == 0 {
+			v.Audio = nil
+		}
+	}
+	if r.err == nil && len(r.b) > 0 {
+		v.Tower = decodeTower(r)
 	}
 	if r.err != nil {
 		return nil, r.err
+	}
+	if v.Tower != nil {
+		if err := v.Tower.Valid(); err != nil {
+			return nil, err
+		}
 	}
 	return v, nil
 }

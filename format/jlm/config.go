@@ -1099,9 +1099,15 @@ type Vision struct {
 	Tolerance float32
 
 	// Audio is the container's audio tower, nil for none: its blocks follow
-	// the vision blocks in the tower's page array (see Audio). The last
-	// optional tail of the record.
+	// the vision blocks in the tower's page array (see Audio). An optional
+	// tail of the record; a stated tower after it with no audio writes it
+	// as zeros, which reads back as none.
 	Audio *Audio
+
+	// Tower is the tower as the converter states it (Tower), nil for a
+	// container converted before towers were stated, which must be
+	// converted again. The last optional tail of the record.
+	Tower *Tower
 }
 
 // Projector is how tower embeddings become language-model tokens.
