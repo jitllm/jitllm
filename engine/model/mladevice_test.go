@@ -52,7 +52,7 @@ func TestMLAOnEveryDevice(t *testing.T) {
 			ran++
 			mlaCPUArm(t, src, ids, want)
 			for _, spec := range stepDevices() {
-				gpux, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
+				gpux, err := openGPU(t, gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
 				if err != nil || gpux == nil {
 					t.Logf("%s: not present (%v)", spec, err)
 					continue
@@ -240,7 +240,7 @@ func TestMLASeamMovesWithItsHistory(t *testing.T) {
 			name string
 			m    *Model
 		}{{spec + "/composed-cpu", mc}} {
-			gpux, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
+			gpux, err := openGPU(t, gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
 			if err != nil || gpux == nil {
 				t.Logf("%s: not present (%v)", spec, err)
 				continue
@@ -332,7 +332,7 @@ func TestMLAOnADeviceWithPoisonedBuffers(t *testing.T) {
 	want := teacherForce(t, m, ids)
 	ran := 0
 	for _, spec := range stepDevices() {
-		gpux, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff),
+		gpux, err := openGPU(t, gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff),
 			gpu.WithPoisonKV(true), gpu.WithPoisonScratch(true))
 		if err != nil || gpux == nil {
 			t.Logf("%s: not present (%v)", spec, err)
@@ -388,7 +388,7 @@ func TestMLAStepsTheKVDownAtTheRightWidths(t *testing.T) {
 			}
 			want := teacherForce(t, m, ids)
 			for _, spec := range stepDevices() {
-				gpux, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
+				gpux, err := openGPU(t, gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
 				if err != nil || gpux == nil {
 					continue
 				}
@@ -467,7 +467,7 @@ func TestNoPEMLAOnEveryDevice(t *testing.T) {
 	mlaCPUArm(t, src, ids, want)
 	ran := 1
 	for _, spec := range stepDevices() {
-		gpux, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
+		gpux, err := openGPU(t, gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
 		if err != nil || gpux == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue

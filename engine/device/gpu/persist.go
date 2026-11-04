@@ -3,7 +3,6 @@ package gpu
 import (
 	"fmt"
 	"sync"
-	"sync/atomic"
 	"unsafe"
 
 	"github.com/jitllm/jitllm/backend"
@@ -36,13 +35,20 @@ const (
 	persistMaxBufs = 63  // distinct buffers one block binds (one more is the sync buffer)
 )
 
-// persistDefault is Config.Persist's default, false outside a jitllmtest
-// build (PersistByDefaultForTest), and persistTotal every persistent kernel
-// launched in the process, which that build's gates read.
-var (
-	persistDefault, persistDepsDefault bool
-	persistTotal, persistDepTotal      atomic.Int64
-)
+// PersistLaunched is what the tier's devices issued down the persistent path:
+// the collected runs of a block's launches (Stats.PersistRuns), the
+// persistent kernels launched and those ordered by dependency counters. It
+// reads only the counts, so it answers after Close.
+func (g *GPU) PersistLaunched() (runs, launched, deps int) {
+	for _, d := range g.devs {
+		d.mu.Lock()
+		runs += d.tot.PersistRuns
+		launched += d.tot.PersistLaunches
+		deps += d.tot.PersistDepLaunches
+		d.mu.Unlock()
+	}
+	return runs, launched, deps
+}
 
 // depWords is a session's dep buffer, in u32 words: every composed kernel's
 // counter region is carved from it at plan time (persistCache.depNext), at
@@ -245,6 +251,7 @@ func (ps *persister) add(k backend.Kernel, groups, width int, bufs []backend.Buf
 // persistIssue binds, plans (once per signature) and issues n collected
 // launches.
 func (g *devTier) persistIssue(t *launchTo, ps *persister, n int) error {
+	g.PersistRuns++
 	// Distinct buffers and bindings, and the signature: each launch's kernel,
 	// grid, width and binding pattern.
 	ps.nd = 0
@@ -310,13 +317,11 @@ func (g *devTier) persistIssue(t *launchTo, ps *persister, n int) error {
 			return err
 		}
 		g.PersistLaunches++
-		persistTotal.Add(1)
 		g.PersistParts += s.hi - s.lo
 		g.PersistPhases += s.phases
 		if s.dep {
 			g.PersistDepLaunches++
 			g.PersistDepTiles += s.tiles
-			persistDepTotal.Add(1)
 		}
 	}
 	return nil

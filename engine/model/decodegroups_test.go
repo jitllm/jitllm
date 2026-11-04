@@ -18,7 +18,7 @@ import (
 // JITLLM_TEST_DEVICES names them.
 func groupedStepAllocs(t *testing.T, path string, opts ...Option) {
 	d := testdevices.Take(t, 2, "cuda:0,vulkan:1")
-	g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(d[0] + "," + d[1])}, testTierOpts(t)...)...)
+	g, err := openGPU(t, append([]gpu.Option{gpu.WithDevices(d[0] + "," + d[1])}, testTierOpts(t)...)...)
 	if err != nil || g == nil {
 		noDevice(t, d[0]+","+d[1], err)
 	}

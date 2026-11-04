@@ -37,7 +37,7 @@ func TestStreamedContainerOnAUnifiedDevice(t *testing.T) {
 	var g *gpu.GPU
 	var name string
 	for _, c := range testdevices.Within(unifiedCandidates()) {
-		d, err := gpu.OpenWith(gpu.WithDevices(c+"="+strconv.FormatUint(third, 10)),
+		d, err := openGPU(t, gpu.WithDevices(c+"="+strconv.FormatUint(third, 10)),
 			gpu.WithDeviceTune(gpu.TuneOff), gpu.WithArena(1<<30))
 		if err != nil || d == nil {
 			continue

@@ -18,7 +18,7 @@ func TestSynthLlama4Q8DecodeOnDevice(t *testing.T) {
 	host := m.NewInstance(len(g.IDs) + 1)
 	want := runIDs(t, host, g.IDs)
 	host.Close()
-	gpux, err := gpu.OpenWith(gpu.WithDevices(testdevices.Like(t, "cuda:0")), gpu.WithDeviceTune(gpu.TuneOff))
+	gpux, err := openGPU(t, gpu.WithDevices(testdevices.Like(t, "cuda:0")), gpu.WithDeviceTune(gpu.TuneOff))
 	if err != nil || gpux == nil {
 		t.Skipf("no cuda device (%v)", err)
 	}

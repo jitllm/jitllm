@@ -420,7 +420,7 @@ func TestComposedExpertPagesMoveToTheCPU(t *testing.T) {
 	for _, name := range []string{"synth-glm4moe-hf" + q8Suffix, "Qwen3-MOE-4x0.6B-Q4_K_M.gguf"} {
 		for _, dev := range stepDevices() {
 			t.Run(name+"/"+dev, func(t *testing.T) {
-				g, err := gpu.OpenWith(gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff))
+				g, err := openGPU(t, gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff))
 				if err != nil || g == nil {
 					noDevice(t, dev, err)
 				}
@@ -522,7 +522,7 @@ func TestStreamedPromptIsTheSameInASecondSession(t *testing.T) {
 	for _, name := range []string{"synth-glm4moe-hf" + q8Suffix, "Qwen3-MOE-4x0.6B-Q4_K_M.gguf"} {
 		for _, dev := range stepDevices() {
 			t.Run(name+"/"+dev, func(t *testing.T) {
-				g, err := gpu.OpenWith(gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff))
+				g, err := openGPU(t, gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff))
 				if err != nil || g == nil {
 					noDevice(t, dev, err)
 				}
@@ -590,7 +590,7 @@ func streamOpts(t *testing.T, m *Model, dev string, a streamArm, parts gpu.Parts
 	switch a {
 	case streamBudget:
 		probe := func(stream bool) gpu.Stats {
-			g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff),
+			g, err := openGPU(t, append([]gpu.Option{gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff),
 				gpu.WithConfig(func(c *gpu.Config) {
 					c.NoGraph, c.PromptRows = noGraph, 64
 					// Streamed at its floor: no cache, each block's plain bank

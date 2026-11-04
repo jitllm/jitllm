@@ -202,7 +202,7 @@ func TestStagedPagedPrefillGateDiscriminates(t *testing.T) {
 		t.Run(dev, func(t *testing.T) {
 			var f gpu.Faults
 			f.SetPagedFault("softwidth")
-			g, err := gpu.OpenWith(gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff), gpu.WithFaults(&f))
+			g, err := openGPU(t, gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff), gpu.WithFaults(&f))
 			if err != nil || g == nil {
 				noDevice(t, dev, err)
 			}

@@ -29,6 +29,7 @@ type Loader struct {
 	// The Vulkan entry points, bound through backend/ffi (goffi). The loader
 	// exports every core symbol, so no vkGetInstanceProcAddr trampolining.
 	vkCreateInstance                         func(up, up, up) Result
+	vkDestroyInstance                        func(Instance, up) ffi.None
 	vkEnumeratePhysicalDevices               func(Instance, *uint32, up) Result
 	vkGetPhysicalDeviceProperties            func(PhysDevice, up) ffi.None
 	vkGetPhysicalDeviceQueueFamilyProperties func(PhysDevice, *uint32, up) ffi.None
@@ -113,6 +114,7 @@ func Load() (*Loader, error) {
 	}
 	l := &Loader{}
 	l.vkCreateInstance = ffi.Fn3[Result, up, up, up](lib, "vkCreateInstance")
+	l.vkDestroyInstance = ffi.Fn2[ffi.None, Instance, up](lib, "vkDestroyInstance")
 	l.vkGetInstanceProcAddr = ffi.Fn2[unsafe.Pointer, Instance, unsafe.Pointer](lib, "vkGetInstanceProcAddr")
 	l.vkEnumeratePhysicalDevices = ffi.Fn3[Result, Instance, *uint32, up](lib, "vkEnumeratePhysicalDevices")
 	l.vkGetPhysicalDeviceProperties = ffi.Fn2[ffi.None, PhysDevice, up](lib, "vkGetPhysicalDeviceProperties")
@@ -177,8 +179,10 @@ func check(r Result, what string) error {
 
 // Ctx is an open device: instance, logical device, queue and command pool.
 type Ctx struct {
-	// l is the binding every call on this context goes through.
-	l *Loader
+	// l is the binding every call on this context goes through, and drv the
+	// instance the context was opened on, its own.
+	l   *Loader
+	drv *Driver
 	// cores and coresFrom are the compute-unit count and the extension that
 	// stated it, threadRegs a lane's registers at the most resident waves
 	// (cores.go).
@@ -295,17 +299,14 @@ func OpenDevice(sel string) (*Ctx, error) { return OpenDeviceWith(sel, Config{})
 
 // OpenDeviceWith is OpenDevice with this device's Config.
 func OpenDeviceWith(sel string, cfg Config) (*Ctx, error) {
-	l, err := Load()
+	d, err := NewDriver()
 	if err != nil {
 		return nil, err
 	}
-	inst, err := l.instance()
-	if err != nil {
-		return nil, err
-	}
-	c := &Ctx{l: l, inst: inst}
+	l := d.l
+	c := &Ctx{l: l, inst: d.inst, drv: d}
 
-	pick, err := l.pickDevice(c.inst, sel, cfg.Device)
+	pick, err := d.pickDevice(sel, cfg.Device)
 	if err != nil {
 		c.Close()
 		return nil, err
@@ -458,52 +459,70 @@ func OpenDeviceWith(sel string, cfg Config) (*Ctx, error) {
 	return c, nil
 }
 
-// proc is the process's one VkInstance, created by the first open or List and
-// never destroyed (see instance), and what its enumerations have found: seen
-// is the first enumeration's device count, and shrunk the count of the first
-// one that came back with fewer (see Vanished). It is the package's one
-// variable because the instance is the process's by the drivers' constraint,
-// not by a choice here.
-var proc struct {
-	sync.Once
+// Driver is one VkInstance on the loader, and the device counts its
+// enumerations have found: seen is the first enumeration's, and shrunk the
+// count of the first one that came back with fewer (Vanished).
+//
+// Every open and every List makes its own and lets it go when done, and a
+// process that opens and closes Vulkan devices again and again holds one more
+// for its life (the server, the CLI and each test binary's TestMain do). The
+// loader dlopens each ICD when an instance is created and dlcloses it when the
+// last instance is destroyed, and NVIDIA's ICD carries initial-exec TLS
+// (libGLX_nvidia, libnvidia-glcore and libnvidia-tls are all DF_STATIC_TLS).
+// glibc serves a dlopened module's static TLS from a fixed surplus and does
+// not reliably get it back on dlclose, so every last-instance destroy spent a
+// few hundred bytes of it: with glibc 2.39 and a recent NVIDIA driver the
+// tenth open/close cycle found the surplus gone, libnvidia-tls failed to load
+// ("cannot allocate memory in static TLS block"), the loader dropped the ICD
+// without an error, and the process enumerated llvmpipe alone from then on.
+// With one instance held the ICD stays loaded, and the others come and go
+// without spending it.
+//
+// The loader reads its environment -- VK_ICD_FILENAMES, VK_DRIVER_FILES,
+// VK_INSTANCE_LAYERS -- when an instance is created.
+type Driver struct {
+	l    *Loader
 	inst Instance
-	err  error
 	seen struct {
 		sync.Mutex
 		first, shrunk int
 	}
 }
 
-// instance is the process's VkInstance, which every Ctx and every List shares.
-//
-// One per process is not an economy, it is what keeps the drivers loadable.
-// The loader dlopens each ICD when an instance is created and dlcloses it when
-// the last instance is destroyed, and NVIDIA's ICD carries initial-exec TLS
-// (libGLX_nvidia, libnvidia-glcore and libnvidia-tls are all DF_STATIC_TLS).
-// glibc serves a dlopened module's static TLS from a fixed surplus and does
-// not reliably get it back on dlclose, so every instance-and-destroy spent a
-// few hundred bytes of it: with glibc 2.39 and a recent NVIDIA driver the tenth
-// open/close cycle found the surplus gone,
-// libnvidia-tls failed to load ("cannot allocate memory in static TLS block"),
-// the loader dropped the ICD without an error, and the process enumerated
-// llvmpipe alone from then on. With the instance held the ICD stays loaded, and
-// a device open costs a logical device rather than an instance as well.
-//
-// It is also why the loader's environment -- VK_ICD_FILENAMES, VK_DRIVER_FILES,
-// VK_INSTANCE_LAYERS -- is read once, at the first open: a caller that wants a
-// different set of drivers wants a different process.
-func (l *Loader) instance() (Instance, error) {
-	proc.Do(func() {
-		namePtr, nameBuf := cstr("jitllm")
-		ai := onHeap[appInfo]()
-		*ai = appInfo{sType: stAppInfo, pName: namePtr, pEngine: namePtr,
-			apiVer: 1<<22 | 3<<12} // 1.3: shaderIntegerDotProduct is core
-		ici := instanceCI{sType: stInstanceCI, pApp: uintptr(up(ai))}
-		proc.err = check(l.vkCreateInstance(up(&ici), nil, up(&proc.inst)), "vkCreateInstance")
-		runtime.KeepAlive(ai)
-		runtime.KeepAlive(nameBuf)
-	})
-	return proc.inst, proc.err
+// NewDriver loads the loader and creates an instance on it.
+func NewDriver() (*Driver, error) {
+	l, err := Load()
+	if err != nil {
+		return nil, err
+	}
+	namePtr, nameBuf := cstr("jitllm")
+	ai := onHeap[appInfo]()
+	*ai = appInfo{sType: stAppInfo, pName: namePtr, pEngine: namePtr,
+		apiVer: 1<<22 | 3<<12} // 1.3: shaderIntegerDotProduct is core
+	ici := instanceCI{sType: stInstanceCI, pApp: uintptr(up(ai))}
+	d := &Driver{l: l}
+	err = check(l.vkCreateInstance(up(&ici), nil, up(&d.inst)), "vkCreateInstance")
+	runtime.KeepAlive(ai)
+	runtime.KeepAlive(nameBuf)
+	if err != nil {
+		return nil, err
+	}
+	// The devices there are now, which a later enumeration that finds fewer is
+	// held to (Vanished).
+	var n uint32
+	if check(l.vkEnumeratePhysicalDevices(d.inst, &n, nil), "vkEnumeratePhysicalDevices") == nil {
+		d.seen.first = int(n)
+	}
+	return d, nil
+}
+
+// Close destroys the driver's instance; nothing opened through it may be used
+// after.
+func (d *Driver) Close() {
+	if d != nil && d.inst != 0 {
+		d.l.vkDestroyInstance(d.inst, nil)
+		d.inst = 0
+	}
 }
 
 // Info is one enumerated physical device, without opening it.
@@ -561,15 +580,13 @@ func List() ([]Info, error) { return ListWith(Config{}) }
 
 // ListWith is List as a device opened with cfg would report its subgroups.
 func ListWith(cfg Config) ([]Info, error) {
-	l, err := Load()
+	d, err := NewDriver()
 	if err != nil {
 		return nil, err
 	}
-	inst, err := l.instance()
-	if err != nil {
-		return nil, err
-	}
-	cands, err := l.enumerate(inst)
+	defer d.Close()
+	l := d.l
+	cands, err := d.enumerate()
 	if err != nil {
 		return nil, err
 	}
@@ -668,6 +685,8 @@ func (c *Ctx) Close() {
 		c.l.vkDestroyDevice(c.dev, nil)
 		c.dev = 0
 	}
-	// The instance is the process's (see instance) and outlives every Ctx.
+	// The context's own instance (OpenDeviceWith) goes with it.
 	c.inst = 0
+	c.drv.Close()
+	c.drv = nil
 }

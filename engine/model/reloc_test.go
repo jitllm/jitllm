@@ -287,12 +287,12 @@ func layerRelocatesToAnotherDevice(t *testing.T, path string, parts gpu.Parts, w
 	// part at a knife-edge argmax whatever the relocation did (it read token
 	// 7 of tinyllama either way on a V100, on main and on a branch alike).
 	// An equality gate pins every knob its equality depends on (RULE 11c).
-	a, err := gpu.OpenWith(gpu.WithDeviceTune(gpu.TuneOff))
+	a, err := openGPU(t, gpu.WithDeviceTune(gpu.TuneOff))
 	if err != nil || a == nil {
 		noDevice(t, "device", err)
 	}
 	defer a.Close()
-	b, err := gpu.OpenWith(gpu.WithDeviceTune(gpu.TuneOff))
+	b, err := openGPU(t, gpu.WithDeviceTune(gpu.TuneOff))
 	if err != nil || b == nil {
 		noDevice(t, "second tier", err)
 	}

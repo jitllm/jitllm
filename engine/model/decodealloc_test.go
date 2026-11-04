@@ -79,7 +79,7 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 			if name == "Llama-3.2-1B-Instruct-Q4_K_M.gguf" {
 				t.Run("two-device", func(t *testing.T) {
 					d := testdevices.Take(t, 2, "cuda:0,vulkan:1")
-					g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(d[0] + "," + d[1])}, testTierOpts(t)...)...)
+					g, err := openGPU(t, append([]gpu.Option{gpu.WithDevices(d[0] + "," + d[1])}, testTierOpts(t)...)...)
 					if err != nil || g == nil {
 						noDevice(t, d[0]+","+d[1], err)
 					}
@@ -144,7 +144,7 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 			})
 			for _, spec := range specs {
 				t.Run(spec, func(t *testing.T) {
-					g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(spec)}, testTierOpts(t)...)...)
+					g, err := openGPU(t, append([]gpu.Option{gpu.WithDevices(spec)}, testTierOpts(t)...)...)
 					if err != nil || g == nil {
 						noDevice(t, spec, err)
 					}
@@ -170,7 +170,7 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 								gpu.WithConfig(func(c *gpu.Config) {
 									c.NoGraph, c.PromptRows = noGraph, 64
 								})}
-							gc, err := gpu.OpenWith(append(opts, testTierOpts(t)...)...)
+							gc, err := openGPU(t, append(opts, testTierOpts(t)...)...)
 							if err != nil || gc == nil {
 								noDevice(t, spec, err)
 							}
@@ -730,7 +730,7 @@ func TestOffCardDecodeDoesNotAllocate(t *testing.T) {
 						t.Fatal(err)
 					}
 					defer m.Close()
-					g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices("gpu:0")}, testTierOpts(t)...)...)
+					g, err := openGPU(t, append([]gpu.Option{gpu.WithDevices("gpu:0")}, testTierOpts(t)...)...)
 					if err != nil || g == nil {
 						noDevice(t, "gpu:0", err)
 					}
@@ -778,7 +778,7 @@ func TestStepAllocsUnderABudget(t *testing.T) {
 	spec := testdevices.One("vulkan")
 	for _, mib := range []uint64{112, 128} {
 		t.Run(fmt.Sprint(mib, "MiB"), func(t *testing.T) {
-			g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(spec), gpu.WithBudget(mib << 20)},
+			g, err := openGPU(t, append([]gpu.Option{gpu.WithDevices(spec), gpu.WithBudget(mib << 20)},
 				testTierOpts(t)...)...)
 			if err != nil || g == nil {
 				noDevice(t, spec, err)

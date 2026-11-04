@@ -24,7 +24,7 @@ func TestPrefixCacheRestoresQwen4Exp(t *testing.T) {
 		var gpux *gpu.GPU
 		if arm != "host" {
 			var err error
-			gpux, err = gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(arm),
+			gpux, err = openGPU(t, append([]gpu.Option{gpu.WithDevices(arm),
 				gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t)...)...)
 			if err != nil || gpux == nil {
 				t.Logf("%s: not present (%v)", arm, err)

@@ -7,8 +7,9 @@ import "testing"
 // cores' only user for a fused region; Unpark takes the user back, and a view
 // closed while parked leaves the counts as if it had never been one.
 func TestFuseWhileTheOtherViewIsParked(t *testing.T) {
-	a := Shared([]int{0, 1, 2})
-	b := Shared([]int{0, 1, 2})
+	crews := NewCrews()
+	a := Shared([]int{0, 1, 2}, WithCrews(crews))
+	b := Shared([]int{0, 1, 2}, WithCrews(crews))
 	defer a.Close()
 	defer b.Close()
 	if a.Fuse() {
@@ -32,7 +33,7 @@ func TestFuseWhileTheOtherViewIsParked(t *testing.T) {
 		t.Fatal("Fuse refused after the parked view closed")
 	}
 	a.Unfuse()
-	c := Shared([]int{0, 1, 2})
+	c := Shared([]int{0, 1, 2}, WithCrews(crews))
 	defer c.Close()
 	if a.Fuse() {
 		a.Unfuse()
@@ -46,12 +47,13 @@ func TestFuseWhileTheOtherViewIsParked(t *testing.T) {
 // another session prefills on the E-cores; the wide set takes the E crew's
 // lock after its own, so it never drives an E-core beside it.
 func TestECrewDoesNotTakeThePCrewsLockBesideTheWideSet(t *testing.T) {
+	crews := NewCrews()
 	if !LoadQoS(0).CanSplitE() {
 		t.Skip("no E-cores a thread can be kept on here")
 	}
-	p := Shared(CoreSet("p"))
-	wide := SharedBeside(CoreSet("pe"), p)
-	e := Shared(CoreSet("e"))
+	p := Shared(CoreSet("p"), WithCrews(crews))
+	wide := SharedBeside(CoreSet("pe"), p, WithCrews(crews))
+	e := Shared(CoreSet("e"), WithCrews(crews))
 	defer p.Close()
 	defer wide.Close()
 	defer e.Close()

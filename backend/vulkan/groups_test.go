@@ -25,15 +25,15 @@ const (
 // wrong offset compiles, runs and reads a plausible number, so an independent
 // reader of the same struct is the gate.
 func TestWorkGroupCountIsReadFromTheDriver(t *testing.T) {
-	l, inst := openInstance(t)
-	cands, err := l.enumerate(inst)
+	d := openInstance(t)
+	cands, err := d.enumerate()
 	if err != nil {
 		t.Fatalf("enumerate: %v", err)
 	}
 	ref := vulkaninfoLimits(t)
 	for _, c := range cands {
 		var props physProps
-		l.vkGetPhysicalDeviceProperties(c.phys, up(&props))
+		d.l.vkGetPhysicalDeviceProperties(c.phys, up(&props))
 		groups, shared := props.maxComputeWorkGroupCount(), props.maxComputeSharedMemorySize()
 		t.Logf("GPU%d %s: maxComputeWorkGroupCount[0] %d, maxComputeSharedMemorySize %d",
 			c.idx, c.name, groups, shared)

@@ -9,6 +9,7 @@ import (
 // widest live request holds while any is live, and the value found before the
 // first is back after the last.
 func TestRaiseProcsOverlapping(t *testing.T) {
+	c := NewCrews()
 	base := runtime.GOMAXPROCS(0)
 	defer runtime.GOMAXPROCS(base)
 	want := func(step string, n int) {
@@ -18,9 +19,9 @@ func TestRaiseProcsOverlapping(t *testing.T) {
 		}
 	}
 	for _, narrowFirst := range []bool{true, false} {
-		narrow := RaiseProcs(base + 2)
+		narrow := c.RaiseProcs(base + 2)
 		want("narrow begins", base+2)
-		wide := RaiseProcs(base + 4)
+		wide := c.RaiseProcs(base + 4)
 		want("wide begins", base+4)
 		if narrowFirst {
 			narrow()
@@ -36,7 +37,7 @@ func TestRaiseProcsOverlapping(t *testing.T) {
 		want("both ended", base)
 	}
 	// A request below the current value changes nothing and restores nothing.
-	low := RaiseProcs(1)
+	low := c.RaiseProcs(1)
 	want("a narrower request", base)
 	low()
 	want("its release", base)

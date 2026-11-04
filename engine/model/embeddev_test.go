@@ -78,7 +78,7 @@ func embedsOnTheDevice(t *testing.T, name string, opts ...gpu.Option) {
 	if !m.Cfg.TiedEmbd {
 		t.Fatalf("%s is not tied: the gather has no head to read from", name)
 	}
-	g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDeviceTune(gpu.TuneOff)}, opts...)...)
+	g, err := openGPU(t, append([]gpu.Option{gpu.WithDeviceTune(gpu.TuneOff)}, opts...)...)
 	if err != nil || g == nil {
 		noDevice(t, "device", err)
 	}

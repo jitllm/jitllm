@@ -34,7 +34,7 @@ func TestPrefillFoldsALayerNormHead(t *testing.T) {
 	ran := 0
 	for _, spec := range stepDevices() {
 		t.Run(spec, func(t *testing.T) {
-			gpux, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
+			gpux, err := openGPU(t, gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
 			if err != nil || gpux == nil {
 				noDevice(t, spec, err)
 			}

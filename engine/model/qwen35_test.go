@@ -15,7 +15,7 @@ import (
 // capture and silently disables graphs.
 func TestHybridDecodeIsCaptured(t *testing.T) {
 	m := hybridModelOpt(t, hyOpt{tiled: true})
-	g, err := gpu.OpenWith(gpu.WithDevices(testdevices.Like(t, "cuda:0")), gpu.WithDeviceTune(gpu.TuneOff))
+	g, err := openGPU(t, gpu.WithDevices(testdevices.Like(t, "cuda:0")), gpu.WithDeviceTune(gpu.TuneOff))
 	if err != nil || g == nil {
 		t.Skipf("no cuda device: %v", err)
 	}

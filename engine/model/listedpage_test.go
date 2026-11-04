@@ -54,7 +54,7 @@ func blocksPageOnTheListedCard(t *testing.T, path, spec string) {
 		if budget > 0 {
 			ds += "=" + strconv.FormatUint(budget, 10)
 		}
-		g, err := gpu.OpenWith(gpu.WithDevices(ds), gpu.WithDeviceTune(gpu.TuneOff))
+		g, err := openGPU(t, gpu.WithDevices(ds), gpu.WithDeviceTune(gpu.TuneOff))
 		if err != nil || g == nil {
 			noDevice(t, ds, err)
 		}

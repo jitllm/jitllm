@@ -43,6 +43,8 @@ type config struct {
 	onPhase func(total, chunk int)
 	// eClass is WithEClass's.
 	eClass uint32
+	// crews is WithCrews's.
+	crews *Crews
 }
 
 func newConfig(opts []Option) config {
@@ -218,11 +220,12 @@ type Pool struct {
 	crew *Pool
 	// mu is held by a view's region on the crew, shared with every crew
 	// whose cores overlap this one's (Shared); key and views are the crew's
-	// registry entry and how many views are open. wake is a view's channel
-	// for mu's handoff.
+	// entry in crews, the registry it is one of, and how many views are open.
+	// wake is a view's channel for mu's handoff.
 	mu    *turn
 	wake  chan struct{}
 	key   string
+	crews *Crews
 	views int
 	// beside is a view opened beside another of the same caller's
 	// (SharedBeside), which the turn's users do not count.

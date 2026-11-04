@@ -2,7 +2,6 @@ package sched
 
 import (
 	"fmt"
-	"sync"
 )
 
 // Shared returns a view of the process's pool for cpus: one set of workers per
@@ -32,12 +31,16 @@ func SharedBeside(cpus []int, of *Pool, opts ...Option) *Pool {
 		cpus = DecodeCores(opts...)
 	}
 	key := fmt.Sprint(cpus, cfg.spin, cfg.spinSet, cfg.numa)
+	crews := cfg.crews
+	if crews == nil {
+		crews = NewCrews()
+	}
 	crews.mu.Lock()
 	defer crews.mu.Unlock()
 	c := crews.m[key]
 	if c == nil {
 		c = New(cpus, opts...)
-		c.key = key
+		c.key, c.crews = key, crews
 		// Crews over overlapping cores take turns with each other too: a
 		// prefill on the wide set and a decode on the P-cores would otherwise
 		// both drive the same cores at once.
@@ -83,13 +86,9 @@ func SharedBeside(cpus []int, of *Pool, opts ...Option) *Pool {
 	return v
 }
 
-var crews = struct {
-	mu sync.Mutex
-	m  map[string]*Pool
-}{m: map[string]*Pool{}}
-
 // release closes a view; the last one stops the crew.
 func (c *Pool) release(v *Pool) {
+	crews := c.crews
 	crews.mu.Lock()
 	defer crews.mu.Unlock()
 	if v.stopped.Swap(true) {
@@ -179,6 +178,7 @@ func (p *Pool) Park() {
 	if p == nil || p.crew == nil {
 		return
 	}
+	crews := p.crew.crews
 	crews.mu.Lock()
 	defer crews.mu.Unlock()
 	if p.away || p.stopped.Load() {
@@ -196,6 +196,7 @@ func (p *Pool) Unpark() {
 	if p == nil || p.crew == nil {
 		return
 	}
+	crews := p.crew.crews
 	crews.mu.Lock()
 	defer crews.mu.Unlock()
 	if !p.away {

@@ -133,7 +133,7 @@ func batchGreedy(t *testing.T, m *Model, ids [][]int32, gen, seq int, opt []gpu.
 // for a gate that has to assert which path ran.
 func batchGreedyStats(t *testing.T, m *Model, ids [][]int32, gen, seq int, opt []gpu.Option) (got [][]int32, after []int32, stats gpu.Stats) {
 	t.Helper()
-	g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDeviceTune(gpu.TuneOff)}, opt...)...)
+	g, err := openGPU(t, append([]gpu.Option{gpu.WithDeviceTune(gpu.TuneOff)}, opt...)...)
 	if err != nil || g == nil {
 		noDevice(t, "device", err)
 	}

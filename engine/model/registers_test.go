@@ -71,7 +71,7 @@ func hotKernelFaults(ks []backend.KernelResources) (faults []string, checked int
 // with opts and returns what each kernel it compiled cost the card.
 func runForRegisters(t *testing.T, m *Model, opts ...gpu.Option) []backend.KernelResources {
 	t.Helper()
-	g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(testdevices.Like(t, "cuda:0")), gpu.WithDeviceTune(gpu.TuneOff)}, opts...)...)
+	g, err := openGPU(t, append([]gpu.Option{gpu.WithDevices(testdevices.Like(t, "cuda:0")), gpu.WithDeviceTune(gpu.TuneOff)}, opts...)...)
 	if err != nil || g == nil {
 		noDevice(t, "CUDA device", err)
 	}

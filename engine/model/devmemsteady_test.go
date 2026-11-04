@@ -40,7 +40,7 @@ func TestDeviceMemoryHoldsSteadyAcrossMoves(t *testing.T) {
 
 func memoryAcrossMoves(t *testing.T, m *Model, parts gpu.Parts) {
 	opts := []gpu.Option{gpu.WithDevices(testdevices.Like(t, "cuda:0")), gpu.WithDeviceTune(gpu.TuneOff)}
-	g, err := gpu.OpenWith(opts...)
+	g, err := openGPU(t, opts...)
 	if err != nil || g == nil {
 		noDevice(t, "device", err)
 	}

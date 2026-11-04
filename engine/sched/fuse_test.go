@@ -12,10 +12,11 @@ import (
 // [0,total) exactly once, in order -- a phase is complete before the next is
 // published -- and the region counter sees one region however many phases ran.
 func TestFusedPhasesCoverExactlyOnce(t *testing.T) {
+	crews := NewCrews()
 	for _, shared := range []bool{false, true} {
 		var p *Pool
 		if shared {
-			p = Shared([]int{0, 1, 2, 3})
+			p = Shared([]int{0, 1, 2, 3}, WithCrews(crews))
 		} else {
 			p = New([]int{0, 1, 2, 3})
 		}
@@ -103,8 +104,9 @@ func TestFusedPhaseOrder(t *testing.T) {
 // TestFuseRefusesASharedCrew: a crew with two users never fuses, since one
 // user would hold the cores across the other's regions.
 func TestFuseRefusesASharedCrew(t *testing.T) {
-	a := Shared([]int{0, 1, 2})
-	b := Shared([]int{0, 1, 2})
+	crews := NewCrews()
+	a := Shared([]int{0, 1, 2}, WithCrews(crews))
+	b := Shared([]int{0, 1, 2}, WithCrews(crews))
 	defer a.Close()
 	defer b.Close()
 	if a.Fuse() {
@@ -119,9 +121,10 @@ func TestFuseRefusesASharedCrew(t *testing.T) {
 // (the M4's P and E cores) never did -- while another caller's view on the
 // wider set still refuses it, and closing that view gives fusion back.
 func TestFuseBesideItsOwnWideView(t *testing.T) {
-	narrow := Shared([]int{0, 1})
+	crews := NewCrews()
+	narrow := Shared([]int{0, 1}, WithCrews(crews))
 	defer narrow.Close()
-	wide := SharedBeside([]int{0, 1, 2, 3}, narrow)
+	wide := SharedBeside([]int{0, 1, 2, 3}, narrow, WithCrews(crews))
 	defer wide.Close()
 	if narrow.crew.mu != wide.crew.mu {
 		t.Fatal("the two views do not take turns on one lock: this gate is not on the case it names")
@@ -130,7 +133,7 @@ func TestFuseBesideItsOwnWideView(t *testing.T) {
 		t.Fatal("Fuse refused beside the caller's own wider view")
 	}
 	narrow.Unfuse()
-	other := Shared([]int{0, 1, 2, 3})
+	other := Shared([]int{0, 1, 2, 3}, WithCrews(crews))
 	if narrow.Fuse() {
 		narrow.Unfuse()
 		other.Close()

@@ -32,7 +32,7 @@ func TestSessionMovesBetweenInstances(t *testing.T) {
 		t.Fatalf("two devices wanted, got %v", devs)
 	}
 	card := func(name string) *gpu.GPU {
-		g, err := gpu.OpenWith(gpu.WithDevices(name), gpu.WithDeviceTune(gpu.TuneOff))
+		g, err := openGPU(t, gpu.WithDevices(name), gpu.WithDeviceTune(gpu.TuneOff))
 		if err != nil || g == nil {
 			noDevice(t, name, err)
 		}

@@ -31,6 +31,7 @@ func TestTurnGrantsEveryWaiter(t *testing.T) {
 }
 
 func turnStress(t *testing.T, procs int, busy bool) {
+	crews := NewCrews()
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(procs))
 	const views, regions = 5, 100
 	cpus := []int{0, 1, 2}
@@ -38,7 +39,7 @@ func turnStress(t *testing.T, procs int, busy bool) {
 	var sink atomic.Int64
 	vs := make([]*Pool, views)
 	for i := range vs {
-		vs[i] = Shared(cpus)
+		vs[i] = Shared(cpus, WithCrews(crews))
 		defer vs[i].Close()
 	}
 

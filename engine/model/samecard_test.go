@@ -57,7 +57,7 @@ func TestOneCardUnderTwoBackendsIsOneBudget(t *testing.T) {
 	c := testdevices.One("cuda:0")
 	vk := []string{"vulkan:0", "vulkan:1", "vulkan:2", "vulkan:3", "vulkan:4", "vulkan:5", "vulkan:6", "vulkan:7"}
 	for _, v := range testdevices.Within(vk) {
-		g, err := gpu.OpenWith(gpu.WithDevices(c+","+v), gpu.WithDeviceTune(gpu.TuneOff))
+		g, err := openGPU(t, gpu.WithDevices(c+","+v), gpu.WithDeviceTune(gpu.TuneOff))
 		if err != nil || g == nil {
 			continue
 		}

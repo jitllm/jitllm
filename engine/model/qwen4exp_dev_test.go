@@ -43,7 +43,7 @@ func TestQwen4ExpDeviceRunsTheChunkWhole(t *testing.T) {
 	for _, spec := range stepDevices() {
 		// A replayed graph issues a token's launches without emitting them,
 		// and the counters count emits: graphs off, so every call counts.
-		gpux, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(spec),
+		gpux, err := openGPU(t, append([]gpu.Option{gpu.WithDevices(spec),
 			gpu.WithDeviceTune(gpu.TuneOff), gpu.WithConfig(func(c *gpu.Config) { c.NoGraph = true })},
 			testTierOpts(t)...)...)
 		if err != nil || gpux == nil {
@@ -131,7 +131,7 @@ func TestQwen4ExpQSATurnsByTheMarks(t *testing.T) {
 	plain := host(0)
 	ran := 0
 	for _, spec := range stepDevices() {
-		gpux, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(spec),
+		gpux, err := openGPU(t, append([]gpu.Option{gpu.WithDevices(spec),
 			gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t)...)...)
 		if err != nil || gpux == nil {
 			t.Logf("%s: not present (%v)", spec, err)

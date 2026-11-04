@@ -77,7 +77,7 @@ func blocksMoveBetweenDevices(t *testing.T, path string, arm int, parts gpu.Part
 // the tier's counts once the moves ran.
 func blocksMoveBetweenDevicesWith(t *testing.T, path string, arm int, parts gpu.Parts, check func(gpu.Stats), opts ...Option) {
 	a, b := moveDevices(t)
-	g, err := gpu.OpenWith(gpu.WithDevices(a+","+b), gpu.WithDeviceTune(gpu.TuneOff))
+	g, err := openGPU(t, gpu.WithDevices(a+","+b), gpu.WithDeviceTune(gpu.TuneOff))
 	if err != nil || g == nil {
 		noDevice(t, a+","+b, err)
 	}
@@ -243,7 +243,7 @@ func (s *Instance) placedOn(name string) []int {
 // without a second tier holding its weights twice.
 func TestBlocksMoveToADeviceAddedLater(t *testing.T) {
 	a, b := moveDevices(t)
-	g, err := gpu.OpenWith(gpu.WithDevices(a), gpu.WithDeviceTune(gpu.TuneOff))
+	g, err := openGPU(t, gpu.WithDevices(a), gpu.WithDeviceTune(gpu.TuneOff))
 	if err != nil || g == nil {
 		noDevice(t, a, err)
 	}
@@ -335,7 +335,7 @@ func TestBlocksMoveToADeviceAddedLater(t *testing.T) {
 // give up the f16 cache to keep its plasticity.
 func TestABinary16HistoryMovesToTheDevice(t *testing.T) {
 	a, _ := moveDevices(t)
-	g, err := gpu.OpenWith(gpu.WithDevices(a), gpu.WithDeviceTune(gpu.TuneOff))
+	g, err := openGPU(t, gpu.WithDevices(a), gpu.WithDeviceTune(gpu.TuneOff))
 	if err != nil || g == nil {
 		noDevice(t, a, err)
 	}
@@ -411,7 +411,7 @@ func TestABinary16HistoryMovesToTheDevice(t *testing.T) {
 // and every token stays in the band of a host run that never moved.
 func TestAnyRangeMovesWithItsHistory(t *testing.T) {
 	a, _ := moveDevices(t)
-	g, err := gpu.OpenWith(gpu.WithDevices(a), gpu.WithDeviceTune(gpu.TuneOff))
+	g, err := openGPU(t, gpu.WithDevices(a), gpu.WithDeviceTune(gpu.TuneOff))
 	if err != nil || g == nil {
 		noDevice(t, a, err)
 	}
@@ -513,12 +513,12 @@ func TestTwoModelsShareACardThroughTheRegistry(t *testing.T) {
 				reg = gpu.NewPoolRegistry()
 				opts = append(opts, gpu.WithPoolRegistry(reg))
 			}
-			ga, err := gpu.OpenWith(opts...)
+			ga, err := openGPU(t, opts...)
 			if err != nil || ga == nil {
 				noDevice(t, a, err)
 			}
 			defer ga.Close()
-			gb, err := gpu.OpenWith(opts...)
+			gb, err := openGPU(t, opts...)
 			if err != nil {
 				t.Fatal(err)
 			}

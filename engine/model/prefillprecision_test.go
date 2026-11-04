@@ -65,7 +65,7 @@ func TestPrefillPrecisionArms(t *testing.T) {
 	}
 	dev := func(noBatch bool, opts ...gpu.Option) [][]float32 {
 		opts = append(opts, gpu.WithDeviceTune(gpu.TuneOff))
-		g, err := gpu.OpenWith(opts...)
+		g, err := openGPU(t, opts...)
 		if err != nil || g == nil {
 			noDevice(t, "device", err)
 		}

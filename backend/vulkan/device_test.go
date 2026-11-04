@@ -10,28 +10,25 @@ import (
 	"testing"
 )
 
-// openInstance is the process's VkInstance alone, which is all the selection
-// tests need -- they never create a logical device, so a host with a
-// display-only card or a broken ICD still runs them.
-func openInstance(t *testing.T) (*Loader, Instance) {
+// openInstance is a driver alone, which is all the selection tests need --
+// they never create a logical device, so a host with a display-only card or a
+// broken ICD still runs them. It is closed when t ends.
+func openInstance(t *testing.T) *Driver {
 	t.Helper()
-	l, err := Load()
-	if err != nil {
-		t.Skipf("no Vulkan loader: %v", err)
-	}
-	inst, err := l.instance()
+	d, err := NewDriver()
 	if err != nil {
 		t.Skipf("no Vulkan instance: %v", err)
 	}
-	return l, inst
+	t.Cleanup(d.Close)
+	return d
 }
 
 // TestEnumerateSeesEveryDevice is the precondition for everything below: if the
 // loader only ever hands back one device, "selection" is untestable and a green
 // line here would mean nothing (RULE 10).
 func TestEnumerateSeesEveryDevice(t *testing.T) {
-	l, inst := openInstance(t)
-	cands, err := l.enumerate(inst)
+	d := openInstance(t)
+	cands, err := d.enumerate()
 	if err != nil {
 		t.Fatalf("enumerate: %v", err)
 	}
@@ -48,12 +45,12 @@ func TestEnumerateSeesEveryDevice(t *testing.T) {
 // compute queue, not the first one: on a host that enumerates the iGPU or
 // llvmpipe ahead of a discrete card, taking index 0 fails here.
 func TestPickIsDeliberate(t *testing.T) {
-	l, inst := openInstance(t)
-	cands, err := l.enumerate(inst)
+	d := openInstance(t)
+	cands, err := d.enumerate()
 	if err != nil {
 		t.Fatalf("enumerate: %v", err)
 	}
-	got, err := l.pickDevice(inst, "", "")
+	got, err := d.pickDevice("", "")
 	if err != nil {
 		t.Fatalf("pickDevice: %v", err)
 	}
@@ -121,8 +118,8 @@ func TestNoComputeQueueFallsThrough(t *testing.T) {
 // selector and reports its name, type and memory. It fails if two indices
 // produce the same device.
 func TestOverridePinsByIndexAndName(t *testing.T) {
-	l, inst := openInstance(t)
-	cands, err := l.enumerate(inst)
+	d := openInstance(t)
+	cands, err := d.enumerate()
 	if err != nil {
 		t.Fatalf("enumerate: %v", err)
 	}
@@ -331,8 +328,8 @@ func runSMI() ([]byte, error) {
 // server, so a Config held in a package variable between an open's start and
 // its device pick hands one open another's pin; run under -race.
 func TestConfigIsPerDevice(t *testing.T) {
-	l, inst := openInstance(t)
-	cands, err := l.enumerate(inst)
+	d := openInstance(t)
+	cands, err := d.enumerate()
 	if err != nil {
 		t.Fatalf("enumerate: %v", err)
 	}

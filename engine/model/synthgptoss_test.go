@@ -168,7 +168,7 @@ func TestSynthGPTOSSOnEveryDevice(t *testing.T) {
 	host.Close()
 	ran := 0
 	for _, spec := range stepDevices() {
-		gpux, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
+		gpux, err := openGPU(t, gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
 		if err != nil || gpux == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue

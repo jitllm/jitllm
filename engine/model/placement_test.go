@@ -25,7 +25,7 @@ func TestPlacement(t *testing.T) {
 	path := jlmOf(t, p)
 	attach := func(t *testing.T, spec string, pl Placement) (*Model, *Instance, *gpu.GPU, error) {
 		t.Helper()
-		g, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
+		g, err := openGPU(t, gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
 		if err != nil || g == nil {
 			noDevice(t, spec, err)
 		}

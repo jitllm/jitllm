@@ -45,7 +45,7 @@ func TestFirstPromptDoesNotGrowTheKVPool(t *testing.T) {
 		if budget > 0 {
 			opts = append(opts, gpu.WithBudget(budget))
 		}
-		g, err := gpu.OpenWith(opts...)
+		g, err := openGPU(t, opts...)
 		if err != nil || g == nil {
 			noDevice(t, "device", err)
 		}

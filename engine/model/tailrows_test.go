@@ -40,7 +40,7 @@ func TestShortChunkRunsAsRaggedStep(t *testing.T) {
 		st := m.NewInstance(n + 16)
 		defer st.Close()
 		if dev {
-			g, err := gpu.OpenWith(gpu.WithDeviceTune(gpu.TuneOff))
+			g, err := openGPU(t, gpu.WithDeviceTune(gpu.TuneOff))
 			if err != nil || g == nil {
 				noDevice(t, "device", err)
 			}

@@ -134,7 +134,7 @@ func prefillOnDevice(t *testing.T, path, dev string, parts gpu.Parts, windows bo
 	// warms the widths up to 64, each a form of the composer's.
 	opts := []gpu.Option{gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff),
 		gpu.WithConfig(func(c *gpu.Config) { c.PromptRows = 64 })}
-	g, err := gpu.OpenWith(append(opts, testTierOpts(t)...)...)
+	g, err := openGPU(t, append(opts, testTierOpts(t)...)...)
 	if err != nil || g == nil {
 		noDevice(t, dev, err)
 	}

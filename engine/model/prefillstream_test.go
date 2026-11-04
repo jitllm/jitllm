@@ -82,7 +82,7 @@ func TestPrefillStreamsHostBlocks(t *testing.T) {
 		done     func()
 	}
 	run := func(t *testing.T, mode PrefillStream) (a arm, why string) {
-		g, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
+		g, err := openGPU(t, gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
 		if err != nil || g == nil {
 			noDevice(t, spec, err)
 		}

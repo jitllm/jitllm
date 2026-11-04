@@ -135,7 +135,7 @@ func TestPageBudgetFollowsARealIntegratedGPU(t *testing.T) {
 	}
 	defer m.Close()
 	const budget = 8 << 30
-	g, err := gpu.OpenWith(gpu.WithDevices("vulkan:"+strconv.Itoa(sel)),
+	g, err := openGPU(t, gpu.WithDevices("vulkan:"+strconv.Itoa(sel)),
 		gpu.WithHostBudget(budget), gpu.WithDeviceTune(gpu.TuneOff))
 	if err != nil {
 		t.Fatalf("open the integrated GPU: %v", err)

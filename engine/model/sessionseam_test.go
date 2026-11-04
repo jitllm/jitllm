@@ -125,7 +125,7 @@ func sessionSeamMoves(t *testing.T, p string, bound float64) {
 		{"grow", 0, []move{{first, cfg.NLayer}}},
 	} {
 		t.Run(arm.name, func(t *testing.T) {
-			g, err := gpu.OpenWith(gpu.WithDevices("gpu:0"), gpu.WithDeviceTune(gpu.TuneOff))
+			g, err := openGPU(t, gpu.WithDevices("gpu:0"), gpu.WithDeviceTune(gpu.TuneOff))
 			if err != nil || g == nil {
 				noDevice(t, "device", err)
 			}

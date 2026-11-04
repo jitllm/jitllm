@@ -138,7 +138,7 @@ type headArm struct {
 
 func (a *headArm) run(t *testing.T) {
 	t.Helper()
-	g, err := gpu.OpenWith(gpu.WithDevices(a.dev), gpu.WithDeviceTune(gpu.TuneOff),
+	g, err := openGPU(t, gpu.WithDevices(a.dev), gpu.WithDeviceTune(gpu.TuneOff),
 		gpu.WithConfig(func(c *gpu.Config) { c.NoGraph = true }))
 	if err != nil || g == nil {
 		noDevice(t, a.dev, err)

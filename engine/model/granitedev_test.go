@@ -163,7 +163,7 @@ func TestGraniteOnEveryDevice(t *testing.T) {
 					// quantized weights, which is why this arm is here and not
 					// on the f32 fixtures.
 					step := func(opts ...gpu.Option) stepResult {
-						g, err := gpu.OpenWith(slices.Concat([]gpu.Option{gpu.WithDevices(dev),
+						g, err := openGPU(t, slices.Concat([]gpu.Option{gpu.WithDevices(dev),
 							gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t), opts)...)
 						if err != nil || g == nil {
 							t.Fatalf("no %s for the step: %v", dev, err)
@@ -264,7 +264,7 @@ func openGranite(t *testing.T, name string) *Model {
 func graniteRun(t *testing.T, m *Model, dev string, seq int, prompt, forced []int32,
 	opts []gpu.Option) ([][]float32, gpu.Stats, string) {
 	t.Helper()
-	g, err := gpu.OpenWith(slices.Concat([]gpu.Option{gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff)},
+	g, err := openGPU(t, slices.Concat([]gpu.Option{gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff)},
 		testTierOpts(t), opts)...)
 	if err != nil || g == nil {
 		return nil, gpu.Stats{}, "no " + dev + " here"
@@ -364,7 +364,7 @@ func TestGraniteScalesOnEveryDevice(t *testing.T) {
 			for _, dev := range stepDevices() {
 				t.Run(dev, func(t *testing.T) {
 					onDevice := func(run func(*Instance) [][]float32, opts ...gpu.Option) ([][]float32, gpu.Stats) {
-						g, err := gpu.OpenWith(slices.Concat([]gpu.Option{gpu.WithDevices(dev),
+						g, err := openGPU(t, slices.Concat([]gpu.Option{gpu.WithDevices(dev),
 							gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t), opts)...)
 						if err != nil || g == nil {
 							noDevice(t, dev, err)
@@ -408,7 +408,7 @@ func TestGraniteScalesOnEveryDevice(t *testing.T) {
 						worst = max(worst, w)
 					}
 					// Three sessions stepping as rows, against each alone.
-					g, err := gpu.OpenWith(slices.Concat([]gpu.Option{gpu.WithDevices(dev),
+					g, err := openGPU(t, slices.Concat([]gpu.Option{gpu.WithDevices(dev),
 						gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t))...)
 					if err != nil || g == nil {
 						noDevice(t, dev, err)

@@ -69,7 +69,7 @@ func composedMoves(t *testing.T, st *Instance, n, half int, devices bool, ntok, 
 
 func blocksMoveToTheCPUAndBack(t *testing.T, path string, composed bool) {
 	a, b := moveDevices(t)
-	g, err := gpu.OpenWith(gpu.WithDevices(a+","+b), gpu.WithDeviceTune(gpu.TuneOff))
+	g, err := openGPU(t, gpu.WithDevices(a+","+b), gpu.WithDeviceTune(gpu.TuneOff))
 	if err != nil || g == nil {
 		noDevice(t, a+","+b, err)
 	}

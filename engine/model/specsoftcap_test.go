@@ -85,7 +85,7 @@ func TestSpecOverAFinalSoftcap(t *testing.T) {
 					// for the cap it first saw.
 					bound := specCapBound(t, m, spec, prompt, want)
 					open := func() *gpu.GPU {
-						g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(spec),
+						g, err := openGPU(t, append([]gpu.Option{gpu.WithDevices(spec),
 							gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t)...)...)
 						if err != nil || g == nil {
 							noDevice(t, spec, err)
@@ -136,7 +136,7 @@ func TestSpecOverAFinalSoftcap(t *testing.T) {
 // uncapped ones 2 and up.
 func specCapBound(t *testing.T, m *Model, spec string, prompt, toks []int32) float64 {
 	t.Helper()
-	g, err := gpu.OpenWith(append([]gpu.Option{gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff)},
+	g, err := openGPU(t, append([]gpu.Option{gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff)},
 		testTierOpts(t)...)...)
 	if err != nil || g == nil {
 		noDevice(t, spec, err)

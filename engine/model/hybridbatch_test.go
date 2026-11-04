@@ -105,7 +105,7 @@ func hybridBatchedPrefill(t *testing.T, m *Model) {
 		defer st.Close()
 		if dev {
 			spec := testdevices.One("gpu:0")
-			g, err := gpu.OpenWith(gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff),
+			g, err := openGPU(t, gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff),
 				gpu.WithPoisonScratch(true),
 				gpu.WithConfig(func(cf *gpu.Config) {
 					cf.NoBatch = noBatch

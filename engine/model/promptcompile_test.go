@@ -43,7 +43,7 @@ func TestPlacedPromptsCompileNothing(t *testing.T) {
 		}
 		for _, tune := range []gpu.TuneMode{gpu.TuneOff, gpu.TuneAuto} {
 			t.Run(fmt.Sprintf("%s/tune%d/composed%d", name, tune, arm.composed), func(t *testing.T) {
-				g, err := gpu.OpenWith(gpu.WithDeviceTune(tune),
+				g, err := openGPU(t, gpu.WithDeviceTune(tune),
 					gpu.WithConfig(func(c *gpu.Config) {
 						// The composer forms a prompt block once, at the
 						// reserved width: the widest chunk here is 224 rows.
