@@ -317,7 +317,7 @@ func TestHybridRuns(t *testing.T) {
 	}
 	s := m.NewInstance(16)
 	defer s.Close()
-	before := append([]float32(nil), s.rstate[0]...)
+	before := append([]float32(nil), s.view.State(0)...)
 	lg, err := s.Forward(3)
 	if err != nil {
 		t.Fatal(err)
@@ -328,7 +328,7 @@ func TestHybridRuns(t *testing.T) {
 		}
 	}
 	same := true
-	for i, v := range s.rstate[0] {
+	for i, v := range s.view.State(0) {
 		if v != before[i] {
 			same = false
 			break
@@ -346,12 +346,12 @@ func TestHybridStateIsConstantInContext(t *testing.T) {
 	m := hybridModel(t)
 	s := m.NewInstance(32)
 	defer s.Close()
-	want := len(s.rstate[0]) + len(s.rconv[0])
+	want := len(s.view.State(0)) + len(s.view.Conv(0))
 	for i := 0; i < 8; i++ {
 		if _, err := s.Forward(int32(i % hyVocab)); err != nil {
 			t.Fatal(err)
 		}
-		if got := len(s.rstate[0]) + len(s.rconv[0]); got != want {
+		if got := len(s.view.State(0)) + len(s.view.Conv(0)); got != want {
 			t.Fatalf("after %d tokens the recurrent state is %d floats, want %d", i+1, got, want)
 		}
 	}
@@ -445,13 +445,13 @@ func hyClose(t *testing.T, what string, want, got []float32) {
 // only see through one more layer of mixing.
 func hyCloseState(t *testing.T, a, b *Instance) {
 	t.Helper()
-	for li := range a.rstate {
-		if a.rstate[li] == nil {
+	for li := range a.view.Blocks() {
+		if a.view.State(li) == nil {
 			continue
 		}
 		var worst float64
-		for i := range a.rstate[li] {
-			if d := math.Abs(float64(a.rstate[li][i] - b.rstate[li][i])); d > worst {
+		for i := range a.view.State(li) {
+			if d := math.Abs(float64(a.view.State(li)[i] - b.view.State(li)[i])); d > worst {
 				worst = d
 			}
 		}
@@ -460,10 +460,10 @@ func hyCloseState(t *testing.T, a, b *Instance) {
 		}
 		// The window holds the last rows' projections, which a prompt's
 		// form and decode's fold in another order (RULE 8).
-		for i := range a.rconv[li] {
-			if d := math.Abs(float64(a.rconv[li][i] - b.rconv[li][i])); !(d <= 1e-4) {
+		for i := range a.view.Conv(li) {
+			if d := math.Abs(float64(a.view.Conv(li)[i] - b.view.Conv(li)[i])); !(d <= 1e-4) {
 				t.Errorf("layer %d convolution state differs at %d: %v vs %v",
-					li, i, a.rconv[li][i], b.rconv[li][i])
+					li, i, a.view.Conv(li)[i], b.view.Conv(li)[i])
 				break
 			}
 		}

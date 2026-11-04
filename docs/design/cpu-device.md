@@ -137,10 +137,15 @@ matrices reach the device by role, as the vectors do
       tells the table as a page changes (`setPage`), so the table is kept,
       not laid out again for every call.
    c. The recurrent states: a linear block's state and convolution rows
-      are the view's, bound as `SrcRecState` and `SrcRecConv` from it.
+      are the view's (`View.MakeRec`, `Conv`, `State`), bound as
+      `SrcRecState` and `SrcRecConv` from it. The view still holds one for
+      every linear block of the instance, a card's among them, where it is
+      what a move, a seal or a restore copies through.
    d. The moves: `MigrateKV` and `MigrateRec` on the view, the
       instance's `migrateKV` calling them, so a block's history leaves and
-      reaches the CPU device as it does a card.
+      reaches the CPU device as it does a card. The view then holds a
+      linear block's state only while the block is on the CPU, and a card
+      block's seal, restore or move goes through one buffer it reuses.
 3. The instance holds devices: a device per block, `onDev` gone, each
    run of consecutive blocks one call on its device, a decline placing
    the block on another device. Gates: as 2, plus the seam gates

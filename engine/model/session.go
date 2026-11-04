@@ -66,8 +66,7 @@ type Session struct {
 	forwardPrompts int
 	// interrupt, when set, is asked before every prefill chunk
 	// (SetPrefillInterrupt).
-	interrupt     func() bool
-	rconv, rstate [][]float32
+	interrupt func() bool
 	// bpos is the sequence's position as a row of a step, one entry. pos
 	// stays the high-water mark: the maxSeq bound and Pos() read it.
 	bpos []int

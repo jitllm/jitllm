@@ -587,8 +587,8 @@ func (s *Instance) cpuRecRows(li int, l *layer, x, cs []float32, seq, pos []int,
 			}
 		}
 		if s.cpu.fault == cpuFaultChunk && base > 0 && i == 0 {
-			clear(o.rstate[li][slot*s.dg.stateStride():][:s.dg.stateStride()])
-			clear(o.rconv[li][slot*s.dg.convStateLen():][:s.dg.convStateLen()])
+			clear(o.view.State(li)[slot*s.dg.stateStride():][:s.dg.stateStride()])
+			clear(o.view.Conv(li)[slot*s.dg.convStateLen():][:s.dg.convStateLen()])
 		}
 		pages, err := s.cpuPages(li, pg)
 		if err != nil {
@@ -679,8 +679,8 @@ func (s *Instance) cpuRecRun(li int, l *layer, f *cpudev.Form, x, cs []float32, 
 	rside, pw := s.cpuSideRows(li)
 	if s.cpu.fault == cpuFaultChunk && base > 0 {
 		slot := seq[0]
-		clear(s.rstate[li][slot*s.dg.stateStride():][:s.dg.stateStride()])
-		clear(s.rconv[li][slot*s.dg.convStateLen():][:s.dg.convStateLen()])
+		clear(s.view.State(li)[slot*s.dg.stateStride():][:s.dg.stateStride()])
+		clear(s.view.Conv(li)[slot*s.dg.convStateLen():][:s.dg.convStateLen()])
 	}
 	points := base >= 0 && s.recPointsOn()
 	for a := 0; a < n; {
@@ -754,8 +754,8 @@ func (s *Instance) cpuRecLi(li int) int {
 	if s.cpu.fault != cpuFaultRec {
 		return li
 	}
-	for r := range s.rstate {
-		if s.rstate[r] != nil {
+	for r := range s.view.Blocks() {
+		if s.view.State(r) != nil {
 			return r
 		}
 	}
@@ -964,7 +964,7 @@ func (s *Instance) cpuRowsCalls(li int, l *layer, f *cpudev.Form, lo, hi int, x 
 		}
 		if f.Rec {
 			b.recLi, b.recOf, b.rec = s.cpuRecLi(li), s.Session, s.cpuRecDesc(seq[r0:r0+k])
-			if n := len(s.rconv[b.recLi]); len(s.cpu.convOut) < n {
+			if n := len(s.view.Conv(b.recLi)); len(s.cpu.convOut) < n {
 				s.cpu.convOut = make([]float32, n)
 			}
 		}
@@ -1004,7 +1004,7 @@ func (s *Instance) cpuRowsCalls(li int, l *layer, f *cpudev.Form, lo, hi int, x 
 			L := s.dg.convStateLen()
 			for i, q := range seq[r0 : r0+k] {
 				if !slices.Contains(seq[r0:r0+i], q) {
-					copy(s.rconv[b.recLi][q*L:(q+1)*L], s.cpu.convOut[q*L:(q+1)*L])
+					copy(s.view.Conv(b.recLi)[q*L:(q+1)*L], s.cpu.convOut[q*L:(q+1)*L])
 				}
 			}
 		}
@@ -1123,8 +1123,8 @@ func (s *Instance) cpuCallOf(b *cpuBound, f *cpudev.Form) *cpudev.Call {
 		a[cpudev.SrcKeys], a[cpudev.SrcValues] = addr(b.kv.t.Arena().Keys()), addr(b.kv.t.Arena().Values())
 	}
 	a[cpudev.SrcPages], a[cpudev.SrcRows], a[cpudev.SrcCall] = addr(b.pages), addr(b.rows), addr(s.cpu.call[:])
-	if r := b.recOf; r != nil && b.recLi >= 0 && b.recLi < len(r.rstate) && b.recLi < len(r.rconv) {
-		a[cpudev.SrcRecState], a[cpudev.SrcRecConv] = addr(r.rstate[b.recLi]), addr(r.rconv[b.recLi])
+	if r := b.recOf; r != nil && b.recLi >= 0 && b.recLi < r.view.Blocks() {
+		a[cpudev.SrcRecState], a[cpudev.SrcRecConv] = addr(r.view.State(b.recLi)), addr(r.view.Conv(b.recLi))
 		a[cpudev.SrcRecConvOut] = a[cpudev.SrcRecConv]
 	}
 	a[cpudev.SrcRecRows] = addr(s.cpu.recRows[:])
@@ -1290,7 +1290,7 @@ func (s *Instance) cpuWhy(li int) composer.Decline {
 		// The forms read a bank as one view of its experts in the host's
 		// expert pages (jlm.File.BankView); a bank with none is not read.
 		return composer.DeclineExperts
-	case c.LayerKind(li).Recurrent() && (li >= len(s.rstate) || s.rstate[li] == nil || s.rconv[li] == nil):
+	case c.LayerKind(li).Recurrent() && (s.view.State(li) == nil || s.view.Conv(li) == nil):
 		return composer.DeclineRecurrent
 	case s.kvl.fmt != cpu.KVF16 && s.kvl.fmt != cpu.KVF32:
 		// The CPU's profile keeps a history binary16 itself (composer.Halves),

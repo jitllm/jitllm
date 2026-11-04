@@ -3,19 +3,38 @@ package cpudev
 // View is a session's hold on the CPU device's history, as a card's session
 // view (gpu.GPU.Attach) is on the card's: for each block keeping one, the
 // arena its pages take slots of and the table its forms read them through
-// (SrcPages). The session's history decides what each page holds; the view
-// is where it is.
+// (SrcPages), and a linear block's recurrent state and convolution rows
+// (SrcRecState, SrcRecConv). The session's history decides what each holds;
+// the view is where it is. The zero View holds nothing, and a nil one reads
+// as one.
 type View struct {
 	tabs []*Table
+	rec  []recState
 }
+
+// recState is a linear block's state and convolution rows, every sequence's
+// back to back.
+type recState struct{ conv, state []float32 }
 
 // NewView is a view of n blocks' history, holding none yet.
 func NewView(n int) *View { return &View{tabs: make([]*Table, n)} }
+
+// Blocks is how many blocks the view spans: one past the last that holds
+// anything.
+func (v *View) Blocks() int {
+	if v == nil {
+		return 0
+	}
+	return max(len(v.tabs), len(v.rec))
+}
 
 // Table is a fresh table for block li's pages on a, of slots pages: the
 // view's for the block from now on. A table the block had before stays with
 // whatever history still holds it until that lets its slots go.
 func (v *View) Table(li int, a *Arena, slots int) *Table {
+	for len(v.tabs) <= li {
+		v.tabs = append(v.tabs, nil)
+	}
 	slots = max(slots, 1)
 	t := &Table{a: a, slots: slots, of: make([]uint32, slots)}
 	v.tabs[li] = t
@@ -28,6 +47,34 @@ func (v *View) At(li int) *Table {
 		return nil
 	}
 	return v.tabs[li]
+}
+
+// MakeRec gives block li a recurrent state of state floats and convolution
+// rows of conv, zeroed, in place of any it held.
+func (v *View) MakeRec(li, conv, state int) {
+	for len(v.rec) <= li {
+		v.rec = append(v.rec, recState{})
+	}
+	v.rec[li] = recState{conv: make([]float32, conv), state: make([]float32, state)}
+}
+
+// Recurrent says some block holds a recurrent state.
+func (v *View) Recurrent() bool { return v != nil && len(v.rec) > 0 }
+
+// Conv is block li's convolution rows, nil where it holds none.
+func (v *View) Conv(li int) []float32 {
+	if v == nil || li >= len(v.rec) {
+		return nil
+	}
+	return v.rec[li].conv
+}
+
+// State is block li's recurrent state, nil where it holds none.
+func (v *View) State(li int) []float32 {
+	if v == nil || li >= len(v.rec) {
+		return nil
+	}
+	return v.rec[li].state
 }
 
 // Table is one block's pages in its arena: the slot each page is held in and

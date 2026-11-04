@@ -157,14 +157,11 @@ func (s *Instance) allocRecurrent(nseq int) {
 	}
 	g := c.delta()
 	s.dg = g
-	s.rconv = make([][]float32, c.NLayer)
-	s.rstate = make([][]float32, c.NLayer)
+	v := s.Session.cpuView()
 	for i := 0; i < c.NLayer; i++ {
-		if !c.LayerKind(i).Recurrent() {
-			continue
+		if c.LayerKind(i).Recurrent() {
+			v.MakeRec(i, nseq*g.convStateLen(), nseq*g.stateStride())
 		}
-		s.rconv[i] = make([]float32, nseq*g.convStateLen())
-		s.rstate[i] = make([]float32, nseq*g.stateStride())
 	}
 }
 
@@ -184,14 +181,14 @@ func (s *Instance) linearIn() bool {
 // sequence means for a linear layer: there is no per-position cache to
 // invalidate, only a running summary to forget.
 func (s *Instance) ResetRecurrent(row int) {
-	for li := range s.rconv {
-		if s.rconv[li] == nil {
+	for li := range s.view.Blocks() {
+		if s.view.Conv(li) == nil {
 			continue
 		}
 		n := s.dg.convStateLen()
-		clear(s.rconv[li][row*n : (row+1)*n])
+		clear(s.view.Conv(li)[row*n : (row+1)*n])
 		n = s.dg.stateStride()
-		clear(s.rstate[li][row*n : (row+1)*n])
+		clear(s.view.State(li)[row*n : (row+1)*n])
 	}
 }
 

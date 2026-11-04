@@ -11,10 +11,14 @@ func (m *Model) kvArenaFor(li, pp int, latent bool, minSlots int) (*cpudev.Arena
 }
 
 // cpuView is the session's view of the CPU device's history, made on the
-// first ask.
+// first ask: before its pages are, where it holds recurrent states first.
 func (s *Session) cpuView() *cpudev.View {
 	if s.view == nil {
-		s.view = cpudev.NewView(len(s.kv.layers))
+		n := 0
+		if s.kv != nil {
+			n = len(s.kv.layers)
+		}
+		s.view = cpudev.NewView(n)
 	}
 	return s.view
 }

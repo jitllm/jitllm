@@ -480,10 +480,10 @@ func (s *Instance) blockHistoryAt(li, pos int) uint64 {
 
 // recBytesOf is block li's recurrent summary in bytes, every row's.
 func (s *Instance) recBytesOf(li int) uint64 {
-	if s.rconv == nil || li >= len(s.rconv) {
+	if li >= s.view.Blocks() {
 		return 0
 	}
-	return uint64(len(s.rconv[li])+len(s.rstate[li])) * 4
+	return uint64(len(s.view.Conv(li))+len(s.view.State(li))) * 4
 }
 
 // BlockHistory is what block li's history costs, so a caller can say how much
