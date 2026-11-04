@@ -124,15 +124,20 @@ func decomposeRopeTable(o graph.Op, c *Context) ([]Prim, error) {
 	}
 	if o.Attr.Grid {
 		// The position is a cell of the grid the request's first word
-		// wide; the pair's axis, after the planes' scale, picks its row (0)
-		// or its column.
+		// wide, the step's live rows over it tall, in its nested order
+		// (tileCell); the pair's axis, after the planes' scale, picks its
+		// row (0) or its column.
 		// The cell's row and column are the row's, one word each that
 		// every pair reads (OpBroadcast): a device of lanes divides once a
 		// row rather than in its lanes.
+		lead := uint32(o.Attr.Offset)
 		gw := x.op(OpMax, U, x.load(3, x.u(RequestGrid)), x.u(1))
+		gh := x.op(OpMax, U, x.op(OpDiv, U, x.op(OpSub, U, x.op(OpMax, U, x.load(0, x.u(0)), x.u(lead+1)), x.u(lead)), gw), x.u(1))
+		cell := x.op(OpSub, U, x.op(OpMax, U, pos, x.u(lead)), x.u(lead))
+		cy, cx := tileCell(&x, cell, gw, gh, o.Attr.Width, o.Attr.Window)
 		axis := x.un(OpCvtI32, I, x.load(1, x.op(OpAdd, U, p, x.u(uint32(8*stride+1)))))
 		row := x.op(OpLess, ir.Pred, x.un(OpBitcast, U, axis), x.u(1))
-		pos = x.sel(U, row, x.un(OpBroadcast, U, x.op(OpDiv, U, pos, gw)), x.un(OpBroadcast, U, x.op(OpRem, U, pos, gw)))
+		pos = x.sel(U, row, x.un(OpBroadcast, U, cy), x.un(OpBroadcast, U, cx))
 		in = append(in, TableRequest.op())
 		ext[1], ext[3] = 8*stride+1+P, RequestRows+R
 	}

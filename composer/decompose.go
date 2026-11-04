@@ -57,6 +57,7 @@ func decompositions() map[graph.OpKind]Decomposition {
 		graph.OpPosAxes:      decomposePosAxes,
 		graph.OpDropRows:     decomposeDropRows,
 		graph.OpFold:         decomposeFold,
+		graph.OpUntile:       decomposeUntile,
 		graph.OpSplice:       decomposeSplice,
 		graph.OpPosResample:  decomposePosResample,
 		graph.OpPicture:      decomposePicture,

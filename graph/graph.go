@@ -171,10 +171,17 @@ const (
 	OpRowConv
 	// OpPatchify is a picture's patches as rows: In[0] is the picture,
 	// [y][x][channel] over the step's rows, a grid of Span x Span patches
-	// whose width in patches is the request's first word; row Offset+p is
-	// patch p in raster order, its Span*Span*3 elements channel-planar (a
-	// convolution whose stride is its kernel, as a matrix product), zero past
-	// them to the output's width and in the Offset rows before.
+	// whose width in patches is the request's first word and whose height is
+	// the step's live rows past Offset over it; a row at position Offset+p
+	// holds the patch at index p of the grid's nested order -- Width x Width
+	// merge windows of patches (Width 0 or 1: none), the patches of one in
+	// raster order and consecutive, in Window x Window windows of merge
+	// windows (Window 0: one window, the grid), each window's merge windows
+	// in raster order and consecutive, the windows in raster order and those
+	// at the grid's right and lower edges cut to it -- its Span*Span*3
+	// elements channel-planar (a convolution whose stride is its kernel, as a
+	// matrix product), zero past them to the output's width and in the Offset
+	// rows before.
 	OpPatchify
 	// OpRegroup is space-to-depth over the step's grid of rows (the
 	// request's first word its width): row g of the output is the Span x Span
@@ -326,6 +333,14 @@ const (
 	// [y][x][channel] over the step's rows, as OpPatchify reads them, zero
 	// past the output's pixels. A primitive.
 	OpPicture
+	// OpUntile is In[0]'s rows -- the cells of a grid in its nested order,
+	// Window x Window windows of cells, each window's cells in raster order
+	// and consecutive, the windows in raster order and those at the grid's
+	// right and lower edges cut to it -- in the cells' raster order: output
+	// row r is the input row of cell r. The grid of cells is the request's
+	// first word over Width wide (a picture's patches over its merge
+	// windows) and its live rows over Width*Width over that tall.
+	OpUntile
 	numOps
 )
 
@@ -391,6 +406,8 @@ func (k OpKind) String() string {
 		return "row_conv"
 	case OpPicture:
 		return "picture"
+	case OpUntile:
+		return "untile"
 	case OpPatchify:
 		return "patchify"
 	case OpRegroup:

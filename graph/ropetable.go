@@ -6,9 +6,16 @@ type RopeTable struct {
 	NRot  int
 	Index int
 	// Grid reads each row's position as a cell of the step's grid (the
-	// request's first word its width): a pair turns by the cell's row or
-	// its column, as the model's planes name for the pair.
-	Grid bool
+	// request's first word its width, the step's live rows over it its
+	// height) in the grid's nested order -- Merge x Merge merge windows in
+	// Window x Window windows of them (OpPatchify's Width and Window) -- a
+	// pair turning by the cell's row or its column, as the model's planes
+	// name for the pair.
+	Grid          bool
+	Merge, Window int
+	// Lead is the rows before a grid's first cell (a class row's), turned
+	// as its first.
+	Lead int
 	// Sections, Interleaved, Cycle and CycleAxes are the rotary's position
 	// axes (Attrs.Sections, Attrs.Interleaved, Attrs.Cycle): where Sections
 	// or Cycle is set, a row has a position on each axis and each pair turns
@@ -25,14 +32,16 @@ type RopeTable struct {
 // position axes its pairs turn by (Attrs.Sections, Attrs.Interleaved,
 // Attrs.Cycle).
 type Rotary struct {
-	NRot        int
-	Base        float64
-	Freqs       bool
-	Grid        bool
-	Sections    [4]int
-	Interleaved bool
-	Cycle       int
-	CycleAxes   [4]uint8
+	NRot          int
+	Base          float64
+	Freqs         bool
+	Grid          bool
+	Merge, Window int
+	Lead          int
+	Sections      [4]int
+	Interleaved   bool
+	Cycle         int
+	CycleAxes     [4]uint8
 }
 
 // Build is the table's graph: each row's positions on the rotary axes from
@@ -50,7 +59,7 @@ func (r *RopeTable) Build() *Graph {
 		in = []ValueID{pos}
 	}
 	g.op(Op{Kind: OpRopeTable, In: in, Out: []ValueID{cs}, Attr: Attrs{NRot: r.NRot, Rotary: r.Index, Grid: r.Grid, Sections: r.Sections, Interleaved: r.Interleaved,
-		Cycle: r.Cycle, CycleAxes: r.CycleAxes}})
+		Cycle: r.Cycle, CycleAxes: r.CycleAxes, Width: r.Merge, Window: r.Window, Offset: r.Lead}})
 	return g
 }
 

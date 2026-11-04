@@ -274,7 +274,8 @@ func decomposePatchify(o graph.Op, c *Context) ([]Prim, error) {
 	lead := o.Attr.Offset
 	r := x.op(OpSub, U, x.op(OpMax, U, x.load(2, x.op(OpAdd, U, row, u(1))), u(lead)), u(lead))
 	gw := x.op(OpMax, U, x.load(1, x.u(RequestGrid)), u(1))
-	py, pxi := x.op(OpDiv, U, r, gw), x.op(OpRem, U, r, gw)
+	gh := x.op(OpMax, U, x.op(OpDiv, U, x.op(OpSub, U, x.op(OpMax, U, x.load(2, x.u(0)), u(lead+1)), u(lead)), gw), u(1))
+	py, pxi := tileCell(&x, r, gw, gh, o.Attr.Width, o.Attr.Window)
 	pp := uint32(P * P)
 	ch, ky, kx := x.op(OpDiv, U, col, x.u(pp)), x.op(OpRem, U, x.op(OpDiv, U, col, u(P)), u(P)), x.op(OpRem, U, col, u(P))
 	y := x.op(OpAdd, U, x.op(OpMul, U, py, u(P)), ky)
@@ -288,6 +289,81 @@ func decomposePatchify(o graph.Op, c *Context) ([]Prim, error) {
 	}
 	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0]), TableRequest.op(), TablePos.op()}, Out: c.value(o.Out[0]), Expr: x.e,
 		Facts: Facts{Extents: map[int]int{1: RequestRows + R, 2: R + 1}}}}, nil
+}
+
+// decomposeUntile is each output row the input row of the cell at its
+// raster index, of the grid of cells the request's patch grid over Width
+// is, taken from the input's nested order (tileIndex).
+func decomposeUntile(o graph.Op, c *Context) ([]Prim, error) {
+	if len(o.In) != 1 || len(o.Out) != 1 || c.width(o.In[0]) != c.width(o.Out[0]) || o.Attr.Window < 1 {
+		return nil, fmt.Errorf("an untile of %d operands over windows of %d", len(o.In), o.Attr.Window)
+	}
+	U := ir.U32
+	sh, ish := c.rows(o.Out[0]), c.rows(o.In[0])
+	m := max(o.Attr.Width, 1)
+	var x exprs
+	r := x.coord(0)
+	u := func(v int) int { return x.u(uint32(v)) }
+	gw := x.op(OpMax, U, x.op(OpDiv, U, x.load(1, x.u(RequestGrid)), u(m)), u(1))
+	gh := x.op(OpMax, U, x.op(OpDiv, U, x.op(OpDiv, U, x.load(2, x.u(0)), u(m*m)), gw), u(1))
+	at := tileIndex(&x, x.op(OpDiv, U, r, gw), x.op(OpRem, U, r, gw), gw, gh, o.Attr.Window)
+	x.at(0, ish, x.op(OpMin, U, at, u(ish[0]-1)), x.coord(1))
+	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0]), TableRequest.op(), TablePos.op()}, Out: c.value(o.Out[0]), Expr: x.e,
+		Facts: Facts{Extents: map[int]int{1: RequestRows + sh[0], 2: c.Step.Rows + 1}}}}, nil
+}
+
+// tileIndex is the index of cell (cy, cx) of a grid gw cells wide and gh tall
+// in its nested order of win x win windows: tileCell's inverse at one level.
+func tileIndex(x *exprs, cy, cx, gw, gh, win int) int {
+	U := ir.U32
+	u := func(v int) int { return x.u(uint32(v)) }
+	wy, wx := x.op(OpDiv, U, cy, u(win)), x.op(OpDiv, U, cx, u(win))
+	top, left := x.op(OpMul, U, wy, u(win)), x.op(OpMul, U, wx, u(win))
+	wh := x.op(OpMax, U, x.op(OpMin, U, u(win), x.op(OpSub, U, x.op(OpMax, U, gh, top), top)), u(1))
+	ww := x.op(OpMax, U, x.op(OpMin, U, u(win), x.op(OpSub, U, x.op(OpMax, U, gw, left), left)), u(1))
+	at := x.op(OpAdd, U, x.op(OpMul, U, top, gw), x.op(OpMul, U, left, wh))
+	return x.op(OpAdd, U, at, x.op(OpAdd, U, x.op(OpMul, U, x.op(OpSub, U, cy, top), ww), x.op(OpSub, U, cx, left)))
+}
+
+// tileCell is the row and column of the patch at index r of a grid gw
+// patches wide and gh tall in nested order (graph.OpPatchify): merge x merge
+// merge windows of patches (merge 0 or 1: none), the patches of one in
+// raster order and consecutive; win x win windows of merge windows (win 0:
+// one window, the grid), each window's merge windows in raster order and
+// consecutive; the windows in raster order, those at the grid's right and
+// lower edges cut to it. The grid's sides are whole merge windows.
+func tileCell(x *exprs, r, gw, gh, merge, win int) (y, c int) {
+	U := ir.U32
+	u := func(v int) int { return x.u(uint32(v)) }
+	m := max(merge, 1)
+	unit, in := r, 0
+	if m > 1 {
+		unit, in = x.op(OpDiv, U, r, u(m*m)), x.op(OpRem, U, r, u(m*m))
+		gw, gh = x.op(OpMax, U, x.op(OpDiv, U, gw, u(m)), u(1)), x.op(OpMax, U, x.op(OpDiv, U, gh, u(m)), u(1))
+	}
+	var uy, ux int
+	if win < 1 {
+		uy, ux = x.op(OpDiv, U, unit, gw), x.op(OpRem, U, unit, gw)
+	} else {
+		// A row of windows is win unit rows of the grid's width, but for the
+		// last; a window of it is win units wide, but for the last.
+		band := x.op(OpMul, U, gw, u(win))
+		wy, rest := x.op(OpDiv, U, unit, band), x.op(OpRem, U, unit, band)
+		top := x.op(OpMul, U, wy, u(win))
+		wh := x.op(OpMax, U, x.op(OpMin, U, u(win), x.op(OpSub, U, x.op(OpMax, U, gh, top), top)), u(1))
+		block := x.op(OpMul, U, wh, u(win))
+		wx, at := x.op(OpDiv, U, rest, block), x.op(OpRem, U, rest, block)
+		left := x.op(OpMul, U, wx, u(win))
+		ww := x.op(OpMax, U, x.op(OpMin, U, u(win), x.op(OpSub, U, x.op(OpMax, U, gw, left), left)), u(1))
+		uy = x.op(OpAdd, U, top, x.op(OpDiv, U, at, ww))
+		ux = x.op(OpAdd, U, left, x.op(OpRem, U, at, ww))
+	}
+	if m == 1 {
+		return uy, ux
+	}
+	y = x.op(OpAdd, U, x.op(OpMul, U, uy, u(m)), x.op(OpDiv, U, in, u(m)))
+	c = x.op(OpAdd, U, x.op(OpMul, U, ux, u(m)), x.op(OpRem, U, in, u(m)))
+	return y, c
 }
 
 // rowBefore is the mask of row r lying before row n.

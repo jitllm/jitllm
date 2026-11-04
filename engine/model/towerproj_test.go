@@ -63,7 +63,7 @@ func projectorFrom(t *testing.T, s *Instance, from int, rows []float32) []float3
 	E := int(m.container.Vision().NEmbd)
 	n := len(rows) / E
 	b := graph.NewBlock(-1)
-	out, err := lowerProgram(b, &p, []graph.ValueID{b.In("rows", E)}, n, m.towerFacts(jlm.DenseBlock))
+	out, err := lowerProgram(b, m.container.Vision().Tower, &p, []graph.ValueID{b.In("rows", E)}, n, m.towerFacts(jlm.DenseBlock))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,6 @@ func projectorFrom(t *testing.T, s *Instance, from int, rows []float32) []float3
 		outRows = n
 	}
 	tr.size(n, E)
-	tr.order(0, tg.side, n/tg.side, 0)
 	copy(tr.blk, rows)
 	tr.req[composer.RequestGrid] = uint32(tg.side)
 	got := make([]float32, outRows*b.G.Values[out].Width)

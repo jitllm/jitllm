@@ -36,6 +36,8 @@ func towerStater(p jlm.Projector) func(*jlm.Source) (*jlm.Tower, error) {
 		return internvlTower
 	case jlm.ProjQwen2VL:
 		return qwen2vlTower
+	case jlm.ProjQwen25VL:
+		return qwen25vlTower
 	}
 	return nil
 }
@@ -457,7 +459,19 @@ const (
 // with the exact GELU between. A picture is "<|vision_start|>", its rows,
 // "<|vision_end|>" in place of the chat template's three, its grid the text
 // model's M-RoPE grid with each side over the merge.
-func qwen2vlTower(s *jlm.Source) (*jlm.Tower, error) {
+func qwen2vlTower(s *jlm.Source) (*jlm.Tower, error) { return qwenVLTower(s, false) }
+
+// qwen25vlTower is Qwen2.5-VL's tower as transformers'
+// Qwen2_5_VisionTransformerPretrainedModel runs it: Qwen2-VL's picture,
+// patches and rotary, its blocks RMSNorm with a gated SiLU MLP, every one
+// but each n_wa_pattern'th attending inside windows of window_size pixels
+// a side (get_window_index: the merge windows reordered window by window,
+// the windows at the edges cut), the merger's norm an RMSNorm, and its rows
+// put back in the merge windows' raster order (reverse_indices).
+func qwen25vlTower(s *jlm.Source) (*jlm.Tower, error) { return qwenVLTower(s, true) }
+
+// qwenVLTower is qwen2vlTower and, windowed, qwen25vlTower.
+func qwenVLTower(s *jlm.Source, windowed bool) (*jlm.Tower, error) {
 	v := s.Vision
 	has := towerRoles(s)
 	for _, r := range []jlm.Role{jlm.RoleVPatchEmbd, jlm.RoleVPostNorm, jlm.RoleVProj, jlm.RoleVProj2} {
@@ -475,7 +489,7 @@ func qwen2vlTower(s *jlm.Source) (*jlm.Tower, error) {
 			hidden = int32(t.Dims[1])
 		}
 	}
-	act, err := v.Activation(false)
+	act, err := v.Activation(windowed)
 	if err != nil {
 		return nil, err
 	}
@@ -489,6 +503,24 @@ func qwen2vlTower(s *jlm.Source) (*jlm.Tower, error) {
 	gelu.GELUErf(jlm.Operand(0))
 	hd := int32(v.NEmbd / v.NHead)
 	merge := int32(v.Scale)
+	norm, mergerNorm := jlm.NormLayer, jlm.TowerOp{Code: jlm.TOpLayerNorm, In: []uint16{0},
+		Bind: bias(jlm.RoleVPostNorm, jlm.RoleVPostNormBias), Eps: v.Eps}
+	var window int32
+	var full []int32
+	if windowed {
+		if v.WinPattern == 0 || v.WinSize == 0 || v.WinSize%(v.PatchSize*v.Scale) != 0 {
+			return nil, fmt.Errorf("convert: qwen2.5vl: windows of %d pixels every %d blocks over patches of %d merged by %d",
+				v.WinSize, v.WinPattern, v.PatchSize, v.Scale)
+		}
+		norm = jlm.NormRMS
+		mergerNorm = jlm.TowerOp{Code: jlm.TOpRMSNorm, In: []uint16{0}, Bind: []jlm.Role{jlm.RoleVPostNorm}, Eps: v.Eps}
+		window = int32(v.WinSize / v.PatchSize)
+		for i := range int32(v.NLayer) {
+			if (i+1)%int32(v.WinPattern) == 0 {
+				full = append(full, i)
+			}
+		}
+	}
 	t := &jlm.Tower{
 		Version: jlm.TowerVersion,
 		Pre: []jlm.PreStep{
@@ -502,12 +534,12 @@ func qwen2vlTower(s *jlm.Source) (*jlm.Tower, error) {
 			{Code: jlm.TOpLinear, In: []uint16{1}, Bind: bias(jlm.RoleVPatchEmbd, jlm.RoleVPatchBias)},
 		}},
 		Block: jlm.TowerBlock{NHead: v.NHead, NKVHead: v.NHead, HeadDim: v.NEmbd / v.NHead,
-			Norm: jlm.NormLayer, Eps: v.Eps, Act: act,
+			Norm: norm, Eps: v.Eps, Act: act, Window: window, Full: full,
 			Rope: jlm.TowerRope{Base: 10000, Dim: hd / 2, Neox: true,
 				Runs: []jlm.TowerRopeRun{{Pairs: hd / 4, Axis: 0}, {Pairs: hd / 4, Axis: 1}}}},
 		// The last block's rows are value 0.
 		Head: jlm.Program{NIn: 1, Out: 5, Ops: []jlm.TowerOp{
-			{Code: jlm.TOpLayerNorm, In: []uint16{0}, Bind: bias(jlm.RoleVPostNorm, jlm.RoleVPostNormBias), Eps: v.Eps},
+			mergerNorm,
 			{Code: jlm.TOpFold, In: []uint16{1}, Span: merge * merge},
 			{Code: jlm.TOpLinear, In: []uint16{2}, Bind: bias(jlm.RoleVProj, jlm.RoleVProjBias)},
 			{Code: jlm.TOpStated, In: []uint16{3}, Expr: &jlm.Expr{Terms: gelu.T}, Width: hidden},
@@ -520,6 +552,10 @@ func qwen2vlTower(s *jlm.Source) (*jlm.Tower, error) {
 	}
 	if t.Span.After, err = markerIDs(s, "<|vision_end|>"); err != nil {
 		return nil, err
+	}
+	if windowed {
+		t.Head.Ops = append(t.Head.Ops, jlm.TowerOp{Code: jlm.TOpUntile, In: []uint16{5}})
+		t.Head.Out = 6
 	}
 	if err := t.Valid(); err != nil {
 		return nil, fmt.Errorf("convert: qwen2vl: %w", err)

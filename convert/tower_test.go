@@ -356,3 +356,58 @@ func TestQwen2VLStatesItsTower(t *testing.T) {
 		t.Errorf("the picture's span is %+v, want <|vision_start|> (%d) and <|vision_end|> (%d), a grid over 2", s, vs, ve)
 	}
 }
+
+// TestQwen25VLStatesItsTower converts synth-qwen25vl's two files and holds
+// the stated tower to Qwen2.5-VL's on top of Qwen2-VL's: RMSNorm blocks with
+// a gated SiLU MLP, windows of window_size pixels (112, 8 patches) that
+// every block but each n_wa_pattern'th attends inside, the merger's
+// RMSNorm, and the head's rows put back in raster order.
+func TestQwen25VLStatesItsTower(t *testing.T) {
+	src := testmodels.Path("synth-qwen25vl.gguf")
+	mm := testmodels.Path("mmproj-synth-qwen25vl.gguf")
+	for _, p := range []string{src, mm} {
+		if _, err := os.Stat(p); err != nil {
+			t.Skipf("MODEL MISSING: %v (run scripts/qwenvlgold.py synth-qwen25vl) -- this gate proved nothing", err)
+		}
+	}
+	dst := filepath.Join(t.TempDir(), "qwen25vl.jlm")
+	if _, err := FromGGUFs(src, mm, dst, jlm.Fingerprint{Writer: "gate"}); err != nil {
+		t.Fatal(err)
+	}
+	f, err := jlm.Open(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	v := f.Vision()
+	if v == nil || v.Tower == nil {
+		t.Fatal("the container states no tower")
+	}
+	tw := v.Tower
+	if err := tw.Valid(); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range tw.Roles() {
+		if !f.Has(r, jlm.DenseBlock, -1) {
+			t.Errorf("the tower binds %v, which the container does not hold", r)
+		}
+	}
+	if b := tw.Block; b.Norm != jlm.NormRMS || b.Window != 8 || !reflect.DeepEqual(b.Full, []int32{1, 3}) {
+		t.Errorf("the blocks are norm %v, windows of %d, whole-picture blocks %v; want RMSNorm, 8 and [1 3]", b.Norm, b.Window, b.Full)
+	}
+	var silu jlm.ExprBuilder
+	silu.Fn(jlm.FnMul, silu.SiLU(jlm.Operand(0)), jlm.Operand(1))
+	if !reflect.DeepEqual(tw.Block.Act.Terms, silu.T) {
+		t.Errorf("the blocks' activation is %+v, want the gated SiLU", tw.Block.Act)
+	}
+	var head []jlm.OpCode
+	for _, op := range tw.Head.Ops {
+		head = append(head, op.Code)
+	}
+	if want := []jlm.OpCode{jlm.TOpRMSNorm, jlm.TOpFold, jlm.TOpLinear, jlm.TOpStated, jlm.TOpLinear, jlm.TOpUntile}; !reflect.DeepEqual(head, want) {
+		t.Errorf("the head is %v, want %v", head, want)
+	}
+	if op := tw.Entry.Ops[0]; op.Code != jlm.TOpPatchify || op.Width != 2 {
+		t.Errorf("the patches are %+v, want 2x2 windows' order", op)
+	}
+}

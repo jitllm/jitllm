@@ -4,7 +4,7 @@ import "fmt"
 
 // TowerVersion is the stated tower's revision. A record of a later one is
 // refused, not read as this one.
-const TowerVersion = 4
+const TowerVersion = 5
 
 // Tower is a vision tower as the converter states it: what the engine builds
 // the tower from, with no family's name in it. The converter knows a family
@@ -135,8 +135,12 @@ const (
 	TOpPool OpCode = 11
 	// TOpFold is each Span consecutive rows of In[0] one row (graph.OpFold):
 	// a merge window's patches, which the patch order made consecutive.
-	TOpFold  OpCode = 12
-	topCodes OpCode = 13
+	TOpFold OpCode = 12
+	// TOpUntile is In[0]'s rows, the picture's merge windows in the order
+	// of the blocks' windows (TowerBlock.Window), in the merge windows'
+	// raster order (graph.OpUntile).
+	TOpUntile OpCode = 13
+	topCodes  OpCode = 14
 )
 
 // TowerOp is one operation of a program: its inputs are values (a program's
@@ -183,6 +187,13 @@ type TowerBlock struct {
 	// Rope turns q and k by the rows' places on the picture's grid; none
 	// where it has no runs.
 	Rope TowerRope
+	// Window, where set, is the side in patches of the square windows the
+	// patch rows are ordered in -- the grid's windows in raster order, those
+	// at its right and lower edges cut to it, each window's merge windows in
+	// raster order -- and a block attends within its row's; Full the
+	// blocks, counted from the tower's first, that attend the whole picture.
+	Window int32
+	Full   []int32
 }
 
 // TowerRope is a tower block's rotary over the picture's grid: each head's
@@ -297,6 +308,14 @@ func (t *Tower) Valid() error {
 			return fmt.Errorf("jlm: the tower's rotary turns %d pairs of a %d-wide head at base %v over %d", pairs, b.HeadDim, r.Base, r.Dim)
 		}
 	}
+	if b.Window < 0 || len(b.Full) > 0 && b.Window == 0 {
+		return fmt.Errorf("jlm: the tower's blocks attend windows of %d with %d whole-picture blocks", b.Window, len(b.Full))
+	}
+	for _, i := range b.Full {
+		if i < 0 {
+			return fmt.Errorf("jlm: the tower's whole-picture block %d", i)
+		}
+	}
 	if t.Span.GridDiv < 0 {
 		return fmt.Errorf("jlm: the tower's rows are a grid divided by %d", t.Span.GridDiv)
 	}
@@ -362,7 +381,7 @@ func (p *Program) valid(name string) error {
 // weights it binds.
 func (op *TowerOp) arity() (in int, bind [2]int) {
 	switch op.Code {
-	case TOpPatchify, TOpDropRows, TOpRegroup, TOpPool, TOpFold:
+	case TOpPatchify, TOpDropRows, TOpRegroup, TOpPool, TOpFold, TOpUntile:
 		return 1, [2]int{0, 0}
 	case TOpLinear, TOpLayerNorm:
 		return 1, [2]int{1, 2}
@@ -427,6 +446,11 @@ func encodeTower(w *wbuf, t *Tower) {
 		w.i32(run.Axis)
 		w.i32(run.Freq)
 	}
+	w.i32(b.Window)
+	w.u32(uint32(len(b.Full)))
+	for _, i := range b.Full {
+		w.i32(i)
+	}
 	encodeProgram(w, &t.Head)
 	for _, ids := range [][]int32{t.Span.Before, t.Span.After} {
 		w.u32(uint32(len(ids)))
@@ -490,6 +514,10 @@ func decodeTower(r *rbuf) *Tower {
 	b.Rope.Base, b.Rope.Dim, b.Rope.Neox = r.f32(), r.i32(), r.bool()
 	for range r.count(12) {
 		b.Rope.Runs = append(b.Rope.Runs, TowerRopeRun{Pairs: r.i32(), Axis: r.i32(), Freq: r.i32()})
+	}
+	b.Window = r.i32()
+	for range r.count(4) {
+		b.Full = append(b.Full, r.i32())
 	}
 	decodeProgram(r, &t.Head)
 	for _, ids := range []*[]int32{&t.Span.Before, &t.Span.After} {
