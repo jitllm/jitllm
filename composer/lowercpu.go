@@ -358,7 +358,9 @@ func (e *x86Lowerer) node(i int) {
 		}
 		if k.Bufs[nd.Buf].Half {
 			if e.lanes(home) == 0 {
-				a.VPINSRWLoad(e.reg(i), e.reg(i), m, 0)
+				r := e.reg(i)
+				a.VPXOR(r, r, r)
+				a.VPINSRWLoad(r, r, m, 0)
 				a.VCVTPH2PSReg(e.reg(i), e.reg(i))
 				return
 			}

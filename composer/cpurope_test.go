@@ -23,7 +23,8 @@ func gateComposedCPURope(t *testing.T, cpuOn cpuArm) {
 		heads, hd, nrot, off int
 		inv                  bool
 	}{{4, 128, 64, 0, false}, {2, 256, 64, 0, false}, {3, 64, 32, 0, false}, {2, 128, 128, 0, false}, {2, 80, 40, 0, false},
-		{2, 128, 64, 64, true}, {3, 64, 16, 8, false}, {2, 64, 64, 0, true}} {
+		{2, 128, 64, 64, true}, {3, 64, 16, 8, false}, {2, 64, 64, 0, true},
+		{4, 2, 2, 0, false}, {4, 4, 4, 0, false}, {3, 6, 6, 0, false}, {2, 4, 4, 0, true}} {
 		for _, layout := range []graph.RopeLayout{graph.RopeNorm, graph.RopeNeox} {
 			for _, R := range []int{1, 5} {
 				name := fmt.Sprintf("%dx%d/rot%d@%d/inv%v/layout%d/rows%d", sh.heads, sh.hd, sh.nrot, sh.off, sh.inv, layout, R)

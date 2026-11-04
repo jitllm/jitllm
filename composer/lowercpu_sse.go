@@ -219,7 +219,9 @@ func (e *x86Lowerer) nodeSSE(i int) {
 		}
 		if k.Bufs[nd.Buf].Half {
 			if e.lanes(home) == 0 {
-				a.PINSRWLoad(e.reg(i), e.reg(i), m, 0)
+				r := e.reg(i)
+				a.PXOR(r, r, r)
+				a.PINSRWLoad(r, r, m, 0)
 			} else {
 				a.PMOVZXWDLoad(e.reg(i), m)
 			}
