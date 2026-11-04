@@ -137,9 +137,12 @@ func align(n, to int) int {
 // A page holds every sequence slot, laid out as the flat cache was with maxSeq
 // replaced by P, so kvLayout addresses within a page unchanged.
 type kvPages struct {
-	p    int // positions per page; 0 means this layer keeps none
-	pp   int // float32 elements per page (nseq * p * kvDim, scaled by elem width)
-	k, v [][]float32
+	p  int // positions per page; 0 means this layer keeps none
+	pp int // float32 elements per page (nseq * p * kvDim, scaled by elem width)
+	// mem is the pages' memory: each page's key and value, in its session's
+	// view of the CPU device (cpudev.Pages). The fields below decide what a
+	// page holds and when it goes; mem is where it is.
+	mem *cpudev.Pages
 	// latent makes the value the same memory as the key, which is what MLA
 	// is: a cached row is the latent followed by the shared rotary key, and
 	// the value is the latent prefix. It is an alias, not a copy: a value's
@@ -160,15 +163,13 @@ type kvPages struct {
 	// sealed long ago, so allocating a zeroed one would wipe their history.
 	// A page dropped on purpose (a restore, a truncation) is not out.
 	out []bool
-	// pool is where a growing page comes from: the pages a closed instance on
-	// the same model gave back, or a fresh one. nil is always fresh.
-	pool *kvPagePool
 	// win is a sliding or chunked layer's window, 0 for a layer that reads its
 	// whole history; chunked says the window is aligned chunks (llama4).
 	//
 	// A windowed layer's pages behind every row's window are never read
-	// again, so release hands them to spare and the next page grows out of
-	// it: the layer holds the window and a page of slack, not the context.
+	// again, so release hands them to its spares (mem) and the next page
+	// grows out of them: the layer holds the window and a page of slack, not
+	// the context.
 	win     int
 	chunked bool
 	// gone is where release's walk starts: every page below it was released
@@ -180,8 +181,6 @@ type kvPages struct {
 	// starting below it is never stored: under content addressing it would
 	// be another session's history.
 	genuine int
-	// spare is released pages, reused before the pool or a fresh one.
-	spare [][]float32
 	// shared[n] says page n aliases sh's single copy (kvshare.go): it is
 	// never written in place, never pooled, and its reference is dropped
 	// wherever the page is let go. cowFault is the sharing gate's violation:
@@ -189,11 +188,6 @@ type kvPages struct {
 	shared   []bool
 	sh       *SharedStore
 	cowFault bool
-	// t, where set, is the layer's table in its session's view of the CPU
-	// device (cpudev.Table): every page it grows is a slot of the model's
-	// arena, where a composed CPU block reads it, and every page it holds is
-	// named there (setPage).
-	t *cpudev.Table
 }
 
 // keyStart is the first key position pos attends on this layer: the window's
@@ -230,29 +224,24 @@ func (s *kvPages) release(low int, fault bool) {
 	if fault {
 		first = s.keyStart(low)/s.p + 1
 	}
-	for n := s.gone; n < first && n < len(s.k); n++ {
+	for n := s.gone; n < first && n < s.mem.Len(); n++ {
 		s.recycle(n)
 	}
 	s.gone = max(s.gone, first)
 }
 
-// recycle moves page n's buffers to spare and leaves it non-resident. Spare
-// holds at most what a window and its slack turn over (spareMax); a page past
-// that goes to the collector.
+// recycle lets page n go and leaves it non-resident, its buffers to the
+// spares while they hold under what a window and its slack turn over
+// (spareMax); a page past that goes to the collector.
 func (s *kvPages) recycle(n int) {
 	if s.isShared(n) {
 		s.drop(n) // others read it: the reference goes, the memory stays
 		return
 	}
-	for _, b := range [2][]float32{s.k[n], s.v[n]} {
-		if b != nil && len(b) == s.pp && len(s.spare) < s.spareMax() && !s.inArena(n, b) {
-			s.spare = append(s.spare, b)
-		}
-		if s.latent {
-			break // the value is the key's memory
-		}
+	s.mem.Release(n, s.spareMax())
+	if n < len(s.out) {
+		s.out[n] = false
 	}
-	s.drop(n)
 }
 
 // spareMax is the most released buffers a windowed layer keeps: the K and V
@@ -264,18 +253,6 @@ func (s *kvPages) spareMax() int {
 	return 2 * 2 * ((s.win+nn.KVWindowSlack)/s.p + 2)
 }
 
-// page0 is a zeroed page: a released one first, then the pool's.
-func (s *kvPages) page0() []float32 {
-	if n := len(s.spare); n > 0 {
-		b := s.spare[n-1]
-		s.spare[n-1] = nil
-		s.spare = s.spare[:n-1]
-		clear(b)
-		return b
-	}
-	return s.pool.get(s.pp)
-}
-
 // reserve sizes the page index for maxSeq positions, so a decode crossing a
 // page boundary does not grow it.
 func (s *kvPages) reserve(maxSeq int) {
@@ -283,28 +260,17 @@ func (s *kvPages) reserve(maxSeq int) {
 		return
 	}
 	n := (maxSeq + s.p - 1) / s.p
-	s.k = slices.Grow(s.k, n)
-	s.v = slices.Grow(s.v, n)
+	s.mem.Reserve(n, s.spareMax())
 	s.out = slices.Grow(s.out, n)
-	s.spare = slices.Grow(s.spare, s.spareMax())
 }
 
-// setPage makes page n's key and value k and v, and tells the CPU view's
-// table.
-func (s *kvPages) setPage(n int, k, v []float32) {
-	s.k[n], s.v[n] = k, v
-	if s.t != nil {
-		s.t.Set(n, k)
-	}
-}
+// setPage makes page n's key and value k and v (cpudev.Pages.Set).
+func (s *kvPages) setPage(n int, k, v []float32) { s.mem.Set(n, k, v) }
 
 // drop lets page n go for good: nothing is to be faulted back into it.
 func (s *kvPages) drop(n int) {
 	s.unshare(n)
-	if s.arenaPage(n) {
-		s.releaseSlot(n)
-	}
-	s.setPage(n, nil, nil)
+	s.mem.Release(n, 0)
 	if n < len(s.out) {
 		s.out[n] = false
 	}
@@ -312,9 +278,7 @@ func (s *kvPages) drop(n int) {
 
 // resident says page n is here now. It is read-only because attention heads
 // fan out across the pool: a worker may ask "is it here", never "put it here".
-func (s *kvPages) resident(n int) bool {
-	return n < len(s.k) && s.k[n] != nil && n < len(s.v) && s.v[n] != nil
-}
+func (s *kvPages) resident(n int) bool { return s.mem.Resident(n) }
 
 // page returns the page index and the position within it.
 func (s *kvPages) page(pos int) (int, int) { return pos / s.p, pos % s.p }
@@ -331,34 +295,14 @@ func (s *kvPages) grow(n int) {
 	}
 	// It refills a hole, not only the tail: eviction and a restored prefix
 	// leave nil slots inside the slice.
-	if s.k[n] == nil && s.v[n] == nil {
-		if k, v := s.takeSlot(); k != nil {
-			s.setPage(n, k, v)
-			return
-		}
-	}
-	k, v := s.k[n], s.v[n]
-	if k == nil {
-		k = s.page0()
-	}
-	switch {
-	case s.latent:
-		// The value IS the key's prefix; see the field.
-		v = k
-	case v == nil:
-		v = s.page0()
-	}
-	s.setPage(n, k, v)
+	s.mem.Grow(n)
 }
 
 // extend makes index n addressable without making it resident. The fault path
 // wants this and not grow: it fills the page from a store, and a buffer
 // allocated here could be read as history if a failure path kept it.
 func (s *kvPages) extend(n int) {
-	for len(s.k) <= n {
-		s.k = append(s.k, nil)
-		s.v = append(s.v, nil)
-	}
+	s.mem.Extend(n)
 	for len(s.out) <= n {
 		s.out = append(s.out, false)
 	}
@@ -380,14 +324,14 @@ func (s *kvPages) bytes() uint64 {
 	// A shared page is the store's, held once however many sessions read it
 	// (KVSharedBytes counts it).
 	var n uint64
-	for i := range s.k {
+	for i := range s.mem.Len() {
 		if s.isShared(i) {
 			continue
 		}
-		if s.k[i] != nil {
+		if s.mem.K(i) != nil {
 			n++
 		}
-		if i < len(s.v) && s.v[i] != nil {
+		if s.mem.V(i) != nil {
 			n++
 		}
 	}
@@ -515,13 +459,14 @@ type kvCache struct {
 }
 
 func newKVCache(c *Config, id string, nseq int, l kvLayout, store KVStore, pin int) *kvCache {
-	return newKVCacheRange(c, id, nseq, l, store, pin, 0, c.NLayer)
+	return newKVCacheRange(c, id, nseq, l, store, pin, 0, c.NLayer, cpudev.NewView(c.NLayer), nil)
 }
 
 // newKVCacheRange is newKVCache for an instance that runs blocks [lo, hi) of its
 // model (Instance.lo): the pages are indexed by block, and the blocks below lo
-// have none.
-func newKVCacheRange(c *Config, id string, nseq int, l kvLayout, store KVStore, pin, lo, hi int) *kvCache {
+// have none. Each block's pages are its memory in view (cpudev.Pages), grown
+// from pool where its arena has no slot.
+func newKVCacheRange(c *Config, id string, nseq int, l kvLayout, store KVStore, pin, lo, hi int, view *cpudev.View, pool *cpudev.PagePool) *kvCache {
 	if store == nil {
 		store = NoStore{}
 	}
@@ -546,6 +491,9 @@ func newKVCacheRange(c *Config, id string, nseq int, l kvLayout, store KVStore, 
 				kc.layers[li].win, kc.layers[li].chunked = c.SWAWindow, c.SWAChunked
 			}
 		}
+	}
+	for li := range kc.layers {
+		kc.layers[li].mem = view.Pages(li, kc.layers[li].pp, kc.layers[li].latent, pool)
 	}
 	return kc
 }
@@ -622,8 +570,8 @@ func (s *kvPages) gather(l kvLayout, slot, n int, k, v []float32) bool {
 		i := pl.At(slot, off, 0)
 		o := l.slots(pos * kvDim)
 		w := l.slots(kvDim)
-		copy(k[o:o+w], s.k[pg][i:i+w])
-		copy(v[o:o+w], s.v[pg][i:i+w])
+		copy(k[o:o+w], s.mem.K(pg)[i:i+w])
+		copy(v[o:o+w], s.mem.V(pg)[i:i+w])
 	}
 	return true
 }
@@ -655,8 +603,8 @@ func (s *kvPages) scatter(l kvLayout, slot, n int, k, v []float32) bool {
 		i := pl.At(slot, off, 0)
 		o := l.slots(pos * kvDim)
 		w := l.slots(kvDim)
-		copy(s.k[pg][i:i+w], k[o:o+w])
-		copy(s.v[pg][i:i+w], v[o:o+w])
+		copy(s.mem.K(pg)[i:i+w], k[o:o+w])
+		copy(s.mem.V(pg)[i:i+w], v[o:o+w])
 	}
 	if n > s.written {
 		s.written = n
@@ -1088,7 +1036,7 @@ func (kc *kvCache) restore(limit int) (int, int, error) {
 					continue
 				}
 				if kc.recurrent && (kc.recAt == nil || !kc.recAt(n*pg.p+f)) {
-					if n < len(pg.k) {
+					if n < pg.mem.Len() {
 						pg.keepOnReset(n)
 					}
 					continue
@@ -1117,7 +1065,7 @@ func (kc *kvCache) restore(limit int) (int, int, error) {
 				if !kc.covers(li) {
 					continue
 				}
-				if n := best / pg.p; n < len(pg.k) {
+				if n := best / pg.p; n < pg.mem.Len() {
 					pg.keepOnReset(n)
 				}
 			}
@@ -1159,10 +1107,10 @@ func (kc *kvCache) restore(limit int) (int, int, error) {
 			continue // a linear layer has no pages to truncate, a windowed one none yet
 		}
 		keep := best / pg.p
-		for n := keep + 1; n < len(pg.k); n++ {
+		for n := keep + 1; n < pg.mem.Len(); n++ {
 			pg.drop(n)
 		}
-		if tail == 0 && keep < len(pg.k) {
+		if tail == 0 && keep < pg.mem.Len() {
 			pg.drop(keep)
 		}
 		pg.lastSealed = keep
@@ -1177,10 +1125,11 @@ func (kc *kvCache) restore(limit int) (int, int, error) {
 // faults a restore makes next (keepOnReset): a restore asks the store, and a
 // reused instance's leftovers would otherwise count as hits.
 func (s *kvPages) dropResident() {
-	for n := range s.k {
+	for n := range s.mem.Len() {
 		s.keepOnReset(n)
 	}
-	s.k, s.v, s.out, s.lastSealed = s.k[:0], s.v[:0], s.out[:0], 0
+	s.mem.Reset()
+	s.out, s.lastSealed = s.out[:0], 0
 	s.gone, s.genuine = 0, 0
 }
 
@@ -1271,7 +1220,7 @@ func (kc *kvCache) restoreWin(n, cover int) (bool, error) {
 func (kc *kvCache) dropWin() {
 	for li := kc.lo; li < len(kc.layers); li++ {
 		if s := &kc.layers[li]; s.p > 0 && !kc.covers(li) {
-			for j := range s.k {
+			for j := range s.mem.Len() {
 				s.drop(j)
 			}
 		}
@@ -1287,7 +1236,7 @@ func (kc *kvCache) dropTail(n int) {
 			continue
 		}
 		idx := n / pg.p
-		if idx < len(pg.k) {
+		if idx < pg.mem.Len() {
 			pg.drop(idx)
 		}
 		if w := idx * pg.p; pg.written > w {
@@ -1708,7 +1657,7 @@ func (s *Instance) restoreKV(max int) (int, error) {
 		if n%pg.p != 0 {
 			keep++
 		}
-		for j := keep; j < len(pg.k); j++ {
+		for j := keep; j < pg.mem.Len(); j++ {
 			pg.keepOnReset(j)
 		}
 		// Only whole pages have been offered to the store; the tail is written
@@ -1786,7 +1735,7 @@ func (kc *kvCache) seal(pos int) {
 			if s.win > 0 && (n < s.gone && !s.resident(n) || s.resident(n) && n*s.p < s.genuine) {
 				continue
 			}
-			if n >= len(s.k) || s.k[n] == nil {
+			if n >= s.mem.Len() || s.mem.K(n) == nil {
 				break
 			}
 			// It must be full: a page is named by the whole boundary's tokens.
@@ -1804,11 +1753,11 @@ func (kc *kvCache) seal(pos int) {
 				kc.stored += 2
 				continue
 			}
-			if err := kc.store.Set(key, li*2, n, kc.page(s.k[n])); err != nil {
+			if err := kc.store.Set(key, li*2, n, kc.page(s.mem.K(n))); err != nil {
 				kc.failed++
 				break
 			}
-			if err := kc.store.Set(key, li*2+1, n, kc.page(s.v[n])); err != nil {
+			if err := kc.store.Set(key, li*2+1, n, kc.page(s.mem.V(n))); err != nil {
 				kc.failed++
 				break
 			}
@@ -1832,14 +1781,11 @@ func (kc *kvCache) trim(pos int) {
 			continue
 		}
 		for n := 0; n < s.lastSealed && kc.Bytes() > kc.budget; n++ {
-			if n >= len(s.k) || s.k[n] == nil {
+			if n >= s.mem.Len() || s.mem.K(n) == nil {
 				continue
 			}
 			s.unshare(n)
-			if s.arenaPage(n) {
-				s.releaseSlot(n)
-			}
-			s.setPage(n, nil, nil)
+			s.mem.Release(n, 0)
 			s.out[n] = true
 			kc.evicted += 2
 		}
@@ -1851,7 +1797,7 @@ func (kc *kvCache) trim(pos int) {
 // write path allocates, because growth is known rather than found.
 func (kc *kvCache) fault(li, n int) error {
 	s := &kc.layers[li]
-	if n < len(s.k) && s.k[n] != nil {
+	if n < s.mem.Len() && s.mem.K(n) != nil {
 		return nil
 	}
 	s.extend(n)
@@ -1873,13 +1819,13 @@ func (kc *kvCache) fault(li, n int) error {
 	// addresses it (cpudev.Arena); a failed read hands the slot back zeroed.
 	var k, v []float32
 	if !s.latent {
-		k, v = s.takeSlot()
+		k, v = s.mem.Take()
 	}
 	if k == nil {
-		k, v = make([]float32, s.pp), make([]float32, s.pp)
+		k, v = s.mem.Alloc(), s.mem.Alloc()
 	}
 	miss := func(err error) error {
-		s.giveSlot(k)
+		s.mem.Give(k)
 		return kc.miss(key, err)
 	}
 	kw := newSliceWriter(kvBytesOf(k))
@@ -1945,13 +1891,13 @@ func (kc *kvCache) faultFill(li, n, fill int) error {
 	// Into a slot of the layer's arena where it has one, zero past the fill.
 	var k, v []float32
 	if !s.latent {
-		k, v = s.takeSlot()
+		k, v = s.mem.Take()
 	}
 	if k == nil {
-		k, v = make([]float32, s.pp), make([]float32, s.pp)
+		k, v = s.mem.Alloc(), s.mem.Alloc()
 	}
 	miss := func(err error) error {
-		s.giveSlot(k)
+		s.mem.Give(k)
 		return kc.miss(key, err)
 	}
 	kw := newSliceWriter(kvBytesOf(k[:want]))
@@ -2063,7 +2009,7 @@ func (kc *kvCache) publishTail(pos int, cardOnly bool) int {
 			continue
 		}
 		have := s.written - cur*s.p
-		if have <= 0 || have >= s.p || cur >= len(s.k) || s.k[cur] == nil || s.v[cur] == nil ||
+		if have <= 0 || have >= s.p || cur >= s.mem.Len() || s.mem.K(cur) == nil || s.mem.V(cur) == nil ||
 			cur*s.p < s.genuine || s.isShared(cur) {
 			continue
 		}
@@ -2118,9 +2064,9 @@ func (kc *kvCache) aliasPage(li, n int, key string) bool {
 	if !s.isShared(n) {
 		return false
 	}
-	kc.share.alias(kvStoreKey{key, li * 2, n}, s.k[n])
+	kc.share.alias(kvStoreKey{key, li * 2, n}, s.mem.K(n))
 	if !s.latent {
-		kc.share.alias(kvStoreKey{key, li*2 + 1, n}, s.v[n])
+		kc.share.alias(kvStoreKey{key, li*2 + 1, n}, s.mem.V(n))
 	}
 	return true
 }
@@ -2190,7 +2136,7 @@ func (kc *kvCache) sealTail(pos int) int {
 		if have <= 0 || have >= s.p {
 			continue // nothing partial here, or seal() already owns it
 		}
-		if cur >= len(s.k) || s.k[cur] == nil || s.v[cur] == nil {
+		if cur >= s.mem.Len() || s.mem.K(cur) == nil || s.mem.V(cur) == nil {
 			continue
 		}
 		if cur*s.p < s.genuine {
@@ -2205,7 +2151,7 @@ func (kc *kvCache) sealTail(pos int) int {
 				continue
 			}
 			n := fill * row
-			if n > len(s.k[cur]) || n > len(s.v[cur]) {
+			if n > len(s.mem.K(cur)) || n > len(s.mem.V(cur)) {
 				continue
 			}
 			keys, lens = append(keys, key), append(lens, n)
@@ -2218,7 +2164,7 @@ func (kc *kvCache) sealTail(pos int) int {
 		// each as a page of its own.
 		if fs, ok := kc.store.(FillStore); ok {
 			top := lens[len(lens)-1]
-			bk, bv := kvBytesOf(s.k[cur][:top]), kvBytesOf(s.v[cur][:top])
+			bk, bv := kvBytesOf(s.mem.K(cur)[:top]), kvBytesOf(s.mem.V(cur)[:top])
 			for i := range lens {
 				lens[i] *= 4 // float32 elements to bytes
 			}
@@ -2235,11 +2181,11 @@ func (kc *kvCache) sealTail(pos int) int {
 		}
 		for i, key := range keys {
 			n := lens[i]
-			if err := kc.store.Set(key, li*2, cur, kc.page(s.k[cur][:n])); err != nil {
+			if err := kc.store.Set(key, li*2, cur, kc.page(s.mem.K(cur)[:n])); err != nil {
 				kc.failed++
 				continue
 			}
-			if err := kc.store.Set(key, li*2+1, cur, kc.page(s.v[cur][:n])); err != nil {
+			if err := kc.store.Set(key, li*2+1, cur, kc.page(s.mem.V(cur)[:n])); err != nil {
 				kc.failed++
 				continue
 			}
@@ -2294,7 +2240,7 @@ func (w *sliceWriter) Write(p []byte) (int, error) {
 // store, no budget -- it is one nil compare.
 func (s *Instance) kvFault(li, page int) bool {
 	pg := &s.kv.layers[li]
-	if page < len(pg.k) && pg.k[page] != nil {
+	if page < pg.mem.Len() && pg.mem.K(page) != nil {
 		return true
 	}
 	if err := s.kv.fault(li, page); err != nil {
@@ -2540,10 +2486,11 @@ func (kc *kvCache) note(pos int, ids ...int32) {
 func (kc *kvCache) reset() {
 	for li := kc.lo; li < len(kc.layers); li++ {
 		s := &kc.layers[li]
-		for n := range s.k {
+		for n := range s.mem.Len() {
 			s.keepOnReset(n)
 		}
-		s.k, s.v, s.out, s.lastSealed, s.written = s.k[:0], s.v[:0], s.out[:0], 0, 0
+		s.mem.Reset()
+		s.out, s.lastSealed, s.written = s.out[:0], 0, 0
 	}
 	kc.seq, kc.named = kc.seq[:0], kc.named[:0]
 	if kc.bh == nil {
@@ -2567,15 +2514,14 @@ func (s *kvPages) keepOnReset(n int) {
 		s.drop(n)
 		return
 	}
-	for _, b := range [2][]float32{s.k[n], s.v[n]} {
-		if b != nil && len(b) == s.pp && (s.win <= 0 || len(s.spare) < s.spareMax()) && !s.inArena(n, b) {
-			s.spare = append(s.spare, b)
-		}
-		if s.latent {
-			break // the value is the key's memory
-		}
+	keep := -1
+	if s.win > 0 {
+		keep = s.spareMax()
 	}
-	s.drop(n)
+	s.mem.Release(n, keep)
+	if n < len(s.out) {
+		s.out[n] = false
+	}
 }
 
 // kvEnsureWindow faults every page of layer li covering [w0, w0+want) into

@@ -28,8 +28,8 @@ func kvDuplicates(t *testing.T, st *Instance) int {
 			continue
 		}
 		cur := st.pos / pg.p
-		for n := 0; n <= cur && n < max(len(pg.k), cur+1); n++ {
-			held := n < len(pg.k) && pg.k[n] != nil
+		for n := 0; n <= cur && n < max(pg.mem.Len(), cur+1); n++ {
+			held := pg.mem.K(n) != nil
 			if st.devAt(li) {
 				if held {
 					dup++ // the host holds a page of the card's history

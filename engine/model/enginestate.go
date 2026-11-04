@@ -51,8 +51,9 @@ type engineState struct {
 	spare   *promptBuf
 	// step is the host step scratch across sessions (stepBuf).
 	step *stepBuf
-	// kvPool is the host KV pages closed instances gave back (kvPagePool).
-	kvPool kvPagePool
+	// kvPool is the history buffers closed sessions gave back
+	// (cpudev.PagePool).
+	kvPool cpudev.PagePool
 	// kvArenas is every instance's composed CPU history, a layer and page size
 	// each (kvArenaFor).
 	kvArenas cpudev.Arenas

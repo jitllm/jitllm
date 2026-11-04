@@ -16,7 +16,12 @@ func TestTableFollowsItsPages(t *testing.T) {
 	}
 	defer a.unmap()
 	v := NewView(3)
-	tb := v.Table(1, a, slots)
+	pg := v.Pages(1, pp, false, nil)
+	if v.At(1) != nil {
+		t.Fatal("a block with no arena has a table")
+	}
+	pg.UseArena(a, slots)
+	tb := pg.Table()
 	if v.At(1) != tb || v.At(0) != nil || v.At(7) != nil {
 		t.Fatal("the view does not hold the table it made")
 	}

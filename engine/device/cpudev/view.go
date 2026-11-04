@@ -1,15 +1,15 @@
 package cpudev
 
 // View is a session's hold on the CPU device's history, as a card's session
-// view (gpu.GPU.Attach) is on the card's: for each block keeping one, the
-// arena its pages take slots of and the table its forms read them through
+// view (gpu.GPU.Attach) is on the card's: for each block keeping one, its
+// pages' memory (Pages) and the table its forms read them through
 // (SrcPages), and a linear block's recurrent state and convolution rows
 // (SrcRecState, SrcRecConv). The session's history decides what each holds;
 // the view is where it is. The zero View holds nothing, and a nil one reads
 // as one.
 type View struct {
-	tabs []*Table
-	rec  []recState
+	pages []*Pages
+	rec   []recState
 }
 
 // recState is a linear block's state and convolution rows, every sequence's
@@ -17,7 +17,7 @@ type View struct {
 type recState struct{ conv, state []float32 }
 
 // NewView is a view of n blocks' history, holding none yet.
-func NewView(n int) *View { return &View{tabs: make([]*Table, n)} }
+func NewView(n int) *View { return &View{pages: make([]*Pages, n)} }
 
 // Blocks is how many blocks the view spans: one past the last that holds
 // anything.
@@ -25,28 +25,15 @@ func (v *View) Blocks() int {
 	if v == nil {
 		return 0
 	}
-	return max(len(v.tabs), len(v.rec))
-}
-
-// Table is a fresh table for block li's pages on a, of slots pages: the
-// view's for the block from now on. A table the block had before stays with
-// whatever history still holds it until that lets its slots go.
-func (v *View) Table(li int, a *Arena, slots int) *Table {
-	for len(v.tabs) <= li {
-		v.tabs = append(v.tabs, nil)
-	}
-	slots = max(slots, 1)
-	t := &Table{a: a, slots: slots, of: make([]uint32, slots)}
-	v.tabs[li] = t
-	return t
+	return max(len(v.pages), len(v.rec))
 }
 
 // At is block li's table, nil where it has none.
 func (v *View) At(li int) *Table {
-	if v == nil || li >= len(v.tabs) {
+	if v == nil || li >= len(v.pages) || v.pages[li] == nil {
 		return nil
 	}
-	return v.tabs[li]
+	return v.pages[li].t
 }
 
 // MakeRec gives block li a recurrent state of state floats and convolution

@@ -1059,7 +1059,7 @@ func (s *Instance) cpuReadable(li, start, pos int) composer.Decline {
 	n, _ := pg.page(pos)
 	s.kvEnsureWindow(li, start, pos-start)
 	for p := start / pg.p; p <= n; p++ {
-		if !pg.arenaPage(p) {
+		if !pg.mem.ArenaPage(p) {
 			return composer.DeclinePageOut
 		}
 	}
@@ -1119,8 +1119,8 @@ func (s *Instance) cpuCallOf(b *cpuBound, f *cpudev.Form) *cpudev.Call {
 	*a = [cpudev.NumSrc]unsafe.Pointer{}
 	a[cpudev.SrcSide] = addr(b.side)
 	a[cpudev.SrcRopeRows], a[cpudev.SrcRopeMarks] = addr(b.ropeRows), addr(b.ropeMarks)
-	if b.kv != nil && b.kv.t != nil {
-		a[cpudev.SrcKeys], a[cpudev.SrcValues] = addr(b.kv.t.Arena().Keys()), addr(b.kv.t.Arena().Values())
+	if t := b.kv.arena(); t != nil {
+		a[cpudev.SrcKeys], a[cpudev.SrcValues] = addr(t.Arena().Keys()), addr(t.Arena().Values())
 	}
 	a[cpudev.SrcPages], a[cpudev.SrcRows], a[cpudev.SrcCall] = addr(b.pages), addr(b.rows), addr(s.cpu.call[:])
 	if r := b.recOf; r != nil && b.recLi >= 0 && b.recLi < r.view.Blocks() {
@@ -1296,7 +1296,7 @@ func (s *Instance) cpuWhy(li int) composer.Decline {
 		// The CPU's profile keeps a history binary16 itself (composer.Halves),
 		// or at f32 without that pass.
 		return composer.DeclineKVFormat
-	case pg.p > 0 && pg.t == nil:
+	case pg.p > 0 && pg.arena() == nil:
 		return composer.DeclinePageOut
 	}
 	return composer.DeclineServes
@@ -1689,12 +1689,21 @@ func (l *layer) namedVector(r jlm.Role) ([]float32, bool) {
 	return nil, false
 }
 
+// arena is the table of the layer's arena, nil for a layer with none (or no
+// layer).
+func (s *kvPages) arena() *cpudev.Table {
+	if s == nil || s.mem == nil {
+		return nil
+	}
+	return s.mem.Table()
+}
+
 // arenaSlots is how many pages the layer's arena holds, 0 for none.
 func (s *kvPages) arenaSlots() int {
-	if s.t == nil {
-		return 0
+	if t := s.arena(); t != nil {
+		return t.Slots()
 	}
-	return s.t.Slots()
+	return 0
 }
 
 // cpuPages is the table block li's forms read its history pg through: its
@@ -1703,7 +1712,7 @@ func (s *Instance) cpuPages(li int, pg *kvPages) ([]uint32, error) {
 	nseq := max(s.nseq, 1)
 	t := s.Session.view.At(li)
 	switch {
-	case t != pg.t:
+	case t != pg.arena():
 		return nil, fmt.Errorf("model: block %d's pages are not its session's view's", li)
 	case t == nil:
 		if len(s.cpu.nopages) < nseq {
