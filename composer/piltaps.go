@@ -65,24 +65,25 @@ func PILTaps(filter uint8, in, out, from, n, k int, dst []uint32) {
 	fscale := max(scale, 1)
 	support := pilSupport(filter) * fscale
 	ss := 1 / fscale
-	w := make([]float64, k)
 	for i := range n {
 		o := from + i
 		center := (float64(o) + 0.5) * scale
 		xmin := max(int(center-support+0.5), 0)
 		xmax := min(int(center+support+0.5), in) - xmin
 		xmax = min(xmax, k)
+		// The window's weights twice, summed and then each divided by the
+		// sum, the values Pillow's one pass stores: nothing is held between.
+		w := func(x int) float64 { return pilFilter(filter, (float64(x+xmin)-center+0.5)*ss) }
 		ww := 0.0
 		for x := range xmax {
-			w[x] = pilFilter(filter, (float64(x+xmin)-center+0.5)*ss)
-			ww += w[x]
+			ww += w(x)
 		}
 		e := dst[i*(k+1) : (i+1)*(k+1)]
 		e[0] = uint32(xmin)
 		for x := range k {
 			v := 0.0
 			if x < xmax && ww != 0 {
-				v = w[x] / ww
+				v = w(x) / ww
 			}
 			if v < 0 {
 				e[1+x] = uint32(int32(-0.5 + v*(1<<pilPrecision)))

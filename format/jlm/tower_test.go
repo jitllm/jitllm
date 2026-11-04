@@ -18,6 +18,7 @@ func sampleTower(t *testing.T) *Tower {
 		Pre: []PreStep{
 			{Kind: PreResize, Ints: []int32{512, 512, int32(FilterTwoTap), int32(PrecFloat)}},
 			{Kind: PreNormalize, Floats: []float32{0.5, 0.5, 0.5, 0.5, 0.5, 0.5}},
+			{Kind: PreTile, Ints: []int32{1, 12, 1}},
 		},
 		Entry: Program{NIn: 1, Out: 4, Ops: []TowerOp{
 			{Code: TOpPatchify, In: []uint16{0}, Span: 16},
@@ -82,6 +83,8 @@ func TestTowerRefusesWhatItCannotRead(t *testing.T) {
 			t.Pre[0] = PreStep{Kind: PreResizeShort, Ints: []int32{336, int32(FilterPILBicubic), int32(PrecFloat)}}
 		}},
 		{"a crop of no height", "crops", func(t *Tower) { t.Pre = append(t.Pre, PreStep{Kind: PreCenterCrop, Ints: []int32{336, 0}}) }},
+		{"fewer tiles at most than at least", "tiles", func(t *Tower) { t.Pre = append(t.Pre, PreStep{Kind: PreTile, Ints: []int32{4, 2, 1}}) }},
+		{"a thumbnail of 2", "tiles", func(t *Tower) { t.Pre = append(t.Pre, PreStep{Kind: PreTile, Ints: []int32{1, 12, 2}}) }},
 		{"an unknown op", "does not know", func(t *Tower) { t.Head.Ops[1].Code = topCodes }},
 		{"a value read before it is made", "before it is made", func(t *Tower) { t.Entry.Ops[3].In[1] = 4 }},
 		{"a linear with no matrix", "binds 0 weights", func(t *Tower) { t.Head.Ops[2].Bind = nil }},

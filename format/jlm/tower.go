@@ -43,6 +43,16 @@ const (
 	// step before left it, at ((w - Ints[0]) / 2, (h - Ints[1]) / 2)
 	// truncated.
 	PreCenterCrop PreKind = 4
+	// PreTile cuts the picture into tiles, each a picture the tower sees:
+	// between Ints[0] and Ints[1] of them, the columns x rows grid whose
+	// aspect is closest to the picture's (a tie to the larger grid while the
+	// picture's area is more than half of it, the grids every columns x rows
+	// pair, columns outer, stably sorted by tile count), the picture resized
+	// by the resize step to the grid's size in squares and cut row-major;
+	// then, where Ints[2] is 1 and the grid is more than one tile, the whole
+	// picture resized to one square. A picture's rows are every tile's in
+	// that order.
+	PreTile PreKind = 5
 )
 
 // Filter is a resampling filter.
@@ -197,6 +207,10 @@ func (t *Tower) Valid() error {
 		case PreCenterCrop:
 			if len(s.Ints) != 2 || s.Ints[0] <= 0 || s.Ints[1] <= 0 {
 				return fmt.Errorf("jlm: the tower's step %d crops to %v", i, s.Ints)
+			}
+		case PreTile:
+			if len(s.Ints) != 3 || s.Ints[0] < 1 || s.Ints[1] < s.Ints[0] || s.Ints[2]&^1 != 0 {
+				return fmt.Errorf("jlm: the tower's step %d tiles by %v", i, s.Ints)
 			}
 		case PreNormalize:
 			if len(s.Floats) != 6 {

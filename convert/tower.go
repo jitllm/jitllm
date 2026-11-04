@@ -32,6 +32,8 @@ func towerStater(p jlm.Projector) func(*jlm.Source) (*jlm.Tower, error) {
 		return gemma3Tower
 	case jlm.ProjMLP:
 		return llavaTower
+	case jlm.ProjInternVL:
+		return internvlTower
 	}
 	return nil
 }
@@ -343,6 +345,91 @@ func llavaTower(s *jlm.Source) (*jlm.Tower, error) {
 	}
 	if err := t.Valid(); err != nil {
 		return nil, fmt.Errorf("convert: llava: %w", err)
+	}
+	return t, nil
+}
+
+// internvlTower is InternVL's tower as its reference runs it (the model
+// card's load_image: dynamic_preprocess, then build_transform): the picture
+// cut into between 1 and 12 tiles of the tower's square -- resized by
+// Pillow's BICUBIC filter to the grid closest to its aspect and cut
+// row-major, a thumbnail of the whole after them -- each normalised;
+// InternViT's patch embedding after a class row and the position table over
+// both; its blocks, their layer scales folded into the matrices they follow
+// at conversion (foldLayerScales), the MLP's activation transformers' exact
+// GELU; then the class row dropped, the pixel shuffle (each 2x2 of the grid
+// one row, the raster order its view and permutes leave), mlp1's LayerNorm
+// (nn.LayerNorm's epsilon) and its two matrices with GELU between. A
+// picture is "<img>", its tiles' rows, "</img>" in place of the "<image>"
+// the chat writes before the question, whose newline is the text after.
+func internvlTower(s *jlm.Source) (*jlm.Tower, error) {
+	v := s.Vision
+	has := towerRoles(s)
+	for _, r := range []jlm.Role{jlm.RoleVPatchEmbd, jlm.RoleVClassEmbd, jlm.RoleVPosEmbd, jlm.RoleVProjNorm, jlm.RoleVProj, jlm.RoleVProj2} {
+		if !has[r] {
+			return nil, fmt.Errorf("convert: internvl: the tower has no %v", r)
+		}
+	}
+	if v.NHead == 0 || v.NEmbd%v.NHead != 0 || v.Scale == 0 || v.PatchSize == 0 || v.ImageSize%v.PatchSize != 0 {
+		return nil, fmt.Errorf("convert: internvl: %d heads over %d, a shuffle of %d, patches of %d in %d",
+			v.NHead, v.NEmbd, v.Scale, v.PatchSize, v.ImageSize)
+	}
+	if side := v.ImageSize / v.PatchSize; side%v.Scale != 0 {
+		return nil, fmt.Errorf("convert: internvl: a grid of %d patches does not shuffle by %d", side, v.Scale)
+	}
+	var hidden int32
+	for i := range s.Tensors {
+		if t := &s.Tensors[i]; t.Block == jlm.DenseBlock && t.Role == jlm.RoleVProj {
+			hidden = int32(t.Dims[1])
+		}
+	}
+	var gelu jlm.ExprBuilder
+	gelu.GELUErf(jlm.Operand(0))
+	act := jlm.Expr{Terms: gelu.T}
+	bias := func(w, b jlm.Role) []jlm.Role {
+		if has[b] {
+			return []jlm.Role{w, b}
+		}
+		return []jlm.Role{w}
+	}
+	side := int32(v.ImageSize)
+	t := &jlm.Tower{
+		Version: jlm.TowerVersion,
+		Pre: []jlm.PreStep{
+			{Kind: jlm.PreTile, Ints: []int32{1, 12, 1}},
+			{Kind: jlm.PreResize, Ints: []int32{side, side, int32(jlm.FilterPILBicubic), int32(jlm.PrecPIL)}},
+			{Kind: jlm.PreNormalize, Floats: []float32{v.Mean[0], v.Mean[1], v.Mean[2], v.Std[0], v.Std[1], v.Std[2]}},
+		},
+		// The pixels are value 0.
+		Entry: jlm.Program{NIn: 1, Out: 5, Ops: []jlm.TowerOp{
+			{Code: jlm.TOpPatchify, In: []uint16{0}, Span: int32(v.PatchSize), Offset: 1},
+			{Code: jlm.TOpLinear, In: []uint16{1}, Bind: bias(jlm.RoleVPatchEmbd, jlm.RoleVPatchBias)},
+			{Code: jlm.TOpLeadRow, In: []uint16{2}, Bind: []jlm.Role{jlm.RoleVClassEmbd}, Offset: 1},
+			{Code: jlm.TOpPosTable, Bind: []jlm.Role{jlm.RoleVPosEmbd}},
+			{Code: jlm.TOpAdd, In: []uint16{3, 4}},
+		}},
+		Block: jlm.TowerBlock{NHead: v.NHead, NKVHead: v.NHead, HeadDim: v.NEmbd / v.NHead,
+			Norm: jlm.NormLayer, Eps: v.Eps, Act: act},
+		// The last block's rows are value 0.
+		Head: jlm.Program{NIn: 1, Out: 6, Ops: []jlm.TowerOp{
+			{Code: jlm.TOpDropRows, In: []uint16{0}, Offset: 1},
+			{Code: jlm.TOpRegroup, In: []uint16{1}, Span: int32(v.Scale)},
+			{Code: jlm.TOpLayerNorm, In: []uint16{2}, Bind: bias(jlm.RoleVProjNorm, jlm.RoleVProjNormBias), Eps: 1e-5},
+			{Code: jlm.TOpLinear, In: []uint16{3}, Bind: bias(jlm.RoleVProj, jlm.RoleVProjBias)},
+			{Code: jlm.TOpStated, In: []uint16{4}, Expr: &jlm.Expr{Terms: gelu.T}, Width: hidden},
+			{Code: jlm.TOpLinear, In: []uint16{5}, Bind: bias(jlm.RoleVProj2, jlm.RoleVProj2Bias)},
+		}},
+		Span: jlm.TowerSpan{Mark: "<image>\n", AfterText: "\n"},
+	}
+	var err error
+	if t.Span.Before, err = markerIDs(s, "<img>"); err != nil {
+		return nil, err
+	}
+	if t.Span.After, err = markerIDs(s, "</img>"); err != nil {
+		return nil, err
+	}
+	if err := t.Valid(); err != nil {
+		return nil, fmt.Errorf("convert: internvl: %w", err)
 	}
 	return t, nil
 }

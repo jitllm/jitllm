@@ -451,9 +451,10 @@ func (m *Model) ChatSpansToolChoice(msgs []ChatMessage, pics []Span, tools []byt
 	for i, p := range pics {
 		switch {
 		case p.Embd == nil && p.Picture != nil:
-			if p.PicRows != m.tower.out {
+			b := p.Picture.Bounds()
+			if want := m.tower.picRows(b.Dx(), b.Dy()); p.PicRows != want {
 				return nil, fmt.Errorf("model: picture %d takes %d rows and the tower writes %d",
-					i, p.PicRows, m.tower.out)
+					i, p.PicRows, want)
 			}
 		case len(p.Embd) == 0 || len(p.Embd)%m.Cfg.NEmbd != 0:
 			return nil, fmt.Errorf("model: picture %d is %d values, not rows of the model's %d",
