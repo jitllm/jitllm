@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"image/jpeg"
 	"io"
 	"net/http"
 	"strings"
@@ -154,28 +155,43 @@ func TestImageRequestsMatchTheEngine(t *testing.T) {
 		t.Fatalf("%s carries no vision tower", visionModel)
 	}
 	quad := readTestdata(t, "quad-and-disc.png")
+	pink := readTestdata(t, "blue-purple-pink.lossy.webp")
 	red := testPNG(t, 384, 384, color.NRGBA{R: 200, G: 30, B: 30, A: 255})
+	img, _, err := image.Decode(bytes.NewReader(quad))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var jb bytes.Buffer
+	if err := jpeg.Encode(&jb, img, &jpeg.Options{Quality: 90}); err != nil {
+		t.Fatal(err)
+	}
+	jpg := jb.Bytes()
 
 	wantQuad, spQuad := engineRun(t, e, lm, quad)
 	wantRed, spRed := engineRun(t, e, lm, red)
+	wantPink, _ := engineRun(t, e, lm, pink)
+	wantJPEG, _ := engineRun(t, e, lm, jpg)
 	t.Logf("quad-and-disc: %q", wantQuad)
 	t.Logf("red: %q", wantRed)
+	t.Logf("blue-purple-pink (WebP): %q", wantPink)
+	t.Logf("quad-and-disc as a JPEG: %q", wantJPEG)
 	if pictureKey(t, spQuad) == pictureKey(t, spRed) {
 		t.Fatal("two different pictures were named alike: the prefix cache would take one for the other")
 	}
-	if wantQuad == wantRed {
+	if wantQuad == wantRed || wantQuad == wantPink {
 		t.Fatalf("two different pictures gave the same answer %q: the picture does not reach the model", wantQuad)
 	}
 	for _, x := range []struct {
-		name string
-		pic  []byte
-		want string
-	}{{"quad", quad, wantQuad}, {"red", red, wantRed}} {
+		name, mt string
+		pic      []byte
+		want     string
+	}{{"quad", "image/png", quad, wantQuad}, {"red", "image/png", red, wantRed},
+		{"webp", "image/webp", pink, wantPink}, {"jpeg", "image/jpeg", jpg, wantJPEG}} {
 		for _, stream := range []bool{false, true} {
-			if got := replyText(t, c.url, "/v1/chat/completions", oaImageBody(x.pic, "image/png", stream)); got != x.want {
+			if got := replyText(t, c.url, "/v1/chat/completions", oaImageBody(x.pic, x.mt, stream)); got != x.want {
 				t.Errorf("OpenAI %s stream=%v: %q, want the engine's %q", x.name, stream, got, x.want)
 			}
-			if got := replyText(t, c.url, "/v1/messages", anImageBody(x.pic, "image/png", stream)); got != x.want {
+			if got := replyText(t, c.url, "/v1/messages", anImageBody(x.pic, x.mt, stream)); got != x.want {
 				t.Errorf("Anthropic %s stream=%v: %q, want the engine's %q", x.name, stream, got, x.want)
 			}
 		}

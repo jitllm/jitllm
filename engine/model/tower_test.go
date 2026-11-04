@@ -1,8 +1,13 @@
 package model
 
 import (
+	"bytes"
 	"fmt"
 	"image"
+	"image/color"
+	"image/color/palette"
+	"image/draw"
+	"image/jpeg"
 	"image/png"
 	"math"
 	"os"
@@ -381,4 +386,102 @@ func TestChatSpansFollowTheTemplate(t *testing.T) {
 	if _, err := m.ChatPrompt(one, true); err == nil {
 		t.Error("ChatPrompt rendered an image part as text")
 	}
+}
+
+// nrgbaOf is img's pixels as an NRGBA picture: YCbCr through
+// image/color.YCbCrToRGB of its planes, a palette's colours straight.
+func nrgbaOf(img image.Image) *image.NRGBA {
+	b := img.Bounds()
+	out := image.NewNRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
+	yc, _ := img.(*image.YCbCr)
+	if a, ok := img.(*image.NYCbCrA); ok {
+		yc = &a.YCbCr
+	}
+	for y := range b.Dy() {
+		for x := range b.Dx() {
+			X, Y := b.Min.X+x, b.Min.Y+y
+			var c color.NRGBA
+			if yc != nil {
+				i := yc.COffset(X, Y)
+				c.R, c.G, c.B = color.YCbCrToRGB(yc.Y[yc.YOffset(X, Y)], yc.Cb[i], yc.Cr[i])
+			} else {
+				c = color.NRGBAModel.Convert(img.At(X, Y)).(color.NRGBA)
+			}
+			c.A = 255
+			out.SetNRGBA(x, y, c)
+		}
+	}
+	return out
+}
+
+// TestPictureFormatsEncodeAsTheirPixels encodes a picture in each sample
+// format a decoder leaves -- a JPEG's YCbCr at 4:2:0, a sub-picture of one at
+// an odd corner, YCbCr at 4:4:4, YCbCr with alpha, a paletted one -- and its
+// pixels as an NRGBA picture (nrgbaOf), and holds the two to the same rows
+// bit for bit: the planes, their offsets and the chroma's phase are laid out
+// as the picture op reads them. A warm encode of a copied layout allocates
+// nothing.
+func TestPictureFormatsEncodeAsTheirPixels(t *testing.T) {
+	m, img := openSmolVLM(t)
+	defer m.Close()
+	s := m.NewInstance(256)
+	defer s.Close()
+	jpg := func(sub bool) image.Image {
+		var b bytes.Buffer
+		if err := jpeg.Encode(&b, img, &jpeg.Options{Quality: 90}); err != nil {
+			t.Fatal(err)
+		}
+		d, err := jpeg.Decode(&b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if sub {
+			r := d.Bounds()
+			d = d.(*image.YCbCr).SubImage(image.Rect(r.Min.X+3, r.Min.Y+5, r.Max.X-2, r.Max.Y-1))
+		}
+		return d
+	}
+	full := image.NewYCbCr(img.Bounds(), image.YCbCrSubsampleRatio444)
+	draw.Draw(&ycbcrDst{full}, img.Bounds(), img, image.Point{}, draw.Src)
+	withA := &image.NYCbCrA{YCbCr: *full, A: make([]byte, len(full.Y)), AStride: full.YStride}
+	pal := image.NewPaletted(img.Bounds(), palette.WebSafe)
+	draw.Draw(pal, img.Bounds(), img, image.Point{}, draw.Src)
+	for _, c := range []struct {
+		name string
+		img  image.Image
+	}{{"jpeg 4:2:0", jpg(false)}, {"jpeg 4:2:0 at an odd corner", jpg(true)},
+		{"ycbcr 4:4:4", full}, {"ycbcr with alpha", withA}, {"paletted", pal}} {
+		got, err := s.EncodePicture(c.img)
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		got = slices.Clone(got)
+		want, err := s.EncodePicture(nrgbaOf(c.img))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := range want {
+			if math.Float32bits(got[i]) != math.Float32bits(want[i]) {
+				t.Fatalf("%s: value %d is %v, and %v from its pixels as NRGBA", c.name, i, got[i], want[i])
+			}
+		}
+		if n := testing.AllocsPerRun(2, func() {
+			if _, err := s.EncodePicture(c.img); err != nil {
+				t.Fatal(err)
+			}
+		}); n != 0 {
+			t.Fatalf("%s: a warm encode allocates %v times", c.name, n)
+		}
+		t.Logf("%s (%T): %d values as its pixels' NRGBA, no allocation warm", c.name, c.img, len(want))
+	}
+}
+
+// ycbcrDst draws into a 4:4:4 YCbCr picture through image/color's own
+// RGB-to-YCbCr conversion.
+type ycbcrDst struct{ *image.YCbCr }
+
+func (d *ycbcrDst) Set(x, y int, c color.Color) {
+	r, g, b, _ := c.RGBA()
+	yy, cb, cr := color.RGBToYCbCr(uint8(r>>8), uint8(g>>8), uint8(b>>8))
+	d.Y[d.YOffset(x, y)], d.Cb[d.COffset(x, y)], d.Cr[d.COffset(x, y)] = yy, cb, cr
 }

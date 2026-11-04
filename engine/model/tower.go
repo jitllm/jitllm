@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"image"
+	"image/color"
 	"math"
 	"sync"
 	"unsafe"
@@ -149,7 +150,7 @@ func (m *Model) buildTowerGraphs() (*towerGraphs, error) {
 	dense := m.towerFacts(jlm.DenseBlock)
 	side := int(v.ImageSize / v.PatchSize)
 	tg := &towerGraphs{entry: map[uint8]*graph.Graph{}, rows: side * side, side: side}
-	for _, px := range []uint8{graph.PixRGBA8, graph.PixGray8} {
+	for px := graph.PixRGBA8; px < graph.PixFormats; px++ {
 		g, err := towerEntry(t, px, tg.rows, dense)
 		if err != nil {
 			return nil, fmt.Errorf("model: the tower's entry: %w", err)
@@ -406,8 +407,10 @@ type towerRun struct {
 	seq, pos  []int
 	posTab    []uint32
 	req       []uint32
-	// pad holds a picture's samples where its bytes are not whole words.
+	// pad holds a picture's planes where they are not read in place, ent a
+	// palette's entries.
 	pad []uint32
+	ent [4 * 256]byte
 	// pics is a prompt's pictures' rows, one buffer a picture, and spans the
 	// prompt's spans with them in place (encodePictures).
 	pics  [][]float32
@@ -430,7 +433,7 @@ func (m *Model) newTowerRun() (*towerRun, error) {
 	}
 	tr := &towerRun{s: ts, entry: map[uint8]*cpudev.Form{}, rows: make([]float32, n*c.NEmbd),
 		out: make([]float32, tg.out*int(v.ProjDim)), seq: make([]int, n), pos: make([]int, n),
-		posTab: make([]uint32, 1+n), req: make([]uint32, composer.RequestPicStride+1)}
+		posTab: make([]uint32, 1+n), req: make([]uint32, composer.RequestPicSub+1)}
 	tr.posTab[0] = uint32(n)
 	for i := range n {
 		tr.pos[i], tr.posTab[1+i] = i, uint32(i)
@@ -469,37 +472,159 @@ func (tr *towerRun) close() {
 	}
 }
 
-// pictureWords is a decoded picture's samples as the step's picture table
-// reads them, the format they are in, and the picture's size and row stride
-// in bytes; a picture whose bytes are not whole words is copied into pad,
-// which grows to hold it.
-func pictureWords(img image.Image, pad *[]uint32) (words []uint32, px uint8, w, h, stride int, err error) {
-	var pix []byte
+// pictureLayout is how a decoded picture's samples sit in the step's picture
+// table: their format, the picture's size and its rows' stride in bytes, and
+// for a second and third plane (YCbCr's chroma, a palette) their stride, byte
+// offsets and the chroma subsampling (composer.RequestPicSub).
+type pictureLayout struct {
+	px                   uint8
+	w, h, stride         int
+	cstride, p2, p3, sub int
+}
+
+// request writes the layout's words into the step's request.
+func (l pictureLayout) request(req []uint32) {
+	req[composer.RequestPicW], req[composer.RequestPicH], req[composer.RequestPicStride] = uint32(l.w), uint32(l.h), uint32(l.stride)
+	req[composer.RequestPicCStride], req[composer.RequestPicP2], req[composer.RequestPicP3] = uint32(l.cstride), uint32(l.p2), uint32(l.p3)
+	req[composer.RequestPicSub] = uint32(l.sub)
+}
+
+// picturePlanes is a decoded picture's layout and the planes the step's
+// picture table holds for it, each from a word boundary after the last: its
+// samples' bytes as the decoder left them, and a palette's entries -- four
+// bytes each, the colour's straight red, green and blue and its alpha --
+// written into ent.
+func picturePlanes(img image.Image, ent *[4 * 256]byte) (pictureLayout, [3][]byte, error) {
+	b := img.Bounds()
+	l := pictureLayout{w: b.Dx(), h: b.Dy()}
+	var planes [3][]byte
+	if l.w <= 0 || l.h <= 0 {
+		return l, planes, fmt.Errorf("model: an empty picture")
+	}
+	rows := func(pix []byte, stride, bpp int) []byte { return pix[:(l.h-1)*stride+l.w*bpp] }
 	switch p := img.(type) {
 	case *image.NRGBA:
-		pix, px, stride = p.Pix, graph.PixRGBA8, p.Stride
+		l.px, l.stride, planes[0] = graph.PixRGBA8, p.Stride, rows(p.Pix, p.Stride, 4)
 	case *image.RGBA:
-		pix, px, stride = p.Pix, graph.PixRGBA8, p.Stride
+		l.px, l.stride, planes[0] = graph.PixRGBA8, p.Stride, rows(p.Pix, p.Stride, 4)
 	case *image.Gray:
-		pix, px, stride = p.Pix, graph.PixGray8, p.Stride
+		l.px, l.stride, planes[0] = graph.PixGray8, p.Stride, rows(p.Pix, p.Stride, 1)
+	case *image.YCbCr:
+		return ycbcrPlanes(l, p)
+	case *image.NYCbCrA:
+		return ycbcrPlanes(l, &p.YCbCr)
+	case *image.Paletted:
+		clear(ent[:])
+		for i, c := range p.Palette[:min(len(p.Palette), 256)] {
+			e := ent[4*i : 4*i+4]
+			if n, ok := c.(color.NRGBA); ok {
+				e[0], e[1], e[2], e[3] = n.R, n.G, n.B, n.A
+				continue
+			}
+			// color.NRGBAModel's arithmetic, without its boxed result.
+			r, g, bb, a := c.RGBA()
+			if a != 0 && a != 0xffff {
+				r, g, bb = r*0xffff/a, g*0xffff/a, bb*0xffff/a
+			}
+			if a == 0 {
+				r, g, bb = 0, 0, 0
+			}
+			e[0], e[1], e[2], e[3] = uint8(r>>8), uint8(g>>8), uint8(bb>>8), uint8(a>>8)
+		}
+		l.px, l.stride = graph.PixPaletted8, p.Stride
+		planes[0], planes[1] = rows(p.Pix, p.Stride, 1), ent[:]
 	default:
-		return nil, 0, 0, 0, 0, fmt.Errorf("model: a %T picture has no picture op reading its samples", img)
+		return l, planes, fmt.Errorf("model: a %T picture has no picture op reading its samples", img)
 	}
-	b := img.Bounds()
-	w, h = b.Dx(), b.Dy()
-	if w <= 0 || h <= 0 || len(pix) == 0 {
-		return nil, 0, 0, 0, 0, fmt.Errorf("model: an empty picture")
+	l.place(planes)
+	return l, planes, nil
+}
+
+// ycbcrPlanes is picturePlanes for a YCbCr picture: its luma and chroma
+// planes, and the chroma's shifts and phase on each axis read off the
+// picture's own COffset, so a sub-picture's chroma is the decoder's.
+func ycbcrPlanes(l pictureLayout, p *image.YCbCr) (pictureLayout, [3][]byte, error) {
+	r := p.Rect
+	ylen := p.YOffset(r.Max.X-1, r.Max.Y-1) + 1
+	clen := p.COffset(r.Max.X-1, r.Max.Y-1) + 1
+	planes := [3][]byte{p.Y[:ylen], p.Cb[:clen], p.Cr[:clen]}
+	hs, mx, okx := chromaShift(r.Dx(), 1, func(k int) int { return p.COffset(r.Min.X+k, r.Min.Y) })
+	vs, my, oky := chromaShift(r.Dy(), p.CStride, func(k int) int { return p.COffset(r.Min.X, r.Min.Y+k) })
+	if !okx || !oky {
+		return l, planes, fmt.Errorf("model: a %v YCbCr picture's chroma follows no shift", p.SubsampleRatio)
 	}
-	if len(pix)%4 == 0 && uintptr(unsafe.Pointer(&pix[0]))%4 == 0 {
-		return unsafe.Slice((*uint32)(unsafe.Pointer(&pix[0])), len(pix)/4), px, w, h, stride, nil
+	l.px, l.stride, l.cstride, l.sub = graph.PixYCbCr8, p.YStride, p.CStride, hs|vs<<8|mx<<16|my<<24
+	l.place(planes)
+	return l, planes, nil
+}
+
+// chromaShift is the shift and phase taking an axis's first pixels, n of
+// them, to their chroma samples as off places them, step bytes apart.
+func chromaShift(n, step int, off func(k int) int) (shift, phase int, ok bool) {
+	for s := 0; s < 3; s++ {
+		for m := 0; m < 1<<s; m++ {
+			ok = true
+			for k := 0; k < min(n, 8) && ok; k++ {
+				ok = off(k) == ((k+m)>>s)*step
+			}
+			if ok {
+				return s, m, true
+			}
+		}
 	}
-	n := (len(pix) + 3) / 4
+	return 0, 0, false
+}
+
+// place sets the second and third planes' offsets, each from a word
+// boundary after the last plane.
+func (l *pictureLayout) place(planes [3][]byte) {
+	at := len(planes[0])
+	for i := 1; i < 3; i++ {
+		if planes[i] == nil {
+			continue
+		}
+		at = (at + 3) &^ 3
+		if i == 1 {
+			l.p2 = at
+		} else {
+			l.p3 = at
+		}
+		at += len(planes[i])
+	}
+}
+
+// pictureWords is a decoded picture's samples as the step's picture table
+// reads them, and their layout: one plane whose bytes are whole aligned
+// words is read in place, and any other picture's planes are copied into
+// pad, which grows to hold them.
+func pictureWords(img image.Image, pad *[]uint32, ent *[4 * 256]byte) ([]uint32, pictureLayout, error) {
+	l, planes, err := picturePlanes(img, ent)
+	if err != nil {
+		return nil, l, err
+	}
+	p := planes[0]
+	if planes[1] == nil && len(p)%4 == 0 && uintptr(unsafe.Pointer(&p[0]))%4 == 0 {
+		return unsafe.Slice((*uint32)(unsafe.Pointer(&p[0])), len(p)/4), l, nil
+	}
+	end := len(p)
+	if planes[2] != nil {
+		end = l.p3 + len(planes[2])
+	} else if planes[1] != nil {
+		end = l.p2 + len(planes[1])
+	}
+	n := (end + 3) / 4
+	if n > composer.PictureWords {
+		return nil, l, fmt.Errorf("model: a picture of %d bytes is past the %d the picture table holds", end, 4*composer.PictureWords)
+	}
 	if cap(*pad) < n {
 		*pad = make([]uint32, n)
 	}
-	words = (*pad)[:n]
-	copy(unsafe.Slice((*byte)(unsafe.Pointer(&words[0])), 4*n), pix)
-	return words, px, w, h, stride, nil
+	words := (*pad)[:n]
+	b := unsafe.Slice((*byte)(unsafe.Pointer(&words[0])), 4*n)
+	copy(b, p)
+	copy(b[l.p2:], planes[1])
+	copy(b[l.p3:], planes[2])
+	return words, l, nil
 }
 
 // EncodePicture is the rows a picture's span puts in the prompt: the picture
@@ -529,18 +654,18 @@ func (s *Instance) towerReady() error {
 // the caller holds.
 func (s *Instance) encodePicture(img image.Image, dst []float32) ([]float32, error) {
 	tr := s.tower
-	words, px, w, h, stride, err := pictureWords(img, &tr.pad)
+	words, pl, err := pictureWords(img, &tr.pad, &tr.ent)
 	if err != nil {
 		return nil, err
 	}
 	ts, m := tr.s, s.m
 	tg := m.tower
-	f := tr.entry[px]
+	f := tr.entry[pl.px]
 	if why := ts.cpuWeights(f, -1, &m.towerDense); why != composer.DeclineServes {
 		return nil, fmt.Errorf("model: the tower's entry: %v", why)
 	}
 	tr.req[composer.RequestGrid] = uint32(tg.side)
-	tr.req[composer.RequestPicW], tr.req[composer.RequestPicH], tr.req[composer.RequestPicStride] = uint32(w), uint32(h), uint32(stride)
+	pl.request(tr.req)
 	b := &ts.cpu.bound
 	*b = cpuBound{li: -1, l: &m.towerDense, own: ts.cpu.dev.Own(f), n: tg.rows, req: tr.req, pos: tr.posTab, pic: words}
 	b.io[0] = unsafe.Pointer(&tr.rows[0])
@@ -638,29 +763,23 @@ func (m *Model) PictureSpan(img image.Image) (Span, error) {
 	return Span{Picture: img, PicRows: m.tower.out, Key: k}, nil
 }
 
-// pictureKey names a picture by everything the tower reads of it: its sample
-// format, its size and its samples row by row (a row's padding past its
-// samples is not read, so it is not named).
+// pictureKey names a picture by everything the tower reads of it: its
+// layout and its planes as the step's picture table holds them.
 func pictureKey(img image.Image) (*RowsKey, error) {
-	var pad []uint32
-	words, px, w, h, stride, err := pictureWords(img, &pad)
+	var ent [4 * 256]byte
+	l, planes, err := picturePlanes(img, &ent)
 	if err != nil {
 		return nil, err
 	}
-	bpp := 4
-	if px == graph.PixGray8 {
-		bpp = 1
-	}
-	pix := unsafe.Slice((*byte)(unsafe.Pointer(&words[0])), 4*len(words))
 	hs := sha256.New()
-	var hdr [13]byte
-	hdr[0] = px
-	binary.LittleEndian.PutUint32(hdr[1:], uint32(w))
-	binary.LittleEndian.PutUint32(hdr[5:], uint32(h))
-	binary.LittleEndian.PutUint32(hdr[9:], uint32(bpp))
+	var hdr [29]byte
+	hdr[0] = l.px
+	for i, v := range [7]int{l.w, l.h, l.stride, l.cstride, l.p2, l.p3, l.sub} {
+		binary.LittleEndian.PutUint32(hdr[1+4*i:], uint32(v))
+	}
 	hs.Write(hdr[:])
-	for y := range h {
-		hs.Write(pix[y*stride : y*stride+w*bpp])
+	for _, p := range planes {
+		hs.Write(p)
 	}
 	var k RowsKey
 	hs.Sum(k[:0])

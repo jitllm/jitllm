@@ -919,7 +919,8 @@ JIT and state) was llama.cpp's technical debt, not a property of the model.
   `TestStatedTowerBlocksArePagedBlocks`, `TestStatedTowerEncodesAPicture`
   (a warm encode allocates nothing), `TestStatedTowerSeesThePicture` (a blank
   picture is the violation), `TestChatSpansFollowTheTemplate`,
-  `composer.TestComposedCPUPicture`, `composer.TestComposedCPURegroup`;
+  `TestPictureFormatsEncodeAsTheirPixels`, `composer.TestComposedCPUPicture`,
+  `composer.TestComposedCPUPictureFormats`, `composer.TestComposedCPURegroup`;
   through the front ends `server.TestImageRequestsMatchTheEngine`,
   `cmd/jitllm.TestImageRunsThroughTheTower` (a run restored past the picture
   answers alike) and `common/engine.TestAnAttachedPictureReachesTheModel` (a
