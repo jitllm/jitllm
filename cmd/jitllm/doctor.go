@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/engine/sched"
@@ -129,7 +130,7 @@ func realDoctorEnv() doctorEnv {
 		version:   buildVersion(),
 		cpuName:   cpuBrand(),
 		form:      model.CPUForm(),
-		jit:       nn.Available(),
+		jit:       composer.HostCPULowers(),
 		hostErr:   nn.HostRefusal(),
 		budget:    sched.MemBudget(),
 		archKnown: jlm.Arch.Valid,

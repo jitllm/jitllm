@@ -17,7 +17,7 @@ import (
 // VEX form, so prefill uses the fused per-token kernel; a shape the pre-VNNI
 // emitters cannot serve is an error, so running every model is the assertion.
 func TestEveryModelRunsPreVNNI(t *testing.T) {
-	if cpu.HostDotKind() == cpu.DotVEX {
+	if composedCPUDevice(1).ISA&uint64(cpu.ISAVNNI) == 0 {
 		t.Skip("this host is already pre-VNNI; the forced arm would not differ")
 	}
 	paths := modelFiles()
@@ -26,13 +26,13 @@ func TestEveryModelRunsPreVNNI(t *testing.T) {
 	}
 	sort.Strings(paths)
 
-	// Force before any model opens: nn.NewJIT builds its kernels at
-	// construction.
+	// Force before any model opens: the CPU device's forms are composed
+	// when an instance is made.
 	old := cpu.ForceNoVNNIForTest(true)
 	defer cpu.ForceNoVNNIForTest(old)
-	if cpu.HostDotKind() != cpu.DotVEX {
-		t.Fatal("ForceNoVNNIForTest did not make HostDotKind report DotVEX, so " +
-			"this gate would test the VNNI path twice and prove nothing")
+	if composedCPUDevice(1).ISA&uint64(cpu.ISAVNNI) != 0 {
+		t.Fatal("ForceNoVNNIForTest left the CPU device stating AVX-VNNI, so " +
+			"this gate would compose the VNNI forms twice and prove nothing")
 	}
 
 	ran := 0
@@ -82,14 +82,14 @@ func TestEveryModelRunsPreVNNI(t *testing.T) {
 // pool's WIDTH (14 workers against 6) rather than the kernel family; this arm
 // is what showed the family exact.
 func TestExactGatesRunPreVNNI(t *testing.T) {
-	if cpu.HostDotKind() == cpu.DotVEX {
+	if composedCPUDevice(1).ISA&uint64(cpu.ISAVNNI) == 0 {
 		t.Skip("this host is already pre-VNNI; the plain gates run this family")
 	}
 	old := cpu.ForceNoVNNIForTest(true)
 	defer cpu.ForceNoVNNIForTest(old)
-	if cpu.HostDotKind() != cpu.DotVEX {
-		t.Fatal("ForceNoVNNIForTest did not make HostDotKind report DotVEX, so " +
-			"this gate would test the VNNI path twice and prove nothing")
+	if composedCPUDevice(1).ISA&uint64(cpu.ISAVNNI) != 0 {
+		t.Fatal("ForceNoVNNIForTest left the CPU device stating AVX-VNNI, so " +
+			"this gate would compose the VNNI forms twice and prove nothing")
 	}
 	t.Run("ForwardBatchFaultsItsBlocksIn", TestForwardBatchFaultsItsBlocksIn)
 	t.Run("BatchMatchesForward", TestBatchMatchesForward)

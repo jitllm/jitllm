@@ -4,8 +4,6 @@ import (
 	"math"
 	"slices"
 
-	"github.com/jitllm/jitllm/engine/nn"
-
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/graph"
 )
@@ -29,7 +27,7 @@ func denseFixtures() []struct {
 		{"synth-apertus", func(m *Model) bool {
 			c, l, l1 := m.Cfg, &m.layers[0], &m.layers[1]
 			return c.Arch == "apertus" && !c.LayerNorm && c.RopeNeox && c.QKNorm && !c.QKNormWide &&
-				len(l.qNorm) == c.HeadDim && c.Act == nn.ActXIELU && l.gate.e == nil && l.vector(jlm.RoleFFNUpBias) == nil &&
+				len(l.qNorm) == c.HeadDim && c.Act == graph.ActXIELU && l.gate.e == nil && l.vector(jlm.RoleFFNUpBias) == nil &&
 				len(l.xielu) == 4 && len(l1.xielu) == 4 && l.xielu[0] != l1.xielu[0] && l.xielu[2] != l1.xielu[2] &&
 				l.xielu[3] < -0.01 && len(m.rope.Freqs) == c.NRot/2 && c.NKVHead < c.NHead && !c.TiedEmbd
 		}},
@@ -41,7 +39,7 @@ func denseFixtures() []struct {
 		}},
 		{"synth-arcee", func(m *Model) bool {
 			c, l := m.Cfg, &m.layers[0]
-			return c.Arch == "arcee" && !c.LayerNorm && c.Act == nn.ActReLU2 && l.gate.e == nil &&
+			return c.Arch == "arcee" && !c.LayerNorm && c.Act == graph.ActReLU2 && l.gate.e == nil &&
 				l.ffnNorm != nil && l.vector(jlm.RoleFFNUpBias) == nil && c.NKVHead < c.NHead && !c.TiedEmbd
 		}},
 		{"synth-seedoss", func(m *Model) bool {
@@ -145,8 +143,8 @@ func denseViolations() map[string][]c6Violation {
 			{"NoPE every second layer", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.SWAPeriod = 2 }) }},
 		},
 		"synth-arcee": {
-			{"SiLU for relu2", actSwap(nn.ActSiLU)},
-			{"GELU for relu2", actSwap(nn.ActGELU)},
+			{"SiLU for relu2", actSwap(graph.ActSiLU)},
+			{"GELU for relu2", actSwap(graph.ActGELU)},
 		},
 		"synth-seedoss": {
 			{"no q/k/v biases", noQKVBias},
@@ -275,7 +273,7 @@ func denseDevViolations() map[string][]c6Violation {
 			{"rotary on the NoPE layer", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.NoPEGlobal = false }) }},
 		},
 		"synth-arcee": {
-			{"SiLU for relu2", actSwap(nn.ActSiLU)},
+			{"SiLU for relu2", actSwap(graph.ActSiLU)},
 		},
 		"synth-seedoss": {
 			{"no q/k/v biases", noQKVBias},

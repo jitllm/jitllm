@@ -14,10 +14,10 @@ package model
 // poisons a handed-back set with NaN and demands the next session's logits are
 // bit-identical to a fresh model's.
 type hostBatch struct {
-	bh, bq, bxb, bk, bv, bgate, bup, bhf, battf []float32
-	qgate, ogate, bqf, bxbf                     []float32
-	bmRow                                       []int32
-	bmW, bmX, bmY, bmG, bmU                     []float32
+	bh, battf               []float32
+	qgate, ogate, bqf, bxbf []float32
+	bmRow                   []int32
+	bmW, bmX, bmY, bmG, bmU []float32
 }
 
 // scratch is n float32s with room for c, from b when it is big enough.
@@ -32,8 +32,7 @@ func scratch(b []float32, n, c int) []float32 {
 // takeHostBatch moves this instance's host scratch out, leaving it to regrow.
 func (s *Instance) takeHostBatch() hostBatch {
 	h := hostBatch{
-		bh: s.bh, bq: s.bq, bxb: s.bxb, bk: s.bk, bv: s.bv, bgate: s.bgate, bup: s.bup,
-		bhf: s.bhf, battf: s.battf, qgate: s.qgate, ogate: s.ogate, bqf: s.bqf, bxbf: s.bxbf,
+		bh: s.bh, battf: s.battf, qgate: s.qgate, ogate: s.ogate, bqf: s.bqf, bxbf: s.bxbf,
 		bmRow: s.bmRow, bmW: s.bmW, bmX: s.bmX, bmY: s.bmY, bmG: s.bmG, bmU: s.bmU,
 	}
 	// One the instance took from the model and never grew into is still worth
@@ -45,8 +44,7 @@ func (s *Instance) takeHostBatch() hostBatch {
 		h.bmRow, h.bmW, h.bmX, h.bmY, h.bmG, h.bmU = s.spareHost.bmRow, s.spareHost.bmW,
 			s.spareHost.bmX, s.spareHost.bmY, s.spareHost.bmG, s.spareHost.bmU
 	}
-	s.bh, s.bq, s.bxb, s.bk, s.bv, s.bgate, s.bup = nil, nil, nil, nil, nil, nil, nil
-	s.bhf, s.battf, s.qgate, s.ogate, s.bqf, s.bxbf = nil, nil, nil, nil, nil, nil
+	s.bh, s.battf, s.qgate, s.ogate, s.bqf, s.bxbf = nil, nil, nil, nil, nil, nil
 	s.bmRow, s.bmW, s.bmX, s.bmY, s.bmG, s.bmU = nil, nil, nil, nil, nil, nil
 	s.spareHost = hostBatch{}
 	return h
@@ -55,8 +53,7 @@ func (s *Instance) takeHostBatch() hostBatch {
 // bytes is the host scratch's size.
 func (h *hostBatch) bytes() uint64 {
 	n := 0
-	for _, b := range [][]float32{h.bh, h.bq, h.bxb, h.bk, h.bv, h.bgate, h.bup, h.bhf, h.battf,
-		h.qgate, h.ogate, h.bqf, h.bxbf, h.bmW, h.bmX, h.bmY, h.bmG, h.bmU} {
+	for _, b := range [][]float32{h.bh, h.battf, h.qgate, h.ogate, h.bqf, h.bxbf, h.bmW, h.bmX, h.bmY, h.bmG, h.bmU} {
 		n += cap(b)
 	}
 	return 4 * uint64(n+cap(h.bmRow))
@@ -120,8 +117,7 @@ func (s *Instance) returnStep() {
 
 // restoreHostBatch puts h back as s's host scratch (takeHostBatch's inverse).
 func (s *Instance) restoreHostBatch(h hostBatch) {
-	s.bh, s.bq, s.bxb, s.bk, s.bv, s.bgate, s.bup = h.bh, h.bq, h.bxb, h.bk, h.bv, h.bgate, h.bup
-	s.bhf, s.battf, s.qgate, s.ogate, s.bqf, s.bxbf = h.bhf, h.battf, h.qgate, h.ogate, h.bqf, h.bxbf
+	s.bh, s.battf, s.qgate, s.ogate, s.bqf, s.bxbf = h.bh, h.battf, h.qgate, h.ogate, h.bqf, h.bxbf
 	s.bmRow, s.bmW, s.bmX, s.bmY, s.bmG, s.bmU = h.bmRow, h.bmW, h.bmX, h.bmY, h.bmG, h.bmU
 }
 
@@ -129,8 +125,7 @@ func (s *Instance) restoreHostBatch(h hostBatch) {
 // decode: prompt and batch rows, scores rows and batch logits. An instance that
 // only decodes, or that leads host steps, holds none of it between calls.
 func (s *Instance) ScratchBytes() uint64 {
-	h := hostBatch{bh: s.bh, bq: s.bq, bxb: s.bxb, bk: s.bk, bv: s.bv, bgate: s.bgate, bup: s.bup,
-		bhf: s.bhf, battf: s.battf, qgate: s.qgate, ogate: s.ogate, bqf: s.bqf, bxbf: s.bxbf,
+	h := hostBatch{bh: s.bh, battf: s.battf, qgate: s.qgate, ogate: s.ogate, bqf: s.bqf, bxbf: s.bxbf,
 		bmRow: s.bmRow, bmW: s.bmW, bmX: s.bmX, bmY: s.bmY, bmG: s.bmG, bmU: s.bmU}
 	b := stepBuf{bx: s.bx, bcs: s.bcs, bcsSWA: s.bcsSWA, bathf: s.bathf, blogits: s.blogits,
 		bsel: s.bsel, bw: s.bw, host: h}

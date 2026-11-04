@@ -7,7 +7,6 @@ import (
 
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/device/gpu"
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/internal/testmodels"
@@ -195,7 +194,7 @@ func k3ComposedViolations(t *testing.T) []c6Violation {
 		{"the MLA latent norms at rms_norm_eps (llama.cpp's)", func(m *Model) func() {
 			return cfgMut(m, func(c *Config) { c.LatentNormEps = c.RMSEps })
 		}},
-		{"plain SwiGLU", actSwap(nn.ActSiLU)},
+		{"plain SwiGLU", actSwap(graph.ActSiLU)},
 	}
 }
 

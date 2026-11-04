@@ -3,8 +3,8 @@ package model
 import (
 	"testing"
 
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/graph"
 )
 
 // hfDenseSelected is what each dense llama-family safetensors fixture's
@@ -23,7 +23,7 @@ func hfDenseSelected() map[string]func(m *Model) bool {
 		},
 		"synth-hf-arcee": func(m *Model) bool {
 			c, l := m.Cfg, &m.layers[0]
-			return c.Arch == "arcee" && c.Act == nn.ActReLU2 && l.gate.e == nil && l.ffnNorm != nil && !c.TiedEmbd
+			return c.Arch == "arcee" && c.Act == graph.ActReLU2 && l.gate.e == nil && l.ffnNorm != nil && !c.TiedEmbd
 		},
 		"synth-hf-seedoss": func(m *Model) bool {
 			c, l := m.Cfg, &m.layers[0]

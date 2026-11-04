@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
-	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/graph"
 )
 
 // c6DevViolations are the kit's features taken out of the model while only the
@@ -59,8 +59,8 @@ func c6BaseDevViolations() map[string][]c6Violation {
 			{"one norm for both branches", oneNormForBoth},
 		},
 		"synth-nemotron": {
-			{"GELU for relu2", actSwap(nn.ActGELU)},
-			{"SiLU for relu2", actSwap(nn.ActSiLU)},
+			{"GELU for relu2", actSwap(graph.ActGELU)},
+			{"SiLU for relu2", actSwap(graph.ActSiLU)},
 			{"RMSNorm for LayerNorm", rmsForLayerNorm},
 			{"NORM rotary for NEOX", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.RopeNeox = false }) }},
 		},

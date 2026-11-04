@@ -11,9 +11,9 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/convert"
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
+	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
@@ -112,7 +112,7 @@ func openBitNet(t *testing.T, model, golden string, typ quant.Type) (*Model, *c6
 // as the widest row.
 func bitnetSelected(m *Model, typ quant.Type) bool {
 	c := m.Cfg
-	if c.Arch != "bitnet" || !c.TokenAct || c.Act != nn.ActReLU2 || !c.RopeNeox || !c.TiedEmbd {
+	if c.Arch != "bitnet" || !c.TokenAct || c.Act != graph.ActReLU2 || !c.RopeNeox || !c.TiedEmbd {
 		return false
 	}
 	for i := range m.layers {
@@ -190,10 +190,15 @@ func bitnetViolations() []c6Violation {
 		{"no FFN inner norm", func(m *Model) func() {
 			return dropVecs(m, jlm.RoleFFNSubNorm)
 		}},
-		{"SiLU for relu2", actSwap(nn.ActSiLU)},
+		{"SiLU for relu2", actSwap(graph.ActSiLU)},
 		{"NORM rotary", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.RopeNeox = false }) }},
 		{"activations per 32, not per token", func(m *Model) func() {
-			return cfgMut(m, func(c *Config) { c.TokenAct = false })
+			// The window a projection's activations are quantized over is
+			// the model's, fixed at Open from the flag: it moves with it.
+			undo := cfgMut(m, func(c *Config) { c.TokenAct = false })
+			was := m.actWindow
+			m.actWindow = m.actWindowOf()
+			return func() { m.actWindow = was; undo() }
 		}},
 	}
 }

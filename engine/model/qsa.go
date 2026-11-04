@@ -3,7 +3,6 @@ package model
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 )
 
@@ -23,20 +22,6 @@ import (
 // nil. transformers scales the score by 1/sqrt(IdxHeadDim) and llama.cpp
 // does not; a positive scale on a sum of ReLUs selects the same blocks, and
 // the engine takes llama.cpp's.
-
-// qsaScratch is a instance's QSA buffers.
-type qsaScratch struct {
-	q, key           []float32 // the decode row's query heads and raw key
-	pooled           []float32 // every complete block's key
-	score, tmp, bias []float32
-	cs               []float32 // one block's rotary table
-	kept             []bool
-	ord              nn.SampleOrder
-	// per row of a chunk: queries, keys and masks.
-	bq, bk, bbias []float32
-	masks         [][]float32
-	rows          int
-}
 
 // loadQSA reads block bi's indexer tensors and checks their shapes.
 func loadQSA(l *layer, bi int32, cfg *Config,
@@ -62,44 +47,4 @@ func loadQSA(l *layer, bi int32, cfg *Config,
 			l.idxK.rows, len(l.vector(jlm.RoleIdxQNorm)), len(l.vector(jlm.RoleIdxKNorm)), h, d, cfg.NEmbd)
 	}
 	return nil
-}
-
-// allocQSA sizes the decode token's selection buffers.
-func (s *Instance) allocQSA() {
-	c := s.m.Cfg
-	if c.QSARatio == 0 {
-		return
-	}
-	g := &qsaScratch{}
-	s.q4.qsa = g
-	nb := s.maxSeq/c.QSARatio + 1
-	g.q = make([]float32, c.IdxHeads*c.IdxHeadDim)
-	g.key = make([]float32, c.HeadDim)
-	g.pooled = make([]float32, nb*c.IdxHeadDim)
-	g.score, g.tmp = make([]float32, nb), make([]float32, nb)
-	g.bias = make([]float32, s.attStride)
-	g.cs = make([]float32, c.NRot)
-	g.kept = make([]bool, nb)
-	g.ord.Reserve(nb)
-}
-
-// growQSARows sizes a chunk's: each row's query, key and mask.
-func (s *Instance) growQSARows(n int) {
-	c := s.m.Cfg
-	g := s.qsa()
-	if g == nil || g.rows >= n {
-		return
-	}
-	g.rows = n
-	g.bq = make([]float32, n*c.IdxHeads*c.IdxHeadDim)
-	g.bk = make([]float32, n*c.HeadDim)
-	g.bbias = make([]float32, n*s.attStride)
-	g.masks = make([][]float32, n)
-}
-
-func (s *Instance) qsa() *qsaScratch {
-	if s.q4 == nil {
-		return nil
-	}
-	return s.q4.qsa
 }

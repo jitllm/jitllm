@@ -9,5 +9,3 @@ import "github.com/jitllm/jitllm/format/quant"
 type Device interface {
 	MatVec(out []float64, t quant.Type, w []byte, x []float64, nrows, k int) bool
 }
-
-func (f *JIT) SetDevice(Device) {}

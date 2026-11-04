@@ -18,7 +18,7 @@ func mlaPlan() *nn.LayerPlan {
 	p := &nn.LayerPlan{
 		NEmbd: 256, NHead: 4, NKVHead: 4, HeadDim: 96, NRot: 32, NFFN: 512,
 		KVLoraRank: 160, QLoraRank: 192, HeadDimV: 128,
-		MaxSeq: 64, Act: nn.ActSiLU, RMSEps: 1e-5, AttnScale: 0.1, RopeBase: 10000,
+		MaxSeq: 64, Act: graph.ActSiLU, RMSEps: 1e-5, AttnScale: 0.1, RopeBase: 10000,
 	}
 	p.Graph = latentBlockGraph(p)
 	withRotary(p)

@@ -13,19 +13,6 @@ import (
 	"github.com/jitllm/jitllm/graph"
 )
 
-// ShareActWindow hands d this JIT's activation window where d quantizes
-// activations itself (ActWindower): a device and the host that quantize with
-// two windows do not agree on token ids. A device that never quantizes has no
-// opinion, and nil is no device.
-func (f *JIT) ShareActWindow(d LayerDevice) {
-	if f == nil {
-		return
-	}
-	if w, ok := d.(ActWindower); ok {
-		w.SetActWindow(f.actWindow)
-	}
-}
-
 // Weight is one matvec's operand: the raw GGUF bytes plus the shape that reads
 // them. A device keys residency on the pointer.
 type Weight struct {
@@ -684,7 +671,7 @@ type LayerPlan struct {
 	// Act is the feed-forward's non-linearity: SiLU (llama), GELU-tanh (gemma,
 	// SmolVLM's tower) or quick-GELU (CLIP's). A device that cannot emit the
 	// kind it is handed must decline.
-	Act      ActKind
+	Act      graph.ActKind
 	RopeNeox bool // rotate (i, i+nRot/2), not (2i, 2i+1)
 	// NoPosEnc: the attention blocks apply no positional encoding at all. On
 	// MLA the rotary launches are replaced by a copy rather than skipped,

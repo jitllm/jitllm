@@ -69,8 +69,7 @@ func reusedScratchGate(t *testing.T, path string) {
 		t.Fatal("no prompt scratch was handed back to the model")
 	}
 	h := &m.spare.host
-	for _, b := range [][]float32{h.bh, h.bq, h.bxb, h.bk, h.bv, h.bgate[:cap(h.bgate)], h.bup[:cap(h.bup)],
-		h.bhf, h.battf, h.qgate, h.ogate, h.bqf, h.bxbf, h.bmW, h.bmX, h.bmY, h.bmG, h.bmU,
+	for _, b := range [][]float32{h.bh, h.battf, h.qgate, h.ogate, h.bqf, h.bxbf, h.bmW, h.bmX, h.bmY, h.bmG, h.bmU,
 		m.spare.bx, m.spare.bcs, m.spare.bcsSWA} {
 		for i := range b {
 			b[i] = float32(math.NaN())

@@ -25,6 +25,7 @@ import (
 	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/tok"
 )
 
@@ -75,7 +76,7 @@ type Config struct {
 	EmbdScale float64 // gemma multiplies the embedding by sqrt(n_embd)
 	// Act is the feed-forward's gated activation: SiLU (llama), GELU-tanh
 	// (gemma) or gpt-oss's clamped swiglu-oai.
-	Act      nn.ActKind
+	Act      graph.ActKind
 	TiedEmbd bool // no output.weight; the lm_head IS token_embd
 	QKNorm   bool // qwen3 RMSNorms each head of q and k before RoPE
 	// QKNormWide makes that ONE RMSNorm over the whole q (and k) projection
@@ -909,11 +910,11 @@ func configFrom(c *jlm.Config) (*Config, error) {
 	case nact > 1:
 		return nil, fmt.Errorf("model: %s: the container claims two activations", out.Arch)
 	case c.Flags.Has(jlm.FlagReLU2):
-		out.Act = nn.ActReLU2
+		out.Act = graph.ActReLU2
 	case c.Flags.Has(jlm.FlagGELU):
-		out.Act = nn.ActGELU
+		out.Act = graph.ActGELU
 	case c.Flags.Has(jlm.FlagSwiGLUOAI):
-		out.Act = nn.ActSwiGLUOAI
+		out.Act = graph.ActSwiGLUOAI
 	}
 	// BitNet quantizes every projection input per token (jlm.ArchBitNet).
 	out.TokenAct = c.Arch == jlm.ArchBitNet
@@ -923,13 +924,13 @@ func configFrom(c *jlm.Config) (*Config, error) {
 		if nact > 0 {
 			return nil, fmt.Errorf("model: %s: the container claims a second activation beside xIELU", out.Arch)
 		}
-		out.Act = nn.ActXIELU
+		out.Act = graph.ActXIELU
 	}
 	if c.Flags2.Has(jlm.Flag2SwiGLUClamp) {
 		if nact != 0 {
 			return nil, fmt.Errorf("model: %s: the container claims two activations", out.Arch)
 		}
-		out.Act = nn.ActSwiGLUClamp
+		out.Act = graph.ActSwiGLUClamp
 	}
 	if out.HCMult != 0 && out.HCLowRank == 0 || len(c.CompKinds) != 0 || c.NHashLayers != 0 {
 		return nil, fmt.Errorf("model: %s carries hyper-connections mixed by Sinkhorn rounds, compressed "+
@@ -1400,10 +1401,10 @@ func Open(path string, options ...Option) (*Model, error) {
 	if !strings.EqualFold(filepath.Ext(path), Ext) {
 		return nil, &NotConvertedError{Path: path}
 	}
-	// Every op a token runs is generated code; with no emitter for this
+	// Every op a token runs is generated code; with no lowering for this
 	// architecture there is nothing to run it on.
-	if !nn.Available() {
-		return nil, fmt.Errorf("model: jitllm has no code generator for %s/%s", runtime.GOOS, runtime.GOARCH)
+	if !composer.HostCPULowers() {
+		return nil, fmt.Errorf("model: the composer lowers no code for %s/%s", runtime.GOOS, runtime.GOARCH)
 	}
 	// A host the emitter cannot serve (an x86 below SSE4.1+SSSE3) is refused
 	// here, naming what is missing, before any page is read.
@@ -3158,7 +3159,7 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 		// Apertus's xIELU: four numbers on every block, and only an ungated
 		// dense FFN runs it. A block without them, or a model that is not
 		// Apertus carrying them, is a file this engine would run wrong.
-		if cfg.Act == nn.ActXIELU {
+		if cfg.Act == graph.ActXIELU {
 			if l.xielu, err = vec(jlm.RoleXIELU, bi); err != nil {
 				return nil, err
 			}

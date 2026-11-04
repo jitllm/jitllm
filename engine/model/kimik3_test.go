@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/graph"
 )
 
 const k3GoldScript = "scripts/k3gold.py"
@@ -33,7 +33,7 @@ func k3Fixtures() []struct {
 		{"synth-kimik3", func(m *Model) bool {
 			c := m.Cfg
 			ok := c.Arch == "kimi-k3" && c.ResAttn() && c.AttnResBlock == 2 && c.Streams() == 4 &&
-				c.ExpertLatent == 32 && c.Act == nn.ActSitu && c.KDALowerBound == -5 &&
+				c.ExpertLatent == 32 && c.Act == graph.ActSitu && c.KDALowerBound == -5 &&
 				c.LatentNormEps == float64(float32(1e-6)) && c.RMSEps == float64(float32(1e-3)) &&
 				c.ChanDecay() && c.MLA() && c.NoPosEnc && c.QLoraRank == 32 && c.KVLoraRank == 32 &&
 				c.NDenseLead == 1 && c.NFFNShExp == 32 && c.ExpertSigmoid && c.ExpertScale == 2 &&
@@ -129,7 +129,7 @@ func k3Violations() []c6Violation {
 		{"the MLA latent norms at rms_norm_eps (llama.cpp's)", func(m *Model) func() {
 			return cfgMut(m, func(c *Config) { c.LatentNormEps = c.RMSEps })
 		}},
-		{"plain SwiGLU", actSwap(nn.ActSiLU)},
+		{"plain SwiGLU", actSwap(graph.ActSiLU)},
 	}
 }
 
