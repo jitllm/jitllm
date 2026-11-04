@@ -49,11 +49,9 @@ func (s *Instance) MaskRow(dst, logits, mask []float32) error {
 		return s.sampleDeclined("the mask")
 	}
 	b := &s.cpu.bound
-	*b = cpuBound{own: s.cpuOwn(f), n: 1}
+	*b = cpuBound{own: s.cpu.dev.Own(f), n: 1}
 	b.io[0], b.io[1], b.io[2] = unsafe.Pointer(&logits[0]), unsafe.Pointer(&mask[0]), unsafe.Pointer(&dst[0])
-	for i := range f.codes {
-		s.cpuCall(b, &f.codes[i])
-	}
+	s.cpuRunForm(b, f)
 	return nil
 }
 
@@ -77,11 +75,9 @@ func (s *Instance) Logprobs(l *Logprobs, logits []float32, chosen int32) (float3
 		return 0, s.sampleDeclined("the logprobs")
 	}
 	b := &s.cpu.bound
-	*b = cpuBound{own: s.cpuOwn(f), n: 1}
+	*b = cpuBound{own: s.cpu.dev.Own(f), n: 1}
 	b.io[0], b.io[1], b.io[2] = unsafe.Pointer(&logits[0]), unsafe.Pointer(&h.lpRow[0]), unsafe.Pointer(&h.lpIDs[0])
-	for i := range f.codes {
-		s.cpuCall(b, &f.codes[i])
-	}
+	s.cpuRunForm(b, f)
 	h.sampled++
 	k := min(max(l.N, 0), len(h.lpIDs))
 	if cap(l.Top) < MaxTopLogprobs {

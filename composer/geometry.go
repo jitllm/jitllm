@@ -35,8 +35,40 @@ type workGeom struct {
 
 func (w Workgroups) geometry(h Heads, d Device) workGeom {
 	lanes := d.Lanes
+	warps := min(w.MaxWarps, max(w.MinWarps, (h.Dim+lanes-1)/lanes))
+	// Fewer warps where the workgroup's memory cannot hold what a head's
+	// warps declare at the least chunk: their partials of a wide head
+	// (gemma4-wide's 512) are a plane of their own beside the chunk's.
+	for {
+		g := w.geometryAt(h, d, warps)
+		if warps/2 < max(w.MinWarps, 1) || g.declares(w, h, lanes) <= w.budget(d) {
+			return g
+		}
+		warps /= 2
+	}
+}
+
+// budget is the words of workgroup memory a workgroup may hold: the
+// device's where it states them, at most the profile's.
+func (w Workgroups) budget(d Device) int {
+	if d.Shared > 0 {
+		return min(w.Shared, d.Shared) / 4
+	}
+	return w.Shared / 4
+}
+
+// declares is the words of workgroup memory geometry g holds: each head's
+// two combines over the workgroup, Bind's per-trip sums and Running's
+// partial and running ones, and the plane of its chunk.
+func (g workGeom) declares(w Workgroups, h Heads, lanes int) int {
+	return g.group*(2*lanes*g.warps+g.warps*h.Dim+3*w.stride(h.Dim)) + g.chunk*g.group*g.wd
+}
+
+// geometryAt is geometry at warps warps.
+func (w Workgroups) geometryAt(h Heads, d Device, warps int) workGeom {
+	lanes := d.Lanes
 	var g workGeom
-	g.warps = min(w.MaxWarps, max(w.MinWarps, (h.Dim+lanes-1)/lanes))
+	g.warps = warps
 	g.wd = min(g.warps, (h.Dim+lanes-1)/lanes)
 	for g.warps%g.wd != 0 {
 		g.wd++

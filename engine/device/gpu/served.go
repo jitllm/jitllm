@@ -216,6 +216,23 @@ type partArg struct {
 	read, writes bool
 }
 
+// what names a: its kind, and its index, role or table.
+func (a partArg) what() string {
+	switch a.kind {
+	case partOwn:
+		return fmt.Sprintf("own buffer %d", a.i)
+	case partIn:
+		return fmt.Sprintf("input %d", a.i)
+	case partOut:
+		return fmt.Sprintf("output %d", a.i)
+	case partWeight:
+		return fmt.Sprintf("weight %v plane %d", a.role, a.region)
+	case partVector:
+		return fmt.Sprintf("vector %v", a.role)
+	}
+	return fmt.Sprintf("table %v", a.table)
+}
+
 const (
 	partOwn uint8 = iota
 	partIn
@@ -918,7 +935,7 @@ func (sv *servedPart) launchCodes(lc *launcher, inst *partInst, in, out []backen
 				}
 			}
 			if b == nil {
-				return matrix, fmt.Errorf("the composer's kernel %d reads %v, which the call site does not hold", i, a.role)
+				return matrix, fmt.Errorf("the composer's kernel %d (%s) reads %s, which the call site does not hold", i, fc.geom.Name, a.what())
 			}
 			bufs[j] = b
 		}

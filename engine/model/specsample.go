@@ -1,7 +1,5 @@
 package model
 
-import ()
-
 // What speculative sampling needs of the Sampler beyond Sample: the
 // probability its distribution gives one token, a uniform draw from its
 // stream, and a history that can be taken back.

@@ -483,6 +483,12 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 			// CPU's input rows write.
 			if len(src.given) == 0 && s.head != nil && s.devAt(s.lo) && (c.PLEDim == 0 || s.allOnDevice()) &&
 				(s.head.GatherRow || s.c.TiedEmbd && c.PLEDim == 0 && m.posEmbd.e == nil) {
+				// The card reads the per-layer inputs it writes back into the
+				// chunk's own, handed before it runs.
+				if c.PLEDim != 0 {
+					s.growBPLE(n)
+					s.layerInputs(s.bple[:n*c.pleWidth()])
+				}
 				if s.ldEmbed != nil && s.ldEmbed.EmbedRows(rowIDs[base:base+n], p0, s.bx[:n*c.NEmbd]) {
 					return nil
 				}

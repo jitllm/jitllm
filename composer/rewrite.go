@@ -1,6 +1,10 @@
 package composer
 
-import "github.com/jitllm/jitllm/composer/ir"
+import (
+	"slices"
+
+	"github.com/jitllm/jitllm/composer/ir"
+)
 
 // redirect points every reader of node from, but node keep, at node to.
 func (n *Kernel) redirect(from, to, keep int) {
@@ -37,6 +41,68 @@ func (n *Kernel) storeArgs(s *Store) []*int {
 		out = append(out, &s.Stride)
 	}
 	return out
+}
+
+// moveLoops appends m's loops to n, re-pointed at n's buffers (bufOf) and
+// loops, a loop of none set inside top, and returns each loop's index in n.
+func (n *Kernel) moveLoops(m *Kernel, bufOf []int, top int) []int {
+	loopOf := make([]int, len(m.Loops))
+	for i := range loopOf {
+		loopOf[i] = len(n.Loops) + i
+	}
+	for _, l := range m.Loops {
+		p := l.Parent
+		l.Parent = top
+		if p >= 0 {
+			l.Parent = loopOf[p]
+		}
+		if l.Of > 0 {
+			l.Of = loopOf[l.Of-1] + 1
+		}
+		cs := make([]Cursor, len(l.Cursors))
+		for j, c := range l.Cursors {
+			c.Buf = bufOf[c.Buf]
+			cs[j] = c
+		}
+		l.Cursors = cs
+		n.Loops = append(n.Loops, l)
+	}
+	return loopOf
+}
+
+// moveNode re-points node nd, copied from one kernel into another, at the
+// other's buffers (bufOf) and loops (loopOf).
+func moveNode(nd *Node, bufOf, loopOf []int) {
+	switch {
+	case nd.Op == OpIter || nd.Op == OpFold:
+		nd.At = loopOf[nd.At]
+	case (nd.Op == OpLoad || nd.Op == OpTileLoad) && nd.At > 0:
+		nd.At = loopOf[nd.At-1] + 1
+	}
+	switch nd.Op {
+	case OpLoad, OpTileLoad, OpTileScale:
+		nd.Buf = bufOf[nd.Buf]
+	}
+}
+
+// moveStore is store s copied from one kernel into another: at its
+// buffers and loops, a store at the element's end at loop top, and its
+// nodes walk's.
+func (n *Kernel) moveStore(s Store, bufOf, loopOf []int, top int, walk func(int) int) Store {
+	s.Ax = slices.Clone(s.Ax)
+	if s.At >= 0 {
+		s.At = loopOf[s.At]
+	} else {
+		s.At = top
+	}
+	if s.Barrier || s.Run {
+		return s
+	}
+	s.Buf = bufOf[s.Buf]
+	for _, p := range n.storeArgs(&s) {
+		*p = walk(*p)
+	}
+	return s
 }
 
 // Operands is node nd's operand fields, a fold's start and step among them.

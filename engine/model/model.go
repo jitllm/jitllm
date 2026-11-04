@@ -23,6 +23,7 @@ import (
 	"github.com/jitllm/jitllm/format/quant"
 
 	"github.com/jitllm/jitllm/engine/device/cpu"
+	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/graph"
@@ -1249,7 +1250,7 @@ type Model struct {
 	kvArenaMu sync.Mutex
 	// cpuForms is the composed CPU blocks' forms (cpuserve.go), and
 	// cpuComposes the times the composer was asked for one (CPUComposes).
-	cpuForms    cpuForms
+	cpuForms    cpudev.Forms
 	cpuComposes atomic.Int64
 
 	// TokErr is why Vocab is nil, when it is. The weights still loaded.
@@ -2007,7 +2008,7 @@ func (m *Model) Close() error {
 	for _, o := range owners {
 		o.ReleaseModel(m.id)
 	}
-	m.cpuForms.close()
+	m.cpuForms.Close()
 	m.unmapKVArenas()
 	err := m.container.Close()
 	m.devMu.Lock()

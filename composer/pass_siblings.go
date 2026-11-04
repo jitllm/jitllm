@@ -181,25 +181,7 @@ func (Siblings) share(k, m *Kernel, g, local int) {
 		}
 		taken[bufOf[i]] = true
 	}
-	loopOf := make([]int, len(m.Loops))
-	for i, l := range m.Loops {
-		if l.Parent >= 0 {
-			l.Parent = loopOf[l.Parent]
-		} else {
-			l.Parent = g
-		}
-		if l.Of > 0 {
-			l.Of = loopOf[l.Of-1] + 1
-		}
-		cs := make([]Cursor, len(l.Cursors))
-		for j, c := range l.Cursors {
-			c.Buf = bufOf[c.Buf]
-			cs[j] = c
-		}
-		l.Cursors = cs
-		loopOf[i] = len(k.Loops)
-		k.Loops = append(k.Loops, l)
-	}
+	loopOf := k.moveLoops(m, bufOf, g)
 	nodeOf := make([]int, len(m.Nodes))
 	for i := range nodeOf {
 		nodeOf[i] = -1
@@ -214,12 +196,7 @@ func (Siblings) share(k, m *Kernel, g, local int) {
 			nodeOf[i] = coord[nd.A]
 			return nodeOf[i]
 		}
-		if nd.Op == OpIter || nd.Op == OpFold {
-			nd.At = loopOf[nd.At]
-		}
-		if nd.Op == OpLoad {
-			nd.Buf = bufOf[nd.Buf]
-		}
+		moveNode(&nd, bufOf, loopOf)
 		nodeOf[i] = k.add(Node{})
 		for _, a := range k.Operands(&nd) {
 			*a = walk(*a)
@@ -241,19 +218,6 @@ func (Siblings) share(k, m *Kernel, g, local int) {
 		at.Count, at.Span, at.End, at.Elem = ref(l.Count), ref(l.Span), ref(l.End), ref(l.Elem)
 	}
 	for _, st := range m.Stores {
-		ns := Store{Barrier: st.Barrier, At: g, Narrow: st.Narrow}
-		if st.At >= 0 {
-			ns.At = loopOf[st.At]
-		}
-		if !st.Barrier {
-			ns.Buf, ns.Val = bufOf[st.Buf], walk(st.Val)
-			// The flat index is read even beside coordinates: it is the
-			// kernel's node, not a stranger's.
-			ns.Ix = walk(st.Ix)
-			for _, a := range st.Ax {
-				ns.Ax = append(ns.Ax, walk(a))
-			}
-		}
-		k.Stores = append(k.Stores, ns)
+		k.Stores = append(k.Stores, k.moveStore(st, bufOf, loopOf, g, walk))
 	}
 }

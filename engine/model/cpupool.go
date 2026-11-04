@@ -80,15 +80,13 @@ func (s *Instance) cpuPool(x []float32, n int, out []float32, raw bool) bool {
 	w := len(out)
 	p.pos[0] = uint32(n)
 	b := &s.cpu.bound
-	*b = cpuBound{own: s.cpuOwn(f), n: n}
+	*b = cpuBound{own: s.cpu.dev.Own(f), n: n}
 	b.io[0], b.io[1] = unsafe.Pointer(&p.in[0]), unsafe.Pointer(&p.out[0])
 	if p.raw != nil {
 		b.io[2] = unsafe.Pointer(&p.raw[0])
 	}
 	s.cpu.call[0] = uint32(n)
-	for i := range f.codes {
-		s.cpuCall(b, &f.codes[i])
-	}
+	s.cpuRunForm(b, f)
 	if raw && p.raw != nil {
 		w = s.c.NEmbd
 		copy(out[:w], p.raw[:w])

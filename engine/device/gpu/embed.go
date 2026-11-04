@@ -116,22 +116,39 @@ func (bs *blockScratch) embStreams() int {
 // bs: x, or every stream's view of it, then the per-layer inputs where the
 // plan has them.
 func (bs *blockScratch) embedOuts(s, R int) ([]backend.Buf, error) {
-	if s <= 1 {
-		bs.embOuts[0] = bs.x
-		return bs.embOuts[:1], nil
+	n := 1
+	bs.embOuts[0] = bs.x
+	if s > 1 {
+		_, out, err := bs.servedStreams(R, bs.p.Streams())
+		if err != nil {
+			return nil, err
+		}
+		n = copy(bs.embOuts[:], out[:s])
 	}
-	in, out, err := bs.servedStreams(R, bs.p.Streams())
-	if err != nil {
-		return nil, err
-	}
-	n := copy(bs.embOuts[:], out[:s])
+	return bs.withPLE(n), nil
+}
+
+// withPLE is the first n of embOuts, then the per-layer inputs where the
+// plan has them: the input rows' graph writes them last.
+func (bs *blockScratch) withPLE(n int) []backend.Buf {
 	if bs.p.PLEWidth != 0 {
-		// servedStreams' inputs are the streams' views, then the per-layer
-		// inputs.
-		bs.embOuts[n] = in[len(in)-1]
+		bs.embOuts[n] = bs.pleIn
 		n++
 	}
-	return bs.embOuts[:n], nil
+	return bs.embOuts[:n]
+}
+
+// readPLE reads the per-layer inputs input rows of n rows wrote in b back
+// to where the call that takes the rows writes them from (pleRows).
+func (g *devTier) readPLE(s backend.Session, b backend.Buf, n int) error {
+	w := n * g.bs.p.PLEWidth
+	if w == 0 {
+		return nil
+	}
+	if len(g.pleHost) < w {
+		return fmt.Errorf("tier: the input rows' per-layer inputs of %d rows, where the caller holds %d floats", n, len(g.pleHost))
+	}
+	return s.Read(b, f32b(g.pleHost[:w]))
 }
 
 // prepEmbed holds the tables the head's input rows read (nn.Head.Embed)
@@ -345,17 +362,23 @@ func (g *devTier) materializeComposed(pe *embPend) {
 		return
 	}
 	R := g.embedRowsAt(bs, len(pe.ids))
-	if bs.embCast == nil {
-		if need := g.footprint(batchWidth * bs.embW.k * 4); !g.room(need) {
+	for _, b := range [...]struct {
+		buf   *backend.Buf
+		words int
+	}{{&bs.embCast, batchWidth * bs.embW.k}, {&bs.embPLE, batchWidth * bs.p.PLEWidth}} {
+		if *b.buf != nil || b.words == 0 {
+			continue
+		}
+		if need := g.footprint(b.words * 4); !g.room(need) {
 			g.LastErr = fmt.Sprintf("the composer's input rows need %d bytes, %d of %d used", need, g.used, g.limit)
 			return
 		}
-		b, err := g.dev.Alloc(batchWidth * bs.embW.k * 4)
+		nb, err := g.dev.Alloc(b.words * 4)
 		if err != nil {
 			g.LastErr = err.Error()
 			return
 		}
-		bs.embCast = b
+		*b.buf = nb
 	}
 	sv, err := g.servedEmbed(bs, R)
 	if err != nil {
@@ -423,29 +446,33 @@ func (g *devTier) composedSession(s backend.Session) {
 	if ns := bs.embStreams(); ns > 1 {
 		// Every stream, through the scratch's own residual: the call that
 		// takes the rows uploads them.
+		// The per-layer inputs into the call's own (embPLE): the scratch's
+		// are its rows', not the call's.
 		outs, err := bs.embedOuts(ns, rd.rows)
+		if err == nil && bs.p.PLEWidth != 0 {
+			outs[len(outs)-1] = bs.embPLE
+		}
 		if err == nil {
 			err = sv.runAs(g, &rd.lc, sv.inst, pe.kind, nil, outs)
 		}
 		for k := 0; k < ns && err == nil; k++ {
 			err = s.Read(outs[k], f32b(pe.dst[k*n*d:(k+1)*n*d]))
 		}
-		// The per-layer inputs go where the call that takes the rows
-		// writes them from (pleRows).
-		if w := n * bs.p.PLEWidth; w != 0 && err == nil {
-			if len(g.pleHost) < w {
-				err = fmt.Errorf("tier: the input rows' per-layer inputs of %d rows, where the caller holds %d floats", n, len(g.pleHost))
-			} else {
-				err = s.Read(outs[ns], f32b(g.pleHost[:w]))
-			}
+		if err == nil {
+			err = g.readPLE(s, bs.embPLE, n)
 		}
 		rd.err = err
 		return
 	}
-	out := [1]backend.Buf{bs.embCast}
-	if err := sv.runAs(g, &rd.lc, sv.inst, pe.kind, nil, out[:]); err != nil {
-		rd.err = err
+	outs := bs.embOuts[:1]
+	outs[0] = bs.embCast
+	if bs.p.PLEWidth != 0 {
+		outs = append(outs, bs.embPLE)
+	}
+	if rd.err = sv.runAs(g, &rd.lc, sv.inst, pe.kind, nil, outs); rd.err != nil {
 		return
 	}
-	rd.err = s.Read(bs.embCast, f32b(pe.dst[:n*d]))
+	if rd.err = s.Read(bs.embCast, f32b(pe.dst[:n*d])); rd.err == nil {
+		rd.err = g.readPLE(s, bs.embPLE, n)
+	}
 }

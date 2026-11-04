@@ -79,14 +79,14 @@ func TestGemma4ServesComposed(t *testing.T) {
 					if !(badW > 100*hostW) || !(badW > 10*bound) {
 						t.Fatalf("every row's table at twice its position and 16 past reads %.3e against a clean %.3e: the served tables cannot see it", badW, hostW)
 					}
-					// The per-layer inputs' tables are the host's: the device
-					// declines the input rows that read them, by name.
+					// The per-layer inputs' tables are the card's: the input
+					// rows that read them run there and write the inputs.
 					if m.Cfg.PLEDim != 0 {
 						ne, de := st.ServedPart(gpu.ComposedEmbed)
 						dw := st.StepDeclines[composer.DeclineEmbedWeight]
 						t.Logf("%s: the input rows served %d times, declined %d (%d for the per-layer tables)", dev, ne, de, dw)
-						if ne != 0 || dw == 0 {
-							t.Fatalf("the input rows served %d times and declined %d times for the per-layer tables: the gap moved", ne, dw)
+						if ne == 0 || de != 0 || dw != 0 {
+							t.Fatalf("the input rows served %d times and declined %d (%d for the per-layer tables): the card's input rows did not write the per-layer inputs", ne, de, dw)
 						}
 					}
 				})

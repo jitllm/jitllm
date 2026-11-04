@@ -56,7 +56,7 @@ func (s *Instance) cpuPlaceEmbed() {
 	u := 1
 	for _, hf := range []*cpuHeadForm{&st.one, &st.many, &st.givenOne, &st.givenMany} {
 		if hf.f != nil {
-			u = max(u, hf.f.unit, hf.f.rows)
+			u = max(u, hf.f.Unit, hf.f.Rows)
 		}
 	}
 	st.tok, st.pos = make([]uint32, u), make([]uint32, u+1)
@@ -126,10 +126,10 @@ func (s *Instance) cpuInputCall(one, many *cpuHeadForm, in, x, ple []float32, to
 		copy(x, in)
 	}
 	for r0 := 0; r0 < rows; {
-		k := min(f.rows, rows-r0)
-		u := max(f.unit, 1)
+		k := min(f.Rows, rows-r0)
+		u := max(f.Unit, 1)
 		b := &s.cpu.bound
-		*b = cpuBound{li: cpuInputRows, own: s.cpuOwn(f), n: k, tok: st.tok, pos: st.pos}
+		*b = cpuBound{li: cpuInputRows, own: s.cpu.dev.Own(f), n: k, tok: st.tok, pos: st.pos}
 		padded := k < u
 		if !padded {
 			k -= k % u
@@ -161,9 +161,7 @@ func (s *Instance) cpuInputCall(one, many *cpuHeadForm, in, x, ple []float32, to
 			}
 		}
 		s.cpu.call[0] = uint32(k)
-		for i := range f.codes {
-			s.cpuCall(b, &f.codes[i])
-		}
+		s.cpuRunForm(b, f)
 		if padded {
 			if writesX {
 				copy(x[r0*d:(r0+k)*d], st.pad[:k*d])

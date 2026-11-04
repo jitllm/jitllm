@@ -82,14 +82,9 @@ func TestComposedCPUProfile(t *testing.T) {
 		run(warm)
 		each = each[:0]
 		m.ResetProfile()
-		m.cpuForms.mu.Lock()
-		for _, f := range m.cpuForms.m {
-			for i := range f.codes {
-				f.codes[i].nanos, f.codes[i].runs = 0, 0
-				f.codes[i].pcalls, f.codes[i].pcallNs, f.codes[i].pstartNs, f.codes[i].pmaxNs = 0, 0, 0, 0
-			}
+		for _, f := range m.cpuForms.All() {
+			f.ResetProfile()
 		}
-		m.cpuForms.mu.Unlock()
 		st.Pool().ResetRegions()
 		ph0 := st.Pool().Phases()
 		d := run(toks)
@@ -121,16 +116,14 @@ func TestComposedCPUProfile(t *testing.T) {
 			pc, pcall, pstart, pmax int64
 		}
 		var rows []row
-		m.cpuForms.mu.Lock()
-		for _, f := range m.cpuForms.m {
-			for i := range f.codes {
-				c := &f.codes[i]
-				if c.runs > 0 {
-					rows = append(rows, row{c.name + c.desc, c.calls, c.serial, c.nanos, c.runs, int64(c.n), c.code.Size, c.pcalls, c.pcallNs, c.pstartNs, c.pmaxNs})
+		for _, f := range m.cpuForms.All() {
+			for i := range f.Codes {
+				c := f.Codes[i].Profile()
+				if c.Runs > 0 {
+					rows = append(rows, row{c.Name, c.Calls, c.Serial, c.Nanos, c.Runs, int64(c.N), c.Bytes, c.CallCount, c.CallNs, c.StartNs, c.MaxNs})
 				}
 			}
 		}
-		m.cpuForms.mu.Unlock()
 		slices.SortFunc(rows, func(a, b row) int { return int(b.nanos - a.nanos) })
 		var tot int64
 		for _, r := range rows {
@@ -150,14 +143,10 @@ func TestComposedCPUProfile(t *testing.T) {
 		if composed {
 			if cb := st.cpu.blocks[st.lo]; cb != nil && cb.f != nil {
 				b.WriteString("  block 0's kernels in order:\n")
-				for _, c := range cb.f.codes {
-					fmt.Fprintf(&b, "    %-60.60s calls %v n %d serial %v join %d chain %d", c.name+c.desc, c.calls, c.n, c.serial, c.join, c.chain)
-					for _, a := range c.args {
-						if a.src == cpuArgWeight || a.src == cpuArgCoord {
-							fmt.Fprintf(&b, " [src %d region %d per %v elem %d off %d]", a.src, a.region, a.per, a.elem, a.off)
-						}
-					}
-					b.WriteString("\n")
+				for i := range cb.f.Codes {
+					c := &cb.f.Codes[i]
+					p := c.Profile()
+					fmt.Fprintf(&b, "    %-60.60s calls %v n %d serial %v join %d chain %d%s\n", p.Name, p.Calls, p.N, p.Serial, p.Join, p.Chain, c.Layout())
 				}
 			}
 		}

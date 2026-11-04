@@ -101,15 +101,10 @@ func TestOpenHonoursAPageBudget(t *testing.T) {
 // frame, so the failure is a wrong (often non-finite) answer rather than an
 // unbound-tensor error; it is invisible on a model that fits.
 //
-// Equal, not close: the GEMM's float epilogue (GEMMExact) sums every batched
-// matmul in the matvec's order, and keeps the matvec on the whole of k where a
-// wide pool would split it (tinyllama's head on a 14-worker pool read
-// NMSE 5.87e-14 before it did), so paging is the only variable left. The
-// shipped GEMM on a pre-VNNI amd64 or an arm64 host sums a k-quant's
-// super-block in integers (cpu.StationaryIntAcc), and int8 re-quantization
-// carries that ~1e-12 per matmul to NMSE 2.85e-03 on qwen3moe -- past this
-// gate's old 1e-3 bound. TestBatchMatchesForward's "shipped" arm
-// is where that form is judged.
+// Equal, not close: the reference is the same batch on the same model with no
+// budget, its forms and their folding order the batched path's, so paging is
+// the only variable. A step's rows and a row alone are apart by their forms'
+// order (TestBatchMatchesForward judges that), so decode is not the reference.
 func TestForwardBatchFaultsItsBlocksIn(t *testing.T) {
 	for name, path := range models() {
 		if name == "stories260K" {
@@ -157,33 +152,34 @@ func forwardBatchFaultsItsBlocksIn(t *testing.T, path string) {
 			streams[i][j] = int32((7 + i*101 + j*13) % tight.Cfg.NVocab)
 		}
 	}
-	// Decode on the same tightly budgeted model, so the batched path
-	// is the only variable.
-	want := make([][]float32, nseq)
-	for i := range streams {
-		st := tight.NewInstance(steps + 1)
-		for _, id := range streams[i] {
-			lg, err := st.Forward(id)
-			if err != nil {
-				st.Close()
-				t.Fatalf("Forward under a one-page budget: %v", err)
+	run := func(m *Model, what string) *sessBatch {
+		b := newSessBatch(m, nseq, steps+1)
+		for j := 0; j < steps; j++ {
+			row := make([]int32, nseq)
+			for i := range streams {
+				row[i] = streams[i][j]
 			}
-			want[i] = append([]float32(nil), lg...)
+			if _, err := b.ForwardBatch(row); err != nil {
+				b.Close()
+				t.Fatalf("ForwardBatch %s: %v", what, err)
+			}
 		}
-		st.Close()
+		return b
 	}
+	full, err := Open(src, WithKVF16(false))
+	if err != nil {
+		t.Fatalf("Open with no budget: %v", err)
+	}
+	ref := run(full, "with no budget")
+	want := make([][]float32, nseq)
+	for i := range want {
+		want[i] = append([]float32(nil), ref.BatchLogits(i)...)
+	}
+	ref.Close()
+	full.Close()
 
-	b := newSessBatch(tight, nseq, steps+1)
+	b := run(tight, "under a one-page budget")
 	defer b.Close()
-	for j := 0; j < steps; j++ {
-		row := make([]int32, nseq)
-		for i := range streams {
-			row[i] = streams[i][j]
-		}
-		if _, err := b.ForwardBatch(row); err != nil {
-			t.Fatalf("ForwardBatch under a one-page budget: %v", err)
-		}
-	}
 	var sse, sy2 float64
 	for i := 0; i < nseq; i++ {
 		lg := b.BatchLogits(i)
@@ -201,10 +197,10 @@ func forwardBatchFaultsItsBlocksIn(t *testing.T, path string) {
 	if sy2 > 0 {
 		nmse = sse / sy2
 	}
-	t.Logf("%d block(s), budget %d of %d page bytes, batch vs decode NMSE %.3e",
+	t.Logf("%d block(s), budget %d of %d page bytes, against no budget NMSE %.3e",
 		nb, tight.container.Budget(), allPages, nmse)
 	if nmse != 0 {
-		t.Fatalf("ForwardBatch and Forward disagree under paging: NMSE %.3e", nmse)
+		t.Fatalf("ForwardBatch under paging parts from ForwardBatch with no budget: NMSE %.3e", nmse)
 	}
 
 }

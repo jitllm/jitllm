@@ -3,6 +3,7 @@ package model
 import (
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
@@ -185,7 +186,7 @@ func TestBatchSeamMovesCarryEveryRowQwen4Exp(t *testing.T) {
 func cardBlocks(m *Model) int {
 	n := 0
 	for li := range m.Cfg.NLayer {
-		if tableRowsOf(m.Composing().BlockGraph(li)) < 0 {
+		if cpudev.TableRowsOf(m.Composing().BlockGraph(li)) < 0 {
 			n++
 		}
 	}

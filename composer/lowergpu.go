@@ -60,14 +60,16 @@ func resident(n *Kernel, d Device) int {
 	return per
 }
 
-// sharedBytes is the workgroup memory a workgroup of n holds: its arrays,
-// and a slot a thread for each combine over the workgroup.
-// sharedParts names what sharedBytes counts: each array's bytes, then the
-// group reductions' rows.
+// sharedBytes is the workgroup memory a workgroup of n holds: the arrays
+// it declares -- those an access names (bufsNamed: a plane Stage moved its
+// accesses off is declared nowhere) -- and a slot a thread for each combine
+// over the workgroup. sharedParts names what sharedBytes counts: each
+// array's bytes, then the group reductions' rows.
 func sharedParts(n *Kernel) string {
 	var parts []string
-	for _, bf := range n.Bufs {
-		if bf.Kind == BufShared {
+	named := n.bufsNamed()
+	for i, bf := range n.Bufs {
+		if bf.Kind == BufShared && named[i] {
 			parts = append(parts, strings.TrimSpace(fmt.Sprintf("%s %d", bf.Operand.Name, 4*bf.Size)))
 		}
 	}
@@ -81,8 +83,9 @@ func sharedParts(n *Kernel) string {
 
 func sharedBytes(n *Kernel) int {
 	b := 0
-	for _, bf := range n.Bufs {
-		if bf.Kind == BufShared {
+	named := n.bufsNamed()
+	for i, bf := range n.Bufs {
+		if bf.Kind == BufShared && named[i] {
 			b += 4 * bf.Size
 		}
 	}

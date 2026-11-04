@@ -71,7 +71,7 @@ func (s *Instance) cpuPlaceKV() {
 		u := cpuRowsCap
 		for _, hf := range []*cpuHeadForm{&c.narrow, &c.widen} {
 			if hf.f != nil {
-				u = max(u, hf.f.unit, hf.f.rows)
+				u = max(u, hf.f.Unit, hf.f.Rows)
 			}
 		}
 		nf, nh = max(nf, u*c.fw), max(nh, u*c.hw)
@@ -107,20 +107,18 @@ func (s *Instance) cpuKVConvert(c *cpuKVConv, narrow bool, f []float32, h []byte
 	}
 	run := func(fp, hp unsafe.Pointer, k int) {
 		b := &s.cpu.bound
-		*b = cpuBound{li: cpuInputRows, own: s.cpuOwn(form), n: k}
+		*b = cpuBound{li: cpuInputRows, own: s.cpu.dev.Own(form), n: k}
 		b.io[0], b.io[1] = hp, fp
 		if narrow {
 			b.io[0], b.io[1] = fp, hp
 		}
 		s.cpu.call[0] = uint32(k)
-		for i := range form.codes {
-			s.cpuCall(b, &form.codes[i])
-		}
+		s.cpuRunForm(b, form)
 	}
-	u := max(form.unit, 1)
+	u := max(form.Unit, 1)
 	whole := len(f) / c.fw / u * u
 	for r0 := 0; r0 < whole; {
-		k := min(form.rows/u*u, whole-r0)
+		k := min(form.Rows/u*u, whole-r0)
 		run(unsafe.Pointer(&f[r0*c.fw]), unsafe.Pointer(&h[r0*c.hw*4]), k)
 		r0 += k
 	}

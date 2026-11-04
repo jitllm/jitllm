@@ -1,7 +1,5 @@
 package model
 
-import ()
-
 // A decode token runs each run of consecutive resident host blocks as ONE pool
 // region (sched.Pool.Fuse): the workers join once and every op of every block
 // in the run -- the norms, the projections, the rotary and cache write,
