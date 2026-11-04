@@ -54,6 +54,9 @@ func jlmOf(t testing.TB, path string) string {
 	os.Remove(tmp.Name())
 	if _, err := convert.FromGGUF(path, tmp.Name(), jlm.Fingerprint{Host: "test", Writer: model.BuildIDForTest()}); err != nil {
 		os.Remove(tmp.Name())
+		if errors.Is(err, convert.ErrPart) {
+			t.Skipf("PART OF A MODEL: %s -- %v", filepath.Base(path), err)
+		}
 		if errors.Is(err, convert.ErrNotImplemented) {
 			t.Skipf("NOT IMPLEMENTED: %s -- %v (RULE 7 scope)", filepath.Base(path), err)
 		}
