@@ -565,7 +565,7 @@ func prefaultExperts(m *model.Model) error {
 		if !m.Cfg.MoEAt(li) {
 			continue
 		}
-		err := m.EnsureExperts(li, all, &h, &m.Layers[li])
+		err := m.EnsureExperts(m.Frames, li, all, &h, &m.Layers[li])
 		h.Release()
 		if err != nil {
 			return err

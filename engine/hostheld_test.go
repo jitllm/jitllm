@@ -55,8 +55,8 @@ func TestPageBudgetLosesOnlyWhatAUnifiedDeviceHolds(t *testing.T) {
 	}
 	const budget = 1 << 30
 	const per = 32 << 20
-	m.SetPageBudget(budget)
-	noDevice := m.PageBudget()
+	m.SetPageBudget(m.Frames, budget)
+	noDevice := m.PageBudget(m.Frames)
 	if noDevice != budget {
 		t.Fatalf("with no device the page budget is %d, want the %d it was given", noDevice, uint64(budget))
 	}
@@ -68,7 +68,7 @@ func TestPageBudgetLosesOnlyWhatAUnifiedDeviceHolds(t *testing.T) {
 	check := func(when string, blocks int) {
 		t.Helper()
 		want := uint64(budget - blocks*per)
-		if got := m.PageBudget(); got != want {
+		if got := m.PageBudget(m.Frames); got != want {
 			t.Fatalf("%s (%d block(s) on the integrated device, %d bytes each): page budget %d, "+
 				"want %d -- the host must lose what the device holds, and only that",
 				when, blocks, uint64(per), got, want)
@@ -106,11 +106,11 @@ func TestPageBudgetLosesOnlyWhatAUnifiedDeviceHolds(t *testing.T) {
 	if err := st.SetDeviceLayers(nil, -1); err != nil {
 		t.Fatal(err)
 	}
-	if got := m.PageBudget(); got != noDevice {
+	if got := m.PageBudget(m.Frames); got != noDevice {
 		t.Fatalf("detached: page budget %d, want the no-device %d back", got, noDevice)
 	}
 	t.Logf("page budget %d with no device, %d with 3 blocks of %d on the integrated device, "+
-		"%d again once detached", noDevice, uint64(budget-3*per), uint64(per), m.PageBudget())
+		"%d again once detached", noDevice, uint64(budget-3*per), uint64(per), m.PageBudget(m.Frames))
 }
 
 // TestPageBudgetFollowsARealIntegratedGPU is the same gate on hardware: an
@@ -144,7 +144,7 @@ func TestPageBudgetFollowsARealIntegratedGPU(t *testing.T) {
 		t.Fatalf("open the integrated GPU: %v", err)
 	}
 	defer g.Close()
-	m.SetPageBudget(budget)
+	m.SetPageBudget(m.Frames, budget)
 	st := testInstance(t, m, 64)
 	defer st.Close()
 
@@ -166,13 +166,13 @@ func TestPageBudgetFollowsARealIntegratedGPU(t *testing.T) {
 				"ceiling -- the host is charged for something other than what the device holds",
 				when, st.GPULayers(), r, used, ceiling)
 		}
-		if got := m.PageBudget(); got != budget-used {
+		if got := m.PageBudget(m.Frames); got != budget-used {
 			t.Fatalf("%s: page budget %d, want %d less the %d the device holds", when, got,
 				uint64(budget), used)
 		}
 		t.Logf("%-28s %d block(s): the device holds %7.2f MiB of a %.2f GiB ceiling, page budget %.4f GiB",
 			when, st.GPULayers(), float64(used)/(1<<20), float64(ceiling)/(1<<30),
-			float64(m.PageBudget())/(1<<30))
+			float64(m.PageBudget(m.Frames))/(1<<30))
 		return used
 	}
 

@@ -134,7 +134,7 @@ func TestPagedModelOpenCloseDoesNotLeak(t *testing.T) {
 			return nil, err
 		}
 		// A budget below the model forces frames, eviction and re-reads.
-		m.SetPageBudget(4 * m.PageSize())
+		m.SetPageBudget(m.Frames, 4*m.PageSize())
 		return m, nil
 	}
 	for i := 0; i < 2; i++ {

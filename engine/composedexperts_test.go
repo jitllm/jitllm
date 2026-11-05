@@ -100,7 +100,7 @@ func TestComposedExpertPagesServe(t *testing.T) {
 						}
 						defer m.Close()
 						got, st, _ := composedDecode(t, m, instOpts, dev, ids, toks, nn.ComposedBlock, false, false, opts...)
-						_, in, _ := m.PageStats()
+						_, in, _ := m.PageStats(m.Frames)
 						return got, st, in
 					}
 					stream := func(slots int) gpu.Option {
@@ -254,7 +254,7 @@ func TestComposedCPUExpertPagesServe(t *testing.T) {
 				}
 				defer m.Close()
 				got := cpuLogits(t, m, toks, f, true, withKVPage(page))
-				_, in, _ := m.PageStats()
+				_, in, _ := m.PageStats(m.Frames)
 				return got, in
 			}
 			got, residentIn := run(cpuFaultNone)
@@ -366,7 +366,7 @@ func TestComposedCPUExpertPromptsServe(t *testing.T) {
 				m, openOpts2 := open(mo...)
 				defer m.Close()
 				got := prompt(m, f, true, openOpts2...)
-				_, in, _ := m.PageStats()
+				_, in, _ := m.PageStats(m.Frames)
 				return got, in
 			}
 			got, residentIn := run(cpuFaultNone)

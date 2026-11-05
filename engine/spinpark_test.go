@@ -33,7 +33,7 @@ func TestThePoolParksOnlyWhileTokensPage(t *testing.T) {
 	for i := 0; i < c.NPages(); i++ {
 		total += c.PageBytes(i)
 	}
-	m.SetPageBudget(total - c.H.ExpPageSize)
+	m.SetPageBudget(m.Frames, total-c.H.ExpPageSize)
 	if !cf.CanEvict() {
 		t.Fatal("a budget one page short of the model and the pager cannot evict: this proved nothing")
 	}
@@ -45,11 +45,11 @@ func TestThePoolParksOnlyWhileTokensPage(t *testing.T) {
 	}
 	var quiet, paged int
 	for i := 0; i < 60 && (quiet == 0 || paged == 0); i++ {
-		_, in0, _ := m.PageStats()
+		_, in0, _ := m.PageStats(m.Frames)
 		if lg, err = st.Forward(Greedy(lg)); err != nil {
 			t.Fatal(err)
 		}
-		_, in1, _ := m.PageStats()
+		_, in1, _ := m.PageStats(m.Frames)
 		switch spin := st.Pool().Spinning(); {
 		case in1 != in0 && spin:
 			t.Fatalf("token %d faulted %d page(s) and left the pool spinning", i, in1-in0)

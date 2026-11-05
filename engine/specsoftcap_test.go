@@ -227,7 +227,7 @@ func specVerifyCapped(t *testing.T, m *model.Model, dev nn.LayerDevice, prompt, 
 	for i := 0; i < len(toks); i += k {
 		out := rowsOut{logits: make([]float32, k*c.NVocab), hidden: make([]float32, k*c.NEmbd)}
 		func() {
-			defer m.EnterPager()()
+			defer m.EnterPager(m.Frames)()
 			rs.kv.note(rs.seqPos(0), toks[i:i+k]...)
 			if err := rs.stepRows(tokenRows(toks[i:i+k]), &out); err != nil {
 				t.Fatal(err)

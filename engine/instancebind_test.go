@@ -60,9 +60,9 @@ func TestAnInstancesBlocksAreItsOwn(t *testing.T) {
 		if len(cpu.layer(li).Wq.Data) == 0 {
 			t.Errorf("block %d: placing it on the card unbound the CPU's instance", li)
 		}
-		if !m.Frames.Kept(li) || !m.BlockHeld(li) {
+		if !m.Frames.Kept(li) || !m.BlockHeld(m.Frames, li) {
 			t.Errorf("block %d: its page left (kept %v, resident %v) while an instance runs it from host memory",
-				li, m.Frames.Kept(li), m.BlockHeld(li))
+				li, m.Frames.Kept(li), m.BlockHeld(m.Frames, li))
 		}
 	}
 	got = append(got, run(cpu, prompt[4:])...)

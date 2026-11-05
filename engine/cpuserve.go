@@ -1342,7 +1342,7 @@ func (s *Instance) formCPUBlock(li int, cb *cpuBlock, rows int) (*cpudev.Form, e
 	}
 	pg := &s.kv.layers[li]
 	page := max(pg.p, 1)
-	req := composer.Request{Graph: &gr, Formats: formats, Strides: s.m.CpuStrides(li, g),
+	req := composer.Request{Graph: &gr, Formats: formats, Strides: s.m.CpuStrides(s.m.Frames, li, g),
 		Step:    composer.Step{Rows: rows, Page: page, Keys: max(pg.arenaSlots(), 1) * page, ActWindow: s.m.ActWindow, Seqs: max(s.nseq, 1)},
 		History: composer.History{ValuesInKeys: pg.latent},
 		Device:  s.composedCPU()}
@@ -1470,7 +1470,7 @@ func (s *Instance) cpuExperts(b *cpuBound, f *cpudev.Form, li, n int) error {
 		s.cpu.sel[0] = other
 	}
 	s.bind.Lock()
-	err := s.m.EnsureExperts(li, s.cpu.sel, &s.expHold, s.layer(li))
+	err := s.m.EnsureExperts(s.m.Frames, li, s.cpu.sel, &s.expHold, s.layer(li))
 	s.bind.Unlock()
 	if err != nil {
 		return err

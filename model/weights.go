@@ -56,13 +56,13 @@ func RopeAxesPlanes(r *nn.Rope, nrot int, split bool) []float32 {
 // page until the device has copied them. A float bank -- which the device reads
 // row-major out of Data -- is gathered into one buffer, since that path has no
 // Sheet; only the synthetic fixtures have one.
-func (m *Model) BankWeight(t Tensor) nn.Weight {
+func (m *Model) BankWeight(fr *jlm.Frames, t Tensor) nn.Weight {
 	c := m.Container
 	if c == nil || t.E == nil || !c.ExpertPaged(t.E) {
 		return Wt(t)
 	}
 	if t.Packed == nil {
-		return m.gatheredBank(t)
+		return m.gatheredBank(fr, t)
 	}
 	// The bank's Weight is a function of the entry alone, so it is built once
 	// (its sheet closure and Packed with it) and every later call -- one per
@@ -73,7 +73,7 @@ func (m *Model) BankWeight(t Tensor) nn.Weight {
 	sheets := int(t.E.Dims[2])
 	nrow := t.Rows / max(sheets, 1)
 	w := nn.Weight{T: t.Typ, Data: m.splitBank[:], Rows: t.Rows, K: t.K,
-		Packed: &nn.Packed{Sheet: func(x int) (nn.Packed, func(), error) { return m.sheetOf(t.E, x, nrow) }, Sheets: sheets}}
+		Packed: &nn.Packed{Sheet: func(x int) (nn.Packed, func(), error) { return m.sheetOf(fr, t.E, x, nrow) }, Sheets: sheets}}
 	got, _ := m.bankWts.LoadOrStore(t.E, w)
 	return got.(nn.Weight)
 }
@@ -81,12 +81,12 @@ func (m *Model) BankWeight(t Tensor) nn.Weight {
 // gatheredBank is a float bank, which the device reads row-major out of Data:
 // gathered into one buffer, since that path has no Sheet. Only the synthetic
 // fixtures have one.
-func (m *Model) gatheredBank(t Tensor) nn.Weight {
+func (m *Model) gatheredBank(fr *jlm.Frames, t Tensor) nn.Weight {
 	sheets := int(t.E.Dims[2])
 	nrow := t.Rows / max(sheets, 1)
 	var buf []byte
 	for x := 0; x < sheets; x++ {
-		p, release, err := m.sheetOf(t.E, x, nrow)
+		p, release, err := m.sheetOf(fr, t.E, x, nrow)
 		if err != nil {
 			release()
 			return Wt(Tensor{})
@@ -140,8 +140,8 @@ func (m *Model) newHold() *sheetHold {
 
 // sheetOf is expert x of bank e: its planes, held in their page until the
 // returned release runs.
-func (m *Model) sheetOf(e *jlm.Entry, x, nrow int) (nn.Packed, func(), error) {
-	c, cf := m.Container, m.Frames
+func (m *Model) sheetOf(fr *jlm.Frames, e *jlm.Entry, x, nrow int) (nn.Packed, func(), error) {
+	c, cf := m.Container, fr
 	p := c.ExpertPage(e, x)
 	if p < 0 {
 		return nn.Packed{}, noRelease, fmt.Errorf("model: %v expert %d has no expert page", e.Role, x)
@@ -233,7 +233,7 @@ func (m *Model) ExpSelBias() []float32 {
 
 // cpuStrides is each bank of block li's graph in the host's expert pages and
 // the words from one expert's sheet to the next's there.
-func (m *Model) CpuStrides(li int, g *graph.Graph) map[jlm.Role]int {
+func (m *Model) CpuStrides(fr *jlm.Frames, li int, g *graph.Graph) map[jlm.Role]int {
 	var st map[jlm.Role]int
 	for _, o := range g.Ops {
 		for _, w := range o.Weight {
@@ -241,7 +241,7 @@ func (m *Model) CpuStrides(li int, g *graph.Graph) map[jlm.Role]int {
 			if t == nil || t.E == nil {
 				continue
 			}
-			if _, stride, ok := m.Frames.BankView(t.E); ok {
+			if _, stride, ok := fr.BankView(t.E); ok {
 				if st == nil {
 					st = map[jlm.Role]int{}
 				}

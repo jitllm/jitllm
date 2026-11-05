@@ -1412,7 +1412,7 @@ func (s *Instance) layerWeightsAt(li int) nn.LayerWeights {
 		// For a MoE file these three are the banks -- l.gate is the 3-D
 		// ffn_gate_exps and l.experts[e] are views into it, so
 		// nothing is copied and the device indexes the same mapping.
-		Gate: s.m.BankWeight(l.Gate), Up: s.m.BankWeight(l.Up), Down: s.m.BankWeight(l.Down),
+		Gate: s.m.BankWeight(s.m.Frames, l.Gate), Up: s.m.BankWeight(s.m.Frames, l.Up), Down: s.m.BankWeight(s.m.Frames, l.Down),
 	}
 	// A LayerNorm always hands the device a bias -- zeros where the file has
 	// none (command-r) -- because the apply kernel takes one.
@@ -1471,7 +1471,7 @@ func (s *Instance) ensureLayer(li int) func(*nn.LayerWeights) error {
 			return err
 		}
 		if s.c.MoE() {
-			if err := s.m.EnsureBlockExperts(li); err != nil {
+			if err := s.m.EnsureBlockExperts(s.m.Frames, li); err != nil {
 				return err
 			}
 		}
@@ -1524,7 +1524,7 @@ func (s *Instance) prefetchSelected(li int) func([]uint32) error {
 		if !s.c.MoE() {
 			return nil
 		}
-		return s.m.EnsureBlockSelected(li, sel, false)
+		return s.m.EnsureBlockSelected(s.m.Frames, li, sel, false)
 	}
 }
 
@@ -1535,7 +1535,7 @@ func (s *Instance) prefetchSelected(li int) func([]uint32) error {
 func (s *Instance) speculateSelected(li int) func([]uint32) {
 	return func(sel []uint32) {
 		if s.c.MoE() {
-			s.m.SpeculateExperts(li, sel)
+			s.m.SpeculateExperts(s.m.Frames, li, sel)
 		}
 	}
 }
@@ -2061,7 +2061,7 @@ func (s *Instance) pageIn(li int) (*model.Layer, error) {
 	l := s.layer(li)
 	s.bind.Lock()
 	defer s.bind.Unlock()
-	return l, s.m.PageIn(li, l)
+	return l, s.m.PageIn(s.m.Frames, li, l)
 }
 
 // pageInSelected is pageIn of block li for the routed sheets sel alone
@@ -2072,7 +2072,7 @@ func (s *Instance) pageInSelected(li int, sel []uint32) error {
 	}
 	s.bind.Lock()
 	defer s.bind.Unlock()
-	return s.m.PageInSelected(li, sel, s.layer(li))
+	return s.m.PageInSelected(s.m.Frames, li, sel, s.layer(li))
 }
 
 // devAt reports whether block li runs on a device.
@@ -2930,7 +2930,7 @@ func (s *Instance) ForwardEmbd(e []float32) ([]float32, error) {
 //	    x += Wdown · (act(Wgate h) * Wup h)
 //	logits = Woutput · rmsnorm(x, output_norm)
 func (s *Instance) Forward(token int32) ([]float32, error) {
-	defer s.m.EnterPager()()
+	defer s.m.EnterPager(s.m.Frames)()
 	if err := s.marksHeld(); err != nil {
 		return nil, err
 	}
@@ -3203,7 +3203,7 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 		// The block is faulted in at first touch; with a budget that holds the
 		// model this is one nil compare. A block that has to be read ends the
 		// fused run before the read, and the run reopens after it.
-		if s.fused && !m.BlockHeld(li) {
+		if s.fused && !m.BlockHeld(m.Frames, li) {
 			s.unfuse()
 		}
 		l, err := s.pageIn(li)

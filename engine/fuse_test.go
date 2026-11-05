@@ -106,7 +106,7 @@ func TestFusedBlocksMatchPerOp(t *testing.T) {
 						m.Close()
 						continue
 					}
-					m.SetPageBudget(2 * m.PageSize())
+					m.SetPageBudget(m.Frames, 2*m.PageSize())
 				}
 				per := fusedDecode(t, m, false, n, false)
 				fu := fusedDecode(t, m, true, n, false)

@@ -83,8 +83,8 @@ func (p *PhaseMeter) reset() {
 	p.t = time.Now()
 	p.rd0 = p.rd
 	if p.m != nil {
-		p.b, p.r = p.m.BytesRead(), p.m.PagerReads()
-		_, p.f, _ = p.m.PageStats()
+		p.b, p.r = p.m.BytesRead(p.m.Frames), p.m.PagerReads()
+		_, p.f, _ = p.m.PageStats(p.m.Frames)
 	}
 }
 
@@ -94,8 +94,8 @@ func (p *PhaseMeter) reset() {
 func (p *PhaseMeter) Mark(name string) PhaseRow {
 	row := PhaseRow{Name: name, Dur: time.Since(p.t)}
 	if p.m != nil {
-		b, r := p.m.BytesRead(), p.m.PagerReads()
-		_, f, _ := p.m.PageStats()
+		b, r := p.m.BytesRead(p.m.Frames), p.m.PagerReads()
+		_, f, _ := p.m.PageStats(p.m.Frames)
 		// Saturating: a counter reset under us must not print as an enormous
 		// unsigned number.
 		if b > p.b {

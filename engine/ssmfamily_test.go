@@ -106,7 +106,7 @@ func ssdSwapBC(t *testing.T) func(m *model.Model) func() {
 		n := g.QkBytes
 		// A block a device took gave its host page up; the swap reads it.
 		for li := range m.Layers {
-			if err := m.PageIn(li, &m.Layers[li]); err != nil {
+			if err := m.PageIn(m.Frames, li, &m.Layers[li]); err != nil {
 				t.Fatal(err)
 			}
 		}

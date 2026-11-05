@@ -69,10 +69,10 @@ func TestPreloadReadsEveryPageAndKeepsTheAnswer(t *testing.T) {
 			t.Logf("%s: %d pages, %d bytes read in %d requests, peak %d outstanding "+
 				"(faulted in by the tokens: %d requests, peak %d)", name, c.NPages(),
 				m.ReadBytes(), m.PagerReads(), m.ReadConcurrency(), coldReads, coldPeak)
-			t.Logf("%s: preload peak pages in flight %d", name, m.PreloadDepth())
-			if c.NPages() >= 16 && m.PreloadDepth() < 2 {
+			t.Logf("%s: preload peak pages in flight %d", name, m.PreloadDepth(m.Frames))
+			if c.NPages() >= 16 && m.PreloadDepth(m.Frames) < 2 {
 				t.Fatalf("preload had at most %d page in flight: the pages were read one at a time",
-					m.PreloadDepth())
+					m.PreloadDepth(m.Frames))
 			}
 			if uint64(m.ReadBytes()) < page {
 				t.Fatalf("preload read %d bytes of %d bytes of pages", m.ReadBytes(), page)

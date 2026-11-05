@@ -20,7 +20,7 @@ func TestPhaseMeterAccountsForEveryByte(t *testing.T) {
 	st := testInstance(t, m, 64, openOpts...)
 	defer st.Close()
 
-	before := m.BytesRead()
+	before := m.BytesRead(m.Frames)
 	ph := NewPhaseMeter(m)
 	ph.Mark("load")
 
@@ -51,7 +51,7 @@ func TestPhaseMeterAccountsForEveryByte(t *testing.T) {
 
 	// The meter starts AFTER `before`, so the rows account for everything the
 	// pager did from that point on and nothing earlier.
-	if got := m.BytesRead() - before; sum != got {
+	if got := m.BytesRead(m.Frames) - before; sum != got {
 		t.Errorf("the rows sum to %d B and the pager read %d B since the meter "+
 			"started: %+d unaccounted -- a phase is being lost or double-counted",
 			sum, got, int64(sum)-int64(got))

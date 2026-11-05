@@ -84,7 +84,7 @@ func pagingDoesNotChangeTheAnswer(t *testing.T, path string, opts ...Option) {
 		}
 		defer m.Close()
 		if frames > 0 {
-			m.SetPageBudget(uint64(frames) * m.PageSize())
+			m.SetPageBudget(m.Frames, uint64(frames)*m.PageSize())
 		}
 		in := m.Vocab.Encode("The capital of France is", true)
 		st := testInstance(t, m, len(in)+8+1, instOpts...)
@@ -118,7 +118,7 @@ func pagingDoesNotChangeTheAnswer(t *testing.T, path string, opts ...Option) {
 				t.Fatalf("the composed CPU served %d block steps, where the prompt and 8 steps run at least %d", served, 9*nl)
 			}
 		}
-		got, faults, _ := m.PageStats()
+		got, faults, _ := m.PageStats(m.Frames)
 		return out, got, faults
 	}
 

@@ -1255,7 +1255,7 @@ func (kc *kvCache) dropTail(n int) {
 // asserts. RoPE is applied before the cache write, so a stored key carries its
 // absolute position and only a prefix is reusable.
 func (s *Instance) PrefillCached(tokens []int32) ([]float32, error) {
-	defer s.m.EnterPager()()
+	defer s.m.EnterPager(s.m.Frames)()
 	if len(tokens) == 0 {
 		return nil, errEmptyPrompt{}
 	}
@@ -1282,7 +1282,7 @@ func (s *Instance) PrefillCached(tokens []int32) ([]float32, error) {
 // on rows after them, which the run's name covers, and a restore that ended
 // inside it would leave the tail a chunk that cuts the run.
 func (s *Instance) PrefillCachedMixed(spans ...model.Span) ([]float32, error) {
-	defer s.m.EnterPager()()
+	defer s.m.EnterPager(s.m.Frames)()
 	if s.seqPos(0) != 0 {
 		return nil, fmt.Errorf("model: PrefillCachedMixed wants a fresh sequence, this one is at position %d", s.seqPos(0))
 	}
@@ -1379,7 +1379,7 @@ func (s *Instance) prefillCachedKey(key []int32, rows int, run func(n int) ([]fl
 // with the last logits, so the next request finds this prompt too. A server's
 // step loop restores this way and then runs the rest as a row.
 func (s *Instance) RestorePrefix(tokens []int32) (int, error) {
-	defer s.m.EnterPager()()
+	defer s.m.EnterPager(s.m.Frames)()
 	if len(tokens) == 0 {
 		return 0, errEmptyPrompt{}
 	}

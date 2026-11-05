@@ -152,7 +152,7 @@ func TestPagesMoveWhileADeviceHoldsBlocks(t *testing.T) {
 		}
 		defer m.Close()
 		if frames > 0 {
-			m.SetPageBudget(uint64(frames) * m.PageSize())
+			m.SetPageBudget(m.Frames, uint64(frames)*m.PageSize())
 		}
 		in := m.Vocab.Encode("The capital of France is", true)
 		st := testInstance(t, m, len(in)+ntok+1)
@@ -252,7 +252,7 @@ func TestPageBudgetResizesWhileServing(t *testing.T) {
 	// run and a frame that was reused for another block has to be re-read.
 	walk := func(m *model.Model, i int) bool {
 		n := []int{2, 22, 3, 22, 2}[i%5]
-		m.SetPageBudget(uint64(n) * m.PageSize())
+		m.SetPageBudget(m.Frames, uint64(n)*m.PageSize())
 		return true
 	}
 	resized, n := run(walk)

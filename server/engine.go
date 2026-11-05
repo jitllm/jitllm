@@ -2923,7 +2923,7 @@ func (e *Engine) applyPageBudget(lm *LoadedModel, newest *engine.Instance) {
 	if lm.m.Cfg.NLayer-minDev <= 0 {
 		return // every block is on a device for every session; nothing faults here
 	}
-	lm.m.SetPageBudget(pagerBudget(avail))
+	lm.m.SetPageBudget(lm.m.Frames, pagerBudget(avail))
 }
 
 // defaultMaxSeq is the KV capacity a session of lm gets when it asks for none.

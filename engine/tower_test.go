@@ -134,7 +134,7 @@ func TestStatedTowerBlocksArePagedBlocks(t *testing.T) {
 	}
 	a, b := m.TowerBase, m.TowerBase+1
 	for _, li := range []int{a, b, a} {
-		if err := m.PageIn(li, &m.Layers[li]); err != nil {
+		if err := m.PageIn(m.Frames, li, &m.Layers[li]); err != nil {
 			t.Fatal(err)
 		}
 		if err := bound(li); err != nil {

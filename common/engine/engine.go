@@ -548,7 +548,7 @@ func placementOf(m *model.Model, st *engine.Instance, g *gpu.GPU) []byte {
 			}
 		}
 	}
-	return blockMap(m.Blocks(), runs, devOf, m.BlockResident)
+	return blockMap(m.Blocks(), runs, devOf, func(li int) bool { return m.BlockResident(m.Frames, li) })
 }
 
 // allocStat is where the model is: bytes per device and bytes on the host.
@@ -562,8 +562,8 @@ func placementOf(m *model.Model, st *engine.Instance, g *gpu.GPU) []byte {
 // ordinal, fastest first.
 func allocStat(m *model.Model, st *engine.Instance, g *gpu.GPU, nBlocks int) session.Allocation {
 	a := session.Allocation{
-		HostUsed:   m.HostBytes(),
-		HostBudget: m.PageBudget(),
+		HostUsed:   m.HostBytes(m.Frames),
+		HostBudget: m.PageBudget(m.Frames),
 		Dense:      m.DenseBytes(),
 		NBlocks:    nBlocks,
 		PageBytes:  m.PageSize(),
@@ -608,14 +608,14 @@ func allocStat(m *model.Model, st *engine.Instance, g *gpu.GPU, nBlocks int) ses
 }
 
 func pagerStat(m *model.Model) session.PagerStat {
-	fr, in, out := m.PageStats()
+	fr, in, out := m.PageStats(m.Frames)
 	// Resident is the resident bytes: Frames is what jlm holds, Resident is
 	// what that costs.
 	return session.PagerStat{
 		Frames: fr, PageIns: in, PageOuts: out,
-		Resident:  m.HostBytes(),
-		BytesRead: m.BytesRead(), Reads: m.PagerReads(),
-		ChunkBytes: m.ChunkBytes(),
+		Resident:  m.HostBytes(m.Frames),
+		BytesRead: m.BytesRead(m.Frames), Reads: m.PagerReads(),
+		ChunkBytes: m.ChunkBytes(m.Frames),
 	}
 }
 
@@ -726,7 +726,7 @@ func (e *Engine) generate(r session.ChatRequest) {
 	ph.Mark("load")
 	var moved0 int
 	e.inspect(func(st *engine.Instance) { moved0 = st.Relocations() })
-	_, _, outs0 := e.m.PageStats()
+	_, _, outs0 := e.m.PageStats(e.m.Frames)
 
 	// The session resets before every turn (server.Engine.Generate): a chat
 	// prompt is the whole history re-rendered, so prefilling onto a session
