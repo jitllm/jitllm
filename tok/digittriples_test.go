@@ -19,7 +19,7 @@ const falconPre = `{"type": "Sequence", "pretokenizers": [{"type": "Punctuation"
 // It fails if "[0-9][0-9][0-9]" is read as the llama3 alternation skeleton,
 // which runs a second letter/digit regex instead of isolating digit triples.
 func TestFalconSplitsDigitTriples(t *testing.T) {
-	ops, err := pretok.ParsePreTokenizer(strings.NewReader(realTokenizerJSON(falconPre)))
+	ops, err := pretok.ParsePreTokenizer(strings.NewReader(RealTokenizerJSON(falconPre)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestTheDigitTripleSplitIsReadOnlyIsolated(t *testing.T) {
 		`{"type": "Split", "pattern": {"Regex": "[0-9][0-9][0-9]"}, "behavior": "Removed", "invert": false}`,
 		`{"type": "Split", "pattern": {"Regex": "[0-9][0-9][0-9]"}, "behavior": "Isolated", "invert": true}`,
 	} {
-		if ops, err := pretok.ParsePreTokenizer(strings.NewReader(realTokenizerJSON(pre))); err == nil {
+		if ops, err := pretok.ParsePreTokenizer(strings.NewReader(RealTokenizerJSON(pre))); err == nil {
 			t.Errorf("%s: accepted as %+v", pre, ops)
 		}
 	}

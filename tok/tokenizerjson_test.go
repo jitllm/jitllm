@@ -1,10 +1,12 @@
-package tok
+package tok_test
 
 import (
 	"fmt"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/jitllm/jitllm/tok"
 
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/tok/pretok"
@@ -13,17 +15,6 @@ import (
 // Gates for the runtime tokenizer.json parse and for WithTokenizer. Each was
 // run against a violation: a wrong pipeline tokenizes fluently and slightly
 // differently.
-
-// realTokenizerJSON returns a tokenizer.json body carrying obj as its
-// pre_tokenizer, laid out the way HuggingFace writes one: the key sits between
-// other top-level keys and a vocabulary follows it.
-func realTokenizerJSON(obj string) string {
-	return `{"version":"1.0","truncation":null,"padding":null,` +
-		`"added_tokens":[{"id":0,"content":"<|endoftext|>","special":true}],` +
-		`"normalizer":null,"pre_tokenizer":` + obj +
-		`,"post_processor":null,"decoder":{"type":"ByteLevel"},` +
-		`"model":{"type":"BPE","vocab":{"Richard":42,"Regex":43},"merges":["a b"]}}`
-}
 
 // TestParsePreTokenizerAgreesWithTheGeneratedTable feeds the runtime parser the
 // shapes the generator read from the same models, and requires the same ops.
@@ -53,7 +44,7 @@ func TestParsePreTokenizerAgreesWithTheGeneratedTable(t *testing.T) {
 			`{"type":"ByteLevel","add_prefix_space":false,"trim_offsets":true,"use_regex":true}`,
 			`{"type":"Digits","individual_digits":true}`)},
 	} {
-		ops, err := pretok.ParsePreTokenizer(strings.NewReader(realTokenizerJSON(c.obj)))
+		ops, err := pretok.ParsePreTokenizer(strings.NewReader(tok.RealTokenizerJSON(c.obj)))
 		if err != nil {
 			t.Errorf("%s: %v", c.name, err)
 			continue
@@ -83,7 +74,7 @@ func jsonString(s string) string {
 // model.vocab and returned a token as the pattern. The bodies built here carry
 // "Richard" and "Regex" in the vocabulary on purpose.
 func TestPreTokenizerObjectStopsAtTheObject(t *testing.T) {
-	body := realTokenizerJSON(`{"type":"ByteLevel","add_prefix_space":false,"use_regex":true}`)
+	body := tok.RealTokenizerJSON(`{"type":"ByteLevel","add_prefix_space":false,"use_regex":true}`)
 	obj, err := pretok.PreTokenizerObject([]byte(body))
 	if err != nil {
 		t.Fatal(err)
@@ -104,7 +95,7 @@ func TestPreTokenizerObjectStopsAtTheObject(t *testing.T) {
 	// The brace count alone is not enough: real patterns happen to balance, so
 	// this one carries an odd brace behind an escaped quote, making the string
 	// and escape tracking load-bearing.
-	tricky := realTokenizerJSON(`{"type":"Split","pattern":{"Regex":"a\"}b"},"behavior":"Isolated"}`)
+	tricky := tok.RealTokenizerJSON(`{"type":"Split","pattern":{"Regex":"a\"}b"},"behavior":"Isolated"}`)
 	obj, err = pretok.PreTokenizerObject([]byte(tricky))
 	if err != nil {
 		t.Fatal(err)
@@ -123,9 +114,9 @@ func TestParsePreTokenizerRefuses(t *testing.T) {
 	for _, c := range []struct{ name, body, want string }{
 		{"no pre_tokenizer key", `{"version":"1.0","model":{"type":"BPE"}}`, "pre_tokenizer"},
 		{"truncated object", `{"pre_tokenizer":{"type":"Sequence","pretokenizers":[{"type":"Byte`, "truncated"},
-		{"unknown stage only", realTokenizerJSON(`{"type":"Metaspace","replacement":"_"}`), "no recognised stages"},
-		{"a Split with no readable pattern", realTokenizerJSON(`{"type":"Split","pattern":{"String":"x"}}`), "no recognised stages"},
-		{"not JSON", realTokenizerJSON(`{"type":,}`), "does not parse"},
+		{"unknown stage only", tok.RealTokenizerJSON(`{"type":"Metaspace","replacement":"_"}`), "no recognised stages"},
+		{"a Split with no readable pattern", tok.RealTokenizerJSON(`{"type":"Split","pattern":{"String":"x"}}`), "no recognised stages"},
+		{"not JSON", tok.RealTokenizerJSON(`{"type":,}`), "does not parse"},
 	} {
 		ops, err := pretok.ParsePreTokenizer(strings.NewReader(c.body))
 		if err == nil {
@@ -186,12 +177,12 @@ func TestWithTokenizerOverridesTheGGUF(t *testing.T) {
 	f, name := gpt2Model(t)
 	defer f.Close()
 
-	base, err := New(f.vocab(t))
+	base, err := tok.New(f.vocab(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	pre := f.pre()
-	if base.pipe == nil {
+	if !base.Piped() {
 		t.Fatalf("%s (pre=%q) did not compose a pipeline; this test cannot see an override", name, pre)
 	}
 
@@ -203,7 +194,7 @@ func TestWithTokenizerOverridesTheGGUF(t *testing.T) {
 	obj := `{"type":"Sequence","pretokenizers":[` +
 		`{"type":"Split","pattern":{"Regex":` + jsonString(pat) + `},"behavior":"Isolated","invert":false},` +
 		`{"type":"ByteLevel","add_prefix_space":false,"trim_offsets":false,"use_regex":false}]}`
-	over, err := New(f.vocab(t), WithTokenizer(strings.NewReader(realTokenizerJSON(obj))))
+	over, err := tok.New(f.vocab(t), tok.WithTokenizer(strings.NewReader(tok.RealTokenizerJSON(obj))))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,10 +202,10 @@ func TestWithTokenizerOverridesTheGGUF(t *testing.T) {
 		{Kind: pretok.OpSplit, Split: pretok.SplitParams{Contractions: true, CaseFold: true, DigitGroup: 3}},
 		{Kind: pretok.OpByteLevel},
 	}
-	if !reflect.DeepEqual(over.pipe.ops, want) {
-		t.Fatalf("override did not reach the vocabulary: %+v", over.pipe.ops)
+	if !reflect.DeepEqual(over.PipeOps(), want) {
+		t.Fatalf("override did not reach the vocabulary: %+v", over.PipeOps())
 	}
-	if reflect.DeepEqual(base.pipe.ops, over.pipe.ops) {
+	if reflect.DeepEqual(base.PipeOps(), over.PipeOps()) {
 		t.Fatalf("%s already had the override's pipeline; the comparison proves nothing", name)
 	}
 
@@ -225,7 +216,7 @@ func TestWithTokenizerOverridesTheGGUF(t *testing.T) {
 	// has no multi-digit token). llama3's `\s*[\r\n]+` takes "\n\n" whole
 	// where GPT-2's pattern emits two, and "ĊĊ" is one token.
 	const text = "a\n\nb"
-	if a, b := base.preSplit(text), over.preSplit(text); reflect.DeepEqual(a, b) {
+	if a, b := base.PreSplit(text), over.PreSplit(text); reflect.DeepEqual(a, b) {
 		t.Errorf("%s: the override did not change the split of %q: %q", name, text, a)
 	}
 	if a, b := base.Encode(text, false), over.Encode(text, false); reflect.DeepEqual(a, b) {
@@ -233,7 +224,7 @@ func TestWithTokenizerOverridesTheGGUF(t *testing.T) {
 	}
 
 	// The default path is unchanged with no option; asserted, not assumed.
-	again, err := New(f.vocab(t))
+	again, err := tok.New(f.vocab(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,19 +243,19 @@ func TestWithTokenizerRescuesARefusedName(t *testing.T) {
 	// produced; see src.renamePre.
 	f.renamePre("a-name-nobody-has-catalogued")
 
-	if _, err := New(f.vocab(t)); err == nil {
+	if _, err := tok.New(f.vocab(t)); err == nil {
 		t.Fatalf("%s with an unknown pre loaded anyway; the refusal this rescues is gone", name)
 	} else if !strings.Contains(err.Error(), "not implemented") {
 		t.Fatalf("unexpected refusal: %v", err)
 	}
 	const obj = `{"type":"Sequence","pretokenizers":[{"type":"Split","pattern":{"Regex":"(?i:'s|'t)|\\p{N}{1,3}"},"behavior":"Isolated"},` +
 		`{"type":"ByteLevel","add_prefix_space":false,"use_regex":false}]}`
-	v, err := New(f.vocab(t), WithTokenizer(strings.NewReader(realTokenizerJSON(obj))))
+	v, err := tok.New(f.vocab(t), tok.WithTokenizer(strings.NewReader(tok.RealTokenizerJSON(obj))))
 	if err != nil {
 		t.Fatalf("the asserted tokenizer.json did not rescue the load: %v", err)
 	}
-	if v.pipe == nil || len(v.pipe.ops) != 2 {
-		t.Fatalf("loaded, but on the legacy path: %+v", v.pipe)
+	if !v.Piped() || len(v.PipeOps()) != 2 {
+		t.Fatalf("loaded, but on the legacy path: %+v", v.PipeOps())
 	}
 	if len(v.Encode("hello 123", false)) == 0 {
 		t.Error("the rescued vocabulary encodes nothing")
@@ -283,13 +274,13 @@ func TestWithTokenizerRefusedOnSPM(t *testing.T) {
 		t.Fatalf("tokenizer.ggml.model is %q, want llama; this test proved nothing", kind)
 	}
 	const obj = `{"type":"ByteLevel","add_prefix_space":false,"use_regex":true}`
-	if _, err := New(f.vocab(t), WithTokenizer(strings.NewReader(realTokenizerJSON(obj)))); err == nil {
+	if _, err := tok.New(f.vocab(t), tok.WithTokenizer(strings.NewReader(tok.RealTokenizerJSON(obj)))); err == nil {
 		t.Fatal("an SPM vocabulary accepted a tokenizer.json pre-tokenizer silently")
 	} else if !strings.Contains(err.Error(), "byte-level BPE") {
 		t.Errorf("error %q does not say which vocabularies take the option", err)
 	}
 	// And the same file still loads without the option.
-	if _, err := New(f.vocab(t)); err != nil {
+	if _, err := tok.New(f.vocab(t)); err != nil {
 		t.Fatalf("the SPM default path broke: %v", err)
 	}
 }

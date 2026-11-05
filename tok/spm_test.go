@@ -1,4 +1,4 @@
-package tok
+package tok_test
 
 import (
 	"encoding/json"
@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/jitllm/jitllm/tok"
 
 	"github.com/jitllm/jitllm/convert/gguf"
 	"github.com/jitllm/jitllm/internal/testmodels"
@@ -49,7 +51,7 @@ func TestGoldens(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer f.Close()
-			v, err := New(vocabOf(t, f))
+			v, err := tok.New(vocabOf(t, f))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -88,7 +90,7 @@ func stories260K(t *testing.T) *src {
 func TestRoundTrip(t *testing.T) {
 	f := stories260K(t)
 	defer f.Close()
-	v, err := New(f.vocab(t))
+	v, err := tok.New(f.vocab(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +109,7 @@ func TestRoundTrip(t *testing.T) {
 func TestVocabShape(t *testing.T) {
 	f := stories260K(t)
 	defer f.Close()
-	v, err := New(f.vocab(t))
+	v, err := tok.New(f.vocab(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +119,7 @@ func TestVocabShape(t *testing.T) {
 	// All 256 byte-fallback tokens must exist, or the first non-ASCII input
 	// silently becomes <unk> instead of round-tripping.
 	for b := 0; b < 256; b++ {
-		if v.byteTok[b] < 0 {
+		if v.ByteToken(b) < 0 {
 			t.Fatalf("byte 0x%02x has no fallback token", b)
 		}
 	}

@@ -25,3 +25,20 @@ func vocabOfMaybe(t testing.TB, f *meta.File) *jlm.Vocab {
 	}
 	return v
 }
+
+// vocabOf is the container's tokenizer section, built from a parsed source.
+//
+// The tests go through the converter: tok.New reads a jlm.Vocab as conversion
+// resolved it, so a hand-built Vocab would test a vocabulary no converter
+// produces.
+func vocabOf(t testing.TB, f *meta.File) *jlm.Vocab {
+	t.Helper()
+	v, err := convert.VocabOf(f)
+	if err != nil {
+		t.Fatalf("convert.VocabOf: %v", err)
+	}
+	if v == nil {
+		t.Skip("this model carries no tokenizer section -- the gate would prove nothing")
+	}
+	return v
+}

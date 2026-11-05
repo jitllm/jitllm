@@ -1,8 +1,10 @@
-package tok
+package tok_test
 
 import (
 	"path/filepath"
 	"testing"
+
+	"github.com/jitllm/jitllm/tok"
 
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
@@ -30,7 +32,7 @@ func TestPipelineIsComposedNotHandPicked(t *testing.T) {
 			f.Close()
 			continue // a projector GGUF has no tokenizer section
 		}
-		v, verr := New(jv)
+		v, verr := tok.New(jv)
 		f.Close()
 		if kind != "gpt2" || verr != nil {
 			continue
@@ -39,13 +41,13 @@ func TestPipelineIsComposedNotHandPicked(t *testing.T) {
 			t.Logf("%-42s pre=%-12q NO generated pipeline (legacy path)", filepath.Base(p), pre)
 			continue
 		}
-		if v.pipe == nil {
+		if !v.Piped() {
 			t.Errorf("%s: pre=%q has a generated pipeline but the vocab did not compose it",
 				filepath.Base(p), pre)
 			continue
 		}
 		checked++
-		t.Logf("%-42s pre=%-12q %d composed stages", filepath.Base(p), pre, len(v.pipe.ops))
+		t.Logf("%-42s pre=%-12q %d composed stages", filepath.Base(p), pre, len(v.PipeOps()))
 	}
 	if checked == 0 {
 		testmodels.Missing(t, "%s", "no model exercised the composed pipeline; this test proved nothing")

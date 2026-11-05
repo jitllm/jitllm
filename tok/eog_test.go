@@ -1,4 +1,4 @@
-package tok
+package tok_test
 
 import (
 	"os"
@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strconv"
 	"testing"
+
+	"github.com/jitllm/jitllm/tok"
 
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
@@ -57,12 +59,12 @@ func TestStopSetMatchesLlamaCpp(t *testing.T) {
 			if s == nil {
 				testmodels.Missing(t, "MODEL MISSING: %s", name)
 			}
-			v, err := New(s.vocab(t))
+			v, err := tok.New(s.vocab(t))
 			s.Close()
 			if err != nil {
 				t.Fatal(err)
 			}
-			got := slices.Clone(v.eog)
+			got := slices.Clone(v.EOG())
 			slices.Sort(got)
 			slices.Sort(want)
 			if !slices.Equal(got, want) {
@@ -87,7 +89,7 @@ func TestStatedStopsEndAGeneration(t *testing.T) {
 	}
 	vc := s.vocab(t)
 	s.Close()
-	v, err := New(vc)
+	v, err := tok.New(vc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +102,7 @@ func TestStatedStopsEndAGeneration(t *testing.T) {
 	}
 	dropped := *vc
 	dropped.Stop = nil
-	if w, err := New(&dropped); err != nil {
+	if w, err := tok.New(&dropped); err != nil {
 		t.Fatal(err)
 	} else if w.IsEOG(id) {
 		t.Error("with the stated stops dropped <｜hy_Assistant｜> still ends a generation: a name covers it, and this gate cannot see the container's set")
@@ -124,7 +126,7 @@ func TestHarmonyContinuesPastEnd(t *testing.T) {
 		if s == nil {
 			testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate would prove nothing (RULE 11)", c.stems)
 		}
-		v, err := New(s.vocab(t))
+		v, err := tok.New(s.vocab(t))
 		s.Close()
 		if err != nil {
 			t.Fatal(err)
@@ -157,7 +159,7 @@ func TestDecodeChatRendersHarmonyChannels(t *testing.T) {
 	if s == nil {
 		testmodels.Missing(t, "%s", "MODEL MISSING: "+testmodels.Path("gpt-oss-20b-Q4_K_M")+" (set JITLLM_MODELS to the model directory) -- this gate would prove nothing (RULE 11)")
 	}
-	v, err := New(s.vocab(t))
+	v, err := tok.New(s.vocab(t))
 	s.Close()
 	if err != nil {
 		t.Fatal(err)
@@ -194,7 +196,7 @@ func TestDecodeChatRendersHarmonyChannels(t *testing.T) {
 	if p == nil {
 		testmodels.Missing(t, "%s", "MODEL MISSING: "+testmodels.Path("Phi-3.5-mini-instruct-Q4_K_M")+" (set JITLLM_MODELS to the model directory) -- the non-harmony arm would prove nothing")
 	}
-	pv, err := New(p.vocab(t))
+	pv, err := tok.New(p.vocab(t))
 	p.Close()
 	if err != nil {
 		t.Fatal(err)

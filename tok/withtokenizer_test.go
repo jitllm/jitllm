@@ -1,4 +1,4 @@
-package tok
+package tok_test
 
 import (
 	"fmt"
@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/jitllm/jitllm/tok"
 
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/tok/pretok"
@@ -146,22 +148,22 @@ func qwenBPEModel(t *testing.T) (*src, string) {
 
 // composes reports whether s's tokenizer composes exactly these stages.
 func composes(t *testing.T, s *src, ops []pretok.Op) bool {
-	v, err := New(s.vocab(t))
-	return err == nil && v.pipe != nil && reflect.DeepEqual(v.pipe.ops, ops)
+	v, err := tok.New(s.vocab(t))
+	return err == nil && v.Piped() && reflect.DeepEqual(v.PipeOps(), ops)
 }
 
 // loadWith loads f with the pre-tokenizer from a testdata artefact.
-func loadWith(t *testing.T, f *src, artefact string) *Vocab {
+func loadWith(t *testing.T, f *src, artefact string) *tok.Vocab {
 	t.Helper()
 	b, err := os.ReadFile(filepath.Join("testdata", "pre", artefact+".json"))
 	if err != nil {
 		t.Fatalf("RULE 11: %v -- the artefact is checked in, fetch it rather than skipping", err)
 	}
-	v, err := New(f.vocab(t), WithTokenizer(strings.NewReader(string(b))))
+	v, err := tok.New(f.vocab(t), tok.WithTokenizer(strings.NewReader(string(b))))
 	if err != nil {
 		t.Fatalf("WithTokenizer(%s.json): %v", artefact, err)
 	}
-	if v.pipe == nil {
+	if !v.Piped() {
 		t.Fatalf("%s.json: loaded with no composed pipeline -- the override did not reach newBPE", artefact)
 	}
 	return v
@@ -180,29 +182,29 @@ func TestWithTokenizerIsSelected(t *testing.T) {
 	defer f.Close()
 	t.Logf("running against %s", name)
 
-	base, err := New(f.vocab(t))
+	base, err := tok.New(f.vocab(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if base.pipe == nil {
+	if !base.Piped() {
 		t.Fatalf("%s composed no pipeline; this gate cannot see an override", name)
 	}
-	if !reflect.DeepEqual(base.pipe.ops, pretok.Table()["qwen2"]) {
-		t.Fatalf("%s did not select the generated qwen2 row: %+v", name, base.pipe.ops)
+	if !reflect.DeepEqual(base.PipeOps(), pretok.Table()["qwen2"]) {
+		t.Fatalf("%s did not select the generated qwen2 row: %+v", name, base.PipeOps())
 	}
-	if g := base.pipe.ops[0].Split.DigitGroup; g != 1 {
+	if g := base.PipeOps()[0].Split.DigitGroup; g != 1 {
 		t.Fatalf("qwen2 groups digits in %d; this gate is built on its being 1", g)
 	}
 
 	// --- arm A: the split changes, exactly and predictably.
 	over := loadWith(t, f, "llama-bpe")
-	if !reflect.DeepEqual(over.pipe.ops, pretok.Table()["llama-bpe"]) {
-		t.Fatalf("the llama-bpe artefact did not reach the vocabulary: %+v", over.pipe.ops)
+	if !reflect.DeepEqual(over.PipeOps(), pretok.Table()["llama-bpe"]) {
+		t.Fatalf("the llama-bpe artefact did not reach the vocabulary: %+v", over.PipeOps())
 	}
-	if reflect.DeepEqual(base.pipe.ops, over.pipe.ops) {
+	if reflect.DeepEqual(base.PipeOps(), over.PipeOps()) {
 		t.Fatalf("%s already runs the llama-bpe pipeline; both arms are the same and prove nothing", name)
 	}
-	if g := over.pipe.ops[0].Split.DigitGroup; g != 3 {
+	if g := over.PipeOps()[0].Split.DigitGroup; g != 3 {
 		t.Fatalf("the override's Split groups digits in %d, want 3", g)
 	}
 	for _, c := range []struct {
@@ -214,10 +216,10 @@ func TestWithTokenizerIsSelected(t *testing.T) {
 			[]string{"2", "0", "2", "4", "-", "0", "6", "-", "0", "1"},
 			[]string{"202", "4", "-", "06", "-", "01"}},
 	} {
-		if got := base.preSplit(c.text); !reflect.DeepEqual(got, c.want) {
+		if got := base.PreSplit(c.text); !reflect.DeepEqual(got, c.want) {
 			t.Errorf("default split of %q is %q, want %q", c.text, got, c.want)
 		}
-		if got := over.preSplit(c.text); !reflect.DeepEqual(got, c.over) {
+		if got := over.PreSplit(c.text); !reflect.DeepEqual(got, c.over) {
 			t.Errorf("overridden split of %q is %q, want %q", c.text, got, c.over)
 		}
 	}
@@ -226,14 +228,14 @@ func TestWithTokenizerIsSelected(t *testing.T) {
 	// A vocabulary that gains a multi-digit token fails here, pointing at the
 	// arm that needs re-deriving.
 	multi := 0
-	for s := range base.ids {
+	for s := range base.IDs() {
 		rs := []rune(s)
 		if len(rs) < 2 {
 			continue
 		}
 		allDigits := true
 		for _, r := range rs {
-			if !ucIsNumber(r) {
+			if !tok.UcIsNumber(r) {
 				allDigits = false
 				break
 			}
@@ -259,14 +261,14 @@ func TestWithTokenizerIsSelected(t *testing.T) {
 	// `\s*[\r\n]+` and becomes two under GPT-2's, and GPT-2's contraction
 	// alternation is case-exact where qwen2's folds.
 	smol := loadWith(t, f, "smollm")
-	if !reflect.DeepEqual(smol.pipe.ops, pretok.Table()["smollm"]) {
-		t.Fatalf("the smollm artefact did not reach the vocabulary: %+v", smol.pipe.ops)
+	if !reflect.DeepEqual(smol.PipeOps(), pretok.Table()["smollm"]) {
+		t.Fatalf("the smollm artefact did not reach the vocabulary: %+v", smol.PipeOps())
 	}
 	ids := func(pieces ...string) []int32 {
 		t.Helper()
 		out := make([]int32, len(pieces))
 		for i, p := range pieces {
-			id, ok := base.ids[p]
+			id, ok := base.IDs()[p]
 			if !ok {
 				t.Fatalf("%s has no %q token; the expectation cannot be derived from the vocabulary", name, p)
 			}
@@ -299,7 +301,7 @@ func TestWithTokenizerIsSelected(t *testing.T) {
 	if f.stem() == "Qwen2-1.5B-Instruct-Q4_K_M" {
 		for _, c := range []struct {
 			text string
-			v    *Vocab
+			v    *tok.Vocab
 			want []int32
 		}{
 			{"a\n\nb", base, []int32{64, 271, 65}},
@@ -315,7 +317,7 @@ func TestWithTokenizerIsSelected(t *testing.T) {
 
 	// The default path is unchanged, checked after two overrides loaded from
 	// the same *meta.File, so an override that mutated shared state shows here.
-	again, err := New(f.vocab(t))
+	again, err := tok.New(f.vocab(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -324,8 +326,8 @@ func TestWithTokenizerIsSelected(t *testing.T) {
 			t.Errorf("a plain New(vocabOf(t, f)) no longer tokenizes %q as it did: %v -> %v", text, a, b)
 		}
 	}
-	if !reflect.DeepEqual(again.pipe.ops, pretok.Table()["qwen2"]) {
-		t.Errorf("a plain New(vocabOf(t, f)) after two overrides composed %+v", again.pipe.ops)
+	if !reflect.DeepEqual(again.PipeOps(), pretok.Table()["qwen2"]) {
+		t.Errorf("a plain New(vocabOf(t, f)) after two overrides composed %+v", again.PipeOps())
 	}
 }
 
@@ -344,7 +346,7 @@ func TestWithTokenizerRescuesUnknownPre(t *testing.T) {
 	if _, ok := pretok.Table()[unknown]; ok {
 		t.Fatalf("%q is in the generated table; this gate would rescue nothing", unknown)
 	}
-	if llama3Family(unknown) || qwen2Family(unknown) || gpt2Family(unknown) || starcoderFamily(unknown) {
+	if tok.Llama3Family(unknown) || tok.Qwen2Family(unknown) || tok.GPT2Family(unknown) || tok.StarcoderFamily(unknown) {
 		t.Fatalf("%q is in a legacy family map; the refusal this gate rescues would never fire", unknown)
 	}
 	f := openSrc(t, testmodels.Path("SmolLM2-360M-Instruct-Q8_0"))
@@ -359,38 +361,38 @@ func TestWithTokenizerRescuesUnknownPre(t *testing.T) {
 	f.renamePre(unknown)
 
 	// The refusal first: a rescue is only a rescue if the load fails without it.
-	if v, err := New(f.vocab(t)); err == nil {
-		t.Fatalf("an uncatalogued pre loaded anyway, composing %+v -- the refusal is gone", v.pipe)
+	if v, err := tok.New(f.vocab(t)); err == nil {
+		t.Fatalf("an uncatalogued pre loaded anyway, composing %+v -- the refusal is gone", v.PipeOps())
 	} else if !strings.Contains(err.Error(), "not implemented") {
 		t.Fatalf("refused for the wrong reason: %v", err)
 	}
 
 	v := loadWith(t, f, "llama-bpe")
-	if !reflect.DeepEqual(v.pipe.ops, pretok.Table()["llama-bpe"]) {
-		t.Fatalf("rescued, but running %+v", v.pipe.ops)
+	if !reflect.DeepEqual(v.PipeOps(), pretok.Table()["llama-bpe"]) {
+		t.Fatalf("rescued, but running %+v", v.PipeOps())
 	}
 	// The asserted pipeline must be the one that runs, not lose to a family
 	// splitter: compare with the same stages built independently, and against
 	// the model's own pipeline (smollm), which the output must not match.
-	ref, err := buildPipeline(pretok.Table()["llama-bpe"])
+	ref, err := tok.BuildPipeline(pretok.Table()["llama-bpe"])
 	if err != nil {
 		t.Fatal(err)
 	}
-	native, err := buildPipeline(pretok.Table()["smollm"])
+	native, err := tok.BuildPipeline(pretok.Table()["smollm"])
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, text := range []string{"1234", "a\n\nb", "IT'S", "don't stop 2024-06-01"} {
-		got := v.preSplit(text)
-		if !reflect.DeepEqual(got, ref.apply(text)) {
+		got := v.PreSplit(text)
+		if !reflect.DeepEqual(got, ref.Apply(text)) {
 			t.Errorf("%q: the rescued vocabulary splits to %q, the asserted pipeline to %q",
-				text, got, ref.apply(text))
+				text, got, ref.Apply(text))
 		}
-		if reflect.DeepEqual(got, native.apply(text)) && !reflect.DeepEqual(ref.apply(text), native.apply(text)) {
+		if reflect.DeepEqual(got, native.Apply(text)) && !reflect.DeepEqual(ref.Apply(text), native.Apply(text)) {
 			t.Errorf("%q: the rescued vocabulary split as the model's own smollm pipeline, not the asserted one", text)
 		}
 	}
-	if got, want := v.preSplit("1234"), []string{"123", "4"}; !reflect.DeepEqual(got, want) {
+	if got, want := v.PreSplit("1234"), []string{"123", "4"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("the rescued vocabulary splits %q to %q, want %q", "1234", got, want)
 	}
 	if ids := v.Encode("hello 1234", false); len(ids) == 0 {
@@ -400,7 +402,7 @@ func TestWithTokenizerRescuesUnknownPre(t *testing.T) {
 	// The option does not leak: the same file, loaded plainly again, is refused
 	// again. An override that stuck would turn a refusal into a silent default
 	// for every later caller of the same *meta.File.
-	if _, err := New(f.vocab(t)); err == nil {
+	if _, err := tok.New(f.vocab(t)); err == nil {
 		t.Error("after an override load, the uncatalogued name stopped being refused")
 	}
 

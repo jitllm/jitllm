@@ -1,4 +1,4 @@
-package tok
+package tok_test
 
 import (
 	"os"

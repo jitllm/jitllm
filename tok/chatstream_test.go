@@ -1,16 +1,18 @@
-package tok
+package tok_test
 
 import (
 	"math/rand"
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/tok"
+
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // requireStreamIsDecodeChat checks that ChatStream's pieces, concatenated, are
 // DecodeChat of every prefix of ids, byte for byte.
-func requireStreamIsDecodeChat(t *testing.T, name string, v *Vocab, ids []int32) {
+func requireStreamIsDecodeChat(t *testing.T, name string, v *tok.Vocab, ids []int32) {
 	t.Helper()
 	cs := v.NewChatStream()
 	var b strings.Builder
@@ -32,7 +34,7 @@ func requireStreamIsDecodeChat(t *testing.T, name string, v *Vocab, ids []int32)
 // and the harmony arm fails at its first <|end|>.
 func TestChatStreamIsDecodeChat(t *testing.T) {
 	text := "Once upon a time, café 日本語 — naïve “quotes” 🙂 the end.\n"
-	w, err := New(wpmVocab(true, false))
+	w, err := tok.New(tok.WPMVocab(true, false))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +46,7 @@ func TestChatStreamIsDecodeChat(t *testing.T) {
 		if s == nil {
 			testmodels.Missing(t, "MODEL MISSING: %s (set JITLLM_MODELS to the model directory) -- this gate would prove nothing (RULE 11)", stem)
 		}
-		v, err := New(s.vocab(t))
+		v, err := tok.New(s.vocab(t))
 		s.Close()
 		if err != nil {
 			t.Fatal(err)
@@ -57,7 +59,7 @@ func TestChatStreamIsDecodeChat(t *testing.T) {
 			rnd[i] = int32(r.Intn(v.Size()))
 		}
 		requireStreamIsDecodeChat(t, stem+" random", v, rnd)
-		if !v.harmony.ok {
+		if !v.Harmony() {
 			continue
 		}
 		sp := func(name string) int32 {

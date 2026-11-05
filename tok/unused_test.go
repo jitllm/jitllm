@@ -1,7 +1,9 @@
-package tok
+package tok_test
 
 import (
 	"testing"
+
+	"github.com/jitllm/jitllm/tok"
 
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
@@ -18,7 +20,7 @@ func TestDecodeRendersUnusedAsNothing(t *testing.T) {
 		if s == nil {
 			testmodels.Missing(t, "MODEL MISSING: %s (set JITLLM_MODELS to the model directory) -- this gate would prove nothing (RULE 11)", c.stem)
 		}
-		v, err := New(s.vocab(t))
+		v, err := tok.New(s.vocab(t))
 		s.Close()
 		if err != nil {
 			t.Fatal(err)
@@ -27,8 +29,8 @@ func TestDecodeRendersUnusedAsNothing(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s: vocabulary has no %s", c.stem, c.unused)
 		}
-		if v.kind[id] != typeUnused {
-			t.Fatalf("%s: %s is type %d, not UNUSED -- the gate is not testing what it names", c.stem, c.unused, v.kind[id])
+		if v.Kind(id) != tok.TypeUnused {
+			t.Fatalf("%s: %s is type %d, not UNUSED -- the gate is not testing what it names", c.stem, c.unused, v.Kind(id))
 		}
 		// The placeholder must vanish and its neighbours must not.
 		word := v.Encode(" Paris", false)
