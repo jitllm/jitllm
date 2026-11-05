@@ -1,6 +1,6 @@
 # A prompt chunk in a ragged step runs as a prefill
 
-A batch step (`model.Scheduler`, `gpu.GPU.LayersRows`) carries rows of several
+A batch step (`engine.Scheduler`, `gpu.GPU.LayersRows`) carries rows of several
 sequences: decoding rows, and prompt chunks admitted beside them. On a device,
 the step is built for decode. A prompt chunk in it pays for that, and a step
 made only of prompt chunks (a decision batch, a server burst of new requests)

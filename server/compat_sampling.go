@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine"
 )
 
 // oaSampling is every sampling field the two shims read, decoded in one place
@@ -92,7 +92,7 @@ func (q samplingFields) validate() error {
 // sampler validates the fields and builds the sampler a request runs with. nil
 // means the session's own, which only a named session with no sampling field
 // gets.
-func (q *oaSampling) sampler(session string) (*model.Sampler, error) {
+func (q *oaSampling) sampler(session string) (*engine.Sampler, error) {
 	if err := q.fields().validate(); err != nil {
 		return nil, err
 	}
@@ -100,7 +100,7 @@ func (q *oaSampling) sampler(session string) (*model.Sampler, error) {
 		q.MinP == nil && q.RepetitionPenalty == nil && q.Seed == nil {
 		return nil, nil
 	}
-	s := &model.Sampler{Temp: 1, TopP: 1}
+	s := &engine.Sampler{Temp: 1, TopP: 1}
 	if q.Temperature != nil {
 		s.Temp = *q.Temperature
 	}

@@ -218,7 +218,7 @@ func TestPlanTakesTheUnion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, err := plan(m, []string{"engine/model/paging.go", "nowhere/x.go"})
+	p, err := plan(m, []string{"engine/paging.go", "model/model.go", "nowhere/x.go"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +230,18 @@ func TestPlanTakesTheUnion(t *testing.T) {
 		}
 	}
 	if !have["five-principles"] || !have["model-correctness"] {
-		t.Errorf("engine/model/ plans %v", have)
+		t.Errorf("engine/* and model/ plan %v", have)
+	}
+	// engine/* is the engine package's own files: a subpackage's path does
+	// not take its checks.
+	sub, err := plan(m, []string{"engine/sched/x.go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range sub.Checks {
+		if c.Name == "composed" || c.Name == "relocation" {
+			t.Errorf("engine/sched/x.go takes the engine package's %s check", c.Name)
+		}
 	}
 	if len(p.Unmapped) != 1 || p.Unmapped[0] != "nowhere/x.go" {
 		t.Errorf("unmapped %v", p.Unmapped)

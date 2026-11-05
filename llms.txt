@@ -36,7 +36,8 @@ Things to know before using or changing it:
 
 ## Code
 
-- [engine/model](https://github.com/jitllm/jitllm/tree/main/engine/model): the inference engine (Open, State, Prefill/Forward, batching, Scheduler, KV stores, prefix cache, embeddings, vision)
+- [model](https://github.com/jitllm/jitllm/tree/main/model): a loaded model (Open, Config, the tokenizer, the chat template, the graphs it states, its vision tower)
+- [engine](https://github.com/jitllm/jitllm/tree/main/engine): what runs a model (instances, sessions, Prefill/Forward, batching, the Scheduler, KV stores, prefix cache, embeddings)
 - [engine/nn](https://github.com/jitllm/jitllm/tree/main/engine/nn): the kernel entry points the graph calls, and per-shape kernel selection
 - [engine/sched](https://github.com/jitllm/jitllm/tree/main/engine/sched): the worker pool, core sets and memory budgets
 - [engine/device/cpu](https://github.com/jitllm/jitllm/tree/main/jit/cpu): the x86-64 (SSE, AVX2, VNNI) and ARM64 code generators

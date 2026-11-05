@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/jitllm/jitllm/engine/grammar"
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/model"
 
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )

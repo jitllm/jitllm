@@ -17,7 +17,9 @@ import (
 
 	"connectrpc.com/connect"
 
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/model"
+
+	"github.com/jitllm/jitllm/engine"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
@@ -129,7 +131,7 @@ func TestTheMemCacheRestoresAndAnswersAsAColdPrefill(t *testing.T) {
 			}
 			p := longPrompt(wlm.m)
 			turn := append(slices.Clone(p), wlm.m.Vocab.Encode(" The dog said hello to the cat.", false)...)
-			seeded := &model.Sampler{Temp: 0.8, TopK: 40, Seed: 7}
+			seeded := &engine.Sampler{Temp: 0.8, TopK: 40, Seed: 7}
 
 			for i, o := range []GenerateOptions{
 				{Prompt: idsPrompt(p), MaxTokens: 12},
@@ -230,13 +232,13 @@ func TestSessionsAnswerAsFreshOnes(t *testing.T) {
 		}
 		answers[i%2] = got.ids
 		if i == 0 {
-			composed = slm.m.CPUComposes()
+			composed = slm.inst.CPUComposes()
 		}
 	}
 	if slices.Equal(answers[0], answers[1]) {
 		t.Fatal("the two prompts have the same answer, so a leaked history could not show")
 	}
-	if n := slm.m.CPUComposes() - composed; n != 0 {
+	if n := slm.inst.CPUComposes() - composed; n != 0 {
 		t.Fatalf("five requests after the first asked the composer %d times", n)
 	}
 	if st := shared.MemCacheStats(slm); st.SessionsOpened != 6 || st.SessionsClosed != 6 {
@@ -268,9 +270,9 @@ func TestAWarmLoadRunsOnTheModelsInstance(t *testing.T) {
 	if st.Store.Sets != 0 || lm.tokensPrefilled.Load() != 0 || lm.tokensGenerated.Load() != 0 {
 		t.Fatalf("the warm-up was counted as served or stored: %+v, %d prefilled", st, lm.tokensPrefilled.Load())
 	}
-	composed := lm.m.CPUComposes()
+	composed := lm.inst.CPUComposes()
 	generate(t, e, GenerateOptions{ModelID: "m", Prompt: Prompt{Kind: PromptText, Text: story}, MaxTokens: 4})
-	if n := lm.m.CPUComposes() - composed; n != 0 {
+	if n := lm.inst.CPUComposes() - composed; n != 0 {
 		t.Fatalf("the first request after a warm load asked the composer %d times", n)
 	}
 
@@ -443,7 +445,7 @@ func TestACancelledRowLeavesItsPromptUnrun(t *testing.T) {
 		fed := 0
 		if begun {
 			fed = 4
-			if err := s.ms.Run(context.Background(), model.PhasePrefill, func(in *model.Instance) error {
+			if err := s.ms.Run(context.Background(), engine.PhasePrefill, func(in *engine.Instance) error {
 				_, err := in.Prefill(p[:fed])
 				return err
 			}); err != nil {
@@ -457,7 +459,7 @@ func TestACancelledRowLeavesItsPromptUnrun(t *testing.T) {
 		// Nothing is waiting, so the loop goroutine is parked in awaitWork
 		// and its rows are this goroutine's.
 		lp.rows = append(lp.rows, r)
-		if units := lp.promptUnits(nil, model.MaxStepRows); len(units) != 0 {
+		if units := lp.promptUnits(nil, engine.MaxStepRows); len(units) != 0 {
 			t.Fatalf("begun %v: a cancelled row was fed %d unit(s)", begun, len(units))
 		}
 		select {
@@ -559,11 +561,11 @@ func TestAnthropicCacheUsageIsReported(t *testing.T) {
 // disk; once memory has dropped it, a Get finds it on disk and copies it back
 // up, so the next Get is a memory hit.
 func TestTheMemCacheLayersOverThePromptStore(t *testing.T) {
-	disk, err := model.NewFileStore(t.TempDir())
+	disk, err := engine.NewFileStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	mem := model.NewBoundedMemStore(4096)
+	mem := engine.NewBoundedMemStore(4096)
 	defer mem.Close()
 	l := &layered{mem: mem, disk: disk}
 	page := bytes.Repeat([]byte{3}, 4096)
@@ -574,7 +576,7 @@ func TestTheMemCacheLayersOverThePromptStore(t *testing.T) {
 	if err := l.Set("b", 0, 0, bytes.NewReader(page)); err != nil {
 		t.Fatal(err)
 	}
-	if err := mem.Get("a", 0, 0, io.Discard); !errors.Is(err, model.ErrNoPage) {
+	if err := mem.Get("a", 0, 0, io.Discard); !errors.Is(err, engine.ErrNoPage) {
 		t.Fatalf("memory still holds the first page (%v): the bound never bit", err)
 	}
 	var got bytes.Buffer
@@ -585,7 +587,7 @@ func TestTheMemCacheLayersOverThePromptStore(t *testing.T) {
 	if err := l.Get("a", 0, 0, io.Discard); err != nil || mem.Stats().Hits != before+1 {
 		t.Fatalf("a disk hit was not copied up to memory (%v)", err)
 	}
-	if err := l.Get("c", 0, 0, io.Discard); !errors.Is(err, model.ErrNoPage) {
+	if err := l.Get("c", 0, 0, io.Discard); !errors.Is(err, engine.ErrNoPage) {
 		t.Fatalf("a page neither holds returned %v", err)
 	}
 }

@@ -20,7 +20,7 @@ capacity the attention kernels baked in (K transposed at stride `cap+1`, a
 score row `cap` wide), so growth was reallocate-copy-rebuild, a batch reserved
 every row's whole context up front, and capacity had to be managed per session.
 Everything else in jitllm is paged -- weights on the host and the device,
-expert pages, the host KV cache (engine/model/kvpage.go) -- and the device KV
+expert pages, the host KV cache (engine/kvpage.go) -- and the device KV
 was the one place it was missing.
 
 The principles, which are the requirement:
@@ -101,7 +101,7 @@ batch session B beside a single session A on a tight card could only leave the
 card whole (0 of 16 blocks) where the contiguous cache let it split. With
 per-layer ids a session leaving layer `l` frees exactly layer `l`'s pages, and
 the same test keeps 6 of 16 of B's blocks on the card with A untouched
-(`model.TestABatchLeavesAnotherSessionAlone/tight`). A session takes pages only
+(`engine.TestABatchLeavesAnotherSessionAlone/tight`). A session takes pages only
 in the layers it runs on the device.
 
 **One descriptor set still serves every layer**, because a sequence's run sits
@@ -157,7 +157,7 @@ over.
 
 ## Ownership
 
-    session (a model.State)  owns  sequences (one, or one per batch row)
+    session (a engine.State)  owns  sequences (one, or one per batch row)
     sequence                 owns  a page list (ids, in position order)
                                    its length (positions written)
 
@@ -366,7 +366,7 @@ table entry the dummy, the id fenced, and an evicted page's home copy nil
 restarting below it) takes a fresh id; one it would read is refused by name.
 The host keeps the same rule (`kvPages.release`), so a session's history in a
 windowed layer is the window and the slack, not the context
-(`model.TestWindowedLayersHoldTheirWindow`). Ids are local to a
+(`engine.TestWindowedLayersHoldTheirWindow`). Ids are local to a
 device; a step spanning several devices reserves its pages on all of them before
 the first device runs.
 
@@ -433,7 +433,7 @@ Running out of pages, in order:
    chunk's furthest row, and the evicted prefix goes up once a layer for the
    chunk rather than once a row (100 tokens over the gate's evicted history:
    400 streamed passes where a row at a time takes at least 1,600). Gate:
-   `model.TestKVEvictionRunsPastTheBudget` -- Llama-3.2-1B, 320 tokens past a
+   `engine.TestKVEvictionRunsPastTheBudget` -- Llama-3.2-1B, 320 tokens past a
    budget held a few pages above the prompt's, 4 pages of every layer sent
    home, all 16 blocks still placed, 1.7e-3 against the unconstrained card and
    3.700e-3 against the host (the unconstrained card's own figure); its
@@ -499,7 +499,7 @@ measured against is deleted.
    prefix cache names, which every sequence that maps it holds and none
    writes in place (kvshare.go: a write copies it on the card). BUILT, MLA
    included, and the capacity machinery deleted; gated by
-   `model.TestPagedKVMatchesTheHost` / `TestPagedKVBatchMatchesHost` and their
+   `engine.TestPagedKVMatchesTheHost` / `TestPagedKVBatchMatchesHost` and their
    violations (`TestPagedKVGateDiscriminates`, jitllmfault).
 4. **Eviction** to the host store. Gate: history larger than the device's KV
    budget runs to completion with placement unchanged. BUILT
@@ -507,11 +507,11 @@ measured against is deleted.
 Later, once paging is in and at least as fast:
 
 5. **Cross-session batching**: rows from any sessions; retire frees pages.
-   BUILT for decode: `model.Step` runs one token for several States as rows
+   BUILT for decode: `engine.Step` runs one token for several States as rows
    of one ragged step (`nn.SessionStepper`), each row's sequence named by its
    own session (`ragStep.sid`), so the weights are read once for all of them
    -- 4.59x for eight sessions of Llama-3.1-8B on a V100. Gate:
-   `model.TestStepAcrossSessionsMatchesEachAlone` (3 sessions, 4.0e-3
+   `engine.TestStepAcrossSessionsMatchesEachAlone` (3 sessions, 4.0e-3
    against each alone; rows reading the current session's history instead,
    8.6e-1). A hybrid's linear blocks step across sessions through one pool of
    recurrent states (docs/design/device-sessions.md). Not yet: a scheduler
@@ -523,7 +523,7 @@ Later, once paging is in and at least as fast:
    absorbs run grouped by head (a float bank reading the float activation),
    and every row attends its own pages through its descriptor in the decode
    plan (tier/mlabatch.go). A NoPE model (Kimi-Linear) copies its rotary
-   channels there as in decode. Gates: `model.TestStepAcrossSessionsLatentMatchesEachAlone`
+   channels there as in decode. Gates: `engine.TestStepAcrossSessionsLatentMatchesEachAlone`
    (3 sessions, teacher-forced, every latent block of every step counted by
    `Stats.RowsLatent`, a poisoned-scratch arm: the synth-deepseek, -dense and
    -kimilinear fixtures at 1e-13 on CUDA, Vulkan, Metal and the V100;
@@ -534,10 +534,10 @@ Later, once paging is in and at least as fast:
    fits no single card here.
 
    **A prompt chunk rides in the step, within one batch and across
-   sessions.** `model.Scheduler` runs each step as the decoding rows plus up
+   sessions.** `engine.Scheduler` runs each step as the decoding rows plus up
    to a budget of prompt rows, a chunk of one sequence's consecutive
    positions, every row naming its slot and position (`State.forwardRows`);
-   `model.StepRuns` does the same across sessions, each State taking a run
+   `engine.StepRuns` does the same across sessions, each State taking a run
    of its next tokens -- one for a session decoding, a chunk of its prompt
    for one being admitted -- with its logits wanted or not
    (`nn.SessionStepper`). Every row's K and V are written before any row
@@ -549,19 +549,19 @@ Later, once paging is in and at least as fast:
    chunk as a RUN: the kernels' run forms (`kernels.RunDescWords`) step each
    sequence's rows in position order through its one state, row k reading
    the state row k-1 left, so a hybrid's prompt rides in chunks on a device
-   too. Gates: `model.TestSchedulerMixesPromptsIntoDecodeSteps` (a dense
+   too. Gates: `engine.TestSchedulerMixesPromptsIntoDecodeSteps` (a dense
    model and a hybrid; exact on the host, tie-bounded on the devices; chunks
    at mirrored positions part at 11-20 logits, a chunk's rows not chaining
-   at 10), `model.TestStepRunsAdmitsAPromptBesideDecoding` (two sessions
+   at 10), `engine.TestStepRunsAdmitsAPromptBesideDecoding` (two sessions
    decoding while a third's prompt rides in chunks of three, teacher-forced
    against each alone: 1.8e-3 to 4.1e-3 dense, 6.8e-4 to 8.1e-4 hybrid on
    CUDA, Vulkan, the V100 and the M4; mirrored chunks 0.35-0.52, rows not
-   chaining 0.39-0.40) and `model.TestStepRunsOneRowHeadMatchesTheBatchedHead`
+   chaining 0.39-0.40) and `engine.TestStepRunsOneRowHeadMatchesTheBatchedHead`
    (0 to 5.1e-5 against the batched head; decode's own kernel reading the
    step's activation, 2.8-3.3).
 6. **Replication and concurrency**: per-session routes and weight copies,
    per-session workspaces. Concurrency is built (device-sessions.md, "Sessions
    at once"): workspaces are lanes, a call's own, and the pool's lifetimes
    above hold with submissions in flight. Gates:
-   `model.TestSessionsStepAtOnce`, `TestSessionsPageAtOnce`,
+   `engine.TestSessionsStepAtOnce`, `TestSessionsPageAtOnce`,
    `TestSessionsEvictAtOnce`. Replication is not.

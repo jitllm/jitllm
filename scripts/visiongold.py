@@ -61,7 +61,7 @@ def grid(n, patch):
     # Four colours in every 2x2 block of patches (red, green / blue, white),
     # dimmed by a diagonal ramp: a picture on which the order of a pixel
     # shuffle's group is the whole difference. Raw floats in [0, 1]; the Go
-    # gates build the same (engine/model's patchGrid).
+    # gates build the same (the engine's tower gates).
     pal = [(1, 0, 0), (0, 1, 0), (0, 0, 1), (1, 1, 1)]
     img = np.zeros((3, n, n), np.float32)
     for y in range(n):
@@ -77,7 +77,7 @@ def patch_rows(n, width):
     # A tower's last hidden state that is no picture at all: every row and
     # channel distinct, so the projector alone is held -- a pool or shuffle in
     # the wrong order cannot hide behind neighbouring patches looking alike.
-    # The Go gate builds the same (engine/model's projectorRows).
+    # The Go gate builds the same (the engine's projector gate).
     p = np.arange(n, dtype=np.float64)[:, None]
     c = np.arange(width, dtype=np.float64)[None, :]
     return torch.from_numpy((np.sin(0.37 * p + 0.11 * c) + 0.5 * np.cos(0.013 * p * c)).astype(np.float32))
@@ -98,7 +98,7 @@ def projector(fam, m, size):
 def pictures(out):
     """The real pictures, as PNG: the repo's synthetic one and a photograph."""
     os.makedirs(out, exist_ok=True)
-    pics = {"quad-and-disc": os.path.join(REPO, "engine/model/testdata/quad-and-disc.png")}
+    pics = {"quad-and-disc": os.path.join(REPO, "engine/testdata/quad-and-disc.png")}
     photo = os.path.join(out, "..", "photo.png")
     if not os.path.exists(photo):
         src = os.path.join(refenv.lcpp_src(), "tools", "mtmd", "test-1.jpeg")

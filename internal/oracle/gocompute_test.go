@@ -23,16 +23,19 @@ import (
 func goComputeAllowed() map[string]string {
 	return map[string]string{
 		// Measurement, not model arithmetic: accounting and the rates measured.
-		"engine/model/hotness.go:ExpertUses": "expert-use accounting for the report",
+		"engine/hotness.go:ExpertUses":       "expert-use accounting for the report",
 		"engine/device/gpu/choose.go:choose": "each device's measured read rate in GB/s, printed when choosing verbosely",
 		// Constants built once at load from the config, like the tables a kernel is
 		// compiled with.
 		"engine/nn/ropetable.go:foldRopeTab": "the rotary table's folded constant planes, once per configuration",
 		"engine/nn/ropetable.go:YarnFreqs":   "YaRN's per-dimension frequencies, once per configuration",
 		"engine/nn/ropeaxes.go:runFreqs":     "a multi-axis rotary's per-pair frequencies, once per configuration",
+		"model/model.go:ropeScale":           "a scaled rotary's per-pair divisors, the shipped factors times the scaling, once at open",
 		"graph/sample.go:selection":          "the draw's graph: the binade thresholds it states as constants, once when the graph is built",
+		// Geometry from a picture's sizes.
+		"model/tower.go:TileGrid": "InternVL's tile grid, the candidate counts walked against the picture's aspect",
 		// A format decoder, as image/png's is for a picture.
-		"engine/model/wav.go:DecodeWAV": "a WAV container's 16-bit PCM read into floats",
+		"engine/wav.go:DecodeWAV": "a WAV container's 16-bit PCM read into floats",
 	}
 }
 
@@ -55,7 +58,7 @@ func TestNoGoComputeOnTheInferencePath(t *testing.T) {
 	// walking the parent of the repository.
 	t.Chdir(root)
 	found := map[string][]int{}
-	for _, pkg := range []string{"engine/model", "engine/nn", "engine/device/gpu", "backend", "engine/sched", "engine/device/cpu", "composer", "graph"} {
+	for _, pkg := range []string{"model", "engine", "engine/nn", "engine/device/gpu", "backend", "engine/sched", "engine/device/cpu", "engine/device/cpudev", "composer", "graph"} {
 		fset := token.NewFileSet()
 		ents, err := os.ReadDir(filepath.Join(root, pkg))
 		if err != nil {

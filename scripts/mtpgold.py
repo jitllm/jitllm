@@ -16,7 +16,7 @@ it:
 
 h is the trunk's last_hidden_state (after its final norm), and row q pairs the
 token at q with the hidden state at q-1 -- zero at q = 0 -- at position q:
-llama.cpp's pairing, the one the engine implements (engine/model/spec.go).
+llama.cpp's pairing, the one the engine implements (engine/spec.go).
 
 The synthetic fixtures are built by transformers' own classes with random
 weights (random norms too, so a norm wired to the wrong input is an
@@ -181,7 +181,7 @@ def build_synth(name, layers, moe):
     if moe:
         # And in the other float formats and quantized: a device's batched
         # mixture runs each bank format through its own form of the grouped
-        # matvec (engine/model/groupedmoe_test.go).
+        # matvec (engine/groupedmoe_test.go).
         for t in ["f16", "bf16", "q8_0"]:
             subprocess.run([sys.executable, os.path.join(LLAMACPP, "convert_hf_to_gguf.py"), d,
                             "--outtype", t, "--outfile", os.path.join(MODELS, name + "-" + t + ".gguf")], check=True)

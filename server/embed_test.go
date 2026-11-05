@@ -21,7 +21,9 @@ import (
 
 	"connectrpc.com/connect"
 
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/model"
+
+	"github.com/jitllm/jitllm/engine"
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/internal/testmodels/fresh"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
@@ -81,7 +83,7 @@ func embedServer(t *testing.T, name string, cfg Config) (*Engine, *LoadedModel, 
 // own, one text at a time.
 func embedReference(t *testing.T, m *model.Model, texts []string) (vecs [][]float32, ids [][]int32, limit int) {
 	t.Helper()
-	emb, err := m.NewEmbedder()
+	emb, err := engine.NewEmbedder(m)
 	if err != nil {
 		t.Fatal(err)
 	}

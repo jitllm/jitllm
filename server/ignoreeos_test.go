@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/model"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 

@@ -10,7 +10,7 @@ the reference computes in float32 on exactly the weights an engine reading
 that GGUF runs. Quantization is then not a variable: what separates the two is
 the graph and the engine's own arithmetic. It writes the logits of every row
 from the prompt's last on as raw little-endian f32, which
-TestTeacherForcedAgainstReference (engine/model, -tags jitllmbench) reads, and
+TestTeacherForcedAgainstReference (engine, -tags jitllmbench) reads, and
 prints each row's top three.
 
 It settled Jamba (model-correctness.md, Mamba-1): on its F16 file jitllm,

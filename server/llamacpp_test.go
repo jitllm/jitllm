@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/model"
 )
 
 // llamaFake is the scripted backend with a byte tokenizer (id 1 is the BOS,

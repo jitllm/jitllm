@@ -2,7 +2,7 @@ package engine
 
 import (
 	"fmt"
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine"
 	"regexp"
 	"strings"
 
@@ -118,6 +118,6 @@ func placedOn(g *gpu.GPU) (string, int) {
 
 // deviceBlocks is how many of the chat session's blocks a device holds.
 func (e *Engine) deviceBlocks() (n int) {
-	e.inspect(func(st *model.Instance) { n = st.GPULayers() })
+	e.inspect(func(st *engine.Instance) { n = st.GPULayers() })
 	return n
 }

@@ -8,7 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/model"
+
+	"github.com/jitllm/jitllm/engine"
 )
 
 // batchCmd decodes one prompt as `-batch` sessions leasing one instance on one
@@ -44,7 +46,9 @@ func batchCmd(args []string) error {
 	if fs.NArg() < 2 {
 		usage()
 	}
-	m, err := model.Open(fs.Arg(0), append(loadOpts(nil, 0), regionLabels(*cpuProf != "")...)...)
+	mo, io := loadOpts(nil, 0)
+	io = append(io, regionLabels(*cpuProf != "")...)
+	m, err := model.Open(fs.Arg(0), mo...)
 	if err != nil {
 		return err
 	}
@@ -60,7 +64,10 @@ func batchCmd(args []string) error {
 	defer closeDev()
 	// The instance is composed once, here; the sessions lease it.
 	capacity := len(ids) + *n + 1
-	in := m.NewInstance(capacity)
+	in, err := engine.NewInstance(m, capacity, io...)
+	if err != nil {
+		return err
+	}
 	defer in.Close()
 	if err := in.SetDevice(d); err != nil {
 		return err
@@ -69,16 +76,16 @@ func batchCmd(args []string) error {
 		return fmt.Errorf("device %s took %d/%d blocks, head %v: batch needs all of them",
 			name, in.GPULayers(), m.Cfg.NLayer, in.HeadOnDevice())
 	}
-	pool := model.NewPool()
+	pool := engine.NewPool()
 	if err := pool.Serve(in, *nseq); err != nil {
 		return err
 	}
 	// decode runs the whole batch and returns the wall and the steps.
 	decode := func(n int) (time.Duration, int, error) {
-		b := m.NewBatcher(*nseq, capacity, model.BatchOver(pool))
+		b := engine.NewBatcher(m, pool, *nseq, capacity)
 		defer b.Close()
 		for range *nseq {
-			b.Submit(&model.Seq{Prompt: ids, MaxTokens: n})
+			b.Submit(&engine.Seq{Prompt: ids, MaxTokens: n})
 		}
 		t0, steps := time.Now(), 0
 		for retired := 0; retired < *nseq; steps++ {

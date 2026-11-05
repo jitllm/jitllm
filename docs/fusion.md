@@ -42,7 +42,7 @@ fused:   [door] work.. work.... work. ...                              1 region,
    q and k rotation, the k page write and the v copy as one launch (shipped;
    `TestRoPEQKVPagedMatchesItsParts`, `TestFusedDecodeMatchesPerOp`,
    `jitllm verify -ab fuse`).
-2. Fused host regions (`sched.Pool.Fuse`, `engine/model/fuse.go`): workers join
+2. Fused host regions (`sched.Pool.Fuse`, `engine/fuse.go`): workers join
    once, each op is a phase published by one store, completion counted in
    chunks; same kernels, chunks and order, so the same logit bits (in progress,
    not yet on main).

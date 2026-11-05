@@ -8,9 +8,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jitllm/jitllm/engine"
 	"github.com/jitllm/jitllm/engine/device/gpu"
-	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/model"
 )
 
 // gpuOptions turns the device tier's environment variables into gpu.Options.
@@ -189,7 +190,7 @@ func pagerChunk() uint64 {
 // number wins where there is one, because it excludes the parts of the
 // suspension that are not I/O; otherwise jlm.File.ReadWait (the wall decode
 // spent blocked in EnsureRanges) covers host runs.
-func phRead(ph *model.PhaseMeter, dev nn.LayerDevice, m *model.Model) {
+func phRead(ph *engine.PhaseMeter, dev nn.LayerDevice, m *model.Model) {
 	if ph == nil {
 		return
 	}

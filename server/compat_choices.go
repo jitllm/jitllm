@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/model"
 )
 
 // OpenAI's logprobs and n.

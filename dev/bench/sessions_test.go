@@ -11,10 +11,11 @@ import (
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/composer/ir"
+	"github.com/jitllm/jitllm/engine"
 	"github.com/jitllm/jitllm/engine/device/gpu"
-	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/model"
 )
 
 // The perf floors of sessions running at once, beside the correctness gates
@@ -176,8 +177,8 @@ func TestSessionsOverlapOnCUDA(t *testing.T) {
 	// States.
 	const rounds, n, warm = 10, 96, 2
 	seq := max(len(prompts[0]), len(prompts[1])) + n + 2
-	place := func(prompt []int32) (*model.Instance, int32) {
-		st := m.NewInstance(seq)
+	place := func(prompt []int32) (*engine.Instance, int32) {
+		st := testInstance(t, m, seq)
 		if err := st.SetDevice(g); err != nil {
 			t.Fatal(err)
 		}
@@ -195,7 +196,7 @@ func TestSessionsOverlapOnCUDA(t *testing.T) {
 		}
 		return st, next
 	}
-	decode := func(st *model.Instance, next int32, n int) int32 {
+	decode := func(st *engine.Instance, next int32, n int) int32 {
 		for range n {
 			lg, err := st.Forward(next)
 			if err != nil {
@@ -209,7 +210,7 @@ func TestSessionsOverlapOnCUDA(t *testing.T) {
 		}
 		return next
 	}
-	both := func(sts [2]*model.Instance, next [2]int32, n int) [2]int32 {
+	both := func(sts [2]*engine.Instance, next [2]int32, n int) [2]int32 {
 		var wg sync.WaitGroup
 		for k := range sts {
 			wg.Add(1)
@@ -232,9 +233,9 @@ func TestSessionsOverlapOnCUDA(t *testing.T) {
 		b, nb := place(prompts[1])
 		// One step untimed: the second session's lane is built at its first
 		// step beside the first.
-		next := both([2]*model.Instance{a, b}, [2]int32{na, nb}, 1)
+		next := both([2]*engine.Instance{a, b}, [2]int32{na, nb}, 1)
 		t0 = time.Now()
-		both([2]*model.Instance{a, b}, next, n)
+		both([2]*engine.Instance{a, b}, next, n)
 		two := time.Since(t0)
 		a.Close()
 		b.Close()
@@ -249,4 +250,14 @@ func TestSessionsOverlapOnCUDA(t *testing.T) {
 	if med >= 1.6 {
 		t.Fatalf("two sessions at once took %.2fx one alone: their submissions did not overlap", med)
 	}
+}
+
+// testInstance is model.NewInstance for a gate: a refusal fails the test.
+func testInstance(tb testing.TB, m *model.Model, maxSeq int, opts ...engine.Option) *engine.Instance {
+	tb.Helper()
+	s, err := engine.NewInstance(m, maxSeq, opts...)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	return s
 }

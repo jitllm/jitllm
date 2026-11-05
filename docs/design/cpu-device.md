@@ -7,7 +7,7 @@ This file is the design; the rule is AGENTS.md's.
 ## What it replaces
 
 The composed CPU runs a block through methods of the instance
-(`engine/model/cpuserve.go`: `cpuStep`, `cpuRows`, `cpuRecRows`,
+(`engine/cpuserve.go`: `cpuStep`, `cpuRows`, `cpuRecRows`,
 `cpuSessions`), keeps its forms, scratch and counters in the instance's
 `cpuState`, and reports through eight instance accessors
 (`CPUBlockSteps`, `CPUEmbedSteps`, `CPUHeadSteps`, ...). The card is a

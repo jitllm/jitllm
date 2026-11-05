@@ -6,11 +6,12 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/convert"
+	"github.com/jitllm/jitllm/engine"
 	"github.com/jitllm/jitllm/engine/device/gpu"
-	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/model"
 )
 
 // TestContainerAgreesHostAndDevice runs the same container and prompt on the
@@ -66,7 +67,7 @@ func TestContainerAgreesHostAndDevice(t *testing.T) {
 		}
 		defer m.Close()
 		ids := m.Vocab.Encode(prompt, true)
-		st := m.NewInstance(len(ids) + n + 1)
+		st := testInstance(t, m, len(ids)+n+1)
 		defer st.Close()
 		placed := 0
 		if dev {
@@ -125,4 +126,14 @@ func TestContainerAgreesHostAndDevice(t *testing.T) {
 			"  host   %v\n  device %v", i, host[i], dev[i], margin[i], placed, host, dev)
 	}
 	t.Logf("%d ids compared, %d tie(s), %d block(s) on the device", len(host), ties, placed)
+}
+
+// testInstance is model.NewInstance for a gate: a refusal fails the test.
+func testInstance(tb testing.TB, m *model.Model, maxSeq int, opts ...engine.Option) *engine.Instance {
+	tb.Helper()
+	s, err := engine.NewInstance(m, maxSeq, opts...)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	return s
 }

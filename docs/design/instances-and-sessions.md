@@ -5,7 +5,7 @@ This file is evidence; the rule is AGENTS.md's.
 
 ## What it replaced
 
-`model.State` was one type holding four things: the placement (which block
+`engine.State` was one type holding four things: the placement (which block
 runs where, the device route), the composed kernels and their scratch, the
 old engine path's forward buffers, and one conversation's history. Each
 State built its own JIT and composed its CPU forms when it was made, so every

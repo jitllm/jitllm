@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """d1-omni's goldens, from its own code (LiquidAI/d1-omni-600M's modeling_d1.py,
-encoder.py, prompt.py), for engine/model's decision gates.
+encoder.py, prompt.py), for the engine's decision gates.
 
     $JITLLM_HF_PY scripts/d1omnigold.py DIR REQUESTS_DIR OUT_DIR
 

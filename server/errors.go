@@ -8,7 +8,7 @@ import (
 
 	"connectrpc.com/connect"
 
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/model"
 )
 
 // connectErr maps an engine error onto a Connect code. A GGUF handed to Open

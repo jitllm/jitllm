@@ -7,7 +7,7 @@ import (
 
 	"connectrpc.com/connect"
 
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine"
 	"github.com/jitllm/jitllm/internal/capabilities"
 	"github.com/jitllm/jitllm/internal/localserver"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
@@ -81,7 +81,7 @@ func (s *TelemetryService) snapshot(modelID, sessionID string) *v1.GetStatsRespo
 		if !sess.running.Load() && sess.mu.TryLock() {
 			var par, ser int64
 			var workers int
-			sess.in().With(func(st *model.Instance) {
+			sess.in().With(func(st *engine.Instance) {
 				par, ser = st.Pool().Regions()
 				workers = st.Workers()
 			})

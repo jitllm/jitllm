@@ -11,7 +11,7 @@ import (
 // quadAndDisc() is the engine's own VLM test picture: a yellow disc over four
 // coloured quadrants, 384x384.
 func quadAndDisc() string {
-	return filepath.Join("..", "..", "engine", "model", "testdata", "quad-and-disc.png")
+	return filepath.Join("..", "..", "engine", "testdata", "quad-and-disc.png")
 }
 
 // A thumbnail must reach the canvas as a real DrawImage, scaled into its box and

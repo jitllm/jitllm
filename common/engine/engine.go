@@ -34,8 +34,9 @@ import (
 	"unicode/utf8"
 
 	"github.com/jitllm/jitllm/common/session"
+	"github.com/jitllm/jitllm/engine"
 	"github.com/jitllm/jitllm/engine/device/gpu"
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/model"
 	"github.com/jitllm/jitllm/server"
 )
 
@@ -217,7 +218,7 @@ func (e *Engine) releaseSession() {
 }
 
 // inspect runs f on the chat session's State between turns.
-func (e *Engine) inspect(f func(st *model.Instance)) {
+func (e *Engine) inspect(f func(st *engine.Instance)) {
 	if e.sess != nil {
 		e.sess.Inspect(f)
 	}
@@ -401,7 +402,7 @@ func (e *Engine) activate(en *entry) error {
 	vision := m.SeesPictures()
 	var blocks []byte
 	var alloc session.Allocation
-	e.inspect(func(st *model.Instance) {
+	e.inspect(func(st *engine.Instance) {
 		blocks = placementOf(m, st, e.gpu)
 		alloc = allocStat(m, st, e.gpu, m.Cfg.NLayer)
 	})
@@ -476,8 +477,8 @@ const defaultMaxSeq = 4096
 // Temp == 0 is greedy and is passed straight through: model.Sampler
 // short-circuits to argmax, and every correctness comparison in the engine
 // (llama.cpp goldens, CPU vs device, verify) is a comparison of argmax.
-func samplerFor(s session.Sampling) *model.Sampler {
-	return &model.Sampler{
+func samplerFor(s session.Sampling) *engine.Sampler {
+	return &engine.Sampler{
 		Temp:        float64(s.Temp),
 		TopK:        s.TopK,
 		TopP:        float64(s.TopP),
@@ -521,7 +522,7 @@ func blockMap(nLayer int, runs [][2]int, devOf func(li int) int, resident func(l
 
 // placementOf is blockMap for a live session. A block the tier cannot name a
 // device for is drawn on device 0 rather than dropped from the device count.
-func placementOf(m *model.Model, st *model.Instance, g *gpu.GPU) []byte {
+func placementOf(m *model.Model, st *engine.Instance, g *gpu.GPU) []byte {
 	ord := map[string]int{}
 	if g != nil {
 		for i, b := range g.Budgets() {
@@ -559,7 +560,7 @@ func placementOf(m *model.Model, st *model.Instance, g *gpu.GPU) []byte {
 //
 // Budgets(), DevStats() and Placed() are parallel arrays indexed by device
 // ordinal, fastest first.
-func allocStat(m *model.Model, st *model.Instance, g *gpu.GPU, nBlocks int) session.Allocation {
+func allocStat(m *model.Model, st *engine.Instance, g *gpu.GPU, nBlocks int) session.Allocation {
 	a := session.Allocation{
 		HostUsed:   m.HostBytes(),
 		HostBudget: m.PageBudget(),
@@ -639,12 +640,12 @@ func (e *Engine) Relocate(n int) {
 			return
 		}
 		var was int
-		e.inspect(func(st *model.Instance) { was = st.GPULayers() })
+		e.inspect(func(st *engine.Instance) { was = st.GPULayers() })
 		got := e.srv.SetDeviceBlocks(e.sess, n)
 		nb := e.m.Cfg.NLayer
 		var blocks []byte
 		var alloc session.Allocation
-		e.inspect(func(st *model.Instance) {
+		e.inspect(func(st *engine.Instance) {
 			blocks = placementOf(e.m, st, e.gpu)
 			alloc = allocStat(e.m, st, e.gpu, nb)
 		})
@@ -721,10 +722,10 @@ func (e *Engine) generate(r session.ChatRequest) {
 		return
 	}
 
-	ph := e.m.NewPhaseMeter()
+	ph := engine.NewPhaseMeter(e.m)
 	ph.Mark("load")
 	var moved0 int
-	e.inspect(func(st *model.Instance) { moved0 = st.Relocations() })
+	e.inspect(func(st *engine.Instance) { moved0 = st.Relocations() })
 	_, _, outs0 := e.m.PageStats()
 
 	// The session resets before every turn (server.Engine.Generate): a chat
@@ -828,7 +829,7 @@ func (e *Engine) generate(r session.ChatRequest) {
 	var reused, prompted int
 	var fails int64
 	var moved int
-	e.inspect(func(st *model.Instance) {
+	e.inspect(func(st *engine.Instance) {
 		reused, fails, moved = st.KVRestored(), st.KVStoreFailures(), st.Relocations()-moved0
 	})
 	prompted = e.lastPromptTok
@@ -857,7 +858,7 @@ func (e *Engine) generate(r session.ChatRequest) {
 	pager.TurnOuts = pager.PageOuts - outs0
 	var alloc session.Allocation
 	var blocks []byte
-	e.inspect(func(st *model.Instance) {
+	e.inspect(func(st *engine.Instance) {
 		alloc = allocStat(e.m, st, e.gpu, e.m.Cfg.NLayer)
 		blocks = placementOf(e.m, st, e.gpu)
 	})
@@ -1075,13 +1076,13 @@ const (
 // The namespace carries size and mtime, not just the basename: many containers
 // are named model.jlm, and the geometry hash cannot separate two fine-tunes of
 // one architecture.
-func kvCache(path string) (model.KVStore, string, string) {
+func kvCache(path string) (engine.KVStore, string, string) {
 	dir := session.KVCacheDir()
 	if dir == "" {
 		return nil, "", "this system has no cache folder"
 	}
 	// Bounded, because nothing in a KV cache expires.
-	store, err := model.NewFileStoreLimit(dir, kvCacheMax)
+	store, err := engine.NewFileStoreLimit(dir, kvCacheMax)
 	if err != nil {
 		return nil, "", err.Error()
 	}
@@ -1113,12 +1114,12 @@ func kvStatus(reused, prompted int, fails int64) string {
 // turn just finished. They read the session directly and so must be called
 // when no generation is in flight, which a test after pump() is.
 func (e *Engine) lastReused() (n int) {
-	e.inspect(func(st *model.Instance) { n = st.KVRestored() })
+	e.inspect(func(st *engine.Instance) { n = st.KVRestored() })
 	return n
 }
 
 func (e *Engine) lastFailures() (n int64) {
-	e.inspect(func(st *model.Instance) { n = st.KVStoreFailures() })
+	e.inspect(func(st *engine.Instance) { n = st.KVStoreFailures() })
 	return n
 }
 

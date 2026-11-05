@@ -6,9 +6,9 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/composer"
-	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/internal/testmodels/fresh"
+	"github.com/jitllm/jitllm/model"
 )
 
 // fixtureOpener opens a fixture with the model; the tests in package cost

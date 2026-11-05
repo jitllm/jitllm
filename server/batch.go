@@ -7,7 +7,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/model"
+
+	"github.com/jitllm/jitllm/engine"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
@@ -96,7 +98,7 @@ type stepLoop struct {
 	walk         []*row
 	units, joint []unit
 	solo         []unit
-	runs         []model.Run
+	runs         []engine.Run
 	// The prompting rows promptUnits walks, and their allotments.
 	prompts []*row
 	alloc   []int
@@ -219,8 +221,8 @@ func (unloadedError) Unwrap() error { return ErrNotFound }
 // one the device has no room for is not wholly on the device and never
 // becomes a row.
 func batchWidth(cfg int) int {
-	if cfg <= 0 || cfg > model.MaxStepRows {
-		return model.MaxStepRows
+	if cfg <= 0 || cfg > engine.MaxStepRows {
+		return engine.MaxStepRows
 	}
 	return cfg
 }
@@ -246,7 +248,7 @@ func newStepLoop(e *Engine, lm *LoadedModel) *stepLoop {
 	lp.post = newStepPost(&lp.stats.postedTokens)
 	lp.chunkOf = func(r *row) int {
 		n := 0
-		r.s.in().With(func(in *model.Instance) { n = in.PromptChunk() })
+		r.s.in().With(func(in *engine.Instance) { n = in.PromptChunk() })
 		return n
 	}
 	go lp.run()
@@ -262,8 +264,8 @@ type row struct {
 	ephemeral bool
 	// tools reads the row's tool calls (Started.Tools).
 	tools     *model.ToolStream
-	sampler   model.Sampler
-	logprobs  *model.Logprobs // nil unless the request asked for logprobs
+	sampler   engine.Sampler
+	logprobs  *engine.Logprobs // nil unless the request asked for logprobs
 	maxTokens int
 	ignoreEOS bool
 	// stops says the row has stop strings: a token's text then decides
@@ -385,7 +387,7 @@ func hasStop(stops []string) bool {
 
 // stepsJointly says whether st can take a run of a joint step: wholly on one
 // device that steps sessions together, or wholly on the host.
-func stepsJointly(st *model.Instance) bool { return st.Steppable() || st.HostSteppable() }
+func stepsJointly(st *engine.Instance) bool { return st.Steppable() || st.HostSteppable() }
 
 // submit queues r for a row, recording in r.depth how many requests were
 // ahead -- under the lock, since the loop may admit r and read it at once.
@@ -702,7 +704,7 @@ func (lp *stepLoop) iterate() {
 		budget = lp.budget.tokens()
 		lp.stats.noteBudget(budget)
 	}
-	units = lp.promptUnits(units, min(budget, model.MaxStepRows-decoding))
+	units = lp.promptUnits(units, min(budget, engine.MaxStepRows-decoding))
 	lp.units = units
 	if len(units) == 0 {
 		return
@@ -765,7 +767,7 @@ func (lp *stepLoop) sealPrompts() {
 		if j.r.isDone() {
 			continue // the loop never touches a retired row's instance
 		}
-		in, err := j.r.s.ms.Hold(lp.ctx, model.PhasePrefill)
+		in, err := j.r.s.ms.Hold(lp.ctx, engine.PhasePrefill)
 		if err == nil {
 			err = in.SealPrompt(j.logits)
 			j.r.s.ms.Unhold(in)
@@ -811,7 +813,7 @@ func (lp *stepLoop) nextToken(r *row) bool {
 		lp.finish(r, FinishMaxTokens, "", nil)
 		return false
 	}
-	in, err := r.s.ms.Hold(lp.ctx, model.PhaseGenerate)
+	in, err := r.s.ms.Hold(lp.ctx, engine.PhaseGenerate)
 	if err != nil {
 		lp.finish(r, FinishError, "", err)
 		return false
@@ -898,7 +900,7 @@ func (lp *stepLoop) promptUnits(units []unit, budget int) []unit {
 		}
 		pipe := lp.chunkOf(r)
 		k := 0
-		if !piped && pipe > model.MaxStepRows && len(r.ids)-r.fed > lp.promptChunk {
+		if !piped && pipe > engine.MaxStepRows && len(r.ids)-r.fed > lp.promptChunk {
 			piped = true
 			k = -min(pipe, len(r.ids)-r.fed) // a pipelined chunk, marked negative
 		}
@@ -1012,7 +1014,7 @@ func (lp *stepLoop) step(units []unit) {
 		if !u.alone {
 			continue
 		}
-		out, err := model.StepRuns([]model.Run{{Session: u.r.s.ms, Tokens: u.tokens, Logits: u.logits}})
+		out, err := engine.StepRuns([]engine.Run{{Session: u.r.s.ms, Tokens: u.tokens, Logits: u.logits}})
 		if err != nil {
 			lp.finish(u.r, FinishError, "", err)
 			continue
@@ -1039,7 +1041,7 @@ func (lp *stepLoop) step(units []unit) {
 		solo = append(solo, joint...)
 	}
 	for _, u := range solo {
-		out, err := model.StepRuns([]model.Run{{Session: u.r.s.ms, Tokens: u.tokens, Logits: u.logits}})
+		out, err := engine.StepRuns([]engine.Run{{Session: u.r.s.ms, Tokens: u.tokens, Logits: u.logits}})
 		if err != nil {
 			lp.finish(u.r, FinishError, "", err)
 			continue
@@ -1059,9 +1061,9 @@ func (lp *stepLoop) step(units []unit) {
 func (lp *stepLoop) leased(units []unit) []unit {
 	live := units[:0]
 	for _, u := range units {
-		p := model.PhaseGenerate
+		p := engine.PhaseGenerate
 		if u.prompt {
-			p = model.PhasePrefill
+			p = engine.PhasePrefill
 		}
 		if err := u.r.s.ms.Acquire(lp.ctx, p); err != nil {
 			lp.finish(u.r, FinishError, "", err)
@@ -1089,7 +1091,7 @@ func (lp *stepLoop) stepJoint(units []unit) bool {
 	defer func() { clear(runs); lp.runs = runs[:0] }()
 	rows := 0
 	for _, u := range units {
-		runs = append(runs, model.Run{Session: u.r.s.ms, Tokens: u.tokens, Logits: u.logits})
+		runs = append(runs, engine.Run{Session: u.r.s.ms, Tokens: u.tokens, Logits: u.logits})
 		rows += len(u.tokens)
 	}
 	gpu := lp.lm.gpuTier()
@@ -1097,7 +1099,7 @@ func (lp *stepLoop) stepJoint(units []unit) bool {
 		return lp.stepHost(units, runs, rows)
 	}
 	before := gpu.Stats().SessionRows
-	out, err := model.StepRuns(runs)
+	out, err := engine.StepRuns(runs)
 	if err != nil {
 		// A hybrid's linear block keeps a summary that a step advances in
 		// place: once any advanced, running the tokens again would apply them
@@ -1136,17 +1138,17 @@ func (lp *stepLoop) stepJoint(units []unit) bool {
 // (model.StepRuns' host arm). The host refuses no step it was offered, so an
 // error ends every row in it: a hybrid's rows may have advanced their
 // recurrent state, and running them again would apply their tokens twice.
-func (lp *stepLoop) stepHost(units []unit, runs []model.Run, rows int) bool {
-	m := lp.lm.m
-	before := m.HostStepRows()
-	out, err := model.StepRuns(runs)
+func (lp *stepLoop) stepHost(units []unit, runs []engine.Run, rows int) bool {
+	in := lp.lm.inst
+	before := in.HostStepRows()
+	out, err := engine.StepRuns(runs)
 	if err != nil {
 		for _, u := range units {
 			lp.finish(u.r, FinishError, "", err)
 		}
 		return true
 	}
-	if m.HostStepRows()-before == int64(rows) {
+	if in.HostStepRows()-before == int64(rows) {
 		lp.stats.jointSteps.Add(1)
 		lp.stats.jointRows.Add(int64(rows))
 	} else {
@@ -1244,7 +1246,7 @@ func (e *Engine) generateBatched(ctx context.Context, lp *stepLoop, s *Session, 
 	// needs that token's logits.
 	restored := 0
 	if store {
-		in, err := s.ms.Hold(ctx, model.PhasePrefill)
+		in, err := s.ms.Hold(ctx, engine.PhasePrefill)
 		if err != nil {
 			return err
 		}

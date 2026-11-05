@@ -9,7 +9,7 @@ import (
 	"connectrpc.com/connect"
 
 	"github.com/jitllm/jitllm/common/session"
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine"
 	"github.com/jitllm/jitllm/server/client"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
@@ -45,7 +45,7 @@ func (e *Engine) MoveToNextDevice() {
 		}
 		var runs [][2]int
 		cur := ""
-		e.inspect(func(st *model.Instance) {
+		e.inspect(func(st *engine.Instance) {
 			runs = st.DeviceBlocks()
 			if len(runs) > 0 {
 				cur, _ = st.DeviceOf(runs[0][0])
@@ -73,7 +73,7 @@ func (e *Engine) MoveToNextDevice() {
 		nb := e.m.Cfg.NLayer
 		var blocks []byte
 		var alloc session.Allocation
-		e.inspect(func(st *model.Instance) {
+		e.inspect(func(st *engine.Instance) {
 			blocks = placementOf(e.m, st, e.gpu)
 			alloc = allocStat(e.m, st, e.gpu, nb)
 		})

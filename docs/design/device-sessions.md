@@ -2,7 +2,7 @@
 
 **Status: built through step 3, with the capacity and the release made the
 session's too, and sessions stepping on one device at once (last section,
-"Sessions at once").** A step ACROSS sessions (`model.StepRuns`, below) still
+"Sessions at once").** A step ACROSS sessions (`engine.StepRuns`, below) still
 runs as one submission: the server's step loop (`server/batch.go`) makes every
 generate on a session wholly on one device a row of its model's shared decode
 steps.
@@ -15,7 +15,7 @@ engine an inference OS. AGENTS.md's Scope section already names the missing piec
 
 ## The bug, measured
 
-tinyllama-1.1b-q3_K_M, two `model.State`s attached to one `gpu.GPU`, 22 blocks
+tinyllama-1.1b-q3_K_M, two `engine.State`s attached to one `gpu.GPU`, 22 blocks
 placed each, six tokens interleaved A,B,A,B... against the same two sequences run
 alone:
 
@@ -49,7 +49,7 @@ same cache at the same positions. The scratch has the same shape: `g.bs`,
 another's intermediates.
 
 ★ **AND THE CPU TIER ALREADY HAS THE RIGHT SPLIT, WHICH IS WHY THIS IS A GAP AND
-NOT A DESIGN.** `model.State` owns its KV arrays and its scratch; `model.Model`
+NOT A DESIGN.** `engine.State` owns its KV arrays and its scratch; `model.Model`
 owns the weights. Every State on the host is independent for free. The device
 tier grew from the other end -- one device, one model, one caller -- and the
 split was never made.
@@ -66,8 +66,8 @@ split was never made.
 
 ## The shape: a session-scoped VIEW, not a wider interface
 
-`nn.LayerDevice` does NOT grow a session parameter. `model.State` obtains its
-device by a type assertion (`ld, ok := d.(nn.LayerDevice)`, engine/model/forward.go),
+`nn.LayerDevice` does NOT grow a session parameter. `engine.State` obtains its
+device by a type assertion (`ld, ok := d.(nn.LayerDevice)`, engine/forward.go),
 so a tier can hand back a view that implements the same interface and closes
 over its own per-sequence state:
 
@@ -116,15 +116,15 @@ before the feature is worth having.
 
 ## Gates
 
-    model.TestTwoStatesOnOneTierShareAKVCache     RED today; step 1 turns it green.
+    engine.TestTwoStatesOnOneTierShareAKVCache     RED today; step 1 turns it green.
                                                   Interleaved A,B,A,B against each
                                                   sequence alone, NMSE bound 1e-3.
                                                   Against a violation (KV shared
                                                   again) it reads 2.1e-01.
-    model.TestConcurrentMultiDeviceDoesNotLeak    step 2. Four States, every
+    engine.TestConcurrentMultiDeviceDoesNotLeak    step 2. Four States, every
                                                   device, RSS/fds/threads/goroutines
                                                   flat across cycles.
-    model.TestConcurrentPlacementSerialForward    step 3. Must assert the block
+    engine.TestConcurrentPlacementSerialForward    step 3. Must assert the block
                                                   COUNT is the same as serial
                                                   placement -- it passes today
                                                   while placing 1 of 22, which is
@@ -178,7 +178,7 @@ only its own card -- a session that card cannot hold runs the block on the host.
 
 The gates:
 
-    model.TestABatchLeavesAnotherSessionAlone   a single sequence A and a
+    engine.TestABatchLeavesAnotherSessionAlone   a single sequence A and a
                    three-row batch B on one tier. With room, B's rows leave A's
                    history byte for byte (HeldBytes) and A's logits identical to
                    A alone; with room for half of B, B takes 8 of 16 blocks home
@@ -201,7 +201,7 @@ different capacities.
 
 ## A hybrid's recurrent state across sessions
 
-A step across sessions (`model.Step` -> `gpuSession.LayersSessions`) runs one
+A step across sessions (`engine.Step` -> `gpuSession.LayersSessions`) runs one
 row per session in one submission, and a linear block's kernels index ONE state
 buffer by row. Each session used to keep its recurrent pair in buffers of its
 own, so the step refused a hybrid outright ("its recurrent state is per
@@ -260,16 +260,16 @@ submission, bringing the shared form's next state home.
 
 The gates:
 
-    model.TestStepAcrossSessionsHybridMatchesEachAlone   Qwen3.5-0.8B, three
+    engine.TestStepAcrossSessionsHybridMatchesEachAlone   Qwen3.5-0.8B, three
                    sessions, eight teacher-forced joint steps against each alone,
                    both forms, cuda and vulkan: logit NMSE 7.3e-04 / 7.0e-04 on
                    the laptop. The first session leads by a token, so 18 states
                    (one a linear block) are aligned at the first joint step and
                    none after. Stats.SessionLinear is the selection check.
-    model.TestStepAcrossSessionsHybridGateDiscriminates   (jitllmfault) every
+    engine.TestStepAcrossSessionsHybridGateDiscriminates   (jitllmfault) every
                    row on the first row's seat reads 1.23; a row brought to the
                    other half without its state, 0.16.
-    model.TestRecurrentPoolKeepsASessionAcrossOthers    a session seated at
+    engine.TestRecurrentPoolKeepsASessionAcrossOthers    a session seated at
                    slot 1 decoding through two arrivals and three departures
                    (four rebuilds of every pool, the last carrying a run that
                    starts above slot 0) is bit-identical to it alone, with
@@ -297,7 +297,7 @@ The gates:
 ## A sequence's rows in one step are a run
 
 A step's rows need not be one a sequence: a prompt chunk rides beside the
-decoding rows (`model.Scheduler` within a batch, `model.StepRuns` across
+decoding rows (`engine.Scheduler` within a batch, `engine.StepRuns` across
 sessions), several consecutive positions of one sequence in one step. Its
 attention needs nothing new -- every row's K and V are written before any row
 attends. Its recurrence does: the k-th row of the chunk must read the state
@@ -334,11 +334,11 @@ it had (`growSeat` reads them home and writes them back wherever the seat
 lands), because a scheduler admits sequences into rows as they free and its
 first steps need not name them all.
 
-    model.TestSchedulerMixesPromptsIntoDecodeSteps/hybrid   chunks of four
+    engine.TestSchedulerMixesPromptsIntoDecodeSteps/hybrid   chunks of four
                    beside decoding rows; Stats.RecChainRows the selection
                    check (558 row-steps chained). Violation (jitllmfault
                    "chain", every row its own run): parts at 10 logits.
-    model.TestStepRunsAdmitsAPromptBesideDecoding/hybrid    a third session's
+    engine.TestStepRunsAdmitsAPromptBesideDecoding/hybrid    a third session's
                    prompt in chunks of three across sessions, 6.8e-4 to
                    8.1e-4 against each alone; "chain" reads 0.39-0.40.
     backend.TestRunsStepEachSequenceAlone   the run forms against each
@@ -349,12 +349,12 @@ first steps need not name them all.
 Kimi-Linear's KDA kernels take the descriptor too, and its full blocks --
 latent attention -- run in the ragged step (device-kv-paging.md, slice 5), so
 a Kimi-Linear step across sessions reaches both kinds end to end:
-`model.TestStepAcrossSessionsLatentMatchesEachAlone` on synth-kimilinear runs
+`engine.TestStepAcrossSessionsLatentMatchesEachAlone` on synth-kimilinear runs
 the hybrid checks above beside the latent ones.
 
 ## Sessions at once
 
-Two `model.State`s attached to one tier -- the app's chat and an API request
+Two `engine.State`s attached to one tier -- the app's chat and an API request
 -- step on one device at the same time, each with exactly the answers it gives
 alone. The device's tier is three parts (`engine/device/gpu/devsess.go`):
 
@@ -375,7 +375,7 @@ budget too small for two scratches serialises the sessions rather than
 sending one to the host. A clone borrows lane0's head and owns its logits; a
 change of lane0's shape retires every clone, and a session that detaches
 gives the free ones back. A vision tower's set is not cloned: a tower's range
-runs in lane0, borrowed. Measured (`model.TestSessionsStepAtOnce` logs it), a
+runs in lane0, borrowed. Measured (`engine.TestSessionsStepAtOnce` logs it), a
 second session stepping at once costs one lane: stories15M 17.1 MB on CUDA,
 21.3 MB on Vulkan; Llama-3.2-1B 139 MB on CUDA, 155 MB on Vulkan (the prompt
 widths' batched scratches are most of it). That is the sessions-per-device
@@ -401,21 +401,21 @@ rows, history streamed from home -- runs alone.
 
 Gates, each run against a violation:
 
-    model.TestSessionsStepAtOnce     stories15M on cuda:0, vulkan:0 (NVIDIA)
+    engine.TestSessionsStepAtOnce     stories15M on cuda:0, vulkan:0 (NVIDIA)
                    and vulkan:1 (Iris Xe): two States decode 48 tokens from two
                    goroutines, ids and logits bit-identical to each alone;
                    Stats.SubsBeside > 0 (submissions started while another was
                    in flight). A lock across every submission: SubsBeside 0,
                    fails.
-    model.TestSessionsOverlapOnCUDA  the wall: two at once against one alone,
+    engine.TestSessionsOverlapOnCUDA  the wall: two at once against one alone,
                    median of ten interleaved rounds 1.27-1.29x; with the lock,
                    2.03x, fails at 1.6.
-    model.TestSessionsPageAtOnce     every block streamed through two slots,
+    engine.TestSessionsPageAtOnce     every block streamed through two slots,
                    ~170 page-ins under the other session's submissions, ids and
                    logits bit-identical to each alone with every block resident.
                    Without the hold, a block about to be read is a victim: the
                    step falls back and the logits differ.
-    model.TestSessionsEvictAtOnce    KV pages sent home while both step, held
+    engine.TestSessionsEvictAtOnce    KV pages sent home while both step, held
                    within the eviction gate's band. The wait moved past the
                    prologue: 1.3e-2 to 2.1e-1, fails.
 

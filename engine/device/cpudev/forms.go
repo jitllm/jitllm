@@ -2,6 +2,7 @@ package cpudev
 
 import (
 	"sync"
+	"sync/atomic"
 
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/device/cpu"
@@ -20,12 +21,18 @@ type Forms struct {
 	reg32 *composer.Registry
 	m     map[composer.Key]*Form
 	err   map[composer.Key]error
+	// asks counts Of's calls, a cached form's among them.
+	asks atomic.Int64
 }
+
+// Asks is how many times a form was asked of c, a cached one among them.
+func (c *Forms) Asks() int64 { return c.asks.Load() }
 
 // Of is request req's form, its graph gr at rows rows (BuildForm's apart
 // and whole): asked of the registry keeping histories at f32 where f32 is
 // set, and forming no int8 or split kernels where float is.
 func (c *Forms) Of(req composer.Request, gr *graph.Graph, rows int, apart, whole, f32, float bool) (*Form, error) {
+	c.asks.Add(1)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.reg == nil {

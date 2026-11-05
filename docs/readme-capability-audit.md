@@ -16,8 +16,8 @@ or a device skips without one (see [`docs/testing.md`](testing.md)).
 |---|---|---|
 | Go 1.26 or newer | `go.mod`, `server/go.mod`, `ui/go.mod` (`go 1.26`) | CI build (`.github/workflows/ci.yml`) |
 | `convert -o DIR NAME out.jlm` fetches a catalog model | `cmd/jitllm/convert.go:convertCmd`, `libraryArgs`; `convert/library/models.go` (`smollm2-360m-instruct`, `llama-3.2-1b-instruct`, `smolvlm-256m-instruct`) | `convert/library/library_test.go`, `cmd/jitllm/library_test.go` |
-| `run -chat -n N model.jlm prompt` | `cmd/jitllm/main.go` (`-chat`, `-system`, `-n`, `-temp`, `-top-p`) | `cmd/jitllm/cli_test.go:TestRunRefusesContradictoryFlagsBeforeLoading`, `engine/model/chat_test.go:TestChatTemplateIsAppliedAndSpecialsAreNotDoubled` |
-| Inference reads `.jlm` only | `engine/model/model.go:Open` (`NotConvertedError`) | `cmd/jitllm/cli_test.go:TestSubcommandsRefuseAModelTheyCannotUse`, `server/connect_test.go:TestHandingAGGUFToLoadReturnsTheConvertCommand` |
+| `run -chat -n N model.jlm prompt` | `cmd/jitllm/main.go` (`-chat`, `-system`, `-n`, `-temp`, `-top-p`) | `cmd/jitllm/cli_test.go:TestRunRefusesContradictoryFlagsBeforeLoading`, `engine/chat_test.go:TestChatTemplateIsAppliedAndSpecialsAreNotDoubled` |
+| Inference reads `.jlm` only | `model/model.go:Open` (`NotConvertedError`) | `cmd/jitllm/cli_test.go:TestSubcommandsRefuseAModelTheyCannotUse`, `server/connect_test.go:TestHandingAGGUFToLoadReturnsTheConvertCommand` |
 | Flags go before the model path | `cmd/jitllm/main.go:misplacedFlag` | `cmd/jitllm/flagorder_test.go` |
 | Subcommand table (`hardware`, `library`, `convert`, `run`, `embed`, `tokenize`, `info`, `speed`, `batch`, `verify`, `asm`) | `cmd/jitllm/main.go:main` dispatch and `usage` | `cmd/jitllm/cli_test.go:TestDispatchAndFlagErrorsExitWithTheirStatus`, `TestSpeedPrintsOneRatePerRepetition`, `TestVerifyAgreesWithTheHostOnARealDevice`, `TestTokenizePrintsEveryPiece`, `TestInfoDescribesTheCommittedGGUF` |
 
@@ -26,10 +26,10 @@ or a device skips without one (see [`docs/testing.md`](testing.md)).
 | Principle | Code | Test |
 |---|---|---|
 | JIT; only the trampolines are assembly | `engine/device/cpu/trampoline_{amd64,arm64}.s` | `engine/device/cpu/noasm_test.go:TestNoAssemblyBesidesTheTrampolines` |
-| No Go compute | `internal/oracle` is test-only; `engine/nn` entry points | `internal/oracle/guard_test.go:TestNoProductionCodeImportsTheOracle`, `engine/model/nnaudit_test.go:TestEveryModelRunsGenerated` |
-| Relocation | `engine/model/forward.go:SetGPULayers`, `SetDevice`; `engine/model/kvpage.go:migrateKV`, `migrateRec` | `engine/model/reloc_test.go:TestLayerRelocatesToAnotherDevice`, `engine/model/relocate_test.go:TestRelocatedBlocksComeBack`, `engine/model/kvpaged_test.go:TestKVPagesRelocateWithTheLayer`, `engine/model/migraterows_test.go:TestBatchSeamMovesCarryEveryRow`, `engine/model/mladevice_test.go:TestMLASeamMovesWithItsHistory`, `engine/model/demoterec_test.go:TestShrinkingTheSeamMovesTheSummaryToTheCPU` |
-| Paging | `format/jlm/read.go`, `format/jlm/partial.go`; `engine/model/model.go:SetPageBudget`, `WithPageBudget` | `engine/model/paging_test.go:TestPagingDoesNotChangeTheAnswer`, `engine/model/pagebudget_test.go:TestOpenHonoursAPageBudget`, `TestForwardBatchFaultsItsBlocksIn`, `engine/model/offheap_test.go:TestTwoPagedModelsShareTheProcess`, `engine/model/swapages_test.go:TestWindowedLayersHoldTheirWindow` |
-| Low to no Go allocation; frames off the heap | `format/jlm/offheap.go:SetOffHeap` | `engine/model/decodealloc_test.go:TestDecodeDoesNotAllocate` |
+| No Go compute | `internal/oracle` is test-only; `engine/nn` entry points | `internal/oracle/guard_test.go:TestNoProductionCodeImportsTheOracle`, `engine/nnaudit_test.go:TestEveryModelRunsGenerated` |
+| Relocation | `engine/forward.go:SetGPULayers`, `SetDevice`; `engine/kvpage.go:migrateKV`, `migrateRec` | `engine/reloc_test.go:TestLayerRelocatesToAnotherDevice`, `engine/relocate_test.go:TestRelocatedBlocksComeBack`, `engine/kvpaged_test.go:TestKVPagesRelocateWithTheLayer`, `engine/migraterows_test.go:TestBatchSeamMovesCarryEveryRow`, `engine/mladevice_test.go:TestMLASeamMovesWithItsHistory`, `engine/demoterec_test.go:TestShrinkingTheSeamMovesTheSummaryToTheCPU` |
+| Paging | `format/jlm/read.go`, `format/jlm/partial.go`; `model/model.go:SetPageBudget`, `WithPageBudget` | `engine/paging_test.go:TestPagingDoesNotChangeTheAnswer`, `engine/pagebudget_test.go:TestOpenHonoursAPageBudget`, `TestForwardBatchFaultsItsBlocksIn`, `engine/offheap_test.go:TestTwoPagedModelsShareTheProcess`, `engine/swapages_test.go:TestWindowedLayersHoldTheirWindow` |
+| Low to no Go allocation; frames off the heap | `format/jlm/offheap.go:SetOffHeap` | `engine/decodealloc_test.go:TestDecodeDoesNotAllocate` |
 
 ## Supported models
 
@@ -38,19 +38,19 @@ or a device skips without one (see [`docs/testing.md`](testing.md)).
 | 65 GGUF text architecture names, 57 graphs | `convert/config.go:archOf` (66 keys including `clip`; 58 distinct `jlm.Arch` values including `ArchCLIP`, so 57 text graphs; `configOf` also gives glm4moe with M-RoPE sections `ArchGLM4VMoE` and windowed olmo2 `ArchOLMo3`, codes over graphs already counted), `convert.Architectures` | `convert/library/arch_test.go:TestEveryArchitectureIsObtainable` |
 | An architecture not on the list is refused at conversion | `convert/config.go:configOf` (`ErrNotImplemented`) | `convert/notimpl_test.go` |
 | Mixtral converts as `llama` | `convert/config.go` (mixture read from the file, not the arch) | `convert/mixtralbanks_test.go` |
-| 29 Hugging Face class names | `convert/safetensors.go:hfArchTable` (`PhimoeForCausalLM` is an alias of `PhiMoEForCausalLM`) | `engine/model/hfgold_test.go:TestSafetensorsMatchTransformers`, `convert/hfdense_test.go:TestDenseSafetensorsMatchesItsGGUF`, `convert/hfmoefamily_test.go:TestMixtureFamiliesConvertAlikeFromEitherInput` |
-| Per-architecture correctness against llama.cpp | `engine/model` graphs | `engine/model/llamacpp_test.go:TestGreedyMatchesLlamaCpp` |
+| 29 Hugging Face class names | `convert/safetensors.go:hfArchTable` (`PhimoeForCausalLM` is an alias of `PhiMoEForCausalLM`) | `engine/hfgold_test.go:TestSafetensorsMatchTransformers`, `convert/hfdense_test.go:TestDenseSafetensorsMatchesItsGGUF`, `convert/hfmoefamily_test.go:TestMixtureFamiliesConvertAlikeFromEitherInput` |
+| Per-architecture correctness against llama.cpp | `engine/model` graphs | `engine/llamacpp_test.go:TestGreedyMatchesLlamaCpp` |
 | `hunyuan_vl`: HunyuanOCR's text model, hunyuan-dense's block under XD-RoPE | `convert/config.go:archOf`; `format/jlm/archvision.go` (`ArchHunyuanVL`, `XDRope`) | `engine/model/hunyuanvl_test.go:TestHunyuanVLTextMatchesTransformers`, `TestHunyuanVLKeepsTheFivePrinciples` |
-| Kimi-K3 held to its own reference code on the trained Kimi-K3-0.40B | `convert/kimik3.go`; `engine/model` Kimi-K3 graph | `engine/model/kimik3real_test.go:TestKimiK3RealMatchesReference` (F32, F16, Q8_0, Q4_K_M, MXFP4 GGUFs against `scripts/k3gold.py`); a mixed-quantization GGUF converts: `convert/kimik3_test.go:TestK3JoinsAMixedQuantization` |
-| Embedding models (`bert`, `nomic-bert`, Qwen3-Embedding, EmbeddingGemma) | `engine/model/encoder.go`, `engine/model/embedstate.go`, `engine/model/embed.go:NewEmbedder`; `cmd/jitllm/embed.go` | `engine/model/embed_test.go:TestEmbeddingsMatchReference`, `TestEmbeddingGateDiscriminates` |
+| Kimi-K3 held to its own reference code on the trained Kimi-K3-0.40B | `convert/kimik3.go`; `engine/model` Kimi-K3 graph | `engine/kimik3real_test.go:TestKimiK3RealMatchesReference` (F32, F16, Q8_0, Q4_K_M, MXFP4 GGUFs against `scripts/k3gold.py`); a mixed-quantization GGUF converts: `convert/kimik3_test.go:TestK3JoinsAMixedQuantization` |
+| Embedding models (`bert`, `nomic-bert`, Qwen3-Embedding, EmbeddingGemma) | `engine/model/encoder.go`, `engine/embedstate.go`, `model/embed.go:NewEmbedder`; `cmd/jitllm/embed.go` | `engine/embed_test.go:TestEmbeddingsMatchReference`, `TestEmbeddingGateDiscriminates` |
 | Weight formats F32, F16, BF16, Q4_0, Q5_0, Q5_1, Q8_0, Q3_K, Q4_K, Q5_K, Q6_K, MXFP4 | `format/quant/types.go` (`PackedTypes`, `Dequantable`) | `internal/oracle/packed_test.go:TestPackedPayloadIsNativeWidth` |
-| `-q8` stores float safetensors matrices as Q8_0 | `cmd/jitllm/convert.go` (`-q8`), `convert/safetensors.go` | `engine/model/hfq8_test.go:TestSafetensorsQ8MatchTransformers` |
+| `-q8` stores float safetensors matrices as Q8_0 | `cmd/jitllm/convert.go` (`-q8`), `convert/safetensors.go` | `engine/hfq8_test.go:TestSafetensorsQ8MatchTransformers` |
 
 ## Vision
 
 | Claim | Code | Test |
 |---|---|---|
-| One container carries text and tower | `convert/gguf.go:FromGGUFs`; `engine/model/model.go:Tower` | `engine/model/vision_test.go:TestOneContainerCarriesTextAndVision` |
+| One container carries text and tower | `convert/gguf.go:FromGGUFs`; `model/model.go:Tower` | `engine/model/vision_test.go:TestOneContainerCarriesTextAndVision` |
 | 17 projectors | `convert/config.go:visionOf` (`idefics3`, `mlp`, `qwen2vl_merger`, `gemma3`, `internvl`, `resampler`, `janus_pro`, `qwen2.5vl_merger`, `pixtral`, `phi4`, `gemma4v`, `gemma3nv`, `llama4`, `glm4v`, `hunyuanvl`, `kimivl`, `qwen3vl_merger`; anything else `ErrNotImplemented`) | per-family gates, e.g. `TestLlavaTowerEncodes`, `TestQwenTowerMatchesTransformers`, `TestGemma3TowerMatchesLlamaCpp`, `TestGemma3nTowerMatchesTransformers`, `TestGemma4TowerMatchesTransformers`, `TestInternVLTowerMatchesLlamaCpp`, `TestMiniCPMVTowerMatchesLlamaCpp`, `TestJanusTowerMatchesLlamaCpp`, `TestPixtralTowerMatchesTransformers`, `TestPhi4TowerMatchesTransformers`, `TestLlama4TowerMatchesTransformers` (all `engine/model`) |
 | Kimi-VL (`kimivl`, MoonViT; its text model is `deepseek2`) | `convert/config.go:visionOf` (`jlm.ProjKimiVL`); `engine/model/kimivit.go` | `engine/model/kimivl_test.go:TestKimiVLTextMatchesTransformers`, `TestKimiVLTowerOnDeviceMatchesHost`, `TestKimiVLRealTowerMatchesMoonshot`, `TestKimiVLKeepsTheFivePrinciples` |
 | HunyuanVL and HunyuanOCR (`hunyuanvl`) | `convert/config.go:visionOf` (`jlm.ProjHunyuanVL`), `convert/hunyuanvl.go`; `engine/model/hunyuanvit.go` | `engine/model/hunyuanvl_test.go:TestHunyuanVLLaysTheImageOutAsTransformersDoes`, `TestHunyuanVLTowerOnDeviceMatchesHost`, `TestHunyuanVLRealTowerOnDevice`, `TestHunyuanVLPictureCountsItsNewlineAndEndRows` |
@@ -63,11 +63,11 @@ or a device skips without one (see [`docs/testing.md`](testing.md)).
 | Claim | Code | Test |
 |---|---|---|
 | AVX2/FMA/F16C tier, AVX-VNNI as a dot kind | `engine/device/cpu/tier.go` (`TierAVX2`), `engine/device/cpu/prevnni.go` | `engine/nn/prevnni_equal_test.go:TestPreVNNIMatchesVNNIBitForBit` |
-| SSE4.1+SSSE3 tier; refused below it | `engine/device/cpu/tier.go` (`TierSSE`), `engine/device/cpu/sse.go`; `engine/nn/host.go:HostRefusal` | `engine/model/sse_models_test.go:TestEveryModelRunsSSE`, `engine/device/cpu/tier_test.go` |
+| SSE4.1+SSSE3 tier; refused below it | `engine/device/cpu/tier.go` (`TierSSE`), `engine/device/cpu/sse.go`; `engine/nn/host.go:HostRefusal` | `engine/sse_models_test.go:TestEveryModelRunsSSE`, `engine/device/cpu/tier_test.go` |
 | ARM64 NEON with SDOT | `engine/device/cpu/tier.go` (`TierNEON`), `engine/device/cpu/packed_a64.go` | `engine/device/cpu/exec_a64_test.go:TestA64ExecuteSDOT` |
 | CUDA, captured decode graphs | `backend/cuda.go`, `backend/cuda`, `composer/ptx` | `backend/cudatiming_test.go:TestCUDAGraphTimingReportsEveryReplay` |
 | Vulkan; a software device is declined | `backend` Vulkan, `composer/spirv` | `backend/vulkan_software_test.go:TestSoftwareVulkanIsDeclined` |
-| Metal | `backend/metal`, `composer/msl` | `engine/model/hybrid_test.go:TestHybridAttentionBlockOnDevice` (metal arm) |
+| Metal | `backend/metal`, `composer/msl` | `engine/hybrid_test.go:TestHybridAttentionBlockOnDevice` (metal arm) |
 | No cgo; libraries loaded at run time through goffi | `backend/ffi`; `go.mod` (one requirement, `github.com/go-webgpu/goffi`); `.goreleaser.yaml` (`CGO_ENABLED=0`) | `internal/srcgate/readme_test.go:TestNoCgo` (no Go file in the three modules imports `"C"`, which a `CGO_ENABLED=0` build alone would leave out rather than refuse); CI cross-builds every release target and module with `CGO_ENABLED=0` (`.github/workflows/ci.yml`, job `build`) |
 | One card under two backends is one device | `engine/device/gpu/choose.go`, device UUIDs in `backend` | `engine/device/gpu/devidentity_test.go:TestOnePhysicalDeviceUnderTwoBackendsIsOfferedOnce`, `backend/identity_test.go:TestTheBackendPreferenceIsCUDAThenMetalThenVulkan`, `engine/device/gpu/open_test.go:TestOneCardTwoAPIsIsOnePool` |
 | `-devices`: `auto` one device by measuring; `all` or a bare `gpu` every distinct device; a bare `cuda` or `vulkan` every device of that backend, fastest first; `cuda:N`, `vulkan:SEL`, `gpu:N` one; `metal` the system default device | `engine/device/gpu/open.go:ParseDevices`, `openEntries` (`everyCUDA`, `everyVulkan`, `allDevices`), `engine/device/gpu/multi.go:order`, `engine/device/gpu/choose.go:choose` | `engine/device/gpu/devspec_test.go:TestABareBackendNameIsEveryDeviceOfIt` |
@@ -79,9 +79,9 @@ or a device skips without one (see [`docs/testing.md`](testing.md)).
 |---|---|---|
 | GGUF, HF directory, URL or catalog name | `cmd/jitllm/convert.go:convertCmd`, `convert/hf` | `convert/hf/fetch_test.go:TestFetchResumesInsteadOfStartingOver` |
 | A Hugging Face repository is read by range, not downloaded | `cmd/jitllm/stream.go:openStreamed`, `convert/hf/remote.go` | `convert/hf/remote_test.go:TestRemoteReadsTheRangesItIsAskedFor` |
-| `-chat-template FILE` (tokenizer_config.json, chat_template.json, .jinja, a directory) | `cmd/jitllm/convert.go` (`-chat-template`), `convert/chattemplate.go` | `convert/chattemplate_test.go:TestChatTemplatesFromEveryForm`, `TestConvertStoresTheChatTemplate`, `engine/model/chat_template_override_test.go:TestChatTemplateOptionReplacesTheGGUFs` |
+| `-chat-template FILE` (tokenizer_config.json, chat_template.json, .jinja, a directory) | `cmd/jitllm/convert.go` (`-chat-template`), `convert/chattemplate.go` | `convert/chattemplate_test.go:TestChatTemplatesFromEveryForm`, `TestConvertStoresTheChatTemplate`, `engine/chat_template_override_test.go:TestChatTemplateOptionReplacesTheGGUFs` |
 | `HF_TOKEN` for gated repositories | `cmd/jitllm/fetch.go:hfClient`, `convert/hf/ref.go` | `convert/hf/fetch_test.go` (the refusal names `HF_TOKEN`) |
-| Stop tokens: a GGUF's eot, eom and FIM ids and a safetensors model's `generation_config` eos list reach the container, and generation stops on them | `convert/vocab.go`, `convert/hfvocab.go`; `format/jlm/vocab.go` (`Vocab.Stop`), `format/jlm/sections.go`; `tok/spm.go:IsEOG` | `convert/stops_test.go:TestStopSetRoundTrips`, `TestStopSetRefusesAnIdOutsideTheVocabulary`, `tok/eog_test.go:TestStopSetMatchesLlamaCpp`, `TestStatedStopsEndAGeneration`, `engine/model/stops_test.go:TestChatStopsAtTheTurnsEnd` |
+| Stop tokens: a GGUF's eot, eom and FIM ids and a safetensors model's `generation_config` eos list reach the container, and generation stops on them | `convert/vocab.go`, `convert/hfvocab.go`; `format/jlm/vocab.go` (`Vocab.Stop`), `format/jlm/sections.go`; `tok/spm.go:IsEOG` | `convert/stops_test.go:TestStopSetRoundTrips`, `TestStopSetRefusesAnIdOutsideTheVocabulary`, `tok/eog_test.go:TestStopSetMatchesLlamaCpp`, `TestStatedStopsEndAGeneration`, `engine/stops_test.go:TestChatStopsAtTheTurnsEnd` |
 | The container carries config, tokenizer, stop tokens, templates, tower | `format/jlm` sections | `engine/model/vision_test.go:TestOneContainerCarriesTextAndVision`, `format/jlm/convert_test.go:TestContainerCarriesTheTokenizer` |
 
 ## The server
@@ -91,32 +91,32 @@ or a device skips without one (see [`docs/testing.md`](testing.md)).
 | `/v1/chat/completions`, `/v1/completions`, `/v1/models`, `/v1/embeddings`, `/v1/messages` | `server/surface.go` (mux), `server/compat_openai.go`, `server/compat_anthropic.go`, `server/compat_embed.go` | `server/compat_test.go:TestOpenAIChatStreamArrivesTokenByToken`, `TestLegacyCompletionsCarryTextNotAMessage`, `TestOpenAIModelsListsLoadedModelsAndTheirFileNames`, `TestAnthropicStreamIsNamedEventsAndEndsWithMessageStop` |
 | Embeddings as floats or base64; Connect `Embed` | `server/compat_embed.go` (`encoding_format`), `server/embed.go` | `server/embed_test.go:TestEmbedMatchesTheEmbedder`, `TestEmbedRefusesWhatCannotEmbed` |
 | `/healthz` | `server/http.go` | `server/engine_test.go:TestHealthzAndTheCompatShimsAreMounted` |
-| Tool calling through the model's template; `tool_calls` / `tool_use` | `server/tools.go`, `engine/model/tools.go:ParseToolCalls`, `engine/model/chat.go:ChatIDsTools` | `server/tools_test.go:TestToolRequestsReachTheTemplate`, `TestOpenAIToolCallStreams`, `TestAnthropicToolUse` |
+| Tool calling through the model's template; `tool_calls` / `tool_use` | `server/tools.go`, `model/tools.go:ParseToolCalls`, `model/chat.go:ChatIDsTools` | `server/tools_test.go:TestToolRequestsReachTheTemplate`, `TestOpenAIToolCallStreams`, `TestAnthropicToolUse` |
 | Connect services | `proto/jitllm/v1/*.proto`, `server/service_*.go` | `server/connect_test.go:TestConnectGenerateStreamsStartedTokensFinishedInThatOrder`, `server/e2e_test.go:TestEndToEndAgainstARealContainer` |
 | `ignore_eos` on `/v1/completions`, `/v1/chat/completions` and `GenerateRequest`; `jitllmd run -ignore-eos` | `server/compat_openai.go` (`ignore_eos`), `proto/jitllm/v1/inference.proto` (field 10), `server/engine.go`, `server/batch.go`, `server/cmd/jitllmd/run.go` | `server/ignoreeos_test.go:TestIgnoreEOSRunsToMaxTokens`, `TestIgnoreEOSRunsToMaxTokensBatched` |
-| Device generates decode together (`-max-batch`) | `server/batch.go`, `engine/model/step.go:StepRuns` | `server/batch_test.go:TestBatchConcurrentGreedyGeneratesShareSteps` |
+| Device generates decode together (`-max-batch`) | `server/batch.go`, `engine/step.go:StepRuns` | `server/batch_test.go:TestBatchConcurrentGreedyGeneratesShareSteps` |
 | `jitllmd` verbs and `serve` flags | `server/cmd/jitllmd/main.go:verbs`, `serve` | `server/cmd/jitllmd/flagorder_test.go`, `client_test.go:TestDevicesPrintsTheSpendableTotalAndNamesAUnifiedHeap` |
 
 ## Memory and placement
 
 | Claim | Code | Test |
 |---|---|---|
-| `-maxmem` host budget | `cmd/jitllm/main.go` (`bytesFlag "maxmem"`), `engine/model/model.go:SetPageBudget` | `cmd/jitllm/cli_test.go:TestATinyBudgetPagesAndSaysSo`, `engine/model/pagebudget_test.go:TestOpenHonoursAPageBudget` |
+| `-maxmem` host budget | `cmd/jitllm/main.go` (`bytesFlag "maxmem"`), `model/model.go:SetPageBudget` | `cmd/jitllm/cli_test.go:TestATinyBudgetPagesAndSaysSo`, `engine/pagebudget_test.go:TestOpenHonoursAPageBudget` |
 | Per-device budgets, `-devices` grammar | `engine/device/gpu/open.go`, `cmd/jitllm/device.go` | `cmd/jitllm/devices_test.go:TestOpenDevicesNamesTwoDevicesAndPoolsThem` |
-| `-placement` with `~` (stream) and `!` (pin) | `engine/model/options.go:ParsePlacement` (`Place.Stream`) | `engine/model/placement_test.go:TestParsePlacementStreams` |
-| Expert streaming reads only the routed sheets | `engine/model/model.go:ensureExperts`, `engine/device/gpu/layer.go:streamBank` | `engine/model/stream_test.go:TestStreamedExpertBankMatchesTheResidentOne` |
-| `-gpu-grow`, `-relocate`, `-tune-seam` | `engine/model/forward.go` (`SetGPUTarget`, `SetRelocate`), `engine/model/seamtune.go` | `engine/model/reloc_test.go:TestSeamMovesWhileServing`, `engine/model/relocate_test.go:TestRelocateKeepsTheDeviceWhenTheContextOutgrowsIt` |
-| Several devices at once | `engine/device/gpu/multi.go` | `engine/model/multidev_test.go:TestTheSeamMovesAcrossTwoDevices` |
-| Prefix cache, `-kv-cache-max` default 8 GiB | `engine/model/kvpage.go:PrefillCached`, `engine/model/kvfile.go`; `cmd/jitllm/main.go` (`kv-cache-max`, `8<<30`) | `engine/model/kvpaged_test.go:TestPrefixCacheReusesASharedPrefix`, `TestKVStoreRoundTripChangesNoToken` |
-| Shared CPU/GPU memory counted once | `backend` `UnifiedMemory`, `engine/device/gpu` budgets | `server/connect_test.go:TestSpendableTotalSubtractsAUnifiedHeapInsteadOfAddingIt`, `engine/model/streamunified_test.go:TestStreamedContainerOnAUnifiedDevice` |
+| `-placement` with `~` (stream) and `!` (pin) | `engine/options.go:ParsePlacement` (`Place.Stream`) | `engine/placement_test.go:TestParsePlacementStreams` |
+| Expert streaming reads only the routed sheets | `model/model.go:ensureExperts`, `engine/device/gpu/layer.go:streamBank` | `engine/stream_test.go:TestStreamedExpertBankMatchesTheResidentOne` |
+| `-gpu-grow`, `-relocate`, `-tune-seam` | `engine/forward.go` (`SetGPUTarget`, `SetRelocate`), `engine/seamtune.go` | `engine/reloc_test.go:TestSeamMovesWhileServing`, `engine/relocate_test.go:TestRelocateKeepsTheDeviceWhenTheContextOutgrowsIt` |
+| Several devices at once | `engine/device/gpu/multi.go` | `engine/multidev_test.go:TestTheSeamMovesAcrossTwoDevices` |
+| Prefix cache, `-kv-cache-max` default 8 GiB | `engine/kvpage.go:PrefillCached`, `engine/kvfile.go`; `cmd/jitllm/main.go` (`kv-cache-max`, `8<<30`) | `engine/kvpaged_test.go:TestPrefixCacheReusesASharedPrefix`, `TestKVStoreRoundTripChangesNoToken` |
+| Shared CPU/GPU memory counted once | `backend` `UnifiedMemory`, `engine/device/gpu` budgets | `server/connect_test.go:TestSpendableTotalSubtractsAUnifiedHeapInsteadOfAddingIt`, `engine/streamunified_test.go:TestStreamedContainerOnAUnifiedDevice` |
 
 ## Go library
 
 | Claim | Code | Test |
 |---|---|---|
-| The example program compiles | the README's Go block; `engine/model/model.go:Open`, `Close`; `engine/model/chat.go:ChatIDs`; `engine/model/forward.go:NewState`, `Forward`, `Greedy`; `engine/model/prefill.go:Prefill`; `tok/spm.go:IsEOG`, `Decode` | `internal/srcgate/readme_test.go:TestTheREADMEGoExamplesBuild` (builds every Go block of the README against the tree); the calls themselves: `engine/model/forward_test.go`, `engine/model/chat_test.go` |
+| The example program compiles | the README's Go block; `model/model.go:Open`, `Close`; `model/chat.go:ChatIDs`; `engine/forward.go:NewState`, `Forward`, `Greedy`; `engine/prefill.go:Prefill`; `tok/spm.go:IsEOG`, `Decode` | `internal/srcgate/readme_test.go:TestTheREADMEGoExamplesBuild` (builds every Go block of the README against the tree); the calls themselves: `engine/forward_test.go`, `engine/chat_test.go` |
 | One dependency in the core module | `go.mod` | `internal/srcgate/readme_test.go:TestTheCoreModuleHasOneDependency` |
-| `SetPageBudget`, `SetGPULayers`, `SetDevice`, `SetKVStore`, `PrefillCached`, `NewEmbedder`, `Scheduler`, `Step` | `engine/model/model.go`, `forward.go`, `kvpage.go`, `embed.go`, `schedule.go`, `step.go` | `engine/model/schedule_test.go:TestSchedulerMatchesSoloSequences`, `engine/model/step_test.go:TestStepAcrossSessionsMatchesEachAlone`, and the rows above |
+| `SetPageBudget`, `SetGPULayers`, `SetDevice`, `SetKVStore`, `PrefillCached`, `NewEmbedder`, `Scheduler`, `Step` | `model/model.go`, `forward.go`, `kvpage.go`, `embed.go`, `schedule.go`, `step.go` | `engine/schedule_test.go:TestSchedulerMatchesSoloSequences`, `engine/step_test.go:TestStepAcrossSessionsMatchesEachAlone`, and the rows above |
 | Desktop app builds with `CGO_ENABLED=0` | `ui/` module | `ui` tests, e.g. `ui/screen/download_test.go:TestDiscoverListsTheWholeLibrary` |
 
 ## Performance

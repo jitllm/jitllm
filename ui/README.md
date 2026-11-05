@@ -181,7 +181,7 @@ two files contain a mutex at all.
 which has no lock — from a ticker goroutine. **That shipped example is racy.
 Do not copy it.**
 
-1. One engine goroutine owns every jitllm object. `model.State` has no lock.
+1. One engine goroutine owns every jitllm object. `engine.State` has no lock.
 2. The UI goroutine never calls jitllm. Click handlers send commands.
 3. Values flow out as signals. Never call a widget mutator from a worker.
 4. Actions flow out through `Shell.Post`, drained in `OnUpdate`.

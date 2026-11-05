@@ -24,7 +24,7 @@ starts and stops where its own output says, never at a guessed point:
 | ttft, model loaded (`JITLLM_MODE=ttft`) | `speed -ttft`'s `ttft-loaded`: ready to the first token of the process's first prompt, tokenizing excluded; refused if a kernel compiled or a tuner trial ran after ready (`readyHonest`) | `llama-completion --no-warmup`'s `prompt eval time`, its first decode after load |
 
 llama.cpp compiles nothing at run time; jitllm compiles only before ready, and
-`model.TestFirstPromptDoesNotGrowTheKVPool` holds the first prompt to zero
+`engine.TestFirstPromptDoesNotGrowTheKVPool` holds the first prompt to zero
 compiles (six without the prewarm on Llama-3.2-1B on an sm_86 card: the
 embedding gather, the folded head's row copy and the fused binary16 operand
 kernels). The model file is in the page cache after the harness's token-count
@@ -489,7 +489,7 @@ llama.cpp mmaps, so its earlier cold column (10.6 s) read a GGUF its own
 server had just put in the page cache; jitllm reads the container with
 O_DIRECT every time. From the disk jitllm now starts first.
 
-**Sessions decode together.** `model.Step` runs one token for several States
+**Sessions decode together.** `engine.Step` runs one token for several States
 -- separate sessions, separate users -- as rows of one ragged step on the
 device (`nn.SessionStepper`), each row reading its own session's history, so
 every block's weights are read once for all of them. Llama-3.1-8B, one card,
@@ -2386,7 +2386,7 @@ counts, tinyllama q3_K_M, RTX 3050 Ti:
     ratio 0.0298   IQR/median 0.022, n=8
 
 **llama.cpp does 5,100 tok/s of prompt where jitllm does 151 -- 34x.** The cause is one line:
-`engine/model/prefill.go` falls back to per-token `Forward` whenever `s.gpuLayers > 0`, so a 507-token
+`engine/prefill.go` falls back to per-token `Forward` whenever `s.gpuLayers > 0`, so a 507-token
 prompt is 507 sequential single-token device submissions. jitllm's device prefill rate (151) is
 therefore just its device DECODE rate (160), because it IS decode run 507 times.
 
@@ -2629,7 +2629,7 @@ instances in one session is enough to make it a rule -- **when a lever is priced
 thing measured alone), find out what that thing costs IN SITU before believing the product.**
 
 **★ AND THE 3.03% IS NOT SEVEN REGIONS -- TWO OF THEM ARE NOT REGIONS AT ALL.** RULE 6 describes the
-epilogue column as "rope, both residual adds, the SiLU-multiply", but in `engine/model/forward.go` the
+epilogue column as "rope, both residual adds, the SiLU-multiply", but in `engine/forward.go` the
 residual adds are plain SERIAL loops:
 
     for i := range s.x { s.x[i] += s.h[i] }
@@ -3104,7 +3104,7 @@ router moved from `softmax` + `MoETopK32JIT` to the single `MoERouteJIT` entry
 point. RULE 6 asks whether that regressed; this is the answer.
 
 **★ THE TIMED A/B WAS REFUSED BY ITS OWN SELF-CONTROL, WHICH IS THE POINT OF
-RUNNING ONE FIRST.** `model.TestFusionCeiling`, one test binary per tree, ABBA,
+RUNNING ONE FIRST.** `engine.TestFusionCeiling`, one test binary per tree, ABBA,
 five rounds, each arm reading its OWN container so neither reconverts the
 other's:
 
@@ -3293,7 +3293,7 @@ REQUIRES a zeroed Out, which nothing gave it.
 
 ★ **IN A MODEL THAT BUFFER IS THE LOGITS**, so token 1 was right (Go zeroes fresh
 memory), token 2 was logits+logits, and the argmax froze.
-`model.TestBatchMatchesForward` read the same token 6342 for every sequence at
+`engine.TestBatchMatchesForward` read the same token 6342 for every sequence at
 every step on the M4 -- a frozen Forward -- and that is exactly what it was.
 
 ★ **THE RATE DID NOT MOVE: 0.8454 BROKEN, 0.8463 FIXED.** A collapsed model does

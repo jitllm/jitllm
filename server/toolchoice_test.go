@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/internal/schemacheck"
+	"github.com/jitllm/jitllm/model"
 )
 
 // tool_choice: "required" and a named tool hold the reply to a call in the

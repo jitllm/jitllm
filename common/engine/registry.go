@@ -2,7 +2,7 @@ package engine
 
 import (
 	"github.com/jitllm/jitllm/common/session"
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/model"
 	"github.com/jitllm/jitllm/server"
 )
 

@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine"
 )
 
 // Two models loaded into one engine divide its host budget: neither may
@@ -54,7 +54,7 @@ func TestLoadedModelsDivideTheHostBudget(t *testing.T) {
 // generate of the same prompt restores its prefix instead of prefilling it.
 func TestASessionWithAStoreReusesItsPrompt(t *testing.T) {
 	e, _, _ := loadedEngine(t, smallModel, "small", LoadOptions{})
-	s, err := e.CreateSession(SessionOptions{ModelID: "small", KVStore: model.NewMemStore(), CacheKey: "test"})
+	s, err := e.CreateSession(SessionOptions{ModelID: "small", KVStore: engine.NewMemStore(), CacheKey: "test"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestASessionWithAStoreReusesItsPrompt(t *testing.T) {
 			t.Fatal(err)
 		}
 		var n int
-		s.Inspect(func(st *model.Instance) { n = st.KVRestored() })
+		s.Inspect(func(st *engine.Instance) { n = st.KVRestored() })
 		return n
 	}
 	if n := run(); n != 0 {

@@ -14,7 +14,8 @@ import (
     "fmt"
     "log"
 
-    "github.com/jitllm/jitllm/engine/model"
+    "github.com/jitllm/jitllm/engine"
+    "github.com/jitllm/jitllm/model"
 )
 
 func main() {
@@ -32,7 +33,10 @@ func main() {
     }
     // An instance is the model's kernels composed for one placement; it
     // runs one conversation of its own here.
-    in := m.NewInstance(8192)
+    in, err := engine.NewInstance(m, 8192)
+    if err != nil {
+        log.Fatal(err)
+    }
     defer in.Close()
 
     // Sample with no sampler is the greedy token, drawn by the CPU
@@ -65,7 +69,8 @@ import (
     "fmt"
     "log"
 
-    "github.com/jitllm/jitllm/engine/model"
+    "github.com/jitllm/jitllm/engine"
+    "github.com/jitllm/jitllm/model"
 )
 
 func main() {
@@ -76,14 +81,19 @@ func main() {
     defer m.Close()
 
     // The model's kernels, composed once for this placement (SetDevice to
-    // move it onto a card), served to every session.
-    in := m.NewInstance(8192)
-    defer in.Close()
-    if err := m.Serve(in, 0); err != nil {
+    // move it onto a card), served to every session by the pool, which
+    // closes them.
+    in, err := engine.NewInstance(m, 8192)
+    if err != nil {
+        log.Fatal(err)
+    }
+    pool := engine.NewPool()
+    defer pool.Close()
+    if err := pool.Serve(in, 0); err != nil {
         log.Fatal(err)
     }
 
-    s, err := m.NewSession(8192)
+    s, err := pool.NewSession(8192)
     if err != nil {
         log.Fatal(err)
     }
@@ -92,7 +102,7 @@ func main() {
     ctx := context.Background()
     // Each phase draws its next token on the instance it leased.
     var id int32
-    if err := s.Run(ctx, model.PhasePrefill, func(in *model.Instance) error {
+    if err := s.Run(ctx, engine.PhasePrefill, func(in *engine.Instance) error {
         logits, err := in.Prefill(ids)
         if err != nil {
             return err
@@ -104,7 +114,7 @@ func main() {
     }
     for n := 0; n < 64 && !m.Vocab.IsEOG(id); n++ {
         fmt.Print(m.Vocab.Decode([]int32{id}))
-        if err := s.Run(ctx, model.PhaseGenerate, func(in *model.Instance) error {
+        if err := s.Run(ctx, engine.PhaseGenerate, func(in *engine.Instance) error {
             logits, err := in.Forward(id)
             if err != nil {
                 return err
@@ -123,17 +133,17 @@ func main() {
 |---|---|
 | `model.Open(path, opts...)` | open a container; `With...` options set every tuner and budget |
 | `Model.SetPageBudget` | host weight residency |
-| `Model.NewInstance`, `Instance.SetGPULayers`, `Instance.SetDevice` | compose an instance and move its execution between devices, every session's history with it |
-| `Model.NewSession`, `Session.Run`, `Session.Acquire`, `Session.Release` | a conversation's history, leased an instance per phase |
-| `model.Scheduler`, `model.Pool`, `model.WithScheduler` | which instance a session leases for a phase: the default pool, or your own |
+| `engine.NewInstance`, `Instance.SetGPULayers`, `Instance.SetDevice` | compose an instance and move its execution between devices, every session's history with it |
+| `engine.NewPool`, `Pool.Serve`, `Pool.NewSession`, `Session.Run`, `Session.Acquire`, `Session.Release` | a conversation's history, leased an instance per phase |
+| `engine.Scheduler`, `engine.Pool`, `engine.WithScheduler` | which instance a session leases for a phase: the default pool, or your own |
 | `Session.SetKVStore`, `Instance.PrefillCached` | KV spill and prefix reuse |
-| `Instance.ShareKV`, `model.NewSharedStore` | one copy of a prompt prefix's pages across sessions |
+| `Instance.ShareKV`, `engine.NewSharedStore` | one copy of a prompt prefix's pages across sessions |
 | `Instance.Park`, `Instance.Resume` | preemption: a session's history home and out to a store, then back |
-| `model.WithKVType` | the KV cache's format: f32 or f16 |
-| `Model.NewEmbedder` | embeddings |
-| `model.Batcher`, `model.StepRuns` | continuous batching: many sessions' rows in one step of an instance, on a card or the CPU device |
+| `engine.WithKVType` | the KV cache's format: f32 or f16 |
+| `engine.NewEmbedder` | embeddings |
+| `engine.Batcher`, `engine.StepRuns` | continuous batching: many sessions' rows in one step of an instance, on a card or the CPU device |
 
-See the [model API](../engine/model/) and the [card tier](../engine/device/gpu/).
+See the [model](../model/), the [engine](../engine/) and the [card tier](../engine/device/gpu/).
 
 The desktop app (model downloads, conversion, text and image chat, memory and
 device views) is a separate module in [ui/](../ui/). Install it from a release

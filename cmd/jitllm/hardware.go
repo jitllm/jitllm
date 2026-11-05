@@ -11,8 +11,8 @@ import (
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/backend/vulkan"
+	"github.com/jitllm/jitllm/engine"
 	"github.com/jitllm/jitllm/engine/device/cpu"
-	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/engine/sched"
 )
 
@@ -84,7 +84,7 @@ func reportMem() {
 
 // reportJIT is how the composer forms this host's CPU device.
 func reportJIT() {
-	fmt.Printf("composer  %s\n", model.CPUForm())
+	fmt.Printf("composer  %s\n", engine.CPUForm())
 	fmt.Printf("          isa %s (%s)\n", cpu.Probe().ISA(), runtime.GOARCH)
 	fmt.Printf("          every kernel a model runs is formed at load for the device in front of it\n")
 }

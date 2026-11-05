@@ -232,7 +232,7 @@ any gfx target with no device present.
 Offline, on any Linux box with comgr reachable (`JITLLM_ROCM` names a directory;
 the packages extract without root, see "Running the gates"):
 
-- `model.TestComposedFormsLowerForAMDGPU`: every kernel the composer forms
+- `engine.TestComposedFormsLowerForAMDGPU`: every kernel the composer forms
   for each synthetic fixture's blocks, at decode and at a chunk's rows, at
   wave 32 and 64, lowers, compiles to a code object for gfx90a,
   gfx942, gfx1030, gfx1100 and gfx1201, and its metadata says no scratch and
@@ -264,7 +264,7 @@ The offline gate needs only comgr. ROCm's packages extract without root:
 
     curl -O https://repo.radeon.com/rocm/apt/6.4.1/pool/main/c/comgr/comgr_3.0.0.60401-83~24.04_amd64.deb
     dpkg-deb -x comgr_*.deb rocm
-    JITLLM_ROCM=$PWD/rocm/opt/rocm-6.4.1/lib ./scripts/cap 8G -- go test ./engine/model -run TestComposedFormsLowerForAMDGPU
+    JITLLM_ROCM=$PWD/rocm/opt/rocm-6.4.1/lib ./scripts/cap 8G -- go test ./engine -run TestComposedFormsLowerForAMDGPU
 
 ## Running the gates on a host with an AMD card
 

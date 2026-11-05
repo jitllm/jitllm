@@ -11,8 +11,8 @@ import (
 	"connectrpc.com/connect"
 
 	"github.com/jitllm/jitllm/convert"
-	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/model"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 

@@ -61,10 +61,10 @@ repository root):
 
     internal/testmodels/fetch.sh --list      # what the tests read, and what is here
     internal/testmodels/fetch.sh             # the default set
-    JITLLM_MODELS=/path/to/models ./scripts/cap 16G -- go test ./engine/model -run TestGreedyMatchesLlamaCpp -count=1
+    JITLLM_MODELS=/path/to/models ./scripts/cap 16G -- go test ./engine -run TestGreedyMatchesLlamaCpp -count=1
 
 [docs/testing.md](docs/testing.md) has every variable that selects a test's
-model and the gates that need a GPU. `engine/model` as a whole package is too
+model and the gates that need a GPU. `engine` as a whole package is too
 much for one run; slice it with `-run`.
 
 ## Commits

@@ -10,9 +10,9 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
 
-	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/internal/capabilities"
 	"github.com/jitllm/jitllm/internal/localserver"
+	"github.com/jitllm/jitllm/model"
 )
 
 // The server's half of the capability manifest (internal/capabilities). The

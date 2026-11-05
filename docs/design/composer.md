@@ -151,7 +151,7 @@ The recipe found by composing: **gate2in**, Gate2 with ActIn's norm
 prologue. Where the attention output's launch already added the residual,
 the FFN's RMSNormQuantRows goes and gate and up read the residual row
 themselves: two launches become one per block. It is bit-identical on PTX
-(`backend.TestGate2InIsTheTwoLaunches`, 96 cases; `model.TestFFNRecipesMatchTwoLaunches`
+(`backend.TestGate2InIsTheTwoLaunches`, 96 cases; `engine.TestFFNRecipesMatchTwoLaunches`
 with every block placed with and without the graph and a half seam;
 violation `TestGate2InSeesASwap`). The tuner keeps it on both of
 Llama-3.2-1B's FFN keys on the V100. Rows: GK "The FFN's recipes, timed per

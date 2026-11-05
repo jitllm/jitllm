@@ -19,7 +19,7 @@ directory from every package, including the nested `ui/` and `server/` modules.
 `models/` may be a symlink to a model disk; otherwise point the variable at
 the models instead of faking the link:
 
-    JITLLM_MODELS=/mnt/models/jitllm ./scripts/cap 16G -- go test ./engine/model -run TestGreedyMatchesLlamaCpp -count=1
+    JITLLM_MODELS=/mnt/models/jitllm ./scripts/cap 16G -- go test ./engine -run TestGreedyMatchesLlamaCpp -count=1
 
 `JITLLM_MODELS` is the same variable `jitllm fetch` uses for where a download
 lands, so one setting serves both. A test binary shipped to another host has
@@ -75,7 +75,7 @@ The model-free run is every package of the five modules but `./dev/bench`
 (its perf floors want a quiet box, RULE 4), `./ui/stage` (the ui job's) and,
 on macOS, `./backend` (the runner's paravirtual Metal device allows
 512-thread pipelines, and the backend's gates force 1024-thread splits),
-`engine/model` and `common/engine` included, plus the SSE tier under
+`engine` and `common/engine` included, plus the SSE tier under
 `-tags jitllmtest` on amd64, Windows included. It sets `JITLLM_MODEL_FREE=1`
 and points `JITLLM_MODELS` at a fresh directory holding only the committed
 `stories260K.gguf` and the container this build converts from it, so every
@@ -114,7 +114,7 @@ HuggingFace directories the safetensors converter is gated on
 files over ~10 GB and the ones only an override variable reaches (the 80B,
 Kimi-Linear, Moonlight, Mixtral, Llama-4-Scout, gpt-oss-20b, DeepSeek-V2-Lite,
 phi-4, falcon-7b). Two gates fail rather than skip without `--large`:
-`engine/model` `TestGPTOSSMatchesLlamaCppIntermediates` and
+`engine` `TestGPTOSSMatchesLlamaCppIntermediates` and
 `tok` `TestDecodeChatRendersHarmonyChannels` both need gpt-oss-20b.
 `HF_TOKEN` is sent to huggingface.co when set; no entry needs it.
 
@@ -123,7 +123,7 @@ Committed rather than fetched: `testdata/models/stories260K.gguf` (1.1 MB), so
 copies it into the model directory, where other tests look for it.
 
 The script fetches no `.jlm`. A test that names a container reads the one
-converted from the GGUF of the same stem: the `engine/model` gates write it
+converted from the GGUF of the same stem: the `engine` gates write it
 beside the GGUF on first use, or convert it yourself with
 `go run ./cmd/jitllm convert <dir>/<name>.gguf`.
 
@@ -149,26 +149,26 @@ sweep by name and are never resolved.
 
 | variable | tests | value | unset |
 |---|---|---|---|
-| `JITLLM_MODEL` | `model.TestFusionCeiling` | one model file | every model |
-| | `model.TestForwardEmbdMatchesForward`, `TestPrefillMixedMatchesPrefill` | one model file | every language model under 2 GiB |
-| | `model.TestPrefillRegionProbe` | one model file | `tinyllama-1.1b-q3_K_M.gguf` |
-| | `model.TestDeviceDecodeRate`, `TestSamplerPerf` | one model file (a container for the sampler) | test skips |
+| `JITLLM_MODEL` | `engine.TestFusionCeiling` | one model file | every model |
+| | `engine.TestForwardEmbdMatchesForward`, `TestPrefillMixedMatchesPrefill` | one model file | every language model under 2 GiB |
+| | `engine.TestPrefillRegionProbe` | one model file | `tinyllama-1.1b-q3_K_M.gguf` |
+| | `engine.TestDeviceDecodeRate`, `TestSamplerPerf` | one model file (a container for the sampler) | test skips |
 | `JITLLM_BENCH_MODEL` | `model` gates that call `benchModel` (e.g. `TestPrefillMatchesForward`) | one model file | the smallest quantized language model in the directory |
-| | `model.TestABKQuantAccsEndToEnd` | a k-quant model file | test skips |
-| | `model.BenchmarkGemmaDecode` | one model file | `gemma-2b.gguf` |
-| `JITLLM_ROUTE_MODEL` | `model.TestRoutingLocality`, `TestHotnessIsAProbability` | a mixture-of-experts model file | test skips |
-| `JITLLM_MLA_MODEL` | `model.TestMLAPrefillMatchesDecode`, `TestMLABatchMatchesDecode` | a real MLA model (name or path) | the synth-deepseek fixtures |
+| | `engine.TestABKQuantAccsEndToEnd` | a k-quant model file | test skips |
+| | `engine.BenchmarkGemmaDecode` | one model file | `gemma-2b.gguf` |
+| `JITLLM_ROUTE_MODEL` | `engine.TestRoutingLocality`, `TestHotnessIsAProbability` | a mixture-of-experts model file | test skips |
+| `JITLLM_MLA_MODEL` | `engine.TestMLAPrefillMatchesDecode`, `TestMLABatchMatchesDecode` | a real MLA model (name or path) | the synth-deepseek fixtures |
 | `JITLLM_DEV_MODEL` | `engine/device/gpu.TestContainerAgreesHostAndDevice` | one file name in the directory | first present of tinyllama, Llama-3.2-1B, Qwen3-MoE, gemma-2b, olmoe |
-| `JITLLM_LABELCOST_MODEL` | `model.TestRegionLabelCost` | file name in the directory | `tinyllama-1.1b-q3_K_M.gguf` |
-| `JITLLM_LABELRATE_MODEL` | `model.TestRegionLabelRate` | file name in the directory | `tinyllama-1.1b-q3_K_M.gguf` |
-| `JITLLM_KVPERF_MODEL` | `model.TestPagedKVCost` | file name in the directory | `tinyllama-1.1b-q3_K_M.gguf` |
-| `JITLLM_KVPREFIX_MODEL` | `model.TestPrefixCacheSpeedup` | file name in the directory | `tinyllama-1.1b-q3_K_M.gguf` |
-| `JITLLM_KVPREC_MODEL` | `model.TestKVPrecisionCost` | exact base name | every model under 2 GiB |
-| `JITLLM_GREEDY_MODEL` | `model.TestGreedyMatchesLlamaCpp` | substring | every model; over 2 GiB only with `JITLLM_SLOW=1` |
-| `JITLLM_GREEDY_PAIR` | `model.TestGreedyMatchesLlamaCpp` | `<gguf>=<container>`, each name or path | GGUFs converted by the test |
-| `JITLLM_KVSWEEP_MODEL` | `model.TestPagedKVIsTokenIdenticalOnEveryModel` | substring | every model under 2 GiB |
-| `JITLLM_AUDIT_MODEL` | `model.TestEveryModelRunsGenerated` | substring, any size | every model under 2 GiB (`JITLLM_SLOW=1`: all) in the directory, one level down, and the safetensors fixtures with an `hf` golden |
-| `JITLLM_TOKMODEL` | `model.TestTokenizerCost` | substring | its fixed list |
+| `JITLLM_LABELCOST_MODEL` | `engine.TestRegionLabelCost` | file name in the directory | `tinyllama-1.1b-q3_K_M.gguf` |
+| `JITLLM_LABELRATE_MODEL` | `engine.TestRegionLabelRate` | file name in the directory | `tinyllama-1.1b-q3_K_M.gguf` |
+| `JITLLM_KVPERF_MODEL` | `engine.TestPagedKVCost` | file name in the directory | `tinyllama-1.1b-q3_K_M.gguf` |
+| `JITLLM_KVPREFIX_MODEL` | `engine.TestPrefixCacheSpeedup` | file name in the directory | `tinyllama-1.1b-q3_K_M.gguf` |
+| `JITLLM_KVPREC_MODEL` | `engine.TestKVPrecisionCost` | exact base name | every model under 2 GiB |
+| `JITLLM_GREEDY_MODEL` | `engine.TestGreedyMatchesLlamaCpp` | substring | every model; over 2 GiB only with `JITLLM_SLOW=1` |
+| `JITLLM_GREEDY_PAIR` | `engine.TestGreedyMatchesLlamaCpp` | `<gguf>=<container>`, each name or path | GGUFs converted by the test |
+| `JITLLM_KVSWEEP_MODEL` | `engine.TestPagedKVIsTokenIdenticalOnEveryModel` | substring | every model under 2 GiB |
+| `JITLLM_AUDIT_MODEL` | `engine.TestEveryModelRunsGenerated` | substring, any size | every model under 2 GiB (`JITLLM_SLOW=1`: all) in the directory, one level down, and the safetensors fixtures with an `hf` golden |
+| `JITLLM_TOKMODEL` | `engine.TestTokenizerCost` | substring | its fixed list |
 | `JITLLM_ROLE_MODEL` | `convert.TestEveryTensorHasARole` | substring | every GGUF |
 | `JITLLM_ST_MODEL` | `convert.TestSafetensorsArchCoverage` | substring | every HuggingFace directory |
 | `JITLLM_C6_HF` | `convert.TestDenseSafetensorsMatchesItsGGUF` | the directory `scripts/c6gold.py` writes its HuggingFace fixtures to (its `CV_HF`) | `$JITLLM_MODELS/hf` |
@@ -176,14 +176,14 @@ sweep by name and are never resolved.
 | `JITLLM_SERVER_MODEL` | `server.TestEndToEndAgainstARealContainer` | a `.jlm` container | test skips |
 | `JITLLM_SERVER_BATCH_MODELS` | `server.TestBatch*` | comma-separated `.jlm` names or paths, each run beside the default | `stories15M-q8_0.jlm` only |
 | `JITLLM_TOOL_MODELS` | `server.TestToolChoiceForcesACall` | comma-separated `.jlm` names, in place of the default | `Qwen3-0.6B-Q8_0.jlm` and `Llama-3.2-1B-Instruct-Q4_K_M.jlm`; also run with Qwen3.5-0.8B-f16, DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M and gpt-oss-20b-Q4_K_M |
-| `JITLLM_STEP_MIXTURE` | `model.TestStepAcrossSessionsMixture*` | comma-separated names or paths | Qwen3-MoE-4x0.6B and olmoe; a card that cannot place every block skips |
-| `JITLLM_PAGED_EXPERTS` | `model.TestComposedExpertPagesServe` | comma-separated names or paths, each run beside the default | the router families' Q8_0 fixtures, Qwen3-MoE-4x0.6B and olmoe |
-| `JITLLM_ALLOC_MODELS` | `model.TestDecodeDoesNotAllocate` | comma-separated names or paths, each run beside the default | Llama-3.2-1B, olmoe and Qwen3.5-0.8B only |
+| `JITLLM_STEP_MIXTURE` | `engine.TestStepAcrossSessionsMixture*` | comma-separated names or paths | Qwen3-MoE-4x0.6B and olmoe; a card that cannot place every block skips |
+| `JITLLM_PAGED_EXPERTS` | `engine.TestComposedExpertPagesServe` | comma-separated names or paths, each run beside the default | the router families' Q8_0 fixtures, Qwen3-MoE-4x0.6B and olmoe |
+| `JITLLM_ALLOC_MODELS` | `engine.TestDecodeDoesNotAllocate` | comma-separated names or paths, each run beside the default | Llama-3.2-1B, olmoe and Qwen3.5-0.8B only |
 | `JITLLM_SLOW` | several `model` sweeps | `1` admits models over 2 GiB | small models only |
 | `JITLLM_MOVE_REPLY_MODEL` | `server.TestAMoveLandsBetweenTwoTokensOfAReply` | a `.jlm` whose reply outlasts its move's preparation | `Llama-3.2-1B-Instruct-Q4_K_M.jlm` |
-| `JITLLM_MOVE_PAUSE_MODEL` | `model.TestMovePause`, a measurement: the pause of a move between two devices, direct against through the host | a model name; opts in | the test skips |
-| `JITLLM_POSTNORM_MODELS` | `model.TestPostNormDeviceErrorIsAmplification` | comma-separated GGUF names in the directory, any model whose last block has a post-FFN norm | OLMo 2 1B and EXAONE 4.0 1.2B |
-| `JITLLM_LLAMACPP_CPU` | `model.TestPostNormDeviceErrorIsAmplification`, `model.TestComposedPromptMatchesLlamaCppF32` | a directory holding a CPU-only `llama-perplexity` and its libraries (a CUDA library beside it is loaded and used) | the test skips naming it |
+| `JITLLM_MOVE_PAUSE_MODEL` | `engine.TestMovePause`, a measurement: the pause of a move between two devices, direct against through the host | a model name; opts in | the test skips |
+| `JITLLM_POSTNORM_MODELS` | `engine.TestPostNormDeviceErrorIsAmplification` | comma-separated GGUF names in the directory, any model whose last block has a post-FFN norm | OLMo 2 1B and EXAONE 4.0 1.2B |
+| `JITLLM_LLAMACPP_CPU` | `engine.TestPostNormDeviceErrorIsAmplification`, `engine.TestComposedPromptMatchesLlamaCppF32` | a directory holding a CPU-only `llama-perplexity` and its libraries (a CUDA library beside it is loaded and used) | the test skips naming it |
 
 Every other `JITLLM_*` variable a test reads is a knob or an opt-in for a
 measurement, not a model choice.
@@ -195,7 +195,7 @@ repository that opens a device: a comma-separated list of `cuda:N`, `vulkan:N`,
 `hip:N` and `metal` (a bare backend name is refused, since "every Vulkan
 device" is what a selection exists to say no to).
 
-    JITLLM_TEST_DEVICES=cuda:2,vulkan:2 ./scripts/cap 8G -- go test ./engine/model -run TestSchedulerOnDevice
+    JITLLM_TEST_DEVICES=cuda:2,vulkan:2 ./scripts/cap 8G -- go test ./engine -run TestSchedulerOnDevice
 
 Unset, every test opens what it always opened. Set, no test opens any other
 device. Ordinals are the backend's own: a CUDA ordinal is the driver's (under
@@ -266,7 +266,7 @@ which reads no environment) maps these onto the `backend.Opts` `Open` uses:
 | variable | effect | unset |
 |---|---|---|
 | `JITLLM_VK_DEVICE` | the Vulkan device every `backend.Open` takes, by index or name substring (`1` is the Iris Xe beside the RTX here) | the default rule's pick |
-| `JITLLM_ROCM` | the ROCm library directory the HIP backend loads from (`backend`, `hip` and `server` tests, and `engine/model`'s `TestComposedFormsLowerForAMDGPU`; `jitllm` and `jitllmd` too); with no AMD card, comgr alone runs that offline code object gate over the composer's forms (docs/design/amd-hip.md) | the default search: the loader, `/opt/rocm/lib`, `/opt/rocm-*/lib` |
+| `JITLLM_ROCM` | the ROCm library directory the HIP backend loads from (`backend`, `hip` and `server` tests, and `engine`'s `TestComposedFormsLowerForAMDGPU`; `jitllm` and `jitllmd` too); with no AMD card, comgr alone runs that offline code object gate over the composer's forms (docs/design/amd-hip.md) | the default search: the loader, `/opt/rocm/lib`, `/opt/rocm-*/lib` |
 | `JITLLM_VK_MAXGROUPS` | workgroups per Vulkan dispatch, below the device's own `maxComputeWorkGroupCount`; `7` sends nearly every launch in the suite through a split dispatch | the device's own |
 | `JITLLM_VK_VALIDATION` | the prefix the Khronos validation layer is installed under, for `backend.TestSplitLaunchesAreValidVulkanUsage`; `apt-get download vulkan-validationlayers && dpkg-deb -x` the `.deb` into DIR and pass `DIR/usr` | `/usr`, else the test skips |
 
@@ -278,7 +278,7 @@ The `model` device gates take the same limit, as `gpu.WithVulkanMaxGroups`:
 default-device gates open (`TestSchedulerOnDevice*`, `TestSlidingWindowRunsOnTheDevice`
 and every other caller of `swaTier`). `JITLLM_TEST_DEVICES` names their device:
 
-    JITLLM_TEST_DEVICES=vulkan:1 JITLLM_VK_MAXGROUPS=7 ./scripts/cap 8G -- go test ./engine/model -run 'TestSchedulerOnDevice' -count=1
+    JITLLM_TEST_DEVICES=vulkan:1 JITLLM_VK_MAXGROUPS=7 ./scripts/cap 8G -- go test ./engine -run 'TestSchedulerOnDevice' -count=1
 
 `cmd/jitllm` reads `JITLLM_VK_DEVICE` and `JITLLM_VK_MAXGROUPS` too, as
 `gpu.WithVulkanDevice` and `gpu.WithVulkanMaxGroups`.
@@ -291,7 +291,7 @@ name. The relocation, move and session gates hold the composer to having
 served (`composedRan`: part steps served, none formed at a step, no decline
 outside the arm's stated reasons):
 
-    JITLLM_TEST_DEVICES=cuda:2,vulkan:2 ./scripts/cap 8G -- go test ./engine/model -run TestBlocksMoveBetweenDevices
+    JITLLM_TEST_DEVICES=cuda:2,vulkan:2 ./scripts/cap 8G -- go test ./engine -run TestBlocksMoveBetweenDevices
 
 The classic-kit and dense (`TestC6OnEveryDevice`), hybrid
 attention (`TestHybridAttentionBlockOnDevice`) and BitNet
@@ -334,7 +334,7 @@ captured graph, and holds them to the tier's logits bit for bit, to the spread
 of the tier's backends at every depth, and to flagging a rewrite of one block's
 graph at that block and no other:
 
-    JITLLM_TEST_DEVICES=cuda:2,vulkan:2 ./scripts/cap 8G -- go test ./engine/model -run TestComposedShadowHoldsEveryBlock
+    JITLLM_TEST_DEVICES=cuda:2,vulkan:2 ./scripts/cap 8G -- go test ./engine -run TestComposedShadowHoldsEveryBlock
 
 ## Reference scripts
 

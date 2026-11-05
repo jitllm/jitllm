@@ -117,7 +117,7 @@ func (e *Engine) rereadHostLocked() {
 func (e *Engine) heldLocked() uint64 {
 	var n uint64
 	for _, lm := range e.models {
-		n += lm.m.HostBytes() + lm.m.StepScratchBytes()
+		n += lm.m.HostBytes() + lm.stepScratchBytes()
 		if st := lm.ttft.store; st != nil {
 			n += st.Bytes()
 		}

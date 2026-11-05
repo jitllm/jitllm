@@ -1,0 +1,222 @@
+package engine
+
+import (
+	"math"
+	"slices"
+	"testing"
+
+	"github.com/jitllm/jitllm/model"
+
+	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/graph"
+)
+
+// embedDevCos is how close a device's embedding must sit to the host's: the
+// f32 reduction-order band of a unit vector, an order of magnitude inside
+// the reference gate's 1e-4 (embedCosBound), so a device arm that passes
+// here passes that gate wherever the host does.
+const embedDevCos = 1 - 1e-5
+
+// embedDevCosQuant is the bound for a decoder embedding model with quantized
+// weights, whose device runs its matrices over int8 activations where the
+// host's prefill does not: qwen3-embedding-0.6b (Q8_0) reads 0.99939-0.99942
+// on a V100's CUDA and Vulkan at half and every block, where its F16 file
+// reads 0.9999994 -- the band is the quantized activations, not the wiring.
+const embedDevCosQuant = 1 - 1e-3
+
+// TestEmbeddingsOnEveryDevice runs every embedding model -- the BERT family
+// through its encoder segment, a decoder (qwen3-embedding, EmbeddingGemma)
+// through its instance, EmbeddingGemma's blocks planned non-causal -- with
+// every encoder block on each device present, and with half of them, against
+// the host and against the references TestEmbeddingsMatchReference holds the
+// host to -- the encoder's segment through the one placement path
+// (encdev.go). The violation is the output LayerNorm's weight taken out of
+// what the device is handed: BERT's post-norms are the block graph's
+// (front.go postResid), which a gate running the pre-norm block would not
+// see.
+func TestEmbeddingsOnEveryDevice(t *testing.T) {
+	for _, g := range loadEmbedGoldens(t) {
+		t.Run(g.Model, func(t *testing.T) {
+			m, openOpts := openEmbedModel(t, g)
+			// A decoder embedding model (qwen3-embedding, EmbeddingGemma)
+			// places its instance's blocks; its history is f32 on the device.
+			nb := m.Cfg.NLayer
+			bound := embedDevCos
+			if g.Model == "qwen3-embedding-0.6b" {
+				bound = embedDevCosQuant
+			}
+			// The history f32, as every arm reads it.
+			eo := append(append([]Option(nil), openOpts...), WithKVF16(false))
+			embed := func(e *Embedder) [][]float32 {
+				var out [][]float32
+				for _, text := range g.Texts {
+					v, err := e.Embed(m.EmbedIDs(text))
+					if err != nil {
+						t.Fatal(err)
+					}
+					out = append(out, append([]float32(nil), v...))
+				}
+				return out
+			}
+			he, err := NewEmbedder(m, eo...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			host := embed(he)
+			he.Close()
+			ran := 0
+			for _, spec := range stepDevices() {
+				probe, err := openGPU(t, gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
+				if err != nil || probe == nil {
+					t.Logf("%s: not present (%v)", spec, err)
+					continue
+				}
+				probe.Close()
+				ran++
+				t.Run(spec, func(t *testing.T) {
+					arm := func(n int) ([][]float32, int) {
+						gpux, err := openGPU(t, append([]gpu.Option{gpu.WithDevices(spec),
+							gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t)...)...)
+						if err != nil {
+							t.Fatal(err)
+						}
+						defer gpux.Close()
+						e, err := NewEmbedder(m, eo...)
+						if err != nil {
+							t.Fatal(err)
+						}
+						defer e.Close()
+						if err := e.SetDeviceLayers(gpux, n); err != nil {
+							t.Fatal(err)
+						}
+						placed := e.DeviceBlocks()
+						if want := n; n < 0 && placed != nb || n >= 0 && placed != want {
+							t.Fatalf("placed %d blocks, offered %d of %d: %v %s", placed, n, nb, e.DeviceDeclines(), gpux.Err())
+						}
+						// The device ran them: one submission a run of placed
+						// blocks a text, counted by the device itself.
+						s0 := gpux.Stats().Submits
+						out := embed(e)
+						if s := gpux.Stats().Submits - s0; s < len(g.Texts) {
+							t.Fatalf("%d submission(s) for %d texts: the placed blocks did not run on the device", s, len(g.Texts))
+						}
+						return out, placed
+					}
+					closest := func(got [][]float32) float64 {
+						w := 1.0
+						for i := range host {
+							h := make([]float64, len(host[i]))
+							for j, x := range host[i] {
+								h[j] = float64(x)
+							}
+							w = math.Min(w, cosine(got[i], h))
+						}
+						return w
+					}
+					for _, n := range []int{nb / 2, -1} {
+						got, placed := arm(n)
+						c := closest(got)
+						t.Logf("%d of %d blocks on %s: worst cosine to the host %.9f", placed, nb, spec, c)
+						if !(c >= bound) {
+							t.Errorf("%d blocks on %s: cosine to the host %.9f < %v", placed, spec, c, bound)
+						}
+						if placed == nb {
+							for i := range got {
+								if i < len(g.Llamacpp) {
+									if lc := cosine(got[i], g.Llamacpp[i]); !(lc >= embedCosBound) && g.LGGUF == "" {
+										t.Errorf("text %d on %s: cosine to llama.cpp %.7f < %v", i, spec, lc, embedCosBound)
+									}
+								}
+							}
+						}
+					}
+					// violation runs the every-block arm with cut applied and
+					// fails unless it moves the answer off the host's.
+					violation := func(name string, cut func() func()) {
+						undo := cut()
+						bad, _ := arm(-1)
+						undo()
+						c := closest(bad)
+						t.Logf("%s on %s: worst cosine to the host %.6f", name, spec, c)
+						if c >= bound {
+							t.Errorf("%s reads cosine %.9f on %s: the gate does not see it", name, c, spec)
+						}
+					}
+					// The attention norm's weight gone from what the device is
+					// handed at the offer.
+					violation("the attention norm without its weight", func() func() {
+						saved := make([][]float32, len(m.Layers))
+						for i := range m.Layers {
+							w := attnNormOf(&m.Layers[i])
+							if w == nil {
+								t.Fatalf("block %d reads no attention norm", i)
+							}
+							saved[i] = append([]float32(nil), w...)
+							copy(w, onesLike(w))
+						}
+						return func() {
+							for i := range m.Layers {
+								copy(attnNormOf(&m.Layers[i]), saved[i])
+							}
+						}
+					})
+					if !m.Cfg.NonCausal {
+						return
+					}
+					// A bidirectional decoder's mask is load-bearing on the
+					// device: run causal there, and with the sliding layers'
+					// graphs stating no window (the long text is past the
+					// window), which is what the composed attention reads.
+					violation("a causal mask on the device", func() func() {
+						m.Cfg.NonCausal = false
+						return func() { m.Cfg.NonCausal = true }
+					})
+					windowed := slices.ContainsFunc(m.FrontGraphs().Blocks, func(g *graph.Graph) bool {
+						return g != nil && slices.ContainsFunc(g.Ops, func(o graph.Op) bool {
+							return o.Kind == graph.OpAttend && o.Attr.Window > 0
+						})
+					})
+					if windowed {
+						violation("no symmetric window on the sliding layers", func() func() {
+							return rewriteEveryBlock(m, t, unwindowed(t))
+						})
+					}
+				})
+			}
+			if ran == 0 {
+				noDevice(t, "device", nil)
+			}
+		})
+	}
+}
+
+// unwindowed is a block's graph with its attention's window gone, the graph
+// itself where it states none.
+func unwindowed(t *testing.T) func(*graph.Graph) *graph.Graph {
+	return func(g *graph.Graph) *graph.Graph {
+		if !slices.ContainsFunc(g.Ops, func(o graph.Op) bool { return o.Kind == graph.OpAttend && o.Attr.Window > 0 }) {
+			return g
+		}
+		return rewriteOps(t, g, func(_ int, o *graph.Op) bool {
+			if o.Kind != graph.OpAttend || o.Attr.Window == 0 {
+				return false
+			}
+			o.Attr.Window = 0
+			return true
+		})
+	}
+}
+
+// attnNormOf is the norm a block's attention reads: its pre-norm, or on a
+// post-norm block the norm after the attention residual (an encoder's, or
+// Gemma's where it has no pre-norm).
+func attnNormOf(l *model.Layer) []float32 {
+	if l.AttnNorm != nil {
+		return l.AttnNorm
+	}
+	if w := l.Vector(jlm.RoleAttnOutNorm); w != nil {
+		return w
+	}
+	return l.Vector(jlm.RolePostAttnNorm)
+}

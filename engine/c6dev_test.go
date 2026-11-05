@@ -1,0 +1,367 @@
+package engine
+
+import (
+	"fmt"
+	"math"
+	"slices"
+	"strings"
+	"testing"
+
+	"github.com/jitllm/jitllm/model"
+
+	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/graph"
+)
+
+// c6DevViolations are the kit's features taken out of the model while only the
+// device session runs; the host arm is computed once from the clean model. A
+// tier that ignored a feature would match the host on the clean arm and fail
+// nothing, so each must move the device's logits.
+func c6BaseDevViolations() map[string][]c6Violation {
+	return map[string][]c6Violation{
+		"synth-phi2": {
+			{"RMSNorm for LayerNorm", rmsForLayerNorm},
+			{"no norm biases", noNormBiases},
+			{"no FFN biases", noFFNBiases},
+			{"serial residual", serialFromShared},
+			{"NORM rotary for NEOX", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.RopeNeox = false }) }},
+			{"no output norm bias", func(m *model.Model) func() {
+				was := m.OutNormB
+				m.OutNormB = nil
+				return func() { m.OutNormB = was }
+			}},
+		},
+		"synth-starcoder": {
+			{"no position table", noPosTable},
+			{"rotary instead of none", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.NoPosEnc = false }) }},
+			{"RMSNorm for LayerNorm", rmsForLayerNorm},
+			{"no norm biases", noNormBiases},
+			{"no FFN biases", noFFNBiases},
+		},
+		"synth-stablelm": {
+			{"RMSNorm for LayerNorm", rmsForLayerNorm},
+			{"parallel residual", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.Parallel = true }) }},
+			{"NORM rotary for NEOX", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.RopeNeox = false }) }},
+		},
+		"synth-stablelm-par": {
+			{"serial residual", serialFromShared},
+		},
+		"synth-starcoder2": {
+			{"RMSNorm for LayerNorm", rmsForLayerNorm},
+			{"parallel residual", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.Parallel = true }) }},
+			{"NORM rotary for NEOX", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.RopeNeox = false }) }},
+			{"no FFN biases", noFFNBiases},
+		},
+		"synth-falcon": {
+			{"serial residual", serialFromShared},
+			{"RMSNorm for LayerNorm", rmsForLayerNorm},
+		},
+		"synth-falcon40": {
+			{"the two norms swapped", swapNorms},
+			{"one norm for both branches", oneNormForBoth},
+		},
+		"synth-nemotron": {
+			{"GELU for relu2", actSwap(graph.ActGELU)},
+			{"SiLU for relu2", actSwap(graph.ActSiLU)},
+			{"RMSNorm for LayerNorm", rmsForLayerNorm},
+			{"NORM rotary for NEOX", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.RopeNeox = false }) }},
+		},
+		"synth-dbrx": {
+			{"no clip_qkv", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.ClampKQV = 0 }) }},
+			{"clip_qkv at twice its value", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.ClampKQV *= 2 }) }},
+			{"RMSNorm for LayerNorm", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.LayerNorm = false }) }},
+			{"the routed weights not renormalised", func(m *model.Model) func() {
+				return cfgMut(m, func(c *model.Config) { c.NoExpertNorm = true })
+			}},
+		},
+		"synth-commandr": {
+			{"RMSNorm for LayerNorm", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.LayerNorm = false }) }},
+			{"serial residual", serialFromShared},
+			{"NEOX rotary for NORM", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.RopeNeox = true }) }},
+		},
+		"synth-cohere2": {
+			{"rotary on the global layer", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.NoPEGlobal = false }) }},
+			{"no sliding window", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.SWAWindow = 0 }) }},
+			{"serial residual", serialFromShared},
+		},
+	}
+}
+
+// TestC6GreedyOnDeviceHonoursTheHeadBias holds the two device argmax paths to
+// phi-2's head bias: the device's composed head applies the bias with its
+// other stages, so ForwardGreedy and each row of ForwardBatchGreedy -- which
+// has no host logits at all -- pick the host's biased argmax.
+func TestC6GreedyOnDeviceHonoursTheHeadBias(t *testing.T) {
+	m, g, openOpts := openC6(t, "synth-phi2")
+	defer m.Close()
+	if m.OutB == nil {
+		t.Fatal("the fixture lost its head bias")
+	}
+	want := make([]int32, len(g.IDs))
+	host := testInstance(t, m, len(g.IDs)+1, openOpts...)
+	for p, id := range g.IDs {
+		lg, err := host.Forward(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want[p] = Greedy(lg)
+	}
+	host.Close()
+	gpux, err := openGPU(t, gpu.WithDeviceTune(gpu.TuneOff))
+	if err != nil || gpux == nil {
+		noDevice(t, "device", err)
+	}
+	defer gpux.Close()
+	st := testInstance(t, m, len(g.IDs)+1, openOpts...)
+	defer st.Close()
+	st.SetDevice(gpux)
+	if st.GPULayers() != m.Cfg.NLayer || !st.HeadOnDevice() {
+		t.Fatalf("placed %d of %d blocks, head %v: %v", st.GPULayers(), m.Cfg.NLayer, st.HeadOnDevice(), gpux.Err())
+	}
+	for p, id := range g.IDs {
+		got, err := st.ForwardGreedy(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != want[p] {
+			t.Errorf("pos %d: ForwardGreedy on the device %d, the host's biased argmax %d", p, got, want[p])
+		}
+	}
+	b := newSessBatch(m, 2, len(g.IDs)+1, openOpts...)
+	defer b.Close()
+	b.SetDevice(gpux)
+	rows := []int32{g.IDs[0], g.IDs[1]}
+	got, err := b.ForwardBatchGreedy(rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for r, id := range rows {
+		h := testInstance(t, m, 2, openOpts...)
+		lg, err := h.Forward(id)
+		h.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if w := Greedy(lg); got[r] != w {
+			t.Errorf("row %d: ForwardBatchGreedy on the device %d, the host's biased argmax %d", r, got[r], w)
+		}
+	}
+}
+
+// TestC6OnEveryDevice runs each classic-transformer fixture with every block
+// and the head on each device present -- cuda, vulkan, metal -- against the
+// host, decode one row at a time and a prefill of the whole prompt
+// through the batched kernels, and then each feature removed from the device
+// session alone.
+func TestC6OnEveryDevice(t *testing.T) {
+	for _, fx := range c6Fixtures() {
+		t.Run(fx.name, func(t *testing.T) {
+			m, g, openOpts := openC6(t, fx.name)
+			defer m.Close()
+			fixtureOnEveryDeviceCounted(t, m, g, c6DevViolations()[fx.name], 1e-5, true, openOpts...)
+		})
+	}
+}
+
+// fixtureOnEveryDevice is TestC6OnEveryDevice's body for one opened fixture:
+// every block and the head on each device present against the host, decode
+// and a whole-prompt prefill, then each of vs on the device session alone.
+func fixtureOnEveryDevice(t *testing.T, m *model.Model, g *c6Golden, vs []c6Violation, io ...Option) {
+	t.Helper()
+	fixtureOnEveryDeviceWithin(t, m, g, vs, 1e-5, io...)
+}
+
+// fixtureOnEveryDeviceWithin is fixtureOnEveryDevice with the prefill arm's
+// bound named: the binary16 attention tiles' band, which a graph that
+// renormalises a small branch (Gemma 4's mixture block) amplifies.
+func fixtureOnEveryDeviceWithin(t *testing.T, m *model.Model, g *c6Golden, vs []c6Violation, preBound float64, io ...Option) {
+	t.Helper()
+	fixtureOnEveryDeviceCounted(t, m, g, vs, preBound, false, io...)
+}
+
+// fixtureOnEveryDeviceCounted is fixtureOnEveryDeviceWithin, and where counted
+// is set a composed build (composedByDefault) adds a decode arm that counts
+// the composer's served block steps against the blocks the front end states
+// (composedCovers).
+func fixtureOnEveryDeviceCounted(t *testing.T, m *model.Model, g *c6Golden, vs []c6Violation, preBound float64, counted bool, io ...Option) {
+	t.Helper()
+	// runErr is the error a run stopped at: a run refused by name, which a
+	// violation's run may be (the gate sees it), returns no logits.
+	var runErr error
+	decode := func(st *Instance) [][]float32 {
+		var out [][]float32
+		for _, id := range g.IDs {
+			lg, err := st.Forward(id)
+			if err != nil {
+				runErr = err
+				return nil
+			}
+			out = append(out, append([]float32(nil), lg...))
+		}
+		return out
+	}
+	prefill := func(st *Instance) [][]float32 {
+		lg, err := st.Prefill(g.IDs)
+		if err != nil {
+			runErr = err
+			return nil
+		}
+		return [][]float32{append([]float32(nil), lg...)}
+	}
+	onHost := func(run func(*Instance) [][]float32) [][]float32 {
+		st := testInstance(t, m, len(g.IDs)+1, io...)
+		defer st.Close()
+		out := run(st)
+		if runErr != nil {
+			t.Fatal(runErr)
+		}
+		return out
+	}
+	cmp := func(want, got [][]float32) (float64, int) {
+		worst, flips := 0.0, 0
+		for p := range want {
+			var num, den float64
+			for i := range want[p] {
+				d := float64(got[p][i] - want[p][i])
+				num, den = num+d*d, den+float64(want[p][i])*float64(want[p][i])
+			}
+			nmse := num / den
+			if math.IsNaN(nmse) || den == 0 {
+				return math.Inf(1), len(want)
+			}
+			worst = math.Max(worst, nmse)
+			if Greedy(got[p]) != Greedy(want[p]) {
+				flips++
+			}
+		}
+		return worst, flips
+	}
+	wantDec, wantPre := onHost(decode), onHost(prefill)
+	nl := m.Cfg.NLayer
+
+	ran := 0
+	for _, spec := range stepDevices() {
+		probe, err := openGPU(t, gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
+		if err != nil || probe == nil {
+			t.Logf("%s: not present (%v)", spec, err)
+			continue
+		}
+		probe.Close()
+		ran++
+		t.Run(spec, func(t *testing.T) {
+			// onDevice runs run on a fresh tier of spec, every block and the
+			// head placed; steps is its one-row steps, every one of which the
+			// composer runs where it serves blocks the front end states.
+			// noGraph issues every step itself, which counts the declines.
+			onDevice := func(run func(*Instance) [][]float32, steps int, noGraph bool) ([][]float32, string) {
+				opts := append([]gpu.Option{gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t)...)
+				if noGraph {
+					opts = append(opts, gpu.WithConfig(func(c *gpu.Config) { c.NoGraph = true }))
+				}
+				gpux, err := openGPU(t, opts...)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer gpux.Close()
+				st := testInstance(t, m, len(g.IDs)+1, io...)
+				defer st.Close()
+				st.SetDeviceLayers(gpux, -1)
+				if n := st.GPULayers(); n != cardBlocks(m) {
+					var front []string
+					for li := range nl {
+						if u := m.Uncovered(li); u != model.Covered {
+							front = append(front, fmt.Sprintf("block %d: %v (%v)", li, u, m.UncoveredErr(li)))
+						}
+					}
+					return nil, fmt.Sprintf("took %d of %d blocks: %v %v; the front end: %v", n, nl,
+						st.DeviceDeclines(), gpux.Err(), front)
+				}
+				if !st.HeadOnDevice() {
+					return nil, "the head stayed on the host: " + gpux.Err()
+				}
+				t.Logf("placed: %d reserved rows (%s)", gpux.Stats().ReservedRows, gpux.Err())
+				got := run(st)
+				if err := runErr; err != nil {
+					runErr = nil
+					return nil, "refused: " + err.Error()
+				}
+				if n := st.GPULayers(); n != cardBlocks(m) {
+					t.Fatalf("the session fell to the host (%d blocks left): %v", n, gpux.Err())
+				}
+				if counted || composedOf(m, gpux) != 0 {
+					composedCovers(t, m, steps, nl, noGraph, gpux)
+				}
+				return got, ""
+			}
+			worst := 0.0
+			arms := []struct {
+				name    string
+				run     func(*Instance) [][]float32
+				want    [][]float32
+				steps   int
+				noGraph bool
+			}{{"decode", decode, wantDec, len(g.IDs), false}, {"prefill", prefill, wantPre, 0, false}}
+			if composedByDefault && counted {
+				// A recording replays what a decline is counted from only when
+				// it is emitted, so a model the front end states in part runs
+				// once more with every step issued, to count its declines.
+				for li := range nl {
+					if m.Uncovered(li) != model.Covered {
+						arms = append(arms, arms[0])
+						arms[2].name, arms[2].noGraph = "decode, no recording", true
+						break
+					}
+				}
+			}
+			for _, arm := range arms {
+				got, why := onDevice(arm.run, arm.steps, arm.noGraph)
+				if why != "" {
+					t.Fatalf("%s: %s", arm.name, why)
+				}
+				w, flips := cmp(arm.want, got)
+				// A prompt's chunk takes Q K^T through binary16 tiles where the
+				// device has them (CUDA's m16n8k16, Metal's FlashPrefillTile),
+				// and P V in float32 on both: up to 4.7e-07 on CUDA and 6.7e-06
+				// on Metal (synth-glm4), where decode's f32 reads 1e-12. With P
+				// and V in binary16 as well, Metal's tile put synth-apertus --
+				// q/k-normed, so its softmax is nearly one-hot -- at 1.3e-04 and
+				// an argmax flip, which this bound and the zero-flip rule refuse.
+				// The violations below land at 1e-01 and up.
+				bound := 1e-6
+				if arm.name == "prefill" {
+					bound = preBound
+				}
+				if !(w < bound) || flips > 0 {
+					t.Fatalf("%s: worst logit NMSE %.3e, %d argmax flips, against the host", arm.name, w, flips)
+				}
+				t.Logf("%s, %d of %d blocks and the head on %s: worst logit NMSE %.3e", arm.name, cardBlocks(m), nl, spec, w)
+				worst = math.Max(worst, w)
+			}
+			if composedByDefault && counted {
+				vs = append(append(slices.Clone(vs), statedViolations(m)...), routerViolations(m)...)
+			}
+			for _, v := range vs {
+				undo := v.mut(m)
+				got, why := onDevice(decode, len(g.IDs), false)
+				undo()
+				if strings.HasPrefix(why, "refused: ") {
+					t.Logf("violation %q: %s -- refused by name, which the gate sees", v.name, why)
+					continue
+				}
+				if why != "" {
+					t.Errorf("%s: the device declined the violation rather than running it: %s", v.name, why)
+					continue
+				}
+				bad, _ := cmp(wantDec, got)
+				if !(bad > 100*worst) || !(bad > 1e-4) {
+					t.Errorf("%s: the device arm cannot see it -- worst NMSE %.3e against a clean %.3e",
+						v.name, bad, worst)
+				}
+				t.Logf("violation %q: worst NMSE %.3e", v.name, bad)
+			}
+		})
+	}
+	if ran == 0 {
+		t.Skip("no device on this host")
+	}
+}

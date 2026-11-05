@@ -34,8 +34,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jitllm/jitllm/engine"
 	"github.com/jitllm/jitllm/engine/device/gpu"
-	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/engine/sched"
 	"github.com/jitllm/jitllm/internal/cmd/goheap"
 	"github.com/jitllm/jitllm/internal/localserver"
@@ -307,13 +307,13 @@ func serve(args []string) {
 	if wasSet(fs, "kv-f16") {
 		kvWidth = kvF16
 	}
-	var store model.KVStore
+	var store engine.KVStore
 	if *kvCache != "" {
 		max, err := gpu.ParseBytes(*kvCacheMax)
 		if err != nil {
 			fatal("-kv-cache-max: %v", err)
 		}
-		fsStore, err := model.NewFileStoreLimit(*kvCache, max)
+		fsStore, err := engine.NewFileStoreLimit(*kvCache, max)
 		if err != nil {
 			fatal("-kv-cache: %v", err)
 		}

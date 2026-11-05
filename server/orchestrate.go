@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine"
 	"github.com/jitllm/jitllm/engine/nn"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
@@ -145,7 +145,7 @@ func (e *Engine) promote(s *Session) error {
 // instBlocks is how many blocks lm's instance runs on a device.
 func instBlocks(lm *LoadedModel) int {
 	var n int
-	lm.inst.With(func(in *model.Instance) { n = in.GPULayers() })
+	lm.inst.With(func(in *engine.Instance) { n = in.GPULayers() })
 	return n
 }
 
@@ -154,7 +154,7 @@ func instBlocks(lm *LoadedModel) int {
 func (e *Engine) place(s *Session, why orchWhy) int {
 	start := time.Now()
 	var got int
-	s.in().Place(func(in *model.Instance) {
+	s.in().Place(func(in *engine.Instance) {
 		before := in.GPULayers()
 		in.PlaceBlocks(0, s.lm.m.Cfg.NLayer)
 		got = in.GPULayers() - before
@@ -210,8 +210,8 @@ func (e *Engine) demote(v *Session, forID string) bool {
 	}
 	defer v.mu.Unlock()
 	start := time.Now()
-	var mv model.BlockMove
-	v.in().Place(func(in *model.Instance) { mv, _ = in.MoveBlocks(0, v.lm.m.Cfg.NLayer, nn.CPU) })
+	var mv engine.BlockMove
+	v.in().Place(func(in *engine.Instance) { mv, _ = in.MoveBlocks(0, v.lm.m.Cfg.NLayer, nn.CPU) })
 	n := len(mv.Moved)
 	// Every idle session of the instance brings its history home too, or its
 	// device view would keep the blocks on the card.

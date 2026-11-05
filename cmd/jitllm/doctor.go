@@ -15,8 +15,8 @@ import (
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/composer"
+	"github.com/jitllm/jitllm/engine"
 	"github.com/jitllm/jitllm/engine/device/cpu"
-	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/capabilities"
 )
@@ -128,7 +128,7 @@ func realDoctorEnv() doctorEnv {
 	env := doctorEnv{
 		version:   buildVersion(),
 		cpuName:   cpuBrand(),
-		form:      model.CPUForm(),
+		form:      engine.CPUForm(),
 		jit:       composer.LowersCPU(uint64(cpu.Probe().ISA())),
 		hostErr:   cpu.New().Baseline(),
 		budget:    gcPlan().Budget(),

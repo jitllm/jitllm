@@ -18,9 +18,9 @@ especially new versions".
 
 Six things came out of the survey that change the shape of the answer:
 
-1. **`engine/model/forward.go` never mentions `Arch`.** `grep -c Arch engine/model/forward.go`
+1. **`engine/forward.go` never mentions `Arch`.** `grep -c Arch engine/forward.go`
    is **0**; the only `jlm.Arch` reference in the whole `model` package is a
-   validity check (`engine/model/model.go:201`). The graph is driven entirely by
+   validity check (`model/model.go:201`). The graph is driven entirely by
    `jlm.Config` fields, `jlm.Flags` bits and which `jlm.Role` tensors exist. The
    architecture switch lives in ONE function, `convert.configOf`
    (`convert/config.go:67`). So jitllm does not pay llama.cpp's "50 graph
@@ -207,9 +207,9 @@ DeepSeek-V2-Lite has `first_k_dense_replace: 1`, DeepSeek-V3 has 3.
 `interleave_moe_layer_step` and `moe_every_n_layers` are the same axis for other
 families.
 
-**What jitllm has.** Nothing. `engine/model/model.go:151` is
+**What jitllm has.** Nothing. `model/model.go:151` is
 `func (c *Config) MoE() bool { return c.NExpert > 0 }` — a WHOLE-MODEL property,
-consulted at seven sites in `engine/model/forward.go` (lines 464, 1057, 1095, 1123,
+consulted at seven sites in `engine/forward.go` (lines 464, 1057, 1095, 1123,
 1156, 1212, 2077). `jlm.LayerKinds` already exists as the per-layer vocabulary
 (`format/jlm/config.go`, `LayerFullAttn` / `LayerLinearAttn`) and the container already
 writes one byte per layer, so the storage and the precedent are both there.
@@ -319,7 +319,7 @@ same 192/128 split.
 
 1. **`jlm.Config` has ONE `HeadDim`** (`format/jlm/config.go:137`) and no field that can
    hold `kv_lora_rank`, `q_lora_rank`, or a rope/no-rope split of a head.
-2. **`model.kvLayout` has ONE `headDim`** (`engine/model/kvlayout.go:31`) and computes
+2. **`model.kvLayout` has ONE `headDim`** (`engine/kvlayout.go:31`) and computes
    `kvDim() = nKV * headDim` for both K and V. Under MLA those differ.
 3. **`nn.JIT.AddAttn(hd, kvStride, f16)`** (`engine/nn/attn.go:75`) maps SIX kernels
    from one `hd`: `AttnScores`, `AttnAcc`, `AttnAccInto`, `AttnScores2`,
@@ -774,7 +774,7 @@ asset for the families above.
 | asset | where | what it covers |
 |---|---|---|
 | the architecture switch is ONE function | `convert.configOf`, `convert/config.go:67` | a new name is a case arm, not a graph builder |
-| the graph is config-driven | `grep -c Arch engine/model/forward.go` = **0** | no per-architecture runtime code |
+| the graph is config-driven | `grep -c Arch engine/forward.go` = **0** | no per-architecture runtime code |
 | per-layer kinds in the container | `jlm.LayerKinds`, one byte per layer | hybrids, irregular patterns, and the natural home for per-layer dense/MoE |
 | gated delta rule, host + all 3 device backends | `kernels.GatedDeltaStep`, `Conv1dRows`, `Conv1dShift`, `DeltaGate` | qwen3next; the base for KDA and most of Mamba-2 |
 | recurrent state migration | `MigrateRec`, `syncRecFromDevice`, `pushRecToDevice`, `recPair` | any recurrent family, on the device |
@@ -791,7 +791,7 @@ asset for the families above.
 | 66 generated pre-tokenizer pipelines | `tok/pretok/table.go`, `scripts/gentok` | `deepseek-v3`, `glm4`, `minimax-m2`, `hunyuan`, `bailingmoe2`, `exaone4`, `cohere2moe`, `falcon-h1`, `lfm2`, `afmoe`, `qwen35` |
 | a tokenizer override path | `tok.WithTokenizer(r)` + `pretok.ParsePreTokenizer` | rescues a `pre` name the table does not carry |
 | the safetensors input path | `convert/safetensors.go`, `hfArchTable` | a model with no GGUF can still be converted |
-| the transformers oracle | `scripts/hfgold.py`, `model.TestSafetensorsMatchTransformers` | a tiny-random fixture gates a graph without the real weights |
+| the transformers oracle | `scripts/hfgold.py`, `engine.TestSafetensorsMatchTransformers` | a tiny-random fixture gates a graph without the real weights |
 | the llama.cpp oracle, with deepseek2 in it | all four `libllama.so` on this box | per-node intermediates for every family in section 1 |
 
 ---
@@ -830,7 +830,7 @@ about verification rather than about ambition:
   KV side is low-rank — half the new machinery;
 - it fits: **10.36 GB** on a box with 68 GB free and 31 GB of RAM, and
   `llama-eval-callback` on this machine dispatches `deepseek2`, so the node-by-
-  node gate that verified gpt-oss (`model.TestGPTOSSMatchesLlamaCppIntermediates`)
+  node gate that verified gpt-oss (`engine.TestGPTOSSMatchesLlamaCppIntermediates`)
   transfers directly.
 
 ### Step 3 — The DeepSeek-V3 router (Capability B)
@@ -977,7 +977,7 @@ IR, not a branch (RULE 8). The exp machinery it needs already exists: the gate
 kernel computes `beta[i] = sigmoid(b[i])` on every tier today.
 
 **Status: SHIPPED and verified.**
-`model.TestSafetensorsMatchTransformers/synth-kimilinear` reads **8 of 8
+`engine.TestSafetensorsMatchTransformers/synth-kimilinear` reads **8 of 8
 positions, worst NMSE 5.08e-11 against a 1e-9 bound**.
 
     the container            DONE  arch, interleaved LayerKinds, the SSM
@@ -1002,7 +1002,7 @@ positions, worst NMSE 5.08e-11 against a 1e-9 bound**.
                                    hardcoded 1e-6 rather than rms_norm_eps.
     NoPE attention           DONE  FlagNoPosEnc. See below -- it is the bug
                                    that is EXACT at position 0.
-    the device, MLA half     DONE  model.TestNoPEMLAOnEveryDevice: the
+    the device, MLA half     DONE  engine.TestNoPEMLAOnEveryDevice: the
                                    full-attention block on cuda and vulkan at
                                    worst logit NMSE 1.0e-12 / 9.4e-13 against
                                    the host, with the linear blocks declined
@@ -1357,7 +1357,7 @@ per family which oracle exists.
    family in this document **provided a GGUF small enough to run exists**.
 2. **transformers, via `scripts/hfgold.py`** into
    the reference venv (`$JITLLM_HF_PY`; torch 2.14 CPU, transformers 5.17), gated by
-   `model.TestSafetensorsMatchTransformers` against teacher-forced logits over
+   `engine.TestSafetensorsMatchTransformers` against teacher-forced logits over
    fixed ids. **This one does not need a real model at all** — the existing
    goldens are `tiny-random-*` fixtures of a few MB, and random weights make
    every wiring error an uncorrelated logit vector rather than a near-miss.

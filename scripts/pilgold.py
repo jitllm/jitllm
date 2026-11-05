@@ -9,7 +9,7 @@ processor resizes with Pillow -- Gemma 3's Gemma3ImageProcessor (BILINEAR),
 CLIP's and InternVL's (BICUBIC) -- is held to the bytes Pillow's resize
 writes, not to an interpolation that looks right. Each case is a pattern
 picture both this script and the Go gates rebuild from one formula (pattern
-below), or a test picture read from engine/model/testdata, resized in mode RGB
+below), or a test picture read from engine/testdata, resized in mode RGB
 to a size, with its output's sha256 and, for a small one, its every byte.
 """
 import hashlib

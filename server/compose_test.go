@@ -6,8 +6,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine"
 	"github.com/jitllm/jitllm/engine/grammar"
-	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/internal/schemacheck"
 )
 
@@ -62,7 +62,7 @@ func TestGrammarComposesWithLogprobsAndChoices(t *testing.T) {
 	}
 	texts := map[int]string{}
 	err = e.Generate(context.Background(), GenerateOptions{ModelID: sm.id, Prompt: prompt, MaxTokens: int(sm.maxTok),
-		Grammar: src, Sampling: &model.Sampler{Temp: 1}, Seeds: []int64{11, 12, 13}}, func(ev Event) error {
+		Grammar: src, Sampling: &engine.Sampler{Temp: 1}, Seeds: []int64{11, 12, 13}}, func(ev Event) error {
 		if ev.Kind == EventToken {
 			texts[ev.Choice] += ev.Token.Text
 		}
@@ -87,7 +87,7 @@ func TestGrammarComposesWithLogprobsAndChoices(t *testing.T) {
 	on := &Speculation{Enabled: true}
 	for what, o := range map[string]GenerateOptions{
 		"logprobs": {ModelID: sm.id, Prompt: prompt, MaxTokens: 4, Speculation: on, Logprobs: true},
-		"n":        {ModelID: sm.id, Prompt: prompt, MaxTokens: 4, Speculation: on, Seeds: []int64{1, 2}, Sampling: &model.Sampler{Temp: 1}},
+		"n":        {ModelID: sm.id, Prompt: prompt, MaxTokens: 4, Speculation: on, Seeds: []int64{1, 2}, Sampling: &engine.Sampler{Temp: 1}},
 	} {
 		err := e.Generate(context.Background(), o, func(Event) error { return nil })
 		if !errors.Is(err, ErrInvalid) {

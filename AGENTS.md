@@ -51,10 +51,10 @@ gate below before it counts.
 | principle | what it means | the gate |
 |---|---|---|
 | **JIT** | every kernel is emitted at run time for the device in front of it; no pregenerated or copied kernels (RULE 8) | `cpu.TestNoAssemblyBesidesTheTrampolines`; device code only from the composer's forms (no hand-written kernels) |
-| **No Go compute** | no arithmetic a token runs is a Go loop; a missing kernel is a BASIC generated kernel, never a fallback (RULE 8) | `TestNoProductionCodeImportsTheOracle`, `model.TestEveryModelRunsGenerated` |
+| **No Go compute** | no arithmetic a token runs is a Go loop; a missing kernel is a BASIC generated kernel, never a fallback (RULE 8) | `TestNoProductionCodeImportsTheOracle`, `engine.TestEveryModelRunsGenerated` |
 | **Relocation** | any block, its KV pages and its recurrent state can move between any two devices, the CPU among them, mid-sequence, with the same answer; no device is a default where blocks live, and every move names its destination | `TestLayerRelocatesToAnotherDevice`, `TestBlocksMoveBetweenDevices`, `TestRelocatedBlocksComeBack`, `TestKVPagesRelocateWithTheLayer`, `TestBatchSeamMovesCarryEveryRow(Hybrid)`, `TestMLASeamMovesWithItsHistory`, `TestShrinkingTheSeamMovesTheSummaryToTheCPU`; decision models: `TestDecisionRelocatesMidPrompt`, `TestDecisionMovesBetweenCards`, `TestDecisionDistributes` |
 | **Paging** | paging is the design, never a mode: a model that does not fit pages, a budget below the model evicts and re-reads with the same answer, every entry point faults its blocks in, and a windowed layer holds its window and not the context (placement.md 15z) | `TestPagingDoesNotChangeTheAnswer`, `TestOpenHonoursAPageBudget`, `TestForwardBatchFaultsItsBlocksIn`, `TestTwoPagedModels*`, `TestWindowedLayersHoldTheirWindow`, `TestPrefixCacheRestoresAWindowedLayer`, `TestKVIsHeldOnce` (a position's history in one place: no page held by a session and the prefix cache both, no host copy of a card's history), `TestBlocksPageOnTheListedCard` (cards listed without the CPU, `WithCPU(false)`, page the model on themselves and nothing runs on the CPU); decision models: `TestDecisionPagesWithTheSameAnswer`, `TestLayaPagesWithTheSameAnswer` |
-| **Low to no Go allocation** | a warm decode token and a warm step make zero engine heap allocations on the host and every device backend; weights and frames live off the heap (RULE 2f) | `model.TestDecodeDoesNotAllocate` (JITLLM_ALLOC_MODELS adds models), `TestTwoPagedModels*`; a decision model's warm question: `TestDecisionDoesNotAllocate` |
+| **Low to no Go allocation** | a warm decode token and a warm step make zero engine heap allocations on the host and every device backend; weights and frames live off the heap (RULE 2f) | `engine.TestDecodeDoesNotAllocate` (JITLLM_ALLOC_MODELS adds models), `TestTwoPagedModels*`; a decision model's warm question: `TestDecisionDoesNotAllocate` |
 
 A new architecture is added to each gate's model list, not only to the
 correctness gates -- a gate that never runs a model does not cover it
@@ -261,7 +261,7 @@ coreset A/B: pe 0.864x, smt 0.965x, all 0.807x against p).
   `PCores`/`ECores`/`SMTSiblings` intersect `sched_getaffinity` so a narrower
   `taskset` yields fewer workers, and `LockOSThread` survives only where an API
   binds state to a thread (CUDA contexts, `backend/cuda`).
-- **The shipped per-region dispatch cost** is `model.TestFusionCeiling`'s
+- **The shipped per-region dispatch cost** is `engine.TestFusionCeiling`'s
   2.70 us on Linux and 3.008 us on the M4.
 - **Measure at the thread count that SHIPS.** A win measured on one core has
   evaporated or reversed at the real thread count eight times here — the single
@@ -357,7 +357,7 @@ an addition is chosen from and priced against.
    that class (`scripts/*gold.py`). A buffer left at its initial zeros is often
    the identity -- DeepSeek-V3's selection bias was, and every gate that claimed
    to cover it compared two arms computing the same function. A new safetensors
-   class needs a fixture and a golden in `model.TestSafetensorsMatchTransformers`
+   class needs a fixture and a golden in `engine.TestSafetensorsMatchTransformers`
    or it is a claim with nothing behind it.
 3. **A features-are-load-bearing gate**: each graph difference, removed, fails
    it. A position-0 comparison cannot see a rotary bug (a rotation by 0 is the
@@ -520,8 +520,8 @@ signature. The oracle's matvec (`internal/oracle.MatVec`,
 test-only) is f32 with Neumaier compensation, so the reference stays an
 independent METHOD (compensated scalar) rather than the kernel's arithmetic
 twice. What float64 is left is measurement -- the tuners' statistics
-(`engine/model/seamtune.go`, `engine/nn/tune.go`), the expert-use accounting
-(`engine/model/hotness.go`) and setup scalars before a kernel call.
+(`engine/seamtune.go`, `engine/nn/tune.go`), the expert-use accounting
+(`engine/hotness.go`) and setup scalars before a kernel call.
 
 Why: it makes the elementwise ops emittable with the assembler that already
 exists. It is not a perf win and must not be quoted as one (decode is bound by
@@ -534,8 +534,8 @@ precision").
 ## RULE 8a: a BLOCK is the unit, and it must stay orchestrable.
 
 The device never learns what a transformer is beyond one repeating unit:
-`engine/model/` keeps the graph and nothing in `engine/device/gpu` knows about embedding lookup,
-sampling or tied output weights. That is what makes `PrepLayer` able to decline
+`model/` states the graph, `engine/` runs it, and nothing in `engine/device/gpu`
+knows about embedding lookup, sampling or tied output weights. That is what makes `PrepLayer` able to decline
 per block, and it is why a model too big for the card runs its first N blocks on
 the device and the rest on the host.
 
@@ -623,7 +623,7 @@ kernel and below a model compare the engine against something that is not
 itself -- the batched path (`TestBatchMatchesForward`) and llama.cpp's goldens
 (`TestGreedyMatchesLlamaCpp`):
 
-    GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 ./scripts/cap 8G -- go test -c -o model.test ./engine/model
+    GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 ./scripts/cap 8G -- go test -c -o model.test ./engine
     # copy model.test and the package's testdata/ to the arm64 host, sign it
     # with .github/release/entitlements.plist (codesign -s - --entitlements), then:
     ./model.test -test.run 'TestGreedyMatchesLlamaCpp|TestBatchMatchesForward|TestEveryModelRunsGenerated'
@@ -674,8 +674,8 @@ that dies at conversion.
 - **The band grows with the blocks below the seam.** An absolute logit
   difference across a deep seam is not evidence of a device bug; the falsifiable
   form is to move the seam and see whether the error tracks the depth below it
-  (`model.TestHybridDeviceErrorIsAmplification`,
-  `model.TestPostNormDeviceErrorIsAmplification`).
+  (`engine.TestHybridDeviceErrorIsAmplification`,
+  `engine.TestPostNormDeviceErrorIsAmplification`).
 - **A gate that pins a knob does not cover that knob's default.** Run the
   shipping default (the f16 KV cache on amd64) on a partial seam too.
 
@@ -755,21 +755,21 @@ Stated by the user, and the shape every entry point takes:
    instances as the caller makes, each its own placement.
 3. **Composition happens only when an instance is made, relocated or tuned
    at runtime** -- never in a prefill, a token or a draw, and never because a
-   session opened (`model.TestComposesOnlyWithAnInstance`,
-   `Model.CPUComposes`; the tier's `FormedAtStep`).
+   session opened (`engine.TestComposesOnlyWithAnInstance`,
+   `Instance.CPUComposes`; the tier's `FormedAtStep`).
 4. **A session is a conversation's history** -- its own KV pages, recurrent
-   state, positions, logits and device view (`model.Session`). Opening one
+   state, positions, logits and device view (`engine.Session`). Opening one
    composes nothing.
 5. **The scheduler leases a session an instance per phase** (prefill,
    generate), the lease held for the whole phase and handed back
-   (`model.Scheduler`, swappable by `WithScheduler`; `model.Pool` is the
+   (`engine.Scheduler`, swappable by `WithScheduler`; `engine.Pool` is the
    default). Prefill and generation may lease different instances; a session
    moving between them moves only the blocks placed differently, the source
    freed once the copy has landed.
 6. **Batching is many sessions leasing one instance**: each step carries every
    decoding session's next token and prompts' chunks beside them, one pass
-   over the weights per instance (`model.StepRuns`, `model.Batcher`), rows
-   reassigned every step (`model.TestSessionsShareAnInstance`).
+   over the weights per instance (`engine.StepRuns`, `engine.Batcher`), rows
+   reassigned every step (`engine.TestSessionsShareAnInstance`).
 7. **Relocating an instance moves the history of every session leasing it**;
    parking a session moves its history alone and leaves the instance where it
    is (`Instance.Park`, `Instance.Settle`).
@@ -798,7 +798,7 @@ does for processes and threads, jitllm does for models and blocks:
 | a page fault | a page-in |
 
 **"Scheduler" is already taken in this tree for a different axis.**
-`model.Scheduler` puts SEQUENCES onto batch rows (admission and retirement,
+`engine.Scheduler` puts SEQUENCES onto batch rows (admission and retirement,
 driven rather than self-running). Block placement puts BLOCKS onto compute
 resources with memory paged; it is the core. You cannot schedule what you cannot
 relocate, which is why block paging is primed whether or not the model fits
@@ -832,7 +832,7 @@ and the sessions-per-device budget.
   second session is not an option, stated by the user: *"we can't refuse,
   jitllm is an inference os multimodel multi devices multi instances"*. A
   session's view letting a block go leaves it on the card for every other view
-  holding it (`model.TestABatchLeavesAnotherSessionAlone`).
+  holding it (`engine.TestABatchLeavesAnotherSessionAlone`).
 - **KV is never held twice.** Host storage follows ownership: a page lives on
   the host or on the device that owns it, never as a standing mirror of both,
   and a prefix shared between sessions is one page (`SharedStore`), not a copy
@@ -862,7 +862,7 @@ and the sessions-per-device budget.
   fits" means enough pages were allocated to hold every block, and nothing is
   ever evicted. There is no paging-off mode, and a measurement that reports one
   measures a path that no longer exists.
-- **The test suite converts** (`engine/model/jlm_helper_test.go`) because it has
+- **The test suite converts** (`engine/jlm_helper_test.go`) because it has
   to run what ships; an open error is a failure, never a `t.Skipf`.
 - **`composer/` generates code and never runs a model** (stated by the user).
   The passes, the lowerings and every device's emitters live there; what runs
@@ -960,7 +960,7 @@ JIT and state) was llama.cpp's technical debt, not a property of the model.
 - **The class token goes where the reference puts it** (InternVL first, as
   transformers does and llama.cpp does not; Llama 4 last).
 - **A bidirectional run in a causal prompt is a per-row key count**
-  (`Span.Bidir`, `nn.KeyRunDevice`, `engine/model/bidir.go`): a prefill chunk
+  (`Span.Bidir`, `nn.KeyRunDevice`, `engine/bidir.go`): a prefill chunk
   never cuts one, and a device that cannot honour it does not run the chunk.
 
 Evidence: `docs/engineering-history/model-correctness.md` ("Vision as blocks:

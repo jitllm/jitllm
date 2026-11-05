@@ -7,7 +7,7 @@ names; the rules themselves stay in AGENTS.md.
 
     go run ./scripts/checks                     # the working tree's changes
     go run ./scripts/checks HEAD~3..HEAD        # a diff range
-    go run ./scripts/checks engine/model/x.go   # paths
+    go run ./scripts/checks engine/x.go         # paths
     go run ./scripts/checks -run HEAD~1..HEAD   # run them, each under scripts/cap
     go run ./scripts/checks -json ...           # the plan or the results as JSON
 

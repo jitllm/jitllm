@@ -16,7 +16,7 @@ the publisher's tokenizer_config.json / chat_template.jinja on Hugging Face (the
 carries). A gated repo is read through a verbatim mirror, named in the entry.
 
 render reads the contexts the Go test dumps -- one per (template, case), the
-exact JSON engine/model binds: messages, tools and documents (null when the
+exact JSON model/ binds: messages, tools and documents (null when the
 request carries none), add_generation_prompt and the special tokens -- and
 renders each with transformers' render_jinja_template, the renderer
 apply_chat_template calls, which binds the same names. It writes

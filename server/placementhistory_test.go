@@ -6,7 +6,7 @@ import (
 
 	"connectrpc.com/connect"
 
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
@@ -36,7 +36,7 @@ func TestPlacementReportsEachBlocksHistoryCost(t *testing.T) {
 	}
 	var pos int
 	var want uint64
-	s.Inspect(func(st *model.Instance) { pos, want = st.Pos(), st.HistoryBytes() })
+	s.Inspect(func(st *engine.Instance) { pos, want = st.Pos(), st.HistoryBytes() })
 	var got uint64
 	for _, b := range pl.Msg.GetPlacement().GetBlocks() {
 		n := pos

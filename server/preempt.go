@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sync/atomic"
 
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine"
 )
 
 // Preemption under memory pressure. A model may carry a KV budget
@@ -72,7 +72,7 @@ func (e *Engine) admitKV(s *Session, grow int) error {
 		return nil
 	}
 	var need uint64
-	s.in().As(s.ms, func(in *model.Instance) { need = in.HistoryBytes() + uint64(max(grow, 0))*in.PositionBytes() })
+	s.in().As(s.ms, func(in *engine.Instance) { need = in.HistoryBytes() + uint64(max(grow, 0))*in.PositionBytes() })
 	// busy is the sessions found stepping: looked past, not waited on.
 	var busy map[*Session]bool
 	for {
@@ -137,7 +137,7 @@ func (e *Engine) resumeLocked(s *Session) error {
 	}
 	var in int
 	var err error
-	s.in().As(s.ms, func(st *model.Instance) { in, err = st.Resume() })
+	s.in().As(s.ms, func(st *engine.Instance) { in, err = st.Resume() })
 	if err != nil {
 		return fmt.Errorf("server: session %q could not resume: %w", s.id, err)
 	}
@@ -160,9 +160,9 @@ func (e *Engine) parkLocked(v *Session) error {
 		v.snapHist.Store(0)
 		return nil
 	}
-	var ps model.ParkStats
+	var ps engine.ParkStats
 	var err error
-	v.in().As(v.ms, func(st *model.Instance) {
+	v.in().As(v.ms, func(st *engine.Instance) {
 		if store := v.lm.ttft.store; store != nil {
 			view := store.Pinned()
 			if ps, err = st.ParkInto(view); err == nil {

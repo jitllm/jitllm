@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/model"
 )
 
 // Anthropic-compatible HTTP: POST /v1/messages.

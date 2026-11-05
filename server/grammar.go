@@ -8,8 +8,9 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/jitllm/jitllm/engine"
 	"github.com/jitllm/jitllm/engine/grammar"
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/model"
 	"github.com/jitllm/jitllm/tok"
 )
 
@@ -72,7 +73,7 @@ type constraint struct {
 
 // mask is logits with every token the grammar does not allow at -inf, in
 // the constraint's own copy, through in's composed mask.
-func (c *constraint) mask(in *model.Instance, logits []float32) ([]float32, error) {
+func (c *constraint) mask(in *engine.Instance, logits []float32) ([]float32, error) {
 	n := len(logits)
 	if cap(c.lg) < n {
 		c.lg, c.bias = make([]float32, n), make([]float32, n)

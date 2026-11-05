@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine"
 	"github.com/jitllm/jitllm/engine/grammar"
-	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/internal/schemacheck"
 )
 
@@ -105,7 +105,7 @@ func TestStructuredOutputValidates(t *testing.T) {
 				for seed := range uint64(structuredSeeds) {
 					out, _, reason := genText(t, e, GenerateOptions{ModelID: sm.id, Prompt: Prompt{Kind: PromptText,
 						Text: sm.prompt}, MaxTokens: int(sm.maxTok), Grammar: src,
-						Sampling: &model.Sampler{Temp: 1, Seed: int64(seed) + 1}})
+						Sampling: &engine.Sampler{Temp: 1, Seed: int64(seed) + 1}})
 					var doc any
 					if err := schemacheck.Parse(out, &doc); err != nil {
 						t.Fatalf("seed %d: %q does not parse (%v, finish %v)", seed, out, err, reason)
@@ -176,7 +176,7 @@ func TestStructuredGateDiscriminates(t *testing.T) {
 	}
 	for seed := range uint64(structuredSeeds) {
 		out, _, _ := genText(t, e, GenerateOptions{ModelID: sm.id, Prompt: Prompt{Kind: PromptText, Text: sm.prompt},
-			MaxTokens: int(sm.maxTok), Grammar: src, Sampling: &model.Sampler{Temp: 1, Seed: int64(seed) + 1}, maskSkip: 3})
+			MaxTokens: int(sm.maxTok), Grammar: src, Sampling: &engine.Sampler{Temp: 1, Seed: int64(seed) + 1}, maskSkip: 3})
 		var doc any
 		if err := schemacheck.Parse(out, &doc); err != nil {
 			t.Logf("seed %d: the unmasked step gave %q, which does not parse -- caught", seed, out[:min(60, len(out))])

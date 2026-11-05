@@ -19,7 +19,7 @@ DIR=${JITLLM_MODELS:?set JITLLM_MODELS to the model directory}
 # exclusive lock for the whole conversion -- download included -- which stalled
 # every build on the box for as long as a model took to arrive.
 BIN=${JITLLM_GATE_BIN:-$ROOT/.library-gate-cli}
-PIC=$ROOT/engine/model/testdata/quad-and-disc.png
+PIC=$ROOT/engine/testdata/quad-and-disc.png
 
 (cd "$ROOT" && ./scripts/cap 8G -- go build -o "$BIN" ./cmd/jitllm) || exit 1
 
