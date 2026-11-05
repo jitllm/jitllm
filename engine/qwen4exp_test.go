@@ -5,6 +5,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/model"
 )
 
@@ -93,14 +94,10 @@ func TestQwen4ExpMatchesTransformers(t *testing.T) {
 // (q4eComposedViolations). Each must move the logits far past c6NMSE.
 func q4eViolations() []c6Violation {
 	return []c6Violation{
-		{"no n-gram embedding", func(m *model.Model) func() {
-			return cfgMut(m, func(c *model.Config) { c.Q4eFault = model.Q4eFaultNoNGram })
-		}},
-		{"the n-gram embedding without its convolution", func(m *model.Model) func() {
-			return cfgMut(m, func(c *model.Config) { c.Q4eFault = model.Q4eFaultNoNGramConv })
-		}},
+		{"no n-gram embedding", func(m *model.Model) func() { return restated(m, zeroing(reading(graph.OpAdd, "ng.ck"))) }},
+		{"the n-gram embedding without its convolution", func(m *model.Model) func() { return restated(m, zeroing(opsNamed("ng.conv.act"))) }},
 		{"the n-gram window not reset at the end of a sequence", func(m *model.Model) func() {
-			return cfgMut(m, func(c *model.Config) { c.Q4eFault = model.Q4eFaultNoEOSReset })
+			return restated(m, editing(opsOfKind(graph.OpNGramHash), func(o *graph.Op) { o.Attr.Reset = false }))
 		}},
 		{"another 2-gram multiplier", func(m *model.Model) func() {
 			return cfgMut(m, func(c *model.Config) {
@@ -111,9 +108,7 @@ func q4eViolations() []c6Violation {
 		{"the QSA budget a block short", func(m *model.Model) func() {
 			return cfgMut(m, func(c *model.Config) { c.IdxTopK -= c.QSARatio })
 		}},
-		{"the delta rule's output gated by silu", func(m *model.Model) func() {
-			return cfgMut(m, func(c *model.Config) { c.Q4eFault = model.Q4eFaultSiLUGate })
-		}},
+		{"the delta rule's output gated by silu", recurrentSiLUGated},
 	}
 }
 

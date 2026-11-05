@@ -62,17 +62,11 @@ func (m *Model) ngramStreams(b *graph.Builder, xs []graph.ValueID,
 			Span: stateSpan(c, g.VHeads*g.VDim*g.KDim)},
 		[]graph.StateRef{{State: graph.StateRecState, Version: at}}, []graph.StateRef{{State: graph.StateRecState, Version: at + 1}})[0]
 	act := siluOf(b, "ng.conv.act", conv)
-	if c.Q4eFault == Q4eFaultNoNGramConv {
-		act = mapRow(b, "ng.conv.off", graph.Attrs{Fn: graph.MapMul, Const: 0}, nil, hd, act)
-	}
 	out := make([]graph.ValueID, h)
 	for k, x := range xs {
 		ck := b.Emit(graph.OpSlice, []graph.ValueID{act}, []graph.Result{{Name: "ng.ck", Width: d}}, nil,
 			graph.Attrs{Offset: k * d, Width: d}, nil, nil)[0]
 		y := b.Add(gv[k], ck)
-		if c.Q4eFault == Q4eFaultNoNGram {
-			y = mapRow(b, "ng.off", graph.Attrs{Fn: graph.MapMul, Const: 0}, nil, d, y)
-		}
 		out[k] = b.Add(x, y)
 	}
 	return out
@@ -98,7 +92,7 @@ func (m *Model) ngramEmbed(b *graph.Builder) graph.ValueID {
 	}
 	hashed := b.Emit(graph.OpNGramHash, []graph.ValueID{win}, []graph.Result{
 		{Name: "ng.rows", Width: heads, Elem: graph.ElemU32}, {Name: "ng.next", Width: n - 1, Elem: graph.ElemU32}}, nil,
-		graph.Attrs{Span: c.NGramHeadsPer, Words: words, Reset: c.Q4eFault != Q4eFaultNoEOSReset}, nil, nil)
+		graph.Attrs{Span: c.NGramHeadsPer, Words: words, Reset: true}, nil, nil)
 	rows := make([]graph.ValueID, heads)
 	for h := range heads {
 		col := b.Emit(graph.OpSlice, []graph.ValueID{hashed[0]}, []graph.Result{{Name: "ng.row", Width: 1, Elem: graph.ElemU32}}, nil,

@@ -712,9 +712,6 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 			return m.blockRest(b, f, li, x, n, mix, jlm.RoleSSMOut, preNorm, norm, resid, matvec, stored, has, st)
 		}
 		mo := matvec(mix, jlm.RoleSSMOut, d)
-		if c.HalfFault == HalfFaultNoMixer {
-			mo = mapRow(b, "mix.dropped", graph.Attrs{Fn: graph.MapMul, Const: 0}, nil, d, mo)
-		}
 		side = append(side, mo)
 	}
 	// With an output gate the q projection is double width: each head's query,
@@ -945,19 +942,6 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 		a.Width = rowW
 		sa := graph.Attrs{NHead: c.IdxHeads, NKVHead: c.IdxHeads, HeadDim: c.IdxHeadDim, Offset: kvDim, Width: rowW,
 			Span: c.IdxBlock, TopK: c.IdxTopK, Local: c.IdxLocal}
-		switch c.MsaFault {
-		case MsaFaultOneShort:
-			sa.TopK--
-		case MsaFaultNoLocal:
-			sa.Local = 0
-		case MsaFaultFirstPosition:
-			sa.Firsts = true
-		case MsaFaultSharedGroups:
-			// Group 0's head selects once for every group.
-			iq = b.Emit(graph.OpSlice, []graph.ValueID{iq}, []graph.Result{{Name: "idx.q.0", Width: c.IdxHeadDim}}, nil,
-				graph.Attrs{HeadDim: c.IdxHeads * c.IdxHeadDim, Width: c.IdxHeadDim}, nil, nil)[0]
-			sa.NHead, sa.NKVHead = 1, 1
-		}
 		sel := b.Select(iq, hist, sa)
 		att = b.AttendSelected(q, hist, sel, a, stored(jlm.RoleAttnSinks)...)
 	} else if pooled {
@@ -969,9 +953,6 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	}
 	if c.AttnOutGate {
 		att = sigmoidMul(b, "gated", gate, att)
-	}
-	if c.HalfFault == HalfFaultNoAttn && len(side) > 0 {
-		att = mapRow(b, "att.dropped", graph.Attrs{Fn: graph.MapMul, Const: 0}, nil, b.G.Values[att].Width, att)
 	}
 	return m.blockRest(b, f, li, x, n, att, jlm.RoleAttnOut, preNorm, norm, resid, matvec, stored, has, st, side...)
 }
@@ -1011,7 +992,7 @@ func (m *Model) blockRest(b *graph.Builder, f graph.Facts, li int, x, n, att gra
 	default:
 		x2 = postResid(resid(x, norm(proj, jlm.RolePostAttnNorm)), jlm.RoleAttnOutNorm, jlm.RoleAttnOutNormBias)
 	}
-	if _, ok := c.ResCheckpoint(li); ok && st != nil && st.mixed && c.K3Fault != K3FaultNoRestart {
+	if _, ok := c.ResCheckpoint(li); ok && st != nil && st.mixed {
 		x2 = norm(proj, jlm.RolePostAttnNorm)
 	}
 	if st != nil && st.side != 0 {
@@ -1321,11 +1302,7 @@ func (m *Model) mixture(b *graph.Builder, f graph.Facts, li int, x, n graph.Valu
 	}
 	out = normed(out, jlm.RolePostFFNNorm2)
 	if has(jlm.RoleFFNRoutedUp) {
-		if m.Cfg.K3Fault == K3FaultNoLatentNorm {
-			out = keepBound(b, out, normed(out, jlm.RoleFFNRoutedNorm))
-		} else {
-			out = normed(out, jlm.RoleFFNRoutedNorm)
-		}
+		out = normed(out, jlm.RoleFFNRoutedNorm)
 		out = b.MatVec(out, jlm.RoleFFNRoutedUp, d)
 	}
 	sh, ok := f.Inventory[jlm.RoleShExpUp]
@@ -1404,9 +1381,6 @@ func (m *Model) latentAttention(b *graph.Builder, li int, n, qIn, q graph.ValueI
 	if has(jlm.RoleIdxK) {
 		ih, id := c.IdxHeads, c.IdxHeadDim
 		layout := graph.RopeNeox
-		if c.IdxFault == IdxFaultPairRope {
-			layout = graph.RopeNorm
-		}
 		turn := func(v graph.ValueID, name string) graph.ValueID {
 			if !c.RopeAt(li) {
 				return v
@@ -1434,9 +1408,6 @@ func (m *Model) latentAttention(b *graph.Builder, li int, n, qIn, q graph.ValueI
 	if width != row {
 		a.Width = width
 		relu := graph.MapMax
-		if c.IdxFault == IdxFaultNoReLU {
-			relu = 0
-		}
 		sel := b.Select(iq, hist, graph.Attrs{NHead: c.IdxHeads, NKVHead: 1, HeadDim: c.IdxHeadDim, Offset: row, Width: width,
 			Span: 1, TopK: c.IdxTopK, Fn: relu}, iw)
 		att = b.AttendSelected(qrow, hist, sel, a, stored(jlm.RoleAttnSinks)...)
@@ -1446,9 +1417,6 @@ func (m *Model) latentAttention(b *graph.Builder, li int, n, qIn, q graph.ValueI
 	o := sheets(slice(att, "att.latent", row, 0, lat, nh*lat), "att.v", jlm.RoleAttnVB, lat, hdv)
 	if has(jlm.RoleAttnGate) {
 		gate := matvec(n, jlm.RoleAttnGate, nh*hdv)
-		if m.Cfg.K3Fault == K3FaultNoMLAGate {
-			return keepBound(b, o, gate), nil
-		}
 		o = sigmoidMul(b, "att.gated", gate, o)
 	}
 	return o, nil

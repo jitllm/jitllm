@@ -101,30 +101,16 @@ func TestKimiK3MatchesReference(t *testing.T) {
 // logits far past c6NMSE.
 func k3Violations() []c6Violation {
 	return []c6Violation{
-		{"no residual attention: every sublayer reads the running residual", func(m *model.Model) func() {
-			return cfgMut(m, func(c *model.Config) { c.K3Fault = model.K3FaultNoBank })
-		}},
-		{"a checkpoint block adds its attention instead of restarting", func(m *model.Model) func() {
-			return cfgMut(m, func(c *model.Config) { c.K3Fault = model.K3FaultNoRestart })
-		}},
-		{"the bank scored on raw values", func(m *model.Model) func() {
-			return cfgMut(m, func(c *model.Config) { c.K3Fault = model.K3FaultRawScores })
-		}},
-		{"the head reads the running residual alone", func(m *model.Model) func() {
-			return cfgMut(m, func(c *model.Config) { c.K3Fault = model.K3FaultNoHeadMix })
-		}},
+		{"no residual attention: every sublayer reads the running residual", unbanked},
+		{"a checkpoint block adds its attention instead of restarting", unrestarted},
+		{"the bank scored on raw values", rawBankScores},
+		{"the head reads the running residual alone", headUnbanked},
 		{"a checkpoint every three blocks", func(m *model.Model) func() {
 			return cfgMut(m, func(c *model.Config) { c.AttnResBlock = 3 })
 		}},
-		{"the latent sum unnormed", func(m *model.Model) func() {
-			return cfgMut(m, func(c *model.Config) { c.K3Fault = model.K3FaultNoLatentNorm })
-		}},
-		{"the MLA output ungated", func(m *model.Model) func() {
-			return cfgMut(m, func(c *model.Config) { c.K3Fault = model.K3FaultNoMLAGate })
-		}},
-		{"the KDA output ungated", func(m *model.Model) func() {
-			return cfgMut(m, func(c *model.Config) { c.K3Fault = model.K3FaultNoKDAGate })
-		}},
+		{"the latent sum unnormed", latentUnnormed},
+		{"the MLA output ungated", latentAttnUngated},
+		{"the KDA output ungated", recurrentUngated},
 		{"the KDA decay unbounded (Kimi-Linear's softplus)", func(m *model.Model) func() {
 			return cfgMut(m, func(c *model.Config) { c.KDALowerBound = 0 })
 		}},

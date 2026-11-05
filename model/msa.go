@@ -23,24 +23,6 @@ import (
 // The full description: docs/engineering-history/model-correctness.md,
 // "model/msa.go".
 
-// msaFault is a violation of one block-selection piece, set only by a gate
-// (Config.msaFault) to show the fixture can see it.
-type msaFault uint8
-
-const (
-	msaFaultNone msaFault = iota
-	// msaFaultNoLocal forces no block in: the query's own block competes.
-	MsaFaultNoLocal
-	// msaFaultSharedGroups selects once, with group 0's head, for every
-	// group.
-	MsaFaultSharedGroups
-	// msaFaultFirstPosition ranks a block by its first position's score
-	// instead of its best.
-	MsaFaultFirstPosition
-	// msaFaultOneShort keeps one block fewer than the top-k.
-	MsaFaultOneShort
-)
-
 // loadMSA reads block bi's indexer tensors and checks their shapes.
 func loadMSA(l *Layer, bi int32, cfg *Config,
 	getTo func(*Tensor, jlm.Role, int32, int32) error, vec func(jlm.Role, int32) ([]float32, error)) error {

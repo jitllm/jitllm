@@ -29,7 +29,7 @@ func (s *Instance) q4ePlan(li int, plan *nn.LayerPlan) {
 		q.NGramHere = c.NGramAt(li)
 	}
 	if c.LayerKind(li).Recurrent() {
-		plan.Recurrent.SigmoidGate = c.Q4eSigmoidGate()
+		plan.Recurrent.SigmoidGate = c.DeltaSigmoidGate
 		plan.Recurrent.TailLen = c.RecTailLen()
 	}
 	plan.Q4E = q

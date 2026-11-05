@@ -5,6 +5,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/format/jlm"
@@ -61,10 +62,20 @@ func ds32Violations() []c6Violation {
 			})
 		}},
 		{"the indexer rotary on adjacent pairs", func(m *model.Model) func() {
-			return cfgMut(m, func(c *model.Config) { c.IdxFault = model.IdxFaultPairRope })
+			return restated(m, editing(func(g *graph.Graph) func(int, *graph.Op) bool {
+				return func(_ int, o *graph.Op) bool {
+					if o.Kind != graph.OpRope || len(o.Out) == 0 {
+						return false
+					}
+					n := g.Values[o.Out[0]].Name
+					return n == "idx.k.rope" || n == "idx.q.rope"
+				}
+			}, func(o *graph.Op) { o.Attr.Layout = graph.RopeNorm }))
 		}},
 		{"no ReLU on the heads' scores", func(m *model.Model) func() {
-			return cfgMut(m, func(c *model.Config) { c.IdxFault = model.IdxFaultNoReLU })
+			return restated(m, editing(func(*graph.Graph) func(int, *graph.Op) bool {
+				return func(_ int, o *graph.Op) bool { return o.Kind == graph.OpSelect && o.Attr.Fn == graph.MapMax }
+			}, func(o *graph.Op) { o.Attr.Fn = 0 }))
 		}},
 	}
 }

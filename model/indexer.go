@@ -21,19 +21,6 @@ import (
 // The projections, norms and scales: docs/engineering-history/
 // model-correctness.md, "model/indexer.go".
 
-// idxFault is a violation of one indexer piece, set only by a gate
-// (Config.idxFault) to show the fixture can see it.
-type idxFault uint8
-
-const (
-	idxFaultNone idxFault = iota
-	// idxFaultPairRope rotates adjacent pairs (MLA's own layout) where the
-	// indexer rotates NEOX halves.
-	IdxFaultPairRope
-	// idxFaultNoReLU sums the heads' raw scores.
-	IdxFaultNoReLU
-)
-
 // idxEps is the indexer key norm's epsilon: nn.LayerNorm(eps=1e-6) in the
 // reference, hardcoded in llama.cpp's builder; no GGUF key carries it.
 const idxEps = 1e-6
