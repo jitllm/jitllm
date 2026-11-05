@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/graph"
 )
 
@@ -29,9 +30,9 @@ const embedDevCosQuant = 1 - 1e-3
 // the host and against the references TestEmbeddingsMatchReference holds the
 // host to -- the encoder's segment through the one placement path
 // (encdev.go). The violation is the output LayerNorm's weight taken out of
-// what the device is handed: BERT's post-norm order is the device's own wiring
-// (nn.LayerPlan.PostResidNorm), which a gate running the pre-norm block would
-// not see.
+// what the device is handed: BERT's post-norms are the block graph's
+// (front.go postResid), which a gate running the pre-norm block would not
+// see.
 func TestEmbeddingsOnEveryDevice(t *testing.T) {
 	for _, g := range loadEmbedGoldens(t) {
 		t.Run(g.Model, func(t *testing.T) {
@@ -139,17 +140,21 @@ func TestEmbeddingsOnEveryDevice(t *testing.T) {
 							t.Errorf("%s reads cosine %.9f on %s: the gate does not see it", name, c, spec)
 						}
 					}
-					// A decoder's: the attention norm's weight gone from what
-					// the device is handed at the offer.
+					// The attention norm's weight gone from what the device is
+					// handed at the offer.
 					violation("the attention norm without its weight", func() func() {
 						saved := make([][]float32, len(m.layers))
 						for i := range m.layers {
-							saved[i] = m.layers[i].attnNorm
-							m.layers[i].attnNorm = onesLike(saved[i])
+							w := attnNormOf(&m.layers[i])
+							if w == nil {
+								t.Fatalf("block %d reads no attention norm", i)
+							}
+							saved[i] = append([]float32(nil), w...)
+							copy(w, onesLike(w))
 						}
 						return func() {
 							for i := range m.layers {
-								m.layers[i].attnNorm = saved[i]
+								copy(attnNormOf(&m.layers[i]), saved[i])
 							}
 						}
 					})
@@ -164,9 +169,16 @@ func TestEmbeddingsOnEveryDevice(t *testing.T) {
 						m.Cfg.NonCausal = false
 						return func() { m.Cfg.NonCausal = true }
 					})
-					violation("no symmetric window on the sliding layers", func() func() {
-						return m.rewriteEveryBlock(t, unwindowed(t))
+					windowed := slices.ContainsFunc(m.frontGraphs().blocks, func(g *graph.Graph) bool {
+						return g != nil && slices.ContainsFunc(g.Ops, func(o graph.Op) bool {
+							return o.Kind == graph.OpAttend && o.Attr.Window > 0
+						})
 					})
+					if windowed {
+						violation("no symmetric window on the sliding layers", func() func() {
+							return m.rewriteEveryBlock(t, unwindowed(t))
+						})
+					}
 				})
 			}
 			if ran == 0 {
@@ -191,4 +203,17 @@ func unwindowed(t *testing.T) func(*graph.Graph) *graph.Graph {
 			return true
 		})
 	}
+}
+
+// attnNormOf is the norm a block's attention reads: its pre-norm, or on a
+// post-norm block the norm after the attention residual (an encoder's, or
+// Gemma's where it has no pre-norm).
+func attnNormOf(l *layer) []float32 {
+	if l.attnNorm != nil {
+		return l.attnNorm
+	}
+	if w := l.vector(jlm.RoleAttnOutNorm); w != nil {
+		return w
+	}
+	return l.vector(jlm.RolePostAttnNorm)
 }
