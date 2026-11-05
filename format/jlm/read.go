@@ -33,6 +33,45 @@ type File struct {
 	// ver is the version the container was opened at: Version, or an older
 	// one a migration reads (migrate.go).
 	ver uint32
+	// reads counts readAt calls, the quantity the pager is priced in. Atomic
+	// because EnsureRanges' run goroutines call it unlocked.
+	reads int64
+	// inIO, peakIO and readBytes are ReadConcurrency's and ReadBytes'
+	// counters: requests outstanding now, the most ever, and bytes asked for.
+	inIO, peakIO, readBytes atomic.Int64
+	// readHook stands in for the file read, for a gate that holds or counts
+	// reads; nil reads the file.
+	readHook func(dst []byte, off int64) error
+
+	f *os.File
+	// direct is a second handle opened O_DIRECT, used for page reads only (see
+	// openDirect). nil when the filesystem refuses O_DIRECT, in which case
+	// everything falls back to the buffered handle.
+	direct *os.File
+	meta   []byte // header through fingerprint; decodeKV slices Raw out of it
+	// extent[i] is how much of page i its tensors use, rounded up to Align:
+	// what a frame for it holds and what the budget is charged. A page on
+	// disk is the largest block's size, so a smaller block's tail is padding
+	// nothing reads. Nil means every page is its array's full size.
+	extent []uint64
+
+	tab  []Entry
+	byID map[tensorID]int
+	cfg  *Config
+	vis  *Vision
+	voc  *Vocab
+}
+
+// Frames is the memory a container's pages are read into: its frames, its
+// budget and resident set, the dense region and the expert pages'
+// reservation, and the read service that fills them. The File is the
+// container itself -- its header, its table and where every page lies -- and
+// reads into memory it is handed; it holds none of this.
+type Frames struct {
+	// file is the container these are the frames of; closed is that Close
+	// ran.
+	file   *File
+	closed bool
 
 	// mu is the one lock over residency: two States decoding on a container
 	// that evicts would otherwise race in claim(). It guards pages, filled,
@@ -56,12 +95,6 @@ type File struct {
 	// chunk is this File's fill granularity: the header's, or SetChunk's. It
 	// is per-File because the residency bitmap is sized from it.
 	chunk uint64
-	// reads counts readAt calls, the quantity the pager is priced in. Atomic
-	// because EnsureRanges' run goroutines call it unlocked.
-	reads int64
-	// inIO, peakIO and readBytes are ReadConcurrency's and ReadBytes'
-	// counters: requests outstanding now, the most ever, and bytes asked for.
-	inIO, peakIO, readBytes atomic.Int64
 	// inPages and peakPages are PreloadDepth's: pages Preload has in flight.
 	inPages, peakPages atomic.Int64
 	// preloadRead stands in for EnsurePage in Preload, for a gate that holds
@@ -90,9 +123,6 @@ type File struct {
 	specHeld int
 	specCap  int
 	spec     specSvc
-	// readHook stands in for the file read, for a gate that holds or counts
-	// reads; nil reads the file.
-	readHook func(dst []byte, off int64) error
 
 	rowReads atomic.Int64
 	chunkIn  int64
@@ -100,13 +130,6 @@ type File struct {
 	// f.mu, which planRuns holds for its whole body, so one array serves every
 	// caller and a mixture's 24-range plan allocates nothing per token.
 	spanBuf []run
-
-	f *os.File
-	// direct is a second handle opened O_DIRECT, used for page reads only (see
-	// openDirect). nil when the filesystem refuses O_DIRECT, in which case
-	// everything falls back to the buffered handle.
-	direct *os.File
-	meta   []byte // header through fingerprint; decodeKV slices Raw out of it
 	// dense holds every non-block weight and is always resident: the embedding,
 	// the output projection and the norms, small beside the pages.
 	dense []byte
@@ -160,11 +183,6 @@ type File struct {
 	// SetBudget); TrimFree hands every one back once a burst of page-ins ends.
 	free      map[uint64][][]byte
 	freeBytes uint64
-	// extent[i] is how much of page i its tensors use, rounded up to Align:
-	// what a frame for it holds and what the budget is charged. A page on
-	// disk is the largest block's size, so a smaller block's tail is padding
-	// nothing reads. Nil means every page is its array's full size.
-	extent []uint64
 	// fresh counts frames take allocated rather than reused: a page-in that
 	// found no free frame of its size and paid for a new one's faults.
 	fresh  int64
@@ -175,40 +193,68 @@ type File struct {
 	tick    uint64
 	faults  int64
 	evicted int64
-
-	tab  []Entry
-	byID map[tensorID]int
-	cfg  *Config
-	vis  *Vision
-	voc  *Vocab
 }
 
 // Open reads and validates a container's metadata. No page is read.
 //
 // Every offset in the file is checked before it slices anything (RULE 9).
-func Open(path string, opts ...OpenOption) (*File, error) {
-	o := openOpts{offHeap: true}
+func Open(path string) (*File, error) { return openAt(path, Version) }
+
+// FramesOption is a choice NewFrames makes for the frames it makes.
+type FramesOption func(*framesOpts)
+
+type framesOpts struct{ offHeap bool }
+
+// OnHeap keeps the frames and the dense region on the Go heap: the control
+// arm for a measurement (see offheap.go). Expert pages stay in their
+// reservation, where a bank is one view (exparena.go). The budget it is sized
+// against keeps its collector reserve (sched.GCPlan.OnHeap).
+func OnHeap() FramesOption { return func(o *framesOpts) { o.offHeap = false } }
+
+// NewFrames is f's frames, the dense region read in: no page is.
+func NewFrames(f *File, opts ...FramesOption) (*Frames, error) {
+	o := framesOpts{offHeap: true}
 	for _, opt := range opts {
 		opt(&o)
 	}
-	return openAt(path, Version, o.offHeap)
+	h := f.H
+	fr := &Frames{file: f, offHeap: o.offHeap}
+	// The dense region is always resident: the host reads it directly every
+	// token.
+	if fr.offHeap {
+		fr.dense = fr.buf(int(h.DenseLen))
+	} else {
+		fr.dense = make([]byte, h.DenseLen)
+	}
+	// The default Placement, before the read faults the pages in; a model's own
+	// SetPlacement re-places it afterwards.
+	placeMemory(fr.dense, false, nil)
+	if h.DenseLen > 0 {
+		if err := f.readAt(fr.dense, int64(h.DenseOff)); err != nil {
+			fr.dense = nil
+			fr.unmapAll()
+			return nil, fmt.Errorf("jlm: reading the dense region of %s: %w", f.Path, err)
+		}
+	}
+	// One block space over all the arrays: text blocks are 0..NBlocks-1, vision
+	// blocks follow, then expert pages, so the pager, residency map, chunk
+	// bitmap and eviction policy are written once. Only pageAt knows.
+	fr.pages = make([][]byte, f.NPages())
+	fr.used = make([]uint64, len(fr.pages))
+	fr.free = map[uint64][][]byte{}
+	fr.recent = -1
+	// The container's own granularity (decodeHeader already validated it);
+	// SetChunk overrides it before the first page is read.
+	fr.chunk = h.Chunk
+	return fr, nil
 }
 
-// OpenOption is a choice Open makes for the File it opens.
-type OpenOption func(*openOpts)
-
-type openOpts struct{ offHeap bool }
-
-// OnHeap keeps the File's frames and dense region on the Go heap: the
-// control arm for a measurement (see offheap.go). Expert pages stay in their
-// reservation, where a bank is one view (exparena.go). The budget it is sized
-// against keeps its collector reserve (sched.GCPlan.OnHeap).
-func OnHeap() OpenOption { return func(o *openOpts) { o.offHeap = false } }
+// File is the container these frames hold the pages of.
+func (f *Frames) File() *File { return f.file }
 
 // openAt is Open for a container of version want: the current one, or an
-// older one a migration reads (migrate.go), its weight memory off the heap
-// where offHeap asks it and the platform maps.
-func openAt(path string, want uint32, offHeap bool) (*File, error) {
+// older one a migration reads (migrate.go).
+func openAt(path string, want uint32) (*File, error) {
 	fh, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -227,7 +273,7 @@ func openAt(path string, want uint32, offHeap bool) (*File, error) {
 		closeDirect(direct)
 		return nil, fmt.Errorf("jlm: %s is %d bytes, shorter than a header", path, size)
 	}
-	f := &File{Path: path, f: fh, direct: direct, offHeap: offHeap}
+	f := &File{Path: path, f: fh, direct: direct}
 
 	hb := make([]byte, HeaderBytes)
 	if _, err := fh.ReadAt(hb, 0); err != nil {
@@ -345,40 +391,11 @@ func openAt(path string, want uint32, offHeap bool) (*File, error) {
 		}
 	}
 
-	// The dense region is always resident: the host reads it directly every
-	// token.
-	if f.offHeap {
-		f.dense = f.buf(int(h.DenseLen))
-	} else {
-		f.dense = make([]byte, h.DenseLen)
-	}
-	// The default Placement, before the read faults the pages in; a model's own
-	// SetPlacement re-places it afterwards.
-	placeMemory(f.dense, false, nil)
-	if h.DenseLen > 0 {
-		if err := f.readAt(f.dense, int64(h.DenseOff)); err != nil {
-			f.dense = nil
-			f.unmapAll()
-			fh.Close()
-			closeDirect(direct)
-			return nil, fmt.Errorf("jlm: reading the dense region of %s: %w", path, err)
-		}
-	}
-	// One block space over all the arrays: text blocks are 0..NBlocks-1, vision
-	// blocks follow, then expert pages, so the pager, residency map, chunk
-	// bitmap and eviction policy are written once. Only pageAt knows.
-	f.pages = make([][]byte, int(h.NBlocks)+int(h.NVisBlocks)+int(h.NExpPages))
-	f.used = make([]uint64, len(f.pages))
 	if err := f.measureExtents(); err != nil {
 		fh.Close()
 		closeDirect(direct)
 		return nil, fmt.Errorf("jlm: %s: %w", path, err)
 	}
-	f.free = map[uint64][][]byte{}
-	f.recent = -1
-	// The container's own granularity (decodeHeader already validated it);
-	// File.SetChunk overrides it before the first page is read.
-	f.chunk = h.Chunk
 	return f, nil
 }
 
@@ -410,7 +427,7 @@ func (f *File) pageSlot(li int) (off, size uint64) {
 // Align so a page-in stays a direct read. Expert pages hold one expert's
 // sheets each and are all one size, so they keep it.
 func (f *File) measureExtents() error {
-	ext := make([]uint64, len(f.pages))
+	ext := make([]uint64, f.NPages())
 	for i := range f.Entries() {
 		e := &f.Entries()[i]
 		if e.Block < 0 || e.Role.Expanded() || expertPaged(e) {
@@ -472,8 +489,8 @@ func (f *File) ExpertPaged(e *Entry) bool { return expertPaged(e) && f.H.NExpPag
 // page, or nils when that page is not resident. Like Span, the slices belong
 // to a frame the pager reuses: hold the page (Hold) for as long as they are
 // read.
-func (f *File) Sheet(e *Entry, x int) (qs, d, sc []byte) {
-	li := f.ExpertPage(e, x)
+func (f *Frames) Sheet(e *Entry, x int) (qs, d, sc []byte) {
+	li := f.file.ExpertPage(e, x)
 	if li < 0 {
 		return nil, nil, nil
 	}
@@ -485,8 +502,8 @@ func (f *File) Sheet(e *Entry, x int) (qs, d, sc []byte) {
 	if err != nil {
 		return nil, nil, nil
 	}
-	base, _ := f.pageAt(li)
-	x0 := uint64(x) * f.H.ExpPageSize
+	base, _ := f.file.pageAt(li)
+	x0 := uint64(x) * f.file.H.ExpPageSize
 	cut := func(off, n uint64) []byte {
 		off += x0
 		if n == 0 || off < base || off+n > base+uint64(len(buf)) {
@@ -530,13 +547,23 @@ func (f *File) InDense(e *Entry) bool {
 
 // NPages is how many block pages this container has, both arrays together, and
 // PageBytes how big one of them is.
-func (f *File) NPages() int { return len(f.pages) }
+func (f *File) NPages() int { return int(f.H.NBlocks) + int(f.H.NVisBlocks) + int(f.H.NExpPages) }
 func (f *File) PageBytes(li int) uint64 {
-	if li < 0 || li >= len(f.pages) {
+	if li < 0 || li >= f.NPages() {
 		return 0
 	}
 	_, size := f.pageAt(li)
 	return size
+}
+
+// ChunkBytes is the fill granularity the container states (Header.Chunk),
+// Chunk where it states none. Frames fill at it unless told otherwise
+// (Frames.SetChunk).
+func (f *File) ChunkBytes() uint64 {
+	if f.H == nil || f.H.Chunk == 0 {
+		return Chunk
+	}
+	return f.H.Chunk
 }
 
 // VisionBlocks is how many of them are the vision tower's.
@@ -544,7 +571,7 @@ func (f *File) VisionBlocks() int { return int(f.H.NVisBlocks) }
 
 // take reuses a buffer of exactly this size, or allocates one. Aligned, because
 // an unaligned frame silently demotes its page-in to buffered I/O.
-func (f *File) take(size uint64) []byte {
+func (f *Frames) take(size uint64) []byte {
 	if l := f.free[size]; len(l) > 0 {
 		b := l[len(l)-1]
 		f.free[size] = l[:len(l)-1]
@@ -582,7 +609,7 @@ func (f *File) take(size uint64) []byte {
 }
 
 // FreshFrames is how many frames page-ins allocated rather than reused.
-func (f *File) FreshFrames() int64 {
+func (f *Frames) FreshFrames() int64 {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.fresh
@@ -590,13 +617,13 @@ func (f *File) FreshFrames() int64 {
 
 // evictOne drops the most recently used resident block and returns its bytes to
 // the free list. See EnsurePage for why MRU rather than LRU.
-func (f *File) evictOne() bool {
+func (f *Frames) evictOne() bool {
 	// An expert page goes first, least recently used: routing is not a cyclic
 	// scan (the next token reuses many of the same experts), and LRU replayed
 	// on real routing hits most of the time. Block pages are the working set
 	// every token scans and are the last thing to give up.
 	victim, oldest := -1, ^uint64(0)
-	for i := int(f.H.NBlocks) + int(f.H.NVisBlocks); i < len(f.pages); i++ {
+	for i := int(f.file.H.NBlocks) + int(f.file.H.NVisBlocks); i < len(f.pages); i++ {
 		if f.pages[i] != nil && !f.pinned(i) && f.used[i] < oldest {
 			victim, oldest = i, f.used[i]
 		}
@@ -628,7 +655,7 @@ func (f *File) evictOne() bool {
 // One page always fits: a budget below a single page is a configuration error
 // the caller cannot recover from mid-token, and thrashing one page is strictly
 // better than failing the read.
-func (f *File) makeRoom(li int, size uint64) {
+func (f *Frames) makeRoom(li int, size uint64) {
 	if f.budget == 0 {
 		return
 	}
@@ -652,7 +679,7 @@ func (f *File) makeRoom(li int, size uint64) {
 // Residency survives a re-budget (it is called twice on a normal load), so
 // widening is free and narrowing evicts exactly the excess; nilling every
 // page here once meant loading the model twice.
-func (f *File) SetBudget(bytes uint64) {
+func (f *Frames) SetBudget(bytes uint64) {
 	// After everything, unlocked: a preload's in-flight pages are pinned and
 	// only leave once their reads land.
 	defer f.settlePreload()
@@ -679,20 +706,20 @@ func (f *File) SetBudget(bytes uint64) {
 
 // Budget is the byte cap, 0 when unlimited, and ResidentBytes what is held
 // against it.
-func (f *File) Budget() uint64 {
+func (f *Frames) Budget() uint64 {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.budget
 }
 
-func (f *File) ResidentBytes() uint64 {
+func (f *Frames) ResidentBytes() uint64 {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.resident
 }
 
 // ResidentPages is how many block pages are in memory.
-func (f *File) ResidentPages() int {
+func (f *Frames) ResidentPages() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	n := 0
@@ -705,7 +732,7 @@ func (f *File) ResidentPages() int {
 }
 
 // Faults is what the budget has cost: pages read in, pages evicted.
-func (f *File) Faults() (in, out int64) {
+func (f *Frames) Faults() (in, out int64) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.faults, f.evicted
@@ -780,7 +807,7 @@ func (f *File) readAt(dst []byte, off int64) error {
 // the one just used, giving N-F faults per token instead of N. This follows
 // from model/'s ascending visit order; another order would degrade it toward
 // the clock, not make it wrong.
-func (f *File) EnsurePage(i int) error {
+func (f *Frames) EnsurePage(i int) error {
 	if i < 0 || i >= len(f.pages) {
 		return fmt.Errorf("jlm: block %d of %d", i, len(f.pages))
 	}
@@ -791,7 +818,7 @@ func (f *File) EnsurePage(i int) error {
 	// The kernel's page cache is kept: posix_fadvise(DONTNEED) was tried and
 	// measured several times slower on a large mixture, because the cache
 	// serves the page-ins a token takes.
-	off, size := f.pageAt(i)
+	off, size := f.file.pageAt(i)
 	return f.EnsureRanges(i, []Range{{Off: off, N: size}})
 }
 
@@ -803,7 +830,7 @@ func (f *File) EnsurePage(i int) error {
 // budget is remembered, so a later page-in refills the same pool. The caller
 // must re-bind anything pointing into a page afterwards; every span it
 // handed out is now nil.
-func (f *File) ReleasePages() {
+func (f *Frames) ReleasePages() {
 	defer f.flushRecycled()
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -824,7 +851,7 @@ func (f *File) ReleasePages() {
 // EnsurePage runs again. A held page stays: its frame is being read, and
 // handing it to the next claim would put another page's bytes under the
 // reader. So does a kept one (Keep).
-func (f *File) DropPage(i int) {
+func (f *Frames) DropPage(i int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if i < 0 || i >= len(f.pages) || f.pages[i] == nil || f.pinned(i) || (i < len(f.kept) && f.kept[i] > 0) {
@@ -838,7 +865,7 @@ func (f *File) DropPage(i int) {
 
 // dropFilled forgets page i's validity map, keeping it for takeFilled.
 // Callers hold f.mu.
-func (f *File) dropFilled(i int) {
+func (f *Frames) dropFilled(i int) {
 	if f.filled == nil || f.filled[i] == nil {
 		return
 	}
@@ -848,7 +875,7 @@ func (f *File) dropFilled(i int) {
 
 // takeFilled is a cleared validity map of n chunks, reused from an evicted
 // page where one is long enough. Callers hold f.mu.
-func (f *File) takeFilled(n int) []bool {
+func (f *Frames) takeFilled(n int) []bool {
 	for k := len(f.freeFilled) - 1; k >= 0; k-- {
 		if m := f.freeFilled[k]; cap(m) >= n {
 			last := len(f.freeFilled) - 1
@@ -866,7 +893,7 @@ func (f *File) takeFilled(n int) []bool {
 // unhold moves page i's frame to the free list and refunds what it was
 // charged: the frame's capacity, which take may have given a page smaller
 // than itself. Callers hold f.mu.
-func (f *File) unhold(i int) {
+func (f *Frames) unhold(i int) {
 	b := f.pages[i]
 	n := uint64(cap(b))
 	f.unspec(i)
@@ -888,7 +915,7 @@ func (f *File) unhold(i int) {
 //
 // A pin is also how a read runs unlocked: EnsureRanges pins the block, drops
 // the lock, reads into the frame and unpins, so the frame cannot be taken.
-func (f *File) pinned(i int) bool { return i < len(f.pins) && f.pins[i] > 0 }
+func (f *Frames) pinned(i int) bool { return i < len(f.pins) && f.pins[i] > 0 }
 
 // Keep moves by d the count of instances that run block page i from host
 // memory, which read its spans between their page-ins unpinned. A kept page
@@ -896,7 +923,7 @@ func (f *File) pinned(i int) bool { return i < len(f.pins) && f.pins[i] > 0 }
 // the page back only once no other runs it from here. It is still evicted
 // under the budget like any unpinned page, which serialises its readers
 // (CanEvict).
-func (f *File) Keep(i, d int) {
+func (f *Frames) Keep(i, d int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if i < 0 || i >= len(f.pages) {
@@ -909,7 +936,7 @@ func (f *File) Keep(i, d int) {
 }
 
 // Kept reports whether an instance keeps block page i (Keep).
-func (f *File) Kept(i int) bool {
+func (f *Frames) Kept(i int) bool {
 	if f == nil {
 		return false
 	}
@@ -918,7 +945,7 @@ func (f *File) Kept(i int) bool {
 	return i >= 0 && i < len(f.kept) && f.kept[i] > 0
 }
 
-func (f *File) hold(i int) {
+func (f *Frames) hold(i int) {
 	if f.pins == nil {
 		f.pins = make([]int, len(f.pages))
 	}
@@ -927,7 +954,7 @@ func (f *File) hold(i int) {
 	}
 }
 
-func (f *File) drop(i int) {
+func (f *Frames) drop(i int) {
 	if i >= 0 && i < len(f.pins) && f.pins[i] > 0 {
 		f.pins[i]--
 	}
@@ -943,14 +970,14 @@ func (f *File) drop(i int) {
 //
 // A zero Lease is valid and releases nothing, so a caller need not branch.
 type Lease struct {
-	f *File
+	f *Frames
 	b int
 }
 
 // Hold makes rs readable in block b and pins the page until Release. Passing no
 // ranges pins without reading, which is what a caller wants when the bytes are
 // already there and only the frame is at risk.
-func (f *File) Hold(b int, rs []Range) (Lease, error) {
+func (f *Frames) Hold(b int, rs []Range) (Lease, error) {
 	if f == nil || b < 0 || b >= len(f.pages) {
 		return Lease{}, fmt.Errorf("jlm: block %d of %d", b, len(f.pages))
 	}
@@ -984,7 +1011,7 @@ func (f *File) Hold(b int, rs []Range) (Lease, error) {
 // full page without the read, decided under one lock so the page cannot be
 // evicted between the check and the pin -- which is what lets a caller take
 // the warm pages inline and send only the cold ones out as reads in flight.
-func (f *File) HoldFilled(b int) (Lease, bool) {
+func (f *Frames) HoldFilled(b int) (Lease, bool) {
 	if f == nil || b < 0 || b >= len(f.pages) {
 		return Lease{}, false
 	}
@@ -1026,14 +1053,14 @@ func (l *Lease) Release() {
 // session's page-in can take a frame another is reading, and no lock here
 // can help because the spans were handed out earlier. It is an atomic
 // because it changes only in SetBudget and is asked once per token.
-func (f *File) CanEvict() bool { return f != nil && f.canEvict.Load() }
+func (f *Frames) CanEvict() bool { return f != nil && f.canEvict.Load() }
 
 // setCanEvict recomputes the flag. Callers hold f.mu.
-func (f *File) setCanEvict() {
+func (f *Frames) setCanEvict() {
 	// Summed once: page sizes are fixed at conversion.
 	if f.pageTotal == 0 {
 		for i := range f.pages {
-			_, size := f.pageAt(i)
+			_, size := f.file.pageAt(i)
 			f.pageTotal += size
 		}
 	}
@@ -1049,7 +1076,7 @@ func (f *File) Reads() int64 { return atomic.LoadInt64(&f.reads) }
 // ReadWait is how long callers have been blocked in EnsureRanges waiting for
 // reads. It is exposed serial time, not device busy time: two sessions
 // waiting on the same I/O count it twice, as each really did stop.
-func (f *File) ReadWait() time.Duration {
+func (f *Frames) ReadWait() time.Duration {
 	if f == nil {
 		return 0
 	}
@@ -1057,7 +1084,7 @@ func (f *File) ReadWait() time.Duration {
 }
 
 // Resident reports whether block i's page is in memory.
-func (f *File) Resident(i int) bool {
+func (f *Frames) Resident(i int) bool {
 	if f == nil {
 		return false
 	}
@@ -1068,7 +1095,7 @@ func (f *File) Resident(i int) bool {
 
 // Filled reports whether block i's whole page is in memory: Resident, and no
 // range of it left unread by a partial EnsureRanges.
-func (f *File) Filled(i int) bool {
+func (f *Frames) Filled(i int) bool {
 	if f == nil {
 		return false
 	}
@@ -1089,12 +1116,12 @@ func (f *File) Filled(i int) bool {
 //
 // It is a configuration, not a mode (paging is always on and a model that
 // fits never evicts), and the baseline the paging curve is measured against.
-func (f *File) LoadAll() error {
+func (f *Frames) LoadAll() error {
 	// Pages are read one at a time and each is already split ReadThreads ways,
 	// so the queue is full without a second level of fan-out competing for it.
 	// The count is read once: pages is allocated at Open and only its
 	// elements change.
-	n := f.NPages()
+	n := f.file.NPages()
 	for i := 0; i < n; i++ {
 		if err := f.EnsurePage(i); err != nil {
 			return err
@@ -1103,18 +1130,32 @@ func (f *File) LoadAll() error {
 	return nil
 }
 
+// Close closes the container's handles. Its frames are closed apart
+// (Frames.Close), first.
 func (f *File) Close() error {
-	// Close is not concurrent with use. The slice header of f.pages is read
-	// without the lock on the hot path (NPages, PageBytes, pageAt), so the
-	// elements are cleared and the header left immutable for the File's life.
-	f.stopSpec()
-	defer f.flushRecycled()
-	f.mu.Lock()
-	defer f.mu.Unlock()
 	if f.f == nil {
 		return nil
 	}
 	h, d := f.f, f.direct
+	f.f, f.direct = nil, nil
+	closeDirect(d)
+	return h.Close()
+}
+
+// Close gives back every frame, the dense region and the expert pages'
+// reservation, and stops the read service. It is not concurrent with use:
+// the slice header of f.pages is read without the lock on the hot path, so
+// the elements are cleared and the header left immutable for the frames'
+// life.
+func (f *Frames) Close() {
+	f.stopSpec()
+	defer f.flushRecycled()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.closed {
+		return
+	}
+	f.closed = true
 	f.stopIO()
 	// Every buffer goes, and the next allocation in this process may land on
 	// any of these addresses: the dense region, the pages and the free frames.
@@ -1138,11 +1179,9 @@ func (f *File) Close() error {
 		f.landed.Broadcast()
 	}
 	f.free, f.freeBytes = map[uint64][][]byte{}, 0
-	f.f, f.direct, f.dense = nil, nil, nil
+	f.dense = nil
 	f.unmapAll()
 	f.unmapExp()
-	closeDirect(d)
-	return h.Close()
 }
 
 // Config, Vision and Vocab are the container's own sections: everything a
@@ -1201,10 +1240,10 @@ func (f *File) SpanLen(e *Entry) (qs, d, sc uint64) {
 //
 // It returns nil for a block whose page is out: residency is explicit, so a
 // caller that has not paged the block in gets nothing rather than a stall.
-func (f *File) Span(e *Entry) (qs, d, sc []byte) {
+func (f *Frames) Span(e *Entry) (qs, d, sc []byte) {
 	// A split bank is not one span: its sheets are in expert pages, one page
 	// per expert. Sheet is how they are reached.
-	if f.ExpertPaged(e) {
+	if f.file.ExpertPaged(e) {
 		return nil, nil, nil
 	}
 	nq, nd, nsc, err := spans(e.Type, e.Dims, e.NDim)
@@ -1216,16 +1255,16 @@ func (f *File) Span(e *Entry) (qs, d, sc []byte) {
 	// The region is decided by the offset, not the block index: a block's
 	// norms are stored in the dense region (alwaysResident), and looking for
 	// them in a page that may be out would return nil.
-	if f.InDense(e) {
-		base, buf = f.H.DenseOff, f.dense
+	if f.file.InDense(e) {
+		base, buf = f.file.H.DenseOff, f.dense
 	} else {
-		li := f.BlockOf(e)
+		li := f.file.BlockOf(e)
 		// One locked read of the frame pointer, not Resident followed by an
 		// unlocked index, which could slice a page another caller nilled.
 		if buf = f.Page(li); buf == nil {
 			return nil, nil, nil
 		}
-		base, _ = f.pageAt(li)
+		base, _ = f.file.pageAt(li)
 	}
 	cut := func(off, n uint64) []byte {
 		if n == 0 || off < base || off+n > base+uint64(len(buf)) {
@@ -1242,7 +1281,7 @@ func (f *File) Span(e *Entry) (qs, d, sc []byte) {
 // The slice is a frame the pager reuses; holding it across anything that
 // can evict reads whichever block was faulted in next. Hold(i, nil) is how a
 // caller says it will still be reading.
-func (f *File) Page(i int) []byte {
+func (f *Frames) Page(i int) []byte {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if i < 0 || i >= len(f.pages) {

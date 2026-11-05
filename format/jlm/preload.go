@@ -25,13 +25,13 @@ import (
 // through the same claim, pin and fill bookkeeping, so a page the forward pass
 // reaches first is not read twice and the answer cannot depend on which got
 // there first.
-func (f *File) Preload(depth int, stop <-chan struct{}) error {
+func (f *Frames) Preload(depth int, stop <-chan struct{}) error {
 	if f == nil || depth < 1 || f.CanEvict() {
 		return nil
 	}
 	f.preloadStart()
 	defer f.preloadEnd()
-	n := f.NPages()
+	n := f.file.NPages()
 	var (
 		next  atomic.Int64
 		wg    sync.WaitGroup
@@ -91,7 +91,7 @@ func (f *File) Preload(depth int, stop <-chan struct{}) error {
 // the shrink waits for those reads and then evicts down to the budget, and a
 // caller reading residency after SetBudget sees the budget it set. The wait
 // is at most the preload's depth of page reads. Called without f.mu.
-func (f *File) settlePreload() {
+func (f *Frames) settlePreload() {
 	if !f.CanEvict() {
 		return
 	}
@@ -104,7 +104,7 @@ func (f *File) settlePreload() {
 }
 
 // preloadStart and preloadEnd count running Preloads for settlePreload.
-func (f *File) preloadStart() {
+func (f *Frames) preloadStart() {
 	f.preMu.Lock()
 	if f.preCond.L == nil {
 		f.preCond.L = &f.preMu
@@ -113,7 +113,7 @@ func (f *File) preloadStart() {
 	f.preMu.Unlock()
 }
 
-func (f *File) preloadEnd() {
+func (f *Frames) preloadEnd() {
 	f.preMu.Lock()
 	f.preN--
 	f.preCond.Broadcast()
@@ -122,7 +122,7 @@ func (f *File) preloadEnd() {
 
 // fitBudget evicts until what is resident is inside the budget: what SetBudget
 // does, for frames that were pinned when it ran.
-func (f *File) fitBudget() {
+func (f *Frames) fitBudget() {
 	defer f.flushRecycled()
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -157,9 +157,9 @@ func (f *File) ioEnd() { f.inIO.Add(-1) }
 // PreloadDepth is the most pages Preload ever had in flight at once: the
 // page-level queue depth, where ReadConcurrency counts requests (one page-in
 // alone issues up to ReadThreads of those).
-func (f *File) PreloadDepth() int64 { return f.peakPages.Load() }
+func (f *Frames) PreloadDepth() int64 { return f.peakPages.Load() }
 
-func (f *File) pageStart() {
+func (f *Frames) pageStart() {
 	c := f.inPages.Add(1)
 	for {
 		p := f.peakPages.Load()

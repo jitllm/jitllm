@@ -20,7 +20,7 @@ func (f *File) PageOffset(p int) (int64, uint64) {
 }
 
 // SpeculationHeld is how many frames hold a guess nobody has demanded.
-func (f *File) SpeculationHeld() int {
+func (f *Frames) SpeculationHeld() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.specHeld

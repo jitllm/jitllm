@@ -105,7 +105,7 @@ func TestTwoLeasesOnOneBlock(t *testing.T) {
 
 // pinCount reads the pin under the lock. A test helper rather than a File
 // method, since nothing outside this package needs to ask.
-func (f *File) pinCount(i int) int {
+func (f *Frames) pinCount(i int) int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if i < 0 || i >= len(f.pins) {

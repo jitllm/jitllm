@@ -125,7 +125,7 @@ func TestStatedTowerBlocksArePagedBlocks(t *testing.T) {
 			return fmt.Errorf("block %d holds no matrix", li)
 		}
 		for _, mt := range l.Mats {
-			qs, _, _ := m.Container.Span(mt.T.E)
+			qs, _, _ := m.Frames.Span(mt.T.E)
 			if !model.SameSpan(mt.T.Data, qs) || len(qs) == 0 {
 				return fmt.Errorf("block %d's %v is not bound to its page", li, mt.Role)
 			}
@@ -141,7 +141,7 @@ func TestStatedTowerBlocksArePagedBlocks(t *testing.T) {
 			t.Fatal(err)
 		}
 		other := a + b - li
-		if m.Container.Resident(other) {
+		if m.Frames.Resident(other) {
 			t.Fatalf("under a budget of one block, block %d stayed resident after block %d paged in", other, li)
 		}
 	}

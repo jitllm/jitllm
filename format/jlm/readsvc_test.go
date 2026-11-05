@@ -16,6 +16,7 @@ import (
 // four per block. pages(e) are bank e's expert pages in expert order.
 type svcFixture struct {
 	c    *jlm.File
+	f    *jlm.Frames
 	bank *jlm.Entry
 	// pages[x] is expert x's page in block 1's gate bank, then block 0's
 	// (indices 0..3 and 4..7 of the eight).
@@ -39,7 +40,7 @@ func openSvc(t *testing.T) *svcFixture {
 	if !ok || !c.ExpertPaged(e) {
 		t.Fatal("no expert-paged bank in block 1")
 	}
-	fx := &svcFixture{c: c, bank: e}
+	fx := &svcFixture{c: c, f: framesOf(t, c), bank: e}
 	for x := 0; x < 4; x++ {
 		fx.pages[x] = c.ExpertPage(e, x)
 	}
@@ -121,10 +122,10 @@ func TestDemandDoesNotWaitForASlowGuess(t *testing.T) {
 	fx := openSvc(t)
 	g := newGate(fx, 0)
 	defer g.open()
-	fx.c.Speculate(fx.bank, []uint32{0})
+	fx.f.Speculate(fx.bank, []uint32{0})
 	waitStarted(t, g, 1)
 	within(t, 3*time.Second, "a demanded read beside a slow unused guess", func() {
-		if err := fx.c.EnsureExperts(fx.bank, []uint32{2}); err != nil {
+		if err := fx.f.EnsureExperts(fx.bank, []uint32{2}); err != nil {
 			t.Error(err)
 		}
 	})
@@ -156,11 +157,11 @@ func TestDemandPromotesAQueuedGuess(t *testing.T) {
 	var once sync.Once
 	open := func() { once.Do(func() { close(release) }) }
 	defer open()
-	fx.c.Speculate(e0, []uint32{0, 1, 2, 3})
+	fx.f.Speculate(e0, []uint32{0, 1, 2, 3})
 	waitBlocked(t, &blocked, 4)
-	fx.c.Speculate(fx.bank, []uint32{0, 1, 3})
+	fx.f.Speculate(fx.bank, []uint32{0, 1, 3})
 	within(t, 3*time.Second, "a demand for a queued guess", func() {
-		if err := fx.c.EnsureExperts(fx.bank, []uint32{3}); err != nil {
+		if err := fx.f.EnsureExperts(fx.bank, []uint32{3}); err != nil {
 			t.Error(err)
 		}
 	})
@@ -188,14 +189,14 @@ func TestAJoinedPageIsReadOnce(t *testing.T) {
 	fx := openSvc(t)
 	g := newGate(fx, 1)
 	defer g.open()
-	fx.c.Speculate(fx.bank, []uint32{1})
+	fx.f.Speculate(fx.bank, []uint32{1})
 	waitStarted(t, g, 1)
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := fx.c.EnsureExperts(fx.bank, []uint32{1}); err != nil {
+			if err := fx.f.EnsureExperts(fx.bank, []uint32{1}); err != nil {
 				t.Error(err)
 			}
 		}()
@@ -214,13 +215,13 @@ func TestAJoinedPageIsReadOnce(t *testing.T) {
 func TestAFrameBeingReadIsNotEvicted(t *testing.T) {
 	fx := openSvc(t)
 	_, size := fx.c.PageOffset(fx.pages[0])
-	fx.c.SetBudget(2 * size)
+	fx.f.SetBudget(2 * size)
 	g := newGate(fx, 0)
 	defer g.open()
-	fx.c.Speculate(fx.bank, []uint32{0})
+	fx.f.Speculate(fx.bank, []uint32{0})
 	waitStarted(t, g, 1)
 	for _, x := range []uint32{1, 2, 3, 1, 2} {
-		if err := fx.c.EnsureExperts(fx.bank, []uint32{x}); err != nil {
+		if err := fx.f.EnsureExperts(fx.bank, []uint32{x}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -230,7 +231,7 @@ func TestAFrameBeingReadIsNotEvicted(t *testing.T) {
 	// another page mid-read is filled with the first page's.
 	resident := 0
 	for x := 0; x < 4; x++ {
-		if qs, _, _ := fx.c.Sheet(fx.bank, x); qs != nil {
+		if qs, _, _ := fx.f.Sheet(fx.bank, x); qs != nil {
 			resident++
 			if !bytes.Equal(qs, referenceSheet(t, fx, x)) {
 				t.Errorf("expert %d: the frame holds another page's bytes", x)
@@ -241,14 +242,14 @@ func TestAFrameBeingReadIsNotEvicted(t *testing.T) {
 		t.Fatal("no page is resident to check")
 	}
 	for x := 0; x < 4; x++ {
-		if err := fx.c.EnsureExperts(fx.bank, []uint32{uint32(x)}); err != nil {
+		if err := fx.f.EnsureExperts(fx.bank, []uint32{uint32(x)}); err != nil {
 			t.Fatal(err)
 		}
-		lease, err := fx.c.Hold(fx.pages[x], nil)
+		lease, err := fx.f.Hold(fx.pages[x], nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		qs, _, _ := fx.c.Sheet(fx.bank, x)
+		qs, _, _ := fx.f.Sheet(fx.bank, x)
 		want := referenceSheet(t, fx, x)
 		if !bytes.Equal(qs, want) {
 			t.Errorf("expert %d: the frame holds another page's bytes", x)
@@ -263,12 +264,13 @@ func referenceSheet(t *testing.T, fx *svcFixture, x int) []byte {
 	if err != nil {
 		t.Fatal(err)
 	}
+	rf := framesOf(t, ref)
 	defer ref.Close()
 	e, _ := ref.Find(jlm.RoleExpGateBank, 1, -1)
-	if err := ref.EnsurePage(ref.ExpertPage(e, x)); err != nil {
+	if err := rf.EnsurePage(ref.ExpertPage(e, x)); err != nil {
 		t.Fatal(err)
 	}
-	qs, _, _ := ref.Sheet(e, x)
+	qs, _, _ := rf.Sheet(e, x)
 	return append([]byte(nil), qs...)
 }
 
@@ -278,10 +280,15 @@ func TestCloseWaitsForReadsInFlight(t *testing.T) {
 	fx := openSvc(t)
 	g := newGate(fx, 0)
 	defer g.open()
-	fx.c.Speculate(fx.bank, []uint32{0})
+	fx.f.Speculate(fx.bank, []uint32{0})
 	waitStarted(t, g, 1)
-	closed := make(chan error, 1)
-	go func() { closed <- fx.c.Close() }()
+	// The frames own the reads, so theirs is the Close that waits; the file
+	// closes after them.
+	closed := make(chan struct{})
+	go func() {
+		fx.f.Close()
+		close(closed)
+	}()
 	select {
 	case <-closed:
 		t.Fatal("Close returned while a read was in flight")
@@ -289,10 +296,7 @@ func TestCloseWaitsForReadsInFlight(t *testing.T) {
 	}
 	g.open()
 	select {
-	case err := <-closed:
-		if err != nil {
-			t.Fatal(err)
-		}
+	case <-closed:
 	case <-time.After(3 * time.Second):
 		t.Fatal("Close did not return after the read ended")
 	}
@@ -319,10 +323,10 @@ func TestSpeculativeErrorsDoNotFailATokenButDemandedOnesDo(t *testing.T) {
 		}
 		return nil
 	})
-	fx.c.Speculate(fx.bank, []uint32{2})
+	fx.f.Speculate(fx.bank, []uint32{2})
 	<-started
 	res := make(chan error, 1)
-	go func() { res <- fx.c.EnsureExperts(fx.bank, []uint32{2}) }()
+	go func() { res <- fx.f.EnsureExperts(fx.bank, []uint32{2}) }()
 	time.Sleep(50 * time.Millisecond)
 	close(release)
 	select {
@@ -336,7 +340,7 @@ func TestSpeculativeErrorsDoNotFailATokenButDemandedOnesDo(t *testing.T) {
 	// The worker counts its failure once the read has returned, after the read
 	// woke the demand that joined it.
 	for deadline := time.Now().Add(3 * time.Second); ; time.Sleep(time.Millisecond) {
-		_, failed := fx.c.SpeculationStats()
+		_, failed := fx.f.SpeculationStats()
 		if failed == 1 {
 			break
 		}
@@ -346,11 +350,11 @@ func TestSpeculativeErrorsDoNotFailATokenButDemandedOnesDo(t *testing.T) {
 	}
 	// The failure did not poison the page or the service.
 	fail.Store(false)
-	if err := fx.c.EnsureExperts(fx.bank, []uint32{2, 3}); err != nil {
+	if err := fx.f.EnsureExperts(fx.bank, []uint32{2, 3}); err != nil {
 		t.Fatal(err)
 	}
-	fx.c.Speculate(fx.bank, []uint32{0})
-	if err := fx.c.EnsureExperts(fx.bank, []uint32{0}); err != nil {
+	fx.f.Speculate(fx.bank, []uint32{0})
+	if err := fx.f.EnsureExperts(fx.bank, []uint32{0}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -359,23 +363,23 @@ func TestSpeculativeErrorsDoNotFailATokenButDemandedOnesDo(t *testing.T) {
 // and speculates over four pages: no more than two are held.
 func TestSpeculativeOccupancyIsBounded(t *testing.T) {
 	fx := openSvc(t)
-	fx.c.SetSpeculation(2)
-	fx.c.Speculate(fx.bank, []uint32{0, 1, 2, 3})
+	fx.f.SetSpeculation(2)
+	fx.f.Speculate(fx.bank, []uint32{0, 1, 2, 3})
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if skipped, _ := fx.c.SpeculationStats(); skipped >= 2 {
+		if skipped, _ := fx.f.SpeculationStats(); skipped >= 2 {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	if got := fx.c.SpeculationHeld(); got != 2 {
+	if got := fx.f.SpeculationHeld(); got != 2 {
 		t.Fatalf("%d frames held by guesses, want the cap of 2", got)
 	}
 	// A demand takes a page off the charge.
-	if err := fx.c.EnsureExperts(fx.bank, []uint32{0, 1, 2, 3}); err != nil {
+	if err := fx.f.EnsureExperts(fx.bank, []uint32{0, 1, 2, 3}); err != nil {
 		t.Fatal(err)
 	}
-	if got := fx.c.SpeculationHeld(); got != 0 {
+	if got := fx.f.SpeculationHeld(); got != 0 {
 		t.Fatalf("%d frames still charged after every page was demanded", got)
 	}
 }
@@ -385,16 +389,16 @@ func TestSpeculativeOccupancyIsBounded(t *testing.T) {
 func TestWarmSelectionAllocatesNothing(t *testing.T) {
 	fx := openSvc(t)
 	sel := []uint32{0, 1, 2, 3}
-	if err := fx.c.EnsureExperts(fx.bank, sel); err != nil {
+	if err := fx.f.EnsureExperts(fx.bank, sel); err != nil {
 		t.Fatal(err)
 	}
-	fx.c.Speculate(fx.bank, sel)
+	fx.f.Speculate(fx.bank, sel)
 	if n := testing.AllocsPerRun(50, func() {
-		if err := fx.c.EnsureExperts(fx.bank, sel); err != nil {
+		if err := fx.f.EnsureExperts(fx.bank, sel); err != nil {
 			t.Fatal(err)
 		}
-		fx.c.Speculate(fx.bank, sel)
-		fx.c.Abandon()
+		fx.f.Speculate(fx.bank, sel)
+		fx.f.Abandon()
 	}); n != 0 {
 		t.Fatalf("a warm selection allocated %v times", n)
 	}

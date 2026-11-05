@@ -29,7 +29,12 @@ func TestOneContainerCarriesTextAndVision(t *testing.T) {
 	if text == 0 || vis == 0 {
 		t.Fatalf("the text and vision pages are %d and %d bytes", text, vis)
 	}
-	if b := c.Budget(); b != 0 && b < text+vis {
+	fr, err := jlm.NewFrames(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fr.Close()
+	if b := fr.Budget(); b != 0 && b < text+vis {
 		t.Fatalf("a budget of %d holds no page of each array (%d and %d)", b, text, vis)
 	}
 	t.Logf("%d text blocks of %d-byte pages, %d vision blocks of %d-byte pages, in one block space", nText, text, nVis, vis)

@@ -85,7 +85,7 @@ func (tg *TowerGraphs) placeholder(tpl *jinja.Template, src, bos, eos, mark stri
 // the page each is read from the container's vision block of that index, and
 // its entry's and head's tensors towerDense: every vector read once, every
 // matrix bound by its role (layer.mats) for its page-in to point again.
-func (m *Model) bindTower(c *jlm.File) error {
+func (m *Model) bindTower(c *jlm.File, fr *jlm.Frames) error {
 	if m.TowerBase != int(c.H.NBlocks) {
 		return fmt.Errorf("model: %d text blocks over a page array of %d: the tower's pages would be another block's",
 			m.TowerBase, c.H.NBlocks)
@@ -130,14 +130,14 @@ func (m *Model) bindTower(c *jlm.File) error {
 			return fmt.Errorf("model: the tower holds %v in block %d of %d", e.Role, e.Block, len(ls))
 		}
 		if e.Role.Expanded() || e.NDim < 2 || squeezed(e) {
-			x, err := entryVector(c, e)
+			x, err := entryVector(fr, e)
 			if err != nil {
 				return err
 			}
 			l.Vecs = append(l.Vecs, nn.RoleVector{Role: e.Role, V: x})
 			continue
 		}
-		t, err := entryTensor(c, e)
+		t, err := entryTensor(fr, e)
 		if err != nil {
 			return err
 		}
@@ -149,11 +149,11 @@ func (m *Model) bindTower(c *jlm.File) error {
 		l.Mats = append(l.Mats, roleTensor{e.Role, dst})
 	}
 	for j := range m.TowerTaps {
-		if err := bindPacked(c, m.Cfg, &m.TowerTaps[j]); err != nil {
+		if err := bindPacked(fr, m.Cfg, &m.TowerTaps[j]); err != nil {
 			return err
 		}
 	}
-	return bindPacked(c, m.Cfg, &m.TowerDense)
+	return bindPacked(fr, m.Cfg, &m.TowerDense)
 }
 
 // tapBinds says tap tp's program binds role r.

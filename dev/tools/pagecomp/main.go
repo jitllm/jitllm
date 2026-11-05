@@ -70,6 +70,12 @@ func main() {
 		os.Exit(1)
 	}
 	defer f.Close()
+	fr, err := jlm.NewFrames(f)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	defer fr.Close()
 	cells := map[key]*stat{}
 	nb, nv := int(f.H.NBlocks), int(f.H.NVisBlocks)
 	np := f.NPages()
@@ -89,12 +95,12 @@ func main() {
 	for i := range f.Entries() {
 		e := &f.Entries()[i]
 		if f.InDense(e) {
-			qs, d, sc := f.Span(e)
+			qs, d, sc := fr.Span(e)
 			measure(o, cells, "head", e.Type, qs, d, sc)
 		}
 	}
 	for _, li := range pick(blockPages, o.nPages) {
-		if err := f.EnsurePage(li); err != nil {
+		if err := fr.EnsurePage(li); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			continue
 		}
@@ -103,13 +109,13 @@ func main() {
 			if f.InDense(e) || f.ExpertPaged(e) || f.BlockOf(e) != li {
 				continue
 			}
-			qs, d, sc := f.Span(e)
+			qs, d, sc := fr.Span(e)
 			measure(o, cells, "dense", e.Type, qs, d, sc)
 		}
-		f.DropPage(li)
+		fr.DropPage(li)
 	}
 	for _, li := range pick(expertPages, o.nPages) {
-		if err := f.EnsurePage(li); err != nil {
+		if err := fr.EnsurePage(li); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			continue
 		}
@@ -122,10 +128,10 @@ func main() {
 			if x < 0 {
 				continue
 			}
-			qs, d, sc := f.Sheet(e, x)
+			qs, d, sc := fr.Sheet(e, x)
 			measure(o, cells, "expert", e.Type, qs, d, sc)
 		}
-		f.DropPage(li)
+		fr.DropPage(li)
 	}
 	report(o, cells)
 }

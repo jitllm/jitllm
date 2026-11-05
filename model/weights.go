@@ -141,7 +141,7 @@ func (m *Model) newHold() *sheetHold {
 // sheetOf is expert x of bank e: its planes, held in their page until the
 // returned release runs.
 func (m *Model) sheetOf(e *jlm.Entry, x, nrow int) (nn.Packed, func(), error) {
-	c := m.Container
+	c, cf := m.Container, m.Frames
 	p := c.ExpertPage(e, x)
 	if p < 0 {
 		return nn.Packed{}, noRelease, fmt.Errorf("model: %v expert %d has no expert page", e.Role, x)
@@ -154,18 +154,18 @@ func (m *Model) sheetOf(e *jlm.Entry, x, nrow int) (nn.Packed, func(), error) {
 		// Held only when in, as ensureExperts does: claiming the
 		// frame of a block whose base is on the card held its size of
 		// host budget empty for every sheet sent.
-		if l, ok := c.HoldFilled(b); ok {
+		if l, ok := cf.HoldFilled(b); ok {
 			h.lb = l
 		}
 	}
 	off, size := c.PageBounds(p)
-	l, err := c.Hold(p, []jlm.Range{{Off: off, N: size}})
+	l, err := cf.Hold(p, []jlm.Range{{Off: off, N: size}})
 	if err != nil {
 		h.put()
 		return nn.Packed{}, noRelease, err
 	}
 	h.l = l
-	qs, d, sc := c.Sheet(e, x)
+	qs, d, sc := cf.Sheet(e, x)
 	return nn.Packed{QS: qs, D: d, SC: sc, Stride: nrow}, h.release, nil
 }
 
@@ -241,7 +241,7 @@ func (m *Model) CpuStrides(li int, g *graph.Graph) map[jlm.Role]int {
 			if t == nil || t.E == nil {
 				continue
 			}
-			if _, stride, ok := m.Container.BankView(t.E); ok {
+			if _, stride, ok := m.Frames.BankView(t.E); ok {
 				if st == nil {
 					st = map[jlm.Role]int{}
 				}

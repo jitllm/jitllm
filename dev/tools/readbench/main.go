@@ -33,6 +33,12 @@ func main() {
 	}
 	parse := time.Since(t0)
 	defer c.Close()
+	fr, err := jlm.NewFrames(c)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	defer fr.Close()
 	st, _ := os.Stat(path)
 	fmt.Printf("%s\n  %.2f GiB, page %.1f MiB, %d blocks, %d tensors\n  parse %v\n",
 		path, float64(st.Size())/(1<<30), float64(c.H.PageSize)/(1<<20),
@@ -133,7 +139,7 @@ func main() {
 	// the compiler cannot delete the touch loop.
 	var sink byte
 	run("mmap fault", func(i int) {
-		p := c.Page(i)
+		p := fr.Page(i)
 		var s byte
 		for j := 0; j < len(p); j += 4096 {
 			s ^= p[j]

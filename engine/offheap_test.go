@@ -34,7 +34,7 @@ func offHeapGate(t *testing.T, path string) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		c := m.Container
+		c := m.Frames
 		if got := c.MappedBytes() > 0; got != off {
 			m.Close()
 			t.Fatalf("off-heap %v, but the model mapped %d bytes", off, c.MappedBytes())
@@ -87,7 +87,7 @@ func TestOffHeapMemoryStaysWithinTheBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := m.Container
+	c := m.Frames
 	if c.MappedBytes() == 0 {
 		t.Skip("this platform maps nothing off the heap -- this gate proved nothing")
 	}
@@ -105,9 +105,9 @@ func TestOffHeapMemoryStaysWithinTheBudget(t *testing.T) {
 		}
 		mb, res, fb := c.MappedBytes(), c.ResidentBytes(), c.FreeBytes()
 		worst = max(worst, mb)
-		if acct := res + fb + c.H.DenseLen; mb > acct+1<<16 || mb < acct {
+		if acct := res + fb + c.File().H.DenseLen; mb > acct+1<<16 || mb < acct {
 			t.Fatalf("step %d: %d bytes mapped, but resident %d + free %d + dense %d is %d: a frame is mapped and owned by nothing",
-				i, mb, res, fb, c.H.DenseLen, acct)
+				i, mb, res, fb, c.File().H.DenseLen, acct)
 		}
 		if res+fb > max(budget, res) {
 			t.Fatalf("step %d: %d free bytes beside %d resident, past the %d-byte budget", i, fb, res, budget)
@@ -120,7 +120,7 @@ func TestOffHeapMemoryStaysWithinTheBudget(t *testing.T) {
 	if fb := c.FreeBytes(); fb != 0 {
 		t.Fatalf("%d free bytes after TrimFree", fb)
 	}
-	if mb, want := c.MappedBytes(), c.ResidentBytes()+c.H.DenseLen; mb > want+1<<16 || mb < want {
+	if mb, want := c.MappedBytes(), c.ResidentBytes()+c.File().H.DenseLen; mb > want+1<<16 || mb < want {
 		t.Fatalf("after TrimFree %d bytes mapped, want the %d resident plus dense", mb, want)
 	}
 	st.Close()
@@ -128,7 +128,7 @@ func TestOffHeapMemoryStaysWithinTheBudget(t *testing.T) {
 	if after := c.MappedBytes(); after != 0 {
 		t.Fatalf("%d off-heap bytes still mapped after the model closed", after)
 	}
-	t.Logf("budget %d, worst %d mapped (dense %d)", budget, worst, c.H.DenseLen)
+	t.Logf("budget %d, worst %d mapped (dense %d)", budget, worst, c.File().H.DenseLen)
 }
 
 // TestTwoPagedModelsShareTheProcess is the multi-model case off the heap: two
@@ -163,9 +163,9 @@ func TestTwoPagedModelsShareTheProcess(t *testing.T) {
 				t.Error(err)
 				return nil
 			}
-			c := m.Container
-			if mb, acct := c.MappedBytes(), c.ResidentBytes()+c.FreeBytes()+c.H.DenseLen; mb > acct+1<<16 || mb < acct {
-				t.Errorf("%s step %d: %d mapped against %d accounted", c.Path, i, mb, acct)
+			c := m.Frames
+			if mb, acct := c.MappedBytes(), c.ResidentBytes()+c.FreeBytes()+c.File().H.DenseLen; mb > acct+1<<16 || mb < acct {
+				t.Errorf("%s step %d: %d mapped against %d accounted", c.File().Path, i, mb, acct)
 			}
 		}
 		return out
@@ -186,7 +186,7 @@ func TestTwoPagedModelsShareTheProcess(t *testing.T) {
 		m.Close()
 	}
 	ms := [2]*model.Model{open(paths[0]), open(paths[1])}
-	if ms[0].Container.MappedBytes() == 0 {
+	if ms[0].Frames.MappedBytes() == 0 {
 		ms[0].Close()
 		ms[1].Close()
 		t.Skip("this platform maps nothing off the heap -- this gate proved nothing")
@@ -207,9 +207,9 @@ func TestTwoPagedModelsShareTheProcess(t *testing.T) {
 		}
 	}
 	// Closing the first returns its mappings and only its; the second still runs.
-	second := ms[1].Container.MappedBytes()
+	second := ms[1].Frames.MappedBytes()
 	ms[0].Close()
-	if first, now := ms[0].Container.MappedBytes(), ms[1].Container.MappedBytes(); first != 0 || now != second {
+	if first, now := ms[0].Frames.MappedBytes(), ms[1].Frames.MappedBytes(); first != 0 || now != second {
 		t.Fatalf("after closing the first model it maps %d bytes and the second %d, want 0 and the second's %d",
 			first, now, second)
 	}
@@ -217,7 +217,7 @@ func TestTwoPagedModelsShareTheProcess(t *testing.T) {
 		t.Fatalf("the second model after the first closed read %v, want %v", again, want[1])
 	}
 	ms[1].Close()
-	if a, b := ms[0].Container.MappedBytes(), ms[1].Container.MappedBytes(); a+b != 0 {
+	if a, b := ms[0].Frames.MappedBytes(), ms[1].Frames.MappedBytes(); a+b != 0 {
 		t.Fatalf("both models closed and they still map %d and %d off-heap bytes", a, b)
 	}
 }

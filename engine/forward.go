@@ -1563,7 +1563,7 @@ func (s *Instance) offerRange(lo, hi int) {
 	// Each placed block gives its host pages back and the next block's land
 	// in the same frames; once the range is offered nothing will take the rest,
 	// so they go back to the OS (jlm.File.TrimFree).
-	defer s.m.Container.TrimFree()
+	defer s.m.Frames.TrimFree()
 	// A group the device took part of (a decline mid-group) comes home whole.
 	defer s.fixKVGroups()
 	c := s.c
@@ -1776,9 +1776,9 @@ func (s *Instance) releasePlacedPage(ld nn.LayerDevice, li int) {
 			keep = !eh.HoldsExperts(li)
 		}
 		s.bind.Lock()
-		model.ReleaseLayer(s.m.Container, li, l, keep)
+		model.ReleaseLayer(s.m.Frames, li, l, keep)
 		s.bind.Unlock()
-	} else if buf := s.m.Container.Page(li); len(buf) > 0 {
+	} else if buf := s.m.Frames.Page(li); len(buf) > 0 {
 		// The page stays (a streamed block's host side reads it), so no
 		// recycle tells the devices to drop the lone-matvec copies they
 		// made of its weights while the host ran it; the block is placed
@@ -2045,7 +2045,7 @@ func (s *Instance) keep(lo, hi, d int) {
 		return
 	}
 	for li := lo; li < hi; li++ {
-		s.m.Container.Keep(li, d)
+		s.m.Frames.Keep(li, d)
 	}
 }
 
@@ -3076,7 +3076,7 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 	// 16 GiB cgroup for a run that read nothing after warm-up, at well under
 	// half the spinning rate (scheduling-and-measurement.md, "What was left:
 	// the pool spinning through a blocking read").
-	if pc := s.m.Container; pc != nil {
+	if pc := s.m.Frames; pc != nil {
 		in0, _ := pc.Faults()
 		defer func() {
 			in1, _ := pc.Faults()

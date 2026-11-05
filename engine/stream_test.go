@@ -28,9 +28,9 @@ func TestStreamedExpertBankMatchesTheResidentOne(t *testing.T) {
 	probe.Close()
 	m, openOpts2 := hybridModelOpt(t, hyOpt{moe: true, wideMoE: true, budget: 2 * page})
 	defer m.Close()
-	if !m.Container.CanEvict() {
+	if !m.Frames.CanEvict() {
 		t.Fatalf("the budget is %d bytes over pages of %d and nothing is evicted: "+
-			"the narrowed expert read would never run", m.Container.Budget(), page)
+			"the narrowed expert read would never run", m.Frames.Budget(), page)
 	}
 	if m.Cfg.NExpertUsed >= m.Cfg.NExpert || m.Cfg.NExpertUsed < 2 {
 		t.Fatalf("the fixture routes %d of %d experts; streaming needs 2 <= used < total",

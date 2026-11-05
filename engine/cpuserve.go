@@ -1310,7 +1310,7 @@ func (s *Instance) formCPUBlock(li int, cb *cpuBlock, rows int) (*cpudev.Form, e
 	gr.Block = 0
 	cb.sideOff = sideAtBinding(&gr)
 	if s.cpu.ngView == nil && s.m.Ngram != nil && cpudev.TableRowsOf(&gr) >= 0 {
-		v, err := s.m.Ngram.F.NewRowView(s.m.Ngram.E)
+		v, err := s.m.Frames.NewRowView(s.m.Ngram.E)
 		if err != nil {
 			return nil, err
 		}
@@ -1379,7 +1379,7 @@ func (s *Instance) cpuBanksPaged(li int) bool {
 		if t.E == nil {
 			continue
 		}
-		planes, _, ok := s.m.Container.BankView(t.E)
+		planes, _, ok := s.m.Frames.BankView(t.E)
 		if !ok {
 			return false
 		}

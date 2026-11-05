@@ -20,11 +20,11 @@ func TestTheDeviceCallbackDoesNotRereadTheBase(t *testing.T) {
 	// same chunks.
 	m, openOpts := hybridModelOpt(t, hyOpt{moe: true, wideMoE: true, chunk: chunk})
 	defer m.Close()
-	c := m.Container
+	c := m.Frames
 	if c.ChunkBytes() != chunk {
 		t.Fatalf("the container fills at %d bytes, want the %d WithChunk asked for", c.ChunkBytes(), chunk)
 	}
-	if c.H.NBlocks == 0 {
+	if c.File().H.NBlocks == 0 {
 		t.Skip("the fixture has no block pages, so there is nothing to re-read")
 	}
 	s := testInstance(t, m, 64, openOpts...)
@@ -84,7 +84,7 @@ func TestTheDeviceCallbackDoesNotRereadTheBase(t *testing.T) {
 		for _, y := range sel {
 			picked = picked || int(y) == x
 		}
-		if got := c.Resident(c.ExpertPage(m.Layers[0].Gate.E, x)); got != picked {
+		if got := c.Resident(c.File().ExpertPage(m.Layers[0].Gate.E, x)); got != picked {
 			t.Errorf("expert %d: page resident=%v, selected=%v", x, got, picked)
 		}
 	}

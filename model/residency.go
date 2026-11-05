@@ -51,6 +51,6 @@ func (r *Residency) Touch(li int, nExpert int, sel []int32) {
 // blockHeld reports whether block li's page is held, so a fused run does not
 // stay open across the read of one that is not.
 func (m *Model) BlockHeld(li int) bool {
-	c := m.Container
-	return c == nil || li >= c.NPages() || c.Resident(li)
+	c, cf := m.Container, m.Frames
+	return c == nil || li >= c.NPages() || cf.Resident(li)
 }

@@ -19,7 +19,7 @@ package model
 // sync.Mutex is not reentrant: the gated set is exactly Forward, Prefill,
 // PrefillMixed, PrefillCached and StepRuns, none of which calls another.
 func (m *Model) EnterPager() func() {
-	if m == nil || m.Container == nil || !m.Container.CanEvict() {
+	if m == nil || m.Container == nil || !m.Frames.CanEvict() {
 		return func() {}
 	}
 	m.pager.Lock()

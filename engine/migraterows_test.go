@@ -480,7 +480,7 @@ func TestBatchSeamMovesCarryEveryRowSSM(t *testing.T) {
 func armGoroutines() int {
 	buf := make([]byte, 1<<20)
 	buf = buf[:runtime.Stack(buf, true)]
-	return runtime.NumGoroutine() - bytes.Count(buf, []byte("format/jlm.(*File).startIO.func1("))
+	return runtime.NumGoroutine() - bytes.Count(buf, []byte("format/jlm.(*Frames).startIO.func1("))
 }
 
 // statsMoved names the integer fields of two snapshots that differ, with

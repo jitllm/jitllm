@@ -58,8 +58,8 @@ func TestPreloadReadsEveryPageAndKeepsTheAnswer(t *testing.T) {
 			if err := m.WaitPreload(); err != nil {
 				t.Fatal(err)
 			}
-			c := m.Container
-			if got, all := c.ResidentPages(), c.NPages(); got != all {
+			c, cf := m.Container, m.Frames
+			if got, all := cf.ResidentPages(), c.NPages(); got != all {
 				t.Fatalf("preload left %d of %d pages resident", got, all)
 			}
 			var page uint64

@@ -46,12 +46,12 @@ func TestMLARunsUnderAPageBudget(t *testing.T) {
 			for i := 0; i < tight.Container.NPages(); i++ {
 				allPages += tight.Container.PageBytes(i)
 			}
-			if got := tight.Container.Budget(); nb < 2 || got == 0 || got >= allPages {
+			if got := tight.Frames.Budget(); nb < 2 || got == 0 || got >= allPages {
 				t.Fatalf("%d block(s), budget %d bytes against %d of pages: nothing "+
 					"is ever evicted, so this gate proved nothing", nb, got, allPages)
 			}
 			t.Logf("%d block(s), budget %d bytes against %d of pages",
-				nb, tight.Container.Budget(), allPages)
+				nb, tight.Frames.Budget(), allPages)
 
 			ids := []int32{1, 2, 3, 4, 5, 6, 7, 8}
 			want := teacherForce(t, full, ids, instOpts...)
