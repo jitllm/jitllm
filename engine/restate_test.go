@@ -2,6 +2,8 @@ package engine
 
 import (
 	"slices"
+	"strconv"
+	"strings"
 
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/graph"
@@ -139,7 +141,21 @@ func written(g *graph.Graph, match func(i int, o *graph.Op) bool) []graph.ValueI
 
 // named matches an op writing a value of g named name.
 func named(g *graph.Graph, name string) func(int, *graph.Op) bool {
-	return func(_ int, o *graph.Op) bool { return len(o.Out) > 0 && g.Values[o.Out[0]].Name == name }
+	return func(_ int, o *graph.Op) bool { return len(o.Out) > 0 && isNamed(g, o.Out[0], name) }
+}
+
+// isNamed reports whether v was emitted under name: the builder keeps
+// values apart by appending the value's index (graph.Builder.value).
+func isNamed(g *graph.Graph, v graph.ValueID, name string) bool {
+	n := g.Values[v].Name
+	i := strings.LastIndexByte(n, '.')
+	if i < 0 {
+		return n == name
+	}
+	if _, err := strconv.Atoi(n[i+1:]); err != nil {
+		return n == name
+	}
+	return n[:i] == name
 }
 
 // binding matches an op binding role.
@@ -243,11 +259,11 @@ func modelWide(match func(*graph.Graph) func(int, *graph.Op) bool) func(*graph.G
 func lastNamed(name string) func(*graph.Graph) func(int, *graph.Op) bool {
 	return func(g *graph.Graph) func(int, *graph.Op) bool {
 		return func(_ int, o *graph.Op) bool {
-			if len(o.Out) == 0 || g.Values[o.Out[0]].Name != name {
+			if len(o.Out) == 0 || !isNamed(g, o.Out[0], name) {
 				return false
 			}
 			for _, r := range g.Ops {
-				if len(r.Out) > 0 && g.Values[r.Out[0]].Name == name && slices.Contains(r.In, o.Out[0]) {
+				if len(r.Out) > 0 && isNamed(g, r.Out[0], name) && slices.Contains(r.In, o.Out[0]) {
 					return false
 				}
 			}
@@ -260,7 +276,7 @@ func lastNamed(name string) func(*graph.Graph) func(int, *graph.Op) bool {
 func reading(k graph.OpKind, name string) func(*graph.Graph) func(int, *graph.Op) bool {
 	return func(g *graph.Graph) func(int, *graph.Op) bool {
 		return func(_ int, o *graph.Op) bool {
-			return o.Kind == k && slices.ContainsFunc(o.In, func(v graph.ValueID) bool { return g.Values[v].Name == name })
+			return o.Kind == k && slices.ContainsFunc(o.In, func(v graph.ValueID) bool { return isNamed(g, v, name) })
 		}
 	}
 }
