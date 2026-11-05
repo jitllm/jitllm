@@ -43,9 +43,10 @@ func TestConvertedBytesEqualThePacker(t *testing.T) {
 			if err != nil {
 				t.Fatalf("open: %v", err)
 			}
+			cf := framesOf(t, c)
 			defer c.Close()
 			// Open reads no page, so a span is nil until the block is in.
-			if err := c.LoadAll(); err != nil {
+			if err := cf.LoadAll(); err != nil {
 				t.Fatalf("load: %v", err)
 			}
 			g, err := gguf.Open(src)
@@ -61,7 +62,7 @@ func TestConvertedBytesEqualThePacker(t *testing.T) {
 				if !ok {
 					t.Fatalf("%s: in the container, not in the source", e.Name)
 				}
-				qs, d, sc := c.Span(e)
+				qs, d, sc := cf.Span(e)
 				want := g.Bytes(gt)
 				// Nothing is exempt: token_embd and output are packed like every
 				// other quantised tensor.
@@ -124,8 +125,9 @@ func TestEveryBlockFitsItsPage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	cf := framesOf(t, c)
 	defer c.Close()
-	if err := c.LoadAll(); err != nil {
+	if err := cf.LoadAll(); err != nil {
 		t.Fatalf("load: %v", err)
 	}
 
@@ -145,7 +147,7 @@ func TestEveryBlockFitsItsPage(t *testing.T) {
 			lo, hi = c.H.DenseOff, c.H.DenseOff+c.H.DenseLen
 			dense++
 		}
-		qs, d, sc := c.Span(e)
+		qs, d, sc := cf.Span(e)
 		for _, s := range []struct {
 			what string
 			off  uint64

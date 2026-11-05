@@ -31,7 +31,7 @@ func TestUngatedStreamedBankMatchesTheResidentOne(t *testing.T) {
 		}
 		defer m.Close()
 		m.SetPageBudget(2 * m.PageSize())
-		if !m.Container.CanEvict() {
+		if !m.Frames.CanEvict() {
 			t.Fatalf("a budget of two pages evicts nothing: the sheets would never be read")
 		}
 		opts := []gpu.Option{gpu.WithDevices("gpu:0"), gpu.WithDeviceTune(gpu.TuneOff)}

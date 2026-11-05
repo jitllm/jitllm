@@ -28,13 +28,13 @@ func TestThePoolParksOnlyWhileTokensPage(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	c := m.Container
+	c, cf := m.Container, m.Frames
 	var total uint64
 	for i := 0; i < c.NPages(); i++ {
 		total += c.PageBytes(i)
 	}
 	m.SetPageBudget(total - c.H.ExpPageSize)
-	if !c.CanEvict() {
+	if !cf.CanEvict() {
 		t.Fatal("a budget one page short of the model and the pager cannot evict: this proved nothing")
 	}
 	st := testInstance(t, m, 96)

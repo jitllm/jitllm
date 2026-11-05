@@ -29,7 +29,6 @@ import (
 
 // ngramTable is the container's n-gram table.
 type ngramTable struct {
-	F        *jlm.File
 	E        *jlm.Entry
 	typ      quant.Type
 	RowBytes int

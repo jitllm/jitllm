@@ -14,7 +14,7 @@ type Placement struct {
 // SetPlacement applies p to the dense region now and to every page frame
 // allocated after it. Call it before the first page is read (model.Open does);
 // frames already in the free list keep the placement they were given.
-func (f *File) SetPlacement(p Placement) {
+func (f *Frames) SetPlacement(p Placement) {
 	var mask []uint64
 	if len(p.Nodes) >= 2 {
 		hi := 0
@@ -45,7 +45,7 @@ func (f *File) SetPlacement(p Placement) {
 }
 
 // Interleaved reports whether this File spreads its memory over nodes.
-func (f *File) Interleaved() bool {
+func (f *Frames) Interleaved() bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.nodeMask != nil

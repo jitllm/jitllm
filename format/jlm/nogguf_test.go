@@ -90,8 +90,9 @@ func TestContainerFromNoGGUFAtAll(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	cf := framesOf(t, c)
 	defer c.Close()
-	if err := c.LoadAll(); err != nil {
+	if err := cf.LoadAll(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -118,7 +119,7 @@ func TestContainerFromNoGGUFAtAll(t *testing.T) {
 	checked := 0
 	for i := range c.Entries() {
 		e := &c.Entries()[i]
-		qs, d, sc := c.Span(e)
+		qs, d, sc := cf.Span(e)
 		raw := tensors[i].Data
 		q, packed := jlm.Packer(e.Type)
 		if !packed {

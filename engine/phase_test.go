@@ -15,7 +15,7 @@ func TestPhaseMeterAccountsForEveryByte(t *testing.T) {
 		t.Skip("no container: there is no pager to split")
 	}
 	// One frame for eight blocks, so decode re-faults and the row is not zero.
-	m.Container.SetBudget(m.Container.PageBytes(0))
+	m.Frames.SetBudget(m.Container.PageBytes(0))
 
 	st := testInstance(t, m, 64, openOpts...)
 	defer st.Close()

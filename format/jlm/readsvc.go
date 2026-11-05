@@ -62,7 +62,7 @@ type specSvc struct {
 
 // SetSpeculation sets the most frames speculative reads may hold at once
 // (pages nobody has demanded yet). 0 restores the default.
-func (f *File) SetSpeculation(pages int) {
+func (f *Frames) SetSpeculation(pages int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.specCap = pages
@@ -70,11 +70,11 @@ func (f *File) SetSpeculation(pages int) {
 
 // SpeculationStats is how many guesses were refused for occupancy and how
 // many failed to read. A failed guess is not a failed token.
-func (f *File) SpeculationStats() (skipped, failed int64) {
+func (f *Frames) SpeculationStats() (skipped, failed int64) {
 	return f.spec.skipped.Load(), f.spec.failed.Load()
 }
 
-func (f *File) specLimit() int {
+func (f *Frames) specLimit() int {
 	if f.specCap > 0 {
 		return f.specCap
 	}
@@ -82,7 +82,7 @@ func (f *File) specLimit() int {
 }
 
 // markSpec charges page b to the speculative occupancy. Callers hold f.mu.
-func (f *File) markSpec(b int) {
+func (f *Frames) markSpec(b int) {
 	if f.specOn == nil {
 		f.specOn = make([]bool, len(f.pages))
 	}
@@ -94,7 +94,7 @@ func (f *File) markSpec(b int) {
 
 // unspec takes page b's charge off: it was demanded, or it left. Callers
 // hold f.mu.
-func (f *File) unspec(b int) {
+func (f *Frames) unspec(b int) {
 	if f.specOn != nil && f.specOn[b] {
 		f.specOn[b] = false
 		f.specHeld--
@@ -105,7 +105,7 @@ func (f *File) unspec(b int) {
 // entry e: guesses not yet started are dropped, and the pages that are not
 // already resident and filled are queued for the workers. It never blocks and
 // allocates nothing once the service has started. A nil sel is Abandon.
-func (f *File) Speculate(e *Entry, sel []uint32) {
+func (f *Frames) Speculate(e *Entry, sel []uint32) {
 	q := &f.spec
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -118,7 +118,7 @@ func (f *File) Speculate(e *Entry, sel []uint32) {
 		q.cond.L = &q.mu
 	}
 	for _, x := range sel {
-		p := f.ExpertPage(e, int(x))
+		p := f.file.ExpertPage(e, int(x))
 		if p < 0 || q.n == len(q.ring) || f.pageWarm(p) || q.queued(p) {
 			continue
 		}
@@ -140,7 +140,7 @@ func (f *File) Speculate(e *Entry, sel []uint32) {
 
 // Abandon drops every guess no worker has started. A read in progress
 // finishes: its frame is pinned and may be joined by a demanded read.
-func (f *File) Abandon() {
+func (f *Frames) Abandon() {
 	q := &f.spec
 	q.mu.Lock()
 	q.n = 0
@@ -158,13 +158,13 @@ func (q *specSvc) queued(p int) bool {
 }
 
 // pageWarm reports whether page p is resident with every chunk filled.
-func (f *File) pageWarm(p int) bool {
+func (f *Frames) pageWarm(p int) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.warmLocked(p)
 }
 
-func (f *File) warmLocked(p int) bool {
+func (f *Frames) warmLocked(p int) bool {
 	if f.pages[p] == nil || f.filled == nil || f.filled[p] == nil {
 		return false
 	}
@@ -179,7 +179,7 @@ func (f *File) warmLocked(p int) bool {
 // demandWarm is pageWarm for a demanded page: a warm hit is a use, so it
 // ticks the LRU order claim would have, and takes the page off the
 // speculative charge.
-func (f *File) demandWarm(p int) bool {
+func (f *Frames) demandWarm(p int) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if !f.warmLocked(p) {
@@ -193,7 +193,7 @@ func (f *File) demandWarm(p int) bool {
 	return true
 }
 
-func (f *File) specWorker() {
+func (f *Frames) specWorker() {
 	q := &f.spec
 	defer q.wg.Done()
 	rs := make([]Range, 1)
@@ -210,7 +210,7 @@ func (f *File) specWorker() {
 		q.head = (q.head + 1) % len(q.ring)
 		q.n--
 		q.mu.Unlock()
-		off, size := f.pageAt(p)
+		off, size := f.file.pageAt(p)
 		rs[0] = Range{Off: off, N: size}
 		switch err := f.ensureRanges(p, rs, true); {
 		case err == nil:
@@ -225,7 +225,7 @@ func (f *File) specWorker() {
 
 // stopSpec ends the workers and waits for the reads in flight, so Close never
 // unmaps a frame a worker is filling.
-func (f *File) stopSpec() {
+func (f *Frames) stopSpec() {
 	q := &f.spec
 	q.mu.Lock()
 	q.closed = true
@@ -244,10 +244,10 @@ func (f *File) stopSpec() {
 // EnsurePage, so the caller waits for that page alone. Nothing here queues
 // behind a speculative read, and a selection that is all warm allocates
 // nothing and starts nothing.
-func (f *File) EnsureExperts(e *Entry, sel []uint32) error {
+func (f *Frames) EnsureExperts(e *Entry, sel []uint32) error {
 	cold := false
 	for _, x := range sel {
-		p := f.ExpertPage(e, int(x))
+		p := f.file.ExpertPage(e, int(x))
 		if p < 0 {
 			return fmt.Errorf("jlm: expert %d has no expert page", x)
 		}
@@ -274,7 +274,7 @@ func (f *File) EnsureExperts(e *Entry, sel []uint32) error {
 	}
 	inline := -1
 	for _, x := range sel {
-		p := f.ExpertPage(e, int(x))
+		p := f.file.ExpertPage(e, int(x))
 		if f.demandWarm(p) {
 			continue
 		}

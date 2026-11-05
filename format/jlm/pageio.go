@@ -48,7 +48,7 @@ type ioPlan struct {
 	wg     sync.WaitGroup
 }
 
-func (f *File) getPlan() *ioPlan {
+func (f *Frames) getPlan() *ioPlan {
 	f.io.mu.Lock()
 	defer f.io.mu.Unlock()
 	if n := len(f.io.plans); n > 0 {
@@ -60,7 +60,7 @@ func (f *File) getPlan() *ioPlan {
 	return new(ioPlan)
 }
 
-func (f *File) putPlan(p *ioPlan) {
+func (f *Frames) putPlan(p *ioPlan) {
 	clear(p.pieces[:cap(p.pieces)])
 	clear(p.errs[:cap(p.errs)])
 	p.pieces, p.errs = p.pieces[:0], p.errs[:0]
@@ -69,7 +69,7 @@ func (f *File) putPlan(p *ioPlan) {
 	f.io.plans = append(f.io.plans, p)
 }
 
-func (f *File) startIO() {
+func (f *Frames) startIO() {
 	f.io.q = make(chan *ioPiece, ioWorkers)
 	f.io.done.Add(ioWorkers)
 	for range ioWorkers {
@@ -90,7 +90,7 @@ func (f *File) startIO() {
 }
 
 // stopIO ends the workers. Callers hold no page-in in flight (Close).
-func (f *File) stopIO() {
+func (f *Frames) stopIO() {
 	if f.io.q == nil {
 		return
 	}
@@ -101,17 +101,17 @@ func (f *File) stopIO() {
 
 // readRuns reads every run of a plan into page, each split as readAt splits
 // one, and returns an error per run.
-func (f *File) readRuns(pl *ioPlan, page []byte, base, psize uint64, runs []run) []error {
+func (f *Frames) readRuns(pl *ioPlan, page []byte, base, psize uint64, runs []run) []error {
 	f.io.once.Do(f.startIO)
 	cs := f.chunkSize()
 	for _, r := range runs {
 		cl, ch := uint64(r.lo)*cs, min(uint64(r.hi)*cs, psize)
 		dst, off := page[cl:ch], int64(base+cl)
 		// A pread is priced per call, so the count is per run, as readAt's.
-		f.countRead()
-		h := f.f
-		if f.direct != nil && directOK(off, len(dst)) && aligned(dst) {
-			h = f.direct
+		f.file.countRead()
+		h := f.file.f
+		if f.file.direct != nil && directOK(off, len(dst)) && aligned(dst) {
+			h = f.file.direct
 		}
 		g := 1
 		// Below a few MiB a split costs more than the queue depth buys.
@@ -119,12 +119,12 @@ func (f *File) readRuns(pl *ioPlan, page []byte, base, psize uint64, runs []run)
 			g = min(ReadThreads, runtime.GOMAXPROCS(0)*4)
 		}
 		chunk := (len(dst) + g - 1) / g
-		if h == f.direct {
+		if h == f.file.direct {
 			chunk = (chunk + Align - 1) &^ (Align - 1)
 		}
 		for lo := 0; lo < len(dst); lo += chunk {
 			hi := min(lo+chunk, len(dst))
-			pl.pieces = append(pl.pieces, ioPiece{f: f, h: h, dst: dst[lo:hi], off: off + int64(lo), wg: &pl.wg})
+			pl.pieces = append(pl.pieces, ioPiece{f: f.file, h: h, dst: dst[lo:hi], off: off + int64(lo), wg: &pl.wg})
 		}
 		pl.errs = append(pl.errs, nil)
 	}

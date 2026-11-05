@@ -18,9 +18,9 @@ func TestConcurrentDecodeOnAnEvictingContainer(t *testing.T) {
 	probe.Close()
 	m, openOpts2 := hybridModelOpt(t, hyOpt{moe: true, layers: 8, manyExp: true, budget: 3 * page})
 	defer m.Close()
-	if !m.Container.CanEvict() {
+	if !m.Frames.CanEvict() {
 		t.Fatalf("the budget is %d bytes over 8 pages of %d and nothing is evicted: "+
-			"this gate would pass on a tree with no lock", m.Container.Budget(), page)
+			"this gate would pass on a tree with no lock", m.Frames.Budget(), page)
 	}
 
 	// Built serially, driven concurrently: building JITs concurrently is not
@@ -87,7 +87,7 @@ func TestConcurrentDecodeOnAnEvictingContainer(t *testing.T) {
 func TestConcurrentDecodeOnAFittingMixture(t *testing.T) {
 	m, openOpts := hybridModelOpt(t, hyOpt{moe: true, layers: 8, manyExp: true})
 	defer m.Close()
-	if m.Container.CanEvict() {
+	if m.Frames.CanEvict() {
 		t.Fatal("the budget evicts: this is the serialised case, not the one this gate is for")
 	}
 	if l := &m.Layers[0]; l.Gate.E == nil || !m.Container.ExpertPaged(l.Gate.E) {

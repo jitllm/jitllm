@@ -31,6 +31,7 @@ func TestRowTableIsReadARowAtATime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	cf := framesOf(t, c)
 	defer c.Close()
 	te, ok := c.Find(jlm.RoleNGramTable, jlm.DenseBlock, -1)
 	if !ok || !jlm.RowTable(te) || c.InDense(te) {
@@ -40,7 +41,7 @@ func TestRowTableIsReadARowAtATime(t *testing.T) {
 	if err != nil || rb != 90 {
 		t.Fatalf("rows of %d bytes (%v), want 90", rb, err)
 	}
-	if n := c.RowReads(); n != 0 {
+	if n := cf.RowReads(); n != 0 {
 		t.Fatalf("opening the model read %d spans of its row table", n)
 	}
 	if uint64(len(table)) != rows*rb {
@@ -85,12 +86,13 @@ func TestRowViewHoldsTheRowsItReads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	cf := framesOf(t, c)
 	defer c.Close()
 	te, ok := c.Find(jlm.RoleNGramTable, jlm.DenseBlock, -1)
 	if !ok {
 		t.Fatal("no table")
 	}
-	v, err := c.NewRowView(te)
+	v, err := cf.NewRowView(te)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,24 +115,24 @@ func TestRowViewHoldsTheRowsItReads(t *testing.T) {
 			}
 		}
 	}
-	before := c.RowReads()
+	before := cf.RowReads()
 	if err := v.Ensure(sel); err != nil {
 		t.Fatal(err)
 	}
-	if n := c.RowReads() - before; n != int64(len(spans)) {
+	if n := cf.RowReads() - before; n != int64(len(spans)) {
 		t.Fatalf("%d reads for rows in %d spans", n, len(spans))
 	}
 	check("read")
-	before = c.RowReads()
-	if err := v.Ensure(sel); err != nil || c.RowReads() != before {
-		t.Fatalf("rows read in were read again (%d reads, %v)", c.RowReads()-before, err)
+	before = cf.RowReads()
+	if err := v.Ensure(sel); err != nil || cf.RowReads() != before {
+		t.Fatalf("rows read in were read again (%d reads, %v)", cf.RowReads()-before, err)
 	}
 	v.Drop()
 	if v.Held() != 0 {
 		t.Fatalf("%d bytes held after a drop", v.Held())
 	}
-	before = c.RowReads()
-	if err := v.Ensure(sel); err != nil || c.RowReads() == before {
+	before = cf.RowReads()
+	if err := v.Ensure(sel); err != nil || cf.RowReads() == before {
 		t.Fatalf("dropped rows were not read again (%v)", err)
 	}
 	check("read again")

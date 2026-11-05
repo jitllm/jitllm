@@ -48,16 +48,16 @@ func TestPlacedBlocksGiveTheirHostPagesBack(t *testing.T) {
 				}
 				t.Fatalf("placed %d of %d blocks: %s", st.GPULayers(), m.Cfg.NLayer, g.Err())
 			}
-			if n := m.Container.ResidentPages(); n != 0 {
-				t.Fatalf("every block is on the device and the host still holds %d page(s), %d bytes", n, m.Container.ResidentBytes())
+			if n := m.Frames.ResidentPages(); n != 0 {
+				t.Fatalf("every block is on the device and the host still holds %d page(s), %d bytes", n, m.Frames.ResidentBytes())
 			}
 			// And the frames those pages lived in are handed back, not kept on
 			// a free list nothing will take from: what is still mapped is the
 			// dense region.
-			if fb := m.Container.FreeBytes(); fb != 0 {
+			if fb := m.Frames.FreeBytes(); fb != 0 {
 				t.Fatalf("placement left %d bytes of frames on the free list", fb)
 			}
-			if mb, dense := m.Container.MappedBytes(), m.Container.H.DenseLen; mb > dense+1<<16 {
+			if mb, dense := m.Frames.MappedBytes(), m.Container.H.DenseLen; mb > dense+1<<16 {
 				t.Fatalf("placement left %d bytes mapped against a %d-byte dense region", mb, dense)
 			}
 			ids := m.Vocab.Encode("The capital of France is", true)
@@ -68,7 +68,7 @@ func TestPlacedBlocksGiveTheirHostPagesBack(t *testing.T) {
 			if _, err := st.Forward(Greedy(lg)); err != nil {
 				t.Fatal(err)
 			}
-			if n := m.Container.ResidentPages(); n != 0 {
+			if n := m.Frames.ResidentPages(); n != 0 {
 				t.Fatalf("a prompt and a decode step on the device read %d page(s) back to the host", n)
 			}
 		})

@@ -1250,7 +1250,7 @@ func TestMoEDeviceUploadReadsTheWholeBank(t *testing.T) {
 	m, openOpts2 := hybridModelOpt(t, hyOpt{moe: true, layers: 8, manyExp: true, budget: 3 * page})
 	defer m.Close()
 	t.Logf("page %d bytes (%.2f MiB), chunk %d", page, float64(page)/(1<<20), jlm.Chunk)
-	if b := m.Container.Budget(); b == 0 || b >= 8*page {
+	if b := m.Frames.Budget(); b == 0 || b >= 8*page {
 		t.Skipf("the budget is %d bytes against 8 pages of %d, so nothing is evicted", b, page)
 	}
 
@@ -1362,9 +1362,9 @@ func TestMoEDeviceReadsOnlyTheBanksItTakes(t *testing.T) {
 		defer g.Close()
 		s := testInstance(t, m, 16, openOpts2...)
 		defer s.Close()
-		before := m.Container.ChunksIn()
+		before := m.Frames.ChunksIn()
 		s.SetDeviceLayers(g, 8)
-		return m.Container.ChunksIn() - before, s.GPULayers()
+		return m.Frames.ChunksIn() - before, s.GPULayers()
 	}
 
 	// Under a budget the card pages a block's banks, so a budgeted block
@@ -1412,7 +1412,7 @@ func TestDevicePagingSurvivesTheHostPager(t *testing.T) {
 func devicePagingUnderHostPager(t *testing.T, o hyOpt) {
 	m, openOpts := hybridModelOpt(t, o)
 	defer m.Close()
-	if b := m.Container.Budget(); b == 0 {
+	if b := m.Frames.Budget(); b == 0 {
 		t.Skip("the host page budget did not apply, so only one pager is live")
 	}
 	ids := []int32{1, 2, 3, 4, 5, 6, 7, 8}

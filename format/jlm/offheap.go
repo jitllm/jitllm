@@ -24,7 +24,7 @@ import (
 
 // buf is an n-byte weight buffer, Align-aligned for O_DIRECT, on the heap or
 // mapped as the File was opened to do. A mapped one is recorded for Close.
-func (f *File) buf(n int) []byte {
+func (f *Frames) buf(n int) []byte {
 	if f.offHeap && n > 0 {
 		if b, mapped, err := offheap.MapOffHeap(n); err == nil && mapped {
 			if f.mapped == nil {
@@ -46,7 +46,7 @@ func (f *File) buf(n int) []byte {
 //
 // fn runs after f.mu is released, on whichever goroutine paged, and before
 // that goroutine reads anything into the frame. nil turns it off.
-func (f *File) OnRecycle(fn func(p unsafe.Pointer, n uintptr)) {
+func (f *Frames) OnRecycle(fn func(p unsafe.Pointer, n uintptr)) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.recycle = fn
@@ -55,7 +55,7 @@ func (f *File) OnRecycle(fn func(p unsafe.Pointer, n uintptr)) {
 // retire records b for the recycle callback: the whole buffer, since a frame
 // handed to a smaller page (take) still holds the tail of what it held before.
 // Callers hold f.mu.
-func (f *File) retire(b []byte) {
+func (f *Frames) retire(b []byte) {
 	if f.recycle == nil || cap(b) == 0 {
 		return
 	}
@@ -65,7 +65,7 @@ func (f *File) retire(b []byte) {
 // flushRecycled hands what retire recorded to the callback. Callers do not hold
 // f.mu: the callback reaches a device's own lock, and the device reaches this
 // File's (a page-in from inside an upload).
-func (f *File) flushRecycled() {
+func (f *Frames) flushRecycled() {
 	f.mu.Lock()
 	fn, bs := f.recycle, f.recycled
 	f.recycled, f.recycledSpare = f.recycledSpare, nil
@@ -91,7 +91,7 @@ func (f *File) flushRecycled() {
 // release gives a buffer this File no longer holds back: a mapping is
 // unmapped at once, a heap buffer is left to the collector. Callers hold f.mu and
 // hold no span into it.
-func (f *File) release(b []byte) {
+func (f *Frames) release(b []byte) {
 	if f.inExp(b) {
 		f.dropExp(b)
 		return
@@ -104,14 +104,14 @@ func (f *File) release(b []byte) {
 }
 
 // putFree keeps a frame of size bytes for the next page-in. Callers hold f.mu.
-func (f *File) putFree(size uint64, b []byte) {
+func (f *Frames) putFree(size uint64, b []byte) {
 	f.free[size] = append(f.free[size], b)
 	f.freeBytes += size
 }
 
 // trimFree releases free frames until at most keep bytes of them are left.
 // Callers hold f.mu.
-func (f *File) trimFree(keep uint64) {
+func (f *Frames) trimFree(keep uint64) {
 	for size, l := range f.free {
 		for len(l) > 0 && f.freeBytes > keep {
 			f.release(l[len(l)-1])
@@ -130,7 +130,7 @@ func (f *File) trimFree(keep uint64) {
 // next page-in, which is what makes a burst of them cheap (placement releases
 // each block's pages and the next block's land in the same frames), and once
 // the burst is over nothing will take it: the caller ends one by trimming.
-func (f *File) TrimFree() {
+func (f *Frames) TrimFree() {
 	if f == nil {
 		return
 	}
@@ -142,7 +142,7 @@ func (f *File) TrimFree() {
 
 // MappedBytes is how much off-heap memory this File holds, and
 // FreeBytes how much of its frame memory is on the free list.
-func (f *File) MappedBytes() uint64 {
+func (f *Frames) MappedBytes() uint64 {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var n uint64
@@ -153,7 +153,7 @@ func (f *File) MappedBytes() uint64 {
 	return n + f.expHeld
 }
 
-func (f *File) FreeBytes() uint64 {
+func (f *Frames) FreeBytes() uint64 {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.freeBytes
@@ -161,7 +161,7 @@ func (f *File) FreeBytes() uint64 {
 
 // unmapAll returns every mapping this File still holds. Callers hold f.mu and
 // have already dropped every reference the File holds.
-func (f *File) unmapAll() {
+func (f *Frames) unmapAll() {
 	for k, m := range f.mapped {
 		offheap.UnmapOffHeap(m)
 		delete(f.mapped, k)

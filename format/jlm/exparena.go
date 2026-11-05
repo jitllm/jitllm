@@ -24,10 +24,10 @@ import (
 // at the first expert page-in, or nil where there is none. The reservation is
 // made with the frames on the heap too (OnHeap): it is address space, and a
 // bank is one view of its experts only there. Callers hold f.mu.
-func (f *File) expFrame(li int, size uint64) ([]byte, error) {
+func (f *Frames) expFrame(li int, size uint64) ([]byte, error) {
 	if f.exp == nil && !f.expNone {
-		n := uint64(f.H.NExpPages) * f.H.ExpPageSize
-		if n == 0 || f.H.ExpPageSize%Align != 0 {
+		n := uint64(f.file.H.NExpPages) * f.file.H.ExpPageSize
+		if n == 0 || f.file.H.ExpPageSize%Align != 0 {
 			f.expNone = true
 			return nil, nil
 		}
@@ -41,8 +41,8 @@ func (f *File) expFrame(li int, size uint64) ([]byte, error) {
 	if f.exp == nil {
 		return nil, nil
 	}
-	at := uint64(li-int(f.H.NBlocks)-int(f.H.NVisBlocks)) * f.H.ExpPageSize
-	if size > f.H.ExpPageSize || at+size > uint64(len(f.exp)) {
+	at := uint64(li-int(f.file.H.NBlocks)-int(f.file.H.NVisBlocks)) * f.file.H.ExpPageSize
+	if size > f.file.H.ExpPageSize || at+size > uint64(len(f.exp)) {
 		return nil, nil
 	}
 	b := f.exp[at : at+size : at+size]
@@ -57,7 +57,7 @@ func (f *File) expFrame(li int, size uint64) ([]byte, error) {
 }
 
 // inExp reports whether b is a frame of the expert reservation.
-func (f *File) inExp(b []byte) bool {
+func (f *Frames) inExp(b []byte) bool {
 	if len(f.exp) == 0 || cap(b) == 0 {
 		return false
 	}
@@ -67,7 +67,7 @@ func (f *File) inExp(b []byte) bool {
 
 // dropExp hands an evicted expert page's frame back to the system. Callers
 // hold f.mu.
-func (f *File) dropExp(b []byte) {
+func (f *Frames) dropExp(b []byte) {
 	f.retire(b)
 	offheap.DropOffHeap(b[:cap(b)])
 	f.expHeld -= uint64(cap(b))
@@ -75,7 +75,7 @@ func (f *File) dropExp(b []byte) {
 
 // unmapExp gives the reservation back at Close. Callers hold f.mu and hold no
 // frame of it.
-func (f *File) unmapExp() {
+func (f *Frames) unmapExp() {
 	if f.exp != nil {
 		offheap.UnmapOffHeap(f.exp)
 		f.exp, f.expHeld = nil, 0
@@ -88,14 +88,14 @@ func (f *File) unmapExp() {
 // next's, the expert page size. ok is false where e is not in expert pages
 // or there is no reservation. A sheet is readable only while its page is
 // resident (EnsureExperts) and held (Hold); the addresses hold until Close.
-func (f *File) BankView(e *Entry) (planes [3]unsafe.Pointer, stride uint64, ok bool) {
+func (f *Frames) BankView(e *Entry) (planes [3]unsafe.Pointer, stride uint64, ok bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if !f.ExpertPaged(e) || f.ExpertPage(e, 0) < 0 {
+	if !f.file.ExpertPaged(e) || f.file.ExpertPage(e, 0) < 0 {
 		return planes, 0, false
 	}
 	if f.exp == nil && !f.expNone {
-		if _, err := f.expFrame(f.ExpertPage(e, 0), 0); err != nil {
+		if _, err := f.expFrame(f.file.ExpertPage(e, 0), 0); err != nil {
 			return planes, 0, false
 		}
 	}
@@ -109,8 +109,8 @@ func (f *File) BankView(e *Entry) (planes [3]unsafe.Pointer, stride uint64, ok b
 	}
 	for i, pl := range [3]struct{ off, n uint64 }{{e.QSOff, qs}, {e.DOff, d}, {e.SCOff, sc}} {
 		if pl.n > 0 {
-			planes[i] = unsafe.Add(base, pl.off-f.H.ExpDataOff)
+			planes[i] = unsafe.Add(base, pl.off-f.file.H.ExpDataOff)
 		}
 	}
-	return planes, f.H.ExpPageSize, true
+	return planes, f.file.H.ExpPageSize, true
 }

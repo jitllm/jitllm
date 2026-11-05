@@ -249,7 +249,7 @@ func loadQ4EHead(m *Model, cfg *Config, f *jlm.File,
 			return fmt.Errorf("model: n-gram head %d reads past the table's %d rows", h, e.Dims[1])
 		}
 	}
-	m.Ngram = &ngramTable{F: f, E: e, typ: t, RowBytes: int(rb)}
+	m.Ngram = &ngramTable{E: e, typ: t, RowBytes: int(rb)}
 	return nil
 }
 

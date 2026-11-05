@@ -51,7 +51,7 @@ func (m *Model) pageNet() uint64 {
 // Nothing is re-bound: a budget evicts and never moves a resident page, and
 // whatever it evicted is read back and bound by the next page-in of it.
 func (m *Model) applyPageBudget(net uint64) {
-	m.Container.SetBudget(net)
+	m.Frames.SetBudget(net)
 }
 
 // followHostHeld re-divides the page budget after what the host-memory devices
@@ -65,7 +65,7 @@ func (m *Model) FollowHostHeld() {
 	if m.pages.bytes == 0 {
 		return
 	}
-	if net := m.pageNet(); net != m.Container.Budget() {
+	if net := m.pageNet(); net != m.Frames.Budget() {
 		m.applyPageBudget(net)
 	}
 }

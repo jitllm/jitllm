@@ -86,6 +86,7 @@ func TestExpertPagesHoldEachExpertsSheets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	cf := framesOf(t, c)
 	defer c.Close()
 
 	checked := 0
@@ -97,7 +98,7 @@ func TestExpertPagesHoldEachExpertsSheets(t *testing.T) {
 		if !c.ExpertPaged(e) {
 			t.Fatalf("%v is not in expert pages", role)
 		}
-		if qs, _, _ := c.Span(e); qs != nil {
+		if qs, _, _ := cf.Span(e); qs != nil {
 			t.Fatalf("%v has a contiguous span; a split bank must be reached by Sheet", role)
 		}
 		raw := banks[role][0]
@@ -108,10 +109,10 @@ func TestExpertPagesHoldEachExpertsSheets(t *testing.T) {
 			if want := int(h.NBlocks) + 4 + x; p != want {
 				t.Fatalf("%v expert %d is page %d, want %d (block 1 follows block 0's four)", role, x, p, want)
 			}
-			if err := c.EnsurePage(p); err != nil {
+			if err := cf.EnsurePage(p); err != nil {
 				t.Fatal(err)
 			}
-			qs, d, sc := c.Sheet(e, x)
+			qs, d, sc := cf.Sheet(e, x)
 			sheet := raw[x*per : (x+1)*per]
 			q, packed := jlm.Packer(e.Type)
 			if !packed {
@@ -141,26 +142,26 @@ func TestExpertPagesHoldEachExpertsSheets(t *testing.T) {
 	}
 
 	// LRU over experts: room for exactly two expert pages, touch A, B, C.
-	c.ReleasePages()
-	c.SetBudget(2 * h.ExpPageSize)
+	cf.ReleasePages()
+	cf.SetBudget(2 * h.ExpPageSize)
 	e, _ := c.Find(jlm.RoleExpGateBank, 0, -1)
 	for x := 0; x < 3; x++ {
-		if err := c.EnsurePage(c.ExpertPage(e, x)); err != nil {
+		if err := cf.EnsurePage(c.ExpertPage(e, x)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if c.Resident(c.ExpertPage(e, 0)) || !c.Resident(c.ExpertPage(e, 1)) || !c.Resident(c.ExpertPage(e, 2)) {
+	if cf.Resident(c.ExpertPage(e, 0)) || !cf.Resident(c.ExpertPage(e, 1)) || !cf.Resident(c.ExpertPage(e, 2)) {
 		t.Fatalf("after A, B, C in room for two: A=%v B=%v C=%v, want the least recently used (A) evicted",
-			c.Resident(c.ExpertPage(e, 0)), c.Resident(c.ExpertPage(e, 1)), c.Resident(c.ExpertPage(e, 2)))
+			cf.Resident(c.ExpertPage(e, 0)), cf.Resident(c.ExpertPage(e, 1)), cf.Resident(c.ExpertPage(e, 2)))
 	}
 	// Touch B, bring A back: C is now the oldest.
-	if err := c.EnsurePage(c.ExpertPage(e, 1)); err != nil {
+	if err := cf.EnsurePage(c.ExpertPage(e, 1)); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.EnsurePage(c.ExpertPage(e, 0)); err != nil {
+	if err := cf.EnsurePage(c.ExpertPage(e, 0)); err != nil {
 		t.Fatal(err)
 	}
-	if c.Resident(c.ExpertPage(e, 2)) || !c.Resident(c.ExpertPage(e, 1)) {
+	if cf.Resident(c.ExpertPage(e, 2)) || !cf.Resident(c.ExpertPage(e, 1)) {
 		t.Fatal("a re-used expert was evicted ahead of an older one")
 	}
 }

@@ -44,18 +44,18 @@ func TestOpenHonoursAPageBudget(t *testing.T) {
 	for i := 0; i < tight.Container.NPages(); i++ {
 		allPages += tight.Container.PageBytes(i)
 	}
-	if got := tight.Container.Budget(); got == 0 || got >= allPages {
+	if got := tight.Frames.Budget(); got == 0 || got >= allPages {
 		t.Fatalf("budget is %d bytes against %d of pages: it did not bind (0 means "+
 			"unlimited), so this test would compare two fully-resident models "+
 			"and prove nothing", got, allPages)
 	}
-	if got := full.Container.Budget(); got != 0 && got < allPages {
+	if got := full.Frames.Budget(); got != 0 && got < allPages {
 		t.Fatalf("the unbudgeted open has a %d-byte budget against %d of pages: both "+
 			"arms are paged and the comparison is not paired", got, allPages)
 	}
 	// build() reads only the always-resident dense region, so opening faults
 	// nothing and placement can happen before any block is read.
-	if in, _ := tight.Container.Faults(); in != 0 {
+	if in, _ := tight.Frames.Faults(); in != 0 {
 		t.Logf("%d page-ins during open (expected 0 now that norms are dense)", in)
 	}
 
@@ -145,7 +145,7 @@ func forwardBatchFaultsItsBlocksIn(t *testing.T, path string, opts ...Option) {
 	for i := 0; i < tight.Container.NPages(); i++ {
 		allPages += tight.Container.PageBytes(i)
 	}
-	if got := tight.Container.Budget(); nb < 2 || got == 0 || got >= allPages {
+	if got := tight.Frames.Budget(); nb < 2 || got == 0 || got >= allPages {
 		t.Fatalf("%d block(s), budget %d against %d of pages: nothing is "+
 			"ever evicted, so this gate proved nothing", nb, got, allPages)
 	}
@@ -205,7 +205,7 @@ func forwardBatchFaultsItsBlocksIn(t *testing.T, path string, opts ...Option) {
 		nmse = sse / sy2
 	}
 	t.Logf("%d block(s), budget %d of %d page bytes, against no budget NMSE %.3e",
-		nb, tight.Container.Budget(), allPages, nmse)
+		nb, tight.Frames.Budget(), allPages, nmse)
 	if nmse != 0 {
 		t.Fatalf("ForwardBatch under paging parts from ForwardBatch with no budget: NMSE %.3e", nmse)
 	}

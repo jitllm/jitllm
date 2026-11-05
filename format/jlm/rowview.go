@@ -18,7 +18,7 @@ import (
 // every span read back. A view is its owner's alone: one device's calls read
 // it, so it takes no lock.
 type RowView struct {
-	f   *File
+	f   *Frames
 	mem []byte
 	// lo is the file offset mem[0] holds, end the table's last byte's past
 	// it; row0 is row 0's place in mem, rb a row's bytes.
@@ -32,7 +32,7 @@ type RowView struct {
 
 // NewRowView reserves row table e's view. It fails where e is not a row
 // table or the host reserves no address space.
-func (f *File) NewRowView(e *Entry) (*RowView, error) {
+func (f *Frames) NewRowView(e *Entry) (*RowView, error) {
 	if !RowTable(e) {
 		return nil, fmt.Errorf("jlm: %s is not a row table", e.Name)
 	}
@@ -89,9 +89,9 @@ func (v *RowView) readSpan(p uint64) error {
 		return fmt.Errorf("jlm: row span at %d: %w", off, err)
 	}
 	v.f.rowReads.Add(1)
-	h := v.f.f
-	if v.f.direct != nil && directOK(int64(off), int(n)) && aligned(dst) {
-		h = v.f.direct
+	h := v.f.file.f
+	if v.f.file.direct != nil && directOK(int64(off), int(n)) && aligned(dst) {
+		h = v.f.file.direct
 	}
 	if _, err := h.ReadAt(dst, int64(off)); err != nil && !errors.Is(err, io.EOF) {
 		return fmt.Errorf("jlm: row span at %d: %w", off, err)
@@ -102,7 +102,7 @@ func (v *RowView) readSpan(p uint64) error {
 // RowReads is how many row-table reads this File has issued, counted apart
 // from the pager's reads: a row is not a page, and a decode that reads rows by
 // design is still a resident model's decode.
-func (f *File) RowReads() int64 { return f.rowReads.Load() }
+func (f *Frames) RowReads() int64 { return f.rowReads.Load() }
 
 // Held is the bytes of the spans read in.
 func (v *RowView) Held() uint64 { return uint64(len(v.read)) * Align }

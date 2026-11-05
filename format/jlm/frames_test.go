@@ -2,28 +2,28 @@ package jlm
 
 import "testing"
 
-// newFake is a File with a page pool and no file behind it, so these gates need
+// newFake is frames over a File with no file behind it, so these gates need
 // no container on disk. fakeIn is EnsurePage's residency half with the read
 // left out.
-func newFake(text, textPage, vis, visPage uint64) *File {
-	f := &File{H: &Header{
+func newFake(text, textPage, vis, visPage uint64) *Frames {
+	f := &Frames{file: &File{H: &Header{
 		PageSize: textPage, NBlocks: uint32(text),
 		VisPageSize: visPage, NVisBlocks: uint32(vis),
 		DataOff: 1 << 20,
-	}}
-	f.H.VisDataOff = f.H.DataOff + text*textPage
+	}}}
+	f.file.H.VisDataOff = f.file.H.DataOff + text*textPage
 	f.pages = make([][]byte, int(text)+int(vis))
 	f.free = map[uint64][][]byte{}
 	f.recent = -1
 	return f
 }
 
-func (f *File) fakeIn(i int, mark byte) {
+func (f *Frames) fakeIn(i int, mark byte) {
 	if f.pages[i] != nil {
 		f.recent = i
 		return
 	}
-	_, size := f.pageAt(i)
+	_, size := f.file.pageAt(i)
 	f.makeRoom(i, size)
 	b := f.take(size)
 	b[0] = mark
@@ -65,24 +65,24 @@ func TestBudgetKeepsTheTwoPageSizesApart(t *testing.T) {
 	f := newFake(4, textPage, 3, visPage)
 	f.SetBudget(textPage + visPage)
 
-	f.fakeIn(0, 1)                // a text page
-	f.fakeIn(int(f.H.NBlocks), 2) // a vision page
+	f.fakeIn(0, 1)                     // a text page
+	f.fakeIn(int(f.file.H.NBlocks), 2) // a vision page
 	if n := len(f.pages[0]); uint64(n) != textPage {
 		t.Fatalf("text block 0 got a %d-byte page, want %d", n, textPage)
 	}
-	if n := len(f.pages[f.H.NBlocks]); uint64(n) != visPage {
+	if n := len(f.pages[f.file.H.NBlocks]); uint64(n) != visPage {
 		t.Fatalf("vision block 0 got a %d-byte page, want %d", n, visPage)
 	}
 	// Evict both, then fault them in the opposite order: if the free list were
 	// keyed by anything but size, the text page would come back short.
 	f.ReleasePages()
-	f.fakeIn(int(f.H.NBlocks), 3)
+	f.fakeIn(int(f.file.H.NBlocks), 3)
 	f.fakeIn(1, 4)
 	if n := len(f.pages[1]); uint64(n) != textPage {
 		t.Fatalf("text block 1 came back %d bytes, want %d -- the free list handed "+
 			"back a vision buffer", n, textPage)
 	}
-	if n := len(f.pages[f.H.NBlocks]); uint64(n) != visPage {
+	if n := len(f.pages[f.file.H.NBlocks]); uint64(n) != visPage {
 		t.Fatalf("vision block 0 came back %d bytes, want %d", n, visPage)
 	}
 }
