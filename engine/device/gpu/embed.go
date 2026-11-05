@@ -388,7 +388,7 @@ func (g *devTier) materializeComposed(pe *embPend) {
 	rd.tok, rd.pos = g.embedWords(pe, R)
 	rd.rows = R
 	if rd.composedFn == nil {
-		rd.composedFn = g.composedSession
+		rd.composedFn = rd.composed
 	}
 	g.readBack(pe, sv, rd.composedFn)
 }
@@ -404,20 +404,27 @@ type embRead struct {
 	rows     int
 	err      error
 	lc       launcher
+	// at is the view the call is the session of: the tier keeps one
+	// embRead for every view, so a body bound once to the first view
+	// would run every later session's call on that view's scratch.
+	at *devTier
 
 	composedFn func(backend.Session)
 }
+
+// composed runs the call's composedSession on the view that made it.
+func (rd *embRead) composed(s backend.Session) { rd.at.composedSession(s) }
 
 // readBack runs fn, one of embRead's session bodies, over the promise pe
 // and, for the composer's, its form sv, and reports whether the rows came
 // back.
 func (g *devTier) readBack(pe *embPend, sv *servedPart, fn func(backend.Session)) bool {
 	rd := &g.embRd
-	rd.pe, rd.sv, rd.err = pe, sv, nil
+	rd.pe, rd.sv, rd.err, rd.at = pe, sv, nil, g
 	rd.lc = launcher{to: &g.embTo, err: &rd.err}
 	g.dev.Session(fn)
 	err := rd.err
-	rd.pe, rd.sv, rd.err = nil, nil, nil
+	rd.pe, rd.sv, rd.err, rd.at = nil, nil, nil, nil
 	if err != nil {
 		g.LastErr = err.Error()
 		return false

@@ -69,7 +69,12 @@ type convScratch struct {
 	call   convCall
 	to     launchTo
 	fn     func(backend.Session)
+	// at is the view the call is the session of (see embRead.at).
+	at *devTier
 }
+
+// session runs the call's convSession on the view that made it.
+func (cs *convScratch) session(s backend.Session) { cs.at.convSession(s) }
 
 // convCall is one ConvLayers submission's arguments and its latched error.
 type convCall struct {
@@ -524,10 +529,12 @@ func (g *devTier) convOnce(lo, hi int, first, last bool, x, out []float32, tap i
 	c := &cs.call
 	*c = convCall{lo: lo, hi: hi, first: first, last: last, x: x, out: out, tap: tap, tapOut: tapOut}
 	c.lc = launcher{to: &cs.to, err: &c.err, g: g}
+	cs.at = g
 	if cs.fn == nil {
-		cs.fn = g.convSession
+		cs.fn = cs.session
 	}
 	g.dev.Session(cs.fn)
+	cs.at = nil
 	err := c.err
 	*c = convCall{}
 	if err != nil {
