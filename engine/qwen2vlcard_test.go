@@ -14,7 +14,7 @@ import (
 // read from the card's own table and, on Qwen2.5-VL's, the windowed blocks'
 // row windows (graph.Attrs.RowWindows) beside the whole-picture blocks.
 func TestQwen2VLTowerRunsOnTheCard(t *testing.T) {
-	for _, name := range qvlTowers {
+	for _, name := range qvlTowers() {
 		t.Run(name, func(t *testing.T) {
 			m, g, openOpts := openQVLTower(t, name)
 			defer m.Close()

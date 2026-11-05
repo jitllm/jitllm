@@ -3,11 +3,12 @@
 package engine
 
 import (
-	"github.com/jitllm/jitllm/engine"
 	"os"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jitllm/jitllm/engine"
 
 	"github.com/jitllm/jitllm/common/session"
 	"github.com/jitllm/jitllm/internal/testmodels"
@@ -125,7 +126,8 @@ func TestALoadThatWorksClearsTheProblem(t *testing.T) {
 func TestThePlacementSettingReachesTheLoad(t *testing.T) {
 	_, sh := loadFor(t, func(st *testStore) { st.DeviceSpec.Set("cpu"); st.Placement.Set("*=host") })
 	if !sh.Store.Loaded.Get() {
-		t.Fatal("a host-only placement did not load")
+		p := sh.Store.Problem.Get()
+		t.Fatalf("a host-only placement did not load: %s: %s", p.Title, p.Detail)
 	}
 	e, sh := loadFor(t, func(st *testStore) { st.DeviceSpec.Set("cpu") })
 	sh.Store.Placement.Set("0=cuda:0")
