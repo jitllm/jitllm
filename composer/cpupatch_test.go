@@ -269,7 +269,8 @@ func TestComposedCPUPosAxes(t *testing.T) {
 // to the step's grid on the CPU, for each filter and chain the op states,
 // over a picture of more rows than a vector loop holds: the forms fit the
 // device's registers, the taps' indices integers in its general registers.
-// The bicubic's sixteen do not fit them yet.
+// What they compute is TestComposedCPUPosResampleFollowsTheReference's and
+// TestComposedCPUPosResampleCubic's.
 func TestComposedCPUPosResample(t *testing.T) {
 	const S, e = 8, 64
 	r := Default().WithoutInt8(DeviceCPU)
@@ -277,7 +278,8 @@ func TestComposedCPUPosResample(t *testing.T) {
 	for _, c := range []struct {
 		name          string
 		chain, filter uint8
-	}{{"bilinear, aligned", graph.ChainAligned, graph.FilterBilinear}, {"linear, half-pixel", graph.ChainHalfPixel, graph.FilterLinear}} {
+	}{{"bilinear, aligned", graph.ChainAligned, graph.FilterBilinear}, {"linear, half-pixel", graph.ChainHalfPixel, graph.FilterLinear},
+		{"cubic, half-pixel", graph.ChainHalfPixel, graph.FilterCubic}} {
 		b := graph.NewBlock(-1)
 		x := b.In("x", e)
 		b.Out(b.Add(x, b.Emit(graph.OpPosResample, nil, []graph.Result{{Name: "pos", Width: e}},

@@ -106,7 +106,7 @@ func (bs *blockScratch) embedFits(ids []int32, pos int, dst []float32) partDecli
 // outputs but the rows' per-layer inputs, its last where the plan has them.
 func (bs *blockScratch) embStreams() int {
 	n := len(bs.embedGraph.Out)
-	if bs.p.PLEWidth != 0 {
+	if bs.p.PLEDim != 0 {
 		n--
 	}
 	return n
@@ -131,7 +131,7 @@ func (bs *blockScratch) embedOuts(s, R int) ([]backend.Buf, error) {
 // withPLE is the first n of embOuts, then the per-layer inputs where the
 // plan has them: the input rows' graph writes them last.
 func (bs *blockScratch) withPLE(n int) []backend.Buf {
-	if bs.p.PLEWidth != 0 {
+	if bs.p.PLEDim != 0 {
 		bs.embOuts[n] = bs.pleIn
 		n++
 	}
@@ -142,7 +142,7 @@ func (bs *blockScratch) withPLE(n int) []backend.Buf {
 // to where the call that takes the rows writes them from (pleRows).
 func (g *devTier) readPLE(s backend.Session, b backend.Buf, n int) error {
 	w := n * g.bs.p.PLEWidth
-	if w == 0 {
+	if w == 0 || g.bs.p.PLEDim == 0 {
 		return nil
 	}
 	if len(g.pleHost) < w {
@@ -365,7 +365,7 @@ func (g *devTier) materializeComposed(pe *embPend) {
 	for _, b := range [...]struct {
 		buf   *backend.Buf
 		words int
-	}{{&bs.embCast, batchWidth * bs.embW.k}, {&bs.embPLE, batchWidth * bs.p.PLEWidth}} {
+	}{{&bs.embCast, batchWidth * bs.embW.k}, {&bs.embPLE, batchWidth * bs.p.PLEWidth * min(bs.p.PLEDim, 1)}} {
 		if *b.buf != nil || b.words == 0 {
 			continue
 		}
@@ -449,7 +449,7 @@ func (g *devTier) composedSession(s backend.Session) {
 		// The per-layer inputs into the call's own (embPLE): the scratch's
 		// are its rows', not the call's.
 		outs, err := bs.embedOuts(ns, rd.rows)
-		if err == nil && bs.p.PLEWidth != 0 {
+		if err == nil && bs.p.PLEDim != 0 {
 			outs[len(outs)-1] = bs.embPLE
 		}
 		if err == nil {
@@ -466,7 +466,7 @@ func (g *devTier) composedSession(s backend.Session) {
 	}
 	outs := bs.embOuts[:1]
 	outs[0] = bs.embCast
-	if bs.p.PLEWidth != 0 {
+	if bs.p.PLEDim != 0 {
 		outs = append(outs, bs.embPLE)
 	}
 	if rd.err = sv.runAs(g, &rd.lc, sv.inst, pe.kind, nil, outs); rd.err != nil {

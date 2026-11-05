@@ -18,9 +18,10 @@ import (
 // qvlFixtures are the Qwen-VL family fixtures scripts/qwenvlgold.py writes:
 // transformers' own classes, converted by llama.cpp's own converter. Qwen3-VL's
 // two (synth-qwen3vl, synth-qwen3vlmoe) add their tower's deepstack rows into
-// the text model's first blocks, which a prompt's span carries no more: they
-// join when the stated tower states its deepstack.
-var qvlFixtures = []string{"synth-qwen2vl", "synth-qwen25vl", "synth-qwen35vl", "synth-glm4v", "synth-glm4vmoe"}
+// the text model's first blocks: their spans carry the golden's (Span.Deep)
+// on the model their pair converts to, whose tower states how many.
+var qvlFixtures = []string{"synth-qwen2vl", "synth-qwen25vl", "synth-qwen35vl", "synth-qwen3vl", "synth-qwen3vlmoe",
+	"synth-glm4v", "synth-glm4vmoe"}
 
 // qvlGolden is scripts/qwenvlgold.py's record of transformers' own
 // Qwen2-VL family on a prompt of text, one non-square image and text, then a
@@ -105,7 +106,16 @@ func openQVL(t *testing.T, name string, opts ...Option) (*Model, *qvlGolden) {
 	if !sourcePresent(text) {
 		testmodels.Missing(t, "MODEL MISSING: %s (set JITLLM_MODELS) -- run scripts/qwenvlgold.py %s (RULE 11)", text, name)
 	}
-	m, err := Open(jlmOf(t, text), append([]Option{WithKVF16(false)}, opts...)...)
+	src := jlmOf
+	if len(g.Image.Deep) > 0 {
+		// The taps the text model adds are its tower's: the pair's model.
+		proj := testmodels.Path("mmproj-" + name + ".gguf")
+		if !sourcePresent(proj) {
+			testmodels.Missing(t, "MODEL MISSING: %s (set JITLLM_MODELS) -- run scripts/qwenvlgold.py %s (RULE 11)", proj, name)
+		}
+		src = func(t testing.TB, p string) string { return jlmOfPair(t, p, proj) }
+	}
+	m, err := Open(src(t, text), append([]Option{WithKVF16(false)}, opts...)...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +125,7 @@ func openQVL(t *testing.T, name string, opts ...Option) (*Model, *qvlGolden) {
 // qvlSpans is the golden's prompt as spans, the image's rows transformers'
 // own tower output; grid false is the violation, the image laid out as text.
 func qvlSpans(g *qvlGolden, grid bool) []Span {
-	img := Span{Embd: g.Image.Embd}
+	img := Span{Embd: g.Image.Embd, Deep: g.Image.Deep}
 	if grid {
 		img.Grid = g.grid()
 	}

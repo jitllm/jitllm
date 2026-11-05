@@ -696,7 +696,8 @@ type LayerPlan struct {
 	// Gemma 4's E2B/E4B: PLEDim is each block's per-layer embedding width
 	// (zero for none), KVShared says the block attends to KVSource's history
 	// and computes no k or v, and NFFN is then this block's own width.
-	// PLEWidth is a row's whole per-layer input, NLayer*PLEDim.
+	// PLEWidth is a row's whole side input to the blocks: its per-layer
+	// inputs, NLayer*PLEDim, or a tower's tap rows the first blocks add.
 	PLEDim, PLEWidth int
 	// DeepSeek V3.2's lightning indexer (model.Config.Indexer): IdxHeads heads
 	// of IdxHeadDim score every cached position, the key cached at the end of

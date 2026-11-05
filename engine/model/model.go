@@ -260,6 +260,10 @@ type Config struct {
 	// layer's slice of the per-layer embeddings, zero for none.
 	NKVShared, PLEDim int
 	DoubleFFN         bool
+	// DeepTaps is how many of the first blocks add a picture's tap rows into
+	// its rows after they run (jlm.TowerTap, Qwen3-VL's deepstack): the
+	// container's tower's taps, tap i after block i.
+	DeepTaps int
 	// IdxHeads, IdxHeadDim and IdxTopK are DeepSeek V3.2's lightning indexer
 	// (indexer.go): IdxHeads heads of IdxHeadDim score every cached position,
 	// and attention reads the IdxTopK best. Zero heads means none.
@@ -1223,6 +1227,9 @@ type Model struct {
 	tower      *towerGraphs
 	towerBase  int
 	towerDense layer
+	// towerTaps is each tap's tensors (jlm.TowerTap): the dense region's at
+	// its block's index.
+	towerTaps []layer
 
 	// basePlans is ensureBlock's read plan for every text block -- the block's
 	// own weights, without its routed banks -- built once. The entries are
@@ -2675,6 +2682,13 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 	if err != nil {
 		return nil, err
 	}
+	if v := c.Vision(); v != nil && v.Tower != nil && len(v.Tower.Taps) > 0 {
+		cfg.DeepTaps = len(v.Tower.Taps)
+		if cfg.DeepTaps > cfg.NLayer || cfg.PLEDim != 0 {
+			return nil, fmt.Errorf("model: %d tap rows added after the first of %d blocks, on a model of per-layer embeddings %v: "+
+				"both would be the blocks' side input", cfg.DeepTaps, cfg.NLayer, cfg.PLEDim != 0)
+		}
+	}
 	// A block of a mixture model with no router is not a mixture: its mixer
 	// alone (Nemotron 3) or a dense FFN (Jamba). Read off the tensors: the
 	// container states the mixture model-wide.
@@ -2906,19 +2920,28 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 	// same field. It is set after the local rotary was copied above, because
 	// llama.cpp leaves gemma3's sliding layers unscaled.
 	if cfg.YarnFactor > 0 || cfg.RopeLinear > 0 {
-		if m.rope.Freqs != nil {
-			return nil, fmt.Errorf("model: %s ships rotary factors AND a scaling type; "+
-				"composing the two is not implemented", cfg.Arch)
-		}
+		var scale []float32
 		if cfg.YarnFactor > 0 {
-			m.rope.Freqs = nn.YarnFreqs(cfg.NRot, cfg.RopeBase, cfg.YarnFactor, cfg.YarnOrigCtx,
+			scale = nn.YarnFreqs(cfg.NRot, cfg.RopeBase, cfg.YarnFactor, cfg.YarnOrigCtx,
 				cfg.YarnBetaFast, cfg.YarnBetaSlow, cfg.YarnExact)
 		} else {
-			m.rope.Freqs = make([]float32, cfg.NRot/2)
-			for i := range m.rope.Freqs {
-				m.rope.Freqs[i] = float32(cfg.RopeLinear)
+			scale = make([]float32, cfg.NRot/2)
+			for i := range scale {
+				scale[i] = float32(cfg.RopeLinear)
 			}
 		}
+		// Shipped factors and a scaling both: each pair's theta divided by
+		// its factor, then scaled -- a ramp over the pair's index, so the
+		// divisors multiply (ggml_rope_ext's freq_factors under its YaRN).
+		if f := m.rope.Freqs; f != nil {
+			if len(f) != len(scale) {
+				return nil, fmt.Errorf("model: %d rotary factors for %d pairs", len(f), len(scale))
+			}
+			for i := range scale {
+				scale[i] *= f[i]
+			}
+		}
+		m.rope.Freqs = scale
 	}
 	if cfg.TiedEmbd {
 		m.output = m.embd

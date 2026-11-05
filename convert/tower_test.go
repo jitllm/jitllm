@@ -411,3 +411,131 @@ func TestQwen25VLStatesItsTower(t *testing.T) {
 		t.Errorf("the patches are %+v, want 2x2 windows' order", op)
 	}
 }
+
+// TestQwen35VLStatesItsTower converts Qwen3.5-VL's fixture, whose tower is
+// Qwen3-VL's with no deepstack taps, and reads its statement back: the
+// published processor's bounds, the patches through their biased matrix
+// plus the 8x8 learned table resampled to the patch grid in the merge
+// windows' order, LayerNorm blocks with the ungated GELU-tanh MLP, and
+// Qwen2-VL's merger.
+func TestQwen35VLStatesItsTower(t *testing.T) {
+	src := testmodels.Path("synth-qwen35vl.gguf")
+	mm := testmodels.Path("mmproj-synth-qwen35vl.gguf")
+	for _, p := range []string{src, mm} {
+		if _, err := os.Stat(p); err != nil {
+			t.Skipf("MODEL MISSING: %v (run scripts/qwenvlgold.py synth-qwen35vl) -- this gate proved nothing", err)
+		}
+	}
+	dst := filepath.Join(t.TempDir(), "qwen35vl.jlm")
+	if _, err := FromGGUFs(src, mm, dst, jlm.Fingerprint{Writer: "gate"}); err != nil {
+		t.Fatal(err)
+	}
+	f, err := jlm.Open(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	v := f.Vision()
+	if v == nil || v.Tower == nil {
+		t.Fatal("the container states no tower")
+	}
+	tw := v.Tower
+	if err := tw.Valid(); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range tw.Roles() {
+		if !f.Has(r, jlm.DenseBlock, -1) {
+			t.Errorf("the tower binds %v, which the container does not hold", r)
+		}
+	}
+	if pre := tw.Pre[0]; pre.Kind != jlm.PreSmartResize || pre.Ints[0] != 32 || pre.Ints[1] != 65536 || pre.Ints[2] != 16777216 {
+		t.Errorf("the resize is %+v, want merge windows of 32 pixels within [65536, 16777216]", pre)
+	}
+	var entry []jlm.OpCode
+	for _, op := range tw.Entry.Ops {
+		entry = append(entry, op.Code)
+	}
+	if want := []jlm.OpCode{jlm.TOpPatchify, jlm.TOpLinear, jlm.TOpPosResample, jlm.TOpAdd}; !reflect.DeepEqual(entry, want) {
+		t.Fatalf("the entry is %v, want %v", entry, want)
+	}
+	if op := tw.Entry.Ops[2]; op.Span != 8 || op.Width != 2 || op.Chain != jlm.ResampleAligned || op.Filter != jlm.TapsLinear {
+		t.Errorf("the table's resample is %+v, want 8 a side, aligned, linear, in 2x2 windows' order", op)
+	}
+	if op := tw.Entry.Ops[1]; len(op.Bind) != 2 {
+		t.Errorf("the patch matrix binds %v, want its bias too", op.Bind)
+	}
+	var gelu jlm.ExprBuilder
+	gelu.GELUTanh(jlm.Operand(0))
+	if b := tw.Block; b.Norm != jlm.NormLayer || b.Window != 0 || !reflect.DeepEqual(b.Act.Terms, gelu.T) {
+		t.Errorf("the blocks are norm %v, windows of %d, activation %+v; want LayerNorm, none, the ungated GELU-tanh", b.Norm, b.Window, b.Act)
+	}
+	var head []jlm.OpCode
+	for _, op := range tw.Head.Ops {
+		head = append(head, op.Code)
+	}
+	if want := []jlm.OpCode{jlm.TOpLayerNorm, jlm.TOpFold, jlm.TOpLinear, jlm.TOpStated, jlm.TOpLinear}; !reflect.DeepEqual(head, want) {
+		t.Errorf("the head is %v, want %v", head, want)
+	}
+}
+
+// TestQwen3VLStatesItsTaps converts Qwen3-VL's fixture, whose tower taps
+// blocks 0 and 2 (clip.vision.is_deepstack_layers), and reads the taps back:
+// one a listed block, in order, each its block's rows through its own merger
+// -- the merge window's patches one row, its LayerNorm, two matrices with
+// the exact GELU between -- whose tensors the container holds at the
+// block's index.
+func TestQwen3VLStatesItsTaps(t *testing.T) {
+	src := testmodels.Path("synth-qwen3vl.gguf")
+	mm := testmodels.Path("mmproj-synth-qwen3vl.gguf")
+	for _, p := range []string{src, mm} {
+		if _, err := os.Stat(p); err != nil {
+			t.Skipf("MODEL MISSING: %v (run scripts/qwenvlgold.py synth-qwen3vl) -- this gate proved nothing", err)
+		}
+	}
+	dst := filepath.Join(t.TempDir(), "qwen3vl.jlm")
+	if _, err := FromGGUFs(src, mm, dst, jlm.Fingerprint{Writer: "gate"}); err != nil {
+		t.Fatal(err)
+	}
+	f, err := jlm.Open(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	v := f.Vision()
+	if v == nil || v.Tower == nil {
+		t.Fatal("the container states no tower")
+	}
+	tw := v.Tower
+	if err := tw.Valid(); err != nil {
+		t.Fatal(err)
+	}
+	var blocks []int32
+	for _, tp := range tw.Taps {
+		blocks = append(blocks, tp.Block)
+	}
+	if !reflect.DeepEqual(blocks, []int32{0, 2}) {
+		t.Fatalf("the taps read blocks %v, want [0 2]", blocks)
+	}
+	var gelu jlm.ExprBuilder
+	gelu.GELUErf(jlm.Operand(0))
+	for _, tp := range tw.Taps {
+		var codes []jlm.OpCode
+		for _, op := range tp.Prog.Ops {
+			codes = append(codes, op.Code)
+			for _, r := range op.Bind {
+				if !f.Has(r, jlm.DenseBlock, tp.Block) {
+					t.Errorf("tap %d binds %v, which the container does not hold at its index", tp.Block, r)
+				}
+			}
+		}
+		if want := []jlm.OpCode{jlm.TOpFold, jlm.TOpLayerNorm, jlm.TOpLinear, jlm.TOpStated, jlm.TOpLinear}; !reflect.DeepEqual(codes, want) {
+			t.Errorf("tap %d is %v, want %v", tp.Block, codes, want)
+		}
+		if op := tp.Prog.Ops[3]; !reflect.DeepEqual(op.Expr.Terms, gelu.T) || op.Width != 256 {
+			t.Errorf("tap %d's activation is %+v over %d, want the exact GELU over 256", tp.Block, op.Expr, op.Width)
+		}
+	}
+	if op := tw.Entry.Ops[2]; op.Code != jlm.TOpPosResample || op.Span != 8 {
+		t.Errorf("the entry's third op is %+v, want the 8x8 table's resample", op)
+	}
+}

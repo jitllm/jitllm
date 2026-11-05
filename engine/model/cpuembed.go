@@ -190,10 +190,14 @@ type rowSrc struct {
 	given []givenRun
 }
 
-// givenRun is the caller's rows from row at on, n_embd each.
+// givenRun is the caller's rows from row at on, n_embd each, and where its
+// span carries them its tap rows: deep is the span's [taps][n][n_embd], the
+// run's first row the span's row n0.
 type givenRun struct {
-	at   int
-	rows []float32
+	at    int
+	rows  []float32
+	deep  []float32
+	n, n0 int
 }
 
 // tokenRows is the source of ids' vocabulary rows.
@@ -210,7 +214,7 @@ func (r rowSrc) from(n int, d int) rowSrc {
 			continue
 		}
 		lo := max(g.at, n)
-		out.given = append(out.given, givenRun{at: lo - n, rows: g.rows[(lo-g.at)*d:]})
+		out.given = append(out.given, givenRun{at: lo - n, rows: g.rows[(lo-g.at)*d:], deep: g.deep, n: g.n, n0: g.n0 + lo - g.at})
 	}
 	return out
 }

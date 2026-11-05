@@ -25,6 +25,7 @@ func TestQwen2VLTowerRunsOnTheCard(t *testing.T) {
 				t.Fatal(err)
 			}
 			want = slices.Clone(want)
+			wantDeep := slices.Clone(host.EncodedTaps())
 			host.Close()
 			nb := len(m.tower.blocks)
 			for _, dev := range stepDevices() {
@@ -50,14 +51,30 @@ func TestQwen2VLTowerRunsOnTheCard(t *testing.T) {
 						}
 						got, err := s.EncodePicture(img)
 						got = slices.Clone(got)
+						deep := slices.Clone(s.EncodedTaps())
 						s.Close()
 						if err != nil {
 							t.Fatalf("%d blocks on %s: %v", blocks, dev, err)
+						}
+						// Every part the picture ran was formed at the placement.
+						if st := d.Stats(); st.FormedAtStep != 0 {
+							t.Fatalf("%d of the tower's parts formed at a step on %s, not at the placement", st.FormedAtStep, dev)
 						}
 						e, worst := nmseOf(got, want)
 						t.Logf("%s, %d of %d tower blocks: NMSE %.3e, max|d| %.3g from the CPU device's rows", dev, blocks, nb, e, worst)
 						if math.IsNaN(e) || e > 1e-3 {
 							t.Fatalf("%d of the tower's blocks on %s sit at NMSE %.3e from the CPU device's rows", blocks, dev, e)
+						}
+						// Qwen3-VL's taps are the rows the blocks before them left on the card.
+						if len(deep) != len(wantDeep) {
+							t.Fatalf("%d tap values on %s, %d on the CPU device", len(deep), dev, len(wantDeep))
+						}
+						if len(deep) > 0 {
+							de, dw := nmseOf(deep, wantDeep)
+							t.Logf("%s, %d of %d tower blocks: taps at NMSE %.3e, max|d| %.3g", dev, blocks, nb, de, dw)
+							if math.IsNaN(de) || de > 1e-3 {
+								t.Fatalf("the taps over %d of the tower's blocks on %s sit at NMSE %.3e from the CPU device's", blocks, dev, de)
+							}
 						}
 						if whole == nil {
 							whole = got
