@@ -8,8 +8,8 @@ import (
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/backend/vulkan"
 	"github.com/jitllm/jitllm/composer/ir"
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testdevices"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // realDevices opens every device on this host -- CUDA, Vulkan and Metal --

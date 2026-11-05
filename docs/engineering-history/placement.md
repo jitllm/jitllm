@@ -994,7 +994,7 @@ packed readers", with this file's own record of a plane change reaching `matvec.
 not `mma.go` as the reason to fear it. **That premise is false and a review refuted
 it by reading the callers:**
 
-    engine/nn/packed.go, the amd64/arm64 emitters, kernels/packedref.go
+    nn/packed.go, the amd64/arm64 emitters, kernels/packedref.go
         receive already-resolved PLANE POINTERS. They compute no container
         expert offset at all.
     kernels/mma.go   MatVecMMA REFUSES Experts > 1 outright.

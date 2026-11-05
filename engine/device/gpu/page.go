@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/engine/sched"
+	"github.com/jitllm/jitllm/nn"
+	"github.com/jitllm/jitllm/sched"
 )
 
 // Block paging: a device holds N block slots and swaps, instead of declining a
@@ -205,7 +205,7 @@ func (g *devTier) slotsIfPerm(n uint64) int {
 
 // victim is the resident block whose next use is furthest away, or -1. On the
 // cyclic layer scan that is Belady's optimum and it is computable
-// (sched.NextUse, shared with the host ring; see engine/sched/cyclic.go): LRU is
+// (sched.NextUse, shared with the host ring; see sched/cyclic.go): LRU is
 // pessimal there, while this pins a prefix of slots-1 blocks and thrashes only
 // the last slot.
 //

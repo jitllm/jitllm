@@ -1,6 +1,6 @@
 package engine
 
-import "github.com/jitllm/jitllm/engine/nn"
+import "github.com/jitllm/jitllm/nn"
 
 // A hybrid's restore points: where the prefix cache keeps a linear block's
 // recurrent summary, so a prompt that shares a prefix with an earlier one

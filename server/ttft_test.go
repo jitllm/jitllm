@@ -17,8 +17,8 @@ import (
 
 	"connectrpc.com/connect"
 
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/model"
+	"github.com/jitllm/jitllm/nn"
 
 	"github.com/jitllm/jitllm/engine"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"

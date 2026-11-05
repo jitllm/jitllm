@@ -6,7 +6,7 @@ import (
 
 	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/device/gpu"
-	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // offCards is the blocks of [lo, hi) the engine was to place and no card

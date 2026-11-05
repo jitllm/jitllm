@@ -14,7 +14,7 @@ import (
 )
 
 // batchCmd decodes one prompt as `-batch` sessions leasing one instance on one
-// device, continuously batched (model.Batcher), and reports the aggregate
+// device, continuously batched (engine.Batcher), and reports the aggregate
 // rate: the concurrent-serving number, where run reports one conversation's.
 //
 // Every session gets the same prompt, admitted in chunks beside the decoding

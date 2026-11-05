@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/jitllm/jitllm/engine/sched"
+	"github.com/jitllm/jitllm/sched"
 
 	"syscall"
 	"testing"

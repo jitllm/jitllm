@@ -1862,7 +1862,7 @@ backends:**
 | spirv | RTX 3050 Ti (Vulkan) | **5.960e-08** | 5.960e-08 |
 | msl | M4 | **5.960e-08** | 5.960e-08 |
 
-5.960e-08 is ONE ULP at 1.0, and it is the same figure engine/nn/ropetable.go records
+5.960e-08 is ONE ULP at 1.0, and it is the same figure nn/ropetable.go records
 for the host kernel against the float64 table it replaced. Eight geometries from
 four rotary pairs (stories260K's head dimension is eight) to 128, one to 32
 rows, mscale on and off, and eighteen positions from 0 to 2^28-1.
@@ -5905,7 +5905,7 @@ most 2032 (8323072 units of 2^-12, under 2^24), so the sum and its mod-4
 fold are exact too. The only rounded quantity is the residual plane
 L_i = U_i - H_i, whose digit product is under 0.0156, giving ~1e-9
 quarter-turns of error (~1e-7 radians at every position; see
-engine/nn/ropetable.go).
+nn/ropetable.go).
 
 The per-model block is PLANE-MAJOR -- all of H0, then all of H1, ... -- so a
 kernel reads each plane as one contiguous vector and the four digit
@@ -7644,7 +7644,7 @@ row where the composer's reads two.
   reads 1e-14 to 1e-12 over four rows at once (TestComposedCPUHead), and the
   original pass fails the same gate at 5e+05 to 8e+05 and 3.8 on the softcap.
   Escape analysis (go build -gcflags=-m, line numbers dropped) against the
-  tree before this work, over jit, engine/device/gpu, engine/model, engine/nn and
+  tree before this work, over jit, engine/device/gpu, engine/model, nn and
   graph, adds no heap escape to forward.go, step.go, layer.go or
   launch.go: the additions are graph.Head.Build's thirteen (built once, then
   cached), two appends and a local in the cse sweep (formation) and one error
@@ -7801,7 +7801,7 @@ row where the composer's reads two.
   TestForwardSampleMatchesSampleOverForward, TestComposedPromptIsNotServed
   and TestComposedShadowHoldsEveryBlock (Llama-3.2-1B) pass.
   Escape analysis against the tree before this work (go build -gcflags=-m,
-  line numbers dropped, jit, engine/device/gpu, engine/model, engine/nn,
+  line numbers dropped, jit, engine/device/gpu, engine/model, nn,
   graph) adds the forms' builds (their maps and a table's planes
   name, once a form), error paths, the placement's planes and table list,
   and appends onto the staging bytes the tier reuses (the rows' positions,
@@ -8017,7 +8017,7 @@ row where the composer's reads two.
   name every step. TestDecodeDoesNotAllocate's composed arms on
   Llama-3.2-1B make no engine allocation with every row gathered, both
   builds. Escape analysis against the tree before (engine/device/gpu,
-  engine/model, engine/nn): the forms' builds, the fault rewrite, error paths
+  engine/model, nn): the forms' builds, the fault rewrite, error paths
   and the staging bytes' growth, none on a warm step's path; the cross-card
   read-back's session closure allocates, as main's did. Open: the sampler's
   top-k with its penalty and the label pick (partSampleTopK, partSamplePick):

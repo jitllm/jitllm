@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // The instance half of speculative decoding (spec.go): one call that runs rows of

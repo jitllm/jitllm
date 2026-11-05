@@ -32,9 +32,9 @@ import (
 	"time"
 
 	"github.com/jitllm/jitllm/backend/vulkan"
-	"github.com/jitllm/jitllm/engine/sched"
 	"github.com/jitllm/jitllm/internal/cmd/goheap"
 	"github.com/jitllm/jitllm/internal/localserver"
+	"github.com/jitllm/jitllm/sched"
 
 	"github.com/jitllm/jitllm/dev/bench"
 
@@ -43,9 +43,9 @@ import (
 	"github.com/jitllm/jitllm/engine"
 	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/device/gpu"
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/model"
+	"github.com/jitllm/jitllm/nn"
 	"github.com/jitllm/jitllm/tok"
 )
 
@@ -383,7 +383,7 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	m, err := model.Open(path, mo...)
 	// The meter starts at Open, not after placement: on a streamed model
 	// admission is the largest read, and starting later leaves it uncounted.
-	// See model.PhaseRow.
+	// See engine.PhaseRow.
 	var ph *engine.PhaseMeter
 	if m != nil {
 		ph = engine.NewPhaseMeter(m)
@@ -502,7 +502,7 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 		extra = model.SpanPositions(spans, m.Cfg.NEmbd) - len(ids)
 	}
 	// Whether the pool spins or parks between regions is decided per token by
-	// the engine, by whether the token paged anything in (model.Instance.forward);
+	// the engine, by whether the token paged anything in (engine.Instance.forward);
 	// JITLLM_SPIN_US still fixes it.
 	// No -n: generate until the model ends its reply, in a session as long as
 	// the model's context, as the server's sessions are by default. KV pages
@@ -940,7 +940,7 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 				per[i].Device, n, per[i].Blocks, served)
 		}
 		fmt.Fprintf(os.Stderr, "device %-44s %d block(s) of %d, whatever no device took\n",
-			"host", c.NLayer-st.GPULayers(), c.NLayer)
+			nn.CPU, c.NLayer-st.GPULayers(), c.NLayer)
 		// The four terms of a page-in, summed over the whole run. TLayer is the
 		// device's own compute: page-in happens in submit(), outside
 		// layersOnce, so TLayer bounds what overlapping a page-in with compute
@@ -1569,7 +1569,7 @@ func loadOpts(t []tok.Option, budget uint64) ([]model.Option, []engine.Option) {
 		o = append(o, engine.WithPool(p...))
 	}
 	// JITLLM_CHUNK pins a prompt chunk's rows on the CPU device
-	// (model.WithPrefillChunk).
+	// (engine.WithPrefillChunk).
 	if n, err := strconv.Atoi(os.Getenv("JITLLM_CHUNK")); err == nil && n >= 1 {
 		o = append(o, engine.WithPrefillChunk(n))
 	}
@@ -1586,7 +1586,7 @@ func loadOpts(t []tok.Option, budget uint64) ([]model.Option, []engine.Option) {
 	// JITLLM_SH_OVERLAP=0 runs a mixture's shared experts after its routed
 	// read instead of behind it.
 	// JITLLM_EXPERTS=host|card places every mixture block's routed experts
-	// off the card (model.WithExperts); -placement's %host / %card per block.
+	// off the card (engine.WithExperts); -placement's %host / %card per block.
 	if e := os.Getenv("JITLLM_EXPERTS"); e != "" {
 		o = append(o, engine.WithExperts(e))
 	}
@@ -1597,22 +1597,22 @@ func loadOpts(t []tok.Option, budget uint64) ([]model.Option, []engine.Option) {
 	if os.Getenv("JITLLM_STREAM_TRIAL") == "0" {
 		o = append(o, engine.WithStreamTrial(false))
 	}
-	// JITLLM_FUSE=0 runs decode one pool region per op (model.WithBlockFusion).
+	// JITLLM_FUSE=0 runs decode one pool region per op (engine.WithBlockFusion).
 	if os.Getenv("JITLLM_FUSE") == "0" {
 		o = append(o, engine.WithBlockFusion(false))
 	}
 	// JITLLM_SERVING_SPLIT=0 keeps a prefill beside a decoding session on the
-	// P and E cores (model.WithServingSplit).
+	// P and E cores (engine.WithServingSplit).
 	if os.Getenv("JITLLM_SERVING_SPLIT") == "0" {
 		o = append(o, engine.WithServingSplit(false))
 	}
 	// JITLLM_FUSE_GROUPS=0 keeps a fused run's matvecs a phase each
-	// (model.WithMatVecGroups).
+	// (engine.WithMatVecGroups).
 	if os.Getenv("JITLLM_FUSE_GROUPS") == "0" {
 		o = append(o, engine.WithMatVecGroups(false))
 	}
 	// JITLLM_FUSE_RESID=1 folds the residual add into the o and down groups
-	// (model.WithResidualFold).
+	// (engine.WithResidualFold).
 	if os.Getenv("JITLLM_FUSE_RESID") == "1" {
 		o = append(o, engine.WithResidualFold(true))
 	}
@@ -1620,7 +1620,7 @@ func loadOpts(t []tok.Option, budget uint64) ([]model.Option, []engine.Option) {
 		o = append(o, engine.WithSharedOverlap(false))
 	}
 	// JITLLM_TAIL_ROWS=0 runs a prompt's few-row chunk batched rather than as
-	// a ragged step of its rows (model.WithTailRows).
+	// a ragged step of its rows (engine.WithTailRows).
 	if os.Getenv("JITLLM_TAIL_ROWS") == "0" {
 		o = append(o, engine.WithTailRows(false))
 	}
@@ -1640,7 +1640,7 @@ func loadOpts(t []tok.Option, budget uint64) ([]model.Option, []engine.Option) {
 	}
 	mo = append(mo, model.WithPreload(preload))
 	// JITLLM_DEVICE_SAMPLE=on|off forces where a sampled token
-	// is drawn (model.WithDeviceSample); unset or auto draws on the device
+	// is drawn (engine.WithDeviceSample); unset or auto draws on the device
 	// wherever it serves.
 	switch os.Getenv("JITLLM_DEVICE_SAMPLE") {
 	case "on":
@@ -1677,7 +1677,7 @@ func modelOptions() []engine.Option {
 		o = append(o, engine.WithProfile(true))
 	}
 	// JITLLM_PREFILL_FORWARD=n runs a prompt of up to n tokens a token at a
-	// time (model.WithPrefillForwardRows).
+	// time (engine.WithPrefillForwardRows).
 	if v := os.Getenv("JITLLM_PREFILL_FORWARD"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
 			o = append(o, engine.WithPrefillForwardRows(n))

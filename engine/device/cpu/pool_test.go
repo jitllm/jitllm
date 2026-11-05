@@ -4,7 +4,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/jitllm/jitllm/engine/sched"
+	"github.com/jitllm/jitllm/sched"
 )
 
 // TestPoolCoversEveryRangeOnce runs a region over the CPU device's pool,

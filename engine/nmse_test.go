@@ -3,7 +3,7 @@ package engine
 import (
 	"math"
 
-	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // nmseOf is the NMSE of got against want and the largest absolute difference.

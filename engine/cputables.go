@@ -3,8 +3,8 @@ package engine
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/model"
+	"github.com/jitllm/jitllm/nn"
 
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/graph"

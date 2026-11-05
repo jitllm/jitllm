@@ -10,8 +10,8 @@ ones that went quiet. Every decision is one a caller can force or forbid.
 ## What exists
 
 - Preemption (`server/preempt.go`): a per-model KV budget; a generate that
-  would exceed it parks other sessions of the same model (their history home
-  and into a store), lowest priority then least recently used, and the parked
+  would exceed it parks other sessions of the same model (their history to the
+  CPU device and into a store), lowest priority then least recently used, and the parked
   session resumes byte for byte. It moves history, never weights, and never
   across models.
 - Plasticity in the engine: `gpu.GPU.AddDevices` (a running model takes a
@@ -30,7 +30,7 @@ loaded on the CPU when the server has a device.
 **Make room.** When the card declines for lack of room, the orchestrator
 demotes the least deserving sessions on that card -- not generating (their
 lock is free), lowest priority, then idle longest, sessions of other models
-first -- by bringing their blocks home with their history (`MoveBlocks` to
+first -- by moving their blocks to the CPU device with their history (`MoveBlocks` to
 "cpu"), then offers again. A block's weights leave the card when no session of its
 model holds it there (the tier's rule). It never demotes a running session,
 and it stops when the promotion fits or no victim is left: then the session
@@ -63,7 +63,7 @@ Defaults on: the server reaches the best placement without user tuning.
 ## Gates
 
 - `TestTheTalkingModelGetsTheCard`: two models on 1200 MiB of one card. The
-  model generating gets the card every turn and the idle one goes home (9
+  model generating gets the card every turn and the idle one moves to the CPU (9
   promotions and 5 demotions over three turns on a V100), each turn's first
   token the unmoved controls' (host and card). The stats carry the same
   counts. Without the registry both models fit their own budget, nothing

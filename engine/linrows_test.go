@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // A hybrid's prompt resumed from the prefix cache, its recurrent summary

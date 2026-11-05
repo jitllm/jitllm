@@ -9,7 +9,7 @@ import (
 
 	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/device/cpudev"
-	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // Session is one conversation's history: what moves with it from instance
@@ -219,7 +219,7 @@ func (s *Instance) attachTier() error {
 	sess := s.Session
 	if sess.ld != nil && sess.tier == s.ldCand {
 		if !s.borrowsJIT() {
-			s.m.ShareActWindow(sess.ld)
+			shareActWindow(s.m, sess.ld)
 		}
 		return nil
 	}
@@ -249,7 +249,7 @@ func (s *Instance) attachTier() error {
 	s.setLD(ld)
 	sess.tier, sess.kvRoom = s.ldCand, 0
 	if !s.borrowsJIT() {
-		s.m.ShareActWindow(ld)
+		shareActWindow(s.m, ld)
 	}
 	return nil
 }
@@ -343,7 +343,7 @@ func (s *Instance) bindOwn() {
 	s.own.away = true
 	s.headTo(s.own)
 	if s.own.ld != nil && !s.borrowsJIT() {
-		s.m.ShareActWindow(s.own.ld)
+		shareActWindow(s.m, s.own.ld)
 	}
 }
 

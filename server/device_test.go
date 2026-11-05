@@ -164,7 +164,7 @@ func TestTheSeamMovesThroughThePlacementService(t *testing.T) {
 }
 
 // TestTuneSeamReadsTheSessionsSnapshot: TuneSeam's ticker reports what the
-// tuner settled on while the session generates. model.Instance's tuner is
+// tuner settled on while the session generates. engine.Instance's tuner is
 // written by Forward with no lock, so the report must come from the snapshot
 // the session publishes under its own lock, never from the Instance.
 //

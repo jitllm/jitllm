@@ -12,8 +12,8 @@ import (
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/composer/ir"
 	"github.com/jitllm/jitllm/engine/device/cpu"
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/graph"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // TestComposedRopeTableOverAxes runs the composer's rotary table over one

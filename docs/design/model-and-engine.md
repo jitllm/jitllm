@@ -3,9 +3,13 @@
 Stated by the user: *"model should live outside of engine ... engine manages
 model instance not model itself"*. A model is the weights, loaded once; the
 engine makes instances of it, runs sessions on them and schedules them
-(AGENTS.md, "The shape"). Today both live in `engine/model`, one package of
-~32,000 lines in which `Model` holds the engine's state beside its own and
-the instance reaches into the model's fields.
+(AGENTS.md, "The shape"). Both lived in `engine/model`, one package of
+~32,000 lines in which `Model` held the engine's state beside its own and
+the instance reached into the model's fields; they are two packages now,
+`model/` and `engine/`, and nothing the model builds on is under `engine/`
+(`srcgate.TestTheModelImportsNothingOfTheEngine`). The vocabulary both
+speak -- the plans a device runs (`nn`), the tool grammars (`grammar`), the
+memory budgets and pool (`sched`) -- is beside them.
 
 ## What each side owns
 
@@ -23,7 +27,7 @@ the instance reaches into the model's fields.
 - what an input is decoded from (`wav.go`, the image preprocessing the
   tower reads).
 
-**The engine** (`engine/instance`, beside `engine/device/*`):
+**The engine** (`engine/`, beside `engine/device/*`):
 
 - `Instance`, `Session`, the `Scheduler` and `Pool`, `StepRuns`, the
   `Batcher`, prefill and decode, speculation, sampling;
@@ -63,8 +67,8 @@ speculation, chunks, devices) is the engine's.
    accesses in the instance's files go to zero (a source gate counts
    them).
 3. The move: the model's files to `model/`, the instance's to
-   `engine/instance`, their tests with them; `server` and `cmd/jitllm`
+   `engine/`, their tests with them; `server` and `cmd/jitllm`
    import both. A source gate holds that `model/` imports nothing under
-   `engine/`, as the composer's does.
+   `engine/` (`srcgate.TestTheModelImportsNothingOfTheEngine`).
 4. The options split, and `model.Open` returning a model no instance
-   has been made of; `engine/instance.New(m, opts...)` makes one.
+   has been made of; `engine.NewInstance(m, maxSeq, opts...)` makes one.

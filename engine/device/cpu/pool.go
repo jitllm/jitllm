@@ -3,7 +3,7 @@ package cpu
 import (
 	"runtime"
 
-	"github.com/jitllm/jitllm/engine/sched"
+	"github.com/jitllm/jitllm/sched"
 )
 
 // Pool is the CPU device's workers: a view of the process's workers on the

@@ -951,16 +951,18 @@ func (x *GetStatsResponse) GetOrchestrator() *OrchestratorStats {
 }
 
 // OrchestratorStats is the server moving blocks on its own initiative: a
-// session that generates promoted onto the cards, idle ones demoted home to
-// make room.
+// session that generates promoted onto the cards, idle ones moved to the CPU
+// device to make room.
 type OrchestratorStats struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Enabled       bool                   `protobuf:"varint,1,opt,name=enabled,proto3" json:"enabled,omitempty"`
-	Promotions    int64                  `protobuf:"varint,2,opt,name=promotions,proto3" json:"promotions,omitempty"`
-	Demotions     int64                  `protobuf:"varint,3,opt,name=demotions,proto3" json:"demotions,omitempty"`
-	BlocksUp      int64                  `protobuf:"varint,4,opt,name=blocks_up,json=blocksUp,proto3" json:"blocks_up,omitempty"`
-	BlocksHome    int64                  `protobuf:"varint,5,opt,name=blocks_home,json=blocksHome,proto3" json:"blocks_home,omitempty"`
-	Moves         []*OrchestratorMove    `protobuf:"bytes,6,rep,name=moves,proto3" json:"moves,omitempty"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Enabled    bool                   `protobuf:"varint,1,opt,name=enabled,proto3" json:"enabled,omitempty"`
+	Promotions int64                  `protobuf:"varint,2,opt,name=promotions,proto3" json:"promotions,omitempty"`
+	Demotions  int64                  `protobuf:"varint,3,opt,name=demotions,proto3" json:"demotions,omitempty"`
+	// The blocks the promotions moved onto the cards, and the demotions onto
+	// the CPU device.
+	BlocksToCards int64               `protobuf:"varint,4,opt,name=blocks_to_cards,json=blocksToCards,proto3" json:"blocks_to_cards,omitempty"`
+	BlocksToCpu   int64               `protobuf:"varint,5,opt,name=blocks_to_cpu,json=blocksToCpu,proto3" json:"blocks_to_cpu,omitempty"`
+	Moves         []*OrchestratorMove `protobuf:"bytes,6,rep,name=moves,proto3" json:"moves,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1016,16 +1018,16 @@ func (x *OrchestratorStats) GetDemotions() int64 {
 	return 0
 }
 
-func (x *OrchestratorStats) GetBlocksUp() int64 {
+func (x *OrchestratorStats) GetBlocksToCards() int64 {
 	if x != nil {
-		return x.BlocksUp
+		return x.BlocksToCards
 	}
 	return 0
 }
 
-func (x *OrchestratorStats) GetBlocksHome() int64 {
+func (x *OrchestratorStats) GetBlocksToCpu() int64 {
 	if x != nil {
-		return x.BlocksHome
+		return x.BlocksToCpu
 	}
 	return 0
 }
@@ -1044,7 +1046,8 @@ type OrchestratorMove struct {
 	SessionId  string                 `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
 	ModelId    string                 `protobuf:"bytes,3,opt,name=model_id,json=modelId,proto3" json:"model_id,omitempty"`
 	Blocks     int32                  `protobuf:"varint,4,opt,name=blocks,proto3" json:"blocks,omitempty"`
-	// "device" or "host".
+	// The devices the blocks went to, by name: "cpu", or the cards that took
+	// them ("cuda:0,cuda:1").
 	To string `protobuf:"bytes,5,opt,name=to,proto3" json:"to,omitempty"`
 	// Why, in words: "promote: generating", "make room for <session>".
 	Why           string  `protobuf:"bytes,6,opt,name=why,proto3" json:"why,omitempty"`
@@ -1370,16 +1373,15 @@ const file_jitllm_v1_telemetry_proto_rawDesc = "" +
 	"\bsessions\x18\x03 \x03(\v2\x17.jitllm.v1.SessionStatsR\bsessions\x12+\n" +
 	"\adevices\x18\x04 \x03(\v2\x11.jitllm.v1.DeviceR\adevices\x12)\n" +
 	"\x04host\x18\x05 \x01(\v2\x15.jitllm.v1.HostMemoryR\x04host\x12@\n" +
-	"\forchestrator\x18\x06 \x01(\v2\x1c.jitllm.v1.OrchestratorStatsR\forchestrator\"\xdc\x01\n" +
+	"\forchestrator\x18\x06 \x01(\v2\x1c.jitllm.v1.OrchestratorStatsR\forchestrator\"\xea\x01\n" +
 	"\x11OrchestratorStats\x12\x18\n" +
 	"\aenabled\x18\x01 \x01(\bR\aenabled\x12\x1e\n" +
 	"\n" +
 	"promotions\x18\x02 \x01(\x03R\n" +
 	"promotions\x12\x1c\n" +
-	"\tdemotions\x18\x03 \x01(\x03R\tdemotions\x12\x1b\n" +
-	"\tblocks_up\x18\x04 \x01(\x03R\bblocksUp\x12\x1f\n" +
-	"\vblocks_home\x18\x05 \x01(\x03R\n" +
-	"blocksHome\x121\n" +
+	"\tdemotions\x18\x03 \x01(\x03R\tdemotions\x12&\n" +
+	"\x0fblocks_to_cards\x18\x04 \x01(\x03R\rblocksToCards\x12\"\n" +
+	"\rblocks_to_cpu\x18\x05 \x01(\x03R\vblocksToCpu\x121\n" +
 	"\x05moves\x18\x06 \x03(\v2\x1b.jitllm.v1.OrchestratorMoveR\x05moves\"\xbf\x01\n" +
 	"\x10OrchestratorMove\x12\x1f\n" +
 	"\vunix_millis\x18\x01 \x01(\x03R\n" +

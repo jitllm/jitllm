@@ -252,7 +252,7 @@ func TestSessionsOverlapOnCUDA(t *testing.T) {
 	}
 }
 
-// testInstance is model.NewInstance for a gate: a refusal fails the test.
+// testInstance is engine.NewInstance for a gate: a refusal fails the test.
 func testInstance(tb testing.TB, m *model.Model, maxSeq int, opts ...engine.Option) *engine.Instance {
 	tb.Helper()
 	s, err := engine.NewInstance(m, maxSeq, opts...)

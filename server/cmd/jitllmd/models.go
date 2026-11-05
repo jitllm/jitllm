@@ -11,6 +11,7 @@ import (
 	"connectrpc.com/connect"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/nn"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
@@ -206,7 +207,7 @@ func listModels(w io.Writer, m *v1.ListModelsResponse) {
 	loaded := m.GetLoaded()
 	fmt.Fprintf(w, "\nloaded (%d)\n", len(loaded))
 	for _, lm := range loaded {
-		where := "host"
+		where := nn.CPU
 		if ids := lm.GetDefaultDeviceIds(); len(ids) > 0 {
 			where = strings.Join(ids, ",")
 		}
@@ -282,7 +283,7 @@ func describeModel(w io.Writer, m *v1.ModelInfo) {
 		fmt.Fprintf(w, "  chat         NO -- a -chat request against this model is refused rather "+
 			"than run as a raw completion\n")
 	}
-	where := "host"
+	where := nn.CPU
 	if ids := m.GetDefaultDeviceIds(); len(ids) > 0 {
 		where = strings.Join(ids, ",")
 	}

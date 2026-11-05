@@ -10,6 +10,7 @@ import (
 
 	"connectrpc.com/connect"
 
+	"github.com/jitllm/jitllm/nn"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
@@ -261,7 +262,7 @@ func printStarted(w io.Writer, s *v1.GenerateStarted) {
 	if s == nil {
 		return
 	}
-	where := "host"
+	where := nn.CPU
 	if s.GetDeviceBlocks() > 0 {
 		where = strings.Join(s.GetDeviceIds(), ",")
 		if where == "" {
@@ -277,7 +278,7 @@ func printStarted(w io.Writer, s *v1.GenerateStarted) {
 		durMS(s.GetPrefillMillis()))
 	fmt.Fprintf(w, "queued   %s behind %d request(s)\n",
 		durMS(s.GetQueuedMillis()), s.GetQueueDepthOnEntry())
-	fmt.Fprintf(w, "blocks   %d on %s, %d on host\n",
+	fmt.Fprintf(w, "blocks   %d on %s, %d on cpu\n",
 		s.GetDeviceBlocks(), where, s.GetHostBlocks())
 }
 
@@ -304,7 +305,7 @@ func printFinished(w io.Writer, s *v1.GenerateStarted, f *v1.GenerateFinished, c
 		finishName(f.GetReason()), stop,
 		f.GetPromptTokens(), f.GetCompletionTokens(), f.GetPosition())
 
-	where := "host"
+	where := nn.CPU
 	if s != nil && s.GetDeviceBlocks() > 0 {
 		if ids := strings.Join(s.GetDeviceIds(), ","); ids != "" {
 			where = fmt.Sprintf("%s + host", ids)

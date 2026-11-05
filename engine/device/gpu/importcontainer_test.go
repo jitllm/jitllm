@@ -5,9 +5,9 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/internal/offheap"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // TestAContainerWeightIsNotRepackedOnAUnifiedDevice offers a block whose

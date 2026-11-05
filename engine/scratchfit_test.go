@@ -230,7 +230,7 @@ func promptFits(t *testing.T, m *model.Model, spec string, io ...Option) {
 
 // TestAStepAtMaxRowsDoesNotOOMAFullCard is the server's step loop on a card
 // that is full once its two sessions are placed: a 512-row step (one session's
-// prompt chunk beside the other's decode token, model.MaxStepRows in all)
+// prompt chunk beside the other's decode token, MaxStepRows in all)
 // needs the step's scratch and 512 rows of logits. With StepRows the device
 // reserved them at placement, so the step runs as one across both sessions
 // with nothing left to ask for. The violation asks the full card for them at

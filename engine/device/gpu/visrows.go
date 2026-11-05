@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // A vision tower's set is sized to the picture it encodes.
@@ -31,7 +31,7 @@ import (
 // whose sizes alternate (an encoder's questions, short and long) do not
 // rebuild the set -- and compile its kernels -- at every call. A picture the budget cannot hold is
 // refused with nothing allocated, and the instance takes tower blocks to the CPU until
-// it fits (model.Instance.reserveTowerRows): the picture encodes on the host,
+// it fits (engine.Instance.reserveTowerRows): the picture encodes on the host,
 // never out of memory. The last tower block to leave takes the set with it
 // (dropIdleTower), and so does a first block the budget refused.
 

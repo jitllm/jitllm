@@ -2,7 +2,7 @@ package gpu
 
 import (
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // The device sampler (nn.Head.SampleK): after the head, the composed walk

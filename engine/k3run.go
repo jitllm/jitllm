@@ -1,7 +1,7 @@
 package engine
 
 import (
-	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // k3Plan adjusts block li's plan for Kimi-K3: the residual attention's mixes

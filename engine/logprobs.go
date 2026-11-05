@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"unsafe"
 
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/model"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // TopLogprob is one candidate token and its log-probability.

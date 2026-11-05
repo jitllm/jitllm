@@ -10,7 +10,7 @@ import (
 
 	"github.com/jitllm/jitllm/model"
 
-	"github.com/jitllm/jitllm/engine/grammar"
+	"github.com/jitllm/jitllm/grammar"
 )
 
 // The tool-call syntaxes are held to each family's own template: the

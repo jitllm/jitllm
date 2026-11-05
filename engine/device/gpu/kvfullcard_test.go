@@ -3,7 +3,7 @@ package gpu
 import (
 	"testing"
 
-	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // TestHistoryMovesToTheCPUFromAFullCard is the small card a server parks rows on:

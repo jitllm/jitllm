@@ -11,7 +11,7 @@ import (
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
-// The step loop's gates on the host (batch.go, model.StepRuns' host arm):
+// The step loop's gates on the host (batch.go, engine.StepRuns' host arm):
 // concurrent generates on a model with no device decode as rows of shared
 // host passes over the weights, through the real handler, and come out as
 // each would alone.

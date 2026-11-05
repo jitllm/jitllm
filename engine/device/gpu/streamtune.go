@@ -15,7 +15,7 @@ import (
 // sheet size's.
 //
 // Each knob is a ladderTuner, run one after another so a run measures one
-// knob: engine/nn/tune.go's pack tuner, paired duels of the incumbent against
+// knob: nn/tune.go's pack tuner, paired duels of the incumbent against
 // the next rung, interleaved in ABBA quads so drift cancels, climbing while
 // the challenger wins by more than the margin and settling otherwise. A run is
 // one token's fills on this device, so both arms see the same blocks.

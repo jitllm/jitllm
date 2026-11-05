@@ -12,7 +12,7 @@ import (
 //
 // It is the engine's Embedder and nothing else: the Connect InferenceService
 // and /v1/embeddings both call Engine.Embed, which tokenizes as `jitllm embed`
-// does and hands each sequence to model.Embedder.Embed, so a vector served here
+// does and hands each sequence to engine.Embedder.Embed, so a vector served here
 // is the vector the CLI prints for the same model and text.
 //
 // An embedder runs on the host -- an encoder has no device tier, and a decoder

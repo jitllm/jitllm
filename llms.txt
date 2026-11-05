@@ -38,8 +38,8 @@ Things to know before using or changing it:
 
 - [model](https://github.com/jitllm/jitllm/tree/main/model): a loaded model (Open, Config, the tokenizer, the chat template, the graphs it states, its vision tower)
 - [engine](https://github.com/jitllm/jitllm/tree/main/engine): what runs a model (instances, sessions, Prefill/Forward, batching, the Scheduler, KV stores, prefix cache, embeddings)
-- [engine/nn](https://github.com/jitllm/jitllm/tree/main/engine/nn): the kernel entry points the graph calls, and per-shape kernel selection
-- [engine/sched](https://github.com/jitllm/jitllm/tree/main/engine/sched): the worker pool, core sets and memory budgets
+- [nn](https://github.com/jitllm/jitllm/tree/main/engine/nn): the kernel entry points the graph calls, and per-shape kernel selection
+- [sched](https://github.com/jitllm/jitllm/tree/main/engine/sched): the worker pool, core sets and memory budgets
 - [engine/device/cpu](https://github.com/jitllm/jitllm/tree/main/jit/cpu): the x86-64 (SSE, AVX2, VNNI) and ARM64 code generators
 - [engine/device/gpu](https://github.com/jitllm/jitllm/tree/main/jit/gpu): the kernel IR, the PTX/SPIR-V/MSL lowering, the CUDA/Vulkan/Metal backends and the device tier (placement, budgets, multi-GPU)
 - [format/jlm](https://github.com/jitllm/jitllm/tree/main/format/jlm): the `.jlm` container and its pager (O_DIRECT reads, block and expert pages)

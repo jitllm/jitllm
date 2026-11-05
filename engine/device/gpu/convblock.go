@@ -7,10 +7,10 @@ import (
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/composer"
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/graph"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // A convolutional tower's blocks on the card (nn.ConvDevice): Gemma 3n's

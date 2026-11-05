@@ -9,8 +9,8 @@ import (
 	"unsafe"
 
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // This file is the router: which device gets a block, in what order they are
@@ -113,7 +113,7 @@ func (g *GPU) dev(i int) *devTier {
 // RecSteps is how many linear blocks advanced across every device during the
 // last Layers or rows call made on the GPU itself (session 0). An instance steps on
 // a session of its own and counts there: ask the instance
-// (model.Instance.RecurrenceAdvanced), never this. See devTier.recSteps.
+// (engine.Instance.RecurrenceAdvanced), never this. See devTier.recSteps.
 func (g *GPU) RecSteps() int {
 	return g.recStepsOf(0)
 }

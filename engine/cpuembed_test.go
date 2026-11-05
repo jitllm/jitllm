@@ -4,8 +4,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/model"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // TestCPUInputRowsAreComposed requires every input row a CPU instance reads to

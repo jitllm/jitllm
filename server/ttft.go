@@ -17,7 +17,7 @@ import (
 // What a request pays before its first token, and the four things here that
 // cut it:
 //
-//   - The memory cache. Every loaded model keeps one bounded model.MemStore,
+//   - The memory cache. Every loaded model keeps one bounded engine.MemStore,
 //     and every generate that starts its sequence prefills through it
 //     (Instance.PrefillCached), so a chat's second turn or a system prompt
 //     another request already ran restores its prefix instead of computing
@@ -149,7 +149,7 @@ type MemCacheStats struct {
 // ttft is a LoadedModel's share of the above.
 type ttft struct {
 	store *engine.MemStore // nil with Config.NoMemCache
-	// shared is the model's pages held once (model.SharedStore), which its
+	// shared is the model's pages held once (engine.SharedStore), which its
 	// Deciders share through: nil with Config.NoMemCache.
 	shared *engine.SharedStore
 	// kv is what an instance is pointed at: the memory cache, or the memory cache

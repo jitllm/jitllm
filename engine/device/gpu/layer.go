@@ -14,11 +14,11 @@ import (
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/composer/ir"
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/graph"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // A whole transformer block on the device.
@@ -481,7 +481,7 @@ const heatHalf = 256
 
 // count adds this token's selection, which the card routed, to uses -- the
 // session's own counts of the block's experts (nn.LayerWeights.ExpertUses,
-// model.Hotness), one source for the model's measure of its experts and for
+// engine.Hotness), one source for the model's measure of its experts and for
 // the expert cache -- or to the block's own counts when the session handed
 // none, halved every heatHalf tokens. The cache keeps by st.heat.
 func (st *streamBank) count(uses []uint32) {
@@ -5389,7 +5389,7 @@ func (g *devTier) MigrateRec(li int, conv, state []float32, toDevice bool) bool 
 }
 
 // migrateRec moves block li's recurrent summary between host and device.
-// model.Instance.rconv/rstate are what every host consumer reads (including the
+// engine.Instance.rconv/rstate are what every host consumer reads (including the
 // -kv-cache seal), and a placed linear block never touches them, so without this
 // a cached restore would resume from a summary that never saw the prompt. It
 // reads half cur, the state as of the last completed token, at the session's

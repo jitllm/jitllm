@@ -2,8 +2,8 @@ package gpu
 
 import (
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/graph"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // A binary16 V pool's pages (Config.KVF16) arrive and leave as floats

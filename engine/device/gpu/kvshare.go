@@ -2,7 +2,7 @@ package gpu
 
 import "fmt"
 
-// Prefix sharing on the card: the engine's prefix cache (model.SharedStore,
+// Prefix sharing on the card: the engine's prefix cache (engine.SharedStore,
 // kvCache) names a sealed page by every token up to its end, and two
 // sequences whose prompts agree that far hold the same bytes. A layer's page
 // the cache names (PublishKV) is held by every sequence that maps it

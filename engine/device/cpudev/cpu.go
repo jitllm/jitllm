@@ -10,7 +10,7 @@ import (
 
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/device/cpu"
-	"github.com/jitllm/jitllm/engine/sched"
+	"github.com/jitllm/jitllm/sched"
 )
 
 // CPU is the CPU as a device the engine places blocks on, shared by every

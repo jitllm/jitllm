@@ -174,14 +174,16 @@ message GetStatsResponse {
 }
 
 // OrchestratorStats is the server moving blocks on its own initiative: a
-// session that generates promoted onto the cards, idle ones demoted home to
-// make room.
+// session that generates promoted onto the cards, idle ones moved to the CPU
+// device to make room.
 message OrchestratorStats {
   bool enabled = 1;
   int64 promotions = 2;
   int64 demotions = 3;
-  int64 blocks_up = 4;
-  int64 blocks_home = 5;
+  // The blocks the promotions moved onto the cards, and the demotions onto
+  // the CPU device.
+  int64 blocks_to_cards = 4;
+  int64 blocks_to_cpu = 5;
   repeated OrchestratorMove moves = 6;
 }
 
@@ -191,7 +193,8 @@ message OrchestratorMove {
   string session_id = 2;
   string model_id = 3;
   int32 blocks = 4;
-  // "device" or "host".
+  // The devices the blocks went to, by name: "cpu", or the cards that took
+  // them ("cuda:0,cuda:1").
   string to = 5;
   // Why, in words: "promote: generating", "make room for <session>".
   string why = 6;

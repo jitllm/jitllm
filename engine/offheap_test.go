@@ -8,8 +8,8 @@ import (
 
 	"github.com/jitllm/jitllm/model"
 
-	"github.com/jitllm/jitllm/engine/sched"
 	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/sched"
 )
 
 // TestOffHeapFramesMatchTheHeap is the gate on the off-heap weights: a model

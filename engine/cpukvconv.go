@@ -5,8 +5,8 @@ import (
 	"unsafe"
 
 	"github.com/jitllm/jitllm/engine/device/cpu"
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/graph"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // kvHalfRow is the floats a row of the binary16 conversions' forms holds.

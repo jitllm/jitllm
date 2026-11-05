@@ -279,7 +279,7 @@ route)`. So:
 softmax + plain top-k + `FlagNoExpertNorm`. Only **V3** needs the new router.
 
 **What V3's router costs.** `nn.MoETopK32JIT` has no Go fallback by design
-(`engine/nn/moetopk.go:19`) and the kernel bakes `(n, k, norm)`
+(`nn/moetopk.go:19`) and the kernel bakes `(n, k, norm)`
 (`cpu.EmittersFor(t).MoETopK(n, k, norm)`). Adding sigmoid + grouping + a
 split between selection score and weight score means:
 
@@ -321,7 +321,7 @@ same 192/128 split.
    hold `kv_lora_rank`, `q_lora_rank`, or a rope/no-rope split of a head.
 2. **`model.kvLayout` has ONE `headDim`** (`engine/kvlayout.go:31`) and computes
    `kvDim() = nKV * headDim` for both K and V. Under MLA those differ.
-3. **`nn.JIT.AddAttn(hd, kvStride, f16)`** (`engine/nn/attn.go:75`) maps SIX kernels
+3. **`nn.JIT.AddAttn(hd, kvStride, f16)`** (`nn/attn.go:75`) maps SIX kernels
    from one `hd`: `AttnScores`, `AttnAcc`, `AttnAccInto`, `AttnScores2`,
    `AttnAcc2`, `AttnAcc2Into`. The `*2` variants are the PAIRED kernels that walk
    K and V in one pass — they assume K and V share a layout. The underlying

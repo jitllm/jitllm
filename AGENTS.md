@@ -520,7 +520,7 @@ signature. The oracle's matvec (`internal/oracle.MatVec`,
 test-only) is f32 with Neumaier compensation, so the reference stays an
 independent METHOD (compensated scalar) rather than the kernel's arithmetic
 twice. What float64 is left is measurement -- the tuners' statistics
-(`engine/seamtune.go`, `engine/nn/tune.go`), the expert-use accounting
+(`engine/seamtune.go`, `nn/tune.go`), the expert-use accounting
 (`engine/hotness.go`) and setup scalars before a kernel call.
 
 Why: it makes the elementwise ops emittable with the assembler that already

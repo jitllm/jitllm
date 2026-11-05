@@ -4,8 +4,8 @@ import (
 	"fmt"
 
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // The label pick (nn.Head.Pick): after the head, the logits at a handful of

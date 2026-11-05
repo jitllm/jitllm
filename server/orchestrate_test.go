@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testdevices"
+	"github.com/jitllm/jitllm/nn"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 

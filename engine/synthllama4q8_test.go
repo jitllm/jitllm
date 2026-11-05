@@ -10,8 +10,8 @@ import (
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // openSynthLlama4Q8 is the Q8_0 twin of the fixture (Q8=1 scripts/llama4gold.py):

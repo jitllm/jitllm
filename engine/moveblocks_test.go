@@ -11,9 +11,9 @@ import (
 	"github.com/jitllm/jitllm/engine/device/cpu"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // moveDevices is the two devices of one tier the device-to-device gates move

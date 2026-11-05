@@ -6,8 +6,8 @@ import (
 	"fmt"
 
 	"github.com/jitllm/jitllm/composer"
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/graph"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // A non-causal block -- a vision tower's -- served whole by the composer:

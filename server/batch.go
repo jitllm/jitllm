@@ -19,8 +19,8 @@ import (
 // A generate on a session whose every block and head are on one device, or
 // whose every block and head are on the host, does not take the gates for
 // itself. It becomes a ROW of the model's step loop: one goroutine that owns
-// every live row's model.Instance, and each step gathers each row's next token
-// and runs them through model.StepRuns -- one device step for all of them
+// every live row's engine.Instance, and each step gathers each row's next token
+// and runs them through engine.StepRuns -- one device step for all of them
 // (nn.SessionStepper), or one host pass over the weights (Instance.HostSteppable),
 // every block's weights read once, each row's history its own session's. Each
 // row then
@@ -216,7 +216,7 @@ func (unloadedError) Unwrap() error { return ErrNotFound }
 
 // batchWidth is the most requests the loop holds rows for: the configured
 // width, bounded by the widest step a device runs across sessions
-// (model.MaxStepRows rows, each decoding session taking one). The KV each row
+// (engine.MaxStepRows rows, each decoding session taking one). The KV each row
 // needs is not part of it: a session holds its own history from creation, and
 // one the device has no room for is not wholly on the device and never
 // becomes a row.
@@ -679,7 +679,7 @@ type unit struct {
 }
 
 // iterate runs one step: every decoding row's next token, and as much of the
-// admitted prompts as the step has room for, in one model.StepRuns.
+// admitted prompts as the step has room for, in one engine.StepRuns.
 func (lp *stepLoop) iterate() {
 	// A move between devices a decoding row's session asked for is prepared
 	// and committed here, between two steps, as the one-at-a-time path does
@@ -859,14 +859,14 @@ func (lp *stepLoop) nextToken(r *row) bool {
 // level's share of the budget split evenly across a window of them (allot) and the rest oldest first,
 // at most budget tokens in all, or a token a prompt of the window when there
 // are more prompts than that. They ride in the step the decoding rows take
-// (model.StepRuns), each chunk as rows of its own session at its next
+// (engine.StepRuns), each chunk as rows of its own session at its next
 // positions, so a new prompt never holds the decoding rows up by more than the
 // rows it adds to one step. A chunk that ends its prompt wants its logits --
 // the row samples from them at the next step; one that does not costs no head
 // projection.
 //
 // A row whose instance pipelines its prefill across several cards (chunkOf
-// wider than a joint step, model.MaxStepRows) takes a pipelined chunk
+// wider than a joint step, engine.MaxStepRows) takes a pipelined chunk
 // instead, run alone beside the joint step, so its cards overlap as they
 // would on the prompt alone; the decoding rows wait one pipelined chunk rather than the prompt.
 // One such chunk a step, the oldest.
@@ -993,7 +993,7 @@ func (lp *stepLoop) allot(budget int) {
 }
 
 // step runs the units: those of sessions wholly on the device as one
-// model.StepRuns, any other alone, and moves each row on by what it ran.
+// engine.StepRuns, any other alone, and moves each row on by what it ran.
 func (lp *stepLoop) step(units []unit) {
 	joint, solo, npiped := lp.joint[:0], lp.solo[:0], 0
 	defer func() { lp.joint, lp.solo = joint[:0], solo[:0] }()
@@ -1083,7 +1083,7 @@ func anyPrompt(units []unit) bool {
 	return false
 }
 
-// stepJoint runs units as one model.StepRuns. It reports false, with no row
+// stepJoint runs units as one engine.StepRuns. It reports false, with no row
 // moved, when the device refused the step before running any of it; those
 // units then run alone, and the refusal stands until the rows change.
 func (lp *stepLoop) stepJoint(units []unit) bool {
@@ -1135,7 +1135,7 @@ func (lp *stepLoop) stepJoint(units []unit) bool {
 }
 
 // stepHost is stepJoint for a model on the host: the runs as one host pass
-// (model.StepRuns' host arm). The host refuses no step it was offered, so an
+// (engine.StepRuns' host arm). The host refuses no step it was offered, so an
 // error ends every row in it: a hybrid's rows may have advanced their
 // recurrent state, and running them again would apply their tokens twice.
 func (lp *stepLoop) stepHost(units []unit, runs []engine.Run, rows int) bool {

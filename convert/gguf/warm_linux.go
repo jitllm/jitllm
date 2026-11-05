@@ -7,7 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/jitllm/jitllm/engine/sched"
+	"github.com/jitllm/jitllm/sched"
 )
 
 // touch faults every page of b in, on the calling goroutine, and stops early

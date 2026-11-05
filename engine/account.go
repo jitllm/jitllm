@@ -1,6 +1,6 @@
 package engine
 
-import "github.com/jitllm/jitllm/engine/nn"
+import "github.com/jitllm/jitllm/nn"
 
 // What a device served an instance and formed for it is read by the
 // device's name, the CPU's as a card's: the CPU's the instance keeps as it

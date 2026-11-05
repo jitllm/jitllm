@@ -3,7 +3,7 @@ package engine
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // A block's location is the device that runs it for this instance, the CPU

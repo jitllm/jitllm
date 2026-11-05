@@ -3,7 +3,7 @@ package gpu
 import (
 	"testing"
 
-	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // TestSelectionHistoryStaysOnTheCard: a block whose attention selects from

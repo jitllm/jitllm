@@ -3,7 +3,7 @@ package engine
 import (
 	"unsafe"
 
-	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // cpuMTPState is a draft instance's prediction block entry composed for the CPU

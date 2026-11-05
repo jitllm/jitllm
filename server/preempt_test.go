@@ -24,7 +24,7 @@ func TestPreemptionKeepsEveryAnswer(t *testing.T) {
 // TestAParkedSessionResumesFromTheMemCache is the same three sessions with the
 // model's memory cache bounded to one byte, so every page it holds unpinned
 // goes as soon as another arrives: a parked session's pages survive only
-// because the view it parked into pins them (model.MemStore.Pinned), and every
+// because the view it parked into pins them (engine.MemStore.Pinned), and every
 // answer is still its solo run's, token for token. The cache is seen holding
 // pinned pages for the sessions still parked and evicting everything else.
 func TestAParkedSessionResumesFromTheMemCache(t *testing.T) {

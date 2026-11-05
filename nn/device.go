@@ -192,7 +192,7 @@ type LayerWeights struct {
 	// means the host does not speculate.
 	SpeculateExperts func(sel []uint32)
 	// ExpertUses is the session's selection counts for this block's experts,
-	// one a expert (model.Hotness): the host's routing adds to it, a device
+	// one a expert (engine.Hotness): the host's routing adds to it, a device
 	// routing the block adds its own selections, and a device's expert cache
 	// keeps what it counts most. nil where nothing is counted.
 	ExpertUses []uint32
@@ -333,7 +333,7 @@ type Head struct {
 	Collapse  *RowsPart
 	Collapses bool
 	// NoCPU says the caller did not list the CPU among the devices
-	// (model.WithCPU): a device that pages blocks takes the projection while
+	// (engine.WithCPU): a device that pages blocks takes the projection while
 	// the slots a swap needs are left, rather than only when it costs none.
 	NoCPU bool
 	Norm  []float32 // output_norm.weight
@@ -369,7 +369,7 @@ type Head struct {
 	// ArgmaxOnly asks for the next greedy token alone. A tier that can serves
 	// it on the device and sets Token, leaving Logits untouched; one that
 	// cannot fills Logits as always and leaves Token as the caller set it (-1).
-	// See model.Instance.ForwardGreedy.
+	// See engine.Instance.ForwardGreedy.
 	ArgmaxOnly bool
 	Token      int32
 	// SampleK, when positive, asks for a top-k draw's token in place of the
@@ -377,10 +377,10 @@ type Head struct {
 	// each token whose count in SampleWindow (a row over the vocabulary) is
 	// above zero, at WalkArgs (k, 1/T, top-p +Inf where off, min-p 0 where
 	// off, and the caller's uniform) -- exactly the CPU's draw
-	// (model.Instance.Sample). A penalty of 1 leaves the row as it is, whatever
+	// (engine.Instance.Sample). A penalty of 1 leaves the row as it is, whatever
 	// the window holds. A tier that serves it sets Token and Sampled and
 	// leaves Logits untouched; one that cannot fills Logits as always. See
-	// model.Instance.ForwardSample.
+	// engine.Instance.ForwardSample.
 	SampleK       int
 	SampleWindow  []float32
 	SamplePenalty float32
@@ -1281,7 +1281,7 @@ type RowsDevice interface {
 // can take: RowsWidth(want) is the widest step of at most want rows whose
 // batched scratch every device holding a block holds or can build in its
 // budget now, 0 when not even the narrowest fits. A caller filling steps
-// (model.Scheduler) keeps under it, since a step wider than the scratch is
+// (engine.Scheduler) keeps under it, since a step wider than the scratch is
 // refused rather than split.
 type RowsWidther interface {
 	RowsWidth(want int) int
@@ -1536,7 +1536,7 @@ type BlockHolder interface{ HoldsBlock(li int) bool }
 // last call, which decides whether a failed step may restart on the host.
 type RecStepper interface{ RecSteps() int }
 
-// Session is the device view one model.Instance holds (gpu.GPU.Attach): the
+// Session is the device view one engine.Instance holds (gpu.GPU.Attach): the
 // session's own history on the device, apart from the model's weights.
 type Session interface {
 	// Detach gives back everything the session holds on every device.

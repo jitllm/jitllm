@@ -6,8 +6,8 @@ import (
 	"unsafe"
 
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/offheap"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // The zero-copy page-in, at the tier's level: on a device whose heap is host

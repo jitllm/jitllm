@@ -25,8 +25,8 @@ import (
 	"github.com/jitllm/jitllm/engine"
 	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/device/gpu"
-	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/engine/sched"
+	"github.com/jitllm/jitllm/nn"
+	"github.com/jitllm/jitllm/sched"
 
 	"github.com/jitllm/jitllm/common/session"
 )
@@ -91,7 +91,7 @@ type Report struct {
 
 	// Arch is the host's architecture, ISA the instruction sets it executes,
 	// and Form how the composer forms its CPU device's kernels from them
-	// (model.CPUForm).
+	// (engine.CPUForm).
 	Arch, ISA, Form string
 
 	GPUs   []GPU
@@ -241,7 +241,7 @@ func ValidateSpec(spec string) (string, error) {
 // that every device it names is one the device spec opens, so the picker cannot
 // accept a map the load then refuses. Empty is valid: the engine places.
 //
-// It is model.ParsePlacement, not a grammar of this app's own.
+// It is engine.ParsePlacement, not a grammar of this app's own.
 func ValidatePlacement(placement, spec string) error {
 	if strings.TrimSpace(placement) == "" {
 		return nil

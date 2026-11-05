@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testdevices"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // The spec grammar, the budget defaults, the pool arithmetic and the rule that

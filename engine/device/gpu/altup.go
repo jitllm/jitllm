@@ -4,8 +4,8 @@ import (
 	"fmt"
 
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/quant"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // Gemma 3n's AltUp and LAuReL on the device (nn.LayerPlan.AltUp; the graph is

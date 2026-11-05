@@ -7,9 +7,9 @@ import (
 	"github.com/jitllm/jitllm/composer"
 
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/graph"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // The head of a model of several residual streams on the card: a call of

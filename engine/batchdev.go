@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // flatSlots is each row's place in the device's flat history, sequence q's

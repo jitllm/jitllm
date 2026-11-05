@@ -1,8 +1,8 @@
 package engine
 
 import (
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/model"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // Qwen3.8-Flash-Next on a device: the plan and weights a block carries

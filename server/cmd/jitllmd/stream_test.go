@@ -134,8 +134,8 @@ func TestRunReportsTheQueueAndTheBytesBehindTheRate(t *testing.T) {
 	if !strings.Contains(se, "behind 2 request(s)") {
 		t.Fatalf("stderr does not report the queue DEPTH on entry:\n%s", se)
 	}
-	if !strings.Contains(se, "22 on cuda:0") || !strings.Contains(se, "10 on host") {
-		t.Fatalf("stderr does not report the device/host block split:\n%s", se)
+	if !strings.Contains(se, "22 on cuda:0") || !strings.Contains(se, "10 on cpu") {
+		t.Fatalf("stderr does not report the cards' and the CPU's block split:\n%s", se)
 	}
 	if !strings.Contains(se, "33.30 tok/s") {
 		t.Fatalf("stderr does not report the rate:\n%s", se)

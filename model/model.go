@@ -19,13 +19,13 @@ import (
 	"unsafe"
 
 	"github.com/jitllm/jitllm/composer"
-	"github.com/jitllm/jitllm/engine/sched"
 	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
+	"github.com/jitllm/jitllm/sched"
 
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/graph"
+	"github.com/jitllm/jitllm/nn"
 	"github.com/jitllm/jitllm/tok"
 )
 
@@ -3299,8 +3299,7 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 			}
 			g := cfg.Delta()
 			// Transposed once at load: the file stores taps contiguous per
-			// channel, and plane-major makes the convolution elementwise
-			// (see cpu.EmitConv1d).
+			// channel, and plane-major makes the convolution elementwise.
 			if n := len(l.SsmConv1d); n == g.Conv*g.Chans {
 				l.SsmConvTaps = F32Tensor(l.SsmConv1d, g.Chans, g.Conv)
 				wt := make([]float32, n)
@@ -3926,15 +3925,6 @@ func (m *Model) ActWindowOf() int {
 		return (maxK + 31) / 32 * 32
 	}
 	return composer.ActWindow(types)
-}
-
-// shareActWindow hands device d the model's activation window where d
-// quantizes activations itself: devices quantizing with two windows do not
-// agree on token ids.
-func (m *Model) ShareActWindow(d nn.LayerDevice) {
-	if w, ok := d.(nn.ActWindower); ok {
-		w.SetActWindow(m.ActWindow)
-	}
 }
 
 // streamHead says the head reads a collapse of several residual streams,

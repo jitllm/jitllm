@@ -31,9 +31,9 @@ import (
 	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"github.com/jitllm/jitllm/engine/device/gpu"
-	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/engine/sched"
 	"github.com/jitllm/jitllm/model"
+	"github.com/jitllm/jitllm/nn"
+	"github.com/jitllm/jitllm/sched"
 	"github.com/jitllm/jitllm/tok"
 )
 
@@ -62,7 +62,7 @@ type Config struct {
 	// beside the rows already decoding, which bounds how much admitting a
 	// prompt holds each of their tokens up. Zero takes a device prefill chunk
 	// (nn.MaxDevicePrefillChunk), the pieces the device would cut it into
-	// anyway; a step never carries more than model.MaxStepRows rows in all.
+	// anyway; a step never carries more than engine.MaxStepRows rows in all.
 	PromptChunk int
 
 	// StepPromptTokens bounds the prompt tokens one step carries beside
@@ -111,12 +111,12 @@ type Config struct {
 	DefaultMaxSeq int
 
 	// KVF16 is the KV cache width a load that names none gets: true binary16,
-	// false f32, nil the engine's own per-host choice (model.WithKVF16).
+	// false f32, nil the engine's own per-host choice (engine.WithKVF16).
 	KVF16 *bool
 
 	// PromptStore is where a session created with PromptCache keeps its
 	// prompt prefixes; nil refuses such a session. jitllmd's -kv-cache is a
-	// model.FileStore.
+	// engine.FileStore.
 	PromptStore engine.KVStore
 
 	// Images bounds the pictures the HTTP shims accept in a chat request, and
@@ -354,7 +354,7 @@ type LoadedModel struct {
 	deviceIDs []string
 	// callerPlaced is a model whose placement the load named (orchestrate.go).
 	callerPlaced bool
-	// cpuListed is a load whose devices list the CPU (model.WithCPU): the
+	// cpuListed is a load whose devices list the CPU (engine.WithCPU): the
 	// orchestrator moves its blocks there to make room only then.
 	cpuListed bool
 	// hwIDs are the devices the tier opened, by their own ids, whatever the
@@ -470,7 +470,7 @@ func (lm *LoadedModel) closeModel() error {
 }
 
 // stepScratchBytes is lm's instance's host step scratch, held between steps
-// for the next (model.Instance.StepScratchBytes).
+// for the next (engine.Instance.StepScratchBytes).
 func (lm *LoadedModel) stepScratchBytes() uint64 {
 	if lm.inst == nil {
 		return 0
@@ -557,10 +557,10 @@ type LoadOptions struct {
 	MaxDeviceBlocks int // -1 means "as many as fit"
 	KVF16           *bool
 	// DeviceSample forces where a sampled token is drawn
-	// (model.WithDeviceSample); the zero value, auto, draws on the device wherever it serves.
+	// (engine.WithDeviceSample); the zero value, auto, draws on the device wherever it serves.
 	DeviceSample engine.DeviceSampleMode
 	// Placement pins blocks and the head to named devices, in the grammar of
-	// model.ParsePlacement ("0-15=cuda:0,16-31=vulkan:0"); the names are the
+	// engine.ParsePlacement ("0-15=cuda:0,16-31=vulkan:0"); the names are the
 	// DeviceIDs entries. Empty leaves every block to the engine.
 	Placement string
 	// PlacementStrict fails the load when a Placement entry cannot be met,
@@ -706,7 +706,7 @@ func (e *Engine) LoadModel(o LoadOptions) (*LoadedModel, error) {
 		opts = append(opts, engine.WithPlacement(pl))
 	}
 	// A host model the step loop runs steps its sessions' rows as one pass
-	// (model.StepRuns' host arm, a matmul over the rows) or one session after
+	// (engine.StepRuns' host arm, a matmul over the rows) or one session after
 	// another (a matvec each), as the joint choice decides per step. Its
 	// contract is that a row comes out as it does alone, to the bit, so a
 	// seeded sampler draws the same tokens either way
@@ -1032,7 +1032,7 @@ func (lm *LoadedModel) closeLoop() {
 
 // ---------------------------------------------------------------- sessions
 
-// Session is one sequence on a loaded model: a model.Instance, its sampler and
+// Session is one sequence on a loaded model: a engine.Instance, its sampler and
 // the counters the stats calls report. Work on it is serialised by its own
 // lock; a generate with only a model_id runs on an ephemeral one.
 type Session struct {
@@ -1077,7 +1077,7 @@ type Session struct {
 	running   atomic.Bool
 	queuePos  atomic.Int32
 
-	// Every reported figure is a snapshot taken under s.mu. model.Instance's
+	// Every reported figure is a snapshot taken under s.mu. engine.Instance's
 	// fields are written by Forward with no lock, so reading them from a stats
 	// handler mid-generate is a data race, and taking s.mu there would block
 	// for the whole generation. The session publishes a snapshot at create,
@@ -1102,7 +1102,7 @@ type Session struct {
 
 	// priority, parked and snapHist are preemption's (preempt.go): the order
 	// a session is parked in, whether it is parked, and its history's bytes
-	// as of the last snapshot (model.Instance.HistoryBytes).
+	// as of the last snapshot (engine.Instance.HistoryBytes).
 	priority atomic.Int32
 	parked   atomic.Bool
 	// pinned is a session the caller placed (RelocateBlocks, SetPlacement):
@@ -1134,7 +1134,7 @@ type SessionOptions struct {
 	Sampling    engine.Sampler
 	// KVStore keeps the session's prompt prefixes, so a prompt that starts as
 	// an earlier one did resumes from its cached keys and values; CacheKey
-	// names what may be shared (model.Instance.SetCacheKey). A session with a
+	// names what may be shared (engine.Instance.SetCacheKey). A session with a
 	// store prefills alone rather than as a row of the step loop.
 	KVStore  engine.KVStore
 	CacheKey string
@@ -1146,7 +1146,7 @@ type SessionOptions struct {
 	PromptCache bool
 }
 
-// Speculation is speculative decoding for a generate (model.Speculator):
+// Speculation is speculative decoding for a generate (engine.Speculator):
 // drafts verified in one pass of the model, by the model's own prediction
 // block where it carries one and by prompt lookup otherwise. Greedy output is
 // plain greedy decode's token for token; with prompt lookup a sampled
@@ -1177,7 +1177,7 @@ func (o *SessionOptions) check(store engine.KVStore) error {
 	return nil
 }
 
-// CreateSession builds a model.Instance and offers its blocks to the model's
+// CreateSession builds a engine.Instance and offers its blocks to the model's
 // tier. The tier's Attach gives this instance its own device session, which is
 // what makes two sessions on one card correct -- see gpu.GPU.Attach.
 func (e *Engine) CreateSession(o SessionOptions) (*Session, error) {
@@ -1303,11 +1303,11 @@ type placementSnapshot struct {
 	// on is the device each block is on, by block; "" for a host block or a
 	// device the tier did not name.
 	on []string
-	// hist is each block's history cost (model.Instance.BlockHistory).
+	// hist is each block's history cost (engine.Instance.BlockHistory).
 	hist []blockHistory
 }
 
-// blockHistory is one block's model.Instance.BlockHistory.
+// blockHistory is one block's engine.Instance.BlockHistory.
 type blockHistory struct {
 	perPos, state uint64
 	window        int
@@ -1441,14 +1441,14 @@ func (s *Session) joinable() bool {
 	return ok
 }
 
-// steppable is joinable's device arm (model.Instance.Steppable).
+// steppable is joinable's device arm (engine.Instance.Steppable).
 func (s *Session) steppable() bool {
 	ok := false
 	s.in().As(s.ms, func(in *engine.Instance) { ok = in.Steppable() })
 	return ok
 }
 
-// recurrenceAdvanced is model.Instance.RecurrenceAdvanced of the session's
+// recurrenceAdvanced is engine.Instance.RecurrenceAdvanced of the session's
 // last step.
 func (s *Session) recurrenceAdvanced() bool {
 	ok := false
@@ -1580,7 +1580,7 @@ type GenerateOptions struct {
 	// Logprobs puts each sampled token's log-probability on its Token event,
 	// with the TopLogprobs (0..model.MaxTopLogprobs) most likely alternatives.
 	// They are the model's raw distribution, before temperature and penalties
-	// (model.Logprobs).
+	// (engine.Logprobs).
 	Logprobs    bool
 	TopLogprobs int
 	// Seeds, when it holds more than one, asks for that many continuations
@@ -2508,7 +2508,7 @@ func (e *Engine) ScanModels(dir string) ([]ModelFileInfo, string, error) {
 // ---------------------------------------------------------------- accessors
 //
 // The engine's own fields stay unexported so a caller cannot reach past the
-// gates into a model.Instance. These are the read-only handles the command and
+// gates into a engine.Instance. These are the read-only handles the command and
 // the handlers need.
 
 // ID is the stable id this model was loaded under.
@@ -2607,7 +2607,7 @@ type moveRes struct {
 }
 
 // serveMove advances the session's pending move; the caller holds s.mu, at a
-// token boundary. The first call prepares it (model.Instance.PrepareMove: the
+// token boundary. The first call prepares it (engine.Instance.PrepareMove: the
 // target takes the blocks while the sequence keeps generating), and a later
 // one commits it once the target is ready -- or at once when final, which is
 // a session no generate is holding.
@@ -2733,7 +2733,7 @@ type tierBox struct{ d nn.LayerDevice }
 
 // bindSession attaches the session's instance to the model's current tier when it
 // is on another (or on none), keeping as many blocks on a device as it had.
-// model.Instance.SetDeviceLayers moves the history to the CPU before it changes tier,
+// engine.Instance.SetDeviceLayers moves the history to the CPU before it changes tier,
 // so the answer does not change; the blocks go back up after.
 func (e *Engine) bindSession(s *Session) error {
 	dev := s.lm.device()
@@ -2783,7 +2783,7 @@ func (e *Engine) bindSessionLocked(s *Session) error {
 // session's tier: the tier owns the devices and is opened at load.
 //
 // A session generating keeps generating: its generate prepares the move
-// between two tokens (model.Instance.PrepareMove), keeps decoding on the source
+// between two tokens (engine.Instance.PrepareMove), keeps decoding on the source
 // while the target takes the blocks, and commits at the first token boundary
 // the target is ready, so the reply waits for the history's copy alone. An
 // idle session is moved here. A move asked while another is pending is

@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 
 	"github.com/jitllm/jitllm/engine"
-	"github.com/jitllm/jitllm/engine/grammar"
+	"github.com/jitllm/jitllm/grammar"
 	"github.com/jitllm/jitllm/model"
 	"github.com/jitllm/jitllm/tok"
 )

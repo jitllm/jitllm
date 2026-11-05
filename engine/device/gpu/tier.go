@@ -27,9 +27,9 @@ import (
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/cost"
-	"github.com/jitllm/jitllm/engine/nn"
 	hw "github.com/jitllm/jitllm/engine/probe"
 	"github.com/jitllm/jitllm/graph"
+	"github.com/jitllm/jitllm/nn"
 )
 
 type resident struct {
@@ -216,7 +216,7 @@ type Config struct {
 	// halved until it does, and Stats.ReservedPrompt says what was kept.
 	PromptRows int
 	// StepRows is the most rows one ragged step across sessions carries on
-	// this device -- the server's step loop sets model.MaxStepRows. A device
+	// this device -- the server's step loop sets engine.MaxStepRows. A device
 	// that runs such steps reserves their scratch and their per-row logits at
 	// placement too; 0 runs none and reserves nothing for them.
 	StepRows int
@@ -1408,7 +1408,7 @@ type devShared struct {
 	// does not fit is admitted by paging other streamed blocks out, and only
 	// streamed blocks are the pager's victims when it makes room. A block not
 	// in it is resident here or declined to the host. Where a block runs is
-	// the placement's choice (model.Place.Stream), not a device-wide switch.
+	// the placement's choice (engine.Place.Stream), not a device-wide switch.
 	// Guarded by mu.
 	stream map[int]bool
 	// name is Slot.Name.

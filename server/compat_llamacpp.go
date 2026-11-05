@@ -10,7 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/jitllm/jitllm/engine"
-	"github.com/jitllm/jitllm/engine/grammar"
+	"github.com/jitllm/jitllm/grammar"
 	"github.com/jitllm/jitllm/model"
 )
 

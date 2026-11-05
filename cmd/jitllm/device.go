@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
-	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // One binary: importing engine/device/gpu costs only libc and libdl, since the CUDA,
@@ -44,7 +44,7 @@ func openDevices(spec string, vram, hostBudget uint64, streamGroups, stepRows in
 		return nil, nil, "", err
 	}
 	// cpu alone is the one spec that opens nothing. Beside a device it lists
-	// the CPU as one more device the engine may choose (model.WithCPU).
+	// the CPU as one more device the engine may choose (engine.WithCPU).
 	device := false
 	for _, e := range es {
 		device = device || e.Device()
@@ -77,7 +77,7 @@ func openDevices(spec string, vram, hostBudget uint64, streamGroups, stepRows in
 
 // relocatable refuses -relocate on a device spec that leaves the CPU out.
 // Relocating moves blocks to the CPU, and a spec that names only cards asked
-// for them and nothing else (model.WithDevices).
+// for them and nothing else (engine.WithDevices).
 func relocatable(spec string) error {
 	ok, err := gpu.ListsCPU(spec)
 	if err != nil || ok {

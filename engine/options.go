@@ -10,7 +10,7 @@ import (
 
 	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/device/cpudev"
-	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // This package reads no environment. cmd/jitllm reads the JITLLM_* names and

@@ -17,7 +17,7 @@ import (
 )
 
 // testInstance is the external test package's twin of the internal one:
-// model.NewInstance for a gate, a refusal failing the test.
+// engine.NewInstance for a gate, a refusal failing the test.
 func testInstance(tb testing.TB, m *model.Model, maxSeq int, opts ...engine.Option) *engine.Instance {
 	tb.Helper()
 	s, err := engine.NewInstance(m, maxSeq, opts...)

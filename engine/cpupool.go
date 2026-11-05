@@ -3,7 +3,7 @@ package engine
 import (
 	"unsafe"
 
-	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // An embedding model's readout on the CPU device: the pooled, unit-length

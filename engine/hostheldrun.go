@@ -1,8 +1,8 @@
 package engine
 
 import (
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/model"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // holdHost makes d the device this instance counts against the host's budgets,

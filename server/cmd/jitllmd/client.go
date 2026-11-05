@@ -25,6 +25,7 @@ import (
 
 	"github.com/jitllm/jitllm/internal/localserver"
 	"github.com/jitllm/jitllm/internal/localserver/service"
+	"github.com/jitllm/jitllm/nn"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 	"github.com/jitllm/jitllm/server/gen/jitllm/v1/jitllmv1connect"
 )
@@ -305,7 +306,7 @@ func kindName(k v1.BlockKind) string {
 func deviceKindName(k v1.DeviceKind) string {
 	switch k {
 	case v1.DeviceKind_DEVICE_KIND_HOST:
-		return "host"
+		return nn.CPU
 	case v1.DeviceKind_DEVICE_KIND_DISCRETE:
 		return "discrete"
 	case v1.DeviceKind_DEVICE_KIND_INTEGRATED:

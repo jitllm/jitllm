@@ -2,8 +2,6 @@ package model
 
 import (
 	"fmt"
-
-	"github.com/jitllm/jitllm/engine/device/cpu"
 )
 
 // KVType is the KV cache's element format, forced per model with WithKVType
@@ -13,7 +11,7 @@ import (
 //	KVF32   4 bytes an element
 //	KVF16   binary16, 2 bytes an element
 //	KVQ8_0  q8_0 per head row (32-element blocks, llama.cpp's rounding):
-//	        1.25 bytes an element as the cache lays it out (cpu.KVFmt)
+//	        1.25 bytes an element as the cache lays it out
 //
 // The q8 cache runs on every host tier (AVX2, SSE, NEON): the append is the
 // generated activation quantizer, the attention the f32 kernels with a
@@ -39,16 +37,14 @@ const (
 	KVQ8_0
 )
 
-func (t KVType) String() string { return t.Fmt().String() }
-
-func (t KVType) Fmt() cpu.KVFmt {
+func (t KVType) String() string {
 	switch t {
 	case KVF16:
-		return cpu.KVF16
+		return "f16"
 	case KVQ8_0:
-		return cpu.KVQ8
+		return "q8_0"
 	}
-	return cpu.KVF32
+	return "f32"
 }
 
 // ParseKVType reads a format's name as KVType.String spells it.

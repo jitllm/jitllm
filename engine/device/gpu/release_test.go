@@ -5,7 +5,7 @@ import (
 
 	"github.com/jitllm/jitllm/format/quant"
 
-	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // blockWeights builds one block's weights for the fake device.

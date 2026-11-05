@@ -1,7 +1,7 @@
 package gpu
 
 import (
-	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // A session is one sequence; a tier is one model. The per-sequence state (the

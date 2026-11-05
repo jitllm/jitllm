@@ -3,7 +3,7 @@ package gpu
 import (
 	"unsafe"
 
-	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // A block's weight is uploaded once and keyed on its address (resKey.p), and

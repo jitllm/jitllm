@@ -1,7 +1,7 @@
 package engine
 
 import (
-	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // Bidirectional runs inside a causal prompt: Gemma 3's reference masks an

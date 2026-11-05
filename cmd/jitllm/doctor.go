@@ -56,7 +56,7 @@ type doctorHost struct {
 	OS   string `json:"os"`
 	Arch string `json:"arch"`
 	CPU  string `json:"cpu"`
-	// Form is how the composer forms this CPU's kernels (model.CPUForm).
+	// Form is how the composer forms this CPU's kernels (engine.CPUForm).
 	Form string `json:"cpu_form"`
 	// JIT is whether this build has a code generator for this host at all.
 	JIT bool `json:"jit"`

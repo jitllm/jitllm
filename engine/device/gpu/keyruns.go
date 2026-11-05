@@ -1,7 +1,7 @@
 package gpu
 
 import (
-	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // Key runs (nn.KeyRunDevice): every mask a block runs is, per row, an

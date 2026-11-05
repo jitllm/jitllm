@@ -6,8 +6,8 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/model"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // TestSpecDistIsTheDrawsDistribution holds Instance.dist -- the distribution

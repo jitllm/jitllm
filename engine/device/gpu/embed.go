@@ -7,8 +7,8 @@ import (
 	"unsafe"
 
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // embPend is a prompt chunk whose rows EmbedRows promised and has not yet

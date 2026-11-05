@@ -83,7 +83,7 @@ func TestImagePathRunsGeneratedCode(t *testing.T) {
 	sort.Strings(keys)
 	for _, k := range keys {
 		if _, ok := imagePathAllowed()[k]; !ok {
-			t.Errorf("%s runs Go arithmetic on the image path: %s -- generate a kernel (engine/nn/image.go), "+
+			t.Errorf("%s runs Go arithmetic on the image path: %s -- generate a kernel (nn/image.go), "+
 				"or, if it is geometry from a picture's sizes, add it to imagePathAllowed() with the reason",
 				k, strings.Join(found[k], "; "))
 		}

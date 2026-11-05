@@ -5,9 +5,9 @@ package gpu
 import (
 	"testing"
 
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // visionBlocks builds n distinct ViT blocks (resident() keys on the weight
