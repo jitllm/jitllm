@@ -137,9 +137,12 @@ type Frames struct {
 	// offHeap and mapped are where frames and the dense region live (see
 	// OnHeap): mapped is every live anonymous mapping, by its first byte,
 	// each unmapped when the File lets go of it (release) and the rest at
-	// Close.
-	offHeap bool
-	mapped  map[*byte][]byte
+	// Close. mem is the memory the frames were given (WithFrameMemory), and
+	// memMapped every buffer of it they hold, by its first byte.
+	offHeap   bool
+	mapped    map[*byte][]byte
+	mem       FrameMemory
+	memMapped map[*byte][]byte
 	// exp is the expert pages' reservation (exparena.go), nil before the
 	// first expert page-in or where there is none; expNone says there is
 	// none.
@@ -203,7 +206,10 @@ func Open(path string) (*File, error) { return openAt(path, Version) }
 // FramesOption is a choice NewFrames makes for the frames it makes.
 type FramesOption func(*framesOpts)
 
-type framesOpts struct{ offHeap bool }
+type framesOpts struct {
+	offHeap bool
+	mem     FrameMemory
+}
 
 // OnHeap keeps the frames and the dense region on the Go heap: the control
 // arm for a measurement (see offheap.go). Expert pages stay in their
@@ -218,7 +224,7 @@ func NewFrames(f *File, opts ...FramesOption) (*Frames, error) {
 		opt(&o)
 	}
 	h := f.H
-	fr := &Frames{file: f, offHeap: o.offHeap}
+	fr := &Frames{file: f, offHeap: o.offHeap, mem: o.mem}
 	// The dense region is always resident: the host reads it directly every
 	// token.
 	if fr.offHeap {

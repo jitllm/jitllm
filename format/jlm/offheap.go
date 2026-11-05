@@ -22,9 +22,36 @@ import (
 // platform has no anonymous mmap, buf falls back to the heap; a File opened
 // OnHeap keeps it there.
 
-// buf is an n-byte weight buffer, Align-aligned for O_DIRECT, on the heap or
-// mapped as the File was opened to do. A mapped one is recorded for Close.
+// FrameMemory is the memory a device gives its frames: the CPU device's
+// anonymous mappings, a card's page-locked staging. Map is n bytes, aligned
+// to Align for O_DIRECT; Unmap gives back a buffer Map returned, whole.
+type FrameMemory interface {
+	Map(n int) ([]byte, error)
+	Unmap(b []byte)
+}
+
+// WithFrameMemory makes the frames' memory mem's in place of anonymous
+// mappings: a device's own (NewFrames). A buffer mem cannot give is mapped
+// as it would be without it.
+func WithFrameMemory(mem FrameMemory) FramesOption {
+	return func(o *framesOpts) { o.mem = mem }
+}
+
+// buf is an n-byte weight buffer, Align-aligned for O_DIRECT: the frames'
+// memory where they were given one, else mapped off the heap, or on the heap
+// as NewFrames was asked. A mapped one is recorded for Close.
 func (f *Frames) buf(n int) []byte {
+	if f.mem != nil && n > 0 {
+		if b, err := f.mem.Map(n); err == nil && len(b) >= n && aligned(b) {
+			if f.memMapped == nil {
+				f.memMapped = map[*byte][]byte{}
+			}
+			f.memMapped[unsafe.SliceData(b)] = b
+			return b[:n:n]
+		} else if err == nil {
+			f.mem.Unmap(b)
+		}
+	}
 	if f.offHeap && n > 0 {
 		if b, mapped, err := offheap.MapOffHeap(n); err == nil && mapped {
 			if f.mapped == nil {
@@ -97,6 +124,11 @@ func (f *Frames) release(b []byte) {
 		return
 	}
 	f.retire(b)
+	if m, ok := f.memMapped[unsafe.SliceData(b)]; ok {
+		delete(f.memMapped, unsafe.SliceData(b))
+		f.mem.Unmap(m)
+		return
+	}
 	if m, ok := f.mapped[unsafe.SliceData(b)]; ok {
 		delete(f.mapped, unsafe.SliceData(b))
 		offheap.UnmapOffHeap(m)
@@ -149,6 +181,9 @@ func (f *Frames) MappedBytes() uint64 {
 	for _, m := range f.mapped {
 		n += uint64(cap(m))
 	}
+	for _, m := range f.memMapped {
+		n += uint64(cap(m))
+	}
 	// The expert reservation costs only the frames it holds.
 	return n + f.expHeld
 }
@@ -165,5 +200,9 @@ func (f *Frames) unmapAll() {
 	for k, m := range f.mapped {
 		offheap.UnmapOffHeap(m)
 		delete(f.mapped, k)
+	}
+	for k, m := range f.memMapped {
+		f.mem.Unmap(m)
+		delete(f.memMapped, k)
 	}
 }

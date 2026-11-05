@@ -35,15 +35,13 @@ lies inside its page). It reads a page or a page's ranges into memory it is
 handed (O_DIRECT, as now). It holds no frame -- the dense region included --
 no budget, no resident set, no device and no callback.
 
-**The host memory is the engine's, in one ledger.** A model running only on
-cards still pages through host memory (cards listed without the CPU,
-`WithCPU(false)`), so the frames are not the CPU device's: they are a host
-ledger instances share (`engine.Host`, handed in as the CPU device is, one of
-its own where none is). It holds every host allocation of the model's weights
--- block, expert and vision frames, the dense region, the expert reservation,
-the reads in flight -- and the host-backed device, history and scratch
-allocations the budget nets against. Physical memory is counted once: a frame
-two instances pin is one frame.
+**Every device pages the blocks placed on it, the same way.** The CPU and a
+card are alike: a device reads the pages of the blocks an instance places on
+it from the file into memory of its own, keeps them under that instance's
+quota on it, evicts in that instance's order, and holds a block two
+instances place on it once. One contract, every device implementing it; no
+device pages through another's memory, and there is no ledger beside the
+devices. The File only reads into memory it is handed.
 
 **An instance's budget is a retention quota.** It bounds the bytes that
 instance keeps pinned between uses, shared or not, and its retention order is
@@ -89,11 +87,25 @@ warm fault allocate nothing (the ledger's bookkeeping is preallocated).
    instance binds from the frames it leased. `Model.CpuUse`, `Model.Bind` and
    the re-bind in `SetPageBudget` go. Gates: as 1, plus the relocation
    principle's (a block moving off and back re-binds).
-3. **Frames out of the file.** `jlm.File` keeps the page table and the reads
-   into a caller's memory; frames, the dense region, the expert reservation,
-   the read service, preload and speculation go to the ledger. Address-keyed
-   copies key on the frame's generation; `OnRecycle` goes. Gates: as 2, plus
-   the vision and expert gates.
+3. **Frames out of the file**, in two commits.
+   - **3a**: `jlm.Frames` is split from `jlm.File`. The File keeps the
+     header, the table, the layout (page bounds, extents) and the reads into
+     memory it is handed; Frames hold the frames, the dense region, the
+     budget and resident set, the expert reservation, the read service,
+     preload and speculation, over a File (`jlm.NewFrames`). The model still
+     opens both (`Model.Frames`); every caller of a frame method is
+     re-pointed at the frames.
+   - **3b**: each device pages for itself, through one contract every
+     device implements: the CPU's into its memory, a card's into its own,
+     each reading the file directly -- a card stops reading through the
+     CPU's frames. The model opens the File alone and reads its vectors from
+     it at open; an instance binds its own copies of its blocks and dense
+     tensors at the pages the device running them holds. Address-keyed
+     copies key on the page's generation; `OnRecycle` goes. (A shared
+     engine-level ledger, and the same pager filed under the CPU device,
+     were both taken out: each was the model-wide pager under another
+     owner, and the second treated the CPU unlike a card.)
+   Gates: as 2, plus the vision and expert gates.
 4. **Quotas per instance.** `engine.WithPageBudget`; `Model.SetPageBudget`
    goes; the server's per-model budget becomes each instance's, the
    `SetPageBudget` RPC names the instance (a proto change, buf generate);
