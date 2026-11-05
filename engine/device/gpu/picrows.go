@@ -32,7 +32,9 @@ type rowsState struct {
 	to                    launchTo
 	lc                    launcher
 	fn                    func(backend.Session)
-	ins, outs             [1]backend.Buf
+	// at is the view the call is the session of (see embRead.at).
+	at        *devTier
+	ins, outs [1]backend.Buf
 	// coll is the row a head reads from every stream, and collOut and
 	// collIn the collapse's output and the first stream it is copied over
 	// (collapse.go).
@@ -151,18 +153,22 @@ func (g *devTier) RunRows(p *nn.RowsPart, live int, req, pos []uint32, in, out [
 	rs.reqB, rs.posB = u32b(req), u32b(pos)
 	rs.err = nil
 	rs.lc = launcher{to: &rs.to, err: &rs.err}
+	rs.at = g
 	if rs.fn == nil {
-		rs.fn = g.rowsSession
+		rs.fn = rs.session
 	}
 	g.dev.Session(rs.fn)
 	err = rs.err
-	rs.sv, rs.inB, rs.outB, rs.reqB, rs.posB, rs.err = nil, nil, nil, nil, nil, nil
+	rs.sv, rs.inB, rs.outB, rs.reqB, rs.posB, rs.err, rs.at = nil, nil, nil, nil, nil, nil, nil
 	if err != nil {
 		g.LastErr = "the composed picture rows: " + err.Error()
 		return false
 	}
 	return true
 }
+
+// session runs the call's rowsSession on the view that made it.
+func (rs *rowsState) session(s backend.Session) { rs.at.rowsSession(s) }
 
 // rowsSession is RunRows' submission: the rows and words written, the
 // form run, its rows read back.
