@@ -70,7 +70,7 @@ func probeContainer(path string) details {
 			_, chat = v.Template("")
 		}
 		d.ctx = int32(c.NCtx)
-		d.caps = modelCapabilities(chat, h.VisionBlocks() > 0, c.Flags.Pooling() != jlm.PoolNone, c.Arch.Encoder())
+		d.caps = modelCapabilities(chat, h.VisionBlocks() > 0, c.Flags.Pooling() != jlm.PoolNone, c.Flags.Has(jlm.FlagNonCausal))
 	}
 	return d
 }

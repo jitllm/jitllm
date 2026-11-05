@@ -74,7 +74,7 @@ func openEmbedModel(t *testing.T, g embedGolden, opts ...Option) (*model.Model, 
 	t.Helper()
 	src, ok := existingModel(testmodels.Path(filepath.Join("embed", g.GGUF)))
 	if !ok {
-		t.Skipf("MODEL MISSING: embed/%s (set JITLLM_MODELS to the model directory; "+
+		testmodels.Missing(t, "MODEL MISSING: embed/%s (set JITLLM_MODELS to the model directory; "+
 			"scripts/embedgold.py names the Ollama registry blob) -- this gate proved nothing", g.GGUF)
 	}
 	instOpts := opts

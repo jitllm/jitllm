@@ -37,7 +37,7 @@ func TestStatedTowerComposesOnTheCPU(t *testing.T) {
 	path := testmodels.Path("SmolVLM-256M-Instruct-Q8_0.gguf")
 	mm := testmodels.Path("mmproj-SmolVLM-256M-Instruct-Q8_0.gguf")
 	if !sourcePresent(path, mm) {
-		t.Skipf("MODEL MISSING: %s and %s (see docs/testing.md) -- this gate proved nothing", path, mm)
+		testmodels.Missing(t, "MODEL MISSING: %s and %s (see docs/testing.md) -- this gate proved nothing", path, mm)
 	}
 	src := jlmOfPair(t, path, mm)
 	m, err := model.Open(src)
@@ -101,7 +101,7 @@ func TestStatedTowerBlocksArePagedBlocks(t *testing.T) {
 	path := testmodels.Path("SmolVLM-256M-Instruct-Q8_0.gguf")
 	mm := testmodels.Path("mmproj-SmolVLM-256M-Instruct-Q8_0.gguf")
 	if !sourcePresent(path, mm) {
-		t.Skipf("MODEL MISSING: %s and %s (see docs/testing.md) -- this gate proved nothing", path, mm)
+		testmodels.Missing(t, "MODEL MISSING: %s and %s (see docs/testing.md) -- this gate proved nothing", path, mm)
 	}
 	src := jlmOfPair(t, path, mm)
 	probe, err := model.Open(src)
@@ -134,7 +134,7 @@ func TestStatedTowerBlocksArePagedBlocks(t *testing.T) {
 	}
 	a, b := m.TowerBase, m.TowerBase+1
 	for _, li := range []int{a, b, a} {
-		if err := m.PageIn(li); err != nil {
+		if err := m.PageIn(li, &m.Layers[li]); err != nil {
 			t.Fatal(err)
 		}
 		if err := bound(li); err != nil {
@@ -183,7 +183,7 @@ func openSmolVLM(t *testing.T) (*model.Model, image.Image) {
 	path := testmodels.Path("SmolVLM-256M-Instruct-Q8_0.gguf")
 	mm := testmodels.Path("mmproj-SmolVLM-256M-Instruct-Q8_0.gguf")
 	if !sourcePresent(path, mm) {
-		t.Skipf("MODEL MISSING: %s and %s (see docs/testing.md) -- this gate proved nothing", path, mm)
+		testmodels.Missing(t, "MODEL MISSING: %s and %s (see docs/testing.md) -- this gate proved nothing", path, mm)
 	}
 	m, err := model.Open(jlmOfPair(t, path, mm))
 	if err != nil {
@@ -353,7 +353,7 @@ func TestGemma3TowerSeesThePicture(t *testing.T) {
 	text := testmodels.Path("gemma-3-4b-it-Q4_K_M.gguf")
 	mm := testmodels.Path("vlm/mmproj-gemma-3-4b-it-f16.gguf")
 	if !sourcePresent(text, mm) {
-		t.Skipf("MODEL MISSING: %s and %s (see docs/testing.md) -- this gate proved nothing", text, mm)
+		testmodels.Missing(t, "MODEL MISSING: %s and %s (see docs/testing.md) -- this gate proved nothing", text, mm)
 	}
 	m, err := model.Open(jlmOfPair(t, text, mm))
 	if err != nil {
@@ -672,7 +672,7 @@ func TestLlavaTowerSeesThePicture(t *testing.T) {
 	text := testmodels.Path("llava-phi-3-mini-int4.gguf")
 	mm := testmodels.Path("llava-phi-3-mini-mmproj-f16.gguf")
 	if !sourcePresent(text, mm) {
-		t.Skipf("MODEL MISSING: %s and %s (see docs/testing.md) -- this gate proved nothing", text, mm)
+		testmodels.Missing(t, "MODEL MISSING: %s and %s (see docs/testing.md) -- this gate proved nothing", text, mm)
 	}
 	m, err := model.Open(jlmOfPair(t, text, mm))
 	if err != nil {
@@ -738,7 +738,7 @@ func TestInternVLTowerSeesThePicture(t *testing.T) {
 	text := testmodels.Path("vlm/InternVL3-1B-Instruct-Q8_0.gguf")
 	mm := testmodels.Path("vlm/mmproj-InternVL3-1B-Instruct-Q8_0.gguf")
 	if !sourcePresent(text, mm) {
-		t.Skipf("MODEL MISSING: %s and %s (see docs/testing.md) -- this gate proved nothing", text, mm)
+		testmodels.Missing(t, "MODEL MISSING: %s and %s (see docs/testing.md) -- this gate proved nothing", text, mm)
 	}
 	m, err := model.Open(jlmOfPair(t, text, mm))
 	if err != nil {

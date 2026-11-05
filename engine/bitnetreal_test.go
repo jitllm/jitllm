@@ -78,7 +78,7 @@ func TestBitNetRealMatchesReference(t *testing.T) {
 			}
 			path := testmodels.Path(c.file)
 			if _, err := os.Stat(path); err != nil {
-				t.Skipf("MODEL MISSING: %s (download it to JITLLM_MODELS) -- this subtest proved nothing", path)
+				testmodels.Missing(t, "MODEL MISSING: %s (download it to JITLLM_MODELS) -- this subtest proved nothing", path)
 			}
 			ran++
 			var container string

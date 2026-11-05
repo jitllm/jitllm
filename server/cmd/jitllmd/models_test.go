@@ -19,7 +19,7 @@ import (
 func TestModelsSetsAliasesAndDisables(t *testing.T) {
 	b, err := os.ReadFile(testmodels.Path("stories260K.jlm"))
 	if err != nil {
-		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS) -- this gate proved nothing", err)
+		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS) -- this gate proved nothing", err)
 	}
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "stories260K.jlm"), b, 0o644); err != nil {

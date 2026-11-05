@@ -24,7 +24,7 @@ func TestAStateThatLedAHostStepDecodesAlone(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			p := testmodels.Path(c.file)
 			if _, err := os.Stat(p); err != nil {
-				t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
+				testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 			}
 			// The float forms: a step's and a row's apart by their folding
 			// order alone (floatFormsNMSE).

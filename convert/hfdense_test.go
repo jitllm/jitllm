@@ -41,7 +41,7 @@ func TestDenseSafetensorsMatchesItsGGUF(t *testing.T) {
 			gp := testmodels.Path(name + ".gguf")
 			for _, p := range []string{filepath.Join(dir, "config.json"), gp} {
 				if _, err := os.Stat(p); err != nil {
-					t.Skipf("MODEL MISSING: %v (scripts/c6gold.py %s writes both; JITLLM_C6_HF names "+
+					testmodels.Missing(t, "MODEL MISSING: %v (scripts/c6gold.py %s writes both; JITLLM_C6_HF names "+
 						"its HuggingFace directory) -- this gate proved nothing", err, name)
 				}
 			}

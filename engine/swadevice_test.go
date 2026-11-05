@@ -163,7 +163,7 @@ func TestSlidingWindowRunsOnTheDevice(t *testing.T) {
 		t.Run(fmt.Sprintf("%s/window%d", c.file, c.window), func(t *testing.T) {
 			p := testmodels.Path(c.file)
 			if _, err := os.Stat(p); err != nil {
-				t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
+				testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 			}
 			m, err := model.Open(p)
 			if err != nil {
@@ -229,7 +229,7 @@ func TestSlidingWindowRunsOnTheDevice(t *testing.T) {
 func TestATierServesALargerSecondSession(t *testing.T) {
 	p := testmodels.Path("gemma-3-1b-it-Q4_K_M.jlm")
 	if _, err := os.Stat(p); err != nil {
-		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
+		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
 	m, err := model.Open(p)
 	if err != nil {

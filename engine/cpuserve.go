@@ -1331,7 +1331,7 @@ func (s *Instance) formCPUBlock(li int, cb *cpuBlock, rows int) (*cpudev.Form, e
 			} else if e, ok := f.Find(w.Role, int32(li), -1); ok {
 				formats[w.Role] = e.Type
 				// A table the block lays out as float32 at load is read so.
-				if t := s.cpuRoleWeight(li, &s.m.Layers[li], w.Role); w.Rows > 0 && t != nil && t.E == nil && t.Typ == quant.F32 {
+				if t := s.cpuRoleWeight(li, s.layer(li), w.Role); w.Rows > 0 && t != nil && t.E == nil && t.Typ == quant.F32 {
 					formats[w.Role] = jlm.TypeF32
 				}
 			} else if w.Rows == 0 {
@@ -1469,7 +1469,10 @@ func (s *Instance) cpuExperts(b *cpuBound, f *cpudev.Form, li, n int) error {
 	if other >= 0 {
 		s.cpu.sel[0] = other
 	}
-	if err := s.m.EnsureExperts(li, s.cpu.sel, &s.expHold); err != nil {
+	s.bind.Lock()
+	err := s.m.EnsureExperts(li, s.cpu.sel, &s.expHold, s.layer(li))
+	s.bind.Unlock()
+	if err != nil {
 		return err
 	}
 	s.res.Touch(li, ne, s.cpu.sel)

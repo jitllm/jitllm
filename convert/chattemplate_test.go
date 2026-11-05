@@ -201,7 +201,7 @@ func TestConvertStoresTheChatTemplate(t *testing.T) {
 	src := testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf")
 	f, err := gguf.Open(src)
 	if err != nil {
-		t.Skipf("MODEL MISSING: %v -- the replacement half proved nothing", err)
+		testmodels.Missing(t, "MODEL MISSING: %v -- the replacement half proved nothing", err)
 	}
 	s, err := sourceOf(f)
 	f.Close()
@@ -255,7 +255,7 @@ func TestGGUFNamedTemplatesMatchTheList(t *testing.T) {
 	src := testmodels.Path("synth-commandr.gguf")
 	f, err := gguf.Open(src)
 	if err != nil {
-		t.Skipf("MODEL MISSING: %v -- the real-file half proved nothing", err)
+		testmodels.Missing(t, "MODEL MISSING: %v -- the real-file half proved nothing", err)
 	}
 	defer f.Close()
 	var names []string

@@ -19,7 +19,7 @@ import (
 func TestCachedContainerWasWrittenByThisBuild(t *testing.T) {
 	src := testmodels.Path("stories260K.gguf")
 	if _, err := os.Stat(src); err != nil {
-		t.Skipf("MODEL MISSING: %s (set JITLLM_MODELS to the model directory) -- this gate proved nothing", src)
+		testmodels.Missing(t, "MODEL MISSING: %s (set JITLLM_MODELS to the model directory) -- this gate proved nothing", src)
 	}
 	dst := jlmOfPair(t, src, "")
 

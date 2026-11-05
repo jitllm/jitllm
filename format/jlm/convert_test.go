@@ -22,7 +22,7 @@ func model(t *testing.T, name string) string {
 	t.Helper()
 	p := testmodels.Path(name)
 	if _, err := os.Stat(p); err != nil {
-		t.Skipf("MODEL MISSING: %s (%v) (set JITLLM_MODELS to the model directory) -- this gate proved nothing", p, err)
+		testmodels.Missing(t, "MODEL MISSING: %s (%v) (set JITLLM_MODELS to the model directory) -- this gate proved nothing", p, err)
 	}
 	return p
 }

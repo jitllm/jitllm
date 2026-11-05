@@ -22,7 +22,7 @@ func TestPlacement(t *testing.T) {
 	testdevices.Require(t, "cuda:0", "vulkan:1")
 	p := testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf")
 	if _, err := os.Stat(p); err != nil {
-		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
+		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
 	path := jlmOf(t, p)
 	attach := func(t *testing.T, spec string, pl Placement) (*model.Model, *Instance, *gpu.GPU, error) {

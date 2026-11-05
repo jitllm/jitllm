@@ -23,7 +23,7 @@ func TestSplitGGUFConvertsLikeTheWholeFile(t *testing.T) {
 	part := testmodels.Path(filepath.Join("split-test", "tl-00001-of-00004.gguf"))
 	for _, p := range []string{whole, part} {
 		if _, err := os.Stat(p); err != nil {
-			t.Skipf("MODEL MISSING: %v (see docs/testing.md) -- this gate proved nothing", err)
+			testmodels.Missing(t, "MODEL MISSING: %v (see docs/testing.md) -- this gate proved nothing", err)
 		}
 	}
 	dir, err := os.MkdirTemp(filepath.Dir(part), "splitgate")

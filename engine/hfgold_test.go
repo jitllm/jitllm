@@ -185,7 +185,7 @@ func hfContainer(t *testing.T, name string) string {
 		t.Logf("no %s here; using %s, converted elsewhere", dir, p)
 		return p
 	}
-	t.Skipf("MODEL MISSING: %s and %s%s (set JITLLM_MODELS to the model directory) -- this gate proved nothing", dir, dir, jlm.Ext)
+	testmodels.Missing(t, "MODEL MISSING: %s and %s%s (set JITLLM_MODELS to the model directory) -- this gate proved nothing", dir, dir, jlm.Ext)
 	return ""
 }
 

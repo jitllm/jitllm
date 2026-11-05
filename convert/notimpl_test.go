@@ -45,7 +45,7 @@ func TestScopeRefusalIsDistinguishableFromABreak(t *testing.T) {
 		// the converter can object to is the name.
 		mm := testmodels.Path("mmproj-SmolVLM-256M-Instruct-Q8_0.gguf")
 		if _, err := os.Stat(mm); err != nil {
-			t.Skipf("MODEL MISSING: %s (%v) (set JITLLM_MODELS to the model directory) -- this half proved nothing", mm, err)
+			testmodels.Missing(t, "MODEL MISSING: %s (%v) (set JITLLM_MODELS to the model directory) -- this half proved nothing", mm, err)
 		}
 		raw, err := os.ReadFile(mm)
 		if err != nil {

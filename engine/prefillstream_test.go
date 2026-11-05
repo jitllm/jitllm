@@ -30,7 +30,7 @@ const prefillStreamNMSE = 1e-2
 func TestPrefillStreamsHostBlocks(t *testing.T) {
 	p := testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf")
 	if _, err := os.Stat(p); err != nil {
-		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
+		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
 	path := jlmOf(t, p)
 	probe, err := model.Open(path)

@@ -235,7 +235,7 @@ func TestPostNormDeviceErrorIsAmplification(t *testing.T) {
 		t.Run(filepath.Base(name), func(t *testing.T) {
 			gguf := testmodels.Path(name)
 			if _, err := os.Stat(gguf); err != nil {
-				t.Skipf("MODEL MISSING: %v -- this gate proved nothing", err)
+				testmodels.Missing(t, "MODEL MISSING: %v -- this gate proved nothing", err)
 			}
 			toks, lc := lcppLogProbs(t, cpuDir, gguf, postNormText, nctx, 0)
 			lcGPU := -1.0

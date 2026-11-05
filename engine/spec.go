@@ -496,7 +496,7 @@ func (sp *Speculator) draftRows(toks []int32, hs []float32, out *rowsOut) error 
 	n := len(toks)
 	// The block's page: its eh_proj is read on the host even where the block
 	// itself runs on a device, and the page stays (offerRange keeps it).
-	if err := d.m.PageIn(sp.mli); err != nil {
+	if _, err := d.pageIn(sp.mli); err != nil {
 		return err
 	}
 	// [enorm(embed(x)) ; hnorm(h)] per row through eh_proj, the composed

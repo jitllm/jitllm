@@ -66,7 +66,7 @@ func evictModels() []string {
 func newEvictGateOf(t *testing.T, name string) *evictGate {
 	p := testmodels.Path(name)
 	if _, err := os.Stat(p); err != nil {
-		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
+		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
 	// No KV prewarm: the pool grows ahead of the history into the room placement
 	// left (112 pages on a 3050 Ti, covering the gate's 449 positions whole),

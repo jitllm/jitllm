@@ -38,7 +38,7 @@ func hfModelDir(t testing.TB) (dir, ggufPath string) {
 	ggufPath = testmodels.Path(hfGGUF)
 	for _, p := range []string{dir, ggufPath} {
 		if _, err := os.Stat(p); err != nil {
-			t.Skipf("MODEL MISSING: %s (%v) (set JITLLM_MODELS to the model directory) -- this gate proved nothing. "+
+			testmodels.Missing(t, "MODEL MISSING: %s (%v) (set JITLLM_MODELS to the model directory) -- this gate proved nothing. "+
 				"Fetch it: huggingface.co/HuggingFaceTB/%s", p, err, hfDirName)
 		}
 	}

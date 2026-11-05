@@ -22,7 +22,7 @@ func TestSmolVLMStatesItsTower(t *testing.T) {
 	mm := testmodels.Path("mmproj-SmolVLM-256M-Instruct-Q8_0.gguf")
 	for _, p := range []string{src, mm} {
 		if _, err := os.Stat(p); err != nil {
-			t.Skipf("MODEL MISSING: %v (see docs/testing.md) -- this gate proved nothing", err)
+			testmodels.Missing(t, "MODEL MISSING: %v (see docs/testing.md) -- this gate proved nothing", err)
 		}
 	}
 	dst := filepath.Join(t.TempDir(), "smolvlm.jlm")
@@ -96,7 +96,7 @@ func TestGemma3StatesItsTower(t *testing.T) {
 	mm := testmodels.Path("vlm/mmproj-gemma-3-4b-it-f16.gguf")
 	for _, p := range []string{src, mm} {
 		if _, err := os.Stat(p); err != nil {
-			t.Skipf("MODEL MISSING: %v (see docs/testing.md) -- this gate proved nothing", err)
+			testmodels.Missing(t, "MODEL MISSING: %v (see docs/testing.md) -- this gate proved nothing", err)
 		}
 	}
 	dst := filepath.Join(t.TempDir(), "gemma3.jlm")
@@ -156,7 +156,7 @@ func TestLlavaStatesItsTower(t *testing.T) {
 	mm := testmodels.Path("llava-phi-3-mini-mmproj-f16.gguf")
 	for _, p := range []string{src, mm} {
 		if _, err := os.Stat(p); err != nil {
-			t.Skipf("MODEL MISSING: %v (see docs/testing.md) -- this gate proved nothing", err)
+			testmodels.Missing(t, "MODEL MISSING: %v (see docs/testing.md) -- this gate proved nothing", err)
 		}
 	}
 	dst := filepath.Join(t.TempDir(), "llava.jlm")
@@ -224,7 +224,7 @@ func TestInternVLStatesItsTower(t *testing.T) {
 	mm := testmodels.Path("vlm/mmproj-InternVL3-1B-Instruct-Q8_0.gguf")
 	for _, p := range []string{src, mm} {
 		if _, err := os.Stat(p); err != nil {
-			t.Skipf("MODEL MISSING: %v (see docs/testing.md) -- this gate proved nothing", err)
+			testmodels.Missing(t, "MODEL MISSING: %v (see docs/testing.md) -- this gate proved nothing", err)
 		}
 	}
 	dst := filepath.Join(t.TempDir(), "internvl.jlm")
@@ -293,7 +293,7 @@ func TestQwen2VLStatesItsTower(t *testing.T) {
 	mm := testmodels.Path("mmproj-synth-qwen2vl.gguf")
 	for _, p := range []string{src, mm} {
 		if _, err := os.Stat(p); err != nil {
-			t.Skipf("MODEL MISSING: %v (run scripts/qwenvlgold.py synth-qwen2vl) -- this gate proved nothing", err)
+			testmodels.Missing(t, "MODEL MISSING: %v (run scripts/qwenvlgold.py synth-qwen2vl) -- this gate proved nothing", err)
 		}
 	}
 	dst := filepath.Join(t.TempDir(), "qwen2vl.jlm")
@@ -367,7 +367,7 @@ func TestQwen25VLStatesItsTower(t *testing.T) {
 	mm := testmodels.Path("mmproj-synth-qwen25vl.gguf")
 	for _, p := range []string{src, mm} {
 		if _, err := os.Stat(p); err != nil {
-			t.Skipf("MODEL MISSING: %v (run scripts/qwenvlgold.py synth-qwen25vl) -- this gate proved nothing", err)
+			testmodels.Missing(t, "MODEL MISSING: %v (run scripts/qwenvlgold.py synth-qwen25vl) -- this gate proved nothing", err)
 		}
 	}
 	dst := filepath.Join(t.TempDir(), "qwen25vl.jlm")
@@ -423,7 +423,7 @@ func TestQwen35VLStatesItsTower(t *testing.T) {
 	mm := testmodels.Path("mmproj-synth-qwen35vl.gguf")
 	for _, p := range []string{src, mm} {
 		if _, err := os.Stat(p); err != nil {
-			t.Skipf("MODEL MISSING: %v (run scripts/qwenvlgold.py synth-qwen35vl) -- this gate proved nothing", err)
+			testmodels.Missing(t, "MODEL MISSING: %v (run scripts/qwenvlgold.py synth-qwen35vl) -- this gate proved nothing", err)
 		}
 	}
 	dst := filepath.Join(t.TempDir(), "qwen35vl.jlm")
@@ -489,7 +489,7 @@ func TestQwen3VLStatesItsTaps(t *testing.T) {
 	mm := testmodels.Path("mmproj-synth-qwen3vl.gguf")
 	for _, p := range []string{src, mm} {
 		if _, err := os.Stat(p); err != nil {
-			t.Skipf("MODEL MISSING: %v (run scripts/qwenvlgold.py synth-qwen3vl) -- this gate proved nothing", err)
+			testmodels.Missing(t, "MODEL MISSING: %v (run scripts/qwenvlgold.py synth-qwen3vl) -- this gate proved nothing", err)
 		}
 	}
 	dst := filepath.Join(t.TempDir(), "qwen3vl.jlm")

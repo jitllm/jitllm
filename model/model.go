@@ -1170,10 +1170,6 @@ type Model struct {
 	// pagerUnlock is pager.Unlock bound once, so enterPager hands back the
 	// same func every token instead of allocating a method value.
 	pagerUnlock func()
-	// bind serialises re-pointing a block's weights at their frames. Rebinding
-	// writes only what moved (see sameSpan), so when the model fits the writes
-	// stop after the first token and concurrent sessions only ever read.
-	Bind sync.Mutex
 	// chatTemplates are the chat templates compiled, by source: a request
 	// renders its model's template, not compiles it (chat.go).
 	chatTemplates sync.Map
@@ -1277,12 +1273,6 @@ type Model struct {
 	// model's blocks at a time.
 	Id uint64
 
-	// cpuUse[li] counts the live instances that run block li on the CPU, under
-	// bind. An instance placing a block gives its host page back only when the
-	// count is zero: placement is per instance and the binding per Model, so
-	// another instance running the block on the host would otherwise find it
-	// unbound between its pageIn and its matvecs.
-	CpuUse []int32
 	// forgetters are the devices that copy weights by address: the pager
 	// tells them when a frame's bytes change (forgetCopies). owners are the
 	// devices holding the model's blocks, released at Close. Both under
@@ -1290,18 +1280,6 @@ type Model struct {
 	devMu      sync.Mutex
 	forgetters []nn.CopyForgetter
 	owners     []nn.ModelOwner
-}
-
-// cpuRuns adds d to cpuUse over blocks [lo, hi).
-func (m *Model) CpuRuns(lo, hi int, d int32) {
-	m.Bind.Lock()
-	defer m.Bind.Unlock()
-	if m.CpuUse == nil {
-		m.CpuUse = make([]int32, len(m.Layers))
-	}
-	for li := max(lo, 0); li < min(hi, len(m.Layers)); li++ {
-		m.CpuUse[li] += d
-	}
 }
 
 // forgetCopies is the container's recycle callback (jlm.File.OnRecycle): every
@@ -1915,7 +1893,10 @@ func (m *Model) PageStats() (frames int, in, out int64) {
 //
 // A frame is reused, so after an eviction block i's bytes are elsewhere and
 // anything holding the old slice reads another block's weights.
-func (m *Model) PageIn(li int) error {
+// PageIn reads block li's own weights into its page and binds l, a copy of
+// the block (Layer.CloneTo), at them. An instance binds its own copy, so no
+// other instance's binding moves; the caller serialises binds of one copy.
+func (m *Model) PageIn(li int, l *Layer) error {
 	// Neither "no pool" nor Resident(li) means this block's bytes are in:
 	// Resident only says a frame is allocated, and a partial read (a streamed
 	// block's expert sheets) can claim one with the block's own weights unread.
@@ -1934,9 +1915,7 @@ func (m *Model) PageIn(li int) error {
 	if err := m.ensureBlock(li); err != nil {
 		return err
 	}
-	m.Bind.Lock()
-	defer m.Bind.Unlock()
-	return bindPacked(m.Container, m.Cfg, &m.Layers[li])
+	return bindPacked(m.Container, m.Cfg, l)
 }
 
 // pageInSelected is pageIn for the device's callback: the frame, the routed
@@ -1949,13 +1928,13 @@ func (m *Model) PageIn(li int) error {
 //
 // The consumer is tier.streamBank.fill. A block that demotes goes back through
 // ensureLayer, the whole-block read.
-func (m *Model) PageInSelected(li int, sel []uint32) error {
+func (m *Model) PageInSelected(li int, sel []uint32, l *Layer) error {
 	if m.Container == nil || li >= int(m.Container.H.NBlocks) {
 		return nil
 	}
 	// A bank in expert pages reaches the device through Sheet, which holds
 	// each selected expert's own page; the block page has nothing it needs.
-	if l := &m.Layers[li]; l.ExpBank().E != nil && m.Container.ExpertPaged(l.ExpBank().E) {
+	if l.ExpBank().E != nil && m.Container.ExpertPaged(l.ExpBank().E) {
 		return nil
 	}
 	rs, err := m.selectedRanges(li, sel, false)
@@ -1966,14 +1945,12 @@ func (m *Model) PageInSelected(li int, sel []uint32) error {
 	// are always-resident. There is nothing to save and the frame still has to
 	// be claimed, so this is an ordinary page-in.
 	if len(rs) == 0 {
-		return m.PageIn(li)
+		return m.PageIn(li, l)
 	}
 	if err := m.Container.EnsureRanges(li, rs); err != nil {
 		return err
 	}
-	m.Bind.Lock()
-	defer m.Bind.Unlock()
-	return bindPacked(m.Container, m.Cfg, &m.Layers[li])
+	return bindPacked(m.Container, m.Cfg, l)
 }
 
 // name is what to call this weight in an error. It is the container's
@@ -2257,15 +2234,15 @@ func appendSpans(rs []jlm.Range, c *jlm.File, e *jlm.Entry) []jlm.Range {
 // ensureExperts reads the sheets of every selected expert of block li, all in
 // flight at once, so an NVMe works at queue depth rather than at its depth-1
 // rate (neurostream's "plan once per layer"). The pages are held in h until the
-// caller's h.release, which it must call whatever this returns.
-func (m *Model) EnsureExperts(li int, sel []int32, h *ExpertHold) error {
+// caller's h.release, which it must call whatever this returns. The views
+// bound are l's, the caller's copy of the block.
+func (m *Model) EnsureExperts(li int, sel []int32, h *ExpertHold, l *Layer) error {
 	c, cfg := m.Container, m.Cfg
 	if c == nil || !cfg.MoEAt(li) || len(sel) == 0 {
 		return nil
 	}
-	l := &m.Layers[li]
 	if l.LegacyExperts {
-		return m.ensureLegacyExperts(li, sel, h)
+		return m.ensureLegacyExperts(li, sel, h, l)
 	}
 	bank := l.ExpBank().E
 	if bank == nil || !c.ExpertPaged(bank) {
@@ -2334,8 +2311,6 @@ func (m *Model) EnsureExperts(li int, sel []int32, h *ExpertHold) error {
 			return err
 		}
 	}
-	m.Bind.Lock()
-	defer m.Bind.Unlock()
 	for _, x := range sel {
 		v := &l.Experts[x]
 		bindSheet(c, &l.Gate, cfg.NFFNExp, int(x), &v.Gate)
@@ -2371,7 +2346,7 @@ func (h *ExpertHold) Release() {
 // pageIn skips the routed experts, so without this nothing would read them. The
 // converter no longer writes this layout for a uniform block; this keeps an
 // old container correct.
-func (m *Model) ensureLegacyExperts(li int, sel []int32, h *ExpertHold) error {
+func (m *Model) ensureLegacyExperts(li int, sel []int32, h *ExpertHold, l *Layer) error {
 	c := m.Container
 	u := make([]uint32, len(sel))
 	for i, x := range sel {
@@ -2388,14 +2363,11 @@ func (m *Model) ensureLegacyExperts(li int, sel []int32, h *ExpertHold) error {
 	h.leases = append(h.leases, lb)
 	// Re-bound under the page just held: bindOne resolves a whole tensor, and
 	// the frame may not be the one pageIn bound it to.
-	m.Bind.Lock()
-	l := &m.Layers[li]
 	for _, x := range sel {
 		bindOne(c, &l.Experts[x].Gate)
 		bindOne(c, &l.Experts[x].Up)
 		bindOne(c, &l.Experts[x].Down)
 	}
-	m.Bind.Unlock()
 	return nil
 }
 
@@ -2497,6 +2469,11 @@ func ReleaseLayer(c *jlm.File, li int, l *Layer, keepExperts bool) {
 	// The views are gone, so the next bind cuts them again even if the banks
 	// land where they were.
 	l.headsFrom, l.banksFrom = [2]bankSpans{}, [3]bankSpans{}
+	// Another instance runs the block from host memory: its page and its
+	// experts' stay for it.
+	if c.Kept(li) {
+		return
+	}
 	c.DropPage(li)
 	// A bank in expert pages is not in the block's page: since v26 each expert
 	// is a page of its own, and on a mixture those are nearly all of the

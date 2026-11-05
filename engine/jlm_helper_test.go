@@ -457,7 +457,7 @@ func TestAServedCopyOpens(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := convert.FromGGUFs(src, "", tmp, jlm.Fingerprint{Host: "test", Writer: BuildIDForTest()}); err != nil {
-		t.Skipf("MODEL MISSING: %v", err)
+		testmodels.Missing(t, "MODEL MISSING: %v", err)
 	}
 	m, err := model.Open(tmp)
 	if err != nil {

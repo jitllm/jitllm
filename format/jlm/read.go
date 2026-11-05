@@ -51,6 +51,8 @@ type File struct {
 	// pins[b] is how many leases hold block b resident. A pinned page is never
 	// a victim; see Hold.
 	pins []int
+	// kept[b] is how many instances run block b from host memory; see Keep.
+	kept []int
 	// chunk is this File's fill granularity: the header's, or SetChunk's. It
 	// is per-File because the residency bitmap is sized from it.
 	chunk uint64
@@ -821,11 +823,11 @@ func (f *File) ReleasePages() {
 // DropPage releases block i's memory. The next Span on it reads nil until
 // EnsurePage runs again. A held page stays: its frame is being read, and
 // handing it to the next claim would put another page's bytes under the
-// reader.
+// reader. So does a kept one (Keep).
 func (f *File) DropPage(i int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if i < 0 || i >= len(f.pages) || f.pages[i] == nil || f.pinned(i) {
+	if i < 0 || i >= len(f.pages) || f.pages[i] == nil || f.pinned(i) || (i < len(f.kept) && f.kept[i] > 0) {
 		return
 	}
 	f.unhold(i)
@@ -887,6 +889,34 @@ func (f *File) unhold(i int) {
 // A pin is also how a read runs unlocked: EnsureRanges pins the block, drops
 // the lock, reads into the frame and unpins, so the frame cannot be taken.
 func (f *File) pinned(i int) bool { return i < len(f.pins) && f.pins[i] > 0 }
+
+// Keep moves by d the count of instances that run block page i from host
+// memory, which read its spans between their page-ins unpinned. A kept page
+// is not dropped (DropPage): an instance placing the block on a device gives
+// the page back only once no other runs it from here. It is still evicted
+// under the budget like any unpinned page, which serialises its readers
+// (CanEvict).
+func (f *File) Keep(i, d int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if i < 0 || i >= len(f.pages) {
+		return
+	}
+	if f.kept == nil {
+		f.kept = make([]int, len(f.pages))
+	}
+	f.kept[i] = max(f.kept[i]+d, 0)
+}
+
+// Kept reports whether an instance keeps block page i (Keep).
+func (f *File) Kept(i int) bool {
+	if f == nil {
+		return false
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return i >= 0 && i < len(f.kept) && f.kept[i] > 0
+}
 
 func (f *File) hold(i int) {
 	if f.pins == nil {

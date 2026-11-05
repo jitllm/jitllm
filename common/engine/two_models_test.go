@@ -17,7 +17,7 @@ func TestLoadingASecondModelLeavesTheFirstLoaded(t *testing.T) {
 	a, b := modelPath(), testmodels.Path("stories15M-q8_0.jlm")
 	for _, p := range []string{a, b} {
 		if _, err := os.Stat(p); err != nil {
-			t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
+			testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 		}
 	}
 	sh := newTestShell()

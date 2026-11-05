@@ -144,7 +144,7 @@ func TestKimiK3RealMatchesReference(t *testing.T) {
 			}
 			path, ok := existingModel(testmodels.Path(c.file))
 			if !ok {
-				t.Skipf("MODEL MISSING: %s (internal/testmodels/fetch.sh kimi, or the conversion its "+
+				testmodels.Missing(t, "MODEL MISSING: %s (internal/testmodels/fetch.sh kimi, or the conversion its "+
 					"k3RealModels line names) -- this subtest proved nothing", testmodels.Path(c.file))
 			}
 			ran++

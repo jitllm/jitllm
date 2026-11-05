@@ -58,7 +58,7 @@ func batchAloneGate(t *testing.T, env, def, kind string, is func(model.Config) b
 	}
 	p := testmodels.Path(name)
 	if _, err := os.Stat(p); err != nil {
-		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
+		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
 	if strings.HasSuffix(p, ".gguf") {
 		p = jlmOf(t, p)
@@ -157,7 +157,7 @@ func TestSharedRecurrentStateMatchesTheDoubledOne(t *testing.T) {
 	}
 	p := testmodels.Path(name)
 	if _, err := os.Stat(p); err != nil {
-		t.Skipf("MODEL MISSING: %v -- this gate proved nothing", err)
+		testmodels.Missing(t, "MODEL MISSING: %v -- this gate proved nothing", err)
 	}
 	m, err := model.Open(p)
 	if err != nil {

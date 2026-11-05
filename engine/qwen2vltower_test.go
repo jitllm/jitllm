@@ -322,7 +322,7 @@ func TestQwen2VLSeesThePicture(t *testing.T) {
 
 func qwen2VLSeesThePicture(t *testing.T, text, mm string) {
 	if !sourcePresent(text, mm) {
-		t.Skipf("MODEL MISSING: %s and %s (see docs/testing.md) -- this gate proved nothing", text, mm)
+		testmodels.Missing(t, "MODEL MISSING: %s and %s (see docs/testing.md) -- this gate proved nothing", text, mm)
 	}
 	m, err := model.Open(jlmOfPair(t, text, mm))
 	if err != nil {

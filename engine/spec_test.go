@@ -59,7 +59,7 @@ func openSpecModel(t *testing.T, name string, opts ...Option) (*model.Model, []O
 	t.Helper()
 	p := testmodels.Path(name)
 	if _, err := os.Stat(p); err != nil {
-		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory; scripts/mtpgold.py builds "+
+		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory; scripts/mtpgold.py builds "+
 			"the fixtures and the real model's GGUF) -- this gate proved nothing", err)
 	}
 	switch {

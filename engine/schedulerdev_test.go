@@ -32,7 +32,7 @@ func TestSchedulerOnDeviceHybrid(t *testing.T) {
 func schedulerOnDevice(t *testing.T, p string) {
 	t.Helper()
 	if _, err := os.Stat(p); err != nil {
-		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
+		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
 	m, err := model.Open(jlmOf(t, p))
 	if err != nil {

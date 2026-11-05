@@ -47,7 +47,7 @@ func openLookupModel(t *testing.T, name string, opts ...Option) (*model.Model, [
 	t.Helper()
 	p := testmodels.Path(name)
 	if _, err := os.Stat(p); err != nil {
-		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
+		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
 	instOpts := opts
 	m, err := model.Open(jlmOf(t, p))

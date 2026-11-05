@@ -37,7 +37,7 @@ func foldsTheHead(t *testing.T, name, spec string) {
 		p = jlmOf(t, src)
 	}
 	if _, err := os.Stat(p); err != nil {
-		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
+		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
 	instOpts := []Option{WithKVF16(false)}
 	m, err := model.Open(p)

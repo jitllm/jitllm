@@ -50,7 +50,7 @@ func pump(t *testing.T, sh *testShell, d time.Duration, what string, want func()
 func TestTheEngineLoadsAModelAndGenerates(t *testing.T) {
 	fresh.Must(t, modelPath())
 	if _, err := os.Stat(modelPath()); err != nil {
-		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
+		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
 	sh := newTestShell()
 	st := sh.Store
@@ -171,7 +171,7 @@ func TestTheEngineLoadsAModelAndGenerates(t *testing.T) {
 func TestStopCancelsAndKeepsTheModel(t *testing.T) {
 	fresh.Must(t, modelPath())
 	if _, err := os.Stat(modelPath()); err != nil {
-		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
+		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
 	sh := newTestShell()
 	st := sh.Store
@@ -219,7 +219,7 @@ func trunc(s string, n int) string {
 func TestASecondTurnReusesTheSharedPrefix(t *testing.T) {
 	fresh.Must(t, modelPath())
 	if _, err := os.Stat(modelPath()); err != nil {
-		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
+		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
 	// A private cache dir, so the gate cannot pass on a page another run left.
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())

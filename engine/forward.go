@@ -137,6 +137,12 @@ type Instance struct {
 	// pager all address block li as li -- so a draft instance and its trunk share
 	// one device without colliding.
 	lo, hi int
+	// layers is this instance's own copy of blocks [lo, hi) (layer): the
+	// spans its page-ins bind and the views cut from them, so no other
+	// instance's page-in moves them. bind serialises binding them: a move's
+	// staging binds beside the instance's own call.
+	layers []model.Layer
+	bind   sync.Mutex
 
 	// fuseOff runs this instance's decode one pool region per op
 	// (WithBlockFusion, SetBlockFusion); fused is whether a fused run of host
@@ -384,8 +390,8 @@ type Instance struct {
 	// sizes and seamtune moves), while a hybrid whose kinds alternate can have
 	// placed blocks with a prefix of zero.
 	onDev []bool
-	// cpuHeld says this instance is counted in m.cpuUse for the blocks of
-	// [lo, hi) it does not place, from its making until Close.
+	// cpuHeld says this instance keeps (jlm.File.Keep) the pages of the
+	// blocks of [lo, hi) it does not place, from its making until Close.
 	cpuHeld bool
 	// head is non-nil when the device also runs the output norm and the
 	// vocabulary projection, which it is only offered when it took every block.
@@ -560,11 +566,15 @@ func newInstanceOver(m *model.Model, g *engineState, opt modelOpts, c *model.Con
 		fuseOff: opt.noFuse, groupOff: opt.noGroups,
 		residFold: opt.residFold, opt: opt, eng: g}
 	s.own = s.Session
+	s.layers = make([]model.Layer, hi-lo)
+	for li := lo; li < hi; li++ {
+		m.Layers[li].CloneTo(&s.layers[li-lo])
+	}
 	s.holdCPURuns()
 	s.seat = g.cpu.Sit()
 	// An instance over a prediction block projects through that block's head.
-	if lo < len(m.Layers) {
-		if w := m.Layers[lo].Mtp; w != nil {
+	if hi > lo {
+		if w := s.layers[0].Mtp; w != nil {
 			s.outNorm, s.outW = w.HeadNorm, &w.Head
 		}
 	}
@@ -761,7 +771,7 @@ func (s *Instance) Close() error {
 		s.cpuHeld = false
 		for li := s.lo; li < s.hi; li++ {
 			if !s.devAt(li) {
-				s.m.CpuRuns(li, li+1, -1)
+				s.keep(li, li+1, -1)
 			}
 		}
 	}
@@ -1392,7 +1402,7 @@ func (s *Instance) placeHeadOn(name string) bool {
 // not set Ensure -- the caller does, because Ensure calls back into here. It is
 // shared by the offer and by every device page-in, which must agree.
 func (s *Instance) layerWeightsAt(li int) nn.LayerWeights {
-	l := &s.m.Layers[li]
+	l := s.layer(li)
 	qn, kn := s.qkNorms(li)
 	w := nn.LayerWeights{
 		Vectors:  l.Vecs,
@@ -1457,7 +1467,7 @@ func (s *Instance) layerWeightsAt(li int) nn.LayerWeights {
 // because ensureBlockExperts reads into the page.
 func (s *Instance) ensureLayer(li int) func(*nn.LayerWeights) error {
 	return func(dst *nn.LayerWeights) error {
-		if err := s.m.PageIn(li); err != nil {
+		if _, err := s.pageIn(li); err != nil {
 			return err
 		}
 		if s.c.MoE() {
@@ -1486,10 +1496,10 @@ func (s *Instance) ensureSelected(li int) func(*nn.LayerWeights, []uint32) error
 		// The device's callback: a placed block's own weights are on the card,
 		// so pageInSelected reads only the routed sheets. See selectedRanges.
 		if s.c.MoE() {
-			if err := s.m.PageInSelected(li, sel); err != nil {
+			if err := s.pageInSelected(li, sel); err != nil {
 				return err
 			}
-		} else if err := s.m.PageIn(li); err != nil {
+		} else if _, err := s.pageIn(li); err != nil {
 			return err
 		}
 		w := s.layerWeightsAt(li)
@@ -1748,7 +1758,7 @@ func (s *Instance) heldOnOffer(adm nn.LayerDevice, li int) bool {
 // it, or tells the devices to drop their lone-matvec copies of a page that
 // stays. offerRange and MoveBlocks share it.
 func (s *Instance) releasePlacedPage(ld nn.LayerDevice, li int) {
-	l := &s.m.Layers[li]
+	l := s.layer(li)
 	// The block is on the card, so the host gives up its page; pageIn
 	// re-reads it if the seam later moves the block back. Asked, not
 	// assumed: a unified device's buffers alias host memory.
@@ -1756,20 +1766,18 @@ func (s *Instance) releasePlacedPage(ld nn.LayerDevice, li int) {
 	// draft step (Speculator.draftRows), and re-reading the page for it
 	// would cost a block of I/O a step.
 	if r, ok := ld.(nn.HostPageReleaser); ok && r.ReleasesHostPage(li) && l.Mtp == nil {
-		// Under bind, as pageIn binds: another instance may be binding or
-		// reading this block's spans while this one places it. An instance
-		// that runs the block on the CPU keeps it bound (cpuUse): it
-		// faults the block in once and then reads its spans unlocked
-		// through every matvec of the block.
-		s.m.Bind.Lock()
-		if s.m.CpuUse[li] == 0 {
-			keep := false
-			if eh, ok := ld.(nn.ExpertHolder); ok {
-				keep = !eh.HoldsExperts(li)
-			}
-			model.ReleaseLayer(s.m.Container, li, l, keep)
+		// Under bind, as pageIn binds: a move's staging may be binding this
+		// block's spans while the instance places it. The page itself stays
+		// while another instance runs the block from host memory (Keep): it
+		// faults the block in once and then reads its spans unlocked through
+		// every matvec of the block.
+		keep := false
+		if eh, ok := ld.(nn.ExpertHolder); ok {
+			keep = !eh.HoldsExperts(li)
 		}
-		s.m.Bind.Unlock()
+		s.bind.Lock()
+		model.ReleaseLayer(s.m.Container, li, l, keep)
+		s.bind.Unlock()
 	} else if buf := s.m.Container.Page(li); len(buf) > 0 {
 		// The page stays (a streamed block's host side reads it), so no
 		// recycle tells the devices to drop the lone-matvec copies they
@@ -1798,11 +1806,11 @@ func (s *Instance) blockOffer(li int) (nn.LayerPlan, nn.LayerWeights, error) {
 // It reads the model and nothing of the instance's placement, so a move's
 // staging runs it beside the instance's own tokens (PendingMove).
 func (s *Instance) blockWeights(li int) (nn.LayerWeights, error) {
-	if err := s.m.PageIn(li); err != nil {
+	l, err := s.pageIn(li)
+	if err != nil {
 		return nn.LayerWeights{}, err
 	}
 	c := s.c
-	l := &s.m.Layers[li]
 	w := s.layerWeightsAt(li)
 	// Every block, not only a mixture's: a device pager needs the host
 	// page re-read on every swap.
@@ -2012,22 +2020,59 @@ func (s *Instance) shrinkOnDev(n int) {
 	}
 }
 
-// holdCPURuns counts this instance in m.cpuUse for every block of [lo, hi): a
-// Instance with no device attached runs them all on the CPU device, so its card
-// prefix is empty.
+// holdCPURuns keeps the page of every block of [lo, hi): an instance with no
+// device attached runs them all on the CPU device, so its card prefix is
+// empty.
 func (s *Instance) holdCPURuns() {
 	s.gpuLayers = s.lo
-	s.m.CpuRuns(s.lo, s.hi, 1)
+	s.keep(s.lo, s.hi, 1)
 	s.cpuHeld = true
 }
 
-// cpuRun moves this instance's count on block li in m.cpuUse by d, as the
-// block leaves (-1) or moves to (+1) the CPU device for it.
+// cpuRun moves this instance's keep on block li's page by d, as the block
+// leaves (-1) or moves to (+1) the CPU device for it.
 func (s *Instance) cpuRun(li, d int) {
 	s.cpuRelocated(li, d > 0)
 	if s.cpuHeld && li >= s.lo && li < s.hi {
-		s.m.CpuRuns(li, li+1, int32(d))
+		s.keep(li, li+1, d)
 	}
+}
+
+// keep moves by d this instance's keep (jlm.File.Keep) on the pages of
+// blocks [lo, hi), which it runs from host memory.
+func (s *Instance) keep(lo, hi, d int) {
+	if s.m.Container == nil {
+		return
+	}
+	for li := lo; li < hi; li++ {
+		s.m.Container.Keep(li, d)
+	}
+}
+
+// layer is this instance's copy of block li, one of [lo, hi).
+func (s *Instance) layer(li int) *model.Layer { return &s.layers[li-s.lo] }
+
+// pageIn reads block li's own weights into its page and binds this
+// instance's copy of the block at them (model.Model.PageIn).
+func (s *Instance) pageIn(li int) (*model.Layer, error) {
+	if li < s.lo || li >= s.hi {
+		return nil, fmt.Errorf("engine: block %d is not one of this instance's [%d, %d)", li, s.lo, s.hi)
+	}
+	l := s.layer(li)
+	s.bind.Lock()
+	defer s.bind.Unlock()
+	return l, s.m.PageIn(li, l)
+}
+
+// pageInSelected is pageIn of block li for the routed sheets sel alone
+// (model.Model.PageInSelected).
+func (s *Instance) pageInSelected(li int, sel []uint32) error {
+	if li < s.lo || li >= s.hi {
+		return fmt.Errorf("engine: block %d is not one of this instance's [%d, %d)", li, s.lo, s.hi)
+	}
+	s.bind.Lock()
+	defer s.bind.Unlock()
+	return s.m.PageInSelected(li, sel, s.layer(li))
 }
 
 // devAt reports whether block li runs on a device.
@@ -2616,7 +2661,7 @@ func (s *Instance) PrewarmGPU(n int) <-chan struct{} {
 	go func() {
 		defer close(done)
 		for li := lo; li < n; li++ {
-			l := &s.m.Layers[li]
+			l := s.layer(li)
 			qn, kn := s.qkNorms(li)
 			w := nn.LayerWeights{
 				Vectors:  l.Vecs,
@@ -3161,10 +3206,10 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 		if s.fused && !m.BlockHeld(li) {
 			s.unfuse()
 		}
-		if err := m.PageIn(li); err != nil {
+		l, err := s.pageIn(li)
+		if err != nil {
 			return nil, err
 		}
-		l := &m.Layers[li]
 		s.fuseRun()
 		why, err := s.cpuStep(li, l, s.cs)
 		if err != nil {

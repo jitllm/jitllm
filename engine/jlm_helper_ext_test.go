@@ -41,7 +41,7 @@ func jlmOf(t testing.TB, path string) string {
 		// containerAlone in jlm_helper_test.go, which this mirrors.
 		c, err := jlm.Open(dst)
 		if err != nil {
-			t.Skipf("MODEL MISSING: %s, and its container %s does not open (%v) (set JITLLM_MODELS to the model directory) -- this "+
+			testmodels.Missing(t, "MODEL MISSING: %s, and its container %s does not open (%v) (set JITLLM_MODELS to the model directory) -- this "+
 				"gate proved nothing", path, dst, err)
 		}
 		c.Close()

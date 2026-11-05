@@ -24,7 +24,7 @@ import (
 func TestABatchLeavesAnotherSessionAlone(t *testing.T) {
 	p := testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf")
 	if _, err := os.Stat(p); err != nil {
-		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
+		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
 	path := jlmOf(t, p)
 	m, err := model.Open(path)

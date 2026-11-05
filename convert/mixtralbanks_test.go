@@ -20,7 +20,7 @@ import (
 func TestPerExpertGGUFBecomesBanks(t *testing.T) {
 	path := testmodels.Path("Mixtral-8x7B-Instruct-Q3_K_M.gguf")
 	if _, err := os.Stat(path); err != nil {
-		t.Skipf("MODEL MISSING: %v (see docs/testing.md) -- this gate proved nothing", err)
+		testmodels.Missing(t, "MODEL MISSING: %v (see docs/testing.md) -- this gate proved nothing", err)
 	}
 	s := ggufSource(t, path)
 	c := s.Config

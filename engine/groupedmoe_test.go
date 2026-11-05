@@ -62,7 +62,7 @@ func TestBatchedMixturePrefillFloatBanks(t *testing.T) {
 func batchedMixtureCase(t *testing.T, name string, float, violate bool) float64 {
 	p := testmodels.Path(name)
 	if _, err := os.Stat(p); err != nil {
-		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
+		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
 	if strings.HasSuffix(p, ".gguf") {
 		p = jlmOf(t, p)

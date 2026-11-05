@@ -117,7 +117,7 @@ func TestProjectorMatchesTransformers(t *testing.T) {
 		t.Run(fam.name, func(t *testing.T) {
 			text, mm := testmodels.Path(fam.text), testmodels.Path(fam.mm)
 			if !sourcePresent(text, mm) {
-				t.Skipf("MODEL MISSING: %s and %s (see docs/testing.md) -- this gate proved nothing", text, mm)
+				testmodels.Missing(t, "MODEL MISSING: %s and %s (see docs/testing.md) -- this gate proved nothing", text, mm)
 			}
 			want := readF32(t, testmodels.Path(filepath.Join("vlm", "goldens", fam.name, "projector.features.f32")))
 			m, err := model.Open(jlmOfPair(t, text, mm))

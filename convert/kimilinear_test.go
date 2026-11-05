@@ -25,7 +25,7 @@ func kimiSource(t testing.TB) (*jlm.Source, *safetensors.File) {
 	dir := testmodels.Path(klDir)
 	p := filepath.Join(dir, "model.safetensors")
 	if _, err := os.Stat(p); err != nil {
-		t.Skipf("MODEL MISSING: %s (%v) (set JITLLM_MODELS to the model directory) -- this gate proved nothing (RULE 10). "+
+		testmodels.Missing(t, "MODEL MISSING: %s (%v) (set JITLLM_MODELS to the model directory) -- this gate proved nothing (RULE 10). "+
 			"Make it: $JITLLM_HF_PY scripts/hfgold.py %s", p, err, klDir)
 	}
 	f, err := safetensors.Open(p)

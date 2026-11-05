@@ -58,7 +58,7 @@ func stepRunsOnTheCPUSharesOnePass(t *testing.T, opts ...Option) {
 		t.Run(c.name, func(t *testing.T) {
 			p := testmodels.Path(c.file)
 			if _, err := os.Stat(p); err != nil {
-				t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
+				testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 			}
 			instOpts := append([]Option{WithKVF16(false)}, opts...)
 			m, err := model.Open(jlmOf(t, p))
