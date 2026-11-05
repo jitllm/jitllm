@@ -6,9 +6,9 @@ import (
 	"os"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/model"
 
-	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
@@ -82,7 +82,7 @@ func batchVsForward(t *testing.T, path string, exact bool, opts ...Option) {
 	// CPU the block steps of a step it served, summed over the rows, and
 	// what it declined.
 	want := make([][][]float32, nseq)
-	decServed, decDeclined := 0, [composer.NumDeclines]int{}
+	decServed, decDeclined := 0, [nn.NumDeclines]int{}
 	for i := range streams {
 		s := testInstance(t, m, steps+1, instOpts...)
 		for _, id := range streams[i] {
@@ -94,7 +94,7 @@ func batchVsForward(t *testing.T, path string, exact bool, opts ...Option) {
 			want[i] = append(want[i], append([]float32(nil), lg...))
 		}
 		{
-			served, declined := s.CPUBlockSteps()
+			served, declined := s.Account(nn.CPU).Steps.Of(nn.ComposedBlock)
 			decServed += served / steps
 			for j, n := range declined {
 				decDeclined[j] += n
@@ -103,7 +103,7 @@ func batchVsForward(t *testing.T, path string, exact bool, opts ...Option) {
 			for j, n := range declined {
 				total += n
 				if n > 0 {
-					t.Logf("row %d: %d block steps declined: %s", i, n, composer.DeclineName(j))
+					t.Logf("row %d: %d block steps declined: %s", i, n, nn.DeclineName(j))
 				}
 			}
 			if total != steps*m.Cfg.NLayer {
@@ -137,10 +137,10 @@ func batchVsForward(t *testing.T, path string, exact bool, opts ...Option) {
 	// block the decode served, served, and declined only by a reason the
 	// decode declined the block by.
 	{
-		served, declined := b.CPUBlockSteps()
+		served, declined := b.Account(nn.CPU).Steps.Of(nn.ComposedBlock)
 		for i, n := range declined {
 			if n > 0 && decDeclined[i] == 0 {
-				t.Errorf("the batch declined %d block steps the decode served: %s (%v)", n, composer.DeclineName(i), b.CPUFormErr())
+				t.Errorf("the batch declined %d block steps the decode served: %s (%v)", n, nn.DeclineName(i), b.Account(nn.CPU).FormErr)
 			}
 		}
 		if want := steps * decServed / nseq; served != want {

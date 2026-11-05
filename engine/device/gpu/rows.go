@@ -310,7 +310,7 @@ func (g *devTier) rowsHeadNeed(bs *blockScratch, nrows int, softcap float32) uin
 // softcap, the composer's head writing the logits they read -- at placement
 // and at PrepHead, so no step compiles them. Callers hold g.mu.
 func (g *devTier) prepRowsReserved() {
-	bb := g.reservedFor(ComposedBlock)
+	bb := g.reservedFor(nn.ComposedBlock)
 	if bb == nil || g.bs == nil || g.bs.head == nil || !g.bs.head.ok || !g.rowsHeld() {
 		return
 	}

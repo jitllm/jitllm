@@ -15,7 +15,7 @@ import (
 
 // TestComposedPromptRunsOnTheMatrixUnit prefills a two-chunk prompt on a
 // device whose composer serves a step's parts and the prompt's
-// (gpu.ComposedStep, the jitllmcomposed build's default): the prompt's
+// (nn.ComposedStep, the jitllmcomposed build's default): the prompt's
 // projections run on the matrix unit -- a dense model's, and a mixture's
 // routed experts grouped by expert -- at least one matrix launch a block of
 // every chunk (Stats.MatrixPart of the prompt) -- and its logits sit from
@@ -26,15 +26,15 @@ func TestComposedPromptRunsOnTheMatrixUnit(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			m, ids, want := composedPromptModel(t, name)
 			defer m.Close()
-			got, s0, s1 := composedPrompt(t, m, ids, gpu.ComposedStep)
-			n := s1.MatrixPart(gpu.ComposedPrompt) - s0.MatrixPart(gpu.ComposedPrompt)
+			got, s0, s1 := composedPrompt(t, m, ids, nn.ComposedStep)
+			n := s1.MatrixPart(nn.ComposedPrompt) - s0.MatrixPart(nn.ComposedPrompt)
 			chunks := (len(ids) + nn.MaxDevicePrefillChunk - 1) / nn.MaxDevicePrefillChunk
 			if n < chunks*m.Cfg.NLayer {
 				t.Fatalf("the prompt's blocks launched %d kernels on the matrix unit, fewer than one a block of each of its %d chunks (%d)",
 					n, chunks, chunks*m.Cfg.NLayer)
 			}
 			e := promptNMSE(t, got, want)
-			tierGot, _, _ := composedPrompt(t, m, ids, gpu.ComposedStep&^gpu.ComposedPrompt)
+			tierGot, _, _ := composedPrompt(t, m, ids, nn.ComposedStep&^nn.ComposedPrompt)
 			te := promptNMSE(t, tierGot, want)
 			if !(e <= bandRatio*te) || Greedy(got) != Greedy(want) {
 				t.Fatalf("the prompt's logits NMSE %.3e against the host, the tier's %.3e (band %.1fx), argmax %d against %d",
@@ -42,9 +42,9 @@ func TestComposedPromptRunsOnTheMatrixUnit(t *testing.T) {
 			}
 			t.Logf("%d matrix launches, %d chunks of %d blocks, logits NMSE %.3e against the host, the tier's %.3e", n, chunks, m.Cfg.NLayer, e, te)
 			for k := 2; k <= matrixTileCount(); k++ {
-				got, s0, s1 := composedPromptAt(t, m, ids, gpu.ComposedStep, k)
+				got, s0, s1 := composedPromptAt(t, m, ids, nn.ComposedStep, k)
 				tiled := s1.MatrixTiled
-				n := s1.MatrixPart(gpu.ComposedPrompt) - s0.MatrixPart(gpu.ComposedPrompt)
+				n := s1.MatrixPart(nn.ComposedPrompt) - s0.MatrixPart(nn.ComposedPrompt)
 				if tiled == 0 || n < chunks*m.Cfg.NLayer {
 					t.Fatalf("tile %d: %d parts formed at it, %d matrix launches", k, tiled, n)
 				}
@@ -88,7 +88,7 @@ func composedPromptModel(t *testing.T, name string) (*model.Model, []int32, []fl
 
 // composedPrompt prefills ids with every block on a device the composer
 // serves parts of, and the logits and the device's stats before and after.
-func composedPrompt(t *testing.T, m *model.Model, ids []int32, parts gpu.Parts, io ...Option) ([]float32, gpu.Stats, gpu.Stats) {
+func composedPrompt(t *testing.T, m *model.Model, ids []int32, parts nn.Parts, io ...Option) ([]float32, gpu.Stats, gpu.Stats) {
 	t.Helper()
 	return composedPromptAt(t, m, ids, parts, 0, io...)
 }
@@ -105,7 +105,7 @@ func matrixTileCount() int {
 
 // composedPromptAt is composedPrompt with the matrix tile forced
 // (gpu.Config.MatrixTile).
-func composedPromptAt(t *testing.T, m *model.Model, ids []int32, parts gpu.Parts, tile int, io ...Option) ([]float32, gpu.Stats, gpu.Stats) {
+func composedPromptAt(t *testing.T, m *model.Model, ids []int32, parts nn.Parts, tile int, io ...Option) ([]float32, gpu.Stats, gpu.Stats) {
 	t.Helper()
 	g, err := openGPU(t, gpu.WithDeviceTune(gpu.TuneOff), gpu.WithConfig(func(c *gpu.Config) { c.MatrixTile = tile }))
 	if err != nil || g == nil {

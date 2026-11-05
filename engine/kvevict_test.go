@@ -215,7 +215,7 @@ func evictionRunsPastTheBudget(t *testing.T, eg *evictGate) {
 	ref := eg.run(t, true, float)
 	freeRef := eg.run(t, false, float)
 	for name, r := range map[string]evictRun{"composed": got, "float reference": ref} {
-		for i, n := range r.st.BlockDeclines {
+		for i, n := range r.st.BlockDeclines() {
 			if n > 0 {
 				t.Errorf("the %s arm declined %d block step(s): %s", name, n, gpu.DeclineName(i))
 			}

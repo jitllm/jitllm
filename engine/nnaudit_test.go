@@ -12,9 +12,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/model"
 
-	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/convert"
 	"github.com/jitllm/jitllm/convert/gguf"
 	"github.com/jitllm/jitllm/internal/testmodels"
@@ -161,19 +161,19 @@ func auditComposedCPU(t *testing.T, name, path string, opts ...Option) {
 		}
 		finite(t, "Forward", lg)
 	}
-	served, declined := s.CPUBlockSteps()
+	served, declined := s.Account(nn.CPU).Steps.Of(nn.ComposedBlock)
 	total := served
 	var named []string
 	for i, n := range declined {
 		total += n
 		if n > 0 {
-			named = append(named, fmt.Sprintf("%d %s", n, composer.DeclineName(i)))
+			named = append(named, fmt.Sprintf("%d %s", n, nn.DeclineName(i)))
 		}
 	}
 	if want := steps * m.Cfg.NLayer; total != want {
 		t.Fatalf("the census counts %d block steps on the CPU, where the decode ran %d", total, want)
 	}
-	t.Logf("composed CPU: %d of %d block steps served; declined: %s (%v)", served, total, strings.Join(named, ", "), s.CPUFormErr())
+	t.Logf("composed CPU: %d of %d block steps served; declined: %s (%v)", served, total, strings.Join(named, ", "), s.Account(nn.CPU).FormErr)
 	if slices.Contains(cpuServedModels(), name) && served != total {
 		t.Fatalf("a model the composer serves on the CPU declined %d block steps", total-served)
 	}

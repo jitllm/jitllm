@@ -10,6 +10,7 @@ import (
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
@@ -30,7 +31,7 @@ func laneModels() []string {
 // A subgroup wider than the device guarantees is refused, never formed.
 func TestComposedBlocksAtEachLaneCount(t *testing.T) {
 	const bandRatio, bandWorst = 1.5, 4.0
-	parts := gpu.ComposedBlock | gpu.ComposedHead
+	parts := nn.ComposedBlock | nn.ComposedHead
 	ran := 0
 	for _, file := range laneModels() {
 		t.Run(file, func(t *testing.T) {
@@ -100,11 +101,11 @@ func TestComposedBlocksAtEachLaneCount(t *testing.T) {
 							if st.ComposedLanes != a.lanes {
 								t.Fatalf("the composer formed for %d lanes, not %d: the arm did not select its subgroup", st.ComposedLanes, a.lanes)
 							}
-							if nb, d := st.ServedPart(gpu.ComposedBlock); nb != len(toks)*m.Cfg.NLayer || d != 0 {
+							if nb, d := st.ServedPart(nn.ComposedBlock); nb != len(toks)*m.Cfg.NLayer || d != 0 {
 								t.Fatalf("the composer served %d block steps and declined %d where %d steps of %d blocks are %d (%s)",
 									nb, d, len(toks), m.Cfg.NLayer, len(toks)*m.Cfg.NLayer, st.LastErr)
 							}
-							if nh, d := st.ServedPart(gpu.ComposedHead); headOn {
+							if nh, d := st.ServedPart(nn.ComposedHead); headOn {
 								// Every decode step's head is served, and the prompt's
 								// last row's.
 								if nh != len(toks)+1 || d != 0 {
@@ -144,7 +145,7 @@ func TestComposedBlocksAtEachLaneCount(t *testing.T) {
 									a.lanes, med, worst, widest, bandRatio, bandWorst)
 							}
 							cut, cst, _ := composedDecode(t, m, nil, dev, ids, toks, parts, true, false, append(a.opts, gpu.WithSplitFault(true))...)
-							if nb, d := cst.ServedPart(gpu.ComposedBlock); nb == 0 || d != 0 {
+							if nb, d := cst.ServedPart(nn.ComposedBlock); nb == 0 || d != 0 {
 								t.Fatalf("with every split's last segment dropped the composer served %d block steps and declined %d", nb, d)
 							}
 							var cr []float64

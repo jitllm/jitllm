@@ -10,6 +10,7 @@ import (
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
@@ -91,7 +92,7 @@ func TestGraniteOnEveryDevice(t *testing.T) {
 					}
 					// The composer's block or prompt block carries the scale as its
 					// add's factor.
-					composed, _ := cs.ServedPart(gpu.ComposedBlock | gpu.ComposedPrompt)
+					composed, _ := cs.ServedPart(nn.ComposedBlock | nn.ComposedPrompt)
 					if composed == 0 {
 						t.Fatalf("no block step composed: the scaled add was not selected")
 					}
@@ -399,7 +400,7 @@ func TestGraniteScalesOnEveryDevice(t *testing.T) {
 						got, s := onDevice(arm.run)
 						// The composer's block or prompt block carries the scale as
 						// its add's factor.
-						composed, _ := s.ServedPart(gpu.ComposedBlock | gpu.ComposedPrompt)
+						composed, _ := s.ServedPart(nn.ComposedBlock | nn.ComposedPrompt)
 						if composed == 0 {
 							t.Fatalf("%s: no residual add took the scale -- the scaled path was not selected", arm.name)
 						}

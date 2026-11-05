@@ -160,8 +160,8 @@ func hybridBatchedPrefill(t *testing.T, m *model.Model, io ...Option) {
 
 	// The arms are the composer's prompt part at two widths: a chunk of one
 	// row at a time, and the prompt's rows batched in fewer chunks.
-	rp, _ := rows.st.ServedPart(gpu.ComposedPrompt)
-	bp, _ := bat.st.ServedPart(gpu.ComposedPrompt)
+	rp, _ := rows.st.ServedPart(nn.ComposedPrompt)
+	bp, _ := bat.st.ServedPart(nn.ComposedPrompt)
 	if bp == 0 || bp >= rp {
 		t.Fatalf("composed prompt steps: %d one row at a time, %d batched -- the arms are not the two widths (%s)",
 			rp, bp, bat.err)

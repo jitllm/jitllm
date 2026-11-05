@@ -6,9 +6,9 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/model"
 
-	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
@@ -62,8 +62,8 @@ func TestComposedPromptMatchesLlamaCppF32(t *testing.T) {
 			}
 			got := map[int][]float32{}
 			for _, i := range at {
-				l, st, _ := composedDecode(t, m, nil, "cuda:0", ids[:nctx/2+i+1], nil, gpu.ComposedBlock|gpu.ComposedPrompt, false, false)
-				if n, d := st.ServedPart(gpu.ComposedPrompt); n == 0 || d != 0 {
+				l, st, _ := composedDecode(t, m, nil, "cuda:0", ids[:nctx/2+i+1], nil, nn.ComposedBlock|nn.ComposedPrompt, false, false)
+				if n, d := st.ServedPart(nn.ComposedPrompt); n == 0 || d != 0 {
 					t.Fatalf("position %d: the composer served %d block steps of the prompt and declined %d", nctx/2+i, n, d)
 				}
 				got[i] = logSoftmax(l[0])

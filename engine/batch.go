@@ -3,7 +3,7 @@ package engine
 import (
 	"slices"
 
-	"github.com/jitllm/jitllm/composer"
+	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // rowOwner is the session whose history row i of a ragged step reads and
@@ -79,7 +79,7 @@ func (s *Instance) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([
 		bple = s.bple[:n*c.PleWidth()]
 	}
 	s.tokenSide(n)
-	if why := s.cpuEmbed(s.bx[:n*c.NEmbd], bple, tokens[:n], pos[:n]); why != composer.DeclineServes {
+	if why := s.cpuEmbed(s.bx[:n*c.NEmbd], bple, tokens[:n], pos[:n]); why != nn.DeclineServes {
 		return nil, s.embedDeclined(why)
 	}
 
@@ -138,7 +138,7 @@ func (s *Instance) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([
 			return nil, err
 		}
 		l := &m.Layers[li]
-		var why composer.Decline
+		var why nn.Decline
 		var err error
 		switch {
 		case c.LayerKind(li).Recurrent():
@@ -151,8 +151,8 @@ func (s *Instance) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([
 		if err != nil {
 			return nil, err
 		}
-		if why == composer.DeclineServes {
-			s.cpu.served++
+		if why == nn.DeclineServes {
+			s.cpu.steps.Serve(nn.PartBlock)
 			continue
 		}
 		return nil, s.cpuRefused(li, why)
@@ -169,7 +169,7 @@ func (s *Instance) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([
 	// The CPU's composed head runs the wanted rows and applies every stage
 	// of the head's graph.
 	if !headOnDev && nlogit > 0 {
-		if why := s.cpuHeadRows(s.bx, s.blogits, nil, nlogit); why != composer.DeclineServes {
+		if why := s.cpuHeadRows(s.bx, s.blogits, nil, nlogit); why != nn.DeclineServes {
 			return nil, cpuHeadRefused(why)
 		}
 	}

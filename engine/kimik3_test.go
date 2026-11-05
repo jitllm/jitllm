@@ -8,6 +8,7 @@ import (
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/graph"
 )
@@ -208,10 +209,10 @@ func TestKimiK3DeviceRunsTheChunkWhole(t *testing.T) {
 			// The composer runs each block whole: the prompt's chunk one
 			// served prompt part a block, a decode token one block step a
 			// block, none declined.
-			p0, pd0 := s0.ServedPart(gpu.ComposedPrompt)
-			p1, pd1 := s1.ServedPart(gpu.ComposedPrompt)
-			b1, bd1 := s1.ServedPart(gpu.ComposedBlock)
-			b2, bd2 := s2.ServedPart(gpu.ComposedBlock)
+			p0, pd0 := s0.ServedPart(nn.ComposedPrompt)
+			p1, pd1 := s1.ServedPart(nn.ComposedPrompt)
+			b1, bd1 := s1.ServedPart(nn.ComposedBlock)
+			b2, bd2 := s2.ServedPart(nn.ComposedBlock)
 			t.Logf("prefill of %d: %d prompt blocks served, %d declined; a decode token: %d block steps served, %d declined",
 				len(g.IDs), p1-p0, pd1-pd0, b2-b1, bd2-bd1)
 			if p1-p0 != nl || pd1 != pd0 {

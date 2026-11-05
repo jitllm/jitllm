@@ -10,6 +10,7 @@ import (
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
@@ -101,12 +102,12 @@ func TestSynthLlama4Q8BatchedPrefillOnDevice(t *testing.T) {
 			if n := st.GPULayers(); n != m.Cfg.NLayer {
 				t.Fatalf("%s took %d of %d blocks: %v %v", spec, n, m.Cfg.NLayer, st.DeviceDeclines(), gpux.Err())
 			}
-			n0, d0 := gpux.Stats().ServedPart(gpu.ComposedPrompt)
+			n0, d0 := gpux.Stats().ServedPart(nn.ComposedPrompt)
 			got, err := st.Prefill(g.IDs)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if n, d := gpux.Stats().ServedPart(gpu.ComposedPrompt); n == n0 || d != d0 {
+			if n, d := gpux.Stats().ServedPart(nn.ComposedPrompt); n == n0 || d != d0 {
 				t.Fatalf("the composer served %d of the prompt's block steps and declined %d (%s), so this compared no batched mixture", n-n0, d-d0, gpux.Err())
 			}
 			// The chunk must have stayed on the device: a demotion restarts it

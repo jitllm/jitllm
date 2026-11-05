@@ -4,6 +4,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/model"
 )
 
@@ -54,7 +55,7 @@ func TestCPUInputRowsAreComposed(t *testing.T) {
 				}
 				want++
 			}
-			served, declined := st.CPUEmbedSteps()
+			served, declined := st.Account(nn.CPU).Steps.Of(nn.ComposedEmbed)
 			if served != want || len(nonZero(declined[:])) != 0 {
 				t.Fatalf("the composed input rows served %d of %d rows (declines %v)", served, want, nonZero(declined[:]))
 			}

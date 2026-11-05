@@ -7978,7 +7978,7 @@ row where the composer's reads two.
   GetRowsPacked), which is why float embeddings were declined. Now the input
   rows graph (nn.Head.Embed) is served at any row count a call carries: a
   decode row, a prompt chunk at its scratch's rows (counted apart, under
-  gpu.PromptEmbed), and a promise no call takes, formed at the narrowest
+  nn.PromptEmbed), and a promise no call takes, formed at the narrowest
   width the placement formed and read back (materializeComposed) -- which is
   also how a head on another card than block 0's hands the rows over: the
   head's card gathers, and block 0's uploads them as the residual crosses
@@ -8160,7 +8160,7 @@ row where the composer's reads two.
   history is the layer's host KV pages held as one off-heap span
   (`kvArena`), page n at slot n, so a declined step's main kernels and a
   composed step read one set of pages. The census is the tier's: the
-  decline names moved to `composer.Decline`, the tier's `partDecline` an alias
+  decline names moved to `nn.Decline`, the tier's `partDecline` an alias
   with its names and numbers unchanged, and the CPU's reasons appended
   (a windowed, latent, shared, recurrent or batched block, a history not
   binary16, a CPU below AVX2/FMA/F16C, a block not composed at placement);
@@ -9738,7 +9738,7 @@ row where the composer's reads two.
   and 3.0e-4, Qwen2.5-VL (windows) 4/4 at 3.3e-5 and 1.8e-3; a warm encode
   allocates nothing; the rows made causal read 6.8e-2, 1.5e-3, 0.12 and
   0.45. On a card the tier
-  serves a non-causal call's blocks when asked (gpu.ComposedTower,
+  serves a non-causal call's blocks when asked (nn.ComposedTower,
   towerserve.go): the rows' descriptors over the device's one transient
   pair as a page of the block's pool geometry, the windows the call staged
   as rows.win, a row-chunked set's phases as the descriptors' ends; a block
@@ -10264,7 +10264,7 @@ row where the composer's reads two.
   UncoveredNonCausal. On the CPU device (WithComposedCPU) the Embedder's
   segment State runs each block over the sequence's rows as one run, its
   history the segment's arena (ncArena, shared with the tower's); on a card
-  the tier serves the segment's non-causal call (gpu.ComposedTower,
+  the tier serves the segment's non-causal call (nn.ComposedTower,
   towerserve.go) as a tower's. On a V100 host's CPU, held to main's
   encoder: all-minilm-l6, mxbai-embed-large, nomic-embed-text and
   snowflake-arctic-embed-22m serve every block of every text (36, 144, 84,
@@ -10322,7 +10322,7 @@ row where the composer's reads two.
   activation, the window order put back), decided by the tensors the
   container holds and declined by name where it holds one no graph binds.
   The CPU forms them at the vision State's placement, a card runs them as
-  gpu.ComposedRows (picrows.go). On the V100 host the CPU serves SmolVLM,
+  nn.ComposedRows (picrows.go). On the V100 host the CPU serves SmolVLM,
   llava, Qwen2-VL and Qwen2.5-VL whole (entry, every block, projector:
   2.6e-7, 7.2e-8, 5.2e-8 and 7.3e-14 after block 0; 1.1e-3, 1.1e-3,
   1.1e-4, 1.2e-4 for the encode), cuda:0 and vulkan:0 those four and
@@ -10579,7 +10579,7 @@ row where the composer's reads two.
   on it), and an encode ends with Pool.Rest, which parks every worker at
   once, so none parks later inside the next measured call: pixtral, phi4
   and SmolVLM read 0 at count 3, an allocation planted in Encode reads 1.
-  A picture's entry and projector on a card (gpu.ComposedRows) now form
+  A picture's entry and projector on a card (nn.ComposedRows) now form
   where the tower's blocks are placed (PrepRows, at the offer), not at the
   first encode: TestComposedTowerOnDevice holds Stats.FormedPart(ComposedRows)
   to 0, and reads 3 with the prewarm taken out. The front end states four

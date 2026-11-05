@@ -6,6 +6,7 @@ import (
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // TestStagedPagedPrefillMatchesDecode prefills a prompt on the device as one
@@ -53,8 +54,8 @@ func stagedPrefillGap(t *testing.T, m *model.Model, dev string, io ...Option) fl
 		t.Fatal(err)
 	}
 	s1 := g.Stats()
-	n0, d0 := s0.ServedPart(gpu.ComposedPrompt)
-	n1, d1 := s1.ServedPart(gpu.ComposedPrompt)
+	n0, d0 := s0.ServedPart(nn.ComposedPrompt)
+	n1, d1 := s1.ServedPart(nn.ComposedPrompt)
 	if n, d := n1-n0, d1-d0; n < m.Cfg.NLayer || d != 0 {
 		t.Fatalf("the composer served %d block steps of the chunk and declined %d (%d blocks): the chunk did not run composed",
 			n, d, m.Cfg.NLayer)

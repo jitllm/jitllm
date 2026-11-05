@@ -9,6 +9,7 @@ import (
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
@@ -30,10 +31,10 @@ func TestPlacedPromptsCompileNothing(t *testing.T) {
 	ran := 0
 	for _, arm := range []struct {
 		name     string
-		composed gpu.Parts
+		composed nn.Parts
 	}{
-		{"newarch/Ministral-3-3B-Instruct-2512-Q4_K_M.gguf", gpu.ComposedStep},
-		{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", gpu.ComposedStep},
+		{"newarch/Ministral-3-3B-Instruct-2512-Q4_K_M.gguf", nn.ComposedStep},
+		{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", nn.ComposedStep},
 	} {
 		name := arm.name
 		p := testmodels.Path(name)
@@ -116,7 +117,7 @@ func TestPlacedPromptsCompileNothing(t *testing.T) {
 				// Every chunk's every block step the composer's, each at its
 				// own width's form.
 				{
-					np, dp := st.ServedPart(gpu.ComposedPrompt)
+					np, dp := st.ServedPart(nn.ComposedPrompt)
 					if np != len(chunks)*m.Cfg.NLayer || dp != 0 {
 						t.Fatalf("the composer served %d block steps of %d chunks of %d blocks and declined %d: %s",
 							np, len(chunks), m.Cfg.NLayer, dp, g.Err())

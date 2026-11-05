@@ -3,7 +3,7 @@ package engine
 import (
 	"unsafe"
 
-	"github.com/jitllm/jitllm/composer"
+	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // cpuMTPState is a draft instance's prediction block entry composed for the CPU
@@ -15,14 +15,6 @@ type cpuMTPState struct {
 	// unit of rows, where the call is shorter than the unit.
 	tok, pos []uint32
 	pad      []float32
-	served   int
-	declined [composer.NumDeclines]int
-}
-
-// CPUMTPSteps is how many rows the composed prediction block entry served on
-// the CPU, and how many it declined, by reason.
-func (s *Instance) CPUMTPSteps() (served int, declined [composer.NumDeclines]int) {
-	return s.cpu.mtp.served, s.cpu.mtp.declined
 }
 
 // cpuPlaceMTP composes the entry of the prediction block a draft instance
@@ -35,8 +27,8 @@ func (s *Instance) cpuPlaceMTP() {
 		return
 	}
 	g := fg.MtpEntry[i]
-	s.cpuComposeHead(&st.one, g, composer.DeclineNoGraph, 1)
-	s.cpuComposeHead(&st.many, g, composer.DeclineNoGraph, cpuRowsCap)
+	s.cpuComposeHead(&st.one, g, nn.DeclineNoGraph, 1)
+	s.cpuComposeHead(&st.many, g, nn.DeclineNoGraph, cpuRowsCap)
 	u := 1
 	for _, hf := range []*cpuHeadForm{&st.one, &st.many} {
 		if hf.f != nil {
@@ -50,9 +42,9 @@ func (s *Instance) cpuPlaceMTP() {
 // cpuMTPEntry writes `rows` rows of z, the rows the prediction block
 // reads, from the tokens toks and the rows of x (the trunk's hidden rows,
 // every stream) through the composed entry, or says why not.
-func (s *Instance) cpuMTPEntry(z, x []float32, toks []int32, rows int) composer.Decline {
+func (s *Instance) cpuMTPEntry(z, x []float32, toks []int32, rows int) nn.Decline {
 	if !s.cpuHeadOn() {
-		return composer.DeclineCaller
+		return nn.DeclineCaller
 	}
 	st := &s.cpu.mtp
 	hf := &st.one
@@ -60,11 +52,11 @@ func (s *Instance) cpuMTPEntry(z, x []float32, toks []int32, rows int) composer.
 		hf = &st.many
 	}
 	f, why := hf.formOf()
-	if why == composer.DeclineServes {
+	if why == nn.DeclineServes {
 		why = s.cpuWeights(f, s.lo, &s.m.Layers[s.lo])
 	}
-	if why != composer.DeclineServes {
-		st.declined[why] += rows
+	if why != nn.DeclineServes {
+		s.cpu.steps.Declined[nn.PartMTP][why] += rows
 		return why
 	}
 	w := s.c.ResidW()
@@ -95,6 +87,6 @@ func (s *Instance) cpuMTPEntry(z, x []float32, toks []int32, rows int) composer.
 		}
 		r0 += k
 	}
-	st.served += rows
-	return composer.DeclineServes
+	s.cpu.steps.Served[nn.PartMTP] += rows
+	return nn.DeclineServes
 }

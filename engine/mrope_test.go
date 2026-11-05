@@ -333,7 +333,7 @@ func mRopeMatchesTransformers(t *testing.T, name string) {
 			// which is the image at sequential positions: the composer's is
 			// served at the positions the instance states, or the host's goes up.
 			s := gpux.Stats()
-			if served, _ := s.ServedPart(gpu.ComposedTable); s.RopeTableUploads == 0 && served == 0 {
+			if served, _ := s.ServedPart(nn.ComposedTable); s.RopeTableUploads == 0 && served == 0 {
 				t.Fatalf("the device composed no rotary table and took none from the host: an M-RoPE table " +
 					"built from cache positions is the violation")
 			}
@@ -721,7 +721,7 @@ func composedAfterPicture(t *testing.T, m *model.Model, g *qvlGolden, spec strin
 	}
 	// Every step's tables and the picture prompt's chunks', each a whole set.
 	steps, tabs := len(g.Cont)-1, composedTables(m)
-	nt, dt := stats.ServedPart(gpu.ComposedTable)
+	nt, dt := stats.ServedPart(nn.ComposedTable)
 	switch {
 	case nt < (steps+1)*tabs || nt%tabs != 0 || dt != 0:
 		t.Fatalf("composed: %d tables served and %d calls declined (%s), where %d steps and the prompt's chunks of %d tables are at least %d",
@@ -757,12 +757,12 @@ func composedAfterPicture(t *testing.T, m *model.Model, g *qvlGolden, spec strin
 		}
 		t.Logf("composed: XD-RoPE's sections moved reach %.3e against transformers (%d flips)", wb, fb)
 	}
-	nb, db := stats.ServedPart(gpu.ComposedBlock)
+	nb, db := stats.ServedPart(nn.ComposedBlock)
 	if nb != steps*stated || db != steps*(m.Cfg.NLayer-stated) {
 		t.Fatalf("composed: %d block steps served and %d declined, where %d steps of %d stated and %d other blocks are %d and %d",
 			nb, db, steps, stated, m.Cfg.NLayer-stated, steps*stated, steps*(m.Cfg.NLayer-stated))
 	}
-	nh, dh := stats.ServedPart(gpu.ComposedHead)
+	nh, dh := stats.ServedPart(nn.ComposedHead)
 	t.Logf("composed after the picture: worst %.3e; %d tables served, %d declined; %d of %d blocks stated, %d block steps served, %d declined %v; head served %d, declined %d",
 		w, nt, dt, stated, m.Cfg.NLayer, nb, db, why, nh, dh)
 }

@@ -5,10 +5,9 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/model"
 
-	"github.com/jitllm/jitllm/composer"
-	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/internal/testmodels"
@@ -56,13 +55,13 @@ func TestKimiK3ServesComposed(t *testing.T) {
 			prompt, toks := ids[:promptLen], ids[promptLen:]
 			run := func(t *testing.T, dev string) float64 {
 				t.Helper()
-				got, st, _ := composedDecode(t, m, openOpts, dev, prompt, toks, gpu.ComposedBlock|gpu.ComposedEmbed, true, false)
-				served, declined := st.ServedPart(gpu.ComposedBlock)
+				got, st, _ := composedDecode(t, m, openOpts, dev, prompt, toks, nn.ComposedBlock|nn.ComposedEmbed, true, false)
+				served, declined := st.ServedPart(nn.ComposedBlock)
 				if n := len(toks) * m.Cfg.NLayer; served != n || declined != 0 {
 					t.Fatalf("%d block steps served and %d declined, want %d served (%s)", served, declined, n, declinesOf(st))
 				}
-				ne, de := st.ServedPart(gpu.ComposedEmbed)
-				if ne += st.ReplayedPart(gpu.ComposedEmbed); ne < len(toks) || de != 0 {
+				ne, de := st.ServedPart(nn.ComposedEmbed)
+				if ne += st.ReplayedPart(nn.ComposedEmbed); ne < len(toks) || de != 0 {
 					t.Fatalf("the input rows served %d times and declined %d, want every step's (%s)", ne, de, declinesOf(st))
 				}
 				if st.FormedAtStep != 0 {
@@ -134,7 +133,7 @@ func TestKimiK3ServesComposedOnCPU(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer ref.Close()
-			want := partCPULogits(t, ref, g.IDs, cpuFaultNone, true, ref.Cfg.NLayer, composer.DeclineServes, instOpts...)
+			want := partCPULogits(t, ref, g.IDs, cpuFaultNone, true, ref.Cfg.NLayer, nn.DeclineServes, instOpts...)
 			instOpts2 := []Option{withCPUFloat()}
 			m, err := model.Open(path)
 			if err != nil {
@@ -145,7 +144,7 @@ func TestKimiK3ServesComposedOnCPU(t *testing.T) {
 				t.Fatal("the bank's input rows are expanded, or the head's mix over it is not stated")
 			}
 			run := func(f cpuFault) float64 {
-				return worstFrom(want, partCPULogits(t, m, g.IDs, f, true, m.Cfg.NLayer, composer.DeclineServes, instOpts2...))
+				return worstFrom(want, partCPULogits(t, m, g.IDs, f, true, m.Cfg.NLayer, nn.DeclineServes, instOpts2...))
 			}
 			worst := run(cpuFaultNone)
 			t.Logf("the composed CPU head's mix from the reference: worst NMSE %.3g over %d steps", worst, len(g.IDs))

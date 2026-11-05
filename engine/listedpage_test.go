@@ -155,7 +155,7 @@ func blocksPageOnTheListedCard(t *testing.T, path, spec string) {
 		t.Logf("%s at %d MiB: %d of %d blocks on the card, %d page-ins, %d page-outs, worst logit diff %.3g",
 			card, budget>>20, st.devCount(), nl, ps.PageIns, ps.PageOuts, worst)
 		if composedByDefault {
-			for i, n := range ps.BlockDeclines {
+			for i, n := range ps.BlockDeclines() {
 				if n > 0 {
 					t.Errorf("the composer declined %d paged block step(s): %s", n, gpu.DeclineName(i))
 				}

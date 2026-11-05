@@ -113,7 +113,7 @@ func (in *Instance) newTowerRun() (*towerRun, error) {
 	tr.tapRows, tr.tapBuf = make([][]float32, len(tg.Taps)), make([][]float32, len(tg.Taps))
 	for li := ts.lo; li < ts.hi; li++ {
 		if cb := ts.cpu.blocks[li]; cb == nil || cb.rows == nil {
-			why := composer.DeclineNoGraph
+			why := nn.DeclineNoGraph
 			if cb != nil {
 				why = max(cb.why, cb.rowsWhy)
 			}
@@ -250,7 +250,7 @@ func (s *Instance) encodePicture(img image.Image, dst, deep []float32) ([]float3
 		return nil, fmt.Errorf("model: a %dx%d picture is past the %d pixels a side the tower's resize reaches", pl.W, pl.H, a.PicSide)
 	}
 	head := tr.head
-	if why := ts.cpuWeights(head, -1, &m.TowerDense); why != composer.DeclineServes {
+	if why := ts.cpuWeights(head, -1, &m.TowerDense); why != nn.DeclineServes {
 		return nil, fmt.Errorf("model: the tower's head: %v", why)
 	}
 	D, E := int(m.Container.Vision().ProjDim), int(m.Container.Vision().NEmbd)
@@ -258,7 +258,7 @@ func (s *Instance) encodePicture(img image.Image, dst, deep []float32) ([]float3
 		return nil, fmt.Errorf("model: %d values and %d for its taps' for a picture's %d rows of %d", len(dst), len(deep), want, D)
 	}
 	for j, f := range tr.taps {
-		if why := ts.cpuWeights(f, -1, &m.TowerTaps[j]); why != composer.DeclineServes {
+		if why := ts.cpuWeights(f, -1, &m.TowerTaps[j]); why != nn.DeclineServes {
 			return nil, fmt.Errorf("model: the tower's tap %d: %v", j, why)
 		}
 	}
@@ -270,7 +270,7 @@ func (s *Instance) encodePicture(img image.Image, dst, deep []float32) ([]float3
 			sq, _ = tg.Square(pl.W, pl.H, i)
 		}
 		f := tr.entry[sq.Class][pl.Px]
-		if why := ts.cpuWeights(f, -1, &m.TowerDense); why != composer.DeclineServes {
+		if why := ts.cpuWeights(f, -1, &m.TowerDense); why != nn.DeclineServes {
 			return nil, fmt.Errorf("model: the tower's entry: %v", why)
 		}
 		tr.squareRequest(pl, sq, tg.Classes[sq.Class].Pic, squares)
@@ -370,7 +370,7 @@ func (ts *Instance) towerBlocks(tr *towerRun, gw int, wins []nn.KeyRun) error {
 		if err != nil {
 			return err
 		}
-		if why != composer.DeclineServes {
+		if why != nn.DeclineServes {
 			return fmt.Errorf("block %d: %v", li-ts.m.TowerBase, why)
 		}
 		for j, blk := range ts.m.Tower.TapBlocks {

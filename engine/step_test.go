@@ -12,6 +12,7 @@ import (
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
@@ -54,7 +55,7 @@ func stepAcrossSessions(t *testing.T, m *model.Model, spec string, io ...Option)
 	r := stepGate(t, m, g, false, io...)
 	// The configuration this gates: the composer serves the step's rows, every
 	// sequence's, as one call of its blocks.
-	if n, d := g.Stats().ServedPart(gpu.ComposedBlock); n == 0 || d != 0 {
+	if n, d := g.Stats().ServedPart(nn.ComposedBlock); n == 0 || d != 0 {
 		t.Fatalf("the composer served %d of the step's block steps and declined %d (%s)", n, d, g.Err())
 	}
 	if bound := denseStepBand * ctl; !(r.worst < bound) {
@@ -411,9 +412,9 @@ func stepGate(t *testing.T, m *model.Model, g *gpu.GPU, apart bool, io ...Option
 	}
 	r.linear = s1.SessionLinear - s0.SessionLinear
 	// A recording's replay runs the composer's parts as its capture did.
-	b1, d1 := s1.ServedPart(gpu.ComposedBlock)
-	b0, d0 := s0.ServedPart(gpu.ComposedBlock)
-	r.blocks = b1 - b0 + s1.ReplayedPart(gpu.ComposedBlock) - s0.ReplayedPart(gpu.ComposedBlock)
+	b1, d1 := s1.ServedPart(nn.ComposedBlock)
+	b0, d0 := s0.ServedPart(nn.ComposedBlock)
+	r.blocks = b1 - b0 + s1.ReplayedPart(nn.ComposedBlock) - s0.ReplayedPart(nn.ComposedBlock)
 	r.blockDeclined = d1 - d0
 	r.worst, r.at = worstStep(got, want)
 	r.refFinite = true

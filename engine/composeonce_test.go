@@ -10,6 +10,7 @@ import (
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
@@ -190,7 +191,7 @@ func composesOnce(t *testing.T, m *model.Model, g *gpu.GPU, width int, to string
 	}
 	prompts := func(s *Instance, off int, lengths []int) int {
 		t.Helper()
-		served0, _ := g.Stats().ServedPart(gpu.ComposedPrompt)
+		served0, _ := g.Stats().ServedPart(nn.ComposedPrompt)
 		steps := 0
 		for _, n := range lengths {
 			l, err := s.Prefill(ids[off : off+n])
@@ -209,7 +210,7 @@ func composesOnce(t *testing.T, m *model.Model, g *gpu.GPU, width int, to string
 				steps += (n + width - 1) / width * nl
 			}
 		}
-		np, dp := g.Stats().ServedPart(gpu.ComposedPrompt)
+		np, dp := g.Stats().ServedPart(nn.ComposedPrompt)
 		if np-served0 < steps || dp != 0 {
 			t.Fatalf("the composer served %d prompt block steps of the %d the chunks hold and declined %d: %s",
 				np-served0, steps, dp, g.Err())

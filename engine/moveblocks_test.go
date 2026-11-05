@@ -71,13 +71,13 @@ const (
 	moveUpper
 )
 
-func blocksMoveBetweenDevices(t *testing.T, path string, arm int, parts gpu.Parts, opts ...Option) {
+func blocksMoveBetweenDevices(t *testing.T, path string, arm int, parts nn.Parts, opts ...Option) {
 	blocksMoveBetweenDevicesWith(t, path, arm, parts, nil, opts...)
 }
 
 // blocksMoveBetweenDevicesWith is blocksMoveBetweenDevices with check given
 // the tier's counts once the moves ran.
-func blocksMoveBetweenDevicesWith(t *testing.T, path string, arm int, parts gpu.Parts, check func(gpu.Stats), opts ...Option) {
+func blocksMoveBetweenDevicesWith(t *testing.T, path string, arm int, parts nn.Parts, check func(gpu.Stats), opts ...Option) {
 	a, b := moveDevices(t)
 	g, err := openGPU(t, gpu.WithDevices(a+","+b), gpu.WithDeviceTune(gpu.TuneOff))
 	if err != nil || g == nil {
@@ -217,10 +217,10 @@ func blocksMoveBetweenDevicesWith(t *testing.T, path string, arm int, parts gpu.
 	if check != nil {
 		check(g.Stats())
 	}
-	if parts&gpu.ComposedEmbed != 0 {
+	if parts&nn.ComposedEmbed != 0 {
 		st := g.Stats()
-		n, d := st.ServedPart(gpu.ComposedEmbed)
-		np, dp := st.ServedPart(gpu.PromptEmbed)
+		n, d := st.ServedPart(nn.ComposedEmbed)
+		np, dp := st.ServedPart(nn.PromptEmbed)
 		if n == 0 || d != 0 || np == 0 || dp != 0 {
 			t.Fatalf("the composer gathered %d steps' rows (%d declined) and %d prompts' (%d declined): %s", n, d, np, dp, declinesOf(st))
 		}

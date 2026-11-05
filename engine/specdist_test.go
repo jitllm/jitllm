@@ -6,6 +6,7 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/model"
 )
 
@@ -40,10 +41,10 @@ func TestSpecDistIsTheDrawsDistribution(t *testing.T) {
 		{Temp: 1.3, MinP: 0.05},
 		{Temp: 0.5, TopK: 600, TopP: 0.9},
 	} {
-		served0, _ := st.CPUSampleSteps()
+		served0, _ := st.Account(nn.CPU).Steps.Of(nn.ComposedSample)
 		var d specDist
 		st.dist(&smp, lg, &d)
-		if served, _ := st.CPUSampleSteps(); served != served0+1 {
+		if served, _ := st.Account(nn.CPU).Steps.Of(nn.ComposedSample); served != served0+1 {
 			t.Fatalf("%+v: the composed distribution was not served (%d to %d)", smp, served0, served)
 		}
 		want, margin := distRef(lg, &smp, false)

@@ -12,6 +12,7 @@ import (
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // TestStepAcrossSessionsHybridGateDiscriminates runs the hybrid step gate under
@@ -333,7 +334,7 @@ func TestComposedPromptChainGateDiscriminates(t *testing.T) {
 	defer m.Close()
 	ids := m.Vocab.Encode("The clerk counted barrels of salt on the upper floor, and the river rose", true)
 	toks := []int32{ids[1], ids[2]}
-	parts := gpu.ComposedBlock | gpu.ComposedHead | gpu.ComposedPrompt
+	parts := nn.ComposedBlock | nn.ComposedHead | nn.ComposedPrompt
 	for _, dev := range stepDevices() {
 		t.Run(dev, func(t *testing.T) {
 			want, st, _ := composedDecode(t, m, openOpts, dev, ids, toks, parts, true, false)
@@ -341,7 +342,7 @@ func TestComposedPromptChainGateDiscriminates(t *testing.T) {
 			f.SetRecFault("chain")
 			got, fst, _ := composedDecode(t, m, openOpts, dev, ids, toks, parts, true, false, gpu.WithFaults(&f))
 			for _, s := range []gpu.Stats{st, fst} {
-				if n, d := s.ServedPart(gpu.ComposedPrompt); n < m.Cfg.NLayer || d != 0 {
+				if n, d := s.ServedPart(nn.ComposedPrompt); n < m.Cfg.NLayer || d != 0 {
 					t.Fatalf("the composer served %d block steps of the prompt and declined %d, of %d blocks", n, d, m.Cfg.NLayer)
 				}
 			}

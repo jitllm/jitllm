@@ -4,9 +4,8 @@ import (
 	"fmt"
 	"unsafe"
 
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/model"
-
-	"github.com/jitllm/jitllm/composer"
 )
 
 // TopLogprob is one candidate token and its log-probability.
@@ -42,8 +41,8 @@ func (s *Instance) MaskRow(dst, logits, mask []float32) error {
 	}
 	h := &s.cpu.head
 	f, why := h.mask.formOf()
-	if why != composer.DeclineServes {
-		h.sampleDeclined[why]++
+	if why != nn.DeclineServes {
+		s.cpu.steps.Decline(nn.PartSample, why)
 		return s.sampleDeclined("the mask")
 	}
 	b := &s.cpu.bound
@@ -68,15 +67,15 @@ func (s *Instance) Logprobs(l *Logprobs, logits []float32, chosen int32) (float3
 	}
 	h := &s.cpu.head
 	f, why := h.logprobs.formOf()
-	if why != composer.DeclineServes {
-		h.sampleDeclined[why]++
+	if why != nn.DeclineServes {
+		s.cpu.steps.Decline(nn.PartSample, why)
 		return 0, s.sampleDeclined("the logprobs")
 	}
 	b := &s.cpu.bound
 	*b = cpuBound{own: s.cpu.dev.Own(f), n: 1}
 	b.io[0], b.io[1], b.io[2] = unsafe.Pointer(&logits[0]), unsafe.Pointer(&h.lpRow[0]), unsafe.Pointer(&h.lpIDs[0])
 	s.cpuRunForm(b, f)
-	h.sampled++
+	s.cpu.steps.Serve(nn.PartSample)
 	k := min(max(l.N, 0), len(h.lpIDs))
 	if cap(l.Top) < model.MaxTopLogprobs {
 		l.Top = make([]TopLogprob, 0, model.MaxTopLogprobs)

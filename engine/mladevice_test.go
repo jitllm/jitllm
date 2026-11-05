@@ -6,8 +6,8 @@ import (
 
 	"github.com/jitllm/jitllm/model"
 
-	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // TestMLAOnEveryDevice runs Multi-head Latent Attention on the device, end to
@@ -291,16 +291,16 @@ func mlaSeamMoves(t *testing.T, m *model.Model, gpux *gpu.GPU, ids []int32, want
 	if n := st.SetGPULayers(0); n != 0 {
 		t.Fatalf("SetGPULayers(0) left %d blocks placed", n)
 	}
-	before, _ := st.CPUBlockSteps()
+	before, _ := st.Account(nn.CPU).Steps.Of(nn.ComposedBlock)
 	step(a, b)
-	served, declined := st.CPUBlockSteps()
+	served, declined := st.Account(nn.CPU).Steps.Of(nn.ComposedBlock)
 	if !composed && served != 0 {
 		t.Fatalf("main's arm served %d composed block steps", served)
 	}
 	if composed {
 		for i, n := range declined {
 			if n > 0 {
-				t.Fatalf("the CPU's third: %d block steps declined: %s (%v)", n, composer.DeclineName(i), st.CPUFormErr())
+				t.Fatalf("the CPU's third: %d block steps declined: %s (%v)", n, nn.DeclineName(i), st.Account(nn.CPU).FormErr)
 			}
 		}
 		if served-before != (b-a)*m.Cfg.NLayer {
@@ -308,7 +308,7 @@ func mlaSeamMoves(t *testing.T, m *model.Model, gpux *gpu.GPU, ids []int32, want
 		}
 		// Composed at the instance's placement and once more on the move
 		// back, never at a step.
-		for li, n := range st.CPUCompositions() {
+		for li, n := range st.Account(nn.CPU).Forms {
 			if n != 2 {
 				t.Fatalf("block %d was composed for the CPU %d times, where it was placed there twice", li, n)
 			}

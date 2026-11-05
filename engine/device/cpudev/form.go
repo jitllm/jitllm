@@ -8,6 +8,7 @@ import (
 
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/device/cpu"
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/graph"
 )
@@ -218,7 +219,7 @@ const IO = 6
 
 // DeclineError is a form the CPU device refuses by a named reason.
 type DeclineError struct {
-	Why composer.Decline
+	Why nn.Decline
 	Err error
 }
 
@@ -463,7 +464,7 @@ func BuildForm(h *cpu.Target, gr *graph.Graph, codes []composer.Code, rows int, 
 					}
 				default:
 					f.Close()
-					return nil, DeclineError{composer.DeclineTable, fmt.Errorf("%s reads the table %s", c.Name, o.Name)}
+					return nil, DeclineError{nn.DeclineTable, fmt.Errorf("%s reads the table %s", c.Name, o.Name)}
 				}
 			default:
 				f.Close()

@@ -46,7 +46,7 @@ func (g *devTier) prepCollapse(bs *blockScratch, h *nn.Head) {
 // collapseParts is the formats, weights and vectors the collapse p binds,
 // held on the card.
 func (g *devTier) collapseParts(p *nn.RowsPart) (composedPart, error) {
-	cp := composedPart{kind: partCollapse, graph: p.Graph, formats: map[jlm.Role]jlm.Type{},
+	cp := composedPart{kind: nn.PartCollapse, graph: p.Graph, formats: map[jlm.Role]jlm.Type{},
 		weights: map[jlm.Role]*resident{}, vectors: map[jlm.Role]backend.Buf{}, apart: true}
 	for _, o := range p.Graph.Ops {
 		for _, b := range o.Weight {
@@ -78,7 +78,7 @@ func (g *devTier) servedCollapse(p *nn.RowsPart, rows int) (*servedPart, error) 
 	if p == nil {
 		return nil, errors.New("the streams' collapse is not held")
 	}
-	return g.servedFor(servedKey{kind: partCollapse, graph: p.Graph, rows: rows}, func() (composedPart, error) {
+	return g.servedFor(servedKey{kind: nn.PartCollapse, graph: p.Graph, rows: rows}, func() (composedPart, error) {
 		return g.collapseParts(p)
 	})
 }
@@ -119,8 +119,8 @@ func (g *devTier) servedRowCopy(w, rows int) (*servedPart, error) {
 		}
 		g.copyGraphs[w] = gr
 	}
-	return g.servedFor(servedKey{kind: partCopy, graph: gr, rows: rows}, func() (composedPart, error) {
-		return composedPart{kind: partCopy, graph: gr}, nil
+	return g.servedFor(servedKey{kind: nn.PartCopy, graph: gr, rows: rows}, func() (composedPart, error) {
+		return composedPart{kind: nn.PartCopy, graph: gr}, nil
 	})
 }
 
@@ -136,8 +136,8 @@ func (g *devTier) servedRowTake(hb *blockScratch, w, rows int) (*servedPart, err
 		}
 		g.takeGraphs[w] = gr
 	}
-	sv, err := g.servedFor(servedKey{kind: partCopy, graph: gr, rows: rows}, func() (composedPart, error) {
-		return composedPart{kind: partCopy, graph: gr, tables: map[composer.TableKey]backend.Buf{tableKey(composer.TableRequest): hb.foldReq}}, nil
+	sv, err := g.servedFor(servedKey{kind: nn.PartCopy, graph: gr, rows: rows}, func() (composedPart, error) {
+		return composedPart{kind: nn.PartCopy, graph: gr, tables: map[composer.TableKey]backend.Buf{tableKey(composer.TableRequest): hb.foldReq}}, nil
 	})
 	if err != nil {
 		return nil, err

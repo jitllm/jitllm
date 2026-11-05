@@ -1,4 +1,4 @@
-package composer
+package nn
 
 import "fmt"
 

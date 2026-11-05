@@ -3099,7 +3099,7 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	// its budget by a vocabulary a row, and a ragged step on a full card could
 	// not build them.
 	rowsNeed := func() uint64 {
-		if bb := g.reservedFor(ComposedBlock); bb != nil && g.rowsHeld() {
+		if bb := g.reservedFor(nn.ComposedBlock); bb != nil && g.rowsHeld() {
 			return g.rowsHeadNeed(bb, h.W.Rows, h.Softcap)
 		}
 		return 0
@@ -3890,7 +3890,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	pe := g.takeEmbedLocked(x)
 	embedSrv := false
 	if pe != nil {
-		// The composer's gather (ComposedEmbed) at the call's rows; a call
+		// The composer's gather (nn.ComposedEmbed) at the call's rows; a call
 		// it cannot write them for (a ragged step's rows, each its own
 		// sequence's) takes them made real by the same form.
 		if len(pe.ids) == nrow && nrow <= R && rag == nil && g.bs.embedServes() == partServes && g.embedBufs(g.bs) &&
@@ -4074,7 +4074,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 			top = max(top, v+1)
 		}
 	}
-	// The call's tables the composer serves (ComposedTable) at its rows,
+	// The call's tables the composer serves (nn.ComposedTable) at its rows,
 	// which write cs and csSWA where the tier's own table would. A call of
 	// the head alone (a model whose host collapses its streams between the
 	// blocks and the head) turns nothing and is not asked for them, nor is a
@@ -4083,8 +4083,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	var raxes []byte
 	if bs.cs != nil && p.NRot > 0 && !p.NonCausal && lo < hi && rrows >= 1 {
 		if why := g.tableServes(bs, p, pos, rrows, rag); why != partServes {
-			g.PartsDeclined[partRope]++
-			g.StepDeclines[why]++
+			g.Steps.Decline(nn.PartTable, why)
 			return refuse("the composer does not serve the rotary tables: %s", DeclineName(int(why)))
 		} else {
 			tableSrv = true
@@ -4093,7 +4092,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	gridSrv := p.NonCausal && lo < hi && g.gridServes(bs)
 	if gridSrv {
 		if _, err := g.servedGridTable(bs, R); err != nil {
-			g.PartsDeclined[partRope]++
+			g.Steps.Decline(nn.PartTable, partNotFormed)
 			return refuse("the composed grid table: %v", err)
 		}
 	}
@@ -4129,7 +4128,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	// decode step's or a prompt's one row, a chunk's folded last row, a
 	// ragged step's wanted rows or every row of a chunk. A prompt's call,
 	// its folded head too, asks only where the prompt is asked
-	// (ComposedPrompt).
+	// (nn.ComposedPrompt).
 	composedHead := head != nil
 	if composedHead {
 		switch {
@@ -4169,7 +4168,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	pickSrv := pickAsked && !pickHeadSrv && hb.pickGraph != nil && head.PickGraph == hb.pickGraph
 	pick := pickWant && g.prepPick(head, pickHeadSrv || pickSrv)
 	pickHeadSrv, pickSrv = pickHeadSrv && pick, pickSrv && pick
-	// The token the composer selects (ComposedSample): a one-row step's
+	// The token the composer selects (nn.ComposedSample): a one-row step's
 	// greedy token, written where the tier's argmax writes it, the sampler's
 	// candidates, or the label pick.
 	sampleSrv := false
@@ -4193,8 +4192,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 			sampleSrv = true
 		}
 		if why != partServes {
-			g.PartsDeclined[partSample]++
-			g.StepDeclines[why]++
+			g.Steps.Decline(nn.PartSample, why)
 			return refuse("the composer does not serve the step's token: %s", DeclineName(int(why)))
 		}
 	}
@@ -4521,7 +4519,7 @@ func (g *devTier) layersSession(s backend.Session) {
 			// The block the composer serves whole: its graph from the model's
 			// front end, formed as one unit and launched on the block's own
 			// weights and history -- a decode step's, or a prompt's at its
-			// rows (ComposedPrompt): a chunk, or a one-row call of the prompt
+			// rows (nn.ComposedPrompt): a chunk, or a one-row call of the prompt
 			// (nn.PromptDevice), never counted as a step.
 			// A ragged step's rows are a decode step of several sessions,
 			// each row at its own position and history (its descriptor):
@@ -4531,9 +4529,9 @@ func (g *devTier) layersSession(s backend.Session) {
 			// A non-causal call is a picture's rows, one run: its blocks are
 			// asked whole, at the call's rows.
 			if l.nonCausal {
-				kind = partTower
+				kind = nn.PartTower
 			}
-			why := g.blockServes(l, li, p, bs, persist, kind == partPrompt)
+			why := g.blockServes(l, li, p, bs, persist, kind == nn.PartPrompt)
 			if why == partServes && R > 1 {
 				why = l.expertsServe(nrow)
 			}
@@ -4567,8 +4565,7 @@ func (g *devTier) layersSession(s backend.Session) {
 				}
 			}
 			if why != partServes {
-				g.PartsDeclined[kind]++
-				g.BlockDeclines[why]++
+				g.Steps.Decline(kind, why)
 			}
 			// The composer is the only path: a block it does not serve is
 			// refused, never run on the tier's own kernels.
@@ -4763,7 +4760,7 @@ func (g *devTier) layersSession(s backend.Session) {
 		cur, have := g.recs[key]
 		if !have {
 			tc := time.Now()
-			parts := g.PartsServed
+			parts := g.Steps.Served
 			g.capturing = true
 			r, e := backend.Record(rec, emit)
 			g.capturing = false
@@ -4776,7 +4773,7 @@ func (g *devTier) layersSession(s backend.Session) {
 					g.stale = append(g.stale, r)
 				}
 				// The capture ran no part: the issue below counts them.
-				err, g.PartsServed = nil, parts
+				err, g.Steps.Served = nil, parts
 				emit()
 				return
 			}
@@ -4786,7 +4783,7 @@ func (g *devTier) layersSession(s backend.Session) {
 				// once will fail again. A recording that came back around a
 				// failed launch is complete as far as the driver knows and
 				// wrong as far as jitllm does, so it is retired unused.
-				g.graphOff, err, g.PartsServed = true, nil, parts
+				g.graphOff, err, g.Steps.Served = true, nil, parts
 				if e != nil {
 					g.LastErr = "graphs disabled: " + e.Error()
 				}
@@ -4802,10 +4799,10 @@ func (g *devTier) layersSession(s backend.Session) {
 			g.recs[key], cur = r, r
 			g.Captures++
 			if g.recParts == nil {
-				g.recParts = map[graphKey][numParts]int{}
+				g.recParts = map[graphKey][nn.NumParts]int{}
 			}
 			for i := range parts {
-				parts[i] = g.PartsServed[i] - parts[i]
+				parts[i] = g.Steps.Served[i] - parts[i]
 			}
 			g.recParts[key] = parts
 		}
@@ -4840,7 +4837,7 @@ func (g *devTier) layersSession(s backend.Session) {
 		if g.bs.posW != nil {
 			w(g.bs.embPos, at)
 		}
-		if pe.kind == partEmbedRows {
+		if pe.kind == nn.PartEmbedRows {
 			g.EmbedLaunches++
 		}
 		sv, serr := g.servedEmbed(g.bs, R)
@@ -5749,7 +5746,7 @@ func (g *devTier) prepBatch(width int) bool {
 		return true
 	}
 	// The composer's prompt forms at this width and their instances
-	// (ComposedPrompt).
+	// (nn.ComposedPrompt).
 	g.promptForms(bb)
 	bb.walked = g.layerGen + 1
 	return true

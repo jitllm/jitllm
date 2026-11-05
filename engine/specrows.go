@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/nn"
 )
 
@@ -331,7 +330,7 @@ func (s *Instance) finishRows(headDone bool, lastBase, total int) error {
 	if !c.Q4E() { // its hidden state is the residual, taken in q4eCollapse
 		hidden = r.hidden[:cnt*c.NEmbd]
 	}
-	if why := s.cpuHeadRows(s.bx[off*c.NEmbd:], r.logits, hidden, cnt); why != composer.DeclineServes {
+	if why := s.cpuHeadRows(s.bx[off*c.NEmbd:], r.logits, hidden, cnt); why != nn.DeclineServes {
 		return s.headDeclined(why)
 	}
 	return s.kvCheck()
@@ -459,7 +458,7 @@ func (s *Instance) rowsHead(rd nn.RowsDevice, pos, slot []int, n int, logits []f
 		}
 	}
 	s.growBatch(n)
-	if why := s.cpuHeadRows(s.bx, logits, nil, nlogit); why != composer.DeclineServes {
+	if why := s.cpuHeadRows(s.bx, logits, nil, nlogit); why != nn.DeclineServes {
 		return s.headDeclined(why)
 	}
 	return nil

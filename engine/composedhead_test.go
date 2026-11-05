@@ -125,7 +125,7 @@ func headTokens(m *model.Model) []int32 {
 type headArm struct {
 	fx         headFixture
 	dev        string
-	parts      gpu.Parts
+	parts      nn.Parts
 	xs         [][]float32
 	lnb, outB  []float32
 	want, cfg  func(c *model.Config)
@@ -197,7 +197,7 @@ func (a *headArm) run(t *testing.T) {
 // in the model's order -- with every block and the head on the device, held to
 // the oracle over the final residuals of the host's blocks, which the device's
 // differ from by the f32 reduction order alone. The head
-// runs as the composer's graph (gpu.ComposedHead), and then as the tier's own
+// runs as the composer's graph (nn.ComposedHead), and then as the tier's own
 // kernels beside the host's finishing of the logits: the same logits either
 // way, and nothing applied twice (nn.Head.Applied). Each op taken out of the
 // composed head -- the softcap dropped, the scale inverted, the bias negated,
@@ -268,7 +268,7 @@ func TestComposedHeadOps(t *testing.T) {
 						t.Run(arm.name, func(t *testing.T) {
 							// The composer's head, then the tier's own with the
 							// host finishing the logits.
-							for _, parts := range []gpu.Parts{gpu.ComposedHead} {
+							for _, parts := range []nn.Parts{nn.ComposedHead} {
 								// The tier's own head caps before the host adds the bias,
 								// and the model's head biases first: without the composed
 								// head the tier leaves such a head on the host, which runs
@@ -277,7 +277,7 @@ func TestComposedHeadOps(t *testing.T) {
 								refused := arm.cap != 0 && outB != nil && parts == 0
 								a := &headArm{fx: fx, dev: dev, parts: parts, xs: xs, lnb: lnb, outB: outB, want: set, cfg: set, refused: refused}
 								a.run(t)
-								n, d := a.stats.ServedPart(gpu.ComposedHead)
+								n, d := a.stats.ServedPart(nn.ComposedHead)
 								if refused {
 									if n != 0 || d != 0 || !(a.worst < bound) {
 										t.Fatalf("parts %d: a head the tier refuses: %d composed head steps served, %d declined, %.3e from the oracle, bound %.0e",
@@ -347,9 +347,9 @@ func TestComposedHeadOps(t *testing.T) {
 							continue
 						}
 						t.Run(v.name, func(t *testing.T) {
-							a := &headArm{fx: fx, dev: dev, parts: gpu.ComposedHead, xs: xs, lnb: lnb, outB: outB, want: full, cfg: v.cfg, mut: v.mut}
+							a := &headArm{fx: fx, dev: dev, parts: nn.ComposedHead, xs: xs, lnb: lnb, outB: outB, want: full, cfg: v.cfg, mut: v.mut}
 							a.run(t)
-							n, d := a.stats.ServedPart(gpu.ComposedHead)
+							n, d := a.stats.ServedPart(nn.ComposedHead)
 							if n != a.steps || d != 0 {
 								t.Fatalf("the composed head served %d of %d steps and was declined %d: %s", n, a.steps, d, declinesOf(a.stats))
 							}

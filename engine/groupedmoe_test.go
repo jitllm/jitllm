@@ -9,6 +9,7 @@ import (
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
@@ -151,8 +152,8 @@ func batchedMixtureCase(t *testing.T, name string, float, violate bool) float64 
 	t.Logf("%s: last-row logit NMSE %.3e\n  batched %v\n  rows    %v", name, nmse, batIDs, rowIDs)
 	// The arms are the composer's prompt part at two widths: a chunk of one
 	// row at a time, and the prompt's rows batched in fewer chunks.
-	rp, _ := rowSt.ServedPart(gpu.ComposedPrompt)
-	bp, _ := batSt.ServedPart(gpu.ComposedPrompt)
+	rp, _ := rowSt.ServedPart(nn.ComposedPrompt)
+	bp, _ := batSt.ServedPart(nn.ComposedPrompt)
 	if bp == 0 || bp >= rp {
 		t.Fatalf("composed prompt steps: %d one row at a time, %d batched -- the arms are not the two widths (%s)",
 			rp, bp, batErr)

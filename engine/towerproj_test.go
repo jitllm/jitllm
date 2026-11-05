@@ -8,6 +8,7 @@ import (
 	"testing"
 	"unsafe"
 
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/composer"
@@ -77,7 +78,7 @@ func projectorFrom(t *testing.T, s *Instance, from int, rows []float32) []float3
 	if err != nil {
 		t.Fatal(err)
 	}
-	if why := ts.cpuWeights(f, -1, &m.TowerDense); why != composer.DeclineServes {
+	if why := ts.cpuWeights(f, -1, &m.TowerDense); why != nn.DeclineServes {
 		t.Fatalf("the projector's weights: %v", why)
 	}
 	outRows := b.G.Values[out].Rows

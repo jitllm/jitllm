@@ -756,7 +756,8 @@ Stated by the user, and the shape every entry point takes:
 3. **Composition happens only when an instance is made, relocated or tuned
    at runtime** -- never in a prefill, a token or a draw, and never because a
    session opened (`engine.TestComposesOnlyWithAnInstance`,
-   `Instance.CPUComposes`; the tier's `FormedAtStep`).
+   `Instance.Account(dev).Asks`, the CPU's as a card's; a card's
+   `FormedAtStep`).
 4. **A session is a conversation's history** -- its own KV pages, recurrent
    state, positions, logits and device view (`engine.Session`). Opening one
    composes nothing.

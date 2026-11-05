@@ -10,8 +10,8 @@ import (
 
 	"github.com/jitllm/jitllm/model"
 
-	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
@@ -99,7 +99,7 @@ func TestComposedExpertPagesServe(t *testing.T) {
 							t.Fatal(err)
 						}
 						defer m.Close()
-						got, st, _ := composedDecode(t, m, instOpts, dev, ids, toks, gpu.ComposedBlock, false, false, opts...)
+						got, st, _ := composedDecode(t, m, instOpts, dev, ids, toks, nn.ComposedBlock, false, false, opts...)
 						_, in, _ := m.PageStats()
 						return got, st, in
 					}
@@ -112,7 +112,7 @@ func TestComposedExpertPagesServe(t *testing.T) {
 					// rest by default: the reference is then those blocks' banks
 					// in pages, served like the whole ones.
 					want, whole, _ := decode(t, false)
-					if n, d := whole.ServedPart(gpu.ComposedBlock); n == 0 || d != 0 {
+					if n, d := whole.ServedPart(nn.ComposedBlock); n == 0 || d != 0 {
 						t.Fatalf("the default placement served %d block steps and declined %d (%s)", n, d, declinesOf(whole))
 					}
 					if whole.StreamBlocks > 0 {
@@ -129,11 +129,11 @@ func TestComposedExpertPagesServe(t *testing.T) {
 						}
 						t.Run(arm.name, func(t *testing.T) {
 							got, st, pageIns := decode(t, arm.budget, stream(arm.slots))
-							served, declined := st.ServedPart(gpu.ComposedBlock)
+							served, declined := st.ServedPart(nn.ComposedBlock)
 							switch {
 							case st.StreamBlocks < moe:
 								t.Fatalf("%d blocks placed streamed of the %d mixtures: the configuration under test was not selected", st.StreamBlocks, moe)
-							case declined != 0 || st.BlockDeclines[composer.DeclineExperts] != 0:
+							case declined != 0 || st.BlockDeclines()[nn.DeclineExperts] != 0:
 								t.Fatalf("%d block steps declined (%s)", declined, declinesOf(st))
 							case served != steps*nLayer:
 								t.Fatalf("%d block steps served of %d", served, steps*nLayer)
@@ -195,7 +195,7 @@ func TestComposedExpertPagesServe(t *testing.T) {
 // first, would be a chunk with its streamed experts on the host.
 func TestComposedExpertPagesMove(t *testing.T) {
 	for _, name := range []string{"synth-glm4moe-hf" + q8Suffix, "synth-qwen2moe-hf" + q8Suffix, "Qwen3-MOE-4x0.6B-Q4_K_M.gguf"} {
-		for _, parts := range []gpu.Parts{gpu.ComposedBlock} {
+		for _, parts := range []nn.Parts{nn.ComposedBlock} {
 			t.Run(name, func(t *testing.T) {
 				path := jlmOf(t, testmodels.Path(name))
 				blocksMoveBetweenDevicesWith(t, path, moveWhole, parts, func(st gpu.Stats) {
@@ -435,7 +435,7 @@ func TestComposedExpertPagesMoveToTheCPU(t *testing.T) {
 				defer m.Close()
 				toks := cpuTokens(t, m, ntok+1, instOpts...)
 				nl := m.Cfg.NLayer
-				run := func(move bool) ([][]float32, int, [composer.NumDeclines]int) {
+				run := func(move bool) ([][]float32, int, [nn.NumDeclines]int) {
 					st := testInstance(t, m, ntok+2, instOpts...)
 					defer st.Close()
 					st.SetDeviceFallback(false)
@@ -463,7 +463,7 @@ func TestComposedExpertPagesMoveToTheCPU(t *testing.T) {
 						}
 						out = append(out, slices.Clone(lg))
 					}
-					served, declined := st.CPUBlockSteps()
+					served, declined := st.Account(nn.CPU).Steps.Of(nn.ComposedBlock)
 					return out, served, declined
 				}
 				want, _, _ := run(false)
@@ -482,7 +482,7 @@ func TestComposedExpertPagesMoveToTheCPU(t *testing.T) {
 				got, served, declined := run(true)
 				for i, n := range declined {
 					if n > 0 {
-						t.Fatalf("the CPU declined %d block steps: %s", n, composer.DeclineName(i))
+						t.Fatalf("the CPU declined %d block steps: %s", n, nn.DeclineName(i))
 					}
 				}
 				if served != (back-toCPU)*nl {
@@ -491,7 +491,7 @@ func TestComposedExpertPagesMoveToTheCPU(t *testing.T) {
 				if fills := g.Stats().StreamFills - f0; fills == 0 {
 					t.Fatal("the card filled no pages: its banks were not in pages")
 				}
-				composedRan(t, gpu.ComposedBlock, nil, g)
+				composedRan(t, nn.ComposedBlock, nil, g)
 				worst := 0.0
 				for i := range want {
 					e := logitNMSE(want[i], got[i])
@@ -588,7 +588,7 @@ const (
 // block cost what a resident one does, which no budget then tells apart.
 // The head is placed after the blocks, so the probes leave it home: a cut it
 // covered would land on it, and the arm runs it at home.
-func streamOpts(t *testing.T, m *model.Model, dev string, a streamArm, parts gpu.Parts, noGraph bool, ctx int, io ...Option) []gpu.Option {
+func streamOpts(t *testing.T, m *model.Model, dev string, a streamArm, parts nn.Parts, noGraph bool, ctx int, io ...Option) []gpu.Option {
 	t.Helper()
 	switch a {
 	case streamBudget:

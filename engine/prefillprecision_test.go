@@ -10,6 +10,7 @@ import (
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
@@ -85,7 +86,7 @@ func TestPrefillPrecisionArms(t *testing.T) {
 			t.Fatalf("the device was demoted; this arm is the host")
 		}
 		st := g.Stats()
-		t.Logf("arm noBatch=%v: %d launches on the matrix unit, %d of them attention", noBatch, st.MatrixPart(gpu.EveryPart), st.AttendPart(gpu.EveryPart))
+		t.Logf("arm noBatch=%v: %d launches on the matrix unit, %d of them attention", noBatch, st.MatrixPart(nn.EveryPart), st.AttendPart(nn.EveryPart))
 		return out
 	}
 	noMatrix := gpu.WithConfig(func(c *gpu.Config) { c.NoMMA = true })

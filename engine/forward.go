@@ -2068,7 +2068,7 @@ func (s *Instance) embed(token int32) error {
 	// token's critical path).
 	e := &s.cpu.embed
 	e.tok1[0], e.pos1[0] = token, s.pos
-	if why := s.cpuEmbed(s.x, s.ple, e.tok1[:], e.pos1[:]); why != composer.DeclineServes {
+	if why := s.cpuEmbed(s.x, s.ple, e.tok1[:], e.pos1[:]); why != nn.DeclineServes {
 		return s.embedDeclined(why)
 	}
 	s.trace(-1, "embd", s.x)
@@ -2842,7 +2842,7 @@ func (s *Instance) ForwardEmbd(e []float32) ([]float32, error) {
 	return s.forward(func() error {
 		st := &s.cpu.embed
 		st.tok1[0], st.pos1[0] = 0, s.pos
-		if why := s.cpuGiven(s.x, s.ple, e, st.tok1[:], st.pos1[:]); why != composer.DeclineServes {
+		if why := s.cpuGiven(s.x, s.ple, e, st.tok1[:], st.pos1[:]); why != nn.DeclineServes {
 			return s.embedDeclined(why)
 		}
 		s.trace(-1, "embd", s.x)
@@ -3150,8 +3150,8 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 		if err != nil {
 			return nil, err
 		}
-		if why == composer.DeclineServes {
-			s.cpu.served++
+		if why == nn.DeclineServes {
+			s.cpu.steps.Serve(nn.PartBlock)
 			s.trace(li, "ffn_resid", s.x)
 			continue
 		}
@@ -3197,7 +3197,7 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 		if s.rows != nil && !c.Q4E() {
 			hidden = s.rows.hidden
 		}
-		if why := s.cpuHead(s.x, s.logits, hidden); why != composer.DeclineServes {
+		if why := s.cpuHead(s.x, s.logits, hidden); why != nn.DeclineServes {
 			return nil, cpuHeadRefused(why)
 		}
 	}

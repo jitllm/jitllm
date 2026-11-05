@@ -12,6 +12,7 @@ import (
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
@@ -96,7 +97,7 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 					decodeAllocs(t, m2, g, instOpts...)
 					st := g.Stats()
 					backs := st.EmbedReadBacks - r0.EmbedReadBacks
-					n, _ := st.ServedPart(gpu.ComposedEmbed)
+					n, _ := st.ServedPart(nn.ComposedEmbed)
 					if backs < 64 || n < 64 {
 						t.Fatalf("%d rows read back and %d composed on %s for blocks on %s: the arm did not cross devices (%s)",
 							backs, n, d[0], d[1], declinesOf(st))
@@ -163,7 +164,7 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 				// recording runs none of it).
 				if slices.Contains(composedAllocModels(), name) {
 					for _, noGraph := range []bool{false, true} {
-						parts := []gpu.Parts{gpu.ComposedEmbed, gpu.ComposedTable, gpu.ComposedBlock, gpu.ComposedHead, gpu.ComposedSample}
+						parts := []nn.Parts{nn.ComposedEmbed, nn.ComposedTable, nn.ComposedBlock, nn.ComposedHead, nn.ComposedSample}
 						t.Run(fmt.Sprintf("%s/composed step/no graph %v", spec, noGraph), func(t *testing.T) {
 							opts := []gpu.Option{gpu.WithDevices(spec),
 								gpu.WithConfig(func(c *gpu.Config) {
@@ -509,8 +510,8 @@ func decodeAllocs(t *testing.T, m *model.Model, g *gpu.GPU, io ...Option) decode
 	}
 	// Every block the CPU holds ran on the composer, the card's on the card.
 	if want := (warm + n) * (m.Cfg.NLayer - placed); want > 0 {
-		if served, _ := s.CPUBlockSteps(); served != want {
-			t.Fatalf("the composed CPU served %d of %d block steps (%v): this arm measured main's decode", served, want, s.CPUFormErr())
+		if served, _ := s.Account(nn.CPU).Steps.Of(nn.ComposedBlock); served != want {
+			t.Fatalf("the composed CPU served %d of %d block steps (%v): this arm measured main's decode", served, want, s.Account(nn.CPU).FormErr)
 		}
 	}
 	dw := decodeWindow{affine: a1 - a0}

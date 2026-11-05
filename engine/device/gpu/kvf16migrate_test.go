@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/quant"
 )
 
@@ -70,7 +71,7 @@ func f16HistoryTravelsRounded(t *testing.T, dv backend.Device) {
 	if rounded == 0 {
 		t.Fatalf("no value was rounded: the gate cannot tell a packed V from a float32 one")
 	}
-	if n, _ := g.Stats().ServedPart(PartHalves); n == 0 {
+	if n, _ := g.Stats().ServedPart(nn.ConvertedHalves); n == 0 {
 		t.Fatal("the history travelled without the card's own binary16 conversions")
 	}
 }

@@ -7,7 +7,6 @@ import (
 
 	"github.com/jitllm/jitllm/model"
 
-	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 )
@@ -283,7 +282,7 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 				}
 				st := &s.cpu.embed
 				st.tok1[0], st.pos1[0] = max(rowIDs[i], 0), s.pos
-				if why := s.cpuGiven(s.x, s.ple, g, st.tok1[:], st.pos1[:]); why != composer.DeclineServes {
+				if why := s.cpuGiven(s.x, s.ple, g, st.tok1[:], st.pos1[:]); why != nn.DeclineServes {
 					return s.embedDeclined(why)
 				}
 				s.trace(-1, "embd", s.x)
@@ -676,13 +675,13 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 			return nil, err
 		}
 	}
-	why := composer.DeclineServes
+	why := nn.DeclineServes
 	if len(s.HostPick) > 0 {
 		why = s.cpuPick(s.x)
 	} else {
 		why = s.cpuHead(s.x, s.logits, nil)
 	}
-	if why != composer.DeclineServes {
+	if why != nn.DeclineServes {
 		return nil, cpuHeadRefused(why)
 	}
 	// A page the store could not return fails the request. See kvFault.
@@ -850,7 +849,7 @@ func (s *Instance) hostRows(li, slot, base, p0, n, chunkRows int, bidir bool) er
 		return err
 	}
 	l := &m.Layers[li]
-	why := composer.DeclineBidir
+	why := nn.DeclineBidir
 	if !bidir || !c.LayerKind(li).Recurrent() {
 		// A non-causal decoder's chunk (an embedding run's) is one run
 		// of rows attending both ways; a symmetric window its graph
@@ -873,8 +872,8 @@ func (s *Instance) hostRows(li, slot, base, p0, n, chunkRows int, bidir bool) er
 			return err
 		}
 	}
-	if why == composer.DeclineServes {
-		s.cpu.served++
+	if why == nn.DeclineServes {
+		s.cpu.steps.Serve(nn.PartBlock)
 		return nil
 	}
 	return s.cpuRefused(li, why)

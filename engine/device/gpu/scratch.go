@@ -434,24 +434,24 @@ func (g *devTier) batchFor(w int) int {
 // where the device holds one. Callers hold g.mu, outside any submission.
 func (g *devTier) promptComposed(lo, hi int) bool {
 	if lo >= hi {
-		return g.reservedFor(ComposedPrompt) != nil
+		return g.reservedFor(nn.ComposedPrompt) != nil
 	}
-	return g.rangeComposed(lo, hi, ComposedPrompt)
+	return g.rangeComposed(lo, hi, nn.ComposedPrompt)
 }
 
 // rowsComposed is promptComposed for a ragged step over blocks [lo, hi): its
-// blocks are asked as decode's (ComposedBlock), a prompt's ragged rows as the
+// blocks are asked as decode's (nn.ComposedBlock), a prompt's ragged rows as the
 // prompt's.
 func (g *devTier) rowsComposed(lo, hi int) bool {
 	if g.prompt {
-		return g.rangeComposed(lo, hi, ComposedPrompt)
+		return g.rangeComposed(lo, hi, nn.ComposedPrompt)
 	}
-	return g.rangeComposed(lo, hi, ComposedBlock)
+	return g.rangeComposed(lo, hi, nn.ComposedBlock)
 }
 
 // reservedFor is the reserved width's scratch where calls asked of the
 // composer as part run there, nil where they do not.
-func (g *devTier) reservedFor(part Parts) *blockScratch {
+func (g *devTier) reservedFor(part nn.Parts) *blockScratch {
 	bb := g.bbs[g.promptW]
 	if g.promptW < 2 || bb == nil || g.ComposedWidths {
 		return nil
@@ -462,13 +462,13 @@ func (g *devTier) reservedFor(part Parts) *blockScratch {
 // headReserved reports whether the composer serves a head over rows in the
 // reserved width, formed there at placement (prewarmComposedHead).
 func (g *devTier) headReserved() bool {
-	return g.reservedFor(ComposedHead) != nil && g.bs != nil && g.bs.head != nil &&
+	return g.reservedFor(nn.ComposedHead) != nil && g.bs != nil && g.bs.head != nil &&
 		g.bs.headServes(g.bs.hNorm, false, false) == partServes
 }
 
 // rangeComposed reports whether the composer serves, as part, every block of
 // [lo, hi) in the reserved width (composedBlock).
-func (g *devTier) rangeComposed(lo, hi int, part Parts) bool {
+func (g *devTier) rangeComposed(lo, hi int, part nn.Parts) bool {
 	bb := g.reservedFor(part)
 	if bb == nil || lo >= hi {
 		return false
@@ -568,7 +568,7 @@ func (g *devTier) rowsHeld() bool {
 // ragged rows in the reserved width (rowsComposed): a step of any count of
 // rows up to it builds, forms and compiles nothing. Callers hold g.mu.
 func (g *devTier) rowsReserved() bool {
-	bb := g.reservedFor(ComposedBlock)
+	bb := g.reservedFor(nn.ComposedBlock)
 	if bb == nil {
 		return false
 	}

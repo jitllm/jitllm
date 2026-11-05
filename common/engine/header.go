@@ -2,9 +2,10 @@ package engine
 
 import (
 	"fmt"
-	"github.com/jitllm/jitllm/engine"
 	"regexp"
 	"strings"
+
+	"github.com/jitllm/jitllm/engine"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
 )

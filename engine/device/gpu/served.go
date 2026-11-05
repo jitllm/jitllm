@@ -26,90 +26,12 @@ import (
 // tier's own buffers -- the block's weights and vectors by role, its rotary
 // table and its paged history.
 
-type partKind uint8
-
-const (
-	partHead partKind = iota + 1
-	// partBlock is a whole block, its graph the model's front end's.
-	partBlock
-	// partShadow is the shadow arm's comparison of a block's two outputs
-	// (shadow.go).
-	partShadow
-	// partPrompt is a whole block at a prompt chunk's rows: one sequence's
-	// positions, each row its own descriptor.
-	partPrompt
-	// partRope is a step's rotary table (nn.LayerPlan.Tables), written where
-	// every block reads it.
-	partRope
-	// partSample is a step's greedy token over the head's logits
-	// (nn.Head.Sample), written where the device's argmax writes it.
-	partSample
-	// partEmbed is a decode step's input row (nn.Head.Embed), gathered from
-	// the tables the device holds; partEmbedRows a prompt chunk's input
-	// rows, its rows at the chunk's.
-	partEmbed
-	partEmbedRows
-	// partCopy is a block's output, written apart from x where its form
-	// reads x in the kernel writing it, copied over x (graph.Copy).
-	partCopy
-	// partTower is a non-causal call's block whole: a picture's rows, one
-	// run (towerserve.go).
-	partTower
-	// partRows is a picture's rows apart from its blocks: a tower's entry
-	// or projector (picrows.go).
-	partRows
-	// partCollapse is the row a head reads from every residual stream
-	// (collapse.go).
-	partCollapse
-	// partConv is a convolutional tower's block whole, at its input grid's
-	// rows (convblock.go).
-	partConv
-	// partHalves is a binary16 history page's conversion, its floats
-	// narrowed or its halves widened, as a migration moves it (kvhalves.go).
-	partHalves
-	numParts
-)
-
-func (k partKind) String() string {
-	switch k {
-	case partHead:
-		return "head"
-	case partBlock:
-		return "block"
-	case partShadow:
-		return "shadow"
-	case partPrompt:
-		return "prompt block"
-	case partRope:
-		return "table"
-	case partSample:
-		return "sample"
-	case partEmbed:
-		return "input rows"
-	case partEmbedRows:
-		return "prompt input rows"
-	case partCopy:
-		return "copy"
-	case partTower:
-		return "tower block"
-	case partRows:
-		return "picture rows"
-	case partCollapse:
-		return "streams' collapse"
-	case partConv:
-		return "convolutional block"
-	case partHalves:
-		return "history page's halves"
-	}
-	return ""
-}
-
 // composedPart is a part of the model as the composer is asked for it: its
 // graph of generic ops, the formats of the weights it binds, and the tier's
 // buffers it binds them to -- weights and vectors by role, the step's tables
 // by the composer's name.
 type composedPart struct {
-	kind partKind
+	kind nn.Part
 	// rotaries is the model's rotaries a text block's rope ops pick their
 	// tables from (composer.Request.Rotaries), each bound by instance.
 	rotaries []graph.Rotary
@@ -1161,7 +1083,7 @@ func (g *devTier) spreadParts(src, nl *lane, gr *graph.Graph) error {
 			continue
 		}
 		var in *partInst
-		if sk.kind != partPrompt {
+		if sk.kind != nn.PartPrompt {
 			var err error
 			if in, err = g.instance(sv.f); err != nil {
 				return fmt.Errorf("the composed %s: %w", sk.kind, err)
@@ -1176,119 +1098,75 @@ func (g *devTier) spreadParts(src, nl *lane, gr *graph.Graph) error {
 	return nil
 }
 
-// Parts names the parts of a model the composer serves, each counted apart
-// (Stats.ServedPart).
-type Parts uint16
-
-const (
-	ComposedHead Parts = 1 << partHead
-	// ComposedBlock serves a block whole from its graph (nn.LayerPlan.Graph).
-	ComposedBlock Parts = 1 << partBlock
-	// PartShadow selects the shadow arm's comparisons in Stats.ServedPart:
-	// Config.ComposedShadow is its switch.
-	PartShadow Parts = 1 << partShadow
-	// ComposedPrompt serves a prompt chunk's blocks whole at the chunk's
-	// rows: a form a width, as the tier keeps a scratch a width.
-	ComposedPrompt Parts = 1 << partPrompt
-	// ComposedTable serves a call's rotary tables from their graphs
-	// (nn.LayerPlan.Tables) at its rows' rotary positions, a step's, a
-	// ragged step's or a prompt chunk's.
-	ComposedTable Parts = 1 << partRope
-	// ComposedSample serves a one-row step's greedy token from its graph
-	// (nn.Head.Sample).
-	ComposedSample Parts = 1 << partSample
-	// ComposedEmbed serves the input rows from their graph (nn.Head.Embed),
-	// a decode step's and a prompt chunk's, gathered on the device the
-	// caller promises them to (nn.EmbedDevice).
-	ComposedEmbed Parts = 1 << partEmbed
-	// PromptEmbed counts what ComposedEmbed serves of a prompt chunk's input
-	// rows (Stats.ServedPart), apart from a decode step's.
-	PromptEmbed Parts = 1 << partEmbedRows
-	// PartCopy selects in Stats.ServedPart the copies of block outputs
-	// written apart from x (servedCopy): a block the composer serves asks
-	// for one where it needs it.
-	PartCopy Parts = 1 << partCopy
-	// ComposedTower serves a non-causal call's blocks whole from their
-	// graphs: a vision tower's, over a picture's rows (towerserve.go).
-	ComposedTower Parts = 1 << partTower
-	// ComposedRows serves a picture's rows apart from its blocks from their
-	// graphs: a tower's entry and projector (nn.RowsPart, picrows.go).
-	ComposedRows Parts = 1 << partRows
-	// CollapsedHead counts the collapse of every stream a head reads, which
-	// the composer serves where it serves the head (ComposedHead).
-	CollapsedHead Parts = 1 << partCollapse
-	// ComposedConv serves a convolutional tower's blocks whole from their
-	// graphs (convblock.go).
-	ComposedConv Parts = 1 << partConv
-	// PartHalves selects in Stats.ServedPart a binary16 history page's
-	// conversions a migration ran (kvhalves.go).
-	PartHalves Parts = 1 << partHalves
-	// EveryPart is every part the composer serves, for a count over all of
-	// them.
-	EveryPart Parts = 1<<numParts - 2
-	// ComposedStep is every part of a step: its input rows, tables, blocks
-	// (a prompt chunk's and a picture's among them), head and token.
-	ComposedStep = ComposedEmbed | ComposedTable | ComposedBlock | ComposedPrompt | ComposedTower | ComposedRows | ComposedHead | ComposedSample
-)
-
 // partDecline is why a decode step's or a prompt chunk's composed part is
 // not asked for: what the serving conditions leave to the tier's own
-// kernels, counted by reason (Stats.BlockDeclines, HeadDeclines).
-type partDecline = composer.Decline
+// kernels, counted by reason (Stats.Steps).
+type partDecline = nn.Decline
 
 const (
-	partServes       = composer.DeclineServes
-	partNoGraph      = composer.DeclineNoGraph
-	partPersist      = composer.DeclinePersist
-	partSkip         = composer.DeclineSkip
-	partNoPool       = composer.DeclineNoPool
-	partPrefill      = composer.DeclinePrefill
-	partStream       = composer.DeclineStream
-	partFeeds        = composer.DeclineFeeds
-	partWindow       = composer.DeclineWindow
-	partHeadShape    = composer.DeclineHeadShape
-	partHeadNorm     = composer.DeclineHeadNorm
-	partPick         = composer.DeclinePick
-	partCaller       = composer.DeclineCaller
-	partNoRoom       = composer.DeclineNoRoom
-	partHeadBias     = composer.DeclineHeadBias
-	partHeadOther    = composer.DeclineHeadOther
-	partNoTable      = composer.DeclineNoTable
-	partTableHeld    = composer.DeclineTableHeld
-	partNoSample     = composer.DeclineNoSample
-	partNoEmbed      = composer.DeclineNoEmbed
-	partEmbedFormat  = composer.DeclineEmbedFormat
-	partEmbedWeight  = composer.DeclineEmbedWeight
-	partEmbedToken   = composer.DeclineEmbedToken
-	partExperts      = composer.DeclineExperts
-	partExpertsHost  = composer.DeclineExpertsHost
-	partExpertsRows  = composer.DeclineExpertsRows
-	partEmbedStreams = composer.DeclineEmbedStreams
-	partRecurrent    = composer.DeclineRecurrent
-	partNoWeight     = composer.DeclineNoWeight
-	numPartDeclines  = composer.NumDeclines
+	partServes       = nn.DeclineServes
+	partNoGraph      = nn.DeclineNoGraph
+	partPersist      = nn.DeclinePersist
+	partSkip         = nn.DeclineSkip
+	partNoPool       = nn.DeclineNoPool
+	partPrefill      = nn.DeclinePrefill
+	partStream       = nn.DeclineStream
+	partFeeds        = nn.DeclineFeeds
+	partWindow       = nn.DeclineWindow
+	partHeadShape    = nn.DeclineHeadShape
+	partHeadNorm     = nn.DeclineHeadNorm
+	partPick         = nn.DeclinePick
+	partCaller       = nn.DeclineCaller
+	partNoRoom       = nn.DeclineNoRoom
+	partHeadBias     = nn.DeclineHeadBias
+	partHeadOther    = nn.DeclineHeadOther
+	partNoTable      = nn.DeclineNoTable
+	partTableHeld    = nn.DeclineTableHeld
+	partNoSample     = nn.DeclineNoSample
+	partNoEmbed      = nn.DeclineNoEmbed
+	partEmbedFormat  = nn.DeclineEmbedFormat
+	partEmbedWeight  = nn.DeclineEmbedWeight
+	partEmbedToken   = nn.DeclineEmbedToken
+	partExperts      = nn.DeclineExperts
+	partExpertsHost  = nn.DeclineExpertsHost
+	partExpertsRows  = nn.DeclineExpertsRows
+	partEmbedStreams = nn.DeclineEmbedStreams
+	partRecurrent    = nn.DeclineRecurrent
+	partNoWeight     = nn.DeclineNoWeight
+	partNotFormed    = nn.DeclineNotFormed
+	numPartDeclines  = nn.NumDeclines
 )
 
 // DeclineName is the reason a decline count is kept under, by its index in
-// Stats.BlockDeclines or HeadDeclines (composer.DeclineName).
-func DeclineName(i int) string { return composer.DeclineName(i) }
+// Stats.BlockDeclines or StepDeclines (nn.DeclineName).
+func DeclineName(i int) string { return nn.DeclineName(i) }
 
 // ServedPart is how many steps the composer served the parts of k in, and
-// how many steps where they serve it was not asked for (Stats.PartsServed,
-// PartsDeclined).
-func (s Stats) ServedPart(k Parts) (served, declined int) {
-	for i := range s.PartsServed {
-		if k&(1<<i) != 0 {
-			served += s.PartsServed[i]
-			declined += s.PartsDeclined[i]
-		}
+// how many steps where they serve it was not asked for (Stats.Steps).
+func (s Stats) ServedPart(k nn.Parts) (served, declined int) {
+	served, why := s.Steps.Of(k)
+	for _, n := range why {
+		declined += n
 	}
 	return served, declined
 }
 
+// BlockDeclines is the block steps declined, a decode step's, a prompt
+// chunk's and a picture's, by reason.
+func (s Stats) BlockDeclines() [numPartDeclines]int {
+	_, why := s.Steps.Of(nn.ComposedBlock | nn.ComposedPrompt | nn.ComposedTower)
+	return why
+}
+
+// StepDeclines is the table, sample and input-row steps declined, by reason.
+func (s Stats) StepDeclines() [numPartDeclines]int {
+	_, why := s.Steps.Of(nn.ComposedTable | nn.ComposedSample | nn.ComposedEmbed | nn.PromptEmbed)
+	return why
+}
+
 // FormedPart is how many of the parts of k formed at a step rather than
 // at a placement (Stats.FormedAtStepParts).
-func (s Stats) FormedPart(k Parts) int {
+func (s Stats) FormedPart(k nn.Parts) int {
 	n := 0
 	for i := range s.FormedAtStepParts {
 		if k&(1<<i) != 0 {
@@ -1300,7 +1178,7 @@ func (s Stats) FormedPart(k Parts) int {
 
 // AttendPart is how many launches of the parts of k ran an attention formed
 // on the device's matrix unit (Stats.AttendLaunches).
-func (s Stats) AttendPart(k Parts) int {
+func (s Stats) AttendPart(k nn.Parts) int {
 	n := 0
 	for i := range s.AttendLaunches {
 		if k&(1<<i) != 0 {
@@ -1312,7 +1190,7 @@ func (s Stats) AttendPart(k Parts) int {
 
 // MatrixPart is how many launches of the parts of k ran a kernel formed on
 // the device's matrix unit (Stats.MatrixLaunches).
-func (s Stats) MatrixPart(k Parts) int {
+func (s Stats) MatrixPart(k nn.Parts) int {
 	n := 0
 	for i := range s.MatrixLaunches {
 		if k&(1<<i) != 0 {
@@ -1324,7 +1202,7 @@ func (s Stats) MatrixPart(k Parts) int {
 
 // ReplayedPart is how many steps a recording replayed the parts of k in
 // (Stats.PartsReplayed).
-func (s Stats) ReplayedPart(k Parts) int {
+func (s Stats) ReplayedPart(k nn.Parts) int {
 	n := 0
 	for i := range s.PartsReplayed {
 		if k&(1<<i) != 0 {
@@ -1339,7 +1217,7 @@ func (s Stats) ReplayedPart(k Parts) int {
 // format. It names the part so a warm step builds no graph to key it; the
 // graph is what the part computes, so the key names it, not a block index.
 type servedKey struct {
-	kind       partKind
+	kind       nn.Part
 	graph      *graph.Graph
 	rows       int
 	keys, page int
@@ -1485,6 +1363,7 @@ func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*
 	if err != nil {
 		return nil, fail(fmt.Errorf("the composed %s: %w", sk.kind, err))
 	}
+	g.FormAsks++
 	f, ok := g.servedForms[key]
 	if !ok {
 		if f, err = g.compilePart(&sl, codes, sk.rows); err != nil {
@@ -1498,7 +1377,7 @@ func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*
 	var in *partInst
 	// A form over a history read in passes is laid on its scratch's arena
 	// (streamPart).
-	if sk.kind != partPrompt && !sk.stream {
+	if sk.kind != nn.PartPrompt && !sk.stream {
 		if in, err = g.instance(f); err != nil {
 			if f.refs == 0 {
 				delete(g.servedForms, key)
@@ -1521,7 +1400,7 @@ func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*
 	f.refs++
 	sv := &servedPart{sl: sl, f: f, inst: in, args: f.launchArgs(), n: len(sl.graph.In), m: len(sl.graph.Out)}
 	g.served[sk] = sv
-	if sk.kind == partBlock && !sk.stream && sk.graph.Block >= 0 {
+	if sk.kind == nn.PartBlock && !sk.stream && sk.graph.Block >= 0 {
 		if b := sk.graph.Block; b >= len(g.blockForms) {
 			g.blockForms = append(g.blockForms, make([]int, b+1-len(g.blockForms))...)
 		}
@@ -1538,14 +1417,14 @@ func (sv *servedPart) run(g *devTier, lc *launcher, inst *partInst, in, out []ba
 
 // runAs is run, counted as a step of part kind: a prompt's one-row call
 // launches a decode step's form and is the prompt's.
-func (sv *servedPart) runAs(g *devTier, lc *launcher, inst *partInst, kind partKind, in, out []backend.Buf) error {
+func (sv *servedPart) runAs(g *devTier, lc *launcher, inst *partInst, kind nn.Part, in, out []backend.Buf) error {
 	copy(sv.in[:sv.n], in)
 	copy(sv.out[:sv.m], out)
 	matrix, err := sv.launch(lc, inst, sv.in[:sv.n], sv.out[:sv.m])
 	if err != nil {
 		return err
 	}
-	g.PartsServed[kind]++
+	g.Steps.Serve(kind)
 	g.MatrixLaunches[kind] += matrix.matrix
 	g.AttendLaunches[kind] += matrix.attend
 	return nil
@@ -1558,7 +1437,7 @@ func (sv *servedPart) runAs(g *devTier, lc *launcher, inst *partInst, kind partK
 // cache's least recently used slot evicted for it -- the page table
 // written, each expert's slot, then the codes that read the banks. uses is
 // the session's counts of the block's experts (streamBank.count).
-func (sv *servedPart) pagedRun(g *devTier, lc *launcher, s backend.Session, inst *partInst, kind partKind, l *layer, nExpert int,
+func (sv *servedPart) pagedRun(g *devTier, lc *launcher, s backend.Session, inst *partInst, kind nn.Part, l *layer, nExpert int,
 	uses []uint32, in, out []backend.Buf) error {
 	f, st := sv.f, l.stream
 	if st == nil || len(st.sel) == 0 || f.selN%len(st.sel) != 0 {
@@ -1635,7 +1514,7 @@ func (sv *servedPart) pagedRun(g *devTier, lc *launcher, s backend.Session, inst
 	if err != nil {
 		return err
 	}
-	g.PartsServed[kind]++
+	g.Steps.Serve(kind)
 	g.MatrixLaunches[kind] += m0.matrix + m1.matrix
 	g.AttendLaunches[kind] += m0.attend + m1.attend
 	return nil
@@ -1772,9 +1651,9 @@ func (g *devTier) servedHead(bs *blockScratch, norm backend.Buf, rows int) (*ser
 			sl.vectors[hs.bias] = bs.hBias
 		}
 	}
-	sk := servedKey{kind: partHead, graph: gr, rows: rows, t: t}
+	sk := servedKey{kind: nn.PartHead, graph: gr, rows: rows, t: t}
 	sv, err := g.servedFor(sk, func() (composedPart, error) {
-		sl := composedPart{kind: partHead, graph: gr, formats: map[jlm.Role]jlm.Type{hs.out: t},
+		sl := composedPart{kind: nn.PartHead, graph: gr, formats: map[jlm.Role]jlm.Type{hs.out: t},
 			weights: map[jlm.Role]*resident{}, vectors: map[jlm.Role]backend.Buf{}}
 		if hs.hasBias {
 			sl.formats[hs.bias] = jlm.TypeF32
@@ -1810,9 +1689,9 @@ func (g *devTier) servedPickHead(bs *blockScratch, norm backend.Buf) (*servedPar
 			sl.vectors[n[1].Role] = bs.hNormB
 		}
 	}
-	sk := servedKey{kind: partHead, graph: gr, rows: 1, t: t}
+	sk := servedKey{kind: nn.PartHead, graph: gr, rows: 1, t: t}
 	sv, err := g.servedFor(sk, func() (composedPart, error) {
-		sl := composedPart{kind: partHead, graph: gr, formats: map[jlm.Role]jlm.Type{out: t},
+		sl := composedPart{kind: nn.PartHead, graph: gr, formats: map[jlm.Role]jlm.Type{out: t},
 			weights: map[jlm.Role]*resident{}, vectors: map[jlm.Role]backend.Buf{}}
 		bind(&sl)
 		return sl, nil
@@ -1852,13 +1731,13 @@ func tableAxes(gr *graph.Graph) bool {
 // planes those the tier folded for it and its positions pos, the live row
 // count and then each row's (four a row over several axes).
 func (g *devTier) servedTable(gr *graph.Graph, R, marks int, cs, planes, rows backend.Buf) (*servedPart, error) {
-	sk := servedKey{kind: partRope, graph: gr, rows: R, keys: marks}
+	sk := servedKey{kind: nn.PartTable, graph: gr, rows: R, keys: marks}
 	sv, err := g.servedFor(sk, func() (composedPart, error) {
 		i, ok := ropeIndex(gr)
 		if !ok {
 			return composedPart{}, errors.New("the composed table is not a rotary table")
 		}
-		return composedPart{kind: partRope, part: composer.PartTable, graph: gr, formats: map[jlm.Role]jlm.Type{}, marks: marks,
+		return composedPart{kind: nn.PartTable, part: composer.PartTable, graph: gr, formats: map[jlm.Role]jlm.Type{}, marks: marks,
 			tables: map[composer.TableKey]backend.Buf{{Table: composer.TableAngles, Instance: i}: cs, {Table: composer.TablePlanes, Instance: i}: planes,
 				tableKey(composer.TableRopeRows): rows, tableKey(composer.TableRopeMarks): g.marks.buf}}, nil
 	})
@@ -2051,7 +1930,7 @@ func (g *devTier) servedEmbed(bs *blockScratch, R int) (*servedPart, error) {
 	if !ok {
 		return nil, fmt.Errorf("the composed input rows: format %d has no container type", w.t)
 	}
-	sk := servedKey{kind: partEmbed, graph: gr, rows: R, t: t}
+	sk := servedKey{kind: nn.PartEmbed, graph: gr, rows: R, t: t}
 	sv, err := g.servedFor(sk, func() (composedPart, error) {
 		formats := map[jlm.Role]jlm.Type{}
 		weights := map[jlm.Role]*resident{}
@@ -2077,7 +1956,7 @@ func (g *devTier) servedEmbed(bs *blockScratch, R int) (*servedPart, error) {
 				formats[w.Role], weights[w.Role] = t, r
 			}
 		}
-		cp := composedPart{kind: partEmbed, part: composer.PartEmbed, graph: g.embedFault(gr), formats: formats, weights: weights,
+		cp := composedPart{kind: nn.PartEmbed, part: composer.PartEmbed, graph: g.embedFault(gr), formats: formats, weights: weights,
 			vectors: vectors, tables: map[composer.TableKey]backend.Buf{tableKey(composer.TableTokens): bs.embTok}}
 		if bs.posW != nil {
 			cp.tables[tableKey(composer.TablePos)] = bs.embPos
@@ -2143,9 +2022,9 @@ func (g *devTier) servedSampleAt(gr *graph.Graph, rows int) (*servedPart, error)
 		len(gr.In) == 4 && len(gr.Out) == 1) {
 		return nil, errors.New("the composed sample: a graph that is not logits in and a token out, the sampler's candidates, its walk or the label pick")
 	}
-	sk := servedKey{kind: partSample, graph: gr, rows: rows}
+	sk := servedKey{kind: nn.PartSample, graph: gr, rows: rows}
 	return g.servedFor(sk, func() (composedPart, error) {
-		return composedPart{kind: partSample, part: composer.PartSample, graph: gr, formats: map[jlm.Role]jlm.Type{}}, nil
+		return composedPart{kind: nn.PartSample, part: composer.PartSample, graph: gr, formats: map[jlm.Role]jlm.Type{}}, nil
 	})
 }
 
@@ -2538,7 +2417,7 @@ func (g *devTier) unserved(li int) string {
 		// none is staged at a placement.
 		return ""
 	default:
-		return fmt.Sprintf("block %d: the composer does not serve it on this device (%s)", li, composer.DeclineName(int(why)))
+		return fmt.Sprintf("block %d: the composer does not serve it on this device (%s)", li, nn.DeclineName(int(why)))
 	}
 }
 
@@ -2882,13 +2761,13 @@ func rowSeqs(R int, one bool) int {
 
 // rowsKind is the part a call of R rows asks of the composer for its
 // blocks: a prompt's chunk, or a call of rows that is not a ragged step, is
-// ComposedPrompt's; a ragged decode step's rows and a one-row step are
-// ComposedBlock's.
-func (g *devTier) rowsKind(R int, rag bool) partKind {
+// nn.ComposedPrompt's; a ragged decode step's rows and a one-row step are
+// nn.ComposedBlock's.
+func (g *devTier) rowsKind(R int, rag bool) nn.Part {
 	if (R > 1 || g.prompt) && (!rag || g.prompt) {
-		return partPrompt
+		return nn.PartPrompt
 	}
-	return partBlock
+	return nn.PartBlock
 }
 
 // promptForms forms every placed block's part at bb's rows where the
@@ -2920,7 +2799,7 @@ func (g *devTier) promptForms(bb *blockScratch) {
 // mixed, at batched scratch bb's rows: the server's step width, or the
 // reserved width a ragged step runs in (reserveScratch).
 func (g *devTier) raggedAt(bb *blockScratch) bool {
-	return bb != nil && (g.stepW > 0 && bb.rows == g.stepW || bb == g.reservedFor(ComposedBlock))
+	return bb != nil && (g.stepW > 0 && bb.rows == g.stepW || bb == g.reservedFor(nn.ComposedBlock))
 }
 
 // keyBound is a block form's key bound for a session of maxSeq positions.
@@ -3062,9 +2941,9 @@ func (g *devTier) servedBlock(l *layer, li int, cs backend.Buf, pl *kvLayerPool,
 func (g *devTier) servedBlockAs(l *layer, li int, cs backend.Buf, pl *kvLayerPool, rows, rowsW, qOff, calls, rec backend.Buf, maxSeq, page, R, seqs int,
 	run []backend.Buf, bs *blockScratch) (*servedPart, error) {
 	keys := keyBound(maxSeq)
-	kind := partBlock
+	kind := nn.PartBlock
 	if R > 1 {
-		kind = partPrompt
+		kind = nn.PartPrompt
 	}
 	// A linear block holds no history, unless it attends too: its state is
 	// its pool's (bindRec).

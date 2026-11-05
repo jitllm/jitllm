@@ -18,7 +18,7 @@ import (
 
 const faultModel = "Llama-3.2-1B-Instruct-Q4_K_M.gguf"
 
-func faultTier(t *testing.T, parts gpu.Parts, extra ...gpu.Option) *gpu.GPU {
+func faultTier(t *testing.T, parts nn.Parts, extra ...gpu.Option) *gpu.GPU {
 	t.Helper()
 	o := append(append([]gpu.Option{gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t)...), extra...)
 	if testdevices.Selected() {
@@ -42,7 +42,7 @@ type faultRun struct {
 // buildFaultRun prefills a prompt and steps a few tokens on a device whose
 // composer cannot form a matvec, the failure reported as a build failure or,
 // for the violation, as the device failing.
-func buildFaultRun(t *testing.T, m *model.Model, parts gpu.Parts, asDevice bool, io ...Option) faultRun {
+func buildFaultRun(t *testing.T, m *model.Model, parts nn.Parts, asDevice bool, io ...Option) faultRun {
 	t.Helper()
 	var f gpu.Faults
 	f.SetFormFault(true, graph.OpMatVec, asDevice)
@@ -81,8 +81,8 @@ func TestBuildFailureMovesNothing(t *testing.T) {
 	defer m.Close()
 	for _, c := range []struct {
 		name  string
-		parts gpu.Parts
-	}{{"block", gpu.ComposedBlock}, {"head", gpu.ComposedHead}} {
+		parts nn.Parts
+	}{{"block", nn.ComposedBlock}, {"head", nn.ComposedHead}} {
 		t.Run(c.name, func(t *testing.T) {
 			r := buildFaultRun(t, m, c.parts, false, instOpts...)
 			var be *nn.BuildError

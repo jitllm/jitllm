@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/graph"
 )
 
@@ -45,9 +46,9 @@ const (
 // bound as its input and its output, so a form that read it at or after the
 // kernel writing the new one is refused.
 func (g *devTier) servedShadow(l *layer, n int) (*servedPart, error) {
-	sk := servedKey{kind: partShadow, graph: l.graph, rows: 1}
+	sk := servedKey{kind: nn.PartShadow, graph: l.graph, rows: 1}
 	sv, err := g.servedFor(sk, func() (composedPart, error) {
-		return composedPart{kind: partShadow, graph: (&graph.Drift{NEmbd: n}).Build()}, nil
+		return composedPart{kind: nn.PartShadow, graph: (&graph.Drift{NEmbd: n}).Build()}, nil
 	})
 	if err == nil && !sv.f.inPlace(driftState, driftNext) {
 		err = fmt.Errorf("the composed shadow reads its state after writing the new one")

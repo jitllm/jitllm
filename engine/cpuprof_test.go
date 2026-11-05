@@ -11,6 +11,7 @@ import (
 
 	"github.com/jitllm/jitllm/model"
 
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/engine/probe"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
@@ -96,7 +97,7 @@ func TestComposedCPUProfile(t *testing.T) {
 		per := float64(d.Microseconds()) / ft
 		bpt := float64(m.BytesPerToken())
 		gb := bpt / (per * 1e-6) / 1e9
-		served, declined := st.CPUBlockSteps()
+		served, declined := st.Account(nn.CPU).Steps.Of(nn.ComposedBlock)
 		var b strings.Builder
 		fmt.Fprintf(&b, "composed=%v: %.0f us a token (%.1f tok/s), %.1f MB a token = %.1f GB/s = %.0f%% of the %.1f GB/s wall; regions a token %.1f parallel %.1f serial, %.1f phases; CPU block steps %d declined %v\n",
 			composed, per, 1e6/per, bpt/1e6, gb, 100*gb*1e9/host.Bandwidth, host.Bandwidth/1e9, float64(par)/ft, float64(ser)/ft, float64(phases)/ft, served, declined)

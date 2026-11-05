@@ -38,7 +38,7 @@ func (g *devTier) towerServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratc
 		return partWindow
 	}
 	if _, _, _, err := g.towerStep(bs, l, li, p, bs.rows); err != nil {
-		return composer.DeclineNotFormed
+		return nn.DeclineNotFormed
 	}
 	return partServes
 }

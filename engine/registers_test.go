@@ -130,7 +130,7 @@ func TestHotKernelsKeepTheirRegisters(t *testing.T) {
 		if _, err = st.Forward(Greedy(lg)); err != nil {
 			t.Fatal(err)
 		}
-		ks := CPUKernels(m, st.eng.cpu)
+		ks := st.eng.cpu.Kernels(m.Id)
 		if len(ks) == 0 {
 			t.Fatal("the model holds no composed CPU kernel: the gate checked nothing")
 		}

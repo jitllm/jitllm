@@ -5,6 +5,7 @@ import (
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/composer"
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 )
 
@@ -50,9 +51,9 @@ func (g *devTier) gridServes(bs *blockScratch) bool {
 // servedGridTable is bs's grid table at R rows, writing bs.cs from bs's
 // cells, request and planes.
 func (g *devTier) servedGridTable(bs *blockScratch, R int) (*servedPart, error) {
-	sk := servedKey{kind: partRope, graph: bs.gridGraph, rows: R}
+	sk := servedKey{kind: nn.PartTable, graph: bs.gridGraph, rows: R}
 	sv, err := g.servedFor(sk, func() (composedPart, error) {
-		return composedPart{kind: partRope, part: composer.PartTable, graph: bs.gridGraph, formats: map[jlm.Role]jlm.Type{},
+		return composedPart{kind: nn.PartTable, part: composer.PartTable, graph: bs.gridGraph, formats: map[jlm.Role]jlm.Type{},
 			tables: map[composer.TableKey]backend.Buf{{Table: composer.TableAngles}: bs.cs, {Table: composer.TablePlanes}: bs.gridPlanes,
 				tableKey(composer.TablePos): bs.gridPos, tableKey(composer.TableRequest): bs.gridReq}}, nil
 	})

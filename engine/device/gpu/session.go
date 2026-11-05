@@ -39,11 +39,13 @@ func (g *GPU) Attach() nn.LayerDevice {
 		_ nn.RecRowsDevice = g
 		_ nn.CopyForgetter = g
 		_ nn.ModelOwner    = g
+		_ nn.Ledger        = g
 		_ nn.NamedDevice   = s
 		_ nn.Session       = s
 		_ nn.RecRowsDevice = s
 		_ nn.CopyForgetter = s
 		_ nn.ModelOwner    = s
+		_ nn.Ledger        = s
 	)
 	return s
 }

@@ -10,7 +10,7 @@ import (
 	"github.com/jitllm/jitllm/format/jlm"
 )
 
-// A picture's rows apart from its blocks (ComposedRows, nn.RowsPart): the
+// A picture's rows apart from its blocks (nn.ComposedRows, nn.RowsPart): the
 // tower's entry over the picture and its projector over its last block's
 // rows, graphs of generic ops the model states, formed by the composer and
 // run on the card holding the tower's last block, in a submission of their
@@ -46,7 +46,7 @@ type rowsState struct {
 // highest block, in (at most p.Rows rows of the graph's input) from the
 // host and out read back, req the request's words and pos the positions'
 // (nil for none); false where the card does not, its reason counted
-// (Stats.PartsDeclined).
+// (Stats.Steps).
 func (g *GPU) RunRows(p *nn.RowsPart, live int, req, pos []uint32, in, out []float32) bool {
 	return g.runRows(0, p, live, req, pos, in, out)
 }
@@ -130,20 +130,20 @@ func (g *devTier) RunRows(p *nn.RowsPart, live int, req, pos []uint32, in, out [
 	sv, err := g.servedRows(p)
 	if err != nil {
 		g.LastErr = "the composed picture rows: " + err.Error()
-		g.PartsDeclined[partRows]++
+		g.Steps.Decline(nn.PartRows, partNotFormed)
 		return false
 	}
 	gr := p.Graph
 	if live > p.Rows || len(in) > p.Rows*gr.Values[gr.In[0]].Width || len(out) < live*gr.Values[gr.Out[0]].Width {
 		g.LastErr = fmt.Sprintf("the composed picture rows: %d live rows past the %d the form holds", live, p.Rows)
-		g.PartsDeclined[partRows]++
+		g.Steps.Decline(nn.PartRows, partCaller)
 		return false
 	}
 	rs := &g.rows
 	inW, outW := gr.Values[gr.In[0]].Width, gr.Values[gr.Out[0]].Width
 	if err := g.rowsBufs(4*p.Rows*inW, 4*p.Rows*outW, 4*(composer.RequestRows+p.Rows), 4*(p.Rows+1)); err != nil {
 		g.LastErr = "the composed picture rows: " + err.Error()
-		g.PartsDeclined[partRows]++
+		g.Steps.Decline(nn.PartRows, partNoRoom)
 		return false
 	}
 	rs.sv = sv
@@ -184,7 +184,7 @@ func (g *devTier) rowsSession(s backend.Session) {
 	rs.to.s = s
 	defer rs.to.leave()
 	rs.ins[0], rs.outs[0] = rs.in, rs.out
-	if err := rs.sv.runAs(g, &rs.lc, rs.sv.inst, partRows, rs.ins[:], rs.outs[:]); err != nil {
+	if err := rs.sv.runAs(g, &rs.lc, rs.sv.inst, nn.PartRows, rs.ins[:], rs.outs[:]); err != nil {
 		rs.err = err
 		return
 	}
@@ -219,7 +219,7 @@ func (g *devTier) rowsBufs(in, out, req, pos int) error {
 // servedRows is p's form on the card, its weights and vectors held.
 func (g *devTier) servedRows(p *nn.RowsPart) (*servedPart, error) {
 	rs := &g.rows
-	sk := servedKey{kind: partRows, graph: p.Graph, rows: p.Rows}
+	sk := servedKey{kind: nn.PartRows, graph: p.Graph, rows: p.Rows}
 	if sv := g.served[sk]; sv != nil && rs.req != nil {
 		sv.sl.tables[tableKey(composer.TableRequest)], sv.sl.tables[tableKey(composer.TablePos)] = rs.req, rs.pos
 		return sv, nil
@@ -253,7 +253,7 @@ func (g *devTier) servedRows(p *nn.RowsPart) (*servedPart, error) {
 		return nil, err
 	}
 	sv, err := g.servedFor(sk, func() (composedPart, error) {
-		return composedPart{kind: partRows, graph: p.Graph, formats: formats, weights: weights, vectors: vectors, apart: true,
+		return composedPart{kind: nn.PartRows, graph: p.Graph, formats: formats, weights: weights, vectors: vectors, apart: true,
 			tables: map[composer.TableKey]backend.Buf{tableKey(composer.TableRequest): rs.req, tableKey(composer.TablePos): rs.pos}}, nil
 	})
 	if err != nil {

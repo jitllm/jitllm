@@ -37,7 +37,7 @@ func TestABatchLeavesAnotherSessionAlone(t *testing.T) {
 
 // aBatchLeavesAnotherSessionAlone is TestABatchLeavesAnotherSessionAlone
 // with the composer serving parts.
-func aBatchLeavesAnotherSessionAlone(t *testing.T, m *model.Model, parts gpu.Parts, io ...Option) {
+func aBatchLeavesAnotherSessionAlone(t *testing.T, m *model.Model, parts nn.Parts, io ...Option) {
 	const seq, rows, before, after = 256, 3, 3, 5
 	open := func(t *testing.T, spec string) *gpu.GPU {
 		g, err := openGPU(t, gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))

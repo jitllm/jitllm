@@ -217,7 +217,7 @@ type lane struct {
 	recTick uint64
 	// recParts is the composer's parts each recording holds, by part, which
 	// a replay of it runs again (Stats.PartsReplayed).
-	recParts map[graphKey][numParts]int
+	recParts map[graphKey][nn.NumParts]int
 	// stale holds recordings that were retired from inside a Session and so
 	// could not be destroyed there; see dropGraph.
 	stale []backend.Recording

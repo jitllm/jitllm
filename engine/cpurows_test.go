@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/model"
 
-	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
@@ -270,7 +270,7 @@ func cpuSessionSteps(t *testing.T, m *model.Model, prompts [][]int32, steps []in
 		}
 		rows[i] = append(rows[i], append([]float32(nil), lg...))
 	}
-	before, _ := states[0].CPUBlockSteps()
+	before, _ := states[0].Account(nn.CPU).Steps.Of(nn.ComposedBlock)
 	// The first step carries three rows of each session, its logit row
 	// leading; each step after it one.
 	runs, calls := make([]Run, len(states)), 0
@@ -292,10 +292,10 @@ func cpuSessionSteps(t *testing.T, m *model.Model, prompts [][]int32, steps []in
 		j, calls = j+k, calls+1
 	}
 	if composed {
-		served, declined := states[0].CPUBlockSteps()
+		served, declined := states[0].Account(nn.CPU).Steps.Of(nn.ComposedBlock)
 		for i, n := range declined {
 			if n > 0 {
-				t.Fatalf("a step across sessions: %d block steps declined: %s (%v)", n, composer.DeclineName(i), states[0].CPUFormErr())
+				t.Fatalf("a step across sessions: %d block steps declined: %s (%v)", n, nn.DeclineName(i), states[0].Account(nn.CPU).FormErr)
 			}
 		}
 		if want := calls * m.Cfg.NLayer; served-before < want {
@@ -314,7 +314,7 @@ func cpuSessionSteps(t *testing.T, m *model.Model, prompts [][]int32, steps []in
 // arm none served.
 func cpuServed(t *testing.T, s *Instance, what string, want int, composed bool) {
 	t.Helper()
-	served, declined := s.CPUBlockSteps()
+	served, declined := s.Account(nn.CPU).Steps.Of(nn.ComposedBlock)
 	if !composed {
 		if served != 0 {
 			t.Fatalf("%s: main's arm served %d composed block steps", what, served)
@@ -323,13 +323,13 @@ func cpuServed(t *testing.T, s *Instance, what string, want int, composed bool) 
 	}
 	for i, n := range declined {
 		if n > 0 {
-			t.Fatalf("%s: %d block steps declined: %s (%v)", what, n, composer.DeclineName(i), s.CPUFormErr())
+			t.Fatalf("%s: %d block steps declined: %s (%v)", what, n, nn.DeclineName(i), s.Account(nn.CPU).FormErr)
 		}
 	}
 	if served < want {
 		t.Fatalf("%s: %d block steps served, want at least %d", what, served, want)
 	}
-	for li, n := range s.CPUCompositions() {
+	for li, n := range s.Account(nn.CPU).Forms {
 		if n != 1 {
 			t.Fatalf("%s: block %d composed for the CPU %d times", what, li, n)
 		}
@@ -360,7 +360,7 @@ func TestComposedCPURowsDoNotAllocate(t *testing.T) {
 				w := s.c.ResidW()
 				for li := range m.Cfg.NLayer {
 					why, err := s.cpuRows(li, &m.Layers[li], s.bx[:len(pos)*w], s.bcs, s.bcsSWA, seq, pos, nil)
-					if err != nil || why != composer.DeclineServes {
+					if err != nil || why != nn.DeclineServes {
 						t.Fatalf("block %d: %v (%s)", li, err, why)
 					}
 				}
@@ -409,7 +409,7 @@ func TestComposedCPURowsDoNotAllocate(t *testing.T) {
 			if w.engine != 0 || w.unattributed > 0 {
 				t.Errorf("a warm batched step allocates%s", w.where)
 			}
-			if served, declined := b.CPUBlockSteps(); served == 0 {
+			if served, declined := b.Account(nn.CPU).Steps.Of(nn.ComposedBlock); served == 0 {
 				t.Fatalf("the batch served no composed block step (declined %v)", declined)
 			}
 		})

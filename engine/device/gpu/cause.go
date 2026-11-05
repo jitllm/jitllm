@@ -55,10 +55,13 @@ func (g *devTier) noteFormCause() {
 // named.
 func (g *devTier) buildFailed(err error) error {
 	g.noteFormCause()
-	if nn.IsBuildError(err) {
-		return err
+	if !nn.IsBuildError(err) {
+		err = &nn.BuildError{Layer: -1, Err: err}
 	}
-	return &nn.BuildError{Layer: -1, Err: err}
+	if g.FormErr == nil {
+		g.FormErr = err
+	}
+	return err
 }
 
 // ErrCause is the worst refusal kind any device met since the last call began

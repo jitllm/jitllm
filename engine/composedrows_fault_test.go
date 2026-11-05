@@ -10,6 +10,7 @@ import (
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // TestComposedRowsDiscriminate runs the composed rows' gates under each
@@ -125,7 +126,7 @@ func composedFoldParts(t *testing.T, m *model.Model, dev string, io ...Option) {
 	if folds == 0 {
 		t.Fatalf("no head folded: the arm did not select the fold")
 	}
-	if hs, hd := g.Stats().ServedPart(gpu.ComposedHead); hs == 0 || hd != 0 {
+	if hs, hd := g.Stats().ServedPart(nn.ComposedHead); hs == 0 || hd != 0 {
 		t.Fatalf("the composer served the head %d times and declined it %d (%s)", hs, hd, declinesOf(g.Stats()))
 	}
 	nmse := logitNMSE(got, want)

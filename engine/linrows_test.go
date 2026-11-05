@@ -5,6 +5,8 @@ import (
 	"math"
 	"strings"
 	"testing"
+
+	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // A hybrid's prompt resumed from the prefix cache, its recurrent summary
@@ -150,14 +152,14 @@ func TestLinearRowsResumeFromThePrefixCache(t *testing.T) {
 	if s.KVRestored() == 0 {
 		t.Fatal("nothing was restored: the resume this gate is about never ran")
 	}
-	s0, d0 := s.CPUBlockSteps()
+	s0, d0 := s.Account(nn.CPU).Steps.Of(nn.ComposedBlock)
 	got, err := s.Prefill(prompt[80:])
 	if err != nil {
 		t.Fatal(err)
 	}
 	// The resumed rows ran on the composed CPU, each of their calls every
 	// block, and nothing declined.
-	if s1, d1 := s.CPUBlockSteps(); s1 == s0 || (s1-s0)%m.Cfg.NLayer != 0 || d1 != d0 {
+	if s1, d1 := s.Account(nn.CPU).Steps.Of(nn.ComposedBlock); s1 == s0 || (s1-s0)%m.Cfg.NLayer != 0 || d1 != d0 {
 		t.Fatalf("the resumed rows: the composed CPU served %d block steps over %d blocks and declined %v", s1-s0, m.Cfg.NLayer, d1)
 	}
 	e := newLinEnv(linExact())
