@@ -91,14 +91,16 @@ func towerPixels(t *testing.T, s *Instance, img image.Image) ([]float32, model.S
 // violation: a picture resized to the rounded size without the area's
 // bound, and the patches in raster order.
 func TestQwen2VLTowerMatchesTransformers(t *testing.T) {
-	for _, name := range qvlTowers {
+	for _, name := range qvlTowers() {
 		t.Run(name, func(t *testing.T) { qwen2VLTowerMatchesTransformers(t, name) })
 	}
 }
 
 // qvlTowers are the Qwen2-VL family fixtures whose towers the converter
 // states: Qwen2-VL's, and Qwen2.5-VL's with its windows.
-var qvlTowers = []string{"synth-qwen2vl", "synth-qwen25vl", "synth-qwen35vl", "synth-qwen3vl", "synth-qwen3vlmoe"}
+func qvlTowers() []string {
+	return []string{"synth-qwen2vl", "synth-qwen25vl", "synth-qwen35vl", "synth-qwen3vl", "synth-qwen3vlmoe"}
+}
 
 func qwen2VLTowerMatchesTransformers(t *testing.T, name string) {
 	m, g, openOpts := openQVLTower(t, name)
@@ -209,7 +211,7 @@ func qwen2VLTowerMatchesTransformers(t *testing.T, name string) {
 // reference by TestQwen2VLTowerMatchesTransformers. The violations are the
 // picture's rows laid out as text and, with taps, the taps zeroed.
 func TestQwen2VLMatchesTransformers(t *testing.T) {
-	for _, name := range qvlTowers {
+	for _, name := range qvlTowers() {
 		t.Run(name, func(t *testing.T) { qwen2VLMatchesTransformers(t, name) })
 	}
 }

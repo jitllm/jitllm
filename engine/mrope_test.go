@@ -22,8 +22,10 @@ import (
 // two (synth-qwen3vl, synth-qwen3vlmoe) add their tower's deepstack rows into
 // the text model's first blocks: their spans carry the golden's (Span.Deep)
 // on the model their pair converts to, whose tower states how many.
-var qvlFixtures = []string{"synth-qwen2vl", "synth-qwen25vl", "synth-qwen35vl", "synth-qwen3vl", "synth-qwen3vlmoe",
-	"synth-glm4v", "synth-glm4vmoe"}
+func qvlFixtures() []string {
+	return []string{"synth-qwen2vl", "synth-qwen25vl", "synth-qwen35vl", "synth-qwen3vl", "synth-qwen3vlmoe",
+		"synth-glm4v", "synth-glm4vmoe"}
+}
 
 // qvlGolden is scripts/qwenvlgold.py's record of transformers' own
 // Qwen2-VL family on a prompt of text, one non-square image and text, then a
@@ -191,7 +193,7 @@ func qvlWorst(g *qvlGolden, rows [][]float32) (float64, int) {
 // get_rope_index row for row -- the prompt's text, the image's (t, h, w) and
 // the text after it -- and ropeOf's continuation to its rope delta.
 func TestMRopeLaysTheImageOutAsTransformersDoes(t *testing.T) {
-	for _, name := range qvlFixtures {
+	for _, name := range qvlFixtures() {
 		t.Run(name, func(t *testing.T) { mRopeLaysTheImageOutAsTransformersDoes(t, name) })
 	}
 }
@@ -236,7 +238,7 @@ func mRopeLaysTheImageOutAsTransformersDoes(t *testing.T, name string) {
 // The violation is the image laid out as text (sequential positions), the
 // state this replaced: it must fail by orders of magnitude.
 func TestMRopeMatchesTransformers(t *testing.T) {
-	for _, name := range qvlFixtures {
+	for _, name := range qvlFixtures() {
 		t.Run(name, func(t *testing.T) { mRopeMatchesTransformers(t, name) })
 	}
 }
@@ -422,7 +424,7 @@ func mRopeMatchesTransformers(t *testing.T, name string) {
 // (t, h, w), with the text after it resuming elsewhere -- restores nothing
 // past the text before the image.
 func TestMRopePrefixCacheKeysOnPositions(t *testing.T) {
-	for _, name := range qvlFixtures {
+	for _, name := range qvlFixtures() {
 		t.Run(name, func(t *testing.T) { mRopePrefixCacheKeysOnPositions(t, name) })
 	}
 }
@@ -521,7 +523,7 @@ func mRopePrefixCacheKeysOnPositions(t *testing.T, name string) {
 // and back home in the middle of the continuation, and a warm decode after
 // the image at zero engine allocations on the host and every device.
 func TestMRopeKeepsTheFivePrinciples(t *testing.T) {
-	for _, name := range qvlFixtures {
+	for _, name := range qvlFixtures() {
 		t.Run(name, func(t *testing.T) { mRopeKeepsTheFivePrinciples(t, name) })
 	}
 }

@@ -2938,11 +2938,15 @@ func (e *Engine) defaultMaxSeq(lm *LoadedModel) int {
 // open: it would otherwise load and fail at the first session, far from the
 // setting that caused it.
 func namedDevicesOpen(pl engine.Placement, g *gpu.GPU) error {
-	open := map[string]bool{"host": true}
+	names := []string{nn.CPU}
 	if g != nil {
 		for _, h := range g.Hardware() {
-			open[nn.DeviceName(h.Name)] = true
+			names = append(names, nn.DeviceName(h.Name))
 		}
+	}
+	open := map[string]bool{}
+	for _, n := range names {
+		open[n] = true
 	}
 	named := make([]engine.Place, 0, len(pl.Blocks)+2)
 	for _, b := range pl.Blocks {
@@ -2955,8 +2959,8 @@ func namedDevicesOpen(pl engine.Placement, g *gpu.GPU) error {
 	}
 	for _, x := range named {
 		if !open[x.On] {
-			return fmt.Errorf("placement names %q, which this load did not open (it opened %d device(s); "+
-				"name each in the device list, e.g. cuda:0,vulkan:0)", x.On, len(open)-1)
+			return fmt.Errorf("placement names %q, which this load did not open (it opened %s; "+
+				"name each in the device list, e.g. cuda:0,vulkan:0)", x.On, strings.Join(names, ", "))
 		}
 	}
 	return nil
