@@ -4,8 +4,8 @@ import (
 	"fmt"
 
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/layout"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // The device's own buffers -- the block scratches, the batched prompt's and

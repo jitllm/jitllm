@@ -6,7 +6,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // Speculative decoding with the model's own multi-token-prediction block

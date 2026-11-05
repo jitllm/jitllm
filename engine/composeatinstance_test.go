@@ -8,8 +8,8 @@ import (
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // cardComposed is what g's composer formed afresh and its devices compiled
@@ -135,8 +135,8 @@ func TestComposesOnlyWithAnInstance(t *testing.T) {
 // TestComposesOnlyWithAnInstanceOnACard is TestComposesOnlyWithAnInstance
 // with the instance on a card: sessions' prompts and tokens, alone and stepped
 // together, form no part on the card at a step (gpu.Stats.FormedAtStep) and
-// ask the CPU composer for nothing; the card formed its parts when the
-// instance was placed.
+// ask no device -- the CPU or a card the instance runs on, by its account --
+// for a form; the card formed its parts when the instance was placed.
 func TestComposesOnlyWithAnInstanceOnACard(t *testing.T) {
 	for _, src := range []string{testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf"), models()["qwen3moe"]} {
 		t.Run(filepath.Base(src), func(t *testing.T) {
@@ -163,11 +163,23 @@ func TestComposesOnlyWithAnInstanceOnACard(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer pool.Unserve(in)
-			c0, f0, k0 := in.Account(nn.CPU).Asks, g.Stats().FormedAtStep, cardComposed(g)
+			f0, k0 := g.Stats().FormedAtStep, cardComposed(g)
 			// The placement composed: a count that never moves would pass
 			// every step below whatever it formed.
 			if k0[0] == 0 || k0[1] == 0 {
 				t.Fatalf("the placement formed %d requests and compiled %d parts: the count sees no composition", k0[0], k0[1])
+			}
+			// Every device the instance runs on, by name, the CPU among them.
+			asks := map[string]int64{nn.CPU: in.Account(nn.CPU).Asks}
+			for _, at := range in.Locations() {
+				if at != "" && at != nn.CPU {
+					asks[at] = in.Account(at).Asks
+				}
+			}
+			for dev, n := range asks {
+				if dev != nn.CPU && n == 0 {
+					t.Fatalf("placing blocks on %s asked it for no form: its count cannot see a composition", dev)
+				}
 			}
 			prompts := [][]int32{{1, 45, 79, 33, 21, 9}, {1, 65, 108, 250, 205, 63}}
 			sess := make([]*Session, len(prompts))
@@ -217,8 +229,10 @@ func TestComposesOnlyWithAnInstanceOnACard(t *testing.T) {
 				t.Errorf("the card formed %d parts at a step (%v)", n, g.Stats().FormedAtStepParts)
 			}
 			composedNothingSince(t, g, k0, "sessions' prompts and steps")
-			if n := in.Account(nn.CPU).Asks - c0; n != 0 {
-				t.Errorf("sessions' prompts and tokens asked the CPU composer %d times", n)
+			for dev, a := range asks {
+				if n := in.Account(dev).Asks - a; n != 0 {
+					t.Errorf("sessions' prompts and tokens asked %s for %d forms", dev, n)
+				}
 			}
 			if g.Stats().SessionRows == 0 {
 				t.Errorf("no step ran the sessions' rows together on the card")

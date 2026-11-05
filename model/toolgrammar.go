@@ -7,7 +7,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/jitllm/jitllm/engine/grammar"
+	"github.com/jitllm/jitllm/grammar"
 )
 
 // ToolChoiceMode is what a request lets the model do with its tools.

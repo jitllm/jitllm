@@ -7,8 +7,8 @@ import (
 	"strings"
 
 	"github.com/jitllm/jitllm/engine/device/cpu"
-	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/engine/sched"
+	"github.com/jitllm/jitllm/nn"
+	"github.com/jitllm/jitllm/sched"
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/backend/metal"
@@ -175,7 +175,7 @@ func OpenWith(options ...Option) (*GPU, error) {
 // cpu lists the CPU as a device: alone it offers the model to no card, and
 // beside cards it is one more device a block may be placed on. A list without
 // it (and without auto) keeps every block on the cards it names, paging where
-// they do not hold the model (model.WithDevices, ListsCPU).
+// they do not hold the model (engine.WithDevices, ListsCPU).
 func ParseDevices(spec string) ([]Entry, error) {
 	spec = strings.TrimSpace(spec)
 	if spec == "" {
@@ -329,7 +329,7 @@ func (e Entry) Device() bool { return e.API != "cpu" }
 // ListsCPU reports whether a device spec lists the CPU among its devices:
 // "auto", or a list that names cpu. The engine chooses the CPU for a block --
 // one no card holds, one a relocation or a fault moves -- exactly when this is
-// true (model.WithDevices); a spec of cards alone is a caller keeping the
+// true (engine.WithDevices); a spec of cards alone is a caller keeping the
 // model off the CPU.
 func ListsCPU(spec string) (bool, error) {
 	es, err := ParseDevices(spec)
@@ -1070,7 +1070,7 @@ func (g *GPU) Budgets() []Budget {
 // the devices on the host's memory have charged to their pool (blocks, KV
 // pages, scratch, the driver's rounding), plus the packed arena's limit. The
 // host takes it off its own budgets (model.Model.SetPageBudget,
-// model.Instance.SetMemBudget), and it moves with placement: an integrated GPU
+// engine.Instance.SetMemBudget), and it moves with placement: an integrated GPU
 // holding nothing costs the host nothing, however large the pool it may grow
 // into. Zero when no device is on the host's memory and the arena is off.
 //

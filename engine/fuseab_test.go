@@ -9,8 +9,8 @@ import (
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/dev/bench"
-	"github.com/jitllm/jitllm/engine/sched"
 	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/sched"
 )
 
 // TestBlockFusionAB is fused host decode (sched.Pool.Fuse) against the per-op

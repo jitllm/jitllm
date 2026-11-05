@@ -3,7 +3,7 @@ package sched_test
 import (
 	"testing"
 
-	"github.com/jitllm/jitllm/engine/sched"
+	"github.com/jitllm/jitllm/sched"
 )
 
 // The policy, simulated: the claim is that on a cyclic scan the obvious
@@ -36,7 +36,7 @@ func simulate(n, held, tokens int, pick func(res map[int]bool, cur int) int) int
 }
 
 // TestCyclicVictimIsTheOnlyPolicyThatHitsAnything is the whole argument for
-// engine/sched/cyclic.go existing, run rather than asserted.
+// sched/cyclic.go existing, run rather than asserted.
 func TestCyclicVictimIsTheOnlyPolicyThatHitsAnything(t *testing.T) {
 	// Llama-3.3-70B's shape, and the window `cap 26G` buys for it.
 	const n, held, tokens = 80, 52, 4

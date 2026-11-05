@@ -1,7 +1,7 @@
 package gpu
 
 import (
-	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // Gemma 4 on the device. Its global layers attend at another geometry than its

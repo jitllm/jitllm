@@ -3,7 +3,7 @@ package model
 import (
 	"sync"
 
-	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // A device whose memory is the host's (an integrated GPU, Apple Silicon)

@@ -1,6 +1,6 @@
 package gpu
 
-import "github.com/jitllm/jitllm/engine/nn"
+import "github.com/jitllm/jitllm/nn"
 
 // AccountOn is what the card named dev kept (nn.Ledger): its own counters,
 // which every instance it serves writes.

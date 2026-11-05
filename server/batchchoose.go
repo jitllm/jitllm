@@ -7,7 +7,7 @@ import (
 )
 
 // JointSteps says how the step loop runs a decode step's rows when it could
-// run them as one joint step (model.StepRuns across sessions).
+// run them as one joint step (engine.StepRuns across sessions).
 type JointSteps int
 
 const (
@@ -41,7 +41,7 @@ const (
 	// tens of percent that decide anything here.
 	jointRounds = 2
 	// jointMargin is how much faster running separately must be to be
-	// chosen: model.SeamTuneMargin's 5%, for the same reason. Joint is the
+	// chosen: engine.SeamTuneMargin's 5%, for the same reason. Joint is the
 	// incumbent because it is what the loop exists for.
 	jointMargin = 1.05
 	// jointReprobe is the steps a choice stands before it is measured again:

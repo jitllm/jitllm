@@ -6,8 +6,8 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/model"
+	"github.com/jitllm/jitllm/nn"
 
 	"github.com/jitllm/jitllm/internal/testmodels"
 )

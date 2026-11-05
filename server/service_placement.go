@@ -9,7 +9,7 @@ import (
 	"connectrpc.com/connect"
 
 	"github.com/jitllm/jitllm/engine"
-	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/nn"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
@@ -107,7 +107,7 @@ func (s *PlacementService) SetPlacement(ctx context.Context, req *connect.Reques
 
 // RelocateBlocks moves a contiguous block range while serving, to any device
 // of the session's tier or to the CPU ("cpu"), each block's history with it
-// (model.Instance.MoveBlocks).
+// (engine.Instance.MoveBlocks).
 //
 // A range wholly on devices that names a card moves there through
 // Engine.MoveBlocks, so a generating session keeps generating while the
@@ -329,7 +329,7 @@ func (s *PlacementService) moveBetweenDevices(ctx context.Context, sess *Session
 	}), nil
 }
 
-// pbRelocationPath is model.BlockMove.Path on the wire.
+// pbRelocationPath is engine.BlockMove.Path on the wire.
 func pbRelocationPath(p string) v1.RelocationPath {
 	switch p {
 	case "host":

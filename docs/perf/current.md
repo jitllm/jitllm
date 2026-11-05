@@ -2305,7 +2305,7 @@ eight-times-wider input. RULE 12i recorded the same thing about the same tool:
 defended."
 
 **★ RESOLVED, AND THE HALF THAT MATTERED WAS THE HALF THAT WAS WRONG.**
-A review found that `engine/sched/pool.go`'s `active` counts SPAWNED workers rather than
+A review found that `sched/pool.go`'s `active` counts SPAWNED workers rather than
 PARTICIPANTS, and inferred that `JITLLM_CORES=N` is therefore not an N-core pool and
 that every core-scaling figure in this file is measuring something other than
 what it claims. **The mechanism is real and the consequence is not.**

@@ -1,7 +1,7 @@
 package engine
 
 import (
-	"github.com/jitllm/jitllm/engine/sched"
+	"github.com/jitllm/jitllm/sched"
 )
 
 // Serving split: while one session decodes, another session's prefill runs on

@@ -17,7 +17,7 @@ import (
 // history or beside a longer one, its prompt in chunks of any size -- which is
 // what lets the decode groups split rows without moving a token.
 //
-// The one-at-a-time path (model.StepRuns of one instance: Prefill's tier
+// The one-at-a-time path (engine.StepRuns of one instance: Prefill's tier
 // kernels, Forward's one-row form) is other arithmetic, and the server's
 // loop moves a row onto it whenever the row steps alone, so a row's tokens
 // still follow the schedule: those arms are measured and logged as the gap
@@ -55,7 +55,7 @@ func TestStepRowsAreTheirOwn(t *testing.T) {
 			t.Cleanup(func() { gl.e.CloseSession(s.id) })
 			return s.ms
 		}
-		// lone runs a step of one instance the server's way (model.StepRuns),
+		// lone runs a step of one instance the server's way (engine.StepRuns),
 		// its prompt through Prefill and a token through Forward.
 		lone := false
 		step := func(runs ...engine.Run) [][]float32 {

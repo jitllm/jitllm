@@ -105,7 +105,7 @@ after we get data through it, then we cache theses kernels"*.
 ★ **THE ENGINE ALREADY DOES THIS SHAPE THREE TIMES, FOR PARAMETERS. THIS EXTENDS
 IT TO BODIES.**
 
-    engine/nn/tune.go          duels pack widths on REAL decode tokens, ABBA, and caches
+    nn/tune.go          duels pack widths on REAL decode tokens, ABBA, and caches
                         the winner to ~/.cache/jitllm/packwidth keyed by
                         (parameter, CPU, cores, shape set)
     tier/choose.go      times one real matvec on each backend and caches the

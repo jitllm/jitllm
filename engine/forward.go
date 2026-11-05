@@ -18,7 +18,7 @@ import (
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/device/cpudev"
-	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // Per-op timing, armed by WithProfile: each model keeps its own counters.
@@ -464,6 +464,26 @@ type Instance struct {
 	recStage [][]float32
 }
 
+// shareActWindow hands device d model m's activation window where d
+// quantizes activations itself: devices quantizing with two windows do not
+// agree on token ids.
+func shareActWindow(m *model.Model, d nn.LayerDevice) {
+	if w, ok := d.(nn.ActWindower); ok {
+		w.SetActWindow(m.ActWindow)
+	}
+}
+
+// kvFmtOf is the CPU's history layout for history type t.
+func kvFmtOf(t model.KVType) cpu.KVFmt {
+	switch t {
+	case model.KVF16:
+		return cpu.KVF16
+	case model.KVQ8_0:
+		return cpu.KVQ8
+	}
+	return cpu.KVF32
+}
+
 // NewInstance composes model m for one placement -- its devices and knobs
 // opts' -- every block formed now, its sessions' histories up to maxSeq
 // positions. A CPU device opts name (WithCPU) is the caller's; without one
@@ -589,7 +609,7 @@ func newInstanceOver(m *model.Model, g *engineState, opt modelOpts, c *model.Con
 	// narrows in hardware -- everywhere but an x86 host the composer forms
 	// from its narrow passes (composer.NarrowsCPU). A quantized cache is
 	// only ever forced (KVType).
-	want := opt.kvType.Fmt()
+	want := kvFmtOf(opt.kvType)
 	if !opt.kvTypeSet {
 		want = cpu.KVF16
 		if composer.NarrowsCPU(composedCPUDevice(s.cpuISA(), 1)) {
@@ -805,7 +825,7 @@ func (s *Instance) SetDeviceLayers(d nn.LayerDevice, max int) error {
 	}
 	// A borrowed JIT is the text instance's, attached to its device by it.
 	if !s.borrowsJIT() {
-		s.m.ShareActWindow(d)
+		shareActWindow(s.m, d)
 	}
 	s.clearOnDev()
 	s.moved = nil
@@ -905,7 +925,7 @@ func (s *Instance) SetDeviceLayers(d nn.LayerDevice, max int) error {
 		// token with different kernels
 		// (TestHybridSecondSessionMatchesTheFirst).
 		if !s.borrowsJIT() {
-			s.m.ShareActWindow(ld)
+			shareActWindow(s.m, ld)
 		}
 	}
 	// Size the scratch before offering anything: the largest matvec is known

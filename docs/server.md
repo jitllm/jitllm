@@ -121,7 +121,7 @@ the reply ends where the grammar does. A schema keyword the converter does not
 build (`pattern`, `format`, numeric bounds, `allOf`, ...) is a 400 naming it;
 the supported subset is in
 [model-correctness.md](engineering-history/model-correctness.md),
-"engine/grammar". A constrained generate decodes alone and without
+"grammar". A constrained generate decodes alone and without
 speculation, and refuses `ignore_eos`.
 
 Speculative decoding is off by default and asked for per request

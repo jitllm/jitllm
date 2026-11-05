@@ -22,7 +22,7 @@ import (
 //
 //   - Time slices. A decoding row that has generated its quantum of tokens
 //     since it was admitted or resumed is parked when a request is waiting
-//     for its row or its room (model.Instance.Park: its blocks' KV and recurrent
+//     for its row or its room (engine.Instance.Park: its blocks' KV and recurrent
 //     state from the card, its sealed pages into a store), and the
 //     waiting request is admitted in its place. The parked row waits in the
 //     same queue and resumes byte for byte (Instance.Resume) when its turn comes;

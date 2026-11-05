@@ -3,7 +3,7 @@ package engine
 import (
 	"slices"
 
-	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // rowOwner is the session whose history row i of a ragged step reads and

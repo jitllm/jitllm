@@ -315,7 +315,7 @@ func concurrentGreedy(t *testing.T, name string, n int) {
 
 // TestBatchARequestJoinsWhileOthersDecode: a request whose prompt arrives
 // while two rows decode is fed a chunk at a time inside their steps
-// (model.StepRuns), so they keep producing a token every step across its
+// (engine.StepRuns), so they keep producing a token every step across its
 // admission -- counted by the loop as steps a chunk rode in beside decoding
 // rows -- and every row still comes out as it does alone. Against a feed that
 // takes the whole prompt in one step, PromptSteps counts one step where the
@@ -566,7 +566,7 @@ func TestBatchForceUnloadEndsEveryRow(t *testing.T) {
 // joint step's logits sit within a band of decode's (tieMargin), and a draw
 // near the boundary between two candidates falls either side of it. What is
 // exact is the pair itself: the same two sessions stepped together through
-// model.Step, outside the server, each fed the tokens the server emitted,
+// engine.Step, outside the server, each fed the tokens the server emitted,
 // give the subject the logits the server's row saw, and the subject's sampler
 // -- fresh, seeded as the request was -- must draw from them exactly the
 // tokens the server sent. Against a random stream shared between the rows,
@@ -643,7 +643,7 @@ func TestBatchSampledRowsAreTheirOwn(t *testing.T) {
 }
 
 // replayPair steps a subject and a companion session through
-// model.StepRuns on lm's device as the server's loop stepped them -- both
+// engine.StepRuns on lm's device as the server's loop stepped them -- both
 // prompts as one step, then one token each a step, the subject first, and the
 // subject alone once the companion is done -- feeding each the tokens the
 // server emitted for it, and demands the subject's sampler sp draw exactly
@@ -943,7 +943,7 @@ func chooses(t *testing.T, name string, mode JointSteps) {
 	}
 }
 
-// testInstance is model.NewInstance for a gate: a refusal fails the test.
+// testInstance is engine.NewInstance for a gate: a refusal fails the test.
 func testInstance(tb testing.TB, m *model.Model, maxSeq int, opts ...engine.Option) *engine.Instance {
 	tb.Helper()
 	s, err := engine.NewInstance(m, maxSeq, opts...)

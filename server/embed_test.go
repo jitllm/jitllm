@@ -33,7 +33,7 @@ import (
 // The embedding gates: a real embedding container on every path the server
 // has -- the Connect RPC, /v1/embeddings as floats and as base64, text and
 // token ids, one request against many, many requests at once -- and every
-// vector is held BIT FOR BIT to a model.Embedder run on the same container,
+// vector is held BIT FOR BIT to a engine.Embedder run on the same container,
 // which is what `jitllm embed` prints.
 //
 // The models are the engine's own embedding gate's, under
@@ -79,7 +79,7 @@ func embedServer(t *testing.T, name string, cfg Config) (*Engine, *LoadedModel, 
 	return e, lm, s.URL
 }
 
-// embedReference is what `jitllm embed` computes: a model.Embedder of its
+// embedReference is what `jitllm embed` computes: a engine.Embedder of its
 // own, one text at a time.
 func embedReference(t *testing.T, m *model.Model, texts []string) (vecs [][]float32, ids [][]int32, limit int) {
 	t.Helper()

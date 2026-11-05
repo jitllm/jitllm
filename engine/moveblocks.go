@@ -6,7 +6,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // BlockMove is what MoveBlocks did.

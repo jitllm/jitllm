@@ -5,8 +5,8 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/quant"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // TestF16HistoryTravelsRounded moves a block's history onto a device whose V

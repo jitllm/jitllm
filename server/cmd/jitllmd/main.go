@@ -36,9 +36,9 @@ import (
 
 	"github.com/jitllm/jitllm/engine"
 	"github.com/jitllm/jitllm/engine/device/gpu"
-	"github.com/jitllm/jitllm/engine/sched"
 	"github.com/jitllm/jitllm/internal/cmd/goheap"
 	"github.com/jitllm/jitllm/internal/localserver"
+	"github.com/jitllm/jitllm/sched"
 	"github.com/jitllm/jitllm/server"
 )
 

@@ -12,14 +12,14 @@ import (
 	"connectrpc.com/connect"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
-	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/nn"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
 // cmdPlace is PlacementService, whole: the seam, relocation, seam tuning and
 // the pager, forcible from outside the process.
 //
-// Placement is per session (SetDeviceLayers is a method on model.Instance), so
+// Placement is per session (SetDeviceLayers is a method on engine.Instance), so
 // -session is the usual argument; a model's default does not move a running
 // session. -model addresses the pager, which is per model.
 func cmdPlace(ctx context.Context, c cli, args []string) error {
@@ -285,7 +285,7 @@ func printPlacement(w io.Writer, p *v1.Placement) {
 	}
 	var runs []run
 	for _, b := range blocks {
-		where := "host"
+		where := nn.CPU
 		if b.GetLocation() == v1.BlockLocation_BLOCK_LOCATION_DEVICE {
 			where = b.GetDeviceId()
 			if where == "" {
@@ -317,7 +317,7 @@ func printPlacement(w io.Writer, p *v1.Placement) {
 		fmt.Fprintf(w, "  blocks %-9s %-10s %-10s %s each   %d of %d page(s) resident on the host\n",
 			span, r.where, r.kind, r.bytes, r.resident, r.total)
 	}
-	head := "host"
+	head := nn.CPU
 	if p.GetHeadOnDevice() {
 		head = "device"
 	}

@@ -7,8 +7,8 @@ import (
 
 	"github.com/jitllm/jitllm/model"
 
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // MaxPrefillChunk is the most rows a step on the CPU device carries.
@@ -338,7 +338,7 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 
 	// The prefill pool, where the JIT has one (nn.Config.PrefillCores). A
 	// mixture stays on the decode pool: its expert GEMMs are a few routed
-	// tokens each and a wider pool measured slower (engine/nn/prefillcores.go).
+	// tokens each and a wider pool measured slower (nn/prefillcores.go).
 	// Chunk by chunk it is placed beside any session decoding (serving.go).
 	var place *prefillPlace
 	if c.NExpert == 0 {

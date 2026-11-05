@@ -202,7 +202,7 @@ function placementTab(force: boolean) {
 const hostName = "the CPU";
 
 // serverMoves is what the server moved on its own initiative: a conversation
-// that is talking promoted onto a card, idle ones moved home to make room.
+// that is talking promoted onto a card, idle ones moved to the CPU to make room.
 function serverMoves(): HTMLElement {
   const o = live.stats?.orchestrator;
   if (!o) return card("Server moves", h("p", { class: "dim small", text: "Waiting for the server's stats…" }));
@@ -210,9 +210,9 @@ function serverMoves(): HTMLElement {
   const rows = [...o.moves].reverse().slice(0, 8).map((m) =>
     h("div", { class: "kv" },
       h("span", { class: "dim small", text: new Date(Number(m.unixMillis)).toLocaleTimeString() }),
-      h("span", { class: "small", text: `${m.blocks} layer(s) of ${m.modelId} (${m.sessionId}) to ${m.to === "host" ? "CPU" : "GPU"} · ${m.why} · ${m.millis.toFixed(0)} ms` })));
+      h("span", { class: "small", text: `${m.blocks} layer(s) of ${m.modelId} (${m.sessionId}) to ${m.to} · ${m.why} · ${m.millis.toFixed(0)} ms` })));
   return card("Server moves",
-    h("p", { class: "dim small", text: `The server puts a conversation that is replying on a card, moving idle ones to the CPU to make room. ${o.promotions} promotion(s), ${o.demotions} demotion(s); ${o.blocksUp} layer(s) up, ${o.blocksHome} home.` }),
+    h("p", { class: "dim small", text: `The server puts a conversation that is replying on a card, moving idle ones to the CPU to make room. ${o.promotions} promotion(s), ${o.demotions} demotion(s); ${o.blocksToCards} layer(s) onto the cards, ${o.blocksToCpu} onto the CPU.` }),
     rows.length ? h("div", { class: "kvs" }, ...rows) : h("p", { class: "dim small", text: "No moves yet." }));
 }
 

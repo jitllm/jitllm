@@ -91,11 +91,11 @@ All non-test Go files directly under `composer/kernels` total **17,703 lines**.
 
 These lowerers are already the shared backend mechanism. I would leave them outside the initial factoring effort. PTX performs an ordered walk of IR; driver compilation owns physical allocation and scheduling ([lower.go:9](../../jit/ptx/lower.go)).
 
-### Where `engine/nn` consumes the emitters
+### Where `nn` consumes the emitters
 
 These are orchestration/cache/dispatch files, not duplicated emitter source:
 
-| Use | Files and lines under `engine/nn/` |
+| Use | Files and lines under `nn/` |
 |---|---|
 | JIT construction, shapes and matrix dispatch | `jit.go` 1,051; `matmul.go` 326; `packed.go` 664; `packedmm.go` 551; `packedmulti.go` 226 |
 | Tuning and prefetch | `tune.go` 868; `mvpick.go` 165; `prefetch.go` 188; `prefillcores.go` 24; `options.go` 218 |
@@ -104,7 +104,7 @@ These are orchestration/cache/dispatch files, not duplicated emitter source:
 | Selection/sampling/image | `argmax.go` 56; `moetopk.go` 385; `sparsemixer.go` 102; `sample.go` 341; `image.go` 386 |
 | Device contract | `device.go` 1,379 |
 
-For an output-preserving refactor, keep these call sites, selection decisions and cache keys unchanged. Relevant entry points include [norm.go:143](../../engine/nn/norm.go), [packedmm.go:322](../../engine/nn/packedmm.go), and [packedmm.go:517](../../engine/nn/packedmm.go).
+For an output-preserving refactor, keep these call sites, selection decisions and cache keys unchanged. Relevant entry points include [norm.go:143](../../nn/norm.go), [packedmm.go:322](../../nn/packedmm.go), and [packedmm.go:517](../../nn/packedmm.go).
 
 ## 2. Patterns and removable duplication
 
@@ -170,7 +170,7 @@ A practical template is an **emission-time control structure with explicit instr
 
 4. **Reduction tails are not ordinary map tails.** LayerNorm’s vector variance tail must clear inactive lanes after subtracting the mean; SSE uses scalar instructions instead. SSE’s eight-XMM fold mirrors four YMM chains in a specific order ([layernorm.go:37](../../jit/cpu/layernorm.go), [sse_norm.go:130](../../jit/cpu/sse_norm.go)).
 
-5. **Host attention is not uniformly online-softmax attention.** It has separate score and accumulation kernels consumed through `nn.AttnSet`. Device flash kernels implement the online-softmax pattern; a template must not silently convert host attention to it ([engine/nn/attn.go:1](../../engine/nn/attn.go)).
+5. **Host attention is not uniformly online-softmax attention.** It has separate score and accumulation kernels consumed through `nn.AttnSet`. Device flash kernels implement the online-softmax pattern; a template must not silently convert host attention to it ([nn/attn.go:1](../../nn/attn.go)).
 
 6. **Fragment MMA and collective matrices have different ownership.** `OpMMA` exposes lane fragments; collective tile operations leave lane layout to the driver. Preserve separate inner policies ([ir.go:132](../../jit/ir/ir.go)).
 
@@ -199,7 +199,7 @@ These are ranked hypotheses, not performance claims. Every item below changes ge
 Code anchors:
 
 - Existing composition: [elem.go:188](../../jit/gpu/kernels/elem.go), [elem.go:1034](../../jit/gpu/kernels/elem.go), [matvec.go:1222](../../jit/gpu/kernels/matvec.go).
-- Existing host tuning: [tune.go:379](../../engine/nn/tune.go), [prefetch.go:1](../../engine/nn/prefetch.go); device choices: [decodeplan.go:1](../../jit/gpu/kernels/decodeplan.go).
+- Existing host tuning: [tune.go:379](../../nn/tune.go), [prefetch.go:1](../../nn/prefetch.go); device choices: [decodeplan.go:1](../../jit/gpu/kernels/decodeplan.go).
 - Existing shared decoder: [mma70.go:422](../../jit/gpu/kernels/mma70.go); shared scale-stream emission: [scstream.go:1](../../jit/gpu/kernels/scstream.go).
 
 Two historical results limit expectations: increasing decode row tiling regressed on both measured GPUs, and the Metal investigation distinguished dispatch overhead from the smaller portion fusion could recover. Templates make these experiments easier; they do not reverse the evidence ([gpu-kernels.md:4110](../../docs/engineering-history/gpu-kernels.md), [gpu-kernels.md:4921](../../docs/engineering-history/gpu-kernels.md)).

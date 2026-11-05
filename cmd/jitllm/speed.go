@@ -15,8 +15,8 @@ import (
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine"
 	"github.com/jitllm/jitllm/engine/device/gpu"
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/model"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // speedCmd is llama-bench's pp/tg measurement: a prompt of -p tokens and a
@@ -344,7 +344,7 @@ func medianF32(v []float32) float32 {
 
 // sessionsRun is speed -sessions: k sessions on the device, each prefilled
 // with prompt, decode n tokens a round, alternately one session after another
-// and all together through model.Step. Each arm's rate is the k sessions'
+// and all together through engine.Step. Each arm's rate is the k sessions'
 // tokens over its wall.
 func sessionsRun(attach func(int) (*engine.Instance, error), prompt []int32, k, n, reps int, ctr *backend.Counters) error {
 	var alone, together []float64

@@ -3,7 +3,7 @@ package gpu
 import (
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/composer/ir"
-	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // noteCause records what kind of refusal the device's last call was. A fault

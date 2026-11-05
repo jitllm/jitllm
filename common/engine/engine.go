@@ -14,7 +14,7 @@
 // both.
 //
 // It is one worker rather than a goroutine per job because the objects are not
-// safe to share: model.Instance holds a sequence and a conversion beside a decode
+// safe to share: engine.Instance holds a sequence and a conversion beside a decode
 // would contend for the same pool and pager. A single command channel makes "a
 // long job cannot overlap a decode" true by construction.
 package engine
@@ -365,7 +365,7 @@ func (e *Engine) activate(en *entry) error {
 	// A context that outgrows the card moves blocks to the CPU one at a time
 	// -- only where the device choice lists the CPU, as the CLI's -relocate
 	// does. A choice of cards alone keeps the model off the CPU, so there the
-	// token takes the cards' refusal instead (model.WithDevices).
+	// token takes the cards' refusal instead (engine.WithDevices).
 	relocate, _ := gpu.ListsCPU(en.spec)
 	o := server.SessionOptions{ModelID: en.lm.ID(), MaxSeq: window, KeepOffHost: !relocate}
 	cacheOff := "turned off in Settings"
@@ -474,7 +474,7 @@ const defaultMaxSeq = 4096
 
 // samplerFor turns the app's settings into the engine's sampler.
 //
-// Temp == 0 is greedy and is passed straight through: model.Sampler
+// Temp == 0 is greedy and is passed straight through: engine.Sampler
 // short-circuits to argmax, and every correctness comparison in the engine
 // (llama.cpp goldens, CPU vs device, verify) is a comparison of argmax.
 func samplerFor(s session.Sampling) *engine.Sampler {
@@ -622,7 +622,7 @@ func pagerStat(m *model.Model) session.PagerStat {
 // Relocate moves the seam: it asks the device to hold n blocks and publishes
 // what it actually took.
 //
-// It is queued, not called: model.Instance has no mutex and nothing may overlap a
+// It is queued, not called: engine.Instance has no mutex and nothing may overlap a
 // decode, so the command channel puts this between turns. It must not copy
 // Stop's shortcut, which bypasses the queue on purpose.
 //

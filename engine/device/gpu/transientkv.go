@@ -1,6 +1,6 @@
 package gpu
 
-import "github.com/jitllm/jitllm/engine/nn"
+import "github.com/jitllm/jitllm/nn"
 
 // One k/v pair for every non-causal block on a device.
 //

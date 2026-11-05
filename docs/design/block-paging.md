@@ -75,7 +75,7 @@ hit rate is `(slots-1)/blocks` instead of zero. `TestVictimIsTheBlockJustCompute
 pins it directly, because a page-in counter on a small model cannot tell the two
 policies apart.
 
-**The arithmetic is `engine/sched/cyclic.go` now, and both tiers call it** -- this
+**The arithmetic is `sched/cyclic.go` now, and both tiers call it** -- this
 reasoning had been written twice and the two copies had reached opposite
 conclusions. See "The HOST is a tier too" below. A second rule joined it there:
 a block whose page-out would reclaim NOTHING is not a candidate at all, which is
@@ -284,7 +284,7 @@ fold into `page.go`. It stayed separate, and the reason is not inertia:
 Merging them would mean one of the two pretending to own memory it does not.
 
 **What WAS one thing, written twice, and the two copies disagreed: the eviction
-POLICY.** `engine/sched/cyclic.go` now holds it, and both tiers call it. The device
+POLICY.** `sched/cyclic.go` now holds it, and both tiers call it. The device
 pager had derived it correctly -- a cyclic scan makes Bélády's optimum computable
 rather than estimated, and the furthest next use belongs to the block JUST BEHIND
 the cursor, so the optimal policy is MOST-recently-used. The host ring shipped a
@@ -544,7 +544,7 @@ card runs the model at all, and on this model the knob has two settings.
     composer/kernels/arena_test.go   every packed array starts AND ends on a
                                    HostAlign() boundary; the length half is what
                                    Apple Silicon needs
-    engine/sched/cyclic_test.go        the policy, simulated: MRU keeps a prefix and
+    sched/cyclic_test.go        the policy, simulated: MRU keeps a prefix and
                                    LRU keeps nothing
     model/ringpolicy_test.go    the host ring's choice, and the sliding window
                                    it replaced, scored against each other

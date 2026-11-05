@@ -3,7 +3,7 @@ package gpu
 import (
 	"reflect"
 
-	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // A device serves several sessions over one scratch: their histories are

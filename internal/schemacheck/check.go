@@ -1,5 +1,5 @@
 // Package schemacheck is the structured-output gates' JSON Schema
-// validator, for the subset engine/grammar compiles: what an output is held
+// validator, for the subset grammar compiles: what an output is held
 // to, written independently of the grammar that produced it.
 package schemacheck
 
@@ -12,7 +12,7 @@ import (
 )
 
 // Validate holds doc (parsed by Parse) to schema s, a JSON Schema in the
-// subset engine/grammar builds; root is the document $refs resolve in.
+// subset grammar builds; root is the document $refs resolve in.
 func Validate(root, s, doc any) error {
 	if b, ok := s.(bool); ok {
 		if !b {

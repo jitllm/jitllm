@@ -51,8 +51,8 @@ holds, counted in a vocabulary of its own.
   The call boundary cannot be the device's package: the composer's own
   gates execute what it forms through it, and a device that composes would
   make each of them an import cycle.
-- **Nothing of the CPU in the instance.** `engine/model` holds no CPU
-  form, scratch, counter or call: renaming the instance's CPU state in
+- **Nothing of the CPU in the instance.** The instance (`engine/`)
+  holds no CPU form, scratch, counter or call: renaming the instance's CPU state in
   place is the same design under another name.
 
 ## The device, as the card's

@@ -3,7 +3,7 @@ package engine
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // resid is the one-row residual a device is handed: every stream.

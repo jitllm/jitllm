@@ -7,7 +7,7 @@ import (
 
 	"github.com/jitllm/jitllm/model"
 
-	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // Step decodes one token for each instance at once, tokens[i] for states[i], and

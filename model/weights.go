@@ -3,9 +3,9 @@ package model
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/graph"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // ropeTabPlanes is one rotary configuration's folded constant planes, or nil

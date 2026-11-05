@@ -10,8 +10,8 @@ import (
 
 	"github.com/jitllm/jitllm/model"
 
-	"github.com/jitllm/jitllm/engine/sched"
 	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/sched"
 )
 
 // fuseModels is every model the fused-run gate decodes: the dense, mixture

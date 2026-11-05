@@ -40,7 +40,7 @@ shape. The second at least fails loudly.
 
     engine/device/gpu/layer.go:39    kc, vc backend.Buf  // on the LAYER, keyed by
                                                     // block index
-    engine/nn/device.go:331            Layers(lo, hi, pos, n, x, cs, head) bool
+    nn/device.go:331            Layers(lo, hi, pos, n, x, cs, head) bool
 
 `Layers` takes a POSITION and carries no state identity, and nothing anywhere in
 `engine/device/gpu` keys device state by State or session. So two sequences write the

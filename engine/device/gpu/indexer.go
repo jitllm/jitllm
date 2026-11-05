@@ -1,7 +1,7 @@
 package gpu
 
 import (
-	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // DeepSeek V3.2's lightning indexer on the device (nn.LayerPlan.IdxHeads;

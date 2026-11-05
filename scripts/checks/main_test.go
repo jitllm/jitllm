@@ -234,13 +234,13 @@ func TestPlanTakesTheUnion(t *testing.T) {
 	}
 	// engine/* is the engine package's own files: a subpackage's path does
 	// not take its checks.
-	sub, err := plan(m, []string{"engine/sched/x.go"})
+	sub, err := plan(m, []string{"sched/x.go"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, c := range sub.Checks {
 		if c.Name == "composed" || c.Name == "relocation" {
-			t.Errorf("engine/sched/x.go takes the engine package's %s check", c.Name)
+			t.Errorf("sched/x.go takes the engine package's %s check", c.Name)
 		}
 	}
 	if len(p.Unmapped) != 1 || p.Unmapped[0] != "nowhere/x.go" {

@@ -5,7 +5,7 @@ import (
 
 	"github.com/jitllm/jitllm/model"
 
-	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // Embedder is the working memory for embedding one sequence at a time. It is

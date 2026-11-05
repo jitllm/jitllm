@@ -24,7 +24,7 @@ import (
 // mixture's row routes to, a long history -- is read on a card while the
 // other cards read theirs, and the cycle shortens by up to the card count.
 //
-// Each group's step is the joint arm (model.StepJoint) whatever its rows, a
+// Each group's step is the joint arm (engine.StepJoint) whatever its rows, a
 // group of one included, so a row's arithmetic is the same in one group or
 // many wherever a step's kernels do not depend on its row count -- where the
 // composer serves every block and the head in its reserved width

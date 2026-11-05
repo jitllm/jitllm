@@ -6,7 +6,7 @@ import (
 	"sync"
 
 	"github.com/jitllm/jitllm/engine/device/cpudev"
-	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // Prefix sharing: sessions whose prompts share a prefix hold its KV pages

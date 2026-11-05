@@ -1,7 +1,7 @@
 package gpu
 
 import (
-	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // MiniMax Sparse Attention on the device (nn.LayerPlan.MSA;

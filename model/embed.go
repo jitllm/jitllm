@@ -3,8 +3,8 @@ package model
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // Embeddings: a sequence in, one L2-normalised vector out. An embedding

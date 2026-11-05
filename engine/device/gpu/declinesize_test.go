@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // TestDeclineSizeRefusesOnlyWhatNoDeviceHolds is the size check placement asks

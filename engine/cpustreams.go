@@ -3,8 +3,8 @@ package engine
 import (
 	"unsafe"
 
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/model"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // The input rows' streams and the head's row on the CPU device, for a model

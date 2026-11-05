@@ -37,7 +37,7 @@ func TestEverySamplingKnobReachesTheSampler(t *testing.T) {
 
 // Greedy must stay reachable, exactly.
 //
-// Temp == 0 cannot be approximated: model.Sampler short-circuits to argmax,
+// Temp == 0 cannot be approximated: engine.Sampler short-circuits to argmax,
 // and every correctness comparison in the engine is of argmax.
 func TestGreedyIsReachableExactly(t *testing.T) {
 	got := samplerFor(session.Sampling{Temp: 0, TopK: 40, TopP: 0.95, MinP: 0.05})

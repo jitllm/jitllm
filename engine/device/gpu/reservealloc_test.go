@@ -4,7 +4,7 @@ import "testing"
 
 // TestReservingKVAcrossDevicesAllocatesNothing: once a model's blocks span two
 // devices the state reserves the next position on each of them every token
-// (model.Instance.relocateFor), so a warm reservation is on the decode path and
+// (engine.Instance.relocateFor), so a warm reservation is on the decode path and
 // must make no heap allocation. The vision decode allocation gates caught it
 // on an eight-card box, where a bare "vulkan" opens every card: 64 objects
 // over 64 tokens, every one the device list ReserveKV built per call.

@@ -1048,7 +1048,7 @@ instead of block 0, legitimate at window 256 -- passes.
 
 ★ AND DO NOT TRUST A `JITLLM_CORES` SWEEP HERE EITHER: one clean run read 45.6 tok/s at one core and
 46.0 at two, no scaling at all, then 151 at four. RULE 1d-nonies records the open finding that
-`engine/sched/pool.go`'s `active` counts SPAWNED workers rather than PARTICIPANTS, so `JITLLM_CORES=N` is not
+`sched/pool.go`'s `active` counts SPAWNED workers rather than PARTICIPANTS, so `JITLLM_CORES=N` is not
 an N-core pool.
 
 ★ AND THE FIRST SWEEP WAS CONTAMINATED, BY ME, ON THE MACHINE THE MUTEX DOES NOT REACH. RULE 3d's
@@ -1095,8 +1095,8 @@ there -- NOT the 99.34 in RULE 1c, which was a shorter sample.
 3. **Is the spin budget wrong for this host?** No. RULE 11a swept it on Linux only, but the M4 agrees:
    65.2 / 80.8 / 80.7 / 80.3 / 79.8 / 79.8 tok/s at 0 / 50 / 250 / 1000 / 5000 / 20000 us. The 250 us
    default is already at the plateau. Spinning matters (never-spin costs 19%); tuning it does not.
-4. **Is the pool itself Linux-only?** No -- `engine/sched/pool.go` is portable and only topology and pinning
-   are tagged. But `engine/sched/latency_test.go` IS `//go:build linux`, so the dispatch round trip had
+4. **Is the pool itself Linux-only?** No -- `sched/pool.go` is portable and only topology and pinning
+   are tagged. But `sched/latency_test.go` IS `//go:build linux`, so the dispatch round trip had
    never been measured on the Mac; `engine.TestFusionCeiling` puts it at 3.008 us against Linux's
    1.6-2.1 us for four to six workers, which is most of why the fusion ceiling clears the bar there.
 
@@ -1756,7 +1756,7 @@ ids on both, no crash.
 
 **★ THE PROBE IS ITSELF JIT-COMPILED ON amd64, WHICH IS THE ONLY DEPENDENCY-FREE WAY TO READ CPUID.**
 `golang.org/x/sys/cpu` would end `go.mod`'s one-require, no-transitive-deps property that
-`engine/nn/device.go` defends, and `internal/cpu` cannot be imported. Eleven bytes of emitted code --
+`nn/device.go` defends, and `internal/cpu` cannot be imported. Eleven bytes of emitted code --
 save RBX, CPUID leaf 7 sub-leaf 1, store four registers, restore RBX -- is less machinery than
 either, and it is precisely what this package exists to do. arm64 reads `AT_HWCAP` out of
 `/proc/self/auxv` on Linux and `hw.optional.arm.FEAT_DotProd` via sysctl on Darwin.
@@ -2170,7 +2170,7 @@ pairing OFF, so **jitllm degrades LESS with context than llama.cpp does on the
 M4** -- the opposite of RULE 14i's finding on Linux. Two hosts, opposite
 directions, and only the Linux one had ever been measured.
 
-**★ AND RULE 14w's COMMIT BROKE THE arm64 BUILD OUTRIGHT.** `engine/nn/attn.go` is
+**★ AND RULE 14w's COMMIT BROKE THE arm64 BUILD OUTRIGHT.** `nn/attn.go` is
 tagged `amd64 || arm64` and called `cpu.EmitAttnScores2`, which existed only in
 the `amd64`-tagged file. The comment claiming arm64 "falls back" was written
 without ever compiling for arm64. **`GOOS=darwin GOARCH=arm64 go build ./...`
@@ -2794,7 +2794,7 @@ body exists only under the **`jitllmtest`** build tag (`nn/disable.go`);
 `nn.Disableable` reports which build this is so a test needing both tiers SKIPS
 rather than comparing the fast tier with itself. `tier/fault.go` is the
 precedent and carries the same sentence -- *it is not in a release build, which
-is why it is a tag and not a flag*. On every other architecture `engine/nn/jit.go` is
+is why it is a tag and not a flag*. On every other architecture `nn/jit.go` is
 not compiled at all and `jit_stub.go`'s nil JIT is the only tier there is, which
 is the configuration the oracle needs.
 
@@ -3153,7 +3153,7 @@ copies, GB/s): tiled is best for Q4_K 2048x2048 (60.1) and Q8_0 2048x2048
 960x2560 (60.2 against 45.4); four slices for Q4_0 2048x16384 (68.7 against
 55.7). The container is plane-major, so a worker's share is one rows*4-byte run
 per payload word; slicing k across workers makes a worker's planes one
-contiguous region. So `engine/nn/mvpick.go` times {tiled, fused, fused/2, fused/4} in
+contiguous region. So `nn/mvpick.go` times {tiled, fused, fused/2, fused/4} in
 place per (format, rows, k, stride) for the first six rounds and keeps the
 fastest median -- on arm64 only; amd64 keeps its fixed rule. Tuning off pins the
 tiled kernel, because the sliced arms reassociate the sum.
@@ -3793,7 +3793,7 @@ Two darwin gaps from the same bring-up, both still true when this was moved here
   and the A/A self-control are the only gates a row passes.
 - **`cpu.OutLine` is sized to a 64-byte line on every architecture**, and the M4's line is 128 bytes,
   so two workers' rounded chunks can still share a line there. The prefill GEMM's rows-per-call duel
-  (`engine/nn/tune.go`) measures that trade per host; whether decode chunks false-share on the M4 is
+  (`nn/tune.go`) measures that trade per host; whether decode chunks false-share on the M4 is
   unmeasured.
 
 ## The Xeon D-2123IT: AVX-512 is scheduled, and the prefill gap is traffic
@@ -4048,7 +4048,7 @@ NEVER A MEASUREMENT OF THE SHIPPED POOL, AND IT HAD REACHED SHIPPING SOURCE.** T
 design document (ARCHITECTURE.md, since deleted) had retired it in its own header -- *"a C probe of a barrier that
 was never built"*, recorded now under RULE 11 in
 `docs/engineering-history/scheduling-and-measurement.md` -- while
-`engine/sched/pool.go` went on citing it as measured, in two places, and this rule cited
+`sched/pool.go` went on citing it as measured, in two places, and this rule cited
 it in a third. The SHIPPED per-region dispatch cost is `engine.TestFusionCeiling`'s
 **2.70 us on Linux and 3.008 us on the M4**. The conclusion does not change; its
 evidence does, and a number that survives the measurement it came from is how a
@@ -4122,7 +4122,7 @@ Both Widen/Narrow pairs and both load-time f64 buffers are deleted.
 
 **What float64 is left is measurement, not inference.** Outside tests the
 `[]float64` in `engine/` are the tuners' ratio and median statistics
-(`engine/seamtune.go`, `engine/nn/tune.go`) and the expert-use accounting
+(`engine/seamtune.go`, `nn/tune.go`) and the expert-use accounting
 (`engine/hotness.go`); scalar float64 appears only as setup arithmetic
 (an epsilon, a scale, an image resample step) before a kernel call. The
 residual, the scratch vectors and the logits are float32 on the host, matching
@@ -4931,7 +4931,7 @@ device kernels XOR the planes into the full weight first and center once.
   batched. The fused kernel's walk of the plane-major layout loses to the tiled
   one at a mixture's shapes. `nn.JIT.MixtureBatches` is the question now
   (`WithMixtureBatch`/`JITLLM_MOE_BATCH` force it), and the loop's matvecs go
-  through `MatVecPacked`'s per-shape choice (`engine/nn/mvpick.go`).
+  through `MatVecPacked`'s per-shape choice (`nn/mvpick.go`).
   `docs/engineering-history/cpu-kernels.md` ("An arm64 fused packed matvec, and why
   the M4 picks a kernel per shape") has the tables.
 

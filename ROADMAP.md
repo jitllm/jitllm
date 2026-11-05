@@ -143,7 +143,7 @@ comes before any code.
 Distributed inference across machines. The interface belongs in core with no
 dependency on libp2p or any transport; an implementation lives outside, the
 dependency pointing inward -- the shape `nn.Device` already has (declared in
-`engine/nn`, implemented in `engine/device/gpu`).
+`nn`, implemented in `engine/device/gpu`).
 
 What that protects: `go.mod` has one require (goffi) and libp2p is about 150
 modules; and there is no cgo, since goffi reaches the drivers through dlopen.

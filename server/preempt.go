@@ -9,8 +9,8 @@ import (
 
 // Preemption under memory pressure. A model may carry a KV budget
 // (SetKVBudget): the bytes its sessions' histories may hold at once, wherever
-// they live (model.Instance.HistoryBytes). A generate that would take the model
-// past it parks other sessions of the model first (model.Instance.Park: their
+// they live (engine.Instance.HistoryBytes). A generate that would take the model
+// past it parks other sessions of the model first (engine.Instance.Park: their
 // blocks' KV and recurrent state to the CPU from the device, their sealed pages
 // into a store) and the parked session resumes, byte for byte, the next time
 // it generates. Nothing is refused for it and nothing is recomputed.
@@ -25,8 +25,8 @@ import (
 type preemptStats struct {
 	parks, resumes    atomic.Int64
 	pagesOut, pagesIn atomic.Int64
-	// blocksHome is the blocks parking moved to the CPU from a device.
-	blocksHome         atomic.Int64
+	// blocksToCPU is the blocks parking moved to the CPU device from a card.
+	blocksToCPU        atomic.Int64
 	overBudgetAdmitted atomic.Int64
 }
 
@@ -116,7 +116,7 @@ func (e *Engine) admitKV(s *Session, grow int) error {
 // lock is free; TryLock never waits on one that is stepping, which a later
 // admitKV may take once it is idle.
 //
-// With a memory cache the session parks into it (model.Instance.ParkInto), through
+// With a memory cache the session parks into it (engine.Instance.ParkInto), through
 // a view that pins what it is given until the session resumes: the model's
 // one store holds parked histories and cached prompts alike, counted in its
 // bytes and so in the model's budget, and no eviction can take a page a parked
@@ -181,7 +181,7 @@ func (e *Engine) parkLocked(v *Session) error {
 	v.snapHist.Store(0)
 	e.preempt.parks.Add(1)
 	e.preempt.pagesOut.Add(int64(ps.PagesOut))
-	e.preempt.blocksHome.Add(int64(ps.Blocks))
+	e.preempt.blocksToCPU.Add(int64(ps.Blocks))
 	v.refresh()
 	return nil
 }

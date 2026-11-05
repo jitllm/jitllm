@@ -17,8 +17,8 @@ import (
 	"github.com/jitllm/jitllm/dev/bench"
 	"github.com/jitllm/jitllm/engine"
 	"github.com/jitllm/jitllm/engine/device/gpu"
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/model"
+	"github.com/jitllm/jitllm/nn"
 )
 
 func verifyCmd(args []string) error {
@@ -145,7 +145,7 @@ func verifyCmd(args []string) error {
 		fn := float64(*n)
 		// Say where the projection is: under a partial seam placeHead gives up
 		// blocks for the head, so the block count alone is misleading.
-		where := "host"
+		where := nn.CPU
 		if g.HeadResident() {
 			where = "device"
 		}
@@ -771,7 +771,7 @@ func abRun(m *model.Model, io []engine.Option, g *gpu.GPU, which string, n, roun
 		if !s.HeadOnDevice() {
 			panic(fmt.Errorf("the device did not take the head; there is nothing to compare"))
 		}
-		a = bench.Case{Name: "head on host", Fn: func(it int) { s.SetHeadOnDevice(false); step(it) }}
+		a = bench.Case{Name: "head on cpu", Fn: func(it int) { s.SetHeadOnDevice(false); step(it) }}
 		b = bench.Case{Name: "head in the block submission", Fn: func(it int) { s.SetHeadOnDevice(true); step(it) }}
 	case "submit":
 		// Graphs off on both arms: layersOnce disables capture under

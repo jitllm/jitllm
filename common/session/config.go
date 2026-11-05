@@ -58,7 +58,7 @@ type Knob struct {
 // knob: it is a value, not a range.
 func SamplingKnobs() []Knob {
 	return []Knob{
-		// The temperature caption names greedy: at zero model.Sampler returns the
+		// The temperature caption names greedy: at zero engine.Sampler returns the
 		// argmax before reading any other field, so the other knobs are inert.
 		{Name: "Temperature", Min: 0, Max: 2, Step: 0.05,
 			Get: func(s Sampling) float32 { return s.Temp },

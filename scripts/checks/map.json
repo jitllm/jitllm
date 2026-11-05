@@ -33,10 +33,10 @@
       "note": "every host emitter against the oracle at ragged widths (RULE 8), and no assembly but the trampolines"
     },
     "nn": {
-      "module": ".", "packages": ["./engine/nn/...", "./engine/grammar/..."], "cap": "8G"
+      "module": ".", "packages": ["./nn/...", "./grammar/..."], "cap": "8G"
     },
     "sched": {
-      "module": ".", "packages": ["./engine/sched/..."], "cap": "8G",
+      "module": ".", "packages": ["./sched/..."], "cap": "8G",
       "note": "the pool, core sets and memory budgets"
     },
     "format": {
@@ -126,9 +126,9 @@
   "entries": [
     {"prefix": "model/", "evidence": "docs/engineering-history/model-correctness.md", "checks": ["model-correctness", "five-principles", "relocation", "device-model", "composed", "vet"]},
     {"prefix": "engine/*", "evidence": "docs/engineering-history/model-correctness.md", "checks": ["model-correctness", "five-principles", "relocation", "device-model", "composed", "vet"]},
-    {"prefix": "engine/nn/", "evidence": "docs/engineering-history/cpu-kernels.md", "checks": ["nn", "jit-cpu", "model-correctness", "five-principles", "vet"]},
-    {"prefix": "engine/grammar/", "evidence": "docs/engineering-history/model-correctness.md", "checks": ["nn", "server", "vet"]},
-    {"prefix": "engine/sched/", "evidence": "docs/engineering-history/scheduling-and-measurement.md", "checks": ["sched", "five-principles", "vet"]},
+    {"prefix": "nn/", "evidence": "docs/engineering-history/cpu-kernels.md", "checks": ["nn", "jit-cpu", "model-correctness", "five-principles", "vet"]},
+    {"prefix": "grammar/", "evidence": "docs/engineering-history/model-correctness.md", "checks": ["nn", "server", "vet"]},
+    {"prefix": "sched/", "evidence": "docs/engineering-history/scheduling-and-measurement.md", "checks": ["sched", "five-principles", "vet"]},
     {"prefix": "engine/device/cpu/", "evidence": "docs/engineering-history/cpu-kernels.md", "checks": ["jit-cpu", "nn", "model-correctness", "five-principles", "vet"]},
     {"prefix": "composer/ir/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-lowering", "gpu-backend", "device-model", "vet"]},
     {"prefix": "composer/ptx/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-lowering", "gpu-backend", "device-model", "vet"]},

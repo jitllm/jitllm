@@ -316,7 +316,7 @@ func timeSliced(t *testing.T, dev string, violate bool) (parks int64, apart int)
 	got := concurrently(t, e, lm, c, reqs)
 	parks = lm.loop.stats.parks.Load()
 	if lm.gpu != nil {
-		home, freed := e.preempt.blocksHome.Load(), lm.loop.stats.parkFreed.Load()
+		home, freed := e.preempt.blocksToCPU.Load(), lm.loop.stats.parkFreed.Load()
 		// The room freed is logged, not demanded: KVRoom reads the card's
 		// machine-wide free memory, which another process moves.
 		t.Logf("%s: parking brought %d block(s) home and freed %d positions of the card's room", dev, home, freed)

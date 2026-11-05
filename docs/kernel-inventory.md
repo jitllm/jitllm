@@ -120,7 +120,7 @@ GPU source files: [`matvec.go`](../jit/gpu/kernels/matvec.go), [`mma.go`](../jit
 | Vulkan | `spirv.Emit` writes the SPIR-V module directly; Vulkan creates a shader module and compute pipeline. | Prepared compute pipelines. No runtime dependency on `glslang` or `spirv-val`. |
 | Metal | `msl.Emit` emits MSL; `newLibraryWithSource:options:error:` compiles it and the framework creates the compute pipeline. | Prepared Metal kernels/pipelines. |
 
-Key sources: [`engine/nn/jit.go:293`](../engine/nn/jit.go#L293), [`engine/nn/norm.go`](../engine/nn/norm.go), [`engine/nn/matmul.go`](../engine/nn/matmul.go), [`engine/nn/packedmm.go`](../engine/nn/packedmm.go), [`cpu/baseline.go`](../jit/cpu/baseline.go), [`cpu/exec_linux.go`](../jit/cpu/exec_linux.go), [`cpu/exec_darwin.go`](../jit/cpu/exec_darwin.go), [`tier/tier.go:2051`](../jit/gpu/tier/tier.go#L2051), [`backend/cuda.go:628`](../backend/cuda.go#L628), [`backend/vulkan.go:103`](../backend/vulkan.go#L103), [`backend/metal.go:90`](../backend/metal.go#L90).
+Key sources: [`nn/jit.go:293`](../nn/jit.go#L293), [`nn/norm.go`](../nn/norm.go), [`nn/matmul.go`](../nn/matmul.go), [`nn/packedmm.go`](../nn/packedmm.go), [`cpu/baseline.go`](../jit/cpu/baseline.go), [`cpu/exec_linux.go`](../jit/cpu/exec_linux.go), [`cpu/exec_darwin.go`](../jit/cpu/exec_darwin.go), [`tier/tier.go:2051`](../jit/gpu/tier/tier.go#L2051), [`backend/cuda.go:628`](../backend/cuda.go#L628), [`backend/vulkan.go:103`](../backend/vulkan.go#L103), [`backend/metal.go:90`](../backend/metal.go#L90).
 
 ## Runtime layer construction
 
@@ -133,7 +133,7 @@ The computation layer is assembled from the loaded model's structure, weights, a
 5. `Layers` / `layersOnce` issue the prepared operations for a run of resident blocks. Compatible CUDA sequences are captured into a runtime graph and replayed. Paging, placement, buffer moves, session switches, or relevant shape changes invalidate affected recordings.
 6. On the CPU, `engine.Forward`, prefill, batch, MoE, MLA, recurrence, and vision code orchestrate generated operation calls. The Go orchestration is part of the compiled program; the numerical kernels it invokes are emitted at runtime.
 
-Sources: [`engine/nn/device.go`](../engine/nn/device.go), [`engine/forward.go`](../engine/forward.go), [`engine/prefill.go`](../engine/prefill.go), [`engine/model/vision.go`](../engine/model/vision.go), [`tier/layer.go:1067`](../jit/gpu/tier/layer.go#L1067), [`tier/layer.go:2299`](../jit/gpu/tier/layer.go#L2299), [`tier/layer.go:3417`](../jit/gpu/tier/layer.go#L3417), [`tier/session.go`](../jit/gpu/tier/session.go).
+Sources: [`nn/device.go`](../nn/device.go), [`engine/forward.go`](../engine/forward.go), [`engine/prefill.go`](../engine/prefill.go), [`engine/model/vision.go`](../engine/model/vision.go), [`tier/layer.go:1067`](../jit/gpu/tier/layer.go#L1067), [`tier/layer.go:2299`](../jit/gpu/tier/layer.go#L2299), [`tier/layer.go:3417`](../jit/gpu/tier/layer.go#L3417), [`tier/session.go`](../jit/gpu/tier/session.go).
 
 ## What happens without the optimized kernel
 
@@ -142,15 +142,15 @@ This is where “build computation at runtime” needs concrete examples. A spec
 | Missing or unsuitable optimization | Runtime alternative | Source |
 |---|---|---|
 | AVX-VNNI packed dot instruction | Emit AVX2 multiply/add sequences for supported packed formats. The SSE tier emits its 128-bit sequence. | [`cpu/prevnni.go:77`](../jit/cpu/prevnni.go#L77), [`cpu/sse_packed.go`](../jit/cpu/sse_packed.go) |
-| CPU interleaved/shaped matvec | Use the generated one-row kernel. | [`engine/nn/jit.go:918`](../engine/nn/jit.go#L918) |
-| CPU fused or wide packed matvec | Use generated packed row tiles and tails. | [`engine/nn/packed.go`](../engine/nn/packed.go) |
-| Requested CPU token tile cannot be emitted | Try smaller token widths and cache a successful generated variant. | [`engine/nn/packedmm.go:309`](../engine/nn/packedmm.go#L309) |
-| CPU multi-token matmul unavailable | Run generated fused kernels per token, a one-token tiled kernel, or the per-token generated matvec composition. | [`engine/nn/packedmm.go:111`](../engine/nn/packedmm.go#L111), [`engine/prefill.go:700`](../engine/prefill.go#L700), [`engine/model/vision.go:744`](../engine/model/vision.go#L744) |
+| CPU interleaved/shaped matvec | Use the generated one-row kernel. | [`nn/jit.go:918`](../nn/jit.go#L918) |
+| CPU fused or wide packed matvec | Use generated packed row tiles and tails. | [`nn/packed.go`](../nn/packed.go) |
+| Requested CPU token tile cannot be emitted | Try smaller token widths and cache a successful generated variant. | [`nn/packedmm.go:309`](../nn/packedmm.go#L309) |
+| CPU multi-token matmul unavailable | Run generated fused kernels per token, a one-token tiled kernel, or the per-token generated matvec composition. | [`nn/packedmm.go:111`](../nn/packedmm.go#L111), [`engine/prefill.go:700`](../engine/prefill.go#L700), [`engine/model/vision.go:744`](../engine/model/vision.go#L744) |
 | GPU matrix-instruction projection unavailable | Build and compile the dot-product `MatVec` batch variant. | [`tier/layer.go:6367`](../jit/gpu/tier/layer.go#L6367), [`tier/layer.go:6429`](../jit/gpu/tier/layer.go#L6429) |
 | GPU tensor-core attention unavailable | Build and compile tiled attention-score compute kernels, including the sliding-window variant. | [`tier/layer.go:2969`](../jit/gpu/tier/layer.go#L2969) |
 | GPU subgroup width unavailable or softmax check fails | Build and compile the scalar GPU softmax; head normalization also has scalar/subgroup variants. “Scalar” here is still device code. | [`tier/layer.go:3501`](../jit/gpu/tier/layer.go#L3501), [`kernels/attn.go`](../jit/gpu/kernels/attn.go) |
 | Device block admission fails | Leave that block for the CPU execution path and its generated kernels. | [`engine/forward.go:960`](../engine/forward.go#L960) |
-| GPU rotary-table path is unsuitable | Use/upload the host-generated rotary table. | [`tier/layer.go:4423`](../jit/gpu/tier/layer.go#L4423), [`engine/nn/ropetable.go`](../engine/nn/ropetable.go) |
+| GPU rotary-table path is unsuitable | Use/upload the host-generated rotary table. | [`tier/layer.go:4423`](../jit/gpu/tier/layer.go#L4423), [`nn/ropetable.go`](../nn/ropetable.go) |
 
 These are implemented alternatives for known operations. An unknown weight representation, unsupported plan feature, invalid shape, or missing mandatory host generator can still be refused. The code does not synthesize arbitrary new model semantics from an unrecognized operation name.
 
@@ -170,7 +170,7 @@ Sources: [`cpu/asm.go`](../jit/cpu/asm.go), [`cpu/a64.go`](../jit/cpu/a64.go), [
 
 - “Runtime-generated kernels” is accurate for the kernel inventory. It does not mean every line of tokenization, image preprocessing, packing, paging, data movement, or orchestration is JIT-compiled.
 - Core compute fallback is generally another generated implementation or composition of generated operations. It is not the float64 interpreted inference tier described by some old comments.
-- In release builds, missing activation-quantize or rotary-table generation does not silently enter the historical Go loop. `engine/device/cpu/quantgo.go` and `engine/nn/ropego.go` reject that path; the comparison implementations are behind `jitllmtest`.
+- In release builds, missing activation-quantize or rotary-table generation does not silently enter the historical Go loop. `engine/device/cpu/quantgo.go` and `nn/ropego.go` reject that path; the comparison implementations are behind `jitllmtest`.
 - Greedy selection calls generated `Argmax32JIT`; the old scan described in some comments is gone. Routing and sampling likewise require generated kernels.
 - Raw-layout GEMM's `PackActJIT` still has a Go packing helper when no packing code is supplied. Conversion and host preparation also contain ordinary Go arithmetic. These are separate from claiming a general interpreted model execution tier.
 - `.jlm` stores prepared weight layouts. It reduces paging/repacking overhead; executable CPU/GPU kernels and layer execution are built by the runtime.

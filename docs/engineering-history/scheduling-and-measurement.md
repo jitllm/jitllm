@@ -107,7 +107,7 @@ checkable with a calculator. Ceilings: tinyllama CPU ~105 tok/s, gemma ~33. Abov
 harness bug, not a win.
 
 **★ 2a. THE ENGINE CONVERGES, SO ONE RUN MEASURES A COLD ENGINE.** jitllm tunes itself while it runs --
-`engine/nn/tune.go` times consecutive real decode tokens and climbs the interleave width, `tier/split.go`
+`nn/tune.go` times consecutive real decode tokens and climbs the interleave width, `tier/split.go`
 sweeps the split per shape at load, `tier/choose.go` probes the GPU APIs -- and some of that is
 cached to `~/.cache/jitllm` while some is not. **A first run therefore measures the search, not the
 answer.** Before quoting a rate: run the same prompt several times and take the LAST, or warm the
@@ -429,7 +429,7 @@ rewritten while others read it; under `-race`, mutating the live map instead of
 copying fails it with `WARNING: DATA RACE`.
 
 ★ WHERE ELSE TO LOOK, since the pattern is what generalises: any per-call lookup
-that answers a question fixed at warm-up. `engine/nn/jit.go`'s `packMu` (the generated
+that answers a question fixed at warm-up. `nn/jit.go`'s `packMu` (the generated
 packer cache) and the `gtile`/`gtune` tuner maps are the same shape, but they are
 consulted per MATMUL -- 2002 calls in the same prefill against 22,815 -- so they
 are two orders of magnitude cheaper and have not been changed.
@@ -1615,7 +1615,7 @@ phase carries no label, so a profile is the per-op run). Prefill and the batched
 step are not fused; their regions carry far more work each.
 
 On the laptop an empty phase cost 489 ns against an empty region's 1.06 us
-(`JITLLM_FUSE_BENCH=1 go test ./engine/sched -run Cheaper`, wide IQR: indicative).
+(`JITLLM_FUSE_BENCH=1 go test ./sched -run Cheaper`, wide IQR: indicative).
 The Xeon rows are in docs/perf/current.md's evidence trail and the PR.
 
 ## The serving split: the E-cores prefill while the P-cores decode

@@ -11,7 +11,7 @@ import (
 	"runtime/debug"
 	"strconv"
 
-	"github.com/jitllm/jitllm/engine/sched"
+	"github.com/jitllm/jitllm/sched"
 )
 
 // Cap tells Go's collector about the cgroup, which it cannot see, and returns

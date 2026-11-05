@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Write engine/nn/testdata/yarn.json: transformers' YaRN inverse frequencies.
+"""Write nn/testdata/yarn.json: transformers' YaRN inverse frequencies.
 
 The oracle for nn.YarnFreqs is transformers' own _compute_yarn_parameters, run
 on gpt-oss's rotary config with truncate both ways. Run with the HF venv:
@@ -27,5 +27,5 @@ for truncate in (False, True):
         inv, att = _compute_yarn_parameters(cfg, "cpu")
         cases.append({"head_dim": head_dim, "base": base, "factor": factor, "orig": orig,
                       "truncate": truncate, "inv_freq": [float(v) for v in inv], "attention_factor": att})
-json.dump(cases, open("engine/nn/testdata/yarn.json", "w"), indent=1)
+json.dump(cases, open("nn/testdata/yarn.json", "w"), indent=1)
 print(len(cases), "cases")

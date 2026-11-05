@@ -291,7 +291,7 @@ table has qwen3, which genuinely has none, and no qwen2 file.
 
     model/       optVec loads attn_{q,k,v,output}.bias when the file has them, nil otherwise
     forward.go   addBias after each projection; prefill.go addBiasRows over the chunk
-    engine/nn/device.go LayerWeights.Bq/Bk/Bv/Bo
+    nn/device.go LayerWeights.Bq/Bk/Bv/Bo
     kernels/     MatVecShape.Bias folds a pBias load into the matvec's own store
     tier/        the vectors upload as float32 beside the norms, and are freed on release
 
@@ -438,7 +438,7 @@ RULE 14s says it plainly ("most of jitllm is f32 already: every generated CPU ke
 
 **★ THE TILE TUNER CONVERGES ON SHAPES IT HAS NEVER SEEN, AND THAT IS WORTH GATING.** The first
 determinism assertion failed because consecutive encodes ALTERNATED between two outputs -- which is
-engine/nn/tune.go duelling incumbent against challenger (RULE 5e), made visible by int8 rather than hidden
+nn/tune.go duelling incumbent against challenger (RULE 5e), made visible by int8 rather than hidden
 by f64. Measured: it settles by ~22 encodes, after which consecutive runs agree at NMSE 0 to
 7.5e-15. So the test warms 24 encodes and then asserts. **A tower whose tile never settled would be
 an autotuner that silently does not apply to vision**, and nothing else would have said so.
@@ -1716,7 +1716,7 @@ cold-cache comparison on a file this size is not measuring the engines.
 ## ★ RULE 7r: SAFETENSORS IS THE SECOND INPUT FORMAT, AND THE ROTARY PERMUTATION IS THE PART THAT LOOKS FINE WHEN IT IS WRONG
 
 Landed as `convert/safetensors/` plus `convert/safetensors.go` and `convert/hfvocab.go`. The
-container is unchanged, `jlm.Write` is unchanged, and nothing in `engine/model/`, `engine/nn/` or `composer/` moved:
+container is unchanged, `jlm.Write` is unchanged, and nothing in `engine/model/`, `nn/` or `composer/` moved:
 a source format is a reader that fills a `jlm.Source`, which is what the Scope section already
 said and what this measured.
 
@@ -8762,7 +8762,7 @@ Only the resize's integer passes ran on generated code (`nn.ResampleRowJIT`);
 a census of the image path found Go loops over every pixel or patch around
 them, and two over transcendentals. Every one of those is a kernel now, on
 AVX2, SSE and NEON (`engine/device/cpu/imgproc_const.go` has the contracts,
-`engine/nn/image.go` the entry points), and what is still Go is geometry from
+`nn/image.go` the entry points), and what is still Go is geometry from
 a picture's sizes and the tower's constant tables.
 
 | site | was | is |
@@ -9099,7 +9099,7 @@ rejected KV rows, keeping the stepped recurrent state (rows and replay) --
 must part from plain decode; `TestSpecLookupOnDevice` runs the trunk on
 CUDA and Vulkan, judging a flip as `TestSpecGreedyOnDevice` does.
 
-### engine/grammar
+### grammar
 
 Structured output: a reply constrained to a context-free grammar, GBNF text
 (llama.cpp's format) or a JSON Schema compiled to it (`FromJSONSchema`, the
@@ -9154,7 +9154,7 @@ At the server a constrained generate decodes alone (not as a row of the step
 loop) and without speculation; `ignore_eos` with a grammar is refused, since
 the grammar ends the reply with an end-of-generation token.
 
-The gates: `engine/grammar` holds the automaton to languages written by hand,
+The gates: `grammar` holds the automaton to languages written by hand,
 refusals, the token boundaries (a token spanning two terminals, a code point
 split over byte tokens, a lead byte nothing can finish), the mask's -inf and
 its zero allocations on a visited state, and random walks over the allowed
