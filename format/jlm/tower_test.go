@@ -21,11 +21,12 @@ func sampleTower(t *testing.T) *Tower {
 			{Kind: PreTile, Ints: []int32{1, 12, 1}},
 			{Kind: PreSmartResize, Ints: []int32{28, 3136, 12845056, int32(FilterPILBicubic), int32(PrecPIL)}},
 		},
-		Entry: Program{NIn: 1, Out: 4, Ops: []TowerOp{
+		Entry: Program{NIn: 1, Out: 5, Ops: []TowerOp{
 			{Code: TOpPatchify, In: []uint16{0}, Span: 16},
 			{Code: TOpLinear, In: []uint16{1}, Bind: []Role{RoleVPatchEmbd, RoleVPatchBias}},
 			{Code: TOpPosTable, Bind: []Role{RoleVPosEmbd}},
 			{Code: TOpAdd, In: []uint16{2, 3}},
+			{Code: TOpPosResample, Bind: []Role{RoleVPosEmbd}, Span: 8, Width: 2, Chain: ResampleAligned, Filter: TapsLinear},
 		}},
 		Block: TowerBlock{NHead: 12, NKVHead: 12, HeadDim: 64, Norm: NormLayer, Eps: 1e-6, Act: act,
 			Rope:   TowerRope{Base: 10000, Dim: 32, Neox: true, Runs: []TowerRopeRun{{16, 0, 0}, {16, 1, 0}}},
@@ -40,6 +41,13 @@ func sampleTower(t *testing.T) *Tower {
 		}},
 		Span: TowerSpan{Before: []int32{198, 49189, 49152}, After: []int32{49189},
 			BeforeText: "\n\n<start_of_image>", AfterText: "<end_of_image>\n\n", Bidir: true, Mark: "<image>\n", GridDiv: 2},
+		Taps: []TowerTap{
+			{Block: 1, Prog: Program{NIn: 1, Out: 2, Ops: []TowerOp{
+				{Code: TOpFold, In: []uint16{0}, Span: 4},
+				{Code: TOpLayerNorm, In: []uint16{1}, Bind: []Role{RoleVDsNorm, RoleVDsNormBias}, Eps: 1e-6},
+			}}},
+			{Block: 5, Prog: Program{NIn: 1, Out: 1, Ops: []TowerOp{{Code: TOpFold, In: []uint16{0}, Span: 4}}}},
+		},
 	}
 }
 
@@ -97,6 +105,12 @@ func TestTowerRefusesWhatItCannotRead(t *testing.T) {
 		{"a rotary on a third axis", "run", func(t *Tower) { t.Block.Rope.Runs[1].Axis = 2 }},
 		{"a rotary wider than the head", "pairs", func(t *Tower) { t.Block.Rope.Runs[0].Pairs = 40 }},
 		{"whole-picture blocks with no windows", "windows of 0", func(t *Tower) { t.Block.Window = 0 }},
+		{"a resample by no chain", "by chain 0", func(t *Tower) { t.Entry.Ops[4].Chain = 0 }},
+		{"taps out of their blocks' order", "not after the tap before it", func(t *Tower) { t.Taps[1].Block = 1 }},
+		{"a tap of two inputs", "reads 2 values", func(t *Tower) { t.Taps[0].Prog.NIn = 2 }},
+		{"a tap op reading past its values", "before it is made", func(t *Tower) { t.Taps[1].Prog.Ops[0].In[0] = 1 }},
+		{"a resample of a table one a side", "a table 1 a side", func(t *Tower) { t.Entry.Ops[4].Span = 1 }},
+		{"a resample stated on a linear", "states a resample", func(t *Tower) { t.Entry.Ops[1].Filter = TapsLinear }},
 		{"a whole-picture block before the first", "whole-picture block -1", func(t *Tower) { t.Block.Full[0] = -1 }},
 		{"an unknown op", "does not know", func(t *Tower) { t.Head.Ops[1].Code = topCodes }},
 		{"a value read before it is made", "before it is made", func(t *Tower) { t.Entry.Ops[3].In[1] = 4 }},

@@ -1341,7 +1341,7 @@ func sideAtBinding(gr *graph.Graph) int {
 // gathered rows (ngramForCPU), the row's per-layer inputs on a model of
 // them, nil where the block has none.
 func (s *Instance) cpuSide(li int) []float32 {
-	if s.c.PLEDim == 0 {
+	if s.c.sideWidth() == 0 {
 		return nil
 	}
 	return s.ple
@@ -1349,7 +1349,7 @@ func (s *Instance) cpuSide(li int) []float32 {
 
 // cpuSideRows is cpuSide over a call's rows, and its width a row.
 func (s *Instance) cpuSideRows(li int) ([]float32, int) {
-	return s.bple, s.c.pleWidth()
+	return s.bple, s.c.sideWidth()
 }
 
 // cpuSideOff is block li's sideOff, 0 for a block not composed.

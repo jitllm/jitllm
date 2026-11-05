@@ -4,6 +4,8 @@ import (
 	"image"
 	"image/color"
 	"math"
+	"math/rand/v2"
+	"slices"
 	"testing"
 	"unsafe"
 
@@ -93,19 +95,18 @@ func TestQwen2VLTowerMatchesTransformers(t *testing.T) {
 
 // qvlTowers are the Qwen2-VL family fixtures whose towers the converter
 // states: Qwen2-VL's, and Qwen2.5-VL's with its windows.
-var qvlTowers = []string{"synth-qwen2vl", "synth-qwen25vl"}
+var qvlTowers = []string{"synth-qwen2vl", "synth-qwen25vl", "synth-qwen35vl", "synth-qwen3vl", "synth-qwen3vlmoe"}
 
 func qwen2VLTowerMatchesTransformers(t *testing.T, name string) {
 	m, g := openQVLTower(t, name)
 	defer m.Close()
 	tg := m.tower
-	if tg == nil || tg.fit.factor != 28 || tg.gridDiv != 2 || tg.table == nil || len(tg.classes) < 2 {
-		t.Fatalf("the tower is %+v: want a size of its own in multiples of 28, 2x2 merge windows, a rotary", tg)
+	if tg == nil || tg.gridDiv != 2 || tg.fit.factor != 2*tg.patch || tg.table == nil || len(tg.classes) < 2 {
+		t.Fatalf("the tower is %+v: want 2x2 merge windows, a size of its own in multiples of one, a rotary", tg)
 	}
 	s := m.NewInstance(64)
 	defer s.Close()
 
-	minPix, maxPix := tg.fit.minPix, tg.fit.maxPix
 	tg.fit.minPix, tg.fit.maxPix = g.Prep.Min, g.Prep.Max
 	px, sq := towerPixels(t, s, rgbPicture(g.Prep.RGB, g.Prep.W, g.Prep.H))
 	if sq.pw != g.Prep.OutW || sq.ph != g.Prep.OutH {
@@ -130,7 +131,8 @@ func qwen2VLTowerMatchesTransformers(t *testing.T, name string) {
 	if _, bad := towerPixels(t, s, rgbPicture(g.Prep.RGB, g.Prep.W, g.Prep.H)); bad.pw == g.Prep.OutW && bad.ph == g.Prep.OutH {
 		t.Fatal("VIOLATION: a resize with no bound on the area reaches the processor's size")
 	}
-	tg.fit.minPix, tg.fit.maxPix = minPix, maxPix
+	// The golden encodes its picture at its own size (do_resize=False).
+	tg.fit.minPix, tg.fit.maxPix = g.Image.W*g.Image.H, g.Image.W*g.Image.H
 
 	img := rgbPicture(g.Image.RGB, g.Image.W, g.Image.H)
 	if gr := tg.spanGrid(g.Image.W, g.Image.H); gr != (ImageGrid{T: g.Image.Grid[0], H: g.Image.Grid[1], W: g.Image.Grid[2]}) {
@@ -142,6 +144,16 @@ func qwen2VLTowerMatchesTransformers(t *testing.T, name string) {
 	}
 	if len(rows) != len(g.Image.EmbdA8) {
 		t.Fatalf("%d values, transformers' tower %d", len(rows), len(g.Image.EmbdA8))
+	}
+	// Its taps' rows (Qwen3-VL's deepstack) are held as its head's are.
+	if deep := s.EncodedTaps(); len(deep) != len(g.Image.DeepA8) {
+		t.Fatalf("%d tap values, transformers' deepstack %d", len(deep), len(g.Image.DeepA8))
+	} else if len(deep) > 0 {
+		dn, dw := nmseOf(deep, g.Image.DeepA8)
+		t.Logf("the tower's %d taps: NMSE %.3e, max|d| %.3g at the engine's arithmetic", len(m.tower.taps), dn, dw)
+		if math.IsNaN(dn) || dn > 2e-3 {
+			t.Fatalf("the taps' rows sit at NMSE %.3e from transformers' deepstack at the engine's arithmetic", dn)
+		}
 	}
 	nmse, worst := nmseOf(rows, g.Image.EmbdA8)
 	f32, _ := nmseOf(rows, g.Image.Embd)
@@ -182,10 +194,17 @@ func qwen2VLTowerMatchesTransformers(t *testing.T, name string) {
 // Qwen2VLForConditionalGeneration: the tower's rows, the M-RoPE grid they
 // stand on and the text model's turn of them. The reference's tower is f32
 // and the engine's runs Q8_0 matrices on int8 activations; the text model is
-// f32 on both sides (the M-RoPE gates hold it at 1e-12), so the bound is
-// twice what that arithmetic alone moves the logits -- transformers' own
-// tower at it (embd_a8) under the text model -- with no argmax flipped. The
-// violation is the picture's rows laid out as text.
+// f32 on both sides (the M-RoPE gates hold it at 1e-12), so what the logits
+// may move is the text model's response to a tower error of the engine's
+// size. One draw of that error does not bound a text model that answers
+// discontinuously -- a mixture's routing, a hybrid's near-tie argmax answer
+// two perturbations of one size very differently -- so the bound is twice
+// the worst of nine: transformers' own tower at the engine's arithmetic
+// (embd_a8), and the f32 tower's rows perturbed eight times by noise the
+// size of the engine tower's error against them; no more argmaxes flip than
+// the worst of those flips. The tower's rows themselves are held to the
+// reference by TestQwen2VLTowerMatchesTransformers. The violations are the
+// picture's rows laid out as text and, with taps, the taps zeroed.
 func TestQwen2VLMatchesTransformers(t *testing.T) {
 	for _, name := range qvlTowers {
 		t.Run(name, func(t *testing.T) { qwen2VLMatchesTransformers(t, name) })
@@ -196,6 +215,9 @@ func qwen2VLMatchesTransformers(t *testing.T, name string) {
 	m, g := openQVLTower(t, name)
 	defer m.Close()
 	img := rgbPicture(g.Image.RGB, g.Image.W, g.Image.H)
+	// The golden encodes the picture at its own size (do_resize=False), which
+	// the published bounds need not admit (Qwen3-VL's floor is 65536 pixels).
+	m.tower.fit.minPix, m.tower.fit.maxPix = g.Image.W*g.Image.H, g.Image.W*g.Image.H
 	picture, err := m.PictureSpan(img)
 	if err != nil {
 		t.Fatal(err)
@@ -231,22 +253,52 @@ func qwen2VLMatchesTransformers(t *testing.T, name string) {
 		}
 		return w, flips
 	}
-	// What the tower's arithmetic alone moves the logits by: transformers'
-	// own tower at the engine's arithmetic (embd_a8) under the text model.
-	arith, _ := worst(run(Span{Embd: g.Image.EmbdA8, Grid: picture.Grid}))
-	clean, flips := worst(run(picture))
-	t.Logf("%d rows: worst NMSE %.3e against transformers, %d argmax flips (its tower's arithmetic alone moves them %.3e)",
-		len(g.Logits), clean, flips, arith)
-	if !(arith > 0) || !(clean < 2*arith) || flips > 0 {
-		t.Fatalf("worst NMSE %.3e against transformers (bound twice the arithmetic's %.3e), %d argmax flips", clean, arith, flips)
+	// The engine tower's error against the f32 tower's rows and taps.
+	s := m.NewInstance(64)
+	rows, err := s.EncodePicture(img)
+	if err != nil {
+		t.Fatal(err)
 	}
+	rows, deep := slices.Clone(rows), slices.Clone(s.EncodedTaps())
+	s.Close()
+	e, _ := nmseOf(rows, g.Image.Embd)
+	ed := 0.0
+	if len(g.Image.Deep) > 0 {
+		ed, _ = nmseOf(deep, g.Image.Deep)
+	}
+	// What a tower error of that size moves the logits by, and the argmaxes
+	// it flips, at its worst over nine draws.
+	arith, aflips := worst(run(Span{Embd: g.Image.EmbdA8, Deep: g.Image.DeepA8, Grid: picture.Grid}))
+	a8 := arith
+	for k := range 8 {
+		rng := rand.New(rand.NewPCG(uint64(k), 0x9e3779b97f4a7c15))
+		n, f := worst(run(Span{Embd: perturbed(rng, g.Image.Embd, e), Deep: perturbed(rng, g.Image.Deep, ed), Grid: picture.Grid}))
+		arith, aflips = math.Max(arith, n), max(aflips, f)
+	}
+	clean, flips := worst(run(picture))
+	t.Logf("%d rows: worst NMSE %.3e against transformers, %d argmax flips; a tower error of the engine's size (%.3e) moves them up to %.3e, flipping up to %d (the reference's int8 draw %.3e)",
+		len(g.Logits), clean, flips, e, arith, aflips, a8)
+	if !(arith > 0) || !(clean < 2*arith) || flips > aflips {
+		t.Fatalf("worst NMSE %.3e against transformers (bound twice the worst draw's %.3e), %d argmax flips where the draws flip up to %d",
+			clean, arith, flips, aflips)
+	}
+	// Each violation fails the gate by a margin: ten times past its bound.
+	bound := 2 * arith
 	text := picture
 	text.Grid = ImageGrid{}
 	bad, _ := worst(run(text))
-	if !(bad > 100*math.Max(clean, 1e-12)) {
-		t.Fatalf("VIOLATION: the picture laid out as text reads %.3e against a clean %.3e", bad, clean)
+	if !(bad > 10*bound) {
+		t.Fatalf("VIOLATION: the picture laid out as text reads %.3e against the bound %.3e", bad, bound)
 	}
-	t.Logf("violation (the picture as text): %.3e", bad)
+	t.Logf("violation (the picture as text): %.3e, %.0fx the bound", bad, bad/bound)
+	if len(g.Image.DeepA8) > 0 {
+		// The taps are load-bearing: the arithmetic arm with them zeroed.
+		none, _ := worst(run(Span{Embd: g.Image.EmbdA8, Deep: make([]float32, len(g.Image.DeepA8)), Grid: picture.Grid}))
+		if !(none > 10*bound) {
+			t.Fatalf("VIOLATION: the taps zeroed read %.3e against the bound %.3e", none, bound)
+		}
+		t.Logf("violation (the taps zeroed): %.3e, %.0fx the bound", none, none/bound)
+	}
 }
 
 // TestQwen2VLSeesThePicture is the real checkpoints: Qwen2-VL-2B-Instruct
@@ -256,6 +308,8 @@ func TestQwen2VLSeesThePicture(t *testing.T) {
 	for _, c := range []struct{ name, text, mm string }{
 		{"qwen2vl-2b", "Qwen2-VL-2B-Instruct-Q4_K_M.gguf", "mmproj-Qwen2-VL-2B-Instruct-f16.gguf"},
 		{"qwen25vl-3b", "Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf", "mmproj-Qwen2.5-VL-3B-Instruct-Q8_0.gguf"},
+		{"qwen35vl-0.8b", "qwen35/Qwen3.5-0.8B-Q4_K_M.gguf", "mmproj-Qwen3.5-0.8B-f16.gguf"},
+		{"qwen3vl-2b", "Qwen3-VL-2B-Instruct-f16.gguf", "mmproj-Qwen3-VL-2B-Instruct-f16.gguf"},
 	} {
 		t.Run(c.name, func(t *testing.T) { qwen2VLSeesThePicture(t, testmodels.Path(c.text), testmodels.Path(c.mm)) })
 	}
@@ -286,4 +340,22 @@ func qwen2VLSeesThePicture(t *testing.T, text, mm string) {
 		}
 	}
 	seesThePicture(t, m, img)
+}
+
+// perturbed is x plus Gaussian noise whose expected NMSE against x is e; nil
+// for an empty x.
+func perturbed(rng *rand.Rand, x []float32, e float64) []float32 {
+	if len(x) == 0 {
+		return nil
+	}
+	var ss float64
+	for _, v := range x {
+		ss += float64(v) * float64(v)
+	}
+	sigma := math.Sqrt(e * ss / float64(len(x)))
+	out := make([]float32, len(x))
+	for i, v := range x {
+		out[i] = v + float32(sigma*rng.NormFloat64())
+	}
+	return out
 }

@@ -600,6 +600,9 @@ func TestStatedTowerRunsOnTheCard(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			if st := g.Stats(); st.FormedAtStep != 0 {
+				t.Fatalf("%d of the tower's parts formed at a step on %s, not at the placement", st.FormedAtStep, dev)
+			}
 			var num, den float64
 			for i := range want {
 				if math.IsNaN(float64(got[i])) || math.IsInf(float64(got[i]), 0) {

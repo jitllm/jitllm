@@ -34,6 +34,41 @@ type embedMode struct {
 	// rows keeps every row of the last block's, unnormed, in out (a tower's
 	// run: its head reads them), in place of a pooled readout.
 	rows bool
+	// taps keeps the rows blocks leave where a tower's taps read them
+	// (jlm.TowerTap): a device's run ends at such a block (tapsAfter).
+	taps []embedTap
+}
+
+// embedTap is the rows block li (the instance's) leaves, kept for a tower's
+// tap.
+type embedTap struct {
+	li   int
+	rows []float32
+}
+
+// tapsAfter says a tap keeps the rows block li leaves.
+func (s *Instance) tapsAfter(li int) bool {
+	if s.emb == nil {
+		return false
+	}
+	for _, tp := range s.emb.taps {
+		if tp.li == li {
+			return true
+		}
+	}
+	return false
+}
+
+// keepTaps copies the n rows block li left into each tap that keeps them.
+func (s *Instance) keepTaps(li, n int) {
+	if s.emb == nil {
+		return
+	}
+	for _, tp := range s.emb.taps {
+		if tp.li == li {
+			copy(tp.rows[:n*s.c.NEmbd], s.bx[:n*s.c.NEmbd])
+		}
+	}
 }
 
 // collect reads the readout from a chunk's n final rows from position base

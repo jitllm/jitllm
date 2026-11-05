@@ -665,8 +665,9 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	}
 	// A model of per-layer embeddings gives each block the row's every
 	// layer's input (the input rows' second output): the block reads its own.
-	if c.PLEDim != 0 {
-		b.In("ple", c.pleWidth())
+	// A tap's block reads the row's tap rows the same way.
+	if c.PLEDim != 0 || li < c.DeepTaps {
+		b.In("ple", c.sideWidth())
 	}
 	// The n-gram block's streams take its embedding first (frontngram.go),
 	// its rows the block's side input.
@@ -1092,6 +1093,14 @@ func (m *Model) blockRest(b *graph.Builder, f graph.Facts, li int, x, n, att gra
 // normed projection of the block's stated activation over its gate of y and
 // the block's slice of the inputs. y itself where it reads none.
 func (m *Model) perLayer(b *graph.Builder, f graph.Facts, li int, y graph.ValueID) (graph.ValueID, Uncovered, error) {
+	if li < m.Cfg.DeepTaps {
+		// Tap li's row, a picture's (Qwen3-VL's deepstack _deepstack_process),
+		// zeros for a token's, after the block.
+		E := m.Cfg.NEmbd
+		in := b.Emit(graph.OpSlice, []graph.ValueID{b.G.In[len(b.G.In)-1]}, []graph.Result{{Name: "deep.in", Width: E}}, nil,
+			graph.Attrs{Offset: li * E, Width: E}, nil, nil)[0]
+		y = b.Add(y, in)
+	}
 	if m.Cfg.PLEDim == 0 {
 		return y, Covered, nil
 	}

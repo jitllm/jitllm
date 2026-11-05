@@ -4,7 +4,7 @@ import "fmt"
 
 // TowerVersion is the stated tower's revision. A record of a later one is
 // refused, not read as this one.
-const TowerVersion = 5
+const TowerVersion = 6
 
 // Tower is a vision tower as the converter states it: what the engine builds
 // the tower from, with no family's name in it. The converter knows a family
@@ -21,6 +21,18 @@ type Tower struct {
 	Block   TowerBlock
 	Head    Program
 	Span    TowerSpan
+	// Taps are rows of the picture beside the head's, each from the rows a
+	// block leaves, in their blocks' order: text block i adds tap i's rows
+	// into the picture's after it runs (Qwen3-VL's deepstack).
+	Taps []TowerTap
+}
+
+// TowerTap is a program over the rows tower block Block leaves (value 0),
+// whose result is as many rows as the head's at the text model's width. Its
+// binds read the tensors stored at index Block of the dense region.
+type TowerTap struct {
+	Block int32
+	Prog  Program
 }
 
 // PreKind is one preprocessing step: an algorithm with its parameters, never
@@ -59,6 +71,9 @@ const (
 	// sqrt(area / Ints[2]) and floored to one, or where it falls short of
 	// Ints[1], scaled up by sqrt(Ints[1] / area) and ceiled to one
 	// (Qwen2-VL's smart_resize); with filter Ints[3] in arithmetic Ints[4].
+	// Ints[5], where stated, is 1 for a picture a side shorter than Ints[0]
+	// scaled up first so that side is Ints[0], each side truncated
+	// (GLM-4V's smart_resize), 0 for none.
 	PreSmartResize PreKind = 6
 )
 
@@ -140,7 +155,34 @@ const (
 	// of the blocks' windows (TowerBlock.Window), in the merge windows'
 	// raster order (graph.OpUntile).
 	TOpUntile OpCode = 13
-	topCodes  OpCode = 14
+	// TOpPosResample is each row's row of the position table Bind[0], a
+	// Span x Span grid, resampled to the picture's patch grid at the row's
+	// cell (graph.OpPosResample): the source coordinate on each axis by
+	// Chain, read through Filter's taps, the rows in TOpPatchify's order
+	// where Width is set, from row Offset on.
+	TOpPosResample OpCode = 14
+	topCodes       OpCode = 15
+)
+
+// A position table's resample (TOpPosResample): where a cell of a side n
+// cells long falls on the table's side, and the taps that read it.
+const (
+	// ResampleAligned is align_corners: cell i at i*(Span-1)/(n-1), the
+	// points of torch.linspace(0, Span-1, n).
+	ResampleAligned uint8 = 1 + iota
+	// ResampleHalfPixel is (i+0.5)*Span/n - 0.5.
+	ResampleHalfPixel
+)
+
+const (
+	// TapsBilinear is the two samples around the coordinate, each weighted
+	// by one less its distance, none below zero.
+	TapsBilinear uint8 = 1 + iota
+	// TapsLinear is TapsBilinear with the coordinate clamped at zero first.
+	TapsLinear
+	// TapsCubic is the four samples around it through the cubic
+	// convolution of a = -0.75.
+	TapsCubic
 )
 
 // TowerOp is one operation of a program: its inputs are values (a program's
@@ -155,6 +197,9 @@ type TowerOp struct {
 	Width  int32
 	Eps    float32
 	Expr   *Expr
+	// Chain and Filter are TOpPosResample's (ResampleAligned, TapsLinear),
+	// zero on every other op.
+	Chain, Filter uint8
 }
 
 // Program is a short graph: NIn inputs, then each op's output, and the value
@@ -257,8 +302,8 @@ func (t *Tower) Valid() error {
 				return fmt.Errorf("jlm: the tower's step %d crops to %v", i, s.Ints)
 			}
 		case PreSmartResize:
-			if len(s.Ints) != 5 || s.Ints[0] <= 0 || s.Ints[1] <= 0 || s.Ints[2] < s.Ints[1] ||
-				!resizes(Filter(s.Ints[3]), Precision(s.Ints[4])) {
+			if len(s.Ints) < 5 || len(s.Ints) > 6 || s.Ints[0] <= 0 || s.Ints[1] <= 0 || s.Ints[2] < s.Ints[1] ||
+				!resizes(Filter(s.Ints[3]), Precision(s.Ints[4])) || len(s.Ints) == 6 && s.Ints[5]&^1 != 0 {
 				return fmt.Errorf("jlm: the tower's step %d resizes to its own size with %v", i, s.Ints)
 			}
 		case PreTile:
@@ -283,6 +328,17 @@ func (t *Tower) Valid() error {
 	}
 	if err := t.Head.valid("head"); err != nil {
 		return err
+	}
+	for i, tp := range t.Taps {
+		if tp.Block < 0 || i > 0 && tp.Block <= t.Taps[i-1].Block {
+			return fmt.Errorf("jlm: the tower's tap %d reads block %d, not after the tap before it", i, tp.Block)
+		}
+		if tp.Prog.NIn != 1 {
+			return fmt.Errorf("jlm: the tower's tap %d reads %d values, want its block's rows", i, tp.Prog.NIn)
+		}
+		if err := tp.Prog.valid(fmt.Sprintf("tap %d", i)); err != nil {
+			return err
+		}
 	}
 	b := t.Block
 	switch {
@@ -361,6 +417,12 @@ func (p *Program) valid(name string) error {
 			return fmt.Errorf("jlm: the tower's %s op %d states no expression or no width", name, i)
 		case op.Offset < 0:
 			return fmt.Errorf("jlm: the tower's %s op %d offsets by %d", name, i, op.Offset)
+		case op.Code == TOpPosResample && (op.Span < 2 || op.Chain < ResampleAligned || op.Chain > ResampleHalfPixel ||
+			op.Filter < TapsBilinear || op.Filter > TapsCubic):
+			return fmt.Errorf("jlm: the tower's %s op %d resamples a table %d a side by chain %d and taps %d",
+				name, i, op.Span, op.Chain, op.Filter)
+		case op.Code != TOpPosResample && (op.Chain != 0 || op.Filter != 0):
+			return fmt.Errorf("jlm: the tower's %s op %d (code %d) states a resample", name, i, op.Code)
 		}
 		if op.Expr != nil {
 			if err := op.Expr.Valid(); err != nil {
@@ -387,7 +449,7 @@ func (op *TowerOp) arity() (in int, bind [2]int) {
 		return 1, [2]int{1, 2}
 	case TOpRMSNorm, TOpLeadRow:
 		return 1, [2]int{1, 1}
-	case TOpPosTable:
+	case TOpPosTable, TOpPosResample:
 		return 0, [2]int{1, 1}
 	case TOpAdd:
 		return 2, [2]int{0, 0}
@@ -463,6 +525,11 @@ func encodeTower(w *wbuf, t *Tower) {
 	w.bool(t.Span.Bidir)
 	w.str(t.Span.Mark)
 	w.i32(t.Span.GridDiv)
+	w.u32(uint32(len(t.Taps)))
+	for i := range t.Taps {
+		w.i32(t.Taps[i].Block)
+		encodeProgram(w, &t.Taps[i].Prog)
+	}
 }
 
 func encodeProgram(w *wbuf, p *Program) {
@@ -483,6 +550,8 @@ func encodeProgram(w *wbuf, p *Program) {
 		w.i32(op.Offset)
 		w.i32(op.Width)
 		w.f32(op.Eps)
+		w.u8(op.Chain)
+		w.u8(op.Filter)
 		w.bool(op.Expr != nil)
 		if op.Expr != nil {
 			encodeExpr(w, op.Expr)
@@ -529,12 +598,18 @@ func decodeTower(r *rbuf) *Tower {
 	t.Span.Bidir = r.bool()
 	t.Span.Mark = r.str()
 	t.Span.GridDiv = r.i32()
+	// A tap is at least its block and an empty program's three counts.
+	for range r.count(12) {
+		tp := TowerTap{Block: r.i32()}
+		decodeProgram(r, &tp.Prog)
+		t.Taps = append(t.Taps, tp)
+	}
 	return t
 }
 
 func decodeProgram(r *rbuf, p *Program) {
 	p.NIn = r.u16()
-	for range r.count(27) {
+	for range r.count(29) {
 		op := TowerOp{Code: OpCode(r.u16())}
 		for range r.count(2) {
 			op.In = append(op.In, r.u16())
@@ -544,6 +619,7 @@ func decodeProgram(r *rbuf, p *Program) {
 		}
 		op.Span, op.Offset, op.Width = r.i32(), r.i32(), r.i32()
 		op.Eps = r.f32()
+		op.Chain, op.Filter = r.u8(), r.u8()
 		if r.bool() {
 			op.Expr = &Expr{}
 			decodeExpr(r, op.Expr)

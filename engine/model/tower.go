@@ -34,6 +34,10 @@ type towerGraphs struct {
 	classes []towerClass
 	blocks  []*graph.Graph
 	head    *graph.Graph
+	// taps is each tap's graph (jlm.TowerTap), tapBlocks the tower block
+	// whose rows it reads.
+	taps      []*graph.Graph
+	tapBlocks []int
 	// rows is the most rows the entry writes and every block reads, lead the
 	// class rows before the patches; side a fixed picture's patch grid's
 	// width and patch a patch's side in pixels; out the rows the head writes
@@ -96,12 +100,30 @@ func (m *Model) bindTower(c *jlm.File) error {
 	}
 	m.layers = m.layers[:n+int(v.NLayer)]
 	ls := m.layers[n:]
+	// A tap's tensors sit at its block's index of the dense region, each tap
+	// a layer of its own.
+	var taps []jlm.TowerTap
+	if v.Tower != nil {
+		taps = v.Tower.Taps
+	}
+	m.towerTaps = make([]layer, len(taps))
+	tapAt := map[int32]int{}
+	for j, tp := range taps {
+		tapAt[tp.Block] = j
+	}
 	for i := range c.Entries() {
 		e := &c.Entries()[i]
-		if !e.Role.Vision() || e.Index >= 0 {
+		if !e.Role.Vision() {
 			continue
 		}
 		l := &m.towerDense
+		if e.Index >= 0 {
+			j, ok := tapAt[e.Index]
+			if e.Block != jlm.DenseBlock || !ok || !tapBinds(taps[j], e.Role) {
+				continue
+			}
+			l = &m.towerTaps[j]
+		}
 		switch {
 		case e.Block >= 0 && int(e.Block) < len(ls):
 			l = &ls[e.Block]
@@ -127,7 +149,54 @@ func (m *Model) bindTower(c *jlm.File) error {
 		*dst = t
 		l.mats = append(l.mats, roleTensor{e.Role, dst})
 	}
+	for j := range m.towerTaps {
+		if err := bindPacked(c, m.Cfg, &m.towerTaps[j]); err != nil {
+			return err
+		}
+	}
 	return bindPacked(c, m.Cfg, &m.towerDense)
+}
+
+// tapBinds says tap tp's program binds role r.
+func tapBinds(tp jlm.TowerTap, r jlm.Role) bool {
+	for _, op := range tp.Prog.Ops {
+		if slices.Contains(op.Bind, r) {
+			return true
+		}
+	}
+	return false
+}
+
+// towerTapFacts is the inventory of the tensors a tap of tower block b binds:
+// the dense region's at index b.
+func (m *Model) towerTapFacts(b int32) graph.Facts {
+	inv := map[jlm.Role]graph.Shape{}
+	for i := range m.container.Entries() {
+		e := &m.container.Entries()[i]
+		if e.Block != jlm.DenseBlock || e.Index != b || !e.Role.Vision() {
+			continue
+		}
+		s := graph.Shape{K: e.K()}
+		if e.NDim >= 2 && !squeezed(e) {
+			s.Rows = e.Rows()
+		}
+		inv[e.Role] = s
+	}
+	return graph.Facts{Inventory: inv}
+}
+
+// towerTapFormats is the container's type of every tensor tap graph g of
+// tower block b binds.
+func (m *Model) towerTapFormats(b int32, g *graph.Graph) map[jlm.Role]jlm.Type {
+	out := map[jlm.Role]jlm.Type{}
+	for _, o := range g.Ops {
+		for _, w := range o.Weight {
+			if e, ok := m.container.Find(w.Role, jlm.DenseBlock, b); ok {
+				out[w.Role] = e.Type
+			}
+		}
+	}
+	return out
 }
 
 // squeezed reports whether e is a vector stored with trailing dimensions
@@ -256,11 +325,26 @@ func (m *Model) buildTowerGraphs() (*towerGraphs, error) {
 		}
 		tg.blocks = append(tg.blocks, g)
 	}
-	h, out, err := towerHead(t, v, tg.rows, dense)
+	h, out, err := towerProgram(t, &t.Head, v, tg.rows, dense)
 	if err != nil {
 		return nil, fmt.Errorf("model: the tower's head: %w", err)
 	}
 	tg.head, tg.out = h, out
+	D := int(v.ProjDim)
+	for j := range t.Taps {
+		tp := &t.Taps[j]
+		if tp.Block >= int32(v.NLayer) {
+			return nil, fmt.Errorf("model: the tower's tap %d reads block %d of %d", j, tp.Block, v.NLayer)
+		}
+		g, n, err := towerProgram(t, &tp.Prog, v, tg.rows, m.towerTapFacts(tp.Block))
+		if err != nil {
+			return nil, fmt.Errorf("model: the tower's tap %d: %w", j, err)
+		}
+		if w := g.Values[g.Out[0]].Width; n != out || w != D {
+			return nil, fmt.Errorf("model: the tower's tap %d writes %d rows of %d, the head %d of %d", j, n, w, out, D)
+		}
+		tg.taps, tg.tapBlocks = append(tg.taps, g), append(tg.tapBlocks, int(tp.Block))
+	}
 	return tg, nil
 }
 
@@ -275,6 +359,9 @@ type pictureFit struct {
 	// factor, minPix and maxPix are a resize to the picture's own size
 	// (jlm.PreSmartResize); factor 0 where there is none.
 	factor, minPix, maxPix int
+	// lift scales a picture a side shorter than factor up first
+	// (jlm.PreSmartResize's Ints[5]).
+	lift bool
 }
 
 // smartSize is a w x h picture's own size (Qwen2-VL's smart_resize): each
@@ -284,6 +371,10 @@ type pictureFit struct {
 // float64, as Python computes them.
 func (f pictureFit) smartSize(w, h int) (ow, oh int) {
 	fa := f.factor
+	if f.lift && (w < fa || h < fa) {
+		s := math.Max(float64(fa)/float64(h), float64(fa)/float64(w))
+		w, h = int(float64(w)*s), int(float64(h)*s)
+	}
 	round := func(v int) int {
 		q, r := v/fa, v%fa
 		if 2*r > fa || 2*r == fa && q%2 == 1 {
@@ -332,6 +423,7 @@ func towerFit(t *jlm.Tower) (pictureFit, error) {
 			fit.short, sized, pil = int(s.Ints[0]), true, jlm.Filter(s.Ints[1]) != jlm.FilterTwoTap
 		case jlm.PreSmartResize:
 			fit.factor, fit.minPix, fit.maxPix = int(s.Ints[0]), int(s.Ints[1]), int(s.Ints[2])
+			fit.lift = len(s.Ints) == 6 && s.Ints[5] == 1
 			sized, pil = true, jlm.Filter(s.Ints[3]) != jlm.FilterTwoTap
 		case jlm.PreCenterCrop:
 			cropped = true
@@ -593,10 +685,10 @@ func shortSide(w, h, s int) (int, int) {
 }
 
 // towerHead is the head over the last block's rows, and the rows it writes.
-func towerHead(t *jlm.Tower, v *jlm.Vision, rows int, f graph.Facts) (*graph.Graph, int, error) {
+func towerProgram(t *jlm.Tower, p *jlm.Program, v *jlm.Vision, rows int, f graph.Facts) (*graph.Graph, int, error) {
 	b := graph.NewBlock(-1)
 	x := b.In("rows", int(v.NEmbd))
-	out, err := lowerProgram(b, t, &t.Head, []graph.ValueID{x}, rows, f)
+	out, err := lowerProgram(b, t, p, []graph.ValueID{x}, rows, f)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -606,6 +698,30 @@ func towerHead(t *jlm.Tower, v *jlm.Vision, rows int, f graph.Facts) (*graph.Gra
 		n = rows
 	}
 	return b.G, n, graph.Verify(b.G, f)
+}
+
+// resampleOf is a record's resample (jlm.ResampleAligned, jlm.TapsLinear) as
+// graph.OpPosResample states it.
+func resampleOf(chain, filter uint8) (uint8, uint8, error) {
+	var c, f uint8
+	switch chain {
+	case jlm.ResampleAligned:
+		c = graph.ChainAligned
+	case jlm.ResampleHalfPixel:
+		c = graph.ChainHalfPixel
+	}
+	switch filter {
+	case jlm.TapsBilinear:
+		f = graph.FilterBilinear
+	case jlm.TapsLinear:
+		f = graph.FilterLinear
+	case jlm.TapsCubic:
+		f = graph.FilterCubic
+	}
+	if c == 0 || f == 0 {
+		return 0, 0, fmt.Errorf("a resample by chain %d and taps %d", chain, filter)
+	}
+	return c, f, nil
 }
 
 // lowerProgram adds p's ops to b over its inputs in, each op the graph's of
@@ -673,6 +789,21 @@ func lowerProgram(b *graph.Builder, t *jlm.Tower, p *jlm.Program, in []graph.Val
 			}
 			out = b.Emit(graph.OpEmbed, nil, []graph.Result{{Name: "pos", Width: s.K}},
 				[]graph.Binding{{Role: op.Bind[0], K: s.K, Rows: s.Rows}}, graph.Attrs{Positional: true, Offset: int(op.Offset)}, nil, nil)[0]
+		case jlm.TOpPosResample:
+			s, err := shape(op.Bind[0])
+			if err != nil {
+				return 0, err
+			}
+			if s.Rows != int(op.Span*op.Span) {
+				return 0, fmt.Errorf("resamples a table %d a side from %d rows", op.Span, s.Rows)
+			}
+			chain, filter, err := resampleOf(op.Chain, op.Filter)
+			if err != nil {
+				return 0, err
+			}
+			out = b.Emit(graph.OpPosResample, nil, []graph.Result{{Name: "pos", Width: s.K}},
+				[]graph.Binding{{Role: op.Bind[0], K: s.K, Rows: s.Rows}},
+				graph.Attrs{Span: int(op.Span), Offset: int(op.Offset), Width: int(op.Width), Window: window, Chain: chain, Filter: filter}, nil, nil)[0]
 		case jlm.TOpAdd:
 			out = b.Add(ins[0], ins[1])
 		case jlm.TOpLayerNorm:
@@ -828,6 +959,13 @@ type towerRun struct {
 	// entry is a class's entry forms, one a sample format.
 	entry []map[uint8]*cpudev.Form
 	head  *cpudev.Form
+	// taps is each tap's form, tapRows the rows its block leaves (tapBuf
+	// their buffers, grown with the square) and mode's taps the card's run
+	// keeping them (embedMode.taps).
+	taps     []*cpudev.Form
+	tapRows  [][]float32
+	tapBuf   [][]float32
+	modeTaps []embedTap
 	// rows is a square's patch rows at the tower's width, as the entry
 	// writes them, and blk as the last block leaves them; seq and pos the
 	// rows' sequence and positions -- row i at position i, the patch gather
@@ -847,19 +985,21 @@ type towerRun struct {
 	// own (a card's row windows).
 	wins, rowWins []nn.KeyRun
 	// out is the rows EncodePicture hands back, at the language model's
-	// width; encodes counts the pictures encoded.
-	out     []float32
-	encodes int
+	// width, and deep its taps' (EncodedTaps); encodes counts the pictures
+	// encoded.
+	out, deep []float32
+	encodes   int
 	// pad holds a picture's planes where they are not read in place, ent a
 	// palette's entries; tapsW and tapsH the source size the request's taps
 	// are for.
 	pad          []uint32
 	ent          [4 * 256]byte
 	tapsW, tapsH int
-	// pics is a prompt's pictures' rows, one buffer a picture, and spans the
-	// prompt's spans with them in place (encodePictures).
-	pics  [][]float32
-	spans []Span
+	// pics is a prompt's pictures' rows, one buffer a picture, deeps their
+	// taps' rows, and spans the prompt's spans with them in place
+	// (encodePictures).
+	pics, deeps [][]float32
+	spans       []Span
 }
 
 // newTowerRun is the model's tower run, nil for a model with no tower.
@@ -899,6 +1039,15 @@ func (m *Model) newTowerRun() (*towerRun, error) {
 		return nil, fmt.Errorf("model: the tower's head: %w", err)
 	}
 	tr.head = f
+	for j, g := range tg.taps {
+		f, err := m.formCPUGraph(ts, g, n, m.towerTapFormats(int32(tg.tapBlocks[j]), g))
+		if err != nil {
+			ts.Close()
+			return nil, fmt.Errorf("model: the tower's tap %d: %w", j, err)
+		}
+		tr.taps = append(tr.taps, f)
+	}
+	tr.tapRows, tr.tapBuf = make([][]float32, len(tg.taps)), make([][]float32, len(tg.taps))
 	for li := ts.lo; li < ts.hi; li++ {
 		if cb := ts.cpu.blocks[li]; cb == nil || cb.rows == nil {
 			why := composer.DeclineNoGraph
@@ -940,6 +1089,12 @@ func (tr *towerRun) size(n, e int) {
 		for i := range n {
 			tr.bufP[i], tr.bufT[1+i] = i, uint32(i)
 		}
+		for j := range tr.tapBuf {
+			tr.tapBuf[j] = make([]float32, n*e)
+		}
+	}
+	for j := range tr.tapRows {
+		tr.tapRows[j] = tr.tapBuf[j][:n*e]
 	}
 	tr.rows, tr.blk = tr.bufE[:n*e], tr.bufB[:n*e]
 	tr.seq, tr.pos, tr.posTab = tr.bufS[:n], tr.bufP[:n], tr.bufT[:1+n]
@@ -1143,10 +1298,21 @@ func (s *Instance) EncodePicture(img image.Image) ([]float32, error) {
 	defer s.m.enterPager()()
 	b := img.Bounds()
 	n := s.m.tower.picRows(b.Dx(), b.Dy()) * int(s.m.container.Vision().ProjDim)
+	k := len(s.m.tower.taps)
 	if cap(s.tower.out) < n {
-		s.tower.out = make([]float32, n)
+		s.tower.out, s.tower.deep = make([]float32, n), make([]float32, k*n)
 	}
-	return s.encodePicture(img, s.tower.out[:n])
+	return s.encodePicture(img, s.tower.out[:n], s.tower.deep[:k*n])
+}
+
+// EncodedTaps is the last picture EncodePicture encoded's taps' rows
+// (jlm.TowerTap), [taps][rows][width]: Qwen3-VL's deepstack rows. A tower
+// with no taps has none.
+func (s *Instance) EncodedTaps() []float32 {
+	if s.tower == nil {
+		return nil
+	}
+	return s.tower.deep
 }
 
 // towerReady is why the instance cannot encode a picture, nil when it can.
@@ -1160,9 +1326,9 @@ func (s *Instance) towerReady() error {
 	return fmt.Errorf("model: the model has no vision tower")
 }
 
-// encodePicture is EncodePicture into dst, the head's rows, under the pager
-// the caller holds.
-func (s *Instance) encodePicture(img image.Image, dst []float32) ([]float32, error) {
+// encodePicture is EncodePicture into dst, the head's rows, and deep, its
+// taps' ([taps][rows][width]), under the pager the caller holds.
+func (s *Instance) encodePicture(img image.Image, dst, deep []float32) ([]float32, error) {
 	tr := s.tower
 	tr.encodes++
 	words, pl, err := pictureWords(img, &tr.pad, &tr.ent)
@@ -1180,8 +1346,13 @@ func (s *Instance) encodePicture(img image.Image, dst []float32) ([]float32, err
 		return nil, fmt.Errorf("model: the tower's head: %v", why)
 	}
 	D, E := int(m.container.Vision().ProjDim), int(m.container.Vision().NEmbd)
-	if want := tg.picRows(pl.w, pl.h); len(dst) != want*D {
-		return nil, fmt.Errorf("model: %d values for a picture's %d rows of %d", len(dst), want, D)
+	if want := tg.picRows(pl.w, pl.h); len(dst) != want*D || len(deep) != len(tr.taps)*want*D {
+		return nil, fmt.Errorf("model: %d values and %d for its taps' for a picture's %d rows of %d", len(dst), len(deep), want, D)
+	}
+	for j, f := range tr.taps {
+		if why := ts.cpuWeights(f, -1, &m.towerTaps[j]); why != composer.DeclineServes {
+			return nil, fmt.Errorf("model: the tower's tap %d: %v", j, why)
+		}
 	}
 	b := &ts.cpu.bound
 	sq, squares := tg.square(pl.w, pl.h, 0)
@@ -1206,6 +1377,12 @@ func (s *Instance) encodePicture(img image.Image, dst []float32) ([]float32, err
 		*b = cpuBound{li: -1, l: &m.towerDense, own: ts.cpu.dev.Own(head), n: n, req: tr.req, pos: tr.posTab}
 		b.io[0], b.io[1] = unsafe.Pointer(&tr.blk[0]), unsafe.Pointer(&dst[at*D])
 		ts.cpuRunForm(b, head)
+		// Each tap's rows at the same rows of its plane of deep.
+		for j, f := range tr.taps {
+			*b = cpuBound{li: -1, l: &m.towerTaps[j], own: ts.cpu.dev.Own(f), n: n, req: tr.req, pos: tr.posTab}
+			b.io[0], b.io[1] = unsafe.Pointer(&tr.tapRows[j][0]), unsafe.Pointer(&deep[(j*len(dst)/D+at)*D])
+			ts.cpuRunForm(b, f)
+		}
 		at += tg.squareOut(sq)
 	}
 	return dst, nil
@@ -1240,6 +1417,13 @@ func (ts *Instance) towerBlocks(tr *towerRun, gw int, wins []nn.KeyRun) error {
 			}
 		}
 		tr.mode = embedMode{bidir: true, rows: true, total: n, out: tr.blk, wins: tr.mode.wins}
+		// The rows each tapped block leaves, which a card writes back where
+		// its run ends at that block.
+		tr.modeTaps = tr.modeTaps[:0]
+		for j, blk := range ts.m.tower.tapBlocks {
+			tr.modeTaps = append(tr.modeTaps, embedTap{li: ts.lo + blk, rows: tr.tapRows[j]})
+		}
+		tr.mode.taps = tr.modeTaps
 		if wins != nil {
 			// A card's windowed blocks read each row's window (graph.Attrs
 			// .RowWindows), handed with the call (embedTell); the blocks the
@@ -1281,6 +1465,11 @@ func (ts *Instance) towerBlocks(tr *towerRun, gw int, wins []nn.KeyRun) error {
 		if why != composer.DeclineServes {
 			return fmt.Errorf("block %d: %v", li-ts.m.towerBase, why)
 		}
+		for j, blk := range ts.m.tower.tapBlocks {
+			if ts.lo+blk == li {
+				copy(tr.tapRows[j], tr.blk)
+			}
+		}
 	}
 	return nil
 }
@@ -1319,13 +1508,19 @@ func (s *Instance) encodePictures(spans []Span, from int) ([]Span, error) {
 			if k == len(tr.pics) {
 				tr.pics = append(tr.pics, nil)
 			}
-			if cap(tr.pics[k]) < sp.PicRows*D {
-				tr.pics[k] = make([]float32, sp.PicRows*D)
+			if k == len(tr.deeps) {
+				tr.deeps = append(tr.deeps, nil)
 			}
-			sp.Embd = tr.pics[k][:sp.PicRows*D]
+			if cap(tr.pics[k]) < sp.PicRows*D {
+				tr.pics[k], tr.deeps[k] = make([]float32, sp.PicRows*D), make([]float32, len(tr.taps)*sp.PicRows*D)
+			}
+			sp.Embd, sp.Deep = tr.pics[k][:sp.PicRows*D], tr.deeps[k][:len(tr.taps)*sp.PicRows*D]
+			if len(tr.taps) == 0 {
+				sp.Deep = nil
+			}
 			k++
 			if row+r > from {
-				if _, err := s.encodePicture(sp.Picture, sp.Embd); err != nil {
+				if _, err := s.encodePicture(sp.Picture, sp.Embd, tr.deeps[k-1][:len(tr.taps)*sp.PicRows*D]); err != nil {
 					return nil, fmt.Errorf("model: span %d: %w", i, err)
 				}
 			}

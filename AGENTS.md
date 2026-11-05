@@ -920,20 +920,25 @@ JIT and state) was llama.cpp's technical debt, not a property of the model.
   submission: bidirectional attention needs every row's k and v first.
 - Gates: `jlm.TestTowerRefusesWhatItCannotRead`, each stater's
   `convert.Test*StatesItsTower` (SmolVLM, Gemma 3, llava, InternVL, Qwen2-VL,
-  Qwen2.5-VL), `TestStatedTowerComposesOnTheCPU`, `TestStatedTowerBlocksArePagedBlocks`,
+  Qwen2.5-VL, Qwen3.5-VL) and `convert.TestQwen3VLStatesItsTaps`,
+  `TestStatedTowerComposesOnTheCPU`, `TestStatedTowerBlocksArePagedBlocks`,
   `TestStatedTowerEncodesAPicture`, `TestWarmImageEncodeDoesNotAllocate`,
   `TestStatedTowerSeesThePicture` and each family's `Test*TowerSeesThePicture`
   (a blank picture is the violation), `TestStatedTowerRunsOnTheCard` (every
   block and a partial seam, against the CPU), `TestQwen2VLTowerMatchesTransformers`
-  (Qwen2-VL's and Qwen2.5-VL's: the processor's samples, every one, and the
-  tower's rows), `TestQwen2VLTowerRunsOnTheCard` (their grid rotary from the
-  card's own table and Qwen2.5-VL's windows, every block and a half seam),
+  (Qwen2-VL's, Qwen2.5-VL's, Qwen3.5-VL's and Qwen3-VL's: the processor's
+  samples, every one, the tower's rows and Qwen3-VL's taps'),
+  `TestQwen2VLTowerRunsOnTheCard` (their grid rotary from the card's own table,
+  Qwen2.5-VL's windows and Qwen3-VL's taps, every block and a half seam),
   `TestQwen2VLMatchesTransformers`, the M-RoPE gates (`TestMRope*`, the text
   side on transformers' own tower rows), `TestChatSpansFollowTheTemplate`,
   `TestPictureFormatsEncodeAsTheirPixels`, `composer.TestComposedCPUPicture*`,
   `composer.TestComposedCPURegroup`, `composer.TestComposedCPUPatchifyTiles`
   and `composer.TestComposedCPUUntile` (the windows' order, against
-  get_window_index); through the front ends
+  get_window_index), `composer.TestComposedCPUPosResampleFollowsTheReference`
+  and `composer.TestComposedCPUPosResampleCubic` (a learned table at the
+  picture's grid, fast_pos_embed_interpolate and grid_sample's bicubic);
+  through the front ends
   `server.TestImageRequestsMatchTheEngine`, `cmd/jitllm.TestImageRunsThroughTheTower`
   (a run restored past the picture answers alike) and
   `common/engine.TestAnAttachedPictureReachesTheModel` (a follow-up turn sees

@@ -19,15 +19,25 @@ package model
 // pleWidth is one row's per-layer inputs, NLayer*PLEDim.
 func (c *Config) pleWidth() int { return c.NLayer * c.PLEDim }
 
+// sideWidth is one row's side input to the blocks (their graphs' last
+// input): its per-layer inputs, or the tap rows the first DeepTaps blocks
+// add, DeepTaps*NEmbd.
+func (c *Config) sideWidth() int {
+	if c.DeepTaps > 0 {
+		return c.DeepTaps * c.NEmbd
+	}
+	return c.pleWidth()
+}
+
 // growPLE sizes the per-layer embedding scratch. A model without them gets
 // none.
 func (s *Instance) growPLE() {
 	c := s.c
-	if c.PLEDim == 0 || s.ple != nil {
+	if c.sideWidth() == 0 || s.ple != nil {
 		return
 	}
-	w := c.pleWidth()
-	s.ple = make([]float32, w)
+	// A decode row's tap rows are zeros, which nothing writes over.
+	s.ple = make([]float32, c.sideWidth())
 }
 
 // kvGroupOffered reports whether block li may be offered by offerRange(lo,
@@ -102,10 +112,49 @@ func (s *Instance) fixKVGroups() {
 	}
 }
 
-// growBPLE sizes a batched chunk's per-layer inputs for n rows. Grows, never
+// growBPLE sizes a batched chunk's side inputs for n rows. Grows, never
 // shrinks.
 func (s *Instance) growBPLE(n int) {
-	if w := n * s.c.pleWidth(); len(s.bple) < w {
+	if w := n * s.c.sideWidth(); len(s.bple) < w {
 		s.bple = make([]float32, w)
+	}
+}
+
+// tokenSide is n token rows' side inputs, zero where they are tap rows (a
+// token's have none); a model of per-layer inputs computes its own over
+// them.
+func (s *Instance) tokenSide(n int) []float32 {
+	w := s.c.sideWidth()
+	if w == 0 {
+		return nil
+	}
+	s.growBPLE(n)
+	side := s.bple[:n*w]
+	if s.c.DeepTaps > 0 {
+		clear(side)
+	}
+	return side
+}
+
+// fillDeep writes rows base..base+n-1 of src's tap rows into side
+// (sideWidth a row): a given run's taps where its span carries them, zeros
+// for every other row.
+func (s *Instance) fillDeep(src rowSrc, base, n int, side []float32) {
+	if s.c.DeepTaps == 0 {
+		return
+	}
+	E, W := s.c.NEmbd, s.c.sideWidth()
+	clear(side[:n*W])
+	for _, g := range src.given {
+		if g.deep == nil {
+			continue
+		}
+		lo, hi := max(g.at, base), min(g.at+len(g.rows)/E, base+n)
+		for i := lo; i < hi; i++ {
+			at := g.n0 + i - g.at
+			for k := range s.c.DeepTaps {
+				copy(side[(i-base)*W+k*E:(i-base)*W+(k+1)*E], g.deep[(k*g.n+at)*E:])
+			}
+		}
 	}
 }

@@ -203,8 +203,9 @@ const (
 	// OpPosResample is each row's position-table row resampled to the
 	// step's grid: Weight[0] a Span x Span table, the row's cell (its
 	// position less Offset, a grid the request's first word wide and the
-	// live rows past Offset tall) mapped to a source coordinate on each axis
-	// by Chain and read through Filter's taps.
+	// live rows past Offset tall, in OpPatchify's order where Width or
+	// Window is set) mapped to a source coordinate on each axis by Chain and
+	// read through Filter's taps.
 	OpPosResample
 	// OpDeltaRule is the delta rule over the block's recurrent state: for
 	// each value head h of NHead, a matrix S of Dv rows (v's width over

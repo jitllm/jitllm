@@ -2,6 +2,9 @@ package convert
 
 import (
 	"fmt"
+	"maps"
+	"math"
+	"slices"
 
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/tok"
@@ -38,6 +41,10 @@ func towerStater(p jlm.Projector) func(*jlm.Source) (*jlm.Tower, error) {
 		return qwen2vlTower
 	case jlm.ProjQwen25VL:
 		return qwen25vlTower
+	case jlm.ProjQwen3VL:
+		return qwen3vlTower
+	case jlm.ProjGLM4V:
+		return glm4vTower
 	}
 	return nil
 }
@@ -445,6 +452,14 @@ const (
 	qwen2vlMaxPixels = 28 * 28 * 1280
 )
 
+// Qwen3-VL's bounds on a picture's area as its published
+// preprocessor_config.json states them (size.shortest_edge and
+// size.longest_edge), which its mmproj does not (docs/divergences.md).
+const (
+	qwen3vlMinPixels = 65536
+	qwen3vlMaxPixels = 16777216
+)
+
 // qwen2vlTower is Qwen2-VL's tower as transformers' Qwen2VLImageProcessorPil
 // and Qwen2VisionTransformerPretrainedModel run it: the picture resized by
 // Pillow's BICUBIC filter to a size of its own (smart_resize: each side a
@@ -459,7 +474,7 @@ const (
 // with the exact GELU between. A picture is "<|vision_start|>", its rows,
 // "<|vision_end|>" in place of the chat template's three, its grid the text
 // model's M-RoPE grid with each side over the merge.
-func qwen2vlTower(s *jlm.Source) (*jlm.Tower, error) { return qwenVLTower(s, false) }
+func qwen2vlTower(s *jlm.Source) (*jlm.Tower, error) { return qwenVLTower(s, qwen2VL) }
 
 // qwen25vlTower is Qwen2.5-VL's tower as transformers'
 // Qwen2_5_VisionTransformerPretrainedModel runs it: Qwen2-VL's picture,
@@ -468,13 +483,36 @@ func qwen2vlTower(s *jlm.Source) (*jlm.Tower, error) { return qwenVLTower(s, fal
 // a side (get_window_index: the merge windows reordered window by window,
 // the windows at the edges cut), the merger's norm an RMSNorm, and its rows
 // put back in the merge windows' raster order (reverse_indices).
-func qwen25vlTower(s *jlm.Source) (*jlm.Tower, error) { return qwenVLTower(s, true) }
+func qwen25vlTower(s *jlm.Source) (*jlm.Tower, error) { return qwenVLTower(s, qwen25VL) }
 
-// qwenVLTower is qwen2vlTower and, windowed, qwen25vlTower.
-func qwenVLTower(s *jlm.Source, windowed bool) (*jlm.Tower, error) {
+// qwen3vlTower is Qwen3-VL's tower, and Qwen3.5-VL's, as transformers'
+// Qwen3VLVisionModel runs it: Qwen2-VL's picture under the published
+// processor's bounds, its patches (a biased matrix) and rotary; a learned
+// table resampled to the patch grid (fast_pos_embed_interpolate: each axis
+// over linspace(0, side-1, n), the four rows around a cell weighted by its
+// fractions) added to them; LayerNorm blocks with an ungated GELU-tanh MLP;
+// then Qwen2-VL's merger.
+func qwen3vlTower(s *jlm.Source) (*jlm.Tower, error) { return qwenVLTower(s, qwen3VL) }
+
+// qwenVLKind is which of the Qwen VL towers qwenVLTower states.
+type qwenVLKind uint8
+
+const (
+	qwen2VL qwenVLKind = iota
+	qwen25VL
+	qwen3VL
+)
+
+// qwenVLTower is qwen2vlTower, qwen25vlTower and qwen3vlTower.
+func qwenVLTower(s *jlm.Source, kind qwenVLKind) (*jlm.Tower, error) {
 	v := s.Vision
 	has := towerRoles(s)
-	for _, r := range []jlm.Role{jlm.RoleVPatchEmbd, jlm.RoleVPostNorm, jlm.RoleVProj, jlm.RoleVProj2} {
+	windowed := kind == qwen25VL
+	need := []jlm.Role{jlm.RoleVPatchEmbd, jlm.RoleVPostNorm, jlm.RoleVProj, jlm.RoleVProj2}
+	if kind == qwen3VL {
+		need = append(need, jlm.RoleVPosEmbd)
+	}
+	for _, r := range need {
 		if !has[r] {
 			return nil, fmt.Errorf("convert: qwen2vl: the tower has no %v", r)
 		}
@@ -483,11 +521,26 @@ func qwenVLTower(s *jlm.Source, windowed bool) (*jlm.Tower, error) {
 		return nil, fmt.Errorf("convert: qwen2vl: %d heads over %d, patches of %d merged by %d",
 			v.NHead, v.NEmbd, v.PatchSize, v.Scale)
 	}
-	var hidden int32
+	var hidden, table int32
+	// A deepstack tap's block, and its merger's first matrix's rows.
+	taps := map[int32]int32{}
 	for i := range s.Tensors {
-		if t := &s.Tensors[i]; t.Block == jlm.DenseBlock && t.Role == jlm.RoleVProj {
+		t := &s.Tensors[i]
+		switch {
+		case t.Block == jlm.DenseBlock && t.Role == jlm.RoleVProj:
 			hidden = int32(t.Dims[1])
+		case t.Block == jlm.DenseBlock && t.Role == jlm.RoleVPosEmbd:
+			table = int32(t.Dims[1])
+		case t.Block == jlm.DenseBlock && t.Role == jlm.RoleVDsFC1:
+			taps[t.Index] = int32(t.Dims[1])
 		}
+	}
+	if len(taps) > 0 && kind != qwen3VL {
+		return nil, fmt.Errorf("convert: qwen2vl: deepstack taps on a tower of no deepstack")
+	}
+	side := int32(math.Sqrt(float64(table)))
+	if kind == qwen3VL && (side < 2 || side*side != table) {
+		return nil, fmt.Errorf("convert: qwen3vl: a position table of %d rows is not a square grid", table)
 	}
 	act, err := v.Activation(windowed)
 	if err != nil {
@@ -521,10 +574,14 @@ func qwenVLTower(s *jlm.Source, windowed bool) (*jlm.Tower, error) {
 			}
 		}
 	}
+	minPix, maxPix := int32(qwen2vlMinPixels), int32(qwen2vlMaxPixels)
+	if kind == qwen3VL {
+		minPix, maxPix = qwen3vlMinPixels, qwen3vlMaxPixels
+	}
 	t := &jlm.Tower{
 		Version: jlm.TowerVersion,
 		Pre: []jlm.PreStep{
-			{Kind: jlm.PreSmartResize, Ints: []int32{int32(v.PatchSize) * merge, qwen2vlMinPixels, qwen2vlMaxPixels,
+			{Kind: jlm.PreSmartResize, Ints: []int32{int32(v.PatchSize) * merge, minPix, maxPix,
 				int32(jlm.FilterPILBicubic), int32(jlm.PrecPIL)}},
 			{Kind: jlm.PreNormalize, Floats: []float32{v.Mean[0], v.Mean[1], v.Mean[2], v.Std[0], v.Std[1], v.Std[2]}},
 		},
@@ -557,8 +614,139 @@ func qwenVLTower(s *jlm.Source, windowed bool) (*jlm.Tower, error) {
 		t.Head.Ops = append(t.Head.Ops, jlm.TowerOp{Code: jlm.TOpUntile, In: []uint16{5}})
 		t.Head.Out = 6
 	}
+	for _, b := range slices.Sorted(maps.Keys(taps)) {
+		// The tapped block's rows, each merge window's patches one row,
+		// normed over that row (use_postshuffle_norm).
+		t.Taps = append(t.Taps, jlm.TowerTap{Block: b, Prog: jlm.Program{NIn: 1, Out: 5, Ops: []jlm.TowerOp{
+			{Code: jlm.TOpFold, In: []uint16{0}, Span: merge * merge},
+			{Code: jlm.TOpLayerNorm, In: []uint16{1}, Bind: []jlm.Role{jlm.RoleVDsNorm, jlm.RoleVDsNormBias}, Eps: v.Eps},
+			{Code: jlm.TOpLinear, In: []uint16{2}, Bind: []jlm.Role{jlm.RoleVDsFC1, jlm.RoleVDsFC1Bias}},
+			{Code: jlm.TOpStated, In: []uint16{3}, Expr: &jlm.Expr{Terms: gelu.T}, Width: taps[b]},
+			{Code: jlm.TOpLinear, In: []uint16{4}, Bind: []jlm.Role{jlm.RoleVDsFC2, jlm.RoleVDsFC2Bias}},
+		}}})
+	}
+	if kind == qwen3VL {
+		// The table's rows at each patch's cell, in the patches' order.
+		t.Entry.Ops = append(t.Entry.Ops,
+			jlm.TowerOp{Code: jlm.TOpPosResample, Bind: []jlm.Role{jlm.RoleVPosEmbd}, Span: side, Width: merge,
+				Chain: jlm.ResampleAligned, Filter: jlm.TapsLinear},
+			jlm.TowerOp{Code: jlm.TOpAdd, In: []uint16{2, 3}})
+		t.Entry.Out = 4
+	}
 	if err := t.Valid(); err != nil {
 		return nil, fmt.Errorf("convert: qwen2vl: %w", err)
+	}
+	return t, nil
+}
+
+// GLM-4V's bounds on a picture's area as its published preprocessor_config
+// states them (size.shortest_edge and longest_edge, 12544 and 9633792), which
+// its processor holds a still picture's two temporal frames to: per frame,
+// as the tower takes them, half each (docs/divergences.md).
+const (
+	glm4vMinPixels = 12544 / 2
+	glm4vMaxPixels = 9633792 / 2
+)
+
+// glm4vTower is GLM-4V's tower as transformers' Glm4vImageProcessorPil and
+// Glm4vVisionModel run it: the picture resized by Pillow's BICUBIC filter to
+// a size of its own (its smart_resize: a side shorter than a merge window
+// scaled up first) and normalised; Qwen2-VL's patches (the conv3d's planes
+// folded) through a biased matrix and RMSNormed (post_conv_layernorm), a
+// learned table resampled bicubic to the patch grid (grid_sample,
+// align_corners false, border) added in the merge windows' order; RMSNorm
+// blocks with a gated SiLU MLP, turned by Qwen2-VL's rotary; the rows
+// RMSNormed (post_layernorm), each merge window's patches one row through
+// the 2x2 convolution as a matrix (downsample), then the merger: a matrix,
+// LayerNorm, the exact GELU and a gated SiLU MLP. A picture is
+// "<|begin_of_image|>", its rows, "<|end_of_image|>", its grid the text
+// model's M-RoPE grid over the merge.
+func glm4vTower(s *jlm.Source) (*jlm.Tower, error) {
+	v := s.Vision
+	has := towerRoles(s)
+	for _, r := range []jlm.Role{jlm.RoleVPatchEmbd, jlm.RoleVEmbdNorm, jlm.RoleVPosEmbd, jlm.RoleVPostNorm,
+		jlm.RoleVMergeConv, jlm.RoleVProj, jlm.RoleVProjNorm, jlm.RoleVProjGate, jlm.RoleVProjUp, jlm.RoleVProjDown} {
+		if !has[r] {
+			return nil, fmt.Errorf("convert: glm4v: the tower has no %v", r)
+		}
+	}
+	if v.NHead == 0 || v.NEmbd%v.NHead != 0 || (v.NEmbd/v.NHead)%4 != 0 || v.PatchSize == 0 || v.Scale < 2 {
+		return nil, fmt.Errorf("convert: glm4v: %d heads over %d, patches of %d merged by %d",
+			v.NHead, v.NEmbd, v.PatchSize, v.Scale)
+	}
+	var table, ctx int32
+	for i := range s.Tensors {
+		t := &s.Tensors[i]
+		switch {
+		case t.Block == jlm.DenseBlock && t.Role == jlm.RoleVPosEmbd:
+			table = int32(t.Dims[1])
+		case t.Block == jlm.DenseBlock && t.Role == jlm.RoleVProjGate:
+			ctx = int32(t.Dims[1])
+		}
+	}
+	side := int32(math.Sqrt(float64(table)))
+	if side < 2 || side*side != table {
+		return nil, fmt.Errorf("convert: glm4v: a position table of %d rows is not a square grid", table)
+	}
+	act, err := v.Activation(true)
+	if err != nil {
+		return nil, err
+	}
+	bias := func(w, b jlm.Role) []jlm.Role {
+		if has[b] {
+			return []jlm.Role{w, b}
+		}
+		return []jlm.Role{w}
+	}
+	var gelu, swiglu jlm.ExprBuilder
+	gelu.GELUErf(jlm.Operand(0))
+	swiglu.Fn(jlm.FnMul, swiglu.SiLU(jlm.Operand(0)), jlm.Operand(1))
+	hd := int32(v.NEmbd / v.NHead)
+	merge := int32(v.Scale)
+	t := &jlm.Tower{
+		Version: jlm.TowerVersion,
+		Pre: []jlm.PreStep{
+			{Kind: jlm.PreSmartResize, Ints: []int32{int32(v.PatchSize) * merge, glm4vMinPixels, glm4vMaxPixels,
+				int32(jlm.FilterPILBicubic), int32(jlm.PrecPIL), 1}},
+			{Kind: jlm.PreNormalize, Floats: []float32{v.Mean[0], v.Mean[1], v.Mean[2], v.Std[0], v.Std[1], v.Std[2]}},
+		},
+		// The pixels are value 0.
+		Entry: jlm.Program{NIn: 1, Out: 5, Ops: []jlm.TowerOp{
+			{Code: jlm.TOpPatchify, In: []uint16{0}, Span: int32(v.PatchSize), Width: merge},
+			{Code: jlm.TOpLinear, In: []uint16{1}, Bind: bias(jlm.RoleVPatchEmbd, jlm.RoleVPatchBias)},
+			{Code: jlm.TOpRMSNorm, In: []uint16{2}, Bind: []jlm.Role{jlm.RoleVEmbdNorm}, Eps: v.Eps},
+			{Code: jlm.TOpPosResample, Bind: []jlm.Role{jlm.RoleVPosEmbd}, Span: side, Width: merge,
+				Chain: jlm.ResampleHalfPixel, Filter: jlm.TapsCubic},
+			{Code: jlm.TOpAdd, In: []uint16{3, 4}},
+		}},
+		Block: jlm.TowerBlock{NHead: v.NHead, NKVHead: v.NHead, HeadDim: v.NEmbd / v.NHead,
+			Norm: jlm.NormRMS, Eps: v.Eps, Act: act,
+			Rope: jlm.TowerRope{Base: 10000, Dim: hd / 2, Neox: true,
+				Runs: []jlm.TowerRopeRun{{Pairs: hd / 4, Axis: 0}, {Pairs: hd / 4, Axis: 1}}}},
+		// The last block's rows are value 0.
+		Head: jlm.Program{NIn: 1, Out: 10, Ops: []jlm.TowerOp{
+			{Code: jlm.TOpRMSNorm, In: []uint16{0}, Bind: []jlm.Role{jlm.RoleVPostNorm}, Eps: v.Eps},
+			{Code: jlm.TOpFold, In: []uint16{1}, Span: merge * merge},
+			{Code: jlm.TOpLinear, In: []uint16{2}, Bind: bias(jlm.RoleVMergeConv, jlm.RoleVMergeConvBias)},
+			{Code: jlm.TOpLinear, In: []uint16{3}, Bind: bias(jlm.RoleVProj, jlm.RoleVProjBias)},
+			// torch's LayerNorm at its default epsilon.
+			{Code: jlm.TOpLayerNorm, In: []uint16{4}, Bind: bias(jlm.RoleVProjNorm, jlm.RoleVProjNormBias), Eps: 1e-5},
+			{Code: jlm.TOpStated, In: []uint16{5}, Expr: &jlm.Expr{Terms: gelu.T}, Width: int32(v.ProjDim)},
+			{Code: jlm.TOpLinear, In: []uint16{6}, Bind: bias(jlm.RoleVProjGate, jlm.RoleVProjGateBias)},
+			{Code: jlm.TOpLinear, In: []uint16{6}, Bind: bias(jlm.RoleVProjUp, jlm.RoleVProjUpBias)},
+			{Code: jlm.TOpStated, In: []uint16{7, 8}, Expr: &jlm.Expr{Terms: swiglu.T}, Width: ctx},
+			{Code: jlm.TOpLinear, In: []uint16{9}, Bind: bias(jlm.RoleVProjDown, jlm.RoleVProjDownBias)},
+		}},
+		Span: jlm.TowerSpan{Mark: "<|begin_of_image|><|image|><|end_of_image|>", GridDiv: merge},
+	}
+	if t.Span.Before, err = markerIDs(s, "<|begin_of_image|>"); err != nil {
+		return nil, err
+	}
+	if t.Span.After, err = markerIDs(s, "<|end_of_image|>"); err != nil {
+		return nil, err
+	}
+	if err := t.Valid(); err != nil {
+		return nil, fmt.Errorf("convert: glm4v: %w", err)
 	}
 	return t, nil
 }

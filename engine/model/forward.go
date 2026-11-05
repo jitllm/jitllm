@@ -1831,7 +1831,7 @@ func (s *Instance) planFor(li int) *nn.LayerPlan {
 	plan.BidirOff = c.BidirSWA && !c.SWA(li)
 	plan.VFromK, plan.OutScale = l.vFromK, l.outScale
 	plan.DenseMoE = c.DenseMoE && c.MoEAt(li)
-	plan.PLEDim, plan.PLEWidth = c.PLEDim, c.NLayer*c.PLEDim
+	plan.PLEDim, plan.PLEWidth = c.PLEDim, c.sideWidth()
 	plan.IdxHeads, plan.IdxHeadDim, plan.IdxTopK = c.IdxHeads, c.IdxHeadDim, c.IdxTopK
 	plan.IdxBlock, plan.IdxLocal = c.IdxBlock, c.IdxLocal
 	// MiniMax-M3's dense lead selects nothing: its row has no indexer head.
@@ -3560,11 +3560,11 @@ func (s *Instance) setLD(ld nn.LayerDevice) {
 	s.ldEmbed, _ = ld.(nn.EmbedDevice)
 }
 
-// layerInputs hands the device the rows' per-layer embedding inputs for the
-// call about to be made (nn.LayerInputDevice). Nothing where the model has
-// none.
+// layerInputs hands the device the rows' side inputs for the call about to
+// be made (nn.LayerInputDevice): their per-layer embedding inputs, or their
+// tap rows. Nothing where the model has none.
 func (s *Instance) layerInputs(in []float32) {
-	if s.ldInputs != nil && s.c.PLEDim != 0 {
+	if s.ldInputs != nil && s.c.sideWidth() != 0 {
 		s.ldInputs.SetLayerInputs(in)
 	}
 }

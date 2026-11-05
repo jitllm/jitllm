@@ -595,6 +595,7 @@ func stepTogether(runs []Run, rows int, ss nn.SessionStepper) ([][]float32, erro
 		s0.growBPLE(rows)
 		bple = s0.bple[:rows*c.pleWidth()]
 	}
+	s0.tokenSide(rows)
 	if why := s0.cpuEmbed(x[:rows*c.NEmbd], bple, s0.stepTok, pos); why != composer.DeclineServes {
 		return nil, s0.embedDeclined(why)
 	}
@@ -621,7 +622,7 @@ func stepTogether(runs []Run, rows int, ss nn.SessionStepper) ([][]float32, erro
 		h.RowLogits, h.Logits, h.LogitRows = true, logits, nlogit
 		defer func() { h.RowLogits, h.Logits, h.LogitRows = false, keep, 0 }()
 	}
-	s0.layerInputs(s0.bple[:rows*c.pleWidth()])
+	s0.layerInputs(s0.bple[:rows*c.sideWidth()])
 	if !ss.LayersSessions(s0.lo, s0.hi, sess, pos, x, cs, csSWA, h) {
 		why := "no reason given"
 		if e, ok := s0.ld.(nn.ErrReporter); ok {

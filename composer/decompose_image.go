@@ -461,7 +461,7 @@ func decomposeDropRows(o graph.Op, c *Context) ([]Prim, error) {
 }
 
 // decomposePosResample is each row's position-table row resampled to the
-// grid: the row's cell, on each axis the source coordinate by the op's
+// grid: the row's cell (tileCell, the patch gather's order), on each axis the source coordinate by the op's
 // chain and its filter's taps' weights and clamped indices, then the sum of
 // every tap pair's weight product times its table row, in the taps' order.
 func decomposePosResample(o graph.Op, c *Context) ([]Prim, error) {
@@ -553,8 +553,9 @@ func decomposePosResample(o graph.Op, c *Context) ([]Prim, error) {
 		}
 		return out
 	}
-	ys := axis(x.op(OpDiv, U, q, gw), gh)
-	xs := axis(x.op(OpRem, U, q, gw), gw)
+	cy, cx := tileCell(&x, q, gw, gh, a.Width, a.Window)
+	ys := axis(cy, gh)
+	xs := axis(cx, gw)
 	// Separable: each row tap's sum over the column taps, weighted by the
 	// row tap's weight, so the floats held across the row are the axes'
 	// weights, not their products.

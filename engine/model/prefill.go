@@ -77,6 +77,10 @@ type Span struct {
 	// cache restores past runs no tower block.
 	Picture image.Image
 	PicRows int
+	// Deep is an Embd span's tap rows (jlm.TowerTap, Qwen3-VL's deepstack),
+	// [taps][rows][NEmbd]: text block i adds tap i's rows into the span's
+	// after it runs. A picture span's are its tower's.
+	Deep []float32
 }
 
 // RowsKey names the content an embedding span's rows came from: a hash over
@@ -241,7 +245,7 @@ func (s *Instance) spanSrc(spans []Span) (rowSrc, error) {
 	src := rowSrc{tok: make([]int32, 0, total)}
 	for _, sp := range spans {
 		if sp.Embd != nil {
-			src.given = append(src.given, givenRun{at: len(src.tok), rows: sp.Embd})
+			src.given = append(src.given, givenRun{at: len(src.tok), rows: sp.Embd, deep: sp.Deep, n: len(sp.Embd) / c.NEmbd})
 			if sp.Tokens != nil {
 				src.tok = append(src.tok, sp.Tokens...)
 				continue
@@ -326,6 +330,9 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 			s.tok = rowIDs[i]
 			if lg, err = s.forward(func() error {
 				g := src.givenAt(i, c.NEmbd)
+				if c.DeepTaps > 0 {
+					s.fillDeep(src, i, 1, s.ple)
+				}
 				if g == nil {
 					// A token's row, as a decode step embeds it.
 					return s.embed(rowIDs[i])
@@ -341,6 +348,10 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 				return nil, err
 			}
 			s.promptRows++
+		}
+		// The decode rows after it are tokens: their tap rows are zeros.
+		if c.DeepTaps > 0 {
+			clear(s.ple)
 		}
 		return lg, nil
 	}
@@ -484,6 +495,8 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 					s.layerInputs(s.bple[:n*c.pleWidth()])
 				}
 				if s.ldEmbed != nil && s.ldEmbed.EmbedRows(rowIDs[base:base+n], p0, s.bx[:n*c.NEmbd]) {
+					// A token chunk's tap rows are zeros.
+					s.tokenSide(n)
 					return nil
 				}
 			}
@@ -498,6 +511,10 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 			at := s.cpu.embed.positions(n)
 			for i := range at {
 				at[i] = p0 + i
+			}
+			if c.DeepTaps > 0 {
+				s.growBPLE(n)
+				s.fillDeep(src, base, n, s.bple[:n*c.sideWidth()])
 			}
 			return s.fillRows(src, base, n, s.bx[:n*c.NEmbd], bple, at)
 		}
@@ -532,7 +549,8 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 		for li := s.lo; li < s.hi; li++ {
 			if s.devAt(li) {
 				hi := li + 1
-				for hi < s.hi && s.devAt(hi) {
+				// A tower's run ends where a tap keeps the rows a block leaves.
+				for hi < s.hi && s.devAt(hi) && !s.tapsAfter(hi-1) {
 					hi++
 				}
 				// The last chunk carries the head when the device runs every
@@ -588,11 +606,12 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 						return nil, err
 					}
 				}
-				s.layerInputs(s.bple[:n*c.pleWidth()])
+				s.layerInputs(s.bple[:n*c.sideWidth()])
 				if s.callTell(p0, n) && s.ld.Layers(li, hi, p0, n, s.bx[:n*c.ResidW()], s.bcs[:n*c.RopeW()],
 					s.bswaTable(n, c.NRotSWA), fh) {
 					headDone = fh != nil
 					li = hi - 1
+					s.keepTaps(li, n)
 					continue
 				}
 				if err := s.refusal(li); err != nil {
@@ -631,6 +650,7 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 			if err := s.hostRows(li, slot, base, p0, n, chunkRows, bidir); err != nil {
 				return nil, err
 			}
+			s.keepTaps(li, n)
 		}
 		if s.emb != nil {
 			if err := s.emb.collect(s, base, n); err != nil {

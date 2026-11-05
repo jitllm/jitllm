@@ -2881,7 +2881,7 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 	al(&bs.roff, rows*4)
 	al(&bs.zero, 4)
 	// The per-layer inputs.
-	if p.PLEDim != 0 {
+	if p.PLEWidth != 0 {
 		al(&bs.pleIn, rows*p.PLEWidth*4)
 	}
 	if err != nil {
@@ -4861,7 +4861,9 @@ func (g *devTier) layersSession(s backend.Session) {
 	if bs.rowPos != nil {
 		w(bs.rowPos, g.rowPosWords(pos, nrow, R, rag))
 	}
-	if bs.pleIn != nil && !embedSrv {
+	// A tower's tap rows are the caller's always: input rows served here
+	// write per-layer embeddings alone.
+	if bs.pleIn != nil && (!embedSrv || p.PLEDim == 0) {
 		w(bs.pleIn, f32b(g.pleRows(R*p.PLEWidth)))
 	}
 	switch {
