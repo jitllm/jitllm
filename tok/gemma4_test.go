@@ -1,4 +1,4 @@
-package tok
+package tok_test
 
 import (
 	"encoding/json"
@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/jitllm/jitllm/tok"
 
 	"github.com/jitllm/jitllm/convert/gguf"
 	"github.com/jitllm/jitllm/format/jlm"
@@ -31,7 +33,7 @@ func TestGemma4EncodesAsItsTokenizerDoes(t *testing.T) {
 		t.Fatalf("the vocabulary is %v (byte fallback %v, space prefix %v, %d merges), want bpe-spm "+
 			"with byte fallback and no space prefix", vc.Kind, vc.ByteFallback, vc.AddSpacePrefix, len(vc.Merges))
 	}
-	v, err := New(vc)
+	v, err := tok.New(vc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +59,15 @@ func TestGemma4EncodesAsItsTokenizerDoes(t *testing.T) {
 			for i < len(got) && i < len(c.IDs) && got[i] == c.IDs[i] {
 				i++
 			}
-			t.Errorf("%.60q: %d ids against tokenizers' %d, first difference at %d", c.Text, len(got), len(c.IDs), i)
+			pieces := func(ids []int32) []string {
+				var out []string
+				for _, id := range ids[max(0, i-3):min(len(ids), i+4)] {
+					out = append(out, v.Text(id))
+				}
+				return out
+			}
+			t.Errorf("%.60q: %d ids against tokenizers' %d, first difference at %d: %q against %q",
+				c.Text, len(got), len(c.IDs), i, pieces(got), pieces(c.IDs))
 			continue
 		}
 		ids += len(got)
