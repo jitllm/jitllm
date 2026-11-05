@@ -22,9 +22,9 @@ import (
 	"github.com/jitllm/jitllm/dev/bench"
 
 	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/engine"
 	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/device/gpu"
-	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/engine/sched"
 
@@ -132,7 +132,7 @@ func Probe() (r Report) {
 	r.MemBudget, r.MemLimit = sched.MemBudget(), sched.MemLimit()
 	r.GCBudgetCap, r.GCUsable = sched.GCBudgetCap(), sched.GCUsable()
 
-	r.Arch, r.ISA, r.Form = runtime.GOARCH, cpu.Probe().ISA().String(), model.CPUForm()
+	r.Arch, r.ISA, r.Form = runtime.GOARCH, cpu.Probe().ISA().String(), engine.CPUForm()
 
 	devs := backend.Open()
 	for _, d := range devs {
@@ -246,7 +246,7 @@ func ValidatePlacement(placement, spec string) error {
 	if strings.TrimSpace(placement) == "" {
 		return nil
 	}
-	pl, err := model.ParsePlacement(placement, true)
+	pl, err := engine.ParsePlacement(placement, true)
 	if err != nil {
 		return err
 	}
@@ -262,11 +262,11 @@ func ValidatePlacement(placement, spec string) error {
 		}
 		opened[nn.DeviceName(e.API+":"+e.Sel)] = true
 	}
-	named := []model.Place{}
+	named := []engine.Place{}
 	for _, b := range pl.Blocks {
 		named = append(named, b)
 	}
-	for _, x := range []*model.Place{pl.Rest, pl.Head} {
+	for _, x := range []*engine.Place{pl.Rest, pl.Head} {
 		if x != nil {
 			named = append(named, *x)
 		}

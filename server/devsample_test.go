@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine"
 )
 
 // TestTheRowIsReadBackWhenTheReplyReadsIt: with the head on the device, a reply
@@ -19,12 +19,12 @@ import (
 //     draws every token on the device, so the arm the logprobs and grammar
 //     arms must stay off is shown to be taken.
 func TestTheRowIsReadBackWhenTheReplyReadsIt(t *testing.T) {
-	for _, mode := range []model.DeviceSampleMode{model.DeviceSampleOn, model.DeviceSampleAuto} {
+	for _, mode := range []engine.DeviceSampleMode{engine.DeviceSampleOn, engine.DeviceSampleAuto} {
 		t.Run(fmt.Sprintf("mode=%d", mode), func(t *testing.T) { rowComesHome(t, mode) })
 	}
 }
 
-func rowComesHome(t *testing.T, mode model.DeviceSampleMode) {
+func rowComesHome(t *testing.T, mode engine.DeviceSampleMode) {
 	path := modelPath(t, instructModel)
 	e := New(admitConfig(Config{ModelDir: filepath.Dir(path), Version: "test", MaxBatchRows: 1}))
 	defer e.Close()
@@ -32,7 +32,7 @@ func rowComesHome(t *testing.T, mode model.DeviceSampleMode) {
 		Sessions: 1, DeviceSample: mode}); err != nil {
 		t.Skipf("NO DEVICE: %v -- this gate proved nothing", err)
 	}
-	sm := model.Sampler{Temp: 0.9, TopK: 40, TopP: 0.9, Seed: 3}
+	sm := engine.Sampler{Temp: 0.9, TopK: 40, TopP: 0.9, Seed: 3}
 	s, err := e.CreateSession(SessionOptions{ModelID: "inst", SessionID: "a", MaxSeq: 256, Sampling: sm})
 	if err != nil {
 		t.Fatal(err)
@@ -42,7 +42,7 @@ func rowComesHome(t *testing.T, mode model.DeviceSampleMode) {
 		head bool
 	}
 	read := func() (c count) {
-		s.Inspect(func(st *model.Instance) {
+		s.Inspect(func(st *engine.Instance) {
 			c = count{st.SampledOnDevice, st.HeadOnDevice()}
 		})
 		return c

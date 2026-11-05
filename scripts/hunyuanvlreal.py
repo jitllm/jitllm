@@ -10,7 +10,7 @@
 
 The hf dir defaults to $HYVL_SRC, else $JITLLM_MODELS/hunyuanvl/hf/HunyuanOCR
 (tencent/HunyuanOCR). The prompt is the checkpoint's own chat template around
-one picture (engine/model/testdata/quad-and-disc.png by default) and a
+one picture (engine/testdata/quad-and-disc.png by default) and a
 question, the pixels the PIL processor's (HunyuanOCR's own resizes with
 PIL.Image.resize); the continuation is transformers' own greedy answer, which
 the engine is then teacher-forced through. The golden carries the tokens

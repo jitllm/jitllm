@@ -7,10 +7,10 @@ import (
 
 	"github.com/jitllm/jitllm/convert"
 	"github.com/jitllm/jitllm/engine/device/gpu"
-	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/model"
 )
 
 // TestDeviceBlocksDoNotStayHostResident: a block is a page placed on one
@@ -44,7 +44,7 @@ func TestDeviceBlocksDoNotStayHostResident(t *testing.T) {
 			n, m.Cfg.NLayer)
 	}
 
-	st := m.NewInstance(64)
+	st := testInstance(t, m, 64)
 	defer st.Close()
 	g, err := gpu.OpenWith(gpu.WithAdmit(testdevices.Admit()), gpu.WithDevices("gpu:0"))
 	if err != nil || g == nil {

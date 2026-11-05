@@ -29,8 +29,8 @@ step ./scripts/cap 8G -- go test ./engine/device/gpu -count=1
 : "${JITLLM_MODELS:?set JITLLM_MODELS to the model directory (docs/testing.md)}"
 # The offline gate: every composed form of the synthetic fixtures becomes a
 # code object for each AMD generation.
-step ./scripts/cap 8G -- go test ./engine/model -count=1 -v -run 'TestComposedFormsLowerForAMDGPU'
-step ./scripts/cap 24G -- go test ./engine/model -count=1 -v -timeout 3h -run \
+step ./scripts/cap 8G -- go test ./engine -count=1 -v -run 'TestComposedFormsLowerForAMDGPU'
+step ./scripts/cap 24G -- go test ./engine -count=1 -v -timeout 3h -run \
 	'TestEveryModelRunsGenerated|TestGreedyMatchesLlamaCpp|TestBatchMatchesForward|TestDecodeDoesNotAllocate|TestLayerRelocatesToAnotherDevice|TestRelocatedBlocksComeBack|TestKVPagesRelocateWithTheLayer|TestPagingDoesNotChangeTheAnswer|TestOpenHonoursAPageBudget|TestForwardBatchFaultsItsBlocksIn|TestSlidingWindowRunsOnTheDevice|TestDeviceMatchesHostOnABiasedModel'
 
 if grep -E 'NO AMD DEVICE|NO COMGR|NO ROCM' "$log"; then

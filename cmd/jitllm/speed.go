@@ -13,9 +13,10 @@ import (
 	"time"
 
 	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/engine"
 	"github.com/jitllm/jitllm/engine/device/gpu"
-	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/model"
 )
 
 // speedCmd is llama-bench's pp/tg measurement: a prompt of -p tokens and a
@@ -70,11 +71,20 @@ func speedCmd(procStart time.Time, args []string) error {
 			return err
 		}
 	}
-	m, err := model.Open(fs.Arg(0), loadOpts(nil, 0)...)
+	mo, io := loadOpts(nil, 0)
+	m, err := model.Open(fs.Arg(0), mo...)
 	if err != nil {
 		return err
 	}
 	defer m.Close()
+	// One CPU device for the run: every instance it makes takes turns on its
+	// workers and shares the model's forms.
+	cd, err := engine.OpenCPU(io...)
+	if err != nil {
+		return err
+	}
+	defer cd.Close()
+	io = append(io, engine.WithCPU(cd))
 	if err := preloadWait(m); err != nil {
 		return err
 	}
@@ -96,8 +106,11 @@ func speedCmd(procStart time.Time, args []string) error {
 		prompt[i] = seed[i%len(seed)]
 	}
 	// attach puts a fresh instance of n positions on the device.
-	attach := func(n int) (*model.Instance, error) {
-		st := m.NewInstance(n)
+	attach := func(n int) (*engine.Instance, error) {
+		st, err := engine.NewInstance(m, n, io...)
+		if err != nil {
+			return nil, err
+		}
 		if d != nil {
 			if err := st.SetDevice(d); err != nil {
 				st.Close()
@@ -175,7 +188,7 @@ func speedCmd(procStart time.Time, args []string) error {
 			return 0, 0, err
 		}
 		defer st2.Close()
-		var sp *model.Speculator
+		var sp *engine.Speculator
 		var next int32
 		if specOpts != nil {
 			if sp, err = st2.Speculate(specOpts...); err != nil {
@@ -333,11 +346,11 @@ func medianF32(v []float32) float32 {
 // with prompt, decode n tokens a round, alternately one session after another
 // and all together through model.Step. Each arm's rate is the k sessions'
 // tokens over its wall.
-func sessionsRun(attach func(int) (*model.Instance, error), prompt []int32, k, n, reps int, ctr *backend.Counters) error {
+func sessionsRun(attach func(int) (*engine.Instance, error), prompt []int32, k, n, reps int, ctr *backend.Counters) error {
 	var alone, together []float64
 	for r := 0; r < 2*reps; r++ {
 		joint := r%2 == 1
-		sts := make([]*model.Instance, k)
+		sts := make([]*engine.Instance, k)
 		toks := make([]int32, k)
 		for i := range sts {
 			// Closed at the end of the round; an error ends the process.
@@ -359,7 +372,7 @@ func sessionsRun(attach func(int) (*model.Instance, error), prompt []int32, k, n
 		t0 := time.Now()
 		for range n {
 			if joint {
-				lgs, err := model.Step(sts, toks)
+				lgs, err := engine.Step(sts, toks)
 				if err != nil {
 					return err
 				}
@@ -494,7 +507,7 @@ func ttftText(m *model.Model, p int) string {
 // the process's -- the container opened, the blocks placed and uploaded, the
 // kernels compiled -- and each after it is a fresh session on the loaded
 // model: tokenize, take pages, prefill, sample.
-func ttftRun(m *model.Model, attach func(int) (*model.Instance, error), p, reps int, procStart, t00 time.Time,
+func ttftRun(m *model.Model, attach func(int) (*engine.Instance, error), p, reps int, procStart, t00 time.Time,
 	tOpen, tDev time.Duration, ctr *backend.Counters) error {
 	text := ttftText(m, p)
 	var tAttach time.Duration
@@ -558,7 +571,7 @@ func ttftRun(m *model.Model, attach func(int) (*model.Instance, error), p, reps 
 // from nothing: a fresh instance at position 0 that ran every row through its
 // blocks (none restored from a prefix cache) and handed back the last row's
 // logits, which the device must have finished to return.
-func warmHonest(st *model.Instance, n int, logits []float32, vocab int) error {
+func warmHonest(st *engine.Instance, n int, logits []float32, vocab int) error {
 	switch {
 	case st.KVRestored() != 0:
 		return fmt.Errorf("speed: the timed prompt restored %d position(s) from a prefix cache", st.KVRestored())

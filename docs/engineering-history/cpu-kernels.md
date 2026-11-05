@@ -1097,7 +1097,7 @@ there -- NOT the 99.34 in RULE 1c, which was a shorter sample.
    default is already at the plateau. Spinning matters (never-spin costs 19%); tuning it does not.
 4. **Is the pool itself Linux-only?** No -- `engine/sched/pool.go` is portable and only topology and pinning
    are tagged. But `engine/sched/latency_test.go` IS `//go:build linux`, so the dispatch round trip had
-   never been measured on the Mac; `model.TestFusionCeiling` puts it at 3.008 us against Linux's
+   never been measured on the Mac; `engine.TestFusionCeiling` puts it at 3.008 us against Linux's
    1.6-2.1 us for four to six workers, which is most of why the fusion ceiling clears the bar there.
 
 **What is left is the ~13% kernel gap, and it has no known instruction to remove** -- RULES 5k, 5l,
@@ -1679,7 +1679,7 @@ at window 256 the eight blocks genuinely hold the same scale. That is the
 invariant holding, not the test being blind.
 
 **★ WHOLE-LAYER FUSION AT DECODE IS MEASURED AND REJECTED.** It carried "~3% from the design recon,
-NOT re-measured" for a long time; `model.TestFusionCeiling` now bounds it without building it, since
+NOT re-measured" for a long time; `engine.TestFusionCeiling` now bounds it without building it, since
 fusing a block changes no bytes read and no FMAs issued and the entire prize is dispatch round trips
 removed. Two real models, quiet box, load-gated:
 
@@ -1781,7 +1781,7 @@ one. Declining is merely the version that does not crash.
 
 Once the reference tier was removed, the decline above stopped being a slow path and became a
 refusal: a Cortex-A53/A57/A72/A73 (Raspberry Pi 3 and 4, many boards and older phones) opened no
-quantized container -- "no host kernel reads <tensor>" from `engine/model/forward.go`. RULE 8 makes
+quantized container -- "no host kernel reads <tensor>" from `engine/forward.go`. RULE 8 makes
 that a missing basic kernel.
 
 **What was built** (`engine/device/cpu/sdotemu.go`): the assembler widens every `SDOT` and `SDOTelem` in
@@ -1812,7 +1812,7 @@ oracle. The whole `engine/device/cpu` suite also runs widened, under `qemu-aarch
 `JITLLM_FORCE_NO_DOTPROD=1` on a chip that has it. Violation runs: dropping SMULL2's high eight
 products (the tail) and doubling one sub-block's scale in the widened packed kernel both fail.
 
-**Model level** (`engine/model/nodot_test.go`, tag `jitllmtest`, arm64): `TestNoDotProdModelGates`
+**Model level** (`engine/nodot_test.go`, tag `jitllmtest`, arm64): `TestNoDotProdModelGates`
 runs `TestEveryModelRunsGenerated` and the golden `TestGreedyMatchesLlamaCpp` with the probe forced
 off, and `TestNoDotProdIsBitIdentical` holds every model under 2 GiB to the SDOT kernels' decode and
 prefill logits, bit for bit, in one process.
@@ -2266,7 +2266,7 @@ from the other side by sharing each load between two heads. What neither tested
 is whether the STRIDE itself costs anything -- pairing halves the number of
 traversals and leaves the waste per traversal exactly as it was.
 
-`model.TestAttnLayoutProbe` (opt-in, `JITLLM_LAYOUT_PROBE=1`) answers it without
+`engine.TestAttnLayoutProbe` (opt-in, `JITLLM_LAYOUT_PROBE=1`) answers it without
 building anything: the same data in two already-resident layouts, the SAME
 shipped paired kernels instantiated at `kvStride = kvDim` and `kvStride = hd`,
 every query head through the real pool. tinyllama's shape, 32 heads, 4 kv heads,
@@ -2335,7 +2335,7 @@ gain the pool leaves on the table does not cover the write, which becomes nKV
 scattered copies of headDim floats where row-major is one contiguous store.
 
 **★ SO THE LAYOUT IS SHELVED.** It stood behind a flag that defaulted off
-(`JITLLM_KV_HEADMAJOR=1`, `model.WithKVHeadMajor`), held bit-identical to the
+(`JITLLM_KV_HEADMAJOR=1`, `engine.WithKVHeadMajor`), held bit-identical to the
 row-major cache by `TestKVLayoutsAgree`. Main's KV path was its only reader; the
 composer declined a head-major history by name, and the flag, the layout's
 branches and the gate were removed with that path. The way back is a history
@@ -2431,7 +2431,7 @@ different kernel.
 
 ### The op is 5.78x and the token is a null
 
-`model.TestRopeTableDose` (tags `jitllmbench jitllmtest`), Llama-3.2-1B
+`engine.TestRopeTableDose` (tags `jitllmbench jitllmtest`), Llama-3.2-1B
 Q4_K_M, six P-cores, ABBA inside one process, A/A self-control FIRST, 15 rounds,
 cores 2.0-2.8% busy:
 
@@ -2713,7 +2713,7 @@ Qwen3-MOE-4x0.6B-Q4_K_M, same binary with the kernels switched off and on:
 
 ★ **AND NO GATE COULD SEE IT, WHICH IS THE PART THAT MUST NOT RECUR.**
 `MatVecPacked` falls back and **RETURNS TRUE**. The answer is correct, so no
-oracle can see it, and `model.TestNothingFallsBackToNN` counts the fallbacks the
+oracle can see it, and `engine.TestNothingFallsBackToNN` counts the fallbacks the
 MODEL takes rather than the ones `nn` takes inside itself -- RULE 10's "a counter
 that counts fallbacks certifies nothing", one package down, where the counter
 was in the wrong place entirely. `nn.TestEveryPackedFormatHasAGeneratedKernel`
@@ -2743,11 +2743,11 @@ everywhere (NEON's 32 registers, against amd64's 16 which narrow Q6_K to two).
       Go reference   2.53 tok/s   ->   generated 62.0    **24.5x**
 
 ★ **THE GATE THAT MAKES IT STAY TRUE COUNTS THE CALLEE, NOT THE CALLER.**
-`model.TestNothingReachesTheReferenceMatvec` asserts `nn`'s OWN reference
+`engine.TestNothingReachesTheReferenceMatvec` asserts `nn`'s OWN reference
 counter is zero over Forward AND Prefill for every model under 2 GiB, on both
 architectures. Against a violation -- Q4_K and Q3_K dropped from the arm64 list
 -- it reads **714 decode and 3808 prefill** reference calls. The old counters
-could not: they live on `model.State` and count what the MODEL declined, while
+could not: they live on `engine.State` and count what the MODEL declined, while
 `nn.MatVecPacked` declined internally and returned true.
 
 ★ **FOUR BUGS, AND THE TWO THAT MATTER ARE ABOUT GATES SEEING DIFFERENT THINGS.**
@@ -2798,7 +2798,7 @@ is why it is a tag and not a flag*. On every other architecture `engine/nn/jit.g
 not compiled at all and `jit_stub.go`'s nil JIT is the only tier there is, which
 is the configuration the oracle needs.
 
-    go test -tags jitllmtest ./engine/model -run TestPlacementInvariance
+    go test -tags jitllmtest ./engine -run TestPlacementInvariance
 
 **★ CLOSED, AND IT WAS WORTH 2.6-4.5% OF A TOKEN.** The audit below
 is kept because it is what the breach looked like; it no longer describes the
@@ -2811,7 +2811,7 @@ all three backends:
     dst *= alpha      -- gemma's embedding scale and EVERY attention score row
 
 **★ AND "ARE WE FALLING BACK AT ALL?" IS A SWEEP, NOT A SPOT CHECK.**
-`model.TestNothingFallsBackToNN` runs Forward, Prefill AND ForwardBatch over
+`engine.TestNothingFallsBackToNN` runs Forward, Prefill AND ForwardBatch over
 EVERY model on the box and asserts all three counters are zero;
 `JITLLM_AUDIT_MODEL=<substring>` audits one file whatever its size, because a
 2 GiB cap skips exactly the models where a missing kernel hides. It found one:
@@ -2870,7 +2870,7 @@ admission buried in a source comment -- `nn.Dot32` twice per state row (37.7M
 multiply-accumulates a token), a four-tap convolution loop, and scalar
 softplus/exp on the gates. The user caught it by asking why the JIT had not been
 touched. `EmitGatedDelta`, `EmitConv1d` and `EmitDeltaGate` replace all three on
-amd64 AND arm64, and `model.TestHybridRuns` asserts all three fallback counters
+amd64 AND arm64, and `engine.TestHybridRuns` asserts all three fallback counters
 are zero AND that the delta kernel was SELECTED -- because the oracle beside it
 computes the same answer, so agreement says nothing about which ran.
 
@@ -3235,7 +3235,7 @@ a 20-39% regression (above). So the cap is a duel (`nn.newRowChunkDuel`,
 candidates none / 256 / 64 / 16 KiB, every rung tried) after the participant
 and token-chunk duels, cached per host, core count and shape set.
 
-It could not settle at first, and the reason was general: **every model.State
+It could not settle at first, and the reason was general: **every engine.State
 builds its own JIT, and only a SETTLED answer reached the cache**, so a duel
 that needed more full chunks than one State's prompt restarted from its first
 rung on every request -- 160 `jitllm speed` prompts on the M4 without the
@@ -3616,16 +3616,16 @@ fails. Result in docs/perf/current.md: 0.953 / 0.967 / 0.952.
 ## Two gates that failed only on the Xeon were the pool's WIDTH, not the pre-VNNI kernels
 
 Both read as kernel-family bugs because the Xeon E5-2680 v4 is the one host
-here without VNNI: `model.TestDecodeDoesNotAllocate`'s olmoe host arm at 128
+here without VNNI: `engine.TestDecodeDoesNotAllocate`'s olmoe host arm at 128
 allocations over 64 tokens, every one in `nn.(*JIT).fusedSliced`, and
-`model.TestForwardBatchFaultsItsBlocksIn` reading tinyllama's batch against
+`engine.TestForwardBatchFaultsItsBlocksIn` reading tinyllama's batch against
 its decode at NMSE 5.872e-14 where the gate wants 0. Same binary, same box,
 only the CPU mask moved:
 
     taskset 0-13 (14 workers)   olmoe 128 allocations   tinyllama 5.872e-14
     taskset 0-5  ( 6 workers)   olmoe   0               tinyllama 0.000e+00
 
-and on the laptop with VNNI forced absent (`model.TestExactGatesRunPreVNNI`)
+and on the laptop with VNNI forced absent (`engine.TestExactGatesRunPreVNNI`)
 every exactness gate reads NMSE 0 and every host arm 0 allocations. So the
 DotVEX family is exact and allocation-free; what moved was `fusedSlices`.
 
@@ -3840,7 +3840,7 @@ WITHOUT A SECOND MEASUREMENT.**
 per-token fused kernel serves this host"*. Its comment says why -- `tiledBudget`
 lands at EXACTLY 16 registers at tok=4 and the VEX dot needs a ones vector with
 no temporary free across the payload loop -- and
-`model.TestEveryModelRunsPreVNNI` runs every model on the box with VNNI forced
+`engine.TestEveryModelRunsPreVNNI` runs every model on the box with VNNI forced
 absent and the tiled kernel declined on all of them. So on the Xeon a prefill of n tokens makes **n** passes over the whole
 weight set, where a VNNI host makes n/4 and llama.cpp's cache-blocked GEMM makes
 a handful.
@@ -3894,7 +3894,7 @@ and 1-against-4 is a same-process dose.
 
 ★★★ **AND THE DOSE WAS TAKEN, AND IT REFUTES THE PREDICTION MADE
 FROM THE TWO BATCHING FACTORS. THE TILE IS WORTH 32%, NOT 3.17x.**
-`model.TestPrefillTileDose`, Llama-3.2-1B Q4_K_M, a 256-token prompt, six
+`engine.TestPrefillTileDose`, Llama-3.2-1B Q4_K_M, a 256-token prompt, six
 P-cores, 21 rounds, ABBA, A/A self-control FIRST:
 
     A/A self-control (tile 4 in BOTH arms)  **1.0000**  IQR/median 0.092  n=21
@@ -3940,7 +3940,7 @@ hosts, most on the Xeon.
 ★★★★ **AND THE CHUNK-SIZE DOSE WAS TAKEN ON THE XEON AND REFUTES IT, THREE
 DOSES, MONOTONIC, EVERY ARM GATING. NARROWING THE CHUNK TOWARD L2 COSTS 20-39%.**
 Llama-3.2-1B Q4_K_M, 256-token prompt, four cores, 15 rounds, ABBA, A/A first, on
-an idle box (`model.TestPrefillTileDose` with `JITLLM_CHUNK_B`):
+an idle box (`engine.TestPrefillTileDose` with `JITLLM_CHUNK_B`):
 
 | cap | chunk rows | pass 1 | pass 2 | IQR/median |
 |---|---|---|---|---|
@@ -4049,7 +4049,7 @@ design document (ARCHITECTURE.md, since deleted) had retired it in its own heade
 was never built"*, recorded now under RULE 11 in
 `docs/engineering-history/scheduling-and-measurement.md` -- while
 `engine/sched/pool.go` went on citing it as measured, in two places, and this rule cited
-it in a third. The SHIPPED per-region dispatch cost is `model.TestFusionCeiling`'s
+it in a third. The SHIPPED per-region dispatch cost is `engine.TestFusionCeiling`'s
 **2.70 us on Linux and 3.008 us on the M4**. The conclusion does not change; its
 evidence does, and a number that survives the measurement it came from is how a
 withdrawn finding keeps the appearance of a binding rule.
@@ -4122,8 +4122,8 @@ Both Widen/Narrow pairs and both load-time f64 buffers are deleted.
 
 **What float64 is left is measurement, not inference.** Outside tests the
 `[]float64` in `engine/` are the tuners' ratio and median statistics
-(`engine/model/seamtune.go`, `engine/nn/tune.go`) and the expert-use accounting
-(`engine/model/hotness.go`); scalar float64 appears only as setup arithmetic
+(`engine/seamtune.go`, `engine/nn/tune.go`) and the expert-use accounting
+(`engine/hotness.go`); scalar float64 appears only as setup arithmetic
 (an epsilon, a scale, an image resample step) before a kernel call. The
 residual, the scratch vectors and the logits are float32 on the host, matching
 the device tier, which already produced token ids identical to the old f64 host
@@ -4182,8 +4182,8 @@ they were written for. Cross-compiled here, codesigned and run there:
     ./engine/nn         66 run,  62 pass,   4 skip, 0 fail   (skips are amd64-only by
                                                        construction -- the
                                                        batched MoE dispatch)
-    ./engine/model      20 run,  20 pass,   0 skip, 0 fail
-    ./engine/model MLA  22 run,  22 pass,   0 skip, 0 fail
+    ./engine      20 run,  20 pass,   0 skip, 0 fail
+    ./engine MLA  22 run,  22 pass,   0 skip, 0 fail
 
 **TestGreedyMatchesLlamaCpp ran on that host for the first time**, teacher-forced
 against llama-completion b10825 over seven models: Llama-3.2-1B, Qwen2-VL-2B,
@@ -4507,7 +4507,7 @@ device kernels XOR the planes into the full weight first and center once.
 - **★ THE VISION TOWER'S 148,755 POOL REGIONS ARE A REGRESSION WITH A COMMIT, NOT A
   DESIGN, AND WHOLE-LAYER FUSION IS THE WRONG LEVER FOR THEM.** Both halves of
   the sentence that stood here were overturned by measurement
-  (`model.TestTowerFusionCeiling`).
+  (`engine.TestTowerFusionCeiling`).
 
   ★ **THE REGRESSION HAS A COMMIT AND A PRICE NOBODY TOOK.** `docs/perf/
   current.md` records the encode END TO END at **477.178 ms** (IQR 0.005,
@@ -4570,7 +4570,7 @@ device kernels XOR the planes into the full weight first and center once.
   `3ce7146`, and the remaining gap is arithmetic rather than scheduling -- so
   the evidence file's retired sentence is true again.
 
-  ★★ **AND IT WAS NEVER A TOWER BUG: `engine/model/prefill.go` CARRIES THE SAME GUARD,
+  ★★ **AND IT WAS NEVER A TOWER BUG: `engine/prefill.go` CARRIES THE SAME GUARD,
   SO EVERY CONTAINER MODEL PREFILLED THROUGH THE ROW LOOP.** The comment there
   named the debt in its own words -- *"the GEMM for it is the next kernel owed
   (RULE 8)"*. tinyllama q3_K_M, a 512-token prompt, six P-cores:
@@ -4768,7 +4768,7 @@ device kernels XOR the planes into the full weight first and center once.
 
   ★★★★ **AND THE SAMPLER WAS THE LARGEST OF THESE BY FAR: IT COST AS MUCH AS
   THE WHOLE FORWARD PASS, AND NO BOARD ROW COULD EVER HAVE SEEN IT.**
-  `engine/model/sample.go` sorted the ENTIRE vocabulary with `sort.Slice` every token
+  `engine/sample.go` sorted the ENTIRE vocabulary with `sort.Slice` every token
   -- 128256 entries through a closure, ~2.2M comparisons with interface dispatch
   and reflect-based swaps -- to keep forty. Measured on the in-process dose
   harness, Llama-3.2-1B Q4_K_M, six P-cores, ABBA in one process, A/A
@@ -4936,7 +4936,7 @@ device kernels XOR the planes into the full weight first and center once.
   the M4 picks a kernel per shape") has the tables.
 
   ★ **THE FIRST VERSION OF THESE GATES ENCODED amd64 AND WOULD HAVE GONE RED ON
-  THE M4 FOR A CAPABILITY THAT WAS NEVER THERE.** `model.TestMoEFFNRunsBatched`
+  THE M4 FOR A CAPABILITY THAT WAS NEVER THERE.** `engine.TestMoEFFNRunsBatched`
   asserted `looped == 0`; it derives the expectation from the JIT
   (`MixtureBatches(gate.typ)`, `PackedFusedSupported` before the arm64 fused kernel existed) and
   read, on the M4 of that day:
@@ -5011,7 +5011,7 @@ device kernels XOR the planes into the full weight first and center once.
   **The W=1 prefetch's device time exceeds the whole token it is accelerating**,
   with all compute assumed perfectly hidden. The prefetch was priced at both
   windows and loses at both; the two tables are in `docs/engineering-history/placement.md` 15t and
-  `model.TestRoutingLocality` reprints them in one command.
+  `engine.TestRoutingLocality` reprints them in one command.
 
   ★ **AND neurostream's FIX IS ALREADY BUILT HERE.** Their 76.3 s -> 0.8 s was
   planning once per LAYER instead of once per projection -- queue depth, not

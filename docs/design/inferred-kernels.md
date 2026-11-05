@@ -52,7 +52,7 @@ What it gives up against tier 1 is the specialisation, not the compilation:
 
 Tier 3 does not move. `nn.JIT[t] == nil` must stay REACHABLE (RULE 8) so the
 oracle and bisection exist; it is reached by nothing in a shipping decode, and
-`model.TestNothingFallsBackToNN` already asserts that over every model on the
+`engine.TestNothingFallsBackToNN` already asserts that over every model on the
 box. This spec does not weaken that line -- it removes the last excuse to cross
 it, because "no kernel exists for this format" stops being true.
 
@@ -166,13 +166,13 @@ of which must fail against a violation before it is believed:
 
     3. WHICH TIER RAN. A counter per tier, asserted ZERO for tier 2 on every
        format that has a tier-1 kernel, over Forward, Prefill AND StepRuns --
-       the same sweep shape as model.TestNothingFallsBackToNN. A tier-2 kernel
+       the same sweep shape as engine.TestNothingFallsBackToNN. A tier-2 kernel
        silently serving Q4_K is a 2-5x regression that produces correct tokens
        and would otherwise never be noticed.
        Against a violation: forcing Q4_K to tier 2 must make the gate read a
        non-zero count, not just a slower row.
 
-    4. NO NEW INTERPRETED PATH. model.TestNothingFallsBackToNN keeps asserting
+    4. NO NEW INTERPRETED PATH. engine.TestNothingFallsBackToNN keeps asserting
        the nn counters at zero. Tier 2 exists so that a missing kernel is not a
        reason to cross RULE 8's line, and the gate that proves it is the one
        already there.

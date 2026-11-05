@@ -15,8 +15,9 @@ import (
 
 	"github.com/jitllm/jitllm/composer/ir"
 	"github.com/jitllm/jitllm/dev/bench"
+	"github.com/jitllm/jitllm/engine"
 	"github.com/jitllm/jitllm/engine/device/gpu"
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/model"
 )
 
 func verifyCmd(args []string) error {
@@ -53,11 +54,20 @@ func verifyCmd(args []string) error {
 	}
 	// The same option set every other command gets: the model and nn packages
 	// read no environment, so JITLLM_* reaches them only through here.
-	m, err := model.Open(fs.Arg(0), loadOpts(nil, *maxmem)...)
+	mo, io := loadOpts(nil, *maxmem)
+	m, err := model.Open(fs.Arg(0), mo...)
 	if err != nil {
 		return err
 	}
 	defer m.Close()
+	// One CPU device for the run: every instance it makes takes turns on its
+	// workers and shares the model's forms.
+	cd, err := engine.OpenCPU(io...)
+	if err != nil {
+		return err
+	}
+	defer cd.Close()
+	io = append(io, engine.WithCPU(cd))
 	// The split tuner is pinned: a k-split is the f32 reduction order, so two
 	// instances that tuned separately differ in the last bits, and on a deep
 	// hybrid that difference is amplified past any useful diff. It goes before
@@ -83,26 +93,26 @@ func verifyCmd(args []string) error {
 		// The kernels a model runs are the ones it compiles: decode, then the
 		// batched prefill (diffed against per-token decode, so a report is never
 		// read off a path that computes something else).
-		benchRun(m, nil, *n)
-		benchRun(m, g, *n)
-		if err := prefillDiff(m, g, max(*prefill, 40), 4); err != nil {
+		benchRun(m, io, nil, *n)
+		benchRun(m, io, g, *n)
+		if err := prefillDiff(m, io, g, max(*prefill, 40), 4); err != nil {
 			// The diff is printed above it; the report still describes the
 			// kernels that ran, which is what was asked for here.
 			fmt.Printf("  (prefill diff: %v)\n", err)
 		}
-		return registerReport(os.Stdout, m.CPUKernels(), g.KernelResources(), *asJSON)
+		return registerReport(os.Stdout, engine.CPUKernels(m, cd), g.KernelResources(), *asJSON)
 	}
 	if *ab != "" {
-		abRun(m, g, *ab, *n, *rounds, *depth)
+		abRun(m, io, g, *ab, *n, *rounds, *depth)
 		return nil
 	}
 	if *prefill > 0 {
-		return prefillDiff(m, g, *prefill, *n)
+		return prefillDiff(m, io, g, *prefill, *n)
 	}
-	cpuRate := benchRun(m, nil, *n)
+	cpuRate := benchRun(m, io, nil, *n)
 	fmt.Printf("\ncpu        %7.2f tok/s\n", cpuRate)
 
-	gpuRate := benchRun(m, g, *n)
+	gpuRate := benchRun(m, io, g, *n)
 	// Stats() sums the per-device counters; DevStats() below keeps them apart.
 	st := g.Stats()
 	fmt.Printf("gpu        %7.2f tok/s   %.2fx\n", gpuRate, gpuRate/cpuRate)
@@ -174,7 +184,7 @@ func verifyCmd(args []string) error {
 		}
 		return fmt.Errorf("device declined everything and reported no error")
 	}
-	return forcedDiff(m, g, *n, *migrate, *band)
+	return forcedDiff(m, io, g, *n, *migrate, *band)
 }
 
 // prefillDiff is the gate on the batched device prefill.
@@ -190,7 +200,7 @@ func verifyCmd(args []string) error {
 //
 // The length is deliberately not a multiple of the batch width: the ragged last
 // chunk writes K and V past the prompt, and decode must overwrite them.
-func prefillDiff(m *model.Model, g *gpu.GPU, ntok, n int) error {
+func prefillDiff(m *model.Model, io []engine.Option, g *gpu.GPU, ntok, n int) error {
 	if ntok < 2 {
 		return fmt.Errorf("verify -prefill: want at least 2 tokens")
 	}
@@ -214,7 +224,10 @@ func prefillDiff(m *model.Model, g *gpu.GPU, ntok, n int) error {
 
 	arm := func(noBatch bool) ([][]float32, error) {
 		g.NoBatch = noBatch
-		s := m.NewInstance(ntok + n + 16)
+		s, err := engine.NewInstance(m, ntok+n+16, io...)
+		if err != nil {
+			return nil, err
+		}
 		defer s.Close()
 		if err := s.SetDevice(g); err != nil {
 			return nil, err
@@ -383,10 +396,16 @@ func isFinite(v float32) bool {
 // localise a disagreement: one tie broken differently changes every later id.
 // Per position, the margin between the top two logits says whether a flip is a
 // computation error or a tie.
-func forcedDiff(m *model.Model, g *gpu.GPU, n int, doMigrate bool, band float64) error {
-	cs := m.NewInstance(n + 16)
+func forcedDiff(m *model.Model, io []engine.Option, g *gpu.GPU, n int, doMigrate bool, band float64) error {
+	cs, err := engine.NewInstance(m, n+16, io...)
+	if err != nil {
+		return err
+	}
 	defer cs.Close()
-	gs := m.NewInstance(n + 16)
+	gs, err := engine.NewInstance(m, n+16, io...)
+	if err != nil {
+		return err
+	}
 	defer gs.Close()
 	if err := gs.SetDevice(g); err != nil {
 		return err
@@ -545,8 +564,12 @@ func forcedDiff(m *model.Model, g *gpu.GPU, n int, doMigrate bool, band float64)
 // faults are not per-token costs. Correctness is forcedDiff's job, not this
 // one's -- a free-running chain is the right thing to TIME and the wrong thing
 // to DIFF.
-func benchRun(m *model.Model, dev *gpu.GPU, n int) float64 {
-	s := m.NewInstance(n + 16)
+func benchRun(m *model.Model, io []engine.Option, dev *gpu.GPU, n int) float64 {
+	s, err := engine.NewInstance(m, n+16, io...)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 0
+	}
 	defer s.Close()
 	if dev != nil {
 		if err := s.SetDevice(dev); err != nil {
@@ -589,8 +612,12 @@ func benchRun(m *model.Model, dev *gpu.GPU, n int) float64 {
 //
 // The state is sized for the whole run rather than reset back to depth,
 // because re-prefilling to depth would be timed as part of an arm.
-func abRun(m *model.Model, g *gpu.GPU, which string, n, rounds, depth int) {
-	s := m.NewInstance(depth + rounds*n*2 + 16)
+func abRun(m *model.Model, io []engine.Option, g *gpu.GPU, which string, n, rounds, depth int) {
+	s, err := engine.NewInstance(m, depth+rounds*n*2+16, io...)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return
+	}
 	defer s.Close()
 	// attnchunk and attnpair compare host attention layouts, which do not run
 	// at all with the blocks on a device; every other arm needs the device.
@@ -617,7 +644,7 @@ func abRun(m *model.Model, g *gpu.GPU, which string, n, rounds, depth int) {
 	// measurement at a depth, keep rounds*n*2 small against depth.
 	fmt.Printf("  context runs %d..%d over the whole A/B (-depth is the START)\n",
 		depth, min(depth+rounds*n*2, lim))
-	runOn := func(s *model.Instance, iters int) {
+	runOn := func(s *engine.Instance, iters int) {
 		tok := int32(1)
 		for i := 0; i < iters; i++ {
 			logits, err := s.Forward(tok)
@@ -662,7 +689,11 @@ func abRun(m *model.Model, g *gpu.GPU, which string, n, rounds, depth int) {
 			panic(err)
 		}
 		defer g2.Close()
-		s2 := m.NewInstance(depth + rounds*n*2 + 16)
+		s2, err := engine.NewInstance(m, depth+rounds*n*2+16, io...)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return
+		}
 		defer s2.Close()
 		if err := s2.SetDevice(g2); err != nil {
 			panic(err)

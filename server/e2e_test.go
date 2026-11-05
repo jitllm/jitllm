@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/model"
 )
 
 // The end-to-end gate: a real container, a real prefill, real tokens.

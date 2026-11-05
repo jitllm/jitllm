@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine"
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/internal/testmodels/fresh"
 )
@@ -193,7 +193,7 @@ func atoi(t *testing.T, s string) int {
 func runSmall(t *testing.T, n int, maxmem uint64) (stdout, stderr string) {
 	t.Helper()
 	path := modelPath(t, "stories260K.jlm")
-	sm := &model.Sampler{RepeatPen: 1, RepeatLastN: 64}
+	sm := &engine.Sampler{RepeatPen: 1, RepeatLastN: 64}
 	stdout, stderr, err := capture(t, func() error {
 		return run(path, "Once upon a time", n, 0, "cpu", -1, 0, maxmem, false, false, false, false,
 			sm, "", nil, nil, "", 0, 0, nil, nil)
@@ -388,21 +388,21 @@ func TestSubcommandsRefuseAModelTheyCannotUse(t *testing.T) {
 	}
 	_, stderr, err := capture(t, func() error {
 		return run(path, "hi", 2, 0, "cpu", -1, 0, 1<<30, false, false, false, false,
-			&model.Sampler{}, "", nil, &chatSpec{}, "", 0, 0, nil, nil)
+			&engine.Sampler{}, "", nil, &chatSpec{}, "", 0, 0, nil, nil)
 	})
 	if err == nil || !strings.Contains(err.Error(), "carries no chat template") {
 		t.Errorf("-chat on a base model: %v\n%s", err, stderr)
 	}
 	_, _, err = capture(t, func() error {
 		return run(path, "hi", 2, 0, "cpu", -1, 0, 1<<30, false, false, false, false,
-			&model.Sampler{}, "x.png", nil, nil, "", 0, 0, nil, nil)
+			&engine.Sampler{}, "x.png", nil, nil, "", 0, 0, nil, nil)
 	})
 	if err == nil || !strings.Contains(err.Error(), "carries no vision tower") {
 		t.Errorf("-image: %v", err)
 	}
 	_, _, err = capture(t, func() error {
 		return run(path, "", 2, 8, "cpu", -1, 0, 1<<30, false, false, false, false,
-			&model.Sampler{}, "", nil, nil, "", 0, 0, nil, nil)
+			&engine.Sampler{}, "", nil, nil, "", 0, 0, nil, nil)
 	})
 	// An empty prompt still carries the BOS, so -depth has something to
 	// repeat; it must run rather than refuse.
@@ -411,7 +411,7 @@ func TestSubcommandsRefuseAModelTheyCannotUse(t *testing.T) {
 	}
 	_, _, err = capture(t, func() error {
 		return run(path, "hi", 2, 0, "cpu", -1, 0, 1<<30, false, false, false, false,
-			&model.Sampler{}, "", nil, nil, "", 0, 1<<20, nil, nil)
+			&engine.Sampler{}, "", nil, nil, "", 0, 1<<20, nil, nil)
 	})
 	if err == nil || !strings.Contains(err.Error(), "-kv-budget needs -kv-cache") {
 		t.Errorf("-kv-budget with no -kv-cache: %v", err)

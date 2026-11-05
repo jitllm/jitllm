@@ -5,7 +5,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/model"
 	"github.com/jitllm/jitllm/tok"
 )
 

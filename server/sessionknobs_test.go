@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
@@ -25,7 +25,7 @@ func TestSessionKnobsReachTheStateOverHTTP(t *testing.T) {
 	path := modelPath(t, smallModel)
 	for _, f16 := range []bool{true, false} {
 		e := New(admitConfig(Config{ModelDir: filepath.Dir(path), Probe: oneCardProbe, Version: "test",
-			KVF16: &f16, PromptStore: model.NewMemStore()}))
+			KVF16: &f16, PromptStore: engine.NewMemStore()}))
 		t.Cleanup(e.Close)
 		if _, err := e.LoadModel(LoadOptions{Path: path, ModelID: "small"}); err != nil {
 			t.Fatal(err)

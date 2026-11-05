@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine"
 )
 
 // TestImageRunsThroughTheTower runs `jitllm run -image` on SmolVLM-256M, on
@@ -18,7 +18,7 @@ import (
 // fluently, so the blank is the violation.
 func TestImageRunsThroughTheTower(t *testing.T) {
 	path := modelPath(t, "SmolVLM-256M-Instruct-Q8_0-vlm.jlm")
-	pic := filepath.Join("..", "..", "engine", "model", "testdata", "quad-and-disc.png")
+	pic := filepath.Join("..", "..", "engine", "testdata", "quad-and-disc.png")
 	if _, err := os.Stat(pic); err != nil {
 		t.Fatalf("IMAGE MISSING: %v", err)
 	}
@@ -39,7 +39,7 @@ func TestImageRunsThroughTheTower(t *testing.T) {
 		t.Helper()
 		out, stderr, err := capture(t, func() error {
 			return run(path, "Describe this image in one sentence.", 32, 0, "cpu", -1, 0, 1<<30, false, false,
-				false, false, &model.Sampler{}, img, nil, nil, cache, 0, 0, nil, nil)
+				false, false, &engine.Sampler{}, img, nil, nil, cache, 0, 0, nil, nil)
 		})
 		if err != nil {
 			t.Fatalf("run -image %s: %v\n%s", img, err, stderr)

@@ -348,7 +348,7 @@ tighter than that.
 **The block was never the problem and the decline that named it is lifted.**
 `declineReason` returned *"a partial rotary (NRot < HeadDim)"*; with the rotary
 tail copied before the rotation (`bs.copyQ`/`bs.copyK`) the block is right, and
-`model.TestHybridAttentionBlockOnDevice` diffs it against the host at every
+`engine.TestHybridAttentionBlockOnDevice` diffs it against the host at every
 position over four fixtures -- the small one, the mixture, Qwen3-Next-80B's own
 head geometry (2048 wide, 16 heads of 256 with 64 rotated) and its mixture
 shape (512 experts of which 10 run, 512 wide). Every one gates at 1e-9 to 5e-5.
@@ -356,7 +356,7 @@ shape (512 experts of which 10 run, 512 wide). Every one gates at 1e-9 to 5e-5.
 ★ **THE FIRST CAUSE: A BATCH THE DEVICE CANNOT PREPARE WAS REPORTED AS A DEVICE
 FAILURE.** `prepBatch` refuses a mixture of experts outright -- *"batched
 prefill does not cover a mixture of experts"* -- and it refuses BEFORE it
-submits anything. `Layers` returned false, `engine/model/prefill.go` read that as the
+submits anything. `Layers` returned false, `engine/prefill.go` read that as the
 card breaking, demoted the whole placement and restarted the chunk on the host.
 The rows now go through the device one at a time instead, which is what every
 prompt did before batching existed and costs the speed and nothing else.
@@ -381,7 +381,7 @@ is what made the next entry measurable at all.
 
 ## ★ 15i. A DEVICE BLOCK'S DISAGREEMENT WITH THE HOST IS AMPLIFIED BY EVERY BLOCK BELOW IT, AND ON A HYBRID THE FACTOR IS 2550x OVER FORTY.
 
-`model.TestHybridDeviceErrorIsAmplification` places ONE attention block of a
+`engine.TestHybridDeviceErrorIsAmplification` places ONE attention block of a
 48-block hybrid and moves only its DEPTH. Same block shape, same weights, same
 kernels; the arms differ in how many host blocks run below the seam:
 
@@ -459,7 +459,7 @@ Qwen3-Next-80B, 2 of 48 blocks on an RTX 3050 Ti, teacher-forced against the CPU
 **0.32-0.55 is the f32 reduction-order band this file already records at
 0.2-0.94.** Nothing is left over.
 
-★ **THE GATE IS `model.TestMoEDeviceUploadReadsTheWholeBank`, AND MAKING IT FIRE
+★ **THE GATE IS `engine.TestMoEDeviceUploadReadsTheWholeBank`, AND MAKING IT FIRE
 IS ITSELF THE FINDING.** Three fixtures passed against the violation before one
 reproduced it, and the reason is arithmetic rather than luck: **EnsureRange
 tracks residency in 1 MiB CHUNKS**, so a chunk that any routed expert lands in
@@ -490,7 +490,7 @@ won"*. A caller that leaves it nil is unchanged, and a paged mixture is the only
 one that sets it.
 
 ★ **THE GATE IS SELF-CALIBRATING, WHICH IS WHY IT CARRIES NO CONSTANT.**
-`model.TestMoEDeviceReadsOnlyTheBanksItTakes` runs the same container under two
+`engine.TestMoEDeviceReadsOnlyTheBanksItTakes` runs the same container under two
 budgets and counts `jlm.File.ChunksIn`:
 
     budget for two blocks   2 placed   **16 chunks**
@@ -600,7 +600,7 @@ host the whole time, with nothing in the tier calling them --
 `gpu.TestDeclineNamesTheGraphFeature` recorded that as *"the honest state
 rather than an oversight"*, which is how a task reads as a property.
 
-`emitLinear` transcribes `engine/model/delta.go`'s order: the fused q|k|v projection,
+`emitLinear` transcribes `model/delta.go`'s order: the fused q|k|v projection,
 the causal convolution and its shift, SiLU, the split gates, the per-key-head L2
 norm with its two scales, one token of the rule out of place through `recPair`,
 the gated output norm, and the output projection.
@@ -717,7 +717,7 @@ for exactly that reason: a gate whose only fixture has the feature cannot see a
 fix that is conditional on it.
 
 ★ **THE GATE, AND ITS FIRST VERSION WAS THE WRONG QUANTITY.**
-`model.TestDevicePagingSurvivesTheHostPager` runs both pagers at once -- a host
+`engine.TestDevicePagingSurvivesTheHostPager` runs both pagers at once -- a host
 budget of three pages over an eight-block model, `manyExp` so a routed bank sits
 in each page -- against a real device. It first asserted `PageIns > 0` and
 **passed against the violation it was written for**: with the refresh disabled
@@ -808,7 +808,7 @@ beside a 12 MiB page set. A missing logits row falls back to the old
       ids identical
 
 ★ **THE GATE ASSERTS THE TOKENS, NOT THE COUNTER.**
-`model.TestPrefixCacheHoldsAPromptShorterThanAPage` runs a 20-token prompt --
+`engine.TestPrefixCacheHoldsAPromptShorterThanAPage` runs a 20-token prompt --
 shorter than its page -- twice and requires the generated tokens to be
 identical, because a prefix cache that restores the wrong history produces
 fluent text and a happy counter. Against the behaviour it replaces it fails at
@@ -818,7 +818,7 @@ fluent text and a happy counter. Against the behaviour it replaces it fails at
 
 `nn.LayerDevice` had `MigrateKV` and no twin for the recurrence. That was
 harmless while the gated delta rule could not be placed, and became a wrong
-answer the day it could (15l): `model.State.rconv`/`rstate` are what every HOST
+answer the day it could (15l): `engine.State.rconv`/`rstate` are what every HOST
 consumer reads, and a block running on a device keeps its summary in the tier's
 `recPair` and never touches them.
 
@@ -876,7 +876,7 @@ movable at all.
 
 ## ★ 15o. STEP 1 OF THE BASE-RESIDENT GOAL: THE ACCOUNTING, AND THE VRAM CLOSES.
 
-`model.TestDeviceBudgetAccounting` (JITLLM_BUDGET=<model.jlm>) separates the
+`engine.TestDeviceBudgetAccounting` (JITLLM_BUDGET=<model.jlm>) separates the
 three quantities a placement decision needs and that one "bytes per token"
 figure runs together. Qwen3-Next-80B-A3B-Instruct-Q4_K_M, 48 layers, 12
 attention and 36 linear:
@@ -1023,7 +1023,7 @@ produces the 352 evictions survives it, and A's own 1.9 already misses the 2 tok
 **250 is a CACHE-HIT ASSUMPTION, not a coalescing result**, and two things this file
 says elsewhere do not support it:
 
-- the **73.9% reuse** figure in `engine/model/residency.go` is previous-token reuse on a
+- the **73.9% reuse** figure in `model/residency.go` is previous-token reuse on a
   FOUR-EXPERT model. It is not evidence for 512, and that manager tracks usage without
   implementing expert eviction.
 - `jlm.File.Reads()` counts outer `readAt` CALLS; above 4 MiB one call fans out into
@@ -1114,7 +1114,7 @@ thing removed: a block's base is fifteen-odd separate tensors where its sheets
 are three big runs, so the base cost more per byte than it weighed.
 
 ★ **THE GATE TOOK TWO CORRECTIONS AND BOTH ARE THE FAILURES THIS FILE ALREADY
-NAMES.** `model.TestTheDeviceCallbackDoesNotRereadTheBase`:
+NAMES.** `engine.TestTheDeviceCallbackDoesNotRereadTheBase`:
 
     v1  GREEN against its own violation. At the 1 MiB default the fixture's
         whole page is 14 chunks, so base and bank SHARE chunks and "base +
@@ -1396,7 +1396,7 @@ had no answer for the streamed path and this file said so twice. The totals are
 dominated by ADMISSION: dividing them by the token count overstated a decode
 token threefold.
 
-`model.PhaseMeter` marks at load, prefill and decode. Qwen3-Next-80B,
+`engine.PhaseMeter` marks at load, prefill and decode. Qwen3-Next-80B,
 `-devices gpu:0 JITLLM_GPU_STREAM=1`, n=32, `scripts/cap 8G`, box 4.2% busy:
 
     load      45.82 GiB in    336 request(s),   48 fault(s),  4.06 GiB/s
@@ -1457,7 +1457,7 @@ which one it is will be compared to a datasheet by the next reader.
 knows what a phase is and nothing should: a second set of counters could drift
 from the first with nothing to notice, and a delta of the SAME counter cannot.
 That is what the gate asserts --
-`model.TestPhaseMeterAccountsForEveryByte` requires the rows to SUM to what the
+`engine.TestPhaseMeterAccountsForEveryByte` requires the rows to SUM to what the
 pager read since the meter started, an equality rather than a plausibility check
 on each row, and requires the decode row to be non-zero so the one row this
 exists for cannot silently be nothing. Against the violation (Mark not rebasing,
@@ -1482,7 +1482,7 @@ hybrid cannot do (errRecurRetry). The CLI takes the flag only where `-devices`
 admits the host: `auto`, or a list with `cpu`.
 
 Llama-3.2-1B, 16 blocks, a budget that holds every block and one 256-position
-page but not the doubling (`model.TestRelocateKeepsTheDeviceWhenTheContextOutgrowsIt`):
+page but not the doubling (`engine.TestRelocateKeepsTheDeviceWhenTheContextOutgrowsIt`):
 
     without -relocate   1 demotion, 0 of 16 kept
     with -relocate      1 block relocated, 15 of 16 kept, 0 demotions
@@ -1533,7 +1533,7 @@ the first host block, so `SetGPULayers`' shrink, `SetDevice`'s detach and
 re-attach, the prefix-cache restore and seal, and both recurrent-summary syncs
 all iterated `[0, gpuLayers)` and skipped the blocks past a hole. They walk the
 placed set now (`placedFrom`), and `offerRange` skips a block already placed.
-`model.TestRelocationTakesFromTheDeviceThatRefused` pins a single card's
+`engine.TestRelocationTakesFromTheDeviceThatRefused` pins a single card's
 refusals on blocks 0-7 (a wrapper, so it runs on every host): block 7 moves,
 15 of 16 stay, 3.9e-04 / 3.2e-04 against the host on CUDA / Metal, and after
 `SetGPULayers(0)` the tail matches too. Red against the highest-block victim
@@ -1560,7 +1560,7 @@ Two sources of room were missing and are built:
   conversation, which needs at least what the last turn grew to, so a growing
   chat never trims and never bounces blocks; a new, shorter conversation does.
 
-`model.TestRelocatedBlocksComeBack`, Llama-3.2-1B at the relocation budget:
+`engine.TestRelocatedBlocksComeBack`, Llama-3.2-1B at the relocation budget:
 a 64-token prompt after a 272-token sequence gets every block back (4.0e-04
 against the host, band 4.0e-04); a budget raised at position 320 brings the
 block back at the next token with its history (3.8e-04). Red against no trim
@@ -1645,7 +1645,7 @@ happening without anyone choosing a budget, and the expert read is 93.6% of what
 the short arm reads.
 
 **★ NOW THE PREDICTABILITY, AND IT IS THE SAME NUMBER ON A SECOND MODEL.**
-`model.TestRoutingLocality`, olmoe (16 layers x 64 experts, 8 used), 400 tokens:
+`engine.TestRoutingLocality`, olmoe (16 layers x 64 experts, 8 used), 400 tokens:
 
     PREVIOUS-TOKEN PREDICTOR   **34.8%** of experts reused   (chance 12.5%)
     whole set unchanged          0.6% of layer-steps
@@ -1841,7 +1841,7 @@ single `recNext`, which `kernels.CopySpan` moves home after the delta step --
 still out of place for the kernel, one scratch for the device rather than one a
 block. The form is decided for the WHOLE batch in LayersRows: grown block by
 block, the first blocks took two halves and left the last none (refused at
-14,480 of 14,809 MiB). Gate: `model.TestSharedRecurrentStateMatchesTheDoubledOne`
+14,480 of 14,809 MiB). Gate: `engine.TestSharedRecurrentStateMatchesTheDoubledOne`
 (gpu.Config.SharedRec forces the form; tokens bit-identical to the doubled
 form, Stats.RecShared asserts the form ran; without the copy back row 0 parts
 at token 3).
@@ -1982,7 +1982,7 @@ at 2K and 15x at full context.
   R_dev 153 GB/s, pack 1.4, seam ~59 us -> bytes >= 3.3 MB per crossing.
 - A separate lock for the sample measured 0.9848 on Phi-3.5, whose verdict is
   "serve" and whose behaviour is meant to be identical.
-- The sample is per session: model.TestHybridSecondSessionMatchesTheFirst read
+- The sample is per session: engine.TestHybridSecondSessionMatchesTheFirst read
   47 matvecs served in a lone session against 0 in the second, logits apart by
   6e-08 at position 0 of the first token.
 
@@ -2186,7 +2186,7 @@ honest placeholder.
 
 ## ★ 15v. THE DEVICE ANSWERED FOR A REUSED FRAME: A LONE MATVEC IS KEYED ON THE POINTER, AND A PAGE'S POINTER IS NOT AN IDENTITY.
 
-`model.TestHybridDeviceErrorIsAmplification` failed about one run in ten on the
+`engine.TestHybridDeviceErrorIsAmplification` failed about one run in ten on the
 RTX 3050 Ti, with `WithDeviceTune(TuneOff)` already pinned: the shallow arm read
 NMSE 2.3e-02 to 2.3e-01 where it reads 2.402e-04, which is larger than the deep
 arm and fails the ordering. It reproduced at 7e2203f, so it was not the
@@ -2257,7 +2257,7 @@ lock is free and otherwise queues it, and every lookup by address
 offers a page's weight again whenever the device is one the model tells
 (`State.forgets`), and only the dense region to any other device.
 
-`model.TestPagedWeightsAreNeverServedStale` is the gate: the one-frame arm must
+`engine.TestPagedWeightsAreNeverServedStale` is the gate: the one-frame arm must
 EQUAL the unbudgeted arm with both serving the same 36 matvecs on the device and
 31 copies forgotten as frames were refilled (the selection check that page
 weights reached the device at all). With `Forget` removed from
@@ -2283,7 +2283,7 @@ the first offer and refuses another model's blocks, head and prewarm by name
 (`LastErr`, a false return) while any block or head of the first is placed.
 `Model.Close` releases its blocks, heads and the scratch, KV pool and argmax
 built from its plan (`nn.ModelOwner.ReleaseModel`), after which the next model
-is admitted onto a device that has seen nothing. `model.TestATierServesOneModel`
+is admitted onto a device that has seen nothing. `engine.TestATierServesOneModel`
 (refused, 5.966e-06 against its host run; admitted after the first closes) and
 `gpu.TestATierRefusesASecondModel` (every buffer returned) are the gates. The
 amplification gate still opens a tier per arm, which is now a choice rather than
@@ -2314,7 +2314,7 @@ applies only to weights the arena would hold.
                                                             = the spans   have 32768"
     gpu.TestAContainerBlockIsPricedInFullOnAUnifiedDevice  priced in     priced at 0
                                                             full          (discount restored)
-    model.TestStreamedContainerOnAUnifiedDevice  M4 Metal   16/16 streamed, 0 of 16, the arena
+    engine.TestStreamedContainerOnAUnifiedDevice  M4 Metal   16/16 streamed, 0 of 16, the arena
                                                  Iris Xe    first token   error above
                                                             as the host
 
@@ -2329,7 +2329,7 @@ placement filled the budget with blocks, and a 512-row chunk then asked the
 card for hundreds of megabytes it did not have: on the laptop's RTX 3050 Ti
 gemma-2-2b's chunk was refused by `cuMemAlloc` and the prompt went a row at a
 time (0 folds, `TestPrefillFoldsTheHead`), and a server step of
-`model.MaxStepRows` rows on a full card was an error.
+`engine.MaxStepRows` rows on a full card was an error.
 
 `engine/device/gpu/scratch.go` charges them and reserves them.
 
@@ -2346,7 +2346,7 @@ head drops its scratches and staging, so a release still returns every byte
 **Reserved at placement.** The first text block, before its own weights,
 builds decode's scratch, the prompt chunk's at `Config.PromptRows` (default
 `nn.MaxDevicePrefillChunk`, halved until it fits beside that block) and, with
-`Config.StepRows` (the server's step loop sets `model.MaxStepRows`), the
+`Config.StepRows` (the server's step loop sets `engine.MaxStepRows`), the
 ragged step's with its per-row logits sized from `nn.LayerPlan.Vocab` -- the
 head arrives after the blocks. Each takes its paged attention plan at the
 deepest history the capacity reaches, where the partials are widest. A width
@@ -2364,7 +2364,7 @@ Qwen3.5-0.8B's 144 MB at 64 positions.
 
     Llama-3.2-1B-Instruct Q4_K_M, the card filled by a second context to the
     model's own budget plus 64 MiB
-    (model.TestAPromptFitsBesideAFullCard / TestAStepAtMaxRowsDoesNotOOMAFullCard)
+    (engine.TestAPromptFitsBesideAFullCard / TestAStepAtMaxRowsDoesNotOOMAFullCard)
 
                           reserved                         without the reservation
     prompt  cuda:0        16 of 16, head on the host,      16 of 16, 2 splits,
@@ -2441,7 +2441,7 @@ not at its parent, and neither was a leak.
 `pageSizeWhy`, the packed bytes, while `pageIn` asks for bytes plus rounding,
 and `pageBytes` left a resident page's rounding in the permanent part. On a
 fixture of small tensors and a card that hands out 64 KiB pages those are not
-close: `model.TestDevicePagingSurvivesTheHostPager`'s dense block is 4,176
+close: `engine.TestDevicePagingSurvivesTheHostPager`'s dense block is 4,176
 bytes asked for and 1,376,228 at footprint (twenty-one buffers, each a page:
 seven matrices' two planes and the word each one's empty third plane gets,
 below), the mixture's 7,082,064 and 8,650,712. The gate keeps the tightest
@@ -2487,7 +2487,7 @@ on cuda:0 (tinyllama, four sessions):
 The buffers grew by exactly the free pool and the card's rounding did not move
 at all; only the ledger's reading of it did. `Bytes()` and `Stats` settle
 before they report, the argmax word and the folded head's row offset are
-charged as scratch, and `model.TestConcurrentMultiDeviceDoesNotLeak` holds the
+charged as scratch, and `engine.TestConcurrentMultiDeviceDoesNotLeak` holds the
 two counts the budget is made of apart: the buffers' bytes (`Allocated`) and
 the tier's charges (`BudgetUsed - RoundingBytes`) may each grow by the free
 pool and nothing else. Rounding is left out because it follows the live
@@ -2497,7 +2497,7 @@ buffers (745,959,992 against 711,356,984 + 17,301,504); against a session that
 takes a charge and never refunds it, on the charges.
 
 ★ **AND A THIRD GATE WENT FROM GREEN TO A SKIP AT THE SAME COMMIT, WHICH NO
-RED LINE SHOWED.** `model.TestMoEDeviceReadsOnlyTheBanksItTakes` measures what
+RED LINE SHOWED.** `engine.TestMoEDeviceReadsOnlyTheBanksItTakes` measures what
 one and two blocks cost on an open card and opens a card at each figure. The
 prompt's scratch is halved until it fits beside the first block, so a card
 opened at the measured budget reserved a narrower one than the card it was
@@ -2559,7 +2559,7 @@ when the prompt was pulled down. A shared prefix whose window the device had
 already released restores nothing for that layer and the prompt prefills, as
 it would in vLLM.
 
-★ **WHAT THE GATES READ** (`model.TestWindowedLayersHoldTheirWindow`, 1528
+★ **WHAT THE GATES READ** (`engine.TestWindowedLayersHoldTheirWindow`, 1528
 positions decoded one at a time, window 4, host page 32, device page 256):
 
     fixture          host peak    control kept   device released (want)
@@ -2606,12 +2606,12 @@ Iris Xe that held nothing still cost the pager 1.62 GiB.
       held by the host     0 with no block; 381704, 728840, 1075976, 1423112
                            bytes with 1..4 blocks; 728840 after two come home
       old HostReserved     6.20 GiB with no block placed: FAIL
-    model.TestPageBudgetLosesOnlyWhatAUnifiedDeviceHolds   fake, 32 MiB a block
+    engine.TestPageBudgetLosesOnlyWhatAUnifiedDeviceHolds   fake, 32 MiB a block
       page budget          1073741824 attached with none, 973078528 with 3,
                            1040187392 with 1, the same with a second session
                            attached and closed, 1073741824 detached
       followHost off       the seam up to 3 leaves 1073741824: FAIL
-    model.TestPageBudgetFollowsARealIntegratedGPU   Iris Xe, stories15M q8_0
+    engine.TestPageBudgetFollowsARealIntegratedGPU   Iris Xe, stories15M q8_0
       held, page budget    0.75 MiB attached (the matvec scratch), 45.94 MiB
                            with all 6 blocks, 30.12 MiB with the seam back at 0
                            -- the budget 8 GiB less each, to the byte
@@ -2937,7 +2937,7 @@ converter change is warranted by these numbers.
 ### 16c-3. Is auto-stream a limitation? An audit, and what it removed.
 
 Where a mixture block's routed experts run is now a placement like any other:
-`model.WithExperts("host"|"card")`, `-placement N=DEV%host` / `%card`,
+`engine.WithExperts("host"|"card")`, `-placement N=DEV%host` / `%card`,
 `gpu.WithHybridExperts`, `gpu.WithAutoStream`, and the choice is kept on every
 device (`nn.ExpertPlacer`), so a block that hops tiers, goes home and comes back
 keeps it (`TestOffCardExpertsRelocate`, which counts the off-card runs at each
@@ -3097,7 +3097,7 @@ reach, doubling from 256, never by maxSeq.
 Gates: `sched.TestMemBudgetHonoursEveryLimit` (fake /proc and /sys: cgroup,
 membind, cpuset, others holding memory; reverting the node term fails membind
 and cpuset), `sched.TestKernelBindNodesReadsThisProcess` (passes unbound and
-under `numactl --membind=0`), `model.TestScoreRowsFollowTheReach` (sizing at
+under `numactl --membind=0`), `engine.TestScoreRowsFollowTheReach` (sizing at
 the context fails it), `server.TestAServerUnderLoadStaysUnderItsBound` (the
 ledger of the 1B under 16 distinct prompts with 2 GiB available).
 
@@ -3146,7 +3146,7 @@ to the tier's next device on `d`.
 inside the pause. On the V100 box (two of eight Tesla V100-SXM2-16GB, NV2
 between cuda:0 and cuda:1), Llama-3.2-3B-Instruct Q4_K_M, an 1852-token
 prompt and every block moved at token 80 and back at 160, that pause was
-3.1-5.6 s for 443-462 MB of history (`model.TestMovePause`, both arms in one
+3.1-5.6 s for 443-462 MB of history (`engine.TestMovePause`, both arms in one
 process, alternated, five rounds, tuner off). Where the time went was read off
 the commit before anything was built on it:
 
@@ -3268,7 +3268,7 @@ card sat with room. It is reverted anyway: the gate written for it does not
 DISCRIMINATE (removing the fallback leaves the same placement and the same
 NMSE), so it would have shipped an unmeasured change to default placement on a
 path that already costs a crossing. **An unreachable branch does not justify an
-ungated fix**, and `model.TestTheHeadGetsItsOwnSubmissionWhenItIsNotOnTheLastDevice`
+ungated fix**, and `engine.TestTheHeadGetsItsOwnSubmissionWhenItIsNotOnTheLastDevice`
 skips with all three reasons written down instead.
 
 ★ **AND THE ROW CANNOT BE TAKEN ON THE XEON, WHICH WAS TESTED RATHER THAN
@@ -3350,7 +3350,7 @@ RTX 3050 Ti, 1.885 GiB of budget against 46.23 GiB of weights:
     decode 0.78 tok/s, 85.06 GiB read over 9 tokens
 
 ★★ **WHAT CLOSED IT WAS ONE BUFFER INSTEAD OF FORTY-EIGHT, AND THE ACCOUNTING
-IS THE WHOLE ARGUMENT.** `model.TestDeviceBudgetAccounting` on that container:
+IS THE WHOLE ARGUMENT.** `engine.TestDeviceBudgetAccounting` on that container:
 
     base per block (container max)   26.96 MiB
     one sheet of gate+up+down         1.98 MiB   x10 routed = 19.84 MiB
@@ -3564,7 +3564,7 @@ rescue, 8.5e-01 without.** A `phase@block` injector is what the other three
 need and is owed.
 
 ★ **AND THREE `fmt.Fprintf(os.Stderr, "DBG ...")` WERE IN SHIPPING CODE** on
-that same path (`engine/model/kvpage.go`), from the MigrateRec work. Deleted.
+that same path (`engine/kvpage.go`), from the MigrateRec work. Deleted.
 
 ★★ **AND A PLACED LINEAR BLOCK'S HISTORY HAD NO WAY HOME, WHICH THE DECLINE HAD
 BEEN HIDING.** `nn.LayerDevice` had `MigrateKV` and no twin for the recurrence.
@@ -3720,7 +3720,7 @@ kernel carrying ~3.9 us of event):
   4.6 experts with the default budget and 405 us with a 2 ms spin
   (JITLLM_SPIN_US=2000: 21.5 and 21.7 against 18.1 and 18.7 tok/s,
   alternating). A token whose device made such calls now has the workers spin
-  2 ms (`model.WithHybridSpin`, `sched.Pool.SetSpinFor`): 21.0 and 21.9
+  2 ms (`engine.WithHybridSpin`, `sched.Pool.SetSpinFor`): 21.0 and 21.9
   against 19.2 and 18.7 with the pool's budget.
 - *The host's experts are at the bandwidth.* With the spin, a call costs a
   fixed ~100 us (its four or five pool regions) and ~66 us an expert, 2.9 MB
@@ -3855,7 +3855,7 @@ would be 1.26 GB for a 256-token prompt. For a while a hybrid therefore probed
 only the exact end, and a decision model (d1 = LFM2, Lev = qwen35) restored
 nothing across requests whose boards differed in a few tokens.
 
-Points are captured during prefill now (`engine/model/recpoint.go`): a host
+Points are captured during prefill now (`engine/recpoint.go`): a host
 linear block's summary after the row that lands on a point, in the row loop
 (`recRowPoint`). The spacing is priced per model (`recEvery`): the smallest
 power-of-two multiple of kvChunk at which a point's summaries cost no more than
@@ -4006,7 +4006,7 @@ RESIDENT bytes where it need only be O(model) in bytes READ.
 
 ★ **AND THE TOWER TAKES A PAGE BUDGET, WHICH IS THE HALF THAT IS EASY TO
 FORGET.** Paging it without one just moves the double-spend: `model.Open` and
-`model.OpenTower` each defaulted to `sched.MemBudget()`, so a VLM run had two
+`engine.OpenTower` each defaulted to `sched.MemBudget()`, so a VLM run had two
 containers sizing themselves against the same host bytes with neither knowing
 the other existed -- the same error the Scope section refuses when a scheduler
 ADDS an integrated GPU's heap to the host's. `OpenTower` takes `model.Option`
@@ -4094,7 +4094,7 @@ does for processes and threads, jitllm does for models and blocks:
 ★ **AND "SCHEDULER" IS ALREADY TAKEN IN THIS TREE FOR A DIFFERENT AXIS.** The two
 are orthogonal and only the first exists:
 
-    model.Scheduler     SEQUENCES onto batch rows -- which request occupies which
+    engine.Scheduler     SEQUENCES onto batch rows -- which request occupies which
                         row and when, admission and retirement. Built, driven
                         rather than self-running, no goroutine of its own.
     block placement     BLOCKS onto compute resources, with memory paged. Which
@@ -4170,7 +4170,7 @@ between two devices in one loop (it is per device now, `vulkan.OpenDeviceWith`).
 TOKENS. FIXED** (`gpu.GPU.Attach`, `docs/design/device-sessions.md`).
 `l.kc`/`l.vc` -- the attention history -- sat on the tier's per-BLOCK layer, and
 `nn.LayerDevice.Layers` carries a POSITION and no state identity, so two
-`model.State`s on one tier wrote the same cache at the same positions. Measured
+`engine.State`s on one tier wrote the same cache at the same positions. Measured
 on tinyllama, 22 blocks placed, two sequences interleaved: **NMSE 2.110e-01 and a
 greedy token of 505 where 6231 was right**, with nothing reporting anything.
 Serial single-State use -- everything the engine ships and every board row above
@@ -4206,7 +4206,7 @@ answer right. The assertion has to be the block COUNT.
 paged (`docs/design/device-kv-paging.md`): a batch's rows or one long
 conversation take pages for that session's sequences alone, and a session
 bringing a block home leaves it on the card for every other session using it
-(`docs/design/device-sessions.md`, last section; `model.TestABatchLeavesAnotherSessionAlone`).
+(`docs/design/device-sessions.md`, last section; `engine.TestABatchLeavesAnotherSessionAlone`).
 
 ★ **WHAT IS NOT DONE, NAMED RATHER THAN IMPLIED: concurrent sessions and the
 sessions-per-device BUDGET.** Every session shares one scratch, so a session's
@@ -4214,7 +4214,7 @@ own calls are SERIALISED on a device -- correct, not concurrent. The scratch
 IS charged to the budget, and a prompt chunk's and a ragged step's are reserved
 at placement, so a full card places a block fewer rather than refusing the
 prompt (`tier/scratch.go`, placement.md 15x). Sessions of ONE model wholly on one
-device are the exception: `model.StepRuns` runs their decode tokens, and an
+device are the exception: `engine.StepRuns` runs their decode tokens, and an
 admitted prompt's chunks, as rows of one step, and the server's step loop
 (`server/batch.go`) puts every such generate there; any other session still
 takes the device alone, in turn. How many sessions a card holds at
@@ -4300,7 +4300,7 @@ evicted because nothing has to be. There is no paging-off mode to compare
 against, and a measurement that reports one is measuring a path that no longer
 exists.
 
-The test suite converts (`engine/model/jlm_helper_test.go`) because it has to run
+The test suite converts (`engine/jlm_helper_test.go`) because it has to run
 what ships. Watch for the RULE 10 shape here: most call sites used to `t.Skipf`
 on an open error, so the refusal would otherwise have turned the whole suite
 green in 0.001 s.
@@ -4462,7 +4462,7 @@ O_DIRECT; the dense region and the metadata are not. Count syscalls.
       qwen2vl      non-finite at logit 0
       with pageIn  **0.000e+00** on all four
 
-  `model.TestForwardBatchFaultsItsBlocksIn` is the gate, and it carries the
+  `engine.TestForwardBatchFaultsItsBlocksIn` is the gate, and it carries the
   selection check that matters: a budget that happens to hold the model makes it
   a comparison of a model against itself, and a ZERO budget is UNLIMITED rather
   than empty. It compares against DECODE ON THE SAME TIGHTLY BUDGETED MODEL, so
@@ -4493,11 +4493,11 @@ O_DIRECT; the dense region and the metadata are not. Count syscalls.
 The source comments state the reason; the measurements they used to carry,
 with the machine that produced them, are here verbatim.
 
-- `State.offerRange` (`engine/model/forward.go`), a block another session
+- `State.offerRange` (`engine/forward.go`), a block another session
   placed: "Reading it again cost every new session the whole model from disk
   -- 122 ms of a 166 ms time to first token for Llama-3.2-1B on an RTX 3050
   Ti."
-- `WithPageBudget` (`engine/model/model.go`): "It has to be known at Open, not
+- `WithPageBudget` (`model/model.go`): "It has to be known at Open, not
   after it: when Open read every page before SetPageBudget narrowed the pool,
   a 53 GiB container on a 31 GiB box allocated 53 GiB first and was killed,
   having produced nothing in 27 minutes, while llama.cpp served the same

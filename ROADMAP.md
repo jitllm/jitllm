@@ -50,7 +50,7 @@ classifiers are built on, so it comes before items 13 and 14.
 
 ## 3. Model and request parameters, complete
 
-**Mostly done.** `model.Sampler` has temperature, top-k, top-p, min-p, a
+**Mostly done.** `engine.Sampler` has temperature, top-k, top-p, min-p, a
 repetition penalty with its window, and a seed, and the sampler itself is
 generated code. The server's `GenerateRequest` adds stop strings and a token
 budget. Rope and YaRN parameters come from the container.
@@ -64,9 +64,9 @@ Left: frequency and presence penalties.
 Done:
 - **Model, instance, session.** An instance is the model composed for one
   placement; a session holds one sequence's history and leases an instance
-  per phase from a `model.Scheduler` (an interface; `model.Pool` is the
+  per phase from a `engine.Scheduler` (an interface; `engine.Pool` is the
   default). `docs/design/instances-and-sessions.md`.
-- **Continuous batching.** `model.Batcher` admits sequences, steps every
+- **Continuous batching.** `engine.Batcher` admits sequences, steps every
   leased session's rows together (`StepRuns`), and retires them on a stop or
   a budget, on the CPU, on a card and across a seam.
 - **Ragged positions.** Each row has its own position, rotary table, KV pages
@@ -95,7 +95,7 @@ right shape; jitllm's batch is a property of the State.
 
 **Done, apart from a remote backend and 5a.**
 
-The cache is paged (`engine/model/kvpage.go`): pages sized per layer from the
+The cache is paged (`engine/kvpage.go`): pages sized per layer from the
 kernels, living on whichever device holds their layer, growing a page at a time
 instead of reserving the whole context. A page leaves a tier through the
 user's interface -- `Get(cacheId, layer, index, io.Writer)` plus `Set`/`Drop`
@@ -208,7 +208,7 @@ decode on an RTX 5070 (not measured here). Our streamed Qwen3-Next-80B on a
    tokens checked in one pass, 2.4-3.2 tokens a pass, 1.6-1.8x decode. Our
    converter used to set MTP blocks aside (`convert/qwen35.go`). Built:
    `jitllm run|speed -spec mtp`, with an adaptive draft count that stops
-   speculating where no count wins (`engine/model/spec.go`).
+   speculating where no count wins (`engine/spec.go`).
 4. **Recurrent-state checkpoints for conversations:** at turn boundaries,
    every 16k prompt tokens and at the end of the system prompt, six kept
    (~118 MB each) -- where a hybrid now restores at one point per prompt.

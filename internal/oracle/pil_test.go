@@ -25,7 +25,7 @@ func pilSource(t *testing.T, c pilCase) []byte {
 	if c.Src == "pattern" {
 		return PILPattern(c.W, c.H)
 	}
-	f, err := os.Open(filepath.Join("..", "..", "engine", "model", "testdata", c.Src))
+	f, err := os.Open(filepath.Join("..", "..", "engine", "testdata", c.Src))
 	if err != nil {
 		t.Fatal(err)
 	}

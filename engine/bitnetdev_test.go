@@ -1,0 +1,239 @@
+package engine
+
+import (
+	"fmt"
+	"math"
+	"testing"
+
+	"github.com/jitllm/jitllm/model"
+
+	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/format/jlm"
+)
+
+// bitnetDevViolations are BitNet's features taken out of the model while only
+// the device session runs; the host arm is computed once from the clean
+// model. A tier that ignored one would match the host on the clean arm. An
+// inner norm taken away is a block the tier refuses by name (the plan says
+// the block has one), so the norms' weights are made ones instead: the
+// device must read the block's own.
+func bitnetDevViolations() []c6Violation {
+	return []c6Violation{
+		{"the attention inner norm's weight all ones", func(m *model.Model) func() {
+			return eachLayer(m, func(l *model.Layer) { setVec(l, jlm.RoleAttnSubNorm, onesLike) })
+		}},
+		{"the FFN inner norm's weight all ones", func(m *model.Model) func() {
+			return eachLayer(m, func(l *model.Layer) { setVec(l, jlm.RoleFFNSubNorm, onesLike) })
+		}},
+		bitnetViolations()[2], // SiLU for relu2
+		bitnetViolations()[3], // NORM rotary
+		// The per-token scale is the session's activation window, which the
+		// device takes from the host's JIT (nn.LayerPlan.ActWin).
+		bitnetViolations()[4],
+	}
+}
+
+// TestBitNetOnEveryDevice runs each BitNet fixture with every block and the
+// head on each device present -- cuda, vulkan, metal -- against the host,
+// decode a row at a time and a prefill of the whole prompt, then a partial
+// seam that leaves the last block and the head home, then each feature
+// removed from the device session alone.
+//
+// The device quantizes the same activations per token as the host, but sums
+// in another order, so an activation within a few ulps of an int8 rounding
+// boundary can land on the other side: bitnetNMSE takes such a flip, and the
+// zero-flip positions must read the reduction band.
+//
+// A prompt's chunk is the exception, measured: CUDA takes Q K^T through
+// binary16 tiles (the warp MMA and FlashPrefill70) where decode is f32, and
+// every int8 rounding downstream of that attention turns its 1e-5 band into
+// flips -- 4e-3..8e-3 on these fixtures, against 5e-14 with those tiles
+// refused (NoMMA, NoVolta, NoFlashPrefill). So the prefill arm runs twice:
+// with the tiles at bitnetDevPrefill, and without them at bitnetNMSE, which
+// is the arm that proves the tier's wiring of BitNet exact.
+func TestBitNetOnEveryDevice(t *testing.T) {
+	for _, fx := range bitnetFixtures() {
+		t.Run(fx.model, func(t *testing.T) {
+			m, g, openOpts := openBitNet(t, fx.model, fx.golden, fx.typ)
+			defer m.Close()
+			bitnetOnEveryDevice(t, m, g, openOpts...)
+		})
+	}
+}
+
+// bitnetArm is one run of the device gate: what it runs, the host's answer, the
+// blocks it places (-1: every block and the head), whether its attention stays
+// f32, its bound, and whether it runs without a recording to count the steps
+// the composer served.
+type bitnetArm struct {
+	name    string
+	run     func(*Instance) [][]float32
+	want    [][]float32
+	layers  int
+	f32Attn bool
+	bound   float64
+	noGraph bool
+}
+
+// bitnetDevPrefill is the shipping prefill arm's bound: binary16 Q K^T
+// tiles under per-token int8 activations (see TestBitNetOnEveryDevice).
+const bitnetDevPrefill = 2e-2
+
+func bitnetOnEveryDevice(t *testing.T, m *model.Model, g *c6Golden, io ...Option) {
+	t.Helper()
+	decode := func(st *Instance) [][]float32 {
+		var out [][]float32
+		for _, id := range g.IDs {
+			lg, err := st.Forward(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			out = append(out, append([]float32(nil), lg...))
+		}
+		return out
+	}
+	prefill := func(st *Instance) [][]float32 {
+		lg, err := st.Prefill(g.IDs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return [][]float32{append([]float32(nil), lg...)}
+	}
+	onHost := func(run func(*Instance) [][]float32) [][]float32 {
+		st := testInstance(t, m, len(g.IDs)+1, io...)
+		defer st.Close()
+		return run(st)
+	}
+	// worst is the worst NMSE, and band how many positions read inside the
+	// device's reduction band (1e-6): a flip moves a position far past it.
+	cmp := func(want, got [][]float32) (worst float64, band int) {
+		for p := range want {
+			var num, den float64
+			for i := range want[p] {
+				d := float64(got[p][i] - want[p][i])
+				num, den = num+d*d, den+float64(want[p][i])*float64(want[p][i])
+			}
+			nmse := num / den
+			if math.IsNaN(nmse) || den == 0 {
+				return math.Inf(1), 0
+			}
+			worst = math.Max(worst, nmse)
+			if nmse < 1e-6 {
+				band++
+			}
+		}
+		return worst, band
+	}
+	wantDec, wantPre := onHost(decode), onHost(prefill)
+	nl := m.Cfg.NLayer
+
+	ran := 0
+	for _, spec := range stepDevices() {
+		probe, err := openGPU(t, gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))
+		if err != nil || probe == nil {
+			t.Logf("%s: not present (%v)", spec, err)
+			continue
+		}
+		probe.Close()
+		ran++
+		t.Run(spec, func(t *testing.T) {
+			// layers -1 places every block and the head; n > 0 the first n
+			// and leaves the rest, the head included, on the host.
+			onDevice := func(run func(*Instance) [][]float32, layers int, f32Attn, noGraph bool) ([][]float32, string) {
+				opts := append([]gpu.Option{gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff)},
+					testTierOpts(t)...)
+				if f32Attn {
+					opts = append(opts, gpu.WithConfig(func(c *gpu.Config) {
+						c.NoMMA = true
+					}))
+				}
+				if noGraph {
+					opts = append(opts, gpu.WithConfig(func(c *gpu.Config) { c.NoGraph = true }))
+				}
+				gpux, err := openGPU(t, opts...)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer gpux.Close()
+				st := testInstance(t, m, len(g.IDs)+1, io...)
+				defer st.Close()
+				st.SetDeviceLayers(gpux, layers)
+				want := nl
+				if layers > 0 {
+					want = layers
+				}
+				if n := st.GPULayers(); n != want {
+					return nil, fmt.Sprintf("took %d of %d blocks: %v %v", n, want, st.DeviceDeclines(), gpux.Err())
+				}
+				if layers < 0 && !st.HeadOnDevice() {
+					return nil, "the head stayed on the host: " + gpux.Err()
+				}
+				got := run(st)
+				if n := st.GPULayers(); n != want {
+					t.Fatalf("the session fell to the host (%d blocks left): %v", n, gpux.Err())
+				}
+				if noGraph {
+					composedCovers(t, m, len(g.IDs), want, true, gpux)
+				}
+				return got, ""
+			}
+			arms := []bitnetArm{
+				{"decode", decode, wantDec, -1, false, bitnetNMSE, false},
+				{"prefill, f32 attention", prefill, wantPre, -1, true, bitnetNMSE, false},
+				{"prefill", prefill, wantPre, -1, false, bitnetDevPrefill, false},
+				{"decode, partial seam", decode, wantDec, nl - 1, false, bitnetNMSE, false},
+				{"prefill, partial seam, f32 attention", prefill, wantPre, nl - 1, true, bitnetNMSE, false},
+			}
+			if composedByDefault {
+				// A step a recording replays emits nothing the composer's
+				// counts see: the arms that count run without one, over the
+				// whole seam and a partial one.
+				arms = append(arms,
+					bitnetArm{"decode, no recording", decode, wantDec, -1, false, bitnetNMSE, true},
+					bitnetArm{"decode, partial seam, no recording", decode, wantDec, nl - 1, false, bitnetNMSE, true})
+			}
+			for _, arm := range arms {
+				got, why := onDevice(arm.run, arm.layers, arm.f32Attn, arm.noGraph)
+				if why != "" {
+					t.Fatalf("%s: %s", arm.name, why)
+				}
+				w, band := cmp(arm.want, got)
+				if arm.bound != bitnetNMSE {
+					band = len(arm.want) // the binary16 tiles' band is not the reduction band
+				}
+				if !(w < arm.bound) || band < len(arm.want)/4 {
+					t.Fatalf("%s: worst logit NMSE %.3e, %d of %d positions in the reduction band, against the host",
+						arm.name, w, band, len(arm.want))
+				}
+				t.Logf("%s on %s: worst logit NMSE %.3e, %d of %d positions in the reduction band",
+					arm.name, spec, w, band, len(arm.want))
+			}
+			for _, v := range bitnetDevViolations() {
+				undo := v.mut(m)
+				got, why := onDevice(decode, nl, false, false) // every block; the head may stay home
+				undo()
+				if why != "" {
+					t.Errorf("%s: the device declined the violation rather than running it: %s", v.name, why)
+					continue
+				}
+				bad, _ := cmp(wantDec, got)
+				if !(bad > 10*bitnetNMSE) {
+					t.Errorf("%s: the device arm cannot see it -- worst NMSE %.3e", v.name, bad)
+				}
+				t.Logf("violation %q: worst NMSE %.3e", v.name, bad)
+			}
+		})
+	}
+	if ran == 0 {
+		t.Skip("no device on this host")
+	}
+}
+
+// onesLike is a weight as long as w, every element one.
+func onesLike(w []float32) []float32 {
+	o := make([]float32, len(w))
+	for i := range o {
+		o[i] = 1
+	}
+	return o
+}

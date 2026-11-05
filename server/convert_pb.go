@@ -5,7 +5,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/model"
+
+	"github.com/jitllm/jitllm/engine"
 
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
@@ -357,11 +359,11 @@ func pbSpeculation(p *v1.SpeculationParams) *Speculation {
 	return &Speculation{Enabled: p.Enabled, Draft: max(int(p.DraftTokens), 0)}
 }
 
-func pbSampling(p *v1.SamplingParams) *model.Sampler {
+func pbSampling(p *v1.SamplingParams) *engine.Sampler {
 	if p == nil {
 		return nil
 	}
-	s := &model.Sampler{}
+	s := &engine.Sampler{}
 	if p.Temperature != nil {
 		s.Temp = float64(*p.Temperature)
 	}

@@ -10,7 +10,9 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/model"
+
+	"github.com/jitllm/jitllm/engine"
 	"github.com/jitllm/jitllm/tok"
 )
 
@@ -82,7 +84,7 @@ func readTurn(r *bufio.Reader, w io.Writer) (string, error) {
 
 // repl runs the conversation on st until /bye or end of input. n caps each
 // reply; the session's context caps the conversation.
-func repl(m *model.Model, st *model.Instance, sm *model.Sampler, system string, n int, cached bool, in io.Reader, out io.Writer) error {
+func repl(m *model.Model, st *engine.Instance, sm *engine.Sampler, system string, n int, cached bool, in io.Reader, out io.Writer) error {
 	if !m.HasChatTemplate() {
 		return fmt.Errorf("the model carries no chat template, so there is no conversation to hold; " +
 			"give a prompt and it completes it instead")
@@ -90,7 +92,7 @@ func repl(m *model.Model, st *model.Instance, sm *model.Sampler, system string, 
 	// The history's pages are restored from here at every turn. A cache key
 	// of its own, so nothing outside this process names these pages.
 	if !cached {
-		st.SetKVStore(model.NewMemStore())
+		st.SetKVStore(engine.NewMemStore())
 		if err := st.SetCacheKey("repl"); err != nil {
 			return err
 		}
@@ -173,7 +175,7 @@ func repl(m *model.Model, st *model.Instance, sm *model.Sampler, system string, 
 
 // replyTo prefills ids onto a reset session and streams the reply to out until
 // the model ends it, n tokens, the context, or stop.
-func replyTo(m *model.Model, st *model.Instance, sm *model.Sampler, ids []int32, n int, stop *atomic.Bool, out io.Writer) (string, error) {
+func replyTo(m *model.Model, st *engine.Instance, sm *engine.Sampler, ids []int32, n int, stop *atomic.Bool, out io.Writer) (string, error) {
 	st.Reset()
 	logits, err := st.PrefillCached(ids)
 	if err != nil {

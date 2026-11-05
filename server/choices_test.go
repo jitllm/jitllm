@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine"
 	"github.com/jitllm/jitllm/internal/oracle"
 )
 
@@ -29,7 +29,7 @@ func TestGenerateLogprobsAreTheModelsRawDistribution(t *testing.T) {
 	var prompt int
 	err := e.Generate(context.Background(), GenerateOptions{
 		ModelID: "small", Prompt: Prompt{Kind: PromptText, Text: story}, MaxTokens: 12,
-		Sampling: &model.Sampler{Temp: 0.9, Seed: 5}, Logprobs: true, TopLogprobs: 4,
+		Sampling: &engine.Sampler{Temp: 0.9, Seed: 5}, Logprobs: true, TopLogprobs: 4,
 	}, func(ev Event) error {
 		switch ev.Kind {
 		case EventStarted:
@@ -51,7 +51,7 @@ func TestGenerateLogprobsAreTheModelsRawDistribution(t *testing.T) {
 	if len(ids) != prompt {
 		t.Fatalf("the prompt encodes to %d tokens here and %d in the generate", len(ids), prompt)
 	}
-	st := lm.m.NewInstance(len(ids) + len(steps) + 1)
+	st := testInstance(t, lm.m, len(ids)+len(steps)+1)
 	defer st.Close()
 	logits, err := st.Prefill(ids)
 	if err != nil {

@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	mdl "github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine"
 
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
@@ -16,8 +16,8 @@ import (
 // own byte counts, not the allocator's RSS. Sessions are histories and hold
 // none.
 func scratchBytes(e *Engine, lm *LoadedModel) (states, model uint64, n int) {
-	lm.inst.With(func(in *mdl.Instance) { states = in.ScratchBytes() })
-	return states, lm.m.StepScratchBytes(), 1
+	lm.inst.With(func(in *engine.Instance) { states = in.ScratchBytes() })
+	return states, lm.stepScratchBytes(), 1
 }
 
 // TestHostBatchScratchDoesNotGrowWithRows: a burst of sixteen concurrent
@@ -25,7 +25,7 @@ func scratchBytes(e *Engine, lm *LoadedModel) (states, model uint64, n int) {
 // model's instance holding no more step scratch than one request alone left
 // it, and the model one step's scratch for the next host step: memory follows
 // the rows in flight, not the widest burst the instance ever ran. Counted on
-// the engine's own bytes (Instance.ScratchBytes, Model.StepScratchBytes).
+// the engine's own bytes (Instance.ScratchBytes, Instance.StepScratchBytes).
 func TestHostBatchScratchDoesNotGrowWithRows(t *testing.T) {
 	e, lm, c := hostBatchEngine(t, "Llama-3.2-1B-Instruct-Q4_K_M.jlm", Config{DefaultMaxSeq: -1, NoMemCache: true}) // -1: the model's whole context
 	base := strings.Repeat("The little dog ran to the park and played with a red ball. ", 10)

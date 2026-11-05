@@ -3,7 +3,7 @@
 package engine
 
 import (
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine"
 	"os"
 	"strings"
 	"testing"
@@ -67,7 +67,7 @@ func TestRelocationFollowsTheDeviceChoice(t *testing.T) {
 		e.Send(session.ChatRequest{Prompt: "Once upon a time", Reply: reply, MaxTokens: 4})
 		pump(t, sh, 90*time.Second, "the turn", func() bool { return !sh.Store.Busy.Get() })
 		var got bool
-		e.inspect(func(st *model.Instance) { got = st.Relocating() })
+		e.inspect(func(st *engine.Instance) { got = st.Relocating() })
 		if got != tc.want {
 			t.Errorf("devices %q: relocation %v after a turn, want %v", tc.spec, got, tc.want)
 		}

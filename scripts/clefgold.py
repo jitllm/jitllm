@@ -1,5 +1,5 @@
 """Clef's goldens, from Clef's own code (joint_schema_model.py in
-Cloudflare/clef-flash), for engine/model's decision gates.
+Cloudflare/clef-flash), for the engine's decision gates.
 
     python -I scripts/clefgold.py fixture <clef_dir> <requests_dir> <out_dir>
     python -I scripts/clefgold.py real    <clef_dir> <requests_dir> <out_dir>

@@ -37,7 +37,7 @@
 #
 #   *.jlm containers. Tests that name one (Llama-3.2-1B-Instruct-Q4_K_M.jlm,
 #     stories260K.jlm, qwen35/Qwen3.5-0.8B-Q4_K_M.jlm, ...) read the container
-#     of the GGUF with the same stem. The engine/model gates write it beside
+#     of the GGUF with the same stem. The engine gates write it beside
 #     the GGUF on first use; or convert it yourself:
 #         go run ./cmd/jitllm convert <dir>/<name>.gguf
 #     A VLM container takes its projector as the second argument:

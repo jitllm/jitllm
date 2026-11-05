@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine"
 	"github.com/jitllm/jitllm/internal/testdevices"
 )
 
@@ -47,7 +47,7 @@ func TestStepRowsAreTheirOwn(t *testing.T) {
 		}
 		long := min(900, int(c.NCtx)-dec-2)
 		a, b, l := mk(1, 61), mk(2, 29), mk(3, long)
-		state := func() *model.Session {
+		state := func() *engine.Session {
 			s, err := gl.e.CreateSession(SessionOptions{ModelID: gl.lm.id})
 			if err != nil {
 				t.Fatal(err)
@@ -58,10 +58,10 @@ func TestStepRowsAreTheirOwn(t *testing.T) {
 		// lone runs a step of one instance the server's way (model.StepRuns),
 		// its prompt through Prefill and a token through Forward.
 		lone := false
-		step := func(runs ...model.Run) [][]float32 {
-			stepf := model.StepJoint
+		step := func(runs ...engine.Run) [][]float32 {
+			stepf := engine.StepJoint
 			if lone && len(runs) == 1 {
-				stepf = model.StepRuns
+				stepf = engine.StepRuns
 			}
 			out, err := stepf(runs)
 			if err != nil {
@@ -75,15 +75,15 @@ func TestStepRowsAreTheirOwn(t *testing.T) {
 		}
 		// run is a step's run of st's, its session leased for the phase the
 		// server's loop takes for it.
-		run := func(st *model.Session, toks []int32) model.Run {
-			p := model.PhaseGenerate
+		run := func(st *engine.Session, toks []int32) engine.Run {
+			p := engine.PhaseGenerate
 			if len(toks) > 1 {
-				p = model.PhasePrefill
+				p = engine.PhasePrefill
 			}
 			if err := st.Acquire(context.Background(), p); err != nil {
 				t.Fatal(err)
 			}
-			return model.Run{Session: st, Tokens: toks, Logits: true}
+			return engine.Run{Session: st, Tokens: toks, Logits: true}
 		}
 		argmax := func(x []float32) int32 {
 			best := 0
@@ -109,13 +109,13 @@ func TestStepRowsAreTheirOwn(t *testing.T) {
 			if chunk < 0 {
 				// The prompt but its last token through Prefill, its last token
 				// joint: Prefill's blocks without its head.
-				if _, err := model.StepRuns([]model.Run{run(sa, pa[:len(pa)-1])}); err != nil {
+				if _, err := engine.StepRuns([]engine.Run{run(sa, pa[:len(pa)-1])}); err != nil {
 					t.Fatal(err)
 				}
 				pa = pa[len(pa)-1:]
 			}
-			sts := make([]*model.Session, len(others))
-			runs := []model.Run{}
+			sts := make([]*engine.Session, len(others))
+			runs := []engine.Run{}
 			next := make([]int32, len(others)+1)
 			for i, o := range others {
 				sts[i] = state()

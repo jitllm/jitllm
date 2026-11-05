@@ -144,7 +144,7 @@ A margin of 1.33 is not a near-tie, so nothing about this was arguable -- and ye
 tree passed. **The reference tier is an oracle for the KERNELS, not for the ARCHITECTURE.** float64
 reference, generated AVX2, and GPU blocks all ran the same wrong rotation and agreed with each other
 to the bit, which is exactly what `TestPlacementInvariance` checks. Only an independent
-implementation of the same model can see this class of bug, and `model.TestGreedyMatchesLlamaCpp`
+implementation of the same model can see this class of bug, and `engine.TestGreedyMatchesLlamaCpp`
 (the exported-API one, in `llamacpp_test.go`) is now that: it decodes 20 greedy tokens on both
 engines and compares TOKEN IDS, re-tokenizing llama.cpp's text with jitllm's own tokenizer.
 
@@ -284,7 +284,7 @@ violation that "passes" instantly is not a passing violation; check the subtest 
 
 ## ★ RULE 7f: ATTENTION BIASES ARE LOADED AND ADDED, ON BOTH TIERS. THE DEVICE DOES NOT DECLINE.
 
-`engine/model/model.go` asked only for `.weight`. qwen2 puts biases on q, k and v, `loadConfig`'s comment
+`model/model.go` asked only for `.weight`. qwen2 puts biases on q, k and v, `loadConfig`'s comment
 claimed they "are loaded if present", and `grep -n '\.bias' model/` returned NOTHING -- so a qwen2
 model ran with them silently dropped. Fluent, wrong output; no oracle caught it because RULE 7's
 table has qwen3, which genuinely has none, and no qwen2 file.
@@ -374,7 +374,7 @@ RULE 14a said the same thing about a graph: read the artefact, not the descripti
 
 ## ★ RULE 7h: THE TOWER LOADER, AND THE MLP TENSOR NAMES ARE INVERTED IN THE FILE.
 
-`model.OpenTower` reads an mmproj into a `Tower`: the `clip.*` header, twelve blocks of
+`engine.OpenTower` reads an mmproj into a `Tower`: the `clip.*` header, twelve blocks of
 (LayerNorm, q/k/v/o with biases, an UNGATED MLP), the position embeddings and the projector. It is
 a separate entry point because it is a separate FILE -- libmtmd's contract is two files and one
 equation, `n_embd(text) == n_embd(mmproj)` -- and `Open` refuses arch `clip` for the same reason.
@@ -496,7 +496,7 @@ same-size test images. Its first node settles the bug on its own: `IM2COL` on a 
 `1.0000, 0.0000, 1.0000`, which is channel-planar; interleaved would print `1, 1, 1`, because pixel
 (0,0) is white on all three channels.
 
-`model.TestTowerMatchesLlamaCpp` is that comparison, pinned: `node_395` (the projector output) at 36
+`engine.TestTowerMatchesLlamaCpp` is that comparison, pinned: `node_395` (the projector output) at 36
 sampled positions plus the sum, relative-RMS bar 0.05. Run against the violation -- the interleaved
 gather -- it reads **RMS 0.5458 and a sum 74.9% off**; correct it reads well inside. The bar is
 percent rather than ulp because jitllm quantizes activations to int8 per matmul (~0.4% each, RULE 7i)
@@ -892,7 +892,7 @@ pinned out it is bit equality.
 
 **★ 3. THE VISION FALLBACK SKIPPED THE GENERATED MatVec** -- straight to
 `nn.MatVec`, the single-core float64 reference, whenever the batched GEMM
-declines. Its comment said "exactly as model.State.mm does it" and `State.mm`
+declines. Its comment said "exactly as engine.State.mm does it" and `State.mm`
 falls back through `s.mv`, which tries `JIT.MatVec` first. **RULE 15f: a comment
 claiming parity with another path is a claim ABOUT that path, and it rots.** The
 F32 case is concrete -- the GEMM has no F32 emitter and both CPU architectures
@@ -1600,7 +1600,7 @@ put the router in; RULE 14j built that field and it runs there now.
 
 **★ 14f. TWO PRE-EXISTING BUGS BLOCKED THIS, AND ONE OF THEM WAS HIDING AS A SLOW MACHINE.**
 
-`go test ./engine/model` had been TIMING OUT at the 600 s package default. `nn.ResetForTest` reset the
+`go test ./engine` had been TIMING OUT at the 600 s package default. `nn.ResetForTest` reset the
 `sync.Once` but never cleared `fastDisabled`, and `TestPlacementInvariance` ends every subtest with
 `decode(true)` -- which sets `JITLLM_DISABLE_FAST=1` and consumes the Once. `t.Setenv` restores the
 environment; the package variable it was read into stays true forever, so every later `NewJIT`
@@ -1817,7 +1817,7 @@ are refused by name: qwen3-next (not in the table), a qwen3moe with dense layers
 **★ THE ORACLE IS THE REFERENCE CLASS, NOT A SECOND FORMAT.** The cross-format gate above needs a
 GGUF of the same weights and one model on the box has both. `scripts/hfgold.py` runs
 `AutoModelForCausalLM` (CPU torch in the reference venv, `$JITLLM_HF_PY`) over fixed ids in float32 and
-records the logits; `model.TestSafetensorsMatchTransformers` compares every position. With the KV
+records the logits; `engine.TestSafetensorsMatchTransformers` compares every position. With the KV
 cache at f32 the correct arms sit at **1.5e-13 to 1.1e-11**, on amd64 AND the M4.
 
 **★ AND ITS FIRST READING WAS A LIVE BUG IN AN ARCHITECTURE ALREADY SHIPPED.** qwen3 read
@@ -1964,7 +1964,7 @@ than llama.cpp's clamp.
 
 An entry is gated
 against transformers itself: `scripts/hfgold.py` records the reference's logits
-and tokenizer ids, `model.TestSafetensorsMatchTransformers` compares them (bound
+and tokenizer ids, `engine.TestSafetensorsMatchTransformers` compares them (bound
 1e-9 with an f32 cache, set by violations). A new entry needs a fixture and a
 golden, or it is a claim with nothing behind it.
 `docs/engineering-history/model-correctness.md` has the measurements.
@@ -2005,7 +2005,7 @@ machines can therefore NEVER be byte-identical, and "same size, different hash"
 two CORRECT conversions. Compare the weight region, not the file.
 
 ★★ **WHAT ACTUALLY BROKE WAS THE TEST SUITE'S CONVERTER CACHE, AND IT IS FIXED
-(`engine/model/jlm_helper_test.go`, `TestCachedContainerWasWrittenByThisBuild`).**
+(`engine/jlm_helper_test.go`, `TestCachedContainerWasWrittenByThisBuild`).**
 `jlmOfPair` reused a container whenever it was newer than its GGUF -- and a GGUF
 never changes, so that condition can never expire anything. The M4 was holding a
 container written before the llava converter landed, and serving it to every
@@ -2345,7 +2345,7 @@ gemma-3-1b's `attn_q` is. That is fixed and gated
 (`gpu.TestEveryPackedFormatReachesTheDevice`).
 
 What is left is a host-vs-device difference **on ONE block**, which is where it
-stops being reassociation. `model.TestDeviceMatchesHostOnABiasedModel` places a
+stops being reassociation. `engine.TestDeviceMatchesHostOnABiasedModel` places a
 single block and compares logits:
 
 | model | logit NMSE, 1 block | max\|d\| |
@@ -2512,7 +2512,7 @@ cannot use.
 
 ## ★ THE TOKENIZER IS NOT A JIT TARGET, MEASURED; IT WAS THREE DATA-STRUCTURE COSTS.
 
-Asked whether Encode should be generated code. `model.TestTokenizerCost`
+Asked whether Encode should be generated code. `engine.TestTokenizerCost`
 (`JITLLM_TOKCOST=1`) prices it on ten vocabularies over AGENTS.md, forward.go
 and a special-token/CJK/emoji mix, and `JITLLM_TOKDUMP` writes every id so two
 builds can be compared token for token. Before: 0.29-0.93 M tok/s on one core
@@ -2651,7 +2651,7 @@ honour it; llama.cpp floors and ceils the correction range for every model
 `nn.TestYarnFreqsMatchTransformers` holds the divisors to transformers' own
 `_compute_yarn_parameters` both ways.
 
-**The gate** is `model.TestGPTOSSMatchesLlamaCppIntermediates`, one token ("The")
+**The gate** is `engine.TestGPTOSSMatchesLlamaCppIntermediates`, one token ("The")
 on gpt-oss-20b-Q4_K_M, sums of successive nodes against llama-eval-callback:
 
     attn_norm-0      -27.703668  llama.cpp  -27.703680   4.5e-07
@@ -2688,7 +2688,7 @@ read no rotary scaling key for any architecture. gemma-3-4b ships
 angles by 8 while leaving the sliding ones at 1. Measured on "The capital" (three
 positions; position 0 cannot see a rotary scale), the rotated K of global layer 5
 summed to -21.585 unscaled and -18.775 scaled against llama.cpp's -18.903; local
-layer 4 is -47.279 either way. `model.TestGemma3GlobalLayersAreLinearlyScaled`
+layer 4 is -47.279 either way. `engine.TestGemma3GlobalLayersAreLinearlyScaled`
 holds it at 3%. The catalog gate had passed that model -- its answers stayed
 fluent.
 
@@ -2775,7 +2775,7 @@ selection bias to its logits, DeepSeek biasing its weights. Both fluent.
 
 ★ **AND THE PAGING HALF NEEDED ITS OWN GATE, BECAUSE NO TEACHER-FORCED ONE CAN
 SEE IT.** Every fixture is a few megabytes, so every block stays resident and
-no MLA weight is ever re-bound. `model.TestMLARunsUnderAPageBudget` opens the
+no MLA weight is ever re-bound. `engine.TestMLARunsUnderAPageBudget` opens the
 same container resident and at a ONE-BYTE budget -- where every block faults on
 every visit -- and demands bit-identical logits. Against the two violations it
 was written for it reads *"no host kernel reads ...q_a_proj.weight (F32,
@@ -2934,7 +2934,7 @@ LAST REFUSAL AND IT IS DELETED.** `mlaProjectRows` is prefill's
 batched projection with the row's slot and position taken from a function,
 because **that is the only thing the two callers disagree about**: prefill's n
 rows are successive positions of ONE sequence and a batch's n rows are n
-DIFFERENT sequences. `model.TestMLABatchMatchesDecode` is the RULE 11c gate --
+DIFFERENT sequences. `engine.TestMLABatchMatchesDecode` is the RULE 11c gate --
 three sequences, six steps, NMSE **0.000e+00** on all three fixtures AND on the
 real 11.9 GiB V2-Lite, and **1.26-1.89 against a violation that gives every row
 slot 0.**
@@ -2988,7 +2988,7 @@ WHICH IS THE PART WORTH KEEPING: THEY ASSERT *EVERY BLOCK PLACED*.** With 3 of 3
 blocks on the card NO host attention runs, so the wrong kernels are emitted and
 never called. The failure needs a PARTIAL seam -- the one configuration a gate
 whose assertion is "the count is NLayer" excludes by construction.
-`model.TestMLAStepsTheKVDownAtTheRightWidths` places **ONE** block on purpose
+`engine.TestMLAStepsTheKVDownAtTheRightWidths` places **ONE** block on purpose
 and leaves the rest home: clean 0.0018-0.0042, and **3.28-5.62 against the
 violation** on the fixtures, 22.9 on the real model.
 
@@ -3001,7 +3001,7 @@ cover that knob's default, and the pin is invisible in a green line.**
 
 ★ **THE GATE FOR THE SCALE DOES NOT NEED THAT MODEL, WHICH IS THE PART WORTH
 COPYING.** No fixture on this box carries `rope_scaling`, and waiting for one to
-exist is how this survived. `model.TestAttnScaleReachesEveryPath` PERTURBS
+exist is how this survived. `engine.TestAttnScaleReachesEveryPath` PERTURBS
 `Cfg.AttnScale` by V2-Lite's own 1.5896 and demands all three paths move
 together -- so an 80 MB F32 fixture becomes the model that has the feature, in a
 third of a second. It reads 2.460e-02 against the two lines this replaced.
@@ -3069,7 +3069,7 @@ through one API, `Model.NewEmbedder` / `jitllm embed`:
     qwen3-embedding,    the ordinary decoder graph through prefill, with the
     EmbeddingGemma      container's pooling bits (jlm.FlagPoolMean/CLS/Last) and
                         jlm.FlagNonCausal deciding the readout and the mask
-                        (engine/model/embedstate.go)
+                        (engine/embedstate.go)
 
 Goldens: scripts/embedgold.py, six texts (accents, CJK, punctuation, a 62-token
 paragraph) plus a ~600-token one for the long-context models. Worst cosine per
@@ -3125,8 +3125,8 @@ does at max_seq_length).
 nomic-bert are real graphs (post-norm encoder, `engine/model/encoder.go`, no decoder
 State); qwen3-embedding and EmbeddingGemma are qwen3 and gemma3 whose container
 carries pooling bits and `FlagNonCausal` (`jlm.FlagPool*`), run through prefill
-(`engine/model/embedstate.go`). One API serves both: `Model.NewEmbedder`, `jitllm
-embed`. The gate is `model.TestEmbeddingsMatchReference` against llama.cpp AND
+(`engine/embedstate.go`). One API serves both: `Model.NewEmbedder`, `jitllm
+embed`. The gate is `engine.TestEmbeddingsMatchReference` against llama.cpp AND
 float32 sentence-transformers goldens (`scripts/embedgold.py`), with
 `TestEmbeddingGateDiscriminates` running the violations in-process.
 `docs/engineering-history/model-correctness.md` has the numbers, including why
@@ -3278,7 +3278,7 @@ answer in JSON stays an answer. A stream sends the text that cannot become a
 call as it arrives, and each call as soon as its markup closes.
 
 **The prompt is held to transformers byte for byte**
-(`model.TestToolPromptMatchesTransformers`, goldens from `scripts/toolgold.py`
+(`engine.TestToolPromptMatchesTransformers`, goldens from `scripts/toolgold.py`
 through `render_jinja_template` on each container's own template): Qwen2.5,
 Qwen3 and Llama-3.2 match exactly. Getting there found two engine bugs:
 
@@ -3309,7 +3309,7 @@ The first parser knew two shapes, Hermes `<tool_call>{...}` and a bare JSON
 call opening the reply. A model's syntax is now a property read from its chat
 template (`model.ToolSyntaxOf`) -- the markup the template writes or describes
 is what the weights were trained to emit -- rather than every parser tried on
-every reply. Twenty-four are read (`engine/model/toolsyntax.go`): Hermes, the
+every reply. Twenty-four are read (`model/toolsyntax.go`): Hermes, the
 Llama 3.x JSON reply, the Qwen3-Coder XML (Qwen3.5, Nemotron 3), Seed-OSS,
 GLM-4.5+ and Ling, MiniMax-M2, DeepSeek V3/R1 and V3.1/V3.2 tool tokens,
 DeepSeek V4's DSML, Kimi-K2's sections, Kimi-K3's XTML, harmony, Mistral v0.3
@@ -3618,7 +3618,7 @@ the FFN norm (`retarget`). The gate is sigmoid WHATEVER the file says:
 transformers' `Glm4MoeTopkRouter`, vLLM and SGLang all hardcode it, and a file
 stating softmax is refused (`convert/moefamily.go`). Gated on `synth-glm4moe`
 (`scripts/moegold.py`: transformers' class, the selection bias RANDOMISED,
-llama.cpp's converter) in `model.TestMoEFamiliesMatchTransformers`,
+llama.cpp's converter) in `engine.TestMoEFamiliesMatchTransformers`,
 `TestMoEFamilyFeaturesAreLoadBearing` and `TestMoEFamiliesOnEveryDevice`;
 GLM-4.5-Air Q4_K_M is 20 of 20 teacher-forced against llama.cpp (V100 box).
 **qwen2moe** (Qwen1.5-MoE, Qwen2-57B) is qwen2's attention with a softmax
@@ -3804,7 +3804,7 @@ box's disk nor its card holds; it is gated on its fixture alone.
 not a device defect: SETTLED against llama.cpp.** The same fixtures converted
 to Q8_0 read max|dlogit| **2.86e-06** with 0/32 disagreeing, so the wiring is
 right; what the real checkpoints add is a model that amplifies any
-reduction-order difference. `model.TestPostNormDeviceErrorIsAmplification`
+reduction-order difference. `engine.TestPostNormDeviceErrorIsAmplification`
 measures it three ways, teacher-forced over one 128-token chunk, the
 log-softmax over llama.cpp's own top-16-nat window (llama-perplexity's
 `--kl-divergence-base`), every device arm with an f32 KV cache against an
@@ -3910,9 +3910,9 @@ reads `Config.Flags` 0 against 128 (seed_oss without NEOX), 132 against 1048708
 (exaone4 without NoPE on the global layer), and q/k bytes differing in every
 block (ministral3 unpermuted).
 
-Gated against transformers by `model.TestSafetensorsMatchTransformers`
+Gated against transformers by `engine.TestSafetensorsMatchTransformers`
 (scripts/hfgold.py fixtures, 32000-token donor, F32 cache, bound 1e-9), with
-`model.TestSafetensorsDenseFamilySelected` asserting each container carries its
+`engine.TestSafetensorsDenseFamilySelected` asserting each container carries its
 feature:
 
     synth-hf-smollm3     8 positions   1.17e-12   NoPE on layers 2 and 5
@@ -4003,7 +4003,7 @@ has the numbers and the RULE 7m choice for EXAONE's window.
 
 ## The no-Go-compute sweep reported SKIP for the whole box when one file was out of scope
 
-`model.TestEveryModelRunsGenerated` is the no-Go-compute principle's model gate,
+`engine.TestEveryModelRunsGenerated` is the no-Go-compute principle's model gate,
 and on a full-directory run it printed `--- SKIP` after 17 models. The cause was
 one line: it converted every model through `jlmOf` on the PARENT test, and
 `jlmOf` turns a scope refusal (`convert.ErrNotImplemented`) into `t.Skipf`. The
@@ -4298,7 +4298,7 @@ weights: 21 config fields agree and every tensor is byte-identical (78, 54, 48,
 29, 47 and 35 tensors). Dropping the fold on the safetensors path makes 6
 tensors differ there and reads 3.3e-03 / 8.2e-03 against transformers from
 position 1 -- position 0 is exact, the rotary being the identity there.
-`model.TestSafetensorsMatchTransformers`, decode against each class: glm4moe
+`engine.TestSafetensorsMatchTransformers`, decode against each class: glm4moe
 7.96e-12, qwen2moe 1.18e-12, ernie45moe 1.09e-11, ernie45 3.71e-13,
 hunyuanmoe 3.82e-11, hunyuan 5.82e-12 (the goldens, testdata/golden/hf/*-hf,
 are scripts/hfgold.py over moegold's saved fixtures, linked into the model
@@ -4306,7 +4306,7 @@ directory as <name>-hf). The real Hunyuan-0.5B-Instruct (bf16 safetensors,
 tencent's repo) converts and is 20 of 20 teacher-forced against llama.cpp on
 bartowski's Q4_K_M.
 
-`model.TestSafetensorsQ8MatchTransformers` was red on synth-glm4moe-hf at
+`engine.TestSafetensorsQ8MatchTransformers` was red on synth-glm4moe-hf at
 1.47e-01 against its 5e-02 bound -- at ONE position: position 7 jumps 50x while
 positions 0-6 read 1.1e-03..3.1e-03, and the float path reads 7.96e-12 at all
 eight. It is a top-k flip, read off the router rather than off that shape
@@ -5536,7 +5536,7 @@ Gemma4TextModel and llama.cpp's gemma4.cpp, which agree:
 
 | piece | how it runs |
 |---|---|
-| per-layer embeddings | a second token table NLayer*PLEDim wide, plus a projection of the scaled embedding normed per layer slice, `(prj + tok)/sqrt(2)` (engine/model/ple.go); each block gates its slice in after the FFN: `x += post_norm(W_out(gelu(W_gate x) * pl[li]))`. The inputs are built on the host at the embedding and handed to the device with the residual (`nn.LayerInputDevice`); the device gathers each block's slice (`kernels.PLESlice`) |
+| per-layer embeddings | a second token table NLayer*PLEDim wide, plus a projection of the scaled embedding normed per layer slice, `(prj + tok)/sqrt(2)` (model/ple.go); each block gates its slice in after the FFN: `x += post_norm(W_out(gelu(W_gate x) * pl[li]))`. The inputs are built on the host at the embedding and handed to the device with the residual (`nn.LayerInputDevice`); the device gathers each block's slice (`kernels.PLESlice`) |
 | KV sharing | the last `shared_kv_layers` blocks compute q alone and attend to the history of the last earlier block of their own kind (`Config.KVSource`, transformers' store_full_length_kv); they own no cache on either tier, and their k/v tensors are dropped at conversion |
 | the double-wide FFN | those blocks' FFN is twice NFFN (`Flag2DoubleFFN`, `Config.NFFNAt`); the device keeps them in a scratch set of their own (geoKey's wide bit beside the sliding one) |
 
@@ -6344,7 +6344,7 @@ step) asks `LayerKind.Recurrent()`. Two RULE 7m choices are written down: the
 gated norm is GROUPED (mamba_ssm and llama.cpp; transformers' Mamba2 and
 Granite classes are not, and agree at one group) and dt is NOT clamped
 (llama.cpp; transformers clamps on a prompt only). Gated against transformers
-by `scripts/ssmgold.py` in `model.TestSSMFamiliesMatchTransformers`;
+by `scripts/ssmgold.py` in `engine.TestSSMFamiliesMatchTransformers`;
 `docs/engineering-history/model-correctness.md` has the measurements.
 
 ## Vision as blocks: the tower on the one runner
@@ -6663,7 +6663,7 @@ and `PrepLayer` is called from `offerRange` and nowhere else in the package.
   puts it last and shifts every patch's position (NMSE 0.18-0.25 against
   transformers). `towerCLSLast` exists only for node-by-node oracle gates.
 - **A bidirectional run in a causal prompt is a per-row key count** (`Span.Bidir`,
-  `nn.KeyRunDevice`, `engine/model/bidir.go`): a prefill chunk never cuts one, a
+  `nn.KeyRunDevice`, `engine/bidir.go`): a prefill chunk never cuts one, a
   device that cannot honour it does not run the chunk, and the device forgets the
   runs with the prompt. One row at a time is causal by construction, so a chunk
   holding a run never takes the per-row retry.
@@ -6937,7 +6937,7 @@ absent), `FlagParallel` (attention and FFN read the block INPUT; the FFN norm
 when the block has one, the attention's normed row when not), an UNGATED FFN
 (the absent gate tensor) with `ffn_up/down` biases, norm and head biases.
 Gated by `scripts/c6gold.py` -- transformers' own class, written to GGUF by
-llama.cpp's OWN `convert_hf_to_gguf.py` -- in `model.TestC6MatchesTransformers`
+llama.cpp's OWN `convert_hf_to_gguf.py` -- in `engine.TestC6MatchesTransformers`
 and `TestC6FeaturesAreLoadBearing`. It runs on CUDA and Vulkan with every
 block and the head placed (`TestC6OnEveryDevice`): the vision tower's LayerNorm
 and ungated-MLP kernels serve the text block (`tier.lnBlock`/`ungatedFFN`), the
@@ -7007,14 +7007,14 @@ residual add), attention.scale (the score, in place of 1/sqrt(head_dim)) and
 logit_scale (DIVIDES the logits). An arch code of its own (`jlm.ArchGranite`) so
 an older reader refuses the container rather than running it at scale one.
 **The greedy gate cannot see two of the four** -- a positive logit divisor moves
-no argmax -- so `model.TestGraniteMatchesLlamaCppValues` holds block 0's output
+no argmax -- so `engine.TestGraniteMatchesLlamaCppValues` holds block 0's output
 and the last logits to `llama-eval-callback`'s values. A mixture has no add of
 its own to scale: the residual scale rides the router's routed scale
 (`Config.routedScale`), and `nn.MoERouteJIT` refuses a gate whose scale differs
 from the one its route was built for. On a device the residual scale is a
 scaled residual add (`kernels.AddScaled`) in place of the fused ones, on every
 backend and every path (decode, a prompt chunk, a step across sessions);
-`model.TestGraniteScalesOnEveryDevice` holds it to the host at 1e-14 on f32
+`engine.TestGraniteScalesOnEveryDevice` holds it to the host at 1e-14 on f32
 fixtures and `TestGraniteOnEveryDevice` on the real models, a violation per
 scale. `docs/engineering-history/gpu-kernels.md` ("Granite on the device");
 `convert/granite.go`.
@@ -7065,7 +7065,7 @@ smoke-test import "succeeded" without loading the module that was broken.
 
 ★★★ **AND THE DEVICE TIER HAD THE SAME ROPE BUG, WHICH IS RULE 8a's POINT
 EXACTLY: A GRAPH CHANGE LANDED ON ONE TIER IS SILENTLY ABSENT FROM THE OTHER.**
-Fixing `engine/model/mla.go` alone left `engine/device/gpu` rotating, and `jitllm verify
+Fixing `model/mla.go` alone left `engine/device/gpu` rotating, and `jitllm verify
 -devices cuda:0` read **max|dlogit| 0.929 with 8 of 32 argmaxes flipped**
 against synth-deepseek's 0.00195 on the same command -- 475x, which is what
 separates a real bug from this file's own 0.2-0.94 reduction-order band. With
@@ -7076,12 +7076,12 @@ REASON THE HOST FIX ALREADY LEARNED.** `mlaRopeK` rotates straight into the KV
 cache row's tail and `mlaRopeQ` into the absorbed query's rotary half, so
 omitting the launches leaves both unwritten. `kernels.CopyAtRowsT`'s own
 comment records the same trap for a vision tower, which has no rotary for the
-same reason. `model.TestNoPEMLAOnEveryDevice` is the RULE 11c gate: cuda and
+same reason. `engine.TestNoPEMLAOnEveryDevice` is the RULE 11c gate: cuda and
 vulkan at worst logit NMSE 1.0e-12 and 9.4e-13, and it fails at 1.369e-02 /
 0.531 against the rotation restored.
 
 ★★★ **AND KDA RUNS ON THE DEVICE: 3 OF 3 BLOCKS ON CUDA, 2 OF THEM LINEAR,
-worst logit NMSE 4.993e-12 AGAINST THE HOST** (`model.TestNoPEMLAOnEveryDevice`).
+worst logit NMSE 4.993e-12 AGAINST THE HOST** (`engine.TestNoPEMLAOnEveryDevice`).
 `emitLinear` branches on `RecurrentPlan.ChanDecay` -- a field of its own,
 because KDA's GEOMETRY is qwen3next's and its ARITHMETIC is not, so nothing in
 the shape can tell them apart. **It needed no new kernel on either tier**:
@@ -7108,7 +7108,7 @@ outside jinja's own tests imported the package. **Every Instruct model ran as a
 RAW COMPLETION**, which produces fluent output and no signal at all: RULE 10's
 shape, a plausible answer from a configuration nobody selected.
 
-`model.ChatPrompt`/`ChatIDs` render it; `jitllm run -chat [-system S]` is the
+`engine.ChatPrompt`/`ChatIDs` render it; `jitllm run -chat [-system S]` is the
 CLI, and it does NOT echo the prompt the way a completion does -- printing it is
 what makes `"The capital of France is"` + `" Paris."` read as the one continuous
 text a completion is, and under `-chat` it asserts two false things: the prompt
@@ -7193,7 +7193,7 @@ DeepSeek-V2-Lite, Mistral-7B-v0.3, Qwen3, phi-4), all equal;
 `<｜hy_Assistant｜>` stops ending a generation; `convert.TestStopSetRoundTrips`
 converts synth-hunyuanvl's GGUF and synth-apertus's safetensors, writes and
 reopens each container and reads the set back, and reads the real HunyuanOCR's
-from both inputs; `model.TestChatStopsAtTheTurnsEnd` runs HunyuanOCR-Q8_0
+from both inputs; `engine.TestChatStopsAtTheTurnsEnd` runs HunyuanOCR-Q8_0
 greedy under its chat template, stops at `<｜hy_Assistant｜>` after 57
 tokens, and with the stated set dropped runs the full 64.
 `TestGreedyMatchesLlamaCpp` and the forward goldens are untouched by
@@ -8969,7 +8969,7 @@ SwiGLU clamped (ActSwiGLUClamp); the first NHashLayers blocks select their
 experts from the token's row of a frozen table (the weights are still the
 gate's).
 
-### engine/model/delta.go
+### model/delta.go
 
 The gated delta net: the other half of a hybrid's block loop.
 
@@ -9008,7 +9008,7 @@ Qwen3-Next-80B-A3B-Instruct prints layer 0 as:
 The state is not a KV cache: it is the same size at every position, so
 residency, paging and placement cannot treat it as KV.
 
-### engine/model/spec.go
+### engine/spec.go
 
 Speculative decoding with the model's own multi-token-prediction block.
 
@@ -9046,7 +9046,7 @@ Greedy decoding through a Speculator is greedy decoding: every emitted token
 is the argmax of the trunk's logits at its position, computed over exactly
 the tokens plain decode would have fed.
 
-### engine/model/speclookup.go
+### engine/speclookup.go
 
 Prompt lookup: speculation with no prediction block, so on every
 architecture. It is a drafter of the one Speculator (`WithSpecDrafter`;
@@ -9167,7 +9167,7 @@ parses, validates and ends on the grammar's end), `TestAnAllowingGrammarIsPlainG
 `TestResponseFormatOverHTTP` (json_object, json_schema, and `pattern` refused
 with a 400 naming it).
 
-### engine/model/msa.go
+### model/msa.go
 
 MiniMax Sparse Attention: MiniMax-M3's block selection (transformers'
 MiniMaxM3VLIndexer, llama.cpp's minimax-m3.cpp).
@@ -9204,7 +9204,7 @@ position's, so walking the positions best first and keeping each new
 block until IdxTopK are kept ranks the blocks by their maximum without a
 max-pool: the first position seen of a block IS its maximum.
 
-### engine/model/k3.go
+### model/k3.go
 
 Kimi-K3's text model (jlm.ArchKimiK3), transcribed from Moonshot's
 modeling_kimi_linear.py (the text model KimiK3ForConditionalGeneration
@@ -9240,7 +9240,7 @@ stream 1+j checkpoint j, stream-major (stream k of row r at
 stream 0 untouched; a device is handed every stream and hands every stream
 back, and the head's mix runs on the host (streamHead).
 
-### engine/model/indexer.go
+### model/indexer.go
 
 DeepSeek Sparse Attention: the lightning indexer of DeepSeek V3.2
 (transformers' DeepseekV32Indexer, llama.cpp's deepseek32.cpp).
@@ -9439,7 +9439,7 @@ picture as it came. The GELU form is under the int8 activations' noise
 (projector alone, 2.443e-3 erf against 2.443e-3 tanh on quad-and-disc).
 
 A decision request carries pictures as llama.cpp's server reads them
-(`model.DecisionMedia`): `files` then `images` data URLs, then every
+(`engine.DecisionMedia`): `files` then `images` data URLs, then every
 `image_url` part of a chat-message state, taken out of its message; at most
 8; `videos` refused. The systemone template writes one marker per picture
 and each becomes its LFM2 run (`<|image_start|>`, `<|img_row_R_col_C|>` and
@@ -9903,7 +9903,7 @@ synth-kimik3), so its fused-run check is red on arm64 whatever the model.
 ## The sampler's order of the cuts and the temperature
 
 The engine held two orders. The device sampler (`engine/device/cpu/sample.go`, and the
-speculative sampler's distribution in `engine/model/specsample.go`) cut the
+speculative sampler's distribution in `engine/specsample.go`) cut the
 top-k candidates by top-p and min-p over their softmax at temperature 1 and
 tempered only the draw over the survivors; the host's `Sampler` tempered
 first. The same seed drew from different sets on the two paths, and

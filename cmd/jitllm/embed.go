@@ -10,7 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/model"
+
+	"github.com/jitllm/jitllm/engine"
 	"github.com/jitllm/jitllm/internal/localserver"
 )
 
@@ -62,7 +64,8 @@ func embedCmd(args []string) error {
 		return embedRemote(svc.Addr, keyOf(*apiKey), fs.Arg(0), texts, os.Stdout)
 	}
 	t0 := time.Now()
-	m, err := model.Open(path, loadOpts(nil, 0)...)
+	mo, io := loadOpts(nil, 0)
+	m, err := model.Open(path, mo...)
 	if err != nil {
 		return err
 	}
@@ -74,7 +77,7 @@ func embedCmd(args []string) error {
 	if m.Vocab == nil {
 		return fmt.Errorf("%s: no tokenizer: %v", fs.Arg(0), m.TokErr)
 	}
-	e, err := m.NewEmbedder()
+	e, err := engine.NewEmbedder(m, io...)
 	if err != nil {
 		return err
 	}

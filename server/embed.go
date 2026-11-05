@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine"
 )
 
 // Embeddings: one vector per input from an embedding model's pooled readout.
@@ -149,13 +149,13 @@ func (e *Engine) Embed(ctx context.Context, o EmbedOptions) (*EmbedResult, error
 // takes one (building it when the list is empty), so the list grows to the
 // highest concurrency the model has seen and keeps that many idle.
 type embedders struct {
-	free   []*model.Embedder
+	free   []*engine.Embedder
 	busy   int
 	closed bool
 	idle   chan struct{} // closed when busy reaches zero after close
 }
 
-func (lm *LoadedModel) takeEmbedder() (*model.Embedder, error) {
+func (lm *LoadedModel) takeEmbedder() (*engine.Embedder, error) {
 	lm.embMu.Lock()
 	if lm.emb.closed {
 		lm.embMu.Unlock()
@@ -169,7 +169,7 @@ func (lm *LoadedModel) takeEmbedder() (*model.Embedder, error) {
 		return x, nil
 	}
 	lm.embMu.Unlock()
-	x, err := lm.m.NewEmbedder()
+	x, err := engine.NewEmbedder(lm.m, lm.io...)
 	if err != nil {
 		lm.giveEmbedder(nil)
 		return nil, err
@@ -188,7 +188,7 @@ func (lm *LoadedModel) takeEmbedder() (*model.Embedder, error) {
 // giveEmbedder returns an embedder to the free list, or closes it when the
 // model is being unloaded -- before the model, which is the order the engine
 // requires of everything holding a Instance.
-func (lm *LoadedModel) giveEmbedder(x *model.Embedder) {
+func (lm *LoadedModel) giveEmbedder(x *engine.Embedder) {
 	lm.embMu.Lock()
 	defer lm.embMu.Unlock()
 	lm.emb.busy--

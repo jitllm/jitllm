@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/model"
 )
 
 // An engine error must be explained in words, with the fix that applies.

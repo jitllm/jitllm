@@ -991,7 +991,7 @@ controls; llama-2-7b and phi3 have argmax ties inside f32 noise and cannot serve
 
 **★ 12u. THE PREFILL UNIT IS A CHUNK NOW, NOT A TOKEN, AND THAT IS RULE 12's OWN
 FINDING ONE LEVEL UP.** RULE 12 moved the device's unit from one MATVEC to one
-BLOCK. `engine/model/prefill.go` still fell back to per-token `Forward` whenever any
+BLOCK. `engine/prefill.go` still fell back to per-token `Forward` whenever any
 block was resident, so a 507-token prompt was 507 single-token submissions and
 jitllm's device PREFILL rate was its device DECODE rate. `Layers(lo, hi, pos, n,
 ...)` takes n rows; every kernel in the block body grew a row dimension and every
@@ -1755,7 +1755,7 @@ so it can price the norms, the quantize and the matvecs and not the whole layer.
 `Ctx.CounterSampling` and `Ctx.CounterSets` are kept as a PROBE rather than an
 assertion: both answers are legitimate hardware and a newer GPU may say
 otherwise. `metal_other.go` carries the stubs, because `metal.GPUBusy` being
-darwin-only in the header broke the Linux build of `./engine/model` once already.
+darwin-only in the header broke the Linux build of `./engine` once already.
 
 ## ★★★ THE DEVICE HAD NO SLIDING WINDOW, AND THE FIRST PROBE SAID IT DID.
 
@@ -1771,7 +1771,7 @@ as a mask to -inf on keys before `cnt - min(cnt, W)`. Exact: the softmax gives
 those keys zero weight and the accumulator adds 0*V over keys the prompt DID
 write. Softmax and accumulate are untouched; window 0 emits identical IR.
 `backend.TestAttnScoresWindowMasksExactlyTheOldKeys` holds it bit-for-bit on
-ptx and spirv; `model.TestSlidingWindowRunsOnTheDevice` holds the model.
+ptx and spirv; `engine.TestSlidingWindowRunsOnTheDevice` holds the model.
 
 **Three traps on the way, each of which produced a confident wrong reading:**
 
@@ -1866,7 +1866,7 @@ backends:**
 for the host kernel against the float64 table it replaced. Eight geometries from
 four rotary pairs (stories260K's head dimension is eight) to 128, one to 32
 rows, mscale on and off, and eighteen positions from 0 to 2^28-1.
-`model.TestRopeTableOnDeviceMatchesTheUpload` runs both arms in ONE process on
+`engine.TestRopeTableOnDeviceMatchesTheUpload` runs both arms in ONE process on
 Llama-3.2-1B and gemma-3-1b with every block placed and the split tuner pinned:
 24 tokens identical and **worst |dlogit| exactly 0.000e+00**, so the ulp above
 is the kernels' worst case over the whole swept position range rather than the
@@ -2039,7 +2039,7 @@ stride (rows == 1 emits the same IR; lowertest unchanged).
 
 Gates: `backend.TestRouteRowsMatchOneRow` (bit-exact against per-row launches,
 five route shapes; fails at row 1 with the group-score row stride dropped).
-`model.TestBatchedMixturePrefillMatchesRowByRow` on a V100 (CUDA, sm_70),
+`engine.TestBatchedMixturePrefillMatchesRowByRow` on a V100 (CUDA, sm_70),
 300-token prompt, 12 generated: V2-Lite 78 grouped / 81 batched latent blocks,
 NMSE 9.97e-4, ids identical; Coder-V2-Lite 7.07e-4; Moonlight 4.35e-4. Against
 a violation (the absorb activations gathered token-major): NMSE 5.80e-1, ids
@@ -2204,7 +2204,7 @@ lives in workgroup memory (a simdgroup_matrix has no lane layout, so none of
 that can happen in registers), then O += P V. llama.cpp's kernel_flash_attn_ext
 keeps O in the same place. `backend.TestFlashPrefillTileMatchesReference`:
 NMSE 1.3-1.7e-7 against float64 with every slot past the count poisoned; the
-dropped-key violation reads 1.5e-3. `model.TestFlashPrefillMatchesThreeKernels`
+dropped-key violation reads 1.5e-3. `engine.TestFlashPrefillMatchesThreeKernels`
 on Metal: Llama 4.2e-4 and Qwen3-0.6B 3.4e-4 against the host, the same as
 the three kernels.
 
@@ -2936,7 +2936,7 @@ and the backend gates launch each kernel at its own width, so they could not
 see it. It was found because a step-across-sessions gate compared a chunked
 prompt against Prefill on the same device, and the reference was the wrong
 arm. The tier keeps each staged variant's width now (`prefillVariant.softW`):
-0.38 -> 2.5e-4 on the M4. Gate: `model.TestStagedPagedPrefillMatchesDecode`.
+0.38 -> 2.5e-4 on the M4. Gate: `engine.TestStagedPagedPrefillMatchesDecode`.
 
 ### A launch at a width the kernel does not declare is refused on every backend
 
@@ -3271,17 +3271,17 @@ and what had been silently falling back a row at a time came out:
   already did, and the head split carries the chunk's count past the head's
   call.
 
-With them, `model.TestLatentPrefillBatchesOnTheDevice` holds the chunk to
+With them, `engine.TestLatentPrefillBatchesOnTheDevice` holds the chunk to
 the row-by-row device prompt: 1e-13 on the fixtures on CUDA, Vulkan, Metal and
 the V100; DeepSeek-V2-Lite p90 4.3e-4 and Moonlight 4.2e-3 on the V100 (the
 sm_70 f16 twins); a chunk rotating Kimi-Linear's NoPE channels reads 9.7e-1.
-And `model.TestC6OnEveryDevice`'s prompt arm, now batched, meets the binary16
+And `engine.TestC6OnEveryDevice`'s prompt arm, now batched, meets the binary16
 attention tiles: synth-dbrx 4.7e-7 on CUDA's m16n8k16 and 1.2e-6 on Metal's
 FlashPrefillTile, 2.9e-12 with the flash tile off; its prompt bound is 1e-5.
 
 ## The step across sessions, architecture by architecture
 
-`model.TestStepAcrossSessionsEveryArchitecture` runs the step gate -- three
+`engine.TestStepAcrossSessionsEveryArchitecture` runs the step gate -- three
 sessions, eight teacher-forced steps together through `Step`, against each
 session decoded alone -- on one model of every architecture on the box, and
 fails naming `State.StepRefusal` where a model would not step. A model that
@@ -3320,7 +3320,7 @@ Speculation refused a model with a final softcap, twice (`Speculate` and
 one and building it wanted the cap perturbed on an MTP fixture. Every head a
 speculation step's rows reach already capped them -- the device's per-row and
 folded heads as decode's does, the host's in `finishRows` -- so the refusals
-went and the gate is the perturbation: `model.TestSpecOverAFinalSoftcap`,
+went and the gate is the perturbation: `engine.TestSpecOverAFinalSoftcap`,
 synth-qwen35-hybrid-mtp and Qwen3.5-0.8B-MTP-Q8_0 with a cap set from the
 largest logit on the first prompt.
 
@@ -3443,14 +3443,14 @@ scales on one tier are refused by name (`planConflict`), as two score scales
 now are.
 
 The arithmetic is exact. On f32 fixtures with Granite's own scales set
-(`model.TestGraniteScalesOnEveryDevice`: synth-qwen2 and synth-mixtral, every
+(`engine.TestGraniteScalesOnEveryDevice`: synth-qwen2 and synth-mixtral, every
 block and the head placed) the device reads 2.6e-14 to 1.7e-11 against the
 host on decode and a prompt chunk, and its step across sessions 3.0e-14 to
 6.9e-14 against each session alone, on the 3050 Ti's CUDA and SPIR-V, the Iris
 Xe and the M4. Each scale dropped reads 8.5e-01 and 3.6e-01 (residual),
 8.1e-03 and 1.4e-03 (attention at 1/sqrt(head_dim)), 49 (no logit divisor).
 
-On the real models (`model.TestGraniteOnEveryDevice`, a chunked prompt then
+On the real models (`engine.TestGraniteOnEveryDevice`, a chunked prompt then
 decode, and decode alone, against the host's own greedy ids):
 
     worst logit NMSE vs host   3050 Ti CUDA   3050 Ti SPIR-V   Iris Xe   M4 Metal
@@ -3621,7 +3621,7 @@ measured.
 ### The dense bound is the model's own order band
 
 The dense step gate held Llama-3.2-1B to `mlaDeviceNMSE`, 1e-2, and the V100
-read 6.95e-03. `model.TestStepNMSEBand` measured what that is, 8 sessions x
+read 6.95e-03. `engine.TestStepNMSEBand` measured what that is, 8 sessions x
 32 teacher-forced steps against each session alone on the device, beside two
 references on the same tokens: the host, and the device decoding alone at a
 pinned matvec split -- the same arithmetic summed in another order and nothing
@@ -4062,7 +4062,7 @@ become 293, the same bytes addressed separately, page size and padding unchanged
 arrives with a row offset, and is unreachable for every shipped model.
 
 **Why nothing saw either.** `backend/matvec_test.go` tests `Bias: withBias` and
-passes -- the kernel was always right. `model.TestAttentionBiasesReachTheModel`
+passes -- the kernel was always right. `engine.TestAttentionBiasesReachTheModel`
 is a HOST-path injection test that says so in its own comment ("it needs no
 biased model, which is the whole point"). **No Go gate compares a real device
 against the host for a text model**; that only lives in `scripts/three-way.sh`,
@@ -4083,7 +4083,7 @@ makes three runs identical. Pin it before comparing anything.
 SEAM, WHICH IS MEASURED AND IS 2550x ON A HYBRID. AN ABSOLUTE LOGIT DIFFERENCE
 ACROSS A DEEP SEAM IS NOT EVIDENCE OF A DEVICE BUG.** The SAME block of the same
 48-block hybrid, moved only in DEPTH
-(`model.TestHybridDeviceErrorIsAmplification`):
+(`engine.TestHybridDeviceErrorIsAmplification`):
 
     one device block at block 43, 4 host blocks below    logit NMSE 7.769e-06
     one device block at block 3, 44 host blocks below    logit NMSE 1.981e-02
@@ -4104,7 +4104,7 @@ AN INDEPENDENT ENGINE.** The post-norm checkpoints (OLMo 2, EXAONE 4) read
 1.4-2.0 device-vs-host, and one block alone reads 1.33 at block 0 and 0.075 at
 the last -- while llama.cpp's own CUDA build reads 1.16-1.93 from its CPU build
 on the same file, and jitllm's host reads 0.85-3.35 from itself with only the V
-cache's width changed. `model.TestPostNormDeviceErrorIsAmplification` holds
+cache's width changed. `engine.TestPostNormDeviceErrorIsAmplification` holds
 all three; `docs/engineering-history/model-correctness.md` has the table.
 
 ## The decode row tile on the device, spread rows: a regression on both backends
@@ -5308,7 +5308,7 @@ milliseconds and the range stays whole after the probe.
 The gates: `gpu.TestASubmissionIsCutAtItsRunTimeBudget` (the cut, its count
 and the residual against the uncut range, on the fake device; against a submit
 that ignores the budget it reads one submission) and, on the hardware,
-`model.TestMiniCPMVOnDeviceMatchesHost/vulkan:1` (5.1e-3 against 1.4) and
+`engine.TestMiniCPMVOnDeviceMatchesHost/vulkan:1` (5.1e-3 against 1.4) and
 `TestPhi4RealMatchesTransformers/photo896x448/vulkan:1` (1.7e-4 against 0.97),
 with `JITLLM_STEP_DEVICES` naming vulkan:1.
 
@@ -5357,7 +5357,7 @@ release, and a block refused for its weights leaves nothing of its set.
 Against the violations: the set built for the grid declines the first block
 ("out of memory ... 268435456 of 268435456 live"); no fit check before the
 build allocates 32 buffers for the refused picture; no release on a refused
-block leaves 55,492,616 bytes live. And `model.TestQwenVLRealMatchesTransformers`
+block leaves 55,492,616 bytes live. And `engine.TestQwenVLRealMatchesTransformers`
 now demands, per device asked for, that tower blocks are placed and every
 placed one ran there (`State.vis.devBlocks`) with the set built for the
 picture (`Stats.TowerRows`); where the text model, placed first as the CLI
@@ -5802,14 +5802,14 @@ On a V100 that tail ran 6.7 ms of kernels for Llama-3.2-1B, against about
 
 A chunk of 2 to 4 rows over the whole model, every block and the head on a
 device that runs ragged rows, now goes as one ragged step of its rows
-(engine/model/tailrows.go): nn.RowsDevice with the rows' positions as their
+(engine/tailrows.go): nn.RowsDevice with the rows' positions as their
 slots, which the tier runs on decode's matvec carrying every live row in one
 pass over the weights (groupMV, `_t2of8` in a kernel name), each row
 attending to its own history. The head is the prompt's tail call, as for any
 chunk that did not fold it. The same 2 rows then run 2.2 ms of kernels on the
 V100. Not taken for a hybrid, a speculation step, a bidirectional run or a
 split placement, which keep the chunk; a refusal falls back to it.
-`model.WithTailRows(false)` (`JITLLM_TAIL_ROWS=0`) is the control arm.
+`engine.WithTailRows(false)` (`JITLLM_TAIL_ROWS=0`) is the control arm.
 
 A first form chose by measurement: the fastest decode call, a short chunk and
 the ragged step, each kept on the Model. A first run includes its compiles
@@ -5853,7 +5853,7 @@ here verbatim.
   reset: "(measured: pp512 on a V100 17.4k tok/s on the first prompt of a
   process and 13.7-14.0k on every one after)". The bisection is "The prompt
   lost 22% on the V100, and none of it was a kernel" above.
-- `promptBuf` (`engine/model/prefill.go`): "A request is a fresh State, and
+- `promptBuf` (`engine/prefill.go`): "A request is a fresh State, and
   allocating these per request cost a V100 prompt of 512 rows 6.6 ms of its
   33.9 (a fresh 4 MiB heap span faults in page by page): the device ran at
   19.5k tok/s and the prompt measured 15.1k."
@@ -6464,7 +6464,7 @@ operand, so nothing is recomputed: one launch goes per block.
 
 It is bit-identical on PTX, whose lowering fixes every rounding
 (`backend.TestMatVecGate2IsTheTwoLaunches`, Q8_0/Q4_K/Q6_K at split 1 and the
-in-group splits; `model.TestGateUp2MatchesTwoLaunches` on Llama-3.2-1B with
+in-group splits; `engine.TestGateUp2MatchesTwoLaunches` on Llama-3.2-1B with
 every block placed with and without the graph and at a half seam; the swap
 violation `TestGateUp2SeesASwap` moves 384768 of 513024 logits). On SPIR-V it
 is not: Fma lowers to an OpFMul and OpFAdd without NoContraction, and the
@@ -6521,7 +6521,7 @@ which the operand-prologue tuner now runs on too; `tuneFFN` replaces
 residual the attention output's launch already added, the FFN's
 RMSNormQuantRows goes and Gate2 builds its operand itself, one launch where
 there were two. Bit-identical on PTX (`backend.TestGate2InIsTheTwoLaunches`,
-96 cases; `model.TestFFNRecipesMatchTwoLaunches` every block placed with and
+96 cases; `engine.TestFFNRecipesMatchTwoLaunches` every block placed with and
 without the graph and at a half seam; violation `TestGate2InSeesASwap`,
 384768 of 513024 logits move). `TestDecodeDoesNotAllocate` holds at zero on
 CUDA.
@@ -7521,7 +7521,7 @@ row where the composer's reads two.
     `engine/device/gpu`, `jit`, `graph` and `engine/model` reads 41235
     heap diagnostics there and 41297 here. The 24 entries that differ are in
     `composer/decompose_map.go` (a form), `graph/verify.go` (the verifier)
-    and `engine/model/front.go` (the graph a model states), all built once;
+    and `model/front.go` (the graph a model states), all built once;
     none is in `engine/device/gpu`, `composer/pass_regs.go` or a file a token runs.
   - Logs. V100, `~/jitllm-test/gates/engine/model/`: `g5-*.out` the first
     commit's default build (`g5-serve-*`, `g5-c6-full`) and the new tree's
@@ -8123,7 +8123,7 @@ row where the composer's reads two.
   its input rows declined by name (the fixture's embedding is not its head's).
   `go build -gcflags=-m` over the four touched packages moves nothing more to
   the heap (247 lines either side).
-- No device is a default where blocks live. `model.WithCPU(listed)` says
+- No device is a default where blocks live. `engine.WithCPU(listed)` says
   whether the caller listed the CPU among its devices (`gpu.AdmitsHost`:
   `auto`, or a `-devices` list naming `cpu`); `cmd/jitllm run` and the
   server's `LoadModel` pass it from the spec. Listed, the engine may choose
@@ -8642,7 +8642,7 @@ row where the composer's reads two.
   (gpu.GPU.layersRows), so with one step in flight one card works. The
   server's step loop (server/batchgroups.go) now deals a multi-card model's
   decoding rows into one group per card holding blocks and steps each group
-  on a long-lived worker of its own (model.StepJoint, the joint arm for a
+  on a long-lived worker of its own (engine.StepJoint, the joint arm for a
   group of any size, one included); admission, the room check, prompts
   (GPU.pipeline) and a move stay the loop's, and any of them ends grouped
   decoding once the groups in flight land. The tier's per-call state became
@@ -8677,7 +8677,7 @@ row where the composer's reads two.
   gains OpDeltaRule (value heads over key heads, grouped or tiled, a decay
   per head or per key channel by its operand's width, beta), and the front
   end states every LayerLinearAttn block from what the container stores
-  (engine/model/frontdelta.go: the mixed projection, OpStateConv, SiLU, the
+  (model/frontdelta.go: the mixed projection, OpStateConv, SiLU, the
   unit-length q and k as an unweighted head norm, the decay from its
   logits, dt bias and log decay or the stated lower bound, the gated norm
   and the output gate the container states); the state-space and short
@@ -9332,7 +9332,7 @@ row where the composer's reads two.
   prompt is 1651 ms on the joint arm (2397 before) against Prefill's 327:
   the capacity forms at 256 rows against the tier's tensor-core prefill.
   The routes that still run one State at a time on such a device are
-  counted by name (model.LoneRoute: forward, prefill, prefill-cached,
+  counted by name (engine.LoneRoute: forward, prefill, prefill-cached,
   prefill-mixed, verify) and the server warms a model through StepRuns;
   TestStepRowsAreTheirOwn holds every arm bit for bit with every route at
   zero. TestStepAcrossSessionsMatchesEachAlone holds a composed build's
@@ -10222,7 +10222,7 @@ row where the composer's reads two.
   weighted values another 9% of Qwen's. A kernel's calls now run on the
   pool where every address of the scratch they write moves along every
   call axis past the axes inside it and the code reaches no more than
-  the calls' slices (engine/model/cpuserve.go, callsOwnScratch); other
+  the calls' slices (engine/cpuserve.go, callsOwnScratch); other
   scratches keep their calls in order. The weighted values (d outer, the
   history's positions inner) ran one vector of a head a trip, each
   position's page found again for every 8 lanes; Jam now strip-mines 4

@@ -393,7 +393,7 @@ The fix was two lines (`buft->context == this`) and the reported effect on the
 author's M5 was ~53 -> ~220 tok/s with `__psynch_mutexwait` samples going
 5,703 -> 0.
 
-**★ jitllm HAD THE SAME SHAPE, AND `engine/model/prefill.go` PUT IT UNDER THE POOL.**
+**★ jitllm HAD THE SAME SHAPE, AND `engine/prefill.go` PUT IT UNDER THE POOL.**
 `RMSNorm32JIT` and `LayerNorm32JIT` took `norms.mu` / `lns.mu` -- process-global
 -- on EVERY call, to answer "do I have a kernel for width n?". The struct's own
 comment says the answer stops changing almost immediately: *"this is two or three
@@ -506,7 +506,7 @@ RULE 5's rows are taken with. A model that is OVER BUDGET reads a block page off
 disk on the critical path of nearly every layer, and six workers spinning
 through it is six cores of heat.
 
-**The rule is per token, not per model.** `model.State.forward` parks the pool
+**The rule is per token, not per model.** `engine.State.forward` parks the pool
 for the next token when this one faulted a page, and spins when it read
 nothing (`sched.Pool.SetSpinning`). The first rule parked whenever
 `WeightBytes() > maxmem` -- but an over-budget mixture reads nothing on most
@@ -521,7 +521,7 @@ passes, size rule (A) against the per-token rule (B):
     12 GiB  1.463 / 1.459     1.128 / 1.130     12.12 GiB (tokens page)
 
 Every arm IQR/median <= 0.016. At 12 GiB tokens still page, so fewer of them
-spin and the decode gain is smaller. `model.TestThePoolParksOnlyWhileTokensPage`
+spin and the decode gain is smaller. `engine.TestThePoolParksOnlyWhileTokensPage`
 holds the rule: park after a faulting token, spin after a quiet one.
 
 `State.forward`'s comment carried the size rule's cost on one run: "Deciding
@@ -562,7 +562,7 @@ cannot be expressed to the collector. That is what trying it measured.
 
 ## ★ AND THE LEAK GATE'S 21 MiB PER CYCLE WAS RSS, NOT A LEAK.
 
-`model.TestConcurrentMultiDeviceDoesNotLeak` asserted on RSS after a scavenge
+`engine.TestConcurrentMultiDeviceDoesNotLeak` asserted on RSS after a scavenge
 and flipped run to run -- fail, fail, pass on one binary. Its own comment had
 already swept the round count (4: +85,796 KiB, 8: +180,084, 16: +242,080), read
 it as linear, concluded *"it is device BUFFERS"*, refused to move the bar, and
@@ -809,7 +809,7 @@ by nine, and v6's 1.0067/1.0147 reproduces its own earlier 1.0037. Four
 gates and a reproduction, and the answer is still wrong.
 
 ★ **THE IN-PROCESS INTERLEAVED HARNESS THIS ENTRY ASKED FOR WAS BUILT, AND IT
-REVERSES THE SIGN.** `model.TestFusionCeiling` already decodes 64 warm tokens in
+REVERSES THE SIGN.** `engine.TestFusionCeiling` already decodes 64 warm tokens in
 process and reports a rate, and BOTH trees carry it unchanged -- so it is one
 test binary per tree, ABBA, A/A self-control FIRST (RULE 2), Llama-3.2-1B
 Q4_K_M, six P-cores, each binary on its own container:
@@ -1330,7 +1330,7 @@ naming the conditions is not the same as naming the cause. **Recorded as open.**
 
 ★★★ **AND THE v6-vs-HEAD ROW ITSELF, GATED, WITH A SELF-CONTROL IN FRONT OF IT.
 HEAD IS 2.6-3.4% FASTER THAN v6 AND THERE IS NO REGRESSION.**
-Llama-3.2-1B-Instruct Q4_K_M, `model.TestFusionCeiling` -- one test binary per
+Llama-3.2-1B-Instruct Q4_K_M, `engine.TestFusionCeiling` -- one test binary per
 tree, each converting with its OWN container code -- six P-cores, ABBA, on a
 laptop that was 3.7% busy at 59 C:
 
@@ -1587,7 +1587,7 @@ succeeded, so a straggler can never run a chunk of the next phase with the last
 phase's body.
 
 What the model fuses is a RUN, not a block: consecutive resident host blocks
-and the host head are one region (`engine/model/fuse.go`). A device run, a block
+and the host head are one region (`engine/fuse.go`). A device run, a block
 whose page has to be read, or the end of the token closes it. Nothing is
 compiled, so a relocation, an eviction or a seam move needs no re-link: the next
 token's runs follow its placement as it is.
@@ -1620,7 +1620,7 @@ The Xeon rows are in docs/perf/current.md's evidence trail and the PR.
 
 ## The serving split: the E-cores prefill while the P-cores decode
 
-Evidence for `model.WithServingSplit` (on by default where the host has E-cores
+Evidence for `engine.WithServingSplit` (on by default where the host has E-cores
 a thread can be kept on: macOS on Apple Silicon). The rule that governs it is
 AGENTS.md's; this is what was measured.
 
@@ -1683,7 +1683,7 @@ Both cases are work proposed or built beside machinery that already did it.
   host copy of the KV; and sealing copied the device's KV home on every prompt,
   which made warm decisions slower than cold on a V100 (260 against 121 ms).
   PR #148 (closed unmerged) instead kept its own trunk snapshot and recurrent
-  copy per Decider. `engine/model/kvshare.go`'s `SharedStore` already shared
+  copy per Decider. `engine/kvshare.go`'s `SharedStore` already shared
   prefix pages between sessions without copying them, which is also what "KV is
   never held twice" requires.
 

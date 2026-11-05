@@ -14,7 +14,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/model"
+
+	"github.com/jitllm/jitllm/engine"
 )
 
 // visionModel is the smallest container with a vision tower in the test
@@ -46,7 +48,7 @@ func engineRun(t *testing.T, e *Engine, lm *LoadedModel, pics ...[]byte) (string
 	}
 	var out strings.Builder
 	err = e.Generate(context.Background(), GenerateOptions{ModelID: lm.id, MaxTokens: 12,
-		Prompt: Prompt{Kind: PromptSpans, Spans: spans}, Sampling: &model.Sampler{}},
+		Prompt: Prompt{Kind: PromptSpans, Spans: spans}, Sampling: &engine.Sampler{}},
 		func(ev Event) error {
 			if ev.Kind == EventToken {
 				out.WriteString(ev.Token.Text)

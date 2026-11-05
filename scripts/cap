@@ -127,7 +127,7 @@ if [ "${1:-}" = "--selftest" ]; then
   t 0 ./scripts/ref/q3kbench
   t 0 /tmp/go-build/model.test -test.run=X
   t 0 go test ./engine/nn -bench=. -run=XXX
-  t 1 go test ./engine/model/ ./engine/nn/ -count=1
+  t 1 go test ./engine/ ./engine/nn/ -count=1
   t 1 go build -o jitllm ./cmd/jitllm
   t 1 taskset -c 0,2,4,6,8,10 go test ./... -count=1
   t 1 gcc -O2 -o probe probe.c

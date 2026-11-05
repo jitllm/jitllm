@@ -6,15 +6,15 @@ import (
 	"io"
 	"sort"
 
+	"github.com/jitllm/jitllm/engine"
 	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/device/gpu"
-	"github.com/jitllm/jitllm/engine/model"
 )
 
 // registerReport prints what each composed kernel cost the CPU and each
 // device, worst first: spill, then occupancy (or vector registers named),
 // then registers.
-func registerReport(w io.Writer, host []model.CPUKernel, devs []gpu.DeviceKernels, asJSON bool) error {
+func registerReport(w io.Writer, host []engine.CPUKernel, devs []gpu.DeviceKernels, asJSON bool) error {
 	sort.SliceStable(host, func(a, b int) bool {
 		if host[a].Stack != host[b].Stack {
 			return host[a].Stack > host[b].Stack
@@ -38,7 +38,7 @@ func registerReport(w io.Writer, host []model.CPUKernel, devs []gpu.DeviceKernel
 		e.SetIndent("", "  ")
 		return e.Encode(struct {
 			Tier    string              `json:"cpu_tier"`
-			Host    []model.CPUKernel   `json:"cpu"`
+			Host    []engine.CPUKernel  `json:"cpu"`
 			Devices []gpu.DeviceKernels `json:"devices"`
 		}{cpu.New().Tier().String(), host, devs})
 	}

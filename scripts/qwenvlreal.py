@@ -8,7 +8,7 @@
    converter, F16), the files the engine is compared on.
 
 The prompt is the model's own chat template around one picture
-(engine/model/testdata/quad-and-disc.png by default) and a question; the
+(engine/testdata/quad-and-disc.png by default) and a question; the
 continuation is transformers' own greedy answer, which the engine is then
 teacher-forced through. The golden carries:
 

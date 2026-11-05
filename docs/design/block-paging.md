@@ -145,7 +145,7 @@ on two engines, both at parity, which is what the claim asks for.)
 ## The structure is always built, and the BUDGET is the control
 
 ★ **PRIMING IS NOT CONDITIONAL ON NOT FITTING, AND THIS REPO ALREADY LEARNED
-THAT ONCE.** `engine/model/residency.go` used to return early when the experts fit, and
+THAT ONCE.** `model/residency.go` used to return early when the experts fit, and
 its comment records why that was wrong: *"that was right for a BATCH ENGINE and
 wrong for a SERVICE ... give me back two gigabytes of GPU for another model;
 this model has gone quiet, park it on the CPU; now unload it. Every one of those
@@ -257,7 +257,7 @@ same NVMe first, whether a host packer faults them or the driver's memcpy does.
 Measured, the raw upload moves 40.10 GiB a pass at 1.61 GB/s -- the disk's rate,
 not the link's 6.68 -- so paging a model bigger than host RAM cannot be faster
 than the host reading it, only slower by less. So streaming is a placement a
-caller asks for per block (`model.Place.Stream`, `-placement N=DEV~`), and the
+caller asks for per block (`engine.Place.Stream`, `-placement N=DEV~`), and the
 automatic placement keeps a block that does not fit on the host for decode --
 verbatim what `model/ring.go` says about itself, for the same reason. There is
 no device-wide paging switch any more: a flag that could only be right for

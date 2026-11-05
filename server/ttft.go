@@ -11,7 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine"
 )
 
 // What a request pays before its first token, and the four things here that
@@ -133,7 +133,7 @@ const storeShare = 8
 
 // MemCacheStats is a model's memory cache and its sessions, as counted.
 type MemCacheStats struct {
-	Store model.MemStoreStats
+	Store engine.MemStoreStats
 	// Restored and Computed are prompt positions taken from the store and
 	// prefilled, over every generate that started its sequence.
 	Restored, Computed int64
@@ -148,13 +148,13 @@ type MemCacheStats struct {
 
 // ttft is a LoadedModel's share of the above.
 type ttft struct {
-	store *model.MemStore // nil with Config.NoMemCache
+	store *engine.MemStore // nil with Config.NoMemCache
 	// shared is the model's pages held once (model.SharedStore), which its
 	// Deciders share through: nil with Config.NoMemCache.
-	shared *model.SharedStore
+	shared *engine.SharedStore
 	// kv is what an instance is pointed at: the memory cache, or the memory cache
 	// over Config.PromptStore (layered) when the server has one.
-	kv model.KVStore
+	kv engine.KVStore
 	ns string
 
 	inflight atomic.Int32
@@ -170,8 +170,8 @@ type ttft struct {
 func (e *Engine) initTTFT(lm *LoadedModel, o LoadOptions) {
 	t := &lm.ttft
 	if !e.cfg.NoMemCache {
-		t.store = model.NewBoundedMemStore(1)
-		t.shared = model.NewSharedStore()
+		t.store = engine.NewBoundedMemStore(1)
+		t.shared = engine.NewSharedStore()
 		// The namespace names this load: the store is the model's own, and
 		// the KV width and page geometry are fixed for its life.
 		t.ns = fmt.Sprintf("jitllmd/%s/%d", lm.id, lm.loadedAt.UnixNano())
@@ -229,7 +229,7 @@ func (e *Engine) admitQueue(lm *LoadedModel) (func(), error) {
 // PromptCache reports the model's memory cache, pool and admission counters.
 func (e *Engine) MemCacheStats(lm *LoadedModel) MemCacheStats {
 	t := &lm.ttft
-	var st model.MemStoreStats
+	var st engine.MemStoreStats
 	if t.store != nil {
 		st = t.store.Stats()
 	}
@@ -326,7 +326,7 @@ func (e *Engine) warm(lm *LoadedModel) error {
 	start := time.Now()
 	ctx := context.Background()
 	var next int32
-	if err := s.ms.Run(ctx, model.PhasePrefill, func(in *model.Instance) error {
+	if err := s.ms.Run(ctx, engine.PhasePrefill, func(in *engine.Instance) error {
 		lg, err := in.Prefill(ids)
 		if err != nil {
 			return err
@@ -336,7 +336,7 @@ func (e *Engine) warm(lm *LoadedModel) error {
 	}); err != nil {
 		return fmt.Errorf("server: warming %q: %w", lm.id, err)
 	}
-	if err := s.ms.Run(ctx, model.PhaseGenerate, func(in *model.Instance) error {
+	if err := s.ms.Run(ctx, engine.PhaseGenerate, func(in *engine.Instance) error {
 		_, err := in.Forward(next)
 		return err
 	}); err != nil {
@@ -357,13 +357,13 @@ func (e *Engine) warm(lm *LoadedModel) error {
 // on disk serves this process only; a session created with prompt_cache names
 // its own, and its pages outlive the process as the disk store's always did.
 type layered struct {
-	mem  *model.MemStore
-	disk model.KVStore
+	mem  *engine.MemStore
+	disk engine.KVStore
 }
 
 func (l *layered) Get(cacheId string, layer, index int, page io.Writer) error {
 	err := l.mem.Get(cacheId, layer, index, page)
-	if !errors.Is(err, model.ErrNoPage) {
+	if !errors.Is(err, engine.ErrNoPage) {
 		return err
 	}
 	var b bytes.Buffer

@@ -13,7 +13,7 @@ quantized to int8 per token. Each prompt is run greedy for REAL_GEN tokens;
 then the prompt and its continuation once more, teacher-forced, and every
 position's logits recorded as the vocabulary's first REAL_HEAD and the
 reference's REAL_TOP highest -- k3gold.py's real-checkpoint schema, which
-engine/model's TestBitNetRealMatchesReference reads.
+the engine's TestBitNetRealMatchesReference reads.
 
 The prompts carry the tokenizer's BOS (<|begin_of_text|>), as the release's
 own examples do.

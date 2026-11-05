@@ -15,8 +15,9 @@ import (
 
 	"connectrpc.com/connect"
 
+	"github.com/jitllm/jitllm/engine"
 	"github.com/jitllm/jitllm/engine/device/gpu"
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/model"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
@@ -187,7 +188,7 @@ func batchStats(t *testing.T, c clients) *v1.BatchStats {
 // prompt and prefix: the host is the reference that is in neither arm.
 func hostGap(t *testing.T, m *model.Model, prompt, prefix []int32, a, b int32) float64 {
 	t.Helper()
-	st := m.NewInstance(len(prompt) + len(prefix) + 1)
+	st := testInstance(t, m, len(prompt)+len(prefix)+1)
 	defer st.Close()
 	lg, err := st.Prefill(append(append([]int32{}, prompt...), prefix...))
 	if err != nil {
@@ -622,7 +623,7 @@ func TestBatchSampledRowsAreTheirOwn(t *testing.T) {
 			t.Fatalf("max_tokens %d gave %d tokens", gen, len(got.ids))
 		}
 		t.Logf("the pair: %+v; subject %d tokens, companion %d", batchStats(t, c), len(got.ids), len(other.ids))
-		sp := model.Sampler{Temp: float64(temp), TopP: float64(topP), Seed: 7}
+		sp := engine.Sampler{Temp: float64(temp), TopP: float64(topP), Seed: 7}
 		replayPair(t, lm, e.cfg.DefaultMaxSeq, sp, lm.m.Vocab.Encode(gatePrompts()[0], true), lm.m.Vocab.Encode(gatePrompts()[1], true),
 			got.ids, other.ids)
 
@@ -649,12 +650,12 @@ func TestBatchSampledRowsAreTheirOwn(t *testing.T) {
 // subj from the subject's logits. The companion's tokens are its history
 // here, not something under test; it finished on max_tokens or EOS, so every
 // token it sent was stepped and nothing else was.
-func replayPair(t *testing.T, lm *LoadedModel, maxSeq int, sp model.Sampler, subjPrompt, compPrompt, subj, comp []int32) {
+func replayPair(t *testing.T, lm *LoadedModel, maxSeq int, sp engine.Sampler, subjPrompt, compPrompt, subj, comp []int32) {
 	t.Helper()
 	// The server's sessions' capacity: a plan's capacity can choose a
 	// different attention kernel, which is a different reduction order.
-	open := func() *model.Instance {
-		st := lm.m.NewInstance(maxSeq)
+	open := func() *engine.Instance {
+		st := testInstance(t, lm.m, maxSeq)
 		t.Cleanup(func() { st.Close() })
 		if err := st.SetDeviceLayers(lm.dev, -1); err != nil {
 			t.Fatal(err)
@@ -668,7 +669,7 @@ func replayPair(t *testing.T, lm *LoadedModel, maxSeq int, sp model.Sampler, sub
 	// The loop resets a session before a generate that does not continue it.
 	a.Reset()
 	b.Reset()
-	out, err := model.StepRuns([]model.Run{{Instance: a, Tokens: subjPrompt, Logits: true},
+	out, err := engine.StepRuns([]engine.Run{{Instance: a, Tokens: subjPrompt, Logits: true},
 		{Instance: b, Tokens: compPrompt, Logits: true}})
 	if err != nil {
 		t.Fatal(err)
@@ -687,11 +688,11 @@ func replayPair(t *testing.T, lm *LoadedModel, maxSeq int, sp model.Sampler, sub
 		if j == len(subj)-1 {
 			break
 		}
-		runs := []model.Run{{Instance: a, Tokens: subj[j : j+1], Logits: true}}
+		runs := []engine.Run{{Instance: a, Tokens: subj[j : j+1], Logits: true}}
 		if j < len(comp) {
-			runs = append(runs, model.Run{Instance: b, Tokens: comp[j : j+1], Logits: true})
+			runs = append(runs, engine.Run{Instance: b, Tokens: comp[j : j+1], Logits: true})
 		}
-		if out, err = model.StepRuns(runs); err != nil {
+		if out, err = engine.StepRuns(runs); err != nil {
 			t.Fatal(err)
 		}
 		lg = out[0]
@@ -940,4 +941,14 @@ func chooses(t *testing.T, name string, mode JointSteps) {
 		two.GetJointStepMillis() <= 0 || two.GetSeparateStepMillis() <= 0 {
 		t.Fatalf("the probe for two rows did not time both arms and settle: %+v", b)
 	}
+}
+
+// testInstance is model.NewInstance for a gate: a refusal fails the test.
+func testInstance(tb testing.TB, m *model.Model, maxSeq int, opts ...engine.Option) *engine.Instance {
+	tb.Helper()
+	s, err := engine.NewInstance(m, maxSeq, opts...)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	return s
 }

@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/jitllm/jitllm/common/catalog"
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/model"
 )
 
 // The stages an engine error can come from, which decide how it is explained.

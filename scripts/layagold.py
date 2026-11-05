@@ -1,5 +1,5 @@
 """Laya's goldens, from Laya's own code (rl_common.py / rl_agent_api.py in
-convaiinnovations/laya), for engine/model's decision gates.
+convaiinnovations/laya), for the engine's decision gates.
 
     python -I scripts/layagold.py real    <laya_dir> <requests_dir> <out_dir>
     python -I scripts/layagold.py fixture <laya_dir> <requests_dir> <out_dir> <llama.cpp_dir>

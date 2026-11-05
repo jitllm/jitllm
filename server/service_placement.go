@@ -8,7 +8,7 @@ import (
 
 	"connectrpc.com/connect"
 
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine"
 	"github.com/jitllm/jitllm/engine/nn"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
@@ -68,7 +68,7 @@ func (s *PlacementService) SetPlacement(ctx context.Context, req *connect.Reques
 	start := time.Now()
 	sess.mu.Lock()
 	var perr error
-	ierr := sess.in().Place(func(st *model.Instance) {
+	ierr := sess.in().Place(func(st *engine.Instance) {
 		if len(want) == 0 {
 			// Everything on the CPU.
 			st.SetGPULayers(0)
@@ -143,8 +143,8 @@ func (s *PlacementService) RelocateBlocks(ctx context.Context, req *connect.Requ
 
 	start := time.Now()
 	sess.mu.Lock()
-	var mv model.BlockMove
-	if perr := sess.in().Place(func(st *model.Instance) { mv, err = st.MoveBlocks(first, last+1, to) }); perr != nil {
+	var mv engine.BlockMove
+	if perr := sess.in().Place(func(st *engine.Instance) { mv, err = st.MoveBlocks(first, last+1, to) }); perr != nil {
 		err = perr
 	}
 	sess.refresh()
@@ -184,7 +184,7 @@ func (s *PlacementService) SetRelocation(ctx context.Context, req *connect.Reque
 		return nil, connectErr(err)
 	}
 	sess.mu.Lock()
-	sess.in().With(func(st *model.Instance) { st.SetRelocate(req.Msg.Enabled) })
+	sess.in().With(func(st *engine.Instance) { st.SetRelocate(req.Msg.Enabled) })
 	sess.refresh()
 	sess.mu.Unlock()
 	return connect.NewResponse(&v1.SetRelocationResponse{Enabled: req.Msg.Enabled}), nil
@@ -205,7 +205,7 @@ func (s *PlacementService) TuneSeam(ctx context.Context, req *connect.Request[v1
 	}
 	sess.mu.Lock()
 	m := req.Msg
-	sess.in().With(func(st *model.Instance) {
+	sess.in().With(func(st *engine.Instance) {
 		st.SetSeamTuning(true)
 		st.SetSeamSchedule(int(m.WarmupTokens), int(m.TokensPerRun), int(m.Rounds))
 	})

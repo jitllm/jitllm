@@ -71,7 +71,7 @@ JITLLM_PATH="${JITLLM_PATH:-${MODEL%.gguf}.jlm}"
 # ★ mtime IS A PROXY FOR "STALE" AND IT IS WRONG WHENEVER ANOTHER BINARY WROTE
 # THE CONTAINER. A container written by an OLDER tree has a NEWER mtime, so
 # `-ot "$JLMBIN"` says fresh and the run then dies on "container is version 6
-# and this build reads 15". It happened here: a `go test ./engine/model -run
+# and this build reads 15". It happened here: a `go test ./engine -run
 # TestFusionCeiling` in a v6 worktree converts into the shared models directory
 # and clobbers the v15 container with a v6 one. The failure was SILENT because
 # jitllm_run discards the engine's stdout and lcpp_run discards stderr, so

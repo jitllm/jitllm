@@ -109,8 +109,13 @@ type PlanCheck struct {
 	Because []string `json:"because"`
 }
 
-// matches reports whether an entry's prefix covers path.
+// matches reports whether an entry's prefix covers path. A prefix ending in
+// "/*" covers that directory's own files and not its subdirectories': a
+// package whose directory holds other packages.
 func matches(prefix, path string) bool {
+	if dir, ok := strings.CutSuffix(prefix, "*"); ok && strings.HasSuffix(dir, "/") {
+		return strings.HasPrefix(path, dir) && !strings.Contains(path[len(dir):], "/")
+	}
 	return prefix != "" && strings.HasPrefix(path, prefix)
 }
 

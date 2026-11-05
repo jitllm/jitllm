@@ -3,7 +3,7 @@ package server
 import (
 	"time"
 
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine"
 )
 
 // Decode groups: a model whose blocks are on several cards runs a joint step
@@ -51,7 +51,7 @@ import (
 type decGroup struct {
 	rows  []*row
 	units []unit
-	runs  []model.Run
+	runs  []engine.Run
 	out   [][]float32
 	err   error
 	t0    time.Time
@@ -65,7 +65,7 @@ type decGroup struct {
 // closes.
 func (lp *stepLoop) groupWorker(g *decGroup) {
 	for range g.start {
-		g.out, g.err = model.StepJoint(g.runs)
+		g.out, g.err = engine.StepJoint(g.runs)
 		lp.landed <- g
 	}
 }
@@ -162,7 +162,7 @@ func (s *Session) movePending() bool {
 // steps (0 for no limit), then lets every group land.
 func (lp *stepLoop) decodeGrouped(n, limit int) {
 	if lp.landed == nil {
-		lp.landed = make(chan *decGroup, model.MaxStepRows)
+		lp.landed = make(chan *decGroup, engine.MaxStepRows)
 	}
 	for len(lp.groups) < n {
 		g := &decGroup{start: make(chan struct{}, 1)}
@@ -231,7 +231,7 @@ func (lp *stepLoop) launch(g *decGroup) bool {
 	lp.post.start()
 	runs := g.runs[:0]
 	for _, u := range units {
-		runs = append(runs, model.Run{Session: u.r.s.ms, Tokens: u.tokens, Logits: true})
+		runs = append(runs, engine.Run{Session: u.r.s.ms, Tokens: u.tokens, Logits: true})
 	}
 	g.runs = runs
 	lp.stats.steps.Add(1)
@@ -242,7 +242,7 @@ func (lp *stepLoop) launch(g *decGroup) bool {
 	g.t0 = time.Now()
 	g.steps++
 	if lp.serialGroups {
-		g.out, g.err = model.StepJoint(g.runs)
+		g.out, g.err = engine.StepJoint(g.runs)
 		lp.landed <- g
 		return true
 	}
@@ -274,7 +274,7 @@ func (lp *stepLoop) land(g *decGroup) {
 		lp.refused, lp.refusedFor = true, lp.shape
 		live := g.rows[:0]
 		for _, u := range g.units {
-			out, err := model.StepRuns([]model.Run{{Session: u.r.s.ms, Tokens: u.tokens, Logits: true}})
+			out, err := engine.StepRuns([]engine.Run{{Session: u.r.s.ms, Tokens: u.tokens, Logits: true}})
 			if err != nil {
 				lp.finish(u.r, FinishError, "", err)
 				continue

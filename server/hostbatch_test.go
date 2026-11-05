@@ -149,7 +149,7 @@ func TestHostBatchConcurrentGeneratesEqualAlone(t *testing.T) {
 					for i := range reqs {
 						reqs[i] = reqOf(i)
 					}
-					before, h0 := batchStats(t, c), lm.m.HostStepRows()
+					before, h0 := batchStats(t, c), lm.inst.HostStepRows()
 					got := concurrently(t, e, lm, c, reqs)
 					sent, exact := 0, 0
 					for i := range n {
@@ -163,7 +163,7 @@ func TestHostBatchConcurrentGeneratesEqualAlone(t *testing.T) {
 						sent += len(got[i].ids)
 					}
 					after := batchStats(t, c)
-					rows := lm.m.HostStepRows() - h0
+					rows := lm.inst.HostStepRows() - h0
 					if rows == 0 || after.GetJointRows()-before.GetJointRows() != rows {
 						t.Fatalf("no rows shared a host pass: the model ran %d host step row(s), stats %+v", rows, after)
 					}

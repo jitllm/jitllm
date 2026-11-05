@@ -9,8 +9,9 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/jitllm/jitllm/engine"
 	"github.com/jitllm/jitllm/engine/grammar"
-	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/model"
 )
 
 // llama.cpp's native HTTP API (tools/server): /completion, /infill,
@@ -823,8 +824,8 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 
 // llamaSampler is the engine's sampler for a request's settings. Temperature 0
 // is greedy, as in llama.cpp; an unset seed (-1) draws its own.
-func llamaSampler(s llamaSettings) *model.Sampler {
-	sm := &model.Sampler{Temp: s.Temperature, TopP: s.TopP, MinP: s.MinP, TopK: max(s.TopK, 0),
+func llamaSampler(s llamaSettings) *engine.Sampler {
+	sm := &engine.Sampler{Temp: s.Temperature, TopP: s.TopP, MinP: s.MinP, TopK: max(s.TopK, 0),
 		RepeatPen: s.RepeatPenalty, Seed: s.Seed}
 	if s.RepeatLastN == 0 {
 		sm.RepeatPen = 1
