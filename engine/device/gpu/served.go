@@ -2474,20 +2474,6 @@ func (l *layer) namedVector(r jlm.Role) (backend.Buf, bool) {
 		return l.nK, true
 	case jlm.RoleVClamp:
 		return l.clampB, true
-	case jlm.RoleAttnOutNorm, jlm.RoleAttnOutNormBias:
-		// A post-norm block's norm over x + attention is the one the tier
-		// holds as its MLP's (nn.LayerPlan.PostResidNorm).
-		if l.nResid == nil {
-			return nil, true
-		}
-		if r == jlm.RoleAttnOutNorm {
-			return l.nFFN, true
-		}
-		return l.nFFNB, true
-	case jlm.RoleLayerOutNorm:
-		return l.nResid, true
-	case jlm.RoleLayerOutNormBias:
-		return l.nResidB, true
 	case jlm.RoleXIELU:
 		return l.xielu, true
 	case jlm.RoleLayerOutScale:

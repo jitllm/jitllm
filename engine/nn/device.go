@@ -92,9 +92,6 @@ type LayerWeights struct {
 	// norms and depthwise filters. Its matrices are Up and Down (an edge or
 	// inverted residual's two) or Wq, Wk, Wv and Wo (an attention block's).
 	Conv *ConvWeights
-	// ResidNorm and ResidNormB are a post-norm block's last LayerNorm, over x
-	// + mlp(x) (LayerPlan.PostResidNorm): BERT's output norm. nil elsewhere.
-	ResidNorm, ResidNormB []float32
 
 	// AttnNormB and FFNNormB are the LayerNorm biases (LayerPlan.LayerNorm):
 	// an RMSNorm has no bias and a LayerNorm does.
@@ -648,13 +645,6 @@ type LayerPlan struct {
 	// gated FFN's product before down (LayerWeights.AttnSubNorm/FFNSubNorm) --
 	// BitNet's two inner norms. A tier runs both or declines the block.
 	SubNorm bool
-	// PostResidNorm says the block's norms come after its residual adds, on
-	// the residual itself (BERT's post-norm order): x = LN(x + attn(x)) with
-	// FFNNorm, whose output is both the FFN's input and the residual, then
-	// x = LN(x + mlp(x)) with LayerWeights.ResidNorm. The attention reads the
-	// block input as it is (no AttnNorm; NoPreNorm). Built on the non-causal
-	// path, the one encoders run.
-	PostResidNorm bool
 	// NoPreNorm says some block has no pre-norms (OLMo 2, EXAONE 4): attention
 	// and the FFN read the residual as it is and only their outputs are
 	// normalised (LayerWeights.AttnNorm and FFNNorm are nil). A tier copies the

@@ -139,10 +139,7 @@ type layer struct {
 	clampB backend.Buf
 	// LayerNorm biases, nil for every block that RMSNorms.
 	nAttnB, nFFNB backend.Buf
-	// nResid and nResidB are a post-norm block's norm over x + mlp(x)
-	// (nn.LayerPlan.PostResidNorm, BERT's), nil elsewhere.
-	nResid, nResidB backend.Buf
-	nQ, nK          backend.Buf // per-head q/k RMSNorm weights (qwen3), nil otherwise
+	nQ, nK        backend.Buf // per-head q/k RMSNorm weights (qwen3), nil otherwise
 	// The KV cache is per sequence, not per block: nn.LayerDevice.Layers carries a
 	// position and no state identity, so two model.instances sharing one pair would
 	// silently corrupt each other. See docs/design/device-sessions.md.
@@ -2453,21 +2450,6 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	}
 	if w.AttnNormB != nil {
 		up(&l.nAttnB, w.AttnNormB)
-	}
-	// BERT's norms after the residual adds: the attention reads the block
-	// input (no attention norm), FFNNorm normalises x + attention and the
-	// residual takes it, ResidNorm normalises x + mlp.
-	if p.PostResidNorm {
-		if w.AttnNorm != nil || w.FFNNorm == nil || len(w.ResidNorm) != p.NEmbd ||
-			(w.ResidNormB != nil && len(w.ResidNormB) != p.NEmbd) {
-			g.LastErr = fmt.Sprintf("block %d: a post-norm block wants no attention norm and two "+
-				"norms of %d after its adds", li, p.NEmbd)
-			return false
-		}
-		up(&l.nResid, w.ResidNorm)
-		if w.ResidNormB != nil {
-			up(&l.nResidB, w.ResidNormB)
-		}
 	}
 	if w.FFNNormB != nil {
 		up(&l.nFFNB, w.FFNNormB)
@@ -5090,7 +5072,6 @@ func (l *layer) auxBufs() []backend.Buf {
 	}
 	return append(append(vs,
 		l.nAttn, l.nFFN, l.nAttnB, l.nFFNB, l.nQ, l.nK,
-		l.nResid, l.nResidB, // BERT's post-norm
 		l.clampB,     // Gemma 4's tower: its clipped linears' bounds
 		l.altRouter,  // Gemma 3n
 		l.ssmTaps.qs, // a linear block's convolution
