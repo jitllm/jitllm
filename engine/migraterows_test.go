@@ -127,7 +127,7 @@ func batchSeamMoves(t *testing.T, p string, bound float64, relocate bool, w *fus
 func batchSeamMovesWith(t *testing.T, p string, bound float64, relocate bool, mopts []Option,
 	check func(t *testing.T, st gpu.Stats), w *fuseWatch) {
 	if _, err := os.Stat(p); err != nil {
-		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
+		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
 	// No KV prewarm: the squeezed arm measures what attaching spends and
 	// needs the rows' growth to outrun it, which pages grown ahead would cover.

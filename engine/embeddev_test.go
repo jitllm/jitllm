@@ -70,7 +70,7 @@ func embedsOnTheDevice(t *testing.T, name string, opts ...gpu.Option) {
 		p = jlmOf(t, src)
 	}
 	if _, err := os.Stat(p); err != nil {
-		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
+		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
 	instOpts := []Option{WithKVF16(false)}
 	m, err := model.Open(p)

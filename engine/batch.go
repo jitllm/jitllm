@@ -21,7 +21,7 @@ func (s *Instance) rowOwner(i int, seq []int) (*Session, int) {
 // rows hold: a step of one row per sequence fans attention out over (row,
 // head) units.
 func (s *Instance) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([]float32, error) {
-	m, c := s.m, s.c
+	c := s.c
 	n := len(tokens)
 	// The ragged head applies the final softcap itself, as decode's head does.
 	// AltUp's head reads the streams' mean, which the host takes (altup.go).
@@ -134,12 +134,11 @@ func (s *Instance) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([
 		// Fault the block in. Skipping this is invisible while the model fits,
 		// and under paging reads another block's bytes from a reused frame
 		// (see TestForwardBatchFaultsItsBlocksIn).
-		if err := m.PageIn(li); err != nil {
+		l, err := s.pageIn(li)
+		if err != nil {
 			return nil, err
 		}
-		l := &m.Layers[li]
 		var why nn.Decline
-		var err error
 		switch {
 		case c.LayerKind(li).Recurrent():
 			why, err = s.cpuRecRows(li, l, s.bx[:n*c.ResidW()], cs, seq, pos, tokens, causal, -1, 0)

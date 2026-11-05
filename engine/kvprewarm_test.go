@@ -26,7 +26,7 @@ func TestFirstPromptDoesNotGrowTheKVPool(t *testing.T) {
 		p = jlmOf(t, src)
 	}
 	if _, err := os.Stat(p); err != nil {
-		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
+		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
 	ids := func(m *model.Model) []int32 {
 		return m.Vocab.Encode(strings.Repeat("The river rose every spring until the bridges were islands. ", 40), true)[:400]

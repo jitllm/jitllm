@@ -65,7 +65,7 @@ func TestStreamedGGUFIsTheConvertedFile(t *testing.T) {
 					continue
 				}
 				if _, err := os.Stat(p); err != nil {
-					t.Skipf("MODEL MISSING: %v (see docs/testing.md) -- this case proved nothing", err)
+					testmodels.Missing(t, "MODEL MISSING: %v (see docs/testing.md) -- this case proved nothing", err)
 				}
 			}
 			dir := t.TempDir()

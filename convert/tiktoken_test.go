@@ -22,7 +22,7 @@ func TestTiktokenVocabMatchesLlamaCpp(t *testing.T) {
 	dir := testmodels.Path("Kimi-Linear-48B-A3B-Instruct")
 	gg := testmodels.Path("Moonlight-16B-A3B-Instruct-Q4_K_M.gguf")
 	if !fileExists(filepath.Join(dir, "tiktoken.model")) || !fileExists(gg) {
-		t.Skipf("MODEL MISSING: %s/tiktoken.model or %s (set JITLLM_MODELS to the model directory) -- this gate proved nothing", dir, gg)
+		testmodels.Missing(t, "MODEL MISSING: %s/tiktoken.model or %s (set JITLLM_MODELS to the model directory) -- this gate proved nothing", dir, gg)
 	}
 	ours, err := hfTiktokenVocab(dirFiles(dir), 163840)
 	if err != nil {
@@ -78,7 +78,7 @@ func TestTiktokenVocabMatchesLlamaCpp(t *testing.T) {
 func TestTiktokenVocabEncodesLikeMoonshot(t *testing.T) {
 	dir := testmodels.Path("Kimi-Linear-48B-A3B-Instruct")
 	if !fileExists(filepath.Join(dir, "tiktoken.model")) {
-		t.Skipf("MODEL MISSING: %s/tiktoken.model (set JITLLM_MODELS to the model directory) -- this gate proved nothing", dir)
+		testmodels.Missing(t, "MODEL MISSING: %s/tiktoken.model (set JITLLM_MODELS to the model directory) -- this gate proved nothing", dir)
 	}
 	b, err := os.ReadFile(filepath.Join("..", "tok", "testdata", "kimi_tiktoken.json"))
 	if err != nil {

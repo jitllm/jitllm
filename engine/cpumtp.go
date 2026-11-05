@@ -53,7 +53,7 @@ func (s *Instance) cpuMTPEntry(z, x []float32, toks []int32, rows int) nn.Declin
 	}
 	f, why := hf.formOf()
 	if why == nn.DeclineServes {
-		why = s.cpuWeights(f, s.lo, &s.m.Layers[s.lo])
+		why = s.cpuWeights(f, s.lo, s.layer(s.lo))
 	}
 	if why != nn.DeclineServes {
 		s.cpu.steps.Declined[nn.PartMTP][why] += rows
@@ -64,7 +64,7 @@ func (s *Instance) cpuMTPEntry(z, x []float32, toks []int32, rows int) nn.Declin
 		k := min(f.Rows, rows-r0)
 		u := max(f.Unit, 1)
 		b := &s.cpu.bound
-		*b = cpuBound{li: s.lo, l: &s.m.Layers[s.lo], own: s.cpu.dev.Own(f), n: k, tok: st.tok, pos: st.pos}
+		*b = cpuBound{li: s.lo, l: s.layer(s.lo), own: s.cpu.dev.Own(f), n: k, tok: st.tok, pos: st.pos}
 		padded := k < u
 		if !padded {
 			k -= k % u

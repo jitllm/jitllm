@@ -31,7 +31,7 @@ func TestChatTemplateOptionReplacesTheGGUFs(t *testing.T) {
 	cfgPath := testmodels.Path(filepath.Join("Mistral-7B-Instruct-v0.3", "tokenizer_config.json"))
 	for _, p := range []string{ggufPath, cfgPath} {
 		if _, err := os.Stat(p); err != nil {
-			t.Skipf("MODEL MISSING: %v (internal/testmodels/fetch.sh mistral) -- this gate proved nothing", err)
+			testmodels.Missing(t, "MODEL MISSING: %v (internal/testmodels/fetch.sh mistral) -- this gate proved nothing", err)
 		}
 	}
 	f, err := gguf.Open(ggufPath, gguf.WithoutWarm(true))

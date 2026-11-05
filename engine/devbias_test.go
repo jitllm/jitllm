@@ -63,7 +63,7 @@ func TestDeviceMatchesHostOnABiasedModel(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if _, err := os.Stat(c.path); err != nil {
-				t.Skipf("MODEL MISSING: %s (set JITLLM_MODELS to the model directory) -- this gate proved nothing", c.path)
+				testmodels.Missing(t, "MODEL MISSING: %s (set JITLLM_MODELS to the model directory) -- this gate proved nothing", c.path)
 			}
 			m, err := model.Open(jlmOf(t, c.path))
 			if err != nil {

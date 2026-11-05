@@ -19,7 +19,7 @@ func TestShardsReadInPlaceWriteTheSameContainer(t *testing.T) {
 	dir := testmodels.Path("synth-kimilinear")
 	_, shards, err := hfShards(dir)
 	if err != nil {
-		t.Skipf("MODEL MISSING: %s: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", dir, err)
+		testmodels.Missing(t, "MODEL MISSING: %s: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", dir, err)
 	}
 	for _, q8 := range []bool{false, true} {
 		var opts []Option

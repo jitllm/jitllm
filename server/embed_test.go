@@ -64,7 +64,7 @@ func embedServer(t *testing.T, name string, cfg Config) (*Engine, *LoadedModel, 
 	path := testmodels.Path(filepath.Join("embed", name))
 	fresh.Must(t, path)
 	if _, err := os.Stat(path); err != nil {
-		t.Skipf("MODEL MISSING: %s (set JITLLM_MODELS to the model directory and convert "+
+		testmodels.Missing(t, "MODEL MISSING: %s (set JITLLM_MODELS to the model directory and convert "+
 			"embed/%s.gguf) -- this gate proved nothing", path, strings.TrimSuffix(name, ".jlm"))
 	}
 	cfg.ModelDir, cfg.Probe = filepath.Dir(path), noProbe
@@ -455,7 +455,7 @@ func TestEmbedRefusesWhatCannotEmbed(t *testing.T) {
 	gen := testmodels.Path("stories260K.jlm")
 	fresh.Must(t, gen)
 	if _, err := os.Stat(gen); err != nil {
-		t.Skipf("MODEL MISSING: %s (internal/testmodels/fetch.sh copies stories260K and "+
+		testmodels.Missing(t, "MODEL MISSING: %s (internal/testmodels/fetch.sh copies stories260K and "+
 			"`jitllm convert` makes the container) -- this gate proved nothing", gen)
 	}
 	e, enc, url := embedServer(t, embedGateModels()[0], Config{})

@@ -26,7 +26,7 @@ import (
 func TestF16RouterOnTheDevice(t *testing.T) {
 	path := testmodels.Path("Qwen3-MOE-4x0.6B-Q4_K_M.gguf")
 	if _, err := os.Stat(path); err != nil {
-		t.Skipf("MODEL MISSING: %s (set JITLLM_MODELS) -- this gate proved nothing", path)
+		testmodels.Missing(t, "MODEL MISSING: %s (set JITLLM_MODELS) -- this gate proved nothing", path)
 	}
 	ids := []int32{1, 415, 5565, 302, 4843, 349}
 	arm := func(f16 bool) (float64, int) {
@@ -45,7 +45,7 @@ func TestF16RouterOnTheDevice(t *testing.T) {
 			if l.Router.Rows == 0 {
 				continue
 			}
-			if err := m.PageIn(li); err != nil {
+			if err := m.PageIn(li, &m.Layers[li]); err != nil {
 				t.Fatal(err)
 			}
 			if l.Router.Typ != quant.F32 {

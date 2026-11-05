@@ -17,7 +17,7 @@ import (
 func TestExpertSheetHandoverAllocatesNothing(t *testing.T) {
 	path, ok := existingModel(testmodels.Path("kimik3/Kimi-K3-0.40B.Q8_0.gguf"))
 	if !ok {
-		t.Skipf("MODEL MISSING: kimik3/Kimi-K3-0.40B.Q8_0.gguf -- this gate proved nothing")
+		testmodels.Missing(t, "MODEL MISSING: kimik3/Kimi-K3-0.40B.Q8_0.gguf -- this gate proved nothing")
 	}
 	m, err := model.Open(jlmOf(t, path))
 	if err != nil {

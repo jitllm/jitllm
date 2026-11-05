@@ -26,7 +26,7 @@ func TestAnAttachedPictureReachesTheModel(t *testing.T) {
 	visionModel := testmodels.Path("SmolVLM-256M-Instruct-Q8_0-vlm.jlm")
 	fresh.Must(t, visionModel)
 	if _, err := os.Stat(visionModel); err != nil {
-		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
+		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
 	pic := filepath.Join("..", "..", "engine", "testdata", "quad-and-disc.png")
 	if _, err := os.Stat(pic); err != nil {

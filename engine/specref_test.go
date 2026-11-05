@@ -59,7 +59,7 @@ func TestMTPMatchesReference(t *testing.T) {
 				t.Fatal(err)
 			}
 			if _, err := os.Stat(testmodels.Path(tc.model)); err != nil {
-				t.Skipf("MODEL MISSING: %v (scripts/mtpgold.py builds it) -- this gate proved nothing", err)
+				testmodels.Missing(t, "MODEL MISSING: %v (scripts/mtpgold.py builds it) -- this gate proved nothing", err)
 			}
 			m, openOpts := openSpecModel(t, tc.model, WithKVF16(false))
 			defer m.Close()

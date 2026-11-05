@@ -21,7 +21,7 @@ func TestParkTakesTheCardHistoryOffAndBack(t *testing.T) {
 	}
 	m, err := model.Open(p)
 	if err != nil {
-		t.Skipf("MODEL MISSING: %v -- this gate proved nothing", err)
+		testmodels.Missing(t, "MODEL MISSING: %v -- this gate proved nothing", err)
 	}
 	defer m.Close()
 	g := swaTier(t)

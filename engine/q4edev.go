@@ -37,7 +37,7 @@ func (s *Instance) q4ePlan(li int, plan *nn.LayerPlan) {
 
 // q4eWeights adds block li's Qwen3.8-Flash-Next tensors to w.
 func (s *Instance) q4eWeights(li int, w *nn.LayerWeights) {
-	l := &s.m.Layers[li]
+	l := s.layer(li)
 	d := l.Q4e
 	if d == nil {
 		return

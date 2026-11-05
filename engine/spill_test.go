@@ -27,7 +27,7 @@ func TestAFullCardSpillsABlockOntoTheNextOne(t *testing.T) {
 	testdevices.Require(t, "cuda:0")
 	p := testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.jlm")
 	if _, err := os.Stat(p); err != nil {
-		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
+		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
 	m, err := model.Open(p)
 	if err != nil {

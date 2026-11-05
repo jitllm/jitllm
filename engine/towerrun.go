@@ -355,7 +355,8 @@ func (ts *Instance) towerBlocks(tr *towerRun, gw int, wins []nn.KeyRun) error {
 	ts.cpu.tabsFresh = false
 	copy(tr.blk, tr.rows)
 	for li := ts.lo; li < ts.hi; li++ {
-		if err := ts.m.PageIn(li); err != nil {
+		l, err := ts.pageIn(li)
+		if err != nil {
 			return err
 		}
 		// Each run of a windowed block is a window its rows attend inside.
@@ -366,7 +367,7 @@ func (ts *Instance) towerBlocks(tr *towerRun, gw int, wins []nn.KeyRun) error {
 			ts.bidir = append(ts.bidir[:0], nn.KeyRun{Lo: 0, Hi: n})
 		}
 		ts.cpu.runWindows = windowed
-		why, err := ts.cpuRows(li, &ts.m.Layers[li], tr.blk, nil, nil, tr.seq, tr.pos, nil)
+		why, err := ts.cpuRows(li, l, tr.blk, nil, nil, tr.seq, tr.pos, nil)
 		if err != nil {
 			return err
 		}

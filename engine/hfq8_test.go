@@ -30,7 +30,7 @@ func TestSafetensorsQ8MatchTransformers(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			dir := testmodels.Path(name)
 			if _, err := os.Stat(filepath.Join(dir, "config.json")); err != nil {
-				t.Skipf("MODEL MISSING: %s (set JITLLM_MODELS to the model directory) -- this gate proved nothing", dir)
+				testmodels.Missing(t, "MODEL MISSING: %s (set JITLLM_MODELS to the model directory) -- this gate proved nothing", dir)
 			}
 			b, err := os.ReadFile(g)
 			if err != nil {

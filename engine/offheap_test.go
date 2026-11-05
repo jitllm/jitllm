@@ -142,7 +142,7 @@ func TestTwoPagedModelsShareTheProcess(t *testing.T) {
 	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen3-MOE-4x0.6B-Q4_K_M.gguf"} {
 		p, ok := existingModel(testmodels.Path(name))
 		if !ok {
-			t.Skipf("MODEL MISSING: %s (set JITLLM_MODELS) -- this gate proved nothing", name)
+			testmodels.Missing(t, "MODEL MISSING: %s (set JITLLM_MODELS) -- this gate proved nothing", name)
 		}
 		paths = append(paths, jlmOf(t, p))
 	}

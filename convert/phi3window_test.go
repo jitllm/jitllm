@@ -13,7 +13,7 @@ import (
 func TestPhi3SlidesEveryLayer(t *testing.T) {
 	p := testmodels.Path("Phi-3.5-mini-instruct-Q4_K_M.gguf")
 	if _, err := os.Stat(p); err != nil {
-		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
+		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
 	c := ggufSource(t, p).Config
 	if c.SWAWindow != 262144 {
@@ -34,7 +34,7 @@ func TestPhi3SlidesEveryLayer(t *testing.T) {
 func TestPhi4AttendsFully(t *testing.T) {
 	p := testmodels.Path("phi-4-Q4_K_M.gguf")
 	if _, err := os.Stat(p); err != nil {
-		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
+		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
 	c := ggufSource(t, p).Config
 	if c.SWAWindow != 0 || c.SWAPeriod != 0 {

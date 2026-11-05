@@ -104,7 +104,7 @@ func (s *Instance) cpuStreamsRun(one, many *cpuHeadForm, x []float32, rows int, 
 		li, l := -1, (*model.Layer)(nil)
 		if hf == &st.collapse || hf == &st.collapseRows {
 			if li = st.li; li >= 0 {
-				l = &s.m.Layers[li]
+				l = s.layer(li)
 			}
 		}
 		why = s.cpuWeights(f, li, l)

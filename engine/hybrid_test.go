@@ -498,7 +498,7 @@ func TestEveryLayerTensorIsBound(t *testing.T) {
 	for li := range m.Layers {
 		// Open touches no page, so fault the block in first: pageIn is where a
 		// weight meets its bytes.
-		if err := m.PageIn(li); err != nil {
+		if err := m.PageIn(li, &m.Layers[li]); err != nil {
 			t.Fatalf("page in block %d: %v", li, err)
 		}
 		v := reflect.ValueOf(&m.Layers[li]).Elem()

@@ -167,7 +167,7 @@ func openLatent(t *testing.T, name string) (*model.Model, []Option) {
 		src = hfContainer(t, name)
 	} else {
 		if _, err := os.Stat(p); err != nil && !strings.HasSuffix(p, jlm.Ext) {
-			t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
+			testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 		}
 		src = jlmOf(t, p)
 	}

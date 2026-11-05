@@ -30,7 +30,7 @@ import (
 func TestDeviceMemoryHoldsSteadyAcrossMoves(t *testing.T) {
 	p := testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf")
 	if _, err := os.Stat(p); err != nil {
-		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS) -- this gate proved nothing", err)
+		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS) -- this gate proved nothing", err)
 	}
 	m, err := model.Open(jlmOf(t, p))
 	if err != nil {

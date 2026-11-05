@@ -36,7 +36,7 @@ func TestYarnAgreesAcrossInputs(t *testing.T) {
 			dir, gp := testmodels.Path(p[0]), testmodels.Path(p[1])
 			for _, q := range []string{dir, gp} {
 				if _, err := os.Stat(q); err != nil {
-					t.Skipf("MODEL MISSING: %s (set JITLLM_MODELS; scripts/c6gold.py builds the fixtures) -- "+
+					testmodels.Missing(t, "MODEL MISSING: %s (set JITLLM_MODELS; scripts/c6gold.py builds the fixtures) -- "+
 						"this gate proved nothing", q)
 				}
 			}

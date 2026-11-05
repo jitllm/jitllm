@@ -24,7 +24,7 @@ func TestChatCapableAgreesWithChatPrompt(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			m, err := model.Open(tc.path)
 			if err != nil {
-				t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
+				testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 			}
 			defer m.Close()
 

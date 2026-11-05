@@ -149,7 +149,7 @@ func modelPath(t *testing.T, name string) string {
 	p := testmodels.Path(name)
 	fresh.Must(t, p)
 	if _, err := os.Stat(p); err != nil {
-		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
+		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate would prove nothing (RULE 11)", err)
 	}
 	return p
 }

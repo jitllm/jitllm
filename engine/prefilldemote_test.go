@@ -24,7 +24,7 @@ import (
 func TestDemotedDevicePrefillFinishesOnTheCPU(t *testing.T) {
 	p := testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf")
 	if _, err := os.Stat(p); err != nil {
-		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS) -- this gate proved nothing", err)
+		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS) -- this gate proved nothing", err)
 	}
 	// Both arms on the same arithmetic: the tuner off (a pack width is a
 	// summation order) and an f32 KV cache (a device steps an f16 one down to

@@ -24,7 +24,7 @@ func jlmOfSafetensors(t testing.TB, dir string) string {
 	t.Helper()
 	real, err := filepath.EvalSymlinks(dir)
 	if err != nil {
-		t.Skipf("MODEL MISSING: %s (%v) (set JITLLM_MODELS to the model directory) -- this gate proved nothing", dir, err)
+		testmodels.Missing(t, "MODEL MISSING: %s (%v) (set JITLLM_MODELS to the model directory) -- this gate proved nothing", dir, err)
 	}
 	dst, err := convertDir(real, false)
 	if err != nil {
@@ -80,7 +80,7 @@ func TestSafetensorsContainerDecodesLikeItsGGUF(t *testing.T) {
 	hf := testmodels.Path("SmolLM2-360M-Instruct")
 	gg := testmodels.Path("SmolLM2-360M-Instruct-Q8_0.gguf")
 	if _, err := os.Stat(gg); err != nil {
-		t.Skipf("MODEL MISSING: %s (%v) (set JITLLM_MODELS to the model directory) -- this gate proved nothing", gg, err)
+		testmodels.Missing(t, "MODEL MISSING: %s (%v) (set JITLLM_MODELS to the model directory) -- this gate proved nothing", gg, err)
 	}
 	const prompt, n = "The capital of France is", 16
 

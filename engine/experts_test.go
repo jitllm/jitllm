@@ -30,7 +30,7 @@ func TestEveryExpertIsADifferentExpert(t *testing.T) {
 			}
 			// Fault the block in first: Open touches no page, so an expert view
 			// has no bytes until pageIn gives it some.
-			if err := m.PageIn(0); err != nil {
+			if err := m.PageIn(0, &m.Layers[0]); err != nil {
 				t.Fatalf("page in block 0: %v", err)
 			}
 			// And the experts separately: pageIn deliberately skips them, and
@@ -42,7 +42,7 @@ func TestEveryExpertIsADifferentExpert(t *testing.T) {
 			// Every expert is its own page; ensureExperts binds the views and
 			// the release keeps the pages held until the comparison is done.
 			var hold model.ExpertHold
-			err = m.EnsureExperts(0, all, &hold)
+			err = m.EnsureExperts(0, all, &hold, &m.Layers[0])
 			defer hold.Release()
 			if err != nil {
 				t.Fatalf("ensure experts: %v", err)

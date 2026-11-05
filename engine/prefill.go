@@ -841,14 +841,14 @@ func (s *Instance) bswaTable(n, nrot int) []float32 {
 // base is the chunk's first row in the prompt and chunkRows the scratch the
 // chunk is sized for.
 func (s *Instance) hostRows(li, slot, base, p0, n, chunkRows int, bidir bool) error {
-	m, c := s.m, s.c
+	c := s.c
 	s.growBatch(chunkRows)
 	// Same fault as decode: a block is a page and visiting it brings
 	// it in. One nil compare when the budget holds the model.
-	if err := m.PageIn(li); err != nil {
+	l, err := s.pageIn(li)
+	if err != nil {
 		return err
 	}
-	l := &m.Layers[li]
 	why := nn.DeclineBidir
 	if !bidir || !c.LayerKind(li).Recurrent() {
 		// A non-causal decoder's chunk (an embedding run's) is one run

@@ -46,20 +46,12 @@ func (m *Model) pageNet() uint64 {
 	return p.bytes - held
 }
 
-// applyPageBudget hands the pager a budget and re-points every block at the
-// frames it kept. Callers hold m.pages.mu.
+// applyPageBudget hands the pager a budget. Callers hold m.pages.mu.
+//
+// Nothing is re-bound: a budget evicts and never moves a resident page, and
+// whatever it evicted is read back and bound by the next page-in of it.
 func (m *Model) applyPageBudget(net uint64) {
 	m.Container.SetBudget(net)
-	// Whatever was evicted faults back in as it is visited. Dense weights are
-	// unaffected -- they never leave. Rebinding writes only what moved
-	// (sameSpan), under the lock pageIn binds under.
-	m.Bind.Lock()
-	defer m.Bind.Unlock()
-	for i := range m.Layers {
-		// The shapes were validated at load; a failure here would mean the
-		// container changed underneath, and pageIn reports the same error.
-		bindPacked(m.Container, m.Cfg, &m.Layers[i])
-	}
 }
 
 // followHostHeld re-divides the page budget after what the host-memory devices
