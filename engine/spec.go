@@ -401,7 +401,7 @@ func (sp *Speculator) Start(prompt []int32, sm *Sampler) (int32, error) {
 	if len(prompt) == 0 {
 		return 0, errEmptyPrompt{}
 	}
-	defer t.m.EnterPager()()
+	defer t.m.EnterPager(t.m.Frames)()
 	n := len(prompt)
 	logits, hid, err := sp.trunkPrompt(prompt)
 	if err != nil {
@@ -534,7 +534,7 @@ func (sp *Speculator) Next(sm *Sampler) ([]int32, error) {
 	if sp.retired && len(sp.replay) == 0 {
 		return sp.decode(sm, greedy)
 	}
-	defer t.m.EnterPager()()
+	defer t.m.EnterPager(t.m.Frames)()
 	P := t.bpos[0]
 	r := len(sp.replay)
 	// The verification writes P..P+r+k: it must fit the trunk's context, and

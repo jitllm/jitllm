@@ -586,7 +586,7 @@ func pagesWithTheSameAnswer(t *testing.T, ids []int32, src string) {
 			}
 			out = append(out, slices.Clone(rows[:2*m.Cfg.NVocab]))
 		}
-		_, in, _ := m.PageStats()
+		_, in, _ := m.PageStats(m.Frames)
 		return out, in
 	}
 	want, residentIn := run()

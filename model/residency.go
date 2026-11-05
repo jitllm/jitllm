@@ -1,5 +1,7 @@
 package model
 
+import "github.com/jitllm/jitllm/format/jlm"
+
 // Expert residency: keeping the experts the router keeps asking for, and
 // dropping the ones it does not.
 //
@@ -50,7 +52,7 @@ func (r *Residency) Touch(li int, nExpert int, sel []int32) {
 
 // blockHeld reports whether block li's page is held, so a fused run does not
 // stay open across the read of one that is not.
-func (m *Model) BlockHeld(li int) bool {
-	c, cf := m.Container, m.Frames
+func (m *Model) BlockHeld(fr *jlm.Frames, li int) bool {
+	c, cf := m.Container, fr
 	return c == nil || li >= c.NPages() || cf.Resident(li)
 }

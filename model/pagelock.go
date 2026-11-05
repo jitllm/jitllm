@@ -1,5 +1,7 @@
 package model
 
+import "github.com/jitllm/jitllm/format/jlm"
+
 // enterPager serialises decode on a container whose budget is smaller than its
 // pages, and does nothing at all on one that fits. It returns the release, so
 // every caller is one deferred line.
@@ -18,8 +20,8 @@ package model
 // It goes on the public boundary only, because the inner paths nest and
 // sync.Mutex is not reentrant: the gated set is exactly Forward, Prefill,
 // PrefillMixed, PrefillCached and StepRuns, none of which calls another.
-func (m *Model) EnterPager() func() {
-	if m == nil || m.Container == nil || !m.Frames.CanEvict() {
+func (m *Model) EnterPager(fr *jlm.Frames) func() {
+	if m == nil || m.Container == nil || !fr.CanEvict() {
 		return func() {}
 	}
 	m.pager.Lock()

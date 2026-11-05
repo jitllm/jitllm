@@ -414,14 +414,14 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	if err := preloadWait(m); err != nil {
 		return err
 	}
-	goheap.OffHeap(maxmem, m.MappedBytes())
+	goheap.OffHeap(maxmem, m.MappedBytes(m.Frames))
 	c := m.Cfg
 	fmt.Fprintf(os.Stderr, "%s L=%d d=%d heads=%d/%d head_dim=%d ffn=%d vocab=%d\n",
 		c.Arch, c.NLayer, c.NEmbd, c.NHead, c.NKVHead, c.HeadDim, c.NFFN, c.NVocab)
 	// The pager's chunk size is stored in the container (jlm.chunkFor). It is
 	// printed at load because the pages line below only appears when frames
 	// are short.
-	if n := m.ChunkBytes(); n > 0 {
+	if n := m.ChunkBytes(m.Frames); n > 0 {
 		fmt.Fprintf(os.Stderr, "pager     %d KiB chunks, %d stream group(s)\n",
 			n>>10, m.StreamGroups())
 	}
@@ -1106,11 +1106,11 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	// Say whether pages faulted: a run fully resident and one a page short
 	// are different measurements.
 	// evict, not out: `out` is the generated token slice in this scope.
-	if fr, in, evict := m.PageStats(); fr > 0 {
+	if fr, in, evict := m.PageStats(m.Frames); fr > 0 {
 		// Read requests, not page-ins, are what a partial page-in costs. The
 		// chunk size is the File's own, so this reports what the pager did.
 		fmt.Fprintf(os.Stderr, "pages    %d frame(s), %d page-in(s), %d eviction(s), %d fresh frame(s), %.2f GiB read in %d request(s) at %d KiB chunks\n",
-			fr, in, evict, m.FreshFrames(), float64(m.BytesRead())/(1<<30), m.PagerReads(), m.ChunkBytes()>>10)
+			fr, in, evict, m.FreshFrames(m.Frames), float64(m.BytesRead(m.Frames))/(1<<30), m.PagerReads(), m.ChunkBytes(m.Frames)>>10)
 		// The same total split by phase: the whole-run figure is dominated by
 		// admission on a streamed model. Each phase's rate is over its own
 		// wall, which includes compute, so it is a floor.
@@ -1833,16 +1833,16 @@ func setPageBudget(m *model.Model, st *engine.Instance, dev nn.LayerDevice, maxm
 	// would be handed, the device's holding off.
 	net := max(avail-min(avail, hostReserved(dev)), 1)
 	frames := int(net / page)
-	pool, _, _ := m.PageStats()
+	pool, _, _ := m.PageStats(m.Frames)
 	if frames >= host && pool == 0 {
 		return // never budgeted, and the budget holds every host block
 	}
-	m.SetPageBudget(avail)
+	m.SetPageBudget(m.Frames, avail)
 	// What the budget holds, not what is resident now: SetPageBudget's count
 	// is the pages already read, which right after placement is the few the
 	// devices left behind, and printed as a capacity it reported page-ins on
 	// a model whose host blocks all fit.
-	net = m.PageBudget()
+	net = m.PageBudget(m.Frames)
 	fit := int(net / page)
 	if fit >= host {
 		return // widened back to holding every host block: nothing will evict

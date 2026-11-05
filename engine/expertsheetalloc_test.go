@@ -38,16 +38,16 @@ func TestExpertSheetHandoverAllocatesNothing(t *testing.T) {
 	sel := []uint32{0, 1}
 
 	bank := func() {
-		m.BankWeight(l.Gate)
-		m.BankWeight(l.Up)
-		m.BankWeight(l.Down)
+		m.BankWeight(m.Frames, l.Gate)
+		m.BankWeight(m.Frames, l.Up)
+		m.BankWeight(m.Frames, l.Down)
 	}
 	bank()
 	if n := testing.AllocsPerRun(50, bank); n != 0 {
 		t.Errorf("bankWeight of a paged bank allocates %v times a call", n)
 	}
 
-	w := m.BankWeight(l.Down)
+	w := m.BankWeight(m.Frames, l.Down)
 	if w.Packed == nil || w.Packed.Sheet == nil {
 		t.Fatal("a paged packed bank hands the device no Sheet: this gate proved nothing")
 	}
@@ -81,7 +81,7 @@ func TestExpertSheetHandoverAllocatesNothing(t *testing.T) {
 	r1()
 
 	warm := func() {
-		if err := m.EnsureBlockSelected(li, sel, false); err != nil {
+		if err := m.EnsureBlockSelected(m.Frames, li, sel, false); err != nil {
 			t.Fatal(err)
 		}
 	}

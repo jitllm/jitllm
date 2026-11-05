@@ -3,6 +3,7 @@ package model
 import (
 	"sync"
 
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/nn"
 )
 
@@ -50,13 +51,13 @@ func (m *Model) pageNet() uint64 {
 //
 // Nothing is re-bound: a budget evicts and never moves a resident page, and
 // whatever it evicted is read back and bound by the next page-in of it.
-func (m *Model) applyPageBudget(net uint64) {
-	m.Frames.SetBudget(net)
+func (m *Model) applyPageBudget(fr *jlm.Frames, net uint64) {
+	fr.SetBudget(net)
 }
 
 // followHostHeld re-divides the page budget after what the host-memory devices
 // hold moved. It does nothing for an unlimited budget or one already right.
-func (m *Model) FollowHostHeld() {
+func (m *Model) FollowHostHeld(fr *jlm.Frames) {
 	if m.Container == nil {
 		return
 	}
@@ -65,8 +66,8 @@ func (m *Model) FollowHostHeld() {
 	if m.pages.bytes == 0 {
 		return
 	}
-	if net := m.pageNet(); net != m.Frames.Budget() {
-		m.applyPageBudget(net)
+	if net := m.pageNet(); net != fr.Budget() {
+		m.applyPageBudget(fr, net)
 	}
 }
 

@@ -327,19 +327,19 @@ func isCapacityDecline(why string) bool {
 
 func pbResidency(lm *LoadedModel) *v1.Residency {
 	m := lm.m
-	frames, in, out := m.PageStats()
-	resident := m.HostResidentBlocks()
+	frames, in, out := m.PageStats(m.Frames)
+	resident := m.HostResidentBlocks(m.Frames)
 	blocks := m.Cfg.NLayer
-	budget := m.PageBudget()
+	budget := m.PageBudget(m.Frames)
 	// fits is a boolean because the step is a cliff: one block short of
 	// resident is one eviction and one page read every token. It is the
 	// budget's answer, not a count of frames: a model that fits has none
 	// resident until its first token, and one under a tiny budget has none
 	// resident right after the re-budget evicted them.
-	fits := m.PagesFit()
+	fits := m.PagesFit(m.Frames)
 	return &v1.Residency{
 		ModelId:        lm.id,
-		Resident:       pbBytes(m.HostBytes()),
+		Resident:       pbBytes(m.HostBytes(m.Frames)),
 		Budget:         pbBytes(budget),
 		Frames:         int32(frames),
 		Blocks:         int32(blocks),
@@ -347,7 +347,7 @@ func pbResidency(lm *LoadedModel) *v1.Residency {
 		Fits:           fits,
 		PageIns:        in,
 		Evictions:      out,
-		BytesRead:      pbBytes(m.BytesRead()),
+		BytesRead:      pbBytes(m.BytesRead(m.Frames)),
 		ReadRequests:   m.PagerReads(),
 	}
 }

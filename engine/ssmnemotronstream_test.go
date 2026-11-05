@@ -30,7 +30,7 @@ func TestUngatedStreamedBankMatchesTheResidentOne(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer m.Close()
-		m.SetPageBudget(2 * m.PageSize())
+		m.SetPageBudget(m.Frames, 2*m.PageSize())
 		if !m.Frames.CanEvict() {
 			t.Fatalf("a budget of two pages evicts nothing: the sheets would never be read")
 		}

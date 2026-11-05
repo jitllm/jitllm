@@ -203,7 +203,7 @@ func (s *Instance) EncodePicture(img image.Image) ([]float32, error) {
 	if err := s.towerReady(); err != nil {
 		return nil, err
 	}
-	defer s.m.EnterPager()()
+	defer s.m.EnterPager(s.m.Frames)()
 	b := img.Bounds()
 	n := s.m.Tower.PicRows(b.Dx(), b.Dy()) * int(s.m.Container.Vision().ProjDim)
 	k := len(s.m.Tower.Taps)

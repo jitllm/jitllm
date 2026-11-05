@@ -213,7 +213,7 @@ func TestTheHeadRidesTheRightDeviceOfTwo(t *testing.T) {
 	want := teacherForce(t, m, ids, instOpts...)
 
 	// Half the model per device, plus the dense region the head lives in.
-	cap2 := m.PageSize()*uint64(m.Cfg.NLayer)/2 + m.PageSize() + m.HostBytes()/4
+	cap2 := m.PageSize()*uint64(m.Cfg.NLayer)/2 + m.PageSize() + m.HostBytes(m.Frames)/4
 	g, err := openGPU(t, gpu.WithDevices("all"), gpu.WithDeviceTune(gpu.TuneOff),
 		gpu.WithBudget(cap2))
 	if err != nil || g == nil {
@@ -276,7 +276,7 @@ func TestTheHeadGetsItsOwnSubmissionWhenItIsNotOnTheLastDevice(t *testing.T) {
 	ids := []int32{5, 11, 23, 41, 67, 89}
 	want := teacherForce(t, m, ids, instOpts...)
 
-	cap2 := m.PageSize()*uint64(m.Cfg.NLayer)/2 + m.PageSize() + m.HostBytes()/4
+	cap2 := m.PageSize()*uint64(m.Cfg.NLayer)/2 + m.PageSize() + m.HostBytes(m.Frames)/4
 	g, err := openGPU(t, gpu.WithDevices("all"), gpu.WithDeviceTune(gpu.TuneOff),
 		gpu.WithBudget(cap2))
 	if err != nil || g == nil {

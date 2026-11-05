@@ -39,7 +39,7 @@ func TestDeviceBlocksDoNotStayHostResident(t *testing.T) {
 	}
 	defer m.Close()
 
-	if n := m.HostResidentBlocks(); n != 0 {
+	if n := m.HostResidentBlocks(m.Frames); n != 0 {
 		t.Errorf("Open left %d of %d blocks host-resident; build() should fault none",
 			n, m.Cfg.NLayer)
 	}
@@ -58,11 +58,11 @@ func TestDeviceBlocksDoNotStayHostResident(t *testing.T) {
 	}
 	// Every block the device took must have given up its host page. Blocks the
 	// device declined are the host's and may be resident.
-	if got, max := m.HostResidentBlocks(), m.Cfg.NLayer-placed; got > max {
+	if got, max := m.HostResidentBlocks(m.Frames), m.Cfg.NLayer-placed; got > max {
 		t.Errorf("%d blocks are on the device, yet %d of %d are still host-resident "+
 			"(at most %d should be) -- the page was copied, not placed",
 			placed, got, m.Cfg.NLayer, max)
 	}
 	t.Logf("%d of %d blocks on the device, %d host-resident",
-		placed, m.Cfg.NLayer, m.HostResidentBlocks())
+		placed, m.Cfg.NLayer, m.HostResidentBlocks(m.Frames))
 }

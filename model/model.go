@@ -1488,7 +1488,7 @@ func WithGCPlan(g sched.GCPlan) Option { return func(l *ModelLoad) { l.gc = g } 
 
 // MappedBytes is how much of the model's weight memory is held off the Go
 // heap (jlm.File.MappedBytes).
-func (m *Model) MappedBytes() uint64 { return m.Frames.MappedBytes() }
+func (m *Model) MappedBytes(fr *jlm.Frames) uint64 { return fr.MappedBytes() }
 
 // WithHugePages sets whether this model's page frames are advised onto
 // transparent huge pages. On by default: the plane layout jumps a whole plane
@@ -1637,18 +1637,18 @@ func openContainer(path string, options ...Option) (*Model, error) {
 		m.Tower = tg
 	}
 	if lo.preload > 0 {
-		m.startPreload(lo.preload)
+		m.startPreload(fr, lo.preload)
 	}
 	return m, nil
 }
 
 // startPreload runs the container's Preload behind Open. Close stops it and
 // waits for it, so no read lands in a frame Close has unmapped.
-func (m *Model) startPreload(depth int) {
+func (m *Model) startPreload(fr *jlm.Frames, depth int) {
 	m.preloadStop, m.preloadDone = make(chan struct{}), make(chan struct{})
 	go func() {
 		defer close(m.preloadDone)
-		m.preloadErr = m.Frames.Preload(depth, m.preloadStop)
+		m.preloadErr = fr.Preload(depth, m.preloadStop)
 	}()
 }
 
@@ -1674,11 +1674,11 @@ func (m *Model) ReadConcurrency() int64 {
 }
 
 // PreloadDepth is the most pages a WithPreload read had in flight at once.
-func (m *Model) PreloadDepth() int64 {
+func (m *Model) PreloadDepth(fr *jlm.Frames) int64 {
 	if m.Container == nil {
 		return 0
 	}
-	return m.Frames.PreloadDepth()
+	return fr.PreloadDepth()
 }
 
 func (m *Model) ReadBytes() int64 {
@@ -1701,11 +1701,11 @@ func (m *Model) PagerReads() int64 {
 // FreshFrames is how many frames the pager allocated rather than reused: on a
 // steady run it stops growing once the budget is full, and a figure that keeps
 // pace with the page-ins is frames being freed and remade.
-func (m *Model) FreshFrames() int64 {
+func (m *Model) FreshFrames(fr *jlm.Frames) int64 {
 	if m.Container == nil {
 		return 0
 	}
-	return m.Frames.FreshFrames()
+	return fr.FreshFrames()
 }
 
 // StreamGroups is the container's own answer to how many pieces a streamed
@@ -1718,20 +1718,20 @@ func (m *Model) StreamGroups() int {
 }
 
 // ChunkBytes is the granularity this container was opened at.
-func (m *Model) ChunkBytes() uint64 {
+func (m *Model) ChunkBytes(fr *jlm.Frames) uint64 {
 	if m.Container == nil {
 		return 0
 	}
-	return m.Frames.ChunkBytes()
+	return fr.ChunkBytes()
 }
 
 // BytesRead is what those chunks actually cost, using this container's
 // granularity rather than the package global. See jlm.File.ChunkBytes.
-func (m *Model) BytesRead() uint64 {
+func (m *Model) BytesRead(fr *jlm.Frames) uint64 {
 	if m.Container == nil {
 		return 0
 	}
-	return uint64(m.Frames.ChunksIn()) * m.Frames.ChunkBytes()
+	return uint64(fr.ChunksIn()) * fr.ChunkBytes()
 }
 
 // DirectIO reports whether this model's pages are read without going through
@@ -1742,13 +1742,13 @@ func (m *Model) DirectIO() bool { return m.Container != nil && m.Container.Direc
 // HostResidentBlocks is how many of this model's block pages the host is
 // currently holding. RSS cannot stand in for it: a released page shows only
 // when the collector runs, and the KV cache dwarfs the weights anyway.
-func (m *Model) HostResidentBlocks() int {
+func (m *Model) HostResidentBlocks(fr *jlm.Frames) int {
 	if m.Container == nil {
 		return 0
 	}
 	n := 0
 	for i := 0; i < len(m.Layers); i++ {
-		if m.Frames.Resident(i) {
+		if fr.Resident(i) {
 			n++
 		}
 	}
@@ -1763,8 +1763,8 @@ func (m *Model) Blocks() int { return len(m.Layers) }
 // BlockResident reports whether block li's page is in host memory now. A block
 // that runs on the host and is not resident is read from the file on its next
 // pass.
-func (m *Model) BlockResident(li int) bool {
-	return m.Container != nil && m.Frames.Resident(li)
+func (m *Model) BlockResident(fr *jlm.Frames, li int) bool {
+	return m.Container != nil && fr.Resident(li)
 }
 
 // SetPageBudget caps how many block pages may be resident, in bytes. Paging
@@ -1775,15 +1775,15 @@ func (m *Model) BlockResident(li int) bool {
 // integrated GPU, Apple Silicon) takes what it holds: the model subtracts that
 // itself, now and whenever a instance's placement moves it (hostheld.go), so a
 // caller never subtracts gpu.GPU.HostReserved again.
-func (m *Model) SetPageBudget(bytes uint64) int {
+func (m *Model) SetPageBudget(fr *jlm.Frames, bytes uint64) int {
 	if m.Container == nil {
 		return 0
 	}
 	m.pages.mu.Lock()
 	m.pages.bytes = bytes
-	m.applyPageBudget(m.pageNet())
+	m.applyPageBudget(fr, m.pageNet())
 	m.pages.mu.Unlock()
-	return m.Frames.ResidentPages()
+	return fr.ResidentPages()
 }
 
 // PageSize is one block page's size in bytes, or zero for a model with no
@@ -1850,8 +1850,8 @@ func (m *Model) DenseBytes() uint64 {
 		if e.Block != jlm.DenseBlock && !e.Role.Expanded() {
 			continue
 		}
-		qs, d, sc := m.Frames.Span(e)
-		n += uint64(len(qs) + len(d) + len(sc))
+		qs, d, sc := jlm.SpanLenOf(e)
+		n += qs + d + sc
 	}
 	return n
 }
@@ -1863,28 +1863,28 @@ func (m *Model) DenseBytes() uint64 {
 // Bytes, because page sizes differ per model and between a container's page
 // arrays, so neither a page count nor frames * PageSize() is comparable. jlm
 // keeps the running total against the budget it enforces.
-func (m *Model) HostBytes() uint64 {
+func (m *Model) HostBytes(fr *jlm.Frames) uint64 {
 	if m.Container == nil {
 		return 0
 	}
-	return m.Frames.ResidentBytes()
+	return fr.ResidentBytes()
 }
 
 // PageBudget is the byte cap the container holds its block pages against, 0
 // when unlimited (see HostBytes).
-func (m *Model) PageBudget() uint64 {
+func (m *Model) PageBudget(fr *jlm.Frames) uint64 {
 	if m.Container == nil {
 		return 0
 	}
-	return m.Frames.Budget()
+	return fr.Budget()
 }
 
 // PagesFit reports whether the page budget holds every page of the container,
 // so that nothing is ever evicted. A model with no container has nothing to
 // page. It is the budget's answer, not the residency's: a model that fits may
 // not have faulted a page in yet.
-func (m *Model) PagesFit() bool {
-	return m.Container == nil || !m.Frames.CanEvict()
+func (m *Model) PagesFit(fr *jlm.Frames) bool {
+	return m.Container == nil || !fr.CanEvict()
 }
 
 // PageBytes is block li's own page size, which differs between a text block
@@ -1897,12 +1897,12 @@ func (m *Model) PageBytes(li int) uint64 {
 }
 
 // PageStats is the budget in pages and what it has cost so far.
-func (m *Model) PageStats() (frames int, in, out int64) {
+func (m *Model) PageStats(fr *jlm.Frames) (frames int, in, out int64) {
 	if m.Container == nil {
 		return 0, 0, 0
 	}
-	in, out = m.Frames.Faults()
-	return m.Frames.ResidentPages(), in, out
+	in, out = fr.Faults()
+	return fr.ResidentPages(), in, out
 }
 
 // pageIn faults block li in and re-points its weights at the frame it landed
@@ -1913,7 +1913,7 @@ func (m *Model) PageStats() (frames int, in, out int64) {
 // PageIn reads block li's own weights into its page and binds l, a copy of
 // the block (Layer.CloneTo), at them. An instance binds its own copy, so no
 // other instance's binding moves; the caller serialises binds of one copy.
-func (m *Model) PageIn(li int, l *Layer) error {
+func (m *Model) PageIn(fr *jlm.Frames, li int, l *Layer) error {
 	// Neither "no pool" nor Resident(li) means this block's bytes are in:
 	// Resident only says a frame is allocated, and a partial read (a streamed
 	// block's expert sheets) can claim one with the block's own weights unread.
@@ -1929,10 +1929,10 @@ func (m *Model) PageIn(li int, l *Layer) error {
 	// router has chosen. EnsureRanges tracks which chunks hold real bytes, so an
 	// expert nobody ensured is absent rather than stale, and every consumer of
 	// a packed span has to ensure it.
-	if err := m.ensureBlock(li); err != nil {
+	if err := m.ensureBlock(fr, li); err != nil {
 		return err
 	}
-	return bindPacked(m.Frames, m.Cfg, l)
+	return bindPacked(fr, m.Cfg, l)
 }
 
 // pageInSelected is pageIn for the device's callback: the frame, the routed
@@ -1945,7 +1945,7 @@ func (m *Model) PageIn(li int, l *Layer) error {
 //
 // The consumer is tier.streamBank.fill. A block that demotes goes back through
 // ensureLayer, the whole-block read.
-func (m *Model) PageInSelected(li int, sel []uint32, l *Layer) error {
+func (m *Model) PageInSelected(fr *jlm.Frames, li int, sel []uint32, l *Layer) error {
 	if m.Container == nil || li >= int(m.Container.H.NBlocks) {
 		return nil
 	}
@@ -1962,12 +1962,12 @@ func (m *Model) PageInSelected(li int, sel []uint32, l *Layer) error {
 	// are always-resident. There is nothing to save and the frame still has to
 	// be claimed, so this is an ordinary page-in.
 	if len(rs) == 0 {
-		return m.PageIn(li, l)
+		return m.PageIn(fr, li, l)
 	}
-	if err := m.Frames.EnsureRanges(li, rs); err != nil {
+	if err := fr.EnsureRanges(li, rs); err != nil {
 		return err
 	}
-	return bindPacked(m.Frames, m.Cfg, l)
+	return bindPacked(fr, m.Cfg, l)
 }
 
 // name is what to call this weight in an error. It is the container's
@@ -2081,12 +2081,12 @@ func sameView(a, b Tensor) bool {
 // ensureBlock reads the parts of block li that every token needs: its
 // attention or recurrent weights, its router, its shared expert -- everything
 // but the routed expert banks.
-func (m *Model) ensureBlock(li int) error {
+func (m *Model) ensureBlock(fr *jlm.Frames, li int) error {
 	m.basePlanOnce.Do(m.buildBasePlans)
 	if li >= 0 && li < len(m.basePlans) {
-		return m.Frames.EnsureRanges(li, m.basePlans[li])
+		return fr.EnsureRanges(li, m.basePlans[li])
 	}
-	return m.ensureBlockRanges(li, false)
+	return m.ensureBlockRanges(fr, li, false)
 }
 
 // buildBasePlans fills basePlans with ensureBlockRanges' plan for each block,
@@ -2108,10 +2108,12 @@ func (m *Model) buildBasePlans() {
 // expert later, so it must be read first; otherwise the upload takes whatever
 // the frame held (zeros, or another block's bytes). See
 // docs/engineering-history/placement.md 15j.
-func (m *Model) EnsureBlockExperts(li int) error { return m.ensureBlockRanges(li, true) }
+func (m *Model) EnsureBlockExperts(fr *jlm.Frames, li int) error {
+	return m.ensureBlockRanges(fr, li, true)
+}
 
-func (m *Model) ensureBlockRanges(li int, experts bool) error {
-	return m.Frames.EnsureRanges(li, m.blockPlan(li, experts))
+func (m *Model) ensureBlockRanges(fr *jlm.Frames, li int, experts bool) error {
+	return fr.EnsureRanges(li, m.blockPlan(li, experts))
 }
 
 // blockPlan is the ranges of block li's page that ensureBlockRanges reads.
@@ -2153,7 +2155,7 @@ func (m *Model) blockPlan(li int, experts bool) []jlm.Range {
 // A streamed device block asks for its bank right after the router has chosen,
 // so reading only the selected sheets is what keeps the device path from
 // reading the whole bank every token.
-func (m *Model) EnsureBlockSelected(li int, sel []uint32, base bool) error {
+func (m *Model) EnsureBlockSelected(fr *jlm.Frames, li int, sel []uint32, base bool) error {
 	// A bank in expert pages is warmed page by page: the reads land in frames
 	// that stay cached across tokens, which is the point of splitting them.
 	if m.Container != nil && li < len(m.Layers) && m.Layers[li].ExpBank().E != nil &&
@@ -2161,11 +2163,11 @@ func (m *Model) EnsureBlockSelected(li int, sel []uint32, base bool) error {
 		// The cold pages are read together and a page a guess is already
 		// reading is joined (jlm.File.EnsureExperts); a warm selection
 		// allocates nothing.
-		if err := m.Frames.EnsureExperts(m.Layers[li].ExpBank().E, sel); err != nil {
+		if err := fr.EnsureExperts(m.Layers[li].ExpBank().E, sel); err != nil {
 			return fmt.Errorf("model: block %d: %w", li, err)
 		}
 		if base {
-			return m.ensureBlock(li)
+			return m.ensureBlock(fr, li)
 		}
 		return nil
 	}
@@ -2176,17 +2178,17 @@ func (m *Model) EnsureBlockSelected(li int, sel []uint32, base bool) error {
 	if rs == nil {
 		return nil
 	}
-	return m.Frames.EnsureRanges(li, rs)
+	return fr.EnsureRanges(li, rs)
 }
 
 // speculateExperts queues the experts sel of block li's bank for the
 // container's background readers, replacing the guesses not yet started.
-func (m *Model) SpeculateExperts(li int, sel []uint32) {
+func (m *Model) SpeculateExperts(fr *jlm.Frames, li int, sel []uint32) {
 	if m.Container == nil || li >= len(m.Layers) {
 		return
 	}
 	if bank := m.Layers[li].ExpBank().E; bank != nil && m.Container.ExpertPaged(bank) {
-		m.Frames.Speculate(bank, sel)
+		fr.Speculate(bank, sel)
 	}
 }
 
@@ -2253,13 +2255,13 @@ func appendSpans(rs []jlm.Range, c *jlm.File, e *jlm.Entry) []jlm.Range {
 // rate (neurostream's "plan once per layer"). The pages are held in h until the
 // caller's h.release, which it must call whatever this returns. The views
 // bound are l's, the caller's copy of the block.
-func (m *Model) EnsureExperts(li int, sel []int32, h *ExpertHold, l *Layer) error {
-	c, cf, cfg := m.Container, m.Frames, m.Cfg
+func (m *Model) EnsureExperts(fr *jlm.Frames, li int, sel []int32, h *ExpertHold, l *Layer) error {
+	c, cf, cfg := m.Container, fr, m.Cfg
 	if c == nil || !cfg.MoEAt(li) || len(sel) == 0 {
 		return nil
 	}
 	if l.LegacyExperts {
-		return m.ensureLegacyExperts(li, sel, h, l)
+		return m.ensureLegacyExperts(fr, li, sel, h, l)
 	}
 	bank := l.ExpBank().E
 	if bank == nil || !c.ExpertPaged(bank) {
@@ -2363,8 +2365,8 @@ func (h *ExpertHold) Release() {
 // pageIn skips the routed experts, so without this nothing would read them. The
 // converter no longer writes this layout for a uniform block; this keeps an
 // old container correct.
-func (m *Model) ensureLegacyExperts(li int, sel []int32, h *ExpertHold, l *Layer) error {
-	cf := m.Frames
+func (m *Model) ensureLegacyExperts(fr *jlm.Frames, li int, sel []int32, h *ExpertHold, l *Layer) error {
+	cf := fr
 	u := make([]uint32, len(sel))
 	for i, x := range sel {
 		u[i] = uint32(x)
@@ -2435,11 +2437,11 @@ func (m *Model) ExpertIO() (wait, io time.Duration, reads, bytes, calls int64) {
 
 // PagerReadWait is how long callers have been blocked in the pager overall,
 // block page-ins and routed sheets. See jlm.File.ReadWait.
-func (m *Model) PagerReadWait() time.Duration {
+func (m *Model) PagerReadWait(fr *jlm.Frames) time.Duration {
 	if m == nil || m.Container == nil {
 		return 0
 	}
-	return m.Frames.ReadWait()
+	return fr.ReadWait()
 }
 
 // releaseLayer drops a block's host residency: the container's page and every

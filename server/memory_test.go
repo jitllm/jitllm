@@ -34,7 +34,7 @@ func readLedger(e *Engine, lm *LoadedModel) ledger {
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
 	st := e.MemCacheStats(lm)
-	return ledger{heap: ms.HeapAlloc, offHeap: lm.m.MappedBytes(), store: st.Store.Bytes,
+	return ledger{heap: ms.HeapAlloc, offHeap: lm.m.MappedBytes(lm.m.Frames), store: st.Store.Bytes,
 		storeLimit: st.Store.Limit}
 }
 

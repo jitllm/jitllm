@@ -198,7 +198,7 @@ func phRead(ph *engine.PhaseMeter, dev nn.LayerDevice, m *model.Model) {
 		ph.ReadTime(g.Stats().TStreamRead)
 		return
 	}
-	ph.ReadTime(m.PagerReadWait())
+	ph.ReadTime(m.PagerReadWait(m.Frames))
 }
 
 // byteCount is a flag holding a byte count: a number with an optional K/M/G/T

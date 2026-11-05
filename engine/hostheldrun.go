@@ -18,7 +18,7 @@ func (s *Instance) holdHost(d nn.LayerDevice) {
 	}
 	// Whatever was last seen belonged to the old device.
 	s.hostSeen = model.NoHostSeen
-	s.m.FollowHostHeld()
+	s.m.FollowHostHeld(s.m.Frames)
 }
 
 // followHost re-reads what the attached device holds of the host's memory and,
@@ -36,5 +36,5 @@ func (s *Instance) followHost() {
 	}
 	s.hostSeen = h
 	s.applyMemBudget()
-	s.m.FollowHostHeld()
+	s.m.FollowHostHeld(s.m.Frames)
 }

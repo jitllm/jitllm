@@ -92,7 +92,7 @@ func TestOffHeapMemoryStaysWithinTheBudget(t *testing.T) {
 		t.Skip("this platform maps nothing off the heap -- this gate proved nothing")
 	}
 	budget := 3 * m.PageSize()
-	m.SetPageBudget(budget)
+	m.SetPageBudget(m.Frames, budget)
 	st := testInstance(t, m, 64)
 	lg, err := st.Prefill(m.Vocab.Encode("The capital of France is", true))
 	if err != nil {
@@ -113,7 +113,7 @@ func TestOffHeapMemoryStaysWithinTheBudget(t *testing.T) {
 			t.Fatalf("step %d: %d free bytes beside %d resident, past the %d-byte budget", i, fb, res, budget)
 		}
 	}
-	if _, faults, _ := m.PageStats(); faults == 0 {
+	if _, faults, _ := m.PageStats(m.Frames); faults == 0 {
 		t.Fatal("nothing was paged: the budget held the model, so this proved nothing")
 	}
 	c.TrimFree()
@@ -175,7 +175,7 @@ func TestTwoPagedModelsShareTheProcess(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		m.SetPageBudget(3 * m.PageSize())
+		m.SetPageBudget(m.Frames, 3*m.PageSize())
 		return m
 	}
 	// Each alone, for the reference.
@@ -202,7 +202,7 @@ func TestTwoPagedModelsShareTheProcess(t *testing.T) {
 		if fmt.Sprint(got[i]) != fmt.Sprint(want[i]) {
 			t.Fatalf("model %d beside the other read %v, alone %v", i, got[i], want[i])
 		}
-		if _, faults, _ := ms[i].PageStats(); faults == 0 {
+		if _, faults, _ := ms[i].PageStats(ms[i].Frames); faults == 0 {
 			t.Fatalf("model %d never paged: its budget held it, so this proved nothing", i)
 		}
 	}
