@@ -11,6 +11,7 @@ import (
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // TestStepNMSEBand is the instrument denseStepBand was set from, not a gate:
@@ -166,7 +167,7 @@ func stepBand(t *testing.T, m *model.Model, dev string, io ...Option) {
 	for _, n := range []int{2, 3, 4, 8} {
 		g := open()
 		got := together(g, n, toks)
-		t.Logf("together=%d: %d launches on the matrix unit", n, g.Stats().MatrixPart(gpu.EveryPart))
+		t.Logf("together=%d: %d launches on the matrix unit", n, g.Stats().MatrixPart(nn.EveryPart))
 		g.Close()
 		report(fmt.Sprintf("together=%d", n), got, ref)
 	}

@@ -5,9 +5,9 @@ import (
 	"os"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/model"
 
-	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
@@ -57,11 +57,11 @@ func TestComposedHeadServesWhereTheBlocksDoNot(t *testing.T) {
 			for _, dev := range stepDevices() {
 				t.Run(dev, func(t *testing.T) {
 					want := cpuDecode(t, m, ids, toks, instOpts...)
-					got, st, headOn := composedDecode(t, m, instOpts, dev, ids, toks, gpu.ComposedHead, true, true)
+					got, st, headOn := composedDecode(t, m, instOpts, dev, ids, toks, nn.ComposedHead, true, true)
 					if !headOn {
 						t.Skipf("the head does not fit beside the blocks on %s", dev)
 					}
-					served, declined := st.ServedPart(gpu.ComposedHead)
+					served, declined := st.ServedPart(nn.ComposedHead)
 					// Every decode step's head, and the prompt's last row's.
 					if served != len(toks)+1 || declined != 0 || st.FormedAtStep != 0 {
 						t.Fatalf("the composed head served %d of %d steps and the prompt's last row, was declined %d (%s) and %d formed at a step",

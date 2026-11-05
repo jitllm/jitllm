@@ -4,6 +4,7 @@ import (
 	"math"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/format/jlm"
@@ -30,8 +31,8 @@ func TestComposedEmbeddingDecoderOnCPU(t *testing.T) {
 			}
 			defer e.Close()
 			got := embedTexts(t, m, e, g)
-			ps, pd := e.st.CPUPoolSteps()
-			bs, bd := e.st.CPUBlockSteps()
+			ps, pd := e.st.Account(nn.CPU).Steps.Of(nn.ComposedPool)
+			bs, bd := e.st.Account(nn.CPU).Steps.Of(nn.ComposedBlock)
 			t.Logf("%s: %d readouts served by the composed pool (declines %v); %d block runs served, declines %v",
 				g.Model, ps, nonZero(pd[:]), bs, nonZero(bd[:]))
 			if ps != len(g.Texts) || len(nonZero(pd[:])) != 0 {
@@ -61,7 +62,7 @@ func TestComposedEmbeddingDecoderOnCPU(t *testing.T) {
 				t.Fatal(err)
 			}
 			vbad := embedTexts(t, m, ve, g)
-			vs, _ := ve.st.CPUPoolSteps()
+			vs, _ := ve.st.Account(nn.CPU).Steps.Of(nn.ComposedPool)
 			ve.Close()
 			m.Cfg.Pooling = was
 			cb := worstCos(vbad, want)
@@ -81,7 +82,7 @@ func TestComposedEmbeddingDecoderOnCPU(t *testing.T) {
 				t.Fatal(err)
 			}
 			cbad := embedTexts(t, m, ce, g)
-			cs, cd := ce.st.CPUBlockSteps()
+			cs, cd := ce.st.Account(nn.CPU).Steps.Of(nn.ComposedBlock)
 			ce.Close()
 			m.Cfg.NonCausal = true
 			m.Front.Restated++

@@ -132,7 +132,7 @@ type Config struct {
 	// reduction the composer forms (Stats.ShadowWorst). The tier's kernels
 	// serve: the stream, the history and the logits are theirs whatever the
 	// form computes, so the option changes no answer. It needs
-	// ComposedBlock, and works on a step issued or recorded alike.
+	// nn.ComposedBlock, and works on a step issued or recorded alike.
 	ComposedShadow bool
 	// ComposedLanes, where not zero, is the subgroup the composer forms the
 	// served parts for in place of the device's (pickLanes): a narrower one,
@@ -411,40 +411,30 @@ type Stats struct {
 	// gave it, and the way to tell "the pool was big enough" from "growth
 	// never ran".
 	KVGrows int
-	// PartsServed counts the parts the composer ran in the tier's
-	// submission, by part (Parts): the steps emitted, not those a
-	// recording replayed.
-	PartsServed [numParts]int
+	// Steps is what the card served, part by part, and the steps it
+	// declined, by reason (nn.Steps): the submissions emitted, not those a
+	// recording replays (PartsReplayed).
+	Steps nn.Steps
 	// MatrixLaunches counts the launches of composed kernels formed on the
-	// device's matrix unit (composer.Matrix), by part, emitted as PartsServed is:
+	// device's matrix unit (composer.Matrix), by part, emitted as Steps is:
 	// what of a part ran on the unit, not what was formed for it.
-	MatrixLaunches [numParts]int
+	MatrixLaunches [nn.NumParts]int
 	// AttendLaunches counts, as MatrixLaunches, the launches of a part's
 	// attention formed on the matrix unit (composer.Flash).
-	AttendLaunches [numParts]int
+	AttendLaunches [nn.NumParts]int
 	// ComposedLanes is the subgroup the composer formed the served parts for
 	// (Config.ComposedLanes, else the device's lanes): the selection check of
 	// a gate that narrows it.
 	ComposedLanes int
-	// PartsDeclined counts the steps a served part was not asked for where
-	// it serves -- a decode step, and a prompt chunk with ComposedPrompt --
-	// by part: a block with no graph, or a head or block the serving
-	// conditions leave out (a LayerNorm head, a window, the persistent
-	// block, history in host memory, a ragged step's rows).
-	PartsDeclined [numParts]int
 	// PartsReplayed counts the steps a recording replayed the composer's
-	// parts in, by part: what PartsServed, counted where a step is emitted,
+	// parts in, by part: what Steps, counted where a step is emitted,
 	// does not see.
-	PartsReplayed [numParts]int
-	// BlockDeclines is PartsDeclined's block steps by reason (DeclineName).
-	BlockDeclines [numPartDeclines]int
-	// StepDeclines is PartsDeclined's table and sample steps by reason.
-	StepDeclines [numPartDeclines]int
+	PartsReplayed [nn.NumParts]int
 	// FormedAtStep counts the parts formed at a step rather than at a
 	// placement or PrepHead: a form a step met first, built inside it.
 	FormedAtStep int
 	// FormedAtStepParts is FormedAtStep by part (FormedPart).
-	FormedAtStepParts [numParts]int
+	FormedAtStepParts [nn.NumParts]int
 	// BlockForms counts, by block, the times a device formed the block's
 	// served one-row part (servedFor): the composer's keyed form, compiled
 	// once per Key and shared by blocks of one structure, with the block's
@@ -458,6 +448,12 @@ type Stats struct {
 	// of what a placement composes, which no prompt, step or session after
 	// it moves.
 	PartsFormed, PartKernels, ScratchBuilds int
+	// FormAsks counts the forms asked of the device's form cache, a
+	// compiled one among them: what a placement, a relocation or a lane
+	// forming a part moves, and no warm step does.
+	FormAsks int
+	// FormErr is the first form or lowering the device did not build.
+	FormErr error
 	// ComposerRuns is the times the device's composer formed a request
 	// rather than found it (composer.Registry.Formed), counted in the
 	// composer whatever the caller marked the form as: a step, a prompt or
@@ -780,16 +776,11 @@ func (s *Stats) add(o Stats) {
 	if o.ComposedLanes > 0 && (s.ComposedLanes == 0 || o.ComposedLanes < s.ComposedLanes) {
 		s.ComposedLanes = o.ComposedLanes
 	}
-	for i := range s.PartsServed {
-		s.PartsServed[i] += o.PartsServed[i]
+	s.Steps.Add(&o.Steps)
+	for i := range s.MatrixLaunches {
 		s.MatrixLaunches[i] += o.MatrixLaunches[i]
 		s.AttendLaunches[i] += o.AttendLaunches[i]
-		s.PartsDeclined[i] += o.PartsDeclined[i]
 		s.PartsReplayed[i] += o.PartsReplayed[i]
-	}
-	for i := range s.BlockDeclines {
-		s.BlockDeclines[i] += o.BlockDeclines[i]
-		s.StepDeclines[i] += o.StepDeclines[i]
 	}
 	s.FormedAtStep += o.FormedAtStep
 	for i := range s.FormedAtStepParts {
@@ -802,6 +793,10 @@ func (s *Stats) add(o Stats) {
 		s.BlockForms[i] += n
 	}
 	s.PartsFormed += o.PartsFormed
+	s.FormAsks += o.FormAsks
+	if s.FormErr == nil {
+		s.FormErr = o.FormErr
+	}
 	s.ComposerRuns += o.ComposerRuns
 	s.PartKernels += o.PartKernels
 	s.ScratchBuilds += o.ScratchBuilds
@@ -1755,7 +1750,7 @@ func (g *GPU) LaneParts() [][]int {
 		d.eachLane(func(l *lane) {
 			seen := map[*graph.Graph]bool{}
 			for sk, sv := range l.served {
-				if sv != nil && (sk.kind == partBlock || sk.kind == partHead) {
+				if sv != nil && (sk.kind == nn.PartBlock || sk.kind == nn.PartHead) {
 					seen[sk.graph] = true
 				}
 			}

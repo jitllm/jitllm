@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/internal/testmodels"
@@ -83,10 +84,10 @@ func TestComposedCPURecurrentPromptsServe(t *testing.T) {
 					out = append(out, append([]float32(nil), lg...))
 				}
 				cpuServed(t, s, "a prompt", (1+decode)*m.Cfg.NLayer, true)
-				whole, stepped := s.CPURecSteps()
+				whole, stepped := s.Account(nn.CPU).Steps.Whole, s.Account(nn.CPU).Steps.Stepped
 				if n > 1 && (whole < linear || stepped != 0) {
 					t.Fatalf("a prompt of %d: %d linear block steps ran whole and %d a row at a time, want at least %d whole and none a row at a time (%v)",
-						n, whole, stepped, linear, s.CPUFormErr())
+						n, whole, stepped, linear, s.Account(nn.CPU).FormErr)
 				}
 				return out
 			}

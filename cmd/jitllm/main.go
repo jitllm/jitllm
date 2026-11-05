@@ -935,7 +935,7 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	if g, ok := dev.(*gpu.GPU); ok {
 		per := g.DevStats()
 		for i, n := range g.Placed() {
-			served, _ := per[i].ServedPart(gpu.EveryPart)
+			served, _ := per[i].ServedPart(nn.EveryPart)
 			fmt.Fprintf(os.Stderr, "device %-44s %d block(s) placed, %d run, %d composed part step(s)\n",
 				per[i].Device, n, per[i].Blocks, served)
 		}

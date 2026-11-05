@@ -6,7 +6,6 @@ import (
 	"slices"
 	"time"
 
-	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/nn"
 )
 
@@ -483,7 +482,7 @@ func (sp *Speculator) trunkPrompt(prompt []int32) ([]float32, []float32, error) 
 		copy(hid, resid)
 		return logits, hid, nil
 	}
-	if why := t.cpuOutNorm(hid, resid, n); why != composer.DeclineServes {
+	if why := t.cpuOutNorm(hid, resid, n); why != nn.DeclineServes {
 		return nil, nil, t.headDeclined(why)
 	}
 	return logits, hid, nil
@@ -507,11 +506,11 @@ func (sp *Speculator) draftRows(toks []int32, hs []float32, out *rowsOut) error 
 	st := c.Streams()
 	d0 := c.NEmbd
 	sp.ze = grow32(sp.ze, n*st*d0)
-	if why := d.cpuMTPEntry(sp.ze[:n*st*d0], hs[:n*st*d0], toks, n); why != composer.DeclineServes {
-		if why == composer.DeclineNotFormed && d.cpu.formErr != nil {
-			return fmt.Errorf("model: the composer does not serve prediction block %d's entry on the CPU: %s (the first: %w)", sp.mli, composer.DeclineName(int(why)), d.cpu.formErr)
+	if why := d.cpuMTPEntry(sp.ze[:n*st*d0], hs[:n*st*d0], toks, n); why != nn.DeclineServes {
+		if why == nn.DeclineNotFormed && d.cpu.formErr != nil {
+			return fmt.Errorf("model: the composer does not serve prediction block %d's entry on the CPU: %s (the first: %w)", sp.mli, nn.DeclineName(int(why)), d.cpu.formErr)
 		}
-		return fmt.Errorf("model: the composer does not serve prediction block %d's entry on the CPU: %s", sp.mli, composer.DeclineName(int(why)))
+		return fmt.Errorf("model: the composer does not serve prediction block %d's entry on the CPU: %s", sp.mli, nn.DeclineName(int(why)))
 	}
 	if st > 1 {
 		d.q4In = sp.ze[:n*st*d0]

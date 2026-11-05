@@ -6,6 +6,7 @@ import (
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
@@ -283,7 +284,7 @@ func TestLayerRelocatesToAnotherDevice(t *testing.T) {
 
 // layerRelocatesToAnotherDevice is TestLayerRelocatesToAnotherDevice on one
 // model, with the composer serving parts.
-func layerRelocatesToAnotherDevice(t *testing.T, path string, parts gpu.Parts, w *fuseWatch) {
+func layerRelocatesToAnotherDevice(t *testing.T, path string, parts nn.Parts, w *fuseWatch) {
 
 	// Both tiers' split tuner off: each tier tunes its own splits, so two
 	// tuned tiers can sum a matvec in different orders, and the two arms then

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testdevices"
 )
 
@@ -33,7 +34,7 @@ func TestSynthLlama4Q8DecodeOnDevice(t *testing.T) {
 	if n := st.GPULayers(); n != m.Cfg.NLayer {
 		t.Fatalf("the session fell to the host: %v", gpux.Err())
 	}
-	if n, d := gpux.Stats().ServedPart(gpu.ComposedBlock); n == 0 || d != 0 {
+	if n, d := gpux.Stats().ServedPart(nn.ComposedBlock); n == 0 || d != 0 {
 		t.Fatalf("%d block steps composed and %d declined: the composed mixture was not selected", n, d)
 	}
 	worst := 0.0

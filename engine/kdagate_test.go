@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/model"
 
-	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/graph"
 )
 
@@ -50,8 +50,8 @@ func TestKimiLinearKDAGateIsLoadBearing(t *testing.T) {
 			ran++
 			want := cpuDecode(t, m, ids, toks)
 			run := func() float64 {
-				got, st, _ := composedDecode(t, m, nil, dev, ids, toks, gpu.ComposedBlock, true, false)
-				served, declined := st.ServedPart(gpu.ComposedBlock)
+				got, st, _ := composedDecode(t, m, nil, dev, ids, toks, nn.ComposedBlock, true, false)
+				served, declined := st.ServedPart(nn.ComposedBlock)
 				if n := len(toks) * m.Cfg.NLayer; served != n || declined != 0 {
 					t.Fatalf("%d block steps served and %d declined, want %d served (%s)", served, declined, n, declinesOf(st))
 				}

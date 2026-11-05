@@ -5,7 +5,6 @@ import (
 
 	"github.com/jitllm/jitllm/model"
 
-	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/graph"
@@ -73,7 +72,7 @@ func (s *Instance) expandStreams(x []float32, n, base int) error {
 	if !s.m.ExpandsStreams() {
 		return nil
 	}
-	if why := s.cpuExpand(x, n); why != composer.DeclineServes {
+	if why := s.cpuExpand(x, n); why != nn.DeclineServes {
 		return s.streamsDeclined("expansion", why)
 	}
 	return nil
@@ -85,7 +84,7 @@ func (s *Instance) collapseStreams(x []float32, n int) error {
 	if s.c.Q4E() {
 		return s.q4eCollapse(x, n)
 	}
-	if why := s.cpuCollapse(x, n); why != composer.DeclineServes {
+	if why := s.cpuCollapse(x, n); why != nn.DeclineServes {
 		return s.streamsDeclined("collapse", why)
 	}
 	return nil
@@ -93,7 +92,7 @@ func (s *Instance) collapseStreams(x []float32, n int) error {
 
 // streamsDeclined is the error of a streams' expansion or collapse no
 // composed form serves.
-func (s *Instance) streamsDeclined(what string, why composer.Decline) error {
+func (s *Instance) streamsDeclined(what string, why nn.Decline) error {
 	return fmt.Errorf("model: the streams' %s has no composed form on this instance (%s): %v %v",
-		what, composer.DeclineName(int(why)), s.cpu.formErr, s.m.FrontGraphs().StreamsErr)
+		what, nn.DeclineName(int(why)), s.cpu.formErr, s.m.FrontGraphs().StreamsErr)
 }

@@ -42,10 +42,10 @@ func TestComposedHeadTokens(t *testing.T) {
 	for _, fx := range headFixtures() {
 		t.Run(fx.name, func(t *testing.T) {
 			for _, dev := range stepDevices() {
-				for _, parts := range []gpu.Parts{gpu.ComposedHead | gpu.ComposedSample} {
+				for _, parts := range []nn.Parts{nn.ComposedHead | nn.ComposedSample} {
 					name := dev + "/own head"
 					switch {
-					case parts&gpu.ComposedSample != 0:
+					case parts&nn.ComposedSample != 0:
 						name = dev + "/composed head and token"
 					case parts != 0:
 						name = dev + "/composed head"
@@ -112,9 +112,9 @@ func TestComposedHeadTokens(t *testing.T) {
 						if served != wantServed {
 							t.Fatalf("the device selected %d of %d greedy tokens, want %d (stages %03b, parts %d)", served, len(ids), wantServed, stages, parts)
 						}
-						if parts&gpu.ComposedSample != 0 {
-							ns, ds := g.Stats().ServedPart(gpu.ComposedSample)
-							ns += g.Stats().ReplayedPart(gpu.ComposedSample)
+						if parts&nn.ComposedSample != 0 {
+							ns, ds := g.Stats().ServedPart(nn.ComposedSample)
+							ns += g.Stats().ReplayedPart(nn.ComposedSample)
 							if ns != served || ds != 0 {
 								t.Fatalf("the composer selected %d of the %d greedy tokens the device did and was declined %d (%s)", ns, served, ds, declinesOf(g.Stats()))
 							}
@@ -160,7 +160,7 @@ func TestComposedHeadTokens(t *testing.T) {
 							m.Front.Mu.Lock()
 							set.CpuSample = orig
 							m.Front.Mu.Unlock()
-							if vn, _ := vg.Stats().ServedPart(gpu.ComposedSample); vn != len(ids) {
+							if vn, _ := vg.Stats().ServedPart(nn.ComposedSample); vn != len(ids) {
 								t.Fatalf("the violation's tier selected %d of %d tokens: it did not run the negated pick (%s)", vn, len(ids), declinesOf(vg.Stats()))
 							}
 							if parted == 0 {
@@ -256,7 +256,7 @@ func TestComposedHeadTokens(t *testing.T) {
 							t.Fatalf("the device selected %d of %d sampled tokens, want %d (stages %03b, parts %d)", onDev, gen, wantSampled, stages, parts)
 						}
 						t.Logf("%d greedy tokens (%d on the device) and %d sampled tokens (%d on the device), stages %03b", len(ids), served, gen, onDev, stages)
-						if parts&gpu.ComposedSample != 0 {
+						if parts&nn.ComposedSample != 0 {
 							// The composer selects every candidate set the device
 							// does: one form, whatever k and the history.
 							if n := composedSamples(g.Stats()) - before; n != int(onDev) {
@@ -364,6 +364,6 @@ func sampleNeighbour(s *graph.Graph) *graph.Graph {
 // composedSamples is how many steps the composer selected a token or the
 // sampler's candidates in, emitted or replayed.
 func composedSamples(s gpu.Stats) int {
-	n, _ := s.ServedPart(gpu.ComposedSample)
-	return n + s.ReplayedPart(gpu.ComposedSample)
+	n, _ := s.ServedPart(nn.ComposedSample)
+	return n + s.ReplayedPart(nn.ComposedSample)
 }

@@ -17,6 +17,7 @@ import (
 
 	"connectrpc.com/connect"
 
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/engine"
@@ -232,13 +233,13 @@ func TestSessionsAnswerAsFreshOnes(t *testing.T) {
 		}
 		answers[i%2] = got.ids
 		if i == 0 {
-			composed = slm.inst.CPUComposes()
+			composed = slm.inst.Account(nn.CPU).Asks
 		}
 	}
 	if slices.Equal(answers[0], answers[1]) {
 		t.Fatal("the two prompts have the same answer, so a leaked history could not show")
 	}
-	if n := slm.inst.CPUComposes() - composed; n != 0 {
+	if n := slm.inst.Account(nn.CPU).Asks - composed; n != 0 {
 		t.Fatalf("five requests after the first asked the composer %d times", n)
 	}
 	if st := shared.MemCacheStats(slm); st.SessionsOpened != 6 || st.SessionsClosed != 6 {
@@ -270,9 +271,9 @@ func TestAWarmLoadRunsOnTheModelsInstance(t *testing.T) {
 	if st.Store.Sets != 0 || lm.tokensPrefilled.Load() != 0 || lm.tokensGenerated.Load() != 0 {
 		t.Fatalf("the warm-up was counted as served or stored: %+v, %d prefilled", st, lm.tokensPrefilled.Load())
 	}
-	composed := lm.inst.CPUComposes()
+	composed := lm.inst.Account(nn.CPU).Asks
 	generate(t, e, GenerateOptions{ModelID: "m", Prompt: Prompt{Kind: PromptText, Text: story}, MaxTokens: 4})
-	if n := lm.inst.CPUComposes() - composed; n != 0 {
+	if n := lm.inst.Account(nn.CPU).Asks - composed; n != 0 {
 		t.Fatalf("the first request after a warm load asked the composer %d times", n)
 	}
 

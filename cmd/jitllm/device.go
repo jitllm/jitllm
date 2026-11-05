@@ -103,7 +103,7 @@ func deviceStats(d nn.LayerDevice) string {
 		float64(st.ScratchBytes)/gib, float64(st.ComposedBytes)/gib, float64(st.KVPoolBytes)/gib)
 	// What ran on the matrix unit: "it made no difference" and "it never
 	// ran" are otherwise the same number.
-	if m, a := st.MatrixPart(gpu.EveryPart), st.AttendPart(gpu.EveryPart); m > 0 || a > 0 {
+	if m, a := st.MatrixPart(nn.EveryPart), st.AttendPart(nn.EveryPart); m > 0 || a > 0 {
 		s += fmt.Sprintf(", %d launches on the matrix unit (%d of them attention)", m, a)
 	}
 	// Whether the decode replayed a captured graph or issued its launches one
@@ -116,7 +116,7 @@ func deviceStats(d nn.LayerDevice) string {
 	if g.Devices() > 1 {
 		per := g.DevStats()
 		for i, n := range g.Placed() {
-			served, _ := per[i].ServedPart(gpu.EveryPart)
+			served, _ := per[i].ServedPart(nn.EveryPart)
 			s += fmt.Sprintf("\n          %-30s %d block(s), %d composed part step(s)",
 				per[i].Device, n, served)
 		}

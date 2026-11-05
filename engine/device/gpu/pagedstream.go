@@ -6,6 +6,7 @@ import (
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/composer"
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/graph"
 )
 
@@ -232,7 +233,7 @@ func (g *devTier) runBufs(bs *blockScratch, l *layer, li int) ([]backend.Buf, er
 // clipped to the pass and the running partial folded from one side into the
 // other -- then the codes after, which finish from the last fold. pl is the
 // pool the form reads. Callers hold g.mu, inside the submission's session.
-func (sv *servedPart) streamRun(g *devTier, lc *launcher, s backend.Session, inst *partInst, kind partKind, bs *blockScratch,
+func (sv *servedPart) streamRun(g *devTier, lc *launcher, s backend.Session, inst *partInst, kind nn.Part, bs *blockScratch,
 	pl *kvLayerPool, in, out []backend.Buf) error {
 	f, pg := sv.f, bs.pkv
 	st, t := pg.st, sv.sl.tables
@@ -303,7 +304,7 @@ func (sv *servedPart) streamRun(g *devTier, lc *launcher, s backend.Session, ins
 	if err != nil {
 		return err
 	}
-	g.PartsServed[kind]++
+	g.Steps.Serve(kind)
 	g.MatrixLaunches[kind] += m0.matrix + m.matrix
 	g.AttendLaunches[kind] += m0.attend + m.attend
 	return nil

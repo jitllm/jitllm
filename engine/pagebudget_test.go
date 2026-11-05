@@ -3,9 +3,9 @@ package engine
 import (
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/model"
 
-	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
@@ -84,14 +84,14 @@ func TestOpenHonoursAPageBudget(t *testing.T) {
 		}
 	}
 	{
-		served, declined := b.CPUBlockSteps()
+		served, declined := b.Account(nn.CPU).Steps.Of(nn.ComposedBlock)
 		t.Logf("the composed CPU served %d block steps of the paged model; declined %v", served, declined)
 		if served == 0 {
 			t.Error("the composed CPU served no block step of the paged model")
 		}
-		for _, why := range []composer.Decline{composer.DeclineStream, composer.DeclineNoRoom} {
+		for _, why := range []nn.Decline{nn.DeclineStream, nn.DeclineNoRoom} {
 			if declined[why] > 0 {
-				t.Errorf("the composed CPU declined %d block step(s): %s", declined[why], composer.DeclineName(int(why)))
+				t.Errorf("the composed CPU declined %d block step(s): %s", declined[why], nn.DeclineName(int(why)))
 			}
 		}
 	}

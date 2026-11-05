@@ -4,6 +4,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/internal/oracle"
@@ -52,7 +53,7 @@ func TestStateSampleIsComposed(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			served0, declined0 := st.CPUSampleSteps()
+			served0, declined0 := st.Account(nn.CPU).Steps.Of(nn.ComposedSample)
 			const draws = 48
 			near := 0
 			for i := range draws {
@@ -77,7 +78,7 @@ func TestStateSampleIsComposed(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			served, declined := st.CPUSampleSteps()
+			served, declined := st.Account(nn.CPU).Steps.Of(nn.ComposedSample)
 			for i := range declined {
 				if declined[i] != declined0[i] {
 					t.Fatalf("the composed draws declined %v (before %v)", declined, declined0)

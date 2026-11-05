@@ -7,6 +7,7 @@ import (
 
 	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
@@ -71,10 +72,10 @@ func TestQwen4ExpDeviceRunsTheChunkWhole(t *testing.T) {
 				t.Fatal(err)
 			}
 			s2 := gpux.Stats()
-			ps0, pd0 := s0.ServedPart(gpu.ComposedPrompt)
-			ps1, pd1 := s1.ServedPart(gpu.ComposedPrompt)
-			bs1, bd1 := s1.ServedPart(gpu.ComposedBlock)
-			bs2, bd2 := s2.ServedPart(gpu.ComposedBlock)
+			ps0, pd0 := s0.ServedPart(nn.ComposedPrompt)
+			ps1, pd1 := s1.ServedPart(nn.ComposedPrompt)
+			bs1, bd1 := s1.ServedPart(nn.ComposedBlock)
+			bs2, bd2 := s2.ServedPart(nn.ComposedBlock)
 			t.Logf("prefill of %d: %d composed block steps, %d declined; a decode token: %d, %d (%d QSA blocks)",
 				len(g.IDs), ps1-ps0, pd1-pd0, bs2-bs1, bd2-bd1, qsa)
 			cb := cardBlocks(m)

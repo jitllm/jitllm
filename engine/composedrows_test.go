@@ -8,8 +8,8 @@ import (
 
 	"github.com/jitllm/jitllm/model"
 
-	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
@@ -51,7 +51,7 @@ func TestComposedRowsServe(t *testing.T) {
 }
 
 // TestComposedRowsTokens decodes composedRowsPrompts together on each
-// device with every part asked of the composer (gpu.ComposedStep), every
+// device with every part asked of the composer (nn.ComposedStep), every
 // row's logits read back: each ragged step's greedy tokens are the
 // composer's sample over its rows, served at every step and declined at
 // none, and each row's token is the host's Greedy over that row's logits,
@@ -106,11 +106,11 @@ func composedRowsTokens(t *testing.T, m *model.Model, io ...Option) {
 	for _, dev := range stepDevices() {
 		t.Run(dev, func(t *testing.T) {
 			toks, logits, steps, st := rowsTokens(t, m, io, ids, gen, gpu.WithDevices(dev))
-			ns, ds := st.ServedPart(gpu.ComposedSample)
-			ns += st.ReplayedPart(gpu.ComposedSample)
-			if ns != steps || ds != 0 || st.StepDeclines[composer.DeclineNoSample] != 0 || st.FormedPart(gpu.ComposedSample) != 0 {
+			ns, ds := st.ServedPart(nn.ComposedSample)
+			ns += st.ReplayedPart(nn.ComposedSample)
+			if ns != steps || ds != 0 || st.StepDeclines()[nn.DeclineNoSample] != 0 || st.FormedPart(nn.ComposedSample) != 0 {
 				t.Fatalf("the composer selected the tokens of %d of %d ragged steps, declined %d, formed %d at a step (%s; last error %q)",
-					ns, steps, ds, st.FormedPart(gpu.ComposedSample), declinesOf(st), st.LastErr)
+					ns, steps, ds, st.FormedPart(nn.ComposedSample), declinesOf(st), st.LastErr)
 			}
 			if bad, rows := parted(toks, logits); bad != 0 {
 				t.Fatalf("%d of %d rows' composed tokens are not the host's Greedy over their logits", bad, rows)
@@ -126,7 +126,7 @@ func composedRowsTokens(t *testing.T, m *model.Model, io ...Option) {
 			m.Front.Mu.Lock()
 			set.CpuSample = orig
 			m.Front.Mu.Unlock()
-			vn, _ := vst.ServedPart(gpu.ComposedSample)
+			vn, _ := vst.ServedPart(nn.ComposedSample)
 			bad, rows := parted(vt, vl)
 			if vn == 0 || bad == 0 {
 				t.Fatalf("over the logits negated the composer selected %d steps' tokens and %d of %d rows part: the gate cannot see a wrong pick", vn, bad, rows)
@@ -203,9 +203,9 @@ func composedRowsModel(t *testing.T) *model.Model {
 // block steps of every block and heads, and declined none.
 func composedRowsServed(t *testing.T, m *model.Model, st gpu.Stats) {
 	t.Helper()
-	nb, db := st.ServedPart(gpu.ComposedBlock)
-	nh, dh := st.ServedPart(gpu.ComposedHead)
-	nb += st.ReplayedPart(gpu.ComposedBlock)
+	nb, db := st.ServedPart(nn.ComposedBlock)
+	nh, dh := st.ServedPart(nn.ComposedHead)
+	nb += st.ReplayedPart(nn.ComposedBlock)
 	if nb == 0 || nb%m.Cfg.NLayer != 0 || db != 0 || nh == 0 || dh != 0 {
 		t.Fatalf("the composer served %d block steps of %d blocks and %d heads, and declined %d and %d (%s; last error %q)",
 			nb, m.Cfg.NLayer, nh, db, dh, declinesOf(st), st.LastErr)

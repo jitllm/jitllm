@@ -20,12 +20,12 @@ type embPend struct {
 	dst []float32
 	ids []int32
 	// pos is the first row's position; composed says the composer gathers
-	// the rows (ComposedEmbed), counted as kind: a decode step's or a
+	// the rows (nn.ComposedEmbed), counted as kind: a decode step's or a
 	// prompt's, from the scratch set geo current when they were promised
 	// (a model of several geometries changes sets between blocks).
 	pos      int
 	composed bool
-	kind     partKind
+	kind     nn.Part
 	geo      geoKey
 }
 
@@ -37,7 +37,7 @@ func (pe *embPend) same(x []float32) bool {
 
 // EmbedRows promises dst's first len(ids) rows as the input rows of tokens
 // ids at positions pos onwards (nn.EmbedDevice). Where the composer serves
-// them (ComposedEmbed) they are the front end's graph of the input rows over
+// them (nn.ComposedEmbed) they are the front end's graph of the input rows over
 // the tables the device holds, any rows a call carries, each decline named;
 // otherwise the host writes them. False writes nothing.
 //
@@ -53,9 +53,9 @@ func (g *devTier) EmbedRows(ids []int32, pos int, dst []float32) bool {
 	if n == 0 || n > batchWidth || bs == nil {
 		return false
 	}
-	kind := partEmbed
+	kind := nn.PartEmbed
 	if n > 1 || g.prompt {
-		kind = partEmbedRows
+		kind = nn.PartEmbedRows
 	}
 	why := bs.embedServes()
 	if why == partServes {
@@ -65,8 +65,7 @@ func (g *devTier) EmbedRows(ids []int32, pos int, dst []float32) bool {
 		why = partNoRoom
 	}
 	if why != partServes {
-		g.PartsDeclined[kind]++
-		g.StepDeclines[why]++
+		g.Steps.Decline(kind, why)
 		return false
 	}
 	pe := &g.embBuf
@@ -280,7 +279,7 @@ func (g *devTier) embedRowsAt(bs *blockScratch, n int) int {
 		if held == 0 || w < held {
 			held = w
 		}
-		if g.served[servedKey{kind: partEmbed, graph: bs.embedGraph, rows: w, t: t}] != nil && (formed == 0 || w < formed) {
+		if g.served[servedKey{kind: nn.PartEmbed, graph: bs.embedGraph, rows: w, t: t}] != nil && (formed == 0 || w < formed) {
 			formed = w
 		}
 	}

@@ -7,7 +7,6 @@ import (
 
 	"github.com/jitllm/jitllm/model"
 
-	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/nn"
 )
 
@@ -600,7 +599,7 @@ func stepTogether(runs []Run, rows int, ss nn.SessionStepper) ([][]float32, erro
 		bple = s0.bple[:rows*c.PleWidth()]
 	}
 	s0.tokenSide(rows)
-	if why := s0.cpuEmbed(x[:rows*c.NEmbd], bple, s0.stepTok, pos); why != composer.DeclineServes {
+	if why := s0.cpuEmbed(x[:rows*c.NEmbd], bple, s0.stepTok, pos); why != nn.DeclineServes {
 		return nil, s0.embedDeclined(why)
 	}
 	// The streams past the first, from each row's embedding.
@@ -640,7 +639,7 @@ func stepTogether(runs []Run, rows int, ss nn.SessionStepper) ([][]float32, erro
 		if err := s0.collapseStreams(x, rows); err != nil {
 			return nil, err
 		}
-		if why := s0.cpuHeadRows(s0.bx, logits, nil, nlogit); why != composer.DeclineServes {
+		if why := s0.cpuHeadRows(s0.bx, logits, nil, nlogit); why != nn.DeclineServes {
 			return nil, s0.headDeclined(why)
 		}
 		headed = true

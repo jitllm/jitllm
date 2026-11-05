@@ -3,6 +3,7 @@ package engine
 import (
 	"fmt"
 
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/composer"
@@ -63,9 +64,9 @@ func (s *Instance) cpuComposeTable(hf *cpuHeadForm, g *graph.Graph, rows int) {
 	*hf = cpuHeadForm{composed: true}
 	switch {
 	case !composer.LowersCPU(uint64(s.cpuISA())):
-		hf.why = composer.DeclineISA
+		hf.why = nn.DeclineISA
 	case g == nil:
-		hf.why = composer.DeclineNoGraph
+		hf.why = nn.DeclineNoGraph
 	default:
 		req := composer.Request{Graph: g, Step: composer.Step{Rows: rows, Page: 1, Keys: 1, Seqs: max(s.nseq, 1),
 			ActWindow: s.m.ActWindow}, Device: s.composedCPU(), Apart: true}
@@ -172,7 +173,7 @@ func (s *Instance) cpuTables(marks *model.RopeMarks, seq, pos []int, cs, csSWA [
 			hf = &st.many[i]
 		}
 		f, why := hf.formOf()
-		if why != composer.DeclineServes {
+		if why != nn.DeclineServes {
 			return fmt.Errorf("model: the rotary table %d on the CPU: %s: %w", i, why, hf.err)
 		}
 		if st.pos != nil {

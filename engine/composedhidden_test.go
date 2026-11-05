@@ -7,6 +7,7 @@ import (
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // composedHiddenRows is the rows a speculation step of the hidden gates
@@ -29,14 +30,14 @@ func TestComposedHeadWritesItsHidden(t *testing.T) {
 			want, _ := composedHidden(t, m, nil, dev, 0, composedHiddenRows, false)
 			for _, a := range []struct {
 				name  string
-				parts gpu.Parts
+				parts nn.Parts
 				k     int
 				fold  bool
 				at    []int
 			}{
 				{"rows", composedParts, composedHiddenRows, false, []int{0, 1, 2, 3, 4, 5}},
 				{"decode", composedParts, 1, false, []int{0}},
-				{"fold", composedParts | gpu.ComposedPrompt, composedHiddenRows, true, []int{composedHiddenRows - 1}},
+				{"fold", composedParts | nn.ComposedPrompt, composedHiddenRows, true, []int{composedHiddenRows - 1}},
 			} {
 				t.Run(a.name, func(t *testing.T) {
 					got, st := composedHidden(t, m, nil, dev, a.parts, a.k, a.fold)
@@ -44,7 +45,7 @@ func TestComposedHeadWritesItsHidden(t *testing.T) {
 						t.Fatalf("the composer served %d heads whose %d normed rows were read back, where the step read %d",
 							st.HiddenHeads, st.HiddenRows, len(a.at))
 					}
-					if hs, hd := st.ServedPart(gpu.ComposedHead); hs == 0 || hd != 0 {
+					if hs, hd := st.ServedPart(nn.ComposedHead); hs == 0 || hd != 0 {
 						t.Fatalf("the composer served the head %d times and declined it %d (%s)", hs, hd, declinesOf(st))
 					}
 					worst, off := composedHiddenGap(t, m, got, want, a.at)
@@ -64,7 +65,7 @@ func TestComposedHeadWritesItsHidden(t *testing.T) {
 // dev, the composer asked for parts, and runs one speculation step of k rows
 // after it: every row wanted, or with fold a prompt chunk wanting its last.
 // It returns the normed rows read back and the tier's stats.
-func composedHidden(t *testing.T, m *model.Model, io []Option, dev string, parts gpu.Parts, k int, fold bool, extra ...gpu.Option) ([]float32, gpu.Stats) {
+func composedHidden(t *testing.T, m *model.Model, io []Option, dev string, parts nn.Parts, k int, fold bool, extra ...gpu.Option) ([]float32, gpu.Stats) {
 	t.Helper()
 	g, err := openGPU(t, append([]gpu.Option{gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff),
 		gpu.WithConfig(func(c *gpu.Config) { c.PromptRows = 32 })}, extra...)...)

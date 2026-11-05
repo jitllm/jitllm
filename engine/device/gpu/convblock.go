@@ -406,9 +406,9 @@ func (g *devTier) convLeft(l *layer) {
 // g.mu.
 func (g *devTier) servedConv(l *layer, li int) (*servedPart, error) {
 	cb := l.conv
-	sk := servedKey{kind: partConv, graph: l.graph, rows: cb.rows, keys: cb.keys, page: cb.page}
+	sk := servedKey{kind: nn.PartConv, graph: l.graph, rows: cb.rows, keys: cb.keys, page: cb.page}
 	sv, err := g.servedFor(sk, func() (composedPart, error) {
-		sl := composedPart{kind: partConv, graph: l.graph, formats: map[jlm.Role]jlm.Type{},
+		sl := composedPart{kind: nn.PartConv, graph: l.graph, formats: map[jlm.Role]jlm.Type{},
 			weights: map[jlm.Role]*resident{}, vectors: map[jlm.Role]backend.Buf{},
 			tables: map[composer.TableKey]backend.Buf{}, keys: cb.keys, page: cb.page, apart: true}
 		if cb.keys > 0 {
@@ -509,7 +509,7 @@ func (g *devTier) convOnce(lo, hi int, first, last bool, x, out []float32, tap i
 		}
 		if _, err := g.servedConv(l, li); err != nil {
 			g.LastErr = fmt.Sprintf("block %d: the composed convolutional block: %v", li, err)
-			g.PartsDeclined[partConv]++
+			g.Steps.Decline(nn.PartConv, partNotFormed)
 			return false
 		}
 	}
@@ -552,7 +552,7 @@ func (g *devTier) convSession(s backend.Session) {
 	}
 	for li := c.lo; li < c.hi && c.err == nil; li++ {
 		l := g.layers[li]
-		sv := g.served[servedKey{kind: partConv, graph: l.graph, rows: l.conv.rows, keys: l.conv.keys, page: l.conv.page}]
+		sv := g.served[servedKey{kind: nn.PartConv, graph: l.graph, rows: l.conv.rows, keys: l.conv.keys, page: l.conv.page}]
 		c.ins[0], c.outs[0] = cs.act[cs.cur], cs.act[1-cs.cur]
 		if c.err = sv.run(g, &c.lc, sv.inst, c.ins[:], c.outs[:]); c.err != nil {
 			return

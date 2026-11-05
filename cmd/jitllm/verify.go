@@ -17,6 +17,7 @@ import (
 	"github.com/jitllm/jitllm/dev/bench"
 	"github.com/jitllm/jitllm/engine"
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/model"
 )
 
@@ -100,7 +101,7 @@ func verifyCmd(args []string) error {
 			// kernels that ran, which is what was asked for here.
 			fmt.Printf("  (prefill diff: %v)\n", err)
 		}
-		return registerReport(os.Stdout, engine.CPUKernels(m, cd), g.KernelResources(), *asJSON)
+		return registerReport(os.Stdout, cd.Kernels(m.Id), g.KernelResources(), *asJSON)
 	}
 	if *ab != "" {
 		abRun(m, io, g, *ab, *n, *rounds, *depth)
@@ -124,7 +125,7 @@ func verifyCmd(args []string) error {
 		// "the second took nothing".
 		per := g.DevStats()
 		for i, n := range g.Placed() {
-			served, _ := per[i].ServedPart(gpu.EveryPart)
+			served, _ := per[i].ServedPart(nn.EveryPart)
 			fmt.Printf("  device %-28s %d block(s), %d composed part step(s), %.2f GiB of KV\n",
 				per[i].Device, n, served, float64(per[i].KVBytes)/(1<<30))
 		}
@@ -135,7 +136,7 @@ func verifyCmd(args []string) error {
 		fmt.Printf("  ! %d tensors the DEVICE refused (out of memory); those matvecs ran on the CPU,\n"+
 			"    so this number is not comparable with a run that had the card to itself\n", st.NoRoom)
 	}
-	served, _ := st.ServedPart(gpu.EveryPart)
+	served, _ := st.ServedPart(nn.EveryPart)
 	fmt.Printf("  %d composed part step(s) on device, %d block offer(s) over budget\n", served, st.Declined)
 	if st.LastErr != "" {
 		fmt.Printf("  kernel compilation failed: %s\n", st.LastErr)
@@ -329,7 +330,7 @@ func prefillDiff(m *model.Model, io []engine.Option, g *gpu.GPU, ntok, n int) er
 	// matvecs that read the activation as binary16 (GemmTile, sm_70's twins)
 	// cannot match the int8 per-token path exactly, so there the bar is token
 	// ids and a bounded max|dlogit|.
-	if st := g.Stats(); st.MatrixPart(gpu.EveryPart) == 0 && st.AttendPart(gpu.EveryPart) == 0 {
+	if st := g.Stats(); st.MatrixPart(nn.EveryPart) == 0 && st.AttendPart(nn.EveryPart) == 0 {
 		if worst != 0 {
 			return fmt.Errorf("batched prefill is not bit-identical to per-token: max|dlogit| %g, %d/%d argmax flips",
 				worst, bad, len(batched))

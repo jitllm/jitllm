@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/model"
 
-	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/internal/testmodels"
@@ -151,10 +151,10 @@ func linearRun(t *testing.T, m *model.Model, prompt, toks []int32, f cpuFault, i
 		}
 		out = append(out, append([]float32(nil), lg...))
 	}
-	served, declined := s.CPUBlockSteps()
+	served, declined := s.Account(nn.CPU).Steps.Of(nn.ComposedBlock)
 	for i, n := range declined {
 		if n > 0 {
-			t.Fatalf("%d block steps declined: %s (%v)", n, composer.DeclineName(i), s.CPUFormErr())
+			t.Fatalf("%d block steps declined: %s (%v)", n, nn.DeclineName(i), s.Account(nn.CPU).FormErr)
 		}
 	}
 	// A prompt's chunk is one block step of each block.

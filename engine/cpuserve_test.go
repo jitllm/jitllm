@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/model"
 
-	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
@@ -332,27 +332,27 @@ func cpuLogits(t *testing.T, m *model.Model, toks []int32, f cpuFault, composed 
 		}
 		out = append(out, append([]float32(nil), lg...))
 	}
-	served, declined := s.CPUBlockSteps()
+	served, declined := s.Account(nn.CPU).Steps.Of(nn.ComposedBlock)
 	if composed {
 		for i, n := range declined {
 			if n > 0 {
-				t.Errorf("%d block steps declined: %s (%v)", n, composer.DeclineName(i), s.CPUFormErr())
+				t.Errorf("%d block steps declined: %s (%v)", n, nn.DeclineName(i), s.Account(nn.CPU).FormErr)
 			}
 		}
 		if want := len(toks) * m.Cfg.NLayer; served != want {
 			t.Fatalf("%d block steps served, want %d (steps x blocks)", served, want)
 		}
 		// Composed once, at placement: no step composes.
-		for li, n := range s.CPUCompositions() {
+		for li, n := range s.Account(nn.CPU).Forms {
 			if n != 1 {
 				t.Fatalf("block %d was composed for the CPU %d times, where it was placed there once", li, n)
 			}
 		}
 		// Every step's head on the CPU's composed head.
-		heads, hdecl := s.CPUHeadSteps()
+		heads, hdecl := s.Account(nn.CPU).Steps.Of(nn.ComposedHead)
 		for i, n := range hdecl {
 			if n > 0 {
-				t.Errorf("%d head steps declined: %s (%v)", n, composer.DeclineName(i), s.CPUFormErr())
+				t.Errorf("%d head steps declined: %s (%v)", n, nn.DeclineName(i), s.Account(nn.CPU).FormErr)
 			}
 		}
 		if heads != len(toks) {
@@ -368,10 +368,10 @@ func cpuLogits(t *testing.T, m *model.Model, toks []int32, f cpuFault, composed 
 					graphs++
 				}
 			}
-			rows, sdecl := s.CPUStreamSteps()
+			rows, sdecl := s.Account(nn.CPU).Steps.Of(nn.ComposedStreams)
 			for i, n := range sdecl {
 				if n > 0 {
-					t.Errorf("%d rows of the streams' expansion or collapse declined: %s (%v)", n, composer.DeclineName(i), s.CPUFormErr())
+					t.Errorf("%d rows of the streams' expansion or collapse declined: %s (%v)", n, nn.DeclineName(i), s.Account(nn.CPU).FormErr)
 				}
 			}
 			if rows != graphs*len(toks) {

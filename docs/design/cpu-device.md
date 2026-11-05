@@ -34,7 +34,7 @@ holds, counted in a vocabulary of its own.
   never falling to the CPU.
 - **One kind of counter.** Every device reports what it served and what
   it declined, by part (blocks, input rows, head, pool, streams,
-  prediction blocks, sampler) and by `composer.Decline`, in one shape,
+  prediction blocks, sampler) and by `nn.Decline`, in one shape,
   read through the instance's devices. No instance-level CPU counter.
 
 - **Two halves, as every card has.** The CPU device's code generation is

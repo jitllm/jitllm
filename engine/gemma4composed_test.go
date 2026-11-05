@@ -6,8 +6,8 @@ import (
 
 	"github.com/jitllm/jitllm/model"
 
-	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // gemma4Composed are the Gemma 4 fixtures the front end states whole: the
@@ -57,17 +57,17 @@ func TestGemma4ServesComposed(t *testing.T) {
 						}
 						return w
 					}
-					got, st, _ := composedDecode(t, m, openOpts, dev, prompt, toks, gpu.ComposedStep, true, false)
-					served, td := st.ServedPart(gpu.ComposedTable)
-					served += st.ReplayedPart(gpu.ComposedTable)
-					nb, db := st.ServedPart(gpu.ComposedBlock)
-					np, dp := st.ServedPart(gpu.ComposedPrompt)
+					got, st, _ := composedDecode(t, m, openOpts, dev, prompt, toks, nn.ComposedStep, true, false)
+					served, td := st.ServedPart(nn.ComposedTable)
+					served += st.ReplayedPart(nn.ComposedTable)
+					nb, db := st.ServedPart(nn.ComposedBlock)
+					np, dp := st.ServedPart(nn.ComposedPrompt)
 					t.Logf("%s: the tables served %d times, declined %d; block steps served %d, declined %d; the prompt's %d served, %d declined (%s)",
 						dev, served, td, nb, db, np, dp, declinesOf(st))
-					if want := (len(toks) + 1) * composedTables(m); served < want || td != 0 || st.StepDeclines[composer.DeclineNoTable] != 0 {
+					if want := (len(toks) + 1) * composedTables(m); served < want || td != 0 || st.StepDeclines()[nn.DeclineNoTable] != 0 {
 						t.Fatalf("the tables served %d times (want at least %d, a table a geometry's run of each step and the prompt) and declined %d", served, want, td)
 					}
-					if n := st.FormedPart(gpu.ComposedTable); n != 0 {
+					if n := st.FormedPart(nn.ComposedTable); n != 0 {
 						t.Fatalf("%d table(s) formed at a step, not at the placement (%s)", n, st.LastErr)
 					}
 					hostW := from(got, host, promptLen-1)
@@ -75,7 +75,7 @@ func TestGemma4ServesComposed(t *testing.T) {
 					if !(hostW < bound) {
 						t.Fatalf("the composed step is %.3e from the host, bound %g", hostW, bound)
 					}
-					bad, _, _ := composedDecodeWith(t, m, openOpts, dev, prompt, toks, gpu.ComposedStep, true, false, nil, gpu.WithRopeFault(2, 16))
+					bad, _, _ := composedDecodeWith(t, m, openOpts, dev, prompt, toks, nn.ComposedStep, true, false, nil, gpu.WithRopeFault(2, 16))
 					badW := from(bad, host, promptLen-1)
 					t.Logf("%s: every row's table at twice its position and 16 past: %.3e from the host", dev, badW)
 					if !(badW > 100*hostW) || !(badW > 10*bound) {
@@ -84,8 +84,8 @@ func TestGemma4ServesComposed(t *testing.T) {
 					// The per-layer inputs' tables are the card's: the input
 					// rows that read them run there and write the inputs.
 					if m.Cfg.PLEDim != 0 {
-						ne, de := st.ServedPart(gpu.ComposedEmbed)
-						dw := st.StepDeclines[composer.DeclineEmbedWeight]
+						ne, de := st.ServedPart(nn.ComposedEmbed)
+						dw := st.StepDeclines()[nn.DeclineEmbedWeight]
 						t.Logf("%s: the input rows served %d times, declined %d (%d for the per-layer tables)", dev, ne, de, dw)
 						if ne == 0 || de != 0 || dw != 0 {
 							t.Fatalf("the input rows served %d times and declined %d (%d for the per-layer tables): the card's input rows did not write the per-layer inputs", ne, de, dw)

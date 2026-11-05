@@ -2,6 +2,8 @@ package gpu
 
 import (
 	"unsafe"
+
+	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // A block's weight is uploaded once and keyed on its address (resKey.p), and
@@ -120,7 +122,7 @@ func (g *devTier) applyForget(lo, hi uintptr) {
 	if rows {
 		g.eachLane(func(l *lane) {
 			for sk, sv := range l.served {
-				if sk.kind == partRows {
+				if sk.kind == nn.PartRows {
 					delete(l.served, sk)
 					g.dropPart(sv)
 				}

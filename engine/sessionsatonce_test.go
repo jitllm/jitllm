@@ -10,6 +10,7 @@ import (
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
@@ -177,7 +178,7 @@ func TestSessionsStepAtOnce(t *testing.T) {
 	defer m.Close()
 	for _, spec := range testdevices.Specs("cuda:0", "vulkan:0", "vulkan:1", "metal") {
 		t.Run(spec, func(t *testing.T) {
-			stepAtOnce(t, m, atOncePrompts(m), spec, m.Cfg.NLayer, true, gpu.ComposedBlock|gpu.ComposedHead)
+			stepAtOnce(t, m, atOncePrompts(m), spec, m.Cfg.NLayer, true, nn.ComposedBlock|nn.ComposedHead)
 		})
 	}
 }
@@ -251,7 +252,7 @@ func atOncePlace(t *testing.T, m *model.Model, g *gpu.GPU, seq int, prompt []int
 // alone and then both at once from two goroutines, and holds the run at once
 // to the runs alone. beside also demands that the device ran a submission
 // beside another's.
-func stepAtOnce(t *testing.T, m *model.Model, prompts [2][]int32, spec string, blocks int, beside bool, parts gpu.Parts, io ...Option) {
+func stepAtOnce(t *testing.T, m *model.Model, prompts [2][]int32, spec string, blocks int, beside bool, parts nn.Parts, io ...Option) {
 	t.Helper()
 	const seq = 256
 	g := atOnceTier(t, spec, nil)
@@ -310,11 +311,11 @@ func stepAtOnce(t *testing.T, m *model.Model, prompts [2][]int32, spec string, b
 // lanesHold is nil when g has at least lanes lanes and each holds an
 // instance of the composed part of each of blocks placed blocks, and of the
 // head where parts names it.
-func lanesHold(g *gpu.GPU, blocks int, parts gpu.Parts, lanes int) error {
+func lanesHold(g *gpu.GPU, blocks int, parts nn.Parts, lanes int) error {
 	// The head's two graphs: decode's, and the one a prompt's fold runs that
 	// writes the norm's rows too (nn.Head.HiddenGraph).
 	want := blocks
-	if parts&gpu.ComposedHead != 0 {
+	if parts&nn.ComposedHead != 0 {
 		want += 2
 	}
 	for _, d := range g.LaneParts() {
@@ -606,7 +607,7 @@ func TestSessionsRelocateAtOnce(t *testing.T) {
 	for _, half := range []bool{false, true} {
 		for _, spec := range testdevices.Specs("cuda:0", "vulkan:0", "metal") {
 			t.Run(fmt.Sprintf("%s/half=%v", spec, half), func(t *testing.T) {
-				relocateAtOnce(t, m, atOncePrompts(m), spec, half, !half, gpu.ComposedBlock|gpu.ComposedHead, w.opt())
+				relocateAtOnce(t, m, atOncePrompts(m), spec, half, !half, nn.ComposedBlock|nn.ComposedHead, w.opt())
 			})
 		}
 	}
@@ -636,7 +637,7 @@ func TestSessionsRelocateAtOnceHybrid(t *testing.T) {
 // relocateAtOnce is TestSessionsRelocateAtOnce's arm for m on spec. beside
 // demands that the device ran a submission beside another's; parts names
 // what the composer serves.
-func relocateAtOnce(t *testing.T, m *model.Model, prompts [2][]int32, spec string, half, beside bool, parts gpu.Parts, io ...Option) {
+func relocateAtOnce(t *testing.T, m *model.Model, prompts [2][]int32, spec string, half, beside bool, parts nn.Parts, io ...Option) {
 	t.Helper()
 	const seq = 256
 	nl := m.Cfg.NLayer

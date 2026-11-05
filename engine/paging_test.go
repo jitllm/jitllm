@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/model"
 
-	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
@@ -108,10 +108,10 @@ func pagingDoesNotChangeTheAnswer(t *testing.T, path string, opts ...Option) {
 		}
 		{
 			// The prompt's chunks and the eight steps, every block of each.
-			served, declined := st.CPUBlockSteps()
+			served, declined := st.Account(nn.CPU).Steps.Of(nn.ComposedBlock)
 			for i, n := range declined {
 				if n > 0 {
-					t.Fatalf("%d block steps declined on the composed CPU: %s (%v)", n, composer.DeclineName(i), st.CPUFormErr())
+					t.Fatalf("%d block steps declined on the composed CPU: %s (%v)", n, nn.DeclineName(i), st.Account(nn.CPU).FormErr)
 				}
 			}
 			if nl := m.Cfg.NLayer; served < 9*nl || served%nl != 0 {

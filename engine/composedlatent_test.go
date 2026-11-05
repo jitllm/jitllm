@@ -8,6 +8,7 @@ import (
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/graph"
 )
@@ -145,11 +146,11 @@ func TestComposedLatentViolations(t *testing.T) {
 			for i := range toks {
 				toks[i] = int32((int(ids[i%len(ids)])*7 + i) % m.Vocab.Size())
 			}
-			parts := gpu.ComposedBlock
+			parts := nn.ComposedBlock
 			for _, dev := range stepDevices() {
 				t.Run(dev, func(t *testing.T) {
 					want, _, _ := composedDecode(t, m, nil, dev, ids, toks, 0, false, false)
-					ref, _, _ := composedDecode(t, m, nil, dev, ids, toks, gpu.ComposedBlock|gpu.ComposedHead, false, true)
+					ref, _, _ := composedDecode(t, m, nil, dev, ids, toks, nn.ComposedBlock|nn.ComposedHead, false, true)
 					widest := 0.0
 					for i := 1; i < len(ref); i++ {
 						widest = max(widest, logitNMSE(want[i], ref[i]))
@@ -173,7 +174,7 @@ func TestComposedLatentViolations(t *testing.T) {
 					n, _ := st.ServedPart(parts)
 					n += st.ReplayedPart(parts)
 					declined := 0
-					for i, k := range st.BlockDeclines {
+					for i, k := range st.BlockDeclines() {
 						if k > 0 && gpu.DeclineName(i) != composedNoGraph {
 							t.Fatalf("the composer declined %d block step(s): %s", k, gpu.DeclineName(i))
 						}

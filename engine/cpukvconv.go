@@ -4,8 +4,8 @@ import (
 	"slices"
 	"unsafe"
 
-	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/device/cpu"
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/graph"
 )
 
@@ -62,12 +62,12 @@ func (s *Instance) cpuPlaceKV() {
 		nb := graph.New()
 		nb.Out(nb.Emit(narrow, []graph.ValueID{nb.In("kv.f", c.fw)},
 			[]graph.Result{{Name: "kv.h", Width: c.hw, Elem: graph.ElemU32}}, nil, graph.Attrs{}, nil, nil)...)
-		s.cpuComposeHead(&c.narrow, nb.G, composer.DeclineNoGraph, cpuRowsCap)
+		s.cpuComposeHead(&c.narrow, nb.G, nn.DeclineNoGraph, cpuRowsCap)
 		wb := graph.New()
 		h := wb.In("kv.h", c.hw)
 		wb.G.Values[h].Elem = graph.ElemU32
 		wb.Out(wb.Emit(widen, []graph.ValueID{h}, []graph.Result{{Name: "kv.f", Width: c.fw}}, nil, graph.Attrs{}, nil, nil)...)
-		s.cpuComposeHead(&c.widen, wb.G, composer.DeclineNoGraph, cpuRowsCap)
+		s.cpuComposeHead(&c.widen, wb.G, nn.DeclineNoGraph, cpuRowsCap)
 		u := cpuRowsCap
 		for _, hf := range []*cpuHeadForm{&c.narrow, &c.widen} {
 			if hf.f != nil {
@@ -102,7 +102,7 @@ func (s *Instance) cpuKVConvert(c *cpuKVConv, narrow bool, f []float32, h []byte
 		hf = &c.narrow
 	}
 	form, why := hf.formOf()
-	if why != composer.DeclineServes || len(h)*c.fw != len(f)*4*c.hw {
+	if why != nn.DeclineServes || len(h)*c.fw != len(f)*4*c.hw {
 		return false
 	}
 	run := func(fp, hp unsafe.Pointer, k int) {

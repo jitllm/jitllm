@@ -101,7 +101,7 @@ func (g *devTier) runPickHead(lc *launcher, bs *blockScratch, norm, in backend.B
 	if err := sv.run(g, lc, sv.inst, []backend.Buf{in, g.pickIDs}, []backend.Buf{g.pickOut}); err != nil {
 		return err
 	}
-	g.PartsServed[partSample]++
+	g.Steps.Serve(nn.PartSample)
 	g.PickRows++
 	return nil
 }

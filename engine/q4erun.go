@@ -1,7 +1,7 @@
 package engine
 
 import (
-	"github.com/jitllm/jitllm/composer"
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/model"
 )
 
@@ -48,7 +48,7 @@ func (s *Instance) q4eDraftStreams(x []float32, rows, base int) {
 func (s *Instance) q4eCollapse(x []float32, n int) error {
 	s.growQ4E(n)
 	s.rows.tapStreams(s, x, n)
-	if why := s.cpuCollapse(x, n); why != composer.DeclineServes {
+	if why := s.cpuCollapse(x, n); why != nn.DeclineServes {
 		return s.streamsDeclined("collapse", why)
 	}
 	return nil

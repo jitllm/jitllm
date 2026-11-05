@@ -6,8 +6,8 @@ import (
 
 	"github.com/jitllm/jitllm/model"
 
-	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
@@ -128,7 +128,7 @@ func TestKVIsHeldOnce(t *testing.T) {
 		if g != nil {
 			s := g.Stats()
 			declined := map[string]int{}
-			for i, n := range s.BlockDeclines {
+			for i, n := range s.BlockDeclines() {
 				if n > 0 {
 					declined[gpu.DeclineName(i)] = n
 				}
@@ -137,9 +137,9 @@ func TestKVIsHeldOnce(t *testing.T) {
 			if composedBlockSteps(g) == 0 {
 				t.Error("the composer served no block step on the card")
 			}
-			for _, why := range []composer.Decline{composer.DeclineStream, composer.DeclineNoRoom} {
-				if n := s.BlockDeclines[why]; n > 0 {
-					t.Errorf("the composer declined %d block step(s) on the card: %s", n, composer.DeclineName(int(why)))
+			for _, why := range []nn.Decline{nn.DeclineStream, nn.DeclineNoRoom} {
+				if n := s.BlockDeclines()[why]; n > 0 {
+					t.Errorf("the composer declined %d block step(s) on the card: %s", n, nn.DeclineName(int(why)))
 				}
 			}
 		}

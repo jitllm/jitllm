@@ -3,7 +3,7 @@ package engine
 import (
 	"unsafe"
 
-	"github.com/jitllm/jitllm/composer"
+	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // An embedding model's readout on the CPU device: the pooled, unit-length
@@ -15,20 +15,12 @@ import (
 
 // cpuPoolState is a instance's composed readout and its census.
 type cpuPoolState struct {
-	form     cpuHeadForm
-	served   int
-	declined [composer.NumDeclines]int
+	form cpuHeadForm
 	// pos is the positions table the form reads its live count from, in,
 	// out its staged rows and its pooled rows, raw the pooled rows before
 	// the dense heads where the model has them.
 	pos          []uint32
 	in, out, raw []float32
-}
-
-// CPUPoolSteps is how many readouts the CPU's composed pool served, and
-// how many it declined, by reason.
-func (s *Instance) CPUPoolSteps() (served int, declined [composer.NumDeclines]int) {
-	return s.cpu.pool.served, s.cpu.pool.declined
 }
 
 // cpuPlacePool composes the model's readout for the CPU at the segment's
@@ -40,7 +32,7 @@ func (s *Instance) cpuPlacePool() {
 	}
 	p := &s.cpu.pool
 	rows := s.maxSeq
-	s.cpuComposeHead(&p.form, g, composer.DeclineNoGraph, rows)
+	s.cpuComposeHead(&p.form, g, nn.DeclineNoGraph, rows)
 	if p.form.f != nil {
 		p.pos = make([]uint32, rows+1)
 		p.in, p.out = make([]float32, rows*s.c.NEmbd), make([]float32, rows*g.Values[g.Out[0]].Width)
@@ -65,14 +57,14 @@ func (s *Instance) cpuPoolWidth() int {
 func (s *Instance) cpuPool(x []float32, n int, out []float32, raw bool) bool {
 	p := &s.cpu.pool
 	f, why := p.form.formOf()
-	if why == composer.DeclineServes {
+	if why == nn.DeclineServes {
 		why = s.cpuWeights(f, -1, nil)
 	}
-	if why == composer.DeclineServes && n > len(p.pos)-1 {
-		why = composer.DeclineSessions
+	if why == nn.DeclineServes && n > len(p.pos)-1 {
+		why = nn.DeclineSessions
 	}
-	if why != composer.DeclineServes {
-		p.declined[why]++
+	if why != nn.DeclineServes {
+		s.cpu.steps.Decline(nn.PartPool, why)
 		return false
 	}
 	d := s.c.NEmbd
@@ -94,6 +86,6 @@ func (s *Instance) cpuPool(x []float32, n int, out []float32, raw bool) bool {
 	} else {
 		copy(out, p.out[:w])
 	}
-	p.served++
+	s.cpu.steps.Serve(nn.PartPool)
 	return true
 }

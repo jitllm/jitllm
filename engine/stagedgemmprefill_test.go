@@ -9,6 +9,7 @@ import (
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
@@ -136,7 +137,7 @@ func stagedGemmArm(t *testing.T, m *model.Model, g *gpu.GPU, seq int, run func(*
 	// After the comparison, so an arm that selected nothing still prints the
 	// other's numbers.
 	st := g.Stats()
-	prompt, matrix := servedSince(s0, st, gpu.ComposedPrompt), st.MatrixPart(gpu.EveryPart)-s0.MatrixPart(gpu.EveryPart)
+	prompt, matrix := servedSince(s0, st, nn.ComposedPrompt), st.MatrixPart(nn.EveryPart)-s0.MatrixPart(nn.EveryPart)
 	sm := ptxTargetSM(g.Name())
 	t.Logf("%s: %d composed prompt block steps, %d launches on the matrix unit", g.Name(), prompt, matrix)
 	switch {

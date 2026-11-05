@@ -9,6 +9,7 @@ import (
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
@@ -87,7 +88,7 @@ func prefillAgainstHost(t *testing.T, lengths []int, opts ...gpu.Option) {
 			den += float64(want[i]) * float64(want[i])
 		}
 		t.Logf("n=%d: logit NMSE %.3e, argmax %d (host %d), %d attention launches on the matrix unit",
-			n, num/den, argmaxID(got), argmaxID(want), g.Stats().AttendPart(gpu.EveryPart))
+			n, num/den, argmaxID(got), argmaxID(want), g.Stats().AttendPart(nn.EveryPart))
 		if num/den > 1e-2 {
 			t.Fatalf("n=%d: logit NMSE %.3e against the host", n, num/den)
 		}

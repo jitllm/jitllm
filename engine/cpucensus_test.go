@@ -7,7 +7,6 @@ import (
 
 	"github.com/jitllm/jitllm/model"
 
-	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testdevices"
@@ -73,13 +72,13 @@ func TestCPUComposesOnce(t *testing.T) {
 				if got := cd.Forms(m.Id).Count(); got != placed {
 					t.Errorf("%s: %d CPU form(s) made at a step, after the placement's %d", what, got-placed, placed)
 				}
-				served, declined := s.CPUBlockSteps()
+				served, declined := s.Account(nn.CPU).Steps.Of(nn.ComposedBlock)
 				for why, n := range declined {
 					if n > 0 {
-						t.Errorf("%s: %d block step(s) declined to main's kernels: %s (%v)", what, n, composer.DeclineName(why), s.CPUFormErr())
+						t.Errorf("%s: %d block step(s) declined to main's kernels: %s (%v)", what, n, nn.DeclineName(why), s.Account(nn.CPU).FormErr)
 					}
 				}
-				for li, n := range s.CPUCompositions() {
+				for li, n := range s.Account(nn.CPU).Forms {
 					if n != 1 {
 						t.Errorf("%s: block %d composed for the CPU %d time(s), want 1", what, li, n)
 					}
@@ -97,7 +96,7 @@ func TestCPUComposesOnce(t *testing.T) {
 			s := testInstance(t, m, total+128, withKVPage(32), WithCPU(cd))
 			defer s.Close()
 			placed = cd.Forms(m.Id).Count()
-			if got := len(s.CPUCompositions()); got != nl {
+			if got := len(s.Account(nn.CPU).Forms); got != nl {
 				t.Fatalf("%d blocks placed on the CPU of %d", got, nl)
 			}
 			served := held("the placement", s, 0, 0)
@@ -134,17 +133,17 @@ func TestCPUComposesOnce(t *testing.T) {
 			// Every prompt's head and both decode steps' on the CPU's
 			// composed head, both decode tokens from its samplers.
 			for _, c := range []struct {
-				what  string
-				steps func() (int, [composer.NumDeclines]int)
-				want  int
+				what string
+				part nn.Parts
+				want int
 			}{
-				{"head", s.CPUHeadSteps, len(tc.lengths) * (1 + decode)},
-				{"sampler", s.CPUSampleSteps, len(tc.lengths) * decode},
+				{"head", nn.ComposedHead, len(tc.lengths) * (1 + decode)},
+				{"sampler", nn.ComposedSample, len(tc.lengths) * decode},
 			} {
-				got, declined := c.steps()
+				got, declined := s.Account(nn.CPU).Steps.Of(c.part)
 				for why, n := range declined {
 					if n > 0 {
-						t.Errorf("%d %s step(s) declined to main's kernels: %s (%v)", n, c.what, composer.DeclineName(why), s.CPUFormErr())
+						t.Errorf("%d %s step(s) declined to main's kernels: %s (%v)", n, c.what, nn.DeclineName(why), s.Account(nn.CPU).FormErr)
 					}
 				}
 				if got != c.want {
@@ -194,10 +193,10 @@ func TestCPUComposesOnce(t *testing.T) {
 			}
 			held("a batch of four sequences", sc.in, 0, steps*nl)
 			// Every decoding row's head in the batch on the CPU's head.
-			bh, bd := sc.in.CPUHeadSteps()
+			bh, bd := sc.in.Account(nn.CPU).Steps.Of(nn.ComposedHead)
 			for why, n := range bd {
 				if n > 0 {
-					t.Fatalf("the batch: %d head step(s) declined to main's kernels: %s", n, composer.DeclineName(why))
+					t.Fatalf("the batch: %d head step(s) declined to main's kernels: %s", n, nn.DeclineName(why))
 				}
 			}
 			if bh < steps {
@@ -244,13 +243,13 @@ func TestCPUComposesOnce(t *testing.T) {
 				}
 				census := func(what string, before, want int) int {
 					t.Helper()
-					served, declined := r.CPUBlockSteps()
+					served, declined := r.Account(nn.CPU).Steps.Of(nn.ComposedBlock)
 					for why, n := range declined {
 						if n > 0 {
-							t.Fatalf("%s: %d block step(s) declined: %s (%v)", what, n, composer.DeclineName(why), r.CPUFormErr())
+							t.Fatalf("%s: %d block step(s) declined: %s (%v)", what, n, nn.DeclineName(why), r.Account(nn.CPU).FormErr)
 						}
 					}
-					for li, n := range r.CPUCompositions() {
+					for li, n := range r.Account(nn.CPU).Forms {
 						w := 1
 						if li < half && what != "the placement" {
 							w = 2
@@ -270,7 +269,7 @@ func TestCPUComposesOnce(t *testing.T) {
 				move(0, half, dev)
 				turn("a prompt with the lower half on "+dev, 40, 20)
 				before := served
-				served, _ = r.CPUBlockSteps()
+				served, _ = r.Account(nn.CPU).Steps.Of(nn.ComposedBlock)
 				if got := served - before; got < 2*(nl-half) {
 					t.Fatalf("with the lower half on %s the CPU served %d block steps, want at least %d", dev, got, 2*(nl-half))
 				}

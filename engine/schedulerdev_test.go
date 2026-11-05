@@ -7,6 +7,7 @@ import (
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
@@ -118,8 +119,8 @@ func schedulerOnDeviceModel(t *testing.T, m *model.Model, open func(*testing.T) 
 	// Each step's rows' greedy tokens are the composer's sample, none the
 	// tier's argmax.
 	st := g.Stats()
-	if ns, ds := st.ServedPart(gpu.ComposedSample); ns+st.ReplayedPart(gpu.ComposedSample) == 0 || ds != 0 {
-		t.Fatalf("the composer selected the tokens of %d steps and was declined %d (%s)", ns+st.ReplayedPart(gpu.ComposedSample), ds, declinesOf(st))
+	if ns, ds := st.ServedPart(nn.ComposedSample); ns+st.ReplayedPart(nn.ComposedSample) == 0 || ds != 0 {
+		t.Fatalf("the composer selected the tokens of %d steps and was declined %d (%s)", ns+st.ReplayedPart(nn.ComposedSample), ds, declinesOf(st))
 	}
 	if n := latentBlocks(m); n > 0 && g.Stats().RowsLatent == 0 {
 		t.Fatalf("%d latent block(s) and none ran in a ragged step: the schedule went somewhere else (%s)",

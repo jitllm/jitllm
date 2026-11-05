@@ -2,6 +2,7 @@ package gpu
 
 import (
 	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/graph"
 )
 
@@ -38,8 +39,8 @@ func (g *devTier) servedHalves(w, rows int, widen bool) (*servedPart, error) {
 		}
 		g.halvesGraphs[key] = gr
 	}
-	return g.servedFor(servedKey{kind: partHalves, graph: gr, rows: rows}, func() (composedPart, error) {
-		return composedPart{kind: partHalves, graph: gr, apart: true}, nil
+	return g.servedFor(servedKey{kind: nn.PartHalves, graph: gr, rows: rows}, func() (composedPart, error) {
+		return composedPart{kind: nn.PartHalves, graph: gr, apart: true}, nil
 	})
 }
 

@@ -3,7 +3,7 @@ package engine
 import (
 	"math"
 
-	"github.com/jitllm/jitllm/composer"
+	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // nmseOf is the NMSE of got against want and the largest absolute difference.
@@ -26,7 +26,7 @@ func nonZero(d []int) map[string]int {
 	out := map[string]int{}
 	for i, n := range d {
 		if n != 0 {
-			out[composer.DeclineName(i)] = n
+			out[nn.DeclineName(i)] = n
 		}
 	}
 	return out

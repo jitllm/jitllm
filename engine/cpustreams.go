@@ -3,9 +3,8 @@ package engine
 import (
 	"unsafe"
 
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/model"
-
-	"github.com/jitllm/jitllm/composer"
 )
 
 // The input rows' streams and the head's row on the CPU device, for a model
@@ -21,8 +20,6 @@ import (
 // census.
 type cpuStreamsState struct {
 	expand, expandRows, collapse, collapseRows cpuHeadForm
-	served                                     int
-	declined                                   [composer.NumDeclines]int
 	// li is the block whose roles the collapse binds: a prediction block's
 	// own head mix, -1 for the model's head.
 	li int
@@ -30,13 +27,6 @@ type cpuStreamsState struct {
 	// past them, out the collapse's rows before they go over stream 0.
 	pad, out []float32
 	in, outs []int
-}
-
-// CPUStreamSteps is how many rows the composed expansion and collapse
-// served on the CPU, and how many they declined, by reason. With the
-// composed CPU off nothing is counted.
-func (s *Instance) CPUStreamSteps() (served int, declined [composer.NumDeclines]int) {
-	return s.cpu.streams.served, s.cpu.streams.declined
 }
 
 // cpuPlaceStreams composes the expansion's and the collapse's graphs for
@@ -47,15 +37,15 @@ func (s *Instance) cpuPlaceStreams() {
 		return
 	}
 	fg := s.m.FrontGraphs()
-	s.cpuComposeHead(&st.expand, fg.Expand, composer.DeclineNoGraph, 1)
-	s.cpuComposeHead(&st.expandRows, fg.Expand, composer.DeclineNoGraph, cpuRowsCap)
+	s.cpuComposeHead(&st.expand, fg.Expand, nn.DeclineNoGraph, 1)
+	s.cpuComposeHead(&st.expandRows, fg.Expand, nn.DeclineNoGraph, cpuRowsCap)
 	collapse := fg.Collapse
 	st.li = -1
 	if i := s.lo - s.c.NLayer; i >= 0 && i < len(fg.MtpCollapse) {
 		collapse, st.li = fg.MtpCollapse[i], s.lo
 	}
-	s.cpuComposeHead(&st.collapse, collapse, composer.DeclineNoGraph, 1)
-	s.cpuComposeHead(&st.collapseRows, collapse, composer.DeclineNoGraph, cpuRowsCap)
+	s.cpuComposeHead(&st.collapse, collapse, nn.DeclineNoGraph, 1)
+	s.cpuComposeHead(&st.collapseRows, collapse, nn.DeclineNoGraph, cpuRowsCap)
 	d, ns := s.c.NEmbd, s.c.Streams()
 	u := 1
 	for _, hf := range []*cpuHeadForm{&st.expand, &st.expandRows, &st.collapse, &st.collapseRows} {
@@ -69,7 +59,7 @@ func (s *Instance) cpuPlaceStreams() {
 
 // cpuExpand writes streams 1 and up of `rows` rows of x from stream 0
 // through the composed expansion, or says why not.
-func (s *Instance) cpuExpand(x []float32, rows int) composer.Decline {
+func (s *Instance) cpuExpand(x []float32, rows int) nn.Decline {
 	st := &s.cpu.streams
 	st.in, st.outs = append(st.in[:0], 0), st.outs[:0]
 	for k := 1; k < s.c.Streams(); k++ {
@@ -83,7 +73,7 @@ func (s *Instance) cpuExpand(x []float32, rows int) composer.Decline {
 
 // cpuCollapse writes the row the head reads into stream 0 of `rows` rows
 // of x through the composed collapse, or says why not.
-func (s *Instance) cpuCollapse(x []float32, rows int) composer.Decline {
+func (s *Instance) cpuCollapse(x []float32, rows int) nn.Decline {
 	st := &s.cpu.streams
 	st.in, st.outs = st.in[:0], append(st.outs[:0], 0)
 	for k := range s.c.Streams() {
@@ -100,9 +90,9 @@ func (s *Instance) cpuCollapse(x []float32, rows int) composer.Decline {
 // st.outs, a call of at most the form's rows at a time; apart writes the
 // outputs in a buffer of their own first, for a graph writing a stream it
 // reads.
-func (s *Instance) cpuStreamsRun(one, many *cpuHeadForm, x []float32, rows int, apart bool) composer.Decline {
+func (s *Instance) cpuStreamsRun(one, many *cpuHeadForm, x []float32, rows int, apart bool) nn.Decline {
 	if !s.cpuHeadOn() {
-		return composer.DeclineCaller
+		return nn.DeclineCaller
 	}
 	st := &s.cpu.streams
 	hf := one
@@ -110,7 +100,7 @@ func (s *Instance) cpuStreamsRun(one, many *cpuHeadForm, x []float32, rows int, 
 		hf = many
 	}
 	f, why := hf.formOf()
-	if why == composer.DeclineServes {
+	if why == nn.DeclineServes {
 		li, l := -1, (*model.Layer)(nil)
 		if hf == &st.collapse || hf == &st.collapseRows {
 			if li = st.li; li >= 0 {
@@ -119,8 +109,8 @@ func (s *Instance) cpuStreamsRun(one, many *cpuHeadForm, x []float32, rows int, 
 		}
 		why = s.cpuWeights(f, li, l)
 	}
-	if why != composer.DeclineServes {
-		st.declined[why] += rows
+	if why != nn.DeclineServes {
+		s.cpu.steps.Declined[nn.PartStreams][why] += rows
 		return why
 	}
 	d := s.c.NEmbd
@@ -167,6 +157,6 @@ func (s *Instance) cpuStreamsRun(one, many *cpuHeadForm, x []float32, rows int, 
 		}
 		r0 += k
 	}
-	st.served += rows
-	return composer.DeclineServes
+	s.cpu.steps.Served[nn.PartStreams] += rows
+	return nn.DeclineServes
 }

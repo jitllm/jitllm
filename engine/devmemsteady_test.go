@@ -8,6 +8,7 @@ import (
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
@@ -36,11 +37,11 @@ func TestDeviceMemoryHoldsSteadyAcrossMoves(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	parts := gpu.ComposedBlock | gpu.ComposedHead
+	parts := nn.ComposedBlock | nn.ComposedHead
 	t.Run(fmt.Sprintf("composed%d", parts), func(t *testing.T) { memoryAcrossMoves(t, m, parts) })
 }
 
-func memoryAcrossMoves(t *testing.T, m *model.Model, parts gpu.Parts, io ...Option) {
+func memoryAcrossMoves(t *testing.T, m *model.Model, parts nn.Parts, io ...Option) {
 	opts := []gpu.Option{gpu.WithDevices(testdevices.Like(t, "cuda:0")), gpu.WithDeviceTune(gpu.TuneOff)}
 	g, err := openGPU(t, opts...)
 	if err != nil || g == nil {

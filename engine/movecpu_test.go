@@ -6,7 +6,6 @@ import (
 
 	"github.com/jitllm/jitllm/model"
 
-	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"
@@ -42,10 +41,10 @@ func TestBlocksMoveToTheCPUAndBack(t *testing.T) {
 // more for the upper half, and the block steps between the moves served.
 func composedMoves(t *testing.T, st *Instance, n, half int, devices bool, ntok, toCPU, toB, halfCPU, toA int) {
 	t.Helper()
-	served, declined := st.CPUBlockSteps()
+	served, declined := st.Account(nn.CPU).Steps.Of(nn.ComposedBlock)
 	for i, k := range declined {
 		if k > 0 {
-			t.Errorf("%d block steps declined on the CPU: %s (%v)", k, composer.DeclineName(i), st.CPUFormErr())
+			t.Errorf("%d block steps declined on the CPU: %s (%v)", k, nn.DeclineName(i), st.Account(nn.CPU).FormErr)
 		}
 	}
 	if !devices {
@@ -58,7 +57,7 @@ func composedMoves(t *testing.T, st *Instance, n, half int, devices bool, ntok, 
 	if want := (toB-toCPU)*n + (toA-halfCPU)*(n-half); served != want {
 		t.Errorf("the composed CPU served %d block steps, where the CPU ran %d", served, want)
 	}
-	for li, k := range st.CPUCompositions() {
+	for li, k := range st.Account(nn.CPU).Forms {
 		w := 2
 		if li >= half {
 			w = 3
