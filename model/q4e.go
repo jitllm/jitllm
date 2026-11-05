@@ -29,25 +29,6 @@ import (
 // The graph, transcribed: docs/engineering-history/model-correctness.md,
 // "qwen4exp".
 
-// q4eFault breaks one piece of the graph, set only by a gate
-// (Config.q4eFault) to show the fixture can see it: the front end states the
-// broken graph, which every device composes. The hyper-connection's and
-// QSA's pooling are taken out as rewrites of the composed statement instead
-// (q4eComposedViolations).
-type q4eFault uint8
-
-const (
-	q4eFaultNone q4eFault = iota
-	// q4eFaultNoNGram drops the n-gram embedding.
-	Q4eFaultNoNGram
-	// q4eFaultNoNGramConv drops its convolution.
-	Q4eFaultNoNGramConv
-	// q4eFaultNoEOSReset hashes across an end-of-sequence token.
-	Q4eFaultNoEOSReset
-	// q4eFaultSiLUGate gates the delta rule's output by silu, qwen3next's.
-	Q4eFaultSiLUGate
-)
-
 // Q4E reports that the model is Qwen3.8-Flash-Next's graph: low-rank gated
 // hyper-connections.
 func (c *Config) Q4E() bool { return c.HCLowRank != 0 }
@@ -276,10 +257,4 @@ func loadQ4EHead(m *Model, cfg *Config, f *jlm.File,
 // call so a warm decode token and a warm step allocate nothing.
 type Q4eScratch struct {
 	Rows int
-}
-
-// q4eSigScale is the delta rule's output gate: sigmoid on this model, silu
-// under the gate's violation.
-func (c *Config) Q4eSigmoidGate() bool {
-	return c.DeltaSigmoidGate && c.Q4eFault != Q4eFaultSiLUGate
 }

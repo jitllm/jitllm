@@ -48,16 +48,7 @@ func falconh1Violations(bool) []c6Violation {
 			restore := cfgMut(m, func(c *model.Config) { c.RopeNeox = false })
 			return func() { m.Rope.Neox = was; restore() }
 		}},
-		{"the attention half dropped", falconHalf(model.HalfFaultNoAttn)},
-		{"the mixer half dropped", falconHalf(model.HalfFaultNoMixer)},
-	}
-}
-
-// falconKinds runs every block as kind alone: one half of the sum dropped.
-// falconHalf drops one half of every block (halfFault): computed, bound and
-// weighed by zero, as the container stores both.
-func falconHalf(f model.HalfFault) func(m *model.Model) func() {
-	return func(m *model.Model) func() {
-		return cfgMut(m, func(c *model.Config) { c.HalfFault = f })
+		{"the attention half dropped", func(m *model.Model) func() { return halfDropped(m, true) }},
+		{"the mixer half dropped", func(m *model.Model) func() { return halfDropped(m, false) }},
 	}
 }

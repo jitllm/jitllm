@@ -182,16 +182,13 @@ func TestKimiK3ServesComposedOnCPU(t *testing.T) {
 // head's mix is the host's, and a checkpoint every three blocks is a bank of
 // other streams than the device was placed with, so neither is here.
 func k3ComposedViolations(t *testing.T) []c6Violation {
-	fault := func(f model.K3Fault) func(*model.Model) func() {
-		return func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.K3Fault = f }) }
-	}
 	return []c6Violation{
-		{"no residual attention: every sublayer reads the running residual", fault(model.K3FaultNoBank)},
-		{"the bank scored on raw values", fault(model.K3FaultRawScores)},
-		{"a checkpoint block adds its attention instead of restarting", fault(model.K3FaultNoRestart)},
-		{"the latent sum unnormed", fault(model.K3FaultNoLatentNorm)},
-		{"the MLA output ungated", fault(model.K3FaultNoMLAGate)},
-		{"the KDA output ungated", fault(model.K3FaultNoKDAGate)},
+		{"no residual attention: every sublayer reads the running residual", unbanked},
+		{"the bank scored on raw values", rawBankScores},
+		{"a checkpoint block adds its attention instead of restarting", unrestarted},
+		{"the latent sum unnormed", latentUnnormed},
+		{"the MLA output ungated", latentAttnUngated},
+		{"the KDA output ungated", recurrentUngated},
 		{"the KDA decay unbounded (Kimi-Linear's softplus)", func(m *model.Model) func() {
 			return cfgMut(m, func(c *model.Config) { c.KDALowerBound = 0 })
 		}},

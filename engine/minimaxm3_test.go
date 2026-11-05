@@ -58,18 +58,10 @@ func m3Violations() []c6Violation {
 		{"attention over every block", func(m *model.Model) func() {
 			return cfgMut(m, func(c *model.Config) { c.IdxTopK = 1 << 20 })
 		}},
-		{"a top-k one short", func(m *model.Model) func() {
-			return cfgMut(m, func(c *model.Config) { c.MsaFault = model.MsaFaultOneShort })
-		}},
-		{"the query's own block not forced in", func(m *model.Model) func() {
-			return cfgMut(m, func(c *model.Config) { c.MsaFault = model.MsaFaultNoLocal })
-		}},
-		{"one selection for every kv group", func(m *model.Model) func() {
-			return cfgMut(m, func(c *model.Config) { c.MsaFault = model.MsaFaultSharedGroups })
-		}},
-		{"a block ranked by its first position", func(m *model.Model) func() {
-			return cfgMut(m, func(c *model.Config) { c.MsaFault = model.MsaFaultFirstPosition })
-		}},
+		{"a top-k one short", func(m *model.Model) func() { return selection(m, func(a *graph.Attrs) { a.TopK-- }) }},
+		{"the query's own block not forced in", func(m *model.Model) func() { return selection(m, func(a *graph.Attrs) { a.Local = 0 }) }},
+		{"one selection for every kv group", sharedSelection},
+		{"a block ranked by its first position", func(m *model.Model) func() { return selection(m, func(a *graph.Attrs) { a.Firsts = true }) }},
 		{"the indexer key unnormed", func(m *model.Model) func() {
 			return eachLayer(m, func(l *model.Layer) {
 				setVec(l, jlm.RoleIdxKNorm, onesLike)

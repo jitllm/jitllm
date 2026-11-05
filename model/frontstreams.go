@@ -153,11 +153,8 @@ func (m *Model) bankMix(b *graph.Builder, f graph.Facts, bank []graph.ValueID, x
 	}
 	scores := make([]graph.ValueID, len(rows))
 	for j, v := range rows {
-		nv := v
-		if c.K3Fault != K3FaultRawScores {
-			nv = b.Emit(graph.OpHeadNorm, []graph.ValueID{v}, []graph.Result{{Name: "bank.normed", Width: d}}, nil,
-				graph.Attrs{Eps: c.RMSEps, HeadDim: d}, nil, nil)[0]
-		}
+		nv := b.Emit(graph.OpHeadNorm, []graph.ValueID{v}, []graph.Result{{Name: "bank.normed", Width: d}}, nil,
+			graph.Attrs{Eps: c.RMSEps, HeadDim: d}, nil, nil)[0]
 		scores[j] = reduce("bank.score", mapRow(b, "bank.scored", graph.Attrs{Fn: graph.MapMul}, w, d, nv), graph.MapAdd)
 	}
 	ns := len(rows)
@@ -170,9 +167,6 @@ func (m *Model) bankMix(b *graph.Builder, f graph.Facts, bank []graph.ValueID, x
 	acc := mapRow(b, "bank.mix", graph.Attrs{Fn: graph.MapMul}, nil, d, slice1(b, "bank.pj", p, 0), rows[0])
 	for j := 1; j < ns; j++ {
 		acc = mapRow(b, "bank.mix", graph.Attrs{Fn: graph.MapFma}, nil, d, slice1(b, "bank.pj", p, j), rows[j], acc)
-	}
-	if c.K3Fault == K3FaultNoBank {
-		return keepBound(b, x, acc)
 	}
 	return acc
 }
@@ -389,8 +383,6 @@ func (m *Model) streamCollapseGraphAt(li int) (*graph.Graph, error) {
 		xs[k] = b.In(fmt.Sprintf("x.%d", k), d)
 	}
 	switch {
-	case c.mixesStreams() && c.K3Fault == K3FaultNoHeadMix:
-		b.Out(streamCopy(b, xs[0]))
 	case c.mixesStreams():
 		b.Out(m.bankMix(b, f, xs[1:1+c.resBankFinal()], xs[0], jlm.RoleOutputResScore))
 	case c.gatesStreams():
@@ -499,14 +491,4 @@ func Unsparsified(e *jlm.Expr) *jlm.Expr {
 		out.Terms = append(out.Terms, t)
 	}
 	return out
-}
-
-// keepBound is x with v read and weighed by zero: a gate's violation that
-// drops what v computes keeps the tensors v reads bound, as the container
-// stores them. v must be finite.
-func keepBound(b *graph.Builder, x, v graph.ValueID) graph.ValueID {
-	z := b.Emit(graph.OpReduce, []graph.ValueID{v}, []graph.Result{{Name: "kept", Width: 1}}, nil,
-		graph.Attrs{Fn: graph.MapAdd}, nil, nil)[0]
-	z = mapRow(b, "kept.zero", graph.Attrs{Fn: graph.MapMul, Const: 0}, nil, 1, z)
-	return mapRow(b, "kept.in", graph.Attrs{Fn: graph.MapAdd}, nil, b.G.Values[x].Width, x, z)
 }

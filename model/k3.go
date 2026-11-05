@@ -24,43 +24,6 @@ import (
 // Each piece's arithmetic: docs/engineering-history/model-correctness.md,
 // "model/k3.go".
 
-// k3Fault breaks one piece of Kimi-K3's graph, for a gate's violation only.
-type K3Fault int
-
-// halfFault drops one half of a block that attends beside its mixer: the
-// half computed and its output weighed by zero, so every tensor it reads
-// stays bound as the container stores it.
-type HalfFault int
-
-const (
-	halfFaultNone HalfFault = iota
-	// halfFaultNoAttn leaves the block its mixer alone.
-	HalfFaultNoAttn
-	// halfFaultNoMixer leaves the block its attention alone.
-	HalfFaultNoMixer
-)
-
-const (
-	k3FaultNone K3Fault = iota
-	// k3FaultNoBank mixes nothing: every sublayer reads the running residual,
-	// as Kimi-Linear does, and the bank is never read.
-	K3FaultNoBank
-	// k3FaultNoRestart adds the attention output on a checkpoint block
-	// instead of restarting the residual from it.
-	K3FaultNoRestart
-	// k3FaultRawScores scores the bank on the raw values instead of the
-	// RMSNormed ones.
-	K3FaultRawScores
-	// k3FaultNoHeadMix reads the head from the running residual alone.
-	K3FaultNoHeadMix
-	// k3FaultNoLatentNorm skips the routed sum's RMSNorm in the latent.
-	K3FaultNoLatentNorm
-	// k3FaultNoMLAGate leaves the MLA output ungated.
-	K3FaultNoMLAGate
-	// k3FaultNoKDAGate leaves the linear blocks' output ungated.
-	K3FaultNoKDAGate
-)
-
 // ResAttn reports Kimi-K3's residual attention: the bank of checkpoints and
 // the mixes over it.
 func (c *Config) ResAttn() bool { return c.AttnResBlock != 0 }

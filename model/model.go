@@ -274,11 +274,6 @@ type Config struct {
 	// every block past the dense lead. Zero IdxBlock is DeepSeek V3.2's
 	// per-position selection.
 	IdxBlock, IdxLocal int
-	// idxFault breaks one piece of the indexer, for a gate's violation only.
-	IdxFault idxFault
-	// msaFault breaks one piece of MiniMax-M3's block selection, for a gate's
-	// violation only.
-	MsaFault msaFault
 	// HCMult is the residual streams a hyper-connected model carries.
 	HCMult int
 	// Qwen3.8-Flash-Next (q4e.go): the hyper-connections' gate rank, QSA's
@@ -291,9 +286,6 @@ type Config struct {
 	NGramEOS, NGramImage             int32
 	NGramMul, NGramOff, NGramVoc     []uint64
 	DeltaSigmoidGate                 bool
-	// q4eFault breaks one piece of Qwen3.8-Flash-Next's graph, for a gate's
-	// violation only.
-	Q4eFault q4eFault
 	// Kimi-K3 (k3.go): a residual checkpoint every AttnResBlock blocks, each
 	// sublayer's input their softmax mix with the running residual (zero is
 	// none); the routed experts at ExpertLatent (zero is n_embd); KDA's decay
@@ -302,12 +294,6 @@ type Config struct {
 	ExpertLatent  int
 	KDALowerBound float32
 	LatentNormEps float64
-	// k3Fault breaks one piece of Kimi-K3's graph, for a gate's violation
-	// only.
-	K3Fault K3Fault
-	// halfFault drops one half of a block that attends beside its mixer
-	// (Falcon-H1's), for a gate's violation only.
-	HalfFault HalfFault
 	// PredStreams is how many residual streams each block predicts and
 	// corrects (altup.go), zero for one stream; NSparse blocks lead with a
 	// gaussian top-k on their FFN gate at SparseStd deviations.
