@@ -7,6 +7,7 @@ package model
 import (
 	"crypto/rand"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -256,12 +257,6 @@ type Config struct {
 	sel *jlm.Selection
 	// HCMult is the residual streams a hyper-connected model carries.
 	HCMult int
-	// HCLowRank is the hyper-connections' gate rank, zero for none.
-	HCLowRank int
-	// AttnResBlock is a residual checkpoint every that many blocks, each
-	// sublayer's input their softmax mix with the running residual (zero is
-	// none).
-	AttnResBlock int
 	// DeltaDecay and DeltaGate are the delta rule's decay and output gate as
 	// the container states them (jlm.Config.DeltaDecay), nil on a model with
 	// no delta rule.
@@ -765,8 +760,7 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 		LayerNorm:      c.Flags.Has(jlm.FlagLayerNorm),
 		Parallel:       c.Flags.Has(jlm.FlagParallel),
 
-		HCMult:    int(c.HCMult),
-		HCLowRank: int(c.HCLowRank),
+		HCMult: int(c.HCMult),
 	}
 	out.setGeoms(c.Geoms)
 	out.VNorm = c.Flags2.Has(jlm.Flag2VNorm)
@@ -777,10 +771,6 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 		s.Groups != 1 && s.Groups != uint32(out.NKVHead) || out.MixedGeom() || out.NKVShared != 0) {
 		return nil, fmt.Errorf("model: %s: a selection of %d keys %d wide over %d kv heads of %d", out.Arch,
 			s.Groups, s.KeyWidth, out.NKVHead, out.HeadDim)
-	}
-	if c.PredStreams != 0 {
-		return nil, fmt.Errorf("model: %s: the container states %d predicted streams in fields of their own, which this "+
-			"build reads only as the residual's stated streams: convert the model again", out.Arch, c.PredStreams)
 	}
 	if (out.NKVShared != 0 || out.PLEDim != 0) && (out.MLA() || out.Hybrid() || out.MoE()) {
 		return nil, fmt.Errorf("model: %s: KV sharing or per-layer embeddings on MLA, a hybrid "+
@@ -861,18 +851,12 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 		out.AttnScale *= mscale * mscale
 	}
 	out.TokenAct = c.ActQuant == jlm.ActQuantRowInt8
-	out.HCLowRank = int(c.HCLowRank)
 	out.DeltaDecay, out.DeltaGate = c.DeltaDecay, c.DeltaGate
-	out.AttnResBlock = int(c.AttnResBlock)
 	out.LatentNormEps = float64(c.LatentNormEps)
 	if out.LatentNormEps == 0 {
 		out.LatentNormEps = out.RMSEps
 	}
 	switch {
-	case out.AttnResBlock < 0 || out.AttnResBlock != 0 && (out.HCMult != 0 || out.Parallel ||
-		out.NMTP != 0):
-		return nil, fmt.Errorf("model: %s: a checkpoint bank every %d blocks beside another residual "+
-			"structure", out.Arch, out.AttnResBlock)
 	}
 	out.stated = &c.Streams
 	// The after-rotary norm is FlagQKNorm's per-head norm moved (see
@@ -1226,6 +1210,9 @@ func Open(path string, options ...Option) (*Model, error) {
 	}
 	m, err := openContainer(path, options...)
 	if err != nil {
+		if ue := (*jlm.UpgradeError)(nil); errors.As(err, &ue) {
+			return nil, &UpgradeRequiredError{Path: path, What: ue.What}
+		}
 		return nil, err
 	}
 	// Where the composer serves, a container written before the converter
@@ -1247,14 +1234,6 @@ func Open(path string, options ...Option) (*Model, error) {
 	if c := m.Container.Config(); c.Revision < 2 && m.storesAny(jlm.RoleAttnSubNorm, jlm.RoleFFNSubNorm) {
 		m.Close()
 		return nil, &UpgradeRequiredError{Path: path, What: "activation quantization"}
-	}
-	if (m.Cfg.AttnResBlock != 0 || m.Cfg.HCLowRank != 0) && m.Cfg.statedStreams() <= 1 {
-		m.Close()
-		return nil, &UpgradeRequiredError{Path: path, What: "residual streams"}
-	}
-	if cc := m.Container.Config(); cc.IdxHeads != 0 && cc.Selection == nil && len(cc.CompKinds) == 0 {
-		m.Close()
-		return nil, &UpgradeRequiredError{Path: path, What: "the history its attention selects"}
 	}
 	return m, nil
 }
