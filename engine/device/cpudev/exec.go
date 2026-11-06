@@ -168,6 +168,9 @@ func (e *Exec) PrepLayer(li int, p *nn.LayerPlan, _ *nn.LayerWeights) bool {
 	return cb != nil && cb.Why == nn.DeclineServes
 }
 
+// PrepErr is the first error the execution's composer met (nn.PrepReporter).
+func (e *Exec) PrepErr() error { return e.comp.Err() }
+
 // Holds says li is one of the placement's blocks.
 func (e *Exec) Holds(li int) bool { return li >= 0 && li < len(e.blocks) }
 

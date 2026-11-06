@@ -699,7 +699,7 @@ func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOp
 	// A text instance of a model with a tower runs its pictures through a
 	// tower run of its own, composed with it (tower.go); one that does not
 	// compose keeps its error for the picture that asks.
-	if c == m.Cfg && m.Tower != nil && s.exec.x.Composer().Err() == nil {
+	if c == m.Cfg && m.Tower != nil && s.prepErr() == nil {
 		if s.tower, s.towerErr = s.newTowerRun(); s.towerErr != nil {
 			s.tower = nil
 		}

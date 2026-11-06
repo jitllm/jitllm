@@ -80,9 +80,9 @@ func (in *Instance) newTowerRun() (*towerRun, error) {
 	if err != nil {
 		return nil, err
 	}
-	if ts.exec.x.Composer().Err() != nil {
+	if err := ts.prepErr(); err != nil {
 		ts.Close()
-		return nil, ts.exec.x.Composer().Err()
+		return nil, err
 	}
 	words := 0
 	for _, cl := range tg.Classes {

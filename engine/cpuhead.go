@@ -80,13 +80,13 @@ func (s *Instance) Sample(smp *Sampler, logits []float32) (int32, error) {
 
 // headDeclined is the error of head rows no composed form serves.
 func (s *Instance) headDeclined(why nn.Decline) error {
-	return fmt.Errorf("model: the head has no composed form on this instance (%s): %v", nn.DeclineName(int(why)), s.exec.x.Composer().Err())
+	return fmt.Errorf("model: the head has no composed form on this instance (%s): %v", nn.DeclineName(int(why)), s.prepErr())
 }
 
 // sampleDeclined is the error of a draw no composed form serves: a form the
 // composer refused at the placement, which CPUFormErr names.
 func (s *Instance) sampleDeclined(what string) error {
-	return fmt.Errorf("model: %s has no composed form on this instance: %v", what, s.exec.x.Composer().Err())
+	return fmt.Errorf("model: %s has no composed form on this instance: %v", what, s.prepErr())
 }
 
 // dist fills d with the distribution smp draws from over logits (a row this
