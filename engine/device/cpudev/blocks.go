@@ -11,12 +11,14 @@ import (
 // one, its recurrent state and window and the slot it reads and writes,
 // and the block's weights. Faults says the history-word violations apply.
 type Row struct {
-	X                 []float32
-	Stride            int
-	CS, CSSWA, Side   []float32
-	Pages             []uint32
-	Keys, Values      unsafe.Pointer
-	KeyStart, Pos     int
+	X               []float32
+	Stride          int
+	CS, CSSWA, Side []float32
+	Pages           []uint32
+	Keys, Values    unsafe.Pointer
+	KeyStart, Pos   int
+	// PagePos is the positions a page of the history holds.
+	PagePos           int
 	Tok               int32
 	Toks              bool
 	RecLi             int
@@ -37,9 +39,18 @@ type Blocks struct {
 	rows [4]uint32
 	tok1 [1]uint32
 	pos1 [2]uint32
-	// FaultRow reads a row's history from one past where it starts, and
-	// FaultWrite writes it one before its position: a gate's violations.
-	FaultRow, FaultWrite bool
+	// rowsTab, posTab and tokTab are a call's rows' spans, positions and
+	// tokens at its form's rows; recDesc its run descriptor; xpad and
+	// sidePad its residual rows and per-layer inputs where its units reach
+	// past them; fpages a page table under the page violation.
+	rowsTab, posTab, tokTab, recDesc []uint32
+	xpad, sidePad                    []float32
+	fpages                           []uint32
+	// FaultRow reads a row's history from one past where it starts,
+	// FaultWrite writes it one before its position, FaultPage reads a call's
+	// first page from another, and FaultKeysFirst runs a bidirectional run's
+	// calls whole in one pass: a gate's violations.
+	FaultRow, FaultWrite, FaultPage, FaultKeysFirst bool
 }
 
 // NewBlocks is the rows of blocks on dev, run through run.
@@ -62,24 +73,241 @@ func (bl *Blocks) Row(li int, cb *Block, r *Row) error {
 	}
 	bl.rows = [4]uint32{0, uint32(r.KeyStart), uint32(r.Pos + 1), uint32(r.Pos)}
 	if r.Faults {
-		bl.faultRows()
+		faultRow(bl.rows[:], bl.FaultRow, bl.FaultWrite)
+		b.Pages = bl.faultPages(r.Pages, r.PagePos, r.Pos+1)
 	}
 	b.RecRows = [3]uint32{1, uint32(r.Slot), uint32(r.Slot)}
 	return bl.run.Form(b, cb.F, li)
 }
 
-func (bl *Blocks) faultRows() {
-	t := &bl.rows
+// Rows is a call's rows of a block, as a chunk or a step runs them: their
+// residual streams (X, Stride apart, Streams of them, each Width wide), their
+// per-layer inputs (a row each, SideW wide, the block's slice SideOff into
+// it), their rotary tables (NRot and NSWA a row), their history's page table
+// (pages PagePos positions each), keys and values, the rows' spans (four
+// words a row: its slot's first key row, where its keys start, one past
+// where they end, its position), positions, tokens and sequences, a
+// recurrent block's state and window and its session's windows (Conv, a
+// slot's ConvLen floats), and the block's weights.
+type Rows struct {
+	X                      []float32
+	Stride, Width, Streams int
+	Side                   []float32
+	SideW, SideOff         int
+	CS                     []float32
+	NRot                   int
+	CSSWA                  []float32
+	NSWA                   int
+	Pages                  []uint32
+	PagePos                int
+	Keys, Values           unsafe.Pointer
+	Spans                  []uint32
+	Pos                    []int
+	Tok                    []int32
+	Seq                    []int
+	RecLi                  int
+	RecState, RecConv      unsafe.Pointer
+	Conv                   []float32
+	ConvLen                int
+	Weights                []unsafe.Pointer
+}
+
+const (
+	stashNone uint8 = iota
+	stashSave
+	stashLoad
+)
+
+// Reserve sizes the rows' descriptors for calls of up to rows rows.
+func (bl *Blocks) Reserve(rows int) {
+	if len(bl.rowsTab) < rows*4 {
+		bl.rowsTab = make([]uint32, rows*4)
+	}
+	if len(bl.posTab) < 1+rows {
+		bl.posTab = make([]uint32, 1+rows)
+	}
+	if len(bl.tokTab) < rows {
+		bl.tokTab = make([]uint32, rows)
+	}
+	if len(bl.recDesc) < 1+7*rows {
+		bl.recDesc = make([]uint32, 1+7*rows)
+	}
+	bl.run.GrowZero(rows * 4)
+}
+
+// Rows runs form f of block li over in's rows, a call of at most the form's
+// rows at a time. A bidirectional run (runs) of more rows than a call holds
+// runs every call's codes up to its last history write first, then every
+// call's rest, the values crossing between them stashed.
+func (bl *Blocks) Rows(li int, f *Form, in *Rows, runs bool) error {
+	if runs && len(in.Pos) > f.Rows {
+		keys := f.KeysEnd
+		if bl.FaultKeysFirst {
+			keys = 0
+		}
+		err := bl.calls(li, f, in, 0, keys, stashSave)
+		if err == nil {
+			err = bl.calls(li, f, in, keys, len(f.Codes), stashLoad)
+		}
+		return err
+	}
+	return bl.calls(li, f, in, 0, len(f.Codes), stashNone)
+}
+
+func (bl *Blocks) calls(li int, f *Form, in *Rows, lo, hi int, stash uint8) error {
+	n := len(in.Pos)
+	d, ns, pw := in.Width, in.Streams, in.SideW
+	bl.Reserve(f.Rows)
+	b := &bl.bound
+	end := 0
+	for r0 := 0; r0 < n; r0 += f.Rows {
+		k := min(f.Rows, n-r0)
+		for i := range k {
+			t := bl.rowsTab[i*4 : i*4+4]
+			copy(t, in.Spans[(r0+i)*4:(r0+i)*4+4])
+			end = max(end, in.Pos[r0+i]+1)
+			faultRow(t, bl.FaultRow, bl.FaultWrite)
+		}
+		bx, bstride := in.X[r0*d:], in.Stride
+		var bside []float32
+		if in.Side != nil {
+			bside = in.Side[r0*pw:]
+		}
+		staged := f.Unit > 1 && k%f.Unit != 0
+		if staged {
+			if len(bl.xpad) < f.Rows*d*ns {
+				bl.xpad = make([]float32, f.Rows*d*ns)
+			}
+			for j := range ns {
+				copy(bl.xpad[j*f.Rows*d:], bx[j*in.Stride:j*in.Stride+k*d])
+			}
+			bx, bstride = bl.xpad, f.Rows*d
+			if in.Side != nil {
+				if len(bl.sidePad) < f.Rows*pw {
+					bl.sidePad = make([]float32, f.Rows*pw)
+				}
+				copy(bl.sidePad, bside[:k*pw])
+				bside = bl.sidePad
+			}
+		}
+		if bside != nil {
+			bside = bside[in.SideOff:]
+		}
+		*b = Bound{Li: li, Own: bl.dev.Own(f), CS: in.CS[r0*in.NRot:], X: bx, Stride: bstride, Rows: bl.rowsTab, N: k,
+			Pages: bl.faultPages(in.Pages, in.PagePos, end), Side: bside, Weights: in.Weights, Keys: in.Keys, Values: in.Values}
+		if in.CSSWA != nil {
+			b.CSSWA = in.CSSWA[r0*in.NSWA:]
+		}
+		bl.posTab[0] = uint32(k)
+		for i := range f.Rows {
+			bl.posTab[1+i] = uint32(in.Pos[r0+min(i, k-1)])
+		}
+		b.Pos = bl.posTab
+		if in.Tok != nil {
+			for i := range f.Rows {
+				bl.tokTab[i] = uint32(in.Tok[r0+min(i, k-1)])
+			}
+			b.Tok = bl.tokTab
+		}
+		if f.Rec {
+			b.RecLi, b.Rec = in.RecLi, bl.recRuns(in.Seq[r0:r0+k])
+			b.RecState, b.RecConv = in.RecState, in.RecConv
+			bl.run.ConvOut(len(in.Conv))
+		}
+		if stash == stashLoad {
+			bl.run.Stash(f, b.Own, r0/f.Rows, false)
+		}
+		if err := bl.run.Codes(b, f, li, lo, hi, k); err != nil {
+			return err
+		}
+		if f.Rec {
+			// The runs' windows over their slots.
+			L := in.ConvLen
+			seq := in.Seq[r0 : r0+k]
+			for i, q := range seq {
+				if !containsInt(seq[:i], q) {
+					copy(in.Conv[q*L:(q+1)*L], bl.run.ConvOut(0)[q*L:(q+1)*L])
+				}
+			}
+		}
+		if stash == stashSave {
+			bl.run.Stash(f, b.Own, r0/f.Rows, true)
+		}
+		if staged {
+			for j := range ns {
+				copy(in.X[j*in.Stride+r0*d:j*in.Stride+(r0+k)*d], bl.xpad[j*f.Rows*d:j*f.Rows*d+k*d])
+			}
+		}
+	}
+	return nil
+}
+
+// recRuns is a call's run descriptor over its rows' sequences seq: their
+// count, each run's slots read and written, each run's first row and length
+// in the run order, and each row's place in it, its run and its own row.
+func (bl *Blocks) recRuns(seq []int) []uint32 {
+	k := len(seq)
+	if len(bl.recDesc) < 1+7*k {
+		bl.recDesc = make([]uint32, 1+7*k)
+	}
+	w := bl.recDesc[:1+7*k]
+	w[0] = uint32(k)
+	at, runs := 0, 0
+	for i, q := range seq {
+		if containsInt(seq[:i], q) {
+			continue
+		}
+		start := at
+		for r := i; r < k; r++ {
+			if seq[r] == q {
+				w[1+4*k+at], w[1+5*k+r], w[1+6*k+r] = uint32(r), uint32(at), uint32(runs)
+				at++
+			}
+		}
+		w[1+2*runs], w[2+2*runs] = uint32(q), uint32(q)
+		w[1+2*k+2*runs], w[2+2*k+2*runs] = uint32(start), uint32(at-start)
+		runs++
+	}
+	for j := runs; j < k; j++ {
+		copy(w[1+2*j:3+2*j], w[2*runs-1:2*runs+1])
+		copy(w[1+2*k+2*j:3+2*k+2*j], w[2*k+2*runs-1:2*k+2*runs+1])
+	}
+	return w
+}
+
+// faultPages is the page table t of pages p positions each, the rows reaching
+// end, under the page violation: its first page another's its rows reach.
+func (bl *Blocks) faultPages(t []uint32, p, end int) []uint32 {
+	n := len(t)
+	last := (end - 1) / max(p, 1)
+	if !bl.FaultPage || n < 2 || p == 0 || end <= p+p/4 || last >= n {
+		return t
+	}
+	if len(bl.fpages) != n {
+		bl.fpages = make([]uint32, n)
+	}
+	copy(bl.fpages, t)
+	// Not a neighbouring or free slot: under sessions pooled in one arena
+	// that is often another session's page of the same positions, or a freed
+	// copy of this one's, whose keys move the step too little to see.
+	bl.fpages[0] = t[last]
+	return bl.fpages
+}
+
+// faultRow is a row's span t under the history-word violations: read from
+// one past where it starts (row), or written one before its position
+// (write).
+func faultRow(t []uint32, row, write bool) {
 	if t[3] == 0 {
 		return
 	}
 	switch {
-	case bl.FaultRow:
+	case row:
 		t[1]++
 		if t[2] > t[1]+1 {
 			t[2]--
 		}
-	case bl.FaultWrite:
+	case write:
 		t[3]--
 	}
 }

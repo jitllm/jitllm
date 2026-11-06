@@ -56,39 +56,22 @@ type cpuState struct {
 	composed []int
 	// steps is what the CPU served the instance, part by part.
 	steps nn.Steps
-	// fpages is a layer's page table under cpuFaultPage (cpuFaultTable), and
-	// nopages a block's that keeps no history (cpuPages).
-	fpages, nopages []uint32
-	// tokTab is a call's rows' tokens (all ones for a row naming none).
-	tokTab []uint32
+	// nopages is a block's page table that keeps no history (cpuPages).
+	nopages []uint32
 	// oneFresh and tabsFresh say the decode row's and the step's rows'
 	// rotary tables are made (cpuOneTable, cpuRowTables); tabSeq is the
 	// rows' slots as the tables read them.
 	oneFresh, tabsFresh bool
 	tabSeq              []int
-	// posTab is a call's live rows then each row's position (cpuArgPos).
-	posTab []uint32
-	// rowsTab is a call's rows' descriptors at the rows' form, call its
-	// "rows.n" word, and rseq and rpos a step's rows' sequences and
-	// positions.
-	rowsTab []uint32
-	// recDesc is a call of the rows' form's run descriptor (cpuRecDesc),
-	// lastPos each sequence's last position a step's rows reach
-	// (cpuRecWhole).
-	recDesc    []uint32
+	// spans is a call's rows' spans as the device reads them (cpuRowsRun),
+	// rowsIn the rows' call itself; rseq and rpos a step's rows' sequences
+	// and positions; lastPos each sequence's last position a step's rows
+	// reach (cpuRecWhole).
+	spans      []uint32
+	rowsIn     cpudev.Rows
 	lastPos    []int
 	rseq, rpos []int
 	onePos     [1]int
-	// kvconv is a binary16 or q8 history's conversions (cpukvconv.go).
-	// xpad is a call's residual rows where its kernels' units reach past
-	// them (cpudev.Form.unit).
-	xpad []float32
-	// sidePad is xpad's per-layer inputs.
-	sidePad []float32
-	// stashing says which pass of a bidirectional run is running
-	// (cpuRowsRun): the values crossing a form's last history write are the
-	// runner's to keep between them (cpudev.Runner.Stash).
-	stashing uint8
 	// runWindows says each run of the instance's (bidir) is a window its rows
 	// attend inside, none of the positions before it: a tower's windowed
 	// block's (cpuTowerRows).
@@ -163,13 +146,6 @@ const (
 	cpuFaultFilterT
 )
 
-// A bidirectional run's passes (cpuState.stashing).
-const (
-	stashNone uint8 = iota
-	stashSave
-	stashLoad
-)
-
 // cpuRowsCap is the rows the CPU's form of several rows is composed for: a
 // step of more runs in calls of this many, one after another.
 const cpuRowsCap = 64
@@ -178,23 +154,6 @@ const cpuRowsCap = 64
 // (composer.CPUForm).
 func CPUForm() string {
 	return composer.CPUForm(cpudev.Target(cpu.Probe().ISA(), 1), runtime.GOARCH == "arm64")
-}
-
-// cpuFaultRowWords applies the instance's key-row fault to one row's
-// descriptor (first key, end, write row), the step's first row left whole.
-func (s *Instance) cpuFaultRowWords(t []uint32) {
-	if t[3] == 0 {
-		return
-	}
-	switch s.cpu.fault {
-	case cpuFaultRow:
-		t[1]++
-		if t[2] > t[1]+1 {
-			t[2]--
-		}
-	case cpuFaultWrite:
-		t[3]--
-	}
 }
 
 // cpuStep runs block li on the CPU the composer's way, or says why not. The
@@ -224,11 +183,8 @@ func (s *Instance) cpuStep(li int, l *model.Layer, cs []float32) (nn.Decline, er
 	if why != nn.DeclineServes {
 		return why, nil
 	}
-	if s.cpu.fault == cpuFaultPage {
-		pages = s.cpuFaultTable(pages, pg, pos+1)
-	}
 	r := cpudev.Row{X: s.resid(), Stride: s.c.NEmbd, CS: cs, CSSWA: s.csSWA, Side: s.cpuSide(li), Pages: pages,
-		KeyStart: pg.keyStart(pos), Pos: pos, Tok: s.tok, Toks: true, RecLi: s.cpuRecLi(li), Weights: w, Faults: true}
+		KeyStart: pg.keyStart(pos), Pos: pos, PagePos: pg.p, Tok: s.tok, Toks: true, RecLi: s.cpuRecLi(li), Weights: w, Faults: true}
 	r.Keys, r.Values = kvAddrs(pg)
 	r.RecState, r.RecConv = recAddrs(s.Session, r.RecLi)
 	if err := s.cpu.rowRun.Row(li, cb, &r); err != nil {
@@ -528,40 +484,6 @@ func rowsOf(tok []int32, a, b int) []int32 {
 	return tok[a:b]
 }
 
-// cpuRecDesc is the run descriptor (composer.RunDescWords' layout) of a
-// call's rows of sequences seq: a run a sequence, its rows in the call's
-// order, its slot read and written the sequence's; the entries past the
-// runs repeat the last.
-func (s *Instance) cpuRecDesc(seq []int) []uint32 {
-	k := len(seq)
-	if len(s.cpu.recDesc) < 1+7*k {
-		s.cpu.recDesc = make([]uint32, 1+7*max(k, cpuRowsCap))
-	}
-	w := s.cpu.recDesc[:1+7*k]
-	w[0] = uint32(k)
-	at, runs := 0, 0
-	for i, q := range seq {
-		if slices.Contains(seq[:i], q) {
-			continue
-		}
-		start := at
-		for r := i; r < k; r++ {
-			if seq[r] == q {
-				w[1+4*k+at], w[1+5*k+r], w[1+6*k+r] = uint32(r), uint32(at), uint32(runs)
-				at++
-			}
-		}
-		w[1+2*runs], w[2+2*runs] = uint32(q), uint32(q)
-		w[1+2*k+2*runs], w[2+2*k+2*runs] = uint32(start), uint32(at-start)
-		runs++
-	}
-	for j := runs; j < k; j++ {
-		copy(w[1+2*j:3+2*j], w[2*runs-1:2*runs+1])
-		copy(w[1+2*k+2*j:3+2*k+2*j], w[2*k+2*runs-1:2*k+2*runs+1])
-	}
-	return w
-}
-
 // cpuRecLi is the block whose recurrent state block li's step binds: its
 // own, or under cpuFaultRec the first linear block's.
 func (s *Instance) cpuRecLi(li int) int {
@@ -615,181 +537,6 @@ func (s *Instance) cpuRowsReady(li int, f *cpudev.Form, pos []int) nn.Decline {
 		return why
 	}
 	return nn.DeclineServes
-}
-
-// cpuFaultTable is the page table a step of the layer whose pages pg
-// holds reads, its rows' history ending before end: under cpuFaultPage,
-// once the layer's first page is full, a table whose first page is the
-// page holding the history's last position -- its positions read the newest
-// keys, another page's tokens at another rotation. Each layer is pointed into its own arena, so a model
-// whose arenas differ (a sliding layer's beside a global one's) is reached.
-func (s *Instance) cpuFaultTable(t []uint32, pg *kvPages, end int) []uint32 {
-	n := len(t)
-	last := (end - 1) / max(pg.p, 1)
-	if s.cpu.fault != cpuFaultPage || n < 2 || pg.p == 0 || end <= pg.p+pg.p/4 || last >= n {
-		return t
-	}
-	if len(s.cpu.fpages) != n {
-		s.cpu.fpages = make([]uint32, n)
-	}
-	copy(s.cpu.fpages, t)
-	// Not a neighbouring or free slot: under sessions pooled in one arena
-	// that is often another session's page of the same positions, or a freed
-	// copy of this one's, whose keys move the step too little to see.
-	s.cpu.fpages[0] = t[last]
-	return s.cpu.fpages
-}
-
-// cpuRowsRun runs block li's rows' form f over the rows of x, their history
-// the instance's, a call of at most f's capacity at a time. A bidirectional
-// run (bidir.go) counts its rows' keys to its end; where the step takes
-// more calls than one, the form's codes through its last history write
-// (keysEnd) first run over every row, each reading only the keys before
-// it, so that every call's rows then read all of them. Where those codes
-// write the residual too they run over a copy of it.
-func (s *Instance) cpuRowsRun(li int, l *model.Layer, f *cpudev.Form, x []float32, stride int, side, cs []float32, nrot int, swa []float32, nswa int, seq, pos []int, tok []int32) error {
-	runs := s.runsAt(li) && s.bidirIn(pos[0], len(pos))
-	if runs && len(pos) > f.Rows {
-		keys := f.KeysEnd
-		if s.cpu.fault == cpuFaultKeysFirst {
-			keys = 0
-		}
-		s.cpu.stashing = stashSave
-		err := s.cpuRowsCalls(li, l, f, 0, keys, x, stride, side, cs, nrot, swa, nswa, seq, pos, tok, true)
-		s.cpu.stashing = stashLoad
-		if err == nil {
-			err = s.cpuRowsCalls(li, l, f, keys, len(f.Codes), x, stride, side, cs, nrot, swa, nswa, seq, pos, tok, true)
-		}
-		s.cpu.stashing = stashNone
-		return err
-	}
-	return s.cpuRowsCalls(li, l, f, 0, len(f.Codes), x, stride, side, cs, nrot, swa, nswa, seq, pos, tok, runs)
-}
-
-// cpuRowsCalls is cpuRowsRun's calls of f's codes [lo, hi), each row's keys
-// counted to its run's end where runs is set; x is the rows' residual,
-// stream-major, stride elements from one stream to the next; side is the
-// rows' per-layer inputs, nil for a model of none. A form over banks
-// (cpudev.Form.split) holds the experts each call's rows pick, from its
-// selection to the call's end (cpuExperts).
-func (s *Instance) cpuRowsCalls(li int, l *model.Layer, f *cpudev.Form, lo, hi int, x []float32, stride int, side, cs []float32, nrot int, swa []float32, nswa int, seq, pos []int, tok []int32, runs bool) error {
-	n := len(pos)
-	if f.Toks && tok == nil {
-		return fmt.Errorf("model: block %d reads its rows' tokens, which the step gives none of", li)
-	}
-	hl := s.c.KVSource(li)
-	pg := &s.kv.layers[hl]
-	pages, err := s.cpuPages(hl, pg)
-	if err != nil {
-		return err
-	}
-	d, ns := s.c.NEmbd, s.c.Streams()
-	_, pw := s.cpuSideRows(li)
-	so := s.cpuSideOff(li)
-	slots := max(pg.arenaSlots(), 1)
-	b := &s.cpu.bound
-	end := 0
-	for r0 := 0; r0 < n; r0 += f.Rows {
-		k := min(f.Rows, n-r0)
-		for i := range k {
-			p := pos[r0+i]
-			e, st := p+1, pg.keyStart(p)
-			if runs {
-				e = max(e, s.bidirEnd(p))
-				if s.cpu.runWindows {
-					st = max(st, s.bidirStart(p))
-				}
-			}
-			if w := s.cpu.rowWins; w != nil && !s.wholePicture(li) {
-				st, e = max(st, w[p].Lo), w[p].Hi
-			}
-			end = max(end, p+1)
-			t := s.cpu.rowsTab[i*4 : i*4+4]
-			t[0], t[1], t[2], t[3] = uint32(seq[r0+i]*slots), uint32(st), uint32(e), uint32(p)
-			s.cpuFaultRowWords(t)
-		}
-		bx, bstride := x[r0*d:], stride
-		var bside []float32
-		if side != nil {
-			bside = side[r0*pw:]
-		}
-		staged := f.Unit > 1 && k%f.Unit != 0
-		if staged {
-			if len(s.cpu.xpad) < f.Rows*d*ns {
-				s.cpu.xpad = make([]float32, f.Rows*d*ns)
-			}
-			for j := range ns {
-				copy(s.cpu.xpad[j*f.Rows*d:], bx[j*stride:j*stride+k*d])
-			}
-			bx, bstride = s.cpu.xpad, f.Rows*d
-			if side != nil {
-				if len(s.cpu.sidePad) < f.Rows*pw {
-					s.cpu.sidePad = make([]float32, f.Rows*pw)
-				}
-				copy(s.cpu.sidePad, bside[:k*pw])
-				bside = s.cpu.sidePad
-			}
-		}
-		if bside != nil {
-			bside = bside[so:]
-		}
-		*b = cpudev.Bound{Li: li, Own: s.cpu.dev.Own(f), CS: cs[r0*nrot:], X: bx, Stride: bstride, Rows: s.cpu.rowsTab, N: k,
-			Pages: s.cpuFaultTable(pages, pg, end), Side: bside}
-		b.Weights, _ = s.ws.bind(f, li, l)
-		b.Keys, b.Values = kvAddrs(pg)
-		if swa != nil {
-			b.CSSWA = swa[r0*nswa:]
-		}
-		if len(s.cpu.posTab) < 1+f.Rows {
-			s.cpu.posTab = make([]uint32, 1+f.Rows)
-		}
-		s.cpu.posTab[0] = uint32(k)
-		for i := range f.Rows {
-			s.cpu.posTab[1+i] = uint32(pos[r0+min(i, k-1)])
-		}
-		b.Pos = s.cpu.posTab
-		if tok != nil {
-			if len(s.cpu.tokTab) < f.Rows {
-				s.cpu.tokTab = make([]uint32, f.Rows)
-			}
-			for i := range f.Rows {
-				s.cpu.tokTab[i] = uint32(tok[r0+min(i, k-1)])
-			}
-			b.Tok = s.cpu.tokTab
-		}
-		if f.Rec {
-			b.RecLi, b.Rec = s.cpuRecLi(li), s.cpuRecDesc(seq[r0:r0+k])
-			b.RecState, b.RecConv = recAddrs(s.Session, b.RecLi)
-			s.cpu.run.ConvOut(len(s.view.Conv(b.RecLi)))
-		}
-		if s.cpu.stashing == stashLoad {
-			s.cpu.run.Stash(f, b.Own, r0/f.Rows, false)
-		}
-		if err := s.cpu.run.Codes(b, f, li, lo, hi, k); err != nil {
-			return err
-		}
-		if f.Rec {
-			// The runs' windows over their slots.
-			L := s.dg.ConvStateLen()
-			for i, q := range seq[r0 : r0+k] {
-				if !slices.Contains(seq[r0:r0+i], q) {
-					copy(s.view.Conv(b.RecLi)[q*L:(q+1)*L], s.cpu.run.ConvOut(0)[q*L:(q+1)*L])
-				}
-			}
-		}
-		if s.cpu.stashing == stashSave {
-			s.cpu.run.Stash(f, b.Own, r0/f.Rows, true)
-		}
-		if staged {
-			for j := range ns {
-				copy(x[j*stride+r0*d:j*stride+(r0+k)*d], s.cpu.xpad[j*f.Rows*d:j*f.Rows*d+k*d])
-			}
-		}
-	}
-	if pg.p > 0 && end > pg.written {
-		pg.written = end
-	}
-	return nil
 }
 
 // cpuRowsOf is the sequences and positions of a chunk's n rows of slot
@@ -921,9 +668,8 @@ func (s *Instance) cpuCompose(li int) {
 		cb.RowsWhy = s.cpu.comp.Decline(err)
 	}
 	s.cpu.composed[li]++
-	if cb.Rows != nil && len(s.cpu.rowsTab) < cpuRowsCap*4 {
-		s.cpu.rowsTab = make([]uint32, cpuRowsCap*4)
-		s.cpu.run.GrowZero(cpuRowsCap * 4)
+	if cb.Rows != nil {
+		s.cpu.rowRun.Reserve(cpuRowsCap)
 	}
 }
 
@@ -1145,4 +891,62 @@ func (s *Instance) cpuPages(li int, pg *kvPages) ([]uint32, error) {
 		return s.cpu.nopages[:nseq], nil
 	}
 	return t.Pages(nseq), nil
+}
+
+// cpuRowsRun runs form f of block li (l its copy) over the rows of x, the
+// stream-major residual stride apart, at positions pos of sequences seq with
+// tokens tok, their per-layer inputs side, rotary tables cs and swa, on the
+// CPU device (cpudev.Blocks.Rows): each row's history read from where it
+// starts to where its bidirectional run or its window ends.
+func (s *Instance) cpuRowsRun(li int, l *model.Layer, f *cpudev.Form, x []float32, stride int, side, cs []float32, nrot int, swa []float32, nswa int, seq, pos []int, tok []int32) error {
+	n := len(pos)
+	if f.Toks && tok == nil {
+		return fmt.Errorf("model: block %d reads its rows' tokens, which the step gives none of", li)
+	}
+	hl := s.c.KVSource(li)
+	pg := &s.kv.layers[hl]
+	pages, err := s.cpuPages(hl, pg)
+	if err != nil {
+		return err
+	}
+	runs := s.runsAt(li) && s.bidirIn(pos[0], n)
+	slots := max(pg.arenaSlots(), 1)
+	if cap(s.cpu.spans) < 4*n {
+		s.cpu.spans = make([]uint32, 4*n)
+	}
+	spans := s.cpu.spans[:4*n]
+	end := 0
+	for i, p := range pos {
+		e, st := p+1, pg.keyStart(p)
+		if runs {
+			e = max(e, s.bidirEnd(p))
+			if s.cpu.runWindows {
+				st = max(st, s.bidirStart(p))
+			}
+		}
+		if w := s.cpu.rowWins; w != nil && !s.wholePicture(li) {
+			st, e = max(st, w[p].Lo), w[p].Hi
+		}
+		end = max(end, p+1)
+		spans[i*4], spans[i*4+1], spans[i*4+2], spans[i*4+3] = uint32(seq[i]*slots), uint32(st), uint32(e), uint32(p)
+	}
+	w, _ := s.ws.bind(f, li, l)
+	_, pw := s.cpuSideRows(li)
+	in := &s.cpu.rowsIn
+	*in = cpudev.Rows{X: x, Stride: stride, Width: s.c.NEmbd, Streams: s.c.Streams(), Side: side, SideW: pw,
+		SideOff: s.cpuSideOff(li), CS: cs, NRot: nrot, CSSWA: swa, NSWA: nswa, Pages: pages, PagePos: pg.p, Spans: spans,
+		Pos: pos, Tok: tok, Seq: seq, Weights: w}
+	in.Keys, in.Values = kvAddrs(pg)
+	if f.Rec {
+		in.RecLi = s.cpuRecLi(li)
+		in.RecState, in.RecConv = recAddrs(s.Session, in.RecLi)
+		in.Conv, in.ConvLen = s.view.Conv(in.RecLi), s.dg.ConvStateLen()
+	}
+	if err := s.cpu.rowRun.Rows(li, f, in, runs); err != nil {
+		return err
+	}
+	if pg.p > 0 && end > pg.written {
+		pg.written = end
+	}
+	return nil
 }

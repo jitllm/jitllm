@@ -413,6 +413,7 @@ func setFault(s *Instance, f cpuFault) {
 	}
 	if r := s.cpu.rowRun; r != nil {
 		r.FaultRow, r.FaultWrite = f == cpuFaultRow, f == cpuFaultWrite
+		r.FaultPage, r.FaultKeysFirst = f == cpuFaultPage, f == cpuFaultKeysFirst
 	}
 	if r := s.cpu.run; r != nil {
 		r.FaultPicks, r.FaultExpert, r.FaultWeight = f == cpuFaultPicks, f == cpuFaultExpert, f == cpuFaultWeight
