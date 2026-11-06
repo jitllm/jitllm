@@ -3,6 +3,7 @@
 package nn
 
 import (
+	"github.com/jitllm/jitllm/nn/history"
 	"math"
 	"strings"
 
@@ -894,6 +895,16 @@ type Spinner interface{ SetSpinning(bool) }
 
 // Threaded is a device that runs its blocks on threads of its own.
 type Threaded interface{ Workers() int }
+
+// HistoryStorage is the storage a device whose memory holds sessions'
+// history keeps for the model it runs: the pool of pages closed sessions
+// gave back, each block's arena of slots, and the numbering of histories.
+// The policy over them (residency, sharing, the store) is the engine's.
+type HistoryStorage interface {
+	PagePool() *history.PagePool
+	ArenaFor(li, pp int, latent bool, slots int) (*history.Arena, error)
+	NextSequence() int64
+}
 
 // BlockPlacer is a device's side of a placement: it takes a block it is
 // offered and lets a run of them go.

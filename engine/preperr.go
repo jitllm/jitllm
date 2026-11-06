@@ -23,6 +23,12 @@ func (s *Instance) notePrep(err error) {
 	}
 }
 
+// storage is the history storage of the device whose memory holds the
+// sessions' history: the lanes' device's.
+func (s *Instance) storage() nn.HistoryStorage {
+	return s.places[routeLanes].(nn.HistoryStorage)
+}
+
 // setSpinning tells each device whether the step read from storage.
 func (s *Instance) setSpinning(on bool) {
 	for _, p := range s.places {

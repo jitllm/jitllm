@@ -184,6 +184,20 @@ func (e *Exec) Lanes() *Lanes { return e.lanes }
 // PrepErr is the first error the execution's composer met (nn.PrepReporter).
 func (e *Exec) PrepErr() error { return e.comp.Err() }
 
+// PagePool is the pool of history pages the model's closed sessions on the
+// device gave back (nn.HistoryStorage).
+func (e *Exec) PagePool() *PagePool { return e.cpu.KVPool(e.setup.Model) }
+
+// ArenaFor is the model's arena for block li's pages of pp floats, made with
+// slots slots on the first ask (nn.HistoryStorage).
+func (e *Exec) ArenaFor(li, pp int, latent bool, slots int) (*Arena, error) {
+	return e.cpu.Arenas(e.setup.Model).For(li, pp, latent, slots)
+}
+
+// NextSequence numbers the model's histories on the device, from 1
+// (nn.HistoryStorage).
+func (e *Exec) NextSequence() int64 { return e.cpu.NextSeq(e.setup.Model) }
+
 // NotePrep records err as the execution's preparation error (nn.PrepNoter).
 func (e *Exec) NotePrep(err error) { e.comp.Note(err) }
 

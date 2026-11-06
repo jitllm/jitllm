@@ -9,7 +9,7 @@ import (
 // budget can hold of that layer and no fewer than minSlots pages.
 func (s *Instance) kvArenaFor(li, pp int, latent bool, minSlots int) (*history.Arena, error) {
 	slots := max(minSlots, int(min(s.m.Gc.Budget()/uint64(4*pp), history.ArenaElems/uint64(pp))))
-	return s.eng.cpu.Arenas(s.m.Id).For(li, pp, latent, slots)
+	return s.storage().ArenaFor(li, pp, latent, slots)
 }
 
 // useArena gives the layer the model's arena for its pages and a table for
