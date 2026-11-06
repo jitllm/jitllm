@@ -53,21 +53,17 @@ func (s *Instance) SetPageBudget(bytes uint64) int {
 // PageBudget is this instance's page quota (SetPageBudget).
 func (s *Instance) PageBudget() uint64 { return s.pageQuota.Load() }
 
-// holdOwner makes d the device this instance holds the model on
-// (nn.ModelOwner), letting the one it held go: a device keeps what the model
-// placed until the last instance holding it lets it go.
-func (s *Instance) holdOwner(d nn.LayerDevice) {
-	var o nn.ModelOwner
-	if mo, ok := d.(nn.ModelOwner); ok {
-		o = mo
-	}
-	if o == s.owner {
+// holdOn makes o the device route r holds the model on (nn.ModelOwner),
+// letting the one it held go: a device keeps what the model placed until the
+// last instance holding it lets it go.
+func (s *Instance) holdOn(r int, o nn.ModelOwner) {
+	if o == s.owners[r] {
 		return
 	}
-	if s.owner != nil {
-		s.owner.ReleaseModel(s.m.Id)
+	if s.owners[r] != nil {
+		s.owners[r].ReleaseModel(s.m.Id)
 	}
-	s.owner = o
+	s.owners[r] = o
 	if o != nil {
 		o.HoldModel(s.m.Id)
 	}
