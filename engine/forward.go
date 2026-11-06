@@ -1983,7 +1983,9 @@ func (s *Instance) planFor(li int) *nn.LayerPlan {
 		plan.IdxHeads, plan.IdxHeadDim, plan.IdxTopK, plan.IdxBlock, plan.IdxLocal = 0, 0, 0, 0, 0
 	}
 	plan.AltUp, plan.Sparse, plan.SparseStd = c.PredStreams, li < c.NSparse, c.SparseStd
-	plan.LaurelRank = l.LaurelL.Rows
+	if t := l.Matrix(jlm.RoleLowRankIn); t != nil {
+		plan.LaurelRank = t.Rows
+	}
 	plan.KVShared, plan.KVSource = c.KVShared(li), c.KVSource(li)
 	plan.NFFN, plan.FFNWide = c.NFFNAt(li), c.NFFNAt(li) != c.NFFN
 	if c.MLA() {

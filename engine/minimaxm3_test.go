@@ -40,10 +40,10 @@ func m3Fixtures() []struct {
 			for i := range m.Layers {
 				l := &m.Layers[i]
 				if c.MSAAt(i) {
-					ok = ok && l.IdxQ.Rows == 2*16 && l.IdxK.Rows == 16 && len(l.Vector(jlm.RoleIdxQNorm)) == 16 &&
+					ok = ok && matRows(l, jlm.RoleIdxQ) == 2*16 && matRows(l, jlm.RoleIdxK) == 16 && len(l.Vector(jlm.RoleIdxQNorm)) == 16 &&
 						len(l.Vector(jlm.RoleIdxKNorm)) == 16
 				} else {
-					ok = ok && l.IdxQ.E == nil && l.IdxK.E == nil
+					ok = ok && l.Matrix(jlm.RoleIdxQ) == nil && l.Matrix(jlm.RoleIdxK) == nil
 				}
 			}
 			return ok

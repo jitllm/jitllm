@@ -34,7 +34,7 @@ func gemma3nFixtures() []struct {
 				c.SparseStd > 1.64 && c.SparseStd < 1.65 && c.VNorm && c.SWAPeriod == 5 && len(m.AltUnembd) == 3
 			for i := range m.Layers {
 				l := &m.Layers[i]
-				ok = ok && l.LaurelL.Rows == 32 && l.AltRouter.Rows == 4 && len(l.Vector(jlm.RoleStreamPredictCoef)) == 64
+				ok = ok && matRows(l, jlm.RoleLowRankIn) == 32 && l.AltRouter.Rows == 4 && len(l.Vector(jlm.RoleStreamPredictCoef)) == 64
 			}
 			return ok
 		}},

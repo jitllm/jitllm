@@ -589,3 +589,19 @@ func TestC6FeaturesAreLoadBearing(t *testing.T) {
 		})
 	}
 }
+
+// matRows and matK are the rows and width of the matrix block l stores under
+// r, 0 for none.
+func matRows(l *model.Layer, r jlm.Role) int {
+	if t := l.Matrix(r); t != nil {
+		return t.Rows
+	}
+	return 0
+}
+
+func matK(l *model.Layer, r jlm.Role) int {
+	if t := l.Matrix(r); t != nil {
+		return t.K
+	}
+	return 0
+}

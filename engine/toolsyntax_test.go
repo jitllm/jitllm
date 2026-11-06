@@ -2,12 +2,13 @@ package engine
 
 import (
 	"encoding/json"
-	"github.com/jitllm/jitllm/convert"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/jitllm/jitllm/convert"
 
 	"github.com/jitllm/jitllm/model"
 

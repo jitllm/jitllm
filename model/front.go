@@ -1351,6 +1351,10 @@ func (m *Model) mixture(b *graph.Builder, f graph.Facts, li int, x, n graph.Valu
 // the cached rows, each value the whole row, with the block's scale, window,
 // softcap and sinks; each head's first KVLoraRank of the result through its
 // sheet of RoleAttnVB, gated where the block stores a gate over the output.
+// idxEps is the indexer key norm's epsilon: nn.LayerNorm(eps=1e-6) in the
+// reference, hardcoded in llama.cpp's builder; no GGUF key carries it.
+const idxEps = 1e-6
+
 func (m *Model) latentAttention(b *graph.Builder, li int, n, qIn, q graph.ValueID, has func(jlm.Role) bool, stored func(jlm.Role) []jlm.Role,
 	matvec func(graph.ValueID, jlm.Role, int, ...jlm.Role) graph.ValueID) (graph.ValueID, error) {
 	c := m.Cfg
