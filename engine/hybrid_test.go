@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/jitllm/jitllm/model"
@@ -300,10 +301,10 @@ func hybridModelOpt(t *testing.T, o hyOpt) (*model.Model, []Option) {
 	if o.chunk > 0 {
 		mo = append(mo, model.WithChunk(o.chunk))
 	}
+	instOpts := slices.Clip(o.extra)
 	if o.budget > 0 {
-		mo = append(mo, model.WithPageBudget(o.budget))
+		instOpts = append(instOpts, WithPageBudget(o.budget))
 	}
-	instOpts := o.extra
 	m, err := model.Open(dst, mo...)
 	if err != nil {
 		t.Fatalf("Open a hybrid container: %v", err)
@@ -495,10 +496,11 @@ func TestEveryLayerTensorIsBound(t *testing.T) {
 	m, _ := hybridModel(t)
 	tt := reflect.TypeOf(model.Tensor{})
 	checked := 0
+	fr := testFrames(t, m)
 	for li := range m.Layers {
 		// Open touches no page, so fault the block in first: pageIn is where a
 		// weight meets its bytes.
-		if err := m.PageIn(m.Frames, li, &m.Layers[li]); err != nil {
+		if err := m.PageIn(fr, li, &m.Layers[li]); err != nil {
 			t.Fatalf("page in block %d: %v", li, err)
 		}
 		v := reflect.ValueOf(&m.Layers[li]).Elem()
@@ -1250,7 +1252,7 @@ func TestMoEDeviceUploadReadsTheWholeBank(t *testing.T) {
 	m, openOpts2 := hybridModelOpt(t, hyOpt{moe: true, layers: 8, manyExp: true, budget: 3 * page})
 	defer m.Close()
 	t.Logf("page %d bytes (%.2f MiB), chunk %d", page, float64(page)/(1<<20), jlm.Chunk)
-	if b := m.Frames.Budget(); b == 0 || b >= 8*page {
+	if b := 3 * page; !budgetEvicts(m, b) {
 		t.Skipf("the budget is %d bytes against 8 pages of %d, so nothing is evicted", b, page)
 	}
 
@@ -1263,7 +1265,7 @@ func TestMoEDeviceUploadReadsTheWholeBank(t *testing.T) {
 			t.Fatalf("host: %v", err)
 		}
 	}
-	resident, in, out := m.PageStats(m.Frames)
+	resident, in, out := m.PageStats(cycle.fr)
 	cycle.Close()
 	t.Logf("after the host decode: %d page(s) resident, %d in, %d out", resident, in, out)
 	if out == 0 {
@@ -1362,9 +1364,11 @@ func TestMoEDeviceReadsOnlyTheBanksItTakes(t *testing.T) {
 		defer g.Close()
 		s := testInstance(t, m, 16, openOpts2...)
 		defer s.Close()
-		before := m.Frames.ChunksIn()
+		// Every device's reads: the card reads a block it takes into frames
+		// of its own.
+		before := m.PagedBytes()
 		s.SetDeviceLayers(g, 8)
-		return m.Frames.ChunksIn() - before, s.GPULayers()
+		return int64((m.PagedBytes() - before) / m.Container.ChunkBytes()), s.GPULayers()
 	}
 
 	// Under a budget the card pages a block's banks, so a budgeted block
@@ -1412,12 +1416,12 @@ func TestDevicePagingSurvivesTheHostPager(t *testing.T) {
 func devicePagingUnderHostPager(t *testing.T, o hyOpt) {
 	m, openOpts := hybridModelOpt(t, o)
 	defer m.Close()
-	if b := m.Frames.Budget(); b == 0 {
-		t.Skip("the host page budget did not apply, so only one pager is live")
-	}
 	ids := []int32{1, 2, 3, 4, 5, 6, 7, 8}
 	host := testInstance(t, m, 16, openOpts...)
 	defer host.Close()
+	if host.fr.Budget() == 0 {
+		t.Skip("the host page budget did not apply, so only one pager is live")
+	}
 	want := make([][]float32, len(ids))
 	for i, id := range ids {
 		l, err := host.Forward(id)

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/model"
 )
 
@@ -55,10 +56,11 @@ func TestPreloadReadsEveryPageAndKeepsTheAnswer(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := m.WaitPreload(); err != nil {
+			cf := testFrames(t, m)
+			if err := cf.WaitPreload(); err != nil {
 				t.Fatal(err)
 			}
-			c, cf := m.Container, m.Frames
+			c := m.Container
 			if got, all := cf.ResidentPages(), c.NPages(); got != all {
 				t.Fatalf("preload left %d of %d pages resident", got, all)
 			}
@@ -69,10 +71,10 @@ func TestPreloadReadsEveryPageAndKeepsTheAnswer(t *testing.T) {
 			t.Logf("%s: %d pages, %d bytes read in %d requests, peak %d outstanding "+
 				"(faulted in by the tokens: %d requests, peak %d)", name, c.NPages(),
 				m.ReadBytes(), m.PagerReads(), m.ReadConcurrency(), coldReads, coldPeak)
-			t.Logf("%s: preload peak pages in flight %d", name, m.PreloadDepth(m.Frames))
-			if c.NPages() >= 16 && m.PreloadDepth(m.Frames) < 2 {
+			t.Logf("%s: preload peak pages in flight %d", name, m.PreloadDepth(cf))
+			if c.NPages() >= 16 && m.PreloadDepth(cf) < 2 {
 				t.Fatalf("preload had at most %d page in flight: the pages were read one at a time",
-					m.PreloadDepth(m.Frames))
+					m.PreloadDepth(cf))
 			}
 			if uint64(m.ReadBytes()) < page {
 				t.Fatalf("preload read %d bytes of %d bytes of pages", m.ReadBytes(), page)
@@ -91,19 +93,22 @@ func TestPreloadReadsEveryPageAndKeepsTheAnswer(t *testing.T) {
 			}
 
 			// A budget below the model: the forward pass decides residency.
-			m3, err := model.Open(path, model.WithPreload(4), model.WithPageBudget(page/2))
+			m3, err := model.Open(path, model.WithPreload(4))
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := m3.WaitPreload(); err != nil {
+			if err := testFrames(t, m3, jlm.Budget(page/2)).WaitPreload(); err != nil {
 				t.Fatal(err)
 			}
-			m4, err := model.Open(path, model.WithPageBudget(page/2))
+			m4, err := model.Open(path)
 			if err != nil {
 				t.Fatal(err)
 			}
+			// Frames over it too, which read the dense region: what differs is
+			// the preload alone.
+			testFrames(t, m4, jlm.Budget(page/2))
 			if r, open := m3.PagerReads(), m4.PagerReads(); r != open {
-				t.Fatalf("preload under a budget below the model issued %d reads, Open alone %d", r, open)
+				t.Fatalf("preload under a budget below the model issued %d reads, frames alone %d", r, open)
 			}
 			m3.Close()
 			m4.Close()
@@ -111,8 +116,8 @@ func TestPreloadReadsEveryPageAndKeepsTheAnswer(t *testing.T) {
 	}
 }
 
-// TestCloseStopsAPreload: Close in the middle of a preload waits for its reads
-// and leaves no goroutine behind.
+// TestCloseStopsAPreload: closing the frames in the middle of a preload waits
+// for its reads and leaves no goroutine behind.
 func TestCloseStopsAPreload(t *testing.T) {
 	path := jlmOf(t, models()["qwen3moe"])
 	base := runtime.NumGoroutine()
@@ -121,6 +126,11 @@ func TestCloseStopsAPreload(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		fr, err := m.NewFrames()
+		if err != nil {
+			t.Fatal(err)
+		}
+		fr.Close()
 		if err := m.Close(); err != nil {
 			t.Fatal(err)
 		}
@@ -130,6 +140,6 @@ func TestCloseStopsAPreload(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	if n := runtime.NumGoroutine(); n > base {
-		t.Fatalf("%d goroutines after four Open/Close pairs with a preload, %d before", n, base)
+		t.Fatalf("%d goroutines after four frames closed under a preload, %d before", n, base)
 	}
 }

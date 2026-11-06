@@ -133,16 +133,16 @@ func TestPagedModelOpenCloseDoesNotLeak(t *testing.T) {
 		if err != nil {
 			return nil, err
 		}
-		// A budget below the model forces frames, eviction and re-reads.
-		m.SetPageBudget(m.Frames, 4*m.PageSize())
 		return m, nil
 	}
+	// A budget below the model forces frames, eviction and re-reads.
+	tight := func(m *model.Model) Option { return WithPageBudget(4 * m.PageSize()) }
 	for i := 0; i < 2; i++ {
 		m, err := open()
 		if err != nil {
 			t.Skip(err)
 		}
-		s := testInstance(t, m, 16)
+		s := testInstance(t, m, 16, tight(m))
 		if _, err := s.Forward(1); err != nil {
 			t.Fatal(err)
 		}
@@ -160,7 +160,7 @@ func TestPagedModelOpenCloseDoesNotLeak(t *testing.T) {
 		if err != nil {
 			t.Fatalf("round %d: %v", i, err)
 		}
-		s := testInstance(t, m, 24)
+		s := testInstance(t, m, 24, tight(m))
 		for k := 0; k < 3; k++ {
 			if _, err := s.Forward(int32(1 + k)); err != nil {
 				t.Fatalf("round %d: %v", i, err)

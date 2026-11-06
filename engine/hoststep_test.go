@@ -168,7 +168,7 @@ func hostStepAllocs(t *testing.T, m *model.Model, chunk bool, io ...Option) {
 	for s := range warm {
 		step(s)
 	}
-	if err := prefaultExperts(m); err != nil {
+	if err := prefaultExperts(instancesOf(runs)...); err != nil {
 		t.Fatal(err)
 	}
 	rows := 0

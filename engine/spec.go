@@ -332,7 +332,11 @@ func (s *Instance) Speculate(opts ...SpecOption) (*Speculator, error) {
 		// where the trunk can verify, and the round's last token -- decided,
 		// not yet fed -- has its draft row at the position the trunk will feed
 		// it at, which on a full context is one past the trunk's last.
-		sp.d = newInstanceOver(m, s.eng, s.opt, m.Cfg, 1, s.maxSeq+1, c.NLayer, c.NLayer+1)
+		d, err := newInstanceOver(m, s.eng, s.fr, s.opt, m.Cfg, 1, s.maxSeq+1, c.NLayer, c.NLayer+1)
+		if err != nil {
+			return nil, err
+		}
+		sp.d = d
 		sp.d.relocate = false
 		if s.device != nil {
 			if err := sp.d.SetDevice(s.device); err != nil {
@@ -401,7 +405,7 @@ func (sp *Speculator) Start(prompt []int32, sm *Sampler) (int32, error) {
 	if len(prompt) == 0 {
 		return 0, errEmptyPrompt{}
 	}
-	defer t.m.EnterPager(t.m.Frames)()
+	defer t.fr.Enter()()
 	n := len(prompt)
 	logits, hid, err := sp.trunkPrompt(prompt)
 	if err != nil {
@@ -534,7 +538,7 @@ func (sp *Speculator) Next(sm *Sampler) ([]int32, error) {
 	if sp.retired && len(sp.replay) == 0 {
 		return sp.decode(sm, greedy)
 	}
-	defer t.m.EnterPager(t.m.Frames)()
+	defer t.fr.Enter()()
 	P := t.bpos[0]
 	r := len(sp.replay)
 	// The verification writes P..P+r+k: it must fit the trunk's context, and

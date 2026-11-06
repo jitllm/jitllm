@@ -29,7 +29,7 @@ func TestDeviceBudgetAccounting(t *testing.T) {
 	if path == "" {
 		t.Skip("set JITLLM_BUDGET=<model.jlm> to print the placement accounting")
 	}
-	m, err := model.Open(path, model.WithPageBudget(3<<30))
+	m, err := model.Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}

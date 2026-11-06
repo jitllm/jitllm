@@ -265,9 +265,7 @@ func (s *Instance) moveHistory(li int, dev bool) error {
 		s.ld.ReleaseLayers(li, li+1)
 		return nil
 	}
-	w := nn.LayerWeights{Ensure: s.ensureLayer(li), EnsureExperts: s.ensureSelected(li),
-		PrefetchExperts: s.prefetchSelected(li), SpeculateExperts: s.speculateSelected(li),
-		ExpertUses: s.hot.layer(li)}
+	w := s.offerWeights(li, false)
 	plan := *s.planFor(li)
 	if !s.ld.PrepLayer(li, &plan, &w) {
 		return fmt.Errorf("model: the device holding block %d has no room for this session's history of it", li)

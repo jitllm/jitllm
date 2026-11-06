@@ -9,7 +9,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unsafe"
 
 	"github.com/jitllm/jitllm/model"
 
@@ -143,6 +142,20 @@ type Instance struct {
 	// staging binds beside the instance's own call.
 	layers []model.Layer
 	bind   sync.Mutex
+	// owner is the device this instance holds the model on (holdOwner), and
+	// holdsCPU that a root instance holds it on its CPU device; each goes at
+	// Close.
+	owner    nn.ModelOwner
+	holdsCPU bool
+	// pageQuota is this instance's page budget (SetPageBudget), 0 for
+	// unlimited, and quota its record on the CPU device; a root's alone.
+	pageQuota uint64
+	quota     *cpudev.Quota
+	// fr is the CPU device's frames for the model (cpudev.CPU.Frames): the
+	// memory the blocks this instance runs on the CPU are read into. dense
+	// is the instance's own copy of the model's dense tensors, bound at fr.
+	fr    *jlm.Frames
+	dense model.Dense
 
 	// fuseOff runs this instance's decode one pool region per op
 	// (WithBlockFusion, SetBlockFusion); fused is whether a fused run of host
@@ -521,13 +534,32 @@ func NewInstance(m *model.Model, maxSeq int, opts ...Option) (*Instance, error) 
 		}
 		g.ownCPU = true
 	}
-	// The CPU device holds the model's forms and arenas: the model releases
-	// them at its Close.
-	m.HeldBy(g.cpu)
+	// The CPU device keeps the model's forms, arenas and frames while an
+	// instance holds it there: this one's hold goes at its Close.
+	g.cpu.HoldModel(m.Id)
 	g.host = g.cpu.Attached(m.Id, func() any { return &hostShared{} }).(*hostShared)
-	s := newInstanceOver(m, g, lo.opt, m.Cfg, 1, maxSeq, 0, m.Cfg.NLayer)
-	s.root = true
-	return s, nil
+	// The page quota is the caller's, or the model's memory plan, recorded
+	// before the frames are made: it budgets them from their first read.
+	pq := m.Gc.Budget()
+	if lo.opt.pageBudgetSet {
+		pq = lo.opt.pageBudget
+	}
+	q := g.cpu.NewQuota(m.Id, pq)
+	fr, err := g.cpu.Frames(m.Id, m.NewFrames)
+	if err == nil {
+		var s *Instance
+		if s, err = newInstanceOver(m, g, fr, lo.opt, m.Cfg, 1, maxSeq, 0, m.Cfg.NLayer); err == nil {
+			s.root, s.holdsCPU = true, true
+			s.pageQuota, s.quota = pq, q
+			return s, nil
+		}
+	}
+	q.Drop()
+	g.cpu.ReleaseModel(m.Id)
+	if g.ownCPU {
+		g.cpu.Close()
+	}
+	return nil, err
 }
 
 // OpenCPU is the CPU device opts state: WithDevices' cpu spec (cpu:sse,
@@ -552,9 +584,9 @@ func OpenCPU(opts ...Option) (*cpudev.CPU, error) {
 }
 
 // newInstanceOver is an instance over blocks [lo, hi) of a segment whose
-// geometry is c's (the text's, or the tower's: towerConfig), sharing g and
-// running with knobs opt.
-func newInstanceOver(m *model.Model, g *engineState, opt modelOpts, c *model.Config, nseq, maxSeq, lo, hi int) *Instance {
+// geometry is c's (the text's, or the tower's: towerConfig), sharing g,
+// paging what it runs on the CPU into fr and running with knobs opt.
+func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOpts, c *model.Config, nseq, maxSeq, lo, hi int) (*Instance, error) {
 	// Clamp to the model's context, and record the request (reqSeq) so a
 	// later "kv cache is full" can name the number the caller passed.
 	req := maxSeq
@@ -562,10 +594,14 @@ func newInstanceOver(m *model.Model, g *engineState, opt modelOpts, c *model.Con
 		maxSeq = c.NCtx
 	}
 	s := &Instance{Session: &Session{model: m}, m: m, c: c, lo: lo, hi: hi, maxSeq: maxSeq, reqSeq: req, nseq: nseq,
-		devFallback: true, relocate: true, prof: opt.profile, outNorm: m.OutNorm, outW: &m.Output,
+		devFallback: true, relocate: true, prof: opt.profile, outNorm: m.OutNorm, fr: fr,
 		fuseOff: opt.noFuse, groupOff: opt.noGroups,
 		residFold: opt.residFold, opt: opt, eng: g}
 	s.own = s.Session
+	if err := m.BindDense(fr, &s.dense); err != nil {
+		return nil, err
+	}
+	s.outW = &s.dense.Output
 	s.layers = make([]model.Layer, hi-lo)
 	for li := lo; li < hi; li++ {
 		m.Layers[li].CloneTo(&s.layers[li-lo])
@@ -669,7 +705,7 @@ func newInstanceOver(m *model.Model, g *engineState, opt modelOpts, c *model.Con
 	// Read at construction too, because an embedded caller may never call
 	// SetMemBudget; it overrides this with the caller's number.
 	s.memBudget = s.m.Gc.Budget()
-	return s
+	return s, nil
 }
 
 // SetMemBudget tells the session how many bytes of weights may stay resident,
@@ -745,12 +781,20 @@ func (s *Instance) Close() error {
 	s.tower.close()
 	s.tower = nil
 	s.eng.cpu.Leave(s.seat)
-	if s.root && s.eng.ownCPU {
+	if s.root {
 		defer func() {
-			s.m.Unheld(s.eng.cpu)
-			s.eng.cpu.Close()
+			if s.holdsCPU {
+				s.holdsCPU = false
+				s.quota.Drop()
+				s.eng.cpu.ReleaseModel(s.m.Id)
+			}
+			if s.eng.ownCPU {
+				s.eng.cpu.Close()
+			}
 		}()
 	}
+	// The card this instance holds the model on lets it go first.
+	defer s.holdOwner(nil)
 	// A move prepared and never committed gives its target's copies back.
 	if s.pending != nil {
 		s.pending.Cancel()
@@ -845,9 +889,7 @@ func (s *Instance) SetDeviceLayers(d nn.LayerDevice, max int) error {
 	// will, both budgets are re-divided for it.
 	s.holdHost(d)
 	defer s.followHost()
-	if d != nil {
-		s.m.HeldBy(d)
-	}
+	s.holdOwner(d)
 	if d == nil {
 		// Detaching gives the host budget back (an integrated GPU's share).
 		s.setLD(nil)
@@ -865,7 +907,7 @@ func (s *Instance) SetDeviceLayers(d nn.LayerDevice, max int) error {
 	c := s.c
 	p := nn.LayerPlan{
 		// Whose blocks these are: a device holds one model's at a time.
-		Model: s.m.Id,
+		Model: s.m.Id, File: s.m.Container, FrameBudget: s.pageQuota,
 		NEmbd: c.NEmbd, NHead: c.NHead, NKVHead: c.NKVHead, HeadDim: c.HeadDim,
 		NRot: c.NRot, NFFN: c.NFFN, MaxSeq: s.maxSeq, Vocab: c.NVocab, FinalSoftcap: c.FinalSoftcap,
 		RMSEps: c.RMSEps, RopeBase: c.RopeBase, Act: c.Act, RopeNeox: c.RopeNeox,
@@ -1358,11 +1400,11 @@ func (s *Instance) newHead() *nn.Head {
 	h := &nn.Head{Model: s.m.Id, Graph: f.CpuHead, HiddenGraph: f.CpuHidden, Sample: f.CpuSample, SampleWalk: f.CpuWalk, PickGraph: f.Pick, PickHead: f.PickHead, Embed: f.Embed, Norm: s.outNorm, W: model.Wt(*s.outW), Logits: s.logits,
 		Softcap: c.FinalSoftcap, Embeds: c.TiedEmbd, EmbdScale: float32(c.EmbdScale),
 		Stages: s.m.HeadStages(), Bias: s.m.OutB, NoCPU: !s.cpuListed()}
-	if !c.TiedEmbd && s.m.Embd.E != nil {
-		h.TokEmbd = model.Wt(s.m.Embd)
+	if !c.TiedEmbd && s.dense.Embd.E != nil {
+		h.TokEmbd = model.Wt(s.dense.Embd)
 	}
-	if s.m.PosEmbd.E != nil {
-		h.PosEmbd = model.Wt(s.m.PosEmbd)
+	if s.dense.PosEmbd.E != nil {
+		h.PosEmbd = model.Wt(s.dense.PosEmbd)
 	}
 	h.Streams, h.Collapse = s.streamsPart(f.Embed), s.streamsPart(f.Collapse)
 	// The final softcap rides the head: a tier that takes it applies the cap on
@@ -1398,11 +1440,12 @@ func (s *Instance) placeHeadOn(name string) bool {
 	return took
 }
 
-// layerWeightsAt gathers block li's weights as the device wants them. It does
-// not set Ensure -- the caller does, because Ensure calls back into here. It is
-// shared by the offer and by every device page-in, which must agree.
-func (s *Instance) layerWeightsAt(li int) nn.LayerWeights {
-	l := s.layer(li)
+// layerWeightsAt gathers block li's weights as a device wants them, from l,
+// a copy of the block bound at a device's frames, and banks, its routed banks
+// over the same frames. It sets no callback -- the caller does, because they
+// call back into here. It is shared by the offer and by every device
+// page-in, which must agree.
+func (s *Instance) layerWeightsAt(li int, l *model.Layer, banks *[3]nn.Weight) nn.LayerWeights {
 	qn, kn := s.qkNorms(li)
 	w := nn.LayerWeights{
 		Vectors:  l.Vecs,
@@ -1412,7 +1455,7 @@ func (s *Instance) layerWeightsAt(li int) nn.LayerWeights {
 		// For a MoE file these three are the banks -- l.gate is the 3-D
 		// ffn_gate_exps and l.experts[e] are views into it, so
 		// nothing is copied and the device indexes the same mapping.
-		Gate: s.m.BankWeight(s.m.Frames, l.Gate), Up: s.m.BankWeight(s.m.Frames, l.Up), Down: s.m.BankWeight(s.m.Frames, l.Down),
+		Gate: banks[0], Up: banks[1], Down: banks[2],
 	}
 	// A LayerNorm always hands the device a bias -- zeros where the file has
 	// none (command-r) -- because the apply kernel takes one.
@@ -1454,89 +1497,137 @@ func (s *Instance) layerWeightsAt(li int) nn.LayerWeights {
 	if s.m.Cfg.MSAAt(li) {
 		w.IdxQ, w.IdxK = model.Wt(l.IdxQ), model.Wt(l.IdxK)
 	}
-	s.q4eWeights(li, &w)
+	s.q4eWeights(li, l, &w)
 	w.MLAGate, w.RoutedDown, w.RoutedUp = model.Wt(l.MlaGate), model.Wt(l.RoutedDown), model.Wt(l.RoutedUp)
+	if k := s.c.LayerKind(li); k.Recurrent() && !k.Attends() {
+		// A linear block has none of these; leaving the attention four set
+		// would offer a device four matrices whose shapes do not match the
+		// plan it was handed. (planFor clears AttnOutGate for the same
+		// reason: s.plan sets it on every block of a qwen3next.)
+		w.Wk, w.Wv, w.Wo = nn.Weight{}, nn.Weight{}, nn.Weight{}
+		w.QNorm, w.KNorm = nil, nil
+	}
 	return w
 }
 
-// ensureLayer builds the callback a device calls before reading block li's
-// bytes: the page back in, the routed bank read, and every Weight in the
-// caller's struct re-pointed at where those bytes are now. The re-pointing
-// matters because a host page is a reused frame: slices kept from placement
-// would read whichever block the host faulted into it last. pageIn comes first
-// because ensureBlockExperts reads into the page.
-func (s *Instance) ensureLayer(li int) func(*nn.LayerWeights) error {
-	return func(dst *nn.LayerWeights) error {
-		if _, err := s.pageIn(li); err != nil {
+// offer is block li as a card is offered it: a copy of the block of its
+// own, bound at the frames of the card it is offered to (Bind) and read into
+// them (Ensure), so the card reads the file into its memory, not the CPU
+// device's, and no binding the CPU device runs moves. The card serialises
+// its calls on one block; the copy is taken from the instance's under bind.
+type offer struct {
+	s      *Instance
+	li     int
+	l      model.Layer
+	cloned bool
+	// banks is the routed banks' Weights over bankFr (model.Model.BankWeight),
+	// built at the first gather over those frames and kept.
+	banks  [3]nn.Weight
+	bankFr *jlm.Frames
+}
+
+// offerWeights is block li's weights as a card is offered them: the
+// callbacks of an offer of its own. bind false leaves Bind out, for a block
+// the card already holds and reads nothing of.
+func (s *Instance) offerWeights(li int, bind bool) nn.LayerWeights {
+	o := &offer{s: s, li: li}
+	w := nn.LayerWeights{Ensure: o.ensure, EnsureExperts: o.ensureSelected,
+		PrefetchExperts: o.prefetch, SpeculateExperts: o.speculate, ExpertUses: s.hot.layer(li)}
+	if bind {
+		w.Bind = o.bind
+	}
+	return w
+}
+
+func (o *offer) layer() *model.Layer {
+	if !o.cloned {
+		o.s.bind.Lock()
+		o.s.layer(o.li).CloneTo(&o.l)
+		o.s.bind.Unlock()
+		o.cloned = true
+	}
+	return &o.l
+}
+
+// gather points dst at the copy's spans in fr, keeping dst's callbacks: a
+// callback missed here is cleared by the first Ensure (a missed
+// PrefetchExperts disables the streamed read/upload pipeline).
+func (o *offer) gather(dst *nn.LayerWeights, fr *jlm.Frames) {
+	if o.bankFr != fr {
+		m, l := o.s.m, &o.l
+		o.banks = [3]nn.Weight{m.BankWeight(fr, l.Gate), m.BankWeight(fr, l.Up), m.BankWeight(fr, l.Down)}
+		o.bankFr = fr
+	}
+	w := o.s.layerWeightsAt(o.li, &o.l, &o.banks)
+	w.Bind, w.Ensure, w.EnsureExperts = dst.Bind, dst.Ensure, dst.EnsureExperts
+	w.PrefetchExperts, w.SpeculateExperts = dst.PrefetchExperts, dst.SpeculateExperts
+	w.ExpertUses = dst.ExpertUses
+	*dst = w
+}
+
+// bind is nn.LayerWeights.Bind: the block's frame in fr claimed, the copy
+// bound at it, nothing read.
+func (o *offer) bind(dst *nn.LayerWeights, fr *jlm.Frames) error {
+	if err := o.s.m.BindBlock(fr, o.li, o.layer()); err != nil {
+		return err
+	}
+	o.gather(dst, fr)
+	return nil
+}
+
+// ensure is nn.LayerWeights.Ensure: the block read into fr, its routed bank
+// with it (a card is handed the whole bank and cannot come back for an
+// expert), and dst re-pointed at where the bytes are now -- a frame is
+// reused, so slices kept from admission would read whichever block landed
+// in it last.
+func (o *offer) ensure(dst *nn.LayerWeights, fr *jlm.Frames) error {
+	s := o.s
+	if err := s.m.PageIn(fr, o.li, o.layer()); err != nil {
+		return err
+	}
+	if s.c.MoE() {
+		if err := s.m.EnsureBlockExperts(fr, o.li); err != nil {
 			return err
 		}
-		if s.c.MoE() {
-			if err := s.m.EnsureBlockExperts(s.m.Frames, li); err != nil {
-				return err
-			}
-		}
-		w := s.layerWeightsAt(li)
-		// Carry every callback over: a field missed here is silently cleared
-		// by the first Ensure (a missed PrefetchExperts disables the streamed
-		// read/upload pipeline).
-		w.Ensure, w.EnsureExperts = dst.Ensure, dst.EnsureExperts
-		w.PrefetchExperts = dst.PrefetchExperts
-		w.ExpertUses = dst.ExpertUses
-		w.SpeculateExperts = dst.SpeculateExperts
-		*dst = w
+	}
+	o.gather(dst, fr)
+	return nil
+}
+
+// ensureSelected is ensure narrowed to the routed sheets sel: a placed
+// block's own weights are on the card, so only they are read
+// (model.Model.PageInSelected). See nn.LayerWeights.EnsureExperts.
+func (o *offer) ensureSelected(dst *nn.LayerWeights, sel []uint32, fr *jlm.Frames) error {
+	s := o.s
+	var err error
+	if s.c.MoE() {
+		err = s.m.PageInSelected(fr, o.li, sel, o.layer())
+	} else {
+		err = s.m.PageIn(fr, o.li, o.layer())
+	}
+	if err != nil {
+		return err
+	}
+	o.gather(dst, fr)
+	return nil
+}
+
+// prefetch is ensureSelected's read and nothing else, for a card that wants
+// the next group of sheets on their way while it uploads the last. It binds
+// nothing, so it is safe beside the card's use of the copy's spans.
+func (o *offer) prefetch(sel []uint32, fr *jlm.Frames) error {
+	if !o.s.c.MoE() {
 		return nil
 	}
+	return o.s.m.EnsureBlockSelected(fr, o.li, sel, false)
 }
 
-// ensureSelected is ensureLayer for a caller that knows which experts it wants.
-// Same three steps -- page in, read, re-point -- with the bank read narrowed to
-// the routed sheets. See nn.LayerWeights.EnsureExperts.
-func (s *Instance) ensureSelected(li int) func(*nn.LayerWeights, []uint32) error {
-	return func(dst *nn.LayerWeights, sel []uint32) error {
-		// The device's callback: a placed block's own weights are on the card,
-		// so pageInSelected reads only the routed sheets. See selectedRanges.
-		if s.c.MoE() {
-			if err := s.pageInSelected(li, sel); err != nil {
-				return err
-			}
-		} else if _, err := s.pageIn(li); err != nil {
-			return err
-		}
-		w := s.layerWeightsAt(li)
-		// Carry every callback over; see ensureLayer.
-		w.Ensure, w.EnsureExperts = dst.Ensure, dst.EnsureExperts
-		w.PrefetchExperts = dst.PrefetchExperts
-		w.ExpertUses = dst.ExpertUses
-		w.SpeculateExperts = dst.SpeculateExperts
-		*dst = w
-		return nil
-	}
-}
-
-// prefetchSelected is ensureSelected's read and nothing else, for a caller that
-// wants the next group of sheets on their way while it uploads the last.
-//
-// It must not bind (so it is not pageInSelected): it runs on another goroutine
-// while the tier uses m.layers[li]'s spans. EnsureRanges is safe because
-// jlm.File locks and makeRoom never evicts the block being faulted in.
-func (s *Instance) prefetchSelected(li int) func([]uint32) error {
-	return func(sel []uint32) error {
-		if !s.c.MoE() {
-			return nil
-		}
-		return s.m.EnsureBlockSelected(s.m.Frames, li, sel, false)
-	}
-}
-
-// speculateSelected is the guess half of the read service for block li: the
-// sheets the previous block predicted, read in the background by the
-// container's workers and never waited for (jlm.File.Speculate). A bank that
-// is not in expert pages has nothing to guess at.
-func (s *Instance) speculateSelected(li int) func([]uint32) {
-	return func(sel []uint32) {
-		if s.c.MoE() {
-			s.m.SpeculateExperts(s.m.Frames, li, sel)
-		}
+// speculate is the guess half of the read service for the block: the sheets
+// the previous block predicted, read in the background into fr and never
+// waited for (jlm.Frames.Speculate).
+func (o *offer) speculate(sel []uint32, fr *jlm.Frames) {
+	if o.s.c.MoE() {
+		o.s.m.SpeculateExperts(fr, o.li, sel)
 	}
 }
 
@@ -1563,7 +1654,7 @@ func (s *Instance) offerRange(lo, hi int) {
 	// Each placed block gives its host pages back and the next block's land
 	// in the same frames; once the range is offered nothing will take the rest,
 	// so they go back to the OS (jlm.File.TrimFree).
-	defer s.m.Frames.TrimFree()
+	defer s.fr.TrimFree()
 	// A group the device took part of (a decline mid-group) comes home whole.
 	defer s.fixKVGroups()
 	c := s.c
@@ -1635,9 +1726,7 @@ func (s *Instance) offerRange(lo, hi int) {
 		// 1B model's time to first token on a 4 GB card (placement.md,
 		// "Measurements once cited in engine/model's comments").
 		if bh, ok := ld.(nn.BlockHolder); ok && !named && bh.HoldsBlock(li) && s.heldOnOffer(adm, li) {
-			w := nn.LayerWeights{Ensure: s.ensureLayer(li), EnsureExperts: s.ensureSelected(li),
-				PrefetchExperts: s.prefetchSelected(li), SpeculateExperts: s.speculateSelected(li),
-				ExpertUses: s.hot.layer(li)}
+			w := s.offerWeights(li, false)
 			plan := *s.planFor(li)
 			took, err := s.prepOffered(adm, li, &plan, &w)
 			if err != nil {
@@ -1776,14 +1865,8 @@ func (s *Instance) releasePlacedPage(ld nn.LayerDevice, li int) {
 			keep = !eh.HoldsExperts(li)
 		}
 		s.bind.Lock()
-		model.ReleaseLayer(s.m.Frames, li, l, keep)
+		model.ReleaseLayer(s.fr, li, l, keep)
 		s.bind.Unlock()
-	} else if buf := s.m.Frames.Page(li); len(buf) > 0 {
-		// The page stays (a streamed block's host side reads it), so no
-		// recycle tells the devices to drop the lone-matvec copies they
-		// made of its weights while the host ran it; the block is placed
-		// now and they are dead weight. Said here instead.
-		s.m.ForgetCopies(unsafe.Pointer(&buf[0]), uintptr(len(buf)))
 	}
 }
 
@@ -1802,41 +1885,17 @@ func (s *Instance) blockOffer(li int) (nn.LayerPlan, nn.LayerWeights, error) {
 	return *s.planFor(li), w, nil
 }
 
-// blockWeights is blockOffer's weights: the page read and every callback set.
-// It reads the model and nothing of the instance's placement, so a move's
-// staging runs it beside the instance's own tokens (PendingMove).
+// blockWeights is blockOffer's weights: an offer of block li with every
+// callback set, the card binding it at its own frames before it decides
+// (nn.LayerWeights.Bind) and reading them once it admits. Nothing is read
+// here: the bytes are the card's to read, into its memory. It reads the
+// model and nothing of the instance's placement, so a move's staging runs it
+// beside the instance's own tokens (PendingMove).
 func (s *Instance) blockWeights(li int) (nn.LayerWeights, error) {
-	l, err := s.pageIn(li)
-	if err != nil {
-		return nn.LayerWeights{}, err
+	if li < s.lo || li >= s.hi {
+		return nn.LayerWeights{}, fmt.Errorf("engine: block %d is not one of this instance's [%d, %d)", li, s.lo, s.hi)
 	}
-	c := s.c
-	w := s.layerWeightsAt(li)
-	// Every block, not only a mixture's: a device pager needs the host
-	// page re-read on every swap.
-	w.Ensure, w.EnsureExperts = s.ensureLayer(li), s.ensureSelected(li)
-	w.PrefetchExperts, w.SpeculateExperts = s.prefetchSelected(li), s.speculateSelected(li)
-	w.ExpertUses = s.hot.layer(li)
-	if c.MoE() {
-		// The expert banks are fetched by the tier through Ensure once it
-		// admits the block: pageIn does not read them (the host fetches
-		// only the experts it routes to), and reading here would spend a
-		// bank on every block the budget then refuses.
-		w.Router = model.Wt(l.Router)
-		// The expert, not its gate; see the twin above.
-		if l.ShGate.Rows != 0 || l.ShUp.Rows != 0 {
-			w.ShGate, w.ShUp, w.ShDown = model.Wt(l.ShGate), model.Wt(l.ShUp), model.Wt(l.ShDown)
-		}
-	}
-	if k := c.LayerKind(li); k.Recurrent() && !k.Attends() {
-		// A linear block has none of these; leaving the attention four set
-		// would offer a device four matrices whose shapes do not match the
-		// plan it was handed. (planFor clears AttnOutGate for the same
-		// reason: s.plan sets it on every block of a qwen3next.)
-		w.Wk, w.Wv, w.Wo = nn.Weight{}, nn.Weight{}, nn.Weight{}
-		w.QNorm, w.KNorm = nil, nil
-	}
-	return w, nil
+	return s.offerWeights(li, true), nil
 }
 
 // planExtra is what a placement of blocks [0,hi) must leave room for besides
@@ -2045,7 +2104,7 @@ func (s *Instance) keep(lo, hi, d int) {
 		return
 	}
 	for li := lo; li < hi; li++ {
-		s.m.Frames.Keep(li, d)
+		s.fr.Keep(li, d)
 	}
 }
 
@@ -2061,7 +2120,7 @@ func (s *Instance) pageIn(li int) (*model.Layer, error) {
 	l := s.layer(li)
 	s.bind.Lock()
 	defer s.bind.Unlock()
-	return l, s.m.PageIn(s.m.Frames, li, l)
+	return l, s.m.PageIn(s.fr, li, l)
 }
 
 // pageInSelected is pageIn of block li for the routed sheets sel alone
@@ -2072,7 +2131,7 @@ func (s *Instance) pageInSelected(li int, sel []uint32) error {
 	}
 	s.bind.Lock()
 	defer s.bind.Unlock()
-	return s.m.PageInSelected(s.m.Frames, li, sel, s.layer(li))
+	return s.m.PageInSelected(s.fr, li, sel, s.layer(li))
 }
 
 // devAt reports whether block li runs on a device.
@@ -2677,10 +2736,10 @@ func (s *Instance) PrewarmGPU(n int) <-chan struct{} {
 				// unread, and this goroutine must not do the file I/O beside a
 				// live submission, so the tier skips packing such a block and
 				// the upload path ensures it.
-				w.Ensure, w.EnsureExperts = s.ensureLayer(li), s.ensureSelected(li)
-				w.PrefetchExperts = s.prefetchSelected(li)
-				w.SpeculateExperts = s.speculateSelected(li)
-				w.ExpertUses = s.hot.layer(li)
+				ow := s.offerWeights(li, false)
+				w.Ensure, w.EnsureExperts = ow.Ensure, ow.EnsureExperts
+				w.PrefetchExperts, w.SpeculateExperts = ow.PrefetchExperts, ow.SpeculateExperts
+				w.ExpertUses = ow.ExpertUses
 			}
 			s.ldCand.PrewarmLayer(li, &s.plan, &w)
 		}
@@ -2930,7 +2989,7 @@ func (s *Instance) ForwardEmbd(e []float32) ([]float32, error) {
 //	    x += Wdown · (act(Wgate h) * Wup h)
 //	logits = Woutput · rmsnorm(x, output_norm)
 func (s *Instance) Forward(token int32) ([]float32, error) {
-	defer s.m.EnterPager(s.m.Frames)()
+	defer s.fr.Enter()()
 	if err := s.marksHeld(); err != nil {
 		return nil, err
 	}
@@ -3076,7 +3135,7 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 	// 16 GiB cgroup for a run that read nothing after warm-up, at well under
 	// half the spinning rate (scheduling-and-measurement.md, "What was left:
 	// the pool spinning through a blocking read").
-	if pc := s.m.Frames; pc != nil {
+	if pc := s.fr; pc != nil {
 		in0, _ := pc.Faults()
 		defer func() {
 			in1, _ := pc.Faults()
@@ -3203,7 +3262,7 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 		// The block is faulted in at first touch; with a budget that holds the
 		// model this is one nil compare. A block that has to be read ends the
 		// fused run before the read, and the run reopens after it.
-		if s.fused && !m.BlockHeld(m.Frames, li) {
+		if s.fused && !m.BlockHeld(s.fr, li) {
 			s.unfuse()
 		}
 		l, err := s.pageIn(li)

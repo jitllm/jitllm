@@ -51,11 +51,13 @@ func RopeAxesPlanes(r *nn.Rope, nrot int, split bool) []float32 {
 // Model.splitBank is the Data of a bank that lives in expert pages. It is not
 // the weight's bytes -- there is no one span of them -- and it exists because
 // every consumer of an nn.Weight reads an empty Data as "no weight here".
-// bankWeight is wt for a mixture's bank. A bank in expert pages has no span to
-// hand over, so the device gets Sheet instead: expert x's planes, held in their
-// page until the device has copied them. A float bank -- which the device reads
-// row-major out of Data -- is gathered into one buffer, since that path has no
-// Sheet; only the synthetic fixtures have one.
+// bankWeight is wt for a mixture's bank over fr. A bank in expert pages has no
+// span to hand over, so the device gets Sheet instead: expert x's planes, held
+// in their page of fr until the device has copied them. A float bank -- which
+// the device reads row-major out of Data -- is gathered into one buffer, since
+// that path has no Sheet; only the synthetic fixtures have one. It builds a
+// Weight each call (its Sheet closure and Packed): the caller keeps it for the
+// frames it was built over.
 func (m *Model) BankWeight(fr *jlm.Frames, t Tensor) nn.Weight {
 	c := m.Container
 	if c == nil || t.E == nil || !c.ExpertPaged(t.E) {
@@ -64,18 +66,10 @@ func (m *Model) BankWeight(fr *jlm.Frames, t Tensor) nn.Weight {
 	if t.Packed == nil {
 		return m.gatheredBank(fr, t)
 	}
-	// The bank's Weight is a function of the entry alone, so it is built once
-	// (its sheet closure and Packed with it) and every later call -- one per
-	// block per step on a device -- allocates nothing.
-	if w, ok := m.bankWts.Load(t.E); ok {
-		return w.(nn.Weight)
-	}
 	sheets := int(t.E.Dims[2])
 	nrow := t.Rows / max(sheets, 1)
-	w := nn.Weight{T: t.Typ, Data: m.splitBank[:], Rows: t.Rows, K: t.K,
+	return nn.Weight{T: t.Typ, Data: m.splitBank[:], Rows: t.Rows, K: t.K,
 		Packed: &nn.Packed{Sheet: func(x int) (nn.Packed, func(), error) { return m.sheetOf(fr, t.E, x, nrow) }, Sheets: sheets}}
-	got, _ := m.bankWts.LoadOrStore(t.E, w)
-	return got.(nn.Weight)
 }
 
 // gatheredBank is a float bank, which the device reads row-major out of Data:
@@ -178,7 +172,7 @@ func Wt(t Tensor) nn.Weight {
 	if t.kp != 0 {
 		k = t.kp
 	}
-	return nn.Weight{T: t.Typ, Data: t.Data, Rows: t.Rows, K: k, Packed: t.Packed}
+	return nn.Weight{T: t.Typ, Data: t.Data, Rows: t.Rows, K: k, Packed: t.Packed, Entry: t.E}
 }
 
 // lnBias is a LayerNorm's bias as a device takes it: b itself, or zeros of

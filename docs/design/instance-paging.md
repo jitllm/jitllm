@@ -101,18 +101,92 @@ warm fault allocate nothing (the ledger's bookkeeping is preallocated).
      CPU's frames. The model opens the File alone and reads its vectors from
      it at open; an instance binds its own copies of its blocks and dense
      tensors at the pages the device running them holds. Address-keyed
-     copies key on the page's generation; `OnRecycle` goes. (A shared
+     copies key on the page's generation; `OnRecycle` goes. A device's
+     frames take the memory it gives them (`jlm.WithFrameMemory`: a card's
+     page-locked staging where its backend has it, `backend.HostPinner`). A
+     card is handed a block's frames before admission (`LayerWeights.Bind`:
+     claimed, unread, so admission reads shapes and lengths as it did) and
+     again to fill them once it admits (`Ensure`); a card that declines lets
+     its claim go, and an uploaded block's staging page is dropped. (A shared
      engine-level ledger, and the same pager filed under the CPU device,
      were both taken out: each was the model-wide pager under another
      owner, and the second treated the CPU unlike a card.)
+
+     The CPU's half: the CPU device holds each model's frames
+     (`cpudev.CPU.Frames`), made by `model.Model.NewFrames` as the caller
+     asked at Open (placement, fill granularity, heap, preload); the
+     model opens the File alone, reads its vectors from it, and keeps its
+     tensors as descriptors. An instance binds its own copy of the dense
+     tensors (`model.Dense`: embedding, head, tables, the tower's entry and
+     taps) at its CPU device's frames. An instance with no `WithCPU` opens a
+     CPU device of its own, and so frames of its own: instances meant to
+     share a block's pages share a CPU device, as the server's do. Reads are
+     counted on the File across every device's frames (`PagedBytes`,
+     `PageFaults`); a front end reads a device's frames through the instance
+     (`Instance.FramesOn`).
+
+     A card's frames keep two pages of staging and, beyond it, the banks of
+     the blocks it streams (their experts are read every token), capped at
+     the instance's page quota (`nn.LayerPlan.FrameBudget` at placement,
+     `nn.FrameBudgeter` when the quota changes); the card reports what that
+     keeps of the host's memory (`HostReserved`), so the CPU device's frames
+     give it up and the two keep what one quota allows.
+
+     Left of 3b: a card offered the head still reads it from the CPU
+     device's dense copy.
    Gates: as 2, plus the vision and expert gates.
 4. **Quotas per instance.** `engine.WithPageBudget`; `Model.SetPageBudget`
    goes; the server's per-model budget becomes each instance's, the
    `SetPageBudget` RPC names the instance (a proto change, buf generate);
    admission at placement. Gates: as 3, and the server's.
+   - Done: an instance has a page quota (`engine.WithPageBudget`,
+     `Instance.SetPageBudget`; the model's memory plan by default), recorded
+     on its CPU device before the frames are made (`cpudev.Quota`) so they
+     are budgeted from their first read, a preload's among them
+     (`jlm.Budget`). The model holds no budget and no host-memory device:
+     `Model.SetPageBudget`, `WithPageBudget`, `PageAsk` and the registry
+     (`HoldOnHost`) are gone; what the attached device holds of the host's
+     memory comes off its own instance's quota. The server hands its
+     per-model share to the model's instance; the CLI and the speed tool
+     hand theirs to theirs. A statistic reads the frames a device holds and
+     makes none (`cpudev.CPU.HeldFrames`).
+   - The CPU device's frames keep what the largest net quota of the
+     instances holding the model allows, not the sum: they hold a block every
+     instance runs once, and two instances running the same blocks under
+     quotas of X keep X. Each instance keeping its own order within its own
+     quota over blocks it alone runs -- the retention quota above -- is not
+     built: the frames have one order.
+   - The RPC still names the model: the server makes one instance a model,
+     and names it by its model; a second instance of a model in the server
+     is what an instance id in the request waits for.
+   - Left: per-instance retention within shared frames; admission at
+     placement.
 5. **The model holds nothing of a device.** Its registries go; `srcgate` holds
-   that no type of `model/` has a field of an `nn` device interface or a
-   func, and that `Model.Close` reaches no device.
+   that no type of `model/` has a field of an `nn` device interface, and that
+   `Model.Close` reaches no device.
+   - Done: a device counts the instances holding a model on it
+     (`nn.ModelOwner.HoldModel`); an instance holds its CPU device and the
+     device it attaches, the last release gives back what the model placed,
+     and `Model.Close` reaches no device
+     (`engine.TestADeviceKeepsAModelForItsInstances`).
+   - Done: the forgetters. A card keys a block's copies on its block and
+     slot, and a tensor at no block's slot (the head, an input table, a
+     picture's rows) on its container entry (`nn.Weight.Entry`), not on the
+     address of whichever device's memory its bytes were handed in: two
+     instances' copies are one, and no later mapping of that memory aliases
+     a stale key. Nothing on a card is then keyed on CPU memory that is
+     reused, so `Model.ForgetCopies`, `HeldBy`, the CPU frames' recycle
+     callback, `nn.CopyForgetter` and `GPU.Forget` go; a card's own frames
+     still tell that card of a frame they reuse. The lock serialising the
+     readers of evicting frames is the frames' (`jlm.Frames.Enter`), not the
+     model's: it protects the reuse of their memory, and instances on two
+     CPU devices never wait on each other. `srcgate.TestTheModelHoldsNoDevice`
+     holds that no `model/` type has a field naming an `nn` interface and that
+     `Model.Close` calls nothing but its container's Close. (The host-memory
+     devices netted off the model's budget went with step 4's quotas.)
+   - The model's func fields are a clock (`WithChatClock`), an expert
+     sheet's release and a test's restatement of the stored tensors, none a
+     device's; the check is on `nn`'s interfaces, not on funcs.
 6. **The transitions, gated.** Two instances of one model -- one at half its
    pages on the CPU, one with a seam on a card -- each matching the
    reference, the blocks both run held once (the ledger's frame count), with

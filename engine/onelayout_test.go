@@ -28,6 +28,8 @@ func TestNoTensorIsInGGUFLayout(t *testing.T) {
 			if m.Container == nil {
 				t.Fatal("not a container -- this gate proved nothing")
 			}
+			s := testInstance(t, m, 64)
+			defer s.Close()
 
 			packed, verbatim := 0, 0
 			check := func(what string, tn *model.Tensor) {
@@ -45,10 +47,13 @@ func TestNoTensorIsInGGUFLayout(t *testing.T) {
 				}
 				packed++
 			}
-			check("token_embd.weight", &m.Embd)
-			check("output.weight", &m.Output)
+			check("token_embd.weight", &s.dense.Embd)
+			check("output.weight", &s.dense.Output)
 			for i := range m.Layers {
-				l := &m.Layers[i]
+				l, err := s.pageIn(i)
+				if err != nil {
+					t.Fatal(err)
+				}
 				for _, p := range []struct {
 					n string
 					t *model.Tensor
@@ -67,11 +72,11 @@ func TestNoTensorIsInGGUFLayout(t *testing.T) {
 			}
 
 			// The embedding lookup must take the packed branch.
-			if _, ok := layout.QuantOf(m.Embd.Typ); ok && m.Embd.Packed == nil {
+			if _, ok := layout.QuantOf(s.dense.Embd.Typ); ok && s.dense.Embd.Packed == nil {
 				t.Fatal("the embedding is quantised and not packed")
 			}
 			dst := make([]float32, m.Cfg.NEmbd)
-			if err := embedRowRef(m, dst, 1); err != nil {
+			if err := embedRowRef(&s.dense.Embd, dst, 1); err != nil {
 				t.Fatalf("embedRowRef: %v", err)
 			}
 			var nz int

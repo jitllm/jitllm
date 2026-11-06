@@ -20,18 +20,19 @@ func TestTheDeviceCallbackDoesNotRereadTheBase(t *testing.T) {
 	// same chunks.
 	m, openOpts := hybridModelOpt(t, hyOpt{moe: true, wideMoE: true, chunk: chunk})
 	defer m.Close()
-	c := m.Frames
+	s := testInstance(t, m, 64, openOpts...)
+	defer s.Close()
+	c := s.fr
 	if c.ChunkBytes() != chunk {
 		t.Fatalf("the container fills at %d bytes, want the %d WithChunk asked for", c.ChunkBytes(), chunk)
 	}
 	if c.File().H.NBlocks == 0 {
 		t.Skip("the fixture has no block pages, so there is nothing to re-read")
 	}
-	s := testInstance(t, m, 64, openOpts...)
-	defer s.Close()
 
 	sel := []uint32{3, 1, uint32(m.Cfg.NExpert - 1), 2}
-	selected, whole := s.ensureSelected(0), s.ensureLayer(0)
+	ow := s.offerWeights(0, false)
+	selected, whole := ow.EnsureExperts, ow.Ensure
 
 	// Each arm starts from an evicted block: a resident page's chunks are
 	// already filled and both arms would read nothing.
@@ -46,9 +47,9 @@ func TestTheDeviceCallbackDoesNotRereadTheBase(t *testing.T) {
 	}
 
 	var w nn.LayerWeights
-	narrow := cost(func() error { return selected(&w, sel) })
+	narrow := cost(func() error { return selected(&w, sel, c) })
 	var w2 nn.LayerWeights
-	full := cost(func() error { return whole(&w2) })
+	full := cost(func() error { return whole(&w2, c) })
 
 	// The bar is zero: a bank lives in expert pages, so the callback has
 	// nothing to read from the block page (the base is on the card, the sheets

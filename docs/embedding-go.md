@@ -132,7 +132,7 @@ func main() {
 | API | What it controls |
 |---|---|
 | `model.Open(path, opts...)` | open a container; `With...` options set every tuner and budget |
-| `Model.SetPageBudget` | host weight residency |
+| `engine.WithPageBudget`, `Instance.SetPageBudget` | an instance's page quota: the weight pages its devices keep for it |
 | `engine.NewInstance`, `Instance.SetGPULayers`, `Instance.SetDevice` | compose an instance and move its execution between devices, every session's history with it |
 | `engine.NewPool`, `Pool.Serve`, `Pool.NewSession`, `Session.Run`, `Session.Acquire`, `Session.Release` | a conversation's history, leased an instance per phase |
 | `engine.Scheduler`, `engine.Pool`, `engine.WithScheduler` | which instance a session leases for a phase: the default pool, or your own |

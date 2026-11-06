@@ -151,11 +151,12 @@ func TestPagesMoveWhileADeviceHoldsBlocks(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer m.Close()
+		var budgeted []Option
 		if frames > 0 {
-			m.SetPageBudget(m.Frames, uint64(frames)*m.PageSize())
+			budgeted = append(budgeted, WithPageBudget(uint64(frames)*m.PageSize()))
 		}
 		in := m.Vocab.Encode("The capital of France is", true)
-		st := testInstance(t, m, len(in)+ntok+1)
+		st := testInstance(t, m, len(in)+ntok+1, budgeted...)
 		defer st.Close()
 		st.SetDeviceLayers(g, devLayers)
 		took := st.GPULayers()
@@ -213,7 +214,7 @@ func TestPageBudgetResizesWhileServing(t *testing.T) {
 	path := jlmOf(t, testmodels.Path("tinyllama-1.1b-q3_K_M.gguf"))
 	const ntok = 10
 
-	run := func(resize func(m *model.Model, i int) bool) ([]int32, int) {
+	run := func(resize func(st *Instance, i int) bool) ([]int32, int) {
 		m, err := model.Open(path)
 		if err != nil {
 			t.Fatal(err)
@@ -236,7 +237,7 @@ func TestPageBudgetResizesWhileServing(t *testing.T) {
 				}
 			}
 			out = append(out, best)
-			if resize != nil && resize(m, i) {
+			if resize != nil && resize(st, i) {
 				resizes++
 			}
 			if logits, err = st.Forward(best); err != nil {
@@ -250,9 +251,9 @@ func TestPageBudgetResizesWhileServing(t *testing.T) {
 
 	// Squeeze to two frames, open back up, squeeze again -- so both directions
 	// run and a frame that was reused for another block has to be re-read.
-	walk := func(m *model.Model, i int) bool {
+	walk := func(st *Instance, i int) bool {
 		n := []int{2, 22, 3, 22, 2}[i%5]
-		m.SetPageBudget(m.Frames, uint64(n)*m.PageSize())
+		st.SetPageBudget(uint64(n) * st.m.PageSize())
 		return true
 	}
 	resized, n := run(walk)

@@ -110,7 +110,7 @@ func TestStatedTowerBlocksArePagedBlocks(t *testing.T) {
 	}
 	page := probe.Container.PageBytes(probe.TowerBase)
 	probe.Close()
-	m, err := model.Open(src, model.WithPageBudget(page))
+	m, err := model.Open(src)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,13 +119,14 @@ func TestStatedTowerBlocksArePagedBlocks(t *testing.T) {
 	if m.TowerBase != m.Cfg.NLayer+m.Cfg.NMTP || m.Blocks() != m.TowerBase+int(v.NLayer) {
 		t.Fatalf("the tower's %d blocks start at %d of %d, want after the %d text blocks", v.NLayer, m.TowerBase, m.Blocks(), m.Cfg.NLayer)
 	}
+	fr := testFrames(t, m, jlm.Budget(page))
 	bound := func(li int) error {
 		l := &m.Layers[li]
 		if len(l.Mats) == 0 {
 			return fmt.Errorf("block %d holds no matrix", li)
 		}
 		for _, mt := range l.Mats {
-			qs, _, _ := m.Frames.Span(mt.T.E)
+			qs, _, _ := fr.Span(mt.T.E)
 			if !model.SameSpan(mt.T.Data, qs) || len(qs) == 0 {
 				return fmt.Errorf("block %d's %v is not bound to its page", li, mt.Role)
 			}
@@ -134,14 +135,14 @@ func TestStatedTowerBlocksArePagedBlocks(t *testing.T) {
 	}
 	a, b := m.TowerBase, m.TowerBase+1
 	for _, li := range []int{a, b, a} {
-		if err := m.PageIn(m.Frames, li, &m.Layers[li]); err != nil {
+		if err := m.PageIn(fr, li, &m.Layers[li]); err != nil {
 			t.Fatal(err)
 		}
 		if err := bound(li); err != nil {
 			t.Fatal(err)
 		}
 		other := a + b - li
-		if m.Frames.Resident(other) {
+		if fr.Resident(other) {
 			t.Fatalf("under a budget of one block, block %d stayed resident after block %d paged in", other, li)
 		}
 	}

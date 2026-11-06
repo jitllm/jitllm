@@ -32,8 +32,8 @@ func TestMLARunsUnderAPageBudget(t *testing.T) {
 
 			// One byte is one frame, the tightest the reader has: every block
 			// is re-bound at every layer of every token.
-			instOpts2 := []Option{WithKVF16(false)}
-			tight, err := model.Open(src, model.WithPageBudget(1))
+			instOpts2 := []Option{WithKVF16(false), WithPageBudget(1)}
+			tight, err := model.Open(src)
 			if err != nil {
 				t.Fatalf("Open under a one-page budget: %v", err)
 			}
@@ -46,16 +46,20 @@ func TestMLARunsUnderAPageBudget(t *testing.T) {
 			for i := 0; i < tight.Container.NPages(); i++ {
 				allPages += tight.Container.PageBytes(i)
 			}
-			if got := tight.Frames.Budget(); nb < 2 || got == 0 || got >= allPages {
-				t.Fatalf("%d block(s), budget %d bytes against %d of pages: nothing "+
-					"is ever evicted, so this gate proved nothing", nb, got, allPages)
+			if nb < 2 || !budgetEvicts(tight, 1) {
+				t.Fatalf("%d block(s) against %d bytes of pages: nothing "+
+					"is ever evicted, so this gate proved nothing", nb, allPages)
 			}
-			t.Logf("%d block(s), budget %d bytes against %d of pages",
-				nb, tight.Frames.Budget(), allPages)
 
 			ids := []int32{1, 2, 3, 4, 5, 6, 7, 8}
 			want := teacherForce(t, full, ids, instOpts...)
 			got := teacherForce(t, tight, ids, instOpts2...)
+			if in, res := tight.PageFaults(), full.PageFaults(); in <= res {
+				t.Fatalf("a one-page quota took %d page-ins against %d resident: nothing paged, "+
+					"so this gate proved nothing", in, res)
+			}
+			t.Logf("%d block(s), %d page-ins under one page against %d resident, %d bytes of pages",
+				nb, tight.PageFaults(), full.PageFaults(), allPages)
 
 			// Bit equality: paging changes which bytes are resident, not the
 			// arithmetic.

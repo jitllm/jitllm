@@ -84,23 +84,23 @@ func TestASessionWithAStoreReusesItsPrompt(t *testing.T) {
 func TestASessionDoesNotStarveThePager(t *testing.T) {
 	const pin = 3 << 30
 	e, lm, _ := loadedEngine(t, "Llama-3.2-1B-Instruct-Q4_K_M.jlm", "m", LoadOptions{PageBudgetBytes: pin})
-	if !lm.m.PagesFit(lm.m.Frames) {
-		t.Fatalf("the model does not fit %d bytes before any session: budget %d", pin, lm.m.PageBudget(lm.m.Frames))
+	if !lm.m.PagesFit(lm.frames()) {
+		t.Fatalf("the model does not fit %d bytes before any session: budget %d", pin, lm.m.PageBudget(lm.frames()))
 	}
 	s, err := e.CreateSession(SessionOptions{ModelID: "m"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !lm.m.PagesFit(lm.m.Frames) {
+	if !lm.m.PagesFit(lm.frames()) {
 		t.Fatalf("creating one session of %d positions left the pager %d bytes: the budget was charged "+
-			"for the whole context's history up front", s.ms.Limit(), lm.m.PageBudget(lm.m.Frames))
+			"for the whole context's history up front", s.ms.Limit(), lm.m.PageBudget(lm.frames()))
 	}
 	o := GenerateOptions{SessionID: s.ID(), Prompt: Prompt{Kind: PromptText, Text: "Once upon a time"}, MaxTokens: 4}
 	if err := e.Generate(context.Background(), o, func(Event) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
-	if !lm.m.PagesFit(lm.m.Frames) {
-		t.Fatalf("after a generate the pager holds %d bytes and the weights do not fit", lm.m.PageBudget(lm.m.Frames))
+	if !lm.m.PagesFit(lm.frames()) {
+		t.Fatalf("after a generate the pager holds %d bytes and the weights do not fit", lm.m.PageBudget(lm.frames()))
 	}
 }
 

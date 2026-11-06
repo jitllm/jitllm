@@ -94,7 +94,7 @@ func (r *rowsOut) foldHead(h *nn.Head, base, n int) (func(), bool) {
 // rowsOut). What reads a row's token past its embedding (Qwen3.8-Flash-Next's
 // n-gram block) reads ids. It is prefill with every output a speculation step
 // reads: one pass over the weights for all the rows, the KV written for each.
-// The caller holds the pager (enterPager), as every inner path assumes.
+// The caller holds the frames (jlm.Frames.Enter), as every inner path assumes.
 func (s *Instance) stepRows(src rowSrc, out *rowsOut) error {
 	c := s.c
 	out.token, out.tokens, out.resBase = -1, nil, 0

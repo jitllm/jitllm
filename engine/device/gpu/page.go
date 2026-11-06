@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/nn"
 	"github.com/jitllm/jitllm/sched"
 )
@@ -51,10 +52,11 @@ type page struct {
 	// (submit) -- read the block: it is no victim while any does, whichever
 	// session's prologue is looking for room. Under mu.
 	uses int
-	// ensure re-points every slice in ws at where the host holds those bytes
-	// NOW, and is nil for a caller that does not page its own weights.
-	// See nn.LayerWeights.Ensure.
-	ensure func(*nn.LayerWeights) error
+	// ensure re-points every slice in ws at where the card's frames (fr)
+	// hold those bytes NOW, and is nil for a caller that does not page its
+	// own weights. See nn.LayerWeights.Ensure.
+	ensure func(*nn.LayerWeights, *jlm.Frames) error
+	fr     *jlm.Frames
 }
 
 // tensors is the block's pageable weights in one fixed order, so that
@@ -567,9 +569,19 @@ func (g *devTier) pageInHold(li, lo, hi int) bool {
 	// wrong weights. This is the one place that re-reads, in weightList order
 	// so the refreshed set matches what tensors() frees.
 	if l.pg.ensure != nil && !g.pagedFaulted("stale") {
+		// Pinned across the upload below: the frame is the source, and a read
+		// for another block into the same frames would otherwise evict it.
+		if fr := l.pg.fr; fr != nil {
+			pin, err := fr.Hold(li, nil)
+			if err != nil {
+				g.LastErr = fmt.Sprintf("block %d page-in: %v", li, err)
+				return false
+			}
+			defer pin.Release()
+		}
 		var w nn.LayerWeights
 		w.Ensure = l.pg.ensure
-		if err := l.pg.ensure(&w); err != nil {
+		if err := l.pg.ensure(&w, l.pg.fr); err != nil {
 			g.LastErr = fmt.Sprintf("block %d page-in: %v", li, err)
 			return false
 		}
@@ -604,7 +616,7 @@ func (g *devTier) pageInHold(li, lo, hi int) bool {
 		if !ok {
 			return false
 		}
-		r := g.resident(li, i, q, x.Data, x.Rows, x.K, x.Packed)
+		r := g.resident(li, i, nil, q, x.Data, x.Rows, x.K, x.Packed)
 		if r == nil || !r.ok {
 			if g.LastErr == "" {
 				g.LastErr = fmt.Sprintf("block %d page-in: tensor %d not resident", li, i)

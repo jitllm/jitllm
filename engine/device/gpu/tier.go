@@ -20,6 +20,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/internal/offheap"
@@ -86,9 +87,25 @@ func (r *resident) bytes() uint64 {
 // identity only until the host says the bytes there changed (Forget).
 type resKey struct {
 	block, slot int
-	p           *byte // nil for a block-keyed entry
-	nrows, k    int
-	t           layout.Quant
+	// e is the tensor of an entry at no block's slot (adhocKey), p its
+	// bytes' address when it is no container entry; both nil for a
+	// block-keyed entry.
+	e        *jlm.Entry
+	p        *byte
+	nrows, k int
+	t        layout.Quant
+}
+
+// adhocKey is the key of a tensor held at no block's slot -- the head, an
+// input table, a picture's rows: its container entry, which is the same
+// tensor whichever device's memory its bytes were handed in, so two
+// instances' copies are one and no later mapping of that memory aliases it;
+// the address of its bytes for a weight that is no entry.
+func adhocKey(e *jlm.Entry, w []byte, q layout.Quant, nrows, k int) resKey {
+	if e != nil {
+		return resKey{block: -1, e: e, nrows: nrows, k: k, t: q}
+	}
+	return resKey{block: -1, p: &w[0], nrows: nrows, k: k, t: q}
 }
 
 // The tier's state is split into per-device and shared explicitly, because a
@@ -1102,6 +1119,11 @@ func (g *devTier) refund(n uint64) {
 type devShared struct {
 	// marks is every sequence's rotary marks on the device (markArena).
 	marks markArena
+	// frames is the card's own frames over each file a block placed on it
+	// is read from (framesOf). Under framesMu, not mu: closing a frames
+	// tells the card what it gave back (forget), which takes mu.
+	frames   cardFrames
+	framesMu sync.Mutex
 	// onDev is how many submissions are inside the backend's session on this
 	// device right now, and ranBeside how many began while another was
 	// (Stats.RanBeside); see runSub.
@@ -1289,10 +1311,12 @@ type devShared struct {
 	// recLs is resetRecRows' list of the blocks it zeroes, kept between
 	// calls.
 	recLs []*layer
-	// headSrc is the first byte of the projection the resident head was
-	// uploaded from, and headNormHost the norm it was built with: what a
-	// second instance's PrepHead is compared against (adoptHead). altNorms are
-	// the other norms that head serves (headnorm.go).
+	// headEntry is the container entry of the projection the resident head
+	// is, headSrc the first byte it was uploaded from where it is no entry,
+	// and headNormHost the norm it was built with: what a second instance's
+	// PrepHead is compared against (adoptHead). altNorms are the other norms
+	// that head serves (headnorm.go).
+	headEntry    *jlm.Entry
 	headSrc      *byte
 	headNormHost []float32
 	altNorms     []altNorm
@@ -1472,6 +1496,8 @@ type GPU struct {
 	ownMu sync.Mutex
 	model uint64
 	held  bool
+	// holdsOf counts the instances holding each model on the tier (HoldModel).
+	holdsOf map[uint64]int
 	// sessions is the last session id Attach gave out; 0 is the zero session.
 	sessions atomic.Uint64
 	// devs is every device, in the order they were opened (AddDevices
@@ -1985,6 +2011,7 @@ func (g *devTier) Close() {
 	// a unified-memory device would not. It takes g.mu, hence before the lock
 	// below.
 	g.releaseEveryLayer()
+	g.closeFrames()
 
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -2144,14 +2171,14 @@ func (g *devTier) importPacked(r *resident, p *Packed) bool {
 // resident uploads a tensor once, keyed by resKey.
 //
 // block is the caller's block index, or -1 for a tensor that is not part of one
-// (the output projection, a lone matvec offered by the host tier). It is a tag
-// telling the arena which entries to release together, and nothing else.
-func (g *devTier) resident(block, slot int, q layout.Quant, w []byte, nrows, k int, pre *nn.Packed) *resident {
+// (the output projection, an input table, a picture's rows), keyed on e, its
+// container entry (adhocKey). block is also a tag telling the arena which
+// entries to release together.
+func (g *devTier) resident(block, slot int, e *jlm.Entry, q layout.Quant, w []byte, nrows, k int, pre *nn.Packed) *resident {
 	g.applyForgets()
 	key := resKey{block: block, slot: slot, nrows: nrows, k: k, t: q}
 	if block < 0 {
-		// The ad-hoc path: no block, no slot, and the weight is host-owned.
-		key.p = &w[0]
+		key = adhocKey(e, w, q, nrows, k)
 	}
 	if r, ok := g.res[key]; ok {
 		// The shape is part of the key because an expert bank and its expert 0
@@ -2635,9 +2662,6 @@ func (g *devTier) blockBytes(ws []nn.Weight) (uint64, bool) {
 		q, ok := quantOf(x.T)
 		if !ok {
 			return 0, false
-		}
-		if _, ok := g.res[resKey{p: &x.Data[0], nrows: x.Rows, k: x.K, t: q}]; ok {
-			continue // already paid for at this shape
 		}
 		// Priced at what the card spends on the three buffers, the driver's
 		// page rounding included (scratch.go): admitting at the bytes alone let

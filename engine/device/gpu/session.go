@@ -1,6 +1,7 @@
 package gpu
 
 import (
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/nn"
 )
 
@@ -37,13 +38,11 @@ func (g *GPU) Attach() nn.LayerDevice {
 		_ nn.LayerDevice   = g
 		_ nn.NamedDevice   = g
 		_ nn.RecRowsDevice = g
-		_ nn.CopyForgetter = g
 		_ nn.ModelOwner    = g
 		_ nn.Ledger        = g
 		_ nn.NamedDevice   = s
 		_ nn.Session       = s
 		_ nn.RecRowsDevice = s
-		_ nn.CopyForgetter = s
 		_ nn.ModelOwner    = s
 		_ nn.Ledger        = s
 	)
@@ -357,5 +356,12 @@ func (s *gpuSession) HeadDeviceName() (string, bool) { return s.g.HeadDeviceName
 func (s *gpuSession) Pin(li int, on bool) bool       { return s.g.Pin(li, on) }
 func (s *gpuSession) Stream(li int, on bool) bool    { return s.g.Stream(li, on) }
 
-// HoldsExperts forwards to the tier (nn.ExpertHolder).
-func (s *gpuSession) HoldsExperts(li int) bool { return s.g.HoldsExperts(li) }
+// HoldsExperts forwards to the tier (nn.ExpertHolder), ReleasesHostPage
+// (nn.HostPageReleaser) and FramesOf (nn.FramesHolder) likewise.
+func (s *gpuSession) HoldsExperts(li int) bool                 { return s.g.HoldsExperts(li) }
+func (s *gpuSession) ReleasesHostPage(li int) bool             { return s.g.ReleasesHostPage(li) }
+func (s *gpuSession) SetFrameBudget(f *jlm.File, bytes uint64) { s.g.SetFrameBudget(f, bytes) }
+
+func (s *gpuSession) FramesOf(dev string, f *jlm.File) *jlm.Frames {
+	return s.g.FramesOf(dev, f)
+}

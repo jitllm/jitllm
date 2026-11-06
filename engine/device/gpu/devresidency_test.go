@@ -11,6 +11,7 @@ import (
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/model"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // TestDeviceBlocksDoNotStayHostResident: a block is a page placed on one
@@ -39,13 +40,13 @@ func TestDeviceBlocksDoNotStayHostResident(t *testing.T) {
 	}
 	defer m.Close()
 
-	if n := m.HostResidentBlocks(m.Frames); n != 0 {
-		t.Errorf("Open left %d of %d blocks host-resident; build() should fault none",
-			n, m.Cfg.NLayer)
-	}
-
 	st := testInstance(t, m, 64)
 	defer st.Close()
+	fr := st.FramesOn(nn.CPU)
+	if n := m.HostResidentBlocks(fr); n != 0 {
+		t.Errorf("Open and an instance left %d of %d blocks host-resident; neither should fault any",
+			n, m.Cfg.NLayer)
+	}
 	g, err := gpu.OpenWith(gpu.WithAdmit(testdevices.Admit()), gpu.WithDevices("gpu:0"))
 	if err != nil || g == nil {
 		t.Skipf("no accelerator: %v", err)
@@ -58,11 +59,11 @@ func TestDeviceBlocksDoNotStayHostResident(t *testing.T) {
 	}
 	// Every block the device took must have given up its host page. Blocks the
 	// device declined are the host's and may be resident.
-	if got, max := m.HostResidentBlocks(m.Frames), m.Cfg.NLayer-placed; got > max {
+	if got, max := m.HostResidentBlocks(fr), m.Cfg.NLayer-placed; got > max {
 		t.Errorf("%d blocks are on the device, yet %d of %d are still host-resident "+
 			"(at most %d should be) -- the page was copied, not placed",
 			placed, got, m.Cfg.NLayer, max)
 	}
 	t.Logf("%d of %d blocks on the device, %d host-resident",
-		placed, m.Cfg.NLayer, m.HostResidentBlocks(m.Frames))
+		placed, m.Cfg.NLayer, m.HostResidentBlocks(fr))
 }

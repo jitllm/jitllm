@@ -42,12 +42,15 @@ func TestAnInstancesBlocksAreItsOwn(t *testing.T) {
 	want := run(ref, prompt)
 	ref.Close()
 
-	cpu := testInstance(t, m, 64)
+	// One CPU device under both instances: the card's must leave the page
+	// the CPU's runs from where it is, in the frames they share.
+	shared := sharedCPU(t)
+	cpu := testInstance(t, m, 64, shared)
 	defer cpu.Close()
 	got := run(cpu, prompt[:4])
 	g := swaTier(t)
 	defer g.Close()
-	card := testInstance(t, m, 64)
+	card := testInstance(t, m, 64, shared)
 	defer card.Close()
 	card.SetDevice(g)
 	if card.GPULayers() != m.Cfg.NLayer {
@@ -60,9 +63,9 @@ func TestAnInstancesBlocksAreItsOwn(t *testing.T) {
 		if len(cpu.layer(li).Wq.Data) == 0 {
 			t.Errorf("block %d: placing it on the card unbound the CPU's instance", li)
 		}
-		if !m.Frames.Kept(li) || !m.BlockHeld(m.Frames, li) {
+		if !cpu.fr.Kept(li) || !m.BlockHeld(cpu.fr, li) {
 			t.Errorf("block %d: its page left (kept %v, resident %v) while an instance runs it from host memory",
-				li, m.Frames.Kept(li), m.BlockHeld(m.Frames, li))
+				li, cpu.fr.Kept(li), m.BlockHeld(cpu.fr, li))
 		}
 	}
 	got = append(got, run(cpu, prompt[4:])...)

@@ -188,7 +188,7 @@ func (g *devTier) prepEmbed(bs *blockScratch, h *nn.Head) {
 		bs.embSW[role] = r
 	}
 	for role, v := range p.Vectors {
-		b, err := g.rowsVector(v)
+		b, err := g.rowsVector(role, v)
 		if err != nil {
 			g.LastErr = fmt.Sprintf("the input rows' %v: %v", role, err)
 			bs.embWhy = partNoRoom
@@ -207,13 +207,13 @@ func (g *devTier) embedTable(w nn.Weight) (*resident, partDecline) {
 	}
 	// A table already held costs nothing more: a head given back for room
 	// leaves its tables held (PrepHead).
-	held := g.res[resKey{block: -1, nrows: w.Rows, k: w.K, t: q, p: &w.Data[0]}]
+	held := g.res[adhocKey(w.Entry, w.Data, q, w.Rows, w.K)]
 	if len(g.stream) > 0 && (held == nil || !held.ok) {
 		if now, after := g.slots(), g.slotsIfPerm(uint64(len(w.Data))); after < now {
 			return nil, partNoRoom
 		}
 	}
-	r := g.resident(-1, 0, q, w.Data, w.Rows, w.K, w.Packed)
+	r := g.resident(-1, 0, w.Entry, q, w.Data, w.Rows, w.K, w.Packed)
 	if r == nil || !r.ok {
 		return nil, partNoRoom
 	}

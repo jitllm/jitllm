@@ -236,17 +236,18 @@ type streamBank struct {
 	// reused rather than allocated per token.
 	sel []uint32
 	// w is the host side of this block. ensure re-points its spans at wherever
-	// the host pager holds the block now, a different frame every token on a
-	// model that pages (see nn.LayerWeights.Ensure).
+	// the card's frames (fr) hold the block now, a different frame every
+	// token on a model that pages (see nn.LayerWeights.Ensure).
 	w      nn.LayerWeights
-	ensure func(*nn.LayerWeights) error
+	fr     *jlm.Frames
+	ensure func(*nn.LayerWeights, *jlm.Frames) error
 	// sel2 is ensure narrowed to the routed sheets. When it is non-nil the
 	// whole-bank read never happens; see nn.LayerWeights.EnsureExperts.
-	sel2 func(*nn.LayerWeights, []uint32) error
+	sel2 func(*nn.LayerWeights, []uint32, *jlm.Frames) error
 	// pre is sel2's read half, safe to call from another goroutine. When it is
 	// non-nil fill pipelines: group g uploads while group g+1 reads. See
 	// nn.LayerWeights.PrefetchExperts.
-	pre func([]uint32) error
+	pre func([]uint32, *jlm.Frames) error
 	// rd and grp are fill's reads in flight and its groups, kept so a token
 	// allocates neither; items and want are its work list and the experts
 	// it reads.
@@ -272,7 +273,7 @@ type streamBank struct {
 	nExpert int
 	// spec hands the host's read service a guess and nil abandons the
 	// unstarted ones (nn.LayerWeights.SpeculateExperts).
-	spec func(sel []uint32)
+	spec func(sel []uint32, fr *jlm.Frames)
 	// hybrid says the placement keeps the block's experts off the card: the
 	// composed card declines the block (partExpertsHost).
 	hybrid bool
@@ -308,8 +309,9 @@ func growU32(s []uint32, n int) []uint32 {
 func (st *streamBank) fill(g *devTier, s backend.Session, l *layer, nExpert int) error {
 	// ensure and the uploads below are one window over a reused host frame, so an
 	// eviction in between would send another block's weights to the card.
-	// model.enterPager holds the pager for the whole Forward, which closes this
-	// window and the other three like it; jlm.Lease is the finer primitive.
+	// The instance holds the frames for the whole Forward (jlm.Frames.Enter),
+	// which closes this window and the other three like it; jlm.Lease is the
+	// finer primitive.
 	//
 	// Every group's read is issued up front and group g uploads as soon as its
 	// own read has landed, so the pager has the whole selection in flight and
@@ -351,7 +353,7 @@ func (st *streamBank) fill(g *devTier, s backend.Session, l *layer, nExpert int)
 	// being read is joined by the read of the same page rather than waited
 	// for (jlm.File.Speculate), so a wrong guess delays nothing.
 	if st.spec != nil {
-		st.spec(nil)
+		st.spec(nil, st.fr)
 	}
 	if st.pre != nil {
 		if cap(st.rd) < len(grp) {
@@ -366,16 +368,16 @@ func (st *streamBank) fill(g *devTier, s backend.Session, l *layer, nExpert int)
 	}
 	var err error
 	if st.pre != nil {
-		err = st.pre(st.want[grp[0][0]:grp[0][1]])
+		err = st.pre(st.want[grp[0][0]:grp[0][1]], st.fr)
 	}
 	switch {
 	case err != nil:
 	case st.sel2 != nil:
 		// The narrow read is preferred: the whole bank is correct but tens of
 		// times the bytes the token consumes.
-		err = st.sel2(&st.w, st.want[grp[0][0]:grp[0][1]])
+		err = st.sel2(&st.w, st.want[grp[0][0]:grp[0][1]], st.fr)
 	case st.ensure != nil:
-		err = st.ensure(&st.w)
+		err = st.ensure(&st.w, st.fr)
 	}
 	g.TStreamRead += time.Since(t0)
 	for gi := range grp {
@@ -544,12 +546,12 @@ func (g *devTier) flushAdmits(s backend.Session) error {
 		}
 		switch {
 		case st.pre != nil:
-			err = st.pre(st.want)
+			err = st.pre(st.want, st.fr)
 		case st.ensure != nil:
-			err = st.ensure(&st.w)
+			err = st.ensure(&st.w, st.fr)
 		}
 		if err == nil && st.sel2 != nil {
-			err = st.sel2(&st.w, st.want)
+			err = st.sel2(&st.w, st.want, st.fr)
 		}
 		if err == nil && up != nil {
 			err = st.upload(g, up, j.l, j.nExpert, items)
@@ -771,7 +773,7 @@ type streamRead struct {
 // closure, so issuing it allocates nothing on the heap.
 func (st *streamBank) read(gi int, gr [2]int) {
 	defer st.rd[gi].wg.Done()
-	st.rd[gi].err = st.pre(st.want[gr[0]:gr[1]])
+	st.rd[gi].err = st.pre(st.want[gr[0]:gr[1]], st.fr)
 }
 
 // groups splits the selection into contiguous runs so a read can overlap an
@@ -1631,8 +1633,27 @@ func declineWeights(w *nn.LayerWeights) string {
 // card with room still gets the block and only when no device has room does
 // anybody swap.
 func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeights, mayPage bool) (placed bool) {
+	fr, pin, ferr := g.offerFrames(li, p, w)
+	if ferr != nil {
+		pin.Release()
+		g.LastErr = fmt.Sprintf("block %d: %v", li, ferr)
+		return false
+	}
+	// Last to run, after the body's unlocks: the pin goes, then the card's
+	// frame for the block once nothing on the card reads it there -- a
+	// declined block's claim, and a placed block whose weights are all on
+	// the card.
+	defer func() {
+		pin.Release()
+		if fr != nil && (!placed || g.ReleasesHostPage(li)) {
+			fr.DropPage(li)
+		}
+		if placed {
+			g.sizeFrames(p.File)
+		}
+	}()
 	if p.Conv != nil {
-		return g.prepConv(li, p, w, mayPage)
+		return g.prepConv(li, p, w, fr, mayPage)
 	}
 	// Every placement of a block forms its composed part, a move's and a
 	// re-offer's too: a step would otherwise meet it first. Deferred first,
@@ -1838,7 +1859,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		if !ok || x.Rows <= 0 || len(x.Data) == 0 {
 			return nil
 		}
-		return g.resident(li, slot, q, x.Data, x.Rows, x.K, x.Packed)
+		return g.resident(li, slot, nil, q, x.Data, x.Rows, x.K, x.Packed)
 	}
 	// mkk is a matrix's record: its rows, format and width.
 	mkk := func(x nn.Weight, r *resident) (mv, bool) {
@@ -1998,7 +2019,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	// and calling it earlier would read a bank for every block the budget then
 	// refuses.
 	if w.Ensure != nil {
-		if err := w.Ensure(w); err != nil {
+		if err := w.Ensure(w, fr); err != nil {
 			g.LastErr = fmt.Sprintf("block %d: %v", li, err)
 			return false
 		}
@@ -2254,7 +2275,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		if hybrid && i >= 4 && i <= 6 {
 			// Nothing of the bank goes on the card; the host runs it.
 			if l.stream == nil {
-				l.stream = &streamBank{sel: make([]uint32, slots),
+				l.stream = &streamBank{sel: make([]uint32, slots), fr: fr,
 					ensure: w.Ensure, sel2: w.EnsureExperts,
 					pre: w.PrefetchExperts, spec: w.SpeculateExperts, w: *w, hybrid: true, nExpert: bank, li: li}
 				g.StreamBlocks++
@@ -2292,7 +2313,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 				// w is seeded here so a host side that does not page (Ensure nil)
 				// still has valid spans; otherwise fill() sends nothing and the FFN
 				// contributes zeros.
-				l.stream = &streamBank{sel: make([]uint32, slots),
+				l.stream = &streamBank{sel: make([]uint32, slots), fr: fr,
 					ensure: w.Ensure, sel2: w.EnsureExperts,
 					pre: w.PrefetchExperts, spec: w.SpeculateExperts, w: *w, li: li}
 				l.stream.nExpert = bank
@@ -2624,8 +2645,8 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		l.pg = nil
 	} else {
 		l.pg = &page{ws: append([]nn.Weight(nil), ws...), bytes: pb, round: pr, in: true,
-			// Kept so a page-in can ask again: ws points into a reused host frame.
-			ensure: w.Ensure}
+			// Kept so a page-in can ask again: ws points into a reused frame.
+			ensure: w.Ensure, fr: fr}
 		g.pagesIn++
 		// Inside the else because ReleaseLayers refunds pageBytes only when
 		// l.pg.in was true.
@@ -3154,7 +3175,7 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 		return false
 	}
 	// -1: the output projection is not a block, so it is not released with one.
-	r := g.resident(-1, 0, q, h.W.Data, h.W.Rows, h.W.K, h.W.Packed)
+	r := g.resident(-1, 0, h.W.Entry, q, h.W.Data, h.W.Rows, h.W.K, h.W.Packed)
 	if r == nil || !r.ok {
 		return false
 	}
@@ -3196,7 +3217,7 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	bs.hOut = unsafe.Slice((*float32)(unsafe.Pointer(&bs.hRaw[0])), h.W.Rows)
 	bs.head, bs.mvHead = r, mv{rows: h.W.Rows, q: q, k: h.W.K}
 	g.shapeChanged()
-	g.headSrc, g.headNormHost = &h.W.Data[0], slices.Clone(h.Norm)
+	g.headEntry, g.headSrc, g.headNormHost = h.W.Entry, &h.W.Data[0], slices.Clone(h.Norm)
 	g.charge(uint64(len(h.Norm)*4 + h.W.Rows*4))
 	g.prepEmbed(bs, h)
 	// The input rows' tables are the head's: a head whose tables have no room

@@ -2,6 +2,7 @@ package engine
 
 import (
 	"fmt"
+	"testing"
 
 	"github.com/jitllm/jitllm/model"
 
@@ -12,8 +13,7 @@ import (
 // embedRowRef is token's row of the embedding as the reference reads the
 // container's layout (internal/oracle): the packed device layout where the
 // model packs it, row-major otherwise. No scale, no position row.
-func embedRowRef(m *model.Model, dst []float32, token int) error {
-	e := &m.Embd
+func embedRowRef(e *model.Tensor, dst []float32, token int) error {
 	if token < 0 || token >= e.Rows {
 		return fmt.Errorf("model: token %d is outside a vocabulary of %d", token, e.Rows)
 	}
@@ -25,4 +25,20 @@ func embedRowRef(m *model.Model, dst []float32, token int) error {
 		return oracle.RowPacked(dst, q, e.Packed.QS, e.Packed.D, e.Packed.SC, token, e.Rows, e.K)
 	}
 	return oracle.Row(dst, e.Typ, e.Data, token, e.K)
+}
+
+// refDense is m's dense tensors bound at frames the test holds until it ends,
+// as an instance binds its own: the model's copy holds no bytes.
+func refDense(t *testing.T, m *model.Model) *model.Dense {
+	t.Helper()
+	fr, err := m.NewFrames()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(fr.Close)
+	d := new(model.Dense)
+	if err := m.BindDense(fr, d); err != nil {
+		t.Fatal(err)
+	}
+	return d
 }

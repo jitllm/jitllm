@@ -18,14 +18,14 @@ import (
 // allocates nothing on either goroutine, and the tier's StageOverlaps says
 // the groups ran on the two cards at once. Two physical cards where
 // JITLLM_TEST_DEVICES names them.
-func groupedStepAllocs(t *testing.T, path string, mopts ...model.Option) {
+func groupedStepAllocs(t *testing.T, path string, io ...Option) {
 	d := testdevices.Take(t, 2, "cuda:0,vulkan:1")
 	g, err := openGPU(t, append([]gpu.Option{gpu.WithDevices(d[0] + "," + d[1])}, testTierOpts(t)...)...)
 	if err != nil || g == nil {
 		noDevice(t, d[0]+","+d[1], err)
 	}
 	defer g.Close()
-	probe, err := model.Open(jlmOf(t, path), mopts...)
+	probe, err := model.Open(jlmOf(t, path))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,9 +35,9 @@ func groupedStepAllocs(t *testing.T, path string, mopts ...model.Option) {
 	for li := range nb / 2 {
 		first[li] = Place{On: d[0]}
 	}
-	instOpts2 := append([]Option(nil), WithStreamTrial(false),
-		WithPlacement(Placement{Blocks: first, Rest: &Place{On: d[1]}, Strict: true}))
-	m, err := model.Open(jlmOf(t, path), mopts...)
+	instOpts2 := append([]Option{WithStreamTrial(false),
+		WithPlacement(Placement{Blocks: first, Rest: &Place{On: d[1]}, Strict: true})}, io...)
+	m, err := model.Open(jlmOf(t, path))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func groupedStepAllocs(t *testing.T, path string, mopts ...model.Option) {
 			t.Fatalf("group %d: %v", k, err)
 		}
 	}
-	if err := prefaultExperts(m); err != nil {
+	if err := prefaultExperts(append(instancesOf(groups[0]), instancesOf(groups[1])...)...); err != nil {
 		t.Fatal(err)
 	}
 	c0 := g.Stats()

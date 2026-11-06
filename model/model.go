@@ -1151,9 +1151,7 @@ type Model struct {
 	VecMats []roleTensor
 	// splitBank is the Data of a bank held in expert pages (bankWeight).
 	splitBank [1]byte
-	// bankWts caches bankWeight's Weight per bank entry; holdFree is the
-	// recycled sheet holds (sheetOf).
-	bankWts  sync.Map
+	// holdFree is the recycled sheet holds (sheetOf).
 	holdMu   sync.Mutex
 	holdFree []*sheetHold
 	// xdKNormFirst is a gate's violation: k normed before XD-RoPE's
@@ -1165,29 +1163,19 @@ type Model struct {
 	Cfg   *Config
 	Vocab *tok.Vocab
 
-	// pager serialises decode when the container evicts; see pagelock.go.
-	pager sync.Mutex
-	// pagerUnlock is pager.Unlock bound once, so enterPager hands back the
-	// same func every token instead of allocating a method value.
-	pagerUnlock func()
 	// chatTemplates are the chat templates compiled, by source: a request
 	// renders its model's template, not compiles it (chat.go).
 	chatTemplates sync.Map
 	// preloadStop, preloadDone and preloadErr are WithPreload's background
 	// read: Close closes the first and waits on the second.
-	preloadStop, preloadDone chan struct{}
-	preloadErr               error
-	// pages is the page budget as the caller set it, and the devices on the
-	// host's own memory whose holdings come off it (hostheld.go).
-	pages pageAsk
 
 	// TokErr is why Vocab is nil, when it is. The weights still loaded.
 	TokErr error
 
 	Container *jlm.File
-	// Frames is the memory the container's pages are read into (jlm.Frames):
-	// the model's while the engine does not hold it.
-	Frames *jlm.Frames
+	// load is what the caller asked of the model's frames at Open
+	// (NewFrames).
+	load ModelLoad
 	// front is the model's graphs as the composer reads them (front.go).
 	Front frontState
 	// tower is the container's stated vision tower lowered into graphs
@@ -1275,81 +1263,16 @@ type Model struct {
 	// id names this model to a device (nn.LayerPlan.Model), which holds one
 	// model's blocks at a time.
 	Id uint64
-
-	// forgetters are the devices that copy weights by address: the pager
-	// tells them when a frame's bytes change (forgetCopies). owners are the
-	// devices holding the model's blocks, released at Close. Both under
-	// devMu, since a page-in on any session reads forgetters.
-	devMu      sync.Mutex
-	forgetters []nn.CopyForgetter
-	owners     []nn.ModelOwner
 }
 
-// forgetCopies is the container's recycle callback (jlm.File.OnRecycle): every
-// device that may hold a copy keyed inside [p, p+n) drops it, before the frame
-// is read into. See placement.md 15v.
-func (m *Model) ForgetCopies(p unsafe.Pointer, n uintptr) {
-	m.devMu.Lock()
-	fs := m.forgetters
-	m.devMu.Unlock()
-	for _, f := range fs {
-		f.Forget(p, n)
-	}
-}
-
-// unheld forgets d: a device that has closed holds nothing of the model.
-func (m *Model) Unheld(d any) {
-	m.devMu.Lock()
-	defer m.devMu.Unlock()
-	if f, ok := d.(nn.CopyForgetter); ok {
-		m.forgetters = slices.DeleteFunc(m.forgetters, func(x nn.CopyForgetter) bool { return x == f })
-	}
-	if o, ok := d.(nn.ModelOwner); ok {
-		m.owners = slices.DeleteFunc(m.owners, func(x nn.ModelOwner) bool { return x == o })
-	}
-}
-
-// heldBy registers d with the model: told when the pager recycles a frame, if
-// it copies weights by address (nn.CopyForgetter), and released at Close, if
-// it holds the model's blocks (nn.ModelOwner).
-func (m *Model) HeldBy(d any) {
-	m.devMu.Lock()
-	defer m.devMu.Unlock()
-	if f, ok := d.(nn.CopyForgetter); ok && !slices.Contains(m.forgetters, f) {
-		m.forgetters = append(m.forgetters, f)
-	}
-	if o, ok := d.(nn.ModelOwner); ok && !slices.Contains(m.owners, o) {
-		m.owners = append(m.owners, o)
-	}
-}
-
-// Close stops a WithPreload read, gives the model's blocks back to every
-// device holding them, so a device another model is offered next is free,
-// then closes the container: its memory goes, and every copy keyed on it with
-// it (forgetCopies). Every instance of the model has closed first.
+// Close closes the container. It reaches no device: what a device keeps of
+// the model went with the last instance holding it (nn.ModelOwner), and
+// every instance of the model has closed first.
 func (m *Model) Close() error {
 	if m.Container == nil {
 		return nil
 	}
-	if m.preloadStop != nil {
-		close(m.preloadStop)
-		<-m.preloadDone
-		m.preloadStop = nil
-	}
-	m.devMu.Lock()
-	owners := m.owners
-	m.devMu.Unlock()
-	for _, o := range owners {
-		o.ReleaseModel(m.Id)
-	}
-	if m.Frames != nil {
-		m.Frames.Close()
-	}
-	err := m.Container.Close()
-	m.devMu.Lock()
-	m.forgetters, m.owners = nil, nil
-	m.devMu.Unlock()
-	return err
+	return m.Container.Close()
 }
 
 // newModelID is a random id for an opened Model. Zero is never handed out, so
@@ -1430,10 +1353,6 @@ type ModelLoad struct {
 	// gc is WithGCPlan's, chatClock WithChatClock's.
 	gc        sched.GCPlan
 	ChatClock func() time.Time
-	// pageBudget is the host weight budget in BYTES, or zero for "ask the
-	// process". See WithPageBudget.
-	pageBudget uint64
-	budgetSet  bool
 	// place is the container's memory placement; see WithHugePages and
 	// WithInterleave.
 	place jlm.Placement
@@ -1464,22 +1383,6 @@ func WithTokenizerOption(o tok.Option) Option {
 // converter wrote -- RULE 7m's fourth and outranking authority.
 func WithTokenizer(r io.Reader) Option { return WithTokenizerOption(tok.WithTokenizer(r)) }
 
-// WithPageBudget caps the bytes of block pages the container may hold resident.
-//
-// It has to be known at Open, not after it: when Open read every page before
-// SetPageBudget narrowed the pool, a container larger than the machine's
-// memory allocated its whole size first and was killed before producing a
-// token (placement.md, "Measurements once cited in engine/model's comments").
-//
-// Zero means "ask the process": the model's GCPlan's Budget, which is
-// MemAvailable or the cgroup limit, whichever binds, times eight tenths, under
-// the collector's reserve when the weights are on the heap. A budget that holds every
-// block never evicts, so one larger than the model is the fully-resident
-// configuration and not a second code path.
-func WithPageBudget(bytes uint64) Option {
-	return func(l *ModelLoad) { l.pageBudget, l.budgetSet = bytes, true }
-}
-
 // WithGCPlan says where the model's weight memory lives and what a budget
 // it sizes itself leaves the Go collector: the zero plan, the default, keeps
 // the weights off the heap; OnHeap puts them on it (jlm.OnHeap), the control
@@ -1488,7 +1391,12 @@ func WithGCPlan(g sched.GCPlan) Option { return func(l *ModelLoad) { l.gc = g } 
 
 // MappedBytes is how much of the model's weight memory is held off the Go
 // heap (jlm.File.MappedBytes).
-func (m *Model) MappedBytes(fr *jlm.Frames) uint64 { return fr.MappedBytes() }
+func (m *Model) MappedBytes(fr *jlm.Frames) uint64 {
+	if fr == nil {
+		return 0
+	}
+	return fr.MappedBytes()
+}
 
 // WithHugePages sets whether this model's page frames are advised onto
 // transparent huge pages. On by default: the plane layout jumps a whole plane
@@ -1541,88 +1449,34 @@ func openContainer(path string, options ...Option) (*Model, error) {
 	for _, o := range options {
 		o(&lo)
 	}
-	var heap []jlm.FramesOption
-	if lo.gc.OnHeap {
-		heap = append(heap, jlm.OnHeap())
+	// Refused at Open, where the caller asked, not when a device first makes
+	// frames over the model.
+	if lo.chunk > 0 {
+		if err := jlm.CheckChunk(lo.chunk); err != nil {
+			return nil, err
+		}
 	}
 	c, err := jlm.Open(path)
 	if err != nil {
 		return nil, err
 	}
-	fr, err := jlm.NewFrames(c, heap...)
-	if err != nil {
-		c.Close()
-		return nil, err
-	}
-	// closeAll is every failure's way out from here: the frames, then the
-	// container.
-	closeAll := func() {
-		fr.Close()
-		c.Close()
-	}
-	// The budget is applied before the first page is read: with no frame pool,
-	// every block gets its own page and nothing is ever evicted.
-	budget := lo.pageBudget
-	if !lo.budgetSet {
-		budget = lo.gc.Budget()
-	}
-	// The budget is bytes, since a container carries page arrays of different
-	// sizes; see jlm.File.SetBudget.
-	if budget > 0 {
-		fr.SetBudget(budget)
-	}
-	fr.SetPlacement(lo.place)
-	if lo.chunk > 0 {
-		if err := fr.SetChunk(lo.chunk); err != nil {
-			closeAll()
-			return nil, err
-		}
-	}
-	// Pages come in during build(), one block at a time, so a container larger
-	// than the host can still be opened.
-	m, err := build(c, fr, lo.tok...)
+	m, err := build(c, lo.tok...)
 	if err == nil {
-		err = loadDenseHeads(c, fr, m)
+		err = loadDenseHeads(c, m)
 	}
 	if err != nil {
-		closeAll()
+		c.Close()
 		return nil, err
 	}
-	m.Container, m.Frames = c, fr
-	// The open-time budget is the caller's ask like any later one: a device
-	// on the host's memory attached afterwards comes off it (hostheld.go).
-	m.pages.bytes = budget
+	m.Container, m.load = c, lo
 	m.Gc, m.chatClock = lo.gc, lo.ChatClock
 	m.ActWindow = m.ActWindowOf()
 	m.Id = newModelID()
-	fr.OnRecycle(m.ForgetCopies)
 	m.TowerBase = len(m.Layers)
 	if v := c.Vision(); v != nil && v.Tower != nil {
-		if err := m.bindTower(c, fr); err != nil {
-			closeAll()
+		if err := m.bindTower(c); err != nil {
+			c.Close()
 			return nil, err
-		}
-	}
-	for i := range m.Layers {
-		if err := bindPacked(fr, m.Cfg, &m.Layers[i]); err != nil {
-			closeAll()
-			return nil, err
-		}
-	}
-	bindOne(fr, &m.Embd)
-	bindOne(fr, &m.PosEmbd)
-	bindOne(fr, &m.Output)
-	bindOne(fr, &m.Dense1)
-	bindOne(fr, &m.Dense2)
-	bindOne(fr, &m.PleTok)
-	bindOne(fr, &m.PleProj)
-	bindOne(fr, &m.AltProj)
-	for i := range m.AltUnembd {
-		bindOne(fr, &m.AltUnembd[i])
-	}
-	if m.Q4eHead != nil {
-		for _, t := range m.Q4eHead.Hc.tensors() {
-			bindOne(fr, t)
 		}
 	}
 	// A tower is the container's statement of it (jlm.Tower), lowered into
@@ -1631,37 +1485,40 @@ func openContainer(path string, options ...Option) (*Model, error) {
 	if c.Vision() != nil {
 		tg, err := m.BuildTowerGraphs()
 		if err != nil {
-			closeAll()
+			c.Close()
 			return nil, err
 		}
 		m.Tower = tg
 	}
-	if lo.preload > 0 {
-		m.startPreload(fr, lo.preload)
-	}
 	return m, nil
 }
 
-// startPreload runs the container's Preload behind Open. Close stops it and
-// waits for it, so no read lands in a frame Close has unmapped.
-func (m *Model) startPreload(fr *jlm.Frames, depth int) {
-	m.preloadStop, m.preloadDone = make(chan struct{}), make(chan struct{})
-	go func() {
-		defer close(m.preloadDone)
-		m.preloadErr = fr.Preload(depth, m.preloadStop)
-	}()
-}
-
-// WaitPreload blocks until a WithPreload read has finished and returns its
-// error; nil at once when there was none. A failed preload is not fatal: the
-// page it could not read is read again, and its error returned, when a token
-// faults it in.
-func (m *Model) WaitPreload() error {
-	if m.preloadDone == nil {
-		return nil
+// NewFrames is frames over the model's container as the caller asked at
+// Open -- the placement, the fill granularity, the heap and the preload --
+// for the device that pages the model's blocks to hold; the device budgets
+// them by the quotas of the instances it pages them for. The model
+// holds none: an instance binds every block and dense tensor it runs at the
+// frames of the device running it.
+func (m *Model) NewFrames(opts ...jlm.FramesOption) (*jlm.Frames, error) {
+	lo := m.load
+	if lo.gc.OnHeap {
+		opts = append(opts, jlm.OnHeap())
 	}
-	<-m.preloadDone
-	return m.preloadErr
+	fr, err := jlm.NewFrames(m.Container, opts...)
+	if err != nil {
+		return nil, err
+	}
+	fr.SetPlacement(lo.place)
+	if lo.chunk > 0 {
+		if err := fr.SetChunk(lo.chunk); err != nil {
+			fr.Close()
+			return nil, err
+		}
+	}
+	if lo.preload > 0 {
+		fr.StartPreload(lo.preload)
+	}
+	return fr, nil
 }
 
 // ReadConcurrency is the most read requests the container ever had
@@ -1675,7 +1532,7 @@ func (m *Model) ReadConcurrency() int64 {
 
 // PreloadDepth is the most pages a WithPreload read had in flight at once.
 func (m *Model) PreloadDepth(fr *jlm.Frames) int64 {
-	if m.Container == nil {
+	if m.Container == nil || fr == nil {
 		return 0
 	}
 	return fr.PreloadDepth()
@@ -1702,7 +1559,7 @@ func (m *Model) PagerReads() int64 {
 // steady run it stops growing once the budget is full, and a figure that keeps
 // pace with the page-ins is frames being freed and remade.
 func (m *Model) FreshFrames(fr *jlm.Frames) int64 {
-	if m.Container == nil {
+	if m.Container == nil || fr == nil {
 		return 0
 	}
 	return fr.FreshFrames()
@@ -1719,7 +1576,7 @@ func (m *Model) StreamGroups() int {
 
 // ChunkBytes is the granularity this container was opened at.
 func (m *Model) ChunkBytes(fr *jlm.Frames) uint64 {
-	if m.Container == nil {
+	if m.Container == nil || fr == nil {
 		return 0
 	}
 	return fr.ChunkBytes()
@@ -1728,10 +1585,26 @@ func (m *Model) ChunkBytes(fr *jlm.Frames) uint64 {
 // BytesRead is what those chunks actually cost, using this container's
 // granularity rather than the package global. See jlm.File.ChunkBytes.
 func (m *Model) BytesRead(fr *jlm.Frames) uint64 {
-	if m.Container == nil {
+	if m.Container == nil || fr == nil {
 		return 0
 	}
 	return uint64(fr.ChunksIn()) * fr.ChunkBytes()
+}
+
+// PagedBytes is the bytes every device's frames have filled from the
+// model's container, and PageFaults the pages they faulted.
+func (m *Model) PagedBytes() uint64 {
+	if m.Container == nil {
+		return 0
+	}
+	return m.Container.PagedBytes()
+}
+
+func (m *Model) PageFaults() int64 {
+	if m.Container == nil {
+		return 0
+	}
+	return m.Container.PageFaults()
 }
 
 // DirectIO reports whether this model's pages are read without going through
@@ -1743,7 +1616,7 @@ func (m *Model) DirectIO() bool { return m.Container != nil && m.Container.Direc
 // currently holding. RSS cannot stand in for it: a released page shows only
 // when the collector runs, and the KV cache dwarfs the weights anyway.
 func (m *Model) HostResidentBlocks(fr *jlm.Frames) int {
-	if m.Container == nil {
+	if m.Container == nil || fr == nil {
 		return 0
 	}
 	n := 0
@@ -1764,26 +1637,7 @@ func (m *Model) Blocks() int { return len(m.Layers) }
 // that runs on the host and is not resident is read from the file on its next
 // pass.
 func (m *Model) BlockResident(fr *jlm.Frames, li int) bool {
-	return m.Container != nil && fr.Resident(li)
-}
-
-// SetPageBudget caps how many block pages may be resident, in bytes. Paging
-// does not turn on or off: a budget that holds every block simply never
-// evicts, so "fully resident" and "one page short" are the same code path.
-//
-// bytes is the host's share before a device on the host's own memory (an
-// integrated GPU, Apple Silicon) takes what it holds: the model subtracts that
-// itself, now and whenever a instance's placement moves it (hostheld.go), so a
-// caller never subtracts gpu.GPU.HostReserved again.
-func (m *Model) SetPageBudget(fr *jlm.Frames, bytes uint64) int {
-	if m.Container == nil {
-		return 0
-	}
-	m.pages.mu.Lock()
-	m.pages.bytes = bytes
-	m.applyPageBudget(fr, m.pageNet())
-	m.pages.mu.Unlock()
-	return fr.ResidentPages()
+	return m.Container != nil && fr != nil && fr.Resident(li)
 }
 
 // PageSize is one block page's size in bytes, or zero for a model with no
@@ -1864,7 +1718,7 @@ func (m *Model) DenseBytes() uint64 {
 // arrays, so neither a page count nor frames * PageSize() is comparable. jlm
 // keeps the running total against the budget it enforces.
 func (m *Model) HostBytes(fr *jlm.Frames) uint64 {
-	if m.Container == nil {
+	if m.Container == nil || fr == nil {
 		return 0
 	}
 	return fr.ResidentBytes()
@@ -1873,7 +1727,7 @@ func (m *Model) HostBytes(fr *jlm.Frames) uint64 {
 // PageBudget is the byte cap the container holds its block pages against, 0
 // when unlimited (see HostBytes).
 func (m *Model) PageBudget(fr *jlm.Frames) uint64 {
-	if m.Container == nil {
+	if m.Container == nil || fr == nil {
 		return 0
 	}
 	return fr.Budget()
@@ -1884,7 +1738,7 @@ func (m *Model) PageBudget(fr *jlm.Frames) uint64 {
 // page. It is the budget's answer, not the residency's: a model that fits may
 // not have faulted a page in yet.
 func (m *Model) PagesFit(fr *jlm.Frames) bool {
-	return m.Container == nil || !fr.CanEvict()
+	return m.Container == nil || fr == nil || !fr.CanEvict()
 }
 
 // PageBytes is block li's own page size, which differs between a text block
@@ -1898,7 +1752,7 @@ func (m *Model) PageBytes(li int) uint64 {
 
 // PageStats is the budget in pages and what it has cost so far.
 func (m *Model) PageStats(fr *jlm.Frames) (frames int, in, out int64) {
-	if m.Container == nil {
+	if m.Container == nil || fr == nil {
 		return 0, 0, 0
 	}
 	in, out = fr.Faults()
@@ -1930,6 +1784,20 @@ func (m *Model) PageIn(fr *jlm.Frames, li int, l *Layer) error {
 	// expert nobody ensured is absent rather than stale, and every consumer of
 	// a packed span has to ensure it.
 	if err := m.ensureBlock(fr, li); err != nil {
+		return err
+	}
+	return bindPacked(fr, m.Cfg, l)
+}
+
+// BindBlock gives block li a frame in fr, claimed and unread, and binds l at
+// it: every span the right length, no byte valid until PageIn (or an expert
+// ensure) reads it. A device deciding whether to take the block reads shapes
+// and lengths only, so it decides before anything is read.
+func (m *Model) BindBlock(fr *jlm.Frames, li int, l *Layer) error {
+	if m.Container == nil || li >= len(m.Layers) || li >= m.Container.NPages() {
+		return nil
+	}
+	if err := fr.Claim(li); err != nil {
 		return err
 	}
 	return bindPacked(fr, m.Cfg, l)
@@ -1982,9 +1850,10 @@ func (t Tensor) name() string {
 	return t.E.Role.String()
 }
 
-// entryTensor is the matrix entry e holds, its spans as they are now; bindOne
-// points it at them again once its page is read.
-func entryTensor(c *jlm.Frames, e *jlm.Entry) (Tensor, error) {
+// entryTensor is the matrix entry e holds, as a descriptor: its shape and
+// entry, no bytes. bindOne points a copy of it at its spans in the frames of
+// the device running it.
+func entryTensor(e *jlm.Entry) (Tensor, error) {
 	if e.NDim < 2 {
 		return Tensor{}, fmt.Errorf("model: %v has %d dimensions, want 2", e.Role, e.NDim)
 	}
@@ -1999,8 +1868,7 @@ func entryTensor(c *jlm.Frames, e *jlm.Entry) (Tensor, error) {
 	for d := 1; d < int(e.NDim); d++ {
 		nrows *= int(e.Dims[d])
 	}
-	qs, _, _ := c.Span(e)
-	tn := Tensor{E: e, Typ: typ, Data: qs, Rows: nrows, K: int(e.Dims[0])}
+	tn := Tensor{E: e, Typ: typ, Rows: nrows, K: int(e.Dims[0])}
 	// Marked packed before the spans exist, since bankExpert and rows()
 	// need the layout; bindOne fills the struct later.
 	if jlm.Packed(e.Type) {
@@ -2009,8 +1877,9 @@ func entryTensor(c *jlm.Frames, e *jlm.Entry) (Tensor, error) {
 	return tn, nil
 }
 
-// entryVector is the vector entry e holds, read once into floats.
-func entryVector(c *jlm.Frames, e *jlm.Entry) ([]float32, error) {
+// entryVector is the vector entry e holds, read once from the file into
+// floats of the model's own.
+func entryVector(c *jlm.File, e *jlm.Entry) ([]float32, error) {
 	typ, ok := jlm.SourceType(e.Type)
 	if !ok {
 		return nil, fmt.Errorf("model: %v is %v, which has no dequantizer yet", e.Role, e.Type)
@@ -2019,7 +1888,10 @@ func entryVector(c *jlm.Frames, e *jlm.Entry) ([]float32, error) {
 	for d := 0; d < int(e.NDim); d++ {
 		n *= int(e.Dims[d])
 	}
-	qs, _, _ := c.Span(e)
+	qs, err := c.ReadPayload(e)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]float32, n)
 	if err := quant.Dequant32(typ, qs, out); err != nil {
 		return nil, fmt.Errorf("model: %v: %w", e.Role, err)
@@ -2642,7 +2514,7 @@ func ropeScale(cfg *Config, factors []float32) ([]float32, error) {
 	return scale, nil
 }
 
-func build(c *jlm.File, fr *jlm.Frames, options ...tok.Option) (*Model, error) {
+func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 	cfg, err := configFrom(c.Config())
 	if err != nil {
 		return nil, err
@@ -2681,7 +2553,6 @@ func build(c *jlm.File, fr *jlm.Frames, options ...tok.Option) (*Model, error) {
 		}
 	}
 	m := &Model{Cfg: cfg}
-	m.pagerUnlock = m.pager.Unlock
 	// An unsupported tokenizer is not a reason to refuse the weights: Vocab
 	// nil is a model that runs token ids but cannot turn text into them.
 	// TokErr says why.
@@ -2695,7 +2566,7 @@ func build(c *jlm.File, fr *jlm.Frames, options ...tok.Option) (*Model, error) {
 		if !ok {
 			return Tensor{}, fmt.Errorf("model: missing %v (block %d, index %d)", role, block, index)
 		}
-		tn, err := entryTensor(fr, e)
+		tn, err := entryTensor(e)
 		if err != nil {
 			return Tensor{}, err
 		}
@@ -2730,7 +2601,7 @@ func build(c *jlm.File, fr *jlm.Frames, options ...tok.Option) (*Model, error) {
 		if !ok {
 			return nil, fmt.Errorf("model: missing %v (block %d)", role, block)
 		}
-		return entryVector(fr, e)
+		return entryVector(c, e)
 	}
 	// optVec is vec for a tensor that may legitimately be absent; nil is the
 	// answer, not an error.

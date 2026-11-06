@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/internal/testmodels"
@@ -30,16 +31,17 @@ func TestOffHeapFramesMatchTheHeap(t *testing.T) {
 
 func offHeapGate(t *testing.T, path string) {
 	decode := func(off bool) [][]float32 {
-		m, err := model.Open(path, model.WithPageBudget(1), model.WithGCPlan(sched.GCPlan{OnHeap: !off}))
+		m, err := model.Open(path, model.WithGCPlan(sched.GCPlan{OnHeap: !off}))
 		if err != nil {
 			t.Fatal(err)
 		}
-		c := m.Frames
+		s := testInstance(t, m, 64, WithPageBudget(1))
+		c := s.fr
 		if got := c.MappedBytes() > 0; got != off {
+			s.Close()
 			m.Close()
 			t.Fatalf("off-heap %v, but the model mapped %d bytes", off, c.MappedBytes())
 		}
-		s := testInstance(t, m, 64)
 		ids := m.Vocab.Encode("The capital of France is", true)
 		lg, err := s.Prefill(ids)
 		if err != nil {
@@ -87,13 +89,13 @@ func TestOffHeapMemoryStaysWithinTheBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := m.Frames
+	st := testInstance(t, m, 64)
+	c := st.fr
 	if c.MappedBytes() == 0 {
 		t.Skip("this platform maps nothing off the heap -- this gate proved nothing")
 	}
 	budget := 3 * m.PageSize()
-	m.SetPageBudget(m.Frames, budget)
-	st := testInstance(t, m, 64)
+	st.SetPageBudget(budget)
 	lg, err := st.Prefill(m.Vocab.Encode("The capital of France is", true))
 	if err != nil {
 		t.Fatal(err)
@@ -113,7 +115,7 @@ func TestOffHeapMemoryStaysWithinTheBudget(t *testing.T) {
 			t.Fatalf("step %d: %d free bytes beside %d resident, past the %d-byte budget", i, fb, res, budget)
 		}
 	}
-	if _, faults, _ := m.PageStats(m.Frames); faults == 0 {
+	if _, faults, _ := m.PageStats(c); faults == 0 {
 		t.Fatal("nothing was paged: the budget held the model, so this proved nothing")
 	}
 	c.TrimFree()
@@ -147,8 +149,22 @@ func TestTwoPagedModelsShareTheProcess(t *testing.T) {
 		paths = append(paths, jlmOf(t, p))
 	}
 	const steps = 10
+	// One CPU device under both models, as a server's: each model's frames on
+	// it live until the model closes.
+	cd, err := OpenCPU()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cd.Close()
+	framesOf := func(m *model.Model) *jlm.Frames {
+		fr, err := cd.Frames(m.Id, m.NewFrames)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return fr
+	}
 	decode := func(m *model.Model) []int32 {
-		st := testInstance(t, m, 64)
+		st := testInstance(t, m, 64, WithCPU(cd), WithPageBudget(3*m.PageSize()))
 		defer st.Close()
 		lg, err := st.Prefill(m.Vocab.Encode("The capital of France is", true))
 		if err != nil {
@@ -163,7 +179,7 @@ func TestTwoPagedModelsShareTheProcess(t *testing.T) {
 				t.Error(err)
 				return nil
 			}
-			c := m.Frames
+			c := st.fr
 			if mb, acct := c.MappedBytes(), c.ResidentBytes()+c.FreeBytes()+c.File().H.DenseLen; mb > acct+1<<16 || mb < acct {
 				t.Errorf("%s step %d: %d mapped against %d accounted", c.File().Path, i, mb, acct)
 			}
@@ -175,7 +191,6 @@ func TestTwoPagedModelsShareTheProcess(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		m.SetPageBudget(m.Frames, 3*m.PageSize())
 		return m
 	}
 	// Each alone, for the reference.
@@ -186,7 +201,8 @@ func TestTwoPagedModelsShareTheProcess(t *testing.T) {
 		m.Close()
 	}
 	ms := [2]*model.Model{open(paths[0]), open(paths[1])}
-	if ms[0].Frames.MappedBytes() == 0 {
+	frs := [2]*jlm.Frames{framesOf(ms[0]), framesOf(ms[1])}
+	if frs[0].MappedBytes() == 0 {
 		ms[0].Close()
 		ms[1].Close()
 		t.Skip("this platform maps nothing off the heap -- this gate proved nothing")
@@ -202,14 +218,14 @@ func TestTwoPagedModelsShareTheProcess(t *testing.T) {
 		if fmt.Sprint(got[i]) != fmt.Sprint(want[i]) {
 			t.Fatalf("model %d beside the other read %v, alone %v", i, got[i], want[i])
 		}
-		if _, faults, _ := ms[i].PageStats(ms[i].Frames); faults == 0 {
+		if _, faults, _ := ms[i].PageStats(frs[i]); faults == 0 {
 			t.Fatalf("model %d never paged: its budget held it, so this proved nothing", i)
 		}
 	}
 	// Closing the first returns its mappings and only its; the second still runs.
-	second := ms[1].Frames.MappedBytes()
+	second := frs[1].MappedBytes()
 	ms[0].Close()
-	if first, now := ms[0].Frames.MappedBytes(), ms[1].Frames.MappedBytes(); first != 0 || now != second {
+	if first, now := frs[0].MappedBytes(), frs[1].MappedBytes(); first != 0 || now != second {
 		t.Fatalf("after closing the first model it maps %d bytes and the second %d, want 0 and the second's %d",
 			first, now, second)
 	}
@@ -217,7 +233,7 @@ func TestTwoPagedModelsShareTheProcess(t *testing.T) {
 		t.Fatalf("the second model after the first closed read %v, want %v", again, want[1])
 	}
 	ms[1].Close()
-	if a, b := ms[0].Frames.MappedBytes(), ms[1].Frames.MappedBytes(); a+b != 0 {
+	if a, b := frs[0].MappedBytes(), frs[1].MappedBytes(); a+b != 0 {
 		t.Fatalf("both models closed and they still map %d and %d off-heap bytes", a, b)
 	}
 }

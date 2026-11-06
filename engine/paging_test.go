@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -83,11 +84,12 @@ func pagingDoesNotChangeTheAnswer(t *testing.T, path string, opts ...Option) {
 			t.Fatal(err)
 		}
 		defer m.Close()
+		budgeted := slices.Clip(instOpts)
 		if frames > 0 {
-			m.SetPageBudget(m.Frames, uint64(frames)*m.PageSize())
+			budgeted = append(budgeted, WithPageBudget(uint64(frames)*m.PageSize()))
 		}
 		in := m.Vocab.Encode("The capital of France is", true)
-		st := testInstance(t, m, len(in)+8+1, instOpts...)
+		st := testInstance(t, m, len(in)+8+1, budgeted...)
 		defer st.Close()
 		logits, err := st.Prefill(in)
 		if err != nil {
@@ -118,7 +120,7 @@ func pagingDoesNotChangeTheAnswer(t *testing.T, path string, opts ...Option) {
 				t.Fatalf("the composed CPU served %d block steps, where the prompt and 8 steps run at least %d", served, 9*nl)
 			}
 		}
-		got, faults, _ := m.PageStats(m.Frames)
+		got, faults, _ := m.PageStats(st.fr)
 		return out, got, faults
 	}
 

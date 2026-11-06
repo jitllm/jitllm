@@ -62,7 +62,7 @@ func TestASystemPromptReachesATemplateWithoutASystemRole(t *testing.T) {
 func TestEveryChatModelTakesASystemPrompt(t *testing.T) {
 	checked := 0
 	for _, p := range testmodels.Glob("*.jlm") {
-		m, err := model.Open(p, model.WithPageBudget(1<<28))
+		m, err := model.Open(p)
 		if err != nil {
 			continue // a stale container; the conversion gates own that
 		}

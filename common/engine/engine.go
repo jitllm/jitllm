@@ -36,7 +36,9 @@ import (
 	"github.com/jitllm/jitllm/common/session"
 	"github.com/jitllm/jitllm/engine"
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/model"
+	"github.com/jitllm/jitllm/nn"
 	"github.com/jitllm/jitllm/server"
 )
 
@@ -402,11 +404,13 @@ func (e *Engine) activate(en *entry) error {
 	vision := m.SeesPictures()
 	var blocks []byte
 	var alloc session.Allocation
+	var fr *jlm.Frames
 	e.inspect(func(st *engine.Instance) {
 		blocks = placementOf(m, st, e.gpu)
 		alloc = allocStat(m, st, e.gpu, m.Cfg.NLayer)
+		fr = st.FramesOn(nn.CPU)
 	})
-	pager := pagerStat(m)
+	pager := pagerStat(m, fr)
 
 	e.sh.Post(func() {
 		if !chatOK {
@@ -548,7 +552,8 @@ func placementOf(m *model.Model, st *engine.Instance, g *gpu.GPU) []byte {
 			}
 		}
 	}
-	return blockMap(m.Blocks(), runs, devOf, func(li int) bool { return m.BlockResident(m.Frames, li) })
+	fr := st.FramesOn(nn.CPU)
+	return blockMap(m.Blocks(), runs, devOf, func(li int) bool { return m.BlockResident(fr, li) })
 }
 
 // allocStat is where the model is: bytes per device and bytes on the host.
@@ -561,9 +566,10 @@ func placementOf(m *model.Model, st *engine.Instance, g *gpu.GPU) []byte {
 // Budgets(), DevStats() and Placed() are parallel arrays indexed by device
 // ordinal, fastest first.
 func allocStat(m *model.Model, st *engine.Instance, g *gpu.GPU, nBlocks int) session.Allocation {
+	fr := st.FramesOn(nn.CPU)
 	a := session.Allocation{
-		HostUsed:   m.HostBytes(m.Frames),
-		HostBudget: m.PageBudget(m.Frames),
+		HostUsed:   m.HostBytes(fr),
+		HostBudget: m.PageBudget(fr),
 		Dense:      m.DenseBytes(),
 		NBlocks:    nBlocks,
 		PageBytes:  m.PageSize(),
@@ -607,16 +613,26 @@ func allocStat(m *model.Model, st *engine.Instance, g *gpu.GPU, nBlocks int) ses
 	return a
 }
 
-func pagerStat(m *model.Model) session.PagerStat {
-	fr, in, out := m.PageStats(m.Frames)
+// pagerStat is the CPU device's paging of m into fr; BytesRead is every
+// device's reads of the container.
+func pagerStat(m *model.Model, fr *jlm.Frames) session.PagerStat {
+	n, in, out := m.PageStats(fr)
 	// Resident is the resident bytes: Frames is what jlm holds, Resident is
 	// what that costs.
 	return session.PagerStat{
-		Frames: fr, PageIns: in, PageOuts: out,
-		Resident:  m.HostBytes(m.Frames),
-		BytesRead: m.BytesRead(m.Frames), Reads: m.PagerReads(),
-		ChunkBytes: m.ChunkBytes(m.Frames),
+		Frames: n, PageIns: in, PageOuts: out,
+		Resident:  m.HostBytes(fr),
+		BytesRead: m.PagedBytes(), Reads: m.PagerReads(),
+		ChunkBytes: m.ChunkBytes(fr),
 	}
+}
+
+// frames is the CPU device's frames the session's instance pages into, nil
+// with no session.
+func (e *Engine) frames() *jlm.Frames {
+	var fr *jlm.Frames
+	e.inspect(func(st *engine.Instance) { fr = st.FramesOn(nn.CPU) })
+	return fr
 }
 
 // Relocate moves the seam: it asks the device to hold n blocks and publishes
@@ -726,7 +742,7 @@ func (e *Engine) generate(r session.ChatRequest) {
 	ph.Mark("load")
 	var moved0 int
 	e.inspect(func(st *engine.Instance) { moved0 = st.Relocations() })
-	_, _, outs0 := e.m.PageStats(e.m.Frames)
+	_, _, outs0 := e.m.PageStats(e.frames())
 
 	// The session resets before every turn (server.Engine.Generate): a chat
 	// prompt is the whole history re-rendered, so prefilling onto a session
@@ -854,7 +870,7 @@ func (e *Engine) generate(r session.ChatRequest) {
 	}
 	perTok := float64(dec.PerToken(n))
 	gbs := dec.Rate() / (1 << 30)
-	pager := pagerStat(e.m)
+	pager := pagerStat(e.m, e.frames())
 	pager.TurnOuts = pager.PageOuts - outs0
 	var alloc session.Allocation
 	var blocks []byte

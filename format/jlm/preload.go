@@ -154,6 +154,41 @@ func (f *File) ioStart(n int) {
 
 func (f *File) ioEnd() { f.inIO.Add(-1) }
 
+// StartPreload runs Preload behind the caller, depth pages in flight.
+// WaitPreload returns its error once it has finished; Close stops it and
+// waits for it first, so no read lands in a frame Close has given back.
+func (f *Frames) StartPreload(depth int) {
+	f.preStop, f.preDone = make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(f.preDone)
+		f.preErr = f.Preload(depth, f.preStop)
+	}()
+}
+
+// WaitPreload blocks until StartPreload's read has finished and returns its
+// error; nil at once when there was none. A failed preload is not fatal: the
+// page it could not read is read again, and its error returned, when a token
+// faults it in.
+func (f *Frames) WaitPreload() error {
+	if f.preDone == nil {
+		return nil
+	}
+	<-f.preDone
+	return f.preErr
+}
+
+func (f *Frames) stopPreload() {
+	if f.preStop == nil {
+		return
+	}
+	select {
+	case <-f.preStop:
+	default:
+		close(f.preStop)
+	}
+	<-f.preDone
+}
+
 // PreloadDepth is the most pages Preload ever had in flight at once: the
 // page-level queue depth, where ReadConcurrency counts requests (one page-in
 // alone issues up to ReadThreads of those).

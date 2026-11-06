@@ -359,7 +359,7 @@ func TestComposedCPURowsDoNotAllocate(t *testing.T) {
 			blocks := func(s *Instance, seq, pos []int) {
 				w := s.c.ResidW()
 				for li := range m.Cfg.NLayer {
-					why, err := s.cpuRows(li, &m.Layers[li], s.bx[:len(pos)*w], s.bcs, s.bcsSWA, seq, pos, nil)
+					why, err := s.cpuRows(li, s.layer(li), s.bx[:len(pos)*w], s.bcs, s.bcsSWA, seq, pos, nil)
 					if err != nil || why != nn.DeclineServes {
 						t.Fatalf("block %d: %v (%s)", li, err, why)
 					}

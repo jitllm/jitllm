@@ -89,18 +89,17 @@ func TestComposedExpertPagesServe(t *testing.T) {
 				t.Run(dev, func(t *testing.T) {
 					decode := func(t *testing.T, budget bool, opts ...gpu.Option) ([][]float32, gpu.Stats, int64) {
 						t.Helper()
-						var mo []model.Option
-						if budget {
-							mo = append(mo, model.WithPageBudget(1))
-						}
 						instOpts := []Option{WithStreamTrial(false)}
-						m, err := model.Open(src, mo...)
+						if budget {
+							instOpts = append(instOpts, WithPageBudget(1))
+						}
+						m, err := model.Open(src)
 						if err != nil {
 							t.Fatal(err)
 						}
 						defer m.Close()
 						got, st, _ := composedDecode(t, m, instOpts, dev, ids, toks, nn.ComposedBlock, false, false, opts...)
-						_, in, _ := m.PageStats(m.Frames)
+						in := m.PageFaults()
 						return got, st, in
 					}
 					stream := func(slots int) gpu.Option {
@@ -247,14 +246,14 @@ func TestComposedCPUExpertPagesServe(t *testing.T) {
 			toks := cpuTokens(t, fm, steps, openOpts...)
 			fm.Close()
 			want, band := cpuReference(t, path, fixtureSource(testmodels.Path(file)), page, toks)
-			run := func(f cpuFault, mo ...model.Option) ([][]float32, int64) {
-				m, err := model.Open(path, mo...)
+			run := func(f cpuFault, io ...Option) ([][]float32, int64) {
+				m, err := model.Open(path)
 				if err != nil {
 					t.Fatal(err)
 				}
 				defer m.Close()
-				got := cpuLogits(t, m, toks, f, true, withKVPage(page))
-				_, in, _ := m.PageStats(m.Frames)
+				got := cpuLogits(t, m, toks, f, true, append(io, withKVPage(page))...)
+				in := m.PageFaults()
 				return got, in
 			}
 			got, residentIn := run(cpuFaultNone)
@@ -265,7 +264,7 @@ func TestComposedCPUExpertPagesServe(t *testing.T) {
 				t.Fatalf("the composed CPU mixture leaves the band: median ratio %.3f (bound %.1f), worst %.3g (bound %.1f x %.3g)",
 					med, bandRatio, worst, bandWorst, widest)
 			}
-			paged, pagedIn := run(cpuFaultNone, model.WithPageBudget(1))
+			paged, pagedIn := run(cpuFaultNone, WithPageBudget(1))
 			if pagedIn <= residentIn {
 				t.Fatalf("a one-page budget took %d page-ins against %d resident: nothing paged", pagedIn, residentIn)
 			}
@@ -274,7 +273,7 @@ func TestComposedCPUExpertPagesServe(t *testing.T) {
 					t.Fatalf("step %d: under a one-page budget the composed logits differ from the resident run's (NMSE %.3e)", i, nmseF32(got[i], paged[i]))
 				}
 			}
-			bad, _ := run(cpuFaultExpert, model.WithPageBudget(1))
+			bad, _ := run(cpuFaultExpert, WithPageBudget(1))
 			far := 0.0
 			for i := range got {
 				far = max(far, logitNMSE(got[i], bad[i]))
@@ -323,10 +322,10 @@ func TestComposedCPUExpertPromptsServe(t *testing.T) {
 	for _, file := range names {
 		t.Run(file, func(t *testing.T) {
 			path := jlmOf(t, testmodels.Path(file))
-			open := func(mo ...model.Option) (*model.Model, []Option) {
+			open := func(io ...Option) (*model.Model, []Option) {
 				t.Helper()
-				instOpts := []Option{withKVPage(page)}
-				m, err := model.Open(path, mo...)
+				instOpts := append([]Option{withKVPage(page)}, io...)
+				m, err := model.Open(path)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -361,12 +360,12 @@ func TestComposedCPUExpertPromptsServe(t *testing.T) {
 				seqs = append(seqs, lcppSeq{p, steps, nil})
 			}
 			band := lcppBand(t, fixtureSource(testmodels.Path(file)), fm.Cfg.NLayer, want, seqs...)
-			run := func(f cpuFault, mo ...model.Option) ([][]float32, int64) {
+			run := func(f cpuFault, io ...Option) ([][]float32, int64) {
 				t.Helper()
-				m, openOpts2 := open(mo...)
+				m, openOpts2 := open(io...)
 				defer m.Close()
 				got := prompt(m, f, true, openOpts2...)
-				_, in, _ := m.PageStats(m.Frames)
+				in := m.PageFaults()
 				return got, in
 			}
 			got, residentIn := run(cpuFaultNone)
@@ -377,7 +376,7 @@ func TestComposedCPUExpertPromptsServe(t *testing.T) {
 				t.Fatalf("the composed CPU's mixture prompts leave the band: median ratio %.3f (bound %.1f), worst %.3g (bound %.1f x %.3g)",
 					med, bandRatio, worst, bandWorst, widest)
 			}
-			paged, pagedIn := run(cpuFaultNone, model.WithPageBudget(1))
+			paged, pagedIn := run(cpuFaultNone, WithPageBudget(1))
 			if pagedIn <= residentIn {
 				t.Fatalf("a one-page budget took %d page-ins against %d resident: nothing paged", pagedIn, residentIn)
 			}
@@ -390,9 +389,9 @@ func TestComposedCPUExpertPromptsServe(t *testing.T) {
 			for _, v := range []struct {
 				name string
 				f    cpuFault
-				opts []model.Option
+				opts []Option
 			}{
-				{"another expert's page held", cpuFaultExpert, []model.Option{model.WithPageBudget(1)}},
+				{"another expert's page held", cpuFaultExpert, []Option{WithPageBudget(1)}},
 				{"a row given another row's picks", cpuFaultPicks, nil},
 				{"each row's first pick's weight dropped", cpuFaultWeight, nil},
 			} {

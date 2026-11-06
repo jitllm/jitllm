@@ -23,10 +23,16 @@ type altNorm struct {
 // adoptHead answers PrepHead for a head already resident: the same projection
 // is accepted, with its norm uploaded beside the resident one when it differs,
 // and a different projection of the same shape is refused -- reusing the
-// resident one would project through another tensor's weights. Callers hold
+// resident one would project through another tensor's weights. The same
+// projection is the same container entry, wherever the instance offering it
+// holds its bytes; one that is no entry is known by its address. Callers hold
 // g.mu.
 func (g *devTier) adoptHead(h *nn.Head) bool {
-	if len(h.W.Data) == 0 || &h.W.Data[0] != g.headSrc {
+	same := h.W.Entry != nil && h.W.Entry == g.headEntry
+	if h.W.Entry == nil {
+		same = len(h.W.Data) > 0 && &h.W.Data[0] == g.headSrc
+	}
+	if !same {
 		g.LastErr = "the head resident on this device is another projection of the same shape"
 		return false
 	}
@@ -135,5 +141,5 @@ func (g *devTier) giveBackHead(bs *blockScratch) {
 		}
 		g.freeResident(r)
 	}
-	g.headSrc, g.headNormHost = nil, nil
+	g.headEntry, g.headSrc, g.headNormHost = nil, nil, nil
 }

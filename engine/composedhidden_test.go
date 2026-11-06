@@ -93,7 +93,7 @@ func composedHidden(t *testing.T, m *model.Model, io []Option, dev string, parts
 		out.from = k - 1
 	}
 	func() {
-		defer m.EnterPager(m.Frames)()
+		defer s.fr.Enter()()
 		s.kv.note(s.seqPos(0), rows...)
 		if err := s.stepRows(tokenRows(rows), &out); err != nil {
 			t.Fatal(err)

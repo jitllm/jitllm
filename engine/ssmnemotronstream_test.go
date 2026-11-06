@@ -30,8 +30,7 @@ func TestUngatedStreamedBankMatchesTheResidentOne(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer m.Close()
-		m.SetPageBudget(m.Frames, 2*m.PageSize())
-		if !m.Frames.CanEvict() {
+		if !budgetEvicts(m, 2*m.PageSize()) {
 			t.Fatalf("a budget of two pages evicts nothing: the sheets would never be read")
 		}
 		opts := []gpu.Option{gpu.WithDevices("gpu:0"), gpu.WithDeviceTune(gpu.TuneOff)}
@@ -43,7 +42,7 @@ func TestUngatedStreamedBankMatchesTheResidentOne(t *testing.T) {
 			noDevice(t, "device", err)
 		}
 		defer g.Close()
-		s := testInstance(t, m, 16)
+		s := testInstance(t, m, 16, WithPageBudget(2*m.PageSize()))
 		defer s.Close()
 		s.SetDeviceLayers(g, m.Cfg.NLayer)
 		placed := s.GPULayers()

@@ -686,8 +686,8 @@ func (e *Engine) LoadModel(o LoadOptions) (*LoadedModel, error) {
 		closeDev()
 		return nil, &DeviceError{err}
 	}
-	mo := []model.Option{model.WithPageBudget(hostBudget), model.WithPreload(preloadDepth), model.WithGCPlan(e.cfg.GC)}
-	opts := []engine.Option{engine.WithDevices(devs...), engine.WithPool(cpu.WithSched(sched.WithCrews(e.crews)))}
+	mo := []model.Option{model.WithPreload(preloadDepth), model.WithGCPlan(e.cfg.GC)}
+	opts := []engine.Option{engine.WithPageBudget(hostBudget), engine.WithDevices(devs...), engine.WithPool(cpu.WithSched(sched.WithCrews(e.crews)))}
 	kv := cmp.Or(o.KVF16, e.cfg.KVF16)
 	if kv != nil {
 		opts = append(opts, engine.WithKVF16(*kv))
@@ -2840,8 +2840,9 @@ func (e *Engine) MoveBlocks(ctx context.Context, s *Session, first, last int, to
 // budget: the dense region never pages, and skipping that subtraction
 // double-spends -- a budget one page short costs a read every token. What a
 // tier on the host's own memory holds (gpu.GPU.HostReserved) is not taken
-// here: Model.SetPageBudget takes it off itself, and again whenever a block
-// moves, so taking it here too would count it twice.
+// here: the instance takes it off its page quota (Instance.SetPageBudget),
+// and again whenever a block moves, so taking it here too would count it
+// twice.
 func (lm *LoadedModel) hostWeightShare(total uint64) uint64 {
 	avail := total
 	if d := lm.m.DenseBytes(); d < avail {
@@ -2923,7 +2924,9 @@ func (e *Engine) applyPageBudget(lm *LoadedModel, newest *engine.Instance) {
 	if lm.m.Cfg.NLayer-minDev <= 0 {
 		return // every block is on a device for every session; nothing faults here
 	}
-	lm.m.SetPageBudget(lm.m.Frames, pagerBudget(avail))
+	if lm.inst != nil {
+		lm.inst.With(func(in *engine.Instance) { in.SetPageBudget(pagerBudget(avail)) })
+	}
 }
 
 // defaultMaxSeq is the KV capacity a session of lm gets when it asks for none.

@@ -448,7 +448,7 @@ func (s *Instance) HostStepRows() int64 { return atomic.LoadInt64(&s.eng.hostSte
 func stepHost(runs []Run, rows int) ([][]float32, error) {
 	s0 := runs[0].Instance
 	c := s0.c
-	defer s0.m.EnterPager(s0.m.Frames)()
+	defer s0.fr.Enter()()
 	toks, pos, own, win, seq := s0.stepTok[:0], s0.stepPos[:0], s0.rowOwn[:0], s0.rowWin[:0], s0.rowSeq[:0]
 	ins := s0.rowInst[:0]
 	// The lists keep their capacity; the sessions are let go of, so a step
@@ -544,8 +544,8 @@ func stepHost(runs []Run, rows int) ([][]float32, error) {
 // such run's last -- lead, so the head projects only them (nn.Head.LogitRows).
 func stepTogether(runs []Run, rows int, ss nn.SessionStepper) ([][]float32, error) {
 	s0 := runs[0].Instance
-	m, c := s0.m, s0.m.Cfg
-	defer m.EnterPager(m.Frames)()
+	c := s0.m.Cfg
+	defer s0.fr.Enter()()
 	nrot := c.RopeW()
 	s0.growBatch(rows)
 	x, cs, csSWA := s0.bx[:rows*c.ResidW()], s0.bcs[:rows*nrot], s0.bswaTable(rows, c.NRotSWA)

@@ -2,7 +2,10 @@
 
 package engine
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
 
 // TestPhaseMeterAccountsForEveryByte checks the phase rows account for the
 // pager's total exactly: every byte in one row. The meter takes deltas of the
@@ -15,12 +18,10 @@ func TestPhaseMeterAccountsForEveryByte(t *testing.T) {
 		t.Skip("no container: there is no pager to split")
 	}
 	// One frame for eight blocks, so decode re-faults and the row is not zero.
-	m.Frames.SetBudget(m.Container.PageBytes(0))
-
-	st := testInstance(t, m, 64, openOpts...)
+	st := testInstance(t, m, 64, append(slices.Clip(openOpts), WithPageBudget(m.Container.PageBytes(0)))...)
 	defer st.Close()
 
-	before := m.BytesRead(m.Frames)
+	before := m.PagedBytes()
 	ph := NewPhaseMeter(m)
 	ph.Mark("load")
 
@@ -51,7 +52,7 @@ func TestPhaseMeterAccountsForEveryByte(t *testing.T) {
 
 	// The meter starts AFTER `before`, so the rows account for everything the
 	// pager did from that point on and nothing earlier.
-	if got := m.BytesRead(m.Frames) - before; sum != got {
+	if got := m.PagedBytes() - before; sum != got {
 		t.Errorf("the rows sum to %d B and the pager read %d B since the meter "+
 			"started: %+d unaccounted -- a phase is being lost or double-counted",
 			sum, got, int64(sum)-int64(got))
