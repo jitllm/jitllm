@@ -12,7 +12,7 @@ import (
 // model's sliding layers: OLMo 3's rotate at their base unscaled, a picture's
 // rows see each other on Gemma 4's 26B and 31B's sliding layers alone and on
 // every layer of the E-models, and a model with neither states nothing but
-// its revision.
+// its revision. BitNet states its projections' int8 activations.
 func TestConverterStatesTheSlidingLayers(t *testing.T) {
 	cfg := func(a jlm.Arch, ple uint32) *jlm.Config {
 		return &jlm.Config{Arch: a, NLayer: 6, SWAWindow: 512, SWAPeriod: 6, PLEDim: ple}
@@ -29,9 +29,17 @@ func TestConverterStatesTheSlidingLayers(t *testing.T) {
 		{"Llama", cfg(jlm.ArchLlama, 0), 0, nil},
 	} {
 		convert.StateRevision(c.c)
+		if c.c.ActQuant != jlm.ActQuantNone {
+			t.Errorf("%s: activation quantization %d", c.name, c.c.ActQuant)
+		}
 		if c.c.Revision != jlm.StatementRevision || c.c.RopeScaleSWA != c.scale || !slices.Equal(c.c.BidirLayers, c.bidir) {
 			t.Errorf("%s: revision %d, sliding scale %v, picture layers %v; want %d, %v, %v", c.name,
 				c.c.Revision, c.c.RopeScaleSWA, c.c.BidirLayers, jlm.StatementRevision, c.scale, c.bidir)
 		}
+	}
+	b := cfg(jlm.ArchBitNet, 0)
+	convert.StateRevision(b)
+	if b.ActQuant != jlm.ActQuantRowInt8 {
+		t.Errorf("BitNet: activation quantization %d, want int8 per row", b.ActQuant)
 	}
 }

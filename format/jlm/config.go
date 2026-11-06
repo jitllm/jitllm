@@ -760,6 +760,9 @@ type Config struct {
 	// BidirLayers is, per layer, whether a picture's rows see each other in
 	// its attention; nil is every layer.
 	BidirLayers []bool
+	// ActQuant is how every projection's input is quantized before the
+	// product, ActQuantNone for not at all. The eighteenth optional tail.
+	ActQuant ActQuant
 
 	Flags Flags
 }
@@ -1244,7 +1247,19 @@ func (c *Config) GLU() GLU {
 // StatementRevision is the revision of what this converter states: a
 // container written at an older one is upgraded (jitllm upgrade) where the
 // later statements matter to it.
-const StatementRevision = 1
+const StatementRevision = 2
+
+// ActQuant is a model's activation quantization.
+type ActQuant uint8
+
+const (
+	// ActQuantNone leaves a projection's input as it is.
+	ActQuantNone ActQuant = iota
+	// ActQuantRowInt8 quantizes a projection's input to int8 per row by its
+	// absolute maximum (BitNet b1.58's BitLinear): the product is over the
+	// row's codes, scaled by the row's scale.
+	ActQuantRowInt8
+)
 
 // Sliding reports that layer li attends over a sliding window: all but the
 // last of each SWAPeriod layers.

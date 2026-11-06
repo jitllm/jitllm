@@ -873,7 +873,7 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 		mscale := float64(c.YarnLogMul)*math.Log(float64(c.YarnFactor)) + 1
 		out.AttnScale *= mscale * mscale
 	}
-	out.TokenAct = c.Arch == jlm.ArchBitNet
+	out.TokenAct = c.ActQuant == jlm.ActQuantRowInt8
 	if err := q4eConfig(out, c); err != nil {
 		return nil, err
 	}
@@ -1287,6 +1287,12 @@ func Open(path string, options ...Option) (*Model, error) {
 		(c.YarnFactor > 1 || m.Container.Vision() != nil) {
 		m.Close()
 		return nil, &UpgradeRequiredError{Path: path, What: "sliding layers"}
+	}
+	// A block of sub-norms before its projections reads the activation
+	// quantization a container written before revision 2 does not state.
+	if c := m.Container.Config(); c.Revision < 2 && m.storesAny(jlm.RoleAttnSubNorm, jlm.RoleFFNSubNorm) {
+		m.Close()
+		return nil, &UpgradeRequiredError{Path: path, What: "activation quantization"}
 	}
 	if m.Cfg.AttnResBlock != 0 && m.Cfg.statedStreams() <= 1 {
 		m.Close()
@@ -3818,3 +3824,15 @@ func f32Bytes(v []float32) []byte {
 // BidirAt reports that a picture's rows see each other in layer li's
 // attention.
 func (c *Config) BidirAt(li int) bool { return len(c.bidir) == 0 || c.bidir[li] }
+
+// storesAny reports that some block of the container stores one of rs.
+func (m *Model) storesAny(rs ...jlm.Role) bool {
+	for bi := range m.Container.Config().NLayer {
+		for _, r := range rs {
+			if m.Container.Has(r, int32(bi), -1) {
+				return true
+			}
+		}
+	}
+	return false
+}
