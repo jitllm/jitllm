@@ -183,7 +183,7 @@ func c6BaseFixtures() []struct {
 		{"synth-dbrx", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
 			return c.Arch == "dbrx" && c.LayerNorm && !c.Parallel && c.RopeNeox && c.NRot == c.HeadDim &&
-				c.ClampKQV == 1.5 && c.NExpert == 4 && c.NExpertUsed == 2 && !c.NoExpertNorm &&
+				m.Container.Config().ClampKQV == 1.5 && c.QKVAct != nil && c.NExpert == 4 && c.NExpertUsed == 2 && !c.NoExpertNorm &&
 				c.NKVHead < c.NHead && l.Router.E != nil && l.FfnNorm != nil && l.AttnNormB == nil &&
 				l.FfnNormB == nil && l.Vector(jlm.RoleAttnQBias) == nil && m.OutNormB == nil && !c.TiedEmbd
 		}},
@@ -539,8 +539,8 @@ func c6BaseViolations() map[string][]c6Violation {
 			{"no logit scale", logitScale},
 		},
 		"synth-dbrx": {
-			{"no clip_qkv", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.ClampKQV = 0 }) }},
-			{"clip_qkv at twice its value", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.ClampKQV *= 2 }) }},
+			{"no clip_qkv", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.QKVAct = nil }) }},
+			{"clip_qkv at twice its value", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.QKVAct = clampTwice(m) }) }},
 			{"RMSNorm for LayerNorm", rmsForLayerNorm},
 			{"NORM rotary for NEOX", hostNormRotary},
 			{"the routed weights not renormalised", func(m *model.Model) func() {
@@ -604,4 +604,11 @@ func matK(l *model.Layer, r jlm.Role) int {
 		return t.K
 	}
 	return 0
+}
+
+// clampTwice is the model's stated q/k/v clamp at twice its bound.
+func clampTwice(m *model.Model) *jlm.Expr {
+	cc := *m.Container.Config()
+	cc.ClampKQV *= 2
+	return cc.QKVAct()
 }

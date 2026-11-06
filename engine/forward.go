@@ -971,8 +971,6 @@ func (s *Instance) SetDeviceLayers(d nn.LayerDevice, max int) error {
 		ResidualScale: c.ResidualScale,
 		// The classic block's (C6); UngatedFFN is per block, in planFor.
 		LayerNorm: c.LayerNorm, Parallel: c.Parallel,
-		// DBRX's clamp on q, k and v.
-		ClampKQV: c.ClampKQV,
 		// The block's own geometry is planFor's.
 		MixedGeom: c.MixedGeom(), VNorm: c.VNorm,
 		NoAttention: !c.Attends(),

@@ -5910,11 +5910,6 @@ func planConflict(bs *blockScratch, p *nn.LayerPlan) string {
 			return fmt.Sprintf("a residual scale of %g on a tier built for %g", b, a)
 		}
 	}
-	// The clamp's bound is baked into its kernel, and a scratch built without
-	// one has neither the kernels nor the buffers.
-	if bs.p.ClampKQV != p.ClampKQV {
-		return fmt.Sprintf("a q/k/v clamp of %g on a tier built for %g", p.ClampKQV, bs.p.ClampKQV)
-	}
 	// The delta-rule kernel bakes one key-head pairing; a scratch built for
 	// grouped heads runs a tiled block's value heads against the wrong keys,
 	// and every shape still matches.
