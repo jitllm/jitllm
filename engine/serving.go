@@ -17,12 +17,26 @@ import (
 // decoding is not split: it keeps the P and E cores, exactly as before, and so
 // does a session alone. See nn.JIT.BeginPrefillE.
 
-// touch records that s is decoding now, on its seat on the CPU.
-func (s *Instance) touch() { s.exec.x.Touch() }
+// touch records that s is decoding now on each device its routes place
+// blocks on that several instances share (nn.DecodeSharer).
+func (s *Instance) touch() {
+	for _, p := range s.places {
+		if d, ok := p.(nn.DecodeSharer); ok {
+			d.Decoding()
+		}
+	}
+}
 
-// othersDecoding reports whether an instance on the CPU other than s is
-// decoding.
-func (s *Instance) othersDecoding() bool { return s.exec.x.OthersDecoding() }
+// othersDecoding reports whether an instance other than s is decoding on a
+// device s places blocks on.
+func (s *Instance) othersDecoding() bool {
+	for _, p := range s.places {
+		if d, ok := p.(nn.DecodeSharer); ok && d.OthersDecoding() {
+			return true
+		}
+	}
+	return false
+}
 
 // splitWanted is whether s's next prefill chunk goes to the E-cores: the model
 // allows it (WithServingSplit) and another session is decoding.
