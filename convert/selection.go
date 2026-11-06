@@ -25,7 +25,7 @@ import (
 //
 // A block selects where it stores the indexer's key.
 func StateSelection(c *jlm.Config, stores func(r jlm.Role, li int32) bool) {
-	if c.IdxHeads == 0 || c.NLayer == 0 || len(c.CompKinds) != 0 {
+	if c.IdxHeads == 0 || c.NLayer == 0 {
 		return
 	}
 	n := c.NLayer + c.NMTP
@@ -47,7 +47,23 @@ func StateSelection(c *jlm.Config, stores func(r jlm.Role, li int32) bool) {
 		return jlm.TowerOp{Code: jlm.TOpRMSNorm, Bind: []jlm.Role{r}, Span: id, Eps: c.RMSEps}
 	}
 	at := func(li uint32) bool { return stores(jlm.RoleIdxK, int32(li)) }
+	weight := func() *jlm.Program {
+		var e jlm.ExprBuilder
+		e.Fn(jlm.FnMul, jlm.Operand(0), jlm.Num(float32(1/math.Sqrt(float64(c.IdxHeadDim*c.IdxHeads)))))
+		return prog(1, linear(jlm.RoleIdxProj), jlm.TowerOp{Code: jlm.TOpStated, Width: int32(c.IdxHeads), Expr: &jlm.Expr{Terms: e.T}})
+	}
 	switch {
+	case len(c.CompKinds) != 0:
+		// DeepSeek V4's compressed sparse attention: the indexer's key is
+		// the block's entries' own (its compressor pooled beside the
+		// attention's), so no key program; the query on the query latent
+		// turned as the block turns, a weight a head, every visible entry
+		// ranked by the relu'd heads' weighted sum, IdxTopK read.
+		for li := range n {
+			s.Blocks[li] = int(li) < len(c.CompKinds) && c.CompKinds[li] == jlm.CompCSA
+		}
+		s.Query = prog(2, jlm.TowerOp{Code: jlm.TOpLinear, In: on(1), Bind: []jlm.Role{jlm.RoleIdxQB}}, rope(jlm.RopeAsBlock))
+		s.Weight, s.Relu = weight(), true
 	case c.QSARatio != 0:
 		for li := range n {
 			s.Blocks[li] = at(li) && !(int(li) < len(c.LayerKinds) && c.LayerKinds[li].Recurrent())
@@ -76,11 +92,7 @@ func StateSelection(c *jlm.Config, stores func(r jlm.Role, li int32) bool) {
 			jlm.TowerOp{Code: jlm.TOpLayerNorm, Bind: []jlm.Role{jlm.RoleIdxKNorm, jlm.RoleIdxKNormB}, Eps: 1e-6},
 			rope(jlm.RopeNeox))
 		s.Query = prog(2, jlm.TowerOp{Code: jlm.TOpLinear, In: on(1), Bind: []jlm.Role{jlm.RoleIdxQB}}, rope(jlm.RopeNeox))
-		var e jlm.ExprBuilder
-		e.Fn(jlm.FnMul, jlm.Operand(0), jlm.Num(float32(1/math.Sqrt(float64(c.IdxHeadDim*c.IdxHeads)))))
-		s.Weight = prog(1, linear(jlm.RoleIdxProj),
-			jlm.TowerOp{Code: jlm.TOpStated, Width: int32(c.IdxHeads), Expr: &jlm.Expr{Terms: e.T}})
-		s.Relu = true
+		s.Weight, s.Relu = weight(), true
 	default:
 		return
 	}

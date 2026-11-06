@@ -585,7 +585,7 @@ func decodeConfigAt(b []byte, v uint32) (*Config, error) {
 	if err := c.Streams.valid(int(c.NLayer + c.NMTP)); err != nil {
 		return nil, err
 	}
-	if err := c.Selection.valid(int(c.NLayer + c.NMTP)); err != nil {
+	if err := c.Selection.valid(int(c.NLayer+c.NMTP), func(li int) bool { return li < len(c.CompKinds) && c.CompKinds[li] != CompNone }); err != nil {
 		return nil, err
 	}
 	if c.ActQuant > ActQuantRowInt8 {

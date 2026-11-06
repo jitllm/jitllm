@@ -876,12 +876,13 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	// positions its heads attend.
 	var ix indexed
 	rowW := kvDim
-	if c.SelectAt(li) {
+	compKind, rate := c.CompAt(li)
+	if c.SelectAt(li) && rate == 0 {
 		if shared {
 			return nil, UncoveredUnverified, fmt.Errorf("block %d selects its keys from a history it shares", li)
 		}
 		var err error
-		if ix, err = m.indexer(b, f, li, n, n); err != nil {
+		if ix, err = m.indexer(b, f, li, n, qIn); err != nil {
 			return nil, UncoveredUnverified, err
 		}
 		kw := int(c.sel.KeyWidth)
@@ -893,14 +894,20 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	// A compressing block's row carries its compressor's values and gates
 	// past the key; its entries, one a window of rate rows, are the
 	// history 1 its attention reads beside them.
-	_, rate := c.CompAt(li)
-	compRow := 0
+	compRow, cw, iw := 0, 0, 0
 	if rate > 0 && !shared {
 		cv := matvec(n, jlm.RoleCompKV, f.Inventory[jlm.RoleCompKV].Rows)
 		cg := matvec(n, jlm.RoleCompGate, f.Inventory[jlm.RoleCompGate].Rows)
-		cw := b.G.Values[cv].Width
-		compRow = rowW + 2*cw
-		k = b.Emit(graph.OpConcat, []graph.ValueID{k, cv, cg}, []graph.Result{{Name: "k.row", Width: compRow}}, nil, graph.Attrs{}, nil, nil)[0]
+		parts := []graph.ValueID{k, cv, cg}
+		cw = b.G.Values[cv].Width
+		if c.SelectAt(li) {
+			iv := matvec(n, jlm.RoleIdxCompKV, f.Inventory[jlm.RoleIdxCompKV].Rows)
+			ig := matvec(n, jlm.RoleIdxCompGate, f.Inventory[jlm.RoleIdxCompGate].Rows)
+			iw = b.G.Values[iv].Width
+			parts = append(parts, iv, ig)
+		}
+		compRow = rowW + 2*cw + 2*iw
+		k = b.Emit(graph.OpConcat, parts, []graph.Result{{Name: "k.row", Width: compRow}}, nil, graph.Attrs{}, nil, nil)[0]
 		v = k
 	}
 	hist := graph.SharedHistory(c.KVSource(li))
@@ -908,15 +915,37 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 		hist = graph.StateRef{State: graph.StateKV, Version: b.KVAppend(k, v, 0)}
 	}
 	var entries graph.StateRef
+	entW, entRow := 0, 0
 	if compRow > 0 {
-		cw := (compRow - rowW) / 2
-		pooled := b.HistoryPool(hist, graph.Attrs{Span: rate, Width: compRow, Words: []uint64{0, uint64(rowW), uint64(rowW + cw), 0}},
-			jlm.RoleCompAPE, cw)
-		ent := b.Norm(pooled, jlm.RoleCompNorm, c.RMSEps)
-		if c.RopeAt(li) {
-			at := b.RopeTableAt(turn, rate)
-			ent = b.Emit(graph.OpRope, []graph.ValueID{ent, at}, []graph.Result{{Name: "ent.rope", Width: cw}}, nil, turn, nil, nil)[0]
+		// pool is the entry a compressor of w columns at off makes of each
+		// window: over overlapping windows (CSA) the window before's first
+		// half beside this one's second, normed and turned at the window's
+		// first position.
+		pool := func(off, w int, ape, norm jlm.Role) graph.ValueID {
+			out, words := w, []uint64{0, uint64(off), uint64(off + w), 0}
+			if compKind == jlm.CompCSA {
+				out = w / 2
+				words = []uint64{1, uint64(off), uint64(off + w), 0, 0, uint64(off + out), uint64(off + w + out), uint64(out)}
+			}
+			e := b.Norm(b.HistoryPool(hist, graph.Attrs{Span: rate, Width: compRow, Words: words}, ape, out), norm, c.RMSEps)
+			if c.RopeAt(li) {
+				t := turn
+				t.HeadDim = out
+				if c.RopeTail {
+					t.Offset = out - t.NRot
+				}
+				e = b.Emit(graph.OpRope, []graph.ValueID{e, b.RopeTableAt(t, rate)}, []graph.Result{{Name: "ent.rope", Width: out}}, nil, t, nil, nil)[0]
+			}
+			return e
 		}
+		ent := pool(rowW, cw, jlm.RoleCompAPE, jlm.RoleCompNorm)
+		entW = b.G.Values[ent].Width
+		if iw > 0 {
+			ie := pool(rowW+2*cw, iw, jlm.RoleIdxCompAPE, jlm.RoleIdxCompNorm)
+			ent = b.Emit(graph.OpConcat, []graph.ValueID{ent, ie}, []graph.Result{{Name: "ent.row", Width: entW + b.G.Values[ie].Width}}, nil,
+				graph.Attrs{}, nil, nil)[0]
+		}
+		entRow = b.G.Values[ent].Width
 		entries = graph.StateRef{State: graph.StateKV, Hist: 1, Version: b.KVAppendEvery(1, ent, ent, 0, rate)}
 	}
 	scale := c.AttnScale
@@ -931,7 +960,16 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	var att graph.ValueID
 	if compRow > 0 {
 		a.Width = compRow
-		att = b.AttendBoth(q, hist, entries, rate, (compRow-rowW)/2, a, stored(jlm.RoleAttnSinks)...)
+		if c.SelectAt(li) {
+			ix, err := m.indexer(b, f, li, n, qIn)
+			if err != nil {
+				return nil, UncoveredUnverified, err
+			}
+			att = b.AttendBothSelected(q, hist, entries, rate, entRow, m.selected(b, li, ix, entries, entW, entRow), a,
+				stored(jlm.RoleAttnSinks)...)
+		} else {
+			att = b.AttendBoth(q, hist, entries, rate, entRow, a, stored(jlm.RoleAttnSinks)...)
+		}
 	} else if c.SelectAt(li) {
 		a.Width = rowW
 		att = b.AttendSelected(q, hist, m.selected(b, li, ix, hist, kvDim, rowW), a, stored(jlm.RoleAttnSinks)...)
@@ -1750,14 +1788,18 @@ func (m *Model) indexer(b *graph.Builder, f graph.Facts, li int, n, qIn graph.Va
 	s := m.Cfg.sel
 	turn := m.blockOps(b, li)
 	var ix indexed
-	key, err := lowerValuesWith(b, nil, s.Key, []graph.ValueID{n}, 1, f, turn)
-	if err != nil {
-		return ix, fmt.Errorf("block %d's indexer key: %w", li, err)
-	}
-	ix.key = key[s.Key.Out]
-	if w, kw := b.G.Values[ix.key].Width, int(s.KeyWidth); w < kw {
-		ix.key = b.Emit(graph.OpConcat, []graph.ValueID{ix.key, zerosOf(b, "idx.k.pad", ix.key, kw-w)},
-			[]graph.Result{{Name: "idx.k.row", Width: kw}}, nil, graph.Attrs{}, nil, nil)[0]
+	// A selection with no key program selects among the block's entries,
+	// whose key the block pools itself.
+	if s.Key != nil {
+		key, err := lowerValuesWith(b, nil, s.Key, []graph.ValueID{n}, 1, f, turn)
+		if err != nil {
+			return ix, fmt.Errorf("block %d's indexer key: %w", li, err)
+		}
+		ix.key = key[s.Key.Out]
+		if w, kw := b.G.Values[ix.key].Width, int(s.KeyWidth); w < kw {
+			ix.key = b.Emit(graph.OpConcat, []graph.ValueID{ix.key, zerosOf(b, "idx.k.pad", ix.key, kw-w)},
+				[]graph.Result{{Name: "idx.k.row", Width: kw}}, nil, graph.Attrs{}, nil, nil)[0]
+		}
 	}
 	q, err := lowerValuesWith(b, nil, s.Query, []graph.ValueID{n, qIn}, 1, f, turn)
 	if err != nil {
@@ -1823,6 +1865,9 @@ func (m *Model) blockOps(b *graph.Builder, li int) func(ins []graph.ValueID, op 
 			}
 			a := graph.Attrs{HeadDim: int(op.Span), NRot: r.NRot, Base: r.Base, Layout: layout, Freqs: len(r.Freqs) > 0, Mscale: r.Scale}
 			a.Sections, a.Interleaved = m.ropeAxes(r)
+			if c.RopeTail {
+				a.Offset = int(op.Span) - r.NRot
+			}
 			return b.Emit(graph.OpRope, []graph.ValueID{v}, []graph.Result{{Name: "rope", Width: b.G.Values[v].Width}}, nil, a, nil, nil)[0], nil
 		case jlm.TOpNGramRows, jlm.TOpTailConv:
 			if !c.LayerKind(li).Recurrent() {

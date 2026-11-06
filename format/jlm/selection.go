@@ -49,17 +49,20 @@ func (s *Selection) At(li int) bool {
 	return s != nil && li >= 0 && li < len(s.Blocks) && s.Blocks[li]
 }
 
-func (s *Selection) valid(nLayer int) error {
+// A selection with no key program selects among its blocks' entries
+// (Config.CompKinds), the indexer's key their own: entries says a block
+// keeps them.
+func (s *Selection) valid(nLayer int, entries func(li int) bool) error {
 	if s == nil {
 		return nil
 	}
 	switch {
 	case len(s.Blocks) != nLayer:
 		return fmt.Errorf("jlm: the selection states %d blocks of %d", len(s.Blocks), nLayer)
-	case s.Key == nil || s.Query == nil:
-		return fmt.Errorf("jlm: a selection with no key or no query")
-	case s.Key.NIn != 1 || s.Query.NIn != 2 || s.Weight != nil && s.Weight.NIn != 1:
-		return fmt.Errorf("jlm: a selection's programs read %d, %d inputs", s.Key.NIn, s.Query.NIn)
+	case s.Query == nil:
+		return fmt.Errorf("jlm: a selection with no query")
+	case s.Key != nil && s.Key.NIn != 1 || s.Query.NIn != 2 || s.Weight != nil && s.Weight.NIn != 1:
+		return fmt.Errorf("jlm: a selection's programs read %d inputs where 2 are stated", s.Query.NIn)
 	case s.Rank != RankBest && s.Rank != RankPooled:
 		return fmt.Errorf("jlm: selection rank %d is not one this format defines", s.Rank)
 	case s.Heads == 0 || s.HeadDim == 0 || s.Groups == 0 || s.KeyWidth < s.HeadDim:
@@ -67,6 +70,11 @@ func (s *Selection) valid(nLayer int) error {
 			s.KeyWidth)
 	case s.Block == 0 || s.Keep == 0 || s.Local > s.Keep:
 		return fmt.Errorf("jlm: a selection keeping %d blocks of %d, %d local", s.Keep, s.Block, s.Local)
+	}
+	for li, sel := range s.Blocks {
+		if sel && s.Key == nil && !entries(li) {
+			return fmt.Errorf("jlm: block %d selects with no key program and keeps no entries", li)
+		}
 	}
 	for _, p := range []*Program{s.Key, s.Query, s.Weight} {
 		if p == nil {
