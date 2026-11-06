@@ -362,7 +362,7 @@ func TestFusedRunsFollowARelocation(t *testing.T) {
 			t.Fatalf("fused=%v: %d relocation(s), %d reclaim(s): the schedule did not move a block both ways",
 				fused, st.Relocations(), st.Reclaims())
 		}
-		return out, st.FusedRuns
+		return out, st.FusedRuns()
 	}
 	per, n0 := run(false)
 	fu, n1 := run(true)

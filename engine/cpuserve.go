@@ -55,6 +55,9 @@ type cpuState struct {
 	// them and what it served.
 	workers *cpu.Pool
 	x       *cpudev.Exec
+	// lanes runs a decode token's blocks on the device for the session the
+	// instance runs (cpudev.Lanes).
+	lanes *cpudev.Lanes
 	// oneFresh and tabsFresh say the decode row's and the step's rows'
 	// rotary tables are made (cpuOneTable, cpuRowTables); tabSeq is the
 	// rows' slots as the tables read them.
@@ -145,23 +148,6 @@ const cpuRowsCap = cpudev.RowsCap
 // (composer.CPUForm).
 func CPUForm() string {
 	return composer.CPUForm(cpudev.Target(cpu.Probe().ISA(), 1), runtime.GOARCH == "arm64")
-}
-
-// cpuStep runs block li on the CPU the composer's way, or says why not. The
-// residual is s.x; the rotary table cs.
-func (s *Instance) cpuStep(li int, l *model.Layer, cs []float32) (nn.Decline, error) {
-	if _, why := s.cpuBlockOf(li); why != nn.DeclineServes {
-		return why, nil
-	}
-	if err := s.cpuOneTable(); err != nil {
-		return nn.DeclineServes, err
-	}
-	// A block sharing another's history reads its source's pages (the
-	// cache's Prepare).
-	st := cpudev.Step{X: s.resid(), Stride: s.c.NEmbd, CS: cs, CSSWA: s.csSWA, Side: s.cpuSide(li), Pos: s.pos, Tok: s.tok,
-		History: s.kv, Seqs: s.nseq, Tensors: l, RecLi: s.cpuRecLi(li)}
-	st.RecState, st.RecConv = recAddrs(s.Session, st.RecLi)
-	return s.cpu.x.Run(li, &st, &s.ws.b)
 }
 
 // cpuRows runs block li on the CPU the composer's way for the n rows of x,
@@ -539,6 +525,9 @@ func (s *Instance) cpuPlace() {
 	s.lease = blockLease{m: s.m, fr: s.fr, mu: &s.bind, hold: &s.expHold, res: s.res, hot: s.hot, layers: s.layers,
 		lo: s.lo, ws: &s.ws}
 	s.cpu.x.Place(n, &s.lease, planes, s.c.NExpert, s.prof)
+	if s.cpu.lanes == nil {
+		s.cpu.lanes = cpudev.NewLanes(s.cpu.x, &s.ws.b, &s.lease, s.c.NEmbd, s.nseq, func(li int) { s.trace(li, "ffn_resid", s.x) })
+	}
 	for li := s.lo; li < min(s.hi, n); li++ {
 		if !s.devAt(li) {
 			s.cpuCompose(li)

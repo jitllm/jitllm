@@ -59,13 +59,13 @@ func TestBlockFusionAB(t *testing.T) {
 		var runs int64
 		return bench.Case{Name: name, Fn: func(iters int) {
 			s.SetBlockFusion(fused)
-			r0 := s.FusedRuns
+			r0 := s.FusedRuns()
 			for i := range iters {
 				if _, err := s.ForwardGreedy(int32(1 + i%100)); err != nil {
 					t.Fatal(err)
 				}
 			}
-			runs += s.FusedRuns - r0
+			runs += s.FusedRuns() - r0
 		}}, &runs
 	}
 	cores := len(sched.DecodeCores())

@@ -1,6 +1,7 @@
 package cpudev
 
 import (
+	"sync/atomic"
 	"unsafe"
 
 	"github.com/jitllm/jitllm/composer"
@@ -26,6 +27,14 @@ type Exec struct {
 	blocks   []*Block
 	composed []int
 	steps    nn.Steps
+	// fused is whether a fused run is open: a decode token's blocks one pool
+	// region from the first to where the caller ends the run (Unfuse) or a
+	// block's page has to be read. fuseOff runs a region an op (SetFusion),
+	// fusedRuns counts the runs opened, tries and opened the engine's counts
+	// across its instances (FuseCounts).
+	fused, fuseOff bool
+	fusedRuns      int64
+	tries, opened  *atomic.Int64
 }
 
 // NewExec is an execution over workers, its forms composed by comp.
@@ -225,3 +234,38 @@ func (e *Exec) Run(li int, st *Step, b *Bindings) (nn.Decline, error) {
 	st.History.Commit(li, st.Pos)
 	return nn.DeclineServes, nil
 }
+
+// SetFusion turns fused runs on or off.
+func (e *Exec) SetFusion(on bool) { e.fuseOff = !on }
+
+// FuseCounts counts every fused run tried and opened in tries and opened as
+// well, the engine's counts across its instances.
+func (e *Exec) FuseCounts(tries, opened *atomic.Int64) { e.tries, e.opened = tries, opened }
+
+// Fuse opens a fused run where none is open and fusion is on.
+func (e *Exec) Fuse() {
+	if e.fused || e.fuseOff {
+		return
+	}
+	if e.tries != nil {
+		e.tries.Add(1)
+	}
+	if e.workers.Fuse() {
+		e.fused = true
+		e.fusedRuns++
+		if e.opened != nil {
+			e.opened.Add(1)
+		}
+	}
+}
+
+// Unfuse closes the open fused run, if there is one.
+func (e *Exec) Unfuse() {
+	if e.fused {
+		e.fused = false
+		e.workers.Unfuse()
+	}
+}
+
+// FusedRuns counts the fused runs opened.
+func (e *Exec) FusedRuns() int64 { return e.fusedRuns }

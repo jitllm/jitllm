@@ -183,12 +183,6 @@ type Instance struct {
 	fr    *jlm.Frames
 	dense model.Dense
 
-	// fuseOff runs this instance's decode one pool region per op
-	// (WithBlockFusion, SetBlockFusion); fused is whether a fused run of host
-	// blocks is open (fuse.go), and FusedRuns counts the runs opened.
-	fuseOff   bool
-	fused     bool
-	FusedRuns int64
 	// ServedOnE counts the times a prefill was placed on the E-cores' pool beside a
 	// decoding session (serving.go): what a gate reads to know the split ran.
 	ServedOnE int64
@@ -614,7 +608,7 @@ func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOp
 	}
 	s := &Instance{Session: &Session{model: m}, m: m, c: c, lo: lo, hi: hi, maxSeq: maxSeq, reqSeq: req, nseq: nseq,
 		devFallback: true, relocate: true, prof: opt.profile, outNorm: m.OutNorm, fr: fr,
-		fuseOff: opt.noFuse, groupOff: opt.noGroups,
+		groupOff:  opt.noGroups,
 		residFold: opt.residFold, opt: opt, eng: g}
 	s.own = s.Session
 	if err := m.BindDense(fr, &s.dense); err != nil {
@@ -676,6 +670,8 @@ func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOp
 
 	s.cpu.workers = cpu.NewPool(s.poolOptions()...)
 	s.cpu.x = cpudev.NewExec(s.cpu.workers, cpudev.NewComposer(g.cpu.Forms(m.Id), g.cpu.Target.ISA(), s.cpu.workers.Workers(), opt.cpuFloat))
+	s.cpu.x.SetFusion(!opt.noFuse)
+	s.cpu.x.FuseCounts(&g.fuse.tries, &g.fuse.runs)
 	// The cache width: WithKVType (or WithKVF16, SetKVType) forces it;
 	// otherwise binary16, half the history's bytes, wherever the CPU
 	// narrows in hardware -- everywhere but an x86 host the composer forms
@@ -3183,7 +3179,7 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 		}()
 	}
 
-	m, c := s.m, s.c
+	c := s.c
 	if s.pos >= s.maxSeq {
 		return nil, errFull{s.maxSeq, s.reqSeq}
 	}
@@ -3299,27 +3295,27 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 			li = hi - 1
 			continue
 		}
-		// The block is faulted in at first touch; with a budget that holds the
-		// model this is one nil compare. A block that has to be read ends the
-		// fused run before the read, and the run reopens after it.
-		if s.fused && !m.BlockHeld(s.fr, li) {
-			s.unfuse()
+		// A run of blocks on the CPU device is one call, as a device run is:
+		// each block faulted in at first touch -- with a budget that holds
+		// the model one nil compare -- the run one fused pool region.
+		hi := li + 1
+		for hi < s.hi && !s.devAt(hi) {
+			hi++
 		}
-		l, err := s.pageIn(li)
-		if err != nil {
+		if err := s.cpuOneTable(); err != nil {
 			return nil, err
 		}
-		s.fuseRun()
-		why, err := s.cpuStep(li, l, s.cs)
-		if err != nil {
-			return nil, err
+		ln := s.cpu.lanes
+		ln.Attach(s.kv, s.view)
+		ln.SetToken(s.tok)
+		ln.SetLayerInputs(s.cpuSide(li))
+		if !ln.Layers(li, hi, s.pos, 1, s.resid(), s.cs, s.csSWA, nil) {
+			if err := ln.Err(); err != nil {
+				return nil, err
+			}
+			return nil, s.cpuRefused(ln.Declined())
 		}
-		if why == nn.DeclineServes {
-			s.cpu.x.Steps().Serve(nn.PartBlock)
-			s.trace(li, "ffn_resid", s.x)
-			continue
-		}
-		return nil, s.cpuRefused(li, why)
+		li = hi - 1
 	}
 	// A head over several streams reads their collapse, written into stream
 	// 0. A device that collapses the
