@@ -658,11 +658,11 @@ func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOp
 	s.placeRange(routeLanes)
 	s.holdFrames()
 	// The cache width: WithKVType (or WithKVF16, SetKVType) forces it;
-	// otherwise the CPU device's own (Exec.DefaultKV). A quantized cache is
-	// only ever forced (KVType).
+	// otherwise the device whose memory holds the history says
+	// (nn.KVDefaulter). A quantized cache is only ever forced (KVType).
 	want := kvFmtOf(opt.kvType)
-	if !opt.kvTypeSet {
-		want = s.exec.x.DefaultKV()
+	if d, ok := s.places[routeLanes].(nn.KVDefaulter); ok && !opt.kvTypeSet {
+		want = d.DefaultKV()
 	}
 	// A selection caches its indexer's key in the row, and the selection over
 	// it is discrete: a key rounded to binary16 moves a block's best score by

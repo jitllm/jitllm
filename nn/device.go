@@ -863,6 +863,10 @@ type RecurrentPlan struct {
 // PrepLayer is per block and may decline, so a model that does not fit runs
 // its first N blocks on one device and the rest on another -- the CPU device
 // is one -- with no separate mechanism for the seam.
+// KVDefaulter is a device that keeps a session's history in its own memory
+// in a format of its choosing where the caller forces none.
+type KVDefaulter interface{ DefaultKV() KVFmt }
+
 // PageQuota is a device that budgets a model's frames by the instances
 // holding it there: SetPageQuota is this instance's quota in bytes, of which
 // the device it attached holds held of the host's memory.
