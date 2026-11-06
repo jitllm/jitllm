@@ -708,8 +708,24 @@ func (g *devTier) SetBudget(bytes uint64) int {
 	if bytes > g.limit {
 		g.roomGen.Add(1)
 	}
+	lowered := bytes < g.limit
 	g.limit = bytes
 	g.kvTight = false
+	// A lowered budget is paid from the KV pools' free pages first: every
+	// layer gives back what its sequences do not hold (shrinkKVLayer), so a
+	// history that grows past the budget evicts rather than filling pages the
+	// budget no longer covers.
+	if lowered && g.kvp != nil {
+		for _, l := range g.kvp.layers {
+			if l == nil {
+				continue
+			}
+			l.fence()
+			if err := g.shrinkKVLayer(g.kvp, l); err != nil {
+				g.LastErr = err.Error()
+			}
+		}
+	}
 	// Give back whatever the new budget no longer covers. A block paged out
 	// here is demoted, not released: it keeps its owner and history and pages
 	// back in on the next token if there is a slot.
