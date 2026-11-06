@@ -51,7 +51,7 @@ func (g *devTier) collapseParts(p *nn.RowsPart) (composedPart, error) {
 	for _, o := range p.Graph.Ops {
 		for _, b := range o.Weight {
 			if w, ok := p.Weights[b.Role]; ok {
-				r, err := g.rowsWeight(w)
+				r, err := g.rowsWeight(p.File, w)
 				if err != nil {
 					return composedPart{}, fmt.Errorf("%v: %w", b.Role, err)
 				}

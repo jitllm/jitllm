@@ -1413,7 +1413,7 @@ func (s *Instance) streamedAt(li int) bool { return li < len(s.streamedOn) && s.
 func (s *Instance) newHead() *nn.Head {
 	c := s.c
 	f := s.m.FrontGraphs()
-	h := &nn.Head{Model: s.m.Id, Graph: f.CpuHead, HiddenGraph: f.CpuHidden, Sample: f.CpuSample, SampleWalk: f.CpuWalk, PickGraph: f.Pick, PickHead: f.PickHead, Embed: f.Embed, Norm: s.outNorm, W: model.Wt(*s.outW), Logits: s.logits,
+	h := &nn.Head{Model: s.m.Id, File: s.m.Container, Graph: f.CpuHead, HiddenGraph: f.CpuHidden, Sample: f.CpuSample, SampleWalk: f.CpuWalk, PickGraph: f.Pick, PickHead: f.PickHead, Embed: f.Embed, Norm: s.outNorm, W: model.Wt(*s.outW), Logits: s.logits,
 		Softcap: c.FinalSoftcap, Embeds: c.TiedEmbd, EmbdScale: float32(c.EmbdScale),
 		Stages: s.m.HeadStages(), Bias: s.m.OutB, NoCPU: !s.cpuListed()}
 	if !c.TiedEmbd && s.dense.Embd.E != nil {

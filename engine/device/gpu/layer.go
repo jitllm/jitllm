@@ -3174,8 +3174,19 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 			foot, rows, g.used, g.limit)
 		return false
 	}
-	// -1: the output projection is not a block, so it is not released with one.
-	r := g.resident(-1, 0, h.W.Entry, q, h.W.Data, h.W.Rows, h.W.K, h.W.Packed)
+	// -1: the output projection is not a block, so it is not released with
+	// one. Read into the card's own frames unless a copy is held already.
+	w := h.W
+	if held := g.res[adhocKey(w.Entry, w.Data, q, w.Rows, w.K)]; held == nil || !held.ok {
+		own, release, err := g.ownWeight(h.File, w)
+		if err != nil {
+			g.LastErr = "the output projection: " + err.Error()
+			return false
+		}
+		defer release()
+		w = own
+	}
+	r := g.resident(-1, 0, w.Entry, q, w.Data, w.Rows, w.K, w.Packed)
 	if r == nil || !r.ok {
 		return false
 	}

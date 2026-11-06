@@ -22,7 +22,7 @@ func (s *Instance) streamsPart(g *graph.Graph) *nn.RowsPart {
 	if g == nil {
 		return nil
 	}
-	p := &nn.RowsPart{Graph: g, Rows: 1, Weights: map[jlm.Role]nn.Weight{}, Vectors: map[jlm.Role][]float32{}}
+	p := &nn.RowsPart{Graph: g, Rows: 1, Weights: map[jlm.Role]nn.Weight{}, Vectors: map[jlm.Role][]float32{}, File: s.m.Container}
 	for _, o := range g.Ops {
 		for _, b := range o.Weight {
 			switch b.Role {

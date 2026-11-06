@@ -162,10 +162,10 @@ func (g *devTier) prepEmbed(bs *blockScratch, h *nn.Head) {
 	}
 	bs.embW = bs.head
 	if !h.Embeds {
-		bs.embW, bs.embWhy = g.embedTable(h.TokEmbd)
+		bs.embW, bs.embWhy = g.embedTable(h.File, h.TokEmbd)
 	}
 	if len(h.PosEmbd.Data) > 0 && bs.embWhy == partServes {
-		bs.posW, bs.embWhy = g.embedTable(h.PosEmbd)
+		bs.posW, bs.embWhy = g.embedTable(h.File, h.PosEmbd)
 	}
 	clear(bs.embSW)
 	clear(bs.embSV)
@@ -179,7 +179,7 @@ func (g *devTier) prepEmbed(bs *blockScratch, h *nn.Head) {
 		bs.embSW, bs.embSV = map[jlm.Role]*resident{}, map[jlm.Role]backend.Buf{}
 	}
 	for role, w := range p.Weights {
-		r, err := g.rowsWeight(w)
+		r, err := g.rowsWeight(p.File, w)
 		if err != nil {
 			g.LastErr = fmt.Sprintf("the input rows' %v: %v", role, err)
 			bs.embWhy = partNoRoom
@@ -200,7 +200,7 @@ func (g *devTier) prepEmbed(bs *blockScratch, h *nn.Head) {
 
 // embedTable is w resident for the input rows, taken under paging only where
 // it costs no block slot, as the head is (PrepHead).
-func (g *devTier) embedTable(w nn.Weight) (*resident, partDecline) {
+func (g *devTier) embedTable(f *jlm.File, w nn.Weight) (*resident, partDecline) {
 	q, ok := quantOf(w.T)
 	if !ok || len(w.Data) == 0 {
 		return nil, partEmbedFormat
@@ -212,6 +212,15 @@ func (g *devTier) embedTable(w nn.Weight) (*resident, partDecline) {
 		if now, after := g.slots(), g.slotsIfPerm(uint64(len(w.Data))); after < now {
 			return nil, partNoRoom
 		}
+	}
+	if held == nil || !held.ok {
+		own, release, err := g.ownWeight(f, w)
+		if err != nil {
+			g.LastErr = "the input rows' table: " + err.Error()
+			return nil, partNoRoom
+		}
+		defer release()
+		w = own
 	}
 	r := g.resident(-1, 0, w.Entry, q, w.Data, w.Rows, w.K, w.Packed)
 	if r == nil || !r.ok {

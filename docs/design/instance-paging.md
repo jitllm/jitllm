@@ -5,9 +5,9 @@ Stated by the user: a model has several instances, each paging -- if it pages
 instance: "every kernel for one placement (which device each block runs on,
 **how heavily it pages**)". This file is the design; the rule is AGENTS.md's.
 
-## What is wrong now
+## What was wrong, before step 1
 
-The container is the file and the pager in one (`jlm.File`): one page array
+The container was the file and the pager in one (`jlm.File`): one page array
 (`pages`), one budget (`SetBudget`), one resident set, its free lists, the
 dense region and the expert pages' reservation. `Model.SetPageBudget` sets that
 one budget (and re-binds every block); the server and `cmd/jitllm` set it once
@@ -132,8 +132,16 @@ warm fault allocate nothing (the ledger's bookkeeping is preallocated).
      keeps of the host's memory (`HostReserved`), so the CPU device's frames
      give it up and the two keep what one quota allows.
 
-     Left of 3b: a card offered the head still reads it from the CPU
-     device's dense copy.
+     A card offered the head reads its tensors -- the projection, the
+     token and position tables, the streams' and the collapse's -- from the
+     file into its own frames (`nn.Head.File`, `nn.RowsPart.File`) and lets
+     that staging go once the upload has copied it (`jlm.Frames.DropDense`),
+     rather than uploading from the CPU device's dense copy
+     (`engine.TestACardReadsTheHeadIntoItsOwnFrames` poisons the CPU's copy).
+
+     Left of 3b: the CPU device still reads the whole dense region when its
+     frames are made, so its copy of a head a card runs is held for nothing
+     until the CPU reads dense entries on demand as a card does.
    Gates: as 2, plus the vision and expert gates.
 4. **Quotas per instance.** `engine.WithPageBudget`; `Model.SetPageBudget`
    goes; the server's per-model budget becomes each instance's, the
@@ -159,8 +167,31 @@ warm fault allocate nothing (the ledger's bookkeeping is preallocated).
    - The RPC still names the model: the server makes one instance a model,
      and names it by its model; a second instance of a model in the server
      is what an instance id in the request waits for.
-   - Left: per-instance retention within shared frames; admission at
-     placement.
+   - Admission at placement admits every quota: one below the block's
+     working set holds one page at a time (a page-in always fits one page,
+     `makeRoom`), so an instance is never refused for its quota and never
+     fails mid-token for it; it thrashes, which the paging gates run at a
+     one-byte quota on purpose. Refusing it would be a refusal where the
+     behaviour is implemented.
+   - Left: per-instance retention within shared frames -- what this file's
+     first "what was wrong" bullet names, still true of two instances on one
+     CPU device: one order, one budget. Where it hooks, as read: every page
+     use goes through `Frames.claimFor` (the order: `tick`, `recent`; the
+     room: `makeRoom`), so a retainer -- an instance's view of the frames,
+     its quota, its held bytes, its own `recent` and expert ticks, a bit in a
+     per-page retention mask -- is carried into it by every claim:
+     `EnsurePage`, `EnsureRanges`, `Claim`, `Hold`, `EnsureExperts` and the
+     speculation queue's requests, whose workers claim on another goroutine.
+     A claim retains the page for its retainer; room is made by unretaining
+     that retainer's own victim (its expert LRU, else its MRU block), and a
+     page leaves when no retainer holds it and nothing pins it. `Keep` and
+     `DropPage` become retention (an instance releasing a block it placed
+     unretains its page; another instance's retention keeps it). The model's
+     frame-taking functions (33 of them) take a pager interface both
+     `*jlm.Frames` (a card's, frames-level) and a retainer satisfy. The free
+     lists' bound becomes the quotas' sum; a preload reads only while every
+     quota holds every page. The gate is two instances on one CPU device
+     with quotas below their scans, each reading what it alone reads.
 5. **The model holds nothing of a device.** Its registries go; `srcgate` holds
    that no type of `model/` has a field of an `nn` device interface, and that
    `Model.Close` reaches no device.
@@ -195,11 +226,45 @@ warm fault allocate nothing (the ledger's bookkeeping is preallocated).
    fault and re-bind allocating nothing; cards-only paging; every leasing
    session's history relocating with its blocks. The violation is the
    model-wide pager (step 1's tree).
+   - Done: `TestAnInstanceOnTheCPUAndOneOnACardShareTheFrames` (one instance
+     on the CPU under half its pages, one with half its blocks on a card,
+     decoding at once from the frames they share, each as alone, then the
+     first closing while the other decodes on), `TestTwoInstancesReadAPageOnce`
+     (two instances on one CPU device read every page once between them;
+     two CPU devices reading every page twice is its violation, seen) and
+     `TestAQuotaShrinksUnderARunningDecode` (quotas falling to a page and
+     back under two running decodes, each as alone). Writing the last showed,
+     from the code, that a budget change could evict a page a CPU block was
+     still reading and give its frame back: the CPU's block runs pin nothing,
+     and the frames' lock was taken only while they evicted. Every reader of the frames now comes in
+     through `jlm.Frames.Enter` -- shared while they fit, alone while they
+     evict -- and while one is in, `SetBudget` records the budget and a
+     shared reader's page-in evicts nothing; the last reader to leave fits
+     the frames to it. The quota is an atomic: it may be set from another
+     goroutine than the instance's.
+   - Already gated before this step: the last owner closing
+     (`TestADeviceKeepsAModelForItsInstances`), a quota reaching the frames
+     before their first read (`TestAQuotaBudgetsTheFramesFromTheirFirstRead`),
+     a warm fault allocating nothing (`TestPagedDecodeDoesNotAllocate`),
+     cards-only paging (`TestBlocksPageOnTheListedCard`), sessions' history
+     relocating with their blocks (the relocation principle's gates).
+   - The CPU device's frames page in only inside an entry (an instance's
+     block runs and expert fills); a placement giving a block's page back
+     (`ReleaseLayer`) cannot take one another instance runs from host
+     memory, which that instance keeps (`Kept`) -- the frames refuse a kept
+     or pinned page.
+   - A tower's pages under two instances (`TestTwoInstancesReadATowersPagesOnce`)
+     and a mixture's experts beside a card's placement
+     (`TestAnInstancesBlocksAreItsOwn` counts the CPU instance's page-ins
+     against one alone's) are gated too. What is left of the design is
+     step 4's: each instance keeping its own order within its own quota over
+     frames it shares.
 
 ## Open
 
 - Admission's two modes: a placement that guarantees independent progress
   reserves its working set; one that relies on sharing reserves only what is
   not already pinned, and says so.
-- `WithPreload` reads every page at open: it becomes a warm of the ledger's
-  clean cache, nothing pinned until an instance pins it.
+- `WithPreload` reads every page when a device's frames are made (the first
+  instance holding the model there), under the quota that made them: it
+  becomes a warm of the clean cache, nothing pinned until an instance pins it.

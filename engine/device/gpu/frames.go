@@ -112,6 +112,33 @@ func (g *GPU) SetFrameBudget(f *jlm.File, bytes uint64) {
 	}
 }
 
+// ownWeight is w read into this card's frames over f, where w is a dense
+// entry of f -- the head, a table, a stream's tensor -- from the file into
+// the card's own staging rather than from another device's memory; release
+// lets the staging go once the upload has copied it. w itself, with a
+// release that does nothing, for a weight that is no dense entry of f.
+func (g *devTier) ownWeight(f *jlm.File, w nn.Weight) (nn.Weight, func(), error) {
+	if f == nil || w.Entry == nil || !f.InDense(w.Entry) {
+		return w, func() {}, nil
+	}
+	fr, err := g.framesOf(f)
+	if err != nil {
+		return w, func() {}, err
+	}
+	qs, d, sc := fr.Span(w.Entry)
+	if len(qs) == 0 {
+		return w, func() {}, fmt.Errorf("reading the entry into the card's frames failed")
+	}
+	w.Data = qs
+	if w.Packed != nil {
+		p := *w.Packed
+		p.QS, p.D, p.SC = qs, d, sc
+		w.Packed = &p
+	}
+	e := w.Entry
+	return w, func() { fr.DropDense(e) }, nil
+}
+
 // FramesOf is nn.FramesHolder: the named card's frames over f, nil for a
 // card it does not have or that has paged nothing of f.
 func (g *GPU) FramesOf(dev string, f *jlm.File) *jlm.Frames {
