@@ -73,7 +73,9 @@ func (p Prologue) readers(ks []*Kernel, i int, d Device) int {
 	if n == 0 || !pays(pr, ks[i+1:i+1+n], d) {
 		return 0
 	}
-	// No kernel past them reads or writes what the producer writes.
+	// No kernel past them reads or writes what the producer writes, and none
+	// before it writes part of it: its readers' workgroup copy holds what the
+	// producer writes alone.
 	for _, b := range pr.Bufs {
 		if b.Kind != BufOut {
 			continue
@@ -83,6 +85,11 @@ func (p Prologue) readers(ks []*Kernel, i int, d Device) int {
 				if x.Operand == b.Operand {
 					return 0
 				}
+			}
+		}
+		for _, k := range ks[:i] {
+			if k.writes(b.Operand) {
+				return 0
 			}
 		}
 	}
