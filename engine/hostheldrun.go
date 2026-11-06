@@ -24,14 +24,15 @@ func (s *Instance) watchSystem(d nn.LayerDevice) {
 // device budgets the model's frames by every instance holding the model
 // there (cpudev.Quota). An instance the root made shares the root's.
 func (s *Instance) applyQuota() {
-	if s.quota == nil {
+	q := s.cpu.x.Quota()
+	if q == nil {
 		return
 	}
 	var held uint64
 	if s.sysRes != nil {
 		held = s.sysRes.HostReserved()
 	}
-	s.quota.Set(s.pageQuota.Load(), held)
+	q.Set(s.pageQuota.Load(), held)
 }
 
 // SetPageBudget is this instance's page quota, in bytes: what the model's

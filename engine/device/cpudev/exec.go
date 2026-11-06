@@ -22,6 +22,11 @@ const RowsCap = 64
 // workers, its composer, the forms of each of its blocks, the runner that
 // calls them, and what it composed and served.
 type Exec struct {
+	// cpu is the device the executor runs on, seat the instance's decode seat
+	// there and quota its page quota (a root instance's; nil otherwise).
+	cpu   *CPU
+	seat  *Seat
+	quota *Quota
 	// chunk pins a prompt chunk's rows (SetChunk), 0 where the executor's
 	// rows decide.
 	chunk int
@@ -141,6 +146,38 @@ func (e *Exec) ReleaseLayers(lo, hi int) {
 		if e.Holds(li) {
 			e.blocks[li] = nil
 		}
+	}
+}
+
+// Sit seats the instance on c, the CPU device the executor runs on.
+func (e *Exec) Sit(c *CPU) { e.cpu, e.seat = c, c.Sit() }
+
+// Leave gives the instance's seat up.
+func (e *Exec) Leave() {
+	if e.cpu != nil {
+		e.cpu.Leave(e.seat)
+	}
+}
+
+// Touch records that the instance is decoding now.
+func (e *Exec) Touch() { e.seat.Touch() }
+
+// OthersDecoding reports whether another instance on the CPU device is
+// decoding.
+func (e *Exec) OthersDecoding() bool { return e.cpu.OthersDecoding(e.seat) }
+
+// SetQuota makes q the instance's page quota on the device.
+func (e *Exec) SetQuota(q *Quota) { e.quota = q }
+
+// Quota is the instance's page quota on the device, nil for one the root's
+// quota covers.
+func (e *Exec) Quota() *Quota { return e.quota }
+
+// DropQuota lets the instance's page quota go.
+func (e *Exec) DropQuota() {
+	if e.quota != nil {
+		e.quota.Drop()
+		e.quota = nil
 	}
 }
 
