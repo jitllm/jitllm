@@ -13,17 +13,16 @@ import (
 )
 
 // TestBlockLocationIsWrittenByItsSetters keeps a block's location in one set
-// of hands: State.onDev (which blocks a device runs) and State.gpuLayers (the
-// device prefix) are written only by the setters that keep the two and the
-// model's cpuUse counts in step (engine/location.go). A write anywhere
-// else -- an assignment, an increment, a composite literal's key -- is a
-// placement that skips the bookkeeping.
+// of hands: Instance.blockRoutes (the route each block runs on) and Instance.gpuLayers
+// (the card's prefix) are written only by the setters that keep the two in
+// step and hand a block over between its routes (place, placeRange, clearOnDev, shrinkOnDev). A write
+// anywhere else -- an assignment, an increment, a composite literal's key --
+// is a placement that skips the hand-over.
 func TestBlockLocationIsWrittenByItsSetters(t *testing.T) {
 	testmodels.SourceTree(t)
 	dir := filepath.Join("..", "..", "engine")
-	setters := map[string]bool{"markOnDev": true, "unmarkOnDev": true, "clearOnDev": true,
-		"shrinkOnDev": true, "holdCPURuns": true}
-	fields := map[string]bool{"onDev": true, "gpuLayers": true}
+	setters := map[string]bool{"place": true, "placeRange": true, "clearOnDev": true, "shrinkOnDev": true}
+	fields := map[string]bool{"blockRoutes": true, "gpuLayers": true}
 	ents, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatal(err)

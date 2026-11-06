@@ -64,7 +64,7 @@ func (s *Instance) park() (ParkStats, error) {
 	if s.devCount() > 0 {
 		sess := s.Session
 		if !sess.away {
-			sess.held = append(sess.held[:0], s.at...)
+			sess.held = append(sess.held[:0], s.blockRoutes...)
 		}
 		for li := s.lo; li < s.hi; li++ {
 			if li >= len(sess.held) || sess.held[li] != routeView {
