@@ -411,20 +411,9 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 		return err
 	}
 	defer m.Close()
-	if err := preloadWait(m); err != nil {
-		return err
-	}
-	goheap.OffHeap(maxmem, m.MappedBytes(m.Frames))
 	c := m.Cfg
 	fmt.Fprintf(os.Stderr, "%s L=%d d=%d heads=%d/%d head_dim=%d ffn=%d vocab=%d\n",
 		c.Arch, c.NLayer, c.NEmbd, c.NHead, c.NKVHead, c.HeadDim, c.NFFN, c.NVocab)
-	// The pager's chunk size is stored in the container (jlm.chunkFor). It is
-	// printed at load because the pages line below only appears when frames
-	// are short.
-	if n := m.ChunkBytes(m.Frames); n > 0 {
-		fmt.Fprintf(os.Stderr, "pager     %d KiB chunks, %d stream group(s)\n",
-			n>>10, m.StreamGroups())
-	}
 
 	if m.Vocab == nil {
 		return fmt.Errorf("%s: %w", path, m.TokErr)
@@ -528,6 +517,20 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 		return err
 	}
 	defer st.Close()
+	// The CPU device's frames exist from the instance on: what they map is
+	// off the Go heap, and the preload, when asked, reads into them.
+	cfr := st.FramesOn(nn.CPU)
+	if err := preloadWait(cfr); err != nil {
+		return err
+	}
+	goheap.OffHeap(maxmem, m.MappedBytes(cfr))
+	// The pager's chunk size is stored in the container (jlm.chunkFor). It is
+	// printed at load because the pages line below only appears when frames
+	// are short.
+	if n := m.ChunkBytes(cfr); n > 0 {
+		fmt.Fprintf(os.Stderr, "pager     %d KiB chunks, %d stream group(s)\n",
+			n>>10, m.StreamGroups())
+	}
 	var kvStore *engine.FileStore
 	// The KV store is attached before the device is chosen. The namespace
 	// names the model; everything else that must match (geometry, layout,
@@ -655,7 +658,7 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 			float64(st.HostBudget())/(1<<30), float64(hostReserved(dev))/(1<<30))
 	}
 
-	phRead(ph, dev, m)
+	phRead(ph, dev, m, cfr)
 	ph.Mark("load")
 	if replying {
 		if err := repl(m, st, sm, chat.system, replyCap, kvCacheDir != "", os.Stdin, os.Stdout); err != nil {
@@ -743,7 +746,7 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 		return withDeviceErr(err, dev)
 	}
 	prefill := time.Since(start)
-	phRead(ph, dev, m)
+	phRead(ph, dev, m, cfr)
 	ph.Mark("prefill")
 	// So the profile below describes DECODE, not the prompt that preceded it.
 	st.ResetProfile()
@@ -898,7 +901,7 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 		<-printing
 	}
 	decode := time.Since(start)
-	phRead(ph, dev, m)
+	phRead(ph, dev, m, cfr)
 	ph.Mark("decode")
 	fmt.Println()
 	if sp != nil {
@@ -1106,11 +1109,11 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	// Say whether pages faulted: a run fully resident and one a page short
 	// are different measurements.
 	// evict, not out: `out` is the generated token slice in this scope.
-	if fr, in, evict := m.PageStats(m.Frames); fr > 0 {
+	if fr, in, evict := m.PageStats(cfr); fr > 0 {
 		// Read requests, not page-ins, are what a partial page-in costs. The
 		// chunk size is the File's own, so this reports what the pager did.
 		fmt.Fprintf(os.Stderr, "pages    %d frame(s), %d page-in(s), %d eviction(s), %d fresh frame(s), %.2f GiB read in %d request(s) at %d KiB chunks\n",
-			fr, in, evict, m.FreshFrames(m.Frames), float64(m.BytesRead(m.Frames))/(1<<30), m.PagerReads(), m.ChunkBytes(m.Frames)>>10)
+			fr, in, evict, m.FreshFrames(cfr), float64(m.BytesRead(cfr))/(1<<30), m.PagerReads(), m.ChunkBytes(cfr)>>10)
 		// The same total split by phase: the whole-run figure is dominated by
 		// admission on a streamed model. Each phase's rate is over its own
 		// wall, which includes compute, so it is a floor.
@@ -1513,12 +1516,12 @@ func tokenizerOption(path string) ([]tok.Option, func(), error) {
 // when JITLLM_PRELOAD_WAIT=1: a warm measurement whose model fits the budget
 // then faults nothing in, as an engine that copies its weights to RAM before
 // its first token does. Unset, the prompt starts beside the reads.
-func preloadWait(m *model.Model) error {
-	if os.Getenv("JITLLM_PRELOAD_WAIT") != "1" {
+func preloadWait(fr *jlm.Frames) error {
+	if os.Getenv("JITLLM_PRELOAD_WAIT") != "1" || fr == nil {
 		return nil
 	}
 	t0 := time.Now()
-	err := m.WaitPreload()
+	err := fr.WaitPreload()
 	fmt.Fprintf(os.Stderr, "preload   waited %.1fs for every page\n", time.Since(t0).Seconds())
 	return err
 }
@@ -1563,7 +1566,7 @@ func loadOpts(t []tok.Option, budget uint64) ([]model.Option, []engine.Option) {
 	}
 	mo = append(mo, model.WithGCPlan(gcPlan()))
 	if budget > 0 {
-		mo = append(mo, model.WithPageBudget(budget))
+		o = append(o, engine.WithPageBudget(budget))
 	}
 	if p := poolOptions(); len(p) > 0 {
 		o = append(o, engine.WithPool(p...))
@@ -1797,6 +1800,7 @@ func tokenizeCmd(args []string) error {
 // an integrated device carved out of the same RAM. A budget that holds every
 // host block is the fully resident configuration; paging simply never fires.
 func setPageBudget(m *model.Model, st *engine.Instance, dev nn.LayerDevice, maxmem uint64) {
+	cfr := st.FramesOn(nn.CPU)
 	page := m.PageSize()
 	if page == 0 {
 		return // not a container; nothing is paged
@@ -1805,8 +1809,8 @@ func setPageBudget(m *model.Model, st *engine.Instance, dev nn.LayerDevice, maxm
 	// run will commit, less the dense weights, which never page. The vision
 	// tower needs no term of its own: its pages are pages of this container and
 	// come out of this budget like any other. What a device living in host
-	// memory holds is not subtracted here: the model takes it off itself, and
-	// again whenever placement moves it (Model.SetPageBudget).
+	// memory holds is not subtracted here: the instance takes it off its quota,
+	// and again whenever placement moves it (Instance.SetPageBudget).
 	avail := maxmem
 	kv := uint64(st.MaxSeq()) * uint64(m.Cfg.KVDim()) * 4 * 2 * uint64(m.Cfg.NLayer)
 	if kv < avail {
@@ -1833,16 +1837,16 @@ func setPageBudget(m *model.Model, st *engine.Instance, dev nn.LayerDevice, maxm
 	// would be handed, the device's holding off.
 	net := max(avail-min(avail, hostReserved(dev)), 1)
 	frames := int(net / page)
-	pool, _, _ := m.PageStats(m.Frames)
+	pool, _, _ := m.PageStats(cfr)
 	if frames >= host && pool == 0 {
 		return // never budgeted, and the budget holds every host block
 	}
-	m.SetPageBudget(m.Frames, avail)
+	st.SetPageBudget(avail)
 	// What the budget holds, not what is resident now: SetPageBudget's count
 	// is the pages already read, which right after placement is the few the
 	// devices left behind, and printed as a capacity it reported page-ins on
 	// a model whose host blocks all fit.
-	net = m.PageBudget(m.Frames)
+	net = m.PageBudget(cfr)
 	fit := int(net / page)
 	if fit >= host {
 		return // widened back to holding every host block: nothing will evict

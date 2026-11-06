@@ -40,12 +40,13 @@ func TestF16RouterOnTheDevice(t *testing.T) {
 			t.Fatal("not a mixture -- this gate proved nothing")
 		}
 		routers := 0
+		fr := testFrames(t, m)
 		for li := range m.Layers {
 			l := &m.Layers[li]
 			if l.Router.Rows == 0 {
 				continue
 			}
-			if err := m.PageIn(m.Frames, li, &m.Layers[li]); err != nil {
+			if err := m.PageIn(fr, li, &m.Layers[li]); err != nil {
 				t.Fatal(err)
 			}
 			if l.Router.Typ != quant.F32 {

@@ -6,6 +6,7 @@ import (
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // TestExpertSheetHandoverAllocatesNothing holds the path a device block's
@@ -24,6 +25,7 @@ func TestExpertSheetHandoverAllocatesNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
+	fr := testFrames(t, m)
 	li := -1
 	for i := range m.Layers {
 		if e := m.Layers[i].ExpBank().E; e != nil && m.Container.ExpertPaged(e) {
@@ -37,17 +39,20 @@ func TestExpertSheetHandoverAllocatesNothing(t *testing.T) {
 	l := &m.Layers[li]
 	sel := []uint32{0, 1}
 
-	bank := func() {
-		m.BankWeight(m.Frames, l.Gate)
-		m.BankWeight(m.Frames, l.Up)
-		m.BankWeight(m.Frames, l.Down)
-	}
-	bank()
-	if n := testing.AllocsPerRun(50, bank); n != 0 {
-		t.Errorf("bankWeight of a paged bank allocates %v times a call", n)
+	// An offer keeps its banks' Weights for the frames it gathers over: a
+	// card's page-in gathers every step.
+	s := testInstance(t, m, 16)
+	defer s.Close()
+	o := &offer{s: s, li: li}
+	o.layer()
+	var lw nn.LayerWeights
+	gather := func() { o.gather(&lw, fr) }
+	gather()
+	if n := testing.AllocsPerRun(50, gather); n != 0 {
+		t.Errorf("an offer's gather of a paged bank allocates %v times a call", n)
 	}
 
-	w := m.BankWeight(m.Frames, l.Down)
+	w := m.BankWeight(fr, l.Down)
 	if w.Packed == nil || w.Packed.Sheet == nil {
 		t.Fatal("a paged packed bank hands the device no Sheet: this gate proved nothing")
 	}
@@ -81,7 +86,7 @@ func TestExpertSheetHandoverAllocatesNothing(t *testing.T) {
 	r1()
 
 	warm := func() {
-		if err := m.EnsureBlockSelected(m.Frames, li, sel, false); err != nil {
+		if err := m.EnsureBlockSelected(fr, li, sel, false); err != nil {
 			t.Fatal(err)
 		}
 	}

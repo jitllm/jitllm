@@ -99,6 +99,7 @@ func TestFusedBlocksMatchPerOp(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
+				var io []Option
 				if paged {
 					// Two frames: every block is evicted and read back within a
 					// token, so a run ends at each read and reopens after it.
@@ -106,13 +107,13 @@ func TestFusedBlocksMatchPerOp(t *testing.T) {
 						m.Close()
 						continue
 					}
-					m.SetPageBudget(m.Frames, 2*m.PageSize())
+					io = append(io, WithPageBudget(2*m.PageSize()))
 				}
-				per := fusedDecode(t, m, false, n, false)
-				fu := fusedDecode(t, m, true, n, false)
+				per := fusedDecode(t, m, false, n, false, io...)
+				fu := fusedDecode(t, m, true, n, false, io...)
 				// The residual fold is off by default; it must be the same
 				// bits on.
-				fr := fusedDecode(t, m, true, n, true)
+				fr := fusedDecode(t, m, true, n, true, io...)
 				m.Close()
 				for i := range per.toks {
 					for j, v := range per.logits[i] {

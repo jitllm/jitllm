@@ -22,8 +22,8 @@ const Chunk uint64 = 1 << 20
 // two of at least 4096, and it must come before the first page is read: the
 // residency bitmap is sized from it.
 func (f *Frames) SetChunk(n uint64) error {
-	if n < 4096 || n&(n-1) != 0 {
-		return fmt.Errorf("jlm: a fill granularity of %d bytes; want a power of two of at least 4096", n)
+	if err := CheckChunk(n); err != nil {
+		return err
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -31,6 +31,15 @@ func (f *Frames) SetChunk(n uint64) error {
 		return fmt.Errorf("jlm: %s has read %d page(s); the fill granularity is fixed by then", f.file.Path, f.faults)
 	}
 	f.chunk = n
+	return nil
+}
+
+// CheckChunk refuses a fill granularity frames cannot take: anything but a
+// power of two of at least 4096 bytes.
+func CheckChunk(n uint64) error {
+	if n < 4096 || n&(n-1) != 0 {
+		return fmt.Errorf("jlm: a fill granularity of %d bytes; want a power of two of at least 4096", n)
+	}
 	return nil
 }
 
@@ -309,6 +318,7 @@ func (f *Frames) markFilled(b int, runs []run, errs []error) error {
 			f.filled[b][k] = true
 		}
 		f.chunkIn += int64(runs[ri].hi - runs[ri].lo)
+		f.file.pagedBytes.Add(int64(runs[ri].hi-runs[ri].lo) * int64(f.chunkSize()))
 	}
 	return first
 }
@@ -367,6 +377,7 @@ func (f *Frames) claimFor(b int, spec bool) error {
 		f.markSpec(b)
 	}
 	f.faults++
+	f.file.pageFaults.Add(1)
 	if f.filled == nil {
 		f.filled = make([][]bool, len(f.pages))
 	}

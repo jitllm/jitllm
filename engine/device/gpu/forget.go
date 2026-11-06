@@ -6,30 +6,18 @@ import (
 	"github.com/jitllm/jitllm/nn"
 )
 
-// A block's weight is uploaded once and keyed on its address (resKey.p), and
-// so is its pack in the arena and a prewarm's stage. The host's pager hands
-// one address to block after block: a frame refilled, or memory given back and
-// mapped again. Forget is the host saying so, and every copy keyed inside the
-// range goes; see docs/engineering-history/placement.md 15v.
-
-// Forget drops every copy the tier keyed on an address in [p, p+n), on every
-// device and in the arena. It never waits for a device that is busy: a device
-// whose lock is held -- by a submission, or by the very upload whose page-in
-// asked -- gets the range queued, and applies it before its next lookup by
-// address.
-func (g *GPU) Forget(p unsafe.Pointer, n uintptr) {
-	lo := uintptr(p)
-	hi := lo + n
-	for _, d := range g.devs {
-		d.forget(lo, hi)
-	}
-	g.Config.arena.Forget(lo, hi)
-}
-
-// Forget forwards to the tier: the copies are the model's, not a session's.
-func (s *gpuSession) Forget(p unsafe.Pointer, n uintptr) { s.g.Forget(p, n) }
+// A block's weight is uploaded once and keyed on its block and slot; a
+// tensor at no block's slot on its container entry (adhocKey). What is still
+// keyed on an address is a prewarm's stage and a weight that is no entry,
+// read from this card's own frames, which hand one address to block after
+// block: a frame refilled, or memory given back and mapped again. The frames
+// say so (framesOf's OnRecycle), and every copy keyed inside the range goes;
+// see docs/engineering-history/placement.md 15v.
 
 // forget applies [lo, hi) now when the device is free and queues it when not.
+// It never waits for a device that is busy: a device whose lock is held -- by
+// a submission, or by the very upload whose page-in asked -- gets the range
+// queued, and applies it before its next lookup by address.
 func (g *devTier) forget(lo, hi uintptr) {
 	if g.mu.TryLock() {
 		defer g.mu.Unlock()
@@ -101,21 +89,13 @@ func (g *devTier) applyForget(lo, hi uintptr) {
 		g.stageBytes -= st.bytes()
 		g.Config.stage.give(st.bytes())
 	}
-	// The picture rows keep their weights and vectors by the host bytes too
-	// (rowsWeight, rowsVector): a weight freed above, or a vector of bytes
-	// the host let go, would be handed to the next model at those addresses.
-	// Their parts bound them, so they go as well.
+	// A rows weight from no container entry is kept by its host bytes too
+	// (rowsWeight): freed above, it would be handed to the next model at
+	// those addresses. Their parts bound it, so they go as well.
 	rows := false
 	for k := range g.rows.w {
-		if in(k) {
+		if in(k.p) {
 			delete(g.rows.w, k)
-			rows = true
-		}
-	}
-	for k, b := range g.rows.v {
-		if in((*byte)(unsafe.Pointer(k))) {
-			b.Free()
-			delete(g.rows.v, k)
 			rows = true
 		}
 	}

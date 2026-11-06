@@ -5,7 +5,6 @@ package nn
 import (
 	"math"
 	"strings"
-	"unsafe"
 
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
@@ -13,12 +12,18 @@ import (
 )
 
 // Weight is one matvec's operand: the raw GGUF bytes plus the shape that reads
-// them. A device keys residency on the pointer.
+// them. A device keys a block's on its block and slot, one held at no block's
+// slot on its Entry.
 type Weight struct {
 	T    quant.Type
 	Data []byte
 	Rows int // output features
 	K    int // input features
+
+	// Entry is the container entry the weight is, when it is one: the
+	// tensor whichever device's memory its bytes were handed in, which a
+	// device keys a copy held at no block's slot on.
+	Entry *jlm.Entry
 
 	// Packed is this weight already in the device layout, or nil. When set the
 	// device writes the spans straight to a buffer and skips the repack, which
@@ -162,27 +167,32 @@ type LayerWeights struct {
 	HCAttn, HCFFN HCWeights
 	NGram         NGramWeights
 
-	// Ensure makes the weight bytes valid, and is called by a tier once the
-	// block is admitted and before anything is read. nil means they already
-	// are, which is every caller but a paged mixture of experts.
+	// Bind points w at fr, the frames of the device offered the block -- its
+	// own, in its own memory -- claimed and unread: shapes and lengths are
+	// right, bytes are not until Ensure. A device calls it before it decides
+	// whether to take the block. nil means w is bound already.
+	Bind func(w *LayerWeights, fr *jlm.Frames) error
+	// Ensure makes the weight bytes valid in fr, the device's frames, and is
+	// called by a tier once the block is admitted and before anything is
+	// read. nil means they already are.
 	//
-	// Admission reads only shapes and len(Data), so a mixture's routed bank is
-	// not fetched until the tier has said yes. Ensure also refreshes w in
-	// place: a tier that uploads a block more than once must call it again,
-	// because the host pager may have moved the pages the earlier slices
-	// pointed at. After it returns, every Weight in w is valid to read now.
-	Ensure func(w *LayerWeights) error
+	// Admission reads only shapes and len(Data), so nothing is read until the
+	// tier has said yes. Ensure also refreshes w in place: a tier that
+	// uploads a block more than once must call it again, because its frames
+	// may have moved the pages the earlier slices pointed at. After it
+	// returns, every Weight in w is valid to read now.
+	Ensure func(w *LayerWeights, fr *jlm.Frames) error
 	// EnsureExperts is Ensure for a caller that already knows which experts it
 	// needs: the block's own weights in full, and of each routed bank only the
 	// listed sheets. nil means the caller must use Ensure and take the whole
 	// bank. sel is the selection in the order the kernels will index it, and
 	// the callee must not retain it.
-	EnsureExperts func(w *LayerWeights, sel []uint32) error
+	EnsureExperts func(w *LayerWeights, sel []uint32, fr *jlm.Frames) error
 	// PrefetchExperts makes sel's sheets readable and does nothing else: it
 	// does not re-point w or bind spans, so it is safe to call from another
 	// goroutine while the caller uploads sheets it already has (EnsureExperts
 	// writes through w and is not). nil means the caller must not overlap.
-	PrefetchExperts func(sel []uint32) error
+	PrefetchExperts func(sel []uint32, fr *jlm.Frames) error
 	// SpeculateExperts hands the host's read service a guess: sel's sheets
 	// are read ahead in the background, never waited for, and replace any
 	// earlier guess not yet started. A nil sel abandons the unstarted ones.
@@ -190,7 +200,7 @@ type LayerWeights struct {
 	// joins the guess's read and one that is not under way takes over its
 	// place, so a wrong guess never delays the experts a token needs. nil
 	// means the host does not speculate.
-	SpeculateExperts func(sel []uint32)
+	SpeculateExperts func(sel []uint32, fr *jlm.Frames)
 	// ExpertUses is the session's selection counts for this block's experts,
 	// one a expert (engine.Hotness): the host's routing adds to it, a device
 	// routing the block adds its own selections, and a device's expert cache
@@ -608,8 +618,13 @@ type LayerPlan struct {
 
 	// Model is which model the block belongs to (ModelOwner): a device keys
 	// its blocks by index, so it must not take a block of a second model
-	// while the first's are there.
-	Model uint64
+	// while the first's are there. File is the container its pages are read
+	// from: a device pages the block into frames of its own (Bind, Ensure),
+	// keeping between uses no more than FrameBudget bytes of it -- the
+	// instance's page budget, 0 for unlimited.
+	Model       uint64
+	File        *jlm.File
+	FrameBudget uint64
 	// Vocab is the output projection's rows. A device that reserves a ragged
 	// step's per-row logits at placement sizes them from it, because the
 	// head is offered after the blocks; 0 leaves them to the first step.
@@ -1433,25 +1448,15 @@ type NamedDevice interface {
 // uses (SetActWindow).
 type ActWindower interface{ SetActWindow(n int) }
 
-// CopyForgetter is a device that keeps copies of the weights it was handed,
-// keyed on their address, and can be told that the bytes at an address range
-// are no longer the ones it copied: a pager's frame refilled with another
-// block, or memory given back. It drops every copy inside [p, p+n). A caller
-// may hand a weight whose address is reused only to a device it tells.
-//
-// Forget may be called on any goroutine, from inside a page-in the device
-// itself started, and while no session is open; it must not block on the
-// device's own work.
-type CopyForgetter interface {
-	Forget(p unsafe.Pointer, n uintptr)
-}
-
-// ModelOwner is a LayerDevice that holds one model's blocks at a time
-// (LayerPlan.Model): a block of another model is refused while any of the
-// first's blocks or its head is placed. ReleaseModel gives back everything
-// model placed -- every block, every session's history on them and the head --
-// so the device may take another; it does nothing for a model it does not hold.
+// ModelOwner is a device that keeps what a model placed on it for the
+// instances holding it: HoldModel counts one instance of model holding the
+// device, ReleaseModel that instance's release, and the last release gives
+// back everything model placed -- every block, every session's history on
+// them, the head, what the device built for it -- so the device may take
+// another, never while an instance still runs it. A release with no hold
+// left gives it back too.
 type ModelOwner interface {
+	HoldModel(model uint64)
 	ReleaseModel(model uint64)
 }
 
@@ -1460,8 +1465,9 @@ type ErrReporter interface{ Err() string }
 
 // HostReserver is how many bytes of the host's memory the device holds now (an
 // integrated GPU's blocks, KV and scratch), which the host's page and expert
-// budgets leave room for. It moves with placement, so the model re-reads it
-// whenever a block moves (Model.SetPageBudget, Instance.SetMemBudget).
+// budgets leave room for. It moves with placement, so the instance attaching
+// it re-reads it whenever a block moves (Instance.SetPageBudget,
+// Instance.SetMemBudget).
 type HostReserver interface{ HostReserved() uint64 }
 
 // Attacher hands out a view carrying one session's own history (a session).
@@ -1524,6 +1530,20 @@ type ChunkLimiter interface{ ChunkRows() int }
 // bank, so the host may give the bank's expert pages back with the block's
 // page. A block whose experts run off the card (streamed, hybrid) does not.
 type ExpertHolder interface{ HoldsExperts(li int) bool }
+
+// FramesHolder is a tier whose devices page the blocks placed on them into
+// frames of their own: FramesOf is the named device's over f, nil where it
+// holds none.
+type FramesHolder interface {
+	FramesOf(dev string, f *jlm.File) *jlm.Frames
+}
+
+// FrameBudgeter is a tier whose devices' frames over f are capped by a page
+// quota (LayerPlan.FrameBudget at placement): SetFrameBudget is a new one,
+// 0 for unlimited, which every device holding frames over f is re-sized to.
+type FrameBudgeter interface {
+	SetFrameBudget(f *jlm.File, bytes uint64)
+}
 
 // HostPageReleaser says a placed block's host page can be given back.
 type HostPageReleaser interface{ ReleasesHostPage(li int) bool }

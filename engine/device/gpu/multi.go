@@ -1848,6 +1848,15 @@ func (g *GPU) releaseLayers(sid uint64, lo, hi int) {
 	var gone []int
 	for d := range touched {
 		gone = append(gone, d.leaveLayers(sid, lo, hi)...)
+		d.framesMu.Lock()
+		fs := make([]*jlm.File, 0, len(d.frames.by))
+		for f := range d.frames.by {
+			fs = append(fs, f)
+		}
+		d.framesMu.Unlock()
+		for _, f := range fs {
+			d.sizeFrames(f)
+		}
 	}
 	g.mu.Lock()
 	for _, li := range gone {

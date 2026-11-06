@@ -10,6 +10,7 @@ import (
 
 	"github.com/jitllm/jitllm/engine"
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/model"
 	"github.com/jitllm/jitllm/nn"
 )
@@ -190,7 +191,7 @@ func pagerChunk() uint64 {
 // number wins where there is one, because it excludes the parts of the
 // suspension that are not I/O; otherwise jlm.File.ReadWait (the wall decode
 // spent blocked in EnsureRanges) covers host runs.
-func phRead(ph *engine.PhaseMeter, dev nn.LayerDevice, m *model.Model) {
+func phRead(ph *engine.PhaseMeter, dev nn.LayerDevice, m *model.Model, fr *jlm.Frames) {
 	if ph == nil {
 		return
 	}
@@ -198,7 +199,7 @@ func phRead(ph *engine.PhaseMeter, dev nn.LayerDevice, m *model.Model) {
 		ph.ReadTime(g.Stats().TStreamRead)
 		return
 	}
-	ph.ReadTime(m.PagerReadWait(m.Frames))
+	ph.ReadTime(m.PagerReadWait(fr))
 }
 
 // byteCount is a flag holding a byte count: a number with an optional K/M/G/T

@@ -553,9 +553,9 @@ func TestHybridMixturesPageWithTheSameAnswer(t *testing.T) {
 // logit bit for bit; the page-in count is the selection check.
 func pagesWithTheSameAnswer(t *testing.T, ids []int32, src string) {
 	t.Helper()
-	run := func(mo ...model.Option) ([][]float32, int64) {
-		instOpts := []Option{WithKVF16(false)}
-		m, err := model.Open(src, mo...)
+	run := func(io ...Option) ([][]float32, int64) {
+		instOpts := append([]Option{WithKVF16(false)}, io...)
+		m, err := model.Open(src)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -586,11 +586,11 @@ func pagesWithTheSameAnswer(t *testing.T, ids []int32, src string) {
 			}
 			out = append(out, slices.Clone(rows[:2*m.Cfg.NVocab]))
 		}
-		_, in, _ := m.PageStats(m.Frames)
+		in := m.PageFaults()
 		return out, in
 	}
 	want, residentIn := run()
-	got, pagedIn := run(model.WithPageBudget(1))
+	got, pagedIn := run(WithPageBudget(1))
 	if pagedIn <= residentIn {
 		t.Fatalf("a one-page budget took %d page-ins against %d resident: nothing paged, "+
 			"this gate proved nothing", pagedIn, residentIn)

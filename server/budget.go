@@ -117,7 +117,7 @@ func (e *Engine) rereadHostLocked() {
 func (e *Engine) heldLocked() uint64 {
 	var n uint64
 	for _, lm := range e.models {
-		n += lm.m.HostBytes(lm.m.Frames) + lm.stepScratchBytes()
+		n += lm.m.HostBytes(lm.frames()) + lm.stepScratchBytes()
 		if st := lm.ttft.store; st != nil {
 			n += st.Bytes()
 		}
@@ -167,7 +167,7 @@ func (e *Engine) rebudget() {
 		lm.mu.Unlock()
 		sum += sh[id]
 		if lm.m != nil {
-			mapped += lm.m.MappedBytes(lm.m.Frames)
+			mapped += lm.m.MappedBytes(lm.frames())
 		}
 		models = append(models, lm)
 	}

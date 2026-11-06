@@ -20,8 +20,8 @@ import (
 // rowsState is a card's picture rows: the weights and vectors it holds of
 // them, the buffers a call binds, and the call a submission runs.
 type rowsState struct {
-	w map[*byte]*resident
-	v map[*float32]backend.Buf
+	w map[resKey]*resident
+	v map[jlm.Role]backend.Buf
 	// in, out, req and pos are a call's rows, its request and its
 	// positions, each of size bytes.
 	in, out, req, pos     backend.Buf
@@ -248,7 +248,7 @@ func (g *devTier) servedRows(p *nn.RowsPart) (*servedPart, error) {
 			if !ok || len(v) == 0 {
 				return nil, fmt.Errorf("the rows read %v, which the model hands no tensor of", b.Role)
 			}
-			buf, err := g.rowsVector(v)
+			buf, err := g.rowsVector(b.Role, v)
 			if err != nil {
 				return nil, fmt.Errorf("%v: %w", b.Role, err)
 			}
@@ -280,31 +280,35 @@ func (g *devTier) rowsWeight(w nn.Weight) (*resident, error) {
 	if len(data) == 0 {
 		return nil, fmt.Errorf("no bytes")
 	}
-	if r, ok := rs.w[&data[0]]; ok {
-		return r, nil
-	}
 	q, ok := quantOf(w.T)
 	if !ok {
 		return nil, fmt.Errorf("format %v", w.T)
 	}
+	key := adhocKey(w.Entry, data, q, w.Rows, w.K)
+	if r, ok := rs.w[key]; ok {
+		return r, nil
+	}
 	if _, ok := jlmType(q); !ok {
 		return nil, fmt.Errorf("format %v has no container type", w.T)
 	}
-	r := g.resident(-1, 0, q, data, w.Rows, w.K, w.Packed)
+	r := g.resident(-1, 0, w.Entry, q, data, w.Rows, w.K, w.Packed)
 	if r == nil || !r.ok {
 		return nil, fmt.Errorf("not held: %s", g.LastErr)
 	}
 	if rs.w == nil {
-		rs.w = map[*byte]*resident{}
+		rs.w = map[resKey]*resident{}
 	}
-	rs.w[&data[0]] = r
+	rs.w[key] = r
 	return r, nil
 }
 
-// rowsVector is v uploaded for the picture rows, once.
-func (g *devTier) rowsVector(v []float32) (backend.Buf, error) {
+// rowsVector is the model's vector under r, v, uploaded for the rows once
+// while the model holds the card: by its role, which names one vector of
+// the model, never by v's address, which a later instance's vector may
+// take once this one's is gone.
+func (g *devTier) rowsVector(r jlm.Role, v []float32) (backend.Buf, error) {
 	rs := &g.rows
-	if b, ok := rs.v[&v[0]]; ok {
+	if b, ok := rs.v[r]; ok {
 		return b, nil
 	}
 	b, err := g.allocBytes(unsafe.Slice((*byte)(unsafe.Pointer(&v[0])), 4*len(v)))
@@ -312,10 +316,28 @@ func (g *devTier) rowsVector(v []float32) (backend.Buf, error) {
 		return nil, err
 	}
 	if rs.v == nil {
-		rs.v = map[*float32]backend.Buf{}
+		rs.v = map[jlm.Role]backend.Buf{}
 	}
-	rs.v[&v[0]] = b
+	rs.v[r] = b
 	return b, nil
+}
+
+// releaseRows gives back what the rows hold of the model: their weights'
+// residents, and what closeRows frees. Callers hold g.mu.
+func (g *devTier) releaseRows() {
+	for _, r := range g.rows.w {
+		for k, v := range g.res {
+			if v == r {
+				delete(g.res, k)
+				break
+			}
+		}
+		if r != nil && r.ok {
+			g.refund(r.bytes())
+			g.freeResident(r)
+		}
+	}
+	g.closeRows()
 }
 
 // closeRows frees the picture rows' buffers and vectors; its weights are

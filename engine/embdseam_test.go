@@ -59,11 +59,12 @@ func embdRows(t *testing.T, m *model.Model, ids []int32) []float32 {
 	t.Helper()
 	c := m.Cfg
 	e := make([]float32, len(ids)*c.NEmbd)
+	embd := &refDense(t, m).Embd
 	for i, id := range ids {
 		row := e[i*c.NEmbd : (i+1)*c.NEmbd]
 		// The shipping lookup, not nn.Row: m.embd is in the device layout, and
 		// reading it row-major produces numbers, not an error.
-		if err := embedRowRef(m, row, int(id)); err != nil {
+		if err := embedRowRef(embd, row, int(id)); err != nil {
 			t.Fatal(err)
 		}
 		// The caller applies EmbdScale, the seam does not: a spliced image

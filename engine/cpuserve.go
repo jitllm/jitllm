@@ -1310,7 +1310,7 @@ func (s *Instance) formCPUBlock(li int, cb *cpuBlock, rows int) (*cpudev.Form, e
 	gr.Block = 0
 	cb.sideOff = sideAtBinding(&gr)
 	if s.cpu.ngView == nil && s.m.Ngram != nil && cpudev.TableRowsOf(&gr) >= 0 {
-		v, err := s.m.Frames.NewRowView(s.m.Ngram.E)
+		v, err := s.fr.NewRowView(s.m.Ngram.E)
 		if err != nil {
 			return nil, err
 		}
@@ -1342,7 +1342,7 @@ func (s *Instance) formCPUBlock(li int, cb *cpuBlock, rows int) (*cpudev.Form, e
 	}
 	pg := &s.kv.layers[li]
 	page := max(pg.p, 1)
-	req := composer.Request{Graph: &gr, Formats: formats, Strides: s.m.CpuStrides(s.m.Frames, li, g),
+	req := composer.Request{Graph: &gr, Formats: formats, Strides: s.m.CpuStrides(s.fr, li, g),
 		Step:    composer.Step{Rows: rows, Page: page, Keys: max(pg.arenaSlots(), 1) * page, ActWindow: s.m.ActWindow, Seqs: max(s.nseq, 1)},
 		History: composer.History{ValuesInKeys: pg.latent},
 		Device:  s.composedCPU()}
@@ -1379,7 +1379,7 @@ func (s *Instance) cpuBanksPaged(li int) bool {
 		if t.E == nil {
 			continue
 		}
-		planes, _, ok := s.m.Frames.BankView(t.E)
+		planes, _, ok := s.fr.BankView(t.E)
 		if !ok {
 			return false
 		}
@@ -1470,7 +1470,7 @@ func (s *Instance) cpuExperts(b *cpuBound, f *cpudev.Form, li, n int) error {
 		s.cpu.sel[0] = other
 	}
 	s.bind.Lock()
-	err := s.m.EnsureExperts(s.m.Frames, li, s.cpu.sel, &s.expHold, s.layer(li))
+	err := s.m.EnsureExperts(s.fr, li, s.cpu.sel, &s.expHold, s.layer(li))
 	s.bind.Unlock()
 	if err != nil {
 		return err
@@ -1484,7 +1484,7 @@ func (s *Instance) cpuExperts(b *cpuBound, f *cpudev.Form, li, n int) error {
 // theirs in the encoder (encRoleWeight).
 func (s *Instance) cpuRoleWeight(li int, l *model.Layer, r jlm.Role) *model.Tensor {
 	if l == nil {
-		switch m := s.m; {
+		switch m := &s.dense; {
 		case li == cpuInputRows && r == jlm.RoleTokenEmbd:
 			return &m.Embd
 		case li == cpuInputRows && r == jlm.RolePosEmbd:
@@ -1503,10 +1503,10 @@ func (s *Instance) cpuRoleWeight(li int, l *model.Layer, r jlm.Role) *model.Tens
 			return &m.Dense1
 		case r == jlm.RoleEmbdDense2:
 			return &m.Dense2
-		case m.Q4eHead != nil && r == jlm.RoleHCHeadDown:
-			return &m.Q4eHead.Hc.Down
-		case m.Q4eHead != nil && r == jlm.RoleHCHeadUp:
-			return &m.Q4eHead.Hc.Up
+		case m.Q4eHC != nil && r == jlm.RoleHCHeadDown:
+			return &m.Q4eHC.Down
+		case m.Q4eHC != nil && r == jlm.RoleHCHeadUp:
+			return &m.Q4eHC.Up
 		}
 		for _, v := range s.m.VecMats {
 			if v.Role == r {

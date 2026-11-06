@@ -213,7 +213,7 @@ func TestTheHeadRidesTheRightDeviceOfTwo(t *testing.T) {
 	want := teacherForce(t, m, ids, instOpts...)
 
 	// Half the model per device, plus the dense region the head lives in.
-	cap2 := m.PageSize()*uint64(m.Cfg.NLayer)/2 + m.PageSize() + m.HostBytes(m.Frames)/4
+	cap2 := m.PageSize()*uint64(m.Cfg.NLayer)/2 + m.PageSize() + textPageBytes(m)/4
 	g, err := openGPU(t, gpu.WithDevices("all"), gpu.WithDeviceTune(gpu.TuneOff),
 		gpu.WithBudget(cap2))
 	if err != nil || g == nil {
@@ -276,7 +276,7 @@ func TestTheHeadGetsItsOwnSubmissionWhenItIsNotOnTheLastDevice(t *testing.T) {
 	ids := []int32{5, 11, 23, 41, 67, 89}
 	want := teacherForce(t, m, ids, instOpts...)
 
-	cap2 := m.PageSize()*uint64(m.Cfg.NLayer)/2 + m.PageSize() + m.HostBytes(m.Frames)/4
+	cap2 := m.PageSize()*uint64(m.Cfg.NLayer)/2 + m.PageSize() + textPageBytes(m)/4
 	g, err := openGPU(t, gpu.WithDevices("all"), gpu.WithDeviceTune(gpu.TuneOff),
 		gpu.WithBudget(cap2))
 	if err != nil || g == nil {
@@ -405,4 +405,14 @@ func TestAWidePromptPipelinesAcrossTwoDevices(t *testing.T) {
 	if !(worst < mlaDeviceNMSE) {
 		t.Fatalf("a pipelined prompt over two devices disagrees with the host: NMSE %.3e, |dlogit| %.3f", worst, worstD)
 	}
+}
+
+// textPageBytes is the bytes of m's text blocks' pages: what a decode with no
+// budget leaves resident.
+func textPageBytes(m *model.Model) uint64 {
+	var n uint64
+	for li := 0; li < m.Cfg.NLayer; li++ {
+		n += m.Container.PageBytes(li)
+	}
+	return n
 }

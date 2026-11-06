@@ -54,6 +54,9 @@ func TestATierRefusesASecondModel(t *testing.T) {
 	if !g.PrepHead(head(1)) {
 		t.Fatalf("model 1's head was refused: %s", g.Err())
 	}
+	// An instance of model 1 holds the tier, as Open's does: a model nothing
+	// holds yields the tier to the next.
+	g.HoldModel(1)
 	p2 := plan(2)
 	if g.PrepLayer(0, p2, block(p2)) || g.PrepLayer(2, p2, block(p2)) || g.PrepHead(head(2)) {
 		t.Fatal("model 2's offers were taken while model 1 holds the tier")

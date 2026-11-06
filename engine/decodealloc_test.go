@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
@@ -59,7 +60,7 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 	// pages and allocated a read goroutine for each. A budget the model fits
 	// is a choice of this gate, not a second path: paging is gated elsewhere
 	// (TestPagingDoesNotChangeTheAnswer), and scripts/cap bounds what it holds.
-	resident := model.WithPageBudget(1 << 40)
+	resident := WithPageBudget(1 << 40)
 	for _, name := range names {
 		t.Run(name, func(t *testing.T) {
 			// jlmOf skips naming the model when neither it nor its container
@@ -87,8 +88,8 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 						noDevice(t, d[0]+","+d[1], err)
 					}
 					defer g.Close()
-					instOpts := []Option{WithStreamTrial(false), WithPlacement(Placement{Rest: &Place{On: d[1]}, Head: &Place{On: d[0]}})}
-					m2, err := model.Open(jlmOf(t, p), resident)
+					instOpts := []Option{WithStreamTrial(false), resident, WithPlacement(Placement{Rest: &Place{On: d[1]}, Head: &Place{On: d[0]}})}
+					m2, err := model.Open(jlmOf(t, p))
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -114,8 +115,8 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 			}
 			// The stream trial pinned off with the tuners: it migrates blocks
 			// between its runs, and a migration's page-ins are not a decode.
-			instOpts2 := []Option{WithStreamTrial(false)}
-			m, err := model.Open(jlmOf(t, p), resident)
+			instOpts2 := []Option{WithStreamTrial(false), resident}
+			m, err := model.Open(jlmOf(t, p))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -324,7 +325,7 @@ func stepAllocs(t *testing.T, m *model.Model, g *gpu.GPU, mode stepMode, io ...O
 			}
 		}
 	}
-	if err := prefaultExperts(m); err != nil {
+	if err := prefaultExperts(instancesOf(runs)...); err != nil {
 		t.Fatal(err)
 	}
 	c0, d0 := g.Stats(), g.DevStats()
@@ -484,7 +485,7 @@ func decodeAllocs(t *testing.T, m *model.Model, g *gpu.GPU, io ...Option) decode
 	// Every routed expert resident, which a long decode reaches by itself: a
 	// cold expert page is a read, and its read goroutine is an allocation
 	// per page-in rather than per token.
-	if err := prefaultExperts(m); err != nil {
+	if err := prefaultExperts(s); err != nil {
 		t.Fatal(err)
 	}
 	var c0 gpu.Stats
@@ -553,22 +554,35 @@ func allocVerdict(t *testing.T, what string, w windowAllocs, n int, reads int64,
 	}
 }
 
-// prefaultExperts makes every routed expert page of a mixture resident, as a
-// decode does over enough tokens. Nothing on a dense model.
-func prefaultExperts(m *model.Model) error {
-	all := make([]int32, m.Cfg.NExpert)
-	for i := range all {
-		all[i] = int32(i)
-	}
-	var h model.ExpertHold
-	for li := range m.Cfg.NLayer {
-		if !m.Cfg.MoEAt(li) {
-			continue
+// prefaultExperts makes every routed expert page of a mixture resident in
+// every frames the instances page through, as a decode does over enough
+// tokens. Nothing on a dense model.
+func prefaultExperts(ss ...*Instance) error {
+	seen := map[*jlm.Frames]bool{}
+	for _, s := range ss {
+		m := s.m
+		all := make([]int32, m.Cfg.NExpert)
+		for i := range all {
+			all[i] = int32(i)
 		}
-		err := m.EnsureExperts(m.Frames, li, all, &h, &m.Layers[li])
-		h.Release()
-		if err != nil {
-			return err
+		for _, fr := range framesOfInstance(s) {
+			if seen[fr] {
+				continue
+			}
+			seen[fr] = true
+			var h model.ExpertHold
+			for li := range m.Cfg.NLayer {
+				if !m.Cfg.MoEAt(li) {
+					continue
+				}
+				var l model.Layer
+				m.Layers[li].CloneTo(&l)
+				err := m.EnsureExperts(fr, li, all, &h, &l)
+				h.Release()
+				if err != nil {
+					return err
+				}
+			}
 		}
 	}
 	return nil
@@ -803,8 +817,8 @@ func TestPagedDecodeDoesNotAllocate(t *testing.T) {
 			}
 			page, nb := probe.PageSize(), uint64(probe.Cfg.NLayer)
 			probe.Close()
-			instOpts := []Option{WithStreamTrial(false)}
-			m, err := model.Open(src, model.WithPageBudget(page*max(nb/3, 2)))
+			instOpts := []Option{WithStreamTrial(false), WithPageBudget(page * max(nb/3, 2))}
+			m, err := model.Open(src)
 			if err != nil {
 				t.Fatal(err)
 			}

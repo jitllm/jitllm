@@ -32,7 +32,7 @@ import (
 // The rest is left for everything that is not weights -- the KV cache, the
 // scratch, the Go heap and the runtime itself. Reading the OS's limits is not
 // reading the environment (AGENTS.md Scope): every caller that sizes a budget
-// takes an explicit one too (model.WithPageBudget, jitllmd -maxmem and
+// takes an explicit one too (engine.WithPageBudget, jitllmd -maxmem and
 // -host-mem).
 func (g GCPlan) Budget() uint64 { return host().mem().Budget(g) }
 

@@ -454,12 +454,13 @@ func TestComposedBlocksServeApart(t *testing.T) {
 func trainedToks(t *testing.T, m *model.Model, ids []int32, n int) ([]int32, int) {
 	t.Helper()
 	row := make([]float32, m.Embd.K)
+	embd := &refDense(t, m).Embd
 	nonzero := func(v float32) bool { return v != 0 }
 	toks, moved := make([]int32, n), 0
 	for i := range toks {
 		id := (int(ids[i%len(ids)])*7 + i) % m.Vocab.Size()
 		for tries := 0; ; tries++ {
-			if err := embedRowRef(m, row, id); err != nil {
+			if err := embedRowRef(embd, row, id); err != nil {
 				t.Fatal(err)
 			}
 			if slices.ContainsFunc(row, nonzero) {

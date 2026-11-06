@@ -74,11 +74,14 @@ func TestCPUPageTablesFollowThePages(t *testing.T) {
 	}
 	defer m.Close()
 
+	// Both sessions on one CPU device: the second restores the first's
+	// pages, slots of that device's arena.
+	cpu := sharedCPU(t)
 	st := NewSharedStore()
-	a := shareSession(t, m, 0, st, true, withKVPage(sharePage))
+	a := shareSession(t, m, 0, st, true, withKVPage(sharePage), cpu)
 	defer a.s.Close()
 	checkCPUTables(t, a.s, "the first session, its pages grown and published")
-	b := shareSession(t, m, 1, st, true, withKVPage(sharePage))
+	b := shareSession(t, m, 1, st, true, withKVPage(sharePage), cpu)
 	defer b.s.Close()
 	if b.s.KVRestored() == 0 {
 		t.Fatal("the second session restored nothing from the shared store")

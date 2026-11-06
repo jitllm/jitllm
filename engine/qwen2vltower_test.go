@@ -73,7 +73,7 @@ func towerPixels(t *testing.T, s *Instance, img image.Image) ([]float32, model.S
 	tr.size(tg.Lead+n, int(m.Container.Vision().NEmbd))
 	out := make([]float32, cl.Rows*3*P*P)
 	bd := &ts.cpu.bound
-	*bd = cpuBound{li: -1, l: &m.TowerDense, own: ts.cpu.dev.Own(f), n: tg.Lead + n, req: tr.req, pos: tr.posTab, pic: words}
+	*bd = cpuBound{li: -1, l: &ts.dense.TowerDense, own: ts.cpu.dev.Own(f), n: tg.Lead + n, req: tr.req, pos: tr.posTab, pic: words}
 	bd.io[0] = unsafe.Pointer(&out[0])
 	ts.cpuRunForm(bd, f)
 	return out[:3*sq.Pw*sq.Ph], sq

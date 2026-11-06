@@ -16,8 +16,9 @@ import (
 // pages written: a slot let go is handed back to the OS
 // (offheap.ReleaseOffHeap), so a windowed block still holds its window. A
 // slot is held by the instance that grew it and by each store entry that took
-// it, and goes back to the free list when the last lets go.
+// it (Keep), and goes back to the free list when the last lets go.
 type Arena struct {
+	set    *Arenas
 	kb, vb []byte
 	k, v   []float32
 	pp     int
@@ -128,6 +129,24 @@ func (a *Arena) Drop(i int) {
 	}
 }
 
+// Keep is a store entry's hold on slot i: the slot's, and the model's on
+// the device, so the arenas outlive the model's last instance while the
+// store names their pages.
+func (a *Arena) Keep(i int) {
+	a.Hold(i)
+	if a.set != nil && a.set.hold != nil {
+		a.set.hold()
+	}
+}
+
+// Unkeep lets a store entry's hold on slot i go (Keep).
+func (a *Arena) Unkeep(i int) {
+	a.Drop(i)
+	if a.set != nil && a.set.let != nil {
+		a.set.let()
+	}
+}
+
 // Page is slot i's key and value.
 func (a *Arena) Page(i int) (k, v []float32) {
 	lo, hi := i*a.pp, (i+1)*a.pp
@@ -166,6 +185,9 @@ func (a *Arena) close() {
 type Arenas struct {
 	mu sync.Mutex
 	m  map[arenaKey]*Arena
+	// hold and let are a store entry's hold on the model on its device
+	// (Arena.Keep), nil off a device.
+	hold, let func()
 }
 
 type arenaKey struct {
@@ -186,6 +208,7 @@ func (as *Arenas) For(li, pp int, latent bool, slots int) (*Arena, error) {
 	if err != nil {
 		return nil, err
 	}
+	a.set = as
 	if as.m == nil {
 		as.m = map[arenaKey]*Arena{}
 	}

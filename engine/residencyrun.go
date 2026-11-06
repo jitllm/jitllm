@@ -60,8 +60,8 @@ func (s *Instance) reap() {
 		return
 	}
 	// Eviction belongs to the container: every expert is its own page, evicted
-	// least recently used by jlm's pager (jlm.File.ExpertPage), and
-	// Model.SetPageBudget arms it. This manager only tracks; r.bytes is not
+	// least recently used by the frames holding it (jlm.Frames), and the
+	// instance's page quota arms it (Instance.SetPageBudget). This manager only tracks; r.bytes is not
 	// decremented here because nothing here frees memory.
 }
 

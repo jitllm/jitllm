@@ -25,6 +25,9 @@ import (
 type modelOpts struct {
 	// sched is WithScheduler's.
 	sched Scheduler
+	// pageBudget and pageBudgetSet are WithPageBudget's.
+	pageBudget    uint64
+	pageBudgetSet bool
 	// devSample is WithDeviceSample's setting (devsample.go).
 	devSample DeviceSampleMode
 	// profile arms the per-op nanosecond counters OpProfile reports. The
@@ -403,6 +406,18 @@ func WithPlacement(p Placement) Option {
 // last WithDevices a caller gives is the list.
 func WithDevices(specs ...string) Option {
 	return func(l *loadOpts) { l.devices = append([]string(nil), specs...) }
+}
+
+// WithPageBudget is the instance's page quota in bytes (Instance.SetPageBudget):
+// what the model's frames on its CPU device may keep for it, 0 for unlimited.
+// It has to be known when the instance is made, before its first page is
+// read: a container larger than the machine's memory read its whole size
+// first when the budget came after (placement.md, "Measurements once cited
+// in engine/model's comments"). With none, the quota is the model's memory
+// plan (model.WithGCPlan): MemAvailable or the cgroup limit, whichever
+// binds, times eight tenths. A quota that holds every block never evicts.
+func WithPageBudget(bytes uint64) Option {
+	return func(l *loadOpts) { l.opt.pageBudget, l.opt.pageBudgetSet = bytes, true }
 }
 
 // WithKVF16 forces the cache width, overriding what nn.KVWidthPaysOff decides:

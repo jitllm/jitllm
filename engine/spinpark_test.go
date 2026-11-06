@@ -28,28 +28,27 @@ func TestThePoolParksOnlyWhileTokensPage(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	c, cf := m.Container, m.Frames
+	c := m.Container
 	var total uint64
 	for i := 0; i < c.NPages(); i++ {
 		total += c.PageBytes(i)
 	}
-	m.SetPageBudget(m.Frames, total-c.H.ExpPageSize)
-	if !cf.CanEvict() {
+	st := testInstance(t, m, 96, WithPageBudget(total-c.H.ExpPageSize))
+	defer st.Close()
+	if !st.fr.CanEvict() {
 		t.Fatal("a budget one page short of the model and the pager cannot evict: this proved nothing")
 	}
-	st := testInstance(t, m, 96)
-	defer st.Close()
 	lg, err := st.Prefill(m.Vocab.Encode("The capital of France is", true))
 	if err != nil {
 		t.Fatal(err)
 	}
 	var quiet, paged int
 	for i := 0; i < 60 && (quiet == 0 || paged == 0); i++ {
-		_, in0, _ := m.PageStats(m.Frames)
+		_, in0, _ := m.PageStats(st.fr)
 		if lg, err = st.Forward(Greedy(lg)); err != nil {
 			t.Fatal(err)
 		}
-		_, in1, _ := m.PageStats(m.Frames)
+		_, in1, _ := m.PageStats(st.fr)
 		switch spin := st.Pool().Spinning(); {
 		case in1 != in0 && spin:
 			t.Fatalf("token %d faulted %d page(s) and left the pool spinning", i, in1-in0)

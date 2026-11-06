@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/jitllm/jitllm/model"
@@ -536,11 +537,10 @@ func mRopeKeepsTheFivePrinciples(t *testing.T, name string) {
 	t.Run("paging", func(t *testing.T) {
 		m1, _, openOpts2 := openQVL(t, name)
 		defer m1.Close()
-		m1.SetPageBudget(m1.Frames, m1.PageSize())
-		st := testInstance(t, m1, n, openOpts2...)
+		st := testInstance(t, m1, n, append(slices.Clip(openOpts2), WithPageBudget(m1.PageSize()))...)
 		defer st.Close()
 		w, flips := qvlWorst(g, qvlRun(t, st, g, true))
-		frames, faults, _ := m1.PageStats(m1.Frames)
+		frames, faults, _ := m1.PageStats(st.fr)
 		// A mixture's experts are pages of their own, smaller than a block's,
 		// so a block page's bytes hold one block frame and some expert ones;
 		// the page-ins are what say the blocks were evicted every token.

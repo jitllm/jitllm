@@ -28,7 +28,7 @@ func TestOpenHonoursAPageBudget(t *testing.T) {
 
 	// One byte of budget is one frame, which is the tightest configuration the
 	// reader has: every block but the resident one faults on every visit.
-	tight, err := model.Open(src, model.WithPageBudget(1))
+	tight, err := model.Open(src)
 	if err != nil {
 		t.Fatalf("Open under a one-page budget: %v", err)
 	}
@@ -44,27 +44,28 @@ func TestOpenHonoursAPageBudget(t *testing.T) {
 	for i := 0; i < tight.Container.NPages(); i++ {
 		allPages += tight.Container.PageBytes(i)
 	}
-	if got := tight.Frames.Budget(); got == 0 || got >= allPages {
-		t.Fatalf("budget is %d bytes against %d of pages: it did not bind (0 means "+
-			"unlimited), so this test would compare two fully-resident models "+
-			"and prove nothing", got, allPages)
-	}
-	if got := full.Frames.Budget(); got != 0 && got < allPages {
-		t.Fatalf("the unbudgeted open has a %d-byte budget against %d of pages: both "+
-			"arms are paged and the comparison is not paired", got, allPages)
-	}
 	// build() reads only the always-resident dense region, so opening faults
 	// nothing and placement can happen before any block is read.
-	if in, _ := tight.Frames.Faults(); in != 0 {
+	if in := tight.PageFaults(); in != 0 {
 		t.Logf("%d page-ins during open (expected 0 now that norms are dense)", in)
 	}
 
 	// And the paged model answers identically: residency is a memory decision,
 	// never an arithmetic one.
 	ids := []int32{1, 7, 3, 11}
-	a, b := testInstance(t, full, 16), testInstance(t, tight, 16)
+	a, b := testInstance(t, full, 16), testInstance(t, tight, 16, WithPageBudget(1))
 	defer a.Close()
 	defer b.Close()
+	// What the instances' quotas made of their frames' budgets.
+	if got := b.fr.Budget(); got == 0 || got >= allPages {
+		t.Fatalf("budget is %d bytes against %d of pages: it did not bind (0 means "+
+			"unlimited), so this test would compare two fully-resident models "+
+			"and prove nothing", got, allPages)
+	}
+	if got := a.fr.Budget(); got != 0 && got < allPages {
+		t.Fatalf("the unbudgeted instance has a %d-byte budget against %d of pages: both "+
+			"arms are paged and the comparison is not paired", got, allPages)
+	}
 	for _, id := range ids {
 		la, err := a.Forward(id % int32(full.Cfg.NVocab))
 		if err != nil {
@@ -132,8 +133,8 @@ func forwardBatchFaultsItsBlocksIn(t *testing.T, path string, opts ...Option) {
 		t.Skipf("model not present: %s", path)
 	}
 	src := jlmOf(t, p)
-	instOpts := append([]Option{WithKVF16(false)}, opts...)
-	tight, err := model.Open(src, model.WithPageBudget(1))
+	instOpts := append([]Option{WithKVF16(false), WithPageBudget(1)}, opts...)
+	tight, err := model.Open(src)
 	if err != nil {
 		t.Fatalf("Open under a one-page budget: %v", err)
 	}
@@ -145,9 +146,9 @@ func forwardBatchFaultsItsBlocksIn(t *testing.T, path string, opts ...Option) {
 	for i := 0; i < tight.Container.NPages(); i++ {
 		allPages += tight.Container.PageBytes(i)
 	}
-	if got := tight.Frames.Budget(); nb < 2 || got == 0 || got >= allPages {
-		t.Fatalf("%d block(s), budget %d against %d of pages: nothing is "+
-			"ever evicted, so this gate proved nothing", nb, got, allPages)
+	if nb < 2 || !budgetEvicts(tight, 1) {
+		t.Fatalf("%d block(s) against %d bytes of pages: nothing is "+
+			"ever evicted, so this gate proved nothing", nb, allPages)
 	}
 
 	const nseq, steps = 2, 4
@@ -187,6 +188,10 @@ func forwardBatchFaultsItsBlocksIn(t *testing.T, path string, opts ...Option) {
 
 	b := run(tight, "under a one-page budget", instOpts)
 	defer b.Close()
+	if got := b.fr.Budget(); got == 0 || got >= allPages {
+		t.Fatalf("the paged arm's frames hold a %d-byte budget against %d of pages: "+
+			"its quota did not bind, so this gate proved nothing", got, allPages)
+	}
 	var sse, sy2 float64
 	for i := 0; i < nseq; i++ {
 		lg := b.BatchLogits(i)
@@ -205,7 +210,7 @@ func forwardBatchFaultsItsBlocksIn(t *testing.T, path string, opts ...Option) {
 		nmse = sse / sy2
 	}
 	t.Logf("%d block(s), budget %d of %d page bytes, against no budget NMSE %.3e",
-		nb, tight.Frames.Budget(), allPages, nmse)
+		nb, b.fr.Budget(), allPages, nmse)
 	if nmse != 0 {
 		t.Fatalf("ForwardBatch under paging parts from ForwardBatch with no budget: NMSE %.3e", nmse)
 	}

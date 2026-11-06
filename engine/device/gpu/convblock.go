@@ -160,7 +160,7 @@ func convGeometry(p *nn.ConvPlan) (rows, in, out, keys int) {
 // block's slots, its own buffers uploaded, its form made. A block the front
 // end states no graph of is the audio conformer's, which no device composes
 // yet.
-func (g *devTier) prepConv(li int, p *nn.LayerPlan, w *nn.LayerWeights, mayPage bool) bool {
+func (g *devTier) prepConv(li int, p *nn.LayerPlan, w *nn.LayerWeights, fr *jlm.Frames, mayPage bool) bool {
 	c, cw := p.Conv, w.Conv
 	switch {
 	case p.Graph == nil:
@@ -229,7 +229,7 @@ func (g *devTier) prepConv(li int, p *nn.LayerPlan, w *nn.LayerWeights, mayPage 
 		}
 	}
 	if w.Ensure != nil {
-		if err := w.Ensure(w); err != nil {
+		if err := w.Ensure(w, fr); err != nil {
 			g.LastErr = fmt.Sprintf("block %d: %v", li, err)
 			return false
 		}
@@ -245,7 +245,7 @@ func (g *devTier) prepConv(li int, p *nn.LayerPlan, w *nn.LayerWeights, mayPage 
 			continue
 		}
 		q, _ := quantOf(x.T)
-		r := g.resident(li, i, q, x.Data, x.Rows, x.K, x.Packed)
+		r := g.resident(li, i, nil, q, x.Data, x.Rows, x.K, x.Packed)
 		if r == nil || !r.ok {
 			if g.LastErr == "" {
 				g.LastErr = fmt.Sprintf("block %d: %s not resident", li, weightRole(i))
@@ -276,7 +276,7 @@ func (g *devTier) prepConv(li int, p *nn.LayerPlan, w *nn.LayerWeights, mayPage 
 			}
 		}
 	}
-	l.pg = &page{ws: append([]nn.Weight(nil), ws...), bytes: pb, round: pr, in: true, ensure: w.Ensure}
+	l.pg = &page{ws: append([]nn.Weight(nil), ws...), bytes: pb, round: pr, in: true, ensure: w.Ensure, fr: fr}
 	g.pagesIn++
 	g.pageBytes += pb + pr
 	if old := g.layers[li]; old != nil {

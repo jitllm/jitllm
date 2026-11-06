@@ -279,3 +279,18 @@ func (g *devTier) mapKVs(sid uint64, li, page int, key string, end int) bool {
 	}
 	return ok
 }
+
+// namesPages reports that a layer's pool names a page for the prefix cache.
+func (g *devTier) namesPages() bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.closed || g.kvp == nil {
+		return false
+	}
+	for _, l := range g.kvp.layers {
+		if l != nil && len(l.sh.holds) > 0 {
+			return true
+		}
+	}
+	return false
+}

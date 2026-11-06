@@ -202,7 +202,7 @@ func (m *SharedStore) publish(k kvStoreKey, b []float32, a *cpudev.Arena) []floa
 	// A slot of an arena is held for the entry until it is forgotten.
 	if a != nil {
 		if i, ok := a.SlotOf(b); ok {
-			a.Hold(i)
+			a.Keep(i)
 			e.arena, e.slot = a, i
 		}
 	}
@@ -320,7 +320,7 @@ func (m *SharedStore) forget(e *sharedPage) {
 		delete(m.held, &e.b[0])
 		m.bytes -= 4 * uint64(len(e.b))
 		if e.arena != nil {
-			e.arena.Drop(e.slot)
+			e.arena.Unkeep(e.slot)
 			e.arena = nil
 		}
 	}
@@ -495,6 +495,15 @@ func (kc *kvCache) publishSealed(li, n int, key string) {
 	if !s.latent {
 		v = kc.share.publish(kvStoreKey{key, li*2 + 1, n}, s.mem.V(n), a)
 	}
+	// The store's copy in another CPU device's arena is that device's: the
+	// block keeps its own page, read through its own arena.
+	if s.mem.Table() != nil && &k[0] != &s.mem.K(n)[0] && !s.mem.InArena(k) {
+		kc.share.release(k)
+		if !s.latent {
+			kc.share.release(v)
+		}
+		return
+	}
 	switch {
 	case a != nil:
 		s.mem.Give(s.mem.K(n))
@@ -534,11 +543,32 @@ func (kc *kvCache) faultShared(li, n int, key string) error {
 			return ErrNoPage
 		}
 	}
+	if s.mem.Table() != nil && !s.mem.InArena(k) {
+		kc.copyShared(s, n, k, v)
+		return nil
+	}
 	s.setPage(n, k, v)
 	s.out[n] = false
 	s.markShared(n, true)
 	kc.fetched += 2
 	return nil
+}
+
+// copyShared makes page n of s a copy of the store's page k, v that another
+// CPU device's arena holds: a block reads its history through its own
+// device's arena, so the bytes move into a page of it, as a page moves
+// between any two devices, and the store's references go back.
+func (kc *kvCache) copyShared(s *kvPages, n int, k, v []float32) {
+	s.extend(n)
+	s.mem.Grow(n)
+	copy(s.mem.K(n), k)
+	if !s.latent {
+		copy(s.mem.V(n), v)
+		kc.share.release(v)
+	}
+	kc.share.release(k)
+	s.out[n] = false
+	kc.fetched += 2
 }
 
 // unshareAll drops every shared page's reference, for Close: the pool must

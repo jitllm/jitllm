@@ -38,7 +38,7 @@ func (s *Instance) hostChunk() int {
 // is identical to Forward's: every matvec becomes a matmul over the chunk, and
 // attention stays per token because token i attends only up to p0+i.
 func (s *Instance) Prefill(tokens []int32) ([]float32, error) {
-	defer s.m.EnterPager(s.m.Frames)()
+	defer s.fr.Enter()()
 	if err := s.retireErr; err != nil {
 		s.retireErr = nil
 		return nil, err
@@ -55,7 +55,7 @@ func (s *Instance) PrefillMixed(spans ...model.Span) ([]float32, error) {
 
 // prefillMixedAt is PrefillMixed into one sequence slot.
 func (s *Instance) prefillMixedAt(slot int, spans ...model.Span) ([]float32, error) {
-	defer s.m.EnterPager(s.m.Frames)()
+	defer s.fr.Enter()()
 	return s.prefillSpans(slot, spans...)
 }
 

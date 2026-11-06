@@ -3,6 +3,7 @@
 package engine
 
 import (
+	"slices"
 	"sync"
 	"testing"
 )
@@ -18,17 +19,20 @@ func TestConcurrentDecodeOnAnEvictingContainer(t *testing.T) {
 	probe.Close()
 	m, openOpts2 := hybridModelOpt(t, hyOpt{moe: true, layers: 8, manyExp: true, budget: 3 * page})
 	defer m.Close()
-	if !m.Frames.CanEvict() {
+	if !budgetEvicts(m, 3*page) {
 		t.Fatalf("the budget is %d bytes over 8 pages of %d and nothing is evicted: "+
-			"this gate would pass on a tree with no lock", m.Frames.Budget(), page)
+			"this gate would pass on a tree with no lock", 3*page, page)
 	}
+	// One CPU device under the workers: one evicting set of frames they all
+	// read, which is what the lock is for.
+	shared := append(slices.Clone(openOpts2), sharedCPU(t, openOpts2...))
 
 	// Built serially, driven concurrently: building JITs concurrently is not
 	// what this test is about.
 	const workers = 3
 	ss := make([]*Instance, workers)
 	for i := range ss {
-		ss[i] = testInstance(t, m, 16, openOpts2...)
+		ss[i] = testInstance(t, m, 16, shared...)
 		defer ss[i].Close()
 	}
 	// The single-threaded answer for every worker, taken first, so a page
@@ -87,16 +91,17 @@ func TestConcurrentDecodeOnAnEvictingContainer(t *testing.T) {
 func TestConcurrentDecodeOnAFittingMixture(t *testing.T) {
 	m, openOpts := hybridModelOpt(t, hyOpt{moe: true, layers: 8, manyExp: true})
 	defer m.Close()
-	if m.Frames.CanEvict() {
+	if budgetEvicts(m, m.Gc.Budget()) {
 		t.Fatal("the budget evicts: this is the serialised case, not the one this gate is for")
 	}
+	shared := append(slices.Clone(openOpts), sharedCPU(t, openOpts...))
 	if l := &m.Layers[0]; l.Gate.E == nil || !m.Container.ExpertPaged(l.Gate.E) {
 		t.Fatal("the fixture's banks are not in expert pages: this gate proved nothing")
 	}
 	const workers = 3
 	ss := make([]*Instance, workers)
 	for i := range ss {
-		ss[i] = testInstance(t, m, 16, openOpts...)
+		ss[i] = testInstance(t, m, 16, shared...)
 		defer ss[i].Close()
 	}
 	want := make([][]float32, workers)

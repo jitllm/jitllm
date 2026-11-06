@@ -1069,7 +1069,7 @@ func (g *GPU) Budgets() []Budget {
 // HostReserved is how many bytes of the host's memory this tier holds now: what
 // the devices on the host's memory have charged to their pool (blocks, KV
 // pages, scratch, the driver's rounding), plus the packed arena's limit. The
-// host takes it off its own budgets (model.Model.SetPageBudget,
+// host takes it off its own budgets (engine.Instance.SetPageBudget,
 // engine.Instance.SetMemBudget), and it moves with placement: an integrated GPU
 // holding nothing costs the host nothing, however large the pool it may grow
 // into. Zero when no device is on the host's memory and the arena is off.
@@ -1081,11 +1081,17 @@ func (g *GPU) HostReserved() uint64 {
 	if g == nil {
 		return 0
 	}
+	// The cards' frames keep host memory beyond their staging: the banks of
+	// the blocks they stream.
+	var frames uint64
+	for _, d := range g.devs {
+		frames += d.framesHeld()
+	}
 	if g.hostPool == nil {
 		// No device on the host's memory, but the arena is still host memory.
-		return g.arenaReserved()
+		return g.arenaReserved() + frames
 	}
-	return g.hostPool.Used() + g.arenaReserved()
+	return g.hostPool.Used() + g.arenaReserved() + frames
 }
 
 // arenaReserved is the host memory the packed arena may retain. It is host RAM

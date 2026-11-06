@@ -23,9 +23,9 @@ import (
 // it, in float64 past the projection: the output norm (a LayerNorm with
 // outNormB, or an RMSNorm), the projection, the bias outB, the final softcap
 // and the logit scale of c, in the model's order.
-func headOracle(t *testing.T, m *model.Model, c *model.Config, x, outNormB, outB []float32) []float64 {
+func headOracle(t *testing.T, m *model.Model, head model.Tensor, c *model.Config, x, outNormB, outB []float32) []float64 {
 	t.Helper()
-	w := model.Wt(m.Output)
+	w := model.Wt(head)
 	if w.T != quant.F32 {
 		t.Fatalf("the fixture's head is %v: the oracle's matvec here is the float one", w.T)
 	}
@@ -128,6 +128,7 @@ type headArm struct {
 	parts      nn.Parts
 	xs         [][]float32
 	lnb, outB  []float32
+	head       model.Tensor
 	want, cfg  func(c *model.Config)
 	mut        func(m *model.Model) func()
 	worst      float64
@@ -155,7 +156,7 @@ func (a *headArm) run(t *testing.T) {
 	a.want(&intended)
 	wants := make([][]float64, len(ids))
 	for p, x := range a.xs {
-		wants[p] = headOracle(t, m, &intended, x, a.lnb, a.outB)
+		wants[p] = headOracle(t, m, a.head, &intended, x, a.lnb, a.outB)
 	}
 	defer cfgMut(m, a.cfg)()
 	if a.mut != nil {
@@ -223,6 +224,9 @@ func TestComposedHeadOps(t *testing.T) {
 			// device arm runs too. The oracle reproduces the host's own head
 			// from them, or neither the residual nor the oracle is right.
 			host := testInstance(t, ref, len(ids)+1, openOpts...)
+			// The instance's head, its bytes kept past the instance's frames.
+			head := host.dense.Output
+			head.Data = slices.Clone(head.Data)
 			var xs [][]float32
 			amax := 0.0
 			for p, id := range ids {
@@ -232,7 +236,7 @@ func TestComposedHeadOps(t *testing.T) {
 				}
 				x := slices.Clone(host.x[:c.NEmbd])
 				xs = append(xs, x)
-				want := headOracle(t, ref, c, x, lnb, outB)
+				want := headOracle(t, ref, head, c, x, lnb, outB)
 				if e := headNMSE(lg, want); !(e < bound) {
 					t.Fatalf("pos %d: the host's own head is %.3e from the oracle: the residual or the oracle is wrong", p, e)
 				}
@@ -275,7 +279,7 @@ func TestComposedHeadOps(t *testing.T) {
 								// it in the model's order (finishLogits). The composed head
 								// keeps the model's order on the device.
 								refused := arm.cap != 0 && outB != nil && parts == 0
-								a := &headArm{fx: fx, dev: dev, parts: parts, xs: xs, lnb: lnb, outB: outB, want: set, cfg: set, refused: refused}
+								a := &headArm{fx: fx, dev: dev, parts: parts, xs: xs, lnb: lnb, outB: outB, head: head, want: set, cfg: set, refused: refused}
 								a.run(t)
 								n, d := a.stats.ServedPart(nn.ComposedHead)
 								if refused {
@@ -347,7 +351,7 @@ func TestComposedHeadOps(t *testing.T) {
 							continue
 						}
 						t.Run(v.name, func(t *testing.T) {
-							a := &headArm{fx: fx, dev: dev, parts: nn.ComposedHead, xs: xs, lnb: lnb, outB: outB, want: full, cfg: v.cfg, mut: v.mut}
+							a := &headArm{fx: fx, dev: dev, parts: nn.ComposedHead, xs: xs, lnb: lnb, outB: outB, head: head, want: full, cfg: v.cfg, mut: v.mut}
 							a.run(t)
 							n, d := a.stats.ServedPart(nn.ComposedHead)
 							if n != a.steps || d != 0 {

@@ -22,8 +22,10 @@ import (
 // the card and the same greedy token at every step as the card holding the
 // whole model resident. Each block is composed once on the card however often
 // it pages, and once more when a caller moves it to the CPU and back
-// (gpu.Stats.BlockForms). A budget below the slots a swap needs fails
-// SetDevice by name and leaves nothing placed.
+// (gpu.Stats.BlockForms). The CPU's frames read and hold no block page,
+// resident or paged: the card reads every block into memory of its own. A
+// budget below the slots a swap needs fails SetDevice by name and leaves
+// nothing placed.
 //
 // VIOLATION SIGNATURE. The same card and budget with the CPU listed spills the
 // blocks the card does not hold to the CPU, and the WhereIs check, run on it,
@@ -120,6 +122,17 @@ func blocksPageOnTheListedCard(t *testing.T, path, spec string) {
 		return toks, lg
 	}
 
+	// cpuReadNone holds the CPU's frames to having read no chunk of a block
+	// page and holding none: the CPU is not listed, so nothing of a block is
+	// its to read.
+	cpuReadNone := func(t *testing.T, st *Instance) {
+		t.Helper()
+		if n, held := st.fr.ChunksIn(), st.fr.ResidentPages(); n != 0 || held != 0 {
+			t.Errorf("the CPU is not listed, and its frames read %d chunk(s) of block pages and hold %d "+
+				"page(s): a card read its blocks through the CPU's memory", n, held)
+		}
+	}
+
 	m, ctl, cg, err := attach(t, 0, false)
 	if err != nil {
 		t.Fatal(err)
@@ -129,6 +142,7 @@ func blocksPageOnTheListedCard(t *testing.T, path, spec string) {
 		t.Fatalf("the unbudgeted card holds %d of %d blocks: %s", ctl.devCount(), nl, cg.Err())
 	}
 	want, wantLg := run(t, m, ctl, nil)
+	cpuReadNone(t, ctl)
 
 	t.Run("pages", func(t *testing.T) {
 		m, st, g, err := attach(t, budget, false)
@@ -139,6 +153,7 @@ func blocksPageOnTheListedCard(t *testing.T, path, spec string) {
 			t.Fatalf("the output projection is not on %s: %s", card, g.Err())
 		}
 		got, lg := run(t, m, st, want)
+		cpuReadNone(t, st)
 		worst := 0.0
 		for i := range want {
 			if got[i] != want[i] {

@@ -85,7 +85,19 @@ func speedCmd(procStart time.Time, args []string) error {
 	}
 	defer cd.Close()
 	io = append(io, engine.WithCPU(cd))
-	if err := preloadWait(m); err != nil {
+	// The CPU device keeps the model's forms and frames for the run: the
+	// instances below come and go, and the last of them to close would
+	// otherwise take them along. The first one makes the frames, under its
+	// page quota, and a preload is waited for there.
+	cd.HoldModel(m.Id)
+	defer cd.ReleaseModel(m.Id)
+	first, err := engine.NewInstance(m, 1, io...)
+	if err != nil {
+		return err
+	}
+	err = preloadWait(first.FramesOn(nn.CPU))
+	first.Close()
+	if err != nil {
 		return err
 	}
 	tOpen := time.Since(t00)

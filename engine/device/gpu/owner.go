@@ -18,6 +18,9 @@ import (
 // so a second model cannot find the tier free while this offer is placing.
 func (g *GPU) admit(model uint64, what string) (func(), bool) {
 	g.ownMu.Lock()
+	if g.held && g.model != model && g.holdsOf[g.model] == 0 {
+		g.releaseHeld()
+	}
 	if g.held && g.model != model && g.holds() {
 		other := g.model
 		g.ownMu.Unlock()
@@ -64,19 +67,56 @@ func (g *GPU) refuse(why string) {
 	}
 }
 
-// ReleaseModel gives back everything model placed: every block on every
-// device with every session's history on it, the head, and what each device
-// built from the model's plan -- its scratch, its KV pool, its argmax -- so
-// the next model starts from a device that has seen nothing. A model that does
-// not hold the tier releases nothing; a refused one never placed anything.
+// HoldModel counts an instance of model holding the tier (nn.ModelOwner).
+func (g *GPU) HoldModel(model uint64) {
+	g.ownMu.Lock()
+	defer g.ownMu.Unlock()
+	if g.holdsOf == nil {
+		g.holdsOf = map[uint64]int{}
+	}
+	g.holdsOf[model]++
+}
+
+// ReleaseModel is one instance's release of model (nn.ModelOwner); the last
+// gives back everything model placed: every block on every device with every
+// session's history on it, the head, and what each device built from the
+// model's plan -- its scratch, its KV pool, its argmax -- so the next model
+// starts from a device that has seen nothing. Pages the prefix cache names
+// hold the model as an instance does, so a later instance restores them: a
+// model they alone hold keeps the tier until another model is admitted. A
+// model that does not hold the tier releases nothing; a refused one never
+// placed anything.
 func (g *GPU) ReleaseModel(model uint64) {
 	g.ownMu.Lock()
 	defer g.ownMu.Unlock()
-	if !g.held || g.model != model {
+	if g.holdsOf[model] > 1 {
+		g.holdsOf[model]--
 		return
 	}
+	delete(g.holdsOf, model)
+	if !g.held || g.model != model || g.named() {
+		return
+	}
+	g.releaseHeld()
+}
+
+// named reports that some device names a page of the held model for the
+// prefix cache. Callers hold g.ownMu.
+func (g *GPU) named() bool {
+	for _, d := range g.devs {
+		if d.namesPages() {
+			return true
+		}
+	}
+	return false
+}
+
+// releaseHeld gives back everything the held model placed (ReleaseModel's
+// last release). Callers hold g.ownMu.
+func (g *GPU) releaseHeld() {
 	for _, d := range g.devs {
 		d.releaseModel()
+		d.closeFrames()
 	}
 	g.mu.Lock()
 	clear(g.own)
@@ -86,7 +126,9 @@ func (g *GPU) ReleaseModel(model uint64) {
 	g.held = false
 }
 
-// ReleaseModel forwards to the tier: what it releases is the model's.
+// HoldModel and ReleaseModel forward to the tier: what it keeps is the
+// model's.
+func (s *gpuSession) HoldModel(model uint64)    { s.g.HoldModel(model) }
 func (s *gpuSession) ReleaseModel(model uint64) { s.g.ReleaseModel(model) }
 
 // releaseModel is ReleaseModel for one device: Close's walk without closing
@@ -105,6 +147,7 @@ func (g *devTier) releaseModel() {
 	// The composed forms go with the model: a whole block's names the
 	// model's graph, and the recordings that launched any of them are gone.
 	g.partsClose()
+	g.releaseRows()
 	// The head's projection is keyed on its address like a lone matvec's, and
 	// goes with its scratch.
 	if bs := g.bs; bs != nil && bs.head != nil {

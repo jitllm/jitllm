@@ -45,7 +45,7 @@ func (m *Model) EmbedIDs(text string) []int32 {
 // loadDenseHeads binds an embedding model's projection heads, when the
 // container carries them. Both or neither: one alone is a model this graph
 // cannot express.
-func loadDenseHeads(c *jlm.File, fr *jlm.Frames, m *Model) error {
+func loadDenseHeads(c *jlm.File, m *Model) error {
 	has1 := c.Has(jlm.RoleEmbdDense1, jlm.DenseBlock, -1)
 	has2 := c.Has(jlm.RoleEmbdDense2, jlm.DenseBlock, -1)
 	if !has1 && !has2 {
@@ -63,8 +63,7 @@ func loadDenseHeads(c *jlm.File, fr *jlm.Frames, m *Model) error {
 		if !ok || e.NDim != 2 {
 			return fmt.Errorf("model: %v is %v in %d dimensions", h.role, e.Type, e.NDim)
 		}
-		qs, _, _ := fr.Span(e)
-		*h.dst = Tensor{E: e, Typ: typ, Data: qs, Rows: int(e.Dims[1]), K: int(e.Dims[0])}
+		*h.dst = Tensor{E: e, Typ: typ, Rows: int(e.Dims[1]), K: int(e.Dims[0])}
 		if jlm.Packed(e.Type) {
 			h.dst.Packed = &nn.Packed{}
 		}
