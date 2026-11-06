@@ -1555,6 +1555,17 @@ type RecRowsDevice interface {
 // rewound by position as attention can. RecMark records where the session's
 // state is; RecRewind returns it there, and is honest about when it cannot --
 // more than one step since the mark, or a state the device keeps in one copy.
+// TowerParts is a device running a vision tower's parts apart from its
+// blocks: a square's entry, picture class class's of sample format px, over
+// the picture's words into its n patch rows; the head over the rows the last
+// block left into the projected rows; and tap j over the rows its block left.
+// req is the square's request words and pos its live rows and positions.
+type TowerParts interface {
+	Entry(class int, px uint8, pic, req, pos []uint32, n int, rows []float32) error
+	Head(n int, req, pos []uint32, in, out []float32) error
+	Tap(j, n int, req, pos []uint32, in, out []float32) error
+}
+
 type RecRewinder interface {
 	RecMark()
 	RecRewind() bool
