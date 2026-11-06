@@ -135,9 +135,9 @@ type Config struct {
 	ssdAttn bool
 	// shortConv: see ShortConv.
 	shortConv bool
-	// mamba1: see Mamba1. dtRank is its dt bottleneck, read off the first
-	// Mamba-1 block's x_proj at build(): the container states no rank.
-	mamba1 bool
+	// scan: see Scan. dtRank is its dt bottleneck, read off the first
+	// scan block's x_proj at build(): the container states no rank.
+	scan   bool
 	DtRank int
 	// SSMNormGroups is how many groups a Mamba-2 block's gated RMSNorm runs
 	// over, each of SSM.Inner/SSMNormGroups channels with its own slice of the
@@ -657,10 +657,11 @@ func (c *Config) SSDAttn() bool { return c.ssdAttn }
 // it.
 func (c *Config) ShortConv() bool { return c.shortConv }
 
-// Mamba1 reports that the recurrent blocks are Mamba-1's selective scan
-// (jlm.LayerMamba1): every channel a head of one row, the decay a vector over
-// the state, dt off a low-rank bottleneck of the convolved x.
-func (c *Config) Mamba1() bool { return c.mamba1 }
+// Scan reports that the recurrent blocks are the per-element selective scan
+// (jlm.LayerScan: Mamba, FalconMamba, Jamba): every channel a head of one
+// row, the decay a vector over the state, dt off a low-rank bottleneck of the
+// convolved x.
+func (c *Config) Scan() bool { return c.scan }
 
 // configFrom translates the container's typed description into the engine's.
 //
@@ -822,13 +823,13 @@ func configFrom(c *jlm.Config) (*Config, error) {
 			out.ssd, out.ssdAttn = true, true
 		case jlm.LayerShortConv:
 			out.shortConv = true
-		case jlm.LayerMamba1:
-			out.mamba1 = true
+		case jlm.LayerScan:
+			out.scan = true
 		}
 	}
-	if out.mamba1 {
+	if out.scan {
 		for i, k := range c.LayerKinds {
-			if k.Recurrent() && k != jlm.LayerMamba1 {
+			if k.Recurrent() && k != jlm.LayerScan {
 				return nil, fmt.Errorf("model: layer %d is %v in a Mamba-1 model", i, k)
 			}
 		}
@@ -2503,9 +2504,9 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 		}
 	}
 	// Mamba-1's dt rank is its x_proj's dt rows.
-	if cfg.Mamba1() {
+	if cfg.Scan() {
 		for i, k := range c.Config().LayerKinds {
-			if e, ok := c.Find(jlm.RoleSSMXDt, int32(i), -1); ok && k == jlm.LayerMamba1 {
+			if e, ok := c.Find(jlm.RoleSSMXDt, int32(i), -1); ok && k == jlm.LayerScan {
 				cfg.DtRank = int(e.Dims[1])
 				break
 			}
@@ -2807,7 +2808,7 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 				head[0].dst = &l.SsmIn
 			}
 			switch {
-			case cfg.Mamba1():
+			case cfg.Scan():
 				// x convolves (wq), z gates the output (ssmGate); dt, B and C
 				// come off the convolved x, and there is no ssm_ba.
 				head = []bind{{jlm.RoleAttnQKV, &l.Wq}, {jlm.RoleAttnGate, &l.SsmGate},
@@ -3091,7 +3092,7 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 				}
 				// A Mamba-2 block may have no gated norm at all (Falcon-H1's
 				// mamba_rms_norm false): y*silu(z) goes straight to ssm_out.
-				if v.role == jlm.RoleSSMNorm && cfg.Mamba1() {
+				if v.role == jlm.RoleSSMNorm && cfg.Scan() {
 					continue // Mamba-1 has no gated norm
 				}
 				if v.role == jlm.RoleSSMNorm && cfg.SSD() {
@@ -3126,7 +3127,7 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 				gateWidth, dtWidth = g.VHeads*g.KDim, g.VHeads*g.KDim
 			}
 			normWidth, dWidth, cbWidth := g.VDim, 0, 0
-			if g.Mamba1 {
+			if g.Scan {
 				// A is a row of the state per channel; D, dt's bias and the
 				// convolution's bias one per channel; no gated norm.
 				gateWidth, normWidth = g.VHeads*g.KDim, 0

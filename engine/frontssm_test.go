@@ -55,7 +55,7 @@ func TestFrontStatesTheStateSpaceMixers(t *testing.T) {
 				}
 				a := rules[0].Attr
 				heads, kHeads, decay := dg.VHeads, dg.KHeads, dg.VHeads
-				if k == jlm.LayerMamba1 {
+				if k == jlm.LayerScan {
 					kHeads, decay = 1, dg.VHeads*dg.KDim
 				}
 				if !a.Additive || a.Tiled || a.NHead != heads || a.NKVHead != kHeads || a.HeadDim != dg.KDim ||
