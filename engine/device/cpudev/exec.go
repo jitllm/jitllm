@@ -163,6 +163,8 @@ type PartPlan struct {
 	Formats                      map[jlm.Role]jlm.Type
 	Rows, Seqs, Marks, ActWindow int
 	None                         nn.Decline
+	// Skip is a part the model has none of: not composed, not asked.
+	Skip bool
 }
 
 // FormGraph composes p's graph through the model's keyed cache, its inputs
@@ -177,6 +179,9 @@ func (e *Exec) FormGraph(p PartPlan) (*Form, error) {
 // end states no graph (None), the host's instructions lower no form, or the
 // composer declines it.
 func (e *Exec) FormPart(p PartPlan) Part {
+	if p.Skip {
+		return Part{}
+	}
 	part := Part{Composed: true}
 	switch {
 	case p.Graph == nil:

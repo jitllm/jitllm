@@ -3,9 +3,7 @@ package engine
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"github.com/jitllm/jitllm/model"
-	"github.com/jitllm/jitllm/nn"
 
 	"github.com/jitllm/jitllm/graph"
 )
@@ -13,41 +11,6 @@ import (
 // cpuTablesBlock is the block a call of the rotary tables' graphs binds: the
 // planes it reads are its rotary's (cpuTablePlanes), no block's.
 const cpuTablesBlock = -3
-
-// cpuPlaceTables composes the rotary tables' graphs (frontGraphs().tables)
-// for the CPU device at the instance's placement: for each rotary a form of
-// one row and one of a chunk's, a tower's grid table one of a picture's.
-func (s *Instance) cpuPlaceTables() {
-	if s.cpu.x.Device() == nil {
-		return
-	}
-	tabs := s.tableGraphs()
-	one, many := make([]cpudev.Part, len(tabs)), make([]cpudev.Part, len(tabs))
-	widths := [2]int{s.c.RopeW(), s.c.LocalNRot()}
-	for i, g := range tabs {
-		// The tables are the model's rotaries; an instance whose config has
-		// none (a tower's) composes none.
-		if i < len(widths) && widths[i] == 0 {
-			continue
-		}
-		one[i] = s.cpuTable(g, 1)
-		// A tower's grid table turns a picture's rows in one call.
-		rows := cpuRowsCap
-		if s.towered() {
-			rows = s.maxSeq
-		}
-		many[i] = s.cpuTable(g, rows)
-	}
-	s.tables = cpudev.NewTables(s.cpu.x.Device(), one, many, [2][]float32{s.tablePlanes(0), s.tablePlanes(1)}, widths,
-		blockWeights{ws: &s.ws, li: cpuTablesBlock})
-}
-
-// cpuTable is rotary table graph g composed on the CPU device at rows
-// rows, the most marks a sequence holds the instance's.
-func (s *Instance) cpuTable(g *graph.Graph, rows int) cpudev.Part {
-	return s.cpu.x.FormPart(cpudev.PartPlan{Graph: g, Rows: rows, Seqs: max(s.nseq, 1), Marks: s.marksCap(),
-		ActWindow: s.m.ActWindow, None: nn.DeclineNoGraph})
-}
 
 // towered says the instance's blocks are the model's tower's.
 func (s *Instance) towered() bool { return s.m.Tower != nil && s.lo >= s.m.TowerBase }

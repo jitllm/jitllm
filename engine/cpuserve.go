@@ -463,13 +463,7 @@ func (s *Instance) cpuPlace() {
 			s.cpuCompose(li)
 		}
 	}
-	s.cpuPlaceHead()
-	s.cpuPlaceStreams()
-	s.cpuPlacePool()
-	s.cpuPlaceMTP()
-	s.cpuPlaceEmbed()
-	s.cpuPlaceTables()
-	s.cpuPlaceKV()
+	s.placeParts()
 }
 
 // cpuRelocated follows block li onto the CPU, composed for it there, or off
