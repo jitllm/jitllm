@@ -131,7 +131,6 @@ type cpuState struct {
 	// reads the wrong history page or the wrong first row.
 	fault   cpuFault
 	head    cpuHeadState
-	streams cpuStreamsState
 	// tabPlanes is each rotary's planes as its composed table reads them
 	// (composer.TablePlanes), folded from the model's rotaries when the
 	// instance places its blocks (cpuTablePlanes).

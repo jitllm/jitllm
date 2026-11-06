@@ -72,7 +72,11 @@ func (s *Instance) expandStreams(x []float32, n, base int) error {
 	if !s.m.ExpandsStreams() {
 		return nil
 	}
-	if why := s.cpuExpand(x, n); why != nn.DeclineServes {
+	why := nn.DeclineCaller
+	if s.streams != nil {
+		why = s.streams.Expand(x, n)
+	}
+	if why != nn.DeclineServes {
 		return s.streamsDeclined("expansion", why)
 	}
 	return nil
@@ -88,7 +92,11 @@ func (s *Instance) collapseStreams(x []float32, n int) error {
 	if s.c.ResidStreams() {
 		s.rows.tapStreams(s, x, n)
 	}
-	if why := s.cpuCollapse(x, n); why != nn.DeclineServes {
+	why := nn.DeclineCaller
+	if s.streams != nil {
+		why = s.streams.Collapse(x, n)
+	}
+	if why != nn.DeclineServes {
 		return s.streamsDeclined("collapse", why)
 	}
 	return nil

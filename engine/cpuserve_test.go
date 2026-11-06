@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"math"
 	"os"
 	"slices"
@@ -323,7 +324,7 @@ func cpuLogits(t *testing.T, m *model.Model, toks []int32, f cpuFault, composed 
 	t.Helper()
 	s := testInstance(t, m, len(toks)+1, io...)
 	defer s.Close()
-	s.cpu.fault = f
+	setFault(s, f)
 	var out [][]float32
 	for _, tk := range toks {
 		lg, err := s.Forward(tk)
@@ -401,4 +402,13 @@ func cpuCompare(want, got [][]float32) (worst float64, agree int) {
 		}
 	}
 	return worst, agree
+}
+
+// setFault breaks s's CPU device the way f names, in the instance and in the
+// parts the device holds.
+func setFault(s *Instance, f cpuFault) {
+	s.cpu.fault = f
+	if st, ok := s.streams.(*cpudev.Streams); ok {
+		st.Fault = f == cpuFaultStreams
+	}
 }

@@ -180,7 +180,7 @@ func cpuPromptPaged(t *testing.T, m *model.Model, ids []int32, n, decode int, f 
 	t.Helper()
 	s := testInstance(t, m, n+decode+1, io...)
 	defer s.Close()
-	s.cpu.fault = f
+	setFault(s, f)
 	if paged {
 		s.SetKVStore(NewMemStore())
 		pp := 0
@@ -222,7 +222,7 @@ func cpuBatch(t *testing.T, m *model.Model, prompts [][]int32, steps []int32, f 
 	}
 	s := newSessBatch(m, len(prompts), most+len(steps)+1, io...)
 	defer s.Close()
-	s.cpu.fault = f
+	setFault(s.Instance, f)
 	rows := make([][][]float32, len(prompts))
 	for i, p := range prompts {
 		lg, err := s.PrefillSeq(i, p)

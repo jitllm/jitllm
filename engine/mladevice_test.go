@@ -181,7 +181,7 @@ func mlaCPUArm(t *testing.T, src string, ids []int32, want [][]float32) {
 		run := func(f cpuFault) [][]float32 {
 			st := testInstance(t, m, len(ids)+1, instOpts...)
 			defer st.Close()
-			st.cpu.fault = f
+			setFault(st, f)
 			got := runIDs(t, st, ids)
 			cpuServed(t, st, "decode", len(ids)*m.Cfg.NLayer, true)
 			return got
