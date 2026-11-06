@@ -81,7 +81,6 @@ type Session struct {
 	// view and its calls on the CPU device (lanes, bound by the instance it
 	// leases, bindLanes).
 	routes   [2]route
-	lanes    cpudev.SessionLanes
 	ldRoom   nn.RoomReporter
 	ldSpill  nn.Spiller
 	ldStep   nn.SessionStepper
