@@ -686,7 +686,8 @@ func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOp
 	s.kvFmt, s.kvl.fmt = want, want
 	s.Session.limit, s.Session.kvFormat, s.Session.span = maxSeq, want, [2]int{lo, hi}
 	// kvl.fmt sizes every page.
-	s.kv = newKVCacheRange(c, s.nextCacheID(), nseq, s.kvl, nil, s.opt.kvPage, s.lo, s.hi, s.Session.cpuView(), g.cpu.KVPool(m.Id))
+	s.kv = newKVCacheRange(c, s.nextCacheID(), nseq, s.kvl, nil, s.opt.kvPage, s.lo, s.hi, nil, g.cpu.KVPool(m.Id))
+	s.makeRec(s.kv.view, nseq)
 	s.kv.reserve(s.maxSeq)
 	if err := s.kv.useArenas(s.maxSeq, s.kvArenaFor); err != nil {
 		s.exec.x.Composer().Note(err)
@@ -804,7 +805,7 @@ func (s *Instance) Close() error {
 	// The history the device gave back was host memory on an integrated GPU,
 	// and the model's pages get it back once no instance holds the device.
 	s.watchSystem(nil)
-	s.kv.giveBack(s.eng.cpu.KVPool(s.m.Id))
+	s.kv.giveBack()
 	s.unmapOwn()
 	// The blocks a device ran from the frames no longer need their pages for
 	// it. Close may be called twice; framesHeld makes the second a no-op.
@@ -2823,7 +2824,7 @@ func (s *Instance) setKVFmt(f nn.KVFmt) {
 	// Carry every caller-visible setting into the fresh cache (namespace and
 	// budget); a forgotten one is silently lost.
 	old := s.kv
-	s.kv = newKVCacheRange(s.c, old.id, s.nseq, s.kvl, old.store, s.opt.kvPage, s.lo, s.hi, s.Session.cpuView(), s.eng.cpu.KVPool(s.m.Id))
+	s.kv = newKVCacheRange(s.c, old.id, s.nseq, s.kvl, old.store, s.opt.kvPage, s.lo, s.hi, old.view, s.eng.cpu.KVPool(s.m.Id))
 	s.kv.reserve(s.maxSeq)
 	s.kv.ns, s.kv.budget = old.ns, old.budget
 	// The CPU's blocks read the new cache: its arenas, and forms for f32.

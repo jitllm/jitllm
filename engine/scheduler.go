@@ -278,8 +278,7 @@ func (s *Instance) newHistory(maxSeq int) (*Session, error) {
 	sess := &Session{model: s.m, limit: maxSeq, kvFormat: s.kvFmt, span: [2]int{s.lo, s.hi}}
 	l := s.kvl
 	l.maxSeq = maxSeq
-	sess.pages = s.eng.cpu.KVPool(s.m.Id)
-	sess.kv = newKVCacheRange(s.c, s.nextCacheID(), 1, l, nil, s.opt.kvPage, s.lo, s.hi, sess.cpuView(), sess.pages)
+	sess.kv = newKVCacheRange(s.c, s.nextCacheID(), 1, l, nil, s.opt.kvPage, s.lo, s.hi, nil, s.eng.cpu.KVPool(s.m.Id))
 	sess.kv.reserve(maxSeq)
 	if err := sess.kv.useArenas(maxSeq, s.kvArenaFor); err != nil {
 		return nil, err
@@ -287,13 +286,7 @@ func (s *Instance) newHistory(maxSeq int) (*Session, error) {
 	sess.bpos = make([]int, 1)
 	sess.logits = make([]float32, s.c.NVocab)
 	sess.rmarks = model.RopeMarks{}
-	if s.recurrent() {
-		for li := range s.c.NLayer {
-			if s.keepsRec(li) {
-				sess.cpuView().MakeRec(li, s.dg.ConvStateLen(), s.dg.StateStride())
-			}
-		}
-	}
+	s.makeRec(sess.kv.view, 1)
 	return sess, nil
 }
 
@@ -380,7 +373,7 @@ func (s *Session) Close() {
 	}
 	s.ld, s.tier, s.held = nil, nil, nil
 	if s.kv != nil {
-		s.kv.giveBack(s.pages)
+		s.kv.giveBack()
 		s.kv = nil
 	}
 }

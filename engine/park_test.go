@@ -22,11 +22,11 @@ func stateBytes(s *Instance) []byte {
 			}
 		}
 	}
-	for li := range s.view.Blocks() {
-		b.Write(kvBytesOf(s.view.Conv(li)))
+	for li := range s.kv.view.Blocks() {
+		b.Write(kvBytesOf(s.kv.view.Conv(li)))
 	}
-	for li := range s.view.Blocks() {
-		b.Write(kvBytesOf(s.view.State(li)))
+	for li := range s.kv.view.Blocks() {
+		b.Write(kvBytesOf(s.kv.view.State(li)))
 	}
 	return b.Bytes()
 }

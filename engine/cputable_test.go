@@ -38,7 +38,7 @@ func cpuTablesWrong(s *Instance) (error, int) {
 		if pg.arena() == nil {
 			continue
 		}
-		if s.Session.view.At(li) != pg.arena() {
+		if s.Session.kv.view.At(li) != pg.arena() {
 			return fmt.Errorf("block %d's table is not its session's view's", li), n
 		}
 		if got, want := pg.arena().Pages(nseq), derivedTable(pg, nseq); !slices.Equal(got, want) {

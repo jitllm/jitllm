@@ -1,5 +1,7 @@
 package engine
 
+import "github.com/jitllm/jitllm/engine/device/cpudev"
+
 // allocRecurrent sizes the recurrent state, nil for every architecture that
 // is not a hybrid.
 //
@@ -10,12 +12,15 @@ func (s *Instance) allocRecurrent(nseq int) {
 	if !c.Hybrid() || !s.linearIn() {
 		return
 	}
-	g := c.Delta()
-	s.dg = g
-	v := s.Session.cpuView()
-	for i := 0; i < c.NLayer; i++ {
-		if c.LayerKind(i).Recurrent() {
-			v.MakeRec(i, nseq*g.ConvStateLen(), nseq*g.StateStride())
+	s.dg = c.Delta()
+}
+
+// makeRec makes each recurrent block's state for nseq sequences in v, a
+// session's history's view of the CPU device.
+func (s *Instance) makeRec(v *cpudev.View, nseq int) {
+	for li := range s.c.NLayer {
+		if s.keepsRec(li) {
+			v.MakeRec(li, nseq*s.dg.ConvStateLen(), nseq*s.dg.StateStride())
 		}
 	}
 }

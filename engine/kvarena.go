@@ -10,19 +10,6 @@ func (s *Instance) kvArenaFor(li, pp int, latent bool, minSlots int) (*cpudev.Ar
 	return s.eng.cpu.Arenas(s.m.Id).For(li, pp, latent, slots)
 }
 
-// cpuView is the session's view of the CPU device's history, made on the
-// first ask: before its pages are, where it holds recurrent states first.
-func (s *Session) cpuView() *cpudev.View {
-	if s.view == nil {
-		n := 0
-		if s.kv != nil {
-			n = len(s.kv.layers)
-		}
-		s.view = cpudev.NewView(n)
-	}
-	return s.view
-}
-
 // useArena gives the layer the model's arena for its pages and a table for
 // maxSeq positions (cpudev.Pages.UseArena). A layer with no history keeps
 // none, and a layer whose pages are already held keeps them where they are.

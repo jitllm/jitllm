@@ -6,7 +6,6 @@ import (
 
 	"github.com/jitllm/jitllm/model"
 
-	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"github.com/jitllm/jitllm/nn"
 )
 
@@ -43,9 +42,6 @@ type Session struct {
 	// kv is the paged KV history (see engine/model/kvpage.go). Pages are committed as
 	// the sequence reaches them rather than reserved for the whole context.
 	kv *kvCache
-	// view is the session's view of the CPU device's history: the table each
-	// of its CPU blocks reads its pages through (cpuView).
-	view *cpudev.View
 	// spanTok is every row's token of the mixed prompt being prefilled, -1
 	// for a row that has none (tokensOf): what a model with per-layer
 	// embeddings, or DeepSeek V4's hash blocks, read where the prefill has no
@@ -105,9 +101,6 @@ type Session struct {
 	// that one's key.
 	recMark int
 	recLast []int32
-	// pages is where the session's history pages go back at its Close (the
-	// CPU device's, per model).
-	pages *cpudev.PagePool
 	// recPrefill says a chunked prefill is running, which keeps its restore
 	// points itself (recRowPoint).
 	recPrefill bool
@@ -173,13 +166,13 @@ func (s *Instance) relayout() error {
 	l := s.kvl
 	l.maxSeq = sess.limit
 	old := sess.kv
-	sess.kv = newKVCacheRange(s.c, old.id, 1, l, old.store, s.opt.kvPage, s.lo, s.hi, sess.cpuView(), s.eng.cpu.KVPool(s.m.Id))
+	sess.kv = newKVCacheRange(s.c, old.id, 1, l, old.store, s.opt.kvPage, s.lo, s.hi, old.view, s.eng.cpu.KVPool(s.m.Id))
 	sess.kv.reserve(sess.limit)
 	sess.kv.ns, sess.kv.budget = old.ns, old.budget
 	if err := sess.kv.useArenas(sess.limit, s.kvArenaFor); err != nil {
 		return err
 	}
-	old.giveBack(s.eng.cpu.KVPool(s.m.Id))
+	old.giveBack()
 	sess.kvFormat = s.kvFmt
 	return nil
 }
