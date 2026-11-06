@@ -347,7 +347,7 @@ func (g *devTier) pagedPrep(sid uint64, bs *blockScratch, rows []pagedRow) error
 	}
 	// The key count rounded to the recording grain, so a captured graph
 	// serves every token of a grain (graphKey.keys).
-	pg.keys = msaKeys(&bs.p, idxKeys(&bs.p, (pagedKeys(rows)+scoreGrain-1)/scoreGrain*scoreGrain))
+	pg.keys = selectKeys(&bs.p, (pagedKeys(rows)+scoreGrain-1)/scoreGrain*scoreGrain)
 	return nil
 }
 
@@ -499,7 +499,7 @@ func (g *devTier) pagedLayer(sid uint64, l *layer, li int, p *nn.LayerPlan) erro
 
 // selectsHistory reports a block whose attention selects from its whole
 // history: the lightning indexer, MiniMax-M3's and QSA's block selections.
-func selectsHistory(p *nn.LayerPlan) bool { return p.IdxHeads != 0 || p.QSA() }
+func selectsHistory(p *nn.LayerPlan) bool { return p.Select != nil }
 
 // contextPages is the pages a block that holds its context needs for seats
 // sequences of the plan's longest context, and the dummy.

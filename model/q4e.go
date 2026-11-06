@@ -7,17 +7,9 @@ import (
 	"github.com/jitllm/jitllm/format/quant"
 )
 
-// Qwen3.8-Flash-Next's attention blocks select their keys by QSA (qsa.go)
-// and one linear block adds the n-gram embedding before its mix
-// (ngram.go); its hyper-connections are the converter's statement of its
-// streams (convert.StateStreams).
-
-// QSAAt reports that block li selects its keys by QSA: every attention
-// block, the prediction blocks after the trunk too (the release's is a QSA
-// block, as its compress ratio states).
-func (c *Config) QSAAt(li int) bool {
-	return c.QSARatio != 0 && li >= 0 && li < c.NLayer+c.NMTP && !c.LayerKind(li).Recurrent()
-}
+// Qwen3.8-Flash-Next's one linear block adds the n-gram embedding before its
+// mix (ngram.go); its hyper-connections and its attention's selection are
+// the converter's statements (convert.StateStreams, convert.StateSelection).
 
 // NGramAt reports that block li adds the n-gram embedding.
 func (c *Config) NGramAt(li int) bool { return c.NGramBlock != 0 && li == c.NGramBlock-1 }

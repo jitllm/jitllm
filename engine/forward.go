@@ -666,20 +666,14 @@ func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOp
 			want = cpu.KVF32
 		}
 	}
-	// MiniMax Sparse Attention caches its indexer's key in the row (msa.go),
-	// and the selection over it is discrete: a key rounded to binary16 moves a
-	// block's best score by ~1e-3, which flips a near tie, and a flipped block
-	// is a different attention, not a nearby one. The references keep the key
-	// at f32 (llama.cpp's converter and cache force F32 for the indexer), and
-	// so does every device here (the paged K pool is f32), so the host's
+	// A selection caches its indexer's key in the row, and the selection over
+	// it is discrete: a key rounded to binary16 moves a block's best score by
+	// ~1e-3, which flips a near tie, and a flipped block is a different
+	// attention, not a nearby one. The references keep the key at f32
+	// (llama.cpp's converter and cache force F32 for an indexer), and so
+	// does every device here (the paged K pool is f32), so the CPU's
 	// default is f32 too; WithKVF16(true) still forces binary16.
-	if c.MSA() && !opt.kvTypeSet {
-		want = cpu.KVF32
-	}
-	// Qwen3.8-Flash-Next's QSA pools its indexer's raw cached keys, which
-	// the references hold at f32 (qsa.go): the default is f32, as MSA's is,
-	// and a forced width is kept.
-	if c.QSARatio != 0 && !opt.kvTypeSet {
+	if c.Selection() != nil && !opt.kvTypeSet {
 		want = cpu.KVF32
 	}
 	// A forced q8 cache on a model that refuses one was refused at
@@ -1972,11 +1966,14 @@ func (s *Instance) planFor(li int) *nn.LayerPlan {
 	plan.VFromK, plan.OutScale = l.VFromK, l.OutScale
 	plan.DenseMoE = c.DenseMoE && c.MoEAt(li)
 	plan.PLEDim, plan.PLEWidth = c.PLEDim, c.SideWidth()
-	plan.IdxHeads, plan.IdxHeadDim, plan.IdxTopK = c.IdxHeads, c.IdxHeadDim, c.IdxTopK
-	plan.IdxBlock, plan.IdxLocal = c.IdxBlock, c.IdxLocal
-	// MiniMax-M3's dense lead selects nothing: its row has no indexer head.
-	if c.MSA() && !c.MSAAt(li) {
-		plan.IdxHeads, plan.IdxHeadDim, plan.IdxTopK, plan.IdxBlock, plan.IdxLocal = 0, 0, 0, 0, 0
+	if c.MLA() {
+		plan.KeyW = c.KVDim() - c.KVLoraRank - c.NRot
+	} else {
+		plan.KeyW = c.KVRowAt(li) - c.KVDimAt(li)
+	}
+	if c.SelectAt(li) {
+		s := c.Selection()
+		plan.Select = &nn.SelectPlan{Block: int(s.Block), Keep: int(s.Keep)}
 	}
 	plan.AltUp, plan.Sparse, plan.SparseStd = c.PredStreams, li < c.NSparse, c.SparseStd
 	if t := l.Matrix(jlm.RoleLowRankIn); t != nil {
@@ -2027,11 +2024,6 @@ func (s *Instance) planFor(li int) *nn.LayerPlan {
 	plan.NStreams = c.Streams()
 	if w := c.ExpWidth(); c.MoEAt(li) && w != c.NEmbd {
 		plan.ExpLatent = w
-	}
-	if c.QSAAt(li) {
-		plan.Q4E = &nn.Q4EPlan{QSARatio: c.QSARatio}
-	} else if c.QSARatio != 0 {
-		plan.IdxHeads, plan.IdxHeadDim, plan.IdxTopK = 0, 0, 0
 	}
 	if c.NonCausal && (s.m.IsEmbedding() || s.m.Tower != nil && li >= s.m.TowerBase) {
 		// A bidirectional decoder (EmbeddingGemma) and a tower: their blocks

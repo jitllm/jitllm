@@ -736,6 +736,13 @@ func LowerProgram(b *graph.Builder, t *jlm.Tower, p *jlm.Program, in []graph.Val
 
 // lowerValues is LowerProgram's every value: the inputs, then each op's.
 func lowerValues(b *graph.Builder, t *jlm.Tower, p *jlm.Program, in []graph.ValueID, rows int, f graph.Facts) ([]graph.ValueID, error) {
+	return lowerValuesWith(b, t, p, in, rows, f, nil)
+}
+
+// lowerValuesWith is lowerValues where turn lowers a stated rotary
+// (jlm.TOpRope), which only a block has.
+func lowerValuesWith(b *graph.Builder, t *jlm.Tower, p *jlm.Program, in []graph.ValueID, rows int, f graph.Facts,
+	turn func(graph.ValueID, *jlm.TowerOp) graph.ValueID) ([]graph.ValueID, error) {
 	merge, window := towerTiles(t)
 	if len(in) != int(p.NIn) {
 		return nil, fmt.Errorf("a program of %d inputs over %d", p.NIn, len(in))
@@ -825,7 +832,16 @@ func lowerValues(b *graph.Builder, t *jlm.Tower, p *jlm.Program, in []graph.Valu
 					graph.Attrs{Eps: float64(op.Eps), HeadDim: hd}, nil, nil)[0]
 				break
 			}
+			if op.Span > 0 && int(op.Span) < width(ins[0]) {
+				out = b.HeadNorm(ins[0], op.Bind[0], int(op.Span), float64(op.Eps))
+				break
+			}
 			out = b.Norm(ins[0], op.Bind[0], float64(op.Eps))
+		case jlm.TOpRope:
+			if turn == nil {
+				return nil, fmt.Errorf("op %d turns its rows by a rotary, which only a block has", i)
+			}
+			out = turn(ins[0], op)
 		case jlm.TOpScale:
 			s, err := shape(op.Bind[0])
 			if err != nil {

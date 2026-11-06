@@ -19,8 +19,8 @@ import (
 func TestKVQ8RefusesByName(t *testing.T) {
 	for _, c := range []struct{ name, why string }{
 		{"synth-deepseek-lite", "MLA"}, // the directory: jlmOf converts it fresh, a .jlm named here is opened as it stands
-		{"synth-deepseek32.gguf", "lightning indexer"},
-		{"synth-minimaxm3.gguf", "MiniMax Sparse Attention"},
+		{"synth-deepseek32.gguf", "indexer key"},
+		{"synth-minimaxm3.gguf", "indexer key"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			src, ok := existingModel(testmodels.Path(c.name))

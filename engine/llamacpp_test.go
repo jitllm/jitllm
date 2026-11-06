@@ -260,7 +260,7 @@ func greedyMatchesLlamaCpp(t *testing.T, extra ...engine.Option) {
 				// at synth-minimaxm3's 16), and says so only in its log, so an
 				// MSA model forces it on and a log that still reports it off
 				// is refused.
-				msa := m.Cfg.MSA()
+				msa := m.Cfg.Selection() != nil && m.Cfg.Selection().Block > 1 && !m.Cfg.MLA()
 				llama := func(sess string) []byte {
 					for _, g := range []string{ngl, "0"} {
 						args := []string{"-m", path, "-p", prompt, "-n", itoa(n),

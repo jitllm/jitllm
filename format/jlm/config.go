@@ -763,6 +763,9 @@ type Config struct {
 	// ActQuant is how every projection's input is quantized before the
 	// product, ActQuantNone for not at all. The eighteenth optional tail.
 	ActQuant ActQuant
+	// Selection is how the blocks' attention selects the history it reads,
+	// nil where it reads every position. The twentieth optional tail.
+	Selection *Selection
 
 	Flags Flags
 }

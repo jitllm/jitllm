@@ -5,6 +5,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/model"
 )
@@ -34,8 +35,9 @@ func q4eFixtures() []struct {
 	}{
 		{"synth-qwen4exp", func(m *model.Model) bool {
 			c := m.Cfg
-			return c.Arch == "qwen4exp" && c.HCMult == 4 && c.HCLowRank == 32 && c.QSARatio == 4 &&
-				c.IdxTopK == 8 && c.IdxHeads == 8 && c.IdxHeadDim == 32 && c.NGramBlock == 3 &&
+			s := c.Selection()
+			return c.Arch == "qwen4exp" && c.HCMult == 4 && c.HCLowRank == 32 && s != nil && s.Rank == jlm.RankPooled &&
+				s.Block == 4 && s.Keep == 2 && s.Heads == 8 && s.HeadDim == 32 && c.NGramBlock == 3 &&
 				c.NGram == 3 && c.NGramHeadsPer == 2 && c.NGramRowDim == 16 && c.NGramConv == 4 &&
 				c.DeltaSigmoidGate && c.NRot == 16 && c.RopeNeox && c.AttnOutGate &&
 				c.LayerKind(0).Recurrent() && !c.LayerKind(1).Recurrent() &&
@@ -61,9 +63,10 @@ func TestQwen4ExpMatchesTransformers(t *testing.T) {
 			if !fx.sel(m) {
 				t.Fatalf("the container does not carry the fixture's graph: %+v", m.Cfg)
 			}
-			if blocks := len(g.IDs) / m.Cfg.QSARatio; blocks <= m.Cfg.IdxTopK/m.Cfg.QSARatio {
+			s := m.Cfg.Selection()
+			if blocks := len(g.IDs) / int(s.Block); blocks <= int(s.Keep) {
 				t.Fatalf("%d golden positions are %d QSA blocks against a budget of %d: every key is read",
-					len(g.IDs), blocks, m.Cfg.IdxTopK/m.Cfg.QSARatio)
+					len(g.IDs), blocks, s.Keep)
 			}
 			if m.Vocab == nil {
 				t.Fatalf("no tokenizer: %v", m.TokErr)
@@ -106,7 +109,7 @@ func q4eViolations() []c6Violation {
 			})
 		}},
 		{"the QSA budget a block short", func(m *model.Model) func() {
-			return cfgMut(m, func(c *model.Config) { c.IdxTopK -= c.QSARatio })
+			return selectionMut(m, func(s *jlm.Selection) { s.Keep-- })
 		}},
 		{"the delta rule's output gated by silu", recurrentSiLUGated},
 	}

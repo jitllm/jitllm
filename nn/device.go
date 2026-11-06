@@ -443,19 +443,20 @@ func (p *LayerPlan) Streams() int {
 // cache allocation, stride and migration must go through it.
 func (p *LayerPlan) KVRow() int {
 	if p.MLA() {
-		return p.KVLoraRank + p.NRot + p.IdxHeadDim
+		return p.KVLoraRank + p.NRot + p.KeyW
 	}
-	if p.MSA() || p.QSA() {
-		return (p.NKVHead + 1) * p.HeadDim
-	}
-	return p.NKVHead * p.HeadDim
+	return p.NKVHead*p.HeadDim + p.KeyW
 }
 
-// QSA reports Qwen3.8-Flash-Next's block selection on this block.
-func (p *LayerPlan) QSA() bool { return p.Q4E != nil && p.Q4E.QSARatio != 0 }
+// KeyHead reports that the block's cached row carries an indexer's key as
+// one more kv head after the attention's own.
+func (p *LayerPlan) KeyHead() bool { return p.KeyW != 0 && !p.MLA() }
 
-// MSA reports MiniMax Sparse Attention's block selection on this block.
-func (p *LayerPlan) MSA() bool { return p.IdxBlock != 0 && p.IdxHeads != 0 }
+// SelectPlan is a block's selection: at most Keep blocks of Block positions
+// are read.
+type SelectPlan struct {
+	Block, Keep int
+}
 
 // Scale is the attention score multiplier this block runs.
 func (p *LayerPlan) Scale() float64 {
@@ -473,14 +474,6 @@ func (p *LayerPlan) Scale() float64 {
 // host trusts history the device returns only from the window start of
 // (its last position - 1 - KVWindowSlack), which this margin guarantees.
 const KVWindowSlack = 64
-
-// Q4EPlan is a QSA block (QSARatio non-zero): the indexer's raw key is one
-// more kv head of the cached row (KVRow, padded to HeadDim) and attention
-// reads the plan's IdxTopK/QSARatio best blocks of QSARatio positions and
-// the tail, the indexer being IdxHeads heads of IdxHeadDim.
-type Q4EPlan struct {
-	QSARatio int
-}
 
 // ExpWidth is the routed experts' input and output width: ExpLatent where
 // they have one of their own, NEmbd everywhere else.
@@ -638,18 +631,13 @@ type LayerPlan struct {
 	// PLEWidth is a row's whole side input to the blocks: its per-layer
 	// inputs, NLayer*PLEDim, or a tower's tap rows the first blocks add.
 	PLEDim, PLEWidth int
-	// DeepSeek V3.2's lightning indexer (model.Config.Indexer): IdxHeads heads
-	// of IdxHeadDim score every cached position, the key cached at the end of
-	// the MLA row (KVRow), and attention reads the IdxTopK best. Zero heads is
-	// none.
-	IdxHeads, IdxHeadDim, IdxTopK int
-	// MiniMax Sparse Attention (model.Config.MSA): with IdxBlock set the same
-	// fields select blocks instead, one IdxHeadDim head per kv group: per
-	// group the IdxTopK best blocks of IdxBlock positions, each block by its
-	// best position, with the IdxLocal blocks ending at the query's own
-	// forced in. The indexer's key is cached as one more kv head of the row
-	// (KVRow). Set only on the blocks that select (past the dense lead).
-	IdxBlock, IdxLocal int
+	// KeyW is the width an indexer's key takes in the block's cached row
+	// after the attention's own (KVRow): a latent row's whatever the block,
+	// one more kv head where the block selects; 0 for none.
+	KeyW int
+	// Select is the block's selection of the history it reads (the
+	// container's jlm.Selection), nil where it reads every position.
+	Select *SelectPlan
 	// Gemma 3n (model.Config.PredStreams): AltUp residual streams, zero for one,
 	// carried stream-major in Layers' x (ResidW); a gaussian top-k at
 	// SparseStd deviations on the FFN gate of a block with Sparse set.
@@ -781,8 +769,6 @@ type LayerPlan struct {
 	// RoutedUp takes it back, beside the shared experts at NEmbd.
 	NStreams  int
 	ExpLatent int
-	// Q4E is a QSA block's selection, nil on every other block.
-	Q4E *Q4EPlan
 	// LatentNormEps is the MLA latent norms' epsilon (Kimi-K3 and
 	// Kimi-Linear's 1e-6); zero means RMSEps.
 	LatentNormEps float64
