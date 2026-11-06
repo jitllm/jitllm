@@ -12,11 +12,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/model"
 	"github.com/jitllm/jitllm/nn"
 
 	"github.com/jitllm/jitllm/convert"
 	"github.com/jitllm/jitllm/convert/gguf"
+	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
@@ -76,14 +78,8 @@ func TestEveryModelRunsOnACard(t *testing.T) {
 				t.Fatalf("the converter accepted it and Open refused it: %v", err)
 			}
 			defer m.Close()
-			st := testInstance(t, m, 16)
+			st := cardInstance(t, m, g)
 			defer st.Close()
-			if err := st.SetDeviceLayers(g, -1); err != nil {
-				t.Fatalf("placement: %v (%s)", err, g.Err())
-			}
-			if st.GPULayers() != m.Cfg.NLayer {
-				t.Fatalf("%d of %d blocks on the card; declined: %v", st.GPULayers(), m.Cfg.NLayer, st.DeviceDeclines())
-			}
 			formed := g.Stats().FormedAtStep
 			for i := range 3 {
 				lg, err := st.Forward(int32(1 + i))
@@ -98,6 +94,42 @@ func TestEveryModelRunsOnACard(t *testing.T) {
 			}
 		})
 	}
+}
+
+// cardInstance is an instance of m with every block on card g: resident
+// where the card holds them all, and where it has room for only some, an
+// instance listing the card alone, on which the model pages and no block
+// runs on the CPU. Any block off the card fails the test, with what the card
+// declined.
+func cardInstance(t *testing.T, m *model.Model, g *gpu.GPU) *Instance {
+	t.Helper()
+	st := testInstance(t, m, 16)
+	if err := st.SetDeviceLayers(g, -1); err != nil {
+		st.Close()
+		t.Fatalf("placement: %v (%s)", err, g.Err())
+	}
+	if st.GPULayers() == m.Cfg.NLayer {
+		return st
+	}
+	declined := st.DeviceDeclines()
+	st.Close()
+	spec := testdevices.One("cuda:0")
+	card := nn.DeviceName(spec)
+	st = testInstance(t, m, 16, WithDevices(spec))
+	if err := st.SetDevice(g); err != nil {
+		st.Close()
+		t.Fatalf("the card listed alone: %v (%s); declined with the CPU: %v", err, g.Err(), declined)
+	}
+	// A paged block not faulted in yet has no holder to name; none is the
+	// CPU's.
+	for li := range m.Cfg.NLayer {
+		if st.WhereIs(li) == nn.CPU {
+			st.Close()
+			t.Fatalf("the card %s listed alone: block %d runs on the CPU; declined with the CPU: %v", card, li, declined)
+		}
+	}
+	t.Logf("%d blocks paged on %s, which had room for some; declined with the CPU: %v", m.Cfg.NLayer, card, declined)
+	return st
 }
 
 // everyModelRunsGenerated is TestEveryModelRunsGenerated with opts on every model it opens.
