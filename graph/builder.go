@@ -102,9 +102,44 @@ func (s *Builder) HeadNorm(x ValueID, role jlm.Role, headDim int, eps float64) V
 
 // KVAppend writes k and v as the step's rows of the block's history: it
 // reads the history's version n and writes n+1, which it returns.
-func (s *Builder) KVAppend(k, v ValueID, n int) int {
-	s.G.op(Op{Kind: OpKVAppend, In: []ValueID{k, v}, Reads: []StateRef{{State: StateKV, Version: n}}, Writes: []StateRef{{State: StateKV, Version: n + 1}}})
+func (s *Builder) KVAppend(k, v ValueID, n int) int { return s.KVAppendTo(0, k, v, n) }
+
+// KVAppendTo is KVAppend to the block's history h.
+func (s *Builder) KVAppendTo(h uint8, k, v ValueID, n int) int { return s.KVAppendEvery(h, k, v, n, 0) }
+
+// KVAppendEvery is KVAppendTo of one entry each span positions, the row
+// closing a window of them writing it (OpKVAppend's Span).
+func (s *Builder) KVAppendEvery(h uint8, k, v ValueID, n, span int) int {
+	s.G.op(Op{Kind: OpKVAppend, In: []ValueID{k, v}, Reads: []StateRef{{State: StateKV, Version: n, Hist: h}},
+		Writes: []StateRef{{State: StateKV, Version: n + 1, Hist: h}}, Attr: Attrs{Span: span}})
 	return n + 1
+}
+
+// HistoryPool is OpHistoryPool's pooling of the history h into width
+// channels, a's Span, Width and segments (Words), the biases bias's rows.
+func (s *Builder) HistoryPool(h StateRef, a Attrs, bias jlm.Role, width int) ValueID {
+	y := s.value("pool", width)
+	s.G.op(Op{Kind: OpHistoryPool, Out: []ValueID{y}, Weight: []Binding{{Role: bias, K: a.biasWidth(width), Rows: a.Span}},
+		Reads: []StateRef{h}, Attr: a})
+	return y
+}
+
+// AttendBoth is AttendOf over the histories rows and entries in one softmax
+// (OpAttend's two Reads), an entry each span positions and width wide.
+func (s *Builder) AttendBoth(q ValueID, rows, entries StateRef, span, width int, a Attrs, sinks ...jlm.Role) ValueID {
+	a.Span, a.Words = span, []uint64{uint64(width)}
+	y := s.AttendOf(q, rows, a, sinks...)
+	o := &s.G.Ops[len(s.G.Ops)-1]
+	o.Reads = append(o.Reads, entries)
+	return y
+}
+
+// AttendBothSelected is AttendBoth with the entries the selection sel keeps.
+func (s *Builder) AttendBothSelected(q ValueID, rows, entries StateRef, span, width int, sel ValueID, a Attrs, sinks ...jlm.Role) ValueID {
+	y := s.AttendBoth(q, rows, entries, span, width, a, sinks...)
+	o := &s.G.Ops[len(s.G.Ops)-1]
+	o.In = append(o.In, sel)
+	return y
 }
 
 // Attend is q's attention over the history's version n, of a's heads,
@@ -210,4 +245,14 @@ func (s *Builder) Int8Codes(x ValueID) (codes, scale ValueID) {
 	codes = s.Emit(OpMap, []ValueID{hi}, []Result{{Name: "q8.codes", Width: w, Elem: ElemI8}}, nil,
 		Attrs{Fn: MapMax, Const: -128}, nil, nil)[0]
 	return codes, scale
+}
+
+// biasWidth is the width of an OpHistoryPool's bias row, its segments'
+// biases width channels each: past the farthest.
+func (a Attrs) biasWidth(width int) int {
+	w := 0
+	for i := 0; i+3 < len(a.Words); i += 4 {
+		w = max(w, int(a.Words[i+3])+width)
+	}
+	return w
 }

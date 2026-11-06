@@ -21,6 +21,9 @@ type Request struct {
 	// History is the layout of the pools the slice's history ops write and
 	// read: the call site's, addressed as it is.
 	History History
+	// More is the layout of the block's other histories, history h at
+	// More[h-1] (graph.StateRef.Hist).
+	More []History
 	// Paged is each bank the call site holds in pages: the sheets it holds of
 	// it, reached through the step's table "experts", one word an expert
 	// naming the sheet that holds it. A bank it does not name is held whole.
@@ -108,7 +111,7 @@ func (r *Registry) formKernels(req Request) ([]*Kernel, error) {
 	var ks []*Kernel
 	for {
 		c := r.context(req.Graph, req.Part, req.Formats, req.Rotaries, req.Step, req.Device)
-		c.History, c.split, c.Paged, c.Strides = req.History, sp, req.Paged, req.Strides
+		c.History, c.More, c.split, c.Paged, c.Strides = req.History, req.More, sp, req.Paged, req.Strides
 		prims, err := r.decomposeOps(c, 0)
 		if err != nil {
 			return nil, fmt.Errorf("jit: cannot form %s at %d rows on %s: %w", slice(req.Graph), req.Step.Rows, req.Device.Kind, err)
