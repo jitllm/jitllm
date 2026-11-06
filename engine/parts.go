@@ -50,7 +50,7 @@ func (s *Instance) partsPlan() *cpudev.PartsPlan {
 	p.Head[14] = part(fg.CpuMask, nn.DeclineNoSample, 1)
 
 	if s.c.StatesStreams() {
-		p.Streams, p.NStreams, p.StreamFault = true, s.c.Streams(), s.cpu.fault == cpuFaultStreams
+		p.Streams, p.NStreams, p.StreamFault = true, s.c.Streams(), s.cpu.x.StreamFault
 		p.StreamParts[0] = part(fg.Expand, nn.DeclineNoGraph, 1)
 		p.StreamParts[1] = part(fg.Expand, nn.DeclineNoGraph, cpuRowsCap)
 		collapse := fg.Collapse
