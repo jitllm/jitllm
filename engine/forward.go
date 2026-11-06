@@ -1488,13 +1488,12 @@ func (s *Instance) layerWeightsAt(li int, l *model.Layer, banks *[3]nn.Weight) n
 		}
 	}
 	if s.c.PLEDim != 0 {
-		w.PLEGate, w.PLEProj = model.Wt(l.PleGate), model.Wt(l.PleProj)
-		w.AltRouter, w.LaurelL, w.LaurelR = model.Wt(l.AltRouter), model.Wt(l.LaurelL), model.Wt(l.LaurelR)
+		w.AltRouter = model.Wt(l.AltRouter)
 	}
 	if s.c.LayerKind(li).Recurrent() {
 		w.SSM = nn.SSMWeights{
 			Gate: model.Wt(l.SsmGate), BA: model.Wt(l.SsmBA), Out: model.Wt(l.SsmOut), Conv1d: l.SsmConv1d,
-			FA: model.Wt(l.SsmFA), FB: model.Wt(l.SsmFB), GA: model.Wt(l.SsmGA), GB: model.Wt(l.SsmGB), In: model.Wt(l.SsmIn),
+			FA: model.Wt(l.SsmFA), FB: model.Wt(l.SsmFB), GA: model.Wt(l.SsmGA), GB: model.Wt(l.SsmGB),
 		}
 		if s.m.Cfg.Scan() {
 			w.SSM.FA, w.SSM.FB, w.SSM.GA, w.SSM.GB = model.Wt(l.SsmXDt), model.Wt(l.SsmDtProj), model.Wt(l.SsmXB), model.Wt(l.SsmXC)
@@ -1507,13 +1506,9 @@ func (s *Instance) layerWeightsAt(li int, l *model.Layer, banks *[3]nn.Weight) n
 	if s.c.MLA() {
 		w.Wqa, w.Wqb = model.Wt(l.Wqa), model.Wt(l.Wqb)
 		w.Wkva, w.Wkb, w.Wvb = model.Wt(l.Wkva), model.Wt(l.Wkb), model.Wt(l.Wvb)
-		w.IdxQB, w.IdxK, w.IdxProj = model.Wt(l.IdxQB), model.Wt(l.IdxK), model.Wt(l.IdxProj)
 	}
-	if s.m.Cfg.MSAAt(li) {
-		w.IdxQ, w.IdxK = model.Wt(l.IdxQ), model.Wt(l.IdxK)
-	}
+	w.Extra = extraWeights(l)
 	s.q4eWeights(li, l, &w)
-	w.MLAGate, w.RoutedDown, w.RoutedUp = model.Wt(l.MlaGate), model.Wt(l.RoutedDown), model.Wt(l.RoutedUp)
 	if k := s.c.LayerKind(li); k.Recurrent() && !k.Attends() {
 		// A linear block has none of these; leaving the attention four set
 		// would offer a device four matrices whose shapes do not match the
@@ -1523,6 +1518,23 @@ func (s *Instance) layerWeightsAt(li int, l *model.Layer, banks *[3]nn.Weight) n
 		w.QNorm, w.KNorm = nil, nil
 	}
 	return w
+}
+
+// extraWeights is every matrix l stores beyond the ones a device is handed
+// by name, by role, in the order the block was read.
+func extraWeights(l *model.Layer) []nn.RoleWeight {
+	named := []*model.Tensor{&l.Wq, &l.Wk, &l.Wv, &l.Wo, &l.Gate, &l.Up, &l.Down, &l.Router,
+		&l.ShGate, &l.ShUp, &l.ShDown, &l.AltRouter, &l.SsmGate, &l.SsmBA, &l.SsmOut,
+		&l.SsmFA, &l.SsmFB, &l.SsmGA, &l.SsmGB, &l.SsmXDt, &l.SsmDtProj, &l.SsmXB, &l.SsmXC,
+		&l.Wqa, &l.Wqb, &l.Wkva, &l.Wkb, &l.Wvb}
+	var out []nn.RoleWeight
+	for _, m := range l.Mats {
+		if slices.Contains(named, m.T) {
+			continue
+		}
+		out = append(out, nn.RoleWeight{Role: m.Role, W: model.Wt(*m.T)})
+	}
+	return out
 }
 
 // offer is block li as a card is offered it: a copy of the block of its

@@ -65,16 +65,14 @@ type page struct {
 func (l *layer) tensors() []**resident {
 	// The order matches weightList and prepLayer's ws/ms/bias order: the dense
 	// seven, then the shared expert, the linear block, MLA and KDA's gates.
-	return []**resident{&l.wq, &l.wk, &l.wv, &l.wo, &l.gate, &l.up, &l.down,
+	ts := []**resident{&l.wq, &l.wk, &l.wv, &l.wo, &l.gate, &l.up, &l.down,
 		&l.shGate, &l.shUp, &l.shDown, &l.ssmGate, &l.ssmBA, &l.ssmOut,
 		&l.wqa, &l.wqb, &l.wkva, &l.wkb, &l.wvb,
-		&l.ssmFA, &l.ssmFB, &l.ssmGA, &l.ssmGB,
-		&l.pleGate, &l.pleProj,
-		&l.idxQB, &l.idxK, &l.idxProj,
-		&l.laurelL, &l.laurelR, &l.ssmIn,
-		&l.idxQ,
-		&l.mlaGate, &l.routedDown, &l.routedUp,
-		&l.hcAD, &l.hcAU, &l.hcAI, &l.hcFD, &l.hcFU, &l.hcFI, &l.ngKey, &l.ngVal}
+		&l.ssmFA, &l.ssmFB, &l.ssmGA, &l.ssmGB}
+	for j := range l.extra {
+		ts = append(ts, &l.extra[j].r)
+	}
+	return ts
 }
 
 // pageSizeWhy is pageSize with the reason, naming the tensor and its format.
@@ -107,14 +105,7 @@ func weightRole(i int) string {
 		"sh_exp_gate", "sh_exp_up", "sh_exp_down",
 		"ssm_gate", "ssm_ba", "ssm_out",
 		"attn_q_a", "attn_q_b", "attn_kv_a", "attn_k_b", "attn_v_b",
-		"ssm_f_a", "ssm_f_b", "ssm_g_a", "ssm_g_b",
-		"inp_gate", "proj",
-		"indexer.attn_q_b", "indexer.attn_k", "indexer.proj",
-		"laurel_l", "laurel_r", "ssm_in",
-		"indexer.q_proj",
-		"attn_gate", "ffn_routed_down", "ffn_routed_up",
-		"hc_attn_down", "hc_attn_up", "hc_attn_inject", "hc_ffn_down", "hc_ffn_up", "hc_ffn_inject",
-		"ngram_key", "ngram_value"}
+		"ssm_f_a", "ssm_f_b", "ssm_g_a", "ssm_g_b"}
 	if i < len(names) {
 		return names[i]
 	}
@@ -585,7 +576,7 @@ func (g *devTier) pageInHold(li, lo, hi int) bool {
 			g.LastErr = fmt.Sprintf("block %d page-in: %v", li, err)
 			return false
 		}
-		got := weightList(&w)
+		got := l.pageList(&w)
 		if len(got) != len(l.pg.ws) {
 			g.LastErr = fmt.Sprintf("block %d page-in: the refreshed weight list is "+
 				"%d long and the page's is %d", li, len(got), len(l.pg.ws))

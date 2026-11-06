@@ -29,9 +29,8 @@ import (
 // card form's once a card gathers them. The head's mix is
 // the host's, as for every model with streams.
 
-// q4eBlock is one Qwen3.8-Flash-Next block's n-gram convolution; its
-// matrices are the layer's residents (slots 34..41) and its vectors are in
-// the layer's vecs.
+// q4eBlock is the n-gram block's convolution; its matrices are the
+// layer's extra and its vectors the layer's vecs.
 type q4eBlock struct {
 	// ngConv is the n-gram block's convolution, a channel's taps contiguous
 	// as the file stores them (nil on every other block).
@@ -47,19 +46,6 @@ func (b *q4eBlock) bufs() []backend.Buf {
 		return nil
 	}
 	return []backend.Buf{b.ngConv}
-}
-
-// q4eSlot says whether a Qwen3.8-Flash-Next block carries slot i (34..41):
-// the two hyper-connections' down, up and placement always, the n-gram
-// key and value on the n-gram block.
-func q4eSlot(p *nn.LayerPlan, i int) bool {
-	if p.Q4E == nil {
-		return false
-	}
-	if i >= 40 {
-		return p.Q4E.NGramHere
-	}
-	return i >= 34
 }
 
 // prepQ4E uploads block li's n-gram convolution, which the composer binds

@@ -118,13 +118,9 @@ type LayerWeights struct {
 	// gate, in Vectors, is one weight per model dimension rather than a
 	// matrix. Zero unless LayerPlan.NFFNShExp is non-zero.
 	ShGate, ShUp, ShDown Weight
-	// PLEGate and PLEProj are Gemma 4's per-layer embedding gate (n_embd ->
-	// PLEDim) and projection back; zero unless LayerPlan.PLEDim is set.
-	PLEGate, PLEProj Weight
-	// Gemma 3n's AltUp and LAuReL (LayerPlan.AltUp): the router (AltUp rows of
-	// n_embd, F32) and LAuReL's two matrices; their vectors are in Vectors.
-	AltRouter        Weight
-	LaurelL, LaurelR Weight
+	// AltRouter is the streams' router (LayerPlan.AltUp): AltUp rows of
+	// n_embd, F32.
+	AltRouter Weight
 	// SSM is a linear-attention block's weights, and every field is zero for an
 	// attention block. Wq carries the fused q|k|v projection for such a block;
 	// the layer kind decides the consumer.
@@ -147,24 +143,12 @@ type LayerWeights struct {
 	//
 	// Exactly one of Wq and (Wqa, Wqb) is populated, decided by QLoraRank.
 	Wqa, Wqb, Wkva, Wkb, Wvb Weight
-	// DeepSeek V3.2's lightning indexer (LayerPlan.IdxHeads): its query from
-	// the query latent, its key and the heads' weights from the block input.
-	// All zero without one.
-	IdxQB, IdxK, IdxProj Weight
-	// MiniMax Sparse Attention (LayerPlan.MSA): the indexer's query from the
-	// block's normed input; the key is IdxK. Zero without one.
-	IdxQ Weight
-	// The MLA output gate (NHead*HeadDimV rows of NEmbd, on a full block of a
-	// model that has one) and a latent mixture's down and up projections
-	// (LayerPlan.ExpLatent); their vectors are in Vectors. All zero
-	// elsewhere. A linear block's full-rank output gate is SSM.Gate,
-	// with SSM.GA and SSM.GB empty.
-	MLAGate              Weight
-	RoutedDown, RoutedUp Weight
-	// Qwen3.8-Flash-Next (LayerPlan.Q4E): the two hyper-connections, and on
-	// the n-gram block its weights.
-	HCAttn, HCFFN HCWeights
-	NGram         NGramWeights
+	// Extra is every other matrix the block stores, by role: what a composed
+	// block binds beyond the matrices above.
+	Extra []RoleWeight
+	// NGram is the n-gram block's convolution (LayerPlan.Q4E), zero
+	// elsewhere.
+	NGram NGramWeights
 
 	// Bind points w at fr, the frames of the device offered the block -- its
 	// own, in its own memory -- claimed and unread: shapes and lengths are
@@ -227,22 +211,16 @@ func VectorOf(vs []RoleVector, r jlm.Role) []float32 {
 	return nil
 }
 
-// HCWeights are one Qwen3.8-Flash-Next hyper-connection's matrices: the
-// gate's down (HCMult*NEmbd -> HCLowRank) and up (back) projections, and the
-// placement's projection (F32, HCMult*NEmbd -> HCMult). Its norm is in
-// LayerWeights.Vectors.
-type HCWeights struct {
-	Down, Up Weight
-	Inject   Weight
+// RoleWeight is a matrix the file stores for a block, and its role.
+type RoleWeight struct {
+	Role jlm.Role
+	W    Weight
 }
 
-// NGramWeights are Qwen3.8-Flash-Next's n-gram block's: the key (NGramWidth
-// -> HCMult*NEmbd) and value (-> NEmbd) projections and the convolution
-// (HCMult*NEmbd channels of NGramConv taps, a channel's contiguous), which a
-// device binds as a matrix. Its norms are in LayerWeights.Vectors.
+// NGramWeights is the n-gram block's convolution (HCMult*NEmbd channels of
+// NGramConv taps, a channel's contiguous), which a device binds as a matrix.
 type NGramWeights struct {
-	Key, Value Weight
-	Conv       []float32
+	Conv []float32
 }
 
 // SSMWeights are the gated delta rule's tensors.
@@ -264,10 +242,6 @@ type SSMWeights struct {
 	// block's vectors (A, the dt bias, the norms, D, the convolution bias)
 	// are in LayerWeights.Vectors.
 	FA, FB, GA, GB Weight
-	// In is the mixer's x|B|C projection on a block that runs attention too
-	// (RecurrentPlan.WithAttn), where Wq is the attention's query; empty
-	// everywhere else, where Wq carries it.
-	In Weight
 }
 
 // HeadStage is a step of the head past the output norm and the projection,
@@ -514,7 +488,7 @@ const KVWindowSlack = 64
 
 // Q4EPlan is Qwen3.8-Flash-Next at one block (model's q4e.go is the graph).
 // The residual is HCMult streams, stream-major in Layers' x; each sublayer
-// reads their mix through a HCLowRank gate (LayerWeights.HCAttn, HCFFN) and
+// reads their mix through a HCLowRank gate (its matrices by role) and
 // is added into every stream at its placement weight. On a QSA block
 // (QSARatio non-zero) the indexer's raw key is one more kv head of the
 // cached row (KVRow, padded to HeadDim) and attention reads the plan's
