@@ -71,7 +71,7 @@ func TestComposedCPURecurrentPromptsServe(t *testing.T) {
 				}
 				s := testInstance(t, m, n+decode+1, io...)
 				defer s.Close()
-				s.cpu.fault = f
+				setFault(s, f)
 				lg, err := s.Prefill(ids[:n])
 				if err != nil {
 					t.Fatal(err)

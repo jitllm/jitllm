@@ -131,7 +131,7 @@ func partCPULogits(t *testing.T, m *model.Model, toks []int32, f cpuFault, compo
 	t.Helper()
 	s := testInstance(t, m, len(toks)+1, io...)
 	defer s.Close()
-	s.cpu.fault = f
+	setFault(s, f)
 	var out [][]float32
 	for _, tk := range toks {
 		lg, err := s.Forward(tk)

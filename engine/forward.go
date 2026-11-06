@@ -134,6 +134,9 @@ type Instance struct {
 	outW    *model.Tensor
 	// ws is where this instance's forms read their weights.
 	ws weightSource
+	// streams is the device running the residual streams' expansion and
+	// collapse, nil for a model of one stream.
+	streams nn.StreamsDevice
 	// lo and hi are the blocks this instance runs, [lo, hi): the trunk, [0,
 	// NLayer), for every session a caller makes, and a multi-token-prediction
 	// block for the draft instance speculation drives (newDraftState). Block

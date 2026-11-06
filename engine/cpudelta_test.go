@@ -135,7 +135,7 @@ func linearRun(t *testing.T, m *model.Model, prompt, toks []int32, f cpuFault, i
 	}
 	s := testInstance(t, m, len(prompt)+len(toks)+1, io...)
 	defer s.Close()
-	s.cpu.fault = f
+	setFault(s, f)
 	var out [][]float32
 	if len(prompt) > 0 {
 		lg, err := s.Prefill(prompt)

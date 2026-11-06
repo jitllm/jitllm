@@ -222,6 +222,15 @@ type Ledger interface {
 	AccountOn(dev string) (Account, bool)
 }
 
+// StreamsDevice is a device running a model's residual streams over a
+// call's rows of the stream-major x: the expansion of stream 0 into the
+// others and the collapse of every stream into the row the head reads, each
+// reporting why it did not serve them.
+type StreamsDevice interface {
+	Expand(x []float32, rows int) Decline
+	Collapse(x []float32, rows int) Decline
+}
+
 // PoolDevice is a device reading an embedding model's readout: the pooled,
 // unit-length row of a call's n rows of x into out -- with raw, the row
 // before the dense heads -- reporting whether it served it.
