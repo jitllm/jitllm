@@ -204,8 +204,10 @@ func encodeConfigAt(c *Config, v uint32) []byte {
 	// twenty. An older reader drops each.
 	// The twenty-second, the streams' posts, implies the first twenty-one;
 	// the twenty-third, the blocks' own geometries (Geoms), the first
-	// twenty-two. An older reader drops each.
-	geoms := len(c.Geoms) != 0
+	// twenty-two; the twenty-fourth, the delta rule's stated decay and gate,
+	// the first twenty-three. An older reader drops each.
+	delta := c.DeltaDecay != nil || c.DeltaGate != nil
+	geoms := delta || len(c.Geoms) != 0
 	post := geoms || c.Streams.sharesWrites()
 	pre := post || c.Streams.addsBefore()
 	sel := pre || c.Selection != nil
@@ -363,6 +365,9 @@ func encodeConfigAt(c *Config, v uint32) []byte {
 			w.u32(g.NRot)
 			w.u32(g.NFFN)
 		}
+	}
+	if delta {
+		encodePrograms(w, []*Program{c.DeltaDecay, c.DeltaGate})
 	}
 	return w.b
 }
@@ -550,6 +555,15 @@ func decodeConfigAt(b []byte, v uint32) (*Config, error) {
 			c.Geoms = append(c.Geoms, Geom{NKVHead: r.u32(), HeadDim: r.u32(), NRot: r.u32(), NFFN: r.u32()})
 		}
 	}
+	if r.err == nil && len(r.b) > 0 {
+		ps := decodePrograms(r)
+		if len(ps) != 2 && r.err == nil {
+			r.err = fmt.Errorf("jlm: the delta rule's statement holds %d programs", len(ps))
+		}
+		if len(ps) == 2 {
+			c.DeltaDecay, c.DeltaGate = ps[0], ps[1]
+		}
+	}
 	if r.err != nil {
 		return nil, r.err
 	}
@@ -557,6 +571,12 @@ func decodeConfigAt(b []byte, v uint32) (*Config, error) {
 		return nil, err
 	}
 	if err := c.geomsValid(); err != nil {
+		return nil, err
+	}
+	if err := c.olderDelta(); err != nil {
+		return nil, err
+	}
+	if err := c.deltaValid(); err != nil {
 		return nil, err
 	}
 	if err := exprsValid(c); err != nil {

@@ -189,7 +189,7 @@ func k3ComposedViolations(t *testing.T) []c6Violation {
 		{"the MLA output ungated", latentAttnUngated},
 		{"the KDA output ungated", recurrentUngated},
 		{"the KDA decay unbounded (Kimi-Linear's softplus)", func(m *model.Model) func() {
-			return cfgMut(m, func(c *model.Config) { c.KDALowerBound = 0 })
+			return cfgMut(m, func(c *model.Config) { c.DeltaDecay = jlm.DeltaDecaySoftplus() })
 		}},
 		{"the MLA latent norms at rms_norm_eps (llama.cpp's)", func(m *model.Model) func() {
 			return cfgMut(m, func(c *model.Config) { c.LatentNormEps = c.RMSEps })

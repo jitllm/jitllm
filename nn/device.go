@@ -788,10 +788,6 @@ type RecurrentPlan struct {
 	// the value heads in (jlm.FlagDeltaKeyTiled). Like ChanDecay, no shape
 	// field can say it -- both orders have identical geometry.
 	KeyTiled bool
-	// DecayBound is Kimi-K3's gate_lower_bound on a KDA block: the decay is
-	// exp(DecayBound * sigma(-A*(alpha+dt))) in place of exp(A*softplus(.)),
-	// A being -exp(A_log). Zero is the softplus decay.
-	DecayBound float32
 	// SSD is Mamba-2's selective update in place of the delta rule
 	// (jlm.LayerSSD): the convolved channels are C | B | x (as q | k | v), the
 	// convolution has a bias (SSMWeights.ConvBias), the update writes x*dt
@@ -819,9 +815,6 @@ type RecurrentPlan struct {
 	Centred                bool
 	NormGroups             int
 	NormBeforeGate, NoNorm bool
-	// SigmoidGate gates the output norm by sigmoid(z) where the gated delta
-	// rule's is silu(z) (Qwen3.8-Flash-Next).
-	SigmoidGate bool
 	// TailLen is what the block's state carries per sequence after the delta
 	// rule's, inside StateLen: room for Qwen3.8-Flash-Next's n-gram
 	// predecessors and convolution history (model's recTailLen), the same on

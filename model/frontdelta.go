@@ -15,11 +15,10 @@ import (
 // output gate's projection, through a low-rank pair where the block stores
 // one; the decay's logits -- one a value head, deinterleaved from the beta
 // projection's groups, or one a key channel of each, through the stored
-// low-rank pair -- with the stored dt bias, softplus and the stored log
-// decay, or the stored lower bound's sigmoid form, exponentiated; beta the
-// sigmoid of its logits; the delta rule; each value head normed against the
-// stored norm, gated by its gate (SiLU, or sigmoid where the container
-// states it or the decay is a channel's).
+// low-rank pair -- through the decay the container states (Config.DeltaDecay);
+// beta the sigmoid of its logits; the delta rule; each value head normed
+// against the stored norm, gated by its gate as the container states it
+// (Config.DeltaGate).
 func (m *Model) deltaMixer(b *graph.Builder, f graph.Facts, n graph.ValueID, has func(jlm.Role) bool,
 	matvec func(graph.ValueID, jlm.Role, int, ...jlm.Role) graph.ValueID) (graph.ValueID, error) {
 	c := m.Cfg
@@ -27,10 +26,6 @@ func (m *Model) deltaMixer(b *graph.Builder, f graph.Facts, n graph.ValueID, has
 	vh, kh, dk, dv := g.VHeads, g.KHeads, g.KDim, g.VDim
 	if vh < 1 || kh < 1 || dk < 1 || dv < 1 || vh%kh != 0 || g.Conv < 2 {
 		return 0, fmt.Errorf("a delta rule of %d value heads of %d over %d key heads of %d, a window of %d", vh, dv, kh, dk, g.Conv)
-	}
-	vec := func(r jlm.Role) []graph.Binding {
-		s := f.Inventory[r]
-		return []graph.Binding{{Role: r, K: s.K, Rows: s.Rows}}
 	}
 	mapc := func(name string, fn graph.MapFn, k float64, width int, w []graph.Binding, in ...graph.ValueID) graph.ValueID {
 		return mapRow(b, name, graph.Attrs{Fn: fn, Const: k}, w, width, in...)
@@ -91,14 +86,13 @@ func (m *Model) deltaMixer(b *graph.Builder, f graph.Facts, n graph.ValueID, has
 		ba := matvec(n, jlm.RoleSSMBA, 2*vh)
 		braw, alpha = slice("beta.logit", ba, 2*rep, 0, rep, vh), slice("decay.logit", ba, 2*rep, rep, rep, vh)
 	}
-	t := mapc("decay.dt", graph.MapAdd, 0, nd, vec(jlm.RoleSSMDtBias), alpha)
-	if lb := c.KDALowerBound; lb != 0 {
-		t = mapc("decay.a", graph.MapMul, 0, nd, vec(jlm.RoleSSMA), t)
-		t = mapc("decay.bound", graph.MapMul, float64(lb), nd, nil, mapc("decay.sig", graph.MapSigmoid, 0, nd, nil, mapc("decay.neg", graph.MapMul, -1, nd, nil, t)))
-	} else {
-		t = mapc("decay.a", graph.MapMul, 0, nd, vec(jlm.RoleSSMA), mapc("decay.sp", graph.MapSoftplus, 0, nd, nil, t))
+	if c.DeltaDecay == nil || c.DeltaGate == nil {
+		return 0, fmt.Errorf("a delta rule with no stated decay or gate")
 	}
-	decay := mapc("decay", graph.MapExp, 0, nd, nil, t)
+	decay, err := lowerStated(b, c.DeltaDecay, []graph.ValueID{alpha}, f)
+	if err != nil {
+		return 0, fmt.Errorf("the delta rule's decay: %w", err)
+	}
 	beta := mapc("beta", graph.MapSigmoid, 0, vh, nil, braw)
 
 	at := b.G.StateVersion(graph.StateRecState)
@@ -106,14 +100,11 @@ func (m *Model) deltaMixer(b *graph.Builder, f graph.Facts, n graph.ValueID, has
 		graph.Attrs{NHead: vh, NKVHead: kh, HeadDim: dk, Tiled: g.Tiled, Span: stateSpan(c, vh*dv*dk)},
 		[]graph.StateRef{{State: graph.StateRecState, Version: at}}, []graph.StateRef{{State: graph.StateRecState, Version: at + 1}})[0]
 	o = b.HeadNorm(o, jlm.RoleSSMNorm, dv, c.RMSEps)
-	if g.chanDecay || c.DeltaSigmoidGate {
-		return sigmoidMul(b, "gated", z, o), nil
+	gated, err := lowerStated(b, c.DeltaGate, []graph.ValueID{z, o}, f)
+	if err != nil {
+		return 0, fmt.Errorf("the delta rule's gate: %w", err)
 	}
-	return b.Expr("gated", vh*dv, []graph.Term{
-		{Fn: graph.MapSigmoid, Args: [3]graph.Arg{{Kind: graph.ArgIn, Index: 0}}},
-		{Fn: graph.MapMul, Args: [3]graph.Arg{{Kind: graph.ArgIn, Index: 0}, {Kind: graph.ArgTerm, Index: 0}}},
-		{Fn: graph.MapMul, Args: [3]graph.Arg{{Kind: graph.ArgTerm, Index: 1}, {Kind: graph.ArgIn, Index: 1}}},
-	}, nil, z, o), nil
+	return gated, nil
 }
 
 // stateSpan is a delta rule's state floats a sequence where the block's

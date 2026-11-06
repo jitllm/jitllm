@@ -264,18 +264,20 @@ type Config struct {
 	NGramRowDim, NGramConv           int
 	NGramEOS, NGramImage             int32
 	NGramMul, NGramOff, NGramVoc     []uint64
-	DeltaSigmoidGate                 bool
 	// Kimi-K3 (k3.go): a residual checkpoint every AttnResBlock blocks, each
 	// sublayer's input their softmax mix with the running residual (zero is
-	// none); the routed experts at ExpertLatent (zero is n_embd); KDA's decay
-	// bound (zero is the softplus decay); the MLA latent norms' epsilon.
+	// none); the routed experts at ExpertLatent (zero is n_embd); the MLA
+	// latent norms' epsilon.
 	AttnResBlock int
+	// DeltaDecay and DeltaGate are the delta rule's decay and output gate as
+	// the container states them (jlm.Config.DeltaDecay), nil on a model with
+	// no delta rule.
+	DeltaDecay, DeltaGate *jlm.Program
 	// stated is the residual's streams as the converter states them
 	// (jlm.Streams, the container's own): N of them, each block's reads and
 	// writes; nil for a config no container made.
 	stated        *jlm.Streams
 	ExpertLatent  int
-	KDALowerBound float32
 	LatentNormEps float64
 	// kvSrcAt replaces KVSource's choice for the shared blocks, a source a
 	// block (nil: none), for a gate's violation only.
@@ -878,19 +880,14 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 	out.NGramRowDim, out.NGramConv = int(c.NGramRowDim), int(c.NGramConv)
 	out.NGramEOS, out.NGramImage = int32(c.NGramEOS), int32(c.NGramImage)
 	out.NGramMul, out.NGramOff, out.NGramVoc = c.NGramMul, c.NGramOff, c.NGramVoc
-	out.DeltaSigmoidGate = c.Flags2.Has(jlm.Flag2DeltaSigmoidGate)
+	out.DeltaDecay, out.DeltaGate = c.DeltaDecay, c.DeltaGate
 	out.AttnResBlock = int(c.AttnResBlock)
 	out.ExpertLatent = int(c.ExpertLatent)
-	out.KDALowerBound = c.KDALowerBound
 	out.LatentNormEps = float64(c.LatentNormEps)
 	if out.LatentNormEps == 0 {
 		out.LatentNormEps = out.RMSEps
 	}
 	switch {
-	case out.KDALowerBound > 0:
-		return nil, fmt.Errorf("model: %s: a decay bound of %g; a bound is negative", out.Arch, out.KDALowerBound)
-	case out.KDALowerBound != 0 && !out.ChanDecay():
-		return nil, fmt.Errorf("model: %s: a decay bound on a model with no per-channel decay", out.Arch)
 	case out.ExpertLatent != 0 && (out.NExpert == 0 || out.ExpertLatent >= out.NEmbd || out.DenseMoE ||
 		out.ExpertWeightIn):
 		return nil, fmt.Errorf("model: %s: a latent mixture at %d on %d experts at n_embd %d", out.Arch,

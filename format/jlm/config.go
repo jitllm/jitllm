@@ -616,6 +616,12 @@ type Config struct {
 	// ArchDBRX; see encodeConfig.
 	ClampKQV float32
 
+	// DeltaDecay and DeltaGate are the delta rule's decay over its logits (one
+	// input, a row of decays in (0, 1)) and its output gate over the gate's
+	// projection and the normed output (two inputs), as the converter states
+	// them (DeltaDecaySoftplus and friends); nil on a model with no delta
+	// rule. A tail of their own; see encodeConfig.
+	DeltaDecay, DeltaGate *Program
 	// Geoms is each text block's own geometry where the blocks do not all
 	// attend and feed forward at the model's (NKVHead, HeadDim, NRot and NFFN
 	// above): one per block, or none. A tail of its own; see encodeConfig.

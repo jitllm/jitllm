@@ -67,7 +67,7 @@ func qwen4expRoleOf(name string) (jlm.Role, bool) {
 //   - the delta rule's output norm gated by sigmoid, not silu: llama.cpp's
 //     graph hardcodes it and the GGUF carries no key, transformers reads
 //     output_gate_type, which the release states as sigmoid
-//     (Flag2DeltaSigmoidGate);
+//     (jlm.DeltaGateSigmoid);
 //   - QSA on the attention blocks: the indexer's heads, width and token
 //     budget, and one block size, which compress_ratios states per block
 //     (the ratio on every attention block, zero on every linear one; any
@@ -80,7 +80,7 @@ func qwen4expRoleOf(name string) (jlm.Role, bool) {
 // block, more than one n-gram block or one on an attention block, and
 // constants too short for the heads they describe.
 func qwen4expConfig(f *meta.File, c *jlm.Config) error {
-	c.Flags2 |= jlm.Flag2DeltaSigmoidGate
+	c.DeltaGate = jlm.DeltaGateSigmoid()
 	if err := partialRotary(c); err != nil {
 		return err
 	}
