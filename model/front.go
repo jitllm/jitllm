@@ -1209,7 +1209,15 @@ func (m *Model) mixture(b *graph.Builder, f graph.Facts, li int, x, n graph.Valu
 			[]graph.Result{{Name: "router.group.rank", Width: g, Elem: graph.ElemU32}}, nil, graph.Attrs{}, nil, nil)[0]
 		choose = mapc("router.kept", graph.MapWhere, math.Inf(-1), E, nil, mapc("router.group.kept", graph.MapLess, float64(kept), g, nil, rank), choose)
 	}
-	sel, _ := topk("router", choose, K, 0, K)
+	// A block storing a token table routes each row to its token's row of
+	// it; the weights are still the router's scores at those experts.
+	var sel graph.ValueID
+	if s, ok := f.Inventory[jlm.RoleHashExperts]; ok {
+		sel = b.Emit(graph.OpEmbed, nil, []graph.Result{{Name: "router.token", Width: K, Elem: graph.ElemU32}},
+			[]graph.Binding{{Role: jlm.RoleHashExperts, K: s.K, Rows: s.Rows}}, graph.Attrs{}, nil, nil)[0]
+	} else {
+		sel, _ = topk("router", choose, K, 0, K)
+	}
 	take := func(name string, v graph.ValueID) graph.ValueID {
 		return b.Emit(graph.OpTake, []graph.ValueID{v, sel}, []graph.Result{{Name: name, Width: K}}, nil, graph.Attrs{}, nil, nil)[0]
 	}

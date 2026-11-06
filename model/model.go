@@ -687,9 +687,15 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 	if !c.Arch.Valid() || c.NVocab == 0 {
 		return nil, fmt.Errorf("model: %v is not a language model", c.Arch)
 	}
-	if c.HCMult != 0 && c.HCLowRank == 0 || len(c.CompKinds) != 0 || c.NHashLayers != 0 {
-		return nil, fmt.Errorf("model: %v carries hyper-connections mixed by Sinkhorn rounds, compressed "+
-			"attention or experts routed by token id, which have no composed form stated from the container", c.Arch)
+	if c.HCMult > 1 && c.Streams.N <= 1 {
+		return nil, fmt.Errorf("model: %v carries %d hyper-connected streams the container does not state: "+
+			"convert the model again", c.Arch, c.HCMult)
+	}
+	for li, k := range c.CompKinds {
+		if k != jlm.CompNone {
+			return nil, fmt.Errorf("model: %v's block %d attends a compressed history, which has no composed form "+
+				"stated from the container", c.Arch, li)
+		}
 	}
 	out := &Config{
 		Arch:         c.Arch.String(),

@@ -92,7 +92,9 @@ PRF = 0.5
 FP4 = torch.tensor([0, 0.5, 1, 1.5, 2, 3, 4, 6, -0.0, -0.5, -1, -1.5, -2, -3, -4, -6])
 
 
-def v4():
+def v4(ratios=(4, 8, 0, 4)):
+    global RATIOS
+    RATIOS = list(ratios)
     from transformers import DeepseekV4ForCausalLM
     from transformers.models.deepseek_v4.configuration_deepseek_v4 import DeepseekV4Config
     cfg = DeepseekV4Config(
@@ -106,6 +108,9 @@ def v4():
 
 SPECS = {
     "synth-deepseek4": v4,
+    # Every block sliding: the hyper-connections and the token-routed
+    # experts without a compressed history.
+    "synth-deepseek4-sliding": lambda: v4((0, 0, 0, 0)),
 }
 
 

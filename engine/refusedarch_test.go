@@ -14,7 +14,7 @@ import (
 // than opened and run on code of its own.
 func TestRefusedArchitecturesSayWhy(t *testing.T) {
 	for _, c := range []struct{ name, why string }{
-		{"synth-deepseek4.gguf", "Sinkhorn"},
+		{"synth-deepseek4.gguf", "compressed history"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			src, ok := existingModel(testmodels.Path(c.name))

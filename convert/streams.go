@@ -24,6 +24,10 @@ func StateStreams(c *jlm.Config, stores func(r jlm.Role, li int32) bool) {
 		stateHyper(c)
 		return
 	}
+	if c.HCIters > 0 && c.HCMult > 1 && c.NLayer > 0 {
+		stateMHC(c)
+		return
+	}
 	if c.AttnResBlock == 0 || c.NLayer == 0 {
 		return
 	}
