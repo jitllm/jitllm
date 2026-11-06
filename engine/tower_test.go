@@ -59,7 +59,7 @@ func TestStatedTowerComposesOnTheCPU(t *testing.T) {
 	}
 	s := testInstance(t, m, 64)
 	defer s.Close()
-	dev := s.cpu.comp.Device()
+	dev := s.cpu.x.Composer().Device()
 	reg := composer.Default()
 	form := func(name string, g *graph.Graph, rows int) {
 		t.Helper()

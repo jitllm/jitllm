@@ -11,7 +11,7 @@ import (
 func (s *Instance) cpuPlaceMTP() {
 	fg := s.m.FrontGraphs()
 	i := s.lo - s.c.NLayer
-	if s.cpu.dev == nil || i < 0 || i >= len(fg.MtpEntry) {
+	if s.cpu.x.Device() == nil || i < 0 || i >= len(fg.MtpEntry) {
 		return
 	}
 	g := fg.MtpEntry[i]
@@ -22,7 +22,7 @@ func (s *Instance) cpuPlaceMTP() {
 	for i := range hf {
 		p[i] = cpudev.Part{Composed: hf[i].composed, F: hf[i].f, Why: hf[i].why, Err: hf[i].err}
 	}
-	s.entry = cpudev.NewEntry(s.cpu.dev, &s.cpu.steps, p[0], p[1], blockWeights{ws: &s.ws, li: s.lo, l: s.layer(s.lo)},
+	s.entry = cpudev.NewEntry(s.cpu.x.Device(), s.cpu.x.Steps(), p[0], p[1], blockWeights{ws: &s.ws, li: s.lo, l: s.layer(s.lo)},
 		s.c.ResidW())
 }
 

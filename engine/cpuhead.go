@@ -35,7 +35,7 @@ type cpuHeadForm struct {
 // cpuPlaceHead composes the head's and the samplers' graphs for the CPU
 // device at the instance's placement (cpudev.Head).
 func (s *Instance) cpuPlaceHead() {
-	if s.cpu.dev == nil {
+	if s.cpu.x.Device() == nil {
 		return
 	}
 	fg := s.m.FrontGraphs()
@@ -63,7 +63,7 @@ func (s *Instance) cpuPlaceHead() {
 	}
 	parts := cpudev.HeadParts{Head: p[0], Hidden: p[1], Rows: p[2], Pick: p[3], Sample: p[4], Walk: p[5], Row: p[6],
 		Cut: p[7], WalkProb: p[8], CutProb: p[9], CutK: p[10], CutKProb: p[11], OutNorm: p[12], Logprobs: p[13], Mask: p[14]}
-	s.heads = cpudev.NewHead(s.cpu.dev, &s.cpu.steps, parts, fg.OutNorm != nil, blockWeights{ws: &s.ws, li: -1},
+	s.heads = cpudev.NewHead(s.cpu.x.Device(), s.cpu.x.Steps(), parts, fg.OutNorm != nil, blockWeights{ws: &s.ws, li: -1},
 		s.c.NEmbd, s.c.NVocab, model.MaxTopLogprobs)
 }
 
@@ -88,7 +88,7 @@ func (s *Instance) cpuComposeHeadAs(hf *cpuHeadForm, g *graph.Graph, rows int, o
 	default:
 		f, err := s.formCPUGraph(g, rows, over)
 		if err != nil {
-			hf.why, hf.err = s.cpu.comp.Decline(err), err
+			hf.why, hf.err = s.cpu.x.Composer().Decline(err), err
 			return
 		}
 		hf.f = f
@@ -128,8 +128,8 @@ func (s *Instance) formCPUGraph(g *graph.Graph, rows int, over map[jlm.Role]jlm.
 		}
 	}
 	req := composer.Request{Graph: g, Formats: formats, Step: composer.Step{Rows: rows, Page: 1, Keys: 1, ActWindow: s.m.ActWindow},
-		Device: s.cpu.comp.Device(), Apart: true}
-	return s.cpu.comp.Form(req, g, rows, true, false, false)
+		Device: s.cpu.x.Composer().Device(), Apart: true}
+	return s.cpu.x.Composer().Form(req, g, rows, true, false, false)
 }
 
 // Sample is smp's token over logits, a row of this instance's vocabulary,
@@ -155,13 +155,13 @@ func (s *Instance) Sample(smp *Sampler, logits []float32) (int32, error) {
 
 // headDeclined is the error of head rows no composed form serves.
 func (s *Instance) headDeclined(why nn.Decline) error {
-	return fmt.Errorf("model: the head has no composed form on this instance (%s): %v", nn.DeclineName(int(why)), s.cpu.comp.Err())
+	return fmt.Errorf("model: the head has no composed form on this instance (%s): %v", nn.DeclineName(int(why)), s.cpu.x.Composer().Err())
 }
 
 // sampleDeclined is the error of a draw no composed form serves: a form the
 // composer refused at the placement, which CPUFormErr names.
 func (s *Instance) sampleDeclined(what string) error {
-	return fmt.Errorf("model: %s has no composed form on this instance: %v", what, s.cpu.comp.Err())
+	return fmt.Errorf("model: %s has no composed form on this instance: %v", what, s.cpu.x.Composer().Err())
 }
 
 // dist fills d with the distribution smp draws from over logits (a row this

@@ -78,9 +78,9 @@ func (in *Instance) newTowerRun() (*towerRun, error) {
 	if err != nil {
 		return nil, err
 	}
-	if ts.cpu.comp.Err() != nil {
+	if ts.cpu.x.Composer().Err() != nil {
 		ts.Close()
-		return nil, ts.cpu.comp.Err()
+		return nil, ts.cpu.x.Composer().Err()
 	}
 	words := 0
 	for _, cl := range tg.Classes {
@@ -115,7 +115,7 @@ func (in *Instance) newTowerRun() (*towerRun, error) {
 	}
 	tr.tapRows, tr.tapBuf = make([][]float32, len(tg.Taps)), make([][]float32, len(tg.Taps))
 	for li := ts.lo; li < ts.hi; li++ {
-		if cb := ts.cpu.blocks[li]; cb == nil || cb.Rows == nil {
+		if cb, _ := ts.cpu.x.Block(li); cb == nil || cb.Rows == nil {
 			why := nn.DeclineNoGraph
 			if cb != nil {
 				why = max(cb.Why, cb.RowsWhy)
@@ -279,23 +279,23 @@ func (s *Instance) encodePicture(img image.Image, dst, deep []float32) ([]float3
 		tr.squareRequest(pl, sq, tg.Classes[sq.Class].Pic, squares)
 		n := tg.Lead + sq.Gw*sq.Gh
 		tr.size(n, E)
-		*b = cpudev.Bound{Li: -1, Own: ts.cpu.dev.Own(f), N: n, Req: tr.req, Pos: tr.posTab, Pic: words}
+		*b = cpudev.Bound{Li: -1, Own: ts.cpu.x.Device().Own(f), N: n, Req: tr.req, Pos: tr.posTab, Pic: words}
 		b.Weights, _ = ts.ws.bind(f, -1, &ts.dense.TowerDense)
 		b.IO[0] = unsafe.Pointer(&tr.rows[0])
-		ts.cpu.run.Run(b, f)
+		ts.cpu.x.Runner().Run(b, f)
 		if err := ts.towerBlocks(tr, sq.Gw, tr.windows(tg, sq.Gw, sq.Gh)); err != nil {
 			return nil, fmt.Errorf("model: the tower's blocks: %w", err)
 		}
-		*b = cpudev.Bound{Li: -1, Own: ts.cpu.dev.Own(head), N: n, Req: tr.req, Pos: tr.posTab}
+		*b = cpudev.Bound{Li: -1, Own: ts.cpu.x.Device().Own(head), N: n, Req: tr.req, Pos: tr.posTab}
 		b.Weights, _ = ts.ws.bind(head, -1, &ts.dense.TowerDense)
 		b.IO[0], b.IO[1] = unsafe.Pointer(&tr.blk[0]), unsafe.Pointer(&dst[at*D])
-		ts.cpu.run.Run(b, head)
+		ts.cpu.x.Runner().Run(b, head)
 		// Each tap's rows at the same rows of its plane of deep.
 		for j, f := range tr.taps {
-			*b = cpudev.Bound{Li: -1, Own: ts.cpu.dev.Own(f), N: n, Req: tr.req, Pos: tr.posTab}
+			*b = cpudev.Bound{Li: -1, Own: ts.cpu.x.Device().Own(f), N: n, Req: tr.req, Pos: tr.posTab}
 			b.Weights, _ = ts.ws.bind(f, -1, &ts.dense.TowerTaps[j])
 			b.IO[0], b.IO[1] = unsafe.Pointer(&tr.tapRows[j][0]), unsafe.Pointer(&deep[(j*len(dst)/D+at)*D])
-			ts.cpu.run.Run(b, f)
+			ts.cpu.x.Runner().Run(b, f)
 		}
 		at += tg.SquareOut(sq)
 	}

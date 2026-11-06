@@ -873,7 +873,7 @@ func (s *Instance) hostRows(li, slot, base, p0, n, chunkRows int, bidir bool) er
 		}
 	}
 	if why == nn.DeclineServes {
-		s.cpu.steps.Serve(nn.PartBlock)
+		s.cpu.x.Steps().Serve(nn.PartBlock)
 		return nil
 	}
 	return s.cpuRefused(li, why)

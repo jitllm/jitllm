@@ -411,11 +411,11 @@ func setFault(s *Instance, f cpuFault) {
 	if st, ok := s.streams.(*cpudev.Streams); ok {
 		st.Fault = f == cpuFaultStreams
 	}
-	if r := s.cpu.rowRun; r != nil {
+	if r := s.cpu.x.Blocks(); r != nil {
 		r.FaultRow, r.FaultWrite = f == cpuFaultRow, f == cpuFaultWrite
 		r.FaultPage, r.FaultKeysFirst = f == cpuFaultPage, f == cpuFaultKeysFirst
 	}
-	if r := s.cpu.run; r != nil {
+	if r := s.cpu.x.Runner(); r != nil {
 		r.FaultPicks, r.FaultExpert, r.FaultWeight = f == cpuFaultPicks, f == cpuFaultExpert, f == cpuFaultWeight
 	}
 	if h, ok := s.heads.(*cpudev.Head); ok {

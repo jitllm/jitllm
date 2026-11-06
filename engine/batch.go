@@ -148,7 +148,7 @@ func (s *Instance) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([
 			return nil, err
 		}
 		if why == nn.DeclineServes {
-			s.cpu.steps.Serve(nn.PartBlock)
+			s.cpu.x.Steps().Serve(nn.PartBlock)
 			continue
 		}
 		return nil, s.cpuRefused(li, why)
