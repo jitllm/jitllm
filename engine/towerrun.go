@@ -279,18 +279,21 @@ func (s *Instance) encodePicture(img image.Image, dst, deep []float32) ([]float3
 		tr.squareRequest(pl, sq, tg.Classes[sq.Class].Pic, squares)
 		n := tg.Lead + sq.Gw*sq.Gh
 		tr.size(n, E)
-		*b = cpuBound{li: -1, l: &ts.dense.TowerDense, own: ts.cpu.dev.Own(f), n: n, req: tr.req, pos: tr.posTab, pic: words}
+		*b = cpuBound{li: -1, own: ts.cpu.dev.Own(f), n: n, req: tr.req, pos: tr.posTab, pic: words}
+		b.weights, _ = ts.ws.bind(f, -1, &ts.dense.TowerDense)
 		b.io[0] = unsafe.Pointer(&tr.rows[0])
 		ts.cpuRunForm(b, f)
 		if err := ts.towerBlocks(tr, sq.Gw, tr.windows(tg, sq.Gw, sq.Gh)); err != nil {
 			return nil, fmt.Errorf("model: the tower's blocks: %w", err)
 		}
-		*b = cpuBound{li: -1, l: &ts.dense.TowerDense, own: ts.cpu.dev.Own(head), n: n, req: tr.req, pos: tr.posTab}
+		*b = cpuBound{li: -1, own: ts.cpu.dev.Own(head), n: n, req: tr.req, pos: tr.posTab}
+		b.weights, _ = ts.ws.bind(head, -1, &ts.dense.TowerDense)
 		b.io[0], b.io[1] = unsafe.Pointer(&tr.blk[0]), unsafe.Pointer(&dst[at*D])
 		ts.cpuRunForm(b, head)
 		// Each tap's rows at the same rows of its plane of deep.
 		for j, f := range tr.taps {
-			*b = cpuBound{li: -1, l: &ts.dense.TowerTaps[j], own: ts.cpu.dev.Own(f), n: n, req: tr.req, pos: tr.posTab}
+			*b = cpuBound{li: -1, own: ts.cpu.dev.Own(f), n: n, req: tr.req, pos: tr.posTab}
+			b.weights, _ = ts.ws.bind(f, -1, &ts.dense.TowerTaps[j])
 			b.io[0], b.io[1] = unsafe.Pointer(&tr.tapRows[j][0]), unsafe.Pointer(&deep[(j*len(dst)/D+at)*D])
 			ts.cpuRunForm(b, f)
 		}
