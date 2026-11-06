@@ -43,7 +43,7 @@ type streams struct {
 // predictsStreams says the model's several residual streams are predicted
 // and corrected (PredStreams), and nothing else carries a stream.
 func (c *Config) PredictsStreams() bool {
-	return c.PredStreams > 1 && c.Streams() == c.PredStreams && c.HCMult <= 1 && !c.ResAttn()
+	return c.PredStreams > 1 && c.Streams() == c.PredStreams && c.HCMult <= 1 && c.statedStreams() <= 1
 }
 
 // A block over a bank of checkpoints (Config.ResAttn): stream 0 is the
@@ -119,7 +119,7 @@ func lowerStated(b *graph.Builder, p *jlm.Program, in []graph.ValueID, f graph.F
 // gatesStreams says the model's several residual streams are mixed through
 // a low-rank gate, and nothing else carries a stream.
 func (c *Config) gatesStreams() bool {
-	return c.HCLowRank > 0 && c.Streams() == c.HCMult && c.PredStreams == 0 && !c.ResAttn()
+	return c.HCLowRank > 0 && c.Streams() == c.HCMult && c.PredStreams == 0 && c.statedStreams() <= 1
 }
 
 // statesStreams says the front end states the model's residual streams.

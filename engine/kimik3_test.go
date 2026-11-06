@@ -35,12 +35,12 @@ func k3Fixtures() []struct {
 	}{
 		{"synth-kimik3", func(m *model.Model) bool {
 			c := m.Cfg
-			ok := c.Arch == "kimi-k3" && c.ResAttn() && c.AttnResBlock == 2 && c.Streams() == 4 &&
+			ok := c.Arch == "kimi-k3" && c.AttnResBlock == 2 && c.Streams() == 4 &&
 				c.ExpertLatent == 32 && m.Container.Config().SituBeta != 0 && c.KDALowerBound == -5 &&
 				c.LatentNormEps == float64(float32(1e-6)) && c.RMSEps == float64(float32(1e-3)) &&
 				c.ChanDecay() && c.MLA() && c.NoPosEnc && c.QLoraRank == 32 && c.KVLoraRank == 32 &&
 				c.NDenseLead == 1 && c.NFFNShExp == 32 && c.ExpertSigmoid && c.ExpertScale == 2 &&
-				len(m.ResOut) == 64 &&
+				len(nn.VectorOf(m.Vecs, jlm.RoleOutputResScore)) == 64 &&
 				slices.Equal(c.LayerKinds, []jlm.LayerKind{jlm.LayerLinearAttn, jlm.LayerLinearAttn,
 					jlm.LayerFullAttn, jlm.LayerLinearAttn, jlm.LayerLinearAttn, jlm.LayerFullAttn})
 			for i := range m.Layers {

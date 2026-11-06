@@ -114,12 +114,13 @@ type layer struct {
 	qsa  bool
 	idxQ *resident
 	mvMQ mv
-	// Kimi-K3 (nn.LayerPlan.K3): the MLA output gate (slot 31) and the
-	// latent mixture's down and up projections (32, 33); its vectors are in
-	// vecs. k3 marks such a block.
+	// The MLA output gate (slot 31) and a latent mixture's down and up
+	// projections (32, 33, nn.LayerPlan.ExpLatent); their vectors are in
+	// vecs. wide marks a block of several residual streams or of experts
+	// at a width of their own.
 	mlaGate, routedDown, routedUp *resident
 	mvMG, mvRD, mvRU              mv
-	k3                            bool
+	wide                          bool
 	// Qwen3.8-Flash-Next (nn.LayerPlan.Q4E, q4e.go): the two
 	// hyper-connections' down, up and placement projections (slots 34..39),
 	// the n-gram key and value (40, 41) and its convolution; its vectors are
@@ -2080,11 +2081,11 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 				return false
 			}
 		}
-		// Kimi-K3's MLA output gate (31) and latent projections (32, 33), on
-		// the blocks the plan says carry them.
+		// The MLA output gate (31) and a latent mixture's projections (32,
+		// 33), on the blocks the plan says carry them.
 		if i >= 31 && i <= 33 {
 			want := i == 31 && p.MLA() && p.Recurrent.Conv == 0 && len(x.Data) != 0 ||
-				i >= 32 && p.K3 != nil && p.K3.Latent != 0
+				i >= 32 && p.ExpLatent != 0
 			if !want {
 				continue
 			}
@@ -2440,7 +2441,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		g.LastErr = why
 		return false
 	}
-	l.k3 = p.K3 != nil
+	l.wide = p.NStreams > 1 || p.ExpLatent != 0
 	if why := g.prepQ4E(l, li, p, w, up); why != "" {
 		g.LastErr = why
 		return false
@@ -5954,17 +5955,13 @@ func planUnion(a *nn.LayerPlan, b *nn.LayerPlan) bool {
 	if b.NFFN > a.NFFN {
 		a.NFFN, grew = b.NFFN, true
 	}
-	// Kimi-K3: the streams, the banks and the checkpoints are per block, and
-	// the scratch builds a mix for every bank and a placement for every
-	// checkpoint (k3.go); the latent width is the mixture blocks', which the
-	// dense lead does not carry.
-	if b.K3 != nil && (a.K3 == nil || b.K3.Latent > a.K3.Latent) {
-		k := *b.K3
-		if a.K3 != nil {
-			k = *a.K3
-			k.Latent = b.K3.Latent
-		}
-		a.K3, grew = &k, true
+	// The streams are the model's; the experts' width is the mixture
+	// blocks', which a dense lead does not carry.
+	if b.NStreams > a.NStreams {
+		a.NStreams, grew = b.NStreams, true
+	}
+	if b.ExpLatent > a.ExpLatent {
+		a.ExpLatent, grew = b.ExpLatent, true
 	}
 	// Gemma 3n's sparse lead: the gaussian's kernels serve the blocks that ask.
 	if b.Sparse && !a.Sparse {

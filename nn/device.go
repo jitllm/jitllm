@@ -154,10 +154,10 @@ type LayerWeights struct {
 	// MiniMax Sparse Attention (LayerPlan.MSA): the indexer's query from the
 	// block's normed input; the key is IdxK. Zero without one.
 	IdxQ Weight
-	// Kimi-K3 (LayerPlan.K3): the MLA output gate (NHead*HeadDimV rows of
-	// NEmbd, on a full block of a model that has one) and the latent
-	// mixture's down and up projections; its vectors are in Vectors. All
-	// zero elsewhere. A linear block's full-rank output gate is SSM.Gate,
+	// The MLA output gate (NHead*HeadDimV rows of NEmbd, on a full block of a
+	// model that has one) and a latent mixture's down and up projections
+	// (LayerPlan.ExpLatent); their vectors are in Vectors. All zero
+	// elsewhere. A linear block's full-rank output gate is SSM.Gate,
 	// with SSM.GA and SSM.GB empty.
 	MLAGate              Weight
 	RoutedDown, RoutedUp Weight
@@ -467,8 +467,8 @@ func (p *LayerPlan) ResidW() int { return p.NEmbd * p.Streams() }
 // Streams is how many residual streams Layers' x carries, stream-major: AltUp's
 // predictions, a residual bank or hyper-connections, one elsewhere.
 func (p *LayerPlan) Streams() int {
-	if p.K3 != nil {
-		return max(p.K3.Streams, 1)
+	if p.NStreams > 1 {
+		return p.NStreams
 	}
 	if p.Q4E != nil {
 		return max(p.Q4E.HCMult, 1)
@@ -512,25 +512,6 @@ func (p *LayerPlan) Scale() float64 {
 // (its last position - 1 - KVWindowSlack), which this margin guarantees.
 const KVWindowSlack = 64
 
-// K3Plan is Kimi-K3's residual attention and latent mixture at one block
-// (model's k3.go is the graph). The residual is Streams streams, stream-major
-// in Layers' x: stream 0 the running residual, stream 1+j checkpoint j. The
-// attention reads the softmax mix of the first BankAttn checkpoints and the
-// running residual, scored by LayerWeights.ResAttn; on a checkpoint block
-// (Push, the stream it banks into, non-zero) the block's raw input is banked
-// first and the running residual restarts from the attention's output; the
-// FFN reads the mix of the first BankFFN and the running residual, scored by
-// ResFFN. The head's mix is the host's. Latent is the routed experts' width
-// (zero for NEmbd): the experts read RoutedDown of the FFN input, their sum
-// is normed by RoutedNorm and RoutedUp takes it back, beside the shared
-// experts at NEmbd.
-type K3Plan struct {
-	Streams           int
-	BankAttn, BankFFN int
-	Push              int
-	Latent            int
-}
-
 // Q4EPlan is Qwen3.8-Flash-Next at one block (model's q4e.go is the graph).
 // The residual is HCMult streams, stream-major in Layers' x; each sublayer
 // reads their mix through a HCLowRank gate (LayerWeights.HCAttn, HCFFN) and
@@ -557,11 +538,11 @@ type Q4EPlan struct {
 	QSARope []float32
 }
 
-// ExpWidth is the routed experts' input and output width: the latent on a
-// Kimi-K3 mixture, NEmbd everywhere else.
+// ExpWidth is the routed experts' input and output width: ExpLatent where
+// they have one of their own, NEmbd everywhere else.
 func (p *LayerPlan) ExpWidth() int {
-	if p.K3 != nil && p.K3.Latent != 0 {
-		return p.K3.Latent
+	if p.ExpLatent != 0 {
+		return p.ExpLatent
 	}
 	return p.NEmbd
 }
@@ -853,9 +834,13 @@ type LayerPlan struct {
 	// (Llama 4), which with a SiLU expert is a different function from the
 	// output-weighted sum every other mixture runs.
 	ExpertWeightIn bool
-	// K3 is Kimi-K3's residual attention and latent mixture at this block,
-	// nil on every other model.
-	K3 *K3Plan
+	// NStreams is how many residual streams the block's x carries,
+	// stream-major, the model's (0 or 1 for one); ExpLatent is the routed
+	// experts' input and output width where it is not NEmbd: they read
+	// RoutedDown of the FFN input, their sum is normed by RoutedNorm and
+	// RoutedUp takes it back, beside the shared experts at NEmbd.
+	NStreams  int
+	ExpLatent int
 	// Q4E is Qwen3.8-Flash-Next's hyper-connections, QSA and n-gram
 	// embedding at this block, nil on every other model.
 	Q4E *Q4EPlan

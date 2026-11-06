@@ -2009,7 +2009,14 @@ func (s *Instance) planFor(li int) *nn.LayerPlan {
 			plan.Recurrent.Scan, plan.Recurrent.Rank, plan.Recurrent.NoNorm = true, g.Rank, true
 		}
 	}
-	s.k3Plan(li, &plan)
+	plan.LatentNormEps = c.LatentNormEps
+	if c.LayerKind(li).Recurrent() {
+		plan.Recurrent.DecayBound = c.KDALowerBound
+	}
+	plan.NStreams = c.Streams()
+	if w := c.ExpWidth(); c.MoEAt(li) && w != c.NEmbd {
+		plan.ExpLatent = w
+	}
 	s.q4ePlan(li, &plan)
 	if c.NonCausal && (s.m.IsEmbedding() || s.m.Tower != nil && li >= s.m.TowerBase) {
 		// A bidirectional decoder (EmbeddingGemma) and a tower: their blocks

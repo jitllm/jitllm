@@ -1552,8 +1552,6 @@ func (s *Instance) cpuRoleVector(li int, l *model.Layer, r jlm.Role) []float32 {
 			return s.m.OutNormB
 		case jlm.RoleOutputBias:
 			return s.m.OutB
-		case jlm.RoleOutputResScore:
-			return s.m.ResOut
 		case jlm.RolePLEProjNorm:
 			return s.m.PleNorm
 		case jlm.RoleHCHeadNorm:
