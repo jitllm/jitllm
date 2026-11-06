@@ -278,7 +278,7 @@ func (s *Instance) newHistory(maxSeq int) (*Session, error) {
 	sess := &Session{model: s.m, limit: maxSeq, kvFormat: s.kvFmt, span: [2]int{s.lo, s.hi}}
 	l := s.kvl
 	l.maxSeq = maxSeq
-	sess.kv = newKVCacheRange(s.c, s.nextCacheID(), 1, l, nil, s.opt.kvPage, s.lo, s.hi, nil, s.storage().PagePool())
+	sess.kv = newKVCacheRange(s.c, s.nextCacheID(), 1, l, nil, s.opt.kvPage, s.lo, s.hi, nil, s.storage().PagePool(), s.entPlanes())
 	sess.kv.reserve(maxSeq)
 	if err := sess.kv.useArenas(maxSeq, s.kvArenaFor); err != nil {
 		return nil, err

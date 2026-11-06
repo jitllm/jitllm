@@ -106,8 +106,7 @@ func (g *devTier) kvPages() *kvPool {
 }
 
 // initPagedScratch builds bs's paged set: the rows' descriptors, full and
-// windowed, and the entry descriptors of a block that compresses its
-// history (entdesc.go). Callers hold g.mu.
+// windowed. Callers hold g.mu.
 func (g *devTier) initPagedScratch(bs *blockScratch) error {
 	defer g.scratchWin().close() // the scratch's own buffers (scratch.go)
 	p := &bs.p
@@ -184,7 +183,7 @@ func (g *devTier) heldLayers(sid uint64, f func(li int, l *kvLayerPool) error) e
 		return nil
 	}
 	for li, l := range g.kvp.layers {
-		if bl := g.layers[li]; bl != nil {
+		if bl := g.layers[keyBlock(li)]; bl != nil {
 			if kvp := bl.kv[sid]; kvp != nil && kvp.paged {
 				if err := f(li, l); err != nil {
 					return err
@@ -486,12 +485,26 @@ func (g *devTier) pagedLayer(sid uint64, l *layer, li int, p *nn.LayerPlan) erro
 	}
 	fresh := l.kv[sid] == nil
 	l.kv[sid] = &kvPair{paged: true}
-	if _, ok := kp.layers[li]; ok {
-		if err := g.pagedSeat(kp, li, l); err != nil {
+	// A block keeping entries holds them beside its rows, on the card, at
+	// its rows' seats and context.
+	if period, w := entriesOf(p.Graph); period > 1 {
+		eg := kvGeom{kvRow: w, mla: true, period: period}
+		if err := g.addKVLayer(kp, entKey(li), eg, 1+seats); err != nil {
 			if fresh {
 				delete(l.kv, sid)
 			}
 			return err
+		}
+		kp.layers[entKey(li)].noEvict, kp.layers[entKey(li)].ctx = true, kp.layers[li].ctx
+	}
+	for _, key := range []int{li, entKey(li)} {
+		if _, ok := kp.layers[key]; ok {
+			if err := g.pagedSeat(kp, key, l); err != nil {
+				if fresh {
+					delete(l.kv, sid)
+				}
+				return err
+			}
 		}
 	}
 	return nil

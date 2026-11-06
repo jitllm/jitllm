@@ -67,6 +67,10 @@ const (
 	SrcTokens
 	// SrcPicture is the step's picture, its decoded samples' words.
 	SrcPicture
+	// SrcEntries and SrcEntryPages are the block's entries plane and its
+	// page table: the composer's history-1 keys and pages.
+	SrcEntries
+	SrcEntryPages
 	// NumSrc is the sources' count.
 	NumSrc
 )
@@ -427,6 +431,10 @@ func BuildForm(h *cpu.Target, gr *graph.Graph, codes []composer.Code, rows int, 
 					ar.src = SrcRopeRows
 				case t == composer.TableRopeMarks:
 					ar.src = SrcRopeMarks
+				case t == composer.TableKeys && o.Instance == 1:
+					ar.src = SrcEntries
+				case t == composer.TablePages && o.Instance == 1:
+					ar.src = SrcEntryPages
 				case t == composer.TableKeys:
 					ar.src = SrcKeys
 				case t == composer.TableValues:

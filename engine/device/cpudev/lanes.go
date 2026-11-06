@@ -167,7 +167,8 @@ func (l *Lanes) Rows(li int, f *Form, t Tensors, c *RowsCall) error {
 	in := &l.in
 	*in = Rows{X: c.X, Stride: c.Stride, Width: l.width, Streams: l.streams, Side: c.Side, SideW: c.SideW,
 		SideOff: sideOff, CS: c.CS, NRot: c.NRot, CSSWA: c.CSSWA, NSWA: c.NSWA, Pages: hb.Pages, PagePos: hb.PagePos,
-		Spans: spans, Pos: c.Pos, Tok: c.Tok, Seq: c.Seq, Weights: w, Keys: hb.Keys, Values: hb.Values}
+		Spans: spans, Pos: c.Pos, Tok: c.Tok, Seq: c.Seq, Weights: w, Keys: hb.Keys, Values: hb.Values,
+		Entries: hb.Entries, EntryPages: hb.EntryPages}
 	if f.Rec {
 		in.RecLi = l.recLi(li)
 		in.RecState, in.RecConv = l.recAddrs(in.RecLi)

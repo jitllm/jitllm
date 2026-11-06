@@ -145,7 +145,7 @@ func (e *Exec) form(p nn.BlockSpec, rows int) (*Form, error) {
 	req := composer.Request{Formats: p.Formats, Strides: p.Strides,
 		Step:     composer.Step{Page: p.Page, Keys: p.Keys, ActWindow: p.ActWindow, Seqs: p.Seqs},
 		History:  composer.History{ValuesInKeys: p.ValuesInKeys},
-		Rotaries: p.Rotaries}
+		Rotaries: p.Rotaries, More: composer.MoreOf(&gr)}
 	req.Graph, req.Step.Rows, req.Device = &gr, rows, e.comp.Device()
 	return e.comp.Form(req, &gr, rows, false, false, p.F32)
 }
@@ -488,7 +488,8 @@ func (e *Exec) Run(li int, st *Step, b *Bindings) (nn.Decline, error) {
 	}
 	r := Row{X: st.X, Stride: st.Stride, CS: st.CS, CSSWA: st.CSSWA, Side: st.Side, Pages: hb.Pages,
 		KeyStart: hb.KeyStart, Pos: st.Pos, PagePos: hb.PagePos, Tok: st.Tok, Toks: st.Toks, RecLi: st.RecLi, Weights: w,
-		Faults: st.Faults, Keys: hb.Keys, Values: hb.Values, RecState: st.RecState, RecConv: st.RecConv, Slot: st.Slot}
+		Faults: st.Faults, Keys: hb.Keys, Values: hb.Values, RecState: st.RecState, RecConv: st.RecConv, Slot: st.Slot,
+		Entries: hb.Entries, EntryPages: hb.EntryPages}
 	if err := e.rows.Row(li, cb, &r); err != nil {
 		return nn.DeclineServes, err
 	}

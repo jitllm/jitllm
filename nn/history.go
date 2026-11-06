@@ -16,6 +16,10 @@ type HistoryBinding struct {
 	// Slots is the pages a sequence's arena holds, at least 1: where a row
 	// of sequence s finds its pages in the table.
 	Slots int
+	// Entries and EntryPages are the block's entries plane (its history 1)
+	// and its page table, where the block keeps one.
+	Entries    unsafe.Pointer
+	EntryPages []uint32
 }
 
 // History is a session's history as the CPU device asks for it: the policy

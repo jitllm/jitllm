@@ -166,7 +166,7 @@ func (s *Instance) relayout() error {
 	l := s.kvl
 	l.maxSeq = sess.limit
 	old := sess.kv
-	sess.kv = newKVCacheRange(s.c, old.id, 1, l, old.store, s.opt.kvPage, s.lo, s.hi, old.view, s.storage().PagePool())
+	sess.kv = newKVCacheRange(s.c, old.id, 1, l, old.store, s.opt.kvPage, s.lo, s.hi, old.view, s.storage().PagePool(), s.entPlanes())
 	sess.kv.reserve(sess.limit)
 	sess.kv.ns, sess.kv.budget = old.ns, old.budget
 	if err := sess.kv.useArenas(sess.limit, s.kvArenaFor); err != nil {
