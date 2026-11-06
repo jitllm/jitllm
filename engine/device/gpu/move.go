@@ -254,7 +254,7 @@ func (g *GPU) moveBlock(sid uint64, li int, to string, p *nn.LayerPlan, w *nn.La
 	}
 	g.mu.Lock()
 	g.own[li], g.geo[li] = d, geoOf(p)
-	g.split = g.split || p.GeomSplit
+	g.split = g.split || p.MixedGeom
 	delete(g.staged, li)
 	g.mu.Unlock()
 	// The source's copy is freed once the caller has moved what it is

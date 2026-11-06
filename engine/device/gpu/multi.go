@@ -330,7 +330,7 @@ func (g *GPU) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeights)
 			g.mu.Lock()
 			g.own[li], g.cur = d, i
 			g.geo[li] = geoOf(p)
-			g.split = g.split || p.GeomSplit
+			g.split = g.split || p.MixedGeom
 			if old != nil {
 				g.spillFrom = nil
 			}
@@ -909,7 +909,7 @@ func (g *GPU) prepLayerOn(sid uint64, name string, li int, p *nn.LayerPlan, w *n
 		if d.prepLayer(sid, li, p, w, mayPage) {
 			g.mu.Lock()
 			g.own[li], g.geo[li] = d, geoOf(p)
-			g.split = g.split || p.GeomSplit
+			g.split = g.split || p.MixedGeom
 			g.mu.Unlock()
 			if old != nil && old != d {
 				old.ReleaseLayers(li, li+1)
@@ -1013,8 +1013,9 @@ func (g *GPU) Pin(li int, on bool) bool {
 }
 
 // run is one contiguous stretch of blocks on one device: one submission.
-// geo is its blocks' scratch set (geomsets.go) and split says the model has two
-// attention geometries (Gemma 4), so the run takes one rotary table (tables).
+// geo is its blocks' scratch set (geomsets.go) and split says the model's
+// blocks attend at more than one geometry, so the run takes one rotary table
+// (tables).
 type run struct {
 	dev    *devTier
 	lo, hi int
@@ -1022,14 +1023,14 @@ type run struct {
 	split  bool
 }
 
-// tables is the rotary tables run r is handed. A split model's runs are one
-// geometry each, built with one table apiece (scratchPlanOf): the sliding
-// layers' run takes the local table where the global one goes.
+// tables is the rotary tables run r is handed. A run of a model of mixed
+// geometry is one geometry, built with one table (scratchPlanOf): a run of
+// blocks rotating by the second table takes it where the first goes.
 func (r run) tables(cs, csSWA []float32) ([]float32, []float32) {
 	switch {
 	case !r.split:
 		return cs, csSWA
-	case r.geo&geoSliding != 0:
+	case r.geo.local:
 		return csSWA, nil
 	}
 	return cs, nil
@@ -1342,7 +1343,7 @@ func (g *GPU) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []float32,
 		return hd.layersFor(sid, lo, hi, pos, n, x, cs, csSWA, head)
 	}
 	tail := head
-	if head != nil && (rs[len(rs)-1].dev != hd || rs[len(rs)-1].geo != 0) {
+	if head != nil && (rs[len(rs)-1].dev != hd || rs[len(rs)-1].geo != (geoKey{})) {
 		// It does not belong to the last run -- another device, or the
 		// sliding layers' scratch set, not the one holding the head -- and
 		// gets its own submission.

@@ -26,7 +26,7 @@ func (s *Instance) altRowsStep(rd nn.RowsDevice, pos, slot []int, tokens []int32
 	if err := s.expandStreams(x, n, 0); err != nil {
 		return err
 	}
-	if !rd.LayersRows(s.lo, s.hi, pos, slot, s.maxSeq, x, s.bcs[:n*c.NRot], s.bswaTable(n, c.NRotSWA), nil) {
+	if !rd.LayersRows(s.lo, s.hi, pos, slot, s.maxSeq, x, s.bcs[:n*c.NRot], s.bswaTable(n, c.LocalNRot()), nil) {
 		why := "no reason given"
 		if e, ok := s.ld.(nn.ErrReporter); ok {
 			why = e.Err()

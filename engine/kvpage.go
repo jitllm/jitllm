@@ -2290,10 +2290,12 @@ func geomDigest(c *model.Config, nseq int, l kvLayout) []byte {
 		nseq, l.elemTag(), c.NKVHead, c.HeadDim, c.NLayer,
 		c.NEmbd, c.NHead, c.NRot, c.NFFN, c.NVocab, c.RopeBase,
 		c.SWAWindow, c.SWAPeriod, c.Arch, c.NExpert, c.NExpertUsed)
-	// The sliding layers' own geometry, only where it is their own: every
-	// other model's digest, and so every page it stored, is unchanged.
-	if c.GeomSplit() {
-		fmt.Fprintf(h, "|swageom=%d/%d/%d", c.NKVHeadSWA, c.HeadDimSWA, c.NRotSWA)
+	// The blocks' own geometries, only where they have them: every other
+	// model's digest, and so every page it stored, is unchanged.
+	if c.MixedGeom() {
+		for li := range c.NLayer {
+			fmt.Fprintf(h, "|geom%d=%d/%d/%d", li, c.NKVHeadAt(li), c.HeadDimAt(li), c.NRotAt(li))
+		}
 	}
 	return h.Sum(nil)
 }

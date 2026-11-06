@@ -5,33 +5,41 @@ import (
 )
 
 // Scratch sets by geometry. A model whose blocks attend at more than one
-// geometry (nn.LayerPlan.GeomSplit) -- Gemma 4's global layers at head_dim 512
-// against its sliding ones' 256, and on the 31B and 26B four kv heads against
-// sixteen -- needs one scratch SET per geometry, since every attention kernel
-// a scratch builds bakes one: the decode scratch, the batched ones by width
-// and the widths reserved for them. A block runs in its own geometry's set.
+// geometry (nn.LayerPlan.MixedGeom) -- a head width, kv head count or rotary
+// width of a block's own -- needs one scratch SET per geometry, since every
+// attention kernel a scratch builds bakes one: the decode scratch, the batched
+// ones by width and the widths reserved for them. A block runs in its own
+// geometry's set.
 // GPU.runsInto cuts a range where the geometry changes, as it cuts where the
 // device changes, so every submission is one geometry and the residual
 // crosses the host between them; the KV pages are per layer already
 // (kvGeomOf reads the block's plan).
 //
-// A feed-forward twice NFFN wide (nn.LayerPlan.FFNWide, the E2B/E4B's
-// KV-sharing layers) is a second axis, since the FFN kernels bake their width
-// too, so a set is keyed by both (geoKey); a non-causal segment, a decision
-// head and a cache row carrying an index key are the others.
+// A feed-forward width of a block's own (nn.LayerPlan.FFNWide) is a second
+// axis, since the FFN kernels bake their width too, so a set is keyed by both
+// (geoKey); a non-causal segment, a decision head and a cache row carrying an
+// index key are the others.
 //
 // The set in use is swapped in place (useGeom): every path below reads g.bs and
-// g.bbs as it always did. The home set is the global, single-width layers',
-// which holds the head, and every entry point that switches restores it before
-// it returns.
+// g.bbs as it always did. The home set is the blocks' at the model's own
+// geometry, which holds the head, and every entry point that switches restores
+// it before it returns.
 
-// geoKey names a scratch set: the zero key is the home set.
-type geoKey uint8
+// geoKey names a scratch set: the zero key is the home set. nkv, hd, nrot and
+// local are a block's own attention geometry and rotary (nn.LayerPlan.OwnGeom),
+// zero for a block at the model's; nffn is a feed-forward width of its own.
+type geoKey struct {
+	flags         geoFlag
+	nkv, hd, nrot int32
+	local         bool
+	nffn          int32
+}
+
+// geoFlag is a set's kind beyond its shape.
+type geoFlag uint8
 
 const (
-	geoSliding   geoKey = 1 << iota // the sliding layers' attention geometry
-	geoWideFFN                      // a feed-forward twice NFFN wide
-	geoNonCausal                    // a non-causal segment's blocks: a vision tower's
+	geoNonCausal geoFlag = 1 << iota // a non-causal segment's blocks: a vision tower's
 	// geoIndexKey is a selecting block's (msa.go, qsa.go): its cache row
 	// carries the indexer's key as one more head, which every K/V writer and
 	// the paged pool's geometry bake, where a dense block's row does not.
@@ -49,19 +57,19 @@ const (
 func geoOf(p *nn.LayerPlan) geoKey {
 	if p.NonCausal {
 		if p.HeadSet {
-			return geoNonCausal | geoNCHead
+			return geoKey{flags: geoNonCausal | geoNCHead}
 		}
-		return geoNonCausal
+		return geoKey{flags: geoNonCausal}
 	}
 	var k geoKey
-	if p.GeomSplit && p.Sliding {
-		k |= geoSliding
+	if p.MixedGeom && p.OwnGeom {
+		k.nkv, k.hd, k.nrot, k.local = int32(p.NKVHead), int32(p.HeadDim), int32(p.NRot), p.LocalRope
 	}
 	if p.FFNWide {
-		k |= geoWideFFN
+		k.nffn = int32(p.NFFN)
 	}
 	if p.KeyHead() {
-		k |= geoIndexKey
+		k.flags |= geoIndexKey
 	}
 	return k
 }
@@ -126,12 +134,12 @@ func (g *devTier) restoreGeom(k geoKey) {
 // home set for an empty range (the head). Callers hold g.mu.
 func (g *devTier) geomFor(lo, hi int) geoKey {
 	if lo >= hi {
-		return 0
+		return geoKey{}
 	}
 	if l := g.layers[lo]; l != nil {
 		return l.geo
 	}
-	return 0
+	return geoKey{}
 }
 
 // enterGeomOf makes block li's scratch set the one in use and returns the set
@@ -146,18 +154,19 @@ func (g *devTier) enterGeomOf(li int) geoKey {
 	return prev
 }
 
-// scratchPlanOf is the plan a block's scratch set is built from. On a split
-// model each set holds one geometry and one rotary: the global set the global
-// table, the sliding set the local one in the global slot (the caller hands it
-// that table as cs), so neither carries a second table. The per-block fields
+// scratchPlanOf is the plan a block's scratch set is built from. On a model of
+// mixed geometry each set holds one geometry and one rotary: a set at the
+// model's the first table, a set of blocks rotating by the second that one in
+// the first slot (the caller hands it that table as cs), so none carries a
+// second table. The per-block fields
 // (v from k, the output scalar) are the block's, not the scratch's.
 func scratchPlanOf(p *nn.LayerPlan) *nn.LayerPlan {
-	if !p.GeomSplit {
+	if !p.MixedGeom {
 		return p
 	}
 	q := *p
 	q.SWAPeriod, q.RopeTabSWA = 0, nil
-	if p.Sliding {
+	if p.LocalRope {
 		q.RopeTab = p.RopeTabSWA
 	}
 	q.VFromK, q.OutScale, q.KVShared, q.KVSource = false, 0, false, 0

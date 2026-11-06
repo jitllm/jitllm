@@ -81,7 +81,7 @@ func (g *devTier) prewarmTowerWidths() {
 	}
 	towers := 0
 	for _, l := range g.layers {
-		if l != nil && l.geo&geoNonCausal != 0 {
+		if l != nil && l.geo.flags&geoNonCausal != 0 {
 			towers++
 		}
 	}
@@ -90,7 +90,7 @@ func (g *devTier) prewarmTowerWidths() {
 	}
 	g.visWarm = [2]int{g.visMax, towers}
 	home := g.geoCur
-	g.useGeom(geoNonCausal)
+	g.useGeom(geoKey{flags: geoNonCausal})
 	defer g.useGeom(home)
 	if g.bs == nil {
 		return
@@ -138,7 +138,7 @@ func (g *devTier) prewarmTowerWidths() {
 // hold g.mu.
 func (g *devTier) holdsTower() bool {
 	for _, l := range g.layers {
-		if l != nil && l.geo&geoNonCausal != 0 {
+		if l != nil && l.geo.flags&geoNonCausal != 0 {
 			return true
 		}
 	}
@@ -201,7 +201,7 @@ func planeBytes(bs *blockScratch) int64 {
 // could not share). Callers hold g.mu.
 func (g *devTier) towerKV() []*kvPair {
 	var out []*kvPair
-	if g.tkv != nil && g.geoCur == geoNonCausal {
+	if g.tkv != nil && g.geoCur == (geoKey{flags: geoNonCausal}) {
 		out = append(out, g.tkv)
 	}
 	for _, l := range g.layers {
@@ -321,7 +321,7 @@ func (g *devTier) TowerChunk() int {
 // widest block to swap through, 0 for a resident tower. Callers hold g.mu.
 func (g *devTier) towerKeep() int64 {
 	for li, l := range g.layers {
-		if l != nil && l.geo == geoNonCausal && g.stream[li] {
+		if l != nil && l.geo == (geoKey{flags: geoNonCausal}) && g.stream[li] {
 			return int64(minSlots) * int64(g.widest)
 		}
 	}
@@ -333,7 +333,7 @@ func (g *devTier) towerKeep() int64 {
 // Callers hold g.mu.
 func (g *devTier) towerWindowed() bool {
 	for _, l := range g.layers {
-		if l != nil && l.geo == geoNonCausal && l.windowed {
+		if l != nil && l.geo == (geoKey{flags: geoNonCausal}) && l.windowed {
 			return true
 		}
 	}
@@ -351,7 +351,7 @@ func (g *devTier) chunkTower(n, want int) bool {
 		return false
 	}
 	home := g.geoCur
-	g.useGeom(geoNonCausal)
+	g.useGeom(geoKey{flags: geoNonCausal})
 	defer g.useGeom(home)
 	old := g.bs
 	if old == nil {
@@ -412,7 +412,7 @@ func (g *devTier) chunkTower(n, want int) bool {
 // hold g.mu.
 func (g *devTier) resizeTower(n, want int) bool {
 	home := g.geoCur
-	g.useGeom(geoNonCausal)
+	g.useGeom(geoKey{flags: geoNonCausal})
 	defer g.useGeom(home)
 	old := g.bs
 	if old == nil {
@@ -576,7 +576,7 @@ func (g *devTier) dropIdleTower() {
 		return
 	}
 	home := g.geoCur
-	for _, k := range []geoKey{geoNonCausal, geoNonCausal | geoNCHead} {
+	for _, k := range []geoKey{{flags: geoNonCausal}, {flags: geoNonCausal | geoNCHead}} {
 		g.useGeom(k)
 		if g.bs != nil || len(g.bbs) > 0 {
 			g.dropGraph()
@@ -595,7 +595,7 @@ func (g *devTier) dropIdleTower() {
 // (geoNCHead). Callers hold g.mu.
 func (g *devTier) hasHeadSet() bool {
 	for _, l := range g.layers {
-		if l != nil && l.geo == geoNonCausal|geoNCHead {
+		if l != nil && l.geo == (geoKey{flags: geoNonCausal | geoNCHead}) {
 			return true
 		}
 	}
@@ -611,7 +611,7 @@ func (g *devTier) headSetAt(rows int) bool {
 		return true
 	}
 	home := g.geoCur
-	g.useGeom(geoNonCausal | geoNCHead)
+	g.useGeom(geoKey{flags: geoNonCausal | geoNCHead})
 	defer g.useGeom(home)
 	if g.bs == nil {
 		return true

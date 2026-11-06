@@ -385,7 +385,7 @@ func (g *GPU) layersRows(c *rowsCall, self uint64, lo, hi int, pos, slot []int, 
 	// own on the head's device, the residual crossing through x, as Layers
 	// does.
 	if why == "" && head != nil {
-		if r := rs[len(rs)-1]; r.dev != g.head || r.geo != 0 {
+		if r := rs[len(rs)-1]; r.dev != g.head || r.geo != (geoKey{}) {
 			rs = append(rs, run{dev: g.head, lo: hi, hi: hi, split: g.split})
 		}
 	}

@@ -283,7 +283,9 @@ func decodeExprs(r *rbuf, c *Config) {
 }
 
 func decodeExpr(r *rbuf, e *Expr) {
-	e.Terms = make([]Term, r.count(5))
+	if n := r.count(5); n > 0 {
+		e.Terms = make([]Term, n)
+	}
 	for k := range e.Terms {
 		t := &e.Terms[k]
 		t.Fn = Fn(r.u8())

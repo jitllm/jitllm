@@ -24,7 +24,7 @@ func (s *Instance) cpuPlaceTables() {
 	}
 	tabs := s.tableGraphs()
 	one, many := make([]cpuHeadForm, len(tabs)), make([]cpuHeadForm, len(tabs))
-	widths := [2]int{s.c.RopeW(), s.c.NRotSWA}
+	widths := [2]int{s.c.RopeW(), s.c.LocalNRot()}
 	for i, g := range tabs {
 		// The tables are the model's rotaries; an instance whose config has
 		// none (a tower's) composes none.
@@ -196,7 +196,7 @@ func (s *Instance) cpuRowTables(seq, pos []int) error {
 		return nil
 	}
 	n := len(pos)
-	w, ws := s.c.RopeW(), s.c.NRotSWA
+	w, ws := s.c.RopeW(), s.c.LocalNRot()
 	if cap(s.cpu.tabSeq) < n {
 		s.cpu.tabSeq = make([]int, n)
 	}

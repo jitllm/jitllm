@@ -663,7 +663,7 @@ func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOp
 	// positions.
 	s.cs = make([]float32, nseq*c.RopeW())
 	if m.RopeSWA != nil {
-		s.csSWA = make([]float32, nseq*c.NRotSWA)
+		s.csSWA = make([]float32, nseq*c.LocalNRot())
 	}
 	s.bpos = make([]int, nseq)
 	s.rmarks = model.RopeMarks{}
@@ -938,7 +938,7 @@ func (s *Instance) SetDeviceLayers(d nn.LayerDevice, max int) error {
 		// The folded constants the host's rotary kernel reads, so the device
 		// builds its own table and the two tiers agree by construction.
 		RopeTab:    model.RopeTabPlanes(&s.m.Rope, c.NRot),
-		RopeTabSWA: model.RopeTabPlanes(s.m.RopeSWA, c.NRotSWA),
+		RopeTabSWA: model.RopeTabPlanes(s.m.RopeSWA, c.LocalNRot()),
 		// The tables as the front end states them, and a multi-axis
 		// rotary's planes, for a device that serves them (front.go).
 		Tables:      s.tableGraphs(),
@@ -973,9 +973,8 @@ func (s *Instance) SetDeviceLayers(d nn.LayerDevice, max int) error {
 		LayerNorm: c.LayerNorm, Parallel: c.Parallel,
 		// DBRX's clamp on q, k and v.
 		ClampKQV: c.ClampKQV,
-		// Gemma 4's; the block's own geometry is planFor's.
-		GeomSplit: c.GeomSplit(), HeadDimSWA: c.HeadDimSWA, NKVHeadSWA: c.NKVHeadSWA,
-		NRotSWA: c.NRotSWA, VNorm: c.VNorm,
+		// The block's own geometry is planFor's.
+		MixedGeom: c.MixedGeom(), VNorm: c.VNorm,
 		NoAttention: !c.Attends(),
 	}
 	s.plan, s.ldCand = p, ld
@@ -1982,7 +1981,8 @@ func (s *Instance) planFor(li int) *nn.LayerPlan {
 	// The block as ops, from the container: what a device serving it whole
 	// forms (front.go), nil where the front end states none.
 	plan.Graph = s.m.Composing().BlockGraph(li)
-	plan.Sliding = c.GeomSplit() && c.SWA(li)
+	plan.LocalRope = c.MixedGeom() && c.SWA(li)
+	plan.OwnGeom = plan.LocalRope || plan.HeadDim != c.HeadDim || plan.NKVHead != c.NKVHead || plan.NRot != c.NRot
 	plan.BidirOff = !c.BidirAt(li)
 	plan.VFromK, plan.OutScale = l.VFromK, l.OutScale
 	plan.DenseMoE = c.DenseMoE && c.MoEAt(li)
@@ -3247,7 +3247,7 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 			}
 			s.layerInputs(s.ple)
 			s.tok1[0] = s.tok
-			if !s.ld.Layers(li, hi, s.pos, 1, s.resid(), s.cs[:c.RopeW()], s.swaTable(c.NRotSWA), fold) {
+			if !s.ld.Layers(li, hi, s.pos, 1, s.resid(), s.cs[:c.RopeW()], s.swaTable(c.LocalNRot()), fold) {
 				if err := s.refusal(li); err != nil {
 					return nil, err
 				}
@@ -3347,7 +3347,7 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 		if !c.ResidStreams() { // its hidden state is the residual, taken in collapseStreams
 			defer s.rows.hiddenOf(s.head)()
 		}
-		if s.ld.Layers(s.gpuLayers, s.gpuLayers, s.pos, 1, s.resid(), s.cs[:c.RopeW()], s.swaTable(c.NRotSWA), s.head) {
+		if s.ld.Layers(s.gpuLayers, s.gpuLayers, s.pos, 1, s.resid(), s.cs[:c.RopeW()], s.swaTable(c.LocalNRot()), s.head) {
 			done = true
 		} else if err := s.refusal(s.gpuLayers); err != nil {
 			return nil, err

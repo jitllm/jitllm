@@ -1683,10 +1683,10 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	// segment's blocks -- a vision tower's, whose residual, heads and FFN are
 	// not the text model's. sp is the plan that set is built from.
 	sp := scratchPlanOf(p)
-	if k := geoOf(p); k != 0 {
+	if k := geoOf(p); k != (geoKey{}) {
 		g.geoUsed = true
 		g.useGeom(k)
-		defer g.useGeom(0)
+		defer g.useGeom(geoKey{})
 	}
 
 	// The KV ceiling is the largest context any session asked for, not the

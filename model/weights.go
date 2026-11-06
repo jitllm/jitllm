@@ -276,7 +276,7 @@ func (m *Model) CpuTablePlanes(i int) []float32 {
 	case i == 0:
 		return RopeTabPlanes(&m.Rope, m.Cfg.NRot)
 	}
-	return RopeTabPlanes(m.RopeSWA, m.Cfg.NRotSWA)
+	return RopeTabPlanes(m.RopeSWA, m.Cfg.LocalNRot())
 }
 
 // namedVector is the vector a field of block l holds under r, and whether a

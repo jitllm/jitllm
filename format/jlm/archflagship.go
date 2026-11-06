@@ -16,8 +16,8 @@ const (
 
 	// ArchGemma4 is Google's Gemma 4 text model (E2B, E4B, 26B-A4B, 31B):
 	// gemma3's block with its global layers at another attention geometry
-	// (HeadDim/NKVHead/NRot are the global layers', HeadDimSWA/NKVHeadSWA/
-	// NRotSWA the sliding ones'), a weightless RMSNorm on v (Flag2VNorm), v
+	// (HeadDim/NKVHead/NRot are the global layers', Config.Geoms each
+	// block's), a weightless RMSNorm on v (Flag2VNorm), v
 	// projected by k's weights where a block has no RoleAttnV, an attention
 	// scale of one (AttnScale), a "proportional" rotary on the global layers
 	// carried as RoleRopeFreqs, and a scalar on each block's output
