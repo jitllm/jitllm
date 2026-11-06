@@ -7,7 +7,6 @@ import (
 	"github.com/jitllm/jitllm/model"
 	"github.com/jitllm/jitllm/nn"
 
-	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/graph"
 )
 
@@ -23,7 +22,7 @@ func (s *Instance) cpuPlaceTables() {
 		return
 	}
 	tabs := s.tableGraphs()
-	one, many := make([]cpuHeadForm, len(tabs)), make([]cpuHeadForm, len(tabs))
+	one, many := make([]cpudev.Part, len(tabs)), make([]cpudev.Part, len(tabs))
 	widths := [2]int{s.c.RopeW(), s.c.LocalNRot()}
 	for i, g := range tabs {
 		// The tables are the model's rotaries; an instance whose config has
@@ -31,43 +30,23 @@ func (s *Instance) cpuPlaceTables() {
 		if i < len(widths) && widths[i] == 0 {
 			continue
 		}
-		s.cpuComposeTable(&one[i], g, 1)
+		one[i] = s.cpuTable(g, 1)
 		// A tower's grid table turns a picture's rows in one call.
 		rows := cpuRowsCap
 		if s.towered() {
 			rows = s.maxSeq
 		}
-		s.cpuComposeTable(&many[i], g, rows)
+		many[i] = s.cpuTable(g, rows)
 	}
-	p1, pn := make([]cpudev.Part, len(tabs)), make([]cpudev.Part, len(tabs))
-	for i := range tabs {
-		p1[i] = cpudev.Part{Composed: one[i].composed, F: one[i].f, Why: one[i].why, Err: one[i].err}
-		pn[i] = cpudev.Part{Composed: many[i].composed, F: many[i].f, Why: many[i].why, Err: many[i].err}
-	}
-	s.tables = cpudev.NewTables(s.cpu.x.Device(), p1, pn, [2][]float32{s.tablePlanes(0), s.tablePlanes(1)}, widths,
+	s.tables = cpudev.NewTables(s.cpu.x.Device(), one, many, [2][]float32{s.tablePlanes(0), s.tablePlanes(1)}, widths,
 		blockWeights{ws: &s.ws, li: cpuTablesBlock})
 }
 
-// cpuComposeTable is hf composed from rotary table graph g at rows rows, the
-// most marks a sequence holds the instance's.
-func (s *Instance) cpuComposeTable(hf *cpuHeadForm, g *graph.Graph, rows int) {
-	*hf = cpuHeadForm{composed: true}
-	switch {
-	case !composer.LowersCPU(uint64(s.cpuISA())):
-		hf.why = nn.DeclineISA
-	case g == nil:
-		hf.why = nn.DeclineNoGraph
-	default:
-		req := composer.Request{Graph: g, Step: composer.Step{Rows: rows, Page: 1, Keys: 1, Seqs: max(s.nseq, 1),
-			ActWindow: s.m.ActWindow}, Device: s.cpu.x.Composer().Device(), Apart: true}
-		req.Step.Marks = s.marksCap()
-		f, err := s.cpu.x.Composer().Form(req, g, rows, true, false, false)
-		if err != nil {
-			hf.why, hf.err = s.cpu.x.Composer().Decline(err), err
-			return
-		}
-		hf.f = f
-	}
+// cpuTable is rotary table graph g composed on the CPU device at rows
+// rows, the most marks a sequence holds the instance's.
+func (s *Instance) cpuTable(g *graph.Graph, rows int) cpudev.Part {
+	return s.cpu.x.FormPart(cpudev.PartPlan{Graph: g, Rows: rows, Seqs: max(s.nseq, 1), Marks: s.marksCap(),
+		ActWindow: s.m.ActWindow, None: nn.DeclineNoGraph})
 }
 
 // towered says the instance's blocks are the model's tower's.

@@ -38,16 +38,12 @@ func (s *Instance) cpuPlaceEmbed() {
 		return
 	}
 	fg := s.m.FrontGraphs()
-	var hf [4]cpuHeadForm
-	s.cpuComposeHead(&hf[0], fg.CpuEmbed, nn.DeclineNoEmbed, 1)
-	s.cpuComposeHead(&hf[1], fg.CpuEmbed, nn.DeclineNoEmbed, cpuRowsCap)
-	if fg.Given != nil {
-		s.cpuComposeHead(&hf[2], fg.Given, nn.DeclineNoEmbed, 1)
-		s.cpuComposeHead(&hf[3], fg.Given, nn.DeclineNoEmbed, cpuRowsCap)
-	}
 	var p [4]cpudev.Part
-	for i := range hf {
-		p[i] = cpudev.Part{Composed: hf[i].composed, F: hf[i].f, Why: hf[i].why, Err: hf[i].err}
+	p[0] = s.cpuPart(fg.CpuEmbed, nn.DeclineNoEmbed, 1)
+	p[1] = s.cpuPart(fg.CpuEmbed, nn.DeclineNoEmbed, cpuRowsCap)
+	if fg.Given != nil {
+		p[2] = s.cpuPart(fg.Given, nn.DeclineNoEmbed, 1)
+		p[3] = s.cpuPart(fg.Given, nn.DeclineNoEmbed, cpuRowsCap)
 	}
 	pw := s.c.PleWidth()
 	writesX := fg.Given != nil && (len(fg.Given.Out) > 1 || pw == 0)

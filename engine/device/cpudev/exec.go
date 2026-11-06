@@ -3,6 +3,7 @@ package cpudev
 import (
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/device/cpu"
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/nn"
 )
@@ -136,4 +137,45 @@ func (e *Exec) Close() {
 	if e.dev != nil {
 		e.dev.Close()
 	}
+}
+
+// PartPlan is a part -- a graph apart from any block's residual: the head,
+// a sampler, the input rows, a rotary table, the streams' mix, a readout --
+// as the CPU device composes it: its weights' formats, the step's rows, the
+// sequences and rotary marks a table reads and the activation window. None
+// is why not, where the front end states no graph.
+type PartPlan struct {
+	Graph                        *graph.Graph
+	Formats                      map[jlm.Role]jlm.Type
+	Rows, Seqs, Marks, ActWindow int
+	None                         nn.Decline
+}
+
+// FormGraph composes p's graph through the model's keyed cache, its inputs
+// and outputs buffers of their own.
+func (e *Exec) FormGraph(p PartPlan) (*Form, error) {
+	req := composer.Request{Graph: p.Graph, Formats: p.Formats, Step: composer.Step{Rows: p.Rows, Page: 1, Keys: 1,
+		Seqs: p.Seqs, Marks: p.Marks, ActWindow: p.ActWindow}, Device: e.comp.Device(), Apart: true}
+	return e.comp.Form(req, p.Graph, p.Rows, true, false, false)
+}
+
+// FormPart is p composed as a part the device serves, or why not: the front
+// end states no graph (None), the host's instructions lower no form, or the
+// composer declines it.
+func (e *Exec) FormPart(p PartPlan) Part {
+	part := Part{Composed: true}
+	switch {
+	case p.Graph == nil:
+		part.Why = p.None
+	case !e.comp.Lowers():
+		part.Why = nn.DeclineISA
+	default:
+		f, err := e.FormGraph(p)
+		if err != nil {
+			part.Why, part.Err = e.comp.Decline(err), err
+			return part
+		}
+		part.F = f
+	}
+	return part
 }
