@@ -17,12 +17,6 @@ type route struct {
 	errs   nn.ErrReporter
 	cause  nn.CauseReporter
 	closer nn.RunCloser
-	bind   historyBinder
-}
-
-// historyBinder is a device whose calls run on the session it is bound to.
-type historyBinder interface {
-	Attach(h cpudev.History, v *cpudev.View)
 }
 
 func newRoute(d nn.LayerRunner) route {
@@ -34,8 +28,25 @@ func newRoute(d nn.LayerRunner) route {
 	r.errs, _ = d.(nn.ErrReporter)
 	r.cause, _ = d.(nn.CauseReporter)
 	r.closer, _ = d.(nn.RunCloser)
-	r.bind, _ = d.(historyBinder)
 	return r
+}
+
+// laneRoute is the route of a session's calls on the CPU device, its faces
+// the lanes' own (no assertion at all).
+func laneRoute(l *cpudev.SessionLanes) route {
+	return route{run: l, inputs: l, toks: l, tables: l, fail: l, errs: l, cause: l, closer: l}
+}
+
+// History is the session's history as it is now (cpudev.HistoryOf).
+func (s *Session) History() cpudev.History { return s.kv }
+
+// bindLanes makes sess's calls on the CPU device run on s's lanes.
+func (s *Instance) bindLanes(sess *Session) {
+	if s.cpu.lanes == nil {
+		return
+	}
+	sess.lanes = s.cpu.lanes.For(sess)
+	sess.routes[1] = laneRoute(&sess.lanes)
 }
 
 // routeAt is the route block li runs on.
@@ -47,14 +58,10 @@ func (s *Instance) routeAt(li int) *route {
 }
 
 // openRun hands the run's device what its blocks read before it is called:
-// the session's history, the side inputs, the token and, where it reads
-// them, the step's rotary tables; and closes the region another device holds
-// open.
+// the side inputs, the token and, where it reads them, the step's rotary
+// tables; and closes the region another device holds open.
 func (s *Instance) openRun(r *route) error {
 	s.closeRuns(r)
-	if r.bind != nil {
-		r.bind.Attach(s.kv, s.view)
-	}
 	if r.inputs != nil && s.c.SideWidth() != 0 {
 		r.inputs.SetLayerInputs(s.ple)
 	}

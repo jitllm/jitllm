@@ -221,10 +221,8 @@ type Instance struct {
 	// device retry (rowStreams).
 	tok1    [1]int32
 	tokFill bool
-	// routes is the devices the instance's blocks run on (route), the
-	// card's view and the CPU's lanes; oneFresh and onePos say the decode
-	// row's rotary tables are made for this token, at onePos.
-	routes   [2]route
+	// oneFresh and onePos say the decode row's rotary tables are made for
+	// this token, at onePos.
 	oneFresh bool
 	onePos   [1]int
 	// expHold pins a layer's routed expert pages while its FFN reads them;

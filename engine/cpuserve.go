@@ -453,7 +453,7 @@ func (s *Instance) cpuPlace() {
 	if s.cpu.lanes == nil {
 		s.cpu.lanes = cpudev.NewLanes(s.cpu.x, &s.ws.b, &s.lease, s.c.NEmbd, s.nseq, s.c.Streams(), s.dg.ConvStateLen(),
 			func(li int) { s.trace(li, "ffn_resid", s.x) })
-		s.routes[1] = newRoute(s.cpu.lanes)
+		s.bindLanes(s.Session)
 	}
 	for li := s.lo; li < min(s.hi, n); li++ {
 		if !s.devAt(li) {

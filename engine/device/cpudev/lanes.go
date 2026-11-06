@@ -188,14 +188,10 @@ func runOf(runs []nn.KeyRun, pos int) (lo, hi int) {
 // Attach runs the lanes over a session's history h and recurrent state v.
 func (l *Lanes) Attach(h History, v *View) { l.h, l.v = h, v }
 
-// SetTokens is the tokens of the next call's rows (nn.TokenReader).
+// SetTokens is the tokens of the next call's rows.
 func (l *Lanes) SetTokens(toks []int32) { l.tok = toks[0] }
 
-// ReadsTables says the blocks read the call's rotary tables (nn.TableReader).
-func (l *Lanes) ReadsTables() bool { return true }
-
-// CloseRun closes the fused pool region the last call left open
-// (nn.RunCloser).
+// CloseRun closes the fused pool region the last call left open.
 func (l *Lanes) CloseRun() { l.e.Unfuse() }
 
 // SetLayerInputs is the per-layer inputs the next call's blocks read
@@ -299,3 +295,51 @@ func (l *Lanes) recAddrs(li int) (state, conv unsafe.Pointer) {
 	}
 	return unsafe.Pointer(unsafe.SliceData(l.v.State(li))), unsafe.Pointer(unsafe.SliceData(l.v.Conv(li)))
 }
+
+// HistoryOf is what a session's calls read their history from: the
+// session's history as it is at the call, which a relayout replaces.
+type HistoryOf interface{ History() History }
+
+// SessionLanes is a session's calls on the CPU device: the instance's lanes
+// run over the session's history and its view, as a card's session view
+// (gpu.GPU.Attach) runs the card's kernels over the session's. Each call
+// attaches the history first, so one instance's lanes serve every session
+// leasing it.
+type SessionLanes struct {
+	l  *Lanes
+	of HistoryOf
+}
+
+// For is the calls of the session whose history of reads on the lanes.
+func (l *Lanes) For(of HistoryOf) SessionLanes { return SessionLanes{l: l, of: of} }
+
+// Layers runs blocks [lo, hi) for the row at pos (nn.LayerRunner) over the
+// session's history.
+func (s *SessionLanes) Layers(lo, hi, pos, n int, x, cs, csSWA []float32, head *nn.Head) bool {
+	h := s.of.History()
+	s.l.Attach(h, h.View())
+	return s.l.Layers(lo, hi, pos, n, x, cs, csSWA, head)
+}
+
+// SetTokens is the tokens of the next call's rows (nn.TokenReader).
+func (s *SessionLanes) SetTokens(toks []int32) { s.l.SetTokens(toks) }
+
+// SetLayerInputs is the per-layer inputs the next call's blocks read
+// (nn.LayerInputDevice).
+func (s *SessionLanes) SetLayerInputs(in []float32) { s.l.SetLayerInputs(in) }
+
+// ReadsTables says the blocks read the call's rotary tables (nn.TableReader).
+func (s *SessionLanes) ReadsTables() bool { return true }
+
+// RunErr is the last call's failure (nn.RunFailer).
+func (s *SessionLanes) RunErr() error { return s.l.RunErr() }
+
+// Err is why the last call declined (nn.ErrReporter).
+func (s *SessionLanes) Err() string { return s.l.Err() }
+
+// ErrCause is a decline's cause (nn.CauseReporter).
+func (s *SessionLanes) ErrCause() nn.FailCause { return s.l.ErrCause() }
+
+// CloseRun closes the fused pool region the last call left open
+// (nn.RunCloser).
+func (s *SessionLanes) CloseRun() { s.l.CloseRun() }

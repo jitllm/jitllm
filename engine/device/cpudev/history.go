@@ -21,6 +21,9 @@ type HistoryBinding struct {
 // History is a session's history as the CPU device asks for it: the policy
 // that holds its pages (residency, sharing, the store) is the engine's.
 type History interface {
+	// View is the session's view of the device the history's blocks read
+	// their pages and recurrent state through; nil reads as an empty one.
+	View() *View
 	// Prepare makes block li's history ready for a row at pos, its page
 	// table nseq sequences wide: the page pos is written into resident and
 	// its own, the pages the row reads resident. A decline says why it is not.
