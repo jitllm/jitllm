@@ -30,6 +30,8 @@ import (
 
 // layer is one block's device-resident state.
 type layer struct {
+	// ngram is an n-gram block's table, read in a call at a time.
+	ngram *ngramRows
 	// graph is the block as ops from the model's front end
 	// (nn.LayerPlan.Graph): what serving it whole forms (served.go), and
 	// win and chunked the window its attention states.
@@ -2343,6 +2345,9 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 			l.auxBytes += uint64(4 * len(v.V))
 		}
 	}
+	if err == nil {
+		err = g.openNGram(l, p, fr)
+	}
 	// One extra KV position is a trash slot for the batched prefill: a ragged
 	// last chunk runs the full grid width with surplus rows zeroed, and those rows
 	// still write K and V. A chunk-width of slack costs too much VRAM and a real
@@ -4477,6 +4482,8 @@ func (g *devTier) layersSession(s backend.Session) {
 				}
 				var serr error
 				switch {
+				case sv.f.rowSplit > 0:
+					serr = sv.rowsRun(g, lc, s, inst, kind, l, in, outs)
 				case sv.f.split > 0:
 					serr = sv.pagedRun(g, lc, s, inst, kind, l, p.NExpert, g.hostFns[sid][li].uses, in, outs)
 				case sv.f.passHi > 0:
@@ -4963,6 +4970,7 @@ func (l *layer) auxBufs() []backend.Buf {
 // does not touch the weights, which live in g.res keyed by their bytes and may
 // be referenced elsewhere. Callers hold g.mu.
 func (g *devTier) dropLayerLocal(l *layer) {
+	g.closeNGram(l)
 	for _, b := range l.auxBufs() {
 		if b != nil {
 			b.Free()
@@ -5094,6 +5102,7 @@ func (g *devTier) releaseBlock(li int) {
 			b.Free()
 		}
 	}
+	g.closeNGram(l)
 	g.convLeft(l)
 	delete(g.layers, li)
 	g.layerGen++

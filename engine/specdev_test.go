@@ -140,6 +140,10 @@ func specGreedyDev(t *testing.T, m *model.Model, io []Option, prompt []int32, n 
 	sp.oracle, sp.corrupt = oracle, oracleCorrupt
 	d := sp.Draft()
 	onDev := st.GPULayers() == m.Cfg.NLayer && st.HeadOnDevice() && d.GPULayers() == 1 && d.HeadOnDevice()
+	if !onDev {
+		t.Logf("the trunk: %d of %d blocks, head %v (%v); the draft: %d block, head %v (%v); %s",
+			st.GPULayers(), m.Cfg.NLayer, st.HeadOnDevice(), st.DeviceDeclines(), d.GPULayers(), d.HeadOnDevice(), d.DeviceDeclines(), g.Err())
+	}
 	y, err := sp.Start(prompt, nil)
 	if err != nil {
 		t.Fatalf("%v (the device's last error: %s)", err, g.Err())
