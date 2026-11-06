@@ -27,7 +27,7 @@ const kvHalfRow = 256
 func (s *Instance) partsPlan() *cpudev.PartsPlan {
 	fg := s.m.FrontGraphs()
 	p := &cpudev.PartsPlan{D: s.c.NEmbd, NVocab: s.c.NVocab, TopLog: model.MaxTopLogprobs,
-		HeadNorm: fg.OutNorm != nil, HeadW: blockWeights{ws: &s.ws, li: -1}}
+		HeadNorm: fg.OutNorm != nil, HeadW: blockWeights{s: s, li: -1}}
 	part := func(g *graph.Graph, none nn.Decline, rows int) cpudev.PartPlan { return s.partPlan(g, none, rows, nil) }
 	p.Head[0] = part(fg.CpuHead, nn.DeclineNoGraph, 1)
 	p.Head[1] = part(fg.CpuHidden, nn.DeclineNoGraph, 1)
@@ -53,17 +53,17 @@ func (s *Instance) partsPlan() *cpudev.PartsPlan {
 		p.StreamParts[0] = part(fg.Expand, nn.DeclineNoGraph, 1)
 		p.StreamParts[1] = part(fg.Expand, nn.DeclineNoGraph, cpuRowsCap)
 		collapse := fg.Collapse
-		cw := blockWeights{ws: &s.ws, li: -1}
+		cw := blockWeights{s: s, li: -1}
 		if i := s.lo - s.c.NLayer; i >= 0 && i < len(fg.MtpCollapse) {
 			collapse, cw.li, cw.l = fg.MtpCollapse[i], s.lo, s.layer(s.lo)
 		}
 		p.StreamParts[2] = part(collapse, nn.DeclineNoGraph, 1)
 		p.StreamParts[3] = part(collapse, nn.DeclineNoGraph, cpuRowsCap)
-		p.StreamW, p.CollapseW = blockWeights{ws: &s.ws, li: -1}, cw
+		p.StreamW, p.CollapseW = blockWeights{s: s, li: -1}, cw
 	}
 
 	if g := fg.Pool; g != nil {
-		p.Pool, p.PoolPart, p.PoolW = true, part(g, nn.DeclineNoGraph, s.maxSeq), blockWeights{ws: &s.ws, li: -1}
+		p.Pool, p.PoolPart, p.PoolW = true, part(g, nn.DeclineNoGraph, s.maxSeq), blockWeights{s: s, li: -1}
 		p.PoolRows, p.PoolWidth, p.PoolRaw = s.maxSeq, s.poolWidth(), len(g.Out) > 1
 	}
 
@@ -71,7 +71,7 @@ func (s *Instance) partsPlan() *cpudev.PartsPlan {
 		g := fg.MtpEntry[i]
 		p.Entry, p.EntryWidth = true, s.c.ResidW()
 		p.EntryParts = [2]cpudev.PartPlan{part(g, nn.DeclineNoGraph, 1), part(g, nn.DeclineNoGraph, cpuRowsCap)}
-		p.EntryW = blockWeights{ws: &s.ws, li: s.lo, l: s.layer(s.lo)}
+		p.EntryW = blockWeights{s: s, li: s.lo, l: s.layer(s.lo)}
 	}
 
 	p.Inputs[0] = part(fg.CpuEmbed, nn.DeclineNoEmbed, 1)
@@ -83,7 +83,7 @@ func (s *Instance) partsPlan() *cpudev.PartsPlan {
 	}
 	p.PleW = s.c.PleWidth()
 	p.Given, p.WritesX = fg.Given != nil, fg.Given != nil && (len(fg.Given.Out) > 1 || p.PleW == 0)
-	p.InputsW = blockWeights{ws: &s.ws, li: cpuInputRows}
+	p.InputsW = blockWeights{s: s, li: cpuInputRows}
 
 	tabs := s.tableGraphs()
 	p.TableWidths = [2]int{s.c.RopeW(), s.c.LocalNRot()}
@@ -102,7 +102,7 @@ func (s *Instance) partsPlan() *cpudev.PartsPlan {
 		p.Tables[i] = cpudev.TablePlan{One: s.tablePlan(g, 1), Many: s.tablePlan(g, rows)}
 	}
 	p.TablePlanes = [2][]float32{s.tablePlanes(0), s.tablePlanes(1)}
-	p.TablesW = blockWeights{ws: &s.ws, li: cpuTablesBlock}
+	p.TablesW = blockWeights{s: s, li: cpuTablesBlock}
 
 	narrow, widen := graph.OpHalves, graph.OpWidenHalves
 	var widths []int

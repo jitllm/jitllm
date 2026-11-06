@@ -40,6 +40,7 @@ type Exec struct {
 	low sched.Lowered
 	// b binds the forms' weights and the rows' table.
 	b        *Bindings
+	bind     Bindings
 	workers  *cpu.Pool
 	dev      *Device
 	comp     *Composer
@@ -61,12 +62,40 @@ type Exec struct {
 // NewExec is an execution over workers, its forms composed by comp.
 func NewExec(workers *cpu.Pool, comp *Composer) *Exec { return &Exec{workers: workers, comp: comp} }
 
+// UseFrames makes the execution's weight bindings over fr, the frames its
+// blocks' weights are read into.
+func (e *Exec) UseFrames(fr *jlm.Frames) {
+	e.bind = NewBindings(fr)
+	e.b = &e.bind
+}
+
+// Bindings is the execution's weight bindings (UseFrames).
+func (e *Exec) Bindings() *Bindings { return e.b }
+
+// ExpertPager is where the experts a block's selection picks are made resident
+// and handed back: the instance's lease of its pages.
+type ExpertPager interface {
+	Experts(li int, sel []int32, count bool) error
+	ReleaseExperts()
+}
+
+// resources is the runner's: the experts ex pages in, and the row table's
+// rows read through the execution's bindings.
+type resources struct {
+	ExpertPager
+	b *Bindings
+}
+
+func (r resources) Rows(own []uint32) error { return r.b.Rows(own) }
+
+func (r resources) DropRows() { r.b.DropRows() }
+
 // Place readies the execution for a placement of n blocks, none of them
 // composed: the launches made once (a placement again, for a new history
-// format, keeps the forms' own buffers), the runner reading res and the
-// rotaries' planes.
-func (e *Exec) Place(n int, res Resources, b *Bindings, planes [2][]float32, nExpert int, prof bool) {
-	e.b = b
+// format, keeps the forms' own buffers), the runner reading the experts ex
+// pages in and the rotaries' planes.
+func (e *Exec) Place(n int, ex ExpertPager, planes [2][]float32, nExpert int, prof bool) {
+	res := resources{ExpertPager: ex, b: e.b}
 	e.blocks = make([]*Block, n)
 	e.composed = make([]int, n)
 	if e.dev == nil {
@@ -277,6 +306,7 @@ func (e *Exec) Close() {
 	if e.dev != nil {
 		e.dev.Close()
 	}
+	e.bind.Close()
 }
 
 // PartPlan is a part -- a graph apart from any block's residual: the head,

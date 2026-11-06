@@ -80,7 +80,7 @@ func projectorFrom(t *testing.T, s *Instance, from int, rows []float32) []float3
 	if err != nil {
 		t.Fatal(err)
 	}
-	if why := ts.ws.check(f, -1, &ts.dense.TowerDense); why != nn.DeclineServes {
+	if why := ts.checkWeights(f, -1, &ts.dense.TowerDense); why != nn.DeclineServes {
 		t.Fatalf("the projector's weights: %v", why)
 	}
 	outRows := b.G.Values[out].Rows
@@ -93,7 +93,7 @@ func projectorFrom(t *testing.T, s *Instance, from int, rows []float32) []float3
 	got := make([]float32, outRows*b.G.Values[out].Width)
 	bd := &tr.bound
 	*bd = cpudev.Bound{Li: -1, Own: ts.exec.x.Device().Own(f), N: n, Req: tr.req, Pos: tr.posTab}
-	bd.Weights, _ = ts.ws.bind(f, -1, &ts.dense.TowerDense)
+	bd.Weights, _ = ts.bindWeights(f, -1, &ts.dense.TowerDense)
 	bd.IO[0], bd.IO[1] = unsafe.Pointer(&tr.blk[0]), unsafe.Pointer(&got[0])
 	ts.exec.x.Runner().Run(bd, f)
 	return got

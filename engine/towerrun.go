@@ -259,7 +259,7 @@ func (s *Instance) encodePicture(img image.Image, dst, deep []float32) ([]float3
 		return nil, fmt.Errorf("model: a %dx%d picture is past the %d pixels a side the tower's resize reaches", pl.W, pl.H, a.PicSide)
 	}
 	head := tr.head
-	if _, why := ts.ws.bind(head, -1, &ts.dense.TowerDense); why != nn.DeclineServes {
+	if _, why := ts.bindWeights(head, -1, &ts.dense.TowerDense); why != nn.DeclineServes {
 		return nil, fmt.Errorf("model: the tower's head: %v", why)
 	}
 	D, E := int(m.Container.Vision().ProjDim), int(m.Container.Vision().NEmbd)
@@ -267,7 +267,7 @@ func (s *Instance) encodePicture(img image.Image, dst, deep []float32) ([]float3
 		return nil, fmt.Errorf("model: %d values and %d for its taps' for a picture's %d rows of %d", len(dst), len(deep), want, D)
 	}
 	for j, f := range tr.taps {
-		if _, why := ts.ws.bind(f, -1, &ts.dense.TowerTaps[j]); why != nn.DeclineServes {
+		if _, why := ts.bindWeights(f, -1, &ts.dense.TowerTaps[j]); why != nn.DeclineServes {
 			return nil, fmt.Errorf("model: the tower's tap %d: %v", j, why)
 		}
 	}
@@ -279,27 +279,27 @@ func (s *Instance) encodePicture(img image.Image, dst, deep []float32) ([]float3
 			sq, _ = tg.Square(pl.W, pl.H, i)
 		}
 		f := tr.entry[sq.Class][pl.Px]
-		if _, why := ts.ws.bind(f, -1, &ts.dense.TowerDense); why != nn.DeclineServes {
+		if _, why := ts.bindWeights(f, -1, &ts.dense.TowerDense); why != nn.DeclineServes {
 			return nil, fmt.Errorf("model: the tower's entry: %v", why)
 		}
 		tr.squareRequest(pl, sq, tg.Classes[sq.Class].Pic, squares)
 		n := tg.Lead + sq.Gw*sq.Gh
 		tr.size(n, E)
 		*b = cpudev.Bound{Li: -1, Own: ts.exec.x.Device().Own(f), N: n, Req: tr.req, Pos: tr.posTab, Pic: words}
-		b.Weights, _ = ts.ws.bind(f, -1, &ts.dense.TowerDense)
+		b.Weights, _ = ts.bindWeights(f, -1, &ts.dense.TowerDense)
 		b.IO[0] = unsafe.Pointer(&tr.rows[0])
 		ts.exec.x.Runner().Run(b, f)
 		if err := ts.towerBlocks(tr, sq.Gw, tr.windows(tg, sq.Gw, sq.Gh)); err != nil {
 			return nil, fmt.Errorf("model: the tower's blocks: %w", err)
 		}
 		*b = cpudev.Bound{Li: -1, Own: ts.exec.x.Device().Own(head), N: n, Req: tr.req, Pos: tr.posTab}
-		b.Weights, _ = ts.ws.bind(head, -1, &ts.dense.TowerDense)
+		b.Weights, _ = ts.bindWeights(head, -1, &ts.dense.TowerDense)
 		b.IO[0], b.IO[1] = unsafe.Pointer(&tr.blk[0]), unsafe.Pointer(&dst[at*D])
 		ts.exec.x.Runner().Run(b, head)
 		// Each tap's rows at the same rows of its plane of deep.
 		for j, f := range tr.taps {
 			*b = cpudev.Bound{Li: -1, Own: ts.exec.x.Device().Own(f), N: n, Req: tr.req, Pos: tr.posTab}
-			b.Weights, _ = ts.ws.bind(f, -1, &ts.dense.TowerTaps[j])
+			b.Weights, _ = ts.bindWeights(f, -1, &ts.dense.TowerTaps[j])
 			b.IO[0], b.IO[1] = unsafe.Pointer(&tr.tapRows[j][0]), unsafe.Pointer(&deep[(j*len(dst)/D+at)*D])
 			ts.exec.x.Runner().Run(b, f)
 		}
