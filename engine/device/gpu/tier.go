@@ -1260,7 +1260,7 @@ type devShared struct {
 	// A growth that succeeds, or a new budget, clears it.
 	kvTight  bool
 	winDepth int
-	// geoUsed says a split plan was ever placed here (gemma4.go).
+	// geoUsed says a split plan was ever placed here (geomsets.go).
 	geoUsed bool
 	// reserving is set while reserveScratch probes widths, so prepBatch's
 	// refusal of a width over the budget is not counted as a prompt's.
@@ -1537,7 +1537,7 @@ type GPU struct {
 	// (settle), so none re-creates a block a free is about to take.
 	retire   []retiree
 	retiring sync.WaitGroup
-	// geo is a block's scratch set (gemma4.go: Gemma 4's attention geometry
+	// geo is a block's scratch set (geomsets.go: Gemma 4's attention geometry
 	// and FFN width), so a range is cut where it changes as it is cut where
 	// the device does (runsInto). Set with own; a block's never changes.
 	geo map[int]geoKey

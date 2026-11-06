@@ -4,19 +4,21 @@ import (
 	"github.com/jitllm/jitllm/nn"
 )
 
-// Gemma 4 on the device. Its global layers attend at another geometry than its
-// sliding ones (nn.LayerPlan.GeomSplit): head_dim 512 against 256, and on the
-// 31B and 26B four kv heads against sixteen. Every attention kernel a scratch
-// builds bakes one geometry, so this tier keeps one scratch SET per geometry
-// -- the decode scratch, the batched ones by width and the widths reserved
-// for them -- and a block runs in its own geometry's set. GPU.runsInto cuts a
-// range where the geometry changes, as it cuts where the device changes, so
-// every submission is one geometry and the residual crosses the host between
-// them; the KV pages are per layer already (kvGeomOf reads the block's plan).
+// Scratch sets by geometry. A model whose blocks attend at more than one
+// geometry (nn.LayerPlan.GeomSplit) -- Gemma 4's global layers at head_dim 512
+// against its sliding ones' 256, and on the 31B and 26B four kv heads against
+// sixteen -- needs one scratch SET per geometry, since every attention kernel
+// a scratch builds bakes one: the decode scratch, the batched ones by width
+// and the widths reserved for them. A block runs in its own geometry's set.
+// GPU.runsInto cuts a range where the geometry changes, as it cuts where the
+// device changes, so every submission is one geometry and the residual
+// crosses the host between them; the KV pages are per layer already
+// (kvGeomOf reads the block's plan).
 //
-// The E2B/E4B add a third axis: their KV-sharing layers' FFN is twice as wide
-// (nn.LayerPlan.FFNWide), and the FFN kernels bake their width too, so a set
-// is keyed by both (geoKey).
+// A feed-forward twice NFFN wide (nn.LayerPlan.FFNWide, the E2B/E4B's
+// KV-sharing layers) is a second axis, since the FFN kernels bake their width
+// too, so a set is keyed by both (geoKey); a non-causal segment, a decision
+// head and a cache row carrying an index key are the others.
 //
 // The set in use is swapped in place (useGeom): every path below reads g.bs and
 // g.bbs as it always did. The home set is the global, single-width layers',
@@ -30,10 +32,10 @@ const (
 	geoSliding   geoKey = 1 << iota // the sliding layers' attention geometry
 	geoWideFFN                      // a feed-forward twice NFFN wide
 	geoNonCausal                    // a non-causal segment's blocks: a vision tower's
-	// geoMSA is MiniMax-M3's selecting blocks (msa.go): their cache row
+	// geoIndexKey is a selecting block's (msa.go, qsa.go): its cache row
 	// carries the indexer's key as one more head, which every K/V writer and
-	// the paged pool's geometry bake, where the dense lead's row does not.
-	geoMSA
+	// the paged pool's geometry bake, where a dense block's row does not.
+	geoIndexKey
 	// geoNCHead is, beside geoNonCausal, a decision head's own non-causal
 	// set (nn.LayerPlan.HeadSet): it resizes with the encoder's (visrows.go).
 	geoNCHead
@@ -59,7 +61,7 @@ func geoOf(p *nn.LayerPlan) geoKey {
 		k |= geoWideFFN
 	}
 	if p.MSA() || p.QSA() {
-		k |= geoMSA
+		k |= geoIndexKey
 	}
 	return k
 }
