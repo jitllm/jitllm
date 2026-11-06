@@ -261,16 +261,16 @@ func (s *gpuSession) Detach() {
 
 // SetKeyRuns records the runs for this session's calls that follow; see
 // GPU.SetKeyRuns.
-func (s *gpuSession) SetKeyRuns(full, windowed []nn.KeyRun) bool {
+func (s *gpuSession) SetKeyRuns(full, windowed []nn.KeyRun) {
 	defer s.leave(s.step())
-	return s.g.setKeyRuns(s.sid, full, windowed)
+	s.g.setKeyRuns(s.sid, full, windowed)
 }
 
 // SetRowWindows records one window a row for this session's calls that
 // follow; see GPU.SetRowWindows.
-func (s *gpuSession) SetRowWindows(wins []nn.KeyRun) bool {
+func (s *gpuSession) SetRowWindows(wins []nn.KeyRun) {
 	defer s.leave(s.step())
-	return s.g.setRowWindows(s.sid, wins)
+	s.g.setRowWindows(s.sid, wins)
 }
 
 // HeldBytes is this session's history on every device (nn.Session).

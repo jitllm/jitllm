@@ -18,14 +18,14 @@ import (
 
 // SetKeyRuns records the runs for the Layers calls that follow on every device:
 // a run crossing a device seam is honoured on both sides.
-func (g *GPU) SetKeyRuns(full, windowed []nn.KeyRun) bool {
-	return g.setKeyRuns(0, full, windowed)
+func (g *GPU) SetKeyRuns(full, windowed []nn.KeyRun) {
+	g.setKeyRuns(0, full, windowed)
 }
 
 // setKeyRuns is SetKeyRuns for session sid. The full runs are the session's:
 // its calls' rows are its own sequence's, and the composed tower reads its
 // windows from them (picWinDesc).
-func (g *GPU) setKeyRuns(sid uint64, full, windowed []nn.KeyRun) bool {
+func (g *GPU) setKeyRuns(sid uint64, full, windowed []nn.KeyRun) {
 	g.mu.Lock()
 	ds := g.devs
 	g.mu.Unlock()
@@ -37,7 +37,6 @@ func (g *GPU) setKeyRuns(sid uint64, full, windowed []nn.KeyRun) bool {
 		ss.winPerRow = false
 		d.mu.Unlock()
 	}
-	return true
 }
 
 // SetRowWindows records one window a row for the NonCausal calls that follow
@@ -45,12 +44,12 @@ func (g *GPU) setKeyRuns(sid uint64, full, windowed []nn.KeyRun) bool {
 // wins[r] on its Windowed blocks. A symmetric sliding window is this
 // (ModernBERT's local layers: the keys within half the window either side),
 // and its rows' windows overlap, which SetKeyRuns' partition cannot say.
-func (g *GPU) SetRowWindows(wins []nn.KeyRun) bool {
-	return g.setRowWindows(0, wins)
+func (g *GPU) SetRowWindows(wins []nn.KeyRun) {
+	g.setRowWindows(0, wins)
 }
 
 // setRowWindows is SetRowWindows for session sid.
-func (g *GPU) setRowWindows(sid uint64, wins []nn.KeyRun) bool {
+func (g *GPU) setRowWindows(sid uint64, wins []nn.KeyRun) {
 	g.mu.Lock()
 	ds := g.devs
 	g.mu.Unlock()
@@ -62,7 +61,6 @@ func (g *GPU) setRowWindows(sid uint64, wins []nn.KeyRun) bool {
 		ss.winPerRow = true
 		d.mu.Unlock()
 	}
-	return true
 }
 
 // bidirCount is row r's key count under the runs, at position pos+r: the end

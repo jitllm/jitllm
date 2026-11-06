@@ -142,8 +142,8 @@ func (s *Instance) openRows(r *route, seq, pos []int, tokens []int32) error {
 	if r.toks != nil {
 		r.toks.SetTokens(rowsOf(tokens, 0, n))
 	}
-	if r.keys != nil && !r.keys.SetKeyRuns(s.bidir, nil) && s.bidirIn(0, s.pos+n) {
-		return fmt.Errorf("model: the device cannot honour the prompt's bidirectional runs")
+	if r.keys != nil {
+		r.keys.SetKeyRuns(s.bidir, nil)
 	}
 	if r.tables != nil && r.tables.ReadsTables() {
 		return s.rowTables(seq, pos)
@@ -265,7 +265,11 @@ func (s *Instance) bidirTellOn(r *route, p0, n int) bool {
 		}
 		return true
 	}
-	return r.keys != nil && r.keys.SetKeyRuns(s.bidir, nil)
+	if r.keys == nil {
+		return false
+	}
+	r.keys.SetKeyRuns(s.bidir, nil)
+	return true
 }
 
 // embedTellOn is embedTell for route r's device; a device told the prompt is
@@ -284,7 +288,8 @@ func (s *Instance) embedTellOn(r *route, n int) bool {
 	if r.wins == nil {
 		return false
 	}
-	return r.wins.SetRowWindows(s.embedWins(n))
+	r.wins.SetRowWindows(s.embedWins(n))
+	return true
 }
 
 // Points says the prompt seals restore points (cpudev.Prompt).
