@@ -25,7 +25,6 @@ type PartsPlan struct {
 	StreamParts         [4]PartPlan
 	StreamW, CollapseW  Weights
 	NStreams            int
-	StreamFault         bool
 	Pool                bool
 	PoolPart            PartPlan
 	PoolW               Weights
@@ -90,7 +89,7 @@ func (e *Exec) PlaceParts(p *PartsPlan) Parts {
 			sp[i] = e.FormPart(p.StreamParts[i])
 		}
 		out.Streams = NewStreams(e.dev, &e.steps, sp[0], sp[1], sp[2], sp[3], p.StreamW, p.CollapseW, p.NStreams, p.D)
-		out.Streams.Fault = p.StreamFault
+		out.Streams.Fault = e.StreamFault
 	}
 	if p.Pool {
 		part := e.FormPart(p.PoolPart)
