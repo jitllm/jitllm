@@ -196,18 +196,21 @@ func (e *Exec) FormPart(p PartPlan) Part {
 
 // Step is a block's call of one row on the CPU device: the residual row, its
 // streams Stride apart, its rotary tables and per-layer inputs, its position
-// and token, its history (History, Seqs sequences wide), the tensors its
-// weights are read in and the recurrent state it steps (RecLi's).
+// and token (Toks: it has one), its history (History, Seqs sequences wide),
+// the tensors its weights are read in and the recurrent state it steps
+// (RecLi's, its sequence's Slot). Faults lets a gate's row violations reach
+// the call.
 type Step struct {
 	X                 []float32
 	Stride            int
 	CS, CSSWA, Side   []float32
 	Pos               int
 	Tok               int32
+	Toks, Faults      bool
 	History           History
 	Seqs              int
 	Tensors           Tensors
-	RecLi             int
+	RecLi, Slot       int
 	RecState, RecConv unsafe.Pointer
 }
 
@@ -229,8 +232,8 @@ func (e *Exec) Run(li int, st *Step, b *Bindings) (nn.Decline, error) {
 		return why, nil
 	}
 	r := Row{X: st.X, Stride: st.Stride, CS: st.CS, CSSWA: st.CSSWA, Side: st.Side, Pages: hb.Pages,
-		KeyStart: hb.KeyStart, Pos: st.Pos, PagePos: hb.PagePos, Tok: st.Tok, Toks: true, RecLi: st.RecLi, Weights: w,
-		Faults: true, Keys: hb.Keys, Values: hb.Values, RecState: st.RecState, RecConv: st.RecConv}
+		KeyStart: hb.KeyStart, Pos: st.Pos, PagePos: hb.PagePos, Tok: st.Tok, Toks: st.Toks, RecLi: st.RecLi, Weights: w,
+		Faults: st.Faults, Keys: hb.Keys, Values: hb.Values, RecState: st.RecState, RecConv: st.RecConv, Slot: st.Slot}
 	if err := e.rows.Row(li, cb, &r); err != nil {
 		return nn.DeclineServes, err
 	}

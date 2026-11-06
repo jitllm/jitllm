@@ -293,60 +293,40 @@ func (s *Instance) cpuRecRows(li int, l *model.Layer, x, cs []float32, seq, pos 
 	d, nrot := s.c.NEmbd, s.c.RopeW()
 	stride := len(x) / s.c.Streams()
 	// A step across sessions binds each row's owner for its row: its
-	// history, which a block that attends as well reads, is its own.
-	lead := s.Session
+	// history, which a block that attends as well writes and reads, and its
+	// recurrent state are its own.
+	ln := s.cpu.lanes
+	defer ln.Attach(s.kv, s.view)
 	for i := range pos {
 		r := i
 		if order != nil {
 			r = order[i]
 		}
 		o, slot := s.rowOwner(r, seq)
-		s.Session = o
-		pg := &s.kv.layers[li]
-		// A block that attends as well writes and reads the row's history.
-		if pg.p > 0 {
-			if why := s.kv.prepare(li, pos[r]); why != nn.DeclineServes {
-				s.Session = lead
-				return why, nil
-			}
-		}
 		if s.cpu.fault == cpuFaultChunk && base > 0 && i == 0 {
 			clear(o.view.State(li)[slot*s.dg.StateStride():][:s.dg.StateStride()])
 			clear(o.view.Conv(li)[slot*s.dg.ConvStateLen():][:s.dg.ConvStateLen()])
 		}
-		pages, err := s.kv.table(li, s.nseq)
-		if err != nil {
-			s.Session = lead
-			return nn.DeclineServes, err
-		}
-		w, _ := s.ws.bind(cb.F, li, l)
-		row := cpudev.Row{X: x[r*d:], Stride: stride, Pages: pages, KeyStart: pg.keyStart(pos[r]), Pos: pos[r],
-			RecLi: s.cpuRecLi(li), Slot: slot, Weights: w}
-		row.Keys, row.Values = kvAddrs(pg)
-		row.RecState, row.RecConv = recAddrs(o, row.RecLi)
-		if tok != nil {
-			row.Tok, row.Toks = tok[r], true
-		} else if cb.F.Toks {
-			s.Session = lead
+		if tok == nil && cb.F.Toks {
 			return nn.DeclineServes, fmt.Errorf("model: block %d reads its rows' tokens, which the step gives none of", li)
 		}
+		st := cpudev.Step{X: x[r*d:], Stride: stride, Pos: pos[r], Tensors: l, Slot: slot}
+		if tok != nil {
+			st.Tok, st.Toks = tok[r], true
+		}
 		if rside, pw := s.cpuSideRows(li); pw != 0 && rside != nil {
-			row.Side = rside[r*pw:]
+			st.Side = rside[r*pw:]
 		}
 		if nrot > 0 {
-			row.CS = cs[r*nrot:]
+			st.CS = cs[r*nrot:]
 		}
 		if s.bcsSWA != nil {
-			row.CSSWA = s.bcsSWA[r*s.c.LocalNRot():]
+			st.CSSWA = s.bcsSWA[r*s.c.LocalNRot():]
 		}
-		if err := s.cpu.x.Blocks().Row(li, cb, &row); err != nil {
-			s.Session = lead
-			return nn.DeclineServes, err
+		ln.Attach(o.kv, o.view)
+		if why, err := ln.Row(li, &st); why != nn.DeclineServes || err != nil {
+			return why, err
 		}
-		if pg.p > 0 && pos[r]+1 > pg.written {
-			pg.written = pos[r] + 1
-		}
-		s.Session = lead
 		if base >= 0 {
 			s.rows.snapRow(s, li, slot, base+r)
 			s.recRowPoint(li, slot, p0+r+1)
@@ -432,20 +412,6 @@ func rowsOf(tok []int32, a, b int) []int32 {
 		return nil
 	}
 	return tok[a:b]
-}
-
-// cpuRecLi is the block whose recurrent state block li's step binds: its
-// own, or under cpuFaultRec the first linear block's.
-func (s *Instance) cpuRecLi(li int) int {
-	if s.cpu.fault != cpuFaultRec {
-		return li
-	}
-	for r := range s.view.Blocks() {
-		if s.view.State(r) != nil {
-			return r
-		}
-	}
-	return li
 }
 
 // cpuRowsForm is block li's rows' form, its weights the block's, or why
@@ -698,15 +664,6 @@ func kvAddrs(pg *kvPages) (keys, values unsafe.Pointer) {
 		return addr(t.Arena().Keys()), addr(t.Arena().Values())
 	}
 	return nil, nil
-}
-
-// recAddrs is where session o holds block li's recurrent state and window,
-// nil where it holds none.
-func recAddrs(o *Session, li int) (state, conv unsafe.Pointer) {
-	if o == nil || li < 0 || li >= o.view.Blocks() {
-		return nil, nil
-	}
-	return addr(o.view.State(li)), addr(o.view.Conv(li))
 }
 
 func (s *kvPages) arena() *cpudev.Table {
