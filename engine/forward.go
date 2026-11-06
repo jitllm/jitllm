@@ -2986,7 +2986,7 @@ func (s *Instance) Reset() {
 	s.aliasMark(0, s.pos+1)
 	s.kv.retireTail(s.pos)
 	s.kv.reset()
-	s.kvErr.Store(nil)
+	s.kv.err.Store(nil)
 	s.kvRoom = 0
 	s.kvSkipped = 0
 }
@@ -3378,7 +3378,7 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 	s.reap()
 	s.growStep()
 	s.seamStep()
-	// A page the store could not return fails the request; see kvFault.
+	// A page the store could not return fails the request; see kvCache.faultIn.
 	if err := s.kvCheck(); err != nil {
 		return nil, err
 	}

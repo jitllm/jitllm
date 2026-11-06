@@ -657,7 +657,7 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 			if err := s.devLogits(); err != nil {
 				return nil, err
 			}
-			// A page the store could not return fails the request. See kvFault.
+			// A page the store could not return fails the request. See kvCache.faultIn.
 			if err := s.kvCheck(); err != nil {
 				return nil, err
 			}
@@ -684,7 +684,7 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 	if why != nn.DeclineServes {
 		return nil, cpuHeadRefused(why)
 	}
-	// A page the store could not return fails the request. See kvFault.
+	// A page the store could not return fails the request. See kvCache.faultIn.
 	if err := s.kvCheck(); err != nil {
 		return nil, err
 	}
