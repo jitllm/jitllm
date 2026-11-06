@@ -608,10 +608,15 @@ func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOp
 	}
 	s.holdCPURuns()
 	s.seat = g.cpu.Sit()
-	// An instance over a prediction block projects through that block's head.
+	// An instance over a prediction block projects through that block's
+	// head: the trunk's, bound with the instance's dense tensors, where the
+	// block has none of its own.
 	if hi > lo {
 		if w := s.layers[0].Mtp; w != nil {
 			s.outNorm, s.outW = w.HeadNorm, &w.Head
+			if w.Head.E != nil && w.Head.E.Block == jlm.DenseBlock {
+				s.outW = &s.dense.Output
+			}
 		}
 	}
 	s.kvl = kvLayout{maxSeq: maxSeq, nKV: c.NKVHead,
@@ -1207,7 +1212,17 @@ const seamCrossBytes = 2 << 20
 func (s *Instance) placeHead() {
 	// WithHeadPlacement(false) leaves the projection on the host -- the other
 	// arm of the placement comparison, and the way to bisect a divergence to it.
-	if s.ld == nil || s.head != nil || s.outW.Data == nil || !s.opt.headPlace {
+	if s.ld == nil || s.head != nil || !s.opt.headPlace {
+		return
+	}
+	// A prediction block's own head is in the block's page.
+	if s.outW.Data == nil && s.hi > s.lo && s.layers[0].Mtp != nil {
+		if _, err := s.pageIn(s.lo); err != nil {
+			s.placeErr = err
+			return
+		}
+	}
+	if s.outW.Data == nil {
 		return
 	}
 	// The placement's head, when it names one.
