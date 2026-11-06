@@ -98,4 +98,7 @@ type Block struct {
 	Why     nn.Decline
 	// RowsWhy is why the rows' form is not served, where it is not.
 	RowsWhy nn.Decline
+	// Bidir says the block attends bidirectionally inside a prompt's runs,
+	// Whole that its rows read the whole picture whatever their windows.
+	Bidir, Whole bool
 }

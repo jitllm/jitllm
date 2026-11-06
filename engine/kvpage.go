@@ -2981,3 +2981,40 @@ func (kv *kvCache) Commit(li, pos int) {
 		pg.written = pos + 1
 	}
 }
+
+// PrepareRows is cpudev.History's: block li's history block's pages for the
+// rows at pos, every row's page written before any is read (a step's rows
+// stand in any order, and a page holds every sequence's positions).
+func (kv *kvCache) PrepareRows(li int, pos []int, keys int) nn.Decline {
+	hl := kv.src[li]
+	pg := &kv.layers[hl]
+	if pg.p == 0 {
+		return nn.DeclineServes
+	}
+	start, end := pos[0], 0
+	for _, p := range pos {
+		kv.owned(hl, p)
+		start, end = min(start, pg.keyStart(p)), max(end, p+1)
+	}
+	if end > keys {
+		return nn.DeclineSessions
+	}
+	return kv.readable(hl, start, end-1)
+}
+
+// Rows is cpudev.History's: how a call of rows binds block li's history
+// block.
+func (kv *kvCache) Rows(li, nseq int) (cpudev.HistoryBinding, error) {
+	pg := &kv.layers[kv.src[li]]
+	pages, err := kv.table(kv.src[li], nseq)
+	if err != nil {
+		return cpudev.HistoryBinding{}, err
+	}
+	b := cpudev.HistoryBinding{Pages: pages, PagePos: pg.p, Slots: max(pg.arenaSlots(), 1)}
+	b.Keys, b.Values = kvAddrs(pg)
+	return b, nil
+}
+
+// KeyStart is cpudev.History's: where block li's keys the row at pos reads
+// start.
+func (kv *kvCache) KeyStart(li, pos int) int { return kv.layers[kv.src[li]].keyStart(pos) }

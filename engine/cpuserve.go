@@ -63,12 +63,8 @@ type cpuState struct {
 	// rows' slots as the tables read them.
 	oneFresh, tabsFresh bool
 	tabSeq              []int
-	// spans is a call's rows' spans as the device reads them (cpuRowsRun),
-	// rowsIn the rows' call itself; rseq and rpos a step's rows' sequences
-	// and positions; lastPos each sequence's last position a step's rows
-	// reach (cpuRecWhole).
-	spans      []uint32
-	rowsIn     cpudev.Rows
+	// rseq and rpos are a step's rows' sequences and positions; lastPos
+	// each sequence's last position a step's rows reach (cpuRecWhole).
 	lastPos    []int
 	rseq, rpos []int
 	onePos     [1]int
@@ -469,28 +465,12 @@ func (s *Instance) cpuRowsForm(li int, l *model.Layer) (*cpudev.Form, nn.Decline
 }
 
 // cpuRowsReady makes the pages of the history the rows at pos write and
-// read resident, in block li's arena, or says why f cannot run them: a
-// history past f's key bound, a page outside the arena.
+// read resident, in block li's arena, or says why f cannot run them
+// (cpudev.Lanes.ReadyRows).
 func (s *Instance) cpuRowsReady(li int, f *cpudev.Form, pos []int) nn.Decline {
-	hl := s.c.KVSource(li)
-	pg := &s.kv.layers[hl]
-	if pg.p == 0 {
-		return nn.DeclineServes
-	}
-	// Every row's page is written before any is read: a step's rows stand
-	// in any order, and a page holds every sequence's positions.
-	start, end := pos[0], 0
-	for _, p := range pos {
-		s.kv.owned(hl, p)
-		start, end = min(start, pg.keyStart(p)), max(end, p+1)
-	}
-	if end > f.Keys {
-		return nn.DeclineSessions
-	}
-	if why := s.kv.readable(hl, start, end-1); why != nn.DeclineServes {
-		return why
-	}
-	return nn.DeclineServes
+	ln := s.cpu.lanes
+	ln.Attach(s.kv, s.view)
+	return ln.ReadyRows(li, f, pos)
 }
 
 // cpuRowsOf is the sequences and positions of a chunk's n rows of slot
@@ -526,7 +506,8 @@ func (s *Instance) cpuPlace() {
 		lo: s.lo, ws: &s.ws}
 	s.cpu.x.Place(n, &s.lease, planes, s.c.NExpert, s.prof)
 	if s.cpu.lanes == nil {
-		s.cpu.lanes = cpudev.NewLanes(s.cpu.x, &s.ws.b, &s.lease, s.c.NEmbd, s.nseq, func(li int) { s.trace(li, "ffn_resid", s.x) })
+		s.cpu.lanes = cpudev.NewLanes(s.cpu.x, &s.ws.b, &s.lease, s.c.NEmbd, s.nseq, s.c.Streams(), s.dg.ConvStateLen(),
+			func(li int) { s.trace(li, "ffn_resid", s.x) })
 	}
 	for li := s.lo; li < min(s.hi, n); li++ {
 		if !s.devAt(li) {
@@ -639,14 +620,6 @@ func (s *Instance) cpuSideRows(li int) ([]float32, int) {
 	return s.bple, s.c.SideWidth()
 }
 
-// cpuSideOff is block li's sideOff, 0 for a block not composed.
-func (s *Instance) cpuSideOff(li int) int {
-	if cb, _ := s.cpu.x.Block(li); cb != nil {
-		return cb.SideOff
-	}
-	return 0
-}
-
 // cpuBlockPlan is what the CPU device composes block li from: the graph its
 // front end states, the formats its weights are read in, their strides, the
 // step's history geometry and the instance's rotaries -- or what keeps the
@@ -699,6 +672,8 @@ func (s *Instance) cpuBlockPlan(li int) cpudev.BlockPlan {
 		// instance's (rotaries): each its own table, bound by instance.
 		Rotaries: s.rotaries()}
 	p.F32 = s.kvl.fmt == cpu.KVF32
+	p.Bidir = s.c.LayerKind(li).Attends() && s.c.BidirAt(li)
+	p.Whole = s.wholePicture(li)
 	return p
 }
 
@@ -752,57 +727,14 @@ func (s *kvPages) arenaSlots() int {
 // cpuRowsRun runs form f of block li (l its copy) over the rows of x, the
 // stream-major residual stride apart, at positions pos of sequences seq with
 // tokens tok, their per-layer inputs side, rotary tables cs and swa, on the
-// CPU device (cpudev.Blocks.Rows): each row's history read from where it
-// starts to where its bidirectional run or its window ends.
+// CPU device (cpudev.Lanes.Rows): the session's history attached, the
+// prompt's runs and the rows' windows handed before the call.
 func (s *Instance) cpuRowsRun(li int, l *model.Layer, f *cpudev.Form, x []float32, stride int, side, cs []float32, nrot int, swa []float32, nswa int, seq, pos []int, tok []int32) error {
-	n := len(pos)
-	if f.Toks && tok == nil {
-		return fmt.Errorf("model: block %d reads its rows' tokens, which the step gives none of", li)
-	}
-	hl := s.c.KVSource(li)
-	pg := &s.kv.layers[hl]
-	pages, err := s.kv.table(hl, s.nseq)
-	if err != nil {
-		return err
-	}
-	runs := s.runsAt(li) && s.bidirIn(pos[0], n)
-	slots := max(pg.arenaSlots(), 1)
-	if cap(s.cpu.spans) < 4*n {
-		s.cpu.spans = make([]uint32, 4*n)
-	}
-	spans := s.cpu.spans[:4*n]
-	end := 0
-	for i, p := range pos {
-		e, st := p+1, pg.keyStart(p)
-		if runs {
-			e = max(e, s.bidirEnd(p))
-			if s.cpu.runWindows {
-				st = max(st, s.bidirStart(p))
-			}
-		}
-		if w := s.cpu.rowWins; w != nil && !s.wholePicture(li) {
-			st, e = max(st, w[p].Lo), w[p].Hi
-		}
-		end = max(end, p+1)
-		spans[i*4], spans[i*4+1], spans[i*4+2], spans[i*4+3] = uint32(seq[i]*slots), uint32(st), uint32(e), uint32(p)
-	}
-	w, _ := s.ws.bind(f, li, l)
+	ln := s.cpu.lanes
+	ln.Attach(s.kv, s.view)
+	ln.KeyRuns(s.bidir, s.cpu.runWindows, s.cpu.rowWins)
 	_, pw := s.cpuSideRows(li)
-	in := &s.cpu.rowsIn
-	*in = cpudev.Rows{X: x, Stride: stride, Width: s.c.NEmbd, Streams: s.c.Streams(), Side: side, SideW: pw,
-		SideOff: s.cpuSideOff(li), CS: cs, NRot: nrot, CSSWA: swa, NSWA: nswa, Pages: pages, PagePos: pg.p, Spans: spans,
-		Pos: pos, Tok: tok, Seq: seq, Weights: w}
-	in.Keys, in.Values = kvAddrs(pg)
-	if f.Rec {
-		in.RecLi = s.cpuRecLi(li)
-		in.RecState, in.RecConv = recAddrs(s.Session, in.RecLi)
-		in.Conv, in.ConvLen = s.view.Conv(in.RecLi), s.dg.ConvStateLen()
-	}
-	if err := s.cpu.x.Blocks().Rows(li, f, in, runs); err != nil {
-		return err
-	}
-	if pg.p > 0 && end > pg.written {
-		pg.written = end
-	}
-	return nil
+	rc := cpudev.RowsCall{X: x, Stride: stride, Side: side, SideW: pw, CS: cs, NRot: nrot, CSSWA: swa, NSWA: nswa,
+		Seq: seq, Pos: pos, Tok: tok}
+	return ln.Rows(li, f, l, &rc)
 }
