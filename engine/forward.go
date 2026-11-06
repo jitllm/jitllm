@@ -134,6 +134,10 @@ type Instance struct {
 	outW    *model.Tensor
 	// ws is where this instance's forms read their weights.
 	ws weightSource
+	// tables is the device writing a call's rotary tables, tabDesc the
+	// call's rows as the caller describes them.
+	tables  nn.TablesDevice
+	tabDesc []uint32
 	// inputs is the device writing a call's input rows, inScr the caller's
 	// side of them.
 	inputs nn.InputsDevice
