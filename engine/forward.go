@@ -425,9 +425,14 @@ type Instance struct {
 	// sizes and seamtune moves), while a hybrid whose kinds alternate can have
 	// placed blocks with a prefix of zero.
 	onDev []bool
-	// cpuHeld says this instance keeps (jlm.File.Keep) the pages of the
-	// blocks of [lo, hi) it does not place, from its making until Close.
-	cpuHeld bool
+	// places are the devices of routes, each one's side of a placement, and
+	// fromFrames says which run a block from the instance's frames.
+	places     [2]nn.BlockPlacer
+	fromFrames [2]bool
+	// framesHeld says this instance keeps (jlm.File.Keep) the pages of the
+	// blocks of [lo, hi) a device runs from them, from its making until
+	// Close.
+	framesHeld bool
 	// head is non-nil when the device also runs the output norm and the
 	// vocabulary projection, which it is only offered when it took every block.
 	// headReady is what head is set back to by SetHeadOnDevice.
@@ -630,7 +635,7 @@ func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOp
 	for li := lo; li < hi; li++ {
 		m.Layers[li].CloneTo(&s.layers[li-lo])
 	}
-	s.holdCPURuns()
+	s.gpuLayers = s.lo
 	s.seat = g.cpu.Sit()
 	// An instance over a prediction block projects through that block's
 	// head: the trunk's, bound with the instance's dense tensors, where the
@@ -683,6 +688,8 @@ func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOp
 	s.cpu.x = cpudev.NewExec(workers, cpudev.NewComposer(g.cpu.Forms(m.Id), g.cpu.Target.ISA(), workers.Workers(), opt.cpuFloat))
 	s.cpu.x.SetFusion(!opt.noFuse)
 	s.cpu.x.FuseCounts(&g.fuse.tries, &g.fuse.runs)
+	s.setPlace(routeLanes, s.cpu.x)
+	s.holdFrames()
 	// The cache width: WithKVType (or WithKVF16, SetKVType) forces it;
 	// otherwise binary16, half the history's bytes, wherever the CPU
 	// narrows in hardware -- everywhere but an x86 host the composer forms
@@ -835,15 +842,13 @@ func (s *Instance) Close() error {
 	s.holdHost(nil)
 	s.kv.giveBack(s.eng.cpu.KVPool(s.m.Id))
 	s.unmapOwn()
-	// The blocks this instance ran on the host no longer need their pages for
-	// it. Close may be called twice; cpuHeld makes the second a no-op.
-	if s.cpuHeld {
-		s.cpuHeld = false
+	// The blocks a device ran from the frames no longer need their pages for
+	// it. Close may be called twice; framesHeld makes the second a no-op.
+	if s.framesHeld {
 		for li := s.lo; li < s.hi; li++ {
-			if !s.devAt(li) {
-				s.keep(li, li+1, -1)
-			}
+			s.holdFrame(li, s.routeOf(li), -1)
 		}
+		s.framesHeld = false
 	}
 	s.keepSpare()
 	s.cpu.x.Pool().Close()
@@ -2071,7 +2076,7 @@ func (s *Instance) markOnDev(li int) {
 		s.onDev = make([]bool, len(s.m.Layers))
 	}
 	if !s.onDev[li] {
-		s.cpuRun(li, -1)
+		s.handOver(li, routeLanes, routeView)
 	}
 	s.onDev[li] = true
 	n := s.lo
@@ -2085,7 +2090,7 @@ func (s *Instance) markOnDev(li int) {
 // twin: the prefix ends at the first block not placed.
 func (s *Instance) unmarkOnDev(li int) {
 	if s.onDev[li] {
-		s.cpuRun(li, 1)
+		s.handOver(li, routeView, routeLanes)
 	}
 	s.onDev[li] = false
 	s.gpuLayers = min(s.gpuLayers, li)
@@ -2106,7 +2111,7 @@ func (s *Instance) placedFrom(lo int) []int {
 func (s *Instance) clearOnDev() {
 	for i := range s.onDev {
 		if s.onDev[i] {
-			s.cpuRun(i, 1)
+			s.handOver(i, routeView, routeLanes)
 		}
 		s.onDev[i] = false
 	}
@@ -2123,37 +2128,12 @@ func (s *Instance) clearOnDev() {
 func (s *Instance) shrinkOnDev(n int) {
 	for i := n; i < len(s.onDev); i++ {
 		if s.onDev[i] {
-			s.cpuRun(i, 1)
+			s.handOver(i, routeView, routeLanes)
 		}
 		s.onDev[i] = false
 	}
 	if s.gpuLayers > n {
 		s.gpuLayers = n
-	}
-}
-
-// holdCPURuns keeps the page of every block of [lo, hi): an instance with no
-// device attached runs them all on the CPU device, so its card prefix is
-// empty.
-func (s *Instance) holdCPURuns() {
-	s.gpuLayers = s.lo
-	s.keep(s.lo, s.hi, 1)
-	s.cpuHeld = true
-}
-
-// cpuRun moves this instance's keep on block li's page by d, as the block
-// leaves (-1) or moves to (+1) the CPU device for it.
-func (s *Instance) cpuRun(li, d int) {
-	// The device composes the block it takes, or lets one that left go.
-	if x := s.cpu.x; x.Holds(li) {
-		if d > 0 {
-			x.PrepLayer(li, s.planFor(li), nil)
-		} else {
-			x.Drop(li)
-		}
-	}
-	if s.cpuHeld && li >= s.lo && li < s.hi {
-		s.keep(li, li+1, d)
 	}
 }
 
@@ -3556,7 +3536,8 @@ func (s *Instance) ContextClamped() (asked, got int, clamped bool) {
 // decode token's allocation count nondeterministic.
 func (s *Instance) setLD(ld nn.LayerDevice) {
 	s.ld = ld
-	s.routes[0] = newRoute(ld)
+	s.routes[routeView] = newRoute(ld)
+	s.setPlace(routeView, ld)
 	s.ldRoom, _ = ld.(nn.RoomReporter)
 	s.ldSpill, _ = ld.(nn.Spiller)
 	s.ldStep, _ = ld.(nn.SessionStepper)
@@ -3575,5 +3556,43 @@ func (s *Instance) setLD(ld nn.LayerDevice) {
 func (s *Instance) layerInputs(in []float32) {
 	if s.ldInputs != nil && s.c.SideWidth() != 0 {
 		s.ldInputs.SetLayerInputs(in)
+	}
+}
+
+// setPlace makes d the device of route r.
+func (s *Instance) setPlace(r int, d nn.BlockPlacer) {
+	s.places[r] = d
+	f, ok := d.(nn.FramesInPlace)
+	s.fromFrames[r] = ok && f.RunsFromFrames()
+}
+
+// holdFrames keeps the frames of every block a device runs from them.
+func (s *Instance) holdFrames() {
+	s.framesHeld = true
+	for li := s.lo; li < s.hi; li++ {
+		s.holdFrame(li, s.routeOf(li), 1)
+	}
+}
+
+// holdFrame keeps (d > 0) or lets go of block li's frames where route r's
+// device runs it from them.
+func (s *Instance) holdFrame(li, r, d int) {
+	if s.framesHeld && s.fromFrames[r] && li >= s.lo && li < s.hi {
+		s.keep(li, li+1, d)
+	}
+}
+
+// handOver records block li's move from route from's device to route to's.
+// A device that runs a block from the frames is handed its plan, lets it go
+// here and holds the frames while it is there; a device with a copy of its
+// own took the block from an offer and lets it go over the run it leaves.
+func (s *Instance) handOver(li, from, to int) {
+	if s.fromFrames[from] {
+		s.places[from].ReleaseLayers(li, li+1)
+		s.holdFrame(li, from, -1)
+	}
+	if s.fromFrames[to] {
+		s.places[to].PrepLayer(li, s.planFor(li), nil)
+		s.holdFrame(li, to, 1)
 	}
 }

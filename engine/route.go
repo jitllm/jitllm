@@ -49,6 +49,12 @@ func newRoute(d nn.LayerRunner) route {
 	return r
 }
 
+// The routes of a session: the attached device's view, and the CPU's lanes.
+const (
+	routeView = iota
+	routeLanes
+)
+
 // laneRoute is the route of a session's calls on the CPU device, its faces
 // the lanes' own (no assertion at all).
 func laneRoute(l *cpudev.SessionLanes) route {
@@ -64,7 +70,7 @@ func (s *Instance) bindLanes(sess *Session) {
 		return
 	}
 	sess.lanes = s.cpu.lanes.For(sess)
-	sess.routes[1] = laneRoute(&sess.lanes)
+	sess.routes[routeLanes] = laneRoute(&sess.lanes)
 }
 
 // routeAt is the route block li runs on.
@@ -73,9 +79,9 @@ func (s *Instance) routeAt(li int) *route { return &s.routes[s.routeOf(li)] }
 // routeOf is the index of the route block li runs on in a session's routes.
 func (s *Instance) routeOf(li int) int {
 	if s.devAt(li) {
-		return 0
+		return routeView
 	}
-	return 1
+	return routeLanes
 }
 
 // openRun hands the run's device what its blocks read before it is called:
@@ -311,9 +317,9 @@ func (s *Session) Snap(li, slot, row int) {
 // to the card's where toDevice, else back.
 func (s *Instance) moveRoutes(toDevice bool) (from, to *route) {
 	if toDevice {
-		return &s.routes[1], &s.routes[0]
+		return &s.routes[routeLanes], &s.routes[routeView]
 	}
-	return &s.routes[0], &s.routes[1]
+	return &s.routes[routeView], &s.routes[routeLanes]
 }
 
 // moveKV moves block li's history of pos positions: the source device gives

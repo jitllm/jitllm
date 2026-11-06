@@ -113,7 +113,7 @@ func (e *Exec) form(p nn.BlockSpec, rows int) (*Form, error) {
 // table opened where its rows read one; false where the block is not
 // composed here.
 func (e *Exec) PrepLayer(li int, p *nn.LayerPlan, _ *nn.LayerWeights) bool {
-	if p.Spec == nil {
+	if p.Spec == nil || !e.Holds(li) {
 		return false
 	}
 	s := *p.Spec
@@ -130,12 +130,18 @@ func (e *Exec) PrepLayer(li int, p *nn.LayerPlan, _ *nn.LayerWeights) bool {
 // Holds says li is one of the placement's blocks.
 func (e *Exec) Holds(li int) bool { return li >= 0 && li < len(e.blocks) }
 
-// Drop lets block li's composition go: it is off the CPU.
-func (e *Exec) Drop(li int) {
-	if e.Holds(li) {
-		e.blocks[li] = nil
+// ReleaseLayers lets the compositions of blocks [lo, hi) go: they are off
+// the CPU.
+func (e *Exec) ReleaseLayers(lo, hi int) {
+	for li := lo; li < hi; li++ {
+		if e.Holds(li) {
+			e.blocks[li] = nil
+		}
 	}
 }
+
+// RunsFromFrames says the CPU runs a block from the instance's frames.
+func (e *Exec) RunsFromFrames() bool { return true }
 
 // Block is block li's composition, made at its placement, or why there is
 // none.

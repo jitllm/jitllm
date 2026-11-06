@@ -9,7 +9,7 @@ import (
 // A block's location is the device that runs it for this instance, the CPU
 // among them: nn.CPU, or the name the attached tier gives the device holding
 // it. onDev and gpuLayers are where the instance keeps it, written only by
-// markOnDev, unmarkOnDev, clearOnDev, shrinkOnDev and holdCPURuns
+// markOnDev, unmarkOnDev, clearOnDev, shrinkOnDev and holdFrames
 // (srcgate.TestBlockLocationIsWrittenByItsSetters).
 
 // WhereIs is the device running block li: nn.CPU for a block this instance runs
