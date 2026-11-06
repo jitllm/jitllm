@@ -101,21 +101,12 @@ type Q4eHC struct {
 	injected, head bool
 }
 
-// q4eLayer is a block's two hyper-connections and, on the n-gram block, the
-// n-gram embedding's weights.
+// q4eLayer is the n-gram block's convolution: HCMult*n_embd channels of
+// NGramConv taps, as the file stores them (a channel's taps contiguous),
+// and NgCvTaps the same as a tensor of a row a channel, which the
+// composer's OpStateConv binds.
 type q4eLayer struct {
-	Attn, Ffn Q4eHC
-	// head is a prediction block's own head mix, which its draft's logits
-	// and nothing else read (q4eCollapse); empty on a trunk block.
-	head Q4eHC
-	// The n-gram block: the key and value projections of the gathered rows
-	// and the convolution (HCMult*n_embd channels of NGramConv taps, as the
-	// file stores them: a channel's taps contiguous); its norms are in the
-	// layer's vecs.
-	NgKey, NgVal Tensor
-	NgCv         []float32
-	// ngCvTaps is ngCv as a tensor of a row a channel, which the composer's
-	// OpStateConv binds.
+	NgCv     []float32
 	NgCvTaps Tensor
 }
 
@@ -153,50 +144,22 @@ func loadQ4EHC(h *Q4eHC, bi int32, cfg *Config, norm, down, up, inj jlm.Role,
 	return nil
 }
 
-// loadQ4E reads block bi's hyper-connections and, on the n-gram block, the
-// n-gram embedding's weights.
+// loadQ4E reads the n-gram block's convolution taps.
 func loadQ4E(l *Layer, bi int32, cfg *Config,
 	getTo func(*Tensor, jlm.Role, int32, int32) error, vec func(jlm.Role, int32) ([]float32, error)) error {
-	if !cfg.Q4E() {
+	if !cfg.NGramAt(int(bi)) {
 		return nil
 	}
 	d := &q4eLayer{}
 	l.Q4e = d
-	if err := loadQ4EHC(&d.Attn, bi, cfg, jlm.RoleHCAttnNorm, jlm.RoleHCAttnDown, jlm.RoleHCAttnUp,
-		jlm.RoleHCAttnInject, getTo, vec); err != nil {
-		return err
-	}
-	if err := loadQ4EHC(&d.Ffn, bi, cfg, jlm.RoleHCFFNNorm, jlm.RoleHCFFNDown, jlm.RoleHCFFNUp,
-		jlm.RoleHCFFNInject, getTo, vec); err != nil {
-		return err
-	}
-	if int(bi) >= cfg.NLayer {
-		// A prediction block: its own head mix, the trunk's roles at its
-		// index (llama.cpp's nextn.hc_head_*).
-		if err := loadQ4EHC(&d.head, bi, cfg, jlm.RoleHCHeadNorm, jlm.RoleHCHeadDown, jlm.RoleHCHeadUp,
-			0, getTo, vec); err != nil {
-			return err
-		}
-		d.head.head = true
-	}
-	if !cfg.NGramAt(int(bi)) {
-		return nil
-	}
 	var err error
-	if err = getTo(&d.NgKey, jlm.RoleNGramKey, bi, -1); err != nil {
-		return err
-	}
-	if err = getTo(&d.NgVal, jlm.RoleNGramValue, bi, -1); err != nil {
-		return err
-	}
 	if d.NgCv, err = vec(jlm.RoleNGramConv, bi); err != nil {
 		return err
 	}
-	hd, w, kt := cfg.HCMult*cfg.NEmbd, cfg.NGramWidth(), cfg.NGramConv
-	if d.NgKey.K != w || d.NgKey.Rows != hd || d.NgVal.K != w || d.NgVal.Rows != cfg.NEmbd || len(d.NgCv) != hd*kt {
-		return fmt.Errorf("model: block %d's n-gram embedding is key %dx%d, value %dx%d, convolution %d; "+
-			"want %d wide in, %d streams of %d, %d taps", bi, d.NgKey.K, d.NgKey.Rows, d.NgVal.K, d.NgVal.Rows,
-			len(d.NgCv), w, cfg.HCMult, cfg.NEmbd, kt)
+	hd, kt := cfg.HCMult*cfg.NEmbd, cfg.NGramConv
+	if len(d.NgCv) != hd*kt {
+		return fmt.Errorf("model: block %d's n-gram convolution is %d, want %d streams of %d, %d taps",
+			bi, len(d.NgCv), cfg.HCMult, cfg.NEmbd, kt)
 	}
 	d.NgCvTaps = F32Tensor(d.NgCv, hd, kt)
 	return nil

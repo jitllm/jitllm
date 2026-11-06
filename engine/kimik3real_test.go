@@ -289,8 +289,8 @@ func k3RealSelected(t *testing.T, m *model.Model) {
 	for i := range m.Layers {
 		l := &m.Layers[i]
 		rec := c.LayerKind(i).Recurrent()
-		ok = ok && (l.MlaGate.E != nil) == !rec && (l.SsmGate.E != nil) == rec && l.SsmGA.E == nil &&
-			(l.RoutedDown.E != nil) == (i >= 1)
+		ok = ok && (l.Matrix(jlm.RoleAttnGate) != nil && l.SsmGate.E == nil) == !rec && (l.SsmGate.E != nil) == rec && l.SsmGA.E == nil &&
+			(l.Matrix(jlm.RoleFFNRoutedDown) != nil) == (i >= 1)
 	}
 	if !ok {
 		t.Fatalf("the container does not carry Kimi-K3-0.40B's graph: %+v", c)

@@ -71,7 +71,7 @@ func gemma4Fixtures() []struct {
 				m.PleTok.K == 6*32 && m.PleProj.Rows == 6*32 && len(m.PleNorm) == 32
 			for i := range m.Layers {
 				l := &m.Layers[i]
-				ok = ok && l.PleGate.Rows == 32 && l.PleProj.K == 32 && len(l.Vector(jlm.RolePLEPostNorm)) == c.NEmbd &&
+				ok = ok && matRows(l, jlm.RolePLEGate) == 32 && matK(l, jlm.RolePLEProj) == 32 && len(l.Vector(jlm.RolePLEPostNorm)) == c.NEmbd &&
 					(l.Wk.Rows == 0) == c.KVShared(i) && (l.KNorm == nil) == c.KVShared(i) && !l.VFromK
 			}
 			return ok
@@ -83,7 +83,7 @@ func gemma4Fixtures() []struct {
 			c := m.Cfg
 			ok := c.Arch == "gemma4" && c.PLEDim == 40 && c.NKVShared == 2 && m.PleProj.Rows == 6*40
 			for i := range m.Layers {
-				ok = ok && m.Layers[i].PleGate.Rows == 40 && m.Layers[i].PleProj.K == 40
+				ok = ok && matRows(&m.Layers[i], jlm.RolePLEGate) == 40 && matK(&m.Layers[i], jlm.RolePLEProj) == 40
 			}
 			return ok
 		}},

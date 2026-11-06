@@ -37,7 +37,7 @@ func ds32Fixtures() []struct {
 				c.NDenseLead == 1 && c.YarnFactor == 8
 			for i := range m.Layers {
 				l := &m.Layers[i]
-				ok = ok && l.IdxQB.Rows == 8*16 && l.IdxK.Rows == 16 && l.IdxProj.Rows == 8 &&
+				ok = ok && matRows(l, jlm.RoleIdxQB) == 8*16 && matRows(l, jlm.RoleIdxK) == 16 && matRows(l, jlm.RoleIdxProj) == 8 &&
 					len(l.Vector(jlm.RoleIdxKNorm)) == 16 && len(l.Vector(jlm.RoleIdxKNormB)) == 16
 			}
 			return ok

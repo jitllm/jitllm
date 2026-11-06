@@ -82,25 +82,15 @@ func loadAltUp(m *Model, cfg *Config, get func(jlm.Role, int32, int32) (Tensor, 
 	return nil
 }
 
-// loadAltUpLayer reads block bi's AltUp and LAuReL matrices; their vectors
-// are the block's table's (layer.vecs).
+// loadAltUpLayer reads block bi's streams' router; its vectors are the
+// block's table's (layer.vecs).
 func loadAltUpLayer(l *Layer, bi int32, cfg *Config, getTo func(*Tensor, jlm.Role, int32, int32) error) error {
-	var err error
-	d, s := cfg.NEmbd, cfg.Streams()
-	if err = getTo(&l.AltRouter, jlm.RoleStreamRouter, bi, -1); err != nil {
+	if err := getTo(&l.AltRouter, jlm.RoleStreamRouter, bi, -1); err != nil {
 		return err
 	}
-	if err = getTo(&l.LaurelL, jlm.RoleLowRankIn, bi, -1); err != nil {
-		return err
-	}
-	if err = getTo(&l.LaurelR, jlm.RoleLowRankOut, bi, -1); err != nil {
-		return err
-	}
-	if l.AltRouter.K != d || l.AltRouter.Rows != s || l.LaurelL.K != d || l.LaurelR.K != l.LaurelL.Rows ||
-		l.LaurelR.Rows != d {
-		return fmt.Errorf("model: block %d's AltUp router is %dx%d and LAuReL %dx%d then %dx%d, want "+
-			"%d rows of %d and a rank between", bi, l.AltRouter.Rows, l.AltRouter.K, l.LaurelL.Rows,
-			l.LaurelL.K, l.LaurelR.Rows, l.LaurelR.K, s, d)
+	if d, s := cfg.NEmbd, cfg.Streams(); l.AltRouter.K != d || l.AltRouter.Rows != s {
+		return fmt.Errorf("model: block %d's streams' router is %dx%d, want %d rows of %d", bi,
+			l.AltRouter.Rows, l.AltRouter.K, s, d)
 	}
 	return nil
 }

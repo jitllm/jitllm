@@ -999,13 +999,9 @@ type Layer struct {
 	// container stores it, the vector a composed block binds.
 	OutScale    float32
 	OutScaleRow []float32
-	// Gemma 4's per-layer embedding (Config.PLEDim): the gate from the
-	// residual and the projection back; its norm is in vecs.
-	PleGate, PleProj Tensor
-	// Gemma 3n's AltUp and LAuReL (Config.PredStreams, altup.go): the router
-	// and LAuReL's two matrices; their vectors are in vecs.
-	AltRouter        Tensor
-	LaurelL, LaurelR Tensor
+	// AltRouter is the streams' router (Config.PredStreams, altup.go); its
+	// vectors are in vecs.
+	AltRouter Tensor
 	// Multi-head Latent Attention, all nil unless Config.KVLoraRank is set.
 	// wq is then the one-step query (DeepSeek-V2-Lite, q_lora_rank null) and
 	// wqa/wqb the two-step one; exactly one of those is populated.
@@ -1013,20 +1009,8 @@ type Layer struct {
 	// wkb and wvb are banks, one sheet per head, read through bankExpert as an
 	// expert bank is, so the absorb runs as a single gather.
 	Wqa, Wqb, Wkva, Wkb, Wvb Tensor
-	// DeepSeek V3.2's lightning indexer (Config.Indexer): its query from the
-	// query latent, its key and the per-head weights; its key's LayerNorm is
-	// in vecs.
-	IdxQB, IdxK, IdxProj Tensor
-	// MiniMax Sparse Attention's query (msa.go); the key is idxK, the norms
-	// in vecs.
-	IdxQ Tensor
-	// q4e is Qwen3.8-Flash-Next's hyper-connections and n-gram weights.
+	// q4e is the n-gram block's convolution taps.
 	Q4e *q4eLayer
-	// Kimi-K3 (k3.go): the MLA output gate (RoleAttnGate in a full block; a
-	// linear block's is ssmGate) and the latent mixture's projections; their
-	// vectors are in vecs.
-	MlaGate              Tensor
-	RoutedDown, RoutedUp Tensor
 	// kbHead and vbHead are wkb and wvb cut into one view per head, built once
 	// at load as l.experts is.
 	kbHead, vbHead []Tensor
@@ -3031,24 +3015,6 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 		if _, err = optVec(jlm.RolePostFFNNorm, bi); err != nil {
 			return nil, err
 		}
-		// Gemma 4's per-layer embedding, gated in after the FFN.
-		if p := cfg.PLEDim; p != 0 {
-			if err = getTo(&l.PleGate, jlm.RolePLEGate, bi, -1); err != nil {
-				return nil, err
-			}
-			if err = getTo(&l.PleProj, jlm.RolePLEProj, bi, -1); err != nil {
-				return nil, err
-			}
-			if _, err = vec(jlm.RolePLEPostNorm, bi); err != nil {
-				return nil, err
-			}
-			if l.PleGate.K != cfg.NEmbd || l.PleGate.Rows != p || l.PleProj.K != p ||
-				l.PleProj.Rows != cfg.NEmbd || len(l.Vector(jlm.RolePLEPostNorm)) != cfg.NEmbd {
-				return nil, fmt.Errorf("model: block %d's per-layer embedding gate is %dx%d, its "+
-					"projection %dx%d and its norm %d, want %d and %d", bi, l.PleGate.K, l.PleGate.Rows,
-					l.PleProj.K, l.PleProj.Rows, len(l.Vector(jlm.RolePLEPostNorm)), cfg.NEmbd, p)
-			}
-		}
 		if cfg.PredStreams != 0 {
 			if err := loadAltUpLayer(l, bi, cfg, getTo); err != nil {
 				return nil, err
@@ -3246,11 +3212,6 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 						bi, v.name, v.have, v.want)
 				}
 			}
-			if cfg.Indexer() {
-				if err := loadIndexer(l, bi, cfg, getTo, vec); err != nil {
-					return nil, err
-				}
-			}
 			// Cut per head once, at load: wkb and wvb are banks of NHead
 			// sheets, and the absorb is nn.MatVecPackedGather over them with
 			// the head as the "expert".
@@ -3267,43 +3228,19 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 				l.vbHead = append(l.vbHead, t)
 			}
 		}
-		if cfg.MSAAt(i) {
-			if err := loadMSA(l, bi, cfg, getTo, vec); err != nil {
-				return nil, err
-			}
-		}
-		// The MLA output gate: RoleAttnGate in a full block of an MLA model,
-		// NHead*HeadDimV rows over n_embd. (A linear block's RoleAttnGate is
-		// its z projection, bound in build.)
-		if cfg.MLA() && !cfg.LayerKind(i).Recurrent() && c.Has(jlm.RoleAttnGate, bi, -1) {
-			if err := getTo(&l.MlaGate, jlm.RoleAttnGate, bi, -1); err != nil {
-				return nil, err
-			}
-			if l.MlaGate.K != cfg.NEmbd || l.MlaGate.Rows != cfg.NHead*cfg.HeadDimV {
-				return nil, fmt.Errorf("model: block %d's MLA output gate is %dx%d, want %dx%d", bi, l.MlaGate.K,
-					l.MlaGate.Rows, cfg.NEmbd, cfg.NHead*cfg.HeadDimV)
-			}
-		}
-		// A latent mixture's projections: the experts read RoutedDown of the
-		// FFN input and RoutedUp takes their normed sum back.
-		if cfg.ExpertLatent != 0 && cfg.MoEAt(i) {
-			if err := getTo(&l.RoutedDown, jlm.RoleFFNRoutedDown, bi, -1); err != nil {
-				return nil, err
-			}
-			if err := getTo(&l.RoutedUp, jlm.RoleFFNRoutedUp, bi, -1); err != nil {
-				return nil, err
-			}
-			L := cfg.ExpertLatent
-			if l.RoutedDown.K != cfg.NEmbd || l.RoutedDown.Rows != L || l.RoutedUp.K != L || l.RoutedUp.Rows != cfg.NEmbd {
-				return nil, fmt.Errorf("model: block %d's latent mixture is %dx%d down and %dx%d up; want %d to %d and back",
-					bi, l.RoutedDown.K, l.RoutedDown.Rows, l.RoutedUp.K, l.RoutedUp.Rows, cfg.NEmbd, L)
-			}
-		}
 		if err := loadQ4E(l, bi, cfg, getTo, vec); err != nil {
 			return nil, err
 		}
-		if cfg.QSAAt(i) {
-			if err := loadQSA(l, bi, cfg, getTo, vec); err != nil {
+		// Every other matrix the block stores is loaded under its role, a
+		// tensor of the block's own: what a stated graph binds that no field
+		// above names.
+		for k := range c.Entries() {
+			e := &c.Entries()[k]
+			if e.Block != bi || e.Index != -1 || e.Role.Expanded() || e.NDim < 2 || squeezed(e) ||
+				l.Matrix(e.Role) != nil || l.Vector(e.Role) != nil {
+				continue
+			}
+			if err := getTo(new(Tensor), e.Role, bi, -1); err != nil {
 				return nil, err
 			}
 		}
