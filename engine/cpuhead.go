@@ -110,10 +110,6 @@ func (s *Instance) topProb(logits []float32, d *specDist) (float32, error) {
 	return d.prob(t), nil
 }
 
-// cpuFormCount is how many forms the model's CPU cache holds, refused ones
-// among them: a step that forms nothing leaves it as it was.
-func (s *Instance) cpuFormCount() int { return s.eng.cpu.Forms(s.m.Id).Count() }
-
 // headRow is the head over the row x into logits, and the norm's rows into
 // hidden where it is given, on the device the instance places the head on
 // (nn.HeadDevice.Head), or why not.
