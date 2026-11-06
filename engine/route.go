@@ -64,13 +64,19 @@ func laneRoute(l *cpudev.SessionLanes) route {
 // History is the session's history as it is now (cpudev.HistoryOf).
 func (s *Session) History() cpudev.History { return s.kv }
 
-// bindLanes makes sess's calls on the CPU device run on s's lanes.
+// bindLanes makes sess's calls on the CPU device run on s's lanes: its view
+// there is made once and bound again in place when it leases another
+// instance, so a lease allocates nothing.
 func (s *Instance) bindLanes(sess *Session) {
 	if s.exec.lanes == nil {
 		return
 	}
-	sess.lanes = s.exec.lanes.For(sess)
-	sess.routes[routeLanes] = laneRoute(&sess.lanes)
+	v, _ := sess.routes[routeLanes].run.(*cpudev.SessionLanes)
+	if v == nil {
+		v = new(cpudev.SessionLanes)
+	}
+	*v = s.exec.lanes.For(sess)
+	sess.routes[routeLanes] = laneRoute(v)
 }
 
 // routeAt is the route block li runs on.
