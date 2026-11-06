@@ -22,14 +22,14 @@ func (s *Instance) PlaceBlocks(lo, hi int) (int, error) {
 	if lo >= hi {
 		return 0, nil
 	}
-	placed, err := s.placeFromCPU(lo, hi, "")
+	placed, err := s.placeOnto(lo, hi, "")
 	return len(placed), err
 }
 
-// placeFromCPU puts the CPU blocks of [lo, hi) on the device named to ("" the
+// placeOnto puts the CPU blocks of [lo, hi) on the device named to ("" the
 // tier's choice) through the offer path, and their history after them. It
 // reports the blocks placed.
-func (s *Instance) placeFromCPU(lo, hi int, to string) ([]int, error) {
+func (s *Instance) placeOnto(lo, hi int, to string) ([]int, error) {
 	if s.ld == nil {
 		return nil, fmt.Errorf("model: no device attached (SetDevice first)")
 	}
@@ -71,13 +71,13 @@ func (s *Instance) placeFromCPU(lo, hi int, to string) ([]int, error) {
 	return placed, err
 }
 
-// moveToCPU is MoveBlocks to the CPU: blocks [lo, hi) come off their devices
+// moveOffCards is MoveBlocks to the CPU: blocks [lo, hi) come off their devices
 // with their history, wherever they sit in the stack -- the CPU block between
 // two device runs it leaves is a placement the steps run as they run
 // relocation's. A pinned block refuses the call before anything moves; a
 // block whose history will not come to the CPU stays where it is, and the
 // call reports it.
-func (s *Instance) moveToCPU(lo, hi int) (mv BlockMove, err error) {
+func (s *Instance) moveOffCards(lo, hi int) (mv BlockMove, err error) {
 	if s.ld == nil {
 		return mv, nil
 	}

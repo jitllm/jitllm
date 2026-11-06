@@ -50,7 +50,7 @@ func (s *Instance) givenRows(x, ple, rows []float32, toks []int32, pos []int) nn
 // embedDeclined is the error of input rows no composed form serves.
 func (s *Instance) embedDeclined(why nn.Decline) error {
 	return fmt.Errorf("model: the input rows have no composed form on this instance (%s): %v %v",
-		nn.DeclineName(int(why)), s.cpu.x.Composer().Err(), s.m.FrontGraphs().CpuInErr)
+		nn.DeclineName(int(why)), s.exec.x.Composer().Err(), s.m.FrontGraphs().CpuInErr)
 }
 
 // rowSrc is a prompt's rows: row i is the vocabulary row of tok[i], or,

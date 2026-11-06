@@ -97,7 +97,7 @@ type Instance struct {
 	fnEndsAt func(c int) [kvEndSeats]uint8
 	// cpu is the blocks this instance runs on the CPU as the composer forms
 	// them (cpuserve.go).
-	cpu cpuState
+	exec laneDevice
 	// readout is the device reading an embedding model's pooled row, nil on a
 	// model with no readout.
 	readout nn.PoolDevice
@@ -411,13 +411,13 @@ type Instance struct {
 	// headReady is what head is set back to by SetHeadOnDevice.
 	head      *nn.Head
 	headReady *nn.Head
-	// HostPick asks a prefill whose head runs on the host to project the
-	// listed vocabulary rows alone into HostPickVals (pickOnHost), the
+	// PickIDs asks a prefill whose head runs on the host to project the
+	// listed vocabulary rows alone into PickVals (pickOnHost), the
 	// host's half of the label pick a device head does (nn.Head.Pick);
-	// HostPicked says the last prefill did. A decision readout sets them.
-	HostPick     []int32
-	HostPickVals []float32
-	HostPicked   bool
+	// Picked says the last prefill did. A decision readout sets them.
+	PickIDs  []int32
+	PickVals []float32
+	Picked   bool
 	// cs is the rotary table for the current position: NRot floats, filled once
 	// per token and read by every head and by the device blocks.
 	cs []float32
@@ -552,7 +552,7 @@ func NewInstance(m *model.Model, maxSeq int, opts ...Option) (*Instance, error) 
 			// The CPU device holds the model for it from above.
 			s.root, s.owners[routeLanes] = true, g.cpu
 			s.pageQuota.Store(pq)
-			s.cpu.x.SetQuota(q)
+			s.exec.x.SetQuota(q)
 			return s, nil
 		}
 	}
@@ -653,19 +653,19 @@ func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOp
 	s.allocRecurrent(nseq)
 
 	workers := cpu.NewPool(s.poolOptions()...)
-	s.cpu.x = cpudev.NewExec(workers, cpudev.NewComposer(g.cpu.Forms(m.Id), g.cpu.Target.ISA(), workers.Workers(), opt.cpuFloat))
-	s.cpu.x.SetFusion(!opt.noFuse)
-	s.cpu.x.FuseCounts(&g.fuse.tries, &g.fuse.runs)
-	s.cpu.x.Sit(g.cpu)
-	s.cpu.x.SetChunk(opt.prefillChunk)
-	s.setPlace(routeLanes, s.cpu.x)
+	s.exec.x = cpudev.NewExec(workers, cpudev.NewComposer(g.cpu.Forms(m.Id), g.cpu.Target.ISA(), workers.Workers(), opt.cpuFloat))
+	s.exec.x.SetFusion(!opt.noFuse)
+	s.exec.x.FuseCounts(&g.fuse.tries, &g.fuse.runs)
+	s.exec.x.Sit(g.cpu)
+	s.exec.x.SetChunk(opt.prefillChunk)
+	s.setPlace(routeLanes, s.exec.x)
 	s.holdFrames()
 	// The cache width: WithKVType (or WithKVF16, SetKVType) forces it;
 	// otherwise the CPU device's own (Exec.DefaultKV). A quantized cache is
 	// only ever forced (KVType).
 	want := kvFmtOf(opt.kvType)
 	if !opt.kvTypeSet {
-		want = s.cpu.x.DefaultKV()
+		want = s.exec.x.DefaultKV()
 	}
 	// A selection caches its indexer's key in the row, and the selection over
 	// it is discrete: a key rounded to binary16 moves a block's best score by
@@ -689,13 +689,13 @@ func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOp
 	s.kv = newKVCacheRange(c, s.nextCacheID(), nseq, s.kvl, nil, s.opt.kvPage, s.lo, s.hi, s.Session.cpuView(), g.cpu.KVPool(m.Id))
 	s.kv.reserve(s.maxSeq)
 	if err := s.kv.useArenas(s.maxSeq, s.kvArenaFor); err != nil {
-		s.cpu.x.Composer().Note(err)
+		s.exec.x.Composer().Note(err)
 	}
-	s.cpuPlace()
+	s.placeLanes()
 	// A text instance of a model with a tower runs its pictures through a
 	// tower run of its own, composed with it (tower.go); one that does not
 	// compose keeps its error for the picture that asks.
-	if c == m.Cfg && m.Tower != nil && s.cpu.x.Composer().Err() == nil {
+	if c == m.Cfg && m.Tower != nil && s.exec.x.Composer().Err() == nil {
 		if s.tower, s.towerErr = s.newTowerRun(); s.towerErr != nil {
 			s.tower = nil
 		}
@@ -778,11 +778,11 @@ func (s *Instance) Close() error {
 	}
 	s.tower.close()
 	s.tower = nil
-	s.cpu.x.Leave()
+	s.exec.x.Leave()
 	if s.root {
 		defer func() {
 			if s.owners[routeLanes] != nil {
-				s.cpu.x.DropQuota()
+				s.exec.x.DropQuota()
 				s.holdOn(routeLanes, nil)
 			}
 			if s.eng.ownCPU {
@@ -815,7 +815,7 @@ func (s *Instance) Close() error {
 		s.framesHeld = false
 	}
 	s.keepSpare()
-	s.cpu.x.Pool().Close()
+	s.exec.x.Pool().Close()
 	return nil
 }
 
@@ -1089,7 +1089,7 @@ func (s *Instance) reserveRows() error {
 			return fmt.Errorf("model: the devices cannot hold %d rows of %d positions "+
 				"for the blocks placed on them, and no other listed device takes one", s.nseq, s.maxSeq)
 		}
-		s.relocateToCPU(li)
+		s.relocateOff(li)
 	}
 	return nil
 }
@@ -2378,15 +2378,15 @@ func (s *Instance) relocateUntil(pos int, fits func() bool) {
 		if !toCPU && !spilled {
 			return
 		}
-		s.relocateToCPU(li)
+		s.relocateOff(li)
 	}
 }
 
-// relocateToCPU moves block li to the CPU device for this instance and
+// relocateOff moves block li to the CPU device for this instance and
 // remembers it, so that reclaim offers it back once the device reports room.
 // The block's history must already be in this session's cache (or never have
 // been written).
-func (s *Instance) relocateToCPU(li int) {
+func (s *Instance) relocateOff(li int) {
 	s.ld.ReleaseLayers(li, li+1)
 	s.unmarkOnDev(li)
 	// -gpu-grow would adopt the block straight back next token.
@@ -2598,7 +2598,7 @@ func (s *Instance) devApplied(a nn.HeadStage) error {
 // JIT is this state's generated-code tier: its vision segment runs on it
 // (Instance.Vision), so a model has one JIT and one worker pool a session.
 // Pool is the CPU device's workers this instance runs on.
-func (s *Instance) Pool() *cpu.Pool { return s.cpu.x.Pool() }
+func (s *Instance) Pool() *cpu.Pool { return s.exec.x.Pool() }
 
 // GPULayers is how many blocks a device took, which is the set and not the
 // prefix: on a hybrid the two differ and the count is what a caller means.
@@ -2811,7 +2811,7 @@ func (s *Instance) SetGPULayers(n int) int {
 }
 
 // Workers is how many worker threads the fast tier uses.
-func (s *Instance) Workers() int { return s.cpu.x.Pool().Workers() }
+func (s *Instance) Workers() int { return s.exec.x.Pool().Workers() }
 
 // Pos is the number of positions already in the cache.
 func (s *Session) Pos() int { return s.pos }
@@ -2839,9 +2839,9 @@ func (s *Instance) setKVFmt(f cpu.KVFmt) {
 	s.kv.ns, s.kv.budget = old.ns, old.budget
 	// The CPU's blocks read the new cache: its arenas, and forms for f32.
 	if err := s.kv.useArenas(s.maxSeq, s.kvArenaFor); err != nil {
-		s.cpu.x.Composer().Note(err)
+		s.exec.x.Composer().Note(err)
 	}
-	s.cpuPlace()
+	s.placeLanes()
 	s.Session.kvFormat = f
 }
 
@@ -3108,7 +3108,7 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 		in0, _ := pc.Faults()
 		defer func() {
 			in1, _ := pc.Faults()
-			s.cpu.x.Pool().SetSpinning(in1 == in0)
+			s.exec.x.Pool().SetSpinning(in1 == in0)
 		}()
 	}
 

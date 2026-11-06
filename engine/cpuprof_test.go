@@ -145,7 +145,7 @@ func TestComposedCPUProfile(t *testing.T) {
 			}
 		}
 		if composed {
-			if cb, _ := st.cpu.x.Block(st.lo); cb != nil && cb.F != nil {
+			if cb, _ := st.exec.x.Block(st.lo); cb != nil && cb.F != nil {
 				b.WriteString("  block 0's kernels in order:\n")
 				for i := range cb.F.Codes {
 					c := &cb.F.Codes[i]

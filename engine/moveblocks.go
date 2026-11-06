@@ -91,7 +91,7 @@ func (s *Instance) MoveBlocks(lo, hi int, to string) (BlockMove, error) {
 			s.pending.lo, s.pending.hi-1, s.pending.to)
 	}
 	if onCPU(to) {
-		return s.moveToCPU(lo, hi)
+		return s.moveOffCards(lo, hi)
 	}
 	if err := s.vacate(lo, hi); err != nil {
 		return BlockMove{}, err
@@ -109,7 +109,7 @@ func (s *Instance) MoveBlocks(lo, hi int, to string) (BlockMove, error) {
 	var mv BlockMove
 	t0 := time.Now()
 	if len(cpu) > 0 {
-		placed, err := s.placeFromCPU(lo, hi, to)
+		placed, err := s.placeOnto(lo, hi, to)
 		for _, li := range placed {
 			mv.KVBytes += s.blockHistoryAt(li, s.pos)
 			mv.RecBytes += s.recBytesOf(li)
@@ -320,7 +320,7 @@ func (p *PendingMove) Commit() (mv BlockMove, err error) {
 		}
 		if errors.Is(err, nn.ErrNotDirect) {
 			path = "host"
-			moved, err = s.moveBlockViaHost(nd, li, p.to)
+			moved, err = s.moveThroughMemory(nd, li, p.to)
 		}
 		if err != nil {
 			if mover != nil {
@@ -392,12 +392,12 @@ func (s *Instance) moveBlockDirect(mover nn.BlockMover, li int, to string, plan 
 	return res.Path, res.Bytes, true, nil
 }
 
-// moveBlockViaHost moves block li to the device named to through this instance's
+// moveThroughMemory moves block li to the device named to through this instance's
 // own cache: the history is read back to the session's cache (MigrateKV copies, so the source keeps
 // its rows until the target has them), the target takes the block, which
 // frees it on the source, and the history goes up to the target. False means
 // the target refused the block, which then stays where it was.
-func (s *Instance) moveBlockViaHost(nd nn.NamedDevice, li int, to string) (bool, error) {
+func (s *Instance) moveThroughMemory(nd nn.NamedDevice, li int, to string) (bool, error) {
 	if !s.migrateKV(li, s.pos, false) || !s.migrateRec(li, false) {
 		return false, fmt.Errorf("model: block %d's history would not come home from its device", li)
 	}

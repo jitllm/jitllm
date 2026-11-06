@@ -106,7 +106,7 @@ func (s *Instance) collapseStreams(x []float32, n int) error {
 // composed form serves.
 func (s *Instance) streamsDeclined(what string, why nn.Decline) error {
 	return fmt.Errorf("model: the streams' %s has no composed form on this instance (%s): %v %v",
-		what, nn.DeclineName(int(why)), s.cpu.x.Composer().Err(), s.m.FrontGraphs().StreamsErr)
+		what, nn.DeclineName(int(why)), s.exec.x.Composer().Err(), s.m.FrontGraphs().StreamsErr)
 }
 
 // draftStreams lays a prediction block's draft rows, which arrive with every

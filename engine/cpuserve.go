@@ -24,13 +24,13 @@ import (
 // over the instance's pool. Every block step on the CPU is counted served or
 // declined by name (CPUBlockSteps), as the tier counts a card's.
 
-// cpuRefused counts the composer's decline of block li's step on the CPU and
+// blockRefusal counts the composer's decline of block li's step on the CPU and
 // is the step's error: the composer is the only path, so no other kernels run
 // the block.
-func (s *Instance) cpuRefused(li int, why nn.Decline) error {
-	s.cpu.x.Steps().Decline(nn.PartBlock, why)
-	if why == nn.DeclineNotFormed && s.cpu.x.Composer().Err() != nil {
-		return fmt.Errorf("model: the composer does not serve block %d on the CPU: %s (the first: %w)", li, nn.DeclineName(int(why)), s.cpu.x.Composer().Err())
+func (s *Instance) blockRefusal(li int, why nn.Decline) error {
+	s.exec.x.Steps().Decline(nn.PartBlock, why)
+	if why == nn.DeclineNotFormed && s.exec.x.Composer().Err() != nil {
+		return fmt.Errorf("model: the composer does not serve block %d on the CPU: %s (the first: %w)", li, nn.DeclineName(int(why)), s.exec.x.Composer().Err())
 	}
 	if why == nn.DeclineNoGraph {
 		u, err := s.m.UncoveredAt(li)
@@ -40,14 +40,14 @@ func (s *Instance) cpuRefused(li int, why nn.Decline) error {
 }
 
 // cpuHeadRefused is the composer's decline of the head on the CPU as the
-// step's error, as cpuRefused is a block's.
+// step's error, as blockRefusal is a block's.
 func cpuHeadRefused(why nn.Decline) error {
 	return fmt.Errorf("model: the composer does not serve the head on the CPU: %s", nn.DeclineName(int(why)))
 }
 
-// cpuState is a instance's composed CPU blocks: each block's form and its own
+// laneDevice is a instance's composed CPU blocks: each block's form and its own
 // buffers, the history tables, and the census.
-type cpuState struct {
+type laneDevice struct {
 	// x is the instance's execution on the device: its workers, its
 	// blocks' forms, the runners that call them and what it served.
 	x *cpudev.Exec
@@ -103,27 +103,27 @@ func addr[T any](x []T) unsafe.Pointer { return unsafe.Pointer(unsafe.SliceData(
 // unmapOwn returns the own buffers and the n-gram table's view held off
 // the heap.
 func (s *Instance) unmapOwn() {
-	s.cpu.x.Close()
+	s.exec.x.Close()
 	s.ws.b.Close()
 }
 
-// cpuPlace composes a new instance's blocks on the CPU: each block of the
+// placeLanes composes a new instance's blocks on the CPU: each block of the
 // instance's range no device holds, once, at its placement (cpuCompose).
-func (s *Instance) cpuPlace() {
+func (s *Instance) placeLanes() {
 	// A segment's blocks are past the text model's in the one block space.
 	n := max(s.c.NLayer, s.hi)
 	planes := [2][]float32{s.tablePlanes(0), s.tablePlanes(1)}
 	s.lease = blockLease{m: s.m, fr: s.fr, mu: &s.bind, hold: &s.expHold, res: s.res, hot: s.hot, layers: s.layers,
 		lo: s.lo, ws: &s.ws}
-	s.cpu.x.Place(n, &s.lease, &s.ws.b, planes, s.c.NExpert, s.prof)
-	if s.cpu.lanes == nil {
-		s.cpu.lanes = cpudev.NewLanes(s.cpu.x, &s.ws.b, &s.lease, s.c.NEmbd, s.nseq, s.c.Streams(), s.dg.ConvStateLen(),
+	s.exec.x.Place(n, &s.lease, &s.ws.b, planes, s.c.NExpert, s.prof)
+	if s.exec.lanes == nil {
+		s.exec.lanes = cpudev.NewLanes(s.exec.x, &s.ws.b, &s.lease, s.c.NEmbd, s.nseq, s.c.Streams(), s.dg.ConvStateLen(),
 			func(li int) { s.trace(li, "ffn_resid", s.x) })
 		s.bindLanes(s.Session)
 	}
 	for li := s.lo; li < min(s.hi, n); li++ {
 		if !s.devAt(li) {
-			s.cpu.x.PrepLayer(li, s.planFor(li), nil)
+			s.exec.x.PrepLayer(li, s.planFor(li), nil)
 		}
 	}
 	s.placeParts()

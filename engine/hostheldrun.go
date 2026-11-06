@@ -24,7 +24,7 @@ func (s *Instance) watchSystem(d nn.LayerDevice) {
 // device budgets the model's frames by every instance holding the model
 // there (cpudev.Quota). An instance the root made shares the root's.
 func (s *Instance) applyQuota() {
-	q := s.cpu.x.Quota()
+	q := s.exec.x.Quota()
 	if q == nil {
 		return
 	}
