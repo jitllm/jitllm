@@ -3743,9 +3743,16 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	// scratch serves one width, so a ragged chunk runs the full width with the
 	// surplus rows zeroed (harmless; see Layers).
 	nrow := len(x) / p.ResidW()
-	if nrow < 1 || nrow > R || pos+nrow > p.MaxSeq {
+	if nrow < 1 || nrow > R || rag == nil && pos+nrow > p.MaxSeq {
 		return refuse("%d rows at position %d on a scratch of %d rows and capacity %d",
 			nrow, pos, R, p.MaxSeq)
+	}
+	if rag != nil {
+		for r := range nrow {
+			if rag.pos[r] >= p.MaxSeq {
+				return refuse("row %d at position %d past a capacity of %d", r, rag.pos[r], p.MaxSeq)
+			}
+		}
 	}
 	hx := bs.hx[:R*p.ResidW()]
 	// A promised embedding is gathered into the scratch, not uploaded (see
