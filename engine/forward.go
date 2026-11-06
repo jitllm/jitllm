@@ -79,9 +79,6 @@ type Instance struct {
 	// own is the session the instance was made with, which its Close
 	// closes; Session is the one its calls run for (use).
 	own *Session
-	// seat is the instance's place on the CPU device, which a prefill there
-	// asks whether another instance decodes.
-	seat *cpudev.Seat
 	// opt is the instance's knobs, and eng what the engine holds beside it
 	// for its model's instances (engineState).
 	opt modelOpts
@@ -172,9 +169,9 @@ type Instance struct {
 	// each goes at Close.
 	owners [2]nn.ModelOwner
 	// pageQuota is this instance's page budget (SetPageBudget), 0 for
-	// unlimited, and quota its record on the CPU device; a root's alone.
+	// unlimited; its record on the CPU device is the CPU executor's
+	// (cpudev.Exec.Quota), a root's alone.
 	pageQuota atomic.Uint64
-	quota     *cpudev.Quota
 	// fr is the CPU device's frames for the model (cpudev.CPU.Frames): the
 	// memory the blocks this instance runs on the CPU are read into. dense
 	// is the instance's own copy of the model's dense tensors, bound at fr.
@@ -555,7 +552,7 @@ func NewInstance(m *model.Model, maxSeq int, opts ...Option) (*Instance, error) 
 			// The CPU device holds the model for it from above.
 			s.root, s.owners[routeLanes] = true, g.cpu
 			s.pageQuota.Store(pq)
-			s.quota = q
+			s.cpu.x.SetQuota(q)
 			return s, nil
 		}
 	}
@@ -613,7 +610,6 @@ func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOp
 		m.Layers[li].CloneTo(&s.layers[li-lo])
 	}
 	s.gpuLayers = s.lo
-	s.seat = g.cpu.Sit()
 	// An instance over a prediction block projects through that block's
 	// head: the trunk's, bound with the instance's dense tensors, where the
 	// block has none of its own.
@@ -660,6 +656,7 @@ func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOp
 	s.cpu.x = cpudev.NewExec(workers, cpudev.NewComposer(g.cpu.Forms(m.Id), g.cpu.Target.ISA(), workers.Workers(), opt.cpuFloat))
 	s.cpu.x.SetFusion(!opt.noFuse)
 	s.cpu.x.FuseCounts(&g.fuse.tries, &g.fuse.runs)
+	s.cpu.x.Sit(g.cpu)
 	s.cpu.x.SetChunk(opt.prefillChunk)
 	s.setPlace(routeLanes, s.cpu.x)
 	s.holdFrames()
@@ -781,11 +778,11 @@ func (s *Instance) Close() error {
 	}
 	s.tower.close()
 	s.tower = nil
-	s.eng.cpu.Leave(s.seat)
+	s.cpu.x.Leave()
 	if s.root {
 		defer func() {
 			if s.owners[routeLanes] != nil {
-				s.quota.Drop()
+				s.cpu.x.DropQuota()
 				s.holdOn(routeLanes, nil)
 			}
 			if s.eng.ownCPU {
