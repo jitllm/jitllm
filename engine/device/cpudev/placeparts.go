@@ -123,6 +123,7 @@ func (e *Exec) PlaceParts(p *PartsPlan) Parts {
 			conv[i] = KVConvForms{FW: k.FW, HW: k.HW, Narrow: e.FormPart(k.Narrow), Widen: e.FormPart(k.Widen)}
 		}
 		out.KVConv = NewKVConv(e.dev, conv, p.KVHalf)
+		e.kvconv = out.KVConv
 	}
 	return out
 }
