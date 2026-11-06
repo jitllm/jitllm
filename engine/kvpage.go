@@ -691,7 +691,7 @@ func (s *kvPages) scatter(l kvLayout, slot, n int, k, v []float32) bool {
 // a bare counter restarts in every process, and a second process would address
 // the first one's pages in a shared store.
 func (s *Instance) nextCacheID() string {
-	return "session-" + strconv.FormatUint(s.m.Id, 16) + "-" + strconv.FormatInt(s.eng.cpu.NextSeq(s.m.Id), 10)
+	return "session-" + strconv.FormatUint(s.m.Id, 16) + "-" + strconv.FormatInt(s.storage().NextSequence(), 10)
 }
 
 // migrateKV moves block li's history between the host's pages and the tier.
