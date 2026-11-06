@@ -84,12 +84,17 @@ func TestEveryModelRunsOnACard(t *testing.T) {
 			if st.GPULayers() != m.Cfg.NLayer {
 				t.Fatalf("%d of %d blocks on the card; declined: %v", st.GPULayers(), m.Cfg.NLayer, st.DeviceDeclines())
 			}
+			formed := g.Stats().FormedAtStep
 			for i := range 3 {
 				lg, err := st.Forward(int32(1 + i))
 				if err != nil {
 					t.Fatalf("Forward on the card: %v (%s)", err, g.Err())
 				}
 				finite(t, "Forward on the card", lg)
+			}
+			if s := g.Stats(); s.FormedAtStep != formed {
+				t.Fatalf("the card formed %d part(s) at a step after placement (by part %v): %s",
+					s.FormedAtStep-formed, s.FormedAtStepParts, g.Err())
 			}
 		})
 	}
