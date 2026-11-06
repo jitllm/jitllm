@@ -164,11 +164,10 @@ type Config struct {
 	// wrong output that only an external oracle catches.
 	AttnSoftcap, FinalSoftcap float32
 	RopeBaseSWA               float64
-	// SWARopePlain makes the sliding layers' rotary carry no YaRN magnitude
-	// (AttnFactor) as well as no YaRN frequencies: OLMo 3's local layers
-	// rotate at their base unscaled (llama.cpp's olmo2 builder passes
-	// attn_factor 1 there, transformers builds them a default rotary).
-	SWARopePlain bool
+	// RopeScaleSWA is the sliding layers' rotary magnitude where the
+	// container states one of their own (jlm.Config.RopeScaleSWA); 0 is the
+	// full layers'.
+	RopeScaleSWA float64
 
 	// Rotary scaling; see jlm.Config. YarnFactor 0 is no YaRN and RopeLinear 0
 	// no linear interpolation. Both scale the global rotary only.
@@ -242,14 +241,10 @@ type Config struct {
 	// VNorm RMSNorms each head of v with no weight before it is cached
 	// (jlm.Flag2VNorm, Gemma 4).
 	VNorm bool
-	// BidirSWA says an image's rows see each other on the sliding layers
-	// only, the global ones staying causal: Gemma 4's 26B and 31B
-	// (use_bidirectional_attention "vision"), where Gemma 3's rows see each
-	// other on every layer. The E-models (per-layer embeddings) keep the
-	// image causal, as transformers' config and llama.cpp's mtmd both have
-	// them; the GGUF states neither, so it is read off the per-layer
-	// embedding, the one difference between the two lines.
-	BidirSWA bool
+	// bidir is, per layer, whether a picture's rows see each other in its
+	// attention, as the container states it (jlm.Config.BidirLayers); nil
+	// is every layer.
+	bidir []bool
 	// NKVShared, PLEDim and DoubleFFN are Gemma 4's E2B/E4B: the last
 	// NKVShared layers attend to an earlier layer's history (KVSource) and,
 	// under DoubleFFN, run an FFN twice NFFN wide (NFFNAt); PLEDim is each
@@ -709,7 +704,7 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 		SWAWindow:    int(c.SWAWindow),
 		SWAPeriod:    int(c.SWAPeriod),
 		RopeBaseSWA:  float64(c.RopeBaseSWA),
-		SWARopePlain: c.Arch == jlm.ArchOLMo3,
+		RopeScaleSWA: float64(c.RopeScaleSWA),
 		AttnSoftcap:  c.AttnSoftcap,
 		FinalSoftcap: c.FinalSoftcap,
 		YarnFactor:   float64(c.YarnFactor),
@@ -776,7 +771,7 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 	out.VNorm = c.Flags2.Has(jlm.Flag2VNorm)
 	out.DenseMoE = c.Flags2.Has(jlm.Flag2DenseMoE)
 	out.NKVShared, out.PLEDim = int(c.NKVShared), int(c.PLEDim)
-	out.BidirSWA = c.Arch == jlm.ArchGemma4 && c.PLEDim == 0
+	out.bidir = c.BidirLayers
 	out.IdxHeads, out.IdxHeadDim, out.IdxTopK = int(c.IdxHeads), int(c.IdxHeadDim), int(c.IdxTopK)
 	out.IdxBlock, out.IdxLocal = int(c.IdxBlock), int(c.IdxLocal)
 	if out.MSA() && (out.MLA() || out.IdxHeads != out.NKVHead || out.IdxHeadDim != out.HeadDim ||
@@ -1292,6 +1287,13 @@ func Open(path string, options ...Option) (*Model, error) {
 	if err := m.statesActivations(path); err != nil {
 		m.Close()
 		return nil, err
+	}
+	// Sliding layers with a scaled rotary or beside a tower read what a
+	// container written before StatementRevision does not state.
+	if c := m.Container.Config(); c.Revision < jlm.StatementRevision && c.SWAWindow > 0 &&
+		(c.YarnFactor > 1 || m.Container.Vision() != nil) {
+		m.Close()
+		return nil, &UpgradeRequiredError{Path: path, What: "sliding layers"}
 	}
 	if m.Cfg.AttnResBlock != 0 && m.Cfg.statedStreams() <= 1 {
 		m.Close()
@@ -2720,8 +2722,8 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 		// Gemma 4's sliding layers turn their own width, the plain rotary over
 		// all of a 256-wide head where the global layers turn 512.
 		r.NRot = cfg.NRotSWA
-		if cfg.SWARopePlain {
-			r.Scale = 1
+		if cfg.RopeScaleSWA != 0 {
+			r.Scale = cfg.RopeScaleSWA
 		}
 		if len(r.Runs) > 0 {
 			return nil, fmt.Errorf("model: %s: rotary sections on the sliding layers' own rotary, which the converter refuses",
@@ -3819,3 +3821,7 @@ func f32Bytes(v []float32) []byte {
 	}
 	return unsafe.Slice((*byte)(unsafe.Pointer(&v[0])), len(v)*4)
 }
+
+// BidirAt reports that a picture's rows see each other in layer li's
+// attention.
+func (c *Config) BidirAt(li int) bool { return len(c.bidir) == 0 || c.bidir[li] }

@@ -57,10 +57,13 @@ func reconvert(path string) error {
 		tools := voc == nil || len(voc.Templates) == 0 || len(voc.Tools.Calls) > 0
 		cfg := c.Config()
 		streams := cfg.AttnResBlock == 0 || cfg.Streams.N > 1
+		rev := cfg.Revision >= jlm.StatementRevision || cfg.SWAWindow == 0 || cfg.YarnFactor <= 1 && v == nil
 		c.Close()
 		switch {
-		case stated && tower && tools && streams:
+		case stated && tower && tools && streams && rev:
 			return nil
+		case !rev:
+			openErr = fmt.Errorf("it states nothing of its sliding layers")
 		case !streams:
 			openErr = fmt.Errorf("it states no residual streams")
 		case stated && tower:

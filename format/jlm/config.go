@@ -750,6 +750,16 @@ type Config struct {
 	// the head's read (streams.go). The sixteenth optional tail; see
 	// encodeConfig.
 	Streams Streams
+	// Revision is the converter's statement revision the container was
+	// written at (StatementRevision), 0 for one written before it. With
+	// RopeScaleSWA and BidirLayers, the seventeenth optional tail.
+	Revision uint8
+	// RopeScaleSWA is the sliding layers' rotary magnitude (YaRN's attention
+	// factor) where it is not the full layers' (AttnFactor); 0 is theirs.
+	RopeScaleSWA float32
+	// BidirLayers is, per layer, whether a picture's rows see each other in
+	// its attention; nil is every layer.
+	BidirLayers []bool
 
 	Flags Flags
 }
@@ -1229,4 +1239,15 @@ func (c *Config) GLU() GLU {
 		return GLU{GateTanh: c.SituBeta, UpTanh: c.SituLinearBeta}
 	}
 	return GLU{}
+}
+
+// StatementRevision is the revision of what this converter states: a
+// container written at an older one is upgraded (jitllm upgrade) where the
+// later statements matter to it.
+const StatementRevision = 1
+
+// Sliding reports that layer li attends over a sliding window: all but the
+// last of each SWAPeriod layers.
+func (c *Config) Sliding(li int) bool {
+	return c.SWAWindow > 0 && c.SWAPeriod > 0 && li%int(c.SWAPeriod) < int(c.SWAPeriod)-1
 }

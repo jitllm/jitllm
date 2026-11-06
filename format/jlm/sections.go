@@ -192,8 +192,12 @@ func encodeConfigAt(c *Config, v uint32) []byte {
 	// fifteenth, the router's stated weight, implies the first fourteen; an
 	// older reader drops it and weighs by the router its flags name. The
 	// sixteenth, the residual's stated streams, implies the first fifteen;
-	// an older reader drops it and refuses the streams it cannot state.
-	streams := c.Streams.N > 1
+	// an older reader drops it and refuses the streams it cannot state. The
+	// seventeenth, the statement revision with the sliding layers' rotary
+	// magnitude and the layers a picture's rows see each other on, implies
+	// the first sixteen; an older reader drops it.
+	rev := c.Revision != 0 || c.RopeScaleSWA != 0 || len(c.BidirLayers) != 0
+	streams := rev || c.Streams.N > 1
 	weight := streams || len(c.RouterWeight.Terms) != 0
 	score := weight || len(c.RouterScore.Terms) != 0
 	acts := score || len(c.Acts) != 0 || len(c.ActLayers) != 0
@@ -311,6 +315,14 @@ func encodeConfigAt(c *Config, v uint32) []byte {
 	}
 	if streams {
 		encodeStreams(w, &c.Streams)
+	}
+	if rev {
+		w.u8(c.Revision)
+		w.f32(c.RopeScaleSWA)
+		w.u32(uint32(len(c.BidirLayers)))
+		for _, b := range c.BidirLayers {
+			w.bool(b)
+		}
 	}
 	return w.b
 }
@@ -470,6 +482,13 @@ func decodeConfigAt(b []byte, v uint32) (*Config, error) {
 	if r.err == nil && len(r.b) > 0 {
 		decodeStreams(r, &c.Streams)
 	}
+	if r.err == nil && len(r.b) > 0 {
+		c.Revision = r.u8()
+		c.RopeScaleSWA = r.f32()
+		for range r.count(1) {
+			c.BidirLayers = append(c.BidirLayers, r.bool())
+		}
+	}
 	if r.err != nil {
 		return nil, r.err
 	}
@@ -478,6 +497,9 @@ func decodeConfigAt(b []byte, v uint32) (*Config, error) {
 	}
 	if err := c.Streams.valid(int(c.NLayer)); err != nil {
 		return nil, err
+	}
+	if n := len(c.BidirLayers); n != 0 && n != int(c.NLayer) {
+		return nil, fmt.Errorf("jlm: %d layers' bidirectional statement for %d layers", n, c.NLayer)
 	}
 	if err := ngramValid(c); err != nil {
 		return nil, err
