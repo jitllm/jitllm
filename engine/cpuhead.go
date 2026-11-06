@@ -21,43 +21,6 @@ import (
 // once for the instance at its placement (cpuPlaceHead) and counted served or
 // declined by name (CPUHeadSteps, CPUSampleSteps); a step forms nothing.
 
-// cpuPlaceHead composes the head's and the samplers' graphs for the CPU
-// device at the instance's placement (cpudev.Head).
-func (s *Instance) cpuPlaceHead() {
-	if s.cpu.x.Device() == nil {
-		return
-	}
-	fg := s.m.FrontGraphs()
-	var p [15]cpudev.Part
-	p[0] = s.cpuPart(fg.CpuHead, nn.DeclineNoGraph, 1)
-	p[1] = s.cpuPart(fg.CpuHidden, nn.DeclineNoGraph, 1)
-	p[2] = s.cpuPart(fg.CpuHidden, nn.DeclineNoGraph, cpuRowsCap)
-	none := nn.DeclineNoGraph
-	if fg.CpuHead != nil {
-		none = nn.DeclineHeadBias
-	}
-	p[3] = s.cpuPart(fg.PickHead, none, 1)
-	for i, g := range []*graph.Graph{fg.CpuSample, fg.CpuWalk, fg.CpuRow, fg.CpuCut, fg.CpuWalkProb, fg.CpuCutProb,
-		fg.CpuCutK, fg.CpuCutKProb} {
-		p[4+i] = s.cpuPart(g, nn.DeclineNoSample, 1)
-	}
-	if fg.OutNorm != nil {
-		p[12] = s.cpuPart(fg.OutNorm, nn.DeclineNoGraph, cpuRowsCap)
-	}
-	p[13] = s.cpuPart(fg.CpuLogprobs, nn.DeclineNoSample, 1)
-	p[14] = s.cpuPart(fg.CpuMask, nn.DeclineNoSample, 1)
-	parts := cpudev.HeadParts{Head: p[0], Hidden: p[1], Rows: p[2], Pick: p[3], Sample: p[4], Walk: p[5], Row: p[6],
-		Cut: p[7], WalkProb: p[8], CutProb: p[9], CutK: p[10], CutKProb: p[11], OutNorm: p[12], Logprobs: p[13], Mask: p[14]}
-	s.heads = cpudev.NewHead(s.cpu.x.Device(), s.cpu.x.Steps(), parts, fg.OutNorm != nil, blockWeights{ws: &s.ws, li: -1},
-		s.c.NEmbd, s.c.NVocab, model.MaxTopLogprobs)
-}
-
-// cpuPart is graph g composed on the CPU device as a part at rows rows
-// (cpudev.Exec.FormPart), none where the front end states no graph.
-func (s *Instance) cpuPart(g *graph.Graph, none nn.Decline, rows int) cpudev.Part {
-	return s.cpu.x.FormPart(s.partPlan(g, none, rows, nil))
-}
-
 // partPlan is graph g as a part at rows rows: its weights read in the
 // formats the container states for its block (the model's own,
 // jlm.DenseBlock, for the head's), over's for the roles over names. A role

@@ -3,7 +3,6 @@ package engine
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"github.com/jitllm/jitllm/nn"
 )
 
@@ -27,28 +26,6 @@ func (st *inputScratch) positions(n int) []int {
 		st.zpos = make([]int, n)
 	}
 	return st.zpos[:n]
-}
-
-// cpuPlaceEmbed composes the input rows' graphs for the CPU device at the
-// instance's placement: the token rows' (embedGraph without the streams past
-// the first) and an embedding span's given rows' (givenGraph), each a form of
-// one row and one of a chunk's at cpuRowsCap.
-func (s *Instance) cpuPlaceEmbed() {
-	if s.cpu.x.Device() == nil {
-		return
-	}
-	fg := s.m.FrontGraphs()
-	var p [4]cpudev.Part
-	p[0] = s.cpuPart(fg.CpuEmbed, nn.DeclineNoEmbed, 1)
-	p[1] = s.cpuPart(fg.CpuEmbed, nn.DeclineNoEmbed, cpuRowsCap)
-	if fg.Given != nil {
-		p[2] = s.cpuPart(fg.Given, nn.DeclineNoEmbed, 1)
-		p[3] = s.cpuPart(fg.Given, nn.DeclineNoEmbed, cpuRowsCap)
-	}
-	pw := s.c.PleWidth()
-	writesX := fg.Given != nil && (len(fg.Given.Out) > 1 || pw == 0)
-	s.inputs = cpudev.NewInputs(s.cpu.x.Device(), s.cpu.x.Steps(), p[0], p[1], p[2], p[3], fg.Given != nil, writesX,
-		blockWeights{ws: &s.ws, li: cpuInputRows}, s.c.NEmbd, pw)
 }
 
 // embedRows writes the input rows of toks, at positions pos, into the rows
