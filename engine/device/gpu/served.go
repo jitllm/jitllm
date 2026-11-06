@@ -49,8 +49,9 @@ type composedPart struct {
 	vectors map[jlm.Role]backend.Buf
 	tables  map[composer.TableKey]backend.Buf
 	// history, keys and page are a block's history layout and its step's
-	// key bound and page.
+	// key bound and page; more its other histories' (its entries').
 	history    composer.History
+	more       []composer.History
 	keys, page int
 	// seqs is the sequences a step's rows are of (composer.Step.Seqs): 1 for a
 	// form of one sequence's rows in position order, 0 for a row each.
@@ -263,6 +264,7 @@ func (g *devTier) askPart(r *composer.Registry, sl *composedPart, rows int) (com
 		Rotaries: sl.rotaries,
 		Device:   dev,
 		History:  sl.history,
+		More:     sl.more,
 	})
 }
 
@@ -2938,6 +2940,15 @@ func (g *devTier) servedBlockAs(l *layer, li int, cs backend.Buf, pl *kvLayerPoo
 	if pl != nil && (!l.linear || l.withAttn) {
 		kk, kv, tab, geom = pl.k, pl.v, pl.tab, pl.geom
 	}
+	// A block keeping entries reads them as its history 1.
+	var ek, etab backend.Buf
+	var more []composer.History
+	if g.kvp != nil {
+		if pe := g.kvp.layers[entKey(l.kvSrc)]; pe != nil {
+			ek, etab = pe.k, pe.tab
+			more = []composer.History{{ValuesInKeys: true, Period: pe.geom.period}}
+		}
+	}
 	sk := servedKey{kind: kind, graph: l.graph, rows: R, keys: keys, page: page, half: geom.f16, latent: geom.mla, seqs: seqs, stream: run != nil,
 		held: l.pagedHeld()}
 	sv, err := g.servedFor(sk, func() (composedPart, error) {
@@ -2950,8 +2961,12 @@ func (g *devTier) servedBlockAs(l *layer, li int, cs backend.Buf, pl *kvLayerPoo
 			weights: map[jlm.Role]*resident{}, vectors: map[jlm.Role]backend.Buf{},
 			tables: map[composer.TableKey]backend.Buf{tableKey(composer.TableAngles): cs, tableKey(composer.TableKeys): kk, tableKey(composer.TableValues): kv, tableKey(composer.TablePages): tab, tableKey(composer.TableRows): rows,
 				tableKey(composer.TableWindows): rowsW, tableKey(composer.TableQOff): qOff, tableKey(composer.TableCall): calls},
-			history: poolHistory(geom),
-			keys:    keys, page: page, seqs: seqs, paged: l.paged()}
+			history: poolHistory(geom), more: more,
+			keys: keys, page: page, seqs: seqs, paged: l.paged()}
+		if ek != nil {
+			sl.tables[composer.TableKey{Table: composer.TableKeys, Instance: 1}] = ek
+			sl.tables[composer.TableKey{Table: composer.TablePages, Instance: 1}] = etab
+		}
 		if run != nil {
 			sl.history.Passes = true
 			sl.tables[tableKey(composer.TableRunIn)], sl.tables[tableKey(composer.TableRunOut)] = run[0], run[1]
@@ -3016,6 +3031,10 @@ func (g *devTier) servedBlockAs(l *layer, li int, cs backend.Buf, pl *kvLayerPoo
 	t := sv.sl.tables
 	t[tableKey(composer.TableAngles)], t[tableKey(composer.TableKeys)], t[tableKey(composer.TableValues)], t[tableKey(composer.TablePages)], t[tableKey(composer.TableRows)], t[tableKey(composer.TableWindows)], t[tableKey(composer.TableQOff)] = cs, kk, kv, tab, rows, rowsW, qOff
 	t[tableKey(composer.TableCall)] = calls
+	if ek != nil {
+		t[composer.TableKey{Table: composer.TableKeys, Instance: 1}] = ek
+		t[composer.TableKey{Table: composer.TablePages, Instance: 1}] = etab
+	}
 	if run != nil {
 		t[tableKey(composer.TableRunIn)], t[tableKey(composer.TableRunOut)] = run[0], run[1]
 	}
@@ -3055,9 +3074,9 @@ func (g *devTier) bindRotaries(t map[composer.TableKey]backend.Buf, bs *blockScr
 }
 
 // readsPlanes reports whether a form of g reads the rotary's planes: a
-// pooled selection turning its blocks.
+// pooled selection turning its blocks, or a rotary value at windows.
 func readsPlanes(g *graph.Graph) bool {
 	return slices.ContainsFunc(g.Ops, func(o graph.Op) bool {
-		return o.Kind == graph.OpSelect && o.Attr.Pooled && o.Attr.NRot > 0
+		return o.Kind == graph.OpSelect && o.Attr.Pooled && o.Attr.NRot > 0 || o.Kind == graph.OpRopeTable
 	})
 }

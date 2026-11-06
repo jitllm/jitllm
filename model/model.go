@@ -258,6 +258,10 @@ type Config struct {
 	// sel is how the blocks' attention selects the history it reads, the
 	// container's statement (jlm.Selection); nil for none.
 	sel *jlm.Selection
+	// compKinds is each block's compression (the container's CompKinds)
+	// and compRate the positions an entry of each kind pools.
+	compKinds []jlm.CompKind
+	compRate  [3]int
 	// HCMult is the residual streams a hyper-connected model carries.
 	HCMult int
 	// DeltaDecay and DeltaGate are the delta rule's decay and output gate as
@@ -311,7 +315,12 @@ func (c *Config) periodLocal(il int) bool {
 
 // ropeLocal says block il turns by the sliding blocks' rotary where the
 // model holds one: a sliding block.
-func (c *Config) ropeLocal(il int) bool { return c.SWA(il) }
+func (c *Config) ropeLocal(il int) bool {
+	// A compressing block windows its rows and turns by the model's
+	// rotary, as its entries do.
+	_, rate := c.CompAt(il)
+	return c.SWA(il) && rate == 0
+}
 
 // AttnWindow is the key range layer il attends to from position pos: w0 is
 // the first key and an how many there are, so the keys are w0..w0+an-1 and
@@ -419,7 +428,21 @@ func (c *Config) KVRowAt(li int) int {
 	if c.KeyHeadAt(li) {
 		return (c.NKVHead + 1) * c.HeadDim
 	}
+	if _, rate := c.CompAt(li); rate > 0 {
+		// The row carries the compressor's values and gates past the key.
+		return c.KVDimAt(li) + 2*c.HeadDimAt(li)
+	}
 	return c.KVDimAt(li)
+}
+
+// CompAt is block li's compression and the positions an entry of it pools:
+// CompNone and 0 for a block that keeps no entries.
+func (c *Config) CompAt(li int) (jlm.CompKind, int) {
+	if li < 0 || li >= len(c.compKinds) || int(c.compKinds[li]) >= len(c.compRate) {
+		return jlm.CompNone, 0
+	}
+	k := c.compKinds[li]
+	return k, c.compRate[k]
 }
 
 // MixedGeom reports that the blocks do not all attend at one geometry: a
@@ -692,9 +715,9 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 			"convert the model again", c.Arch, c.HCMult)
 	}
 	for li, k := range c.CompKinds {
-		if k != jlm.CompNone {
-			return nil, fmt.Errorf("model: %v's block %d attends a compressed history, which has no composed form "+
-				"stated from the container", c.Arch, li)
+		if k == jlm.CompCSA {
+			return nil, fmt.Errorf("model: %v's block %d attends a compressed history through an indexer, which has no "+
+				"composed form stated from the container", c.Arch, li)
 		}
 	}
 	out := &Config{
@@ -780,6 +803,7 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 	out.NKVShared, out.PLEDim = int(c.NKVShared), int(c.PLEDim)
 	out.bidir = c.BidirLayers
 	out.sel = c.Selection
+	out.compKinds, out.compRate = c.CompKinds, [3]int{0, int(c.CompRateCSA), int(c.CompRateHCA)}
 	if s := out.sel; s != nil && !out.MLA() && (s.KeyWidth != uint32(out.HeadDim) ||
 		s.Groups != 1 && s.Groups != uint32(out.NKVHead) || out.MixedGeom() || out.NKVShared != 0) {
 		return nil, fmt.Errorf("model: %s: a selection of %d keys %d wide over %d kv heads of %d", out.Arch,

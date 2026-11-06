@@ -5119,6 +5119,7 @@ func (g *devTier) releaseBlock(li int) {
 	// there.
 	if g.kvp != nil {
 		g.dropKVLayer(g.kvp, li)
+		g.dropKVLayer(g.kvp, entKey(li))
 	}
 	if n := l.recBytes; n > 0 {
 		g.refund(n)
@@ -5269,6 +5270,7 @@ func (g *devTier) dropHistory(li int, l *layer, sid uint64) bool {
 		// held here is room again, whoever keeps the block.
 		delete(l.kv, sid)
 		g.pagedLeave(li, sid, l)
+		g.pagedLeave(entKey(li), sid, l)
 		freed = true
 	} else if kvp != nil && kvp.shared {
 		delete(l.kv, sid)

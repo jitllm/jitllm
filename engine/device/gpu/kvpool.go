@@ -3,6 +3,8 @@ package gpu
 import (
 	"errors"
 	"fmt"
+	"github.com/jitllm/jitllm/composer"
+	"github.com/jitllm/jitllm/graph"
 	"slices"
 	"unsafe"
 
@@ -29,10 +31,41 @@ type kvGeom struct {
 	kvRow int
 	f16   bool
 	mla   bool
+	// period, past 1, is an entries plane's: one entry each period
+	// positions, a page holding its positions' and one spare slot
+	// (composer.History.Period).
+	period int
 }
 
 // kWords and vWords are one page's K and V in 32-bit words.
-func (k kvGeom) kWords(p int) int { return p * k.kvRow }
+func (k kvGeom) kWords(p int) int {
+	if k.period > 1 {
+		return composer.History{Period: k.period}.Slots(p) * k.kvRow
+	}
+	return p * k.kvRow
+}
+
+// entBit marks a pool key as a block's entries plane: entKey(li) is block
+// li's, keyBlock the block a key is of.
+const entBit = 1 << 24
+
+func entKey(li int) int { return li | entBit }
+
+func keyBlock(key int) int { return key &^ entBit }
+
+// entriesOf is the entries plane block graph g appends to its history 1:
+// the period and the entry's width, 0 and 0 for none.
+func entriesOf(g *graph.Graph) (period, width int) {
+	if g == nil {
+		return 0, 0
+	}
+	for _, o := range g.Ops {
+		if o.Kind == graph.OpKVAppend && len(o.Writes) == 1 && o.Writes[0].Hist == 1 {
+			return max(1, o.Attr.Span), g.Values[o.In[0]].Width
+		}
+	}
+	return 0, 0
+}
 func (k kvGeom) vWords(p int) int {
 	switch {
 	case k.mla:

@@ -139,3 +139,25 @@ func (c *Context) onHistory(o graph.Op) (undo func(), err error) {
 
 // tab is table t of the history the op being decomposed reads.
 func (c *Context) tab(t Table) Operand { return t.of(int(c.hist)) }
+
+// Slots is a page's slots of a history laid out as h, its pages of page
+// positions: a position each, or an entry each Period and one past them.
+func (h History) Slots(page int) int { return h.slots(page) }
+
+// MoreOf is the layouts of graph g's histories past the block's own, as
+// its appends state them (Request.More): history h at [h-1], an entry each
+// append's Span positions, its values its keys where the append's are.
+func MoreOf(g *graph.Graph) []History {
+	var more []History
+	for _, o := range g.Ops {
+		if o.Kind != graph.OpKVAppend || len(o.Writes) != 1 || o.Writes[0].Hist == 0 {
+			continue
+		}
+		h := int(o.Writes[0].Hist)
+		for len(more) < h {
+			more = append(more, History{})
+		}
+		more[h-1] = History{ValuesInKeys: o.In[0] == o.In[1], Period: max(1, o.Attr.Span)}
+	}
+	return more
+}

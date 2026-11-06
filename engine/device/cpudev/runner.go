@@ -23,6 +23,10 @@ type Bound struct {
 	// page table.
 	Keys, Values unsafe.Pointer
 	Pages        []uint32
+	// Entries and EntryPages are its entries plane and that plane's page
+	// table (the composer's history-1 tables), where the block keeps one.
+	Entries    unsafe.Pointer
+	EntryPages []uint32
 	// CSSWA is the call's second rotary's table where the model trains one,
 	// RopeRows and RopeMarks a rotary table's call's rows and its session's
 	// marks.
@@ -131,6 +135,7 @@ func (r *Runner) CallOf(b *Bound, f *Form) *Call {
 	a[SrcRopeRows], a[SrcRopeMarks] = ptr(b.RopeRows), ptr(b.RopeMarks)
 	a[SrcKeys], a[SrcValues] = b.Keys, b.Values
 	a[SrcPages], a[SrcRows], a[SrcCall] = ptr(b.Pages), ptr(b.Rows), unsafe.Pointer(&r.call[0])
+	a[SrcEntries], a[SrcEntryPages] = b.Entries, ptr(b.EntryPages)
 	if b.RecState != nil {
 		a[SrcRecState], a[SrcRecConv] = b.RecState, b.RecConv
 		a[SrcRecConvOut] = a[SrcRecConv]

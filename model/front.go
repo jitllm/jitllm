@@ -890,9 +890,34 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 		v = b.Emit(graph.OpConcat, []graph.ValueID{v, zerosOf(b, "v.pad", ix.key)}, []graph.Result{{Name: "v.row", Width: rowW}}, nil,
 			graph.Attrs{}, nil, nil)[0]
 	}
+	// A compressing block's row carries its compressor's values and gates
+	// past the key; its entries, one a window of rate rows, are the
+	// history 1 its attention reads beside them.
+	_, rate := c.CompAt(li)
+	compRow := 0
+	if rate > 0 && !shared {
+		cv := matvec(n, jlm.RoleCompKV, f.Inventory[jlm.RoleCompKV].Rows)
+		cg := matvec(n, jlm.RoleCompGate, f.Inventory[jlm.RoleCompGate].Rows)
+		cw := b.G.Values[cv].Width
+		compRow = rowW + 2*cw
+		k = b.Emit(graph.OpConcat, []graph.ValueID{k, cv, cg}, []graph.Result{{Name: "k.row", Width: compRow}}, nil, graph.Attrs{}, nil, nil)[0]
+		v = k
+	}
 	hist := graph.SharedHistory(c.KVSource(li))
 	if !shared {
 		hist = graph.StateRef{State: graph.StateKV, Version: b.KVAppend(k, v, 0)}
+	}
+	var entries graph.StateRef
+	if compRow > 0 {
+		cw := (compRow - rowW) / 2
+		pooled := b.HistoryPool(hist, graph.Attrs{Span: rate, Width: compRow, Words: []uint64{0, uint64(rowW), uint64(rowW + cw), 0}},
+			jlm.RoleCompAPE, cw)
+		ent := b.Norm(pooled, jlm.RoleCompNorm, c.RMSEps)
+		if c.RopeAt(li) {
+			at := b.RopeTableAt(turn, rate)
+			ent = b.Emit(graph.OpRope, []graph.ValueID{ent, at}, []graph.Result{{Name: "ent.rope", Width: cw}}, nil, turn, nil, nil)[0]
+		}
+		entries = graph.StateRef{State: graph.StateKV, Hist: 1, Version: b.KVAppendEvery(1, ent, ent, 0, rate)}
 	}
 	scale := c.AttnScale
 	if scale == 0 {
@@ -904,7 +929,10 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 		a.Window, a.Chunked = c.SWAWindow, c.SWAChunked
 	}
 	var att graph.ValueID
-	if c.SelectAt(li) {
+	if compRow > 0 {
+		a.Width = compRow
+		att = b.AttendBoth(q, hist, entries, rate, (compRow-rowW)/2, a, stored(jlm.RoleAttnSinks)...)
+	} else if c.SelectAt(li) {
 		a.Width = rowW
 		att = b.AttendSelected(q, hist, m.selected(b, li, ix, hist, kvDim, rowW), a, stored(jlm.RoleAttnSinks)...)
 	} else {

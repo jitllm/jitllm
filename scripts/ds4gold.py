@@ -111,6 +111,9 @@ SPECS = {
     # Every block sliding: the hyper-connections and the token-routed
     # experts without a compressed history.
     "synth-deepseek4-sliding": lambda: v4((0, 0, 0, 0)),
+    # Sliding and heavily compressed blocks: entries pooled every 8
+    # positions and attended beside the window, no indexer.
+    "synth-deepseek4-hca": lambda: v4((0, 8, 0, 8)),
 }
 
 

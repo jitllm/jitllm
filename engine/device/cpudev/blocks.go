@@ -16,6 +16,8 @@ type Row struct {
 	CS, CSSWA, Side []float32
 	Pages           []uint32
 	Keys, Values    unsafe.Pointer
+	Entries         unsafe.Pointer
+	EntryPages      []uint32
 	KeyStart, Pos   int
 	// PagePos is the positions a page of the history holds.
 	PagePos           int
@@ -61,7 +63,7 @@ func (bl *Blocks) Row(li int, cb *Block, r *Row) error {
 	b := &bl.bound
 	*b = Bound{Li: li, Own: bl.dev.Own(cb.F), CS: r.CS, CSSWA: r.CSSWA, X: r.X, Stride: r.Stride, Rows: bl.rows[:], N: 1,
 		Pages: r.Pages, Keys: r.Keys, Values: r.Values, RecLi: r.RecLi, RecState: r.RecState, RecConv: r.RecConv,
-		Weights: r.Weights}
+		Weights: r.Weights, Entries: r.Entries, EntryPages: r.EntryPages}
 	if r.Side != nil {
 		b.Side = r.Side[cb.SideOff:]
 	}
@@ -101,6 +103,8 @@ type Rows struct {
 	Pages                  []uint32
 	PagePos                int
 	Keys, Values           unsafe.Pointer
+	Entries                unsafe.Pointer
+	EntryPages             []uint32
 	Spans                  []uint32
 	Pos                    []int
 	Tok                    []int32
@@ -194,7 +198,8 @@ func (bl *Blocks) calls(li int, f *Form, in *Rows, lo, hi int, stash uint8) erro
 			bside = bside[in.SideOff:]
 		}
 		*b = Bound{Li: li, Own: bl.dev.Own(f), CS: in.CS[r0*in.NRot:], X: bx, Stride: bstride, Rows: bl.rowsTab, N: k,
-			Pages: bl.faultPages(in.Pages, in.PagePos, end), Side: bside, Weights: in.Weights, Keys: in.Keys, Values: in.Values}
+			Pages: bl.faultPages(in.Pages, in.PagePos, end), Side: bside, Weights: in.Weights, Keys: in.Keys, Values: in.Values,
+			Entries: in.Entries, EntryPages: in.EntryPages}
 		if in.CSSWA != nil {
 			b.CSSWA = in.CSSWA[r0*in.NSWA:]
 		}
