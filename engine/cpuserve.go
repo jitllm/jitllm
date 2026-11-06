@@ -135,7 +135,6 @@ type cpuState struct {
 	// (composer.TablePlanes), folded from the model's rotaries when the
 	// instance places its blocks (cpuTablePlanes).
 	tabPlanes [2][]float32
-	mtp       cpuMTPState
 }
 
 // cpuFault is a gate's violation of the composed CPU path's bindings.

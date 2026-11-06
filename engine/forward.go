@@ -134,6 +134,9 @@ type Instance struct {
 	outW    *model.Tensor
 	// ws is where this instance's forms read their weights.
 	ws weightSource
+	// entry is the device writing a prediction block's entry rows, nil on an
+	// instance that starts at no prediction block.
+	entry nn.EntryDevice
 	// tables is the device writing a call's rotary tables, tabDesc the
 	// call's rows as the caller describes them.
 	tables  nn.TablesDevice

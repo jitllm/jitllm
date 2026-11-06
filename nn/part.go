@@ -222,6 +222,13 @@ type Ledger interface {
 	AccountOn(dev string) (Account, bool)
 }
 
+// EntryDevice is a device writing a prediction block's entry: `rows` rows
+// of z, the rows the block reads, from the tokens toks and the trunk's
+// hidden rows x, reporting why it did not serve them.
+type EntryDevice interface {
+	Entry(z, x []float32, toks []int32, rows int) Decline
+}
+
 // TablesDevice is a device writing a call's rotary tables: row i at the
 // cache position desc[2i], its sequence's marks from desc[2i+1] in marks,
 // into cs and csSWA; SetGrid makes them a grid table's over a picture, its
