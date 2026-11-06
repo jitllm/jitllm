@@ -15,9 +15,6 @@ func (s *Instance) qkNorms(li int) (q, k []float32) {
 	return l.QNorm, l.KNorm
 }
 
-// cpuISA is the extensions the model's CPU device forms for (its Host's).
-func (s *Instance) cpuISA() cpu.ISA { return s.eng.cpu.Target.ISA() }
-
 // Trace installs a callback invoked with every intermediate vector, for diffing
 // against an independent oracle layer by layer. nil disables it.
 func (s *Instance) Trace(fn func(layer int, name string, v []float32)) { s.opt.tracer = fn }

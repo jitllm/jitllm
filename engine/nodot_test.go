@@ -29,7 +29,7 @@ func nodotFormed(t *testing.T, m *model.Model, want bool, io ...Option) {
 	t.Helper()
 	s := testInstance(t, m, 8, io...)
 	defer s.Close()
-	if got := s.cpuISA()&cpu.ISADotProd != 0; got != want {
+	if got := s.cpu.x.ISA()&cpu.ISADotProd != 0; got != want {
 		t.Fatalf("the CPU device states FEAT_DotProd %v, want %v: the arm formed the other int8 dots", got, want)
 	}
 }

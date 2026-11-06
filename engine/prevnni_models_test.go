@@ -113,7 +113,7 @@ func noVNNI(t *testing.T, m *model.Model, io ...Option) {
 	t.Helper()
 	s := testInstance(t, m, 8, io...)
 	defer s.Close()
-	if s.cpuISA()&cpu.ISAVNNI != 0 {
+	if s.cpu.x.ISA()&cpu.ISAVNNI != 0 {
 		t.Fatal("a model opened on cpu:novnni has a CPU device stating VNNI")
 	}
 }

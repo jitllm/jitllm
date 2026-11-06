@@ -401,7 +401,7 @@ func (s *Instance) settleHist() error {
 // session bound for the moves: it holds no history to carry. err where they
 // do not.
 func (s *Instance) roomFor(err error) error {
-	if !s.relocate || !s.cpuListed() || s.own == nil || s.ld == nil {
+	if !s.relocate || !s.listed(routeLanes) || s.own == nil || s.ld == nil {
 		return err
 	}
 	if s.Session != s.own {

@@ -426,14 +426,14 @@ const (
 
 // PromptChunk is how many prompt tokens this instance's Prefill takes in one
 // chunk: a pipelined chunk when every block is on a device that crosses
-// several cards (deviceChunk), a device chunk on a device, the host's chunk
+// several cards (chunkOn), a device chunk on a device, the CPU's chunk
 // otherwise. A caller feeding a prompt in pieces feeds pieces this wide to
 // keep the path Prefill would take on the whole prompt.
 func (s *Instance) PromptChunk() int {
 	if s.devCount() > 0 {
-		return s.deviceChunk()
+		return s.chunkOn(routeView)
 	}
-	return s.hostChunk()
+	return s.chunkOn(routeLanes)
 }
 
 // RoutedStepRows is the rows StepRuns has run as routed steps across sessions,
