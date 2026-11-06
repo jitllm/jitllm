@@ -85,7 +85,8 @@ const ds4SwiGLULimit = 10
 // docs/engineering-history/model-correctness.md,
 // "convert/deepseek4.go: deepseek4Config".
 func deepseek4Config(f *meta.File, c *jlm.Config) error {
-	c.Flags2 |= jlm.Flag2SwiGLUClamp | jlm.Flag2ExpertSqrtSoftplus
+	c.Flags2 |= jlm.Flag2SwiGLUClamp | jlm.Flag2ExpertSqrtSoftplus | jlm.Flag2RopeTail | jlm.Flag2KeyValue |
+		jlm.Flag2QUnitNorm | jlm.Flag2OutUnrotated
 	if c.NKVHead != 1 {
 		return fmt.Errorf("%d kv heads: DeepSeek V4's attention is one shared key and value: %w",
 			c.NKVHead, ErrNotImplemented)
