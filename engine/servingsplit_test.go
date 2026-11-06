@@ -155,7 +155,7 @@ func TestServingSplitAB(t *testing.T) {
 			}
 		})
 		time.Sleep(20 * time.Millisecond)
-		n0, r0 := toks.Load(), d.FusedRuns
+		n0, r0 := toks.Load(), d.FusedRuns()
 		t0 := time.Now()
 		for i := range run {
 			if _, err := d.ForwardGreedy(int32(1 + i%100)); err != nil {
@@ -166,7 +166,7 @@ func TestServingSplitAB(t *testing.T) {
 		n1 := toks.Load()
 		stop.Store(true)
 		wg.Wait()
-		return result{dec: el, pre: float64(n1-n0) / el.Seconds(), fused: d.FusedRuns - r0, onE: s.ServedOnE}
+		return result{dec: el, pre: float64(n1-n0) / el.Seconds(), fused: d.FusedRuns() - r0, onE: s.ServedOnE}
 	}
 	var starved, onEBase, onESplit int
 	ab := func(a, b arm) string {

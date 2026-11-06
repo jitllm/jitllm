@@ -15,30 +15,17 @@ package engine
 // token's runs follow the next token's placement and residency as they are.
 
 // fuseRun opens a fused run unless one is open or this instance runs per op.
-func (s *Instance) fuseRun() {
-	if s.fused || s.fuseOff {
-		return
-	}
-	s.eng.fuse.tries.Add(1)
-	if s.cpu.workers.Fuse() {
-		s.fused = true
-		s.FusedRuns++
-		s.eng.fuse.runs.Add(1)
-	}
-}
 
 // unfuse closes the open fused run, if there is one.
-func (s *Instance) unfuse() {
-	if s.fused {
-		s.fused = false
-		s.cpu.workers.Unfuse()
-	}
-}
+func (s *Instance) unfuse() { s.cpu.x.Unfuse() }
 
 // SetBlockFusion turns fused host runs on or off for this instance's decode
 // tokens (WithBlockFusion is the model-wide default): the A/B arm and the
 // gates' per-op reference.
-func (s *Instance) SetBlockFusion(on bool) { s.fuseOff = !on }
+func (s *Instance) SetBlockFusion(on bool) { s.cpu.x.SetFusion(on) }
+
+// FusedRuns counts the fused runs of the instance's decode blocks opened.
+func (s *Instance) FusedRuns() int64 { return s.cpu.x.FusedRuns() }
 
 // SetMatVecGroups turns groupOf on or off inside fused runs: off, a fused
 // run's matvecs and their activation quantization are a phase each.
