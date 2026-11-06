@@ -136,6 +136,9 @@ type Frames struct {
 	// planned it (planRunsBusy); landed wakes the callers that joined it.
 	busy   [][]bool
 	landed sync.Cond
+	// landedGen counts the landings landed broadcast (and Close), under mu:
+	// a reader waits for it to move past the one its plan saw (awaitLanded).
+	landedGen uint64
 	// specOn, specHeld and specCap are the speculative occupancy (readsvc.go),
 	// guarded by mu; spec is the queue and its workers.
 	specOn   []bool
@@ -1342,6 +1345,7 @@ func (f *Frames) Close() {
 	// to a nil map panics.
 	f.filled, f.resident, f.recent = nil, 0, -1
 	f.specOn, f.specHeld, f.busy = nil, 0, nil
+	f.landedGen++
 	if f.landed.L != nil {
 		f.landed.Broadcast()
 	}
