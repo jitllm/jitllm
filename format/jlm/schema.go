@@ -465,7 +465,7 @@ const (
 	RoleSCB Role = 402
 	RoleSCC Role = 403
 	RoleSCX Role = 404
-	// Mamba-1's (LayerMamba1): x_proj split at conversion into its three
+	// Mamba-1's (LayerScan): x_proj split at conversion into its three
 	// outputs -- the dt bottleneck, B and C -- dt_proj back up to the
 	// channels, and Jamba's three RMSNorm weights (FalconMamba's weightless
 	// norms are written as ones). Apart from the run above for the same

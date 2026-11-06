@@ -37,7 +37,7 @@ const (
 	ArchLFM2 Arch = 104
 
 	// ArchMamba is Mamba-1 (state-spaces/mamba, FalconMamba): every block a
-	// Mamba-1 mixer (LayerMamba1) under one RMSNorm, and no FFN.
+	// Mamba-1 mixer (LayerScan) under one RMSNorm, and no FFN.
 	ArchMamba Arch = 105
 
 	// ArchJamba is AI21's Jamba: Mamba-1 mixers with weighted dt/B/C norms

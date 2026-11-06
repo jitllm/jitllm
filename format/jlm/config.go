@@ -322,13 +322,13 @@ const (
 	// over NEmbd channels, C times that, out_proj. Its only state is the
 	// convolution's window.
 	LayerShortConv LayerKind = 10
-	// LayerMamba1 is Mamba-1's selective scan (Mamba, FalconMamba, Jamba): in
+	// LayerScan is Mamba-1's selective scan (Mamba, FalconMamba, Jamba): in
 	// the delta rule's terms every one of SSM.Inner channels is a value head
 	// of one row, with B and C shared by all of them and a decay that is a
 	// vector over the state (exp(dt*A), A one row of StateSize per channel).
 	// dt comes off a low-rank bottleneck of x (RoleSSMXDt, RoleSSMDtProj), B
 	// and C off x too, each optionally RMS-normed (Jamba, FalconMamba).
-	LayerMamba1 LayerKind = 11
+	LayerScan LayerKind = 11
 )
 
 // Recurrent reports whether a layer keeps a recurrent state in place of a KV
@@ -337,7 +337,7 @@ const (
 // prefix cache's restore point, a session's reset -- asks this, not one kind.
 func (k LayerKind) Recurrent() bool {
 	return k == LayerLinearAttn || k == LayerSSD || k == LayerSSDAttn || k == LayerShortConv ||
-		k == LayerMamba1
+		k == LayerScan
 }
 
 // Attends reports whether a layer runs softmax attention over a KV cache.
@@ -377,7 +377,7 @@ func (k LayerKind) String() string {
 		return "ssd+attn"
 	case LayerShortConv:
 		return "shortconv"
-	case LayerMamba1:
+	case LayerScan:
 		return "mamba1"
 	}
 	return "layer(" + itoa(uint64(k)) + ")"

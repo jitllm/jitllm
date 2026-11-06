@@ -8,7 +8,7 @@ import (
 	"github.com/jitllm/jitllm/format/jlm"
 )
 
-// Mamba-1's selective scan (jlm.LayerMamba1): plain Mamba and FalconMamba
+// Mamba-1's selective scan (jlm.LayerScan): plain Mamba and FalconMamba
 // (arch "mamba") and Jamba's recurrent blocks. In the delta rule's terms every
 // one of Inner channels is a value head of one row: NHeadV is Inner and the
 // state is StateSize wide per channel, B and C shared by every channel. The
@@ -66,7 +66,7 @@ func mamba1Kinds(f *meta.File, n uint32) ([]jlm.LayerKind, error) {
 	for i := range kinds {
 		kinds[i] = jlm.LayerFullAttn
 		if _, ok := f.Get("blk." + itoa(i) + ".ssm_conv1d.weight"); ok {
-			kinds[i], rec = jlm.LayerMamba1, rec+1
+			kinds[i], rec = jlm.LayerScan, rec+1
 		}
 	}
 	if rec == 0 {
@@ -155,7 +155,7 @@ func mamba1UnitNorms(f *meta.File, s *jlm.Source) error {
 	}
 	n := uint64(c.SSM.StateSize)
 	for b, k := range c.LayerKinds {
-		if k != jlm.LayerMamba1 {
+		if k != jlm.LayerScan {
 			continue
 		}
 		r, ok := rank[int32(b)]

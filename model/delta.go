@@ -59,11 +59,11 @@ type DeltaGeom struct {
 	// scale is 1/sqrt(kDim), which the L2 norm's rescale and the delta rule's
 	// query scale both want.
 	scale float32
-	// mamba1 is Mamba-1's selective scan (mamba1Attn): every channel a value
+	// Scan is the per-element selective scan (jlm.LayerScan): every channel a value
 	// head of one row (vHeads is Inner, vDim one), B and C one key head
 	// shared by all, and only x convolved -- B and C come off it afterwards,
 	// so chans is Inner. rank is its dt bottleneck.
-	Mamba1 bool
+	Scan bool
 	// tail is the recurrent state's tail per sequence (Config.recTailLen).
 	tail int
 }
@@ -90,8 +90,8 @@ func (c *Config) Delta() DeltaGeom {
 	g.Tiled = c.DeltaKeyTiled
 	g.Ssd = c.SSD()
 	g.tail = c.RecTailLen()
-	if c.Mamba1() {
-		g.Mamba1, g.Chans, g.QkBytes, g.Rank = true, int(c.SSM.Inner), 0, c.DtRank
+	if c.Scan() {
+		g.Scan, g.Chans, g.QkBytes, g.Rank = true, int(c.SSM.Inner), 0, c.DtRank
 	}
 	return g
 }
@@ -104,7 +104,7 @@ const (
 	mixNone      mixer = iota
 	mixDelta           // the gated delta rule (jlm.LayerLinearAttn)
 	mixSelective       // the additive update, one decay a head (jlm.LayerSSD, LayerSSDAttn)
-	mixScan            // the additive update, one decay a state element of each channel (jlm.LayerMamba1)
+	mixScan            // the additive update, one decay a state element of each channel (jlm.LayerScan)
 	mixShortConv       // the gated short convolution (jlm.LayerShortConv)
 )
 
@@ -115,7 +115,7 @@ func (c *Config) mixerAt(li int) mixer {
 		return mixDelta
 	case jlm.LayerSSD, jlm.LayerSSDAttn:
 		return mixSelective
-	case jlm.LayerMamba1:
+	case jlm.LayerScan:
 		return mixScan
 	case jlm.LayerShortConv:
 		return mixShortConv

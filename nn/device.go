@@ -258,7 +258,7 @@ type SSMWeights struct {
 	// gate that replaces Gate. All four are zero on qwen3next, which has one
 	// matrix for the second and derives the first from BA's interleaved alpha.
 	//
-	// Mamba-1 (RecurrentPlan.Mamba1) carries its four matrices in the same
+	// The selective scan (RecurrentPlan.Scan) carries its four matrices in the same
 	// four: FA is x_proj's dt rows and FB dt_proj (the same bottleneck shape
 	// as KDA's forget gate), GA x_proj's B rows and GB its C rows. The
 	// block's vectors (A, the dt bias, the norms, D, the convolution bias)
@@ -938,12 +938,12 @@ type RecurrentPlan struct {
 	// every linear block so a device keeps one slot width. A sequence's slot
 	// is [delta rule | tail]; the delta rule's kernels step its head.
 	TailLen int
-	// Mamba1 is Mamba-1's selective scan (jlm.LayerMamba1): VHeads channels
+	// Scan is the per-element selective scan (jlm.LayerScan): VHeads channels
 	// of one row each over a KDim-wide state, B and C shared, the decay a
 	// vector exp(dt*A) per channel, dt off a rank-Rank bottleneck of the
 	// convolved x. Wq is x, SSMWeights.Gate is z.
-	Mamba1 bool
-	Rank   int
+	Scan bool
+	Rank int
 }
 
 // LayerDevice runs a whole transformer block without returning the residual

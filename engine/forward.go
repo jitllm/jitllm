@@ -1496,7 +1496,7 @@ func (s *Instance) layerWeightsAt(li int, l *model.Layer, banks *[3]nn.Weight) n
 			Gate: model.Wt(l.SsmGate), BA: model.Wt(l.SsmBA), Out: model.Wt(l.SsmOut), Conv1d: l.SsmConv1d,
 			FA: model.Wt(l.SsmFA), FB: model.Wt(l.SsmFB), GA: model.Wt(l.SsmGA), GB: model.Wt(l.SsmGB), In: model.Wt(l.SsmIn),
 		}
-		if s.m.Cfg.Mamba1() {
+		if s.m.Cfg.Scan() {
 			w.SSM.FA, w.SSM.FB, w.SSM.GA, w.SSM.GB = model.Wt(l.SsmXDt), model.Wt(l.SsmDtProj), model.Wt(l.SsmXB), model.Wt(l.SsmXC)
 		}
 	}
@@ -2004,9 +2004,9 @@ func (s *Instance) planFor(li int) *nn.LayerPlan {
 		plan.AttnOutGate = false
 		plan.Recurrent.WithAttn = c.LayerKind(li).Attends()
 		plan.Recurrent.ShortConv = c.ShortConv()
-		if g.Mamba1 {
+		if g.Scan {
 			// No gated norm: the block's output is y*silu(z) straight to ssm_out.
-			plan.Recurrent.Mamba1, plan.Recurrent.Rank, plan.Recurrent.NoNorm = true, g.Rank, true
+			plan.Recurrent.Scan, plan.Recurrent.Rank, plan.Recurrent.NoNorm = true, g.Rank, true
 		}
 	}
 	s.k3Plan(li, &plan)

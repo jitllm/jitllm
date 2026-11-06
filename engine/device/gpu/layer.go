@@ -2048,7 +2048,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		if !l.mla {
 			// No latent block, no latent matrices -- except Mamba-1's four,
 			// which ride KDA's slots 18..21 (nn.SSMWeights).
-			return i >= 13 && !(i >= 18 && p.Recurrent.Mamba1)
+			return i >= 13 && !(i >= 18 && p.Recurrent.Scan)
 		}
 		// A linear block of an MLA model (Kimi-Linear) has none of them either:
 		// l.mla is a property of the model, not the block.
@@ -2148,7 +2148,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		// sit past MLA's range and are not MLA's.
 		if i >= 18 && !extra {
 			switch {
-			case !p.Recurrent.ChanDecay && !p.Recurrent.Mamba1, p.Recurrent.Conv == 0:
+			case !p.Recurrent.ChanDecay && !p.Recurrent.Scan, p.Recurrent.Conv == 0:
 				// Not a KDA model, or an attention block of one: absent by
 				// construction rather than by a missing tensor.
 				continue
@@ -2213,7 +2213,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 				continue
 			}
 			// Mamba-1 has no ssm_ba: dt comes off its x_proj (slot 18).
-			if i == 11 && p.Recurrent.Mamba1 {
+			if i == 11 && p.Recurrent.Scan {
 				continue
 			}
 			if len(x.Data) == 0 {
