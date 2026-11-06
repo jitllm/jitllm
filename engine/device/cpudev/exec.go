@@ -57,6 +57,10 @@ type Exec struct {
 	fused, fuseOff bool
 	fusedRuns      int64
 	tries, opened  *atomic.Int64
+	// setup is what the execution was attached with; lanes its run of
+	// blocks, made at its first placement.
+	setup Setup
+	lanes *Lanes
 }
 
 // NewExec is an execution over workers, its forms composed by comp.
@@ -93,9 +97,14 @@ func (r resources) DropRows() { r.b.DropRows() }
 // Place readies the execution for a placement of n blocks, none of them
 // composed: the launches made once (a placement again, for a new history
 // format, keeps the forms' own buffers), the runner reading the experts ex
-// pages in and the rotaries' planes.
-func (e *Exec) Place(n int, ex ExpertPager, planes [2][]float32, nExpert int, prof bool) {
+// pages in and the rotaries' planes, and its lanes over the same lease the
+// first time.
+func (e *Exec) Place(n int, ex Lease, planes [2][]float32, nExpert int, prof bool) {
 	res := resources{ExpertPager: ex, b: e.b}
+	if e.lanes == nil {
+		st := e.setup
+		e.lanes = NewLanes(e, e.b, ex, st.Width, st.Seqs, st.Streams, st.ConvLen, st.Trace)
+	}
 	e.blocks = make([]*Block, n)
 	e.composed = make([]int, n)
 	if e.dev == nil {
@@ -168,6 +177,10 @@ func (e *Exec) PrepLayer(li int, p *nn.LayerPlan, _ *nn.LayerWeights) bool {
 	return cb != nil && cb.Why == nn.DeclineServes
 }
 
+// Lanes is the execution's run of blocks for the session it is bound to,
+// nil before its first placement.
+func (e *Exec) Lanes() *Lanes { return e.lanes }
+
 // PrepErr is the first error the execution's composer met (nn.PrepReporter).
 func (e *Exec) PrepErr() error { return e.comp.Err() }
 
@@ -201,6 +214,20 @@ type Setup struct {
 	// Quota is the instance's page quota on the device, the execution's to
 	// drop; nil for one another instance's covers.
 	Quota *Quota
+	// Width is the residual's width, Seqs the sequences its history is
+	// strided by, Streams the residual streams and ConvLen a linear block's
+	// convolution rows a sequence: what the execution's lanes run (Lanes).
+	// Trace is called with each block's residual once it ran.
+	Width, Seqs, Streams, ConvLen int
+	Trace                         func(li int)
+}
+
+// Lease is what an execution's placement reads its blocks through: the
+// experts a selection picks, paged in and handed back, and each block's
+// weights, paged in.
+type Lease interface {
+	ExpertPager
+	Source
 }
 
 // Attach makes an instance's execution on c from st: its workers, its
@@ -214,6 +241,7 @@ func (c *CPU) Attach(st Setup) *Exec {
 	e.fuseOff, e.tries, e.opened = st.NoFuse, st.Tries, st.Runs
 	e.chunk = st.Chunk
 	e.quota = st.Quota
+	e.setup = st
 	return e
 }
 

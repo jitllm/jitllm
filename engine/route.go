@@ -72,14 +72,14 @@ func (s *Session) History() cpudev.History { return s.kv }
 // there is made once and bound again in place when it leases another
 // instance, so a lease allocates nothing.
 func (s *Instance) bindLanes(sess *Session) {
-	if s.exec.lanes == nil {
+	if s.exec.x.Lanes() == nil {
 		return
 	}
 	v, _ := sess.routes[routeLanes].run.(*cpudev.SessionLanes)
 	if v == nil {
 		v = new(cpudev.SessionLanes)
 	}
-	*v = s.exec.lanes.For(sess, sess)
+	v.Bind(s.exec.x.Lanes(), sess, sess)
 	sess.routes[routeLanes] = laneRoute(v)
 }
 

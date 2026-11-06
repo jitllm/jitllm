@@ -409,7 +409,7 @@ func cpuCompare(want, got [][]float32) (worst float64, agree int) {
 // parts the device holds.
 func setFault(s *Instance, f cpuFault) {
 	s.exec.x.StreamFault = f == cpuFaultStreams
-	if ln := s.exec.lanes; ln != nil {
+	if ln := s.exec.x.Lanes(); ln != nil {
 		ln.RecFault = f == cpuFaultRec
 		ln.ChunkFault = f == cpuFaultChunk
 	}
