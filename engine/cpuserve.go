@@ -102,15 +102,6 @@ type cpuState struct {
 	// marking those already in it, by expert (cpuExperts).
 	sel    []int32
 	picked []bool
-	// banks is each block's routed banks' planes in the host's expert
-	// pages, by bank (gate, up, down) and plane (jlm.File.BankView), set at
-	// the block's composition.
-	banks [][3][3]unsafe.Pointer
-	// weights is each form's bound weights (cpuFormWeights).
-	weights map[cpuBoundKey]*cpuBoundWeights
-	// ngView is the n-gram table's rows where this device reads them, made
-	// at the composition of the block that gathers them.
-	ngView *jlm.RowView
 	// kvconv is a binary16 or q8 history's conversions (cpukvconv.go).
 	kvconv cpuKVConvs
 	// xpad is a call's residual rows where its kernels' units reach past
@@ -348,7 +339,7 @@ func (s *Instance) cpuStep(li int, l *model.Layer, cs []float32) (nn.Decline, er
 	s.cpu.tok1[0] = uint32(s.tok)
 	s.cpu.pos1 = [2]uint32{1, uint32(pos)}
 	b.tok, b.pos, b.csSWA = s.cpu.tok1[:], s.cpu.pos1[:], s.csSWA
-	if _, why := s.cpuFormWeights(cb.f, li, l); why != nn.DeclineServes {
+	if _, why := s.ws.bind(cb.f, li, l); why != nn.DeclineServes {
 		return why, nil
 	}
 	s.cpu.rows = [4]uint32{0, uint32(pg.keyStart(pos)), uint32(pos + 1), uint32(pos)}
@@ -509,7 +500,7 @@ func (s *Instance) cpuRecRows(li int, l *model.Layer, x, cs []float32, seq, pos 
 	if len(pos) > 1 {
 		s.cpu.steps.Stepped++
 	}
-	if _, why := s.cpuFormWeights(cb.f, li, l); why != nn.DeclineServes {
+	if _, why := s.ws.bind(cb.f, li, l); why != nn.DeclineServes {
 		return why, nil
 	}
 	// x is stream-major: row r's stream k at (k*rows + r)*n_embd.
@@ -609,7 +600,7 @@ func (s *Instance) cpuRecWhole(li int, l *model.Layer, cb *cpuBlock, seq, pos, o
 		}
 		last[q] = pos[i]
 	}
-	if _, why := s.cpuFormWeights(cb.rows, li, l); why != nn.DeclineServes {
+	if _, why := s.ws.bind(cb.rows, li, l); why != nn.DeclineServes {
 		return nil
 	}
 	return cb.rows
@@ -720,7 +711,7 @@ func (s *Instance) cpuRowsForm(li int, l *model.Layer) (*cpudev.Form, nn.Decline
 	if cb.rows == nil {
 		return nil, cb.rowsWhy
 	}
-	if _, why := s.cpuFormWeights(cb.rows, li, l); why != nn.DeclineServes {
+	if _, why := s.ws.bind(cb.rows, li, l); why != nn.DeclineServes {
 		return nil, why
 	}
 	return cb.rows, nn.DeclineServes
@@ -923,8 +914,8 @@ func (s *Instance) cpuRowsCalls(li int, l *model.Layer, f *cpudev.Form, lo, hi i
 		c := s.cpuCallOf(b, f)
 		for i := lo; i < hi; i++ {
 			if i == f.RowSplit && f.RowSplit > 0 {
-				if err := s.cpu.ngView.Ensure(b.own[f.RowSel][:k*f.RowN]); err != nil {
-					s.cpu.ngView.Drop()
+				if err := s.ws.ngView.Ensure(b.own[f.RowSel][:k*f.RowN]); err != nil {
+					s.ws.ngView.Drop()
 					return err
 				}
 			}
@@ -1014,37 +1005,6 @@ func (s *Instance) cpuReadable(li, start, pos int) nn.Decline {
 	return nn.DeclineServes
 }
 
-// cpuWeights says every weight f binds is one block l holds whole.
-func (s *Instance) cpuWeights(f *cpudev.Form, li int, l *model.Layer) nn.Decline {
-	for _, w := range f.Weights {
-		switch {
-		case w.Vector:
-			if len(s.cpuRoleVector(li, l, w.Role)) == 0 {
-				return nn.DeclineNoWeight
-			}
-		case jlm.ExpertBank(w.Role):
-			// A bank is read in the host's expert pages (cpuBanksPaged).
-			if li >= len(s.cpu.banks) || s.cpu.banks[li][w.Role-jlm.RoleExpGateBank][w.Region] == nil {
-				return nn.DeclineNoWeight
-			}
-		case w.Role == jlm.RoleNGramTable:
-			// A row table is read in its view (cpuForm reads the rows in).
-			if s.cpu.ngView == nil {
-				return nn.DeclineNoWeight
-			}
-		default:
-			t := s.cpuRoleWeight(li, l, w.Role)
-			if t == nil || t.Packed == nil && len(t.Data) == 0 {
-				return nn.DeclineNoWeight
-			}
-			if p := t.Packed; p != nil && (p.Row != 0 || p.Stride != 0 && p.Stride != t.Rows || p.Sheet != nil) {
-				return nn.DeclineCutWeight
-			}
-		}
-	}
-	return nn.DeclineServes
-}
-
 // cpuRunForm runs every code of form f, one after another, on b.
 func (s *Instance) cpuRunForm(b *cpuBound, f *cpudev.Form) {
 	c := s.cpuCallOf(b, f)
@@ -1082,74 +1042,8 @@ func (s *Instance) cpuCallOf(b *cpuBound, f *cpudev.Form) *cpudev.Call {
 	a[cpudev.SrcZero] = addr(s.cpu.zero)
 	a[cpudev.SrcRequest], a[cpudev.SrcTokens], a[cpudev.SrcPos] = addr(b.req), addr(b.tok), addr(b.pos)
 	a[cpudev.SrcPicture] = addr(b.pic)
-	c.Weights, _ = s.cpuFormWeights(f, b.li, b.l)
+	c.Weights, _ = s.ws.bind(f, b.li, b.l)
 	return c
-}
-
-// cpuBoundKey names a form's bound weights: the form, the block whose
-// weights it reads (-1 for the model's) and the copy of it they are read in.
-type cpuBoundKey struct {
-	f  *cpudev.Form
-	li int
-	l  *model.Layer
-}
-
-// cpuBoundWeights is a form's weights where its call reads them, at the
-// frame they were resolved at, and why not where the CPU cannot read one.
-type cpuBoundWeights struct {
-	frame unsafe.Pointer
-	addrs []unsafe.Pointer
-	why   nn.Decline
-}
-
-// cpuFormWeights is form f's weights for block li (l its copy, nil for the
-// model's tensors) where its call reads them: resolved and checked once for
-// the block's frame, and again only when the frame has moved -- a page-in
-// after an eviction binds the block's tensors elsewhere -- never looked up by
-// role on every call. A tensor no page holds is resolved once.
-func (s *Instance) cpuFormWeights(f *cpudev.Form, li int, l *model.Layer) ([]unsafe.Pointer, nn.Decline) {
-	var frame unsafe.Pointer
-	if li >= 0 && s.fr != nil {
-		frame = addr(s.fr.Page(li))
-	}
-	k := cpuBoundKey{f, li, l}
-	b := s.cpu.weights[k]
-	if b != nil && b.frame == frame {
-		return b.addrs, b.why
-	}
-	if b == nil {
-		if s.cpu.weights == nil {
-			s.cpu.weights = map[cpuBoundKey]*cpuBoundWeights{}
-		}
-		b = &cpuBoundWeights{}
-		s.cpu.weights[k] = b
-	}
-	b.frame, b.addrs = frame, b.addrs[:0]
-	if b.why = s.cpuWeights(f, li, l); b.why == nn.DeclineServes {
-		for _, w := range f.Weights {
-			b.addrs = append(b.addrs, s.cpuWeightAt(li, l, w))
-		}
-	}
-	return b.addrs, b.why
-}
-
-// cpuWeightAt is where block li's weight w is read: a vector's, a plane of
-// a weight's, a bank's in the host's expert pages, or a table's row in its
-// view.
-func (s *Instance) cpuWeightAt(li int, l *model.Layer, w cpudev.Weight) unsafe.Pointer {
-	switch {
-	case w.Vector:
-		return addr(s.cpuRoleVector(li, l, w.Role))
-	case jlm.ExpertBank(w.Role):
-		return s.cpu.banks[li][w.Role-jlm.RoleExpGateBank][w.Region]
-	case w.Role == jlm.RoleNGramTable:
-		return unsafe.Add(s.cpu.ngView.Base(), w.From*s.m.Ngram.RowBytes)
-	}
-	t := s.cpuRoleWeight(li, l, w.Role)
-	if t.Packed == nil {
-		return addr(t.Data)
-	}
-	return addr([3][]byte{t.Packed.QS, t.Packed.D, t.Packed.SC}[w.Region])
 }
 
 // addr is x's first element's address, nil for a nil slice.
@@ -1161,9 +1055,9 @@ func (s *Instance) unmapOwn() {
 	if s.cpu.dev != nil {
 		s.cpu.dev.Close()
 	}
-	if s.cpu.ngView != nil {
-		s.cpu.ngView.Close()
-		s.cpu.ngView = nil
+	if s.ws.ngView != nil {
+		s.ws.ngView.Close()
+		s.ws.ngView = nil
 	}
 }
 
@@ -1354,12 +1248,12 @@ func (s *Instance) formCPUBlock(li int, cb *cpuBlock, rows int) (*cpudev.Form, e
 	gr := *g
 	gr.Block = 0
 	cb.sideOff = sideAtBinding(&gr)
-	if s.cpu.ngView == nil && s.m.Ngram != nil && cpudev.TableRowsOf(&gr) >= 0 {
+	if s.ws.ngView == nil && s.m.Ngram != nil && cpudev.TableRowsOf(&gr) >= 0 {
 		v, err := s.fr.NewRowView(s.m.Ngram.E)
 		if err != nil {
 			return nil, err
 		}
-		s.cpu.ngView = v
+		s.ws.ngView = v
 	}
 	formats := map[jlm.Role]jlm.Type{}
 	f := s.m.Composing()
@@ -1376,7 +1270,7 @@ func (s *Instance) formCPUBlock(li int, cb *cpuBlock, rows int) (*cpudev.Form, e
 			} else if e, ok := f.Find(w.Role, int32(li), -1); ok {
 				formats[w.Role] = e.Type
 				// A table the block lays out as float32 at load is read so.
-				if t := s.cpuRoleWeight(li, s.layer(li), w.Role); w.Rows > 0 && t != nil && t.E == nil && t.Typ == quant.F32 {
+				if t := s.ws.matrix(li, s.layer(li), w.Role); w.Rows > 0 && t != nil && t.E == nil && t.Typ == quant.F32 {
 					formats[w.Role] = jlm.TypeF32
 				}
 			} else if w.Rows == 0 {
@@ -1406,7 +1300,7 @@ func (s *Instance) cpuFormOf(req composer.Request, gr *graph.Graph, rows int, ap
 // dropRows hands back the table's rows form f's call read in.
 func (s *Instance) dropRows(f *cpudev.Form) {
 	if f.RowSplit > 0 {
-		s.cpu.ngView.Drop()
+		s.ws.ngView.Drop()
 	}
 }
 
@@ -1417,8 +1311,8 @@ func (s *Instance) cpuBanksPaged(li int) bool {
 	if s.m.Container == nil || l.LegacyExperts {
 		return false
 	}
-	if len(s.cpu.banks) < len(s.m.Layers) {
-		s.cpu.banks = make([][3][3]unsafe.Pointer, len(s.m.Layers))
+	if len(s.ws.banks) < len(s.m.Layers) {
+		s.ws.banks = make([][3][3]unsafe.Pointer, len(s.m.Layers))
 	}
 	for i, t := range []*model.Tensor{&l.Gate, &l.Up, &l.Down} {
 		if t.E == nil {
@@ -1428,7 +1322,7 @@ func (s *Instance) cpuBanksPaged(li int) bool {
 		if !ok {
 			return false
 		}
-		s.cpu.banks[li][i] = planes
+		s.ws.banks[li][i] = planes
 	}
 	return l.Up.E != nil && l.Down.E != nil
 }
@@ -1445,8 +1339,8 @@ func (s *Instance) cpuForm(b *cpuBound, f *cpudev.Form, li int) error {
 		// The table's rows the call's hash names, read in for its gathers and
 		// handed back after the call.
 		s.cpu.dev.Calls(c, f.Codes[:f.RowSplit])
-		defer s.cpu.ngView.Drop()
-		if err := s.cpu.ngView.Ensure(b.own[f.RowSel][:b.n*f.RowN]); err != nil {
+		defer s.ws.ngView.Drop()
+		if err := s.ws.ngView.Ensure(b.own[f.RowSel][:b.n*f.RowN]); err != nil {
 			return err
 		}
 		lo = f.RowSplit
@@ -1522,78 +1416,6 @@ func (s *Instance) cpuExperts(b *cpuBound, f *cpudev.Form, li, n int) error {
 	}
 	s.res.Touch(li, ne, s.cpu.sel)
 	return nil
-}
-
-// cpuRoleWeight is block li's (l's) matrix of role r, nil for one it does
-// not hold; with no block, the head's. An encoder segment's blocks hold
-// theirs in the encoder (encRoleWeight).
-func (s *Instance) cpuRoleWeight(li int, l *model.Layer, r jlm.Role) *model.Tensor {
-	if l == nil {
-		switch m := &s.dense; {
-		case li == cpuInputRows && r == jlm.RoleTokenEmbd:
-			return &m.Embd
-		case li == cpuInputRows && r == jlm.RolePosEmbd:
-			return &m.PosEmbd
-		case r == jlm.RoleOutput || r == jlm.RoleTokenEmbd:
-			return s.outW
-		case r == jlm.RolePLETokEmbd && m.PleTok.E != nil:
-			return &m.PleTok
-		case r == jlm.RolePLEModelProj && m.PleProj.E != nil:
-			return &m.PleProj
-		case r == jlm.RoleEmbdDense1:
-			return &m.Dense1
-		case r == jlm.RoleEmbdDense2:
-			return &m.Dense2
-		}
-		for _, v := range s.m.VecMats {
-			if v.Role == r {
-				return v.T
-			}
-		}
-		return s.dense.Matrix(r)
-	}
-	if t := l.Matrix(r); t != nil {
-		return t
-	}
-	// What the loader bound under no role of its own: a prediction block's
-	// matrices and the convolutions' taps, cut from vectors.
-	switch r {
-	case jlm.RoleNextnEHProj:
-		if l.Mtp == nil {
-			return nil
-		}
-		return &l.Mtp.EhProj
-	case jlm.RoleNextnEmbd:
-		if l.Mtp == nil {
-			return nil
-		}
-		return &l.Mtp.Embd
-	case jlm.RoleSSMConv1d:
-		return &l.SsmConvTaps
-	}
-	return nil
-}
-
-// cpuRoleVector is block li's (l's) vector of role r, nil for one it does
-// not hold; with no block, the head's.
-func (s *Instance) cpuRoleVector(li int, l *model.Layer, r jlm.Role) []float32 {
-	if l == nil {
-		switch r {
-		case jlm.RoleOutputNorm:
-			return s.outNorm
-		case jlm.RoleOutputNormBias:
-			return s.m.OutNormB
-		case jlm.RoleOutputBias:
-			return s.m.OutB
-		case jlm.RolePLEProjNorm:
-			return s.m.PleNorm
-		}
-		return nn.VectorOf(s.m.Vecs, r)
-	}
-	if v, ok := l.NamedVector(r); ok {
-		return v
-	}
-	return nn.VectorOf(l.Vecs, r)
 }
 
 // arena is the table of the layer's arena, nil for a layer with none (or no

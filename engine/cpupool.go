@@ -24,7 +24,7 @@ func (s *Instance) cpuPlacePool() {
 	part := cpudev.Part{Composed: hf.composed, F: hf.f, Why: hf.why, Err: hf.err}
 	var weights []unsafe.Pointer
 	if f := part.F; f != nil {
-		ws, why := s.cpuFormWeights(f, -1, nil)
+		ws, why := s.ws.bind(f, -1, nil)
 		if why != nn.DeclineServes {
 			part.F, part.Why = nil, why
 		}
