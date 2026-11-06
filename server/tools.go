@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/jitllm/jitllm/convert"
 	"github.com/jitllm/jitllm/model"
 )
 
@@ -29,7 +30,7 @@ type toolText struct {
 func newToolText(tools []byte) *toolText {
 	t := &toolText{on: len(tools) > 0, tools: tools}
 	if t.on {
-		t.ts = model.NewTextToolStream(model.ToolSyntaxHermes, model.ParseToolSet(tools))
+		t.ts = model.NewTextToolStream(model.ToolSyntaxFor(convert.DefaultToolForm()), model.ParseToolSet(tools))
 	}
 	return t
 }

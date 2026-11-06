@@ -139,6 +139,7 @@ func buildGGUF(f, vf *meta.File, src, mmproj string, o options) (*jlm.Source, er
 	if err := o.applyChatTemplate(s); err != nil {
 		return nil, err
 	}
+	stateToolForm(s)
 	return s, nil
 }
 

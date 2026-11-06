@@ -2011,6 +2011,10 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 	lm.tokensPrefilled.Add(int64(prompted))
 	prefill := time.Since(prefillStart)
 
+	tools, err := lm.toolStream(o)
+	if err != nil {
+		return err
+	}
 	if err := emit(Event{Kind: EventStarted, Started: &Started{
 		SessionID:    s.id,
 		ModelID:      lm.id,
@@ -2024,7 +2028,7 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 		Prefill:      prefill,
 		Execution:    ExecutionParallel,
 		Restored:     restored,
-		Tools:        lm.toolStream(o),
+		Tools:        tools,
 	}}); err != nil {
 		return err
 	}

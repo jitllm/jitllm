@@ -45,8 +45,12 @@ type toolPiece struct {
 
 // NewToolStream reads a reply of this model's for calls in its syntax to
 // the declared tools.
-func (m *Model) NewToolStream(tools ToolSet) *ToolStream {
-	return &ToolStream{syn: m.ToolSyntax(), tools: tools, v: m.Vocab, cs: m.Vocab.NewChatStream()}
+func (m *Model) NewToolStream(tools ToolSet) (*ToolStream, error) {
+	syn, err := m.ToolSyntax()
+	if err != nil {
+		return nil, err
+	}
+	return &ToolStream{syn: syn, tools: tools, v: m.Vocab, cs: m.Vocab.NewChatStream()}, nil
 }
 
 // NewTextToolStream reads text pushes, with no vocabulary to spell control

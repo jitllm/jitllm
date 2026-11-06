@@ -1,8 +1,6 @@
 package model
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -57,50 +55,3 @@ func toolFields(mm map[string]any, x ChatMessage, stringArgs bool) error {
 	mm["tool_calls"] = calls
 	return nil
 }
-
-// ParseToolCalls reads the tool calls out of a completion in the default
-// syntax (ToolSyntaxHermes: Hermes <tool_call> blocks, or a reply that opens
-// with a bare JSON call as Llama 3.x and Mistral v0.3 write one), returning
-// the text that is not part of any call and the calls. names are the
-// declared tools; a call to anything else is not a call and stays text. nil
-// names accepts any. A model's own syntax is ToolSyntax.Parse.
-//
-// The declared-name check is what keeps a model asked to answer IN JSON from
-// having its answer taken for a call.
-func ParseToolCalls(text string, names []string) (string, []ToolCall) {
-	return ToolSyntaxHermes.Parse(text, ToolSet{names: names, any: names == nil})
-}
-
-// decodeCall reads {"name", "arguments"|"parameters"}; arguments may be an
-// object or a string holding one (Qwen emits both).
-func decodeCall(b []byte) (ToolCall, bool) {
-	var c struct {
-		Name       string          `json:"name"`
-		Arguments  json.RawMessage `json:"arguments"`
-		Parameters json.RawMessage `json:"parameters"`
-	}
-	if json.Unmarshal(b, &c) != nil || c.Name == "" {
-		return ToolCall{}, false
-	}
-	a := c.Arguments
-	if len(a) == 0 {
-		a = c.Parameters
-	}
-	var s string
-	if json.Unmarshal(a, &s) == nil {
-		a = json.RawMessage(s)
-	}
-	if len(bytes.TrimSpace(a)) == 0 {
-		a = json.RawMessage("{}")
-	}
-	var buf bytes.Buffer
-	if json.Compact(&buf, a) != nil || buf.Bytes()[0] != '{' {
-		return ToolCall{}, false
-	}
-	return ToolCall{Name: c.Name, Arguments: buf.String()}, true
-}
-
-// ToolCallHold is ToolSyntaxHermes.Hold: where a stream must stop emitting
-// text because a tool call has begun, or may be beginning, at that byte of
-// text; -1 when nothing needs holding.
-func ToolCallHold(text string) int { return ToolSyntaxHermes.Hold(text) }

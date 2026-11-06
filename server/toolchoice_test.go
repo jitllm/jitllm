@@ -119,7 +119,11 @@ func TestToolChoiceForcesACall(t *testing.T) {
 	for _, file := range forcedToolModels() {
 		t.Run(file, func(t *testing.T) {
 			_, lm, c := loadedEngine(t, file, "m", LoadOptions{})
-			t.Logf("%s: tool syntax %s", file, lm.m.ToolSyntax())
+			syn, err := lm.m.ToolSyntax()
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("%s: tool syntax %s", file, syn)
 			oa := func(extra string, stream bool) (string, []oaToolCall, string) {
 				body := fmt.Sprintf(`{"model":"m","messages":%s,"tools":%s,"max_tokens":1024,"temperature":0%s,"stream":%v}`,
 					forcedPrompt, forcedTools, extra, stream)

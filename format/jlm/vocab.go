@@ -179,6 +179,10 @@ type Vocab struct {
 	PreName string
 
 	Templates []ChatTemplate
+	// Tools is how the model writes a tool call, stated from the template a
+	// request with tools renders (convert.ToolFormOf). Absent from a
+	// container written before it, which is refused tool calls.
+	Tools ToolForm
 }
 
 // AddedToken is a token introduced after training, which the pre-tokenizer must

@@ -2,6 +2,7 @@ package engine
 
 import (
 	"encoding/json"
+	"github.com/jitllm/jitllm/convert"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -31,69 +32,69 @@ const syntaxArgs = `{"location": "Zürich", "unit": "celsius", "days": 3, "radiu
 // differently on purpose.
 type syntaxCase struct {
 	file      string
-	syn       model.ToolSyntax
+	syn       string
 	sample    string
 	noGrammar string
 }
 
 func syntaxCases() []syntaxCase {
 	return []syntaxCase{
-		{file: "qwen2.5.jinja", syn: model.ToolSyntaxHermes},
-		{file: "qwen3.jinja", syn: model.ToolSyntaxHermes},
-		{file: "qwen3-next.jinja", syn: model.ToolSyntaxHermes},
-		{file: "internvl3.jinja", syn: model.ToolSyntaxHermes},
-		{file: "jamba.jinja", syn: model.ToolSyntaxHermes,
+		{file: "qwen2.5.jinja", syn: "hermes"},
+		{file: "qwen3.jinja", syn: "hermes"},
+		{file: "qwen3-next.jinja", syn: "hermes"},
+		{file: "internvl3.jinja", syn: "hermes"},
+		{file: "jamba.jinja", syn: "hermes",
 			sample: "<tool_call>\n{\"name\": \"get_weather\", \"arguments\": " + syntaxArgs + "}\n</tool_call>"},
-		{file: "granite4.jinja", syn: model.ToolSyntaxHermes},
-		{file: "exaone4.jinja", syn: model.ToolSyntaxHermes, noGrammar: "EXAONE writes no newlines inside <tool_call>"},
-		{file: "smollm3.jinja", syn: model.ToolSyntaxHermes,
+		{file: "granite4.jinja", syn: "hermes"},
+		{file: "exaone4.jinja", syn: "hermes", noGrammar: "EXAONE writes no newlines inside <tool_call>"},
+		{file: "smollm3.jinja", syn: "hermes",
 			sample: "<tool_call>\n{\"name\": \"get_weather\", \"arguments\": " + syntaxArgs + "}\n</tool_call>"},
-		{file: "falcon-h1.jinja", syn: model.ToolSyntaxHermes,
+		{file: "falcon-h1.jinja", syn: "hermes",
 			sample: "<tool_call>\n{\"name\": \"get_weather\", \"arguments\": " + syntaxArgs + "}\n</tool_call>"},
-		{file: "qwen3.5.jinja", syn: model.ToolSyntaxQwenXML},
-		{file: "nemotron3.jinja", syn: model.ToolSyntaxQwenXML},
-		{file: "Qwen3-Coder.jinja", syn: model.ToolSyntaxQwenXML},
-		{file: "seed-oss.jinja", syn: model.ToolSyntaxSeedXML},
-		{file: "glm4.5.jinja", syn: model.ToolSyntaxGLM},
-		{file: "GLM-4.6.jinja", syn: model.ToolSyntaxGLM},
-		{file: "GLM-4.7-Flash.jinja", syn: model.ToolSyntaxGLM, noGrammar: "GLM-4.7 writes no newlines between its tags"},
-		{file: "inclusionai-ling-3.0-flash.jinja", syn: model.ToolSyntaxGLM, noGrammar: "Ling writes no newlines between its tags"},
-		{file: "minimax-m2.jinja", syn: model.ToolSyntaxMiniMax},
-		{file: "deepseek-ai-DeepSeek-V4.jinja", syn: model.ToolSyntaxDSML},
-		{file: "deepseek-ai-DeepSeek-R1-Distill-Qwen-32B.jinja", syn: model.ToolSyntaxDeepSeekV3},
-		{file: "deepseek-v3.2.jinja", syn: model.ToolSyntaxDeepSeekV31},
-		{file: "deepseek-ai-DeepSeek-V3.1.jinja", syn: model.ToolSyntaxDeepSeekV31},
-		{file: "Kimi-K2-Instruct.jinja", syn: model.ToolSyntaxKimi},
-		{file: "Kimi-K3.jinja", syn: model.ToolSyntaxKimiXTML, noGrammar: "the grammar writes the arguments as one JSON block, the template's other form"},
-		{file: "gpt-oss.jinja", syn: model.ToolSyntaxHarmony,
+		{file: "qwen3.5.jinja", syn: "qwen-xml"},
+		{file: "nemotron3.jinja", syn: "qwen-xml"},
+		{file: "Qwen3-Coder.jinja", syn: "qwen-xml"},
+		{file: "seed-oss.jinja", syn: "seed-xml"},
+		{file: "glm4.5.jinja", syn: "glm"},
+		{file: "GLM-4.6.jinja", syn: "glm"},
+		{file: "GLM-4.7-Flash.jinja", syn: "glm", noGrammar: "GLM-4.7 writes no newlines between its tags"},
+		{file: "inclusionai-ling-3.0-flash.jinja", syn: "glm", noGrammar: "Ling writes no newlines between its tags"},
+		{file: "minimax-m2.jinja", syn: "minimax"},
+		{file: "deepseek-ai-DeepSeek-V4.jinja", syn: "dsml"},
+		{file: "deepseek-ai-DeepSeek-R1-Distill-Qwen-32B.jinja", syn: "deepseek-v3"},
+		{file: "deepseek-v3.2.jinja", syn: "deepseek-v3.1"},
+		{file: "deepseek-ai-DeepSeek-V3.1.jinja", syn: "deepseek-v3.1"},
+		{file: "Kimi-K2-Instruct.jinja", syn: "kimi"},
+		{file: "Kimi-K3.jinja", syn: "kimi-xtml", noGrammar: "the grammar writes the arguments as one JSON block, the template's other form"},
+		{file: "gpt-oss.jinja", syn: "harmony",
 			sample: "<|channel|>commentary to=functions.get_weather <|constrain|>json<|message|>" + syntaxArgs},
-		{file: "mistral-v0.3.jinja", syn: model.ToolSyntaxHermes,
+		{file: "mistral-v0.3.jinja", syn: "hermes",
 			sample:    "[{\"name\": \"get_weather\", \"arguments\": " + syntaxArgs + "}]",
 			noGrammar: "this template declares no tools: the default syntax's grammar writes Hermes"},
-		{file: "ministral3.jinja", syn: model.ToolSyntaxMistralArgs},
-		{file: "Mistral-Small-3.2-24B-Instruct-2506.jinja", syn: model.ToolSyntaxMistralArgs},
-		{file: "granite3.3.jinja", syn: model.ToolSyntaxGranite,
+		{file: "ministral3.jinja", syn: "mistral-args"},
+		{file: "Mistral-Small-3.2-24B-Instruct-2506.jinja", syn: "mistral-args"},
+		{file: "granite3.3.jinja", syn: "granite",
 			sample: "<|tool_call|>[{\"name\": \"get_weather\", \"arguments\": " + syntaxArgs + "}]"},
-		{file: "ibm-granite-granite-3.3-2B-Instruct.jinja", syn: model.ToolSyntaxGranite,
+		{file: "ibm-granite-granite-3.3-2B-Instruct.jinja", syn: "granite",
 			sample: "<|tool_call|>[{\"name\": \"get_weather\", \"arguments\": " + syntaxArgs + "}]"},
-		{file: "nemotron-h.jinja", syn: model.ToolSyntaxNemotron,
+		{file: "nemotron-h.jinja", syn: "nemotron",
 			sample: "<TOOLCALL>[{\"name\": \"get_weather\", \"arguments\": " + syntaxArgs + "}]</TOOLCALL>"},
-		{file: "command-r7b.tool_use.jinja", syn: model.ToolSyntaxCommandR7B},
-		{file: "command-r.tool_use.jinja", syn: model.ToolSyntaxCommandR,
+		{file: "command-r7b.tool_use.jinja", syn: "command-r7b"},
+		{file: "command-r.tool_use.jinja", syn: "command-r",
 			sample:    "Action: ```json\n[\n    {\n        \"tool_name\": \"get_weather\",\n        \"parameters\": " + syntaxArgs + "\n    }\n]\n```",
 			noGrammar: "the sample is indented as the template's example is; the grammar writes one line per call"},
-		{file: "Apertus-8B-Instruct.jinja", syn: model.ToolSyntaxApertus},
-		{file: "phi4-mini.jinja", syn: model.ToolSyntaxPhi4Mini,
+		{file: "Apertus-8B-Instruct.jinja", syn: "apertus"},
+		{file: "phi4-mini.jinja", syn: "phi4-mini",
 			sample: "functools[{\"name\": \"get_weather\", \"arguments\": " + syntaxArgs + "}]"},
-		{file: "llama3.jinja", syn: model.ToolSyntaxJSON},
-		{file: "meta-llama-Llama-3.2-3B-Instruct.jinja", syn: model.ToolSyntaxJSON},
-		{file: "llama4.jinja", syn: model.ToolSyntaxPythonic, noGrammar: "Llama 4's template quotes every value; the grammar writes each as its type"},
-		{file: "lfm2-moe.jinja", syn: model.ToolSyntaxLFM2,
+		{file: "llama3.jinja", syn: "json"},
+		{file: "meta-llama-Llama-3.2-3B-Instruct.jinja", syn: "json"},
+		{file: "llama4.jinja", syn: "pythonic", noGrammar: "Llama 4's template quotes every value; the grammar writes each as its type"},
+		{file: "lfm2-moe.jinja", syn: "lfm2",
 			sample: "<|tool_call_start|>[get_weather(location=\"Zürich\", unit=\"celsius\", days=3, radius_km=10.5)]<|tool_call_end|>"},
-		{file: "LFM2.5-Instruct.jinja", syn: model.ToolSyntaxLFM2,
+		{file: "LFM2.5-Instruct.jinja", syn: "lfm2",
 			sample: "<|tool_call_start|>[get_weather(location=\"Zürich\", unit=\"celsius\", days=3, radius_km=10.5)]<|tool_call_end|>"},
-		{file: "hunyuan.jinja", syn: model.ToolSyntaxHunyuan},
-		{file: "gemma4.jinja", syn: model.ToolSyntaxGemma4},
+		{file: "hunyuan.jinja", syn: "hunyuan"},
+		{file: "gemma4.jinja", syn: "gemma4"},
 	}
 }
 
@@ -151,14 +152,19 @@ func TestToolSyntaxReadsItsTemplatesCalls(t *testing.T) {
 	for _, c := range syntaxCases() {
 		t.Run(c.file, func(t *testing.T) {
 			src := readSyntaxTemplate(t, c.file)
-			if got := model.ToolSyntaxOf(src); got != c.syn {
-				t.Fatalf("syntax %s, want %s", got, c.syn)
+			form := convert.ToolFormOf(src, false)
+			if form.Name != c.syn {
+				t.Fatalf("syntax %s, want %s", form.Name, c.syn)
 			}
+			if err := form.Valid(); err != nil {
+				t.Fatal(err)
+			}
+			syn := model.ToolSyntaxFor(form)
 			reply, prompt := c.sample, ""
 			if reply == "" {
 				reply, prompt = renderedCall(t, src)
 			}
-			content, calls := c.syn.Parse(reply, tools)
+			content, calls := syn.Parse(reply, tools)
 			if len(calls) != 1 || calls[0].Name != "get_weather" || !sameArgs(t, calls[0].Arguments, syntaxArgs) {
 				t.Fatalf("reply %q read as %+v", reply, calls)
 			}
@@ -168,14 +174,14 @@ func TestToolSyntaxReadsItsTemplatesCalls(t *testing.T) {
 			// The declared-name check: the same call to a tool the request
 			// did not declare is text.
 			only := model.ParseToolSet([]byte(`[{"type": "function", "function": {"name": "get_time"}}]`))
-			if _, calls := c.syn.Parse(reply, only); len(calls) != 0 {
+			if _, calls := syn.Parse(reply, only); len(calls) != 0 {
 				t.Errorf("a call to an undeclared tool was read: %+v", calls)
 			}
 			if c.noGrammar != "" {
 				t.Logf("grammar not held to this rendering: %s", c.noGrammar)
 				return
 			}
-			g, err := model.ToolGrammarOf(c.syn, c.syn.Reasoning(src, prompt), tools, model.ToolChoice{Mode: model.ToolChoiceFunction, Name: "get_weather"})
+			g, err := model.ToolGrammarOf(syn, syn.Reasoning(src, prompt), tools, model.ToolChoice{Mode: model.ToolChoiceFunction, Name: "get_weather"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -224,7 +230,7 @@ func TestToolSyntaxStreamsCallsAsTheyClose(t *testing.T) {
 	tools := model.ParseToolSet([]byte(syntaxTools))
 	reply := "Let me check. <tool_call>\n{\"name\": \"get_weather\", \"arguments\": " + syntaxArgs +
 		"}\n</tool_call>\n<tool_call>\n{\"name\": \"get_time\", \"arguments\": {\"zone\": \"CET\"}}\n</tool_call>"
-	ts := model.NewTextToolStream(model.ToolSyntaxHermes, tools)
+	ts := model.NewTextToolStream(model.ToolSyntaxFor(convert.DefaultToolForm()), tools)
 	var shown strings.Builder
 	var at []int
 	var calls []model.ToolCall
