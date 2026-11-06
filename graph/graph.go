@@ -36,7 +36,9 @@ const (
 	OpMatVec
 	// OpRope turns each head's first NRot elements by the position, in the
 	// pair Layout, at Base: the NRot from Offset of the head where it is
-	// set, and back (by the negated angle) where Inverse.
+	// set, and back (by the negated angle) where Inverse. With In[1] (an
+	// OpRopeTable's value) it turns by that value's row rather than the
+	// step's table.
 	OpRope
 	// OpKVAppend writes k and v (In[0], In[1]) as this position's row of the
 	// block's KV: it reads state version n and writes n+1. With Span > 1 the
@@ -142,6 +144,9 @@ const (
 	OpConcat
 	// OpRopeTable is a step's rotary table: for each row's position and each
 	// of NRot/2 pairs, the pair's cos and sin, Out[0] two elements a pair.
+	// With Span set it is a value, not the step's table: each row's at its
+	// position floored to a multiple of Span (a window's first), of rotary
+	// Rotary's planes.
 	// Where Sections or Cycle states several axes, a row has a position on
 	// each, and a pair's angle is its axis's position's.
 	OpRopeTable

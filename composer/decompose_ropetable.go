@@ -64,6 +64,23 @@ func decomposeRopeTable(o graph.Op, c *Context) ([]Prim, error) {
 	stride := graph.RopeStride(P)
 	R := c.Step.Rows
 	out := TableAngles.of(o.Attr.Rotary)
+	planes := TablePlanes.of(out.Instance)
+	span := o.Attr.Span
+	if span > 0 {
+		// The value turns as the rotary the model states for its rotation
+		// and base: that rotary's planes (rotaryTable's match).
+		tab, err := c.rotaryTable(o.Attr)
+		if err != nil {
+			return nil, err
+		}
+		if len(o.In) != 0 || o.Attr.Sections != [ropeAxes]int{} || o.Attr.Grid {
+			return nil, fmt.Errorf("a rotary value at windows of %d over %d inputs", span, len(o.In))
+		}
+		out, planes = c.value(o.Out[0]), TablePlanes.of(tab.Instance)
+		if c.width(o.Out[0]) != 2*P {
+			return nil, fmt.Errorf("a rotary value of %d for %d pairs", c.width(o.Out[0]), P)
+		}
+	}
 	var axes []uint32
 	if o.Attr.Cycle != 0 {
 		return nil, fmt.Errorf("a rotary table over a cycle of %d axes %v: its pairs' frequencies are its cycles' first pairs'", o.Attr.Cycle, o.Attr.CycleAxes)
@@ -122,6 +139,9 @@ func decomposeRopeTable(o graph.Op, c *Context) ([]Prim, error) {
 	default:
 		pos = x.load(0, x.op(OpAdd, U, r, x.u(1)))
 	}
+	if span > 1 {
+		pos = x.op(OpMul, U, x.op(OpDiv, U, pos, x.u(uint32(span))), x.u(uint32(span)))
+	}
 	if o.Attr.Grid {
 		// The position is a cell of the grid the request's first word
 		// wide, the step's live rows over it tall, in its nested order
@@ -145,7 +165,7 @@ func decomposeRopeTable(o graph.Op, c *Context) ([]Prim, error) {
 	at := x.op(OpMul, U, x.op(OpAdd, U, x.op(OpMul, U, r, x.u(uint32(P))), p), x.u(2))
 	at1 := x.op(OpAdd, U, at, x.u(1))
 
-	in[1] = TablePlanes.of(out.Instance)
+	in[1] = planes
 	return []Prim{{Kind: PrimMap, Shape: []int{R, P}, In: in, Expr: x.e,
 		Stores: []PrimStore{{Out: out, Index: at, Value: cvs, Extent: 2 * R * P}, {Out: out, Index: at1, Value: svs, Extent: 2 * R * P}},
 		Facts: Facts{Rows: live.e, Words: words, Extents: ext,
