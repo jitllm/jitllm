@@ -257,10 +257,9 @@ type Config struct {
 	HCMult int
 	// HCLowRank is the hyper-connections' gate rank, zero for none.
 	HCLowRank int
-	// Kimi-K3 (k3.go): a residual checkpoint every AttnResBlock blocks, each
+	// AttnResBlock is a residual checkpoint every that many blocks, each
 	// sublayer's input their softmax mix with the running residual (zero is
-	// none); the routed experts at ExpertLatent (zero is n_embd); the MLA
-	// latent norms' epsilon.
+	// none).
 	AttnResBlock int
 	// DeltaDecay and DeltaGate are the delta rule's decay and output gate as
 	// the container states them (jlm.Config.DeltaDecay), nil on a model with
@@ -269,8 +268,11 @@ type Config struct {
 	// stated is the residual's streams as the converter states them
 	// (jlm.Streams, the container's own): N of them, each block's reads and
 	// writes; nil for a config no container made.
-	stated        *jlm.Streams
-	ExpertLatent  int
+	stated *jlm.Streams
+	// expWidth is the routed experts' input and output width as their banks
+	// state it (expertWidth), zero for n_embd.
+	expWidth int
+	// LatentNormEps is the MLA latent norms' epsilon.
 	LatentNormEps float64
 	// kvSrcAt replaces KVSource's choice for the shared blocks, a source a
 	// block (nil: none), for a gate's violation only.
@@ -861,16 +863,11 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 	out.HCLowRank = int(c.HCLowRank)
 	out.DeltaDecay, out.DeltaGate = c.DeltaDecay, c.DeltaGate
 	out.AttnResBlock = int(c.AttnResBlock)
-	out.ExpertLatent = int(c.ExpertLatent)
 	out.LatentNormEps = float64(c.LatentNormEps)
 	if out.LatentNormEps == 0 {
 		out.LatentNormEps = out.RMSEps
 	}
 	switch {
-	case out.ExpertLatent != 0 && (out.NExpert == 0 || out.ExpertLatent >= out.NEmbd ||
-		out.ExpertWeightIn):
-		return nil, fmt.Errorf("model: %s: a latent mixture at %d on %d experts at n_embd %d", out.Arch,
-			out.ExpertLatent, out.NExpert, out.NEmbd)
 	case out.AttnResBlock < 0 || out.AttnResBlock != 0 && (out.HCMult != 0 || out.Parallel ||
 		out.NMTP != 0):
 		return nil, fmt.Errorf("model: %s: a checkpoint bank every %d blocks beside another residual "+
@@ -2477,6 +2474,9 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 	if err != nil {
 		return nil, err
 	}
+	if cfg.expWidth, err = expertWidth(c, cfg); err != nil {
+		return nil, err
+	}
 	if v := c.Vision(); v != nil && v.Tower != nil && len(v.Tower.Taps) > 0 {
 		cfg.DeepTaps = len(v.Tower.Taps)
 		if cfg.DeepTaps > cfg.NLayer || cfg.PLEDim != 0 {
@@ -3726,13 +3726,35 @@ func (c *Config) SpecHidW() int {
 	return c.NEmbd
 }
 
-// ExpWidth is the routed experts' input and output width: ExpertLatent
+// ExpWidth is the routed experts' input and output width: their banks' own
 // where they read a latent of their own, n_embd everywhere else.
 func (c *Config) ExpWidth() int {
-	if c.ExpertLatent != 0 {
-		return c.ExpertLatent
+	if c.expWidth != 0 {
+		return c.expWidth
 	}
 	return c.NEmbd
+}
+
+// expertWidth is the routed experts' width as the first mixture block's up
+// bank states it (its rows' width), zero where no block holds one or it is
+// n_embd.
+func expertWidth(f *jlm.File, cfg *Config) (int, error) {
+	for bi := range cfg.NLayer {
+		e, ok := f.Find(jlm.RoleExpUpBank, int32(bi), -1)
+		if !ok || e.NDim < 1 {
+			continue
+		}
+		w := int(e.Dims[0])
+		switch {
+		case w == cfg.NEmbd:
+			return 0, nil
+		case w <= 0 || w > cfg.NEmbd || cfg.ExpertWeightIn:
+			return 0, fmt.Errorf("model: %s: routed experts %d wide on n_embd %d (weights on their input %v)",
+				cfg.Arch, w, cfg.NEmbd, cfg.ExpertWeightIn)
+		}
+		return w, nil
+	}
+	return 0, nil
 }
 
 // f32Bytes is a float32 slice addressed as the bytes a kernel reads: the same
