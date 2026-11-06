@@ -15,9 +15,9 @@ import (
 
 // TestDemotedDevicePrefillFinishesOnTheCPU fails the device partway through a
 // prompt whose every block it held, and demands the host finish it with the
-// same logits a host-only prefill gives. A device-only prompt allocates no host
-// rows (growDeviceBatch), so the host restart after demotion must allocate
-// them (growBatch). Injected failures: the batched call (1), then the per-row
+// same logits a CPU-only prefill gives: the rows the restart reads are the
+// ones the device's chunks sized (growRows), whatever device runs them.
+// Injected failures: the batched call (1), then the per-row
 // retry after one success (3).
 //
 // Build with -tags jitllmfault; tier reads JITLLM_DEVICE_FAIL_AT at Open.

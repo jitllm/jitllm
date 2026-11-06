@@ -240,7 +240,7 @@ func (s *Instance) openPrompt(r *route, slot, base, p0, n, chunkRows int, bidir 
 		r.prompt.SetPromptRows(slot, base, bidir)
 	}
 	if r.tables != nil && r.tables.ReadsTables() {
-		s.growBatch(chunkRows)
+		s.growRows(chunkRows)
 		seq, pos := s.chunkRows(slot, p0, n)
 		return s.rowTables(seq, pos)
 	}

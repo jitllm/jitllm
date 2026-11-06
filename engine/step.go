@@ -548,7 +548,7 @@ func stepTogether(runs []Run, rows int, ss nn.SessionStepper) ([][]float32, erro
 	c := s0.m.Cfg
 	defer s0.fr.Enter()()
 	nrot := c.RopeW()
-	s0.growBatch(rows)
+	s0.growRows(rows)
 	x, cs, csSWA := s0.bx[:rows*c.ResidW()], s0.bcs[:rows*nrot], s0.bswaTable(rows, c.LocalNRot())
 	// The step's lists are s0's, reused: its rows' sessions and positions, the
 	// wanted rows' logits and the slice handed back.

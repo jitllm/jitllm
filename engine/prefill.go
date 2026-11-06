@@ -314,17 +314,7 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 	}
 	chunkRows := min(chunkCap, total)
 	sizeFor := func(rows int) {
-		if s.allOnDevice() {
-			s.growDeviceBatch(rows)
-		} else {
-			s.growBatch(rows)
-		}
-		if c.MoE() {
-			if w := rows * c.NExpertUsed; len(s.bsel) < w {
-				s.bsel = make([]int32, w)
-				s.bw = make([]float32, w)
-			}
-		}
+		s.growRows(rows)
 	}
 	sizeFor(chunkRows)
 
@@ -710,7 +700,10 @@ func (s *Instance) chunkOn(r int) int {
 // Deeper pipelines (more cards) gain from more pieces.
 const pipelineChunks = 4
 
-func (s *Instance) growDeviceBatch(chunk int) {
+// growRows sizes the rows a chunk of chunk rows reads: its residual rows and
+// rotary tables, from the model's spare prompt buffers where they are big
+// enough.
+func (s *Instance) growRows(chunk int) {
 	c := s.c
 	// Every buffer the rows read, the second rotary's table too: a set
 	// whose residual rows suffice may hold a shorter table, or none.
@@ -719,9 +712,6 @@ func (s *Instance) growDeviceBatch(chunk int) {
 		return
 	}
 	b := s.takeSpare()
-	if b != nil {
-		s.spareHost = b.host // growBatch's, if a host block wants it
-	}
 	if b != nil && len(b.bx) >= chunk*c.ResidW() && len(b.bcs) >= chunk*c.RopeW() &&
 		(s.m.RopeSWA == nil || len(b.bcsSWA) >= chunk*c.LocalNRot()) {
 		s.bx, s.bcs, s.bcsSWA = b.bx, b.bcs, b.bcsSWA
@@ -744,7 +734,6 @@ func (s *Instance) growDeviceBatch(chunk int) {
 // need a free list.
 type promptBuf struct {
 	bx, bcs, bcsSWA []float32
-	host            hostBatch
 }
 
 // takeSpare is the model's spare prompt buffers, or nil, emptying the slot.
@@ -765,7 +754,7 @@ func (s *Instance) keepSpare() {
 	s.eng.host.mu.Lock()
 	defer s.eng.host.mu.Unlock()
 	if s.eng.host.spare == nil || len(s.eng.host.spare.bx) < len(s.bx) {
-		s.eng.host.spare = &promptBuf{s.bx, s.bcs, s.bcsSWA, s.takeHostBatch()}
+		s.eng.host.spare = &promptBuf{s.bx, s.bcs, s.bcsSWA}
 	}
 	s.bx, s.bcs, s.bcsSWA = nil, nil, nil
 }
@@ -778,29 +767,6 @@ func (s *Instance) allOnDevice() bool {
 		}
 	}
 	return true
-}
-
-func (s *Instance) growBatch(chunk int) {
-	c := s.c
-	qDim := c.MaxQDim()
-	s.growDeviceBatch(chunk)
-	if len(s.bh) >= chunk*max(c.NEmbd, qDim) {
-		return
-	}
-	// A previous instance's set where it is big enough (hostBatch); scratch
-	// allocates what is not.
-	h := s.spareHost
-	s.spareHost.bh = nil
-	s.bh = scratch(h.bh, chunk*max(c.NEmbd, qDim), 0)
-	// One attention scores row per token, for the same kernels decode uses:
-	// sized where it is used, by the keys the chunk reaches (rowsStride).
-	s.battf = h.battf
-	if c.AttnOutGate {
-		s.qgate = scratch(h.qgate, chunk*2*qDim, 0)
-		s.ogate = scratch(h.ogate, chunk*qDim, 0)
-	}
-	s.bqf = scratch(h.bqf, chunk*qDim, 0)
-	s.bxbf = scratch(h.bxbf, chunk*qDim, 0)
 }
 
 type errEmptyPrompt struct{}
