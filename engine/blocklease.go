@@ -40,6 +40,6 @@ func (l *blockLease) Experts(li int, sel []int32, count bool) error {
 
 func (l *blockLease) ReleaseExperts() { l.hold.Release() }
 
-func (l *blockLease) Rows(own []uint32) error { return l.ws.ngView.Ensure(own) }
+func (l *blockLease) Rows(own []uint32) error { return l.ws.b.Rows(own) }
 
-func (l *blockLease) DropRows() { l.ws.ngView.Drop() }
+func (l *blockLease) DropRows() { l.ws.b.DropRows() }

@@ -312,3 +312,49 @@ func (l *Layer) NamedVector(r jlm.Role) ([]float32, bool) {
 	}
 	return nil, false
 }
+
+// Held is block l's matrix of role r, nil for one it does not hold: what
+// the loader bound under no role of its own -- a prediction block's
+// matrices, the convolution's taps cut from a vector -- held under the role
+// a graph reads it by.
+func (l *Layer) Held(r jlm.Role) *Tensor {
+	if t := l.Matrix(r); t != nil {
+		return t
+	}
+	switch r {
+	case jlm.RoleNextnEHProj:
+		if l.Mtp == nil {
+			return nil
+		}
+		return &l.Mtp.EhProj
+	case jlm.RoleNextnEmbd:
+		if l.Mtp == nil {
+			return nil
+		}
+		return &l.Mtp.Embd
+	case jlm.RoleSSMConv1d:
+		return &l.SsmConvTaps
+	}
+	return nil
+}
+
+// Bytes is block l's matrix of role r as a form reads it: its bytes, its
+// planes where it is packed, and its rows; nil for one it does not hold.
+func (l *Layer) Bytes(r jlm.Role) ([]byte, *nn.Packed, int) { return l.Held(r).Bytes() }
+
+// Floats is block l's vector of role r, nil for one it does not hold.
+func (l *Layer) Floats(r jlm.Role) []float32 {
+	if v, ok := l.NamedVector(r); ok {
+		return v
+	}
+	return nn.VectorOf(l.Vecs, r)
+}
+
+// Bytes is t's bytes, its planes where it is packed, and its rows; nil for
+// no tensor.
+func (t *Tensor) Bytes() ([]byte, *nn.Packed, int) {
+	if t == nil {
+		return nil, nil, 0
+	}
+	return t.Data, t.Packed, t.Rows
+}

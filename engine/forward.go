@@ -638,7 +638,7 @@ func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOp
 			}
 		}
 	}
-	s.ws = weightSource{m: m, dense: &s.dense, fr: fr, outW: s.outW, outNorm: s.outNorm}
+	s.ws = newWeightSource(m, &s.dense, fr, s.outW, s.outNorm)
 	s.kvl = kvLayout{maxSeq: maxSeq, nKV: c.NKVHead,
 		headDim: c.HeadDim}
 	// MLA caches one row per position for the whole layer: the compressed

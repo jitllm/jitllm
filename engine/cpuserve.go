@@ -551,10 +551,7 @@ func (s *Instance) unmapOwn() {
 	if s.cpu.dev != nil {
 		s.cpu.dev.Close()
 	}
-	if s.ws.ngView != nil {
-		s.ws.ngView.Close()
-		s.ws.ngView = nil
-	}
+	s.ws.b.Close()
 }
 
 // cpuPlace composes a new instance's blocks on the CPU: each block of the
@@ -736,12 +733,10 @@ func (s *Instance) formCPUBlock(li int, cb *cpudev.Block, rows int) (*cpudev.For
 	gr := *g
 	gr.Block = 0
 	cb.SideOff = sideAtBinding(&gr)
-	if s.ws.ngView == nil && s.m.Ngram != nil && cpudev.TableRowsOf(&gr) >= 0 {
-		v, err := s.fr.NewRowView(s.m.Ngram.E)
-		if err != nil {
+	if s.m.Ngram != nil && cpudev.TableRowsOf(&gr) >= 0 {
+		if err := s.ws.b.OpenTable(s.m.Ngram.E, s.m.Ngram.RowBytes); err != nil {
 			return nil, err
 		}
-		s.ws.ngView = v
 	}
 	formats := map[jlm.Role]jlm.Type{}
 	f := s.m.Composing()
@@ -786,18 +781,8 @@ func (s *Instance) cpuBanksPaged(li int) bool {
 	if s.m.Container == nil || l.LegacyExperts {
 		return false
 	}
-	if len(s.ws.banks) < len(s.m.Layers) {
-		s.ws.banks = make([][3][3]unsafe.Pointer, len(s.m.Layers))
-	}
-	for i, t := range []*model.Tensor{&l.Gate, &l.Up, &l.Down} {
-		if t.E == nil {
-			continue
-		}
-		planes, _, ok := s.fr.BankView(t.E)
-		if !ok {
-			return false
-		}
-		s.ws.banks[li][i] = planes
+	if !s.ws.b.BankViews(li, len(s.m.Layers), [3]*jlm.Entry{l.Gate.E, l.Up.E, l.Down.E}) {
+		return false
 	}
 	return l.Up.E != nil && l.Down.E != nil
 }
