@@ -1483,9 +1483,11 @@ func (s *Instance) layerWeightsAt(li int, l *model.Layer, banks *[3]nn.Weight) n
 	// carried: wkb and wvb are the banks, indexed by head on the device as an
 	// expert bank is by expert.
 	if s.c.MLA() {
-		w.Wqa, w.Wqb = model.Wt(l.Wqa), model.Wt(l.Wqb)
 		w.Wkva, w.Wkb, w.Wvb = model.Wt(l.Wkva), model.Wt(l.Wkb), model.Wt(l.Wvb)
 	}
+	// A latent query is carried wherever the block stores one, whatever its
+	// attention.
+	w.Wqa, w.Wqb = model.Wt(l.Wqa), model.Wt(l.Wqb)
 	w.Extra = extraWeights(l)
 	if k := s.c.LayerKind(li); k.Recurrent() && !k.Attends() {
 		// A linear block has none of these; leaving the attention four set

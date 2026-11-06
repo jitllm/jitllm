@@ -1971,7 +1971,16 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	mlaSkip := func(i int) bool {
 		if !l.mla {
 			// No latent block, no latent matrices -- except Mamba-1's four,
-			// which ride KDA's slots 18..21 (nn.SSMWeights).
+			// which ride KDA's slots 18..21 (nn.SSMWeights), and a latent
+			// query the container stores for a block of any attention: slot
+			// 0 is then empty and 13/14 are the query.
+			latentQ := len(ws) > 14 && len(ws[13].Data) != 0
+			switch i {
+			case 0:
+				return latentQ && len(ws[0].Data) == 0
+			case 13, 14:
+				return !latentQ
+			}
 			return i >= 13 && !(i >= 18 && p.Recurrent.Scan)
 		}
 		// A linear block of an MLA model (Kimi-Linear) has none of them either:
@@ -2052,6 +2061,11 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 				g.LastErr = fmt.Sprintf("block %d: v is k's projection and the block offers a v matrix", li)
 				return false
 			}
+			continue
+		}
+		// Nor has a block whose graph reads no v matrix (its values are its
+		// keys): slot 2 is empty by construction.
+		if i == 2 && len(x.Data) == 0 && !bindsRole(p.Graph, jlm.RoleAttnV) {
 			continue
 		}
 		// A block that is its mixer alone has no FFN at all.
@@ -3772,6 +3786,9 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	// on the host.
 	pe := g.takeEmbedLocked(x)
 	embedSrv := false
+	// toks is the rows' tokens where the card does not gather the rows
+	// itself: a block reading them (a mixture routed by them) still does.
+	var toks []byte
 	if pe != nil {
 		// The composer's gather (nn.ComposedEmbed) at the call's rows; a call
 		// it cannot write them for (a ragged step's rows, each its own
@@ -3780,9 +3797,15 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 			g.bs.embW.k == p.NEmbd {
 			embedSrv = true
 		} else {
+			if g.bs.embTok != nil {
+				toks, _ = g.embedWords(pe, R)
+			}
 			g.materializeLocked(pe)
 			pe = nil
 		}
+	}
+	if toks == nil && !embedSrv && g.bs.embTok != nil && len(g.stepToks) > 0 {
+		toks = g.tokWords(g.stepToks, R)
 	}
 	if pe == nil {
 		for i := range hx {
@@ -4167,7 +4190,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	g.sub = submitArgs{
 		bs: bs, hb: hb, head: head, lo: lo, hi: hi, pos: pos, x: x,
 		hx: hx, hcs: hcs, hcsSWA: hcsSWA, pn: pn,
-		p: p, rag: rag, pe: pe, key: key, R: R, nrow: nrow,
+		p: p, rag: rag, pe: pe, key: key, R: R, nrow: nrow, toks: toks,
 		nCap: nCap, rrows: rrows,
 		tableSrv: tableSrv, gridSrv: gridSrv, sampleSrv: sampleSrv, embedSrv: embedSrv, raxes: raxes,
 		fold: fold, argmax: argmax, sampleK: sampleK, pick: pick, ragHead: ragHead, parOK: parOK,
@@ -4277,8 +4300,10 @@ type submitArgs struct {
 	// its token; raxes is a table over several axes' staged positions;
 	// gridSrv says the set runs its grid table from the session's cells.
 	tableSrv, sampleSrv, gridSrv bool
-	// embedSrv says the composer gathers the decode row.
+	// embedSrv says the composer gathers the decode row; toks is the rows'
+	// tokens where it does not.
 	embedSrv       bool
+	toks           []byte
 	raxes          []byte
 	sampleK        int
 	pick           bool
@@ -4715,6 +4740,9 @@ func (g *devTier) layersSession(s backend.Session) {
 	// than 54 times across 18 blocks.
 	if fold {
 		w(hb.foldReq, g.foldWords(nrow-1))
+	}
+	if !embedSrv && a.toks != nil {
+		w(g.bs.embTok, a.toks)
 	}
 	if embedSrv {
 		tok, at := g.embedWords(pe, R)
@@ -6058,4 +6086,19 @@ func (g *devTier) foldWords(row int) []byte {
 	b = binary.LittleEndian.AppendUint32(b, uint32(row))
 	g.subBytes.fold = b
 	return b
+}
+
+// bindsRole reports whether graph g binds a weight of role r.
+func bindsRole(g *graph.Graph, r jlm.Role) bool {
+	if g == nil {
+		return true
+	}
+	for _, o := range g.Ops {
+		for _, b := range o.Weight {
+			if b.Role == r {
+				return true
+			}
+		}
+	}
+	return false
 }
