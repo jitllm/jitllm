@@ -87,7 +87,7 @@ func TestComposedCPUProfile(t *testing.T) {
 		run(warm)
 		each = each[:0]
 		st.ResetProfile()
-		for _, f := range st.eng.cpu.Forms(m.Id).All() {
+		for _, f := range cpuOf(st).Forms(m.Id).All() {
 			f.ResetProfile()
 		}
 		cpudev.PoolOf(st.Devices()).ResetRegions()
@@ -121,7 +121,7 @@ func TestComposedCPUProfile(t *testing.T) {
 			pc, pcall, pstart, pmax int64
 		}
 		var rows []row
-		for _, f := range st.eng.cpu.Forms(m.Id).All() {
+		for _, f := range cpuOf(st).Forms(m.Id).All() {
 			for i := range f.Codes {
 				c := f.Codes[i].Profile()
 				if c.Runs > 0 {

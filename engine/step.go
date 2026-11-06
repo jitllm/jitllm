@@ -433,7 +433,7 @@ func routedStepper(runs []Run, rows int) bool {
 	}
 	s0 := runs[0].Instance
 	for _, r := range runs {
-		if !r.Instance.RoutedSteppable() || r.Instance.m != s0.m || r.Instance.eng.cpu != s0.eng.cpu {
+		if !r.Instance.RoutedSteppable() || r.Instance.m != s0.m || r.Instance.eng.dev != s0.eng.dev {
 			return false
 		}
 	}

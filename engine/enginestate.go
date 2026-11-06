@@ -4,7 +4,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/jitllm/jitllm/engine/device/cpudev"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // hostShared is the scratch every instance of a model on one CPU device
@@ -35,10 +35,9 @@ type engineState struct {
 	// host is the scratch the model's instances on the CPU device hand each
 	// other (hostShared).
 	host *hostShared
-	// cpu is the CPU device the instances run on: its target, its crews, the
-	// model's forms, arenas and history pool on it, and the instances' seats.
-	// ownCPU is that the instance that made it closes it (no WithCPU).
-	cpu    *cpudev.CPU
+	// dev is the device the instances' lanes run on, as they open it; ownCPU
+	// is that the instance that made it closes it (no WithCPU).
+	dev    nn.ExecutionDevice
 	ownCPU bool
 	// routedStepRows is the rows StepRuns has run as routed steps across
 	// sessions (stepRouted); RoutedStepRows reports it.

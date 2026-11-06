@@ -524,41 +524,43 @@ func NewInstance(m *model.Model, maxSeq int, opts ...Option) (*Instance, error) 
 			return nil, err
 		}
 	}
-	g := &engineState{cpu: lo.cpu, fuse: lo.opt.fuse}
+	g := &engineState{fuse: lo.opt.fuse}
 	if g.fuse == nil {
 		g.fuse = &fuseCount{}
 	}
-	if g.cpu == nil {
-		if g.cpu, err = OpenCPU(opts...); err != nil {
+	c := lo.cpu
+	if c == nil {
+		if c, err = OpenCPU(opts...); err != nil {
 			return nil, err
 		}
 		g.ownCPU = true
 	}
+	g.dev = c.Execs(lo.opt.cpuFloat, !lo.opt.noServingSplit)
 	// The CPU device keeps the model's forms, arenas and frames while an
 	// instance holds it there: this one's hold goes at its Close.
-	g.cpu.HoldModel(m.Id)
-	g.host = g.cpu.Attached(m.Id, func() any { return &hostShared{} }).(*hostShared)
+	g.dev.HoldModel(m.Id)
+	g.host = g.dev.Attached(m.Id, func() any { return &hostShared{} }).(*hostShared)
 	// The page quota is the caller's, or the model's memory plan, recorded
 	// before the frames are made: it budgets them from their first read.
 	pq := m.Gc.Budget()
 	if lo.opt.pageBudgetSet {
 		pq = lo.opt.pageBudget
 	}
-	q := g.cpu.NewQuota(m.Id, pq)
-	fr, err := g.cpu.Frames(m.Id, m.NewFrames)
+	q := g.dev.NewQuota(m.Id, pq)
+	fr, err := g.dev.Frames(m.Id, m.NewFrames)
 	if err == nil {
 		var s *Instance
 		if s, err = newInstanceOver(m, g, fr, lo.opt, m.Cfg, 1, maxSeq, 0, m.Cfg.NLayer, q); err == nil {
 			// The CPU device holds the model for it from above.
-			s.root, s.owners[routeLanes] = true, g.cpu
+			s.root, s.owners[routeLanes] = true, g.dev
 			s.pageQuota.Store(pq)
 			return s, nil
 		}
 	}
 	q.Drop()
-	g.cpu.ReleaseModel(m.Id)
+	g.dev.ReleaseModel(m.Id)
 	if g.ownCPU {
-		g.cpu.Close()
+		g.dev.Close()
 	}
 	return nil, err
 }
@@ -587,7 +589,7 @@ func OpenCPU(opts ...Option) (*cpudev.CPU, error) {
 // newInstanceOver is an instance over blocks [lo, hi) of a segment whose
 // geometry is c's (the text's, or the tower's: towerConfig), sharing g,
 // paging what it runs on the CPU into fr and running with knobs opt.
-func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOpts, c *model.Config, nseq, maxSeq, lo, hi int, q *cpudev.Quota) (*Instance, error) {
+func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOpts, c *model.Config, nseq, maxSeq, lo, hi int, q nn.Quota) (*Instance, error) {
 	// Clamp to the model's context, and record the request (reqSeq) so a
 	// later "kv cache is full" can name the number the caller passed.
 	req := maxSeq
@@ -650,10 +652,10 @@ func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOp
 	s.rmarks = model.RopeMarks{}
 	s.allocRecurrent(nseq)
 
-	s.exec.x = g.cpu.Attach(cpudev.Setup{Model: m.Id, Frames: fr, Float: opt.cpuFloat, Split: !opt.noServingSplit,
+	s.exec.x = g.dev.AttachExecution(nn.ExecutionSetup{Model: m.Id, Frames: fr,
 		NoFuse: opt.noFuse, Chunk: opt.prefillChunk, Tries: &g.fuse.tries, Runs: &g.fuse.runs, Quota: q,
 		Width: c.NEmbd, Seqs: nseq, Streams: c.Streams(), ConvLen: s.dg.ConvStateLen(),
-		Trace: func(li int) { s.trace(li, "ffn_resid", s.x) }})
+		Trace: func(li int) { s.trace(li, "ffn_resid", s.x) }}).(*cpudev.Exec)
 	s.setPlace(routeLanes, s.exec.x)
 	s.placeRange(routeLanes)
 	s.holdFrames()
@@ -782,7 +784,7 @@ func (s *Instance) Close() error {
 				s.holdOn(routeLanes, nil)
 			}
 			if s.eng.ownCPU {
-				s.eng.cpu.Close()
+				s.eng.dev.Close()
 			}
 		}()
 	}

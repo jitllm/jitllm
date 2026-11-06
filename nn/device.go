@@ -6,6 +6,7 @@ import (
 	"github.com/jitllm/jitllm/nn/history"
 	"math"
 	"strings"
+	"sync/atomic"
 
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
@@ -895,6 +896,58 @@ type Spinner interface{ SetSpinning(bool) }
 
 // Threaded is a device that runs its blocks on threads of its own.
 type Threaded interface{ Workers() int }
+
+// Quota is an instance's budget of the frames its blocks page into on a
+// device: Set moves it, Drop gives it back.
+type Quota interface {
+	Set(bytes, held uint64) uint64
+	Drop()
+}
+
+// ModelScratch keeps a value beside a model on a device for every instance
+// of it there, made by mk on the first ask, gone with the model's last hold.
+type ModelScratch interface {
+	Attached(model uint64, mk func() any) any
+}
+
+// FrameKeeper is a device whose memory holds a model's pages: the frames its
+// instances page blocks into, made by mk on the first ask, and each
+// instance's quota of them, registered before the frames are read.
+type FrameKeeper interface {
+	NewQuota(model, bytes uint64) Quota
+	Frames(model uint64, mk func(...jlm.FramesOption) (*jlm.Frames, error)) (*jlm.Frames, error)
+}
+
+// ExecutionSetup is what an instance hands a device it runs blocks on when
+// it attaches its execution: the model, its frames there and its quota of
+// them (nil for an instance sharing its parent's), the fusion and prompt
+// policy, the counters of fused runs, the geometry its lanes are sized for,
+// and a trace of each block's output.
+type ExecutionSetup struct {
+	Model                         uint64
+	Frames                        *jlm.Frames
+	Quota                         Quota
+	NoFuse                        bool
+	Chunk                         int
+	Tries, Runs                   *atomic.Int64
+	Width, Seqs, Streams, ConvLen int
+	Trace                         func(li int)
+}
+
+// ExecutionAttacher attaches an instance's execution to a device.
+type ExecutionAttacher interface {
+	AttachExecution(ExecutionSetup) BlockPlacer
+}
+
+// ExecutionDevice is a device an instance runs its lanes on, as the instance
+// opens it.
+type ExecutionDevice interface {
+	ModelOwner
+	ModelScratch
+	FrameKeeper
+	ExecutionAttacher
+	Close()
+}
 
 // HistoryStorage is the storage a device whose memory holds sessions'
 // history keeps for the model it runs: the pool of pages closed sessions
