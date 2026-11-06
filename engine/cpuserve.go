@@ -6,8 +6,6 @@ import (
 	"slices"
 	"unsafe"
 
-	"github.com/jitllm/jitllm/model"
-
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/device/cpudev"
@@ -64,14 +62,6 @@ type cpuState struct {
 	// each sequence's last position a step's rows reach (cpuRecWhole).
 	lastPos    []int
 	rseq, rpos []int
-	// runWindows says each run of the instance's (bidir) is a window its rows
-	// attend inside, none of the positions before it: a tower's windowed
-	// block's (cpuTowerRows).
-	runWindows bool
-	// rowWins is each row's own window where a call's rows' windows overlap
-	// (an LFM2 encoder's media prefix), nil else: its rows' descriptors
-	// carry them as they are.
-	rowWins []nn.KeyRun
 	// bound is what a run of a form's codes reads its addresses from.
 	bound cpudev.Bound
 	// fault is a violation a gate sets: the bindings rewritten so a kernel
@@ -140,27 +130,6 @@ const cpuRowsCap = cpudev.RowsCap
 // (composer.CPUForm).
 func CPUForm() string {
 	return composer.CPUForm(cpudev.Target(cpu.Probe().ISA(), 1), runtime.GOARCH == "arm64")
-}
-
-// cpuRows runs block li on the CPU the composer's way for the n rows of x,
-// row i at position pos[i] of sequence seq[i], its rotary table the i-th of
-// cs, or says why not: through the rows' form, a call of at most its
-// capacity at a time, each row's history in its own sequence's pages.
-func (s *Instance) cpuRows(li int, l *model.Layer, x, cs, csSWA []float32, seq, pos []int, tok []int32) (nn.Decline, error) {
-	if err := s.cpuRowTables(seq, pos); err != nil {
-		return nn.DeclineServes, err
-	}
-	ln := s.cpu.lanes
-	ln.Attach(s.kv, s.view)
-	f, why := ln.RowsForm(li, l)
-	if why != nn.DeclineServes {
-		return why, nil
-	}
-	if why := ln.ReadyRows(li, f, pos); why != nn.DeclineServes {
-		return why, nil
-	}
-	side, _ := s.cpuSideRows(li)
-	return nn.DeclineServes, s.cpuRowsRun(li, l, f, x, len(pos)*s.c.NEmbd, side, s.bcs, s.c.RopeW(), s.bcsSWA, s.c.LocalNRot(), seq, pos, tok)
 }
 
 // swaRows is the step's second rotary table from row a, nil where the model
@@ -352,21 +321,6 @@ func (s *kvPages) arenaSlots() int {
 		return t.Slots()
 	}
 	return 0
-}
-
-// cpuRowsRun runs form f of block li (l its copy) over the rows of x, the
-// stream-major residual stride apart, at positions pos of sequences seq with
-// tokens tok, their per-layer inputs side, rotary tables cs and swa, on the
-// CPU device (cpudev.Lanes.Rows): the session's history attached, the
-// prompt's runs and the rows' windows handed before the call.
-func (s *Instance) cpuRowsRun(li int, l *model.Layer, f *cpudev.Form, x []float32, stride int, side, cs []float32, nrot int, swa []float32, nswa int, seq, pos []int, tok []int32) error {
-	ln := s.cpu.lanes
-	ln.Attach(s.kv, s.view)
-	ln.KeyRuns(s.bidir, s.cpu.runWindows, s.cpu.rowWins)
-	_, pw := s.cpuSideRows(li)
-	rc := cpudev.RowsCall{X: x, Stride: stride, Side: side, SideW: pw, CS: cs, NRot: nrot, CSSWA: swa, NSWA: nswa,
-		Seq: seq, Pos: pos, Tok: tok}
-	return ln.Rows(li, f, l, &rc)
 }
 
 // blockWhy is what keeps block li off the composer's CPU path before it is
