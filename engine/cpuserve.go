@@ -56,7 +56,6 @@ type laneDevice struct {
 	lanes *cpudev.Lanes
 }
 
-
 // cpuRowsCap is the rows the CPU's form of several rows is composed for
 // (cpudev.RowsCap).
 const cpuRowsCap = cpudev.RowsCap
@@ -209,7 +208,7 @@ func (s *Instance) blockSpec(li int) nn.BlockSpec {
 	// A block turns by the rotary its rope ops state, of the
 	// instance's (rotaries): each its own table, bound by instance.
 	p.Rotaries = s.rotaries()
-	p.F32 = s.kvl.fmt == cpu.KVF32
+	p.F32 = s.kvl.fmt == nn.KVF32
 	p.Bidir = s.c.LayerKind(li).Attends() && s.c.BidirAt(li)
 	p.Whole = s.wholePicture(li)
 	return p
@@ -263,7 +262,7 @@ func (s *Instance) blockWhy(li int) nn.Decline {
 		return nn.DeclineExperts
 	case c.LayerKind(li).Recurrent() && (s.view.State(li) == nil || s.view.Conv(li) == nil):
 		return nn.DeclineRecurrent
-	case s.kvl.fmt != cpu.KVF16 && s.kvl.fmt != cpu.KVF32:
+	case s.kvl.fmt != nn.KVF16 && s.kvl.fmt != nn.KVF32:
 		return nn.DeclineKVFormat
 	case pg.p > 0 && pg.arena() == nil:
 		return nn.DeclinePageOut

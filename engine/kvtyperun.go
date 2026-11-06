@@ -1,16 +1,16 @@
 package engine
 
 import (
-	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/model"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // KVType is the format this session's cache holds.
 func (s *Instance) KVType() model.KVType {
 	switch s.kvFmt {
-	case cpu.KVF16:
+	case nn.KVF16:
 		return model.KVF16
-	case cpu.KVQ8:
+	case nn.KVQ8:
 		return model.KVQ8_0
 	}
 	return model.KVF32

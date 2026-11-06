@@ -8,8 +8,6 @@ import (
 
 	"github.com/jitllm/jitllm/model"
 
-	"github.com/jitllm/jitllm/engine/device/cpu"
-
 	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
@@ -354,7 +352,7 @@ func TestABinary16HistoryMovesToTheDevice(t *testing.T) {
 	run := func(ids []int32, move bool) [][]float32 {
 		st := testInstance(t, m, len(prompt)+ntok+1, instOpts...)
 		defer st.Close()
-		if st.kvFmt != cpu.KVF16 {
+		if st.kvFmt != nn.KVF16 {
 			t.Skipf("the host cache is %v, not binary16: this gate proved nothing", st.kvFmt)
 		}
 		logits, err := st.Prefill(prompt)

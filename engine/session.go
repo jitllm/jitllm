@@ -6,7 +6,6 @@ import (
 
 	"github.com/jitllm/jitllm/model"
 
-	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"github.com/jitllm/jitllm/nn"
 )
@@ -20,7 +19,7 @@ type Session struct {
 	// holds, nil between phases.
 	model    *model.Model
 	limit    int
-	kvFormat cpu.KVFmt
+	kvFormat nn.KVFmt
 	span     [2]int
 	lease    *Lease
 	// sched is the scheduler that leases the session; on the instance whose

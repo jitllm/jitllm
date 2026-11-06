@@ -1,8 +1,8 @@
 package engine
 
 import (
-	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/model"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // kvLayout is where a (sequence slot, position, kv head) lives in the host KV
@@ -14,10 +14,10 @@ type kvLayout struct {
 	nKV     int
 	headDim int
 	// fmt is the cached elements' format. The cache stays a []float32 and
-	// holds packed halves (f16) or q8_0 rows (cpu.KVFmt) in its slots; every
+	// holds packed halves (f16) or q8_0 rows (nn.KVFmt) in its slots; every
 	// offset handed out is a whole number of head rows, and a row of any
-	// format fills whole float32 slots (cpu.KVRowBytes).
-	fmt cpu.KVFmt
+	// format fills whole float32 slots (nn.KVRowBytes).
+	fmt nn.KVFmt
 }
 
 // slots is how many float32 slots a run of n elements occupies. n is always a
@@ -25,10 +25,10 @@ type kvLayout struct {
 // the quantization unit and has no element-sized slot.
 func (l kvLayout) slots(n int) int {
 	switch l.fmt {
-	case cpu.KVF16:
+	case nn.KVF16:
 		return n * 2 / 4
-	case cpu.KVQ8:
-		return n / l.headDim * cpu.KVRowBytes(cpu.KVQ8, l.headDim) / 4
+	case nn.KVQ8:
+		return n / l.headDim * nn.KVRowBytes(nn.KVQ8, l.headDim) / 4
 	}
 	return n
 }
@@ -38,9 +38,9 @@ func (l kvLayout) slots(n int) int {
 // their keys, and the format's name for a q8 cache.
 func (l kvLayout) elemTag() string {
 	switch l.fmt {
-	case cpu.KVF16:
+	case nn.KVF16:
 		return "2"
-	case cpu.KVQ8:
+	case nn.KVQ8:
 		return l.fmt.String()
 	}
 	return "4"
