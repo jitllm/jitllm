@@ -401,6 +401,10 @@ type Instance struct {
 	fromFrames [2]bool
 	// chunks are the routes' devices' prompt chunk limits, asserted once.
 	chunks [2]nn.ChunkLimiter
+	// spilling is block li+1 while a card re-offers it to the cards after it
+	// (SpillAfter), 0 otherwise: it moves between cards and is handed to no
+	// device on the way.
+	spilling int
 	// framesHeld says this instance keeps (jlm.File.Keep) the pages of the
 	// blocks of [lo, hi) a device runs from them, from its making until
 	// Close.
@@ -2360,11 +2364,14 @@ func (s *Instance) relocateUntil(pos int, fits func() bool) {
 		// crossing. See gpu.GPU.SpillAfter.
 		spilled := false
 		if sp != nil && sp.SpillAfter(li) {
+			s.spilling = li + 1
 			s.unmarkOnDev(li)
 			s.offerRange(li, li+1)
 			if spilled = s.devAt(li); !spilled {
 				s.markOnDev(li) // no later card took it; it never left
-			} else if s.migrateKV(li, s.pos, true) && s.migrateRec(li, true) {
+			}
+			s.spilling = 0
+			if spilled && s.migrateKV(li, s.pos, true) && s.migrateRec(li, true) {
 				s.devSpilled++
 				continue
 			}
@@ -3514,6 +3521,9 @@ func (s *Instance) holdFrame(li, r, d int) {
 // here and holds the frames while it is there; a device with a copy of its
 // own took the block from an offer and lets it go over the run it leaves.
 func (s *Instance) handOver(li, from, to int) {
+	if s.spilling == li+1 {
+		return
+	}
 	if s.fromFrames[from] {
 		s.places[from].ReleaseLayers(li, li+1)
 		s.holdFrame(li, from, -1)
