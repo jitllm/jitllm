@@ -29,6 +29,11 @@ func scoreMap(shape []int, in []Operand, out Operand, e []Expr, f Facts) Prim {
 // row's first position as its window's start, the Window positions ending
 // at the query's or the query's aligned chunk.
 func decomposeAttend(o graph.Op, c *Context) ([]Prim, error) {
+	undo, err := c.onHistory(o)
+	if err != nil {
+		return nil, err
+	}
+	defer undo()
 	a := o.Attr
 	if len(o.In) != 1 && len(o.In) != 2 || len(o.Out) != 1 || len(o.Weight) > 1 || a.Window < 0 || a.Softcap < 0 ||
 		a.NHead <= 0 || a.NKVHead <= 0 || a.NHead%a.NKVHead != 0 || c.Step.Page <= 0 || c.Step.Keys <= 0 {
@@ -41,13 +46,13 @@ func decomposeAttend(o graph.Op, c *Context) ([]Prim, error) {
 		}
 		kw = a.Width
 	}
-	values, vl := c.History.values()
-	for _, l := range []Pool{c.History.Keys, vl} {
-		if err := l.check(kw); err != nil {
-			return nil, err
-		}
+	if len(o.Reads) == 2 {
+		return attendBoth(o, c, kw)
 	}
-	g := attendGeom{D: a.HeadDim, KW: kw, Keys: c.History.Keys.operand(TableKeys.op()), Values: values, ValuePool: vl}
+	g, err := c.attendGeomOf(o.Reads[0], 1, kw, a)
+	if err != nil {
+		return nil, err
+	}
 	if len(o.In) == 2 {
 		// A block selection: the positions each kv group's mask keeps.
 		sel := c.producer(o.In[1])
@@ -60,16 +65,96 @@ func decomposeAttend(o graph.Op, c *Context) ([]Prim, error) {
 		m := maskOf(c, o.In[1])
 		g.Mask, g.MaskGroups = &m, sel.Attr.NKVHead
 	}
+	return attend(o, c, c.value(o.In[0]), c.value(o.Out[0]), g), nil
+}
+
+// attendGeomOf is an attention's geometry over the history r, an entry each
+// period positions, its rows kw wide.
+func (c *Context) attendGeomOf(r graph.StateRef, period, kw int, a graph.Attrs) (attendGeom, error) {
+	l, err := c.layoutOf(r.Hist)
+	if err != nil {
+		return attendGeom{}, err
+	}
+	if max(1, l.Period) != max(1, period) {
+		return attendGeom{}, fmt.Errorf("an attention over an entry each %d positions of a history of one each %d", period, l.Period)
+	}
+	values, vl := l.values(r.Hist)
+	for _, p := range []Pool{l.Keys, vl} {
+		if err := p.check(kw); err != nil {
+			return attendGeom{}, err
+		}
+	}
+	g := attendGeom{D: a.HeadDim, KW: kw, Keys: l.Keys.operand(TableKeys.of(int(r.Hist))), Values: values, ValuePool: vl,
+		KeyPool: l.Keys, Slots: l.slots(c.Step.Page), Pages: TablePages.of(int(r.Hist)), Period: period}
 	// A block sharing another's history (graph.SharedHistory) reads that
 	// block's pools as it left them.
-	if len(o.Reads) == 1 && o.Reads[0].From > 0 {
-		n := o.Reads[0].From - 1
+	if r.From > 0 {
+		n := r.From - 1
 		if c.Graph.Block < 0 {
-			return nil, fmt.Errorf("an attention over block %d's history outside a block", n)
+			return attendGeom{}, fmt.Errorf("an attention over block %d's history outside a block", n)
 		}
 		g.Keys.Of, g.Values.Of = c.blockPart(n), c.blockPart(n)
 	}
-	return attend(o, c, c.value(o.In[0]), c.value(o.Out[0]), g), nil
+	return g, nil
+}
+
+// attendBoth is an attention over two histories in one softmax: each read
+// as a partial of its own (attendPartial), the second's entries masked by a
+// selection where the op has one, then merged as a pass is folded into the
+// running partial (foldPasses): each side's weighted values and sum scaled
+// by exp of its maximum less the larger, a side that attended nothing
+// dropped, a sink's exp(sink - max) in the sum once.
+func attendBoth(o graph.Op, c *Context, kw int) ([]Prim, error) {
+	a := o.Attr
+	if c.History.Passes {
+		return nil, fmt.Errorf("an attention over two histories read in passes")
+	}
+	rows, err := c.attendGeomOf(o.Reads[0], 1, kw, a)
+	if err != nil {
+		return nil, err
+	}
+	ents, err := c.attendGeomOf(o.Reads[1], a.Span, int(a.Words[0]), a)
+	if err != nil {
+		return nil, err
+	}
+	ents.Tag = "e."
+	if len(o.In) == 2 {
+		sel := c.producer(o.In[1])
+		if sel == nil || sel.Kind != graph.OpSelect || a.NHead%sel.Attr.NKVHead != 0 {
+			return nil, fmt.Errorf("an attention of %d heads over a selection that is not its entries' groups", a.NHead)
+		}
+		m := maskOf(c, o.In[1])
+		ents.Mask, ents.MaskGroups = &m, sel.Attr.NKVHead
+	}
+	q, out := c.value(o.In[0]), c.value(o.Out[0])
+	ea := a
+	ea.Window, ea.Chunked, ea.RowWindows = 0, false, false
+	pr, vr, lr, mr := attendPartial(o, a, c, q, out, rows)
+	pe, ve, le, me := attendPartial(o, ea, c, q, out, ents)
+	R, H, D := c.Step.Rows, a.NHead, a.HeadDim
+	F := ir.F32
+	heads, dims := []int{R, H}, []int{R, H, D}
+	minus := math.Float32frombits(0xff7fffff)
+
+	var x exprs
+	r, h, d := x.coord(0), x.coord(1), x.coord(2)
+	mo, lo, mj, lj := x.at(2, heads, r, h), x.at(1, heads, r, h), x.at(5, heads, r, h), x.at(4, heads, r, h)
+	held := x.op(OpLess, ir.Pred, x.f(0), lo)
+	seen := x.op(OpLess, ir.Pred, x.f(minus/2), mj)
+	mn := x.sel(F, held, x.sel(F, seen, x.op(OpMax, F, mo, mj), mo), mj)
+	ex := x.sel(F, held, x.un(OpExp, F, x.op(OpSub, F, mo, mn)), x.f(0))
+	ey := x.sel(F, seen, x.un(OpExp, F, x.op(OpSub, F, mj, mn)), x.f(0))
+	acc := x.op(OpAdd, F, x.op(OpMul, F, x.at(0, dims, r, h, d), ex), x.op(OpMul, F, x.at(3, dims, r, h, d), ey))
+	l := x.op(OpAdd, F, x.op(OpMul, F, lo, ex), x.op(OpMul, F, lj, ey))
+	in := []Operand{vr, lr, mr, ve, le, me}
+	if len(o.Weight) == 1 {
+		l = x.op(OpAdd, F, l, x.un(OpExp, F, x.op(OpSub, F, x.at(6, []int{H}, h), mn)))
+		in = append(in, sinkVec(o))
+	}
+	x.op(OpMul, F, acc, x.op(OpDiv, F, x.f(1), x.op(OpMax, F, l, x.f(1e-30))))
+	prims := append(pr, pe...)
+	return append(prims, Prim{Kind: PrimMap, Shape: dims, In: in, Out: out, Expr: x.e,
+		Facts: Facts{Heads: &Heads{Rows: R, Query: H, Key: a.NKVHead, Dim: D, Seqs: c.Step.Seqs}}}), nil
 }
 
 // attendGeom is an attention's shape over the history's pools: D a key
@@ -83,8 +168,16 @@ type attendGeom struct {
 	// position it does not keep scores as the least float.
 	Mask       *Operand
 	MaskGroups int
-	// ValuePool is how the values' pool lays out a page.
-	ValuePool Pool
+	// ValuePool is how the values' pool lays out a page, KeyPool the keys',
+	// Slots a page's slots in either (History.slots) and Pages the page
+	// table they are read through.
+	ValuePool, KeyPool Pool
+	Slots              int
+	Pages              Operand
+	// Period, past 1, reads a history of an entry each Period positions.
+	Period int
+	// Tag sets this history's scratch apart from another's the op reads.
+	Tag string
 }
 
 // attend is decodeAttend's primitives for the query q (rows by heads by
@@ -92,18 +185,49 @@ type attendGeom struct {
 // softcap and sinks.
 func attend(o graph.Op, c *Context, q, out Operand, g attendGeom) []Prim {
 	a := o.Attr
+	R, H, D := c.Step.Rows, a.NHead, g.D
+	prims, values, sums, maxes := attendPartial(o, a, c, q, out, g)
+	if c.History.Passes {
+		return append(prims, foldPasses(o, R, H, D, values, sums, maxes, out)...)
+	}
+	var ox exprs
+	nv := ox.at(0, []int{R, H, D}, ox.coord(0), ox.coord(1), ox.coord(2))
+	l := ox.at(1, []int{R, H}, ox.coord(0), ox.coord(1))
+	outIn := []Operand{values, sums}
+	if len(o.Weight) == 1 {
+		// A sink is one more logit a head in the denominator alone: the
+		// sum gains exp(sink - max), the max the keys' alone, so the
+		// attention keeps the form of one without (the split's partitions
+		// and their combine). A sink past the max by more than a float's
+		// exponent makes the sum infinite and the row zero, its limit.
+		m := ox.at(2, []int{R, H}, ox.coord(0), ox.coord(1))
+		l = ox.op(OpAdd, ir.F32, l, ox.un(OpExp, ir.F32, ox.op(OpSub, ir.F32, ox.at(3, []int{H}, ox.coord(1)), m)))
+		outIn = append(outIn, maxes, sinkVec(o))
+	}
+	ox.op(OpMul, ir.F32, nv, ox.op(OpDiv, ir.F32, ox.f(1), ox.op(OpMax, ir.F32, l, ox.f(1e-30))))
+	return append(prims, Prim{Kind: PrimMap, Shape: []int{R, H, D}, In: outIn, Out: out, Expr: ox.e, Facts: Facts{Heads: &Heads{Rows: R, Query: H, Key: a.NKVHead, Dim: D, Seqs: c.Step.Seqs}}})
+}
+
+// attendPartial is attend's primitives up to its partial over the history
+// g reads, a's heads, scale, window and softcap: the weighted values, their
+// sum and the maximum score, each a row's head's.
+func attendPartial(o graph.Op, a graph.Attrs, c *Context, q, out Operand, g attendGeom) (prims []Prim, values, sums, maxes Operand) {
 	U, F := ir.U32, ir.F32
 	R, H, D := c.Step.Rows, a.NHead, g.D
 	C := c.Step.Keys
+	if g.Period > 1 {
+		C = max(1, C/g.Period)
+	}
 	gqa, kw, pg := a.NHead/a.NKVHead, g.KW, c.Step.Page
 	tmp := func(name string) Operand {
-		return Operand{Kind: OperandScratch, Name: out.Name + "." + name, Temp: true}
+		return Operand{Kind: OperandScratch, Name: out.Name + "." + g.Tag + name, Temp: true}
 	}
-	dots, scores, maxes, weights, sums, values := tmp("dots"), tmp("scores"), tmp("max"), tmp("weights"), tmp("sum"), tmp("values")
+	dots, scores, weights := tmp("dots"), tmp("scores"), tmp("weights")
+	maxes, sums, values = tmp("max"), tmp("sum"), tmp("values")
 	minus := math.Float32frombits(0xff7fffff)
-	keys, heads, dims := []int{R, H, C}, []int{R, H}, []int{R, H, D}
+	keys, heads := []int{R, H, C}, []int{R, H}
 
-	hs := history{a: a, pageSize: pg}
+	hs := history{a: a, pageSize: pg, period: g.Period}
 	position, held, page := hs.position, hs.held, hs.page
 	rng := func(axis int) Facts {
 		return Facts{Range: hs.span(axis), Heads: &Heads{Rows: R, Query: H, Key: a.NKVHead, Dim: D, Seqs: c.Step.Seqs},
@@ -117,7 +241,7 @@ func attend(o graph.Op, c *Context, q, out Operand, g attendGeom) []Prim {
 	kh := dx.op(OpDiv, U, h, dx.u(uint32(gqa)))
 	kd := dx.op(OpAdd, U, dx.op(OpMul, U, kh, dx.u(uint32(D))), d)
 	qat := dx.op(OpAdd, U, dx.op(OpMul, U, dx.op(OpAdd, U, dx.op(OpMul, U, dx.coord(0), dx.u(uint32(H))), h), dx.u(uint32(D))), d)
-	dx.op(OpMul, F, dx.load(0, qat), c.poolRead(&dx, 3, c.History.Keys, kw, pid, off, kd))
+	dx.op(OpMul, F, dx.load(0, qat), c.poolReadIn(&dx, 3, g.KeyPool, g.Slots, kw, pid, off, kd))
 
 	var sx exprs
 	spos, sfirst := position(&sx)
@@ -156,28 +280,12 @@ func attend(o graph.Op, c *Context, q, out Operand, g attendGeom) []Prim {
 	vkh := vx.op(OpDiv, U, vh, vx.u(uint32(gqa)))
 	vd2 := vx.op(OpAdd, U, vx.op(OpMul, U, vkh, vx.u(uint32(D))), vd)
 	w := vx.at(0, keys, vx.coord(0), vh, vk)
-	v := c.poolRead(&vx, 3, g.ValuePool, kw, vpid, voff, vd2)
+	v := c.poolReadIn(&vx, 3, g.ValuePool, g.Slots, kw, vpid, voff, vd2)
 	if c.History.Passes {
 		// A pass the row attends nothing of reads a page outside the pass.
 		v = vx.sel(F, vx.op(OpLess, ir.Pred, vpos, vx.live()), v, vx.f(0))
 	}
 	vx.op(OpMul, F, w, v)
-
-	var ox exprs
-	nv := ox.at(0, dims, ox.coord(0), ox.coord(1), ox.coord(2))
-	l := ox.at(1, heads, ox.coord(0), ox.coord(1))
-	outIn := []Operand{values, sums}
-	if len(o.Weight) == 1 {
-		// A sink is one more logit a head in the denominator alone: the
-		// sum gains exp(sink - max), the max the keys' alone, so the
-		// attention keeps the form of one without (the split's partitions
-		// and their combine). A sink past the max by more than a float's
-		// exponent makes the sum infinite and the row zero, its limit.
-		m := ox.at(2, heads, ox.coord(0), ox.coord(1))
-		l = ox.op(OpAdd, F, l, ox.un(OpExp, F, ox.op(OpSub, F, ox.at(3, []int{H}, ox.coord(1)), m)))
-		outIn = append(outIn, maxes, sinkVec(o))
-	}
-	ox.op(OpMul, F, nv, ox.op(OpDiv, F, ox.f(1), ox.op(OpMax, F, l, ox.f(1e-30))))
 
 	sum := rng(2)
 	if !c.History.Passes {
@@ -186,10 +294,10 @@ func attend(o graph.Op, c *Context, q, out Operand, g attendGeom) []Prim {
 	scored := rng(2)
 	scored.Extents[0] = R * H * D
 	desc := TableRows.op()
-	if a.RowWindows || a.Window > 0 && !a.Bidir {
+	if g.Period <= 1 && (a.RowWindows || a.Window > 0 && !a.Bidir) {
 		desc = TableWindows.op()
 	}
-	tables := func(ops ...Operand) []Operand { return append([]Operand{ops[0], desc, TablePages.op()}, ops[1:]...) }
+	tables := func(ops ...Operand) []Operand { return append([]Operand{ops[0], desc, g.Pages}, ops[1:]...) }
 	// The score map reads the mask as its fourth operand.
 	withMask := func(d Operand) []Operand {
 		if g.Mask != nil {
@@ -197,7 +305,7 @@ func attend(o graph.Op, c *Context, q, out Operand, g attendGeom) []Prim {
 		}
 		return tables(d)
 	}
-	prims := []Prim{
+	prims = []Prim{
 		{Kind: PrimContract, Shape: []int{R, H, C, D}, In: tables(q, g.Keys), Out: dots, Expr: dx.e, Facts: scored},
 		scoreMap(keys, withMask(dots), scores, sx.e, rng(2)),
 		{Kind: PrimReduce, Shape: keys, In: tables(scores), Out: maxes, Combine: OpMax, Init: int64(math.Float32bits(minus)),
@@ -206,10 +314,7 @@ func attend(o graph.Op, c *Context, q, out Operand, g attendGeom) []Prim {
 		{Kind: PrimReduce, Shape: keys, In: tables(weights), Out: sums, Combine: OpAdd, Expr: lx.e, Facts: sum},
 		{Kind: PrimContract, Shape: []int{R, H, D, C}, In: tables(weights, g.Values), Out: values, Expr: vx.e, Facts: rng(3)},
 	}
-	if c.History.Passes {
-		return append(prims, foldPasses(o, R, H, D, values, sums, maxes, out)...)
-	}
-	return append(prims, Prim{Kind: PrimMap, Shape: dims, In: outIn, Out: out, Expr: ox.e, Facts: Facts{Heads: &Heads{Rows: R, Query: H, Key: a.NKVHead, Dim: D, Seqs: c.Step.Seqs}}})
+	return prims, values, sums, maxes
 }
 
 // The running partial of an attention read in passes: a row's heads, each
@@ -272,6 +377,11 @@ func foldPasses(o graph.Op, R, H, D int, values, sums, maxes, out Operand) []Pri
 type history struct {
 	a        graph.Attrs
 	pageSize int
+	// period, past 1, reads entries (History.Period): the row attends
+	// entries 0 to its range's end over period, entry j held at the page of
+	// the position closing it, clamped to the row's own position so an entry
+	// the row cannot see yet is read where it holds a page.
+	period int
 }
 
 // row is word w of the row's descriptor.
@@ -285,6 +395,9 @@ func (hs history) row(x *exprs, w int) int {
 // start computed here as well would hide a descriptor that lost the window.
 func (hs history) start(x *exprs) int {
 	U, a := ir.U32, hs.a
+	if hs.period > 1 {
+		return x.u(0)
+	}
 	first := hs.row(x, rowStart)
 	if a.Window == 0 || !a.Bidir {
 		return first
@@ -311,6 +424,9 @@ func (hs history) span(axis int) *Range {
 // a symmetric window the window's.
 func (hs history) end(x *exprs) int {
 	end := hs.row(x, rowEnd)
+	if hs.period > 1 {
+		return x.op(OpDiv, ir.U32, end, x.u(uint32(hs.period)))
+	}
 	if a := hs.a; a.Window > 0 && a.Bidir {
 		U := ir.U32
 		return x.op(OpMin, U, end, x.op(OpAdd, U, hs.row(x, rowWrite), x.u(uint32(a.Window/2+1))))
@@ -333,8 +449,15 @@ func (hs history) held(x *exprs, pos, first int) int {
 // page is position t's page and its offset in the page.
 func (hs history) page(x *exprs, t int) (pid, off int) {
 	U := ir.U32
+	if P := hs.period; P > 1 {
+		t = x.op(OpMin, U, x.op(OpSub, U, x.op(OpMul, U, x.op(OpAdd, U, t, x.u(1)), x.u(uint32(P))), x.u(1)), hs.row(x, rowWrite))
+	}
 	pid = x.load(2, x.op(OpAdd, U, hs.row(x, rowTab), x.op(OpDiv, U, t, x.u(uint32(hs.pageSize)))))
-	return pid, x.op(OpRem, U, t, x.u(uint32(hs.pageSize)))
+	off = x.op(OpRem, U, t, x.u(uint32(hs.pageSize)))
+	if hs.period > 1 {
+		off = x.op(OpDiv, U, off, x.u(uint32(hs.period)))
+	}
+	return pid, off
 }
 
 // producer is the op of the graph that writes v, nil for none.

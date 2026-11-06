@@ -19,6 +19,11 @@ import (
 // incomplete one is kept beside them. Its ranking compares every pair of
 // blocks: the basic form.
 func decomposeSelect(o graph.Op, c *Context) ([]Prim, error) {
+	undo, err := c.onHistory(o)
+	if err != nil {
+		return nil, err
+	}
+	defer undo()
 	a := o.Attr
 	if len(o.In) < 1 || len(o.In) > 2 || len(o.Out) != 1 || len(o.Reads) != 1 || a.Window != 0 || a.Bidir ||
 		a.NHead <= 0 || a.NKVHead <= 0 || a.NHead%a.NKVHead != 0 || a.Span <= 0 || a.TopK <= 0 || a.Local < 0 ||
@@ -38,7 +43,7 @@ func decomposeSelect(o graph.Op, c *Context) ([]Prim, error) {
 		return nil, fmt.Errorf("a selection's score through %v", a.Fn)
 	}
 	pool := c.History.Keys
-	keys, desc, pages := pool.operand(TableKeys.op()), TableRows.op(), TablePages.op()
+	keys, desc, pages := pool.operand(c.tab(TableKeys)), TableRows.op(), c.tab(TablePages)
 	if err := pool.check(a.Width); err != nil {
 		return nil, err
 	}

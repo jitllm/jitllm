@@ -126,12 +126,17 @@ func decomposeRope(o graph.Op, c *Context) ([]Prim, error) {
 // and value pools, each a page of positions of the width: the key alone
 // where the values are the keys' rows.
 func decomposeKVAppend(o graph.Op, c *Context) ([]Prim, error) {
+	undo, err := c.onHistory(o)
+	if err != nil {
+		return nil, err
+	}
+	defer undo()
 	if len(o.In) != 2 || c.Step.Page <= 0 {
 		return nil, fmt.Errorf("a history append of %d values over pages of %d", len(o.In), c.Step.Page)
 	}
-	pools := []Operand{TableKeys.op(), TableValues.op()}
+	pools := []Operand{c.tab(TableKeys), c.tab(TableValues)}
 	layouts := [2]Pool{c.History.Keys, c.History.Values}
-	rows, pages := TableRows.op(), TablePages.op()
+	rows, pages := TableRows.op(), c.tab(TablePages)
 	if c.History.ValuesInKeys {
 		if o.In[0] != o.In[1] {
 			return nil, fmt.Errorf("a history append of a value other than its key, into a pool whose values are its keys")
@@ -139,14 +144,26 @@ func decomposeKVAppend(o graph.Op, c *Context) ([]Prim, error) {
 		pools = pools[:1]
 	}
 	U := ir.U32
-	page := c.Step.Page
+	page, P := c.Step.Page, max(1, o.Attr.Span)
+	if P != max(1, c.History.Period) {
+		return nil, fmt.Errorf("an append of an entry each %d positions into a history of one each %d", P, c.History.Period)
+	}
+	slots := c.slots()
+	// A row closing no window writes zeros to the page's last slot, which
+	// nothing reads: the IR stores unconditionally.
+	open := -1
 	slot := func(x *exprs) (pid, off int) {
 		row := func(w int) int {
 			return x.load(1, x.op(OpAdd, U, x.op(OpMul, U, x.coord(0), x.u(rowWords)), x.u(uint32(w))))
 		}
 		tab, pos := row(rowTab), row(rowWrite)
 		pid = x.load(2, x.op(OpAdd, U, tab, x.op(OpDiv, U, pos, x.u(uint32(page)))))
-		return pid, x.op(OpRem, U, pos, x.u(uint32(page)))
+		off = x.op(OpRem, U, pos, x.u(uint32(page)))
+		if P > 1 {
+			open = x.op(OpLess, ir.Pred, x.op(OpRem, U, pos, x.u(uint32(P))), x.u(uint32(P-1)))
+			off = x.sel(U, open, x.u(uint32(slots-1)), x.op(OpDiv, U, off, x.u(uint32(P))))
+		}
+		return pid, off
 	}
 	var prims []Prim
 	for i, pool := range pools {
@@ -161,7 +178,7 @@ func decomposeKVAppend(o graph.Op, c *Context) ([]Prim, error) {
 		d := x.coord(1)
 		pid, off := slot(&x)
 		at := []int{pid, off, d}
-		ext := []int{c.pages(), page, w}
+		ext := []int{c.pages(), slots, w}
 		shape := sh
 		var val int
 		switch {
@@ -172,12 +189,21 @@ func decomposeKVAppend(o graph.Op, c *Context) ([]Prim, error) {
 			lo := x.at(0, sh, x.coord(0), x.op(OpMul, U, d, x.u(2)))
 			hi := x.at(0, sh, x.coord(0), x.op(OpAdd, U, x.op(OpMul, U, d, x.u(2)), x.u(1)))
 			val = x.op(OpOr, U, x.un(OpHalf, U, lo), x.op(OpShl, U, x.un(OpHalf, U, hi), x.u(16)))
-			shape, ext = []int{sh[0], w / 2}, []int{c.pages(), page, w / 2}
+			if open >= 0 {
+				val = x.sel(U, open, x.u(0), val)
+			}
+			shape, ext = []int{sh[0], w / 2}, []int{c.pages(), slots, w / 2}
 		case l.ByDim:
 			val = x.at(0, sh, x.coord(0), d)
-			at, ext = []int{pid, d, off}, []int{c.pages(), w, page}
+			if open >= 0 {
+				val = x.sel(ir.F32, open, x.f(0), val)
+			}
+			at, ext = []int{pid, d, off}, []int{c.pages(), w, slots}
 		default:
 			val = x.at(0, sh, x.coord(0), d)
+			if open >= 0 {
+				val = x.sel(ir.F32, open, x.f(0), val)
+			}
 		}
 		prims = append(prims, Prim{Kind: PrimMap, Shape: shape, In: []Operand{c.value(v), rows, pages}, Expr: x.e,
 			Facts:  Facts{Extents: map[int]int{1: c.Step.Rows * rowWords, 2: c.pages()}},

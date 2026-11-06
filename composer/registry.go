@@ -141,6 +141,13 @@ type Context struct {
 	Of int
 	// History is how the part's history pools lay out a page.
 	History History
+	// More is Request.More.
+	More []History
+	// hist is the history the op being decomposed reads or writes
+	// (onHistory), whose tables are at instance hist; base is history 0's
+	// layout while another's is History.
+	hist uint8
+	base History
 	// Paged is Request.Paged: the sheets the call site holds of each bank
 	// it holds in pages.
 	Paged map[jlm.Role]int

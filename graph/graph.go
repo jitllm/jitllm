@@ -39,7 +39,10 @@ const (
 	// set, and back (by the negated angle) where Inverse.
 	OpRope
 	// OpKVAppend writes k and v (In[0], In[1]) as this position's row of the
-	// block's KV: it reads state version n and writes n+1.
+	// block's KV: it reads state version n and writes n+1. With Span > 1 the
+	// history keeps one entry each Span positions, the row closing a window
+	// of them (its position+1 a multiple of Span) writing it, every other
+	// row writing nothing of it.
 	OpKVAppend
 	// OpAttend is causal attention of q (In[0]) over the KV version it reads,
 	// GQA by the head counts, scaled by Scale, over a Window (0: the whole
@@ -50,6 +53,10 @@ const (
 	// are queries over keys and values other rows appended: a
 	// cross-attention. With In[1], an OpSelect's Out[0], each group of its
 	// query heads attends the positions the selection keeps for it alone.
+	// Reading two histories, it is one softmax over both: the first's
+	// positions as above, then the second's entries, one each Span positions
+	// (an OpKVAppend's), the row seeing those its range's end over Span
+	// closes, each of Words[0] wide; a selection masks the second alone.
 	OpAttend
 	// OpAdd is In[0] + In[1].
 	OpAdd
@@ -342,6 +349,17 @@ const (
 	// first word over Width wide (a picture's patches over its merge
 	// windows) and its live rows over Width*Width over that tall.
 	OpUntile
+	// OpHistoryPool is, for each row, the window of Span positions holding
+	// its position, read from the history it reads (rows of Width), pooled
+	// per channel of Out[0]: the segments of Words, four words each -- 1
+	// for the window before the row's and 0 for its own, then the offsets
+	// in a row of the segment's values and gates, and in a row of the bias
+	// Weight[0] (Span rows, one an offset in the window) of its biases --
+	// each channel the sum over every segment's positions of the value
+	// weighted by the softmax of gate plus bias. A position before the
+	// history's first, or past the row's own, is no term. Only a row
+	// closing its window pools all of it.
+	OpHistoryPool
 	numOps
 )
 
@@ -409,6 +427,8 @@ func (k OpKind) String() string {
 		return "picture"
 	case OpUntile:
 		return "untile"
+	case OpHistoryPool:
+		return "history_pool"
 	case OpPatchify:
 		return "patchify"
 	case OpRegroup:
@@ -611,24 +631,28 @@ const (
 )
 
 // StateRef is a version of the block's persistent state: State, and where
-// From is set, block From-1's (a block reading another's history).
+// From is set, block From-1's (a block reading another's history). Hist
+// names which of the block's histories a StateKV is: 0 its history of rows,
+// others histories of its own beside it (entries pooled from its rows).
 type StateRef struct {
 	State   State
 	From    int
 	Version int
+	Hist    uint8
 }
 
 // String is the state's label, its version apart.
 func (r StateRef) String() string {
 	var s string
 	switch r.State {
-	case 0:
+	case StateKV:
 		s = "kv"
-	case 1:
-		s = "ent"
-	case 2:
+		if r.Hist > 0 {
+			s = fmt.Sprintf("kv%d", r.Hist)
+		}
+	case StateRecConv:
 		s = "rec.conv"
-	case 3:
+	case StateRecState:
 		s = "rec.state"
 	default:
 		s = fmt.Sprintf("state%d", r.State)
@@ -640,7 +664,7 @@ func (r StateRef) String() string {
 }
 
 // key is the state r names, whatever its version.
-func (r StateRef) key() StateRef { return StateRef{State: r.State, From: r.From} }
+func (r StateRef) key() StateRef { return StateRef{State: r.State, From: r.From, Hist: r.Hist} }
 
 // Attrs are an op's parameters. Only those its kind defines are read; the
 // verifier refuses one set on a kind that does not define it.
