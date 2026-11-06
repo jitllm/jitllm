@@ -3,7 +3,6 @@ package engine
 import (
 	"slices"
 
-	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/model"
@@ -108,9 +107,9 @@ func (s *Instance) partsPlan() *cpudev.PartsPlan {
 	narrow, widen := graph.OpHalves, graph.OpWidenHalves
 	var widths []int
 	switch s.kvl.fmt {
-	case cpu.KVF16:
+	case nn.KVF16:
 		widths = []int{kvHalfRow}
-	case cpu.KVQ8:
+	case nn.KVQ8:
 		narrow, widen = graph.OpQ8Rows, graph.OpWidenQ8Rows
 		for li := s.lo; li < s.hi; li++ {
 			if hd := s.kvlAt(li).headDim; !slices.Contains(widths, hd) {
@@ -120,7 +119,7 @@ func (s *Instance) partsPlan() *cpudev.PartsPlan {
 	}
 	for _, fw := range widths {
 		c := cpudev.KVConvPlan{FW: fw, HW: fw / 2}
-		if s.kvl.fmt == cpu.KVQ8 {
+		if s.kvl.fmt == nn.KVQ8 {
 			c.HW = graph.Q8RowWords(fw)
 		}
 		nb := graph.New()
@@ -134,7 +133,7 @@ func (s *Instance) partsPlan() *cpudev.PartsPlan {
 		c.Widen = part(wb.G, nn.DeclineNoGraph, cpuRowsCap)
 		p.KV = append(p.KV, c)
 	}
-	p.KVHalf = s.kvl.fmt == cpu.KVF16
+	p.KVHalf = s.kvl.fmt == nn.KVF16
 	return p
 }
 

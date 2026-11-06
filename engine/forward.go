@@ -193,8 +193,8 @@ type Instance struct {
 	// up to a vector.
 	attStride int
 	maxSeq    int
-	reqSeq    int       // what the caller asked for; > maxSeq when the model is shorter
-	kvFmt     cpu.KVFmt // the KV cache's element format
+	reqSeq    int      // what the caller asked for; > maxSeq when the model is shorter
+	kvFmt     nn.KVFmt // the KV cache's element format
 
 	// autoStreamed counts the blocks the last placement streamed because no
 	// card could hold them resident (nn.AutoStreamer), and streamedOn marks
@@ -493,14 +493,14 @@ func shareActWindow(m *model.Model, d nn.LayerDevice) {
 }
 
 // kvFmtOf is the CPU's history layout for history type t.
-func kvFmtOf(t model.KVType) cpu.KVFmt {
+func kvFmtOf(t model.KVType) nn.KVFmt {
 	switch t {
 	case model.KVF16:
-		return cpu.KVF16
+		return nn.KVF16
 	case model.KVQ8_0:
-		return cpu.KVQ8
+		return nn.KVQ8
 	}
-	return cpu.KVF32
+	return nn.KVF32
 }
 
 // NewInstance composes model m for one placement -- its devices and knobs
@@ -675,13 +675,13 @@ func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOp
 	// does every device here (the paged K pool is f32), so the CPU's
 	// default is f32 too; WithKVF16(true) still forces binary16.
 	if c.Selection() != nil && !opt.kvTypeSet {
-		want = cpu.KVF32
+		want = nn.KVF32
 	}
 	// A forced q8 cache on a model that refuses one was refused at
 	// NewInstance (Config.KVTypeRefusal); this is the backstop for the
 	// instances it makes itself.
-	if want == cpu.KVQ8 && c.KVTypeRefusal(model.KVQ8_0) != nil {
-		want = cpu.KVF32
+	if want == nn.KVQ8 && c.KVTypeRefusal(model.KVQ8_0) != nil {
+		want = nn.KVF32
 	}
 	s.kvFmt, s.kvl.fmt = want, want
 	s.Session.limit, s.Session.kvFormat, s.Session.span = maxSeq, want, [2]int{lo, hi}
@@ -869,7 +869,7 @@ func (s *Instance) SetDeviceLayers(d nn.LayerDevice, max int) error {
 	// history that later moves between devices through the host comes back
 	// as it went (TestLayerRelocatesToAnotherDevice,
 	// TestMLAStepsTheKVDownAtTheRightWidths).
-	if d != nil && s.pos == 0 && s.kvFmt == cpu.KVF16 && !s.histWritten() {
+	if d != nil && s.pos == 0 && s.kvFmt == nn.KVF16 && !s.histWritten() {
 		s.stepDownKVToF32()
 	}
 	// A borrowed JIT is the text instance's, attached to its device by it.
@@ -2536,7 +2536,7 @@ func (s *Instance) SetAttnChunk(n int) { s.attnChunk = n }
 // the width forced to f16 (WithKVF16), when the model's head dimension has no
 // generated attention kernel and the f32 fallbacks have to be able to read the
 // cache.
-func (s *Instance) KVIsF16() bool { return s.kvFmt == cpu.KVF16 }
+func (s *Instance) KVIsF16() bool { return s.kvFmt == nn.KVF16 }
 
 // attnPairShipped is what ships: share both the K walk and the V walk between
 // each pair of query heads. It is neutral at shallow depth and a win where
@@ -2824,12 +2824,12 @@ func (s *Session) PrefillRows() int { return s.promptRows }
 // stepDownKVToF32 narrows the cache from packed halves to f32 and rebuilds it.
 // It is a named method so a gate can reach it without a real card. The caller
 // owns the pos == 0 precondition: the pages are rebuilt, not reinterpreted.
-func (s *Instance) stepDownKVToF32() { s.setKVFmt(cpu.KVF32) }
+func (s *Instance) stepDownKVToF32() { s.setKVFmt(nn.KVF32) }
 
 // setKVFmt rebuilds an empty cache in format f, and the CPU's forms for it:
 // what a served instance takes from the pool's first (Pool.Serve), so a
 // session's history reads the same on every instance it leases.
-func (s *Instance) setKVFmt(f cpu.KVFmt) {
+func (s *Instance) setKVFmt(f nn.KVFmt) {
 	s.kvFmt, s.kvl.fmt = f, f
 	// Carry every caller-visible setting into the fresh cache (namespace and
 	// budget); a forgotten one is silently lost.

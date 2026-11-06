@@ -196,11 +196,11 @@ func (e *Exec) ChunkRows() int { return min(cmp.Or(e.chunk, RowsCap), nn.MaxHost
 // none: binary16, half the bytes, wherever it narrows in hardware, f32 where
 // the composer forms the narrowing from its narrow passes
 // (composer.NarrowsCPU).
-func (e *Exec) DefaultKV() cpu.KVFmt {
+func (e *Exec) DefaultKV() nn.KVFmt {
 	if composer.NarrowsCPU(Target(e.comp.ISA(), 1)) {
-		return cpu.KVF32
+		return nn.KVF32
 	}
-	return cpu.KVF16
+	return nn.KVF16
 }
 
 // ISA is the instruction set the CPU's forms are composed for.

@@ -17,7 +17,6 @@ import (
 
 	"github.com/jitllm/jitllm/model"
 
-	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"github.com/jitllm/jitllm/nn"
 )
@@ -499,9 +498,9 @@ func (kv *kvCache) MigrateKV(li int, k, v []float32, pos int, in bool, conv nn.K
 	hk, hv, _, _ := kvMigBufs(l, pos)
 	rows := pos * l.nKV
 	own := func(x []float32) []byte {
-		return unsafe.Slice((*byte)(unsafe.Pointer(&x[0])), rows*cpu.KVRowBytes(l.fmt, l.headDim))
+		return unsafe.Slice((*byte)(unsafe.Pointer(&x[0])), rows*nn.KVRowBytes(l.fmt, l.headDim))
 	}
-	widened := l.fmt != cpu.KVF32 && rows > 0
+	widened := l.fmt != nn.KVF32 && rows > 0
 	if !widened {
 		hk, hv = k, v
 	} else if conv == nil {
@@ -727,7 +726,7 @@ func (s *Instance) migrateKV(li, pos int, toDevice bool) bool {
 func kvMigBufs(kvl kvLayout, n int) (k, v, fk, fv []float32) {
 	k = make([]float32, kvl.slots(n*kvl.kvDim()))
 	v = make([]float32, len(k))
-	if kvl.fmt == cpu.KVF32 {
+	if kvl.fmt == nn.KVF32 {
 		return k, v, k, v
 	}
 	fk = make([]float32, n*kvl.kvDim())
@@ -747,9 +746,9 @@ func kvMigBufs(kvl kvLayout, n int) (k, v, fk, fv []float32) {
 func (s *Instance) migrateKVAs(kvl kvLayout, n int, k, v, fk, fv []float32, toDevice bool, move func() bool) bool {
 	rows := n * kvl.nKV
 	own := func(x []float32) []byte {
-		return unsafe.Slice((*byte)(unsafe.Pointer(&x[0])), rows*cpu.KVRowBytes(kvl.fmt, kvl.headDim))
+		return unsafe.Slice((*byte)(unsafe.Pointer(&x[0])), rows*nn.KVRowBytes(kvl.fmt, kvl.headDim))
 	}
-	conv := kvl.fmt != cpu.KVF32 && rows > 0
+	conv := kvl.fmt != nn.KVF32 && rows > 0
 	if toDevice && conv {
 		if !s.convertKV(false, kvl.headDim, fk[:rows*kvl.headDim], own(k)) || !s.convertKV(false, kvl.headDim, fv[:rows*kvl.headDim], own(v)) {
 			return false

@@ -9,9 +9,9 @@ import (
 
 	"github.com/jitllm/jitllm/model"
 
-	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/internal/oracle"
 	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // TestKVQ8RefusesByName: the caches a q8 row cannot express are refused at
@@ -64,7 +64,7 @@ func TestCPUConvertsAQ8History(t *testing.T) {
 			}
 			s := testInstance(t, m, 8)
 			defer s.Close()
-			s.setKVFmt(cpu.KVQ8)
+			s.setKVFmt(nn.KVQ8)
 			if s.KVType() != model.KVQ8_0 {
 				t.Fatal("a q8_0 cache was asked for and not selected")
 			}
@@ -75,8 +75,8 @@ func TestCPUConvertsAQ8History(t *testing.T) {
 			}
 			for hd := range widths {
 				n := 2*cpuRowsCap + 3
-				nb := (hd + cpu.KVQ8Block - 1) / cpu.KVQ8Block
-				rs := cpu.KVRowBytes(cpu.KVQ8, hd)
+				nb := (hd + nn.KVQ8Block - 1) / nn.KVQ8Block
+				rs := nn.KVRowBytes(nn.KVQ8, hd)
 				f := make([]float32, n*hd)
 				for i := range f {
 					f[i] = float32(rng.NormFloat64())
@@ -86,7 +86,7 @@ func TestCPUConvertsAQ8History(t *testing.T) {
 				if !s.convertKV(true, hd, f, h) {
 					t.Fatalf("head width %d: the q8 rows are not served", hd)
 				}
-				pad := make([]float32, nb*cpu.KVQ8Block)
+				pad := make([]float32, nb*nn.KVQ8Block)
 				q := make([]int8, len(pad))
 				pairs := make([]float32, 2*nb)
 				for r := 0; r < n; r++ {
@@ -113,7 +113,7 @@ func TestCPUConvertsAQ8History(t *testing.T) {
 				for r := 0; r < n; r++ {
 					row := h[r*rs : (r+1)*rs]
 					for i := 0; i < hd; i++ {
-						d := math.Float32frombits(binary.LittleEndian.Uint32(row[nb*cpu.KVQ8Block+8*(i/cpu.KVQ8Block):]))
+						d := math.Float32frombits(binary.LittleEndian.Uint32(row[nb*nn.KVQ8Block+8*(i/nn.KVQ8Block):]))
 						if want := d * float32(int8(row[i])); math.Float32bits(back[r*hd+i]) != math.Float32bits(want) {
 							t.Fatalf("head width %d: row %d element %d is %v, want %v", hd, r, i, back[r*hd+i], want)
 						}
