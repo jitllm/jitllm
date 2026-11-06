@@ -656,7 +656,7 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 		}
 	}
 	why := nn.DeclineServes
-	if len(s.HostPick) > 0 {
+	if len(s.PickIDs) > 0 {
 		why = s.pickLabels(s.x)
 	} else {
 		why = s.headRow(s.x, s.logits, nil)

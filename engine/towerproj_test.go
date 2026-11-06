@@ -76,7 +76,7 @@ func projectorFrom(t *testing.T, s *Instance, from int, rows []float32) []float3
 	if err := graph.Verify(b.G, m.TowerFacts(jlm.DenseBlock)); err != nil {
 		t.Fatal(err)
 	}
-	f, err := ts.formCPUGraph(b.G, n, nil)
+	f, err := ts.towerForm(b.G, n, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,10 +92,10 @@ func projectorFrom(t *testing.T, s *Instance, from int, rows []float32) []float3
 	tr.req[composer.RequestGrid] = uint32(tg.Side)
 	got := make([]float32, outRows*b.G.Values[out].Width)
 	bd := &tr.bound
-	*bd = cpudev.Bound{Li: -1, Own: ts.cpu.x.Device().Own(f), N: n, Req: tr.req, Pos: tr.posTab}
+	*bd = cpudev.Bound{Li: -1, Own: ts.exec.x.Device().Own(f), N: n, Req: tr.req, Pos: tr.posTab}
 	bd.Weights, _ = ts.ws.bind(f, -1, &ts.dense.TowerDense)
 	bd.IO[0], bd.IO[1] = unsafe.Pointer(&tr.blk[0]), unsafe.Pointer(&got[0])
-	ts.cpu.x.Runner().Run(bd, f)
+	ts.exec.x.Runner().Run(bd, f)
 	return got
 }
 

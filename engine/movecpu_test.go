@@ -19,7 +19,7 @@ import (
 // CPU control's tokens. Every block is where it was sent (WhereIs and
 // Locations name it), and every token stays in the band of the control.
 //
-// VIOLATION SIGNATURE. Drop the history from moveToCPU (no migrateKV) and the
+// VIOLATION SIGNATURE. Drop the history from moveOffCards (no migrateKV) and the
 // tokens after the first move leave the band.
 func TestBlocksMoveToTheCPUAndBack(t *testing.T) {
 	names := append([]string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf"}, relocModels()...)

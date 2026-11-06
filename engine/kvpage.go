@@ -1465,10 +1465,10 @@ func (s *Instance) SealPrompt(lg []float32) error {
 		s.kv.flushPublish() // the prompt's names on the card, in one call
 	}
 	s.sealRecurrentTail(s.pos)
-	// A prompt whose head projected only picked rows (HostPick, nn.Head.Pick)
+	// A prompt whose head projected only picked rows (PickIDs, nn.Head.Pick)
 	// left lg as the last full projection made it: not this prompt's logits,
 	// so none are stored, and a whole-prompt hit runs its last position again.
-	if !s.HostPicked && (s.head == nil || !s.head.Picked) {
+	if !s.Picked && (s.head == nil || !s.head.Picked) {
 		s.sealLogits(s.pos, lg)
 	}
 	return nil

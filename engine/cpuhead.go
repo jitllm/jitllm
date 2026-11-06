@@ -51,10 +51,10 @@ func (s *Instance) partPlan(g *graph.Graph, none nn.Decline, rows int, over map[
 	return p
 }
 
-// formCPUGraph is graph g on the CPU at rows rows (cpudev.Exec.FormGraph),
+// towerForm is graph g on the CPU at rows rows (cpudev.Exec.FormGraph),
 // over's formats in place of the container's for the roles it names.
-func (s *Instance) formCPUGraph(g *graph.Graph, rows int, over map[jlm.Role]jlm.Type) (*cpudev.Form, error) {
-	return s.cpu.x.FormGraph(s.partPlan(g, nn.DeclineNoGraph, rows, over))
+func (s *Instance) towerForm(g *graph.Graph, rows int, over map[jlm.Role]jlm.Type) (*cpudev.Form, error) {
+	return s.exec.x.FormGraph(s.partPlan(g, nn.DeclineNoGraph, rows, over))
 }
 
 // Sample is smp's token over logits, a row of this instance's vocabulary,
@@ -80,13 +80,13 @@ func (s *Instance) Sample(smp *Sampler, logits []float32) (int32, error) {
 
 // headDeclined is the error of head rows no composed form serves.
 func (s *Instance) headDeclined(why nn.Decline) error {
-	return fmt.Errorf("model: the head has no composed form on this instance (%s): %v", nn.DeclineName(int(why)), s.cpu.x.Composer().Err())
+	return fmt.Errorf("model: the head has no composed form on this instance (%s): %v", nn.DeclineName(int(why)), s.exec.x.Composer().Err())
 }
 
 // sampleDeclined is the error of a draw no composed form serves: a form the
 // composer refused at the placement, which CPUFormErr names.
 func (s *Instance) sampleDeclined(what string) error {
-	return fmt.Errorf("model: %s has no composed form on this instance: %v", what, s.cpu.x.Composer().Err())
+	return fmt.Errorf("model: %s has no composed form on this instance: %v", what, s.exec.x.Composer().Err())
 }
 
 // dist fills d with the distribution smp draws from over logits (a row this
@@ -140,15 +140,15 @@ func (s *Instance) outNormRows(dst, x []float32, n int) nn.Decline {
 }
 
 // pickLabels is the label pick: the head projecting the instance's picked
-// ids (HostPick) alone from the row x into HostPickVals, the logits left as
+// ids (PickIDs) alone from the row x into PickVals, the logits left as
 // they were (nn.HeadDevice.Pick), or why not.
 func (s *Instance) pickLabels(x []float32) nn.Decline {
-	s.HostPicked = false
+	s.Picked = false
 	if s.heads == nil {
 		return nn.DeclineCaller
 	}
-	why := s.heads.Pick(x, s.HostPick, s.HostPickVals)
-	s.HostPicked = why == nn.DeclineServes
+	why := s.heads.Pick(x, s.PickIDs, s.PickVals)
+	s.Picked = why == nn.DeclineServes
 	return why
 }
 

@@ -18,11 +18,11 @@ import (
 // does a session alone. See nn.JIT.BeginPrefillE.
 
 // touch records that s is decoding now, on its seat on the CPU.
-func (s *Instance) touch() { s.cpu.x.Touch() }
+func (s *Instance) touch() { s.exec.x.Touch() }
 
 // othersDecoding reports whether an instance on the CPU other than s is
 // decoding.
-func (s *Instance) othersDecoding() bool { return s.cpu.x.OthersDecoding() }
+func (s *Instance) othersDecoding() bool { return s.exec.x.OthersDecoding() }
 
 // splitWanted is whether s's next prefill chunk goes to the E-cores: the model
 // allows it (WithServingSplit) and another session is decoding.

@@ -84,9 +84,9 @@ func (in *Instance) newTowerRun() (*towerRun, error) {
 	if err != nil {
 		return nil, err
 	}
-	if ts.cpu.x.Composer().Err() != nil {
+	if ts.exec.x.Composer().Err() != nil {
 		ts.Close()
-		return nil, ts.cpu.x.Composer().Err()
+		return nil, ts.exec.x.Composer().Err()
 	}
 	words := 0
 	for _, cl := range tg.Classes {
@@ -96,7 +96,7 @@ func (in *Instance) newTowerRun() (*towerRun, error) {
 	for _, cl := range tg.Classes {
 		forms := map[uint8]*cpudev.Form{}
 		for px, g := range cl.Entry {
-			f, err := ts.formCPUGraph(g, cl.Rows, nil)
+			f, err := ts.towerForm(g, cl.Rows, nil)
 			if err != nil {
 				ts.Close()
 				return nil, fmt.Errorf("model: the tower's entry: %w", err)
@@ -105,14 +105,14 @@ func (in *Instance) newTowerRun() (*towerRun, error) {
 		}
 		tr.entry = append(tr.entry, forms)
 	}
-	f, err := ts.formCPUGraph(tg.Head, n, nil)
+	f, err := ts.towerForm(tg.Head, n, nil)
 	if err != nil {
 		ts.Close()
 		return nil, fmt.Errorf("model: the tower's head: %w", err)
 	}
 	tr.head = f
 	for j, g := range tg.Taps {
-		f, err := in.formCPUGraph(g, n, in.m.TowerTapFormats(int32(tg.TapBlocks[j]), g))
+		f, err := in.towerForm(g, n, in.m.TowerTapFormats(int32(tg.TapBlocks[j]), g))
 		if err != nil {
 			ts.Close()
 			return nil, fmt.Errorf("model: the tower's tap %d: %w", j, err)
@@ -121,7 +121,7 @@ func (in *Instance) newTowerRun() (*towerRun, error) {
 	}
 	tr.tapRows, tr.tapBuf = make([][]float32, len(tg.Taps)), make([][]float32, len(tg.Taps))
 	for li := ts.lo; li < ts.hi; li++ {
-		if cb, _ := ts.cpu.x.Block(li); cb == nil || cb.Rows == nil {
+		if cb, _ := ts.exec.x.Block(li); cb == nil || cb.Rows == nil {
 			why := nn.DeclineNoGraph
 			if cb != nil {
 				why = max(cb.Why, cb.RowsWhy)
@@ -285,23 +285,23 @@ func (s *Instance) encodePicture(img image.Image, dst, deep []float32) ([]float3
 		tr.squareRequest(pl, sq, tg.Classes[sq.Class].Pic, squares)
 		n := tg.Lead + sq.Gw*sq.Gh
 		tr.size(n, E)
-		*b = cpudev.Bound{Li: -1, Own: ts.cpu.x.Device().Own(f), N: n, Req: tr.req, Pos: tr.posTab, Pic: words}
+		*b = cpudev.Bound{Li: -1, Own: ts.exec.x.Device().Own(f), N: n, Req: tr.req, Pos: tr.posTab, Pic: words}
 		b.Weights, _ = ts.ws.bind(f, -1, &ts.dense.TowerDense)
 		b.IO[0] = unsafe.Pointer(&tr.rows[0])
-		ts.cpu.x.Runner().Run(b, f)
+		ts.exec.x.Runner().Run(b, f)
 		if err := ts.towerBlocks(tr, sq.Gw, tr.windows(tg, sq.Gw, sq.Gh)); err != nil {
 			return nil, fmt.Errorf("model: the tower's blocks: %w", err)
 		}
-		*b = cpudev.Bound{Li: -1, Own: ts.cpu.x.Device().Own(head), N: n, Req: tr.req, Pos: tr.posTab}
+		*b = cpudev.Bound{Li: -1, Own: ts.exec.x.Device().Own(head), N: n, Req: tr.req, Pos: tr.posTab}
 		b.Weights, _ = ts.ws.bind(head, -1, &ts.dense.TowerDense)
 		b.IO[0], b.IO[1] = unsafe.Pointer(&tr.blk[0]), unsafe.Pointer(&dst[at*D])
-		ts.cpu.x.Runner().Run(b, head)
+		ts.exec.x.Runner().Run(b, head)
 		// Each tap's rows at the same rows of its plane of deep.
 		for j, f := range tr.taps {
-			*b = cpudev.Bound{Li: -1, Own: ts.cpu.x.Device().Own(f), N: n, Req: tr.req, Pos: tr.posTab}
+			*b = cpudev.Bound{Li: -1, Own: ts.exec.x.Device().Own(f), N: n, Req: tr.req, Pos: tr.posTab}
 			b.Weights, _ = ts.ws.bind(f, -1, &ts.dense.TowerTaps[j])
 			b.IO[0], b.IO[1] = unsafe.Pointer(&tr.tapRows[j][0]), unsafe.Pointer(&deep[(j*len(dst)/D+at)*D])
-			ts.cpu.x.Runner().Run(b, f)
+			ts.exec.x.Runner().Run(b, f)
 		}
 		at += tg.SquareOut(sq)
 	}

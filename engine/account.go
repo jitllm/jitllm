@@ -21,4 +21,4 @@ func (s *Instance) Account(dev string) nn.Account {
 
 // devices is every device the instance holds: the CPU's execution, the
 // card's session view and the card.
-func (s *Instance) devices() [3]any { return [3]any{s.cpu.x, s.ld, s.ldCand} }
+func (s *Instance) devices() [3]any { return [3]any{s.exec.x, s.ld, s.ldCand} }

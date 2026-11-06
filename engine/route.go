@@ -66,10 +66,10 @@ func (s *Session) History() cpudev.History { return s.kv }
 
 // bindLanes makes sess's calls on the CPU device run on s's lanes.
 func (s *Instance) bindLanes(sess *Session) {
-	if s.cpu.lanes == nil {
+	if s.exec.lanes == nil {
 		return
 	}
-	sess.lanes = s.cpu.lanes.For(sess)
+	sess.lanes = s.exec.lanes.For(sess)
 	sess.routes[routeLanes] = laneRoute(&sess.lanes)
 }
 
