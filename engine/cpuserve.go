@@ -59,19 +59,14 @@ type cpuState struct {
 	// fpages is a layer's page table under cpuFaultPage (cpuFaultTable), and
 	// nopages a block's that keeps no history (cpuPages).
 	fpages, nopages []uint32
-	rows            [4]uint32
-	// tok1 is a decode's token, tokTab a call's rows' (all ones for a row
-	// naming none).
-	tok1   [1]uint32
+	// tokTab is a call's rows' tokens (all ones for a row naming none).
 	tokTab []uint32
 	// oneFresh and tabsFresh say the decode row's and the step's rows'
 	// rotary tables are made (cpuOneTable, cpuRowTables); tabSeq is the
 	// rows' slots as the tables read them.
 	oneFresh, tabsFresh bool
 	tabSeq              []int
-	// pos1 and posTab are a block's call's live rows then each row's
-	// position (cpuArgPos), a decode's and a call's.
-	pos1   [2]uint32
+	// posTab is a call's live rows then each row's position (cpuArgPos).
 	posTab []uint32
 	// rowsTab is a call's rows' descriptors at the rows' form, call its
 	// "rows.n" word, and rseq and rpos a step's rows' sequences and
@@ -104,10 +99,12 @@ type cpuState struct {
 	rowWins []nn.KeyRun
 	// dev is the device's launches, bind the addresses a run of a form's
 	// codes binds (cpuCallOf) and bound what they are read from.
-	dev   *cpudev.Device
-	comp  *cpudev.Composer
-	run   *cpudev.Runner
-	bound cpudev.Bound
+	dev  *cpudev.Device
+	comp *cpudev.Composer
+	run  *cpudev.Runner
+	// rowRun runs a block's rows.
+	rowRun *cpudev.Blocks
+	bound  cpudev.Bound
 	// fault is a violation a gate sets: the bindings rewritten so a kernel
 	// reads the wrong history page or the wrong first row.
 	fault cpuFault
@@ -223,30 +220,18 @@ func (s *Instance) cpuStep(li int, l *model.Layer, cs []float32) (nn.Decline, er
 	if err != nil {
 		return nn.DeclineServes, err
 	}
-	b := &s.cpu.bound
-	*b = cpudev.Bound{Li: li, Own: s.cpu.dev.Own(cb.F), CS: cs, X: s.resid(), Stride: s.c.NEmbd, Rows: s.cpu.rows[:], N: 1, Pages: pages,
-		RecLi: s.cpuRecLi(li), Side: s.cpuSide(li)}
-	b.Weights, _ = s.ws.bind(cb.F, li, l)
-	b.Keys, b.Values = kvAddrs(pg)
-	b.RecState, b.RecConv = recAddrs(s.Session, b.RecLi)
-	if b.Side != nil {
-		b.Side = b.Side[cb.SideOff:]
-	}
-	s.cpu.tok1[0] = uint32(s.tok)
-	s.cpu.pos1 = [2]uint32{1, uint32(pos)}
-	b.Tok, b.Pos, b.CSSWA = s.cpu.tok1[:], s.cpu.pos1[:], s.csSWA
-	if _, why := s.ws.bind(cb.F, li, l); why != nn.DeclineServes {
+	w, why := s.ws.bind(cb.F, li, l)
+	if why != nn.DeclineServes {
 		return why, nil
 	}
-	s.cpu.rows = [4]uint32{0, uint32(pg.keyStart(pos)), uint32(pos + 1), uint32(pos)}
-	b.RecRows = [3]uint32{1, 0, 0}
-	switch s.cpu.fault {
-	case cpuFaultPage:
-		b.Pages = s.cpuFaultTable(b.Pages, pg, pos+1)
-	case cpuFaultRow, cpuFaultWrite:
-		s.cpuFaultRowWords(s.cpu.rows[:])
+	if s.cpu.fault == cpuFaultPage {
+		pages = s.cpuFaultTable(pages, pg, pos+1)
 	}
-	if err := s.cpu.run.Form(b, cb.F, li); err != nil {
+	r := cpudev.Row{X: s.resid(), Stride: s.c.NEmbd, CS: cs, CSSWA: s.csSWA, Side: s.cpuSide(li), Pages: pages,
+		KeyStart: pg.keyStart(pos), Pos: pos, Tok: s.tok, Toks: true, RecLi: s.cpuRecLi(li), Weights: w, Faults: true}
+	r.Keys, r.Values = kvAddrs(pg)
+	r.RecState, r.RecConv = recAddrs(s.Session, r.RecLi)
+	if err := s.cpu.rowRun.Row(li, cb, &r); err != nil {
 		return nn.DeclineServes, err
 	}
 	if pg.p > 0 && pos+1 > pg.written {
@@ -401,7 +386,6 @@ func (s *Instance) cpuRecRows(li int, l *model.Layer, x, cs []float32, seq, pos 
 	// x is stream-major: row r's stream k at (k*rows + r)*n_embd.
 	d, nrot := s.c.NEmbd, s.c.RopeW()
 	stride := len(x) / s.c.Streams()
-	b := &s.cpu.bound
 	// A step across sessions binds each row's owner for its row: its
 	// history, which a block that attends as well reads, is its own.
 	lead := s.Session
@@ -429,33 +413,27 @@ func (s *Instance) cpuRecRows(li int, l *model.Layer, x, cs []float32, seq, pos 
 			s.Session = lead
 			return nn.DeclineServes, err
 		}
-		*b = cpudev.Bound{Li: li, Own: s.cpu.dev.Own(cb.F), X: x[r*d:], Stride: stride, Rows: s.cpu.rows[:], N: 1,
-			Pages: pages, RecLi: s.cpuRecLi(li)}
-		b.Weights, _ = s.ws.bind(cb.F, li, l)
-		b.Keys, b.Values = kvAddrs(pg)
-		b.RecState, b.RecConv = recAddrs(o, b.RecLi)
-		// One live row, at its own position, as a decode step's.
-		s.cpu.pos1 = [2]uint32{1, uint32(pos[r])}
-		b.Pos = s.cpu.pos1[:]
+		w, _ := s.ws.bind(cb.F, li, l)
+		row := cpudev.Row{X: x[r*d:], Stride: stride, Pages: pages, KeyStart: pg.keyStart(pos[r]), Pos: pos[r],
+			RecLi: s.cpuRecLi(li), Slot: slot, Weights: w}
+		row.Keys, row.Values = kvAddrs(pg)
+		row.RecState, row.RecConv = recAddrs(o, row.RecLi)
 		if tok != nil {
-			s.cpu.tok1[0] = uint32(tok[r])
-			b.Tok = s.cpu.tok1[:]
+			row.Tok, row.Toks = tok[r], true
 		} else if cb.F.Toks {
 			s.Session = lead
 			return nn.DeclineServes, fmt.Errorf("model: block %d reads its rows' tokens, which the step gives none of", li)
 		}
 		if rside, pw := s.cpuSideRows(li); pw != 0 && rside != nil {
-			b.Side = rside[r*pw+cb.SideOff:]
+			row.Side = rside[r*pw:]
 		}
 		if nrot > 0 {
-			b.CS = cs[r*nrot:]
+			row.CS = cs[r*nrot:]
 		}
 		if s.bcsSWA != nil {
-			b.CSSWA = s.bcsSWA[r*s.c.NRotSWA:]
+			row.CSSWA = s.bcsSWA[r*s.c.NRotSWA:]
 		}
-		s.cpu.rows = [4]uint32{0, uint32(pg.keyStart(pos[r])), uint32(pos[r] + 1), uint32(pos[r])}
-		b.RecRows = [3]uint32{1, uint32(slot), uint32(slot)}
-		if err := s.cpu.run.Form(b, cb.F, li); err != nil {
+		if err := s.cpu.rowRun.Row(li, cb, &row); err != nil {
 			s.Session = lead
 			return nn.DeclineServes, err
 		}
@@ -892,6 +870,9 @@ func (s *Instance) cpuPlace() {
 		lo: s.lo, ws: &s.ws}
 	if s.cpu.run == nil {
 		s.cpu.run = cpudev.NewRunner(s.cpu.dev, &s.lease, planes, s.c.NExpert)
+	}
+	if s.cpu.rowRun == nil {
+		s.cpu.rowRun = cpudev.NewBlocks(s.cpu.dev, s.cpu.run)
 	}
 	s.cpu.run.SetPlanes(planes)
 	for li := s.lo; li < min(s.hi, n); li++ {
