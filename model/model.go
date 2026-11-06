@@ -255,15 +255,8 @@ type Config struct {
 	sel *jlm.Selection
 	// HCMult is the residual streams a hyper-connected model carries.
 	HCMult int
-	// Qwen3.8-Flash-Next (q4e.go): the hyper-connections' gate rank, the
-	// n-gram embedding (its one-based block, n, heads per n, row width,
-	// convolution taps, the end-of-sequence and picture ids and the hash's
-	// constants) and the delta rule's sigmoid output gate.
-	HCLowRank                        int
-	NGramBlock, NGram, NGramHeadsPer int
-	NGramRowDim, NGramConv           int
-	NGramEOS, NGramImage             int32
-	NGramMul, NGramOff, NGramVoc     []uint64
+	// HCLowRank is the hyper-connections' gate rank, zero for none.
+	HCLowRank int
 	// Kimi-K3 (k3.go): a residual checkpoint every AttnResBlock blocks, each
 	// sublayer's input their softmax mix with the running residual (zero is
 	// none); the routed experts at ExpertLatent (zero is n_embd); the MLA
@@ -866,10 +859,6 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 	}
 	out.TokenAct = c.ActQuant == jlm.ActQuantRowInt8
 	out.HCLowRank = int(c.HCLowRank)
-	out.NGramBlock, out.NGram, out.NGramHeadsPer = int(c.NGramBlock), int(c.NGram), int(c.NGramHeadsPer)
-	out.NGramRowDim, out.NGramConv = int(c.NGramRowDim), int(c.NGramConv)
-	out.NGramEOS, out.NGramImage = int32(c.NGramEOS), int32(c.NGramImage)
-	out.NGramMul, out.NGramOff, out.NGramVoc = c.NGramMul, c.NGramOff, c.NGramVoc
 	out.DeltaDecay, out.DeltaGate = c.DeltaDecay, c.DeltaGate
 	out.AttnResBlock = int(c.AttnResBlock)
 	out.ExpertLatent = int(c.ExpertLatent)
@@ -1264,10 +1253,6 @@ func Open(path string, options ...Option) (*Model, error) {
 	if (m.Cfg.AttnResBlock != 0 || m.Cfg.HCLowRank != 0) && m.Cfg.statedStreams() <= 1 {
 		m.Close()
 		return nil, &UpgradeRequiredError{Path: path, What: "residual streams"}
-	}
-	if m.Cfg.NGramBlock != 0 && m.Cfg.RecTailLen() == 0 {
-		m.Close()
-		return nil, &UpgradeRequiredError{Path: path, What: "the n-gram block"}
 	}
 	if cc := m.Container.Config(); cc.IdxHeads != 0 && cc.Selection == nil && len(cc.CompKinds) == 0 {
 		m.Close()
