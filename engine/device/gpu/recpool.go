@@ -339,10 +339,6 @@ func (g *devTier) recZeroLayers(ls []*layer, base, rows int) error {
 // (or Config.SharedRec asks), every pool takes the shared form. Callers hold
 // g.mu, outside a session.
 func (g *devTier) growSeat(sid uint64, rows int) bool {
-	if rows > 1 && (g.roomFaulted("noseat") || g.roomFaulted("noseat-lie")) {
-		g.LastErr = "rows: a batch's recurrent states do not fit in this device's budget (roomFault)"
-		return false
-	}
 	old, had := g.recSeats[sid]
 	if had && old.rows >= rows {
 		return true

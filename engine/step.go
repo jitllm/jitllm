@@ -195,6 +195,55 @@ func reserveRuns(runs []Run) error {
 	return nil
 }
 
+// roomRuns gives the runs' step room on the card holding their instance's
+// blocks (nn.RowsRoomer): each session's view is asked for the step's rows,
+// its own recurrent seat and, where the step wants logits from the card's
+// head, the per-row head; where one has no room, blocks move to the CPU,
+// every session's history with them, until it has (relocateUntil). A step
+// whose scratch does not build is that step's error.
+func roomRuns(runs []Run, rows int) error {
+	in := runs[0].Instance
+	if in.ld == nil || in.devCount() == 0 {
+		return nil
+	}
+	var head *nn.Head
+	end := 0
+	for i := range runs {
+		r := &runs[i]
+		if r.Logits && !in.c.StreamHead() {
+			head = in.head
+		}
+		end = max(end, r.sess().bpos[0]+len(r.Tokens))
+	}
+	var buildErr error
+	room := func() bool {
+		for i := range runs {
+			rr, ok := runs[i].sess().ld.(nn.RowsRoomer)
+			if !ok || buildErr != nil || runs[i].Instance.devCount() == 0 {
+				continue
+			}
+			ok, err := rr.RowsRoom(rows, 1, head)
+			if err != nil {
+				buildErr = err
+				continue
+			}
+			if !ok {
+				return false
+			}
+		}
+		return true
+	}
+	if !room() {
+		in.noRoom++
+		in.relocateUntil(end, room)
+		// Every other session's history follows the blocks that moved.
+		if err := in.settleHist(); err != nil {
+			return err
+		}
+	}
+	return buildErr
+}
+
 // reserveMoving reserves need positions of se's history on s's device,
 // moving blocks to the CPU, every session's history of each with it, until
 // they fit (relocateUntil); false where they do not.
@@ -241,6 +290,9 @@ func stepRunsOn(runs []Run, lone bool) ([][]float32, error) {
 		pictures = pictures || r.Spans != nil
 	}
 	if err := reserveRuns(runs); err != nil {
+		return nil, err
+	}
+	if err := roomRuns(runs, rows); err != nil {
 		return nil, err
 	}
 	if pictures {

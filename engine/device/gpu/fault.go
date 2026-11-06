@@ -289,9 +289,10 @@ func (c *Config) rowsFaulted(f string) bool { return c.fault != nil && c.fault.r
 //	"narrow"          no batched scratch wider than 64 rows fits: RowsWidth
 //	                  clamps the Scheduler's steps to it
 //	"narrow-lie"      the same, and RowsWidth says the requested width fits
-//	"noseat"          no recurrent seat for a batch fits: RowsRoom says so,
+//	"noroom"          a step's scratch passes the budget: RowsRoom says so,
 //	                  and the blocks move to the CPU before the step
-//	"noseat-lie"      the same, and RowsRoom says there is room
+//	"noroom-lie"      the same, and RowsRoom says there is room: the card
+//	                  refuses the step
 //	"nobuild"         a ragged step's twins do not build: RowsRoom returns
 //	                  the error and the step is refused by name
 //	"nobuild-room"    the same, and RowsRoom reads it as no room, so the
