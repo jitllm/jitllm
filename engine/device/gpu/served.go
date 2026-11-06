@@ -2079,6 +2079,11 @@ func (f *partForm) inPlace(in, out int) bool {
 // roleWeight is the block's matrix its graph binds under role, nil for one
 // the tier does not hold.
 func (l *layer) roleWeight(r jlm.Role) *resident {
+	for _, x := range l.extra {
+		if x.role == r {
+			return x.r
+		}
+	}
 	switch r {
 	case jlm.RoleAttnQ, jlm.RoleVAttnQ:
 		return l.wq
@@ -2110,24 +2115,14 @@ func (l *layer) roleWeight(r jlm.Role) *resident {
 		if l.linear {
 			return l.ssmGate
 		}
-		if l.mla {
-			return l.mlaGate
-		}
 	case jlm.RoleAttnQKV:
-		if l.withAttn {
-			return l.ssmIn
-		}
-		if l.linear {
+		if l.linear && !l.withAttn {
 			return l.wq
 		}
 	case jlm.RoleSCX:
 		if l.linear {
 			return l.wq
 		}
-	case jlm.RoleFFNRoutedDown:
-		return l.routedDown
-	case jlm.RoleFFNRoutedUp:
-		return l.routedUp
 	case jlm.RoleSCB:
 		return l.ssmGate
 	case jlm.RoleSCC, jlm.RoleSSMBA:
@@ -2171,44 +2166,12 @@ func (l *layer) roleWeight(r jlm.Role) *resident {
 		return l.shUp
 	case jlm.RoleShExpDown:
 		return l.shDown
-	case jlm.RolePLEGate:
-		return l.pleGate
-	case jlm.RolePLEProj:
-		return l.pleProj
 	case jlm.RoleStreamRouter:
 		return l.altRouterW
-	case jlm.RoleLowRankIn:
-		return l.laurelL
-	case jlm.RoleLowRankOut:
-		return l.laurelR
-	case jlm.RoleHCAttnDown:
-		return l.hcAD
-	case jlm.RoleHCAttnUp:
-		return l.hcAU
-	case jlm.RoleHCAttnInject:
-		return l.hcAI
-	case jlm.RoleHCFFNDown:
-		return l.hcFD
-	case jlm.RoleHCFFNUp:
-		return l.hcFU
-	case jlm.RoleHCFFNInject:
-		return l.hcFI
-	case jlm.RoleNGramKey:
-		return l.ngKey
-	case jlm.RoleNGramValue:
-		return l.ngVal
 	case jlm.RoleNGramConv:
 		if l.q4e != nil && l.q4e.ngram {
 			return &l.q4e.ngTaps
 		}
-	case jlm.RoleIdxQ:
-		return l.idxQ
-	case jlm.RoleIdxQB:
-		return l.idxQB
-	case jlm.RoleIdxK:
-		return l.idxK
-	case jlm.RoleIdxProj:
-		return l.idxProj
 	}
 	return nil
 }

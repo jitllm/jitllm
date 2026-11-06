@@ -35,20 +35,9 @@ func (s *Instance) q4ePlan(li int, plan *nn.LayerPlan) {
 	plan.Q4E = q
 }
 
-// q4eWeights adds block li's Qwen3.8-Flash-Next tensors to w.
+// q4eWeights adds the n-gram block's convolution to w.
 func (s *Instance) q4eWeights(li int, l *model.Layer, w *nn.LayerWeights) {
-	d := l.Q4e
-	if d == nil {
-		return
-	}
-	hc := func(h *model.Q4eHC) nn.HCWeights {
-		return nn.HCWeights{Down: model.Wt(h.Down), Up: model.Wt(h.Up), Inject: model.Wt(h.Inj)}
-	}
-	w.HCAttn, w.HCFFN = hc(&d.Attn), hc(&d.Ffn)
-	if s.m.Cfg.QSAAt(li) {
-		w.IdxQ, w.IdxK = model.Wt(l.IdxQ), model.Wt(l.IdxK)
-	}
-	if s.m.Cfg.NGramAt(li) {
-		w.NGram = nn.NGramWeights{Key: model.Wt(d.NgKey), Value: model.Wt(d.NgVal), Conv: d.NgCv}
+	if d := l.Q4e; d != nil && s.m.Cfg.NGramAt(li) {
+		w.NGram = nn.NGramWeights{Conv: d.NgCv}
 	}
 }

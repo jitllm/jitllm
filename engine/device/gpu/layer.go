@@ -44,23 +44,19 @@ type layer struct {
 	// qwen3next's shared expert: an always-on feed-forward added to the routed
 	// sum, scaled by a sigmoid of one logit (its gate is in vecs).
 	shGate, shUp, shDown *resident
-	mvsg, mvsu, mvsd     mv
-	// Gemma 4's per-layer embedding (nn.LayerPlan.PLEDim): the gate and the
-	// projection back, and pleOff the block's li*PLEDim, the offset of its
-	// slice in a row's inputs; its post-norm is in vecs.
-	pleGate, pleProj *resident
-	mvpg, mvpp       mv
-	pleOff           backend.Buf
-	// Gemma 3n's AltUp (nn.LayerPlan.AltUp, altup.go): the router as plain
-	// floats and LAuReL's two matrices; their vectors are in vecs. sparse
-	// says the FFN gate takes the gaussian top-k.
-	altRouter backend.Buf
-	// altRouterW is altRouter as the composer binds a matrix; it owns
-	// nothing (altRouter is freed with the block).
-	altRouterW       *resident
-	laurelL, laurelR *resident
-	mvLL, mvLR       mv
-	sparse           bool
+	// extra is every other matrix the block stores and its graph binds, by
+	// role (nn.LayerWeights.Extra), uploaded as the file stores it.
+	extra []roleRes
+	// pleOff is the block's li*PLEDim, the offset of its slice in a row's
+	// per-layer inputs.
+	pleOff backend.Buf
+	// The streams' router (nn.LayerPlan.AltUp, altup.go) as plain floats,
+	// and altRouterW the same as the composer binds a matrix; it owns
+	// nothing (altRouter is freed with the block). sparse says the FFN gate
+	// takes the gaussian top-k.
+	altRouter  backend.Buf
+	altRouterW *resident
+	sparse     bool
 	// kvSrc is the block whose history this one attends to: its own index, or
 	// for a KV-sharing block (nn.LayerPlan.KVShared) the source's, whose
 	// cache this block reads and never writes.
@@ -78,18 +74,14 @@ type layer struct {
 	centred bool
 	// KDA's two low-rank gates, nil on qwen3next.
 	ssmFA, ssmFB, ssmGA, ssmGB *resident
-	mvSG, mvBA, mvSO           mv
-	mvFA, mvFB, mvGA, mvGB     mv
 	// ssmTaps is the convolution's taps a channel's contiguous, which the
 	// composer's convolutions read; the file stores them tap-major.
 	ssmTaps resident
-	// withAttn is a block that runs attention beside its Mamba-2 mixer
-	// (nn.RecurrentPlan.WithAttn, Falcon-H1): it keeps a KV history and a
-	// recurrent state both, and its mixer's projection is ssmIn rather than
-	// wq, which is the attention's query.
+	// withAttn is a block that runs attention beside its mixer
+	// (nn.RecurrentPlan.WithAttn): it keeps a KV history and a recurrent
+	// state both, and its mixer's projection is one of extra, wq being the
+	// attention's query.
 	withAttn bool
-	ssmIn    *resident
-	mvSI     mv
 	// noFFN is a block that is its mixer alone (nn.LayerPlan.NoFFN): the
 	// emit ends it at the first residual.
 	noFFN bool
@@ -100,39 +92,14 @@ type layer struct {
 	// empty. mla is set from the plan, like linear.
 	mla                      bool
 	wqa, wqb, wkva, wkb, wvb *resident
-	mvQA, mvQB, mvKVA        mv
-	mvKB, mvVB               mv
-	// DeepSeek V3.2's lightning indexer (nn.LayerPlan.IdxHeads, indexer.go):
-	// its query, key and weight projections.
-	idxQB, idxK, idxProj *resident
-	mvIQ, mvIK, mvIW     mv
-	// MiniMax Sparse Attention (nn.LayerPlan.MSA, msa.go): msa says the block
-	// selects its key blocks; idxQ/mvMQ is its indexer query, the key being
-	// idxK/mvIK.
-	msa bool
-	// qsa is a Qwen3.8-Flash-Next attention block's QSA selection (qsa.go).
-	qsa  bool
-	idxQ *resident
-	mvMQ mv
-	// The MLA output gate (slot 31) and a latent mixture's down and up
-	// projections (32, 33, nn.LayerPlan.ExpLatent); their vectors are in
-	// vecs. wide marks a block of several residual streams or of experts
-	// at a width of their own.
-	mlaGate, routedDown, routedUp *resident
-	mvMG, mvRD, mvRU              mv
-	wide                          bool
-	// Qwen3.8-Flash-Next (nn.LayerPlan.Q4E, q4e.go): the two
-	// hyper-connections' down, up and placement projections (slots 34..39),
-	// the n-gram key and value (40, 41) and its convolution; its vectors are
-	// in vecs.
-	hcAD, hcAU, hcAI, hcFD, hcFU, hcFI       *resident
-	ngKey, ngVal                             *resident
-	mvHAD, mvHAU, mvHAI, mvHFD, mvHFU, mvHFI mv
-	mvNGK, mvNGV                             mv
-	q4e                                      *q4eBlock
+	// q4e is the n-gram block's convolution (q4e.go), nil elsewhere.
+	q4e *q4eBlock
 	// conv is a convolutional tower block's own buffers (convblock.go), nil
 	// for every other block.
 	conv *convBlock
+	// wide marks a block of several residual streams or of experts at a
+	// width of their own.
+	wide bool
 
 	nAttn, nFFN backend.Buf // norm weights, f32
 	// clampB is a vision block's clipped-linear bounds (nn.LayerWeights.Clamp,
@@ -179,16 +146,13 @@ type layer struct {
 	// swa says the block attends at the sliding layers' geometry, so it runs
 	// in that geometry's scratch set (geomsets.go). outScale is its output
 	// scalar, one float, nil where it has none.
-	geo           geoKey
-	vFromK        bool
-	outScale      backend.Buf
-	mvq, mvk, mvv mv
+	geo      geoKey
+	vFromK   bool
+	outScale backend.Buf
 	// shadow is the shadow arm's state for the block (Config.ComposedShadow):
 	// the worst drift of the form from the tier's kernels and the steps
 	// compared, two floats the comparison keeps (shadow.go).
-	shadow        backend.Buf
-	mvo, mvg, mvu mv
-	mvd           mv
+	shadow backend.Buf
 	// MoE only: the F32 router matrix and its matvec. gate/up/down above hold
 	// the banks in that case, and their mv carries slots > 0.
 	router backend.Buf
@@ -1858,19 +1822,6 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		}
 		return g.resident(li, slot, nil, q, x.Data, x.Rows, x.K, x.Packed)
 	}
-	// mkk is a matrix's record: its rows, format and width.
-	mkk := func(x nn.Weight, r *resident) (mv, bool) {
-		q, ok := quantOf(x.T)
-		if !ok {
-			return mv{}, false
-		}
-		return mv{rows: x.Rows, q: q, k: x.K, pad: p.KPad > 0 && x.K == p.KPad}, true
-	}
-	mkkID := func(x nn.Weight, r *resident, experts, slots int, slotAct bool) (mv, bool) {
-		m, ok := mkk(x, r)
-		m.experts, m.slots, m.slotAct = experts, slots, slotAct
-		return m, ok
-	}
 	// An expert bank is one matrix of NExpert*Rows rows: a GGUF 3-D expert tensor
 	// is expert-major and contiguous, so it packs, uploads and indexes as one
 	// tall matrix, and the kernel does the row offset from Experts and Slots.
@@ -1888,12 +1839,10 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	// nor charged. A linear block leaves 1..3 empty (Wq carries its fused q|k|v),
 	// an attention block leaves 10..12 empty, and pageSizeWhy skips zero-length
 	// weights.
-	ws := weightList(w)
+	ws := append(weightList(w), l.takeExtra(w)...)
 	// A streamed bank is priced at its compact size by scaling the three bank
 	// rows from NExpert sheets to NExpertUsed; every size derives from
-	// Weight.Rows, so the charge and the refund cannot disagree. slots > 1 is a
-	// kernel constraint: at experts <= 1 mkkID returns the plain matvec, which
-	// has no pSel parameter.
+	// Weight.Rows, so the charge and the refund cannot disagree.
 	mode, auto := g.autoStream[li]
 	// hostExp says the block's experts will run on the host (hybrid): the
 	// placement's choice, else the tier's defaults. Such a block keeps no bank
@@ -2022,24 +1971,6 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		}
 	}
 	rs := l.tensors()
-	ms := []*mv{&l.mvq, &l.mvk, &l.mvv, &l.mvo, &l.mvg, &l.mvu, &l.mvd,
-		&l.mvsg, &l.mvsu, &l.mvsd, &l.mvSG, &l.mvBA, &l.mvSO,
-		// MLA's five, in weightList/tensors() order.
-		&l.mvQA, &l.mvQB, &l.mvKVA, &l.mvKB, &l.mvVB,
-		// KDA's four, in weightList/tensors() order.
-		&l.mvFA, &l.mvFB, &l.mvGA, &l.mvGB,
-		// Gemma 4's per-layer embedding gate and projection.
-		&l.mvpg, &l.mvpp,
-		// DeepSeek V3.2's indexer, Gemma 3n's LAuReL, then Falcon-H1's mixer
-		// projection, last.
-		&l.mvIQ, &l.mvIK, &l.mvIW,
-		&l.mvLL, &l.mvLR, &l.mvSI,
-		// MiniMax-M3's indexer query (its key is slot 25's).
-		&l.mvMQ,
-		// Kimi-K3's MLA output gate and latent mixture projections.
-		&l.mvMG, &l.mvRD, &l.mvRU,
-		// Qwen3.8-Flash-Next's hyper-connections and n-gram projections.
-		&l.mvHAD, &l.mvHAU, &l.mvHAI, &l.mvHFD, &l.mvHFU, &l.mvHFI, &l.mvNGK, &l.mvNGV}
 	// The latent block's own slots: 0 (q) is the one-step query and is empty
 	// where 13/14 are populated; 1 and 2 are always empty (MLA has no k or v
 	// projection); 15..17 are always there. Each is an absent weight, not a
@@ -2070,84 +2001,22 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		return false
 	}
 	for i, x := range ws {
-		// Qwen3.8-Flash-Next's (34..41), on the blocks the plan says carry
-		// them and nowhere else.
-		if i >= 34 {
-			if !q4eSlot(p, i) {
-				continue
-			}
-			if len(x.Data) == 0 {
-				g.LastErr = fmt.Sprintf("block %d: a Qwen3.8-Flash-Next block and %s is empty", li, weightRole(i))
+		// A matrix past the shared structure's is uploaded as the file
+		// stores it, by role.
+		if i >= nNamed {
+			r := mkw(i, x)
+			if r == nil || !r.ok {
+				if g.LastErr == "" {
+					g.LastErr = fmt.Sprintf("block %d: %s (%s %dx%d) not resident", li, l.extra[i-nNamed].role, x.T, x.Rows, x.K)
+				}
 				return false
 			}
-		}
-		// The MLA output gate (31) and a latent mixture's projections (32,
-		// 33), on the blocks the plan says carry them.
-		if i >= 31 && i <= 33 {
-			want := i == 31 && p.MLA() && p.Recurrent.Conv == 0 && len(x.Data) != 0 ||
-				i >= 32 && p.ExpLatent != 0
-			if !want {
-				continue
-			}
-			if len(x.Data) == 0 {
-				g.LastErr = fmt.Sprintf("block %d: the plan has a latent mixture and %s is empty",
-					li, weightRole(i))
-				return false
-			}
-		}
-		// The per-layer embedding's two (22, 23), the indexer's three (24..26),
-		// Gemma 3n's LAuReL (27, 28) and Falcon-H1's mixer projection (29),
-		// past every other range.
-		extra := i >= 22
-		if i >= 24 && i <= 28 {
-			// MiniMax-M3's indexer has a key (25) and its own query (30),
-			// not DeepSeek V3.2's query latent (24) or weights (26).
-			if (i < 27 && (p.IdxHeads == 0 || (p.MSA() || p.QSA()) && i != 25)) || (i >= 27 && p.AltUp == 0) {
-				continue
-			}
-			if len(x.Data) == 0 {
-				g.LastErr = fmt.Sprintf("block %d: the plan has an indexer or LAuReL and %s is empty",
-					li, weightRole(i))
-				return false
-			}
-		}
-		ple := i == 22 || i == 23
-		if ple {
-			if p.PLEDim == 0 {
-				continue
-			}
-			if len(x.Data) == 0 {
-				g.LastErr = fmt.Sprintf("block %d: the plan has per-layer embeddings and %s is empty",
-					li, weightRole(i))
-				return false
-			}
-		}
-		// The mixer's own projection beside the attention's four (Falcon-H1, 29),
-		// absent by construction everywhere else.
-		if i == 29 {
-			if !p.Recurrent.WithAttn {
-				continue
-			}
-			if len(x.Data) == 0 {
-				g.LastErr = fmt.Sprintf("block %d: the plan runs attention beside a Mamba-2 mixer "+
-					"and %s is empty", li, weightRole(i))
-				return false
-			}
-		}
-		// MiniMax-M3's indexer query (30), absent by construction elsewhere.
-		if i == 30 {
-			if !p.MSA() && !p.QSA() {
-				continue
-			}
-			if len(x.Data) == 0 {
-				g.LastErr = fmt.Sprintf("block %d: the plan selects key blocks and %s is empty",
-					li, weightRole(i))
-				return false
-			}
+			*rs[i] = r
+			continue
 		}
 		// KDA's four low-rank gate matrices, checked before mlaSkip because they
 		// sit past MLA's range and are not MLA's.
-		if i >= 18 && !extra {
+		if i >= 18 {
 			switch {
 			case !p.Recurrent.ChanDecay && !p.Recurrent.Scan, p.Recurrent.Conv == 0:
 				// Not a KDA model, or an attention block of one: absent by
@@ -2165,10 +2034,10 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 			// A present weight falls through to the upload; a continue here would
 			// leave l.ssmGA nil and crash inside the recorded session.
 		}
-		if !extra && mlaSkip(i) {
+		if mlaSkip(i) {
 			continue
 		}
-		if i >= 13 && !extra {
+		if i >= 13 {
 			if len(x.Data) == 0 {
 				g.LastErr = fmt.Sprintf("block %d: the plan is a latent attention block "+
 					"(KVLoraRank=%d) and %s is empty", li, p.KVLoraRank, weightRole(i))
@@ -2240,17 +2109,17 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 				return false
 			}
 		}
-		e, sl := 1, 0
+		e := 1
 		// MLA's two absorb banks are one sheet per head, and the "expert" indexed
 		// is the head: every head is selected on every token, so the selection is
 		// the identity 0..NHead-1 and one indexed matvec replaces NHead, each slot
 		// reading its own activation like the mixture's down projection.
 		if l.mla && (i == 16 || i == 17) {
-			e, sl = p.NHead, p.NHead
+			e = p.NHead
 		}
 		// 4..6 only: the shared expert's matrices at 7..9 are dense.
 		if moe && i >= 4 && i <= 6 { // gate, up and down are the banks
-			e, sl = bank, slots
+			e = bank
 			if stream {
 				// The kernel is told the bank is k experts and indexes it with
 				// 0..k-1; backend.TestIndexedMatVecMatchesACompactBank is where
@@ -2346,14 +2215,6 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 			}
 			x.Rows /= e
 		}
-		// slotAct: each slot reads its own activation vector. The mixture's
-		// down projection (6) does, and so do MLA's two banks -- head h absorbs
-		// its own nope half and un-absorbs its own attention result.
-		k, ok := mkkID(x, r, e, sl, i == 6 || i == 16 || i == 17)
-		if !ok {
-			return false
-		}
-		*ms[i] = k
 	}
 	if moe {
 		// The router is unquantized, so it does not go through resident() at
@@ -2467,8 +2328,6 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		up(&l.nQ, w.QNorm)
 		up(&l.nK, w.KNorm)
 	}
-	l.qsa = p.QSA()
-	l.msa = p.MSA()
 	if r := p.Recurrent; r.Conv > 0 {
 		if len(w.SSM.Conv1d) != r.Conv*r.Chans {
 			g.LastErr = fmt.Sprintf("block %d: conv1d is %d floats, want %d x %d",
@@ -5593,14 +5452,54 @@ func weightList(w *nn.LayerWeights) []nn.Weight {
 		w.ShGate, w.ShUp, w.ShDown,
 		w.SSM.Gate, w.SSM.BA, w.SSM.Out,
 		w.Wqa, w.Wqb, w.Wkva, w.Wkb, w.Wvb,
-		w.SSM.FA, w.SSM.FB, w.SSM.GA, w.SSM.GB,
-		w.PLEGate, w.PLEProj,
-		w.IdxQB, w.IdxK, w.IdxProj,
-		w.LaurelL, w.LaurelR, w.SSM.In,
-		w.IdxQ,
-		w.MLAGate, w.RoutedDown, w.RoutedUp,
-		w.HCAttn.Down, w.HCAttn.Up, w.HCAttn.Inject, w.HCFFN.Down, w.HCFFN.Up, w.HCFFN.Inject,
-		w.NGram.Key, w.NGram.Value}
+		w.SSM.FA, w.SSM.FB, w.SSM.GA, w.SSM.GB}
+}
+
+// nNamed is how many matrices weightList names; a block's extra follow.
+const nNamed = 22
+
+// roleRes is one of a block's extra matrices and its role.
+type roleRes struct {
+	role jlm.Role
+	r    *resident
+}
+
+// takeExtra makes l.extra the matrices of w.Extra that l's graph binds, and
+// is their weights in that order.
+func (l *layer) takeExtra(w *nn.LayerWeights) []nn.Weight {
+	binds := map[jlm.Role]bool{}
+	if l.graph != nil {
+		for _, o := range l.graph.Ops {
+			for _, b := range o.Weight {
+				binds[b.Role] = true
+			}
+		}
+	}
+	l.extra = l.extra[:0]
+	var ws []nn.Weight
+	for _, x := range w.Extra {
+		if binds[x.Role] && len(x.W.Data) != 0 {
+			l.extra = append(l.extra, roleRes{role: x.Role})
+			ws = append(ws, x.W)
+		}
+	}
+	return ws
+}
+
+// pageList is weightList and l's extra, as a page-in reads them again.
+func (l *layer) pageList(w *nn.LayerWeights) []nn.Weight {
+	ws := weightList(w)
+	for _, e := range l.extra {
+		var x nn.Weight
+		for _, y := range w.Extra {
+			if y.Role == e.role {
+				x = y.W
+				break
+			}
+		}
+		ws = append(ws, x)
+	}
+	return ws
 }
 
 // BatchTok is how many token columns one thread of a batched matvec carries.
