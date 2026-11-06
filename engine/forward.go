@@ -1985,7 +1985,6 @@ func (s *Instance) planFor(li int) *nn.LayerPlan {
 	plan.OwnGeom = plan.LocalRope || plan.HeadDim != c.HeadDim || plan.NKVHead != c.NKVHead || plan.NRot != c.NRot
 	plan.BidirOff = !c.BidirAt(li)
 	plan.VFromK, plan.OutScale = l.VFromK, l.OutScale
-	plan.DenseMoE = c.DenseMoE && c.MoEAt(li)
 	plan.PLEDim, plan.PLEWidth = c.PLEDim, c.SideWidth()
 	if c.MLA() {
 		plan.KeyW = c.KVDim() - c.KVLoraRank - c.NRot

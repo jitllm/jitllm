@@ -287,10 +287,6 @@ type Config struct {
 	// mixtures. MoEAt is false there. Read off the container at build(), nil
 	// when no block is one.
 	noRouter []bool
-	// DenseMoE is Gemma 4's mixture block (jlm.Flag2DenseMoE): a dense MLP and
-	// the mixture side by side, each with its own norms, the router on its own
-	// norm of the residual and each routed weight times its expert's scale.
-	DenseMoE bool
 
 	// The classic block (C6); see jlm.FlagLayerNorm and jlm.FlagParallel.
 	// LayerNorm makes every text-graph norm mean-centred, with the norm's
@@ -778,7 +774,6 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 	}
 	out.setGeoms(c.Geoms)
 	out.VNorm = c.Flags2.Has(jlm.Flag2VNorm)
-	out.DenseMoE = c.Flags2.Has(jlm.Flag2DenseMoE)
 	out.NKVShared, out.PLEDim = int(c.NKVShared), int(c.PLEDim)
 	out.bidir = c.BidirLayers
 	out.sel = c.Selection
@@ -800,11 +795,6 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 			return nil, fmt.Errorf("model: %s: KV-sharing block %d has no earlier block of its kind",
 				out.Arch, li)
 		}
-	}
-	if out.DenseMoE && (out.NExpert == 0 || out.ExpertSigmoid || out.NoExpertNorm ||
-		out.NExpertGroup > 1 || out.ExpertWeightIn) {
-		return nil, fmt.Errorf("model: %s: a dense-and-mixture block on anything but a "+
-			"renormalised softmax router", out.Arch)
 	}
 	// A scale derived from the head width would be one scale per geometry,
 	// and the one field is one.
@@ -888,7 +878,7 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 		out.LatentNormEps = out.RMSEps
 	}
 	switch {
-	case out.ExpertLatent != 0 && (out.NExpert == 0 || out.ExpertLatent >= out.NEmbd || out.DenseMoE ||
+	case out.ExpertLatent != 0 && (out.NExpert == 0 || out.ExpertLatent >= out.NEmbd ||
 		out.ExpertWeightIn):
 		return nil, fmt.Errorf("model: %s: a latent mixture at %d on %d experts at n_embd %d", out.Arch,
 			out.ExpertLatent, out.NExpert, out.NEmbd)
@@ -3031,7 +3021,9 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 			return nil, fmt.Errorf("model: block %d's FFN is %d wide (up %d), want %d", bi, l.Down.K,
 				l.Up.Rows, f)
 		}
-		if cfg.DenseMoE && cfg.MoEAt(i) {
+		// A mixture block whose experts read a pre-norm of their own runs a
+		// dense MLP beside them, each branch with its norms.
+		if cfg.MoEAt(i) && l.Vector(jlm.RoleFFNNorm2) != nil {
 			for _, v := range []struct {
 				role jlm.Role
 				want int
