@@ -43,6 +43,9 @@ type composedPart struct {
 	graph   *graph.Graph
 	formats map[jlm.Role]jlm.Type
 	weights map[jlm.Role]*resident
+	// ngram is the n-gram table's rows on the card, each range a gather
+	// binds the table from its own (ngramRows).
+	ngram   *ngramRows
 	vectors map[jlm.Role]backend.Buf
 	tables  map[composer.TableKey]backend.Buf
 	// history, keys and page are a block's history layout and its step's
@@ -91,6 +94,11 @@ type partForm struct {
 	// selection, of selN words, and table the own buffer the step's table
 	// "experts" is written to.
 	split, sel, selN, table int
+	// A form gathering the n-gram table's rows runs in two halves too
+	// (rowsRun): its codes before rowSplit, up to the hash, then the
+	// gathers. rowSel is the own buffer of the hash's rows, rowN of them a
+	// row, rowIDs at the form's rows.
+	rowSplit, rowSel, rowN, rowIDs int
 	// A form over a history read in passes (composer.History.Passes) runs its
 	// codes [passLo, passHi) once a pass (streamRun).
 	passLo, passHi int
@@ -133,6 +141,9 @@ type partArg struct {
 	role   jlm.Role
 	region int
 	table  composer.TableKey
+	// from is a weight's first row the binding names (the n-gram table's
+	// range a gather reads).
+	from int
 	// read and writes are whether the code reads and writes it
 	// (composer.Binding.Read, Writes): a binding is not always both.
 	read, writes bool
@@ -375,7 +386,7 @@ func (g *devTier) compilePart(sl *composedPart, codes []composer.Code, rows int)
 				f.own[i].n = max(f.own[i].n, int(bd.Bytes))
 				args = append(args, partArg{kind: partOwn, i: i})
 			case o.Kind == composer.OperandWeight && o.Region >= 0 && o.Region < 3:
-				args = append(args, partArg{kind: partWeight, role: o.Role, region: o.Region})
+				args = append(args, partArg{kind: partWeight, role: o.Role, region: o.Region, from: o.Instance})
 			case o.Kind == composer.OperandVector:
 				args = append(args, partArg{kind: partVector, role: o.Role})
 			case o.Kind == composer.OperandTable && sl.tables[o.Key()] != nil:
@@ -422,6 +433,10 @@ func (g *devTier) compilePart(sl *composedPart, codes []composer.Code, rows int)
 			f.close()
 			return nil, err
 		}
+	}
+	if err := f.rowHalves(gr, vals, rows); err != nil {
+		f.close()
+		return nil, err
 	}
 	if sl.history.Passes {
 		if err := f.passHalves(); err != nil {
@@ -852,7 +867,11 @@ func (sv *servedPart) launchCodes(lc *launcher, inst *partInst, in, out []backen
 			case partTable:
 				b = sl.tables[a.table]
 			case partWeight:
-				if r := sl.weights[a.role]; r != nil {
+				r := sl.weights[a.role]
+				if a.role == jlm.RoleNGramTable && sl.ngram != nil {
+					r = sl.ngram.at(a.from)
+				}
+				if r != nil {
 					b = [3]backend.Buf{r.qs, r.d, r.sc}[a.region]
 				}
 			}
@@ -2079,6 +2098,9 @@ func (f *partForm) inPlace(in, out int) bool {
 // roleWeight is the block's matrix its graph binds under role, nil for one
 // the tier does not hold.
 func (l *layer) roleWeight(r jlm.Role) *resident {
+	if r == jlm.RoleNGramTable && l.ngram != nil && len(l.ngram.ranges) > 0 {
+		return &l.ngram.ranges[0].rows
+	}
 	if w := l.namedWeight(r); w != nil {
 		return w
 	}
@@ -2951,6 +2973,12 @@ func (g *devTier) servedBlockAs(l *layer, li int, cs backend.Buf, pl *kvLayerPoo
 		}
 		for _, o := range l.graph.Ops {
 			for _, w := range o.Weight {
+				// The n-gram table is read in its stated format, a call's
+				// rows at a time (ngramRows).
+				if w.Role == jlm.RoleNGramTable && l.ngram != nil {
+					sl.formats[w.Role] = l.ngram.typ
+					continue
+				}
 				// A bank's bias is a row an expert, held as one vector.
 				if w.Rows > 0 && (l.roleVector(w.Role) == nil || l.roleWeight(w.Role) != nil) {
 					r := l.roleWeight(w.Role)
@@ -2981,6 +3009,7 @@ func (g *devTier) servedBlockAs(l *layer, li int, cs backend.Buf, pl *kvLayerPoo
 	for r := range sv.sl.weights {
 		sv.sl.weights[r] = l.roleWeight(r)
 	}
+	sv.sl.ngram = l.ngram
 	for r := range sv.sl.vectors {
 		sv.sl.vectors[r] = l.roleVector(r)
 	}

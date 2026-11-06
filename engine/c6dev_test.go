@@ -280,7 +280,11 @@ func fixtureOnEveryDeviceCounted(t *testing.T, m *model.Model, g *c6Golden, vs [
 					return nil, "the head stayed on the host: " + gpux.Err()
 				}
 				t.Logf("placed: %d reserved rows (%s)", gpux.Stats().ReservedRows, gpux.Err())
+				rows0 := gpux.Stats().NGramRows
 				got := run(st)
+				if m.Ngram != nil && gpux.Stats().NGramRows == rows0 {
+					t.Fatalf("the n-gram block read no table row in on the card: its gathers did not run there")
+				}
 				if err := runErr; err != nil {
 					runErr = nil
 					return nil, "refused: " + err.Error()

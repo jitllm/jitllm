@@ -5,7 +5,6 @@ import (
 
 	"github.com/jitllm/jitllm/model"
 
-	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/nn"
@@ -183,13 +182,13 @@ func TestBatchSeamMovesCarryEveryRowQwen4Exp(t *testing.T) {
 	batchSeamMoves(t, p, 1e-3, true, w)
 }
 
-// cardBlocks is how many of m's blocks a card takes: every one but a block
-// gathering a row table's rows, which no card holds (the n-gram table does
-// not fit one), so that block runs on the CPU device.
+// cardBlocks is how many of m's blocks a card takes: every one its front
+// end states, the n-gram block's among them, whose table's rows the card
+// reads in a call at a time.
 func cardBlocks(m *model.Model) int {
 	n := 0
 	for li := range m.Cfg.NLayer {
-		if g := m.Composing().BlockGraph(li); g != nil && cpudev.TableRowsOf(g) < 0 {
+		if m.Composing().BlockGraph(li) != nil {
 			n++
 		}
 	}
