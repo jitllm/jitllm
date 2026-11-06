@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"image"
 	"slices"
-	"unsafe"
 
 	"github.com/jitllm/jitllm/model"
 
@@ -19,19 +18,16 @@ import (
 // and the entry's forms (one a sample format) and the head's on it, all
 // composed when the instance is made.
 type towerRun struct {
-	// bound is what a run of a form's codes reads its addresses from.
-	bound cpudev.Bound
+	// parts is the entry, the head and the taps on the device that runs
+	// them (nn.TowerParts).
+	parts nn.TowerParts
 	s     *Instance
 	// tok and given are the picture's rows as a prompt's source (prefillSrc).
 	tok   []int32
 	given [1]givenRun
-	// entry is a class's entry forms, one a sample format.
-	entry []map[uint8]*cpudev.Form
-	head  *cpudev.Form
-	// taps is each tap's form, tapRows the rows its block leaves (tapBuf
-	// their buffers, grown with the square) and mode's taps the card's run
-	// keeping them (embedMode.taps).
-	taps     []*cpudev.Form
+	// tapRows is the rows each tap's block leaves (tapBuf their buffers,
+	// grown with the square) and mode's taps the card's run keeping them
+	// (embedMode.taps).
 	tapRows  [][]float32
 	tapBuf   [][]float32
 	modeTaps []embedTap
@@ -93,32 +89,25 @@ func (in *Instance) newTowerRun() (*towerRun, error) {
 		words = max(words, (cl.Pic.PicW+cl.Pic.PicH)*(cl.Pic.Taps+1))
 	}
 	tr := &towerRun{s: ts, req: make([]uint32, composer.RequestPicTaps+words)}
+	plans := cpudev.TowerPlans{Head: ts.partPlan(tg.Head, nn.DeclineNoGraph, n, nil)}
 	for _, cl := range tg.Classes {
-		forms := map[uint8]*cpudev.Form{}
+		e := map[uint8]cpudev.PartPlan{}
 		for px, g := range cl.Entry {
-			f, err := ts.towerForm(g, cl.Rows, nil)
-			if err != nil {
-				ts.Close()
-				return nil, fmt.Errorf("model: the tower's entry: %w", err)
-			}
-			forms[px] = f
+			e[px] = ts.partPlan(g, nn.DeclineNoGraph, cl.Rows, nil)
 		}
-		tr.entry = append(tr.entry, forms)
+		plans.Entry = append(plans.Entry, e)
 	}
-	f, err := ts.towerForm(tg.Head, n, nil)
+	tapsW := make([]cpudev.Tensors, len(tg.Taps))
+	for j, g := range tg.Taps {
+		plans.Taps = append(plans.Taps, in.partPlan(g, nn.DeclineNoGraph, n, in.m.TowerTapFormats(int32(tg.TapBlocks[j]), g)))
+		tapsW[j] = &ts.dense.TowerTaps[j]
+	}
+	parts, err := cpudev.NewTower(ts.exec.x, plans, &ts.dense.TowerDense, tapsW)
 	if err != nil {
 		ts.Close()
-		return nil, fmt.Errorf("model: the tower's head: %w", err)
+		return nil, fmt.Errorf("model: %w", err)
 	}
-	tr.head = f
-	for j, g := range tg.Taps {
-		f, err := in.towerForm(g, n, in.m.TowerTapFormats(int32(tg.TapBlocks[j]), g))
-		if err != nil {
-			ts.Close()
-			return nil, fmt.Errorf("model: the tower's tap %d: %w", j, err)
-		}
-		tr.taps = append(tr.taps, f)
-	}
+	tr.parts = parts
 	tr.tapRows, tr.tapBuf = make([][]float32, len(tg.Taps)), make([][]float32, len(tg.Taps))
 	for li := ts.lo; li < ts.hi; li++ {
 		if cb, _ := ts.exec.x.Block(li); cb == nil || cb.Rows == nil {
@@ -258,50 +247,33 @@ func (s *Instance) encodePicture(img image.Image, dst, deep []float32) ([]float3
 	if a := tg.Classes[0].Pic; a.Chain == graph.ChainPIL && (pl.W > a.PicSide || pl.H > a.PicSide) {
 		return nil, fmt.Errorf("model: a %dx%d picture is past the %d pixels a side the tower's resize reaches", pl.W, pl.H, a.PicSide)
 	}
-	head := tr.head
-	if _, why := ts.bindWeights(head, -1, &ts.dense.TowerDense); why != nn.DeclineServes {
-		return nil, fmt.Errorf("model: the tower's head: %v", why)
-	}
 	D, E := int(m.Container.Vision().ProjDim), int(m.Container.Vision().NEmbd)
-	if want := tg.PicRows(pl.W, pl.H); len(dst) != want*D || len(deep) != len(tr.taps)*want*D {
+	if want := tg.PicRows(pl.W, pl.H); len(dst) != want*D || len(deep) != len(tg.Taps)*want*D {
 		return nil, fmt.Errorf("model: %d values and %d for its taps' for a picture's %d rows of %d", len(dst), len(deep), want, D)
 	}
-	for j, f := range tr.taps {
-		if _, why := ts.bindWeights(f, -1, &ts.dense.TowerTaps[j]); why != nn.DeclineServes {
-			return nil, fmt.Errorf("model: the tower's tap %d: %v", j, why)
-		}
-	}
-	b := &tr.bound
 	sq, squares := tg.Square(pl.W, pl.H, 0)
 	at := 0
 	for i := range squares {
 		if i > 0 {
 			sq, _ = tg.Square(pl.W, pl.H, i)
 		}
-		f := tr.entry[sq.Class][pl.Px]
-		if _, why := ts.bindWeights(f, -1, &ts.dense.TowerDense); why != nn.DeclineServes {
-			return nil, fmt.Errorf("model: the tower's entry: %v", why)
-		}
 		tr.squareRequest(pl, sq, tg.Classes[sq.Class].Pic, squares)
 		n := tg.Lead + sq.Gw*sq.Gh
 		tr.size(n, E)
-		*b = cpudev.Bound{Li: -1, Own: ts.exec.x.Device().Own(f), N: n, Req: tr.req, Pos: tr.posTab, Pic: words}
-		b.Weights, _ = ts.bindWeights(f, -1, &ts.dense.TowerDense)
-		b.IO[0] = unsafe.Pointer(&tr.rows[0])
-		ts.exec.x.Runner().Run(b, f)
+		if err := tr.parts.Entry(sq.Class, pl.Px, words, tr.req, tr.posTab, n, tr.rows); err != nil {
+			return nil, fmt.Errorf("model: %w", err)
+		}
 		if err := ts.towerBlocks(tr, sq.Gw, tr.windows(tg, sq.Gw, sq.Gh)); err != nil {
 			return nil, fmt.Errorf("model: the tower's blocks: %w", err)
 		}
-		*b = cpudev.Bound{Li: -1, Own: ts.exec.x.Device().Own(head), N: n, Req: tr.req, Pos: tr.posTab}
-		b.Weights, _ = ts.bindWeights(head, -1, &ts.dense.TowerDense)
-		b.IO[0], b.IO[1] = unsafe.Pointer(&tr.blk[0]), unsafe.Pointer(&dst[at*D])
-		ts.exec.x.Runner().Run(b, head)
+		if err := tr.parts.Head(n, tr.req, tr.posTab, tr.blk, dst[at*D:]); err != nil {
+			return nil, fmt.Errorf("model: %w", err)
+		}
 		// Each tap's rows at the same rows of its plane of deep.
-		for j, f := range tr.taps {
-			*b = cpudev.Bound{Li: -1, Own: ts.exec.x.Device().Own(f), N: n, Req: tr.req, Pos: tr.posTab}
-			b.Weights, _ = ts.bindWeights(f, -1, &ts.dense.TowerTaps[j])
-			b.IO[0], b.IO[1] = unsafe.Pointer(&tr.tapRows[j][0]), unsafe.Pointer(&deep[(j*len(dst)/D+at)*D])
-			ts.exec.x.Runner().Run(b, f)
+		for j := range tg.Taps {
+			if err := tr.parts.Tap(j, n, tr.req, tr.posTab, tr.tapRows[j], deep[(j*len(dst)/D+at)*D:]); err != nil {
+				return nil, fmt.Errorf("model: %w", err)
+			}
 		}
 		at += tg.SquareOut(sq)
 	}
@@ -406,15 +378,15 @@ func (s *Instance) encodePictures(spans []model.Span, from int) ([]model.Span, e
 				tr.deeps = append(tr.deeps, nil)
 			}
 			if cap(tr.pics[k]) < sp.PicRows*D {
-				tr.pics[k], tr.deeps[k] = make([]float32, sp.PicRows*D), make([]float32, len(tr.taps)*sp.PicRows*D)
+				tr.pics[k], tr.deeps[k] = make([]float32, sp.PicRows*D), make([]float32, len(s.m.Tower.Taps)*sp.PicRows*D)
 			}
-			sp.Embd, sp.Deep = tr.pics[k][:sp.PicRows*D], tr.deeps[k][:len(tr.taps)*sp.PicRows*D]
-			if len(tr.taps) == 0 {
+			sp.Embd, sp.Deep = tr.pics[k][:sp.PicRows*D], tr.deeps[k][:len(s.m.Tower.Taps)*sp.PicRows*D]
+			if len(s.m.Tower.Taps) == 0 {
 				sp.Deep = nil
 			}
 			k++
 			if row+r > from {
-				if _, err := s.encodePicture(sp.Picture, sp.Embd, tr.deeps[k-1][:len(tr.taps)*sp.PicRows*D]); err != nil {
+				if _, err := s.encodePicture(sp.Picture, sp.Embd, tr.deeps[k-1][:len(s.m.Tower.Taps)*sp.PicRows*D]); err != nil {
 					return nil, fmt.Errorf("model: span %d: %w", i, err)
 				}
 			}
