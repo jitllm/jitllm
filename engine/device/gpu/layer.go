@@ -2556,7 +2556,7 @@ func nanFill(n int) []byte {
 // Nothing else writes bs.cs, so this deliberately un-poisons it under
 // WithPoisonScratch.
 func (g *devTier) initRopePlanes(bs *blockScratch, p *nn.LayerPlan, rows int) error {
-	if p.NonCausal || p.NRot <= 0 || len(p.RopeTab) == 0 {
+	if gridded(p) || p.NRot <= 0 || len(p.RopeTab) == 0 {
 		return nil
 	}
 	up := func(dst *backend.Buf, v []float32) error {
@@ -2591,7 +2591,7 @@ func (g *devTier) initRopePlanes(bs *blockScratch, p *nn.LayerPlan, rows int) er
 // reads where the plan has one (RopeTabAxes): its planes, uploaded once, and
 // the rows' positions, staged every call.
 func (g *devTier) initRopeAxes(bs *blockScratch, p *nn.LayerPlan, rows int) error {
-	if len(p.RopeTabAxes) == 0 || p.NonCausal || p.NRot <= 0 || bs.cs == nil {
+	if len(p.RopeTabAxes) == 0 || gridded(p) || p.NRot <= 0 || bs.cs == nil {
 		return nil
 	}
 	b, err := g.dev.Alloc(len(p.RopeTabAxes) * 4)
@@ -2614,7 +2614,7 @@ func (g *devTier) initRopeAxes(bs *blockScratch, p *nn.LayerPlan, rows int) erro
 // initRopeRows holds the rows the composed rotary tables read (ropeRowsWords),
 // staged every call, and makes the device's marks arena (markArena).
 func (g *devTier) initRopeRows(bs *blockScratch, p *nn.LayerPlan, rows int) error {
-	if p.NonCausal || p.NRot <= 0 || bs.cs == nil {
+	if gridded(p) || p.NRot <= 0 || bs.cs == nil {
 		return nil
 	}
 	b, err := g.dev.Alloc((1 + 2*rows) * 4)
@@ -2741,7 +2741,7 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 		bs.picStage = make([]byte, rows*composer.RowWords*4)
 		bs.picStageW = make([]byte, rows*composer.RowWords*4)
 	}
-	if p.NonCausal && len(p.GridPlanes) > 0 && len(p.Tables) == 1 && p.Tables[0] != nil {
+	if gridded(p) && len(p.Tables) == 1 && p.Tables[0] != nil {
 		bs.gridGraph = p.Tables[0]
 		al(&bs.gridPos, (1+rows)*4)
 		al(&bs.gridReq, (composer.RequestRows+rows)*4)
@@ -3980,10 +3980,11 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	// which write cs and csSWA where the tier's own table would. A call of
 	// the head alone (a model whose host collapses its streams between the
 	// blocks and the head) turns nothing and is not asked for them, nor is a
-	// non-causal segment's, whose rotary is the caller's table of its grid.
+	// non-causal segment's that turns by its picture's grid (servedGridTable).
+	gridSrv := p.NonCausal && lo < hi && g.gridServes(bs)
 	tableSrv := false
 	var raxes []byte
-	if bs.cs != nil && p.NRot > 0 && !p.NonCausal && lo < hi && rrows >= 1 {
+	if bs.cs != nil && p.NRot > 0 && !gridSrv && lo < hi && rrows >= 1 {
 		if why := g.tableServes(bs, p, pos, rrows, rag); why != partServes {
 			g.Steps.Decline(nn.PartTable, why)
 			return refuse("the composer does not serve the rotary tables: %s", DeclineName(int(why)))
@@ -3991,7 +3992,6 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 			tableSrv = true
 		}
 	}
-	gridSrv := p.NonCausal && lo < hi && g.gridServes(bs)
 	if gridSrv {
 		if _, err := g.servedGridTable(bs, R); err != nil {
 			g.Steps.Decline(nn.PartTable, partNotFormed)
@@ -6086,3 +6086,7 @@ func bindsRole(g *graph.Graph, r jlm.Role) bool {
 	}
 	return false
 }
+
+// gridded says plan p's rows turn by their picture's grid (servedGridTable)
+// rather than by their positions.
+func gridded(p *nn.LayerPlan) bool { return p.NonCausal && len(p.GridPlanes) > 0 }
