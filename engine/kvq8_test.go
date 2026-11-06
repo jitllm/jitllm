@@ -82,8 +82,8 @@ func TestCPUConvertsAQ8History(t *testing.T) {
 					f[i] = float32(rng.NormFloat64())
 				}
 				h := make([]byte, n*rs)
-				before := s.cpu.kvconv.ran
-				if !s.cpuKV(true, hd, f, h) {
+				before := kvRan(s)
+				if !s.convertKV(true, hd, f, h) {
 					t.Fatalf("head width %d: the q8 rows are not served", hd)
 				}
 				pad := make([]float32, nb*cpu.KVQ8Block)
@@ -107,7 +107,7 @@ func TestCPUConvertsAQ8History(t *testing.T) {
 					}
 				}
 				back := make([]float32, len(f))
-				if !s.cpuKV(false, hd, back, h) {
+				if !s.convertKV(false, hd, back, h) {
 					t.Fatalf("head width %d: the q8 rows are not widened", hd)
 				}
 				for r := 0; r < n; r++ {
@@ -119,7 +119,7 @@ func TestCPUConvertsAQ8History(t *testing.T) {
 						}
 					}
 				}
-				if got := s.cpu.kvconv.ran - before; got != 2 {
+				if got := kvRan(s) - before; got != 2 {
 					t.Fatalf("head width %d: %d conversions counted, want 2", hd, got)
 				}
 				t.Logf("head width %d: %d rows narrowed and widened", hd, n)

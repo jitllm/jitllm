@@ -702,7 +702,7 @@ func (s *Instance) migrateKVAs(kvl kvLayout, n int, k, v, fk, fv []float32, toDe
 	}
 	conv := kvl.fmt != cpu.KVF32 && rows > 0
 	if toDevice && conv {
-		if !s.cpuKV(false, kvl.headDim, fk[:rows*kvl.headDim], own(k)) || !s.cpuKV(false, kvl.headDim, fv[:rows*kvl.headDim], own(v)) {
+		if !s.convertKV(false, kvl.headDim, fk[:rows*kvl.headDim], own(k)) || !s.convertKV(false, kvl.headDim, fv[:rows*kvl.headDim], own(v)) {
 			return false
 		}
 	}
@@ -710,7 +710,7 @@ func (s *Instance) migrateKVAs(kvl kvLayout, n int, k, v, fk, fv []float32, toDe
 		return false
 	}
 	if !toDevice && conv {
-		if !s.cpuKV(true, kvl.headDim, fk[:rows*kvl.headDim], own(k)) || !s.cpuKV(true, kvl.headDim, fv[:rows*kvl.headDim], own(v)) {
+		if !s.convertKV(true, kvl.headDim, fk[:rows*kvl.headDim], own(k)) || !s.convertKV(true, kvl.headDim, fv[:rows*kvl.headDim], own(v)) {
 			return false
 		}
 	}

@@ -222,6 +222,13 @@ type Ledger interface {
 	AccountOn(dev string) (Account, bool)
 }
 
+// KVConvDevice is a device converting a history's rows: narrowing the
+// floats f of head rows hd wide into the history's bytes h, or widening h
+// into f, reporting whether it served them.
+type KVConvDevice interface {
+	Convert(narrow bool, hd int, f []float32, h []byte) bool
+}
+
 // DrawArgs is a draw's sampler: its top-k (0 for none), 1/T, top-p and
 // min-p, and its repeat penalty with the window it counts (nil where the
 // penalty is 1).
