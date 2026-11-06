@@ -51,12 +51,6 @@ func (s *Instance) partPlan(g *graph.Graph, none nn.Decline, rows int, over map[
 	return p
 }
 
-// towerForm is graph g on the CPU at rows rows (cpudev.Exec.FormGraph),
-// over's formats in place of the container's for the roles it names.
-func (s *Instance) towerForm(g *graph.Graph, rows int, over map[jlm.Role]jlm.Type) (*cpudev.Form, error) {
-	return s.exec.x.FormGraph(s.partPlan(g, nn.DeclineNoGraph, rows, over))
-}
-
 // Sample is smp's token over logits, a row of this instance's vocabulary,
 // from the composed samplers on the CPU: the greedy token (graph.Sample), a
 // top-k draw's (graph.SampleWalk) and the row's or its cut's
