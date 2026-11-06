@@ -154,7 +154,13 @@ func (eg *evictGate) open(t *testing.T, squeeze bool, cfg func(*gpu.Config), ext
 		// stream through; a pool of the dummy and one page refuses instead.
 		// The prompt is under a page, so each layer holds one: two more a
 		// layer.
+		// A budget of what the card holds gives the pool's free pages back
+		// first (SetBudget), so the slack is counted from what is left.
 		st := g.Stats()
+		if _, err := g.SetBudget(st.BudgetUsed); err != nil {
+			t.Fatal(err)
+		}
+		st = g.Stats()
 		if _, err := g.SetBudget(st.BudgetUsed + 2*st.KVBytes); err != nil {
 			t.Fatal(err)
 		}
