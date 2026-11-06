@@ -373,7 +373,7 @@ func TestComposedCPURowsDoNotAllocate(t *testing.T) {
 			if _, err := s.Prefill(ids[:chunk]); err != nil {
 				t.Fatal(err)
 			}
-			seq, pos := s.cpuRowsOf(0, 0, chunk)
+			seq, pos := s.chunkRows(0, 0, chunk)
 			blocks(s, seq, pos)
 			if w := countAllocs(func() { blocks(s, seq, pos) }); w.engine != 0 || w.unattributed > 0 {
 				t.Errorf("a warm composed chunk of %d rows through every block allocates: %d engine, %d unattributed%s", chunk, w.engine, w.unattributed, w.where)

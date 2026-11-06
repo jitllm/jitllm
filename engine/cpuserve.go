@@ -48,22 +48,12 @@ func cpuHeadRefused(why nn.Decline) error {
 // cpuState is a instance's composed CPU blocks: each block's form and its own
 // buffers, the history tables, and the census.
 type cpuState struct {
-	// workers is the CPU device's workers (cpu.Pool), x the instance's
-	// execution on the device: its blocks' forms, the runners that call
-	// them and what it served.
-	workers *cpu.Pool
-	x       *cpudev.Exec
+	// x is the instance's execution on the device: its workers, its
+	// blocks' forms, the runners that call them and what it served.
+	x *cpudev.Exec
 	// lanes runs a decode token's blocks on the device for the session the
 	// instance runs (cpudev.Lanes).
-	lanes     *cpudev.Lanes
-	tabsFresh bool
-	tabSeq    []int
-	// rseq and rpos are a step's rows' sequences and positions; lastPos
-	// each sequence's last position a step's rows reach (cpuRecWhole).
-	lastPos    []int
-	rseq, rpos []int
-	// bound is what a run of a form's codes reads its addresses from.
-	bound cpudev.Bound
+	lanes *cpudev.Lanes
 	// fault is a violation a gate sets: the bindings rewritten so a kernel
 	// reads the wrong history page or the wrong first row.
 	fault cpuFault
@@ -133,7 +123,7 @@ func CPUForm() string {
 }
 
 // swaRows is the step's second rotary table from row a, nil where the model
-// has no second rotary (cpuRowTables writes it into s.bcsSWA).
+// has no second rotary (rowTables writes it into s.bcsSWA).
 func (s *Instance) swaRows(a int) []float32 {
 	if s.bcsSWA == nil {
 		return nil
@@ -149,13 +139,13 @@ func rowsOf(tok []int32, a, b int) []int32 {
 	return tok[a:b]
 }
 
-// cpuRowsOf is the sequences and positions of a chunk's n rows of slot
+// chunkRows is the sequences and positions of a chunk's n rows of slot
 // from position p0, in the instance's own rows.
-func (s *Instance) cpuRowsOf(slot, p0, n int) (seq, pos []int) {
-	if cap(s.cpu.rpos) < n {
-		s.cpu.rseq, s.cpu.rpos = make([]int, n), make([]int, n)
+func (s *Instance) chunkRows(slot, p0, n int) (seq, pos []int) {
+	if cap(s.promptPos) < n {
+		s.promptSeq, s.promptPos = make([]int, n), make([]int, n)
 	}
-	seq, pos = s.cpu.rseq[:n], s.cpu.rpos[:n]
+	seq, pos = s.promptSeq[:n], s.promptPos[:n]
 	for i := range n {
 		seq[i], pos[i] = slot, p0+i
 	}

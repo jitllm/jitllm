@@ -145,6 +145,9 @@ func (e *Exec) Device() *Device { return e.dev }
 // Composer is the execution's composer.
 func (e *Exec) Composer() *Composer { return e.comp }
 
+// Pool is the device's workers.
+func (e *Exec) Pool() *cpu.Pool { return e.workers }
+
 // Runner is the runner that calls the execution's forms.
 func (e *Exec) Runner() *Runner { return e.run }
 

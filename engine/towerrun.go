@@ -19,7 +19,9 @@ import (
 // and the entry's forms (one a sample format) and the head's on it, all
 // composed when the instance is made.
 type towerRun struct {
-	s *Instance
+	// bound is what a run of a form's codes reads its addresses from.
+	bound cpudev.Bound
+	s     *Instance
 	// tok and given are the picture's rows as a prompt's source (prefillSrc).
 	tok   []int32
 	given [1]givenRun
@@ -269,7 +271,7 @@ func (s *Instance) encodePicture(img image.Image, dst, deep []float32) ([]float3
 			return nil, fmt.Errorf("model: the tower's tap %d: %v", j, why)
 		}
 	}
-	b := &ts.cpu.bound
+	b := &tr.bound
 	sq, squares := tg.Square(pl.W, pl.H, 0)
 	at := 0
 	for i := range squares {

@@ -89,8 +89,8 @@ func (s *Instance) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([
 	s.tock(opResid, t0)
 
 	// The step's rotary tables are the CPU's to make where a block runs
-	// there (cpuRowTables); a device makes its own.
-	s.cpu.tabsFresh = false
+	// there (rowTables); a device makes its own.
+	s.rowsFresh = false
 
 	var slot []int
 	if len(s.rowOwn) == 0 {

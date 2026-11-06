@@ -254,7 +254,7 @@ func (s *Instance) stepRowsDevice(src rowSrc, out *rowsOut) error {
 		return err
 	}
 	s.layerInputs(ple)
-	s.cpu.tabsFresh = false
+	s.rowsFresh = false
 	s.relocateFor(p0 + n)
 	rd, _ := s.onRowsDevice()
 	// A step with no head (a replay's commit, a piece of the prediction
@@ -398,7 +398,7 @@ func (s *Instance) stepRowsStreams(src rowSrc, out *rowsOut) error {
 	if err := s.fillRows(src, 0, n, s.bx[:n*c.NEmbd], nil, pos); err != nil {
 		return err
 	}
-	s.cpu.tabsFresh = false
+	s.rowsFresh = false
 	s.relocateFor(p0 + n)
 	rd, _ := s.onRowsDevice()
 	nlogit := n

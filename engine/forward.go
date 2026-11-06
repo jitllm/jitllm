@@ -221,6 +221,12 @@ type Instance struct {
 	// device retry (rowStreams).
 	tok1    [1]int32
 	tokFill bool
+	// rowsFresh and rowSlots say a step's rows' rotary tables are made for
+	// this step, and each row's slot (rowTables); promptSeq and promptPos
+	// are a prompt chunk's rows' sequences and positions (chunkRows).
+	rowsFresh            bool
+	rowSlots             []int
+	promptSeq, promptPos []int
 	// oneFresh and onePos say the decode row's rotary tables are made for
 	// this token, at onePos.
 	oneFresh bool
@@ -673,8 +679,8 @@ func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOp
 		s.ogate = make([]float32, nseq*qd)
 	}
 
-	s.cpu.workers = cpu.NewPool(s.poolOptions()...)
-	s.cpu.x = cpudev.NewExec(s.cpu.workers, cpudev.NewComposer(g.cpu.Forms(m.Id), g.cpu.Target.ISA(), s.cpu.workers.Workers(), opt.cpuFloat))
+	workers := cpu.NewPool(s.poolOptions()...)
+	s.cpu.x = cpudev.NewExec(workers, cpudev.NewComposer(g.cpu.Forms(m.Id), g.cpu.Target.ISA(), workers.Workers(), opt.cpuFloat))
 	s.cpu.x.SetFusion(!opt.noFuse)
 	s.cpu.x.FuseCounts(&g.fuse.tries, &g.fuse.runs)
 	// The cache width: WithKVType (or WithKVF16, SetKVType) forces it;
@@ -840,7 +846,7 @@ func (s *Instance) Close() error {
 		}
 	}
 	s.keepSpare()
-	s.cpu.workers.Close()
+	s.cpu.x.Pool().Close()
 	return nil
 }
 
@@ -2664,7 +2670,7 @@ func (s *Instance) devApplied(a nn.HeadStage) error {
 // JIT is this state's generated-code tier: its vision segment runs on it
 // (Instance.Vision), so a model has one JIT and one worker pool a session.
 // Pool is the CPU device's workers this instance runs on.
-func (s *Instance) Pool() *cpu.Pool { return s.cpu.workers }
+func (s *Instance) Pool() *cpu.Pool { return s.cpu.x.Pool() }
 
 // GPULayers is how many blocks a device took, which is the set and not the
 // prefix: on a hybrid the two differ and the count is what a caller means.
@@ -2877,7 +2883,7 @@ func (s *Instance) SetGPULayers(n int) int {
 }
 
 // Workers is how many worker threads the fast tier uses.
-func (s *Instance) Workers() int { return s.cpu.workers.Workers() }
+func (s *Instance) Workers() int { return s.cpu.x.Pool().Workers() }
 
 // Pos is the number of positions already in the cache.
 func (s *Session) Pos() int { return s.pos }
@@ -3187,7 +3193,7 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 		in0, _ := pc.Faults()
 		defer func() {
 			in1, _ := pc.Faults()
-			s.cpu.workers.SetSpinning(in1 == in0)
+			s.cpu.x.Pool().SetSpinning(in1 == in0)
 		}()
 	}
 
