@@ -133,7 +133,8 @@ const (
 	// TOpLayerNorm is In[0]'s LayerNorm, weight Bind[0], bias Bind[1]
 	// where bound, epsilon Eps.
 	TOpLayerNorm OpCode = 5
-	// TOpRMSNorm is In[0]'s RMS norm, weight Bind[0], epsilon Eps.
+	// TOpRMSNorm is In[0]'s RMS norm, weight Bind[0] where bound, epsilon
+	// Eps.
 	TOpRMSNorm OpCode = 6
 	// TOpRegroup is space-to-depth: each Span x Span block of the grid's
 	// rows one row, the block's rows in raster order (graph.OpRegroup).
@@ -161,7 +162,18 @@ const (
 	// Chain, read through Filter's taps, the rows in TOpPatchify's order
 	// where Width is set, from row Offset on.
 	TOpPosResample OpCode = 14
-	topCodes       OpCode = 15
+	// TOpScale is In[0] times the stored vector Bind[0], element by
+	// element.
+	TOpScale OpCode = 15
+	// TOpSum and TOpMax are In[0]'s elements summed, and their largest:
+	// one wide.
+	TOpSum OpCode = 16
+	TOpMax OpCode = 17
+	// TOpConcat is the In values side by side, in order.
+	TOpConcat OpCode = 18
+	// TOpSlice is In[0]'s Width elements from Offset.
+	TOpSlice OpCode = 19
+	topCodes OpCode = 20
 )
 
 // A position table's resample (TOpPosResample): where a cell of a side n
@@ -413,6 +425,8 @@ func (p *Program) valid(name string) error {
 			return fmt.Errorf("jlm: the tower's %s op %d groups by %d", name, i, op.Span)
 		case (op.Code == TOpLayerNorm || op.Code == TOpRMSNorm) && op.Eps <= 0:
 			return fmt.Errorf("jlm: the tower's %s op %d has an epsilon of %v", name, i, op.Eps)
+		case op.Code == TOpSlice && op.Width <= 0:
+			return fmt.Errorf("jlm: the tower's %s op %d slices %d elements", name, i, op.Width)
 		case op.Code == TOpStated && (op.Expr == nil || op.Width <= 0):
 			return fmt.Errorf("jlm: the tower's %s op %d states no expression or no width", name, i)
 		case op.Offset < 0:
@@ -447,8 +461,14 @@ func (op *TowerOp) arity() (in int, bind [2]int) {
 		return 1, [2]int{0, 0}
 	case TOpLinear, TOpLayerNorm:
 		return 1, [2]int{1, 2}
-	case TOpRMSNorm, TOpLeadRow:
+	case TOpRMSNorm:
+		return 1, [2]int{0, 1}
+	case TOpLeadRow, TOpScale:
 		return 1, [2]int{1, 1}
+	case TOpSum, TOpMax, TOpSlice:
+		return 1, [2]int{0, 0}
+	case TOpConcat:
+		return -1, [2]int{0, 0}
 	case TOpPosTable, TOpPosResample:
 		return 0, [2]int{1, 1}
 	case TOpAdd:

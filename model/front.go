@@ -659,7 +659,7 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 		for k := 1; k < c.Streams(); k++ {
 			st.in = append(st.in, b.In(fmt.Sprintf("x.%d", k), d))
 		}
-		if _, ok := c.ResCheckpoint(li); ok && st.mixed {
+		if st.mixed && c.stated.Blocks[li].Bank != 0 {
 			st.bank = streamCopy(b, x)
 		}
 	}
@@ -678,7 +678,10 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	attnIn := x
 	switch {
 	case st != nil && st.mixed:
-		attnIn = m.bankMix(b, f, st.in[1:1+c.ResBank(li, false)], x, jlm.RoleAttnResScore)
+		var err error
+		if attnIn, err = m.streamRead(b, f, &c.stated.Blocks[li].Attn, st.in, x, x); err != nil {
+			return nil, UncoveredStreams, fmt.Errorf("block %d's stated attention read: %w", li, err)
+		}
 	case st != nil && st.gated:
 		attnIn, st.w = m.gatedMix(b, f, st.in, jlm.RoleHCAttnNorm, jlm.RoleHCAttnDown, jlm.RoleHCAttnUp, jlm.RoleHCAttnInject)
 	case st != nil:
@@ -992,8 +995,12 @@ func (m *Model) blockRest(b *graph.Builder, f graph.Facts, li int, x, n, att gra
 	default:
 		x2 = postResid(resid(x, norm(proj, jlm.RolePostAttnNorm)), jlm.RoleAttnOutNorm, jlm.RoleAttnOutNormBias)
 	}
-	if _, ok := c.ResCheckpoint(li); ok && st != nil && st.mixed {
-		x2 = norm(proj, jlm.RolePostAttnNorm)
+	if st != nil && st.mixed && c.stated.Blocks[li].Attn.Join != nil {
+		var err error
+		if x2, err = m.streamJoin(b, f, &c.stated.Blocks[li].Attn, x, norm(proj, jlm.RolePostAttnNorm), resid); err != nil {
+			return nil, UncoveredStreams, fmt.Errorf("block %d's stated attention join: %w", li, err)
+		}
+		x2 = postResid(x2, jlm.RoleAttnOutNorm, jlm.RoleAttnOutNormBias)
 	}
 	if st != nil && st.side != 0 {
 		x2 = mapRow(b, "joined", graph.Attrs{Fn: graph.MapMul, Const: 1 / math.Sqrt2}, nil, d, b.Add(x2, st.side))
@@ -1023,7 +1030,10 @@ func (m *Model) blockRest(b *graph.Builder, f graph.Facts, li int, x, n, att gra
 	case c.Parallel:
 		ffnIn = x
 	case st != nil && st.mixed:
-		ffnIn = m.bankMix(b, f, st.bankAfter(c, li), x2, jlm.RoleFFNResScore)
+		var err error
+		if ffnIn, err = m.streamRead(b, f, &c.stated.Blocks[li].FFN, st.in, x, x2); err != nil {
+			return nil, UncoveredStreams, fmt.Errorf("block %d's stated FFN read: %w", li, err)
+		}
 	case st != nil && st.gated:
 		ffnIn, st.w = m.gatedMix(b, f, st.cur, jlm.RoleHCFFNNorm, jlm.RoleHCFFNDown, jlm.RoleHCFFNUp, jlm.RoleHCFFNInject)
 	}
@@ -1056,7 +1066,11 @@ func (m *Model) blockRest(b *graph.Builder, f graph.Facts, li int, x, n, att gra
 		return verified(b, f)
 	}
 	if st != nil && st.mixed {
-		return m.banked(b, f, li, st, resid(x2, norm(ffn, jlm.RolePostFFNNorm)), has)
+		y, err := m.streamJoin(b, f, &c.stated.Blocks[li].FFN, x2, norm(ffn, jlm.RolePostFFNNorm), resid)
+		if err != nil {
+			return nil, UncoveredStreams, fmt.Errorf("block %d's stated FFN join: %w", li, err)
+		}
+		return m.banked(b, f, li, st, y, has)
 	}
 	if st != nil {
 		return m.corrected(b, f, li, st, resid(x2, norm(ffn, jlm.RolePostFFNNorm)), has)

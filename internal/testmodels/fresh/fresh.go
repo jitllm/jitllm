@@ -55,10 +55,14 @@ func reconvert(path string) error {
 		tower := v == nil || v.Tower != nil || !convert.StatesTower(v.Projector)
 		voc := c.Vocab()
 		tools := voc == nil || len(voc.Templates) == 0 || len(voc.Tools.Calls) > 0
+		cfg := c.Config()
+		streams := cfg.AttnResBlock == 0 || cfg.Streams.N > 1
 		c.Close()
 		switch {
-		case stated && tower && tools:
+		case stated && tower && tools && streams:
 			return nil
+		case !streams:
+			openErr = fmt.Errorf("it states no residual streams")
 		case stated && tower:
 			openErr = fmt.Errorf("its chat template states no tool form")
 		case !stated:

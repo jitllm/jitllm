@@ -58,10 +58,49 @@ func (c *Config) PredictsStreams() bool {
 //	in_f = mix(x_1..x_nb', x_0')                    with the input banked
 //	x_0'' = x_0' + ffn(in_f)
 
-// mixesStreams says the model's several residual streams are a bank of
-// checkpoints, and nothing else carries a stream.
+// mixesStreams says the model's several residual streams are the ones the
+// converter states, and nothing else carries a stream.
 func (c *Config) mixesStreams() bool {
-	return c.ResAttn() && c.Streams() == c.resStreams() && c.PredStreams == 0 && c.HCMult <= 1
+	return c.statedStreams() > 1 && c.Streams() == c.statedStreams() && c.PredStreams == 0 && c.HCMult <= 1
+}
+
+// streamRead is the input u reads: its program over the streams it names
+// -- stream k of st's inputs, the block's input in, or the running residual
+// run -- or run where it states none.
+func (m *Model) streamRead(b *graph.Builder, f graph.Facts, u *jlm.SubStreams, xs []graph.ValueID, in, run graph.ValueID) (graph.ValueID, error) {
+	if u.Read == nil {
+		return run, nil
+	}
+	ins := make([]graph.ValueID, len(u.From))
+	for j, k := range u.From {
+		switch k {
+		case jlm.StreamIn:
+			ins[j] = in
+		case jlm.StreamRun:
+			ins[j] = run
+		default:
+			ins[j] = xs[k]
+		}
+	}
+	return lowerStated(b, u.Read, ins, f)
+}
+
+// streamJoin is the running residual after a sublayer: u's join over run
+// and the sublayer's output y, or their sum where it states none.
+func (m *Model) streamJoin(b *graph.Builder, f graph.Facts, u *jlm.SubStreams, run, y graph.ValueID, sum func(x, y graph.ValueID) graph.ValueID) (graph.ValueID, error) {
+	if u.Join == nil {
+		return sum(run, y), nil
+	}
+	return lowerStated(b, u.Join, []graph.ValueID{run, y}, f)
+}
+
+// lowerStated lowers a stated program over in; one of no op returns the
+// input it names.
+func lowerStated(b *graph.Builder, p *jlm.Program, in []graph.ValueID, f graph.Facts) (graph.ValueID, error) {
+	if len(p.Ops) == 0 {
+		return in[p.Out], nil
+	}
+	return LowerProgram(b, nil, p, in, 1, f)
 }
 
 // A block over several streams that each sublayer reads through a low-rank
@@ -134,60 +173,13 @@ func (m *Model) placed(b *graph.Builder, xs []graph.ValueID, w, y graph.ValueID)
 	return out
 }
 
-// bankMix is the mix of the banked rows and the running residual x: each
-// scored by the sum of role's vector times the row RMS-normed with no
-// weight, the scores' softmax weighting the rows. With no bank it is x
-// times its softmax of one, exactly x; a block that stores no score vector
-// reads x.
-func (m *Model) bankMix(b *graph.Builder, f graph.Facts, bank []graph.ValueID, x graph.ValueID, role jlm.Role) graph.ValueID {
-	sh, ok := f.Inventory[role]
-	if !ok {
-		return x
-	}
-	c := m.Cfg
-	d := c.NEmbd
-	rows := append(slices.Clone(bank), x)
-	w := []graph.Binding{{Role: role, K: sh.K, Rows: sh.Rows}}
-	reduce := func(name string, v graph.ValueID, fn graph.MapFn) graph.ValueID {
-		return b.Emit(graph.OpReduce, []graph.ValueID{v}, []graph.Result{{Name: name, Width: 1}}, nil, graph.Attrs{Fn: fn}, nil, nil)[0]
-	}
-	scores := make([]graph.ValueID, len(rows))
-	for j, v := range rows {
-		nv := b.Emit(graph.OpHeadNorm, []graph.ValueID{v}, []graph.Result{{Name: "bank.normed", Width: d}}, nil,
-			graph.Attrs{Eps: c.RMSEps, HeadDim: d}, nil, nil)[0]
-		scores[j] = reduce("bank.score", mapRow(b, "bank.scored", graph.Attrs{Fn: graph.MapMul}, w, d, nv), graph.MapAdd)
-	}
-	ns := len(rows)
-	sc := b.Emit(graph.OpConcat, scores, []graph.Result{{Name: "bank.scores", Width: ns}}, nil, graph.Attrs{}, nil, nil)[0]
-	ex := b.Expr("bank.exp", ns, []graph.Term{
-		{Fn: graph.MapSub, Args: [3]graph.Arg{{Kind: graph.ArgIn, Index: 0}, {Kind: graph.ArgIn, Index: 1}}},
-		{Fn: graph.MapExp, Args: [3]graph.Arg{{Kind: graph.ArgTerm, Index: 0}}},
-	}, nil, sc, reduce("bank.max", sc, graph.MapMax))
-	p := mapRow(b, "bank.p", graph.Attrs{Fn: graph.MapDiv}, nil, ns, ex, reduce("bank.sum", ex, graph.MapAdd))
-	acc := mapRow(b, "bank.mix", graph.Attrs{Fn: graph.MapMul}, nil, d, slice1(b, "bank.pj", p, 0), rows[0])
-	for j := 1; j < ns; j++ {
-		acc = mapRow(b, "bank.mix", graph.Attrs{Fn: graph.MapFma}, nil, d, slice1(b, "bank.pj", p, j), rows[j], acc)
-	}
-	return acc
-}
-
-// bankAfter is the bank block li's FFN mixes: its attention's, with the
-// stream it banks its input into read as that input.
-func (st *streams) bankAfter(c *Config, li int) []graph.ValueID {
-	bank := slices.Clone(st.in[1 : 1+c.ResBank(li, true)])
-	if k, ok := c.ResCheckpoint(li); ok {
-		bank[k-1] = st.in[0]
-	}
-	return bank
-}
-
 // banked writes the block's streams: the running residual y, the banked
 // stream its input, every other stream its input itself, which no kernel
 // writes.
 func (m *Model) banked(b *graph.Builder, f graph.Facts, li int, st *streams, y graph.ValueID, has func(jlm.Role) bool) (*graph.Graph, Uncovered, error) {
 	out := slices.Clone(st.in)
 	out[0] = outScaled(b, has, y)
-	if k, ok := m.Cfg.ResCheckpoint(li); ok {
+	if k := m.Cfg.stated.Blocks[li].Bank; k != 0 {
 		out[k] = st.bank
 	}
 	b.Out(out...)
@@ -384,7 +376,11 @@ func (m *Model) streamCollapseGraphAt(li int) (*graph.Graph, error) {
 	}
 	switch {
 	case c.mixesStreams():
-		b.Out(m.bankMix(b, f, xs[1:1+c.resBankFinal()], xs[0], jlm.RoleOutputResScore))
+		y, err := m.streamRead(b, f, &c.stated.Head, xs, xs[0], xs[0])
+		if err != nil {
+			return nil, fmt.Errorf("the streams' stated head read: %w", err)
+		}
+		b.Out(y)
 	case c.gatesStreams():
 		mix, _ := m.gatedMix(b, f, xs, jlm.RoleHCHeadNorm, jlm.RoleHCHeadDown, jlm.RoleHCHeadUp, 0)
 		b.Out(mix)

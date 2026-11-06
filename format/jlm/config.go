@@ -745,6 +745,11 @@ type Config struct {
 	// pick's element its weight. Empty where the weights are the selected
 	// scores. A fifteenth optional tail; see encodeConfig.
 	RouterWeight Expr
+	// Streams is a residual of several streams, where the converter states
+	// them: their count, what each block's sublayers read and write, and
+	// the head's read (streams.go). The sixteenth optional tail; see
+	// encodeConfig.
+	Streams Streams
 
 	Flags Flags
 }

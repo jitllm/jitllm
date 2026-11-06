@@ -286,7 +286,11 @@ type Config struct {
 	// sublayer's input their softmax mix with the running residual (zero is
 	// none); the routed experts at ExpertLatent (zero is n_embd); KDA's decay
 	// bound (zero is the softplus decay); the MLA latent norms' epsilon.
-	AttnResBlock  int
+	AttnResBlock int
+	// stated is the residual's streams as the converter states them
+	// (jlm.Streams, the container's own): N of them, each block's reads and
+	// writes; nil for a config no container made.
+	stated        *jlm.Streams
 	ExpertLatent  int
 	KDALowerBound float32
 	LatentNormEps float64
@@ -887,6 +891,7 @@ func configFrom(c *jlm.Config) (*Config, error) {
 	if err := k3Config(out, c); err != nil {
 		return nil, err
 	}
+	out.stated = &c.Streams
 	// The after-rotary norm is FlagQKNorm's per-head norm moved (see
 	// jlm.FlagQKNormPostRope); without the norm, or on a whole-projection one,
 	// it describes nothing the engine runs.
@@ -1274,6 +1279,10 @@ func Open(path string, options ...Option) (*Model, error) {
 	if err := m.statesActivations(path); err != nil {
 		m.Close()
 		return nil, err
+	}
+	if m.Cfg.AttnResBlock != 0 && m.Cfg.statedStreams() <= 1 {
+		m.Close()
+		return nil, &UpgradeRequiredError{Path: path, What: "residual streams"}
 	}
 	return m, nil
 }

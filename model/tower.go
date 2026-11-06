@@ -512,6 +512,9 @@ func towerEntry(t *jlm.Tower, px uint8, grid, lead, side int, fit PictureFit, f 
 // x window of them (TowerBlock.Window over the merge, 0 for none).
 func towerTiles(t *jlm.Tower) (merge, window int) {
 	merge = 1
+	if t == nil {
+		return merge, 0
+	}
 	if ops := t.Entry.Ops; len(ops) > 0 && ops[0].Code == jlm.TOpPatchify && ops[0].Width > 1 {
 		merge = int(ops[0].Width)
 	}
@@ -804,7 +807,35 @@ func LowerProgram(b *graph.Builder, t *jlm.Tower, p *jlm.Program, in []graph.Val
 		case jlm.TOpLayerNorm:
 			out = b.LayerNorm(ins[0], op.Bind[0], float64(op.Eps), op.Bind[1:]...)
 		case jlm.TOpRMSNorm:
+			if len(op.Bind) == 0 {
+				w := width(ins[0])
+				out = b.Emit(graph.OpHeadNorm, ins, []graph.Result{{Name: name, Width: w}}, nil,
+					graph.Attrs{Eps: float64(op.Eps), HeadDim: w}, nil, nil)[0]
+				break
+			}
 			out = b.Norm(ins[0], op.Bind[0], float64(op.Eps))
+		case jlm.TOpScale:
+			s, err := shape(op.Bind[0])
+			if err != nil {
+				return 0, err
+			}
+			out = mapRow(b, name, graph.Attrs{Fn: graph.MapMul}, []graph.Binding{{Role: op.Bind[0], K: s.K, Rows: s.Rows}},
+				width(ins[0]), ins[0])
+		case jlm.TOpSum, jlm.TOpMax:
+			fn := graph.MapAdd
+			if op.Code == jlm.TOpMax {
+				fn = graph.MapMax
+			}
+			out = b.Emit(graph.OpReduce, ins, []graph.Result{{Name: name, Width: 1}}, nil, graph.Attrs{Fn: fn}, nil, nil)[0]
+		case jlm.TOpConcat:
+			w := 0
+			for _, v := range ins {
+				w += width(v)
+			}
+			out = b.Emit(graph.OpConcat, ins, []graph.Result{{Name: name, Width: w}}, nil, graph.Attrs{}, nil, nil)[0]
+		case jlm.TOpSlice:
+			out = b.Emit(graph.OpSlice, ins, []graph.Result{{Name: name, Width: int(op.Width)}}, nil,
+				graph.Attrs{Offset: int(op.Offset), Width: int(op.Width)}, nil, nil)[0]
 		case jlm.TOpRegroup:
 			S := int(op.Span)
 			out = b.Emit(graph.OpRegroup, ins, []graph.Result{{Name: "grouped", Width: S * S * width(ins[0]),

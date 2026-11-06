@@ -39,9 +39,16 @@ import (
 const magEps = 1e-5
 
 // Streams is how many residual streams a token carries: AltUp's, DeepSeek
-// V4's hyper-connections, Kimi-K3's running residual and its checkpoints, or
-// one.
-func (c *Config) Streams() int { return max(c.PredStreams, c.HCMult, c.resStreams(), 1) }
+// V4's hyper-connections, the streams the converter states, or one.
+func (c *Config) Streams() int { return max(c.PredStreams, c.HCMult, c.statedStreams(), 1) }
+
+// statedStreams is how many streams the converter states, 0 for none.
+func (c *Config) statedStreams() int {
+	if c.stated == nil {
+		return 0
+	}
+	return int(c.stated.N)
+}
 
 // ResidW is one row's residual width, every stream of it.
 func (c *Config) ResidW() int { return c.NEmbd * c.Streams() }

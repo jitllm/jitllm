@@ -129,9 +129,16 @@ func StateActivations(s *jlm.Source) error {
 // StateActivations states a source's; false for one that states them or has
 // no layers (jlm.Restate).
 func StateStored(f *jlm.File, c *jlm.Config) (bool, error) {
-	if len(c.Acts) != 0 && len(c.RouterScore.Terms) == len(RouterScore(c).Terms) && len(c.RouterWeight.Terms) == len(RouterWeight(c).Terms) ||
+	streams := c.AttnResBlock == 0 || c.Streams.N > 1
+	if len(c.Acts) != 0 && len(c.RouterScore.Terms) == len(RouterScore(c).Terms) && len(c.RouterWeight.Terms) == len(RouterWeight(c).Terms) && streams ||
 		c.NLayer == 0 || c.Arch == jlm.ArchCLIP {
 		return false, nil
+	}
+	if !streams {
+		StateStreams(c, func(r jlm.Role, li int32) bool {
+			_, ok := f.Find(r, li, -1)
+			return ok
+		})
 	}
 	stores := func(rs ...jlm.Role) func(int) bool {
 		return func(li int) bool {

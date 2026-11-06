@@ -293,18 +293,78 @@ func attends(m *model.Model) func(int) bool {
 // The pieces the gates' violations take out, each as the rewrite of the
 // stated graphs that removes it.
 
-// unbanked is a residual bank read as nothing: each mix over the bank is the
-// running residual, its last row (a bank's mix's last FMA reads it).
-func unbanked(m *model.Model) func() { return restated(m, skipping(lastNamed("bank.mix"), 1)) }
+// unbanked is a residual bank read as nothing: every source of each mix over
+// the bank is the running residual, so the mix is that residual, its scores
+// still bound and read.
+func unbanked(m *model.Model) func() {
+	return streamsMut(m, func(s *jlm.Streams) {
+		run := func(u *jlm.SubStreams) {
+			from := make([]int8, len(u.From))
+			for j := range from {
+				from[j] = jlm.StreamRun
+			}
+			u.From = from
+		}
+		for i := range s.Blocks {
+			run(&s.Blocks[i].Attn)
+			run(&s.Blocks[i].FFN)
+		}
+	})
+}
+
+// streamsMut runs every block, and the head, under the container's stated
+// streams as f rewrites a copy of them.
+func streamsMut(m *model.Model, f func(s *jlm.Streams)) func() {
+	c := m.Container.Config()
+	was := c.Streams
+	s := was
+	s.Blocks = slices.Clone(was.Blocks)
+	f(&s)
+	c.Streams = s
+	undo := restate(m, func(map[jlm.Role]graph.Shape) {})
+	return func() {
+		c.Streams = was
+		undo()
+	}
+}
+
+// eachRead runs f on a copy of every stated read's program, the head's
+// among them.
+func eachRead(s *jlm.Streams, f func(p *jlm.Program)) {
+	rd := func(u *jlm.SubStreams) {
+		if u.Read == nil {
+			return
+		}
+		p := *u.Read
+		p.Ops = slices.Clone(p.Ops)
+		f(&p)
+		u.Read = &p
+	}
+	for i := range s.Blocks {
+		rd(&s.Blocks[i].Attn)
+		rd(&s.Blocks[i].FFN)
+	}
+	rd(&s.Head)
+}
 
 // headUnbanked is the head's mix over the streams read as the running
 // residual alone, the blocks' mixes kept.
 func headUnbanked(m *model.Model) func() {
-	return restated(m, skipping(modelWide(lastNamed("bank.mix")), 1))
+	return streamsMut(m, func(s *jlm.Streams) { s.Head.From, s.Head.Read = nil, nil })
 }
 
 // rawBankScores scores a bank on its rows unnormed.
-func rawBankScores(m *model.Model) func() { return restated(m, skipping(opsNamed("bank.normed"), 0)) }
+func rawBankScores(m *model.Model) func() {
+	return streamsMut(m, func(s *jlm.Streams) {
+		eachRead(s, func(p *jlm.Program) {
+			for i := range p.Ops {
+				if op := &p.Ops[i]; op.Code == jlm.TOpRMSNorm && len(op.Bind) == 0 {
+					*op = jlm.TowerOp{Code: jlm.TOpSlice, In: op.In, Width: int32(m.Cfg.NEmbd)}
+				}
+			}
+		})
+	})
+}
 
 // latentUnnormed skips the norm over a mixture's routed sum before its up
 // projection.
@@ -335,26 +395,10 @@ func recurrentSiLUGated(m *model.Model) func() {
 // restarts the residual, its sum stated and read by nothing -- add its
 // attention: what reads the sublayer's output reads the sum.
 func unrestarted(m *model.Model) func() {
-	return restated(m, func(g *graph.Graph) *graph.Graph {
-		if g.Block < 0 {
-			return g
+	return streamsMut(m, func(s *jlm.Streams) {
+		for i := range s.Blocks {
+			s.Blocks[i].Attn.Join = nil
 		}
-		if _, ok := m.Cfg.ResCheckpoint(g.Block); !ok {
-			return g
-		}
-		p := written(g, binding(jlm.RoleAttnOut))
-		if len(p) != 1 {
-			return g
-		}
-		for i, o := range g.Ops {
-			if o.Kind != graph.OpAdd || len(o.Out) == 0 || !slices.Contains(o.In, p[0]) || readers(g, o.Out[0], 0) {
-				continue
-			}
-			out := cloned(g)
-			redirect(out, p[0], o.Out[0], i+1)
-			return out
-		}
-		return g
 	})
 }
 
