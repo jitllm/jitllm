@@ -26,8 +26,10 @@ type BlockStreams struct {
 	// Bank is the stream the block's input is written into before any
 	// read; 0 is none.
 	Bank uint8
+	// Pre is, before the attention's read, a read whose result every
+	// stream's write takes in place of a sublayer's output; zero for none.
 	// Attn and FFN are each sublayer's input and join.
-	Attn, FFN SubStreams
+	Pre, Attn, FFN SubStreams
 }
 
 // SubStreams is a sublayer's read of the streams and the join of its output.
@@ -84,10 +86,13 @@ func (s *Streams) valid(nLayer int) error {
 		if int(b.Bank) >= int(s.N) {
 			return fmt.Errorf("jlm: block %d banks into stream %d of %d", i, b.Bank, s.N)
 		}
-		for _, u := range []*SubStreams{&b.Attn, &b.FFN} {
+		for _, u := range []*SubStreams{&b.Pre, &b.Attn, &b.FFN} {
 			if err := u.valid(s.N, fmt.Sprintf("block %d", i)); err != nil {
 				return err
 			}
+		}
+		if b.Pre.Read != nil && len(b.Pre.Writes) == 0 {
+			return fmt.Errorf("jlm: block %d's addition before its attention writes no stream", i)
 		}
 	}
 	return s.Head.valid(s.N, "the head")
@@ -276,4 +281,36 @@ func decodeWrites(r *rbuf, u *SubStreams) {
 		u.Exports = append(u.Exports, r.u16())
 	}
 	u.Writes = decodePrograms(r)
+}
+
+// addsBefore reports that a block states an addition before its attention:
+// the twenty-first tail.
+func (s *Streams) addsBefore() bool {
+	for i := range s.Blocks {
+		if s.Blocks[i].Pre.Read != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// encodeStreamPre is the twenty-first tail: each block's addition before its
+// attention, read, join, exports and writes.
+func encodeStreamPre(w *wbuf, s *Streams) {
+	w.u32(uint32(len(s.Blocks)))
+	for i := range s.Blocks {
+		encodeSub(w, &s.Blocks[i].Pre)
+		encodeWrites(w, &s.Blocks[i].Pre)
+	}
+}
+
+func decodeStreamPre(r *rbuf, s *Streams) {
+	if n := int(r.u32()); r.err == nil && n != len(s.Blocks) {
+		r.err = fmt.Errorf("jlm: the streams' additions state %d blocks of %d", n, len(s.Blocks))
+		return
+	}
+	for i := range s.Blocks {
+		decodeSub(r, &s.Blocks[i].Pre)
+		decodeWrites(r, &s.Blocks[i].Pre)
+	}
 }

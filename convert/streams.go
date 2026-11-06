@@ -1,6 +1,8 @@
 package convert
 
 import (
+	"math"
+
 	"github.com/jitllm/jitllm/format/jlm"
 )
 
@@ -131,6 +133,9 @@ func stateHyper(c *jlm.Config) {
 		}
 	}
 	s.Head = hyperSub(c, jlm.RoleHCHeadNorm, jlm.RoleHCHeadDown, jlm.RoleHCHeadUp, 0)
+	if b := int(c.NGramBlock); b != 0 && b <= int(c.NLayer) {
+		s.Blocks[b-1].Pre = ngramPre(c)
+	}
 	c.Streams = s
 }
 
@@ -191,4 +196,69 @@ func hyperSub(c *jlm.Config, norm, down, up, inject jlm.Role) jlm.SubStreams {
 	}
 	p.Out = mix
 	return u2
+}
+
+// ngramPre states Qwen3.8-Flash-Next's n-gram embedding (transformers'
+// Qwen4ExpTextPLELayer), added into every stream before its block's
+// attention reads them: each row's n-gram table rows project to a key per
+// stream and one value; each stream's normed key against its normed
+// residual, scaled by 1/sqrt(n_embd), gates the value by the sigmoid of its
+// signed square root, the magnitude floored at the reference's
+// clamp_min(1e-6); the gated values and their normed depthwise convolution
+// through silu, dilated by the n-gram, are added to the streams.
+func ngramPre(c *jlm.Config) jlm.SubStreams {
+	n, d := int(c.HCMult), int32(c.NEmbd)
+	hd := int32(n) * d
+	p := &jlm.Program{NIn: uint16(n)}
+	op := func(o jlm.TowerOp) uint16 {
+		p.Ops = append(p.Ops, o)
+		return uint16(n + len(p.Ops) - 1)
+	}
+	expr := func(w int32, f func(e *jlm.ExprBuilder), in ...uint16) uint16 {
+		var e jlm.ExprBuilder
+		f(&e)
+		return op(jlm.TowerOp{Code: jlm.TOpStated, In: in, Width: w, Expr: &jlm.Expr{Terms: e.T}})
+	}
+	norm := func(v uint16, r jlm.Role) uint16 {
+		normed := op(jlm.TowerOp{Code: jlm.TOpRMSNorm, In: []uint16{v}, Span: d, Eps: c.RMSEps})
+		return op(jlm.TowerOp{Code: jlm.TOpScale, In: []uint16{normed}, Bind: []jlm.Role{r}})
+	}
+	mul := func(e *jlm.ExprBuilder) { e.Fn(jlm.FnMul, jlm.Operand(0), jlm.Operand(1)) }
+	heads := int32((c.NGram - 1) * c.NGramHeadsPer)
+	emb := op(jlm.TowerOp{Code: jlm.TOpNGramRows, Bind: []jlm.Role{jlm.RoleNGramTable}, Span: int32(c.NGram),
+		Width: heads * int32(c.NGramRowDim)})
+	kn := norm(op(jlm.TowerOp{Code: jlm.TOpLinear, In: []uint16{emb}, Bind: []jlm.Role{jlm.RoleNGramKey}}), jlm.RoleNGramNormKey)
+	val := op(jlm.TowerOp{Code: jlm.TOpLinear, In: []uint16{emb}, Bind: []jlm.Role{jlm.RoleNGramValue}})
+	streams := make([]uint16, n)
+	from := make([]int8, n)
+	for k := range n {
+		streams[k], from[k] = uint16(k), int8(k)
+	}
+	qn := norm(op(jlm.TowerOp{Code: jlm.TOpConcat, In: streams}), jlm.RoleNGramNormQuery)
+	dot := op(jlm.TowerOp{Code: jlm.TOpSum, In: []uint16{expr(hd, mul, kn, qn)}, Span: d})
+	gate := expr(int32(n), func(e *jlm.ExprBuilder) {
+		s := e.Fn(jlm.FnMul, jlm.Operand(0), jlm.Num(float32(1/math.Sqrt(float64(d)))))
+		mag := e.Fn(jlm.FnSqrt, e.Fn(jlm.FnMax, e.Fn(jlm.FnAbs, s), jlm.Num(1e-6)))
+		sign := e.Fn(jlm.FnSub, e.Fn(jlm.FnLess, jlm.Num(0), s), e.Fn(jlm.FnLess, s, jlm.Num(0)))
+		e.Fn(jlm.FnSigmoid, e.Fn(jlm.FnMul, sign, mag))
+	}, dot)
+	gv := make([]uint16, n)
+	for k := range n {
+		gv[k] = expr(d, mul, op(jlm.TowerOp{Code: jlm.TOpSlice, In: []uint16{gate}, Offset: int32(k), Width: 1}), val)
+	}
+	gvs := op(jlm.TowerOp{Code: jlm.TOpConcat, In: gv})
+	conv := op(jlm.TowerOp{Code: jlm.TOpTailConv, In: []uint16{norm(gvs, jlm.RoleNGramNormConv)},
+		Bind: []jlm.Role{jlm.RoleNGramConv}, Span: int32(c.NGramConv), Offset: int32(c.NGram), Width: hd})
+	act := expr(hd, func(e *jlm.ExprBuilder) {
+		e.Fn(jlm.FnMul, jlm.Operand(0), e.Fn(jlm.FnSigmoid, jlm.Operand(0)))
+	}, conv)
+	p.Out = op(jlm.TowerOp{Code: jlm.TOpAdd, In: []uint16{gvs, act}})
+	u := jlm.SubStreams{From: from, Read: p}
+	for k := range n {
+		u.Writes = append(u.Writes, &jlm.Program{NIn: 2, Ops: []jlm.TowerOp{
+			{Code: jlm.TOpSlice, In: []uint16{1}, Offset: int32(k) * d, Width: d},
+			{Code: jlm.TOpAdd, In: []uint16{0, 2}},
+		}, Out: 3})
+	}
+	return u
 }

@@ -739,10 +739,10 @@ func lowerValues(b *graph.Builder, t *jlm.Tower, p *jlm.Program, in []graph.Valu
 	return lowerValuesWith(b, t, p, in, rows, f, nil)
 }
 
-// lowerValuesWith is lowerValues where turn lowers a stated rotary
-// (jlm.TOpRope), which only a block has.
+// lowerValuesWith is lowerValues where blockOps lowers the ops only a block
+// has (Model.blockOps).
 func lowerValuesWith(b *graph.Builder, t *jlm.Tower, p *jlm.Program, in []graph.ValueID, rows int, f graph.Facts,
-	turn func(graph.ValueID, *jlm.TowerOp) graph.ValueID) ([]graph.ValueID, error) {
+	blockOps func([]graph.ValueID, *jlm.TowerOp) (graph.ValueID, error)) ([]graph.ValueID, error) {
 	merge, window := towerTiles(t)
 	if len(in) != int(p.NIn) {
 		return nil, fmt.Errorf("a program of %d inputs over %d", p.NIn, len(in))
@@ -837,11 +837,15 @@ func lowerValuesWith(b *graph.Builder, t *jlm.Tower, p *jlm.Program, in []graph.
 				break
 			}
 			out = b.Norm(ins[0], op.Bind[0], float64(op.Eps))
-		case jlm.TOpRope:
-			if turn == nil {
-				return nil, fmt.Errorf("op %d turns its rows by a rotary, which only a block has", i)
+		case jlm.TOpRope, jlm.TOpNGramRows, jlm.TOpTailConv:
+			if blockOps == nil {
+				return nil, fmt.Errorf("op %d is code %d, which only a block has", i, op.Code)
 			}
-			out = turn(ins[0], op)
+			v, err := blockOps(ins, op)
+			if err != nil {
+				return nil, err
+			}
+			out = v
 		case jlm.TOpScale:
 			s, err := shape(op.Bind[0])
 			if err != nil {
@@ -854,7 +858,11 @@ func lowerValuesWith(b *graph.Builder, t *jlm.Tower, p *jlm.Program, in []graph.
 			if op.Code == jlm.TOpMax {
 				fn = graph.MapMax
 			}
-			out = b.Emit(graph.OpReduce, ins, []graph.Result{{Name: name, Width: 1}}, nil, graph.Attrs{Fn: fn}, nil, nil)[0]
+			w, a := 1, graph.Attrs{Fn: fn}
+			if op.Span > 0 {
+				w, a.Span = width(ins[0])/int(op.Span), int(op.Span)
+			}
+			out = b.Emit(graph.OpReduce, ins, []graph.Result{{Name: name, Width: w}}, nil, a, nil, nil)[0]
 		case jlm.TOpConcat:
 			w := 0
 			for _, v := range ins {

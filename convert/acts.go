@@ -129,7 +129,7 @@ func StateActivations(s *jlm.Source) error {
 // StateActivations states a source's; false for one that states them or has
 // no layers (jlm.Restate).
 func StateStored(f *jlm.File, c *jlm.Config) (bool, error) {
-	streams := c.AttnResBlock == 0 && c.HCLowRank == 0 || c.Streams.N > 1
+	streams := (c.AttnResBlock == 0 && c.HCLowRank == 0 || c.Streams.N > 1) && (c.NGramBlock == 0 || StatesPre(c))
 	rev := c.Revision >= jlm.StatementRevision
 	sel := c.IdxHeads == 0 || c.Selection != nil
 	if len(c.Acts) != 0 && len(c.RouterScore.Terms) == len(RouterScore(c).Terms) && len(c.RouterWeight.Terms) == len(RouterWeight(c).Terms) && streams && rev && sel ||
@@ -263,4 +263,15 @@ func SparseMixerWeight(eps float32) jlm.Expr {
 	ex := e.Fn(jlm.FnWhere, out, num(0), e.Fn(jlm.FnExp, e.Fn(jlm.FnSub, s, m)))
 	e.Fn(jlm.FnDiv, ex, e.Sum(ex))
 	return jlm.Expr{Terms: e.T}
+}
+
+// StatesPre reports that c's streams state an addition before some block's
+// attention (an n-gram block's).
+func StatesPre(c *jlm.Config) bool {
+	for i := range c.Streams.Blocks {
+		if c.Streams.Blocks[i].Pre.Read != nil {
+			return true
+		}
+	}
+	return false
 }

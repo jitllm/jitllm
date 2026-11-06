@@ -38,6 +38,24 @@ type streams struct {
 	ex  []graph.ValueID
 }
 
+// statedBinds is every role block li's stated reads bind.
+func (c *Config) statedBinds(li int) []jlm.Role {
+	if c.stated == nil || li < 0 || li >= len(c.stated.Blocks) {
+		return nil
+	}
+	var out []jlm.Role
+	bl := &c.stated.Blocks[li]
+	for _, u := range []*jlm.SubStreams{&bl.Pre, &bl.Attn, &bl.FFN} {
+		if u.Read == nil {
+			continue
+		}
+		for _, op := range u.Read.Ops {
+			out = append(out, op.Bind...)
+		}
+	}
+	return out
+}
+
 // ResidStreams says the residual is every stream, which the input rows
 // expand into (jlm.Streams.Expand): a row's hidden state is all of them, as
 // the head's mix reads them, not the output norm's row.
@@ -71,7 +89,8 @@ func (c *Config) mixesStreams() bool {
 // stream k as it is now (xs), stream 0 as the block received it (in), or the
 // running residual (run) -- or run where it states none, and the values its
 // program exports.
-func (m *Model) streamRead(b *graph.Builder, f graph.Facts, u *jlm.SubStreams, xs []graph.ValueID, in, run graph.ValueID) (graph.ValueID, []graph.ValueID, error) {
+func (m *Model) streamRead(b *graph.Builder, f graph.Facts, u *jlm.SubStreams, xs []graph.ValueID, in, run graph.ValueID,
+	ops func([]graph.ValueID, *jlm.TowerOp) (graph.ValueID, error)) (graph.ValueID, []graph.ValueID, error) {
 	if u.Read == nil {
 		return run, nil, nil
 	}
@@ -89,7 +108,7 @@ func (m *Model) streamRead(b *graph.Builder, f graph.Facts, u *jlm.SubStreams, x
 	if len(u.Read.Ops) == 0 {
 		return ins[u.Read.Out], nil, nil
 	}
-	vals, err := lowerValues(b, nil, u.Read, ins, 1, f)
+	vals, err := lowerValuesWith(b, nil, u.Read, ins, 1, f, ops)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -356,7 +375,7 @@ func (m *Model) streamCollapseGraphAt(li int) (*graph.Graph, error) {
 	}
 	switch {
 	case c.mixesStreams():
-		y, _, err := m.streamRead(b, f, &c.stated.Head, xs, xs[0], xs[0])
+		y, _, err := m.streamRead(b, f, &c.stated.Head, xs, xs[0], xs[0], nil)
 		if err != nil {
 			return nil, fmt.Errorf("the streams' stated head read: %w", err)
 		}
