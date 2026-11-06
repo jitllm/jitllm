@@ -653,7 +653,9 @@ func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOp
 	s.allocRecurrent(nseq)
 
 	s.exec.x = g.cpu.Attach(cpudev.Setup{Model: m.Id, Frames: fr, Float: opt.cpuFloat, Split: !opt.noServingSplit,
-		NoFuse: opt.noFuse, Chunk: opt.prefillChunk, Tries: &g.fuse.tries, Runs: &g.fuse.runs, Quota: q})
+		NoFuse: opt.noFuse, Chunk: opt.prefillChunk, Tries: &g.fuse.tries, Runs: &g.fuse.runs, Quota: q,
+		Width: c.NEmbd, Seqs: nseq, Streams: c.Streams(), ConvLen: s.dg.ConvStateLen(),
+		Trace: func(li int) { s.trace(li, "ffn_resid", s.x) }})
 	s.setPlace(routeLanes, s.exec.x)
 	s.placeRange(routeLanes)
 	s.holdFrames()

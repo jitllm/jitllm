@@ -34,11 +34,9 @@ func cpuHeadRefused(why nn.Decline) error {
 // buffers, the history tables, and the census.
 type laneDevice struct {
 	// x is the instance's execution on the device: its workers, its
-	// blocks' forms, the runners that call them and what it served.
+	// blocks' forms, the runners and lanes that call them and what it
+	// served.
 	x *cpudev.Exec
-	// lanes runs a decode token's blocks on the device for the session the
-	// instance runs (cpudev.Lanes).
-	lanes *cpudev.Lanes
 }
 
 // cpuRowsCap is the rows the CPU's form of several rows is composed for
@@ -93,11 +91,7 @@ func (s *Instance) placeLanes() {
 	s.lease = blockLease{m: s.m, fr: s.fr, mu: &s.bind, hold: &s.expHold, res: s.res, hot: s.hot, layers: s.layers,
 		lo: s.lo}
 	s.exec.x.Place(n, &s.lease, planes, s.c.NExpert, s.prof)
-	if s.exec.lanes == nil {
-		s.exec.lanes = cpudev.NewLanes(s.exec.x, s.exec.x.Bindings(), &s.lease, s.c.NEmbd, s.nseq, s.c.Streams(), s.dg.ConvStateLen(),
-			func(li int) { s.trace(li, "ffn_resid", s.x) })
-		s.bindLanes(s.Session)
-	}
+	s.bindLanes(s.Session)
 	// Each block is prepared by its route's device where that device runs it
 	// from the frames; one with a copy of its own took it at its offer.
 	for li := s.lo; li < min(s.hi, n); li++ {

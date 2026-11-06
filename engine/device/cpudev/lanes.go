@@ -364,8 +364,10 @@ type SessionLanes struct {
 	keep recKeep
 }
 
-// For is the calls of the session whose history of reads on the lanes.
-func (l *Lanes) For(of HistoryOf, pr Prompt) SessionLanes { return SessionLanes{l: l, of: of, pr: pr} }
+// Bind makes s the calls of the session whose history of reads and whose
+// say over the prompt pr is, on l, keeping what s holds of its own (its
+// rewind copies).
+func (s *SessionLanes) Bind(l *Lanes, of HistoryOf, pr Prompt) { s.l, s.of, s.pr = l, of, pr }
 
 // Layers runs blocks [lo, hi) for the row at pos (nn.LayerRunner) over the
 // session's history.
