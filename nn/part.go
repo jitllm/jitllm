@@ -221,3 +221,10 @@ type Account struct {
 type Ledger interface {
 	AccountOn(dev string) (Account, bool)
 }
+
+// PoolDevice is a device reading an embedding model's readout: the pooled,
+// unit-length row of a call's n rows of x into out -- with raw, the row
+// before the dense heads -- reporting whether it served it.
+type PoolDevice interface {
+	Pool(x []float32, n int, out []float32, raw bool) bool
+}

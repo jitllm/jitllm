@@ -23,7 +23,7 @@ type embedMode struct {
 	bidir bool
 	pool  jlm.Pooling
 	total int // positions in the sequence
-	// out is the readout (cpuPool): through the dense heads and at unit
+	// out is the readout (Instance.readout): through the dense heads and at unit
 	// length, or with raw (Embedder.skipDense) at unit length before them.
 	out  []float32
 	raw  bool
@@ -72,7 +72,7 @@ func (s *Instance) keepTaps(li, n int) {
 }
 
 // collect reads the readout from a chunk's n final rows from position base
-// on the CPU the composer's way (cpuPool): the last row's on the chunk
+// on the CPU the composer's way (Instance.readout): the last row's on the chunk
 // holding it, the first's on the first chunk, and a mean on the one chunk a
 // mean-pooled run is (Prefill). A chunk holding no row it reads is passed
 // over.
@@ -96,7 +96,7 @@ func (e *embedMode) collect(s *Instance, base, n int) error {
 			return fmt.Errorf("model: a mean over %d of %d rows, and a mean-pooled run is one chunk", n, e.total)
 		}
 	}
-	if !s.cpuPool(s.bx[:n*s.c.NEmbd], n, e.out, e.raw) {
+	if s.readout == nil || !s.readout.Pool(s.bx[:n*s.c.NEmbd], n, e.out, e.raw) {
 		return fmt.Errorf("model: the embedding readout has no composed form on this instance: %v", s.cpu.formErr)
 	}
 	return nil

@@ -143,7 +143,6 @@ type cpuState struct {
 	// (composer.TablePlanes), folded from the model's rotaries when the
 	// instance places its blocks (cpuTablePlanes).
 	tabPlanes [2][]float32
-	pool      cpuPoolState
 	mtp       cpuMTPState
 	embed     cpuEmbedState
 	tables    cpuTableState
@@ -1078,7 +1077,7 @@ func (s *Instance) cpuCallOf(b *cpuBound, f *cpudev.Form) *cpudev.Call {
 	if b.rec != nil {
 		a[cpudev.SrcRecConvOut], a[cpudev.SrcRecRows] = addr(s.cpu.convOut), addr(b.rec)
 	}
-	a[cpudev.SrcPoolPos], a[cpudev.SrcZero] = addr(s.cpu.pool.pos), addr(s.cpu.zero)
+	a[cpudev.SrcZero] = addr(s.cpu.zero)
 	a[cpudev.SrcRequest], a[cpudev.SrcTokens], a[cpudev.SrcPos] = addr(b.req), addr(b.tok), addr(b.pos)
 	a[cpudev.SrcPicture] = addr(b.pic)
 	c.Weights = c.Weights[:0]
