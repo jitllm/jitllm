@@ -5842,7 +5842,6 @@ func planUnion(a *nn.LayerPlan, b *nn.LayerPlan) bool {
 		a.ExpertSigmoid, a.ExpertSelBias = b.ExpertSigmoid, b.ExpertSelBias
 		a.ExpertGroups, a.ExpertGroupsUsed = b.ExpertGroups, b.ExpertGroupsUsed
 		a.ExpertScale, a.NoExpertNorm = b.ExpertScale, b.NoExpertNorm
-		a.ExpertSparseMixer = b.ExpertSparseMixer
 		grew = true
 	}
 	// The shared expert and the dense FFN are widths, so the union is the max:

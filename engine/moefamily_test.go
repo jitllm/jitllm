@@ -393,10 +393,9 @@ func routerViolations(m *model.Model) []c6Violation {
 			return cfgMut(m, func(c *model.Config) { c.NoExpertNorm = true })
 		}})
 	}
-	// A sparsemixer router is a top-2 the tier's own kernels run alone
-	// (checkSparseMixer): with one fewer chosen it places no block, and its
-	// stated weight is held by the violation below instead.
-	if c.NExpertUsed > 1 && c.SparseMixer == 0 {
+	// A router whose weight is stated (sparsemixer's) picks as many as its
+	// statement weighs, so its violations rewrite the statement instead.
+	if c.NExpertUsed > 1 && len(m.Container.Config().RouterWeight.Terms) == 0 {
 		vs = append(vs, c6Violation{"router: one expert fewer chosen", func(m *model.Model) func() {
 			return cfgMut(m, func(c *model.Config) { c.NExpertUsed-- })
 		}})

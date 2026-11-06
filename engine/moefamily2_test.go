@@ -55,7 +55,7 @@ func moe2Fixtures() []struct {
 		{"synth-phimoe", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
 			ok := c.Arch == "phimoe" && c.LayerNorm && !c.Parallel && c.RopeNeox && c.NRot == c.HeadDim &&
-				c.SparseMixer == 0.01 && c.NoExpertNorm && !c.ExpertSigmoid && c.NExpertGroup <= 1 &&
+				len(m.Container.Config().RouterWeight.Terms) != 0 && c.NoExpertNorm && !c.ExpertSigmoid && c.NExpertGroup <= 1 &&
 				c.NExpert == 8 && c.NExpertUsed == 2 && c.NFFNShExp == 0 && c.NDenseLead == 0 &&
 				c.NKVHead < c.NHead && !c.TiedEmbd && c.SWAWindow == 0 &&
 				math.Abs(c.AttnFactor-math.Sqrt(1+math.Log(8)/math.Log(512))) < 1e-6 &&
@@ -197,7 +197,7 @@ func moe2DevViolations() map[string][]c6Violation {
 // llamaCppPhiMoERouter routes Phi-3.5-MoE as llama.cpp does: a softmax top-2,
 // renormalised.
 func llamaCppPhiMoERouter(m *model.Model) func() {
-	undo := cfgMut(m, func(c *model.Config) { c.SparseMixer, c.NoExpertNorm = 0, false })
+	undo := cfgMut(m, func(c *model.Config) { c.NoExpertNorm = false })
 	undoR := statedRouter(m, convert.RouterScore(&jlm.Config{NExpert: 2}), jlm.Expr{})
 	return func() { undoR(); undo() }
 }
@@ -220,16 +220,12 @@ func statedRouter(m *model.Model, score, weight jlm.Expr) func() {
 // renormalised: sparsemixer with no mask, and both of its experts' shared
 // denominator.
 func unmaskedSoftmax(m *model.Model) func() {
-	undo := cfgMut(m, func(c *model.Config) { c.SparseMixer = 0 })
-	undoR := statedRouter(m, convert.RouterScore(&jlm.Config{NExpert: 2}), jlm.Expr{})
-	return func() { undoR(); undo() }
+	return statedRouter(m, convert.RouterScore(&jlm.Config{NExpert: 2}), jlm.Expr{})
 }
 
 // mixerEps runs sparsemixer at another jitter_eps.
 func mixerEps(eps float32) func(m *model.Model) func() {
 	return func(m *model.Model) func() {
-		undo := cfgMut(m, func(c *model.Config) { c.SparseMixer = eps })
-		undoR := statedRouter(m, m.Container.Config().RouterScore, convert.SparseMixerWeight(eps))
-		return func() { undoR(); undo() }
+		return statedRouter(m, m.Container.Config().RouterScore, convert.SparseMixerWeight(eps))
 	}
 }
