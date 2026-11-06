@@ -19,6 +19,8 @@ const RowsCap = 64
 // workers, its composer, the forms of each of its blocks, the runner that
 // calls them, and what it composed and served.
 type Exec struct {
+	// b binds the forms' weights and the rows' table.
+	b        *Bindings
 	workers  *cpu.Pool
 	dev      *Device
 	comp     *Composer
@@ -40,29 +42,12 @@ type Exec struct {
 // NewExec is an execution over workers, its forms composed by comp.
 func NewExec(workers *cpu.Pool, comp *Composer) *Exec { return &Exec{workers: workers, comp: comp} }
 
-// BlockPlan is what the CPU device composes a block from (Exec.Compose):
-// the graph the block states, the graph its forms are composed from and
-// the request stating their formats, strides, rotaries and history, or why
-// the block is not to be asked.
-type BlockPlan struct {
-	Why     nn.Decline
-	Source  *graph.Graph
-	Graph   *graph.Graph
-	SideOff int
-	Req     composer.Request
-	F32     bool
-	// Bidir says the block attends bidirectionally inside a prompt's runs,
-	// Whole that its rows read the whole picture whatever their windows.
-	Bidir, Whole bool
-	// Rec is a linear block: its rows step a recurrent state in order.
-	Rec bool
-}
-
 // Place readies the execution for a placement of n blocks, none of them
 // composed: the launches made once (a placement again, for a new history
 // format, keeps the forms' own buffers), the runner reading res and the
 // rotaries' planes.
-func (e *Exec) Place(n int, res Resources, planes [2][]float32, nExpert int, prof bool) {
+func (e *Exec) Place(n int, res Resources, b *Bindings, planes [2][]float32, nExpert int, prof bool) {
+	e.b = b
 	e.blocks = make([]*Block, n)
 	e.composed = make([]int, n)
 	if e.dev == nil {
@@ -80,7 +65,7 @@ func (e *Exec) Place(n int, res Resources, planes [2][]float32, nExpert int, pro
 
 // Compose composes block li from p: the form of one row and the rows'
 // form, through the model's keyed cache, counted (Composed).
-func (e *Exec) Compose(li int, p BlockPlan) {
+func (e *Exec) Compose(li int, p nn.BlockSpec) {
 	cb := &Block{Why: p.Why}
 	e.blocks[li] = cb
 	if !e.comp.Lowers() {
@@ -106,11 +91,33 @@ func (e *Exec) Compose(li int, p BlockPlan) {
 }
 
 // form is p's form for a step of rows.
-func (e *Exec) form(p BlockPlan, rows int) (*Form, error) {
+func (e *Exec) form(p nn.BlockSpec, rows int) (*Form, error) {
 	gr := *p.Graph
-	req := p.Req
+	req := composer.Request{Formats: p.Formats, Strides: p.Strides,
+		Step:     composer.Step{Page: p.Page, Keys: p.Keys, ActWindow: p.ActWindow, Seqs: p.Seqs},
+		History:  composer.History{ValuesInKeys: p.ValuesInKeys},
+		Rotaries: p.Rotaries}
 	req.Graph, req.Step.Rows, req.Device = &gr, rows, e.comp.Device()
 	return e.comp.Form(req, &gr, rows, false, false, p.F32)
+}
+
+// PrepLayer composes block li from the statement plan carries
+// (nn.LayerPlan.Spec), as a card prepares a block it is offered, its rows'
+// table opened where its rows read one; false where the block is not
+// composed here.
+func (e *Exec) PrepLayer(li int, p *nn.LayerPlan, _ *nn.LayerWeights) bool {
+	if p.Spec == nil {
+		return false
+	}
+	s := *p.Spec
+	if s.Why == nn.DeclineServes && s.Table != nil && TableRowsOf(s.Graph) >= 0 {
+		if err := e.b.OpenTable(s.Table, s.TableRow); err != nil {
+			s.Why = e.comp.Decline(err)
+		}
+	}
+	e.Compose(li, s)
+	cb := e.blocks[li]
+	return cb != nil && cb.Why == nn.DeclineServes
 }
 
 // Holds says li is one of the placement's blocks.

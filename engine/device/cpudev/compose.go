@@ -101,6 +101,6 @@ type Block struct {
 	// Bidir says the block attends bidirectionally inside a prompt's runs,
 	// Whole that its rows read the whole picture whatever their windows.
 	Bidir, Whole bool
-	// Rec is a linear block (BlockPlan.Rec).
+	// Rec is a linear block (nn.BlockSpec.Rec).
 	Rec bool
 }

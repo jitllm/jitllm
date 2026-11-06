@@ -2056,6 +2056,11 @@ func (s *Instance) planFor(li int) *nn.LayerPlan {
 		plan.Windowed = c.SWA(li)
 		plan.SWAWindow = 0
 	}
+	// What the block is composed from, for a device that composes it so.
+	if s.kv != nil && li < len(s.kv.layers) {
+		spec := s.blockSpec(li)
+		plan.Spec = &spec
+	}
 	return &plan
 }
 
@@ -2142,7 +2147,7 @@ func (s *Instance) cpuRun(li, d int) {
 	// The device composes the block it takes, or lets one that left go.
 	if x := s.cpu.x; x.Holds(li) {
 		if d > 0 {
-			x.Compose(li, s.blockPlan(li))
+			x.PrepLayer(li, s.planFor(li), nil)
 		} else {
 			x.Drop(li)
 		}
