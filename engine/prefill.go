@@ -536,7 +536,7 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 					s.tailPos = pos
 					// One sequence: slot is the position (nn.RowsDevice).
 					if s.rowsRun(li, hi, pos, pos, s.bx[:n*c.ResidW()], s.bcs[:n*c.RopeW()],
-						s.bswaTable(n, c.NRotSWA), false, nil, 0) == nil {
+						s.bswaTable(n, c.LocalNRot()), false, nil, 0) == nil {
 						s.tailRowChunks++
 						li = hi - 1
 						continue
@@ -551,7 +551,7 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 				}
 				s.layerInputs(s.bple[:n*c.SideWidth()])
 				if s.callTell(p0, n) && s.ld.Layers(li, hi, p0, n, s.bx[:n*c.ResidW()], s.bcs[:n*c.RopeW()],
-					s.bswaTable(n, c.NRotSWA), fh) {
+					s.bswaTable(n, c.LocalNRot()), fh) {
 					headDone = fh != nil
 					li = hi - 1
 					s.keepTaps(li, n)
@@ -653,7 +653,7 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 	}
 	devCollapse := s.devCollapses()
 	if s.head != nil && s.devCount() > 0 {
-		if s.ld.Layers(s.gpuLayers, s.gpuLayers, s.seqPos(slot)-1, 1, s.resid(), s.cs[:c.RopeW()], s.swaTable(c.NRotSWA), s.head) {
+		if s.ld.Layers(s.gpuLayers, s.gpuLayers, s.seqPos(slot)-1, 1, s.resid(), s.cs[:c.RopeW()], s.swaTable(c.LocalNRot()), s.head) {
 			if err := s.devLogits(); err != nil {
 				return nil, err
 			}
@@ -732,7 +732,7 @@ func (s *Instance) growDeviceBatch(chunk int) {
 	// Every buffer the rows read, the second rotary's table too: a set
 	// whose residual rows suffice may hold a shorter table, or none.
 	if len(s.bx) >= chunk*c.ResidW() && len(s.bcs) >= chunk*c.RopeW() &&
-		(s.m.RopeSWA == nil || len(s.bcsSWA) >= chunk*c.NRotSWA) {
+		(s.m.RopeSWA == nil || len(s.bcsSWA) >= chunk*c.LocalNRot()) {
 		return
 	}
 	b := s.takeSpare()
@@ -740,14 +740,14 @@ func (s *Instance) growDeviceBatch(chunk int) {
 		s.spareHost = b.host // growBatch's, if a host block wants it
 	}
 	if b != nil && len(b.bx) >= chunk*c.ResidW() && len(b.bcs) >= chunk*c.RopeW() &&
-		(s.m.RopeSWA == nil || len(b.bcsSWA) >= chunk*c.NRotSWA) {
+		(s.m.RopeSWA == nil || len(b.bcsSWA) >= chunk*c.LocalNRot()) {
 		s.bx, s.bcs, s.bcsSWA = b.bx, b.bcs, b.bcsSWA
 		return
 	}
 	s.bx = make([]float32, chunk*c.ResidW())
 	s.bcs = make([]float32, chunk*c.RopeW())
 	if s.m.RopeSWA != nil {
-		s.bcsSWA = make([]float32, chunk*c.NRotSWA)
+		s.bcsSWA = make([]float32, chunk*c.LocalNRot())
 	}
 }
 

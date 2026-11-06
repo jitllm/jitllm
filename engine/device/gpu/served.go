@@ -1793,14 +1793,14 @@ func (bs *blockScratch) tableCount() int {
 
 // scratchTable is the graph of bs's table i (cs, then csSWA) among the
 // plan's tables, nil where the plan states none for it. A scratch set of one
-// geometry of a split model (scratchPlanOf) holds its own layers' table in
-// cs: the global set the plan's first, the sliding set its second.
+// geometry of a model of mixed geometry (scratchPlanOf) holds its own layers'
+// table in cs: the plan's first, or its second for blocks rotating by it.
 func scratchTable(bs *blockScratch, p *nn.LayerPlan, i int) *graph.Graph {
-	if bs.p.GeomSplit {
+	if bs.p.MixedGeom {
 		switch {
 		case i > 0 || len(p.Tables) != 2:
 			return nil
-		case bs.p.Sliding:
+		case bs.p.LocalRope:
 			return p.Tables[1]
 		}
 		return p.Tables[0]
@@ -3003,10 +3003,10 @@ func (g *devTier) servedBlockAs(l *layer, li int, cs backend.Buf, pl *kvLayerPoo
 // model trains a second rotary, the sliding blocks', with their planes where
 // the block's graph reads them. Callers hold g.mu.
 func (g *devTier) bindRotaries(t map[composer.TableKey]backend.Buf, bs *blockScratch, cs backend.Buf, planes bool) {
-	// A sliding geometry's set of a split model holds its own rotary's table
-	// in cs (scratchTable): the second rotary's, which its blocks read.
+	// A set of blocks rotating by the second table, on a model of mixed
+	// geometry, holds that table in cs (scratchTable).
 	first := 0
-	if bs != nil && bs.p.GeomSplit && bs.p.Sliding {
+	if bs != nil && bs.p.MixedGeom && bs.p.LocalRope {
 		first = 1
 	}
 	t[composer.TableKey{Table: composer.TableAngles, Instance: first}] = cs

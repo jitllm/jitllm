@@ -599,20 +599,17 @@ type LayerPlan struct {
 	// QKNormPost runs q's norm after the rotary and k's before it, k's weight
 	// folded into q's at conversion (Hunyuan; jlm.FlagQKNormPostRope).
 	QKNormPost bool
-	// Gemma 4. GeomSplit says the model's sliding and global layers attend at
-	// two geometries; NKVHead, HeadDim and NRot are then THIS block's (planFor
-	// sets them per block) and HeadDimSWA/NKVHeadSWA/NRotSWA the sliding
-	// layers', so a tier sizes for both. VNorm RMSNorms each head of v with no
-	// weight before it is cached; VFromK says the block has no v projection
-	// and v is k's (LayerWeights.Wv is empty); OutScale multiplies the block's
-	// output row after its last residual add (zero means none).
-	GeomSplit                       bool
-	HeadDimSWA, NKVHeadSWA, NRotSWA int
-	// Sliding says this block attends at the sliding layers' geometry (its
-	// NKVHead/HeadDim/NRot are HeadDimSWA's) and rotates by the local table.
-	Sliding       bool
-	VNorm, VFromK bool
-	OutScale      float32
+	// MixedGeom says the model's blocks do not all attend at one geometry;
+	// NKVHead, HeadDim and NRot are then THIS block's (planFor sets them per
+	// block). OwnGeom says they, or the rotary table it reads, are not the
+	// model's, and LocalRope that it rotates by the second table (RopeTabSWA).
+	// VNorm RMSNorms each head of v with no weight before it is cached; VFromK
+	// says the block has no v projection and v is k's (LayerWeights.Wv is
+	// empty); OutScale multiplies the block's output row after its last
+	// residual add (zero means none).
+	MixedGeom, OwnGeom, LocalRope bool
+	VNorm, VFromK                 bool
+	OutScale                      float32
 	// DenseMoE is Gemma 4's mixture block (model.Config.DenseMoE): a dense MLP
 	// (LayerWeights.ShGate/ShUp/ShDown, ungated) beside the mixture, each with
 	// its own norms, the router on its own norm and a per-expert weight factor.
@@ -632,9 +629,8 @@ type LayerPlan struct {
 	Select   *SelectPlan
 	KVShared bool
 	KVSource int
-	// FFNWide says this block's NFFN is twice the model's (a KV-sharing
-	// block under use_double_wide_mlp), which a tier that bakes the FFN width
-	// into its scratch keeps apart.
+	// FFNWide says this block's NFFN is not the model's (its own geometry's),
+	// which a tier that bakes the FFN width into its scratch keeps apart.
 	FFNWide bool
 	// NoExpertNorm skips the division of the top-k mixture weights by their sum
 	// (olmoe). Negated so the zero value renormalises, which is what every other

@@ -216,10 +216,15 @@ func configOf(f *meta.File) (*jlm.Config, error) {
 }
 
 // localAxes refuses rotary sections under a second rotary, the sliding
-// layers' own base or width: a table over several position axes on the
-// local layers, which no architecture in archOf or hfArchTable states.
+// layers' own base or a block's own width: a table over several position
+// axes on the local layers, which no architecture in archOf or hfArchTable
+// states.
 func localAxes(c *jlm.Config) error {
-	if c.RopeSections == [4]uint32{} || c.RopeBaseSWA == 0 && (c.NRotSWA == 0 || c.NRotSWA == c.NRot) {
+	second := c.RopeBaseSWA != 0
+	for b := range c.Geoms {
+		second = second || c.Geoms[b].NRot != c.NRot
+	}
+	if c.RopeSections == [4]uint32{} || !second {
 		return nil
 	}
 	return fmt.Errorf("convert: %s: rotary sections %v on the sliding layers' own rotary: %w",

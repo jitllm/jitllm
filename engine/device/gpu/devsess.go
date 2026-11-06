@@ -573,10 +573,10 @@ func (g *devTier) shapeChanged() {
 // homeSet is lane l's home geometry set's decode scratch: the one holding
 // the head.
 func homeSet(l *lane) *blockScratch {
-	if l.geoCur == 0 {
+	if l.geoCur == (geoKey{}) {
 		return l.bs
 	}
-	return l.geoSets[0].bs
+	return l.geoSets[geoKey{}].bs
 }
 
 // cloneLane builds a lane from lane0's plans: every causal set's decode
@@ -604,7 +604,7 @@ func (g *devTier) cloneLane() (*lane, bool) {
 		sets[k] = s
 	}
 	for k, s := range sets {
-		if s.bs == nil || k&geoNonCausal != 0 {
+		if s.bs == nil || k.flags&geoNonCausal != 0 {
 			continue
 		}
 		v.useGeom(k)
@@ -635,7 +635,7 @@ func (g *devTier) cloneLane() (*lane, bool) {
 			g.prewarming = was
 		}
 	}
-	v.useGeom(0)
+	v.useGeom(geoKey{})
 	if h := homeSet(l0); h != nil && h.head != nil && nl.bs != nil {
 		if !v.shareHead(nl.bs, h) {
 			return fail()

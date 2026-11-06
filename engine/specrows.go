@@ -269,7 +269,7 @@ func (s *Instance) stepRowsDevice(src rowSrc, out *rowsOut) error {
 		}
 		defer func() { h.RowLogits, h.Logits, h.LogitRows, h.Hidden = false, keep, 0, nil }()
 	}
-	if !rd.LayersRows(s.lo, s.hi, pos, slot, s.maxSeq, s.bx[:n*c.NEmbd], s.bcs[:n*nrot], s.bswaTable(n, c.NRotSWA), h) {
+	if !rd.LayersRows(s.lo, s.hi, pos, slot, s.maxSeq, s.bx[:n*c.NEmbd], s.bcs[:n*nrot], s.bswaTable(n, c.LocalNRot()), h) {
 		why := "no reason given"
 		if e, ok := s.ld.(nn.ErrReporter); ok {
 			why = e.Err()
@@ -451,7 +451,7 @@ func (s *Instance) rowsHead(rd nn.RowsDevice, pos, slot []int, n int, logits []f
 	if h != nil {
 		keep := h.Logits
 		h.RowLogits, h.Logits, h.LogitRows = true, logits[:nlogit*c.NVocab], nlogit
-		ok := rd.LayersRows(s.hi, s.hi, pos, slot, s.maxSeq, x, s.bcs[:n*c.NRot], s.bswaTable(n, c.NRotSWA), h)
+		ok := rd.LayersRows(s.hi, s.hi, pos, slot, s.maxSeq, x, s.bcs[:n*c.NRot], s.bswaTable(n, c.LocalNRot()), h)
 		h.RowLogits, h.Logits, h.LogitRows = false, keep, 0
 		if ok {
 			s.rowsHeads++

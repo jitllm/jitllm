@@ -100,13 +100,14 @@ func deepseek32Config(f *meta.File, c *jlm.Config) error {
 
 // gemma4Config is llama.cpp's gemma4.cpp and transformers' Gemma4ForCausalLM,
 // text only: gemma3's block with two attention geometries (the global layers'
-// HeadDim, NKVHead and NRot, the sliding layers' *SWA), the global layers'
-// "proportional" rotary as RoleRopeFreqs, a weightless norm on v
-// (Flag2VNorm), k's projection as v on a global layer with no v_proj, an
-// attention scale of one and a per-block layer_scalar (RoleLayerOutScale).
-// The 26B runs a dense MLP beside a mixture (jlm.Flag2DenseMoE); the E2B/E4B
-// add per-layer embeddings (PLEDim), KV sharing (NKVShared) and a double-width
-// FFN on the sharing layers (Flag2DoubleFFN).
+// HeadDim, NKVHead and NRot, the sliding layers' their own, each block's
+// stated in jlm.Config.Geoms), the global layers' "proportional" rotary as
+// RoleRopeFreqs, a weightless norm on v (Flag2VNorm), k's projection as v on
+// a global layer with no v_proj, an attention scale of one and a per-block
+// layer_scalar (RoleLayerOutScale). The 26B runs a dense MLP beside a
+// mixture (jlm.Flag2DenseMoE); the E2B/E4B add per-layer embeddings
+// (PLEDim), KV sharing (NKVShared) and a double-width FFN on the sharing
+// layers, each block's width in its geometry.
 //
 // The reference-to-container table: docs/engineering-history/
 // model-correctness.md, "convert/flagship.go: gemma4Config".
@@ -127,6 +128,7 @@ func gemma4Config(f *meta.File, c *jlm.Config) error {
 		}
 	}
 	// One width, or the base width and twice it on the KV-sharing layers.
+	var ffns []int32
 	if c.NFFN == 0 {
 		kv, ok := f.Key("feed_forward_length")
 		if !ok {
@@ -137,13 +139,13 @@ func gemma4Config(f *meta.File, c *jlm.Config) error {
 			return fmt.Errorf("feed_forward_length: %d values for %d layers (%v)", len(ws), c.NLayer, err)
 		}
 		c.NFFN = uint32(ws[0])
-		c.Flags2 |= jlm.Flag2DoubleFFN
 		for i, w := range ws {
-			if want := c.NFFNAt(i); uint32(w) != want {
+			if w != ws[0] && (!c.KVShared(i) || w != 2*ws[0]) {
 				return fmt.Errorf("feed_forward_length %v: layer %d is %d, and only the %d KV-sharing "+
 					"layers may be twice %d", ws, i, w, c.NKVShared, c.NFFN)
 			}
 		}
+		ffns = ws
 	}
 	c.SWAWindow = uint32(f.UintKey("attention.sliding_window", 0))
 	if c.SWAWindow == 0 {
@@ -160,13 +162,14 @@ func gemma4Config(f *meta.File, c *jlm.Config) error {
 	// The global layers' geometry is the model's (key_length and
 	// rope.dimension_count are the global layers'); the sliding layers' is
 	// its own.
-	c.HeadDimSWA = uint32(f.UintKey("attention.key_length_swa", 0))
-	if v := uint32(f.UintKey("attention.value_length_swa", uint64(c.HeadDimSWA))); v != c.HeadDimSWA {
-		return fmt.Errorf("sliding key width %d and value width %d", c.HeadDimSWA, v)
+	var swa jlm.Geom
+	swa.HeadDim = uint32(f.UintKey("attention.key_length_swa", 0))
+	if v := uint32(f.UintKey("attention.value_length_swa", uint64(swa.HeadDim))); v != swa.HeadDim {
+		return fmt.Errorf("sliding key width %d and value width %d", swa.HeadDim, v)
 	}
-	c.NRotSWA = uint32(f.UintKey("rope.dimension_count_swa", uint64(c.HeadDimSWA)))
-	if c.HeadDimSWA == 0 || c.NRotSWA == 0 || c.NRotSWA%2 != 0 || c.NRotSWA > c.HeadDimSWA {
-		return fmt.Errorf("sliding head %d with rotary %d", c.HeadDimSWA, c.NRotSWA)
+	swa.NRot = uint32(f.UintKey("rope.dimension_count_swa", uint64(swa.HeadDim)))
+	if swa.HeadDim == 0 || swa.NRot == 0 || swa.NRot%2 != 0 || swa.NRot > swa.HeadDim {
+		return fmt.Errorf("sliding head %d with rotary %d", swa.HeadDim, swa.NRot)
 	}
 	if c.HeadDimV != 0 {
 		return fmt.Errorf("global key width %d and value width %d", c.HeadDim, c.HeadDimV)
@@ -195,8 +198,8 @@ func gemma4Config(f *meta.File, c *jlm.Config) error {
 		}
 		for i, v := range vs {
 			dst := &c.NKVHead
-			if uint32(i)%c.SWAPeriod < c.SWAPeriod-1 {
-				dst = &c.NKVHeadSWA
+			if sliding(c, i) {
+				dst = &swa.NKVHead
 			}
 			if v <= 0 || (*dst != 0 && *dst != uint32(v)) {
 				return fmt.Errorf("attention.head_count_kv %v does not split by the sliding pattern", vs)
@@ -207,12 +210,10 @@ func gemma4Config(f *meta.File, c *jlm.Config) error {
 	if c.NKVHead == 0 || c.NHead%c.NKVHead != 0 {
 		return fmt.Errorf("%d global kv heads for %d query heads", c.NKVHead, c.NHead)
 	}
-	if c.NKVHeadSWA == c.NKVHead {
-		c.NKVHeadSWA = 0
+	if swa.NKVHead == 0 {
+		swa.NKVHead = c.NKVHead
 	}
-	if c.HeadDimSWA == c.HeadDim && c.NRotSWA == c.NRot {
-		c.HeadDimSWA, c.NRotSWA = 0, 0
-	}
+	c.Geoms = blockGeoms(c, swa, ffns)
 	return nil
 }
 
@@ -461,4 +462,31 @@ func gemma4MoEConfig(f *meta.File, c *jlm.Config) error {
 	}
 	c.NFFNShExp = c.NFFN
 	return nil
+}
+
+// sliding reports that block i of c's pattern slides.
+func sliding(c *jlm.Config, i int) bool { return uint32(i)%c.SWAPeriod < c.SWAPeriod-1 }
+
+// blockGeoms is each block's geometry: the sliding layers' swa where the
+// pattern slides, the model's elsewhere, and ffns' feed-forward width where it
+// is stated per layer; none at all when every block is the model's.
+func blockGeoms(c *jlm.Config, swa jlm.Geom, ffns []int32) []jlm.Geom {
+	model := jlm.Geom{NKVHead: c.NKVHead, HeadDim: c.HeadDim, NRot: c.NRot, NFFN: c.NFFN}
+	gs := make([]jlm.Geom, c.NLayer)
+	differ := false
+	for i := range gs {
+		g := model
+		if sliding(c, i) {
+			g.NKVHead, g.HeadDim, g.NRot = swa.NKVHead, swa.HeadDim, swa.NRot
+		}
+		if ffns != nil {
+			g.NFFN = uint32(ffns[i])
+		}
+		gs[i] = g
+		differ = differ || g != model
+	}
+	if !differ {
+		return nil
+	}
+	return gs
 }

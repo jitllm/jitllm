@@ -230,11 +230,14 @@ type Config struct {
 	// for speculative drafting (spec.go), never in the trunk.
 	NMTP int
 
-	// The sliding layers' attention geometry (jlm.Config.HeadDimSWA): equal to
-	// HeadDim, NKVHead and NRot for every model but Gemma 4, whose global layers
-	// are 512 wide where its sliding ones are 256. Read through HeadDimAt and
-	// friends, never directly.
-	HeadDimSWA, NKVHeadSWA, NRotSWA int
+	// geoms is each block's own geometry where the blocks differ
+	// (jlm.Config.Geoms), nil when every block is the model's; mixed says
+	// their attention geometries differ and localNRot is the rotary width the
+	// blocks reading the second table turn. Set by setGeoms, read through
+	// HeadDimAt and friends.
+	geoms     []jlm.Geom
+	mixed     bool
+	localNRot int
 	// VNorm RMSNorms each head of v with no weight before it is cached
 	// (jlm.Flag2VNorm, Gemma 4).
 	VNorm bool
@@ -242,12 +245,10 @@ type Config struct {
 	// attention, as the container states it (jlm.Config.BidirLayers); nil
 	// is every layer.
 	bidir []bool
-	// NKVShared, PLEDim and DoubleFFN are Gemma 4's E2B/E4B: the last
-	// NKVShared layers attend to an earlier layer's history (KVSource) and,
-	// under DoubleFFN, run an FFN twice NFFN wide (NFFNAt); PLEDim is each
-	// layer's slice of the per-layer embeddings, zero for none.
+	// The last NKVShared layers attend to an earlier layer's history
+	// (KVSource); PLEDim is each layer's slice of the per-layer embeddings,
+	// zero for none.
 	NKVShared, PLEDim int
-	DoubleFFN         bool
 	// DeepTaps is how many of the first blocks add a picture's tap rows into
 	// its rows after they run (jlm.TowerTap, Qwen3-VL's deepstack): the
 	// container's tower's taps, tap i after block i.
@@ -432,36 +433,53 @@ func (c *Config) KVRowAt(li int) int {
 	return c.KVDimAt(li)
 }
 
-// GeomSplit reports that the sliding layers attend at another geometry than
-// the global ones (Gemma 4): another head width, kv head count or rotary
-// width. HeadDim, NKVHead and NRot are then the global layers', and every
-// per-layer path reads HeadDimAt, NKVHeadAt and NRotAt.
-func (c *Config) GeomSplit() bool {
-	return c.HeadDimSWA != c.HeadDim || c.NKVHeadSWA != c.NKVHead || c.NRotSWA != c.NRot
+// MixedGeom reports that the blocks do not all attend at one geometry: a
+// block states its own head width, kv head count or rotary width. HeadDim,
+// NKVHead and NRot are then the model's, and every per-layer path reads
+// HeadDimAt, NKVHeadAt and NRotAt.
+func (c *Config) MixedGeom() bool { return c.mixed }
+
+// setGeoms takes the blocks' own geometries, gs one per block or none.
+func (c *Config) setGeoms(gs []jlm.Geom) {
+	c.geoms, c.mixed, c.localNRot = gs, false, 0
+	for li := range gs {
+		c.mixed = c.mixed || c.HeadDimAt(li) != c.HeadDim || c.NKVHeadAt(li) != c.NKVHead || c.NRotAt(li) != c.NRot
+		if c.SWA(li) {
+			c.localNRot = max(c.localNRot, c.NRotAt(li))
+		}
+	}
+}
+
+// LocalNRot is the rotary width the blocks reading the second table
+// (Model.RopeSWA) turn: theirs where they state one, NRot otherwise.
+func (c *Config) LocalNRot() int {
+	if c.localNRot != 0 {
+		return c.localNRot
+	}
+	return c.NRot
 }
 
 // HeadDimAt, NKVHeadAt and NRotAt are layer li's attention geometry: the
-// sliding layers' own where Config.SWA says li slides, the model's otherwise.
-// For every model without a split they are HeadDim, NKVHead and NRot.
+// block's own where the container states one, the model's otherwise.
 func (c *Config) HeadDimAt(li int) int {
-	if c.SWA(li) {
-		return c.HeadDimSWA
+	if li >= 0 && li < len(c.geoms) {
+		return int(c.geoms[li].HeadDim)
 	}
 	return c.HeadDim
 }
 
 // NKVHeadAt is layer li's kv head count (see HeadDimAt).
 func (c *Config) NKVHeadAt(li int) int {
-	if c.SWA(li) {
-		return c.NKVHeadSWA
+	if li >= 0 && li < len(c.geoms) {
+		return int(c.geoms[li].NKVHead)
 	}
 	return c.NKVHead
 }
 
 // NRotAt is layer li's rotary width (see HeadDimAt).
 func (c *Config) NRotAt(li int) int {
-	if c.SWA(li) {
-		return c.NRotSWA
+	if li >= 0 && li < len(c.geoms) {
+		return int(c.geoms[li].NRot)
 	}
 	return c.NRot
 }
@@ -481,9 +499,15 @@ func (c *Config) GQAAt(li int) int { return c.NHead / c.NKVHeadAt(li) }
 // QDimAt is the query (and the attention output) width at layer li.
 func (c *Config) QDimAt(li int) int { return c.NHead * c.HeadDimAt(li) }
 
-// MaxHeadDim, MaxKVDim, MaxQDim and MaxNRot are the widest of the two
+// MaxHeadDim, MaxKVDim, MaxQDim and MaxNRot are the widest of the blocks'
 // geometries: what a buffer that serves every layer is sized by.
-func (c *Config) MaxHeadDim() int { return max(c.HeadDim, c.HeadDimSWA) }
+func (c *Config) MaxHeadDim() int {
+	m := c.HeadDim
+	for li := range c.geoms {
+		m = max(m, c.HeadDimAt(li))
+	}
+	return m
+}
 
 // KVShared reports that block li computes no k and v of its own and attends
 // to KVSource(li)'s history (Gemma 4's E2B/E4B).
@@ -507,27 +531,27 @@ func (c *Config) KVSource(li int) int {
 	return -1
 }
 
-// NFFNAt is block li's feed-forward width (twice NFFN on a KV-sharing block
-// under DoubleFFN), and MaxNFFN the widest.
+// NFFNAt is block li's feed-forward width: its own where the container
+// states one, NFFN otherwise.
 func (c *Config) NFFNAt(li int) int {
-	if c.DoubleFFN && c.KVShared(li) {
-		return 2 * c.NFFN
+	if li >= 0 && li < len(c.geoms) {
+		return int(c.geoms[li].NFFN)
 	}
 	return c.NFFN
 }
 
-// MaxNFFN is the widest feed-forward width of any block: twice NFFN when the
-// model has KV-sharing blocks under DoubleFFN, NFFN otherwise.
+// MaxNFFN is the widest feed-forward width of any block.
 func (c *Config) MaxNFFN() int {
-	if c.DoubleFFN && c.NKVShared != 0 {
-		return 2 * c.NFFN
+	m := c.NFFN
+	for li := range c.geoms {
+		m = max(m, c.NFFNAt(li))
 	}
-	return c.NFFN
+	return m
 }
 
 // MaxKVDim is the widest row any layer caches: MLA's latent row, an MSA
 // block's k with the indexer's key after it, DeepSeek V4's widest KVRowAt, or
-// else the wider of the two geometries' KV widths.
+// else the widest of the blocks' KV widths.
 func (c *Config) MaxKVDim() int {
 	if c.KVLoraRank != 0 {
 		return c.KVDim()
@@ -537,14 +561,24 @@ func (c *Config) MaxKVDim() int {
 		// after it.
 		return (c.NKVHead + 1) * c.HeadDim
 	}
-	return max(c.KVDim(), c.NKVHeadSWA*c.HeadDimSWA)
+	m := c.KVDim()
+	for li := range c.geoms {
+		m = max(m, c.NKVHeadAt(li)*c.HeadDimAt(li))
+	}
+	return m
 }
 
-// MaxQDim is the query width at the wider of the two head widths.
+// MaxQDim is the query width at the widest head.
 func (c *Config) MaxQDim() int { return c.NHead * c.MaxHeadDim() }
 
-// MaxNRot is the wider of the two geometries' rotary widths.
-func (c *Config) MaxNRot() int { return max(c.NRot, c.NRotSWA) }
+// MaxNRot is the widest rotary any block turns.
+func (c *Config) MaxNRot() int {
+	m := c.NRot
+	for li := range c.geoms {
+		m = max(m, c.NRotAt(li))
+	}
+	return m
+}
 
 // RopeW is how many floats one row's rotary table holds: NRot, or two tables
 // of it under XD-RoPE (RopeXD).
@@ -744,24 +778,14 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 		HCMult:    int(c.HCMult),
 		HCLowRank: int(c.HCLowRank),
 	}
-	// Zero means the global layers' geometry; the engine wants the widths.
-	out.HeadDimSWA, out.NKVHeadSWA, out.NRotSWA = out.HeadDim, out.NKVHead, out.NRot
-	if c.HeadDimSWA != 0 {
-		out.HeadDimSWA = int(c.HeadDimSWA)
-	}
-	if c.NKVHeadSWA != 0 {
-		out.NKVHeadSWA = int(c.NKVHeadSWA)
-	}
-	if c.NRotSWA != 0 {
-		out.NRotSWA = int(c.NRotSWA)
-	}
+	out.setGeoms(c.Geoms)
 	out.VNorm = c.Flags2.Has(jlm.Flag2VNorm)
 	out.DenseMoE = c.Flags2.Has(jlm.Flag2DenseMoE)
 	out.NKVShared, out.PLEDim = int(c.NKVShared), int(c.PLEDim)
 	out.bidir = c.BidirLayers
 	out.sel = c.Selection
 	if s := out.sel; s != nil && !out.MLA() && (s.KeyWidth != uint32(out.HeadDim) ||
-		s.Groups != 1 && s.Groups != uint32(out.NKVHead) || out.GeomSplit() || out.NKVShared != 0) {
+		s.Groups != 1 && s.Groups != uint32(out.NKVHead) || out.MixedGeom() || out.NKVShared != 0) {
 		return nil, fmt.Errorf("model: %s: a selection of %d keys %d wide over %d kv heads of %d", out.Arch,
 			s.Groups, s.KeyWidth, out.NKVHead, out.HeadDim)
 	}
@@ -769,7 +793,6 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 		return nil, fmt.Errorf("model: %s: the container states %d predicted streams in fields of their own, which this "+
 			"build reads only as the residual's stated streams: convert the model again", out.Arch, c.PredStreams)
 	}
-	out.DoubleFFN = c.Flags2.Has(jlm.Flag2DoubleFFN)
 	if (out.NKVShared != 0 || out.PLEDim != 0) && (out.MLA() || out.Hybrid() || out.MoE()) {
 		return nil, fmt.Errorf("model: %s: KV sharing or per-layer embeddings on MLA, a hybrid "+
 			"or a mixture", out.Arch)
@@ -785,11 +808,11 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 		return nil, fmt.Errorf("model: %s: a dense-and-mixture block on anything but a "+
 			"renormalised softmax router", out.Arch)
 	}
-	// The split is Gemma 4's and is built for its block alone. A scale derived
-	// from the head width would be two scales, and the one field is one.
-	if out.GeomSplit() && (out.MLA() || out.Hybrid() || out.QKNormWide || out.AttnOutGate ||
+	// A scale derived from the head width would be one scale per geometry,
+	// and the one field is one.
+	if out.MixedGeom() && (out.MLA() || out.Hybrid() || out.QKNormWide || out.AttnOutGate ||
 		c.AttnScale == 0 || out.QKL2Norm || out.ClampKQV != 0) {
-		return nil, fmt.Errorf("model: %s: a sliding-layer geometry on MLA, a hybrid, a whole-"+
+		return nil, fmt.Errorf("model: %s: blocks of several geometries on MLA, a hybrid, a whole-"+
 			"projection q/k norm, an output gate, a clamp or a derived attention scale", out.Arch)
 	}
 	for _, k := range c.LayerKinds {
@@ -2682,14 +2705,13 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 	}
 	// A second rotary for architectures trained with two bases (gemma3's
 	// sliding layers), built only when RopeBaseSWA is set.
-	if cfg.RopeBaseSWA != 0 || cfg.NRotSWA != cfg.NRot {
+	if cfg.RopeBaseSWA != 0 || cfg.LocalNRot() != cfg.NRot {
 		r := m.Rope
 		if cfg.RopeBaseSWA != 0 {
 			r.Base = cfg.RopeBaseSWA
 		}
-		// Gemma 4's sliding layers turn their own width, the plain rotary over
-		// all of a 256-wide head where the global layers turn 512.
-		r.NRot = cfg.NRotSWA
+		// The sliding layers turn their own width where their blocks state one.
+		r.NRot = cfg.LocalNRot()
 		if cfg.RopeScaleSWA != 0 {
 			r.Scale = cfg.RopeScaleSWA
 		}

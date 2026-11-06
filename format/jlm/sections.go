@@ -202,7 +202,11 @@ func encodeConfigAt(c *Config, v uint32) []byte {
 	// eighteen; the twentieth, the selection, the first nineteen; the
 	// twenty-first, the blocks' additions before their attention, the first
 	// twenty. An older reader drops each.
-	post := c.Streams.sharesWrites()
+	// The twenty-second, the streams' posts, implies the first twenty-one;
+	// the twenty-third, the blocks' own geometries (Geoms), the first
+	// twenty-two. An older reader drops each.
+	geoms := len(c.Geoms) != 0
+	post := geoms || c.Streams.sharesWrites()
 	pre := post || c.Streams.addsBefore()
 	sel := pre || c.Selection != nil
 	sw := sel || c.Streams.writesStreams()
@@ -222,8 +226,7 @@ func encodeConfigAt(c *Config, v uint32) []byte {
 	msa := ds4 || c.IdxBlock != 0 || c.IdxLocal != 0
 	alt := msa || c.PredStreams != 0 || c.NSparse != 0
 	idx := alt || c.IdxHeads != 0
-	geom := idx || c.HeadDimSWA != 0 || c.NKVHeadSWA != 0 || c.NRotSWA != 0 || c.Flags2 != 0 ||
-		c.NKVShared != 0 || c.PLEDim != 0
+	geom := idx || c.Flags2 != 0 || c.NKVShared != 0 || c.PLEDim != 0
 	clamp := geom || c.ClampKQV != 0
 	scales := clamp || c.AttnScale != 0 || c.ResidualScale != 0 || c.LogitScale != 0
 	if scales || c.MoEStep != 0 || c.AttnTempScale != 0 || c.AttnTempFloor != 0 || c.AttnTempOffset != 0 {
@@ -241,9 +244,11 @@ func encodeConfigAt(c *Config, v uint32) []byte {
 		w.f32(c.ClampKQV)
 	}
 	if geom {
-		w.u32(c.HeadDimSWA)
-		w.u32(c.NKVHeadSWA)
-		w.u32(c.NRotSWA)
+		// Three slots an older writer filled with the sliding layers'
+		// geometry; decodeConfigAt reads them into Geoms.
+		w.u32(0)
+		w.u32(0)
+		w.u32(0)
 		w.u32(uint32(c.Flags2))
 		w.u32(c.NKVShared)
 		w.u32(c.PLEDim)
@@ -350,6 +355,15 @@ func encodeConfigAt(c *Config, v uint32) []byte {
 	if post {
 		encodeStreamPosts(w, &c.Streams)
 	}
+	if geoms {
+		w.u32(uint32(len(c.Geoms)))
+		for _, g := range c.Geoms {
+			w.u32(g.NKVHead)
+			w.u32(g.HeadDim)
+			w.u32(g.NRot)
+			w.u32(g.NFFN)
+		}
+	}
 	return w.b
 }
 
@@ -416,10 +430,11 @@ func decodeConfigAt(b []byte, v uint32) (*Config, error) {
 	if r.err == nil && len(r.b) > 0 {
 		c.ClampKQV = r.f32()
 	}
+	var swa Geom
 	if r.err == nil && len(r.b) > 0 {
-		c.HeadDimSWA = r.u32()
-		c.NKVHeadSWA = r.u32()
-		c.NRotSWA = r.u32()
+		swa.HeadDim = r.u32()
+		swa.NKVHead = r.u32()
+		swa.NRot = r.u32()
 		c.Flags2 = Flags2(r.u32())
 		c.NKVShared = r.u32()
 		c.PLEDim = r.u32()
@@ -530,8 +545,19 @@ func decodeConfigAt(b []byte, v uint32) (*Config, error) {
 	if r.err == nil && len(r.b) > 0 {
 		decodeStreamPosts(r, &c.Streams)
 	}
+	if r.err == nil && len(r.b) > 0 {
+		for range r.count(16) {
+			c.Geoms = append(c.Geoms, Geom{NKVHead: r.u32(), HeadDim: r.u32(), NRot: r.u32(), NFFN: r.u32()})
+		}
+	}
 	if r.err != nil {
 		return nil, r.err
+	}
+	if err := c.olderGeoms(swa); err != nil {
+		return nil, err
+	}
+	if err := c.geomsValid(); err != nil {
+		return nil, err
 	}
 	if err := exprsValid(c); err != nil {
 		return nil, err
@@ -628,18 +654,6 @@ func decodeConfigAt(b []byte, v uint32) (*Config, error) {
 	for _, v := range []float32{c.AttnScale, c.ResidualScale, c.LogitScale, c.ClampKQV} {
 		if !(v >= 0) || math.IsInf(float64(v), 0) {
 			return nil, fmt.Errorf("jlm: scale %g in the config record", v)
-		}
-	}
-	// A sliding geometry with no sliding layer to carry it is a field no block
-	// reads; one whose kv heads do not divide the query heads has no grouping.
-	if c.HeadDimSWA != 0 || c.NKVHeadSWA != 0 || c.NRotSWA != 0 {
-		switch {
-		case c.SWAWindow == 0 || c.SWAPeriod == 0:
-			return nil, fmt.Errorf("jlm: a sliding-layer geometry with no sliding layers")
-		case c.NKVHeadSWA != 0 && c.NHead%c.NKVHeadSWA != 0:
-			return nil, fmt.Errorf("jlm: %d sliding kv heads for %d query heads", c.NKVHeadSWA, c.NHead)
-		case c.HeadDimSWA != 0 && c.NRotSWA > c.HeadDimSWA:
-			return nil, fmt.Errorf("jlm: sliding rotary width %d on a %d-wide head", c.NRotSWA, c.HeadDimSWA)
 		}
 	}
 	// A shared run that leaves no layer to share from, or a layer of one kind

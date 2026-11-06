@@ -210,7 +210,7 @@ func (s *Instance) cpuRows(li int, l *model.Layer, x, cs, csSWA []float32, seq, 
 		return why, nil
 	}
 	side, _ := s.cpuSideRows(li)
-	return nn.DeclineServes, s.cpuRowsRun(li, l, f, x, len(pos)*s.c.NEmbd, side, s.bcs, s.c.RopeW(), s.bcsSWA, s.c.NRotSWA, seq, pos, tok)
+	return nn.DeclineServes, s.cpuRowsRun(li, l, f, x, len(pos)*s.c.NEmbd, side, s.bcs, s.c.RopeW(), s.bcsSWA, s.c.LocalNRot(), seq, pos, tok)
 }
 
 // swaRows is the step's second rotary table from row a, nil where the model
@@ -219,7 +219,7 @@ func (s *Instance) swaRows(a int) []float32 {
 	if s.bcsSWA == nil {
 		return nil
 	}
-	return s.bcsSWA[a*s.c.NRotSWA:]
+	return s.bcsSWA[a*s.c.LocalNRot():]
 }
 
 // cpuSessions is cpuRows for a step across sessions (stepHost): row i's
@@ -292,7 +292,7 @@ func (s *Instance) cpuOwnerRuns(li int, l *model.Layer, x, cs []float32, nrot in
 			if pw != 0 && rside != nil {
 				side = rside[a*pw:]
 			}
-			if err := oi.cpuRowsRun(li, l, f, x[a*d:], len(pos)*d, side, cs[a*nrot:], nrot, s.swaRows(a), s.c.NRotSWA, seq[a:b], pos[a:b], rowsOf(tok, a, b)); err != nil {
+			if err := oi.cpuRowsRun(li, l, f, x[a*d:], len(pos)*d, side, cs[a*nrot:], nrot, s.swaRows(a), s.c.LocalNRot(), seq[a:b], pos[a:b], rowsOf(tok, a, b)); err != nil {
 				oi.Session = lead
 				return nn.DeclineServes, err
 			}
@@ -385,7 +385,7 @@ func (s *Instance) cpuRecRows(li int, l *model.Layer, x, cs []float32, seq, pos 
 			row.CS = cs[r*nrot:]
 		}
 		if s.bcsSWA != nil {
-			row.CSSWA = s.bcsSWA[r*s.c.NRotSWA:]
+			row.CSSWA = s.bcsSWA[r*s.c.LocalNRot():]
 		}
 		if err := s.cpu.rowRun.Row(li, cb, &row); err != nil {
 			s.Session = lead
@@ -463,7 +463,7 @@ func (s *Instance) cpuRecRun(li int, l *model.Layer, f *cpudev.Form, x, cs []flo
 		if pw != 0 && side != nil {
 			side = side[a*pw:]
 		}
-		if err := s.cpuRowsRun(li, l, f, x[a*d:], n*d, side, cs[a*nrot:], nrot, s.swaRows(a), s.c.NRotSWA, seq[a:b], pos[a:b], rowsOf(tok, a, b)); err != nil {
+		if err := s.cpuRowsRun(li, l, f, x[a*d:], n*d, side, cs[a*nrot:], nrot, s.swaRows(a), s.c.LocalNRot(), seq[a:b], pos[a:b], rowsOf(tok, a, b)); err != nil {
 			return nn.DeclineServes, err
 		}
 		if base >= 0 {

@@ -616,15 +616,10 @@ type Config struct {
 	// ArchDBRX; see encodeConfig.
 	ClampKQV float32
 
-	// The sliding layers' own attention geometry, when it is not the global
-	// layers': Gemma 4 runs its sliding layers at head_dim 256 and its global
-	// ones at 512, with different kv head counts on the 31B and 26B and a
-	// different rotary width. HeadDim, NKVHead and NRot above are the GLOBAL
-	// layers' (the source's key_length and rope.dimension_count); these apply
-	// where Config.SWA says a layer slides. Zero means the same as the global
-	// field. A fourth optional tail, written only for ArchGemma4; see
-	// encodeConfig.
-	HeadDimSWA, NKVHeadSWA, NRotSWA uint32
+	// Geoms is each text block's own geometry where the blocks do not all
+	// attend and feed forward at the model's (NKVHead, HeadDim, NRot and NFFN
+	// above): one per block, or none. A tail of its own; see encodeConfig.
+	Geoms []Geom
 	// Flags2 are the quirks past the 32 bits of Flags, carried in the same
 	// tail. See Flag2VNorm.
 	Flags2 Flags2
@@ -801,8 +796,9 @@ const (
 	// by RolePostFFNNorm before the residual add. The dense MLP is carried as
 	// the shared expert's roles (RoleShExpGate/Up/Down), ungated.
 	Flag2DenseMoE Flags2 = 1 << 1
-	// Flag2DoubleFFN makes the feed-forward of every KV-sharing layer twice
-	// NFFN wide (Gemma 4's use_double_wide_mlp).
+	// Flag2DoubleFFN is an older writer's statement that the feed-forward of
+	// every KV-sharing layer is twice NFFN wide; a reader takes it into Geoms
+	// (olderGeoms), and nothing writes it.
 	Flag2DoubleFFN Flags2 = 1 << 2
 	// Flag2SwiGLUClamp makes the gated activation DeepSeek V4's clamped
 	// SwiGLU: silu(min(gate, 10)) * clamp(up, -10, 10), in the experts and
@@ -826,14 +822,28 @@ const (
 // Has reports whether every bit of f2 is set.
 func (f Flags2) Has(f2 Flags2) bool { return f&f2 == f2 }
 
-// HeadDimAt, NKVHeadAt and NRotAt are text block b's attention geometry:
-// the sliding layers' own where the model has one (HeadDimSWA and friends),
-// the model's otherwise.
-func (c *Config) HeadDimAt(b int) uint32 { return c.swaOr(b, c.HeadDimSWA, c.HeadDim) }
+// Geom is one block's shape: its kv heads, their width, the rotary width it
+// turns and its feed-forward width.
+type Geom struct {
+	NKVHead, HeadDim, NRot, NFFN uint32
+}
 
-func (c *Config) NKVHeadAt(b int) uint32 { return c.swaOr(b, c.NKVHeadSWA, c.NKVHead) }
+// GeomAt is text block b's geometry: its own where Geoms states one, the
+// model's otherwise.
+func (c *Config) GeomAt(b int) Geom {
+	if b >= 0 && b < len(c.Geoms) {
+		return c.Geoms[b]
+	}
+	return Geom{NKVHead: c.NKVHead, HeadDim: c.HeadDim, NRot: c.NRot, NFFN: c.NFFN}
+}
 
-func (c *Config) NRotAt(b int) uint32 { return c.swaOr(b, c.NRotSWA, c.NRot) }
+// HeadDimAt, NKVHeadAt and NRotAt are text block b's attention geometry
+// (GeomAt).
+func (c *Config) HeadDimAt(b int) uint32 { return c.GeomAt(b).HeadDim }
+
+func (c *Config) NKVHeadAt(b int) uint32 { return c.GeomAt(b).NKVHead }
+
+func (c *Config) NRotAt(b int) uint32 { return c.GeomAt(b).NRot }
 
 // KVShared reports that text block b computes no k and v of its own and
 // attends to KVSource(b)'s history.
@@ -858,14 +868,8 @@ func (c *Config) KVSource(b int) int {
 	return -1
 }
 
-// NFFNAt is text block b's feed-forward width: twice NFFN on a KV-sharing
-// block under Flag2DoubleFFN.
-func (c *Config) NFFNAt(b int) uint32 {
-	if c.Flags2.Has(Flag2DoubleFFN) && c.KVShared(b) {
-		return 2 * c.NFFN
-	}
-	return c.NFFN
-}
+// NFFNAt is text block b's feed-forward width (GeomAt).
+func (c *Config) NFFNAt(b int) uint32 { return c.GeomAt(b).NFFN }
 
 func (c *Config) swaOr(b int, swa, global uint32) uint32 {
 	if swa != 0 && c.SWAWindow > 0 && c.SWAPeriod > 0 && uint32(b)%c.SWAPeriod < c.SWAPeriod-1 {

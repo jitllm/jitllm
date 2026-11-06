@@ -34,8 +34,8 @@ func gemma4Fixtures() []struct {
 	}{
 		{"synth-gemma4", func(m *model.Model) bool {
 			c := m.Cfg
-			ok := c.Arch == "gemma4" && c.GeomSplit() && c.HeadDim == 32 && c.HeadDimSWA == 16 &&
-				c.NKVHead == 1 && c.NKVHeadSWA == 2 && c.NRot == 32 && c.NRotSWA == 16 &&
+			ok := c.Arch == "gemma4" && c.MixedGeom() && c.HeadDim == 32 && c.HeadDimAt(0) == 16 &&
+				c.NKVHead == 1 && c.NKVHeadAt(0) == 2 && c.NRot == 32 && c.NRotAt(0) == 16 &&
 				c.VNorm && c.AttnScale == 1 && c.RopeNeox && c.QKNorm && c.SWAWindow == 4 &&
 				c.SWAPeriod == 3 && c.FinalSoftcap == 30 && c.TiedEmbd && m.RopeSWA != nil &&
 				len(m.Rope.Freqs) == c.HeadDim/2 && m.RopeSWA.Freqs == nil
@@ -50,14 +50,14 @@ func gemma4Fixtures() []struct {
 		// checkpoint runs them at.
 		{"synth-gemma4-wide", func(m *model.Model) bool {
 			c := m.Cfg
-			return c.Arch == "gemma4" && c.GeomSplit() && c.HeadDim == 512 && c.HeadDimSWA == 256 &&
-				c.NRot == 512 && c.NRotSWA == 256 && c.NKVHead == 1 && c.NKVHeadSWA == 1 &&
+			return c.Arch == "gemma4" && c.MixedGeom() && c.HeadDim == 512 && c.HeadDimAt(0) == 256 &&
+				c.NRot == 512 && c.NRotAt(0) == 256 && c.NKVHead == 1 && c.NKVHeadAt(0) == 1 &&
 				m.Layers[2].VFromK && !m.Layers[1].VFromK
 		}},
 		{"synth-gemma4-kv", func(m *model.Model) bool {
 			c := m.Cfg
-			ok := c.Arch == "gemma4" && c.GeomSplit() && c.HeadDim == 32 && c.HeadDimSWA == 16 &&
-				c.NKVHead == 2 && c.NKVHeadSWA == 2 && c.VNorm
+			ok := c.Arch == "gemma4" && c.MixedGeom() && c.HeadDim == 32 && c.HeadDimAt(0) == 16 &&
+				c.NKVHead == 2 && c.NKVHeadAt(0) == 2 && c.VNorm
 			for i := range m.Layers {
 				ok = ok && !m.Layers[i].VFromK
 			}
@@ -65,8 +65,8 @@ func gemma4Fixtures() []struct {
 		}},
 		{"synth-gemma4-e", func(m *model.Model) bool {
 			c := m.Cfg
-			ok := c.Arch == "gemma4" && c.GeomSplit() && c.PLEDim == 32 && c.NKVShared == 2 &&
-				c.DoubleFFN && c.NFFNAt(4) == 2*c.NFFN && c.NFFNAt(3) == c.NFFN &&
+			ok := c.Arch == "gemma4" && c.MixedGeom() && c.PLEDim == 32 && c.NKVShared == 2 &&
+				c.NFFNAt(4) == 2*c.NFFN && c.NFFNAt(3) == c.NFFN &&
 				c.KVSource(4) == 3 && c.KVSource(5) == 2 && c.KVSource(1) == 1 &&
 				m.PleTok.K == 6*32 && m.PleProj.Rows == 6*32 && len(m.PleNorm) == 32
 			for i := range m.Layers {
@@ -89,7 +89,7 @@ func gemma4Fixtures() []struct {
 		}},
 		{"synth-gemma4-moe", func(m *model.Model) bool {
 			c := m.Cfg
-			ok := c.Arch == "gemma4" && c.GeomSplit() && c.DenseMoE && c.NExpert == 8 &&
+			ok := c.Arch == "gemma4" && c.MixedGeom() && c.DenseMoE && c.NExpert == 8 &&
 				c.NExpertUsed == 2 && c.NFFNExp == 32 && c.NFFNShExp == c.NFFN && !c.NoExpertNorm
 			for i := range m.Layers {
 				l := &m.Layers[i]

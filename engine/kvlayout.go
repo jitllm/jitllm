@@ -64,9 +64,8 @@ func (l kvLayout) At(slot, pos, kvHead int) int {
 }
 
 // kvlAt is layer li's layout: the instance's own at the layer's geometry, which
-// differs from kvl only where the sliding layers attend at their own head
-// width and kv heads (Config.GeomSplit). MLA's one cached row is the same on
-// every layer.
+// differs from kvl only where a block attends at its own head width and kv
+// heads (Config.MixedGeom). MLA's one cached row is the same on every layer.
 func (s *Instance) kvlAt(li int) kvLayout { return s.kvl.atLayer(s.c, li) }
 
 // atLayer is l at layer li's geometry; kvlAt has the cases. The page sizes
@@ -76,8 +75,8 @@ func (l kvLayout) atLayer(c *model.Config, li int) kvLayout {
 	switch {
 	case c.KeyHeadAt(li):
 		l.nKV++
-	case c.GeomSplit() && !c.MLA() && c.SWA(li):
-		l.nKV, l.headDim = c.NKVHeadSWA, c.HeadDimSWA
+	case c.MixedGeom() && !c.MLA():
+		l.nKV, l.headDim = c.NKVHeadAt(li), c.HeadDimAt(li)
 	}
 	return l
 }

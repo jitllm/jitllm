@@ -68,7 +68,7 @@ func (s *Instance) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([
 	nrot := c.RopeW()
 	// One rotary table per row, rows being at different positions: the prompt
 	// chunk's tables, since a step may carry more rows than there are slots.
-	cs, csSWA := s.bcs[:n*nrot], s.bswaTable(n, c.NRotSWA)
+	cs, csSWA := s.bcs[:n*nrot], s.bswaTable(n, c.LocalNRot())
 
 	t0 := s.tick()
 	// The rows' input rows, scale, positions and per-layer inputs through the
