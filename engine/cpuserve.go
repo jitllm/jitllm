@@ -75,10 +75,13 @@ func (s *Instance) chunkRows(slot, p0, n int) (seq, pos []int) {
 // addr is x's first element's address, nil for a nil slice.
 func addr[T any](x []T) unsafe.Pointer { return unsafe.Pointer(unsafe.SliceData(x)) }
 
-// unmapOwn returns the own buffers and the n-gram table's view held off
-// the heap.
+// unmapOwn lets the instance's execution on the CPU device go, as a card's
+// session view goes (nn.Session): its own buffers and the n-gram table's
+// view held off the heap, its workers among what it made.
 func (s *Instance) unmapOwn() {
-	s.exec.x.Close()
+	if d, ok := s.places[routeLanes].(nn.Session); ok {
+		d.Detach()
+	}
 }
 
 // placeLanes composes a new instance's blocks on the CPU: each block of the
