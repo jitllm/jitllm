@@ -216,21 +216,6 @@ func sideAtBinding(gr *graph.Graph) int {
 	return off
 }
 
-// cpuSide is block li's side input of decode's row: the n-gram block's
-// gathered rows (ngramForCPU), the row's per-layer inputs on a model of
-// them, nil where the block has none.
-func (s *Instance) cpuSide(li int) []float32 {
-	if s.c.SideWidth() == 0 {
-		return nil
-	}
-	return s.ple
-}
-
-// cpuSideRows is cpuSide over a call's rows, and its width a row.
-func (s *Instance) cpuSideRows(li int) ([]float32, int) {
-	return s.bple, s.c.SideWidth()
-}
-
 // blockSpec is what block li is composed from (nn.BlockSpec): the graph its
 // front end states, the formats its weights are read in, their strides, the
 // step's history geometry and the instance's rotaries -- or what keeps the
@@ -326,7 +311,7 @@ func (s *Instance) blockWhy(li int) nn.Decline {
 	switch {
 	case g == nil:
 		return nn.DeclineNoGraph
-	case len(g.Out) != c.Streams() || len(g.In) > len(g.Out)+1 || len(g.In) > len(g.Out) && s.cpuSide(li) == nil:
+	case len(g.Out) != c.Streams() || len(g.In) > len(g.Out)+1 || len(g.In) > len(g.Out) && c.SideWidth() == 0:
 		return nn.DeclineFeeds
 	case c.MoEAt(li) && (s.m.Container == nil || l.LegacyExperts ||
 		!s.ws.b.BankViews(li, len(s.m.Layers), [3]*jlm.Entry{l.Gate.E, l.Up.E, l.Down.E}) || l.Up.E == nil || l.Down.E == nil):
