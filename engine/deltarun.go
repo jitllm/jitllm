@@ -1,6 +1,8 @@
 package engine
 
-import "github.com/jitllm/jitllm/engine/device/cpudev"
+import (
+	"github.com/jitllm/jitllm/nn/history"
+)
 
 // allocRecurrent sizes the recurrent state, nil for every architecture that
 // is not a hybrid.
@@ -17,7 +19,7 @@ func (s *Instance) allocRecurrent(nseq int) {
 
 // makeRec makes each recurrent block's state for nseq sequences in v, a
 // session's history's view of the CPU device.
-func (s *Instance) makeRec(v *cpudev.View, nseq int) {
+func (s *Instance) makeRec(v *history.View, nseq int) {
 	for li := range s.c.NLayer {
 		if s.keepsRec(li) {
 			v.MakeRec(li, nseq*s.dg.ConvStateLen(), nseq*s.dg.StateStride())

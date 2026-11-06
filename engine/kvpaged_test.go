@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"github.com/jitllm/jitllm/nn/history"
 	"io"
 	"os"
 	"os/exec"
@@ -14,7 +15,6 @@ import (
 
 	"github.com/jitllm/jitllm/model"
 
-	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/internal/testmodels"
@@ -1930,8 +1930,8 @@ func TestMemStoreFillsServeASharedPrefix(t *testing.T) {
 
 // heldPages is a block's page memory of pp floats a page, page n resident
 // where held[n] says so, for a gate that builds its history by hand.
-func heldPages(pp int, held ...bool) *cpudev.Pages {
-	p := cpudev.NewView(1).Pages(0, pp, false, nil)
+func heldPages(pp int, held ...bool) *history.Pages {
+	p := history.NewView(1).Pages(0, pp, false, nil)
 	for n, h := range held {
 		p.Extend(n)
 		if h {

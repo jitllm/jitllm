@@ -2,6 +2,7 @@ package engine
 
 import (
 	"fmt"
+	"github.com/jitllm/jitllm/nn/history"
 	"runtime"
 	"slices"
 	"unsafe"
@@ -19,7 +20,7 @@ import (
 // composer forms for it from the block's graph (Model.Composing), through
 // the one keyed cache, on the instance's own buffers -- the residual, the
 // block's weights and vectors by role, its rotary table and its history in
-// the host's KV pages (cpudev.Arena) -- each kernel mapped once for the model and
+// the host's KV pages (history.Arena) -- each kernel mapped once for the model and
 // called through the trampoline, the calls of a kernel over heads spread
 // over the instance's pool. Every block step on the CPU is counted served or
 // declined by name (CPUBlockSteps), as the tier counts a card's.
@@ -198,7 +199,7 @@ func kvAddrs(pg *kvPages) (keys, values unsafe.Pointer) {
 	return nil, nil
 }
 
-func (s *kvPages) arena() *cpudev.Table {
+func (s *kvPages) arena() *history.Table {
 	if s == nil || s.mem == nil {
 		return nil
 	}

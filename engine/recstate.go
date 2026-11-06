@@ -1,7 +1,7 @@
 package engine
 
 // A recurrent block's state is its device's: the CPU device keeps a
-// session's in the session's view (cpudev.View) as a card keeps it on the
+// session's in the session's view (history.View) as a card keeps it on the
 // card, and the instance reads or writes it only through the device the
 // block runs on (nn.RecMigrator), into a buffer of its own (recStaged).
 

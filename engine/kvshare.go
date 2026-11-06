@@ -2,10 +2,10 @@ package engine
 
 import (
 	"fmt"
+	"github.com/jitllm/jitllm/nn/history"
 	"io"
 	"sync"
 
-	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"github.com/jitllm/jitllm/nn"
 )
 
@@ -67,7 +67,7 @@ type sharedPage struct {
 	refs int
 	// arena and slot are the arena slot b is, held for the entry, nil where
 	// b is memory of its own.
-	arena *cpudev.Arena
+	arena *history.Arena
 	slot  int
 	// gone means Drop or Prune took it out of the index: no session can
 	// acquire it again, and it is forgotten once the last holder lets go.
@@ -186,7 +186,7 @@ func (m *SharedStore) Refs(cacheId string, layer, index int) int {
 // already holds that page, the session gets the held copy (and keeps
 // ownership of b, which it gives back to its pool); otherwise b becomes the
 // held copy. Either way the session holds one reference to what is returned.
-func (m *SharedStore) publish(k kvStoreKey, b []float32, a *cpudev.Arena) []float32 {
+func (m *SharedStore) publish(k kvStoreKey, b []float32, a *history.Arena) []float32 {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if e := m.pages[k]; e != nil {
@@ -437,7 +437,7 @@ func (s *kvPages) cow(n int) {
 		return // the violation: write into the shared page in place
 	}
 	// A slot of the layer's arena where it has one, where a composed CPU
-	// block reads it, else a spare first as a fresh page is (cpudev.Pages):
+	// block reads it, else a spare first as a fresh page is (history.Pages):
 	// the copy overwrites it whole.
 	k, v := s.mem.Take()
 	if k == nil {
@@ -483,10 +483,10 @@ func (kc *kvCache) publishSealed(li, n int, key string) {
 	}
 	// A page the store holds already: the session reads the held copy, and
 	// its own memory goes back -- its arena slot, or to its spares, where the
-	// next page it needs is taken from (cpudev.Pages). A page of the arena
+	// next page it needs is taken from (history.Pages). A page of the arena
 	// becomes the store's copy with the slot held for it, so every session
-	// that restores it reads that slot (cpudev.Arena).
-	var a *cpudev.Arena
+	// that restores it reads that slot (history.Arena).
+	var a *history.Arena
 	if s.mem.ArenaPage(n) {
 		a = s.mem.Table().Arena()
 	}

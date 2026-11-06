@@ -1,4 +1,4 @@
-package cpudev
+package history
 
 import (
 	"sync"
@@ -226,3 +226,7 @@ func (as *Arenas) Close() {
 		delete(as.m, k)
 	}
 }
+
+// HoldWith sets what a store entry's hold on the arenas' model does on the
+// device that owns them, and what letting it go does.
+func (a *Arenas) HoldWith(hold, let func()) { a.hold, a.let = hold, let }

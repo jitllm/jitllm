@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/jitllm/jitllm/nn/history"
 	"hash"
 	"io"
 	"math"
@@ -142,9 +143,9 @@ type kvPages struct {
 	p  int // positions per page; 0 means this layer keeps none
 	pp int // float32 elements per page (nseq * p * kvDim, scaled by elem width)
 	// mem is the pages' memory: each page's key and value, in its session's
-	// view of the CPU device (cpudev.Pages). The fields below decide what a
+	// view of the CPU device (history.Pages). The fields below decide what a
 	// page holds and when it goes; mem is where it is.
-	mem *cpudev.Pages
+	mem *history.Pages
 	// latent makes the value the same memory as the key, which is what MLA
 	// is: a cached row is the latent followed by the shared rotary key, and
 	// the value is the latent prefix. It is an alias, not a copy: a value's
@@ -266,7 +267,7 @@ func (s *kvPages) reserve(maxSeq int) {
 	s.out = slices.Grow(s.out, n)
 }
 
-// setPage makes page n's key and value k and v (cpudev.Pages.Set).
+// setPage makes page n's key and value k and v (history.Pages.Set).
 func (s *kvPages) setPage(n int, k, v []float32) { s.mem.Set(n, k, v) }
 
 // drop lets page n go for good: nothing is to be faulted back into it.
@@ -416,8 +417,8 @@ type kvCache struct {
 	// history, and err the first page fault of the current step that could
 	// not be recovered: set inside a pool closure, which has no error path,
 	// and drained by Instance.kvCheck at the entry point.
-	view    *cpudev.View
-	pool    *cpudev.PagePool
+	view    *history.View
+	pool    *history.PagePool
 	src     []int
 	noTable []uint32
 	err     atomic.Pointer[error]
@@ -476,7 +477,7 @@ type kvCache struct {
 }
 
 // View is the session's view of the CPU device's history (cpudev.History).
-func (s *kvCache) View() *cpudev.View {
+func (s *kvCache) View() *history.View {
 	if s == nil {
 		return nil
 	}
@@ -524,19 +525,19 @@ func (kv *kvCache) MigrateKV(li int, k, v []float32, pos int, in bool, conv nn.K
 }
 
 func newKVCache(c *model.Config, id string, nseq int, l kvLayout, store KVStore, pin int) *kvCache {
-	return newKVCacheRange(c, id, nseq, l, store, pin, 0, c.NLayer, cpudev.NewView(c.NLayer), nil)
+	return newKVCacheRange(c, id, nseq, l, store, pin, 0, c.NLayer, history.NewView(c.NLayer), nil)
 }
 
 // newKVCacheRange is newKVCache for an instance that runs blocks [lo, hi) of its
 // model (Instance.lo): the pages are indexed by block, and the blocks below lo
-// have none. Each block's pages are its memory in view (cpudev.Pages), grown
+// have none. Each block's pages are its memory in view (history.Pages), grown
 // from pool where its arena has no slot.
-func newKVCacheRange(c *model.Config, id string, nseq int, l kvLayout, store KVStore, pin, lo, hi int, view *cpudev.View, pool *cpudev.PagePool) *kvCache {
+func newKVCacheRange(c *model.Config, id string, nseq int, l kvLayout, store KVStore, pin, lo, hi int, view *history.View, pool *history.PagePool) *kvCache {
 	if store == nil {
 		store = NoStore{}
 	}
 	if view == nil {
-		view = cpudev.NewView(hi)
+		view = history.NewView(hi)
 	}
 	kc := &kvCache{id: id, store: store, layers: make([]kvPages, hi), lo: lo, kvl: l, cfg: c,
 		bh: map[int][]string{}, geom: geomDigest(c, nseq, l), view: view, pool: pool, src: make([]int, hi)}
@@ -1828,7 +1829,7 @@ func (kc *kvCache) fault(li, n int) error {
 	// The length is checked here, where the geometry is: a short page would
 	// leave zeros read back as keys the model never wrote. A layer with an
 	// arena reads the page back into its slot, where a composed CPU block
-	// addresses it (cpudev.Arena); a failed read hands the slot back zeroed.
+	// addresses it (history.Arena); a failed read hands the slot back zeroed.
 	var k, v []float32
 	if !s.latent {
 		k, v = s.mem.Take()
