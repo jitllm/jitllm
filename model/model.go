@@ -418,7 +418,10 @@ func (c *Config) selKeyW() int {
 
 // KeyHeadAt reports that layer li's cached row carries its selection's key
 // as one more kv head after the attention's own.
-func (c *Config) KeyHeadAt(li int) bool { return c.KVLoraRank == 0 && c.SelectAt(li) }
+func (c *Config) KeyHeadAt(li int) bool {
+	_, rate := c.CompAt(li)
+	return c.KVLoraRank == 0 && c.SelectAt(li) && rate == 0
+}
 
 // KVRowAt is one cached position's width in layer li's history: KVDimAt,
 // plus where it selects its keys the indexer's key as one more kv head.
@@ -428,9 +431,18 @@ func (c *Config) KVRowAt(li int) int {
 	if c.KeyHeadAt(li) {
 		return (c.NKVHead + 1) * c.HeadDim
 	}
-	if _, rate := c.CompAt(li); rate > 0 {
-		// The row carries the compressor's values and gates past the key.
-		return c.KVDimAt(li) + 2*c.HeadDimAt(li)
+	if kind, rate := c.CompAt(li); rate > 0 {
+		// The row carries the compressor's values and gates past the key,
+		// two heads of each over overlapping windows, and an indexer's
+		// beside them.
+		w := c.HeadDimAt(li)
+		if kind == jlm.CompCSA {
+			w *= 2
+		}
+		if c.SelectAt(li) {
+			w += 2 * int(c.sel.HeadDim)
+		}
+		return c.KVDimAt(li) + 2*w
 	}
 	return c.KVDimAt(li)
 }
@@ -715,9 +727,9 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 			"convert the model again", c.Arch, c.HCMult)
 	}
 	for li, k := range c.CompKinds {
-		if k == jlm.CompCSA {
-			return nil, fmt.Errorf("model: %v's block %d attends a compressed history through an indexer, which has no "+
-				"composed form stated from the container", c.Arch, li)
+		if k == jlm.CompCSA && !c.Selection.At(li) {
+			return nil, fmt.Errorf("model: %v's block %d compresses overlapping windows with no indexer stated: "+
+				"convert the model again", c.Arch, li)
 		}
 	}
 	out := &Config{

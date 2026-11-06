@@ -55,8 +55,9 @@ func decomposeSelect(o graph.Op, c *Context) ([]Prim, error) {
 		keys.Of = c.blockPart(n)
 	}
 	U, F := ir.U32, ir.F32
-	R, H, D, G, C, B := c.Step.Rows, a.NHead, a.HeadDim, a.NKVHead, c.Step.Keys, a.Span
-	NB := (c.Step.Keys + a.Span - 1) / a.Span
+	period, C := c.selPositions()
+	R, H, D, G, B := c.Step.Rows, a.NHead, a.HeadDim, a.NKVHead, a.Span
+	NB := (C + a.Span - 1) / a.Span
 	out := c.value(o.Out[0])
 	tmp := func(name string, t ir.Type) Operand {
 		return Operand{Kind: OperandScratch, Name: out.Name + "." + name, Elem: t, Temp: true}
@@ -64,7 +65,7 @@ func decomposeSelect(o graph.Op, c *Context) ([]Prim, error) {
 	dots, scores, best, rank, keep := tmp("dots", F), tmp("scores", F), tmp("best", F), tmp("rank", U), tmp("keep", U)
 	mask := maskOf(c, o.Out[0])
 	minus := math.Float32frombits(0xff7fffff)
-	hs := history{a: a, pageSize: c.Step.Page}
+	hs := history{a: a, pageSize: c.Step.Page, period: period}
 	tables := func(ops ...Operand) []Operand { return append([]Operand{ops[0], desc, pages}, ops[1:]...) }
 	ext := func() map[int]int { return map[int]int{1: R * rowWords, 2: c.pages()} }
 	rng := Facts{Range: hs.span(2), Extents: ext()}
@@ -74,7 +75,7 @@ func decomposeSelect(o graph.Op, c *Context) ([]Prim, error) {
 	// block, the first of the blocks forced in and whether block b is one,
 	// and whether block b holds an attended position.
 	boundsOf := func(x *exprs) selectBounds {
-		first, end := hs.row(x, rowStart), hs.row(x, rowEnd)
+		first, end := hs.start(x), hs.end(x)
 		own := x.op(OpDiv, U, x.op(OpSub, U, x.op(OpMax, U, end, x.u(1)), x.u(1)), x.u(uint32(B)))
 		forced := x.op(OpMin, U, x.u(uint32(a.Local)), x.op(OpAdd, U, own, x.u(1)))
 		return selectBounds{first, end, own, x.op(OpSub, U, x.op(OpAdd, U, own, x.u(1)), forced)}
@@ -142,9 +143,9 @@ func decomposeSelect(o graph.Op, c *Context) ([]Prim, error) {
 	kept(&kx, kbd, kx.coord(2), kx.at(0, []int{R, G, NB}, kx.coord(0), kx.coord(1), kx.coord(2)))
 
 	var mx exprs
-	mpos := mx.op(OpAdd, U, hs.row(&mx, rowStart), mx.coord(2))
+	mpos := mx.op(OpAdd, U, hs.start(&mx), mx.coord(2))
 	mb := mx.op(OpMin, U, mx.op(OpDiv, U, mpos, mx.u(uint32(B))), mx.u(uint32(NB-1)))
-	live := mx.sel(U, mx.op(OpLess, ir.Pred, mpos, hs.row(&mx, rowEnd)), mx.u(1), mx.u(0))
+	live := mx.sel(U, mx.op(OpLess, ir.Pred, mpos, hs.end(&mx)), mx.u(1), mx.u(0))
 	mx.un(OpCvtF32, F, mx.op(OpAnd, U, live, mx.at(0, []int{R, G, NB}, mx.coord(0), mx.coord(1), mb)))
 
 	var cx exprs
@@ -166,9 +167,10 @@ func selectBest(o graph.Op, c *Context, fn Op, pool Pool, keys Operand, tables f
 	dots, scores, best Operand, minus float32, boundsOf func(*exprs) selectBounds) []Prim {
 	a := o.Attr
 	U, F := ir.U32, ir.F32
-	R, H, D, G, C, B := c.Step.Rows, a.NHead, a.HeadDim, a.NKVHead, c.Step.Keys, a.Span
-	J, NB := H/G, (c.Step.Keys+a.Span-1)/a.Span
-	hs := history{a: a, pageSize: c.Step.Page}
+	period, C := c.selPositions()
+	R, H, D, G, B := c.Step.Rows, a.NHead, a.HeadDim, a.NKVHead, a.Span
+	J, NB := H/G, (C+a.Span-1)/a.Span
+	hs := history{a: a, pageSize: c.Step.Page, period: period}
 	var dx exprs
 	h, d := dx.coord(1), dx.coord(3)
 	pos, first := hs.position(&dx)
@@ -207,4 +209,15 @@ func selectBest(o graph.Op, c *Context, fn Op, pool Pool, keys Operand, tables f
 		{Kind: PrimReduce, Shape: []int{R, G, NB, B}, In: tables(scores), Out: best, Combine: OpMax,
 			Init: int64(math.Float32bits(minus)), Expr: bx.e, Facts: flat},
 	}
+}
+
+// selPositions is the period of the history a selection reads (1 for one
+// of rows) and the positions its rows can see: the step's keys, or over
+// entries the entries they close.
+func (c *Context) selPositions() (period, positions int) {
+	period, positions = max(1, c.History.Period), c.Step.Keys
+	if period > 1 {
+		positions = max(1, positions/period)
+	}
+	return period, positions
 }

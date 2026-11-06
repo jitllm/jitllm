@@ -19,7 +19,9 @@ const ds4NMSE = 1e-9
 // ds4Fixtures are the DeepSeek V4 fixtures the engine composes, and what
 // each container must carry: the hyper-connected streams stated, and the
 // first two blocks routed by their token tables.
-func ds4Fixtures() []string { return []string{"synth-deepseek4-sliding", "synth-deepseek4-hca"} }
+func ds4Fixtures() []string {
+	return []string{"synth-deepseek4-sliding", "synth-deepseek4-hca", "synth-deepseek4"}
+}
 
 // TestDeepseek4MatchesTransformers holds the composed DeepSeek V4 to
 // transformers' own class (scripts/ds4gold.py) on decode, prefill at every
