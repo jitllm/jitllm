@@ -14,15 +14,14 @@ import (
 // model.Layer holds it and the model's own tensors as modelTensors does --
 // the head's, and the input rows' where they embed.
 type weightSource struct {
-	b           cpudev.Bindings
 	head, input modelTensors
 }
 
-// newWeightSource binds forms to weights read into fr, the head's projected
-// through outW and normed by outNorm.
-func newWeightSource(m *model.Model, dense *model.Dense, fr *jlm.Frames, outW *model.Tensor, outNorm []float32) weightSource {
+// newWeightSource is the model's tensors as forms read them, the head's
+// projected through outW and normed by outNorm.
+func newWeightSource(m *model.Model, dense *model.Dense, outW *model.Tensor, outNorm []float32) weightSource {
 	t := modelTensors{m: m, dense: dense, outW: outW, outNorm: outNorm}
-	w := weightSource{b: cpudev.NewBindings(fr), head: t, input: t}
+	w := weightSource{head: t, input: t}
 	w.input.input = true
 	return w
 }
@@ -39,15 +38,16 @@ func (w *weightSource) tensors(li int, l *model.Layer) cpudev.Tensors {
 	return &w.head
 }
 
-// bind is form f's weights for block li (l its copy, nil for the model's
-// tensors) where its call reads them (cpudev.Bindings.Bind).
-func (w *weightSource) bind(f *cpudev.Form, li int, l *model.Layer) ([]unsafe.Pointer, nn.Decline) {
-	return w.b.Bind(f, li, w.tensors(li, l))
+// bindWeights is form f's weights for block li (l its copy, nil for the
+// model's tensors) where its call reads them, through the CPU device's
+// bindings (cpudev.Bindings.Bind).
+func (s *Instance) bindWeights(f *cpudev.Form, li int, l *model.Layer) ([]unsafe.Pointer, nn.Decline) {
+	return s.exec.x.Bindings().Bind(f, li, s.ws.tensors(li, l))
 }
 
-// check says every weight f binds is one block l holds whole.
-func (w *weightSource) check(f *cpudev.Form, li int, l *model.Layer) nn.Decline {
-	return w.b.Check(f, li, w.tensors(li, l))
+// checkWeights says every weight f binds is one block l holds whole.
+func (s *Instance) checkWeights(f *cpudev.Form, li int, l *model.Layer) nn.Decline {
+	return s.exec.x.Bindings().Check(f, li, s.ws.tensors(li, l))
 }
 
 // matrix is block li's (l's) matrix of role r, nil for one it does not

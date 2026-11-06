@@ -23,7 +23,6 @@ type blockLease struct {
 	hot    *Hotness
 	layers []model.Layer
 	lo     int
-	ws     *weightSource
 }
 
 // Held is cpudev.Source's: block li's page is in.
@@ -56,7 +55,3 @@ func (l *blockLease) Experts(li int, sel []int32, count bool) error {
 }
 
 func (l *blockLease) ReleaseExperts() { l.hold.Release() }
-
-func (l *blockLease) Rows(own []uint32) error { return l.ws.b.Rows(own) }
-
-func (l *blockLease) DropRows() { l.ws.b.DropRows() }

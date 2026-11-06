@@ -79,7 +79,6 @@ func addr[T any](x []T) unsafe.Pointer { return unsafe.Pointer(unsafe.SliceData(
 // the heap.
 func (s *Instance) unmapOwn() {
 	s.exec.x.Close()
-	s.ws.b.Close()
 }
 
 // placeLanes composes a new instance's blocks on the CPU: each block of the
@@ -89,10 +88,10 @@ func (s *Instance) placeLanes() {
 	n := max(s.c.NLayer, s.hi)
 	planes := [2][]float32{s.tablePlanes(0), s.tablePlanes(1)}
 	s.lease = blockLease{m: s.m, fr: s.fr, mu: &s.bind, hold: &s.expHold, res: s.res, hot: s.hot, layers: s.layers,
-		lo: s.lo, ws: &s.ws}
-	s.exec.x.Place(n, &s.lease, &s.ws.b, planes, s.c.NExpert, s.prof)
+		lo: s.lo}
+	s.exec.x.Place(n, &s.lease, planes, s.c.NExpert, s.prof)
 	if s.exec.lanes == nil {
-		s.exec.lanes = cpudev.NewLanes(s.exec.x, &s.ws.b, &s.lease, s.c.NEmbd, s.nseq, s.c.Streams(), s.dg.ConvStateLen(),
+		s.exec.lanes = cpudev.NewLanes(s.exec.x, s.exec.x.Bindings(), &s.lease, s.c.NEmbd, s.nseq, s.c.Streams(), s.dg.ConvStateLen(),
 			func(li int) { s.trace(li, "ffn_resid", s.x) })
 		s.bindLanes(s.Session)
 	}
@@ -234,7 +233,7 @@ func (s *Instance) blockWhy(li int) nn.Decline {
 	case len(g.Out) != c.Streams() || len(g.In) > len(g.Out)+1 || len(g.In) > len(g.Out) && c.SideWidth() == 0:
 		return nn.DeclineFeeds
 	case c.MoEAt(li) && (s.m.Container == nil || l.LegacyExperts ||
-		!s.ws.b.BankViews(li, len(s.m.Layers), [3]*jlm.Entry{l.Gate.E, l.Up.E, l.Down.E}) || l.Up.E == nil || l.Down.E == nil):
+		!s.exec.x.Bindings().BankViews(li, len(s.m.Layers), [3]*jlm.Entry{l.Gate.E, l.Up.E, l.Down.E}) || l.Up.E == nil || l.Down.E == nil):
 		return nn.DeclineExperts
 	case c.LayerKind(li).Recurrent() && !s.keepsRec(li):
 		return nn.DeclineRecurrent

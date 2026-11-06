@@ -621,7 +621,7 @@ func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOp
 			}
 		}
 	}
-	s.ws = newWeightSource(m, &s.dense, fr, s.outW, s.outNorm)
+	s.ws = newWeightSource(m, &s.dense, s.outW, s.outNorm)
 	s.kvl = kvLayout{maxSeq: maxSeq, nKV: c.NKVHead,
 		headDim: c.HeadDim}
 	// MLA caches one row per position for the whole layer: the compressed
@@ -654,6 +654,7 @@ func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOp
 
 	workers := cpu.NewPool(s.poolOptions()...)
 	s.exec.x = cpudev.NewExec(workers, cpudev.NewComposer(g.cpu.Forms(m.Id), g.cpu.Target.ISA(), workers.Workers(), opt.cpuFloat))
+	s.exec.x.UseFrames(fr)
 	s.exec.x.SetFusion(!opt.noFuse)
 	s.exec.x.FuseCounts(&g.fuse.tries, &g.fuse.runs)
 	s.exec.x.Sit(g.cpu)
