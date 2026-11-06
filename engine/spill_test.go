@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/model"
+	"github.com/jitllm/jitllm/nn"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testdevices"
@@ -39,6 +40,9 @@ func TestAFullCardSpillsABlockOntoTheNextOne(t *testing.T) {
 		prompt = append(prompt, m.Vocab.Encode("The capital of France is Paris. Water boils at 100 degrees. ", false)...)
 	}
 	const gen = 8
+	// formed counts what the CPU device composed while the tokens ran: a
+	// spill moves a block between cards and composes nothing on the way.
+	formed := 0
 	run := func(g *gpu.GPU) (*Instance, []int32) {
 		st := testInstance(t, m, len(prompt)+gen+1)
 		if g != nil {
@@ -48,6 +52,7 @@ func TestAFullCardSpillsABlockOntoTheNextOne(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		before := append([]int(nil), st.Account(nn.CPU).Forms...)
 		out := []int32{Greedy(lg)}
 		for len(out) < gen {
 			next, err := st.ForwardGreedy(out[len(out)-1])
@@ -55,6 +60,13 @@ func TestAFullCardSpillsABlockOntoTheNextOne(t *testing.T) {
 				t.Fatal(err)
 			}
 			out = append(out, next)
+		}
+		formed = 0
+		for li, n := range st.Account(nn.CPU).Forms {
+			if li < len(before) {
+				n -= before[li]
+			}
+			formed += n
 		}
 		return st, out
 	}
@@ -120,6 +132,9 @@ func TestAFullCardSpillsABlockOntoTheNextOne(t *testing.T) {
 			defer st.Close()
 			t.Logf("placed %v, %d spill(s), %d relocation(s), %d demotion(s), %d/%d blocks", g.Placed(),
 				st.Spills(), st.Relocations(), st.DeviceDemotions(), st.GPULayers(), m.Cfg.NLayer)
+			if c.spill && formed != 0 {
+				t.Fatalf("the spill composed %d block(s) on the CPU while the tokens ran", formed)
+			}
 			if st.DeviceDemotions() != 0 || (c.spill && st.Spills() == 0) || (c.reloc && st.Relocations() == 0) {
 				t.Fatalf("want spill %v, relocation %v and no demotion: %d spill(s), %d relocation(s), %d demotion(s) (%s)",
 					c.spill, c.reloc, st.Spills(), st.Relocations(), st.DeviceDemotions(), g.Err())
