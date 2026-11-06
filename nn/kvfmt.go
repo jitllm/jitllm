@@ -61,37 +61,3 @@ func KVRowBytes(f KVFmt, hd int) int {
 	}
 	return 4 * hd
 }
-
-// kvAddr is how a kernel addresses one head row run of format f at head width
-// hd: the byte offset of element e, the byte offset of the scale covering it
-// (q8 only) and the byte stride between positions.
-type kvAddr struct {
-	f  KVFmt
-	hd int
-}
-
-// off is element e's byte offset from the row's start.
-func (k kvAddr) off(e int) int32 {
-	switch k.f {
-	case KVF16:
-		return int32(2 * e)
-	case KVQ8:
-		return int32(e)
-	}
-	return int32(4 * e)
-}
-
-// scale is the byte offset of the scale covering element e (q8 only).
-func (k kvAddr) scale(e int) int32 {
-	nb := (k.hd + KVQ8Block - 1) / KVQ8Block
-	return int32(nb*KVQ8Block + (e/KVQ8Block)*8)
-}
-
-// stride is the byte distance between consecutive positions, kvStride being
-// in elements.
-func (k kvAddr) stride(kvStride int) int32 {
-	if k.f == KVQ8 {
-		return int32(kvStride / k.hd * KVRowBytes(KVQ8, k.hd))
-	}
-	return k.off(kvStride)
-}

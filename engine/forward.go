@@ -2128,17 +2128,6 @@ func (s *Instance) pageIn(li int) (*model.Layer, error) {
 	return l, s.m.PageIn(s.fr, li, l)
 }
 
-// pageInSelected is pageIn of block li for the routed sheets sel alone
-// (model.Model.PageInSelected).
-func (s *Instance) pageInSelected(li int, sel []uint32) error {
-	if li < s.lo || li >= s.hi {
-		return fmt.Errorf("engine: block %d is not one of this instance's [%d, %d)", li, s.lo, s.hi)
-	}
-	s.bind.Lock()
-	defer s.bind.Unlock()
-	return s.m.PageInSelected(s.fr, li, sel, s.layer(li))
-}
-
 // devAt reports whether block li runs on a device.
 func (s *Instance) devAt(li int) bool { return li < len(s.onDev) && s.onDev[li] }
 

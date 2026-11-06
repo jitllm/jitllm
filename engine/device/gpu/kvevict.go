@@ -2,7 +2,6 @@ package gpu
 
 import (
 	"fmt"
-	"unsafe"
 )
 
 // Eviction: a pool that cannot grow sends pages to host memory rather than refusing
@@ -354,14 +353,6 @@ func residentIDs(dst, ids []uint32) []uint32 {
 		}
 	}
 	return dst
-}
-
-// f32of views b as float32 words.
-func f32of(b []byte) []float32 {
-	if len(b) == 0 {
-		return nil
-	}
-	return unsafe.Slice((*float32)(unsafe.Pointer(&b[0])), len(b)/4)
 }
 
 // SetKVStreamPages sets, at run time, how many evicted pages one pass over

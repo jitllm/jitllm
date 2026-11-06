@@ -1,9 +1,5 @@
 package engine
 
-import (
-	"github.com/jitllm/jitllm/nn"
-)
-
 // Bidirectional runs inside a causal prompt: Gemma 3's reference masks an
 // image's tokens so they see each other in both directions, while every other
 // token stays causal (its token_type_ids blockwise overlay, OR'd with the
@@ -36,18 +32,4 @@ func (s *Instance) bidirIn(p0, n int) bool {
 		}
 	}
 	return false
-}
-
-// bidirTell hands the runs to the device before a chunk's blocks run there,
-// and reports whether it can honour them; a device that cannot must not run a
-// chunk holding one, since its causal answer would be fluent and wrong.
-func (s *Instance) bidirTell(p0, n int) bool {
-	kd, ok := s.ld.(nn.KeyRunDevice)
-	if !s.bidirIn(p0, n) {
-		if ok {
-			kd.SetKeyRuns(nil, nil)
-		}
-		return true
-	}
-	return ok && kd.SetKeyRuns(s.bidir, nil)
 }

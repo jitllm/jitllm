@@ -24,21 +24,6 @@ import (
 // over the instance's pool. Every block step on the CPU is counted served or
 // declined by name (CPUBlockSteps), as the tier counts a card's.
 
-// blockRefusal counts the composer's decline of block li's step on the CPU and
-// is the step's error: the composer is the only path, so no other kernels run
-// the block.
-func (s *Instance) blockRefusal(li int, why nn.Decline) error {
-	s.exec.x.Steps().Decline(nn.PartBlock, why)
-	if why == nn.DeclineNotFormed && s.exec.x.Composer().Err() != nil {
-		return fmt.Errorf("model: the composer does not serve block %d on the CPU: %s (the first: %w)", li, nn.DeclineName(int(why)), s.exec.x.Composer().Err())
-	}
-	if why == nn.DeclineNoGraph {
-		u, err := s.m.UncoveredAt(li)
-		return fmt.Errorf("model: the composer does not serve block %d on the CPU: %s (the front end: %v, %v)", li, nn.DeclineName(int(why)), u, err)
-	}
-	return fmt.Errorf("model: the composer does not serve block %d on the CPU: %s", li, nn.DeclineName(int(why)))
-}
-
 // cpuHeadRefused is the composer's decline of the head on the CPU as the
 // step's error, as blockRefusal is a block's.
 func cpuHeadRefused(why nn.Decline) error {
@@ -64,15 +49,6 @@ const cpuRowsCap = cpudev.RowsCap
 // (composer.CPUForm).
 func CPUForm() string {
 	return composer.CPUForm(cpudev.Target(cpu.Probe().ISA(), 1), runtime.GOARCH == "arm64")
-}
-
-// swaRows is the step's second rotary table from row a, nil where the model
-// has no second rotary (rowTables writes it into s.bcsSWA).
-func (s *Instance) swaRows(a int) []float32 {
-	if s.bcsSWA == nil {
-		return nil
-	}
-	return s.bcsSWA[a*s.c.LocalNRot():]
 }
 
 // rowsOf is rows [a, b) of a step's rows' tokens, nil for a step of none.

@@ -114,20 +114,6 @@ func symmetricWindow(pos, total, window int) (w0, an int) {
 	return w0, end - w0
 }
 
-// callTell readies the device for a chunk's call: a bidirectional embedding
-// run's windows (embedTell), or the key runs of the prompt's bidirectional
-// spans (bidirTell).
-func (s *Instance) callTell(p0, n int) bool {
-	if s.emb != nil && s.emb.bidir {
-		return s.embedTell(n)
-	}
-	return s.bidirTell(p0, n)
-}
-
-// embedTell hands the device a bidirectional embedding run's n rows, the
-// whole sequence in one call (embedTellOn).
-func (s *Instance) embedTell(n int) bool { return s.embedTellOn(&s.routes[routeView], n) }
-
 // embedWins is each of a bidirectional embedding run's n rows' windows: its
 // symmetric window on the sliding layers, every row's keys the call's on the
 // others, the run's own where it states them.
