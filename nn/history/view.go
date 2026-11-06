@@ -1,4 +1,4 @@
-package cpudev
+package history
 
 // View is a session's hold on the CPU device's history, as a card's session
 // view (gpu.GPU.Attach) is on the card's: for each block keeping one, its

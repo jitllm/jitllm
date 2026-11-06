@@ -61,8 +61,8 @@ func checkCPUTables(t *testing.T, s *Instance, when string) {
 }
 
 // TestCPUPageTablesFollowThePages: the table a composed CPU block reads its
-// history through is its session's view's (cpudev.View), kept as each page
-// changes (cpudev.Table.Set) rather than laid out again for every call. After
+// history through is its session's view's (history.View), kept as each page
+// changes (history.Table.Set) rather than laid out again for every call. After
 // every way a page changes it names the slot each page is in: pages grown by
 // a prompt and a decode, a prefix restored from the shared store, a shared
 // page made private before a write, pages evicted under a budget and faulted

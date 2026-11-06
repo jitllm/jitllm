@@ -1,4 +1,4 @@
-package cpudev
+package history
 
 import (
 	"slices"

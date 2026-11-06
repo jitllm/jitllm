@@ -130,8 +130,7 @@ func (c *CPU) of(model uint64) *modelOn {
 	o := c.models[model]
 	if o == nil {
 		o = &modelOn{forms: Forms{Target: c.Target}}
-		o.arenas.hold = func() { c.HoldModel(model) }
-		o.arenas.let = func() { c.ReleaseModel(model) }
+		o.arenas.HoldWith(func() { c.HoldModel(model) }, func() { c.ReleaseModel(model) })
 		c.models[model] = o
 	}
 	return o
