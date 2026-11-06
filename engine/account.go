@@ -10,7 +10,7 @@ import "github.com/jitllm/jitllm/nn"
 // for it (nn.Account): nothing where no device of the instance is named dev.
 func (s *Instance) Account(dev string) nn.Account {
 	if dev == nn.CPU {
-		return nn.Account{Steps: s.cpu.steps, Forms: s.cpu.composed, Asks: s.eng.cpu.Forms(s.m.Id).Asks(), FormErr: s.cpu.formErr}
+		return nn.Account{Steps: s.cpu.steps, Forms: s.cpu.composed, Asks: s.eng.cpu.Forms(s.m.Id).Asks(), FormErr: s.cpu.comp.Err()}
 	}
 	for _, d := range [2]nn.LayerDevice{s.ld, s.ldCand} {
 		if l, ok := d.(nn.Ledger); ok {

@@ -3,6 +3,7 @@
 package engine
 
 import (
+	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"os"
 	"path/filepath"
 	"sort"
@@ -19,7 +20,7 @@ import (
 // VEX form, so prefill uses the fused per-token kernel; a shape the pre-VNNI
 // emitters cannot serve is an error, so running every model is the assertion.
 func TestEveryModelRunsPreVNNI(t *testing.T) {
-	if composedCPUDevice(cpu.Probe().ISA(), 1).ISA&uint64(cpu.ISAVNNI) == 0 {
+	if cpudev.Target(cpu.Probe().ISA(), 1).ISA&uint64(cpu.ISAVNNI) == 0 {
 		t.Skip("this host is already pre-VNNI; the forced arm would not differ")
 	}
 	paths := modelFiles()
@@ -77,7 +78,7 @@ func TestEveryModelRunsPreVNNI(t *testing.T) {
 // pool's WIDTH (14 workers against 6) rather than the kernel family; this arm
 // is what showed the family exact.
 func TestExactGatesRunPreVNNI(t *testing.T) {
-	if composedCPUDevice(cpu.Probe().ISA(), 1).ISA&uint64(cpu.ISAVNNI) == 0 {
+	if cpudev.Target(cpu.Probe().ISA(), 1).ISA&uint64(cpu.ISAVNNI) == 0 {
 		t.Skip("this host is already pre-VNNI; the plain gates run this family")
 	}
 	dev := WithDevices("cpu:novnni")

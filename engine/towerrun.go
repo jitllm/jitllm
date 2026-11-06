@@ -78,9 +78,9 @@ func (in *Instance) newTowerRun() (*towerRun, error) {
 	if err != nil {
 		return nil, err
 	}
-	if ts.cpu.formErr != nil {
+	if ts.cpu.comp.Err() != nil {
 		ts.Close()
-		return nil, ts.cpu.formErr
+		return nil, ts.cpu.comp.Err()
 	}
 	words := 0
 	for _, cl := range tg.Classes {
@@ -115,10 +115,10 @@ func (in *Instance) newTowerRun() (*towerRun, error) {
 	}
 	tr.tapRows, tr.tapBuf = make([][]float32, len(tg.Taps)), make([][]float32, len(tg.Taps))
 	for li := ts.lo; li < ts.hi; li++ {
-		if cb := ts.cpu.blocks[li]; cb == nil || cb.rows == nil {
+		if cb := ts.cpu.blocks[li]; cb == nil || cb.Rows == nil {
 			why := nn.DeclineNoGraph
 			if cb != nil {
-				why = max(cb.why, cb.rowsWhy)
+				why = max(cb.Why, cb.RowsWhy)
 			}
 			ts.Close()
 			return nil, fmt.Errorf("model: the tower's block %d does not run on the CPU: %v", li-in.m.TowerBase, why)

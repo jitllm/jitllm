@@ -153,7 +153,7 @@ func BenchmarkNoDotProdDecode(b *testing.B) {
 					b.Fatal(err)
 				}
 			}
-			if widened := st.composedCPU().ISA&uint64(cpu.ISADotProd) == 0; widened != (arm == "widened") {
+			if widened := st.cpu.comp.Device().ISA&uint64(cpu.ISADotProd) == 0; widened != (arm == "widened") {
 				b.Fatalf("arm %s: widened=%v -- the arm formed the other int8 dots", arm, widened)
 			}
 			b.ResetTimer()

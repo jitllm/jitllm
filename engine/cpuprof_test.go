@@ -145,10 +145,10 @@ func TestComposedCPUProfile(t *testing.T) {
 			}
 		}
 		if composed {
-			if cb := st.cpu.blocks[st.lo]; cb != nil && cb.f != nil {
+			if cb := st.cpu.blocks[st.lo]; cb != nil && cb.F != nil {
 				b.WriteString("  block 0's kernels in order:\n")
-				for i := range cb.f.Codes {
-					c := &cb.f.Codes[i]
+				for i := range cb.F.Codes {
+					c := &cb.F.Codes[i]
 					p := c.Profile()
 					fmt.Fprintf(&b, "    %-60.60s calls %v n %d serial %v join %d chain %d%s\n", p.Name, p.Calls, p.N, p.Serial, p.Join, p.Chain, c.Layout())
 				}

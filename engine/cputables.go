@@ -59,11 +59,11 @@ func (s *Instance) cpuComposeTable(hf *cpuHeadForm, g *graph.Graph, rows int) {
 		hf.why = nn.DeclineNoGraph
 	default:
 		req := composer.Request{Graph: g, Step: composer.Step{Rows: rows, Page: 1, Keys: 1, Seqs: max(s.nseq, 1),
-			ActWindow: s.m.ActWindow}, Device: s.composedCPU(), Apart: true}
+			ActWindow: s.m.ActWindow}, Device: s.cpu.comp.Device(), Apart: true}
 		req.Step.Marks = s.marksCap()
-		f, err := s.cpuFormOf(req, g, rows, true, false, false)
+		f, err := s.cpu.comp.Form(req, g, rows, true, false, false)
 		if err != nil {
-			hf.why, hf.err = s.cpuFormDecline(err), err
+			hf.why, hf.err = s.cpu.comp.Decline(err), err
 			return
 		}
 		hf.f = f
