@@ -180,7 +180,7 @@ const (
 	TOpRope OpCode = 20
 	// TOpNGramRows is the row's n-gram table rows, Width wide: its token and
 	// the Span-1 before it, held in the block's recurrent tail, hashed per
-	// head (the container's NGram hash) into a row of table Bind[0].
+	// head (Hash) into a row of table Bind[0].
 	TOpNGramRows OpCode = 21
 	// TOpTailConv is In[0], Width channels, convolved depthwise by Bind[0]
 	// over Span taps Offset positions apart, its history in the block's
@@ -237,6 +237,21 @@ type TowerOp struct {
 	// Chain and Filter are TOpPosResample's (ResampleAligned, TapsLinear),
 	// zero on every other op.
 	Chain, Filter uint8
+	// Hash is TOpNGramRows's, nil on every other op.
+	Hash *NGramHash
+}
+
+// NGramHash is an n-gram op's hash: for n = 2..Span, HeadsPer heads each,
+// head h of a token reads table row
+//
+//	(t0*Mul[0] ^ ... ^ t(n-1)*Mul[n-1]) mod Voc[h] + Off[h]
+//
+// over the token and its n-1 predecessors; a predecessor at or before an EOS
+// token, or before the sequence, reads as EOS, and Image stands for a
+// picture's rows.
+type NGramHash struct {
+	EOS, Image, HeadsPer uint32
+	Mul, Off, Voc        []uint64
 }
 
 // Program is a short graph: NIn inputs, then each op's output, and the value
@@ -450,8 +465,10 @@ func (p *Program) valid(name string) error {
 			return fmt.Errorf("jlm: the tower's %s op %d groups by %d", name, i, op.Span)
 		case (op.Code == TOpLayerNorm || op.Code == TOpRMSNorm) && op.Eps <= 0:
 			return fmt.Errorf("jlm: the tower's %s op %d has an epsilon of %v", name, i, op.Eps)
-		case op.Code == TOpNGramRows && (op.Span < 2 || op.Width <= 0):
-			return fmt.Errorf("jlm: the tower's %s op %d gathers %d-grams %d wide", name, i, op.Span, op.Width)
+		case op.Code == TOpNGramRows && (op.Span < 2 || op.Width <= 0 || !op.Hash.fits(op.Span, op.Width)):
+			return fmt.Errorf("jlm: the tower's %s op %d gathers %d-grams %d wide by a hash of %+v", name, i, op.Span, op.Width, op.Hash)
+		case op.Code != TOpNGramRows && op.Hash != nil:
+			return fmt.Errorf("jlm: the tower's %s op %d (code %d) states a hash", name, i, op.Code)
 		case op.Code == TOpTailConv && (op.Span < 1 || op.Offset < 1 || op.Width <= 0):
 			return fmt.Errorf("jlm: the tower's %s op %d convolves %d taps %d apart over %d channels", name, i,
 				op.Span, op.Offset, op.Width)
@@ -606,6 +623,9 @@ func encodeProgram(w *wbuf, p *Program) {
 		w.f32(op.Eps)
 		w.u8(op.Chain)
 		w.u8(op.Filter)
+		if op.Code == TOpNGramRows {
+			encodeNGramHash(w, op.Hash)
+		}
 		w.bool(op.Expr != nil)
 		if op.Expr != nil {
 			encodeExpr(w, op.Expr)
@@ -674,6 +694,9 @@ func decodeProgram(r *rbuf, p *Program) {
 		op.Span, op.Offset, op.Width = r.i32(), r.i32(), r.i32()
 		op.Eps = r.f32()
 		op.Chain, op.Filter = r.u8(), r.u8()
+		if op.Code == TOpNGramRows {
+			op.Hash = decodeNGramHash(r)
+		}
 		if r.bool() {
 			op.Expr = &Expr{}
 			decodeExpr(r, op.Expr)

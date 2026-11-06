@@ -231,7 +231,8 @@ func ngramPre(c *jlm.Config) jlm.SubStreams {
 	mul := func(e *jlm.ExprBuilder) { e.Fn(jlm.FnMul, jlm.Operand(0), jlm.Operand(1)) }
 	heads := int32((c.NGram - 1) * c.NGramHeadsPer)
 	emb := op(jlm.TowerOp{Code: jlm.TOpNGramRows, Bind: []jlm.Role{jlm.RoleNGramTable}, Span: int32(c.NGram),
-		Width: heads * int32(c.NGramRowDim)})
+		Width: heads * int32(c.NGramRowDim), Hash: &jlm.NGramHash{EOS: c.NGramEOS, Image: c.NGramImage,
+			HeadsPer: c.NGramHeadsPer, Mul: c.NGramMul, Off: c.NGramOff, Voc: c.NGramVoc}})
 	kn := norm(op(jlm.TowerOp{Code: jlm.TOpLinear, In: []uint16{emb}, Bind: []jlm.Role{jlm.RoleNGramKey}}), jlm.RoleNGramNormKey)
 	val := op(jlm.TowerOp{Code: jlm.TOpLinear, In: []uint16{emb}, Bind: []jlm.Role{jlm.RoleNGramValue}})
 	streams := make([]uint16, n)

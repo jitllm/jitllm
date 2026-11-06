@@ -35,11 +35,11 @@ func q4eFixtures() []struct {
 		sel  func(m *model.Model) bool
 	}{
 		{"synth-qwen4exp", func(m *model.Model) bool {
-			c := m.Cfg
+			c, jc := m.Cfg, m.Container.Config()
 			s := c.Selection()
 			return c.Arch == "qwen4exp" && c.HCMult == 4 && c.HCLowRank == 32 && s != nil && s.Rank == jlm.RankPooled &&
-				s.Block == 4 && s.Keep == 2 && s.Heads == 8 && s.HeadDim == 32 && c.NGramBlock == 3 &&
-				c.NGram == 3 && c.NGramHeadsPer == 2 && c.NGramRowDim == 16 && c.NGramConv == 4 &&
+				s.Block == 4 && s.Keep == 2 && s.Heads == 8 && s.HeadDim == 32 && jc.NGramBlock == 3 &&
+				jc.NGram == 3 && jc.NGramHeadsPer == 2 && jc.NGramRowDim == 16 && jc.NGramConv == 4 &&
 				reflect.DeepEqual(c.DeltaGate, jlm.DeltaGateSigmoid()) && c.NRot == 16 && c.RopeNeox && c.AttnOutGate &&
 				c.LayerKind(0).Recurrent() && !c.LayerKind(1).Recurrent() &&
 				c.LayerKind(2).Recurrent() && !c.LayerKind(3).Recurrent() && m.Ngram != nil
@@ -125,10 +125,11 @@ func q4eViolations() []c6Violation {
 			return restated(m, editing(opsOfKind(graph.OpNGramHash), func(o *graph.Op) { o.Attr.Reset = false }))
 		}},
 		{"another 2-gram multiplier", func(m *model.Model) func() {
-			return cfgMut(m, func(c *model.Config) {
-				c.NGramMul = slices.Clone(c.NGramMul)
-				c.NGramMul[1] += 2
-			})
+			// The hash's words are its EOS, then a multiplier a token.
+			return restated(m, editing(opsOfKind(graph.OpNGramHash), func(o *graph.Op) {
+				o.Attr.Words = slices.Clone(o.Attr.Words)
+				o.Attr.Words[2] += 2
+			}))
 		}},
 		{"the QSA budget a block short", func(m *model.Model) func() {
 			return selectionMut(m, func(s *jlm.Selection) { s.Keep-- })
