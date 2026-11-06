@@ -2,6 +2,7 @@ package cpudev
 
 import (
 	"fmt"
+	"slices"
 	"unsafe"
 
 	"github.com/jitllm/jitllm/nn"
@@ -31,6 +32,14 @@ type Lanes struct {
 	stride int
 	side   []float32
 	tok    int32
+	toks   []int32
+	// seqBuf, zeros, order, last and oruns are a rows call's scratch: the
+	// rows' sequences, a session's rows' (every one its session's 0), a
+	// linear block's rows in causal order, each sequence's last position,
+	// and a step across sessions' runs of one session's rows.
+	seqBuf, zeros, order, last []int
+	oruns                      []ownRun
+	own                        []*SessionLanes
 	// width and streams are a row's width and its residual streams, convLen
 	// a sequence's recurrent window.
 	width, streams, convLen int
@@ -189,7 +198,30 @@ func runOf(runs []nn.KeyRun, pos int) (lo, hi int) {
 func (l *Lanes) Attach(h History, v *View) { l.h, l.v = h, v }
 
 // SetTokens is the tokens of the next call's rows.
-func (l *Lanes) SetTokens(toks []int32) { l.tok = toks[0] }
+func (l *Lanes) SetTokens(toks []int32) {
+	l.toks = toks
+	if len(toks) > 0 {
+		l.tok = toks[0]
+	}
+}
+
+// SetKeyRuns is the prompt's runs the next calls' rows read both ways in,
+// full or each a window its rows read inside only (nn.KeyRunDevice); it
+// takes back any row windows.
+func (l *Lanes) SetKeyRuns(full, windowed []nn.KeyRun) bool {
+	l.runs, l.windowed, l.wins = full, false, nil
+	if len(windowed) > 0 {
+		l.runs, l.windowed = windowed, true
+	}
+	return true
+}
+
+// SetRowWindows is each row's own window for the next calls
+// (nn.RowWindowDevice).
+func (l *Lanes) SetRowWindows(wins []nn.KeyRun) bool {
+	l.wins = wins
+	return true
+}
 
 // CloseRun closes the fused pool region the last call left open.
 func (l *Lanes) CloseRun() { l.e.Unfuse() }
@@ -316,8 +348,7 @@ func (l *Lanes) For(of HistoryOf) SessionLanes { return SessionLanes{l: l, of: o
 // Layers runs blocks [lo, hi) for the row at pos (nn.LayerRunner) over the
 // session's history.
 func (s *SessionLanes) Layers(lo, hi, pos, n int, x, cs, csSWA []float32, head *nn.Head) bool {
-	h := s.of.History()
-	s.l.Attach(h, h.View())
+	s.attach()
 	return s.l.Layers(lo, hi, pos, n, x, cs, csSWA, head)
 }
 
@@ -343,3 +374,271 @@ func (s *SessionLanes) ErrCause() nn.FailCause { return s.l.ErrCause() }
 // CloseRun closes the fused pool region the last call left open
 // (nn.RunCloser).
 func (s *SessionLanes) CloseRun() { s.l.CloseRun() }
+
+// ownRun is rows [a, b) of a step across sessions, one session's.
+type ownRun struct{ a, b int }
+
+// LayersRows runs blocks [lo, hi) over the rows of x (nn.RowsDevice): row i
+// at position pos[i] of the sequence its slot names (slot[i] / seqLen), its
+// rotary tables the i-th of cs and csSWA, each block faulted in first.
+func (l *Lanes) LayersRows(lo, hi int, pos, slot []int, seqLen int, x, cs, csSWA []float32, head *nn.Head) bool {
+	l.why, l.at, l.err = nn.DeclineServes, -1, nil
+	if head != nil {
+		l.err = fmt.Errorf("cpudev: rows with a head are the head's call")
+		return false
+	}
+	l.seqBuf = slices.Grow(l.seqBuf[:0], len(slot))[:len(slot)]
+	for i, f := range slot {
+		l.seqBuf[i] = f / max(seqLen, 1)
+	}
+	return l.blocksRows(lo, hi, x, cs, csSWA, l.seqBuf, pos, nil)
+}
+
+// blocksRows runs blocks [lo, hi) over the rows: their sequences seq, or
+// with own each row's session.
+func (l *Lanes) blocksRows(lo, hi int, x, cs, csSWA []float32, seq, pos []int, own []*SessionLanes) bool {
+	for li := lo; li < hi; li++ {
+		t, err := l.src.Ensure(li)
+		if err != nil {
+			l.err = err
+			return false
+		}
+		cb, why := l.e.Block(li)
+		switch {
+		case why != nn.DeclineServes:
+		case cb.Rec:
+			why, err = l.recRows(li, cb, t, x, cs, csSWA, seq, pos, own)
+		case own != nil:
+			why, err = l.sessionRows(li, t, x, cs, csSWA, pos, own)
+		default:
+			why, err = l.rows(li, t, x, cs, csSWA, seq, pos)
+		}
+		if err != nil {
+			l.err = err
+			return false
+		}
+		if why != nn.DeclineServes {
+			l.why, l.at = why, li
+			l.e.steps.Decline(nn.PartBlock, why)
+			return false
+		}
+		l.e.steps.Serve(nn.PartBlock)
+	}
+	return true
+}
+
+// call is a rows call over rows [a, b) of a step of n rows.
+func (l *Lanes) call(x, cs, csSWA []float32, seq, pos []int, a, b, n int) RowsCall {
+	d := l.width
+	nrot, nswa, pw := len(cs)/n, len(csSWA)/n, len(l.side)/n
+	c := RowsCall{X: x[a*d:], Stride: n * d, SideW: pw, NRot: nrot, NSWA: nswa, Seq: seq[a:b], Pos: pos[a:b]}
+	if pw != 0 {
+		c.Side = l.side[a*pw:]
+	}
+	if nrot != 0 {
+		c.CS = cs[a*nrot:]
+	}
+	if nswa != 0 {
+		c.CSSWA = csSWA[a*nswa:]
+	}
+	if l.toks != nil {
+		c.Tok = l.toks[a:b]
+	}
+	return c
+}
+
+// rows runs block li's rows' form over the rows, each row's history in its
+// own sequence's pages.
+func (l *Lanes) rows(li int, t Tensors, x, cs, csSWA []float32, seq, pos []int) (nn.Decline, error) {
+	f, why := l.RowsForm(li, t)
+	if why != nn.DeclineServes {
+		return why, nil
+	}
+	if why := l.ReadyRows(li, f, pos); why != nn.DeclineServes {
+		return why, nil
+	}
+	c := l.call(x, cs, csSWA, seq, pos, 0, len(pos), len(pos))
+	return nn.DeclineServes, l.Rows(li, f, t, &c)
+}
+
+// sessionRows runs block li over the rows of a step across sessions, row
+// i's history own[i]'s: every row's page made its own before any session's
+// rows are made ready, each session's rows run on its own lanes' form, the
+// runs in order of position so a session's later row reads the keys its
+// earlier rows wrote.
+func (l *Lanes) sessionRows(li int, t Tensors, x, cs, csSWA []float32, pos []int, own []*SessionLanes) (nn.Decline, error) {
+	n := len(pos)
+	for a := range n {
+		own[a].of.History().Own(li, pos[a])
+	}
+	l.oruns = l.oruns[:0]
+	for a := 0; a < n; {
+		b := a + 1
+		for b < n && own[b] == own[a] {
+			b++
+		}
+		l.oruns = append(l.oruns, ownRun{a, b})
+		a = b
+	}
+	slices.SortStableFunc(l.oruns, func(p, q ownRun) int { return pos[p.a] - pos[q.a] })
+	l.zeros = slices.Grow(l.zeros[:0], n)[:n]
+	clear(l.zeros)
+	for _, r := range l.oruns {
+		o := own[r.a]
+		f, why := o.l.RowsForm(li, t)
+		if why != nn.DeclineServes {
+			return why, nil
+		}
+		o.attach()
+		if why := o.l.ReadyRows(li, f, pos[r.a:r.b]); why != nn.DeclineServes {
+			return why, nil
+		}
+	}
+	for _, r := range l.oruns {
+		o := own[r.a]
+		f, _ := o.l.RowsForm(li, t)
+		o.attach()
+		c := l.call(x, cs, csSWA, l.zeros, pos, r.a, r.b, n)
+		if err := o.l.Rows(li, f, t, &c); err != nil {
+			return nn.DeclineServes, err
+		}
+	}
+	return nn.DeclineServes, nil
+}
+
+// recRows runs linear block li over the rows: on its rows' form where the
+// rows run on it whole (recWhole), else on its form of one row, a row at a
+// time in causal order, each stepping its own sequence's recurrent state --
+// with own, its session's (its sequence that session's 0).
+func (l *Lanes) recRows(li int, cb *Block, t Tensors, x, cs, csSWA []float32, seq, pos []int, own []*SessionLanes) (nn.Decline, error) {
+	n := len(pos)
+	l.order = slices.Grow(l.order[:0], n)[:n]
+	for i := range l.order {
+		l.order[i] = i
+	}
+	slices.SortStableFunc(l.order, func(a, b int) int { return pos[a] - pos[b] })
+	if own == nil {
+		if f := l.recWhole(li, t, cb, seq, pos); f != nil {
+			if why := l.ReadyRows(li, f, pos); why != nn.DeclineServes {
+				return why, nil
+			}
+			c := l.call(x, cs, csSWA, seq, pos, 0, n, n)
+			if err := l.Rows(li, f, t, &c); err != nil {
+				return nn.DeclineServes, err
+			}
+			l.e.steps.Whole++
+			return nn.DeclineServes, nil
+		}
+	}
+	if n > 1 {
+		l.e.steps.Stepped++
+	}
+	if _, why := l.b.Bind(cb.F, li, t); why != nn.DeclineServes {
+		return why, nil
+	}
+	d, stride := l.width, len(x)/l.streams
+	nrot, nswa, pw := len(cs)/n, len(csSWA)/n, len(l.side)/n
+	h, v := l.h, l.v
+	defer l.Attach(h, v)
+	for _, r := range l.order {
+		if l.toks == nil && cb.F.Toks {
+			return nn.DeclineServes, fmt.Errorf("model: block %d reads its rows' tokens, which the step gives none of", li)
+		}
+		st := Step{X: x[r*d:], Stride: stride, Pos: pos[r], Tensors: t}
+		if own != nil {
+			hr := own[r].of.History()
+			l.Attach(hr, hr.View())
+		} else {
+			st.Slot = seq[r]
+		}
+		if l.toks != nil {
+			st.Tok, st.Toks = l.toks[r], true
+		}
+		if pw != 0 {
+			st.Side = l.side[r*pw:]
+		}
+		if nrot > 0 {
+			st.CS = cs[r*nrot:]
+		}
+		if nswa > 0 {
+			st.CSSWA = csSWA[r*nswa:]
+		}
+		if why, err := l.Row(li, &st); why != nn.DeclineServes || err != nil {
+			return why, err
+		}
+	}
+	return nn.DeclineServes, nil
+}
+
+// recWhole is linear block li's rows' form where the rows run on it whole:
+// several rows in causal order, each sequence's rows in order of position;
+// nil where not.
+func (l *Lanes) recWhole(li int, t Tensors, cb *Block, seq, pos []int) *Form {
+	if len(pos) < 2 || cb.Rows == nil {
+		return nil
+	}
+	for i, r := range l.order {
+		if r != i {
+			return nil
+		}
+	}
+	l.last = slices.Grow(l.last[:0], max(l.seqs, 1))[:max(l.seqs, 1)]
+	for i := range l.last {
+		l.last[i] = -1
+	}
+	for i, q := range seq {
+		if q < 0 || q >= len(l.last) || pos[i] <= l.last[q] {
+			return nil
+		}
+		l.last[q] = pos[i]
+	}
+	if f, why := l.RowsForm(li, t); why == nn.DeclineServes {
+		return f
+	}
+	return nil
+}
+
+// attach binds the session's history to its lanes.
+func (s *SessionLanes) attach() {
+	h := s.of.History()
+	s.l.Attach(h, h.View())
+}
+
+// LayersRows runs blocks [lo, hi) over the session's rows (nn.RowsDevice).
+func (s *SessionLanes) LayersRows(lo, hi int, pos, slot []int, seqLen int, x, cs, csSWA []float32, head *nn.Head) bool {
+	s.attach()
+	return s.l.LayersRows(lo, hi, pos, slot, seqLen, x, cs, csSWA, head)
+}
+
+// LayersSessions runs blocks [lo, hi) over a step's rows across sessions
+// (nn.SessionStepper), row i's session sess[i] -- its calls on this device,
+// a SessionLanes.
+func (s *SessionLanes) LayersSessions(lo, hi int, sess []nn.LayerRunner, pos []int, x, cs, csSWA []float32, head *nn.Head) bool {
+	l := s.l
+	l.why, l.at, l.err = nn.DeclineServes, -1, nil
+	if head != nil {
+		l.err = fmt.Errorf("cpudev: rows with a head are the head's call")
+		return false
+	}
+	l.own = l.own[:0]
+	for i, d := range sess {
+		o, ok := d.(*SessionLanes)
+		if !ok || o == nil || o.l == nil {
+			l.err = fmt.Errorf("cpudev: row %d's session has no calls on the CPU device", i)
+			return false
+		}
+		l.own = append(l.own, o)
+	}
+	defer s.attach()
+	ok := l.blocksRows(lo, hi, x, cs, csSWA, nil, pos, l.own)
+	clear(l.own)
+	return ok
+}
+
+// SetKeyRuns hands the lanes the prompt's runs (nn.KeyRunDevice).
+func (s *SessionLanes) SetKeyRuns(full, windowed []nn.KeyRun) bool {
+	return s.l.SetKeyRuns(full, windowed)
+}
+
+// SetRowWindows hands the lanes each row's window (nn.RowWindowDevice).
+func (s *SessionLanes) SetRowWindows(wins []nn.KeyRun) bool { return s.l.SetRowWindows(wins) }

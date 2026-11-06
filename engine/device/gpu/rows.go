@@ -722,7 +722,7 @@ func (s *gpuSession) LayersRows(lo, hi int, pos, slot []int, seqLen int, x, cs, 
 // must be its next positions, each once (devTier.groupRuns refuses a gap or a
 // repeat); every row's K and V are written before any row attends, so a
 // chunk's rows see each other causally.
-func (s *gpuSession) LayersSessions(lo, hi int, sess []nn.LayerDevice, pos []int, x, cs, csSWA []float32, head *nn.Head) bool {
+func (s *gpuSession) LayersSessions(lo, hi int, sess []nn.LayerRunner, pos []int, x, cs, csSWA []float32, head *nn.Head) bool {
 	// The session's own lists, reused: a session steps from one goroutine.
 	s.sidBuf = slices.Grow(s.sidBuf[:0], len(sess))[:len(sess)]
 	s.slotBuf = slices.Grow(s.slotBuf[:0], len(sess))[:len(sess)]

@@ -54,6 +54,8 @@ type BlockPlan struct {
 	// Bidir says the block attends bidirectionally inside a prompt's runs,
 	// Whole that its rows read the whole picture whatever their windows.
 	Bidir, Whole bool
+	// Rec is a linear block: its rows step a recurrent state in order.
+	Rec bool
 }
 
 // Place readies the execution for a placement of n blocks, none of them
@@ -87,7 +89,7 @@ func (e *Exec) Compose(li int, p BlockPlan) {
 	if cb.Why != nn.DeclineServes {
 		return
 	}
-	cb.Graph, cb.SideOff, cb.Bidir, cb.Whole = p.Source, p.SideOff, p.Bidir, p.Whole
+	cb.Graph, cb.SideOff, cb.Bidir, cb.Whole, cb.Rec = p.Source, p.SideOff, p.Bidir, p.Whole, p.Rec
 	f, err := e.form(p, 1)
 	if err != nil {
 		cb.Why = e.comp.Decline(err)

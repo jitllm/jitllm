@@ -690,7 +690,7 @@ func (s *Instance) stepOut(n int) [][]float32 {
 
 // clearDevs empties a reused list of sessions, so it pins no device the
 // Instance has let go of.
-func clearDevs(ds []nn.LayerDevice) []nn.LayerDevice {
+func clearDevs(ds []nn.LayerRunner) []nn.LayerRunner {
 	clear(ds)
 	return ds[:0]
 }

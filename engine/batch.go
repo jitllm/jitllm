@@ -1,8 +1,6 @@
 package engine
 
 import (
-	"slices"
-
 	"github.com/jitllm/jitllm/nn"
 )
 
@@ -94,64 +92,34 @@ func (s *Instance) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([
 	// there (cpuRowTables); a device makes its own.
 	s.cpu.tabsFresh = false
 
-	var devSlot []int
-	if s.devCount() > 0 && len(s.rowOwn) == 0 {
-		devSlot = s.flatSlots(seq, pos)
+	var slot []int
+	if len(s.rowOwn) == 0 {
+		slot = s.flatSlots(seq, pos)
 	}
-	// A recurrent block steps a sequence's summary one row at a time, so its
-	// rows go in position order: a chunk's rows may stand in any order in the
-	// step (its logit row leads), and its summary must see them as written.
-	var causal []int
-	if s.recurrent() {
-		causal = slices.Grow(s.rowCausal[:0], n)[:n]
-		s.rowCausal = causal
-		for i := range causal {
-			causal[i] = i
-		}
-		slices.SortStableFunc(causal, func(a, b int) int { return pos[a] - pos[b] })
-	}
+	// A run of blocks on one device is one call, whichever device: the
+	// rows' call, or across sessions every row through its own session's
+	// view of the device.
 	for li := s.lo; li < s.hi; li++ {
-		if s.devAt(li) {
-			hi := li + 1
-			for hi < s.hi && s.devAt(hi) {
-				hi++
-			}
-			withHead := headOnDev && hi == s.hi
-			run := s.rowsRun
-			if len(s.rowOwn) > 0 {
-				run = s.rowsSessions
-			}
-			if err := run(li, hi, pos, devSlot, s.bx[:n*c.ResidW()], cs, csSWA,
-				withHead, s.blogits[:nlogit*c.NVocab], nlogit); err != nil {
-				return nil, err
-			}
-			li = hi - 1
-			continue
+		k := s.routeOf(li)
+		r := &s.routes[k]
+		hi := li + 1
+		for hi < s.hi && s.routeOf(hi) == k {
+			hi++
 		}
-		// Fault the block in. Skipping this is invisible while the model fits,
-		// and under paging reads another block's bytes from a reused frame
-		// (see TestForwardBatchFaultsItsBlocksIn).
-		l, err := s.pageIn(li)
-		if err != nil {
+		if err := s.openRows(r, seq, pos, tokens); err != nil {
 			return nil, err
 		}
-		var why nn.Decline
-		switch {
-		case c.LayerKind(li).Recurrent():
-			why, err = s.cpuRecRows(li, l, s.bx[:n*c.ResidW()], cs, seq, pos, tokens, causal, -1, 0)
-		case len(s.rowOwn) > 0:
-			why, err = s.cpuSessions(li, l, s.bx[:n*c.ResidW()], cs, csSWA, seq, pos, tokens, nlogit)
-		default:
-			why, err = s.cpuRows(li, l, s.bx[:n*c.ResidW()], cs, csSWA, seq, pos, tokens)
+		withHead := headOnDev && hi == s.hi
+		var err error
+		if len(s.rowOwn) > 0 {
+			err = s.sessionsOn(k, li, hi, pos, s.bx[:n*c.ResidW()], cs, csSWA, withHead, s.blogits[:nlogit*c.NVocab], nlogit)
+		} else {
+			err = s.rowsOn(r, li, hi, pos, slot, s.bx[:n*c.ResidW()], cs, csSWA, withHead, s.blogits[:nlogit*c.NVocab], nlogit)
 		}
 		if err != nil {
 			return nil, err
 		}
-		if why == nn.DeclineServes {
-			s.cpu.x.Steps().Serve(nn.PartBlock)
-			continue
-		}
-		return nil, s.cpuRefused(li, why)
+		li = hi - 1
 	}
 	if c.StreamHead() && nlogit > 0 {
 		if err := s.collapseStreams(s.bx[:n*c.ResidW()], n); err != nil {
