@@ -9,14 +9,14 @@ import (
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
-// TestAStateThatLedAHostStepDecodesAlone: the instance leading a host step across
+// TestAStateThatLedARoutedStepDecodesAlone: the instance leading a routed step across
 // sessions lends the model its host scratch for the step and hands it back
 // (borrowStep, returnStep), and a decode token it runs alone afterwards -- the
 // other row having ended, or still sealing its prompt -- finds the scratch it
 // needs: the gated query of a hybrid is one buffer a single token reads. Both
 // instances are checked against the same tokens run on instances that never stepped
 // together.
-func TestAStateThatLedAHostStepDecodesAlone(t *testing.T) {
+func TestAStateThatLedARoutedStepDecodesAlone(t *testing.T) {
 	for _, c := range []struct{ name, file string }{
 		{"hybrid", "qwen35/Qwen3.5-0.8B-Q4_K_M.gguf"},
 		{"dense", "Llama-3.2-1B-Instruct-Q4_K_M.gguf"},
@@ -57,8 +57,8 @@ func TestAStateThatLedAHostStepDecodesAlone(t *testing.T) {
 			a, b := testInstance(t, m, 64, instOpts...), testInstance(t, m, 64, instOpts...)
 			defer a.Close()
 			defer b.Close()
-			if err := a.HostRefusal(); err != nil {
-				t.Skipf("the host step refuses this model: %v", err)
+			if err := a.RoutedRefusal(); err != nil {
+				t.Skipf("the routed step refuses this model: %v", err)
 			}
 			lga, err := a.Prefill(prompts[0])
 			if err != nil {
@@ -70,14 +70,14 @@ func TestAStateThatLedAHostStepDecodesAlone(t *testing.T) {
 			}
 			ta, tb := []int32{next(lga)}, []int32{next(lgb)}
 			joint := []Run{{Instance: a, Tokens: ta, Logits: true}, {Instance: b, Tokens: tb, Logits: true}}
-			r0 := hostStepRows(joint)
+			r0 := routedStepRows(joint)
 			// a leads one joint step, then b's row is done and a decodes alone.
 			out, err := StepRuns(joint)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if n := hostStepRows(joint) - r0; n != 2 {
-				t.Fatalf("the step ran %d rows across sessions, want 2: it was not a host step", n)
+			if n := routedStepRows(joint) - r0; n != 2 {
+				t.Fatalf("the step ran %d rows across sessions, want 2: it was not a routed step", n)
 			}
 			lga, lgb = append([]float32(nil), out[0]...), append([]float32(nil), out[1]...)
 			for k := 0; k < 2; k++ {
@@ -92,7 +92,7 @@ func TestAStateThatLedAHostStepDecodesAlone(t *testing.T) {
 			}
 			for i, got := range [][]float32{lga, lgb} {
 				if w, at := worstStep([][]float32{got}, [][]float32{want[i]}); !(w <= floatFormsNMSE) {
-					t.Fatalf("state %d: a token run alone after leading a host step differs from one that never stepped jointly: NMSE %.3e at %d (bound %.0e)", i, w, at, floatFormsNMSE)
+					t.Fatalf("state %d: a token run alone after leading a routed step differs from one that never stepped jointly: NMSE %.3e at %d (bound %.0e)", i, w, at, floatFormsNMSE)
 				}
 			}
 		})

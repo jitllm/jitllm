@@ -1736,7 +1736,7 @@ time there:
    a nil `s.qgate` (`takeHostBatch` had lent the model the leader's scratch):
    an architecture with a gated attention output (Qwen3.5 reproduces it)
    panicked in `projectQ`. It reproduces on main with
-   two States and no server (`TestAStateThatLedAHostStepDecodesAlone`).
+   two States and no server (`TestAStateThatLedARoutedStepDecodesAlone`).
 
 **What changed.** `MemStore.SetFills` holds the fills of a page over one
 off-heap copy, charged once; `Set` reads a reader that knows its length
@@ -1744,7 +1744,7 @@ straight into the mapping. The loop seals after the step is timed, so the
 budget and the fairness quantum are fitted to the step alone. `forward()` makes
 the gate rows a State needs when it no longer holds them. Gates run against
 violations: a corrupted copy fails `TestMemStoreFillsServeASharedPrefix`; the
-parent commit panics `TestAStateThatLedAHostStepDecodesAlone`. The store half
+parent commit panics `TestAStateThatLedARoutedStepDecodesAlone`. The store half
 fell from 290-360 ms to 35-45 ms a request.
 
 **Paired, interleaved, A/A in the same pass** (`dev/deploysearch`, a fresh

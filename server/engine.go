@@ -469,7 +469,7 @@ func (lm *LoadedModel) closeModel() error {
 	return err
 }
 
-// stepScratchBytes is lm's instance's host step scratch, held between steps
+// stepScratchBytes is lm's instance's routed step scratch, held between steps
 // for the next (engine.Instance.StepScratchBytes).
 func (lm *LoadedModel) stepScratchBytes() uint64 {
 	if lm.inst == nil {
@@ -706,7 +706,7 @@ func (e *Engine) LoadModel(o LoadOptions) (*LoadedModel, error) {
 		opts = append(opts, engine.WithPlacement(pl))
 	}
 	// A host model the step loop runs steps its sessions' rows as one pass
-	// (engine.StepRuns' host arm, a matmul over the rows) or one session after
+	// (engine.StepRuns' routed arm, a matmul over the rows) or one session after
 	// another (a matvec each), as the joint choice decides per step. Its
 	// contract is that a row comes out as it does alone, to the bit, so a
 	// seeded sampler draws the same tokens either way
@@ -2903,7 +2903,7 @@ func (e *Engine) applyPageBudget(lm *LoadedModel, newest *engine.Instance) {
 		minDev = 0 // no session has placed anything yet
 	}
 	e.mu.RUnlock()
-	// The instance's host step scratch: one step's rows across sessions, held
+	// The instance's routed step scratch: one step's rows across sessions, held
 	// between steps for the next.
 	kv += lm.stepScratchBytes()
 

@@ -110,7 +110,7 @@ func sharedDecodeArms(t *testing.T, m *model.Model, prompts [][]int32, gen, ever
 		}
 	}
 	out := make([][]int32, len(prompts))
-	before := in.HostStepRows()
+	before := in.RoutedStepRows()
 	runs := make([]Run, len(prompts))
 	for k := range gen {
 		for i := range sess {
@@ -143,7 +143,7 @@ func sharedDecodeArms(t *testing.T, m *model.Model, prompts [][]int32, gen, ever
 			last[i] = lg[i]
 		}
 	}
-	return out, in.HostStepRows() - before
+	return out, in.RoutedStepRows() - before
 }
 
 // TestSessionsStepWithinTheBandOnF16KV is TestSessionsShareAnInstance's
