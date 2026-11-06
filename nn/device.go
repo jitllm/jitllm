@@ -1356,6 +1356,13 @@ type TableReader interface{ ReadsTables() bool }
 // page that could not be read), which the step returns as it is.
 type RunFailer interface{ RunErr() error }
 
+// PromptRows is a device told which rows a prompt chunk's call (Layers with
+// n > 1) runs: the sequence slot names, the chunk's first row base in the
+// prompt (-1 for none), and whether the prompt's rows attend both ways.
+type PromptRows interface {
+	SetPromptRows(slot, base int, bidir bool)
+}
+
 // RunCloser is a device that keeps a region open across its calls (the CPU's
 // fused pool region); CloseRun closes it before another device runs.
 type RunCloser interface{ CloseRun() }

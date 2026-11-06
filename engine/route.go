@@ -22,6 +22,9 @@ type route struct {
 	rows   nn.RowsDevice
 	steps  nn.SessionStepper
 	keys   nn.KeyRunDevice
+	wins   nn.RowWindowDevice
+	resv   nn.RowsReserver
+	prompt nn.PromptRows
 }
 
 func newRoute(d nn.LayerRunner) route {
@@ -36,13 +39,16 @@ func newRoute(d nn.LayerRunner) route {
 	r.rows, _ = d.(nn.RowsDevice)
 	r.steps, _ = d.(nn.SessionStepper)
 	r.keys, _ = d.(nn.KeyRunDevice)
+	r.wins, _ = d.(nn.RowWindowDevice)
+	r.resv, _ = d.(nn.RowsReserver)
+	r.prompt, _ = d.(nn.PromptRows)
 	return r
 }
 
 // laneRoute is the route of a session's calls on the CPU device, its faces
 // the lanes' own (no assertion at all).
 func laneRoute(l *cpudev.SessionLanes) route {
-	return route{run: l, inputs: l, toks: l, tables: l, fail: l, errs: l, cause: l, closer: l, rows: l, steps: l, keys: l}
+	return route{run: l, inputs: l, toks: l, tables: l, fail: l, errs: l, cause: l, closer: l, rows: l, steps: l, keys: l, wins: l, prompt: l}
 }
 
 // History is the session's history as it is now (cpudev.HistoryOf).
@@ -206,4 +212,93 @@ func (s *Instance) rowsRefused(r *route, lo, hi, n int, across string) error {
 		why = r.errs.Err()
 	}
 	return fmt.Errorf("model: the device refused blocks [%d,%d) for %d rows%s: %s", lo, hi, n, across, why)
+}
+
+// openPrompt hands a prompt chunk's run's device what its blocks read: the
+// side inputs, the chunk's tokens, which sequence and prompt rows it is
+// (nn.PromptRows) and, where it reads them, the chunk's rotary tables from
+// its host rows, grown to the chunk's size first.
+func (s *Instance) openPrompt(r *route, slot, base, p0, n, chunkRows int, bidir bool) error {
+	s.closeRuns(r)
+	if r.inputs != nil && s.c.SideWidth() != 0 {
+		r.inputs.SetLayerInputs(s.bple[:n*s.c.SideWidth()])
+	}
+	if r.toks != nil {
+		r.toks.SetTokens(s.chunkTok[:n])
+	}
+	if r.prompt != nil {
+		r.prompt.SetPromptRows(slot, base, bidir)
+	}
+	if r.tables != nil && r.tables.ReadsTables() {
+		s.growBatch(chunkRows)
+		seq, pos := s.cpuRowsOf(slot, p0, n)
+		return s.cpuRowTables(seq, pos)
+	}
+	return nil
+}
+
+// callTellOn hands route r's device the chunk's attention before it runs:
+// a non-causal prompt's rows (embedTellOn), else the prompt's key runs in
+// the chunk (bidirTellOn). false is a device that cannot honour them.
+func (s *Instance) callTellOn(r *route, p0, n int) bool {
+	if s.emb != nil && s.emb.bidir {
+		return s.embedTellOn(r, n)
+	}
+	return s.bidirTellOn(r, p0, n)
+}
+
+// bidirTellOn is bidirTell for route r's device.
+func (s *Instance) bidirTellOn(r *route, p0, n int) bool {
+	if !s.bidirIn(p0, n) {
+		if r.keys != nil {
+			r.keys.SetKeyRuns(nil, nil)
+		}
+		return true
+	}
+	return r.keys != nil && r.keys.SetKeyRuns(s.bidir, nil)
+}
+
+// embedTellOn is embedTell for route r's device; a device told the prompt is
+// non-causal (nn.PromptRows) makes the chunk's run itself, handed the rows'
+// windows only where the run states them (a tower's windowed blocks).
+func (s *Instance) embedTellOn(r *route, n int) bool {
+	if r.prompt != nil {
+		if r.wins != nil {
+			r.wins.SetRowWindows(s.emb.rowWins)
+		}
+		return true
+	}
+	if r.resv != nil && !r.resv.ReserveRows(n) {
+		return false
+	}
+	if r.wins == nil {
+		return false
+	}
+	return r.wins.SetRowWindows(s.embedWins(n))
+}
+
+// Snaps says a speculation step keeps each prompt row's summary
+// (cpudev.Prompt).
+func (s *Session) Snaps() bool { return s.on != nil && s.on.rows != nil }
+
+// Points says the prompt seals restore points (cpudev.Prompt).
+func (s *Session) Points() bool { return s.on != nil && s.on.recPointsOn() }
+
+// Point says pos is one of the prompt's restore points (cpudev.Prompt).
+func (s *Session) Point(pos int) bool { return s.on != nil && s.on.recPoint(pos) }
+
+// Seal stores block li's summary of slot at pos where pos is a restore point
+// (cpudev.Prompt).
+func (s *Session) Seal(li, slot, pos int) {
+	if s.on != nil {
+		s.on.recRowPoint(li, slot, pos)
+	}
+}
+
+// Snap keeps block li's summary of slot as a speculation step's row's
+// (cpudev.Prompt).
+func (s *Session) Snap(li, slot, row int) {
+	if s.on != nil {
+		s.on.rows.snapRow(s.on, li, slot, row)
+	}
 }

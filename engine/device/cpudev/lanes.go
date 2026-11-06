@@ -40,6 +40,17 @@ type Lanes struct {
 	seqBuf, zeros, order, last []int
 	oruns                      []ownRun
 	own                        []*SessionLanes
+	posBuf                     []int
+	// slot, base and bidir are the prompt chunk the next call runs
+	// (SetPromptRows); prompt is the session's say over a linear block's
+	// summary as a prompt's rows run (attach).
+	slot, base int
+	bidir      bool
+	chunkRun   [1]nn.KeyRun
+	prompt     Prompt
+	// ChunkFault starts each prompt chunk after the first from a cleared
+	// summary.
+	ChunkFault bool
 	// width and streams are a row's width and its residual streams, convLen
 	// a sequence's recurrent window.
 	width, streams, convLen int
@@ -235,6 +246,9 @@ func (l *Lanes) SetLayerInputs(in []float32) { l.side = in }
 // (Declined) or fails (Err).
 func (l *Lanes) Layers(lo, hi, pos, n int, x, cs, csSWA []float32, head *nn.Head) bool {
 	l.why, l.at, l.err = nn.DeclineServes, -1, nil
+	if n > 1 && head == nil {
+		return l.chunk(lo, hi, pos, n, x, cs, csSWA)
+	}
 	if n != 1 || head != nil {
 		l.err = fmt.Errorf("cpudev: a run of %d rows with a head is the rows' call", n)
 		return false
@@ -397,6 +411,12 @@ func (l *Lanes) LayersRows(lo, hi int, pos, slot []int, seqLen int, x, cs, csSWA
 // blocksRows runs blocks [lo, hi) over the rows: their sequences seq, or
 // with own each row's session.
 func (l *Lanes) blocksRows(lo, hi int, x, cs, csSWA []float32, seq, pos []int, own []*SessionLanes) bool {
+	return l.blocks(lo, hi, x, cs, csSWA, seq, pos, own, -1)
+}
+
+// blocks is blocksRows for a prompt chunk's rows too: base the chunk's first
+// row in the prompt, -1 for a step's rows.
+func (l *Lanes) blocks(lo, hi int, x, cs, csSWA []float32, seq, pos []int, own []*SessionLanes, base int) bool {
 	for li := lo; li < hi; li++ {
 		t, err := l.src.Ensure(li)
 		if err != nil {
@@ -406,8 +426,10 @@ func (l *Lanes) blocksRows(lo, hi int, x, cs, csSWA []float32, seq, pos []int, o
 		cb, why := l.e.Block(li)
 		switch {
 		case why != nn.DeclineServes:
+		case cb.Rec && base >= 0 && l.bidir:
+			why = nn.DeclineBidir
 		case cb.Rec:
-			why, err = l.recRows(li, cb, t, x, cs, csSWA, seq, pos, own)
+			why, err = l.recRows(li, cb, t, x, cs, csSWA, seq, pos, own, base)
 		case own != nil:
 			why, err = l.sessionRows(li, t, x, cs, csSWA, pos, own)
 		default:
@@ -510,21 +532,42 @@ func (l *Lanes) sessionRows(li int, t Tensors, x, cs, csSWA []float32, pos []int
 // rows run on it whole (recWhole), else on its form of one row, a row at a
 // time in causal order, each stepping its own sequence's recurrent state --
 // with own, its session's (its sequence that session's 0).
-func (l *Lanes) recRows(li int, cb *Block, t Tensors, x, cs, csSWA []float32, seq, pos []int, own []*SessionLanes) (nn.Decline, error) {
+func (l *Lanes) recRows(li int, cb *Block, t Tensors, x, cs, csSWA []float32, seq, pos []int, own []*SessionLanes, base int) (nn.Decline, error) {
 	n := len(pos)
 	l.order = slices.Grow(l.order[:0], n)[:n]
 	for i := range l.order {
 		l.order[i] = i
 	}
 	slices.SortStableFunc(l.order, func(a, b int) int { return pos[a] - pos[b] })
-	if own == nil {
+	pr := l.prompt
+	if base < 0 {
+		pr = nil
+	}
+	if own == nil && (pr == nil || !pr.Snaps()) {
 		if f := l.recWhole(li, t, cb, seq, pos); f != nil {
 			if why := l.ReadyRows(li, f, pos); why != nn.DeclineServes {
 				return why, nil
 			}
-			c := l.call(x, cs, csSWA, seq, pos, 0, n, n)
-			if err := l.Rows(li, f, t, &c); err != nil {
-				return nn.DeclineServes, err
+			if l.ChunkFault && base > 0 {
+				l.clearRec(li, seq[0])
+			}
+			points := pr != nil && pr.Points()
+			for a := 0; a < n; {
+				b := n
+				for e := a + 1; points && e < n; e++ {
+					if pr.Point(pos[0] + e) {
+						b = e
+						break
+					}
+				}
+				c := l.call(x, cs, csSWA, seq, pos, a, b, n)
+				if err := l.Rows(li, f, t, &c); err != nil {
+					return nn.DeclineServes, err
+				}
+				if pr != nil {
+					pr.Seal(li, seq[a], pos[0]+b)
+				}
+				a = b
 			}
 			l.e.steps.Whole++
 			return nn.DeclineServes, nil
@@ -551,6 +594,9 @@ func (l *Lanes) recRows(li int, cb *Block, t Tensors, x, cs, csSWA []float32, se
 		} else {
 			st.Slot = seq[r]
 		}
+		if l.ChunkFault && base > 0 && r == l.order[0] {
+			l.clearRec(li, st.Slot)
+		}
 		if l.toks != nil {
 			st.Tok, st.Toks = l.toks[r], true
 		}
@@ -566,8 +612,57 @@ func (l *Lanes) recRows(li int, cb *Block, t Tensors, x, cs, csSWA []float32, se
 		if why, err := l.Row(li, &st); why != nn.DeclineServes || err != nil {
 			return why, err
 		}
+		if pr != nil {
+			pr.Snap(li, st.Slot, base+r)
+			pr.Seal(li, st.Slot, pos[r]+1)
+		}
 	}
 	return nn.DeclineServes, nil
+}
+
+// clearRec clears linear block li's summary of sequence slot (ChunkFault).
+func (l *Lanes) clearRec(li, slot int) {
+	if st, cv := l.v.State(li), l.v.Conv(li); st != nil && cv != nil {
+		ns, nc := len(st)/max(l.seqs, 1), l.convLen
+		clear(st[slot*ns:][:ns])
+		clear(cv[slot*nc:][:nc])
+	}
+}
+
+// chunk runs blocks [lo, hi) over a prompt chunk's n rows of the sequence
+// SetPromptRows named, at positions pos..pos+n-1; a non-causal prompt's
+// chunk is one run of rows attending both ways.
+func (l *Lanes) chunk(lo, hi, pos, n int, x, cs, csSWA []float32) bool {
+	l.seqBuf = slices.Grow(l.seqBuf[:0], n)[:n]
+	l.posBuf = slices.Grow(l.posBuf[:0], n)[:n]
+	for i := range n {
+		l.seqBuf[i], l.posBuf[i] = l.slot, pos+i
+	}
+	if l.bidir {
+		runs, windowed, wins := l.runs, l.windowed, l.wins
+		l.chunkRun[0] = nn.KeyRun{Lo: pos, Hi: pos + n}
+		l.runs, l.windowed = l.chunkRun[:], false
+		defer func() { l.runs, l.windowed, l.wins = runs, windowed, wins }()
+	}
+	return l.blocks(lo, hi, x, cs, csSWA, l.seqBuf, l.posBuf, nil, l.base)
+}
+
+// SetPromptRows is the prompt chunk the next chunk call runs
+// (nn.PromptRows).
+func (l *Lanes) SetPromptRows(slot, base int, bidir bool) {
+	l.slot, l.base, l.bidir = slot, base, bidir
+}
+
+// Prompt is a session's say over a linear block's summary as its prompt's
+// rows run on the CPU device: whether a speculation step keeps each row's
+// (Snaps, Snap), and the restore points the prompt seals it at (Points,
+// Point, Seal).
+type Prompt interface {
+	Snaps() bool
+	Points() bool
+	Point(pos int) bool
+	Seal(li, slot, pos int)
+	Snap(li, slot, row int)
 }
 
 // recWhole is linear block li's rows' form where the rows run on it whole:
@@ -602,6 +697,13 @@ func (l *Lanes) recWhole(li int, t Tensors, cb *Block, seq, pos []int) *Form {
 func (s *SessionLanes) attach() {
 	h := s.of.History()
 	s.l.Attach(h, h.View())
+	s.l.prompt, _ = s.of.(Prompt)
+}
+
+// SetPromptRows hands the lanes the prompt chunk the next call runs
+// (nn.PromptRows).
+func (s *SessionLanes) SetPromptRows(slot, base int, bidir bool) {
+	s.l.SetPromptRows(slot, base, bidir)
 }
 
 // LayersRows runs blocks [lo, hi) over the session's rows (nn.RowsDevice).

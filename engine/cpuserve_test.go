@@ -1,12 +1,13 @@
 package engine
 
 import (
-	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"math"
 	"os"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/jitllm/jitllm/engine/device/cpudev"
 
 	"github.com/jitllm/jitllm/model"
 	"github.com/jitllm/jitllm/nn"
@@ -410,6 +411,7 @@ func setFault(s *Instance, f cpuFault) {
 	s.cpu.fault = f
 	if ln := s.cpu.lanes; ln != nil {
 		ln.RecFault = f == cpuFaultRec
+		ln.ChunkFault = f == cpuFaultChunk
 	}
 	if st, ok := s.streams.(*cpudev.Streams); ok {
 		st.Fault = f == cpuFaultStreams
