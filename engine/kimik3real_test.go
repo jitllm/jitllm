@@ -281,7 +281,7 @@ func k3RealSelected(t *testing.T, m *model.Model) {
 	t.Helper()
 	c := m.Cfg
 	lin, full := jlm.LayerLinearAttn, jlm.LayerFullAttn
-	ok := c.Arch == "kimi-k3" && c.ResAttn() && c.AttnResBlock == 4 && c.ExpertLatent == 512 &&
+	ok := c.Arch == "kimi-k3" && c.AttnResBlock == 4 && c.ExpertLatent == 512 &&
 		m.Container.Config().SituBeta != 0 && c.KDALowerBound == 0 && c.ChanDecay() && c.MLA() && c.NoPosEnc &&
 		c.QLoraRank == 256 && c.KVLoraRank == 128 && c.NDenseLead == 1 && c.NExpert == 8 &&
 		c.NExpertUsed == 2 && c.ExpertSigmoid && c.NEmbd == 1024 &&

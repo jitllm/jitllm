@@ -888,8 +888,26 @@ func configFrom(c *jlm.Config) (*Config, error) {
 	if err := q4eConfig(out, c); err != nil {
 		return nil, err
 	}
-	if err := k3Config(out, c); err != nil {
-		return nil, err
+	out.AttnResBlock = int(c.AttnResBlock)
+	out.ExpertLatent = int(c.ExpertLatent)
+	out.KDALowerBound = c.KDALowerBound
+	out.LatentNormEps = float64(c.LatentNormEps)
+	if out.LatentNormEps == 0 {
+		out.LatentNormEps = out.RMSEps
+	}
+	switch {
+	case out.KDALowerBound > 0:
+		return nil, fmt.Errorf("model: %s: a decay bound of %g; a bound is negative", out.Arch, out.KDALowerBound)
+	case out.KDALowerBound != 0 && !out.ChanDecay():
+		return nil, fmt.Errorf("model: %s: a decay bound on a model with no per-channel decay", out.Arch)
+	case out.ExpertLatent != 0 && (out.NExpert == 0 || out.ExpertLatent >= out.NEmbd || out.DenseMoE ||
+		out.ExpertWeightIn):
+		return nil, fmt.Errorf("model: %s: a latent mixture at %d on %d experts at n_embd %d", out.Arch,
+			out.ExpertLatent, out.NExpert, out.NEmbd)
+	case out.AttnResBlock < 0 || out.AttnResBlock != 0 && (out.PredStreams != 0 || out.HCMult != 0 || out.Parallel ||
+		out.NMTP != 0):
+		return nil, fmt.Errorf("model: %s: a checkpoint bank every %d blocks beside another residual "+
+			"structure", out.Arch, out.AttnResBlock)
 	}
 	out.stated = &c.Streams
 	// The after-rotary norm is FlagQKNorm's per-head norm moved (see
@@ -1185,9 +1203,6 @@ type Model struct {
 	// q4eHead is Qwen3.8-Flash-Next's head mix and ngram its n-gram table.
 	Q4eHead *q4eHead
 	Ngram   *ngramTable
-	// resOut is Kimi-K3's head score vector (RoleOutputResScore) and resOutT
-	// its one-row view; nil without residual attention.
-	ResOut []float32
 	// onesHD is a HeadDim-wide vector of ones: the weight Llama 4's weightless
 	// q/k RMSNorm runs the generated norm against. nil unless QKL2Norm.
 	onesHD  []float32
@@ -2639,9 +2654,6 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 			return nil, err
 		}
 	}
-	if err := loadK3Head(m, cfg, vec); err != nil {
-		return nil, err
-	}
 	if err := loadQ4EHead(m, cfg, c, get, vec); err != nil {
 		return nil, err
 	}
@@ -3254,8 +3266,32 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 				return nil, err
 			}
 		}
-		if err := loadK3(l, bi, cfg, c, getTo); err != nil {
-			return nil, err
+		// The MLA output gate: RoleAttnGate in a full block of an MLA model,
+		// NHead*HeadDimV rows over n_embd. (A linear block's RoleAttnGate is
+		// its z projection, bound in build.)
+		if cfg.MLA() && !cfg.LayerKind(i).Recurrent() && c.Has(jlm.RoleAttnGate, bi, -1) {
+			if err := getTo(&l.MlaGate, jlm.RoleAttnGate, bi, -1); err != nil {
+				return nil, err
+			}
+			if l.MlaGate.K != cfg.NEmbd || l.MlaGate.Rows != cfg.NHead*cfg.HeadDimV {
+				return nil, fmt.Errorf("model: block %d's MLA output gate is %dx%d, want %dx%d", bi, l.MlaGate.K,
+					l.MlaGate.Rows, cfg.NEmbd, cfg.NHead*cfg.HeadDimV)
+			}
+		}
+		// A latent mixture's projections: the experts read RoutedDown of the
+		// FFN input and RoutedUp takes their normed sum back.
+		if cfg.ExpertLatent != 0 && cfg.MoEAt(i) {
+			if err := getTo(&l.RoutedDown, jlm.RoleFFNRoutedDown, bi, -1); err != nil {
+				return nil, err
+			}
+			if err := getTo(&l.RoutedUp, jlm.RoleFFNRoutedUp, bi, -1); err != nil {
+				return nil, err
+			}
+			L := cfg.ExpertLatent
+			if l.RoutedDown.K != cfg.NEmbd || l.RoutedDown.Rows != L || l.RoutedUp.K != L || l.RoutedUp.Rows != cfg.NEmbd {
+				return nil, fmt.Errorf("model: block %d's latent mixture is %dx%d down and %dx%d up; want %d to %d and back",
+					bi, l.RoutedDown.K, l.RoutedDown.Rows, l.RoutedUp.K, l.RoutedUp.Rows, cfg.NEmbd, L)
+			}
 		}
 		if err := loadQ4E(l, bi, cfg, getTo, vec); err != nil {
 			return nil, err
@@ -3748,7 +3784,7 @@ func (m *Model) ActWindowOf() int {
 // which the host takes (AltUp's predictions, a residual bank, gated
 // hyper-connections): a device runs the blocks and hands every stream back,
 // and never folds the head into them.
-func (c *Config) StreamHead() bool { return c.PredStreams != 0 || c.ResAttn() || c.Q4E() }
+func (c *Config) StreamHead() bool { return c.PredStreams != 0 || c.statedStreams() > 1 || c.Q4E() }
 
 // specHidW is a speculation step's hidden state per row: what a prediction
 // block reads of the trunk's. The output norm's result, n_embd wide; on
@@ -3759,4 +3795,22 @@ func (c *Config) SpecHidW() int {
 		return c.ResidW()
 	}
 	return c.NEmbd
+}
+
+// ExpWidth is the routed experts' input and output width: ExpertLatent
+// where they read a latent of their own, n_embd everywhere else.
+func (c *Config) ExpWidth() int {
+	if c.ExpertLatent != 0 {
+		return c.ExpertLatent
+	}
+	return c.NEmbd
+}
+
+// f32Bytes is a float32 slice addressed as the bytes a kernel reads: the same
+// memory, no copy.
+func f32Bytes(v []float32) []byte {
+	if len(v) == 0 {
+		return nil
+	}
+	return unsafe.Slice((*byte)(unsafe.Pointer(&v[0])), len(v)*4)
 }
