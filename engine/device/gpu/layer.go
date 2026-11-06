@@ -2651,10 +2651,6 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 	// for what the device holds, not the full context.
 	cp := g.capped(p)
 	p = &cp
-	if why := unblockedRow(p, rows); why != "" {
-		g.LastErr = why
-		return nil
-	}
 	// A picture's rows go in query chunks where its blocks' planes do not fit
 	// one (visionChunk), so the scratch is rounded up to whole chunks.
 	if p.NonCausal && rows > 1 {
@@ -5717,20 +5713,6 @@ const batchGrain = 8 * 4
 // promptGrain is the grain a prompt chunk's own width is rounded to: the
 // batched forms' batchGrain. Callers hold g.mu.
 func (g *devTier) promptGrain() int { return batchGrain }
-
-// unblockedRow names the row of a rows-wide scratch for p that the tier's
-// int8 activation blocks (32 wide) do not divide, which its quantizers refuse
-// to build, or "".
-func unblockedRow(p *nn.LayerPlan, rows int) string {
-	const why = "a row of %d (%s) that the tier's int8 activation blocks of 32 do not divide"
-	switch {
-	case p.KPad == 0 && rows*p.NEmbd%32 != 0:
-		return fmt.Sprintf(why, p.NEmbd, "the model's width")
-	case rows*p.NFFN%32 != 0:
-		return fmt.Sprintf(why, p.NFFN, "the MLP's width")
-	}
-	return ""
-}
 
 // attendsIn reports whether a block of [lo, hi) on this device attends: not
 // a linear block's recurrence.
