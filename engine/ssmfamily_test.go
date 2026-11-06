@@ -232,16 +232,16 @@ func TestSSDFeaturesAreLoadBearing(t *testing.T) {
 				undo()
 			}
 			check("the convolution window not carried", worst(func(st *Instance) {
-				for li := range st.view.Blocks() {
-					clear(st.view.Conv(li))
+				for li := range st.kv.view.Blocks() {
+					clear(st.kv.view.Conv(li))
 				}
 			}))
 			if m.Cfg.ShortConv() {
 				return // the window is a short convolution's only state
 			}
 			check("the state not carried", worst(func(st *Instance) {
-				for li := range st.view.Blocks() {
-					clear(st.view.State(li))
+				for li := range st.kv.view.Blocks() {
+					clear(st.kv.view.State(li))
 				}
 			}))
 		})

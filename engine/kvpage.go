@@ -417,6 +417,7 @@ type kvCache struct {
 	// not be recovered: set inside a pool closure, which has no error path,
 	// and drained by Instance.kvCheck at the entry point.
 	view    *cpudev.View
+	pool    *cpudev.PagePool
 	src     []int
 	noTable []uint32
 	err     atomic.Pointer[error]
@@ -534,8 +535,11 @@ func newKVCacheRange(c *model.Config, id string, nseq int, l kvLayout, store KVS
 	if store == nil {
 		store = NoStore{}
 	}
+	if view == nil {
+		view = cpudev.NewView(hi)
+	}
 	kc := &kvCache{id: id, store: store, layers: make([]kvPages, hi), lo: lo, kvl: l, cfg: c,
-		bh: map[int][]string{}, geom: geomDigest(c, nseq, l), view: view, src: make([]int, hi)}
+		bh: map[int][]string{}, geom: geomDigest(c, nseq, l), view: view, pool: pool, src: make([]int, hi)}
 	for li := range kc.src {
 		kc.src[li] = max(c.KVSource(li), 0)
 	}
