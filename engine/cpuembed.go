@@ -2,8 +2,8 @@ package engine
 
 import (
 	"fmt"
-	"unsafe"
 
+	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"github.com/jitllm/jitllm/nn"
 )
 
@@ -11,161 +11,67 @@ import (
 // model's own tensors, its token table the embedding's and not the head's.
 const cpuInputRows = -2
 
-// cpuEmbedState is the input rows' graphs composed for the CPU: the token
-// rows' (embedGraph without the streams past the first) and an embedding
-// span's given rows' (givenGraph), each a form of one row and one of a
-// chunk's. The token rows' outputs are the row and, where the model has
-// them, the row's per-layer inputs; the given rows' the row where a
-// position table moves it, then the per-layer inputs.
-type cpuEmbedState struct {
-	one, many           cpuHeadForm
-	givenOne, givenMany cpuHeadForm
-	// tok and pos are a call's tokens table and its positions table (its live
-	// rows, then a row's position); tok1 and pos1 a decode step's one row.
-	tok, pos []uint32
-	tok1     [1]int32
-	pos1     [1]int
-	// zpos is a call's rows' positions where the caller holds none
-	// (positions), toks a call's rows' tokens (fillRows).
+// inputScratch is the caller's side of a call's input rows: a decode step's
+// one token and position (tok1, pos1), a call's rows' positions where the
+// caller holds none (positions) and its rows' tokens (fillRows).
+type inputScratch struct {
+	tok1 [1]int32
+	pos1 [1]int
 	zpos []int
 	toks []int32
-	// pad holds a call's outputs where it is shorter than its form's unit,
-	// gin a given rows' call's input rows.
-	pad, gin []float32
-}
-
-// cpuPlaceEmbed composes the input rows' graphs for the CPU at the
-// instance's placement.
-func (s *Instance) cpuPlaceEmbed() {
-	st := &s.cpu.embed
-	fg := s.m.FrontGraphs()
-	s.cpuComposeHead(&st.one, fg.CpuEmbed, nn.DeclineNoEmbed, 1)
-	s.cpuComposeHead(&st.many, fg.CpuEmbed, nn.DeclineNoEmbed, cpuRowsCap)
-	if fg.Given != nil {
-		s.cpuComposeHead(&st.givenOne, fg.Given, nn.DeclineNoEmbed, 1)
-		s.cpuComposeHead(&st.givenMany, fg.Given, nn.DeclineNoEmbed, cpuRowsCap)
-	}
-	u := 1
-	for _, hf := range []*cpuHeadForm{&st.one, &st.many, &st.givenOne, &st.givenMany} {
-		if hf.f != nil {
-			u = max(u, hf.f.Unit, hf.f.Rows)
-		}
-	}
-	st.tok, st.pos = make([]uint32, u), make([]uint32, u+1)
-	st.pad = make([]float32, u*(s.c.NEmbd+s.c.PleWidth()))
-	if fg.Given != nil {
-		st.gin = make([]float32, u*s.c.NEmbd)
-	}
 }
 
 // positions is a call's n rows' positions, the caller's to write.
-func (st *cpuEmbedState) positions(n int) []int {
+func (st *inputScratch) positions(n int) []int {
 	if len(st.zpos) < n {
 		st.zpos = make([]int, n)
 	}
 	return st.zpos[:n]
 }
 
-// cpuEmbed writes the input rows of toks, at positions pos, into the rows
-// of x and, where the model has them, their per-layer inputs into the rows
-// of ple, through the composed graph, or says why not.
-func (s *Instance) cpuEmbed(x, ple []float32, toks []int32, pos []int) nn.Decline {
-	return s.cpuInputCall(&s.cpu.embed.one, &s.cpu.embed.many, nil, x, ple, toks, pos)
-}
-
-// cpuGiven writes rows, an embedding span's given rows, into the rows of x
-// with their position rows where the model has a position table, and their
-// per-layer inputs into the rows of ple from the tokens toks at positions
-// pos, through the composed given rows; a model that adds nothing to a
-// given row has its rows copied.
-func (s *Instance) cpuGiven(x, ple, rows []float32, toks []int32, pos []int) nn.Decline {
-	st := &s.cpu.embed
-	if s.m.FrontGraphs().Given == nil {
-		copy(x, rows)
-		s.cpu.steps.Served[nn.PartEmbed] += len(toks)
-		return nn.DeclineServes
+// cpuPlaceEmbed composes the input rows' graphs for the CPU device at the
+// instance's placement: the token rows' (embedGraph without the streams past
+// the first) and an embedding span's given rows' (givenGraph), each a form of
+// one row and one of a chunk's at cpuRowsCap.
+func (s *Instance) cpuPlaceEmbed() {
+	if s.cpu.dev == nil {
+		return
 	}
-	return s.cpuInputCall(&st.givenOne, &st.givenMany, rows, x, ple, toks, pos)
+	fg := s.m.FrontGraphs()
+	var hf [4]cpuHeadForm
+	s.cpuComposeHead(&hf[0], fg.CpuEmbed, nn.DeclineNoEmbed, 1)
+	s.cpuComposeHead(&hf[1], fg.CpuEmbed, nn.DeclineNoEmbed, cpuRowsCap)
+	if fg.Given != nil {
+		s.cpuComposeHead(&hf[2], fg.Given, nn.DeclineNoEmbed, 1)
+		s.cpuComposeHead(&hf[3], fg.Given, nn.DeclineNoEmbed, cpuRowsCap)
+	}
+	var p [4]cpudev.Part
+	for i := range hf {
+		p[i] = cpudev.Part{Composed: hf[i].composed, F: hf[i].f, Why: hf[i].why, Err: hf[i].err}
+	}
+	pw := s.c.PleWidth()
+	writesX := fg.Given != nil && (len(fg.Given.Out) > 1 || pw == 0)
+	s.inputs = cpudev.NewInputs(s.cpu.dev, &s.cpu.steps, p[0], p[1], p[2], p[3], fg.Given != nil, writesX,
+		blockWeights{ws: &s.ws, li: cpuInputRows}, s.c.NEmbd, pw)
 }
 
-// cpuInputCall runs one of the input rows' forms of one row (one) or of a
-// chunk's (many) over toks at positions pos, reading in's rows where it is
-// set (the given rows' graph) and writing x and ple, a call of at most the
-// form's rows at a time.
-func (s *Instance) cpuInputCall(one, many *cpuHeadForm, in, x, ple []float32, toks []int32, pos []int) nn.Decline {
-	if !s.cpuHeadOn() {
+// embedRows writes the input rows of toks, at positions pos, into the rows
+// of x and their per-layer inputs into the rows of ple on the device the
+// instance places them on (nn.InputsDevice.Embed), or says why not.
+func (s *Instance) embedRows(x, ple []float32, toks []int32, pos []int) nn.Decline {
+	if s.inputs == nil {
 		return nn.DeclineCaller
 	}
-	st := &s.cpu.embed
-	rows := len(toks)
-	hf := one
-	if rows > 1 {
-		hf = many
+	return s.inputs.Embed(x, ple, toks, pos)
+}
+
+// givenRows writes an embedding span's given rows into the rows of x
+// (nn.InputsDevice.Given), or says why not.
+func (s *Instance) givenRows(x, ple, rows []float32, toks []int32, pos []int) nn.Decline {
+	if s.inputs == nil {
+		return nn.DeclineCaller
 	}
-	f, why := hf.formOf()
-	if why == nn.DeclineServes {
-		_, why = s.ws.bind(f, cpuInputRows, nil)
-	}
-	if why != nn.DeclineServes {
-		s.cpu.steps.Declined[nn.PartEmbed][why] += rows
-		return why
-	}
-	d, pw := s.c.NEmbd, s.c.PleWidth()
-	// A given rows' graph writes the row only where a position table moves
-	// it; otherwise the row is the caller's, copied.
-	writesX := in == nil || len(s.m.FrontGraphs().Given.Out) > 1 || pw == 0
-	if in != nil && !writesX {
-		copy(x, in)
-	}
-	for r0 := 0; r0 < rows; {
-		k := min(f.Rows, rows-r0)
-		u := max(f.Unit, 1)
-		b := &s.cpu.bound
-		*b = cpuBound{li: cpuInputRows, own: s.cpu.dev.Own(f), n: k, tok: st.tok, pos: st.pos}
-		padded := k < u
-		if !padded {
-			k -= k % u
-			b.n = k
-		}
-		st.pos[0] = uint32(k)
-		for i := range k {
-			st.tok[i] = uint32(toks[r0+i])
-			st.pos[1+i] = uint32(pos[r0+i])
-		}
-		o := 0
-		if in != nil {
-			copy(st.gin[:k*d], in[r0*d:(r0+k)*d])
-			b.io[0], o = unsafe.Pointer(&st.gin[0]), 1
-		}
-		if padded {
-			if writesX {
-				b.io[o], o = unsafe.Pointer(&st.pad[0]), o+1
-			}
-			if pw > 0 {
-				b.io[o] = unsafe.Pointer(&st.pad[u*d])
-			}
-		} else {
-			if writesX {
-				b.io[o], o = unsafe.Pointer(&x[r0*d]), o+1
-			}
-			if pw > 0 {
-				b.io[o] = unsafe.Pointer(&ple[r0*pw])
-			}
-		}
-		s.cpu.call[0] = uint32(k)
-		s.cpuRunForm(b, f)
-		if padded {
-			if writesX {
-				copy(x[r0*d:(r0+k)*d], st.pad[:k*d])
-			}
-			if pw > 0 {
-				copy(ple[r0*pw:(r0+k)*pw], st.pad[u*d:u*d+k*pw])
-			}
-		}
-		r0 += k
-	}
-	s.cpu.steps.Served[nn.PartEmbed] += rows
-	return nn.DeclineServes
+	return s.inputs.Given(x, ple, rows, toks, pos)
 }
 
 // embedDeclined is the error of input rows no composed form serves.
@@ -227,7 +133,7 @@ func (r rowSrc) givenAt(i, d int) []float32 {
 // given run through the composed given rows (cpuGiven).
 func (s *Instance) fillRows(src rowSrc, base, n int, x, ple []float32, pos []int) error {
 	d, pw := s.c.NEmbd, s.c.PleWidth()
-	st := &s.cpu.embed
+	st := &s.inScr
 	if len(st.toks) < n {
 		st.toks = make([]int32, n)
 	}
@@ -245,7 +151,7 @@ func (s *Instance) fillRows(src rowSrc, base, n int, x, ple []float32, pos []int
 		if a >= b {
 			return nil
 		}
-		if why := s.cpuEmbed(x[a*d:b*d], pleOf(a, b), toks[a:b], pos[a:b]); why != nn.DeclineServes {
+		if why := s.embedRows(x[a*d:b*d], pleOf(a, b), toks[a:b], pos[a:b]); why != nn.DeclineServes {
 			return s.embedDeclined(why)
 		}
 		return nil
@@ -260,7 +166,7 @@ func (s *Instance) fillRows(src rowSrc, base, n int, x, ple []float32, pos []int
 			return err
 		}
 		rows := g.rows[(base+lo-g.at)*d : (base+hi-g.at)*d]
-		if why := s.cpuGiven(x[lo*d:hi*d], pleOf(lo, hi), rows, toks[lo:hi], pos[lo:hi]); why != nn.DeclineServes {
+		if why := s.givenRows(x[lo*d:hi*d], pleOf(lo, hi), rows, toks[lo:hi], pos[lo:hi]); why != nn.DeclineServes {
 			return s.embedDeclined(why)
 		}
 		at = hi

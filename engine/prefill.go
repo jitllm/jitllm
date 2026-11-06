@@ -280,9 +280,9 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 					// A token's row, as a decode step embeds it.
 					return s.embed(rowIDs[i])
 				}
-				st := &s.cpu.embed
+				st := &s.inScr
 				st.tok1[0], st.pos1[0] = max(rowIDs[i], 0), s.pos
-				if why := s.cpuGiven(s.x, s.ple, g, st.tok1[:], st.pos1[:]); why != nn.DeclineServes {
+				if why := s.givenRows(s.x, s.ple, g, st.tok1[:], st.pos1[:]); why != nn.DeclineServes {
 					return s.embedDeclined(why)
 				}
 				s.trace(-1, "embd", s.x)
@@ -451,7 +451,7 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 				s.growBPLE(n)
 				bple = s.bple[:n*c.PleWidth()]
 			}
-			at := s.cpu.embed.positions(n)
+			at := s.inScr.positions(n)
 			for i := range at {
 				at[i] = p0 + i
 			}

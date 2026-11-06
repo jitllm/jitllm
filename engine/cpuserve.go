@@ -129,14 +129,13 @@ type cpuState struct {
 	bound cpuBound
 	// fault is a violation a gate sets: the bindings rewritten so a kernel
 	// reads the wrong history page or the wrong first row.
-	fault   cpuFault
-	head    cpuHeadState
+	fault cpuFault
+	head  cpuHeadState
 	// tabPlanes is each rotary's planes as its composed table reads them
 	// (composer.TablePlanes), folded from the model's rotaries when the
 	// instance places its blocks (cpuTablePlanes).
 	tabPlanes [2][]float32
 	mtp       cpuMTPState
-	embed     cpuEmbedState
 	tables    cpuTableState
 }
 

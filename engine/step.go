@@ -599,7 +599,7 @@ func stepTogether(runs []Run, rows int, ss nn.SessionStepper) ([][]float32, erro
 		bple = s0.bple[:rows*c.PleWidth()]
 	}
 	s0.tokenSide(rows)
-	if why := s0.cpuEmbed(x[:rows*c.NEmbd], bple, s0.stepTok, pos); why != nn.DeclineServes {
+	if why := s0.embedRows(x[:rows*c.NEmbd], bple, s0.stepTok, pos); why != nn.DeclineServes {
 		return nil, s0.embedDeclined(why)
 	}
 	// The streams past the first, from each row's embedding.
