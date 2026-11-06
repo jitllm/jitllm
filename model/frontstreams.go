@@ -27,17 +27,15 @@ import (
 type streams struct {
 	in, pred []graph.ValueID
 	side     graph.ValueID
-	// mixed is a bank of checkpoints (mixesStreams), and bank the stream
-	// the block banks its input into, written before any stream is read
-	// (0 for none).
+	// mixed is streams the converter states (mixesStreams), and bank the
+	// stream the block banks its input into, written before any stream is
+	// read (0 for none).
 	mixed bool
 	bank  graph.ValueID
-	// gated is streams each sublayer reads through a low-rank gate
-	// (gatesStreams): cur the streams after the attention's placement, w
-	// the placement weights of the sublayer being stated.
-	gated bool
-	cur   []graph.ValueID
-	w     graph.ValueID
+	// cur is the streams after a sublayer that writes every one, and ex
+	// the values the sublayer's read exports to its writes.
+	cur []graph.ValueID
+	ex  []graph.ValueID
 }
 
 // predictsStreams says the model's several residual streams are predicted
@@ -61,15 +59,16 @@ func (c *Config) PredictsStreams() bool {
 // mixesStreams says the model's several residual streams are the ones the
 // converter states, and nothing else carries a stream.
 func (c *Config) mixesStreams() bool {
-	return c.statedStreams() > 1 && c.Streams() == c.statedStreams() && c.PredStreams == 0 && c.HCMult <= 1
+	return c.statedStreams() > 1 && c.Streams() == c.statedStreams() && c.PredStreams == 0
 }
 
-// streamRead is the input u reads: its program over the streams it names
-// -- stream k of st's inputs, the block's input in, or the running residual
-// run -- or run where it states none.
-func (m *Model) streamRead(b *graph.Builder, f graph.Facts, u *jlm.SubStreams, xs []graph.ValueID, in, run graph.ValueID) (graph.ValueID, error) {
+// streamRead is the input u reads -- its program over the streams it names:
+// stream k as it is now (xs), stream 0 as the block received it (in), or the
+// running residual (run) -- or run where it states none, and the values its
+// program exports.
+func (m *Model) streamRead(b *graph.Builder, f graph.Facts, u *jlm.SubStreams, xs []graph.ValueID, in, run graph.ValueID) (graph.ValueID, []graph.ValueID, error) {
 	if u.Read == nil {
-		return run, nil
+		return run, nil, nil
 	}
 	ins := make([]graph.ValueID, len(u.From))
 	for j, k := range u.From {
@@ -82,7 +81,36 @@ func (m *Model) streamRead(b *graph.Builder, f graph.Facts, u *jlm.SubStreams, x
 			ins[j] = xs[k]
 		}
 	}
-	return lowerStated(b, u.Read, ins, f)
+	if len(u.Read.Ops) == 0 {
+		return ins[u.Read.Out], nil, nil
+	}
+	vals, err := lowerValues(b, nil, u.Read, ins, 1, f)
+	if err != nil {
+		return 0, nil, err
+	}
+	ex := make([]graph.ValueID, len(u.Exports))
+	for i, e := range u.Exports {
+		ex[i] = vals[e]
+	}
+	return vals[u.Read.Out], ex, nil
+}
+
+// streamWrites is every stream after a sublayer whose output is y: u's
+// write of stream k over it as it is (xs[k]), y and the read's exports, the
+// stream as it is where u writes none.
+func (m *Model) streamWrites(b *graph.Builder, f graph.Facts, u *jlm.SubStreams, xs []graph.ValueID, y graph.ValueID, ex []graph.ValueID) ([]graph.ValueID, error) {
+	out := slices.Clone(xs)
+	for k, p := range u.Writes {
+		if p == nil {
+			continue
+		}
+		v, err := lowerStated(b, p, append([]graph.ValueID{xs[k], y}, ex...), f)
+		if err != nil {
+			return nil, fmt.Errorf("stream %d's write: %w", k, err)
+		}
+		out[k] = v
+	}
+	return out, nil
 }
 
 // streamJoin is the running residual after a sublayer: u's join over run
@@ -103,74 +131,9 @@ func lowerStated(b *graph.Builder, p *jlm.Program, in []graph.ValueID, f graph.F
 	return LowerProgram(b, nil, p, in, 1, f)
 }
 
-// A block over several streams that each sublayer reads through a low-rank
-// gate and writes into every stream at a weight of its own (HCLowRank): with
-// xn the S streams side by side, each RMS-normed against its own row of the
-// stored weight,
-//
-//	g   = sigmoid(U silu(D xn / S)) * xn
-//	in  = the mean over the streams k of g_k
-//	w   = 2 sigmoid(J xn / S)                  one weight a stream
-//	x_k = x_k + w_k sublayer(in)
-//
-// The input rows' streams are S copies of the embedding, and the head reads
-// the mix through a gate of its own with no placement and no norm.
-
-// gatesStreams says the model's several residual streams are mixed through
-// a low-rank gate, and nothing else carries a stream.
-func (c *Config) gatesStreams() bool {
-	return c.HCLowRank > 0 && c.Streams() == c.HCMult && c.PredStreams == 0 && c.statedStreams() <= 1
-}
-
 // statesStreams says the front end states the model's residual streams.
 func (c *Config) StatesStreams() bool {
-	return c.PredictsStreams() || c.mixesStreams() || c.gatesStreams()
-}
-
-// gatedMix is the sublayer input the low-rank gate reads from the streams
-// xs, and with an inject role stored the streams' placement weights (0
-// for none).
-func (m *Model) gatedMix(b *graph.Builder, f graph.Facts, xs []graph.ValueID, norm, down, up, inject jlm.Role) (mix, w graph.ValueID) {
-	c := m.Cfg
-	s, d := len(xs), c.NEmbd
-	sd, r, inv := s*d, c.HCLowRank, 1/float64(s)
-	cat := b.Emit(graph.OpConcat, xs, []graph.Result{{Name: "hc.streams", Width: sd}}, nil, graph.Attrs{}, nil, nil)[0]
-	xn := b.Emit(graph.OpHeadNorm, []graph.ValueID{cat}, []graph.Result{{Name: "hc.normed", Width: sd}}, nil,
-		graph.Attrs{Eps: c.RMSEps, HeadDim: d}, nil, nil)[0]
-	xn = mapRow(b, "hc.xn", graph.Attrs{Fn: graph.MapMul}, []graph.Binding{{Role: norm, K: sd}}, sd, xn)
-	lo := mapRow(b, "hc.lo", graph.Attrs{Fn: graph.MapMul, Const: inv}, nil, r, b.MatVec(xn, down, r))
-	g := b.Expr("hc.gate", sd, []graph.Term{
-		{Fn: graph.MapSigmoid, Args: [3]graph.Arg{{Kind: graph.ArgIn, Index: 0}}},
-		{Fn: graph.MapMul, Args: [3]graph.Arg{{Kind: graph.ArgTerm, Index: 0}, {Kind: graph.ArgIn, Index: 1}}},
-	}, nil, b.MatVec(siluOf(b, "hc.act", lo), up, sd), xn)
-	acc := b.Emit(graph.OpSlice, []graph.ValueID{g}, []graph.Result{{Name: "hc.g", Width: d}}, nil, graph.Attrs{Width: d}, nil, nil)[0]
-	for k := 1; k < s; k++ {
-		gk := b.Emit(graph.OpSlice, []graph.ValueID{g}, []graph.Result{{Name: "hc.g", Width: d}}, nil,
-			graph.Attrs{Offset: k * d, Width: d}, nil, nil)[0]
-		acc = b.Add(acc, gk)
-	}
-	mix = mapRow(b, "hc.mix", graph.Attrs{Fn: graph.MapMul, Const: inv}, nil, d, acc)
-	if _, ok := f.Inventory[inject]; !ok {
-		return mix, 0
-	}
-	w = mapRow(b, "hc.w.in", graph.Attrs{Fn: graph.MapMul, Const: inv}, nil, s, b.MatVec(xn, inject, s))
-	w = mapRow(b, "hc.w.sig", graph.Attrs{Fn: graph.MapSigmoid}, nil, s, w)
-	return mix, mapRow(b, "hc.w", graph.Attrs{Fn: graph.MapMul, Const: 2}, nil, s, w)
-}
-
-// placed is each stream of xs plus y at its placement weight, at weight
-// one where the sublayer states none.
-func (m *Model) placed(b *graph.Builder, xs []graph.ValueID, w, y graph.ValueID) []graph.ValueID {
-	d := m.Cfg.NEmbd
-	out := make([]graph.ValueID, len(xs))
-	for k, x := range xs {
-		if w == 0 {
-			out[k] = b.Add(x, y)
-			continue
-		}
-		out[k] = mapRow(b, "hc.placed", graph.Attrs{Fn: graph.MapFma}, nil, d, slice1(b, "hc.wk", w, k), y, x)
-	}
-	return out
+	return c.PredictsStreams() || c.mixesStreams()
 }
 
 // banked writes the block's streams: the running residual y, the banked
@@ -307,20 +270,28 @@ func (m *Model) magMatched(b *graph.Builder, p, r graph.ValueID) graph.ValueID {
 // it: predicted from it, or copies of it.
 func (m *Model) ExpandsStreams() bool {
 	c := m.Cfg
-	return c.PredictsStreams() || c.gatesStreams()
+	return c.PredictsStreams() || c.stated != nil && len(c.stated.Expand) != 0
 }
 
 // streamExpand is the input rows' streams 1 and up from stream 0, x:
 // copies of it, or its predictions matched to its magnitude.
-func (m *Model) streamExpand(b *graph.Builder, x graph.ValueID) []graph.ValueID {
+func (m *Model) streamExpand(b *graph.Builder, f graph.Facts, x graph.ValueID) ([]graph.ValueID, error) {
 	c := m.Cfg
 	s, d := c.Streams(), c.NEmbd
 	var out []graph.ValueID
-	if c.gatesStreams() {
-		for range s - 1 {
-			out = append(out, streamCopy(b, x))
+	if c.stated != nil && len(c.stated.Expand) != 0 {
+		for k, p := range c.stated.Expand {
+			if p == nil {
+				out = append(out, streamCopy(b, x))
+				continue
+			}
+			v, err := lowerStated(b, p, []graph.ValueID{x}, f)
+			if err != nil {
+				return nil, fmt.Errorf("stream %d's expansion: %w", k+1, err)
+			}
+			out = append(out, v)
 		}
-		return out
+		return out, nil
 	}
 	p := b.MatVec(x, jlm.RoleStreamExpand, (s-1)*d)
 	for k := 1; k < s; k++ {
@@ -328,7 +299,7 @@ func (m *Model) streamExpand(b *graph.Builder, x graph.ValueID) []graph.ValueID 
 			graph.Attrs{Offset: (k - 1) * d, Width: d}, nil, nil)[0]
 		out = append(out, m.magMatched(b, pk, x))
 	}
-	return out
+	return out, nil
 }
 
 // streamExpandGraph is the input rows' streams 1 and up from stream 0:
@@ -342,7 +313,11 @@ func (m *Model) streamExpandGraph() (*graph.Graph, error) {
 	f, _ := m.Inventory(jlm.DenseBlock)
 	b := graph.NewBlock(-1)
 	x := b.In("x", m.Cfg.NEmbd)
-	b.Out(m.streamExpand(b, x)...)
+	xs, err := m.streamExpand(b, f, x)
+	if err != nil {
+		return nil, err
+	}
+	b.Out(xs...)
 	if err := graph.Verify(b.G, f); err != nil {
 		return nil, fmt.Errorf("the streams' expansion does not verify: %w", err)
 	}
@@ -376,14 +351,11 @@ func (m *Model) streamCollapseGraphAt(li int) (*graph.Graph, error) {
 	}
 	switch {
 	case c.mixesStreams():
-		y, err := m.streamRead(b, f, &c.stated.Head, xs, xs[0], xs[0])
+		y, _, err := m.streamRead(b, f, &c.stated.Head, xs, xs[0], xs[0])
 		if err != nil {
 			return nil, fmt.Errorf("the streams' stated head read: %w", err)
 		}
 		b.Out(y)
-	case c.gatesStreams():
-		mix, _ := m.gatedMix(b, f, xs, jlm.RoleHCHeadNorm, jlm.RoleHCHeadDown, jlm.RoleHCHeadUp, 0)
-		b.Out(mix)
 	default:
 		acc := xs[0]
 		for k := 1; k < s; k++ {

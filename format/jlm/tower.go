@@ -134,7 +134,7 @@ const (
 	// where bound, epsilon Eps.
 	TOpLayerNorm OpCode = 5
 	// TOpRMSNorm is In[0]'s RMS norm, weight Bind[0] where bound, epsilon
-	// Eps.
+	// Eps; without a weight, each Span-wide head of it where Span is set.
 	TOpRMSNorm OpCode = 6
 	// TOpRegroup is space-to-depth: each Span x Span block of the grid's
 	// rows one row, the block's rows in raster order (graph.OpRegroup).

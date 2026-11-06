@@ -3,7 +3,6 @@ package engine
 import (
 	"math"
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/jitllm/jitllm/model"
@@ -191,15 +190,50 @@ func partCPULogits(t *testing.T, m *model.Model, toks []int32, f cpuFault, compo
 // its plain streams, the placement at weight one, the placement without
 // its factor of two, and the gate's rank unscaled.
 func q4eComposedViolations(t *testing.T) []c6Violation {
-	at := func(name string, f func(g *graph.Graph, o *graph.Op) bool) c6Violation {
+	// hyper edits every block's stated hyper-connection, its reads or with
+	// writes its writes, by f on each op of a copy of each program: f says
+	// whether it changed the op.
+	hyper := func(name string, writes bool, f func(p *jlm.Program, i int) bool) c6Violation {
 		return c6Violation{name, func(m *model.Model) func() {
-			return rewriteEveryBlock(m, t, func(g *graph.Graph) *graph.Graph {
-				return rewriteOps(t, g, func(_ int, o *graph.Op) bool { return f(g, o) })
+			changed := 0
+			undo := streamsMut(m, func(s *jlm.Streams) {
+				edit := func(p *jlm.Program) *jlm.Program {
+					if p == nil {
+						return nil
+					}
+					q := *p
+					q.Ops = slices.Clone(p.Ops)
+					for i := range q.Ops {
+						if e := q.Ops[i].Expr; e != nil {
+							c := *e
+							c.Terms = slices.Clone(e.Terms)
+							q.Ops[i].Expr = &c
+						}
+						if f(&q, i) {
+							changed++
+						}
+					}
+					return &q
+				}
+				for li := range s.Blocks {
+					for _, u := range []*jlm.SubStreams{&s.Blocks[li].Attn, &s.Blocks[li].FFN} {
+						if !writes {
+							u.Read = edit(u.Read)
+							continue
+						}
+						w := slices.Clone(u.Writes)
+						for k := range w {
+							w[k] = edit(w[k])
+						}
+						u.Writes = w
+					}
+				}
 			})
+			if changed == 0 {
+				t.Fatalf("%s: the rewrite changed no block", name)
+			}
+			return undo
 		}}
-	}
-	named := func(g *graph.Graph, o *graph.Op, name string) bool {
-		return len(o.Out) > 0 && strings.HasPrefix(g.Values[o.Out[0]].Name, name)
 	}
 	// qsa breaks each QSA block's pooled selection (graph.Attrs.Pooled) by
 	// f, the blocks with none left as they are.
@@ -218,33 +252,37 @@ func q4eComposedViolations(t *testing.T) []c6Violation {
 		}}
 	}
 	return []c6Violation{
-		at("the streams mixed by their plain mean", func(g *graph.Graph, o *graph.Op) bool {
-			if o.Kind != graph.OpExpr || !named(g, o, "hc.gate") {
+		hyper("the streams mixed by their plain mean", false, func(p *jlm.Program, i int) bool {
+			op := &p.Ops[i]
+			t := exprOf(op)
+			if len(t) != 2 || t[0].Fn != jlm.FnSigmoid || t[1].Fn != jlm.FnMul || len(op.In) != 2 {
 				return false
 			}
-			*o = graph.Op{Kind: graph.OpMap, In: o.In[1:2], Out: o.Out, Attr: graph.Attrs{Fn: graph.MapMul, Const: 1}}
+			*op = jlm.TowerOp{Code: jlm.TOpSlice, In: op.In[1:2], Width: op.Width}
 			return true
 		}),
-		at("the sublayer placed into every stream at weight one", func(g *graph.Graph, o *graph.Op) bool {
-			if o.Kind != graph.OpMap || !named(g, o, "hc.placed") {
+		hyper("the sublayer placed into every stream at weight one", true, func(p *jlm.Program, i int) bool {
+			op := &p.Ops[i]
+			if t := exprOf(op); len(t) != 1 || t[0].Fn != jlm.FnMul || len(op.In) != 2 || op.In[1] != 1 {
 				return false
 			}
-			*o = graph.Op{Kind: graph.OpAdd, In: o.In[1:3], Out: o.Out}
+			*op = jlm.TowerOp{Code: jlm.TOpSlice, In: []uint16{1}, Width: op.Width}
 			return true
 		}),
-		at("the placement without its factor of two", func(g *graph.Graph, o *graph.Op) bool {
-			if o.Kind != graph.OpMap || !named(g, o, "hc.w") || o.Attr.Fn != graph.MapMul || o.Attr.Const != 2 {
-				return false
-			}
-			o.Attr.Const = 1
-			return true
+		hyper("the placement without its factor of two", false, func(p *jlm.Program, i int) bool {
+			return constOf(&p.Ops[i], 2, 1)
 		}),
-		at("the gate's rank unscaled", func(g *graph.Graph, o *graph.Op) bool {
-			if o.Kind != graph.OpMap || !named(g, o, "hc.lo") {
+		hyper("the gate's rank unscaled", false, func(p *jlm.Program, i int) bool {
+			op := &p.Ops[i]
+			if len(op.In) != 1 || int(op.In[0]) < int(p.NIn) {
 				return false
 			}
-			o.Attr.Const = 1
-			return true
+			src := &p.Ops[int(op.In[0])-int(p.NIn)]
+			if src.Code != jlm.TOpLinear || !slices.Contains([]jlm.Role{jlm.RoleHCAttnDown, jlm.RoleHCFFNDown}, src.Bind[0]) {
+				return false
+			}
+			t := exprOf(op)
+			return len(t) == 1 && t[0].Fn == jlm.FnMul && constOf(op, t[0].Args[1].Value, 1)
 		}),
 		qsa("QSA's blocks not turned at their first positions", func(o *graph.Op) { o.Attr.NRot = 0 }),
 		qsa("QSA's blocks scored by their best key, not their pooled key", func(o *graph.Op) {
@@ -384,4 +422,23 @@ func TestQwen4ExpServesComposed(t *testing.T) {
 	if ran == 0 {
 		t.Fatal("no device on this host")
 	}
+}
+
+// exprOf is a stated op's terms, nil for any other op.
+func exprOf(op *jlm.TowerOp) []jlm.Term {
+	if op.Code != jlm.TOpStated || op.Expr == nil {
+		return nil
+	}
+	return op.Expr.Terms
+}
+
+// constOf makes a stated op of one product by the constant from a product
+// by to, and says whether it did.
+func constOf(op *jlm.TowerOp, from, to float32) bool {
+	t := exprOf(op)
+	if len(t) != 1 || t[0].Fn != jlm.FnMul || t[0].Args[1].Kind != jlm.ArgConst || t[0].Args[1].Value != from {
+		return false
+	}
+	t[0].Args[1].Value = to
+	return true
 }

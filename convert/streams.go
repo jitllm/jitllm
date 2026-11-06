@@ -13,6 +13,10 @@ import (
 // attention's output is the running residual rather than added to it.
 // stores says block li (-1 the dense tensors) stores role.
 func StateStreams(c *jlm.Config, stores func(r jlm.Role, li int32) bool) {
+	if c.HCLowRank > 0 && c.HCMult > 1 && c.NLayer > 0 {
+		stateHyper(c)
+		return
+	}
 	if c.AttnResBlock == 0 || c.NLayer == 0 {
 		return
 	}
@@ -104,4 +108,87 @@ func bankRead(c *jlm.Config, u jlm.SubStreams, from []int8, role jlm.Role, store
 	p.Out = acc
 	u.Read = p
 	return u
+}
+
+// stateHyper states Qwen3.8-Flash-Next's hyper-connections (transformers'
+// Qwen4ExpForCausalLM): HCMult streams, the input rows' copies of the
+// embedding; each sublayer reads, with xn the streams side by side each
+// RMS-normed against its own row of the stored weight,
+//
+//	g   = sigmoid(U silu(D xn / S)) * xn
+//	in  = the mean over the streams k of g_k
+//	w   = 2 sigmoid(J xn / S)                  one weight a stream
+//	x_k = x_k + w_k sublayer(in)
+//
+// and the head reads the mix through a gate of its own, with no placement.
+func stateHyper(c *jlm.Config) {
+	n := int(c.HCMult)
+	s := jlm.Streams{N: uint8(n), Expand: make([]*jlm.Program, n-1), Blocks: make([]jlm.BlockStreams, c.NLayer+c.NMTP)}
+	for li := range s.Blocks {
+		s.Blocks[li] = jlm.BlockStreams{
+			Attn: hyperSub(c, jlm.RoleHCAttnNorm, jlm.RoleHCAttnDown, jlm.RoleHCAttnUp, jlm.RoleHCAttnInject),
+			FFN:  hyperSub(c, jlm.RoleHCFFNNorm, jlm.RoleHCFFNDown, jlm.RoleHCFFNUp, jlm.RoleHCFFNInject),
+		}
+	}
+	s.Head = hyperSub(c, jlm.RoleHCHeadNorm, jlm.RoleHCHeadDown, jlm.RoleHCHeadUp, 0)
+	c.Streams = s
+}
+
+// hyperSub is a sublayer reading the streams through the gate the roles
+// bind, and with an inject role placing its output into every stream.
+func hyperSub(c *jlm.Config, norm, down, up, inject jlm.Role) jlm.SubStreams {
+	n, d := int(c.HCMult), int32(c.NEmbd)
+	sd, inv := int32(n)*d, 1/float32(n)
+	p := &jlm.Program{NIn: uint16(n)}
+	op := func(o jlm.TowerOp) uint16 {
+		p.Ops = append(p.Ops, o)
+		return uint16(n + len(p.Ops) - 1)
+	}
+	expr := func(w int32, f func(e *jlm.ExprBuilder), in ...uint16) uint16 {
+		var e jlm.ExprBuilder
+		f(&e)
+		return op(jlm.TowerOp{Code: jlm.TOpStated, In: in, Width: w, Expr: &jlm.Expr{Terms: e.T}})
+	}
+	scaled := func(w int32, k float32, in uint16) uint16 {
+		return expr(w, func(e *jlm.ExprBuilder) { e.Fn(jlm.FnMul, jlm.Operand(0), jlm.Num(k)) }, in)
+	}
+	streams := make([]uint16, n)
+	from := make([]int8, n)
+	for k := range n {
+		streams[k], from[k] = uint16(k), int8(k)
+	}
+	cat := op(jlm.TowerOp{Code: jlm.TOpConcat, In: streams})
+	normed := op(jlm.TowerOp{Code: jlm.TOpRMSNorm, In: []uint16{cat}, Span: d, Eps: c.RMSEps})
+	xn := op(jlm.TowerOp{Code: jlm.TOpScale, In: []uint16{normed}, Bind: []jlm.Role{norm}})
+	lo := scaled(int32(c.HCLowRank), inv, op(jlm.TowerOp{Code: jlm.TOpLinear, In: []uint16{xn}, Bind: []jlm.Role{down}}))
+	act := expr(int32(c.HCLowRank), func(e *jlm.ExprBuilder) {
+		e.Fn(jlm.FnMul, jlm.Operand(0), e.Fn(jlm.FnSigmoid, jlm.Operand(0)))
+	}, lo)
+	u := op(jlm.TowerOp{Code: jlm.TOpLinear, In: []uint16{act}, Bind: []jlm.Role{up}})
+	g := expr(sd, func(e *jlm.ExprBuilder) { e.Fn(jlm.FnMul, e.Fn(jlm.FnSigmoid, jlm.Operand(0)), jlm.Operand(1)) }, u, xn)
+	acc := op(jlm.TowerOp{Code: jlm.TOpSlice, In: []uint16{g}, Width: d})
+	for k := 1; k < n; k++ {
+		gk := op(jlm.TowerOp{Code: jlm.TOpSlice, In: []uint16{g}, Offset: int32(k) * d, Width: d})
+		acc = op(jlm.TowerOp{Code: jlm.TOpAdd, In: []uint16{acc, gk}})
+	}
+	mix := scaled(d, inv, acc)
+	u2 := jlm.SubStreams{From: from, Read: p}
+	if inject != 0 {
+		wv := scaled(int32(n), inv, op(jlm.TowerOp{Code: jlm.TOpLinear, In: []uint16{xn}, Bind: []jlm.Role{inject}}))
+		ws := expr(int32(n), func(e *jlm.ExprBuilder) { e.Fn(jlm.FnSigmoid, jlm.Operand(0)) }, wv)
+		w := scaled(int32(n), 2, ws)
+		u2.Exports = []uint16{w}
+		for k := range n {
+			wp := &jlm.Program{NIn: 3}
+			wp.Ops = append(wp.Ops, jlm.TowerOp{Code: jlm.TOpSlice, In: []uint16{2}, Offset: int32(k), Width: 1})
+			var e jlm.ExprBuilder
+			e.Fn(jlm.FnMul, jlm.Operand(0), jlm.Operand(1))
+			wp.Ops = append(wp.Ops, jlm.TowerOp{Code: jlm.TOpStated, In: []uint16{3, 1}, Width: d, Expr: &jlm.Expr{Terms: e.T}},
+				jlm.TowerOp{Code: jlm.TOpAdd, In: []uint16{0, 4}})
+			wp.Out = 5
+			u2.Writes = append(u2.Writes, wp)
+		}
+	}
+	p.Out = mix
+	return u2
 }

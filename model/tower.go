@@ -727,9 +727,18 @@ func resampleOf(chain, filter uint8) (uint8, uint8, error) {
 // matrix's rows, a regroup's input times its group, and a patch gather's the
 // width the matrix reading it takes.
 func LowerProgram(b *graph.Builder, t *jlm.Tower, p *jlm.Program, in []graph.ValueID, rows int, f graph.Facts) (graph.ValueID, error) {
+	vals, err := lowerValues(b, t, p, in, rows, f)
+	if err != nil {
+		return 0, err
+	}
+	return vals[p.Out], nil
+}
+
+// lowerValues is LowerProgram's every value: the inputs, then each op's.
+func lowerValues(b *graph.Builder, t *jlm.Tower, p *jlm.Program, in []graph.ValueID, rows int, f graph.Facts) ([]graph.ValueID, error) {
 	merge, window := towerTiles(t)
 	if len(in) != int(p.NIn) {
-		return 0, fmt.Errorf("a program of %d inputs over %d", p.NIn, len(in))
+		return nil, fmt.Errorf("a program of %d inputs over %d", p.NIn, len(in))
 	}
 	vals := append([]graph.ValueID(nil), in...)
 	shape := func(r jlm.Role) (graph.Shape, error) {
@@ -777,27 +786,27 @@ func LowerProgram(b *graph.Builder, t *jlm.Tower, p *jlm.Program, in []graph.Val
 		case jlm.TOpLinear:
 			s, err := shape(op.Bind[0])
 			if err != nil {
-				return 0, err
+				return nil, err
 			}
 			out = b.MatVec(ins[0], op.Bind[0], s.Rows, op.Bind[1:]...)
 		case jlm.TOpPosTable:
 			s, err := shape(op.Bind[0])
 			if err != nil {
-				return 0, err
+				return nil, err
 			}
 			out = b.Emit(graph.OpEmbed, nil, []graph.Result{{Name: "pos", Width: s.K}},
 				[]graph.Binding{{Role: op.Bind[0], K: s.K, Rows: s.Rows}}, graph.Attrs{Positional: true, Offset: int(op.Offset)}, nil, nil)[0]
 		case jlm.TOpPosResample:
 			s, err := shape(op.Bind[0])
 			if err != nil {
-				return 0, err
+				return nil, err
 			}
 			if s.Rows != int(op.Span*op.Span) {
-				return 0, fmt.Errorf("resamples a table %d a side from %d rows", op.Span, s.Rows)
+				return nil, fmt.Errorf("resamples a table %d a side from %d rows", op.Span, s.Rows)
 			}
 			chain, filter, err := resampleOf(op.Chain, op.Filter)
 			if err != nil {
-				return 0, err
+				return nil, err
 			}
 			out = b.Emit(graph.OpPosResample, nil, []graph.Result{{Name: "pos", Width: s.K}},
 				[]graph.Binding{{Role: op.Bind[0], K: s.K, Rows: s.Rows}},
@@ -808,16 +817,19 @@ func LowerProgram(b *graph.Builder, t *jlm.Tower, p *jlm.Program, in []graph.Val
 			out = b.LayerNorm(ins[0], op.Bind[0], float64(op.Eps), op.Bind[1:]...)
 		case jlm.TOpRMSNorm:
 			if len(op.Bind) == 0 {
-				w := width(ins[0])
+				w, hd := width(ins[0]), width(ins[0])
+				if op.Span > 0 {
+					hd = int(op.Span)
+				}
 				out = b.Emit(graph.OpHeadNorm, ins, []graph.Result{{Name: name, Width: w}}, nil,
-					graph.Attrs{Eps: float64(op.Eps), HeadDim: w}, nil, nil)[0]
+					graph.Attrs{Eps: float64(op.Eps), HeadDim: hd}, nil, nil)[0]
 				break
 			}
 			out = b.Norm(ins[0], op.Bind[0], float64(op.Eps))
 		case jlm.TOpScale:
 			s, err := shape(op.Bind[0])
 			if err != nil {
-				return 0, err
+				return nil, err
 			}
 			out = mapRow(b, name, graph.Attrs{Fn: graph.MapMul}, []graph.Binding{{Role: op.Bind[0], K: s.K, Rows: s.Rows}},
 				width(ins[0]), ins[0])
@@ -859,7 +871,7 @@ func LowerProgram(b *graph.Builder, t *jlm.Tower, p *jlm.Program, in []graph.Val
 			mean := jlm.Expr{Terms: e.T}
 			var err error
 			if out, err = b.Stated("pooled", &mean, []graph.ValueID{acc}, E, f); err != nil {
-				return 0, fmt.Errorf("the pool's mean: %w", err)
+				return nil, fmt.Errorf("the pool's mean: %w", err)
 			}
 		case jlm.TOpFold:
 			S := int(op.Span)
@@ -877,15 +889,15 @@ func LowerProgram(b *graph.Builder, t *jlm.Tower, p *jlm.Program, in []graph.Val
 		case jlm.TOpStated:
 			v, err := b.Stated(name, op.Expr, ins, int(op.Width), f)
 			if err != nil {
-				return 0, err
+				return nil, err
 			}
 			out = v
 		default:
-			return 0, fmt.Errorf("op %d is code %d, which this engine does not lower", i, op.Code)
+			return nil, fmt.Errorf("op %d is code %d, which this engine does not lower", i, op.Code)
 		}
 		vals = append(vals, out)
 	}
-	return vals[p.Out], nil
+	return vals, nil
 }
 
 // towerBlock is block li of the model's block space (the tower's block

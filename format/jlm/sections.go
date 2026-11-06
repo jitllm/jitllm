@@ -198,7 +198,10 @@ func encodeConfigAt(c *Config, v uint32) []byte {
 	// the first sixteen; an older reader drops it.
 	// The eighteenth, the activation quantization, implies the first
 	// seventeen; an older reader drops it.
-	aq := c.ActQuant != ActQuantNone
+	// The nineteenth, the streams' expansions and writes, implies the first
+	// eighteen; an older reader drops it.
+	sw := c.Streams.writesStreams()
+	aq := sw || c.ActQuant != ActQuantNone
 	rev := aq || c.Revision != 0 || c.RopeScaleSWA != 0 || len(c.BidirLayers) != 0
 	streams := rev || c.Streams.N > 1
 	weight := streams || len(c.RouterWeight.Terms) != 0
@@ -329,6 +332,9 @@ func encodeConfigAt(c *Config, v uint32) []byte {
 	}
 	if aq {
 		w.u8(uint8(c.ActQuant))
+	}
+	if sw {
+		encodeStreamWrites(w, &c.Streams)
 	}
 	return w.b
 }
@@ -498,13 +504,16 @@ func decodeConfigAt(b []byte, v uint32) (*Config, error) {
 	if r.err == nil && len(r.b) > 0 {
 		c.ActQuant = ActQuant(r.u8())
 	}
+	if r.err == nil && len(r.b) > 0 {
+		decodeStreamWrites(r, &c.Streams)
+	}
 	if r.err != nil {
 		return nil, r.err
 	}
 	if err := exprsValid(c); err != nil {
 		return nil, err
 	}
-	if err := c.Streams.valid(int(c.NLayer)); err != nil {
+	if err := c.Streams.valid(int(c.NLayer + c.NMTP)); err != nil {
 		return nil, err
 	}
 	if c.ActQuant > ActQuantRowInt8 {
