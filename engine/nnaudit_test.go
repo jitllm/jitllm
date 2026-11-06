@@ -154,12 +154,16 @@ func auditComposedCPU(t *testing.T, name, path string, opts ...Option) {
 	const steps = 3
 	s := testInstance(t, m, 16, instOpts...)
 	defer s.Close()
+	asked := s.Account(nn.CPU).Asks
 	for i := range steps {
 		lg, err := s.Forward(int32(1 + i))
 		if err != nil {
 			t.Fatalf("Forward: %v", err)
 		}
 		finite(t, "Forward", lg)
+	}
+	if n := s.Account(nn.CPU).Asks - asked; n != 0 {
+		t.Fatalf("the decode asked the composer for %d form(s) after the instance was made", n)
 	}
 	served, declined := s.Account(nn.CPU).Steps.Of(nn.ComposedBlock)
 	total := served
