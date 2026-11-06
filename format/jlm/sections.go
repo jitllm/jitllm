@@ -196,7 +196,10 @@ func encodeConfigAt(c *Config, v uint32) []byte {
 	// seventeenth, the statement revision with the sliding layers' rotary
 	// magnitude and the layers a picture's rows see each other on, implies
 	// the first sixteen; an older reader drops it.
-	rev := c.Revision != 0 || c.RopeScaleSWA != 0 || len(c.BidirLayers) != 0
+	// The eighteenth, the activation quantization, implies the first
+	// seventeen; an older reader drops it.
+	aq := c.ActQuant != ActQuantNone
+	rev := aq || c.Revision != 0 || c.RopeScaleSWA != 0 || len(c.BidirLayers) != 0
 	streams := rev || c.Streams.N > 1
 	weight := streams || len(c.RouterWeight.Terms) != 0
 	score := weight || len(c.RouterScore.Terms) != 0
@@ -323,6 +326,9 @@ func encodeConfigAt(c *Config, v uint32) []byte {
 		for _, b := range c.BidirLayers {
 			w.bool(b)
 		}
+	}
+	if aq {
+		w.u8(uint8(c.ActQuant))
 	}
 	return w.b
 }
@@ -489,6 +495,9 @@ func decodeConfigAt(b []byte, v uint32) (*Config, error) {
 			c.BidirLayers = append(c.BidirLayers, r.bool())
 		}
 	}
+	if r.err == nil && len(r.b) > 0 {
+		c.ActQuant = ActQuant(r.u8())
+	}
 	if r.err != nil {
 		return nil, r.err
 	}
@@ -497,6 +506,9 @@ func decodeConfigAt(b []byte, v uint32) (*Config, error) {
 	}
 	if err := c.Streams.valid(int(c.NLayer)); err != nil {
 		return nil, err
+	}
+	if c.ActQuant > ActQuantRowInt8 {
+		return nil, fmt.Errorf("jlm: activation quantization %d is not one this format defines", c.ActQuant)
 	}
 	if n := len(c.BidirLayers); n != 0 && n != int(c.NLayer) {
 		return nil, fmt.Errorf("jlm: %d layers' bidirectional statement for %d layers", n, c.NLayer)

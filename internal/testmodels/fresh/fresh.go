@@ -57,7 +57,8 @@ func reconvert(path string) error {
 		tools := voc == nil || len(voc.Templates) == 0 || len(voc.Tools.Calls) > 0
 		cfg := c.Config()
 		streams := cfg.AttnResBlock == 0 || cfg.Streams.N > 1
-		rev := cfg.Revision >= jlm.StatementRevision || cfg.SWAWindow == 0 || cfg.YarnFactor <= 1 && v == nil
+		rev := cfg.Revision >= jlm.StatementRevision || (cfg.SWAWindow == 0 || cfg.YarnFactor <= 1 && v == nil) &&
+			(cfg.Revision >= 2 || !storesAny(c, jlm.RoleAttnSubNorm, jlm.RoleFFNSubNorm))
 		c.Close()
 		switch {
 		case stated && tower && tools && streams && rev:
@@ -100,4 +101,16 @@ func reconvert(path string) error {
 			filepath.Base(path), openErr, filepath.Base(src), err)
 	}
 	return os.Rename(tmp, path)
+}
+
+// storesAny reports that some block of c stores one of rs.
+func storesAny(c *jlm.File, rs ...jlm.Role) bool {
+	for bi := range c.Config().NLayer {
+		for _, r := range rs {
+			if c.Has(r, int32(bi), -1) {
+				return true
+			}
+		}
+	}
+	return false
 }
