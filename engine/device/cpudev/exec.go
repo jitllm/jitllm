@@ -22,6 +22,9 @@ const RowsCap = 64
 // workers, its composer, the forms of each of its blocks, the runner that
 // calls them, and what it composed and served.
 type Exec struct {
+	// StreamFault is a gate's violation of the streams part: its expansion
+	// swaps streams 1 and 2 (Streams.Fault), armed before the parts are placed.
+	StreamFault bool
 	// cpu is the device the executor runs on, seat the instance's decode seat
 	// there and quota its page quota (a root instance's; nil otherwise).
 	cpu   *CPU
