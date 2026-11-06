@@ -197,8 +197,6 @@ type Speculator struct {
 
 	// Scratch, grown to the widest round.
 	tout, dout rowsOut
-	snaps      []recSnap
-	pre        recSnap
 	ze         []float32
 	// noTok is a draft step's rows' tokens: none, its rows given (draftRows).
 	noTok  []int32
@@ -348,22 +346,19 @@ func (s *Instance) Speculate(opts ...SpecOption) (*Speculator, error) {
 	sp.mode = sp.opt.rollback
 	if sp.mode == SpecRollbackAuto {
 		sp.mode = SpecRollbackRows
-		if s.devLinear() {
+		if !s.recRowsKept() {
 			sp.mode = SpecRollbackReplay
 		}
 	}
-	if sp.mode == SpecRollbackRows && s.devLinear() {
+	if sp.mode == SpecRollbackRows && !s.recRowsKept() {
 		sp.Close()
-		return nil, fmt.Errorf("model: per-row recurrent snapshots need every linear block on the host; " +
-			"a device keeps its own state and rewinds it one step (SpecRollbackReplay)")
+		return nil, fmt.Errorf("model: per-row recurrent snapshots need every linear block on a device that keeps a call's rows " +
+			"(nn.RecRowKeeper); a card rewinds its own state one step (SpecRollbackReplay)")
 	}
 	sp.stats.Rollback = sp.mode
 	sp.h = make([]float32, c.SpecHidW())
 	sp.dlog = make([]float32, c.NVocab)
 	sp.dhid = make([]float32, c.SpecHidW())
-	if s.recurrent() {
-		sp.pre = s.newRecSnap()
-	}
 	if !mtp {
 		sp.lookupInit()
 	}
@@ -649,22 +644,13 @@ func (sp *Speculator) Next(sm *Sampler) ([]int32, error) {
 	sp.tout.from = from
 	sp.tout.logits = grow32(sp.tout.logits, (nr-from)*c.NVocab)
 	sp.tout.hidden = grow32(sp.tout.hidden, (nr-from)*c.SpecHidW())
-	sp.tout.snap = nil
 	sp.tout.argmax = greedy
-	rr, devRec := t.ld.(nn.RecRewinder)
-	devRec = devRec && t.devLinear()
 	if t.recurrent() && kd > 0 {
 		switch sp.mode {
 		case SpecRollbackRows:
-			for len(sp.snaps) < nr-1 {
-				sp.snaps = append(sp.snaps, t.newRecSnap())
-			}
-			sp.tout.snap = sp.snaps[:nr-1]
+			t.recKeepRows(nr - 1)
 		case SpecRollbackReplay:
-			t.saveRec(&sp.pre)
-			if devRec {
-				rr.RecMark()
-			}
+			t.recMarkAll()
 		}
 	}
 	t.kv.note(P, rows...)
@@ -747,14 +733,15 @@ func (sp *Speculator) Next(sm *Sampler) ([]int32, error) {
 		case sp.fault == faultKeepRejectedRec:
 			t.rewind(keep)
 		case sp.mode == SpecRollbackRows:
-			t.loadRec(&sp.snaps[r+a])
+			if !t.recRestoreRow(r + a) {
+				return nil, fmt.Errorf("model: a device kept no recurrent state after row %d of the verification", r+a)
+			}
 			t.rewind(keep)
 			sp.stats.Restored++
 		default:
 			// Back to the state before this pass, and the accepted rows go
 			// again at the head of the next one.
-			t.loadRec(&sp.pre)
-			if devRec && !rr.RecRewind() {
+			if !t.recRewindAll() {
 				why := "no reason given"
 				if e, ok := t.ld.(nn.ErrReporter); ok {
 					why = e.Err()

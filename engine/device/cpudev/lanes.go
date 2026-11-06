@@ -48,6 +48,9 @@ type Lanes struct {
 	bidir      bool
 	chunkRun   [1]nn.KeyRun
 	prompt     Prompt
+	// keep is the attached session's copies of its recurrent state
+	// (recKeep).
+	keep *recKeep
 	// ChunkFault starts each prompt chunk after the first from a cleared
 	// summary.
 	ChunkFault bool
@@ -339,6 +342,9 @@ func (l *Lanes) recAddrs(li int) (state, conv unsafe.Pointer) {
 	if l.v == nil || li < 0 || li >= l.v.Blocks() {
 		return nil, nil
 	}
+	if l.keep != nil {
+		l.keep.stepping(l.v, li)
+	}
 	return unsafe.Pointer(unsafe.SliceData(l.v.State(li))), unsafe.Pointer(unsafe.SliceData(l.v.Conv(li)))
 }
 
@@ -352,8 +358,9 @@ type HistoryOf interface{ History() History }
 // attaches the history first, so one instance's lanes serve every session
 // leasing it.
 type SessionLanes struct {
-	l  *Lanes
-	of HistoryOf
+	l    *Lanes
+	of   HistoryOf
+	keep recKeep
 }
 
 // For is the calls of the session whose history of reads on the lanes.
@@ -543,7 +550,7 @@ func (l *Lanes) recRows(li int, cb *Block, t Tensors, x, cs, csSWA []float32, se
 	if base < 0 {
 		pr = nil
 	}
-	if own == nil && (pr == nil || !pr.Snaps()) {
+	if own == nil && l.keep.whole() {
 		if f := l.recWhole(li, t, cb, seq, pos); f != nil {
 			if why := l.ReadyRows(li, f, pos); why != nn.DeclineServes {
 				return why, nil
@@ -612,8 +619,10 @@ func (l *Lanes) recRows(li int, cb *Block, t Tensors, x, cs, csSWA []float32, se
 		if why, err := l.Row(li, &st); why != nn.DeclineServes || err != nil {
 			return why, err
 		}
+		if l.keep != nil && base >= 0 {
+			l.keep.stepped(l.v, li, base+r)
+		}
 		if pr != nil {
-			pr.Snap(li, st.Slot, base+r)
 			pr.Seal(li, st.Slot, pos[r]+1)
 		}
 	}
@@ -658,11 +667,9 @@ func (l *Lanes) SetPromptRows(slot, base int, bidir bool) {
 // (Snaps, Snap), and the restore points the prompt seals it at (Points,
 // Point, Seal).
 type Prompt interface {
-	Snaps() bool
 	Points() bool
 	Point(pos int) bool
 	Seal(li, slot, pos int)
-	Snap(li, slot, row int)
 }
 
 // recWhole is linear block li's rows' form where the rows run on it whole:
@@ -698,6 +705,7 @@ func (s *SessionLanes) attach() {
 	h := s.of.History()
 	s.l.Attach(h, h.View())
 	s.l.prompt, _ = s.of.(Prompt)
+	s.l.keep = &s.keep
 }
 
 // SetPromptRows hands the lanes the prompt chunk the next call runs

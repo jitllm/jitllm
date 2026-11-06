@@ -43,18 +43,10 @@ type rowsOut struct {
 	argmax bool
 	token  int32
 	tokens []int32
-	// snap[r], when there are that many, receives every host linear block's
-	// recurrent state after row r of the call: a rejection after row r takes
-	// it back (recSnap). Device blocks keep their own (nn.RecRewinder).
-	snap []recSnap
 	// resBase is the step's row the chunk being collapsed begins at, for
 	// tapStreams.
 	resBase int
 }
-
-// recSnap is one copy of every linear block's recurrent state for one row,
-// indexed by block; nil for an attention block.
-type recSnap struct{ conv, state [][]float32 }
 
 // hiddenOf points a head's hidden readback at the step's destination for the
 // duration of one call, and returns what puts it back. Callable on a nil
@@ -336,20 +328,6 @@ func (s *Instance) finishRows(headDone bool, lastBase, total int) error {
 	return s.kvCheck()
 }
 
-// snapRow copies every host linear block's recurrent state for the slot after
-// row `row` of a speculation step into its snapshot, when the step asked for
-// one that far. Called once per (block, row), after the block steps the row.
-func (r *rowsOut) snapRow(s *Instance, li, slot, row int) {
-	if r == nil || row >= len(r.snap) || s.view.Conv(li) == nil {
-		return
-	}
-	g := s.dg
-	nc, ns := g.ConvStateLen(), g.StateStride()
-	sn := &r.snap[row]
-	copy(sn.conv[li], s.view.Conv(li)[slot*nc:(slot+1)*nc])
-	copy(sn.state[li][:ns], s.view.State(li)[slot*g.StateStride():slot*g.StateStride()+ns])
-}
-
 // tapStreams copies the residual of the wanted rows among n rows of a chunk
 // x (stream-major) into the step's hidden rows, every stream of a row
 // together: over a residual of every stream a step's hidden state is the
@@ -463,51 +441,6 @@ func (s *Instance) rowsHead(rd nn.RowsDevice, pos, slot []int, n int, logits []f
 		return s.headDeclined(why)
 	}
 	return nil
-}
-
-// newRecSnap allocates one snapshot of every host linear block's state for
-// one row, or an empty one on a model with none.
-func (s *Instance) newRecSnap() recSnap {
-	if !s.view.Recurrent() {
-		return recSnap{}
-	}
-	g := s.dg
-	sn := recSnap{conv: make([][]float32, s.view.Blocks()), state: make([][]float32, s.view.Blocks())}
-	for li := range s.view.Blocks() {
-		if s.view.Conv(li) != nil {
-			sn.conv[li] = make([]float32, g.ConvStateLen())
-			sn.state[li] = make([]float32, g.StateStride())
-		}
-	}
-	return sn
-}
-
-// saveRec copies slot 0's recurrent state of every host linear block into
-// sn, and loadRec copies it back. A device block's state is the device's
-// (nn.RecRewinder): the host's copy of it is not the live one, and copying it
-// was a measurable share of a speculation round.
-func (s *Instance) saveRec(sn *recSnap) { s.copyRec(sn, true) }
-func (s *Instance) loadRec(sn *recSnap) { s.copyRec(sn, false) }
-
-func (s *Instance) copyRec(sn *recSnap, save bool) {
-	g := s.dg
-	nc, ns := g.ConvStateLen(), g.StateStride()
-	for li := range s.view.Blocks() {
-		if s.view.Conv(li) == nil || !s.c.LayerKind(li).Recurrent() {
-			continue
-		}
-		if s.devAt(li) {
-			// The device rewinds its block's state (nn.RecRewinder).
-			continue
-		}
-		if save {
-			copy(sn.conv[li], s.view.Conv(li)[:nc])
-			copy(sn.state[li], s.view.State(li)[:ns])
-		} else {
-			copy(s.view.Conv(li)[:nc], sn.conv[li])
-			copy(s.view.State(li)[:ns], sn.state[li])
-		}
-	}
 }
 
 // rewind takes slot 0 back to position p, forgetting what was written past
