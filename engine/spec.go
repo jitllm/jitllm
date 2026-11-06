@@ -486,7 +486,7 @@ func (sp *Speculator) trunkPrompt(prompt []int32) ([]float32, []float32, error) 
 		copy(hid, resid)
 		return logits, hid, nil
 	}
-	if why := t.cpuOutNorm(hid, resid, n); why != nn.DeclineServes {
+	if why := t.outNormRows(hid, resid, n); why != nn.DeclineServes {
 		return nil, nil, t.headDeclined(why)
 	}
 	return logits, hid, nil

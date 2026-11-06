@@ -48,7 +48,7 @@ func (s *Instance) altRowsStep(rd nn.RowsDevice, pos, slot []int, tokens []int32
 		return err
 	}
 	s.growBatch(n)
-	if why := s.cpuHeadRows(s.bx, logits, nil, nlogit); why != nn.DeclineServes {
+	if why := s.headRows(s.bx, logits, nil, nlogit); why != nn.DeclineServes {
 		return s.headDeclined(why)
 	}
 	if greedy {

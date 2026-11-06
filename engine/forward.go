@@ -134,6 +134,8 @@ type Instance struct {
 	outW    *model.Tensor
 	// ws is where this instance's forms read their weights.
 	ws weightSource
+	// heads is the device running the head and the samplers.
+	heads nn.HeadDevice
 	// entry is the device writing a prediction block's entry rows, nil on an
 	// instance that starts at no prediction block.
 	entry nn.EntryDevice
@@ -3094,7 +3096,7 @@ func (s *Instance) ForwardGreedy(token int32) (int32, error) {
 	if onDev && h.Token >= 0 {
 		return h.Token, nil
 	}
-	if tok, ok := s.cpuGreedy(logits); ok {
+	if tok, ok := s.greedy(logits); ok {
 		return tok, nil
 	}
 	return 0, s.sampleDeclined("the greedy token")
@@ -3142,7 +3144,7 @@ func (s *Instance) ForwardSample(token int32, smp *Sampler) (int32, error) {
 		s.SampledOnDevice++
 		tok = h.Token
 	default:
-		t, ok := s.cpuDraw(logits, smp, u)
+		t, ok := s.draw(logits, smp, u)
 		if !ok {
 			return 0, s.sampleDeclined("the draw")
 		}
@@ -3364,7 +3366,7 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 		if s.rows != nil && !c.ResidStreams() {
 			hidden = s.rows.hidden
 		}
-		if why := s.cpuHead(s.x, s.logits, hidden); why != nn.DeclineServes {
+		if why := s.headRow(s.x, s.logits, hidden); why != nn.DeclineServes {
 			return nil, cpuHeadRefused(why)
 		}
 	}
