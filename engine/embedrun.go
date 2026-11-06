@@ -31,7 +31,7 @@ func NewEmbedder(m *model.Model, opts ...Option) (*Embedder, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Embedder{m: m, st: st, pooled: make([]float32, st.cpuPoolWidth())}, nil
+	return &Embedder{m: m, st: st, pooled: make([]float32, st.poolWidth())}, nil
 }
 
 // Close releases the embedder's session.

@@ -102,6 +102,9 @@ type Instance struct {
 	// cpu is the blocks this instance runs on the CPU as the composer forms
 	// them (cpuserve.go).
 	cpu cpuState
+	// readout is the device reading an embedding model's pooled row, nil on a
+	// model with no readout.
+	readout nn.PoolDevice
 	// tower is the instance's run of its model's vision tower (tower.go),
 	// nil for a model with none and, with towerErr why, for one whose tower
 	// did not compose.
