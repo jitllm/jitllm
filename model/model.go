@@ -1278,7 +1278,7 @@ func Open(path string, options ...Option) (*Model, error) {
 		m.Close()
 		return nil, &UpgradeRequiredError{Path: path, What: "activation quantization"}
 	}
-	if m.Cfg.AttnResBlock != 0 && m.Cfg.statedStreams() <= 1 {
+	if (m.Cfg.AttnResBlock != 0 || m.Cfg.HCLowRank != 0) && m.Cfg.statedStreams() <= 1 {
 		m.Close()
 		return nil, &UpgradeRequiredError{Path: path, What: "residual streams"}
 	}

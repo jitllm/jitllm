@@ -56,7 +56,7 @@ func reconvert(path string) error {
 		voc := c.Vocab()
 		tools := voc == nil || len(voc.Templates) == 0 || len(voc.Tools.Calls) > 0
 		cfg := c.Config()
-		streams := cfg.AttnResBlock == 0 || cfg.Streams.N > 1
+		streams := cfg.AttnResBlock == 0 && cfg.HCLowRank == 0 || cfg.Streams.N > 1
 		rev := cfg.Revision >= jlm.StatementRevision || (cfg.SWAWindow == 0 || cfg.YarnFactor <= 1 && v == nil) &&
 			(cfg.Revision >= 2 || !storesAny(c, jlm.RoleAttnSubNorm, jlm.RoleFFNSubNorm))
 		c.Close()
