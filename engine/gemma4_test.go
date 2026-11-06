@@ -89,7 +89,7 @@ func gemma4Fixtures() []struct {
 		}},
 		{"synth-gemma4-moe", func(m *model.Model) bool {
 			c := m.Cfg
-			ok := c.Arch == "gemma4" && c.MixedGeom() && c.DenseMoE && c.NExpert == 8 &&
+			ok := c.Arch == "gemma4" && c.MixedGeom() && m.Layers[0].Vector(jlm.RoleFFNNorm2) != nil && c.NExpert == 8 &&
 				c.NExpertUsed == 2 && c.NFFNExp == 32 && c.NFFNShExp == c.NFFN && !c.NoExpertNorm
 			for i := range m.Layers {
 				l := &m.Layers[i]
@@ -280,7 +280,7 @@ func TestGemma4OnEveryDevice(t *testing.T) {
 			defer m.Close()
 			pre := 1e-5
 			switch {
-			case m.Cfg.DenseMoE:
+			case m.Layers[0].Vector(jlm.RoleFFNNorm2) != nil:
 				pre = 5e-5
 			case m.Cfg.HeadDim == 512:
 				// CUDA's batched scores take binary16 operands (Stats.AttnMMA),

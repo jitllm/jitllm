@@ -676,15 +676,13 @@ func (st *streamBank) forget() {
 
 // cacheSlotsFor is a streamed block's bank size in sheets: the selection, or
 // want (Config.StreamCacheSlots) when that is bigger and the device has room for
-// the block's own bank of that many beside what it already holds. A model
-// whose expert kernels read the selection itself (DenseMoE's per-expert
-// scale) keeps the plain bank: the cache rewrites the selection as slots.
+// the block's own bank of that many beside what it already holds. A block
+// whose expert kernels read a per-expert vector by the selection itself
+// (biased: the experts' biases, or a scale of each expert's output) keeps the
+// plain bank: the cache rewrites the selection as slots. The composer's form
+// reads only the banks in pages through the page table.
 func (g *devTier) cacheSlotsFor(p *nn.LayerPlan, ws []nn.Weight, want, slots, bank int, biased bool) int {
-	// Nor one whose experts carry biases (gpt-oss) where the tier's own
-	// kernels run it: they index the biases by the selection, which the cache
-	// rewrites as slots. The composer's form reads only the banks in pages
-	// through the page table.
-	if p.DenseMoE || biased {
+	if biased {
 		return slots
 	}
 	var sheet uint64
@@ -1849,9 +1847,9 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	// is placed as a streamed one -- the compact bank and its kernels on the
 	// card -- marked hybrid, so the cache sized after placement has kernels
 	// to run its experts with (streamBank.split). One whose experts carry
-	// biases or a dense scale keeps no bank, as cacheSlotsFor refuses them,
+	// biases or a per-expert scale keeps no bank, as cacheSlotsFor refuses them,
 	// and so does a float bank, which has no packed sheets to send.
-	cacheable := !g.NoHybridCache && g.StreamCacheSlots >= 0 && slots > 1 && !p.DenseMoE &&
+	cacheable := !g.NoHybridCache && g.StreamCacheSlots >= 0 && slots > 1 && w.Vector(jlm.RoleExpScale) == nil &&
 		w.Vector(jlm.RoleExpGateBias) == nil && w.Vector(jlm.RoleExpUpBias) == nil && w.Vector(jlm.RoleExpDownBias) == nil &&
 		w.Up.Packed != nil && w.Down.Packed != nil && (w.Gate.Packed != nil || len(w.Gate.Data) == 0)
 	hybrid := stream && hostExp && !cacheable
@@ -2121,7 +2119,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 					// An auto-streamed block is placed on the plain bank;
 					// its cache comes after placement (sizeAutoCaches).
 					cslots = g.cacheSlotsFor(p, ws, g.StreamCacheSlots, slots, bank,
-						false)
+						w.Vector(jlm.RoleExpScale) != nil)
 				}
 				e = cslots
 			}

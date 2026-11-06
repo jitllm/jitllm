@@ -800,7 +800,8 @@ const (
 	// post-normed by RolePostFFNNorm2; its router reads an RMSNorm of the
 	// residual weighted by RoleRouterNorm; the two branches' sum is post-normed
 	// by RolePostFFNNorm before the residual add. The dense MLP is carried as
-	// the shared expert's roles (RoleShExpGate/Up/Down), ungated.
+	// the shared expert's roles (RoleShExpGate/Up/Down), ungated. The bit is
+	// the converter's: a reader takes the block from the roles it holds.
 	Flag2DenseMoE Flags2 = 1 << 1
 	// Flag2DoubleFFN is an older writer's statement that the feed-forward of
 	// every KV-sharing layer is twice NFFN wide; a reader takes it into Geoms

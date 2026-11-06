@@ -610,10 +610,6 @@ type LayerPlan struct {
 	MixedGeom, OwnGeom, LocalRope bool
 	VNorm, VFromK                 bool
 	OutScale                      float32
-	// DenseMoE is Gemma 4's mixture block (model.Config.DenseMoE): a dense MLP
-	// (LayerWeights.ShGate/ShUp/ShDown, ungated) beside the mixture, each with
-	// its own norms, the router on its own norm and a per-expert weight factor.
-	DenseMoE bool
 	// Gemma 4's E2B/E4B: PLEDim is each block's per-layer embedding width
 	// (zero for none), KVShared says the block attends to KVSource's history
 	// and computes no k or v, and NFFN is then this block's own width.
