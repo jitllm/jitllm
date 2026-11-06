@@ -103,7 +103,6 @@ type cpuState struct {
 	sel    []int32
 	picked []bool
 	// kvconv is a binary16 or q8 history's conversions (cpukvconv.go).
-	kvconv cpuKVConvs
 	// xpad is a call's residual rows where its kernels' units reach past
 	// them (cpudev.Form.unit).
 	xpad []float32

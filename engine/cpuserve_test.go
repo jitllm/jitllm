@@ -418,3 +418,11 @@ func setFault(s *Instance, f cpuFault) {
 		}
 	}
 }
+
+// kvRan is how many history conversions s's CPU device has served.
+func kvRan(s *Instance) int {
+	if k, ok := s.kvConv.(*cpudev.KVConv); ok {
+		return k.Ran
+	}
+	return 0
+}
