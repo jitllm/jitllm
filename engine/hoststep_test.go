@@ -10,7 +10,7 @@ import (
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
-// hostStepNMSE bounds a host step across sessions against each session
+// hostStepNMSE bounds a routed step across sessions against each session
 // alone: the composed CPU's forms over a step's rows against its forms over
 // one, which fold a block in another order (RULE 8: the bar across forms is
 // the band, not bit-identity). Measured on the Xeon at 2.4e-3 on
@@ -30,15 +30,15 @@ const hostStepNMSE = 1e-2
 // reads orders of magnitude above it.
 const floatFormsNMSE = 1e-5
 
-// TestStepRunsOnTheCPUSharesOnePass is the gate on StepRuns' host arm
-// (stepHost): two sessions decode while a third session's prompt rides beside
+// TestStepRunsOnTheCPUSharesOnePass is the gate on StepRuns' routed arm
+// (stepRouted): two sessions decode while a third session's prompt rides beside
 // them in chunks of three tokens, then all three decode together, every
 // Instance on the host. Teacher-forced against each session alone (Prefill and
 // Forward): every decoding row's logits, the late session's at the end of its
 // prompt, and its decoding after.
 //
 // It selects what it gates -- every row ran in a step across sessions
-// (Instance.HostStepRows) -- and runs two violations: the late prompt's chunks
+// (Instance.RoutedStepRows) -- and runs two violations: the late prompt's chunks
 // laid out at mirrored positions, and every row given the first session's
 // history (stepShare). Each must part from the sessions alone by more than
 // the bound.
@@ -79,13 +79,13 @@ func stepRunsOnTheCPUSharesOnePass(t *testing.T, opts ...Option) {
 			want := plan.alone(t, m, nil)
 			got, rows := plan.together(t, m, nil)
 			if n := plan.hostRows; n != int64(rows) {
-				t.Fatalf("%d rows ran in host steps across sessions, want %d: StepRuns went one instance after another", n, rows)
+				t.Fatalf("%d rows ran in routed steps across sessions, want %d: StepRuns went one instance after another", n, rows)
 			}
 			w, at := worstStep(got, want)
 			t.Logf("%d rows, %d logit rows compared: worst NMSE %.3e (row %d) against each session alone",
 				rows, len(want), w, at)
 			if !(w <= hostStepNMSE) {
-				t.Fatalf("a host step across sessions parts from each session alone: NMSE %.3e at row %d (bound %.0e)", w, at, hostStepNMSE)
+				t.Fatalf("a routed step across sessions parts from each session alone: NMSE %.3e at row %d (bound %.0e)", w, at, hostStepNMSE)
 			}
 
 			plan.opts = append(append([]Option(nil), instOpts...), withStepPosFault(func(base, j, k int) int { return base + k - 1 - j }))
@@ -107,11 +107,11 @@ func stepRunsOnTheCPUSharesOnePass(t *testing.T, opts ...Option) {
 	}
 }
 
-// hostStepRows is the rows runs' instances ran as host steps across sessions.
-func hostStepRows(runs []Run) int64 {
+// routedStepRows is the rows runs' instances ran as routed steps across sessions.
+func routedStepRows(runs []Run) int64 {
 	var n int64
 	for _, r := range runs {
-		n += r.Instance.HostStepRows()
+		n += r.Instance.RoutedStepRows()
 	}
 	return n
 }
@@ -120,8 +120,8 @@ func hostStepRows(runs []Run) int64 {
 // across sessions: three host instances step together, warm, at a fixed shape --
 // one token each, or with chunk the third taking two prompt rows a step with
 // no logits -- and the window must make no engine heap allocation. It checks
-// the window really ran as host steps (Instance.HostStepRows), and skips naming
-// why on an architecture the host step refuses.
+// the window really ran as host steps (Instance.RoutedStepRows), and skips naming
+// why on an architecture the routed step refuses.
 func hostStepAllocs(t *testing.T, m *model.Model, chunk bool, io ...Option) {
 	io = append(append([]Option(nil), io...), sharedCPU(t, io...))
 	prompts := []string{"The capital of France is", "Water boils at a temperature of",
@@ -141,8 +141,8 @@ func hostStepAllocs(t *testing.T, m *model.Model, chunk bool, io ...Option) {
 		ids := m.Vocab.Encode(pr, true)
 		st := testInstance(t, m, len(ids)+k*(warm+n)+8, io...)
 		defer st.Close()
-		if err := st.HostRefusal(); err != nil {
-			t.Skipf("the host step refuses this model (%v): StepRuns runs its instances one after another, "+
+		if err := st.RoutedRefusal(); err != nil {
+			t.Skipf("the routed step refuses this model (%v): StepRuns runs its instances one after another, "+
 				"which the host decode arm measured", err)
 		}
 		if _, err := st.Prefill(ids); err != nil {
@@ -175,16 +175,16 @@ func hostStepAllocs(t *testing.T, m *model.Model, chunk bool, io ...Option) {
 	for _, r := range runs {
 		rows += len(r.Tokens)
 	}
-	h0, r0 := hostStepRows(runs), m.Container.Reads()
+	h0, r0 := routedStepRows(runs), m.Container.Reads()
 	w := countAllocs(func() {
 		for s := range n {
 			step(warm + s)
 		}
 	})
-	if got := hostStepRows(runs) - h0; got != int64(n*rows) {
-		t.Fatalf("%d row(s) ran as host steps across sessions, want %d: the arm did not run the step it names",
+	if got := routedStepRows(runs) - h0; got != int64(n*rows) {
+		t.Fatalf("%d row(s) ran as routed steps across sessions, want %d: the arm did not run the step it names",
 			got, n*rows)
 	}
-	allocVerdict(t, fmt.Sprintf("host step, %d run(s) of %d row(s) a step", len(runs), rows), w, n,
+	allocVerdict(t, fmt.Sprintf("routed step, %d run(s) of %d row(s) a step", len(runs), rows), w, n,
 		m.Container.Reads()-r0, 0)
 }

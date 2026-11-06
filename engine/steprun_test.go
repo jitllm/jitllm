@@ -115,8 +115,8 @@ type runsPlan struct {
 	// (sharedCPU), opened at the first placed.
 	opts []Option
 	cpu  Option
-	// hostRows is the rows the last together ran as host steps across
-	// sessions (Instance.HostStepRows, over its instances).
+	// hostRows is the rows the last together ran as routed steps across
+	// sessions (Instance.RoutedStepRows, over its instances).
 	hostRows int64
 }
 
@@ -225,9 +225,9 @@ func (p *runsPlan) together(t *testing.T, m *model.Model, g *gpu.GPU) ([][]float
 			}
 		}
 	}
-	p.hostRows = ls.HostStepRows()
+	p.hostRows = ls.RoutedStepRows()
 	for _, st := range sts {
-		p.hostRows += st.HostStepRows()
+		p.hostRows += st.RoutedStepRows()
 	}
 	return got, rows
 }

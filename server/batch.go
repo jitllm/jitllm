@@ -21,7 +21,7 @@ import (
 // itself. It becomes a ROW of the model's step loop: one goroutine that owns
 // every live row's engine.Instance, and each step gathers each row's next token
 // and runs them through engine.StepRuns -- one device step for all of them
-// (nn.SessionStepper), or one host pass over the weights (Instance.HostSteppable),
+// (nn.SessionStepper), or one host pass over the weights (Instance.RoutedSteppable),
 // every block's weights read once, each row's history its own session's. Each
 // row then
 // samples its own logits with its own sampler, exactly as the one-at-a-time
@@ -387,7 +387,7 @@ func hasStop(stops []string) bool {
 
 // stepsJointly says whether st can take a run of a joint step: wholly on one
 // device that steps sessions together, or wholly on the host.
-func stepsJointly(st *engine.Instance) bool { return st.Steppable() || st.HostSteppable() }
+func stepsJointly(st *engine.Instance) bool { return st.Steppable() || st.RoutedSteppable() }
 
 // submit queues r for a row, recording in r.depth how many requests were
 // ahead -- under the lock, since the loop may admit r and read it at once.
@@ -1096,7 +1096,7 @@ func (lp *stepLoop) stepJoint(units []unit) bool {
 	}
 	gpu := lp.lm.gpuTier()
 	if gpu == nil {
-		return lp.stepHost(units, runs, rows)
+		return lp.stepRouted(units, runs, rows)
 	}
 	before := gpu.Stats().SessionRows
 	out, err := engine.StepRuns(runs)
@@ -1134,13 +1134,13 @@ func (lp *stepLoop) stepJoint(units []unit) bool {
 	return true
 }
 
-// stepHost is stepJoint for a model on the host: the runs as one host pass
-// (engine.StepRuns' host arm). The host refuses no step it was offered, so an
+// stepRouted is stepJoint for a model on the host: the runs as one host pass
+// (engine.StepRuns' routed arm). The host refuses no step it was offered, so an
 // error ends every row in it: a hybrid's rows may have advanced their
 // recurrent state, and running them again would apply their tokens twice.
-func (lp *stepLoop) stepHost(units []unit, runs []engine.Run, rows int) bool {
+func (lp *stepLoop) stepRouted(units []unit, runs []engine.Run, rows int) bool {
 	in := lp.lm.inst
-	before := in.HostStepRows()
+	before := in.RoutedStepRows()
 	out, err := engine.StepRuns(runs)
 	if err != nil {
 		for _, u := range units {
@@ -1148,7 +1148,7 @@ func (lp *stepLoop) stepHost(units []unit, runs []engine.Run, rows int) bool {
 		}
 		return true
 	}
-	if in.HostStepRows()-before == int64(rows) {
+	if in.RoutedStepRows()-before == int64(rows) {
 		lp.stats.jointSteps.Add(1)
 		lp.stats.jointRows.Add(int64(rows))
 	} else {

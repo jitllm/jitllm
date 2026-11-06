@@ -12,7 +12,7 @@ import (
 )
 
 // scratchBytes is the host scratch the model's instance holds and the
-// scratch the model holds for host steps and the next prompt: the engine's
+// scratch the model holds for routed steps and the next prompt: the engine's
 // own byte counts, not the allocator's RSS. Sessions are histories and hold
 // none.
 func scratchBytes(e *Engine, lm *LoadedModel) (states, model uint64, n int) {
@@ -23,7 +23,7 @@ func scratchBytes(e *Engine, lm *LoadedModel) (states, model uint64, n int) {
 // TestHostBatchScratchDoesNotGrowWithRows: a burst of sixteen concurrent
 // generates on a host model, at the model's whole context, leaves the
 // model's instance holding no more step scratch than one request alone left
-// it, and the model one step's scratch for the next host step: memory follows
+// it, and the model one step's scratch for the next routed step: memory follows
 // the rows in flight, not the widest burst the instance ever ran. Counted on
 // the engine's own bytes (Instance.ScratchBytes, Instance.StepScratchBytes).
 func TestHostBatchScratchDoesNotGrowWithRows(t *testing.T) {

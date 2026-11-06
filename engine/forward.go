@@ -405,7 +405,7 @@ type Instance struct {
 	chunkTok   []int32
 	stepLogits []float32
 	stepRes    [][]float32
-	// A step across host sessions (stepHost) this instance leads: each row's
+	// A step across host sessions (stepRouted) this instance leads: each row's
 	// session, whether the row is its session's furthest (the one that
 	// faults its attention window in), and each row's slot, always 0.
 	rowOwn []*Session
@@ -417,7 +417,7 @@ type Instance struct {
 	// stepb is the model's step scratch holder while this instance leads a
 	// host step (borrowStep).
 	stepb *stepBuf
-	// rowCausal is a ragged step's rows in position order (rowsHost).
+	// rowCausal is a ragged step's rows in position order (rowsRouted).
 	rowCausal []int
 	// onDev[li] says block li runs on a device: the truth for execution, where
 	// gpuLayers is the truth for the seam. Placement is a set and migration a
@@ -3153,7 +3153,7 @@ func (s *Instance) ForwardSample(token int32, smp *Sampler) (int32, error) {
 // the token on the host (Layers may have written part of s.x).
 func (s *Instance) forward(fill func() error) ([]float32, error) {
 	s.touch()
-	// An instance that led a host step across sessions lent the model its gate
+	// An instance that led a routed step across sessions lent the model its gate
 	// scratch (returnStep -> takeHostBatch), and the token it runs alone
 	// afterwards reads one query-gate row it no longer holds. It is made once;
 	// an instance that does not lead holds it from NewInstance.

@@ -59,7 +59,7 @@ func (h *hostBatch) bytes() uint64 {
 	return 4 * uint64(n+cap(h.bmRow))
 }
 
-// stepBuf is a ragged step's scratch across host sessions (stepHost): the
+// stepBuf is a ragged step's scratch across host sessions (stepRouted): the
 // residual rows, their rotary tables, the host batch scratch, the scores
 // rows and the wanted rows' logits. The model holds one, and whichever instance
 // leads a step borrows it for the step and hands it back, so the scratch is
@@ -121,7 +121,7 @@ func (s *Instance) restoreHostBatch(h hostBatch) {
 
 // ScratchBytes is the host scratch this instance holds beyond its single-token
 // decode: prompt and batch rows, scores rows and batch logits. An instance that
-// only decodes, or that leads host steps, holds none of it between calls.
+// only decodes, or that leads routed steps, holds none of it between calls.
 func (s *Instance) ScratchBytes() uint64 {
 	h := hostBatch{bh: s.bh, battf: s.battf, qgate: s.qgate, ogate: s.ogate, bqf: s.bqf, bxbf: s.bxbf,
 		bmRow: s.bmRow, bmW: s.bmW, bmX: s.bmX, bmY: s.bmY, bmG: s.bmG, bmU: s.bmU}
@@ -130,7 +130,7 @@ func (s *Instance) ScratchBytes() uint64 {
 	return b.bytes() + s.spareHost.bytes()
 }
 
-// StepScratchBytes is the scratch the model holds for host steps across
+// StepScratchBytes is the scratch the model holds for routed steps across
 // sessions and for the next session's prompt (stepBuf, promptBuf).
 func (s *Instance) StepScratchBytes() uint64 {
 	s.eng.host.mu.Lock()

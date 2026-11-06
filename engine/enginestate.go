@@ -9,7 +9,7 @@ import (
 
 // hostShared is the scratch every instance of a model on one CPU device
 // hands the next: a closed session's prompt buffers, for the next instance's
-// first prompt (promptBuf), and the host step scratch across sessions
+// first prompt (promptBuf), and the routed step scratch across sessions
 // (stepBuf). The CPU device keeps it for the model (cpudev.CPU.Attached).
 type hostShared struct {
 	mu    sync.Mutex
@@ -40,7 +40,7 @@ type engineState struct {
 	// ownCPU is that the instance that made it closes it (no WithCPU).
 	cpu    *cpudev.CPU
 	ownCPU bool
-	// hostStepRows is the rows StepRuns has run as host steps across
-	// sessions (stepHost); HostStepRows reports it.
-	hostStepRows int64
+	// routedStepRows is the rows StepRuns has run as routed steps across
+	// sessions (stepRouted); RoutedStepRows reports it.
+	routedStepRows int64
 }

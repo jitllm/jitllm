@@ -112,7 +112,7 @@ func (e *Engine) rereadHostLocked() {
 
 // heldLocked is the host memory this engine's models hold: resident weights,
 // the memory caches, every session's and pooled session's history, and each
-// model's host step scratch. e.mu
+// model's routed step scratch. e.mu
 // held.
 func (e *Engine) heldLocked() uint64 {
 	var n uint64

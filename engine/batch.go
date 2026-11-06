@@ -6,7 +6,7 @@ import (
 
 // rowOwner is the session whose history row i of a ragged step reads and
 // writes, and the slot there: the batch's own slot seq[i], or in a step across
-// sessions (stepHost) the row's own session, whose one sequence is slot 0.
+// sessions (stepRouted) the row's own session, whose one sequence is slot 0.
 func (s *Instance) rowOwner(i int, seq []int) (*Session, int) {
 	if len(s.rowOwn) > 0 {
 		return s.rowOwn[i], 0
@@ -14,11 +14,11 @@ func (s *Instance) rowOwner(i int, seq []int) (*Session, int) {
 	return s.Session, seq[i]
 }
 
-// rowsHost runs a ragged step's blocks and head and returns the wanted rows'
+// rowsRouted runs a ragged step's blocks and head and returns the wanted rows'
 // logits; the caller moves the positions on. seqs is how many sequences the
 // rows hold: a step of one row per sequence fans attention out over (row,
 // head) units.
-func (s *Instance) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([]float32, error) {
+func (s *Instance) rowsRouted(tokens []int32, seq, pos []int, nlogit, seqs int) ([]float32, error) {
 	c := s.c
 	n := len(tokens)
 	// The ragged head applies the final softcap itself, as decode's head does.

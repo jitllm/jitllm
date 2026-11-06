@@ -11,7 +11,7 @@ import (
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
-// The step loop's gates on the host (batch.go, engine.StepRuns' host arm):
+// The step loop's gates on the host (batch.go, engine.StepRuns' routed arm):
 // concurrent generates on a model with no device decode as rows of shared
 // host passes over the weights, through the real handler, and come out as
 // each would alone.
@@ -124,7 +124,7 @@ func parted(t *testing.T, lm *LoadedModel, prompt string, got, want []int32) int
 // TestHostBatchConcurrentGeneratesEqualAlone: N greedy generates on a host
 // model, admitted together, each produce what it produces alone; their rows
 // really shared host passes (BatchStats' joint rows against the model's own
-// HostStepRows), N sessions a step; and the text of every token was made
+// RoutedStepRows), N sessions a step; and the text of every token was made
 // beside its step (the overlap helper's count equals the tokens sent). Then
 // the violations: a step that feeds each row the next row's token, and a loop
 // that never retires a row at max_tokens, must each part some row from its
@@ -149,7 +149,7 @@ func TestHostBatchConcurrentGeneratesEqualAlone(t *testing.T) {
 					for i := range reqs {
 						reqs[i] = reqOf(i)
 					}
-					before, h0 := batchStats(t, c), lm.inst.HostStepRows()
+					before, h0 := batchStats(t, c), lm.inst.RoutedStepRows()
 					got := concurrently(t, e, lm, c, reqs)
 					sent, exact := 0, 0
 					for i := range n {
@@ -163,9 +163,9 @@ func TestHostBatchConcurrentGeneratesEqualAlone(t *testing.T) {
 						sent += len(got[i].ids)
 					}
 					after := batchStats(t, c)
-					rows := lm.inst.HostStepRows() - h0
+					rows := lm.inst.RoutedStepRows() - h0
 					if rows == 0 || after.GetJointRows()-before.GetJointRows() != rows {
-						t.Fatalf("no rows shared a host pass: the model ran %d host step row(s), stats %+v", rows, after)
+						t.Fatalf("no rows shared a host pass: the model ran %d routed step row(s), stats %+v", rows, after)
 					}
 					if after.GetMaxSessionsPerStep() < int32(n) {
 						t.Fatalf("at most %d sessions a step, want %d", after.GetMaxSessionsPerStep(), n)
@@ -173,7 +173,7 @@ func TestHostBatchConcurrentGeneratesEqualAlone(t *testing.T) {
 					if posted := lm.loop.stats.postedTokens.Load(); posted < int64(sent) {
 						t.Fatalf("%d token events made beside their step, %d tokens sent", posted, sent)
 					}
-					t.Logf("%d of %d rows token-identical to alone; %d host step rows, %d joint steps",
+					t.Logf("%d of %d rows token-identical to alone; %d routed step rows, %d joint steps",
 						exact, n, rows, after.GetJointSteps()-before.GetJointSteps())
 				})
 			}

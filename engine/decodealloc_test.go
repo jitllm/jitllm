@@ -124,7 +124,7 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 			t.Run("host", func(t *testing.T) {
 				decodeAllocs(t, m, nil, instOpts2...)
 			})
-			// The step across host sessions (stepHost) a server's step loop
+			// The step across host sessions (stepRouted) a server's step loop
 			// runs a host-only model's requests through.
 			t.Run("host-step", func(t *testing.T) { hostStepAllocs(t, m, false, instOpts2...) })
 			t.Run("host-step-chunk", func(t *testing.T) { hostStepAllocs(t, m, true, instOpts2...) })

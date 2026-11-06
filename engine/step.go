@@ -252,8 +252,8 @@ func stepRunsOn(runs []Run, lone bool) ([][]float32, error) {
 	if lone && len(runs) == 1 && rows <= MaxStepRows && runs[0].Instance.Steppable() {
 		return stepTogether(runs, rows, runs[0].Instance.ldStep)
 	}
-	if hostStepper(runs, rows) {
-		return stepHost(runs, rows)
+	if routedStepper(runs, rows) {
+		return stepRouted(runs, rows)
 	}
 	if len(runs) == 0 {
 		return nil, nil
@@ -370,57 +370,58 @@ const (
 	errStepSplit    modelError = "model: not every block of the instance is on the device"
 )
 
-// hostStepper reports whether the runs can go as one host step across their
-// sessions (stepHost): two or more instances of one model on one CPU device,
-// each HostSteppable, the rows within the host's widest batch. The step runs
-// every row on that device's workers and forms; instances on different CPU
-// devices run alone, which is the same answer.
-func hostStepper(runs []Run, rows int) bool {
+// routedStepper reports whether the runs can go as one routed step across
+// their sessions (stepRouted): two or more instances of one model on one
+// engine's devices, each RoutedSteppable, the rows within the widest batch.
+// The step runs every row through each run of blocks on that run's device;
+// instances of different engines run alone, which is the same answer.
+func routedStepper(runs []Run, rows int) bool {
 	if len(runs) < 2 || rows > MaxPrefillChunk {
 		return false
 	}
 	s0 := runs[0].Instance
 	for _, r := range runs {
-		if !r.Instance.HostSteppable() || r.Instance.m != s0.m || r.Instance.eng.cpu != s0.eng.cpu {
+		if !r.Instance.RoutedSteppable() || r.Instance.m != s0.m || r.Instance.eng.cpu != s0.eng.cpu {
 			return false
 		}
 	}
 	return true
 }
 
-// HostSteppable reports whether this instance can take a run of StepRuns' host
-// arm: a single sequence whose every block and head run on the host. Such
-// instances of one Model step as rows of one pass over the weights (stepHost),
+// RoutedSteppable reports whether this instance can take a run of StepRuns'
+// routed arm: a single sequence whose every block and head run on a device
+// that steps rows of different sessions. Such instances of one Model step as
+// rows of one pass over the weights (stepRouted),
 // each row reading and writing its own session's history and recurrent state;
-// StepRuns runs any other instance alone, which is the same answer. HostRefusal
+// StepRuns runs any other instance alone, which is the same answer. RoutedRefusal
 // says why an instance is not. It allocates nothing.
-func (s *Instance) HostSteppable() bool { return s.HostRefusal() == nil }
+func (s *Instance) RoutedSteppable() bool { return s.RoutedRefusal() == nil }
 
-// HostRefusal is why this instance cannot take a run of StepRuns' host arm, nil
-// when it can (HostSteppable).
-func (s *Instance) HostRefusal() error {
+// RoutedRefusal is why this instance cannot take a run of StepRuns' routed
+// arm, nil when it can (RoutedSteppable).
+func (s *Instance) RoutedRefusal() error {
 	c := s.c
 	switch {
 	case s.emb != nil:
 		return errStepEmbedder
 	case (s.devCount() > 0 || s.head != nil) && s.ldStep == nil:
-		return errHostOnDevice
+		return errRoutedNoStepper
 	case s.lo != 0 || s.hi != c.NLayer:
-		return errHostPartial
+		return errRoutedPartial
 	case c.MLA() || c.Selection() != nil:
 		// A latent's cached rows and a selection's are read through the
 		// batch's own slots; a row of another session there would read the
 		// wrong history.
-		return errHostCache
+		return errRoutedCache
 	}
 	return nil
 }
 
-// The conditions HostRefusal names beside StepRefusal's.
+// The conditions RoutedRefusal names beside StepRefusal's.
 const (
-	errHostOnDevice modelError = "model: a device that steps no rows of different sessions runs some of the instance's blocks or its head"
-	errHostPartial  modelError = "model: the instance runs part of the model (a prediction block)"
-	errHostCache    modelError = "model: the architecture's cached rows are read per batch slot (MLA, a selection)"
+	errRoutedNoStepper modelError = "model: a device that steps no rows of different sessions runs some of the instance's blocks or its head"
+	errRoutedPartial   modelError = "model: the instance runs part of the model (a prediction block)"
+	errRoutedCache     modelError = "model: the architecture's cached rows are read per batch slot (MLA, a selection)"
 )
 
 // PromptChunk is how many prompt tokens this instance's Prefill takes in one
@@ -435,17 +436,17 @@ func (s *Instance) PromptChunk() int {
 	return s.hostChunk()
 }
 
-// HostStepRows is the rows StepRuns has run as host steps across sessions,
+// RoutedStepRows is the rows StepRuns has run as routed steps across sessions,
 // which says whether sessions really shared passes over the weights.
-func (s *Instance) HostStepRows() int64 { return atomic.LoadInt64(&s.eng.hostStepRows) }
+func (s *Instance) RoutedStepRows() int64 { return atomic.LoadInt64(&s.eng.routedStepRows) }
 
-// stepHost is StepRuns' host arm: the runs' rows as one ragged pass over the
-// weights (rowsHost, the batch's own step), each row embedded and rotated at
+// stepRouted is StepRuns' routed arm: the runs' rows as one ragged pass over
+// the weights (rowsRouted, the batch's own step), each row embedded and rotated at
 // its own session's next position, its K and V written into and its attention
 // and recurrent state read from that session's Instance. Each session's logits and
 // position then move on as Prefill and Forward move them. The rows whose
 // logits are wanted lead, so the head projects only them.
-func stepHost(runs []Run, rows int) ([][]float32, error) {
+func stepRouted(runs []Run, rows int) ([][]float32, error) {
 	s0 := runs[0].Instance
 	c := s0.c
 	defer s0.fr.Enter()()
@@ -502,11 +503,11 @@ func stepHost(runs []Run, rows int) ([][]float32, error) {
 	// The step's scratch is the model's, lent to whichever instance leads.
 	s0.borrowStep()
 	defer s0.returnStep()
-	lg, err := s0.rowsHost(toks, seq, pos, nlogit, len(runs))
+	lg, err := s0.rowsRouted(toks, seq, pos, nlogit, len(runs))
 	if err != nil {
 		return nil, err
 	}
-	atomic.AddInt64(&s0.eng.hostStepRows, int64(rows))
+	atomic.AddInt64(&s0.eng.routedStepRows, int64(rows))
 	out := s0.stepOut(len(runs))
 	at := 0
 	lead := s0.Session
@@ -527,7 +528,7 @@ func stepHost(runs []Run, rows int) ([][]float32, error) {
 		st.reap()
 		// A decoding row steps its seam tuner as stepTogether's do. A tuner
 		// that moves blocks onto a card takes the instance out of the host
-		// step (HostRefusal), and StepRuns runs it alone from then on.
+		// step (RoutedRefusal), and StepRuns runs it alone from then on.
 		if k == 1 {
 			st.seamStep()
 		}
