@@ -846,12 +846,16 @@ func lowerValuesWith(b *graph.Builder, t *jlm.Tower, p *jlm.Program, in []graph.
 				return nil, err
 			}
 			out = v
-		case jlm.TOpScale:
+		case jlm.TOpScale, jlm.TOpShift:
 			s, err := shape(op.Bind[0])
 			if err != nil {
 				return nil, err
 			}
-			out = mapRow(b, name, graph.Attrs{Fn: graph.MapMul}, []graph.Binding{{Role: op.Bind[0], K: s.K, Rows: s.Rows}},
+			fn := graph.MapMul
+			if op.Code == jlm.TOpShift {
+				fn = graph.MapAdd
+			}
+			out = mapRow(b, name, graph.Attrs{Fn: fn}, []graph.Binding{{Role: op.Bind[0], K: s.K, Rows: s.Rows}},
 				width(ins[0]), ins[0])
 		case jlm.TOpSum, jlm.TOpMax:
 			fn := graph.MapAdd
@@ -911,7 +915,11 @@ func lowerValuesWith(b *graph.Builder, t *jlm.Tower, p *jlm.Program, in []graph.
 			out = b.Emit(graph.OpDropRows, ins, []graph.Result{{Name: "rows", Width: width(ins[0]),
 				Rows: rowsOf(ins[0]) - int(op.Offset)}}, nil, graph.Attrs{Offset: int(op.Offset)}, nil, nil)[0]
 		case jlm.TOpStated:
-			v, err := b.Stated(name, op.Expr, ins, int(op.Width), f)
+			w := int(op.Width)
+			if w == 0 {
+				w = width(ins[0])
+			}
+			v, err := b.Stated(name, op.Expr, ins, w, f)
 			if err != nil {
 				return nil, err
 			}

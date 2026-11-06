@@ -5,6 +5,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"testing"
 
@@ -106,7 +107,7 @@ func k3RealModels() []struct {
 // its Kazakh continuation 1.7e-12, so synth-kimik3 stays that choice's gate.
 func k3RealViolations() []c6Violation {
 	out := []c6Violation{{"a decay bound the checkpoint does not state (-5)", func(m *model.Model) func() {
-		return cfgMut(m, func(c *model.Config) { c.KDALowerBound = -5 })
+		return cfgMut(m, func(c *model.Config) { c.DeltaDecay = jlm.DeltaDecayBounded(-5) })
 	}}}
 	for _, v := range k3Violations() {
 		switch v.name {
@@ -282,7 +283,7 @@ func k3RealSelected(t *testing.T, m *model.Model) {
 	c := m.Cfg
 	lin, full := jlm.LayerLinearAttn, jlm.LayerFullAttn
 	ok := c.Arch == "kimi-k3" && c.AttnResBlock == 4 && c.ExpertLatent == 512 &&
-		m.Container.Config().SituBeta != 0 && c.KDALowerBound == 0 && c.ChanDecay() && c.MLA() && c.NoPosEnc &&
+		m.Container.Config().SituBeta != 0 && reflect.DeepEqual(c.DeltaDecay, jlm.DeltaDecaySoftplus()) && c.ChanDecay() && c.MLA() && c.NoPosEnc &&
 		c.QLoraRank == 256 && c.KVLoraRank == 128 && c.NDenseLead == 1 && c.NExpert == 8 &&
 		c.NExpertUsed == 2 && c.ExpertSigmoid && c.NEmbd == 1024 &&
 		slices.Equal(c.LayerKinds, []jlm.LayerKind{lin, lin, lin, full, lin, lin, lin, full})

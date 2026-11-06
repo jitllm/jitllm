@@ -144,7 +144,8 @@ const (
 	TOpLeadRow OpCode = 8
 	// TOpDropRows is In[0] from row Offset on.
 	TOpDropRows OpCode = 9
-	// TOpStated is the expression Expr over the In values, Width wide.
+	// TOpStated is the expression Expr over the In values, Width wide, or as
+	// wide as In[0] where Width is zero.
 	TOpStated OpCode = 10
 	// TOpPool is an average pool: each Span x Span block of the grid's rows
 	// their mean, the blocks in raster order.
@@ -185,7 +186,9 @@ const (
 	// over Span taps Offset positions apart, its history in the block's
 	// recurrent tail.
 	TOpTailConv OpCode = 22
-	topCodes    OpCode = 23
+	// TOpShift is In[0] plus the stored vector Bind[0], element by element.
+	TOpShift OpCode = 23
+	topCodes OpCode = 24
 )
 
 // A stated rotary's layout (TOpRope's Chain).
@@ -456,7 +459,7 @@ func (p *Program) valid(name string) error {
 			return fmt.Errorf("jlm: the tower's %s op %d turns heads of %d laid out as %d", name, i, op.Span, op.Chain)
 		case op.Code == TOpSlice && op.Width <= 0:
 			return fmt.Errorf("jlm: the tower's %s op %d slices %d elements", name, i, op.Width)
-		case op.Code == TOpStated && (op.Expr == nil || op.Width <= 0):
+		case op.Code == TOpStated && (op.Expr == nil || op.Width < 0 || op.Width == 0 && len(op.In) == 0):
 			return fmt.Errorf("jlm: the tower's %s op %d states no expression or no width", name, i)
 		case op.Offset < 0:
 			return fmt.Errorf("jlm: the tower's %s op %d offsets by %d", name, i, op.Offset)
@@ -492,7 +495,7 @@ func (op *TowerOp) arity() (in int, bind [2]int) {
 		return 1, [2]int{1, 2}
 	case TOpRMSNorm:
 		return 1, [2]int{0, 1}
-	case TOpLeadRow, TOpScale, TOpTailConv:
+	case TOpLeadRow, TOpScale, TOpShift, TOpTailConv:
 		return 1, [2]int{1, 1}
 	case TOpNGramRows:
 		return 0, [2]int{1, 1}

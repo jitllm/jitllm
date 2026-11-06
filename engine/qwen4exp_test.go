@@ -2,6 +2,7 @@ package engine
 
 import (
 	"math"
+	"reflect"
 	"slices"
 	"testing"
 
@@ -39,7 +40,7 @@ func q4eFixtures() []struct {
 			return c.Arch == "qwen4exp" && c.HCMult == 4 && c.HCLowRank == 32 && s != nil && s.Rank == jlm.RankPooled &&
 				s.Block == 4 && s.Keep == 2 && s.Heads == 8 && s.HeadDim == 32 && c.NGramBlock == 3 &&
 				c.NGram == 3 && c.NGramHeadsPer == 2 && c.NGramRowDim == 16 && c.NGramConv == 4 &&
-				c.DeltaSigmoidGate && c.NRot == 16 && c.RopeNeox && c.AttnOutGate &&
+				reflect.DeepEqual(c.DeltaGate, jlm.DeltaGateSigmoid()) && c.NRot == 16 && c.RopeNeox && c.AttnOutGate &&
 				c.LayerKind(0).Recurrent() && !c.LayerKind(1).Recurrent() &&
 				c.LayerKind(2).Recurrent() && !c.LayerKind(3).Recurrent() && m.Ngram != nil
 		}},

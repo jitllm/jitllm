@@ -71,7 +71,7 @@ const k3LatentNormEps = 1e-6
 //	ssm.conv_kernel, kda.head_dim, head_count      -> SSM: KDA's heads are the
 //	                                               attention's (llama.cpp's
 //	                                               n_head_kda is n_head)
-//	kda.gate_lower_bound                           -> KDALowerBound: the decay
+//	kda.gate_lower_bound                           -> DeltaDecayBounded: the decay
 //	                                               lb*sigmoid(exp(A_log)*(f+dt))
 //	                                               in place of -exp(A_log)*
 //	                                               softplus(f+dt)
@@ -118,7 +118,7 @@ func kimiK3Config(f *meta.File, c *jlm.Config) error {
 		if !(lb < 0) || math.IsInf(lb, 0) {
 			return fmt.Errorf("kda.gate_lower_bound %g: a bound is negative and finite", lb)
 		}
-		c.KDALowerBound = float32(lb)
+		c.DeltaDecay = jlm.DeltaDecayBounded(float32(lb))
 	}
 
 	c.AttnResBlock = uint32(f.UintKey("attn_res.block_size", 0))

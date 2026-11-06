@@ -536,6 +536,7 @@ func hfSourceOf(dir hfDir, shards []*safetensors.File) (*jlm.Source, error) {
 	}
 	StateStreams(s.Config, sourceStores(s))
 	StateSelection(s.Config, sourceStores(s))
+	StateDelta(s.Config, sourceStores(s))
 	StateRevision(s.Config)
 	return s, nil
 }

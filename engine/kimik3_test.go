@@ -2,6 +2,7 @@ package engine
 
 import (
 	"math"
+	"reflect"
 	"slices"
 	"testing"
 
@@ -36,7 +37,7 @@ func k3Fixtures() []struct {
 		{"synth-kimik3", func(m *model.Model) bool {
 			c := m.Cfg
 			ok := c.Arch == "kimi-k3" && c.AttnResBlock == 2 && c.Streams() == 4 &&
-				c.ExpertLatent == 32 && m.Container.Config().SituBeta != 0 && c.KDALowerBound == -5 &&
+				c.ExpertLatent == 32 && m.Container.Config().SituBeta != 0 && reflect.DeepEqual(c.DeltaDecay, jlm.DeltaDecayBounded(-5)) &&
 				c.LatentNormEps == float64(float32(1e-6)) && c.RMSEps == float64(float32(1e-3)) &&
 				c.ChanDecay() && c.MLA() && c.NoPosEnc && c.QLoraRank == 32 && c.KVLoraRank == 32 &&
 				c.NDenseLead == 1 && c.NFFNShExp == 32 && c.ExpertSigmoid && c.ExpertScale == 2 &&
@@ -126,7 +127,7 @@ func k3Violations() []c6Violation {
 		{"the MLA output ungated", latentAttnUngated},
 		{"the KDA output ungated", recurrentUngated},
 		{"the KDA decay unbounded (Kimi-Linear's softplus)", func(m *model.Model) func() {
-			return cfgMut(m, func(c *model.Config) { c.KDALowerBound = 0 })
+			return cfgMut(m, func(c *model.Config) { c.DeltaDecay = jlm.DeltaDecaySoftplus() })
 		}},
 		{"the MLA latent norms at rms_norm_eps (llama.cpp's)", func(m *model.Model) func() {
 			return cfgMut(m, func(c *model.Config) { c.LatentNormEps = c.RMSEps })

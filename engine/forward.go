@@ -2034,8 +2034,6 @@ func (s *Instance) planFor(li int) *nn.LayerPlan {
 	}
 	plan.LatentNormEps = c.LatentNormEps
 	if c.LayerKind(li).Recurrent() {
-		plan.Recurrent.DecayBound = c.KDALowerBound
-		plan.Recurrent.SigmoidGate = c.DeltaSigmoidGate
 		plan.Recurrent.TailLen = c.RecTailLen()
 	}
 	plan.NStreams = c.Streams()

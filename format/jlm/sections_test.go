@@ -23,6 +23,8 @@ func TestSectionsRoundTrip(t *testing.T) {
 		NFFNShExp:  512,
 		SSM:        SSMConfig{ConvKernel: 4, Groups: 16, Inner: 4096, StateSize: 128, NHeadV: 32},
 		LayerKinds: []LayerKind{LayerLinearAttn, LayerLinearAttn, LayerLinearAttn, LayerFullAttn},
+		// What a writer states for a model with a delta rule.
+		DeltaDecay: DeltaDecaySoftplus(), DeltaGate: DeltaGateSiLU(),
 	}
 	cfg.NLayer = uint32(len(cfg.LayerKinds))
 	got, err := decodeConfig(encodeConfig(cfg))

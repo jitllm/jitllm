@@ -267,3 +267,30 @@ func ngramPre(c *jlm.Config) jlm.SubStreams {
 	}
 	return u
 }
+
+// StateDelta states the delta rule's decay and output gate where the
+// architecture's config left them unstated: the decay through softplus, and
+// the gate a sigmoid where the decay is a key channel's (the block stores
+// the low-rank decay pair, Kimi Delta Attention's), silu elsewhere.
+// stores says block li (-1 the dense tensors) stores role.
+func StateDelta(c *jlm.Config, stores func(r jlm.Role, li int32) bool) {
+	linear, perChannel := false, false
+	for li, k := range c.LayerKinds {
+		if k == jlm.LayerLinearAttn {
+			linear = true
+			perChannel = perChannel || stores(jlm.RoleSSMFB, int32(li))
+		}
+	}
+	if !linear {
+		return
+	}
+	if c.DeltaDecay == nil {
+		c.DeltaDecay = jlm.DeltaDecaySoftplus()
+	}
+	if c.DeltaGate == nil {
+		c.DeltaGate = jlm.DeltaGateSiLU()
+		if perChannel {
+			c.DeltaGate = jlm.DeltaGateSigmoid()
+		}
+	}
+}
