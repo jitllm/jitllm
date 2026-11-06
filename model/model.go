@@ -193,9 +193,6 @@ type Config struct {
 	ExpertSigmoid                  bool
 	ExpertScale                    float64
 	NExpertGroup, NExpertGroupUsed int
-	// SparseMixer, when non-zero, is Phi-3.5-MoE's router and its jitter_eps
-	// (jlm.ArchPhiMoE carries it).
-	SparseMixer float32
 
 	// AttnScale is the softmax's multiplier, already including YaRN's squared
 	// magnitude correction. The converter folds one copy of the correction into
@@ -683,7 +680,6 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 	out := &Config{
 		Arch:         c.Arch.String(),
 		chanDecay:    stores(jlm.RoleSSMFB),
-		SparseMixer:  sparseMixerOf(c.Arch),
 		NLayer:       int(c.NLayer),
 		NMTP:         int(c.NMTP),
 		NEmbd:        int(c.NEmbd),
@@ -919,9 +915,6 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 	}
 	if out.NLayer == 0 || out.NEmbd == 0 || out.NHead == 0 {
 		return nil, fmt.Errorf("model: %s: the container's config is empty", out.Arch)
-	}
-	if err := out.checkSparseMixer(); err != nil {
-		return nil, err
 	}
 	return out, nil
 }

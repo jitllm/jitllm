@@ -713,10 +713,6 @@ type LayerPlan struct {
 	ExpertSelBias                  bool
 	ExpertGroups, ExpertGroupsUsed int
 	ExpertScale                    float64
-	// ExpertSparseMixer, when non-zero, is Phi-3.5-MoE's sparsemixer router
-	// and its jitter_eps: the plain logit rank keeps two
-	// and the weights are its masked softmaxes, not renormalised.
-	ExpertSparseMixer float32
 	// NFFNShExp is the shared expert's hidden width, 0 when the model has none.
 	// It runs for every token beside the routed ones and its gate is a vector
 	// rather than a router.

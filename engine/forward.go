@@ -1999,7 +1999,6 @@ func (s *Instance) planFor(li int) *nn.LayerPlan {
 	plan.ExpertSigmoid, plan.ExpertScale = c.ExpertSigmoid, c.ExpertScale
 	plan.ExpertGroups, plan.ExpertGroupsUsed = c.NExpertGroup, c.NExpertGroupUsed
 	plan.ExpertSelBias = s.m.ExpSelBias() != nil
-	plan.ExpertSparseMixer = c.SparseMixer
 	if c.LayerKind(li).Recurrent() {
 		g := c.Delta()
 		plan.Recurrent = nn.RecurrentPlan{
