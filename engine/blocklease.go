@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/model"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // blockLease is what a block's call on the CPU device pages in during it,
@@ -25,12 +25,12 @@ type blockLease struct {
 	lo     int
 }
 
-// Held is cpudev.Source's: block li's page is in.
+// Held is nn.Source's: block li's page is in.
 func (l *blockLease) Held(li int) bool { return l.m.BlockHeld(l.fr, li) }
 
-// Ensure is cpudev.Source's: block li's own weights read into its page and
+// Ensure is nn.Source's: block li's own weights read into its page and
 // this instance's copy of the block bound at them (model.Model.PageIn).
-func (l *blockLease) Ensure(li int) (cpudev.Tensors, error) {
+func (l *blockLease) Ensure(li int) (nn.Tensors, error) {
 	if li < l.lo || li >= l.lo+len(l.layers) {
 		return nil, fmt.Errorf("engine: block %d is not one of this instance's [%d, %d)", li, l.lo, l.lo+len(l.layers))
 	}

@@ -3,7 +3,6 @@ package engine
 import (
 	"slices"
 
-	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/model"
 	"github.com/jitllm/jitllm/nn"
@@ -12,7 +11,7 @@ import (
 // kvHalfRow is the floats a row of the binary16 conversions' forms holds.
 const kvHalfRow = 256
 
-// partsPlan is what the instance's parts are placed from (cpudev.PartsPlan),
+// partsPlan is what the instance's parts are placed from (nn.PartsPlan),
 // each as the model states it: the head's and the samplers' graphs (graph.Head
 // over the row the streams collapse to, the norm, the projection and what
 // follows it; a step's rows' at cpuRowsCap; a label pick's over the picked rows
@@ -24,11 +23,11 @@ const kvHalfRow = 256
 // turns a picture's rows in one call) and a binary16 or q8 history's
 // conversions (a binary16 history's halves in rows of kvHalfRow floats, a q8
 // history's rows one a head width its layers hold).
-func (s *Instance) partsPlan() *cpudev.PartsPlan {
+func (s *Instance) partsPlan() *nn.PartsPlan {
 	fg := s.m.FrontGraphs()
-	p := &cpudev.PartsPlan{D: s.c.NEmbd, NVocab: s.c.NVocab, TopLog: model.MaxTopLogprobs,
-		HeadNorm: fg.OutNorm != nil, HeadW: blockWeights{s: s, li: -1}}
-	part := func(g *graph.Graph, none nn.Decline, rows int) cpudev.PartPlan { return s.partPlan(g, none, rows, nil) }
+	p := &nn.PartsPlan{D: s.c.NEmbd, NVocab: s.c.NVocab, TopLog: model.MaxTopLogprobs,
+		HeadNorm: fg.OutNorm != nil, HeadW: nn.PartWeights{Block: -1, Of: s.ws.tensors(-1, nil)}}
+	part := func(g *graph.Graph, none nn.Decline, rows int) nn.PartPlan { return s.partPlan(g, none, rows, nil) }
 	p.Head[0] = part(fg.CpuHead, nn.DeclineNoGraph, 1)
 	p.Head[1] = part(fg.CpuHidden, nn.DeclineNoGraph, 1)
 	p.Head[2] = part(fg.CpuHidden, nn.DeclineNoGraph, cpuRowsCap)
@@ -41,7 +40,7 @@ func (s *Instance) partsPlan() *cpudev.PartsPlan {
 		fg.CpuCutK, fg.CpuCutKProb} {
 		p.Head[4+i] = part(g, nn.DeclineNoSample, 1)
 	}
-	p.Head[12] = cpudev.PartPlan{Skip: true}
+	p.Head[12] = nn.PartPlan{Skip: true}
 	if fg.OutNorm != nil {
 		p.Head[12] = part(fg.OutNorm, nn.DeclineNoGraph, cpuRowsCap)
 	}
@@ -53,56 +52,56 @@ func (s *Instance) partsPlan() *cpudev.PartsPlan {
 		p.StreamParts[0] = part(fg.Expand, nn.DeclineNoGraph, 1)
 		p.StreamParts[1] = part(fg.Expand, nn.DeclineNoGraph, cpuRowsCap)
 		collapse := fg.Collapse
-		cw := blockWeights{s: s, li: -1}
+		cw := nn.PartWeights{Block: -1, Of: s.ws.tensors(-1, nil)}
 		if i := s.lo - s.c.NLayer; i >= 0 && i < len(fg.MtpCollapse) {
-			collapse, cw.li, cw.l = fg.MtpCollapse[i], s.lo, s.layer(s.lo)
+			collapse, cw = fg.MtpCollapse[i], nn.PartWeights{Block: s.lo, Of: s.ws.tensors(s.lo, s.layer(s.lo))}
 		}
 		p.StreamParts[2] = part(collapse, nn.DeclineNoGraph, 1)
 		p.StreamParts[3] = part(collapse, nn.DeclineNoGraph, cpuRowsCap)
-		p.StreamW, p.CollapseW = blockWeights{s: s, li: -1}, cw
+		p.StreamW, p.CollapseW = nn.PartWeights{Block: -1, Of: s.ws.tensors(-1, nil)}, cw
 	}
 
 	if g := fg.Pool; g != nil {
-		p.Pool, p.PoolPart, p.PoolW = true, part(g, nn.DeclineNoGraph, s.maxSeq), blockWeights{s: s, li: -1}
+		p.Pool, p.PoolPart, p.PoolW = true, part(g, nn.DeclineNoGraph, s.maxSeq), nn.PartWeights{Block: -1, Of: s.ws.tensors(-1, nil)}
 		p.PoolRows, p.PoolWidth, p.PoolRaw = s.maxSeq, s.poolWidth(), len(g.Out) > 1
 	}
 
 	if i := s.lo - s.c.NLayer; i >= 0 && i < len(fg.MtpEntry) {
 		g := fg.MtpEntry[i]
 		p.Entry, p.EntryWidth = true, s.c.ResidW()
-		p.EntryParts = [2]cpudev.PartPlan{part(g, nn.DeclineNoGraph, 1), part(g, nn.DeclineNoGraph, cpuRowsCap)}
-		p.EntryW = blockWeights{s: s, li: s.lo, l: s.layer(s.lo)}
+		p.EntryParts = [2]nn.PartPlan{part(g, nn.DeclineNoGraph, 1), part(g, nn.DeclineNoGraph, cpuRowsCap)}
+		p.EntryW = nn.PartWeights{Block: s.lo, Of: s.ws.tensors(s.lo, s.layer(s.lo))}
 	}
 
 	p.Inputs[0] = part(fg.CpuEmbed, nn.DeclineNoEmbed, 1)
 	p.Inputs[1] = part(fg.CpuEmbed, nn.DeclineNoEmbed, cpuRowsCap)
-	p.Inputs[2], p.Inputs[3] = cpudev.PartPlan{Skip: true}, cpudev.PartPlan{Skip: true}
+	p.Inputs[2], p.Inputs[3] = nn.PartPlan{Skip: true}, nn.PartPlan{Skip: true}
 	if fg.Given != nil {
 		p.Inputs[2] = part(fg.Given, nn.DeclineNoEmbed, 1)
 		p.Inputs[3] = part(fg.Given, nn.DeclineNoEmbed, cpuRowsCap)
 	}
 	p.PleW = s.c.PleWidth()
 	p.Given, p.WritesX = fg.Given != nil, fg.Given != nil && (len(fg.Given.Out) > 1 || p.PleW == 0)
-	p.InputsW = blockWeights{s: s, li: cpuInputRows}
+	p.InputsW = nn.PartWeights{Block: cpuInputRows, Of: s.ws.tensors(cpuInputRows, nil)}
 
 	tabs := s.tableGraphs()
 	p.TableWidths = [2]int{s.c.RopeW(), s.c.LocalNRot()}
-	p.Tables = make([]cpudev.TablePlan, len(tabs))
+	p.Tables = make([]nn.TablePlan, len(tabs))
 	for i, g := range tabs {
 		// The tables are the model's rotaries; an instance whose config has
 		// none (a tower's) composes none.
 		if i < len(p.TableWidths) && p.TableWidths[i] == 0 {
-			p.Tables[i] = cpudev.TablePlan{One: cpudev.PartPlan{Skip: true}, Many: cpudev.PartPlan{Skip: true}}
+			p.Tables[i] = nn.TablePlan{One: nn.PartPlan{Skip: true}, Many: nn.PartPlan{Skip: true}}
 			continue
 		}
 		rows := cpuRowsCap
 		if s.towered() {
 			rows = s.maxSeq
 		}
-		p.Tables[i] = cpudev.TablePlan{One: s.tablePlan(g, 1), Many: s.tablePlan(g, rows)}
+		p.Tables[i] = nn.TablePlan{One: s.tablePlan(g, 1), Many: s.tablePlan(g, rows)}
 	}
 	p.TablePlanes = [2][]float32{s.tablePlanes(0), s.tablePlanes(1)}
-	p.TablesW = blockWeights{s: s, li: cpuTablesBlock}
+	p.TablesW = nn.PartWeights{Block: cpuTablesBlock, Of: s.ws.tensors(cpuTablesBlock, nil)}
 
 	narrow, widen := graph.OpHalves, graph.OpWidenHalves
 	var widths []int
@@ -118,7 +117,7 @@ func (s *Instance) partsPlan() *cpudev.PartsPlan {
 		}
 	}
 	for _, fw := range widths {
-		c := cpudev.KVConvPlan{FW: fw, HW: fw / 2}
+		c := nn.KVConvPlan{FW: fw, HW: fw / 2}
 		if s.kvl.fmt == nn.KVQ8 {
 			c.HW = graph.Q8RowWords(fw)
 		}
@@ -139,14 +138,14 @@ func (s *Instance) partsPlan() *cpudev.PartsPlan {
 
 // tablePlan is rotary table graph g as a part at rows rows, the most marks a
 // sequence holds the instance's.
-func (s *Instance) tablePlan(g *graph.Graph, rows int) cpudev.PartPlan {
-	return cpudev.PartPlan{Graph: g, Rows: rows, Seqs: max(s.nseq, 1), Marks: s.marksCap(), ActWindow: s.m.ActWindow,
+func (s *Instance) tablePlan(g *graph.Graph, rows int) nn.PartPlan {
+	return nn.PartPlan{Graph: g, Rows: rows, Seqs: max(s.nseq, 1), Marks: s.marksCap(), ActWindow: s.m.ActWindow,
 		None: nn.DeclineNoGraph}
 }
 
 // placeParts makes the instance's parts on the CPU device from partsPlan.
 func (s *Instance) placeParts() {
-	pp := s.exec.x.PlaceParts(s.partsPlan())
+	pp := s.places[routeLanes].(nn.PartsPlacer).PlaceParts(s.partsPlan())
 	s.kvConv = nil
 	if pp.Head == nil {
 		return

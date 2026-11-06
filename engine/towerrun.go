@@ -8,7 +8,6 @@ import (
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/composer"
-	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/nn"
 )
@@ -89,20 +88,20 @@ func (in *Instance) newTowerRun() (*towerRun, error) {
 		words = max(words, (cl.Pic.PicW+cl.Pic.PicH)*(cl.Pic.Taps+1))
 	}
 	tr := &towerRun{s: ts, req: make([]uint32, composer.RequestPicTaps+words)}
-	plans := cpudev.TowerPlans{Head: ts.partPlan(tg.Head, nn.DeclineNoGraph, n, nil)}
+	plans := nn.TowerPlans{Head: ts.partPlan(tg.Head, nn.DeclineNoGraph, n, nil)}
 	for _, cl := range tg.Classes {
-		e := map[uint8]cpudev.PartPlan{}
+		e := map[uint8]nn.PartPlan{}
 		for px, g := range cl.Entry {
 			e[px] = ts.partPlan(g, nn.DeclineNoGraph, cl.Rows, nil)
 		}
 		plans.Entry = append(plans.Entry, e)
 	}
-	tapsW := make([]cpudev.Tensors, len(tg.Taps))
+	tapsW := make([]nn.Tensors, len(tg.Taps))
 	for j, g := range tg.Taps {
 		plans.Taps = append(plans.Taps, in.partPlan(g, nn.DeclineNoGraph, n, in.m.TowerTapFormats(int32(tg.TapBlocks[j]), g)))
 		tapsW[j] = &ts.dense.TowerTaps[j]
 	}
-	parts, err := cpudev.NewTower(ts.exec.x, plans, &ts.dense.TowerDense, tapsW)
+	parts, err := ts.places[routeLanes].(nn.TowerPlacer).PlaceTower(plans, &ts.dense.TowerDense, tapsW)
 	if err != nil {
 		ts.Close()
 		return nil, fmt.Errorf("model: %w", err)
@@ -110,11 +109,7 @@ func (in *Instance) newTowerRun() (*towerRun, error) {
 	tr.parts = parts
 	tr.tapRows, tr.tapBuf = make([][]float32, len(tg.Taps)), make([][]float32, len(tg.Taps))
 	for li := ts.lo; li < ts.hi; li++ {
-		if cb, _ := ts.exec.x.Block(li); cb == nil || cb.Rows == nil {
-			why := nn.DeclineNoGraph
-			if cb != nil {
-				why = max(cb.Why, cb.RowsWhy)
-			}
+		if why := ts.places[routeLanes].(nn.BlockRows).RowsServed(li); why != nn.DeclineServes {
 			ts.Close()
 			return nil, fmt.Errorf("model: the tower's block %d does not run on the CPU: %v", li-in.m.TowerBase, why)
 		}

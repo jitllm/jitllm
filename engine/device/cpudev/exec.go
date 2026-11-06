@@ -10,7 +10,6 @@ import (
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/nn"
 )
 
@@ -75,13 +74,6 @@ func (e *Exec) useFrames(fr *jlm.Frames) {
 
 // Bindings is the execution's weight bindings (UseFrames).
 func (e *Exec) Bindings() *Bindings { return e.b }
-
-// ExpertPager is where the experts a block's selection picks are made resident
-// and handed back: the instance's lease of its pages.
-type ExpertPager interface {
-	Experts(li int, sel []int32, count bool) error
-	ReleaseExperts()
-}
 
 // resources is the runner's: the experts ex pages in, and the row table's
 // rows read through the execution's bindings.
@@ -260,14 +252,6 @@ type Setup struct {
 	Trace                         func(li int)
 }
 
-// Lease is what an execution's placement reads its blocks through: the
-// experts a selection picks, paged in and handed back, and each block's
-// weights, paged in.
-type Lease interface {
-	ExpertPager
-	Source
-}
-
 // Attach makes an instance's execution on c from st: its workers, its
 // composer over the model's forms, its bindings over the frames, and its
 // seat on c, given up when it closes.
@@ -432,20 +416,6 @@ func (e *Exec) Detach() { e.Close() }
 // HeldBytes is what the execution holds of a session's history
 // (nn.Session): none, the history being the session's own.
 func (e *Exec) HeldBytes() uint64 { return 0 }
-
-// PartPlan is a part -- a graph apart from any block's residual: the head,
-// a sampler, the input rows, a rotary table, the streams' mix, a readout --
-// as the CPU device composes it: its weights' formats, the step's rows, the
-// sequences and rotary marks a table reads and the activation window. None
-// is why not, where the front end states no graph.
-type PartPlan struct {
-	Graph                        *graph.Graph
-	Formats                      map[jlm.Role]jlm.Type
-	Rows, Seqs, Marks, ActWindow int
-	None                         nn.Decline
-	// Skip is a part the model has none of: not composed, not asked.
-	Skip bool
-}
 
 // FormGraph composes p's graph through the model's keyed cache, its inputs
 // and outputs buffers of their own.

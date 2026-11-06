@@ -22,14 +22,6 @@ type Tower struct {
 	bound Bound
 }
 
-// TowerPlans is what a tower's parts are composed from: each class's entry
-// by sample format, the head and each tap.
-type TowerPlans struct {
-	Entry []map[uint8]PartPlan
-	Head  PartPlan
-	Taps  []PartPlan
-}
-
 // NewTower composes p's parts on x, their weights read in dense and each
 // tap's in taps.
 func NewTower(x *Exec, p TowerPlans, dense Tensors, taps []Tensors) (*Tower, error) {

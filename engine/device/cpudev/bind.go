@@ -7,16 +7,6 @@ import (
 	"github.com/jitllm/jitllm/nn"
 )
 
-// Tensors is where a form's weights are read: a block's copy, a tower's
-// tensors or the model's own.
-type Tensors interface {
-	// Bytes is the matrix of role r: its bytes, its planes where it is
-	// packed, and its rows; nil for one it does not hold.
-	Bytes(r jlm.Role) ([]byte, *nn.Packed, int)
-	// Floats is the vector of role r, nil for one it does not hold.
-	Floats(r jlm.Role) []float32
-}
-
 // Bindings is where the CPU device's forms read their weights: each form's
 // weights resolved once for the frame its block is in (Bind), each block's
 // routed banks as one view of its experts in the frames' expert pages, and

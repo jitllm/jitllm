@@ -8,14 +8,6 @@ import (
 	"github.com/jitllm/jitllm/nn"
 )
 
-// Source is where an instance's blocks' weights are read in: Held says block
-// li's page is in, so reading it reads nothing; Ensure reads it in where it
-// is not and is the block's copy, bound at it, that its forms read.
-type Source interface {
-	Held(li int) bool
-	Ensure(li int) (Tensors, error)
-}
-
 // Lanes is a session's run of blocks on the CPU device (Layers), as a card's
 // view runs a session's blocks there: each block read in through its
 // source, its history readied and committed through the session's History,

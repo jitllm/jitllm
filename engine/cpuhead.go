@@ -5,7 +5,6 @@ import (
 
 	"github.com/jitllm/jitllm/model"
 
-	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/nn"
@@ -26,8 +25,8 @@ import (
 // jlm.DenseBlock, for the head's), over's for the roles over names. A role
 // the block reads from another's tensor (a prediction block's embedding, the
 // trunk's table) takes that tensor's format.
-func (s *Instance) partPlan(g *graph.Graph, none nn.Decline, rows int, over map[jlm.Role]jlm.Type) cpudev.PartPlan {
-	p := cpudev.PartPlan{Graph: g, Rows: rows, ActWindow: s.m.ActWindow, None: none}
+func (s *Instance) partPlan(g *graph.Graph, none nn.Decline, rows int, over map[jlm.Role]jlm.Type) nn.PartPlan {
+	p := nn.PartPlan{Graph: g, Rows: rows, ActWindow: s.m.ActWindow, None: none}
 	if g == nil {
 		return p
 	}
