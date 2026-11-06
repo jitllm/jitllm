@@ -219,26 +219,29 @@ const cpuRowsCap = 64
 // x, their rotary tables cs and their descriptors rows, their history the
 // layer's pages kv through the page table pages.
 type cpuBound struct {
-	li  int
-	l   *model.Layer
-	own [][]uint32
-	cs  []float32
-	x   []float32
+	li int
+	// weights is the call's form's weights as its block reads them
+	// (weightSource.bind).
+	weights []unsafe.Pointer
+	own     [][]uint32
+	cs      []float32
+	x       []float32
 	// stride is the elements from one residual stream of x to the next.
 	stride int
 	rows   []uint32
 	n      int
-	kv     *kvPages
-	pages  []uint32
+	// keys and values are the call's history's, where it has one.
+	keys, values unsafe.Pointer
+	pages        []uint32
 	// csSWA is the call's second rotary's table where the model trains one,
 	// ropeRows and ropeMarks a rotary table's call's rows and its session's
 	// marks (ropeTables).
 	csSWA               []float32
 	ropeRows, ropeMarks []uint32
-	// recLi is the block whose recurrent states a linear block's step binds
-	// and recOf the session that holds them.
-	recLi int
-	recOf *Session
+	// recLi is the block whose recurrent states a linear block's step binds,
+	// recState and recConv where its session holds them.
+	recLi             int
+	recState, recConv unsafe.Pointer
 	// rec, where set, is the call's run descriptor in place of recRows.
 	rec []uint32
 	// side is the bound rows' per-layer inputs, a row each (cpuArgSide).
@@ -325,8 +328,11 @@ func (s *Instance) cpuStep(li int, l *model.Layer, cs []float32) (nn.Decline, er
 		return nn.DeclineServes, err
 	}
 	b := &s.cpu.bound
-	*b = cpuBound{li: li, l: l, own: s.cpu.dev.Own(cb.f), cs: cs, x: s.resid(), stride: s.c.NEmbd, rows: s.cpu.rows[:], n: 1, kv: pg, pages: pages,
-		recLi: s.cpuRecLi(li), recOf: s.Session, side: s.cpuSide(li)}
+	*b = cpuBound{li: li, own: s.cpu.dev.Own(cb.f), cs: cs, x: s.resid(), stride: s.c.NEmbd, rows: s.cpu.rows[:], n: 1, pages: pages,
+		recLi: s.cpuRecLi(li), side: s.cpuSide(li)}
+	b.weights, _ = s.ws.bind(cb.f, li, l)
+	b.keys, b.values = kvAddrs(pg)
+	b.recState, b.recConv = recAddrs(s.Session, b.recLi)
 	if b.side != nil {
 		b.side = b.side[cb.sideOff:]
 	}
@@ -528,8 +534,11 @@ func (s *Instance) cpuRecRows(li int, l *model.Layer, x, cs []float32, seq, pos 
 			s.Session = lead
 			return nn.DeclineServes, err
 		}
-		*b = cpuBound{li: li, l: l, own: s.cpu.dev.Own(cb.f), x: x[r*d:], stride: stride, rows: s.cpu.rows[:], n: 1, kv: pg,
-			pages: pages, recLi: s.cpuRecLi(li), recOf: o}
+		*b = cpuBound{li: li, own: s.cpu.dev.Own(cb.f), x: x[r*d:], stride: stride, rows: s.cpu.rows[:], n: 1,
+			pages: pages, recLi: s.cpuRecLi(li)}
+		b.weights, _ = s.ws.bind(cb.f, li, l)
+		b.keys, b.values = kvAddrs(pg)
+		b.recState, b.recConv = recAddrs(o, b.recLi)
 		// One live row, at its own position, as a decode step's.
 		s.cpu.pos1 = [2]uint32{1, uint32(pos[r])}
 		b.pos = s.cpu.pos1[:]
@@ -873,8 +882,10 @@ func (s *Instance) cpuRowsCalls(li int, l *model.Layer, f *cpudev.Form, lo, hi i
 		if bside != nil {
 			bside = bside[so:]
 		}
-		*b = cpuBound{li: li, l: l, own: s.cpu.dev.Own(f), cs: cs[r0*nrot:], x: bx, stride: bstride, rows: s.cpu.rowsTab, n: k,
-			kv: pg, pages: s.cpuFaultTable(pages, pg, end), side: bside}
+		*b = cpuBound{li: li, own: s.cpu.dev.Own(f), cs: cs[r0*nrot:], x: bx, stride: bstride, rows: s.cpu.rowsTab, n: k,
+			pages: s.cpuFaultTable(pages, pg, end), side: bside}
+		b.weights, _ = s.ws.bind(f, li, l)
+		b.keys, b.values = kvAddrs(pg)
 		if swa != nil {
 			b.csSWA = swa[r0*nswa:]
 		}
@@ -896,7 +907,8 @@ func (s *Instance) cpuRowsCalls(li int, l *model.Layer, f *cpudev.Form, lo, hi i
 			b.tok = s.cpu.tokTab
 		}
 		if f.Rec {
-			b.recLi, b.recOf, b.rec = s.cpuRecLi(li), s.Session, s.cpuRecDesc(seq[r0:r0+k])
+			b.recLi, b.rec = s.cpuRecLi(li), s.cpuRecDesc(seq[r0:r0+k])
+			b.recState, b.recConv = recAddrs(s.Session, b.recLi)
 			if n := len(s.view.Conv(b.recLi)); len(s.cpu.convOut) < n {
 				s.cpu.convOut = make([]float32, n)
 			}
@@ -1021,12 +1033,10 @@ func (s *Instance) cpuCallOf(b *cpuBound, f *cpudev.Form) *cpudev.Call {
 	*a = [cpudev.NumSrc]unsafe.Pointer{}
 	a[cpudev.SrcSide] = addr(b.side)
 	a[cpudev.SrcRopeRows], a[cpudev.SrcRopeMarks] = addr(b.ropeRows), addr(b.ropeMarks)
-	if t := b.kv.arena(); t != nil {
-		a[cpudev.SrcKeys], a[cpudev.SrcValues] = addr(t.Arena().Keys()), addr(t.Arena().Values())
-	}
+	a[cpudev.SrcKeys], a[cpudev.SrcValues] = b.keys, b.values
 	a[cpudev.SrcPages], a[cpudev.SrcRows], a[cpudev.SrcCall] = addr(b.pages), addr(b.rows), addr(s.cpu.call[:])
-	if r := b.recOf; r != nil && b.recLi >= 0 && b.recLi < r.view.Blocks() {
-		a[cpudev.SrcRecState], a[cpudev.SrcRecConv] = addr(r.view.State(b.recLi)), addr(r.view.Conv(b.recLi))
+	if b.recState != nil {
+		a[cpudev.SrcRecState], a[cpudev.SrcRecConv] = b.recState, b.recConv
 		a[cpudev.SrcRecConvOut] = a[cpudev.SrcRecConv]
 	}
 	a[cpudev.SrcRecRows] = addr(s.cpu.recRows[:])
@@ -1036,7 +1046,7 @@ func (s *Instance) cpuCallOf(b *cpuBound, f *cpudev.Form) *cpudev.Call {
 	a[cpudev.SrcZero] = addr(s.cpu.zero)
 	a[cpudev.SrcRequest], a[cpudev.SrcTokens], a[cpudev.SrcPos] = addr(b.req), addr(b.tok), addr(b.pos)
 	a[cpudev.SrcPicture] = addr(b.pic)
-	c.Weights, _ = s.ws.bind(f, b.li, b.l)
+	c.Weights = b.weights
 	return c
 }
 
@@ -1414,6 +1424,23 @@ func (s *Instance) cpuExperts(b *cpuBound, f *cpudev.Form, li, n int) error {
 
 // arena is the table of the layer's arena, nil for a layer with none (or no
 // layer).
+// kvAddrs is where history pg's keys and values are read, nil for none.
+func kvAddrs(pg *kvPages) (keys, values unsafe.Pointer) {
+	if t := pg.arena(); t != nil {
+		return addr(t.Arena().Keys()), addr(t.Arena().Values())
+	}
+	return nil, nil
+}
+
+// recAddrs is where session o holds block li's recurrent state and window,
+// nil where it holds none.
+func recAddrs(o *Session, li int) (state, conv unsafe.Pointer) {
+	if o == nil || li < 0 || li >= o.view.Blocks() {
+		return nil, nil
+	}
+	return addr(o.view.State(li)), addr(o.view.Conv(li))
+}
+
 func (s *kvPages) arena() *cpudev.Table {
 	if s == nil || s.mem == nil {
 		return nil
