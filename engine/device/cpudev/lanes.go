@@ -360,11 +360,12 @@ type HistoryOf interface{ History() History }
 type SessionLanes struct {
 	l    *Lanes
 	of   HistoryOf
+	pr   Prompt
 	keep recKeep
 }
 
 // For is the calls of the session whose history of reads on the lanes.
-func (l *Lanes) For(of HistoryOf) SessionLanes { return SessionLanes{l: l, of: of} }
+func (l *Lanes) For(of HistoryOf, pr Prompt) SessionLanes { return SessionLanes{l: l, of: of, pr: pr} }
 
 // Layers runs blocks [lo, hi) for the row at pos (nn.LayerRunner) over the
 // session's history.
@@ -704,7 +705,7 @@ func (l *Lanes) recWhole(li int, t Tensors, cb *Block, seq, pos []int) *Form {
 func (s *SessionLanes) attach() {
 	h := s.of.History()
 	s.l.Attach(h, h.View())
-	s.l.prompt, _ = s.of.(Prompt)
+	s.l.prompt = s.pr
 	s.l.keep = &s.keep
 }
 

@@ -79,7 +79,7 @@ func (s *Instance) bindLanes(sess *Session) {
 	if v == nil {
 		v = new(cpudev.SessionLanes)
 	}
-	*v = s.exec.lanes.For(sess)
+	*v = s.exec.lanes.For(sess, sess)
 	sess.routes[routeLanes] = laneRoute(v)
 }
 
