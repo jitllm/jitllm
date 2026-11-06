@@ -55,9 +55,9 @@ type Config struct {
 	// their own, which its convolution's taps keep to as well: a media
 	// prefix's rows the prefix alone (an LFM2 encoder's, rowWindows).
 	RowWindowed bool
-	// chanDecay is ChanDecay()'s backing field: Kimi Delta Attention rather
-	// than qwen3next's gated delta rule. Unexported because it is derived from
-	// the container's Arch and is not a knob.
+	// chanDecay is ChanDecay()'s backing field: a delta rule whose forget
+	// gate is its own low-rank pair (RoleSSMFA, RoleSSMFB) decays per channel
+	// rather than per head.
 	chanDecay bool
 	NLayer    int
 	NEmbd     int
@@ -671,21 +671,23 @@ func (c *Config) Scan() bool { return c.scan }
 //
 // Parsing and architecture knowledge live in convert.configOf; this copies
 // fields and derives. The two types differ on purpose: the container stores
-// what the file says and this carries what the engine derived.
-func configFrom(c *jlm.Config) (*Config, error) {
+// what the file says and this carries what the engine derived. stores says
+// a block of the container stores a role.
+func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 	if c == nil {
 		return nil, fmt.Errorf("model: the container has no config section")
 	}
-	if !c.Arch.Valid() || c.Arch == jlm.ArchCLIP {
+	// A container with no vocabulary is a tower alone.
+	if !c.Arch.Valid() || c.NVocab == 0 {
 		return nil, fmt.Errorf("model: %v is not a language model", c.Arch)
 	}
-	if c.Arch == jlm.ArchDeepseek4 {
-		return nil, fmt.Errorf("model: %v is refused: its compressed attention and Sinkhorn hyper-connections "+
-			"have no composed form stated from the container", c.Arch)
+	if c.HCMult != 0 && c.HCLowRank == 0 || len(c.CompKinds) != 0 || c.NHashLayers != 0 {
+		return nil, fmt.Errorf("model: %v carries hyper-connections mixed by Sinkhorn rounds, compressed "+
+			"attention or experts routed by token id, which have no composed form stated from the container", c.Arch)
 	}
 	out := &Config{
 		Arch:         c.Arch.String(),
-		chanDecay:    c.Arch == jlm.ArchKimiLinear || c.Arch == jlm.ArchKimiK3,
+		chanDecay:    stores(jlm.RoleSSMFB),
 		SparseMixer:  sparseMixerOf(c.Arch),
 		NLayer:       int(c.NLayer),
 		NMTP:         int(c.NMTP),
@@ -881,10 +883,6 @@ func configFrom(c *jlm.Config) (*Config, error) {
 		out.AttnScale *= mscale * mscale
 	}
 	out.TokenAct = c.Arch == jlm.ArchBitNet
-	if out.HCMult != 0 && out.HCLowRank == 0 || len(c.CompKinds) != 0 || c.NHashLayers != 0 {
-		return nil, fmt.Errorf("model: %s carries hyper-connections mixed by Sinkhorn rounds, compressed "+
-			"attention or experts routed by token id, which have no composed form stated from the container", out.Arch)
-	}
 	if err := q4eConfig(out, c); err != nil {
 		return nil, err
 	}
@@ -2502,7 +2500,14 @@ func ropeScale(cfg *Config, factors []float32) ([]float32, error) {
 }
 
 func build(c *jlm.File, options ...tok.Option) (*Model, error) {
-	cfg, err := configFrom(c.Config())
+	cfg, err := configFrom(c.Config(), func(r jlm.Role) bool {
+		for bi := range c.Config().NLayer {
+			if c.Has(r, int32(bi), -1) {
+				return true
+			}
+		}
+		return false
+	})
 	if err != nil {
 		return nil, err
 	}
