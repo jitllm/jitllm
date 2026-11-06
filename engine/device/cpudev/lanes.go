@@ -215,19 +215,17 @@ func (l *Lanes) SetTokens(toks []int32) {
 // SetKeyRuns is the prompt's runs the next calls' rows read both ways in,
 // full or each a window its rows read inside only (nn.KeyRunDevice); it
 // takes back any row windows.
-func (l *Lanes) SetKeyRuns(full, windowed []nn.KeyRun) bool {
+func (l *Lanes) SetKeyRuns(full, windowed []nn.KeyRun) {
 	l.runs, l.windowed, l.wins = full, false, nil
 	if len(windowed) > 0 {
 		l.runs, l.windowed = windowed, true
 	}
-	return true
 }
 
 // SetRowWindows is each row's own window for the next calls
 // (nn.RowWindowDevice).
-func (l *Lanes) SetRowWindows(wins []nn.KeyRun) bool {
+func (l *Lanes) SetRowWindows(wins []nn.KeyRun) {
 	l.wins = wins
-	return true
 }
 
 // CloseRun closes the fused pool region the last call left open.
@@ -728,12 +726,12 @@ func (s *SessionLanes) LayersSessions(lo, hi int, sess []nn.LayerRunner, pos []i
 }
 
 // SetKeyRuns hands the lanes the prompt's runs (nn.KeyRunDevice).
-func (s *SessionLanes) SetKeyRuns(full, windowed []nn.KeyRun) bool {
-	return s.l.SetKeyRuns(full, windowed)
+func (s *SessionLanes) SetKeyRuns(full, windowed []nn.KeyRun) {
+	s.l.SetKeyRuns(full, windowed)
 }
 
 // SetRowWindows hands the lanes each row's window (nn.RowWindowDevice).
-func (s *SessionLanes) SetRowWindows(wins []nn.KeyRun) bool { return s.l.SetRowWindows(wins) }
+func (s *SessionLanes) SetRowWindows(wins []nn.KeyRun) { s.l.SetRowWindows(wins) }
 
 // MigrateKV is the CPU's half of moving block li's history of pos positions
 // (nn.KVMigrator): the session's history takes k and v, or gives its rows

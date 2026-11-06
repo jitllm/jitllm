@@ -1203,7 +1203,7 @@ type GridCellsDevice interface {
 // before every row's key is in the cache; false is a device that cannot take
 // the runs, and the caller fails the call rather than running it unmasked.
 type KeyRunDevice interface {
-	SetKeyRuns(full, windowed []KeyRun) bool
+	SetKeyRuns(full, windowed []KeyRun)
 }
 
 // RowWindowDevice is an optional LayerDevice that takes one window a row for
@@ -1213,7 +1213,7 @@ type KeyRunDevice interface {
 // KeyRunDevice can state. It replaces whatever runs SetKeyRuns gave, and
 // false is a device that cannot take them.
 type RowWindowDevice interface {
-	SetRowWindows(wins []KeyRun) bool
+	SetRowWindows(wins []KeyRun)
 }
 
 // SeqRunsDevice is an optional LayerDevice that takes several sequences
