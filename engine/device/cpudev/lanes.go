@@ -31,6 +31,17 @@ type Lanes struct {
 	stride int
 	side   []float32
 	tok    int32
+	// width and streams are a row's width and its residual streams, convLen
+	// a sequence's recurrent window.
+	width, streams, convLen int
+	// runs is the prompt's bidirectional runs, windowed that a row reads
+	// inside its run only, wins each position's own window (KeyRuns).
+	runs     []nn.KeyRun
+	windowed bool
+	wins     []nn.KeyRun
+	// spans and in are a call of rows' spans and record.
+	spans []uint32
+	in    Rows
 	// RecFault binds every linear block to the recurrent state of the first:
 	// a gate's violation.
 	RecFault bool
@@ -44,8 +55,117 @@ type Lanes struct {
 // NewLanes runs e's blocks for a session, their weights bound by b and read
 // in through src, a row's residual streams stride apart, their history seqs
 // sequences wide; trace, where set, is told each block a run finishes.
-func NewLanes(e *Exec, b *Bindings, src Source, stride, seqs int, trace func(li int)) *Lanes {
-	return &Lanes{e: e, b: b, src: src, stride: stride, seqs: seqs, trace: trace}
+func NewLanes(e *Exec, b *Bindings, src Source, stride, seqs, streams, convLen int, trace func(li int)) *Lanes {
+	return &Lanes{e: e, b: b, src: src, stride: stride, seqs: seqs, width: stride, streams: streams, convLen: convLen,
+		trace: trace}
+}
+
+// KeyRuns is the prompt's bidirectional runs the next calls of rows read,
+// windowed that a row reads inside its run only, and each position's own
+// window where the rows' windows overlap (nil for none), as a card is
+// handed them (nn.KeyRunDevice, nn.RowWindowDevice).
+func (l *Lanes) KeyRuns(runs []nn.KeyRun, windowed bool, wins []nn.KeyRun) {
+	l.runs, l.windowed, l.wins = runs, windowed, wins
+}
+
+// RowsCall is a call of a block's rows: the rows of X, the stream-major
+// residual Stride apart, their per-layer inputs Side (SideW a row), their
+// rotary tables CS and CSSWA (NRot and NSWA a row), positions Pos of
+// sequences Seq and tokens Tok.
+type RowsCall struct {
+	X        []float32
+	Stride   int
+	Side     []float32
+	SideW    int
+	CS       []float32
+	NRot     int
+	CSSWA    []float32
+	NSWA     int
+	Seq, Pos []int
+	Tok      []int32
+}
+
+// ReadyRows makes block li's history ready for the rows at pos its form f
+// runs, or says why f cannot run them: a history past f's key bound, a page
+// outside the arena.
+func (l *Lanes) ReadyRows(li int, f *Form, pos []int) nn.Decline {
+	return l.h.PrepareRows(li, pos, f.Keys)
+}
+
+// Rows runs block li's form f of rows over c, its weights read in t: each
+// row's history read from where it starts to where its bidirectional run or
+// its window ends, the history committed once the rows ran.
+func (l *Lanes) Rows(li int, f *Form, t Tensors, c *RowsCall) error {
+	n := len(c.Pos)
+	if f.Toks && c.Tok == nil {
+		return fmt.Errorf("model: block %d reads its rows' tokens, which the step gives none of", li)
+	}
+	hb, err := l.h.Rows(li, l.seqs)
+	if err != nil {
+		return err
+	}
+	cb, _ := l.e.Block(li)
+	var sideOff int
+	var bidir, whole bool
+	if cb != nil {
+		sideOff, bidir, whole = cb.SideOff, cb.Bidir, cb.Whole
+	}
+	runs := bidir && runsIn(l.runs, c.Pos[0], n)
+	if cap(l.spans) < 4*n {
+		l.spans = make([]uint32, 4*n)
+	}
+	spans := l.spans[:4*n]
+	end := 0
+	for i, p := range c.Pos {
+		e, st := p+1, l.h.KeyStart(li, p)
+		if runs {
+			lo, hi := runOf(l.runs, p)
+			e = max(e, hi)
+			if l.windowed {
+				st = max(st, lo)
+			}
+		}
+		if w := l.wins; w != nil && !whole {
+			st, e = max(st, w[p].Lo), w[p].Hi
+		}
+		end = max(end, p+1)
+		spans[i*4], spans[i*4+1], spans[i*4+2], spans[i*4+3] = uint32(c.Seq[i]*hb.Slots), uint32(st), uint32(e), uint32(p)
+	}
+	w, _ := l.b.Bind(f, li, t)
+	in := &l.in
+	*in = Rows{X: c.X, Stride: c.Stride, Width: l.width, Streams: l.streams, Side: c.Side, SideW: c.SideW,
+		SideOff: sideOff, CS: c.CS, NRot: c.NRot, CSSWA: c.CSSWA, NSWA: c.NSWA, Pages: hb.Pages, PagePos: hb.PagePos,
+		Spans: spans, Pos: c.Pos, Tok: c.Tok, Seq: c.Seq, Weights: w, Keys: hb.Keys, Values: hb.Values}
+	if f.Rec {
+		in.RecLi = l.recLi(li)
+		in.RecState, in.RecConv = l.recAddrs(in.RecLi)
+		in.Conv, in.ConvLen = l.v.Conv(in.RecLi), l.convLen
+	}
+	if err := l.e.rows.Rows(li, f, in, runs); err != nil {
+		return err
+	}
+	l.h.Commit(li, end-1)
+	return nil
+}
+
+// runsIn says one of runs holds a position of [p0, p0+n).
+func runsIn(runs []nn.KeyRun, p0, n int) bool {
+	for _, r := range runs {
+		if r.Lo < p0+n && r.Hi > p0 {
+			return true
+		}
+	}
+	return false
+}
+
+// runOf is the run holding pos, zero for none.
+func runOf(runs []nn.KeyRun, pos int) (lo, hi int) {
+	for _, r := range runs {
+		if pos >= r.Lo && pos < r.Hi {
+			return r.Lo, r.Hi
+		}
+	}
+	return 0, 0
 }
 
 // Attach runs the lanes over a session's history h and recurrent state v.

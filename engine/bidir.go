@@ -13,35 +13,6 @@ import (
 // run must therefore be in the same prefill chunk, since none of their scores
 // exist until all their keys are in the cache.
 
-// bidirEnd is the end of the run holding position pos, or 0 when pos is in
-// none.
-func (s *Instance) bidirEnd(pos int) int {
-	for _, r := range s.bidir {
-		if pos >= r.Lo && pos < r.Hi {
-			return r.Hi
-		}
-	}
-	return 0
-}
-
-// bidirStart is the start of the run holding position pos, 0 when pos is
-// in none.
-func (s *Instance) bidirStart(pos int) int {
-	for _, r := range s.bidir {
-		if pos >= r.Lo && pos < r.Hi {
-			return r.Lo
-		}
-	}
-	return 0
-}
-
-// runsAt reports whether block li's attention honours the instance's runs:
-// an attending block's where the model's picture rows see each other in it
-// (Config.BidirAt).
-func (s *Instance) runsAt(li int) bool {
-	return len(s.bidir) > 0 && s.c.LayerKind(li).Attends() && s.c.BidirAt(li)
-}
-
 // bidirChunk is a chunk's row count n, starting at position p0, moved so no
 // run is cut: a run that would straddle the end is left to the next chunk when
 // rows come before it, and taken whole (past n) when it starts the chunk.
