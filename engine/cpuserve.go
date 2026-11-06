@@ -278,7 +278,7 @@ func (s *Instance) cpuRecRows(li int, l *model.Layer, x, cs []float32, seq, pos 
 	if err := s.cpuRowTables(seq, pos); err != nil {
 		return nn.DeclineServes, err
 	}
-	cb, why := s.cpuBlockOf(li)
+	cb, why := s.cpu.x.Block(li)
 	if why != nn.DeclineServes {
 		return why, nil
 	}
@@ -460,60 +460,10 @@ func (s *Instance) cpuPlace() {
 	}
 	for li := s.lo; li < min(s.hi, n); li++ {
 		if !s.devAt(li) {
-			s.cpuCompose(li)
+			s.cpu.x.Compose(li, s.blockPlan(li))
 		}
 	}
 	s.placeParts()
-}
-
-// cpuRelocated follows block li onto the CPU, composed for it there, or off
-// it, its composition released.
-func (s *Instance) cpuRelocated(li int, onCPU bool) {
-	if !s.cpu.x.Holds(li) {
-		return
-	}
-	if onCPU {
-		s.cpuCompose(li)
-		return
-	}
-	s.cpu.x.Drop(li)
-}
-
-// cpuCompose composes block li on the CPU device from what the model states
-// of it (cpudev.Exec.Compose), counted (CPUCompositions).
-func (s *Instance) cpuCompose(li int) { s.cpu.x.Compose(li, s.cpuBlockPlan(li)) }
-
-// cpuBlockOf is block li's composition on the CPU, made at its placement.
-func (s *Instance) cpuBlockOf(li int) (*cpudev.Block, nn.Decline) { return s.cpu.x.Block(li) }
-
-// cpuWhy is what keeps block li off the composer's CPU path before it is
-// asked: what its graph and history need that the CPU device does not hold.
-func (s *Instance) cpuWhy(li int) nn.Decline {
-	c := s.c
-	g := s.m.Composing().BlockGraph(li)
-	// A block sharing another's history reads its source's pages.
-	pg := &s.kv.layers[c.KVSource(li)]
-	switch {
-	case !composer.LowersCPU(uint64(s.cpuISA())):
-		return nn.DeclineISA
-	case g == nil:
-		return nn.DeclineNoGraph
-	case len(g.Out) != c.Streams() || len(g.In) > len(g.Out)+1 || len(g.In) > len(g.Out) && s.cpuSide(li) == nil:
-		return nn.DeclineFeeds
-	case c.MoEAt(li) && !s.cpuBanksPaged(li):
-		// The forms read a bank as one view of its experts in the host's
-		// expert pages (jlm.File.BankView); a bank with none is not read.
-		return nn.DeclineExperts
-	case c.LayerKind(li).Recurrent() && (s.view.State(li) == nil || s.view.Conv(li) == nil):
-		return nn.DeclineRecurrent
-	case s.kvl.fmt != cpu.KVF16 && s.kvl.fmt != cpu.KVF32:
-		// The CPU's profile keeps a history binary16 itself (composer.Halves),
-		// or at f32 without that pass.
-		return nn.DeclineKVFormat
-	case pg.p > 0 && pg.arena() == nil:
-		return nn.DeclinePageOut
-	}
-	return nn.DeclineServes
 }
 
 // sideAtBinding moves the offset of every slice of gr's side input (its
@@ -563,12 +513,12 @@ func (s *Instance) cpuSideRows(li int) ([]float32, int) {
 	return s.bple, s.c.SideWidth()
 }
 
-// cpuBlockPlan is what the CPU device composes block li from: the graph its
+// blockPlan is what the CPU device composes block li from: the graph its
 // front end states, the formats its weights are read in, their strides, the
 // step's history geometry and the instance's rotaries -- or what keeps the
 // block off the composer's CPU path before it is asked (cpuWhy).
-func (s *Instance) cpuBlockPlan(li int) cpudev.BlockPlan {
-	p := cpudev.BlockPlan{Why: s.cpuWhy(li)}
+func (s *Instance) blockPlan(li int) cpudev.BlockPlan {
+	p := cpudev.BlockPlan{Why: s.blockWhy(li)}
 	if p.Why != nn.DeclineServes {
 		return p
 	}
@@ -620,19 +570,6 @@ func (s *Instance) cpuBlockPlan(li int) cpudev.BlockPlan {
 	return p
 }
 
-// cpuBanksPaged says block li's routed banks are each one view of its
-// experts in the host's expert pages (jlm.File.BankView).
-func (s *Instance) cpuBanksPaged(li int) bool {
-	l := &s.m.Layers[li]
-	if s.m.Container == nil || l.LegacyExperts {
-		return false
-	}
-	if !s.ws.b.BankViews(li, len(s.m.Layers), [3]*jlm.Entry{l.Gate.E, l.Up.E, l.Down.E}) {
-		return false
-	}
-	return l.Up.E != nil && l.Down.E != nil
-}
-
 // arena is the table of the layer's arena, nil for a layer with none (or no
 // layer).
 // kvAddrs is where history pg's keys and values are read, nil for none.
@@ -671,4 +608,35 @@ func (s *Instance) cpuRowsRun(li int, l *model.Layer, f *cpudev.Form, x []float3
 	rc := cpudev.RowsCall{X: x, Stride: stride, Side: side, SideW: pw, CS: cs, NRot: nrot, CSSWA: swa, NSWA: nswa,
 		Seq: seq, Pos: pos, Tok: tok}
 	return ln.Rows(li, f, l, &rc)
+}
+
+// blockWhy is what keeps block li off the composer's CPU path before it is
+// asked, as the model and its history state it: no graph, an input the
+// device is handed none of, a bank with no expert pages (the forms read a
+// bank as one view of its experts in the frames' expert pages,
+// jlm.Frames.BankView), a recurrent block with no state, a history format
+// the forms do not read (the CPU keeps a history binary16 itself,
+// composer.Halves, or at f32 without that pass) or pages outside an arena.
+func (s *Instance) blockWhy(li int) nn.Decline {
+	c := s.c
+	g := s.m.Composing().BlockGraph(li)
+	// A block sharing another's history reads its source's pages.
+	pg := &s.kv.layers[c.KVSource(li)]
+	l := &s.m.Layers[li]
+	switch {
+	case g == nil:
+		return nn.DeclineNoGraph
+	case len(g.Out) != c.Streams() || len(g.In) > len(g.Out)+1 || len(g.In) > len(g.Out) && s.cpuSide(li) == nil:
+		return nn.DeclineFeeds
+	case c.MoEAt(li) && (s.m.Container == nil || l.LegacyExperts ||
+		!s.ws.b.BankViews(li, len(s.m.Layers), [3]*jlm.Entry{l.Gate.E, l.Up.E, l.Down.E}) || l.Up.E == nil || l.Down.E == nil):
+		return nn.DeclineExperts
+	case c.LayerKind(li).Recurrent() && (s.view.State(li) == nil || s.view.Conv(li) == nil):
+		return nn.DeclineRecurrent
+	case s.kvl.fmt != cpu.KVF16 && s.kvl.fmt != cpu.KVF32:
+		return nn.DeclineKVFormat
+	case pg.p > 0 && pg.arena() == nil:
+		return nn.DeclinePageOut
+	}
+	return nn.DeclineServes
 }
