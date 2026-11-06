@@ -155,8 +155,8 @@ func (s *Instance) recChunkPoint(slot, pos int) {
 	if slot != 0 || !s.recPointsOn() || !s.recPoint(pos) || s.devCount() == 0 || s.ld == nil {
 		return
 	}
-	for li := s.lo; li < len(s.at); li++ {
-		if s.at[li] != routeView || !s.keepsRec(li) || s.recDev(li) != nil {
+	for li := s.lo; li < len(s.blockRoutes); li++ {
+		if s.blockRoutes[li] != routeView || !s.keepsRec(li) || s.recDev(li) != nil {
 			continue
 		}
 		// Read from the device where it keeps no points.

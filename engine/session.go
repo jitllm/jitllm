@@ -116,7 +116,7 @@ func (s *Instance) use(sess *Session) error {
 		return s.comeBack()
 	}
 	if cur := s.Session; cur != nil && !cur.away {
-		cur.held = append(cur.held[:0], s.at...)
+		cur.held = append(cur.held[:0], s.blockRoutes...)
 	}
 	s.Session = sess
 	sess.on = s
@@ -193,7 +193,7 @@ func (s *Instance) comeBack() error {
 			return err
 		}
 		if li < len(sess.held) {
-			sess.held[li] = s.at[li]
+			sess.held[li] = s.blockRoutes[li]
 		}
 	}
 	sess.away = false
@@ -326,7 +326,7 @@ func (s *Instance) forget(sess *Session) {
 // through its own view.
 func (s *Instance) bindOwn() {
 	if sess := s.Session; !sess.away {
-		sess.held = append(sess.held[:0], s.at...)
+		sess.held = append(sess.held[:0], s.blockRoutes...)
 		sess.away = true
 	}
 	s.Session = s.own
@@ -474,7 +474,7 @@ func (s *Instance) vacate(lo, hi int) error {
 		return nil
 	}
 	if !cur.away {
-		cur.held = append(cur.held[:0], s.at...)
+		cur.held = append(cur.held[:0], s.blockRoutes...)
 	}
 	for _, o := range s.hist {
 		if err := release(o); err != nil {
@@ -504,7 +504,7 @@ func (s *Instance) As(sess *Session, f func(*Instance)) {
 	defer s.mu.Unlock()
 	if prev := s.Session; prev != sess {
 		if !prev.away {
-			prev.held = append(prev.held[:0], s.at...)
+			prev.held = append(prev.held[:0], s.blockRoutes...)
 		}
 		sess.away = true
 		s.Session = sess
