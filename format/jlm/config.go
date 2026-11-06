@@ -835,6 +835,21 @@ type Geom struct {
 	NKVHead, HeadDim, NRot, NFFN uint32
 }
 
+// QKVAct is the element-wise function q, k and v pass through straight
+// after their projections (and biases), before any norm or rotary: the clamp
+// to [-ClampKQV, ClampKQV] where the container states a bound, nil where it
+// states none.
+func (c *Config) QKVAct() *Expr {
+	if c.ClampKQV == 0 {
+		return nil
+	}
+	b := c.ClampKQV
+	return &Expr{Terms: []Term{
+		{Fn: FnMax, Args: [3]Arg{{Kind: ArgIn}, {Kind: ArgConst, Value: -b}}},
+		{Fn: FnMin, Args: [3]Arg{{Kind: ArgTerm, Index: 0}, {Kind: ArgConst, Value: b}}},
+	}}
+}
+
 // GeomAt is text block b's geometry: its own where Geoms states one, the
 // model's otherwise.
 func (c *Config) GeomAt(b int) Geom {

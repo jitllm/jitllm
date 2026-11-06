@@ -67,8 +67,8 @@ func c6BaseDevViolations() map[string][]c6Violation {
 			{"NORM rotary for NEOX", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.RopeNeox = false }) }},
 		},
 		"synth-dbrx": {
-			{"no clip_qkv", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.ClampKQV = 0 }) }},
-			{"clip_qkv at twice its value", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.ClampKQV *= 2 }) }},
+			{"no clip_qkv", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.QKVAct = nil }) }},
+			{"clip_qkv at twice its value", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.QKVAct = clampTwice(m) }) }},
 			{"RMSNorm for LayerNorm", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.LayerNorm = false }) }},
 			{"the routed weights not renormalised", func(m *model.Model) func() {
 				return cfgMut(m, func(c *model.Config) { c.NoExpertNorm = true })

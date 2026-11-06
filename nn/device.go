@@ -719,9 +719,6 @@ type LayerPlan struct {
 	// both into the residual. UngatedFFN is up, its bias BUp, the activation
 	// alone, down and BDown -- Gate is empty.
 	LayerNorm, Parallel, UngatedFFN bool
-	// ClampKQV clamps q, k and v to [-ClampKQV, ClampKQV] straight after their
-	// projections (DBRX); zero means no clamp.
-	ClampKQV float32
 	// BidirOff says this block's attention ignores the bidirectional runs
 	// (KeyRunDevice's full runs) and stays causal: Gemma 4's global layers,
 	// on a model whose image rows see each other on the sliding layers only.

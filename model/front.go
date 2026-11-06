@@ -764,19 +764,27 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 		}
 		q, gate = half("q", 0), half("gate", hd)
 	}
-	if bound := c.ClampKQV; bound != 0 {
-		clamp := func(x graph.ValueID, name string) graph.ValueID {
-			return b.Emit(graph.OpClamp, []graph.ValueID{x}, []graph.Result{{Name: name, Width: b.G.Values[x].Width}}, nil,
-				graph.Attrs{Bound: float64(bound)}, nil, nil)[0]
+	if act := c.QKVAct; act != nil {
+		var err error
+		through := func(x graph.ValueID, name string) graph.ValueID {
+			if err != nil {
+				return x
+			}
+			var y graph.ValueID
+			y, err = b.Stated(name, act, []graph.ValueID{x}, b.G.Values[x].Width, f)
+			return y
 		}
-		q = clamp(q, "q.clamp")
+		q = through(q, "q.act")
 		switch {
 		case shared:
 		case vFromK:
-			k = clamp(k, "k.clamp")
+			k = through(k, "k.act")
 			v = k
 		default:
-			k, v = clamp(k, "k.clamp"), clamp(v, "v.clamp")
+			k, v = through(k, "k.act"), through(v, "v.act")
+		}
+		if err != nil {
+			return nil, UncoveredUnverified, fmt.Errorf("block %d's stated q/k/v function: %w", li, err)
 		}
 	}
 	// ones is an RMS norm over each head of x with no weight.

@@ -218,9 +218,10 @@ type Config struct {
 	// logits are divided by the second on every path that produces them.
 	ResidualScale, LogitScale float64
 
-	// ClampKQV clamps q, k and v to [-ClampKQV, ClampKQV] after their
-	// projections: DBRX's clip_qkv. Zero means none; see jlm.Config.
-	ClampKQV float32
+	// QKVAct is the function q, k and v pass through after their
+	// projections, as the container states it (jlm.Config.QKVAct); nil for
+	// none.
+	QKVAct *jlm.Expr
 
 	// NMTP is how many multi-token-prediction blocks follow the trunk (blocks
 	// NLayer..NLayer+NMTP-1); zero for a model that ships none. They run only
@@ -760,7 +761,7 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 		AttnTempOffs:   float64(c.AttnTempOffset),
 		ResidualScale:  float64(c.ResidualScale),
 		LogitScale:     float64(c.LogitScale),
-		ClampKQV:       c.ClampKQV,
+		QKVAct:         c.QKVAct(),
 		LayerNorm:      c.Flags.Has(jlm.FlagLayerNorm),
 		Parallel:       c.Flags.Has(jlm.FlagParallel),
 
@@ -794,7 +795,7 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 	// A scale derived from the head width would be one scale per geometry,
 	// and the one field is one.
 	if out.MixedGeom() && (out.MLA() || out.Hybrid() || out.QKNormWide || out.AttnOutGate ||
-		c.AttnScale == 0 || out.QKL2Norm || out.ClampKQV != 0) {
+		c.AttnScale == 0 || out.QKL2Norm || out.QKVAct != nil) {
 		return nil, fmt.Errorf("model: %s: blocks of several geometries on MLA, a hybrid, a whole-"+
 			"projection q/k norm, an output gate, a clamp or a derived attention scale", out.Arch)
 	}
