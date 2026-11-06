@@ -470,7 +470,7 @@ func flagshipExpanded(r Role) bool {
 		RoleIdxQNorm, RoleHCAttnBase, RoleHCAttnScale, RoleHCFFNBase, RoleHCFFNScale, RoleCompAPE,
 		RoleCompNorm, RoleIdxCompAPE, RoleIdxCompNorm, RoleHashExperts, RoleAttnResScore,
 		RoleFFNResScore, RoleOutputResScore, RoleFFNRoutedNorm, RoleHCAttnNorm, RoleHCFFNNorm,
-		RoleHCHeadNorm, RoleNGramNormKey, RoleNGramNormQuery, RoleNGramNormConv, RoleNGramConv:
+		RoleHCHeadNorm, RoleHCHeadBase, RoleHCHeadScale, RoleNGramNormKey, RoleNGramNormQuery, RoleNGramNormConv, RoleNGramConv:
 		return true
 	}
 	return false
