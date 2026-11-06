@@ -471,6 +471,14 @@ type kvCache struct {
 	shareRefused int64
 }
 
+// View is the session's view of the CPU device's history (cpudev.History).
+func (s *kvCache) View() *cpudev.View {
+	if s == nil {
+		return nil
+	}
+	return s.view
+}
+
 func newKVCache(c *model.Config, id string, nseq int, l kvLayout, store KVStore, pin int) *kvCache {
 	return newKVCacheRange(c, id, nseq, l, store, pin, 0, c.NLayer, cpudev.NewView(c.NLayer), nil)
 }

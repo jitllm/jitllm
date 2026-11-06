@@ -77,7 +77,12 @@ type Session struct {
 	// has none, set with ld (setLD). tier is the device ld was attached
 	// from, and held the blocks whose history ld holds while the session
 	// is not the one its instance runs (use).
-	ld       nn.LayerDevice
+	ld nn.LayerDevice
+	// routes is the devices the session's blocks run on (route): its card
+	// view and its calls on the CPU device (lanes, bound by the instance it
+	// leases, bindLanes).
+	routes   [2]route
+	lanes    cpudev.SessionLanes
 	ldRoom   nn.RoomReporter
 	ldSpill  nn.Spiller
 	ldStep   nn.SessionStepper
@@ -124,6 +129,7 @@ func (s *Instance) use(sess *Session) error {
 	}
 	s.Session = sess
 	sess.on = s
+	s.bindLanes(sess)
 	if sess.kvFormat != s.kvFmt {
 		if err := s.relayout(); err != nil {
 			return err
