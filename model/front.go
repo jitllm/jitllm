@@ -819,6 +819,10 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 		q = b.HeadNorm(q, jlm.RoleAttnQNorm, hd, c.RMSEps)
 		onK(func(k graph.ValueID) graph.ValueID { return b.HeadNorm(k, jlm.RoleAttnKNorm, hd, c.RMSEps) })
 	}
+	if c.QUnitNorm {
+		q = ones(q, "q.unit")
+	}
+	var turn graph.Attrs
 	if c.RopeAt(li) {
 		r := m.ropeAt(li)
 		layout := graph.RopeNorm
@@ -830,6 +834,10 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 		}
 		a := graph.Attrs{HeadDim: hd, NRot: r.NRot, Base: r.Base, Layout: layout, Freqs: len(r.Freqs) > 0, Mscale: r.Scale}
 		a.Sections, a.Interleaved = m.ropeAxes(r)
+		if c.RopeTail {
+			a.Offset = hd - r.NRot
+		}
+		turn = a
 		q = b.Emit(graph.OpRope, []graph.ValueID{q}, []graph.Result{{Name: "q.rope", Width: qdim}}, nil, a, nil, nil)[0]
 		onK(func(k graph.ValueID) graph.ValueID {
 			return b.Emit(graph.OpRope, []graph.ValueID{k}, []graph.Result{{Name: "k.rope", Width: kvDim}}, nil, a, nil, nil)[0]
@@ -901,6 +909,21 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 		att = b.AttendSelected(q, hist, m.selected(b, li, ix, hist, kvDim, rowW), a, stored(jlm.RoleAttnSinks)...)
 	} else {
 		att = b.AttendOf(q, hist, a, stored(jlm.RoleAttnSinks)...)
+	}
+	if c.OutUnrotated && c.RopeAt(li) {
+		turn.Inverse = true
+		att = b.Emit(graph.OpRope, []graph.ValueID{att}, []graph.Result{{Name: "att.unrope", Width: b.G.Values[att].Width}}, nil,
+			turn, nil, nil)[0]
+	}
+	// A grouped output down-projection takes each group of heads through its
+	// own sheet before the output projection mixes them.
+	if oa, ok := f.Inventory[jlm.RoleAttnOutA]; ok {
+		w, g := b.G.Values[att].Width, oa.Sheets
+		if g < 1 || w%g != 0 || oa.K != w/g {
+			return nil, UncoveredUnverified, fmt.Errorf("block %d's grouped output: %d sheets of %d over %d", li, g, oa.K, w)
+		}
+		att = b.Emit(graph.OpExpertMatVec, []graph.ValueID{att}, []graph.Result{{Name: "att.groups", Width: g * oa.Rows}},
+			[]graph.Binding{{Role: jlm.RoleAttnOutA, K: oa.K, Rows: oa.Rows, Sheets: g}}, graph.Attrs{}, nil, nil)[0]
 	}
 	if c.AttnOutGate {
 		att = sigmoidMul(b, "gated", gate, att)

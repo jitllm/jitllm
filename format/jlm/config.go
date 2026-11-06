@@ -824,6 +824,20 @@ const (
 	// convolution reads the rows on both sides of its own, which a
 	// non-causal model's does (FlagNonCausal); nothing reads or writes it.
 	Flag2CentredConv Flags2 = 1 << 6
+	// Flag2RopeTail is a rotary that turns each head's last NRot elements,
+	// the head's first HeadDim-NRot left as they are.
+	Flag2RopeTail Flags2 = 1 << 7
+	// Flag2KeyValue is an attention that reads its key as its value: the
+	// block stores no v projection, and the value is the key after its norm
+	// and rotary.
+	Flag2KeyValue Flags2 = 1 << 8
+	// Flag2QUnitNorm is q's heads RMS-normed with no weight before the
+	// rotary.
+	Flag2QUnitNorm Flags2 = 1 << 9
+	// Flag2OutUnrotated is an attention output turned back by the rotary at
+	// the query's position before the output projection (a value that is
+	// its rotated key carries the rotation).
+	Flag2OutUnrotated Flags2 = 1 << 10
 )
 
 // Has reports whether every bit of f2 is set.

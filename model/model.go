@@ -183,7 +183,10 @@ type Config struct {
 	// HeadDimV is the value head's width, filled in even where the container
 	// stores zero for "same as HeadDim".
 	QLoraRank, KVLoraRank int
-	HeadDimV              int
+	// RopeTail, KeyValue, QUnitNorm and OutUnrotated are the container's
+	// attention statements (jlm.Flag2RopeTail, ...).
+	RopeTail, KeyValue, QUnitNorm, OutUnrotated bool
+	HeadDimV                                    int
 
 	// The DeepSeek router: sigmoid gating, a selection-only bias, grouped
 	// scoring and a scale on the surviving weights. NExpertGroup <= 1 is the
@@ -736,6 +739,10 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 		DeltaKeyTiled: c.Flags.Has(jlm.FlagDeltaKeyTiled),
 
 		QLoraRank:        int(c.QLoraRank),
+		RopeTail:         c.Flags2.Has(jlm.Flag2RopeTail),
+		KeyValue:         c.Flags2.Has(jlm.Flag2KeyValue),
+		QUnitNorm:        c.Flags2.Has(jlm.Flag2QUnitNorm),
+		OutUnrotated:     c.Flags2.Has(jlm.Flag2OutUnrotated),
 		KVLoraRank:       int(c.KVLoraRank),
 		HeadDimV:         int(c.HeadDimV),
 		ExpertSigmoid:    c.Flags.Has(jlm.FlagExpertSigmoid),
@@ -2773,6 +2780,12 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 			}
 			want = append(head, want[4:]...)
 		}
+		// A block storing a latent query reads q through it whatever its
+		// attention.
+		if !mla && !linear && c.Has(jlm.RoleAttnQA, bi, -1) {
+			want[0] = bind{jlm.RoleAttnQB, &l.Wqb}
+			want = append([]bind{{jlm.RoleAttnQA, &l.Wqa}}, want...)
+		}
 		if linear {
 			head := []bind{
 				{jlm.RoleAttnQKV, &l.Wq},
@@ -2913,6 +2926,10 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 			if spec.role == jlm.RoleAttnV && cfg.VNorm && !c.Has(jlm.RoleAttnV, bi, -1) &&
 				c.Has(jlm.RoleAttnK, bi, -1) {
 				l.VFromK = true
+				continue
+			}
+			// A container stating its key as its value stores no v.
+			if spec.role == jlm.RoleAttnV && cfg.KeyValue && !c.Has(jlm.RoleAttnV, bi, -1) {
 				continue
 			}
 			if err = getTo(spec.dst, spec.role, bi, -1); err != nil {
