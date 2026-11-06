@@ -53,7 +53,7 @@ func (s *Instance) cpuMTPEntry(z, x []float32, toks []int32, rows int) nn.Declin
 	}
 	f, why := hf.formOf()
 	if why == nn.DeclineServes {
-		why = s.cpuWeights(f, s.lo, s.layer(s.lo))
+		_, why = s.cpuFormWeights(f, s.lo, s.layer(s.lo))
 	}
 	if why != nn.DeclineServes {
 		s.cpu.steps.Declined[nn.PartMTP][why] += rows

@@ -216,7 +216,7 @@ func (s *Instance) cpuHead(x, logits, hidden []float32) nn.Decline {
 	}
 	f, why := hf.formOf()
 	if why == nn.DeclineServes {
-		why = s.cpuWeights(f, -1, nil)
+		_, why = s.cpuFormWeights(f, -1, nil)
 	}
 	if why != nn.DeclineServes {
 		s.cpu.steps.Decline(nn.PartHead, why)
@@ -248,7 +248,7 @@ func (s *Instance) cpuHeadRows(x, logits, hidden []float32, n int) nn.Decline {
 	h := &s.cpu.head
 	f, why := h.rows.formOf()
 	if why == nn.DeclineServes {
-		why = s.cpuWeights(f, -1, nil)
+		_, why = s.cpuFormWeights(f, -1, nil)
 	}
 	if why != nn.DeclineServes {
 		s.cpu.steps.Declined[nn.PartHead][why] += n
@@ -296,7 +296,7 @@ func (s *Instance) cpuOutNorm(dst, x []float32, n int) nn.Decline {
 	h := &s.cpu.head
 	f, why := h.outNorm.formOf()
 	if why == nn.DeclineServes {
-		why = s.cpuWeights(f, -1, nil)
+		_, why = s.cpuFormWeights(f, -1, nil)
 	}
 	if why != nn.DeclineServes {
 		s.cpu.steps.Declined[nn.PartHead][why] += n
@@ -350,7 +350,7 @@ func (s *Instance) cpuPick(x []float32) nn.Decline {
 	h := &s.cpu.head
 	f, why := h.pick.formOf()
 	if why == nn.DeclineServes {
-		why = s.cpuWeights(f, -1, nil)
+		_, why = s.cpuFormWeights(f, -1, nil)
 	}
 	if why == nn.DeclineServes && (len(s.HostPick) > len(h.pickIDs) || len(s.HostPickVals) < len(s.HostPick)) {
 		why = nn.DeclineCaller

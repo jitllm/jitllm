@@ -253,7 +253,7 @@ func (s *Instance) encodePicture(img image.Image, dst, deep []float32) ([]float3
 		return nil, fmt.Errorf("model: a %dx%d picture is past the %d pixels a side the tower's resize reaches", pl.W, pl.H, a.PicSide)
 	}
 	head := tr.head
-	if why := ts.cpuWeights(head, -1, &ts.dense.TowerDense); why != nn.DeclineServes {
+	if _, why := ts.cpuFormWeights(head, -1, &ts.dense.TowerDense); why != nn.DeclineServes {
 		return nil, fmt.Errorf("model: the tower's head: %v", why)
 	}
 	D, E := int(m.Container.Vision().ProjDim), int(m.Container.Vision().NEmbd)
@@ -261,7 +261,7 @@ func (s *Instance) encodePicture(img image.Image, dst, deep []float32) ([]float3
 		return nil, fmt.Errorf("model: %d values and %d for its taps' for a picture's %d rows of %d", len(dst), len(deep), want, D)
 	}
 	for j, f := range tr.taps {
-		if why := ts.cpuWeights(f, -1, &ts.dense.TowerTaps[j]); why != nn.DeclineServes {
+		if _, why := ts.cpuFormWeights(f, -1, &ts.dense.TowerTaps[j]); why != nn.DeclineServes {
 			return nil, fmt.Errorf("model: the tower's tap %d: %v", j, why)
 		}
 	}
@@ -273,7 +273,7 @@ func (s *Instance) encodePicture(img image.Image, dst, deep []float32) ([]float3
 			sq, _ = tg.Square(pl.W, pl.H, i)
 		}
 		f := tr.entry[sq.Class][pl.Px]
-		if why := ts.cpuWeights(f, -1, &ts.dense.TowerDense); why != nn.DeclineServes {
+		if _, why := ts.cpuFormWeights(f, -1, &ts.dense.TowerDense); why != nn.DeclineServes {
 			return nil, fmt.Errorf("model: the tower's entry: %v", why)
 		}
 		tr.squareRequest(pl, sq, tg.Classes[sq.Class].Pic, squares)

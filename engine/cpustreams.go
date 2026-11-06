@@ -107,7 +107,7 @@ func (s *Instance) cpuStreamsRun(one, many *cpuHeadForm, x []float32, rows int, 
 				l = s.layer(li)
 			}
 		}
-		why = s.cpuWeights(f, li, l)
+		_, why = s.cpuFormWeights(f, li, l)
 	}
 	if why != nn.DeclineServes {
 		s.cpu.steps.Declined[nn.PartStreams][why] += rows
