@@ -2128,7 +2128,14 @@ func (s *Instance) holdCPURuns() {
 // cpuRun moves this instance's keep on block li's page by d, as the block
 // leaves (-1) or moves to (+1) the CPU device for it.
 func (s *Instance) cpuRun(li, d int) {
-	s.cpuRelocated(li, d > 0)
+	// The device composes the block it takes, or lets one that left go.
+	if x := s.cpu.x; x.Holds(li) {
+		if d > 0 {
+			x.Compose(li, s.blockPlan(li))
+		} else {
+			x.Drop(li)
+		}
+	}
 	if s.cpuHeld && li >= s.lo && li < s.hi {
 		s.keep(li, li+1, d)
 	}

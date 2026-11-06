@@ -81,6 +81,9 @@ func (e *Exec) Place(n int, res Resources, planes [2][]float32, nExpert int, pro
 func (e *Exec) Compose(li int, p BlockPlan) {
 	cb := &Block{Why: p.Why}
 	e.blocks[li] = cb
+	if !e.comp.Lowers() {
+		cb.Why = nn.DeclineISA
+	}
 	if cb.Why != nn.DeclineServes {
 		return
 	}
