@@ -11,5 +11,5 @@ import (
 // rows, over's formats in place of the container's for the roles it names:
 // a tower gate's own part, run beside the tower's.
 func (s *Instance) towerForm(g *graph.Graph, rows int, over map[jlm.Role]jlm.Type) (*cpudev.Form, error) {
-	return s.exec.x.FormGraph(s.partPlan(g, nn.DeclineNoGraph, rows, over))
+	return execOf(s).FormGraph(s.partPlan(g, nn.DeclineNoGraph, rows, over))
 }

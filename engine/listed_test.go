@@ -46,8 +46,8 @@ func TestDevicesListTheCPU(t *testing.T) {
 	defer m.Close()
 	in := testInstance(t, m, 64, WithDevices("cpu:novnni"))
 	defer in.Close()
-	if in.exec.x.ISA()&cpu.ISAVNNI != 0 || in.opt.noCPU {
-		t.Fatalf("an instance on cpu:novnni states ISA %v, CPU left out %v", in.exec.x.ISA(), in.opt.noCPU)
+	if execOf(in).ISA()&cpu.ISAVNNI != 0 || in.opt.noCPU {
+		t.Fatalf("an instance on cpu:novnni states ISA %v, CPU left out %v", execOf(in).ISA(), in.opt.noCPU)
 	}
 	if bad, err := NewInstance(m, 64, WithDevices("cpu:avx9")); err == nil {
 		bad.Close()
