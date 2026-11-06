@@ -66,7 +66,6 @@ type cpuState struct {
 	// nopages a block's that keeps no history (cpuPages).
 	fpages, nopages []uint32
 	rows            [4]uint32
-	zero            []uint32
 	// tok1 is a decode's token, tokTab a call's rows' (all ones for a row
 	// naming none).
 	tok1   [1]uint32
@@ -84,34 +83,22 @@ type cpuState struct {
 	// "rows.n" word, and rseq and rpos a step's rows' sequences and
 	// positions.
 	rowsTab []uint32
-	call    [4]uint32
-	// recRows is a linear block's call's recurrent descriptor: one row, the
-	// slot it reads and the slot it writes, its sequence's.
-	recRows [3]uint32
 	// recDesc is a call of the rows' form's run descriptor (cpuRecDesc),
 	// lastPos each sequence's last position a step's rows reach
 	// (cpuRecWhole).
-	recDesc []uint32
-	lastPos []int
-	// convOut is a step of several rows' convolution windows, written apart
-	// and copied over the runs' slots after the call.
-	convOut    []float32
+	recDesc    []uint32
+	lastPos    []int
 	rseq, rpos []int
 	onePos     [1]int
-	// sel is a call's experts as the pager's fault path takes them, picked
-	// marking those already in it, by expert (cpuExperts).
-	sel    []int32
-	picked []bool
 	// kvconv is a binary16 or q8 history's conversions (cpukvconv.go).
 	// xpad is a call's residual rows where its kernels' units reach past
 	// them (cpudev.Form.unit).
 	xpad []float32
 	// sidePad is xpad's per-layer inputs.
 	sidePad []float32
-	// stash is the values crossing a form's last history write, a call's
-	// after another, between a bidirectional run's two passes (cpuRowsRun);
-	// stashing says which pass is running.
-	stash    []uint32
+	// stashing says which pass of a bidirectional run is running
+	// (cpuRowsRun): the values crossing a form's last history write are the
+	// runner's to keep between them (cpudev.Runner.Stash).
 	stashing uint8
 	// runWindows says each run of the instance's (bidir) is a window its rows
 	// attend inside, none of the positions before it: a tower's windowed
@@ -124,15 +111,11 @@ type cpuState struct {
 	// dev is the device's launches, bind the addresses a run of a form's
 	// codes binds (cpuCallOf) and bound what they are read from.
 	dev   *cpudev.Device
-	bind  cpudev.Call
-	bound cpuBound
+	run   *cpudev.Runner
+	bound cpudev.Bound
 	// fault is a violation a gate sets: the bindings rewritten so a kernel
 	// reads the wrong history page or the wrong first row.
 	fault cpuFault
-	// tabPlanes is each rotary's planes as its composed table reads them
-	// (composer.TablePlanes), folded from the model's rotaries when the
-	// instance places its blocks (cpuTablePlanes).
-	tabPlanes [2][]float32
 }
 
 // cpuFault is a gate's violation of the composed CPU path's bindings.
@@ -215,50 +198,6 @@ type cpuBlock struct {
 // step of more runs in calls of this many, one after another.
 const cpuRowsCap = 64
 
-// cpuBound is a block's step as its words read it: n rows of the residual
-// x, their rotary tables cs and their descriptors rows, their history the
-// layer's pages kv through the page table pages.
-type cpuBound struct {
-	li int
-	// weights is the call's form's weights as its block reads them
-	// (weightSource.bind).
-	weights []unsafe.Pointer
-	own     [][]uint32
-	cs      []float32
-	x       []float32
-	// stride is the elements from one residual stream of x to the next.
-	stride int
-	rows   []uint32
-	n      int
-	// keys and values are the call's history's, where it has one.
-	keys, values unsafe.Pointer
-	pages        []uint32
-	// csSWA is the call's second rotary's table where the model trains one,
-	// ropeRows and ropeMarks a rotary table's call's rows and its session's
-	// marks (ropeTables).
-	csSWA               []float32
-	ropeRows, ropeMarks []uint32
-	// recLi is the block whose recurrent states a linear block's step binds,
-	// recState and recConv where its session holds them.
-	recLi             int
-	recState, recConv unsafe.Pointer
-	// rec, where set, is the call's run descriptor in place of recRows.
-	rec []uint32
-	// side is the bound rows' per-layer inputs, a row each (cpuArgSide).
-	side []float32
-	// io is the buffers of a graph apart from its residual (cpuArgIO), its
-	// inputs' then its outputs'.
-	io [cpudev.IO]unsafe.Pointer
-	// req is the step's request words (cpuArgRequest), pos its live rows,
-	// then a row's position (cpuArgPos), tok its tokens (cpuArgTokens).
-	req, pos, tok []uint32
-	// planes, where set, is the rotary planes a table's call reads in place
-	// of the model's (the tower's grid planes, towertable.go).
-	planes []float32
-	// pic is the step's picture, its decoded samples' words (cpudev.SrcPicture).
-	pic []uint32
-}
-
 // composedCPUDevice is the CPU of extensions isa as the composer forms for
 // it.
 func composedCPUDevice(isa cpu.ISA, workers int) composer.Device {
@@ -328,30 +267,29 @@ func (s *Instance) cpuStep(li int, l *model.Layer, cs []float32) (nn.Decline, er
 		return nn.DeclineServes, err
 	}
 	b := &s.cpu.bound
-	*b = cpuBound{li: li, own: s.cpu.dev.Own(cb.f), cs: cs, x: s.resid(), stride: s.c.NEmbd, rows: s.cpu.rows[:], n: 1, pages: pages,
-		recLi: s.cpuRecLi(li), side: s.cpuSide(li)}
-	b.weights, _ = s.ws.bind(cb.f, li, l)
-	b.keys, b.values = kvAddrs(pg)
-	b.recState, b.recConv = recAddrs(s.Session, b.recLi)
-	if b.side != nil {
-		b.side = b.side[cb.sideOff:]
+	*b = cpudev.Bound{Li: li, Own: s.cpu.dev.Own(cb.f), CS: cs, X: s.resid(), Stride: s.c.NEmbd, Rows: s.cpu.rows[:], N: 1, Pages: pages,
+		RecLi: s.cpuRecLi(li), Side: s.cpuSide(li)}
+	b.Weights, _ = s.ws.bind(cb.f, li, l)
+	b.Keys, b.Values = kvAddrs(pg)
+	b.RecState, b.RecConv = recAddrs(s.Session, b.RecLi)
+	if b.Side != nil {
+		b.Side = b.Side[cb.sideOff:]
 	}
 	s.cpu.tok1[0] = uint32(s.tok)
 	s.cpu.pos1 = [2]uint32{1, uint32(pos)}
-	b.tok, b.pos, b.csSWA = s.cpu.tok1[:], s.cpu.pos1[:], s.csSWA
+	b.Tok, b.Pos, b.CSSWA = s.cpu.tok1[:], s.cpu.pos1[:], s.csSWA
 	if _, why := s.ws.bind(cb.f, li, l); why != nn.DeclineServes {
 		return why, nil
 	}
 	s.cpu.rows = [4]uint32{0, uint32(pg.keyStart(pos)), uint32(pos + 1), uint32(pos)}
-	s.cpu.recRows = [3]uint32{1, 0, 0}
-	s.cpu.call[0] = 1
+	b.RecRows = [3]uint32{1, 0, 0}
 	switch s.cpu.fault {
 	case cpuFaultPage:
-		b.pages = s.cpuFaultTable(b.pages, pg, pos+1)
+		b.Pages = s.cpuFaultTable(b.Pages, pg, pos+1)
 	case cpuFaultRow, cpuFaultWrite:
 		s.cpuFaultRowWords(s.cpu.rows[:])
 	}
-	if err := s.cpuForm(b, cb.f, li); err != nil {
+	if err := s.cpu.run.Form(b, cb.f, li); err != nil {
 		return nn.DeclineServes, err
 	}
 	if pg.p > 0 && pos+1 > pg.written {
@@ -534,34 +472,33 @@ func (s *Instance) cpuRecRows(li int, l *model.Layer, x, cs []float32, seq, pos 
 			s.Session = lead
 			return nn.DeclineServes, err
 		}
-		*b = cpuBound{li: li, own: s.cpu.dev.Own(cb.f), x: x[r*d:], stride: stride, rows: s.cpu.rows[:], n: 1,
-			pages: pages, recLi: s.cpuRecLi(li)}
-		b.weights, _ = s.ws.bind(cb.f, li, l)
-		b.keys, b.values = kvAddrs(pg)
-		b.recState, b.recConv = recAddrs(o, b.recLi)
+		*b = cpudev.Bound{Li: li, Own: s.cpu.dev.Own(cb.f), X: x[r*d:], Stride: stride, Rows: s.cpu.rows[:], N: 1,
+			Pages: pages, RecLi: s.cpuRecLi(li)}
+		b.Weights, _ = s.ws.bind(cb.f, li, l)
+		b.Keys, b.Values = kvAddrs(pg)
+		b.RecState, b.RecConv = recAddrs(o, b.RecLi)
 		// One live row, at its own position, as a decode step's.
 		s.cpu.pos1 = [2]uint32{1, uint32(pos[r])}
-		b.pos = s.cpu.pos1[:]
+		b.Pos = s.cpu.pos1[:]
 		if tok != nil {
 			s.cpu.tok1[0] = uint32(tok[r])
-			b.tok = s.cpu.tok1[:]
+			b.Tok = s.cpu.tok1[:]
 		} else if cb.f.Toks {
 			s.Session = lead
 			return nn.DeclineServes, fmt.Errorf("model: block %d reads its rows' tokens, which the step gives none of", li)
 		}
 		if rside, pw := s.cpuSideRows(li); pw != 0 && rside != nil {
-			b.side = rside[r*pw+cb.sideOff:]
+			b.Side = rside[r*pw+cb.sideOff:]
 		}
 		if nrot > 0 {
-			b.cs = cs[r*nrot:]
+			b.CS = cs[r*nrot:]
 		}
 		if s.bcsSWA != nil {
-			b.csSWA = s.bcsSWA[r*s.c.NRotSWA:]
+			b.CSSWA = s.bcsSWA[r*s.c.NRotSWA:]
 		}
 		s.cpu.rows = [4]uint32{0, uint32(pg.keyStart(pos[r])), uint32(pos[r] + 1), uint32(pos[r])}
-		s.cpu.recRows = [3]uint32{1, uint32(slot), uint32(slot)}
-		s.cpu.call[0] = 1
-		if err := s.cpuForm(b, cb.f, li); err != nil {
+		b.RecRows = [3]uint32{1, uint32(slot), uint32(slot)}
+		if err := s.cpu.run.Form(b, cb.f, li); err != nil {
 			s.Session = lead
 			return nn.DeclineServes, err
 		}
@@ -794,27 +731,6 @@ func (s *Instance) cpuRowsRun(li int, l *model.Layer, f *cpudev.Form, x []float3
 	return s.cpuRowsCalls(li, l, f, 0, len(f.Codes), x, stride, side, cs, nrot, swa, nswa, seq, pos, tok, runs)
 }
 
-// cpuStash saves (stashSave) or restores (stashLoad) call c's values form
-// f's codes before keysEnd write and the rest read (cpudev.Form.cross).
-func (s *Instance) cpuStash(f *cpudev.Form, own [][]uint32, c int) {
-	at := 0
-	for _, i := range f.Cross {
-		at += len(own[i]) * c
-	}
-	for _, i := range f.Cross {
-		n := len(own[i])
-		if end := at + n; len(s.cpu.stash) < end {
-			s.cpu.stash = append(s.cpu.stash, make([]uint32, end-len(s.cpu.stash))...)
-		}
-		if s.cpu.stashing == stashSave {
-			copy(s.cpu.stash[at:at+n], own[i])
-		} else {
-			copy(own[i], s.cpu.stash[at:at+n])
-		}
-		at += n
-	}
-}
-
 // cpuRowsCalls is cpuRowsRun's calls of f's codes [lo, hi), each row's keys
 // counted to its run's end where runs is set; x is the rows' residual,
 // stream-major, stride elements from one stream to the next; side is the
@@ -882,12 +798,12 @@ func (s *Instance) cpuRowsCalls(li int, l *model.Layer, f *cpudev.Form, lo, hi i
 		if bside != nil {
 			bside = bside[so:]
 		}
-		*b = cpuBound{li: li, own: s.cpu.dev.Own(f), cs: cs[r0*nrot:], x: bx, stride: bstride, rows: s.cpu.rowsTab, n: k,
-			pages: s.cpuFaultTable(pages, pg, end), side: bside}
-		b.weights, _ = s.ws.bind(f, li, l)
-		b.keys, b.values = kvAddrs(pg)
+		*b = cpudev.Bound{Li: li, Own: s.cpu.dev.Own(f), CS: cs[r0*nrot:], X: bx, Stride: bstride, Rows: s.cpu.rowsTab, N: k,
+			Pages: s.cpuFaultTable(pages, pg, end), Side: bside}
+		b.Weights, _ = s.ws.bind(f, li, l)
+		b.Keys, b.Values = kvAddrs(pg)
 		if swa != nil {
-			b.csSWA = swa[r0*nswa:]
+			b.CSSWA = swa[r0*nswa:]
 		}
 		if len(s.cpu.posTab) < 1+f.Rows {
 			s.cpu.posTab = make([]uint32, 1+f.Rows)
@@ -896,7 +812,7 @@ func (s *Instance) cpuRowsCalls(li int, l *model.Layer, f *cpudev.Form, lo, hi i
 		for i := range f.Rows {
 			s.cpu.posTab[1+i] = uint32(pos[r0+min(i, k-1)])
 		}
-		b.pos = s.cpu.posTab
+		b.Pos = s.cpu.posTab
 		if tok != nil {
 			if len(s.cpu.tokTab) < f.Rows {
 				s.cpu.tokTab = make([]uint32, f.Rows)
@@ -904,57 +820,30 @@ func (s *Instance) cpuRowsCalls(li int, l *model.Layer, f *cpudev.Form, lo, hi i
 			for i := range f.Rows {
 				s.cpu.tokTab[i] = uint32(tok[r0+min(i, k-1)])
 			}
-			b.tok = s.cpu.tokTab
+			b.Tok = s.cpu.tokTab
 		}
 		if f.Rec {
-			b.recLi, b.rec = s.cpuRecLi(li), s.cpuRecDesc(seq[r0:r0+k])
-			b.recState, b.recConv = recAddrs(s.Session, b.recLi)
-			if n := len(s.view.Conv(b.recLi)); len(s.cpu.convOut) < n {
-				s.cpu.convOut = make([]float32, n)
-			}
+			b.RecLi, b.Rec = s.cpuRecLi(li), s.cpuRecDesc(seq[r0:r0+k])
+			b.RecState, b.RecConv = recAddrs(s.Session, b.RecLi)
+			s.cpu.run.ConvOut(len(s.view.Conv(b.RecLi)))
 		}
-		s.cpu.call[0] = uint32(k)
 		if s.cpu.stashing == stashLoad {
-			s.cpuStash(f, b.own, r0/f.Rows)
+			s.cpu.run.Stash(f, b.Own, r0/f.Rows, false)
 		}
-		c := s.cpuCallOf(b, f)
-		for i := lo; i < hi; i++ {
-			if i == f.RowSplit && f.RowSplit > 0 {
-				if err := s.ws.ngView.Ensure(b.own[f.RowSel][:k*f.RowN]); err != nil {
-					s.ws.ngView.Drop()
-					return err
-				}
-			}
-			if i == f.Split && f.Split > 0 {
-				if err := s.cpuExperts(b, f, li, k); err != nil {
-					s.expHold.Release()
-					s.dropRows(f)
-					return err
-				}
-			}
-			if s.cpu.fault == cpuFaultWeight && slices.Contains(f.WReads, i) {
-				// Each row's first pick weighted by zero where a kernel
-				// reads the weights.
-				w := f.SelN / f.Rows
-				for r := range k {
-					b.own[f.WSel][r*w] = 0
-				}
-			}
-			s.cpu.dev.Call(c, &f.Codes[i])
+		if err := s.cpu.run.Codes(b, f, li, lo, hi, k); err != nil {
+			return err
 		}
-		s.expHold.Release()
-		s.dropRows(f)
 		if f.Rec {
 			// The runs' windows over their slots.
 			L := s.dg.ConvStateLen()
 			for i, q := range seq[r0 : r0+k] {
 				if !slices.Contains(seq[r0:r0+i], q) {
-					copy(s.view.Conv(b.recLi)[q*L:(q+1)*L], s.cpu.convOut[q*L:(q+1)*L])
+					copy(s.view.Conv(b.RecLi)[q*L:(q+1)*L], s.cpu.run.ConvOut(0)[q*L:(q+1)*L])
 				}
 			}
 		}
 		if s.cpu.stashing == stashSave {
-			s.cpuStash(f, b.own, r0/f.Rows)
+			s.cpu.run.Stash(f, b.Own, r0/f.Rows, true)
 		}
 		if staged {
 			for j := range ns {
@@ -1011,45 +900,6 @@ func (s *Instance) cpuReadable(li, start, pos int) nn.Decline {
 	return nn.DeclineServes
 }
 
-// cpuRunForm runs every code of form f, one after another, on b.
-func (s *Instance) cpuRunForm(b *cpuBound, f *cpudev.Form) {
-	c := s.cpuCallOf(b, f)
-	for i := range f.Codes {
-		s.cpu.dev.Call(c, &f.Codes[i])
-	}
-}
-
-// cpuCallOf is b as the CPU device binds it for a run of form f's codes:
-// each source's address, and each of the form's weights' (cpudev.Form.Weights).
-func (s *Instance) cpuCallOf(b *cpuBound, f *cpudev.Form) *cpudev.Call {
-	c := &s.cpu.bind
-	c.Own, c.X, c.Stride, c.N, c.IO = b.own, b.x, b.stride, b.n, b.io
-	c.Rope = [2]unsafe.Pointer{addr(b.cs), addr(b.csSWA)}
-	c.Planes = [2]unsafe.Pointer{addr(s.cpu.tabPlanes[0]), addr(s.cpu.tabPlanes[1])}
-	if b.planes != nil {
-		c.Planes = [2]unsafe.Pointer{addr(b.planes), addr(b.planes)}
-	}
-	a := &c.At
-	*a = [cpudev.NumSrc]unsafe.Pointer{}
-	a[cpudev.SrcSide] = addr(b.side)
-	a[cpudev.SrcRopeRows], a[cpudev.SrcRopeMarks] = addr(b.ropeRows), addr(b.ropeMarks)
-	a[cpudev.SrcKeys], a[cpudev.SrcValues] = b.keys, b.values
-	a[cpudev.SrcPages], a[cpudev.SrcRows], a[cpudev.SrcCall] = addr(b.pages), addr(b.rows), addr(s.cpu.call[:])
-	if b.recState != nil {
-		a[cpudev.SrcRecState], a[cpudev.SrcRecConv] = b.recState, b.recConv
-		a[cpudev.SrcRecConvOut] = a[cpudev.SrcRecConv]
-	}
-	a[cpudev.SrcRecRows] = addr(s.cpu.recRows[:])
-	if b.rec != nil {
-		a[cpudev.SrcRecConvOut], a[cpudev.SrcRecRows] = addr(s.cpu.convOut), addr(b.rec)
-	}
-	a[cpudev.SrcZero] = addr(s.cpu.zero)
-	a[cpudev.SrcRequest], a[cpudev.SrcTokens], a[cpudev.SrcPos] = addr(b.req), addr(b.tok), addr(b.pos)
-	a[cpudev.SrcPicture] = addr(b.pic)
-	c.Weights = b.weights
-	return c
-}
-
 // addr is x's first element's address, nil for a nil slice.
 func addr[T any](x []T) unsafe.Pointer { return unsafe.Pointer(unsafe.SliceData(x)) }
 
@@ -1068,9 +918,6 @@ func (s *Instance) unmapOwn() {
 // cpuPlace composes a new instance's blocks on the CPU: each block of the
 // instance's range no device holds, once, at its placement (cpuCompose).
 func (s *Instance) cpuPlace() {
-	for i := range s.cpu.tabPlanes {
-		s.cpu.tabPlanes[i] = s.tablePlanes(i)
-	}
 	// A segment's blocks are past the text model's in the one block space.
 	n := max(s.c.NLayer, s.hi)
 	s.cpu.blocks = make([]*cpuBlock, n)
@@ -1083,7 +930,13 @@ func (s *Instance) cpuPlace() {
 		s.cpu.dev = cpudev.NewDevice(s.cpu.workers)
 		s.cpu.dev.Prof = s.prof
 	}
-	s.cpu.zero = make([]uint32, 4)
+	planes := [2][]float32{s.tablePlanes(0), s.tablePlanes(1)}
+	s.lease = blockLease{m: s.m, fr: s.fr, mu: &s.bind, hold: &s.expHold, res: s.res, hot: s.hot, layers: s.layers,
+		lo: s.lo, ws: &s.ws}
+	if s.cpu.run == nil {
+		s.cpu.run = cpudev.NewRunner(s.cpu.dev, &s.lease, planes, s.c.NExpert)
+	}
+	s.cpu.run.SetPlanes(planes)
 	for li := s.lo; li < min(s.hi, n); li++ {
 		if !s.devAt(li) {
 			s.cpuCompose(li)
@@ -1132,7 +985,7 @@ func (s *Instance) cpuCompose(li int) {
 	s.cpu.composed[li]++
 	if cb.rows != nil && len(s.cpu.rowsTab) < cpuRowsCap*4 {
 		s.cpu.rowsTab = make([]uint32, cpuRowsCap*4)
-		s.cpu.zero = make([]uint32, cpuRowsCap*4)
+		s.cpu.run.GrowZero(cpuRowsCap * 4)
 	}
 }
 
@@ -1301,13 +1154,6 @@ func (s *Instance) cpuFormOf(req composer.Request, gr *graph.Graph, rows int, ap
 	return s.eng.cpu.Forms(s.m.Id).Of(req, gr, rows, apart, whole, f32, s.opt.cpuFloat)
 }
 
-// dropRows hands back the table's rows form f's call read in.
-func (s *Instance) dropRows(f *cpudev.Form) {
-	if f.RowSplit > 0 {
-		s.ws.ngView.Drop()
-	}
-}
-
 // cpuBanksPaged says block li's routed banks are each one view of its
 // experts in the host's expert pages (jlm.File.BankView).
 func (s *Instance) cpuBanksPaged(li int) bool {
@@ -1329,97 +1175,6 @@ func (s *Instance) cpuBanksPaged(li int) bool {
 		s.ws.banks[li][i] = planes
 	}
 	return l.Up.E != nil && l.Down.E != nil
-}
-
-// cpuForm runs form f of block li over the step b: its codes in order, and
-// for a form over banks (cpudev.Form.split) the selection's experts made
-// resident and held between its halves -- the pager's own fault path
-// (ensureExperts), each read from the file where the budget evicted it --
-// and counted as the host's own mixture counts them.
-func (s *Instance) cpuForm(b *cpuBound, f *cpudev.Form, li int) error {
-	c := s.cpuCallOf(b, f)
-	lo := 0
-	if f.RowSplit > 0 {
-		// The table's rows the call's hash names, read in for its gathers and
-		// handed back after the call.
-		s.cpu.dev.Calls(c, f.Codes[:f.RowSplit])
-		defer s.ws.ngView.Drop()
-		if err := s.ws.ngView.Ensure(b.own[f.RowSel][:b.n*f.RowN]); err != nil {
-			return err
-		}
-		lo = f.RowSplit
-	}
-	if f.Split <= 0 {
-		s.cpu.dev.Calls(c, f.Codes[lo:])
-		return nil
-	}
-	s.cpu.dev.Calls(c, f.Codes[lo:f.Split])
-	err := s.cpuExperts(b, f, li, 1)
-	defer s.expHold.Release()
-	if err != nil {
-		return err
-	}
-	if !s.rowsOfChunk {
-		s.hot.add(li, s.cpu.sel)
-	}
-	s.cpu.dev.Calls(c, f.Codes[f.Split:])
-	return nil
-}
-
-// cpuExperts makes the experts the n rows of a call of form f select
-// (cpudev.Form.sel, a row's picks after another's) resident and held until
-// s.expHold's release, each once however many rows pick it -- the pager's
-// own fault path (ensureExperts), each read from the file where the budget
-// evicted it -- and counts them resident as main's mixture does. s.cpu.sel
-// is the experts held, in the order the rows first pick them.
-func (s *Instance) cpuExperts(b *cpuBound, f *cpudev.Form, li, n int) error {
-	k := f.SelN / max(f.Rows, 1)
-	picks := b.own[f.Sel][:n*k]
-	ne := s.c.NExpert
-	if s.cpu.fault == cpuFaultPicks && n > 1 {
-		// The first row given the second's picks, with its own weights.
-		copy(picks[:k], picks[k:2*k])
-	}
-	if len(s.cpu.picked) < ne {
-		s.cpu.picked = make([]bool, ne)
-	}
-	s.cpu.sel = s.cpu.sel[:0]
-	for _, x := range picks {
-		if int(x) >= ne {
-			// No page: ensureExperts names it.
-			s.cpu.sel = append(s.cpu.sel, int32(x))
-		} else if !s.cpu.picked[x] {
-			s.cpu.picked[x] = true
-			s.cpu.sel = append(s.cpu.sel, int32(x))
-		}
-	}
-	other := int32(-1)
-	if s.cpu.fault == cpuFaultExpert {
-		// Another expert's page made resident and held than the first the
-		// kernels read: one no row picks, where there is one.
-		e := s.cpu.sel[0]
-		for j := 1; j < ne && other < 0; j++ {
-			if x := (e + int32(j)) % int32(ne); !s.cpu.picked[x] {
-				other = x
-			}
-		}
-	}
-	for _, x := range s.cpu.sel {
-		if int(x) < ne {
-			s.cpu.picked[x] = false
-		}
-	}
-	if other >= 0 {
-		s.cpu.sel[0] = other
-	}
-	s.bind.Lock()
-	err := s.m.EnsureExperts(s.fr, li, s.cpu.sel, &s.expHold, s.layer(li))
-	s.bind.Unlock()
-	if err != nil {
-		return err
-	}
-	s.res.Touch(li, ne, s.cpu.sel)
-	return nil
 }
 
 // arena is the table of the layer's arena, nil for a layer with none (or no

@@ -30,6 +30,7 @@ func (s *Instance) initHotness() {
 		count:   make([]uint32, c.NExpert*len(s.m.Layers)),
 		nExpert: c.NExpert,
 	}
+	s.lease.hot = s.hot
 }
 
 // count records one layer's selection. sel holds global expert ids.

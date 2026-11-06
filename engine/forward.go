@@ -132,8 +132,10 @@ type Instance struct {
 	// is paged, and a page-in rebinds the model's copy.
 	outNorm []float32
 	outW    *model.Tensor
-	// ws is where this instance's forms read their weights.
-	ws weightSource
+	// ws is where this instance's forms read their weights, lease what a
+	// block's call pages in during it.
+	ws    weightSource
+	lease blockLease
 	// kvConv is the device converting a binary16 or q8 history's rows, nil
 	// for a history of floats.
 	kvConv nn.KVConvDevice
@@ -225,12 +227,6 @@ type Instance struct {
 	// device retry (rowStreams).
 	tok1    [1]int32
 	tokFill bool
-	// dmoe is Gemma 4's mixture block's scratch (Config.DenseMoE): the
-	// router's input and the mixture's sum, each NEmbd wide. See denseMoE.
-	// rowsOfChunk says moe() is running one row of a batched chunk, which
-	// counts no hotness: endToken() advances once per Forward. See
-	// denseMoERows.
-	rowsOfChunk bool
 	// expHold pins a layer's routed expert pages while its FFN reads them;
 	// one per instance, reused every layer of every token.
 	expHold model.ExpertHold

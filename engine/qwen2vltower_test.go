@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"image"
 	"image/color"
 	"math"
@@ -73,10 +74,10 @@ func towerPixels(t *testing.T, s *Instance, img image.Image) ([]float32, model.S
 	tr.size(tg.Lead+n, int(m.Container.Vision().NEmbd))
 	out := make([]float32, cl.Rows*3*P*P)
 	bd := &ts.cpu.bound
-	*bd = cpuBound{li: -1, own: ts.cpu.dev.Own(f), n: tg.Lead + n, req: tr.req, pos: tr.posTab, pic: words}
-	bd.weights, _ = ts.ws.bind(f, -1, &ts.dense.TowerDense)
-	bd.io[0] = unsafe.Pointer(&out[0])
-	ts.cpuRunForm(bd, f)
+	*bd = cpudev.Bound{Li: -1, Own: ts.cpu.dev.Own(f), N: tg.Lead + n, Req: tr.req, Pos: tr.posTab, Pic: words}
+	bd.Weights, _ = ts.ws.bind(f, -1, &ts.dense.TowerDense)
+	bd.IO[0] = unsafe.Pointer(&out[0])
+	ts.cpu.run.Run(bd, f)
 	return out[:3*sq.Pw*sq.Ph], sq
 }
 
