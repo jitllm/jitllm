@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"testing"
 
 	"github.com/jitllm/jitllm/model"
@@ -49,7 +50,7 @@ func TestThePoolParksOnlyWhileTokensPage(t *testing.T) {
 			t.Fatal(err)
 		}
 		_, in1, _ := m.PageStats(st.fr)
-		switch spin := st.Pool().Spinning(); {
+		switch spin := cpudev.PoolOf(st.Devices()).Spinning(); {
 		case in1 != in0 && spin:
 			t.Fatalf("token %d faulted %d page(s) and left the pool spinning", i, in1-in0)
 		case in1 == in0 && !spin:

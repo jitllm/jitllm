@@ -2,6 +2,7 @@ package engine
 
 import (
 	"fmt"
+	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"os"
 	"runtime"
 	"slices"
@@ -493,7 +494,7 @@ func decodeAllocs(t *testing.T, m *model.Model, g *gpu.GPU, io ...Option) decode
 		c0 = g.Stats()
 	}
 	r0 := m.Container.Reads()
-	_, a0 := s.Pool().NUMA()
+	_, a0 := cpudev.PoolOf(s.Devices()).NUMA()
 	w := countAllocs(func() {
 		for i := range n {
 			if _, err := s.Forward(int32(3 + i%64)); err != nil {
@@ -505,7 +506,7 @@ func decodeAllocs(t *testing.T, m *model.Model, g *gpu.GPU, io ...Option) decode
 	if g != nil {
 		captures = g.Stats().Captures - c0.Captures
 	}
-	_, a1 := s.Pool().NUMA()
+	_, a1 := cpudev.PoolOf(s.Devices()).NUMA()
 	if g != nil && s.GPULayers() < placed {
 		t.Fatalf("%d of the %d blocks placed on the device are still there after the window (%s): this arm measured the host", s.GPULayers(), placed, declinesOf(g.Stats()))
 	}

@@ -10,6 +10,7 @@
 package engine
 
 import (
+	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"os"
 	"testing"
 	"time"
@@ -40,13 +41,13 @@ func TestPrefillRegionProbe(t *testing.T) {
 	}
 	s2 := testInstance(t, m, 1024)
 	defer s2.Close()
-	s2.Pool().ResetRegions()
+	cpudev.PoolOf(s2.Devices()).ResetRegions()
 	start := time.Now()
 	if _, err := s2.Prefill(ids); err != nil {
 		t.Fatal(err)
 	}
 	el := time.Since(start)
-	par, ser := s2.Pool().Regions()
+	par, ser := cpudev.PoolOf(s2.Devices()).Regions()
 	t.Logf("%d layers, %d prompt tokens: %d parallel regions (%d/layer, %.1f per layer per token), "+
 		"%d inline, %v (%.1f tok/s)",
 		m.Cfg.NLayer, len(ids), par, par/int64(m.Cfg.NLayer),

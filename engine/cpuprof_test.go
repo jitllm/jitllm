@@ -2,6 +2,7 @@ package engine
 
 import (
 	"fmt"
+	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"os"
 	"slices"
 	"strconv"
@@ -89,11 +90,11 @@ func TestComposedCPUProfile(t *testing.T) {
 		for _, f := range st.eng.cpu.Forms(m.Id).All() {
 			f.ResetProfile()
 		}
-		st.Pool().ResetRegions()
-		ph0 := st.Pool().Phases()
+		cpudev.PoolOf(st.Devices()).ResetRegions()
+		ph0 := cpudev.PoolOf(st.Devices()).Phases()
 		d := run(toks)
-		par, ser := st.Pool().Regions()
-		phases := st.Pool().Phases() - ph0
+		par, ser := cpudev.PoolOf(st.Devices()).Regions()
+		phases := cpudev.PoolOf(st.Devices()).Phases() - ph0
 		per := float64(d.Microseconds()) / ft
 		bpt := float64(m.BytesPerToken())
 		gb := bpt / (per * 1e-6) / 1e9

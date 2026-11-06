@@ -15,6 +15,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"image"
 	_ "image/gif" // a GIF's first frame, which image.Decode returns
 	_ "image/jpeg"
@@ -1057,7 +1058,7 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	fmt.Fprintf(os.Stderr, "\nprompt %d tok in %v (%s)   decode %d tok in %v (%s)\n",
 		ptok, prefill.Round(time.Millisecond), rateOf(ptok, prefill),
 		len(out), decode.Round(time.Millisecond), rateOf(len(out), decode))
-	if nodes, aff := st.Pool().NUMA(); nodes > 1 {
+	if nodes, aff := cpudev.PoolOf(st.Devices()).NUMA(); nodes > 1 {
 		fmt.Fprintf(os.Stderr, "numa     %d nodes, %d region(s) read node-affine\n", nodes, aff)
 	}
 	// Report what the KV cache did, including zero: a working cache and a

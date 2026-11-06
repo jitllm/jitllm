@@ -3,6 +3,7 @@
 package engine
 
 import (
+	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"os"
 	"runtime"
 	"slices"
@@ -36,7 +37,7 @@ func TestRegionLabelCost(t *testing.T) {
 	perToken := func(labels bool, n int) (allocs, bytes float64, regions float64) {
 		s := testInstance(t, m, 64)
 		defer s.Close()
-		s.Pool().SetRegionLabels(labels)
+		cpudev.PoolOf(s.Devices()).SetRegionLabels(labels)
 		for i := 0; i < 8; i++ {
 			if _, err := s.Forward(int32(5 + i)); err != nil {
 				t.Fatal(err)
@@ -45,14 +46,14 @@ func TestRegionLabelCost(t *testing.T) {
 		var a, b runtime.MemStats
 		runtime.GC()
 		runtime.ReadMemStats(&a)
-		r0, _ := s.Pool().Regions()
+		r0, _ := cpudev.PoolOf(s.Devices()).Regions()
 		for i := 0; i < n; i++ {
 			if _, err := s.Forward(int32(3 + i%64)); err != nil {
 				t.Fatal(err)
 			}
 		}
 		runtime.ReadMemStats(&b)
-		r1, _ := s.Pool().Regions()
+		r1, _ := cpudev.PoolOf(s.Devices()).Regions()
 		return float64(b.Mallocs-a.Mallocs) / float64(n),
 			float64(b.TotalAlloc-a.TotalAlloc) / float64(n),
 			float64(r1-r0) / float64(n)
@@ -104,7 +105,7 @@ func TestRegionLabelRate(t *testing.T) {
 	sample := func(labels bool) float64 {
 		s := testInstance(t, m, 128)
 		defer s.Close()
-		s.Pool().SetRegionLabels(labels)
+		cpudev.PoolOf(s.Devices()).SetRegionLabels(labels)
 		for i := 0; i < 8; i++ {
 			if _, err := s.Forward(int32(5 + i)); err != nil {
 				t.Fatal(err)

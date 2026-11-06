@@ -14,7 +14,6 @@ import (
 
 	"github.com/jitllm/jitllm/format/jlm"
 
-	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"github.com/jitllm/jitllm/nn"
 )
@@ -2597,10 +2596,16 @@ func (s *Instance) devApplied(a nn.HeadStage) error {
 	return nil
 }
 
-// JIT is this state's generated-code tier: its vision segment runs on it
-// (Instance.Vision), so a model has one JIT and one worker pool a session.
-// Pool is the CPU device's workers this instance runs on.
-func (s *Instance) Pool() *cpu.Pool { return s.exec.x.Pool() }
+// Devices is every device the placement runs blocks on.
+func (s *Instance) Devices() []nn.BlockPlacer {
+	var ds []nn.BlockPlacer
+	for _, p := range s.places {
+		if p != nil && !slices.Contains(ds, p) {
+			ds = append(ds, p)
+		}
+	}
+	return ds
+}
 
 // GPULayers is how many blocks a device took, which is the set and not the
 // prefix: on a hybrid the two differ and the count is what a caller means.
