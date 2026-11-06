@@ -103,7 +103,7 @@ func (f *Frames) ensureRanges(b int, rs []Range, spec bool) error {
 	pl := f.getPlan()
 	defer f.putPlan(pl)
 	for {
-		page, base, runs, waits, err := f.planRunsBusy(b, rs, spec, pl.runs[:0])
+		page, base, runs, waits, gen, err := f.planRunsBusy(b, rs, spec, pl.runs[:0])
 		pl.runs = runs[:0]
 		// Before the read: a copy of the frame's old bytes must be gone before
 		// its new ones can be handed out.
@@ -115,7 +115,7 @@ func (f *Frames) ensureRanges(b int, rs []Range, spec bool) error {
 			if !waits {
 				return nil
 			}
-			f.awaitLanded()
+			f.awaitLanded(gen)
 			continue
 		}
 		if err := f.readPlanned(b, pl, page, base, runs); err != nil {
@@ -144,15 +144,19 @@ func (f *Frames) readPlanned(b int, pl *ioPlan, page []byte, base uint64, runs [
 	return f.markFilled(b, runs, errs)
 }
 
-// awaitLanded blocks until some in-flight read lands (or fails), which is
-// when a caller that joined it re-plans.
-func (f *Frames) awaitLanded() {
+// awaitLanded blocks until some in-flight read lands (or fails) after the
+// plan that saw landing generation gen, which is when a caller that joined it
+// re-plans. One that landed between the plan and this call has moved the
+// generation already: waiting for a broadcast then would sleep through it.
+func (f *Frames) awaitLanded(gen uint64) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.landed.L == nil {
 		f.landed.L = &f.mu
 	}
-	f.landed.Wait()
+	for f.landedGen == gen && !f.closed {
+		f.landed.Wait()
+	}
 }
 
 // run is a contiguous stretch of missing chunks, which is one read request.
@@ -175,7 +179,7 @@ func (f *Frames) chunkSpan(r Range, base uint64, nc int) (lo, hi int) {
 //
 // runs is the caller's scratch, appended to and returned.
 func (f *Frames) planRuns(b int, rs []Range, runs []run) (page []byte, base uint64, _ []run, err error) {
-	page, base, runs, _, err = f.planRunsBusy(b, rs, false, runs)
+	page, base, runs, _, _, err = f.planRunsBusy(b, rs, false, runs)
 	// A plan taken for inspection reads nothing, so it must not leave its
 	// chunks marked as being read.
 	f.mu.Lock()
@@ -188,14 +192,14 @@ func (f *Frames) planRuns(b int, rs []Range, runs []run) (page []byte, base uint
 // them busy so a second caller joins instead of reading them again, and
 // reports in waits that some wanted chunk is being read by someone else.
 // runs is the caller's scratch, appended to and returned.
-func (f *Frames) planRunsBusy(b int, rs []Range, spec bool, runs []run) (page []byte, base uint64, _ []run, waits bool, err error) {
+func (f *Frames) planRunsBusy(b int, rs []Range, spec bool, runs []run) (page []byte, base uint64, _ []run, waits bool, gen uint64, err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if b < 0 || b >= len(f.pages) {
-		return nil, 0, runs[:0], false, fmt.Errorf("jlm: block %d of %d", b, len(f.pages))
+		return nil, 0, runs[:0], false, f.landedGen, fmt.Errorf("jlm: block %d of %d", b, len(f.pages))
 	}
 	if err := f.claimFor(b, spec); err != nil {
-		return nil, 0, runs[:0], false, err
+		return nil, 0, runs[:0], false, f.landedGen, err
 	}
 	base, psize := f.file.pageAt(b)
 	have := f.filled[b]
@@ -218,7 +222,7 @@ func (f *Frames) planRunsBusy(b int, rs []Range, spec bool, runs []run) (page []
 			continue
 		}
 		if r.Off < base || r.Off+r.N > base+psize {
-			return nil, 0, runs[:0], false, fmt.Errorf("jlm: [%d,%d) is outside block %d's page",
+			return nil, 0, runs[:0], false, f.landedGen, fmt.Errorf("jlm: [%d,%d) is outside block %d's page",
 				r.Off, r.Off+r.N, b)
 		}
 		if lo, hi := f.chunkSpan(r, base, nc); lo < hi {
@@ -227,7 +231,7 @@ func (f *Frames) planRunsBusy(b int, rs []Range, spec bool, runs []run) (page []
 	}
 	f.spanBuf = sp[:0] // keep the grown array whatever this call found
 	if len(sp) == 0 {
-		return nil, 0, runs[:0], false, nil
+		return nil, 0, runs[:0], false, f.landedGen, nil
 	}
 	// Insertion sort, not sort.Slice: a plan is a couple of dozen nearly
 	// sorted spans (bank by bank, ascending expert), and sort.Slice's
@@ -272,7 +276,7 @@ func (f *Frames) planRunsBusy(b int, rs []Range, spec bool, runs []run) (page []
 		}
 	}
 	if len(runs) == 0 {
-		return nil, 0, runs[:0], waits, nil
+		return nil, 0, runs[:0], waits, f.landedGen, nil
 	}
 	for _, r := range runs {
 		for k := r.lo; k < r.hi; k++ {
@@ -280,7 +284,7 @@ func (f *Frames) planRunsBusy(b int, rs []Range, spec bool, runs []run) (page []
 		}
 	}
 	f.hold(b)
-	return f.pages[b], base, runs, waits, nil
+	return f.pages[b], base, runs, waits, f.landedGen, nil
 }
 
 // unpin releases the pin planRuns took.
@@ -299,6 +303,7 @@ func (f *Frames) markFilled(b int, runs []run, errs []error) error {
 	if f.landed.L == nil {
 		f.landed.L = &f.mu
 	}
+	f.landedGen++
 	defer f.landed.Broadcast()
 	var first error
 	for ri, err := range errs {
