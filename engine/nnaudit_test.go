@@ -39,6 +39,62 @@ import (
 // ran.
 func TestEveryModelRunsGenerated(t *testing.T) { everyModelRunsGenerated(t) }
 
+// TestEveryModelRunsOnACard is the card half of every model running: each
+// model the sweep converts places every block on the card the test's
+// devices select and decodes there; a model whose blocks the card does not
+// all take fails by name, with what the card declined.
+func TestEveryModelRunsOnACard(t *testing.T) {
+	g, err := openGPU(t)
+	if err != nil || g == nil {
+		t.Fatalf("no card to run the models on: %v", err)
+	}
+	defer g.Close()
+	slow := os.Getenv("JITLLM_SLOW") != ""
+	for _, src := range auditModels(t) {
+		if !slow && src.size > 2<<30 {
+			continue
+		}
+		t.Run(src.name, func(t *testing.T) {
+			path := src.path
+			if src.hf {
+				path = jlmOfSafetensors(t, src.path)
+			} else {
+				p, err := jlmOfErr(src.path)
+				if errors.Is(err, convert.ErrNotImplemented) {
+					t.Skipf("NOT IMPLEMENTED (RULE 7 scope): %v", err)
+				}
+				if errors.Is(err, convert.ErrPart) {
+					t.Skipf("PART OF A MODEL: %v", err)
+				}
+				if err != nil {
+					t.Fatalf("convert: %v", err)
+				}
+				path = p
+			}
+			m, err := model.Open(path)
+			if err != nil {
+				t.Fatalf("the converter accepted it and Open refused it: %v", err)
+			}
+			defer m.Close()
+			st := testInstance(t, m, 16)
+			defer st.Close()
+			if err := st.SetDeviceLayers(g, -1); err != nil {
+				t.Fatalf("placement: %v (%s)", err, g.Err())
+			}
+			if st.GPULayers() != m.Cfg.NLayer {
+				t.Fatalf("%d of %d blocks on the card; declined: %v", st.GPULayers(), m.Cfg.NLayer, st.DeviceDeclines())
+			}
+			for i := range 3 {
+				lg, err := st.Forward(int32(1 + i))
+				if err != nil {
+					t.Fatalf("Forward on the card: %v (%s)", err, g.Err())
+				}
+				finite(t, "Forward on the card", lg)
+			}
+		})
+	}
+}
+
 // everyModelRunsGenerated is TestEveryModelRunsGenerated with opts on every model it opens.
 func everyModelRunsGenerated(t *testing.T, opts ...Option) {
 	// JITLLM_AUDIT_MODEL=<substring> audits one file whatever its size (run it
