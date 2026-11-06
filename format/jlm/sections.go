@@ -597,8 +597,8 @@ func decodeConfigAt(b []byte, v uint32) (*Config, error) {
 	if err := ngramValid(c); err != nil {
 		return nil, err
 	}
-	if c.NGramBlock != 0 && !c.Streams.states(TOpNGramRows) {
-		return nil, fmt.Errorf("jlm: the container states an n-gram block in fields of its own, which this build reads only as a stated n-gram op: convert the model again")
+	if err := c.olderStatements(); err != nil {
+		return nil, err
 	}
 	// One kind per layer or none at all: a short array would leave the tail
 	// reading as LayerNone, and the graph would run nothing for those layers.

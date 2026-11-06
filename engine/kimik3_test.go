@@ -36,7 +36,7 @@ func k3Fixtures() []struct {
 	}{
 		{"synth-kimik3", func(m *model.Model) bool {
 			c := m.Cfg
-			ok := c.Arch == "kimi-k3" && c.AttnResBlock == 2 && c.Streams() == 4 &&
+			ok := c.Arch == "kimi-k3" && m.Container.Config().AttnResBlock == 2 && c.Streams() == 4 &&
 				c.ExpWidth() == 32 && m.Container.Config().SituBeta != 0 && reflect.DeepEqual(c.DeltaDecay, jlm.DeltaDecayBounded(-5)) &&
 				c.LatentNormEps == float64(float32(1e-6)) && c.RMSEps == float64(float32(1e-3)) &&
 				c.ChanDecay() && c.MLA() && c.NoPosEnc && c.QLoraRank == 32 && c.KVLoraRank == 32 &&
