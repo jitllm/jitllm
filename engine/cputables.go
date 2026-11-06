@@ -19,7 +19,7 @@ const cpuTablesBlock = -3
 // for the CPU device at the instance's placement: for each rotary a form of
 // one row and one of a chunk's, a tower's grid table one of a picture's.
 func (s *Instance) cpuPlaceTables() {
-	if s.cpu.dev == nil {
+	if s.cpu.x.Device() == nil {
 		return
 	}
 	tabs := s.tableGraphs()
@@ -44,7 +44,7 @@ func (s *Instance) cpuPlaceTables() {
 		p1[i] = cpudev.Part{Composed: one[i].composed, F: one[i].f, Why: one[i].why, Err: one[i].err}
 		pn[i] = cpudev.Part{Composed: many[i].composed, F: many[i].f, Why: many[i].why, Err: many[i].err}
 	}
-	s.tables = cpudev.NewTables(s.cpu.dev, p1, pn, [2][]float32{s.tablePlanes(0), s.tablePlanes(1)}, widths,
+	s.tables = cpudev.NewTables(s.cpu.x.Device(), p1, pn, [2][]float32{s.tablePlanes(0), s.tablePlanes(1)}, widths,
 		blockWeights{ws: &s.ws, li: cpuTablesBlock})
 }
 
@@ -59,11 +59,11 @@ func (s *Instance) cpuComposeTable(hf *cpuHeadForm, g *graph.Graph, rows int) {
 		hf.why = nn.DeclineNoGraph
 	default:
 		req := composer.Request{Graph: g, Step: composer.Step{Rows: rows, Page: 1, Keys: 1, Seqs: max(s.nseq, 1),
-			ActWindow: s.m.ActWindow}, Device: s.cpu.comp.Device(), Apart: true}
+			ActWindow: s.m.ActWindow}, Device: s.cpu.x.Composer().Device(), Apart: true}
 		req.Step.Marks = s.marksCap()
-		f, err := s.cpu.comp.Form(req, g, rows, true, false, false)
+		f, err := s.cpu.x.Composer().Form(req, g, rows, true, false, false)
 		if err != nil {
-			hf.why, hf.err = s.cpu.comp.Decline(err), err
+			hf.why, hf.err = s.cpu.x.Composer().Decline(err), err
 			return
 		}
 		hf.f = f

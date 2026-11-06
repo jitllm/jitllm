@@ -25,7 +25,7 @@ func (b blockWeights) Bind(f *cpudev.Form) ([]unsafe.Pointer, nn.Decline) {
 // chunk's rows at cpuRowsCap (frontstreams.go): the collapse a prediction
 // block's own head mix where the instance runs one.
 func (s *Instance) cpuPlaceStreams() {
-	if !s.c.StatesStreams() || s.cpu.dev == nil {
+	if !s.c.StatesStreams() || s.cpu.x.Device() == nil {
 		return
 	}
 	fg := s.m.FrontGraphs()
@@ -43,7 +43,7 @@ func (s *Instance) cpuPlaceStreams() {
 	for i := range hf {
 		p[i] = cpudev.Part{Composed: hf[i].composed, F: hf[i].f, Why: hf[i].why, Err: hf[i].err}
 	}
-	st := cpudev.NewStreams(s.cpu.dev, &s.cpu.steps, p[0], p[1], p[2], p[3], blockWeights{ws: &s.ws, li: -1}, cw,
+	st := cpudev.NewStreams(s.cpu.x.Device(), s.cpu.x.Steps(), p[0], p[1], p[2], p[3], blockWeights{ws: &s.ws, li: -1}, cw,
 		s.c.Streams(), s.c.NEmbd)
 	st.Fault = s.cpu.fault == cpuFaultStreams
 	s.streams = st

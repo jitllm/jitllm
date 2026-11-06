@@ -19,7 +19,7 @@ const kvHalfRow = 256
 // its layers hold.
 func (s *Instance) cpuPlaceKV() {
 	s.kvConv = nil
-	if s.cpu.dev == nil {
+	if s.cpu.x.Device() == nil {
 		return
 	}
 	narrow, widen := graph.OpHalves, graph.OpWidenHalves
@@ -57,7 +57,7 @@ func (s *Instance) cpuPlaceKV() {
 		c.Widen = cpudev.Part{Composed: hf[1].composed, F: hf[1].f, Why: hf[1].why, Err: hf[1].err}
 		conv = append(conv, c)
 	}
-	s.kvConv = cpudev.NewKVConv(s.cpu.dev, conv, s.kvl.fmt == cpu.KVF16)
+	s.kvConv = cpudev.NewKVConv(s.cpu.x.Device(), conv, s.kvl.fmt == cpu.KVF16)
 }
 
 // convertKV narrows the floats f of head rows hd wide into the history's

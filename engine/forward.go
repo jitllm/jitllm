@@ -675,7 +675,7 @@ func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOp
 	}
 
 	s.cpu.workers = cpu.NewPool(s.poolOptions()...)
-	s.cpu.comp = cpudev.NewComposer(g.cpu.Forms(m.Id), g.cpu.Target.ISA(), s.cpu.workers.Workers(), opt.cpuFloat)
+	s.cpu.x = cpudev.NewExec(s.cpu.workers, cpudev.NewComposer(g.cpu.Forms(m.Id), g.cpu.Target.ISA(), s.cpu.workers.Workers(), opt.cpuFloat))
 	// The cache width: WithKVType (or WithKVF16, SetKVType) forces it;
 	// otherwise binary16, half the history's bytes, wherever the CPU
 	// narrows in hardware -- everywhere but an x86 host the composer forms
@@ -710,13 +710,13 @@ func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOp
 	s.kv = newKVCacheRange(c, s.nextCacheID(), nseq, s.kvl, nil, s.opt.kvPage, s.lo, s.hi, s.Session.cpuView(), g.cpu.KVPool(m.Id))
 	s.kv.reserve(s.maxSeq)
 	if err := s.kv.useArenas(s.maxSeq, s.kvArenaFor); err != nil {
-		s.cpu.comp.Note(err)
+		s.cpu.x.Composer().Note(err)
 	}
 	s.cpuPlace()
 	// A text instance of a model with a tower runs its pictures through a
 	// tower run of its own, composed with it (tower.go); one that does not
 	// compose keeps its error for the picture that asks.
-	if c == m.Cfg && m.Tower != nil && s.cpu.comp.Err() == nil {
+	if c == m.Cfg && m.Tower != nil && s.cpu.x.Composer().Err() == nil {
 		if s.tower, s.towerErr = s.newTowerRun(); s.towerErr != nil {
 			s.tower = nil
 		}
@@ -2897,7 +2897,7 @@ func (s *Instance) setKVFmt(f cpu.KVFmt) {
 	s.kv.ns, s.kv.budget = old.ns, old.budget
 	// The CPU's blocks read the new cache: its arenas, and forms for f32.
 	if err := s.kv.useArenas(s.maxSeq, s.kvArenaFor); err != nil {
-		s.cpu.comp.Note(err)
+		s.cpu.x.Composer().Note(err)
 	}
 	s.cpuPlace()
 	s.Session.kvFormat = f
@@ -3315,7 +3315,7 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 			return nil, err
 		}
 		if why == nn.DeclineServes {
-			s.cpu.steps.Serve(nn.PartBlock)
+			s.cpu.x.Steps().Serve(nn.PartBlock)
 			s.trace(li, "ffn_resid", s.x)
 			continue
 		}

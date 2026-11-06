@@ -30,7 +30,7 @@ func (s *Instance) cpuPlacePool() {
 		}
 		weights = ws
 	}
-	s.readout = cpudev.NewPool(s.cpu.dev, &s.cpu.steps, part, weights, s.maxSeq, s.c.NEmbd, s.poolWidth(), len(g.Out) > 1)
+	s.readout = cpudev.NewPool(s.cpu.x.Device(), s.cpu.x.Steps(), part, weights, s.maxSeq, s.c.NEmbd, s.poolWidth(), len(g.Out) > 1)
 }
 
 // poolWidth is the readout's width: the last dense head's rows, or the
