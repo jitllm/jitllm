@@ -170,7 +170,7 @@ func (s *Instance) cpuPlace() {
 	planes := [2][]float32{s.tablePlanes(0), s.tablePlanes(1)}
 	s.lease = blockLease{m: s.m, fr: s.fr, mu: &s.bind, hold: &s.expHold, res: s.res, hot: s.hot, layers: s.layers,
 		lo: s.lo, ws: &s.ws}
-	s.cpu.x.Place(n, &s.lease, planes, s.c.NExpert, s.prof)
+	s.cpu.x.Place(n, &s.lease, &s.ws.b, planes, s.c.NExpert, s.prof)
 	if s.cpu.lanes == nil {
 		s.cpu.lanes = cpudev.NewLanes(s.cpu.x, &s.ws.b, &s.lease, s.c.NEmbd, s.nseq, s.c.Streams(), s.dg.ConvStateLen(),
 			func(li int) { s.trace(li, "ffn_resid", s.x) })
@@ -178,7 +178,7 @@ func (s *Instance) cpuPlace() {
 	}
 	for li := s.lo; li < min(s.hi, n); li++ {
 		if !s.devAt(li) {
-			s.cpu.x.Compose(li, s.blockPlan(li))
+			s.cpu.x.PrepLayer(li, s.planFor(li), nil)
 		}
 	}
 	s.placeParts()
@@ -231,12 +231,12 @@ func (s *Instance) cpuSideRows(li int) ([]float32, int) {
 	return s.bple, s.c.SideWidth()
 }
 
-// blockPlan is what the CPU device composes block li from: the graph its
+// blockSpec is what block li is composed from (nn.BlockSpec): the graph its
 // front end states, the formats its weights are read in, their strides, the
 // step's history geometry and the instance's rotaries -- or what keeps the
 // block off the composer's CPU path before it is asked (cpuWhy).
-func (s *Instance) blockPlan(li int) cpudev.BlockPlan {
-	p := cpudev.BlockPlan{Why: s.blockWhy(li), Rec: s.c.LayerKind(li).Recurrent()}
+func (s *Instance) blockSpec(li int) nn.BlockSpec {
+	p := nn.BlockSpec{Why: s.blockWhy(li), Rec: s.c.LayerKind(li).Recurrent()}
 	if p.Why != nn.DeclineServes {
 		return p
 	}
@@ -244,11 +244,8 @@ func (s *Instance) blockPlan(li int) cpudev.BlockPlan {
 	gr := *g
 	gr.Block = 0
 	p.Source, p.Graph, p.SideOff = g, &gr, sideAtBinding(&gr)
-	if s.m.Ngram != nil && cpudev.TableRowsOf(&gr) >= 0 {
-		if err := s.ws.b.OpenTable(s.m.Ngram.E, s.m.Ngram.RowBytes); err != nil {
-			p.Why = s.cpu.x.Composer().Decline(err)
-			return p
-		}
+	if s.m.Ngram != nil {
+		p.Table, p.TableRow = s.m.Ngram.E, s.m.Ngram.RowBytes
 	}
 	formats := map[jlm.Role]jlm.Type{}
 	f := s.m.Composing()
@@ -276,12 +273,12 @@ func (s *Instance) blockPlan(li int) cpudev.BlockPlan {
 	}
 	pg := &s.kv.layers[li]
 	page := max(pg.p, 1)
-	p.Req = composer.Request{Formats: formats, Strides: s.m.CpuStrides(s.fr, li, g),
-		Step:    composer.Step{Page: page, Keys: max(pg.arenaSlots(), 1) * page, ActWindow: s.m.ActWindow, Seqs: max(s.nseq, 1)},
-		History: composer.History{ValuesInKeys: pg.latent},
-		// A block turns by the rotary its rope ops state, of the
-		// instance's (rotaries): each its own table, bound by instance.
-		Rotaries: s.rotaries()}
+	p.Formats, p.Strides = formats, s.m.CpuStrides(s.fr, li, g)
+	p.Page, p.Keys, p.ActWindow, p.Seqs = page, max(pg.arenaSlots(), 1)*page, s.m.ActWindow, max(s.nseq, 1)
+	p.ValuesInKeys = pg.latent
+	// A block turns by the rotary its rope ops state, of the
+	// instance's (rotaries): each its own table, bound by instance.
+	p.Rotaries = s.rotaries()
 	p.F32 = s.kvl.fmt == cpu.KVF32
 	p.Bidir = s.c.LayerKind(li).Attends() && s.c.BidirAt(li)
 	p.Whole = s.wholePicture(li)

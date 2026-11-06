@@ -492,7 +492,39 @@ const (
 	BackendAMDGCN
 )
 
+// BlockSpec is what a block is composed from, as the instance states it for
+// whichever device takes the block: the graph its front end states (Source)
+// and the one its forms are composed from (Graph), its weights' formats and
+// the strides they are laid out at, its step's geometry (a history page's
+// positions, the keys a row reads, the activation window, the sequences), a
+// history holding values in its keys, the rotaries it turns by (each device
+// states its own device to the composer), where its side input starts, the
+// table of rows its rows read (Table, TableRow bytes a row; nil for none),
+// whether its history is kept at f32, whether it attends both ways inside a
+// prompt's runs (Bidir), reads the whole picture (Whole) or steps a recurrent
+// state in order (Rec) -- or why it is not to be asked (Why).
+type BlockSpec struct {
+	Why           Decline
+	Source, Graph *graph.Graph
+	SideOff       int
+	Formats       map[jlm.Role]jlm.Type
+	Strides       map[jlm.Role]int
+	Page, Keys    int
+	ActWindow     int
+	Seqs          int
+	ValuesInKeys  bool
+	Rotaries      []graph.Rotary
+	Table         *jlm.Entry
+	TableRow      int
+	F32           bool
+	Bidir, Whole  bool
+	Rec           bool
+}
+
 type LayerPlan struct {
+	// Spec is the block's statement (BlockSpec), for a device that composes
+	// it from that; nil where none was stated.
+	Spec *BlockSpec
 	// Graph is the block's graph of generic ops as the model's front end
 	// built it from the container (engine/model/front.go), nil for a block
 	// it states none of: what a device asks the composer to form when it
