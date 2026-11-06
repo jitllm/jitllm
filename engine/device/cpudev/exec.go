@@ -198,6 +198,9 @@ type Setup struct {
 	NoFuse      bool
 	Chunk       int
 	Tries, Runs *atomic.Int64
+	// Quota is the instance's page quota on the device, the execution's to
+	// drop; nil for one another instance's covers.
+	Quota *Quota
 }
 
 // Attach makes an instance's execution on c from st: its workers, its
@@ -210,6 +213,7 @@ func (c *CPU) Attach(st Setup) *Exec {
 	e.useFrames(st.Frames)
 	e.fuseOff, e.tries, e.opened = st.NoFuse, st.Tries, st.Runs
 	e.chunk = st.Chunk
+	e.quota = st.Quota
 	return e
 }
 
@@ -228,15 +232,17 @@ func (e *Exec) Decoding() { e.seat.Touch() }
 // decoding (nn.DecodeSharer).
 func (e *Exec) OthersDecoding() bool { return e.cpu != nil && e.cpu.OthersDecoding(e.seat) }
 
-// SetQuota makes q the instance's page quota on the device.
-func (e *Exec) SetQuota(q *Quota) { e.quota = q }
+// SetPageQuota sets the instance's page quota, of which the device it
+// attached holds held (nn.PageQuota); an execution with none has nothing to
+// set.
+func (e *Exec) SetPageQuota(bytes, held uint64) {
+	if e.quota != nil {
+		e.quota.Set(bytes, held)
+	}
+}
 
-// Quota is the instance's page quota on the device, nil for one the root's
-// quota covers.
-func (e *Exec) Quota() *Quota { return e.quota }
-
-// DropQuota lets the instance's page quota go.
-func (e *Exec) DropQuota() {
+// dropQuota lets the instance's page quota go.
+func (e *Exec) dropQuota() {
 	if e.quota != nil {
 		e.quota.Drop()
 		e.quota = nil
@@ -331,6 +337,7 @@ func (e *Exec) Blocks() *Blocks { return e.rows }
 // Close returns the launches' own buffers.
 func (e *Exec) Close() {
 	e.leave()
+	e.dropQuota()
 	if e.dev != nil {
 		e.dev.Close()
 	}

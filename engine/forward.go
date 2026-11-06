@@ -549,11 +549,10 @@ func NewInstance(m *model.Model, maxSeq int, opts ...Option) (*Instance, error) 
 	fr, err := g.cpu.Frames(m.Id, m.NewFrames)
 	if err == nil {
 		var s *Instance
-		if s, err = newInstanceOver(m, g, fr, lo.opt, m.Cfg, 1, maxSeq, 0, m.Cfg.NLayer); err == nil {
+		if s, err = newInstanceOver(m, g, fr, lo.opt, m.Cfg, 1, maxSeq, 0, m.Cfg.NLayer, q); err == nil {
 			// The CPU device holds the model for it from above.
 			s.root, s.owners[routeLanes] = true, g.cpu
 			s.pageQuota.Store(pq)
-			s.exec.x.SetQuota(q)
 			return s, nil
 		}
 	}
@@ -589,7 +588,7 @@ func OpenCPU(opts ...Option) (*cpudev.CPU, error) {
 // newInstanceOver is an instance over blocks [lo, hi) of a segment whose
 // geometry is c's (the text's, or the tower's: towerConfig), sharing g,
 // paging what it runs on the CPU into fr and running with knobs opt.
-func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOpts, c *model.Config, nseq, maxSeq, lo, hi int) (*Instance, error) {
+func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOpts, c *model.Config, nseq, maxSeq, lo, hi int, q *cpudev.Quota) (*Instance, error) {
 	// Clamp to the model's context, and record the request (reqSeq) so a
 	// later "kv cache is full" can name the number the caller passed.
 	req := maxSeq
@@ -654,7 +653,7 @@ func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOp
 	s.allocRecurrent(nseq)
 
 	s.exec.x = g.cpu.Attach(cpudev.Setup{Model: m.Id, Frames: fr, Float: opt.cpuFloat, Split: !opt.noServingSplit,
-		NoFuse: opt.noFuse, Chunk: opt.prefillChunk, Tries: &g.fuse.tries, Runs: &g.fuse.runs})
+		NoFuse: opt.noFuse, Chunk: opt.prefillChunk, Tries: &g.fuse.tries, Runs: &g.fuse.runs, Quota: q})
 	s.setPlace(routeLanes, s.exec.x)
 	s.placeRange(routeLanes)
 	s.holdFrames()
@@ -780,7 +779,6 @@ func (s *Instance) Close() error {
 	if s.root {
 		defer func() {
 			if s.owners[routeLanes] != nil {
-				s.exec.x.DropQuota()
 				s.holdOn(routeLanes, nil)
 			}
 			if s.eng.ownCPU {

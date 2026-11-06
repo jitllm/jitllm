@@ -76,7 +76,7 @@ func (in *Instance) newTowerRun() (*towerRun, error) {
 	v := in.m.Container.Vision()
 	n := tg.Rows
 	c := model.TowerConfig(in.m.TowerBase, n, v, v.Tower)
-	ts, err := newInstanceOver(in.m, in.eng, in.fr, in.opt, c, 1, n, in.m.TowerBase, in.m.TowerBase+len(tg.Blocks))
+	ts, err := newInstanceOver(in.m, in.eng, in.fr, in.opt, c, 1, n, in.m.TowerBase, in.m.TowerBase+len(tg.Blocks), nil)
 	if err != nil {
 		return nil, err
 	}
