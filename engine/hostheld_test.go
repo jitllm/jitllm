@@ -41,7 +41,7 @@ func (d *unifiedFake) ReleaseLayers(lo, hi int) {
 // the caller's less what a device on the host's memory HOLDS, and it follows
 // every placement move -- attach with nothing placed, the seam up, the seam
 // down, a second session on the same device, detach, close. The expert budget
-// (HostBudget) follows the same number. With followHost disabled the seam
+// (SystemBudget) follows the same number. With followSystem disabled the seam
 // moves leave the page budget where attaching put it, and this fails on the
 // first one.
 func TestPageBudgetLosesOnlyWhatAUnifiedDeviceHolds(t *testing.T) {
@@ -72,7 +72,7 @@ func TestPageBudgetLosesOnlyWhatAUnifiedDeviceHolds(t *testing.T) {
 				"want %d -- the host must lose what the device holds, and only that",
 				when, blocks, uint64(per), got, want)
 		}
-		if got := st.HostBudget(); got != want {
+		if got := st.SystemBudget(); got != want {
 			t.Fatalf("%s: expert budget %d, want %d", when, got, want)
 		}
 	}

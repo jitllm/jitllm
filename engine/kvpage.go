@@ -2608,9 +2608,9 @@ func (kv *kvCache) window(li, w0, want int) {
 // kvCheck reports the first unrecoverable page fault of this step, and clears
 // it. Every entry point calls it before returning logits, so it is also where a
 // step's placement moves (growth, relocation, a demotion, the KV a device grew)
-// reach the host's budgets (followHost).
+// reach the system memory's budgets (followSystem).
 func (s *Instance) kvCheck() error {
-	s.followHost()
+	s.followSystem()
 	if s.kv == nil {
 		return nil
 	}

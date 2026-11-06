@@ -264,18 +264,18 @@ type Instance struct {
 	// memBudget is what SetMemBudget was asked for -- or what newState read from
 	// sched.MemBudget when nobody did -- kept because the share of it the host
 	// actually gets depends on the device, which may be attached after the budget
-	// was set. See hostBudget.
+	// was set. See systemBudget.
 	memBudget uint64
 	// memBudgetAsked separates "the caller set a budget" from "we read one at
 	// construction", which is the difference between arming the expert
 	// residency tracker and merely recording a number. newState does only the
 	// second, and re-applying must not start doing the first.
 	memBudgetAsked bool
-	// hostRes is the attached device when it reports a holding of the host's
+	// sysRes is the attached device when it reports a holding of the host's
 	// memory, counted against the model's page budget while attached, and
-	// hostSeen the holding both budgets were last divided for (hostheld.go).
-	hostRes  nn.HostReserver
-	hostSeen uint64
+	// sysSeen the holding both budgets were last divided for (hostheld.go).
+	sysRes  nn.HostReserver
+	sysSeen uint64
 	// gpuTarget is where the seam is heading; gpuLayers is where it is.
 	gpuTarget int
 	seam      *seamTuner
@@ -717,22 +717,22 @@ func (s *Instance) SetMemBudget(bytes uint64) {
 	s.applyMemBudget()
 }
 
-// HostBudget is the weight budget actually in force on the host: what
+// SystemBudget is the weight budget actually in force on the host: what
 // SetMemBudget was given, less the share of it a device on the host's own memory
 // is allowed to fill. It is what a report should print, because it is the number
 // the residency manager is working to.
-func (s *Instance) HostBudget() uint64 {
-	b, _ := s.hostBudget()
+func (s *Instance) SystemBudget() uint64 {
+	b, _ := s.systemBudget()
 	return b
 }
 
-// hostBudget splits the requested budget into the host's share and the device's.
+// systemBudget splits the requested budget into the frames' share of the system's memory and the device's.
 //
 // An integrated GPU spends the host's bytes, so counting them twice would
 // thrash rather than fail. The tier reports what it holds through HostReserved
 // and this subtracts it. It is an optional interface so model/ need not know
 // what a backend is; a discrete card leaves the budget unchanged.
-func (s *Instance) hostBudget() (host, device uint64) {
+func (s *Instance) systemBudget() (host, device uint64) {
 	host = s.memBudget
 	d, ok := s.dev().(nn.HostReserver)
 	if !ok {
@@ -748,11 +748,11 @@ func (s *Instance) hostBudget() (host, device uint64) {
 	return host - device, device
 }
 
-// applyMemBudget pushes the host's share at the two managers that spend it. It
+// applyMemBudget pushes the frames' share at the two managers that spend it. It
 // is re-run when a device is attached and whenever what it holds moves
-// (followHost), because those are what change the answer.
+// (followSystem), because those are what change the answer.
 func (s *Instance) applyMemBudget() {
-	host, _ := s.hostBudget()
+	host, _ := s.systemBudget()
 	if s.memBudgetAsked {
 		s.initResidency(host) // recomputes the expert share of the new budget
 	}
@@ -802,7 +802,7 @@ func (s *Instance) Close() error {
 	}
 	// The history the device gave back was host memory on an integrated GPU,
 	// and the model's pages get it back once no instance holds the device.
-	s.holdHost(nil)
+	s.watchSystem(nil)
 	s.kv.giveBack(s.eng.cpu.KVPool(s.m.Id))
 	s.unmapOwn()
 	// The blocks a device ran from the frames no longer need their pages for
@@ -881,8 +881,8 @@ func (s *Instance) SetDeviceLayers(d nn.LayerDevice, max int) error {
 	// A device on the host's memory is counted against the model's pages from
 	// here, for what it holds; once the offers below have placed what they
 	// will, both budgets are re-divided for it.
-	s.holdHost(d)
-	defer s.followHost()
+	s.watchSystem(d)
+	defer s.followSystem()
 	o, _ := d.(nn.ModelOwner)
 	s.holdOn(routeView, o)
 	if d == nil {
@@ -979,7 +979,7 @@ func (s *Instance) SetDeviceLayers(d nn.LayerDevice, max int) error {
 	ld.Reserve(rows, k)
 	// Before any block is offered: a device on host memory shrinks the host's
 	// budget by what it already holds (another session's blocks, the scratch
-	// reserved above); followHost takes off what the offers add.
+	// reserved above); followSystem takes off what the offers add.
 	s.setLD(ld)
 	s.Session.tier, s.Session.kvRoom = s.ldCand, 0
 	s.applyMemBudget()
@@ -2737,7 +2737,7 @@ func (s *Instance) SetGPULayers(n int) int {
 	}
 	defer s.settleHist()
 	// What an integrated GPU holds moved with the seam.
-	defer s.followHost()
+	defer s.followSystem()
 	total := s.hi
 	if n < s.lo {
 		n = s.lo
