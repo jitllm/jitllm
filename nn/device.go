@@ -1409,7 +1409,7 @@ type KVTrimmer interface{ TrimKV(pos int) bool }
 // csSWA their rotary rows, as RowsDevice's; the head, when set, works as for RowsDevice.LayersRows,
 // LogitRows included.
 type SessionStepper interface {
-	LayersSessions(lo, hi int, sess []LayerDevice, pos []int, x, cs, csSWA []float32, head *Head) bool
+	LayersSessions(lo, hi int, sess []LayerRunner, pos []int, x, cs, csSWA []float32, head *Head) bool
 }
 
 // Pipeliner says how many devices a prompt chunk crosses. A device that

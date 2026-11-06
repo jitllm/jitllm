@@ -24,6 +24,10 @@ type History interface {
 	// View is the session's view of the device the history's blocks read
 	// their pages and recurrent state through; nil reads as an empty one.
 	View() *View
+	// Own makes the page block li writes pos into resident and its own,
+	// where its history is paged: a row of a step across sessions writes
+	// its own session's page before any session's rows read.
+	Own(li, pos int)
 	// Prepare makes block li's history ready for a row at pos, its page
 	// table nseq sequences wide: the page pos is written into resident and
 	// its own, the pages the row reads resident. A decline says why it is not.

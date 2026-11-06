@@ -392,7 +392,7 @@ type Instance struct {
 	// The lists a step this instance leads reuses (step.go): Step's runs, the
 	// rows' sessions and positions, the wanted rows' logits and the result.
 	stepRuns []Run
-	stepSess []nn.LayerDevice
+	stepSess []nn.LayerRunner
 	stepPos  []int
 	stepTok  []int32
 	// chunkTok is a prefill chunk's rows' tokens, -1 for a row naming none.

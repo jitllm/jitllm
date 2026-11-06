@@ -535,7 +535,8 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 					}
 					s.tailPos = pos
 					// One sequence: slot is the position (nn.RowsDevice).
-					if s.rowsRun(li, hi, pos, pos, s.bx[:n*c.ResidW()], s.bcs[:n*c.RopeW()],
+					s.layerInputs(s.bple[:n*c.SideWidth()])
+					if s.rowsOn(s.routeAt(li), li, hi, pos, pos, s.bx[:n*c.ResidW()], s.bcs[:n*c.RopeW()],
 						s.bswaTable(n, c.LocalNRot()), false, nil, 0) == nil {
 						s.tailRowChunks++
 						li = hi - 1

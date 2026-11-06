@@ -172,94 +172,6 @@ func (s *Instance) swaRows(a int) []float32 {
 	return s.bcsSWA[a*s.c.LocalNRot():]
 }
 
-// cpuSessions is cpuRows for a step across sessions (stepHost): row i's
-// history is s.rowOwn[i]'s, its one sequence, and the first nlogit rows are
-// each a session's last. Each session runs its own rows on its own block's
-// form and buffers, its history bound as its form was composed for. Every
-// session's pages are made ready before any row runs; the runs of a
-// session's consecutive rows run one after another, the rows after the
-// logit rows first, so a session's last row reads the keys its earlier
-// rows wrote.
-func (s *Instance) cpuSessions(li int, l *model.Layer, x, cs, csSWA []float32, seq, pos []int, tok []int32, nlogit int) (nn.Decline, error) {
-	if err := s.cpuRowTables(seq, pos); err != nil {
-		return nn.DeclineServes, err
-	}
-	cs, nrot := s.bcs, s.c.RopeW()
-	n := len(pos)
-	// Every row's page is writable before any session's range is checked: a
-	// session's logit row leads its other rows in the step, and the range it
-	// reads holds the pages they write.
-	if hl := s.c.KVSource(li); s.kv.layers[hl].p > 0 {
-		for a := range n {
-			oi := s
-			if a < len(s.rowInst) && s.rowInst[a] != nil {
-				oi = s.rowInst[a]
-			}
-			lead := oi.Session
-			oi.Session = s.rowOwn[a]
-			oi.kv.owned(hl, pos[a])
-			oi.Session = lead
-		}
-	}
-	why, err := s.cpuOwnerRuns(li, l, x, cs, nrot, seq, pos, tok, 0, n, false)
-	if why != nn.DeclineServes || err != nil {
-		return why, err
-	}
-	if why, err = s.cpuOwnerRuns(li, l, x, cs, nrot, seq, pos, tok, nlogit, n, true); err != nil {
-		return why, err
-	}
-	return s.cpuOwnerRuns(li, l, x, cs, nrot, seq, pos, tok, 0, nlogit, true)
-}
-
-// cpuOwnerRuns makes ready (run unset) or runs block li over the rows
-// [lo, hi) of a step across sessions, a run of one session's consecutive
-// rows at a time, on that session's form.
-func (s *Instance) cpuOwnerRuns(li int, l *model.Layer, x, cs []float32, nrot int, seq, pos []int, tok []int32, lo, hi int, run bool) (nn.Decline, error) {
-	d := s.c.NEmbd
-	rside, pw := s.cpuSideRows(li)
-	for a := lo; a < hi; {
-		o, b := s.rowOwn[a], a+1
-		for b < hi && s.rowOwn[b] == o {
-			b++
-		}
-		if o.model != s.m {
-			return nn.DeclineSessions, nil
-		}
-		// A row of another instance runs on that instance's form, composed
-		// for its history; a session leasing s, on s's with its history bound.
-		oi := s
-		if a < len(s.rowInst) && s.rowInst[a] != nil {
-			oi = s.rowInst[a]
-		}
-		ln := oi.cpu.lanes
-		f, why := ln.RowsForm(li, l)
-		if why != nn.DeclineServes {
-			return why, nil
-		}
-		lead := oi.Session
-		oi.Session = o
-		if run {
-			var side []float32
-			if pw != 0 && rside != nil {
-				side = rside[a*pw:]
-			}
-			if err := oi.cpuRowsRun(li, l, f, x[a*d:], len(pos)*d, side, cs[a*nrot:], nrot, s.swaRows(a), s.c.LocalNRot(), seq[a:b], pos[a:b], rowsOf(tok, a, b)); err != nil {
-				oi.Session = lead
-				return nn.DeclineServes, err
-			}
-		} else {
-			ln.Attach(oi.kv, oi.view)
-			if why := ln.ReadyRows(li, f, pos[a:b]); why != nn.DeclineServes {
-				oi.Session = lead
-				return why, nil
-			}
-		}
-		oi.Session = lead
-		a = b
-	}
-	return nn.DeclineServes, nil
-}
-
 // cpuRecRows runs linear block li over the n rows of x, or says why not:
 // on its rows' form, the scan stepping each sequence's rows in order, where
 // the step's rows of each sequence stand in order and all are this instance's
@@ -515,7 +427,7 @@ func (s *Instance) cpuSideRows(li int) ([]float32, int) {
 // step's history geometry and the instance's rotaries -- or what keeps the
 // block off the composer's CPU path before it is asked (cpuWhy).
 func (s *Instance) blockPlan(li int) cpudev.BlockPlan {
-	p := cpudev.BlockPlan{Why: s.blockWhy(li)}
+	p := cpudev.BlockPlan{Why: s.blockWhy(li), Rec: s.c.LayerKind(li).Recurrent()}
 	if p.Why != nn.DeclineServes {
 		return p
 	}

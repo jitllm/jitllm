@@ -2917,6 +2917,14 @@ func (kc *kvCache) writeSeq(h io.Writer, a, e int) {
 	}
 }
 
+// Own is owned for block li's history block, where its history is paged
+// (cpudev.History).
+func (kv *kvCache) Own(li, pos int) {
+	if hl := kv.src[li]; kv.layers[hl].p > 0 {
+		kv.owned(hl, pos)
+	}
+}
+
 // owned makes the page block li writes pos into resident and its own.
 func (kv *kvCache) owned(li, pos int) {
 	pg := &kv.layers[li]
