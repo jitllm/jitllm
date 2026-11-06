@@ -187,7 +187,7 @@ func cpuFaultsOf(t *testing.T, m *model.Model) []cpuFault {
 	if rec > 1 {
 		fs = append(fs, cpuFaultRec)
 	}
-	if m.Cfg.PredictsStreams() && m.Cfg.Streams() > 3 {
+	if m.Cfg.StatesStreams() && m.ExpandsStreams() && m.Cfg.Streams() > 3 {
 		fs = append(fs, cpuFaultStreams)
 	}
 	if len(fs) == 0 {

@@ -155,9 +155,8 @@ func sparsityOf(f *meta.File, c *jlm.Config) error {
 
 // gemma3nTensors finishes Gemma 3n's tensors. The unembedding's AltUp-1
 // matrices, stacked in one tensor in the file, become one tensor per stream;
-// each block's prediction and correction coefficients are transposed, so a
-// coefficient vector is a sum of rows weighted by the modalities rather than
-// a matvec on a matrix four wide.
+// each block's prediction and correction coefficients are read as float
+// matrices the router's weights multiply (stateAltUp).
 func gemma3nTensors(s *jlm.Source) error {
 	c := s.Config
 	if c == nil || c.Arch != jlm.ArchGemma3n {
@@ -208,8 +207,8 @@ func gemma3nTensors(s *jlm.Source) error {
 			if err := widenF32(&t); err != nil {
 				return err
 			}
-			if err := transposeF32(&t, a, cols); err != nil {
-				return err
+			if t.NDim != 2 || t.Dims[0] != a || t.Dims[1] != cols {
+				return fmt.Errorf("convert: %s is %v, want {%d, %d}", t.Name, t.Dims[:t.NDim], a, cols)
 			}
 		case t.Role == jlm.RolePLETokEmbd && t.NDim == 2:
 			// llama.cpp pads the per-layer table from its own vocabulary to
@@ -258,31 +257,6 @@ func widenF32(t *jlm.Tensor) error {
 		binary.LittleEndian.PutUint32(d[4*i:], math.Float32bits(v))
 	}
 	t.Type, t.Data, t.Load = jlm.TypeF32, d, nil
-	return nil
-}
-
-// transposeF32 rewrites an F32 matrix of `rows` outputs over `k` inputs (the
-// file's {k, rows}) as `k` rows of `rows`: row i holds every output's weight
-// on input i.
-func transposeF32(t *jlm.Tensor, k, rows uint64) error {
-	if t.Type != jlm.TypeF32 || t.NDim != 2 || t.Dims[0] != k || t.Dims[1] != rows {
-		return fmt.Errorf("convert: %s is %v %v, want an F32 {%d, %d}", t.Name, t.Type, t.Dims[:t.NDim], k, rows)
-	}
-	b, err := t.Bytes()
-	if err != nil {
-		return err
-	}
-	if uint64(len(b)) != 4*k*rows {
-		return fmt.Errorf("convert: %s holds %d bytes, want %d", t.Name, len(b), 4*k*rows)
-	}
-	d := make([]byte, len(b))
-	for r := uint64(0); r < rows; r++ {
-		for i := uint64(0); i < k; i++ {
-			binary.LittleEndian.PutUint32(d[4*(i*rows+r):], binary.LittleEndian.Uint32(b[4*(r*k+i):]))
-		}
-	}
-	t.Data, t.Load = d, nil
-	t.Dims = [4]uint64{rows, k}
 	return nil
 }
 

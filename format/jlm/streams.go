@@ -34,8 +34,8 @@ type BlockStreams struct {
 
 // SubStreams is a sublayer's read of the streams and the join of its output.
 type SubStreams struct {
-	// From are Read's inputs, in order: a stream (its value now), StreamIn
-	// or StreamRun.
+	// From are Read's inputs, in order: a stream (its value now), StreamIn,
+	// StreamRun or StreamSide.
 	From []int8
 	// Read is the sublayer's input over From; nil is the running residual.
 	Read *Program
@@ -44,9 +44,14 @@ type SubStreams struct {
 	// Join is the running residual after the sublayer, a program over the
 	// running residual and the sublayer's output; nil is their sum.
 	Join *Program
+	// Post is, where the sublayer writes every stream, what the writes share
+	// after it: a program over the sublayer's output and Exports, computed
+	// once, whose value each write reads after Exports; nil for none.
+	Post *Program
 	// Writes is, where the sublayer writes every stream, each stream after
-	// it: a program over the stream, the sublayer's output and Exports (nil
-	// leaves the stream as it is). Empty where Join is the write.
+	// it: a program over the stream, the sublayer's output, Exports and
+	// Post's value where it states one (nil leaves the stream as it is).
+	// Empty where Join is the write.
 	Writes []*Program
 }
 
@@ -55,6 +60,8 @@ const (
 	StreamRun int8 = -1
 	// StreamIn is stream 0 as the block received it.
 	StreamIn int8 = -2
+	// StreamSide is the block's row of per-layer inputs, every block's.
+	StreamSide int8 = -3
 )
 
 func (s *Streams) valid(nLayer int) error {
@@ -100,9 +107,22 @@ func (s *Streams) valid(nLayer int) error {
 
 func (u *SubStreams) valid(n uint8, where string) error {
 	for _, k := range u.From {
-		if k < StreamIn || int(k) >= int(n) {
+		if k < StreamSide || int(k) >= int(n) {
 			return fmt.Errorf("jlm: %s reads stream %d of %d", where, k, n)
 		}
+	}
+	post := 0
+	if u.Post != nil {
+		if len(u.Writes) == 0 {
+			return fmt.Errorf("jlm: %s states what its writes share and writes no stream", where)
+		}
+		if int(u.Post.NIn) != 1+len(u.Exports) {
+			return fmt.Errorf("jlm: %s shares through a program of %d inputs, want %d", where, u.Post.NIn, 1+len(u.Exports))
+		}
+		if err := u.Post.valid(where); err != nil {
+			return err
+		}
+		post = 1
 	}
 	for _, e := range u.Exports {
 		if u.Read == nil || int(e) >= int(u.Read.NIn)+len(u.Read.Ops) {
@@ -116,8 +136,9 @@ func (u *SubStreams) valid(n uint8, where string) error {
 		if p == nil {
 			continue
 		}
-		if int(p.NIn) != 2+len(u.Exports) {
-			return fmt.Errorf("jlm: %s writes a stream through a program of %d inputs, want %d", where, p.NIn, 2+len(u.Exports))
+		if int(p.NIn) != 2+len(u.Exports)+post {
+			return fmt.Errorf("jlm: %s writes a stream through a program of %d inputs, want %d", where, p.NIn,
+				2+len(u.Exports)+post)
 		}
 		if err := p.valid(where); err != nil {
 			return err
@@ -312,5 +333,46 @@ func decodeStreamPre(r *rbuf, s *Streams) {
 	for i := range s.Blocks {
 		decodeSub(r, &s.Blocks[i].Pre)
 		decodeWrites(r, &s.Blocks[i].Pre)
+	}
+}
+
+// sharesWrites says a sublayer of the streams states what its writes share
+// (SubStreams.Post).
+func (s *Streams) sharesWrites() bool {
+	for i := range s.Blocks {
+		b := &s.Blocks[i]
+		if b.Pre.Post != nil || b.Attn.Post != nil || b.FFN.Post != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// encodeStreamPosts is the twenty-second tail: each block's sublayers'
+// shared programs, the addition before the attention's first.
+func encodeStreamPosts(w *wbuf, s *Streams) {
+	w.u32(uint32(len(s.Blocks)))
+	for i := range s.Blocks {
+		b := &s.Blocks[i]
+		encodePrograms(w, []*Program{b.Pre.Post, b.Attn.Post, b.FFN.Post})
+	}
+}
+
+// decodeStreamPosts reads the twenty-second tail into s, whose blocks the
+// sixteenth sized.
+func decodeStreamPosts(r *rbuf, s *Streams) {
+	n := r.count(1)
+	if n != len(s.Blocks) {
+		r.err = fmt.Errorf("jlm: the streams' shared programs state %d blocks of %d", n, len(s.Blocks))
+		return
+	}
+	for i := range s.Blocks {
+		b := &s.Blocks[i]
+		ps := decodePrograms(r)
+		if len(ps) != 3 {
+			r.err = fmt.Errorf("jlm: block %d's shared programs are %d of 3", i, len(ps))
+			return
+		}
+		b.Pre.Post, b.Attn.Post, b.FFN.Post = ps[0], ps[1], ps[2]
 	}
 }

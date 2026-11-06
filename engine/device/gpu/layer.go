@@ -50,13 +50,7 @@ type layer struct {
 	// pleOff is the block's li*PLEDim, the offset of its slice in a row's
 	// per-layer inputs.
 	pleOff backend.Buf
-	// The streams' router (nn.LayerPlan.AltUp, altup.go) as plain floats,
-	// and altRouterW the same as the composer binds a matrix; it owns
-	// nothing (altRouter is freed with the block). sparse says the FFN gate
-	// takes the gaussian top-k.
-	altRouter  backend.Buf
-	altRouterW *resident
-	sparse     bool
+	sparse bool
 	// kvSrc is the block whose history this one attends to: its own index, or
 	// for a KV-sharing block (nn.LayerPlan.KVShared) the source's, whose
 	// cache this block reads and never writes.
@@ -2295,10 +2289,6 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 			}
 		}
 		l.auxBytes += 4
-	}
-	if why := g.prepAltUp(l, li, p, w, up); why != "" {
-		g.LastErr = why
-		return false
 	}
 	l.wide = p.NStreams > 1 || p.ExpLatent != 0
 	// Gemma 4's output scalar, one float, charged with the norms.
@@ -4949,7 +4939,6 @@ func (l *layer) auxBufs() []backend.Buf {
 	return append(append(vs,
 		l.nAttn, l.nFFN, l.nAttnB, l.nFFNB, l.nQ, l.nK,
 		l.clampB,     // Gemma 4's tower: its clipped linears' bounds
-		l.altRouter,  // Gemma 3n
 		l.ssmTaps.qs, // a linear block's convolution
 		l.router,
 		l.outScale, // Gemma 4's output scalar
@@ -5858,10 +5847,6 @@ func planUnion(a *nn.LayerPlan, b *nn.LayerPlan) bool {
 	}
 	if b.ExpLatent > a.ExpLatent {
 		a.ExpLatent, grew = b.ExpLatent, true
-	}
-	// Gemma 3n's sparse lead: the gaussian's kernels serve the blocks that ask.
-	if b.Sparse && !a.Sparse {
-		a.Sparse, grew = true, true
 	}
 	// A block that is its mixer alone says nothing about the FFN the others
 	// run, gated or not.

@@ -29,12 +29,13 @@ func gemma3nFixtures() []struct {
 		sel  func(m *model.Model) bool
 	}{
 		{"synth-gemma3n", func(m *model.Model) bool {
-			c := m.Cfg
-			ok := c.Arch == "gemma3n" && c.PredStreams == 4 && c.PLEDim == 32 && c.NKVShared == 2 && c.NSparse == 3 &&
-				c.SparseStd > 1.64 && c.SparseStd < 1.65 && c.VNorm && c.SWAPeriod == 5 && len(m.AltUnembd) == 3
+			c, jc := m.Cfg, m.Container.Config()
+			ok := c.Arch == "gemma3n" && c.Streams() == 4 && len(jc.Streams.Expand) == 3 && c.PLEDim == 32 &&
+				c.NKVShared == 2 && jc.NSparse == 3 && jc.SparseStd > 1.64 && jc.SparseStd < 1.65 && c.VNorm && c.SWAPeriod == 5
 			for i := range m.Layers {
 				l := &m.Layers[i]
-				ok = ok && matRows(l, jlm.RoleLowRankIn) == 32 && l.AltRouter.Rows == 4 && len(l.Vector(jlm.RoleStreamPredictCoef)) == 64
+				ok = ok && matRows(l, jlm.RoleLowRankIn) == 32 && matRows(l, jlm.RoleStreamRouter) == 4 &&
+					matRows(l, jlm.RoleStreamPredictCoef) == 16
 			}
 			return ok
 		}},
@@ -44,11 +45,11 @@ func gemma3nFixtures() []struct {
 // gemma3nActs is a violation restating every block's activation as the
 // container states it (ActLayers), which is what the front end builds the
 // blocks from: to picks block li's from the blocks' own.
-func gemma3nActs(name string, to func(c *model.Config, acts []uint8) func(li int) uint8) c6Violation {
+func gemma3nActs(name string, to func(c *jlm.Config, acts []uint8) func(li int) uint8) c6Violation {
 	return c6Violation{name, func(m *model.Model) func() {
 		jc := m.Container.Config()
 		was := slices.Clone(jc.ActLayers)
-		pick := to(m.Cfg, was)
+		pick := to(jc, was)
 		for li := range jc.ActLayers {
 			jc.ActLayers[li] = pick(li)
 		}
@@ -64,13 +65,17 @@ func gemma3nActs(name string, to func(c *model.Config, acts []uint8) func(li int
 func gemma3nViolations() []c6Violation {
 	return []c6Violation{
 		{"no AltUp prediction", func(m *model.Model) func() {
-			return eachLayer(m, func(l *model.Layer) {
-				setVec(l, jlm.RoleStreamPredictCoef, func(v []float32) []float32 { return make([]float32, len(v)) })
+			return streamsMut(m, func(s *jlm.Streams) {
+				for i := range s.Blocks {
+					s.Blocks[i].Pre.Writes = make([]*jlm.Program, len(s.Blocks[i].Pre.Writes))
+				}
 			})
 		}},
 		{"no AltUp correction", func(m *model.Model) func() {
-			return eachLayer(m, func(l *model.Layer) {
-				setVec(l, jlm.RoleStreamCorrectCoef, func(v []float32) []float32 { return make([]float32, len(v)) })
+			return streamsMut(m, func(s *jlm.Streams) {
+				for i := range s.Blocks {
+					s.Blocks[i].FFN.Post = uncorrected(s.Blocks[i].FFN.Post)
+				}
 			})
 		}},
 		{"no LAuReL", func(m *model.Model) func() {
@@ -78,10 +83,10 @@ func gemma3nViolations() []c6Violation {
 				setVec(l, jlm.RoleLowRankNorm, func(v []float32) []float32 { return make([]float32, len(v)) })
 			})
 		}},
-		gemma3nActs("no gaussian top-k", func(c *model.Config, a []uint8) func(int) uint8 {
+		gemma3nActs("no gaussian top-k", func(c *jlm.Config, a []uint8) func(int) uint8 {
 			return func(int) uint8 { return a[c.NSparse] }
 		}),
-		gemma3nActs("the gaussian on every block", func(c *model.Config, a []uint8) func(int) uint8 {
+		gemma3nActs("the gaussian on every block", func(c *jlm.Config, a []uint8) func(int) uint8 {
 			return func(int) uint8 { return a[0] }
 		}),
 		{"no correction scale", func(m *model.Model) func() {
@@ -196,4 +201,25 @@ func TestBatchSeamMovesCarryEveryRowAltUp(t *testing.T) {
 // (principleFixtures) and the windowed-layer gate: its sliding layers' pages
 // are a window's.
 func init() {
+}
+
+// uncorrected is the shared program p of a block's correction with its
+// coefficients read as zero: every stream's innovation weighed by one.
+func uncorrected(p *jlm.Program) *jlm.Program {
+	q := *p
+	q.Ops = slices.Clone(p.Ops)
+	for j, o := range q.Ops {
+		if o.Code != jlm.TOpLinear || len(o.Bind) == 0 || o.Bind[0] != jlm.RoleStreamCorrectCoef || j+1 >= len(q.Ops) {
+			continue
+		}
+		var e jlm.ExprBuilder
+		e.Fn(jlm.FnAdd, e.Fn(jlm.FnMul, jlm.Operand(0), jlm.Num(0)), jlm.Num(1))
+		next := q.Ops[j+1]
+		next.Expr = &jlm.Expr{Terms: e.T}
+		q.Ops[j+1] = next
+		return &q
+	}
+	// A correction that states no coefficients is left as it is: the gate
+	// then reports a violation it cannot see.
+	return p
 }

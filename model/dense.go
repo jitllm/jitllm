@@ -1,8 +1,6 @@
 package model
 
 import (
-	"slices"
-
 	"github.com/jitllm/jitllm/format/jlm"
 )
 
@@ -13,11 +11,10 @@ import (
 // device running them (Model.BindDense). The model's own are descriptors:
 // shapes and entries, no bytes.
 type Dense struct {
-	Embd, PosEmbd, Output    Tensor
-	Dense1, Dense2           Tensor
-	PleTok, PleProj, AltProj Tensor
-	AltUnembd                []Tensor
-	TowerDense               Layer
+	Embd, PosEmbd, Output Tensor
+	Dense1, Dense2        Tensor
+	PleTok, PleProj       Tensor
+	TowerDense            Layer
 	// Mats is the model's other dense matrices, by role (Model.DenseMats).
 	Mats      []roleTensor
 	TowerTaps []Layer
@@ -29,12 +26,8 @@ type Dense struct {
 func (m *Model) BindDense(fr *jlm.Frames, d *Dense) error {
 	d.Embd, d.PosEmbd, d.Output = m.Embd, m.PosEmbd, m.Output
 	d.Dense1, d.Dense2 = m.Dense1, m.Dense2
-	d.PleTok, d.PleProj, d.AltProj = m.PleTok, m.PleProj, m.AltProj
-	d.AltUnembd = slices.Clone(m.AltUnembd)
-	ts := []*Tensor{&d.Embd, &d.PosEmbd, &d.Output, &d.Dense1, &d.Dense2, &d.PleTok, &d.PleProj, &d.AltProj}
-	for i := range d.AltUnembd {
-		ts = append(ts, &d.AltUnembd[i])
-	}
+	d.PleTok, d.PleProj = m.PleTok, m.PleProj
+	ts := []*Tensor{&d.Embd, &d.PosEmbd, &d.Output, &d.Dense1, &d.Dense2, &d.PleTok, &d.PleProj}
 	d.Mats = make([]roleTensor, len(m.DenseMats))
 	for i, x := range m.DenseMats {
 		t := *x.T
@@ -66,10 +59,10 @@ func (m *Model) BindDense(fr *jlm.Frames, d *Dense) error {
 func denseNamed(r jlm.Role) bool {
 	switch r {
 	case jlm.RoleTokenEmbd, jlm.RolePosEmbd, jlm.RoleOutput, jlm.RoleEmbdDense1, jlm.RoleEmbdDense2,
-		jlm.RolePLETokEmbd, jlm.RolePLEModelProj, jlm.RoleStreamExpand:
+		jlm.RolePLETokEmbd, jlm.RolePLEModelProj:
 		return true
 	}
-	return r >= jlm.RoleStreamCollapse1 && r <= jlm.RoleStreamCollapse3
+	return false
 }
 
 // Matrix is the dense matrix of role r a field of d does not name, nil for

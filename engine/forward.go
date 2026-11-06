@@ -1479,7 +1479,6 @@ func (s *Instance) layerWeightsAt(li int, l *model.Layer, banks *[3]nn.Weight) n
 		}
 	}
 	if s.c.PLEDim != 0 {
-		w.AltRouter = model.Wt(l.AltRouter)
 	}
 	if s.c.LayerKind(li).Recurrent() {
 		w.SSM = nn.SSMWeights{
@@ -1514,7 +1513,7 @@ func (s *Instance) layerWeightsAt(li int, l *model.Layer, banks *[3]nn.Weight) n
 // by name, by role, in the order the block was read.
 func extraWeights(l *model.Layer) []nn.RoleWeight {
 	named := []*model.Tensor{&l.Wq, &l.Wk, &l.Wv, &l.Wo, &l.Gate, &l.Up, &l.Down, &l.Router,
-		&l.ShGate, &l.ShUp, &l.ShDown, &l.AltRouter, &l.SsmGate, &l.SsmBA, &l.SsmOut,
+		&l.ShGate, &l.ShUp, &l.ShDown, &l.SsmGate, &l.SsmBA, &l.SsmOut,
 		&l.SsmFA, &l.SsmFB, &l.SsmGA, &l.SsmGB, &l.SsmXDt, &l.SsmDtProj, &l.SsmXB, &l.SsmXC,
 		&l.Wqa, &l.Wqb, &l.Wkva, &l.Wkb, &l.Wvb}
 	var out []nn.RoleWeight
@@ -1974,10 +1973,6 @@ func (s *Instance) planFor(li int) *nn.LayerPlan {
 	if c.SelectAt(li) {
 		s := c.Selection()
 		plan.Select = &nn.SelectPlan{Block: int(s.Block), Keep: int(s.Keep)}
-	}
-	plan.AltUp, plan.Sparse, plan.SparseStd = c.PredStreams, li < c.NSparse, c.SparseStd
-	if t := l.Matrix(jlm.RoleLowRankIn); t != nil {
-		plan.LaurelRank = t.Rows
 	}
 	plan.KVShared, plan.KVSource = c.KVShared(li), c.KVSource(li)
 	plan.NFFN, plan.FFNWide = c.NFFNAt(li), c.NFFNAt(li) != c.NFFN
