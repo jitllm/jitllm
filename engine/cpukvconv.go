@@ -46,15 +46,12 @@ func (s *Instance) cpuPlaceKV() {
 		nb := graph.New()
 		nb.Out(nb.Emit(narrow, []graph.ValueID{nb.In("kv.f", c.FW)},
 			[]graph.Result{{Name: "kv.h", Width: c.HW, Elem: graph.ElemU32}}, nil, graph.Attrs{}, nil, nil)...)
-		var hf [2]cpuHeadForm
-		s.cpuComposeHead(&hf[0], nb.G, nn.DeclineNoGraph, cpuRowsCap)
+		c.Narrow = s.cpuPart(nb.G, nn.DeclineNoGraph, cpuRowsCap)
 		wb := graph.New()
 		h := wb.In("kv.h", c.HW)
 		wb.G.Values[h].Elem = graph.ElemU32
 		wb.Out(wb.Emit(widen, []graph.ValueID{h}, []graph.Result{{Name: "kv.f", Width: c.FW}}, nil, graph.Attrs{}, nil, nil)...)
-		s.cpuComposeHead(&hf[1], wb.G, nn.DeclineNoGraph, cpuRowsCap)
-		c.Narrow = cpudev.Part{Composed: hf[0].composed, F: hf[0].f, Why: hf[0].why, Err: hf[0].err}
-		c.Widen = cpudev.Part{Composed: hf[1].composed, F: hf[1].f, Why: hf[1].why, Err: hf[1].err}
+		c.Widen = s.cpuPart(wb.G, nn.DeclineNoGraph, cpuRowsCap)
 		conv = append(conv, c)
 	}
 	s.kvConv = cpudev.NewKVConv(s.cpu.x.Device(), conv, s.kvl.fmt == cpu.KVF16)

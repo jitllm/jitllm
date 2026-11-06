@@ -15,13 +15,9 @@ func (s *Instance) cpuPlaceMTP() {
 		return
 	}
 	g := fg.MtpEntry[i]
-	var hf [2]cpuHeadForm
-	s.cpuComposeHead(&hf[0], g, nn.DeclineNoGraph, 1)
-	s.cpuComposeHead(&hf[1], g, nn.DeclineNoGraph, cpuRowsCap)
 	var p [2]cpudev.Part
-	for i := range hf {
-		p[i] = cpudev.Part{Composed: hf[i].composed, F: hf[i].f, Why: hf[i].why, Err: hf[i].err}
-	}
+	p[0] = s.cpuPart(g, nn.DeclineNoGraph, 1)
+	p[1] = s.cpuPart(g, nn.DeclineNoGraph, cpuRowsCap)
 	s.entry = cpudev.NewEntry(s.cpu.x.Device(), s.cpu.x.Steps(), p[0], p[1], blockWeights{ws: &s.ws, li: s.lo, l: s.layer(s.lo)},
 		s.c.ResidW())
 }

@@ -19,9 +19,7 @@ func (s *Instance) cpuPlacePool() {
 	if g == nil {
 		return
 	}
-	var hf cpuHeadForm
-	s.cpuComposeHead(&hf, g, nn.DeclineNoGraph, s.maxSeq)
-	part := cpudev.Part{Composed: hf.composed, F: hf.f, Why: hf.why, Err: hf.err}
+	part := s.cpuPart(g, nn.DeclineNoGraph, s.maxSeq)
 	var weights []unsafe.Pointer
 	if f := part.F; f != nil {
 		ws, why := s.ws.bind(f, -1, nil)

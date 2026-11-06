@@ -5,7 +5,6 @@ import (
 
 	"github.com/jitllm/jitllm/model"
 
-	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/graph"
@@ -22,16 +21,6 @@ import (
 // once for the instance at its placement (cpuPlaceHead) and counted served or
 // declined by name (CPUHeadSteps, CPUSampleSteps); a step forms nothing.
 
-// cpuHeadForm is one of the head's graphs composed for the CPU, or why
-// not.
-type cpuHeadForm struct {
-	composed bool
-	f        *cpudev.Form
-	why      nn.Decline
-	// err is the composer's, where it formed none.
-	err error
-}
-
 // cpuPlaceHead composes the head's and the samplers' graphs for the CPU
 // device at the instance's placement (cpudev.Head).
 func (s *Instance) cpuPlaceHead() {
@@ -39,78 +28,47 @@ func (s *Instance) cpuPlaceHead() {
 		return
 	}
 	fg := s.m.FrontGraphs()
-	var hf [15]cpuHeadForm
-	s.cpuComposeHead(&hf[0], fg.CpuHead, nn.DeclineNoGraph, 1)
-	s.cpuComposeHead(&hf[1], fg.CpuHidden, nn.DeclineNoGraph, 1)
-	s.cpuComposeHead(&hf[2], fg.CpuHidden, nn.DeclineNoGraph, cpuRowsCap)
+	var p [15]cpudev.Part
+	p[0] = s.cpuPart(fg.CpuHead, nn.DeclineNoGraph, 1)
+	p[1] = s.cpuPart(fg.CpuHidden, nn.DeclineNoGraph, 1)
+	p[2] = s.cpuPart(fg.CpuHidden, nn.DeclineNoGraph, cpuRowsCap)
 	none := nn.DeclineNoGraph
 	if fg.CpuHead != nil {
 		none = nn.DeclineHeadBias
 	}
-	s.cpuComposeHead(&hf[3], fg.PickHead, none, 1)
+	p[3] = s.cpuPart(fg.PickHead, none, 1)
 	for i, g := range []*graph.Graph{fg.CpuSample, fg.CpuWalk, fg.CpuRow, fg.CpuCut, fg.CpuWalkProb, fg.CpuCutProb,
 		fg.CpuCutK, fg.CpuCutKProb} {
-		s.cpuComposeHead(&hf[4+i], g, nn.DeclineNoSample, 1)
+		p[4+i] = s.cpuPart(g, nn.DeclineNoSample, 1)
 	}
 	if fg.OutNorm != nil {
-		s.cpuComposeHead(&hf[12], fg.OutNorm, nn.DeclineNoGraph, cpuRowsCap)
+		p[12] = s.cpuPart(fg.OutNorm, nn.DeclineNoGraph, cpuRowsCap)
 	}
-	s.cpuComposeHead(&hf[13], fg.CpuLogprobs, nn.DeclineNoSample, 1)
-	s.cpuComposeHead(&hf[14], fg.CpuMask, nn.DeclineNoSample, 1)
-	var p [15]cpudev.Part
-	for i := range hf {
-		p[i] = cpudev.Part{Composed: hf[i].composed, F: hf[i].f, Why: hf[i].why, Err: hf[i].err}
-	}
+	p[13] = s.cpuPart(fg.CpuLogprobs, nn.DeclineNoSample, 1)
+	p[14] = s.cpuPart(fg.CpuMask, nn.DeclineNoSample, 1)
 	parts := cpudev.HeadParts{Head: p[0], Hidden: p[1], Rows: p[2], Pick: p[3], Sample: p[4], Walk: p[5], Row: p[6],
 		Cut: p[7], WalkProb: p[8], CutProb: p[9], CutK: p[10], CutKProb: p[11], OutNorm: p[12], Logprobs: p[13], Mask: p[14]}
 	s.heads = cpudev.NewHead(s.cpu.x.Device(), s.cpu.x.Steps(), parts, fg.OutNorm != nil, blockWeights{ws: &s.ws, li: -1},
 		s.c.NEmbd, s.c.NVocab, model.MaxTopLogprobs)
 }
 
-// cpuComposeHead composes graph g for the CPU at rows rows into hf, or
-// says why not: none where the front end states no graph.
-func (s *Instance) cpuComposeHead(hf *cpuHeadForm, g *graph.Graph, none nn.Decline, rows int) {
-	s.cpuComposeHeadAs(hf, g, rows, nil)
+// cpuPart is graph g composed on the CPU device as a part at rows rows
+// (cpudev.Exec.FormPart), none where the front end states no graph.
+func (s *Instance) cpuPart(g *graph.Graph, none nn.Decline, rows int) cpudev.Part {
+	return s.cpu.x.FormPart(s.partPlan(g, none, rows, nil))
+}
+
+// partPlan is graph g as a part at rows rows: its weights read in the
+// formats the container states for its block (the model's own,
+// jlm.DenseBlock, for the head's), over's for the roles over names. A role
+// the block reads from another's tensor (a prediction block's embedding, the
+// trunk's table) takes that tensor's format.
+func (s *Instance) partPlan(g *graph.Graph, none nn.Decline, rows int, over map[jlm.Role]jlm.Type) cpudev.PartPlan {
+	p := cpudev.PartPlan{Graph: g, Rows: rows, ActWindow: s.m.ActWindow, None: none}
 	if g == nil {
-		hf.why = none
+		return p
 	}
-}
-
-// cpuComposeHeadAs is cpuComposeHead with the formats over states the
-// weights of its roles are held in, in place of the container's.
-func (s *Instance) cpuComposeHeadAs(hf *cpuHeadForm, g *graph.Graph, rows int, over map[jlm.Role]jlm.Type) {
-	*hf = cpuHeadForm{composed: true}
-	switch {
-	case !composer.LowersCPU(uint64(s.cpuISA())):
-		hf.why = nn.DeclineISA
-	case g == nil:
-		hf.why = nn.DeclineNoGraph
-	default:
-		f, err := s.formCPUGraph(g, rows, over)
-		if err != nil {
-			hf.why, hf.err = s.cpu.x.Composer().Decline(err), err
-			return
-		}
-		hf.f = f
-	}
-}
-
-// formOf is hf's form, or why it does not serve: not composed at the
-// instance's placement, or declined there.
-func (hf *cpuHeadForm) formOf() (*cpudev.Form, nn.Decline) {
-	if !hf.composed {
-		return nil, nn.DeclineUnplaced
-	}
-	return hf.f, hf.why
-}
-
-// formCPUGraph is graph g on the CPU at rows rows through the model's keyed
-// cache: its weights its block's (the model's own, jlm.DenseBlock, for the
-// head's), its inputs and outputs buffers of their own. A role the block
-// reads from another's tensor (a prediction block's embedding, the trunk's
-// table) takes that tensor's format.
-func (s *Instance) formCPUGraph(g *graph.Graph, rows int, over map[jlm.Role]jlm.Type) (*cpudev.Form, error) {
-	formats := map[jlm.Role]jlm.Type{}
+	p.Formats = map[jlm.Role]jlm.Type{}
 	f := s.m.Composing()
 	var l *model.Layer
 	if g.Block >= 0 && g.Block < len(s.m.Layers) {
@@ -119,17 +77,21 @@ func (s *Instance) formCPUGraph(g *graph.Graph, rows int, over map[jlm.Role]jlm.
 	for _, o := range g.Ops {
 		for _, w := range o.Weight {
 			if t, ok := over[w.Role]; ok {
-				formats[w.Role] = t
+				p.Formats[w.Role] = t
 			} else if e, ok := f.Find(w.Role, int32(g.Block), -1); ok {
-				formats[w.Role] = e.Type
+				p.Formats[w.Role] = e.Type
 			} else if t := s.ws.matrix(g.Block, l, w.Role); t != nil && t.E != nil {
-				formats[w.Role] = t.E.Type
+				p.Formats[w.Role] = t.E.Type
 			}
 		}
 	}
-	req := composer.Request{Graph: g, Formats: formats, Step: composer.Step{Rows: rows, Page: 1, Keys: 1, ActWindow: s.m.ActWindow},
-		Device: s.cpu.x.Composer().Device(), Apart: true}
-	return s.cpu.x.Composer().Form(req, g, rows, true, false, false)
+	return p
+}
+
+// formCPUGraph is graph g on the CPU at rows rows (cpudev.Exec.FormGraph),
+// over's formats in place of the container's for the roles it names.
+func (s *Instance) formCPUGraph(g *graph.Graph, rows int, over map[jlm.Role]jlm.Type) (*cpudev.Form, error) {
+	return s.cpu.x.FormGraph(s.partPlan(g, nn.DeclineNoGraph, rows, over))
 }
 
 // Sample is smp's token over logits, a row of this instance's vocabulary,
