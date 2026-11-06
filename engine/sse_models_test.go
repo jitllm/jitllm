@@ -55,7 +55,7 @@ func ssemTook(t *testing.T, path string) {
 	defer m.Close()
 	s := testInstance(t, m, 8, instOpts...)
 	defer s.Close()
-	if got := s.eng.cpu.Target.Tier(); got != cpu.TierSSE {
+	if got := cpuOf(s).Target.Tier(); got != cpu.TierSSE {
 		t.Fatalf("an instance opened on cpu:sse has its CPU device at %v", got)
 	}
 }
@@ -122,7 +122,7 @@ func ssemRun(t *testing.T, path string, ids []int32, gen int, opts ...Option) ss
 	for _, id := range ids {
 		l, err := s.Forward(id)
 		if err != nil {
-			t.Fatalf("Forward on tier %v: %v", s.eng.cpu.Target.Tier(), err)
+			t.Fatalf("Forward on tier %v: %v", cpuOf(s).Target.Tier(), err)
 		}
 		a.forced = append(a.forced, append([]float32(nil), l...))
 	}
@@ -133,7 +133,7 @@ func ssemRun(t *testing.T, path string, ids []int32, gen int, opts ...Option) ss
 		a.steps = append(a.steps, step)
 		l, err := s.Forward(next)
 		if err != nil {
-			t.Fatalf("greedy Forward on tier %v: %v", s.eng.cpu.Target.Tier(), err)
+			t.Fatalf("greedy Forward on tier %v: %v", cpuOf(s).Target.Tier(), err)
 		}
 		step = append([]float32(nil), l...)
 		next, margin = ssemArgmax(step)
@@ -144,17 +144,17 @@ func ssemRun(t *testing.T, path string, ids []int32, gen int, opts ...Option) ss
 	p := testInstance(t, m, len(ids)+1, instOpts...)
 	l, err := p.Prefill(ids)
 	if err != nil {
-		t.Fatalf("Prefill on tier %v: %v", s.eng.cpu.Target.Tier(), err)
+		t.Fatalf("Prefill on tier %v: %v", cpuOf(s).Target.Tier(), err)
 	}
 	a.prefill = append([]float32(nil), l...)
 	p.Close()
 
 	b := newSessBatch(m, 2, 8, instOpts...)
 	if _, err := b.ForwardBatch([]int32{ids[0], ids[1]}); err != nil {
-		t.Fatalf("ForwardBatch on tier %v: %v", s.eng.cpu.Target.Tier(), err)
+		t.Fatalf("ForwardBatch on tier %v: %v", cpuOf(s).Target.Tier(), err)
 	}
 	b.Close()
-	a.mapped = s.eng.cpu.Target.MappedByTier()
+	a.mapped = cpuOf(s).Target.MappedByTier()
 	return a
 }
 
@@ -185,7 +185,7 @@ func ssemComposedServes(t *testing.T, path string, ids []int32, forced [][]float
 		}
 		worst = math.Max(worst, d)
 	}
-	mapped := s.eng.cpu.Target.MappedByTier()
+	mapped := cpuOf(s).Target.MappedByTier()
 	if d := mapped[cpu.TierAVX2]; d != 0 {
 		t.Fatalf("the composed CPU mapped %d AVX2 kernels on the SSE tier", d)
 	}

@@ -21,6 +21,8 @@ import (
 // forms and history arenas, and the seats of the instances on it, so a
 // prefill can ask whether another instance decodes.
 type CPU struct {
+	// execs are the CPU as instances open it, one per option set (Execs).
+	execs  map[[2]bool]*Execs
 	Target *cpu.Target
 	pool   []cpu.PoolOption
 
