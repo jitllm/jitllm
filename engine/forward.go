@@ -314,10 +314,6 @@ type Instance struct {
 	roomSeen     uint64
 	devReclaimed int
 
-	// nseq is the sequences an instance's cache is strided by, one: a
-	// session holds one sequence, and sessions step together (StepRuns)
-	// rather than as slots of one cache.
-	nseq int
 	// hist is the sessions whose history lives under this instance's
 	// placement: each that ran on it and has not left (use, forget). A move
 	// of the instance's blocks moves theirs (settleHist).
@@ -547,7 +543,7 @@ func NewInstance(m *model.Model, maxSeq int, opts ...Option) (*Instance, error) 
 	fr, err := g.dev.Frames(m.Id, m.NewFrames)
 	if err == nil {
 		var s *Instance
-		if s, err = newInstanceOver(m, g, fr, lo.opt, m.Cfg, 1, maxSeq, 0, m.Cfg.NLayer, q); err == nil {
+		if s, err = newInstanceOver(m, g, fr, lo.opt, m.Cfg, maxSeq, 0, m.Cfg.NLayer, q); err == nil {
 			// The CPU device holds the model for it from above.
 			s.root, s.owners[routeLanes] = true, g.dev
 			s.pageQuota.Store(pq)
@@ -586,14 +582,14 @@ func OpenCPU(opts ...Option) (*cpudev.CPU, error) {
 // newInstanceOver is an instance over blocks [lo, hi) of a segment whose
 // geometry is c's (the text's, or the tower's: towerConfig), sharing g,
 // paging what it runs on the CPU into fr and running with knobs opt.
-func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOpts, c *model.Config, nseq, maxSeq, lo, hi int, q nn.Quota) (*Instance, error) {
+func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOpts, c *model.Config, maxSeq, lo, hi int, q nn.Quota) (*Instance, error) {
 	// Clamp to the model's context, and record the request (reqSeq) so a
 	// later "kv cache is full" can name the number the caller passed.
 	req := maxSeq
 	if maxSeq > c.NCtx {
 		maxSeq = c.NCtx
 	}
-	s := &Instance{Session: &Session{model: m}, m: m, c: c, lo: lo, hi: hi, maxSeq: maxSeq, reqSeq: req, nseq: nseq,
+	s := &Instance{Session: &Session{model: m}, m: m, c: c, lo: lo, hi: hi, maxSeq: maxSeq, reqSeq: req,
 		devFallback: true, relocate: true, prof: opt.profile, outNorm: m.OutNorm, fr: fr,
 		groupOff:  opt.noGroups,
 		residFold: opt.residFold, opt: opt, eng: g}
@@ -639,19 +635,17 @@ func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOp
 	s.growPLE()
 	s.allocStreams()
 	s.logits = make([]float32, c.NVocab)
-	// One rotary table per row: a ragged batch has rows at different
-	// positions.
-	s.cs = make([]float32, nseq*c.RopeW())
+	s.cs = make([]float32, c.RopeW())
 	if m.RopeSWA != nil {
-		s.csSWA = make([]float32, nseq*c.LocalNRot())
+		s.csSWA = make([]float32, c.LocalNRot())
 	}
-	s.bpos = make([]int, nseq)
+	s.bpos = make([]int, 1)
 	s.rmarks = model.RopeMarks{}
-	s.allocRecurrent(nseq)
+	s.allocRecurrent(1)
 
 	s.setPlace(routeLanes, g.dev.AttachExecution(nn.ExecutionSetup{Model: m.Id, Frames: fr,
 		NoFuse: opt.noFuse, Chunk: opt.prefillChunk, Tries: &g.fuse.tries, Runs: &g.fuse.runs, Quota: q,
-		Width: c.NEmbd, Seqs: nseq, Streams: c.Streams(), ConvLen: s.dg.ConvStateLen(),
+		Width: c.NEmbd, Seqs: 1, Streams: c.Streams(), ConvLen: s.dg.ConvStateLen(),
 		Trace: func(li int) { s.trace(li, "ffn_resid", s.x) }}))
 	s.placeRange(routeLanes)
 	s.holdFrames()
@@ -681,8 +675,8 @@ func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOp
 	s.kvFmt, s.kvl.fmt = want, want
 	s.Session.limit, s.Session.kvFormat, s.Session.span = maxSeq, want, [2]int{lo, hi}
 	// kvl.fmt sizes every page.
-	s.kv = newKVCacheRange(c, s.nextCacheID(), nseq, s.kvl, nil, s.opt.kvPage, s.lo, s.hi, nil, s.storage().PagePool(), s.entPlanes())
-	s.makeRec(s.kv.view, nseq)
+	s.kv = newKVCacheRange(c, s.nextCacheID(), 1, s.kvl, nil, s.opt.kvPage, s.lo, s.hi, nil, s.storage().PagePool(), s.entPlanes())
+	s.makeRec(s.kv.view, 1)
 	s.kv.reserve(s.maxSeq)
 	if err := s.kv.useArenas(s.maxSeq, s.kvArenaFor); err != nil {
 		s.notePrep(err)
@@ -1049,40 +1043,11 @@ func (s *Instance) SetDeviceLayers(d nn.LayerDevice, max int) error {
 	if err := s.finishPlacement(); err != nil {
 		return err
 	}
-	if err := s.reserveRows(); err != nil {
-		return err
-	}
 	// Last, so the blocks, the head and the prompt's scratch have taken their
 	// room first: the pool grows ahead into what is left, one prompt chunk's
 	// worth at most.
 	if pw, ok := d.(nn.KVPrewarmer); ok && s.devCount() > 0 && !s.opt.noKVPrewarm {
 		pw.PrewarmKV(min(s.maxSeq, nn.MaxDevicePrefillChunk))
-	}
-	return nil
-}
-
-// reserveRows makes the devices hold every row's history before any is
-// written. A batch's rows sit at slot*maxSeq+pos in each block's cache, so it
-// needs nseq*maxSeq positions where one sequence grows into maxSeq. The
-// capacity is this instance's own (a tier session's), so no other session's caches
-// grow; what the cards cannot hold comes home for this instance alone -- a
-// session's release leaves blocks another instance is using where they are -- and
-// with nothing written yet nothing has to move. A strict placement fails
-// instead, since that would move a block it named.
-func (s *Instance) reserveRows() error {
-	// A device that pages per sequence takes each row's pages as it writes
-	// them; a whole-context reservation is the contiguous cache's.
-	if sd, ok := s.ld.(nn.SeqKVDevice); ok && sd.PerSequenceKV() {
-		return nil
-	}
-	total := s.nseq * s.maxSeq
-	for s.nseq > 1 && s.devCount() > 0 && !s.ld.ReserveKV(total) {
-		li := s.relocationVictim()
-		if p := s.opt.place; li < 0 || p != nil && p.Strict || !s.listed(routeLanes) {
-			return fmt.Errorf("model: the devices cannot hold %d rows of %d positions "+
-				"for the blocks placed on them, and no other listed device takes one", s.nseq, s.maxSeq)
-		}
-		s.relocateOff(li)
 	}
 	return nil
 }
@@ -1922,7 +1887,7 @@ func (s *Instance) planExtra(hi int) uint64 {
 			n++
 		}
 	}
-	return n*perPos*uint64(s.maxSeq)*uint64(max(s.nseq, 1)) + s.m.HeadReadBytes()
+	return n*perPos*uint64(s.maxSeq) + s.m.HeadReadBytes()
 }
 
 // planFor is the block's plan with no weights in it: s.plan adjusted for what
@@ -2301,25 +2266,7 @@ func (s *Instance) relocateFor(pos int) {
 	if s.ld == nil {
 		return
 	}
-	fits := func() bool { return s.ld.ReserveKV(pos) }
-	if s.nseq > 1 {
-		if sd, ok := s.ld.(nn.SeqKVDevice); ok && sd.PerSequenceKV() {
-			// Each row is its own sequence: what has to fit is every row's next
-			// position, not the batch's whole context.
-			bases, ends := make([]int, s.nseq), make([]int, s.nseq)
-			for r := range bases {
-				bases[r], ends[r] = r*s.maxSeq, s.bpos[r]+1
-			}
-			fits = func() bool { return sd.ReserveKVSeqs(bases, ends) }
-		} else {
-			// A contiguous cache holds every row at r*maxSeq+pos
-			// (nn.RowsDevice) and a rows step reserves all of it, whatever one
-			// row's position is. The moves below carry every row
-			// (migrateKVRows).
-			pos = s.nseq * s.maxSeq
-		}
-	}
-	s.relocateUntil(pos, fits)
+	s.relocateUntil(pos, func() bool { return s.ld.ReserveKV(pos) })
 }
 
 // relocateUntil moves blocks off the device -- to a later card, or home under
@@ -2462,7 +2409,7 @@ func (s *Instance) reclaim(pos int) {
 // Only a prompt that needs less gives room back, so a chat turn (which
 // re-prefills the whole conversation) does not bounce blocks.
 func (s *Instance) relocateFresh(total int) {
-	if !s.relocate || s.ld == nil || s.nseq != 1 || s.pos != 0 || !slices.Contains(s.moved, true) {
+	if !s.relocate || s.ld == nil || s.pos != 0 || !slices.Contains(s.moved, true) {
 		return
 	}
 	if t, ok := s.ld.(nn.KVTrimmer); ok {
@@ -2849,7 +2796,7 @@ func (s *Instance) setKVFmt(f nn.KVFmt) {
 	// Carry every caller-visible setting into the fresh cache (namespace and
 	// budget); a forgotten one is silently lost.
 	old := s.kv
-	s.kv = newKVCacheRange(s.c, old.id, s.nseq, s.kvl, old.store, s.opt.kvPage, s.lo, s.hi, old.view, s.storage().PagePool(), s.entPlanes())
+	s.kv = newKVCacheRange(s.c, old.id, 1, s.kvl, old.store, s.opt.kvPage, s.lo, s.hi, old.view, s.storage().PagePool(), s.entPlanes())
 	s.kv.reserve(s.maxSeq)
 	s.kv.ns, s.kv.budget = old.ns, old.budget
 	// The CPU's blocks read the new cache: its arenas, and forms for f32.
@@ -2919,18 +2866,13 @@ func (s *Instance) Reset() {
 		s.bpos[i] = 0
 		s.rewindRope(i, -1)
 	}
-	for i := 0; i < s.nseq; i++ {
-		s.ResetRecurrent(i)
-	}
+	s.ResetRecurrent(0)
 	// A placed linear block keeps its running state on the device, and the
 	// next prompt would start from the last one's summary: zeroed there too,
 	// as Retire zeroes a row's. A failure is the next call's error.
 	if s.recurrent() && s.devLinear() {
-		if len(s.allRows) != s.nseq {
-			s.allRows = make([]int, s.nseq)
-			for i := range s.allRows {
-				s.allRows[i] = i
-			}
+		if len(s.allRows) != 1 {
+			s.allRows = []int{0}
 		}
 		if rr, ok := s.ld.(nn.RecRowsDevice); !ok || !rr.ResetRecRows(s.allRows) {
 			why := ""

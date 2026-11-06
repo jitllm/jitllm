@@ -308,7 +308,7 @@ func (p *PendingMove) Commit() (mv BlockMove, err error) {
 	headWas, headOn := nd.HeadDeviceName()
 	headOn = headOn && s.head != nil
 	mover, direct := s.ld.(nn.BlockMover)
-	direct = direct && !s.opt.hostMoves && s.nseq <= 1
+	direct = direct && !s.opt.hostMoves
 	for i, li := range p.blocks {
 		if at, _ := nd.DeviceOf(li); at == nn.DeviceName(p.to) {
 			continue

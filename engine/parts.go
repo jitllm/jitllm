@@ -139,7 +139,7 @@ func (s *Instance) partsPlan() *nn.PartsPlan {
 // tablePlan is rotary table graph g as a part at rows rows, the most marks a
 // sequence holds the instance's.
 func (s *Instance) tablePlan(g *graph.Graph, rows int) nn.PartPlan {
-	return nn.PartPlan{Graph: g, Rows: rows, Seqs: max(s.nseq, 1), Marks: s.marksCap(), ActWindow: s.m.ActWindow,
+	return nn.PartPlan{Graph: g, Rows: rows, Seqs: 1, Marks: s.marksCap(), ActWindow: s.m.ActWindow,
 		None: nn.DeclineNoGraph}
 }
 

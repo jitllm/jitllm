@@ -17,8 +17,7 @@ func (s *Instance) keepsRec(li int) bool {
 // recLens is a block's recurrent state's widths: its convolution rows' and
 // its summary's, every sequence's.
 func (s *Instance) recLens() (conv, state int) {
-	n := max(s.nseq, 1)
-	return n * s.dg.ConvStateLen(), n * s.dg.StateStride()
+	return s.dg.ConvStateLen(), s.dg.StateStride()
 }
 
 // recStaged is the instance's buffer for one block's state, kept so a warm

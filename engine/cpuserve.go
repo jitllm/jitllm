@@ -169,7 +169,7 @@ func (s *Instance) blockSpec(li int) nn.BlockSpec {
 	pg := &s.kv.layers[li]
 	page := max(pg.p, 1)
 	p.Formats, p.Strides = formats, s.m.CpuStrides(s.fr, li, g)
-	p.Page, p.Keys, p.ActWindow, p.Seqs = page, max(pg.arenaSlots(), 1)*page, s.m.ActWindow, max(s.nseq, 1)
+	p.Page, p.Keys, p.ActWindow, p.Seqs = page, max(pg.arenaSlots(), 1)*page, s.m.ActWindow, 1
 	p.ValuesInKeys = pg.latent
 	// A block turns by the rotary its rope ops state, of the
 	// instance's (rotaries): each its own table, bound by instance.

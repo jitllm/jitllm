@@ -315,8 +315,6 @@ func (s *Instance) Speculate(opts ...SpecOption) (*Speculator, error) {
 	switch {
 	case mtp && c.NMTP == 0:
 		return nil, fmt.Errorf("model: %s carries no multi-token-prediction block to draft with", c.Arch)
-	case s.nseq != 1:
-		return nil, fmt.Errorf("model: speculation drives a single sequence, not a batch")
 	case s.pos != 0:
 		return nil, fmt.Errorf("model: speculation starts on an empty session")
 	case s.lo != 0:
@@ -330,7 +328,7 @@ func (s *Instance) Speculate(opts ...SpecOption) (*Speculator, error) {
 		// where the trunk can verify, and the round's last token -- decided,
 		// not yet fed -- has its draft row at the position the trunk will feed
 		// it at, which on a full context is one past the trunk's last.
-		d, err := newInstanceOver(m, s.eng, s.fr, s.opt, m.Cfg, 1, s.maxSeq+1, c.NLayer, c.NLayer+1, nil)
+		d, err := newInstanceOver(m, s.eng, s.fr, s.opt, m.Cfg, s.maxSeq+1, c.NLayer, c.NLayer+1, nil)
 		if err != nil {
 			return nil, err
 		}
