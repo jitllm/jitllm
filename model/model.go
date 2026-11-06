@@ -48,9 +48,6 @@ type Config struct {
 	// container's flags; see jlm.FlagPoolMean and jlm.FlagNonCausal.
 	Pooling   jlm.Pooling
 	NonCausal bool
-	// CentredConv is a short convolution reading the rows after its own as
-	// well as before (jlm.Flag2CentredConv).
-	CentredConv bool
 	// RowWindowed says a non-causal block's rows attend inside windows of
 	// their own, which its convolution's taps keep to as well: a media
 	// prefix's rows the prefix alone (an LFM2 encoder's, rowWindows).
@@ -759,7 +756,6 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 		NDenseLead:       int(c.NDenseLead),
 		Pooling:          c.Flags.Pooling(),
 		NonCausal:        c.Flags.Has(jlm.FlagNonCausal),
-		CentredConv:      c.Flags2.Has(jlm.Flag2CentredConv),
 
 		MoEStep:        int(c.MoEStep),
 		SWAChunked:     c.Flags.Has(jlm.FlagSWAChunked),
