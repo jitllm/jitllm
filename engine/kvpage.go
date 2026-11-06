@@ -735,9 +735,6 @@ func (s *Instance) migrateKV(li, pos int, toDevice bool) bool {
 		// position zero is success -- the same answer the tier gives.
 		return s.moveKV(li, 0, nil, nil, from, to)
 	}
-	if s.nseq > 1 {
-		return s.migrateKVRows(li, toDevice)
-	}
 	// A shared page does not move to a device for one of its holders: the
 	// block stays on the CPU (kvshare.go).
 	if toDevice && pg.anyShared() {
@@ -788,93 +785,6 @@ func (s *Instance) migrateKVAs(kvl kvLayout, n int, k, v, fk, fv []float32, toDe
 	}
 	if !toDevice && conv {
 		if !s.convertKV(true, kvl.headDim, fk[:rows*kvl.headDim], own(k)) || !s.convertKV(true, kvl.headDim, fv[:rows*kvl.headDim], own(v)) {
-			return false
-		}
-	}
-	return true
-}
-
-// migrateKVRows is migrateKV for a batch: every row's history, not row 0's.
-//
-// The device keeps one cache per block with row r at positions
-// r*maxSeq+pos (nn.RowsDevice), so the rows travel as one flat run in that
-// layout and MigrateKV's contract is unchanged: the positions it moves are
-// device positions, up to the end of the last row with history. Each row
-// contributes its own live prefix, bpos[r], which is why the high-water
-// s.pos is not used; the gaps between rows are positions nothing reads.
-func (s *Instance) migrateKVRows(li int, toDevice bool) bool {
-	pg := &s.kv.layers[li]
-	if sd, ok := s.ld.(nn.SeqKVDevice); ok && sd.PerSequenceKV() {
-		return s.migrateKVSeqs(sd, li, toDevice)
-	}
-	ext := 0
-	for r, p := range s.bpos {
-		if p > 0 {
-			ext = r*s.maxSeq + p
-		}
-	}
-	if ext == 0 {
-		return s.ld.MigrateKV(li, nil, nil, 0, toDevice)
-	}
-	// The next rows step reserves the whole batch anyway (LayersRows); asking
-	// here is what lets the device hold rows past its current capacity before
-	// any step has grown it.
-	if toDevice && !s.ld.ReserveKV(s.nseq*s.maxSeq) {
-		return false
-	}
-	kvl := s.kvlAt(li)
-	kvDim := kvl.kvDim()
-	k, v, fk, fv := kvMigBufs(kvl, ext)
-	for r, p := range s.bpos {
-		if !toDevice || p == 0 {
-			continue
-		}
-		o := kvl.slots(r * s.maxSeq * kvDim)
-		if !pg.gather(kvl, r, p, k[o:], v[o:]) {
-			return false
-		}
-	}
-	if !s.migrateKVAs(kvl, ext, k, v, fk, fv, toDevice, func() bool {
-		return s.ld.MigrateKV(li, fk, fv, ext, toDevice)
-	}) {
-		return false
-	}
-	if toDevice {
-		return true
-	}
-	for r, p := range s.bpos {
-		if p == 0 {
-			continue
-		}
-		o := kvl.slots(r * s.maxSeq * kvDim)
-		if !pg.scatter(kvl, r, p, k[o:], v[o:]) {
-			return false
-		}
-	}
-	return true
-}
-
-// migrateKVSeqs is migrateKVRows on a device that keeps each row's history
-// as its own sequence (nn.SeqKVDevice): every row with history moves on its
-// own, by the base of its slots, and nothing is reserved -- the device takes
-// the pages a row's positions need as it loads them.
-func (s *Instance) migrateKVSeqs(sd nn.SeqKVDevice, li int, toDevice bool) bool {
-	pg := &s.kv.layers[li]
-	kvl := s.kvlAt(li)
-	for r, p := range s.bpos {
-		if p == 0 {
-			continue
-		}
-		k, v, fk, fv := kvMigBufs(kvl, p)
-		if toDevice && !pg.gather(kvl, r, p, k, v) {
-			return false
-		}
-		if !s.migrateKVAs(kvl, p, k, v, fk, fv, toDevice, func() bool {
-			return sd.MigrateKVSeq(li, r*s.maxSeq, fk, fv, p, toDevice)
-		}) {
-			return false
-		}
-		if !toDevice && !pg.scatter(kvl, r, p, k, v) {
 			return false
 		}
 	}
@@ -972,12 +882,6 @@ func (s *Session) SetKVStore(st KVStore) {
 //
 // Call it before the first token.
 func (s *Instance) SetCacheKey(ns string) error {
-	// A batched page holds every row's slots, so no single row's tokens can
-	// name it.
-	if ns != "" && s.nseq > 1 {
-		return fmt.Errorf("model: a %d-row batch cannot use a cache namespace: one page "+
-			"holds every row's slots, so no single sequence's tokens can name it", s.nseq)
-	}
 	// It wants a fresh sequence: mid-flight, the token log would restart at the
 	// current position and name every later page by a shifted window.
 	return s.Session.SetCacheKey(ns)

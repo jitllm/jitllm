@@ -31,7 +31,7 @@ func derivedTable(pg *kvPages, nseq int) []uint32 {
 // cpuTablesWrong is the first CPU block of s whose view's table names another
 // slot than its pages are in, and how many blocks it compared.
 func cpuTablesWrong(s *Instance) (error, int) {
-	nseq := max(s.nseq, 1)
+	nseq := 1
 	n := 0
 	for li := s.kv.lo; li < len(s.kv.layers); li++ {
 		pg := &s.kv.layers[li]

@@ -166,8 +166,8 @@ func batchSeamMovesWith(t *testing.T, p string, bound float64, relocate bool, mo
 		start int // blocks placed at attach
 		moves []move
 		// squeeze attaches under a budget that holds every block but only half
-		// the batch's history, so the attach's reservation hands blocks to the
-		// host for this instance (reserveRows); at step `first` the budget comes
+		// the batch's history, so the history's reservation hands blocks to
+		// the host for this instance; at step `first` the budget comes
 		// back and a step reclaims them, sending the rows' history up.
 		squeeze bool
 		// seq is each row's capacity. The squeezed arm's is wider, so the

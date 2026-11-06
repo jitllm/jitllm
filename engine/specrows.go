@@ -162,7 +162,7 @@ func (e errRowsRefused) Error() string {
 // block the ragged path refuses (latent attention).
 func (s *Instance) rowsVerifiable() bool {
 	_, ok := s.onRowsDevice()
-	return ok && !s.c.MLA() && s.nseq == 1
+	return ok && !s.c.MLA()
 }
 
 // stepRowsDevice is stepRows as one ragged step on the device. The rows are
