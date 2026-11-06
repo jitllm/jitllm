@@ -757,6 +757,20 @@ func (s *SessionLanes) MigrateKV(li int, k, v []float32, pos int, toDevice bool)
 }
 
 // MigrateRec is the CPU's half of moving block li's recurrent state
-// (nn.RecMigrator): the session's recurrent rows are the move's buffers, so
-// there is nothing more to take or give.
-func (s *SessionLanes) MigrateRec(li int, conv, state []float32, toDevice bool) bool { return true }
+// (nn.RecMigrator): out of the session's view into conv and state, or into
+// it.
+func (s *SessionLanes) MigrateRec(li int, conv, state []float32, toDevice bool) bool {
+	v := s.of.History().View()
+	c, st := v.Conv(li), v.State(li)
+	if c == nil || st == nil || len(conv) != len(c) || len(state) != len(st) {
+		return false
+	}
+	if toDevice {
+		copy(c, conv)
+		copy(st, state)
+	} else {
+		copy(conv, c)
+		copy(state, st)
+	}
+	return true
+}

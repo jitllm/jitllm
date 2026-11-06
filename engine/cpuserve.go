@@ -236,7 +236,7 @@ func (s *Instance) blockWhy(li int) nn.Decline {
 	case c.MoEAt(li) && (s.m.Container == nil || l.LegacyExperts ||
 		!s.ws.b.BankViews(li, len(s.m.Layers), [3]*jlm.Entry{l.Gate.E, l.Up.E, l.Down.E}) || l.Up.E == nil || l.Down.E == nil):
 		return nn.DeclineExperts
-	case c.LayerKind(li).Recurrent() && (s.view.State(li) == nil || s.view.Conv(li) == nil):
+	case c.LayerKind(li).Recurrent() && !s.keepsRec(li):
 		return nn.DeclineRecurrent
 	case s.kvl.fmt != nn.KVF16 && s.kvl.fmt != nn.KVF32:
 		return nn.DeclineKVFormat

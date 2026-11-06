@@ -360,7 +360,7 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 		// speculation step's rows are its own and may be rolled back, so it
 		// seals no summary mid-step (the boundary is sealed when the position
 		// next passes it).
-		if s.view.Recurrent() && s.kv.ns != "" && !spanAll {
+		if s.recurrent() && s.kv.ns != "" && !spanAll {
 			if pb := s.recurrentBoundary(); pb > 0 {
 				if next := ((s.seqPos(slot) / pb) + 1) * pb; next > s.seqPos(slot) {
 					width = min(width, next-s.seqPos(slot))

@@ -36,13 +36,14 @@ func (s *Instance) linearIn() bool {
 // sequence means for a linear layer: there is no per-position cache to
 // invalidate, only a running summary to forget.
 func (s *Instance) ResetRecurrent(row int) {
-	for li := range s.view.Blocks() {
-		if s.view.Conv(li) == nil {
+	nc, ns := s.dg.ConvStateLen(), s.dg.StateStride()
+	conv, state := s.recStaged()
+	for li := range s.c.NLayer {
+		if !s.keepsRec(li) || !s.recIO(li, conv, state, false) {
 			continue
 		}
-		n := s.dg.ConvStateLen()
-		clear(s.view.Conv(li)[row*n : (row+1)*n])
-		n = s.dg.StateStride()
-		clear(s.view.State(li)[row*n : (row+1)*n])
+		clear(conv[row*nc : (row+1)*nc])
+		clear(state[row*ns : (row+1)*ns])
+		s.recIO(li, conv, state, true)
 	}
 }
