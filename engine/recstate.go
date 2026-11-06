@@ -43,7 +43,7 @@ func (s *Instance) recIO(li int, conv, state []float32, in bool) bool {
 // state, each once: false at the first that is not.
 func (s *Instance) recRoutes(ok func(r *route) bool) bool {
 	var seen [len(s.routes)]bool
-	for li := range s.c.NLayer {
+	for li := s.lo; li < min(s.hi, s.c.NLayer); li++ {
 		if !s.keepsRec(li) {
 			continue
 		}

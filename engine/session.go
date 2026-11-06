@@ -89,7 +89,7 @@ type Session struct {
 	ldEmbed  nn.EmbedDevice
 	ldPrompt nn.PromptDevice
 	tier     nn.LayerDevice
-	held     []bool
+	held     []int8
 	// kvRoom is the positions ld holds room for (reserveRuns), 0 when not
 	// known.
 	kvRoom int
@@ -116,7 +116,7 @@ func (s *Instance) use(sess *Session) error {
 		return s.comeBack()
 	}
 	if cur := s.Session; cur != nil && !cur.away {
-		cur.held = append(cur.held[:0], s.onDev...)
+		cur.held = append(cur.held[:0], s.at...)
 	}
 	s.Session = sess
 	sess.on = s
@@ -185,7 +185,7 @@ func (s *Instance) comeBack() error {
 		return nil
 	}
 	for li := s.lo; li < s.hi; li++ {
-		want, has := s.devAt(li), li < len(sess.held) && sess.held[li]
+		want, has := s.devAt(li), li < len(sess.held) && sess.held[li] == routeView
 		if want == has {
 			continue
 		}
@@ -193,7 +193,7 @@ func (s *Instance) comeBack() error {
 			return err
 		}
 		if li < len(sess.held) {
-			sess.held[li] = want
+			sess.held[li] = s.at[li]
 		}
 	}
 	sess.away = false
@@ -217,14 +217,14 @@ func (s *Instance) attachTier() error {
 	}
 	if sess.ld != nil {
 		for li := range sess.held {
-			if !sess.held[li] {
+			if sess.held[li] != routeView {
 				continue
 			}
 			if !s.migrateKV(li, s.pos, false) || !s.migrateRec(li, false) {
 				return fmt.Errorf("model: block %d's history would not leave its device", li)
 			}
 			sess.ld.ReleaseLayers(li, li+1)
-			sess.held[li] = false
+			sess.held[li] = routeLanes
 		}
 		if d, ok := sess.ld.(nn.Session); ok {
 			d.Detach()
@@ -326,7 +326,7 @@ func (s *Instance) forget(sess *Session) {
 // through its own view.
 func (s *Instance) bindOwn() {
 	if sess := s.Session; !sess.away {
-		sess.held = append(sess.held[:0], s.onDev...)
+		sess.held = append(sess.held[:0], s.at...)
 		sess.away = true
 	}
 	s.Session = s.own
@@ -461,20 +461,20 @@ func (s *Instance) vacate(lo, hi int) error {
 		}
 		s.Session = o
 		for li := lo; li < hi && li < len(o.held); li++ {
-			if !o.held[li] {
+			if o.held[li] != routeView {
 				continue
 			}
 			if !s.migrateKV(li, s.pos, false) || !s.migrateRec(li, false) {
 				return fmt.Errorf("model: block %d's history would not leave its device", li)
 			}
 			o.ld.ReleaseLayers(li, li+1)
-			o.held[li] = false
+			o.held[li] = routeLanes
 		}
 		o.away = true
 		return nil
 	}
 	if !cur.away {
-		cur.held = append(cur.held[:0], s.onDev...)
+		cur.held = append(cur.held[:0], s.at...)
 	}
 	for _, o := range s.hist {
 		if err := release(o); err != nil {
@@ -504,7 +504,7 @@ func (s *Instance) As(sess *Session, f func(*Instance)) {
 	defer s.mu.Unlock()
 	if prev := s.Session; prev != sess {
 		if !prev.away {
-			prev.held = append(prev.held[:0], s.onDev...)
+			prev.held = append(prev.held[:0], s.at...)
 		}
 		sess.away = true
 		s.Session = sess

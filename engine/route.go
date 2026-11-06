@@ -86,13 +86,12 @@ func (s *Instance) bindLanes(sess *Session) {
 // routeAt is the route block li runs on.
 func (s *Instance) routeAt(li int) *route { return &s.routes[s.routeOf(li)] }
 
-// routeOf is the index of the route block li runs on in a session's routes.
-func (s *Instance) routeOf(li int) int {
-	if s.devAt(li) {
-		return routeView
-	}
-	return routeLanes
-}
+// slotNone is a block the instance does not place (Instance.at).
+const slotNone int8 = -1
+
+// routeOf is the index of the route block li runs on in a session's routes,
+// one of the instance's range, which it places.
+func (s *Instance) routeOf(li int) int { return int(s.slotAt(li)) }
 
 // openRun hands the run's device what its blocks read before it is called:
 // the side inputs, the token and, where it reads them, the step's rotary

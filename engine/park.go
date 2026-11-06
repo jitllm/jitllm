@@ -64,16 +64,16 @@ func (s *Instance) park() (ParkStats, error) {
 	if s.devCount() > 0 {
 		sess := s.Session
 		if !sess.away {
-			sess.held = append(sess.held[:0], s.onDev...)
+			sess.held = append(sess.held[:0], s.at...)
 		}
 		for li := s.lo; li < s.hi; li++ {
-			if li >= len(sess.held) || !sess.held[li] {
+			if li >= len(sess.held) || sess.held[li] != routeView {
 				continue
 			}
 			if err := s.moveHistory(li, false); err != nil {
 				return st, fmt.Errorf("model: park: %w", err)
 			}
-			sess.held[li] = false
+			sess.held[li] = routeLanes
 			st.Blocks++
 		}
 		sess.away = true
