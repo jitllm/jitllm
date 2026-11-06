@@ -167,11 +167,10 @@ type Instance struct {
 	// staging binds beside the instance's own call.
 	layers []model.Layer
 	bind   sync.Mutex
-	// owner is the device this instance holds the model on (holdOwner), and
-	// holdsCPU that a root instance holds it on its CPU device; each goes at
-	// Close.
-	owner    nn.ModelOwner
-	holdsCPU bool
+	// owners are the devices this instance holds the model on, by route
+	// (holdOn): the attached device, and the CPU device for a root instance;
+	// each goes at Close.
+	owners [2]nn.ModelOwner
 	// pageQuota is this instance's page budget (SetPageBudget), 0 for
 	// unlimited, and quota its record on the CPU device; a root's alone.
 	pageQuota atomic.Uint64
@@ -577,7 +576,8 @@ func NewInstance(m *model.Model, maxSeq int, opts ...Option) (*Instance, error) 
 	if err == nil {
 		var s *Instance
 		if s, err = newInstanceOver(m, g, fr, lo.opt, m.Cfg, 1, maxSeq, 0, m.Cfg.NLayer); err == nil {
-			s.root, s.holdsCPU = true, true
+			// The CPU device holds the model for it from above.
+			s.root, s.owners[routeLanes] = true, g.cpu
 			s.pageQuota.Store(pq)
 			s.quota = q
 			return s, nil
@@ -813,10 +813,9 @@ func (s *Instance) Close() error {
 	s.eng.cpu.Leave(s.seat)
 	if s.root {
 		defer func() {
-			if s.holdsCPU {
-				s.holdsCPU = false
+			if s.owners[routeLanes] != nil {
 				s.quota.Drop()
-				s.eng.cpu.ReleaseModel(s.m.Id)
+				s.holdOn(routeLanes, nil)
 			}
 			if s.eng.ownCPU {
 				s.eng.cpu.Close()
@@ -824,7 +823,7 @@ func (s *Instance) Close() error {
 		}()
 	}
 	// The card this instance holds the model on lets it go first.
-	defer s.holdOwner(nil)
+	defer s.holdOn(routeView, nil)
 	// A move prepared and never committed gives its target's copies back.
 	if s.pending != nil {
 		s.pending.Cancel()
@@ -917,7 +916,8 @@ func (s *Instance) SetDeviceLayers(d nn.LayerDevice, max int) error {
 	// will, both budgets are re-divided for it.
 	s.holdHost(d)
 	defer s.followHost()
-	s.holdOwner(d)
+	o, _ := d.(nn.ModelOwner)
+	s.holdOn(routeView, o)
 	if d == nil {
 		// Detaching gives the host budget back (an integrated GPU's share).
 		s.setLD(nil)
