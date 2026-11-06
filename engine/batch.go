@@ -79,7 +79,7 @@ func (s *Instance) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([
 		bple = s.bple[:n*c.PleWidth()]
 	}
 	s.tokenSide(n)
-	if why := s.cpuEmbed(s.bx[:n*c.NEmbd], bple, tokens[:n], pos[:n]); why != nn.DeclineServes {
+	if why := s.embedRows(s.bx[:n*c.NEmbd], bple, tokens[:n], pos[:n]); why != nn.DeclineServes {
 		return nil, s.embedDeclined(why)
 	}
 

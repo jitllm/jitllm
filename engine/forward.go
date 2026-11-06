@@ -134,6 +134,10 @@ type Instance struct {
 	outW    *model.Tensor
 	// ws is where this instance's forms read their weights.
 	ws weightSource
+	// inputs is the device writing a call's input rows, inScr the caller's
+	// side of them.
+	inputs nn.InputsDevice
+	inScr  inputScratch
 	// streams is the device running the residual streams' expansion and
 	// collapse, nil for a model of one stream.
 	streams nn.StreamsDevice
@@ -2223,9 +2227,9 @@ func (s *Instance) embed(token int32) error {
 	// On the CPU, unlike a prompt's rows: a device gather here measured
 	// slower (one row is usually cache-hot, and the launch sits on the
 	// token's critical path).
-	e := &s.cpu.embed
+	e := &s.inScr
 	e.tok1[0], e.pos1[0] = token, s.pos
-	if why := s.cpuEmbed(s.x, s.ple, e.tok1[:], e.pos1[:]); why != nn.DeclineServes {
+	if why := s.embedRows(s.x, s.ple, e.tok1[:], e.pos1[:]); why != nn.DeclineServes {
 		return s.embedDeclined(why)
 	}
 	s.trace(-1, "embd", s.x)
@@ -2996,9 +3000,9 @@ func (s *Instance) ForwardEmbd(e []float32) ([]float32, error) {
 	}
 	s.tok = -1
 	return s.forward(func() error {
-		st := &s.cpu.embed
+		st := &s.inScr
 		st.tok1[0], st.pos1[0] = 0, s.pos
-		if why := s.cpuGiven(s.x, s.ple, e, st.tok1[:], st.pos1[:]); why != nn.DeclineServes {
+		if why := s.givenRows(s.x, s.ple, e, st.tok1[:], st.pos1[:]); why != nn.DeclineServes {
 			return s.embedDeclined(why)
 		}
 		s.trace(-1, "embd", s.x)

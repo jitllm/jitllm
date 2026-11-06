@@ -222,6 +222,16 @@ type Ledger interface {
 	AccountOn(dev string) (Account, bool)
 }
 
+// InputsDevice is a device writing a call's input rows: the vocabulary rows
+// of toks at positions pos into x and, where the model has them, their
+// per-layer inputs into ple (Embed), or an embedding span's given rows with
+// what the model adds to them (Given), each reporting why it did not serve
+// them.
+type InputsDevice interface {
+	Embed(x, ple []float32, toks []int32, pos []int) Decline
+	Given(x, ple, rows []float32, toks []int32, pos []int) Decline
+}
+
 // StreamsDevice is a device running a model's residual streams over a
 // call's rows of the stream-major x: the expansion of stream 0 into the
 // others and the collapse of every stream into the row the head reads, each
