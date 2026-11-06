@@ -95,9 +95,11 @@ func (s *Instance) placeLanes() {
 			func(li int) { s.trace(li, "ffn_resid", s.x) })
 		s.bindLanes(s.Session)
 	}
+	// Each block is prepared by its route's device where that device runs it
+	// from the frames; one with a copy of its own took it at its offer.
 	for li := s.lo; li < min(s.hi, n); li++ {
-		if !s.devAt(li) {
-			s.exec.x.PrepLayer(li, s.planFor(li), nil)
+		if r := s.slotAt(li); r != slotNone && s.fromFrames[r] {
+			s.places[r].PrepLayer(li, s.planFor(li), nil)
 		}
 	}
 	s.placeParts()

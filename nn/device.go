@@ -861,8 +861,8 @@ type RecurrentPlan struct {
 // matvec, and because it keeps the graph in model/: the device knows nothing
 // beyond one repeating unit (no embedding lookup, sampling or tied weights).
 // PrepLayer is per block and may decline, so a model that does not fit runs
-// its first N blocks on the device and the rest on the CPU with no separate
-// mechanism for the seam.
+// its first N blocks on one device and the rest on another -- the CPU device
+// is one -- with no separate mechanism for the seam.
 // BlockPlacer is a device's side of a placement: it takes a block it is
 // offered and lets a run of them go.
 type BlockPlacer interface {
@@ -938,8 +938,8 @@ type LayerDevice interface {
 	// holds its lock: ask first, then move.
 	ReserveKV(pos int) bool
 
-	// ReleaseLayers hands blocks [lo, hi) back to the host and frees whatever
-	// they held on the device.
+	// ReleaseLayers lets blocks [lo, hi) go and frees whatever they held on
+	// the device; where they run next is the caller's placement.
 	ReleaseLayers(lo, hi int)
 
 	// PrepHead uploads the output norm and the vocabulary projection. False
