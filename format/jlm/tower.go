@@ -166,7 +166,7 @@ const (
 	// element.
 	TOpScale OpCode = 15
 	// TOpSum and TOpMax are In[0]'s elements summed, and their largest:
-	// one wide.
+	// one wide, or one a Span-wide head where Span is set.
 	TOpSum OpCode = 16
 	TOpMax OpCode = 17
 	// TOpConcat is the In values side by side, in order.
@@ -176,8 +176,16 @@ const (
 	// TOpRope is In[0]'s Span-wide heads turned by the block's attention
 	// rotary at the row's position, laid out as Chain says (RopeAsBlock,
 	// RopeNormal, RopeNeox); a block with no rotary leaves them as they are.
-	TOpRope  OpCode = 20
-	topCodes OpCode = 21
+	TOpRope OpCode = 20
+	// TOpNGramRows is the row's n-gram table rows, Width wide: its token and
+	// the Span-1 before it, held in the block's recurrent tail, hashed per
+	// head (the container's NGram hash) into a row of table Bind[0].
+	TOpNGramRows OpCode = 21
+	// TOpTailConv is In[0], Width channels, convolved depthwise by Bind[0]
+	// over Span taps Offset positions apart, its history in the block's
+	// recurrent tail.
+	TOpTailConv OpCode = 22
+	topCodes    OpCode = 23
 )
 
 // A stated rotary's layout (TOpRope's Chain).
@@ -439,6 +447,11 @@ func (p *Program) valid(name string) error {
 			return fmt.Errorf("jlm: the tower's %s op %d groups by %d", name, i, op.Span)
 		case (op.Code == TOpLayerNorm || op.Code == TOpRMSNorm) && op.Eps <= 0:
 			return fmt.Errorf("jlm: the tower's %s op %d has an epsilon of %v", name, i, op.Eps)
+		case op.Code == TOpNGramRows && (op.Span < 2 || op.Width <= 0):
+			return fmt.Errorf("jlm: the tower's %s op %d gathers %d-grams %d wide", name, i, op.Span, op.Width)
+		case op.Code == TOpTailConv && (op.Span < 1 || op.Offset < 1 || op.Width <= 0):
+			return fmt.Errorf("jlm: the tower's %s op %d convolves %d taps %d apart over %d channels", name, i,
+				op.Span, op.Offset, op.Width)
 		case op.Code == TOpRope && (op.Span <= 0 || op.Chain > RopeNeox):
 			return fmt.Errorf("jlm: the tower's %s op %d turns heads of %d laid out as %d", name, i, op.Span, op.Chain)
 		case op.Code == TOpSlice && op.Width <= 0:
@@ -479,8 +492,10 @@ func (op *TowerOp) arity() (in int, bind [2]int) {
 		return 1, [2]int{1, 2}
 	case TOpRMSNorm:
 		return 1, [2]int{0, 1}
-	case TOpLeadRow, TOpScale:
+	case TOpLeadRow, TOpScale, TOpTailConv:
 		return 1, [2]int{1, 1}
+	case TOpNGramRows:
+		return 0, [2]int{1, 1}
 	case TOpSum, TOpMax, TOpSlice, TOpRope:
 		return 1, [2]int{0, 0}
 	case TOpConcat:
@@ -663,4 +678,23 @@ func decodeProgram(r *rbuf, p *Program) {
 		p.Ops = append(p.Ops, op)
 	}
 	p.Out = r.u16()
+}
+
+// Tail is how much of a block's recurrent tail, per sequence, the program's
+// ops keep: an n-gram's tokens before the next position and a convolution's
+// history, in the order the ops come.
+func (p *Program) Tail() int {
+	if p == nil {
+		return 0
+	}
+	t := 0
+	for _, op := range p.Ops {
+		switch op.Code {
+		case TOpNGramRows:
+			t += int(op.Span) - 1
+		case TOpTailConv:
+			t += int(op.Span-1) * int(op.Offset) * int(op.Width)
+		}
+	}
+	return t
 }

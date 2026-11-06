@@ -402,10 +402,10 @@ func (m *Model) Inventory(block int32) (graph.Facts, bool) {
 		}
 		inv[e.Role] = s
 	}
-	// A row table is the model's, read by the block whose embedding gathers
-	// it (Config.NGramBlock).
-	if m.Cfg.NGramAt(int(block)) {
-		if e, ok := m.Container.Find(jlm.RoleNGramTable, jlm.DenseBlock, -1); ok {
+	// A row table is the model's, read by the block whose statement binds
+	// it.
+	for _, r := range m.Cfg.statedBinds(int(block)) {
+		if e, ok := m.Container.Find(r, jlm.DenseBlock, -1); ok && jlm.RowTable(e) {
 			inv[e.Role] = graph.Shape{K: e.K(), Rows: e.Rows()}
 		}
 	}
@@ -669,17 +669,23 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	if c.PLEDim != 0 || li < c.DeepTaps {
 		b.In("ple", c.SideWidth())
 	}
-	// The n-gram block's streams take its embedding first (frontngram.go),
-	// its rows the block's side input.
-	if c.NGramAt(li) {
-		st.in = m.ngramStreams(b, st.in, matvec)
+	// Streams with a stated addition before the attention take it first.
+	if st != nil && st.mixed && c.stated.Blocks[li].Pre.Read != nil {
+		pre := &c.stated.Blocks[li].Pre
+		y, ex, err := m.streamRead(b, f, pre, st.in, x, x, m.blockOps(b, li))
+		if err == nil {
+			st.in, err = m.streamWrites(b, f, pre, st.in, y, ex)
+		}
+		if err != nil {
+			return nil, UncoveredStreams, fmt.Errorf("block %d's stated addition: %w", li, err)
+		}
 		x = st.in[0]
 	}
 	attnIn := x
 	switch {
 	case st != nil && st.mixed:
 		var err error
-		if attnIn, st.ex, err = m.streamRead(b, f, &c.stated.Blocks[li].Attn, st.in, x, x); err != nil {
+		if attnIn, st.ex, err = m.streamRead(b, f, &c.stated.Blocks[li].Attn, st.in, x, x, m.blockOps(b, li)); err != nil {
 			return nil, UncoveredStreams, fmt.Errorf("block %d's stated attention read: %w", li, err)
 		}
 	case st != nil:
@@ -977,7 +983,7 @@ func (m *Model) blockRest(b *graph.Builder, f graph.Facts, li int, x, n, att gra
 		if st.cur != nil {
 			cur = st.cur
 		}
-		if ffnIn, st.ex, err = m.streamRead(b, f, &c.stated.Blocks[li].FFN, cur, x, x2); err != nil {
+		if ffnIn, st.ex, err = m.streamRead(b, f, &c.stated.Blocks[li].FFN, cur, x, x2, m.blockOps(b, li)); err != nil {
 			return nil, UncoveredStreams, fmt.Errorf("block %d's stated FFN read: %w", li, err)
 		}
 	}
@@ -1684,7 +1690,7 @@ type indexed struct {
 // padded with zeros to the width the row caches.
 func (m *Model) indexer(b *graph.Builder, f graph.Facts, li int, n, qIn graph.ValueID) (indexed, error) {
 	s := m.Cfg.sel
-	turn := m.statedTurn(b, li)
+	turn := m.blockOps(b, li)
 	var ix indexed
 	key, err := lowerValuesWith(b, nil, s.Key, []graph.ValueID{n}, 1, f, turn)
 	if err != nil {
@@ -1734,25 +1740,76 @@ func (m *Model) selected(b *graph.Builder, li int, ix indexed, hist graph.StateR
 	return b.Select(ix.query, hist, a)
 }
 
-// statedTurn lowers a stated rotary (jlm.TOpRope) of block li: its
-// attention's rotary at the row's position, in the stated layout, nothing on
-// a block with none.
-func (m *Model) statedTurn(b *graph.Builder, li int) func(v graph.ValueID, op *jlm.TowerOp) graph.ValueID {
-	return func(v graph.ValueID, op *jlm.TowerOp) graph.ValueID {
-		if !m.Cfg.RopeAt(li) {
-			return v
+// blockOps lowers the stated ops only a block has, block li's: a rotary
+// (jlm.TOpRope), its attention's at the row's position in the stated
+// layout, nothing on a block with none; and the ops over its recurrent tail
+// (jlm.TOpNGramRows, jlm.TOpTailConv), each at its place in the tail after
+// the delta rule's state, in the order they come.
+func (m *Model) blockOps(b *graph.Builder, li int) func(ins []graph.ValueID, op *jlm.TowerOp) (graph.ValueID, error) {
+	c := m.Cfg
+	cursor := 0
+	return func(ins []graph.ValueID, op *jlm.TowerOp) (graph.ValueID, error) {
+		switch op.Code {
+		case jlm.TOpRope:
+			v := ins[0]
+			if !c.RopeAt(li) {
+				return v, nil
+			}
+			r := m.ropeAt(li)
+			layout := ropeLayout(r.Neox)
+			switch op.Chain {
+			case jlm.RopeNormal:
+				layout = graph.RopeNorm
+			case jlm.RopeNeox:
+				layout = graph.RopeNeox
+			}
+			a := graph.Attrs{HeadDim: int(op.Span), NRot: r.NRot, Base: r.Base, Layout: layout, Freqs: len(r.Freqs) > 0, Mscale: r.Scale}
+			a.Sections, a.Interleaved = m.ropeAxes(r)
+			return b.Emit(graph.OpRope, []graph.ValueID{v}, []graph.Result{{Name: "rope", Width: b.G.Values[v].Width}}, nil, a, nil, nil)[0], nil
+		case jlm.TOpNGramRows, jlm.TOpTailConv:
+			if !c.LayerKind(li).Recurrent() {
+				return 0, fmt.Errorf("block %d keeps a recurrent tail and is no recurrent block", li)
+			}
+			g := c.Delta()
+			base := g.VHeads * g.VDim * g.KDim
+			at := b.G.StateVersion(graph.StateRecState)
+			in, out := []graph.StateRef{{State: graph.StateRecState, Version: at}}, []graph.StateRef{{State: graph.StateRecState, Version: at + 1}}
+			off := base + cursor
+			if op.Code == jlm.TOpTailConv {
+				w, taps, dil := int(op.Width), int(op.Span), int(op.Offset)
+				cursor += (taps - 1) * dil * w
+				return b.Emit(graph.OpStateConv, ins, []graph.Result{{Name: "tail.conv", Width: w}},
+					[]graph.Binding{{Role: op.Bind[0], K: taps, Rows: w}},
+					graph.Attrs{Taps: taps, Dil: dil, Offset: off, Span: stateSpan(c, base)}, in, out)[0], nil
+			}
+			n := int(op.Span)
+			cursor += n - 1
+			heads := (n - 1) * c.NGramHeadsPer
+			if heads <= 0 || int(op.Width)%heads != 0 || len(c.NGramOff) < heads || len(c.NGramVoc) < heads {
+				return 0, fmt.Errorf("block %d gathers %d-grams %d wide over %d heads' ranges", li, n, op.Width, len(c.NGramOff))
+			}
+			rowW := int(op.Width) / heads
+			tok := b.Emit(graph.OpToken, nil, []graph.Result{{Name: "ng.tok", Width: 1, Elem: graph.ElemU32}}, nil, graph.Attrs{}, nil, nil)[0]
+			win := b.Emit(graph.OpNGramWindow, []graph.ValueID{tok}, []graph.Result{{Name: "ng.win", Width: n, Elem: graph.ElemU32}}, nil,
+				graph.Attrs{Taps: n, Offset: off, Span: stateSpan(c, base), Words: []uint64{uint64(uint32(c.NGramImage))}}, in, out)[0]
+			words := append([]uint64{uint64(uint32(c.NGramEOS))}, c.NGramMul...)
+			for h := range heads {
+				words = append(words, c.NGramOff[h], c.NGramVoc[h])
+			}
+			hashed := b.Emit(graph.OpNGramHash, []graph.ValueID{win}, []graph.Result{
+				{Name: "ng.rows", Width: heads, Elem: graph.ElemU32}, {Name: "ng.next", Width: n - 1, Elem: graph.ElemU32}}, nil,
+				graph.Attrs{Span: c.NGramHeadsPer, Words: words, Reset: true}, nil, nil)
+			rows := make([]graph.ValueID, heads)
+			for h := range heads {
+				col := b.Emit(graph.OpSlice, []graph.ValueID{hashed[0]}, []graph.Result{{Name: "ng.row", Width: 1, Elem: graph.ElemU32}}, nil,
+					graph.Attrs{Offset: h, Width: 1}, nil, nil)[0]
+				rows[h] = b.Emit(graph.OpEmbed, []graph.ValueID{col}, []graph.Result{{Name: "ng.emb", Width: rowW}},
+					[]graph.Binding{{Role: op.Bind[0], K: rowW, Rows: int(c.NGramVoc[h]), From: int(c.NGramOff[h])}},
+					graph.Attrs{}, nil, nil)[0]
+			}
+			return b.Emit(graph.OpConcat, rows, []graph.Result{{Name: "ngram", Width: int(op.Width)}}, nil, graph.Attrs{}, nil, nil)[0], nil
 		}
-		r := m.ropeAt(li)
-		layout := ropeLayout(r.Neox)
-		switch op.Chain {
-		case jlm.RopeNormal:
-			layout = graph.RopeNorm
-		case jlm.RopeNeox:
-			layout = graph.RopeNeox
-		}
-		a := graph.Attrs{HeadDim: int(op.Span), NRot: r.NRot, Base: r.Base, Layout: layout, Freqs: len(r.Freqs) > 0, Mscale: r.Scale}
-		a.Sections, a.Interleaved = m.ropeAxes(r)
-		return b.Emit(graph.OpRope, []graph.ValueID{v}, []graph.Result{{Name: "idx.rope", Width: b.G.Values[v].Width}}, nil, a, nil, nil)[0]
+		return 0, fmt.Errorf("op code %d is no block's", op.Code)
 	}
 }
 

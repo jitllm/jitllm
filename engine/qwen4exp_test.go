@@ -97,8 +97,29 @@ func TestQwen4ExpMatchesTransformers(t *testing.T) {
 // (q4eComposedViolations). Each must move the logits far past c6NMSE.
 func q4eViolations() []c6Violation {
 	return []c6Violation{
-		{"no n-gram embedding", func(m *model.Model) func() { return restated(m, zeroing(reading(graph.OpAdd, "ng.ck"))) }},
-		{"the n-gram embedding without its convolution", func(m *model.Model) func() { return restated(m, zeroing(opsNamed("ng.conv.act"))) }},
+		{"no n-gram embedding", func(m *model.Model) func() {
+			return streamsMut(m, func(s *jlm.Streams) {
+				for i := range s.Blocks {
+					s.Blocks[i].Pre = jlm.SubStreams{}
+				}
+			})
+		}},
+		{"the n-gram embedding without its convolution", func(m *model.Model) func() {
+			return streamsMut(m, func(s *jlm.Streams) {
+				for i := range s.Blocks {
+					p := s.Blocks[i].Pre.Read
+					if p == nil {
+						continue
+					}
+					// The sum of the gated values and the convolution's silu
+					// keeps the gated values alone.
+					q := *p
+					q.Ops = slices.Clone(p.Ops)
+					q.Out = q.Ops[int(q.Out)-int(q.NIn)].In[0]
+					s.Blocks[i].Pre.Read = &q
+				}
+			})
+		}},
 		{"the n-gram window not reset at the end of a sequence", func(m *model.Model) func() {
 			return restated(m, editing(opsOfKind(graph.OpNGramHash), func(o *graph.Op) { o.Attr.Reset = false }))
 		}},

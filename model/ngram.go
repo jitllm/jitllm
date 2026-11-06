@@ -1,35 +1,57 @@
 package model
 
 import (
+	"fmt"
+
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
 )
 
-// The n-gram embedding: Qwen3.8-Flash-Next's PLE (transformers'
-// Qwen4ExpTextPLELayer, llama.cpp's build_ple), on one linear block, before
-// its attention mix.
-//
-// Each position's token and its NGram-1 predecessors are hashed per head
-// (Config.NGramMul, NGramOff, NGramVoc; a predecessor at or before an
-// end-of-sequence token, or before the sequence, reads as that token) into a
-// row of a shared table, read a row at a time from the container
-// (jlm.RowTable): it is hundreds of millions of rows, of which a position
-// reads (NGram-1)*NGramHeadsPer, each head's from its own range. The graph
-// states all of it (frontngram.go); the CPU device reads the rows a call's
-// hash names into the table's view between its gathers' halves (cpuForm).
-// The rows, concatenated, project to a key
-// per stream and one value; each stream's normed key and normed residual give
-// a gate, sigmoid of the signed square root of their scaled dot product; the
-// gated value is added to the stream, and so is a depthwise convolution over
-// it (normed), dilated by NGram, through silu.
-//
-// The predecessors and the convolution's history are the block's recurrent
-// state, after the delta rule's (Config.ngramStateLen), so they page,
-// relocate and are prefix-cached with it.
+// An n-gram table (jlm.TOpNGramRows): each position's token and its
+// predecessors are hashed per head (Config.NGramMul, NGramOff, NGramVoc; a
+// predecessor at or before an end-of-sequence token, or before the
+// sequence, reads as that token) into a row of a shared table, read a row at
+// a time from the container (jlm.RowTable): it is hundreds of millions of
+// rows, of which a position reads one a head, each head's from its own
+// range. The CPU device reads the rows a call's hash names into the table's
+// view between its gathers' halves (cpuForm). The predecessors are the
+// block's recurrent tail (jlm.Program.Tail), so they page, relocate and are
+// prefix-cached with it.
 
 // ngramTable is the container's n-gram table.
 type ngramTable struct {
 	E        *jlm.Entry
 	typ      quant.Type
 	RowBytes int
+}
+
+// loadNGramTable reads the n-gram block's table.
+func loadNGramTable(m *Model, cfg *Config, f *jlm.File) error {
+	if cfg.NGramBlock == 0 {
+		return nil
+	}
+	e, ok := f.Find(jlm.RoleNGramTable, jlm.DenseBlock, -1)
+	if !ok || !jlm.RowTable(e) || e.NDim != 2 || int(e.Dims[0]) != cfg.NGramRowDim {
+		return fmt.Errorf("model: %s has an n-gram block and no n-gram table %d wide", cfg.Arch, cfg.NGramRowDim)
+	}
+	t, ok := jlm.SourceType(e.Type)
+	if !ok {
+		return fmt.Errorf("model: the n-gram table is %v", e.Type)
+	}
+	switch t {
+	case quant.F32, quant.F16, quant.BF16, quant.IQ4_NL:
+	default:
+		return fmt.Errorf("model: an n-gram table of %v has no row reader", t)
+	}
+	rb, err := jlm.RowBytes(e)
+	if err != nil || rb > jlm.Align {
+		return fmt.Errorf("model: n-gram rows of %d bytes (%v)", rb, err)
+	}
+	for h := range cfg.NGramVoc {
+		if cfg.NGramOff[h]+cfg.NGramVoc[h] > e.Dims[1] {
+			return fmt.Errorf("model: n-gram head %d reads past the table's %d rows", h, e.Dims[1])
+		}
+	}
+	m.Ngram = &ngramTable{E: e, typ: t, RowBytes: int(rb)}
+	return nil
 }

@@ -199,9 +199,11 @@ func encodeConfigAt(c *Config, v uint32) []byte {
 	// The eighteenth, the activation quantization, implies the first
 	// seventeen; an older reader drops it.
 	// The nineteenth, the streams' expansions and writes, implies the first
-	// eighteen; the twentieth, the selection, the first nineteen. An older
-	// reader drops each.
-	sel := c.Selection != nil
+	// eighteen; the twentieth, the selection, the first nineteen; the
+	// twenty-first, the blocks' additions before their attention, the first
+	// twenty. An older reader drops each.
+	pre := c.Streams.addsBefore()
+	sel := pre || c.Selection != nil
 	sw := sel || c.Streams.writesStreams()
 	aq := sw || c.ActQuant != ActQuantNone
 	rev := aq || c.Revision != 0 || c.RopeScaleSWA != 0 || len(c.BidirLayers) != 0
@@ -340,6 +342,9 @@ func encodeConfigAt(c *Config, v uint32) []byte {
 	}
 	if sel {
 		encodeSelection(w, c.Selection)
+	}
+	if pre {
+		encodeStreamPre(w, &c.Streams)
 	}
 	return w.b
 }
@@ -514,6 +519,9 @@ func decodeConfigAt(b []byte, v uint32) (*Config, error) {
 	}
 	if r.err == nil && len(r.b) > 0 {
 		c.Selection = decodeSelection(r)
+	}
+	if r.err == nil && len(r.b) > 0 {
+		decodeStreamPre(r, &c.Streams)
 	}
 	if r.err != nil {
 		return nil, r.err

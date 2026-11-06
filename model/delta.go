@@ -152,8 +152,11 @@ func (g DeltaGeom) StateStride() int { return g.DeltaStateLen() + g.tail }
 // linear block has the same row, [delta rule | tail], so a device keeps one
 // slot width for all of them (nn.RecurrentPlan.TailLen).
 func (c *Config) RecTailLen() int {
-	if c.NGramBlock != 0 {
-		return c.ngramStateLen()
+	t := 0
+	if c.stated != nil {
+		for i := range c.stated.Blocks {
+			t = max(t, c.stated.Blocks[i].Pre.Read.Tail())
+		}
 	}
-	return 0
+	return t
 }

@@ -867,14 +867,6 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 	out.NGramEOS, out.NGramImage = int32(c.NGramEOS), int32(c.NGramImage)
 	out.NGramMul, out.NGramOff, out.NGramVoc = c.NGramMul, c.NGramOff, c.NGramVoc
 	out.DeltaSigmoidGate = c.Flags2.Has(jlm.Flag2DeltaSigmoidGate)
-	if out.NGramBlock != 0 {
-		if !out.LayerKind(out.NGramBlock - 1).Recurrent() {
-			return nil, fmt.Errorf("model: %s: the n-gram block %d is not a linear block", out.Arch, out.NGramBlock-1)
-		}
-		if out.NGramRowDim*out.ngramHeads() != out.NGramWidth() {
-			return nil, fmt.Errorf("model: %s: %d n-gram heads of %d", out.Arch, out.ngramHeads(), out.NGramRowDim)
-		}
-	}
 	out.AttnResBlock = int(c.AttnResBlock)
 	out.ExpertLatent = int(c.ExpertLatent)
 	out.KDALowerBound = c.KDALowerBound
@@ -1280,6 +1272,10 @@ func Open(path string, options ...Option) (*Model, error) {
 	if (m.Cfg.AttnResBlock != 0 || m.Cfg.HCLowRank != 0) && m.Cfg.statedStreams() <= 1 {
 		m.Close()
 		return nil, &UpgradeRequiredError{Path: path, What: "residual streams"}
+	}
+	if m.Cfg.NGramBlock != 0 && m.Cfg.RecTailLen() == 0 {
+		m.Close()
+		return nil, &UpgradeRequiredError{Path: path, What: "the n-gram block"}
 	}
 	if cc := m.Container.Config(); cc.IdxHeads != 0 && cc.Selection == nil && len(cc.CompKinds) == 0 {
 		m.Close()
