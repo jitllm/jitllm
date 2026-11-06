@@ -863,6 +863,11 @@ type RecurrentPlan struct {
 // PrepLayer is per block and may decline, so a model that does not fit runs
 // its first N blocks on one device and the rest on another -- the CPU device
 // is one -- with no separate mechanism for the seam.
+// PageQuota is a device that budgets a model's frames by the instances
+// holding it there: SetPageQuota is this instance's quota in bytes, of which
+// the device it attached holds held of the host's memory.
+type PageQuota interface{ SetPageQuota(bytes, held uint64) }
+
 // DecodeSharer is a device several instances decode on at once: Decoding
 // records that this one decodes now, OthersDecoding whether another does.
 type DecodeSharer interface {
