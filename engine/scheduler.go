@@ -287,9 +287,9 @@ func (s *Instance) newHistory(maxSeq int) (*Session, error) {
 	sess.bpos = make([]int, 1)
 	sess.logits = make([]float32, s.c.NVocab)
 	sess.rmarks = model.RopeMarks{}
-	if s.view.Recurrent() {
-		for li := range s.view.Blocks() {
-			if s.view.Conv(li) != nil {
+	if s.recurrent() {
+		for li := range s.c.NLayer {
+			if s.keepsRec(li) {
 				sess.cpuView().MakeRec(li, s.dg.ConvStateLen(), s.dg.StateStride())
 			}
 		}

@@ -29,13 +29,14 @@ func (s *Instance) recEvery() int {
 	}
 	s.recEv = -1
 	p := s.recurrentBoundary()
-	if !s.view.Recurrent() || p == 0 {
+	if !s.recurrent() || p == 0 {
 		return 0
 	}
 	var point, perPos uint64
-	for li := range s.view.Blocks() {
-		if s.view.Conv(li) != nil {
-			point += uint64(len(s.view.Conv(li))+len(s.view.State(li))) * 4
+	nc, ns := s.recLens()
+	for li := range s.c.NLayer {
+		if s.keepsRec(li) {
+			point += uint64(nc+ns) * 4
 		}
 	}
 	for li := s.kv.lo; li < len(s.kv.layers); li++ {
@@ -76,16 +77,16 @@ func (s *Instance) recPointKey(pos int) (string, int) {
 // under a cache namespace with a store, on a hybrid, outside a speculation
 // step (whose rows may be rolled back).
 func (s *Instance) recPointsOn() bool {
-	if !s.view.Recurrent() || s.kv.ns == "" || s.rows != nil {
+	if !s.recurrent() || s.kv.ns == "" || s.rows != nil {
 		return false
 	}
 	_, none := s.kv.store.(NoStore)
 	return !none
 }
 
-// sealRecLayer stores layer li's summary as it is in rconv/rstate, as the
-// restore point at pos. The two are written as one entry through a buffer
-// kept on the instance, so a warm prompt allocates nothing for it.
+// sealRecLayer stores layer li's summary, read from the device it runs on,
+// as the restore point at pos. The two are written as one entry through a
+// buffer kept on the instance, so a warm prompt allocates nothing for it.
 func (s *Instance) sealRecLayer(li, pos int) bool {
 	key, idx := s.recPointKey(pos)
 	if key == "" {
@@ -96,14 +97,12 @@ func (s *Instance) sealRecLayer(li, pos int) bool {
 	if d := s.recDev(li); d != nil {
 		return d.SnapRec(li, key)
 	}
-	nc, ns := len(s.view.Conv(li)), len(s.view.State(li))
-	if cap(s.recBuf) < nc+ns {
-		s.recBuf = make([]float32, nc+ns)
+	conv, state := s.recStaged()
+	if !s.recIO(li, conv, state, false) {
+		s.kv.syncFailed++
+		return false
 	}
-	b := s.recBuf[:nc+ns]
-	copy(b, s.view.Conv(li))
-	copy(b[nc:], s.view.State(li))
-	s.recRd.Reset(kvBytesOf(b))
+	s.recRd.Reset(kvBytesOf(s.recBuf[:len(conv)+len(state)]))
 	if err := s.kv.store.Set(key, s.recurrentLayer(li), idx, &s.recRd); err != nil {
 		s.kv.failed++
 		return false
@@ -133,7 +132,7 @@ func (s *Instance) recPoint(pos int) bool {
 // from the last one, when that is inside it. The key is kept for the next.
 func (s *Instance) markParting(key []int32) {
 	s.recMark = 0
-	if !s.view.Recurrent() {
+	if !s.recurrent() {
 		return
 	}
 	c := 0
@@ -149,23 +148,21 @@ func (s *Instance) markParting(key []int32) {
 }
 
 // recChunkPoint is a chunk's end: where it ends on a restore point, a placed
-// linear block's summary is read back from the device and stored as the
-// point (its row loop runs there, out of recRowPoint's reach). pos is where
-// the chunk ended.
+// linear block's summary is read from its device and stored as the point
+// (its row loop runs there, out of recRowPoint's reach). pos is where the
+// chunk ended.
 func (s *Instance) recChunkPoint(slot, pos int) {
 	if slot != 0 || !s.recPointsOn() || !s.recPoint(pos) || s.devCount() == 0 || s.ld == nil {
 		return
 	}
 	for li := s.lo; li < len(s.onDev); li++ {
-		if !s.onDev[li] || s.view.Conv(li) == nil || s.recDev(li) != nil {
+		if !s.onDev[li] || !s.keepsRec(li) || s.recDev(li) != nil {
 			continue
 		}
-		// Read back where the device keeps no points.
-		if !s.migrateRecLayer(li, false) {
-			s.kv.syncFailed++
+		// Read from the device where it keeps no points.
+		if !s.sealRecLayer(li, pos) {
 			return
 		}
-		s.sealRecLayer(li, pos)
 	}
 	s.sealRecOnDevice(pos)
 }
@@ -179,8 +176,8 @@ func (s *Instance) sealRecOnDevice(pos int) bool {
 	}
 	s.recBatch = s.recBatch[:0]
 	var d nn.RecShareDevice
-	for li := range s.view.Blocks() {
-		if s.view.Conv(li) == nil {
+	for li := range s.c.NLayer {
+		if !s.keepsRec(li) {
 			continue
 		}
 		if x := s.recDev(li); x != nil {
