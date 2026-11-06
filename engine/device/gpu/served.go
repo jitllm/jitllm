@@ -2175,8 +2175,6 @@ func (l *layer) namedWeight(r jlm.Role) *resident {
 		return l.shUp
 	case jlm.RoleShExpDown:
 		return l.shDown
-	case jlm.RoleStreamRouter:
-		return l.altRouterW
 	}
 	return nil
 }
@@ -2954,7 +2952,7 @@ func (g *devTier) servedBlockAs(l *layer, li int, cs backend.Buf, pl *kvLayerPoo
 		for _, o := range l.graph.Ops {
 			for _, w := range o.Weight {
 				// A bank's bias is a row an expert, held as one vector.
-				if w.Rows > 0 && l.roleVector(w.Role) == nil {
+				if w.Rows > 0 && (l.roleVector(w.Role) == nil || l.roleWeight(w.Role) != nil) {
 					r := l.roleWeight(w.Role)
 					if r == nil {
 						return sl, fmt.Errorf("the composed block %d binds %v, which the tier holds no matrix for", li, w.Role)

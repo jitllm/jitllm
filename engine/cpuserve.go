@@ -1491,14 +1491,10 @@ func (s *Instance) cpuRoleWeight(li int, l *model.Layer, r jlm.Role) *model.Tens
 			return &m.PosEmbd
 		case r == jlm.RoleOutput || r == jlm.RoleTokenEmbd:
 			return s.outW
-		case r == jlm.RoleStreamExpand && m.AltProj.Rows != 0:
-			return &m.AltProj
 		case r == jlm.RolePLETokEmbd && m.PleTok.E != nil:
 			return &m.PleTok
 		case r == jlm.RolePLEModelProj && m.PleProj.E != nil:
 			return &m.PleProj
-		case r >= jlm.RoleStreamCollapse1 && int(r-jlm.RoleStreamCollapse1) < len(m.AltUnembd):
-			return &m.AltUnembd[r-jlm.RoleStreamCollapse1]
 		case r == jlm.RoleEmbdDense1:
 			return &m.Dense1
 		case r == jlm.RoleEmbdDense2:

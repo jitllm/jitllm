@@ -51,8 +51,8 @@ func TestGemma3nServesComposedOnCPU(t *testing.T) {
 			if c := coveredBlocks(m); c != m.Cfg.NLayer {
 				t.Fatalf("the front end states %d of %d blocks: %s (%v)", c, m.Cfg.NLayer, m.Uncovered(0), m.UncoveredErr(0))
 			}
-			if g := m.Composing().BlockGraph(0); len(g.Out) != m.Cfg.PredStreams {
-				t.Fatalf("block 0 writes %d streams, want %d", len(g.Out), m.Cfg.PredStreams)
+			if g := m.Composing().BlockGraph(0); len(g.Out) != m.Cfg.Streams() {
+				t.Fatalf("block 0 writes %d streams, want %d", len(g.Out), m.Cfg.Streams())
 			}
 			worst := worstFrom(want, cpuLogits(t, m, toks, cpuFaultNone, true, withKVPage(page)))
 			n := len(toks) - 4

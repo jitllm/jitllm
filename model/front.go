@@ -655,24 +655,25 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	// own and runs on stream 0's prediction (frontstreams.go).
 	var st *streams
 	if c.StatesStreams() {
-		st = &streams{in: []graph.ValueID{x}, mixed: c.mixesStreams()}
+		st = &streams{in: []graph.ValueID{x}}
 		for k := 1; k < c.Streams(); k++ {
 			st.in = append(st.in, b.In(fmt.Sprintf("x.%d", k), d))
 		}
-		if st.mixed && c.stated.Blocks[li].Bank != 0 {
+		if c.stated.Blocks[li].Bank != 0 {
 			st.bank = streamCopy(b, x)
 		}
 	}
 	// A model of per-layer embeddings gives each block the row's every
 	// layer's input (the input rows' second output): the block reads its own.
 	// A tap's block reads the row's tap rows the same way.
+	var pleIn graph.ValueID
 	if c.PLEDim != 0 || li < c.DeepTaps {
-		b.In("ple", c.SideWidth())
+		pleIn = b.In("ple", c.SideWidth())
 	}
 	// Streams with a stated addition before the attention take it first.
-	if st != nil && st.mixed && c.stated.Blocks[li].Pre.Read != nil {
+	if st != nil && c.stated.Blocks[li].Pre.Read != nil {
 		pre := &c.stated.Blocks[li].Pre
-		y, ex, err := m.streamRead(b, f, pre, st.in, x, x, m.blockOps(b, li))
+		y, ex, err := m.streamRead(b, f, pre, st.in, x, x, pleIn, m.blockOps(b, li))
 		if err == nil {
 			st.in, err = m.streamWrites(b, f, pre, st.in, y, ex)
 		}
@@ -683,19 +684,13 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	}
 	attnIn := x
 	switch {
-	case st != nil && st.mixed:
+	case st != nil:
 		var err error
-		if attnIn, st.ex, err = m.streamRead(b, f, &c.stated.Blocks[li].Attn, st.in, x, x, m.blockOps(b, li)); err != nil {
+		if attnIn, st.ex, err = m.streamRead(b, f, &c.stated.Blocks[li].Attn, st.in, x, x, pleIn, m.blockOps(b, li)); err != nil {
 			return nil, UncoveredStreams, fmt.Errorf("block %d's stated attention read: %w", li, err)
 		}
-	case st != nil:
-		st.pred = m.predicted(b, f, st.in)
-		x, attnIn = st.pred[0], st.pred[0]
 	}
 	n := preNorm(attnIn, jlm.RoleAttnNorm, jlm.RoleAttnNormBias)
-	if st != nil && has(jlm.RoleLowRankIn) {
-		st.side = m.lowRank(b, f, n)
-	}
 	var mix graph.ValueID
 	var err error
 	switch c.mixerAt(li) {
@@ -935,7 +930,7 @@ func (m *Model) blockRest(b *graph.Builder, f graph.Facts, li int, x, n, att gra
 	// stated; x2 is then none of them.
 	var x2 graph.ValueID
 	switch {
-	case st != nil && st.mixed && len(c.stated.Blocks[li].Attn.Writes) != 0:
+	case st != nil && len(c.stated.Blocks[li].Attn.Writes) != 0:
 		var err error
 		if st.cur, err = m.streamWrites(b, f, &c.stated.Blocks[li].Attn, st.in, norm(proj, jlm.RolePostAttnNorm), st.ex); err != nil {
 			return nil, UncoveredStreams, fmt.Errorf("block %d's stated attention writes: %w", li, err)
@@ -943,26 +938,20 @@ func (m *Model) blockRest(b *graph.Builder, f graph.Facts, li int, x, n, att gra
 	default:
 		x2 = postResid(resid(x, norm(proj, jlm.RolePostAttnNorm)), jlm.RoleAttnOutNorm, jlm.RoleAttnOutNormBias)
 	}
-	if st != nil && st.mixed && c.stated.Blocks[li].Attn.Join != nil {
+	if st != nil && c.stated.Blocks[li].Attn.Join != nil {
 		var err error
 		if x2, err = m.streamJoin(b, f, &c.stated.Blocks[li].Attn, x, norm(proj, jlm.RolePostAttnNorm), resid); err != nil {
 			return nil, UncoveredStreams, fmt.Errorf("block %d's stated attention join: %w", li, err)
 		}
 		x2 = postResid(x2, jlm.RoleAttnOutNorm, jlm.RoleAttnOutNormBias)
 	}
-	if st != nil && st.side != 0 {
-		x2 = mapRow(b, "joined", graph.Attrs{Fn: graph.MapMul, Const: 1 / math.Sqrt2}, nil, d, b.Add(x2, st.side))
-	}
 	if !c.MoEAt(li) && !has(jlm.RoleFFNUp) && !has(jlm.RoleFFNDown) {
 		if st != nil && st.cur != nil {
 			b.Out(st.cur...)
 			return verified(b, f)
 		}
-		if st != nil && st.mixed {
-			return m.banked(b, f, li, st, x2, has)
-		}
 		if st != nil {
-			return m.corrected(b, f, li, st, x2, has)
+			return m.banked(b, f, li, st, x2, has)
 		}
 		y, why, err := m.perLayer(b, f, li, x2)
 		if err != nil {
@@ -977,13 +966,18 @@ func (m *Model) blockRest(b *graph.Builder, f graph.Facts, li int, x, n, att gra
 	switch {
 	case c.Parallel:
 		ffnIn = x
-	case st != nil && st.mixed:
+	case st != nil:
 		var err error
 		cur := st.in
 		if st.cur != nil {
 			cur = st.cur
 		}
-		if ffnIn, st.ex, err = m.streamRead(b, f, &c.stated.Blocks[li].FFN, cur, x, x2, m.blockOps(b, li)); err != nil {
+		// The block's per-layer inputs are its graph's last input.
+		var pleIn graph.ValueID
+		if c.PLEDim != 0 || li < c.DeepTaps {
+			pleIn = b.G.In[len(b.G.In)-1]
+		}
+		if ffnIn, st.ex, err = m.streamRead(b, f, &c.stated.Blocks[li].FFN, cur, x, x2, pleIn, m.blockOps(b, li)); err != nil {
 			return nil, UncoveredStreams, fmt.Errorf("block %d's stated FFN read: %w", li, err)
 		}
 	}
@@ -1011,7 +1005,7 @@ func (m *Model) blockRest(b *graph.Builder, f graph.Facts, li int, x, n, att gra
 		h = norm(h, jlm.RoleFFNSubNorm)
 		ffn = matvec(h, jlm.RoleFFNDown, d, stored(jlm.RoleFFNDownBias)...)
 	}
-	if st != nil && st.mixed && len(c.stated.Blocks[li].FFN.Writes) != 0 {
+	if st != nil && len(c.stated.Blocks[li].FFN.Writes) != 0 {
 		cur := st.in
 		if st.cur != nil {
 			cur = st.cur
@@ -1023,15 +1017,12 @@ func (m *Model) blockRest(b *graph.Builder, f graph.Facts, li int, x, n, att gra
 		b.Out(out...)
 		return verified(b, f)
 	}
-	if st != nil && st.mixed {
+	if st != nil {
 		y, err := m.streamJoin(b, f, &c.stated.Blocks[li].FFN, x2, norm(ffn, jlm.RolePostFFNNorm), resid)
 		if err != nil {
 			return nil, UncoveredStreams, fmt.Errorf("block %d's stated FFN join: %w", li, err)
 		}
 		return m.banked(b, f, li, st, y, has)
-	}
-	if st != nil {
-		return m.corrected(b, f, li, st, resid(x2, norm(ffn, jlm.RolePostFFNNorm)), has)
 	}
 	y, why, err := m.perLayer(b, f, li, postResid(resid(x2, norm(ffn, jlm.RolePostFFNNorm)), jlm.RoleLayerOutNorm, jlm.RoleLayerOutNormBias))
 	if err != nil {
@@ -1560,7 +1551,7 @@ func (m *Model) embedGraph(streams bool) (*graph.Graph, Uncovered, error) {
 	// vector of them is a head's (clef's fields), which the rows never read.
 	tt, types := f.Inventory[jlm.RoleTokenTypes]
 	types = types && tt.K == c.NEmbd && tt.Rows > 0
-	if streams && c.Streams() > 1 && !c.mixesStreams() && !m.ExpandsStreams() {
+	if streams && c.Streams() > 1 && !c.StatesStreams() && !m.ExpandsStreams() {
 		return nil, UncoveredStreams, nil
 	}
 	b := graph.NewBlock(-1)

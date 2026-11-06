@@ -185,10 +185,9 @@ const (
 	//
 	// Per block: RoleStreamRouter (PredStreams rows of n_embd) reads
 	// rmsnorm(x0) * RoleStreamRouterNorm / n_embd into one weight a stream;
-	// RoleStreamPredictCoef holds the prediction coefficients TRANSPOSED at
-	// conversion, PredStreams rows of PredStreams^2, so the coefficients are a
-	// sum of the rows weighted by the router's weights; RoleStreamCorrectCoef
-	// the correction's, PredStreams rows of PredStreams, the same way;
+	// RoleStreamPredictCoef holds the prediction coefficients, PredStreams^2
+	// rows of PredStreams the router's weights multiply; RoleStreamCorrectCoef
+	// the correction's, PredStreams rows of PredStreams;
 	// RoleStreamCorrectScale the active stream's scale before the per-layer
 	// input gate. RoleLowRankIn (n_embd -> rank) and RoleLowRankOut (rank ->
 	// n_embd) are the side branch and RoleLowRankNorm its norm.

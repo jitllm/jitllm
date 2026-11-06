@@ -202,7 +202,8 @@ func encodeConfigAt(c *Config, v uint32) []byte {
 	// eighteen; the twentieth, the selection, the first nineteen; the
 	// twenty-first, the blocks' additions before their attention, the first
 	// twenty. An older reader drops each.
-	pre := c.Streams.addsBefore()
+	post := c.Streams.sharesWrites()
+	pre := post || c.Streams.addsBefore()
 	sel := pre || c.Selection != nil
 	sw := sel || c.Streams.writesStreams()
 	aq := sw || c.ActQuant != ActQuantNone
@@ -345,6 +346,9 @@ func encodeConfigAt(c *Config, v uint32) []byte {
 	}
 	if pre {
 		encodeStreamPre(w, &c.Streams)
+	}
+	if post {
+		encodeStreamPosts(w, &c.Streams)
 	}
 	return w.b
 }
@@ -522,6 +526,9 @@ func decodeConfigAt(b []byte, v uint32) (*Config, error) {
 	}
 	if r.err == nil && len(r.b) > 0 {
 		decodeStreamPre(r, &c.Streams)
+	}
+	if r.err == nil && len(r.b) > 0 {
+		decodeStreamPosts(r, &c.Streams)
 	}
 	if r.err != nil {
 		return nil, r.err

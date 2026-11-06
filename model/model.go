@@ -279,11 +279,6 @@ type Config struct {
 	ExpertLatent  int
 	KDALowerBound float32
 	LatentNormEps float64
-	// PredStreams is how many residual streams each block predicts and
-	// corrects (altup.go), zero for one stream; NSparse blocks lead with a
-	// gaussian top-k on their FFN gate at SparseStd deviations.
-	PredStreams, NSparse int
-	SparseStd            float32
 	// kvSrcAt replaces KVSource's choice for the shared blocks, a source a
 	// block (nil: none), for a gate's violation only.
 	KvSrcAt []int
@@ -770,11 +765,9 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 		return nil, fmt.Errorf("model: %s: a selection of %d keys %d wide over %d kv heads of %d", out.Arch,
 			s.Groups, s.KeyWidth, out.NKVHead, out.HeadDim)
 	}
-	out.PredStreams, out.NSparse, out.SparseStd = int(c.PredStreams), int(c.NSparse), c.SparseStd
-	if out.PredStreams == 1 || (out.PredStreams != 0 && (out.PLEDim == 0 || out.MLA() || out.Hybrid() || out.MoE() ||
-		out.Parallel || out.GeomSplit())) || out.NSparse > out.NLayer {
-		return nil, fmt.Errorf("model: %s: %d AltUp streams (per-layer input %d) and %d sparse blocks of %d",
-			out.Arch, out.PredStreams, out.PLEDim, out.NSparse, out.NLayer)
+	if c.PredStreams != 0 {
+		return nil, fmt.Errorf("model: %s: the container states %d predicted streams in fields of their own, which this "+
+			"build reads only as the residual's stated streams: convert the model again", out.Arch, c.PredStreams)
 	}
 	out.DoubleFFN = c.Flags2.Has(jlm.Flag2DoubleFFN)
 	if (out.NKVShared != 0 || out.PLEDim != 0) && (out.MLA() || out.Hybrid() || out.MoE()) {
@@ -883,7 +876,7 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 		out.ExpertWeightIn):
 		return nil, fmt.Errorf("model: %s: a latent mixture at %d on %d experts at n_embd %d", out.Arch,
 			out.ExpertLatent, out.NExpert, out.NEmbd)
-	case out.AttnResBlock < 0 || out.AttnResBlock != 0 && (out.PredStreams != 0 || out.HCMult != 0 || out.Parallel ||
+	case out.AttnResBlock < 0 || out.AttnResBlock != 0 && (out.HCMult != 0 || out.Parallel ||
 		out.NMTP != 0):
 		return nil, fmt.Errorf("model: %s: a checkpoint bank every %d blocks beside another residual "+
 			"structure", out.Arch, out.AttnResBlock)
@@ -989,9 +982,6 @@ type Layer struct {
 	// container stores it, the vector a composed block binds.
 	OutScale    float32
 	OutScaleRow []float32
-	// AltRouter is the streams' router (Config.PredStreams, altup.go); its
-	// vectors are in vecs.
-	AltRouter Tensor
 	// Multi-head Latent Attention, all nil unless Config.KVLoraRank is set.
 	// wq is then the one-step query (DeepSeek-V2-Lite, q_lora_rank null) and
 	// wqa/wqb the two-step one; exactly one of those is populated.
@@ -1181,10 +1171,6 @@ type Model struct {
 	// (Config.PLEDim). Empty everywhere else.
 	PleTok, PleProj Tensor
 	PleNorm         []float32
-	// altProj and altUnembd are Gemma 3n's AltUp projections from the
-	// embedding to the other streams and from each back (altup.go).
-	AltProj   Tensor
-	AltUnembd []Tensor
 	// lnZeros is the zero bias a device's LayerNorm is handed where the file
 	// has none; see lnBias.
 	lnZeros     []float32
@@ -2643,11 +2629,6 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 				cfg.NEmbd, p)
 		}
 	}
-	if cfg.PredStreams != 0 {
-		if err := loadAltUp(m, cfg, get); err != nil {
-			return nil, err
-		}
-	}
 	if err := loadNGramTable(m, cfg, c); err != nil {
 		return nil, err
 	}
@@ -3030,11 +3011,6 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 		}
 		if _, err = optVec(jlm.RolePostFFNNorm, bi); err != nil {
 			return nil, err
-		}
-		if cfg.PredStreams != 0 {
-			if err := loadAltUpLayer(l, bi, cfg, getTo); err != nil {
-				return nil, err
-			}
 		}
 		if f := cfg.NFFNAt(i); !cfg.MoEAt(i) && l.Down.K != 0 && (l.Down.K != f || l.Up.Rows != f) {
 			return nil, fmt.Errorf("model: block %d's FFN is %d wide (up %d), want %d", bi, l.Down.K,
@@ -3616,10 +3592,6 @@ func (m *Model) MaxMatVec() (rows, k int) {
 	see(&m.Output)
 	see(&m.Embd)
 	see(&m.PleProj)
-	see(&m.AltProj)
-	for i := range m.AltUnembd {
-		see(&m.AltUnembd[i])
-	}
 	for _, d := range m.DenseMats {
 		see(d.T)
 	}
@@ -3747,10 +3719,9 @@ func (m *Model) ActWindowOf() int {
 }
 
 // streamHead says the head reads a collapse of several residual streams,
-// which the host takes (AltUp's predictions, a residual bank, gated
-// hyper-connections): a device runs the blocks and hands every stream back,
+// which the host takes (the streams the converter states): a device runs the blocks and hands every stream back,
 // and never folds the head into them.
-func (c *Config) StreamHead() bool { return c.PredStreams != 0 || c.statedStreams() > 1 }
+func (c *Config) StreamHead() bool { return c.statedStreams() > 1 }
 
 // specHidW is a speculation step's hidden state per row: what a prediction
 // block reads of the trunk's. The output norm's result, n_embd wide; on

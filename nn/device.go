@@ -118,9 +118,6 @@ type LayerWeights struct {
 	// gate, in Vectors, is one weight per model dimension rather than a
 	// matrix. Zero unless LayerPlan.NFFNShExp is non-zero.
 	ShGate, ShUp, ShDown Weight
-	// AltRouter is the streams' router (LayerPlan.AltUp): AltUp rows of
-	// n_embd, F32.
-	AltRouter Weight
 	// SSM is a linear-attention block's weights, and every field is zero for an
 	// attention block. Wq carries the fused q|k|v projection for such a block;
 	// the layer kind decides the consumer.
@@ -429,14 +426,9 @@ func (p *LayerPlan) RopeW() int {
 // ResidW is one row's residual width in Layers' x: every residual stream.
 func (p *LayerPlan) ResidW() int { return p.NEmbd * p.Streams() }
 
-// Streams is how many residual streams Layers' x carries, stream-major: AltUp's
-// predictions, a residual bank or hyper-connections, one elsewhere.
-func (p *LayerPlan) Streams() int {
-	if p.NStreams > 1 {
-		return p.NStreams
-	}
-	return max(p.AltUp, 1)
-}
+// Streams is how many residual streams Layers' x carries, stream-major: the
+// streams the converter states, one elsewhere.
+func (p *LayerPlan) Streams() int { return max(p.NStreams, 1) }
 
 // KVRow is one position's width in the attention cache: the latent plus the
 // shared rotary key under MLA, and NKVHead heads of HeadDim otherwise. Every
@@ -637,17 +629,9 @@ type LayerPlan struct {
 	KeyW int
 	// Select is the block's selection of the history it reads (the
 	// container's jlm.Selection), nil where it reads every position.
-	Select *SelectPlan
-	// Gemma 3n (model.Config.PredStreams): AltUp residual streams, zero for one,
-	// carried stream-major in Layers' x (ResidW); a gaussian top-k at
-	// SparseStd deviations on the FFN gate of a block with Sparse set.
-	AltUp     int
-	Sparse    bool
-	SparseStd float32
-	// LaurelRank is LAuReL's middle width (Gemma 3n), zero elsewhere.
-	LaurelRank int
-	KVShared   bool
-	KVSource   int
+	Select   *SelectPlan
+	KVShared bool
+	KVSource int
 	// FFNWide says this block's NFFN is twice the model's (a KV-sharing
 	// block under use_double_wide_mlp), which a tier that bakes the FFN width
 	// into its scratch keeps apart.

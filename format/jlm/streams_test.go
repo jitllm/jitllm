@@ -32,8 +32,16 @@ func TestStreamsRoundTrip(t *testing.T) {
 		c := base()
 		c.Streams = Streams{N: 3, Blocks: []BlockStreams{
 			{Bank: 1, Attn: SubStreams{Join: &Program{NIn: 2, Out: 1}}, FFN: read(StreamIn, StreamRun)},
-			{Attn: read(1, StreamRun), FFN: read(1, 2, StreamRun)},
+			{Attn: read(1, StreamRun), FFN: read(1, 2, StreamRun, StreamSide)},
 		}, Head: read(1, 2, StreamRun)}
+		// The second block's FFN writes every stream through what the writes
+		// share: the output plus the side row's first values.
+		f := &c.Streams.Blocks[1].FFN
+		f.Exports = []uint16{3}
+		f.Post = &Program{NIn: 2, Ops: []TowerOp{{Code: TOpSlice, In: []uint16{1}, Width: 64}, {Code: TOpAdd, In: []uint16{0, 2}}}, Out: 3}
+		for range 3 {
+			f.Writes = append(f.Writes, &Program{NIn: 4, Ops: []TowerOp{{Code: TOpAdd, In: []uint16{0, 3}}}, Out: 4})
+		}
 		return c
 	}
 	got, err := decodeConfig(encodeConfig(stated()))
@@ -59,6 +67,9 @@ func TestStreamsRoundTrip(t *testing.T) {
 		{"a join of one input", "joins through a program of 1", func(c *Config) { c.Streams.Blocks[0].Attn.Join.NIn = 1 }},
 		{"an empty join past its inputs", "returns value 2", func(c *Config) { c.Streams.Blocks[0].Attn.Join.Out = 2 }},
 		{"a slice of nothing", "slices 0", func(c *Config) { c.Streams.Head.Read.Ops[len(c.Streams.Head.Read.Ops)-1].Width = 0 }},
+		{"a read past the side row", "reads stream -4", func(c *Config) { c.Streams.Blocks[1].FFN.From[3] = StreamSide - 1 }},
+		{"writes that do not read what they share", "want 4", func(c *Config) { c.Streams.Blocks[1].FFN.Writes[0].NIn = 3 }},
+		{"a shared program and no writes", "writes no stream", func(c *Config) { c.Streams.Blocks[1].FFN.Writes = nil }},
 	} {
 		c := stated()
 		v.bad(c)
