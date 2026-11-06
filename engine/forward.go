@@ -194,9 +194,7 @@ type Instance struct {
 	ple, bple []float32
 	// xa is the one-row residual's streams (x is its stream 0), on a model of
 	// several (altup.go).
-	xa []float32
-	// q4 is Qwen3.8-Flash-Next's scratch (q4e.go); xa is its streams too.
-	q4  *model.Q4eScratch
+	xa  []float32
 	tok int32
 	// tok1 hands a decode step's token to the device (tokenIDs) without an
 	// allocation, and rowx one row's streams in a prefill's row-by-row
@@ -440,10 +438,10 @@ type Instance struct {
 	// rowsPos is a stream model's speculation step's positions and slots
 	// (stepRowsStreams).
 	rowsPos []int
-	// q4In is a Qwen3.8-Flash-Next prediction block's draft rows, every
-	// stream, row-major: laid into the residual in place of the embedding's
-	// copies (q4eDraftStreams). nil on every other Instance.
-	q4In []float32
+	// draftIn is a prediction block's draft rows over a residual of every
+	// stream, each row every stream, which a chunk lays out stream-major
+	// (draftStreams); nil on every other Instance.
+	draftIn []float32
 
 	// emb is set for the length of one Embedder.Embed on a decoder embedding
 	// model: prefill then pools the final residual instead of projecting it
@@ -692,7 +690,6 @@ func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOp
 	}
 	s.kvFmt, s.kvl.fmt = want, want
 	s.Session.limit, s.Session.kvFormat, s.Session.span = maxSeq, want, [2]int{lo, hi}
-	s.allocQ4E()
 	// kvl.fmt sizes every page.
 	s.kv = newKVCacheRange(c, s.nextCacheID(), nseq, s.kvl, nil, s.opt.kvPage, s.lo, s.hi, s.Session.cpuView(), g.cpu.KVPool(m.Id))
 	s.kv.reserve(s.maxSeq)
@@ -1508,7 +1505,6 @@ func (s *Instance) layerWeightsAt(li int, l *model.Layer, banks *[3]nn.Weight) n
 		w.Wkva, w.Wkb, w.Wvb = model.Wt(l.Wkva), model.Wt(l.Wkb), model.Wt(l.Wvb)
 	}
 	w.Extra = extraWeights(l)
-	s.q4eWeights(li, l, &w)
 	if k := s.c.LayerKind(li); k.Recurrent() && !k.Attends() {
 		// A linear block has none of these; leaving the attention four set
 		// would offer a device four matrices whose shapes do not match the
@@ -2025,12 +2021,18 @@ func (s *Instance) planFor(li int) *nn.LayerPlan {
 	plan.LatentNormEps = c.LatentNormEps
 	if c.LayerKind(li).Recurrent() {
 		plan.Recurrent.DecayBound = c.KDALowerBound
+		plan.Recurrent.SigmoidGate = c.DeltaSigmoidGate
+		plan.Recurrent.TailLen = c.RecTailLen()
 	}
 	plan.NStreams = c.Streams()
 	if w := c.ExpWidth(); c.MoEAt(li) && w != c.NEmbd {
 		plan.ExpLatent = w
 	}
-	s.q4ePlan(li, &plan)
+	if c.QSAAt(li) {
+		plan.Q4E = &nn.Q4EPlan{QSARatio: c.QSARatio}
+	} else if c.QSARatio != 0 {
+		plan.IdxHeads, plan.IdxHeadDim, plan.IdxTopK = 0, 0, 0
+	}
 	if c.NonCausal && (s.m.IsEmbedding() || s.m.Tower != nil && li >= s.m.TowerBase) {
 		// A bidirectional decoder (EmbeddingGemma) and a tower: their blocks
 		// are non-causal blocks, as an encoder's are -- the sequence (a
@@ -3333,7 +3335,7 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 	done := false
 	if s.head != nil && !folded {
 		s.unfuse()
-		if !c.Q4E() { // its hidden state is the residual, taken in q4eCollapse
+		if !c.ResidStreams() { // its hidden state is the residual, taken in collapseStreams
 			defer s.rows.hiddenOf(s.head)()
 		}
 		if s.ld.Layers(s.gpuLayers, s.gpuLayers, s.pos, 1, s.resid(), s.cs[:c.RopeW()], s.swaTable(c.NRotSWA), s.head) {
@@ -3352,7 +3354,7 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 	// The CPU's composed head applies every stage of the head's graph.
 	if !done {
 		var hidden []float32
-		if s.rows != nil && !c.Q4E() {
+		if s.rows != nil && !c.ResidStreams() {
 			hidden = s.rows.hidden
 		}
 		if why := s.cpuHead(s.x, s.logits, hidden); why != nn.DeclineServes {

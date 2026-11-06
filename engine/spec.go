@@ -460,13 +460,13 @@ func (sp *Speculator) trunkPrompt(prompt []int32) ([]float32, []float32, error) 
 	// keep the last chunk's on the device, so the tail projects instead.
 	resid := make([]float32, 0, n*c.ResidW())
 	t.rowTap = func(_ int, rows []float32) { resid = append(resid, rows...) }
-	if c.Q4E() {
+	if c.ResidStreams() {
 		// A chunk's rows stream-major; the hidden state is each row's every
-		// stream together, unnormed (q4eCollapse).
+		// stream together, unnormed (collapseStreams).
 		t.rowTap = func(_ int, rows []float32) {
 			nc := len(rows) / c.ResidW()
 			for i := 0; i < nc; i++ {
-				for k := 0; k < c.HCMult; k++ {
+				for k := range c.Streams() {
 					resid = append(resid, c.Stream(rows, k, nc, i)...)
 				}
 			}
@@ -482,7 +482,7 @@ func (sp *Speculator) trunkPrompt(prompt []int32) ([]float32, []float32, error) 
 	if len(resid) != len(hid) {
 		return nil, nil, fmt.Errorf("model: the prompt's %d rows gave %d hidden values", n, len(resid))
 	}
-	if c.Q4E() {
+	if c.ResidStreams() {
 		copy(hid, resid)
 		return logits, hid, nil
 	}
@@ -504,9 +504,9 @@ func (sp *Speculator) draftRows(toks []int32, hs []float32, out *rowsOut) error 
 		return err
 	}
 	// [enorm(embed(x)) ; hnorm(h)] per row through eh_proj, the composed
-	// entry (mtpEntryGraph). Qwen3.8-Flash-Next's block takes the trunk's
-	// residual, every stream: eh_proj runs once per (row, stream), and its
-	// rows are the draft's residual streams (llama.cpp's graph_mtp).
+	// entry (mtpEntryGraph). Over a residual of every stream the block takes
+	// the trunk's, every stream: eh_proj runs once per (row, stream), and its
+	// rows are the draft's residual streams.
 	st := c.Streams()
 	d0 := c.NEmbd
 	sp.ze = grow32(sp.ze, n*st*d0)
@@ -517,8 +517,8 @@ func (sp *Speculator) draftRows(toks []int32, hs []float32, out *rowsOut) error 
 		return fmt.Errorf("model: the composer does not serve prediction block %d's entry on the CPU: %s", sp.mli, nn.DeclineName(int(why)))
 	}
 	if st > 1 {
-		d.q4In = sp.ze[:n*st*d0]
-		defer func() { d.q4In = nil }()
+		d.draftIn = sp.ze[:n*st*d0]
+		defer func() { d.draftIn = nil }()
 	}
 	for len(sp.noTok) < n {
 		sp.noTok = append(sp.noTok, -1)

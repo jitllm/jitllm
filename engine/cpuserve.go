@@ -1503,17 +1503,13 @@ func (s *Instance) cpuRoleWeight(li int, l *model.Layer, r jlm.Role) *model.Tens
 			return &m.Dense1
 		case r == jlm.RoleEmbdDense2:
 			return &m.Dense2
-		case m.Q4eHC != nil && r == jlm.RoleHCHeadDown:
-			return &m.Q4eHC.Down
-		case m.Q4eHC != nil && r == jlm.RoleHCHeadUp:
-			return &m.Q4eHC.Up
 		}
 		for _, v := range s.m.VecMats {
 			if v.Role == r {
 				return v.T
 			}
 		}
-		return nil
+		return s.dense.Matrix(r)
 	}
 	if t := l.Matrix(r); t != nil {
 		return t
@@ -1533,10 +1529,6 @@ func (s *Instance) cpuRoleWeight(li int, l *model.Layer, r jlm.Role) *model.Tens
 		return &l.Mtp.Embd
 	case jlm.RoleSSMConv1d:
 		return &l.SsmConvTaps
-	case jlm.RoleNGramConv:
-		if l.Q4e != nil {
-			return &l.Q4e.NgCvTaps
-		}
 	}
 	return nil
 }
@@ -1554,10 +1546,6 @@ func (s *Instance) cpuRoleVector(li int, l *model.Layer, r jlm.Role) []float32 {
 			return s.m.OutB
 		case jlm.RolePLEProjNorm:
 			return s.m.PleNorm
-		case jlm.RoleHCHeadNorm:
-			if s.m.Q4eHead != nil {
-				return s.m.Q4eHead.Hc.Norm
-			}
 		}
 		return nn.VectorOf(s.m.Vecs, r)
 	}

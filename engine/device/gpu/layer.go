@@ -92,8 +92,6 @@ type layer struct {
 	// empty. mla is set from the plan, like linear.
 	mla                      bool
 	wqa, wqb, wkva, wkb, wvb *resident
-	// q4e is the n-gram block's convolution (q4e.go), nil elsewhere.
-	q4e *q4eBlock
 	// conv is a convolutional tower block's own buffers (convblock.go), nil
 	// for every other block.
 	conv *convBlock
@@ -2303,10 +2301,6 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		return false
 	}
 	l.wide = p.NStreams > 1 || p.ExpLatent != 0
-	if why := g.prepQ4E(l, li, p, w, up); why != "" {
-		g.LastErr = why
-		return false
-	}
 	// Gemma 4's output scalar, one float, charged with the norms.
 	if p.OutScale != 0 {
 		up(&l.outScale, []float32{p.OutScale})
@@ -2347,7 +2341,11 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		l.auxBytes += uint64(len(taps) * 4)
 	}
 	for _, v := range w.Vectors {
-		if _, named := l.namedVector(v.Role); named || l.roleWeight(v.Role) != nil {
+		// A vector the block holds as a matrix too (a 2-D one) is a vector
+		// still, to a graph that reads it as one -- but not one a field holds,
+		// as a vector or as a weight laid out for it (a linear block's taps):
+		// a block binds a role as a vector wherever the card holds one.
+		if _, named := l.namedVector(v.Role); named || l.namedWeight(v.Role) != nil {
 			continue
 		}
 		var b backend.Buf
@@ -4957,7 +4955,7 @@ func (l *layer) auxBufs() []backend.Buf {
 		l.outScale, // Gemma 4's output scalar
 		l.shadow,   // the shadow arm's state
 		l.pleOff,   // Gemma 4's per-layer embedding
-	), append(l.q4e.bufs(), l.conv.bufs()...)...) // Qwen3.8-Flash-Next's convolution, a convolutional block's
+	), l.conv.bufs()...) // a convolutional block's
 }
 
 // dropLayerLocal frees the buffers PrepLayer allocates fresh for one block and

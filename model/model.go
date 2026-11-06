@@ -414,7 +414,7 @@ func (c *Config) MLA() bool { return c.KVLoraRank != 0 }
 
 // Indexer reports that attention reads only the positions DeepSeek V3.2's
 // lightning indexer selects.
-func (c *Config) Indexer() bool { return c.IdxHeads != 0 && c.IdxBlock == 0 && !c.Q4E() }
+func (c *Config) Indexer() bool { return c.IdxHeads != 0 && c.IdxBlock == 0 && c.QSARatio == 0 }
 
 // MSA reports MiniMax Sparse Attention: attention on the blocks past the
 // dense lead reads only the position blocks each kv group's indexer head
@@ -770,6 +770,7 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 	out.bidir = c.BidirLayers
 	out.IdxHeads, out.IdxHeadDim, out.IdxTopK = int(c.IdxHeads), int(c.IdxHeadDim), int(c.IdxTopK)
 	out.IdxBlock, out.IdxLocal = int(c.IdxBlock), int(c.IdxLocal)
+	out.QSARatio = int(c.QSARatio)
 	if out.MSA() && (out.MLA() || out.IdxHeads != out.NKVHead || out.IdxHeadDim != out.HeadDim ||
 		out.IdxTopK <= 0 || out.IdxLocal < 1 || out.IdxLocal > out.IdxTopK || out.GeomSplit() ||
 		out.NRot > out.IdxHeadDim || out.NKVShared != 0) {
@@ -874,8 +875,25 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 		out.AttnScale *= mscale * mscale
 	}
 	out.TokenAct = c.ActQuant == jlm.ActQuantRowInt8
-	if err := q4eConfig(out, c); err != nil {
-		return nil, err
+	out.HCLowRank, out.QSARatio = int(c.HCLowRank), int(c.QSARatio)
+	out.NGramBlock, out.NGram, out.NGramHeadsPer = int(c.NGramBlock), int(c.NGram), int(c.NGramHeadsPer)
+	out.NGramRowDim, out.NGramConv = int(c.NGramRowDim), int(c.NGramConv)
+	out.NGramEOS, out.NGramImage = int32(c.NGramEOS), int32(c.NGramImage)
+	out.NGramMul, out.NGramOff, out.NGramVoc = c.NGramMul, c.NGramOff, c.NGramVoc
+	out.DeltaSigmoidGate = c.Flags2.Has(jlm.Flag2DeltaSigmoidGate)
+	if out.QSARatio != 0 && (out.IdxHeads <= 0 || out.IdxHeadDim <= 0 || out.IdxHeadDim > out.HeadDim ||
+		out.IdxTopK <= 0 || out.IdxTopK%out.QSARatio != 0 || out.NRot > out.IdxHeadDim || out.GeomSplit()) {
+		return nil, fmt.Errorf("model: %s: QSA over %d heads of %d, a budget of %d at a ratio of %d, "+
+			"on heads of %d rotating %d", out.Arch, out.IdxHeads, out.IdxHeadDim, out.IdxTopK, out.QSARatio,
+			out.HeadDim, out.NRot)
+	}
+	if out.NGramBlock != 0 {
+		if !out.LayerKind(out.NGramBlock - 1).Recurrent() {
+			return nil, fmt.Errorf("model: %s: the n-gram block %d is not a linear block", out.Arch, out.NGramBlock-1)
+		}
+		if out.NGramRowDim*out.ngramHeads() != out.NGramWidth() {
+			return nil, fmt.Errorf("model: %s: %d n-gram heads of %d", out.Arch, out.ngramHeads(), out.NGramRowDim)
+		}
 	}
 	out.AttnResBlock = int(c.AttnResBlock)
 	out.ExpertLatent = int(c.ExpertLatent)
@@ -1009,8 +1027,6 @@ type Layer struct {
 	// wkb and wvb are banks, one sheet per head, read through bankExpert as an
 	// expert bank is, so the absorb runs as a single gather.
 	Wqa, Wqb, Wkva, Wkb, Wvb Tensor
-	// q4e is the n-gram block's convolution taps.
-	Q4e *q4eLayer
 	// kbHead and vbHead are wkb and wvb cut into one view per head, built once
 	// at load as l.experts is.
 	kbHead, vbHead []Tensor
@@ -1105,6 +1121,10 @@ type Model struct {
 	// vecMats is each of those that is a table (the token-type rows) as a
 	// float matrix over the same slice, which an embedding binds as one.
 	VecMats []roleTensor
+	// DenseMats is every matrix the model stores outside its blocks that no
+	// field of Dense names, by role: what a stated head or the streams' mix
+	// binds.
+	DenseMats []roleTensor
 	// splitBank is the Data of a bank held in expert pages (bankWeight).
 	splitBank [1]byte
 	// holdFree is the recycled sheet holds (sheetOf).
@@ -1170,9 +1190,8 @@ type Model struct {
 	// ropeSWA is the LOCAL layers' rotary where an architecture trains two
 	// bases, and nil where it trains one -- which is every model but gemma3.
 	RopeSWA *nn.Rope
-	// q4eHead is Qwen3.8-Flash-Next's head mix and ngram its n-gram table.
-	Q4eHead *q4eHead
-	Ngram   *ngramTable
+	// Ngram is the n-gram block's table.
+	Ngram *ngramTable
 	// onesHD is a HeadDim-wide vector of ones: the weight Llama 4's weightless
 	// q/k RMSNorm runs the generated norm against. nil unless QKL2Norm.
 	onesHD  []float32
@@ -2293,6 +2312,11 @@ func (m *Model) PagerReadWait(fr *jlm.Frames) time.Duration {
 // It is the inverse of bindPacked; pageIn rebinds on the next fault.
 func ReleaseLayer(c *jlm.Frames, li int, l *Layer, keepExperts bool) {
 	for _, m := range l.Mats {
+		// A matrix no entry names is a view of the block's own vector, not
+		// of its page: nothing would bind it again.
+		if m.T.E == nil {
+			continue
+		}
 		m.T.Data = nil
 		if m.T.Packed != nil {
 			m.T.Packed.QS, m.T.Packed.D, m.T.Packed.SC = nil, nil, nil
@@ -2644,7 +2668,7 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 			return nil, err
 		}
 	}
-	if err := loadQ4EHead(m, cfg, c, get, vec); err != nil {
+	if err := loadNGramTable(m, cfg, c); err != nil {
 		return nil, err
 	}
 	if m.OutNormB, err = optVec(jlm.RoleOutputNormBias, jlm.DenseBlock); err != nil {
@@ -2738,6 +2762,18 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 		m.Output = m.Embd
 	} else if m.Output, err = get(jlm.RoleOutput, jlm.DenseBlock, -1); err != nil {
 		return nil, err
+	}
+	for i := range c.Entries() {
+		e := &c.Entries()[i]
+		if e.Block != jlm.DenseBlock || e.Index != -1 || e.Role.Expanded() || e.Role.Vision() || e.NDim < 2 ||
+			jlm.RowTable(e) || denseNamed(e.Role) {
+			continue
+		}
+		t, err := get(e.Role, jlm.DenseBlock, -1)
+		if err != nil {
+			return nil, err
+		}
+		m.DenseMats = append(m.DenseMats, roleTensor{e.Role, &t})
 	}
 
 	// Room for the tower's blocks after the text's (bindTower): a layer's
@@ -3228,9 +3264,6 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 				l.vbHead = append(l.vbHead, t)
 			}
 		}
-		if err := loadQ4E(l, bi, cfg, getTo, vec); err != nil {
-			return nil, err
-		}
 		// Every other matrix the block stores is loaded under its role, a
 		// tensor of the block's own: what a stated graph binds that no field
 		// above names.
@@ -3243,6 +3276,18 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 			if err := getTo(new(Tensor), e.Role, bi, -1); err != nil {
 				return nil, err
 			}
+		}
+		// A vector the block stores 2-D is a matrix too, a row of its
+		// second dimension each, where no tensor views it already: a
+		// convolution's taps a stated graph binds as one.
+		for _, rv := range l.Vecs {
+			e, ok := c.Find(rv.Role, bi, -1)
+			if !ok || e.NDim != 2 || len(rv.V) == 0 || l.Matrix(rv.Role) != nil ||
+				len(l.SsmConvTaps.Data) > 0 && &l.SsmConvTaps.Data[0] == (*byte)(unsafe.Pointer(&rv.V[0])) {
+				continue
+			}
+			t := F32Tensor(rv.V, int(e.Dims[1]), int(e.Dims[0]))
+			l.Mats = append(l.Mats, roleTensor{rv.Role, &t})
 		}
 		if cfg.QKNormAt(i) {
 			if l.QNorm, err = vec(jlm.RoleAttnQNorm, bi); err != nil {
@@ -3351,11 +3396,11 @@ func buildMTP(c *jlm.File, m *Model,
 		} else if hn != nil {
 			w.HeadNorm = hn
 		}
-		// Qwen3.8-Flash-Next's block reads the trunk's residual, every stream,
-		// each normed against its own row of hnorm, and its head is the block's
-		// own mix (q4eLayer.head), not a norm.
+		// Over a residual of every stream (ResidStreams) the block reads the
+		// trunk's, each stream normed against its own row of hnorm, and its
+		// head is the streams' stated mix, not a norm.
 		hw, hn := cfg.NEmbd, cfg.NEmbd
-		if cfg.Q4E() {
+		if cfg.ResidStreams() {
 			hw, hn = cfg.ResidW(), len(w.HeadNorm)
 		}
 		for _, v := range []struct {
@@ -3591,14 +3636,12 @@ func (m *Model) MaxMatVec() (rows, k int) {
 	see(&m.Output)
 	see(&m.Embd)
 	see(&m.PleProj)
-	if m.Q4eHead != nil {
-		for _, t := range m.Q4eHead.Hc.tensors() {
-			see(t)
-		}
-	}
 	see(&m.AltProj)
 	for i := range m.AltUnembd {
 		see(&m.AltUnembd[i])
+	}
+	for _, d := range m.DenseMats {
+		see(d.T)
 	}
 	return rows, k
 }
@@ -3727,14 +3770,14 @@ func (m *Model) ActWindowOf() int {
 // which the host takes (AltUp's predictions, a residual bank, gated
 // hyper-connections): a device runs the blocks and hands every stream back,
 // and never folds the head into them.
-func (c *Config) StreamHead() bool { return c.PredStreams != 0 || c.statedStreams() > 1 || c.Q4E() }
+func (c *Config) StreamHead() bool { return c.PredStreams != 0 || c.statedStreams() > 1 }
 
 // specHidW is a speculation step's hidden state per row: what a prediction
 // block reads of the trunk's. The output norm's result, n_embd wide; on
-// Qwen3.8-Flash-Next the residual before the head's mix, every stream
-// (llama.cpp's h_nextn).
+// a residual of every stream (ResidStreams) the residual before the head's
+// mix, every stream.
 func (c *Config) SpecHidW() int {
-	if c.Q4E() {
+	if c.ResidStreams() {
 		return c.ResidW()
 	}
 	return c.NEmbd

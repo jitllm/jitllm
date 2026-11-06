@@ -8,7 +8,7 @@ import (
 
 // Dense is a model's tensors outside its blocks -- the embedding, the
 // position table, the output projection, an embedding model's heads, the
-// per-layer and stream tables, a hyper-connected head, a tower's entry and
+// per-layer and stream tables, a tower's entry and
 // head and its taps -- as one instance binds them at the frames of the
 // device running them (Model.BindDense). The model's own are descriptors:
 // shapes and entries, no bytes.
@@ -17,10 +17,10 @@ type Dense struct {
 	Dense1, Dense2           Tensor
 	PleTok, PleProj, AltProj Tensor
 	AltUnembd                []Tensor
-	// Q4eHC is the hyper-connected head's, nil on a model with none.
-	Q4eHC      *Q4eHC
-	TowerDense Layer
-	TowerTaps  []Layer
+	TowerDense               Layer
+	// Mats is the model's other dense matrices, by role (Model.DenseMats).
+	Mats      []roleTensor
+	TowerTaps []Layer
 }
 
 // BindDense makes d an instance's own copy of the model's dense tensors,
@@ -35,12 +35,11 @@ func (m *Model) BindDense(fr *jlm.Frames, d *Dense) error {
 	for i := range d.AltUnembd {
 		ts = append(ts, &d.AltUnembd[i])
 	}
-	if m.Q4eHead != nil {
-		hc := m.Q4eHead.Hc
-		d.Q4eHC = &hc
-		for _, t := range d.Q4eHC.tensors() {
-			ts = append(ts, t)
-		}
+	d.Mats = make([]roleTensor, len(m.DenseMats))
+	for i, x := range m.DenseMats {
+		t := *x.T
+		d.Mats[i] = roleTensor{x.Role, &t}
+		ts = append(ts, &t)
 	}
 	for _, t := range ts {
 		if t.Packed != nil {
@@ -58,6 +57,27 @@ func (m *Model) BindDense(fr *jlm.Frames, d *Dense) error {
 		m.TowerTaps[j].CloneTo(&d.TowerTaps[j])
 		if err := bindPacked(fr, m.Cfg, &d.TowerTaps[j]); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// denseNamed reports that a field of Dense names role r's matrix.
+func denseNamed(r jlm.Role) bool {
+	switch r {
+	case jlm.RoleTokenEmbd, jlm.RolePosEmbd, jlm.RoleOutput, jlm.RoleEmbdDense1, jlm.RoleEmbdDense2,
+		jlm.RolePLETokEmbd, jlm.RolePLEModelProj, jlm.RoleStreamExpand:
+		return true
+	}
+	return r >= jlm.RoleStreamCollapse1 && r <= jlm.RoleStreamCollapse3
+}
+
+// Matrix is the dense matrix of role r a field of d does not name, nil for
+// none (Dense.Mats).
+func (d *Dense) Matrix(r jlm.Role) *Tensor {
+	for _, x := range d.Mats {
+		if x.Role == r {
+			return x.T
 		}
 	}
 	return nil

@@ -7,17 +7,10 @@ import (
 
 // CloneTo makes dst an instance's own copy of block l: every binding a page-in
 // writes is dst's -- each matrix and its packed planes, a bank's expert views,
-// the attention heads' views, a prediction block's and an n-gram block's own
-// weights -- so binding dst (BindBlock) leaves l and every other copy as they
+// the attention heads' views, a prediction block's own weights -- so binding dst (BindBlock) leaves l and every other copy as they
 // were. The vectors are read once at open and never bound, and stay shared.
 func (l *Layer) CloneTo(dst *Layer) {
 	*dst = *l
-	var q *q4eLayer
-	if l.Q4e != nil {
-		c := *l.Q4e
-		q = &c
-		dst.Q4e = q
-	}
 	var w *mtpWeights
 	if l.Mtp != nil {
 		c := *l.Mtp
@@ -40,11 +33,6 @@ func (l *Layer) CloneTo(dst *Layer) {
 		}
 		if n, ok := at(unsafe.Pointer(l), unsafe.Sizeof(*l), unsafe.Pointer(dst)); ok {
 			return n
-		}
-		if q != nil {
-			if n, ok := at(unsafe.Pointer(l.Q4e), unsafe.Sizeof(*l.Q4e), unsafe.Pointer(q)); ok {
-				return n
-			}
 		}
 		if w != nil {
 			if n, ok := at(unsafe.Pointer(l.Mtp), unsafe.Sizeof(*l.Mtp), unsafe.Pointer(w)); ok {

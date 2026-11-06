@@ -2079,11 +2079,20 @@ func (f *partForm) inPlace(in, out int) bool {
 // roleWeight is the block's matrix its graph binds under role, nil for one
 // the tier does not hold.
 func (l *layer) roleWeight(r jlm.Role) *resident {
+	if w := l.namedWeight(r); w != nil {
+		return w
+	}
 	for _, x := range l.extra {
 		if x.role == r {
 			return x.r
 		}
 	}
+	return nil
+}
+
+// namedWeight is the weight of role r the block holds by name, nil for one
+// it holds none of or holds only among its extras.
+func (l *layer) namedWeight(r jlm.Role) *resident {
 	switch r {
 	case jlm.RoleAttnQ, jlm.RoleVAttnQ:
 		return l.wq
@@ -2168,10 +2177,6 @@ func (l *layer) roleWeight(r jlm.Role) *resident {
 		return l.shDown
 	case jlm.RoleStreamRouter:
 		return l.altRouterW
-	case jlm.RoleNGramConv:
-		if l.q4e != nil && l.q4e.ngram {
-			return &l.q4e.ngTaps
-		}
 	}
 	return nil
 }

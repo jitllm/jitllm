@@ -38,6 +38,11 @@ type streams struct {
 	ex  []graph.ValueID
 }
 
+// ResidStreams says the residual is every stream, which the input rows
+// expand into (jlm.Streams.Expand): a row's hidden state is all of them, as
+// the head's mix reads them, not the output norm's row.
+func (c *Config) ResidStreams() bool { return c.stated != nil && len(c.stated.Expand) != 0 }
+
 // predictsStreams says the model's several residual streams are predicted
 // and corrected (PredStreams), and nothing else carries a stream.
 func (c *Config) PredictsStreams() bool {
