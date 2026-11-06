@@ -154,11 +154,13 @@ func (s *Instance) cpuRows(li int, l *model.Layer, x, cs, csSWA []float32, seq, 
 	if err := s.cpuRowTables(seq, pos); err != nil {
 		return nn.DeclineServes, err
 	}
-	f, why := s.cpuRowsForm(li, l)
+	ln := s.cpu.lanes
+	ln.Attach(s.kv, s.view)
+	f, why := ln.RowsForm(li, l)
 	if why != nn.DeclineServes {
 		return why, nil
 	}
-	if why := s.cpuRowsReady(li, f, pos); why != nn.DeclineServes {
+	if why := ln.ReadyRows(li, f, pos); why != nn.DeclineServes {
 		return why, nil
 	}
 	side, _ := s.cpuSideRows(li)
@@ -233,7 +235,8 @@ func (s *Instance) cpuOwnerRuns(li int, l *model.Layer, x, cs []float32, nrot in
 		if a < len(s.rowInst) && s.rowInst[a] != nil {
 			oi = s.rowInst[a]
 		}
-		f, why := oi.cpuRowsForm(li, l)
+		ln := oi.cpu.lanes
+		f, why := ln.RowsForm(li, l)
 		if why != nn.DeclineServes {
 			return why, nil
 		}
@@ -248,9 +251,12 @@ func (s *Instance) cpuOwnerRuns(li int, l *model.Layer, x, cs []float32, nrot in
 				oi.Session = lead
 				return nn.DeclineServes, err
 			}
-		} else if why := oi.cpuRowsReady(li, f, pos[a:b]); why != nn.DeclineServes {
-			oi.Session = lead
-			return why, nil
+		} else {
+			ln.Attach(oi.kv, oi.view)
+			if why := ln.ReadyRows(li, f, pos[a:b]); why != nn.DeclineServes {
+				oi.Session = lead
+				return why, nil
+			}
 		}
 		oi.Session = lead
 		a = b
@@ -361,10 +367,10 @@ func (s *Instance) cpuRecWhole(li int, l *model.Layer, cb *cpudev.Block, seq, po
 		}
 		last[q] = pos[i]
 	}
-	if _, why := s.ws.bind(cb.Rows, li, l); why != nn.DeclineServes {
-		return nil
+	if f, why := s.cpu.lanes.RowsForm(li, l); why == nn.DeclineServes {
+		return f
 	}
-	return cb.Rows
+	return nil
 }
 
 // cpuRecRun runs linear block li's rows' form f over the step's rows, a
@@ -372,7 +378,9 @@ func (s *Instance) cpuRecWhole(li int, l *model.Layer, cb *cpudev.Block, seq, po
 // its first position) end a call at each restore point inside them and seal
 // it there.
 func (s *Instance) cpuRecRun(li int, l *model.Layer, f *cpudev.Form, x, cs []float32, seq, pos []int, tok []int32, base, p0 int) (nn.Decline, error) {
-	if why := s.cpuRowsReady(li, f, pos); why != nn.DeclineServes {
+	ln := s.cpu.lanes
+	ln.Attach(s.kv, s.view)
+	if why := ln.ReadyRows(li, f, pos); why != nn.DeclineServes {
 		return why, nil
 	}
 	n, d, nrot := len(pos), s.c.NEmbd, s.c.RopeW()
@@ -412,31 +420,6 @@ func rowsOf(tok []int32, a, b int) []int32 {
 		return nil
 	}
 	return tok[a:b]
-}
-
-// cpuRowsForm is block li's rows' form, its weights the block's, or why
-// not.
-func (s *Instance) cpuRowsForm(li int, l *model.Layer) (*cpudev.Form, nn.Decline) {
-	cb, why := s.cpuBlockOf(li)
-	if why != nn.DeclineServes {
-		return nil, why
-	}
-	if cb.Rows == nil {
-		return nil, cb.RowsWhy
-	}
-	if _, why := s.ws.bind(cb.Rows, li, l); why != nn.DeclineServes {
-		return nil, why
-	}
-	return cb.Rows, nn.DeclineServes
-}
-
-// cpuRowsReady makes the pages of the history the rows at pos write and
-// read resident, in block li's arena, or says why f cannot run them
-// (cpudev.Lanes.ReadyRows).
-func (s *Instance) cpuRowsReady(li int, f *cpudev.Form, pos []int) nn.Decline {
-	ln := s.cpu.lanes
-	ln.Attach(s.kv, s.view)
-	return ln.ReadyRows(li, f, pos)
 }
 
 // cpuRowsOf is the sequences and positions of a chunk's n rows of slot
