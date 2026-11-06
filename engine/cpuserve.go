@@ -150,33 +150,18 @@ func CPUForm() string {
 // cpuStep runs block li on the CPU the composer's way, or says why not. The
 // residual is s.x; the rotary table cs.
 func (s *Instance) cpuStep(li int, l *model.Layer, cs []float32) (nn.Decline, error) {
-	cb, why := s.cpuBlockOf(li)
-	if why != nn.DeclineServes {
+	if _, why := s.cpuBlockOf(li); why != nn.DeclineServes {
 		return why, nil
 	}
 	if err := s.cpuOneTable(); err != nil {
 		return nn.DeclineServes, err
 	}
-	// A block sharing another's history reads its source's pages.
-	var h cpudev.History = s.kv
-	pos := s.pos
-	hb, why, err := h.Prepare(li, pos, s.nseq)
-	if why != nn.DeclineServes || err != nil {
-		return why, err
-	}
-	w, why := s.ws.bind(cb.F, li, l)
-	if why != nn.DeclineServes {
-		return why, nil
-	}
-	r := cpudev.Row{X: s.resid(), Stride: s.c.NEmbd, CS: cs, CSSWA: s.csSWA, Side: s.cpuSide(li), Pages: hb.Pages,
-		KeyStart: hb.KeyStart, Pos: pos, PagePos: hb.PagePos, Tok: s.tok, Toks: true, RecLi: s.cpuRecLi(li), Weights: w, Faults: true,
-		Keys: hb.Keys, Values: hb.Values}
-	r.RecState, r.RecConv = recAddrs(s.Session, r.RecLi)
-	if err := s.cpu.x.Blocks().Row(li, cb, &r); err != nil {
-		return nn.DeclineServes, err
-	}
-	h.Commit(li, pos)
-	return nn.DeclineServes, nil
+	// A block sharing another's history reads its source's pages (the
+	// cache's Prepare).
+	st := cpudev.Step{X: s.resid(), Stride: s.c.NEmbd, CS: cs, CSSWA: s.csSWA, Side: s.cpuSide(li), Pos: s.pos, Tok: s.tok,
+		History: s.kv, Seqs: s.nseq, Tensors: l, RecLi: s.cpuRecLi(li)}
+	st.RecState, st.RecConv = recAddrs(s.Session, st.RecLi)
+	return s.cpu.x.Run(li, &st, &s.ws.b)
 }
 
 // cpuRows runs block li on the CPU the composer's way for the n rows of x,

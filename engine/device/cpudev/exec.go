@@ -1,6 +1,8 @@
 package cpudev
 
 import (
+	"unsafe"
+
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/format/jlm"
@@ -178,4 +180,48 @@ func (e *Exec) FormPart(p PartPlan) Part {
 		part.F = f
 	}
 	return part
+}
+
+// Step is a block's call of one row on the CPU device: the residual row, its
+// streams Stride apart, its rotary tables and per-layer inputs, its position
+// and token, its history (History, Seqs sequences wide), the tensors its
+// weights are read in and the recurrent state it steps (RecLi's).
+type Step struct {
+	X                 []float32
+	Stride            int
+	CS, CSSWA, Side   []float32
+	Pos               int
+	Tok               int32
+	History           History
+	Seqs              int
+	Tensors           Tensors
+	RecLi             int
+	RecState, RecConv unsafe.Pointer
+}
+
+// Run runs block li's form of one row over st, its weights bound by b, or
+// says why not: the block is not composed here, its history is not
+// resident, or it reads a weight the device cannot. The row's history is
+// committed once the row has run.
+func (e *Exec) Run(li int, st *Step, b *Bindings) (nn.Decline, error) {
+	cb, why := e.Block(li)
+	if why != nn.DeclineServes {
+		return why, nil
+	}
+	hb, why, err := st.History.Prepare(li, st.Pos, st.Seqs)
+	if why != nn.DeclineServes || err != nil {
+		return why, err
+	}
+	w, why := b.Bind(cb.F, li, st.Tensors)
+	if why != nn.DeclineServes {
+		return why, nil
+	}
+	r := Row{X: st.X, Stride: st.Stride, CS: st.CS, CSSWA: st.CSSWA, Side: st.Side, Pages: hb.Pages,
+		KeyStart: hb.KeyStart, Pos: st.Pos, PagePos: hb.PagePos, Tok: st.Tok, Toks: true, RecLi: st.RecLi, Weights: w,
+		Faults: true, Keys: hb.Keys, Values: hb.Values, RecState: st.RecState, RecConv: st.RecConv}
+	if err := e.rows.Row(li, cb, &r); err != nil {
+		return nn.DeclineServes, err
+	}
+	st.History.Commit(li, st.Pos)
+	return nn.DeclineServes, nil
 }
