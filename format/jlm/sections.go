@@ -190,8 +190,11 @@ func encodeConfigAt(c *Config, v uint32) []byte {
 	// fourteenth, the router's stated score, implies the first thirteen; an
 	// older reader drops it and routes by the gating its flags name. The
 	// fifteenth, the router's stated weight, implies the first fourteen; an
-	// older reader drops it and weighs by the router its flags name.
-	weight := len(c.RouterWeight.Terms) != 0
+	// older reader drops it and weighs by the router its flags name. The
+	// sixteenth, the residual's stated streams, implies the first fifteen;
+	// an older reader drops it and refuses the streams it cannot state.
+	streams := c.Streams.N > 1
+	weight := streams || len(c.RouterWeight.Terms) != 0
 	score := weight || len(c.RouterScore.Terms) != 0
 	acts := score || len(c.Acts) != 0 || len(c.ActLayers) != 0
 	clef := acts || c.DecisionRouting != 0 || c.DecisionEps != 0
@@ -305,6 +308,9 @@ func encodeConfigAt(c *Config, v uint32) []byte {
 	}
 	if weight {
 		encodeExpr(w, &c.RouterWeight)
+	}
+	if streams {
+		encodeStreams(w, &c.Streams)
 	}
 	return w.b
 }
@@ -461,10 +467,16 @@ func decodeConfigAt(b []byte, v uint32) (*Config, error) {
 	if r.err == nil && len(r.b) > 0 {
 		decodeExpr(r, &c.RouterWeight)
 	}
+	if r.err == nil && len(r.b) > 0 {
+		decodeStreams(r, &c.Streams)
+	}
 	if r.err != nil {
 		return nil, r.err
 	}
 	if err := exprsValid(c); err != nil {
+		return nil, err
+	}
+	if err := c.Streams.valid(int(c.NLayer)); err != nil {
 		return nil, err
 	}
 	if err := ngramValid(c); err != nil {

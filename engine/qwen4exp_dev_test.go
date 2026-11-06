@@ -189,7 +189,7 @@ func TestBatchSeamMovesCarryEveryRowQwen4Exp(t *testing.T) {
 func cardBlocks(m *model.Model) int {
 	n := 0
 	for li := range m.Cfg.NLayer {
-		if cpudev.TableRowsOf(m.Composing().BlockGraph(li)) < 0 {
+		if g := m.Composing().BlockGraph(li); g != nil && cpudev.TableRowsOf(g) < 0 {
 			n++
 		}
 	}

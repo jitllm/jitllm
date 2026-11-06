@@ -5,6 +5,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/jitllm/jitllm/convert"
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
@@ -61,6 +62,14 @@ func k3Fixtures() []struct {
 	}
 }
 
+// k3NMSE is the bound against Moonshot's reference. Its kernels' torch
+// references reduce in an order of their own, so the fixtures sit near
+// 1e-9 where c6NMSE's sit at ~1e-13: 9.6e-10 through the bank's own
+// kernels, 1.0e-9 through its stated reads, which score with a multiply and
+// an add. Every violation lands at 3e-3 or far above
+// (TestKimiK3FeaturesAreLoadBearing).
+const k3NMSE = 2e-9
+
 // TestKimiK3MatchesReference holds each fixture to Moonshot's own remote code
 // (KimiLinearForCausalLM from modeling_kimi_linear.py, fla's kernels as their
 // torch references; scripts/k3gold.py) on decode, prefill at every length and
@@ -84,8 +93,8 @@ func TestKimiK3MatchesReference(t *testing.T) {
 			worst := c6Worst(t, m, g, func(what string, p int, lg []float32) float64 {
 				t.Helper()
 				nmse := llama4Cmp(g.Pos[p].Head, lg)
-				if math.IsNaN(nmse) || math.IsInf(nmse, 0) || nmse > c6NMSE {
-					t.Errorf("%s pos %d: NMSE %.3e against the reference (bound %.0e)", what, p, nmse, c6NMSE)
+				if math.IsNaN(nmse) || math.IsInf(nmse, 0) || nmse > k3NMSE {
+					t.Errorf("%s pos %d: NMSE %.3e against the reference (bound %.0e)", what, p, nmse, k3NMSE)
 				}
 				if am := Greedy(lg); am != g.Pos[p].Argmax {
 					t.Errorf("%s pos %d: argmax %d, the reference %d", what, p, am, g.Pos[p].Argmax)
@@ -106,7 +115,12 @@ func k3Violations() []c6Violation {
 		{"the bank scored on raw values", rawBankScores},
 		{"the head reads the running residual alone", headUnbanked},
 		{"a checkpoint every three blocks", func(m *model.Model) func() {
-			return cfgMut(m, func(c *model.Config) { c.AttnResBlock = 3 })
+			return streamsMut(m, func(s *jlm.Streams) {
+				c := *m.Container.Config()
+				c.AttnResBlock = 3
+				convert.StateStreams(&c, func(r jlm.Role, li int32) bool { return m.Stores(int(li), r) })
+				*s = c.Streams
+			})
 		}},
 		{"the latent sum unnormed", latentUnnormed},
 		{"the MLA output ungated", latentAttnUngated},
