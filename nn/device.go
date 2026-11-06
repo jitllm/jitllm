@@ -1338,6 +1338,28 @@ type ModelOwner interface {
 // ErrReporter says why the device's last call refused.
 type ErrReporter interface{ Err() string }
 
+// LayerRunner runs a range of blocks (LayerDevice.Layers): what a step asks
+// of every device its blocks are placed on.
+type LayerRunner interface {
+	Layers(lo, hi, pos, n int, x, cs, csSWA []float32, head *Head) bool
+}
+
+// TokenReader takes the tokens of the rows the next call runs, for the
+// blocks that read them (an n-gram block's hash).
+type TokenReader interface{ SetTokens(toks []int32) }
+
+// TableReader reads the call's rotary tables (cs, csSWA) rather than making
+// its own from the positions.
+type TableReader interface{ ReadsTables() bool }
+
+// RunFailer is a device whose last call failed with an error of its own (a
+// page that could not be read), which the step returns as it is.
+type RunFailer interface{ RunErr() error }
+
+// RunCloser is a device that keeps a region open across its calls (the CPU's
+// fused pool region); CloseRun closes it before another device runs.
+type RunCloser interface{ CloseRun() }
+
 // HostReserver is how many bytes of the host's memory the device holds now (an
 // integrated GPU's blocks, KV and scratch), which the host's page and expert
 // budgets leave room for. It moves with placement, so the instance attaching

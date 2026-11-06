@@ -188,8 +188,15 @@ func runOf(runs []nn.KeyRun, pos int) (lo, hi int) {
 // Attach runs the lanes over a session's history h and recurrent state v.
 func (l *Lanes) Attach(h History, v *View) { l.h, l.v = h, v }
 
-// SetToken is the token the next call's row is of.
-func (l *Lanes) SetToken(tok int32) { l.tok = tok }
+// SetTokens is the tokens of the next call's rows (nn.TokenReader).
+func (l *Lanes) SetTokens(toks []int32) { l.tok = toks[0] }
+
+// ReadsTables says the blocks read the call's rotary tables (nn.TableReader).
+func (l *Lanes) ReadsTables() bool { return true }
+
+// CloseRun closes the fused pool region the last call left open
+// (nn.RunCloser).
+func (l *Lanes) CloseRun() { l.e.Unfuse() }
 
 // SetLayerInputs is the per-layer inputs the next call's blocks read
 // (nn.LayerInputDevice).
@@ -225,10 +232,12 @@ func (l *Lanes) Layers(lo, hi, pos, n int, x, cs, csSWA []float32, head *nn.Head
 		}
 		if why != nn.DeclineServes {
 			l.why, l.at = why, li
+			l.e.steps.Decline(nn.PartBlock, why)
 			return false
 		}
 		l.e.steps.Serve(nn.PartBlock)
-		if l.trace != nil {
+		// The caller traces a run's last block, whichever device ran it.
+		if l.trace != nil && li < hi-1 {
 			l.trace(li)
 		}
 	}
@@ -248,8 +257,25 @@ func (l *Lanes) Row(li int, st *Step) (nn.Decline, error) {
 // where none declined.
 func (l *Lanes) Declined() (int, nn.Decline) { return l.at, l.why }
 
-// Err is the last call's failure, nil where it ran or was declined.
-func (l *Lanes) Err() error { return l.err }
+// RunErr is the last call's failure, nil where it ran or was declined
+// (nn.RunFailer).
+func (l *Lanes) RunErr() error { return l.err }
+
+// Err is why the last call declined (nn.ErrReporter): the block's decline,
+// and the composer's first error where the block was not formed.
+func (l *Lanes) Err() string {
+	if l.why == nn.DeclineServes {
+		return ""
+	}
+	if l.why == nn.DeclineNotFormed && l.e.comp.Err() != nil {
+		return fmt.Sprintf("the composer does not serve block %d on the CPU: %s (the first: %v)", l.at, nn.DeclineName(int(l.why)), l.e.comp.Err())
+	}
+	return fmt.Sprintf("the composer does not serve block %d on the CPU: %s", l.at, nn.DeclineName(int(l.why)))
+}
+
+// ErrCause is a decline's cause (nn.CauseReporter): a call the lanes refuse
+// is a decline, never a fault.
+func (l *Lanes) ErrCause() nn.FailCause { return nn.FailDecline }
 
 // recLi is the block whose recurrent state block li steps: its own, or under
 // RecFault the first block's that holds one.

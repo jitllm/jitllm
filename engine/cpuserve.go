@@ -57,17 +57,13 @@ type cpuState struct {
 	x       *cpudev.Exec
 	// lanes runs a decode token's blocks on the device for the session the
 	// instance runs (cpudev.Lanes).
-	lanes *cpudev.Lanes
-	// oneFresh and tabsFresh say the decode row's and the step's rows'
-	// rotary tables are made (cpuOneTable, cpuRowTables); tabSeq is the
-	// rows' slots as the tables read them.
-	oneFresh, tabsFresh bool
-	tabSeq              []int
+	lanes     *cpudev.Lanes
+	tabsFresh bool
+	tabSeq    []int
 	// rseq and rpos are a step's rows' sequences and positions; lastPos
 	// each sequence's last position a step's rows reach (cpuRecWhole).
 	lastPos    []int
 	rseq, rpos []int
-	onePos     [1]int
 	// runWindows says each run of the instance's (bidir) is a window its rows
 	// attend inside, none of the positions before it: a tower's windowed
 	// block's (cpuTowerRows).
@@ -457,6 +453,7 @@ func (s *Instance) cpuPlace() {
 	if s.cpu.lanes == nil {
 		s.cpu.lanes = cpudev.NewLanes(s.cpu.x, &s.ws.b, &s.lease, s.c.NEmbd, s.nseq, s.c.Streams(), s.dg.ConvStateLen(),
 			func(li int) { s.trace(li, "ffn_resid", s.x) })
+		s.routes[1] = newRoute(s.cpu.lanes)
 	}
 	for li := s.lo; li < min(s.hi, n); li++ {
 		if !s.devAt(li) {
