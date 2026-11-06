@@ -3,7 +3,6 @@ package engine
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"github.com/jitllm/jitllm/nn"
 )
 
@@ -59,28 +58,20 @@ const (
 	routeLanes
 )
 
-// laneRoute is the route of a session's calls on the CPU device, its faces
-// the lanes' own (no assertion at all).
-func laneRoute(l *cpudev.SessionLanes) route {
-	return route{run: l, inputs: l, toks: l, tables: l, fail: l, errs: l, cause: l, closer: l, rows: l, steps: l, keys: l, wins: l, prompt: l, kvmig: l, recmig: l, rew: l, rowk: l}
-}
+// History is the session's history as it is now (nn.HistoryOf).
+func (s *Session) History() nn.History { return s.kv }
 
-// History is the session's history as it is now (cpudev.HistoryOf).
-func (s *Session) History() cpudev.History { return s.kv }
-
-// bindLanes makes sess's calls on the CPU device run on s's lanes: its view
-// there is made once and bound again in place when it leases another
-// instance, so a lease allocates nothing.
+// bindLanes makes sess's calls on the lanes' device run for s: its view there
+// is made once and bound again in place when it leases another instance, so
+// a lease allocates nothing.
 func (s *Instance) bindLanes(sess *Session) {
-	if s.exec.x.Lanes() == nil {
+	b, ok := s.places[routeLanes].(nn.SessionBinder)
+	if !ok {
 		return
 	}
-	v, _ := sess.routes[routeLanes].run.(*cpudev.SessionLanes)
-	if v == nil {
-		v = new(cpudev.SessionLanes)
+	if v, ok := b.BindSession(sess.routes[routeLanes].run, sess, sess); ok {
+		sess.routes[routeLanes] = newRoute(v)
 	}
-	v.Bind(s.exec.x.Lanes(), sess, sess)
-	sess.routes[routeLanes] = laneRoute(v)
 }
 
 // routeAt is the route block li runs on.

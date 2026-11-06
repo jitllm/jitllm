@@ -198,6 +198,21 @@ func (e *Exec) ArenaFor(li, pp int, latent bool, slots int) (*Arena, error) {
 // (nn.HistoryStorage).
 func (e *Exec) NextSequence() int64 { return e.cpu.NextSeq(e.setup.Model) }
 
+// BindSession binds a session's view of the execution's lanes, prev's in
+// place where it is one (nn.SessionBinder); false before the first
+// placement.
+func (e *Exec) BindSession(prev nn.LayerRunner, h nn.HistoryOf, p nn.Prompt) (nn.LayerRunner, bool) {
+	if e.lanes == nil {
+		return nil, false
+	}
+	v, _ := prev.(*SessionLanes)
+	if v == nil {
+		v = new(SessionLanes)
+	}
+	v.Bind(e.lanes, h, p)
+	return v, true
+}
+
 // NotePrep records err as the execution's preparation error (nn.PrepNoter).
 func (e *Exec) NotePrep(err error) { e.comp.Note(err) }
 
