@@ -104,7 +104,7 @@ func (s *Instance) cpuInputCall(one, many *cpuHeadForm, in, x, ple []float32, to
 	}
 	f, why := hf.formOf()
 	if why == nn.DeclineServes {
-		why = s.cpuWeights(f, cpuInputRows, nil)
+		_, why = s.cpuFormWeights(f, cpuInputRows, nil)
 	}
 	if why != nn.DeclineServes {
 		s.cpu.steps.Declined[nn.PartEmbed][why] += rows

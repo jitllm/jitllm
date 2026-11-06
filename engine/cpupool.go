@@ -24,13 +24,11 @@ func (s *Instance) cpuPlacePool() {
 	part := cpudev.Part{Composed: hf.composed, F: hf.f, Why: hf.why, Err: hf.err}
 	var weights []unsafe.Pointer
 	if f := part.F; f != nil {
-		if why := s.cpuWeights(f, -1, nil); why != nn.DeclineServes {
+		ws, why := s.cpuFormWeights(f, -1, nil)
+		if why != nn.DeclineServes {
 			part.F, part.Why = nil, why
-		} else {
-			for _, w := range f.Weights {
-				weights = append(weights, s.cpuWeightAt(-1, nil, w))
-			}
 		}
+		weights = ws
 	}
 	s.readout = cpudev.NewPool(s.cpu.dev, &s.cpu.steps, part, weights, s.maxSeq, s.c.NEmbd, s.poolWidth(), len(g.Out) > 1)
 }

@@ -106,6 +106,8 @@ type cpuState struct {
 	// pages, by bank (gate, up, down) and plane (jlm.File.BankView), set at
 	// the block's composition.
 	banks [][3][3]unsafe.Pointer
+	// weights is each form's bound weights (cpuFormWeights).
+	weights map[cpuBoundKey]*cpuBoundWeights
 	// ngView is the n-gram table's rows where this device reads them, made
 	// at the composition of the block that gathers them.
 	ngView *jlm.RowView
@@ -346,7 +348,7 @@ func (s *Instance) cpuStep(li int, l *model.Layer, cs []float32) (nn.Decline, er
 	s.cpu.tok1[0] = uint32(s.tok)
 	s.cpu.pos1 = [2]uint32{1, uint32(pos)}
 	b.tok, b.pos, b.csSWA = s.cpu.tok1[:], s.cpu.pos1[:], s.csSWA
-	if why := s.cpuWeights(cb.f, li, l); why != nn.DeclineServes {
+	if _, why := s.cpuFormWeights(cb.f, li, l); why != nn.DeclineServes {
 		return why, nil
 	}
 	s.cpu.rows = [4]uint32{0, uint32(pg.keyStart(pos)), uint32(pos + 1), uint32(pos)}
@@ -507,7 +509,7 @@ func (s *Instance) cpuRecRows(li int, l *model.Layer, x, cs []float32, seq, pos 
 	if len(pos) > 1 {
 		s.cpu.steps.Stepped++
 	}
-	if why := s.cpuWeights(cb.f, li, l); why != nn.DeclineServes {
+	if _, why := s.cpuFormWeights(cb.f, li, l); why != nn.DeclineServes {
 		return why, nil
 	}
 	// x is stream-major: row r's stream k at (k*rows + r)*n_embd.
@@ -607,7 +609,7 @@ func (s *Instance) cpuRecWhole(li int, l *model.Layer, cb *cpuBlock, seq, pos, o
 		}
 		last[q] = pos[i]
 	}
-	if s.cpuWeights(cb.rows, li, l) != nn.DeclineServes {
+	if _, why := s.cpuFormWeights(cb.rows, li, l); why != nn.DeclineServes {
 		return nil
 	}
 	return cb.rows
@@ -718,7 +720,7 @@ func (s *Instance) cpuRowsForm(li int, l *model.Layer) (*cpudev.Form, nn.Decline
 	if cb.rows == nil {
 		return nil, cb.rowsWhy
 	}
-	if why := s.cpuWeights(cb.rows, li, l); why != nn.DeclineServes {
+	if _, why := s.cpuFormWeights(cb.rows, li, l); why != nn.DeclineServes {
 		return nil, why
 	}
 	return cb.rows, nn.DeclineServes
@@ -1080,11 +1082,55 @@ func (s *Instance) cpuCallOf(b *cpuBound, f *cpudev.Form) *cpudev.Call {
 	a[cpudev.SrcZero] = addr(s.cpu.zero)
 	a[cpudev.SrcRequest], a[cpudev.SrcTokens], a[cpudev.SrcPos] = addr(b.req), addr(b.tok), addr(b.pos)
 	a[cpudev.SrcPicture] = addr(b.pic)
-	c.Weights = c.Weights[:0]
-	for _, w := range f.Weights {
-		c.Weights = append(c.Weights, s.cpuWeightAt(b.li, b.l, w))
-	}
+	c.Weights, _ = s.cpuFormWeights(f, b.li, b.l)
 	return c
+}
+
+// cpuBoundKey names a form's bound weights: the form, the block whose
+// weights it reads (-1 for the model's) and the copy of it they are read in.
+type cpuBoundKey struct {
+	f  *cpudev.Form
+	li int
+	l  *model.Layer
+}
+
+// cpuBoundWeights is a form's weights where its call reads them, at the
+// frame they were resolved at, and why not where the CPU cannot read one.
+type cpuBoundWeights struct {
+	frame unsafe.Pointer
+	addrs []unsafe.Pointer
+	why   nn.Decline
+}
+
+// cpuFormWeights is form f's weights for block li (l its copy, nil for the
+// model's tensors) where its call reads them: resolved and checked once for
+// the block's frame, and again only when the frame has moved -- a page-in
+// after an eviction binds the block's tensors elsewhere -- never looked up by
+// role on every call. A tensor no page holds is resolved once.
+func (s *Instance) cpuFormWeights(f *cpudev.Form, li int, l *model.Layer) ([]unsafe.Pointer, nn.Decline) {
+	var frame unsafe.Pointer
+	if li >= 0 && s.fr != nil {
+		frame = addr(s.fr.Page(li))
+	}
+	k := cpuBoundKey{f, li, l}
+	b := s.cpu.weights[k]
+	if b != nil && b.frame == frame {
+		return b.addrs, b.why
+	}
+	if b == nil {
+		if s.cpu.weights == nil {
+			s.cpu.weights = map[cpuBoundKey]*cpuBoundWeights{}
+		}
+		b = &cpuBoundWeights{}
+		s.cpu.weights[k] = b
+	}
+	b.frame, b.addrs = frame, b.addrs[:0]
+	if b.why = s.cpuWeights(f, li, l); b.why == nn.DeclineServes {
+		for _, w := range f.Weights {
+			b.addrs = append(b.addrs, s.cpuWeightAt(li, l, w))
+		}
+	}
+	return b.addrs, b.why
 }
 
 // cpuWeightAt is where block li's weight w is read: a vector's, a plane of
