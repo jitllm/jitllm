@@ -66,7 +66,7 @@ func gateFromAReduction(reg *composer.Registry, d backend.Device, dev composer.D
 	gate := b.Expr("gate", H, []graph.Term{
 		{Fn: graph.MapMul, Args: [3]graph.Arg{in0, konst(1 / math.Sqrt(float64(D)))}},
 		{Fn: graph.MapAbs, Args: [3]graph.Arg{term(0)}},
-		{Fn: graph.MapMax, Args: [3]graph.Arg{term(1), konst(float64(graph.SqrtSigmoidFloor))}},
+		{Fn: graph.MapMax, Args: [3]graph.Arg{term(1), konst(1e-6)}},
 		{Fn: graph.MapSqrt, Args: [3]graph.Arg{term(2)}},
 		{Fn: graph.MapLess, Args: [3]graph.Arg{konst(0), term(0)}},
 		{Fn: graph.MapLess, Args: [3]graph.Arg{term(0), konst(0)}},
@@ -127,7 +127,7 @@ func gateFromAReduction(reg *composer.Registry, d backend.Device, dev composer.D
 				dt += float64(kv[r*C+k*D+e]) * float64(qv[r*C+k*D+e])
 			}
 			t0 := dt / math.Sqrt(float64(D))
-			sg := math.Sqrt(max(math.Abs(t0), float64(graph.SqrtSigmoidFloor)))
+			sg := math.Sqrt(max(math.Abs(t0), 1e-6))
 			switch {
 			case t0 < 0:
 				sg = -sg

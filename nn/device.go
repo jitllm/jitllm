@@ -104,11 +104,7 @@ type LayerWeights struct {
 	// AttnNormB and FFNNormB are the LayerNorm biases (LayerPlan.LayerNorm):
 	// an RMSNorm has no bias and a LayerNorm does.
 	AttnNormB, FFNNormB []float32
-	// XIELU is an Apertus block's activation numbers (alpha_p, alpha_n, beta,
-	// eps; jlm.RoleXIELU), where LayerPlan.Act is ActXIELU. They are the
-	// block's own, so they ride with its weights and move when it moves.
-	XIELU          []float32
-	Wq, Wk, Wv, Wo Weight
+	Wq, Wk, Wv, Wo      Weight
 	// Gate, Up and Down are one expert's matrices in a dense block and the whole
 	// bank of LayerPlan.NExpert of them when Router.Data is non-nil. Rows stays
 	// one expert's row count either way; the bank is NExpert*Rows rows of the
@@ -678,11 +674,7 @@ type LayerPlan struct {
 	// ActWin is how many activation elements share one quantization scale. It
 	// must match what the CPU tier uses, because the gate between them is
 	// identical token ids.
-	ActWin int
-	// Act is the feed-forward's non-linearity: SiLU (llama), GELU-tanh (gemma,
-	// SmolVLM's tower) or quick-GELU (CLIP's). A device that cannot emit the
-	// kind it is handed must decline.
-	Act      graph.ActKind
+	ActWin   int
 	RopeNeox bool // rotate (i, i+nRot/2), not (2i, 2i+1)
 	// NoPosEnc: the attention blocks apply no positional encoding at all. On
 	// MLA the rotary launches are replaced by a copy rather than skipped,

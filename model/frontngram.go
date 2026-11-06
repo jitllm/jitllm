@@ -7,12 +7,16 @@ import (
 	"github.com/jitllm/jitllm/graph"
 )
 
+// sqrtSigmoidFloor is the gate's floor on the magnitude, the reference's
+// clamp_min(1e-6).
+const sqrtSigmoidFloor = 1e-6
+
 // ngramStreams is the n-gram embedding's block over the streams xs, stated
 // as ops: the rows' gathered table rows (ngramEmbed) project to a key per
 // stream and one value; each stream's normed key
 // against its normed residual, over sqrt(n_embd), gives a gate, the
 // sigmoid of its signed square root (the magnitude floored at
-// kernels.SqrtSigmoidFloor); the gated values, and their normed
+// sqrtSigmoidFloor); the gated values, and their normed
 // convolution through silu -- depthwise, dilated by the n-gram, its history
 // in the delta rule's state slot after the predecessors -- are added to the
 // streams.
@@ -39,7 +43,7 @@ func (m *Model) ngramStreams(b *graph.Builder, xs []graph.ValueID,
 	gate := b.Expr("ng.gate", h, []graph.Term{
 		{Fn: graph.MapMul, Args: [3]graph.Arg{in0, konst(1 / math.Sqrt(float64(d)))}},
 		{Fn: graph.MapAbs, Args: [3]graph.Arg{term(0)}},
-		{Fn: graph.MapMax, Args: [3]graph.Arg{term(1), konst(float64(graph.SqrtSigmoidFloor))}},
+		{Fn: graph.MapMax, Args: [3]graph.Arg{term(1), konst(sqrtSigmoidFloor)}},
 		{Fn: graph.MapSqrt, Args: [3]graph.Arg{term(2)}},
 		{Fn: graph.MapLess, Args: [3]graph.Arg{konst(0), term(0)}},
 		{Fn: graph.MapLess, Args: [3]graph.Arg{term(0), konst(0)}},

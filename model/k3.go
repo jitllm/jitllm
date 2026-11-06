@@ -5,14 +5,13 @@ import (
 	"unsafe"
 
 	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/graph"
 )
 
 // Kimi-K3's text model (jlm.ArchKimiK3), transcribed from Moonshot's
 // modeling_kimi_linear.py, which llama.cpp's kimi-k3.cpp matches: Kimi-Linear's
 // hybrid (KDA in delta.go, MLA with no rotary in mla.go) plus residual
 // attention over a bank of block inputs, a latent mixture (k3MoE), situ
-// (graph.ActSitu), an MLA output gate (mlaOutProject) and a full-rank KDA gate
+// (stated by the converter), an MLA output gate (mlaOutProject) and a full-rank KDA gate
 // with an optional decay lower bound (nn.DeltaDecayBound32JIT).
 //
 // The bank crosses a device seam inside a token, so it is carried as residual
@@ -69,21 +68,14 @@ func (c *Config) ExpWidth() int {
 }
 
 // k3Config carries the container's Kimi-K3 fields into c and checks they
-// describe a graph the engine runs. nact is how many activation flags the
-// container set; situ is the only activation then.
-func k3Config(out *Config, c *jlm.Config, nact int) error {
+// describe a graph the engine runs.
+func k3Config(out *Config, c *jlm.Config) error {
 	out.AttnResBlock = int(c.AttnResBlock)
 	out.ExpertLatent = int(c.ExpertLatent)
 	out.KDALowerBound = c.KDALowerBound
 	out.LatentNormEps = float64(c.LatentNormEps)
 	if out.LatentNormEps == 0 {
 		out.LatentNormEps = out.RMSEps
-	}
-	if c.SituBeta != 0 || c.SituLinearBeta != 0 {
-		if nact != 0 || out.Act != graph.ActSiLU {
-			return fmt.Errorf("model: %s: the container claims two activations", out.Arch)
-		}
-		out.Act = graph.ActSitu
 	}
 	switch {
 	case out.KDALowerBound > 0:

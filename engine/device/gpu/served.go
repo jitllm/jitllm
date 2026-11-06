@@ -2353,8 +2353,6 @@ func (l *layer) namedVector(r jlm.Role) (backend.Buf, bool) {
 		return l.nK, true
 	case jlm.RoleVClamp:
 		return l.clampB, true
-	case jlm.RoleXIELU:
-		return l.xielu, true
 	case jlm.RoleLayerOutScale:
 		return l.outScale, true
 	}

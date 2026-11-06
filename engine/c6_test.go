@@ -170,7 +170,7 @@ func c6BaseFixtures() []struct {
 		{"synth-nemotron", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
 			return c.Arch == "nemotron" && c.LayerNorm && !c.Parallel && c.RopeNeox &&
-				2*c.NRot == c.HeadDim && c.Act == graph.ActReLU2 && l.Gate.E == nil &&
+				2*c.NRot == c.HeadDim && m.Container.Config().Flags.Has(jlm.FlagReLU2) && l.Gate.E == nil &&
 				l.FfnNorm != nil && l.AttnNormB != nil && l.Vector(jlm.RoleFFNUpBias) != nil && l.Vector(jlm.RoleFFNDownBias) != nil &&
 				m.OutNormB != nil && !c.TiedEmbd
 		}},
@@ -526,7 +526,7 @@ func c6BaseViolations() map[string][]c6Violation {
 			{"one norm for both branches", oneNormForBoth},
 		},
 		"synth-nemotron": {
-			{"GELU for relu2", actSwap(graph.ActGELU)},
+			{"GELU for relu2", actSwap(jlm.FlagGELU)},
 			{"LayerNorm1p's 1 added again", onePlusAgain},
 			{"RMSNorm for LayerNorm", rmsForLayerNorm},
 			{"NORM rotary for NEOX", hostNormRotary},
