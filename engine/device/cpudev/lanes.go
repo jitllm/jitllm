@@ -348,10 +348,6 @@ func (l *Lanes) recAddrs(li int) (state, conv unsafe.Pointer) {
 	return unsafe.Pointer(unsafe.SliceData(l.v.State(li))), unsafe.Pointer(unsafe.SliceData(l.v.Conv(li)))
 }
 
-// HistoryOf is what a session's calls read their history from: the
-// session's history as it is at the call, which a relayout replaces.
-type HistoryOf interface{ History() History }
-
 // SessionLanes is a session's calls on the CPU device: the instance's lanes
 // run over the session's history and its view, as a card's session view
 // (gpu.GPU.Attach) runs the card's kernels over the session's. Each call
@@ -663,16 +659,6 @@ func (l *Lanes) chunk(lo, hi, pos, n int, x, cs, csSWA []float32) bool {
 // (nn.PromptRows).
 func (l *Lanes) SetPromptRows(slot, base int, bidir bool) {
 	l.slot, l.base, l.bidir = slot, base, bidir
-}
-
-// Prompt is a session's say over a linear block's summary as its prompt's
-// rows run on the CPU device: whether a speculation step keeps each row's
-// (Snaps, Snap), and the restore points the prompt seals it at (Points,
-// Point, Seal).
-type Prompt interface {
-	Points() bool
-	Point(pos int) bool
-	Seal(li, slot, pos int)
 }
 
 // recWhole is linear block li's rows' form where the rows run on it whole:
