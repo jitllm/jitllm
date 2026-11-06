@@ -165,32 +165,24 @@ func (s *Instance) cpuStep(li int, l *model.Layer, cs []float32) (nn.Decline, er
 		return nn.DeclineServes, err
 	}
 	// A block sharing another's history reads its source's pages.
-	hl := s.c.KVSource(li)
-	pg := &s.kv.layers[hl]
+	var h cpudev.History = s.kv
 	pos := s.pos
-	if pg.p > 0 {
-		if why := s.prepareHistory(hl, pos); why != nn.DeclineServes {
-			return why, nil
-		}
-	}
-	pages, err := s.historyTable(hl, pg, s.nseq)
-	if err != nil {
-		return nn.DeclineServes, err
+	hb, why, err := h.Prepare(li, pos, s.nseq)
+	if why != nn.DeclineServes || err != nil {
+		return why, err
 	}
 	w, why := s.ws.bind(cb.F, li, l)
 	if why != nn.DeclineServes {
 		return why, nil
 	}
-	r := cpudev.Row{X: s.resid(), Stride: s.c.NEmbd, CS: cs, CSSWA: s.csSWA, Side: s.cpuSide(li), Pages: pages,
-		KeyStart: pg.keyStart(pos), Pos: pos, PagePos: pg.p, Tok: s.tok, Toks: true, RecLi: s.cpuRecLi(li), Weights: w, Faults: true}
-	r.Keys, r.Values = kvAddrs(pg)
+	r := cpudev.Row{X: s.resid(), Stride: s.c.NEmbd, CS: cs, CSSWA: s.csSWA, Side: s.cpuSide(li), Pages: hb.Pages,
+		KeyStart: hb.KeyStart, Pos: pos, PagePos: hb.PagePos, Tok: s.tok, Toks: true, RecLi: s.cpuRecLi(li), Weights: w, Faults: true,
+		Keys: hb.Keys, Values: hb.Values}
 	r.RecState, r.RecConv = recAddrs(s.Session, r.RecLi)
 	if err := s.cpu.rowRun.Row(li, cb, &r); err != nil {
 		return nn.DeclineServes, err
 	}
-	if pg.p > 0 && pos+1 > pg.written {
-		pg.written = pos + 1
-	}
+	h.Commit(li, pos)
 	return nn.DeclineServes, nil
 }
 
@@ -247,7 +239,7 @@ func (s *Instance) cpuSessions(li int, l *model.Layer, x, cs, csSWA []float32, s
 			}
 			lead := oi.Session
 			oi.Session = s.rowOwn[a]
-			oi.historyWritable(hl, pos[a])
+			oi.kv.owned(hl, pos[a])
 			oi.Session = lead
 		}
 	}
@@ -353,7 +345,7 @@ func (s *Instance) cpuRecRows(li int, l *model.Layer, x, cs []float32, seq, pos 
 		pg := &s.kv.layers[li]
 		// A block that attends as well writes and reads the row's history.
 		if pg.p > 0 {
-			if why := s.prepareHistory(li, pos[r]); why != nn.DeclineServes {
+			if why := s.kv.prepare(li, pos[r]); why != nn.DeclineServes {
 				s.Session = lead
 				return why, nil
 			}
@@ -362,7 +354,7 @@ func (s *Instance) cpuRecRows(li int, l *model.Layer, x, cs []float32, seq, pos 
 			clear(o.view.State(li)[slot*s.dg.StateStride():][:s.dg.StateStride()])
 			clear(o.view.Conv(li)[slot*s.dg.ConvStateLen():][:s.dg.ConvStateLen()])
 		}
-		pages, err := s.historyTable(li, pg, s.nseq)
+		pages, err := s.kv.table(li, s.nseq)
 		if err != nil {
 			s.Session = lead
 			return nn.DeclineServes, err
@@ -525,13 +517,13 @@ func (s *Instance) cpuRowsReady(li int, f *cpudev.Form, pos []int) nn.Decline {
 	// in any order, and a page holds every sequence's positions.
 	start, end := pos[0], 0
 	for _, p := range pos {
-		s.historyWritable(hl, p)
+		s.kv.owned(hl, p)
 		start, end = min(start, pg.keyStart(p)), max(end, p+1)
 	}
 	if end > f.Keys {
 		return nn.DeclineSessions
 	}
-	if why := s.historyReadable(hl, start, end-1); why != nn.DeclineServes {
+	if why := s.kv.readable(hl, start, end-1); why != nn.DeclineServes {
 		return why
 	}
 	return nn.DeclineServes
@@ -548,36 +540,6 @@ func (s *Instance) cpuRowsOf(slot, p0, n int) (seq, pos []int) {
 		seq[i], pos[i] = slot, p0+i
 	}
 	return seq, pos
-}
-
-// cpuHistory makes the pages block li's step reads and writes resident,
-// in the layer's arena, or says why they are not.
-func (s *Session) prepareHistory(li, pos int) nn.Decline {
-	s.historyWritable(li, pos)
-	return s.historyReadable(li, s.kv.layers[li].keyStart(pos), pos)
-}
-
-// cpuWritable makes the page block li writes pos into resident and its own.
-func (s *Session) historyWritable(li, pos int) {
-	pg := &s.kv.layers[li]
-	s.kvWritable(li, pos)
-	n, _ := pg.page(pos)
-	pg.grow(n)
-	pg.cow(n)
-}
-
-// cpuReadable makes the pages of block li's positions [start, pos]
-// resident, in the layer's arena, or says why they are not.
-func (s *Session) historyReadable(li, start, pos int) nn.Decline {
-	pg := &s.kv.layers[li]
-	n, _ := pg.page(pos)
-	s.kvEnsureWindow(li, start, pos-start)
-	for p := start / pg.p; p <= n; p++ {
-		if !pg.mem.ArenaPage(p) {
-			return nn.DeclinePageOut
-		}
-	}
-	return nn.DeclineServes
 }
 
 // addr is x's first element's address, nil for a nil slice.
@@ -767,7 +729,7 @@ func (s *Instance) cpuSideOff(li int) int {
 
 // formCPUBlock is block li's form on the CPU at rows rows through the
 // model's keyed cache: its history the session's sequences' pages
-// (Session.historyTable), each a history of the instance's context.
+// (kvCache.table), each a history of the instance's context.
 func (s *Instance) formCPUBlock(li int, cb *cpudev.Block, rows int) (*cpudev.Form, error) {
 	g := s.m.Composing().BlockGraph(li)
 	cb.Graph = g
@@ -874,23 +836,6 @@ func (s *kvPages) arenaSlots() int {
 	return 0
 }
 
-// cpuPages is the table block li's forms read its history pg through: its
-// session's view's (cpudev.View), or a zero table for a block keeping none.
-func (s *Session) historyTable(li int, pg *kvPages, nseq int) ([]uint32, error) {
-	nseq = max(nseq, 1)
-	t := s.view.At(li)
-	switch {
-	case t != pg.arena():
-		return nil, fmt.Errorf("model: block %d's pages are not its session's view's", li)
-	case t == nil:
-		if len(s.noTable) < nseq {
-			s.noTable = make([]uint32, nseq)
-		}
-		return s.noTable[:nseq], nil
-	}
-	return t.Pages(nseq), nil
-}
-
 // cpuRowsRun runs form f of block li (l its copy) over the rows of x, the
 // stream-major residual stride apart, at positions pos of sequences seq with
 // tokens tok, their per-layer inputs side, rotary tables cs and swa, on the
@@ -903,7 +848,7 @@ func (s *Instance) cpuRowsRun(li int, l *model.Layer, f *cpudev.Form, x []float3
 	}
 	hl := s.c.KVSource(li)
 	pg := &s.kv.layers[hl]
-	pages, err := s.historyTable(hl, pg, s.nseq)
+	pages, err := s.kv.table(hl, s.nseq)
 	if err != nil {
 		return err
 	}

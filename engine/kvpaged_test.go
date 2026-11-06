@@ -360,7 +360,7 @@ func (t *truncStore) Get(cacheId string, layer, index int, page io.Writer) error
 //
 // A short page leaves zeros in a fresh buffer, and the answer is fluent and
 // wrong, so counting it and carrying on is not enough. Against the violation
-// (kvFault recording nothing) this test produces tokens.
+// (kvCache.faultIn recording nothing) this test produces tokens.
 func TestAShortPageFailsTheRequest(t *testing.T) {
 	path := jlmOf(t, testmodels.Path("tinyllama-1.1b-q3_K_M.gguf"))
 	m, err := model.Open(path)

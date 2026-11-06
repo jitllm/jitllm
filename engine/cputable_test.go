@@ -93,7 +93,7 @@ func TestCPUPageTablesFollowThePages(t *testing.T) {
 	if !pg.isShared(0) {
 		t.Fatal("the second session's first page is not shared: nothing is made private")
 	}
-	b.s.historyWritable(li, 3)
+	b.s.kv.owned(li, 3)
 	if pg.isShared(0) {
 		t.Fatal("a write's page stayed shared")
 	}

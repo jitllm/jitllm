@@ -12,6 +12,7 @@ import (
 	"math"
 	"slices"
 	"strconv"
+	"sync/atomic"
 	"unsafe"
 
 	"github.com/jitllm/jitllm/model"
@@ -160,7 +161,7 @@ type kvPages struct {
 	// would store those zeros as history.
 	written int
 	// out[n] marks a page trim evicted with history still in it. A write into
-	// it faults it back first (Instance.kvWritable): in a batch the page holds
+	// it faults it back first (kvCache.writable): in a batch the page holds
 	// every row's slots, and a readmitted row writes into pages the others
 	// sealed long ago, so allocating a zeroed one would wipe their history.
 	// A page dropped on purpose (a restore, a truncation) is not out.
@@ -406,6 +407,16 @@ type kvCache struct {
 	// recurrent says this model carries state outside the pages, so a restore
 	// point needs a summary as well as pages. See sealRecurrentTail.
 	recurrent bool
+	// view is the session's view of the CPU device's history: the table each
+	// block reads its pages through. src is each block's history block
+	// (Config.KVSource), noTable the page table of a block that keeps no
+	// history, and err the first page fault of the current step that could
+	// not be recovered: set inside a pool closure, which has no error path,
+	// and drained by Instance.kvCheck at the entry point.
+	view    *cpudev.View
+	src     []int
+	noTable []uint32
+	err     atomic.Pointer[error]
 	// recAt asks whether a hybrid's every summary is stored for a position
 	// (Instance.recPointAt), and mark is the instance's recMark for the restore in
 	// flight.
@@ -473,7 +484,10 @@ func newKVCacheRange(c *model.Config, id string, nseq int, l kvLayout, store KVS
 		store = NoStore{}
 	}
 	kc := &kvCache{id: id, store: store, layers: make([]kvPages, hi), lo: lo,
-		bh: map[int][]string{}, geom: geomDigest(c, nseq, l)}
+		bh: map[int][]string{}, geom: geomDigest(c, nseq, l), view: view, src: make([]int, hi)}
+	for li := range kc.src {
+		kc.src[li] = max(c.KVSource(li), 0)
+	}
 	// A model with a layer that keeps no pages keeps its history somewhere
 	// else, and that somewhere has its own restore points.
 	for li := kc.lo; li < len(kc.layers); li++ {
@@ -2241,34 +2255,34 @@ func (w *sliceWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// kvFault brings a page back if it was evicted. On a resident-only session -- no
-// store, no budget -- it is one nil compare.
-func (s *Session) kvFault(li, page int) bool {
-	pg := &s.kv.layers[li]
+// faultIn brings a page back if it was evicted. On a resident-only session --
+// no store, no budget -- it is one nil compare.
+func (kv *kvCache) faultIn(li, page int) bool {
+	pg := &kv.layers[li]
 	if page < pg.mem.Len() && pg.mem.K(page) != nil {
 		return true
 	}
-	if err := s.kv.fault(li, page); err != nil {
+	if err := kv.fault(li, page); err != nil {
 		// A page the store cannot return is a hole in the sequence's past, so
 		// the request fails. The error is recorded because this may run in a
 		// pool closure with no error path; kvCheck surfaces it at the entry
 		// point. Returning false stops the walk over the nil page.
-		s.kvErr.CompareAndSwap(nil, &err)
+		kv.err.CompareAndSwap(nil, &err)
 		return false
 	}
 	return true
 }
 
-// kvWritable brings back the page pos falls in before it is written, when trim
+// writable brings back the page pos falls in before it is written, when trim
 // evicted it with history still in it. On a session with no budget it is one
 // bounds check.
-func (s *Session) kvWritable(li, pos int) {
-	pg := &s.kv.layers[li]
+func (kv *kvCache) writable(li, pos int) {
+	pg := &kv.layers[li]
 	if pg.p == 0 {
 		return
 	}
 	if n, _ := pg.page(pos); n < len(pg.out) && pg.out[n] {
-		s.kvFault(li, n)
+		kv.faultIn(li, n)
 	}
 }
 
@@ -2531,12 +2545,12 @@ func (s *kvPages) keepOnReset(n int) {
 	}
 }
 
-// kvEnsureWindow faults every page of layer li covering [w0, w0+want) into
+// window faults every page of layer li covering [w0, w0+want) into
 // residence, on one goroutine, before the attention heads fan out. Faulting
 // from inside the pool is a data race (extend can reallocate the slice another
 // worker holds), so residency is decided here and workers only read.
-func (s *Session) kvEnsureWindow(li, w0, want int) {
-	pg := &s.kv.layers[li]
+func (kv *kvCache) window(li, w0, want int) {
+	pg := &kv.layers[li]
 	if pg.p == 0 {
 		return
 	}
@@ -2549,7 +2563,7 @@ func (s *Session) kvEnsureWindow(li, w0, want int) {
 	}
 	for pos, end := w0, w0+want; pos < end; {
 		sp := pg.span(pos, end)
-		s.kvFault(li, sp.page)
+		kv.faultIn(li, sp.page)
 		pos += sp.n
 	}
 }
@@ -2560,7 +2574,10 @@ func (s *Session) kvEnsureWindow(li, w0, want int) {
 // reach the host's budgets (followHost).
 func (s *Instance) kvCheck() error {
 	s.followHost()
-	if p := s.kvErr.Swap(nil); p != nil {
+	if s.kv == nil {
+		return nil
+	}
+	if p := s.kv.err.Swap(nil); p != nil {
 		return *p
 	}
 	return nil
@@ -2889,5 +2906,78 @@ func (kc *kvCache) writeSeq(h io.Writer, a, e int) {
 		}
 		h.Write(b[:])
 		seq = seq[1:]
+	}
+}
+
+// owned makes the page block li writes pos into resident and its own.
+func (kv *kvCache) owned(li, pos int) {
+	pg := &kv.layers[li]
+	kv.writable(li, pos)
+	n, _ := pg.page(pos)
+	pg.grow(n)
+	pg.cow(n)
+}
+
+// readable makes the pages of block li's positions [start, pos] resident,
+// in the layer's arena, or says why they are not.
+func (kv *kvCache) readable(li, start, pos int) nn.Decline {
+	pg := &kv.layers[li]
+	n, _ := pg.page(pos)
+	kv.window(li, start, pos-start)
+	for p := start / pg.p; p <= n; p++ {
+		if !pg.mem.ArenaPage(p) {
+			return nn.DeclinePageOut
+		}
+	}
+	return nn.DeclineServes
+}
+
+// prepare makes block li's history ready for a row at pos: its page written
+// and its window read.
+func (kv *kvCache) prepare(li, pos int) nn.Decline {
+	kv.owned(li, pos)
+	return kv.readable(li, kv.layers[li].keyStart(pos), pos)
+}
+
+// table is block li's page table, nseq sequences wide, from the session's
+// view of the CPU device's history.
+func (kv *kvCache) table(li, nseq int) ([]uint32, error) {
+	nseq = max(nseq, 1)
+	t := kv.view.At(li)
+	switch {
+	case t != kv.layers[li].arena():
+		return nil, fmt.Errorf("model: block %d's pages are not its session's view's", li)
+	case t == nil:
+		if len(kv.noTable) < nseq {
+			kv.noTable = make([]uint32, nseq)
+		}
+		return kv.noTable[:nseq], nil
+	}
+	return t.Pages(nseq), nil
+}
+
+// Prepare is cpudev.History's: block li's history block (its own, or the one
+// it shares) ready for a row at pos, and how a call binds it.
+func (kv *kvCache) Prepare(li, pos, nseq int) (cpudev.HistoryBinding, nn.Decline, error) {
+	hl := kv.src[li]
+	pg := &kv.layers[hl]
+	if pg.p > 0 {
+		if why := kv.prepare(hl, pos); why != nn.DeclineServes {
+			return cpudev.HistoryBinding{}, why, nil
+		}
+	}
+	pages, err := kv.table(hl, nseq)
+	if err != nil {
+		return cpudev.HistoryBinding{}, nn.DeclineServes, err
+	}
+	b := cpudev.HistoryBinding{Pages: pages, KeyStart: pg.keyStart(pos), PagePos: pg.p}
+	b.Keys, b.Values = kvAddrs(pg)
+	return b, nn.DeclineServes, nil
+}
+
+// Commit is cpudev.History's: block li's history holds the row at pos.
+func (kv *kvCache) Commit(li, pos int) {
+	if pg := &kv.layers[kv.src[li]]; pg.p > 0 && pos+1 > pg.written {
+		pg.written = pos + 1
 	}
 }
