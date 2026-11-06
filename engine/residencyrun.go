@@ -42,6 +42,7 @@ func (s *Instance) initResidency(budget uint64) {
 		}
 	}
 	s.res.SetBudget(expert)
+	s.lease.res = s.res
 }
 
 // reap drops the coldest experts until the resident set is inside the budget.

@@ -411,6 +411,9 @@ func setFault(s *Instance, f cpuFault) {
 	if st, ok := s.streams.(*cpudev.Streams); ok {
 		st.Fault = f == cpuFaultStreams
 	}
+	if r := s.cpu.run; r != nil {
+		r.FaultPicks, r.FaultExpert, r.FaultWeight = f == cpuFaultPicks, f == cpuFaultExpert, f == cpuFaultWeight
+	}
 	if h, ok := s.heads.(*cpudev.Head); ok {
 		h.Wrong = nil
 		if f == cpuFaultHead {
