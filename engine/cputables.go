@@ -115,18 +115,18 @@ func (s *Instance) ropeTables(marks *model.RopeMarks, seq, pos []int, cs, csSWA 
 	return s.tables.Tables(desc, buf, cs, csSWA)
 }
 
-// cpuOneTable makes a decode row's rotary tables in s.cs and s.csSWA, which
+// oneTable makes a decode row's rotary tables in s.cs and s.csSWA, which
 // the CPU's blocks read, once a token: at the row's cache position, from
 // its sequence's marks.
-func (s *Instance) cpuOneTable() error {
-	if s.cpu.oneFresh {
+func (s *Instance) oneTable() error {
+	if s.oneFresh {
 		return nil
 	}
-	s.cpu.onePos[0] = s.pos
-	if err := s.ropeTables(&s.rmarks, nil, s.cpu.onePos[:], s.cs, s.csSWA); err != nil {
+	s.onePos[0] = s.pos
+	if err := s.ropeTables(&s.rmarks, nil, s.onePos[:], s.cs, s.csSWA); err != nil {
 		return err
 	}
-	s.cpu.oneFresh = true
+	s.oneFresh = true
 	return nil
 }
 

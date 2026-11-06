@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/jitllm/jitllm/model"
 	"github.com/jitllm/jitllm/nn"
 )
 
@@ -24,8 +25,18 @@ func (s *Instance) devCause() nn.FailCause {
 // device does not serve -- are answered by no move: the caller returns the
 // error. Only a fault moves blocks (demoteAll).
 func (s *Instance) refusal(li int) error {
-	why := strings.TrimPrefix(s.devWhy(), ": ")
-	switch s.devCause() {
+	return s.refusalOf(li, strings.TrimPrefix(s.devWhy(), ": "), s.devCause())
+}
+
+// refusalOf is refusal for a device that said why and with what cause; a
+// block the front end does not state says what of it is not covered.
+func (s *Instance) refusalOf(li int, why string, cause nn.FailCause) error {
+	if cause == nn.FailDecline {
+		if u, err := s.m.UncoveredAt(li); u != model.Covered || err != nil {
+			why = fmt.Sprintf("%s (the front end: %v, %v)", why, u, err)
+		}
+	}
+	switch cause {
 	case nn.FailBuild:
 		s.buildRefused++
 		return &nn.BuildError{Layer: li, Err: errors.New(why)}

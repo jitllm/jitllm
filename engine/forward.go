@@ -221,6 +221,12 @@ type Instance struct {
 	// device retry (rowStreams).
 	tok1    [1]int32
 	tokFill bool
+	// routes is the devices the instance's blocks run on (route), the
+	// card's view and the CPU's lanes; oneFresh and onePos say the decode
+	// row's rotary tables are made for this token, at onePos.
+	routes   [2]route
+	oneFresh bool
+	onePos   [1]int
 	// expHold pins a layer's routed expert pages while its FFN reads them;
 	// one per instance, reused every layer of every token.
 	expHold model.ExpertHold
@@ -3211,15 +3217,15 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 	// Each contiguous run of device blocks is one call (one upload, one
 	// download, one drain), not one call per block.
 	// The row's rotary tables are the CPU's to make where a block runs
-	// there (cpuOneTable); a device makes its own.
-	s.cpu.oneFresh = false
+	// there (oneTable); a device makes its own.
+	s.oneFresh = false
 	// With the last block on the device the projection rides the same
 	// submission (folded); otherwise it is its own call below. Device runs sit
 	// inside the block loop, and the residual crosses the seam once per run.
 	//
 	// AltUp's head reads the streams' mean, which the host takes, so the
 	// projection is never folded into the last run.
-	folded := s.head != nil && s.devAt(s.hi-1) && !c.StreamHead()
+	folded := s.head != nil && s.routeAt(s.hi-1).run == nn.LayerRunner(s.ld) && !c.StreamHead()
 	// Not a defer inside the loop: one there takes every defer in this
 	// function off the open-coded path, and a heap defer record costs a decode
 	// token an allocation whenever the runtime's per-P pool runs dry.
@@ -3231,96 +3237,74 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 		}
 	}()
 	for li := s.lo; li < s.hi; li++ {
-		if s.devAt(li) {
-			// A device run ends the fused host run (fuse.go).
-			s.unfuse()
-			hi := li + 1
-			for hi < s.hi && s.devAt(hi) {
-				hi++
-			}
-			var fold *nn.Head
-			if folded && hi == s.hi {
-				fold = s.head
-				unhide = s.rows.hiddenOf(fold)
-			}
-			s.layerInputs(s.ple)
-			s.tok1[0] = s.tok
-			if !s.ld.Layers(li, hi, s.pos, 1, s.resid(), s.cs[:c.RopeW()], s.swaTable(c.LocalNRot()), fold) {
-				if err := s.refusal(li); err != nil {
-					return nil, err
-				}
-				// A fault demotes everything and restarts the token on the
-				// CPU device from the embeddings (Layers may have written part
-				// of the residual), unless SetDeviceFallback(false) asked for
-				// the error.
-				if !s.fallsBack() {
-					return nil, errDevice{li, s.devWhy()}
-				}
-				// A hybrid cannot restart once a placed linear block has
-				// advanced its recurrence (the host would apply it twice). li is
-				// where the run started, not where it failed, so the guard asks
-				// the tier's step count rather than the position.
-				if s.recurrent() && s.devLinear() && s.recStepped() != 0 {
-					return nil, errRecurRetry{li, s.devWhy()}
-				}
-				if !s.demoteAll() {
-					// The history could not be rescued, so falling back really
-					// would attend to an empty cache. Fail loudly instead.
-					return nil, errDevice{li, s.devWhy()}
-				}
-				if err := fill(); err != nil {
-					return nil, err
-				}
-				// demoteAll cleared the placement, so the retry is pure host.
-				// li = lo-1 and the loop's ++ restarts it at the first block.
-				folded = false
-				li = s.lo - 1
-				continue
-			}
-			s.trace(hi-1, "ffn_resid", s.x)
-			if fold != nil {
-				// The device ran the output norm and the projection too, so the
-				// token is finished and the residual never came home.
-				//
-				if err := s.devLogits(); err != nil {
-					return nil, err
-				}
-				s.advance(0, 1)
-				// The token is complete, so it steps what every token steps:
-				// a head on the device is no reason for the seam tuner or the
-				// grow path to stop counting.
-				s.hot.endToken()
-				s.reap()
-				s.growStep()
-				s.seamStep()
-				// A page the store could not return fails the request.
-				if err := s.kvCheck(); err != nil {
-					return nil, err
-				}
-				return s.logits, nil
-			}
-			li = hi - 1
-			continue
-		}
-		// A run of blocks on the CPU device is one call, as a device run is:
-		// each block faulted in at first touch -- with a budget that holds
-		// the model one nil compare -- the run one fused pool region.
+		// A run of blocks on one device is one call, whichever device: the
+		// residual crosses to it and back once.
+		r := s.routeAt(li)
 		hi := li + 1
-		for hi < s.hi && !s.devAt(hi) {
+		for hi < s.hi && s.routeAt(hi) == r {
 			hi++
 		}
-		if err := s.cpuOneTable(); err != nil {
+		var fold *nn.Head
+		if folded && hi == s.hi {
+			fold = s.head
+			unhide = s.rows.hiddenOf(fold)
+		}
+		if err := s.openRun(r); err != nil {
 			return nil, err
 		}
-		ln := s.cpu.lanes
-		ln.Attach(s.kv, s.view)
-		ln.SetToken(s.tok)
-		ln.SetLayerInputs(s.cpuSide(li))
-		if !ln.Layers(li, hi, s.pos, 1, s.resid(), s.cs, s.csSWA, nil) {
-			if err := ln.Err(); err != nil {
+		if !r.run.Layers(li, hi, s.pos, 1, s.resid(), s.cs[:c.RopeW()], s.swaTable(c.LocalNRot()), fold) {
+			if err := s.runRefusal(r, li); err != nil {
 				return nil, err
 			}
-			return nil, s.cpuRefused(ln.Declined())
+			// A fault demotes everything and restarts the token on the
+			// CPU device from the embeddings (Layers may have written part
+			// of the residual), unless SetDeviceFallback(false) asked for
+			// the error.
+			if !s.fallsBack() {
+				return nil, errDevice{li, s.devWhy()}
+			}
+			// A hybrid cannot restart once a placed linear block has
+			// advanced its recurrence (the host would apply it twice). li is
+			// where the run started, not where it failed, so the guard asks
+			// the tier's step count rather than the position.
+			if s.recurrent() && s.devLinear() && s.recStepped() != 0 {
+				return nil, errRecurRetry{li, s.devWhy()}
+			}
+			if !s.demoteAll() {
+				// The history could not be rescued, so falling back really
+				// would attend to an empty cache. Fail loudly instead.
+				return nil, errDevice{li, s.devWhy()}
+			}
+			if err := fill(); err != nil {
+				return nil, err
+			}
+			// demoteAll cleared the placement, so the retry is pure host.
+			// li = lo-1 and the loop's ++ restarts it at the first block.
+			folded = false
+			li = s.lo - 1
+			continue
+		}
+		s.trace(hi-1, "ffn_resid", s.x)
+		if fold != nil {
+			// The device ran the output norm and the projection too, so the
+			// token is finished and the residual never came home.
+			//
+			if err := s.devLogits(); err != nil {
+				return nil, err
+			}
+			s.advance(0, 1)
+			// The token is complete, so it steps what every token steps:
+			// a head on the device is no reason for the seam tuner or the
+			// grow path to stop counting.
+			s.hot.endToken()
+			s.reap()
+			s.growStep()
+			s.seamStep()
+			// A page the store could not return fails the request.
+			if err := s.kvCheck(); err != nil {
+				return nil, err
+			}
+			return s.logits, nil
 		}
 		li = hi - 1
 	}
@@ -3562,6 +3546,7 @@ func (s *Instance) ContextClamped() (asked, got int, clamped bool) {
 // decode token's allocation count nondeterministic.
 func (s *Instance) setLD(ld nn.LayerDevice) {
 	s.ld = ld
+	s.routes[0] = newRoute(ld)
 	s.ldRoom, _ = ld.(nn.RoomReporter)
 	s.ldSpill, _ = ld.(nn.Spiller)
 	s.ldStep, _ = ld.(nn.SessionStepper)
