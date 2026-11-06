@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"time"
 
 	"connectrpc.com/connect"
@@ -82,7 +83,7 @@ func (s *TelemetryService) snapshot(modelID, sessionID string) *v1.GetStatsRespo
 			var par, ser int64
 			var workers int
 			sess.in().With(func(st *engine.Instance) {
-				par, ser = st.Pool().Regions()
+				par, ser = cpudev.PoolOf(st.Devices()).Regions()
 				workers = st.Workers()
 			})
 			ss.Pool = &v1.PoolStats{

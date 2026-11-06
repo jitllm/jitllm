@@ -3,6 +3,7 @@
 package engine
 
 import (
+	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"math"
 	"os"
 	"strings"
@@ -55,8 +56,8 @@ func fusedDecode(t *testing.T, m *model.Model, fused bool, n int, resid bool, io
 		if i == len(prompt) {
 			// The counters cover the generated tokens, after the prompt warmed
 			// the CPU device's forms.
-			s.Pool().ResetRegions()
-			a.phases = s.Pool().Phases()
+			cpudev.PoolOf(s.Devices()).ResetRegions()
+			a.phases = cpudev.PoolOf(s.Devices()).Phases()
 			a.runs = s.FusedRuns()
 			a.grouped = s.Grouped
 		}
@@ -73,8 +74,8 @@ func fusedDecode(t *testing.T, m *model.Model, fused bool, n int, resid bool, io
 		a.logits = append(a.logits, append([]float32(nil), lg...))
 		tok = next
 	}
-	a.regions, _ = s.Pool().Regions()
-	a.phases = s.Pool().Phases() - a.phases
+	a.regions, _ = cpudev.PoolOf(s.Devices()).Regions()
+	a.phases = cpudev.PoolOf(s.Devices()).Phases() - a.phases
 	a.runs = s.FusedRuns() - a.runs
 	a.grouped = s.Grouped - a.grouped
 	a.decoded = n

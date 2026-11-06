@@ -365,6 +365,17 @@ func (e *Exec) EndPrefill() {
 // Pool is the device's workers.
 func (e *Exec) Pool() *cpu.Pool { return e.workers }
 
+// PoolOf is the worker pool of the CPU execution among ds, nil where none
+// runs blocks.
+func PoolOf(ds []nn.BlockPlacer) *cpu.Pool {
+	for _, d := range ds {
+		if e, ok := d.(*Exec); ok {
+			return e.workers
+		}
+	}
+	return nil
+}
+
 // Runner is the runner that calls the execution's forms.
 func (e *Exec) Runner() *Runner { return e.run }
 

@@ -4,6 +4,7 @@ package engine
 
 import (
 	"fmt"
+	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"os"
 	"path/filepath"
 	"sort"
@@ -78,7 +79,7 @@ func fusionCeiling(t *testing.T, path string) {
 	}
 
 	const tokens = 64
-	s.Pool().ResetRegions()
+	cpudev.PoolOf(s.Devices()).ResetRegions()
 	start := time.Now()
 	for i := 0; i < tokens; i++ {
 		if _, err := s.Forward(int32(1 + i%16)); err != nil {
@@ -86,7 +87,7 @@ func fusionCeiling(t *testing.T, path string) {
 		}
 	}
 	elapsed := time.Since(start)
-	par, ser := s.Pool().Regions()
+	par, ser := cpudev.PoolOf(s.Devices()).Regions()
 	perTok := elapsed / tokens
 	parPerTok := float64(par) / tokens
 	t.Logf("%d layers, %.1f parallel regions/token, %.1f inline regions/token, %v/token (%.1f tok/s)",
