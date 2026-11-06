@@ -83,9 +83,6 @@ func (s *Instance) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([
 		return nil, s.embedDeclined(why)
 	}
 
-	if c.Q4E() {
-		s.growQ4E(n)
-	}
 	if c.StreamHead() {
 		if err := s.expandStreams(s.bx[:n*c.ResidW()], n, 0); err != nil {
 			return nil, err

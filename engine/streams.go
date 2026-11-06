@@ -63,10 +63,10 @@ func (s *Instance) allocStreams() {
 // the embedding in stream 0: its copies or its predictions. A bank of
 // checkpoints states none, each block writing its checkpoint before any
 // block reads it; a prediction block's draft rows arrive with every stream
-// (q4In).
+// (draftIn).
 func (s *Instance) expandStreams(x []float32, n, base int) error {
-	if s.q4In != nil {
-		s.q4eDraftStreams(x, n, base)
+	if s.draftIn != nil {
+		s.draftStreams(x, n, base)
 		return nil
 	}
 	if !s.m.ExpandsStreams() {
@@ -80,9 +80,13 @@ func (s *Instance) expandStreams(x []float32, n, base int) error {
 
 // collapseStreams writes the head's input into stream 0 of n rows of x
 // through the composed collapse.
+//
+// Over a residual of every stream the rows' residual is a speculation
+// step's hidden state (rowsOut.tapStreams): what a prediction block reads,
+// and what a draft chains to its next step.
 func (s *Instance) collapseStreams(x []float32, n int) error {
-	if s.c.Q4E() {
-		return s.q4eCollapse(x, n)
+	if s.c.ResidStreams() {
+		s.rows.tapStreams(s, x, n)
 	}
 	if why := s.cpuCollapse(x, n); why != nn.DeclineServes {
 		return s.streamsDeclined("collapse", why)
@@ -95,4 +99,18 @@ func (s *Instance) collapseStreams(x []float32, n int) error {
 func (s *Instance) streamsDeclined(what string, why nn.Decline) error {
 	return fmt.Errorf("model: the streams' %s has no composed form on this instance (%s): %v %v",
 		what, nn.DeclineName(int(why)), s.cpu.formErr, s.m.FrontGraphs().StreamsErr)
+}
+
+// draftStreams lays a prediction block's draft rows, which arrive with every
+// stream (s.draftIn, row-major), into a chunk of rows whose first is row base
+// of the call.
+func (s *Instance) draftStreams(x []float32, rows, base int) {
+	c := s.m.Cfg
+	w, d := c.ResidW(), c.NEmbd
+	for r := 0; r < rows; r++ {
+		in := s.draftIn[(base+r)*w : (base+r+1)*w]
+		for k := range c.Streams() {
+			copy(c.Stream(x, k, rows, r), in[k*d:(k+1)*d])
+		}
+	}
 }

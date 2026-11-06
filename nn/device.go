@@ -146,9 +146,6 @@ type LayerWeights struct {
 	// Extra is every other matrix the block stores, by role: what a composed
 	// block binds beyond the matrices above.
 	Extra []RoleWeight
-	// NGram is the n-gram block's convolution (LayerPlan.Q4E), zero
-	// elsewhere.
-	NGram NGramWeights
 
 	// Bind points w at fr, the frames of the device offered the block -- its
 	// own, in its own memory -- claimed and unread: shapes and lengths are
@@ -215,12 +212,6 @@ func VectorOf(vs []RoleVector, r jlm.Role) []float32 {
 type RoleWeight struct {
 	Role jlm.Role
 	W    Weight
-}
-
-// NGramWeights is the n-gram block's convolution (HCMult*NEmbd channels of
-// NGramConv taps, a channel's contiguous), which a device binds as a matrix.
-type NGramWeights struct {
-	Conv []float32
 }
 
 // SSMWeights are the gated delta rule's tensors.
@@ -444,9 +435,6 @@ func (p *LayerPlan) Streams() int {
 	if p.NStreams > 1 {
 		return p.NStreams
 	}
-	if p.Q4E != nil {
-		return max(p.Q4E.HCMult, 1)
-	}
 	return max(p.AltUp, 1)
 }
 
@@ -486,30 +474,12 @@ func (p *LayerPlan) Scale() float64 {
 // (its last position - 1 - KVWindowSlack), which this margin guarantees.
 const KVWindowSlack = 64
 
-// Q4EPlan is Qwen3.8-Flash-Next at one block (model's q4e.go is the graph).
-// The residual is HCMult streams, stream-major in Layers' x; each sublayer
-// reads their mix through a HCLowRank gate (its matrices by role) and
-// is added into every stream at its placement weight. On a QSA block
-// (QSARatio non-zero) the indexer's raw key is one more kv head of the
-// cached row (KVRow, padded to HeadDim) and attention reads the plan's
-// IdxTopK/QSARatio best blocks of QSARatio positions and the tail, the
-// indexer being IdxHeads heads of IdxHeadDim. On the n-gram block
-// (NGramHere; NGramWidth is the model's, on every block, so a scratch built
-// for any block serves it) each row's table rows, which its graph gathers,
-// are projected, gated per stream and convolved
-// over NGramConv taps NGramDil positions apart, the history the block's
-// recurrent tail (RecurrentPlan.TailLen). The head's mix is the host's.
+// Q4EPlan is a QSA block (QSARatio non-zero): the indexer's raw key is one
+// more kv head of the cached row (KVRow, padded to HeadDim) and attention
+// reads the plan's IdxTopK/QSARatio best blocks of QSARatio positions and
+// the tail, the indexer being IdxHeads heads of IdxHeadDim.
 type Q4EPlan struct {
-	HCMult, HCLowRank int
-	QSARatio          int
-	NGramWidth        int
-	NGramConv         int
-	NGramDil          int
-	NGramHere         bool
-	// QSARope is the rotary's folded planes at a scalar position (Rope.
-	// TabPlanes), which a QSA block's pooled keys turn by at their blocks'
-	// first positions: an M-RoPE model's text rows turn by the same table.
-	QSARope []float32
+	QSARatio int
 }
 
 // ExpWidth is the routed experts' input and output width: ExpLatent where
@@ -811,8 +781,7 @@ type LayerPlan struct {
 	// RoutedUp takes it back, beside the shared experts at NEmbd.
 	NStreams  int
 	ExpLatent int
-	// Q4E is Qwen3.8-Flash-Next's hyper-connections, QSA and n-gram
-	// embedding at this block, nil on every other model.
+	// Q4E is a QSA block's selection, nil on every other block.
 	Q4E *Q4EPlan
 	// LatentNormEps is the MLA latent norms' epsilon (Kimi-K3 and
 	// Kimi-Linear's 1e-6); zero means RMSEps.

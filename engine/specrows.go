@@ -91,8 +91,8 @@ func (r *rowsOut) foldHead(h *nn.Head, base, n int) (func(), bool) {
 
 // stepRows runs src -- rows of slot 0 at the session's next positions, ids
 // their tokens (nil for rows with none: a draft's) -- and fills out (see
-// rowsOut). What reads a row's token past its embedding (Qwen3.8-Flash-Next's
-// n-gram block) reads ids. It is prefill with every output a speculation step
+// rowsOut). What reads a row's token past its embedding (an n-gram block)
+// reads ids. It is prefill with every output a speculation step
 // reads: one pass over the weights for all the rows, the KV written for each.
 // The caller holds the frames (jlm.Frames.Enter), as every inner path assumes.
 func (s *Instance) stepRows(src rowSrc, out *rowsOut) error {
@@ -183,7 +183,7 @@ func (s *Instance) rowsVerifiable() bool {
 // into s.rowsLog and s.rowsHid, and the tail is copied out: a few rows of
 // head beside a prompt chunk.
 func (s *Instance) stepRowsDevice(src rowSrc, out *rowsOut) error {
-	if s.c.Q4E() {
+	if s.c.ResidStreams() {
 		return s.stepRowsStreams(src, out)
 	}
 	c := s.c
@@ -327,7 +327,7 @@ func (s *Instance) finishRows(headDone bool, lastBase, total int) error {
 	// hidden state.
 	s.growBatch(cnt)
 	var hidden []float32
-	if !c.Q4E() { // its hidden state is the residual, taken in q4eCollapse
+	if !c.ResidStreams() { // its hidden state is the residual, taken in collapseStreams
 		hidden = r.hidden[:cnt*c.NEmbd]
 	}
 	if why := s.cpuHeadRows(s.bx[off*c.NEmbd:], r.logits, hidden, cnt); why != nn.DeclineServes {
@@ -352,8 +352,8 @@ func (r *rowsOut) snapRow(s *Instance, li, slot, row int) {
 
 // tapStreams copies the residual of the wanted rows among n rows of a chunk
 // x (stream-major) into the step's hidden rows, every stream of a row
-// together: on Qwen3.8-Flash-Next a step's hidden state is the residual
-// before the head's mix (q4eCollapse), ResidW a row, not the head's input.
+// together: over a residual of every stream a step's hidden state is the
+// residual before the head's mix (collapseStreams), ResidW a row, not the head's input.
 func (r *rowsOut) tapStreams(s *Instance, x []float32, n int) {
 	if r == nil || r.noHead {
 		return
@@ -365,14 +365,15 @@ func (r *rowsOut) tapStreams(s *Instance, x []float32, n int) {
 		if g < 0 || (g+1)*w > len(r.hidden) {
 			continue
 		}
-		for k := 0; k < c.HCMult; k++ {
+		for k := range c.Streams() {
 			copy(r.hidden[g*w+k*d:g*w+(k+1)*d], c.Stream(x, k, n, i))
 		}
 	}
 }
 
-// stepRowsStreams is stepRowsDevice for Qwen3.8-Flash-Next: its rows are
-// hyper-connected streams with n-gram rows beside them, which the batched
+// stepRowsStreams is stepRowsDevice over a residual of every stream: its
+// rows are the streams, with n-gram rows beside them where a block reads
+// them, which the batched
 // step's altRowsStep builds -- the streams expanded, the n-gram rows hashed
 // from ids, the blocks on the device as rows in position order, the head on
 // the host over the collapsed streams. Every row runs through the head and
