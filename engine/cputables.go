@@ -3,6 +3,7 @@ package engine
 import (
 	"fmt"
 
+	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"github.com/jitllm/jitllm/model"
 	"github.com/jitllm/jitllm/nn"
 
@@ -14,48 +15,37 @@ import (
 // planes it reads are its rotary's (cpuTablePlanes), no block's.
 const cpuTablesBlock = -3
 
-// cpuTableState is the rotary tables' graphs (frontGraphs().tables) composed
-// for the CPU: a form a rotary of one row and one of a chunk's, and a call's
-// rows as the tables read them (composer.TableRopeRows): its live count, then a
-// row's cache position and where its sequence's marks start.
-type cpuTableState struct {
-	one, many []cpuHeadForm
-	rows      []uint32
-	// zero is the marks a model of no marks binds, one empty block.
-	zero [1]uint32
-	// req and pos are a grid table's request and rows (a tower's picture):
-	// the grid's width, and the live rows and their positions.
-	req, pos []uint32
-}
-
-// cpuPlaceTables composes the rotary tables' graphs for the CPU at the
-// instance's placement.
+// cpuPlaceTables composes the rotary tables' graphs (frontGraphs().tables)
+// for the CPU device at the instance's placement: for each rotary a form of
+// one row and one of a chunk's, a tower's grid table one of a picture's.
 func (s *Instance) cpuPlaceTables() {
-	st := &s.cpu.tables
+	if s.cpu.dev == nil {
+		return
+	}
 	tabs := s.tableGraphs()
-	st.one, st.many = make([]cpuHeadForm, len(tabs)), make([]cpuHeadForm, len(tabs))
+	one, many := make([]cpuHeadForm, len(tabs)), make([]cpuHeadForm, len(tabs))
 	widths := [2]int{s.c.RopeW(), s.c.NRotSWA}
-	u := 1
 	for i, g := range tabs {
 		// The tables are the model's rotaries; an instance whose config has
 		// none (a tower's) composes none.
 		if i < len(widths) && widths[i] == 0 {
 			continue
 		}
-		s.cpuComposeTable(&st.one[i], g, 1)
+		s.cpuComposeTable(&one[i], g, 1)
 		// A tower's grid table turns a picture's rows in one call.
-		many := cpuRowsCap
+		rows := cpuRowsCap
 		if s.towered() {
-			many = s.maxSeq
+			rows = s.maxSeq
 		}
-		s.cpuComposeTable(&st.many[i], g, many)
-		for _, hf := range []*cpuHeadForm{&st.one[i], &st.many[i]} {
-			if hf.f != nil {
-				u = max(u, hf.f.Unit, hf.f.Rows)
-			}
-		}
+		s.cpuComposeTable(&many[i], g, rows)
 	}
-	st.rows = make([]uint32, 1+2*u)
+	p1, pn := make([]cpudev.Part, len(tabs)), make([]cpudev.Part, len(tabs))
+	for i := range tabs {
+		p1[i] = cpudev.Part{Composed: one[i].composed, F: one[i].f, Why: one[i].why, Err: one[i].err}
+		pn[i] = cpudev.Part{Composed: many[i].composed, F: many[i].f, Why: many[i].why, Err: many[i].err}
+	}
+	s.tables = cpudev.NewTables(s.cpu.dev, p1, pn, [2][]float32{s.tablePlanes(0), s.tablePlanes(1)}, widths,
+		blockWeights{ws: &s.ws, li: cpuTablesBlock})
 }
 
 // cpuComposeTable is hf composed from rotary table graph g at rows rows, the
@@ -151,74 +141,36 @@ func (s *Instance) marksCap() int {
 	return s.m.RopeMarksCap(s.maxSeq)
 }
 
-// cpuTables writes the rotary tables of rows rows -- row i at cache position
-// pos[i] of slot seq[i] (slot 0 where seq is nil) of the session whose marks
-// are marks -- into cs and, where the model trains a second rotary, csSWA,
-// through the composed tables: each row's positions on the axes from its
-// sequence's marks (graph.OpRopePos), then its angles.
-func (s *Instance) cpuTables(marks *model.RopeMarks, seq, pos []int, cs, csSWA []float32) error {
-	st := &s.cpu.tables
-	outs := [2][]float32{cs, csSWA}
-	widths := [2]int{s.c.RopeW(), s.c.NRotSWA}
-	rows := len(pos)
-	for i := range st.one {
-		if i >= len(outs) || len(outs[i]) == 0 || widths[i] == 0 {
-			continue
+// ropeTables writes the rotary tables of rows rows -- row i at cache
+// position pos[i] of slot seq[i] (slot 0 where seq is nil) of the session
+// whose marks are marks -- into cs and, where the model trains a second
+// rotary, csSWA, on the device the instance places them on
+// (nn.TablesDevice).
+func (s *Instance) ropeTables(marks *model.RopeMarks, seq, pos []int, cs, csSWA []float32) error {
+	if s.tables == nil {
+		return fmt.Errorf("model: the rotary tables have no device on this instance")
+	}
+	n := len(pos)
+	if cap(s.tabDesc) < 2*n {
+		s.tabDesc = make([]uint32, 2*n)
+	}
+	desc := s.tabDesc[:2*n]
+	marked := marks != nil && s.marksCap() > 0
+	for r := range n {
+		q := 0
+		if seq != nil {
+			q = seq[r]
 		}
-		if len(outs[i]) < rows*widths[i] {
-			return fmt.Errorf("model: the rotary table %d on the CPU: %d values for %d rows of %d", i, len(outs[i]), rows, widths[i])
-		}
-		hf := &st.one[i]
-		if rows > 1 {
-			hf = &st.many[i]
-		}
-		f, why := hf.formOf()
-		if why != nn.DeclineServes {
-			return fmt.Errorf("model: the rotary table %d on the CPU: %s: %w", i, why, hf.err)
-		}
-		if st.pos != nil {
-			// A grid table reads the picture's rows and request whole.
-			if f.Rows < rows {
-				return fmt.Errorf("model: the grid table on the CPU turns %d rows, a picture's %d", f.Rows, rows)
-			}
-			b := &s.cpu.bound
-			*b = cpuBound{li: cpuTablesBlock, own: s.cpu.dev.Own(f), n: rows, req: st.req, pos: st.pos, ropeMarks: st.zero[:]}
-			b.cs, b.csSWA = outs[0], outs[1]
-			s.cpu.call[0] = uint32(rows)
-			s.cpuRunForm(b, f)
-			continue
-		}
-		for r0 := 0; r0 < rows; {
-			k := min(f.Rows, rows-r0)
-			st.rows[0] = uint32(k)
-			for j := range f.Rows {
-				r := r0 + min(j, k-1)
-				q := 0
-				if seq != nil {
-					q = seq[r]
-				}
-				st.rows[1+2*j] = uint32(pos[r])
-				if marks != nil && s.marksCap() > 0 {
-					st.rows[2+2*j] = uint32(marks.Offset(q))
-				}
-			}
-			b := &s.cpu.bound
-			*b = cpuBound{li: cpuTablesBlock, own: s.cpu.dev.Own(f), n: k, ropeRows: st.rows, ropeMarks: st.zero[:]}
-			if marks != nil && len(marks.Buf) > 0 {
-				b.ropeMarks = marks.Buf
-			}
-			b.cs, b.csSWA = outs[0], outs[1]
-			if i == 0 {
-				b.cs = outs[0][r0*widths[0]:]
-			} else {
-				b.csSWA = outs[1][r0*widths[1]:]
-			}
-			s.cpu.call[0] = uint32(k)
-			s.cpuRunForm(b, f)
-			r0 += k
+		desc[2*r], desc[2*r+1] = uint32(pos[r]), 0
+		if marked {
+			desc[2*r+1] = uint32(marks.Offset(q))
 		}
 	}
-	return nil
+	var buf []uint32
+	if marks != nil {
+		buf = marks.Buf
+	}
+	return s.tables.Tables(desc, buf, cs, csSWA)
 }
 
 // cpuOneTable makes a decode row's rotary tables in s.cs and s.csSWA, which
@@ -229,7 +181,7 @@ func (s *Instance) cpuOneTable() error {
 		return nil
 	}
 	s.cpu.onePos[0] = s.pos
-	if err := s.cpuTables(&s.rmarks, nil, s.cpu.onePos[:], s.cs, s.csSWA); err != nil {
+	if err := s.ropeTables(&s.rmarks, nil, s.cpu.onePos[:], s.cs, s.csSWA); err != nil {
 		return err
 	}
 	s.cpu.oneFresh = true
@@ -264,7 +216,7 @@ func (s *Instance) cpuRowTables(seq, pos []int) error {
 		if s.bcsSWA != nil {
 			swa = s.bcsSWA[i*ws:]
 		}
-		if err := s.cpuTables(&o.rmarks, slots[i:j], pos[i:j], s.bcs[i*w:], swa); err != nil {
+		if err := s.ropeTables(&o.rmarks, slots[i:j], pos[i:j], s.bcs[i*w:], swa); err != nil {
 			return err
 		}
 		i = j

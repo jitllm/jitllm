@@ -136,7 +136,6 @@ type cpuState struct {
 	// instance places its blocks (cpuTablePlanes).
 	tabPlanes [2][]float32
 	mtp       cpuMTPState
-	tables    cpuTableState
 }
 
 // cpuFault is a gate's violation of the composed CPU path's bindings.
@@ -236,7 +235,7 @@ type cpuBound struct {
 	pages  []uint32
 	// csSWA is the call's second rotary's table where the model trains one,
 	// ropeRows and ropeMarks a rotary table's call's rows and its session's
-	// marks (cpuTables).
+	// marks (ropeTables).
 	csSWA               []float32
 	ropeRows, ropeMarks []uint32
 	// recLi is the block whose recurrent states a linear block's step binds

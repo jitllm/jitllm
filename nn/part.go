@@ -222,6 +222,15 @@ type Ledger interface {
 	AccountOn(dev string) (Account, bool)
 }
 
+// TablesDevice is a device writing a call's rotary tables: row i at the
+// cache position desc[2i], its sequence's marks from desc[2i+1] in marks,
+// into cs and csSWA; SetGrid makes them a grid table's over a picture, its
+// request req and its rows pos.
+type TablesDevice interface {
+	Tables(desc, marks []uint32, cs, csSWA []float32) error
+	SetGrid(req, pos []uint32)
+}
+
 // InputsDevice is a device writing a call's input rows: the vocabulary rows
 // of toks at positions pos into x and, where the model has them, their
 // per-layer inputs into ple (Embed), or an embedding span's given rows with

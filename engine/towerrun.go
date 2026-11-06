@@ -318,7 +318,9 @@ func (ts *Instance) towerBlocks(tr *towerRun, gw int, wins []nn.KeyRun) error {
 	n := len(tr.pos)
 	ts.bidir = append(ts.bidir[:0], nn.KeyRun{Lo: 0, Hi: n})
 	defer func() { ts.bidir, ts.cpu.runWindows, ts.cpu.rowWins = ts.bidir[:0], false, nil }()
-	ts.cpu.tables.req, ts.cpu.tables.pos = tr.req, tr.posTab
+	if ts.tables != nil {
+		ts.tables.SetGrid(tr.req, tr.posTab)
+	}
 	if ts.devCount() > 0 {
 		ts.Reset()
 		if ts.m.Tower.Table != nil {
