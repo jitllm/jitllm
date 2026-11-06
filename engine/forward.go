@@ -386,12 +386,13 @@ type Instance struct {
 	stepb *stepBuf
 	// rowCausal is a ragged step's rows in position order (rowsRouted).
 	rowCausal []int
-	// onDev[li] says block li runs on a device: the truth for execution, where
-	// gpuLayers is the truth for the seam. Placement is a set and migration a
-	// boundary: gpuLayers is the contiguous device prefix (what -gpu-layers
-	// sizes and seamtune moves), while a hybrid whose kinds alternate can have
-	// placed blocks with a prefix of zero.
-	onDev []bool
+	// at[li] is the route block li runs on (a session's routes, route.go),
+	// slotNone for a block the instance does not place: the truth for
+	// execution, where gpuLayers is the truth for the seam. Placement is a set
+	// and migration a boundary: gpuLayers is the contiguous prefix on the
+	// card's route (what -gpu-layers sizes and seamtune moves), while a hybrid
+	// whose kinds alternate can have placed blocks with a prefix of zero.
+	at []int8
 	// places are the devices of routes, each one's side of a placement, and
 	// fromFrames says which run a block from the instance's frames.
 	places     [2]nn.BlockPlacer
@@ -660,6 +661,7 @@ func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOp
 	s.exec.x.Sit(g.cpu)
 	s.exec.x.SetChunk(opt.prefillChunk)
 	s.setPlace(routeLanes, s.exec.x)
+	s.placeRange(routeLanes)
 	s.holdFrames()
 	// The cache width: WithKVType (or WithKVF16, SetKVType) forces it;
 	// otherwise the CPU device's own (Exec.DefaultKV). A quantized cache is
@@ -1646,8 +1648,8 @@ func (o *offer) speculate(sel []uint32, fr *jlm.Frames) {
 }
 
 // offerRange offers blocks [lo, hi) to the device in order. A declined block
-// stays on the host and the rest are still offered (placement is a set; see
-// onDev); the seam is the prefix of what was accepted. A tier that cannot run a
+// stays on the CPU device and the rest are still offered (placement is a set;
+// see Instance.at); the seam is the prefix of what was accepted. A tier that cannot run a
 // block says so by name through DeclinePlan.
 func (s *Instance) offerRange(lo, hi int) {
 	ld := s.ldCand
@@ -2036,38 +2038,52 @@ func (s *Instance) planFor(li int) *nn.LayerPlan {
 	return &plan
 }
 
-// markOnDev records that a device accepted block li, and recomputes gpuLayers
-// as the contiguous placed prefix (with holes, "li + 1" is not a length).
-func (s *Instance) markOnDev(li int) {
-	if s.onDev == nil {
-		s.onDev = make([]bool, len(s.m.Layers))
+// place puts block li on route to, handing it over from the route it was on,
+// and recomputes gpuLayers as the contiguous prefix on the card's route (with
+// holes, "li + 1" is not a length).
+func (s *Instance) place(li int, to int8) {
+	if from := s.at[li]; from != to && from != slotNone {
+		s.handOver(li, int(from), int(to))
 	}
-	if !s.onDev[li] {
-		s.handOver(li, routeLanes, routeView)
-	}
-	s.onDev[li] = true
+	s.at[li] = to
 	n := s.lo
-	for n < len(s.onDev) && s.onDev[n] {
+	for n < len(s.at) && s.at[n] == routeView {
 		n++
 	}
 	s.gpuLayers = n
 }
 
-// unmarkOnDev records that block li went back to the host, and is markOnDev's
-// twin: the prefix ends at the first block not placed.
-func (s *Instance) unmarkOnDev(li int) {
-	if s.onDev[li] {
-		s.handOver(li, routeView, routeLanes)
+// placeRange puts every block of the instance's range on route r, where it
+// is made: the one device it holds then.
+func (s *Instance) placeRange(r int8) {
+	s.at = make([]int8, len(s.m.Layers))
+	for li := range s.at {
+		s.at[li] = slotNone
+		if li >= s.lo && li < s.hi {
+			s.at[li] = r
+		}
 	}
-	s.onDev[li] = false
-	s.gpuLayers = min(s.gpuLayers, li)
 }
+
+// slotAt is the route block li runs on, slotNone for one not placed.
+func (s *Instance) slotAt(li int) int8 {
+	if li < 0 || li >= len(s.at) {
+		return slotNone
+	}
+	return s.at[li]
+}
+
+// markOnDev records that the card accepted block li.
+func (s *Instance) markOnDev(li int) { s.place(li, routeView) }
+
+// unmarkOnDev records that block li left the card for the CPU device.
+func (s *Instance) unmarkOnDev(li int) { s.place(li, routeLanes) }
 
 // placedFrom lists the placed blocks at index lo and above.
 func (s *Instance) placedFrom(lo int) []int {
 	var out []int
-	for li := lo; li < len(s.onDev); li++ {
-		if s.onDev[li] {
+	for li := lo; li < len(s.at); li++ {
+		if s.at[li] == routeView {
 			out = append(out, li)
 		}
 	}
@@ -2076,11 +2092,10 @@ func (s *Instance) placedFrom(lo int) []int {
 
 // clearOnDev forgets the whole placement.
 func (s *Instance) clearOnDev() {
-	for i := range s.onDev {
-		if s.onDev[i] {
-			s.handOver(i, routeView, routeLanes)
+	for i := range s.at {
+		if s.at[i] == routeView {
+			s.place(i, routeLanes)
 		}
-		s.onDev[i] = false
 	}
 	s.gpuLayers = s.lo
 	// The census belongs to one placement: -gpu-grow and seamtune re-offer, and
@@ -2093,11 +2108,10 @@ func (s *Instance) clearOnDev() {
 // caller that writes `s.gpuLayers = n` means: the seam moved down, so
 // the blocks above it are no longer placed anywhere.
 func (s *Instance) shrinkOnDev(n int) {
-	for i := n; i < len(s.onDev); i++ {
-		if s.onDev[i] {
-			s.handOver(i, routeView, routeLanes)
+	for i := n; i < len(s.at); i++ {
+		if s.at[i] == routeView {
+			s.place(i, routeLanes)
 		}
-		s.onDev[i] = false
 	}
 	if s.gpuLayers > n {
 		s.gpuLayers = n
@@ -2131,20 +2145,20 @@ func (s *Instance) pageIn(li int) (*model.Layer, error) {
 }
 
 // devAt reports whether block li runs on a device.
-func (s *Instance) devAt(li int) bool { return li < len(s.onDev) && s.onDev[li] }
+func (s *Instance) devAt(li int) bool { return s.slotAt(li) == routeView }
 
 // devRuns is the placement as maximal contiguous runs, the unit
 // nn.LayerDevice.Layers takes. Each run is one seam crossing (the residual goes
 // up and comes back), so alternating tiers is priced rather than refused.
 func (s *Instance) devRuns() [][2]int {
 	var out [][2]int
-	for li := 0; li < len(s.onDev); {
-		if !s.onDev[li] {
+	for li := 0; li < len(s.at); {
+		if s.at[li] != routeView {
 			li++
 			continue
 		}
 		hi := li
-		for hi < len(s.onDev) && s.onDev[hi] {
+		for hi < len(s.at) && s.at[hi] == routeView {
 			hi++
 		}
 		out = append(out, [2]int{li, hi})
@@ -2157,8 +2171,8 @@ func (s *Instance) devRuns() [][2]int {
 // "how much of this model is on the card" means.
 func (s *Instance) devCount() int {
 	n := 0
-	for _, v := range s.onDev {
-		if v {
+	for _, r := range s.at {
+		if r == routeView {
 			n++
 		}
 	}
@@ -2221,8 +2235,8 @@ func (s *Instance) demoteAll() bool {
 	if s.ld == nil || s.devCount() == 0 {
 		return true
 	}
-	for li := 0; li < len(s.onDev); li++ {
-		if !s.onDev[li] {
+	for li := 0; li < len(s.at); li++ {
+		if s.at[li] != routeView {
 			continue
 		}
 		if !s.migrateKV(li, s.pos, false) || !s.migrateRec(li, false) {
@@ -2487,7 +2501,7 @@ func (s *Instance) relocationVictim() int {
 		}
 	}
 	if li < 0 {
-		for li = len(s.onDev) - 1; li >= 0 && (!s.onDev[li] || s.pinnedOnDev(li)); li-- {
+		for li = len(s.at) - 1; li >= 0 && (s.at[li] != routeView || s.pinnedOnDev(li)); li-- {
 		}
 	}
 	return li
@@ -3430,8 +3444,8 @@ func (s *Instance) devLinear() bool {
 	if !s.recurrent() {
 		return false
 	}
-	for li := 0; li < len(s.onDev); li++ {
-		if s.onDev[li] && s.keepsRec(li) {
+	for li := 0; li < len(s.at); li++ {
+		if s.at[li] == routeView && s.keepsRec(li) {
 			return true
 		}
 	}

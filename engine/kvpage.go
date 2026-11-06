@@ -1549,8 +1549,8 @@ func (s *Instance) restoreKey(key []int32, rows int, logits bool) (int, []float3
 		s.kv.unmigratable++
 		n = 0
 	}
-	for li := s.lo; li < len(s.onDev) && n > 0 && !shared; li++ {
-		if !s.onDev[li] {
+	for li := s.lo; li < len(s.at) && n > 0 && !shared; li++ {
+		if s.at[li] != routeView {
 			continue
 		}
 		if !s.migrateKV(li, n, true) {
