@@ -31,7 +31,7 @@ func (s *Instance) applyQuota() {
 	if s.hostRes != nil {
 		held = s.hostRes.HostReserved()
 	}
-	s.quota.Set(s.pageQuota, held)
+	s.quota.Set(s.pageQuota.Load(), held)
 }
 
 // SetPageBudget is this instance's page quota, in bytes: what the model's
@@ -42,7 +42,7 @@ func (s *Instance) applyQuota() {
 // placement moves it (followHost). It returns the pages the CPU device's
 // frames hold.
 func (s *Instance) SetPageBudget(bytes uint64) int {
-	s.pageQuota = bytes
+	s.pageQuota.Store(bytes)
 	if fb, ok := s.ld.(nn.FrameBudgeter); ok && s.m.Container != nil {
 		fb.SetFrameBudget(s.m.Container, bytes)
 	}
@@ -51,7 +51,7 @@ func (s *Instance) SetPageBudget(bytes uint64) int {
 }
 
 // PageBudget is this instance's page quota (SetPageBudget).
-func (s *Instance) PageBudget() uint64 { return s.pageQuota }
+func (s *Instance) PageBudget() uint64 { return s.pageQuota.Load() }
 
 // holdOwner makes d the device this instance holds the model on
 // (nn.ModelOwner), letting the one it held go: a device keeps what the model

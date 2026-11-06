@@ -149,7 +149,7 @@ type Instance struct {
 	holdsCPU bool
 	// pageQuota is this instance's page budget (SetPageBudget), 0 for
 	// unlimited, and quota its record on the CPU device; a root's alone.
-	pageQuota uint64
+	pageQuota atomic.Uint64
 	quota     *cpudev.Quota
 	// fr is the CPU device's frames for the model (cpudev.CPU.Frames): the
 	// memory the blocks this instance runs on the CPU are read into. dense
@@ -550,7 +550,8 @@ func NewInstance(m *model.Model, maxSeq int, opts ...Option) (*Instance, error) 
 		var s *Instance
 		if s, err = newInstanceOver(m, g, fr, lo.opt, m.Cfg, 1, maxSeq, 0, m.Cfg.NLayer); err == nil {
 			s.root, s.holdsCPU = true, true
-			s.pageQuota, s.quota = pq, q
+			s.pageQuota.Store(pq)
+			s.quota = q
 			return s, nil
 		}
 	}
@@ -912,7 +913,7 @@ func (s *Instance) SetDeviceLayers(d nn.LayerDevice, max int) error {
 	c := s.c
 	p := nn.LayerPlan{
 		// Whose blocks these are: a device holds one model's at a time.
-		Model: s.m.Id, File: s.m.Container, FrameBudget: s.pageQuota,
+		Model: s.m.Id, File: s.m.Container, FrameBudget: s.pageQuota.Load(),
 		NEmbd: c.NEmbd, NHead: c.NHead, NKVHead: c.NKVHead, HeadDim: c.HeadDim,
 		NRot: c.NRot, NFFN: c.NFFN, MaxSeq: s.maxSeq, Vocab: c.NVocab, FinalSoftcap: c.FinalSoftcap,
 		RMSEps: c.RMSEps, RopeBase: c.RopeBase, Act: c.Act, RopeNeox: c.RopeNeox,

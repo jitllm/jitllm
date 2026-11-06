@@ -71,10 +71,15 @@ type File struct {
 // container itself -- its header, its table and where every page lies -- and
 // reads into memory it is handed; it holds none of this.
 type Frames struct {
-	// use serialises the readers of frames that evict (Enter), and leave is
-	// its Unlock bound once, so Enter hands back the same func every call.
-	use   sync.Mutex
-	leave func()
+	// use is the readers' lock (Enter): shared while the frames fit, held
+	// alone while they evict. leave and leaveShared are the releases, bound
+	// once so Enter hands back the same func every call. inside counts the
+	// readers in, shared those holding use shared, and refit says a budget
+	// changed while one was; all three under mu.
+	use                sync.RWMutex
+	leave, leaveShared func()
+	inside, shared     int
+	refit              bool
 	// file is the container these are the frames of; closed is that Close
 	// ran.
 	file   *File
@@ -281,7 +286,7 @@ func NewFrames(f *File, opts ...FramesOption) (*Frames, error) {
 	// The container's own granularity (decodeHeader already validated it);
 	// SetChunk overrides it before the first page is read.
 	fr.chunk = h.Chunk
-	fr.leave = fr.use.Unlock
+	fr.leave, fr.leaveShared = fr.exit, fr.exitShared
 	if o.budget > 0 {
 		fr.SetBudget(o.budget)
 	}
@@ -695,7 +700,12 @@ func (f *Frames) evictOne() bool {
 // the caller cannot recover from mid-token, and thrashing one page is strictly
 // better than failing the read.
 func (f *Frames) makeRoom(li int, size uint64) {
-	if f.budget == 0 {
+	// A shared reader's other readers hold spans of every page: what it reads
+	// over a budget that narrowed goes when the last of them leaves (out).
+	if f.budget == 0 || f.shared > 0 {
+		if f.shared > 0 && f.resident+size > f.budget && f.budget > 0 {
+			f.refit = true
+		}
 		return
 	}
 	for f.resident+size > f.budget {
@@ -731,16 +741,13 @@ func (f *Frames) SetBudget(bytes uint64) {
 	if bytes == 0 {
 		return
 	}
-	for f.resident > f.budget {
-		if !f.evictOne() {
-			break
-		}
+	// A reader in holds spans of pages it has not finished with: what they
+	// leave over the budget goes when the last of them leaves.
+	if f.inside > 0 {
+		f.refit = true
+		return
 	}
-	if f.resident < f.budget {
-		f.trimFree(f.budget - f.resident)
-	} else {
-		f.trimFree(0)
-	}
+	f.fit()
 }
 
 // Budget is the byte cap, 0 when unlimited, and ResidentBytes what is held
@@ -1109,28 +1116,86 @@ func (l *Lease) Release() {
 // because it changes only in SetBudget and is asked once per token.
 func (f *Frames) CanEvict() bool { return f != nil && f.canEvict.Load() }
 
-// Enter serialises the readers of frames whose budget is smaller than their
-// pages, and does nothing on frames that hold every page; it returns the
-// release, so every caller is one deferred line. Every span the frames hand
-// out is a slice of a frame a page-in may reuse, and a reader holds its
-// spans across a block's whole compute, which f.mu does not cover: one
-// coarse lock covers every such window (the CPU device's loop, a device's
-// upload from them, a streamed expert's fill, a tower) at the cost of
-// parallelism between the readers of one evicting frames. Readers of
-// different frames -- instances on two CPU devices -- never wait on each
-// other. It is not reentrant: an instance takes it once, at the entry a
-// token, a prompt or a step comes in by. The release is bound once at
-// NewFrames: a method value written here is one heap object per token.
+// Enter is a reader coming in, and returns its release, so every caller is
+// one deferred line. Every span the frames hand out is a slice of a frame a
+// page-in may reuse, and a reader holds its spans across a block's whole
+// compute, which f.mu does not cover. Readers of frames that hold every page
+// share the lock and run at once; readers of evicting frames hold it alone,
+// one coarse lock over every such window (the CPU device's loop, a device's
+// upload from them, a streamed expert's fill, a tower). While any reader is
+// in, a budget change evicts nothing (SetBudget), and a shared reader's
+// page-in never evicts: the last reader to leave fits the frames to the
+// budget. Readers of different frames -- instances on two CPU devices --
+// never wait on each other. It is not reentrant: an instance takes it once,
+// at the entry a token, a prompt or a step comes in by. The releases are
+// bound once at NewFrames: a method value written here is one heap object a
+// token.
 func (f *Frames) Enter() func() {
-	if !f.CanEvict() {
+	if f == nil {
 		return stayed
 	}
+	if !f.CanEvict() {
+		f.use.RLock()
+		if !f.CanEvict() {
+			f.in(true)
+			return f.leaveShared
+		}
+		f.use.RUnlock()
+	}
 	f.use.Lock()
+	f.in(false)
 	return f.leave
 }
 
-// stayed is Enter's release on frames that never evict.
+// stayed is Enter's release for no frames.
 func stayed() {}
+
+func (f *Frames) in(shared bool) {
+	f.mu.Lock()
+	f.inside++
+	if shared {
+		f.shared++
+	}
+	f.mu.Unlock()
+}
+
+// out is a reader leaving; the last one fits the frames to a budget that
+// changed while readers were in.
+func (f *Frames) out(shared bool) {
+	// Deferred first, so it runs after the unlock: see flushRecycled.
+	defer f.flushRecycled()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.inside--
+	if shared {
+		f.shared--
+	}
+	if f.inside == 0 && f.refit {
+		f.refit = false
+		f.fit()
+	}
+}
+
+func (f *Frames) exit()       { f.out(false); f.use.Unlock() }
+func (f *Frames) exitShared() { f.out(true); f.use.RUnlock() }
+
+// fit evicts down to the budget and gives back the free frames beyond it.
+// Callers hold f.mu, with no reader in.
+func (f *Frames) fit() {
+	if f.budget == 0 {
+		return
+	}
+	for f.resident > f.budget {
+		if !f.evictOne() {
+			break
+		}
+	}
+	if f.resident < f.budget {
+		f.trimFree(f.budget - f.resident)
+	} else {
+		f.trimFree(0)
+	}
+}
 
 // setCanEvict recomputes the flag. Callers hold f.mu.
 func (f *Frames) setCanEvict() {
