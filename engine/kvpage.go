@@ -381,6 +381,10 @@ func (s *kvPages) span(pos, end int) kvSpan {
 // kvCache is a instance's whole history: one kvPages per layer, plus the identity
 // the store knows it by.
 type kvCache struct {
+	// kvl and cfg are the history's layout and its model's geometry, a block's
+	// rows read at its own (kvLayout.atLayer).
+	kvl    kvLayout
+	cfg    *model.Config
 	id     string
 	layers []kvPages
 	store  KVStore
@@ -479,6 +483,46 @@ func (s *kvCache) View() *cpudev.View {
 	return s.view
 }
 
+// MigrateKV takes block li's history of pos positions from the floats k
+// and v (in), or gives it into them (cpudev.History): gathered from the
+// block's pages and widened where they are binary16 or q8, or narrowed and
+// scattered into them -- what scatter leaves out lying behind the window,
+// released as far as seal and the read walk are concerned. A binary16 history
+// returns its halves bit for bit; a q8 one each element's code, and each
+// scale within an ulp (the block's amax widens to 127*d).
+func (kv *kvCache) MigrateKV(li int, k, v []float32, pos int, in bool, conv nn.KVConvDevice) bool {
+	pg := &kv.layers[li]
+	if pg.p == 0 || pos <= 0 {
+		return true
+	}
+	l := kv.kvl.atLayer(kv.cfg, li)
+	hk, hv, _, _ := kvMigBufs(l, pos)
+	rows := pos * l.nKV
+	own := func(x []float32) []byte {
+		return unsafe.Slice((*byte)(unsafe.Pointer(&x[0])), rows*cpu.KVRowBytes(l.fmt, l.headDim))
+	}
+	widened := l.fmt != cpu.KVF32 && rows > 0
+	if !widened {
+		hk, hv = k, v
+	} else if conv == nil {
+		return false
+	}
+	if !in {
+		if !pg.gather(l, 0, pos, hk, hv) {
+			return false
+		}
+		return !widened || conv.Convert(false, l.headDim, k[:rows*l.headDim], own(hk)) && conv.Convert(false, l.headDim, v[:rows*l.headDim], own(hv))
+	}
+	if widened && (!conv.Convert(true, l.headDim, k[:rows*l.headDim], own(hk)) || !conv.Convert(true, l.headDim, v[:rows*l.headDim], own(hv))) {
+		return false
+	}
+	if !pg.scatter(l, 0, pos, hk, hv) {
+		return false
+	}
+	pg.gone = max(pg.gone, pg.liveFrom(pos))
+	return true
+}
+
 func newKVCache(c *model.Config, id string, nseq int, l kvLayout, store KVStore, pin int) *kvCache {
 	return newKVCacheRange(c, id, nseq, l, store, pin, 0, c.NLayer, cpudev.NewView(c.NLayer), nil)
 }
@@ -491,7 +535,7 @@ func newKVCacheRange(c *model.Config, id string, nseq int, l kvLayout, store KVS
 	if store == nil {
 		store = NoStore{}
 	}
-	kc := &kvCache{id: id, store: store, layers: make([]kvPages, hi), lo: lo,
+	kc := &kvCache{id: id, store: store, layers: make([]kvPages, hi), lo: lo, kvl: l, cfg: c,
 		bh: map[int][]string{}, geom: geomDigest(c, nseq, l), view: view, src: make([]int, hi)}
 	for li := range kc.src {
 		kc.src[li] = max(c.KVSource(li), 0)
@@ -657,10 +701,11 @@ func (s *Instance) migrateKV(li, pos int, toDevice bool) bool {
 		return true
 	}
 	pg := &s.kv.layers[li]
+	from, to := s.moveRoutes(toDevice)
 	if pg.p == 0 || pos <= 0 {
 		// A linear-attention block has no history, and nothing to move at
 		// position zero is success -- the same answer the tier gives.
-		return s.ld.MigrateKV(li, nil, nil, 0, toDevice)
+		return s.moveKV(li, 0, nil, nil, from, to)
 	}
 	if s.nseq > 1 {
 		return s.migrateKVRows(li, toDevice)
@@ -671,26 +716,8 @@ func (s *Instance) migrateKV(li, pos int, toDevice bool) bool {
 		s.kv.shareRefused++
 		return false
 	}
-	kvl := s.kvlAt(li)
-	k, v, fk, fv := kvMigBufs(kvl, pos)
-	if toDevice && !pg.gather(kvl, 0, pos, k, v) {
-		return false
-	}
-	if !s.migrateKVAs(kvl, pos, k, v, fk, fv, toDevice, func() bool {
-		return s.ld.MigrateKV(li, fk, fv, pos, toDevice)
-	}) {
-		return false
-	}
-	if toDevice {
-		return true
-	}
-	if !pg.scatter(kvl, 0, pos, k, v) {
-		return false
-	}
-	// What scatter left out lies behind the window: released, as far as
-	// seal and the read walk are concerned.
-	pg.gone = max(pg.gone, pg.liveFrom(pos))
-	return true
+	_, _, fk, fv := kvMigBufs(s.kvlAt(li), pos)
+	return s.moveKV(li, pos, fk, fv, from, to)
 }
 
 // kvMigBufs is the buffers a migration of n positions of layout kvl moves
@@ -844,7 +871,9 @@ func (s *Instance) migrateRec(li int, toDevice bool) bool {
 // whole recurrent state, the n-gram block's predecessors among it, moves
 // with the block.
 func (s *Instance) migrateRecLayer(li int, toDevice bool) bool {
-	return s.ld.MigrateRec(li, s.view.Conv(li), s.view.State(li), toDevice)
+	from, to := s.moveRoutes(toDevice)
+	conv, state := s.view.Conv(li), s.view.State(li)
+	return from.recmig != nil && to.recmig != nil && from.recmig.MigrateRec(li, conv, state, false) && to.recmig.MigrateRec(li, conv, state, true)
 }
 
 // The paged read walk. Every attention read in model/ goes through these four,

@@ -1410,6 +1410,20 @@ type PrefillPhases interface {
 	EndPrefill()
 }
 
+// KVMigrator is a device's half of moving block li's history of pos
+// positions to or from another device (LayerDevice.MigrateKV): toDevice takes
+// k and v into its history, else gives its history into them.
+type KVMigrator interface {
+	MigrateKV(li int, k, v []float32, pos int, toDevice bool) bool
+}
+
+// RecMigrator is a device's half of moving block li's recurrent state
+// (LayerDevice.MigrateRec): toDevice takes conv and state, else gives its own
+// into them.
+type RecMigrator interface {
+	MigrateRec(li int, conv, state []float32, toDevice bool) bool
+}
+
 // RunCloser is a device that keeps a region open across its calls (the CPU's
 // fused pool region); CloseRun closes it before another device runs.
 type RunCloser interface{ CloseRun() }

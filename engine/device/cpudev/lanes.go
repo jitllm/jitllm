@@ -744,3 +744,19 @@ func (s *SessionLanes) SetKeyRuns(full, windowed []nn.KeyRun) bool {
 
 // SetRowWindows hands the lanes each row's window (nn.RowWindowDevice).
 func (s *SessionLanes) SetRowWindows(wins []nn.KeyRun) bool { return s.l.SetRowWindows(wins) }
+
+// MigrateKV is the CPU's half of moving block li's history of pos positions
+// (nn.KVMigrator): the session's history takes k and v, or gives its rows
+// into them, through the device's conversions.
+func (s *SessionLanes) MigrateKV(li int, k, v []float32, pos int, toDevice bool) bool {
+	var conv nn.KVConvDevice
+	if c := s.l.e.kvconv; c != nil {
+		conv = c
+	}
+	return s.of.History().MigrateKV(li, k, v, pos, toDevice, conv)
+}
+
+// MigrateRec is the CPU's half of moving block li's recurrent state
+// (nn.RecMigrator): the session's recurrent rows are the move's buffers, so
+// there is nothing more to take or give.
+func (s *SessionLanes) MigrateRec(li int, conv, state []float32, toDevice bool) bool { return true }

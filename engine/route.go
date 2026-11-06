@@ -25,6 +25,8 @@ type route struct {
 	wins   nn.RowWindowDevice
 	resv   nn.RowsReserver
 	prompt nn.PromptRows
+	kvmig  nn.KVMigrator
+	recmig nn.RecMigrator
 }
 
 func newRoute(d nn.LayerRunner) route {
@@ -42,13 +44,15 @@ func newRoute(d nn.LayerRunner) route {
 	r.wins, _ = d.(nn.RowWindowDevice)
 	r.resv, _ = d.(nn.RowsReserver)
 	r.prompt, _ = d.(nn.PromptRows)
+	r.kvmig, _ = d.(nn.KVMigrator)
+	r.recmig, _ = d.(nn.RecMigrator)
 	return r
 }
 
 // laneRoute is the route of a session's calls on the CPU device, its faces
 // the lanes' own (no assertion at all).
 func laneRoute(l *cpudev.SessionLanes) route {
-	return route{run: l, inputs: l, toks: l, tables: l, fail: l, errs: l, cause: l, closer: l, rows: l, steps: l, keys: l, wins: l, prompt: l}
+	return route{run: l, inputs: l, toks: l, tables: l, fail: l, errs: l, cause: l, closer: l, rows: l, steps: l, keys: l, wins: l, prompt: l, kvmig: l, recmig: l}
 }
 
 // History is the session's history as it is now (cpudev.HistoryOf).
@@ -301,4 +305,19 @@ func (s *Session) Snap(li, slot, row int) {
 	if s.on != nil {
 		s.on.rows.snapRow(s.on, li, slot, row)
 	}
+}
+
+// moveRoutes is the routes a block's history moves between: from the CPU's
+// to the card's where toDevice, else back.
+func (s *Instance) moveRoutes(toDevice bool) (from, to *route) {
+	if toDevice {
+		return &s.routes[1], &s.routes[0]
+	}
+	return &s.routes[0], &s.routes[1]
+}
+
+// moveKV moves block li's history of pos positions: the source device gives
+// it as floats into k and v, the destination takes them.
+func (s *Instance) moveKV(li, pos int, k, v []float32, from, to *route) bool {
+	return from.kvmig != nil && to.kvmig != nil && from.kvmig.MigrateKV(li, k, v, pos, false) && to.kvmig.MigrateKV(li, k, v, pos, true)
 }

@@ -21,6 +21,8 @@ const RowsCap = 64
 // workers, its composer, the forms of each of its blocks, the runner that
 // calls them, and what it composed and served.
 type Exec struct {
+	// kvconv is the history's conversions where it is binary16 or q8.
+	kvconv *KVConv
 	// onE and low are a prompt phase on the efficiency cores (BeginPrefill).
 	onE bool
 	low sched.Lowered
