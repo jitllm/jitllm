@@ -1395,6 +1395,21 @@ type PromptRows interface {
 	SetPromptRows(slot, base int, bidir bool)
 }
 
+// Fuser is a device that runs a run of its blocks as one fused region,
+// on or off (SetFusion), counting the runs it fused (FusedRuns).
+type Fuser interface {
+	SetFusion(on bool)
+	FusedRuns() int64
+}
+
+// PrefillPhases is a device whose workers run a prompt as a phase of their
+// own: BeginPrefill starts one, on its efficiency cores where e asks for them
+// and it has them (and says so), EndPrefill ends it.
+type PrefillPhases interface {
+	BeginPrefill(e bool) bool
+	EndPrefill()
+}
+
 // RunCloser is a device that keeps a region open across its calls (the CPU's
 // fused pool region); CloseRun closes it before another device runs.
 type RunCloser interface{ CloseRun() }

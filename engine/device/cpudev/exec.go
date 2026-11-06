@@ -4,6 +4,8 @@ import (
 	"sync/atomic"
 	"unsafe"
 
+	"github.com/jitllm/jitllm/sched"
+
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/format/jlm"
@@ -19,6 +21,9 @@ const RowsCap = 64
 // workers, its composer, the forms of each of its blocks, the runner that
 // calls them, and what it composed and served.
 type Exec struct {
+	// onE and low are a prompt phase on the efficiency cores (BeginPrefill).
+	onE bool
+	low sched.Lowered
 	// b binds the forms' weights and the rows' table.
 	b        *Bindings
 	workers  *cpu.Pool
@@ -151,6 +156,38 @@ func (e *Exec) Device() *Device { return e.dev }
 
 // Composer is the execution's composer.
 func (e *Exec) Composer() *Composer { return e.comp }
+
+// AccountOn is what the device served the instance and formed for it, by
+// its name (nn.Ledger).
+func (e *Exec) AccountOn(dev string) (nn.Account, bool) {
+	if dev != nn.CPU {
+		return nn.Account{}, false
+	}
+	return nn.Account{Steps: e.steps, Forms: e.Composed(), Asks: e.comp.forms.Asks(), FormErr: e.comp.Err()}, true
+}
+
+// BeginPrefill starts a prompt as a phase of the device's workers, on its
+// efficiency cores where e asks and it has them (nn.PrefillPhases).
+func (e *Exec) BeginPrefill(onE bool) bool {
+	if onE && e.workers.BeginPrefillE() {
+		e.onE, e.low = true, e.workers.LowerToE()
+		return true
+	}
+	e.workers.BeginPrefill()
+	e.onE = false
+	return false
+}
+
+// EndPrefill ends the prompt's phase (nn.PrefillPhases).
+func (e *Exec) EndPrefill() {
+	if e.onE {
+		e.low.Raise()
+		e.workers.EndPrefillE()
+	} else {
+		e.workers.EndPrefill()
+	}
+	e.onE = false
+}
 
 // Pool is the device's workers.
 func (e *Exec) Pool() *cpu.Pool { return e.workers }
