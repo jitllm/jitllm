@@ -85,6 +85,23 @@ type RowsCall struct {
 	Tok      []int32
 }
 
+// RowsForm is block li's rows' form, its weights read in t bound where its
+// call reads them, or why not: the block not composed here, no rows' form
+// composed for it, a weight the device cannot read.
+func (l *Lanes) RowsForm(li int, t Tensors) (*Form, nn.Decline) {
+	cb, why := l.e.Block(li)
+	if why != nn.DeclineServes {
+		return nil, why
+	}
+	if cb.Rows == nil {
+		return nil, cb.RowsWhy
+	}
+	if _, why := l.b.Bind(cb.Rows, li, t); why != nn.DeclineServes {
+		return nil, why
+	}
+	return cb.Rows, nn.DeclineServes
+}
+
 // ReadyRows makes block li's history ready for the rows at pos its form f
 // runs, or says why f cannot run them: a history past f's key bound, a page
 // outside the arena.
