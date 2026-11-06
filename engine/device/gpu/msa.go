@@ -9,7 +9,7 @@ import (
 //
 // A selecting block's cache row carries the indexer's key as one more kv
 // head (nn.LayerPlan.KVRow), so it pages, migrates and is stored with K and V.
-// The block runs in a scratch set of its own (geoMSA, gemma4.go): every K/V
+// The block runs in a scratch set of its own (geoIndexKey, geomsets.go): every K/V
 // writer bakes the row. Each call:
 //
 //	the key: idx_k on the block's normed input, its per-head RMSNorm, then

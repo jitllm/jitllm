@@ -1013,7 +1013,7 @@ func (g *GPU) Pin(li int, on bool) bool {
 }
 
 // run is one contiguous stretch of blocks on one device: one submission.
-// geo is its blocks' scratch set (gemma4.go) and split says the model has two
+// geo is its blocks' scratch set (geomsets.go) and split says the model has two
 // attention geometries (Gemma 4), so the run takes one rotary table (tables).
 type run struct {
 	dev    *devTier
@@ -1051,7 +1051,7 @@ func (g *GPU) runsInto(out []run, lo, hi int) ([]run, bool) {
 			return nil, false
 		}
 		// A change of geometry is cut as a change of device is: one
-		// submission is one scratch set (gemma4.go).
+		// submission is one scratch set (geomsets.go).
 		geo := g.geo[li]
 		if n := len(out); n > 0 && out[n-1].dev == d && out[n-1].geo == geo {
 			out[n-1].hi = li + 1

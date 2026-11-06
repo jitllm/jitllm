@@ -35,7 +35,7 @@ type ragStep struct {
 	// keys is groupRuns' scratch, kept with the rest.
 	keys []runKey
 	// again says an earlier run of this step ran on the same device (a cut at
-	// a change of geometry, gemma4.go), so the step's rows are counted once.
+	// a change of geometry, geomsets.go), so the step's rows are counted once.
 	again bool
 }
 
@@ -85,7 +85,7 @@ func (g *devTier) layersRows(lo, hi int, rs *ragStep, x, cs, csSWA []float32, he
 	}
 	pos, slot, sid := rs.pos, rs.slot, rs.self
 	n := len(pos)
-	// Gemma 4: the range's geometry's scratch set (gemma4.go), as layersCall.
+	// Gemma 4: the range's geometry's scratch set (geomsets.go), as layersCall.
 	g.mu.Lock()
 	prev := g.geoCur
 	if g.geoUsed {
@@ -381,7 +381,7 @@ func (g *GPU) layersRows(c *rowsCall, self uint64, lo, hi int, pos, slot []int, 
 	}
 	// A head on another device than the last block's -- placed where the
 	// tail device had no room for it (PrepHead) -- or a last run outside the
-	// home scratch set (gemma4.go) leaves the projection to a step of its
+	// home scratch set (geomsets.go) leaves the projection to a step of its
 	// own on the head's device, the residual crossing through x, as Layers
 	// does.
 	if why == "" && head != nil {

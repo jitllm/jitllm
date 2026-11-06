@@ -172,7 +172,7 @@ type lane struct {
 	// row count into every kernel. See prepBatch.
 	bbs map[int]*blockScratch
 	// geoSets is the scratch sets of the geometries not in use and geoCur the
-	// one in use (gemma4.go). promptW is the prompt width reserved at
+	// one in use (geomsets.go). promptW is the prompt width reserved at
 	// placement, 0 where none is; stepW the ragged step's.
 	geoSets        map[geoKey]geomSet
 	geoCur         geoKey

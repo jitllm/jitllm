@@ -176,7 +176,7 @@ type layer struct {
 	ungated bool
 	noRope  bool
 	// swa says the block attends at the sliding layers' geometry, so it runs
-	// in that geometry's scratch set (gemma4.go). outScale is its output
+	// in that geometry's scratch set (geomsets.go). outScale is its output
 	// scalar, one float, nil where it has none.
 	geo           geoKey
 	vFromK        bool
@@ -1722,7 +1722,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		g.dropIfEmpty()
 	}()
 	// The block's own geometry's scratch set, and the home set again on the
-	// way out (gemma4.go): Gemma 4's sliding layers, and a non-causal
+	// way out (geomsets.go): Gemma 4's sliding layers, and a non-causal
 	// segment's blocks -- a vision tower's, whose residual, heads and FFN are
 	// not the text model's. sp is the plan that set is built from.
 	sp := scratchPlanOf(p)
@@ -3325,7 +3325,7 @@ func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []floa
 	// decide whether a host restart is sound.
 	g.recSteps = 0
 	// Gemma 4: the range's geometry's scratch set, and the caller's set again
-	// on the way out (gemma4.go). GPU.runsInto hands one geometry per call.
+	// on the way out (geomsets.go). GPU.runsInto hands one geometry per call.
 	prev := g.geoCur
 	if g.geoUsed {
 		g.useGeom(g.geomFor(lo, hi))
@@ -5848,7 +5848,7 @@ func (g *devTier) ensureKVCap(pos int) bool {
 	// The recordings made in this lane name the scratch about to go; no
 	// other lane's changes.
 	g.dropLaneGraph()
-	// Every scratch set (gemma4.go) is built at the capacity, not only the
+	// Every scratch set (geomsets.go) is built at the capacity, not only the
 	// one in use: a set left at the old bound refuses the next position.
 	home := g.geoCur
 	defer g.useGeom(home)
