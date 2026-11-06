@@ -73,15 +73,9 @@ func (c *Config) KVTypeRefusal(t KVType) error {
 // nil where one can.
 func (c *Config) KvQ8Inexpressible() error {
 	switch {
-	case c.Indexer():
-		return fmt.Errorf("model: %s reads its lightning indexer's key from the cached row: "+
+	case c.sel != nil:
+		return fmt.Errorf("model: %s selects its history by an indexer key it caches in the row: "+
 			"a q8_0 KV cache is not implemented for it", c.Arch)
-	case c.MSA():
-		return fmt.Errorf("model: %s selects blocks by its indexer's cached key (MiniMax Sparse Attention): "+
-			"a q8_0 KV cache is not implemented for it", c.Arch)
-	case c.QSARatio != 0:
-		return fmt.Errorf("model: %s pools its QSA indexer's raw cached keys, which its references hold "+
-			"at f32: a q8_0 KV cache is not implemented for it", c.Arch)
 	case c.MLA():
 		return fmt.Errorf("model: %s caches MLA's latent row, whose value is a prefix of the key's row: "+
 			"a q8_0 KV cache is not implemented for it", c.Arch)

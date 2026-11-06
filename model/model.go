@@ -252,23 +252,16 @@ type Config struct {
 	// its rows after they run (jlm.TowerTap, Qwen3-VL's deepstack): the
 	// container's tower's taps, tap i after block i.
 	DeepTaps int
-	// IdxHeads, IdxHeadDim and IdxTopK are DeepSeek V3.2's lightning indexer
-	// (indexer.go): IdxHeads heads of IdxHeadDim score every cached position,
-	// and attention reads the IdxTopK best. Zero heads means none.
-	IdxHeads, IdxHeadDim, IdxTopK int
-	// IdxBlock and IdxLocal are MiniMax Sparse Attention (msa.go): the same
-	// indexer fields, one head per kv group, selecting IdxTopK blocks of
-	// IdxBlock positions with the IdxLocal ending at the query's forced in, on
-	// every block past the dense lead. Zero IdxBlock is DeepSeek V3.2's
-	// per-position selection.
-	IdxBlock, IdxLocal int
+	// sel is how the blocks' attention selects the history it reads, the
+	// container's statement (jlm.Selection); nil for none.
+	sel *jlm.Selection
 	// HCMult is the residual streams a hyper-connected model carries.
 	HCMult int
-	// Qwen3.8-Flash-Next (q4e.go): the hyper-connections' gate rank, QSA's
-	// block size, the n-gram embedding (its one-based block, n, heads per n,
-	// row width, convolution taps, the end-of-sequence and picture ids and
-	// the hash's constants) and the delta rule's sigmoid output gate.
-	HCLowRank, QSARatio              int
+	// Qwen3.8-Flash-Next (q4e.go): the hyper-connections' gate rank, the
+	// n-gram embedding (its one-based block, n, heads per n, row width,
+	// convolution taps, the end-of-sequence and picture ids and the hash's
+	// constants) and the delta rule's sigmoid output gate.
+	HCLowRank                        int
 	NGramBlock, NGram, NGramHeadsPer int
 	NGramRowDim, NGramConv           int
 	NGramEOS, NGramImage             int32
@@ -401,10 +394,10 @@ func (c *Config) GQA() int { return c.NHead / c.NKVHead }
 // also aliases V onto K (kvPages.latent), so the width is charged once.
 func (c *Config) KVDim() int {
 	if c.KVLoraRank != 0 {
-		// The indexer's key rides the same row, after the rotary key: it is
+		// A selection's key rides the same row, after the rotary key: it is
 		// cached per position and per layer exactly as the latent is, so it
-		// pages, relocates and is stored with it (indexer.go).
-		return c.KVLoraRank + c.NRot + c.IdxHeadDim
+		// pages, relocates and is stored with it.
+		return c.KVLoraRank + c.NRot + c.selKeyW()
 	}
 	return c.NKVHead * c.HeadDim
 }
@@ -412,30 +405,33 @@ func (c *Config) KVDim() int {
 // MLA reports that this model's attention is over a compressed latent.
 func (c *Config) MLA() bool { return c.KVLoraRank != 0 }
 
-// Indexer reports that attention reads only the positions DeepSeek V3.2's
-// lightning indexer selects.
-func (c *Config) Indexer() bool { return c.IdxHeads != 0 && c.IdxBlock == 0 && c.QSARatio == 0 }
+// Selection is how the blocks' attention selects the history it reads, nil
+// where every block reads all of it.
+func (c *Config) Selection() *jlm.Selection { return c.sel }
 
-// MSA reports MiniMax Sparse Attention: attention on the blocks past the
-// dense lead reads only the position blocks each kv group's indexer head
-// selects (msa.go).
-func (c *Config) MSA() bool { return c.IdxHeads != 0 && c.IdxBlock != 0 }
+// SelectAt reports that block li's attention reads only the positions its
+// indexer selects.
+func (c *Config) SelectAt(li int) bool { return c.sel.At(li) }
 
-// MSAAt reports that block li selects its keys: every block past the dense
-// lead of an MSA model.
-func (c *Config) MSAAt(li int) bool { return c.MSA() && li >= c.NDenseLead }
+// selKeyW is the width a selection's key takes in a latent attention's row,
+// 0 for none.
+func (c *Config) selKeyW() int {
+	if c.sel == nil {
+		return 0
+	}
+	return int(c.sel.KeyWidth)
+}
 
-// extraKVHead reports that layer li's cached row carries an indexer key as
-// one more kv head: MiniMax-M3's (msa.go) and Qwen3.8-Flash-Next's QSA
-// (qsa.go).
-func (c *Config) ExtraKVHead(li int) bool { return c.MSAAt(li) || c.QSAAt(li) }
+// KeyHeadAt reports that layer li's cached row carries its selection's key
+// as one more kv head after the attention's own.
+func (c *Config) KeyHeadAt(li int) bool { return c.KVLoraRank == 0 && c.SelectAt(li) }
 
 // KVRowAt is one cached position's width in layer li's history: KVDimAt,
-// plus on an MSA block the indexer's key as one more kv head (msa.go). Every
-// cache allocation, page and migration of a layer goes through it; the k and
-// v projections are KVDimAt wide.
+// plus where it selects its keys the indexer's key as one more kv head.
+// Every cache allocation, page and migration of a layer goes through it; the
+// k and v projections are KVDimAt wide.
 func (c *Config) KVRowAt(li int) int {
-	if c.ExtraKVHead(li) {
+	if c.KeyHeadAt(li) {
 		return (c.NKVHead + 1) * c.HeadDim
 	}
 	return c.KVDimAt(li)
@@ -541,8 +537,8 @@ func (c *Config) MaxKVDim() int {
 	if c.KVLoraRank != 0 {
 		return c.KVDim()
 	}
-	if c.MSA() || c.QSARatio != 0 {
-		// The row an MSA or QSA block writes: its k with the indexer's key
+	if c.sel != nil {
+		// The row a selecting block writes: its k with the indexer's key
 		// after it.
 		return (c.NKVHead + 1) * c.HeadDim
 	}
@@ -768,27 +764,17 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 	out.DenseMoE = c.Flags2.Has(jlm.Flag2DenseMoE)
 	out.NKVShared, out.PLEDim = int(c.NKVShared), int(c.PLEDim)
 	out.bidir = c.BidirLayers
-	out.IdxHeads, out.IdxHeadDim, out.IdxTopK = int(c.IdxHeads), int(c.IdxHeadDim), int(c.IdxTopK)
-	out.IdxBlock, out.IdxLocal = int(c.IdxBlock), int(c.IdxLocal)
-	out.QSARatio = int(c.QSARatio)
-	if out.MSA() && (out.MLA() || out.IdxHeads != out.NKVHead || out.IdxHeadDim != out.HeadDim ||
-		out.IdxTopK <= 0 || out.IdxLocal < 1 || out.IdxLocal > out.IdxTopK || out.GeomSplit() ||
-		out.NRot > out.IdxHeadDim || out.NKVShared != 0) {
-		return nil, fmt.Errorf("model: %s: block selection over %d heads of %d (top %d blocks of %d, "+
-			"%d local) on %d kv heads of %d", out.Arch, out.IdxHeads, out.IdxHeadDim, out.IdxTopK,
-			out.IdxBlock, out.IdxLocal, out.NKVHead, out.HeadDim)
+	out.sel = c.Selection
+	if s := out.sel; s != nil && !out.MLA() && (s.KeyWidth != uint32(out.HeadDim) ||
+		s.Groups != 1 && s.Groups != uint32(out.NKVHead) || out.GeomSplit() || out.NKVShared != 0) {
+		return nil, fmt.Errorf("model: %s: a selection of %d keys %d wide over %d kv heads of %d", out.Arch,
+			s.Groups, s.KeyWidth, out.NKVHead, out.HeadDim)
 	}
 	out.PredStreams, out.NSparse, out.SparseStd = int(c.PredStreams), int(c.NSparse), c.SparseStd
 	if out.PredStreams == 1 || (out.PredStreams != 0 && (out.PLEDim == 0 || out.MLA() || out.Hybrid() || out.MoE() ||
 		out.Parallel || out.GeomSplit())) || out.NSparse > out.NLayer {
 		return nil, fmt.Errorf("model: %s: %d AltUp streams (per-layer input %d) and %d sparse blocks of %d",
 			out.Arch, out.PredStreams, out.PLEDim, out.NSparse, out.NLayer)
-	}
-	if out.Indexer() && (!out.MLA() || out.QLoraRank == 0 || out.IdxTopK <= 0 ||
-		out.IdxHeadDim%8 != 0 || out.NRot > out.IdxHeadDim) {
-		return nil, fmt.Errorf("model: %s: an indexer of %d heads of %d (top %d) on q_lora_rank %d, "+
-			"kv_lora_rank %d, rotary %d", out.Arch, out.IdxHeads, out.IdxHeadDim, out.IdxTopK,
-			out.QLoraRank, out.KVLoraRank, out.NRot)
 	}
 	out.DoubleFFN = c.Flags2.Has(jlm.Flag2DoubleFFN)
 	if (out.NKVShared != 0 || out.PLEDim != 0) && (out.MLA() || out.Hybrid() || out.MoE()) {
@@ -875,18 +861,12 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 		out.AttnScale *= mscale * mscale
 	}
 	out.TokenAct = c.ActQuant == jlm.ActQuantRowInt8
-	out.HCLowRank, out.QSARatio = int(c.HCLowRank), int(c.QSARatio)
+	out.HCLowRank = int(c.HCLowRank)
 	out.NGramBlock, out.NGram, out.NGramHeadsPer = int(c.NGramBlock), int(c.NGram), int(c.NGramHeadsPer)
 	out.NGramRowDim, out.NGramConv = int(c.NGramRowDim), int(c.NGramConv)
 	out.NGramEOS, out.NGramImage = int32(c.NGramEOS), int32(c.NGramImage)
 	out.NGramMul, out.NGramOff, out.NGramVoc = c.NGramMul, c.NGramOff, c.NGramVoc
 	out.DeltaSigmoidGate = c.Flags2.Has(jlm.Flag2DeltaSigmoidGate)
-	if out.QSARatio != 0 && (out.IdxHeads <= 0 || out.IdxHeadDim <= 0 || out.IdxHeadDim > out.HeadDim ||
-		out.IdxTopK <= 0 || out.IdxTopK%out.QSARatio != 0 || out.NRot > out.IdxHeadDim || out.GeomSplit()) {
-		return nil, fmt.Errorf("model: %s: QSA over %d heads of %d, a budget of %d at a ratio of %d, "+
-			"on heads of %d rotating %d", out.Arch, out.IdxHeads, out.IdxHeadDim, out.IdxTopK, out.QSARatio,
-			out.HeadDim, out.NRot)
-	}
 	if out.NGramBlock != 0 {
 		if !out.LayerKind(out.NGramBlock - 1).Recurrent() {
 			return nil, fmt.Errorf("model: %s: the n-gram block %d is not a linear block", out.Arch, out.NGramBlock-1)
@@ -1300,6 +1280,10 @@ func Open(path string, options ...Option) (*Model, error) {
 	if (m.Cfg.AttnResBlock != 0 || m.Cfg.HCLowRank != 0) && m.Cfg.statedStreams() <= 1 {
 		m.Close()
 		return nil, &UpgradeRequiredError{Path: path, What: "residual streams"}
+	}
+	if cc := m.Container.Config(); cc.IdxHeads != 0 && cc.Selection == nil && len(cc.CompKinds) == 0 {
+		m.Close()
+		return nil, &UpgradeRequiredError{Path: path, What: "the history its attention selects"}
 	}
 	return m, nil
 }

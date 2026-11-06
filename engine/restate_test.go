@@ -410,7 +410,8 @@ func selection(m *model.Model, edit func(a *graph.Attrs)) func() {
 // sharedSelection selects once, with group 0's head of the indexer's query,
 // for every kv group.
 func sharedSelection(m *model.Model) func() {
-	c := m.Cfg
+	s := m.Cfg.Selection()
+	hd, nh := int(s.HeadDim), int(s.Heads)
 	return restated(m, func(g *graph.Graph) *graph.Graph {
 		k := slices.IndexFunc(g.Ops, func(o graph.Op) bool { return o.Kind == graph.OpSelect })
 		if k < 0 {
@@ -419,8 +420,8 @@ func sharedSelection(m *model.Model) func() {
 		out := cloned(g)
 		q := out.Ops[k].In[0]
 		q0, _ := insert(out, k-1, func(b *graph.Builder) graph.ValueID {
-			return b.Emit(graph.OpSlice, []graph.ValueID{q}, []graph.Result{{Name: "idx.q.0", Width: c.IdxHeadDim}}, nil,
-				graph.Attrs{HeadDim: c.IdxHeads * c.IdxHeadDim, Width: c.IdxHeadDim}, nil, nil)[0]
+			return b.Emit(graph.OpSlice, []graph.ValueID{q}, []graph.Result{{Name: "idx.q.0", Width: hd}}, nil,
+				graph.Attrs{HeadDim: nh * hd, Width: hd}, nil, nil)[0]
 		})
 		sel := &out.Ops[k+1]
 		sel.In[0], sel.Attr.NHead, sel.Attr.NKVHead = q0, 1, 1
@@ -451,4 +452,27 @@ func halfDropped(m *model.Model, attn bool) func() {
 		zero(out, writer(out, att))
 		return out
 	})
+}
+
+// selectionMut runs f on a copy of the container's stated selection, its
+// blocks and programs copied, and restates the blocks over it.
+func selectionMut(m *model.Model, f func(s *jlm.Selection)) func() {
+	s := m.Container.Config().Selection
+	was := *s
+	c := was
+	c.Blocks = slices.Clone(was.Blocks)
+	for _, p := range []**jlm.Program{&c.Key, &c.Query, &c.Weight} {
+		if *p != nil {
+			q := **p
+			q.Ops = slices.Clone(q.Ops)
+			*p = &q
+		}
+	}
+	f(&c)
+	*s = c
+	undo := restate(m, func(map[jlm.Role]graph.Shape) {})
+	return func() {
+		*s = was
+		undo()
+	}
 }

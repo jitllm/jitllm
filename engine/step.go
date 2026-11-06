@@ -407,10 +407,10 @@ func (s *Instance) HostRefusal() error {
 		return errHostOnDevice
 	case s.lo != 0 || s.hi != c.NLayer:
 		return errHostPartial
-	case c.MLA() || c.Indexer() || c.MSA():
-		// Their cached rows and selections are read through the batch's own
-		// slots (mlaProjectRows, idxRows, msaRows); a row of
-		// another session there would read the wrong history.
+	case c.MLA() || c.Selection() != nil:
+		// A latent's cached rows and a selection's are read through the
+		// batch's own slots; a row of another session there would read the
+		// wrong history.
 		return errHostCache
 	}
 	return nil
@@ -420,7 +420,7 @@ func (s *Instance) HostRefusal() error {
 const (
 	errHostOnDevice modelError = "model: a device that steps no rows of different sessions runs some of the instance's blocks or its head"
 	errHostPartial  modelError = "model: the instance runs part of the model (a prediction block)"
-	errHostCache    modelError = "model: the architecture's cached rows are read per batch slot (MLA, an indexer, MSA, DeepSeek V4)"
+	errHostCache    modelError = "model: the architecture's cached rows are read per batch slot (MLA, a selection)"
 )
 
 // PromptChunk is how many prompt tokens this instance's Prefill takes in one

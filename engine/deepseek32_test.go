@@ -31,9 +31,10 @@ func ds32Fixtures() []struct {
 	}{
 		{"synth-deepseek32", func(m *model.Model) bool {
 			c := m.Cfg
-			ok := c.Arch == "deepseek32" && c.MLA() && c.Indexer() && c.QLoraRank == 32 &&
-				c.KVLoraRank == 16 && c.NRot == 8 && c.IdxHeads == 8 && c.IdxHeadDim == 16 &&
-				c.IdxTopK == 4 && c.KVDim() == 16+8+16 && c.ExpertSigmoid && c.NExpertGroup == 2 &&
+			s := c.Selection()
+			ok := c.Arch == "deepseek32" && c.MLA() && s != nil && s.Rank == jlm.RankBest && s.Block == 1 && s.Relu &&
+				s.Weight != nil && c.QLoraRank == 32 && c.KVLoraRank == 16 && c.NRot == 8 && s.Heads == 8 && s.HeadDim == 16 &&
+				s.Keep == 4 && c.KVDim() == 16+8+16 && c.ExpertSigmoid && c.NExpertGroup == 2 &&
 				c.NDenseLead == 1 && c.YarnFactor == 8
 			for i := range m.Layers {
 				l := &m.Layers[i]
@@ -50,10 +51,10 @@ func ds32Fixtures() []struct {
 func ds32Violations() []c6Violation {
 	return []c6Violation{
 		{"attention over every position", func(m *model.Model) func() {
-			return cfgMut(m, func(c *model.Config) { c.IdxTopK = 1 << 20 })
+			return selectionMut(m, func(s *jlm.Selection) { s.Keep = 1 << 20 })
 		}},
 		{"a top-k one short", func(m *model.Model) func() {
-			return cfgMut(m, func(c *model.Config) { c.IdxTopK-- })
+			return selectionMut(m, func(s *jlm.Selection) { s.Keep-- })
 		}},
 		{"the indexer key unnormed", func(m *model.Model) func() {
 			return eachLayer(m, func(l *model.Layer) {
@@ -91,9 +92,9 @@ func TestDeepseek32MatchesTransformers(t *testing.T) {
 			if !fx.sel(m) {
 				t.Fatalf("the container does not carry the fixture's graph: %+v", m.Cfg)
 			}
-			if len(g.IDs) <= m.Cfg.IdxTopK {
+			if keep := int(m.Cfg.Selection().Keep); len(g.IDs) <= keep {
 				t.Fatalf("%d golden positions against a top-%d: the indexer selects nothing",
-					len(g.IDs), m.Cfg.IdxTopK)
+					len(g.IDs), keep)
 			}
 			if m.Vocab == nil {
 				t.Fatalf("no tokenizer: %v", m.TokErr)
@@ -155,10 +156,10 @@ func TestDeepseek32FeaturesAreLoadBearing(t *testing.T) {
 func ds32DevViolations() []c6Violation {
 	return []c6Violation{
 		{"attention over every position", func(m *model.Model) func() {
-			return cfgMut(m, func(c *model.Config) { c.IdxTopK = 1 << 20 })
+			return selectionMut(m, func(s *jlm.Selection) { s.Keep = 1 << 20 })
 		}},
 		{"a top-k one short", func(m *model.Model) func() {
-			return cfgMut(m, func(c *model.Config) { c.IdxTopK-- })
+			return selectionMut(m, func(s *jlm.Selection) { s.Keep-- })
 		}},
 		{"the indexer key unnormed", ds32Violations()[2].mut},
 	}

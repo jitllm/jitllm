@@ -60,7 +60,7 @@ func geoOf(p *nn.LayerPlan) geoKey {
 	if p.FFNWide {
 		k |= geoWideFFN
 	}
-	if p.MSA() || p.QSA() {
+	if p.KeyHead() {
 		k |= geoIndexKey
 	}
 	return k

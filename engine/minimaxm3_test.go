@@ -32,14 +32,15 @@ func m3Fixtures() []struct {
 	}{
 		{"synth-minimaxm3", func(m *model.Model) bool {
 			c := m.Cfg
-			ok := c.Arch == "minimax-m3" && c.MSA() && !c.Indexer() && !c.MLA() && c.NKVHead == 2 &&
+			s := c.Selection()
+			ok := c.Arch == "minimax-m3" && s != nil && s.Rank == jlm.RankBest && !c.MLA() && c.NKVHead == 2 &&
 				c.HeadDim == 16 && c.NRot == 8 && c.RopeNeox && c.QKNorm && !c.QKNormWide &&
-				c.IdxHeads == 2 && c.IdxHeadDim == 16 && c.IdxTopK == 2 && c.IdxBlock == 4 &&
-				c.IdxLocal == 1 && c.NDenseLead == 1 && c.ExpertSigmoid && c.ExpertScale == 2 &&
+				s.Heads == 2 && s.Groups == 2 && s.HeadDim == 16 && s.KeyWidth == 16 && s.Keep == 2 && s.Block == 4 &&
+				s.Local == 1 && c.NDenseLead == 1 && c.ExpertSigmoid && c.ExpertScale == 2 &&
 				c.NFFNShExp == 32 && m.Container.Config().Flags.Has(jlm.FlagSwiGLUOAI) && c.KVRowAt(0) == 32 && c.KVRowAt(1) == 48
 			for i := range m.Layers {
 				l := &m.Layers[i]
-				if c.MSAAt(i) {
+				if c.SelectAt(i) {
 					ok = ok && matRows(l, jlm.RoleIdxQ) == 2*16 && matRows(l, jlm.RoleIdxK) == 16 && len(l.Vector(jlm.RoleIdxQNorm)) == 16 &&
 						len(l.Vector(jlm.RoleIdxKNorm)) == 16
 				} else {
@@ -56,7 +57,7 @@ func m3Fixtures() []struct {
 func m3Violations() []c6Violation {
 	return []c6Violation{
 		{"attention over every block", func(m *model.Model) func() {
-			return cfgMut(m, func(c *model.Config) { c.IdxTopK = 1 << 20 })
+			return selectionMut(m, func(s *jlm.Selection) { s.Keep = 1 << 20 })
 		}},
 		{"a top-k one short", func(m *model.Model) func() { return selection(m, func(a *graph.Attrs) { a.TopK-- }) }},
 		{"the query's own block not forced in", func(m *model.Model) func() { return selection(m, func(a *graph.Attrs) { a.Local = 0 }) }},
@@ -87,9 +88,10 @@ func TestMiniMaxM3MatchesTransformers(t *testing.T) {
 			if !fx.sel(m) {
 				t.Fatalf("the container does not carry the fixture's graph: %+v", m.Cfg)
 			}
-			if blocks := (len(g.IDs) + m.Cfg.IdxBlock - 1) / m.Cfg.IdxBlock; blocks <= m.Cfg.IdxTopK {
+			s := m.Cfg.Selection()
+			if blocks := (len(g.IDs) + int(s.Block) - 1) / int(s.Block); blocks <= int(s.Keep) {
 				t.Fatalf("%d golden positions are %d blocks against a top-%d: the selection keeps "+
-					"everything", len(g.IDs), blocks, m.Cfg.IdxTopK)
+					"everything", len(g.IDs), blocks, s.Keep)
 			}
 			if m.Vocab == nil {
 				t.Fatalf("no tokenizer: %v", m.TokErr)
@@ -152,10 +154,10 @@ func m3DevViolations() []c6Violation {
 	return []c6Violation{
 		{"attention over every block", m3Violations()[0].mut},
 		{"a top-k one short", func(m *model.Model) func() {
-			return cfgMut(m, func(c *model.Config) { c.IdxTopK-- })
+			return selectionMut(m, func(s *jlm.Selection) { s.Keep-- })
 		}},
 		{"two blocks forced in", func(m *model.Model) func() {
-			return cfgMut(m, func(c *model.Config) { c.IdxLocal = 2 })
+			return selectionMut(m, func(s *jlm.Selection) { s.Local = 2 })
 		}},
 		{"the indexer key unnormed", m3Violations()[5].mut},
 		{"the indexer query unnormed", m3Violations()[6].mut},

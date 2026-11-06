@@ -134,7 +134,7 @@ const (
 	// where bound, epsilon Eps.
 	TOpLayerNorm OpCode = 5
 	// TOpRMSNorm is In[0]'s RMS norm, weight Bind[0] where bound, epsilon
-	// Eps; without a weight, each Span-wide head of it where Span is set.
+	// Eps, each Span-wide head of it where Span is set.
 	TOpRMSNorm OpCode = 6
 	// TOpRegroup is space-to-depth: each Span x Span block of the grid's
 	// rows one row, the block's rows in raster order (graph.OpRegroup).
@@ -173,7 +173,21 @@ const (
 	TOpConcat OpCode = 18
 	// TOpSlice is In[0]'s Width elements from Offset.
 	TOpSlice OpCode = 19
-	topCodes OpCode = 20
+	// TOpRope is In[0]'s Span-wide heads turned by the block's attention
+	// rotary at the row's position, laid out as Chain says (RopeAsBlock,
+	// RopeNormal, RopeNeox); a block with no rotary leaves them as they are.
+	TOpRope  OpCode = 20
+	topCodes OpCode = 21
+)
+
+// A stated rotary's layout (TOpRope's Chain).
+const (
+	// RopeAsBlock is the block's attention's own layout.
+	RopeAsBlock uint8 = iota
+	// RopeNormal turns adjacent pairs.
+	RopeNormal
+	// RopeNeox turns each element with the one half a head away.
+	RopeNeox
 )
 
 // A position table's resample (TOpPosResample): where a cell of a side n
@@ -425,6 +439,8 @@ func (p *Program) valid(name string) error {
 			return fmt.Errorf("jlm: the tower's %s op %d groups by %d", name, i, op.Span)
 		case (op.Code == TOpLayerNorm || op.Code == TOpRMSNorm) && op.Eps <= 0:
 			return fmt.Errorf("jlm: the tower's %s op %d has an epsilon of %v", name, i, op.Eps)
+		case op.Code == TOpRope && (op.Span <= 0 || op.Chain > RopeNeox):
+			return fmt.Errorf("jlm: the tower's %s op %d turns heads of %d laid out as %d", name, i, op.Span, op.Chain)
 		case op.Code == TOpSlice && op.Width <= 0:
 			return fmt.Errorf("jlm: the tower's %s op %d slices %d elements", name, i, op.Width)
 		case op.Code == TOpStated && (op.Expr == nil || op.Width <= 0):
@@ -435,7 +451,7 @@ func (p *Program) valid(name string) error {
 			op.Filter < TapsBilinear || op.Filter > TapsCubic):
 			return fmt.Errorf("jlm: the tower's %s op %d resamples a table %d a side by chain %d and taps %d",
 				name, i, op.Span, op.Chain, op.Filter)
-		case op.Code != TOpPosResample && (op.Chain != 0 || op.Filter != 0):
+		case op.Code != TOpPosResample && (op.Chain != 0 && op.Code != TOpRope || op.Filter != 0):
 			return fmt.Errorf("jlm: the tower's %s op %d (code %d) states a resample", name, i, op.Code)
 		}
 		if op.Expr != nil {
@@ -465,7 +481,7 @@ func (op *TowerOp) arity() (in int, bind [2]int) {
 		return 1, [2]int{0, 1}
 	case TOpLeadRow, TOpScale:
 		return 1, [2]int{1, 1}
-	case TOpSum, TOpMax, TOpSlice:
+	case TOpSum, TOpMax, TOpSlice, TOpRope:
 		return 1, [2]int{0, 0}
 	case TOpConcat:
 		return -1, [2]int{0, 0}

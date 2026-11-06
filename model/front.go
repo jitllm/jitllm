@@ -730,7 +730,7 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	}
 	q := matvec(qIn, qRole, qrows, stored(jlm.RoleAttnQBias)...)
 	if has(jlm.RoleAttnKVA) {
-		att, err := m.latentAttention(b, li, n, qIn, q, has, stored, matvec)
+		att, err := m.latentAttention(b, f, li, n, qIn, q, has, stored, matvec)
 		if err != nil {
 			return nil, UncoveredUnverified, err
 		}
@@ -854,76 +854,24 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 		}, nil, pos)
 		q = mapRow(b, "q.temp", graph.Attrs{Fn: graph.MapMul}, nil, qdim, q, temp)
 	}
-	// A block selecting blocks of its keys caches its indexer's key as one
-	// more kv head of the row, that head's value zero, and asks a query
-	// head per kv group which blocks its heads attend.
-	var iq graph.ValueID
+	// A selecting block caches its indexer's key as one more kv head of the
+	// row, that head's value zero, and its indexer's query picks the
+	// positions its heads attend.
+	var ix indexed
 	rowW := kvDim
-	selects := c.IdxBlock != 0 && has(jlm.RoleIdxK)
-	if selects {
-		id := c.IdxHeadDim
-		if id != hd || c.IdxHeads != nkv || shared {
-			return nil, UncoveredUnverified, fmt.Errorf("a block selection of %d heads of %d over %d kv heads of %d (shared %v)",
-				c.IdxHeads, id, nkv, hd, shared)
+	if c.SelectAt(li) {
+		if shared {
+			return nil, UncoveredUnverified, fmt.Errorf("block %d selects its keys from a history it shares", li)
 		}
-		turn := func(v graph.ValueID, name string) graph.ValueID {
-			if !c.RopeAt(li) {
-				return v
-			}
-			r := m.Rope
-			layout := graph.RopeNorm
-			if r.Neox {
-				layout = graph.RopeNeox
-			}
-			a := graph.Attrs{HeadDim: id, NRot: r.NRot, Base: r.Base, Layout: layout, Freqs: len(r.Freqs) > 0, Mscale: r.Scale}
-			return b.Emit(graph.OpRope, []graph.ValueID{v}, []graph.Result{{Name: name, Width: b.G.Values[v].Width}}, nil, a, nil, nil)[0]
+		var err error
+		if ix, err = m.indexer(b, f, li, n, n); err != nil {
+			return nil, UncoveredUnverified, err
 		}
-		ik := turn(b.Norm(matvec(n, jlm.RoleIdxK, id), jlm.RoleIdxKNorm, c.RMSEps), "idx.k.rope")
-		iq = turn(b.HeadNorm(matvec(n, jlm.RoleIdxQ, c.IdxHeads*id), jlm.RoleIdxQNorm, id, c.RMSEps), "idx.q.rope")
-		rowW = kvDim + id
-		join := func(name string, x, y graph.ValueID) graph.ValueID {
-			return b.Emit(graph.OpConcat, []graph.ValueID{x, y}, []graph.Result{{Name: name, Width: rowW}}, nil, graph.Attrs{}, nil, nil)[0]
-		}
-		k, v = join("k.row", k, ik), join("v.row", v, mapRow(b, "v.pad", graph.Attrs{Fn: graph.MapMul}, nil, id, ik))
-	}
-	// QSA caches its indexer's raw key as one more kv head, padded to the
-	// head with zeros and its value zero, and selects blocks of positions by
-	// their pooled keys (graph.Attrs.Pooled) for every head at once.
-	pooled := c.QSAAt(li) && has(jlm.RoleIdxK)
-	var qsa graph.Attrs
-	if pooled {
-		id := c.IdxHeadDim
-		if id > hd || shared || c.QSARatio <= 0 || c.IdxTopK < c.QSARatio {
-			return nil, UncoveredUnverified, fmt.Errorf("a pooled selection of %d heads of %d over kv heads of %d, blocks of %d keeping %d (shared %v)",
-				c.IdxHeads, id, hd, c.QSARatio, c.IdxTopK, shared)
-		}
-		zeros := func(name string, w int) graph.ValueID {
-			cut := b.Emit(graph.OpSlice, []graph.ValueID{q}, []graph.Result{{Name: name + ".cut", Width: w}}, nil,
-				graph.Attrs{HeadDim: b.G.Values[q].Width, Width: w}, nil, nil)[0]
-			return mapRow(b, name, graph.Attrs{Fn: graph.MapMul}, nil, w, cut)
-		}
-		parts := []graph.ValueID{k, matvec(n, jlm.RoleIdxK, id)}
-		if id < hd {
-			parts = append(parts, zeros("idx.k.pad", hd-id))
-		}
-		rowW = kvDim + hd
-		k = b.Emit(graph.OpConcat, parts, []graph.Result{{Name: "k.row", Width: rowW}}, nil, graph.Attrs{}, nil, nil)[0]
-		v = b.Emit(graph.OpConcat, []graph.ValueID{v, zeros("v.pad", hd)}, []graph.Result{{Name: "v.row", Width: rowW}}, nil, graph.Attrs{}, nil, nil)[0]
-		iq = b.HeadNorm(matvec(n, jlm.RoleIdxQ, c.IdxHeads*id), jlm.RoleIdxQNorm, id, c.RMSEps)
-		qsa = graph.Attrs{NHead: c.IdxHeads, NKVHead: 1, HeadDim: id, Offset: kvDim, Width: rowW, Span: c.QSARatio,
-			TopK: c.IdxTopK / c.QSARatio, Fn: graph.MapMax, Eps: c.RMSEps}
-		if c.RopeAt(li) {
-			r := m.ropeAt(li)
-			layout := graph.RopeNorm
-			if c.RopeNeox {
-				layout = graph.RopeNeox
-			}
-			qsa.NRot, qsa.Base, qsa.Layout, qsa.Freqs, qsa.Mscale = r.NRot, r.Base, layout, len(r.Freqs) > 0, r.Scale
-			qsa.Sections, qsa.Interleaved = m.ropeAxes(r)
-			iq = b.Emit(graph.OpRope, []graph.ValueID{iq}, []graph.Result{{Name: "idx.q.rope", Width: c.IdxHeads * id}}, nil,
-				graph.Attrs{HeadDim: id, NRot: qsa.NRot, Base: qsa.Base, Layout: layout, Freqs: qsa.Freqs, Mscale: qsa.Mscale,
-					Sections: qsa.Sections, Interleaved: qsa.Interleaved}, nil, nil)[0]
-		}
+		kw := int(c.sel.KeyWidth)
+		rowW = kvDim + kw
+		k = b.Emit(graph.OpConcat, []graph.ValueID{k, ix.key}, []graph.Result{{Name: "k.row", Width: rowW}}, nil, graph.Attrs{}, nil, nil)[0]
+		v = b.Emit(graph.OpConcat, []graph.ValueID{v, zerosOf(b, "v.pad", ix.key)}, []graph.Result{{Name: "v.row", Width: rowW}}, nil,
+			graph.Attrs{}, nil, nil)[0]
 	}
 	hist := graph.SharedHistory(c.KVSource(li))
 	if !shared {
@@ -939,16 +887,9 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 		a.Window, a.Chunked = c.SWAWindow, c.SWAChunked
 	}
 	var att graph.ValueID
-	if selects {
+	if c.SelectAt(li) {
 		a.Width = rowW
-		sa := graph.Attrs{NHead: c.IdxHeads, NKVHead: c.IdxHeads, HeadDim: c.IdxHeadDim, Offset: kvDim, Width: rowW,
-			Span: c.IdxBlock, TopK: c.IdxTopK, Local: c.IdxLocal}
-		sel := b.Select(iq, hist, sa)
-		att = b.AttendSelected(q, hist, sel, a, stored(jlm.RoleAttnSinks)...)
-	} else if pooled {
-		a.Width = rowW
-		sel := b.SelectPooled(iq, hist, qsa, jlm.RoleIdxKNorm)
-		att = b.AttendSelected(q, hist, sel, a, stored(jlm.RoleAttnSinks)...)
+		att = b.AttendSelected(q, hist, m.selected(b, li, ix, hist, kvDim, rowW), a, stored(jlm.RoleAttnSinks)...)
 	} else {
 		att = b.AttendOf(q, hist, a, stored(jlm.RoleAttnSinks)...)
 	}
@@ -1362,11 +1303,8 @@ func (m *Model) mixture(b *graph.Builder, f graph.Facts, li int, x, n graph.Valu
 // the cached rows, each value the whole row, with the block's scale, window,
 // softcap and sinks; each head's first KVLoraRank of the result through its
 // sheet of RoleAttnVB, gated where the block stores a gate over the output.
-// idxEps is the indexer key norm's epsilon: nn.LayerNorm(eps=1e-6) in the
-// reference, hardcoded in llama.cpp's builder; no GGUF key carries it.
-const idxEps = 1e-6
 
-func (m *Model) latentAttention(b *graph.Builder, li int, n, qIn, q graph.ValueID, has func(jlm.Role) bool, stored func(jlm.Role) []jlm.Role,
+func (m *Model) latentAttention(b *graph.Builder, f graph.Facts, li int, n, qIn, q graph.ValueID, has func(jlm.Role) bool, stored func(jlm.Role) []jlm.Role,
 	matvec func(graph.ValueID, jlm.Role, int, ...jlm.Role) graph.ValueID) (graph.ValueID, error) {
 	c := m.Cfg
 	nh, hd, lat, rot, hdv := c.NHead, c.HeadDimAt(li), c.KVLoraRank, c.NRot, c.HeadDimV
@@ -1404,24 +1342,15 @@ func (m *Model) latentAttention(b *graph.Builder, li int, n, qIn, q graph.ValueI
 	abs := sheets(slice(q, "q.nope", hd, 0, nope, nh*nope), "q.abs", jlm.RoleAttnKB, nope, lat)
 	qrow := b.Emit(graph.OpConcat, []graph.ValueID{abs, qpe}, []graph.Result{{Name: "q.row", Width: nh * row}}, nil,
 		graph.Attrs{NHead: nh}, nil, nil)[0]
-	// An indexer's key rides the cached row after the rotary key.
+	// A selection's key rides the cached row after the rotary key.
 	parts, width := []graph.ValueID{latent, kpe}, row
-	var iq, iw graph.ValueID
-	if has(jlm.RoleIdxK) {
-		ih, id := c.IdxHeads, c.IdxHeadDim
-		layout := graph.RopeNeox
-		turn := func(v graph.ValueID, name string) graph.ValueID {
-			if !c.RopeAt(li) {
-				return v
-			}
-			r := m.ropeAt(li)
-			a := graph.Attrs{HeadDim: id, NRot: r.NRot, Base: r.Base, Layout: layout, Freqs: len(r.Freqs) > 0, Mscale: r.Scale}
-			return b.Emit(graph.OpRope, []graph.ValueID{v}, []graph.Result{{Name: name, Width: b.G.Values[v].Width}}, nil, a, nil, nil)[0]
+	var ix indexed
+	if c.SelectAt(li) {
+		var err error
+		if ix, err = m.indexer(b, f, li, n, qIn); err != nil {
+			return 0, err
 		}
-		ik := turn(b.LayerNorm(matvec(n, jlm.RoleIdxK, id), jlm.RoleIdxKNorm, idxEps, jlm.RoleIdxKNormB), "idx.k.rope")
-		iq = turn(matvec(qIn, jlm.RoleIdxQB, ih*id), "idx.q.rope")
-		iw = mapRow(b, "idx.w", graph.Attrs{Fn: graph.MapMul, Const: 1 / math.Sqrt(float64(id*ih))}, nil, ih, matvec(n, jlm.RoleIdxProj, ih))
-		parts, width = append(parts, ik), row+id
+		parts, width = append(parts, ix.key), row+int(c.sel.KeyWidth)
 	}
 	krow := b.Emit(graph.OpConcat, parts, []graph.Result{{Name: "kv.row", Width: width}}, nil, graph.Attrs{}, nil, nil)[0]
 	hist := graph.StateRef{State: graph.StateKV, Version: b.KVAppend(krow, krow, 0)}
@@ -1434,12 +1363,9 @@ func (m *Model) latentAttention(b *graph.Builder, li int, n, qIn, q graph.ValueI
 		a.Window, a.Chunked = c.SWAWindow, c.SWAChunked
 	}
 	var att graph.ValueID
-	if width != row {
+	if c.SelectAt(li) {
 		a.Width = width
-		relu := graph.MapMax
-		sel := b.Select(iq, hist, graph.Attrs{NHead: c.IdxHeads, NKVHead: 1, HeadDim: c.IdxHeadDim, Offset: row, Width: width,
-			Span: 1, TopK: c.IdxTopK, Fn: relu}, iw)
-		att = b.AttendSelected(qrow, hist, sel, a, stored(jlm.RoleAttnSinks)...)
+		att = b.AttendSelected(qrow, hist, m.selected(b, li, ix, hist, row, width), a, stored(jlm.RoleAttnSinks)...)
 	} else {
 		att = b.AttendOf(qrow, hist, a, stored(jlm.RoleAttnSinks)...)
 	}
@@ -1745,3 +1671,106 @@ func (m *Model) givenGraph() (*graph.Graph, error) {
 // MaxTopLogprobs is the most alternatives a Logprobs reports per token, the
 // OpenAI API's bound on top_logprobs.
 const MaxTopLogprobs = 20
+
+// indexed is a selecting block's indexer: its key as the row caches it, its
+// query, and its heads' weight where it states one.
+type indexed struct {
+	key, query, weight graph.ValueID
+	weighted           bool
+}
+
+// indexer is block li's stated indexer (jlm.Selection) over its normed input
+// n and the attention's query latent qIn (n where it has none), its key
+// padded with zeros to the width the row caches.
+func (m *Model) indexer(b *graph.Builder, f graph.Facts, li int, n, qIn graph.ValueID) (indexed, error) {
+	s := m.Cfg.sel
+	turn := m.statedTurn(b, li)
+	var ix indexed
+	key, err := lowerValuesWith(b, nil, s.Key, []graph.ValueID{n}, 1, f, turn)
+	if err != nil {
+		return ix, fmt.Errorf("block %d's indexer key: %w", li, err)
+	}
+	ix.key = key[s.Key.Out]
+	if w, kw := b.G.Values[ix.key].Width, int(s.KeyWidth); w < kw {
+		ix.key = b.Emit(graph.OpConcat, []graph.ValueID{ix.key, zerosOf(b, "idx.k.pad", ix.key, kw-w)},
+			[]graph.Result{{Name: "idx.k.row", Width: kw}}, nil, graph.Attrs{}, nil, nil)[0]
+	}
+	q, err := lowerValuesWith(b, nil, s.Query, []graph.ValueID{n, qIn}, 1, f, turn)
+	if err != nil {
+		return ix, fmt.Errorf("block %d's indexer query: %w", li, err)
+	}
+	ix.query = q[s.Query.Out]
+	if s.Weight != nil {
+		w, err := lowerValuesWith(b, nil, s.Weight, []graph.ValueID{n}, 1, f, turn)
+		if err != nil {
+			return ix, fmt.Errorf("block %d's indexer weight: %w", li, err)
+		}
+		ix.weight, ix.weighted = w[s.Weight.Out], true
+	}
+	return ix, nil
+}
+
+// selected is the positions block li's indexer ix selects from hist, whose
+// rows carry its key at off of width.
+func (m *Model) selected(b *graph.Builder, li int, ix indexed, hist graph.StateRef, off, width int) graph.ValueID {
+	c, s := m.Cfg, m.Cfg.sel
+	a := graph.Attrs{NHead: int(s.Heads), NKVHead: int(s.Groups), HeadDim: int(s.HeadDim), Offset: off, Width: width,
+		Span: int(s.Block), TopK: int(s.Keep), Local: int(s.Local)}
+	if s.Rank == jlm.RankPooled {
+		a.Fn, a.Eps = graph.MapMax, float64(s.Eps)
+		if c.RopeAt(li) {
+			r := m.ropeAt(li)
+			a.NRot, a.Base, a.Layout, a.Freqs, a.Mscale = r.NRot, r.Base, ropeLayout(r.Neox), len(r.Freqs) > 0, r.Scale
+			a.Sections, a.Interleaved = m.ropeAxes(r)
+		}
+		return b.SelectPooled(ix.query, hist, a, s.PoolNorm)
+	}
+	if s.Relu {
+		a.Fn = graph.MapMax
+	}
+	if ix.weighted {
+		return b.Select(ix.query, hist, a, ix.weight)
+	}
+	return b.Select(ix.query, hist, a)
+}
+
+// statedTurn lowers a stated rotary (jlm.TOpRope) of block li: its
+// attention's rotary at the row's position, in the stated layout, nothing on
+// a block with none.
+func (m *Model) statedTurn(b *graph.Builder, li int) func(v graph.ValueID, op *jlm.TowerOp) graph.ValueID {
+	return func(v graph.ValueID, op *jlm.TowerOp) graph.ValueID {
+		if !m.Cfg.RopeAt(li) {
+			return v
+		}
+		r := m.ropeAt(li)
+		layout := ropeLayout(r.Neox)
+		switch op.Chain {
+		case jlm.RopeNormal:
+			layout = graph.RopeNorm
+		case jlm.RopeNeox:
+			layout = graph.RopeNeox
+		}
+		a := graph.Attrs{HeadDim: int(op.Span), NRot: r.NRot, Base: r.Base, Layout: layout, Freqs: len(r.Freqs) > 0, Mscale: r.Scale}
+		a.Sections, a.Interleaved = m.ropeAxes(r)
+		return b.Emit(graph.OpRope, []graph.ValueID{v}, []graph.Result{{Name: "idx.rope", Width: b.G.Values[v].Width}}, nil, a, nil, nil)[0]
+	}
+}
+
+// ropeLayout is a rotary's layout, neox-style or adjacent pairs.
+func ropeLayout(neox bool) graph.RopeLayout {
+	if neox {
+		return graph.RopeNeox
+	}
+	return graph.RopeNorm
+}
+
+// zerosOf is a row of zeros as wide as x, or w wide (no wider than x).
+func zerosOf(b *graph.Builder, name string, x graph.ValueID, w ...int) graph.ValueID {
+	width := b.G.Values[x].Width
+	if len(w) > 0 {
+		cut := b.Emit(graph.OpSlice, []graph.ValueID{x}, []graph.Result{{Name: name + ".cut", Width: w[0]}}, nil,
+			graph.Attrs{HeadDim: width, Width: w[0]}, nil, nil)[0]
+		return mapRow(b, name, graph.Attrs{Fn: graph.MapMul}, nil, w[0], cut)
+	}
+	return mapRow(b, name, graph.Attrs{Fn: graph.MapMul}, nil, width, x)
+}

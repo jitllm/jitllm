@@ -4,6 +4,7 @@ import (
 	"math"
 	"testing"
 
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/graph"
@@ -60,8 +61,9 @@ func TestComposedCPUSelectsKeys(t *testing.T) {
 	if n, want := selectingBlocks(m), m.Cfg.NLayer-m.Cfg.NDenseLead; n != want || n == 0 {
 		t.Fatalf("%d blocks select their keys, want %d", n, want)
 	}
-	if blocks := (steps + m.Cfg.IdxBlock - 1) / m.Cfg.IdxBlock; blocks <= m.Cfg.IdxTopK {
-		t.Fatalf("%d steps are %d blocks against a top-%d: the selection keeps everything", steps, blocks, m.Cfg.IdxTopK)
+	if s := m.Cfg.Selection(); (steps+int(s.Block)-1)/int(s.Block) <= int(s.Keep) {
+		t.Fatalf("%d steps are %d blocks against a top-%d: the selection keeps everything", steps,
+			(steps+int(s.Block)-1)/int(s.Block), s.Keep)
 	}
 	toks := cpuTokens(t, ref, steps, append(append([]Option(nil), instOpts...), withKVPage(page))...)
 	want := cpuLogits(t, ref, toks, cpuFaultNone, true, append(append([]Option(nil), instOpts...), withKVPage(page))...)
@@ -85,7 +87,7 @@ func TestComposedCPUSelectsKeys(t *testing.T) {
 		{"attention over every block", m3Violations()[0].mut},
 		{"a top-k one short", m3DevViolations()[1].mut},
 		{"two blocks forced in", m3DevViolations()[2].mut},
-		{"blocks of eight", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.IdxBlock = 8 }) }},
+		{"blocks of eight", func(m *model.Model) func() { return selectionMut(m, func(s *jlm.Selection) { s.Block = 8 }) }},
 	} {
 		undo := v.mut(m)
 		bad := worstOf(cpuLogits(t, m, toks, cpuFaultNone, true, withKVPage(page)))

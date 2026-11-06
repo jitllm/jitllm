@@ -74,7 +74,7 @@ func (s *Instance) kvlAt(li int) kvLayout { return s.kvl.atLayer(s.c, li) }
 // head width.
 func (l kvLayout) atLayer(c *model.Config, li int) kvLayout {
 	switch {
-	case c.ExtraKVHead(li):
+	case c.KeyHeadAt(li):
 		l.nKV++
 	case c.GeomSplit() && !c.MLA() && c.SWA(li):
 		l.nKV, l.headDim = c.NKVHeadSWA, c.HeadDimSWA

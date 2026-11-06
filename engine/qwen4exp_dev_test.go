@@ -38,7 +38,7 @@ func TestQwen4ExpDeviceRunsTheChunkWhole(t *testing.T) {
 	c := m.Cfg
 	nl, qsa := c.NLayer, 0
 	for li := 0; li < nl; li++ {
-		if c.QSAAt(li) {
+		if c.SelectAt(li) {
 			qsa++
 		}
 	}

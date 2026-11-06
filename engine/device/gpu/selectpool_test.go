@@ -15,9 +15,9 @@ import (
 // what admitting it costs. The plain block is the control: its pages may go.
 func TestSelectionHistoryStaysOnTheCard(t *testing.T) {
 	plain := &nn.LayerPlan{MaxSeq: 4096}
-	qsa := &nn.LayerPlan{MaxSeq: 4096, Q4E: &nn.Q4EPlan{QSARatio: 4}}
-	msa := &nn.LayerPlan{MaxSeq: 4096, IdxHeads: 4, IdxBlock: 8}
-	idx := &nn.LayerPlan{MaxSeq: 4096, IdxHeads: 4}
+	qsa := &nn.LayerPlan{MaxSeq: 4096, KeyW: 16, Select: &nn.SelectPlan{Block: 4, Keep: 2}}
+	msa := &nn.LayerPlan{MaxSeq: 4096, KeyW: 16, Select: &nn.SelectPlan{Block: 8, Keep: 4}}
+	idx := &nn.LayerPlan{MaxSeq: 4096, Select: &nn.SelectPlan{Block: 1, Keep: 4}}
 	for name, c := range map[string]struct {
 		p    *nn.LayerPlan
 		want bool
@@ -52,8 +52,8 @@ func TestSelectionHistoryStaysOnTheCard(t *testing.T) {
 		ctx  bool
 	}{
 		{"plain", nn.LayerPlan{MaxSeq: 4096, NKVHead: 1, HeadDim: 16}, false},
-		{"qsa", nn.LayerPlan{MaxSeq: 4096, NKVHead: 1, HeadDim: 16, Q4E: &nn.Q4EPlan{QSARatio: 4}}, true},
-		{"indexer", nn.LayerPlan{MaxSeq: 4096, NKVHead: 1, HeadDim: 16, IdxHeads: 4}, true},
+		{"qsa", nn.LayerPlan{MaxSeq: 4096, NKVHead: 1, HeadDim: 16, KeyW: 16, Select: &nn.SelectPlan{Block: 4, Keep: 2}}, true},
+		{"indexer", nn.LayerPlan{MaxSeq: 4096, NKVHead: 1, HeadDim: 16, Select: &nn.SelectPlan{Block: 1, Keep: 4}}, true},
 	} {
 		if err := d.pagedLayer(1, &layer{}, li, &c.p); err != nil {
 			t.Fatal(err)
