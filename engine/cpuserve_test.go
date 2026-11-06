@@ -408,19 +408,19 @@ func cpuCompare(want, got [][]float32) (worst float64, agree int) {
 // setFault breaks s's CPU device the way f names, in the instance and in the
 // parts the device holds.
 func setFault(s *Instance, f cpuFault) {
-	s.exec.x.StreamFault = f == cpuFaultStreams
-	if ln := s.exec.x.Lanes(); ln != nil {
+	execOf(s).StreamFault = f == cpuFaultStreams
+	if ln := execOf(s).Lanes(); ln != nil {
 		ln.RecFault = f == cpuFaultRec
 		ln.ChunkFault = f == cpuFaultChunk
 	}
 	if st, ok := s.streams.(*cpudev.Streams); ok {
 		st.Fault = f == cpuFaultStreams
 	}
-	if r := s.exec.x.Blocks(); r != nil {
+	if r := execOf(s).Blocks(); r != nil {
 		r.FaultRow, r.FaultWrite = f == cpuFaultRow, f == cpuFaultWrite
 		r.FaultPage, r.FaultKeysFirst = f == cpuFaultPage, f == cpuFaultKeysFirst
 	}
-	if r := s.exec.x.Runner(); r != nil {
+	if r := execOf(s).Runner(); r != nil {
 		r.FaultPicks, r.FaultExpert, r.FaultWeight = f == cpuFaultPicks, f == cpuFaultExpert, f == cpuFaultWeight
 	}
 	if h, ok := s.heads.(*cpudev.Head); ok {

@@ -92,10 +92,10 @@ func projectorFrom(t *testing.T, s *Instance, from int, rows []float32) []float3
 	tr.req[composer.RequestGrid] = uint32(tg.Side)
 	got := make([]float32, outRows*b.G.Values[out].Width)
 	bd := new(cpudev.Bound)
-	*bd = cpudev.Bound{Li: -1, Own: ts.exec.x.Device().Own(f), N: n, Req: tr.req, Pos: tr.posTab}
+	*bd = cpudev.Bound{Li: -1, Own: execOf(ts).Device().Own(f), N: n, Req: tr.req, Pos: tr.posTab}
 	bd.Weights, _ = execOf(ts).Bindings().Bind(f, -1, &ts.dense.TowerDense)
 	bd.IO[0], bd.IO[1] = unsafe.Pointer(&tr.blk[0]), unsafe.Pointer(&got[0])
-	ts.exec.x.Runner().Run(bd, f)
+	execOf(ts).Runner().Run(bd, f)
 	return got
 }
 

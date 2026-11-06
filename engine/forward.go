@@ -94,9 +94,6 @@ type Instance struct {
 	fnDevAt  func(li int) nn.KVShareDevice
 	fnRecAt  func(pos int) bool
 	fnEndsAt func(c int) [kvEndSeats]uint8
-	// cpu is the blocks this instance runs on the CPU as the composer forms
-	// them (cpuserve.go).
-	exec laneDevice
 	// readout is the device reading an embedding model's pooled row, nil on a
 	// model with no readout.
 	readout nn.PoolDevice
@@ -652,11 +649,10 @@ func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOp
 	s.rmarks = model.RopeMarks{}
 	s.allocRecurrent(nseq)
 
-	s.exec.x = g.dev.AttachExecution(nn.ExecutionSetup{Model: m.Id, Frames: fr,
+	s.setPlace(routeLanes, g.dev.AttachExecution(nn.ExecutionSetup{Model: m.Id, Frames: fr,
 		NoFuse: opt.noFuse, Chunk: opt.prefillChunk, Tries: &g.fuse.tries, Runs: &g.fuse.runs, Quota: q,
 		Width: c.NEmbd, Seqs: nseq, Streams: c.Streams(), ConvLen: s.dg.ConvStateLen(),
-		Trace: func(li int) { s.trace(li, "ffn_resid", s.x) }}).(*cpudev.Exec)
-	s.setPlace(routeLanes, s.exec.x)
+		Trace: func(li int) { s.trace(li, "ffn_resid", s.x) }}))
 	s.placeRange(routeLanes)
 	s.holdFrames()
 	// The cache width: WithKVType (or WithKVF16, SetKVType) forces it;

@@ -1,7 +1,6 @@
 package engine
 
 import (
-
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/model"
 	"github.com/jitllm/jitllm/nn"

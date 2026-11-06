@@ -19,6 +19,6 @@ func (s *Instance) Account(dev string) nn.Account {
 	return nn.Account{}
 }
 
-// devices is every device the instance holds: the CPU's execution, the
-// card's session view and the card.
-func (s *Instance) devices() [3]any { return [3]any{s.exec.x, s.ld, s.ldCand} }
+// devices is every device the instance holds: its execution on the lanes'
+// device, the card's session view and the card.
+func (s *Instance) devices() [3]any { return [3]any{s.places[routeLanes], s.ld, s.ldCand} }

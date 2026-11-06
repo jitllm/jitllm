@@ -31,15 +31,6 @@ func cpuHeadRefused(why nn.Decline) error {
 	return fmt.Errorf("model: the composer does not serve the head on the CPU: %s", nn.DeclineName(int(why)))
 }
 
-// laneDevice is a instance's composed CPU blocks: each block's form and its own
-// buffers, the history tables, and the census.
-type laneDevice struct {
-	// x is the instance's execution on the device: its workers, its
-	// blocks' forms, the runners and lanes that call them and what it
-	// served.
-	x *cpudev.Exec
-}
-
 // cpuRowsCap is the rows the CPU's form of several rows is composed for
 // (cpudev.RowsCap).
 const cpuRowsCap = cpudev.RowsCap

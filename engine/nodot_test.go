@@ -29,7 +29,7 @@ func nodotFormed(t *testing.T, m *model.Model, want bool, io ...Option) {
 	t.Helper()
 	s := testInstance(t, m, 8, io...)
 	defer s.Close()
-	if got := s.exec.x.ISA()&cpu.ISADotProd != 0; got != want {
+	if got := execOf(s).ISA()&cpu.ISADotProd != 0; got != want {
 		t.Fatalf("the CPU device states FEAT_DotProd %v, want %v: the arm formed the other int8 dots", got, want)
 	}
 }
@@ -153,7 +153,7 @@ func BenchmarkNoDotProdDecode(b *testing.B) {
 					b.Fatal(err)
 				}
 			}
-			if widened := st.exec.x.Composer().Device().ISA&uint64(cpu.ISADotProd) == 0; widened != (arm == "widened") {
+			if widened := execOf(st).Composer().Device().ISA&uint64(cpu.ISADotProd) == 0; widened != (arm == "widened") {
 				b.Fatalf("arm %s: widened=%v -- the arm formed the other int8 dots", arm, widened)
 			}
 			b.ResetTimer()
