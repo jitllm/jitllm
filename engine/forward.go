@@ -615,6 +615,7 @@ func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOp
 		groupOff:  opt.noGroups,
 		residFold: opt.residFold, opt: opt, eng: g}
 	s.own = s.Session
+	s.own.on = s
 	if err := m.BindDense(fr, &s.dense); err != nil {
 		return nil, err
 	}

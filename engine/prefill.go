@@ -475,8 +475,8 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 			return nil, err
 		}
 
-		// The chunk's rotary tables are the CPU's to make where a block runs
-		// there (cpuRowTables); a device makes its own.
+		// The chunk's rotary tables are made for a device that reads them
+		// (openPrompt); a device that makes its own is handed none.
 		s.cpu.tabsFresh = false
 		// The chunk's rows' tokens, -1 for a supplied embedding's, for a block
 		// that reads them (graph.OpToken).
@@ -489,112 +489,109 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 		}
 		// Device blocks go as runs, not a prefix (see forward.go), each run as
 		// one batch so the weights are read once for n tokens.
+		// A run of blocks on one device is one call, whichever device: the
+		// chunk's n rows go to it and come back once.
 		for li := s.lo; li < s.hi; li++ {
-			if s.devAt(li) {
-				hi := li + 1
-				// A tower's run ends where a tap keeps the rows a block leaves.
-				for hi < s.hi && s.devAt(hi) && !s.tapsAfter(hi-1) {
-					hi++
-				}
-				// The last chunk carries the head when the device runs every
-				// block, so the projection runs on the last row inside the same
-				// submission. A device that cannot refuses before submitting and
-				// the tail call below runs instead.
-				// A batch row's history on the device lives at its own slots,
-				// which the per-sequence call cannot address: the run goes as
-				// rows of this one sequence, a causal prefill (nn.RowsDevice),
-				// which a linear block steps in position order through the
-				// slot's one state.
-				var fh *nn.Head
-				// A tap reads every chunk's residual, which a folded head keeps
-				// on the device.
-				if li == s.lo && hi == s.hi && base+n == total && s.emb == nil && s.head != nil && !s.noHeadFold && s.rowTap == nil &&
-					!c.StreamHead() {
-					fh = s.head
-					// A speculation step folds the head only over the rows it
-					// wants; otherwise the host projects them after the loop.
-					if s.rows != nil {
-						if undo, ok := s.rows.foldHead(fh, base, n); ok {
-							defer undo()
-						} else {
-							fh = nil
-						}
+			r := s.routeAt(li)
+			hi := li + 1
+			// A tower's run ends where a tap keeps the rows a block leaves.
+			for hi < s.hi && s.routeAt(hi) == r && !s.tapsAfter(hi-1) {
+				hi++
+			}
+			// The last chunk carries the head when the device runs every
+			// block, so the projection runs on the last row inside the same
+			// submission. A device that cannot refuses before submitting and
+			// the tail call below runs instead.
+			// A batch row's history on the device lives at its own slots,
+			// which the per-sequence call cannot address: the run goes as
+			// rows of this one sequence, a causal prefill (nn.RowsDevice),
+			// which a linear block steps in position order through the
+			// slot's one state.
+			var fh *nn.Head
+			// A tap reads every chunk's residual, which a folded head keeps
+			// on the device.
+			if li == s.lo && hi == s.hi && base+n == total && s.emb == nil && s.head != nil && !s.noHeadFold && s.rowTap == nil &&
+				!c.StreamHead() && r.run == nn.LayerRunner(s.ld) {
+				fh = s.head
+				// A speculation step folds the head only over the rows it
+				// wants; otherwise the host projects them after the loop.
+				if s.rows != nil {
+					if undo, ok := s.rows.foldHead(fh, base, n); ok {
+						defer undo()
+					} else {
+						fh = nil
 					}
 				}
-				// A chunk of a few rows over the whole model is one ragged step
-				// of them (tailrows.go): decode's matvec over the live rows,
-				// where the chunk would run its batched kernels at the device's
-				// grain. The head is the tail call after the loop. A decline is
-				// the prompt's error (refusal); a fault falls through to the
-				// chunk, whose call takes the fault's path.
-				if !s.opt.noTailRows && n >= 2 && n <= tailRowsMax && li == s.lo && hi == s.hi && !chunkBidir && s.rows == nil &&
-					!s.recurrent() && s.rowsRefusal() == nil {
-					pos := s.tailPos[:0]
-					for j := 0; j < n; j++ {
-						pos = append(pos, p0+j)
-					}
-					s.tailPos = pos
-					// One sequence: slot is the position (nn.RowsDevice).
-					s.layerInputs(s.bple[:n*c.SideWidth()])
-					if s.rowsOn(s.routeAt(li), li, hi, pos, pos, s.bx[:n*c.ResidW()], s.bcs[:n*c.RopeW()],
-						s.bswaTable(n, c.LocalNRot()), false, nil, 0) == nil {
-						s.tailRowChunks++
-						li = hi - 1
-						continue
-					}
-					if err := s.refusal(li); err != nil {
-						return nil, err
-					}
-					// The step may have written part of the residual.
-					if err := refill(); err != nil {
-						return nil, err
-					}
+			}
+			// A chunk of a few rows over the whole model is one ragged step
+			// of them (tailrows.go): decode's matvec over the live rows,
+			// where the chunk would run its batched kernels at the device's
+			// grain. The head is the tail call after the loop. A decline is
+			// the prompt's error (refusal); a fault falls through to the
+			// chunk, whose call takes the fault's path.
+			if !s.opt.noTailRows && n >= 2 && n <= tailRowsMax && li == s.lo && hi == s.hi && !chunkBidir && s.rows == nil && r.run == nn.LayerRunner(s.ld) &&
+				!s.recurrent() && s.rowsRefusal() == nil {
+				pos := s.tailPos[:0]
+				for j := 0; j < n; j++ {
+					pos = append(pos, p0+j)
 				}
+				s.tailPos = pos
+				// One sequence: slot is the position (nn.RowsDevice).
 				s.layerInputs(s.bple[:n*c.SideWidth()])
-				if s.callTell(p0, n) && s.ld.Layers(li, hi, p0, n, s.bx[:n*c.ResidW()], s.bcs[:n*c.RopeW()],
-					s.bswaTable(n, c.LocalNRot()), fh) {
-					headDone = fh != nil
+				if s.rowsOn(r, li, hi, pos, pos, s.bx[:n*c.ResidW()], s.bcs[:n*c.RopeW()],
+					s.bswaTable(n, c.LocalNRot()), false, nil, 0) == nil {
+					s.tailRowChunks++
 					li = hi - 1
-					s.keepTaps(li, n)
 					continue
 				}
 				if err := s.refusal(li); err != nil {
 					return nil, err
 				}
-				// A fault: a hybrid's speculation step is rolled back as one
-				// pass, so its fault is the step's error; any other chunk's
-				// demotes and restarts on the CPU device.
-				if s.rows != nil && s.recurrent() {
-					why := "no reason given"
-					if e, ok := s.ld.(nn.ErrReporter); ok && e.Err() != "" {
-						why = e.Err()
-					}
-					return nil, fmt.Errorf("model: the device refused a %d-row speculation step on blocks [%d,%d): %s",
-						n, li, hi, why)
-				}
-				if !s.fallsBack() {
-					return nil, errDevice{li, s.devWhy()}
-				}
-				// A hybrid cannot restart: re-running the linear blocks before li
-				// would apply their gated delta rule twice. See errRecurRetry.
-				if s.recurrent() {
-					return nil, errRecurRetry{li, s.devWhy()}
-				}
-				if !s.demoteAll() {
-					return nil, errDevice{li, s.devWhy()}
-				}
+				// The step may have written part of the residual.
 				if err := refill(); err != nil {
 					return nil, err
 				}
-				li = s.lo - 1
-				continue
 			}
-			// A host block needs the host's rows, which a device-only prompt
-			// did not allocate (growDeviceBatch); a demotion lands here.
-			if err := s.hostRows(li, slot, base, p0, n, chunkRows, bidir); err != nil {
+			if err := s.openPrompt(r, slot, base, p0, n, chunkRows, bidir); err != nil {
 				return nil, err
 			}
-			s.keepTaps(li, n)
+			if s.callTellOn(r, p0, n) && r.run.Layers(li, hi, p0, n, s.bx[:n*c.ResidW()], s.bcs[:n*c.RopeW()],
+				s.bswaTable(n, c.LocalNRot()), fh) {
+				headDone = fh != nil
+				li = hi - 1
+				s.keepTaps(li, n)
+				continue
+			}
+			if err := s.runRefusal(r, li); err != nil {
+				return nil, err
+			}
+			// A fault: a hybrid's speculation step is rolled back as one
+			// pass, so its fault is the step's error; any other chunk's
+			// demotes and restarts on the CPU device.
+			if s.rows != nil && s.recurrent() {
+				why := "no reason given"
+				if e, ok := s.ld.(nn.ErrReporter); ok && e.Err() != "" {
+					why = e.Err()
+				}
+				return nil, fmt.Errorf("model: the device refused a %d-row speculation step on blocks [%d,%d): %s",
+					n, li, hi, why)
+			}
+			if !s.fallsBack() {
+				return nil, errDevice{li, s.devWhy()}
+			}
+			// A hybrid cannot restart: re-running the linear blocks before li
+			// would apply their gated delta rule twice. See errRecurRetry.
+			if s.recurrent() {
+				return nil, errRecurRetry{li, s.devWhy()}
+			}
+			if !s.demoteAll() {
+				return nil, errDevice{li, s.devWhy()}
+			}
+			if err := refill(); err != nil {
+				return nil, err
+			}
+			li = s.lo - 1
+			continue
 		}
 		if s.emb != nil {
 			if err := s.emb.collect(s, base, n); err != nil {
@@ -833,51 +830,6 @@ func (s *Instance) bswaTable(n, nrot int) []float32 {
 		return nil
 	}
 	return s.bcsSWA[:n*nrot]
-}
-
-// hostRows runs block li on the host for n rows of one sequence -- slot's,
-// positions p0.. -- reading and writing the residual in s.bx: the block body
-// prefill runs for a chunk, and the one a vision segment runs for an image
-// (vision.go), whose rows attend over their key runs instead of causally.
-// base is the chunk's first row in the prompt and chunkRows the scratch the
-// chunk is sized for.
-func (s *Instance) hostRows(li, slot, base, p0, n, chunkRows int, bidir bool) error {
-	c := s.c
-	s.growBatch(chunkRows)
-	// Same fault as decode: a block is a page and visiting it brings
-	// it in. One nil compare when the budget holds the model.
-	l, err := s.pageIn(li)
-	if err != nil {
-		return err
-	}
-	why := nn.DeclineBidir
-	if !bidir || !c.LayerKind(li).Recurrent() {
-		// A non-causal decoder's chunk (an embedding run's) is one run
-		// of rows attending both ways; a symmetric window its graph
-		// states clips it per row (graph.Attrs.Bidir).
-		if bidir {
-			s.bidir = append(s.bidir[:0], nn.KeyRun{Lo: p0, Hi: p0 + n})
-		}
-		seq, pos := s.cpuRowsOf(slot, p0, n)
-		tok := s.chunkTok[:n]
-		var err error
-		if c.LayerKind(li).Recurrent() {
-			why, err = s.cpuRecRows(li, l, s.bx[:n*c.ResidW()], s.bcs, seq, pos, tok, nil, base, p0)
-		} else {
-			why, err = s.cpuRows(li, l, s.bx[:n*c.ResidW()], s.bcs, s.bcsSWA, seq, pos, tok)
-		}
-		if bidir {
-			s.bidir = s.bidir[:0]
-		}
-		if err != nil {
-			return err
-		}
-	}
-	if why == nn.DeclineServes {
-		s.cpu.x.Steps().Serve(nn.PartBlock)
-		return nil
-	}
-	return s.cpuRefused(li, why)
 }
 
 // forwardRowsFor is the longest prompt run through the decode path: the

@@ -125,20 +125,15 @@ func (s *Instance) callTell(p0, n int) bool {
 }
 
 // embedTell hands the device a bidirectional embedding run's n rows, the
-// whole sequence in one call: the non-causal set sized for them
-// (nn.RowsReserver), and each row's symmetric window on the sliding layers
-// (nn.RowWindowDevice), every row's keys the call's on the others. false is
-// a device that cannot take them; the caller does not run the call.
-func (s *Instance) embedTell(n int) bool {
-	if rr, ok := s.ld.(nn.RowsReserver); ok && !rr.ReserveRows(n) {
-		return false
-	}
-	rw, ok := s.ld.(nn.RowWindowDevice)
-	if !ok {
-		return false
-	}
+// whole sequence in one call (embedTellOn).
+func (s *Instance) embedTell(n int) bool { return s.embedTellOn(&s.routes[0], n) }
+
+// embedWins is each of a bidirectional embedding run's n rows' windows: its
+// symmetric window on the sliding layers, every row's keys the call's on the
+// others, the run's own where it states them.
+func (s *Instance) embedWins(n int) []nn.KeyRun {
 	if s.emb.rowWins != nil {
-		return rw.SetRowWindows(s.emb.rowWins)
+		return s.emb.rowWins
 	}
 	c := s.c
 	if cap(s.emb.wins) < n {
@@ -152,7 +147,7 @@ func (s *Instance) embedTell(n int) bool {
 		}
 		wins[i] = nn.KeyRun{Lo: lo, Hi: lo + an}
 	}
-	return rw.SetRowWindows(wins)
+	return wins
 }
 
 // embedPrefill runs ids from position zero and leaves the pooled, normed (but
