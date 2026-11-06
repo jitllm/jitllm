@@ -9,10 +9,7 @@ import "github.com/jitllm/jitllm/nn"
 // Account is what device dev kept of what it served the instance and formed
 // for it (nn.Account): nothing where no device of the instance is named dev.
 func (s *Instance) Account(dev string) nn.Account {
-	if dev == nn.CPU {
-		return nn.Account{Steps: *s.cpu.x.Steps(), Forms: s.cpu.x.Composed(), Asks: s.eng.cpu.Forms(s.m.Id).Asks(), FormErr: s.cpu.x.Composer().Err()}
-	}
-	for _, d := range [2]nn.LayerDevice{s.ld, s.ldCand} {
+	for _, d := range s.devices() {
 		if l, ok := d.(nn.Ledger); ok {
 			if a, ok := l.AccountOn(dev); ok {
 				return a
@@ -21,3 +18,7 @@ func (s *Instance) Account(dev string) nn.Account {
 	}
 	return nn.Account{}
 }
+
+// devices is every device the instance holds: the CPU's execution, the
+// card's session view and the card.
+func (s *Instance) devices() [3]any { return [3]any{s.cpu.x, s.ld, s.ldCand} }

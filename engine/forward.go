@@ -3241,7 +3241,7 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 	// token an allocation whenever the runtime's per-P pool runs dry.
 	var unhide func()
 	defer func() {
-		s.unfuse()
+		s.closeRuns(nil)
 		if unhide != nil {
 			unhide()
 		}
@@ -3335,7 +3335,7 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 	// which has the norm and the weights either way.
 	done := false
 	if s.head != nil && !folded {
-		s.unfuse()
+		s.closeRuns(nil)
 		if !c.ResidStreams() { // its hidden state is the residual, taken in collapseStreams
 			defer s.rows.hiddenOf(s.head)()
 		}
@@ -3362,7 +3362,7 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 			return nil, cpuHeadRefused(why)
 		}
 	}
-	s.unfuse()
+	s.closeRuns(nil)
 	if done {
 		if err := s.devLogits(); err != nil {
 			return nil, err

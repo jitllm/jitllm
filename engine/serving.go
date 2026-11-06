@@ -1,7 +1,7 @@
 package engine
 
 import (
-	"github.com/jitllm/jitllm/sched"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // Serving split: while one session decodes, another session's prefill runs on
@@ -37,7 +37,6 @@ type prefillPlace struct {
 	s       *Instance
 	started bool
 	onE     bool
-	low     sched.Lowered
 }
 
 // at is asked before each chunk.
@@ -47,14 +46,15 @@ func (p *prefillPlace) at() {
 		return
 	}
 	p.end()
-	if e && p.s.cpu.x.Pool().BeginPrefillE() {
-		p.onE, p.started = true, true
-		p.s.ServedOnE++
-		p.low = p.s.cpu.x.Pool().LowerToE()
-		return
-	}
-	p.s.cpu.x.Pool().BeginPrefill()
 	p.onE, p.started = false, true
+	for _, d := range p.s.devices() {
+		if ph, ok := d.(nn.PrefillPhases); ok && ph.BeginPrefill(e) {
+			p.onE = true
+		}
+	}
+	if p.onE {
+		p.s.ServedOnE++
+	}
 }
 
 // end leaves wherever the prefill is, back on the decode pool.
@@ -62,11 +62,10 @@ func (p *prefillPlace) end() {
 	if !p.started {
 		return
 	}
-	if p.onE {
-		p.low.Raise()
-		p.s.cpu.x.Pool().EndPrefillE()
-	} else {
-		p.s.cpu.x.Pool().EndPrefill()
+	for _, d := range p.s.devices() {
+		if ph, ok := d.(nn.PrefillPhases); ok {
+			ph.EndPrefill()
+		}
 	}
 	p.started, p.onE = false, false
 }
