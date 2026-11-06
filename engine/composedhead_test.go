@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"math"
 	"slices"
 	"strings"
@@ -422,7 +423,7 @@ func TestComposedHeadForms(t *testing.T) {
 				t.Errorf("the head's norm is %v for LayerNorm %v, it states %d softcap(s) and ends in %v %v by %v: want one softcap and a scale of 1/8",
 					gr.Ops[0].Kind, m.Cfg.LayerNorm, caps, last.Kind, last.Attr.Fn, last.Attr.Const)
 			}
-			for _, d := range []composer.Device{{Kind: composer.DeviceGPU, Slots: 80 * 2048, Lanes: 32}, composedCPUDevice(cpu.Probe().ISA(), 6)} {
+			for _, d := range []composer.Device{{Kind: composer.DeviceGPU, Slots: 80 * 2048, Lanes: 32}, cpudev.Target(cpu.Probe().ISA(), 6)} {
 				_, codes, err := composer.Default().Form(composer.Request{Graph: gr, Formats: formats, Step: step, Device: d})
 				if err != nil {
 					t.Fatalf("%v: %v", d.Kind, err)

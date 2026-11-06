@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"slices"
 	"strings"
 	"testing"
@@ -61,7 +62,7 @@ func formBlocks(t *testing.T, m *model.Model, blocks []int) {
 	t.Helper()
 	f := m.Composing()
 	step := composer.Step{Rows: 1, Page: 64, Keys: 16, ActWindow: 32}
-	for _, d := range []composer.Device{{Kind: composer.DeviceGPU, Slots: 80 * 2048, Lanes: 32}, composedCPUDevice(cpu.Probe().ISA(), 6)} {
+	for _, d := range []composer.Device{{Kind: composer.DeviceGPU, Slots: 80 * 2048, Lanes: 32}, cpudev.Target(cpu.Probe().ISA(), 6)} {
 		reg := composer.Default()
 		for _, li := range blocks {
 			run := []composer.PartPlan{{Part: composer.Part{Kind: composer.PartBlock, Block: li, Graph: f.BlockGraph(li)}, Device: d}}
