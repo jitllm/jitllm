@@ -36,10 +36,10 @@ func (s *Instance) bidirStart(pos int) int {
 }
 
 // runsAt reports whether block li's attention honours the instance's runs:
-// every block's, or the sliding blocks' alone where the model's image rows
-// see each other on those (Config.BidirSWA).
+// an attending block's where the model's picture rows see each other in it
+// (Config.BidirAt).
 func (s *Instance) runsAt(li int) bool {
-	return len(s.bidir) > 0 && s.c.LayerKind(li).Attends() && (!s.c.BidirSWA || s.c.SWA(li))
+	return len(s.bidir) > 0 && s.c.LayerKind(li).Attends() && s.c.BidirAt(li)
 }
 
 // bidirChunk is a chunk's row count n, starting at position p0, moved so no

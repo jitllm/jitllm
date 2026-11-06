@@ -43,7 +43,7 @@ func hfDenseSelected() map[string]func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
 			return c.Arch == "olmo3" && c.QKNormWide && l.AttnNorm == nil && l.Vector(jlm.RolePostFFNNorm) != nil &&
 				c.SWAWindow == 4 && c.SWAPeriod == 4 && c.SWA(0) && c.SWA(2) && !c.SWA(3) &&
-				!c.NoPEGlobal && c.RopeAt(3) && c.SWARopePlain && m.RopeSWA != nil
+				!c.NoPEGlobal && c.RopeAt(3) && c.RopeScaleSWA == 1 && m.RopeSWA != nil
 		},
 		"synth-hf-exaone4": func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]

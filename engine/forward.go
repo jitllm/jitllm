@@ -1972,7 +1972,7 @@ func (s *Instance) planFor(li int) *nn.LayerPlan {
 	// forms (front.go), nil where the front end states none.
 	plan.Graph = s.m.Composing().BlockGraph(li)
 	plan.Sliding = c.GeomSplit() && c.SWA(li)
-	plan.BidirOff = c.BidirSWA && !c.SWA(li)
+	plan.BidirOff = !c.BidirAt(li)
 	plan.VFromK, plan.OutScale = l.VFromK, l.OutScale
 	plan.DenseMoE = c.DenseMoE && c.MoEAt(li)
 	plan.PLEDim, plan.PLEWidth = c.PLEDim, c.SideWidth()

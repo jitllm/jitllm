@@ -130,7 +130,8 @@ func StateActivations(s *jlm.Source) error {
 // no layers (jlm.Restate).
 func StateStored(f *jlm.File, c *jlm.Config) (bool, error) {
 	streams := c.AttnResBlock == 0 || c.Streams.N > 1
-	if len(c.Acts) != 0 && len(c.RouterScore.Terms) == len(RouterScore(c).Terms) && len(c.RouterWeight.Terms) == len(RouterWeight(c).Terms) && streams ||
+	rev := c.Revision >= jlm.StatementRevision
+	if len(c.Acts) != 0 && len(c.RouterScore.Terms) == len(RouterScore(c).Terms) && len(c.RouterWeight.Terms) == len(RouterWeight(c).Terms) && streams && rev ||
 		c.NLayer == 0 || c.Arch == jlm.ArchCLIP {
 		return false, nil
 	}
@@ -139,6 +140,9 @@ func StateStored(f *jlm.File, c *jlm.Config) (bool, error) {
 			_, ok := f.Find(r, li, -1)
 			return ok
 		})
+	}
+	if !rev {
+		StateRevision(c)
 	}
 	stores := func(rs ...jlm.Role) func(int) bool {
 		return func(li int) bool {
