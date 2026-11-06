@@ -2243,7 +2243,7 @@ func (w *sliceWriter) Write(p []byte) (int, error) {
 
 // kvFault brings a page back if it was evicted. On a resident-only session -- no
 // store, no budget -- it is one nil compare.
-func (s *Instance) kvFault(li, page int) bool {
+func (s *Session) kvFault(li, page int) bool {
 	pg := &s.kv.layers[li]
 	if page < pg.mem.Len() && pg.mem.K(page) != nil {
 		return true
@@ -2262,7 +2262,7 @@ func (s *Instance) kvFault(li, page int) bool {
 // kvWritable brings back the page pos falls in before it is written, when trim
 // evicted it with history still in it. On a session with no budget it is one
 // bounds check.
-func (s *Instance) kvWritable(li, pos int) {
+func (s *Session) kvWritable(li, pos int) {
 	pg := &s.kv.layers[li]
 	if pg.p == 0 {
 		return
@@ -2533,7 +2533,7 @@ func (s *kvPages) keepOnReset(n int) {
 // residence, on one goroutine, before the attention heads fan out. Faulting
 // from inside the pool is a data race (extend can reallocate the slice another
 // worker holds), so residency is decided here and workers only read.
-func (s *Instance) kvEnsureWindow(li, w0, want int) {
+func (s *Session) kvEnsureWindow(li, w0, want int) {
 	pg := &s.kv.layers[li]
 	if pg.p == 0 {
 		return

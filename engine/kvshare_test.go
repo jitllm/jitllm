@@ -243,7 +243,7 @@ func TestSharedPageIsNeverWrittenInPlace(t *testing.T) {
 			// As a composed block writes its row: the page made its own
 			// (cpuWritable), then the row stored in place.
 			pg.cowFault = inPlace
-			b.s.cpuWritable(li, 3)
+			b.s.historyWritable(li, 3)
 			l := pg.layout(b.s.kvlAt(li))
 			n, off := pg.page(3)
 			at := l.slots(off * l.kvDim())

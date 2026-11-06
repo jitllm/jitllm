@@ -52,6 +52,9 @@ type Session struct {
 	// recovered. It is set inside a pool closure, which has no error path, and
 	// drained by kvCheck at the entry point.
 	kvErr atomic.Pointer[error]
+	// noTable is the page table of a block that keeps no history, a word a
+	// slot.
+	noTable []uint32
 	// spanTok is every row's token of the mixed prompt being prefilled, -1
 	// for a row that has none (tokensOf): what a model with per-layer
 	// embeddings, or DeepSeek V4's hash blocks, read where the prefill has no
