@@ -184,6 +184,15 @@ func (e *Exec) Lanes() *Lanes { return e.lanes }
 // PrepErr is the first error the execution's composer met (nn.PrepReporter).
 func (e *Exec) PrepErr() error { return e.comp.Err() }
 
+// NotePrep records err as the execution's preparation error (nn.PrepNoter).
+func (e *Exec) NotePrep(err error) { e.comp.Note(err) }
+
+// SetSpinning sets whether the execution's idle workers spin (nn.Spinner).
+func (e *Exec) SetSpinning(on bool) { e.workers.SetSpinning(on) }
+
+// Workers is the execution's worker count (nn.Threaded).
+func (e *Exec) Workers() int { return e.workers.Workers() }
+
 // Holds says li is one of the placement's blocks.
 func (e *Exec) Holds(li int) bool { return li >= 0 && li < len(e.blocks) }
 

@@ -883,6 +883,18 @@ type DecodeSharer interface {
 // was offered: the first error it met forming or binding it, nil for none.
 type PrepReporter interface{ PrepErr() error }
 
+// PrepNoter is a device told of an error preparing what it holds for the
+// placement (a session's history in its memory), which its PrepErr reports.
+type PrepNoter interface{ NotePrep(error) }
+
+// Spinner is a device whose idle threads may spin between calls: told after
+// each step whether the step read anything from storage, it spins only when
+// it did not.
+type Spinner interface{ SetSpinning(bool) }
+
+// Threaded is a device that runs its blocks on threads of its own.
+type Threaded interface{ Workers() int }
+
 // BlockPlacer is a device's side of a placement: it takes a block it is
 // offered and lets a run of them go.
 type BlockPlacer interface {
