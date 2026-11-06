@@ -126,7 +126,7 @@ func (s *Instance) callTell(p0, n int) bool {
 
 // embedTell hands the device a bidirectional embedding run's n rows, the
 // whole sequence in one call (embedTellOn).
-func (s *Instance) embedTell(n int) bool { return s.embedTellOn(&s.routes[0], n) }
+func (s *Instance) embedTell(n int) bool { return s.embedTellOn(&s.routes[routeView], n) }
 
 // embedWins is each of a bidirectional embedding run's n rows' windows: its
 // symmetric window on the sliding layers, every row's keys the call's on the

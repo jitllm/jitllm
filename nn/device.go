@@ -863,6 +863,18 @@ type RecurrentPlan struct {
 // PrepLayer is per block and may decline, so a model that does not fit runs
 // its first N blocks on the device and the rest on the CPU with no separate
 // mechanism for the seam.
+// BlockPlacer is a device's side of a placement: it takes a block it is
+// offered and lets a run of them go.
+type BlockPlacer interface {
+	PrepLayer(li int, p *LayerPlan, w *LayerWeights) bool
+	ReleaseLayers(lo, hi int)
+}
+
+// FramesInPlace is a device that runs a placed block from the instance's
+// frames rather than from a copy of its own: it is handed the block's plan
+// alone, and the frames stay while the block is there.
+type FramesInPlace interface{ RunsFromFrames() bool }
+
 type LayerDevice interface {
 	// PrepLayer uploads block li's weights and scratch. It returns false if the
 	// block will not fit, or a quant type has no kernel, in which case that
