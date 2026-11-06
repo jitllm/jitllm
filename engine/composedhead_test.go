@@ -1,11 +1,12 @@
 package engine
 
 import (
-	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"math"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/jitllm/jitllm/engine/device/cpudev"
 
 	"github.com/jitllm/jitllm/model"
 

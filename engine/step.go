@@ -566,7 +566,7 @@ func stepTogether(runs []Run, rows int, ss nn.SessionStepper) ([][]float32, erro
 		if p >= se.limit {
 			return r.full()
 		}
-		s0.cpu.tabsFresh = false
+		s0.rowsFresh = false
 		sess, pos = append(sess, se.ld), append(pos, p)
 		s0.stepTok = append(s0.stepTok, tok)
 		return nil

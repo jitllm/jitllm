@@ -477,7 +477,7 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 
 		// The chunk's rotary tables are made for a device that reads them
 		// (openPrompt); a device that makes its own is handed none.
-		s.cpu.tabsFresh = false
+		s.rowsFresh = false
 		// The chunk's rows' tokens, -1 for a supplied embedding's, for a block
 		// that reads them (graph.OpToken).
 		s.chunkTok = grow32i(s.chunkTok, n)

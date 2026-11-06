@@ -47,13 +47,13 @@ func (p *prefillPlace) at() {
 		return
 	}
 	p.end()
-	if e && p.s.cpu.workers.BeginPrefillE() {
+	if e && p.s.cpu.x.Pool().BeginPrefillE() {
 		p.onE, p.started = true, true
 		p.s.ServedOnE++
-		p.low = p.s.cpu.workers.LowerToE()
+		p.low = p.s.cpu.x.Pool().LowerToE()
 		return
 	}
-	p.s.cpu.workers.BeginPrefill()
+	p.s.cpu.x.Pool().BeginPrefill()
 	p.onE, p.started = false, true
 }
 
@@ -64,9 +64,9 @@ func (p *prefillPlace) end() {
 	}
 	if p.onE {
 		p.low.Raise()
-		p.s.cpu.workers.EndPrefillE()
+		p.s.cpu.x.Pool().EndPrefillE()
 	} else {
-		p.s.cpu.workers.EndPrefill()
+		p.s.cpu.x.Pool().EndPrefill()
 	}
 	p.started, p.onE = false, false
 }

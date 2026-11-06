@@ -130,19 +130,19 @@ func (s *Instance) oneTable() error {
 	return nil
 }
 
-// cpuRowTables makes a step's rows' rotary tables in s.bcs and s.bcsSWA,
+// rowTables makes a step's rows' rotary tables in s.bcs and s.bcsSWA,
 // which the CPU's blocks read, once a step: row i of slot seq[i] at cache
 // position pos[i], each run of one session's rows from its marks.
-func (s *Instance) cpuRowTables(seq, pos []int) error {
-	if s.cpu.tabsFresh || len(pos) == 0 {
+func (s *Instance) rowTables(seq, pos []int) error {
+	if s.rowsFresh || len(pos) == 0 {
 		return nil
 	}
 	n := len(pos)
 	w, ws := s.c.RopeW(), s.c.LocalNRot()
-	if cap(s.cpu.tabSeq) < n {
-		s.cpu.tabSeq = make([]int, n)
+	if cap(s.rowSlots) < n {
+		s.rowSlots = make([]int, n)
 	}
-	slots := s.cpu.tabSeq[:n]
+	slots := s.rowSlots[:n]
 	for i := 0; i < n; {
 		o, sl := s.rowOwner(i, seq)
 		slots[i] = sl
@@ -163,6 +163,6 @@ func (s *Instance) cpuRowTables(seq, pos []int) error {
 		}
 		i = j
 	}
-	s.cpu.tabsFresh = true
+	s.rowsFresh = true
 	return nil
 }

@@ -2,12 +2,13 @@ package engine
 
 import (
 	"encoding/binary"
-	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"math"
 	"os"
 	"path/filepath"
 	"testing"
 	"unsafe"
+
+	"github.com/jitllm/jitllm/engine/device/cpudev"
 
 	"github.com/jitllm/jitllm/model"
 	"github.com/jitllm/jitllm/nn"
@@ -90,7 +91,7 @@ func projectorFrom(t *testing.T, s *Instance, from int, rows []float32) []float3
 	copy(tr.blk, rows)
 	tr.req[composer.RequestGrid] = uint32(tg.Side)
 	got := make([]float32, outRows*b.G.Values[out].Width)
-	bd := &ts.cpu.bound
+	bd := &tr.bound
 	*bd = cpudev.Bound{Li: -1, Own: ts.cpu.x.Device().Own(f), N: n, Req: tr.req, Pos: tr.posTab}
 	bd.Weights, _ = ts.ws.bind(f, -1, &ts.dense.TowerDense)
 	bd.IO[0], bd.IO[1] = unsafe.Pointer(&tr.blk[0]), unsafe.Pointer(&got[0])

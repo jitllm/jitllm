@@ -136,7 +136,7 @@ func (s *Instance) openRows(r *route, seq, pos []int, tokens []int32) error {
 		return fmt.Errorf("model: the device cannot honour the prompt's bidirectional runs")
 	}
 	if r.tables != nil && r.tables.ReadsTables() {
-		return s.cpuRowTables(seq, pos)
+		return s.rowTables(seq, pos)
 	}
 	return nil
 }
@@ -231,8 +231,8 @@ func (s *Instance) openPrompt(r *route, slot, base, p0, n, chunkRows int, bidir 
 	}
 	if r.tables != nil && r.tables.ReadsTables() {
 		s.growBatch(chunkRows)
-		seq, pos := s.cpuRowsOf(slot, p0, n)
-		return s.cpuRowTables(seq, pos)
+		seq, pos := s.chunkRows(slot, p0, n)
+		return s.rowTables(seq, pos)
 	}
 	return nil
 }
