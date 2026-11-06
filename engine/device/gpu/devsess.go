@@ -105,6 +105,9 @@ type devSess struct {
 	// embPend is the prompt chunk EmbedRows promised and the next submission
 	// gathers (embed.go). Guarded by mu.
 	embPend *embPend
+	// stepToks is the step's tokens the engine handed (nn.TokenReader), the
+	// rows' a block reads where the card does not gather the rows itself.
+	stepToks []int32
 	// embBuf is what embPend points at, kept so a prompt chunk's promise
 	// allocates nothing past the first.
 	embBuf embPend

@@ -491,3 +491,31 @@ func (g *devTier) composedSession(s backend.Session) {
 		rd.err = g.readPLE(s, bs.embPLE, n)
 	}
 }
+
+// SetTokens is nn.TokenReader: the step's tokens, for blocks that read
+// them.
+func (g *devTier) SetTokens(ids []int32) {
+	g.mu.Lock()
+	g.stepToks = append(g.stepToks[:0], ids...)
+	g.mu.Unlock()
+}
+
+// tokWords is the rows' tokens ids as R words, the last row's past them.
+func (g *devTier) tokWords(ids []int32, R int) []byte {
+	b := slices.Grow(g.subBytes.embIDs[:0], R*4)
+	for r := range R {
+		b = binary.LittleEndian.AppendUint32(b, uint32(ids[min(r, len(ids)-1)]))
+	}
+	g.subBytes.embIDs = b
+	return b
+}
+
+// SetTokens is nn.TokenReader over every card of the tier.
+func (g *GPU) SetTokens(ids []int32) {
+	for _, d := range g.devs {
+		d.SetTokens(ids)
+	}
+}
+
+// SetTokens is nn.TokenReader for the session's step.
+func (s *gpuSession) SetTokens(ids []int32) { s.g.SetTokens(ids) }
