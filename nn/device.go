@@ -863,6 +863,10 @@ type RecurrentPlan struct {
 // PrepLayer is per block and may decline, so a model that does not fit runs
 // its first N blocks on one device and the rest on another -- the CPU device
 // is one -- with no separate mechanism for the seam.
+// PrepReporter is a device that says why it could not prepare something it
+// was offered: the first error it met forming or binding it, nil for none.
+type PrepReporter interface{ PrepErr() error }
+
 // BlockPlacer is a device's side of a placement: it takes a block it is
 // offered and lets a run of them go.
 type BlockPlacer interface {

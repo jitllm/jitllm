@@ -97,7 +97,7 @@ func (e *embedMode) collect(s *Instance, base, n int) error {
 		}
 	}
 	if s.readout == nil || !s.readout.Pool(s.bx[:n*s.c.NEmbd], n, e.out, e.raw) {
-		return fmt.Errorf("model: the embedding readout has no composed form on this instance: %v", s.exec.x.Composer().Err())
+		return fmt.Errorf("model: the embedding readout has no composed form on this instance: %v", s.prepErr())
 	}
 	return nil
 }

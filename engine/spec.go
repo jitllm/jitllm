@@ -506,8 +506,8 @@ func (sp *Speculator) draftRows(toks []int32, hs []float32, out *rowsOut) error 
 	d0 := c.NEmbd
 	sp.ze = grow32(sp.ze, n*st*d0)
 	if why := d.mtpEntry(sp.ze[:n*st*d0], hs[:n*st*d0], toks, n); why != nn.DeclineServes {
-		if why == nn.DeclineNotFormed && d.exec.x.Composer().Err() != nil {
-			return fmt.Errorf("model: the composer does not serve prediction block %d's entry on the CPU: %s (the first: %w)", sp.mli, nn.DeclineName(int(why)), d.exec.x.Composer().Err())
+		if why == nn.DeclineNotFormed && d.prepErr() != nil {
+			return fmt.Errorf("model: the composer does not serve prediction block %d's entry on the CPU: %s (the first: %w)", sp.mli, nn.DeclineName(int(why)), d.prepErr())
 		}
 		return fmt.Errorf("model: the composer does not serve prediction block %d's entry on the CPU: %s", sp.mli, nn.DeclineName(int(why)))
 	}
