@@ -591,7 +591,7 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 		// The full budget: Instance.SetMemBudget takes what a device on the host's
 		// memory holds off it itself, once the device has placed its blocks and
 		// whenever they move -- so an embedder that never reads HostReserved
-		// still cannot double-spend the machine. See Instance.hostBudget.
+		// still cannot double-spend the machine. See Instance.systemBudget.
 		st.SetMemBudget(maxmem)
 		if _, bud := st.Resident(); bud > 0 {
 			fmt.Fprintf(os.Stderr, "         managing expert residency: %.2f GiB of expert budget\n",
@@ -650,12 +650,12 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	// After placement, because the host's page count is NLayer minus what the
 	// devices took. Outside the device branch, so a CPU-only run gets a budget.
 	setPageBudget(m, st, dev, maxmem)
-	// With the device attached, HostBudget has taken off what an integrated GPU
+	// With the device attached, SystemBudget has taken off what an integrated GPU
 	// holds; say what the host works to when that moved it.
-	if maxmem > 0 && st.HostBudget() != maxmem {
+	if maxmem > 0 && st.SystemBudget() != maxmem {
 		fmt.Fprintf(os.Stderr, "memory   host budget in force %.2f GiB: devices on the HOST's own "+
 			"memory hold %.2f GiB of it (an integrated GPU spends the same bytes)\n",
-			float64(st.HostBudget())/(1<<30), float64(hostReserved(dev))/(1<<30))
+			float64(st.SystemBudget())/(1<<30), float64(hostReserved(dev))/(1<<30))
 	}
 
 	phRead(ph, dev, m, cfr)

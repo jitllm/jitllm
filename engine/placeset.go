@@ -33,7 +33,7 @@ func (s *Instance) placeFromCPU(lo, hi int, to string) ([]int, error) {
 	if s.ld == nil {
 		return nil, fmt.Errorf("model: no device attached (SetDevice first)")
 	}
-	defer s.followHost()
+	defer s.followSystem()
 	defer s.fixKVGroups()
 	s.moved = nil
 	var fresh []int
@@ -95,7 +95,7 @@ func (s *Instance) moveToCPU(lo, hi int) (mv BlockMove, err error) {
 	}
 	t0 := time.Now()
 	defer func() { mv.Pause = time.Since(t0) }()
-	defer s.followHost()
+	defer s.followSystem()
 	defer s.fixKVGroups()
 	s.moved = nil
 	// The head goes first, as SetGPULayers sends it: it rides the last

@@ -4,23 +4,23 @@ import (
 	"github.com/jitllm/jitllm/nn"
 )
 
-// noHostSeen is a holding no device reports, so the next followHost applies.
-const noHostSeen = ^uint64(0)
+// noSysSeen is a holding no device reports, so the next followSystem applies.
+const noSysSeen = ^uint64(0)
 
-// holdHost makes d the device this instance counts against the host's budgets,
+// watchSystem makes d the device this instance counts against the system memory's budgets,
 // letting the one it had go, and re-divides the page budget for the change.
-func (s *Instance) holdHost(d nn.LayerDevice) {
-	s.hostRes = nil
+func (s *Instance) watchSystem(d nn.LayerDevice) {
+	s.sysRes = nil
 	if hr, ok := d.(nn.HostReserver); ok {
-		s.hostRes = hr
+		s.sysRes = hr
 	}
 	// Whatever was last seen belonged to the old device.
-	s.hostSeen = noHostSeen
+	s.sysSeen = noSysSeen
 	s.applyQuota()
 }
 
 // applyQuota hands this instance's page quota to its CPU device, with the
-// device it attached and what that holds of the host's memory: the CPU
+// device it attached and what that holds of the system's memory: the CPU
 // device budgets the model's frames by every instance holding the model
 // there (cpudev.Quota). An instance the root made shares the root's.
 func (s *Instance) applyQuota() {
@@ -28,8 +28,8 @@ func (s *Instance) applyQuota() {
 		return
 	}
 	var held uint64
-	if s.hostRes != nil {
-		held = s.hostRes.HostReserved()
+	if s.sysRes != nil {
+		held = s.sysRes.HostReserved()
 	}
 	s.quota.Set(s.pageQuota.Load(), held)
 }
@@ -39,7 +39,7 @@ func (s *Instance) applyQuota() {
 // card it attached, 0 for unlimited. Paging does not turn on or off: a quota
 // that holds every block simply never evicts. What the attached device holds
 // of the host's memory comes off the CPU device's share, now and whenever
-// placement moves it (followHost). It returns the pages the CPU device's
+// placement moves it (followSystem). It returns the pages the CPU device's
 // frames hold.
 func (s *Instance) SetPageBudget(bytes uint64) int {
 	s.pageQuota.Store(bytes)
@@ -69,20 +69,20 @@ func (s *Instance) holdOn(r int, o nn.ModelOwner) {
 	}
 }
 
-// followHost re-reads what the attached device holds of the host's memory and,
+// followSystem re-reads what the attached device holds of the system's memory and,
 // when it moved, re-divides the two budgets that pay for it: this instance's
 // expert residency and the model's pages. It runs after every placement call
 // and at the end of every forward entry point (kvCheck), where a block moved by
 // growth, relocation or a demotion has settled. Unchanged, it is one read.
-func (s *Instance) followHost() {
-	if s.hostRes == nil {
+func (s *Instance) followSystem() {
+	if s.sysRes == nil {
 		return
 	}
-	h := s.hostRes.HostReserved()
-	if h == s.hostSeen {
+	h := s.sysRes.HostReserved()
+	if h == s.sysSeen {
 		return
 	}
-	s.hostSeen = h
+	s.sysSeen = h
 	s.applyMemBudget()
 	s.applyQuota()
 }

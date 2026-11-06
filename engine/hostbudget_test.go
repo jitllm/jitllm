@@ -42,7 +42,7 @@ func (d *hostHungryDevice) PrewarmLayer(int, *nn.LayerPlan, *nn.LayerWeights) bo
 // TestHostBudgetLosesWhatAnIntegratedDeviceHolds: a device on host memory must
 // be subtracted from the host weight budget, or the host and the device spend
 // the same bytes. Asserted through the public calls (SetMemBudget,
-// SetDeviceLayers, HostBudget) in the order cmd/jitllm and an embedder make
+// SetDeviceLayers, SystemBudget) in the order cmd/jitllm and an embedder make
 // them: the budget is set before the device exists.
 func TestHostBudgetLosesWhatAnIntegratedDeviceHolds(t *testing.T) {
 	m, err := model.Open(jlmOf(t, models()["stories260K"]))
@@ -56,14 +56,14 @@ func TestHostBudgetLosesWhatAnIntegratedDeviceHolds(t *testing.T) {
 	const budget = 24 << 30
 	const held = 6 << 30
 	st.SetMemBudget(budget)
-	if got := st.HostBudget(); got != budget {
+	if got := st.SystemBudget(); got != budget {
 		t.Fatalf("with no device attached the host budget is %d, want the %d it was given",
 			got, uint64(budget))
 	}
 
 	// The budget was set first and the device arrives after, as run() does.
 	st.SetDeviceLayers(&hostHungryDevice{reserved: held}, -1)
-	got := st.HostBudget()
+	got := st.SystemBudget()
 	t.Logf("budget %d, device on host memory holds %d, host keeps %d", uint64(budget), uint64(held), got)
 	if got != budget-held {
 		t.Fatalf("host budget %d after attaching a device that holds %d of the same memory; "+
@@ -74,7 +74,7 @@ func TestHostBudgetLosesWhatAnIntegratedDeviceHolds(t *testing.T) {
 	// Detaching gives it back: a session that parks its accelerator must get
 	// the whole budget back.
 	st.SetDeviceLayers(nil, -1)
-	if got := st.HostBudget(); got != budget {
+	if got := st.SystemBudget(); got != budget {
 		t.Fatalf("host budget %d after detaching the device, want the full %d back",
 			got, uint64(budget))
 	}
@@ -82,7 +82,7 @@ func TestHostBudgetLosesWhatAnIntegratedDeviceHolds(t *testing.T) {
 	// A device with no claim on host memory (every discrete card) leaves the
 	// budget as it was.
 	st.SetDeviceLayers(&hostHungryDevice{reserved: 0}, -1)
-	if got := st.HostBudget(); got != budget {
+	if got := st.SystemBudget(); got != budget {
 		t.Fatalf("a device reserving nothing moved the host budget to %d from %d", got, uint64(budget))
 	}
 }
