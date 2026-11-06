@@ -16,7 +16,7 @@ import (
 // forced by gpu.Faults.SetRoomFault and each held to a violation it must not
 // survive (RULE 10): a recurrent seat reset from host-written zeros, a
 // Batcher clamped to the batched scratch the device holds (nn.RowsWidther),
-// and a step whose recurrent seats do not fit run with the blocks home
+// and a step whose scratch does not fit run with the blocks moved to the CPU
 // (nn.RowsRoomer, BatcherStats.RoomToCPU). Every forced arm's tokens are the
 // host's.
 
@@ -143,21 +143,21 @@ func TestRoomShortagesAreSurvived(t *testing.T) {
 		}
 	})
 
-	t.Run("seats-home", func(t *testing.T) {
+	t.Run("scratch-moves", func(t *testing.T) {
 		var f gpu.Faults
 		g := swaTierWith(t, gpu.WithFaults(&f))
 		defer g.Close()
-		f.SetRoomFault("noseat")
+		f.SetRoomFault("noroom")
 		got, st, err := roomBatch(t, m, g, 0, openOpts...)
 		f.SetRoomFault("")
 		if err != nil {
-			t.Fatalf("a device with no room for the batch's seats: %v", err)
+			t.Fatalf("a device with no room for a step's scratch: %v", err)
 		}
 		if st.RoomToCPU == 0 {
 			t.Fatal("no step came home: the forced path never ran")
 		}
 		same(t, got)
-		f.SetRoomFault("noseat-lie")
+		f.SetRoomFault("noroom-lie")
 		_, _, err = roomBatch(t, m, g, 0, openOpts...)
 		f.SetRoomFault("")
 		if err == nil {

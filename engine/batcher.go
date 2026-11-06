@@ -153,7 +153,7 @@ func (b *Batcher) Live() int { return len(b.live) }
 func (b *Batcher) Stats() BatcherStats {
 	st := b.stats
 	for i := range b.groups {
-		st.RoomToCPU += b.groups[i].in.roomToCPU
+		st.RoomToCPU += b.groups[i].in.noRoom
 	}
 	return st
 }

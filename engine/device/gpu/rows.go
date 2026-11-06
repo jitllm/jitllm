@@ -229,6 +229,10 @@ func (g *devTier) prepRagged(bs *blockScratch, rowsHead *nn.Head, n int) bool {
 	if bs == nil {
 		return false
 	}
+	if g.roomFaulted("nobuild") || g.roomFaulted("nobuild-room") {
+		g.LastErr = "a ragged step's twins do not build (roomFault)"
+		return false
+	}
 	defer g.scratchWin().close()
 	return g.prepRowsHead(bs, rowsHead, n)
 }
@@ -544,6 +548,9 @@ func (g *GPU) RowsWidth(want int) int {
 			// The composer serves every block in the reserved width at any
 			// count of rows up to it: nothing is built for the step.
 			w = min(w, d.promptW)
+			if d.roomFaulted("narrow") {
+				w = min(w, 64)
+			}
 		case held && d.bs != nil:
 			for w >= 8 {
 				r := (w + 7) / 8 * 8
@@ -568,8 +575,11 @@ func (g *GPU) RowsWidth(want int) int {
 // error, not a shortage of room.
 func (g *GPU) rowsRoom(sid uint64, rows, seqs int, head *nn.Head) (bool, error) {
 	g.resetCause(sid, true)
-	if g.roomFaulted("noseat-lie") || g.roomFaulted("narrow-lie") {
+	if g.roomFaulted("noroom-lie") || g.roomFaulted("narrow-lie") {
 		return true, nil
+	}
+	if g.roomFaulted("noroom") {
+		return false, nil
 	}
 	g.mu.Lock()
 	hd := g.head

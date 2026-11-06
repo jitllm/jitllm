@@ -359,9 +359,9 @@ type Instance struct {
 	// session of it: what a draft instance attaches to (Speculate).
 	device    nn.LayerDevice
 	gpuLayers int
-	// roomToCPU counts batch steps whose device had no room for them, so the
+	// noRoom counts batch steps whose device had no room for them, so the
 	// blocks moved to the CPU device before the step (relocateRows, forwardRows).
-	roomToCPU int
+	noRoom int
 	// The lists a step this instance leads reuses (step.go): Step's runs, the
 	// rows' sessions and positions, the wanted rows' logits and the result.
 	stepRuns []Run

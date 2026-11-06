@@ -3743,6 +3743,12 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	// scratch serves one width, so a ragged chunk runs the full width with the
 	// surplus rows zeroed (harmless; see Layers).
 	nrow := len(x) / p.ResidW()
+	if g.roomFaulted("noroom-lie") && nrow > 1 {
+		return refuse("a %d-row step's scratch passes the budget (roomFault)", nrow)
+	}
+	if (g.roomFaulted("narrow") || g.roomFaulted("narrow-lie")) && nrow > 64 {
+		return refuse("%d rows on a device holding only 64-row scratch (roomFault)", nrow)
+	}
 	if nrow < 1 || nrow > R || rag == nil && pos+nrow > p.MaxSeq {
 		return refuse("%d rows at position %d on a scratch of %d rows and capacity %d",
 			nrow, pos, R, p.MaxSeq)
