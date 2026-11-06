@@ -236,7 +236,7 @@ func (g *devTier) servedRows(p *nn.RowsPart) (*servedPart, error) {
 	for _, o := range p.Graph.Ops {
 		for _, b := range o.Weight {
 			if w, ok := p.Weights[b.Role]; ok {
-				r, err := g.rowsWeight(w)
+				r, err := g.rowsWeight(p.File, w)
 				if err != nil {
 					return nil, fmt.Errorf("%v: %w", b.Role, err)
 				}
@@ -271,7 +271,7 @@ func (g *devTier) servedRows(p *nn.RowsPart) (*servedPart, error) {
 
 // rowsWeight is w held on the card for the picture rows, at no block's
 // slot.
-func (g *devTier) rowsWeight(w nn.Weight) (*resident, error) {
+func (g *devTier) rowsWeight(f *jlm.File, w nn.Weight) (*resident, error) {
 	rs := &g.rows
 	data := w.Data
 	if len(data) == 0 && w.Packed != nil {
@@ -290,6 +290,17 @@ func (g *devTier) rowsWeight(w nn.Weight) (*resident, error) {
 	}
 	if _, ok := jlmType(q); !ok {
 		return nil, fmt.Errorf("format %v has no container type", w.T)
+	}
+	if w.Entry != nil {
+		own, release, err := g.ownWeight(f, w)
+		if err != nil {
+			return nil, err
+		}
+		defer release()
+		w = own
+		if data = w.Data; len(data) == 0 && w.Packed != nil {
+			data = w.Packed.QS
+		}
 	}
 	r := g.resident(-1, 0, w.Entry, q, data, w.Rows, w.K, w.Packed)
 	if r == nil || !r.ok {

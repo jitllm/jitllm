@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"path/filepath"
 	"slices"
 	"testing"
 
@@ -12,14 +13,20 @@ import (
 // own bindings: one runs every block on the CPU, the other places every block
 // on a card. The card's instance gives up its own binding of each block it
 // placed and leaves the other's alone, the page stays for the instance that
-// runs the block from host memory (jlm.File.Keep), and that instance decodes
-// as an instance alone does.
+// runs the block from host memory (jlm.Frames.Keep) -- a mixture's experts
+// with it -- and that instance decodes as an instance alone does, reading
+// what one alone reads: a page given back under it would be read again.
 func TestAnInstancesBlocksAreItsOwn(t *testing.T) {
-	src := testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf")
-	path, ok := existingModel(src)
-	if !ok {
-		t.Fatalf("model not present: %s (nor its container)", src)
+	for _, src := range []string{testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf"), models()["qwen3moe"]} {
+		path, ok := existingModel(src)
+		if !ok {
+			t.Fatalf("model not present: %s (nor its container)", src)
+		}
+		t.Run(filepath.Base(path), func(t *testing.T) { instancesBlocksAreTheirOwn(t, path) })
 	}
+}
+
+func instancesBlocksAreTheirOwn(t *testing.T, path string) {
 	m, err := model.Open(jlmOf(t, path))
 	if err != nil {
 		t.Fatal(err)
@@ -38,16 +45,20 @@ func TestAnInstancesBlocksAreItsOwn(t *testing.T) {
 		}
 		return out
 	}
+	f0 := m.PageFaults()
 	ref := testInstance(t, m, 64)
 	want := run(ref, prompt)
 	ref.Close()
+	alone := m.PageFaults() - f0
 
 	// One CPU device under both instances: the card's must leave the page
 	// the CPU's runs from where it is, in the frames they share.
 	shared := sharedCPU(t)
 	cpu := testInstance(t, m, 64, shared)
 	defer cpu.Close()
+	f0 = m.PageFaults()
 	got := run(cpu, prompt[:4])
+	read := m.PageFaults() - f0
 	g := swaTier(t)
 	defer g.Close()
 	card := testInstance(t, m, 64, shared)
@@ -68,12 +79,20 @@ func TestAnInstancesBlocksAreItsOwn(t *testing.T) {
 				li, cpu.fr.Kept(li), m.BlockHeld(cpu.fr, li))
 		}
 	}
+	f0 = m.PageFaults()
 	got = append(got, run(cpu, prompt[4:])...)
+	read += m.PageFaults() - f0
 	for p := range want {
 		if !slices.Equal(got[p], want[p]) {
 			e, _ := nmseOf(got[p], want[p])
 			t.Errorf("position %d: the CPU's instance beside the card's decodes %.3e from it alone (NMSE)", p, e)
 		}
+	}
+	if alone == 0 {
+		t.Fatal("an instance alone read no page: the count proves nothing")
+	}
+	if read != alone {
+		t.Errorf("the CPU's instance read %d pages beside the card's, one alone %d: the card's placement gave back pages it runs", read, alone)
 	}
 	// The card's instance runs too: placing gave nothing of the CPU's away.
 	run(card, prompt)

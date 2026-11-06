@@ -41,6 +41,9 @@ type RowsPart struct {
 	Rows    int
 	Weights map[jlm.Role]Weight
 	Vectors map[jlm.Role][]float32
+	// File is the file the weights are entries of, which a device reads
+	// them from into frames of its own; nil where they are no file's.
+	File *jlm.File
 }
 
 // PictureRowsDevice runs a RowsPart over live rows: in the graph's input
@@ -301,6 +304,10 @@ const PickMax = 512
 type Head struct {
 	// Model is which model the head belongs to; see LayerPlan.Model.
 	Model uint64
+	// File is the file the head's weights are entries of, which a device
+	// reads them from into frames of its own (as LayerPlan.File for a
+	// block); nil where they are no file's.
+	File *jlm.File
 	// Graph is the head as ops from the model's front end, nil where it
 	// states none: what a device serving the head forms.
 	Graph *graph.Graph

@@ -1451,6 +1451,22 @@ func (f *Frames) Span(e *Entry) (qs, d, sc []byte) {
 	return cut(e.QSOff, nq), cut(e.DOff, nd), cut(e.SCOff, nsc)
 }
 
+// DropDense lets dense entry e's bytes read on demand (DenseOnDemand) go: a
+// device that copied them into memory of its own needs them no more, and the
+// next Span of e reads them again. Frames that read the region whole keep it.
+func (f *Frames) DropDense(e *Entry) {
+	// Deferred first, so it runs after the unlock: see flushRecycled.
+	defer f.flushRecycled()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	b, ok := f.denseOf[e]
+	if !ok {
+		return
+	}
+	delete(f.denseOf, e)
+	f.release(b)
+}
+
 // denseEntry is dense entry e's planes, read into the frames the first time
 // and kept: the offset its buffer starts at and the buffer, or a nil buffer
 // where the read failed.

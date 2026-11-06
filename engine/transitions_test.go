@@ -107,6 +107,56 @@ func TestTwoInstancesReadAPageOnce(t *testing.T) {
 	}
 }
 
+// TestTwoInstancesReadATowersPagesOnce is the held-once transition over a
+// vision tower's pages: two instances of a picture model on one CPU device
+// encode a picture at once -- the tower's blocks are pages of the model's
+// file like the text's -- each as one alone does, bit for bit, and between
+// them read the pages one encode reads.
+func TestTwoInstancesReadATowersPagesOnce(t *testing.T) {
+	m, img := openSmolVLM(t)
+	defer m.Close()
+	encode := func(in *Instance) []float32 {
+		rows, err := in.EncodePicture(img)
+		if err != nil {
+			t.Error(err)
+			return nil
+		}
+		return slices.Clone(rows)
+	}
+	solo := testInstance(t, m, 256)
+	f0 := m.PageFaults()
+	want := encode(solo)
+	once := m.PageFaults() - f0
+	solo.Close()
+	if once == 0 {
+		t.Fatal("an encode read no page: this gate proved nothing")
+	}
+
+	cpu := sharedCPU(t)
+	x := testInstance(t, m, 256, cpu)
+	defer x.Close()
+	y := testInstance(t, m, 256, cpu)
+	defer y.Close()
+	var got [2][]float32
+	var wg sync.WaitGroup
+	f0 = m.PageFaults()
+	for i, in := range []*Instance{x, y} {
+		wg.Add(1)
+		go func() { defer wg.Done(); got[i] = encode(in) }()
+	}
+	wg.Wait()
+	n := m.PageFaults() - f0
+	for i := range got {
+		if !slices.Equal(got[i], want) {
+			t.Errorf("instance %d beside the other encodes the picture apart from one alone", i)
+		}
+	}
+	if n != once {
+		t.Errorf("two instances on one CPU device read %d of the tower's pages, one alone %d: a page both run was read twice", n, once)
+	}
+	t.Logf("one encode reads %d pages; two at once on one CPU device read %d", once, n)
+}
+
 // TestAnInstanceOnTheCPUAndOneOnACardShareTheFrames is instance paging's
 // first transition (docs/design/instance-paging.md step 6): two instances
 // of one model on one CPU device -- one running every block on the CPU under
