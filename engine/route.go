@@ -27,6 +27,8 @@ type route struct {
 	prompt nn.PromptRows
 	kvmig  nn.KVMigrator
 	recmig nn.RecMigrator
+	rew    nn.RecRewinder
+	rowk   nn.RecRowKeeper
 }
 
 func newRoute(d nn.LayerRunner) route {
@@ -46,6 +48,8 @@ func newRoute(d nn.LayerRunner) route {
 	r.prompt, _ = d.(nn.PromptRows)
 	r.kvmig, _ = d.(nn.KVMigrator)
 	r.recmig, _ = d.(nn.RecMigrator)
+	r.rew, _ = d.(nn.RecRewinder)
+	r.rowk, _ = d.(nn.RecRowKeeper)
 	return r
 }
 
@@ -58,7 +62,7 @@ const (
 // laneRoute is the route of a session's calls on the CPU device, its faces
 // the lanes' own (no assertion at all).
 func laneRoute(l *cpudev.SessionLanes) route {
-	return route{run: l, inputs: l, toks: l, tables: l, fail: l, errs: l, cause: l, closer: l, rows: l, steps: l, keys: l, wins: l, prompt: l, kvmig: l, recmig: l}
+	return route{run: l, inputs: l, toks: l, tables: l, fail: l, errs: l, cause: l, closer: l, rows: l, steps: l, keys: l, wins: l, prompt: l, kvmig: l, recmig: l, rew: l, rowk: l}
 }
 
 // History is the session's history as it is now (cpudev.HistoryOf).
@@ -293,10 +297,6 @@ func (s *Instance) embedTellOn(r *route, n int) bool {
 	return r.wins.SetRowWindows(s.embedWins(n))
 }
 
-// Snaps says a speculation step keeps each prompt row's summary
-// (cpudev.Prompt).
-func (s *Session) Snaps() bool { return s.on != nil && s.on.rows != nil }
-
 // Points says the prompt seals restore points (cpudev.Prompt).
 func (s *Session) Points() bool { return s.on != nil && s.on.recPointsOn() }
 
@@ -308,14 +308,6 @@ func (s *Session) Point(pos int) bool { return s.on != nil && s.on.recPoint(pos)
 func (s *Session) Seal(li, slot, pos int) {
 	if s.on != nil {
 		s.on.recRowPoint(li, slot, pos)
-	}
-}
-
-// Snap keeps block li's summary of slot as a speculation step's row's
-// (cpudev.Prompt).
-func (s *Session) Snap(li, slot, row int) {
-	if s.on != nil {
-		s.on.rows.snapRow(s.on, li, slot, row)
 	}
 }
 

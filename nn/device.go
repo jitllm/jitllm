@@ -1560,6 +1560,15 @@ type RecRewinder interface {
 	RecRewind() bool
 }
 
+// RecRowKeeper is a device whose linear blocks keep a session's recurrent
+// state after each of a call's first rows (RecKeepRows; zero keeps none) and
+// can return it to any of them (RecRestoreRow): a speculation's rollback to
+// its last accepted row, with no row run again.
+type RecRowKeeper interface {
+	RecKeepRows(rows int)
+	RecRestoreRow(row int) bool
+}
+
 // SizeDecliner is an optional LayerDevice that can answer from a block's
 // size alone that no device could hold it, before the caller reads it. total
 // is every byte the block keeps resident; bank is the routed expert banks'
