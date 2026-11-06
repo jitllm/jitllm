@@ -14,7 +14,6 @@ import (
 
 	"github.com/jitllm/jitllm/format/jlm"
 
-	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"github.com/jitllm/jitllm/nn"
@@ -429,6 +428,8 @@ type Instance struct {
 	// fromFrames says which run a block from the instance's frames.
 	places     [2]nn.BlockPlacer
 	fromFrames [2]bool
+	// chunks are the routes' devices' prompt chunk limits, asserted once.
+	chunks [2]nn.ChunkLimiter
 	// framesHeld says this instance keeps (jlm.File.Keep) the pages of the
 	// blocks of [lo, hi) a device runs from them, from its making until
 	// Close.
@@ -688,19 +689,15 @@ func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOp
 	s.cpu.x = cpudev.NewExec(workers, cpudev.NewComposer(g.cpu.Forms(m.Id), g.cpu.Target.ISA(), workers.Workers(), opt.cpuFloat))
 	s.cpu.x.SetFusion(!opt.noFuse)
 	s.cpu.x.FuseCounts(&g.fuse.tries, &g.fuse.runs)
+	s.cpu.x.SetChunk(opt.prefillChunk)
 	s.setPlace(routeLanes, s.cpu.x)
 	s.holdFrames()
 	// The cache width: WithKVType (or WithKVF16, SetKVType) forces it;
-	// otherwise binary16, half the history's bytes, wherever the CPU
-	// narrows in hardware -- everywhere but an x86 host the composer forms
-	// from its narrow passes (composer.NarrowsCPU). A quantized cache is
+	// otherwise the CPU device's own (Exec.DefaultKV). A quantized cache is
 	// only ever forced (KVType).
 	want := kvFmtOf(opt.kvType)
 	if !opt.kvTypeSet {
-		want = cpu.KVF16
-		if composer.NarrowsCPU(cpudev.Target(s.cpuISA(), 1)) {
-			want = cpu.KVF32
-		}
+		want = s.cpu.x.DefaultKV()
 	}
 	// A selection caches its indexer's key in the row, and the selection over
 	// it is discrete: a key rounded to binary16 moves a block's best score by
@@ -1120,7 +1117,7 @@ func (s *Instance) reserveRows() error {
 	total := s.nseq * s.maxSeq
 	for s.nseq > 1 && s.devCount() > 0 && !s.ld.ReserveKV(total) {
 		li := s.relocationVictim()
-		if p := s.opt.place; li < 0 || p != nil && p.Strict || !s.cpuListed() {
+		if p := s.opt.place; li < 0 || p != nil && p.Strict || !s.listed(routeLanes) {
 			return fmt.Errorf("model: the devices cannot hold %d rows of %d positions "+
 				"for the blocks placed on them, and no other listed device takes one", s.nseq, s.maxSeq)
 		}
@@ -1324,7 +1321,7 @@ func (s *Instance) placeHead() {
 		// bytes for the head's and add a seam that does not exist.
 		// A block given up for the head runs on the CPU, which only a caller
 		// that listed it lets the engine choose.
-		if s.gpuLayers >= s.hi || s.gpuLayers == s.lo+1 || !s.cpuListed() {
+		if s.gpuLayers >= s.hi || s.gpuLayers == s.lo+1 || !s.listed(routeLanes) {
 			restore()
 			return
 		}
@@ -1437,7 +1434,7 @@ func (s *Instance) newHead() *nn.Head {
 	f := s.m.FrontGraphs()
 	h := &nn.Head{Model: s.m.Id, File: s.m.Container, Graph: f.CpuHead, HiddenGraph: f.CpuHidden, Sample: f.CpuSample, SampleWalk: f.CpuWalk, PickGraph: f.Pick, PickHead: f.PickHead, Embed: f.Embed, Norm: s.outNorm, W: model.Wt(*s.outW), Logits: s.logits,
 		Softcap: c.FinalSoftcap, Embeds: c.TiedEmbd, EmbdScale: float32(c.EmbdScale),
-		Stages: s.m.HeadStages(), Bias: s.m.OutB, NoCPU: !s.cpuListed()}
+		Stages: s.m.HeadStages(), Bias: s.m.OutB, NoCPU: !s.listed(routeLanes)}
 	if !c.TiedEmbd && s.dense.Embd.E != nil {
 		h.TokEmbd = model.Wt(s.dense.Embd)
 	}
@@ -2252,7 +2249,7 @@ func (s *Instance) SetDeviceFallback(on bool) { s.devFallback = on }
 
 // fallsBack reports whether a device failure moves the blocks to the CPU
 // (demoteAll) rather than failing the step.
-func (s *Instance) fallsBack() bool { return s.devFallback && s.cpuListed() }
+func (s *Instance) fallsBack() bool { return s.devFallback && s.listed(routeLanes) }
 
 // demoteAll moves every device block and its history to the CPU device.
 //
@@ -2366,7 +2363,7 @@ func (s *Instance) relocateUntil(pos int, fits func() bool) {
 	defer s.fixKVGroups()
 	sp := s.ldSpill
 	// The CPU is a destination only where the caller listed it.
-	toCPU := s.relocate && s.cpuListed()
+	toCPU := s.relocate && s.listed(routeLanes)
 	if !toCPU && sp == nil {
 		return
 	}
@@ -3564,6 +3561,7 @@ func (s *Instance) setPlace(r int, d nn.BlockPlacer) {
 	s.places[r] = d
 	f, ok := d.(nn.FramesInPlace)
 	s.fromFrames[r] = ok && f.RunsFromFrames()
+	s.chunks[r], _ = d.(nn.ChunkLimiter)
 }
 
 // holdFrames keeps the frames of every block a device runs from them.

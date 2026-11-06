@@ -43,10 +43,9 @@ func (s *Instance) Locations() []string {
 // onCPU reports whether to names the CPU.
 func onCPU(to string) bool { return nn.DeviceName(to) == nn.CPU }
 
-// cpuListed reports whether the engine may choose the CPU for a block
-// (WithCPU): as the destination of a block no card takes, of a relocation, of
-// a fault's evacuation.
-func (s *Instance) cpuListed() bool { return !s.opt.noCPU }
+// listed says route r's device is one the caller listed (WithDevices,
+// WithCPU).
+func (s *Instance) listed(r int) bool { return r != routeLanes || !s.opt.noCPU }
 
 // errCPUUnlisted is the refusal of a move the engine would have made to the
 // CPU, had the caller listed it.

@@ -89,7 +89,7 @@ func (s *Instance) initSeamTuner() {
 func (s *Instance) initStreamTrial() {
 	// Two of its arms run on the CPU, a destination only a caller that
 	// listed it lets the engine try.
-	if s.ld == nil || s.gpuLayers <= s.lo || !s.cpuListed() {
+	if s.ld == nil || s.gpuLayers <= s.lo || !s.listed(routeLanes) {
 		return
 	}
 	full := s.gpuLayers
@@ -139,7 +139,7 @@ func (s *Instance) SetSeamTuning(on bool) {
 	}
 	// The tuner's seams leave blocks on the CPU: with the CPU unlisted there
 	// is no seam to tune.
-	if s.seam == nil && s.cpuListed() {
+	if s.seam == nil && s.listed(routeLanes) {
 		s.initSeamTuner()
 	}
 }

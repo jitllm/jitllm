@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"cmp"
 	"fmt"
 	"time"
 
@@ -18,16 +17,9 @@ const MaxPrefillChunk = nn.MaxHostPrefillChunk
 // device's where the session places blocks.
 func (s *Instance) chunkWidth() int {
 	if s.devCount() > 0 {
-		return s.deviceChunk()
+		return s.chunkOn(routeView)
 	}
-	return s.hostChunk()
-}
-
-// hostChunk is the rows a prompt chunk on the CPU device carries: the rows
-// its forms are composed at (cpuRowsCap), a wider chunk being cut into calls
-// of that many, so no fewer weight reads. WithPrefillChunk pins it.
-func (s *Instance) hostChunk() int {
-	return min(cmp.Or(s.opt.prefillChunk, cpuRowsCap), MaxPrefillChunk)
+	return s.chunkOn(routeLanes)
 }
 
 // Prefill runs a whole prompt through the model in batches and returns the
@@ -368,7 +360,7 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 		if place != nil {
 			place.at()
 		}
-		width := s.hostChunk()
+		width := s.chunkOn(routeLanes)
 		if whole || spanAll {
 			width = total
 		}
@@ -391,7 +383,7 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 		// 64 rows 13.3 ms and 512 57.4 ms on the V100 (CUDA), 116 ms and
 		// 834 ms on the M4 (Metal).
 		if s.devCount() > 0 && !whole && !spanAll {
-			width = s.deviceChunk()
+			width = s.chunkOn(routeView)
 			// One submission's width when a run is in the prompt: a pipelined
 			// chunk is cut into pieces, and a piece must not cut a run.
 			if len(s.bidir) > 0 {
@@ -406,7 +398,7 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 		}
 		// A block an earlier chunk moved (relocateFor) can widen the
 		// device's chunk past what the prompt was sized for -- a second card
-		// makes it a pipeline (deviceChunk) -- and so can a run.
+		// makes it a pipeline (chunkOn) -- and so can a run.
 		if n > chunkRows {
 			chunkRows = n
 			sizeFor(n)
@@ -699,21 +691,14 @@ func (s *Instance) devCollapses() bool {
 	return c.StreamHead() && s.head != nil && s.head.Collapses && s.rows == nil && s.devCount() > 0 && s.lo < c.NLayer
 }
 
-// growDeviceBatch sizes what a chunk needs when every block runs on a device:
-// the residual rows it uploads and downloads and the rotary rows beside them.
-//
-// Nothing else: growBatch's full host set is tens of MB at the device's chunk
-// width, and allocating it cost a fresh instance measurable time per prompt.
-// deviceChunk is the prompt chunk a device takes: MaxDevicePrefillChunk, or
-// pipelineChunks of them when every block is on a device that crosses
-// several cards, so the cards can work on different pieces at once
-// (nn.Pipeliner). Only then: host blocks between device runs take the chunk
-// whole.
-func (s *Instance) deviceChunk() int {
-	if l, ok := s.ld.(nn.ChunkLimiter); ok && l.ChunkRows() > 0 {
+// chunkOn is how many prompt rows route r's device takes in one chunk: its
+// own limit (nn.ChunkLimiter), a pipeline's chunks where every block crosses
+// its cards, else a device's chunk.
+func (s *Instance) chunkOn(r int) int {
+	if l := s.chunks[r]; l != nil && l.ChunkRows() > 0 {
 		return l.ChunkRows()
 	}
-	if p, ok := s.ld.(nn.Pipeliner); ok && s.allOnDevice() && p.PipelineDepth() > 1 {
+	if p, ok := s.places[r].(nn.Pipeliner); ok && s.allOnDevice() && p.PipelineDepth() > 1 {
 		return nn.MaxDevicePrefillChunk * pipelineChunks
 	}
 	return nn.MaxDevicePrefillChunk

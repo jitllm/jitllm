@@ -1,6 +1,7 @@
 package cpudev
 
 import (
+	"cmp"
 	"sync/atomic"
 	"unsafe"
 
@@ -21,6 +22,9 @@ const RowsCap = 64
 // workers, its composer, the forms of each of its blocks, the runner that
 // calls them, and what it composed and served.
 type Exec struct {
+	// chunk pins a prompt chunk's rows (SetChunk), 0 where the executor's
+	// rows decide.
+	chunk int
 	// kvconv is the history's conversions where it is binary16 or q8.
 	kvconv *KVConv
 	// onE and low are a prompt phase on the efficiency cores (BeginPrefill).
@@ -139,6 +143,28 @@ func (e *Exec) ReleaseLayers(lo, hi int) {
 		}
 	}
 }
+
+// SetChunk pins a prompt chunk's rows at n, 0 for the executor's own.
+func (e *Exec) SetChunk(n int) { e.chunk = n }
+
+// ChunkRows is how many prompt rows the CPU takes in one chunk
+// (nn.ChunkLimiter): the pinned width, else the rows its forms are formed
+// for, never past the widest chunk.
+func (e *Exec) ChunkRows() int { return min(cmp.Or(e.chunk, RowsCap), nn.MaxHostPrefillChunk) }
+
+// DefaultKV is the width the CPU holds a history at where the caller forces
+// none: binary16, half the bytes, wherever it narrows in hardware, f32 where
+// the composer forms the narrowing from its narrow passes
+// (composer.NarrowsCPU).
+func (e *Exec) DefaultKV() cpu.KVFmt {
+	if composer.NarrowsCPU(Target(e.comp.ISA(), 1)) {
+		return cpu.KVF32
+	}
+	return cpu.KVF16
+}
+
+// ISA is the instruction set the CPU's forms are composed for.
+func (e *Exec) ISA() cpu.ISA { return e.comp.ISA() }
 
 // RunsFromFrames says the CPU runs a block from the instance's frames.
 func (e *Exec) RunsFromFrames() bool { return true }

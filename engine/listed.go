@@ -35,7 +35,7 @@ func (s *Instance) offCards(lo, hi int) []int {
 // the host. A block that not even that places -- a plan no card runs, a
 // budget below the slots a swap needs -- is the placement's error, by name.
 func (s *Instance) pageOnCards(lo, hi int) error {
-	if s.cpuListed() || s.ld == nil || s.ldCand == nil {
+	if s.listed(routeLanes) || s.ld == nil || s.ldCand == nil {
 		return nil
 	}
 	off := s.offCards(lo, hi)
