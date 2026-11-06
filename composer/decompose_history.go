@@ -57,7 +57,7 @@ func decomposeRope(o graph.Op, c *Context) ([]Prim, error) {
 	// per-pair factors (Freqs), its cos/sin scale (Mscale) and, over several
 	// position axes (Sections), each pair's axis are in it. Each pair turns
 	// by one angle either way, so the rotation is the same.
-	if len(o.In) != 1 || len(o.Out) != 1 || a.HeadDim <= 0 || c.width(o.In[0])%a.HeadDim != 0 ||
+	if len(o.In) != 1 && len(o.In) != 2 || len(o.Out) != 1 || a.HeadDim <= 0 || c.width(o.In[0])%a.HeadDim != 0 ||
 		a.NRot <= 0 || a.NRot%2 != 0 || a.Offset < 0 || a.Offset+a.NRot > a.HeadDim ||
 		a.Layout != graph.RopeNorm && a.Layout != graph.RopeNeox && a.Layout != graph.RopeSplit {
 		return nil, fmt.Errorf("a rotary of %d of %d, layout %d", a.NRot, a.HeadDim, a.Layout)
@@ -102,6 +102,12 @@ func decomposeRope(o graph.Op, c *Context) ([]Prim, error) {
 	table, err := c.rotaryTable(a)
 	if err != nil {
 		return nil, err
+	}
+	if len(o.In) == 2 {
+		if c.width(o.In[1]) != cs[1] {
+			return nil, fmt.Errorf("a rotary of %d turning by a table of %d", cs[1], c.width(o.In[1]))
+		}
+		table = c.value(o.In[1])
 	}
 	in := []Operand{c.value(o.In[0]), table}
 	prims := []Prim{{Kind: PrimMap, Shape: []int{R, W / hd, pairs}, In: in, Expr: x.e,

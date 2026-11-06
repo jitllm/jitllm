@@ -256,3 +256,15 @@ func (a Attrs) biasWidth(width int) int {
 	}
 	return w
 }
+
+// RopeTableAt is OpRopeTable's value of the rotary a turns by (its
+// rotation, base and frequencies), at each row's position floored to a
+// multiple of span: what OpRope's In[1] turns by.
+func (s *Builder) RopeTableAt(a Attrs, span int) ValueID {
+	t := Attrs{NRot: a.NRot, Base: a.Base, Freqs: a.Freqs, Layout: a.Layout, Span: span}
+	w := a.NRot
+	if a.Layout == RopeSplit {
+		w *= 2
+	}
+	return s.Emit(OpRopeTable, nil, []Result{{Name: "rope.at", Width: w}}, nil, t, nil, nil)[0]
+}
