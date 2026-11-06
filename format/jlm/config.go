@@ -813,9 +813,9 @@ const (
 	// where qwen3next's gate is silu(z) (Qwen3.8-Flash-Next's
 	// output_gate_type).
 	Flag2DeltaSigmoidGate Flags2 = 1 << 5
-	// Flag2CentredConv says a short convolution mixer reads the Taps/2 rows
-	// before and after its own, a bidirectional model's (the LFM2.5-Encoder
-	// trunk's), where it otherwise reads its own and the Taps-1 before.
+	// Flag2CentredConv is an older writer's statement that a short
+	// convolution reads the rows on both sides of its own, which a
+	// non-causal model's does (FlagNonCausal); nothing reads or writes it.
 	Flag2CentredConv Flags2 = 1 << 6
 )
 
