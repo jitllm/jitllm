@@ -218,7 +218,7 @@ func (s *Instance) stepRowsDevice(src rowSrc, out *rowsOut) error {
 			logits = s.rowsLog
 		}
 	}
-	s.growDeviceBatch(n)
+	s.growRows(n)
 	pos, slot := make([]int, n), make([]int, n)
 	for j, i := range order {
 		pos[j] = p0 + i
@@ -325,7 +325,7 @@ func (s *Instance) finishRows(headDone bool, lastBase, total int) error {
 	}
 	// The CPU's composed head over the wanted rows, the norm's rows its
 	// hidden state.
-	s.growBatch(cnt)
+	s.growRows(cnt)
 	var hidden []float32
 	if !c.ResidStreams() { // its hidden state is the residual, taken in collapseStreams
 		hidden = r.hidden[:cnt*c.NEmbd]
@@ -385,8 +385,8 @@ func (s *Instance) stepRowsStreams(src rowSrc, out *rowsOut) error {
 	if p0+n > s.maxSeq {
 		return errFull{s.maxSeq, s.reqSeq}
 	}
-	s.growDeviceBatch(n)
-	s.growBatch(n)
+	s.growRows(n)
+	s.growRows(n)
 	if len(s.rowsPos) < 2*n {
 		s.rowsPos = make([]int, 2*n)
 	}
@@ -458,7 +458,7 @@ func (s *Instance) rowsHead(rd nn.RowsDevice, pos, slot []int, n int, logits []f
 			return nil
 		}
 	}
-	s.growBatch(n)
+	s.growRows(n)
 	if why := s.headRows(s.bx, logits, nil, nlogit); why != nn.DeclineServes {
 		return s.headDeclined(why)
 	}

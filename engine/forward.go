@@ -232,27 +232,7 @@ type Instance struct {
 	// expHold pins a layer's routed expert pages while its FFN reads them;
 	// one per instance, reused every layer of every token.
 	expHold model.ExpertHold
-	// spareHost is a closed session's prompt scratch, taken from the model with
-	// its promptBuf, for growBatch and growMoEBatch to grow into.
-	spareHost hostBatch
 	// traceLayer is the block moe() is running, for traceExperts.
-	// Per-row selection and weight for a batched chunk, so moeBatch can visit
-	// experts in order rather than rows.
-	bsel []int32
-	bw   []float32
-	// The per-expert gather of a batched mixture FFN (moeBatchExpert): which
-	// rows chose the expert, their weights, and the rows' input, gate, up and
-	// down scratch.
-	bmRow    []int32
-	bmW      []float32
-	bmX, bmY []float32
-	bmG, bmU []float32
-
-	// qgate is the double-width query projection of an architecture that folds
-	// its attention output gate into attn_q, and ogate is the gate after the
-	// per-head deinterleave. Both are nil when Config.AttnOutGate is false,
-	// which is every architecture but the hybrid.
-	qgate, ogate []float32
 
 	// declines counts, by reason, the blocks no device took. See DeviceDeclines.
 	declines map[string]int
@@ -374,17 +354,9 @@ type Instance struct {
 	// offerOn is the device MoveBlocks is placing CPU blocks on: offerRange
 	// offers each to it alone ("" lets the tier choose).
 	offerOn string
-	// Attention scores per (sequence, head). atth/attf are the nseq==1 case;
-	// a batch parallelises over sequences and heads, so every pair needs a row.
-	bathf []float32
-	// scoreReach is the key reach bathf and battf are sized for (rowsStride).
-	scoreReach int
-
 	// Batched prefill scratch, allocated on first use and sized by
 	// PrefillChunk rather than by the sequence length.
-	bx, bh    []float32
-	bqf, bxbf []float32
-	battf     []float32 // per-token score rows, at rowsStride
+	bx []float32
 
 	// device is the device SetDeviceLayers was handed, before Attach made ld a
 	// session of it: what a draft instance attaches to (Speculate).
@@ -679,11 +651,6 @@ func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOp
 	s.bpos = make([]int, nseq)
 	s.rmarks = model.RopeMarks{}
 	s.allocRecurrent(nseq)
-	if c.AttnOutGate {
-		qd := c.NHead * c.HeadDim
-		s.qgate = make([]float32, nseq*2*qd)
-		s.ogate = make([]float32, nseq*qd)
-	}
 
 	workers := cpu.NewPool(s.poolOptions()...)
 	s.cpu.x = cpudev.NewExec(workers, cpudev.NewComposer(g.cpu.Forms(m.Id), g.cpu.Target.ISA(), workers.Workers(), opt.cpuFloat))
@@ -2603,31 +2570,6 @@ func (s *Instance) SetAttnPair(v int) { s.attnPair = v }
 // the generated softmax writes stays inside the row it belongs to.
 func attStride(maxSeq int) int { return (maxSeq + 15) &^ 15 }
 
-// rowsStride is the stride of the many-row score buffers (battf for a prefill
-// chunk, bathf for a batch step) when their rows reach keys below reach.
-//
-// Those buffers hold a row per token or per (row, head), so sized at maxSeq
-// they were the largest thing an instance allocated: a 170-token prompt on a
-// 131072-position context held 89 MB of scores for keys it could not reach,
-// and a server keeps an instance per concurrent request. The reach they are sized
-// for grows by doubling, from scoreReachMin, up to maxSeq, so a sequence
-// re-sizes them a handful of times in its life and a warm step at a steady
-// reach allocates nothing.
-func (s *Instance) rowsStride(reach int) int {
-	if reach > s.scoreReach {
-		r := max(s.scoreReach, scoreReachMin)
-		for r < reach {
-			r *= 2
-		}
-		s.scoreReach = min(r, s.maxSeq)
-	}
-	return attStride(s.scoreReach + s.m.SinkSlot())
-}
-
-// scoreReachMin is the first reach rowsStride sizes for: a page's worth of
-// positions, past which a short exchange never re-sizes.
-const scoreReachMin = 256
-
 // devLogits says the logits the device's head handed back carry every stage
 // of the head past the projection (devApplied).
 func (s *Instance) devLogits() error {
@@ -3150,19 +3092,6 @@ func (s *Instance) ForwardSample(token int32, smp *Sampler) (int32, error) {
 // the token on the host (Layers may have written part of s.x).
 func (s *Instance) forward(fill func() error) ([]float32, error) {
 	s.touch()
-	// An instance that led a routed step across sessions lent the model its gate
-	// scratch (returnStep -> takeHostBatch), and the token it runs alone
-	// afterwards reads one query-gate row it no longer holds. It is made once;
-	// an instance that does not lead holds it from NewInstance.
-	if c := s.c; c.AttnOutGate {
-		qd, n := c.NHead*c.HeadDim, len(s.bpos)
-		if cap(s.qgate) < n*2*qd {
-			s.qgate = make([]float32, n*2*qd)
-		}
-		if cap(s.ogate) < n*qd {
-			s.ogate = make([]float32, n*qd)
-		}
-	}
 	// The pool spins or parks for the next token by what this one did. A token
 	// that paged weights in waits on reads between its regions, and a spinning
 	// worker would burn a core through each; a token that read nothing runs its

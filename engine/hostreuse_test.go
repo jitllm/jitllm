@@ -12,7 +12,7 @@ import (
 )
 
 // TestReusedPromptScratchIsNotRead is the gate on a closed session's prompt
-// scratch (hostBatch) and history pages (kvPagePool) serving the next instance
+// rows (promptBuf) and history pages (kvPagePool) serving the next instance
 // on the same model.
 //
 // The next session's prompt and decode must be bit-identical to the first
@@ -74,18 +74,16 @@ func reusedScratchGate(t *testing.T, path string) {
 
 	// Poison everything a closed instance handed back.
 	hs.mu.Lock()
-	if hs.spare == nil || hs.spare.host.bh == nil {
+	if hs.spare == nil || hs.spare.bx == nil {
 		hs.mu.Unlock()
 		t.Fatal("no prompt scratch was handed back to the CPU device")
 	}
-	h := &hs.spare.host
-	for _, b := range [][]float32{h.bh, h.battf, h.qgate, h.ogate, h.bqf, h.bxbf, h.bmW, h.bmX, h.bmY, h.bmG, h.bmU,
-		hs.spare.bx, hs.spare.bcs, hs.spare.bcsSWA} {
+	for _, b := range [][]float32{hs.spare.bx, hs.spare.bcs, hs.spare.bcsSWA} {
 		for i := range b {
 			b[i] = float32(math.NaN())
 		}
 	}
-	poisoned := unsafe.SliceData(h.bh)
+	poisoned := unsafe.SliceData(hs.spare.bx)
 	hs.mu.Unlock()
 	pooled := cd.KVPool(m.Id).Held(func(b []float32) {
 		for i := range b {
@@ -98,7 +96,7 @@ func reusedScratchGate(t *testing.T, path string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if unsafe.SliceData(s.bh) != poisoned {
+	if unsafe.SliceData(s.bx) != poisoned {
 		t.Fatal("the new session's prompt scratch is not the handed-back set: the reuse was not selected")
 	}
 	if pooled == 0 {

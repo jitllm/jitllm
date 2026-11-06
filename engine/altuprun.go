@@ -47,7 +47,7 @@ func (s *Instance) altRowsStep(rd nn.RowsDevice, pos, slot []int, tokens []int32
 	if err := s.collapseStreams(x, n); err != nil {
 		return err
 	}
-	s.growBatch(n)
+	s.growRows(n)
 	if why := s.headRows(s.bx, logits, nil, nlogit); why != nn.DeclineServes {
 		return s.headDeclined(why)
 	}

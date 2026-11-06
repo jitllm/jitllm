@@ -24,43 +24,9 @@ func (s *Instance) rowsRouted(tokens []int32, seq, pos []int, nlogit, seqs int) 
 	// The ragged head applies the final softcap itself, as decode's head does.
 	// AltUp's head reads the streams' mean, which the host takes (altup.go).
 	headOnDev := s.devCount() > 0 && s.headWithLastBlock() && !c.StreamHead()
-	s.growBatch(n)
-	if len(s.bsel) < n*c.NExpertUsed && c.MoE() {
-		s.bsel = make([]int32, n*c.NExpertUsed)
-		s.bw = make([]float32, n*c.NExpertUsed)
-	}
-	// Sized apart: a device batch step allocates blogits and never the score
-	// rows, so a batch whose blocks came home finds the one without the other.
+	s.growRows(n)
 	if len(s.blogits) < nlogit*c.NVocab {
 		s.blogits = make([]float32, nlogit*c.NVocab)
-	}
-	// Attention fans out over (row, head) units, each with its own scores row.
-	// A step of one row per sequence is that; one carrying a prompt chunk goes
-	// a row per unit, heads in turn, as Prefill does -- a scores row per (row,
-	// head) would be rows x heads x context, a quarter of a GiB for 512 rows of
-	// 32 heads at a 4096 context.
-	unitHeads := 1
-	if n > seqs {
-		unitHeads = c.NHead
-	}
-	units := n * c.NHead / unitHeads
-	// A row reaches keys below its own position plus one (rowsStride).
-	reach := 0
-	for i := 0; i < n; i++ {
-		reach = max(reach, pos[i]+1)
-	}
-	astride := s.rowsStride(reach)
-	// Across sessions a row's reach is its own session's, which may run
-	// past the leading instance's context, where rowsStride stops.
-	if len(s.rowOwn) > 0 && astride < attStride(reach+s.m.SinkSlot()) {
-		r := scoreReachMin
-		for r < reach {
-			r *= 2
-		}
-		astride = attStride(r + s.m.SinkSlot())
-	}
-	if len(s.bathf) < units*astride {
-		s.bathf = make([]float32, units*astride)
 	}
 
 	nrot := c.RopeW()
