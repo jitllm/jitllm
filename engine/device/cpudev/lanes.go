@@ -199,10 +199,9 @@ func (l *Lanes) Layers(lo, hi, pos, n int, x, cs, csSWA []float32, head *nn.Head
 			return false
 		}
 		l.e.Fuse()
-		st := Step{X: x, Stride: l.stride, CS: cs, CSSWA: csSWA, Side: l.side, Pos: pos, Tok: l.tok, History: l.h,
-			Seqs: l.seqs, Tensors: t, RecLi: l.recLi(li)}
-		st.RecState, st.RecConv = l.recAddrs(st.RecLi)
-		why, err := l.e.Run(li, &st, l.b)
+		st := Step{X: x, Stride: l.stride, CS: cs, CSSWA: csSWA, Side: l.side, Pos: pos, Tok: l.tok, Toks: true,
+			Faults: true, Tensors: t}
+		why, err := l.Row(li, &st)
 		if err != nil {
 			l.err = err
 			return false
@@ -217,6 +216,15 @@ func (l *Lanes) Layers(lo, hi, pos, n int, x, cs, csSWA []float32, head *nn.Head
 		}
 	}
 	return true
+}
+
+// Row runs block li's form of one row over st on the session the lanes are
+// attached to: its history and recurrent state the session's.
+func (l *Lanes) Row(li int, st *Step) (nn.Decline, error) {
+	st.History, st.Seqs = l.h, l.seqs
+	st.RecLi = l.recLi(li)
+	st.RecState, st.RecConv = l.recAddrs(st.RecLi)
+	return l.e.Run(li, st, l.b)
 }
 
 // Declined is the block the last call stopped at and why, DeclineServes
