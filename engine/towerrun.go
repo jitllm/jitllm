@@ -3,6 +3,7 @@ package engine
 import (
 	"fmt"
 	"image"
+	"slices"
 	"unsafe"
 
 	"github.com/jitllm/jitllm/model"
@@ -19,6 +20,9 @@ import (
 // composed when the instance is made.
 type towerRun struct {
 	s *Instance
+	// tok and given are the picture's rows as a prompt's source (prefillSrc).
+	tok   []int32
+	given [1]givenRun
 	// entry is a class's entry forms, one a sample format.
 	entry []map[uint8]*cpudev.Form
 	head  *cpudev.Form
@@ -310,9 +314,8 @@ func (s *Instance) wholePicture(li int) bool {
 
 // towerBlocks runs the tower's blocks over the patch rows of a gw x gh grid,
 // one run in which every row's keys are every row's, leaving the last
-// block's rows in blk: on the CPU device, the runner's CPU rows over the
-// run, block by block; with blocks on a card, the tower instance's prefill
-// (embedMode.rows), each block on the device that holds it. Blocks that turn
+// block's rows in blk: the tower instance's prefill (embedMode.rows), each
+// run of blocks on the device that holds it. Blocks that turn
 // q and k read each row's cell of the grid from its position and the
 // picture's request (the tower's grid table, on a card the card's own from
 // the rows' cells and the grid's width gw); a windowed block attends within
@@ -320,75 +323,47 @@ func (s *Instance) wholePicture(li int) bool {
 func (ts *Instance) towerBlocks(tr *towerRun, gw int, wins []nn.KeyRun) error {
 	n := len(tr.pos)
 	ts.bidir = append(ts.bidir[:0], nn.KeyRun{Lo: 0, Hi: n})
-	defer func() { ts.bidir, ts.cpu.runWindows, ts.cpu.rowWins = ts.bidir[:0], false, nil }()
+	defer func() { ts.bidir = ts.bidir[:0] }()
 	if ts.tables != nil {
 		ts.tables.SetGrid(tr.req, tr.posTab)
 	}
-	if ts.devCount() > 0 {
-		ts.Reset()
-		if ts.m.Tower.Table != nil {
-			gc, ok := ts.ld.(nn.GridCellsDevice)
-			if !ok || !gc.SetGridCells(tr.posTab, gw) {
-				return fmt.Errorf("the tower's blocks turn by the picture's grid on a device that holds no grid table")
-			}
-		}
-		tr.mode = embedMode{bidir: true, rows: true, total: n, out: tr.blk, wins: tr.mode.wins}
-		// The rows each tapped block leaves, which a card writes back where
-		// its run ends at that block.
-		tr.modeTaps = tr.modeTaps[:0]
-		for j, blk := range ts.m.Tower.TapBlocks {
-			tr.modeTaps = append(tr.modeTaps, embedTap{li: ts.lo + blk, rows: tr.tapRows[j]})
-		}
-		tr.mode.taps = tr.modeTaps
-		if wins != nil {
-			// A card's windowed blocks read each row's window (graph.Attrs
-			// .RowWindows), handed with the call (embedTell); the blocks the
-			// CPU device keeps read them per row as well.
-			tr.rowWins = tr.rowWins[:0]
-			for _, w := range wins {
-				for range w.Hi - w.Lo {
-					tr.rowWins = append(tr.rowWins, w)
-				}
-			}
-			tr.mode.rowWins, ts.cpu.rowWins = tr.rowWins, tr.rowWins
-		}
-		ts.emb = &tr.mode
-		defer func() { ts.emb = nil }()
-		_, err := ts.prefillSpans(0, model.Span{Embd: tr.rows})
-		return err
-	}
-	if w := ts.c.RopeW(); len(ts.bcs) < n*w {
-		ts.bcs = make([]float32, n*w)
-	}
-	ts.cpu.tabsFresh = false
-	copy(tr.blk, tr.rows)
-	for li := ts.lo; li < ts.hi; li++ {
-		l, err := ts.pageIn(li)
-		if err != nil {
-			return err
-		}
-		// Each run of a windowed block is a window its rows attend inside.
-		windowed := wins != nil && !ts.m.Tower.Full[li-ts.lo]
-		if windowed {
-			ts.bidir = append(ts.bidir[:0], wins...)
-		} else {
-			ts.bidir = append(ts.bidir[:0], nn.KeyRun{Lo: 0, Hi: n})
-		}
-		ts.cpu.runWindows = windowed
-		why, err := ts.cpuRows(li, l, tr.blk, nil, nil, tr.seq, tr.pos, nil)
-		if err != nil {
-			return err
-		}
-		if why != nn.DeclineServes {
-			return fmt.Errorf("block %d: %v", li-ts.m.TowerBase, why)
-		}
-		for j, blk := range ts.m.Tower.TapBlocks {
-			if ts.lo+blk == li {
-				copy(tr.tapRows[j], tr.blk)
-			}
+	ts.Reset()
+	if ts.m.Tower.Table != nil && ts.devCount() > 0 {
+		gc, ok := ts.ld.(nn.GridCellsDevice)
+		if !ok || !gc.SetGridCells(tr.posTab, gw) {
+			return fmt.Errorf("the tower's blocks turn by the picture's grid on a device that holds no grid table")
 		}
 	}
-	return nil
+	tr.mode = embedMode{bidir: true, rows: true, total: n, out: tr.blk, wins: tr.mode.wins}
+	// The rows each tapped block leaves, which a run ending at that block
+	// writes back.
+	tr.modeTaps = tr.modeTaps[:0]
+	for j, blk := range ts.m.Tower.TapBlocks {
+		tr.modeTaps = append(tr.modeTaps, embedTap{li: ts.lo + blk, rows: tr.tapRows[j]})
+	}
+	tr.mode.taps = tr.modeTaps
+	if wins != nil {
+		// A windowed block reads each row's window (graph.Attrs.RowWindows),
+		// handed with the call (embedTellOn), on whichever device holds it.
+		tr.rowWins = tr.rowWins[:0]
+		for _, w := range wins {
+			for range w.Hi - w.Lo {
+				tr.rowWins = append(tr.rowWins, w)
+			}
+		}
+		tr.mode.rowWins = tr.rowWins
+	}
+	ts.emb = &tr.mode
+	defer func() { ts.emb = nil }()
+	// The picture's rows as the prompt's given rows, from the run's own
+	// scratch: a warm encode allocates nothing for them.
+	tr.tok = slices.Grow(tr.tok[:0], n)[:n]
+	for i := range tr.tok {
+		tr.tok[i] = -1
+	}
+	tr.given[0] = givenRun{rows: tr.rows[:n*ts.c.NEmbd], n: n}
+	_, err := ts.prefillSrc(0, rowSrc{tok: tr.tok, given: tr.given[:]})
+	return err
 }
 
 // encodePictures is spans with every picture span's rows in place: encoded

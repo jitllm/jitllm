@@ -357,12 +357,14 @@ func TestComposedCPURowsDoNotAllocate(t *testing.T) {
 			defer m.Close()
 			ids := m.Vocab.Encode(strings.Repeat("The river rose every spring until the bridges were islands. ", 20), true)
 			blocks := func(s *Instance, seq, pos []int) {
-				w := s.c.ResidW()
-				for li := range m.Cfg.NLayer {
-					why, err := s.cpuRows(li, s.layer(li), s.bx[:len(pos)*w], s.bcs, s.bcsSWA, seq, pos, nil)
-					if err != nil || why != nn.DeclineServes {
-						t.Fatalf("block %d: %v (%s)", li, err, why)
-					}
+				n, r := len(pos), s.routeAt(0)
+				if err := s.openRows(r, seq, pos, nil); err != nil {
+					t.Fatal(err)
+				}
+				err := s.rowsOn(r, 0, m.Cfg.NLayer, pos, s.flatSlots(seq, pos), s.bx[:n*s.c.ResidW()], s.bcs[:n*s.c.RopeW()],
+					s.bswaTable(n, s.c.LocalNRot()), false, nil, 0)
+				if err != nil {
+					t.Fatalf("blocks: %v", err)
 				}
 			}
 			const chunk = 33
