@@ -174,17 +174,13 @@ type layer struct {
 	// that it rotates nothing. Read on the non-causal path only.
 	nffn    int
 	ungated bool
-	act     graph.ActKind
 	noRope  bool
 	// swa says the block attends at the sliding layers' geometry, so it runs
 	// in that geometry's scratch set (gemma4.go). outScale is its output
 	// scalar, one float, nil where it has none.
-	geo      geoKey
-	vFromK   bool
-	outScale backend.Buf
-	// xielu is an Apertus block's four activation numbers (kernels.XIELU's
-	// pP), nil elsewhere.
-	xielu         backend.Buf
+	geo           geoKey
+	vFromK        bool
+	outScale      backend.Buf
 	mvq, mvk, mvv mv
 	// shadow is the shadow arm's state for the block (Config.ComposedShadow):
 	// the worst drift of the form from the tier's kernels and the steps
@@ -1851,7 +1847,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	l := &layer{nonCausal: p.NonCausal, windowed: p.Windowed, geo: geoOf(p), vFromK: p.VFromK, graph: p.Graph}
 	l.win, l.chunked = attendWindow(p.Graph)
 	if p.NonCausal {
-		l.nffn, l.ungated, l.act = p.NFFN, ungatedFFN(p), p.Act
+		l.nffn, l.ungated = p.NFFN, ungatedFFN(p)
 		l.noRope = p.NRot == 0 || p.NoPosEnc
 	}
 	mkw := func(slot int, x nn.Weight) *resident {
@@ -2453,15 +2449,6 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	if p.OutScale != 0 {
 		up(&l.outScale, []float32{p.OutScale})
 		l.auxBytes += 4
-	}
-	// Apertus's xIELU numbers, four floats, the block's own.
-	if p.Act == graph.ActXIELU {
-		if len(w.XIELU) != 4 {
-			g.LastErr = fmt.Sprintf("block %d: xIELU wants 4 numbers, the block carries %d", li, len(w.XIELU))
-			return false
-		}
-		up(&l.xielu, w.XIELU)
-		l.auxBytes += 16
 	}
 	// The shadow arm's state, the worst drift and the steps compared, both
 	// zero: written here, since a device buffer is not.
@@ -5108,7 +5095,6 @@ func (l *layer) auxBufs() []backend.Buf {
 		l.ssmTaps.qs, // a linear block's convolution
 		l.router,
 		l.outScale, // Gemma 4's output scalar
-		l.xielu,    // Apertus's activation numbers
 		l.shadow,   // the shadow arm's state
 		l.pleOff,   // Gemma 4's per-layer embedding
 	), append(l.q4e.bufs(), l.conv.bufs()...)...) // Qwen3.8-Flash-Next's convolution, a convolutional block's
@@ -6086,8 +6072,8 @@ func nonCausalConflict(bs *blockScratch, p *nn.LayerPlan) string {
 	case !ungatedFFN(p) && ungatedFFN(a):
 		// The set of an ungated MLP has no gate buffer; a block's own width,
 		// gating and activation are otherwise its own (layer.nffn).
-		return fmt.Sprintf("a non-causal block's MLP (%s %s, %d wide) on a set built for (%s %s, %d wide)",
-			gated[ungatedFFN(p)], p.Act, p.NFFN, gated[ungatedFFN(a)], a.Act, a.NFFN)
+		return fmt.Sprintf("a non-causal block's MLP (%s, %d wide) on a set built for (%s, %d wide)",
+			gated[ungatedFFN(p)], p.NFFN, gated[ungatedFFN(a)], a.NFFN)
 	case p.LayerNorm != a.LayerNorm:
 		return fmt.Sprintf("a non-causal block with LayerNorm %v on a set built with %v", p.LayerNorm, a.LayerNorm)
 	case p.NRot > 0 && !p.NoPosEnc && (a.NRot == 0 || a.NoPosEnc):

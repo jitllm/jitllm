@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"fmt"
 	"slices"
 
 	"github.com/jitllm/jitllm/model"
@@ -94,12 +93,10 @@ func statedViolations(m *model.Model) []c6Violation {
 	return vs
 }
 
-// actSwap runs every block under activation k: in the model's config, which
-// main's kernels read, and stated by the converter, as a container of that
-// activation states it, for the front end and the composer.
-func actSwap(k graph.ActKind) func(*model.Model) func() {
+// actSwap runs every block under the activation the converter states for
+// flag k (0: the gated SiLU), as a container of that activation states it.
+func actSwap(k jlm.Flags) func(*model.Model) func() {
 	return func(m *model.Model) func() {
-		undoC := cfgMut(m, func(c *model.Config) { c.Act = k })
 		c := m.Container.Config()
 		was, wasL := c.Acts, c.ActLayers
 		s := *c
@@ -107,15 +104,7 @@ func actSwap(k graph.ActKind) func(*model.Model) func() {
 		s.Flags &^= jlm.FlagGELU | jlm.FlagReLU2 | jlm.FlagSwiGLUOAI
 		s.Flags2 &^= jlm.Flag2SwiGLUClamp
 		s.SituBeta, s.SituLinearBeta, s.SparseStd = 0, 0, 0
-		switch k {
-		case graph.ActGELU:
-			s.Flags |= jlm.FlagGELU
-		case graph.ActReLU2:
-			s.Flags |= jlm.FlagReLU2
-		case graph.ActSiLU:
-		default:
-			panic(fmt.Sprintf("actSwap: no statement for %v", k))
-		}
+		s.Flags |= k
 		gated := make([]bool, c.NLayer)
 		for li := range gated {
 			// As the converter reads it: the dense FFN's roles or the
@@ -131,7 +120,6 @@ func actSwap(k graph.ActKind) func(*model.Model) func() {
 		return func() {
 			c.Acts, c.ActLayers = was, wasL
 			undo()
-			undoC()
 		}
 	}
 }

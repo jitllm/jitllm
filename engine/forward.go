@@ -916,7 +916,7 @@ func (s *Instance) SetDeviceLayers(d nn.LayerDevice, max int) error {
 		Model: s.m.Id, File: s.m.Container, FrameBudget: s.pageQuota.Load(),
 		NEmbd: c.NEmbd, NHead: c.NHead, NKVHead: c.NKVHead, HeadDim: c.HeadDim,
 		NRot: c.NRot, NFFN: c.NFFN, MaxSeq: s.maxSeq, Vocab: c.NVocab, FinalSoftcap: c.FinalSoftcap,
-		RMSEps: c.RMSEps, RopeBase: c.RopeBase, Act: c.Act, RopeNeox: c.RopeNeox,
+		RMSEps: c.RMSEps, RopeBase: c.RopeBase, RopeNeox: c.RopeNeox,
 		NoPosEnc: c.NoPosEnc,
 		QKNorm:   c.QKNorm, QKNormWide: c.QKNormWide, QKNormPost: c.QKNormPost, NoExpertNorm: c.NoExpertNorm,
 		// The tier picks the local or global rotary table per block from
@@ -1475,7 +1475,6 @@ func (s *Instance) layerWeightsAt(li int, l *model.Layer, banks *[3]nn.Weight) n
 	}
 	// A LayerNorm always hands the device a bias -- zeros where the file has
 	// none (command-r) -- because the apply kernel takes one.
-	w.XIELU = l.Xielu
 	if s.c.LayerNorm {
 		w.AttnNormB = s.m.LnBias(l.AttnNormB)
 		if l.FfnNorm != nil {
@@ -2744,7 +2743,6 @@ func (s *Instance) PrewarmGPU(n int) <-chan struct{} {
 				QNorm: qn, KNorm: kn,
 				Wq: model.Wt(l.Wq), Wk: model.Wt(l.Wk), Wv: model.Wt(l.Wv), Wo: model.Wt(l.Wo),
 				Gate: model.Wt(l.Gate), Up: model.Wt(l.Up), Down: model.Wt(l.Down),
-				XIELU: l.Xielu,
 			}
 			if c.MoE() {
 				w.Router = model.Wt(l.Router)

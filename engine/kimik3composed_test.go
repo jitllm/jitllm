@@ -194,7 +194,7 @@ func k3ComposedViolations(t *testing.T) []c6Violation {
 		{"the MLA latent norms at rms_norm_eps (llama.cpp's)", func(m *model.Model) func() {
 			return cfgMut(m, func(c *model.Config) { c.LatentNormEps = c.RMSEps })
 		}},
-		{"plain SwiGLU", actSwap(graph.ActSiLU)},
+		{"plain SwiGLU", actSwap(0)},
 	}
 }
 

@@ -29,9 +29,9 @@ func denseFixtures() []struct {
 		{"synth-apertus", func(m *model.Model) bool {
 			c, l, l1 := m.Cfg, &m.Layers[0], &m.Layers[1]
 			return c.Arch == "apertus" && !c.LayerNorm && c.RopeNeox && c.QKNorm && !c.QKNormWide &&
-				len(l.QNorm) == c.HeadDim && c.Act == graph.ActXIELU && l.Gate.E == nil && l.Vector(jlm.RoleFFNUpBias) == nil &&
-				len(l.Xielu) == 4 && len(l1.Xielu) == 4 && l.Xielu[0] != l1.Xielu[0] && l.Xielu[2] != l1.Xielu[2] &&
-				l.Xielu[3] < -0.01 && len(m.Rope.Freqs) == c.NRot/2 && c.NKVHead < c.NHead && !c.TiedEmbd
+				len(l.QNorm) == c.HeadDim && m.Container.Config().Arch == jlm.ArchApertus && l.Gate.E == nil && l.Vector(jlm.RoleFFNUpBias) == nil &&
+				len(l.Vector(jlm.RoleXIELU)) == 4 && len(l1.Vector(jlm.RoleXIELU)) == 4 && l.Vector(jlm.RoleXIELU)[0] != l1.Vector(jlm.RoleXIELU)[0] &&
+				l.Vector(jlm.RoleXIELU)[2] != l1.Vector(jlm.RoleXIELU)[2] && l.Vector(jlm.RoleXIELU)[3] < -0.01 && len(m.Rope.Freqs) == c.NRot/2 && c.NKVHead < c.NHead && !c.TiedEmbd
 		}},
 		{"synth-smollm3", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
@@ -41,7 +41,7 @@ func denseFixtures() []struct {
 		}},
 		{"synth-arcee", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
-			return c.Arch == "arcee" && !c.LayerNorm && c.Act == graph.ActReLU2 && l.Gate.E == nil &&
+			return c.Arch == "arcee" && !c.LayerNorm && m.Container.Config().Flags.Has(jlm.FlagReLU2) && l.Gate.E == nil &&
 				l.FfnNorm != nil && l.Vector(jlm.RoleFFNUpBias) == nil && c.NKVHead < c.NHead && !c.TiedEmbd
 		}},
 		{"synth-seedoss", func(m *model.Model) bool {
@@ -145,8 +145,8 @@ func denseViolations() map[string][]c6Violation {
 			{"NoPE every second layer", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.SWAPeriod = 2 }) }},
 		},
 		"synth-arcee": {
-			{"SiLU for relu2", actSwap(graph.ActSiLU)},
-			{"GELU for relu2", actSwap(graph.ActGELU)},
+			{"SiLU for relu2", actSwap(0)},
+			{"GELU for relu2", actSwap(jlm.FlagGELU)},
 		},
 		"synth-seedoss": {
 			{"no q/k/v biases", noQKVBias},
@@ -189,8 +189,10 @@ func apertusViolations() []c6Violation {
 			p[0] = float32(math.Log(math.Expm1(float64(p[0]))))
 		})},
 		{"every block running block 0's xIELU", func(m *model.Model) func() {
-			p0 := slices.Clone(m.Layers[0].Xielu)
-			return eachLayer(m, func(l *model.Layer) { l.Xielu = p0 })
+			p0 := slices.Clone(m.Layers[0].Vector(jlm.RoleXIELU))
+			return eachLayer(m, func(l *model.Layer) {
+				setVec(l, jlm.RoleXIELU, func([]float32) []float32 { return p0 })
+			})
 		}},
 		{"no llama 3 rotary factors", noRopeFreqs},
 		{"NORM rotary for NEOX", neoxOff},
@@ -214,9 +216,12 @@ func xieluMut(f func(p []float32, li int)) func(m *model.Model) func() {
 	return func(m *model.Model) func() {
 		li := 0
 		return eachLayer(m, func(l *model.Layer) {
-			p := slices.Clone(l.Xielu)
-			f(p, li)
-			l.Xielu, li = p, li+1
+			setVec(l, jlm.RoleXIELU, func(v []float32) []float32 {
+				p := slices.Clone(v)
+				f(p, li)
+				return p
+			})
+			li++
 		})
 	}
 }
@@ -275,7 +280,7 @@ func denseDevViolations() map[string][]c6Violation {
 			{"rotary on the NoPE layer", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.NoPEGlobal = false }) }},
 		},
 		"synth-arcee": {
-			{"SiLU for relu2", actSwap(graph.ActSiLU)},
+			{"SiLU for relu2", actSwap(0)},
 		},
 		"synth-seedoss": {
 			{"no q/k/v biases", noQKVBias},

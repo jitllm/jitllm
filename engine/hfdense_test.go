@@ -6,7 +6,6 @@ import (
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/graph"
 )
 
 // hfDenseSelected is what each dense llama-family safetensors fixture's
@@ -25,7 +24,7 @@ func hfDenseSelected() map[string]func(m *model.Model) bool {
 		},
 		"synth-hf-arcee": func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
-			return c.Arch == "arcee" && c.Act == graph.ActReLU2 && l.Gate.E == nil && l.FfnNorm != nil && !c.TiedEmbd
+			return c.Arch == "arcee" && m.Container.Config().Flags.Has(jlm.FlagReLU2) && l.Gate.E == nil && l.FfnNorm != nil && !c.TiedEmbd
 		},
 		"synth-hf-seedoss": func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]

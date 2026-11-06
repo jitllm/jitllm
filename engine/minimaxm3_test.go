@@ -36,7 +36,7 @@ func m3Fixtures() []struct {
 				c.HeadDim == 16 && c.NRot == 8 && c.RopeNeox && c.QKNorm && !c.QKNormWide &&
 				c.IdxHeads == 2 && c.IdxHeadDim == 16 && c.IdxTopK == 2 && c.IdxBlock == 4 &&
 				c.IdxLocal == 1 && c.NDenseLead == 1 && c.ExpertSigmoid && c.ExpertScale == 2 &&
-				c.NFFNShExp == 32 && c.Act == graph.ActSwiGLUOAI && c.KVRowAt(0) == 32 && c.KVRowAt(1) == 48
+				c.NFFNShExp == 32 && m.Container.Config().Flags.Has(jlm.FlagSwiGLUOAI) && c.KVRowAt(0) == 32 && c.KVRowAt(1) == 48
 			for i := range m.Layers {
 				l := &m.Layers[i]
 				if c.MSAAt(i) {
@@ -72,7 +72,7 @@ func m3Violations() []c6Violation {
 				setVec(l, jlm.RoleIdxQNorm, onesLike)
 			})
 		}},
-		{"plain SwiGLU", actSwap(graph.ActSiLU)},
+		{"plain SwiGLU", actSwap(0)},
 	}
 }
 

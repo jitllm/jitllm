@@ -15,7 +15,6 @@ import (
 	"github.com/jitllm/jitllm/convert"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
-	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
@@ -115,7 +114,7 @@ func openBitNet(t *testing.T, name, golden string, typ quant.Type) (*model.Model
 // as the widest row.
 func bitnetSelected(m *model.Model, typ quant.Type) bool {
 	c := m.Cfg
-	if c.Arch != "bitnet" || !c.TokenAct || c.Act != graph.ActReLU2 || !c.RopeNeox || !c.TiedEmbd {
+	if c.Arch != "bitnet" || !c.TokenAct || !m.Container.Config().Flags.Has(jlm.FlagReLU2) || !c.RopeNeox || !c.TiedEmbd {
 		return false
 	}
 	for i := range m.Layers {
@@ -193,7 +192,7 @@ func bitnetViolations() []c6Violation {
 		{"no FFN inner norm", func(m *model.Model) func() {
 			return dropVecs(m, jlm.RoleFFNSubNorm)
 		}},
-		{"SiLU for relu2", actSwap(graph.ActSiLU)},
+		{"SiLU for relu2", actSwap(0)},
 		{"NORM rotary", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.RopeNeox = false }) }},
 		{"activations per 32, not per token", func(m *model.Model) func() {
 			// The window a projection's activations are quantized over is

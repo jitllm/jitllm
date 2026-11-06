@@ -20,7 +20,7 @@ func visionPlan() *nn.LayerPlan {
 	p := &nn.LayerPlan{
 		NonCausal: true, LayerNorm: true, UngatedFFN: true,
 		NEmbd: 256, NHead: 4, NKVHead: 4, HeadDim: 64, NRot: 0, NFFN: 1024,
-		MaxSeq: 64, Act: graph.ActGELU, RMSEps: 1e-5,
+		MaxSeq: 64, RMSEps: 1e-5,
 	}
 	p.Graph = visionBlockGraph(p)
 	return p

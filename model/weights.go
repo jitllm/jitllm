@@ -307,8 +307,6 @@ func (l *Layer) NamedVector(r jlm.Role) ([]float32, bool) {
 		return l.KNorm, true
 	case jlm.RoleVClamp:
 		return l.Clamp, true
-	case jlm.RoleXIELU:
-		return l.Xielu, true
 	case jlm.RoleLayerOutScale:
 		return l.OutScaleRow, true
 	}

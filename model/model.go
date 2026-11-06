@@ -24,7 +24,6 @@ import (
 	"github.com/jitllm/jitllm/sched"
 
 	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/nn"
 	"github.com/jitllm/jitllm/tok"
 )
@@ -74,11 +73,8 @@ type Config struct {
 
 	// Architecture quirks.
 	EmbdScale float64 // gemma multiplies the embedding by sqrt(n_embd)
-	// Act is the feed-forward's gated activation: SiLU (llama), GELU-tanh
-	// (gemma) or gpt-oss's clamped swiglu-oai.
-	Act      graph.ActKind
-	TiedEmbd bool // no output.weight; the lm_head IS token_embd
-	QKNorm   bool // qwen3 RMSNorms each head of q and k before RoPE
+	TiedEmbd  bool    // no output.weight; the lm_head IS token_embd
+	QKNorm    bool    // qwen3 RMSNorms each head of q and k before RoPE
 	// QKNormWide makes that ONE RMSNorm over the whole q (and k) projection
 	// instead of one per head. olmoe's attn_q_norm is n_embd wide and is applied
 	// before the reshape into heads; qwen3's is head_dim wide and is applied
@@ -879,38 +875,7 @@ func configFrom(c *jlm.Config) (*Config, error) {
 		mscale := float64(c.YarnLogMul)*math.Log(float64(c.YarnFactor)) + 1
 		out.AttnScale *= mscale * mscale
 	}
-	nact := 0
-	for _, fl := range []jlm.Flags{jlm.FlagGELU, jlm.FlagSwiGLUOAI, jlm.FlagReLU2} {
-		if c.Flags.Has(fl) {
-			nact++
-		}
-	}
-	switch {
-	case nact > 1:
-		return nil, fmt.Errorf("model: %s: the container claims two activations", out.Arch)
-	case c.Flags.Has(jlm.FlagReLU2):
-		out.Act = graph.ActReLU2
-	case c.Flags.Has(jlm.FlagGELU):
-		out.Act = graph.ActGELU
-	case c.Flags.Has(jlm.FlagSwiGLUOAI):
-		out.Act = graph.ActSwiGLUOAI
-	}
-	// BitNet quantizes every projection input per token (jlm.ArchBitNet).
 	out.TokenAct = c.Arch == jlm.ArchBitNet
-	// Apertus's activation is its arch's: a file states it only through the
-	// per-block numbers (jlm.RoleXIELU).
-	if c.Arch == jlm.ArchApertus {
-		if nact > 0 {
-			return nil, fmt.Errorf("model: %s: the container claims a second activation beside xIELU", out.Arch)
-		}
-		out.Act = graph.ActXIELU
-	}
-	if c.Flags2.Has(jlm.Flag2SwiGLUClamp) {
-		if nact != 0 {
-			return nil, fmt.Errorf("model: %s: the container claims two activations", out.Arch)
-		}
-		out.Act = graph.ActSwiGLUClamp
-	}
 	if out.HCMult != 0 && out.HCLowRank == 0 || len(c.CompKinds) != 0 || c.NHashLayers != 0 {
 		return nil, fmt.Errorf("model: %s carries hyper-connections mixed by Sinkhorn rounds, compressed "+
 			"attention or experts routed by token id, which have no composed form stated from the container", out.Arch)
@@ -918,7 +883,7 @@ func configFrom(c *jlm.Config) (*Config, error) {
 	if err := q4eConfig(out, c); err != nil {
 		return nil, err
 	}
-	if err := k3Config(out, c, nact); err != nil {
+	if err := k3Config(out, c); err != nil {
 		return nil, err
 	}
 	// The after-rotary norm is FlagQKNorm's per-head norm moved (see
@@ -1024,9 +989,6 @@ type Layer struct {
 	// container stores it, the vector a composed block binds.
 	OutScale    float32
 	OutScaleRow []float32
-	// xielu is an Apertus block's activation numbers (jlm.RoleXIELU: alpha_p,
-	// alpha_n, beta, eps), read where Config.Act is ActXIELU; nil elsewhere.
-	Xielu []float32
 	// Gemma 4's per-layer embedding (Config.PLEDim): the gate from the
 	// residual and the projection back; its norm is in vecs.
 	PleGate, PleProj Tensor
@@ -2914,10 +2876,6 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 			// Experts with no gate bank are ungated: down(act(up(h))), the
 			// activation an ungated kind (Nemotron 3's squared ReLU).
 			if !l.LegacyExperts && !c.Has(jlm.RoleExpGateBank, bi, -1) && c.Has(jlm.RoleExpUpBank, bi, -1) {
-				if !cfg.Act.Ungated() {
-					return nil, fmt.Errorf("model: block %d's experts have no gate, and %v is a gated activation",
-						bi, cfg.Act)
-				}
 				l.UngatedExp = true
 				specs = slices.Delete(specs, 1, 2)
 			}
@@ -2939,10 +2897,6 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 					{jlm.RoleShExpDown, &l.ShDown},
 				} {
 					if spec.role == jlm.RoleShExpGate && !c.Has(jlm.RoleShExpGate, bi, -1) {
-						if !cfg.Act.Ungated() {
-							return nil, fmt.Errorf("model: block %d's shared expert has no gate, and %v is a gated activation",
-								bi, cfg.Act)
-						}
 						continue
 					}
 					if err = getTo(spec.dst, spec.role, bi, -1); err != nil {
@@ -3017,20 +2971,6 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 		// experts' own (RoleExpUpBias). Refused rather than guessed.
 		if (l.Vector(jlm.RoleFFNUpBias) != nil || l.Vector(jlm.RoleFFNDownBias) != nil) && (l.Gate.E != nil || cfg.MoEAt(i)) {
 			return nil, fmt.Errorf("model: block %d carries FFN biases on a gated or mixture FFN", bi)
-		}
-		// Apertus's xIELU: four numbers on every block, and only an ungated
-		// dense FFN runs it. A block without them, or a model that is not
-		// Apertus carrying them, is a file this engine would run wrong.
-		if cfg.Act == graph.ActXIELU {
-			if l.Xielu, err = vec(jlm.RoleXIELU, bi); err != nil {
-				return nil, err
-			}
-			if len(l.Xielu) != 4 || l.Gate.E != nil || cfg.MoEAt(i) {
-				return nil, fmt.Errorf("model: block %d: xIELU wants four numbers on an ungated dense FFN "+
-					"(%d numbers, gate %v, mixture %v)", bi, len(l.Xielu), l.Gate.E != nil, cfg.MoEAt(i))
-			}
-		} else if c.Has(jlm.RoleXIELU, bi, -1) {
-			return nil, fmt.Errorf("model: block %d carries xIELU numbers and %s runs %v", bi, cfg.Arch, cfg.Act)
 		}
 		// gemma2/gemma3's post-norms, when the file carries them.
 		if _, err = optVec(jlm.RolePostAttnNorm, bi); err != nil {
