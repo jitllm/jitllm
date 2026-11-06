@@ -639,7 +639,7 @@ func stepTogether(runs []Run, rows int, ss nn.SessionStepper) ([][]float32, erro
 		if err := s0.collapseStreams(x, rows); err != nil {
 			return nil, err
 		}
-		if why := s0.cpuHeadRows(s0.bx, logits, nil, nlogit); why != nn.DeclineServes {
+		if why := s0.headRows(s0.bx, logits, nil, nlogit); why != nn.DeclineServes {
 			return nil, s0.headDeclined(why)
 		}
 		headed = true

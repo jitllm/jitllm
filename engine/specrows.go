@@ -330,7 +330,7 @@ func (s *Instance) finishRows(headDone bool, lastBase, total int) error {
 	if !c.ResidStreams() { // its hidden state is the residual, taken in collapseStreams
 		hidden = r.hidden[:cnt*c.NEmbd]
 	}
-	if why := s.cpuHeadRows(s.bx[off*c.NEmbd:], r.logits, hidden, cnt); why != nn.DeclineServes {
+	if why := s.headRows(s.bx[off*c.NEmbd:], r.logits, hidden, cnt); why != nn.DeclineServes {
 		return s.headDeclined(why)
 	}
 	return s.kvCheck()
@@ -459,7 +459,7 @@ func (s *Instance) rowsHead(rd nn.RowsDevice, pos, slot []int, n int, logits []f
 		}
 	}
 	s.growBatch(n)
-	if why := s.cpuHeadRows(s.bx, logits, nil, nlogit); why != nn.DeclineServes {
+	if why := s.headRows(s.bx, logits, nil, nlogit); why != nn.DeclineServes {
 		return s.headDeclined(why)
 	}
 	return nil

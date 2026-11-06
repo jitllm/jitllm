@@ -411,4 +411,10 @@ func setFault(s *Instance, f cpuFault) {
 	if st, ok := s.streams.(*cpudev.Streams); ok {
 		st.Fault = f == cpuFaultStreams
 	}
+	if h, ok := s.heads.(*cpudev.Head); ok {
+		h.Wrong = nil
+		if f == cpuFaultHead {
+			h.Wrong = s.h
+		}
+	}
 }

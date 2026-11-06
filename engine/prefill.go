@@ -677,9 +677,9 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 	}
 	why := nn.DeclineServes
 	if len(s.HostPick) > 0 {
-		why = s.cpuPick(s.x)
+		why = s.pickLabels(s.x)
 	} else {
-		why = s.cpuHead(s.x, s.logits, nil)
+		why = s.headRow(s.x, s.logits, nil)
 	}
 	if why != nn.DeclineServes {
 		return nil, cpuHeadRefused(why)

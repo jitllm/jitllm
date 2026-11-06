@@ -2,10 +2,8 @@ package engine
 
 import (
 	"fmt"
-	"unsafe"
 
 	"github.com/jitllm/jitllm/model"
-	"github.com/jitllm/jitllm/nn"
 )
 
 // TopLogprob is one candidate token and its log-probability.
@@ -36,19 +34,9 @@ func (s *Instance) MaskRow(dst, logits, mask []float32) error {
 	if len(dst) != n || len(logits) != n || len(mask) != n {
 		return fmt.Errorf("model: a mask over %d logits into %d by %d, and the vocabulary is %d", len(logits), len(dst), len(mask), n)
 	}
-	if !s.cpuHeadOn() {
+	if s.heads == nil || !s.heads.Mask(dst, logits, mask) {
 		return s.sampleDeclined("the mask")
 	}
-	h := &s.cpu.head
-	f, why := h.mask.formOf()
-	if why != nn.DeclineServes {
-		s.cpu.steps.Decline(nn.PartSample, why)
-		return s.sampleDeclined("the mask")
-	}
-	b := &s.cpu.bound
-	*b = cpuBound{own: s.cpu.dev.Own(f), n: 1}
-	b.io[0], b.io[1], b.io[2] = unsafe.Pointer(&logits[0]), unsafe.Pointer(&mask[0]), unsafe.Pointer(&dst[0])
-	s.cpuRunForm(b, f)
 	return nil
 }
 
@@ -62,30 +50,23 @@ func (s *Instance) Logprobs(l *Logprobs, logits []float32, chosen int32) (float3
 	if n != s.c.NVocab {
 		return 0, fmt.Errorf("model: logprobs over %d logits, and the vocabulary is %d", n, s.c.NVocab)
 	}
-	if !s.cpuHeadOn() {
+	if s.heads == nil {
 		return 0, s.sampleDeclined("the logprobs")
 	}
-	h := &s.cpu.head
-	f, why := h.logprobs.formOf()
-	if why != nn.DeclineServes {
-		s.cpu.steps.Decline(nn.PartSample, why)
+	row, ids, ok := s.heads.Logprobs(logits)
+	if !ok {
 		return 0, s.sampleDeclined("the logprobs")
 	}
-	b := &s.cpu.bound
-	*b = cpuBound{own: s.cpu.dev.Own(f), n: 1}
-	b.io[0], b.io[1], b.io[2] = unsafe.Pointer(&logits[0]), unsafe.Pointer(&h.lpRow[0]), unsafe.Pointer(&h.lpIDs[0])
-	s.cpuRunForm(b, f)
-	s.cpu.steps.Serve(nn.PartSample)
-	k := min(max(l.N, 0), len(h.lpIDs))
+	k := min(max(l.N, 0), len(ids))
 	if cap(l.Top) < model.MaxTopLogprobs {
 		l.Top = make([]TopLogprob, 0, model.MaxTopLogprobs)
 	}
 	l.Top = l.Top[:0]
-	for _, id := range h.lpIDs[:k] {
-		l.Top = append(l.Top, TopLogprob{ID: int32(id), Logprob: h.lpRow[id]})
+	for _, id := range ids[:k] {
+		l.Top = append(l.Top, TopLogprob{ID: int32(id), Logprob: row[id]})
 	}
 	if chosen < 0 || int(chosen) >= n {
 		return 0, nil
 	}
-	return h.lpRow[chosen], nil
+	return row[chosen], nil
 }

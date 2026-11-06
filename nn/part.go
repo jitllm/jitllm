@@ -222,6 +222,32 @@ type Ledger interface {
 	AccountOn(dev string) (Account, bool)
 }
 
+// DrawArgs is a draw's sampler: its top-k (0 for none), 1/T, top-p and
+// min-p, and its repeat penalty with the window it counts (nil where the
+// penalty is 1).
+type DrawArgs struct {
+	TopK                int
+	InvTemp, TopP, MinP float32
+	Penalty             float32
+	Window              []float32
+}
+
+// HeadDevice is a device running the head and the samplers: the head over a
+// row (Head) or a call's rows (HeadRows), the output norm alone, a label
+// pick, the greedy token, a draw at a uniform, a draw's distribution, a
+// constrained draw's mask and the log-softmax with its most likely tokens.
+type HeadDevice interface {
+	Head(x, logits, hidden []float32) Decline
+	HeadRows(x, logits, hidden []float32, n int) Decline
+	OutNorm(dst, x []float32, n int) Decline
+	Pick(x []float32, ids []int32, vals []float32) Decline
+	Greedy(logits []float32) (int32, bool)
+	Draw(logits []float32, a DrawArgs, u float32) (int32, bool)
+	Dist(logits []float32, a DrawArgs, pall []float32) (dense bool, ids []uint32, vals []float32, ok bool)
+	Mask(dst, logits, mask []float32) bool
+	Logprobs(logits []float32) (row []float32, ids []uint32, ok bool)
+}
+
 // EntryDevice is a device writing a prediction block's entry: `rows` rows
 // of z, the rows the block reads, from the tokens toks and the trunk's
 // hidden rows x, reporting why it did not serve them.

@@ -165,7 +165,7 @@ func (s *Instance) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([
 	// The CPU's composed head runs the wanted rows and applies every stage
 	// of the head's graph.
 	if !headOnDev && nlogit > 0 {
-		if why := s.cpuHeadRows(s.bx, s.blogits, nil, nlogit); why != nn.DeclineServes {
+		if why := s.headRows(s.bx, s.blogits, nil, nlogit); why != nn.DeclineServes {
 			return nil, cpuHeadRefused(why)
 		}
 	}
