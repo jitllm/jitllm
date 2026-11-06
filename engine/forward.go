@@ -132,6 +132,8 @@ type Instance struct {
 	// is paged, and a page-in rebinds the model's copy.
 	outNorm []float32
 	outW    *model.Tensor
+	// ws is where this instance's forms read their weights.
+	ws weightSource
 	// lo and hi are the blocks this instance runs, [lo, hi): the trunk, [0,
 	// NLayer), for every session a caller makes, and a multi-token-prediction
 	// block for the draft instance speculation drives (newDraftState). Block
@@ -621,6 +623,7 @@ func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOp
 			}
 		}
 	}
+	s.ws = weightSource{m: m, dense: &s.dense, fr: fr, outW: s.outW, outNorm: s.outNorm}
 	s.kvl = kvLayout{maxSeq: maxSeq, nKV: c.NKVHead,
 		headDim: c.HeadDim}
 	// MLA caches one row per position for the whole layer: the compressed

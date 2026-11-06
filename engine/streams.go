@@ -14,8 +14,8 @@ import (
 // from the input rows and their collapse before the head.
 
 // streamsPart is the tensors graph g binds past the head's own and the
-// embedding, by role, as the CPU binds them with no block (cpuRoleWeight,
-// cpuRoleVector): a device's for the streams' expansion in the input rows
+// embedding, by role, as the CPU binds them with no block (weightSource.matrix,
+// weightSource.vector): a device's for the streams' expansion in the input rows
 // and their collapse before the head. nil where g is, or binds a tensor the
 // model does not hold.
 func (s *Instance) streamsPart(g *graph.Graph) *nn.RowsPart {
@@ -30,14 +30,14 @@ func (s *Instance) streamsPart(g *graph.Graph) *nn.RowsPart {
 				continue
 			}
 			if o.Kind != graph.OpEmbed && (b.Rows == 0 || b.Role.Expanded()) {
-				v := s.cpuRoleVector(-1, nil, b.Role)
+				v := s.ws.vector(-1, nil, b.Role)
 				if len(v) == 0 {
 					return nil
 				}
 				p.Vectors[b.Role] = v
 				continue
 			}
-			t := s.cpuRoleWeight(-1, nil, b.Role)
+			t := s.ws.matrix(-1, nil, b.Role)
 			if t == nil || t.E == nil {
 				return nil
 			}
