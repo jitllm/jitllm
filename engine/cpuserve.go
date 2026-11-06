@@ -91,7 +91,7 @@ func (s *Instance) placeLanes() {
 	planes := [2][]float32{s.tablePlanes(0), s.tablePlanes(1)}
 	s.lease = blockLease{m: s.m, fr: s.fr, mu: &s.bind, hold: &s.expHold, res: s.res, hot: s.hot, layers: s.layers,
 		lo: s.lo}
-	s.exec.x.Place(n, &s.lease, planes, s.c.NExpert, s.prof)
+	s.places[routeLanes].(nn.LanePlacer).PlaceLanes(n, &s.lease, planes, s.c.NExpert, s.prof)
 	s.bindLanes(s.Session)
 	// Each block is prepared by its route's device where that device runs it
 	// from the frames; one with a copy of its own took it at its offer.
@@ -233,7 +233,7 @@ func (s *Instance) blockWhy(li int) nn.Decline {
 	case len(g.Out) != c.Streams() || len(g.In) > len(g.Out)+1 || len(g.In) > len(g.Out) && c.SideWidth() == 0:
 		return nn.DeclineFeeds
 	case c.MoEAt(li) && (s.m.Container == nil || l.LegacyExperts ||
-		!s.exec.x.Bindings().BankViews(li, len(s.m.Layers), [3]*jlm.Entry{l.Gate.E, l.Up.E, l.Down.E}) || l.Up.E == nil || l.Down.E == nil):
+		!s.places[routeLanes].(nn.BankViewer).BankViews(li, len(s.m.Layers), [3]*jlm.Entry{l.Gate.E, l.Up.E, l.Down.E}) || l.Up.E == nil || l.Down.E == nil):
 		return nn.DeclineExperts
 	case c.LayerKind(li).Recurrent() && !s.keepsRec(li):
 		return nn.DeclineRecurrent

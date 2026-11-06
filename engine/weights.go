@@ -1,9 +1,7 @@
 package engine
 
 import (
-	"unsafe"
 
-	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/model"
 	"github.com/jitllm/jitllm/nn"
@@ -28,7 +26,7 @@ func newWeightSource(m *model.Model, dense *model.Dense, outW *model.Tensor, out
 
 // tensors is where block li's forms read their weights: l, its copy, or
 // with no block the model's own.
-func (w *weightSource) tensors(li int, l *model.Layer) cpudev.Tensors {
+func (w *weightSource) tensors(li int, l *model.Layer) nn.Tensors {
 	switch {
 	case l != nil:
 		return l
@@ -36,18 +34,6 @@ func (w *weightSource) tensors(li int, l *model.Layer) cpudev.Tensors {
 		return &w.input
 	}
 	return &w.head
-}
-
-// bindWeights is form f's weights for block li (l its copy, nil for the
-// model's tensors) where its call reads them, through the CPU device's
-// bindings (cpudev.Bindings.Bind).
-func (s *Instance) bindWeights(f *cpudev.Form, li int, l *model.Layer) ([]unsafe.Pointer, nn.Decline) {
-	return s.exec.x.Bindings().Bind(f, li, s.ws.tensors(li, l))
-}
-
-// checkWeights says every weight f binds is one block l holds whole.
-func (s *Instance) checkWeights(f *cpudev.Form, li int, l *model.Layer) nn.Decline {
-	return s.exec.x.Bindings().Check(f, li, s.ws.tensors(li, l))
 }
 
 // matrix is block li's (l's) matrix of role r, nil for one it does not
@@ -69,7 +55,7 @@ func (w *weightSource) vector(li int, l *model.Layer, r jlm.Role) []float32 {
 }
 
 // modelTensors is the model's own tensors as a form reads them
-// (cpudev.Tensors): the dense ones and the head the instance projects
+// (nn.Tensors): the dense ones and the head the instance projects
 // through, and with input the input rows' embeddings.
 type modelTensors struct {
 	m       *model.Model
@@ -105,10 +91,10 @@ func (t *modelTensors) held(r jlm.Role) *model.Tensor {
 	return t.dense.Matrix(r)
 }
 
-// Bytes is cpudev.Tensors': the model's matrix of role r as a form reads it.
+// Bytes is nn.Tensors': the model's matrix of role r as a form reads it.
 func (t *modelTensors) Bytes(r jlm.Role) ([]byte, *nn.Packed, int) { return t.held(r).Bytes() }
 
-// Floats is cpudev.Tensors': the model's vector of role r, nil for none.
+// Floats is nn.Tensors': the model's vector of role r, nil for none.
 func (t *modelTensors) Floats(r jlm.Role) []float32 {
 	switch r {
 	case jlm.RoleOutputNorm:
