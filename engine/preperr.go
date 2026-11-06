@@ -14,3 +14,20 @@ func (s *Instance) prepErr() error {
 	}
 	return nil
 }
+
+// notePrep tells the device whose memory holds the history that preparing it
+// failed: the history's arenas are the device's that runs the lanes.
+func (s *Instance) notePrep(err error) {
+	if n, ok := s.places[routeLanes].(nn.PrepNoter); ok {
+		n.NotePrep(err)
+	}
+}
+
+// setSpinning tells each device whether the step read from storage.
+func (s *Instance) setSpinning(on bool) {
+	for _, p := range s.places {
+		if sp, ok := p.(nn.Spinner); ok {
+			sp.SetSpinning(on)
+		}
+	}
+}

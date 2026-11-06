@@ -689,7 +689,7 @@ func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOp
 	s.makeRec(s.kv.view, nseq)
 	s.kv.reserve(s.maxSeq)
 	if err := s.kv.useArenas(s.maxSeq, s.kvArenaFor); err != nil {
-		s.exec.x.Composer().Note(err)
+		s.notePrep(err)
 	}
 	s.placeLanes()
 	// A text instance of a model with a tower runs its pictures through a
@@ -2808,8 +2808,16 @@ func (s *Instance) SetGPULayers(n int) int {
 	return s.gpuLayers
 }
 
-// Workers is how many worker threads the fast tier uses.
-func (s *Instance) Workers() int { return s.exec.x.Pool().Workers() }
+// Workers is how many worker threads the placement's devices run on.
+func (s *Instance) Workers() int {
+	n := 0
+	for _, p := range s.places {
+		if t, ok := p.(nn.Threaded); ok {
+			n += t.Workers()
+		}
+	}
+	return n
+}
 
 // Pos is the number of positions already in the cache.
 func (s *Session) Pos() int { return s.pos }
@@ -2837,7 +2845,7 @@ func (s *Instance) setKVFmt(f nn.KVFmt) {
 	s.kv.ns, s.kv.budget = old.ns, old.budget
 	// The CPU's blocks read the new cache: its arenas, and forms for f32.
 	if err := s.kv.useArenas(s.maxSeq, s.kvArenaFor); err != nil {
-		s.exec.x.Composer().Note(err)
+		s.notePrep(err)
 	}
 	s.placeLanes()
 	s.Session.kvFormat = f
@@ -3106,7 +3114,7 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 		in0, _ := pc.Faults()
 		defer func() {
 			in1, _ := pc.Faults()
-			s.exec.x.Pool().SetSpinning(in1 == in0)
+			s.setSpinning(in1 == in0)
 		}()
 	}
 
