@@ -2,6 +2,7 @@ package jlm
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"math"
 )
@@ -760,7 +761,8 @@ func encodeVocab(v *Vocab) []byte {
 	// The optional tails, each written only when it holds something (or a
 	// later one follows), so every vocabulary without one writes the bytes it
 	// wrote before. First one flag per op, then the stop ids.
-	tail := len(v.Stop) > 0
+	tools := len(v.Tools.Calls) > 0
+	tail := len(v.Stop) > 0 || tools
 	for _, op := range v.Pre {
 		tail = tail || op.PunctNoNewline
 	}
@@ -770,11 +772,19 @@ func encodeVocab(v *Vocab) []byte {
 			w.bool(op.PunctNoNewline)
 		}
 	}
-	if len(v.Stop) > 0 {
+	if len(v.Stop) > 0 || tools {
 		w.u32(uint32(len(v.Stop)))
 		for _, id := range v.Stop {
 			w.i32(id)
 		}
+	}
+	// Then the tool-call form, as JSON: a record of templates that grows
+	// with what forms state, read by name.
+	if tools {
+		// Strings, lists of them and a string map: nothing in it fails to
+		// marshal.
+		b, _ := json.Marshal(v.Tools)
+		w.str(string(b))
 	}
 	return w.b
 }
@@ -863,6 +873,16 @@ func decodeVocab(b []byte) (*Vocab, error) {
 			v.Stop = make([]int32, n)
 			for i := range v.Stop {
 				v.Stop[i] = r.i32()
+			}
+		}
+	}
+	if r.err == nil && len(r.b) > 0 {
+		if s := r.str(); r.err == nil {
+			if err := json.Unmarshal([]byte(s), &v.Tools); err != nil {
+				return nil, fmt.Errorf("jlm: the vocabulary's tool form: %w", err)
+			}
+			if err := v.Tools.Valid(); err != nil {
+				return nil, err
 			}
 		}
 	}

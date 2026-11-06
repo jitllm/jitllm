@@ -21,39 +21,43 @@ func TestToolStreamReadsControlTokens(t *testing.T) {
 		`{"type":"object","properties":{"location":{"type":"string"}}}}}]`))
 	for _, c := range []struct {
 		file, reply, marker, shown string
-		syn                        model.ToolSyntax
+		syn                        string
 	}{
 		{"DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M.jlm",
 			"<think>\nThe user wants Paris.\n</think>\n\nChecking.<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function" +
 				"<｜tool▁sep｜>get_weather\n```json\n{\"location\": \"Paris\"}\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜>",
-			"", "<think>\nThe user wants Paris.\n</think>\n\nChecking.", model.ToolSyntaxDeepSeekV3},
+			"", "<think>\nThe user wants Paris.\n</think>\n\nChecking.", "deepseek-v3"},
 		{"gpt-oss-20b-Q4_K_M.jlm",
 			"<|channel|>analysis<|message|>The user wants Paris.<|end|><|start|>assistant<|channel|>commentary " +
 				"to=functions.get_weather <|constrain|>json<|message|>{\"location\":\"Paris\"}",
-			"<|channel|>", "<think>The user wants Paris.</think>", model.ToolSyntaxHarmony},
+			"<|channel|>", "<think>The user wants Paris.</think>", "harmony"},
 		// Mistral v0.3's [TOOL_CALLS] is a control token. (This GGUF's
 		// template declares no tools, so the model's syntax is the
 		// default, which reads the opener spelled out.)
 		{"Mistral-7B-Instruct-v0.3-Q4_K_M.jlm",
 			"[TOOL_CALLS] [{\"name\": \"get_weather\", \"arguments\": {\"location\": \"Paris\"}}]",
-			"[TOOL_CALLS]", "", model.ToolSyntaxHermes},
+			"[TOOL_CALLS]", "", "hermes"},
 	} {
 		t.Run(c.file, func(t *testing.T) {
+			// The suite converts what ships: the source beside the container,
+			// so the container states this build's tool form.
 			path := testmodels.Path(c.file)
-			if _, err := os.Stat(path); err != nil {
-				// The suite converts what ships: the source beside it.
-				src := strings.TrimSuffix(path, ".jlm") + ".gguf"
-				if _, serr := os.Stat(src); serr != nil {
-					testmodels.Missing(t, "%s: %v (set JITLLM_MODELS)", c.file, err)
-				}
+			src := strings.TrimSuffix(path, ".jlm") + ".gguf"
+			if _, err := os.Stat(src); err == nil {
 				path = jlmOf(t, src)
+			} else if _, err := os.Stat(path); err != nil {
+				testmodels.Missing(t, "%s: %v (set JITLLM_MODELS)", c.file, err)
 			}
 			m, err := model.Open(path)
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer m.Close()
-			if got := m.ToolSyntax(); got != c.syn {
+			got, err := m.ToolSyntax()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.String() != c.syn {
 				t.Fatalf("syntax %s, want %s", got, c.syn)
 			}
 			ids := m.Vocab.EncodeSpecial(c.reply, false)
@@ -68,7 +72,10 @@ func TestToolStreamReadsControlTokens(t *testing.T) {
 					t.Fatalf("%q decodes to %q: the case does not exercise a control token", c.marker, p)
 				}
 			}
-			ts := m.NewToolStream(tools)
+			ts, err := m.NewToolStream(tools)
+			if err != nil {
+				t.Fatal(err)
+			}
 			var shown strings.Builder
 			var calls []model.ToolCall
 			for _, id := range ids {

@@ -2,6 +2,7 @@ package engine
 
 import (
 	"encoding/json"
+	"github.com/jitllm/jitllm/convert"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -38,7 +39,7 @@ func TestParseToolCalls(t *testing.T) {
 		{"prose", "The weather in Paris is mild.", "The weather in Paris is mild.", nil},
 		{"broken hermes stays text", "<tool_call>{\"name\": \"get_time\", </tool_call>", "<tool_call>{\"name\": \"get_time\", </tool_call>", nil},
 	} {
-		content, calls := model.ParseToolCalls(c.in, names)
+		content, calls := hermesForm().Parse(c.in, model.ToolSetOf(names))
 		if content != c.content || !reflect.DeepEqual(calls, c.calls) {
 			t.Errorf("%s: got %q %+v, want %q %+v", c.name, content, calls, c.content, c.calls)
 		}
@@ -57,7 +58,7 @@ func TestToolCallHold(t *testing.T) {
 		"Answer: {\"a\": 1}":     -1,
 		"Checking <tool_call>\n": 9,
 	} {
-		if got := model.ToolCallHold(in); got != want {
+		if got := hermesForm().Hold(in); got != want {
 			t.Errorf("%q: hold at %d, want %d", in, got, want)
 		}
 	}
@@ -174,3 +175,6 @@ func clip(s string) string {
 	}
 	return s
 }
+
+// hermesForm is the default form a reply with no model of its own is read in.
+func hermesForm() model.ToolSyntax { return model.ToolSyntaxFor(convert.DefaultToolForm()) }

@@ -134,13 +134,18 @@ func oaResponseFormat(raw json.RawMessage) (string, error) {
 	return "", fmt.Errorf("%w: response_format type %q: text, json_object or json_schema", ErrInvalid, rf.Type)
 }
 
-// toolStream reads a generate's tool calls, when its chat declares tools.
-func (lm *LoadedModel) toolStream(o GenerateOptions) *model.ToolStream {
+// toolStream reads a generate's tool calls, when its chat declares tools: in
+// the form the model's container states, or refused where it states none.
+func (lm *LoadedModel) toolStream(o GenerateOptions) (*model.ToolStream, error) {
 	ch := o.Prompt.Chat
 	if o.Prompt.Kind != PromptChat && o.Prompt.Kind != PromptSpans || ch == nil || len(ch.Tools) == 0 || lm.m.Vocab == nil {
-		return nil
+		return nil, nil
 	}
-	return lm.m.NewToolStream(model.ParseToolSet(ch.Tools))
+	ts, err := lm.m.NewToolStream(model.ParseToolSet(ch.Tools))
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
+	}
+	return ts, nil
 }
 
 // toolConstraint is the constraint a chat whose tool_choice forces a call
@@ -194,7 +199,11 @@ func (lm *LoadedModel) toolMatcher(src string) (*grammar.Matcher, error) {
 		g.m = map[string]*grammar.Matcher{}
 	}
 	if g.toolToks == nil {
-		g.toolToks = grammar.IndexTokens(markedVocab{lm.m.Vocab, markers(lm.m.Vocab, lm.m.ToolSyntax())})
+		syn, err := lm.m.ToolSyntax()
+		if err != nil {
+			return nil, err
+		}
+		g.toolToks = grammar.IndexTokens(markedVocab{lm.m.Vocab, markers(lm.m.Vocab, syn)})
 	}
 	m := grammar.NewMatcher(gr, g.toolToks)
 	g.m[key] = m

@@ -1257,9 +1257,13 @@ func (e *Engine) generateBatched(ctx context.Context, lp *stepLoop, s *Session, 
 		}
 		restored = n
 	}
+	tools, err := lm.toolStream(o)
+	if err != nil {
+		return err
+	}
 	now := time.Now()
 	r := &row{
-		tools:     lm.toolStream(o),
+		tools:     tools,
 		s:         s,
 		ids:       ids,
 		restored:  restored,

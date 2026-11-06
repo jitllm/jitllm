@@ -26,9 +26,12 @@ import (
 // Container makes the container at path one this build reads: a container that
 // does not open and has X.gguf beside it is reconverted from that, and a
 // merged vision container X-vlm.jlm written before the converter stated its
-// projector's tower is reconverted from X.gguf and mmproj-X.gguf. A container
-// that opens, a path that is not a container, an absent one and one with no
-// source beside it are left alone, and the caller's load says what is wrong.
+// projector's tower is reconverted from X.gguf and mmproj-X.gguf, and one
+// whose chat template states no tool form is reconverted too. An absent
+// container with its source beside it is converted from it: a missing
+// artefact is a task. A container that opens and states all of that, a path
+// that is not a container and one with no source are left alone, and the
+// caller's load says what is wrong.
 func Container(path string) error {
 	if !strings.HasSuffix(path, jlm.Ext) {
 		return nil
@@ -50,10 +53,14 @@ func reconvert(path string) error {
 		stated := len(c.Config().Acts) > 0
 		v := c.Vision()
 		tower := v == nil || v.Tower != nil || !convert.StatesTower(v.Projector)
+		voc := c.Vocab()
+		tools := voc == nil || len(voc.Templates) == 0 || len(voc.Tools.Calls) > 0
 		c.Close()
 		switch {
-		case stated && tower:
+		case stated && tower && tools:
 			return nil
+		case stated && tower:
+			openErr = fmt.Errorf("its chat template states no tool form")
 		case !stated:
 			// Written before the converter stated activations: it opens, and
 			// the front end refuses its blocks.
@@ -61,9 +68,6 @@ func reconvert(path string) error {
 		default:
 			openErr = fmt.Errorf("it states no tower for its %v projector", v.Projector)
 		}
-	}
-	if _, err := os.Stat(path); err != nil {
-		return nil
 	}
 	base := strings.TrimSuffix(path, jlm.Ext)
 	src, mm := base+".gguf", ""
