@@ -62,9 +62,9 @@ type Exec struct {
 // NewExec is an execution over workers, its forms composed by comp.
 func NewExec(workers *cpu.Pool, comp *Composer) *Exec { return &Exec{workers: workers, comp: comp} }
 
-// UseFrames makes the execution's weight bindings over fr, the frames its
+// useFrames makes the execution's weight bindings over fr, the frames its
 // blocks' weights are read into.
-func (e *Exec) UseFrames(fr *jlm.Frames) {
+func (e *Exec) useFrames(fr *jlm.Frames) {
 	e.bind = NewBindings(fr)
 	e.b = &e.bind
 }
@@ -184,11 +184,32 @@ func (e *Exec) ReleaseLayers(lo, hi int) {
 	}
 }
 
-// NewExec is an execution on c for one instance over workers, its forms
-// composed by comp, seated on c until it closes.
-func (c *CPU) NewExec(workers *cpu.Pool, comp *Composer) *Exec {
-	e := NewExec(workers, comp)
+// Setup is what an instance's execution on the CPU device is made from: the
+// model it runs (whose forms on the device it composes through), the frames
+// its weights are read into, whether its forms compute in float, whether a
+// prefill beside a decode takes the efficiency cores (the serving split),
+// whether its runs fuse, the rows a prompt step carries (0 for the
+// device's), and where its fused runs are counted.
+type Setup struct {
+	Model       uint64
+	Frames      *jlm.Frames
+	Float       bool
+	Split       bool
+	NoFuse      bool
+	Chunk       int
+	Tries, Runs *atomic.Int64
+}
+
+// Attach makes an instance's execution on c from st: its workers, its
+// composer over the model's forms, its bindings over the frames, and its
+// seat on c, given up when it closes.
+func (c *CPU) Attach(st Setup) *Exec {
+	workers := cpu.NewPool(append(c.PoolOptions(), cpu.WithServingSplit(st.Split))...)
+	e := NewExec(workers, NewComposer(c.Forms(st.Model), c.Target.ISA(), workers.Workers(), st.Float))
 	e.cpu, e.seat = c, c.Sit()
+	e.useFrames(st.Frames)
+	e.fuseOff, e.tries, e.opened = st.NoFuse, st.Tries, st.Runs
+	e.chunk = st.Chunk
 	return e
 }
 
@@ -221,9 +242,6 @@ func (e *Exec) DropQuota() {
 		e.quota = nil
 	}
 }
-
-// SetChunk pins a prompt chunk's rows at n, 0 for the executor's own.
-func (e *Exec) SetChunk(n int) { e.chunk = n }
 
 // ChunkRows is how many prompt rows the CPU takes in one chunk
 // (nn.ChunkLimiter): the pinned width, else the rows its forms are formed
@@ -414,10 +432,6 @@ func (e *Exec) Run(li int, st *Step, b *Bindings) (nn.Decline, error) {
 
 // SetFusion turns fused runs on or off.
 func (e *Exec) SetFusion(on bool) { e.fuseOff = !on }
-
-// FuseCounts counts every fused run tried and opened in tries and opened as
-// well, the engine's counts across its instances.
-func (e *Exec) FuseCounts(tries, opened *atomic.Int64) { e.tries, e.opened = tries, opened }
 
 // Fuse opens a fused run where none is open and fusion is on.
 func (e *Exec) Fuse() {

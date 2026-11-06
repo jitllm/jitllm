@@ -1,9 +1,5 @@
 package engine
 
-import (
-	"github.com/jitllm/jitllm/engine/device/cpu"
-)
-
 // qkNorms is the pair block li offers a device: its weights when QKNormAt says
 // the block norms q and k, and none when it does not, so the device's launch
 // follows the same derivation as the host's.
@@ -23,10 +19,4 @@ func (s *Instance) trace(l int, name string, v []float32) {
 	if s.opt.tracer != nil {
 		s.opt.tracer(l, name, v)
 	}
-}
-
-// poolOptions is what an instance's CPU device's workers are made with: the
-// caller's, and the serving split unless the model turned it off.
-func (s *Instance) poolOptions() []cpu.PoolOption {
-	return append(s.eng.cpu.PoolOptions(), cpu.WithServingSplit(!s.opt.noServingSplit))
 }
