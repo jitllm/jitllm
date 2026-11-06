@@ -334,7 +334,9 @@ func (e *Exec) Runner() *Runner { return e.run }
 // Blocks is the runner of the execution's blocks' rows.
 func (e *Exec) Blocks() *Blocks { return e.rows }
 
-// Close returns the launches' own buffers.
+// Close returns the launches' own buffers and lets go of everything the
+// attachment made: the seat, the quota, the bindings' views and the
+// workers. A second Close does nothing more.
 func (e *Exec) Close() {
 	e.leave()
 	e.dropQuota()
@@ -342,7 +344,17 @@ func (e *Exec) Close() {
 		e.dev.Close()
 	}
 	e.bind.Close()
+	if e.workers != nil {
+		e.workers.Close()
+	}
 }
+
+// Detach lets the instance's execution go (nn.Session): its close.
+func (e *Exec) Detach() { e.Close() }
+
+// HeldBytes is what the execution holds of a session's history
+// (nn.Session): none, the history being the session's own.
+func (e *Exec) HeldBytes() uint64 { return 0 }
 
 // PartPlan is a part -- a graph apart from any block's residual: the head,
 // a sampler, the input rows, a rotary table, the streams' mix, a readout --

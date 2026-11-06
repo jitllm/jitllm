@@ -811,7 +811,6 @@ func (s *Instance) Close() error {
 		s.framesHeld = false
 	}
 	s.keepSpare()
-	s.exec.x.Pool().Close()
 	return nil
 }
 
