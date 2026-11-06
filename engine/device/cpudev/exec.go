@@ -184,22 +184,28 @@ func (e *Exec) ReleaseLayers(lo, hi int) {
 	}
 }
 
-// Sit seats the instance on c, the CPU device the executor runs on.
-func (e *Exec) Sit(c *CPU) { e.cpu, e.seat = c, c.Sit() }
+// NewExec is an execution on c for one instance over workers, its forms
+// composed by comp, seated on c until it closes.
+func (c *CPU) NewExec(workers *cpu.Pool, comp *Composer) *Exec {
+	e := NewExec(workers, comp)
+	e.cpu, e.seat = c, c.Sit()
+	return e
+}
 
-// Leave gives the instance's seat up.
-func (e *Exec) Leave() {
+// leave gives the instance's seat up.
+func (e *Exec) leave() {
 	if e.cpu != nil {
 		e.cpu.Leave(e.seat)
+		e.cpu = nil
 	}
 }
 
-// Touch records that the instance is decoding now.
-func (e *Exec) Touch() { e.seat.Touch() }
+// Decoding records that the instance is decoding now (nn.DecodeSharer).
+func (e *Exec) Decoding() { e.seat.Touch() }
 
 // OthersDecoding reports whether another instance on the CPU device is
-// decoding.
-func (e *Exec) OthersDecoding() bool { return e.cpu.OthersDecoding(e.seat) }
+// decoding (nn.DecodeSharer).
+func (e *Exec) OthersDecoding() bool { return e.cpu != nil && e.cpu.OthersDecoding(e.seat) }
 
 // SetQuota makes q the instance's page quota on the device.
 func (e *Exec) SetQuota(q *Quota) { e.quota = q }
@@ -306,6 +312,7 @@ func (e *Exec) Blocks() *Blocks { return e.rows }
 
 // Close returns the launches' own buffers.
 func (e *Exec) Close() {
+	e.leave()
 	if e.dev != nil {
 		e.dev.Close()
 	}

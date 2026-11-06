@@ -863,6 +863,13 @@ type RecurrentPlan struct {
 // PrepLayer is per block and may decline, so a model that does not fit runs
 // its first N blocks on one device and the rest on another -- the CPU device
 // is one -- with no separate mechanism for the seam.
+// DecodeSharer is a device several instances decode on at once: Decoding
+// records that this one decodes now, OthersDecoding whether another does.
+type DecodeSharer interface {
+	Decoding()
+	OthersDecoding() bool
+}
+
 // PrepReporter is a device that says why it could not prepare something it
 // was offered: the first error it met forming or binding it, nil for none.
 type PrepReporter interface{ PrepErr() error }

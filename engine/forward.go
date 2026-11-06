@@ -654,11 +654,10 @@ func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOp
 	s.allocRecurrent(nseq)
 
 	workers := cpu.NewPool(s.poolOptions()...)
-	s.exec.x = cpudev.NewExec(workers, cpudev.NewComposer(g.cpu.Forms(m.Id), g.cpu.Target.ISA(), workers.Workers(), opt.cpuFloat))
+	s.exec.x = g.cpu.NewExec(workers, cpudev.NewComposer(g.cpu.Forms(m.Id), g.cpu.Target.ISA(), workers.Workers(), opt.cpuFloat))
 	s.exec.x.UseFrames(fr)
 	s.exec.x.SetFusion(!opt.noFuse)
 	s.exec.x.FuseCounts(&g.fuse.tries, &g.fuse.runs)
-	s.exec.x.Sit(g.cpu)
 	s.exec.x.SetChunk(opt.prefillChunk)
 	s.setPlace(routeLanes, s.exec.x)
 	s.placeRange(routeLanes)
@@ -782,7 +781,6 @@ func (s *Instance) Close() error {
 	}
 	s.tower.close()
 	s.tower = nil
-	s.exec.x.Leave()
 	if s.root {
 		defer func() {
 			if s.owners[routeLanes] != nil {
