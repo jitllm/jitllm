@@ -344,7 +344,8 @@ const (
 	// at most PicW x PicH -- each sample read as [0, 1] and channel c
 	// normalised as (v - Mean[c]) / Std[c]. Out[0] is the pixels
 	// [y][x][channel] over the step's rows, as OpPatchify reads them, zero
-	// past the output's pixels. A primitive.
+	// past the output's pixels -- where PicPad, past its padded grid, the
+	// pad's cells a zero sample normalised. A primitive.
 	OpPicture
 	// OpUntile is In[0]'s rows -- the cells of a grid in its nested order,
 	// Window x Window windows of cells, each window's cells in raster order
@@ -790,11 +791,15 @@ type Attrs struct {
 	// format, the size it is resampled to, and each channel's mean and std;
 	// PicSide is the most a side of a picture resampled by Pillow's filters
 	// (ChainPIL) may be, whose reduction Taps reaches. PicLive says the size
-	// resampled to is the request's, PicW x PicH the most it is.
+	// resampled to is the request's, PicW x PicH the most it is; PicPad,
+	// where set, lays a live picture out in a grid whose sides are the
+	// output's rounded up to a multiple of PicPad, the cells past the output
+	// a zero sample normalised (a black pad, made before normalising).
 	Pixels     uint8
 	PicW, PicH int
 	PicSide    int
 	PicLive    bool
+	PicPad     int
 	Mean, Std  [3]float64
 }
 
