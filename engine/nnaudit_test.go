@@ -18,6 +18,7 @@ import (
 
 	"github.com/jitllm/jitllm/convert"
 	"github.com/jitllm/jitllm/convert/gguf"
+	"github.com/jitllm/jitllm/convert/library"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
@@ -52,8 +53,12 @@ func TestEveryModelRunsOnACard(t *testing.T) {
 	}
 	defer g.Close()
 	slow := os.Getenv("JITLLM_SLOW") != ""
+	pick := os.Getenv("JITLLM_AUDIT_MODEL")
 	for _, src := range auditModels(t) {
-		if !slow && src.size > 2<<30 {
+		if pick != "" && !strings.Contains(src.path, pick) {
+			continue
+		}
+		if pick == "" && !slow && src.size > 2<<30 {
 			continue
 		}
 		t.Run(src.name, func(t *testing.T) {
@@ -61,7 +66,7 @@ func TestEveryModelRunsOnACard(t *testing.T) {
 			if src.hf {
 				path = jlmOfSafetensors(t, src.path)
 			} else {
-				p, err := jlmOfErr(src.path)
+				p, err := convertPair(src.path, src.mmproj)
 				if errors.Is(err, convert.ErrNotImplemented) {
 					t.Skipf("NOT IMPLEMENTED (RULE 7 scope): %v", err)
 				}
@@ -156,7 +161,7 @@ func everyModelRunsGenerated(t *testing.T, opts ...Option) {
 			if src.hf {
 				path = jlmOfSafetensors(t, src.path)
 			} else {
-				p, err := jlmOfErr(src.path)
+				p, err := convertPair(src.path, src.mmproj)
 				if errors.Is(err, convert.ErrNotImplemented) {
 					why = err
 					t.Skipf("NOT IMPLEMENTED (RULE 7 scope): %v", err)
@@ -287,8 +292,26 @@ func finite(t *testing.T, what string, v []float32) {
 
 type auditModel struct {
 	name, path string
-	size       int64
-	hf         bool // a safetensors directory
+	// mmproj is the catalog's projector for a vision model, converted with
+	// it into one container.
+	mmproj string
+	size   int64
+	hf     bool // a safetensors directory
+}
+
+// libraryPath is where the model directory holds a catalog file: at its top,
+// or a directory or two down; "" where it holds none.
+func libraryPath(file string) string {
+	if p := testmodels.Path(file); fileExists(p) {
+		return p
+	}
+	for _, pat := range []string{filepath.Join("*", file), filepath.Join("*", "*", file)} {
+		if ps, _ := filepath.Glob(filepath.Join(testmodels.Dir(), pat)); len(ps) > 0 {
+			sort.Strings(ps)
+			return ps[0]
+		}
+	}
+	return ""
 }
 
 // laterShard is the second and later file of a split GGUF; the first names the
@@ -320,13 +343,43 @@ func auditModels(t *testing.T) []auditModel {
 		}
 		out = append(out, auditModel{name: name, path: p, size: size, hf: hf})
 	}
+	// Every catalog model, its projector with it: a file the box does not
+	// hold fails here rather than leaving the list.
+	listed := map[string]bool{}
+	missing := t.Errorf
+	if os.Getenv("JITLLM_AUDIT_MODEL") != "" {
+		missing = t.Logf
+	}
+	for _, lm := range library.Models() {
+		p := libraryPath(lm.File)
+		if p == "" {
+			missing("%s: MODEL MISSING: %s is not in %s (https://huggingface.co/%s)", lm.Name, lm.File, testmodels.Dir(), lm.Repo)
+			continue
+		}
+		listed[p] = true
+		mp := ""
+		if lm.MMProj != "" {
+			if mp = libraryPath(lm.MMProj); mp == "" {
+				missing("%s: MODEL MISSING: its projector %s is not in %s", lm.Name, lm.MMProj, testmodels.Dir())
+				continue
+			}
+			listed[mp] = true
+		}
+		n := len(out)
+		add(lm.Name, p, false)
+		if len(out) > n {
+			out[n].mmproj = mp
+		}
+	}
 	for _, p := range languageModels(t) {
-		add(filepath.Base(p), p, false)
+		if !listed[p] {
+			add(filepath.Base(p), p, false)
+		}
 	}
 	sub, _ := filepath.Glob(filepath.Join(testmodels.Dir(), "*", "*.gguf"))
 	sort.Strings(sub)
 	for _, p := range sub {
-		if laterShard().MatchString(p) || isProjector(p) {
+		if laterShard().MatchString(p) || listed[p] || isProjector(p) {
 			continue
 		}
 		add(filepath.Join(filepath.Base(filepath.Dir(p)), filepath.Base(p)), p, false)
@@ -342,7 +395,7 @@ func auditModels(t *testing.T) []auditModel {
 	// The decision models' files, which sit deeper than one directory down
 	// (laya/gguf/, laya/fixture/) where the glob above does not reach.
 	for _, rel := range auditDecision() {
-		if p := testmodels.Path(rel); fileExists(p) {
+		if p := testmodels.Path(rel); fileExists(p) && !listed[p] {
 			add(rel, p, false)
 		}
 	}
