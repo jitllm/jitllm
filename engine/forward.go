@@ -1402,7 +1402,7 @@ func (s *Instance) placeHeadOn(name string) bool {
 // over the same frames. It sets no callback -- the caller does, because they
 // call back into here. It is shared by the offer and by every device
 // page-in, which must agree.
-func (s *Instance) layerWeightsAt(li int, l *model.Layer, banks *[3]nn.Weight) nn.LayerWeights {
+func (s *Instance) layerWeightsAt(li int, l *model.Layer, banks *[3]nn.Weight, extra *[]nn.RoleWeight) nn.LayerWeights {
 	qn, kn := s.qkNorms(li)
 	w := nn.LayerWeights{
 		Vectors:  l.Vecs,
@@ -1450,7 +1450,8 @@ func (s *Instance) layerWeightsAt(li int, l *model.Layer, banks *[3]nn.Weight) n
 	// A latent query is carried wherever the block stores one, whatever its
 	// attention.
 	w.Wqa, w.Wqb = model.Wt(l.Wqa), model.Wt(l.Wqb)
-	w.Extra = extraWeights(l)
+	*extra = extraWeights(l, (*extra)[:0])
+	w.Extra = *extra
 	if k := s.c.LayerKind(li); k.Recurrent() && !k.Attends() {
 		// A linear block has none of these; leaving the attention four set
 		// would offer a device four matrices whose shapes do not match the
@@ -1463,15 +1464,14 @@ func (s *Instance) layerWeightsAt(li int, l *model.Layer, banks *[3]nn.Weight) n
 }
 
 // extraWeights is every matrix l stores beyond the ones a device is handed
-// by name, by role, in the order the block was read.
-func extraWeights(l *model.Layer) []nn.RoleWeight {
-	named := []*model.Tensor{&l.Wq, &l.Wk, &l.Wv, &l.Wo, &l.Gate, &l.Up, &l.Down, &l.Router,
+// by name, by role, in the order the block was read, appended to out.
+func extraWeights(l *model.Layer, out []nn.RoleWeight) []nn.RoleWeight {
+	named := [...]*model.Tensor{&l.Wq, &l.Wk, &l.Wv, &l.Wo, &l.Gate, &l.Up, &l.Down, &l.Router,
 		&l.ShGate, &l.ShUp, &l.ShDown, &l.SsmGate, &l.SsmBA, &l.SsmOut,
 		&l.SsmFA, &l.SsmFB, &l.SsmGA, &l.SsmGB, &l.SsmXDt, &l.SsmDtProj, &l.SsmXB, &l.SsmXC,
 		&l.Wqa, &l.Wqb, &l.Wkva, &l.Wkb, &l.Wvb}
-	var out []nn.RoleWeight
 	for _, m := range l.Mats {
-		if slices.Contains(named, m.T) {
+		if slices.Contains(named[:], m.T) {
 			continue
 		}
 		out = append(out, nn.RoleWeight{Role: m.Role, W: model.Wt(*m.T)})
@@ -1493,6 +1493,9 @@ type offer struct {
 	// built at the first gather over those frames and kept.
 	banks  [3]nn.Weight
 	bankFr *jlm.Frames
+	// extra is the block's extra matrices (extraWeights), refilled in place
+	// at every gather.
+	extra []nn.RoleWeight
 }
 
 // offerWeights is block li's weights as a card is offered them: the
@@ -1527,7 +1530,7 @@ func (o *offer) gather(dst *nn.LayerWeights, fr *jlm.Frames) {
 		o.banks = [3]nn.Weight{m.BankWeight(fr, l.Gate), m.BankWeight(fr, l.Up), m.BankWeight(fr, l.Down)}
 		o.bankFr = fr
 	}
-	w := o.s.layerWeightsAt(o.li, &o.l, &o.banks)
+	w := o.s.layerWeightsAt(o.li, &o.l, &o.banks, &o.extra)
 	w.Bind, w.Ensure, w.EnsureExperts = dst.Bind, dst.Ensure, dst.EnsureExperts
 	w.PrefetchExperts, w.SpeculateExperts = dst.PrefetchExperts, dst.SpeculateExperts
 	w.ExpertUses = dst.ExpertUses
