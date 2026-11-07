@@ -228,11 +228,9 @@ func Models() []Model {
 
 		// --- gemma2 / gemma3 ---
 		{Name: "gemma-2-2b-it", Title: "Gemma 2 2B Instruct", Arch: "gemma2", Params: "2B", Quant: "Q4_K_M",
-			Repo: "bartowski/gemma-2-2b-it-GGUF", File: "gemma-2-2b-it-Q4_K_M.gguf", Bytes: 1708582752,
-			Note: "Runs on the CPU: the GPU does not run Gemma 2 yet."},
+			Repo: "bartowski/gemma-2-2b-it-GGUF", File: "gemma-2-2b-it-Q4_K_M.gguf", Bytes: 1708582752},
 		{Name: "gemma-2-9b-it", Title: "Gemma 2 9B Instruct", Arch: "gemma2", Params: "9B", Quant: "Q4_K_M",
-			Repo: "bartowski/gemma-2-9b-it-GGUF", File: "gemma-2-9b-it-Q4_K_M.gguf", Bytes: 5761057728,
-			Note: "Runs on the CPU: the GPU does not run Gemma 2 yet."},
+			Repo: "bartowski/gemma-2-9b-it-GGUF", File: "gemma-2-9b-it-Q4_K_M.gguf", Bytes: 5761057728},
 		{Name: "gemma-3-1b-it", Title: "Gemma 3 1B Instruct", Arch: "gemma3", Params: "1B", Quant: "Q4_K_M",
 			Repo: "bartowski/google_gemma-3-1b-it-GGUF", File: "google_gemma-3-1b-it-Q4_K_M.gguf", Bytes: 806058496},
 		{Name: "gemma-3-4b-it", Title: "Gemma 3 4B Instruct", Arch: "gemma3", Params: "4B", Quant: "Q4_K_M",
