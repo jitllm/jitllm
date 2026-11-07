@@ -26,8 +26,10 @@ type route struct {
 	prompt nn.PromptRows
 	kvmig  nn.KVMigrator
 	recmig nn.RecMigrator
-	rew    nn.RecRewinder
-	rowk   nn.RecRowKeeper
+	// recrows zeroes a row's recurrent state where the device holds it.
+	recrows nn.RecRowsDevice
+	rew     nn.RecRewinder
+	rowk    nn.RecRowKeeper
 }
 
 func newRoute(d nn.LayerRunner) route {
@@ -47,6 +49,7 @@ func newRoute(d nn.LayerRunner) route {
 	r.prompt, _ = d.(nn.PromptRows)
 	r.kvmig, _ = d.(nn.KVMigrator)
 	r.recmig, _ = d.(nn.RecMigrator)
+	r.recrows, _ = d.(nn.RecRowsDevice)
 	r.rew, _ = d.(nn.RecRewinder)
 	r.rowk, _ = d.(nn.RecRowKeeper)
 	return r

@@ -335,7 +335,7 @@ type Instance struct {
 	attnPaired atomic.Int64
 
 	blogits []float32 // a step's rows' logits, NVocab each
-	allRows []int     // 0..nseq-1, the rows Reset zeroes on a device
+	recRow  [1]int    // the row ResetRecurrent zeroes on a device
 	// placing is true while SetDeviceLayers offers blocks, when WithPlacement's
 	// map applies; placeErr is what it could not do.
 	placing  bool
@@ -2863,21 +2863,6 @@ func (s *Instance) Reset() {
 		s.rewindRope(i, -1)
 	}
 	s.ResetRecurrent(0)
-	// A placed linear block keeps its running state on the device, and the
-	// next prompt would start from the last one's summary: zeroed there too,
-	// as Retire zeroes a row's. A failure is the next call's error.
-	if s.recurrent() && s.devLinear() {
-		if len(s.allRows) != 1 {
-			s.allRows = []int{0}
-		}
-		if rr, ok := s.ld.(nn.RecRowsDevice); !ok || !rr.ResetRecRows(s.allRows) {
-			why := ""
-			if er, ok := s.ld.(nn.ErrReporter); ok && er.Err() != "" {
-				why = ": " + er.Err()
-			}
-			s.retireErr = fmt.Errorf("model: the recurrent state on the device could not be reset%s", why)
-		}
-	}
 	s.aliasMark(0, s.pos+1)
 	s.kv.retireTail(s.pos)
 	s.kv.reset()
