@@ -649,7 +649,7 @@ func stepTogether(runs []Run, rows int, ss nn.SessionStepper) ([][]float32, erro
 	var bple []float32
 	if c.PLEDim != 0 {
 		s0.growBPLE(rows)
-		bple = s0.bple[:rows*c.PleWidth()]
+		bple = s0.bple[:rows*c.SideWidth()]
 	}
 	s0.tokenSide(rows)
 	if why := s0.embedRows(x[:rows*c.NEmbd], bple, s0.stepTok, pos); why != nn.DeclineServes {

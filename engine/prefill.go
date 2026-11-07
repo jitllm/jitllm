@@ -268,19 +268,23 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 			s.tok = rowIDs[i]
 			if lg, err = s.forward(func() error {
 				g := src.givenAt(i, c.NEmbd)
+				if g == nil {
+					// A token's row, as a decode step embeds it.
+					if err := s.embed(rowIDs[i]); err != nil {
+						return err
+					}
+				} else {
+					st := &s.inScr
+					st.tok1[0], st.pos1[0] = max(rowIDs[i], 0), s.pos
+					if why := s.givenRows(s.x, s.ple, g, st.tok1[:], st.pos1[:]); why != nn.DeclineServes {
+						return s.embedDeclined(why)
+					}
+					s.trace(-1, "embd", s.x)
+				}
+				// The tap rows over the input rows' zeros.
 				if c.DeepTaps > 0 {
 					s.fillDeep(src, i, 1, s.ple)
 				}
-				if g == nil {
-					// A token's row, as a decode step embeds it.
-					return s.embed(rowIDs[i])
-				}
-				st := &s.inScr
-				st.tok1[0], st.pos1[0] = max(rowIDs[i], 0), s.pos
-				if why := s.givenRows(s.x, s.ple, g, st.tok1[:], st.pos1[:]); why != nn.DeclineServes {
-					return s.embedDeclined(why)
-				}
-				s.trace(-1, "embd", s.x)
 				return nil
 			}); err != nil {
 				return nil, err
@@ -414,7 +418,7 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 			// A model of per-layer embeddings gathers on the card only with
 			// every block there: a CPU block reads the per-layer inputs the
 			// CPU's input rows write.
-			if len(src.given) == 0 && s.head != nil && s.devAt(s.lo) && (c.PLEDim == 0 || s.allOnDevice()) &&
+			if len(src.given) == 0 && s.head != nil && s.devAt(s.lo) && (c.PLEDim == 0 || s.allOnDevice() && c.DeepTaps == 0) &&
 				(s.head.GatherRow || s.c.TiedEmbd && c.PLEDim == 0 && m.PosEmbd.E == nil) {
 				// The card reads the per-layer inputs it writes back into the
 				// chunk's own, handed before it runs.
@@ -434,17 +438,21 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 			var bple []float32
 			if c.PLEDim != 0 {
 				s.growBPLE(n)
-				bple = s.bple[:n*c.PleWidth()]
+				bple = s.bple[:n*c.SideWidth()]
 			}
 			at := s.inScr.positions(n)
 			for i := range at {
 				at[i] = p0 + i
 			}
+			if err := s.fillRows(src, base, n, s.bx[:n*c.NEmbd], bple, at); err != nil {
+				return err
+			}
+			// The tap rows over the input rows' zeros.
 			if c.DeepTaps > 0 {
 				s.growBPLE(n)
 				s.fillDeep(src, base, n, s.bple[:n*c.SideWidth()])
 			}
-			return s.fillRows(src, base, n, s.bx[:n*c.NEmbd], bple, at)
+			return nil
 		}
 		// The streams past the first, from each row's embedding.
 		if c.StreamHead() {

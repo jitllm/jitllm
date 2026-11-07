@@ -2501,9 +2501,8 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 	}
 	if v := c.Vision(); v != nil && v.Tower != nil && len(v.Tower.Taps) > 0 {
 		cfg.DeepTaps = len(v.Tower.Taps)
-		if cfg.DeepTaps > cfg.NLayer || cfg.PLEDim != 0 {
-			return nil, fmt.Errorf("model: %d tap rows added after the first of %d blocks, on a model of per-layer embeddings %v: "+
-				"both would be the blocks' side input", cfg.DeepTaps, cfg.NLayer, cfg.PLEDim != 0)
+		if cfg.DeepTaps > cfg.NLayer {
+			return nil, fmt.Errorf("model: %d tap rows added after the first of %d blocks", cfg.DeepTaps, cfg.NLayer)
 		}
 	}
 	// A block of a mixture model with no router is not a mixture: its mixer

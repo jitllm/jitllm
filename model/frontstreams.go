@@ -67,6 +67,10 @@ func (c *Config) ResidStreams() bool { return c.stated != nil && len(c.stated.Ex
 // where it states none, and the values its program exports.
 func (m *Model) streamRead(b *graph.Builder, f graph.Facts, u *jlm.SubStreams, xs []graph.ValueID, in, run, side graph.ValueID,
 	ops func([]graph.ValueID, *jlm.TowerOp) (graph.ValueID, error)) (graph.ValueID, []graph.ValueID, error) {
+	if c := m.Cfg; side != 0 && c.TapsWidth() > 0 && c.PLEDim != 0 {
+		side = b.Emit(graph.OpSlice, []graph.ValueID{side}, []graph.Result{{Name: "side.ple", Width: c.PleWidth()}}, nil,
+			graph.Attrs{Offset: c.TapsWidth(), Width: c.PleWidth()}, nil, nil)[0]
+	}
 	if u.Read == nil {
 		return run, nil, nil
 	}

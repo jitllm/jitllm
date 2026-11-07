@@ -1167,7 +1167,7 @@ func (m *Model) perLayerOf(b *graph.Builder, f graph.Facts, li int, g graph.Valu
 	p := c.PLEDim
 	gate := b.MatVec(g, jlm.RolePLEGate, p)
 	in := b.Emit(graph.OpSlice, []graph.ValueID{b.G.In[len(b.G.In)-1]}, []graph.Result{{Name: "ple.in", Width: p}}, nil,
-		graph.Attrs{Offset: li * p, Width: p}, nil, nil)[0]
+		graph.Attrs{Offset: c.TapsWidth() + li*p, Width: p}, nil, nil)[0]
 	h, err := b.Stated("ple.act", m.plainActAt(li), []graph.ValueID{gate, in}, p, f)
 	if err != nil {
 		return 0, UncoveredAct, fmt.Errorf("the per-layer input's stated activation: %w", err)
@@ -1656,7 +1656,15 @@ func (m *Model) perLayerInputs(b *graph.Builder, f graph.Facts, x graph.ValueID)
 	t = scale("ple.tok.scaled", t, math.Sqrt(float64(p)))
 	pr := scale("ple.proj.scaled", b.MatVec(x, jlm.RolePLEModelProj, w), 1/math.Sqrt(float64(c.NEmbd)))
 	pr = b.HeadNorm(pr, jlm.RolePLEProjNorm, p, c.RMSEps)
-	return scale("ple.in", b.Add(pr, t), 1/math.Sqrt2)
+	pl := scale("ple.in", b.Add(pr, t), 1/math.Sqrt2)
+	if c.TapsWidth() == 0 {
+		return pl
+	}
+	// A row's tap rows lead its side input, zeros until a picture's are
+	// written over them.
+	zeros := mapRow(b, "taps.zero", graph.Attrs{Fn: graph.MapMul, Const: 0}, nil, c.TapsWidth(), x)
+	return b.Emit(graph.OpConcat, []graph.ValueID{zeros, pl}, []graph.Result{{Name: "side", Width: c.SideWidth()}}, nil,
+		graph.Attrs{}, nil, nil)[0]
 }
 
 // embedGraph is the step's input rows: each row's token's row of the

@@ -218,13 +218,13 @@ func (s *Instance) stepRowsDevice(src rowSrc, out *rowsOut) error {
 	}
 	// The rows in order's order, the wanted last one first where order
 	// moved it there, their per-layer inputs beside them.
-	d, pw := c.NEmbd, c.PleWidth()
+	d, pw := c.NEmbd, c.SideWidth()
 	var ple []float32
 	if pw > 0 {
 		s.growBPLE(n)
 		ple = s.bple[:n*pw]
 	}
-	if c.DeepTaps > 0 {
+	if c.DeepTaps > 0 && c.PLEDim == 0 {
 		// The speculated rows are tokens: their tap rows are zeros.
 		ple = s.tokenSide(n)
 		pw = 0

@@ -105,7 +105,7 @@ func (r rowSrc) givenAt(i, d int) []float32 {
 // pos: a run of token rows through the composed input rows (cpuEmbed), a
 // given run through the composed given rows (cpuGiven).
 func (s *Instance) fillRows(src rowSrc, base, n int, x, ple []float32, pos []int) error {
-	d, pw := s.c.NEmbd, s.c.PleWidth()
+	d, pw := s.c.NEmbd, s.c.InputSideWidth()
 	st := &s.inScr
 	if len(st.toks) < n {
 		st.toks = make([]int32, n)
