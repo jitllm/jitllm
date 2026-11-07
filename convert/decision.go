@@ -70,6 +70,7 @@ func decisionOf(f *meta.File, c *jlm.Config) error {
 		return fmt.Errorf("decision model %q carries no systemone template, which is its prompt", name)
 	}
 	c.Decision = kind
+	c.DecisionLabels = decisionLabelsOf(kind)
 	c.DecisionBlocks = uint32(f.UintKey("decision.block_count", 0))
 	if kind == jlm.DecisionLaya {
 		if c.Arch != jlm.ArchModernBERT || c.DecisionBlocks == 0 {

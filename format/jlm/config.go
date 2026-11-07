@@ -724,6 +724,9 @@ type Config struct {
 	// see encodeConfig.
 	DecisionRouting uint32
 	DecisionEps     float32
+	// DecisionLabels is a label readout's statement, nil for a readout of
+	// another mechanism. The twenty-fifth optional tail; see encodeConfig.
+	DecisionLabels *DecisionLabels
 
 	// Acts are the FFN activations the blocks apply, each stated in the op
 	// language (Expr), and ActLayers each layer's index into them (none:

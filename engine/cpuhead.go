@@ -145,6 +145,16 @@ func (s *Instance) pickLabels(x []float32) nn.Decline {
 	return why
 }
 
+// decideScores is a label readout over the picked logits vals, its
+// distribution into probs and its statistics into stats
+// (nn.HeadDevice.Decide), or false where it declines.
+func (s *Instance) decideScores(vals, keep, params, prior, probs, stats []float32) bool {
+	if s.heads == nil {
+		return false
+	}
+	return s.heads.Decide(vals, keep, params, prior, probs, stats)
+}
+
 // greedy is the token of the largest of logits, the lower id of two equal
 // (nn.HeadDevice.Greedy), or false where it declines.
 func (s *Instance) greedy(logits []float32) (int32, bool) {
