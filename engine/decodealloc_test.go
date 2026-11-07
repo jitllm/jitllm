@@ -133,16 +133,14 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 			// padding and spill space reserved at load, so a warm token
 			// allocates nothing either.
 			t.Run("host-q8", func(t *testing.T) {
-				if err := m.Cfg.KVTypeRefusal(model.KVQ8_0); err != nil {
-					t.Skipf("refused by name: %v", err)
-				}
-				s := testInstance(t, m, 8, append(append([]Option(nil), instOpts2...), WithKVType(model.KVQ8_0))...)
+				q8Opts := append(append([]Option(nil), instOpts2...), WithKVType(model.KVQ8_0))
+				s := testInstance(t, m, 8, q8Opts...)
 				q8 := s.KVType() == model.KVQ8_0
 				s.Close()
 				if !q8 {
 					t.Fatal("a q8_0 cache was asked for and not selected")
 				}
-				decodeAllocs(t, m, nil, instOpts2...)
+				decodeAllocs(t, m, nil, q8Opts...)
 			})
 			for _, spec := range specs {
 				t.Run(spec, func(t *testing.T) {

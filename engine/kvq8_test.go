@@ -15,34 +15,6 @@ import (
 	"github.com/jitllm/jitllm/nn"
 )
 
-// TestKVQ8RefusesByName: the caches a q8 row cannot express are refused at
-// Open, naming the reason, and through SetKVType on an open model.
-func TestKVQ8RefusesByName(t *testing.T) {
-	for _, c := range []struct{ name, why string }{
-		{"synth-deepseek-lite", "MLA"}, // the directory: jlmOf converts it fresh, a .jlm named here is opened as it stands
-		{"synth-deepseek32.gguf", "indexer key"},
-		{"synth-minimaxm3.gguf", "indexer key"},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			src, ok := existingModel(testmodels.Path(c.name))
-			if !ok {
-				testmodels.Missing(t, "%s", "MODEL MISSING: "+testmodels.Path(c.name))
-			}
-			m, err := model.Open(jlmOf(t, src))
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer m.Close()
-			if in, err := NewInstance(m, 64, WithKVType(model.KVQ8_0)); err == nil || !strings.Contains(err.Error(), c.why) {
-				if in != nil {
-					in.Close()
-				}
-				t.Fatalf("an instance with a q8_0 cache: %v, want a refusal naming %q", err, c.why)
-			}
-		})
-	}
-}
-
 // TestCPUConvertsAQ8History runs a q8 history's composed conversions through
 // the instance, as a migration does: rows of every head width its layers
 // hold, past whole units of the forms so the last rows are staged, narrowed
@@ -58,9 +30,6 @@ func TestCPUConvertsAQ8History(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer m.Close()
-			if m.Cfg.KvQ8Inexpressible() != nil {
-				return
-			}
 			s := testInstance(t, m, 8, WithKVType(model.KVQ8_0))
 			defer s.Close()
 			if s.KVType() != model.KVQ8_0 {
@@ -159,9 +128,6 @@ func TestCPUAttendsAQ8History(t *testing.T) {
 				}
 			}
 			if li < 0 {
-				return
-			}
-			if m.Cfg.KvQ8Inexpressible() != nil {
 				return
 			}
 			ids := m.Vocab.Encode(strings.Repeat("The quick brown fox jumps over the lazy dog. ", 6), true)
