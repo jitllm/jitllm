@@ -54,6 +54,7 @@ func TestEveryModelRunsOnACard(t *testing.T) {
 	defer g.Close()
 	slow := os.Getenv("JITLLM_SLOW") != ""
 	pick := os.Getenv("JITLLM_AUDIT_MODEL")
+	ran := 0
 	for _, src := range auditModels(t) {
 		if pick != "" && !strings.Contains(src.path, pick) {
 			continue
@@ -61,6 +62,7 @@ func TestEveryModelRunsOnACard(t *testing.T) {
 		if pick == "" && !slow && src.size > 2<<30 {
 			continue
 		}
+		ran++
 		t.Run(src.name, func(t *testing.T) {
 			path := src.path
 			if src.hf {
@@ -83,6 +85,34 @@ func TestEveryModelRunsOnACard(t *testing.T) {
 				t.Fatalf("the converter accepted it and Open refused it: %v", err)
 			}
 			defer m.Close()
+			if m.IsEmbedding() {
+				// An embedding model runs through its embedder, every block on
+				// the card.
+				e, err := NewEmbedder(m, WithKVF16(false))
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer e.Close()
+				if err := e.SetDeviceLayers(g, -1); err != nil {
+					t.Fatal(err)
+				}
+				if n := e.DeviceBlocks(); n != m.Cfg.NLayer {
+					t.Fatalf("the card took %d of %d blocks: %v (%s)", n, m.Cfg.NLayer, e.DeviceDeclines(), g.Err())
+				}
+				formed := g.Stats().FormedAtStep
+				for i := range 3 {
+					v, err := e.Embed([]int32{1, int32(2 + i), 3})
+					if err != nil {
+						t.Fatalf("Embed on the card: %v (%s)", err, g.Err())
+					}
+					finite(t, "Embed on the card", v)
+				}
+				if s := g.Stats(); s.FormedAtStep != formed {
+					t.Fatalf("the card formed %d part(s) at a step after placement (by part %v): %s",
+						s.FormedAtStep-formed, s.FormedAtStepParts, g.Err())
+				}
+				return
+			}
 			st := cardInstance(t, m, g)
 			defer st.Close()
 			formed := g.Stats().FormedAtStep
@@ -98,6 +128,9 @@ func TestEveryModelRunsOnACard(t *testing.T) {
 					s.FormedAtStep-formed, s.FormedAtStepParts, g.Err())
 			}
 		})
+	}
+	if ran == 0 {
+		t.Fatalf("no model ran on the card (JITLLM_AUDIT_MODEL %q) -- this gate proved nothing", pick)
 	}
 }
 
@@ -219,6 +252,9 @@ func auditRun(t *testing.T, m *model.Model, io ...Option) {
 			t.Fatalf("Embed: %v", err)
 		}
 		finite(t, "Embed", v)
+		// An embedding model has no head to decode with: it runs as it is
+		// read, through its embedder.
+		return
 	}
 	s := testInstance(t, m, 16, io...)
 	logits, err := s.Forward(1)
@@ -250,6 +286,34 @@ func auditComposedCPU(t *testing.T, name, path string, opts ...Option) {
 	defer m.Close()
 	auditRun(t, m, instOpts...)
 	const steps = 3
+	if m.IsEmbedding() {
+		e, err := NewEmbedder(m, instOpts...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer e.Close()
+		asked := e.st.Account(nn.CPU).Asks
+		for i := range steps {
+			v, err := e.Embed([]int32{1, int32(2 + i), 3})
+			if err != nil {
+				t.Fatalf("Embed: %v", err)
+			}
+			finite(t, "Embed", v)
+		}
+		if n := e.st.Account(nn.CPU).Asks - asked; n != 0 {
+			t.Fatalf("the embeddings asked the composer for %d form(s) after the instance was made", n)
+		}
+		served, declined := e.st.Account(nn.CPU).Steps.Of(nn.ComposedBlock)
+		for i, n := range declined {
+			if n > 0 {
+				t.Fatalf("%d block steps declined on the composed CPU: %s (%v)", n, nn.DeclineName(i), e.st.Account(nn.CPU).FormErr)
+			}
+		}
+		if served == 0 {
+			t.Fatal("the embeddings served no block step on the composed CPU")
+		}
+		return
+	}
 	s := testInstance(t, m, 16, instOpts...)
 	defer s.Close()
 	asked := s.Account(nn.CPU).Asks
