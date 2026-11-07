@@ -279,3 +279,50 @@ func TestDecisionMovesBetweenCards(t *testing.T) {
 		})
 	}
 }
+
+// TestDecisionDistributes runs a label readout with its blocks split over two
+// cards, the first half on one and the rest and the head on the other, every
+// answer held to llama.cpp's.
+func TestDecisionDistributes(t *testing.T) {
+	for _, c := range decisionCases() {
+		t.Run(c.name, func(t *testing.T) {
+			a, b := moveDevices(t)
+			g, err := openGPU(t, gpu.WithDevices(a+","+b), gpu.WithDeviceTune(gpu.TuneOff))
+			if err != nil || g == nil {
+				noDevice(t, a+","+b, err)
+			}
+			defer g.Close()
+			distinctCards(t, g)
+			m := openDecision(t, c)
+			defer m.Close()
+			half := m.Cfg.NLayer / 2
+			blocks := map[int]Place{}
+			for li := range half {
+				blocks[li] = Place{On: a}
+			}
+			in, err := NewInstance(m, 4096, WithKVF16(false),
+				WithPlacement(Placement{Blocks: blocks, Rest: &Place{On: b}, Head: &Place{On: b}, Strict: true}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer in.Close()
+			if err := in.SetDevice(g); err != nil {
+				t.Fatal(err)
+			}
+			if na, nb := len(in.placedOn(a)), len(in.placedOn(b)); na != half || nb != m.Cfg.NLayer-half {
+				t.Fatalf("%d blocks on %s and %d on %s, want %d and %d", na, a, nb, b, half, m.Cfg.NLayer-half)
+			}
+			d, err := NewDecider(in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			state, qs := decisionRequest(t, "support")
+			ans, err := d.Decide(state, qs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			worst := checkDecisions(t, qs, ans, readDecisionGold(t, c.gold+".support.llamacpp.json"), c.tol)
+			t.Logf("%d blocks on %s, %d on %s; worst difference from llama.cpp %.5f", half, a, m.Cfg.NLayer-half, b, worst)
+		})
+	}
+}
