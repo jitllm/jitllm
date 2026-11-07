@@ -381,6 +381,9 @@ type Stats struct {
 	// dummy and the free pages included -- what competes with weights for the
 	// budget, where KVBytes is what sequences hold of it.
 	KVPoolBytes uint64
+	// KVFreeBytes is the part of KVPoolBytes a shrink gives back: the pages
+	// beyond those in use and each layer's floor (shrinkKVLayer).
+	KVFreeBytes uint64
 	// BudgetUsed is what the device's budget has spent: weights, scratch and
 	// the pool. SetBudget below it pages something out; at it, nothing grows.
 	BudgetUsed uint64
@@ -847,6 +850,7 @@ func (s *Stats) add(o Stats) {
 	s.PrepackedBytes += o.PrepackedBytes
 	s.KVBytes += o.KVBytes
 	s.KVPoolBytes += o.KVPoolBytes
+	s.KVFreeBytes += o.KVFreeBytes
 	s.BudgetUsed += o.BudgetUsed
 	s.ScratchBytes += o.ScratchBytes
 	s.ComposedBytes += o.ComposedBytes
@@ -1851,6 +1855,19 @@ func (d *devTier) stats() Stats {
 			}
 		}
 		s.KVPoolBytes = d.kvp.charged()
+		for _, l := range d.kvp.layers {
+			live := 1
+			for _, ids := range l.owned {
+				for _, id := range ids {
+					if id != 0 {
+						live++
+					}
+				}
+			}
+			if spare := l.n - max(live, l.floor, 1); spare > 0 {
+				s.KVFreeBytes += uint64(spare) * d.kvp.pageBytes(l)
+			}
+		}
 	}
 	s.BudgetUsed = d.used
 	s.ComposedBytes, s.ComposedArena = d.instBytes, d.arenaBytes
