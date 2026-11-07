@@ -11,19 +11,19 @@ import (
 )
 
 // TestStepRowsAreTheirOwn: on a model split over two devices whose steps are
-// one kernel for every row count (gpu.GPU.RowsComposed), a session's logits
-// are bit for bit the same whatever other sessions share its steps -- its
-// prompt alone or beside another's, its decode alone, beside a shorter
-// history or beside a longer one, its prompt in chunks of any size -- which is
-// what lets the decode groups split rows without moving a token.
+// composed for every row count (gpu.GPU.RowsComposed), a session's rows are
+// its own. Beside other sessions -- a shorter prompt, a longer history, two
+// prompts -- its logits are bit for bit those of the same steps beside other
+// sessions of the same lengths: the same forms run, and only the other rows
+// differ. Against its steps alone, or its prompt in chunks, other forms run
+// (a form per row count, its own arithmetic: RULE 8), so they are held to a
+// band: three times how far the session's two paths alone stand apart, the
+// joint step and the one-at-a-time path. Every arm's tokens are the arm alone's, teacher-forced, so one
+// argmax flipped inside the band does not part every step after it.
 //
-// The one-at-a-time path (engine.StepRuns of one instance: Prefill's tier
-// kernels, Forward's one-row form) is other arithmetic, and the server's
-// loop moves a row onto it whenever the row steps alone, so a row's tokens
-// still follow the schedule: those arms are measured and logged as the gap
-// that keeps the load gate's one-group arm from repeating itself, and not
-// held equal (Qwen3-0.6B on the laptop: up to 0.30 of a logit, the joint
-// arm at one row 59.7 ms a step where Forward is 18.7).
+// The one-at-a-time path (engine.StepRuns of one instance: Prefill, then
+// Forward's one-row form) is the other path the server's loop runs a row
+// alone on; how far it stands from the joint step alone sets the band.
 func TestStepRowsAreTheirOwn(t *testing.T) {
 	devs := testdevices.Take(t, 2, "cuda:0,vulkan:1")
 	eachBatchModel(t, func(t *testing.T, name string) {
@@ -99,6 +99,7 @@ func TestStepRowsAreTheirOwn(t *testing.T) {
 		// decode step beside theirs.
 		// With pre, each other state's prompt runs alone first, and a's
 		// prompt steps beside their first decode.
+		var forced []int32
 		trace := func(others [][]int32, pre bool, chunk int) ([][]float32, time.Duration) {
 			sa := state()
 			pa := a
@@ -130,8 +131,11 @@ func TestStepRowsAreTheirOwn(t *testing.T) {
 			for i := range next {
 				next[i] = argmax(out[i])
 			}
+			if forced != nil {
+				next[len(others)] = forced[0]
+			}
 			t0 := time.Now()
-			for range dec {
+			for k := range dec {
 				runs = runs[:0]
 				for i := range others {
 					runs = append(runs, run(sts[i], next[i:i+1]))
@@ -141,11 +145,49 @@ func TestStepRowsAreTheirOwn(t *testing.T) {
 				for i := range next {
 					next[i] = argmax(out[i])
 				}
+				if forced != nil {
+					next[len(others)] = forced[k+1]
+				}
 			}
 			return got, time.Since(t0) / dec
 		}
 		alone, dt := trace(nil, false, 0)
 		t.Logf("alone: %v a decode step", dt)
+		for _, row := range alone {
+			forced = append(forced, argmax(row))
+		}
+		// apart is how far got's steps are from want's: the elements that
+		// differ, the largest difference and the worst step's NMSE.
+		apart := func(want, got [][]float32) (n int, diff, worst float64) {
+			for k := range want {
+				var num, den float64
+				for i := range want[k] {
+					d := float64(want[k][i] - got[k][i])
+					if d != 0 || math.Float32bits(want[k][i]) != math.Float32bits(got[k][i]) {
+						n++
+					}
+					diff = max(diff, math.Abs(d))
+					num += d * d
+					den += float64(want[k][i]) * float64(want[k][i])
+				}
+				worst = max(worst, num/max(den, 1e-30))
+			}
+			return n, diff, worst
+		}
+		// other is a prompt of each of others' lengths, of other tokens.
+		lone = true
+		loneAlone, _ := trace(nil, false, 0)
+		lone = false
+		_, _, paths := apart(alone, loneAlone)
+		band := 3 * max(paths, 1e-6)
+		t.Logf("the two paths alone stand %.3e apart: the band is %.3e", paths, band)
+		other := func(others [][]int32) [][]int32 {
+			out := make([][]int32, len(others))
+			for i, o := range others {
+				out[i] = mk(uint32(100+i), len(o))
+			}
+			return out
+		}
 		for _, arm := range []struct {
 			name   string
 			others [][]int32
@@ -161,27 +203,26 @@ func TestStepRowsAreTheirOwn(t *testing.T) {
 			{"its prompt in chunks of 7, beside a longer history", [][]int32{l}, true, 7, false},
 			{"its prompt a token at a time", nil, false, 1, false},
 			{"its prompt through Prefill but its last token", nil, false, -1, false},
-			{"alone, the one-at-a-time path", nil, false, 0, true},
 			{"in chunks of 20, the one-at-a-time path", nil, false, 20, true},
 		} {
 			lone = arm.lone
 			got, dt := trace(arm.others, arm.pre, arm.chunk)
 			t.Logf("%s: %v a decode step", arm.name, dt)
+			if len(arm.others) > 0 {
+				twin, _ := trace(other(arm.others), arm.pre, arm.chunk)
+				if n, diff, _ := apart(got, twin); n > 0 {
+					t.Errorf("%s: %d logits differ beside other sessions of the same lengths, by up to %.3g: "+
+						"a row read another's", arm.name, n, diff)
+				}
+			}
 			lone = false
-			for k := range alone {
-				diff, n := 0.0, 0
-				for i := range alone[k] {
-					if math.Float32bits(alone[k][i]) != math.Float32bits(got[k][i]) {
-						n++
-						diff = max(diff, math.Abs(float64(alone[k][i]-got[k][i])))
-					}
-				}
-				switch {
-				case n > 0 && arm.chunk >= 0 && !arm.lone:
-					t.Errorf("%s, step %d: %d of %d logits differ from alone, by up to %.3g", arm.name, k, n, len(alone[k]), diff)
-				case n > 0 && k < 2:
-					t.Logf("%s, step %d: %d of %d logits differ from the joint arm, by up to %.3g", arm.name, k, n, len(alone[k]), diff)
-				}
+			n, diff, worst := apart(alone, got)
+			switch {
+			case worst > band:
+				t.Errorf("%s: NMSE %.3e from alone (%d logits apart, by up to %.3g), past the band %.3e",
+					arm.name, worst, n, diff, band)
+			case n > 0:
+				t.Logf("%s: NMSE %.3e from alone, by up to %.3g", arm.name, worst, diff)
 			}
 		}
 	})
