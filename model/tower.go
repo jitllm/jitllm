@@ -51,7 +51,10 @@ type TowerGraphs struct {
 	// after each of its rows (TOpRowBreak), Ends before and after it
 	// (TOpWrapRows); Frame the merge they count the grid over.
 	Line, Ends, Frame int
-	Full              []bool
+	// Trim is the break rows the frame leaves off its last row: 1 where the
+	// head breaks after each merged row but the last (TOpRowBreak's Offset).
+	Trim int
+	Full []bool
 	// fit is how a picture becomes the tower's squares.
 	Fit PictureFit
 	// table and planes are the blocks' rotary table and its planes, nil for
@@ -329,7 +332,7 @@ func (m *Model) BuildTowerGraphs() (*TowerGraphs, error) {
 		return nil, fmt.Errorf("model: the tower's head: %w", err)
 	}
 	tg.Head, tg.Out = h, out
-	if tg.Line, tg.Frame = programFrame(&t.Head); tg.Frame > 0 {
+	if tg.Line, tg.Frame, tg.Trim = programFrame(&t.Head); tg.Frame > 0 {
 		for _, op := range t.Head.Ops {
 			if op.Code == jlm.TOpWrapRows {
 				tg.Ends = 1
@@ -384,6 +387,21 @@ type PictureFit struct {
 	// (jlm.PreLongBox): the shorter side at least BoxMin; Box 0 where there
 	// is none.
 	Box, BoxMin int
+	// Cap and CapUnit are a resize that keeps the longer side at most Cap
+	// pixels, each side then rounded up to a whole CapUnit (jlm.PreCapUnit);
+	// Cap 0 where there is none.
+	Cap, CapUnit int
+}
+
+// capSize is a w x h picture's size under the cap (PixtralImageProcessor's
+// get_resize_output_image_size): both sides divided by the longer over Cap
+// and floored where it passes Cap, then each rounded up to a whole unit.
+func (f PictureFit) capSize(w, h int) (int, int) {
+	if r := math.Max(float64(w), float64(h)) / float64(f.Cap); r > 1 {
+		w, h = int(math.Floor(float64(w)/r)), int(math.Floor(float64(h)/r))
+	}
+	u := f.CapUnit
+	return ((max(w, 1)-1)/u + 1) * u, ((max(h, 1)-1)/u + 1) * u
 }
 
 // boxSize is a w x h picture's size inside its box (Janus's resize): the
@@ -395,12 +413,15 @@ func (f PictureFit) boxSize(w, h int) (int, int) {
 }
 
 // Own reports that a picture is encoded at a size of its own.
-func (f PictureFit) Own() bool { return f.Factor > 0 || f.Limit > 0 }
+func (f PictureFit) Own() bool { return f.Factor > 0 || f.Limit > 0 || f.Cap > 0 }
 
 // unit is the multiple a picture of its own size's encoded sides are.
 func (f PictureFit) unit() int {
-	if f.Limit > 0 {
+	switch {
+	case f.Limit > 0:
 		return f.Pad
+	case f.Cap > 0:
+		return f.CapUnit
 	}
 	return f.Factor
 }
@@ -505,6 +526,12 @@ func towerFit(t *jlm.Tower) (PictureFit, error) {
 			fit.Factor, fit.MinPix, fit.MaxPix = int(s.Ints[0]), int(s.Ints[1]), int(s.Ints[2])
 			fit.lift = len(s.Ints) == 6 && s.Ints[5] == 1
 			sized, pil = true, jlm.Filter(s.Ints[3]) != jlm.FilterTwoTap
+		case jlm.PreCapUnit:
+			fit.Cap, fit.CapUnit = int(s.Ints[0]), int(s.Ints[1])
+			// The area the reduction reaches: the cap's, rounded up a unit.
+			side := (fit.Cap + fit.CapUnit - 1) / fit.CapUnit * fit.CapUnit
+			fit.MaxPix = side * side
+			sized, pil = true, jlm.Filter(s.Ints[2]) != jlm.FilterTwoTap
 		case jlm.PreNaFlex:
 			p := int(s.Ints[0])
 			fit.Factor, fit.MinPix, fit.MaxPix, fit.naflex = p, int(s.Ints[1])*p*p, int(s.Ints[2])*p*p, true
@@ -526,7 +553,7 @@ func towerFit(t *jlm.Tower) (PictureFit, error) {
 		}
 	}
 	ways := 0
-	for _, w := range []bool{fit.Short > 0, fit.MaxTiles > 0, fit.Factor > 0, fit.Limit > 0, fit.Box > 0} {
+	for _, w := range []bool{fit.Short > 0, fit.MaxTiles > 0, fit.Factor > 0, fit.Limit > 0, fit.Box > 0, fit.Cap > 0} {
 		if w {
 			ways++
 		}
@@ -568,6 +595,11 @@ func towerEntry(t *jlm.Tower, px uint8, grid, lead, side int, fit PictureFit, f 
 		case jlm.PreSmartResize:
 			a.PicW, a.PicH, a.PicLive = side, side, true
 			if err := resizeChain(&a, jlm.Filter(s.Ints[3])); err != nil {
+				return nil, err
+			}
+		case jlm.PreCapUnit:
+			a.PicW, a.PicH, a.PicLive = side, side, true
+			if err := resizeChain(&a, jlm.Filter(s.Ints[2])); err != nil {
 				return nil, err
 			}
 		case jlm.PreNaFlex:
@@ -741,6 +773,14 @@ type Square struct {
 // at its own size in the smallest class that holds it, or a fixed square,
 // a crop or a tile at the entry's size.
 func (tg *TowerGraphs) Square(w, h, i int) (Square, int) {
+	if tg.Fit.Cap > 0 {
+		ow, oh := tg.Fit.capSize(w, h)
+		c := 0
+		for c < len(tg.Classes)-1 && max(ow, oh) > tg.Classes[c].Pic.PicW {
+			c++
+		}
+		return Square{Class: c, Ow: ow, Oh: oh, Pw: ow, Ph: oh, Gw: ow / tg.Patch, Gh: oh / tg.Patch}, 1
+	}
 	if tg.Fit.Box > 0 {
 		// Resized inside the box, which the picture op lays it in.
 		ow, oh := tg.Fit.boxSize(w, h)
@@ -777,7 +817,7 @@ func (tg *TowerGraphs) Square(w, h, i int) (Square, int) {
 func (tg *TowerGraphs) SquareOut(sq Square) int {
 	if tg.Frame > 0 {
 		m := tg.Frame
-		return (sq.Gh/m)*(sq.Gw/m+tg.Line) + 2*tg.Ends
+		return (sq.Gh/m)*(sq.Gw/m+tg.Line) - tg.Trim + 2*tg.Ends
 	}
 	return sq.Gw * sq.Gh * tg.Out / (tg.Rows - tg.Lead)
 }
@@ -1051,9 +1091,9 @@ func lowerValuesWith(b *graph.Builder, t *jlm.Tower, p *jlm.Program, in []graph.
 				[]graph.Binding{{Role: op.Bind[0], K: width(ins[0])}}, graph.Attrs{Offset: int(op.Offset)}, nil, nil)[0]
 		case jlm.TOpRowBreak:
 			out = b.Emit(graph.OpRowBreak, ins, []graph.Result{{Name: "lines", Width: width(ins[0]), Rows: 2 * rowsOf(ins[0])}},
-				[]graph.Binding{{Role: op.Bind[0], K: width(ins[0])}}, graph.Attrs{Span: int(op.Span)}, nil, nil)[0]
+				[]graph.Binding{{Role: op.Bind[0], K: width(ins[0])}}, graph.Attrs{Span: int(op.Span), Offset: int(op.Offset)}, nil, nil)[0]
 		case jlm.TOpWrapRows:
-			line, _ := programFrame(p)
+			line, _, _ := programFrame(p)
 			out = b.Emit(graph.OpWrapRows, ins, []graph.Result{{Name: "framed", Width: width(ins[0]), Rows: rowsOf(ins[0]) + 2}},
 				[]graph.Binding{{Role: op.Bind[0], K: width(ins[0])}, {Role: op.Bind[1], K: width(ins[0])}},
 				graph.Attrs{Span: int(op.Span), Offset: int(t.Entry.Ops[0].Offset), Width: line}, nil, nil)[0]
@@ -1375,15 +1415,15 @@ func pictureKey(img image.Image) (*RowsKey, error) {
 }
 
 // programFrame is the rows a program's TOpRowBreak adds after each row of
-// the merged grid -- 1 where it has one, 0 where not -- and the merge it
-// counts that grid over.
-func programFrame(p *jlm.Program) (line, merge int) {
+// the merged grid -- 1 where it has one, 0 where not -- the merge it counts
+// that grid over, and the breaks it leaves off the last row.
+func programFrame(p *jlm.Program) (line, merge, trim int) {
 	for _, op := range p.Ops {
 		if op.Code == jlm.TOpRowBreak {
-			return 1, int(op.Span)
+			return 1, int(op.Span), int(op.Offset)
 		}
 	}
-	return 0, 0
+	return 0, 0, 0
 }
 
 // naflexSize is the size SigLIP2's NaFlex processor resamples a w x h

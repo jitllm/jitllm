@@ -96,6 +96,11 @@ const (
 	// (SigLIP2's get_image_size_for_max_num_patches); with filter Ints[3] in
 	// arithmetic Ints[4].
 	PreNaFlex PreKind = 9
+	// PreCapUnit resamples the picture so neither side passes Ints[0]
+	// pixels -- both divided by longer / Ints[0] and floored, where the
+	// longer passes it -- then each side rounded up to a whole Ints[1]
+	// pixels, with filter Ints[2] in arithmetic Ints[3] (Pixtral's resize).
+	PreCapUnit PreKind = 10
 )
 
 // Filter is a resampling filter.
@@ -211,7 +216,8 @@ const (
 	TOpShift OpCode = 23
 	// TOpRowBreak is In[0]'s rows -- the merged grid's raster, its width the
 	// picture's patch grid's over Span -- with Bind[0]'s one row after each
-	// of the grid's rows (HunyuanVL's newline).
+	// of the grid's rows (HunyuanVL's newline), or after each but the last
+	// where Offset is 1 (Pixtral's [IMG_BREAK]).
 	TOpRowBreak OpCode = 24
 	// TOpWrapRows is Bind[0]'s one row, In[0]'s rows -- the patch grid over
 	// Span, with a TOpRowBreak's row after each of its rows where one came
@@ -397,6 +403,10 @@ func (t *Tower) Valid() error {
 				!resizes(Filter(s.Ints[3]), Precision(s.Ints[4])) {
 				return fmt.Errorf("jlm: the tower's step %d limits and pads with %v", i, s.Ints)
 			}
+		case PreCapUnit:
+			if len(s.Ints) != 4 || s.Ints[0] <= 0 || s.Ints[1] <= 0 || !resizes(Filter(s.Ints[2]), Precision(s.Ints[3])) {
+				return fmt.Errorf("jlm: the tower's step %d caps the picture with %v", i, s.Ints)
+			}
 		case PreNaFlex:
 			if len(s.Ints) != 5 || s.Ints[0] <= 0 || s.Ints[1] <= 0 || s.Ints[2] < s.Ints[1] ||
 				!resizes(Filter(s.Ints[3]), Precision(s.Ints[4])) {
@@ -513,6 +523,8 @@ func (p *Program) valid(name string) error {
 		case (op.Code == TOpPatchify || op.Code == TOpRegroup || op.Code == TOpPool || op.Code == TOpFold ||
 			op.Code == TOpRowBreak || op.Code == TOpWrapRows) && op.Span <= 0:
 			return fmt.Errorf("jlm: the tower's %s op %d groups by %d", name, i, op.Span)
+		case op.Code == TOpRowBreak && op.Offset&^1 != 0:
+			return fmt.Errorf("jlm: the tower's %s op %d breaks rows with an offset of %d", name, i, op.Offset)
 		case (op.Code == TOpLayerNorm || op.Code == TOpRMSNorm) && op.Eps <= 0:
 			return fmt.Errorf("jlm: the tower's %s op %d has an epsilon of %v", name, i, op.Eps)
 		case op.Code == TOpNGramRows && (op.Span < 2 || op.Width <= 0 || !op.Hash.fits(op.Span, op.Width)):

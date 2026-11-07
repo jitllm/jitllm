@@ -803,14 +803,22 @@ func decomposeRowBreak(o graph.Op, c *Context) ([]Prim, error) {
 	r, i := x.coord(0), x.coord(1)
 	u := func(v int) int { return x.u(uint32(v)) }
 	W := x.op(OpDiv, U, x.op(OpMax, U, x.load(2, u(RequestGrid)), u(S)), u(S))
+	H := x.op(OpDiv, U, x.op(OpMax, U, x.load(2, u(RequestGridH)), u(S)), u(S))
 	line := x.op(OpAdd, U, W, u(1))
-	k := x.op(OpRem, U, r, line)
-	src := x.op(OpAdd, U, x.op(OpMul, U, x.op(OpDiv, U, r, line), W), k)
+	// A row past the frame's last is clamped to it, recomputing it: the
+	// break may be the head's last op, and no row past the picture's is
+	// written.
+	last := x.op(OpSub, U, x.op(OpMul, U, H, line), u(1+o.Attr.Offset))
+	rr := x.op(OpMin, U, r, x.op(OpMin, U, last, u(sh[0]-1)))
+	k := x.op(OpRem, U, rr, line)
+	src := x.op(OpAdd, U, x.op(OpMul, U, x.op(OpDiv, U, rr, line), W), k)
 	in := x.at(0, ish, x.op(OpMin, U, src, u(ish[0]-1)), i)
 	nl := x.at(1, []int{sh[1]}, i)
-	x.sel(ir.F32, x.op(OpLess, ir.Pred, k, W), in, nl)
+	v := x.sel(ir.F32, x.op(OpLess, ir.Pred, k, W), in, nl)
+	out := c.value(o.Out[0])
 	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0]), {Kind: OperandVector, Role: w.Role, Name: w.Role.String()},
-		TableRequest.op()}, Out: c.value(o.Out[0]), Expr: x.e, Facts: Facts{Extents: map[int]int{2: RequestRows + sh[0]}}}}, nil
+		TableRequest.op()}, Out: out, Expr: x.e, Facts: Facts{Extents: map[int]int{2: RequestRows + sh[0]}},
+		Stores: []PrimStore{{Out: out, Ax: []int{rr, i}, Ext: sh, Value: v}}}}, nil
 }
 
 // decomposeWrapRows is the first weight's row, the input's rows and the
