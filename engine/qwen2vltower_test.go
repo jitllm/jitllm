@@ -49,6 +49,12 @@ func rgbPicture(rgb []byte, w, h int) *image.NRGBA {
 // resized and normalised picture, [y][x][channel], and its square.
 func towerPixels(t *testing.T, s *Instance, img image.Image) ([]float32, model.Square) {
 	t.Helper()
+	return towerPixelsAt(t, s, img, 0)
+}
+
+// towerPixelsAt is towerPixels of img's square i.
+func towerPixelsAt(t *testing.T, s *Instance, img image.Image, i int) ([]float32, model.Square) {
+	t.Helper()
 	if err := s.towerReady(); err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +65,7 @@ func towerPixels(t *testing.T, s *Instance, img image.Image) ([]float32, model.S
 		t.Fatal(err)
 	}
 	pl.Request(tr.req)
-	sq, squares := tg.Square(pl.W, pl.H, 0)
+	sq, squares := tg.Square(pl.W, pl.H, i)
 	cl := tg.Classes[sq.Class]
 	a := cl.Pic
 	a.Pixels = pl.Px

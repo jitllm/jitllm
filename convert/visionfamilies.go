@@ -432,3 +432,81 @@ func towerGathered(name string) bool {
 	_, _, ok := layerScaleOf(name)
 	return ok
 }
+
+// tokenRow is the text table's row of token id, dequantized as the text
+// model reads it.
+func tokenRow(s *jlm.Source, id int) ([]float32, error) {
+	for i := range s.Tensors {
+		t := &s.Tensors[i]
+		if t.Role != jlm.RoleTokenEmbd {
+			continue
+		}
+		src, ok := sourceType(t.Type)
+		if !ok || t.NDim != 2 || uint64(id) >= t.Dims[1] {
+			return nil, fmt.Errorf("convert: %s cannot give token %d's row", t.Name, id)
+		}
+		k := int(t.Dims[0])
+		be, bb := int(src.BlockElems()), int(src.BlockBytes())
+		if k%be != 0 {
+			return nil, fmt.Errorf("convert: %s rows are %d wide, not whole %v blocks", t.Name, k, src)
+		}
+		rb := k / be * bb
+		b, err := t.Bytes()
+		if err != nil {
+			return nil, err
+		}
+		row := make([]float32, k)
+		if err := quant.Dequant32(src, b[id*rb:(id+1)*rb], row); err != nil {
+			return nil, fmt.Errorf("convert: %s row %d: %w", t.Name, id, err)
+		}
+		return row, nil
+	}
+	return nil, fmt.Errorf("convert: no text token table to take token %d's row from", id)
+}
+
+// tileMarks writes a tiled picture's marker rows (jlm.RoleVTileMarks): the
+// text table's row of <|img_row_R_col_C|> at (R-1)*span + C-1 for every tile
+// a grid of at most span tiles reaches, then <|img_thumbnail|>'s; the rows no
+// grid reaches are zero.
+func tileMarks(s *jlm.Source, span int) error {
+	ids := map[string]int{}
+	if s.Vocab != nil {
+		for i, tok := range s.Vocab.Tokens {
+			ids[tok] = i
+		}
+	}
+	var table []float32
+	k := 0
+	put := func(at int, name string) error {
+		id, ok := ids[name]
+		if !ok {
+			return fmt.Errorf("convert: the vocabulary has no %q, a tiled picture's marker", name)
+		}
+		row, err := tokenRow(s, id)
+		if err != nil {
+			return err
+		}
+		if table == nil {
+			k = len(row)
+			table = make([]float32, (span*span+1)*k)
+		}
+		copy(table[at*k:(at+1)*k], row)
+		return nil
+	}
+	for r := range span {
+		for c := range span {
+			if (r+1)*(c+1) <= span {
+				if err := put(r*span+c, fmt.Sprintf("<|img_row_%d_col_%d|>", r+1, c+1)); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	if err := put(span*span, "<|img_thumbnail|>"); err != nil {
+		return err
+	}
+	e := jlm.Tensor{Role: jlm.RoleVTileMarks, Block: jlm.DenseBlock, Index: -1, Name: "v.token_embd.tile_marks"}
+	setF32Dims(&e, table, uint64(k), uint64(span*span+1))
+	s.Tensors = append(s.Tensors, e)
+	return nil
+}

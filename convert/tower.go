@@ -57,6 +57,8 @@ func towerStater(p jlm.Projector) func(*jlm.Source) (*jlm.Tower, error) {
 		return pixtralTower
 	case jlm.ProjGemma4V:
 		return gemma4vTower
+	case jlm.ProjLFM2:
+		return lfm2Tower
 	}
 	return nil
 }
@@ -1343,6 +1345,115 @@ func gemma4vTower(s *jlm.Source) (*jlm.Tower, error) {
 	}
 	if err := t.Valid(); err != nil {
 		return nil, fmt.Errorf("convert: gemma4v: %w", err)
+	}
+	return t, nil
+}
+
+// lfm2Tower is LFM2-VL's tower (and d1's) as transformers'
+// Lfm2VlImageProcessor, Siglip2VisionModel and Lfm2VlMultiModalProjector run
+// it: a picture whose sides, rounded to whole merge units, hold more than
+// the file's tolerance times its piece's pixel bound cut into the grid of
+// tiles closest to its aspect, resized onto the grid and cut row-major, then
+// the whole at its own size as a thumbnail; any other picture one piece at
+// that size (each side rounded half to even to a merge unit and scaled into
+// the file's bounds); resized by the file's filter as torchvision resizes an
+// 8-bit picture, and normalised. Each
+// piece runs SigLIP2's NaFlex tower -- the patches through a biased matrix
+// plus the square position table resized to the piece's grid by torch's
+// antialiased bilinear, LayerNorm blocks, the post-LayerNorm -- then the
+// projector: the Scale x Scale unshuffle, the LayerNorm where the file has
+// one, two matrices with the exact GELU between. A tiled picture's pieces
+// each follow their marker, <|img_row_R_col_C|> for a tile and
+// <|img_thumbnail|> for the thumbnail, rows the converter copies from the
+// text table (tileMarks); the picture is <|image_start|>, its pieces,
+// <|image_end|>, the template's <image> its mark.
+func lfm2Tower(s *jlm.Source) (*jlm.Tower, error) {
+	v := s.Vision
+	has := towerRoles(s)
+	for _, r := range []jlm.Role{jlm.RoleVPatchEmbd, jlm.RoleVPosEmbd, jlm.RoleVPostNorm, jlm.RoleVProj, jlm.RoleVProj2} {
+		if !has[r] {
+			return nil, fmt.Errorf("convert: lfm2: the tower has no %v", r)
+		}
+	}
+	P, merge := int32(v.PatchSize), int32(v.Scale)
+	if v.NHead == 0 || v.NEmbd%v.NHead != 0 || P == 0 || merge < 1 || v.ImageSize%v.PatchSize != 0 ||
+		v.TileSize == 0 || v.MinTiles < 1 || v.MaxTiles < v.MinTiles || !(v.Tolerance > 0) {
+		return nil, fmt.Errorf("convert: lfm2: %d heads over %d, patches of %d merged by %d, tiles of %d (%d to %d past %g)",
+			v.NHead, v.NEmbd, P, merge, v.TileSize, v.MinTiles, v.MaxTiles, v.Tolerance)
+	}
+	var hidden int32
+	for i := range s.Tensors {
+		if t := &s.Tensors[i]; t.Block == jlm.DenseBlock && t.Role == jlm.RoleVProj {
+			hidden = int32(t.Dims[1])
+		}
+	}
+	act, err := v.Activation(false)
+	if err != nil {
+		return nil, err
+	}
+	bias := func(w, b jlm.Role) []jlm.Role {
+		if has[b] {
+			return []jlm.Role{w, b}
+		}
+		return []jlm.Role{w}
+	}
+	span := int32(v.MaxTiles)
+	if err := tileMarks(s, int(span)); err != nil {
+		return nil, err
+	}
+	filter := jlm.FilterPILBilinear
+	if v.Flags.Has(jlm.FlagVisionBicubic) {
+		filter = jlm.FilterPILBicubic
+	}
+	var gelu jlm.ExprBuilder
+	gelu.GELUErf(jlm.Operand(0))
+	var head jlm.Program
+	head.NIn = 1
+	at := uint16(0)
+	op := func(o jlm.TowerOp) {
+		o.In = []uint16{at}
+		head.Ops = append(head.Ops, o)
+		at = uint16(len(head.Ops))
+	}
+	op(jlm.TowerOp{Code: jlm.TOpLayerNorm, Bind: bias(jlm.RoleVPostNorm, jlm.RoleVPostNormBias), Eps: v.Eps})
+	op(jlm.TowerOp{Code: jlm.TOpRegroup, Span: merge})
+	if has[jlm.RoleVProjNorm] {
+		// torch's LayerNorm at its default epsilon.
+		op(jlm.TowerOp{Code: jlm.TOpLayerNorm, Bind: bias(jlm.RoleVProjNorm, jlm.RoleVProjNormBias), Eps: 1e-5})
+	}
+	op(jlm.TowerOp{Code: jlm.TOpLinear, Bind: bias(jlm.RoleVProj, jlm.RoleVProjBias)})
+	op(jlm.TowerOp{Code: jlm.TOpStated, Expr: &jlm.Expr{Terms: gelu.T}, Width: hidden})
+	op(jlm.TowerOp{Code: jlm.TOpLinear, Bind: bias(jlm.RoleVProj2, jlm.RoleVProj2Bias)})
+	op(jlm.TowerOp{Code: jlm.TOpMarkRow, Bind: []jlm.Role{jlm.RoleVTileMarks}, Span: span, Width: merge})
+	head.Out = at
+	t := &jlm.Tower{
+		Version: jlm.TowerVersion,
+		Pre: []jlm.PreStep{
+			{Kind: jlm.PreTileSmart, Ints: []int32{int32(v.TileSize), int32(v.MinTiles), int32(v.MaxTiles), P, P * merge,
+				int32(v.MinPixels), int32(v.MaxPixels), int32(filter), int32(jlm.PrecTorch)}, Floats: []float32{v.Tolerance}},
+			{Kind: jlm.PreNormalize, Floats: []float32{v.Mean[0], v.Mean[1], v.Mean[2], v.Std[0], v.Std[1], v.Std[2]}},
+		},
+		// The pixels are value 0.
+		Entry: jlm.Program{NIn: 1, Out: 4, Ops: []jlm.TowerOp{
+			{Code: jlm.TOpPatchify, In: []uint16{0}, Span: P},
+			{Code: jlm.TOpLinear, In: []uint16{1}, Bind: bias(jlm.RoleVPatchEmbd, jlm.RoleVPatchBias)},
+			{Code: jlm.TOpPosResample, Bind: []jlm.Role{jlm.RoleVPosEmbd}, Span: int32(v.ImageSize) / P,
+				Chain: jlm.ResampleHalfPixel, Filter: jlm.TapsAntialias},
+			{Code: jlm.TOpAdd, In: []uint16{2, 3}},
+		}},
+		Block: jlm.TowerBlock{NHead: v.NHead, NKVHead: v.NHead, HeadDim: v.NEmbd / v.NHead,
+			Norm: jlm.NormLayer, Eps: v.Eps, Act: act},
+		Head: head,
+		Span: jlm.TowerSpan{Mark: "<image>"},
+	}
+	if t.Span.Before, err = markerIDs(s, "<|image_start|>"); err != nil {
+		return nil, err
+	}
+	if t.Span.After, err = markerIDs(s, "<|image_end|>"); err != nil {
+		return nil, err
+	}
+	if err := t.Valid(); err != nil {
+		return nil, fmt.Errorf("convert: lfm2: %w", err)
 	}
 	return t, nil
 }
