@@ -2678,12 +2678,8 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 		m.Rope.Runs = nn.IMRopeRuns(cfg.RopeSections[:], cfg.NRot/2)
 	}
 	if cfg.RopeXD = c.Config().Arch.XDRope(); cfg.RopeXD {
-		// transformers' XD-RoPE turns the whole head; a partial one has no
-		// reference to be held to.
-		if !cfg.RopeNeox || len(m.Rope.Runs) == 0 || cfg.NRot != cfg.HeadDim {
-			return nil, fmt.Errorf("model: %s: XD-RoPE needs NEOX pairs, rope sections and the whole head "+
-				"turned (NRot %d of %d)", cfg.Arch, cfg.NRot, cfg.HeadDim)
-		}
+		// The converter states XD-RoPE over the whole head with NEOX pairs, as
+		// transformers turns it (convert.hunyuanVLConfig).
 		m.Rope.Runs, _ = nn.XDRopeRuns(cfg.RopeSections[:], cfg.NRot/2)
 	}
 	if cfg.QKL2Norm || cfg.VNorm {
