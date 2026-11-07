@@ -1391,9 +1391,7 @@ type devShared struct {
 	embTo launchTo
 	embRd embRead
 	// rows is the picture rows apart from their blocks (picrows.go).
-	rows rowsState
-	// conv is the convolutional blocks' activation (convblock.go).
-	conv      convScratch
+	rows      rowsState
 	mvPart    backend.Buf
 	mvPartCap int
 	used      uint64
@@ -1513,11 +1511,6 @@ type GPU struct {
 	devs []*devTier
 	// counters is what the devices count into; see Counters.
 	counters *backend.Counters
-	// convMu serialises ConvLayers' runs and its activation crossing the
-	// host between cards (convblock.go).
-	convMu   sync.Mutex
-	convRuns []run
-	convTmp  [2][]float32
 	// rowsComp is RowsComposed's last answer and what it rested on: the
 	// devices' placement generations, their count and the head's device.
 	// Under mu, as is rowsWalks, the walks it made (Stats.RowsComposedWalks).
