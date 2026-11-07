@@ -1,6 +1,7 @@
 package gguf
 
 import (
+	"github.com/jitllm/jitllm/internal/testmodels"
 	"os"
 	"sync"
 	"testing"
@@ -11,7 +12,7 @@ import (
 // variable, one Open's choice is another's, which -race reports here.
 func TestWarmIsPerOpen(t *testing.T) {
 	if _, err := os.Stat(stories260K); err != nil {
-		t.Skipf("fixture not present: %v", err)
+		testmodels.Missing(t, "fixture not present: %v", err)
 	}
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {

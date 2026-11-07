@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"github.com/jitllm/jitllm/internal/testmodels"
 	"os"
 	"testing"
 
@@ -17,7 +18,7 @@ func TestBlockReadBytesIsNotBlockSize(t *testing.T) {
 	for name, path := range models() {
 		t.Run(name, func(t *testing.T) {
 			if _, err := os.Stat(path); err != nil {
-				t.Skipf("model not present: %s", path)
+				testmodels.Missing(t, "model not present: %s", path)
 			}
 			m, err := model.Open(jlmOf(t, path))
 			if err != nil {
@@ -70,7 +71,7 @@ func TestHeadTradeNeverGivesUpMoreThanItGains(t *testing.T) {
 	for name, path := range models() {
 		t.Run(name, func(t *testing.T) {
 			if _, err := os.Stat(path); err != nil {
-				t.Skipf("model not present: %s", path)
+				testmodels.Missing(t, "model not present: %s", path)
 			}
 			m, err := model.Open(jlmOf(t, path))
 			if err != nil {
@@ -122,7 +123,7 @@ func TestHeadTradeNeverGivesUpMoreThanItGains(t *testing.T) {
 func TestMoEDiscountBuysMoreBlocks(t *testing.T) {
 	path := models()["qwen3moe"]
 	if _, err := os.Stat(path); err != nil {
-		t.Skipf("model not present: %s", path)
+		testmodels.Missing(t, "model not present: %s", path)
 	}
 	m, err := model.Open(jlmOf(t, path))
 	if err != nil {

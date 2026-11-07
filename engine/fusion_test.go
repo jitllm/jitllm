@@ -51,7 +51,7 @@ func TestFusionCeiling(t *testing.T) {
 		paths = []string{testmodels.Resolve(p)}
 	}
 	if len(paths) == 0 {
-		t.Skip("MODEL MISSING: no models in " + testmodels.Dir() + " (set JITLLM_MODELS to the model directory) -- this measurement needs a real one")
+		testmodels.Missing(t, "%s", "MODEL MISSING: no models in "+testmodels.Dir()+" (set JITLLM_MODELS to the model directory) -- this measurement needs a real one")
 	}
 	sort.Strings(paths)
 	for _, p := range paths {

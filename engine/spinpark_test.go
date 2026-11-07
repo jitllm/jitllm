@@ -22,7 +22,7 @@ import (
 func TestThePoolParksOnlyWhileTokensPage(t *testing.T) {
 	p, ok := existingModel(testmodels.Path("olmoe-1b-7b-0924-instruct-Q4_K_M.gguf"))
 	if !ok {
-		t.Skip("MODEL MISSING: olmoe-1b-7b-0924-instruct-Q4_K_M (set JITLLM_MODELS) -- this gate proved nothing")
+		testmodels.Missing(t, "MODEL MISSING: olmoe-1b-7b-0924-instruct-Q4_K_M (set JITLLM_MODELS) -- this gate proved nothing")
 	}
 	m, err := model.Open(jlmOf(t, p))
 	if err != nil {

@@ -30,7 +30,7 @@ func batchMatchesForward(t *testing.T, opts ...Option) {
 			if p, ok := existingModel(path); ok {
 				path = p
 			} else {
-				t.Skipf("model not present: %s (nor its container)", path)
+				testmodels.Missing(t, "model not present: %s (nor its container)", path)
 			}
 			// Two modes, as TestPrefillMatchesForward has. On the composed
 			// CPU's float forms a step's rows and a row alone are apart by
@@ -216,7 +216,7 @@ func raggedBatchMatchesForward(t *testing.T, opts ...Option) {
 			if p, ok := existingModel(path); ok {
 				path = p
 			} else {
-				t.Skipf("model not present: %s (nor its container)", path)
+				testmodels.Missing(t, "model not present: %s (nor its container)", path)
 			}
 			t.Run("exact-gemm", func(t *testing.T) {
 				raggedVsForward(t, path, true, append([]Option{withCPUFloat()}, opts...)...)
@@ -321,7 +321,7 @@ func prefillSeqMatchesForward(t *testing.T, opts ...Option) {
 			if p, ok := existingModel(path); ok {
 				path = p
 			} else {
-				t.Skipf("model not present: %s (nor its container)", path)
+				testmodels.Missing(t, "model not present: %s (nor its container)", path)
 			}
 			// Token equality needs the exact arm, as TestBatchMatchesForward's
 			// exact mode: on arm64 the batch's rows run MatMulPacked's fused

@@ -44,7 +44,7 @@ func TestGoldens(t *testing.T) {
 				t.Fatal(err)
 			}
 			if _, err := os.Stat(path); err != nil {
-				t.Skipf("model not present: %s (a model-directory file follows JITLLM_MODELS)", path)
+				testmodels.Missing(t, "model not present: %s (a model-directory file follows JITLLM_MODELS)", path)
 			}
 			f, err := gguf.Open(path)
 			if err != nil {

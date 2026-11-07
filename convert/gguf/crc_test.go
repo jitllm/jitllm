@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"github.com/jitllm/jitllm/internal/testmodels"
 	"hash/crc32"
 	"io"
 	"math"
@@ -61,7 +62,7 @@ func TestWholeTensorCRC(t *testing.T) {
 		byID[id] = p
 	}
 	if present == 0 {
-		t.Skip("MODEL MISSING: neither tinyllama-1.1b-q3_K_M.gguf nor gemma-2b.gguf (set JITLLM_MODELS) -- this gate proved nothing")
+		testmodels.Missing(t, "MODEL MISSING: neither tinyllama-1.1b-q3_K_M.gguf nor gemma-2b.gguf (set JITLLM_MODELS) -- this gate proved nothing")
 	}
 
 	var total uint64

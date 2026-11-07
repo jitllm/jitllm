@@ -130,7 +130,7 @@ func forwardBatchFaultsGate(t *testing.T, opts ...Option) {
 func forwardBatchFaultsItsBlocksIn(t *testing.T, path string, opts ...Option) {
 	p, ok := existingModel(path)
 	if !ok {
-		t.Skipf("model not present: %s", path)
+		testmodels.Missing(t, "model not present: %s", path)
 	}
 	src := jlmOf(t, p)
 	instOpts := append([]Option{WithKVF16(false), WithPageBudget(1)}, opts...)

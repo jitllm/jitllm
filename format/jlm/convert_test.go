@@ -409,7 +409,7 @@ func TestWeightsStayRelocatable(t *testing.T) {
 		}
 	}
 	if src == "" {
-		t.Skip("MODEL MISSING: no mixture in " + testmodels.Dir() + " (set JITLLM_MODELS to the model directory) -- this gate proved nothing")
+		testmodels.Missing(t, "%s", "MODEL MISSING: no mixture in "+testmodels.Dir()+" (set JITLLM_MODELS to the model directory) -- this gate proved nothing")
 	}
 	dst := filepath.Join(t.TempDir(), "m"+jlm.Ext)
 	if _, err := convert.FromGGUF(src, dst, jlm.Fingerprint{}); err != nil {

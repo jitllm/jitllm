@@ -20,7 +20,7 @@ import (
 func TestPackAgainstRealWeights(t *testing.T) {
 	models := testmodels.Glob("*.gguf")
 	if len(models) == 0 {
-		t.Skip("MODEL MISSING: no *.gguf in " + testmodels.Dir() + " (set JITLLM_MODELS to the model directory) -- this gate proved nothing")
+		testmodels.Missing(t, "%s", "MODEL MISSING: no *.gguf in "+testmodels.Dir()+" (set JITLLM_MODELS to the model directory) -- this gate proved nothing")
 	}
 	want := map[quant.Type]layout.Quant{}
 	for _, f := range packedRefFormats() {
