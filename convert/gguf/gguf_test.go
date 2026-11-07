@@ -31,7 +31,7 @@ func stories15M() string { return testmodels.Path("stories15M-q4_0.gguf") }
 func open(t *testing.T, path string) *meta.File {
 	t.Helper()
 	if _, err := os.Stat(path); err != nil {
-		t.Skipf("model not present: %s (a model-directory file follows JITLLM_MODELS)", path)
+		testmodels.Missing(t, "model not present: %s (a model-directory file follows JITLLM_MODELS)", path)
 	}
 	f, err := Open(path)
 	if err != nil {

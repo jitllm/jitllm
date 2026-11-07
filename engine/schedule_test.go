@@ -31,7 +31,7 @@ func TestSchedulerMatchesSoloSequences(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			if _, err := os.Stat(path); err != nil {
-				t.Skipf("model not present: %s", path)
+				testmodels.Missing(t, "model not present: %s", path)
 			}
 			// An f32 cache: a session's rows read a binary16 history through the
 			// rows' form and alone through the one-row form, which round apart
@@ -138,7 +138,7 @@ func TestSchedulerMatchesSoloSequences(t *testing.T) {
 func TestSchedulerStopsOnStop(t *testing.T) {
 	path := models()["stories15M"]
 	if _, err := os.Stat(path); err != nil {
-		t.Skipf("model not present: %s", path)
+		testmodels.Missing(t, "model not present: %s", path)
 	}
 	m, err := model.Open(jlmOf(t, path))
 	if err != nil {
@@ -179,7 +179,7 @@ func TestSchedulerStopsOnStop(t *testing.T) {
 func TestSchedulerRejectsAnOversizedPrompt(t *testing.T) {
 	path := models()["stories15M"]
 	if _, err := os.Stat(path); err != nil {
-		t.Skipf("model not present: %s", path)
+		testmodels.Missing(t, "model not present: %s", path)
 	}
 	m, err := model.Open(jlmOf(t, path))
 	if err != nil {

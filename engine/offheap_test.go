@@ -83,7 +83,7 @@ func offHeapGate(t *testing.T, path string) {
 func TestOffHeapMemoryStaysWithinTheBudget(t *testing.T) {
 	p, ok := existingModel(testmodels.Path("Qwen3-MOE-4x0.6B-Q4_K_M.gguf"))
 	if !ok {
-		t.Skip("MODEL MISSING: Qwen3-MOE-4x0.6B-Q4_K_M (set JITLLM_MODELS) -- this gate proved nothing")
+		testmodels.Missing(t, "MODEL MISSING: Qwen3-MOE-4x0.6B-Q4_K_M (set JITLLM_MODELS) -- this gate proved nothing")
 	}
 	m, err := model.Open(jlmOf(t, p))
 	if err != nil {

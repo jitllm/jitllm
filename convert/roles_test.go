@@ -27,7 +27,7 @@ import (
 func TestEveryTensorHasARole(t *testing.T) {
 	paths := testmodels.Glob("*.gguf")
 	if len(paths) == 0 {
-		t.Skip("MODEL MISSING: no *.gguf in " + testmodels.Dir() + " (set JITLLM_MODELS to the model directory) -- this gate proved nothing")
+		testmodels.Missing(t, "%s", "MODEL MISSING: no *.gguf in "+testmodels.Dir()+" (set JITLLM_MODELS to the model directory) -- this gate proved nothing")
 	}
 	seenRole := map[jlm.Role]int{}
 	unplaced := map[string]string{} // name -> first model that has it

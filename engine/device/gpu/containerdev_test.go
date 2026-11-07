@@ -43,7 +43,7 @@ func TestContainerAgreesHostAndDevice(t *testing.T) {
 		}
 	}
 	if src == "" {
-		t.Skip("MODEL MISSING: none of the candidates are in " + testmodels.Dir() + " (set JITLLM_MODELS to the model directory) -- this gate proved nothing")
+		testmodels.Missing(t, "%s", "MODEL MISSING: none of the candidates are in "+testmodels.Dir()+" (set JITLLM_MODELS to the model directory) -- this gate proved nothing")
 	}
 	t.Logf("model %s", filepath.Base(src))
 	dst := filepath.Join(t.TempDir(), "m"+jlm.Ext)

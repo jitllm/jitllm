@@ -27,7 +27,7 @@ import (
 func TestDeviceBlocksDoNotStayHostResident(t *testing.T) {
 	src := testmodels.Path("Qwen3-1.7B-Q4_K_M.gguf")
 	if _, err := os.Stat(src); err != nil {
-		t.Skipf("model not present: %s (set JITLLM_MODELS to the model directory)", src)
+		testmodels.Missing(t, "model not present: %s (set JITLLM_MODELS to the model directory)", src)
 	}
 	dst := filepath.Join(t.TempDir(), "m"+jlm.Ext)
 	if _, err := convert.FromGGUF(src, dst, jlm.Fingerprint{Host: "test"}); err != nil {

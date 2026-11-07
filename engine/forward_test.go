@@ -61,7 +61,7 @@ func greedyMatchesLlamaCpp(t *testing.T, loadOpts ...Option) {
 			}
 			mp, ok := existingModel(path)
 			if !ok {
-				t.Skipf("model not present: %s (nor its container) (set JITLLM_MODELS to the model directory)", path)
+				testmodels.Missing(t, "model not present: %s (nor its container) (set JITLLM_MODELS to the model directory)", path)
 			}
 			instOpts := loadOpts
 			m, err := model.Open(jlmOf(t, mp))

@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"github.com/jitllm/jitllm/internal/testmodels"
 	"math"
 	"os"
 	"testing"
@@ -24,7 +25,7 @@ func TestAttentionBiasesReachTheModel(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			if _, err := os.Stat(path); err != nil {
-				t.Skipf("model not present: %s", path)
+				testmodels.Missing(t, "model not present: %s", path)
 			}
 			m, err := model.Open(jlmOf(t, path))
 			if err != nil {
@@ -102,7 +103,7 @@ func biasedBatchMatchesForward(t *testing.T, opts ...Option) {
 		}
 		t.Run(name, func(t *testing.T) {
 			if _, err := os.Stat(path); err != nil {
-				t.Skipf("model not present: %s", path)
+				testmodels.Missing(t, "model not present: %s", path)
 			}
 			instOpts := opts
 			m, err := model.Open(jlmOf(t, path))
@@ -254,7 +255,7 @@ func TestPrefillAfterForwardContinues(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			if _, err := os.Stat(path); err != nil {
-				t.Skipf("model not present: %s", path)
+				testmodels.Missing(t, "model not present: %s", path)
 			}
 			// The float forms: decode and prompt forms apart by their folding
 			// order alone (floatFormsNMSE).

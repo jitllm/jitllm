@@ -19,7 +19,7 @@ func eachModel(t *testing.T, fn func(t *testing.T, m *model.Model, io []Option),
 		paths = []string{testmodels.Resolve(p)}
 	}
 	if len(paths) == 0 {
-		t.Skip("MODEL MISSING: no models in " + testmodels.Dir() + " (set JITLLM_MODELS to the model directory) -- this gate proved nothing")
+		testmodels.Missing(t, "%s", "MODEL MISSING: no models in "+testmodels.Dir()+" (set JITLLM_MODELS to the model directory) -- this gate proved nothing")
 	}
 	sort.Strings(paths)
 	for _, p := range paths {
