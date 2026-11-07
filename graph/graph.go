@@ -100,9 +100,6 @@ const (
 	// stride takes, ceil(H/Stride) x ceil(GridW/Stride) rows (its value's
 	// Rows), padded as TensorFlow pads, the smaller half first.
 	OpConv
-	// OpAffine is In[0] times a per-channel scale plus a shift (Weight[0],
-	// Weight[1]): a BatchNorm folded at conversion.
-	OpAffine
 	// OpMap is an elementwise function Fn of its operands: In[0], In[1] and
 	// In[2] in order, then Weight[0] (a bound vector, a stored table of
 	// several rows its elements in order), then Const, as many as
@@ -444,8 +441,6 @@ func (k OpKind) String() string {
 		return "scale"
 	case OpConv:
 		return "conv"
-	case OpAffine:
-		return "affine"
 	case OpMap:
 		return "map"
 	case OpReduce:
