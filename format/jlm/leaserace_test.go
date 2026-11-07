@@ -31,7 +31,7 @@ func newReal(t *testing.T, nblocks int, page, chunk uint64) *Frames {
 		t.Fatalf("open fixture: %v", err)
 	}
 	t.Cleanup(func() { h.Close() })
-	f := &Frames{file: &File{
+	f := &Frames{frameCore: &frameCore{file: &File{
 		Path: p,
 		H: &Header{
 			PageSize: page, NBlocks: uint32(nblocks),
@@ -39,8 +39,10 @@ func newReal(t *testing.T, nblocks int, page, chunk uint64) *Frames {
 			DataOff: dataOff, VisDataOff: dataOff + uint64(nblocks)*page,
 		},
 		f: h,
-	}, chunk: chunk}
+	}, chunk: chunk}, bit: 1}
+	f.views = []*Frames{f}
 	f.pages = make([][]byte, nblocks)
+	f.holders = make([]uint64, nblocks)
 	f.free = map[uint64][][]byte{}
 	f.recent = -1
 	return f

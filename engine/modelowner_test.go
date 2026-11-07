@@ -27,7 +27,8 @@ func (d *ownerFake) ReleaseModel(uint64) {
 // holds it there, the last instance's release gives it back -- never one
 // instance's Close while another still runs the model -- and the model's
 // Close reaches no device. On one CPU device two instances share the model's
-// frames; the first instance's Close leaves them, the second's lets them go.
+// frames, each through a view of its own; the first instance's Close leaves
+// them, the second's lets them go.
 //
 // VIOLATION SIGNATURE. A model whose Close released its devices (the owner
 // registry this replaced) gives the fake one more release after both
@@ -51,15 +52,15 @@ func TestADeviceKeepsAModelForItsInstances(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if dev.holds != 2 || a.fr != b.fr {
-		t.Fatalf("two instances attached: the device counts %d holds, and they share frames %v", dev.holds, a.fr == b.fr)
+	if dev.holds != 2 || !a.fr.Shares(b.fr) {
+		t.Fatalf("two instances attached: the device counts %d holds, and they share frames %v", dev.holds, a.fr.Shares(b.fr))
 	}
 	fr := a.fr
 	a.Close()
 	if dev.gave != 0 {
 		t.Errorf("one of two instances closed and the device gave the model back %d time(s)", dev.gave)
 	}
-	if got, err := cd.Frames(m.Id, m.NewFrames); err != nil || got != fr {
+	if got, err := cd.Frames(m.Id, m.NewFrames); err != nil || !got.Shares(fr) {
 		t.Errorf("one of two instances closed and the CPU device's frames for the model are new (%v)", err)
 	}
 	b.Close()
@@ -70,7 +71,7 @@ func TestADeviceKeepsAModelForItsInstances(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got == fr {
+	if got.Shares(fr) {
 		t.Error("both instances closed and the CPU device still holds the model's frames")
 	}
 	if err := m.Close(); err != nil {

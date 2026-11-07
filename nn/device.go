@@ -911,10 +911,11 @@ type ModelScratch interface {
 
 // FrameKeeper is a device whose memory holds a model's pages: the frames its
 // instances page blocks into, made by mk on the first ask, and each
-// instance's quota of them, registered before the frames are read.
+// instance's quota of them, registered before the frames are read; Frames
+// is the quota's own view of them, its budget and order.
 type FrameKeeper interface {
 	NewQuota(model, bytes uint64) Quota
-	Frames(model uint64, mk func(...jlm.FramesOption) (*jlm.Frames, error)) (*jlm.Frames, error)
+	Frames(q Quota, model uint64, mk func(...jlm.FramesOption) (*jlm.Frames, error)) (*jlm.Frames, error)
 }
 
 // ExecutionSetup is what an instance hands a device it runs blocks on when

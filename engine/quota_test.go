@@ -10,8 +10,9 @@ import (
 // TestAQuotaBudgetsTheFramesFromTheirFirstRead: an instance's page quota
 // reaches its CPU device's frames before they read a page, a preload's among
 // them -- a preload under a quota below the model reads nothing a run without
-// one does not -- and instances of one model on one CPU device keep what the
-// largest quota allows, the frames re-budgeted as quotas change and go.
+// one does not -- and each instance of one model on one CPU device pages
+// through a view of its own at its own quota, re-budgeted alone as it
+// changes, whatever the others' do.
 func TestAQuotaBudgetsTheFramesFromTheirFirstRead(t *testing.T) {
 	path := jlmOf(t, models()["stories15M"])
 	probe, err := model.Open(path)
@@ -89,15 +90,15 @@ func TestAQuotaBudgetsTheFramesFromTheirFirstRead(t *testing.T) {
 	a := testInstance(t, m, 8, cpu, WithPageBudget(all/4))
 	defer a.Close()
 	b := testInstance(t, m, 8, cpu, WithPageBudget(all/2))
-	if a.fr != b.fr {
-		t.Fatal("two instances on one CPU device page into two frames: this gate proved nothing")
+	if a.fr == b.fr {
+		t.Fatal("two instances on one CPU device page through one view of the frames: one order and one budget for both")
 	}
-	if got := a.fr.Budget(); got != all/2 {
-		t.Fatalf("quotas of %d and %d keep %d, want the larger", all/4, all/2, got)
+	if ga, gb := a.fr.Budget(), b.fr.Budget(); ga != all/4 || gb != all/2 {
+		t.Fatalf("quotas of %d and %d keep %d and %d, want each its own", all/4, all/2, ga, gb)
 	}
 	b.Close()
 	if got := a.fr.Budget(); got != all/4 {
-		t.Fatalf("the larger quota's instance closed and the frames keep %d, want the %d left", got, all/4)
+		t.Fatalf("the other instance closed and this one's view keeps %d, want its %d", got, all/4)
 	}
 	a.SetPageBudget(all / 3)
 	if got := a.fr.Budget(); got != all/3 {

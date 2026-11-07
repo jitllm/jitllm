@@ -373,6 +373,12 @@ func (f *Frames) claimFor(b int, spec bool) error {
 		if !spec {
 			f.unspec(b)
 		}
+		if f.holders[b]&f.bit == 0 {
+			// Another view's page, now this one's too: within this view's
+			// budget, read nothing.
+			f.makeRoom(b, uint64(cap(f.pages[b])))
+			f.retain(b)
+		}
 		if !f.file.expertPage(b) {
 			f.recent = b
 		}
@@ -395,10 +401,10 @@ func (f *Frames) claimFor(b int, spec bool) error {
 			return err
 		}
 		f.pages[b] = fr
-		if f.pages[b] != nil && f.budget > 0 {
+		if bd := f.bound(); f.pages[b] != nil && bd > 0 {
 			// An expert page takes no free frame: those beside it give way
 			// as they would to a fresh one (take).
-			f.trimFree(f.budget - min(f.budget, f.resident+size))
+			f.trimFree(bd - min(bd, f.resident+size))
 		}
 	}
 	if f.pages[b] == nil {
@@ -414,6 +420,7 @@ func (f *Frames) claimFor(b int, spec bool) error {
 	// Whatever the frame held, it is about to hold block b; see OnRecycle.
 	f.retire(f.pages[b])
 	f.resident += uint64(cap(f.pages[b]))
+	f.retain(b)
 	if !f.file.expertPage(b) {
 		f.recent = b
 	}

@@ -127,10 +127,10 @@ func (f *Frames) fitBudget() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.inside > 0 {
-		f.refit = f.refit || (f.budget > 0 && f.resident > f.budget)
+		f.refit = f.refit || (f.budget > 0 && f.held > f.budget)
 		return
 	}
-	for f.budget > 0 && f.resident > f.budget {
+	for f.budget > 0 && f.held > f.budget {
 		if !f.evictOne() {
 			return
 		}

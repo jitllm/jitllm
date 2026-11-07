@@ -158,12 +158,11 @@ warm fault allocate nothing (the ledger's bookkeeping is preallocated).
      per-model share to the model's instance; the CLI and the speed tool
      hand theirs to theirs. A statistic reads the frames a device holds and
      makes none (`cpudev.CPU.HeldFrames`).
-   - The CPU device's frames keep what the largest net quota of the
-     instances holding the model allows, not the sum: they hold a block every
-     instance runs once, and two instances running the same blocks under
-     quotas of X keep X. Each instance keeping its own order within its own
-     quota over blocks it alone runs -- the retention quota above -- is not
-     built: the frames have one order.
+   - Each instance on the CPU device pages through a view of the model's
+     frames there (`jlm.Frames.View`, `cpudev.Quota.Frames`): its own budget
+     -- its net quota -- its own order and the bytes of the pages it retains.
+     Two instances running the same blocks under quotas of X each keep a
+     page both run once, and each evicts only what it alone retains.
    - The RPC still names the model: the server makes one instance a model,
      and names it by its model; a second instance of a model in the server
      is what an instance id in the request waits for.
@@ -173,25 +172,23 @@ warm fault allocate nothing (the ledger's bookkeeping is preallocated).
      fails mid-token for it; it thrashes, which the paging gates run at a
      one-byte quota on purpose. Refusing it would be a refusal where the
      behaviour is implemented.
-   - Left: per-instance retention within shared frames -- what this file's
-     first "what was wrong" bullet names, still true of two instances on one
-     CPU device: one order, one budget. Where it hooks, as read: every page
-     use goes through `Frames.claimFor` (the order: `tick`, `recent`; the
-     room: `makeRoom`), so a retainer -- an instance's view of the frames,
-     its quota, its held bytes, its own `recent` and expert ticks, a bit in a
-     per-page retention mask -- is carried into it by every claim:
-     `EnsurePage`, `EnsureRanges`, `Claim`, `Hold`, `EnsureExperts` and the
-     speculation queue's requests, whose workers claim on another goroutine.
-     A claim retains the page for its retainer; room is made by unretaining
-     that retainer's own victim (its expert LRU, else its MRU block), and a
-     page leaves when no retainer holds it and nothing pins it. `Keep` and
-     `DropPage` become retention (an instance releasing a block it placed
-     unretains its page; another instance's retention keeps it). The model's
-     frame-taking functions (33 of them) take a pager interface both
-     `*jlm.Frames` (a card's, frames-level) and a retainer satisfy. The free
-     lists' bound becomes the quotas' sum; a preload reads only while every
-     quota holds every page. The gate is two instances on one CPU device
-     with quotas below their scans, each reading what it alone reads.
+   - Per-instance retention within shared frames is built: the frames are
+     a core (pages, frames, readers' lock, pins, kept counts, free frames)
+     and views of it. Every claim goes through `claimFor` on the claiming
+     view: it retains the page for that view (a page another view holds is
+     retained without a read), and room is made by unretaining that view's
+     own victim -- its expert LRU, else its MRU block. A frame goes back
+     when no view retains it and nothing pins it; `DropPage` unretains, and
+     another view's retention keeps the page. A speculative guess is
+     claimed by the view that made it. The free frames are bounded by the
+     views' budgets together, and readers take the frames alone while any
+     view can evict. `*jlm.Frames` is a view, so the model's frame-taking
+     functions page through whichever one the instance holds. Gates:
+     `jlm.TestViewsKeepTheirOwnOrder` (one view at the same budget, the old
+     single order, is its violation) and
+     `engine.TestInstancesPageInTheirOwnOrder` (two instances on one CPU
+     device under half the text pages each decode as one alone, bit for
+     bit, each within its quota).
 5. **The model holds nothing of a device.** Its registries go; `srcgate` holds
    that no type of `model/` has a field of an `nn` device interface, and that
    `Model.Close` reaches no device.
@@ -256,9 +253,7 @@ warm fault allocate nothing (the ledger's bookkeeping is preallocated).
    - A tower's pages under two instances (`TestTwoInstancesReadATowersPagesOnce`)
      and a mixture's experts beside a card's placement
      (`TestAnInstancesBlocksAreItsOwn` counts the CPU instance's page-ins
-     against one alone's) are gated too. What is left of the design is
-     step 4's: each instance keeping its own order within its own quota over
-     frames it shares.
+     against one alone's) are gated too.
 
 ## Open
 
