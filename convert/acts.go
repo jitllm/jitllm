@@ -146,10 +146,12 @@ func StateStored(f *jlm.File, c *jlm.Config) (bool, error) {
 		StateRevision(c)
 	}
 	if !sel {
-		StateSelection(c, func(r jlm.Role, li int32) bool {
+		if err := StateSelection(c, func(r jlm.Role, li int32) bool {
 			_, ok := f.Find(r, li, -1)
 			return ok
-		})
+		}); err != nil {
+			return false, err
+		}
 	}
 	stores := func(rs ...jlm.Role) func(int) bool {
 		return func(li int) bool {
