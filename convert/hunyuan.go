@@ -67,6 +67,12 @@ func hunyuanVLConfig(f *meta.File, name string, c *jlm.Config) error {
 	if err := mropeSectionsOf(f, name, c); err != nil {
 		return err
 	}
+	// transformers' XD-RoPE turns the whole head: a file turning part of it
+	// states a rotary its reference never runs.
+	if c.NRot != c.HeadDim {
+		return fmt.Errorf("convert: %s: XD-RoPE over %d of a head's %d dimensions, where the reference turns the whole head",
+			name, c.NRot, c.HeadDim)
+	}
 	if alpha := f.FloatKey("rope.scaling.alpha", 0); alpha > 0 {
 		d := float64(c.NRot)
 		c.RopeBase = float32(float64(c.RopeBase) * math.Pow(alpha, d/(d-2)))
