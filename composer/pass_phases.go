@@ -1,6 +1,9 @@
 package composer
 
-import "github.com/jitllm/jitllm/composer/ir"
+import (
+	"github.com/jitllm/jitllm/composer/ir"
+	"github.com/jitllm/jitllm/format/jlm"
+)
 
 // Phases runs consecutive kernels that each launch one workgroup of the
 // same width as one launch: each kernel a phase of the workgroup, a barrier
@@ -32,6 +35,11 @@ func (p Phases) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			ks[j].Of == ks[i].Of && ks[j].Apart == ks[i].Apart && !(j > i && ks[j-1].Folds) {
 			r, w := atTheEdge(ks[j], made)
 			if (reads || r) && (writes || w) {
+				break
+			}
+			// A row table's rows are paged in for the indices the launches
+			// before its first reader wrote.
+			if j > i && ks[j].readsRowTable() && !ks[i].readsRowTable() {
 				break
 			}
 			reads, writes = reads || r, writes || w
@@ -194,4 +202,14 @@ func atTheEdge(k *Kernel, made map[Operand]bool) (reads, writes bool) {
 		reads = reads || b.Kind == BufIn && b.Operand.Kind == OperandValue && !made[b.Operand]
 	}
 	return reads, writes
+}
+
+// readsRowTable reports whether k reads a weight stored as a row table.
+func (k *Kernel) readsRowTable() bool {
+	for _, b := range k.Bufs {
+		if b.Operand.Kind == OperandWeight && jlm.RowTableRole(b.Operand.Role) {
+			return true
+		}
+	}
+	return false
 }

@@ -8,7 +8,6 @@ import (
 
 	"github.com/jitllm/jitllm/model"
 
-	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/nn"
 )
@@ -56,10 +55,6 @@ func composedCovers(t *testing.T, m *model.Model, steps, placed int, exact bool,
 	covered := 0
 	refused := map[string]int{}
 	for li := range placed {
-		if cpudev.TableRowsOf(m.Composing().BlockGraph(li)) >= 0 {
-			placed--
-			continue
-		}
 		if why := m.Uncovered(li); why != model.Covered {
 			refused[why.String()]++
 			continue
