@@ -594,7 +594,7 @@ func (k *Kernel) broadcastInto(c int) {
 				if xn := k.Nodes[x]; xn.Op == OpFold && xn.At == c {
 					continue
 				}
-				scalar := hs[x] >= 0 && k.Loops[hs[x]].Lanes == 0
+				scalar := hs[x] >= 0 && k.Loops[hs[x]].Lanes == 0 || k.scalarFolded(x)
 				if !scalar && !k.computedFrom(x, OpHSum) && !k.computedFrom(x, OpHMax) && !k.computedFrom(x, OpHMin) {
 					continue
 				}
@@ -610,4 +610,27 @@ func (k *Kernel) broadcastInto(c int) {
 			}
 		}
 	}
+}
+
+// scalarFolded reports whether node i is computed from the sum of a loop
+// that runs one lane a trip: a value in its first lane only.
+func (k *Kernel) scalarFolded(i int) bool {
+	return k.scalarFoldedSeen(i, make([]bool, len(k.Nodes)))
+}
+
+func (k *Kernel) scalarFoldedSeen(i int, seen []bool) bool {
+	if seen[i] {
+		return false
+	}
+	seen[i] = true
+	nd := k.Nodes[i]
+	if nd.Op == OpFold {
+		return k.Loops[nd.At].Lanes == 0
+	}
+	for _, a := range k.Operands(&nd) {
+		if k.scalarFoldedSeen(*a, seen) {
+			return true
+		}
+	}
+	return false
 }
