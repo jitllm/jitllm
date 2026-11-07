@@ -346,7 +346,10 @@ func alwaysResident(e *Entry) bool {
 // sits after every page array, verbatim and row-major, so row r is
 // RowBytes(e) bytes at QSOff + r*RowBytes(e). Qwen3.8-Flash-Next's n-gram
 // table is one: 320 million rows, of which a token reads sixteen.
-func RowTable(e *Entry) bool { return e.Role == RoleNGramTable }
+func RowTable(e *Entry) bool { return RowTableRole(e.Role) }
+
+// RowTableRole says role r is stored as a row table (RowTable).
+func RowTableRole(r Role) bool { return r == RoleNGramTable }
 
 // RowBytes is one row of a row table: Dims[0] elements of its type.
 func RowBytes(e *Entry) (uint64, error) { return verbatimBytes(e.Type, e.Dims[0]) }
