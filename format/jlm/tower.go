@@ -4,7 +4,7 @@ import "fmt"
 
 // TowerVersion is the stated tower's revision. A record of a later one is
 // refused, not read as this one.
-const TowerVersion = 9
+const TowerVersion = 10
 
 // Tower is a vision tower as the converter states it: what the engine builds
 // the tower from, with no family's name in it. The converter knows a family
@@ -25,6 +25,21 @@ type Tower struct {
 	// block leaves, in their blocks' order: text block i adds tap i's rows
 	// into the picture's after it runs (Qwen3-VL's deepstack).
 	Taps []TowerTap
+	// Chain, where set, is the tower's blocks each a program of its own in
+	// place of the repeated Block: block i runs Chain[i] over the rows the
+	// block before it left (the entry's, for the first), a grid of its own
+	// shape, its binds reading block i's tensors.
+	Chain []ChainBlock
+	// HeadFrom is the chained blocks whose rows the head reads beside the
+	// last block's: block HeadFrom[j]'s are the head's value 1+j.
+	HeadFrom []int32
+}
+
+// ChainBlock is one block of a chained tower: the rows and width of the
+// grid it reads, and its program over them (value 0).
+type ChainBlock struct {
+	Rows, Width int32
+	Prog        Program
 }
 
 // TowerTap is a program over the rows tower block Block leaves (value 0),
@@ -226,7 +241,8 @@ const (
 	// wide as In[0] where Width is zero.
 	TOpStated OpCode = 10
 	// TOpPool is an average pool: each Span x Span block of the grid's rows
-	// their mean, the blocks in raster order.
+	// their mean, the blocks in raster order; the grid GridW rows wide where
+	// set, the request's where not.
 	TOpPool OpCode = 11
 	// TOpFold is each Span consecutive rows of In[0] one row (graph.OpFold):
 	// a merge window's patches, which the patch order made consecutive.
@@ -301,10 +317,27 @@ const (
 	TOpTableRows OpCode = 30
 	// TOpRowsAttend is each row of In[0] attending over the live rows of
 	// In[1] (keys) and In[2] (values), every row and both ways, Span heads
-	// scaled by one over the root of their width (graph.OpRowsAttend): a
-	// value of In[0]'s rows, whatever the picture's grid.
+	// scaled by one over the root of their width, over Width key/value heads
+	// (0: Span) each read by Span/Width of them (graph.OpRowsAttend): a value
+	// of In[0]'s rows, whatever the picture's grid.
 	TOpRowsAttend OpCode = 31
-	topCodes      OpCode = 32
+	// TOpUnfold is each output row of a grid GridW rows wide as the Span x
+	// Span window of rows around it at Stride, tap-major, Width wide, zero
+	// past the taps (graph.OpUnfold), padded as TensorFlow pads: a full
+	// convolution's input, its matrix the next op's.
+	TOpUnfold OpCode = 32
+	// TOpConv is a depthwise convolution of a grid GridW rows wide by
+	// Bind[0]'s Span x Span taps (tap-major rows of the width) at Stride,
+	// padded as TensorFlow pads (graph.OpConv).
+	TOpConv OpCode = 33
+	// TOpUpsample is a grid GridW rows wide Span times as large each way,
+	// each row its nearest (graph.OpUpsample).
+	TOpUpsample OpCode = 34
+	// TOpAppendRow is In[0]'s rows, then row Offset of Bind[0]
+	// (graph.OpAppendRow): a marker the reference embeds through a table of
+	// the tower's.
+	TOpAppendRow OpCode = 35
+	topCodes     OpCode = 36
 )
 
 // A stated rotary's layout (TOpRope's Chain).
@@ -360,6 +393,10 @@ type TowerOp struct {
 	Chain, Filter uint8
 	// Hash is TOpNGramRows's, nil on every other op.
 	Hash *NGramHash
+	// GridW is a grid op's input grid's width in rows (TOpUnfold, TOpConv,
+	// TOpUpsample; TOpPool where set, the request's grid where not) and
+	// Stride its step (TOpUnfold, TOpConv); zero on every other op.
+	GridW, Stride int32
 }
 
 // NGramHash is an n-gram op's hash: for n = 2..Span, HeadsPer heads each,
@@ -566,8 +603,17 @@ func (t *Tower) Valid() error {
 			return err
 		}
 	}
+	switch {
+	case len(t.Chain) > 0:
+		if err := t.chainValid(); err != nil {
+			return err
+		}
+	case len(t.HeadFrom) > 0:
+		return fmt.Errorf("jlm: the tower's head reads %d blocks' rows and the tower has no chain", len(t.HeadFrom))
+	}
 	b := t.Block
 	switch {
+	case len(t.Chain) > 0:
 	case b.NHead == 0 || b.NKVHead == 0 || b.HeadDim == 0 || b.NHead%b.NKVHead != 0:
 		return fmt.Errorf("jlm: the tower's block has %d heads over %d kv heads of %d", b.NHead, b.NKVHead, b.HeadDim)
 	case b.Norm != NormLayer && b.Norm != NormRMS:
@@ -575,7 +621,7 @@ func (t *Tower) Valid() error {
 	case b.Eps <= 0:
 		return fmt.Errorf("jlm: the tower's block has an epsilon of %v", b.Eps)
 	}
-	if err := b.Act.Valid(); err != nil {
+	if err := b.Act.Valid(); len(t.Chain) == 0 && err != nil {
 		return fmt.Errorf("jlm: the tower's block activation: %w", err)
 	}
 	if r := b.Rope; len(r.Runs) > 0 {
@@ -664,6 +710,19 @@ func (p *Program) valid(name string) error {
 				name, i, op.Span, op.Chain, op.Filter)
 		case op.Code != TOpPosResample && (op.Chain != 0 && op.Code != TOpRope || op.Filter != 0):
 			return fmt.Errorf("jlm: the tower's %s op %d (code %d) states a resample", name, i, op.Code)
+		case (op.Code == TOpUnfold || op.Code == TOpConv) && (op.Span < 1 || op.Span%2 == 0 || op.Stride < 1 || op.GridW < 1):
+			return fmt.Errorf("jlm: the tower's %s op %d convolves %d taps a side at stride %d over a grid %d wide", name, i,
+				op.Span, op.Stride, op.GridW)
+		case op.Code == TOpUnfold && op.Width < op.Span*op.Span:
+			return fmt.Errorf("jlm: the tower's %s op %d unfolds %d taps into %d", name, i, op.Span*op.Span, op.Width)
+		case op.Code == TOpUpsample && (op.Span < 2 || op.GridW < 1):
+			return fmt.Errorf("jlm: the tower's %s op %d upsamples by %d a grid %d wide", name, i, op.Span, op.GridW)
+		case op.Code == TOpRowsAttend && (op.Width < 0 || op.Width > 0 && op.Span%op.Width != 0):
+			return fmt.Errorf("jlm: the tower's %s op %d attends %d heads over %d", name, i, op.Span, op.Width)
+		case op.Code != TOpUnfold && op.Code != TOpConv && op.Code != TOpUpsample && op.Code != TOpPool && op.GridW != 0:
+			return fmt.Errorf("jlm: the tower's %s op %d (code %d) states a grid %d wide", name, i, op.Code, op.GridW)
+		case op.Code != TOpUnfold && op.Code != TOpConv && op.Stride != 0:
+			return fmt.Errorf("jlm: the tower's %s op %d (code %d) states a stride of %d", name, i, op.Code, op.Stride)
 		}
 		if op.Expr != nil {
 			if err := op.Expr.Valid(); err != nil {
@@ -690,6 +749,10 @@ func (op *TowerOp) arity() (in int, bind [2]int) {
 		return 0, [2]int{1, 1}
 	case TOpRowsAttend:
 		return 3, [2]int{0, 0}
+	case TOpUnfold, TOpUpsample:
+		return 1, [2]int{0, 0}
+	case TOpConv, TOpAppendRow:
+		return 1, [2]int{1, 1}
 	case TOpMarkRow, TOpTailRow:
 		return 1, [2]int{1, 1}
 	case TOpLinear, TOpLayerNorm:
@@ -791,6 +854,16 @@ func encodeTower(w *wbuf, t *Tower) {
 		w.i32(t.Taps[i].Block)
 		encodeProgram(w, &t.Taps[i].Prog)
 	}
+	w.u32(uint32(len(t.Chain)))
+	for i := range t.Chain {
+		w.i32(t.Chain[i].Rows)
+		w.i32(t.Chain[i].Width)
+		encodeProgram(w, &t.Chain[i].Prog)
+	}
+	w.u32(uint32(len(t.HeadFrom)))
+	for _, b := range t.HeadFrom {
+		w.i32(b)
+	}
 }
 
 func encodeProgram(w *wbuf, p *Program) {
@@ -813,6 +886,8 @@ func encodeProgram(w *wbuf, p *Program) {
 		w.f32(op.Eps)
 		w.u8(op.Chain)
 		w.u8(op.Filter)
+		w.i32(op.GridW)
+		w.i32(op.Stride)
 		if op.Code == TOpNGramRows {
 			encodeNGramHash(w, op.Hash)
 		}
@@ -826,6 +901,12 @@ func encodeProgram(w *wbuf, p *Program) {
 
 func decodeTower(r *rbuf) *Tower {
 	t := &Tower{Version: r.u16()}
+	// The record is the section's last: another revision's is left unread
+	// and refused by Valid by its number.
+	if t.Version != TowerVersion {
+		r.b = nil
+		return t
+	}
 	// Each count is bounded by its element's least size in what is left, so
 	// a corrupt record cannot size an allocation (RULE 9).
 	for range r.count(10) {
@@ -870,12 +951,22 @@ func decodeTower(r *rbuf) *Tower {
 		decodeProgram(r, &tp.Prog)
 		t.Taps = append(t.Taps, tp)
 	}
+	// A chained block is at least its rows, its width and an empty
+	// program's three counts.
+	for range r.count(16) {
+		cb := ChainBlock{Rows: r.i32(), Width: r.i32()}
+		decodeProgram(r, &cb.Prog)
+		t.Chain = append(t.Chain, cb)
+	}
+	for range r.count(4) {
+		t.HeadFrom = append(t.HeadFrom, r.i32())
+	}
 	return t
 }
 
 func decodeProgram(r *rbuf, p *Program) {
 	p.NIn = r.u16()
-	for range r.count(29) {
+	for range r.count(37) {
 		op := TowerOp{Code: OpCode(r.u16())}
 		for range r.count(2) {
 			op.In = append(op.In, r.u16())
@@ -886,6 +977,7 @@ func decodeProgram(r *rbuf, p *Program) {
 		op.Span, op.Offset, op.Width = r.i32(), r.i32(), r.i32()
 		op.Eps = r.f32()
 		op.Chain, op.Filter = r.u8(), r.u8()
+		op.GridW, op.Stride = r.i32(), r.i32()
 		if op.Code == TOpNGramRows {
 			op.Hash = decodeNGramHash(r)
 		}
@@ -915,4 +1007,31 @@ func (p *Program) Tail() int {
 		}
 	}
 	return t
+}
+
+// chainValid holds a chained tower to its shape: every block a program over
+// one grid of rows, no repeated block or taps beside the chain, and the head
+// reading the last block's rows and each HeadFrom block's, earlier ones.
+func (t *Tower) chainValid() error {
+	if b := t.Block; b.NHead != 0 || b.NKVHead != 0 || b.HeadDim != 0 || len(b.Rope.Runs) > 0 || b.Window != 0 || len(t.Taps) > 0 {
+		return fmt.Errorf("jlm: the tower states a chain of %d blocks and a repeated block or taps beside it", len(t.Chain))
+	}
+	for i := range t.Chain {
+		cb := &t.Chain[i]
+		if cb.Rows < 1 || cb.Width < 1 || cb.Prog.NIn != 1 {
+			return fmt.Errorf("jlm: the tower's chained block %d reads %d rows of %d in %d values", i, cb.Rows, cb.Width, cb.Prog.NIn)
+		}
+		if err := cb.Prog.valid(fmt.Sprintf("chained block %d", i)); err != nil {
+			return err
+		}
+	}
+	if int(t.Head.NIn) != 1+len(t.HeadFrom) {
+		return fmt.Errorf("jlm: the tower's head reads %d values and %d blocks' rows beside the last's", t.Head.NIn, len(t.HeadFrom))
+	}
+	for j, b := range t.HeadFrom {
+		if b < 0 || int(b) >= len(t.Chain)-1 || j > 0 && b <= t.HeadFrom[j-1] {
+			return fmt.Errorf("jlm: the tower's head reads block %d's rows of a chain of %d", b, len(t.Chain))
+		}
+	}
+	return nil
 }

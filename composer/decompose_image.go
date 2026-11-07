@@ -457,14 +457,24 @@ func decomposeRegroup(o graph.Op, c *Context) ([]Prim, error) {
 	var x exprs
 	g, j := x.coord(0), x.coord(1)
 	u := func(v int) int { return x.u(uint32(v)) }
-	gw := x.op(OpMax, U, x.load(1, x.u(RequestGrid)), u(S))
+	in := []Operand{c.value(o.In[0])}
+	var gw int
+	if W := o.Attr.GridW; W > 0 {
+		gw = u(W)
+	} else {
+		in = append(in, TableRequest.op())
+		gw = x.op(OpMax, U, x.load(1, x.u(RequestGrid)), u(S))
+	}
 	gsw := x.op(OpDiv, U, gw, u(S))
 	slot, e := x.op(OpDiv, U, j, u(E)), x.op(OpRem, U, j, u(E))
 	row := x.op(OpAdd, U, x.op(OpMul, U, x.op(OpDiv, U, g, gsw), u(S)), x.op(OpDiv, U, slot, u(S)))
 	colm := x.op(OpAdd, U, x.op(OpMul, U, x.op(OpRem, U, g, gsw), u(S)), x.op(OpRem, U, slot, u(S)))
 	p := x.op(OpAdd, U, x.op(OpMul, U, row, gw), colm)
 	x.at(0, ish, x.op(OpMin, U, p, u(R-1)), e)
-	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0]), TableRequest.op()}, Out: c.value(o.Out[0]), Expr: x.e,
+	if len(in) == 1 {
+		return []Prim{{Kind: PrimMap, Shape: sh, In: in, Out: c.value(o.Out[0]), Expr: x.e}}, nil
+	}
+	return []Prim{{Kind: PrimMap, Shape: sh, In: in, Out: c.value(o.Out[0]), Expr: x.e,
 		Facts: Facts{Extents: map[int]int{1: RequestRows + sh[0]}}}}, nil
 }
 
@@ -1115,4 +1125,27 @@ func decomposeUpsample(o graph.Op, c *Context) ([]Prim, error) {
 	p := x.op(OpAdd, U, x.op(OpMul, U, x.op(OpDiv, U, y, u(S)), u(W)), x.op(OpDiv, U, col, u(S)))
 	x.at(0, ish, p, j)
 	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0])}, Out: c.value(o.Out[0]), Expr: x.e}}, nil
+}
+
+// decomposeAppendRow is the input's rows, then row Offset of the weight
+// (graph.OpAppendRow): one map over the output's rows.
+func decomposeAppendRow(o graph.Op, c *Context) ([]Prim, error) {
+	if len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) != 1 || o.Weight[0].K != c.width(o.In[0]) ||
+		o.Attr.Offset < 0 || o.Attr.Offset >= max(o.Weight[0].Rows, 1) {
+		return nil, fmt.Errorf("an appended row of %d operands and %d weights", len(o.In), len(o.Weight))
+	}
+	U := ir.U32
+	sh, ish := c.rows(o.Out[0]), c.rows(o.In[0])
+	w := o.Weight[0]
+	R := ish[0]
+	if sh[0] != R+1 {
+		return nil, fmt.Errorf("an appended row after %d rows writes %d", R, sh[0])
+	}
+	var x exprs
+	r, i := x.coord(0), x.coord(1)
+	in := x.at(0, ish, x.op(OpMin, U, r, x.u(uint32(R-1))), i)
+	row := x.at(1, []int{max(w.Rows, 1), sh[1]}, x.u(uint32(o.Attr.Offset)), i)
+	x.sel(ir.F32, x.op(OpLess, ir.Pred, r, x.u(uint32(R))), in, row)
+	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0]), {Kind: OperandVector, Role: w.Role, Name: w.Role.String()}},
+		Out: c.value(o.Out[0]), Expr: x.e}}, nil
 }
