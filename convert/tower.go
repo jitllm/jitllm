@@ -51,6 +51,8 @@ func towerStater(p jlm.Projector) func(*jlm.Source) (*jlm.Tower, error) {
 		return hunyuanvlTower
 	case jlm.ProjJanus:
 		return janusTower
+	case jlm.ProjPhi4:
+		return phi4Tower
 	}
 	return nil
 }
@@ -1050,6 +1052,80 @@ func janusTower(s *jlm.Source) (*jlm.Tower, error) {
 	}
 	if err := t.Valid(); err != nil {
 		return nil, fmt.Errorf("convert: janus: %w", err)
+	}
+	return t, nil
+}
+
+// phi4Tower is Phi-4-reasoning-vision's tower as its processor and
+// Siglip2VisionModel run it: the picture resized by Pillow's BILINEAR filter
+// to whole patches of its own count, clamped to the file's bounds
+// (Siglip2ImageProcessorNoUpscale's NaFlex size), and normalised; the
+// patches through a biased matrix plus the square position table resized to
+// the picture's grid by torch's antialiased bilinear (resize_positional_
+// embeddings); the blocks llama.cpp's converter kept, which end at
+// hidden_states[-2] with no post-LayerNorm; then mlp2x_gelu, two matrices
+// with the exact GELU between. The template's "<image>" is the picture's
+// rows with no markers.
+func phi4Tower(s *jlm.Source) (*jlm.Tower, error) {
+	v := s.Vision
+	has := towerRoles(s)
+	for _, r := range []jlm.Role{jlm.RoleVPatchEmbd, jlm.RoleVPosEmbd, jlm.RoleVProj, jlm.RoleVProj2} {
+		if !has[r] {
+			return nil, fmt.Errorf("convert: phi4: the tower has no %v", r)
+		}
+	}
+	P := int32(v.PatchSize)
+	if v.NHead == 0 || v.NEmbd%v.NHead != 0 || P == 0 || v.ImageSize%v.PatchSize != 0 ||
+		v.MinPixels < uint32(P*P) || v.MaxPixels < v.MinPixels {
+		return nil, fmt.Errorf("convert: phi4: %d heads over %d, patches of %d in %d, %d to %d pixels",
+			v.NHead, v.NEmbd, P, v.ImageSize, v.MinPixels, v.MaxPixels)
+	}
+	var hidden int32
+	for i := range s.Tensors {
+		if t := &s.Tensors[i]; t.Block == jlm.DenseBlock && t.Role == jlm.RoleVProj {
+			hidden = int32(t.Dims[1])
+		}
+	}
+	act, err := v.Activation(false)
+	if err != nil {
+		return nil, err
+	}
+	bias := func(w, b jlm.Role) []jlm.Role {
+		if has[b] {
+			return []jlm.Role{w, b}
+		}
+		return []jlm.Role{w}
+	}
+	var gelu jlm.ExprBuilder
+	gelu.GELUErf(jlm.Operand(0))
+	side := int32(v.ImageSize) / P
+	t := &jlm.Tower{
+		Version: jlm.TowerVersion,
+		Pre: []jlm.PreStep{
+			{Kind: jlm.PreNaFlex, Ints: []int32{P, int32(v.MinPixels) / (P * P), int32(v.MaxPixels) / (P * P),
+				int32(jlm.FilterPILBilinear), int32(jlm.PrecPIL)}},
+			{Kind: jlm.PreNormalize, Floats: []float32{v.Mean[0], v.Mean[1], v.Mean[2], v.Std[0], v.Std[1], v.Std[2]}},
+		},
+		// The pixels are value 0.
+		Entry: jlm.Program{NIn: 1, Out: 4, Ops: []jlm.TowerOp{
+			{Code: jlm.TOpPatchify, In: []uint16{0}, Span: P},
+			{Code: jlm.TOpLinear, In: []uint16{1}, Bind: bias(jlm.RoleVPatchEmbd, jlm.RoleVPatchBias)},
+			{Code: jlm.TOpPosResample, Bind: []jlm.Role{jlm.RoleVPosEmbd}, Span: side,
+				Chain: jlm.ResampleHalfPixel, Filter: jlm.TapsAntialias},
+			{Code: jlm.TOpAdd, In: []uint16{2, 3}},
+		}},
+		Block: jlm.TowerBlock{NHead: v.NHead, NKVHead: v.NHead, HeadDim: v.NEmbd / v.NHead,
+			Norm: jlm.NormLayer, Eps: v.Eps, Act: act},
+		// The last block's rows are value 0.
+		Head: jlm.Program{NIn: 1, Out: 3, Ops: []jlm.TowerOp{
+			{Code: jlm.TOpLinear, In: []uint16{0}, Bind: bias(jlm.RoleVProj, jlm.RoleVProjBias)},
+			{Code: jlm.TOpStated, In: []uint16{1}, Expr: &jlm.Expr{Terms: gelu.T}, Width: hidden},
+			{Code: jlm.TOpLinear, In: []uint16{2}, Bind: bias(jlm.RoleVProj2, jlm.RoleVProj2Bias)},
+		}},
+		Span: jlm.TowerSpan{Mark: "<image>"},
+	}
+	if err := t.Valid(); err != nil {
+		return nil, fmt.Errorf("convert: phi4: %w", err)
 	}
 	return t, nil
 }

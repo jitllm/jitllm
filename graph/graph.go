@@ -922,6 +922,10 @@ const (
 	FilterBilinear uint8 = 1 + iota
 	FilterLinear
 	FilterCubic
+	// FilterAntialias is torch's antialiased bilinear: every sample of the
+	// side weighted by a triangle as wide as the reduction (one sample at
+	// least) about the cell's centre, normalised by the weights' sum.
+	FilterAntialias
 )
 
 // A picture's sample formats (OpPicture), as an image decoder leaves them.

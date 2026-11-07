@@ -372,8 +372,9 @@ type PictureFit struct {
 	// (jlm.PreSmartResize); factor 0 where there is none.
 	Factor, MinPix, MaxPix int
 	// lift scales a picture a side shorter than factor up first
-	// (jlm.PreSmartResize's Ints[5]).
-	lift bool
+	// (jlm.PreSmartResize's Ints[5]); naflex sizes it by its patch count
+	// instead, MinPix and MaxPix whole patches' pixels (jlm.PreNaFlex).
+	lift, naflex bool
 	// Limit, Pad and LimitPatch are a resize past a patch count and a pad
 	// (jlm.PreLimitPad): a picture of more than Limit whole LimitPatch-pixel
 	// patches scaled down to about that many, then padded to multiples of
@@ -447,6 +448,9 @@ func (f PictureFit) maxPatches(p int) int {
 // float64, as Python computes them.
 func (f PictureFit) smartSize(w, h int) (ow, oh int) {
 	fa := f.Factor
+	if f.naflex {
+		return naflexSize(w, h, fa, f.MinPix/(fa*fa), f.MaxPix/(fa*fa))
+	}
 	if f.lift && (w < fa || h < fa) {
 		s := math.Max(float64(fa)/float64(h), float64(fa)/float64(w))
 		w, h = int(float64(w)*s), int(float64(h)*s)
@@ -500,6 +504,10 @@ func towerFit(t *jlm.Tower) (PictureFit, error) {
 		case jlm.PreSmartResize:
 			fit.Factor, fit.MinPix, fit.MaxPix = int(s.Ints[0]), int(s.Ints[1]), int(s.Ints[2])
 			fit.lift = len(s.Ints) == 6 && s.Ints[5] == 1
+			sized, pil = true, jlm.Filter(s.Ints[3]) != jlm.FilterTwoTap
+		case jlm.PreNaFlex:
+			p := int(s.Ints[0])
+			fit.Factor, fit.MinPix, fit.MaxPix, fit.naflex = p, int(s.Ints[1])*p*p, int(s.Ints[2])*p*p, true
 			sized, pil = true, jlm.Filter(s.Ints[3]) != jlm.FilterTwoTap
 		case jlm.PreLongBox:
 			fit.Box, fit.BoxMin = int(s.Ints[0]), int(s.Ints[1])
@@ -558,6 +566,11 @@ func towerEntry(t *jlm.Tower, px uint8, grid, lead, side int, fit PictureFit, f 
 				return nil, err
 			}
 		case jlm.PreSmartResize:
+			a.PicW, a.PicH, a.PicLive = side, side, true
+			if err := resizeChain(&a, jlm.Filter(s.Ints[3])); err != nil {
+				return nil, err
+			}
+		case jlm.PreNaFlex:
 			a.PicW, a.PicH, a.PicLive = side, side, true
 			if err := resizeChain(&a, jlm.Filter(s.Ints[3])); err != nil {
 				return nil, err
@@ -838,6 +851,8 @@ func resampleOf(chain, filter uint8) (uint8, uint8, error) {
 		f = graph.FilterLinear
 	case jlm.TapsCubic:
 		f = graph.FilterCubic
+	case jlm.TapsAntialias:
+		f = graph.FilterAntialias
 	}
 	if c == 0 || f == 0 {
 		return 0, 0, fmt.Errorf("a resample by chain %d and taps %d", chain, filter)
@@ -1369,4 +1384,29 @@ func programFrame(p *jlm.Program) (line, merge int) {
 		}
 	}
 	return 0, 0
+}
+
+// naflexSize is the size SigLIP2's NaFlex processor resamples a w x h
+// picture to: its own whole patches' count clamped to [lo, hi] patches, then
+// transformers' get_image_size_for_max_num_patches -- a bisection for the
+// largest scale whose sides, ceiled to whole patches, hold that many.
+func naflexSize(w, h, patch, lo, hi int) (int, int) {
+	n := max((w/patch)*(h/patch), 1)
+	target := min(max(n, lo), hi)
+	scaled := func(scale float64, size int) int {
+		v := math.Ceil(float64(size)*scale/float64(patch)) * float64(patch)
+		return int(math.Max(float64(patch), v))
+	}
+	const eps = 1e-5
+	smin, smax := eps/10, 100.0
+	for smax-smin >= eps {
+		sc := (smin + smax) / 2
+		th, tw := scaled(sc, h), scaled(sc, w)
+		if float64(th)/float64(patch)*(float64(tw)/float64(patch)) <= float64(target) {
+			smin = sc
+		} else {
+			smax = sc
+		}
+	}
+	return scaled(smin, w), scaled(smin, h)
 }

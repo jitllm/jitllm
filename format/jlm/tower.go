@@ -89,6 +89,13 @@ const (
 	// normalising), each margin the floor of half the slack (Janus's
 	// resize and pad_to_square).
 	PreLongBox PreKind = 8
+	// PreNaFlex resamples the picture to a size of its own in whole
+	// Ints[0]-pixel patches: its own whole patches' count clamped to
+	// [Ints[1], Ints[2]], then the largest scale whose sides, each ceiled
+	// to a patch and at least one, hold that many, found by bisection
+	// (SigLIP2's get_image_size_for_max_num_patches); with filter Ints[3] in
+	// arithmetic Ints[4].
+	PreNaFlex PreKind = 9
 )
 
 // Filter is a resampling filter.
@@ -242,6 +249,11 @@ const (
 	// TapsCubic is the four samples around it through the cubic
 	// convolution of a = -0.75.
 	TapsCubic
+	// TapsAntialias is torch's antialiased bilinear (interpolate with
+	// antialias=True, the half-pixel chain): a triangle over the samples
+	// within the scale's support of the cell's centre, at least one
+	// sample's, normalised by its sum.
+	TapsAntialias
 )
 
 // TowerOp is one operation of a program: its inputs are values (a program's
@@ -385,6 +397,11 @@ func (t *Tower) Valid() error {
 				!resizes(Filter(s.Ints[3]), Precision(s.Ints[4])) {
 				return fmt.Errorf("jlm: the tower's step %d limits and pads with %v", i, s.Ints)
 			}
+		case PreNaFlex:
+			if len(s.Ints) != 5 || s.Ints[0] <= 0 || s.Ints[1] <= 0 || s.Ints[2] < s.Ints[1] ||
+				!resizes(Filter(s.Ints[3]), Precision(s.Ints[4])) {
+				return fmt.Errorf("jlm: the tower's step %d resizes by patch count with %v", i, s.Ints)
+			}
 		case PreLongBox:
 			if len(s.Ints) != 7 || s.Ints[0] <= 0 || s.Ints[1] <= 0 || s.Ints[1] > s.Ints[0] ||
 				s.Ints[2]&^255 != 0 || s.Ints[3]&^255 != 0 || s.Ints[4]&^255 != 0 || !resizes(Filter(s.Ints[5]), Precision(s.Ints[6])) {
@@ -514,7 +531,7 @@ func (p *Program) valid(name string) error {
 		case op.Offset < 0:
 			return fmt.Errorf("jlm: the tower's %s op %d offsets by %d", name, i, op.Offset)
 		case op.Code == TOpPosResample && (op.Span < 2 || op.Chain < ResampleAligned || op.Chain > ResampleHalfPixel ||
-			op.Filter < TapsBilinear || op.Filter > TapsCubic):
+			op.Filter < TapsBilinear || op.Filter > TapsAntialias):
 			return fmt.Errorf("jlm: the tower's %s op %d resamples a table %d a side by chain %d and taps %d",
 				name, i, op.Span, op.Chain, op.Filter)
 		case op.Code != TOpPosResample && (op.Chain != 0 && op.Code != TOpRope || op.Filter != 0):
