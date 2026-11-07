@@ -153,7 +153,11 @@ const (
 	// as the source carries them, folded into RoleVMNHardEmbd at conversion:
 	// no container carries one.
 	RoleVMNHardTable Role = 65497
-	RoleVMNHardNorm  Role = 65496
+	// RoleVTileMarks is a tiled picture's marker rows, [rows][text width]:
+	// the text table's rows of the tokens that stand before each tile and
+	// before its thumbnail (TOpMarkRow), copied at conversion.
+	RoleVTileMarks  Role = 65495
+	RoleVMNHardNorm Role = 65496
 )
 
 func visionFamRoleName(r Role) (string, bool) {
@@ -162,6 +166,8 @@ func visionFamRoleName(r Role) (string, bool) {
 		return "mm.patch_merger", true
 	case RoleVImgBreak:
 		return "v.token_embd.img_break", true
+	case RoleVTileMarks:
+		return "v.token_embd.tile_marks", true
 	case RoleVProj3:
 		return "mm.model.fc", true
 	case RoleVPostAttnNorm:

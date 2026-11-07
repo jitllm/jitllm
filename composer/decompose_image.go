@@ -31,6 +31,9 @@ const (
 	RequestPicSub
 	RequestPicOW
 	RequestPicOH
+	// RequestMark is a square's marker row in the head's table plus one, 0
+	// for a square with none (graph.OpMarkRow).
+	RequestMark
 	// RequestPicTaps is where a picture resized by Pillow's filters
 	// (graph.ChainPIL) has its taps: the output's columns' (PILTaps), then
 	// its rows', each entry Taps+1 words.
@@ -862,5 +865,47 @@ func decomposeWrapRows(o graph.Op, c *Context) ([]Prim, error) {
 	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0]), vec(o.Weight[0]), vec(o.Weight[1]),
 		TableRequest.op()}, Out: out, Expr: x.e,
 		Facts:  Facts{Extents: map[int]int{3: RequestRows + sh[0]}},
+		Stores: []PrimStore{{Out: out, Ax: []int{rr, i}, Ext: sh, Value: v}}}}, nil
+}
+
+// decomposeMarkRow is the input's rows -- a square's merged grid, the
+// request's grid over Width -- after the weight's row the request names
+// (RequestMark, the row plus one; none where it is 0). A row past the
+// square's last is clamped to it, recomputing it: no row past the square's
+// is written, the next square's or the prompt's.
+func decomposeMarkRow(o graph.Op, c *Context) ([]Prim, error) {
+	a := o.Attr
+	S := a.Width
+	if len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) != 1 || S < 1 || o.Weight[0].Rows < 1 ||
+		o.Weight[0].K != c.width(o.In[0]) || c.width(o.Out[0]) != c.width(o.In[0]) {
+		return nil, fmt.Errorf("a marker row of %d operands, %d weights, by %d", len(o.In), len(o.Weight), S)
+	}
+	wo, err := c.weight(o.Weight[0])
+	if err != nil {
+		return nil, err
+	}
+	U := ir.U32
+	sh, ish := c.rows(o.Out[0]), c.rows(o.In[0])
+	T := o.Weight[0].Rows
+	var x exprs
+	r, i := x.coord(0), x.coord(1)
+	u := func(v int) int { return x.u(uint32(v)) }
+	W := x.op(OpDiv, U, x.op(OpMax, U, x.load(1, u(RequestGrid)), u(S)), u(S))
+	H := x.op(OpDiv, U, x.op(OpMax, U, x.load(1, u(RequestGridH)), u(S)), u(S))
+	mark := x.load(1, u(RequestMark))
+	lead := x.op(OpMin, U, mark, u(1))
+	last := x.op(OpSub, U, x.op(OpAdd, U, x.op(OpMul, U, H, W), lead), u(1))
+	rr := x.op(OpMin, U, r, x.op(OpMin, U, last, u(sh[0]-1)))
+	src := x.op(OpMin, U, x.op(OpSub, U, x.op(OpMax, U, rr, lead), lead), u(ish[0]-1))
+	in := []Operand{c.value(o.In[0]), TableRequest.op()}
+	facts := Facts{Extents: map[int]int{1: RequestRows + sh[0]}}
+	row := x.op(OpMin, U, x.op(OpSub, U, x.op(OpMax, U, mark, u(1)), u(1)), u(T-1))
+	mv, err := weightElement(&x, wo, T, sh[1], &in, &facts, row, i)
+	if err != nil {
+		return nil, fmt.Errorf("a marker table of %s: %w", wo.Format, err)
+	}
+	v := x.sel(ir.F32, x.op(OpLess, ir.Pred, rr, lead), mv, x.at(0, ish, src, i))
+	out := c.value(o.Out[0])
+	return []Prim{{Kind: PrimMap, Shape: sh, In: in, Out: out, Expr: x.e, Facts: facts,
 		Stores: []PrimStore{{Out: out, Ax: []int{rr, i}, Ext: sh, Value: v}}}}, nil
 }

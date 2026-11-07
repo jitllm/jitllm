@@ -54,7 +54,10 @@ type TowerGraphs struct {
 	// Trim is the break rows the frame leaves off its last row: 1 where the
 	// head breaks after each merged row but the last (TOpRowBreak's Offset).
 	Trim int
-	Full []bool
+	// Marked says the head writes a square's marker row before its rows
+	// (TOpMarkRow) where the square names one (Square.Mark).
+	Marked bool
+	Full   []bool
 	// fit is how a picture becomes the tower's squares.
 	Fit PictureFit
 	// table and planes are the blocks' rotary table and its planes, nil for
@@ -348,6 +351,9 @@ func (m *Model) BuildTowerGraphs() (*TowerGraphs, error) {
 		return nil, fmt.Errorf("model: the tower's head: %w", err)
 	}
 	tg.Head, tg.Out = h, out
+	for _, op := range t.Head.Ops {
+		tg.Marked = tg.Marked || op.Code == jlm.TOpMarkRow
+	}
 	if tg.Line, tg.Frame, tg.Trim = programFrame(&t.Head); tg.Frame > 0 {
 		for _, op := range t.Head.Ops {
 			if op.Code == jlm.TOpWrapRows {
@@ -407,6 +413,13 @@ type PictureFit struct {
 	// pixels, each side then rounded up to a whole CapUnit (jlm.PreCapUnit);
 	// Cap 0 where there is none.
 	Cap, CapUnit int
+	// SmartTile is the tile side of a picture tiled past its size bound or
+	// sized its own way under it (jlm.PreTileSmart), 0 where there is none:
+	// SmartMin to SmartMax tiles, its own size whole SmartUnits between
+	// MinPix and MaxPix, cut where its sides, rounded so (at least a
+	// SmartPatch each), hold more than Tolerance times its piece's bound.
+	SmartTile, SmartMin, SmartMax, SmartPatch, SmartUnit, SmartMaxPix int
+	Tolerance                                                         float64
 	// Budget, BudgetPatch and BudgetUnit are a resize to the largest size
 	// of the picture's aspect within Budget patches of BudgetPatch pixels,
 	// each side whole BudgetUnits (jlm.PreAspectBudget); Budget 0 where
@@ -457,7 +470,23 @@ func (f PictureFit) boxSize(w, h int) (int, int) {
 }
 
 // Own reports that a picture is encoded at a size of its own.
-func (f PictureFit) Own() bool { return f.Factor > 0 || f.Limit > 0 || f.Cap > 0 || f.Budget > 0 }
+func (f PictureFit) Own() bool {
+	return f.Factor > 0 || f.Limit > 0 || f.Cap > 0 || f.Budget > 0 || f.SmartTile > 0
+}
+
+// smartLayout is how a w x h picture is cut under jlm.PreTileSmart: cols x
+// rows tiles where tiled, and its own size (the thumbnail, or the one piece
+// where not).
+func (f PictureFit) smartLayout(w, h int) (cols, rows int, tiled bool, ow, oh int) {
+	ow, oh = PictureFit{Factor: f.SmartUnit, MinPix: f.MinPix, MaxPix: f.SmartMaxPix}.smartSize(w, h)
+	u := f.SmartUnit
+	round := func(v int) int { return max(f.SmartPatch, int(math.RoundToEven(float64(v)/float64(u)))*u) }
+	if float64(round(h)*round(w)) <= float64(f.SmartMaxPix)*f.Tolerance {
+		return 1, 1, false, ow, oh
+	}
+	cols, rows = TileGrid(w, h, f.SmartTile, f.SmartMin, f.SmartMax)
+	return cols, rows, true, ow, oh
+}
 
 // unit is the multiple a picture of its own size's encoded sides are.
 func (f PictureFit) unit() int {
@@ -468,6 +497,8 @@ func (f PictureFit) unit() int {
 		return f.CapUnit
 	case f.Budget > 0:
 		return f.BudgetUnit
+	case f.SmartTile > 0:
+		return f.SmartUnit
 	}
 	return f.Factor
 }
@@ -572,6 +603,13 @@ func towerFit(t *jlm.Tower) (PictureFit, error) {
 			fit.Factor, fit.MinPix, fit.MaxPix = int(s.Ints[0]), int(s.Ints[1]), int(s.Ints[2])
 			fit.lift = len(s.Ints) == 6 && s.Ints[5] == 1
 			sized, pil = true, jlm.Filter(s.Ints[3]) != jlm.FilterTwoTap
+		case jlm.PreTileSmart:
+			fit.SmartTile, fit.SmartMin, fit.SmartMax = int(s.Ints[0]), int(s.Ints[1]), int(s.Ints[2])
+			fit.SmartPatch, fit.SmartUnit, fit.MinPix, fit.SmartMaxPix = int(s.Ints[3]), int(s.Ints[4]), int(s.Ints[5]), int(s.Ints[6])
+			fit.Tolerance = float64(s.Floats[0])
+			// The area the reduction reaches: a piece's bound or a tile's.
+			fit.MaxPix = max(fit.SmartMaxPix, fit.SmartTile*fit.SmartTile)
+			sized, pil = true, jlm.Filter(s.Ints[7]) != jlm.FilterTwoTap
 		case jlm.PreAspectBudget:
 			fit.Budget, fit.BudgetPatch, fit.BudgetUnit = int(s.Ints[0]), int(s.Ints[1]), int(s.Ints[2])
 			// The area the reduction reaches: the budget's.
@@ -604,7 +642,7 @@ func towerFit(t *jlm.Tower) (PictureFit, error) {
 		}
 	}
 	ways := 0
-	for _, w := range []bool{fit.Short > 0, fit.MaxTiles > 0, fit.Factor > 0, fit.Limit > 0, fit.Box > 0, fit.Cap > 0, fit.Budget > 0} {
+	for _, w := range []bool{fit.Short > 0, fit.MaxTiles > 0, fit.Factor > 0, fit.Limit > 0, fit.Box > 0, fit.Cap > 0, fit.Budget > 0, fit.SmartTile > 0} {
 		if w {
 			ways++
 		}
@@ -648,6 +686,12 @@ func towerEntry(t *jlm.Tower, px uint8, grid, lead, side int, fit PictureFit, f 
 			if err := resizeChain(&a, jlm.Filter(s.Ints[3])); err != nil {
 				return nil, err
 			}
+		case jlm.PreTileSmart:
+			a.PicW, a.PicH, a.PicLive = side, side, true
+			if err := resizeChain(&a, jlm.Filter(s.Ints[7])); err != nil {
+				return nil, err
+			}
+			a.PicTorch = jlm.Precision(s.Ints[8]) == jlm.PrecTorch
 		case jlm.PreAspectBudget:
 			a.PicW, a.PicH, a.PicLive = side, side, true
 			if err := resizeChain(&a, jlm.Filter(s.Ints[3])); err != nil {
@@ -823,12 +867,41 @@ type Square struct {
 	Class                  int
 	Ow, Oh, X0, Y0, Pw, Ph int
 	Gw, Gh                 int
+	// Mark is the square's marker row in the head's table plus one, 0 for
+	// none (TOpMarkRow, composer.RequestMark).
+	Mark int
 }
 
 // square is square i of a w x h picture and how many the picture has: one
 // at its own size in the smallest class that holds it, or a fixed square,
 // a crop or a tile at the entry's size.
 func (tg *TowerGraphs) Square(w, h, i int) (Square, int) {
+	if f := tg.Fit; f.SmartTile > 0 {
+		cols, rows, tiled, ow, oh := f.smartLayout(w, h)
+		n, span := 1, f.SmartMax
+		if tiled {
+			n = cols*rows + 1
+		}
+		class := func(side int) int {
+			c := 0
+			for c < len(tg.Classes)-1 && side > tg.Classes[c].Pic.PicW {
+				c++
+			}
+			return c
+		}
+		if i < n-1 {
+			// Tile i of the picture resized onto the grid, its marker the
+			// tile's place.
+			s := f.SmartTile
+			return Square{Class: class(s), Ow: cols * s, Oh: rows * s, X0: i % cols * s, Y0: i / cols * s, Pw: s, Ph: s,
+				Gw: s / tg.Patch, Gh: s / tg.Patch, Mark: i/cols*span + i%cols + 1}, n
+		}
+		sq := Square{Class: class(max(ow, oh)), Ow: ow, Oh: oh, Pw: ow, Ph: oh, Gw: ow / tg.Patch, Gh: oh / tg.Patch}
+		if tiled {
+			sq.Mark = span*span + 1
+		}
+		return sq, n
+	}
 	if tg.Fit.Budget > 0 {
 		ow, oh := tg.Fit.budgetSize(w, h)
 		c := 0
@@ -882,6 +955,15 @@ func (tg *TowerGraphs) SquareOut(sq Square) int {
 	if tg.Frame > 0 {
 		m := tg.Frame
 		return (sq.Gh/m)*(sq.Gw/m+tg.Line) - tg.Trim + 2*tg.Ends
+	}
+	if tg.Marked {
+		// The head's rows less its marker row over the patches, and the
+		// marker where the square has one.
+		n := sq.Gw * sq.Gh * (tg.Out - 1) / (tg.Rows - tg.Lead)
+		if sq.Mark > 0 {
+			n++
+		}
+		return n
 	}
 	return sq.Gw * sq.Gh * tg.Out / (tg.Rows - tg.Lead)
 }
@@ -1164,6 +1246,16 @@ func lowerValuesWith(b *graph.Builder, t *jlm.Tower, p *jlm.Program, in []graph.
 		case jlm.TOpLeadRow:
 			out = b.Emit(graph.OpLeadRow, ins, []graph.Result{{Name: "class", Width: width(ins[0])}},
 				[]graph.Binding{{Role: op.Bind[0], K: width(ins[0])}}, graph.Attrs{Offset: int(op.Offset)}, nil, nil)[0]
+		case jlm.TOpMarkRow:
+			s, err := shape(op.Bind[0])
+			if err != nil {
+				return nil, err
+			}
+			if s.K != width(ins[0]) || s.Rows < 1 {
+				return nil, fmt.Errorf("marks rows %d wide from a table of %d rows %d wide", width(ins[0]), s.Rows, s.K)
+			}
+			out = b.Emit(graph.OpMarkRow, ins, []graph.Result{{Name: "marked", Width: width(ins[0]), Rows: rowsOf(ins[0]) + 1}},
+				[]graph.Binding{{Role: op.Bind[0], K: s.K, Rows: s.Rows}}, graph.Attrs{Width: int(op.Width)}, nil, nil)[0]
 		case jlm.TOpRowBreak:
 			out = b.Emit(graph.OpRowBreak, ins, []graph.Result{{Name: "lines", Width: width(ins[0]), Rows: 2 * rowsOf(ins[0])}},
 				[]graph.Binding{{Role: op.Bind[0], K: width(ins[0])}}, graph.Attrs{Span: int(op.Span), Offset: int(op.Offset)}, nil, nil)[0]

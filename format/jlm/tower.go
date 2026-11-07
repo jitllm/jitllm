@@ -109,6 +109,16 @@ const (
 	// (Gemma 4's get_aspect_ratio_preserving_size); with filter Ints[3] in
 	// arithmetic Ints[4].
 	PreAspectBudget PreKind = 11
+	// PreTileSmart is a picture one piece at its own size or cut: its own
+	// size each side a whole Ints[4] pixels, rounded half to even, then
+	// scaled into [Ints[5], Ints[6]] pixels as PreSmartResize scales it; a
+	// picture whose sides rounded so (at least an Ints[3]-pixel patch each)
+	// hold more than Floats[0] times Ints[6] pixels is cut into the grid of
+	// Ints[1] to Ints[2] Ints[0]-pixel tiles closest to its aspect (as
+	// PreTile chooses one), resized onto the grid and cut row-major, then
+	// the whole at its own size as a thumbnail (LFM2-VL's); with filter
+	// Ints[7] in arithmetic Ints[8].
+	PreTileSmart PreKind = 12
 )
 
 // Filter is a resampling filter.
@@ -135,6 +145,10 @@ const (
 	// PrecPIL is Pillow's: 8-bit RGB in, fixed-point taps of the precision
 	// Pillow picks for the filter, rounded to 8 bits after each pass.
 	PrecPIL Precision = 2
+	// PrecTorch is torchvision's antialiased resample of an 8-bit picture:
+	// Pillow's passes and filters, the taps at the widest precision (to 21
+	// bits) at which an axis's largest weight holds in an int16.
+	PrecTorch Precision = 3
 )
 
 // PreStep is one step of the picture's preprocessing.
@@ -235,7 +249,13 @@ const (
 	// axis, back to back in Bind[0]: the first's at the patch's column plus
 	// the second's at its row (graph.OpPosAxes), from row Offset on.
 	TOpPosAxes OpCode = 26
-	topCodes   OpCode = 27
+	// TOpMarkRow is In[0]'s rows -- a piece's merged grid, its width the
+	// patch grid's over Width -- after one row of Bind[0], the row the
+	// piece's place names: of a tiled picture's tile at grid row r and
+	// column c row r*Span+c, of its thumbnail row Span*Span; a picture of
+	// one piece takes none.
+	TOpMarkRow OpCode = 27
+	topCodes   OpCode = 28
 )
 
 // A stated rotary's layout (TOpRope's Chain).
@@ -418,6 +438,12 @@ func (t *Tower) Valid() error {
 				!resizes(Filter(s.Ints[3]), Precision(s.Ints[4])) {
 				return fmt.Errorf("jlm: the tower's step %d limits and pads with %v", i, s.Ints)
 			}
+		case PreTileSmart:
+			if len(s.Ints) != 9 || len(s.Floats) != 1 || s.Ints[0] <= 0 || s.Ints[1] < 1 || s.Ints[2] < s.Ints[1] ||
+				s.Ints[3] <= 0 || s.Ints[4] <= 0 || s.Ints[4]%s.Ints[3] != 0 || s.Ints[0]%s.Ints[4] != 0 ||
+				s.Ints[5] <= 0 || s.Ints[6] < s.Ints[5] || !(s.Floats[0] > 0) || !resizes(Filter(s.Ints[7]), Precision(s.Ints[8])) {
+				return fmt.Errorf("jlm: the tower's step %d tiles or sizes with %v %v", i, s.Ints, s.Floats)
+			}
 		case PreAspectBudget:
 			if len(s.Ints) != 5 || s.Ints[0] <= 0 || s.Ints[1] <= 0 || s.Ints[2] <= 0 || s.Ints[2]%s.Ints[1] != 0 ||
 				!resizes(Filter(s.Ints[3]), Precision(s.Ints[4])) {
@@ -516,7 +542,7 @@ func resizes(f Filter, p Precision) bool {
 	case FilterTwoTap:
 		return p == PrecFloat
 	case FilterPILBilinear, FilterPILBicubic:
-		return p == PrecPIL
+		return p == PrecPIL || p == PrecTorch
 	}
 	return false
 }
@@ -541,7 +567,7 @@ func (p *Program) valid(name string) error {
 		case len(op.Bind) < bind[0] || len(op.Bind) > bind[1]:
 			return fmt.Errorf("jlm: the tower's %s op %d (code %d) binds %d weights, want %d to %d", name, i, op.Code, len(op.Bind), bind[0], bind[1])
 		case (op.Code == TOpPatchify || op.Code == TOpRegroup || op.Code == TOpPool || op.Code == TOpFold ||
-			op.Code == TOpRowBreak || op.Code == TOpWrapRows || op.Code == TOpPosAxes) && op.Span <= 0:
+			op.Code == TOpRowBreak || op.Code == TOpWrapRows || op.Code == TOpPosAxes || op.Code == TOpMarkRow) && op.Span <= 0:
 			return fmt.Errorf("jlm: the tower's %s op %d groups by %d", name, i, op.Span)
 		case op.Code == TOpRowBreak && op.Offset&^1 != 0:
 			return fmt.Errorf("jlm: the tower's %s op %d breaks rows with an offset of %d", name, i, op.Offset)
@@ -592,6 +618,8 @@ func (op *TowerOp) arity() (in int, bind [2]int) {
 		return 1, [2]int{0, 0}
 	case TOpPosAxes:
 		return 0, [2]int{1, 1}
+	case TOpMarkRow:
+		return 1, [2]int{1, 1}
 	case TOpLinear, TOpLayerNorm:
 		return 1, [2]int{1, 2}
 	case TOpRMSNorm:

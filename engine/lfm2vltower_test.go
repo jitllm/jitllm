@@ -1,0 +1,202 @@
+package engine
+
+import (
+	"encoding/binary"
+	"encoding/json"
+	"fmt"
+	"image/png"
+	"math"
+	"os"
+	"testing"
+
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/quant"
+	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/model"
+)
+
+// lfm2Golden is scripts/lfm2visiongold.py --fixture's reference for
+// synth-lfm2vl: a picture cut into tiles and a thumbnail, each piece's patch
+// grid (rows, columns),
+// and beside it the pieces' pixels (.px, [y][x][channel] each, in order) and
+// the projector's rows at the engine's arithmetic (.emb_a8).
+type lfm2Golden struct {
+	W, H, Rows, Cols int
+	Pieces           [][2]int
+}
+
+func openLFM2VL(t *testing.T) (*model.Model, *lfm2Golden, string) {
+	t.Helper()
+	const name = "synth-lfm2vl"
+	text, proj := testmodels.Path(name+".gguf"), testmodels.Path("mmproj-"+name+".gguf")
+	if !sourcePresent(text, proj) {
+		testmodels.Missing(t, "MODEL MISSING: %s and its mmproj -- run scripts/lfm2visiongold.py --fixture (RULE 11)", text)
+	}
+	base := testmodels.Path(name + "-gold/picture")
+	raw, err := os.ReadFile(base + ".json")
+	if err != nil {
+		testmodels.Missing(t, "GOLDEN MISSING: %v -- run scripts/lfm2visiongold.py --fixture (RULE 11)", err)
+	}
+	g := &lfm2Golden{}
+	if err := json.Unmarshal(raw, g); err != nil {
+		t.Fatal(err)
+	}
+	m, err := model.Open(jlmOfPair(t, text, proj))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m, g, base
+}
+
+func readF32File(t *testing.T, path string) []float32 {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		testmodels.Missing(t, "GOLDEN MISSING: %v", err)
+	}
+	out := make([]float32, len(raw)/4)
+	for i := range out {
+		out[i] = math.Float32frombits(binary.LittleEndian.Uint32(raw[4*i:]))
+	}
+	return out
+}
+
+// TestLFM2VLTowerMatchesTransformers holds synth-lfm2vl's stated tower to
+// transformers' Lfm2VlImageProcessor, Siglip2VisionModel and projector: the
+// picture cut into its tiles and thumbnail as the processor cuts it, every
+// piece's every sample; and the picture's rows -- each piece's marker row,
+// the text table's row of its <|img_row_R_col_C|> or <|img_thumbnail|>,
+// then its rows at the engine's arithmetic within the tower bound. A
+// tolerance that keeps the picture whole is the violation.
+func TestLFM2VLTowerMatchesTransformers(t *testing.T) {
+	m, g, base := openLFM2VL(t)
+	defer m.Close()
+	tg := m.Tower
+	f, err := os.Open(base + ".png")
+	if err != nil {
+		testmodels.Missing(t, "PICTURE MISSING: %v", err)
+	}
+	img, err := png.Decode(f)
+	f.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := img.Bounds()
+	if _, n := tg.Square(b.Dx(), b.Dy(), 0); n != len(g.Pieces) || g.Cols*g.Rows < 2 {
+		t.Fatalf("the picture is %d pieces, the processor's %d (%dx%d tiles)", n, len(g.Pieces), g.Cols, g.Rows)
+	}
+	s := testInstance(t, m, 64, WithKVF16(false))
+	defer s.Close()
+	px := readF32File(t, base+".px")
+	at, differ, worst := 0, 0, 0.0
+	for i, pc := range g.Pieces {
+		got, sq := towerPixelsAt(t, s, img, i)
+		if [2]int{sq.Gh, sq.Gw} != pc {
+			t.Fatalf("piece %d is %dx%d patches, the processor's %dx%d", i, sq.Gh, sq.Gw, pc[0], pc[1])
+		}
+		for j, v := range got {
+			d := math.Abs(float64(v - px[at+j]))
+			if !(d < 2e-4) {
+				differ++
+			}
+			worst = math.Max(worst, d)
+		}
+		at += len(got)
+	}
+	if at != len(px) || differ > 0 {
+		t.Fatalf("%d of %d samples differ from the processor's, worst by %.5f (%d of the golden's %d read)",
+			differ, at, worst, at, len(px))
+	}
+	t.Logf("%dx%d tiles and a thumbnail: every one of %d samples the processor's", g.Cols, g.Rows, at)
+
+	rows, err := s.EncodePicture(img)
+	if err != nil {
+		t.Fatal(err)
+	}
+	emb := readF32File(t, base+".emb_a8")
+	D := int(m.Container.Vision().ProjDim)
+	var marks []float32
+	for i := range m.Container.Entries() {
+		e := &m.Container.Entries()[i]
+		if e.Role != jlm.RoleVTileMarks {
+			continue
+		}
+		typ, ok := jlm.SourceType(e.Type)
+		qs, err := m.Container.ReadPayload(e)
+		if !ok || err != nil {
+			t.Fatalf("the marker table of %v: %v", e.Type, err)
+		}
+		marks = make([]float32, int(e.Dims[0])*int(e.Dims[1]))
+		if err := quant.Dequant32(typ, qs, marks); err != nil {
+			t.Fatal(err)
+		}
+		if int(e.Dims[0]) != D {
+			t.Fatalf("the marker table's rows are %d wide, not %d", e.Dims[0], D)
+		}
+	}
+	if marks == nil {
+		t.Fatal("the container has no marker table")
+	}
+	var got, want []float32
+	pos, ref := 0, 0
+	worstMark := 0.0
+	for i := range g.Pieces {
+		sq, _ := tg.Square(b.Dx(), b.Dy(), i)
+		n := tg.SquareOut(sq) - 1
+		mark := marks[(sq.Mark-1)*D : sq.Mark*D]
+		for j, v := range rows[pos*D : (pos+1)*D] {
+			worstMark = math.Max(worstMark, math.Abs(float64(v-mark[j])))
+		}
+		if (ref+n)*D > len(emb) || (pos+1+n)*D > len(rows) {
+			var each []string
+			for j := range g.Pieces {
+				q, _ := tg.Square(b.Dx(), b.Dy(), j)
+				each = append(each, fmt.Sprintf("%dx%d patches -> %d", q.Gh, q.Gw, tg.SquareOut(q)))
+			}
+			t.Fatalf("piece %d overruns: the reference has %d rows, the engine %d; the pieces %v (the processor's %v)",
+				i, len(emb)/D, len(rows)/D, each, g.Pieces)
+		}
+		got = append(got, rows[(pos+1)*D:(pos+1+n)*D]...)
+		want = append(want, emb[ref*D:(ref+n)*D]...)
+		pos, ref = pos+1+n, ref+n
+	}
+	if pos*D != len(rows) || ref*D != len(emb) {
+		t.Fatalf("%d rows read of %d, %d of the reference's %d", pos, len(rows)/D, ref, len(emb)/D)
+	}
+	if worstMark != 0 {
+		t.Fatalf("a marker row is off its table row by %.3g", worstMark)
+	}
+	clean, worst := nmseOf(got, want)
+	t.Logf("%d pieces' %d rows: NMSE %.3e, max|d| %.4f at the engine's arithmetic; %d marker rows their table's",
+		len(g.Pieces), ref, clean, worst, len(g.Pieces))
+	if math.IsNaN(clean) || clean > 2e-3 {
+		t.Fatalf("the rows are NMSE %.3e from transformers' (bound 2e-3)", clean)
+	}
+
+	// The violation: a tolerance that keeps the picture whole.
+	tol := tg.Fit.Tolerance
+	tg.Fit.Tolerance = 1e6
+	_, n := tg.Square(b.Dx(), b.Dy(), 0)
+	tg.Fit.Tolerance = tol
+	if n == len(g.Pieces) {
+		t.Fatal("VIOLATION: a tolerance of a million still cuts the picture into the processor's pieces")
+	}
+}
+
+// TestLFM2VLTowerRunsOnTheCard places synth-lfm2vl's tower on each device,
+// every block and then half of them, and holds the tiled picture's rows,
+// markers and all, to the CPU device's.
+func TestLFM2VLTowerRunsOnTheCard(t *testing.T) {
+	m, _, base := openLFM2VL(t)
+	defer m.Close()
+	f, err := os.Open(base + ".png")
+	if err != nil {
+		testmodels.Missing(t, "PICTURE MISSING: %v", err)
+	}
+	img, err := png.Decode(f)
+	f.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	towerRunsOnTheCard(t, m, img, nil, 0, WithKVF16(false))
+}

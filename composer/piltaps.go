@@ -61,10 +61,42 @@ func PILTapCount(filter uint8, in, out int) int {
 // whole side is a crop of the resize: each output's taps are its own, and
 // so is the 8-bit sample the first pass leaves for it.
 func PILTaps(filter uint8, in, out, from, n, k int, dst []uint32) {
+	PILTapsAt(filter, false, in, out, from, n, k, dst)
+}
+
+// PILTapsAt is PILTaps, at torchvision's precision where torch says: each
+// weight rounded at the widest precision p (to 21 bits) at which the
+// axis's largest holds in an int16, then shifted up to Pillow's -- the same
+// sums, (s + 2^(p-1)) >> p, through the picture op's one finish.
+func PILTapsAt(filter uint8, torch bool, in, out, from, n, k int, dst []uint32) {
 	scale := float64(in) / float64(out)
 	fscale := max(scale, 1)
 	support := pilSupport(filter) * fscale
 	ss := 1 / fscale
+	prec := pilPrecision
+	if torch {
+		// The largest weight over every output of the axis, as torchvision
+		// computes it before it rounds any.
+		most := 0.0
+		for o := range out {
+			center := (float64(o) + 0.5) * scale
+			xmin := max(int(center-support+0.5), 0)
+			xmax := min(int(center+support+0.5), in) - xmin
+			ww := 0.0
+			for x := range xmax {
+				ww += pilFilter(filter, (float64(x+xmin)-center+0.5)*ss)
+			}
+			for x := range xmax {
+				if ww != 0 {
+					most = max(most, pilFilter(filter, (float64(x+xmin)-center+0.5)*ss)/ww)
+				}
+			}
+		}
+		prec = 0
+		for prec < 21 && int(0.5+most*float64(int(1)<<(prec+1))) < 1<<15 {
+			prec++
+		}
+	}
 	for i := range n {
 		o := from + i
 		center := (float64(o) + 0.5) * scale
@@ -85,11 +117,13 @@ func PILTaps(filter uint8, in, out, from, n, k int, dst []uint32) {
 			if x < xmax && ww != 0 {
 				v = w(x) / ww
 			}
+			var q int32
 			if v < 0 {
-				e[1+x] = uint32(int32(-0.5 + v*(1<<pilPrecision)))
+				q = int32(-0.5 + v*float64(int(1)<<prec))
 			} else {
-				e[1+x] = uint32(int32(0.5 + v*(1<<pilPrecision)))
+				q = int32(0.5 + v*float64(int(1)<<prec))
 			}
+			e[1+x] = uint32(q << (pilPrecision - prec))
 		}
 	}
 }

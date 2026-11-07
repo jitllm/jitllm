@@ -379,6 +379,11 @@ const (
 	// rows Width rows longer (an OpRowBreak's), the second weight's row after
 	// its last.
 	OpWrapRows
+	// OpMarkRow is In[0]'s rows -- a piece's merged grid, its width the
+	// step's patch grid's over Width -- after Weight[0]'s row the request
+	// names for the piece (composer.RequestMark: the row plus one, 0 for
+	// none); rows past them are not written.
+	OpMarkRow
 	numOps
 )
 
@@ -474,6 +479,8 @@ func (k OpKind) String() string {
 		return "row_break"
 	case OpWrapRows:
 		return "wrap_rows"
+	case OpMarkRow:
+		return "mark_row"
 	case OpPosAxes:
 		return "pos_axes"
 	case OpNGramHash:
@@ -823,7 +830,10 @@ type Attrs struct {
 	PicPad     int
 	PicBox     bool
 	PicFill    [3]uint8
-	Mean, Std  [3]float64
+	// PicTorch says the taps are torchvision's precision, not Pillow's
+	// (composer.PILTapsAt): the picture op runs the same passes on them.
+	PicTorch  bool
+	Mean, Std [3]float64
 }
 
 // Op is one operation.
