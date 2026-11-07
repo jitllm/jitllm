@@ -139,7 +139,7 @@ func render(d lines) ([]byte, error) {
 
 	var encoders []string
 	for _, n := range names {
-		if a, _ := convert.ArchitectureGraph(n); a.Encoder() {
+		if a, _ := convert.ArchitectureGraph(n); convert.Encoder(a) {
 			encoders = append(encoders, n)
 		}
 	}
