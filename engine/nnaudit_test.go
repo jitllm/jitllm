@@ -151,15 +151,43 @@ func cardDeclines(g *gpu.GPU) [nn.NumDeclines]int {
 // reason that is not a hardware limit: a part placed on the card runs there.
 func refusedAtStep(t *testing.T, g *gpu.GPU, before [nn.NumDeclines]int) {
 	t.Helper()
-	after := cardDeclines(g)
+	for _, d := range stepDeclines(before, cardDeclines(g)) {
+		t.Errorf("the card declined %s", d)
+	}
+}
+
+// stepDeclines names the steps declined between two counts for a reason that
+// is not a hardware limit: the device not serving the part, holding no room
+// for it, or lacking the ISA.
+func stepDeclines(before, after [nn.NumDeclines]int) []string {
+	var out []string
 	for i := range after {
 		switch nn.Decline(i) {
 		case nn.DeclineServes, nn.DeclineNoRoom, nn.DeclineISA:
 			continue
 		}
 		if n := after[i] - before[i]; n > 0 {
-			t.Errorf("the card declined %d step(s): %s", n, nn.DeclineName(i))
+			out = append(out, fmt.Sprintf("%d step(s): %s", n, nn.DeclineName(i)))
 		}
+	}
+	return out
+}
+
+// TestTheCensusSeesADeclinedStep runs the census's decline check against its
+// violations: a step declined as not formed, or for a table it lacked, is
+// named; the hardware limits, and declines from before the decode, are not.
+func TestTheCensusSeesADeclinedStep(t *testing.T) {
+	var before, after [nn.NumDeclines]int
+	before[nn.DeclineNotFormed] = 4
+	after[nn.DeclineNotFormed] = 4
+	after[nn.DeclineServes], after[nn.DeclineNoRoom], after[nn.DeclineISA] = 2, 3, 1
+	if got := stepDeclines(before, after); len(got) != 0 {
+		t.Fatalf("hardware limits and earlier declines were named: %v", got)
+	}
+	after[nn.DeclineNotFormed]++
+	after[nn.DeclineNoTable] = 2
+	if got := stepDeclines(before, after); len(got) != 2 {
+		t.Fatalf("a step declined as not formed and two for a table gave %v, want two findings", got)
 	}
 }
 
