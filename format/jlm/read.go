@@ -71,6 +71,25 @@ type File struct {
 // container itself -- its header, its table and where every page lies -- and
 // reads into memory it is handed; it holds none of this.
 type Frames struct {
+	*frameCore
+	// bit is this view's bit in each page's holders, budget its byte cap (0
+	// unlimited), held the bytes of the pages it retains, recent the block
+	// it used most recently (its MRU victim, -1 for none), and used and tick
+	// its own order: when it last claimed each page.
+	bit    uint64
+	budget uint64
+	held   uint64
+	recent int
+	used   []uint64
+	tick   uint64
+}
+
+// frameCore is what every view of a model's frames shares: the pages and
+// their frames, the readers, the pins and the free frames. holders[i] is the
+// views retaining page i, views every view made.
+type frameCore struct {
+	holders []uint64
+	views   []*Frames
 	// use is the readers' lock (Enter): shared while the frames fit, held
 	// alone while they evict. leave and leaveShared are the releases, bound
 	// once so Enter hands back the same func every call. inside counts the
@@ -193,8 +212,9 @@ type Frames struct {
 	// the GC is not handed a page of garbage per fault.
 	//
 	// The budget is bytes, not a frame count, because the text, vision and
-	// expert page arrays have different page sizes (see Role.Vision).
-	budget uint64 // 0 = unlimited
+	// expert page arrays have different page sizes (see Role.Vision): each
+	// view's, and the frames' bound their sum (bound).
+	//
 	// pageTotal is every page's size added up, computed once: page sizes are
 	// fixed at conversion, so CanEvict does not re-walk them per token.
 	pageTotal uint64
@@ -210,12 +230,7 @@ type Frames struct {
 	freeBytes uint64
 	// fresh counts frames take allocated rather than reused: a page-in that
 	// found no free frame of its size and paid for a new one's faults.
-	fresh  int64
-	recent int // the block used most recently: the MRU victim. -1 for none
-	// used[i] is when page i was last claimed, on a counter that ticks per
-	// claim: the LRU order over expert pages. Guarded by mu.
-	used    []uint64
-	tick    uint64
+	fresh   int64
 	faults  int64
 	evicted int64
 }
@@ -259,7 +274,8 @@ func NewFrames(f *File, opts ...FramesOption) (*Frames, error) {
 		opt(&o)
 	}
 	h := f.H
-	fr := &Frames{file: f, offHeap: o.offHeap, mem: o.mem, denseLazy: o.denseOnDemand}
+	fr := &Frames{frameCore: &frameCore{file: f, offHeap: o.offHeap, mem: o.mem, denseLazy: o.denseOnDemand}, bit: 1}
+	fr.views = []*Frames{fr}
 	// The dense region is resident from here, unless it is read entry by
 	// entry (DenseOnDemand).
 	if fr.denseLazy {
@@ -283,6 +299,7 @@ func NewFrames(f *File, opts ...FramesOption) (*Frames, error) {
 	// blocks follow, then expert pages, so the pager, residency map, chunk
 	// bitmap and eviction policy are written once. Only pageAt knows.
 	fr.pages = make([][]byte, f.NPages())
+	fr.holders = make([]uint64, len(fr.pages))
 	fr.used = make([]uint64, len(fr.pages))
 	fr.free = map[uint64][][]byte{}
 	fr.recent = -1
@@ -633,7 +650,7 @@ func (f *Frames) take(size uint64) []byte {
 	best := uint64(0)
 	for n, l := range f.free {
 		if len(l) > 0 && n > size && n <= size+size/4 && (best == 0 || n < best) &&
-			(f.budget == 0 || f.resident+n <= f.budget) {
+			(f.bound() == 0 || f.resident+n <= f.bound()) {
 			best = n
 		}
 	}
@@ -646,8 +663,8 @@ func (f *Frames) take(size uint64) []byte {
 	}
 	// No frame of this size: free frames of other sizes give way first, so a
 	// mixture evicting expert pages to fit a block page does not hold both.
-	if f.budget > 0 && f.resident+size <= f.budget {
-		f.trimFree(f.budget - f.resident - size)
+	if b := f.bound(); b > 0 && f.resident+size <= b {
+		f.trimFree(b - f.resident - size)
 	}
 	f.fresh++
 	b := f.buf(int(size))
@@ -671,17 +688,17 @@ func (f *Frames) evictOne() bool {
 	// every token scans and are the last thing to give up.
 	victim, oldest := -1, ^uint64(0)
 	for i := int(f.file.H.NBlocks) + int(f.file.H.NVisBlocks); i < len(f.pages); i++ {
-		if f.pages[i] != nil && !f.pinned(i) && f.used[i] < oldest {
+		if f.retains(i) && !f.pinned(i) && f.used[i] < oldest {
 			victim, oldest = i, f.used[i]
 		}
 	}
 	if victim < 0 {
 		victim = f.recent
 	}
-	if victim < 0 || victim >= len(f.pages) || f.pages[victim] == nil || f.pinned(victim) {
+	if victim < 0 || victim >= len(f.pages) || !f.retains(victim) || f.pinned(victim) {
 		victim = -1
 		for i := range f.pages {
-			if f.pages[i] != nil && !f.pinned(i) {
+			if f.retains(i) && !f.pinned(i) {
 				victim = i
 				break
 			}
@@ -690,12 +707,50 @@ func (f *Frames) evictOne() bool {
 	if victim < 0 {
 		return false
 	}
-	f.unhold(victim)
-	f.evicted++
+	f.unretain(victim)
 	if f.recent == victim {
 		f.recent = -1
 	}
 	return true
+}
+
+// retains says this view holds page i. Callers hold f.mu.
+func (f *Frames) retains(i int) bool { return f.pages[i] != nil && f.holders[i]&f.bit != 0 }
+
+// retain charges resident page i to this view, where it is not already.
+// Callers hold f.mu.
+func (f *Frames) retain(i int) {
+	if f.holders[i]&f.bit == 0 {
+		f.holders[i] |= f.bit
+		f.held += uint64(cap(f.pages[i]))
+	}
+}
+
+// unretain gives page i up for this view; the frame goes back when no view
+// retains it. Callers hold f.mu.
+func (f *Frames) unretain(i int) {
+	if f.holders[i]&f.bit == 0 {
+		return
+	}
+	f.holders[i] &^= f.bit
+	f.held -= min(f.held, uint64(cap(f.pages[i])))
+	if f.holders[i] == 0 {
+		f.unhold(i)
+		f.evicted++
+	}
+}
+
+// bound is what the frames hold at most: every view's budget, 0 where one
+// is unlimited. Callers hold f.mu.
+func (c *frameCore) bound() uint64 {
+	t := uint64(0)
+	for _, v := range c.views {
+		if v.budget == 0 {
+			return 0
+		}
+		t += v.budget
+	}
+	return t
 }
 
 // makeRoom evicts until size more bytes fit, or until nothing is left to evict.
@@ -706,12 +761,12 @@ func (f *Frames) makeRoom(li int, size uint64) {
 	// A shared reader's other readers hold spans of every page: what it reads
 	// over a budget that narrowed goes when the last of them leaves (out).
 	if f.budget == 0 || f.shared > 0 {
-		if f.shared > 0 && f.resident+size > f.budget && f.budget > 0 {
+		if f.shared > 0 && f.held+size > f.budget && f.budget > 0 {
 			f.refit = true
 		}
 		return
 	}
-	for f.resident+size > f.budget {
+	for f.held+size > f.budget {
 		save := f.pages[li]
 		f.pages[li] = nil // never evict the block being faulted in
 		ok := f.evictOne()
@@ -891,7 +946,10 @@ func (f *Frames) ReleasePages() {
 		f.pages[i] = nil
 		f.dropFilled(i)
 	}
-	f.resident, f.recent = 0, -1
+	f.resident = 0
+	for _, v := range f.views {
+		v.held, v.recent = 0, -1
+	}
 	f.specOn, f.specHeld, f.busy = nil, 0, nil
 	f.trimFree(0)
 }
@@ -906,7 +964,10 @@ func (f *Frames) DropPage(i int) {
 	if i < 0 || i >= len(f.pages) || f.pages[i] == nil || f.pinned(i) || (i < len(f.kept) && f.kept[i] > 0) {
 		return
 	}
-	f.unhold(i)
+	if f.holders[i] == 0 {
+		f.unhold(i)
+	}
+	f.unretain(i)
 	if f.recent == i {
 		f.recent = -1
 	}
@@ -951,6 +1012,12 @@ func (f *Frames) unhold(i int) {
 	} else {
 		f.putFree(n, b[:n])
 	}
+	for _, v := range f.views {
+		if f.holders[i]&v.bit != 0 {
+			v.held -= min(v.held, n)
+		}
+	}
+	f.holders[i] = 0
 	f.pages[i] = nil
 	f.dropFilled(i)
 	if f.resident >= n {
@@ -1175,7 +1242,9 @@ func (f *Frames) out(shared bool) {
 	}
 	if f.inside == 0 && f.refit {
 		f.refit = false
-		f.fit()
+		for _, v := range f.views {
+			v.fit()
+		}
 	}
 }
 
@@ -1188,14 +1257,14 @@ func (f *Frames) fit() {
 	if f.budget == 0 {
 		return
 	}
-	for f.resident > f.budget {
+	for f.held > f.budget {
 		if !f.evictOne() {
 			break
 		}
 	}
-	if f.resident < f.budget {
-		f.trimFree(f.budget - f.resident)
-	} else {
+	if b := f.bound(); b > 0 && f.resident < b {
+		f.trimFree(b - f.resident)
+	} else if b > 0 {
 		f.trimFree(0)
 	}
 }
@@ -1209,7 +1278,11 @@ func (f *Frames) setCanEvict() {
 			f.pageTotal += size
 		}
 	}
-	f.canEvict.Store(f.budget != 0 && f.budget < f.pageTotal)
+	evicts := false
+	for _, v := range f.views {
+		evicts = evicts || v.budget != 0 && v.budget < f.pageTotal
+	}
+	f.canEvict.Store(evicts)
 }
 
 func (f *File) countRead() { atomic.AddInt64(&f.reads, 1) }
@@ -1554,4 +1627,63 @@ func (h *Header) checkSheets(e *Entry) error {
 		return fmt.Errorf("%d sheets from expert page %d run past the %d pages", sheets, first, h.NExpPages)
 	}
 	return nil
+}
+
+// View is another view of f's frames, an instance's: it pages within its
+// own budget (0 unlimited) in its own order over the pages every view
+// shares, reading only a page no view holds, and a frame leaves only when
+// no view retains it. Release gives the view's pages up.
+func (f *Frames) View(budget uint64) (*Frames, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	used := uint64(0)
+	for _, v := range f.views {
+		used |= v.bit
+	}
+	bit := uint64(0)
+	for k := range 64 {
+		if used&(1<<k) == 0 {
+			bit = 1 << k
+			break
+		}
+	}
+	if bit == 0 {
+		return nil, fmt.Errorf("jlm: %s has 64 views of its frames", f.file.Path)
+	}
+	v := &Frames{frameCore: f.frameCore, bit: bit, budget: budget, recent: -1, used: make([]uint64, len(f.pages))}
+	f.views = append(f.views, v)
+	f.setCanEvict()
+	return v, nil
+}
+
+// Release gives up every page this view retains, and a view made by View
+// with them: a page no other view retains goes back to the free frames. The
+// frames' own view stays theirs.
+func (f *Frames) Release() {
+	defer f.flushRecycled()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := range f.pages {
+		if f.retains(i) && !f.pinned(i) {
+			f.unretain(i)
+		}
+	}
+	for k, v := range f.views {
+		if v == f && k > 0 {
+			f.views = append(f.views[:k], f.views[k+1:]...)
+			break
+		}
+	}
+	f.setCanEvict()
+}
+
+// Shares says f and g are views of one model's frames: one set of pages,
+// each page read once whichever view reads it.
+func (f *Frames) Shares(g *Frames) bool { return g != nil && f.frameCore == g.frameCore }
+
+// Held is the bytes of the pages this view retains.
+func (f *Frames) Held() uint64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.held
 }

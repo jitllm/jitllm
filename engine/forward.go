@@ -537,7 +537,7 @@ func NewInstance(m *model.Model, maxSeq int, opts ...Option) (*Instance, error) 
 		pq = lo.opt.pageBudget
 	}
 	q := g.dev.NewQuota(m.Id, pq)
-	fr, err := g.dev.Frames(m.Id, m.NewFrames)
+	fr, err := g.dev.Frames(q, m.Id, m.NewFrames)
 	if err == nil {
 		var s *Instance
 		if s, err = newInstanceOver(m, g, fr, lo.opt, m.Cfg, maxSeq, 0, m.Cfg.NLayer, q); err == nil {

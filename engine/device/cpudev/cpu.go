@@ -43,11 +43,13 @@ type modelOn struct {
 	// attached is the engine's (Attached).
 	attached any
 	// frames is the model's frames on the CPU (Frames), made under framesMu,
-	// and quotas the page quota of each instance holding the model on c
-	// (NewQuota), which budget them.
+	// quotas the page quota of each instance holding the model on c
+	// (NewQuota), and base the quota whose view is frames itself; every other
+	// quota pages through a view of its own (Quota.Frames).
 	framesMu sync.Mutex
 	frames   *jlm.Frames
 	quotas   map[*Quota]quota
+	base     *Quota
 }
 
 // quota is one instance's page quota for a model on c: the bytes it lets the
@@ -174,11 +176,44 @@ func (c *CPU) HeldFrames(model uint64) *jlm.Frames {
 	return o.frames
 }
 
-// Quota is one instance's page quota for a model on c (NewQuota): it
-// budgets the model's frames there with every other instance's
-// (modelOn.budget) until Drop.
+// Quota is one instance's page quota for a model on c (NewQuota): the
+// budget of its view of the model's frames there (Frames), its own order
+// over the pages every instance shares, until Drop.
 type Quota struct {
-	o *modelOn
+	o    *modelOn
+	view *jlm.Frames
+}
+
+// Frames is the quota's view of model's frames on c, the frames themselves
+// made by mk on the first ask of any quota: the first quota to ask, or the
+// first after it dropped, pages through them; every other through a view of
+// its own (jlm.Frames.View), each at its own budget.
+func (q *Quota) Frames(mk func(...jlm.FramesOption) (*jlm.Frames, error)) (*jlm.Frames, error) {
+	o := q.o
+	o.framesMu.Lock()
+	defer o.framesMu.Unlock()
+	if q.view != nil {
+		return q.view, nil
+	}
+	n := o.quotas[q].net()
+	switch {
+	case o.frames == nil:
+		fr, err := mk(jlm.Budget(n))
+		if err != nil {
+			return nil, err
+		}
+		o.frames, o.base, q.view = fr, q, fr
+	case o.base == nil:
+		o.base, q.view = q, o.frames
+		o.frames.SetBudget(n)
+	default:
+		v, err := o.frames.View(n)
+		if err != nil {
+			return nil, err
+		}
+		q.view = v
+	}
+	return q.view, nil
 }
 
 // NewQuota records a page quota of bytes, 0 for unlimited, for model on c,
@@ -201,9 +236,9 @@ func (q *Quota) Set(bytes, held uint64) uint64 {
 		o.quotas = map[*Quota]quota{}
 	}
 	o.quotas[q] = quota{bytes: bytes, held: held}
-	b := o.budget()
-	if o.frames != nil && b != o.frames.Budget() {
-		o.frames.SetBudget(b)
+	b := o.quotas[q].net()
+	if q.view != nil && b != q.view.Budget() {
+		q.view.SetBudget(b)
 	}
 	return b
 }
@@ -215,9 +250,13 @@ func (q *Quota) Drop() {
 	o.framesMu.Lock()
 	defer o.framesMu.Unlock()
 	delete(o.quotas, q)
-	if b := o.budget(); o.frames != nil && len(o.quotas) > 0 && b != o.frames.Budget() {
-		o.frames.SetBudget(b)
+	if q.view != nil {
+		q.view.Release()
 	}
+	if o.base == q {
+		o.base = nil
+	}
+	q.view = nil
 }
 
 // Arenas is model's history arenas on c.

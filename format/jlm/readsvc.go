@@ -51,6 +51,7 @@ type specSvc struct {
 	mu      sync.Mutex
 	cond    sync.Cond
 	ring    []int
+	by      []*Frames // the view each guess of ring is for
 	head, n int
 	started bool
 	closed  bool
@@ -114,7 +115,7 @@ func (f *Frames) Speculate(e *Entry, sel []uint32) {
 		return
 	}
 	if q.ring == nil {
-		q.ring = make([]int, specRing)
+		q.ring, q.by = make([]int, specRing), make([]*Frames, specRing)
 		q.cond.L = &q.mu
 	}
 	for _, x := range sel {
@@ -123,6 +124,7 @@ func (f *Frames) Speculate(e *Entry, sel []uint32) {
 			continue
 		}
 		q.ring[(q.head+q.n)%len(q.ring)] = p
+		q.by[(q.head+q.n)%len(q.ring)] = f
 		q.n++
 	}
 	if q.n == 0 {
@@ -206,13 +208,14 @@ func (f *Frames) specWorker() {
 		if q.closed {
 			return
 		}
-		p := q.ring[q.head]
+		p, v := q.ring[q.head], q.by[q.head]
+		q.by[q.head] = nil
 		q.head = (q.head + 1) % len(q.ring)
 		q.n--
 		q.mu.Unlock()
 		off, size := f.file.pageAt(p)
 		rs[0] = Range{Off: off, N: size}
-		switch err := f.ensureRanges(p, rs, true); {
+		switch err := v.ensureRanges(p, rs, true); {
 		case err == nil:
 		case errors.Is(err, errSpecFull):
 			q.skipped.Add(1)

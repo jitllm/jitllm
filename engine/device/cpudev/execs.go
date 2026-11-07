@@ -40,9 +40,16 @@ func (x *Execs) ReleaseModel(model uint64) { x.c.ReleaseModel(model) }
 // Attached is the CPU's (nn.ModelScratch).
 func (x *Execs) Attached(model uint64, mk func() any) any { return x.c.Attached(model, mk) }
 
-// NewQuota and Frames are the CPU's (nn.FrameKeeper).
+// NewQuota is the CPU's (nn.FrameKeeper).
 func (x *Execs) NewQuota(model, bytes uint64) nn.Quota { return x.c.NewQuota(model, bytes) }
-func (x *Execs) Frames(model uint64, mk func(...jlm.FramesOption) (*jlm.Frames, error)) (*jlm.Frames, error) {
+
+// Frames is quota q's view of model's frames on the CPU (Quota.Frames),
+// made by mk on the first ask; the frames themselves for a quota of no
+// CPU's (nn.FrameKeeper).
+func (x *Execs) Frames(q nn.Quota, model uint64, mk func(...jlm.FramesOption) (*jlm.Frames, error)) (*jlm.Frames, error) {
+	if cq, ok := q.(*Quota); ok {
+		return cq.Frames(mk)
+	}
 	return x.c.Frames(model, mk)
 }
 

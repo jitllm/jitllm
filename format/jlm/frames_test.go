@@ -6,13 +6,15 @@ import "testing"
 // no container on disk. fakeIn is EnsurePage's residency half with the read
 // left out.
 func newFake(text, textPage, vis, visPage uint64) *Frames {
-	f := &Frames{file: &File{H: &Header{
+	f := &Frames{frameCore: &frameCore{file: &File{H: &Header{
 		PageSize: textPage, NBlocks: uint32(text),
 		VisPageSize: visPage, NVisBlocks: uint32(vis),
 		DataOff: 1 << 20,
-	}}}
+	}}}, bit: 1}
+	f.views = []*Frames{f}
 	f.file.H.VisDataOff = f.file.H.DataOff + text*textPage
 	f.pages = make([][]byte, int(text)+int(vis))
+	f.holders = make([]uint64, len(f.pages))
 	f.free = map[uint64][][]byte{}
 	f.recent = -1
 	return f
@@ -20,6 +22,10 @@ func newFake(text, textPage, vis, visPage uint64) *Frames {
 
 func (f *Frames) fakeIn(i int, mark byte) {
 	if f.pages[i] != nil {
+		if f.holders[i]&f.bit == 0 {
+			f.makeRoom(i, uint64(cap(f.pages[i])))
+			f.retain(i)
+		}
 		f.recent = i
 		return
 	}
@@ -29,6 +35,7 @@ func (f *Frames) fakeIn(i int, mark byte) {
 	b[0] = mark
 	f.pages[i], f.recent = b, i
 	f.resident += size
+	f.retain(i)
 }
 
 // TestBudgetReusesItsBuffers is a memory gate. A page can be over a gigabyte,
