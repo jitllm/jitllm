@@ -40,7 +40,7 @@ func (s *Instance) rowsRouted(tokens []int32, seq, pos []int, nlogit, seqs int) 
 	var bple []float32
 	if c.PLEDim != 0 {
 		s.growBPLE(n)
-		bple = s.bple[:n*c.PleWidth()]
+		bple = s.bple[:n*c.SideWidth()]
 	}
 	s.tokenSide(n)
 	if why := s.embedRows(s.bx[:n*c.NEmbd], bple, tokens[:n], pos[:n]); why != nn.DeclineServes {

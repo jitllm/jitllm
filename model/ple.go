@@ -19,12 +19,20 @@ package model
 // pleWidth is one row's per-layer inputs, NLayer*PLEDim.
 func (c *Config) PleWidth() int { return c.NLayer * c.PLEDim }
 
-// sideWidth is one row's side input to the blocks (their graphs' last
-// input): its per-layer inputs, or the tap rows the first DeepTaps blocks
-// add, DeepTaps*NEmbd.
-func (c *Config) SideWidth() int {
-	if c.DeepTaps > 0 {
-		return c.DeepTaps * c.NEmbd
+// TapsWidth is the tap rows the first DeepTaps blocks add, DeepTaps*NEmbd:
+// the head of a row's side input, its per-layer inputs after them.
+func (c *Config) TapsWidth() int { return c.DeepTaps * c.NEmbd }
+
+// SideWidth is one row's side input to the blocks (their graphs' last
+// input): its tap rows, then its per-layer inputs.
+func (c *Config) SideWidth() int { return c.TapsWidth() + c.PleWidth() }
+
+// InputSideWidth is the side row the input rows write: the whole row, zeros
+// where the taps go, for a model of per-layer embeddings; none for one of
+// taps alone, whose side rows the taps' fill writes.
+func (c *Config) InputSideWidth() int {
+	if c.PLEDim == 0 {
+		return 0
 	}
-	return c.PleWidth()
+	return c.SideWidth()
 }

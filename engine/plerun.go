@@ -101,7 +101,7 @@ func (s *Instance) tokenSide(n int) []float32 {
 	}
 	s.growBPLE(n)
 	side := s.bple[:n*w]
-	if s.c.DeepTaps > 0 {
+	if s.c.DeepTaps > 0 && s.c.PLEDim == 0 {
 		clear(side)
 	}
 	return side
@@ -114,8 +114,10 @@ func (s *Instance) fillDeep(src rowSrc, base, n int, side []float32) {
 	if s.c.DeepTaps == 0 {
 		return
 	}
-	E, W := s.c.NEmbd, s.c.SideWidth()
-	clear(side[:n*W])
+	E, W, T := s.c.NEmbd, s.c.SideWidth(), s.c.TapsWidth()
+	for i := range n {
+		clear(side[i*W : i*W+T])
+	}
 	for _, g := range src.given {
 		if g.deep == nil {
 			continue
