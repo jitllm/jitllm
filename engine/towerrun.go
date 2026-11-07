@@ -8,6 +8,7 @@ import (
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/composer"
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/nn"
 )
@@ -68,11 +69,16 @@ type towerRun struct {
 	// by lease (chainRun); act the two buffers the blocks write their rows
 	// in by turns, kept the rows the head reads beside the last block's,
 	// and headIn the head's inputs.
-	chain  []model.Layer
-	lease  blockLease
-	act    [2][]float32
-	kept   [][]float32
-	headIn [][]float32
+	chain []model.Layer
+	lease blockLease
+	// chainOn is the device each chained block runs on where it is not the
+	// CPU device, chainParts its part there (nn.RowsPart), both nil for a
+	// block on the CPU device.
+	chainOn    []nn.PictureRowsDevice
+	chainParts []*nn.RowsPart
+	act        [2][]float32
+	kept       [][]float32
+	headIn     [][]float32
 }
 
 // newTowerRun is the model's tower run, nil for a model with no tower.
@@ -474,14 +480,21 @@ func (ts *Instance) chainRun(tr *towerRun, tg *model.TowerGraphs, words []uint32
 	k := 0
 	for i, g := range tg.Blocks {
 		li := ts.m.TowerBase + i
-		w, err := tr.lease.Ensure(li)
-		if err != nil {
-			return err
-		}
 		o := g.Values[g.Out[0]]
 		out := tr.act[(i+1)%2][:o.Rows*o.Width]
-		if err := ch.ChainBlock(i, li, w, tr.req, tr.posTab, cur, out); err != nil {
-			return err
+		if dev := tr.chainDev(i); dev != nil {
+			n := g.Values[g.In[0]].Rows
+			if !dev.RunRows(tr.chainParts[i], n, tr.req, tr.posTab[:n+1], cur, out) {
+				return fmt.Errorf("the tower's block %d did not run on its device", i)
+			}
+		} else {
+			w, err := tr.lease.Ensure(li)
+			if err != nil {
+				return err
+			}
+			if err := ch.ChainBlock(i, li, w, tr.req, tr.posTab, cur, out); err != nil {
+				return err
+			}
 		}
 		if k < len(tg.HeadFrom) && tg.HeadFrom[k] == i {
 			copy(tr.kept[k], out)
@@ -492,4 +505,66 @@ func (ts *Instance) chainRun(tr *towerRun, tg *model.TowerGraphs, words []uint32
 	tr.headIn[0] = cur
 	copy(tr.headIn[1:], tr.kept)
 	return ch.ChainHead(tr.req, tr.posTab, dst, tr.headIn...)
+}
+
+// chainDev is the device chained block i runs on, nil for the CPU device.
+func (tr *towerRun) chainDev(i int) nn.PictureRowsDevice {
+	if i < len(tr.chainOn) {
+		return tr.chainOn[i]
+	}
+	return nil
+}
+
+// PlaceTowerChain puts a chained tower's first n blocks on dev and the rest
+// on the CPU device: each placed block's part formed and its tensors held
+// there now, so no picture forms one. n 0 brings every block back.
+func (s *Instance) PlaceTowerChain(dev nn.PictureRowsDevice, n int) error {
+	if err := s.towerReady(); err != nil {
+		return err
+	}
+	tr, tg := s.tower, s.m.Tower
+	if !tg.Chain || n < 0 || n > len(tg.Blocks) {
+		return fmt.Errorf("model: %d of a tower's %d chained blocks (chained %v)", n, len(tg.Blocks), tg.Chain)
+	}
+	if tr.chainOn == nil {
+		tr.chainOn, tr.chainParts = make([]nn.PictureRowsDevice, len(tg.Blocks)), make([]*nn.RowsPart, len(tg.Blocks))
+	}
+	for i, g := range tg.Blocks {
+		tr.chainOn[i], tr.chainParts[i] = nil, nil
+		if i >= n {
+			continue
+		}
+		p, err := chainPart(s.m, i, g)
+		if err != nil {
+			return err
+		}
+		if !dev.PrepRows(p) {
+			return fmt.Errorf("model: the tower's block %d does not form on the device", i)
+		}
+		tr.chainOn[i], tr.chainParts[i] = dev, p
+	}
+	return nil
+}
+
+// chainPart is chained block i as a part of a device of its own: its graph
+// over its input's rows, its matrices the container's entries, which the
+// device reads into frames of its own, and its vectors.
+func chainPart(m *model.Model, i int, g *graph.Graph) (*nn.RowsPart, error) {
+	l := &m.Layers[m.TowerBase+i]
+	p := &nn.RowsPart{Graph: g, Rows: g.Values[g.In[0]].Rows, Weights: map[jlm.Role]nn.Weight{}, Vectors: map[jlm.Role][]float32{},
+		File: m.Container}
+	for _, o := range g.Ops {
+		for _, b := range o.Weight {
+			if v := l.Vector(b.Role); len(v) > 0 {
+				p.Vectors[b.Role] = v
+				continue
+			}
+			t := l.Matrix(b.Role)
+			if t == nil || t.E == nil {
+				return nil, fmt.Errorf("model: the tower's block %d binds %v, which it does not hold", i, b.Role)
+			}
+			p.Weights[b.Role] = model.Wt(*t)
+		}
+	}
+	return p, nil
 }

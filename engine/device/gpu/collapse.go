@@ -63,7 +63,7 @@ func (g *devTier) collapseParts(p *nn.RowsPart) (composedPart, error) {
 			if !ok || len(v) == 0 {
 				return composedPart{}, fmt.Errorf("it reads %v, which the model hands no tensor of", b.Role)
 			}
-			buf, err := g.rowsVector(b.Role, v)
+			buf, err := g.rowsVector(p.Graph.Block, b.Role, v)
 			if err != nil {
 				return composedPart{}, fmt.Errorf("%v: %w", b.Role, err)
 			}
