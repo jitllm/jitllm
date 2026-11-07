@@ -46,6 +46,18 @@ func slidingRotary(c *jlm.Config) (uint32, bool) {
 	return local, c.RopeBaseSWA != 0 || local != c.NRot
 }
 
+// xdRope reports whether a's M-RoPE assigns its axes per element of the
+// rotary rather than per pair (HunyuanVL).
+func xdRope(a jlm.Arch) bool { return a == jlm.ArchHunyuanVL }
+
+// interleavedMRope reports whether a's M-RoPE sections are interleaved over a
+// head's pairs rather than laid out as contiguous runs (Qwen2-VL's). Qwen3.5
+// (ArchQwen3Next with sections) is Qwen3-VL's split under its own tower;
+// qwen3next itself carries no sections and has no runs.
+func interleavedMRope(a jlm.Arch) bool {
+	return a == jlm.ArchQwen3VL || a == jlm.ArchQwen3VLMoE || a == jlm.ArchQwen3Next || a == jlm.ArchQwen4Exp
+}
+
 // ropeFits refuses a rotary the blocks cannot turn as stated: sections that
 // do not cover the head's rotated pairs (an XD-RoPE's chunks covering the
 // whole head, never interleaved), and an encoder rotating a block by a
@@ -55,7 +67,7 @@ func ropeFits(c *jlm.Config) error {
 	for _, n := range c.RopeSections {
 		pairs += n
 	}
-	xd, il := c.Arch.XDRope(), c.Arch.InterleavedMRope()
+	xd, il := xdRope(c.Arch), interleavedMRope(c.Arch)
 	if pairs != 0 && (xd && (il || 2*pairs != c.NRot) || !xd && pairs != c.NRot/2) {
 		return fmt.Errorf("convert: %v's rotary sections %v do not cover its %d rotated dimensions: %w",
 			c.Arch, c.RopeSections, c.NRot, ErrNotImplemented)

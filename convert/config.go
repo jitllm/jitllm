@@ -1067,7 +1067,7 @@ func allLocal(nLayer uint32) uint32 { return nLayer + 1 }
 // short list leaves a tail of each head unrotated, which is fluent and which no
 // self-comparing tier can see.
 //
-// An interleaved split (jlm.Arch.InterleavedMRope) is read as transformers
+// An interleaved split (interleavedMRope) is read as transformers
 // reads it: pair i turns by h when i%3 == 1 and i < 3*sections[1], by w when
 // i%3 == 2 and i < 3*sections[2], and by t otherwise. ggml's IMROPE sends a
 // pair with i%3 == 0 at or past 3*sections[0] to a fourth axis instead; no
@@ -1100,7 +1100,7 @@ func mropeSectionsOf(f *meta.File, name string, c *jlm.Config) error {
 			"has %d rotary pairs -- the remainder would be left unrotated",
 			name, secs, sum, c.NRot/2)
 	}
-	if c.Arch.InterleavedMRope() {
+	if interleavedMRope(c.Arch) {
 		if c.RopeSections[3] != 0 {
 			return fmt.Errorf("convert: %s: an interleaved M-RoPE with a fourth section %d: %w",
 				name, c.RopeSections[3], ErrNotImplemented)

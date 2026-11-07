@@ -61,7 +61,8 @@ func reconvert(path string) error {
 			(cfg.IdxHeads == 0 || cfg.Selection != nil || len(cfg.CompKinds) != 0)
 		labels := cfg.DecisionLabels != nil || !convert.StatesDecisionLabels(cfg.Decision)
 		rev := cfg.Revision >= jlm.StatementRevision || (cfg.SWAWindow == 0 || cfg.YarnFactor <= 1 && v == nil) &&
-			(cfg.Revision >= 2 || !storesAny(c, jlm.RoleAttnSubNorm, jlm.RoleFFNSubNorm))
+			(cfg.Revision >= 2 || !storesAny(c, jlm.RoleAttnSubNorm, jlm.RoleFFNSubNorm)) &&
+			(cfg.Revision >= 3 || cfg.RopeSections == [4]uint32{})
 		c.Close()
 		switch {
 		case stated && tower && tools && streams && rev && labels:
@@ -69,7 +70,7 @@ func reconvert(path string) error {
 		case !labels:
 			openErr = fmt.Errorf("it states no label readout for its decision kind")
 		case !rev:
-			openErr = fmt.Errorf("it states nothing of its sliding layers")
+			openErr = fmt.Errorf("it states nothing of its sliding layers or its rotary layout")
 		case !streams:
 			openErr = fmt.Errorf("it states no residual streams")
 		case stated && tower:
