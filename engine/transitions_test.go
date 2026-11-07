@@ -243,7 +243,8 @@ func TestAnInstanceOnTheCPUAndOneOnACardShareTheFrames(t *testing.T) {
 // a memory decision, never an arithmetic one -- and once they are out the
 // frames hold no more than the quota last set. A budget that evicted a page
 // a reader was still in would hand its frame to another page, or back to the
-// system, under the reader.
+// system, under the reader. Once they are out, each instance's view holds no
+// more than its quota and the frames no more than the quotas together.
 func TestAQuotaShrinksUnderARunningDecode(t *testing.T) {
 	for _, name := range transitionModels() {
 		t.Run(name, func(t *testing.T) {
@@ -300,8 +301,13 @@ func TestAQuotaShrinksUnderARunningDecode(t *testing.T) {
 			}
 			x.SetPageBudget(page)
 			y.SetPageBudget(page)
-			if r, b := x.fr.ResidentBytes(), x.fr.Budget(); b != page || (r > b && x.fr.ResidentPages() > 1) {
-				t.Errorf("out of every reader, the frames hold %d bytes against a budget of %d (want %d)", r, b, page)
+			for i, in := range []*Instance{x, y} {
+				if h, b := in.fr.Held(), in.fr.Budget(); b != page || h > b {
+					t.Errorf("out of every reader, instance %d's view holds %d bytes against its budget of %d (want %d)", i, h, b, page)
+				}
+			}
+			if r := x.fr.ResidentBytes(); r > 2*page && x.fr.ResidentPages() > 2 {
+				t.Errorf("out of every reader, the frames hold %d bytes against the two quotas' %d", r, 2*page)
 			}
 			t.Logf("%d quota changes under two decodes of %d tokens", flips, len(ids))
 		})
