@@ -242,11 +242,13 @@ func batchSeamMovesWith(t *testing.T, p string, bound float64, relocate bool, mo
 				}
 				squeezed, limit = pg.Bytes()-pg.Stats().KVBytes/2, pg.Budgets()[0].Limit
 				if sd, ok := ps.ld.(nn.SeqKVDevice); ok && sd.PerSequenceKV() {
-					// Paged: nothing is reserved at attach, so the squeeze is the
-					// attach exactly -- every block and the pool's working set --
-					// and the rows' first pages do not fit. The relocation then
-					// happens during a step, not at the attach.
-					squeezed, paged = pg.Bytes(), true
+					// Paged: the squeeze is the attach without its pool's free
+					// pages -- every block, the pages the rows hold and the
+					// pool's own buffers -- so the rows' next pages do not fit
+					// (an MLA's latent rows fill a page slowly enough that the
+					// free pages held them all). The relocation then happens
+					// during a step.
+					squeezed, paged = pg.Bytes()-pg.Stats().KVFreeBytes, true
 				}
 				ps.Close()
 				pg.Close()
