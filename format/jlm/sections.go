@@ -583,9 +583,6 @@ func decodeConfigAt(b []byte, v uint32) (*Config, error) {
 	if err := c.geomsValid(); err != nil {
 		return nil, err
 	}
-	if err := c.olderDelta(); err != nil {
-		return nil, err
-	}
 	if err := c.deltaValid(); err != nil {
 		return nil, err
 	}
