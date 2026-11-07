@@ -46,6 +46,13 @@ func slidingRotary(c *jlm.Config) (uint32, bool) {
 	return local, c.RopeBaseSWA != 0 || local != c.NRot
 }
 
+// Encoder reports whether a is an embedding encoder (the BERT family): its
+// blocks non-causal, with no KV cache and no logits. A decoder that pools
+// (FlagPoolMean and its siblings) is not one.
+func Encoder(a jlm.Arch) bool {
+	return a == jlm.ArchBERT || a == jlm.ArchNomicBERT || a == jlm.ArchModernBERT || a == jlm.ArchLFM2Enc
+}
+
 // xdRope reports whether a's M-RoPE assigns its axes per element of the
 // rotary rather than per pair (HunyuanVL).
 func xdRope(a jlm.Arch) bool { return a == jlm.ArchHunyuanVL }

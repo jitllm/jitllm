@@ -38,12 +38,15 @@ func familyGeneric(s string) bool {
 }
 
 // TestNoFamilyCode holds the engine to knowing no family: no architecture
-// constant is read outside convert/ and format/jlm, and no file, type,
-// function, method, field, variable or constant under familyDirs is named
-// for a family. The names are the architecture constants' own (ArchQwen4Exp
-// is qwen4exp, its stem qwen) and familyShort. Comments and strings are not
-// read. The violations -- an architecture compared in a model, a family's
-// field, a family's file -- are seen.
+// constant is read outside convert/ and format/jlm, no architecture is asked
+// what it means past the converter (a method on an Arch value but its name
+// and validity), format/jlm compares an architecture only in its name tables,
+// and no file, type, function, method, field, variable or constant under
+// familyDirs is named for a family. The names are the architecture
+// constants' own (ArchQwen4Exp is qwen4exp, its stem qwen) and familyShort.
+// Comments and strings are not read. The violations -- an architecture
+// compared in a model, an architecture asked in a model, an architecture
+// compared in format/jlm, a family's field, a family's file -- are seen.
 func TestNoFamilyCode(t *testing.T) {
 	testmodels.SourceTree(t)
 	root, err := filepath.Abs(filepath.Join("..", ".."))
@@ -87,6 +90,29 @@ func TestNoFamilyCode(t *testing.T) {
 	if files < 300 {
 		t.Fatalf("read %d files under %v: the gate read nothing", files, familyDirs())
 	}
+	jf, err := filepath.Glob(filepath.Join(root, "format", "jlm", "*.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tables := 0
+	for _, p := range jf {
+		if strings.HasSuffix(p, "_test.go") {
+			continue
+		}
+		src, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rel, _ := filepath.Rel(root, p)
+		bad, n := fam.comparedIn(rel, src)
+		tables += n
+		for _, b := range bad {
+			t.Errorf("%s", b)
+		}
+	}
+	if tables < 5 {
+		t.Fatalf("read %d architecture name tables in format/jlm: the gate read nothing", tables)
+	}
 
 	viol := `package model
 
@@ -99,10 +125,27 @@ func swa(a jlm.Arch) bool { return a == jlm.ArchGemma4 }
 func isQwen3Block() {}
 
 func opPhi() {}
+
+func rope(c *jlm.Config) bool { return c.Arch.XDRope() || c.Arch.Valid() }
 `
 	got := fam.inSource("model/viol.go", []byte(viol))
-	if len(got) != 3 {
-		t.Errorf("the violations gave %d findings, want 3 (a field, an architecture, a function): %v", len(got), got)
+	if len(got) != 4 {
+		t.Errorf("the violations gave %d findings, want 4 (a field, an architecture, a function, an architecture asked): %v", len(got), got)
+	}
+	jviol := `package jlm
+
+func (a Arch) XDRope() bool { return a == ArchHunyuanVL }
+
+func viewArchName(a Arch) (string, bool) {
+	switch a {
+	case ArchHunyuanVL:
+		return "hunyuan_vl", true
+	}
+	return "", false
+}
+`
+	if bad, n := fam.comparedIn("format/jlm/viol.go", []byte(jviol)); len(bad) != 1 || n != 1 {
+		t.Errorf("an architecture compared beside a name table gave %v and %d table(s), want one finding and one table", bad, n)
 	}
 	for _, n := range []string{"q4erun.go", "gemma4.go", "k3run.go"} {
 		if !fam.fileNamed(n) {
@@ -238,6 +281,52 @@ func (f families) identNamed(id string) bool {
 	return false
 }
 
+// comparedIn is every architecture constant format/jlm source compares
+// outside a name table (a function named ...ArchName, name or Valid), and how
+// many name tables it holds.
+func (f families) comparedIn(rel string, src []byte) ([]string, int) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, rel, src, 0)
+	if err != nil {
+		return []string{rel + ": " + err.Error()}, 0
+	}
+	var out []string
+	tables := 0
+	for _, d := range file.Decls {
+		fd, ok := d.(*ast.FuncDecl)
+		if !ok || fd.Body == nil {
+			continue
+		}
+		name := fd.Name.Name
+		if strings.HasSuffix(name, "ArchName") {
+			tables++
+			continue
+		}
+		if name == "name" || name == "Valid" {
+			continue
+		}
+		ast.Inspect(fd.Body, func(n ast.Node) bool {
+			var ids []ast.Expr
+			switch x := n.(type) {
+			case *ast.BinaryExpr:
+				if x.Op == token.EQL || x.Op == token.NEQ {
+					ids = []ast.Expr{x.X, x.Y}
+				}
+			case *ast.CaseClause:
+				ids = x.List
+			}
+			for _, e := range ids {
+				if id, ok := e.(*ast.Ident); ok && f.arch[id.Name] {
+					out = append(out, fset.Position(id.Pos()).String()+": "+name+" compares "+id.Name+
+						": what an architecture means is stated by the converter")
+				}
+			}
+			return true
+		})
+	}
+	return out, tables
+}
+
 // fileNamed is whether a file's name starts with a family's name: k3run.go,
 // gemma4.go, q4edev.go.
 func (f families) fileNamed(name string) bool {
@@ -281,6 +370,12 @@ func (f families) inSource(rel string, src []byte) []string {
 		case *ast.SelectorExpr:
 			if id, ok := x.X.(*ast.Ident); ok && id.Name == "jlm" && f.arch[x.Sel.Name] {
 				out = append(out, at(x.Pos())+": reads "+x.Sel.Name+": the container states what the architecture means")
+			}
+		case *ast.CallExpr:
+			if m, ok := x.Fun.(*ast.SelectorExpr); ok && m.Sel.Name != "String" && m.Sel.Name != "Valid" {
+				if a, ok := m.X.(*ast.SelectorExpr); ok && a.Sel.Name == "Arch" {
+					out = append(out, at(x.Pos())+": asks the architecture "+m.Sel.Name+": the container states what the architecture means")
+				}
 			}
 		case *ast.FuncDecl:
 			if f.identNamed(x.Name.Name) {
