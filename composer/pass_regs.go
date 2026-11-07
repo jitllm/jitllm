@@ -1355,8 +1355,15 @@ func (k *Kernel) needsVectorOf(i int, words map[int]bool) bool {
 		words = k.vectorWords()
 	}
 	if nd.Op == OpLoad && k.Bufs[nd.Buf].Operand.Kind == OperandWeight && k.vectorized() {
-		// A jammed loop's word an address reads stays in the general registers.
-		return words[i] || !k.wide() || !k.addressNodes()[i]
+		if words[i] {
+			return true
+		}
+		// A word a scalar loop loads is read by the general registers, as
+		// a jammed loop's word an address reads is.
+		if hs := k.homesNow(); i < len(hs) && (hs[i] < 0 || k.Loops[hs[i]].Lanes == 0 && k.Loops[hs[i]].Wide == 0) {
+			return false
+		}
+		return !k.wide() || !k.addressNodes()[i]
 	}
 	return words[i]
 }
@@ -1374,10 +1381,26 @@ func (k *Kernel) vectorWords() map[int]bool {
 	return k.vwords.words
 }
 
+// homesNow is Homes, kept while a register binding runs (Kernel.vwords)
+// for as long as the kernel holds as many nodes.
+func (k *Kernel) homesNow() []int {
+	m := k.vwords
+	if m == nil {
+		return k.Homes()
+	}
+	if m.homesN != len(k.Nodes)+1 {
+		m.homesN, m.homes = len(k.Nodes)+1, k.Homes()
+	}
+	return m.homes
+}
+
 // vectorMemo is a register binding's VectorWords at a count of nodes.
 type vectorMemo struct {
 	n     int
 	words map[int]bool
+	// homesN is the count of nodes homes was found at, plus one (0: none).
+	homesN int
+	homes  []int
 	// vecN is the count of nodes vec was found at, plus one (0: none).
 	vecN int
 	vec  bool
