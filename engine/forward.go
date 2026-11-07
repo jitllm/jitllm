@@ -430,6 +430,9 @@ type Instance struct {
 	// ran on the device (rowsHead).
 	rowsHeads int
 	rowsTok   []int32
+	// prepLater holds a lane binding's block preparation for the caller to
+	// run once the blocks' routes are settled (SetDeviceLayers).
+	prepLater bool
 	// rowsPos is a stream model's speculation step's positions and slots
 	// (stepRowsStreams).
 	rowsPos []int
@@ -844,8 +847,13 @@ func (s *Instance) SetDeviceLayers(d nn.LayerDevice, max int) error {
 	// history that later moves between devices through the host comes back
 	// as it went (TestLayerRelocatesToAnotherDevice,
 	// TestMLAStepsTheKVDownAtTheRightWidths).
+	// The blocks the CPU still runs once the device has made its offers are
+	// prepared for the new cache then, not every block now.
 	if d != nil && s.pos == 0 && s.kvFmt == nn.KVF16 && !s.histWritten() {
+		s.prepLater = true
 		s.stepDownKVToF32()
+		s.prepLater = false
+		defer s.prepFrames()
 	}
 	// A borrowed JIT is the text instance's, attached to its device by it.
 	if !s.borrowsJIT() {
