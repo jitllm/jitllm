@@ -1979,7 +1979,7 @@ func (g *devTier) servedEmbed(bs *blockScratch, R int) (*servedPart, error) {
 		}
 		cp := composedPart{kind: nn.PartEmbed, part: composer.PartEmbed, graph: g.embedFault(gr), formats: formats, weights: weights,
 			vectors: vectors, tables: map[composer.TableKey]backend.Buf{tableKey(composer.TableTokens): bs.embTok}}
-		if bs.posW != nil {
+		if bs.embPos != nil {
 			cp.tables[tableKey(composer.TablePos)] = bs.embPos
 		}
 		return cp, nil
