@@ -89,6 +89,9 @@ func (b *Bindings) Check(f *Form, li int, t Tensors) nn.Decline {
 		default:
 			data, p, rows := t.Bytes(x.Role)
 			if p == nil && len(data) == 0 {
+				if len(t.Floats(x.Role)) > 0 {
+					continue
+				}
 				return nn.DeclineNoWeight
 			}
 			if p != nil && (p.Row != 0 || p.Stride != 0 && p.Stride != rows || p.Sheet != nil) {
@@ -111,6 +114,10 @@ func (b *Bindings) at(li int, t Tensors, x Weight) unsafe.Pointer {
 		return unsafe.Add(b.table.Base(), x.From*b.tableRow)
 	}
 	data, p, _ := t.Bytes(x.Role)
+	if p == nil && len(data) == 0 {
+		// A matrix held as a vector (Check): its floats are its rows.
+		return unsafe.Pointer(unsafe.SliceData(t.Floats(x.Role)))
+	}
 	if p == nil {
 		return unsafe.Pointer(unsafe.SliceData(data))
 	}

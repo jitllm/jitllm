@@ -110,6 +110,18 @@ type TowerPlans struct {
 	Entry []map[uint8]PartPlan
 	Head  PartPlan
 	Taps  []PartPlan
+	// Chain is a chained tower's blocks' plans in order (jlm.Tower.Chain),
+	// each over its block's own grid, its weights the block's tensors.
+	Chain []PartPlan
+}
+
+// TowerChain is a chained tower's blocks on a device: block i over the rows
+// in into out, its weights block li's tensors w as the instance's pager
+// holds them; and the head over the last block's rows and the earlier
+// blocks' it reads beside them, into out.
+type TowerChain interface {
+	ChainBlock(i, li int, w Tensors, req, pos []uint32, in, out []float32) error
+	ChainHead(req, pos []uint32, out []float32, in ...[]float32) error
 }
 
 // PartWeights is where a part's form reads its weights: block Block's
