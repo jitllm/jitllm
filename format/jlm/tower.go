@@ -82,6 +82,13 @@ const (
 	// the right and at the bottom to multiples of Ints[2] pixels (Kimi-VL's
 	// rescale with pad_input).
 	PreLimitPad PreKind = 7
+	// PreLongBox resizes the picture so its longer side is Ints[0] pixels
+	// and its shorter round-half-even(side * Ints[0] / longer), at least
+	// Ints[1], with filter Ints[5] in arithmetic Ints[6]; then centres it
+	// on an Ints[0]-pixel square of the colour Ints[2..4] (bytes, before
+	// normalising), each margin the floor of half the slack (Janus's
+	// resize and pad_to_square).
+	PreLongBox PreKind = 8
 )
 
 // Filter is a resampling filter.
@@ -377,6 +384,11 @@ func (t *Tower) Valid() error {
 			if len(s.Ints) != 5 || s.Ints[0] <= 0 || s.Ints[1] <= 0 || s.Ints[2] <= 0 || s.Ints[2]%s.Ints[0] != 0 ||
 				!resizes(Filter(s.Ints[3]), Precision(s.Ints[4])) {
 				return fmt.Errorf("jlm: the tower's step %d limits and pads with %v", i, s.Ints)
+			}
+		case PreLongBox:
+			if len(s.Ints) != 7 || s.Ints[0] <= 0 || s.Ints[1] <= 0 || s.Ints[1] > s.Ints[0] ||
+				s.Ints[2]&^255 != 0 || s.Ints[3]&^255 != 0 || s.Ints[4]&^255 != 0 || !resizes(Filter(s.Ints[5]), Precision(s.Ints[6])) {
+				return fmt.Errorf("jlm: the tower's step %d boxes with %v", i, s.Ints)
 			}
 		case PreTile:
 			if len(s.Ints) != 3 || s.Ints[0] < 1 || s.Ints[1] < s.Ints[0] || s.Ints[2]&^1 != 0 {

@@ -72,8 +72,9 @@ func decomposePicture(o graph.Op, c *Context) ([]Prim, error) {
 		ow = x.op(OpMin, U, x.op(OpMax, U, x.load(1, u(RequestPicOW)), u(1)), u(a.PicW))
 		oh = x.op(OpMin, U, x.op(OpMax, U, x.load(1, u(RequestPicOH)), u(1)), u(a.PicH))
 	}
-	wd, hd := padded(&x, ow, a.PicPad), padded(&x, oh, a.PicPad)
-	oy, ox := x.op(OpDiv, U, pix, wd), x.op(OpRem, U, pix, wd)
+	wd, hd, fx, fy := frame(&x, a, ow, oh)
+	oy := x.op(OpSub, U, x.op(OpDiv, U, pix, wd), fy)
+	ox := x.op(OpSub, U, x.op(OpRem, U, pix, wd), fx)
 	sw := x.op(OpMax, U, x.load(1, u(RequestPicW)), u(1))
 	sh2 := x.op(OpMax, U, x.load(1, u(RequestPicH)), u(1))
 	stride := x.load(1, u(RequestPicStride))
@@ -109,13 +110,33 @@ func decomposePicture(o graph.Op, c *Context) ([]Prim, error) {
 		return x.op(OpDiv, F, x.op(OpSub, F, x.op(OpDiv, F, v, x.f(255)), byChannel(a.Mean)), byChannel(a.Std))
 	}
 	v = norm(v)
-	if a.PicPad > 0 {
-		pad := norm(x.f(0))
+	if a.PicPad > 0 || a.PicBox {
+		pad := norm(fillOf(&x, a, ch))
 		v = x.sel(F, x.op(OpLess, ir.Pred, ox, ow), x.sel(F, x.op(OpLess, ir.Pred, oy, oh), v, pad), pad)
 	}
 	x.sel(F, x.op(OpLess, ir.Pred, pix, x.op(OpMul, U, wd, hd)), v, x.f(0))
 	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{TablePicture.op(), TableRequest.op()}, Out: c.value(o.Out[0]), Expr: x.e,
 		Facts: Facts{Extents: map[int]int{0: PictureWords, 1: RequestPicOH + 1}}}}, nil
+}
+
+// frame is a live picture's frame and its place in it: the output w x h
+// rounded up to the pad's units, or the op's PicW x PicH with the picture
+// centred (PicBox), or the output itself; the picture's corner (U32s).
+func frame(x *exprs, a graph.Attrs, w, h int) (fw, fh, x0, y0 int) {
+	if !a.PicBox {
+		return padded(x, w, a.PicPad), padded(x, h, a.PicPad), x.u(0), x.u(0)
+	}
+	U := ir.U32
+	fw, fh = x.u(uint32(a.PicW)), x.u(uint32(a.PicH))
+	return fw, fh, x.op(OpShr, U, x.op(OpSub, U, fw, w), x.u(1)), x.op(OpShr, U, x.op(OpSub, U, fh, h), x.u(1))
+}
+
+// fillOf is channel ch's fill sample (F32): the box's colour, zero for a
+// pad.
+func fillOf(x *exprs, a graph.Attrs, ch int) int {
+	F := ir.F32
+	f := func(c int) int { return x.f(float32(a.PicFill[c])) }
+	return x.sel(F, x.op(OpLess, ir.Pred, ch, x.u(1)), f(0), x.sel(F, x.op(OpLess, ir.Pred, ch, x.u(2)), f(1), f(2)))
 }
 
 // padded is n rounded up to a multiple of unit (U32), n itself where unit is
@@ -232,15 +253,16 @@ func decomposePicturePIL(o graph.Op, c *Context) ([]Prim, error) {
 	at, live := flat, mu(n)
 	in := []Operand{vsum}
 	ext := map[int]int{0: n}
-	var ow, oh, py, px int
+	var ow, oh, py, px, fch int
 	if a.PicLive {
 		in = append(in, TableRequest.op())
 		ext[1] = reqWords
 		ow = m.op(OpMin, U, m.op(OpMax, U, m.load(1, mu(RequestPicOW)), mu(1)), mu(a.PicW))
 		oh = m.op(OpMin, U, m.op(OpMax, U, m.load(1, mu(RequestPicOH)), mu(1)), mu(a.PicH))
-		wd, hd := padded(&m, ow, a.PicPad), padded(&m, oh, a.PicPad)
+		wd, hd, fx, fy := frame(&m, a, ow, oh)
 		pix, ch := m.op(OpDiv, U, flat, mu(3)), m.op(OpRem, U, flat, mu(3))
-		py, px = m.op(OpDiv, U, pix, wd), m.op(OpRem, U, pix, wd)
+		py, px = m.op(OpSub, U, m.op(OpDiv, U, pix, wd), fy), m.op(OpSub, U, m.op(OpRem, U, pix, wd), fx)
+		fch = ch
 		at = m.op(OpAdd, U, m.op(OpMul, U, m.op(OpAdd, U, m.op(OpMul, U, py, mu(a.PicW)), px), mu(3)), ch)
 		live = m.op(OpMul, U, m.op(OpMul, U, wd, hd), mu(3))
 	}
@@ -248,8 +270,8 @@ func decomposePicturePIL(o graph.Op, c *Context) ([]Prim, error) {
 		return m.op(OpDiv, F, m.op(OpSub, F, m.op(OpDiv, F, b, m.f(255)), byChannel(a.Mean)), byChannel(a.Std))
 	}
 	val := norm(m.un(OpCvtF32, F, finish(&m, m.load(0, m.op(OpMin, U, at, mu(n-1))))))
-	if a.PicLive && a.PicPad > 0 {
-		pad := norm(m.f(0))
+	if a.PicLive && (a.PicPad > 0 || a.PicBox) {
+		pad := norm(fillOf(&m, a, fch))
 		val = m.sel(F, m.op(OpLess, ir.Pred, px, ow), m.sel(F, m.op(OpLess, ir.Pred, py, oh), val, pad), pad)
 	}
 	m.sel(F, m.op(OpLess, ir.Pred, flat, live), val, m.f(0))

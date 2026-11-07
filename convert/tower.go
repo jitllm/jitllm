@@ -49,6 +49,8 @@ func towerStater(p jlm.Projector) func(*jlm.Source) (*jlm.Tower, error) {
 		return kimivlTower
 	case jlm.ProjHunyuanVL:
 		return hunyuanvlTower
+	case jlm.ProjJanus:
+		return janusTower
 	}
 	return nil
 }
@@ -954,6 +956,100 @@ func hunyuanvlTower(s *jlm.Source) (*jlm.Tower, error) {
 	}
 	if err := t.Valid(); err != nil {
 		return nil, fmt.Errorf("convert: hunyuanvl: %w", err)
+	}
+	return t, nil
+}
+
+// janusMinSide is the shorter side Janus's processor keeps at least
+// (JanusImageProcessor's min_size).
+const janusMinSide = 14
+
+// janusTower is Janus-Pro's tower as transformers' JanusImageProcessorPil,
+// JanusVisionModel and JanusVisionAlignerMLP run it: the picture resized by
+// Pillow's BICUBIC filter so its longer side is the tower's and centred on
+// the tower's square of the processor's background colour (the mean as
+// bytes), then normalised; SigLIP's patches through a biased matrix plus
+// the position table, its blocks and post-LayerNorm; then the aligner --
+// llava's two matrices with the exact GELU between. A picture is
+// "<begin_of_image>", its rows, "<end_of_image>", the template's
+// "<image_placeholder>" its mark.
+func janusTower(s *jlm.Source) (*jlm.Tower, error) {
+	v := s.Vision
+	has := towerRoles(s)
+	for _, r := range []jlm.Role{jlm.RoleVPatchEmbd, jlm.RoleVPosEmbd, jlm.RoleVProj, jlm.RoleVProj2} {
+		if !has[r] {
+			return nil, fmt.Errorf("convert: janus: the tower has no %v", r)
+		}
+	}
+	if v.NHead == 0 || v.NEmbd%v.NHead != 0 || v.PatchSize == 0 || v.ImageSize%v.PatchSize != 0 {
+		return nil, fmt.Errorf("convert: janus: %d heads over %d, patches of %d in %d", v.NHead, v.NEmbd, v.PatchSize, v.ImageSize)
+	}
+	var hidden int32
+	for i := range s.Tensors {
+		if t := &s.Tensors[i]; t.Block == jlm.DenseBlock && t.Role == jlm.RoleVProj {
+			hidden = int32(t.Dims[1])
+		}
+	}
+	act, err := v.Activation(false)
+	if err != nil {
+		return nil, err
+	}
+	bias := func(w, b jlm.Role) []jlm.Role {
+		if has[b] {
+			return []jlm.Role{w, b}
+		}
+		return []jlm.Role{w}
+	}
+	var fill [3]int32
+	for c := range 3 {
+		// transformers' tuple(int(x * 255) for x in image_mean).
+		fill[c] = int32(v.Mean[c] * 255)
+	}
+	var gelu jlm.ExprBuilder
+	gelu.GELUErf(jlm.Operand(0))
+	var head jlm.Program
+	head.NIn = 1
+	at := uint16(0)
+	op := func(o jlm.TowerOp) {
+		o.In = []uint16{at}
+		head.Ops = append(head.Ops, o)
+		at = uint16(len(head.Ops))
+	}
+	if has[jlm.RoleVPostNorm] {
+		op(jlm.TowerOp{Code: jlm.TOpLayerNorm, Bind: bias(jlm.RoleVPostNorm, jlm.RoleVPostNormBias), Eps: v.Eps})
+	}
+	op(jlm.TowerOp{Code: jlm.TOpLinear, Bind: bias(jlm.RoleVProj, jlm.RoleVProjBias)})
+	op(jlm.TowerOp{Code: jlm.TOpStated, Expr: &jlm.Expr{Terms: gelu.T}, Width: hidden})
+	op(jlm.TowerOp{Code: jlm.TOpLinear, Bind: bias(jlm.RoleVProj2, jlm.RoleVProj2Bias)})
+	head.Out = at
+	side := int32(v.ImageSize)
+	t := &jlm.Tower{
+		Version: jlm.TowerVersion,
+		Pre: []jlm.PreStep{
+			{Kind: jlm.PreLongBox, Ints: []int32{side, janusMinSide, fill[0], fill[1], fill[2],
+				int32(jlm.FilterPILBicubic), int32(jlm.PrecPIL)}},
+			{Kind: jlm.PreNormalize, Floats: []float32{v.Mean[0], v.Mean[1], v.Mean[2], v.Std[0], v.Std[1], v.Std[2]}},
+		},
+		// The pixels are value 0.
+		Entry: jlm.Program{NIn: 1, Out: 4, Ops: []jlm.TowerOp{
+			{Code: jlm.TOpPatchify, In: []uint16{0}, Span: int32(v.PatchSize)},
+			{Code: jlm.TOpLinear, In: []uint16{1}, Bind: bias(jlm.RoleVPatchEmbd, jlm.RoleVPatchBias)},
+			{Code: jlm.TOpPosTable, Bind: []jlm.Role{jlm.RoleVPosEmbd}},
+			{Code: jlm.TOpAdd, In: []uint16{2, 3}},
+		}},
+		Block: jlm.TowerBlock{NHead: v.NHead, NKVHead: v.NHead, HeadDim: v.NEmbd / v.NHead,
+			Norm: jlm.NormLayer, Eps: v.Eps, Act: act},
+		Head: head,
+		Span: jlm.TowerSpan{Mark: "<image_placeholder>"},
+	}
+	if t.Span.Before, err = markerIDs(s, "<begin_of_image>"); err != nil {
+		return nil, err
+	}
+	if t.Span.After, err = markerIDs(s, "<end_of_image>"); err != nil {
+		return nil, err
+	}
+	if err := t.Valid(); err != nil {
+		return nil, fmt.Errorf("convert: janus: %w", err)
 	}
 	return t, nil
 }
