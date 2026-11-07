@@ -66,6 +66,8 @@ type gpuSession struct {
 	ple []float32
 	// prompt says the calls are a prompt's (SetPrompt).
 	prompt bool
+	// toks is the rows' tokens for the next call (SetTokens).
+	toks []int32
 }
 
 // SetPrompt says whether the session's calls that follow are a prompt's
