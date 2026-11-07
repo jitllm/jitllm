@@ -149,6 +149,12 @@ func TestQwen4ExpFeaturesAreLoadBearing(t *testing.T) {
 				t.Run(v.name, func(t *testing.T) {
 					undo := v.mut(m)
 					defer undo()
+					for li := range m.Cfg.NLayer {
+						if m.Uncovered(li) != model.Covered {
+							t.Logf("the front end refuses block %d by name, which the gate sees: %v", li, m.UncoveredErr(li))
+							return
+						}
+					}
 					st := testInstance(t, m, len(g.IDs)+1, openOpts...)
 					defer st.Close()
 					worst := 0.0

@@ -383,12 +383,13 @@ func recurrentUngated(m *model.Model) func() {
 // recurrentSiLUGated gates a recurrent block's output by silu of its gate
 // where it states a sigmoid.
 func recurrentSiLUGated(m *model.Model) func() {
-	silu := []graph.Term{
-		{Fn: graph.MapSigmoid, Args: [3]graph.Arg{{Kind: graph.ArgIn, Index: 0}}},
-		{Fn: graph.MapMul, Args: [3]graph.Arg{{Kind: graph.ArgIn, Index: 0}, {Kind: graph.ArgTerm, Index: 0}}},
-		{Fn: graph.MapMul, Args: [3]graph.Arg{{Kind: graph.ArgTerm, Index: 1}, {Kind: graph.ArgIn, Index: 1}}},
+	was := m.Cfg.DeltaGate
+	m.Cfg.DeltaGate = jlm.DeltaGateSiLU()
+	undo := restate(m, func(map[jlm.Role]graph.Shape) {})
+	return func() {
+		m.Cfg.DeltaGate = was
+		undo()
 	}
-	return restated(m, editing(inBlocks(recurrent(m), opsNamed("gated")), func(o *graph.Op) { o.Attr.Expr = silu }))
 }
 
 // unrestarted makes a checkpoint block -- one whose attention sublayer
