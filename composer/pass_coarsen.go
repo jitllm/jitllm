@@ -3,6 +3,7 @@ package composer
 import (
 	bin "encoding/binary"
 	"fmt"
+	"slices"
 
 	"github.com/jitllm/jitllm/composer/ir"
 )
@@ -222,10 +223,15 @@ type coarse struct {
 	E, T    int
 	// R and P are the units' periods and the units a period (uval): R the
 	// rows every member's leading axis holds a multiple of, T = R*P.
-	R, P    int
-	u       int
-	local   int
-	memo    map[string]int
+	R, P  int
+	u     int
+	local int
+	memo  map[string]int
+	// members is the instructions of the members the chain replaces.
+	size    int
+	owns    map[string]bool
+	made    map[string]int
+	ownAt   map[*Kernel][]int
 	values  map[int]*uval
 	classOf map[int]int
 	classes map[string]int
@@ -266,7 +272,10 @@ func (c Coarsen) form(members []*Kernel, host *Kernel, d Device, under bool, out
 		R = 1
 	}
 	k := &coarse{c: c, members: members, E: E, T: T, R: R, P: T / R, lanes: lanes, warp: warp, guard: -1, memo: map[string]int{},
-		values: map[int]*uval{}, classOf: map[int]int{}, classes: map[string]int{}}
+		owns: map[string]bool{}, made: map[string]int{}, ownAt: map[*Kernel][]int{}, values: map[int]*uval{}, classOf: map[int]int{}, classes: map[string]int{}}
+	for _, n := range members {
+		k.size += len(n.Nodes)
+	}
 	if host != nil {
 		// The phase reads what the host's whole row wrote: one workgroup.
 		if host.Elements() != 1 || T > host.Group {
@@ -353,7 +362,7 @@ func (c Coarsen) form(members []*Kernel, host *Kernel, d Device, under bool, out
 			}
 		}
 	}
-	if k.err != nil {
+	if k.err != nil || k.over() {
 		return nil, false
 	}
 	if k.under && k.exchanged {
@@ -820,7 +829,12 @@ func (k *coarse) produce(n *Kernel, s Store, coords []int) int {
 		// it is read only there: a reader taking another output -- one
 		// head's gate read across every element of a row -- would read its
 		// own group's sum in place of that one.
-		if !k.ownOutput(n, coords, g) {
+		own, seen := k.owns[key]
+		if !seen {
+			own = k.ownOutput(n, coords, g)
+			k.owns[key] = own
+		}
+		if !own {
 			if k.err == nil {
 				k.err = fmt.Errorf("a reduction exchanged over its threads read at another output than theirs")
 			}
@@ -836,6 +850,14 @@ func (k *coarse) produce(n *Kernel, s Store, coords []int) int {
 	}
 	var v int
 	if n.Kind == PrimReduce {
+		if g <= k.c.Unit {
+			once := fmt.Sprintf("%p %d", n, s.Val)
+			if k.made[once]++; k.made[once] > k.c.Unit/g {
+				k.err = fmt.Errorf("a reduction read at %d places a unit, which owns %d of its outputs: the chain would compute it again at each",
+					k.made[once], k.c.Unit/g)
+				return 0
+			}
+		}
 		v = k.reduce(n, s, coords, g)
 	} else {
 		v = copyInto(k.m, n, s.Val, k.coordLeaf(n, coords))
@@ -848,7 +870,11 @@ func (k *coarse) produce(n *Kernel, s Store, coords []int) int {
 // the unit's group exchanges: the unit over the group's g/Unit slots,
 // decoded in n's space.
 func (k *coarse) ownOutput(n *Kernel, coords []int, g int) bool {
-	own := k.m.decode(k.m.bin(OpDiv, ir.U32, k.u, k.m.u32(g/k.c.Unit)), n.Space)
+	own, ok := k.ownAt[n]
+	if !ok {
+		own = k.m.decode(k.m.bin(OpDiv, ir.U32, k.u, k.m.u32(g/k.c.Unit)), n.Space)
+		k.ownAt[n] = own
+	}
 	if len(own) != len(coords) {
 		return false
 	}
@@ -858,13 +884,23 @@ func (k *coarse) ownOutput(n *Kernel, coords []int, g int) bool {
 			return false
 		}
 		b, ok := k.value(coords[i])
-		if !ok {
+		if !ok || !k.same(a, b) {
 			return false
 		}
-		for t := range k.T {
-			if k.at(a, t) != k.at(b, t) {
-				return false
-			}
+	}
+	return true
+}
+
+// same says a and b are one value at every unit: by their words a period
+// and its step where both have that form, the step mattering only past the
+// first period.
+func (k *coarse) same(a, b *uval) bool {
+	if a.full == nil && b.full == nil {
+		return slices.Equal(a.a, b.a) && (k.R == 1 || a.c == b.c)
+	}
+	for t := range k.T {
+		if k.at(a, t) != k.at(b, t) {
+			return false
 		}
 	}
 	return true
@@ -882,14 +918,21 @@ func (k *coarse) term(n *Kernel, coords []int, j int) int {
 // did not finish). The members then run as the kernels they are.
 const maxChainNodes = 1 << 20
 
+// chainGrowth is the most a chain's kernel may hold against its members'
+// instructions together: a chain fuses what they compute, and past this it
+// is unrolling a reduction or computing one again, code the device's
+// compiler pays for and the members, run as their kernels, do not.
+const chainGrowth = 8
+
 // over reports whether the chain has grown past maxChainNodes, leaving it
 // unformed (k.err).
 func (k *coarse) over() bool {
-	if len(k.m.Nodes) <= maxChainNodes {
+	n := len(k.m.Nodes)
+	if n <= maxChainNodes && n <= chainGrowth*k.size {
 		return false
 	}
 	if k.err == nil {
-		k.err = fmt.Errorf("a chain of more than %d nodes", maxChainNodes)
+		k.err = fmt.Errorf("a chain of more than %d nodes, its members %d", min(maxChainNodes, chainGrowth*k.size), k.size)
 	}
 	return true
 }
