@@ -6,7 +6,9 @@
 package convert
 
 import (
+	"encoding/binary"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"unsafe"
@@ -535,9 +537,8 @@ func bankStemOf(r jlm.Role) string {
 // the experts back to back -- the same concatenation safetensors gets, and the
 // same refusal of a missing expert.
 //
-// A block whose experts disagree on type keeps all three roles per-expert:
-// a bank is one matrix of one type, and model.build decides the layout per
-// block. Such a block runs on the host (model.offerRange says why).
+// A bank whose experts disagree on type is stacked from its sheets widened
+// to F32 (widenedF32): a bank is one matrix of one type.
 func stackGGUFExperts(experts map[bankKey][]*jlm.Tensor, c *jlm.Config) ([]jlm.Tensor, error) {
 	byBlock := map[int32]map[bankKey][]*jlm.Tensor{}
 	for k, v := range experts {
@@ -554,18 +555,19 @@ func stackGGUFExperts(experts map[bankKey][]*jlm.Tensor, c *jlm.Config) ([]jlm.T
 	var out []jlm.Tensor
 	for _, b := range blocks {
 		set := byBlock[b]
-		if mixedTypes(set) {
-			keys := make([]bankKey, 0, len(set))
-			for k := range set {
-				keys = append(keys, k)
+		for k, sheets := range set {
+			if !mixedTypes(sheets) {
+				continue
 			}
-			sort.Slice(keys, func(i, j int) bool { return keys[i].role < keys[j].role })
-			for _, k := range keys {
-				for _, x := range set[k] {
-					out = append(out, *x)
+			wide := make([]*jlm.Tensor, len(sheets))
+			for e, x := range sheets {
+				w, err := widenedF32(x)
+				if err != nil {
+					return nil, err
 				}
+				wide[e] = w
 			}
-			continue
+			set[k] = wide
 		}
 		bs, err := stackBanks(set, c)
 		if err != nil {
@@ -579,22 +581,51 @@ func stackGGUFExperts(experts map[bankKey][]*jlm.Tensor, c *jlm.Config) ([]jlm.T
 	return out, nil
 }
 
-// mixedTypes reports whether the experts of any one of a block's banks, every
-// one present, disagree on type. Two banks may differ -- a down projection is
-// often quantized wider than its gate -- and that is not mixed. A missing
-// expert is not "mixed" either: stackBanks refuses it by name.
-func mixedTypes(set map[bankKey][]*jlm.Tensor) bool {
-	for _, sheets := range set {
-		for _, x := range sheets {
-			if x == nil || sheets[0] == nil {
-				return false
-			}
-			if x.Type != sheets[0].Type {
-				return true
-			}
+// mixedTypes reports whether one bank's experts, every one present,
+// disagree on type. Two banks may differ -- a down projection is often
+// quantized wider than its gate -- and that is not mixed. A missing expert
+// is not mixed either: stackBanks refuses it by name.
+func mixedTypes(sheets []*jlm.Tensor) bool {
+	for _, x := range sheets {
+		if x == nil || sheets[0] == nil {
+			return false
+		}
+		if x.Type != sheets[0].Type {
+			return true
 		}
 	}
 	return false
+}
+
+// widenedF32 is expert sheet x read as F32, decoded when its bytes are
+// asked for: a bank holds one type, and F32 holds every type's values
+// exactly.
+func widenedF32(x *jlm.Tensor) (*jlm.Tensor, error) {
+	if x == nil || x.Type == jlm.TypeF32 {
+		return x, nil
+	}
+	src, ok := sourceType(x.Type)
+	if !ok || x.Stored {
+		return nil, fmt.Errorf("convert: %s: a sheet of %v cannot be widened", x.Name, x.Type)
+	}
+	w := *x
+	n := int(x.Dims[0] * x.Dims[1])
+	w.Type, w.Data, w.Load = jlm.TypeF32, nil, func() ([]byte, error) {
+		b, err := x.Bytes()
+		if err != nil {
+			return nil, err
+		}
+		f := make([]float32, n)
+		if err := quant.Dequant32(src, b, f); err != nil {
+			return nil, fmt.Errorf("convert: %s: %w", x.Name, err)
+		}
+		d := make([]byte, 4*n)
+		for i, v := range f {
+			binary.LittleEndian.PutUint32(d[4*i:], math.Float32bits(v))
+		}
+		return d, nil
+	}
+	return &w, nil
 }
 
 // prepareTower reshapes the patch embedding and quantizes every matrix the
