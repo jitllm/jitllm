@@ -809,12 +809,18 @@ type Attrs struct {
 	// resampled to is the request's, PicW x PicH the most it is; PicPad,
 	// where set, lays a live picture out in a grid whose sides are the
 	// output's rounded up to a multiple of PicPad, the cells past the output
-	// a zero sample normalised (a black pad, made before normalising).
+	// a zero sample normalised (a black pad, made before normalising);
+	// PicBox centres a live picture in the PicW x PicH frame instead, at
+	// ((PicW - w) / 2, (PicH - h) / 2), every cell outside it PicFill's
+	// sample of its channel normalised (a letterbox, made before
+	// normalising).
 	Pixels     uint8
 	PicW, PicH int
 	PicSide    int
 	PicLive    bool
 	PicPad     int
+	PicBox     bool
+	PicFill    [3]uint8
 	Mean, Std  [3]float64
 }
 

@@ -379,6 +379,18 @@ type PictureFit struct {
 	// patches scaled down to about that many, then padded to multiples of
 	// Pad pixels; Limit 0 where there is none.
 	Limit, Pad, LimitPatch int
+	// Box and BoxMin are a resize by the longer side into a Box-pixel square
+	// (jlm.PreLongBox): the shorter side at least BoxMin; Box 0 where there
+	// is none.
+	Box, BoxMin int
+}
+
+// boxSize is a w x h picture's size inside its box (Janus's resize): the
+// longer side the box's, the shorter rounded half to even to its share of
+// it and at least BoxMin -- in float64, as Python computes them.
+func (f PictureFit) boxSize(w, h int) (int, int) {
+	d := float64(f.Box) / float64(max(w, h))
+	return max(int(math.RoundToEven(float64(w)*d)), f.BoxMin), max(int(math.RoundToEven(float64(h)*d)), f.BoxMin)
 }
 
 // Own reports that a picture is encoded at a size of its own.
@@ -489,6 +501,11 @@ func towerFit(t *jlm.Tower) (PictureFit, error) {
 			fit.Factor, fit.MinPix, fit.MaxPix = int(s.Ints[0]), int(s.Ints[1]), int(s.Ints[2])
 			fit.lift = len(s.Ints) == 6 && s.Ints[5] == 1
 			sized, pil = true, jlm.Filter(s.Ints[3]) != jlm.FilterTwoTap
+		case jlm.PreLongBox:
+			fit.Box, fit.BoxMin = int(s.Ints[0]), int(s.Ints[1])
+			// The area the reduction reaches: the box's.
+			fit.MaxPix = fit.Box * fit.Box
+			sized, pil = true, jlm.Filter(s.Ints[5]) != jlm.FilterTwoTap
 		case jlm.PreLimitPad:
 			fit.LimitPatch, fit.Limit, fit.Pad = int(s.Ints[0]), int(s.Ints[1]), int(s.Ints[2])
 			// The area the reduction reaches: the limit's patches.
@@ -501,7 +518,7 @@ func towerFit(t *jlm.Tower) (PictureFit, error) {
 		}
 	}
 	ways := 0
-	for _, w := range []bool{fit.Short > 0, fit.MaxTiles > 0, fit.Factor > 0, fit.Limit > 0} {
+	for _, w := range []bool{fit.Short > 0, fit.MaxTiles > 0, fit.Factor > 0, fit.Limit > 0, fit.Box > 0} {
 		if w {
 			ways++
 		}
@@ -543,6 +560,12 @@ func towerEntry(t *jlm.Tower, px uint8, grid, lead, side int, fit PictureFit, f 
 		case jlm.PreSmartResize:
 			a.PicW, a.PicH, a.PicLive = side, side, true
 			if err := resizeChain(&a, jlm.Filter(s.Ints[3])); err != nil {
+				return nil, err
+			}
+		case jlm.PreLongBox:
+			a.PicW, a.PicH, a.PicLive, a.PicBox = int(s.Ints[0]), int(s.Ints[0]), true, true
+			a.PicFill = [3]uint8{uint8(s.Ints[2]), uint8(s.Ints[3]), uint8(s.Ints[4])}
+			if err := resizeChain(&a, jlm.Filter(s.Ints[5])); err != nil {
 				return nil, err
 			}
 		case jlm.PreLimitPad:
@@ -705,6 +728,11 @@ type Square struct {
 // at its own size in the smallest class that holds it, or a fixed square,
 // a crop or a tile at the entry's size.
 func (tg *TowerGraphs) Square(w, h, i int) (Square, int) {
+	if tg.Fit.Box > 0 {
+		// Resized inside the box, which the picture op lays it in.
+		ow, oh := tg.Fit.boxSize(w, h)
+		return Square{Ow: ow, Oh: oh, Pw: ow, Ph: oh, Gw: tg.Side, Gh: tg.Side}, 1
+	}
 	if tg.Fit.Limit > 0 {
 		// Resized to its own size and laid over its padded grid by the
 		// picture op: the window the size itself, the grid the padded one.

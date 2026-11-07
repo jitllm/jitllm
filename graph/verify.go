@@ -233,6 +233,8 @@ func Verify(g *Graph, f Facts) error {
 				bad("%s: a picture resampled to %dx%d", at, a.PicW, a.PicH)
 			case a.PicPad < 0 || a.PicPad > 0 && (!a.PicLive || a.PicW%a.PicPad != 0 || a.PicH%a.PicPad != 0):
 				bad("%s: a picture padded to units of %d, its size %v and at most %dx%d", at, a.PicPad, a.PicLive, a.PicW, a.PicH)
+			case a.PicBox && (!a.PicLive || a.PicPad != 0) || !a.PicBox && a.PicFill != [3]uint8{}:
+				bad("%s: a picture boxed %v (filled %v), its size %v, padded to %d", at, a.PicBox, a.PicFill, a.PicLive, a.PicPad)
 			case !(a.Chain == ChainHalfPixel && a.Filter == FilterLinear) &&
 				!(a.Chain == ChainPIL && (a.Filter == FilterBilinear || a.Filter == FilterCubic) && a.Taps > 0 && a.PicSide > 0):
 				bad("%s: a picture resampled by chain %d and filter %d (%d taps)", at, a.Chain, a.Filter, a.Taps)
