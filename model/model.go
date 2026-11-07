@@ -1016,13 +1016,8 @@ type Layer struct {
 	// router is nil unless this layer's FFN is a mixture of experts, in which
 	// case gate/up/down hold the three 3-D banks and experts the per-expert
 	// views of them. The router tensor's presence is the graph's branch.
-	Router Tensor
-	// legacyExperts marks the Mixtral-era layout: eight separate 2-D tensors
-	// per role instead of one stacked 3-D bank. gate/up/down are then empty and
-	// only l.experts is populated, so offerRange declines the block by name.
-	// The converter no longer writes it for a uniform block; see build().
-	LegacyExperts bool
-	Experts       []expert
+	Router  Tensor
+	Experts []expert
 	// ungatedExp is a mixture whose experts have no gate bank (Nemotron 3):
 	// each is down(act(up(h))), the activation alone, as an ungated FFN is.
 	UngatedExp bool
@@ -1969,8 +1964,7 @@ func (m *Model) blockPlan(li int, experts bool) []jlm.Range {
 			continue
 		}
 		switch e.Role {
-		case jlm.RoleExpGateBank, jlm.RoleExpUpBank, jlm.RoleExpDownBank,
-			jlm.RoleExpGate, jlm.RoleExpUp, jlm.RoleExpDown:
+		case jlm.RoleExpGateBank, jlm.RoleExpUpBank, jlm.RoleExpDownBank:
 			if !experts {
 				continue // routed experts: moe() ensures the ones it selected
 			}
@@ -2025,8 +2019,8 @@ func (m *Model) SpeculateExperts(fr *jlm.Frames, li int, sel []uint32) {
 }
 
 // selectedRanges is ensureBlockSelected's plan over the block page: the base
-// when asked for, and a legacy per-expert tensor when selected. Since v26 a
-// bank is never in it; its sheets are expert pages.
+// when asked for. Since v26 a bank is never in it; its sheets are expert
+// pages.
 func (m *Model) selectedRanges(li int, sel []uint32, base bool) ([]jlm.Range, error) {
 	c := m.Container
 	if c == nil || li >= int(c.H.NBlocks) {
@@ -2043,32 +2037,14 @@ func (m *Model) selectedRanges(li int, sel []uint32, base bool) ([]jlm.Range, er
 		if c.ExpertPaged(e) {
 			continue
 		}
-		switch e.Role {
-		case jlm.RoleExpGate, jlm.RoleExpUp, jlm.RoleExpDown:
-			// The legacy per-expert layout: each expert is its own tensor, so
-			// "only the routed ones" is a filter on Index.
-			if selected(sel, e.Index) {
-				rs = appendSpans(rs, c, e)
-			}
-		default:
-			// The base is skipped for a block on a device: it was uploaded at
-			// placement, binding needs only addresses, and pageIn re-reads it
-			// for a later host consumer.
-			if base {
-				rs = appendSpans(rs, c, e)
-			}
+		// The base is skipped for a block on a device: it was uploaded at
+		// placement, binding needs only addresses, and pageIn re-reads it for
+		// a later host consumer.
+		if base {
+			rs = appendSpans(rs, c, e)
 		}
 	}
 	return rs, nil
-}
-
-func selected(sel []uint32, idx int32) bool {
-	for _, x := range sel {
-		if int32(x) == idx {
-			return true
-		}
-	}
-	return false
 }
 
 // appendSpans adds an entry's three spans to a plan.
@@ -2091,9 +2067,6 @@ func (m *Model) EnsureExperts(fr *jlm.Frames, li int, sel []int32, h *ExpertHold
 	c, cf, cfg := m.Container, fr, m.Cfg
 	if c == nil || !cfg.MoEAt(li) || len(sel) == 0 {
 		return nil
-	}
-	if l.LegacyExperts {
-		return m.ensureLegacyExperts(fr, li, sel, h, l)
 	}
 	bank := l.ExpBank().E
 	if bank == nil || !c.ExpertPaged(bank) {
@@ -2189,37 +2162,6 @@ func (h *ExpertHold) Release() {
 		h.leases[i].Release()
 	}
 	h.leases = h.leases[:0]
-}
-
-// ensureLegacyExperts is ensureExperts for a block whose experts are separate
-// tensors in the block's own page.
-//
-// pageIn skips the routed experts, so without this nothing would read them. The
-// converter no longer writes this layout for a uniform block; this keeps an
-// old container correct.
-func (m *Model) ensureLegacyExperts(fr *jlm.Frames, li int, sel []int32, h *ExpertHold, l *Layer) error {
-	cf := fr
-	u := make([]uint32, len(sel))
-	for i, x := range sel {
-		u[i] = uint32(x)
-	}
-	rs, err := m.selectedRanges(li, u, false)
-	if err != nil {
-		return err
-	}
-	lb, err := cf.Hold(li, rs)
-	if err != nil {
-		return err
-	}
-	h.leases = append(h.leases, lb)
-	// Re-bound under the page just held: bindOne resolves a whole tensor, and
-	// the frame may not be the one pageIn bound it to.
-	for _, x := range sel {
-		bindOne(cf, &l.Experts[x].Gate)
-		bindOne(cf, &l.Experts[x].Up)
-		bindOne(cf, &l.Experts[x].Down)
-	}
-	return nil
 }
 
 // expBank is the bank a mixture block's expert pages are addressed through:
@@ -2385,16 +2327,6 @@ func bindPacked(c *jlm.Frames, cfg *Config, l *Layer) error {
 			}
 		}
 		l.headsFrom = from
-	}
-	if l.LegacyExperts {
-		// Separate tensors per expert: each has its own name, so bindOne is
-		// resolving a whole weight rather than clobbering a view.
-		for i := range l.Experts {
-			bindOne(c, &l.Experts[i].Gate)
-			bindOne(c, &l.Experts[i].Up)
-			bindOne(c, &l.Experts[i].Down)
-		}
-		return nil
 	}
 	// A bank in expert pages has no bank to cut views from, and its views are
 	// left alone: ensureExperts binds the ones a token selects. Emptying them
@@ -2868,13 +2800,12 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 			// rather than appended to want, so nothing about the attention
 			// tensors above can be skipped by getting this branch wrong.
 			want = want[:len(want)-3]
-			// Two layouts: stacked 3-D banks, the only one the converter writes
-			// (convert.sourceOf stacks Mixtral-era files), and separate 2-D
-			// tensors per expert. The legacy branch survives for older
-			// containers and for experts quantized to different types; those
-			// run on the host and offerRange declines them by name.
+			// Every bank is stacked at conversion (convert.stackGGUFExperts, a
+			// bank of mixed types as F32): experts one tensor each are a
+			// container written before that.
 			if !c.Has(jlm.RoleExpGateBank, bi, -1) && c.Has(jlm.RoleExpGate, bi, 0) {
-				l.LegacyExperts = true
+				return nil, fmt.Errorf("model: block %d stores its experts one tensor each, as converters "+
+					"before banks of mixed types did: re-convert the model (jitllm convert)", bi)
 			}
 			specs := []struct {
 				role jlm.Role
@@ -2885,12 +2816,9 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 				{jlm.RoleExpUpBank, &l.Up},
 				{jlm.RoleExpDownBank, &l.Down},
 			}
-			if l.LegacyExperts {
-				specs = specs[:1] // the router only; experts are read below
-			}
 			// Experts with no gate bank are ungated: down(act(up(h))), the
 			// activation an ungated kind (Nemotron 3's squared ReLU).
-			if !l.LegacyExperts && !c.Has(jlm.RoleExpGateBank, bi, -1) && c.Has(jlm.RoleExpUpBank, bi, -1) {
+			if !c.Has(jlm.RoleExpGateBank, bi, -1) && c.Has(jlm.RoleExpUpBank, bi, -1) {
 				l.UngatedExp = true
 				specs = slices.Delete(specs, 1, 2)
 			}
@@ -3284,34 +3212,6 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 					bi, l.Router.K, l.Router.Rows, cfg.NEmbd, cfg.NExpert)
 			}
 			l.Experts = make([]expert, cfg.NExpert)
-			if l.LegacyExperts {
-				// NFFNExp comes from the tensor, not from a ratio of other
-				// keys.
-				for e := range l.Experts {
-					x := &l.Experts[e]
-					if x.Gate, err = get(jlm.RoleExpGate, bi, int32(e)); err != nil {
-						return nil, err
-					}
-					if x.Up, err = get(jlm.RoleExpUp, bi, int32(e)); err != nil {
-						return nil, err
-					}
-					if x.Down, err = get(jlm.RoleExpDown, bi, int32(e)); err != nil {
-						return nil, err
-					}
-					if e == 0 {
-						cfg.NFFNExp = x.Gate.Rows
-					}
-					if x.Gate.Rows != cfg.NFFNExp || x.Gate.K != cfg.ExpWidth() {
-						return nil, fmt.Errorf("model: block %d expert %d gate is %dx%d, want %dx%d",
-							bi, e, x.Gate.K, x.Gate.Rows, cfg.ExpWidth(), cfg.NFFNExp)
-					}
-					if x.Down.Rows != cfg.ExpWidth() || x.Down.K != cfg.NFFNExp {
-						return nil, fmt.Errorf("model: block %d expert %d down is %dx%d, want %dx%d",
-							bi, e, x.Down.K, x.Down.Rows, cfg.NFFNExp, cfg.ExpWidth())
-					}
-				}
-				continue
-			}
 			for e := range l.Experts {
 				x := &l.Experts[e]
 				if !l.UngatedExp {

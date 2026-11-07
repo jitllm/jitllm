@@ -1679,15 +1679,6 @@ func (s *Instance) offerRange(lo, hi int) {
 				s.markStreamed(li, true)
 			}
 		}
-		// A block whose experts are separate tensors has no bank to offer; say
-		// why rather than let the tier report zero-value weights. See
-		// convert.stackGGUFExperts.
-		if s.m.Layers[li].LegacyExperts {
-			s.noteDecline("the block's experts are separate tensors rather than a bank " +
-				"(a container converted before per-expert GGUFs were stacked, or " +
-				"experts of mixed types); re-convert it to place this block")
-			continue
-		}
 		// A block another session placed is shared: the device keeps the
 		// weights and reads none of these, and the host page may have been
 		// given back after the first upload (nn.HostPageReleaser). Reading it

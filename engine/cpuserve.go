@@ -233,7 +233,7 @@ func (s *Instance) blockWhy(li int) nn.Decline {
 		return nn.DeclineNoGraph
 	case len(g.Out) != c.Streams() || len(g.In) > len(g.Out)+1 || len(g.In) > len(g.Out) && c.SideWidth() == 0:
 		return nn.DeclineFeeds
-	case c.MoEAt(li) && (s.m.Container == nil || l.LegacyExperts ||
+	case c.MoEAt(li) && (s.m.Container == nil ||
 		!s.places[routeLanes].(nn.BankViewer).BankViews(li, len(s.m.Layers), [3]*jlm.Entry{l.Gate.E, l.Up.E, l.Down.E}) || l.Up.E == nil || l.Down.E == nil):
 		return nn.DeclineExperts
 	case c.LayerKind(li).Recurrent() && !s.keepsRec(li):

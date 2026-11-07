@@ -49,9 +49,6 @@ func TestEveryExpertIsADifferentExpert(t *testing.T) {
 				t.Fatalf("ensure experts: %v", err)
 			}
 			l := &m.Layers[0]
-			if l.LegacyExperts {
-				t.Skipf("%s stores experts as separate tensors, not a bank", name)
-			}
 			checked, packed := 0, 0
 			for _, r := range []struct {
 				what string
