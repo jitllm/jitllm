@@ -64,6 +64,15 @@ type towerRun struct {
 	// (encodePictures).
 	pics, deeps [][]float32
 	spans       []model.Span
+	// chain is a chained tower's blocks' own layers, each bound at its page
+	// by lease (chainRun); act the two buffers the blocks write their rows
+	// in by turns, kept the rows the head reads beside the last block's,
+	// and headIn the head's inputs.
+	chain  []model.Layer
+	lease  blockLease
+	act    [2][]float32
+	kept   [][]float32
+	headIn [][]float32
 }
 
 // newTowerRun is the model's tower run, nil for a model with no tower.
@@ -75,7 +84,13 @@ func (in *Instance) newTowerRun() (*towerRun, error) {
 	v := in.m.Container.Vision()
 	n := tg.Rows
 	c := model.TowerConfig(in.m.TowerBase, n, v, v.Tower)
-	ts, err := newInstanceOver(in.m, in.eng, in.fr, in.opt, c, n, in.m.TowerBase, in.m.TowerBase+len(tg.Blocks), nil)
+	hi := in.m.TowerBase + len(tg.Blocks)
+	if tg.Chain {
+		// A chain's blocks run as forms over their own grids (chainRun),
+		// not as the instance's blocks over one residual.
+		hi = in.m.TowerBase
+	}
+	ts, err := newInstanceOver(in.m, in.eng, in.fr, in.opt, c, n, in.m.TowerBase, hi, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +103,15 @@ func (in *Instance) newTowerRun() (*towerRun, error) {
 		words = max(words, (cl.Pic.PicW+cl.Pic.PicH)*(cl.Pic.Taps+1))
 	}
 	tr := &towerRun{s: ts, req: make([]uint32, composer.RequestPicTaps+words)}
-	plans := nn.TowerPlans{Head: ts.partPlan(tg.Head, nn.DeclineNoGraph, n, nil)}
+	hn := n
+	var chain []nn.PartPlan
+	if tg.Chain {
+		hn = tg.Head.Values[tg.Head.In[0]].Rows
+		for _, g := range tg.Blocks {
+			chain = append(chain, ts.partPlan(g, nn.DeclineNoGraph, g.Values[g.In[0]].Rows, in.m.TowerFormats(g)))
+		}
+	}
+	plans := nn.TowerPlans{Head: ts.partPlan(tg.Head, nn.DeclineNoGraph, hn, nil), Chain: chain}
 	for _, cl := range tg.Classes {
 		e := map[uint8]nn.PartPlan{}
 		for px, g := range cl.Entry {
@@ -107,6 +130,12 @@ func (in *Instance) newTowerRun() (*towerRun, error) {
 		return nil, fmt.Errorf("model: %w", err)
 	}
 	tr.parts = parts
+	if tg.Chain {
+		if err := tr.chainSetup(in.m, ts, tg); err != nil {
+			ts.Close()
+			return nil, err
+		}
+	}
 	tr.tapRows, tr.tapBuf = make([][]float32, len(tg.Taps)), make([][]float32, len(tg.Taps))
 	for li := ts.lo; li < ts.hi; li++ {
 		if why := ts.places[routeLanes].(nn.BlockRows).RowsServed(li); why != nn.DeclineServes {
@@ -249,6 +278,13 @@ func (s *Instance) encodePicture(img image.Image, dst, deep []float32) ([]float3
 		return nil, fmt.Errorf("model: %d values and %d for its taps' for a picture's %d rows of %d", len(dst), len(deep), want, D)
 	}
 	sq, squares := tg.Square(pl.W, pl.H, 0)
+	if tg.Chain {
+		tr.squareRequest(pl, sq, tg.Classes[sq.Class].Pic, squares)
+		if err := ts.chainRun(tr, tg, words, pl.Px, dst); err != nil {
+			return nil, fmt.Errorf("model: %w", err)
+		}
+		return dst, nil
+	}
 	at := 0
 	for i := range squares {
 		if i > 0 {
@@ -391,4 +427,69 @@ func (s *Instance) encodePictures(spans []model.Span, from int) ([]model.Span, e
 		row += r
 	}
 	return tr.spans, nil
+}
+
+// chainSetup is a chained tower's run: each block's own copy of its layer,
+// which the lease binds at the block's page as the instance's pager reads
+// it in, and the buffers the blocks' rows are written in, as large as the
+// largest grid of rows any block or the entry writes.
+func (tr *towerRun) chainSetup(m *model.Model, ts *Instance, tg *model.TowerGraphs) error {
+	if _, ok := tr.parts.(nn.TowerChain); !ok {
+		return fmt.Errorf("model: the device holding the tower runs no chained blocks")
+	}
+	e := tg.Classes[0].Entry[graph.PixRGBA8]
+	o := e.Values[e.Out[0]]
+	most := o.Rows * o.Width
+	tr.chain = make([]model.Layer, len(tg.Blocks))
+	for i, g := range tg.Blocks {
+		m.Layers[m.TowerBase+i].CloneTo(&tr.chain[i])
+		o := g.Values[g.Out[0]]
+		most = max(most, o.Rows*o.Width)
+	}
+	tr.lease = blockLease{m: m, fr: ts.fr, mu: &ts.bind, layers: tr.chain, lo: m.TowerBase}
+	tr.act = [2][]float32{make([]float32, most), make([]float32, most)}
+	for _, j := range tg.HeadFrom {
+		o := tg.Blocks[j].Values[tg.Blocks[j].Out[0]]
+		tr.kept = append(tr.kept, make([]float32, o.Rows*o.Width))
+	}
+	tr.headIn = make([][]float32, 1+len(tg.HeadFrom))
+	return nil
+}
+
+// chainRun runs a chained tower over a picture's words, its request in the
+// run's: the entry into the first block's rows, each block in turn over the
+// rows the block before it left -- its page read in and its form bound
+// there -- the rows the head reads beside the last block's kept as their
+// blocks leave them, then the head into dst.
+func (ts *Instance) chainRun(tr *towerRun, tg *model.TowerGraphs, words []uint32, px uint8, dst []float32) error {
+	ch := tr.parts.(nn.TowerChain)
+	cl := tg.Classes[0]
+	tr.size(cl.Rows, 0)
+	e := cl.Entry[px]
+	o := e.Values[e.Out[0]]
+	cur := tr.act[0][:o.Rows*o.Width]
+	if err := tr.parts.Entry(0, px, words, tr.req, tr.posTab, cl.Rows, cur); err != nil {
+		return err
+	}
+	k := 0
+	for i, g := range tg.Blocks {
+		li := ts.m.TowerBase + i
+		w, err := tr.lease.Ensure(li)
+		if err != nil {
+			return err
+		}
+		o := g.Values[g.Out[0]]
+		out := tr.act[(i+1)%2][:o.Rows*o.Width]
+		if err := ch.ChainBlock(i, li, w, tr.req, tr.posTab, cur, out); err != nil {
+			return err
+		}
+		if k < len(tg.HeadFrom) && tg.HeadFrom[k] == i {
+			copy(tr.kept[k], out)
+			k++
+		}
+		cur = out
+	}
+	tr.headIn[0] = cur
+	copy(tr.headIn[1:], tr.kept)
+	return ch.ChainHead(tr.req, tr.posTab, dst, tr.headIn...)
 }

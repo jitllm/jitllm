@@ -458,14 +458,16 @@ func decomposeRegroup(o graph.Op, c *Context) ([]Prim, error) {
 	g, j := x.coord(0), x.coord(1)
 	u := func(v int) int { return x.u(uint32(v)) }
 	in := []Operand{c.value(o.In[0])}
-	var gw int
+	var gw, gsw int
 	if W := o.Attr.GridW; W > 0 {
-		gw = u(W)
+		// A stated grid's sides fold here: the map lowers no op over two
+		// constants.
+		gw, gsw = u(W), u(W/S)
 	} else {
 		in = append(in, TableRequest.op())
 		gw = x.op(OpMax, U, x.load(1, x.u(RequestGrid)), u(S))
+		gsw = x.op(OpDiv, U, gw, u(S))
 	}
-	gsw := x.op(OpDiv, U, gw, u(S))
 	slot, e := x.op(OpDiv, U, j, u(E)), x.op(OpRem, U, j, u(E))
 	row := x.op(OpAdd, U, x.op(OpMul, U, x.op(OpDiv, U, g, gsw), u(S)), x.op(OpDiv, U, slot, u(S)))
 	colm := x.op(OpAdd, U, x.op(OpMul, U, x.op(OpRem, U, g, gsw), u(S)), x.op(OpRem, U, slot, u(S)))

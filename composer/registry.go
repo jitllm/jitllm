@@ -336,10 +336,11 @@ func gridRowsOf(g *graph.Graph, o graph.Op) int {
 // that row of its inputs alone, so that it runs over a grid of rows of its
 // own as over the step's: the kinds a gate holds over a strided grid
 // (TestComposedCPUGridRows, TestComposedGPUGridRows, TestComposedCPUGridAttend,
-// TestComposedGPUGridAttend).
+// TestComposedGPUGridAttend, TestComposedCPUGridConcat).
 func gridRowWise(o graph.Op) bool {
 	switch o.Kind {
-	case graph.OpNorm, graph.OpLayerNorm, graph.OpHeadNorm, graph.OpAdd, graph.OpExpr, graph.OpMap, graph.OpKVAppend:
+	case graph.OpNorm, graph.OpLayerNorm, graph.OpHeadNorm, graph.OpAdd, graph.OpExpr, graph.OpMap, graph.OpKVAppend,
+		graph.OpConcat:
 		return true
 	case graph.OpMatVec:
 		return len(o.In) == 1
