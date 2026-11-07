@@ -159,6 +159,10 @@ type DecisionLabels struct {
 	// EntropyConfidence gives a choice's and a score's confidence as one
 	// minus the distribution's entropy over log of its option count.
 	EntropyConfidence bool
+	// SortedLegend writes a score's level description that is not text, in
+	// the response's legend, as its compact JSON with every object's keys
+	// sorted, a string.
+	SortedLegend bool
 }
 
 // DecisionTemp is one fitted calibration temperature: it divides the scores of

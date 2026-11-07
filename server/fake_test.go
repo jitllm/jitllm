@@ -126,6 +126,10 @@ func (f *fakeBackend) Embed(ctx context.Context, o EmbedOptions) (*EmbedResult, 
 	return nil, fmt.Errorf("%w: the scripted backend embeds nothing", ErrInvalid)
 }
 
+func (f *fakeBackend) Decide(ctx context.Context, o DecideOptions) (*DecideResult, error) {
+	return nil, fmt.Errorf("%w: the scripted backend decides nothing", ErrInvalid)
+}
+
 func (f *fakeBackend) opts() GenerateOptions {
 	f.mu.Lock()
 	defer f.mu.Unlock()

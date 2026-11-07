@@ -59,12 +59,15 @@ func reconvert(path string) error {
 		streams := (cfg.AttnResBlock == 0 && cfg.HCLowRank == 0 || cfg.Streams.N > 1) &&
 			(cfg.NGramBlock == 0 || convert.StatesPre(cfg)) &&
 			(cfg.IdxHeads == 0 || cfg.Selection != nil || len(cfg.CompKinds) != 0)
+		labels := cfg.DecisionLabels != nil || !convert.StatesDecisionLabels(cfg.Decision)
 		rev := cfg.Revision >= jlm.StatementRevision || (cfg.SWAWindow == 0 || cfg.YarnFactor <= 1 && v == nil) &&
 			(cfg.Revision >= 2 || !storesAny(c, jlm.RoleAttnSubNorm, jlm.RoleFFNSubNorm))
 		c.Close()
 		switch {
-		case stated && tower && tools && streams && rev:
+		case stated && tower && tools && streams && rev && labels:
 			return nil
+		case !labels:
+			openErr = fmt.Errorf("it states no label readout for its decision kind")
 		case !rev:
 			openErr = fmt.Errorf("it states nothing of its sliding layers")
 		case !streams:

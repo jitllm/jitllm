@@ -47,6 +47,9 @@ func compatRoutes() []compatRoute {
 			note: "the loaded models, with max_model_len"},
 		{path: "/v1/embeddings", methods: []string{http.MethodPost}, surface: "openai", req: oaEmbeddingRequest{},
 			handle: (*compat).openAIEmbeddings, note: "an embedding model only; a text model is refused"},
+		{path: "/v1/systemone", methods: []string{http.MethodPost}, surface: "jitllm", handle: (*compat).systemOne,
+			note: fmt.Sprintf("a decision model's answers: a JSON object with state and questions, at most %d MiB",
+				maxSystemOneBody>>20)},
 		{path: "/v1/files", methods: []string{http.MethodGet, http.MethodPost}, surface: "openai",
 			handle: (*compat).openAIFiles,
 			note:   fmt.Sprintf("multipart upload (field file, purpose batch), at most %d MiB", maxBatchFile>>20)},
@@ -295,6 +298,8 @@ func refusalList() []refusal {
 			When: fmt.Sprintf("more pictures than the server's limit (default %d)", DefaultImageMaxImages), Message: "a request carries at most"}},
 		{Refusal: capabilities.Refusal{ID: "image-oversize", Endpoints: []string{"/v1/chat/completions", "/v1/messages"},
 			When: "a picture over the byte or pixel limit, or a request's pictures over the request byte limit", Message: "over the limit of"}},
+		{Refusal: capabilities.Refusal{ID: "decision-non-decider", Endpoints: []string{"/v1/systemone"},
+			When: "the model is not a decision model", Message: "is not a decision model"}},
 		{Refusal: capabilities.Refusal{ID: "image-format", Endpoints: []string{"/v1/chat/completions", "/v1/messages"},
 			When: "a picture that is not PNG, JPEG, WebP or GIF", Message: "the pictures accepted are"}},
 	}

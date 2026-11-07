@@ -11,7 +11,8 @@ func TestDecisionLabelsRoundTrip(t *testing.T) {
 	l := &DecisionLabels{Codes: []string{"A", "B", "AA"}, WideCodes: []string{"00", "01"}, Pool: []string{"a"},
 		MaxOptions: 255, KeyCodes: true, Spaced: true, ShowCodes: true,
 		NoulTrue: []string{"yes", "Yes"}, NoulFalse: []string{"no"}, NoulRatings: 9, NoulTrueFirst: true,
-		ScoreByKey: true, Reversed: true, SortKeys: true, IDInstructions: true, EntropyConfidence: true}
+		ScoreByKey: true, Reversed: true, SortKeys: true, IDInstructions: true, EntropyConfidence: true,
+		SortedLegend: true}
 	c := &Config{Arch: ArchLlama, NLayer: 1, NEmbd: 8, NHead: 1, NKVHead: 1, HeadDim: 8, NRot: 8, NFFN: 16,
 		NVocab: 32, NCtx: 64, Decision: DecisionLev, DecisionLabels: l}
 	got, err := decodeConfig(encodeConfig(c))

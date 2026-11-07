@@ -14,7 +14,8 @@ import (
 //     at its nine rating levels, asks a choice again in reversed order and
 //     was trained on sorted keys; d3 asks its own default question where the
 //     instructions are absent, and gives a choice's and a score's confidence
-//     as one minus the normalised entropy.
+//     as one minus the normalised entropy, and a score's legend with each
+//     description that is not text as sorted-key JSON.
 //   - lfm2-d1 (LiquidAI/d1-3B): a choice's own keys where each is one letter,
 //     else A..Z, or two digits past 26 options, falling back through a pool
 //     of letters, digits and pairs; each code with its " "+code token; a
@@ -52,7 +53,7 @@ func decisionLabelsOf(kind jlm.DecisionKind) *jlm.DecisionLabels {
 		if kind == jlm.DecisionLev {
 			l.NoulRatings, l.Reversed, l.SortKeys, l.IDInstructions = 9, true, true, true
 		} else {
-			l.EntropyConfidence = true
+			l.EntropyConfidence, l.SortedLegend = true, true
 		}
 		return l
 	case jlm.DecisionLFM2D1:
@@ -69,3 +70,6 @@ func decisionLabelsOf(kind jlm.DecisionKind) *jlm.DecisionLabels {
 	}
 	return nil
 }
+
+// StatesDecisionLabels says the converter states a label readout for kind.
+func StatesDecisionLabels(kind jlm.DecisionKind) bool { return decisionLabelsOf(kind) != nil }

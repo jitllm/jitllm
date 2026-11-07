@@ -147,6 +147,8 @@ func main() {
 		err = libraryCmd(os.Args[2:])
 	case "embed":
 		err = embedCmd(os.Args[2:])
+	case "decide":
+		err = decideCmd(os.Args[2:])
 	default:
 		usage()
 	}
@@ -166,6 +168,7 @@ func usage() {
   jitllm tokenize [-tokenizer FILE] <model.jlm> <text...>
   jitllm run [flags] <model.jlm> <prompt...>
   jitllm embed [-ids] [-lines] <model.jlm> <text...>   an embedding model's normalised vector
+  jitllm decide [-lines] <model.jlm> <request.json|->       a decision model's answers to a /v1/systemone body
   jitllm bench [-tokenizer FILE] <model.jlm>
   jitllm speed [-devices SPEC] [-p N] [-n N] [-r N] <model.jlm>   llama-bench's pp/tg, warmed
   jitllm batch [-devices SPEC] [-batch N] [-n N] <model.jlm> <prompt...>
