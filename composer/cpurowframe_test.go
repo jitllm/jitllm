@@ -16,7 +16,9 @@ import (
 // merge and its height the request's, each output row the input row or
 // stored row its place names, and no row past the framed ones written. A
 // grid stated a window wider is the row break's violation, a row of
-// windows more the row wrap's.
+// windows more the row wrap's. A break after each row but the last
+// (Offset 1, Pixtral's) writes the same rows less the last break and
+// nothing after them.
 func TestComposedCPURowFrame(t *testing.T) {
 	r := Default().WithoutInt8(DeviceCPU)
 	dev := Device{Kind: DeviceCPU, Slots: 1, Lanes: 8, ISA: uint64(cpu.Probe().ISA()), ExactDiv: true}
@@ -101,6 +103,17 @@ func TestComposedCPURowFrame(t *testing.T) {
 		}, L)
 		if same(brk(in, c.gw+c.S, c.gh), lines, L*c.E) {
 			t.Fatalf("%+v: a row break over a grid a window wider writes the same rows", c)
+		}
+
+		trim := form(graph.OpRowBreak, []graph.Binding{{Role: jlm.RoleVImgNewline, K: c.E}}, graph.Attrs{Span: c.S, Offset: 1}, M, 2*M)
+		trimmed := trim(in, c.gw, c.gh)
+		if !same(trimmed, lines, (L-1)*c.E) {
+			t.Fatalf("%+v: a break after each row but the last does not write the break's rows", c)
+		}
+		for j := (L - 1) * c.E; j < len(trimmed); j++ {
+			if !math.IsNaN(float64(trimmed[j])) {
+				t.Fatalf("%+v: a break after each row but the last wrote element %d of %d (%v)", c, j, len(trimmed), trimmed[j])
+			}
 		}
 
 		wrap := form(graph.OpWrapRows, []graph.Binding{{Role: jlm.RoleVImgBegin, K: c.E}, {Role: jlm.RoleVImgEnd, K: c.E}},

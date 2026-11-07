@@ -53,6 +53,8 @@ func towerStater(p jlm.Projector) func(*jlm.Source) (*jlm.Tower, error) {
 		return janusTower
 	case jlm.ProjPhi4:
 		return phi4Tower
+	case jlm.ProjPixtral:
+		return pixtralTower
 	}
 	return nil
 }
@@ -1126,6 +1128,107 @@ func phi4Tower(s *jlm.Source) (*jlm.Tower, error) {
 	}
 	if err := t.Valid(); err != nil {
 		return nil, fmt.Errorf("convert: phi4: %w", err)
+	}
+	return t, nil
+}
+
+// pixtralTower is Pixtral's and Mistral 3's tower as transformers'
+// PixtralImageProcessor, PixtralVisionModel and Mistral3MultiModalProjector
+// run it: the picture resized by Pillow's BICUBIC filter so its longer side
+// is at most the tower's, each side then rounded up to a whole merge unit,
+// and normalised; the patches through the matrix and ln_pre; RMSNorm blocks
+// with the gated SiLU MLP, turned by the 2-D rotary -- the first quarter of
+// a head's pairs by the patch's grid row at the even frequencies of
+// base^(-2i/head_dim), the next by its column at the odd; then the
+// projector's RMSNorm, the merger (the converter put its columns in the
+// regroup's order) where the file merges, the two matrices with the exact
+// GELU between, and the [IMG_BREAK] row after each merged row but the last.
+// A picture is its rows then [IMG_END], the template's "[IMG]" its mark.
+func pixtralTower(s *jlm.Source) (*jlm.Tower, error) {
+	v := s.Vision
+	has := towerRoles(s)
+	for _, r := range []jlm.Role{jlm.RoleVPatchEmbd, jlm.RoleVPostNorm, jlm.RoleVProj, jlm.RoleVProj2, jlm.RoleVImgBreak} {
+		if !has[r] {
+			return nil, fmt.Errorf("convert: pixtral: the tower has no %v", r)
+		}
+	}
+	merge := int32(max(v.Scale, 1))
+	if v.NHead == 0 || v.NEmbd%v.NHead != 0 || v.PatchSize == 0 || v.ImageSize == 0 || (v.NEmbd/v.NHead)%4 != 0 ||
+		merge > 1 && !has[jlm.RoleVMerge] {
+		return nil, fmt.Errorf("convert: pixtral: %d heads over %d, patches of %d up to %d, a merge of %d",
+			v.NHead, v.NEmbd, v.PatchSize, v.ImageSize, merge)
+	}
+	var hidden int32
+	for i := range s.Tensors {
+		if t := &s.Tensors[i]; t.Block == jlm.DenseBlock && t.Role == jlm.RoleVProj {
+			hidden = int32(t.Dims[1])
+		}
+	}
+	act, err := v.Activation(true)
+	if err != nil {
+		return nil, err
+	}
+	bias := func(w, b jlm.Role) []jlm.Role {
+		if has[b] {
+			return []jlm.Role{w, b}
+		}
+		return []jlm.Role{w}
+	}
+	hd := int32(v.NEmbd / v.NHead)
+	var runs []jlm.TowerRopeRun
+	for j := range hd / 4 {
+		runs = append(runs, jlm.TowerRopeRun{Pairs: 1, Axis: 0, Freq: 2 * j})
+	}
+	for j := range hd / 4 {
+		runs = append(runs, jlm.TowerRopeRun{Pairs: 1, Axis: 1, Freq: 2*j + 1})
+	}
+	entry := jlm.Program{NIn: 1, Out: 2, Ops: []jlm.TowerOp{
+		{Code: jlm.TOpPatchify, In: []uint16{0}, Span: int32(v.PatchSize)},
+		{Code: jlm.TOpLinear, In: []uint16{1}, Bind: bias(jlm.RoleVPatchEmbd, jlm.RoleVPatchBias)},
+	}}
+	if has[jlm.RoleVPreNorm] {
+		entry.Ops = append(entry.Ops, jlm.TowerOp{Code: jlm.TOpRMSNorm, In: []uint16{2}, Bind: []jlm.Role{jlm.RoleVPreNorm}, Eps: v.Eps})
+		entry.Out = 3
+	}
+	var gelu jlm.ExprBuilder
+	gelu.GELUErf(jlm.Operand(0))
+	var head jlm.Program
+	head.NIn = 1
+	at := uint16(0)
+	op := func(o jlm.TowerOp) {
+		o.In = []uint16{at}
+		head.Ops = append(head.Ops, o)
+		at = uint16(len(head.Ops))
+	}
+	op(jlm.TowerOp{Code: jlm.TOpRMSNorm, Bind: []jlm.Role{jlm.RoleVPostNorm}, Eps: v.Eps})
+	if merge > 1 {
+		op(jlm.TowerOp{Code: jlm.TOpRegroup, Span: merge})
+		op(jlm.TowerOp{Code: jlm.TOpLinear, Bind: []jlm.Role{jlm.RoleVMerge}})
+	}
+	op(jlm.TowerOp{Code: jlm.TOpLinear, Bind: bias(jlm.RoleVProj, jlm.RoleVProjBias)})
+	op(jlm.TowerOp{Code: jlm.TOpStated, Expr: &jlm.Expr{Terms: gelu.T}, Width: hidden})
+	op(jlm.TowerOp{Code: jlm.TOpLinear, Bind: bias(jlm.RoleVProj2, jlm.RoleVProj2Bias)})
+	op(jlm.TowerOp{Code: jlm.TOpRowBreak, Bind: []jlm.Role{jlm.RoleVImgBreak}, Span: merge, Offset: 1})
+	head.Out = at
+	t := &jlm.Tower{
+		Version: jlm.TowerVersion,
+		Pre: []jlm.PreStep{
+			{Kind: jlm.PreCapUnit, Ints: []int32{int32(v.ImageSize), int32(v.PatchSize) * merge,
+				int32(jlm.FilterPILBicubic), int32(jlm.PrecPIL)}},
+			{Kind: jlm.PreNormalize, Floats: []float32{v.Mean[0], v.Mean[1], v.Mean[2], v.Std[0], v.Std[1], v.Std[2]}},
+		},
+		Entry: entry,
+		Block: jlm.TowerBlock{NHead: v.NHead, NKVHead: v.NHead, HeadDim: v.NEmbd / v.NHead,
+			Norm: jlm.NormRMS, Eps: v.Eps, Act: act,
+			Rope: jlm.TowerRope{Base: 10000, Dim: hd, Runs: runs}},
+		Head: head,
+		Span: jlm.TowerSpan{Mark: "[IMG]"},
+	}
+	if t.Span.After, err = markerIDs(s, "[IMG_END]"); err != nil {
+		return nil, err
+	}
+	if err := t.Valid(); err != nil {
+		return nil, fmt.Errorf("convert: pixtral: %w", err)
 	}
 	return t, nil
 }
