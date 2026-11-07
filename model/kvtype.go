@@ -62,11 +62,7 @@ func (c *Config) KVTypeRefusal(t KVType) error {
 	if t != KVQ8_0 {
 		return nil
 	}
-	if err := c.KvQ8Inexpressible(); err != nil {
-		return err
-	}
-	// The composer is the only path, and it forms no q8_0 history yet.
-	return fmt.Errorf("model: %s: a q8_0 KV cache is not one the composer forms (binary16 and f32 are)", c.Arch)
+	return c.KvQ8Inexpressible()
 }
 
 // kvQ8Inexpressible is why a q8_0 row cannot hold this model's history, or

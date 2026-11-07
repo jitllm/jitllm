@@ -174,7 +174,10 @@ func (s *Instance) blockSpec(li int) nn.BlockSpec {
 	// A block turns by the rotary its rope ops state, of the
 	// instance's (rotaries): each its own table, bound by instance.
 	p.Rotaries = s.rotaries()
-	p.F32 = s.kvl.fmt == nn.KVF32
+	p.F32 = s.kvl.fmt != nn.KVF16
+	if s.kvl.fmt == nn.KVQ8 {
+		p.KVQ8 = s.kvlAt(li).headDim
+	}
 	p.Bidir = s.c.LayerKind(li).Attends() && s.c.BidirAt(li)
 	p.Whole = s.wholePicture(li)
 	return p
@@ -228,8 +231,6 @@ func (s *Instance) blockWhy(li int) nn.Decline {
 		return nn.DeclineExperts
 	case c.LayerKind(li).Recurrent() && !s.keepsRec(li):
 		return nn.DeclineRecurrent
-	case s.kvl.fmt != nn.KVF16 && s.kvl.fmt != nn.KVF32:
-		return nn.DeclineKVFormat
 	case pg.p > 0 && pg.arena() == nil:
 		return nn.DeclinePageOut
 	}

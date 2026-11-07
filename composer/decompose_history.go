@@ -186,8 +186,21 @@ func decomposeKVAppend(o graph.Op, c *Context) ([]Prim, error) {
 		at := []int{pid, off, d}
 		ext := []int{c.pages(), slots, w}
 		shape := sh
+		src := c.value(v)
 		var val int
 		switch {
+		case l.Q8 > 0:
+			// The rows quantized whole, a head's row at a time, then a
+			// word a thread into the position's slot.
+			q := Operand{Kind: OperandScratch, Name: src.Name + ".q8", Elem: U, Temp: true}
+			rw := l.words(w)
+			prims = append(prims, q8Rows(c, src, []int{sh[0] * (w / l.Q8), l.Q8}, q)...)
+			src = q
+			val = x.at(0, []int{sh[0], rw}, x.coord(0), d)
+			if open >= 0 {
+				val = x.sel(U, open, x.u(0), val)
+			}
+			shape, ext = []int{sh[0], rw}, []int{c.pages(), slots, rw}
 		case l.Half:
 			// A word a thread: its position's two halves, the lower element
 			// low, so no two threads write one word.
@@ -211,7 +224,7 @@ func decomposeKVAppend(o graph.Op, c *Context) ([]Prim, error) {
 				val = x.sel(ir.F32, open, x.f(0), val)
 			}
 		}
-		prims = append(prims, Prim{Kind: PrimMap, Shape: shape, In: []Operand{c.value(v), rows, pages}, Expr: x.e,
+		prims = append(prims, Prim{Kind: PrimMap, Shape: shape, In: []Operand{src, rows, pages}, Expr: x.e,
 			Facts:  Facts{Extents: map[int]int{1: c.Step.Rows * rowWords, 2: c.pages()}},
 			Stores: []PrimStore{{Out: l.operand(pool), Ax: at, Ext: ext, Value: val}}})
 	}
