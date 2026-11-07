@@ -7,10 +7,9 @@ import (
 )
 
 // TestDeltaStatementRoundTrips holds the delta rule's stated decay and gate
-// to the config's contract: they round-trip; a container an older writer
-// made states them from its bound and its sigmoid bit (and the per-channel
-// decay's architectures' own gate); and a statement no delta rule reads is
-// refused.
+// to the config's contract: they round-trip, and a statement no delta rule
+// reads is refused. A container an older writer made states neither; the
+// model states them from the file (model.olderDelta).
 func TestDeltaStatementRoundTrips(t *testing.T) {
 	base := func() *Config {
 		return &Config{Arch: ArchQwen3Next, NLayer: 4, NEmbd: 64, NHead: 4, NKVHead: 2, HeadDim: 16, NRot: 16,
@@ -28,31 +27,6 @@ func TestDeltaStatementRoundTrips(t *testing.T) {
 	}
 
 	for _, tc := range []struct {
-		name         string
-		edit         func(c *Config)
-		decay, gated *Program
-	}{
-		{"the defaults", func(c *Config) {}, DeltaDecaySoftplus(), DeltaGateSiLU()},
-		{"a bound", func(c *Config) { c.KDALowerBound = -5 }, DeltaDecayBounded(-5), DeltaGateSiLU()},
-		{"a sigmoid gate", func(c *Config) { c.Flags2 |= Flag2DeltaSigmoidGate }, DeltaDecaySoftplus(), DeltaGateSigmoid()},
-		{"a per-channel decay's architecture", func(c *Config) { c.Arch = ArchKimiLinear }, DeltaDecaySoftplus(), DeltaGateSigmoid()},
-	} {
-		old := base()
-		tc.edit(old)
-		if err := old.olderDelta(); err != nil {
-			t.Fatalf("%s: %v", tc.name, err)
-		}
-		if !reflect.DeepEqual(old.DeltaDecay, tc.decay) || !reflect.DeepEqual(old.DeltaGate, tc.gated) {
-			t.Errorf("%s: stated decay %+v and gate %+v", tc.name, old.DeltaDecay, old.DeltaGate)
-		}
-	}
-	plain := base()
-	plain.LayerKinds = nil
-	if err := plain.olderDelta(); err != nil || plain.DeltaDecay != nil {
-		t.Errorf("a model with no delta rule stated %+v (%v)", plain.DeltaDecay, err)
-	}
-
-	for _, tc := range []struct {
 		name string
 		edit func(c *Config)
 		want string
@@ -65,7 +39,6 @@ func TestDeltaStatementRoundTrips(t *testing.T) {
 		{"a gate of one input", func(c *Config) {
 			c.DeltaDecay, c.DeltaGate = DeltaDecaySoftplus(), DeltaDecaySoftplus()
 		}, "gate over 1"},
-		{"a positive bound", func(c *Config) { c.KDALowerBound = 2 }, "a bound is negative"},
 	} {
 		bad := base()
 		tc.edit(bad)

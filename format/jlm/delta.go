@@ -57,27 +57,6 @@ func (c *Config) linear() bool {
 	return false
 }
 
-// olderDelta states, for a container an older writer made, the decay and
-// gate it carried as fields: the lower bound (KDALowerBound) and the sigmoid
-// gate (Flag2DeltaSigmoidGate), the per-channel decay's gate a sigmoid (its
-// two architectures' own), every other one silu.
-func (c *Config) olderDelta() error {
-	if c.DeltaDecay != nil || c.DeltaGate != nil || !c.linear() {
-		return nil
-	}
-	if !(c.KDALowerBound <= 0) {
-		return fmt.Errorf("jlm: a decay bound of %g; a bound is negative", c.KDALowerBound)
-	}
-	c.DeltaDecay, c.DeltaGate = DeltaDecaySoftplus(), DeltaGateSiLU()
-	if c.KDALowerBound != 0 {
-		c.DeltaDecay = DeltaDecayBounded(c.KDALowerBound)
-	}
-	if c.Flags2.Has(Flag2DeltaSigmoidGate) || c.Arch == ArchKimiLinear || c.Arch == ArchKimiK3 {
-		c.DeltaGate = DeltaGateSigmoid()
-	}
-	return nil
-}
-
 // deltaValid refuses a statement no delta rule reads: both programs or
 // neither, a decay of one input and a gate of two, and none on a model with
 // no delta rule.

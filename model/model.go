@@ -889,6 +889,12 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 	}
 	out.TokenAct = c.ActQuant == jlm.ActQuantRowInt8
 	out.DeltaDecay, out.DeltaGate = c.DeltaDecay, c.DeltaGate
+	if out.DeltaDecay == nil {
+		var err error
+		if out.DeltaDecay, out.DeltaGate, err = olderDelta(c, stores); err != nil {
+			return nil, err
+		}
+	}
 	out.LatentNormEps = float64(c.LatentNormEps)
 	if out.LatentNormEps == 0 {
 		out.LatentNormEps = out.RMSEps
