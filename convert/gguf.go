@@ -491,6 +491,9 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 	if err := geometryFits(s.Config); err != nil {
 		return nil, err
 	}
+	if err := ropeFits(s.Config); err != nil {
+		return nil, err
+	}
 	StateDelta(s.Config, sourceStores(s))
 	StateRevision(s.Config)
 	return s, nil

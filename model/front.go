@@ -32,14 +32,9 @@ const (
 	UncoveredKind
 	UncoveredRouterScore
 	UncoveredExperts
-	UncoveredSelect
 	UncoveredStreams
-	UncoveredRopeAxes
-	UncoveredNonCausal
-	UncoveredCompressed
 	UncoveredAct
 	UncoveredPooling
-	UncoveredClamp
 	UncoveredUnbound
 	UncoveredUnverified
 	numUncovered
@@ -55,22 +50,12 @@ func (u Uncovered) String() string {
 		return "a router whose score the container does not state"
 	case UncoveredExperts:
 		return "routed experts stored one matrix each (a container converted before its experts were stacked into banks)"
-	case UncoveredSelect:
-		return "an attention indexer or sparse key selection"
 	case UncoveredStreams:
 		return "several residual streams"
-	case UncoveredRopeAxes:
-		return "a rotary over position axes its sections do not state (a pair's halves turned apart)"
-	case UncoveredNonCausal:
-		return "non-causal attention"
-	case UncoveredCompressed:
-		return "compressed or grouped attention"
 	case UncoveredAct:
 		return "an activation the container does not state, or not over the block's operands"
 	case UncoveredPooling:
 		return "a pooled head (an embedding model's)"
-	case UncoveredClamp:
-		return "linears clamped to stored bounds"
 	case UncoveredUnbound:
 		return "stored tensors its graph does not bind"
 	case UncoveredUnverified:
@@ -430,12 +415,6 @@ func (m *Model) uncovered(li int) Uncovered {
 	switch {
 	case c.Streams() > 1 && !c.StatesStreams():
 		return UncoveredStreams
-	case c.RopeAt(li) && !m.ropeAxesStated(m.ropeAt(li)):
-		return UncoveredRopeAxes
-	case c.NonCausal && c.RopeAt(li) && m.ropeAt(li).NRot == 0:
-		// A non-causal block turned by a rotary the model's does not hold
-		// (an encoder's of its own bases).
-		return UncoveredNonCausal
 	}
 	return m.uncoveredRest(li)
 }
@@ -496,32 +475,6 @@ func (m *Model) ropeAxes(r nn.Rope) (sections [4]int, interleaved bool) {
 		il = false
 	}
 	return sec, il
-}
-
-// ropeAxesStated reports whether the sections ropeAxes states are rotary
-// r's: every pair in a run of the sections' axes at its own frequency, so
-// a pair turns by one angle. A pair whose two halves turn by different
-// axes (RopeXD) is not.
-func (m *Model) ropeAxesStated(r nn.Rope) bool {
-	if len(r.Runs) == 0 {
-		return true
-	}
-	sec, il := m.ropeAxes(r)
-	if m.Cfg.RopeXD {
-		// Each coordinate's chunk of elements, in order, covering the head's
-		// rotated elements: the first halves' runs XDRopeRuns states.
-		sum := 0
-		for _, n := range sec {
-			sum += n
-		}
-		a, _ := nn.XDRopeRuns(m.Cfg.RopeSections[:], r.NRot/2)
-		return !m.Cfg.RopeInterleaved && sum == r.NRot && slices.Equal(a, r.Runs)
-	}
-	want := nn.MRopeRuns(sec[:])
-	if il {
-		want = nn.IMRopeRuns(sec[:], r.NRot/2)
-	}
-	return nn.RopeRuns(r.Runs) == r.NRot/2 && slices.Equal(want, r.Runs)
 }
 
 // blockGraph is block li's graph: the attention block the container states
