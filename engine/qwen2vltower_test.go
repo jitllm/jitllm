@@ -292,13 +292,19 @@ func qwen2VLMatchesTransformers(t *testing.T, name string) {
 	}
 	// Each violation fails the gate by a margin: ten times past its bound.
 	bound := 2 * arith
-	text := picture
+	// A picture whose rows advance as text has no grid to take away: its
+	// violation is the rows of another picture -- the reference's reversed.
+	text, what := picture, "the picture as text"
+	if picture.Grid.Zero() {
+		text.Embd, what = slices.Clone(g.Image.EmbdA8), "the picture's rows reversed"
+		slices.Reverse(text.Embd)
+	}
 	text.Grid = model.ImageGrid{}
 	bad, _ := worst(run(text))
 	if !(bad > 10*bound) {
-		t.Fatalf("VIOLATION: the picture laid out as text reads %.3e against the bound %.3e", bad, bound)
+		t.Fatalf("VIOLATION: %s reads %.3e against the bound %.3e", what, bad, bound)
 	}
-	t.Logf("violation (the picture as text): %.3e, %.0fx the bound", bad, bad/bound)
+	t.Logf("violation (%s): %.3e, %.0fx the bound", what, bad, bad/bound)
 	if len(g.Image.DeepA8) > 0 {
 		// The taps are load-bearing: the arithmetic arm with them zeroed.
 		none, _ := worst(run(model.Span{Embd: g.Image.EmbdA8, Deep: make([]float32, len(g.Image.DeepA8)), Grid: picture.Grid}))

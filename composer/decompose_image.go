@@ -7,9 +7,12 @@ import (
 	"github.com/jitllm/jitllm/graph"
 )
 
-// RequestGrid is a picture's step's request word: its grid's width in
-// patches.
-const RequestGrid = 0
+// RequestGrid and RequestGridH are a picture's step's request words: its
+// grid's width and height in patches.
+const (
+	RequestGrid  = 0
+	RequestGridH = 1
+)
 
 // A picture's own request words (graph.OpPicture): its width and height in
 // pixels, and its rows' stride in bytes; a second plane's stride in bytes,
@@ -675,4 +678,75 @@ func decomposeSplice(o graph.Op, c *Context) ([]Prim, error) {
 	x.sel(F, none, x.at(0, sh, r, e), pic)
 	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0]), c.value(o.In[1]), TableRequest.op()}, Out: c.value(o.Out[0]),
 		Expr: x.e, Facts: Facts{Extents: map[int]int{1: P * Wp, 2: RequestRows + R}}}}, nil
+}
+
+// decomposeRowBreak is the input's rows, a grid W wide (the request's
+// patch grid over Span), with the weight's row after each of the grid's
+// rows: output row r is input row (r/(W+1))*W + r%(W+1), or the weight's
+// where r%(W+1) is W.
+func decomposeRowBreak(o graph.Op, c *Context) ([]Prim, error) {
+	S := o.Attr.Span
+	if len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) != 1 || S < 1 || o.Weight[0].K != c.width(o.In[0]) ||
+		c.width(o.Out[0]) != c.width(o.In[0]) {
+		return nil, fmt.Errorf("a row break of %d operands, %d weights, by %d", len(o.In), len(o.Weight), S)
+	}
+	U := ir.U32
+	sh, ish := c.rows(o.Out[0]), c.rows(o.In[0])
+	w := o.Weight[0]
+	var x exprs
+	r, i := x.coord(0), x.coord(1)
+	u := func(v int) int { return x.u(uint32(v)) }
+	W := x.op(OpDiv, U, x.op(OpMax, U, x.load(2, u(RequestGrid)), u(S)), u(S))
+	line := x.op(OpAdd, U, W, u(1))
+	k := x.op(OpRem, U, r, line)
+	src := x.op(OpAdd, U, x.op(OpMul, U, x.op(OpDiv, U, r, line), W), k)
+	in := x.at(0, ish, x.op(OpMin, U, src, u(ish[0]-1)), i)
+	nl := x.at(1, []int{sh[1]}, i)
+	x.sel(ir.F32, x.op(OpLess, ir.Pred, k, W), in, nl)
+	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0]), {Kind: OperandVector, Role: w.Role, Name: w.Role.String()},
+		TableRequest.op()}, Out: c.value(o.Out[0]), Expr: x.e, Facts: Facts{Extents: map[int]int{2: RequestRows + sh[0]}}}}, nil
+}
+
+// decomposeWrapRows is the first weight's row, the input's rows and the
+// second weight's row: the input a grid of the step's patches (its rows
+// less Offset lead rows, the request's width) over Span, each of its rows
+// Width rows longer, so its rows are H*(W+Width) and the second weight's
+// row output row H*(W+Width)+1.
+func decomposeWrapRows(o graph.Op, c *Context) ([]Prim, error) {
+	a := o.Attr
+	S := a.Span
+	if len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) != 2 || S < 1 || a.Width < 0 ||
+		o.Weight[0].K != c.width(o.In[0]) || o.Weight[1].K != c.width(o.In[0]) || c.width(o.Out[0]) != c.width(o.In[0]) {
+		return nil, fmt.Errorf("a row wrap of %d operands, %d weights, by %d", len(o.In), len(o.Weight), S)
+	}
+	U := ir.U32
+	sh, ish := c.rows(o.Out[0]), c.rows(o.In[0])
+	var x exprs
+	r, i := x.coord(0), x.coord(1)
+	u := func(v int) int { return x.u(uint32(v)) }
+	// The framed rows: H rows of W windows and Width more, H and W the
+	// grid's height and width over S, then the end row.
+	framed := func(x *exprs) int {
+		u := func(v int) int { return x.u(uint32(v)) }
+		gw := x.op(OpMax, U, x.load(3, u(RequestGrid)), u(S))
+		gh := x.op(OpMax, U, x.load(3, u(RequestGridH)), u(S))
+		w := x.op(OpAdd, U, x.op(OpDiv, U, gw, u(S)), u(a.Width))
+		return x.op(OpAdd, U, x.op(OpMul, U, x.op(OpDiv, U, gh, u(S)), w), u(1))
+	}
+	// A row past the end row is clamped to it, recomputing it: no row
+	// past the picture's is written (the rows after it are the prompt's).
+	end := framed(&x)
+	rr := x.op(OpMin, U, r, x.op(OpMin, U, end, u(sh[0]-1)))
+	src := x.op(OpMin, U, x.op(OpSub, U, x.op(OpMax, U, rr, u(1)), u(1)), u(ish[0]-1))
+	in := x.at(0, ish, src, i)
+	bv, ev := x.at(1, []int{sh[1]}, i), x.at(2, []int{sh[1]}, i)
+	v := x.sel(ir.F32, x.op(OpLess, ir.Pred, rr, u(1)), bv, x.sel(ir.F32, x.op(OpLess, ir.Pred, rr, end), in, ev))
+	vec := func(w graph.Binding) Operand {
+		return Operand{Kind: OperandVector, Role: w.Role, Name: w.Role.String()}
+	}
+	out := c.value(o.Out[0])
+	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0]), vec(o.Weight[0]), vec(o.Weight[1]),
+		TableRequest.op()}, Out: out, Expr: x.e,
+		Facts:  Facts{Extents: map[int]int{3: RequestRows + sh[0]}},
+		Stores: []PrimStore{{Out: out, Ax: []int{rr, i}, Ext: sh, Value: v}}}}, nil
 }

@@ -366,6 +366,17 @@ const (
 	// history's first, or past the row's own, is no term. Only a row
 	// closing its window pools all of it.
 	OpHistoryPool
+	// OpRowBreak is In[0]'s rows -- a grid's raster, its width the step's
+	// patch grid's (the request's) over Span -- with Weight[0]'s one row
+	// after each of the grid's rows: output row r of a grid W wide is input
+	// row (r/(W+1))*W + r%(W+1), or the weight's where r%(W+1) is W.
+	OpRowBreak
+	// OpWrapRows is Weight[0]'s one row, In[0]'s rows and Weight[1]'s one
+	// row: the input a grid of the step's patches -- the step's rows less
+	// Offset lead rows, its width the request's -- over Span, each of its
+	// rows Width rows longer (an OpRowBreak's), the second weight's row after
+	// its last.
+	OpWrapRows
 	numOps
 )
 
@@ -457,6 +468,10 @@ func (k OpKind) String() string {
 		return "select"
 	case OpTailRow:
 		return "tail_row"
+	case OpRowBreak:
+		return "row_break"
+	case OpWrapRows:
+		return "wrap_rows"
 	case OpPosAxes:
 		return "pos_axes"
 	case OpNGramHash:

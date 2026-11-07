@@ -351,7 +351,8 @@ func gridRowWise(o graph.Op) bool {
 // writes its output's itself, each value at its own grid's rows.
 func ownsItsGrid(k graph.OpKind) bool {
 	switch k {
-	case graph.OpConv, graph.OpUnfold, graph.OpTakeRows, graph.OpRegroup, graph.OpFold, graph.OpUntile, graph.OpDropRows:
+	case graph.OpConv, graph.OpUnfold, graph.OpTakeRows, graph.OpRegroup, graph.OpFold, graph.OpUntile, graph.OpDropRows,
+		graph.OpRowBreak, graph.OpWrapRows:
 		return true
 	}
 	return false

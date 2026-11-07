@@ -47,6 +47,8 @@ func towerStater(p jlm.Projector) func(*jlm.Source) (*jlm.Tower, error) {
 		return glm4vTower
 	case jlm.ProjKimiVL:
 		return kimivlTower
+	case jlm.ProjHunyuanVL:
+		return hunyuanvlTower
 	}
 	return nil
 }
@@ -853,6 +855,105 @@ func kimivlTower(s *jlm.Source) (*jlm.Tower, error) {
 	}
 	if err := t.Valid(); err != nil {
 		return nil, fmt.Errorf("convert: kimivl: %w", err)
+	}
+	return t, nil
+}
+
+// hunyuanvlTower is HunyuanVL's tower as transformers' HunYuanVL classes run
+// it: the picture resized by Pillow's BICUBIC filter to a size of its own
+// (Qwen2-VL's smart_resize, a merge window's pixels a side, the file's
+// bounds on the area) and normalised; its patches in raster order -- the
+// processor's, unlike Qwen-VL's merge windows -- through a biased matrix,
+// plus a learned square table resampled bilinear (interpolate,
+// align_corners false); LayerNorm blocks with no rotary; then the
+// merger: an RMSNorm, each 2x2 raster window one row through the 2x2
+// convolution as a matrix, the exact GELU, the 1x1 convolution, a newline
+// row after each merged row, a linear, the begin and end rows around the
+// picture and an RMSNorm -- H*(W+1)+2 rows. A picture is its start marker,
+// its rows and its end marker, its grid the text model's XD-RoPE grid over
+// the merge with the newline column and the two end rows.
+func hunyuanvlTower(s *jlm.Source) (*jlm.Tower, error) {
+	v := s.Vision
+	has := towerRoles(s)
+	for _, r := range []jlm.Role{jlm.RoleVPatchEmbd, jlm.RoleVPosEmbd, jlm.RoleVProjInNorm, jlm.RoleVMergeConv,
+		jlm.RoleVProj, jlm.RoleVImgNewline, jlm.RoleVProj2, jlm.RoleVImgBegin, jlm.RoleVImgEnd, jlm.RoleVProjNorm} {
+		if !has[r] {
+			return nil, fmt.Errorf("convert: hunyuanvl: the tower has no %v", r)
+		}
+	}
+	if v.NHead == 0 || v.NEmbd%v.NHead != 0 || v.PatchSize == 0 || v.Scale < 2 || v.MinPixels == 0 || v.MaxPixels < v.MinPixels {
+		return nil, fmt.Errorf("convert: hunyuanvl: %d heads over %d, patches of %d merged by %d, %d to %d pixels",
+			v.NHead, v.NEmbd, v.PatchSize, v.Scale, v.MinPixels, v.MaxPixels)
+	}
+	var merged, table int32
+	for i := range s.Tensors {
+		t := &s.Tensors[i]
+		switch {
+		case t.Block == jlm.DenseBlock && t.Role == jlm.RoleVMergeConv:
+			merged = int32(t.Dims[1])
+		case t.Block == jlm.DenseBlock && t.Role == jlm.RoleVPosEmbd:
+			table = int32(t.Dims[1])
+		}
+	}
+	side := int32(math.Sqrt(float64(table)))
+	if side < 2 || side*side != table {
+		return nil, fmt.Errorf("convert: hunyuanvl: a position table of %d rows is not a square grid", table)
+	}
+	act, err := v.Activation(false)
+	if err != nil {
+		return nil, err
+	}
+	bias := func(w, b jlm.Role) []jlm.Role {
+		if has[b] {
+			return []jlm.Role{w, b}
+		}
+		return []jlm.Role{w}
+	}
+	var gelu jlm.ExprBuilder
+	gelu.GELUErf(jlm.Operand(0))
+	merge := int32(v.Scale)
+	t := &jlm.Tower{
+		Version: jlm.TowerVersion,
+		Pre: []jlm.PreStep{
+			{Kind: jlm.PreSmartResize, Ints: []int32{int32(v.PatchSize) * merge, int32(v.MinPixels), int32(v.MaxPixels),
+				int32(jlm.FilterPILBicubic), int32(jlm.PrecPIL)}},
+			{Kind: jlm.PreNormalize, Floats: []float32{v.Mean[0], v.Mean[1], v.Mean[2], v.Std[0], v.Std[1], v.Std[2]}},
+		},
+		// The pixels are value 0.
+		Entry: jlm.Program{NIn: 1, Out: 4, Ops: []jlm.TowerOp{
+			{Code: jlm.TOpPatchify, In: []uint16{0}, Span: int32(v.PatchSize)},
+			{Code: jlm.TOpLinear, In: []uint16{1}, Bind: bias(jlm.RoleVPatchEmbd, jlm.RoleVPatchBias)},
+			{Code: jlm.TOpPosResample, Bind: []jlm.Role{jlm.RoleVPosEmbd}, Span: side,
+				Chain: jlm.ResampleHalfPixel, Filter: jlm.TapsLinear},
+			{Code: jlm.TOpAdd, In: []uint16{2, 3}},
+		}},
+		Block: jlm.TowerBlock{NHead: v.NHead, NKVHead: v.NHead, HeadDim: v.NEmbd / v.NHead,
+			Norm: jlm.NormLayer, Eps: v.Eps, Act: act},
+		// The last block's rows are value 0.
+		Head: jlm.Program{NIn: 1, Out: 9, Ops: []jlm.TowerOp{
+			{Code: jlm.TOpRMSNorm, In: []uint16{0}, Bind: []jlm.Role{jlm.RoleVProjInNorm}, Eps: v.Eps},
+			{Code: jlm.TOpRegroup, In: []uint16{1}, Span: merge},
+			{Code: jlm.TOpLinear, In: []uint16{2}, Bind: bias(jlm.RoleVMergeConv, jlm.RoleVMergeConvBias)},
+			{Code: jlm.TOpStated, In: []uint16{3}, Expr: &jlm.Expr{Terms: gelu.T}, Width: merged},
+			{Code: jlm.TOpLinear, In: []uint16{4}, Bind: bias(jlm.RoleVProj, jlm.RoleVProjBias)},
+			{Code: jlm.TOpRowBreak, In: []uint16{5}, Bind: []jlm.Role{jlm.RoleVImgNewline}, Span: merge},
+			{Code: jlm.TOpLinear, In: []uint16{6}, Bind: bias(jlm.RoleVProj2, jlm.RoleVProj2Bias)},
+			// after_rms before the frame: the begin and end rows were
+			// normalised by it at conversion (normFrameRows).
+			{Code: jlm.TOpRMSNorm, In: []uint16{7}, Bind: []jlm.Role{jlm.RoleVProjNorm}, Eps: v.Eps},
+			{Code: jlm.TOpWrapRows, In: []uint16{8}, Bind: []jlm.Role{jlm.RoleVImgBegin, jlm.RoleVImgEnd}, Span: merge},
+		}},
+		Span: jlm.TowerSpan{Mark: "<\uff5chy_place\u2581holder\u2581no\u2581100\uff5c><\uff5chy_place\u2581holder\u2581no\u2581102\uff5c>" +
+			"<\uff5chy_place\u2581holder\u2581no\u2581101\uff5c>", GridDiv: merge},
+	}
+	if t.Span.Before, err = markerIDs(s, "<\uff5chy_place\u2581holder\u2581no\u2581100\uff5c>"); err != nil {
+		return nil, err
+	}
+	if t.Span.After, err = markerIDs(s, "<\uff5chy_place\u2581holder\u2581no\u2581101\uff5c>"); err != nil {
+		return nil, err
+	}
+	if err := t.Valid(); err != nil {
+		return nil, fmt.Errorf("convert: hunyuanvl: %w", err)
 	}
 	return t, nil
 }
