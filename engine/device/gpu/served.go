@@ -3027,6 +3027,17 @@ func (g *devTier) servedBlockAs(l *layer, li int, cs backend.Buf, pl *kvLayerPoo
 	for r := range sv.sl.vectors {
 		sv.sl.vectors[r] = l.roleVector(r)
 	}
+	// A kernel reading as a vector a role the part bound as a matrix (a map
+	// over a 2-D vector) reads the block's vector of it.
+	for _, args := range sv.f.args {
+		for _, a := range args {
+			if a.kind == partVector && sv.sl.vectors[a.role] == nil {
+				if v := l.roleVector(a.role); v != nil {
+					sv.sl.vectors[a.role] = v
+				}
+			}
+		}
+	}
 	t := sv.sl.tables
 	t[tableKey(composer.TableAngles)], t[tableKey(composer.TableKeys)], t[tableKey(composer.TableValues)], t[tableKey(composer.TablePages)], t[tableKey(composer.TableRows)], t[tableKey(composer.TableWindows)], t[tableKey(composer.TableQOff)] = cs, kk, kv, tab, rows, rowsW, qOff
 	t[tableKey(composer.TableCall)] = calls
