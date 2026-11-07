@@ -1069,17 +1069,19 @@ func TestSealDoesNotClaimPagesItCouldNotStore(t *testing.T) {
 	}
 }
 
-// mirrorDevice is a LayerDevice that keeps its own KV and hands it back: enough
-// to test that the engine pulls the history down and seals it, without a card.
+// mirrorDevice is a LayerDevice that keeps its own KV and recurrent state and
+// hands them back: enough to test that the engine pulls the history down and
+// seals it, without a card.
 type mirrorDevice struct {
 	kv       map[int][]float32
+	rec      map[int][]float32
 	refuse   bool // MigrateKV(toDevice=false) fails, as the f16 V cache does
 	corrupt  bool // hand back a history that is not what was given
 	migrated int
 }
 
 func newMirrorDevice() *mirrorDevice {
-	return &mirrorDevice{kv: map[int][]float32{}}
+	return &mirrorDevice{kv: map[int][]float32{}, rec: map[int][]float32{}}
 }
 
 func (d *mirrorDevice) MatVec([]float32, quant.Type, []byte, []float32, int, int) bool {
@@ -1123,11 +1125,29 @@ func (d *mirrorDevice) MigrateKV(li int, k, v []float32, pos int, toDevice bool)
 	return true
 }
 
-// MigrateRec: this fake keeps no recurrent state, so nothing to move is success.
-func (d *mirrorDevice) MigrateRec(int, []float32, []float32, bool) bool { return true }
-func (d *mirrorDevice) ReserveKV(int) bool                              { return true }
-func (d *mirrorDevice) ReleaseLayers(int, int)                          {}
-func (d *mirrorDevice) Reserve(int, int) bool                           { return true }
+// MigrateRec keeps a block's convolution and recurrent state on the way up and
+// hands them back on the way down, corrupted as the history is.
+func (d *mirrorDevice) MigrateRec(li int, conv, state []float32, toDevice bool) bool {
+	if toDevice {
+		d.rec[li*2] = append([]float32(nil), conv...)
+		d.rec[li*2+1] = append([]float32(nil), state...)
+		return true
+	}
+	if d.refuse {
+		return false
+	}
+	copy(conv, d.rec[li*2])
+	copy(state, d.rec[li*2+1])
+	if d.corrupt {
+		for i := range state {
+			state[i] *= -1.5
+		}
+	}
+	return true
+}
+func (d *mirrorDevice) ReserveKV(int) bool     { return true }
+func (d *mirrorDevice) ReleaseLayers(int, int) {}
+func (d *mirrorDevice) Reserve(int, int) bool  { return true }
 func (d *mirrorDevice) PrewarmLayer(int, *nn.LayerPlan, *nn.LayerWeights) bool {
 	return false
 }
