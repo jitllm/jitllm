@@ -4,7 +4,7 @@ import "fmt"
 
 // TowerVersion is the stated tower's revision. A record of a later one is
 // refused, not read as this one.
-const TowerVersion = 8
+const TowerVersion = 9
 
 // Tower is a vision tower as the converter states it: what the engine builds
 // the tower from, with no family's name in it. The converter knows a family
@@ -132,6 +132,19 @@ const (
 	// last the first, after a row's last the second, before the picture's
 	// last tile the third.
 	PreBestFit PreKind = 13
+	// PreSliceUHD is llava-uhd's cut (MiniCPM-V's): an overview at its own
+	// size -- Ints[0]^2 pixels at the picture's aspect, each side a whole
+	// Ints[1]-pixel patch, rounded half to even -- then, where the picture's
+	// area over Ints[0]^2 rounds up past one, the slices of the grid of at
+	// most Ints[2] whose aspect is closest to the picture's (of the counts
+	// one either side of that multiple): the picture resized to a whole
+	// number of best-sized slices and cut row-major; the overview upscaled
+	// only where nothing is cut. With filter Ints[3] in arithmetic Ints[4].
+	// A head's marker runs (TOpMarkRow) are a table of six: <image> and
+	// </image> about the overview, <slice> and </slice> about a slice, a
+	// slice row's first after the first taking the last two (a newline and
+	// <slice>) before it.
+	PreSliceUHD PreKind = 15
 	// PreNormalizeBF16 is PreNormalize in bfloat16: the sample times 1/255,
 	// less the mean, over the std, each result and the mean and std rounded
 	// to bfloat16 as torch's arithmetic on a bfloat16 tensor rounds them.
@@ -267,16 +280,31 @@ const (
 	// the second's at its row (graph.OpPosAxes), from row Offset on.
 	TOpPosAxes OpCode = 26
 	// TOpMarkRow is In[0]'s rows -- a piece's merged grid, its width the
-	// patch grid's over Width -- after one row of Bind[0] and, where Offset
-	// is 1, before another: the rows the piece's place names under the
-	// picture's fit. Under PreTileSmart a tile at grid row r and column c
-	// takes row r*Span+c before it and the thumbnail row Span*Span, a
-	// picture of one piece none; PreBestFit states its own.
+	// patch grid's over Width, or where Width is 0 all of In[0]'s rows --
+	// after a run of at most Span consecutive
+	// rows of Bind[0] and before a run of at most Offset: the runs the
+	// piece's place names under the picture's fit. Under PreTileSmart a tile
+	// at grid row r and column c of a grid of at most M tiles takes row
+	// r*M+c before it and the thumbnail row M*M; PreBestFit and PreSliceUHD
+	// state theirs; a picture of one piece takes none.
 	TOpMarkRow OpCode = 27
 	// TOpTailRow is In[0] with its last row Bind[0]'s one row: a class row
 	// after the patches, in the row the entry leaves for it.
 	TOpTailRow OpCode = 28
-	topCodes   OpCode = 29
+	// TOpPosBuckets is each row's row of the position table Bind[0], a Span
+	// x Span grid, at the patch's cell bucketed onto it: of a gh x gw grid,
+	// row floor(Span*y/gh) and column floor(Span*x/gw) -- NaViT's bucketing
+	// of the cell's fractional coordinates, at the rational -- from row
+	// Offset on (graph.OpPosBuckets).
+	TOpPosBuckets OpCode = 29
+	// TOpTableRows is Bind[0]'s rows as a value of their own (graph.OpTableRows).
+	TOpTableRows OpCode = 30
+	// TOpRowsAttend is each row of In[0] attending over the live rows of
+	// In[1] (keys) and In[2] (values), every row and both ways, Span heads
+	// scaled by one over the root of their width (graph.OpRowsAttend): a
+	// value of In[0]'s rows, whatever the picture's grid.
+	TOpRowsAttend OpCode = 31
+	topCodes      OpCode = 32
 )
 
 // A stated rotary's layout (TOpRope's Chain).
@@ -422,8 +450,12 @@ type TowerRopeRun struct {
 type TowerSpan struct {
 	Before, After         []int32
 	BeforeText, AfterText string
-	Bidir                 bool
-	Mark                  string
+	// IndexBefore and IndexAfter are the text around the picture's number
+	// in the prompt, counted from 0, ahead of BeforeText (MiniCPM-V's
+	// processor's <image_id>N</image_id>); empty for none.
+	IndexBefore, IndexAfter string
+	Bidir                   bool
+	Mark                    string
 	// GridDiv says the rows are a grid for the language model's rotary
 	// (M-RoPE): the patch grid with each side divided by GridDiv; 0 for rows
 	// that advance as text.
@@ -461,6 +493,11 @@ func (t *Tower) Valid() error {
 			if len(s.Ints) != 5 || s.Ints[0] <= 0 || s.Ints[1] <= 0 || s.Ints[2] <= 0 || s.Ints[2]%s.Ints[0] != 0 ||
 				!resizes(Filter(s.Ints[3]), Precision(s.Ints[4])) {
 				return fmt.Errorf("jlm: the tower's step %d limits and pads with %v", i, s.Ints)
+			}
+		case PreSliceUHD:
+			if len(s.Ints) != 5 || s.Ints[0] <= 0 || s.Ints[1] <= 0 || s.Ints[2] < 1 ||
+				!resizes(Filter(s.Ints[3]), Precision(s.Ints[4])) {
+				return fmt.Errorf("jlm: the tower's step %d slices with %v", i, s.Ints)
 			}
 		case PreBestFit:
 			if len(s.Ints) != 1 || s.Ints[0] < 1 {
@@ -599,7 +636,8 @@ func (p *Program) valid(name string) error {
 		case len(op.Bind) < bind[0] || len(op.Bind) > bind[1]:
 			return fmt.Errorf("jlm: the tower's %s op %d (code %d) binds %d weights, want %d to %d", name, i, op.Code, len(op.Bind), bind[0], bind[1])
 		case (op.Code == TOpPatchify || op.Code == TOpRegroup || op.Code == TOpPool || op.Code == TOpFold ||
-			op.Code == TOpRowBreak || op.Code == TOpWrapRows || op.Code == TOpPosAxes || op.Code == TOpMarkRow) && op.Span <= 0:
+			op.Code == TOpRowBreak || op.Code == TOpWrapRows || op.Code == TOpPosAxes || op.Code == TOpMarkRow || op.Code == TOpPosBuckets ||
+			op.Code == TOpRowsAttend) && op.Span <= 0:
 			return fmt.Errorf("jlm: the tower's %s op %d groups by %d", name, i, op.Span)
 		case op.Code == TOpRowBreak && op.Offset&^1 != 0:
 			return fmt.Errorf("jlm: the tower's %s op %d breaks rows with an offset of %d", name, i, op.Offset)
@@ -648,8 +686,10 @@ func (op *TowerOp) arity() (in int, bind [2]int) {
 	switch op.Code {
 	case TOpPatchify, TOpDropRows, TOpRegroup, TOpPool, TOpFold, TOpUntile:
 		return 1, [2]int{0, 0}
-	case TOpPosAxes:
+	case TOpPosAxes, TOpPosBuckets, TOpTableRows:
 		return 0, [2]int{1, 1}
+	case TOpRowsAttend:
+		return 3, [2]int{0, 0}
 	case TOpMarkRow, TOpTailRow:
 		return 1, [2]int{1, 1}
 	case TOpLinear, TOpLayerNorm:
@@ -740,6 +780,8 @@ func encodeTower(w *wbuf, t *Tower) {
 		}
 	}
 	w.str(t.Span.BeforeText)
+	w.str(t.Span.IndexBefore)
+	w.str(t.Span.IndexAfter)
 	w.str(t.Span.AfterText)
 	w.bool(t.Span.Bidir)
 	w.str(t.Span.Mark)
@@ -818,7 +860,7 @@ func decodeTower(r *rbuf) *Tower {
 			*ids = append(*ids, r.i32())
 		}
 	}
-	t.Span.BeforeText, t.Span.AfterText = r.str(), r.str()
+	t.Span.BeforeText, t.Span.IndexBefore, t.Span.IndexAfter, t.Span.AfterText = r.str(), r.str(), r.str(), r.str()
 	t.Span.Bidir = r.bool()
 	t.Span.Mark = r.str()
 	t.Span.GridDiv = r.i32()

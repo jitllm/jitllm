@@ -125,6 +125,7 @@ func (in *Instance) newTowerRun() (*towerRun, error) {
 func (tr *towerRun) squareRequest(pl model.PictureLayout, sq model.Square, a graph.Attrs, squares int) {
 	tr.req[composer.RequestGrid], tr.req[composer.RequestGridH] = uint32(sq.Gw), uint32(sq.Gh)
 	tr.req[composer.RequestMark], tr.req[composer.RequestTrail] = uint32(sq.Mark), uint32(sq.Trail)
+	tr.req[composer.RequestMarkN], tr.req[composer.RequestTrailN] = uint32(sq.MarkN), uint32(sq.TrailN)
 	tr.req[composer.RequestPicOW], tr.req[composer.RequestPicOH] = uint32(sq.Pw), uint32(sq.Ph)
 	if a.Chain != graph.ChainPIL || squares == 1 && pl.W == tr.tapsW && pl.H == tr.tapsH {
 		return
