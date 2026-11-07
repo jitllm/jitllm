@@ -831,13 +831,6 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 				out.Arch, li)
 		}
 	}
-	// A scale derived from the head width would be one scale per geometry,
-	// and the one field is one.
-	if out.MixedGeom() && (out.MLA() || out.Hybrid() || out.QKNormWide || out.AttnOutGate ||
-		c.AttnScale == 0 || out.QKL2Norm || out.QKVAct != nil) {
-		return nil, fmt.Errorf("model: %s: blocks of several geometries on MLA, a hybrid, a whole-"+
-			"projection q/k norm, an output gate, a clamp or a derived attention scale", out.Arch)
-	}
 	for _, k := range c.LayerKinds {
 		switch k {
 		case jlm.LayerSSD:
