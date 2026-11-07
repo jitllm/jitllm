@@ -65,6 +65,9 @@ type Decider struct {
 	probs, stats              []float32
 	// input counts the prompt tokens the last Decide ran.
 	input int
+	// one is a bidirectional prompt as its one span, kept so a warm question
+	// allocates nothing.
+	one [1]model.Span
 }
 
 // NewDecider is a Decider over in, whose model states a label readout.
@@ -220,7 +223,11 @@ func (d *Decider) answer(state jinja.Value, q *DecisionQuestion) (DecisionAnswer
 		if err != nil {
 			return DecisionAnswer{}, err
 		}
-		if err := d.pick(text); err != nil {
+		ids, err := d.encode(text)
+		if err != nil {
+			return DecisionAnswer{}, err
+		}
+		if err := d.ask(ids); err != nil {
 			return DecisionAnswer{}, err
 		}
 		// The second variant averages with the first.
@@ -260,17 +267,23 @@ func (d *Decider) answer(state jinja.Value, q *DecisionQuestion) (DecisionAnswer
 	return a, nil
 }
 
-// pick runs a prompt and leaves its label pick in vals: the head's
-// projection of the question's ids alone, on whichever device holds the
-// head.
-func (d *Decider) pick(text string) error {
+// encode is a rendered prompt's ids.
+func (d *Decider) encode(text string) ([]int32, error) {
 	ids := d.in.m.Vocab.EncodeSpecial(text, false)
 	if len(ids) == 0 {
-		return fmt.Errorf("the prompt is empty")
+		return nil, fmt.Errorf("the prompt is empty")
 	}
 	if len(ids) > d.in.MaxSeq() {
-		return fmt.Errorf("the prompt is %d tokens and this instance holds %d", len(ids), d.in.MaxSeq())
+		return nil, fmt.Errorf("the prompt is %d tokens and this instance holds %d", len(ids), d.in.MaxSeq())
 	}
+	return ids, nil
+}
+
+// ask runs a prompt's ids and leaves its label pick in vals: the head's
+// projection of the question's ids alone, on whichever device holds the
+// head. It is the engine's half of a question, which makes no heap
+// allocation once warm (TestDecisionDoesNotAllocate).
+func (d *Decider) ask(ids []int32) error {
 	s := d.in
 	s.Reset()
 	s.PickIDs, s.PickVals, s.Picked = d.ids, d.vals, false
@@ -285,7 +298,9 @@ func (d *Decider) pick(text string) error {
 	}()
 	var err error
 	if d.bidi {
-		_, err = s.PrefillMixed(model.Span{Tokens: ids, Bidir: true})
+		d.one[0] = model.Span{Tokens: ids, Bidir: true}
+		_, err = s.PrefillMixed(d.one[:]...)
+		d.one[0] = model.Span{}
 	} else {
 		_, err = s.Prefill(ids)
 	}
