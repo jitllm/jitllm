@@ -45,6 +45,8 @@ func towerStater(p jlm.Projector) func(*jlm.Source) (*jlm.Tower, error) {
 		return qwen3vlTower
 	case jlm.ProjGLM4V:
 		return glm4vTower
+	case jlm.ProjKimiVL:
+		return kimivlTower
 	}
 	return nil
 }
@@ -747,6 +749,110 @@ func glm4vTower(s *jlm.Source) (*jlm.Tower, error) {
 	}
 	if err := t.Valid(); err != nil {
 		return nil, fmt.Errorf("convert: glm4v: %w", err)
+	}
+	return t, nil
+}
+
+// Kimi-VL's processor's in_token_limit, which its mmproj does not state
+// (preprocessor_config.json).
+const kimivlTokenLimit = 4096
+
+// kimivlTower is Kimi-VL's tower as Moonshot's KimiVLImageProcessor and
+// MoonViT run it: a picture of more whole patches than the processor's
+// limit scaled down to about that many by Pillow's BICUBIC filter, then
+// padded black on the right and at the bottom to whole merge windows
+// (pad_input) and normalised; its patches in raster order through a biased
+// matrix, plus a learned square table resampled bicubic to the patch grid
+// (interpolate, align_corners false); LayerNorm blocks with a GELU-tanh MLP,
+// q and k turned in complex pairs by the 2-D rotary over the whole head --
+// pair 2j by the patch's column and 2j+1 by its row, both at theta 10000 to
+// the -4j/head (Rope2DPosEmb); the final LayerNorm; then the projector: a
+// LayerNorm on each patch, each 2x2 window's patches one row, a matrix, the
+// exact GELU and a matrix. A picture is "<|media_start|>image<|media_content|>",
+// its rows, "<|media_end|>", the rows advancing as text.
+func kimivlTower(s *jlm.Source) (*jlm.Tower, error) {
+	v := s.Vision
+	has := towerRoles(s)
+	for _, r := range []jlm.Role{jlm.RoleVPatchEmbd, jlm.RoleVPosEmbd, jlm.RoleVPostNorm, jlm.RoleVProjInNorm,
+		jlm.RoleVProj, jlm.RoleVProj2} {
+		if !has[r] {
+			return nil, fmt.Errorf("convert: kimivl: the tower has no %v", r)
+		}
+	}
+	if v.NHead == 0 || v.NEmbd%v.NHead != 0 || (v.NEmbd/v.NHead)%4 != 0 || v.PatchSize == 0 || v.Scale < 2 {
+		return nil, fmt.Errorf("convert: kimivl: %d heads over %d, patches of %d merged by %d",
+			v.NHead, v.NEmbd, v.PatchSize, v.Scale)
+	}
+	var hidden, table int32
+	for i := range s.Tensors {
+		t := &s.Tensors[i]
+		switch {
+		case t.Block == jlm.DenseBlock && t.Role == jlm.RoleVProj:
+			hidden = int32(t.Dims[1])
+		case t.Block == jlm.DenseBlock && t.Role == jlm.RoleVPosEmbd:
+			table = int32(t.Dims[1])
+		}
+	}
+	side := int32(math.Sqrt(float64(table)))
+	if side < 2 || side*side != table {
+		return nil, fmt.Errorf("convert: kimivl: a position table of %d rows is not a square grid", table)
+	}
+	act, err := v.Activation(false)
+	if err != nil {
+		return nil, err
+	}
+	bias := func(w, b jlm.Role) []jlm.Role {
+		if has[b] {
+			return []jlm.Role{w, b}
+		}
+		return []jlm.Role{w}
+	}
+	var gelu jlm.ExprBuilder
+	gelu.GELUErf(jlm.Operand(0))
+	hd := int32(v.NEmbd / v.NHead)
+	merge := int32(v.Scale)
+	var runs []jlm.TowerRopeRun
+	for j := range hd / 4 {
+		runs = append(runs, jlm.TowerRopeRun{Pairs: 1, Axis: 1, Freq: 2 * j}, jlm.TowerRopeRun{Pairs: 1, Axis: 0, Freq: 2 * j})
+	}
+	t := &jlm.Tower{
+		Version: jlm.TowerVersion,
+		Pre: []jlm.PreStep{
+			{Kind: jlm.PreLimitPad, Ints: []int32{int32(v.PatchSize), kimivlTokenLimit, int32(v.PatchSize) * merge,
+				int32(jlm.FilterPILBicubic), int32(jlm.PrecPIL)}},
+			{Kind: jlm.PreNormalize, Floats: []float32{v.Mean[0], v.Mean[1], v.Mean[2], v.Std[0], v.Std[1], v.Std[2]}},
+		},
+		// The pixels are value 0.
+		Entry: jlm.Program{NIn: 1, Out: 4, Ops: []jlm.TowerOp{
+			{Code: jlm.TOpPatchify, In: []uint16{0}, Span: int32(v.PatchSize)},
+			{Code: jlm.TOpLinear, In: []uint16{1}, Bind: bias(jlm.RoleVPatchEmbd, jlm.RoleVPatchBias)},
+			{Code: jlm.TOpPosResample, Bind: []jlm.Role{jlm.RoleVPosEmbd}, Span: side,
+				Chain: jlm.ResampleHalfPixel, Filter: jlm.TapsCubic},
+			{Code: jlm.TOpAdd, In: []uint16{2, 3}},
+		}},
+		Block: jlm.TowerBlock{NHead: v.NHead, NKVHead: v.NHead, HeadDim: v.NEmbd / v.NHead,
+			Norm: jlm.NormLayer, Eps: v.Eps, Act: act,
+			Rope: jlm.TowerRope{Base: 10000, Dim: hd, Runs: runs}},
+		// The last block's rows are value 0.
+		Head: jlm.Program{NIn: 1, Out: 6, Ops: []jlm.TowerOp{
+			{Code: jlm.TOpLayerNorm, In: []uint16{0}, Bind: bias(jlm.RoleVPostNorm, jlm.RoleVPostNormBias), Eps: v.Eps},
+			// torch's LayerNorm at the projector's epsilon.
+			{Code: jlm.TOpLayerNorm, In: []uint16{1}, Bind: bias(jlm.RoleVProjInNorm, jlm.RoleVProjInNormBias), Eps: 1e-5},
+			{Code: jlm.TOpRegroup, In: []uint16{2}, Span: merge},
+			{Code: jlm.TOpLinear, In: []uint16{3}, Bind: bias(jlm.RoleVProj, jlm.RoleVProjBias)},
+			{Code: jlm.TOpStated, In: []uint16{4}, Expr: &jlm.Expr{Terms: gelu.T}, Width: hidden},
+			{Code: jlm.TOpLinear, In: []uint16{5}, Bind: bias(jlm.RoleVProj2, jlm.RoleVProj2Bias)},
+		}},
+		Span: jlm.TowerSpan{Mark: "<|media_start|>image<|media_content|><|media_pad|><|media_end|>"},
+	}
+	if t.Span.Before, err = markerIDs(s, "<|media_start|>", "image", "<|media_content|>"); err != nil {
+		return nil, err
+	}
+	if t.Span.After, err = markerIDs(s, "<|media_end|>"); err != nil {
+		return nil, err
+	}
+	if err := t.Valid(); err != nil {
+		return nil, fmt.Errorf("convert: kimivl: %w", err)
 	}
 	return t, nil
 }

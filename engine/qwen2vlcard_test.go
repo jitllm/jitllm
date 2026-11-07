@@ -12,9 +12,10 @@ import (
 // device -- every block, then half of them with the rest on the CPU device --
 // and holds the picture's rows to the CPU device's: the blocks' grid rotary
 // read from the card's own table and, on Qwen2.5-VL's, the windowed blocks'
-// row windows (graph.Attrs.RowWindows) beside the whole-picture blocks.
+// row windows (graph.Attrs.RowWindows) beside the whole-picture blocks;
+// and Kimi-VL's, its 2-D rotary in complex pairs.
 func TestQwen2VLTowerRunsOnTheCard(t *testing.T) {
-	for _, name := range qvlTowers() {
+	for _, name := range append(qvlTowers(), "synth-kimivl") {
 		t.Run(name, func(t *testing.T) {
 			m, g, openOpts := openQVLTower(t, name)
 			defer m.Close()

@@ -75,6 +75,13 @@ const (
 	// scaled up first so that side is Ints[0], each side truncated
 	// (GLM-4V's smart_resize), 0 for none.
 	PreSmartResize PreKind = 6
+	// PreLimitPad keeps the picture at its size unless its whole Ints[0]
+	// pixel patches pass Ints[1], where both sides are scaled by
+	// sqrt(Ints[1] / patches) and truncated, with filter Ints[3] in
+	// arithmetic Ints[4]; then pads it black, before it is normalised, on
+	// the right and at the bottom to multiples of Ints[2] pixels (Kimi-VL's
+	// rescale with pad_input).
+	PreLimitPad PreKind = 7
 )
 
 // Filter is a resampling filter.
@@ -357,6 +364,11 @@ func (t *Tower) Valid() error {
 			if len(s.Ints) < 5 || len(s.Ints) > 6 || s.Ints[0] <= 0 || s.Ints[1] <= 0 || s.Ints[2] < s.Ints[1] ||
 				!resizes(Filter(s.Ints[3]), Precision(s.Ints[4])) || len(s.Ints) == 6 && s.Ints[5]&^1 != 0 {
 				return fmt.Errorf("jlm: the tower's step %d resizes to its own size with %v", i, s.Ints)
+			}
+		case PreLimitPad:
+			if len(s.Ints) != 5 || s.Ints[0] <= 0 || s.Ints[1] <= 0 || s.Ints[2] <= 0 || s.Ints[2]%s.Ints[0] != 0 ||
+				!resizes(Filter(s.Ints[3]), Precision(s.Ints[4])) {
+				return fmt.Errorf("jlm: the tower's step %d limits and pads with %v", i, s.Ints)
 			}
 		case PreTile:
 			if len(s.Ints) != 3 || s.Ints[0] < 1 || s.Ints[1] < s.Ints[0] || s.Ints[2]&^1 != 0 {

@@ -79,7 +79,7 @@ func towerPixels(t *testing.T, s *Instance, img image.Image) ([]float32, model.S
 	bd.Weights, _ = execOf(ts).Bindings().Bind(f, -1, &ts.dense.TowerDense)
 	bd.IO[0] = unsafe.Pointer(&out[0])
 	execOf(ts).Runner().Run(bd, f)
-	return out[:3*sq.Pw*sq.Ph], sq
+	return out[:3*sq.Gw*sq.Gh*P*P], sq
 }
 
 // TestQwen2VLTowerMatchesTransformers holds Qwen2-VL's stated tower to
