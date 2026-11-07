@@ -22,7 +22,8 @@ func deviceKinds() []string { return []string{"cpudev", "gpu", "cpu"} }
 // host, and no field holds a device package's concrete type -- in its own
 // declaration or in a struct of the engine's it is declared as -- where a
 // card is held through nn's faces. The violations -- a CPU-named method, a
-// field of the CPU device's executor -- are seen.
+// host-named field, a field of the CPU device's executor -- run through the
+// same check and are each seen.
 func TestTheCPUIsADevice(t *testing.T) {
 	testmodels.SourceTree(t)
 	root, err := filepath.Abs(filepath.Join("..", ".."))
@@ -30,9 +31,6 @@ func TestTheCPUIsADevice(t *testing.T) {
 		t.Fatal(err)
 	}
 	fset := token.NewFileSet()
-	types := map[string]*ast.StructType{}
-	var inst *ast.StructType
-	methods := 0
 	ps, err := filepath.Glob(filepath.Join(root, "engine", "*.go"))
 	if err != nil {
 		t.Fatal(err)
@@ -51,6 +49,42 @@ func TestTheCPUIsADevice(t *testing.T) {
 			t.Fatal(err)
 		}
 		files = append(files, f)
+	}
+	found, methods, fields := instanceFindings(fset, files)
+	if methods < 100 || fields < 50 {
+		t.Fatalf("read %d methods and %d fields of Instance: the gate read nothing", methods, fields)
+	}
+	for _, f := range found {
+		t.Error(f)
+	}
+	t.Logf("%d methods and %d fields of engine.Instance: none named for the CPU or the host, none a device's concrete type",
+		methods, fields)
+
+	const bad = `package engine
+type Instance struct {
+	hostRows []float32
+	x *cpudev.Exec
+}
+func (s *Instance) cpuChunk() {}
+`
+	vf, err := parser.ParseFile(fset, "violation.go", bad, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vs, _, _ := instanceFindings(fset, []*ast.File{vf})
+	t.Logf("violations: %d seen of 3", len(vs))
+	if len(vs) != 3 {
+		t.Fatalf("VIOLATION: a CPU-named method, a host-named field and a CPU executor field read as %d findings, want 3: %v", len(vs), vs)
+	}
+}
+
+// instanceFindings is every finding over files' engine.Instance -- a field
+// or method named for the CPU or the host, a field of a device's concrete
+// type -- and the methods and fields it read.
+func instanceFindings(fset *token.FileSet, files []*ast.File) (found []string, methods, fields int) {
+	types := map[string]*ast.StructType{}
+	var inst *ast.StructType
+	for _, f := range files {
 		for _, d := range f.Decls {
 			g, ok := d.(*ast.GenDecl)
 			if !ok {
@@ -68,9 +102,6 @@ func TestTheCPUIsADevice(t *testing.T) {
 			}
 		}
 	}
-	if inst == nil {
-		t.Fatal("no engine.Instance: the gate read nothing")
-	}
 	for _, f := range files {
 		for _, d := range f.Decls {
 			fn, ok := d.(*ast.FuncDecl)
@@ -79,28 +110,25 @@ func TestTheCPUIsADevice(t *testing.T) {
 			}
 			methods++
 			if deviceNamed(fn.Name.Name) {
-				t.Errorf("%s: method Instance.%s is named for the CPU or the host", fset.Position(fn.Pos()), fn.Name.Name)
+				found = append(found, fset.Position(fn.Pos()).String()+": method Instance."+fn.Name.Name+" is named for the CPU or the host")
 			}
 		}
 	}
-	if methods < 100 {
-		t.Fatalf("read %d methods of Instance: the gate read nothing", methods)
+	if inst == nil {
+		return found, methods, 0
 	}
-	fields := 0
 	for _, fl := range inst.Fields.List {
 		for _, n := range fl.Names {
 			fields++
 			if deviceNamed(n.Name) {
-				t.Errorf("%s: field Instance.%s is named for the CPU or the host", fset.Position(n.Pos()), n.Name)
+				found = append(found, fset.Position(n.Pos()).String()+": field Instance."+n.Name+" is named for the CPU or the host")
 			}
 			if k := concreteDevice(fl.Type, types, 0); k != "" {
-				t.Errorf("%s: field Instance.%s holds %s's concrete type, not a device face", fset.Position(n.Pos()), n.Name, k)
+				found = append(found, fset.Position(n.Pos()).String()+": field Instance."+n.Name+" holds "+k+"'s concrete type, not a device face")
 			}
 		}
 	}
-	if fields < 50 {
-		t.Fatalf("read %d fields of Instance: the gate read nothing", fields)
-	}
+	return found, methods, fields
 }
 
 func onInstance(e ast.Expr) bool {
