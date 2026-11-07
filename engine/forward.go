@@ -499,9 +499,8 @@ func kvFmtOf(t model.KVType) nn.KVFmt {
 // NewInstance composes model m for one placement -- its devices and knobs
 // opts' -- every block formed now, its sessions' histories up to maxSeq
 // positions. A CPU device opts name (WithCPU) is the caller's; without one
-// the instance opens one of its own and closes it with itself. A knob the
-// model refuses (a KV type, Config.KVTypeRefusal) or a CPU the composer
-// cannot serve is refused here, naming why.
+// the instance opens one of its own and closes it with itself. A CPU the
+// composer cannot serve is refused here, naming why.
 func NewInstance(m *model.Model, maxSeq int, opts ...Option) (*Instance, error) {
 	lo := loadOpts{opt: defaultOpts()}
 	for _, o := range opts {
@@ -512,11 +511,6 @@ func NewInstance(m *model.Model, maxSeq int, opts ...Option) (*Instance, error) 
 		return nil, err
 	}
 	lo.opt.noCPU = !listed
-	if lo.opt.kvTypeSet {
-		if err := m.Cfg.KVTypeRefusal(lo.opt.kvType); err != nil {
-			return nil, err
-		}
-	}
 	g := &engineState{fuse: lo.opt.fuse}
 	if g.fuse == nil {
 		g.fuse = &fuseCount{}
@@ -664,12 +658,6 @@ func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOp
 	// does every device here (the paged K pool is f32), so the CPU's
 	// default is f32 too; WithKVF16(true) still forces binary16.
 	if c.Selection() != nil && !opt.kvTypeSet {
-		want = nn.KVF32
-	}
-	// A forced q8 cache on a model that refuses one was refused at
-	// NewInstance (Config.KVTypeRefusal); this is the backstop for the
-	// instances it makes itself.
-	if want == nn.KVQ8 && c.KVTypeRefusal(model.KVQ8_0) != nil {
 		want = nn.KVF32
 	}
 	s.kvFmt, s.kvl.fmt = want, want

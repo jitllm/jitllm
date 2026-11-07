@@ -1372,7 +1372,7 @@ func TestKVPagesRelocateWithTheLayer(t *testing.T) {
 		for _, c := range []struct {
 			name string
 			kt   model.KVType
-		}{{"f32", model.KVF32}, {"f16", model.KVF16}} {
+		}{{"f32", model.KVF32}, {"f16", model.KVF16}, {"q8_0", model.KVQ8_0}} {
 			t.Run(name+"/"+c.name, func(t *testing.T) { kvPagesRelocateWithTheLayer(t, jlmOf(t, testmodels.Path(name)), c.kt, w) })
 		}
 	}
@@ -1388,9 +1388,6 @@ func kvPagesRelocateWithTheLayer(t *testing.T, path string, kt model.KVType, w *
 		t.Fatal(err)
 	}
 	defer m.Close()
-	if err := m.Cfg.KVTypeRefusal(kt); err != nil {
-		t.Skipf("refused by name: %v", err)
-	}
 	// A model every block of which is recurrent (plain Mamba-2) keeps no
 	// attention history at all: there is no page to carry, and its summary's
 	// relocation is TestBatchSeamMovesCarryEveryRowSSM's and
