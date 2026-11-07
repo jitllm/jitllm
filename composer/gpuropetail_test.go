@@ -38,7 +38,7 @@ func TestComposedGPURopeTail(t *testing.T) {
 						src = b.Emit(graph.OpAdd, []graph.ValueID{x, x}, []graph.Result{{Name: "x2", Width: W}}, nil, graph.Attrs{}, nil, nil)[0]
 					}
 					a := graph.Attrs{HeadDim: sh.hd, NRot: sh.nrot, Base: 10000, Layout: graph.RopeNorm, Offset: sh.hd - sh.nrot, Inverse: inv}
-					y := b.Emit(graph.OpRope, []graph.ValueID{src},[]graph.Result{{Name: "y", Width: W}}, nil, a, nil, nil)[0]
+					y := b.Emit(graph.OpRope, []graph.ValueID{src}, []graph.Result{{Name: "y", Width: W}}, nil, a, nil, nil)[0]
 					b.Out(y)
 					_, codes, err := composer.Default().Form(composer.Request{Graph: b.G, Apart: true,
 						Rotaries: []graph.Rotary{{NRot: sh.nrot, Base: 10000}},
