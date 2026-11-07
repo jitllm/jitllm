@@ -88,9 +88,6 @@ type layer struct {
 	// empty. mla is set from the plan, like linear.
 	mla                      bool
 	wqa, wqb, wkva, wkb, wvb *resident
-	// conv is a convolutional tower block's own buffers (convblock.go), nil
-	// for every other block.
-	conv *convBlock
 	// wide marks a block of several residual streams or of experts at a
 	// width of their own.
 	wide bool
@@ -1605,9 +1602,6 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 			g.sizeFrames(p.File)
 		}
 	}()
-	if p.Conv != nil {
-		return g.prepConv(li, p, w, fr, mayPage)
-	}
 	// Every placement of a block forms its composed part, a move's and a
 	// re-offer's too: a step would otherwise meet it first. Deferred first,
 	// it runs after the body's own deferred unlocks.
@@ -4990,7 +4984,7 @@ func (l *layer) auxBufs() []backend.Buf {
 	for i, v := range l.vecs {
 		vs[i] = v.buf
 	}
-	return append(append(vs,
+	return append(vs,
 		l.nAttn, l.nFFN, l.nAttnB, l.nFFNB, l.nQ, l.nK,
 		l.clampB,     // Gemma 4's tower: its clipped linears' bounds
 		l.ssmTaps.qs, // a linear block's convolution
@@ -4998,7 +4992,7 @@ func (l *layer) auxBufs() []backend.Buf {
 		l.outScale, // Gemma 4's output scalar
 		l.shadow,   // the shadow arm's state
 		l.pleOff,   // Gemma 4's per-layer embedding
-	), l.conv.bufs()...) // a convolutional block's
+	)
 }
 
 // dropLayerLocal frees the buffers PrepLayer allocates fresh for one block and
@@ -5012,7 +5006,6 @@ func (g *devTier) dropLayerLocal(l *layer) {
 			b.Free()
 		}
 	}
-	g.convLeft(l)
 	g.freeKV(l)
 	freeRec(l)
 	if n := l.recBytes; n > 0 {
@@ -5140,7 +5133,6 @@ func (g *devTier) releaseBlock(li int) {
 		}
 	}
 	g.closeNGram(l)
-	g.convLeft(l)
 	delete(g.layers, li)
 	g.layerGen++
 	g.placeGen.Add(1)
@@ -5975,9 +5967,8 @@ func planConflict(bs *blockScratch, p *nn.LayerPlan) string {
 // heads and their width, the norm kind, the rotary's width and pairing, a
 // gate buffer and the copy where a norm is missing, so a block differing in
 // one of those would run on the first one's kernels and is declined by name.
-// A convolutional tower block runs its own program and is not compared.
 func nonCausalConflict(bs *blockScratch, p *nn.LayerPlan) string {
-	if bs == nil || !p.NonCausal || p.Conv != nil || bs.p.Conv != nil {
+	if bs == nil || !p.NonCausal {
 		return ""
 	}
 	a := &bs.p

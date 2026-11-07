@@ -54,10 +54,6 @@ func (g *devTier) prewarmTower(li int) (roomless string) {
 	}
 	defer g.useGeom(g.enterGeomOf(li))
 	bs, l := g.bs, g.layers[li]
-	if l.conv != nil {
-		// Formed at its placement (prepConv).
-		return ""
-	}
 	// A windowed block forms here too: the windows a call stages
 	// (SetKeyRuns, SetRowWindows) are descriptors its form reads, not a
 	// shape it is formed for.

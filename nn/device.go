@@ -98,10 +98,6 @@ type LayerWeights struct {
 	// gate, up and down, the input's minimum and maximum and the output's;
 	// nil for a block with none.
 	Clamp []float32
-	// Conv is a convolutional tower block's vectors (LayerPlan.Conv): its
-	// norms and depthwise filters. Its matrices are Up and Down (an edge or
-	// inverted residual's two) or Wq, Wk, Wv and Wo (an attention block's).
-	Conv *ConvWeights
 
 	// AttnNormB and FFNNormB are the LayerNorm biases (LayerPlan.LayerNorm):
 	// an RMSNorm has no bias and a LayerNorm does.
@@ -768,11 +764,6 @@ type LayerPlan struct {
 	// (KeyRunDevice's full runs) and stays causal: Gemma 4's global layers,
 	// on a model whose image rows see each other on the sliding layers only.
 	BidirOff bool
-	// Conv is a convolutional tower's block (Gemma 3n's MobileNet-V5), nil
-	// for every other: its rows are positions of a grid whose shape is the
-	// block's own, and its body is convolutions, not a transformer block's.
-	// Such a block runs through ConvDevice.ConvLayers, not Layers.
-	Conv *ConvPlan
 	// ExpertWeightIn applies a mixture's routed weight to the expert's input
 	// (Llama 4), which with a SiLU expert is a different function from the
 	// output-weighted sum every other mixture runs.
@@ -1084,114 +1075,6 @@ type EmbedDevice interface {
 // own position; a row of a NonCausal call sees its whole call, or on a
 // Windowed block its window's run.
 type KeyRun struct{ Lo, Hi int }
-
-type ConvKind uint8
-
-const (
-	// ConvEdge is an edge residual: a full 3x3 convolution at Stride, a
-	// norm and GELU, a pointwise convolution and a norm.
-	ConvEdge ConvKind = iota + 1
-	// ConvInverted is a universal inverted residual: an optional depthwise
-	// start and its norm, a pointwise expansion, a norm and GELU, an
-	// optional depthwise middle with its norm and GELU, a pointwise
-	// projection and its norm.
-	ConvInverted
-	// ConvAttention is multi-query attention: a norm, Heads query heads of
-	// KD and one key and one value head of KD, each the normed input or a
-	// stride-2 depthwise downsample of it with a norm, scores at
-	// 1/sqrt(KD), then the output projection.
-	ConvAttention
-	// ConvConformer is a FastConformer block (d1-omni's audio tower): half a
-	// SiLU feed-forward, Transformer-XL relative-position attention with
-	// per-head u and v biases, the convolution module (LayerNorm, a GLU, a
-	// depthwise convolution of KMid taps centred on the row, a folded
-	// BatchNorm, SiLU, pointwise), the other half feed-forward and a
-	// LayerNorm, every norm a LayerNorm with a bias and every matrix with a
-	// bias. Rows are positions: HIn is the most a call takes, and a call of
-	// fewer rows reads only its own (the keys and the convolution stop at the
-	// call's rows). CIn is the width, CExp the feed-forward's, Heads of KD.
-	// The matrices ride the slots: Wq, Wk, Wv, Wo, Gate (linear_pos), Up and
-	// Down (the first feed-forward), ShGate (the GLU's value), ShUp and
-	// ShDown (the second feed-forward), SSM.Gate (the GLU's gate) and SSM.BA
-	// (the pointwise convolution).
-	ConvConformer
-)
-
-// ConvPlan is one convolutional block's geometry at its picture's size. Rows
-// are positions, channel-last; every convolution pads TF SAME (the smaller
-// half before the first sample), and every weight is tap-major (ky, kx, c).
-type ConvPlan struct {
-	Kind             ConvKind
-	HIn, WIn, CIn    int
-	HOut, WOut, COut int
-	// CExp is the widest intermediate: an edge or inverted residual's
-	// expansion.
-	CExp int
-	// Stride is an edge residual's full convolution's.
-	Stride int
-	// The inverted residual's depthwise filters: start (KStart 0 when it has
-	// none) over CIn writing HMid x WMid, middle (KMid 0) over CExp.
-	KStart, SStart, HMid, WMid int
-	KMid, SMid                 int
-	// Attention: Heads of KD, and the key/value downsample's filter side
-	// (KVK 0 when there is none) and the grid it writes.
-	Heads, KD     int
-	KVK, HKV, WKV int
-	// Residual adds the block's input to its output.
-	Residual bool
-	// Eps is the norms' epsilon, and ActWin the activation quantizer's amax
-	// window, which must be the host's.
-	Eps    float64
-	ActWin int
-}
-
-// ConvWeights is a convolutional block's vectors: the norms after its two
-// matrices (an attention block's Norm1 is its input norm), and its depthwise
-// filters with theirs, each filter K*K rows of channels.
-type ConvWeights struct {
-	Norm1, Norm2         []float32
-	DwStart, DwStartNorm []float32
-	DwMid, DwMidNorm     []float32
-	KDown, KDownNorm     []float32
-	VDown, VDownNorm     []float32
-	// Conformer is a ConvConformer block's vectors, nil for every other.
-	Conformer *ConformerVecs
-}
-
-// ConformerVecs is a FastConformer block's vectors: its norms and biases,
-// the attention's u and v (heads x head width), the depthwise taps
-// (tap-major), the BatchNorm folded into a scale and a shift (the depthwise
-// bias folded into the shift), and PE, the relative positions' sinusoids
-// from HIn-1 down to -(HIn-1): 2*HIn-1 rows of the width.
-type ConformerVecs struct {
-	FF1Norm, FF1NormB, FF1UpB, FF1DownB []float32
-	AttnNorm, AttnNormB                 []float32
-	QB, KB, VB, OB, U, V                []float32
-	ConvNorm, ConvNormB                 []float32
-	GLUValB, GLUGateB                   []float32
-	DW, BNScale, BNShift, PW2B          []float32
-	FF2Norm, FF2NormB, FF2UpB, FF2DownB []float32
-	OutNorm, OutNormB                   []float32
-	PE                                  []float32
-}
-
-// List is the vectors in a fixed order, the tier's.
-func (c *ConformerVecs) List() [27][]float32 {
-	return [27][]float32{c.FF1Norm, c.FF1NormB, c.FF1UpB, c.FF1DownB, c.AttnNorm, c.AttnNormB,
-		c.QB, c.KB, c.VB, c.OB, c.U, c.V, c.ConvNorm, c.ConvNormB, c.GLUValB, c.GLUGateB,
-		c.DW, c.BNScale, c.BNShift, c.PW2B, c.FF2Norm, c.FF2NormB, c.FF2UpB, c.FF2DownB,
-		c.OutNorm, c.OutNormB, c.PE}
-}
-
-// ConvDevice is a LayerDevice that runs a convolutional tower's blocks.
-// ConvLayers runs blocks [lo, hi) as one submission: x is block lo's input
-// (its plan's HIn*WIn*CIn floats), out receives block hi-1's output, and when
-// tap is a block of the range tapOut receives that block's output too (the
-// fusion adapter's first input). False with nothing run is a device that does
-// not hold the range.
-type ConvDevice interface {
-	ConvLayers(lo, hi int, x, out []float32, tap int, tapOut []float32) bool
-}
 
 // GridCellsDevice is an optional LayerDevice that computes a non-causal
 // call's rotary table itself, from each row's cell of a grid (the plan's
