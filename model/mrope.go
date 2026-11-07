@@ -42,7 +42,7 @@ func (g ImageGrid) Zero() bool { return g == ImageGrid{} }
 
 // mropeSections is the container's M-RoPE split: contiguous runs of pairs for
 // Qwen2-VL, Qwen2.5-VL and GLM-4.xV, an interleaved split for Qwen3-VL and
-// Qwen3.5 (jlm.Arch.InterleavedMRope, Config.RopeInterleaved). A container
+// Qwen3.5 (jlm.FlagRopeInterleaved, Config.RopeInterleaved). A container
 // with no sections has none.
 func mropeSections(c *jlm.Config) (out [4]int) {
 	for i, v := range c.RopeSections {

@@ -95,10 +95,10 @@ type Config struct {
 	RopeSections [4]int
 
 	// RopeInterleaved says the sections are Qwen3-VL's interleaved split
-	// (nn.IMRopeRuns), not contiguous runs (jlm.Arch.InterleavedMRope).
+	// (nn.IMRopeRuns), not contiguous runs (jlm.FlagRopeInterleaved).
 	RopeInterleaved bool
 
-	// RopeXD is HunyuanVL's XD-RoPE (jlm.Arch.XDRope): four axes assigned per
+	// RopeXD is HunyuanVL's XD-RoPE (jlm.FlagRopeXD): four axes assigned per
 	// element, so a row's table is two pair tables, A for each NEOX pair's
 	// first half and B for its second (RopeW floats), the rotation
 	// graph.RopeSplit, and k's norm after it as q's is.
@@ -1255,8 +1255,8 @@ func Open(path string, options ...Option) (*Model, error) {
 		return nil, err
 	}
 	// Sliding layers with a scaled rotary or beside a tower read what a
-	// container written before StatementRevision does not state.
-	if c := m.Container.Config(); c.Revision < jlm.StatementRevision && c.SWAWindow > 0 &&
+	// container written before revision 2 does not state.
+	if c := m.Container.Config(); c.Revision < 2 && c.SWAWindow > 0 &&
 		(c.YarnFactor > 1 || m.Container.Vision() != nil) {
 		m.Close()
 		return nil, &UpgradeRequiredError{Path: path, What: "sliding layers"}
@@ -1266,6 +1266,12 @@ func Open(path string, options ...Option) (*Model, error) {
 	if c := m.Container.Config(); c.Revision < 2 && m.storesAny(jlm.RoleAttnSubNorm, jlm.RoleFFNSubNorm) {
 		m.Close()
 		return nil, &UpgradeRequiredError{Path: path, What: "activation quantization"}
+	}
+	// Rotary sections are laid out as the flags a container written before
+	// revision 3 does not state.
+	if c := m.Container.Config(); c.Revision < 3 && c.RopeSections != [4]uint32{} {
+		m.Close()
+		return nil, &UpgradeRequiredError{Path: path, What: "rotary layout"}
 	}
 	return m, nil
 }
@@ -2596,13 +2602,13 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 	if m.OutNormB != nil && !cfg.LayerNorm {
 		return nil, fmt.Errorf("model: %s: a norm bias on an RMSNorm model", cfg.Arch)
 	}
-	cfg.RopeInterleaved = c.Config().Arch.InterleavedMRope()
+	cfg.RopeInterleaved = c.Config().Flags.Has(jlm.FlagRopeInterleaved)
 	m.Rope = nn.Rope{NRot: cfg.NRot, Base: cfg.RopeBase, Neox: cfg.RopeNeox,
 		Scale: cfg.AttnFactor, Runs: nn.MRopeRuns(cfg.RopeSections[:])}
 	if cfg.RopeInterleaved && len(m.Rope.Runs) > 0 {
 		m.Rope.Runs = nn.IMRopeRuns(cfg.RopeSections[:], cfg.NRot/2)
 	}
-	if cfg.RopeXD = c.Config().Arch.XDRope(); cfg.RopeXD {
+	if cfg.RopeXD = c.Config().Flags.Has(jlm.FlagRopeXD); cfg.RopeXD {
 		// The converter states XD-RoPE over the whole head with NEOX pairs, as
 		// transformers turns it (convert.hunyuanVLConfig).
 		m.Rope.Runs, _ = nn.XDRopeRuns(cfg.RopeSections[:], cfg.NRot/2)

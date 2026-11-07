@@ -1067,6 +1067,13 @@ const (
 	// image_resize_algo, which d1's file states and LFM2-VL's older files do
 	// not. A vision-section flag; no text model sets it.
 	FlagVisionBicubic Flags = 1 << 28
+	// FlagRopeInterleaved says the M-RoPE sections are interleaved over a
+	// head's pairs (Qwen3-VL's split) rather than laid out as contiguous runs.
+	// Stated from revision 3.
+	FlagRopeInterleaved Flags = 1 << 29
+	// FlagRopeXD says the M-RoPE assigns its axes per element of the rotary
+	// rather than per pair (HunyuanVL's XD-RoPE). Stated from revision 3.
+	FlagRopeXD Flags = 1 << 30
 )
 
 // Pooling is the embedding readout the flags describe, or PoolNone for a model
@@ -1293,7 +1300,7 @@ func (c *Config) GLU() GLU {
 // StatementRevision is the revision of what this converter states: a
 // container written at an older one is upgraded (jitllm upgrade) where the
 // later statements matter to it.
-const StatementRevision = 2
+const StatementRevision = 3
 
 // ActQuant is a model's activation quantization.
 type ActQuant uint8

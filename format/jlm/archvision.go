@@ -69,18 +69,6 @@ func visionArchName(a Arch) (string, bool) {
 	return "", false
 }
 
-// XDRope reports whether a's M-RoPE assigns its axes per element of the
-// rotary rather than per pair (ArchHunyuanVL).
-func (a Arch) XDRope() bool { return a == ArchHunyuanVL }
-
-// InterleavedMRope reports whether a's M-RoPE sections are interleaved over
-// a head's pairs rather than laid out as contiguous runs (ArchQwen2VL's).
-// Qwen3.5 (ArchQwen3Next with sections) is Qwen3-VL's split under its own
-// tower; qwen3next itself carries no sections and has no runs.
-func (a Arch) InterleavedMRope() bool {
-	return a == ArchQwen3VL || a == ArchQwen3VLMoE || a == ArchQwen3Next || a == ArchQwen4Exp
-}
-
 const (
 	// ProjQwen3VL is the "qwen3vl_merger": Qwen2-VL's 2x2 merger (a
 	// LayerNorm with a bias over each patch row, the shuffle, linear, GELU,
