@@ -47,6 +47,9 @@ type Session struct {
 	// embeddings, or DeepSeek V4's hash blocks, read where the prefill has no
 	// ids. nil outside one.
 	spanTok []int32
+	// srcTok is the row source's tokens of the mixed prompt being prefilled
+	// (spanSrc), kept from prompt to prompt.
+	srcTok []int32
 	// kvSkipped is what the last PrefillCached restored rather than computed.
 	kvSkipped int
 	// promptRows counts the prompt rows this session ran through its blocks,

@@ -177,7 +177,10 @@ func (s *Instance) spanSrc(spans []model.Span) (rowSrc, error) {
 	if total == 0 {
 		return rowSrc{}, errEmptyPrompt{}
 	}
-	src := rowSrc{tok: make([]int32, 0, total)}
+	if cap(s.srcTok) < total {
+		s.srcTok = make([]int32, 0, total)
+	}
+	src := rowSrc{tok: s.srcTok[:0]}
 	for _, sp := range spans {
 		if sp.Embd != nil {
 			src.given = append(src.given, givenRun{at: len(src.tok), rows: sp.Embd, deep: sp.Deep, n: len(sp.Embd) / c.NEmbd})
