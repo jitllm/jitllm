@@ -188,7 +188,7 @@ func (g *devTier) prepEmbed(bs *blockScratch, h *nn.Head) {
 		bs.embSW[role] = r
 	}
 	for role, v := range p.Vectors {
-		b, err := g.rowsVector(role, v)
+		b, err := g.rowsVector(p.Graph.Block, role, v)
 		if err != nil {
 			g.LastErr = fmt.Sprintf("the input rows' %v: %v", role, err)
 			bs.embWhy = partNoRoom

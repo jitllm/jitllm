@@ -7,6 +7,7 @@ import (
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/nn"
 )
 
@@ -21,11 +22,16 @@ import (
 // them, the buffers a call binds, and the call a submission runs.
 type rowsState struct {
 	w map[resKey]*resident
-	v map[jlm.Role]backend.Buf
+	v map[rowsVec]backend.Buf
 	// in, out, req and pos are a call's rows, its request and its
 	// positions, each of size bytes.
 	in, out, req, pos     backend.Buf
 	inN, outN, reqN, posN int
+	// call is the call's live rows, its one word written from callW at every
+	// call (composer.TableCall).
+	call                  backend.Buf
+	callN                 int
+	callW                 [1]uint32
 	sv                    *servedPart
 	inB, outB, reqB, posB []byte
 	err                   error
@@ -56,7 +62,7 @@ func (g *GPU) RunRows(p *nn.RowsPart, live int, req, pos []uint32, in, out []flo
 // runRows is RunRows in session sid's view of the card.
 func (g *GPU) runRows(sid uint64, p *nn.RowsPart, live int, req, pos []uint32, in, out []float32) bool {
 	g.mu.Lock()
-	d := g.tail()
+	d := g.rowsTier()
 	g.mu.Unlock()
 	if d == nil {
 		return false
@@ -84,7 +90,7 @@ func (g *GPU) PrepRows(p *nn.RowsPart) bool {
 // prepRows is PrepRows in session sid's view of the card.
 func (g *GPU) prepRows(sid uint64, p *nn.RowsPart) bool {
 	g.mu.Lock()
-	d := g.tail()
+	d := g.rowsTier()
 	g.mu.Unlock()
 	if d == nil {
 		return false
@@ -117,11 +123,20 @@ func (g *devTier) PrepRows(p *nn.RowsPart) bool {
 	}
 	gr := p.Graph
 	inW, outW := gr.Values[gr.In[0]].Width, gr.Values[gr.Out[0]].Width
-	if err := g.rowsBufs(4*p.Rows*inW, 4*p.Rows*outW, 4*(composer.RequestRows+p.Rows), 4*(p.Rows+1)); err != nil {
+	if err := g.rowsBufs(4*p.Rows*inW, 4*max(p.Rows, outRows(p, p.Rows))*outW, 4*(composer.RequestRows+p.Rows), 4*(p.Rows+1)); err != nil {
 		g.LastErr = "the composed picture rows: " + err.Error()
 		return false
 	}
 	return true
+}
+
+// outRows is the rows p writes over live rows: its output's own where the
+// graph states a grid of them, else live.
+func outRows(p *nn.RowsPart, live int) int {
+	if r := p.Graph.Values[p.Graph.Out[0]].Rows; r > 0 {
+		return r
+	}
+	return live
 }
 
 // RunRows is GPU.RunRows on this card.
@@ -136,21 +151,23 @@ func (g *devTier) RunRows(p *nn.RowsPart, live int, req, pos []uint32, in, out [
 		return false
 	}
 	gr := p.Graph
-	if live > p.Rows || len(in) > p.Rows*gr.Values[gr.In[0]].Width || len(out) < live*gr.Values[gr.Out[0]].Width {
+	on := outRows(p, live)
+	if live > p.Rows || len(in) > p.Rows*gr.Values[gr.In[0]].Width || len(out) < on*gr.Values[gr.Out[0]].Width {
 		g.LastErr = fmt.Sprintf("the composed picture rows: %d live rows past the %d the form holds", live, p.Rows)
 		g.Steps.Decline(nn.PartRows, partCaller)
 		return false
 	}
 	rs := &g.rows
 	inW, outW := gr.Values[gr.In[0]].Width, gr.Values[gr.Out[0]].Width
-	if err := g.rowsBufs(4*p.Rows*inW, 4*p.Rows*outW, 4*(composer.RequestRows+p.Rows), 4*(p.Rows+1)); err != nil {
+	if err := g.rowsBufs(4*p.Rows*inW, 4*max(p.Rows, on)*outW, 4*(composer.RequestRows+p.Rows), 4*(p.Rows+1)); err != nil {
 		g.LastErr = "the composed picture rows: " + err.Error()
 		g.Steps.Decline(nn.PartRows, partNoRoom)
 		return false
 	}
 	rs.sv = sv
-	rs.inB, rs.outB = f32b(in), f32b(out[:live*outW])
+	rs.inB, rs.outB = f32b(in), f32b(out[:on*outW])
 	rs.reqB, rs.posB = u32b(req), u32b(pos)
+	rs.callW[0] = uint32(live)
 	rs.err = nil
 	rs.lc = launcher{to: &rs.to, err: &rs.err}
 	rs.at = g
@@ -187,6 +204,9 @@ func (g *devTier) rowsSession(s backend.Session) {
 			return
 		}
 	}
+	if rs.err = s.Write(rs.call, u32b(rs.callW[:])); rs.err != nil {
+		return
+	}
 	rs.to.s = s
 	defer rs.to.leave()
 	rs.ins[0], rs.outs[0] = rs.in, rs.out
@@ -205,7 +225,7 @@ func (g *devTier) rowsBufs(in, out, req, pos int) error {
 		buf  *backend.Buf
 		n    *int
 		want int
-	}{{&rs.in, &rs.inN, in}, {&rs.out, &rs.outN, out}, {&rs.req, &rs.reqN, req}, {&rs.pos, &rs.posN, pos}} {
+	}{{&rs.in, &rs.inN, in}, {&rs.out, &rs.outN, out}, {&rs.req, &rs.reqN, req}, {&rs.pos, &rs.posN, pos}, {&rs.call, &rs.callN, 4}} {
 		if *b.buf != nil && *b.n >= b.want {
 			continue
 		}
@@ -228,6 +248,7 @@ func (g *devTier) servedRows(p *nn.RowsPart) (*servedPart, error) {
 	sk := servedKey{kind: nn.PartRows, graph: p.Graph, rows: p.Rows}
 	if sv := g.served[sk]; sv != nil && rs.req != nil {
 		sv.sl.tables[tableKey(composer.TableRequest)], sv.sl.tables[tableKey(composer.TablePos)] = rs.req, rs.pos
+		sv.sl.tables[tableKey(composer.TableCall)] = rs.call
 		return sv, nil
 	}
 	formats := map[jlm.Role]jlm.Type{}
@@ -248,11 +269,18 @@ func (g *devTier) servedRows(p *nn.RowsPart) (*servedPart, error) {
 			if !ok || len(v) == 0 {
 				return nil, fmt.Errorf("the rows read %v, which the model hands no tensor of", b.Role)
 			}
-			buf, err := g.rowsVector(b.Role, v)
+			buf, err := g.rowsVector(p.Graph.Block, b.Role, v)
 			if err != nil {
 				return nil, fmt.Errorf("%v: %w", b.Role, err)
 			}
 			formats[b.Role], vectors[b.Role] = jlm.TypeF32, buf
+			if b.Rows > 1 && b.K > 0 && len(v) == b.Rows*b.K {
+				r, err := g.rowsWeight(p.File, nn.Weight{T: quant.F32, Data: f32b(v), Rows: b.Rows, K: b.K})
+				if err != nil {
+					return nil, fmt.Errorf("%v: %w", b.Role, err)
+				}
+				weights[b.Role] = r
+			}
 		}
 	}
 	if err := g.rowsBufs(4, 4, 4*(composer.RequestRows+p.Rows), 4*(p.Rows+1)); err != nil {
@@ -260,12 +288,14 @@ func (g *devTier) servedRows(p *nn.RowsPart) (*servedPart, error) {
 	}
 	sv, err := g.servedFor(sk, func() (composedPart, error) {
 		return composedPart{kind: nn.PartRows, graph: p.Graph, formats: formats, weights: weights, vectors: vectors, apart: true,
-			tables: map[composer.TableKey]backend.Buf{tableKey(composer.TableRequest): rs.req, tableKey(composer.TablePos): rs.pos}}, nil
+			tables: map[composer.TableKey]backend.Buf{tableKey(composer.TableRequest): rs.req, tableKey(composer.TablePos): rs.pos,
+				tableKey(composer.TableCall): rs.call}}, nil
 	})
 	if err != nil {
 		return nil, err
 	}
 	sv.sl.tables[tableKey(composer.TableRequest)], sv.sl.tables[tableKey(composer.TablePos)] = rs.req, rs.pos
+	sv.sl.tables[tableKey(composer.TableCall)] = rs.call
 	return sv, nil
 }
 
@@ -277,7 +307,7 @@ func (g *devTier) rowsWeight(f *jlm.File, w nn.Weight) (*resident, error) {
 	if len(data) == 0 && w.Packed != nil {
 		data = w.Packed.QS
 	}
-	if len(data) == 0 {
+	if len(data) == 0 && w.Entry == nil {
 		return nil, fmt.Errorf("no bytes")
 	}
 	q, ok := quantOf(w.T)
@@ -291,7 +321,14 @@ func (g *devTier) rowsWeight(f *jlm.File, w nn.Weight) (*resident, error) {
 	if _, ok := jlmType(q); !ok {
 		return nil, fmt.Errorf("format %v has no container type", w.T)
 	}
-	if w.Entry != nil {
+	if w.Entry != nil && f != nil && !f.InDense(w.Entry) {
+		own, release, err := g.blockWeight(f, w)
+		if err != nil {
+			return nil, err
+		}
+		defer release()
+		w, data = own, own.Data
+	} else if w.Entry != nil {
 		own, release, err := g.ownWeight(f, w)
 		if err != nil {
 			return nil, err
@@ -313,13 +350,21 @@ func (g *devTier) rowsWeight(f *jlm.File, w nn.Weight) (*resident, error) {
 	return r, nil
 }
 
-// rowsVector is the model's vector under r, v, uploaded for the rows once
-// while the model holds the card: by its role, which names one vector of
-// the model, never by v's address, which a later instance's vector may
-// take once this one's is gone.
-func (g *devTier) rowsVector(r jlm.Role, v []float32) (backend.Buf, error) {
+// rowsVec names a vector of the model: its block's and its role, the role
+// alone naming one in every block of a chained tower.
+type rowsVec struct {
+	block int
+	role  jlm.Role
+}
+
+// rowsVector is the model's vector of block li under r, v, uploaded for the
+// rows once while the model holds the card: by its block and role, which
+// name one vector of the model, never by v's address, which a later
+// instance's vector may take once this one's is gone.
+func (g *devTier) rowsVector(li int, r jlm.Role, v []float32) (backend.Buf, error) {
 	rs := &g.rows
-	if b, ok := rs.v[r]; ok {
+	key := rowsVec{li, r}
+	if b, ok := rs.v[key]; ok {
 		return b, nil
 	}
 	b, err := g.allocBytes(unsafe.Slice((*byte)(unsafe.Pointer(&v[0])), 4*len(v)))
@@ -327,9 +372,9 @@ func (g *devTier) rowsVector(r jlm.Role, v []float32) (backend.Buf, error) {
 		return nil, err
 	}
 	if rs.v == nil {
-		rs.v = map[jlm.Role]backend.Buf{}
+		rs.v = map[rowsVec]backend.Buf{}
 	}
-	rs.v[r] = b
+	rs.v[key] = b
 	return b, nil
 }
 
@@ -355,7 +400,7 @@ func (g *devTier) releaseRows() {
 // the residents' (freed with them).
 func (g *devTier) closeRows() {
 	rs := &g.rows
-	for _, b := range [...]*backend.Buf{&rs.in, &rs.out, &rs.req, &rs.pos, &rs.coll} {
+	for _, b := range [...]*backend.Buf{&rs.in, &rs.out, &rs.req, &rs.pos, &rs.call, &rs.coll} {
 		if *b != nil {
 			(*b).Free()
 			*b = nil
@@ -366,4 +411,52 @@ func (g *devTier) closeRows() {
 		delete(rs.v, k)
 	}
 	clear(rs.w)
+}
+
+// rowsTier is the card a rows part runs on: the one holding the highest
+// block, or the first the GPU holds where no block is placed (a chained
+// tower's blocks run as parts). Callers hold g.mu.
+func (g *GPU) rowsTier() *devTier {
+	if d := g.tail(); d != nil {
+		return d
+	}
+	if len(g.devs) > 0 {
+		return g.devs[0]
+	}
+	return nil
+}
+
+// blockWeight is w, an entry of a block's page in f, read into this card's
+// frames over f: the page held while the upload copies its planes, which
+// release lets go.
+func (g *devTier) blockWeight(f *jlm.File, w nn.Weight) (nn.Weight, func(), error) {
+	fr, err := g.framesOf(f)
+	if err != nil {
+		return w, nil, err
+	}
+	e := w.Entry
+	qn, dn, sn := f.SpanLen(e)
+	var rs []jlm.Range
+	for _, r := range [...]jlm.Range{{Off: e.QSOff, N: qn}, {Off: e.DOff, N: dn}, {Off: e.SCOff, N: sn}} {
+		if r.N != 0 {
+			rs = append(rs, r)
+		}
+	}
+	l, err := fr.Hold(f.BlockOf(e), rs)
+	if err != nil {
+		return w, nil, err
+	}
+	qs, d, sc := fr.Span(w.Entry)
+	if len(qs) == 0 {
+		l.Release()
+		return w, nil, fmt.Errorf("reading the block's entry into the card's frames failed")
+	}
+	w.Data = qs
+	p := nn.Packed{}
+	if w.Packed != nil {
+		p = *w.Packed
+	}
+	p.QS, p.D, p.SC = qs, d, sc
+	w.Packed = &p
+	return w, l.Release, nil
 }
