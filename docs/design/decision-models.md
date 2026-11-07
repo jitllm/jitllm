@@ -295,6 +295,31 @@ Order, by what each unlocks (coordinator's priorities):
 
 ## 9. What was built, and the gates
 
+**As it stands.** The per-family readouts below were deleted as family code
+(the engine branched on the decision kind). The label readouts came back as
+container data and one composed part: the converter states each kind's
+rules in `jlm.DecisionLabels` (codes and fallbacks, the token groups that
+score an option, the order options are shown in, a reversed second asking,
+sorted keys, the id for absent instructions, the entropy confidence, the
+sorted legend), and `engine.Decider` reads that record alone. Everything
+after the label pick is `graph.DecisionScores`, formed with the head's parts
+when the instance is made: the group max, the temperature, the softmax over
+the question's options, the mean with a reversed variant, and the answers'
+statistics and confidences. `jitllm decide` and `POST /v1/systemone` answer
+through it. Gates: `engine.TestDecisionMatchesLlamaCpp` (d1, Lev, OpenJev,
+vllm-d3 on both requests and both KV caches, the calibration rewritten as
+its violation), `TestDecisionResponseMatchesLlamaCpp`,
+`server.TestSystemOneMatchesTheEngine`, `composer.TestComposedCPUDecisionScores`,
+and the principle gates `TestDecisionPagesWithTheSameAnswer`,
+`TestDecisionDoesNotAllocate`, `TestDecisionRelocatesMidPrompt`,
+`TestDecisionMovesBetweenCards`.
+
+Not back yet, named: Laya's marker head and scorer (its sequence rules --
+the per-piece cuts, Python's repr of a description -- become container
+data first), Clef's joint span head, Kev's pointer head, d1-omni's readout,
+pictures in a decision request, a decision's prefix sharing and its batches.
+The table below is the evidence of what the deleted readouts measured.
+
 | model | readout | gates | against the reference | against llama.cpp b11514 |
 |---|---|---|---|---|
 | d1-3B (Q8_0) | label logits, lfm2 | `TestDecisionMatchesLlamaCpp`, `TestDecisionReadoutIsLoadBearing` (noul shown true first) | not run: the reference is transformers remote code (>=5.14) and was not run here | worst probability 0.021 (f16 kv, llama.cpp's own), 0.020 (f32 kv); prompts token for token |
