@@ -534,11 +534,15 @@ func (c *Config) MaxHeadDim() int {
 }
 
 // KVShared reports that block li computes no k and v of its own and attends
-// to KVSource(li)'s history (Gemma 4's E2B/E4B).
-func (c *Config) KVShared(li int) bool { return c.NKVShared != 0 && li >= c.NLayer-c.NKVShared }
+// to KVSource(li)'s history (Gemma 4's E2B/E4B). A recurrent block in the
+// shared run keeps no history and is its own.
+func (c *Config) KVShared(li int) bool {
+	return c.NKVShared != 0 && li >= c.NLayer-c.NKVShared && c.LayerKind(li).Attends()
+}
 
 // KVSource is the block whose history block li attends to: li itself, or for
 // a KV-sharing block the last block before the shared run of li's own kind
+// that attends -- a hybrid's recurrent blocks keep no history
 // (jlm.Config.KVSource). -1 when there is none, which load refuses.
 func (c *Config) KVSource(li int) int {
 	if !c.KVShared(li) {
@@ -548,7 +552,7 @@ func (c *Config) KVSource(li int) int {
 		return c.KvSrcAt[li]
 	}
 	for j := c.NLayer - c.NKVShared - 1; j >= 0; j-- {
-		if c.SWA(j) == c.SWA(li) {
+		if c.SWA(j) == c.SWA(li) && c.LayerKind(j).Attends() {
 			return j
 		}
 	}
@@ -820,10 +824,6 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 		s.Groups != 1 && s.Groups != uint32(out.NKVHead) || out.MixedGeom() || out.NKVShared != 0) {
 		return nil, fmt.Errorf("model: %s: a selection of %d keys %d wide over %d kv heads of %d", out.Arch,
 			s.Groups, s.KeyWidth, out.NKVHead, out.HeadDim)
-	}
-	if (out.NKVShared != 0 || out.PLEDim != 0) && (out.MLA() || out.Hybrid() || out.MoE()) {
-		return nil, fmt.Errorf("model: %s: KV sharing or per-layer embeddings on MLA, a hybrid "+
-			"or a mixture", out.Arch)
 	}
 	for li := out.NLayer - out.NKVShared; li < out.NLayer; li++ {
 		if out.KVSource(li) < 0 {
