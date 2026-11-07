@@ -94,9 +94,9 @@ type LayerWeights struct {
 	// QNorm and KNorm are head_dim wide and nil unless the architecture
 	// RMSNorms each head of q and k before RoPE (qwen3).
 	QNorm, KNorm []float32
-	// Clamp is a block's clipped-linear bounds (LayerPlan.Clamps), 28 floats:
-	// for q, k, v, o, gate, up and down, the input's minimum and maximum and
-	// the output's. nil everywhere else.
+	// Clamp is a block's clipped-linear bounds, 28 floats: for q, k, v, o,
+	// gate, up and down, the input's minimum and maximum and the output's;
+	// nil for a block with none.
 	Clamp []float32
 	// Conv is a convolutional tower block's vectors (LayerPlan.Conv): its
 	// norms and depthwise filters. Its matrices are Up and Down (an edge or
@@ -768,9 +768,6 @@ type LayerPlan struct {
 	// (KeyRunDevice's full runs) and stays causal: Gemma 4's global layers,
 	// on a model whose image rows see each other on the sliding layers only.
 	BidirOff bool
-	// Clamps says every matrix's input and output is clamped to bounds the
-	// block carries (LayerWeights.Clamp): Gemma 4's clipped linears.
-	Clamps bool
 	// Conv is a convolutional tower's block (Gemma 3n's MobileNet-V5), nil
 	// for every other: its rows are positions of a grid whose shape is the
 	// block's own, and its body is convolutions, not a transformer block's.

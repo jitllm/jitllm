@@ -339,7 +339,7 @@ func gridRowsOf(g *graph.Graph, o graph.Op) int {
 // TestComposedGPUGridAttend).
 func gridRowWise(o graph.Op) bool {
 	switch o.Kind {
-	case graph.OpNorm, graph.OpLayerNorm, graph.OpAdd, graph.OpExpr, graph.OpKVAppend:
+	case graph.OpNorm, graph.OpLayerNorm, graph.OpHeadNorm, graph.OpAdd, graph.OpExpr, graph.OpMap, graph.OpKVAppend:
 		return true
 	case graph.OpMatVec:
 		return len(o.In) == 1

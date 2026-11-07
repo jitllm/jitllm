@@ -142,6 +142,12 @@ func (m *Model) bindTower(c *jlm.File) error {
 			if err != nil {
 				return err
 			}
+			if e.Role == jlm.RoleVClamp {
+				// The block's named vector (Layer.NamedVector), as every
+				// device reads it.
+				l.Clamp = x
+				continue
+			}
 			l.Vecs = append(l.Vecs, nn.RoleVector{Role: e.Role, V: x})
 			continue
 		}
@@ -180,7 +186,12 @@ func (m *Model) towerTapFacts(b int32) graph.Facts {
 		}
 		s := graph.Shape{K: e.K()}
 		if e.NDim >= 2 && !squeezed(e) {
-			s.Rows = e.Rows()
+			// Every trailing dimension's rows, as the tensor's load counts
+			// them: a stack of tables is its tables' rows back to back.
+			s.Rows = 1
+			for d := 1; d < int(e.NDim); d++ {
+				s.Rows *= int(e.Dims[d])
+			}
 		}
 		inv[e.Role] = s
 	}
@@ -247,7 +258,12 @@ func (m *Model) TowerFacts(b int32) graph.Facts {
 		}
 		s := graph.Shape{K: e.K()}
 		if e.NDim >= 2 && !squeezed(e) {
-			s.Rows = e.Rows()
+			// Every trailing dimension's rows, as the tensor's load counts
+			// them: a stack of tables is its tables' rows back to back.
+			s.Rows = 1
+			for d := 1; d < int(e.NDim); d++ {
+				s.Rows *= int(e.Dims[d])
+			}
 		}
 		inv[e.Role] = s
 	}
@@ -391,6 +407,34 @@ type PictureFit struct {
 	// pixels, each side then rounded up to a whole CapUnit (jlm.PreCapUnit);
 	// Cap 0 where there is none.
 	Cap, CapUnit int
+	// Budget, BudgetPatch and BudgetUnit are a resize to the largest size
+	// of the picture's aspect within Budget patches of BudgetPatch pixels,
+	// each side whole BudgetUnits (jlm.PreAspectBudget); Budget 0 where
+	// there is none.
+	Budget, BudgetPatch, BudgetUnit int
+}
+
+// budgetSize is a w x h picture's size within the patch budget (Gemma 4's
+// get_aspect_ratio_preserving_size): both sides scaled by
+// sqrt(budget area / area) and floored to whole units; a side that floors
+// to nothing one unit and the other the aspect's whole multiple of it, at
+// most the budget's units a row -- in float64, as Python computes them.
+func (f PictureFit) budgetSize(w, h int) (int, int) {
+	p, u := f.BudgetPatch, f.BudgetUnit
+	s := math.Sqrt(float64(f.Budget*p*p) / (float64(h) * float64(w)))
+	th := int(math.Floor(s*float64(h)/float64(u))) * u
+	tw := int(math.Floor(s*float64(w)/float64(u))) * u
+	g := u / p
+	most := (f.Budget / (g * g)) * u
+	switch {
+	case th == 0 && tw == 0:
+		th, tw = u, u
+	case th == 0:
+		th, tw = u, min(int(math.Floor(float64(w)/float64(h)))*u, most)
+	case tw == 0:
+		tw, th = u, min(int(math.Floor(float64(h)/float64(w)))*u, most)
+	}
+	return tw, th
 }
 
 // capSize is a w x h picture's size under the cap (PixtralImageProcessor's
@@ -413,7 +457,7 @@ func (f PictureFit) boxSize(w, h int) (int, int) {
 }
 
 // Own reports that a picture is encoded at a size of its own.
-func (f PictureFit) Own() bool { return f.Factor > 0 || f.Limit > 0 || f.Cap > 0 }
+func (f PictureFit) Own() bool { return f.Factor > 0 || f.Limit > 0 || f.Cap > 0 || f.Budget > 0 }
 
 // unit is the multiple a picture of its own size's encoded sides are.
 func (f PictureFit) unit() int {
@@ -422,6 +466,8 @@ func (f PictureFit) unit() int {
 		return f.Pad
 	case f.Cap > 0:
 		return f.CapUnit
+	case f.Budget > 0:
+		return f.BudgetUnit
 	}
 	return f.Factor
 }
@@ -526,6 +572,11 @@ func towerFit(t *jlm.Tower) (PictureFit, error) {
 			fit.Factor, fit.MinPix, fit.MaxPix = int(s.Ints[0]), int(s.Ints[1]), int(s.Ints[2])
 			fit.lift = len(s.Ints) == 6 && s.Ints[5] == 1
 			sized, pil = true, jlm.Filter(s.Ints[3]) != jlm.FilterTwoTap
+		case jlm.PreAspectBudget:
+			fit.Budget, fit.BudgetPatch, fit.BudgetUnit = int(s.Ints[0]), int(s.Ints[1]), int(s.Ints[2])
+			// The area the reduction reaches: the budget's.
+			fit.MaxPix = fit.Budget * fit.BudgetPatch * fit.BudgetPatch
+			sized, pil = true, jlm.Filter(s.Ints[3]) != jlm.FilterTwoTap
 		case jlm.PreCapUnit:
 			fit.Cap, fit.CapUnit = int(s.Ints[0]), int(s.Ints[1])
 			// The area the reduction reaches: the cap's, rounded up a unit.
@@ -553,7 +604,7 @@ func towerFit(t *jlm.Tower) (PictureFit, error) {
 		}
 	}
 	ways := 0
-	for _, w := range []bool{fit.Short > 0, fit.MaxTiles > 0, fit.Factor > 0, fit.Limit > 0, fit.Box > 0, fit.Cap > 0} {
+	for _, w := range []bool{fit.Short > 0, fit.MaxTiles > 0, fit.Factor > 0, fit.Limit > 0, fit.Box > 0, fit.Cap > 0, fit.Budget > 0} {
 		if w {
 			ways++
 		}
@@ -593,6 +644,11 @@ func towerEntry(t *jlm.Tower, px uint8, grid, lead, side int, fit PictureFit, f 
 				return nil, err
 			}
 		case jlm.PreSmartResize:
+			a.PicW, a.PicH, a.PicLive = side, side, true
+			if err := resizeChain(&a, jlm.Filter(s.Ints[3])); err != nil {
+				return nil, err
+			}
+		case jlm.PreAspectBudget:
 			a.PicW, a.PicH, a.PicLive = side, side, true
 			if err := resizeChain(&a, jlm.Filter(s.Ints[3])); err != nil {
 				return nil, err
@@ -773,6 +829,14 @@ type Square struct {
 // at its own size in the smallest class that holds it, or a fixed square,
 // a crop or a tile at the entry's size.
 func (tg *TowerGraphs) Square(w, h, i int) (Square, int) {
+	if tg.Fit.Budget > 0 {
+		ow, oh := tg.Fit.budgetSize(w, h)
+		c := 0
+		for c < len(tg.Classes)-1 && max(ow, oh) > tg.Classes[c].Pic.PicW {
+			c++
+		}
+		return Square{Class: c, Ow: ow, Oh: oh, Pw: ow, Ph: oh, Gw: ow / tg.Patch, Gh: oh / tg.Patch}, 1
+	}
 	if tg.Fit.Cap > 0 {
 		ow, oh := tg.Fit.capSize(w, h)
 		c := 0
@@ -996,6 +1060,17 @@ func lowerValuesWith(b *graph.Builder, t *jlm.Tower, p *jlm.Program, in []graph.
 			out = b.Emit(graph.OpPosResample, nil, []graph.Result{{Name: "pos", Width: s.K}},
 				[]graph.Binding{{Role: op.Bind[0], K: s.K, Rows: s.Rows}},
 				graph.Attrs{Span: int(op.Span), Offset: int(op.Offset), Width: int(op.Width), Window: window, Chain: chain, Filter: filter}, nil, nil)[0]
+		case jlm.TOpPosAxes:
+			s, err := shape(op.Bind[0])
+			if err != nil {
+				return nil, err
+			}
+			if s.Rows != int(2*op.Span) {
+				return nil, fmt.Errorf("reads two tables of %d rows from %d rows", op.Span, s.Rows)
+			}
+			out = b.Emit(graph.OpPosAxes, nil, []graph.Result{{Name: "pos", Width: s.K}},
+				[]graph.Binding{{Role: op.Bind[0], K: s.K, Rows: s.Rows}},
+				graph.Attrs{Span: int(op.Span), Offset: int(op.Offset)}, nil, nil)[0]
 		case jlm.TOpAdd:
 			out = b.Add(ins[0], ins[1])
 		case jlm.TOpLayerNorm:
@@ -1153,11 +1228,36 @@ func towerBlock(li, i int, t *jlm.Tower, v *jlm.Vision, f graph.Facts) (*graph.G
 		}
 		return b.Norm(x, r, eps)
 	}
+	// clamp holds x, w wide, to the bounds at slot of the block's clipped
+	// linears (RoleVClamp: four a matrix, input then output, min then max),
+	// where it holds them.
+	clamp := func(x graph.ValueID, w, slot int) graph.ValueID {
+		if !has(jlm.RoleVClamp) {
+			return x
+		}
+		return b.Emit(graph.OpClamp, []graph.ValueID{x}, []graph.Result{{Name: "clamp", Width: w}},
+			[]graph.Binding{{Role: jlm.RoleVClamp, K: 28}}, graph.Attrs{Offset: slot}, nil, nil)[0]
+	}
+	// mv is the matrix r over x, in wide to out wide, both clamped by
+	// matrix m's bounds.
+	mv := func(x graph.ValueID, r jlm.Role, in, out, m int, bias ...jlm.Role) graph.ValueID {
+		return clamp(b.MatVec(clamp(x, in, 4*m), r, out, bias...), out, 4*m+2)
+	}
 	x := b.In("x", d)
 	n := norm(x, jlm.RoleVAttnNorm, jlm.RoleVAttnNormBias)
-	q := b.MatVec(n, jlm.RoleVAttnQ, qdim, stored(jlm.RoleVAttnQBias)...)
-	k := b.MatVec(n, jlm.RoleVAttnK, kvDim, stored(jlm.RoleVAttnKBias)...)
-	vv := b.MatVec(n, jlm.RoleVAttnV, kvDim, stored(jlm.RoleVAttnVBias)...)
+	q := mv(n, jlm.RoleVAttnQ, d, qdim, 0, stored(jlm.RoleVAttnQBias)...)
+	k := mv(n, jlm.RoleVAttnK, d, kvDim, 1, stored(jlm.RoleVAttnKBias)...)
+	vv := mv(n, jlm.RoleVAttnV, d, kvDim, 2, stored(jlm.RoleVAttnVBias)...)
+	if has(jlm.RoleVAttnQNorm) {
+		q = b.HeadNorm(q, jlm.RoleVAttnQNorm, hd, eps)
+	}
+	if has(jlm.RoleVAttnKNorm) {
+		k = b.HeadNorm(k, jlm.RoleVAttnKNorm, hd, eps)
+	}
+	if bl.VNorm {
+		vv = b.Emit(graph.OpHeadNorm, []graph.ValueID{vv}, []graph.Result{{Name: "v.norm", Width: kvDim}}, nil,
+			graph.Attrs{Eps: eps, HeadDim: hd}, nil, nil)[0]
+	}
 	if len(bl.Rope.Runs) > 0 {
 		layout := graph.RopeNorm
 		if bl.Rope.Neox {
@@ -1177,19 +1277,27 @@ func towerBlock(li, i int, t *jlm.Tower, v *jlm.Vision, f graph.Facts) (*graph.G
 	windowed := bl.Window > 0 && !slices.Contains(bl.Full, int32(i))
 	att := b.AttendOf(q, hist, graph.Attrs{NHead: int(bl.NHead), NKVHead: int(bl.NKVHead), HeadDim: hd, Scale: scale, Bidir: true,
 		RowWindows: windowed})
-	x2 := b.Add(x, b.MatVec(att, jlm.RoleVAttnOut, d, stored(jlm.RoleVAttnOutBias)...))
+	ao := mv(att, jlm.RoleVAttnOut, qdim, d, 3, stored(jlm.RoleVAttnOutBias)...)
+	if has(jlm.RoleVPostAttnNorm) {
+		ao = b.Norm(ao, jlm.RoleVPostAttnNorm, eps)
+	}
+	x2 := b.Add(x, ao)
 	n2 := norm(x2, jlm.RoleVFFNNorm, jlm.RoleVFFNNormBias)
 	ffn := f.Inventory[jlm.RoleVFC1].Rows
 	var acts []graph.ValueID
 	if has(jlm.RoleVFFNGate) {
-		acts = append(acts, b.MatVec(n2, jlm.RoleVFFNGate, ffn, stored(jlm.RoleVFFNGateBias)...))
+		acts = append(acts, mv(n2, jlm.RoleVFFNGate, d, ffn, 4, stored(jlm.RoleVFFNGateBias)...))
 	}
-	acts = append(acts, b.MatVec(n2, jlm.RoleVFC1, ffn, stored(jlm.RoleVFC1Bias)...))
+	acts = append(acts, mv(n2, jlm.RoleVFC1, d, ffn, 5, stored(jlm.RoleVFC1Bias)...))
 	h, err := b.Stated("act", &bl.Act, acts, ffn, f)
 	if err != nil {
 		return nil, fmt.Errorf("the stated activation: %w", err)
 	}
-	b.Out(b.Add(x2, b.MatVec(h, jlm.RoleVFC2, d, stored(jlm.RoleVFC2Bias)...)))
+	fo := mv(h, jlm.RoleVFC2, ffn, d, 6, stored(jlm.RoleVFC2Bias)...)
+	if has(jlm.RoleVPostFFNNorm) {
+		fo = b.Norm(fo, jlm.RoleVPostFFNNorm, eps)
+	}
+	b.Out(b.Add(x2, fo))
 	return b.G, graph.Verify(b.G, f)
 }
 

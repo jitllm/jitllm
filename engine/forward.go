@@ -633,7 +633,7 @@ func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOp
 	s.allocStreams()
 	s.logits = make([]float32, c.NVocab)
 	s.cs = make([]float32, c.RopeW())
-	if m.RopeSWA != nil {
+	if localTable(m, c) {
 		s.csSWA = make([]float32, c.LocalNRot())
 	}
 	s.bpos = make([]int, 1)
@@ -1408,7 +1408,8 @@ func (s *Instance) layerWeightsAt(li int, l *model.Layer, banks *[3]nn.Weight) n
 		Vectors:  l.Vecs,
 		AttnNorm: l.AttnNorm, FFNNorm: l.FfnNorm,
 		QNorm: qn, KNorm: kn,
-		Wq: model.Wt(l.Wq), Wk: model.Wt(l.Wk), Wv: model.Wt(l.Wv), Wo: model.Wt(l.Wo),
+		Clamp: l.Clamp,
+		Wq:    model.Wt(l.Wq), Wk: model.Wt(l.Wk), Wv: model.Wt(l.Wv), Wo: model.Wt(l.Wo),
 		// For a MoE file these three are the banks -- l.gate is the 3-D
 		// ffn_gate_exps and l.experts[e] are views into it, so
 		// nothing is copied and the device indexes the same mapping.
@@ -3307,6 +3308,13 @@ func windowFor(c *model.Config, maxSeq int) int {
 // swaPeriodFor is the plan's copy of Config.SWA's pattern, and it is zero unless
 // the architecture trains two rotary bases: a sliding window alone is honoured
 // through the per-row key count and needs no second table (gemma2).
+// localTable says an instance of config c turns its local layers by m's
+// second rotary, as the model makes it (a base or a width of its own): a
+// model's that has one, never its tower's, whose config states neither.
+func localTable(m *model.Model, c *model.Config) bool {
+	return m.RopeSWA != nil && (c.RopeBaseSWA != 0 || c.LocalNRot() != c.NRot)
+}
+
 func swaPeriodFor(c *model.Config) int {
 	if c.RopeBaseSWA == 0 {
 		return 0

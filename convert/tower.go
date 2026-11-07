@@ -55,6 +55,8 @@ func towerStater(p jlm.Projector) func(*jlm.Source) (*jlm.Tower, error) {
 		return phi4Tower
 	case jlm.ProjPixtral:
 		return pixtralTower
+	case jlm.ProjGemma4V:
+		return gemma4vTower
 	}
 	return nil
 }
@@ -1229,6 +1231,118 @@ func pixtralTower(s *jlm.Source) (*jlm.Tower, error) {
 	}
 	if err := t.Valid(); err != nil {
 		return nil, fmt.Errorf("convert: pixtral: %w", err)
+	}
+	return t, nil
+}
+
+// gemma4SoftTokens is Gemma 4's soft-token budget (max_soft_tokens): the
+// mmproj does not state it, every published processor_config does.
+const gemma4SoftTokens = 280
+
+// gemma4vTower is Gemma 4's tower as transformers' Gemma4ImageProcessor and
+// Gemma4VisionModel run it: the picture resized by Pillow's BICUBIC filter to
+// the largest size of its aspect within the soft-token budget's patches,
+// each side whole pool groups, and normalised (2x - 1); the patches through
+// the matrix plus two learned tables, the column's row of the first and the
+// row's of the second; RMSNorm blocks with sandwich norms, per-head q and k
+// norms and a weightless v norm, scores at scale one, the gated GELU MLP,
+// every clipped linear's input and output held to its bounds, turned by the
+// 2-D rotary -- NEOX pairs over the head the converter laid out, the
+// column's quarter first then the row's, each from base^0 over half the
+// head at base 100; then the Scale x Scale average pool, times
+// sqrt(NEmbd), the standardisation where the checkpoint has it (the
+// converter stores its bias negated, the shift it adds), an RMSNorm with no
+// weight and the projection. A picture is <|image>, its rows, <image|>, the
+// template's <|image|> its mark.
+func gemma4vTower(s *jlm.Source) (*jlm.Tower, error) {
+	v := s.Vision
+	has := towerRoles(s)
+	for _, r := range []jlm.Role{jlm.RoleVPatchEmbd, jlm.RoleVPosEmbd, jlm.RoleVProj} {
+		if !has[r] {
+			return nil, fmt.Errorf("convert: gemma4v: the tower has no %v", r)
+		}
+	}
+	if has[jlm.RoleVStdBias] != has[jlm.RoleVStdScale] {
+		return nil, fmt.Errorf("convert: gemma4v: a standardisation of a bias %v and a scale %v", has[jlm.RoleVStdBias], has[jlm.RoleVStdScale])
+	}
+	merge := int32(v.Scale)
+	hd := int32(v.NEmbd / max(v.NHead, 1))
+	if v.NHead == 0 || v.NEmbd%v.NHead != 0 || hd%4 != 0 || v.PatchSize == 0 || merge < 1 {
+		return nil, fmt.Errorf("convert: gemma4v: %d heads over %d, patches of %d, a pool of %d", v.NHead, v.NEmbd, v.PatchSize, merge)
+	}
+	// The tables are one [NEmbd, length, 2] tensor: the column's, then the
+	// row's.
+	var table int32
+	for i := range s.Tensors {
+		if t := &s.Tensors[i]; t.Block == jlm.DenseBlock && t.Role == jlm.RoleVPosEmbd {
+			if t.NDim != 3 || t.Dims[2] != 2 {
+				return nil, fmt.Errorf("convert: gemma4v: position tables of shape %v, not two of one length", t.Dims[:t.NDim])
+			}
+			table = int32(t.Dims[1])
+		}
+	}
+	if table < 1 {
+		return nil, fmt.Errorf("convert: gemma4v: the tower has no position tables")
+	}
+	act, err := v.Activation(true)
+	if err != nil {
+		return nil, err
+	}
+	bias := func(w, b jlm.Role) []jlm.Role {
+		if has[b] {
+			return []jlm.Role{w, b}
+		}
+		return []jlm.Role{w}
+	}
+	var scale jlm.ExprBuilder
+	scale.Fn(jlm.FnMul, jlm.Operand(0), jlm.Num(float32(math.Sqrt(float64(v.NEmbd)))))
+	var head jlm.Program
+	head.NIn = 1
+	at := uint16(0)
+	op := func(o jlm.TowerOp) {
+		o.In = []uint16{at}
+		head.Ops = append(head.Ops, o)
+		at = uint16(len(head.Ops))
+	}
+	op(jlm.TowerOp{Code: jlm.TOpPool, Span: merge})
+	op(jlm.TowerOp{Code: jlm.TOpStated, Expr: &jlm.Expr{Terms: scale.T}})
+	if has[jlm.RoleVStdBias] {
+		op(jlm.TowerOp{Code: jlm.TOpShift, Bind: []jlm.Role{jlm.RoleVStdBias}})
+		op(jlm.TowerOp{Code: jlm.TOpScale, Bind: []jlm.Role{jlm.RoleVStdScale}})
+	}
+	op(jlm.TowerOp{Code: jlm.TOpRMSNorm, Eps: v.Eps})
+	op(jlm.TowerOp{Code: jlm.TOpLinear, Bind: bias(jlm.RoleVProj, jlm.RoleVProjBias)})
+	head.Out = at
+	P := int32(v.PatchSize)
+	t := &jlm.Tower{
+		Version: jlm.TowerVersion,
+		Pre: []jlm.PreStep{
+			{Kind: jlm.PreAspectBudget, Ints: []int32{gemma4SoftTokens * merge * merge, P, P * merge,
+				int32(jlm.FilterPILBicubic), int32(jlm.PrecPIL)}},
+			{Kind: jlm.PreNormalize, Floats: []float32{v.Mean[0], v.Mean[1], v.Mean[2], v.Std[0], v.Std[1], v.Std[2]}},
+		},
+		// The pixels are value 0.
+		Entry: jlm.Program{NIn: 1, Out: 4, Ops: []jlm.TowerOp{
+			{Code: jlm.TOpPatchify, In: []uint16{0}, Span: P},
+			{Code: jlm.TOpLinear, In: []uint16{1}, Bind: bias(jlm.RoleVPatchEmbd, jlm.RoleVPatchBias)},
+			{Code: jlm.TOpPosAxes, Bind: []jlm.Role{jlm.RoleVPosEmbd}, Span: table},
+			{Code: jlm.TOpAdd, In: []uint16{2, 3}},
+		}},
+		Block: jlm.TowerBlock{NHead: v.NHead, NKVHead: v.NHead, HeadDim: uint32(hd), Norm: jlm.NormRMS, Eps: v.Eps,
+			AttnScale: 1, Act: act, VNorm: true,
+			Rope: jlm.TowerRope{Base: 100, Dim: hd / 2, Neox: true,
+				Runs: []jlm.TowerRopeRun{{Pairs: hd / 4, Axis: 1}, {Pairs: hd / 4, Axis: 0}}}},
+		Head: head,
+		Span: jlm.TowerSpan{Mark: "<|image|>"},
+	}
+	if t.Span.Before, err = markerIDs(s, "<|image>"); err != nil {
+		return nil, err
+	}
+	if t.Span.After, err = markerIDs(s, "<image|>"); err != nil {
+		return nil, err
+	}
+	if err := t.Valid(); err != nil {
+		return nil, fmt.Errorf("convert: gemma4v: %w", err)
 	}
 	return t, nil
 }

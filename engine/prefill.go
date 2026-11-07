@@ -719,18 +719,18 @@ func (s *Instance) growRows(chunk int) {
 	// Every buffer the rows read, the second rotary's table too: a set
 	// whose residual rows suffice may hold a shorter table, or none.
 	if len(s.bx) >= chunk*c.ResidW() && len(s.bcs) >= chunk*c.RopeW() &&
-		(s.m.RopeSWA == nil || len(s.bcsSWA) >= chunk*c.LocalNRot()) {
+		(!localTable(s.m, c) || len(s.bcsSWA) >= chunk*c.LocalNRot()) {
 		return
 	}
 	b := s.takeSpare()
 	if b != nil && len(b.bx) >= chunk*c.ResidW() && len(b.bcs) >= chunk*c.RopeW() &&
-		(s.m.RopeSWA == nil || len(b.bcsSWA) >= chunk*c.LocalNRot()) {
+		(!localTable(s.m, c) || len(b.bcsSWA) >= chunk*c.LocalNRot()) {
 		s.bx, s.bcs, s.bcsSWA = b.bx, b.bcs, b.bcsSWA
 		return
 	}
 	s.bx = make([]float32, chunk*c.ResidW())
 	s.bcs = make([]float32, chunk*c.RopeW())
-	if s.m.RopeSWA != nil {
+	if localTable(s.m, c) {
 		s.bcsSWA = make([]float32, chunk*c.LocalNRot())
 	}
 }
