@@ -396,6 +396,9 @@ type LoadedModel struct {
 	// embMu guards emb, the idle embedders Embed reuses (embed.go).
 	embMu sync.Mutex
 	emb   embedders
+	// decMu guards dec, the decision model's idle deciders (decide.go).
+	decMu sync.Mutex
+	dec   deciders
 
 	tokensGenerated atomic.Int64
 	tokensPrefilled atomic.Int64
@@ -976,6 +979,7 @@ func (e *Engine) UnloadModel(id string, force bool) (closed int, err error) {
 	// they end -- and before the model it steps.
 	lm.closeLoop()
 	lm.closeEmbedders()
+	lm.closeDeciders()
 	if cerr := lm.closeModel(); cerr != nil {
 		err = cerr
 	}
@@ -1018,6 +1022,7 @@ func (e *Engine) Close() {
 		lm.closeLoop()
 		e.closeIdle(lm)
 		lm.closeEmbedders()
+		lm.closeDeciders()
 		lm.closeModel()
 		lm.closeTiers()
 	}

@@ -990,6 +990,14 @@
         ]
       },
       {
+        "path": "/v1/systemone",
+        "methods": [
+          "POST"
+        ],
+        "surface": "jitllm",
+        "note": "a decision model's answers: a JSON object with state and questions, at most 16 MiB"
+      },
+      {
         "path": "/v1/files",
         "methods": [
           "GET",
@@ -1433,6 +1441,14 @@
         ],
         "when": "a picture over the byte or pixel limit, or a request's pictures over the request byte limit",
         "message": "over the limit of"
+      },
+      {
+        "id": "decision-non-decider",
+        "endpoints": [
+          "/v1/systemone"
+        ],
+        "when": "the model is not a decision model",
+        "message": "is not a decision model"
       },
       {
         "id": "image-format",

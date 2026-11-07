@@ -1086,7 +1086,7 @@ func encodeDecisionLabels(w *wbuf, l *DecisionLabels) {
 	encodeStrs(w, l.NoulFalse)
 	w.u32(l.NoulRatings)
 	for _, b := range []bool{l.KeyCodes, l.Spaced, l.ShowCodes, l.NoulTrueFirst, l.ScoreByKey, l.Reversed, l.SortKeys,
-		l.IDInstructions, l.EntropyConfidence} {
+		l.IDInstructions, l.EntropyConfidence, l.SortedLegend} {
 		w.bool(b)
 	}
 }
@@ -1095,7 +1095,7 @@ func decodeDecisionLabels(r *rbuf) *DecisionLabels {
 	l := &DecisionLabels{Codes: decodeStrs(r), WideCodes: decodeStrs(r), Pool: decodeStrs(r), MaxOptions: r.u32()}
 	l.NoulTrue, l.NoulFalse, l.NoulRatings = decodeStrs(r), decodeStrs(r), r.u32()
 	for _, b := range []*bool{&l.KeyCodes, &l.Spaced, &l.ShowCodes, &l.NoulTrueFirst, &l.ScoreByKey, &l.Reversed,
-		&l.SortKeys, &l.IDInstructions, &l.EntropyConfidence} {
+		&l.SortKeys, &l.IDInstructions, &l.EntropyConfidence, &l.SortedLegend} {
 		*b = r.bool()
 	}
 	return l

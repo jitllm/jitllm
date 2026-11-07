@@ -37,6 +37,10 @@ type Backend interface {
 	// Embed is the one embedding path; /v1/embeddings calls this and nothing
 	// else to produce vectors.
 	Embed(ctx context.Context, o EmbedOptions) (*EmbedResult, error)
+
+	// Decide is the one decision path; /v1/systemone calls this and nothing
+	// else to answer.
+	Decide(ctx context.Context, o DecideOptions) (*DecideResult, error)
 }
 
 // ModelSummary is the little a model list needs.

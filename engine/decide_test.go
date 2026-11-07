@@ -218,3 +218,75 @@ func checkDecisions(t *testing.T, qs []DecisionQuestion, ans []DecisionAnswer, g
 	}
 	return worst
 }
+
+// TestDecisionResponseMatchesLlamaCpp holds the response body to llama.cpp's
+// for vllm-d3's legend request: the answer's shape, and a score's legend
+// with each description that is not text as its sorted-key JSON, a string,
+// as the container states. Without the statement the legend is the
+// request's own JSON, which must fail it.
+func TestDecisionResponseMatchesLlamaCpp(t *testing.T) {
+	c := decisionCases()[3]
+	m := openDecision(t, c)
+	defer m.Close()
+	in, err := NewInstance(m, 4096)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer in.Close()
+	d, err := NewDecider(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(filepath.Join("testdata", "decision", "legend.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, state, qs, err := ParseDecisionRequest(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ans, err := d.Decide(state, qs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type resp struct {
+		Answers map[string]struct {
+			Type   string            `json:"type"`
+			Legend map[string]string `json:"legend"`
+		} `json:"answers"`
+	}
+	var gold resp
+	b, err := os.ReadFile(filepath.Join("testdata", "decision", c.gold+".legend.llamacpp.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(b, &gold); err != nil {
+		t.Fatal(err)
+	}
+	legend := func(out []byte) (map[string]string, error) {
+		var r resp
+		if err := json.Unmarshal(out, &r); err != nil {
+			return nil, err
+		}
+		return r.Answers["anger"].Legend, nil
+	}
+	got, err := legend(d.DecisionResponse(c.gguf, qs, ans))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := gold.Answers["anger"].Legend
+	if len(got) != len(want) || len(want) == 0 {
+		t.Fatalf("legend %v, llama.cpp %v", got, want)
+	}
+	for k, w := range want {
+		if got[k] != w {
+			t.Errorf("legend %s: %q, llama.cpp %q", k, got[k], w)
+		}
+	}
+	lab := *d.lab
+	lab.SortedLegend = false
+	d.lab = &lab
+	if off, err := legend(d.DecisionResponse(c.gguf, qs, ans)); err == nil && off["0"] == want["0"] {
+		t.Errorf("the legend without the statement is llama.cpp's too: the gate does not see it")
+	}
+}
