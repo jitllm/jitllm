@@ -3189,11 +3189,16 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 	// 0. A device that collapses the
 	// streams itself (nn.Head.Collapses) is handed them as they are, and the
 	// host collapses them only where it refuses the call.
-	devCollapse := s.head != nil && !folded && s.head.Collapses && s.rows == nil && s.lo < c.NLayer
+	devCollapse := s.head != nil && !folded && s.head.Collapses && s.lo < c.NLayer
 	if c.StreamHead() && !devCollapse {
 		if err := s.collapseStreams(s.xa, 1); err != nil {
 			return nil, err
 		}
+	}
+	// A step's row wanting its hidden state takes the residual before the
+	// device's mix, as collapseStreams takes it before the host's.
+	if devCollapse && c.ResidStreams() {
+		s.rows.tapStreams(s, s.xa, 1)
 	}
 
 	// The projection on the device under a partial seam: an empty block range
