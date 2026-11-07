@@ -37,7 +37,6 @@ const (
 	UncoveredStreams
 	UncoveredRopeAxes
 	UncoveredNonCausal
-	UncoveredTemp
 	UncoveredCompressed
 	UncoveredAct
 	UncoveredPooling
@@ -68,8 +67,6 @@ func (u Uncovered) String() string {
 		return "a rotary over position axes its sections do not state (a pair's halves turned apart)"
 	case UncoveredNonCausal:
 		return "non-causal attention"
-	case UncoveredTemp:
-		return "an attention temperature whose position offset is not a whole number"
 	case UncoveredCompressed:
 		return "compressed or grouped attention"
 	case UncoveredAct:
@@ -445,8 +442,6 @@ func (m *Model) uncovered(li int) Uncovered {
 		// A non-causal block turned by a rotary the model's does not hold
 		// (an encoder's of its own bases).
 		return UncoveredNonCausal
-	case c.AttnTempScale != 0 && (c.AttnTempOffs < 0 || c.AttnTempOffs != math.Trunc(c.AttnTempOffs)):
-		return UncoveredTemp
 	}
 	return m.uncoveredRest(li)
 }
@@ -866,17 +861,9 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	if keyValue {
 		v = k
 	}
-	// The attention temperature, 1 + s ln(1 + floor((pos + o) / f)) at the
-	// row's history position, multiplies q: the scores are linear in it.
-	if s := c.AttnTempScale; s != 0 && !(c.NoPEGlobal && c.RopeAt(li)) {
-		pos := b.Emit(graph.OpPosition, nil, []graph.Result{{Name: "pos", Width: 1}}, nil,
-			graph.Attrs{Offset: int(c.AttnTempOffs), Span: int(c.AttnTempFloor)}, nil, nil)[0]
-		temp := b.Expr("temp", 1, []graph.Term{
-			{Fn: graph.MapAdd, Args: [3]graph.Arg{{Kind: graph.ArgIn, Index: 0}, {Kind: graph.ArgConst, Const: 1}}},
-			{Fn: graph.MapLog, Args: [3]graph.Arg{{Kind: graph.ArgTerm, Index: 0}}},
-			{Fn: graph.MapFma, Args: [3]graph.Arg{{Kind: graph.ArgTerm, Index: 1}, {Kind: graph.ArgConst, Const: s}, {Kind: graph.ArgConst, Const: 1}}},
-		}, nil, pos)
-		q = mapRow(b, "q.temp", graph.Attrs{Fn: graph.MapMul}, nil, qdim, q, temp)
+	// The attention temperature multiplies q: the scores are linear in it.
+	if c.AttnTempScale != 0 && !(c.NoPEGlobal && c.RopeAt(li)) {
+		q = mapRow(b, "q.temp", graph.Attrs{Fn: graph.MapMul}, nil, qdim, q, attnTemp(b, c))
 	}
 	// A selecting block caches its indexer's key as one more kv head of the
 	// row, that head's value zero, and its indexer's query picks the
@@ -1960,4 +1947,36 @@ func zerosOf(b *graph.Builder, name string, x graph.ValueID, w ...int) graph.Val
 		return mapRow(b, name, graph.Attrs{Fn: graph.MapMul}, nil, w[0], cut)
 	}
 	return mapRow(b, name, graph.Attrs{Fn: graph.MapMul}, nil, width, x)
+}
+
+// attnTemp is the attention temperature 1 + s ln(1 + floor((pos + o) / f))
+// at the row's history position: the position op's whole-number offset and
+// division where o is a whole number at or above zero, and otherwise the
+// floor taken in the expression -- x rounded, less one where x lies below
+// its rounding, exact for any x.
+func attnTemp(b *graph.Builder, c *Config) graph.ValueID {
+	s, o, f := c.AttnTempScale, c.AttnTempOffs, c.AttnTempFloor
+	in := graph.Arg{Kind: graph.ArgIn, Index: 0}
+	term := func(i int) graph.Arg { return graph.Arg{Kind: graph.ArgTerm, Index: i} }
+	num := func(v float64) graph.Arg { return graph.Arg{Kind: graph.ArgConst, Const: v} }
+	if o >= 0 && o == math.Trunc(o) {
+		pos := b.Emit(graph.OpPosition, nil, []graph.Result{{Name: "pos", Width: 1}}, nil,
+			graph.Attrs{Offset: int(o), Span: int(f)}, nil, nil)[0]
+		return b.Expr("temp", 1, []graph.Term{
+			{Fn: graph.MapAdd, Args: [3]graph.Arg{in, num(1)}},
+			{Fn: graph.MapLog, Args: [3]graph.Arg{term(0)}},
+			{Fn: graph.MapFma, Args: [3]graph.Arg{term(1), num(s), num(1)}},
+		}, nil, pos)
+	}
+	pos := b.Emit(graph.OpPosition, nil, []graph.Result{{Name: "pos", Width: 1}}, nil, graph.Attrs{}, nil, nil)[0]
+	return b.Expr("temp", 1, []graph.Term{
+		{Fn: graph.MapAdd, Args: [3]graph.Arg{in, num(o)}},
+		{Fn: graph.MapDiv, Args: [3]graph.Arg{term(0), num(f)}},
+		{Fn: graph.MapRound, Args: [3]graph.Arg{term(1)}},
+		{Fn: graph.MapLess, Args: [3]graph.Arg{term(1), term(2)}},
+		{Fn: graph.MapSub, Args: [3]graph.Arg{term(2), term(3)}},
+		{Fn: graph.MapAdd, Args: [3]graph.Arg{term(4), num(1)}},
+		{Fn: graph.MapLog, Args: [3]graph.Arg{term(5)}},
+		{Fn: graph.MapFma, Args: [3]graph.Arg{term(6), num(s), num(1)}},
+	}, nil, pos)
 }
