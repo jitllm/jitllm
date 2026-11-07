@@ -195,10 +195,10 @@ const (
 	// matrix product), zero past them to the output's width and in the Offset
 	// rows before.
 	OpPatchify
-	// OpRegroup is space-to-depth over the step's grid of rows (the
-	// request's first word its width): row g of the output is the Span x Span
-	// block of rows at g's place, each Span*Span slot in raster order a run
-	// of the input's width.
+	// OpRegroup is space-to-depth over the step's grid of rows (GridW its
+	// width where set, the request's first word where not): row g of the
+	// output is the Span x Span block of rows at g's place, each Span*Span
+	// slot in raster order a run of the input's width.
 	OpRegroup
 	// OpLeadRow is In[0] with its first Offset rows each Weight[0]'s one row
 	// (a tower's class row).
@@ -406,6 +406,9 @@ const (
 	// each way: row (y, x) of Out[0] is In[0]'s row (y/Span, x/Span), the
 	// nearest.
 	OpUpsample
+	// OpAppendRow is In[0]'s rows, then row Offset of Weight[0]: a marker
+	// after a picture's rows that the reference embeds through a table.
+	OpAppendRow
 	numOps
 )
 
@@ -509,6 +512,8 @@ func (k OpKind) String() string {
 		return "table_rows"
 	case OpUpsample:
 		return "upsample"
+	case OpAppendRow:
+		return "append_row"
 	case OpRowsAttend:
 		return "rows_attend"
 	case OpPosAxes:

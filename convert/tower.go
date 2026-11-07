@@ -63,6 +63,8 @@ func towerStater(p jlm.Projector) func(*jlm.Source) (*jlm.Tower, error) {
 		return llama4Tower
 	case jlm.ProjResampler:
 		return minicpmvTower
+	case jlm.ProjGemma3nV:
+		return gemma3nvTower
 	}
 	return nil
 }

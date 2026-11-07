@@ -33,6 +33,11 @@ type TowerGraphs struct {
 	Classes []towerClass
 	Blocks  []*graph.Graph
 	Head    *graph.Graph
+	// Chain says the blocks are a chained tower's (jlm.Tower.Chain), each a
+	// graph over a grid of its own run after the one before it; HeadFrom
+	// the blocks whose rows the head reads beside the last's.
+	Chain    bool
+	HeadFrom []int
 	// taps is each tap's graph (jlm.TowerTap), tapBlocks the tower block
 	// whose rows it reads.
 	Taps      []*graph.Graph
@@ -322,6 +327,11 @@ func (m *Model) BuildTowerGraphs() (*TowerGraphs, error) {
 	merge, window := towerTiles(t)
 	tg := &TowerGraphs{Lead: int(ops[0].Offset), GridDiv: int(t.Span.GridDiv), Merge: merge, Window: window,
 		Side: int(v.ImageSize / v.PatchSize), Patch: P, Fit: fit}
+	if len(t.Chain) > 0 {
+		// A chain's entry reads the picture's every patch of P: its grid is
+		// the picture's, whatever the container's patch.
+		tg.Side = int(v.ImageSize) / P
+	}
 	for _, op := range ops {
 		if op.Code == jlm.TOpTailRow {
 			tg.Tail = 1
@@ -350,19 +360,25 @@ func (m *Model) BuildTowerGraphs() (*TowerGraphs, error) {
 	if r := t.Block.Rope; len(r.Runs) > 0 {
 		tg.Table, tg.Planes = towerRotary(t)
 	}
-	for i := range int(v.NLayer) {
-		tg.Full = append(tg.Full, window == 0 || slices.Contains(t.Block.Full, int32(i)))
-		g, err := towerBlock(m.TowerBase+i, i, t, v, m.TowerFacts(int32(i)))
-		if err != nil {
-			return nil, fmt.Errorf("model: the tower's block %d: %w", i, err)
+	if len(t.Chain) > 0 {
+		if err := m.chainGraphs(tg, t, v, dense); err != nil {
+			return nil, err
 		}
-		tg.Blocks = append(tg.Blocks, g)
+	} else {
+		for i := range int(v.NLayer) {
+			tg.Full = append(tg.Full, window == 0 || slices.Contains(t.Block.Full, int32(i)))
+			g, err := towerBlock(m.TowerBase+i, i, t, v, m.TowerFacts(int32(i)))
+			if err != nil {
+				return nil, fmt.Errorf("model: the tower's block %d: %w", i, err)
+			}
+			tg.Blocks = append(tg.Blocks, g)
+		}
+		h, out, err := towerProgram(t, &t.Head, v, tg.Rows, dense)
+		if err != nil {
+			return nil, fmt.Errorf("model: the tower's head: %w", err)
+		}
+		tg.Head, tg.Out = h, out
 	}
-	h, out, err := towerProgram(t, &t.Head, v, tg.Rows, dense)
-	if err != nil {
-		return nil, fmt.Errorf("model: the tower's head: %w", err)
-	}
-	tg.Head, tg.Out = h, out
 	for _, op := range t.Head.Ops {
 		if op.Code == jlm.TOpMarkRow {
 			tg.Marks = int(op.Span + op.Offset)
@@ -397,8 +413,8 @@ func (m *Model) BuildTowerGraphs() (*TowerGraphs, error) {
 		if err != nil {
 			return nil, fmt.Errorf("model: the tower's tap %d: %w", j, err)
 		}
-		if w := g.Values[g.Out[0]].Width; n != out || w != D {
-			return nil, fmt.Errorf("model: the tower's tap %d writes %d rows of %d, the head %d of %d", j, n, w, out, D)
+		if w := g.Values[g.Out[0]].Width; n != tg.Out || w != D {
+			return nil, fmt.Errorf("model: the tower's tap %d writes %d rows of %d, the head %d of %d", j, n, w, tg.Out, D)
 		}
 		tg.Taps, tg.TapBlocks = append(tg.Taps, g), append(tg.TapBlocks, int(tp.Block))
 	}
@@ -1327,7 +1343,7 @@ func lowerValuesWith(b *graph.Builder, t *jlm.Tower, p *jlm.Program, in []graph.
 			// row, its slots summed and scaled by 1/S^2.
 			S, E := int(op.Span), width(ins[0])
 			g := b.Emit(graph.OpRegroup, ins, []graph.Result{{Name: "pool.grouped", Width: S * S * E,
-				Rows: rowsOf(ins[0]) / (S * S)}}, nil, graph.Attrs{Span: S}, nil, nil)[0]
+				Rows: rowsOf(ins[0]) / (S * S)}}, nil, graph.Attrs{Span: S, GridW: int(op.GridW)}, nil, nil)[0]
 			slot := func(k int) graph.ValueID {
 				return b.Emit(graph.OpSlice, []graph.ValueID{g}, []graph.Result{{Name: "pool.slot", Width: E}}, nil,
 					graph.Attrs{Offset: k * E, Width: E}, nil, nil)[0]
@@ -1387,12 +1403,47 @@ func lowerValuesWith(b *graph.Builder, t *jlm.Tower, p *jlm.Program, in []graph.
 			out = b.Emit(graph.OpTableRows, nil, []graph.Result{{Name: "table", Width: s.K, Rows: s.Rows}},
 				[]graph.Binding{{Role: op.Bind[0], K: s.K, Rows: s.Rows}}, graph.Attrs{}, nil, nil)[0]
 		case jlm.TOpRowsAttend:
-			w, h := width(ins[0]), int(op.Span)
-			if w%h != 0 || width(ins[1]) != w || width(ins[2]) != w {
-				return nil, fmt.Errorf("attends rows %d, %d and %d wide in %d heads", w, width(ins[1]), width(ins[2]), h)
+			w, h, g := width(ins[0]), int(op.Span), int(op.Width)
+			if g == 0 {
+				g = h
+			}
+			if w%h != 0 || width(ins[1]) != g*(w/h) || width(ins[2]) != g*(w/h) {
+				return nil, fmt.Errorf("attends rows %d, %d and %d wide in %d heads over %d", w, width(ins[1]), width(ins[2]), h, g)
 			}
 			out = b.Emit(graph.OpRowsAttend, ins, []graph.Result{{Name: "attended", Width: w, Rows: rowsOf(ins[0])}}, nil,
-				graph.Attrs{NHead: h, HeadDim: w / h, Scale: 1 / math.Sqrt(float64(w/h))}, nil, nil)[0]
+				graph.Attrs{NHead: h, NKVHead: g, HeadDim: w / h, Scale: 1 / math.Sqrt(float64(w/h))}, nil, nil)[0]
+		case jlm.TOpUnfold, jlm.TOpConv:
+			T, st, W := int(op.Span), int(op.Stride), int(op.GridW)
+			R := rowsOf(ins[0])
+			if R%W != 0 {
+				return nil, fmt.Errorf("convolves %d rows as a grid %d wide", R, W)
+			}
+			res := graph.Result{Name: name, Width: width(ins[0])}
+			if st > 1 {
+				res.Rows = ((R/W + st - 1) / st) * ((W + st - 1) / st)
+			}
+			kind := graph.OpConv
+			var bind []graph.Binding
+			if op.Code == jlm.TOpUnfold {
+				kind, res.Width = graph.OpUnfold, int(op.Width)
+			} else {
+				bind = []graph.Binding{{Role: op.Bind[0], K: width(ins[0]), Rows: T * T}}
+			}
+			out = b.Emit(kind, ins, []graph.Result{res}, bind, graph.Attrs{Taps: T, Stride: st, GridW: W}, nil, nil)[0]
+		case jlm.TOpUpsample:
+			S := int(op.Span)
+			out = b.Emit(graph.OpUpsample, ins, []graph.Result{{Name: name, Width: width(ins[0]), Rows: rowsOf(ins[0]) * S * S}}, nil,
+				graph.Attrs{Span: S, GridW: int(op.GridW)}, nil, nil)[0]
+		case jlm.TOpAppendRow:
+			s, err := shape(op.Bind[0])
+			if err != nil {
+				return nil, err
+			}
+			if s.K != width(ins[0]) || int(op.Offset) >= max(s.Rows, 1) {
+				return nil, fmt.Errorf("appends row %d of a %dx%d table to rows %d wide", op.Offset, s.Rows, s.K, width(ins[0]))
+			}
+			out = b.Emit(graph.OpAppendRow, ins, []graph.Result{{Name: name, Width: width(ins[0]), Rows: rowsOf(ins[0]) + 1}},
+				[]graph.Binding{{Role: op.Bind[0], K: s.K, Rows: s.Rows}}, graph.Attrs{Offset: int(op.Offset)}, nil, nil)[0]
 		case jlm.TOpTailRow:
 			out = b.Emit(graph.OpTailRow, ins, []graph.Result{{Name: "class", Width: width(ins[0])}},
 				[]graph.Binding{{Role: op.Bind[0], K: width(ins[0])}}, graph.Attrs{}, nil, nil)[0]
@@ -1929,4 +1980,63 @@ func (f PictureFit) refineSize(w, h, cols, rows int) (int, int) {
 // (the processor's ensure_divide).
 func wholeUnits(length float64, unit int) int {
 	return max(int(math.RoundToEven(length/float64(unit)))*unit, unit)
+}
+
+// chainGraphs lowers a chained tower's blocks, each over the grid the block
+// before it left (the entry's, for the first) and bound to its own tensors,
+// and its head over the last block's rows and each HeadFrom block's: the
+// head writes as many rows whatever the picture.
+func (m *Model) chainGraphs(tg *TowerGraphs, t *jlm.Tower, v *jlm.Vision, dense graph.Facts) error {
+	if len(t.Chain) != int(v.NLayer) {
+		return fmt.Errorf("model: the tower chains %d blocks of its %d", len(t.Chain), v.NLayer)
+	}
+	e := tg.Classes[0].Entry[graph.PixRGBA8]
+	ev := e.Values[e.Out[0]]
+	rows, width := ev.Rows, ev.Width
+	if rows == 0 {
+		rows = tg.Classes[0].Rows
+	}
+	outs := make([][2]int, len(t.Chain))
+	for i := range t.Chain {
+		cb := &t.Chain[i]
+		if int(cb.Rows) != rows || int(cb.Width) != width {
+			return fmt.Errorf("model: the tower's block %d reads %d rows of %d after %d rows of %d", i, cb.Rows, cb.Width, rows, width)
+		}
+		f := m.TowerFacts(int32(i))
+		b := graph.NewBlock(m.TowerBase + i)
+		x := b.In("x", width)
+		b.G.Values[x].Rows = rows
+		out, err := LowerProgram(b, t, &cb.Prog, []graph.ValueID{x}, rows, f)
+		if err != nil {
+			return fmt.Errorf("model: the tower's block %d: %w", i, err)
+		}
+		b.Out(out)
+		if err := graph.Verify(b.G, f); err != nil {
+			return fmt.Errorf("model: the tower's block %d: %w", i, err)
+		}
+		tg.Blocks, tg.Full = append(tg.Blocks, b.G), append(tg.Full, true)
+		o := b.G.Values[out]
+		rows, width = o.Rows, o.Width
+		outs[i] = [2]int{rows, width}
+	}
+	b := graph.NewBlock(-1)
+	ins := []graph.ValueID{b.In("x", width)}
+	b.G.Values[ins[0]].Rows = rows
+	for _, j := range t.HeadFrom {
+		x := b.In("from", outs[j][1])
+		b.G.Values[x].Rows = outs[j][0]
+		ins = append(ins, x)
+		tg.HeadFrom = append(tg.HeadFrom, int(j))
+	}
+	out, err := LowerProgram(b, t, &t.Head, ins, rows, dense)
+	if err != nil {
+		return fmt.Errorf("model: the tower's head: %w", err)
+	}
+	b.Out(out)
+	if err := graph.Verify(b.G, dense); err != nil {
+		return fmt.Errorf("model: the tower's head: %w", err)
+	}
+	n := b.G.Values[out].Rows
+	tg.Head, tg.Out, tg.Fixed, tg.Chain = b.G, n, n, true
+	return nil
 }
