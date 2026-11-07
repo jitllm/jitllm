@@ -538,6 +538,9 @@ func hfSourceOf(dir hfDir, shards []*safetensors.File) (*jlm.Source, error) {
 	if err := StateSelection(s.Config, sourceStores(s)); err != nil {
 		return nil, err
 	}
+	if err := expertsFit(s); err != nil {
+		return nil, err
+	}
 	StateDelta(s.Config, sourceStores(s))
 	StateRevision(s.Config)
 	return s, nil

@@ -55,7 +55,7 @@ func (u Uncovered) String() string {
 	case UncoveredRouterScore:
 		return "a router whose score the container does not state"
 	case UncoveredExperts:
-		return "routed experts weighted at their input over biased banks, in a latent of their own, or stored one matrix each"
+		return "routed experts stored one matrix each (a container converted before its experts were stacked into banks)"
 	case UncoveredGeometry:
 		return "a value head of another width than the key's, a layer of its own rotary width turned by the model's rotary, " +
 			"or a block reading another's history of another shape than its attention's"
@@ -458,8 +458,6 @@ func (m *Model) uncoveredRest(li int) Uncovered {
 	case !c.MoEAt(li):
 	case len(m.Container.Config().RouterScore.Terms) == 0:
 		return UncoveredRouterScore
-	case c.ExpertWeightIn && (m.Stores(li, jlm.RoleExpGateBias) || m.Stores(li, jlm.RoleExpUpBias)):
-		return UncoveredExperts
 	}
 	return Covered
 }
