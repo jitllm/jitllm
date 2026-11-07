@@ -52,14 +52,14 @@ func TestEveryModelRunsOnACard(t *testing.T) {
 		t.Fatalf("no card to run the models on: %v", err)
 	}
 	defer g.Close()
-	slow := os.Getenv("JITLLM_SLOW") != ""
+	slow, only := os.Getenv("JITLLM_SLOW") != "", os.Getenv("JITLLM_SLOW") == "only"
 	pick := os.Getenv("JITLLM_AUDIT_MODEL")
 	ran := 0
 	for _, src := range auditModels(t) {
 		if pick != "" && !strings.Contains(src.path, pick) {
 			continue
 		}
-		if pick == "" && !slow && src.size > 2<<30 {
+		if pick == "" && (!slow && src.size > 2<<30 || only && src.size <= 2<<30) {
 			continue
 		}
 		ran++
@@ -99,7 +99,7 @@ func TestEveryModelRunsOnACard(t *testing.T) {
 				if n := e.DeviceBlocks(); n != m.Cfg.NLayer {
 					t.Fatalf("the card took %d of %d blocks: %v (%s)", n, m.Cfg.NLayer, e.DeviceDeclines(), g.Err())
 				}
-				formed := g.Stats().FormedAtStep
+				formed, before := g.Stats().FormedAtStep, cardDeclines(g)
 				for i := range 3 {
 					v, err := e.Embed([]int32{1, int32(2 + i), 3})
 					if err != nil {
@@ -111,11 +111,12 @@ func TestEveryModelRunsOnACard(t *testing.T) {
 					t.Fatalf("the card formed %d part(s) at a step after placement (by part %v): %s",
 						s.FormedAtStep-formed, s.FormedAtStepParts, g.Err())
 				}
+				refusedAtStep(t, g, before)
 				return
 			}
 			st := cardInstance(t, m, g)
 			defer st.Close()
-			formed := g.Stats().FormedAtStep
+			formed, before := g.Stats().FormedAtStep, cardDeclines(g)
 			for i := range 3 {
 				lg, err := st.Forward(int32(1 + i))
 				if err != nil {
@@ -127,10 +128,38 @@ func TestEveryModelRunsOnACard(t *testing.T) {
 				t.Fatalf("the card formed %d part(s) at a step after placement (by part %v): %s",
 					s.FormedAtStep-formed, s.FormedAtStepParts, g.Err())
 			}
+			refusedAtStep(t, g, before)
 		})
 	}
 	if ran == 0 {
 		t.Fatalf("no model ran on the card (JITLLM_AUDIT_MODEL %q) -- this gate proved nothing", pick)
+	}
+}
+
+// cardDeclines is the steps card g declined so far, its blocks' and its
+// table, sample and input rows', by reason.
+func cardDeclines(g *gpu.GPU) [nn.NumDeclines]int {
+	s := g.Stats()
+	b, o := s.BlockDeclines(), s.StepDeclines()
+	for i := range b {
+		b[i] += o[i]
+	}
+	return b
+}
+
+// refusedAtStep fails t on every step card g declined since before for a
+// reason that is not a hardware limit: a part placed on the card runs there.
+func refusedAtStep(t *testing.T, g *gpu.GPU, before [nn.NumDeclines]int) {
+	t.Helper()
+	after := cardDeclines(g)
+	for i := range after {
+		switch nn.Decline(i) {
+		case nn.DeclineServes, nn.DeclineNoRoom, nn.DeclineISA:
+			continue
+		}
+		if n := after[i] - before[i]; n > 0 {
+			t.Errorf("the card declined %d step(s): %s", n, nn.DeclineName(i))
+		}
 	}
 }
 
@@ -174,13 +203,16 @@ func cardInstance(t *testing.T, m *model.Model, g *gpu.GPU) *Instance {
 func everyModelRunsGenerated(t *testing.T, opts ...Option) {
 	// JITLLM_AUDIT_MODEL=<substring> audits one file whatever its size (run it
 	// under `scripts/cap 24G` for anything over ~16 GB); JITLLM_SLOW=1 admits
-	// every model over 2 GiB.
+	// every model over 2 GiB, and JITLLM_SLOW=only sweeps those alone.
 	pick := os.Getenv("JITLLM_AUDIT_MODEL")
-	slow := os.Getenv("JITLLM_SLOW") != ""
+	slow, only := os.Getenv("JITLLM_SLOW") != "", os.Getenv("JITLLM_SLOW") == "only"
 	var ran, refused, large []string
 	for _, src := range auditModels(t) {
 		name := src.name
 		if pick != "" && !strings.Contains(src.path, pick) {
+			continue
+		}
+		if pick == "" && only && src.size <= 2<<30 {
 			continue
 		}
 		if pick == "" && !slow && src.size > 2<<30 {
