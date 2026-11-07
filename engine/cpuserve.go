@@ -84,14 +84,21 @@ func (s *Instance) placeLanes() {
 		lo: s.lo}
 	s.places[routeLanes].(nn.LanePlacer).PlaceLanes(n, &s.lease, planes, s.c.NExpert, s.prof)
 	s.bindLanes(s.Session)
-	// Each block is prepared by its route's device where that device runs it
-	// from the frames; one with a copy of its own took it at its offer.
+	if !s.prepLater {
+		s.prepFrames()
+	}
+	s.placeParts()
+}
+
+// prepFrames prepares each block on its route's device where that device runs
+// it from the frames; one with a copy of its own took it at its offer.
+func (s *Instance) prepFrames() {
+	n := max(s.c.NLayer, s.hi)
 	for li := s.lo; li < min(s.hi, n); li++ {
 		if r := s.slotAt(li); r != slotNone && s.fromFrames[r] {
 			s.places[r].PrepLayer(li, s.planFor(li), nil)
 		}
 	}
-	s.placeParts()
 }
 
 // sideAtBinding moves the offset of every slice of gr's side input (its
