@@ -290,13 +290,13 @@ func (m *Model) BuildTowerGraphs() (*TowerGraphs, error) {
 	tg := &TowerGraphs{Lead: int(ops[0].Offset), GridDiv: int(t.Span.GridDiv), Merge: merge, Window: window,
 		Side: int(v.ImageSize / v.PatchSize), Patch: P, Fit: fit}
 	sides := []int{0}
-	if fit.Factor > 0 {
+	if fit.Own() {
 		sides = fit.classSides()
 	}
 	for _, sd := range sides {
 		grid := tg.Side * tg.Side
 		if sd > 0 {
-			grid = min((sd/P)*(sd/P), fit.MaxPix/(P*P))
+			grid = min((sd/P)*(sd/P), fit.maxPatches(P))
 		}
 		cl := towerClass{Entry: map[uint8]*graph.Graph{}, Rows: grid + tg.Lead}
 		for px := graph.PixRGBA8; px < graph.PixFormats; px++ {
@@ -357,6 +357,58 @@ type PictureFit struct {
 	// lift scales a picture a side shorter than factor up first
 	// (jlm.PreSmartResize's Ints[5]).
 	lift bool
+	// Limit, Pad and LimitPatch are a resize past a patch count and a pad
+	// (jlm.PreLimitPad): a picture of more than Limit whole LimitPatch-pixel
+	// patches scaled down to about that many, then padded to multiples of
+	// Pad pixels; Limit 0 where there is none.
+	Limit, Pad, LimitPatch int
+}
+
+// Own reports that a picture is encoded at a size of its own.
+func (f PictureFit) Own() bool { return f.Factor > 0 || f.Limit > 0 }
+
+// unit is the multiple a picture of its own size's encoded sides are.
+func (f PictureFit) unit() int {
+	if f.Limit > 0 {
+		return f.Pad
+	}
+	return f.Factor
+}
+
+// limitSize is a w x h picture's size under a patch limit (Kimi-VL's
+// rescale): kept, unless its whole patches pass Limit, where both sides are
+// scaled by sqrt(Limit / patches) and truncated -- in float64, as Python
+// computes them.
+func (f PictureFit) limitSize(w, h int) (int, int) {
+	p := f.LimitPatch
+	if n := (w / p) * (h / p); n > f.Limit {
+		s := math.Sqrt(float64(f.Limit) / float64(n))
+		return int(float64(w) * s), int(float64(h) * s)
+	}
+	return w, h
+}
+
+// maxPatches is the most patches a picture of its own size encodes in, of
+// p pixels: under an area bound, the area's; under a patch limit, the most a
+// picture pads to -- a side of a whole patches pads to at most a over the
+// pad's patches plus one of them, and its other side has at most Limit/a
+// (any number up to a picture's longest side where a is zero).
+func (f PictureFit) maxPatches(p int) int {
+	if f.Limit == 0 {
+		return f.MaxPix / (p * p)
+	}
+	u := f.Pad / p
+	pad := func(a int) int { return (a/u + 1) * u }
+	most := composer.PictureSide / p
+	best := 0
+	for a := 0; a <= most; a++ {
+		b := most
+		if a > 0 {
+			b = min(most, f.Limit/a)
+		}
+		best = max(best, pad(a)*pad(b))
+	}
+	return best
 }
 
 // smartSize is a w x h picture's own size (Qwen2-VL's smart_resize): each
@@ -393,13 +445,13 @@ func (f PictureFit) smartSize(w, h int) (ow, oh int) {
 }
 
 // classSides is the sides of the squares a picture of its own size is
-// encoded in, smallest first: 16 factors, doubling, and last the most a
-// side reaches, a picture's at most composer.PictureSide rounded up a
-// factor.
+// encoded in, smallest first: 16 units, doubling, and last the most a side
+// reaches, a picture's at most composer.PictureSide rounded up a unit.
 func (f PictureFit) classSides() []int {
-	most := (composer.PictureSide/f.Factor + 1) * f.Factor
+	u := f.unit()
+	most := (composer.PictureSide/u + 1) * u
 	var out []int
-	for s := 16 * f.Factor; s < most; s *= 2 {
+	for s := 16 * u; s < most; s *= 2 {
 		out = append(out, s)
 	}
 	return append(out, most)
@@ -420,6 +472,11 @@ func towerFit(t *jlm.Tower) (PictureFit, error) {
 			fit.Factor, fit.MinPix, fit.MaxPix = int(s.Ints[0]), int(s.Ints[1]), int(s.Ints[2])
 			fit.lift = len(s.Ints) == 6 && s.Ints[5] == 1
 			sized, pil = true, jlm.Filter(s.Ints[3]) != jlm.FilterTwoTap
+		case jlm.PreLimitPad:
+			fit.LimitPatch, fit.Limit, fit.Pad = int(s.Ints[0]), int(s.Ints[1]), int(s.Ints[2])
+			// The area the reduction reaches: the limit's patches.
+			fit.MaxPix = fit.Limit * fit.LimitPatch * fit.LimitPatch
+			sized, pil = true, jlm.Filter(s.Ints[3]) != jlm.FilterTwoTap
 		case jlm.PreCenterCrop:
 			cropped = true
 		case jlm.PreTile:
@@ -427,7 +484,7 @@ func towerFit(t *jlm.Tower) (PictureFit, error) {
 		}
 	}
 	ways := 0
-	for _, w := range []bool{fit.Short > 0, fit.MaxTiles > 0, fit.Factor > 0} {
+	for _, w := range []bool{fit.Short > 0, fit.MaxTiles > 0, fit.Factor > 0, fit.Limit > 0} {
 		if w {
 			ways++
 		}
@@ -468,6 +525,11 @@ func towerEntry(t *jlm.Tower, px uint8, grid, lead, side int, fit PictureFit, f 
 			}
 		case jlm.PreSmartResize:
 			a.PicW, a.PicH, a.PicLive = side, side, true
+			if err := resizeChain(&a, jlm.Filter(s.Ints[3])); err != nil {
+				return nil, err
+			}
+		case jlm.PreLimitPad:
+			a.PicW, a.PicH, a.PicLive, a.PicPad = side, side, true, int(s.Ints[2])
 			if err := resizeChain(&a, jlm.Filter(s.Ints[3])); err != nil {
 				return nil, err
 			}
@@ -626,6 +688,18 @@ type Square struct {
 // at its own size in the smallest class that holds it, or a fixed square,
 // a crop or a tile at the entry's size.
 func (tg *TowerGraphs) Square(w, h, i int) (Square, int) {
+	if tg.Fit.Limit > 0 {
+		// Resized to its own size and laid over its padded grid by the
+		// picture op: the window the size itself, the grid the padded one.
+		ow, oh := tg.Fit.limitSize(w, h)
+		u := tg.Fit.Pad
+		pw, ph := (ow+u-1)/u*u, (oh+u-1)/u*u
+		c := 0
+		for c < len(tg.Classes)-1 && max(pw, ph) > tg.Classes[c].Pic.PicW {
+			c++
+		}
+		return Square{Class: c, Ow: ow, Oh: oh, Pw: ow, Ph: oh, Gw: pw / tg.Patch, Gh: ph / tg.Patch}, 1
+	}
 	if tg.Fit.Factor > 0 {
 		ow, oh := tg.Fit.smartSize(w, h)
 		c := 0
