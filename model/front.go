@@ -32,7 +32,6 @@ const (
 	UncoveredKind
 	UncoveredRouterScore
 	UncoveredExperts
-	UncoveredGeometry
 	UncoveredSelect
 	UncoveredStreams
 	UncoveredRopeAxes
@@ -56,9 +55,6 @@ func (u Uncovered) String() string {
 		return "a router whose score the container does not state"
 	case UncoveredExperts:
 		return "routed experts stored one matrix each (a container converted before its experts were stacked into banks)"
-	case UncoveredGeometry:
-		return "a layer of its own rotary width turned by the model's rotary, " +
-			"or a block reading another's history of another shape than its attention's"
 	case UncoveredSelect:
 		return "an attention indexer or sparse key selection"
 	case UncoveredStreams:
@@ -432,8 +428,6 @@ func (m *Model) uncovered(li int) Uncovered {
 		return UncoveredKind
 	}
 	switch {
-	case c.NRotAt(li) != c.NRot && !(m.RopeSWA != nil && c.SWA(li)) || !m.sharesGeometry(li):
-		return UncoveredGeometry
 	case c.Streams() > 1 && !c.StatesStreams():
 		return UncoveredStreams
 	case c.RopeAt(li) && !m.ropeAxesStated(m.ropeAt(li)):
@@ -460,18 +454,6 @@ func (m *Model) uncoveredRest(li int) Uncovered {
 		return UncoveredRouterScore
 	}
 	return Covered
-}
-
-// sharesGeometry reports whether block li reads a history of its own
-// attention's shape: its own, or the one its source block writes, whose
-// key heads and head width are li's.
-func (m *Model) sharesGeometry(li int) bool {
-	c := m.Cfg
-	if !c.KVShared(li) {
-		return true
-	}
-	src := c.KVSource(li)
-	return src >= 0 && src < li && !c.KVShared(src) && c.HeadDimAt(src) == c.HeadDimAt(li) && c.NKVHeadAt(src) == c.NKVHeadAt(li)
 }
 
 // stores reports whether the container stores role for block li.
