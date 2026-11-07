@@ -2001,10 +2001,11 @@ func (g *devTier) setRecSteps(sid uint64, n int) {
 
 // setInputs hands session sid's per-layer inputs to this device for its
 // next call (gpuSession.inputsTo).
-func (g *devTier) setInputs(sid uint64, ple []float32, prompt bool) {
+func (g *devTier) setInputs(sid uint64, ple []float32, prompt bool, toks []int32) {
 	g.mu.Lock()
 	ds := g.sessOf(sid)
 	ds.pleHost, ds.prompt = ple, prompt
+	ds.stepToks = append(ds.stepToks[:0], toks...)
 	g.mu.Unlock()
 }
 

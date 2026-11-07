@@ -3801,7 +3801,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 		}
 	}
 	if toks == nil && !embedSrv && g.bs.embTok != nil && len(g.stepToks) > 0 {
-		toks = g.tokWords(g.stepToks, R)
+		toks = g.tokWords(g.stepToks, min(R, batchWidth))
 	}
 	if pe == nil {
 		for i := range hx {
@@ -4737,12 +4737,20 @@ func (g *devTier) layersSession(s backend.Session) {
 	if fold {
 		w(hb.foldReq, g.foldWords(nrow-1))
 	}
+	// The rows' tokens, to the set in use and to the set the blocks run on
+	// (a prompt step's batch set), whose token table they bind.
 	if !embedSrv && a.toks != nil {
 		w(g.bs.embTok, a.toks)
+		if bs != g.bs && bs.embTok != nil {
+			w(bs.embTok, a.toks)
+		}
 	}
 	if embedSrv {
 		tok, at := g.embedWords(pe, R)
 		w(g.bs.embTok, tok)
+		if bs != g.bs && bs.embTok != nil {
+			w(bs.embTok, tok)
+		}
 		if g.bs.posW != nil {
 			w(g.bs.embPos, at)
 		}

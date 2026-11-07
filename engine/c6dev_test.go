@@ -10,6 +10,7 @@ import (
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/model"
 
+	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"github.com/jitllm/jitllm/engine/device/gpu"
 )
 
@@ -282,7 +283,7 @@ func fixtureOnEveryDeviceCounted(t *testing.T, m *model.Model, g *c6Golden, vs [
 				t.Logf("placed: %d reserved rows (%s)", gpux.Stats().ReservedRows, gpux.Err())
 				rows0 := gpux.Stats().NGramRows
 				got := run(st)
-				if m.Ngram != nil && gpux.Stats().NGramRows == rows0 {
+				if gathersStated(m) && gpux.Stats().NGramRows == rows0 {
 					t.Fatalf("the n-gram block read no table row in on the card: its gathers did not run there")
 				}
 				if err := runErr; err != nil {
@@ -368,4 +369,16 @@ func fixtureOnEveryDeviceCounted(t *testing.T, m *model.Model, g *c6Golden, vs [
 	if ran == 0 {
 		t.Skip("no device on this host")
 	}
+}
+
+// gathersStated reports whether a block of m the front end states gathers the
+// n-gram table's rows.
+func gathersStated(m *model.Model) bool {
+	for li := range m.Cfg.NLayer {
+		gr := m.Composing().BlockGraph(li)
+		if gr != nil && m.Uncovered(li) == model.Covered && cpudev.TableRowsOf(gr) >= 0 {
+			return true
+		}
+	}
+	return false
 }

@@ -518,4 +518,4 @@ func (g *GPU) SetTokens(ids []int32) {
 }
 
 // SetTokens is nn.TokenReader for the session's step.
-func (s *gpuSession) SetTokens(ids []int32) { s.g.SetTokens(ids) }
+func (s *gpuSession) SetTokens(ids []int32) { s.toks = append(s.toks[:0], ids...) }
