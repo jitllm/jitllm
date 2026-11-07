@@ -365,13 +365,14 @@ func (s *Instance) stepRowsStreams(src rowSrc, out *rowsOut) error {
 	}
 	s.growRows(n)
 	s.growRows(n)
-	if len(s.rowsPos) < 2*n {
-		s.rowsPos = make([]int, 2*n)
+	if len(s.rowsPos) < 3*n {
+		s.rowsPos = make([]int, 3*n)
 	}
-	pos, slot := s.rowsPos[:n], s.rowsPos[n:2*n]
+	pos, slot, seq := s.rowsPos[:n], s.rowsPos[n:2*n], s.rowsPos[2*n:3*n]
 	for i := range n {
 		pos[i] = p0 + i
 		slot[i] = pos[i] // sequence 0's slots are its positions (nn.RowsDevice)
+		seq[i] = 0
 	}
 	if err := s.fillRows(src, 0, n, s.bx[:n*c.NEmbd], nil, pos); err != nil {
 		return err
@@ -396,6 +397,11 @@ func (s *Instance) stepRowsStreams(src rowSrc, out *rowsOut) error {
 	hostLogits := nlogit
 	if devHead {
 		hostLogits = 0
+	}
+	// The device's run is opened as every rows step's is: its rows' tokens
+	// among what its blocks read.
+	if err := s.openRows(s.routeAt(s.lo), seq, pos, src.tok); err != nil {
+		return err
 	}
 	err := s.altRowsStep(rd, pos, slot, src.tok, n, logits, hostLogits)
 	if err == nil && devHead {
