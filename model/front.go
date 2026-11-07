@@ -737,7 +737,7 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 		qIn, qRole = b.Norm(matvec(n, jlm.RoleAttnQA, qa.Rows), jlm.RoleAttnQANorm, c.LatentNormEps), jlm.RoleAttnQB
 	}
 	q := matvec(qIn, qRole, qrows, stored(jlm.RoleAttnQBias)...)
-	if has(jlm.RoleAttnKVA) {
+	if has(jlm.RoleAttnKVA) || c.KVShared(li) && c.MLA() {
 		att, err := m.latentAttention(b, f, li, n, qIn, q, has, stored, matvec)
 		if err != nil {
 			return nil, UncoveredUnverified, err
@@ -1433,9 +1433,15 @@ func (m *Model) latentAttention(b *graph.Builder, f graph.Facts, li int, n, qIn,
 		return b.Emit(graph.OpExpertMatVec, []graph.ValueID{v}, []graph.Result{{Name: name, Width: nh * rows}},
 			[]graph.Binding{{Role: r, K: k, Rows: rows, Sheets: nh}}, graph.Attrs{}, nil, nil)[0]
 	}
-	kv := matvec(n, jlm.RoleAttnKVA, row)
-	latent := b.Norm(slice(kv, "latent", 0, 0, lat, lat), jlm.RoleAttnKVANorm, c.LatentNormEps)
-	kpe := slice(kv, "k.pe", 0, lat, rot, rot)
+	// A block reading another's history (Config.KVShared) writes no latent
+	// row: its keys and values are the rows its source block cached.
+	shared := c.KVShared(li)
+	var latent, kpe graph.ValueID
+	if !shared {
+		kv := matvec(n, jlm.RoleAttnKVA, row)
+		latent = b.Norm(slice(kv, "latent", 0, 0, lat, lat), jlm.RoleAttnKVANorm, c.LatentNormEps)
+		kpe = slice(kv, "k.pe", 0, lat, rot, rot)
+	}
 	qpe := slice(q, "q.pe", hd, nope, rot, nh*rot)
 	if c.RopeAt(li) {
 		r := m.ropeAt(li)
@@ -1446,7 +1452,9 @@ func (m *Model) latentAttention(b *graph.Builder, f graph.Facts, li int, n, qIn,
 		a := graph.Attrs{HeadDim: rot, NRot: r.NRot, Base: r.Base, Layout: layout, Freqs: len(r.Freqs) > 0, Mscale: r.Scale}
 		a.Sections, a.Interleaved = m.ropeAxes(r)
 		qpe = b.Emit(graph.OpRope, []graph.ValueID{qpe}, []graph.Result{{Name: "q.pe.rope", Width: nh * rot}}, nil, a, nil, nil)[0]
-		kpe = b.Emit(graph.OpRope, []graph.ValueID{kpe}, []graph.Result{{Name: "k.pe.rope", Width: rot}}, nil, a, nil, nil)[0]
+		if !shared {
+			kpe = b.Emit(graph.OpRope, []graph.ValueID{kpe}, []graph.Result{{Name: "k.pe.rope", Width: rot}}, nil, a, nil, nil)[0]
+		}
 	}
 	abs := sheets(slice(q, "q.nope", hd, 0, nope, nh*nope), "q.abs", jlm.RoleAttnKB, nope, lat)
 	qrow := b.Emit(graph.OpConcat, []graph.ValueID{abs, qpe}, []graph.Result{{Name: "q.row", Width: nh * row}}, nil,
@@ -1461,8 +1469,11 @@ func (m *Model) latentAttention(b *graph.Builder, f graph.Facts, li int, n, qIn,
 		}
 		parts, width = append(parts, ix.key), row+int(c.sel.KeyWidth)
 	}
-	krow := b.Emit(graph.OpConcat, parts, []graph.Result{{Name: "kv.row", Width: width}}, nil, graph.Attrs{}, nil, nil)[0]
-	hist := graph.StateRef{State: graph.StateKV, Version: b.KVAppend(krow, krow, 0)}
+	hist := graph.SharedHistory(c.KVSource(li))
+	if !shared {
+		krow := b.Emit(graph.OpConcat, parts, []graph.Result{{Name: "kv.row", Width: width}}, nil, graph.Attrs{}, nil, nil)[0]
+		hist = graph.StateRef{State: graph.StateKV, Version: b.KVAppend(krow, krow, 0)}
+	}
 	scale := c.AttnScale
 	if scale == 0 {
 		scale = 1 / math.Sqrt(float64(hd))
