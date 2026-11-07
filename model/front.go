@@ -148,6 +148,9 @@ type frontSet struct {
 	// cpuLogprobs is the logits' log-softmax and their MaxTopLogprobs most
 	// likely tokens, cpuMask a constrained draw's masked logits.
 	CpuLogprobs, CpuMask *graph.Graph
+	// CpuDecide is a label readout's distribution and answers over the
+	// picked logits (graph.DecisionScores), for a container that states one.
+	CpuDecide *graph.Graph
 	// tables are the step's rotary tables, the model's rotary's then its
 	// sliding layers', as composer.Front states them (nil for one that turns
 	// nothing).
@@ -373,6 +376,10 @@ func (m *Model) FrontGraphs() *frontSet {
 		s.CpuLogprobs = lp.Build()
 		mk := graph.MaskRow{NVocab: m.Cfg.NVocab}
 		s.CpuMask = mk.Build()
+	}
+	if m.Container.Config().DecisionLabels != nil {
+		ds := graph.DecisionScores{N: nn.DecisionOptions, G: nn.DecisionGroup}
+		s.CpuDecide = ds.Build()
 	}
 	f.Set = s
 	return s

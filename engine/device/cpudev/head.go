@@ -17,6 +17,7 @@ type HeadParts struct {
 	Sample, Walk, Row, Cut            Part
 	WalkProb, CutProb, CutK, CutKProb Part
 	OutNorm, Logprobs, Mask           Part
+	Decide                            Part
 }
 
 // Head is the head and the samplers on the CPU device, composed once at the
@@ -399,4 +400,19 @@ func (h *Head) Logprobs(logits []float32) (row []float32, ids []uint32, ok bool)
 	h.run(f, nil, 1, unsafe.Pointer(&logits[0]), unsafe.Pointer(&h.lpRow[0]), unsafe.Pointer(&h.lpIDs[0]))
 	h.steps.Serve(nn.PartSample)
 	return h.lpRow, h.lpIDs, true
+}
+
+// Decide is a label readout over vals, the picked logits of a question's
+// option groups: its distribution into probs and its statistics into stats
+// (graph.DecisionScores), or false where the form declines.
+func (h *Head) Decide(vals, keep, params, prior, probs, stats []float32) bool {
+	f, _, why := h.form(&h.p.Decide, false)
+	if why != nn.DeclineServes {
+		h.steps.Decline(nn.PartSample, why)
+		return false
+	}
+	h.run(f, nil, 1, unsafe.Pointer(&vals[0]), unsafe.Pointer(&keep[0]), unsafe.Pointer(&params[0]),
+		unsafe.Pointer(&prior[0]), unsafe.Pointer(&probs[0]), unsafe.Pointer(&stats[0]))
+	h.steps.Serve(nn.PartSample)
+	return true
 }

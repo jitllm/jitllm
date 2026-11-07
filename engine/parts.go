@@ -46,6 +46,10 @@ func (s *Instance) partsPlan() *nn.PartsPlan {
 	}
 	p.Head[13] = part(fg.CpuLogprobs, nn.DeclineNoSample, 1)
 	p.Head[14] = part(fg.CpuMask, nn.DeclineNoSample, 1)
+	p.Head[15] = nn.PartPlan{Skip: true}
+	if fg.CpuDecide != nil {
+		p.Head[15] = part(fg.CpuDecide, nn.DeclineNoSample, 1)
+	}
 
 	if s.c.StatesStreams() {
 		p.Streams, p.NStreams = true, s.c.Streams()

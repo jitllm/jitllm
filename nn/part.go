@@ -242,7 +242,9 @@ type DrawArgs struct {
 // HeadDevice is a device running the head and the samplers: the head over a
 // row (Head) or a call's rows (HeadRows), the output norm alone, a label
 // pick, the greedy token, a draw at a uniform, a draw's distribution, a
-// constrained draw's mask and the log-softmax with its most likely tokens.
+// constrained draw's mask, the log-softmax with its most likely tokens and a
+// label readout's distribution over a question's options (Decide:
+// graph.DecisionScores' inputs and outputs, in their order).
 type HeadDevice interface {
 	Head(x, logits, hidden []float32) Decline
 	HeadRows(x, logits, hidden []float32, n int) Decline
@@ -253,6 +255,7 @@ type HeadDevice interface {
 	Dist(logits []float32, a DrawArgs, pall []float32) (dense bool, ids []uint32, vals []float32, ok bool)
 	Mask(dst, logits, mask []float32) bool
 	Logprobs(logits []float32) (row []float32, ids []uint32, ok bool)
+	Decide(vals, keep, params, prior, probs, stats []float32) bool
 }
 
 // EntryDevice is a device writing a prediction block's entry: `rows` rows

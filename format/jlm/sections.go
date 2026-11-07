@@ -206,7 +206,11 @@ func encodeConfigAt(c *Config, v uint32) []byte {
 	// the twenty-third, the blocks' own geometries (Geoms), the first
 	// twenty-two; the twenty-fourth, the delta rule's stated decay and gate,
 	// the first twenty-three. An older reader drops each.
-	delta := c.DeltaDecay != nil || c.DeltaGate != nil
+	// The twenty-fifth, a label readout's statement, implies the first
+	// twenty-four; an older reader drops it and opens the model as the
+	// backbone it is.
+	labels := c.DecisionLabels != nil
+	delta := labels || c.DeltaDecay != nil || c.DeltaGate != nil
 	geoms := delta || len(c.Geoms) != 0
 	post := geoms || c.Streams.sharesWrites()
 	pre := post || c.Streams.addsBefore()
@@ -368,6 +372,9 @@ func encodeConfigAt(c *Config, v uint32) []byte {
 	}
 	if delta {
 		encodePrograms(w, []*Program{c.DeltaDecay, c.DeltaGate})
+	}
+	if labels {
+		encodeDecisionLabels(w, c.DecisionLabels)
 	}
 	return w.b
 }
@@ -563,6 +570,9 @@ func decodeConfigAt(b []byte, v uint32) (*Config, error) {
 		if len(ps) == 2 {
 			c.DeltaDecay, c.DeltaGate = ps[0], ps[1]
 		}
+	}
+	if r.err == nil && len(r.b) > 0 {
+		c.DecisionLabels = decodeDecisionLabels(r)
 	}
 	if r.err != nil {
 		return nil, r.err
@@ -1050,4 +1060,43 @@ func ngramValid(c *Config) error {
 		}
 	}
 	return nil
+}
+
+func encodeStrs(w *wbuf, ss []string) {
+	w.u32(uint32(len(ss)))
+	for _, x := range ss {
+		w.str(x)
+	}
+}
+
+func decodeStrs(r *rbuf) []string {
+	var out []string
+	for range r.count(4) {
+		out = append(out, r.str())
+	}
+	return out
+}
+
+func encodeDecisionLabels(w *wbuf, l *DecisionLabels) {
+	encodeStrs(w, l.Codes)
+	encodeStrs(w, l.WideCodes)
+	encodeStrs(w, l.Pool)
+	w.u32(l.MaxOptions)
+	encodeStrs(w, l.NoulTrue)
+	encodeStrs(w, l.NoulFalse)
+	w.u32(l.NoulRatings)
+	for _, b := range []bool{l.KeyCodes, l.Spaced, l.ShowCodes, l.NoulTrueFirst, l.ScoreByKey, l.Reversed, l.SortKeys,
+		l.IDInstructions, l.EntropyConfidence} {
+		w.bool(b)
+	}
+}
+
+func decodeDecisionLabels(r *rbuf) *DecisionLabels {
+	l := &DecisionLabels{Codes: decodeStrs(r), WideCodes: decodeStrs(r), Pool: decodeStrs(r), MaxOptions: r.u32()}
+	l.NoulTrue, l.NoulFalse, l.NoulRatings = decodeStrs(r), decodeStrs(r), r.u32()
+	for _, b := range []*bool{&l.KeyCodes, &l.Spaced, &l.ShowCodes, &l.NoulTrueFirst, &l.ScoreByKey, &l.Reversed,
+		&l.SortKeys, &l.IDInstructions, &l.EntropyConfidence} {
+		*b = r.bool()
+	}
+	return l
 }

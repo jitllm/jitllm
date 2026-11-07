@@ -253,10 +253,18 @@ const (
 // form is made for it once, and a larger k reads the logits back.
 const SampleMaxK = 256
 
-// PickMax is the most ids a device's label pick (Head.Pick) reads: its
-// forms are made for it once, and a longer pick reads the logits back.
-// Lev's codes are at most 255; d1's groups two a code.
-const PickMax = 512
+// DecisionOptions is the most options a label readout weighs, and
+// DecisionGroup the most token ids one option is read at (a label, its spaced
+// form and a case's forms): the readout's form (graph.DecisionScores) is made
+// for them once, a question's own count masked within it.
+const (
+	DecisionOptions = 256
+	DecisionGroup   = 3
+)
+
+// PickMax is the most ids a device's label pick (Head.Pick) reads: a label
+// readout's every option at its whole group. Its forms are made for it once.
+const PickMax = DecisionOptions * DecisionGroup
 
 // Head is the tail of a token: the output norm and the vocabulary projection.
 // It runs in the same submission as the last block, so a token ends with one
