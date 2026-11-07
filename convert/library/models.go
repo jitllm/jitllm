@@ -237,13 +237,13 @@ func Models() []Model {
 			Repo: "bartowski/google_gemma-3-1b-it-GGUF", File: "google_gemma-3-1b-it-Q4_K_M.gguf", Bytes: 806058496},
 		{Name: "gemma-3-4b-it", Title: "Gemma 3 4B Instruct", Arch: "gemma3", Params: "4B", Quant: "Q4_K_M",
 			Repo: "bartowski/google_gemma-3-4b-it-GGUF", File: "google_gemma-3-4b-it-Q4_K_M.gguf", Bytes: 2489758112,
-			Note: "Text only here: its vision tower is not supported yet."},
+			Note: "Text only: this file carries no vision tower."},
 		{Name: "gemma-3-12b-it", Title: "Gemma 3 12B Instruct", Arch: "gemma3", Params: "12B", Quant: "Q4_K_M",
 			Repo: "bartowski/google_gemma-3-12b-it-GGUF", File: "google_gemma-3-12b-it-Q4_K_M.gguf", Bytes: 7300575264,
-			Note: "Text only here: its vision tower is not supported yet."},
+			Note: "Text only: this file carries no vision tower."},
 		{Name: "gemma-3n-E2B-it", Title: "Gemma 3n E2B Instruct", Arch: "gemma3n", Params: "5B (E2B)", Quant: "Q4_K_M",
 			Repo: "unsloth/gemma-3n-E2B-it-GGUF", File: "gemma-3n-E2B-it-Q4_K_M.gguf", Bytes: 3026881888,
-			Note: "Text only here: its vision and audio encoders are not supported yet."},
+			Note: "Text only: this file carries no vision or audio encoder."},
 
 		// --- phi3 (Phi-3, Phi-3.5 and Phi-4 are this architecture) ---
 		{Name: "phi-3.5-mini-instruct", Title: "Phi-3.5 mini Instruct", Arch: "phi3", Params: "3.8B", Quant: "Q4_K_M",
