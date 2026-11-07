@@ -218,9 +218,11 @@ func mainSampleArgs() ArgFields {
 // in Out, its input planes in AScale, the one input word in K. A table over
 // several position axes reads more buffers, in fields the registers hold
 // apart from AScale's: a further input in Q2, and its positions, read at an
-// index a load gives, in AScale2.
+// index a load gives, in AScale2. A call's coordinates are in Cols and OutStr,
+// as every part's: a grid table's rows are its calls (RowCalls).
 func mainTableArgs() ArgFields {
-	return ArgFields{Out: []int{0}, Weight: 136, Consts: 56, In: []int{24, 128}, Word: 40, Vectors: 40, Tail: 32, Counts: []int{32}}
+	return ArgFields{Out: []int{0}, Weight: 136, Consts: 56, In: []int{24, 128}, Word: 40, Vectors: 40, Tail: 32, Counts: []int{32},
+		Coords: []int{80, 88}}
 }
 
 // mainWorkgroups is main's layout of a range's partitions over workgroups.
