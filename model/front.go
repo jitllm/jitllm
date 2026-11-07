@@ -57,7 +57,7 @@ func (u Uncovered) String() string {
 	case UncoveredExperts:
 		return "routed experts stored one matrix each (a container converted before its experts were stacked into banks)"
 	case UncoveredGeometry:
-		return "a value head of another width than the key's, a layer of its own rotary width turned by the model's rotary, " +
+		return "a layer of its own rotary width turned by the model's rotary, " +
 			"or a block reading another's history of another shape than its attention's"
 	case UncoveredSelect:
 		return "an attention indexer or sparse key selection"
@@ -432,7 +432,7 @@ func (m *Model) uncovered(li int) Uncovered {
 		return UncoveredKind
 	}
 	switch {
-	case c.NRotAt(li) != c.NRot && !(m.RopeSWA != nil && c.SWA(li)) || !c.MLA() && c.HeadDimV != c.HeadDim || !m.sharesGeometry(li):
+	case c.NRotAt(li) != c.NRot && !(m.RopeSWA != nil && c.SWA(li)) || !m.sharesGeometry(li):
 		return UncoveredGeometry
 	case c.Streams() > 1 && !c.StatesStreams():
 		return UncoveredStreams

@@ -6,6 +6,17 @@ import (
 	"github.com/jitllm/jitllm/format/jlm"
 )
 
+// valueWidthFits refuses a value head of another width than the key's
+// outside an MLA model: the history holds a key and a value of one head
+// width, and no family that converts states another.
+func valueWidthFits(c *jlm.Config) error {
+	if c.KVLoraRank == 0 && c.HeadDimV != 0 && c.HeadDimV != c.HeadDim {
+		return fmt.Errorf("convert: %v's value heads are %d wide beside keys %d wide: %w",
+			c.Arch, c.HeadDimV, c.HeadDim, ErrNotImplemented)
+	}
+	return nil
+}
+
 // expertsFit refuses a mixture no reference states: experts weighted at
 // their input (Llama 4's, which has no expert biases) over a biased gate or
 // up bank, routed experts wider than the residual, or latent experts --
