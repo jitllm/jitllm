@@ -820,11 +820,6 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 	out.bidir = c.BidirLayers
 	out.sel = c.Selection
 	out.compKinds, out.compRate = c.CompKinds, [3]int{0, int(c.CompRateCSA), int(c.CompRateHCA)}
-	if s := out.sel; s != nil && !out.MLA() && (s.KeyWidth != uint32(out.HeadDim) ||
-		s.Groups != 1 && s.Groups != uint32(out.NKVHead) || out.MixedGeom() || out.NKVShared != 0) {
-		return nil, fmt.Errorf("model: %s: a selection of %d keys %d wide over %d kv heads of %d", out.Arch,
-			s.Groups, s.KeyWidth, out.NKVHead, out.HeadDim)
-	}
 	for li := out.NLayer - out.NKVShared; li < out.NLayer; li++ {
 		if out.KVSource(li) < 0 {
 			return nil, fmt.Errorf("model: %s: KV-sharing block %d has no earlier block of its kind",

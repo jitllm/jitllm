@@ -1,6 +1,7 @@
 package convert
 
 import (
+	"fmt"
 	"math"
 
 	"github.com/jitllm/jitllm/format/jlm"
@@ -23,10 +24,14 @@ import (
 //     block's first position, IdxTopK/QSARatio read, on every attention
 //     block.
 //
-// A block selects where it stores the indexer's key.
-func StateSelection(c *jlm.Config, stores func(r jlm.Role, li int32) bool) {
+// A block selects where it stores the indexer's key. Outside an MLA model
+// the key is cached as one more head of the block's history, so a key of
+// another width, groups that are neither one nor the kv heads, blocks of
+// several geometries or KV sharing are refused here, with the file in front
+// of a person.
+func StateSelection(c *jlm.Config, stores func(r jlm.Role, li int32) bool) error {
 	if c.IdxHeads == 0 || c.NLayer == 0 {
-		return
+		return nil
 	}
 	n := c.NLayer + c.NMTP
 	id := int32(c.IdxHeadDim)
@@ -94,7 +99,30 @@ func StateSelection(c *jlm.Config, stores func(r jlm.Role, li int32) bool) {
 		s.Query = prog(2, jlm.TowerOp{Code: jlm.TOpLinear, In: on(1), Bind: []jlm.Role{jlm.RoleIdxQB}}, rope(jlm.RopeNeox))
 		s.Weight, s.Relu = weight(), true
 	default:
-		return
+		return nil
+	}
+	if err := selectionFits(c, s); err != nil {
+		return err
 	}
 	c.Selection = s
+	return nil
+}
+
+// selectionFits refuses a non-MLA selection whose key is not one head of
+// the history it is cached in.
+func selectionFits(c *jlm.Config, s *jlm.Selection) error {
+	if c.KVLoraRank != 0 {
+		return nil
+	}
+	mixed := false
+	for b := range int(c.NLayer) {
+		g := c.GeomAt(b)
+		mixed = mixed || g.HeadDim != c.HeadDim || g.NKVHead != c.NKVHead || g.NRot != c.NRot
+	}
+	if s.KeyWidth != c.HeadDim || s.Groups != 1 && s.Groups != c.NKVHead || mixed || c.NKVShared != 0 {
+		return fmt.Errorf("convert: %v selects with %d group(s) of keys %d wide over %d kv heads of %d "+
+			"(blocks of several geometries %v, %d sharing their KV): the key is cached as one head of the "+
+			"history: %w", c.Arch, s.Groups, s.KeyWidth, c.NKVHead, c.HeadDim, mixed, c.NKVShared, ErrNotImplemented)
+	}
+	return nil
 }
