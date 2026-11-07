@@ -94,7 +94,8 @@ func Verify(g *Graph, f Facts) error {
 			return 0
 		}
 		strided := (o.Kind == OpConv || o.Kind == OpUnfold) && o.Attr.Stride > 1
-		grid := strided || o.Kind == OpRegroup || o.Kind == OpFold || o.Kind == OpDropRows
+		grid := strided || o.Kind == OpRegroup || o.Kind == OpFold || o.Kind == OpDropRows ||
+			o.Kind == OpRowBreak || o.Kind == OpWrapRows
 		for j, id := range o.Out {
 			if r := rows(id); grid && j == 0 && r < 1 {
 				bad("%s: a %s's %%%s states no rows", at, o.Kind, g.Values[id].Name)
@@ -109,6 +110,10 @@ func Verify(g *Graph, f Facts) error {
 				want = in / max(o.Attr.Span, 1)
 			case OpDropRows:
 				want = in - o.Attr.Offset
+			case OpRowBreak:
+				want = 2 * in
+			case OpWrapRows:
+				want = in + 2
 			}
 			if want >= 0 && out != want {
 				bad("%s: a %s of %d rows writes %d, not %d", at, o.Kind, in, out, want)

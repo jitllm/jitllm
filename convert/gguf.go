@@ -644,6 +644,11 @@ func prepareTower(s *jlm.Source) error {
 			}
 		}
 	}
+	if v.Projector == jlm.ProjHunyuanVL {
+		if err := normFrameRows(s, v.Eps); err != nil {
+			return err
+		}
+	}
 	return quantizeTower(s.Tensors)
 }
 

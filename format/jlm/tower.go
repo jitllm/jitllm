@@ -195,7 +195,15 @@ const (
 	TOpTailConv OpCode = 22
 	// TOpShift is In[0] plus the stored vector Bind[0], element by element.
 	TOpShift OpCode = 23
-	topCodes OpCode = 24
+	// TOpRowBreak is In[0]'s rows -- the merged grid's raster, its width the
+	// picture's patch grid's over Span -- with Bind[0]'s one row after each
+	// of the grid's rows (HunyuanVL's newline).
+	TOpRowBreak OpCode = 24
+	// TOpWrapRows is Bind[0]'s one row, In[0]'s rows -- the patch grid over
+	// Span, with a TOpRowBreak's row after each of its rows where one came
+	// before in the program -- and Bind[1]'s one row.
+	TOpWrapRows OpCode = 25
+	topCodes    OpCode = 26
 )
 
 // A stated rotary's layout (TOpRope's Chain).
@@ -473,7 +481,8 @@ func (p *Program) valid(name string) error {
 			return fmt.Errorf("jlm: the tower's %s op %d (code %d) reads %d values, want %d", name, i, op.Code, len(op.In), in)
 		case len(op.Bind) < bind[0] || len(op.Bind) > bind[1]:
 			return fmt.Errorf("jlm: the tower's %s op %d (code %d) binds %d weights, want %d to %d", name, i, op.Code, len(op.Bind), bind[0], bind[1])
-		case (op.Code == TOpPatchify || op.Code == TOpRegroup || op.Code == TOpPool || op.Code == TOpFold) && op.Span <= 0:
+		case (op.Code == TOpPatchify || op.Code == TOpRegroup || op.Code == TOpPool || op.Code == TOpFold ||
+			op.Code == TOpRowBreak || op.Code == TOpWrapRows) && op.Span <= 0:
 			return fmt.Errorf("jlm: the tower's %s op %d groups by %d", name, i, op.Span)
 		case (op.Code == TOpLayerNorm || op.Code == TOpRMSNorm) && op.Eps <= 0:
 			return fmt.Errorf("jlm: the tower's %s op %d has an epsilon of %v", name, i, op.Eps)
@@ -524,8 +533,10 @@ func (op *TowerOp) arity() (in int, bind [2]int) {
 		return 1, [2]int{1, 2}
 	case TOpRMSNorm:
 		return 1, [2]int{0, 1}
-	case TOpLeadRow, TOpScale, TOpShift, TOpTailConv:
+	case TOpLeadRow, TOpScale, TOpShift, TOpTailConv, TOpRowBreak:
 		return 1, [2]int{1, 1}
+	case TOpWrapRows:
+		return 1, [2]int{2, 2}
 	case TOpNGramRows:
 		return 0, [2]int{1, 1}
 	case TOpSum, TOpMax, TOpSlice, TOpRope:

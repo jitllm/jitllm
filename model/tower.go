@@ -47,7 +47,11 @@ type TowerGraphs struct {
 	// rows are ordered in and window that of the windows of them, in merge
 	// windows (towerTiles); full says block i attends the whole picture.
 	GridDiv, Merge, Window int
-	Full                   []bool
+	// Line and Ends are the rows the head adds to the merged grid's: Line
+	// after each of its rows (TOpRowBreak), Ends before and after it
+	// (TOpWrapRows); Frame the merge they count the grid over.
+	Line, Ends, Frame int
+	Full              []bool
 	// fit is how a picture becomes the tower's squares.
 	Fit PictureFit
 	// table and planes are the blocks' rotary table and its planes, nil for
@@ -325,6 +329,19 @@ func (m *Model) BuildTowerGraphs() (*TowerGraphs, error) {
 		return nil, fmt.Errorf("model: the tower's head: %w", err)
 	}
 	tg.Head, tg.Out = h, out
+	if tg.Line, tg.Frame = programFrame(&t.Head); tg.Frame > 0 {
+		for _, op := range t.Head.Ops {
+			if op.Code == jlm.TOpWrapRows {
+				tg.Ends = 1
+			}
+		}
+	} else {
+		for _, op := range t.Head.Ops {
+			if op.Code == jlm.TOpWrapRows {
+				tg.Ends, tg.Frame = 1, int(op.Span)
+			}
+		}
+	}
 	D := int(v.ProjDim)
 	for j := range t.Taps {
 		tp := &t.Taps[j]
@@ -717,6 +734,10 @@ func (tg *TowerGraphs) Square(w, h, i int) (Square, int) {
 // squareOut is the rows the head writes for square sq: its patches over
 // the head's ratio of rows out to patch rows in.
 func (tg *TowerGraphs) SquareOut(sq Square) int {
+	if tg.Frame > 0 {
+		m := tg.Frame
+		return (sq.Gh/m)*(sq.Gw/m+tg.Line) + 2*tg.Ends
+	}
 	return sq.Gw * sq.Gh * tg.Out / (tg.Rows - tg.Lead)
 }
 
@@ -985,6 +1006,14 @@ func lowerValuesWith(b *graph.Builder, t *jlm.Tower, p *jlm.Program, in []graph.
 		case jlm.TOpLeadRow:
 			out = b.Emit(graph.OpLeadRow, ins, []graph.Result{{Name: "class", Width: width(ins[0])}},
 				[]graph.Binding{{Role: op.Bind[0], K: width(ins[0])}}, graph.Attrs{Offset: int(op.Offset)}, nil, nil)[0]
+		case jlm.TOpRowBreak:
+			out = b.Emit(graph.OpRowBreak, ins, []graph.Result{{Name: "lines", Width: width(ins[0]), Rows: 2 * rowsOf(ins[0])}},
+				[]graph.Binding{{Role: op.Bind[0], K: width(ins[0])}}, graph.Attrs{Span: int(op.Span)}, nil, nil)[0]
+		case jlm.TOpWrapRows:
+			line, _ := programFrame(p)
+			out = b.Emit(graph.OpWrapRows, ins, []graph.Result{{Name: "framed", Width: width(ins[0]), Rows: rowsOf(ins[0]) + 2}},
+				[]graph.Binding{{Role: op.Bind[0], K: width(ins[0])}, {Role: op.Bind[1], K: width(ins[0])}},
+				graph.Attrs{Span: int(op.Span), Offset: int(t.Entry.Ops[0].Offset), Width: line}, nil, nil)[0]
 		case jlm.TOpDropRows:
 			out = b.Emit(graph.OpDropRows, ins, []graph.Result{{Name: "rows", Width: width(ins[0]),
 				Rows: rowsOf(ins[0]) - int(op.Offset)}}, nil, graph.Attrs{Offset: int(op.Offset)}, nil, nil)[0]
@@ -1276,7 +1305,7 @@ func (tg *TowerGraphs) SpanGrid(w, h int) ImageGrid {
 		return ImageGrid{}
 	}
 	sq, _ := tg.Square(w, h, 0)
-	return ImageGrid{T: 1, H: sq.Gh / tg.GridDiv, W: sq.Gw / tg.GridDiv}
+	return ImageGrid{T: 1, H: sq.Gh / tg.GridDiv, W: sq.Gw / tg.GridDiv, Line: tg.Line, Ends: tg.Ends}
 }
 
 // pictureKey names a picture by everything the tower reads of it: its
@@ -1300,4 +1329,16 @@ func pictureKey(img image.Image) (*RowsKey, error) {
 	var k RowsKey
 	hs.Sum(k[:0])
 	return &k, nil
+}
+
+// programFrame is the rows a program's TOpRowBreak adds after each row of
+// the merged grid -- 1 where it has one, 0 where not -- and the merge it
+// counts that grid over.
+func programFrame(p *jlm.Program) (line, merge int) {
+	for _, op := range p.Ops {
+		if op.Code == jlm.TOpRowBreak {
+			return 1, int(op.Span)
+		}
+	}
+	return 0, 0
 }
