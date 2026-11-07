@@ -413,13 +413,19 @@ func containerModels(t testing.TB) []string {
 }
 
 // existingModel resolves a test's model path to something that is actually on
-// this box: the GGUF it names, or the container beside it.
+// this box: the GGUF it names, the container beside it, or for a name with
+// q8Suffix the source directory convertPair quantizes.
 //
 // A hardcoded ".gguf" is a claim about the disk that is false on a host
 // holding only containers, where the gate would otherwise skip.
 func existingModel(path string) (string, bool) {
 	if _, err := os.Stat(path); err == nil {
 		return path, true
+	}
+	if src, ok := strings.CutSuffix(path, q8Suffix); ok {
+		if _, err := os.Stat(src); err == nil {
+			return path, true
+		}
 	}
 	c := strings.TrimSuffix(path, filepath.Ext(path)) + jlm.Ext
 	if _, err := os.Stat(c); err == nil {
