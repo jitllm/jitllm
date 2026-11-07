@@ -33,7 +33,6 @@ const (
 	DeclineEmbedToken
 	DeclineFeeds
 	DeclineRecurrent
-	DeclineKVFormat
 	DeclinePageOut
 	DeclineNoWeight
 	DeclineCutWeight
@@ -100,8 +99,6 @@ func (d Decline) String() string {
 		return "a block graph reading more than the residual and per-layer inputs the device holds"
 	case DeclineRecurrent:
 		return "a recurrent state the form does not step (a tail or a variant it does not hold, none held, or the CPU's several rows)"
-	case DeclineKVFormat:
-		return "a history neither binary16 nor f32 (q8_0)"
 	case DeclinePageOut:
 		return "a history page outside the layer's arena"
 	case DeclineNoWeight:

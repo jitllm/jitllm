@@ -2,6 +2,7 @@ package engine
 
 import (
 	"encoding/binary"
+	"fmt"
 	"math"
 	"math/rand"
 	"strings"
@@ -46,9 +47,7 @@ func TestKVQ8RefusesByName(t *testing.T) {
 // the instance, as a migration does: rows of every head width its layers
 // hold, past whole units of the forms so the last rows are staged, narrowed
 // into the history's bytes word for word as oracle.QuantizeQ8 writes a
-// zero-padded row, then widened back to each element's d*q. No q8 history
-// can be asked for while the composer forms no attention over one
-// (KVTypeRefusal), so the instance is given one directly, on every model
+// zero-padded row, then widened back to each element's d*q, on every model
 // whose history a q8 row can hold.
 func TestCPUConvertsAQ8History(t *testing.T) {
 	ran := 0
@@ -62,9 +61,8 @@ func TestCPUConvertsAQ8History(t *testing.T) {
 			if m.Cfg.KvQ8Inexpressible() != nil {
 				return
 			}
-			s := testInstance(t, m, 8)
+			s := testInstance(t, m, 8, WithKVType(model.KVQ8_0))
 			defer s.Close()
-			s.setKVFmt(nn.KVQ8)
 			if s.KVType() != model.KVQ8_0 {
 				t.Fatal("a q8_0 cache was asked for and not selected")
 			}
@@ -124,6 +122,124 @@ func TestCPUConvertsAQ8History(t *testing.T) {
 				}
 				t.Logf("head width %d: %d rows narrowed and widened", hd, n)
 			}
+			ran++
+		})
+	}
+	if ran == 0 {
+		t.Fatal("no model holds a q8 history")
+	}
+}
+
+// TestCPUAttendsAQ8History runs a prompt and its decode on the composed CPU
+// with a q8_0 history and with an f32 one, on every model with an attention
+// history: every block step is served composed over the q8 pages, and the
+// first attending block -- whose keys and values read no history before they
+// are written, so both instances write the same rows -- holds each row of a
+// prompt inside its window as oracle.QuantizeQ8 quantizes the f32 history's
+// row, widened to d*q, bit for bit. The logits must be finite
+// and not the f32 history's (which they would be were the rows held at f32);
+// how far they move is the model's sensitivity, logged and not judged:
+// attention reading the rows is TestComposedCPUAttendQ8's.
+func TestCPUAttendsAQ8History(t *testing.T) {
+	const decode = 6
+	ran := 0
+	for _, name := range principleModels() {
+		t.Run(name, func(t *testing.T) {
+			m, err := model.Open(jlmOf(t, testmodels.Path(name)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer m.Close()
+			c := m.Cfg
+			li := -1
+			for i := range c.NLayer {
+				if c.LayerKind(i).Attends() {
+					li = i
+					break
+				}
+			}
+			if li < 0 {
+				return
+			}
+			if m.Cfg.KvQ8Inexpressible() != nil {
+				return
+			}
+			ids := m.Vocab.Encode(strings.Repeat("The quick brown fox jumps over the lazy dog. ", 6), true)
+			n := len(ids) - decode
+			type run struct {
+				logits [][]float32
+				k, v   []float32
+				hd     int
+			}
+			do := func(kv model.KVType) run {
+				s := testInstance(t, m, len(ids)+1, WithKVType(kv))
+				defer s.Close()
+				if s.KVType() != kv {
+					t.Fatalf("a %v cache was asked for and %v selected", kv, s.KVType())
+				}
+				lg, err := s.Prefill(ids[:n])
+				if err != nil {
+					t.Fatal(err)
+				}
+				r := run{logits: [][]float32{append([]float32(nil), lg...)}}
+				for i := range decode {
+					if lg, err = s.Forward(ids[n+i]); err != nil {
+						t.Fatal(err)
+					}
+					r.logits = append(r.logits, append([]float32(nil), lg...))
+				}
+				cpuServed(t, s, fmt.Sprintf("%v: a prompt of %d", kv, n), (1+decode)*c.NLayer, true)
+				h := 16
+				if c.SWA(li) && c.SWAWindow > 0 {
+					h = min(h, c.SWAWindow)
+				}
+				hs := testInstance(t, m, h+1, WithKVType(kv))
+				defer hs.Close()
+				if _, err := hs.Prefill(ids[:h]); err != nil {
+					t.Fatal(err)
+				}
+				l := hs.kvlAt(li)
+				_, _, r.k, r.v = kvMigBufs(l, h)
+				if l.fmt == nn.KVF32 {
+					r.k, r.v = make([]float32, h*l.kvDim()), make([]float32, h*l.kvDim())
+				}
+				if !hs.kv.MigrateKV(li, r.k, r.v, h, false, hs.kvConv) {
+					t.Fatalf("%v: block %d's history was not gathered", kv, li)
+				}
+				r.hd = l.headDim
+				return r
+			}
+			f, q := do(model.KVF32), do(model.KVQ8_0)
+			nb := (f.hd + nn.KVQ8Block - 1) / nn.KVQ8Block
+			pad, codes, pairs := make([]float32, nb*nn.KVQ8Block), make([]int8, nb*nn.KVQ8Block), make([]float32, 2*nb)
+			for _, x := range [][2][]float32{{f.k, q.k}, {f.v, q.v}} {
+				for r := 0; r < len(x[0])/f.hd; r++ {
+					clear(pad[copy(pad, x[0][r*f.hd:(r+1)*f.hd]):])
+					if err := oracle.QuantizeQ8(codes, pairs, pad, 128); err != nil {
+						t.Fatal(err)
+					}
+					for i := range f.hd {
+						want := pairs[2*(i/nn.KVQ8Block)] * float32(codes[i])
+						if got := x[1][r*f.hd+i]; math.Float32bits(got) != math.Float32bits(want) {
+							t.Fatalf("block %d's history row %d element %d is %v, the f32 row quantized is %v", li, r, i, got, want)
+						}
+					}
+				}
+			}
+			worst, differs := 0.0, false
+			for i := range f.logits {
+				e, _ := nmseOf(q.logits[i], f.logits[i])
+				if math.IsNaN(e) || math.IsInf(e, 0) {
+					t.Fatalf("row %d: NMSE %v", i, e)
+				}
+				worst = max(worst, e)
+				differs = differs || e > 0
+			}
+			if !differs {
+				t.Fatal("the q8 history's logits equal the f32 history's: its rows were not quantized")
+			}
+			t.Logf("block %d's %d history rows quantized exactly; %d prompt rows and %d decoded: worst NMSE %.3e against the f32 history",
+				li, len(f.k)/f.hd, n, decode, worst)
 			ran++
 		})
 	}

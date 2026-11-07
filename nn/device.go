@@ -519,8 +519,11 @@ type BlockSpec struct {
 	Table         *jlm.Entry
 	TableRow      int
 	F32           bool
-	Bidir, Whole  bool
-	Rec           bool
+	// KVQ8, past 0, is the head width of a q8 history's rows (F32 is then
+	// true: no store narrows to halves).
+	KVQ8         int
+	Bidir, Whole bool
+	Rec          bool
 }
 
 type LayerPlan struct {

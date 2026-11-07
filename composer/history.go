@@ -10,9 +10,22 @@ import (
 // Pool is how one history pool lays out a page: ByDim keeps a dimension's
 // positions together, [width][page], rather than a position's row,
 // [page][width]; Half stores binary16, two halves to a 32-bit word, the
-// lower element in the low half.
+// lower element in the low half; Q8, past 0, stores a position's row as
+// its heads' q8 rows of Q8 elements each, as OpQ8Rows writes them.
 type Pool struct {
 	ByDim, Half bool
+	Q8          int
+}
+
+// words is the 32-bit words a position's row of width elements occupies.
+func (l Pool) words(width int) int {
+	switch {
+	case l.Q8 > 0:
+		return width / l.Q8 * graph.Q8RowWords(l.Q8)
+	case l.Half:
+		return width / 2
+	}
+	return width
 }
 
 // History is the layout of the pools a part's history lives in: the call
@@ -89,13 +102,17 @@ func (l Pool) check(width int) error {
 		return fmt.Errorf("a binary16 pool laid out by dimension: a word would hold two positions")
 	case l.Half && width%2 != 0:
 		return fmt.Errorf("a binary16 pool of odd width %d: a word would cross a position", width)
+	case l.Q8 > 0 && (l.Half || l.ByDim):
+		return fmt.Errorf("a q8 pool laid out by dimension or in halves: its rows are whole")
+	case l.Q8 > 0 && width%l.Q8 != 0:
+		return fmt.Errorf("a q8 pool of rows of %d holding a width of %d", l.Q8, width)
 	}
 	return nil
 }
 
-// operand is pool o as l lays it out: a binary16 pool is words.
+// operand is pool o as l lays it out: a binary16 or q8 pool is words.
 func (l Pool) operand(o Operand) Operand {
-	if l.Half {
+	if l.Half || l.Q8 > 0 {
 		o.Elem = ir.U32
 	}
 	return o
@@ -111,6 +128,19 @@ func (c *Context) poolRead(x *exprs, j int, l Pool, w, pid, off, d int) int {
 func (c *Context) poolReadIn(x *exprs, j int, l Pool, pg, w, pid, off, d int) int {
 	U := ir.U32
 	switch {
+	case l.Q8 > 0:
+		// The element's code in its head's row, sign-extended, times its
+		// block's scale (OpWidenQ8Rows).
+		hd, F := l.Q8, ir.F32
+		ext := []int{c.pages(), pg, l.words(w)}
+		e := x.op(OpRem, U, d, x.u(uint32(hd)))
+		base := x.op(OpMul, U, x.op(OpDiv, U, d, x.u(uint32(hd))), x.u(uint32(graph.Q8RowWords(hd))))
+		word := x.at(j, ext, pid, off, x.op(OpAdd, U, base, x.op(OpShr, U, e, x.u(2))))
+		b := x.op(OpAnd, U, x.op(OpShr, U, word, x.op(OpMul, U, x.op(OpAnd, U, e, x.u(3)), x.u(8))), x.u(255))
+		code := x.un(OpCvtF32, F, x.un(OpBitcast, ir.I32, x.op(OpSub, U, x.op(OpXor, U, b, x.u(128)), x.u(128))))
+		nb := (hd + q8Block - 1) / q8Block
+		sw := x.op(OpAdd, U, base, x.op(OpAdd, U, x.u(uint32(nb*q8Words)), x.op(OpMul, U, x.op(OpShr, U, e, x.u(5)), x.u(2))))
+		return x.op(OpMul, F, x.un(OpBitcast, F, x.at(j, ext, pid, off, sw)), code)
 	case l.Half:
 		word := x.at(j, []int{c.pages(), pg, w / 2}, pid, off, x.op(OpShr, U, d, x.u(1)))
 		shift := x.op(OpShl, U, x.op(OpAnd, U, d, x.u(1)), x.u(4))

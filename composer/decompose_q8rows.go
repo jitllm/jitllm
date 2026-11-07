@@ -15,13 +15,18 @@ func decomposeQ8Rows(o graph.Op, c *Context) ([]Prim, error) {
 	if len(o.In) != 1 || len(o.Out) != 1 || c.width(o.Out[0]) != graph.Q8RowWords(c.width(o.In[0])) {
 		return nil, fmt.Errorf("q8 rows of %d inputs into %d outputs", len(o.In), len(o.Out))
 	}
+	out := c.value(o.Out[0])
+	out.Elem = ir.U32
+	return q8Rows(c, c.value(o.In[0]), c.rows(o.In[0]), out), nil
+}
+
+// q8Rows is each of in's sh rows of floats into out's words as a q8
+// history's row holds it (OpQ8Rows).
+func q8Rows(c *Context, src Operand, sh []int, out Operand) []Prim {
 	U, F, I := ir.U32, ir.F32, ir.I32
-	sh := c.rows(o.In[0])
 	R, W := sh[0], sh[1]
 	nb := (W + q8Block - 1) / q8Block
 	rs := graph.Q8RowWords(W)
-	out := c.value(o.Out[0])
-	out.Elem = U
 	temp := func(name string, t ir.Type) Operand {
 		return Operand{Kind: OperandScratch, Name: out.Name + "." + name, Elem: t, Temp: true}
 	}
@@ -82,16 +87,16 @@ func decomposeQ8Rows(o graph.Op, c *Context) ([]Prim, error) {
 
 	ext := R * rs
 	return []Prim{
-		{Kind: PrimReduce, Shape: []int{R, nb, q8Block}, In: []Operand{c.value(o.In[0])}, Out: amax, Combine: OpMax, Expr: a.e},
+		{Kind: PrimReduce, Shape: []int{R, nb, q8Block}, In: []Operand{src}, Out: amax, Combine: OpMax, Expr: a.e},
 		{Kind: PrimMap, Shape: blocks, In: []Operand{amax}, Out: d, Expr: s.e},
 		{Kind: PrimMap, Shape: blocks, In: []Operand{amax, d}, Out: inv, Expr: n.e},
-		{Kind: PrimMap, Shape: padded, In: []Operand{c.value(o.In[0]), inv}, Out: codes, Expr: k.e},
+		{Kind: PrimMap, Shape: padded, In: []Operand{src, inv}, Out: codes, Expr: k.e},
 		{Kind: PrimMap, Shape: []int{R, nb * q8Words}, In: []Operand{codes}, Expr: p.e,
 			Stores: []PrimStore{{Out: out, Index: wix, Value: packed, Extent: ext}}},
 		{Kind: PrimReduce, Shape: []int{R, nb, q8Block}, In: []Operand{codes}, Out: sums, Combine: OpAdd, Type: I, Expr: u.e},
 		{Kind: PrimMap, Shape: blocks, In: []Operand{d, sums}, Expr: q.e,
 			Stores: []PrimStore{{Out: out, Index: pair, Value: dv, Extent: ext}, {Out: out, Index: pair1, Value: sv, Extent: ext}}},
-	}, nil
+	}
 }
 
 // decomposeWidenQ8Rows is each q8 row's codes times their blocks' scales.
