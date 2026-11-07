@@ -54,10 +54,13 @@ type TowerGraphs struct {
 	// Trim is the break rows the frame leaves off its last row: 1 where the
 	// head breaks after each merged row but the last (TOpRowBreak's Offset).
 	Trim int
-	// Marked says the head writes a square's marker row before its rows
-	// (TOpMarkRow) where the square names one (Square.Mark).
-	Marked bool
-	Full   []bool
+	// Marks is the marker rows the head writes around a square's rows
+	// (TOpMarkRow): 1 for one before them, 2 for one before and one after,
+	// each where the square names one (Square.Mark, Square.Trail).
+	Marks int
+	// Tail is the class rows after the patches (TOpTailRow).
+	Tail int
+	Full []bool
 	// fit is how a picture becomes the tower's squares.
 	Fit PictureFit
 	// table and planes are the blocks' rotary table and its planes, nil for
@@ -315,6 +318,11 @@ func (m *Model) BuildTowerGraphs() (*TowerGraphs, error) {
 	merge, window := towerTiles(t)
 	tg := &TowerGraphs{Lead: int(ops[0].Offset), GridDiv: int(t.Span.GridDiv), Merge: merge, Window: window,
 		Side: int(v.ImageSize / v.PatchSize), Patch: P, Fit: fit}
+	for _, op := range ops {
+		if op.Code == jlm.TOpTailRow {
+			tg.Tail = 1
+		}
+	}
 	sides := []int{0}
 	if fit.Own() {
 		sides = fit.classSides()
@@ -324,9 +332,9 @@ func (m *Model) BuildTowerGraphs() (*TowerGraphs, error) {
 		if sd > 0 {
 			grid = min((sd/P)*(sd/P), fit.maxPatches(P))
 		}
-		cl := towerClass{Entry: map[uint8]*graph.Graph{}, Rows: grid + tg.Lead}
+		cl := towerClass{Entry: map[uint8]*graph.Graph{}, Rows: grid + tg.Lead + tg.Tail}
 		for px := graph.PixRGBA8; px < graph.PixFormats; px++ {
-			g, err := towerEntry(t, px, grid, tg.Lead, sd, fit, dense)
+			g, err := towerEntry(t, px, grid, tg.Lead+tg.Tail, sd, fit, dense)
 			if err != nil {
 				return nil, fmt.Errorf("model: the tower's entry: %w", err)
 			}
@@ -352,7 +360,9 @@ func (m *Model) BuildTowerGraphs() (*TowerGraphs, error) {
 	}
 	tg.Head, tg.Out = h, out
 	for _, op := range t.Head.Ops {
-		tg.Marked = tg.Marked || op.Code == jlm.TOpMarkRow
+		if op.Code == jlm.TOpMarkRow {
+			tg.Marks = 1 + int(op.Offset)
+		}
 	}
 	if tg.Line, tg.Frame, tg.Trim = programFrame(&t.Head); tg.Frame > 0 {
 		for _, op := range t.Head.Ops {
@@ -393,6 +403,9 @@ type PictureFit struct {
 	Short              int
 	MinTiles, MaxTiles int
 	Thumb              bool
+	// Canvas says the tiles are a best-fitting canvas's (jlm.PreBestFit):
+	// the picture resized onto it without distortion, at its top left.
+	Canvas bool
 	// factor, minPix and maxPix are a resize to the picture's own size
 	// (jlm.PreSmartResize); factor 0 where there is none.
 	Factor, MinPix, MaxPix int
@@ -639,6 +652,8 @@ func towerFit(t *jlm.Tower) (PictureFit, error) {
 			cropped = true
 		case jlm.PreTile:
 			fit.MinTiles, fit.MaxTiles, fit.Thumb = int(s.Ints[0]), int(s.Ints[1]), s.Ints[2] == 1
+		case jlm.PreBestFit:
+			fit.MinTiles, fit.MaxTiles, fit.Thumb, fit.Canvas = 1, int(s.Ints[0]), true, true
 		}
 	}
 	ways := 0
@@ -665,9 +680,9 @@ func towerFit(t *jlm.Tower) (PictureFit, error) {
 
 // towerEntry is the entry for pictures of sample format px: the record's
 // preprocessing as one op (graph.OpPicture), then its entry program over
-// the grid's patch rows after lead rows (a class row's); for a picture of a
-// size of its own, at most side pixels a side.
-func towerEntry(t *jlm.Tower, px uint8, grid, lead, side int, fit PictureFit, f graph.Facts) (*graph.Graph, error) {
+// the grid's patch rows and extra rows beside them (a class row's, before
+// or after); for a picture of a size of its own, at most side pixels a side.
+func towerEntry(t *jlm.Tower, px uint8, grid, extra, side int, fit PictureFit, f graph.Facts) (*graph.Graph, error) {
 	a := graph.Attrs{Pixels: px, Std: [3]float64{1, 1, 1}}
 	for _, s := range t.Pre {
 		switch s.Kind {
@@ -676,6 +691,7 @@ func towerEntry(t *jlm.Tower, px uint8, grid, lead, side int, fit PictureFit, f 
 			if err := resizeChain(&a, jlm.Filter(s.Ints[2])); err != nil {
 				return nil, err
 			}
+			a.PicTorch = jlm.Precision(s.Ints[3]) == jlm.PrecTorch
 		case jlm.PreResizeShort:
 			a.PicW, a.PicH = int(s.Ints[0]), int(s.Ints[0])
 			if err := resizeChain(&a, jlm.Filter(s.Ints[1])); err != nil {
@@ -720,10 +736,11 @@ func towerEntry(t *jlm.Tower, px uint8, grid, lead, side int, fit PictureFit, f 
 			}
 		case jlm.PreCenterCrop:
 			a.PicW, a.PicH = int(s.Ints[0]), int(s.Ints[1])
-		case jlm.PreNormalize:
+		case jlm.PreNormalize, jlm.PreNormalizeBF16:
 			for c := range 3 {
 				a.Mean[c], a.Std[c] = float64(s.Floats[c]), float64(s.Floats[3+c])
 			}
+			a.PicBF16 = s.Kind == jlm.PreNormalizeBF16
 		}
 	}
 	switch {
@@ -746,7 +763,7 @@ func towerEntry(t *jlm.Tower, px uint8, grid, lead, side int, fit PictureFit, f 
 	if a.PicLive && grid*P*P > a.PicW*a.PicH || !a.PicLive && a.PicW*a.PicH != grid*P*P {
 		return nil, fmt.Errorf("a %dx%d picture is not %d patches of %d", a.PicW, a.PicH, grid, P)
 	}
-	out, err := LowerProgram(b, t, p, []graph.ValueID{pix}, grid+lead, f)
+	out, err := LowerProgram(b, t, p, []graph.ValueID{pix}, grid+extra, f)
 	if err != nil {
 		return nil, err
 	}
@@ -796,6 +813,7 @@ func TowerRotaryOf(t *jlm.Tower) graph.Rotary {
 	if ops := t.Entry.Ops; len(ops) > 0 && ops[0].Code == jlm.TOpPatchify {
 		g.Lead = int(ops[0].Offset)
 	}
+	g.Origin = int(t.Block.Rope.Origin)
 	g.Merge, g.Window = towerTiles(t)
 	return g
 }
@@ -807,7 +825,11 @@ func (f PictureFit) Tiles(w, h, s int) (cols, rows, n int) {
 	if f.MaxTiles == 0 {
 		return 1, 1, 1
 	}
-	cols, rows = TileGrid(w, h, s, f.MinTiles, f.MaxTiles)
+	if f.Canvas {
+		rows, cols = bestFit(w, h, s, f.MaxTiles)
+	} else {
+		cols, rows = TileGrid(w, h, s, f.MinTiles, f.MaxTiles)
+	}
 	n = cols * rows
 	if f.Thumb && n > 1 {
 		n++
@@ -826,6 +848,10 @@ func (f PictureFit) Window(w, h, pw, ph, t int) (ow, oh, x0, y0 int) {
 	case f.MaxTiles > 0:
 		cols, rows, _ := f.Tiles(w, h, pw)
 		if t < cols*rows {
+			if f.Canvas {
+				ow, oh = canvasSize(w, h, pw, cols, rows)
+				return ow, oh, (t % cols) * pw, (t / cols) * ph
+			}
 			return cols * pw, rows * ph, (t % cols) * pw, (t / cols) * ph
 		}
 	}
@@ -867,9 +893,10 @@ type Square struct {
 	Class                  int
 	Ow, Oh, X0, Y0, Pw, Ph int
 	Gw, Gh                 int
-	// Mark is the square's marker row in the head's table plus one, 0 for
-	// none (TOpMarkRow, composer.RequestMark).
-	Mark int
+	// Mark and Trail are the square's marker rows in the head's table plus
+	// one, before its rows and after them, 0 for none (TOpMarkRow,
+	// composer.RequestMark and RequestTrail).
+	Mark, Trail int
 }
 
 // square is square i of a w x h picture and how many the picture has: one
@@ -944,9 +971,23 @@ func (tg *TowerGraphs) Square(w, h, i int) (Square, int) {
 		return Square{Class: c, Ow: ow, Oh: oh, Pw: ow, Ph: oh, Gw: ow / tg.Patch, Gh: oh / tg.Patch}, 1
 	}
 	a := tg.Classes[0].Pic
-	_, _, n := tg.Fit.Tiles(w, h, a.PicW)
+	cols, _, n := tg.Fit.Tiles(w, h, a.PicW)
 	ow, oh, x0, y0 := tg.Fit.Window(w, h, a.PicW, a.PicH, i)
-	return Square{Ow: ow, Oh: oh, X0: x0, Y0: y0, Pw: a.PicW, Ph: a.PicH, Gw: tg.Side, Gh: tg.Side}, n
+	sq := Square{Ow: ow, Oh: oh, X0: x0, Y0: y0, Pw: a.PicW, Ph: a.PicH, Gw: tg.Side, Gh: tg.Side}
+	if tg.Fit.Canvas && tg.Marks > 0 {
+		// The canvas's markers (jlm.PreBestFit): before the last square the
+		// third, after a tile its row's separator, after a row's last the
+		// rows'.
+		switch {
+		case i == n-1:
+			sq.Mark = 3
+		case i%cols < cols-1:
+			sq.Trail = 1
+		default:
+			sq.Trail = 2
+		}
+	}
+	return sq, n
 }
 
 // squareOut is the rows the head writes for square sq: its patches over
@@ -956,16 +997,20 @@ func (tg *TowerGraphs) SquareOut(sq Square) int {
 		m := tg.Frame
 		return (sq.Gh/m)*(sq.Gw/m+tg.Line) - tg.Trim + 2*tg.Ends
 	}
-	if tg.Marked {
-		// The head's rows less its marker row over the patches, and the
-		// marker where the square has one.
-		n := sq.Gw * sq.Gh * (tg.Out - 1) / (tg.Rows - tg.Lead)
+	grid := tg.Rows - tg.Lead - tg.Tail
+	if tg.Marks > 0 {
+		// The head's rows less its marker rows over the patches, and the
+		// markers the square names.
+		n := sq.Gw * sq.Gh * (tg.Out - tg.Marks) / grid
 		if sq.Mark > 0 {
+			n++
+		}
+		if sq.Trail > 0 {
 			n++
 		}
 		return n
 	}
-	return sq.Gw * sq.Gh * tg.Out / (tg.Rows - tg.Lead)
+	return sq.Gw * sq.Gh * tg.Out / grid
 }
 
 // picRows is the rows a w x h picture becomes: its squares' every row.
@@ -1254,8 +1299,15 @@ func lowerValuesWith(b *graph.Builder, t *jlm.Tower, p *jlm.Program, in []graph.
 			if s.K != width(ins[0]) || s.Rows < 1 {
 				return nil, fmt.Errorf("marks rows %d wide from a table of %d rows %d wide", width(ins[0]), s.Rows, s.K)
 			}
-			out = b.Emit(graph.OpMarkRow, ins, []graph.Result{{Name: "marked", Width: width(ins[0]), Rows: rowsOf(ins[0]) + 1}},
-				[]graph.Binding{{Role: op.Bind[0], K: s.K, Rows: s.Rows}}, graph.Attrs{Width: int(op.Width)}, nil, nil)[0]
+			if op.Offset&^1 != 0 {
+				return nil, fmt.Errorf("marks rows with a trail of %d", op.Offset)
+			}
+			out = b.Emit(graph.OpMarkRow, ins, []graph.Result{{Name: "marked", Width: width(ins[0]),
+				Rows: rowsOf(ins[0]) + 1 + int(op.Offset)}},
+				[]graph.Binding{{Role: op.Bind[0], K: s.K, Rows: s.Rows}}, graph.Attrs{Width: int(op.Width), Offset: int(op.Offset)}, nil, nil)[0]
+		case jlm.TOpTailRow:
+			out = b.Emit(graph.OpTailRow, ins, []graph.Result{{Name: "class", Width: width(ins[0])}},
+				[]graph.Binding{{Role: op.Bind[0], K: width(ins[0])}}, graph.Attrs{}, nil, nil)[0]
 		case jlm.TOpRowBreak:
 			out = b.Emit(graph.OpRowBreak, ins, []graph.Result{{Name: "lines", Width: width(ins[0]), Rows: 2 * rowsOf(ins[0])}},
 				[]graph.Binding{{Role: op.Bind[0], K: width(ins[0])}}, graph.Attrs{Span: int(op.Span), Offset: int(op.Offset)}, nil, nil)[0]
@@ -1649,4 +1701,77 @@ func naflexSize(w, h, patch, lo, hi int) (int, int) {
 		}
 	}
 	return scaled(smin, w), scaled(smin, h)
+}
+
+// canvases is every rows x columns canvas of at most most tiles in the
+// order jlm.PreBestFit walks them: tile counts from most down, each count's
+// factor pairs by rows ascending, grouped by aspect in the order each
+// first appears.
+func canvases(most int) [][2]int {
+	var ratios []float64
+	byRatio := map[float64][][2]int{}
+	for n := most; n >= 1; n-- {
+		for r := 1; r <= n; r++ {
+			if n%r != 0 {
+				continue
+			}
+			c := n / r
+			q := float64(r) / float64(c)
+			if _, ok := byRatio[q]; !ok {
+				ratios = append(ratios, q)
+			}
+			byRatio[q] = append(byRatio[q], [2]int{r, c})
+		}
+	}
+	var out [][2]int
+	for _, q := range ratios {
+		out = append(out, byRatio[q]...)
+	}
+	return out
+}
+
+// bestFit is a w x h picture's canvas of s-pixel tiles (jlm.PreBestFit):
+// the one whose limiting scale is the smallest upscale, or failing any the
+// largest downscale, the smallest area breaking a tie -- the scales
+// float32, as the reference divides two integer tensors.
+func bestFit(w, h, s, most int) (rows, cols int) {
+	cs := canvases(most)
+	scale := make([]float32, len(cs))
+	for i, c := range cs {
+		sw := float32(c[1]*s) / float32(w)
+		sh := float32(c[0]*s) / float32(h)
+		scale[i] = min(sh, sw)
+	}
+	sel, up := float32(0), false
+	for _, v := range scale {
+		if v >= 1 && (!up || v < sel) {
+			sel, up = v, true
+		}
+	}
+	if !up {
+		for _, v := range scale {
+			sel = max(sel, v)
+		}
+	}
+	best := -1
+	for i, v := range scale {
+		if v == sel && (best < 0 || cs[i][0]*cs[i][1] < cs[best][0]*cs[best][1]) {
+			best = i
+		}
+	}
+	return cs[best][0], cs[best][1]
+}
+
+// canvasSize is the size a w x h picture is resized to on a cols x rows
+// canvas of s-pixel tiles: the largest of its aspect within the canvas and
+// within its own size raised to one tile, the shorter scale's side floored.
+func canvasSize(w, h, s, cols, rows int) (ow, oh int) {
+	th, tw := min(max(h, s), rows*s), min(max(w, s), cols*s)
+	sw, sh := float64(tw)/float64(w), float64(th)/float64(h)
+	if sw < sh {
+		ow, oh = tw, min(int(math.Floor(float64(h)*sw)), th)
+	} else {
+		oh, ow = th, min(int(math.Floor(float64(w)*sh)), tw)
+	}
+	return max(ow, 1), max(oh, 1)
 }

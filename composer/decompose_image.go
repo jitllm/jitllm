@@ -2,6 +2,7 @@ package composer
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/jitllm/jitllm/composer/ir"
 	"github.com/jitllm/jitllm/graph"
@@ -32,8 +33,10 @@ const (
 	RequestPicOW
 	RequestPicOH
 	// RequestMark is a square's marker row in the head's table plus one, 0
-	// for a square with none (graph.OpMarkRow).
+	// for a square with none (graph.OpMarkRow), and RequestTrail the one
+	// after its rows.
 	RequestMark
+	RequestTrail
 	// RequestPicTaps is where a picture resized by Pillow's filters
 	// (graph.ChainPIL) has its taps: the output's columns' (PILTaps), then
 	// its rows', each entry Taps+1 words.
@@ -105,13 +108,7 @@ func decomposePicture(o graph.Op, c *Context) ([]Prim, error) {
 		return x.op(OpAdd, F, x.op(OpMul, F, p, x.op(OpSub, F, x.f(1), t)), x.op(OpMul, F, q, t))
 	}
 	v := lerp(lerp(sample(y0, x0), sample(y0, x1), tx), lerp(sample(y1, x0), sample(y1, x1), tx), ty)
-	byChannel := func(m [3]float64) int {
-		return x.sel(F, x.op(OpLess, ir.Pred, ch, u(1)), x.f(float32(m[0])),
-			x.sel(F, x.op(OpLess, ir.Pred, ch, u(2)), x.f(float32(m[1])), x.f(float32(m[2]))))
-	}
-	norm := func(v int) int {
-		return x.op(OpDiv, F, x.op(OpSub, F, x.op(OpDiv, F, v, x.f(255)), byChannel(a.Mean)), byChannel(a.Std))
-	}
+	norm := func(v int) int { return normalized(&x, a, ch, v) }
 	v = norm(v)
 	if a.PicPad > 0 || a.PicBox {
 		pad := norm(fillOf(&x, a, ch))
@@ -247,10 +244,6 @@ func decomposePicturePIL(o graph.Op, c *Context) ([]Prim, error) {
 	flat := m.op(OpAdd, U, m.op(OpMul, U, m.coord(0), mu(W)), m.coord(1))
 	col := m.coord(1)
 	mch := m.op(OpSub, U, col, m.op(OpMul, U, m.op(OpShr, U, m.op(OpMul, U, col, mu(0xAAAB)), mu(17)), mu(3)))
-	byChannel := func(c [3]float64) int {
-		return m.sel(F, m.op(OpLess, ir.Pred, mch, mu(1)), m.f(float32(c[0])),
-			m.sel(F, m.op(OpLess, ir.Pred, mch, mu(2)), m.f(float32(c[1])), m.f(float32(c[2]))))
-	}
 	// A live picture is dense in the output and laid at the form's width in
 	// the sums: its pixel (y, x) is sum (y, x) of the reductions above.
 	at, live := flat, mu(n)
@@ -269,9 +262,7 @@ func decomposePicturePIL(o graph.Op, c *Context) ([]Prim, error) {
 		at = m.op(OpAdd, U, m.op(OpMul, U, m.op(OpAdd, U, m.op(OpMul, U, py, mu(a.PicW)), px), mu(3)), ch)
 		live = m.op(OpMul, U, m.op(OpMul, U, wd, hd), mu(3))
 	}
-	norm := func(b int) int {
-		return m.op(OpDiv, F, m.op(OpSub, F, m.op(OpDiv, F, b, m.f(255)), byChannel(a.Mean)), byChannel(a.Std))
-	}
+	norm := func(b int) int { return normalized(&m, a, mch, b) }
 	val := norm(m.un(OpCvtF32, F, finish(&m, m.load(0, m.op(OpMin, U, at, mu(n-1))))))
 	if a.PicLive && (a.PicPad > 0 || a.PicBox) {
 		pad := norm(fillOf(&m, a, fch))
@@ -870,13 +861,14 @@ func decomposeWrapRows(o graph.Op, c *Context) ([]Prim, error) {
 
 // decomposeMarkRow is the input's rows -- a square's merged grid, the
 // request's grid over Width -- after the weight's row the request names
-// (RequestMark, the row plus one; none where it is 0). A row past the
-// square's last is clamped to it, recomputing it: no row past the square's
-// is written, the next square's or the prompt's.
+// (RequestMark, the row plus one; none where it is 0) and, where the op says
+// (Offset 1), before the one it names after them (RequestTrail). A row past
+// the square's last is clamped to it, recomputing it: no row past the
+// square's is written, the next square's or the prompt's.
 func decomposeMarkRow(o graph.Op, c *Context) ([]Prim, error) {
 	a := o.Attr
 	S := a.Width
-	if len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) != 1 || S < 1 || o.Weight[0].Rows < 1 ||
+	if len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) != 1 || S < 1 || o.Weight[0].Rows < 1 || a.Offset&^1 != 0 ||
 		o.Weight[0].K != c.width(o.In[0]) || c.width(o.Out[0]) != c.width(o.In[0]) {
 		return nil, fmt.Errorf("a marker row of %d operands, %d weights, by %d", len(o.In), len(o.Weight), S)
 	}
@@ -892,20 +884,64 @@ func decomposeMarkRow(o graph.Op, c *Context) ([]Prim, error) {
 	u := func(v int) int { return x.u(uint32(v)) }
 	W := x.op(OpDiv, U, x.op(OpMax, U, x.load(1, u(RequestGrid)), u(S)), u(S))
 	H := x.op(OpDiv, U, x.op(OpMax, U, x.load(1, u(RequestGridH)), u(S)), u(S))
-	mark := x.load(1, u(RequestMark))
+	mark, trail := x.load(1, u(RequestMark)), u(0)
+	if a.Offset == 1 {
+		trail = x.load(1, u(RequestTrail))
+	}
 	lead := x.op(OpMin, U, mark, u(1))
-	last := x.op(OpSub, U, x.op(OpAdd, U, x.op(OpMul, U, H, W), lead), u(1))
+	end := x.op(OpAdd, U, x.op(OpMul, U, H, W), lead)
+	last := x.op(OpSub, U, x.op(OpAdd, U, end, x.op(OpMin, U, trail, u(1))), u(1))
 	rr := x.op(OpMin, U, r, x.op(OpMin, U, last, u(sh[0]-1)))
 	src := x.op(OpMin, U, x.op(OpSub, U, x.op(OpMax, U, rr, lead), lead), u(ish[0]-1))
 	in := []Operand{c.value(o.In[0]), TableRequest.op()}
 	facts := Facts{Extents: map[int]int{1: RequestRows + sh[0]}}
-	row := x.op(OpMin, U, x.op(OpSub, U, x.op(OpMax, U, mark, u(1)), u(1)), u(T-1))
+	before := x.op(OpLess, ir.Pred, rr, lead)
+	named := x.sel(U, before, mark, trail)
+	row := x.op(OpMin, U, x.op(OpSub, U, x.op(OpMax, U, named, u(1)), u(1)), u(T-1))
 	mv, err := weightElement(&x, wo, T, sh[1], &in, &facts, row, i)
 	if err != nil {
 		return nil, fmt.Errorf("a marker table of %s: %w", wo.Format, err)
 	}
-	v := x.sel(ir.F32, x.op(OpLess, ir.Pred, rr, lead), mv, x.at(0, ish, src, i))
+	after := x.op(OpLess, ir.Pred, x.op(OpSub, U, end, u(1)), rr)
+	v := x.sel(ir.F32, before, mv, x.sel(ir.F32, after, mv, x.at(0, ish, src, i)))
 	out := c.value(o.Out[0])
 	return []Prim{{Kind: PrimMap, Shape: sh, In: in, Out: out, Expr: x.e, Facts: facts,
 		Stores: []PrimStore{{Out: out, Ax: []int{rr, i}, Ext: sh, Value: v}}}}, nil
+}
+
+// normalized is sample v (an F32 of the byte) of channel ch (a U32) read as
+// [0, 1] and normalised by the channel's mean and std (operand order the
+// op's): in float32, or where the op says (PicBF16) in bfloat16 -- the
+// sample times 1/255, less the mean, over the std, each result rounded to
+// nearest even and the mean and std rounded too, as torch's arithmetic on a
+// bfloat16 tensor rounds them.
+func normalized(x *exprs, a graph.Attrs, ch, v int) int {
+	F, U := ir.F32, ir.U32
+	byChannel := func(c [3]float64) int {
+		k := func(i int) int {
+			if a.PicBF16 {
+				return x.f(bf16Of(float32(c[i])))
+			}
+			return x.f(float32(c[i]))
+		}
+		return x.sel(F, x.op(OpLess, ir.Pred, ch, x.u(1)), k(0), x.sel(F, x.op(OpLess, ir.Pred, ch, x.u(2)), k(1), k(2)))
+	}
+	if !a.PicBF16 {
+		return x.op(OpDiv, F, x.op(OpSub, F, x.op(OpDiv, F, v, x.f(255)), byChannel(a.Mean)), byChannel(a.Std))
+	}
+	bf := func(v int) int {
+		b := x.un(OpBitcast, U, v)
+		odd := x.op(OpAnd, U, x.op(OpShr, U, b, x.u(16)), x.u(1))
+		b = x.op(OpAdd, U, b, x.op(OpAdd, U, x.u(0x7fff), odd))
+		return x.un(OpBitcast, F, x.op(OpAnd, U, b, x.u(0xffff0000)))
+	}
+	s := bf(x.op(OpMul, F, v, x.f(1.0/255)))
+	return bf(x.op(OpDiv, F, bf(x.op(OpSub, F, s, byChannel(a.Mean))), byChannel(a.Std)))
+}
+
+// bf16Of is v rounded to bfloat16, to nearest even.
+func bf16Of(v float32) float32 {
+	b := math.Float32bits(v)
+	b += 0x7fff + (b>>16)&1
+	return math.Float32frombits(b &^ 0xffff)
 }

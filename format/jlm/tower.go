@@ -4,7 +4,7 @@ import "fmt"
 
 // TowerVersion is the stated tower's revision. A record of a later one is
 // refused, not read as this one.
-const TowerVersion = 7
+const TowerVersion = 8
 
 // Tower is a vision tower as the converter states it: what the engine builds
 // the tower from, with no family's name in it. The converter knows a family
@@ -119,6 +119,23 @@ const (
 	// the whole at its own size as a thumbnail (LFM2-VL's); with filter
 	// Ints[7] in arithmetic Ints[8].
 	PreTileSmart PreKind = 12
+	// PreBestFit cuts the picture into tiles as PreTile does, on the canvas
+	// of at most Ints[0] tiles whose limiting scale is the smallest upscale,
+	// or failing any the largest downscale, the smallest area breaking a tie
+	// (the canvases every rows x columns pair by tile count from Ints[0]
+	// down, grouped by aspect in the order each first appears): the picture
+	// resized by the resize step onto it without distortion, at most its
+	// canvas and upscaled to at most one tile, laid at its top left with
+	// black past it and cut row-major; then, for more than one tile, the
+	// whole picture resized to one tile more (Llama 4's). A head's marker
+	// rows (TOpMarkRow) are a table of three: after a tile not its row's
+	// last the first, after a row's last the second, before the picture's
+	// last tile the third.
+	PreBestFit PreKind = 13
+	// PreNormalizeBF16 is PreNormalize in bfloat16: the sample times 1/255,
+	// less the mean, over the std, each result and the mean and std rounded
+	// to bfloat16 as torch's arithmetic on a bfloat16 tensor rounds them.
+	PreNormalizeBF16 PreKind = 14
 )
 
 // Filter is a resampling filter.
@@ -250,12 +267,16 @@ const (
 	// the second's at its row (graph.OpPosAxes), from row Offset on.
 	TOpPosAxes OpCode = 26
 	// TOpMarkRow is In[0]'s rows -- a piece's merged grid, its width the
-	// patch grid's over Width -- after one row of Bind[0], the row the
-	// piece's place names: of a tiled picture's tile at grid row r and
-	// column c row r*Span+c, of its thumbnail row Span*Span; a picture of
-	// one piece takes none.
+	// patch grid's over Width -- after one row of Bind[0] and, where Offset
+	// is 1, before another: the rows the piece's place names under the
+	// picture's fit. Under PreTileSmart a tile at grid row r and column c
+	// takes row r*Span+c before it and the thumbnail row Span*Span, a
+	// picture of one piece none; PreBestFit states its own.
 	TOpMarkRow OpCode = 27
-	topCodes   OpCode = 28
+	// TOpTailRow is In[0] with its last row Bind[0]'s one row: a class row
+	// after the patches, in the row the entry leaves for it.
+	TOpTailRow OpCode = 28
+	topCodes   OpCode = 29
 )
 
 // A stated rotary's layout (TOpRope's Chain).
@@ -373,12 +394,15 @@ type TowerBlock struct {
 // Neox, adjacent elements where not -- turned in runs, run i's Pairs pairs
 // by the row's position on axis Axis (0 its grid row, 1 its column), pair j
 // of a run at frequency Base^(-2(Freq+j)/Dim). The runs cover the head's
-// first 2*sum(Pairs) elements; the rest are not turned.
+// first 2*sum(Pairs) elements; the rest are not turned. A cell's position
+// on each axis counts from Origin; a row past the grid's cells (a class row
+// after them) is not turned.
 type TowerRope struct {
-	Base float32
-	Dim  int32
-	Neox bool
-	Runs []TowerRopeRun
+	Base   float32
+	Dim    int32
+	Neox   bool
+	Runs   []TowerRopeRun
+	Origin int32
 }
 
 // TowerRopeRun is one run of a tower's rotary.
@@ -437,6 +461,14 @@ func (t *Tower) Valid() error {
 			if len(s.Ints) != 5 || s.Ints[0] <= 0 || s.Ints[1] <= 0 || s.Ints[2] <= 0 || s.Ints[2]%s.Ints[0] != 0 ||
 				!resizes(Filter(s.Ints[3]), Precision(s.Ints[4])) {
 				return fmt.Errorf("jlm: the tower's step %d limits and pads with %v", i, s.Ints)
+			}
+		case PreBestFit:
+			if len(s.Ints) != 1 || s.Ints[0] < 1 {
+				return fmt.Errorf("jlm: the tower's step %d fits a canvas of %v tiles", i, s.Ints)
+			}
+		case PreNormalizeBF16:
+			if len(s.Floats) != 6 {
+				return fmt.Errorf("jlm: the tower's step %d normalizes with %d numbers, want 6", i, len(s.Floats))
 			}
 		case PreTileSmart:
 			if len(s.Ints) != 9 || len(s.Floats) != 1 || s.Ints[0] <= 0 || s.Ints[1] < 1 || s.Ints[2] < s.Ints[1] ||
@@ -618,7 +650,7 @@ func (op *TowerOp) arity() (in int, bind [2]int) {
 		return 1, [2]int{0, 0}
 	case TOpPosAxes:
 		return 0, [2]int{1, 1}
-	case TOpMarkRow:
+	case TOpMarkRow, TOpTailRow:
 		return 1, [2]int{1, 1}
 	case TOpLinear, TOpLayerNorm:
 		return 1, [2]int{1, 2}
@@ -699,6 +731,7 @@ func encodeTower(w *wbuf, t *Tower) {
 		w.i32(i)
 	}
 	w.bool(b.VNorm)
+	w.i32(b.Rope.Origin)
 	encodeProgram(w, &t.Head)
 	for _, ids := range [][]int32{t.Span.Before, t.Span.After} {
 		w.u32(uint32(len(ids)))
@@ -778,6 +811,7 @@ func decodeTower(r *rbuf) *Tower {
 		b.Full = append(b.Full, r.i32())
 	}
 	b.VNorm = r.bool()
+	b.Rope.Origin = r.i32()
 	decodeProgram(r, &t.Head)
 	for _, ids := range []*[]int32{&t.Span.Before, &t.Span.After} {
 		for range r.count(4) {

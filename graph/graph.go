@@ -382,7 +382,8 @@ const (
 	// OpMarkRow is In[0]'s rows -- a piece's merged grid, its width the
 	// step's patch grid's over Width -- after Weight[0]'s row the request
 	// names for the piece (composer.RequestMark: the row plus one, 0 for
-	// none); rows past them are not written.
+	// none) and, where Offset is 1, before the row it names after them
+	// (composer.RequestTrail); rows past them are not written.
 	OpMarkRow
 	numOps
 )
@@ -780,6 +781,9 @@ type Attrs struct {
 	// where OpSelect's key starts in it, and OpRope's where each head's turned
 	// elements start.
 	Offset, Width int
+	// Origin is OpRopeTable's position of a grid's first cell on each axis
+	// (graph.Rotary.Origin).
+	Origin int
 	// Local is OpSelect's blocks kept ending at the row's own.
 	Local int
 	// Pooled scores OpSelect's blocks by their pooled keys: a complete
@@ -832,7 +836,11 @@ type Attrs struct {
 	PicFill    [3]uint8
 	// PicTorch says the taps are torchvision's precision, not Pillow's
 	// (composer.PILTapsAt): the picture op runs the same passes on them.
-	PicTorch  bool
+	PicTorch bool
+	// PicBF16 says the normalisation is in bfloat16: the sample times
+	// 1/255, less the mean, over the std, each result and the mean and std
+	// rounded to bfloat16 (composer's normalized).
+	PicBF16   bool
 	Mean, Std [3]float64
 }
 
