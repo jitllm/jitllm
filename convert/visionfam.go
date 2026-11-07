@@ -177,3 +177,25 @@ func halfNeoxToNeox(s *jlm.Source) error {
 	}
 	return nil
 }
+
+// negateRole stores role r's tensors negated: Gemma 4's standardisation
+// subtracts its bias, which the tower states as a shift it adds.
+func negateRole(s *jlm.Source, r jlm.Role) error {
+	for i := range s.Tensors {
+		t := &s.Tensors[i]
+		if t.Role != r {
+			continue
+		}
+		vals, err := normF32(t)
+		if err != nil {
+			return err
+		}
+		for j := range vals {
+			vals[j] = -vals[j]
+		}
+		dims := make([]uint64, t.NDim)
+		copy(dims, t.Dims[:t.NDim])
+		setF32Dims(t, vals, dims...)
+	}
+	return nil
+}

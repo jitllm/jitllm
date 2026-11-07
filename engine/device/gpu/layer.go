@@ -2288,7 +2288,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	if w.FFNNorm != nil {
 		up(&l.nFFN, w.FFNNorm)
 	}
-	if p.Clamps {
+	if w.Clamp != nil {
 		if len(w.Clamp) != 28 {
 			g.LastErr = fmt.Sprintf("block %d: clipped-linear bounds are %d floats, want 28", li, len(w.Clamp))
 			return false
@@ -3934,6 +3934,10 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 			len(csSWA), len(cs))
 	}
 	hcs := cs
+	if R > 1 && len(bs.hcs) < R*p.RopeW() {
+		return refuse("the scratch stages %d rotary floats for %d rows of %d (its plan's %d rows of %d, rotary %d split %v; this plan's rotary %d split %v)",
+			len(bs.hcs), R, p.RopeW(), bs.rows, bs.p.RopeW(), bs.p.NRot, bs.p.RopeSplit, p.NRot, p.RopeSplit)
+	}
 	if R > 1 {
 		hcs = bs.hcs[:R*p.RopeW()]
 		for i := range hcs {

@@ -622,6 +622,9 @@ func prepareTower(s *jlm.Source) error {
 		if err := halfNeoxToNeox(s); err != nil {
 			return err
 		}
+		if err := negateRole(s, jlm.RoleVStdBias); err != nil {
+			return err
+		}
 	}
 	if err := padFFN(s); err != nil {
 		return err

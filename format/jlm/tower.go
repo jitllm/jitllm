@@ -4,7 +4,7 @@ import "fmt"
 
 // TowerVersion is the stated tower's revision. A record of a later one is
 // refused, not read as this one.
-const TowerVersion = 6
+const TowerVersion = 7
 
 // Tower is a vision tower as the converter states it: what the engine builds
 // the tower from, with no family's name in it. The converter knows a family
@@ -101,6 +101,14 @@ const (
 	// longer passes it -- then each side rounded up to a whole Ints[1]
 	// pixels, with filter Ints[2] in arithmetic Ints[3] (Pixtral's resize).
 	PreCapUnit PreKind = 10
+	// PreAspectBudget resamples the picture to the largest size of its
+	// aspect within Ints[0] patches of Ints[1] pixels, each side a whole
+	// Ints[2] pixels: both scaled by sqrt(budget area / area) and floored
+	// to the unit; a side that floors to nothing one unit, the other the
+	// aspect's whole multiple of it, at most the budget's units a row
+	// (Gemma 4's get_aspect_ratio_preserving_size); with filter Ints[3] in
+	// arithmetic Ints[4].
+	PreAspectBudget PreKind = 11
 )
 
 // Filter is a resampling filter.
@@ -223,7 +231,11 @@ const (
 	// Span, with a TOpRowBreak's row after each of its rows where one came
 	// before in the program -- and Bind[1]'s one row.
 	TOpWrapRows OpCode = 25
-	topCodes    OpCode = 26
+	// TOpPosAxes is each row's rows of two position tables of Span rows an
+	// axis, back to back in Bind[0]: the first's at the patch's column plus
+	// the second's at its row (graph.OpPosAxes), from row Offset on.
+	TOpPosAxes OpCode = 26
+	topCodes   OpCode = 27
 )
 
 // A stated rotary's layout (TOpRope's Chain).
@@ -331,6 +343,9 @@ type TowerBlock struct {
 	// blocks, counted from the tower's first, that attend the whole picture.
 	Window int32
 	Full   []int32
+	// VNorm says v takes an RMS norm over each head with no weight (Gemma
+	// 4's); q's and k's norms are the block's tensors where it holds them.
+	VNorm bool
 }
 
 // TowerRope is a tower block's rotary over the picture's grid: each head's
@@ -402,6 +417,11 @@ func (t *Tower) Valid() error {
 			if len(s.Ints) != 5 || s.Ints[0] <= 0 || s.Ints[1] <= 0 || s.Ints[2] <= 0 || s.Ints[2]%s.Ints[0] != 0 ||
 				!resizes(Filter(s.Ints[3]), Precision(s.Ints[4])) {
 				return fmt.Errorf("jlm: the tower's step %d limits and pads with %v", i, s.Ints)
+			}
+		case PreAspectBudget:
+			if len(s.Ints) != 5 || s.Ints[0] <= 0 || s.Ints[1] <= 0 || s.Ints[2] <= 0 || s.Ints[2]%s.Ints[1] != 0 ||
+				!resizes(Filter(s.Ints[3]), Precision(s.Ints[4])) {
+				return fmt.Errorf("jlm: the tower's step %d resizes within a budget with %v", i, s.Ints)
 			}
 		case PreCapUnit:
 			if len(s.Ints) != 4 || s.Ints[0] <= 0 || s.Ints[1] <= 0 || !resizes(Filter(s.Ints[2]), Precision(s.Ints[3])) {
@@ -521,7 +541,7 @@ func (p *Program) valid(name string) error {
 		case len(op.Bind) < bind[0] || len(op.Bind) > bind[1]:
 			return fmt.Errorf("jlm: the tower's %s op %d (code %d) binds %d weights, want %d to %d", name, i, op.Code, len(op.Bind), bind[0], bind[1])
 		case (op.Code == TOpPatchify || op.Code == TOpRegroup || op.Code == TOpPool || op.Code == TOpFold ||
-			op.Code == TOpRowBreak || op.Code == TOpWrapRows) && op.Span <= 0:
+			op.Code == TOpRowBreak || op.Code == TOpWrapRows || op.Code == TOpPosAxes) && op.Span <= 0:
 			return fmt.Errorf("jlm: the tower's %s op %d groups by %d", name, i, op.Span)
 		case op.Code == TOpRowBreak && op.Offset&^1 != 0:
 			return fmt.Errorf("jlm: the tower's %s op %d breaks rows with an offset of %d", name, i, op.Offset)
@@ -570,6 +590,8 @@ func (op *TowerOp) arity() (in int, bind [2]int) {
 	switch op.Code {
 	case TOpPatchify, TOpDropRows, TOpRegroup, TOpPool, TOpFold, TOpUntile:
 		return 1, [2]int{0, 0}
+	case TOpPosAxes:
+		return 0, [2]int{1, 1}
 	case TOpLinear, TOpLayerNorm:
 		return 1, [2]int{1, 2}
 	case TOpRMSNorm:
@@ -648,6 +670,7 @@ func encodeTower(w *wbuf, t *Tower) {
 	for _, i := range b.Full {
 		w.i32(i)
 	}
+	w.bool(b.VNorm)
 	encodeProgram(w, &t.Head)
 	for _, ids := range [][]int32{t.Span.Before, t.Span.After} {
 		w.u32(uint32(len(ids)))
@@ -726,6 +749,7 @@ func decodeTower(r *rbuf) *Tower {
 	for range r.count(4) {
 		b.Full = append(b.Full, r.i32())
 	}
+	b.VNorm = r.bool()
 	decodeProgram(r, &t.Head)
 	for _, ids := range []*[]int32{&t.Span.Before, &t.Span.After} {
 		for range r.count(4) {
