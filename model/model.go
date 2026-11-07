@@ -2491,9 +2491,7 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 	if err != nil {
 		return nil, err
 	}
-	if cfg.expWidth, err = expertWidth(c, cfg); err != nil {
-		return nil, err
-	}
+	cfg.expWidth = expertWidth(c, cfg)
 	if v := c.Vision(); v != nil && v.Tower != nil && len(v.Tower.Taps) > 0 {
 		cfg.DeepTaps = len(v.Tower.Taps)
 		if cfg.DeepTaps > cfg.NLayer {
@@ -3760,23 +3758,18 @@ func (c *Config) ExpWidth() int {
 // expertWidth is the routed experts' width as the first mixture block's up
 // bank states it (its rows' width), zero where no block holds one or it is
 // n_embd.
-func expertWidth(f *jlm.File, cfg *Config) (int, error) {
+func expertWidth(f *jlm.File, cfg *Config) int {
 	for bi := range cfg.NLayer {
 		e, ok := f.Find(jlm.RoleExpUpBank, int32(bi), -1)
 		if !ok || e.NDim < 1 {
 			continue
 		}
-		w := int(e.Dims[0])
-		switch {
-		case w == cfg.NEmbd:
-			return 0, nil
-		case w <= 0 || w > cfg.NEmbd || cfg.ExpertWeightIn:
-			return 0, fmt.Errorf("model: %s: routed experts %d wide on n_embd %d (weights on their input %v)",
-				cfg.Arch, w, cfg.NEmbd, cfg.ExpertWeightIn)
+		if w := int(e.Dims[0]); w != cfg.NEmbd {
+			return w
 		}
-		return w, nil
+		return 0
 	}
-	return 0, nil
+	return 0
 }
 
 // f32Bytes is a float32 slice addressed as the bytes a kernel reads: the same
