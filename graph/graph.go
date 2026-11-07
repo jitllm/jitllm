@@ -398,8 +398,14 @@ const (
 	// OpRowsAttend is each row of In[0] (the queries) attending over the
 	// step's live rows of In[1] (the keys) and In[2] (the values), every row
 	// and both ways: NHead heads of HeadDim, the scores scaled by Scale, a
-	// softmax over the live rows. Out[0] has In[0]'s rows.
+	// softmax over the live rows. The keys and values are NKVHead heads (0:
+	// NHead), each read by NHead/NKVHead consecutive query heads. Out[0] has
+	// In[0]'s rows.
 	OpRowsAttend
+	// OpUpsample is In[0], a grid of rows GridW wide, Span times as large
+	// each way: row (y, x) of Out[0] is In[0]'s row (y/Span, x/Span), the
+	// nearest.
+	OpUpsample
 	numOps
 )
 
@@ -501,6 +507,8 @@ func (k OpKind) String() string {
 		return "pos_buckets"
 	case OpTableRows:
 		return "table_rows"
+	case OpUpsample:
+		return "upsample"
 	case OpRowsAttend:
 		return "rows_attend"
 	case OpPosAxes:

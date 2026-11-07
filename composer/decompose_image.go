@@ -1019,16 +1019,24 @@ func decomposeTableRows(o graph.Op, c *Context) ([]Prim, error) {
 // over the rows, and each element that sum over the weights'.
 func decomposeRowsAttend(o graph.Op, c *Context) ([]Prim, error) {
 	a := o.Attr
-	H, hd := a.NHead, a.HeadDim
-	if len(o.In) != 3 || len(o.Out) != 1 || H < 1 || hd < 1 || c.width(o.In[0]) != H*hd ||
-		c.width(o.In[1]) != H*hd || c.width(o.In[2]) != H*hd || c.width(o.Out[0]) != H*hd {
-		return nil, fmt.Errorf("a rows attention of %d operands, %d heads of %d", len(o.In), H, hd)
+	H, hd, G := a.NHead, a.HeadDim, a.NKVHead
+	if G == 0 {
+		G = H
+	}
+	if len(o.In) != 3 || len(o.Out) != 1 || H < 1 || hd < 1 || G < 1 || H%G != 0 || c.width(o.In[0]) != H*hd ||
+		c.width(o.In[1]) != G*hd || c.width(o.In[2]) != G*hd || c.width(o.Out[0]) != H*hd {
+		return nil, fmt.Errorf("a rows attention of %d operands, %d heads of %d over %d", len(o.In), H, hd, G)
 	}
 	F, U := ir.F32, ir.U32
-	qs, ks := c.rows(o.In[0]), c.rows(o.In[1])
+	qs, ks, vs := c.rows(o.In[0]), c.rows(o.In[1]), c.rows(o.In[2])
 	Q, R, D := qs[0], ks[0], H*hd
-	if vs := c.rows(o.In[2]); vs[0] != R {
+	if vs[0] != R {
 		return nil, fmt.Errorf("a rows attention over %d keys and %d values", R, vs[0])
+	}
+	// kvAt is element e of query head h's key or value head: the one its
+	// group of H/G heads reads.
+	kvAt := func(x *exprs, h, e int) int {
+		return x.op(OpAdd, U, x.op(OpMul, U, x.op(OpDiv, U, h, x.u(uint32(H/G))), x.u(uint32(hd))), e)
 	}
 	minus := math.Float32frombits(0xff7fffff)
 	tmp := func(name string) Operand {
@@ -1041,7 +1049,11 @@ func decomposeRowsAttend(o graph.Op, c *Context) ([]Prim, error) {
 	{
 		q, h, j, e := dx.coord(0), dx.coord(1), dx.coord(2), dx.coord(3)
 		el := dx.op(OpAdd, U, dx.op(OpMul, U, h, dx.u(uint32(hd))), e)
-		dx.op(OpMul, F, dx.at(0, qs, q, el), dx.at(1, ks, j, el))
+		kel := el
+		if G != H {
+			kel = kvAt(&dx, h, e)
+		}
+		dx.op(OpMul, F, dx.at(0, qs, q, el), dx.at(1, ks, j, kel))
 	}
 	var sx exprs
 	{
@@ -1060,7 +1072,11 @@ func decomposeRowsAttend(o graph.Op, c *Context) ([]Prim, error) {
 	{
 		q, e, j := vx.coord(0), vx.coord(1), vx.coord(2)
 		h := vx.op(OpDiv, U, e, vx.u(uint32(hd)))
-		vx.op(OpMul, F, vx.at(0, sh, q, h, j), vx.at(1, ks, j, e))
+		ve := e
+		if G != H {
+			ve = kvAt(&vx, h, vx.op(OpRem, U, e, vx.u(uint32(hd))))
+		}
+		vx.op(OpMul, F, vx.at(0, sh, q, h, j), vx.at(1, vs, j, ve))
 	}
 	var ox exprs
 	{
@@ -1077,4 +1093,26 @@ func decomposeRowsAttend(o graph.Op, c *Context) ([]Prim, error) {
 		{Kind: PrimReduce, Shape: []int{Q, D, R}, In: []Operand{weights, c.value(o.In[2])}, Out: num, Combine: OpAdd, Expr: vx.e},
 		{Kind: PrimMap, Shape: []int{Q, D}, In: []Operand{num, sums}, Out: c.value(o.Out[0]), Expr: ox.e},
 	}, nil
+}
+
+// decomposeUpsample is a grid of rows GridW wide Span times as large each
+// way (graph.OpUpsample), one map over the output's rows and width: row r
+// of the grid Span*GridW wide reads the input row at (y/Span, x/Span).
+func decomposeUpsample(o graph.Op, c *Context) ([]Prim, error) {
+	S, W := o.Attr.Span, o.Attr.GridW
+	if len(o.In) != 1 || len(o.Out) != 1 || S < 2 || W < 1 || c.width(o.Out[0]) != c.width(o.In[0]) {
+		return nil, fmt.Errorf("an upsample of %d operands by %d over a grid %d wide", len(o.In), S, W)
+	}
+	U := ir.U32
+	sh, ish := c.rows(o.Out[0]), c.rows(o.In[0])
+	if ish[0]%W != 0 || sh[0] != ish[0]*S*S {
+		return nil, fmt.Errorf("an upsample of %d rows %d wide into %d", ish[0], W, sh[0])
+	}
+	var x exprs
+	r, j := x.coord(0), x.coord(1)
+	u := func(v int) int { return x.u(uint32(v)) }
+	y, col := x.op(OpDiv, U, r, u(W*S)), x.op(OpRem, U, r, u(W*S))
+	p := x.op(OpAdd, U, x.op(OpMul, U, x.op(OpDiv, U, y, u(S)), u(W)), x.op(OpDiv, U, col, u(S)))
+	x.at(0, ish, p, j)
+	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0])}, Out: c.value(o.Out[0]), Expr: x.e}}, nil
 }
