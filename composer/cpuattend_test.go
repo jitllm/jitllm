@@ -23,7 +23,8 @@ func attendGraph(heads, kv, dim int) *graph.Graph {
 
 // runCPUCalls runs codes in order on the CPU, each over its calls' space,
 // every operand's words where bufs names it by kind and name (a value by
-// its graph name), the composer's own buffers made here.
+// its graph name, a packed weight's planes past its quants by
+// "<name>#<region>"), the composer's own buffers made here.
 func runCPUCalls(cpuOn cpuArm, codes []Code, g *graph.Graph, bufs map[string][]uint32) error {
 	return runCPUCallsAt(cpuOn, codes, g, bufs, func(at int) int { return at })
 }
@@ -84,6 +85,8 @@ func runCPUCallsAt(cpuOn cpuArm, codes []Code, g *graph.Graph, bufs map[string][
 					words = a.Words
 				case o.Kind == OperandValue && bufs[g.Values[o.Value].Name] != nil:
 					words = bufs[g.Values[o.Value].Name]
+				case o.Kind == OperandWeight && o.Region > 0 && bufs[fmt.Sprintf("%s#%d", o.Name, o.Region)] != nil:
+					words = bufs[fmt.Sprintf("%s#%d", o.Name, o.Region)]
 				case (o.Kind == OperandTable || o.Kind == OperandVector || o.Kind == OperandWeight) && bufs[o.Name] != nil:
 					words = bufs[o.Name]
 				case o.Kind == OperandValue || o.Kind == OperandScratch:
