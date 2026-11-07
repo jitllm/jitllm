@@ -481,6 +481,15 @@ func markTable(s *jlm.Source, names []string) error {
 			continue
 		}
 		id, ok := ids[name]
+		if !ok && name == "\n" {
+			// A newline is a byte token where the vocabulary stores bytes:
+			// byte-level BPE's or sentencepiece's.
+			for _, alt := range []string{"\u010a", "<0x0A>"} {
+				if id, ok = ids[alt]; ok {
+					break
+				}
+			}
+		}
 		if !ok {
 			return fmt.Errorf("convert: the vocabulary has no %q, a picture's marker", name)
 		}

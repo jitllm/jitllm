@@ -54,9 +54,13 @@ type TowerGraphs struct {
 	// Trim is the break rows the frame leaves off its last row: 1 where the
 	// head breaks after each merged row but the last (TOpRowBreak's Offset).
 	Trim int
-	// Marks is the marker rows the head writes around a square's rows
-	// (TOpMarkRow): 1 for one before them, 2 for one before and one after,
-	// each where the square names one (Square.Mark, Square.Trail).
+	// Fixed is the rows the head writes for a square whatever its grid,
+	// its marker rows aside (a resampler's queries, TOpRowsAttend); 0 for
+	// a head whose rows follow the grid.
+	Fixed int
+	// Marks is the most marker rows the head writes around a square's rows
+	// (TOpMarkRow's Span and Offset), each run where the square names one
+	// (Square.Mark, Square.Trail).
 	Marks int
 	// Tail is the class rows after the patches (TOpTailRow).
 	Tail int
@@ -361,8 +365,14 @@ func (m *Model) BuildTowerGraphs() (*TowerGraphs, error) {
 	tg.Head, tg.Out = h, out
 	for _, op := range t.Head.Ops {
 		if op.Code == jlm.TOpMarkRow {
-			tg.Marks = 1 + int(op.Offset)
+			tg.Marks = int(op.Span + op.Offset)
 		}
+		if op.Code == jlm.TOpRowsAttend {
+			tg.Fixed = -1
+		}
+	}
+	if tg.Fixed < 0 {
+		tg.Fixed = tg.Out - tg.Marks
 	}
 	if tg.Line, tg.Frame, tg.Trim = programFrame(&t.Head); tg.Frame > 0 {
 		for _, op := range t.Head.Ops {
@@ -403,6 +413,10 @@ type PictureFit struct {
 	Short              int
 	MinTiles, MaxTiles int
 	Thumb              bool
+	// Slice, SlicePatch and SliceMax are llava-uhd's cut (jlm.PreSliceUHD):
+	// an overview of about Slice^2 pixels, each side whole SlicePatch-pixel
+	// patches, and at most SliceMax slices; 0 where there is none.
+	Slice, SlicePatch, SliceMax int
 	// Canvas says the tiles are a best-fitting canvas's (jlm.PreBestFit):
 	// the picture resized onto it without distortion, at its top left.
 	Canvas bool
@@ -484,7 +498,7 @@ func (f PictureFit) boxSize(w, h int) (int, int) {
 
 // Own reports that a picture is encoded at a size of its own.
 func (f PictureFit) Own() bool {
-	return f.Factor > 0 || f.Limit > 0 || f.Cap > 0 || f.Budget > 0 || f.SmartTile > 0
+	return f.Factor > 0 || f.Limit > 0 || f.Cap > 0 || f.Budget > 0 || f.SmartTile > 0 || f.Slice > 0
 }
 
 // smartLayout is how a w x h picture is cut under jlm.PreTileSmart: cols x
@@ -512,6 +526,8 @@ func (f PictureFit) unit() int {
 		return f.BudgetUnit
 	case f.SmartTile > 0:
 		return f.SmartUnit
+	case f.Slice > 0:
+		return f.SlicePatch
 	}
 	return f.Factor
 }
@@ -623,6 +639,12 @@ func towerFit(t *jlm.Tower) (PictureFit, error) {
 			// The area the reduction reaches: a piece's bound or a tile's.
 			fit.MaxPix = max(fit.SmartMaxPix, fit.SmartTile*fit.SmartTile)
 			sized, pil = true, jlm.Filter(s.Ints[7]) != jlm.FilterTwoTap
+		case jlm.PreSliceUHD:
+			fit.Slice, fit.SlicePatch, fit.SliceMax = int(s.Ints[0]), int(s.Ints[1]), int(s.Ints[2])
+			// The area the reduction reaches: a piece's, each side rounded up
+			// a patch.
+			fit.MaxPix = (fit.Slice + fit.SlicePatch) * (fit.Slice + fit.SlicePatch)
+			sized, pil = true, jlm.Filter(s.Ints[3]) != jlm.FilterTwoTap
 		case jlm.PreAspectBudget:
 			fit.Budget, fit.BudgetPatch, fit.BudgetUnit = int(s.Ints[0]), int(s.Ints[1]), int(s.Ints[2])
 			// The area the reduction reaches: the budget's.
@@ -657,7 +679,7 @@ func towerFit(t *jlm.Tower) (PictureFit, error) {
 		}
 	}
 	ways := 0
-	for _, w := range []bool{fit.Short > 0, fit.MaxTiles > 0, fit.Factor > 0, fit.Limit > 0, fit.Box > 0, fit.Cap > 0, fit.Budget > 0, fit.SmartTile > 0} {
+	for _, w := range []bool{fit.Short > 0, fit.MaxTiles > 0, fit.Factor > 0, fit.Limit > 0, fit.Box > 0, fit.Cap > 0, fit.Budget > 0, fit.SmartTile > 0, fit.Slice > 0} {
 		if w {
 			ways++
 		}
@@ -702,6 +724,12 @@ func towerEntry(t *jlm.Tower, px uint8, grid, extra, side int, fit PictureFit, f
 			if err := resizeChain(&a, jlm.Filter(s.Ints[3])); err != nil {
 				return nil, err
 			}
+		case jlm.PreSliceUHD:
+			a.PicW, a.PicH, a.PicLive = side, side, true
+			if err := resizeChain(&a, jlm.Filter(s.Ints[3])); err != nil {
+				return nil, err
+			}
+			a.PicTorch = jlm.Precision(s.Ints[4]) == jlm.PrecTorch
 		case jlm.PreTileSmart:
 			a.PicW, a.PicH, a.PicLive = side, side, true
 			if err := resizeChain(&a, jlm.Filter(s.Ints[7])); err != nil {
@@ -893,39 +921,63 @@ type Square struct {
 	Class                  int
 	Ow, Oh, X0, Y0, Pw, Ph int
 	Gw, Gh                 int
-	// Mark and Trail are the square's marker rows in the head's table plus
-	// one, before its rows and after them, 0 for none (TOpMarkRow,
-	// composer.RequestMark and RequestTrail).
-	Mark, Trail int
+	// Mark and Trail are the first rows of the square's marker runs in the
+	// head's table plus one, before its rows and after them, 0 for none, and
+	// MarkN and TrailN their lengths (TOpMarkRow, composer.RequestMark and
+	// RequestTrail).
+	Mark, Trail, MarkN, TrailN int
 }
 
 // square is square i of a w x h picture and how many the picture has: one
 // at its own size in the smallest class that holds it, or a fixed square,
 // a crop or a tile at the entry's size.
 func (tg *TowerGraphs) Square(w, h, i int) (Square, int) {
+	if f := tg.Fit; f.Slice > 0 {
+		cols, rows, cut := f.sliceGrid(w, h)
+		n := 1
+		if cut {
+			n += cols * rows
+		}
+		if i == 0 {
+			// The overview, at its own size, upscaled where nothing is cut.
+			ow, oh := f.sliceSize(float64(w), float64(h), !cut)
+			sq := Square{Class: tg.classOf(max(ow, oh)), Ow: ow, Oh: oh, Pw: ow, Ph: oh, Gw: ow / tg.Patch, Gh: oh / tg.Patch}
+			if tg.Marks > 0 {
+				sq.Mark, sq.MarkN, sq.Trail, sq.TrailN = 1, 1, 2, 1
+			}
+			return sq, n
+		}
+		// Slice i-1 of the picture resized to whole best-sized slices; a
+		// slice row's first after the first takes the newline before it.
+		rw, rh := f.refineSize(w, h, cols, rows)
+		sw, sh, k := rw/cols, rh/rows, i-1
+		sq := Square{Class: tg.classOf(max(sw, sh)), Ow: rw, Oh: rh, X0: k % cols * sw, Y0: k / cols * sh, Pw: sw, Ph: sh,
+			Gw: sw / tg.Patch, Gh: sh / tg.Patch}
+		if tg.Marks > 0 {
+			sq.Mark, sq.MarkN, sq.Trail, sq.TrailN = 3, 1, 4, 1
+			if k > 0 && k%cols == 0 {
+				sq.Mark, sq.MarkN = 5, 2
+			}
+		}
+		return sq, n
+	}
 	if f := tg.Fit; f.SmartTile > 0 {
 		cols, rows, tiled, ow, oh := f.smartLayout(w, h)
 		n, span := 1, f.SmartMax
 		if tiled {
 			n = cols*rows + 1
 		}
-		class := func(side int) int {
-			c := 0
-			for c < len(tg.Classes)-1 && side > tg.Classes[c].Pic.PicW {
-				c++
-			}
-			return c
-		}
+		class := tg.classOf
 		if i < n-1 {
 			// Tile i of the picture resized onto the grid, its marker the
 			// tile's place.
 			s := f.SmartTile
 			return Square{Class: class(s), Ow: cols * s, Oh: rows * s, X0: i % cols * s, Y0: i / cols * s, Pw: s, Ph: s,
-				Gw: s / tg.Patch, Gh: s / tg.Patch, Mark: i/cols*span + i%cols + 1}, n
+				Gw: s / tg.Patch, Gh: s / tg.Patch, Mark: i/cols*span + i%cols + 1, MarkN: 1}, n
 		}
 		sq := Square{Class: class(max(ow, oh)), Ow: ow, Oh: oh, Pw: ow, Ph: oh, Gw: ow / tg.Patch, Gh: oh / tg.Patch}
 		if tiled {
-			sq.Mark = span*span + 1
+			sq.Mark, sq.MarkN = span*span+1, 1
 		}
 		return sq, n
 	}
@@ -980,11 +1032,11 @@ func (tg *TowerGraphs) Square(w, h, i int) (Square, int) {
 		// rows'.
 		switch {
 		case i == n-1:
-			sq.Mark = 3
+			sq.Mark, sq.MarkN = 3, 1
 		case i%cols < cols-1:
-			sq.Trail = 1
+			sq.Trail, sq.TrailN = 1, 1
 		default:
-			sq.Trail = 2
+			sq.Trail, sq.TrailN = 2, 1
 		}
 	}
 	return sq, n
@@ -998,15 +1050,25 @@ func (tg *TowerGraphs) SquareOut(sq Square) int {
 		return (sq.Gh/m)*(sq.Gw/m+tg.Line) - tg.Trim + 2*tg.Ends
 	}
 	grid := tg.Rows - tg.Lead - tg.Tail
+	if tg.Fixed > 0 {
+		n := tg.Fixed
+		if sq.Mark > 0 {
+			n += sq.MarkN
+		}
+		if sq.Trail > 0 {
+			n += sq.TrailN
+		}
+		return n
+	}
 	if tg.Marks > 0 {
 		// The head's rows less its marker rows over the patches, and the
 		// markers the square names.
 		n := sq.Gw * sq.Gh * (tg.Out - tg.Marks) / grid
 		if sq.Mark > 0 {
-			n++
+			n += sq.MarkN
 		}
 		if sq.Trail > 0 {
-			n++
+			n += sq.TrailN
 		}
 		return n
 	}
@@ -1299,12 +1361,38 @@ func lowerValuesWith(b *graph.Builder, t *jlm.Tower, p *jlm.Program, in []graph.
 			if s.K != width(ins[0]) || s.Rows < 1 {
 				return nil, fmt.Errorf("marks rows %d wide from a table of %d rows %d wide", width(ins[0]), s.Rows, s.K)
 			}
-			if op.Offset&^1 != 0 {
-				return nil, fmt.Errorf("marks rows with a trail of %d", op.Offset)
+			if op.Span < 1 || op.Offset < 0 {
+				return nil, fmt.Errorf("marks rows with runs of %d before and %d after", op.Span, op.Offset)
 			}
 			out = b.Emit(graph.OpMarkRow, ins, []graph.Result{{Name: "marked", Width: width(ins[0]),
-				Rows: rowsOf(ins[0]) + 1 + int(op.Offset)}},
-				[]graph.Binding{{Role: op.Bind[0], K: s.K, Rows: s.Rows}}, graph.Attrs{Width: int(op.Width), Offset: int(op.Offset)}, nil, nil)[0]
+				Rows: rowsOf(ins[0]) + int(op.Span+op.Offset)}},
+				[]graph.Binding{{Role: op.Bind[0], K: s.K, Rows: s.Rows}},
+				graph.Attrs{Width: int(op.Width), Span: int(op.Span), Offset: int(op.Offset)}, nil, nil)[0]
+		case jlm.TOpPosBuckets:
+			s, err := shape(op.Bind[0])
+			if err != nil {
+				return nil, err
+			}
+			if s.Rows != int(op.Span*op.Span) {
+				return nil, fmt.Errorf("buckets onto a table %d a side from %d rows", op.Span, s.Rows)
+			}
+			out = b.Emit(graph.OpPosBuckets, nil, []graph.Result{{Name: "pos", Width: s.K}},
+				[]graph.Binding{{Role: op.Bind[0], K: s.K, Rows: s.Rows}},
+				graph.Attrs{Span: int(op.Span), Offset: int(op.Offset)}, nil, nil)[0]
+		case jlm.TOpTableRows:
+			s, err := shape(op.Bind[0])
+			if err != nil {
+				return nil, err
+			}
+			out = b.Emit(graph.OpTableRows, nil, []graph.Result{{Name: "table", Width: s.K, Rows: s.Rows}},
+				[]graph.Binding{{Role: op.Bind[0], K: s.K, Rows: s.Rows}}, graph.Attrs{}, nil, nil)[0]
+		case jlm.TOpRowsAttend:
+			w, h := width(ins[0]), int(op.Span)
+			if w%h != 0 || width(ins[1]) != w || width(ins[2]) != w {
+				return nil, fmt.Errorf("attends rows %d, %d and %d wide in %d heads", w, width(ins[1]), width(ins[2]), h)
+			}
+			out = b.Emit(graph.OpRowsAttend, ins, []graph.Result{{Name: "attended", Width: w, Rows: rowsOf(ins[0])}}, nil,
+				graph.Attrs{NHead: h, HeadDim: w / h, Scale: 1 / math.Sqrt(float64(w/h))}, nil, nil)[0]
 		case jlm.TOpTailRow:
 			out = b.Emit(graph.OpTailRow, ins, []graph.Result{{Name: "class", Width: width(ins[0])}},
 				[]graph.Binding{{Role: op.Bind[0], K: width(ins[0])}}, graph.Attrs{}, nil, nil)[0]
@@ -1774,4 +1862,71 @@ func canvasSize(w, h, s, cols, rows int) (ow, oh int) {
 		oh, ow = th, min(int(math.Floor(float64(w)*sh)), tw)
 	}
 	return max(ow, 1), max(oh, 1)
+}
+
+// classOf is the class a picture of side pixels is encoded in: the smallest
+// whose picture holds it, else the largest.
+func (tg *TowerGraphs) classOf(side int) int {
+	c := 0
+	for c < len(tg.Classes)-1 && side > tg.Classes[c].Pic.PicW {
+		c++
+	}
+	return c
+}
+
+// sliceGrid is jlm.PreSliceUHD's grid of a w x h picture: cols x rows
+// slices, and whether it is cut at all -- the counts one either side of the
+// picture's area over Slice^2 rounded up, each count's factor pairs in
+// order, the first whose aspect is closest to the picture's
+// (get_sliced_grid, in float64 as Python computes it).
+func (f PictureFit) sliceGrid(w, h int) (cols, rows int, cut bool) {
+	logRatio := math.Log(float64(w) / float64(h))
+	ratio := float64(w) * float64(h) / float64(f.Slice*f.Slice)
+	multiple := min(int(math.Ceil(ratio)), f.SliceMax)
+	if multiple <= 1 {
+		return 1, 1, false
+	}
+	best, least := [2]int{1, 1}, math.Inf(1)
+	for _, n := range []int{multiple - 1, multiple, multiple + 1} {
+		if n == 1 || n > f.SliceMax {
+			continue
+		}
+		for m := 1; m <= n; m++ {
+			if n%m != 0 {
+				continue
+			}
+			if e := math.Abs(logRatio - math.Log(float64(m)/float64(n/m))); e < least {
+				best, least = [2]int{m, n / m}, e
+			}
+		}
+	}
+	return best[0], best[1], true
+}
+
+// sliceSize is a w x h piece's size under jlm.PreSliceUHD (find_best_resize):
+// past Slice^2 pixels, or where up, Slice^2 at its aspect -- the height
+// truncated, the width the truncated height times the aspect, truncated --
+// then each side whole patches, rounded half to even, at least one.
+func (f PictureFit) sliceSize(w, h float64, up bool) (int, int) {
+	if w*h > float64(f.Slice*f.Slice) || up {
+		r := w / h
+		h = math.Trunc(float64(f.Slice) / math.Sqrt(r))
+		w = math.Trunc(h * r)
+	}
+	return wholeUnits(w, f.SlicePatch), wholeUnits(h, f.SlicePatch)
+}
+
+// refineSize is the size a w x h picture is resized to before it is cut
+// into cols x rows slices (get_refine_size): whole slices, each the best
+// size of the picture's own slice, upscaled where it must be.
+func (f PictureFit) refineSize(w, h, cols, rows int) (int, int) {
+	rw, rh := wholeUnits(float64(w), cols), wholeUnits(float64(h), rows)
+	sw, sh := f.sliceSize(float64(rw)/float64(cols), float64(rh)/float64(rows), true)
+	return sw * cols, sh * rows
+}
+
+// wholeUnits is length rounded half to even to whole units, at least one
+// (the processor's ensure_divide).
+func wholeUnits(length float64, unit int) int {
+	return max(int(math.RoundToEven(length/float64(unit)))*unit, unit)
 }

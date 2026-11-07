@@ -156,7 +156,13 @@ const (
 	// RoleVTileMarks is a tiled picture's marker rows, [rows][text width]:
 	// the text table's rows of the tokens that stand before each tile and
 	// before its thumbnail (TOpMarkRow), copied at conversion.
-	RoleVTileMarks  Role = 65495
+	RoleVTileMarks Role = 65495
+	// RoleVRsPosAxes is the resampler's key positions as two tables of the
+	// same length, [2*length][D]: row x of the first the column's sin and
+	// cos over the first half, row y of the second the row's over the
+	// second (TOpPosAxes), written at conversion (resampler.py's
+	// get_2d_sincos_pos_embed, for any grid a picture's piece reaches).
+	RoleVRsPosAxes  Role = 65494
 	RoleVMNHardNorm Role = 65496
 )
 
@@ -168,6 +174,8 @@ func visionFamRoleName(r Role) (string, bool) {
 		return "v.token_embd.img_break", true
 	case RoleVTileMarks:
 		return "v.token_embd.tile_marks", true
+	case RoleVRsPosAxes:
+		return "resampler.pos_axes", true
 	case RoleVProj3:
 		return "mm.model.fc", true
 	case RoleVPostAttnNorm:

@@ -3,6 +3,7 @@ package model
 import (
 	"fmt"
 	"maps"
+	"strconv"
 	"strings"
 	"time"
 
@@ -501,6 +502,9 @@ func (m *Model) ChatSpansToolChoice(msgs []ChatMessage, pics []Span, tools []byt
 			seg = mk.AfterText + seg
 		}
 		if i < n {
+			if mk.IndexBefore != "" || mk.IndexAfter != "" {
+				seg += mk.IndexBefore + strconv.Itoa(i) + mk.IndexAfter
+			}
 			seg += mk.BeforeText
 		}
 		add(m.Vocab.EncodeSpecial(seg, false))

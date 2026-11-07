@@ -37,6 +37,10 @@ const (
 	// after its rows.
 	RequestMark
 	RequestTrail
+	// RequestMarkN and RequestTrailN are the runs' lengths, a mark's none
+	// where it is 0.
+	RequestMarkN
+	RequestTrailN
 	// RequestPicTaps is where a picture resized by Pillow's filters
 	// (graph.ChainPIL) has its taps: the output's columns' (PILTaps), then
 	// its rows', each entry Taps+1 words.
@@ -860,15 +864,16 @@ func decomposeWrapRows(o graph.Op, c *Context) ([]Prim, error) {
 }
 
 // decomposeMarkRow is the input's rows -- a square's merged grid, the
-// request's grid over Width -- after the weight's row the request names
-// (RequestMark, the row plus one; none where it is 0) and, where the op says
-// (Offset 1), before the one it names after them (RequestTrail). A row past
-// the square's last is clamped to it, recomputing it: no row past the
-// square's is written, the next square's or the prompt's.
+// request's grid over Width, or where Width is 0 all of them -- after the run of the weight's rows the
+// request names (RequestMark, its first row plus one, none where it is 0;
+// RequestMarkN long, at most Span) and before the run it names after them
+// (RequestTrail and RequestTrailN, at most Offset). A row past the square's
+// last is clamped to it, recomputing it: no row past the square's is
+// written, the next square's or the prompt's.
 func decomposeMarkRow(o graph.Op, c *Context) ([]Prim, error) {
 	a := o.Attr
 	S := a.Width
-	if len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) != 1 || S < 1 || o.Weight[0].Rows < 1 || a.Offset&^1 != 0 ||
+	if len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) != 1 || S < 0 || o.Weight[0].Rows < 1 || a.Span < 1 || a.Offset < 0 ||
 		o.Weight[0].K != c.width(o.In[0]) || c.width(o.Out[0]) != c.width(o.In[0]) {
 		return nil, fmt.Errorf("a marker row of %d operands, %d weights, by %d", len(o.In), len(o.Weight), S)
 	}
@@ -882,27 +887,41 @@ func decomposeMarkRow(o graph.Op, c *Context) ([]Prim, error) {
 	var x exprs
 	r, i := x.coord(0), x.coord(1)
 	u := func(v int) int { return x.u(uint32(v)) }
-	W := x.op(OpDiv, U, x.op(OpMax, U, x.load(1, u(RequestGrid)), u(S)), u(S))
-	H := x.op(OpDiv, U, x.op(OpMax, U, x.load(1, u(RequestGridH)), u(S)), u(S))
-	mark, trail := x.load(1, u(RequestMark)), u(0)
-	if a.Offset == 1 {
-		trail = x.load(1, u(RequestTrail))
+	// body is the rows between the runs: the merged grid's, or where Width
+	// is 0 every row of the input's.
+	body := u(ish[0])
+	if S > 0 {
+		W := x.op(OpDiv, U, x.op(OpMax, U, x.load(1, u(RequestGrid)), u(S)), u(S))
+		H := x.op(OpDiv, U, x.op(OpMax, U, x.load(1, u(RequestGridH)), u(S)), u(S))
+		body = x.op(OpMul, U, H, W)
 	}
-	lead := x.op(OpMin, U, mark, u(1))
-	end := x.op(OpAdd, U, x.op(OpMul, U, H, W), lead)
-	last := x.op(OpSub, U, x.op(OpAdd, U, end, x.op(OpMin, U, trail, u(1))), u(1))
+	// run is a mark's first row and length: none where its word is 0, the
+	// length at most the op's.
+	run := func(at, n, most int) (first, length int) {
+		m := x.load(1, u(at))
+		first = x.op(OpSub, U, x.op(OpMax, U, m, u(1)), u(1))
+		length = x.op(OpMin, U, x.op(OpMul, U, x.op(OpMin, U, m, u(1)), x.load(1, u(n))), u(most))
+		return first, length
+	}
+	mark, lead := run(RequestMark, RequestMarkN, a.Span)
+	trail, tail := u(0), u(0)
+	if a.Offset > 0 {
+		trail, tail = run(RequestTrail, RequestTrailN, a.Offset)
+	}
+	end := x.op(OpAdd, U, body, lead)
+	last := x.op(OpSub, U, x.op(OpAdd, U, end, tail), u(1))
 	rr := x.op(OpMin, U, r, x.op(OpMin, U, last, u(sh[0]-1)))
 	src := x.op(OpMin, U, x.op(OpSub, U, x.op(OpMax, U, rr, lead), lead), u(ish[0]-1))
 	in := []Operand{c.value(o.In[0]), TableRequest.op()}
 	facts := Facts{Extents: map[int]int{1: RequestRows + sh[0]}}
 	before := x.op(OpLess, ir.Pred, rr, lead)
-	named := x.sel(U, before, mark, trail)
-	row := x.op(OpMin, U, x.op(OpSub, U, x.op(OpMax, U, named, u(1)), u(1)), u(T-1))
+	after := x.op(OpLess, ir.Pred, x.op(OpSub, U, end, u(1)), rr)
+	named := x.sel(U, before, x.op(OpAdd, U, mark, rr), x.op(OpAdd, U, trail, x.op(OpSub, U, x.op(OpMax, U, rr, end), end)))
+	row := x.op(OpMin, U, named, u(T-1))
 	mv, err := weightElement(&x, wo, T, sh[1], &in, &facts, row, i)
 	if err != nil {
 		return nil, fmt.Errorf("a marker table of %s: %w", wo.Format, err)
 	}
-	after := x.op(OpLess, ir.Pred, x.op(OpSub, U, end, u(1)), rr)
 	v := x.sel(ir.F32, before, mv, x.sel(ir.F32, after, mv, x.at(0, ish, src, i)))
 	out := c.value(o.Out[0])
 	return []Prim{{Kind: PrimMap, Shape: sh, In: in, Out: out, Expr: x.e, Facts: facts,
@@ -944,4 +963,118 @@ func bf16Of(v float32) float32 {
 	b := math.Float32bits(v)
 	b += 0x7fff + (b>>16)&1
 	return math.Float32frombits(b &^ 0xffff)
+}
+
+// decomposePosBuckets is each row's row of a Span x Span position table at
+// its cell of the request's grid bucketed onto it: row (Span*y)/gh, column
+// (Span*x)/gw, in integers.
+func decomposePosBuckets(o graph.Op, c *Context) ([]Prim, error) {
+	a := o.Attr
+	if len(o.In) != 0 || len(o.Out) != 1 || len(o.Weight) != 1 || a.Span < 1 || o.Weight[0].Rows != a.Span*a.Span {
+		return nil, fmt.Errorf("a bucketed position table of %d weights over %d a side", len(o.Weight), a.Span)
+	}
+	wo, err := c.weight(o.Weight[0])
+	if err != nil {
+		return nil, err
+	}
+	U := ir.U32
+	sh := c.rows(o.Out[0])
+	R, E, S := sh[0], sh[1], uint32(a.Span)
+	var x exprs
+	r, e := x.coord(0), x.coord(1)
+	in := []Operand{TablePos.op(), TableRequest.op()}
+	facts := Facts{Extents: map[int]int{0: R + 1, 1: RequestRows + R}}
+	lead := uint32(a.Offset)
+	gw := x.op(OpMax, U, x.load(1, x.u(RequestGrid)), x.u(1))
+	gh := x.op(OpMax, U, x.load(1, x.u(RequestGridH)), x.u(1))
+	q := x.op(OpSub, U, x.op(OpMax, U, x.load(0, x.op(OpAdd, U, r, x.u(1))), x.u(lead)), x.u(lead))
+	col := x.op(OpDiv, U, x.op(OpMul, U, x.op(OpRem, U, q, gw), x.u(S)), gw)
+	row := x.op(OpDiv, U, x.op(OpMul, U, x.op(OpDiv, U, q, gw), x.u(S)), gh)
+	at := x.op(OpAdd, U, x.op(OpMul, U, x.op(OpMin, U, row, x.u(S-1)), x.u(S)), x.op(OpMin, U, col, x.u(S-1)))
+	if _, err := weightElement(&x, wo, a.Span*a.Span, E, &in, &facts, at, e); err != nil {
+		return nil, fmt.Errorf("a position table of %s: %w", wo.Format, err)
+	}
+	return []Prim{{Kind: PrimMap, Shape: sh, In: in, Out: c.value(o.Out[0]), Expr: x.e, Facts: facts}}, nil
+}
+
+// decomposeTableRows is the weight's rows, each a row of the output: a
+// table the reader copies out, read as the block's vector.
+func decomposeTableRows(o graph.Op, c *Context) ([]Prim, error) {
+	if len(o.In) != 0 || len(o.Out) != 1 || len(o.Weight) != 1 || c.width(o.Out[0]) != o.Weight[0].K ||
+		c.rows(o.Out[0])[0] != o.Weight[0].Rows {
+		return nil, fmt.Errorf("a table's rows of %d weights", len(o.Weight))
+	}
+	sh := c.rows(o.Out[0])
+	w := o.Weight[0]
+	var x exprs
+	x.at(0, []int{sh[0] * sh[1]}, x.op(OpAdd, ir.U32, x.op(OpMul, ir.U32, x.coord(0), x.u(uint32(sh[1]))), x.coord(1)))
+	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{{Kind: OperandVector, Role: w.Role, Name: w.Role.String()}},
+		Out: c.value(o.Out[0]), Expr: x.e}}, nil
+}
+
+// decomposeRowsAttend is each query row (operand 0) attending over the
+// step's live rows of the keys and values (1 and 2): per head, the scores
+// q.k times the scale -- none past the live rows -- their maximum, the
+// weights exp(score - maximum) and their sum, the weighted values summed
+// over the rows, and each element that sum over the weights'.
+func decomposeRowsAttend(o graph.Op, c *Context) ([]Prim, error) {
+	a := o.Attr
+	H, hd := a.NHead, a.HeadDim
+	if len(o.In) != 3 || len(o.Out) != 1 || H < 1 || hd < 1 || c.width(o.In[0]) != H*hd ||
+		c.width(o.In[1]) != H*hd || c.width(o.In[2]) != H*hd || c.width(o.Out[0]) != H*hd {
+		return nil, fmt.Errorf("a rows attention of %d operands, %d heads of %d", len(o.In), H, hd)
+	}
+	F, U := ir.F32, ir.U32
+	qs, ks := c.rows(o.In[0]), c.rows(o.In[1])
+	Q, R, D := qs[0], ks[0], H*hd
+	if vs := c.rows(o.In[2]); vs[0] != R {
+		return nil, fmt.Errorf("a rows attention over %d keys and %d values", R, vs[0])
+	}
+	minus := math.Float32frombits(0xff7fffff)
+	tmp := func(name string) Operand {
+		return Operand{Kind: OperandScratch, Name: c.value(o.Out[0]).Name + "." + name, Temp: true}
+	}
+	dots, scores, maxes, weights, sums, num := tmp("dots"), tmp("scores"), tmp("max"), tmp("weights"), tmp("sum"), tmp("num")
+	sh, qh := []int{Q, H, R}, []int{Q, H}
+
+	var dx exprs
+	{
+		q, h, j, e := dx.coord(0), dx.coord(1), dx.coord(2), dx.coord(3)
+		el := dx.op(OpAdd, U, dx.op(OpMul, U, h, dx.u(uint32(hd))), e)
+		dx.op(OpMul, F, dx.at(0, qs, q, el), dx.at(1, ks, j, el))
+	}
+	var sx exprs
+	{
+		j := sx.coord(2)
+		live := sx.load(1, sx.u(0))
+		d := sx.at(0, sh, sx.coord(0), sx.coord(1), j)
+		sx.sel(F, sx.op(OpLess, ir.Pred, j, live), sx.op(OpMul, F, d, sx.f(float32(a.Scale))), sx.f(minus))
+	}
+	var mx exprs
+	mx.at(0, sh, mx.coord(0), mx.coord(1), mx.coord(2))
+	var wx exprs
+	wx.un(OpExp, F, wx.op(OpSub, F, wx.at(0, sh, wx.coord(0), wx.coord(1), wx.coord(2)), wx.at(1, qh, wx.coord(0), wx.coord(1))))
+	var lx exprs
+	lx.at(0, sh, lx.coord(0), lx.coord(1), lx.coord(2))
+	var vx exprs
+	{
+		q, e, j := vx.coord(0), vx.coord(1), vx.coord(2)
+		h := vx.op(OpDiv, U, e, vx.u(uint32(hd)))
+		vx.op(OpMul, F, vx.at(0, sh, q, h, j), vx.at(1, ks, j, e))
+	}
+	var ox exprs
+	{
+		q, e := ox.coord(0), ox.coord(1)
+		ox.op(OpDiv, F, ox.at(0, []int{Q, D}, q, e), ox.at(1, qh, q, ox.op(OpDiv, U, e, ox.u(uint32(hd)))))
+	}
+	return []Prim{
+		{Kind: PrimReduce, Shape: []int{Q, H, R, hd}, In: []Operand{c.value(o.In[0]), c.value(o.In[1])}, Out: dots, Combine: OpAdd, Expr: dx.e},
+		{Kind: PrimMap, Shape: sh, In: []Operand{dots, TablePos.op()}, Out: scores, Expr: sx.e,
+			Facts: Facts{Extents: map[int]int{1: R + 1}}},
+		{Kind: PrimReduce, Shape: sh, In: []Operand{scores}, Out: maxes, Combine: OpMax, Init: int64(math.Float32bits(minus)), Expr: mx.e},
+		{Kind: PrimMap, Shape: sh, In: []Operand{scores, maxes}, Out: weights, Expr: wx.e},
+		{Kind: PrimReduce, Shape: sh, In: []Operand{weights}, Out: sums, Combine: OpAdd, Expr: lx.e},
+		{Kind: PrimReduce, Shape: []int{Q, D, R}, In: []Operand{weights, c.value(o.In[2])}, Out: num, Combine: OpAdd, Expr: vx.e},
+		{Kind: PrimMap, Shape: []int{Q, D}, In: []Operand{num, sums}, Out: c.value(o.Out[0]), Expr: ox.e},
+	}, nil
 }

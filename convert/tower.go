@@ -61,6 +61,8 @@ func towerStater(p jlm.Projector) func(*jlm.Source) (*jlm.Tower, error) {
 		return lfm2Tower
 	case jlm.ProjLlama4:
 		return llama4Tower
+	case jlm.ProjResampler:
+		return minicpmvTower
 	}
 	return nil
 }
@@ -1426,7 +1428,7 @@ func lfm2Tower(s *jlm.Source) (*jlm.Tower, error) {
 	op(jlm.TowerOp{Code: jlm.TOpLinear, Bind: bias(jlm.RoleVProj, jlm.RoleVProjBias)})
 	op(jlm.TowerOp{Code: jlm.TOpStated, Expr: &jlm.Expr{Terms: gelu.T}, Width: hidden})
 	op(jlm.TowerOp{Code: jlm.TOpLinear, Bind: bias(jlm.RoleVProj2, jlm.RoleVProj2Bias)})
-	op(jlm.TowerOp{Code: jlm.TOpMarkRow, Bind: []jlm.Role{jlm.RoleVTileMarks}, Span: span, Width: merge})
+	op(jlm.TowerOp{Code: jlm.TOpMarkRow, Bind: []jlm.Role{jlm.RoleVTileMarks}, Span: 1, Width: merge})
 	head.Out = at
 	t := &jlm.Tower{
 		Version: jlm.TowerVersion,
@@ -1561,4 +1563,144 @@ func llama4Tower(s *jlm.Source) (*jlm.Tower, error) {
 		return nil, fmt.Errorf("convert: llama4: %w", err)
 	}
 	return t, nil
+}
+
+// sliceMax is MiniCPM-V's most slices (max_slice_nums): every published
+// preprocessor_config says 9 and the mmproj does not state it.
+const sliceMax = 9
+
+// widestPicture is the widest side of a picture a tower's picture op reads
+// (composer.PictureSide), the bound on a piece's grid.
+const widestPicture = 4096
+
+// minicpmvTower is MiniCPM-V's tower as its own MiniCPMVImageProcessor,
+// SiglipVisionTransformer (modeling_navit_siglip.py) and Resampler run it:
+// the picture cut as llava-uhd cuts it -- an overview at its own size and,
+// for a picture past the slice's area, the slices of the grid closest to its
+// aspect, cut from the picture resized to whole best-sized slices -- each by
+// Pillow's BICUBIC and normalised; each piece's patches through the
+// patch matrix plus the position table's row at the patch's cell bucketed
+// onto the table's square (NaViT's, at the rational); SigLIP's LayerNorm
+// blocks with the tanh GELU, and the post-LayerNorm; then the resampler: the
+// rows through the kv matrix and its LayerNorm (the values), plus their 2-D
+// sin/cos position (the keys), the learned queries through their LayerNorm,
+// all three through their matrices, the queries attending over the piece's
+// rows in heads 128 wide, the output matrix, the post-LayerNorm and the
+// projection: 64 rows a piece whatever its size. A picture is its number in
+// the prompt in <image_id> and </image_id>, <image>, the overview's rows,
+// </image>, then each slice in <slice> and </slice>, a newline before each
+// slice row but the first.
+func minicpmvTower(s *jlm.Source) (*jlm.Tower, error) {
+	v := s.Vision
+	has := towerRoles(s)
+	for _, r := range []jlm.Role{jlm.RoleVPatchEmbd, jlm.RoleVPosEmbd, jlm.RoleVPostNorm, jlm.RoleVRsQuery, jlm.RoleVRsKV,
+		jlm.RoleVRsLnQ, jlm.RoleVRsLnKV, jlm.RoleVRsQ, jlm.RoleVRsK, jlm.RoleVRsV, jlm.RoleVRsOut, jlm.RoleVRsLnPost,
+		jlm.RoleVRsProj} {
+		if !has[r] {
+			return nil, fmt.Errorf("convert: minicpmv: the tower has no %v", r)
+		}
+	}
+	var table, d int32
+	for i := range s.Tensors {
+		t := &s.Tensors[i]
+		if t.Block != jlm.DenseBlock {
+			continue
+		}
+		switch t.Role {
+		case jlm.RoleVPosEmbd:
+			table = int32(t.Dims[1])
+		case jlm.RoleVRsQuery:
+			d = int32(t.Dims[0])
+		}
+	}
+	side := int32(math.Round(math.Sqrt(float64(table))))
+	P := int32(v.PatchSize)
+	if side < 1 || side*side != table || d < 128 || d%128 != 0 || P == 0 || v.NHead == 0 || v.NEmbd%v.NHead != 0 {
+		return nil, fmt.Errorf("convert: minicpmv: a position table of %d rows, a resampler %d wide, patches of %d", table, d, P)
+	}
+	act, err := v.Activation(false)
+	if err != nil {
+		return nil, err
+	}
+	length := widestPicture/P + 1
+	if err := sincosAxes(s, int(d), int(length)); err != nil {
+		return nil, err
+	}
+	if err := markTable(s, []string{"<image>", "</image>", "<slice>", "</slice>", "\n", "<slice>"}); err != nil {
+		return nil, err
+	}
+	bias := func(w, b jlm.Role) []jlm.Role {
+		if has[b] {
+			return []jlm.Role{w, b}
+		}
+		return []jlm.Role{w}
+	}
+	// The pixels are value 0.
+	entry := jlm.Program{NIn: 1, Out: 4, Ops: []jlm.TowerOp{
+		{Code: jlm.TOpPatchify, In: []uint16{0}, Span: P},
+		{Code: jlm.TOpLinear, In: []uint16{1}, Bind: bias(jlm.RoleVPatchEmbd, jlm.RoleVPatchBias)},
+		{Code: jlm.TOpPosBuckets, Bind: []jlm.Role{jlm.RoleVPosEmbd}, Span: side},
+		{Code: jlm.TOpAdd, In: []uint16{2, 3}},
+	}}
+	// The last block's rows are value 0; op i writes value i+1.
+	head := jlm.Program{NIn: 1, Out: 15, Ops: []jlm.TowerOp{
+		{Code: jlm.TOpLayerNorm, In: []uint16{0}, Bind: bias(jlm.RoleVPostNorm, jlm.RoleVPostNormBias), Eps: v.Eps},
+		{Code: jlm.TOpLinear, In: []uint16{1}, Bind: []jlm.Role{jlm.RoleVRsKV}},
+		{Code: jlm.TOpLayerNorm, In: []uint16{2}, Bind: []jlm.Role{jlm.RoleVRsLnKV, jlm.RoleVRsLnKVBias}, Eps: 1e-6},
+		{Code: jlm.TOpPosAxes, Bind: []jlm.Role{jlm.RoleVRsPosAxes}, Span: length},
+		{Code: jlm.TOpAdd, In: []uint16{3, 4}},
+		{Code: jlm.TOpLinear, In: []uint16{5}, Bind: []jlm.Role{jlm.RoleVRsK, jlm.RoleVRsKBias}},
+		{Code: jlm.TOpLinear, In: []uint16{3}, Bind: []jlm.Role{jlm.RoleVRsV, jlm.RoleVRsVBias}},
+		{Code: jlm.TOpTableRows, Bind: []jlm.Role{jlm.RoleVRsQuery}},
+		{Code: jlm.TOpLayerNorm, In: []uint16{8}, Bind: []jlm.Role{jlm.RoleVRsLnQ, jlm.RoleVRsLnQBias}, Eps: 1e-6},
+		{Code: jlm.TOpLinear, In: []uint16{9}, Bind: []jlm.Role{jlm.RoleVRsQ, jlm.RoleVRsQBias}},
+		{Code: jlm.TOpRowsAttend, In: []uint16{10, 6, 7}, Span: d / 128},
+		{Code: jlm.TOpLinear, In: []uint16{11}, Bind: []jlm.Role{jlm.RoleVRsOut, jlm.RoleVRsOutBias}},
+		{Code: jlm.TOpLayerNorm, In: []uint16{12}, Bind: []jlm.Role{jlm.RoleVRsLnPost, jlm.RoleVRsLnPostBias}, Eps: 1e-6},
+		{Code: jlm.TOpLinear, In: []uint16{13}, Bind: []jlm.Role{jlm.RoleVRsProj}},
+		{Code: jlm.TOpMarkRow, In: []uint16{14}, Bind: []jlm.Role{jlm.RoleVTileMarks}, Span: 2, Offset: 1},
+	}}
+	t := &jlm.Tower{
+		Version: jlm.TowerVersion,
+		Pre: []jlm.PreStep{
+			{Kind: jlm.PreSliceUHD, Ints: []int32{int32(v.ImageSize), P, sliceMax, int32(jlm.FilterPILBicubic), int32(jlm.PrecPIL)}},
+			{Kind: jlm.PreNormalize, Floats: []float32{v.Mean[0], v.Mean[1], v.Mean[2], v.Std[0], v.Std[1], v.Std[2]}},
+		},
+		Entry: entry,
+		Block: jlm.TowerBlock{NHead: v.NHead, NKVHead: v.NHead, HeadDim: v.NEmbd / v.NHead, Norm: jlm.NormLayer, Eps: v.Eps, Act: act},
+		Head:  head,
+		Span:  jlm.TowerSpan{Mark: "(<image>./</image>)", IndexBefore: "<image_id>", IndexAfter: "</image_id>"},
+	}
+	if err := t.Valid(); err != nil {
+		return nil, fmt.Errorf("convert: minicpmv: %w", err)
+	}
+	return t, nil
+}
+
+// sincosAxes writes the resampler's key positions as two tables of length
+// rows each (jlm.RoleVRsPosAxes): row x of the first sin(x*w_i) then
+// cos(x*w_i) over the first half, row y of the second the same of y over
+// the second, w_i = 10000^(-i/(d/4)) for i < d/4 -- resampler.py's
+// get_2d_sincos_pos_embed, whose first half is the column's (it meshgrids
+// (w, h)), in float32 as numpy computes it.
+func sincosAxes(s *jlm.Source, d, length int) error {
+	q := d / 4
+	omega := make([]float32, q)
+	for i := range omega {
+		omega[i] = 1 / float32(math.Pow(10000, float64(float32(i)/float32(q))))
+	}
+	table := make([]float32, 2*length*d)
+	for p := range length {
+		x, y := table[p*d:(p+1)*d], table[(length+p)*d:(length+p+1)*d]
+		for i, w := range omega {
+			a := float64(float32(p) * w)
+			sn, cs := float32(math.Sin(a)), float32(math.Cos(a))
+			x[i], x[q+i] = sn, cs
+			y[2*q+i], y[3*q+i] = sn, cs
+		}
+	}
+	e := jlm.Tensor{Role: jlm.RoleVRsPosAxes, Block: jlm.DenseBlock, Index: -1, Name: "resampler.pos_axes"}
+	setF32Dims(&e, table, uint64(d), uint64(2*length))
+	s.Tensors = append(s.Tensors, e)
+	return nil
 }

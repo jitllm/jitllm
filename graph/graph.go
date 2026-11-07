@@ -380,11 +380,26 @@ const (
 	// its last.
 	OpWrapRows
 	// OpMarkRow is In[0]'s rows -- a piece's merged grid, its width the
-	// step's patch grid's over Width -- after Weight[0]'s row the request
-	// names for the piece (composer.RequestMark: the row plus one, 0 for
-	// none) and, where Offset is 1, before the row it names after them
-	// (composer.RequestTrail); rows past them are not written.
+	// step's patch grid's over Width -- after a run of Weight[0]'s
+	// consecutive rows the request names for the piece (composer.RequestMark,
+	// its first row plus one, 0 for none; RequestMarkN its length, at most
+	// Span) and before the run it names after them (RequestTrail and
+	// RequestTrailN, at most Offset); rows past them are not written.
 	OpMarkRow
+	// OpPosBuckets is each row's row of a Span x Span position table
+	// (Weight[0]) at its cell of the step's grid -- the request's grid,
+	// RequestGrid wide and RequestGridH tall, the cell the row's position
+	// less Offset -- bucketed onto the table: row floor(Span*y/gh), column
+	// floor(Span*x/gw).
+	OpPosBuckets
+	// OpTableRows is Weight[0]'s rows, each a row of Out[0]: a learned
+	// table the reader copies out, read whole (a resampler's queries).
+	OpTableRows
+	// OpRowsAttend is each row of In[0] (the queries) attending over the
+	// step's live rows of In[1] (the keys) and In[2] (the values), every row
+	// and both ways: NHead heads of HeadDim, the scores scaled by Scale, a
+	// softmax over the live rows. Out[0] has In[0]'s rows.
+	OpRowsAttend
 	numOps
 )
 
@@ -482,6 +497,12 @@ func (k OpKind) String() string {
 		return "wrap_rows"
 	case OpMarkRow:
 		return "mark_row"
+	case OpPosBuckets:
+		return "pos_buckets"
+	case OpTableRows:
+		return "table_rows"
+	case OpRowsAttend:
+		return "rows_attend"
 	case OpPosAxes:
 		return "pos_axes"
 	case OpNGramHash:

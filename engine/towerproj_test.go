@@ -46,19 +46,23 @@ func readF32(t *testing.T, path string) []float32 {
 	return out
 }
 
-// projectorFrom is the tower's head from op from on -- the projector, where
-// the ops before it are the vision model's own (Gemma 3's post norm) -- run
-// on the CPU device over rows, the head's input grid tg.side wide.
-func projectorFrom(t *testing.T, s *Instance, from int, rows []float32) []float32 {
+// projectorFrom is the tower's head's ops from from up to to (0: its end)
+// -- the projector, where the ops before it are the vision model's own
+// (Gemma 3's post norm) and the ones after it its marker rows -- run on the
+// CPU device over rows, the head's input grid gw x gh.
+func projectorFrom(t *testing.T, s *Instance, from, to int, rows []float32, gw, gh int) []float32 {
 	t.Helper()
 	if err := s.towerReady(); err != nil {
 		t.Fatal(err)
 	}
 	m, tr := s.m, s.tower
-	ts, tg := tr.s, m.Tower
+	ts := tr.s
 	h := m.Container.Vision().Tower.Head
-	p := jlm.Program{NIn: 1, Out: h.Out - uint16(from)}
-	for _, op := range h.Ops[from:] {
+	if to == 0 {
+		to = len(h.Ops)
+	}
+	p := jlm.Program{NIn: 1, Out: uint16(to - from)}
+	for _, op := range h.Ops[from:to] {
 		op.In = append([]uint16(nil), op.In...)
 		for i := range op.In {
 			op.In[i] -= uint16(from)
@@ -89,7 +93,7 @@ func projectorFrom(t *testing.T, s *Instance, from int, rows []float32) []float3
 	}
 	tr.size(n, E)
 	copy(tr.blk, rows)
-	tr.req[composer.RequestGrid] = uint32(tg.Side)
+	tr.req[composer.RequestGrid], tr.req[composer.RequestGridH] = uint32(gw), uint32(gh)
 	got := make([]float32, outRows*b.G.Values[out].Width)
 	bd := new(cpudev.Bound)
 	*bd = cpudev.Bound{Li: -1, Own: execOf(ts).Device().Own(f), N: n, Req: tr.req, Pos: tr.posTab}
@@ -133,7 +137,7 @@ func TestProjectorMatchesTransformers(t *testing.T) {
 			side, E := m.Tower.Side, int(m.Container.Vision().NEmbd)
 			x := projectorRows(side*side, E)
 			run := func(x []float32) []float32 {
-				return projectorFrom(t, s, fam.from, append(make([]float32, fam.lead*E), x...))
+				return projectorFrom(t, s, fam.from, 0, append(make([]float32, fam.lead*E), x...), side, side)
 			}
 			got := run(x)
 			if len(got) != len(want) {
