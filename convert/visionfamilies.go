@@ -464,11 +464,10 @@ func tokenRow(s *jlm.Source, id int) ([]float32, error) {
 	return nil, fmt.Errorf("convert: no text token table to take token %d's row from", id)
 }
 
-// tileMarks writes a tiled picture's marker rows (jlm.RoleVTileMarks): the
-// text table's row of <|img_row_R_col_C|> at (R-1)*span + C-1 for every tile
-// a grid of at most span tiles reaches, then <|img_thumbnail|>'s; the rows no
-// grid reaches are zero.
-func tileMarks(s *jlm.Source, span int) error {
+// markTable writes a picture's marker rows (jlm.RoleVTileMarks): the text
+// table's row of each named token in order, a zero row where a name is
+// empty.
+func markTable(s *jlm.Source, names []string) error {
 	ids := map[string]int{}
 	if s.Vocab != nil {
 		for i, tok := range s.Vocab.Tokens {
@@ -477,10 +476,13 @@ func tileMarks(s *jlm.Source, span int) error {
 	}
 	var table []float32
 	k := 0
-	put := func(at int, name string) error {
+	for at, name := range names {
+		if name == "" {
+			continue
+		}
 		id, ok := ids[name]
 		if !ok {
-			return fmt.Errorf("convert: the vocabulary has no %q, a tiled picture's marker", name)
+			return fmt.Errorf("convert: the vocabulary has no %q, a picture's marker", name)
 		}
 		row, err := tokenRow(s, id)
 		if err != nil {
@@ -488,25 +490,31 @@ func tileMarks(s *jlm.Source, span int) error {
 		}
 		if table == nil {
 			k = len(row)
-			table = make([]float32, (span*span+1)*k)
+			table = make([]float32, len(names)*k)
 		}
 		copy(table[at*k:(at+1)*k], row)
-		return nil
 	}
+	if table == nil {
+		return fmt.Errorf("convert: a marker table of no markers")
+	}
+	e := jlm.Tensor{Role: jlm.RoleVTileMarks, Block: jlm.DenseBlock, Index: -1, Name: "v.token_embd.tile_marks"}
+	setF32Dims(&e, table, uint64(k), uint64(len(names)))
+	s.Tensors = append(s.Tensors, e)
+	return nil
+}
+
+// tileMarks writes a tiled picture's marker rows: <|img_row_R_col_C|> at
+// (R-1)*span + C-1 for every tile a grid of at most span tiles reaches, then
+// <|img_thumbnail|>; the rows no grid reaches are zero.
+func tileMarks(s *jlm.Source, span int) error {
+	names := make([]string, span*span+1)
 	for r := range span {
 		for c := range span {
 			if (r+1)*(c+1) <= span {
-				if err := put(r*span+c, fmt.Sprintf("<|img_row_%d_col_%d|>", r+1, c+1)); err != nil {
-					return err
-				}
+				names[r*span+c] = fmt.Sprintf("<|img_row_%d_col_%d|>", r+1, c+1)
 			}
 		}
 	}
-	if err := put(span*span, "<|img_thumbnail|>"); err != nil {
-		return err
-	}
-	e := jlm.Tensor{Role: jlm.RoleVTileMarks, Block: jlm.DenseBlock, Index: -1, Name: "v.token_embd.tile_marks"}
-	setF32Dims(&e, table, uint64(k), uint64(span*span+1))
-	s.Tensors = append(s.Tensors, e)
-	return nil
+	names[span*span] = "<|img_thumbnail|>"
+	return markTable(s, names)
 }

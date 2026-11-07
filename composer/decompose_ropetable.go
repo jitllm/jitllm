@@ -155,6 +155,12 @@ func decomposeRopeTable(o graph.Op, c *Context) ([]Prim, error) {
 		gh := x.op(OpMax, U, x.op(OpDiv, U, x.op(OpSub, U, x.op(OpMax, U, x.load(0, x.u(0)), x.u(lead+1)), x.u(lead)), gw), x.u(1))
 		cell := x.op(OpSub, U, x.op(OpMax, U, pos, x.u(lead)), x.u(lead))
 		cy, cx := tileCell(&x, cell, gw, gh, o.Attr.Width, o.Attr.Window)
+		// A cell's position on each axis counts from the origin; a row past
+		// the grid's cells (a class row after them) turns by nothing.
+		inside := x.op(OpLess, ir.Pred, cell, x.op(OpMul, U, gw, gh))
+		org := x.u(uint32(o.Attr.Origin))
+		cy = x.sel(U, inside, x.op(OpAdd, U, cy, org), x.u(0))
+		cx = x.sel(U, inside, x.op(OpAdd, U, cx, org), x.u(0))
 		axis := x.un(OpCvtI32, I, x.load(1, x.op(OpAdd, U, p, x.u(uint32(8*stride+1)))))
 		row := x.op(OpLess, ir.Pred, x.un(OpBitcast, U, axis), x.u(1))
 		pos = x.sel(U, row, x.un(OpBroadcast, U, cy), x.un(OpBroadcast, U, cx))

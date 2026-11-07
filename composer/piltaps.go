@@ -103,6 +103,10 @@ func PILTapsAt(filter uint8, torch bool, in, out, from, n, k int, dst []uint32) 
 		xmin := max(int(center-support+0.5), 0)
 		xmax := min(int(center+support+0.5), in) - xmin
 		xmax = min(xmax, k)
+		if o >= out {
+			// Past the resize's edge (a canvas's pad): no sample, black.
+			xmax = 0
+		}
 		// The window's weights twice, summed and then each divided by the
 		// sum, the values Pillow's one pass stores: nothing is held between.
 		w := func(x int) float64 { return pilFilter(filter, (float64(x+xmin)-center+0.5)*ss) }

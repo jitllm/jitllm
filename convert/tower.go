@@ -59,6 +59,8 @@ func towerStater(p jlm.Projector) func(*jlm.Source) (*jlm.Tower, error) {
 		return gemma4vTower
 	case jlm.ProjLFM2:
 		return lfm2Tower
+	case jlm.ProjLlama4:
+		return llama4Tower
 	}
 	return nil
 }
@@ -1454,6 +1456,109 @@ func lfm2Tower(s *jlm.Source) (*jlm.Tower, error) {
 	}
 	if err := t.Valid(); err != nil {
 		return nil, fmt.Errorf("convert: lfm2: %w", err)
+	}
+	return t, nil
+}
+
+// llama4Tower is Llama 4's tower as transformers' Llama4ImageProcessor and
+// Llama4VisionModel run it: the picture on the best-fitting canvas of up to
+// MaxTiles tiles, resized onto it without distortion by torchvision's
+// antialiased bilinear and laid at its top left, black past it, cut
+// row-major, then -- for more than one tile -- the whole picture resized to
+// one tile more; rescaled and normalised in bfloat16. Each tile: its
+// patches through the unfolding matrix, the class row after them, the
+// position table over both, the pre-LayerNorm; LayerNorm blocks with biased
+// matrices and the exact GELU, turned by the 2-D rotary on adjacent pairs --
+// the column's half of the pairs, then the row's, each from the first
+// frequency at base 10000 (the file does not state it; transformers'
+// default, every published config's), a patch's positions counted from
+// one and the class row not turned; then the post-LayerNorm, the
+// Scale x Scale pixel shuffle (the class row left behind), two matrices
+// each followed by the exact GELU, and the projector. A picture is
+// <|image_start|>, each tile's rows followed by <|tile_x_separator|> or, at
+// a row's end, <|tile_y_separator|>, then <|image|> before the last tile's
+// rows, and <|image_end|>: the separators and <|image|> are the marker
+// table's rows, the text table's own.
+func llama4Tower(s *jlm.Source) (*jlm.Tower, error) {
+	v := s.Vision
+	has := towerRoles(s)
+	for _, r := range []jlm.Role{jlm.RoleVPatchEmbd, jlm.RoleVClassEmbd, jlm.RoleVPosEmbd, jlm.RoleVPreNorm,
+		jlm.RoleVPostNorm, jlm.RoleVProj, jlm.RoleVProj2, jlm.RoleVProj3} {
+		if !has[r] {
+			return nil, fmt.Errorf("convert: llama4: the tower has no %v", r)
+		}
+	}
+	merge := int32(v.Scale)
+	hd := int32(v.NEmbd / max(v.NHead, 1))
+	if v.NHead == 0 || v.NEmbd%v.NHead != 0 || hd%4 != 0 || v.PatchSize == 0 || v.ImageSize%v.PatchSize != 0 ||
+		merge < 1 || (v.ImageSize/v.PatchSize)%uint32(merge) != 0 || v.MaxTiles < 1 {
+		return nil, fmt.Errorf("convert: llama4: %d heads over %d, patches of %d in %d, a shuffle of %d, %d tiles",
+			v.NHead, v.NEmbd, v.PatchSize, v.ImageSize, merge, v.MaxTiles)
+	}
+	bias := func(w, b jlm.Role) []jlm.Role {
+		if has[b] {
+			return []jlm.Role{w, b}
+		}
+		return []jlm.Role{w}
+	}
+	var gelu jlm.ExprBuilder
+	gelu.GELUErf(jlm.Operand(0))
+	act := jlm.Expr{Terms: gelu.T}
+	P := int32(v.PatchSize)
+	// The pixels are value 0.
+	entry := jlm.Program{NIn: 1, Out: 6, Ops: []jlm.TowerOp{
+		{Code: jlm.TOpPatchify, In: []uint16{0}, Span: P},
+		{Code: jlm.TOpLinear, In: []uint16{1}, Bind: bias(jlm.RoleVPatchEmbd, jlm.RoleVPatchBias)},
+		{Code: jlm.TOpTailRow, In: []uint16{2}, Bind: []jlm.Role{jlm.RoleVClassEmbd}},
+		{Code: jlm.TOpPosTable, Bind: []jlm.Role{jlm.RoleVPosEmbd}},
+		{Code: jlm.TOpAdd, In: []uint16{3, 4}},
+		{Code: jlm.TOpLayerNorm, In: []uint16{5}, Bind: bias(jlm.RoleVPreNorm, jlm.RoleVPreNormBias), Eps: v.Eps},
+	}}
+	// The last block's rows are value 0.
+	var head jlm.Program
+	head.NIn = 1
+	at := uint16(0)
+	op := func(o jlm.TowerOp) {
+		o.In = []uint16{at}
+		head.Ops = append(head.Ops, o)
+		at = uint16(len(head.Ops))
+	}
+	op(jlm.TowerOp{Code: jlm.TOpLayerNorm, Bind: bias(jlm.RoleVPostNorm, jlm.RoleVPostNormBias), Eps: v.Eps})
+	op(jlm.TowerOp{Code: jlm.TOpRegroup, Span: merge})
+	op(jlm.TowerOp{Code: jlm.TOpLinear, Bind: bias(jlm.RoleVProj, jlm.RoleVProjBias)})
+	op(jlm.TowerOp{Code: jlm.TOpStated, Expr: &act})
+	op(jlm.TowerOp{Code: jlm.TOpLinear, Bind: bias(jlm.RoleVProj2, jlm.RoleVProj2Bias)})
+	op(jlm.TowerOp{Code: jlm.TOpStated, Expr: &act})
+	op(jlm.TowerOp{Code: jlm.TOpLinear, Bind: []jlm.Role{jlm.RoleVProj3}})
+	op(jlm.TowerOp{Code: jlm.TOpMarkRow, Bind: []jlm.Role{jlm.RoleVTileMarks}, Span: 1, Width: merge, Offset: 1})
+	head.Out = at
+	side := int32(v.ImageSize)
+	t := &jlm.Tower{
+		Version: jlm.TowerVersion,
+		Pre: []jlm.PreStep{
+			{Kind: jlm.PreResize, Ints: []int32{side, side, int32(jlm.FilterPILBilinear), int32(jlm.PrecTorch)}},
+			{Kind: jlm.PreBestFit, Ints: []int32{int32(v.MaxTiles)}},
+			{Kind: jlm.PreNormalizeBF16, Floats: []float32{v.Mean[0], v.Mean[1], v.Mean[2], v.Std[0], v.Std[1], v.Std[2]}},
+		},
+		Entry: entry,
+		Block: jlm.TowerBlock{NHead: v.NHead, NKVHead: v.NHead, HeadDim: uint32(hd), Norm: jlm.NormLayer, Eps: v.Eps, Act: act,
+			Rope: jlm.TowerRope{Base: 10000, Dim: hd / 2, Origin: 1,
+				Runs: []jlm.TowerRopeRun{{Pairs: hd / 4, Axis: 1}, {Pairs: hd / 4, Axis: 0}}}},
+		Head: head,
+		Span: jlm.TowerSpan{Mark: "<|image|>"},
+	}
+	var err error
+	if t.Span.Before, err = markerIDs(s, "<|image_start|>"); err != nil {
+		return nil, err
+	}
+	if t.Span.After, err = markerIDs(s, "<|image_end|>"); err != nil {
+		return nil, err
+	}
+	if err := markTable(s, []string{"<|tile_x_separator|>", "<|tile_y_separator|>", "<|image|>"}); err != nil {
+		return nil, err
+	}
+	if err := t.Valid(); err != nil {
+		return nil, fmt.Errorf("convert: llama4: %w", err)
 	}
 	return t, nil
 }

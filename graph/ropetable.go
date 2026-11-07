@@ -14,8 +14,10 @@ type RopeTable struct {
 	Grid          bool
 	Merge, Window int
 	// Lead is the rows before a grid's first cell (a class row's), turned
-	// as its first.
-	Lead int
+	// as its first; Origin a cell's position on each axis at the grid's
+	// first row and column. A row past the grid's cells (a class row after
+	// them) is not turned.
+	Lead, Origin int
 	// Sections, Interleaved, Cycle and CycleAxes are the rotary's position
 	// axes (Attrs.Sections, Attrs.Interleaved, Attrs.Cycle): where Sections
 	// or Cycle is set, a row has a position on each axis and each pair turns
@@ -38,10 +40,13 @@ type Rotary struct {
 	Grid          bool
 	Merge, Window int
 	Lead          int
-	Sections      [4]int
-	Interleaved   bool
-	Cycle         int
-	CycleAxes     [4]uint8
+	// Origin is a grid cell's position on each axis at the grid's first
+	// row and column (RopeTable.Origin).
+	Origin      int
+	Sections    [4]int
+	Interleaved bool
+	Cycle       int
+	CycleAxes   [4]uint8
 }
 
 // Build is the table's graph: each row's positions on the rotary axes from
@@ -59,7 +64,7 @@ func (r *RopeTable) Build() *Graph {
 		in = []ValueID{pos}
 	}
 	g.op(Op{Kind: OpRopeTable, In: in, Out: []ValueID{cs}, Attr: Attrs{NRot: r.NRot, Rotary: r.Index, Grid: r.Grid, Sections: r.Sections, Interleaved: r.Interleaved,
-		Cycle: r.Cycle, CycleAxes: r.CycleAxes, Width: r.Merge, Window: r.Window, Offset: r.Lead}})
+		Cycle: r.Cycle, CycleAxes: r.CycleAxes, Width: r.Merge, Window: r.Window, Offset: r.Lead, Origin: r.Origin}})
 	return g
 }
 

@@ -115,7 +115,7 @@ func Verify(g *Graph, f Facts) error {
 			case OpWrapRows:
 				want = in + 2
 			case OpMarkRow:
-				want = in + 1
+				want = in + 1 + o.Attr.Offset
 			}
 			if want >= 0 && out != want {
 				bad("%s: a %s of %d rows writes %d, not %d", at, o.Kind, in, out, want)
