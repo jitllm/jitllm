@@ -122,6 +122,8 @@ func (g *GPU) releaseHeld() {
 	clear(g.own)
 	g.head, g.cur, g.spillFrom = nil, 0, nil
 	g.planN, g.share = 0, nil
+	g.split = false
+	clear(g.geo)
 	g.mu.Unlock()
 	g.held = false
 }
@@ -185,4 +187,9 @@ func (g *devTier) releaseModel() {
 	g.kvCap, g.maxSeqAsked, g.paged = 0, 0, false
 	g.widest = 0
 	g.pinned, g.stream = nil, nil
+	// The scratch sets went with dropAllScratch; which one is in use and the
+	// non-causal set's widths are the next model's to state.
+	g.geoCur = geoKey{}
+	g.visCap, g.visMax, g.visKeys, g.visSmall, g.visFirst = 0, 0, 0, 0, 0
+	g.visWarm = [2]int{}
 }
