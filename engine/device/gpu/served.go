@@ -1296,13 +1296,6 @@ func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*
 	if g.capturing {
 		return nil, errServedCold
 	}
-	if !g.prewarming {
-		g.FormedAtStep++
-		g.FormedAtStepParts[sk.kind]++
-		g.LastErr = fmt.Sprintf("the composed %s at %d rows was not formed at placement (keys %d, seqs %d, stream %v, held %d, clone lane %v): a step composes nothing",
-			sk.kind, sk.rows, sk.keys, sk.seqs, sk.stream, sk.held, g.lane.clone)
-		return nil, errors.New(g.LastErr)
-	}
 	if g.served == nil {
 		g.served = map[servedKey]*servedPart{}
 	}
@@ -1327,6 +1320,12 @@ func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*
 	defer g.subUnlock(g.subLock())
 	if g.servedForms == nil {
 		g.servedForms = map[composer.Key]*partForm{}
+	}
+	if !g.prewarming {
+		g.FormedAtStep++
+		g.FormedAtStepParts[sk.kind]++
+		g.LastErr = fmt.Sprintf("the composed %s formed at %d rows outside a placement (keys %d, seqs %d, stream %v, held %d, clone lane %v)",
+			sk.kind, sk.rows, sk.keys, sk.seqs, sk.stream, sk.held, g.lane.clone)
 	}
 	if g.composer == nil {
 		g.composer = composer.Default()
