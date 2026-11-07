@@ -232,7 +232,7 @@ func batchSeamMovesWith(t *testing.T, p string, bound float64, relocate bool, mo
 			}
 			// The squeezed budget is measured: every block and half the rows'
 			// history, from an attach with room for all of it.
-			var squeezed, limit uint64
+			var squeezed, limit, floorKept uint64
 			paged := false
 			if arm.squeeze {
 				pg := open()
@@ -242,24 +242,63 @@ func batchSeamMovesWith(t *testing.T, p string, bound float64, relocate bool, mo
 				}
 				squeezed, limit = pg.Bytes()-pg.Stats().KVBytes/2, pg.Budgets()[0].Limit
 				if sd, ok := ps.ld.(nn.SeqKVDevice); ok && sd.PerSequenceKV() {
-					// Paged: the squeeze is the attach without its pool's free
-					// pages -- every block, the pages the rows hold and the
-					// pool's own buffers -- so the rows' next pages do not fit
-					// (an MLA's latent rows fill a page slowly enough that the
-					// free pages held them all). The relocation then happens
+					// Paged: the squeeze is the attach without every page its
+					// pool holds for no row -- the seats' floor too -- or,
+					// where no block relocates under that by the first move,
+					// with the floor kept: what a step grows on a squeezed card
+					// differs by family (synth-deepseek32 its per-row head's
+					// scratch, synth-kimik3 its recurrent rows), and an MLA's
+					// latent rows fill a page slowly enough that a page held
+					// for them holds them all. The relocation then happens
 					// during a step.
-					squeezed, paged = pg.Bytes()-pg.Stats().KVFreeBytes, true
+					st := pg.Stats()
+					squeezed = pg.Bytes() - (st.KVPoolBytes - min(st.KVBytes, st.KVPoolBytes))
+					floorKept, paged = pg.Bytes()-st.KVFreeBytes, true
 				}
 				ps.Close()
 				pg.Close()
 			}
 			var g *gpu.GPU
-			if arm.squeeze {
-				g = open(gpu.WithBudget(squeezed))
-			} else {
-				g = open()
+			var st *sessBatch
+			attach := func(budget uint64) {
+				if arm.squeeze {
+					g = open(gpu.WithBudget(budget))
+				} else {
+					g = open()
+				}
+				st = newSessBatch(m, rows, arm.seq, instOpts...)
+				if err := st.SetDeviceLayers(g, arm.start); err != nil {
+					t.Fatal(err)
+				}
 			}
-			st := newSessBatch(m, rows, arm.seq, instOpts...)
+			if paged {
+				// The steps before the first move, under the strict squeeze.
+				attach(squeezed)
+				for step := range first {
+					switch step {
+					case 3:
+						st.Retire(1)
+					case 6:
+						st.Retire(2)
+					}
+					toks := make([]int32, rows)
+					for r := range toks {
+						toks[r] = stream[r][st.SeqPos(r)]
+					}
+					if _, err := st.ForwardBatch(toks); err != nil {
+						t.Fatalf("step %d under a squeeze of %d bytes: %v", step, squeezed, err)
+					}
+				}
+				relocated := st.Relocations()
+				st.Close()
+				g.Close()
+				if relocated == 0 {
+					t.Logf("no block relocated under a squeeze of %d bytes (%q): the seats' floor stays, %d",
+						squeezed, g.Err(), floorKept)
+					squeezed = floorKept
+				}
+			}
+			attach(squeezed)
 			// The arm closes both itself, as part of its leak checks; this is
 			// for a failure before that, which would otherwise hold the card
 			// for every test after it.
@@ -270,9 +309,6 @@ func batchSeamMovesWith(t *testing.T, p string, bound float64, relocate bool, mo
 					g.Close()
 				}
 			})
-			if err := st.SetDeviceLayers(g, arm.start); err != nil {
-				t.Fatal(err)
-			}
 			if arm.squeeze && !paged {
 				// Relocation is the configuration under test: the attach must
 				// have handed blocks home, and the rest of the rows' history
