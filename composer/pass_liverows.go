@@ -132,16 +132,18 @@ func (k *Kernel) liveRows(live int) int {
 // liveElements is the node of the elements of a space of capacity live the
 // call's rows reach: ceil(rows * space[0] / live) coordinates of its
 // leading axis, each the product of the others. The leading axis's whole
-// rows, rows * (space[0] / live), come apart from its remainder's share, so
-// no product passes 32 bits where the space's does not: a flattened leading
-// axis of 4096 rows of 1152 times 4096 rows does.
+// rows, rows * (space[0] / live), come apart from its remainder's share,
+// taken in its lowest terms, so no product passes 32 bits where the space's
+// does not: a flattened leading axis of 4096 rows of 1152 times 4096 rows
+// does, and so does 147456 rows times a share of 36864 in 147456.
 func (k *Kernel) liveElements(space []int, live int) int {
 	U := ir.U32
 	rows := k.liveRows(live)
 	units := k.bin(OpMul, U, rows, k.u32(space[0]/live))
 	if r := space[0] % live; r != 0 {
-		n := k.bin(OpAdd, U, k.bin(OpMul, U, rows, k.u32(r)), k.u32(live-1))
-		units = k.bin(OpAdd, U, units, k.bin(OpDiv, U, n, k.u32(live)))
+		g := gcd(r, live)
+		n := k.bin(OpAdd, U, k.bin(OpMul, U, rows, k.u32(r/g)), k.u32(live/g-1))
+		units = k.bin(OpAdd, U, units, k.bin(OpDiv, U, n, k.u32(live/g)))
 	}
 	inner := 1
 	for _, x := range space[1:] {
