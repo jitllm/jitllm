@@ -524,12 +524,16 @@ func decomposeDropRows(o graph.Op, c *Context) ([]Prim, error) {
 func decomposePosResample(o graph.Op, c *Context) ([]Prim, error) {
 	a := o.Attr
 	if len(o.In) != 0 || len(o.Out) != 1 || len(o.Weight) != 1 || a.Span < 2 || o.Weight[0].Rows != a.Span*a.Span ||
-		a.Chain < graph.ChainAligned || a.Chain > graph.ChainHalfPixel || a.Filter < graph.FilterBilinear || a.Filter > graph.FilterCubic {
+		a.Chain < graph.ChainAligned || a.Chain > graph.ChainHalfPixel || a.Filter < graph.FilterBilinear || a.Filter > graph.FilterAntialias ||
+		a.Filter == graph.FilterAntialias && a.Chain != graph.ChainHalfPixel {
 		return nil, fmt.Errorf("a position resample of %d weights, chain %d, filter %d", len(o.Weight), a.Chain, a.Filter)
 	}
 	wo, err := c.weight(o.Weight[0])
 	if err != nil {
 		return nil, err
+	}
+	if a.Filter == graph.FilterAntialias {
+		return decomposePosAntialias(o, c, wo)
 	}
 	U, F, I := ir.U32, ir.F32, ir.I32
 	sh := c.rows(o.Out[0])
@@ -640,6 +644,86 @@ func decomposePosResample(o graph.Op, c *Context) ([]Prim, error) {
 		}
 	}
 	return []Prim{{Kind: PrimMap, Shape: sh, In: in, Out: c.value(o.Out[0]), Expr: x.e, Facts: facts}}, nil
+}
+
+// decomposePosAntialias is a position resample by torch's antialiased
+// bilinear (graph.FilterAntialias): each row's cell's weights over the
+// table's S samples an axis, then the row the sum of the table's S*S rows,
+// each weighted by its sample's weight on both axes. On an axis of n cells
+// the scale is S/n and sample j's weight for cell i max(0, 1 - |j+0.5 -
+// (i+0.5)*scale| / max(scale, 1)) over the S weights' sum -- a sample past
+// the support weighs nothing, so the sum is torch's window.
+func decomposePosAntialias(o graph.Op, c *Context, wo Operand) ([]Prim, error) {
+	a := o.Attr
+	U, F := ir.U32, ir.F32
+	sh := c.rows(o.Out[0])
+	R, E, S := sh[0], sh[1], a.Span
+	name := c.Graph.Values[o.Out[0]].Name
+	lead := uint32(a.Offset)
+	var prims []Prim
+	// weights is each row's cell's triangle weights on one axis (down for
+	// the rows, else across), each over their sum: a map of the row by the
+	// samples.
+	weights := func(down bool, tag string) Operand {
+		ws := Operand{Kind: OperandScratch, Name: name + ".aaw" + tag}
+		var w exprs
+		f := func(v float32) int { return w.f(v) }
+		r, j := w.coord(0), w.coord(1)
+		gw := w.op(OpMax, U, w.load(1, w.u(RequestGrid)), w.u(1))
+		live := w.op(OpMax, U, w.load(0, w.u(0)), w.u(lead+1))
+		q := w.op(OpSub, U, w.op(OpMax, U, w.load(0, w.op(OpAdd, U, r, w.u(1))), w.u(lead)), w.u(lead))
+		var gh, cy, cx int
+		if a.Width <= 1 && a.Window == 0 {
+			// A raster grid's cell by a float quotient, which the CPU
+			// divides in lanes: exact below 2^24 patches, where no
+			// quotient of two whole numbers rounds across a whole one.
+			quo := func(v int) int {
+				return w.un(OpBitcast, U, w.un(OpCvtI32, ir.I32, w.op(OpDiv, F, w.un(OpCvtF32, F, v), w.un(OpCvtF32, F, gw))))
+			}
+			gh = w.op(OpMax, U, quo(w.op(OpSub, U, live, w.u(lead))), w.u(1))
+			cy = quo(q)
+			cx = w.op(OpSub, U, q, w.op(OpMul, U, cy, gw))
+		} else {
+			gh = w.op(OpMax, U, w.op(OpDiv, U, w.op(OpSub, U, live, w.u(lead)), gw), w.u(1))
+			cy, cx = tileCell(&w, q, gw, gh, a.Width, a.Window)
+		}
+		cell, size := cx, gw
+		if down {
+			cell, size = cy, gh
+		}
+		i, n := w.un(OpCvtF32, F, cell), w.un(OpCvtF32, F, size)
+		centre := w.op(OpMul, F, w.op(OpAdd, F, i, f(0.5)), w.op(OpDiv, F, f(float32(S)), n))
+		inv := w.op(OpMin, F, w.op(OpDiv, F, n, f(float32(S))), f(1))
+		tri := func(at int) int {
+			d := w.op(OpSub, F, w.op(OpAdd, F, at, f(0.5)), centre)
+			d = w.op(OpMax, F, d, w.op(OpSub, F, f(0), d))
+			return w.op(OpMax, F, w.op(OpSub, F, f(1), w.op(OpMul, F, d, inv)), f(0))
+		}
+		sum := tri(f(0))
+		for k := 1; k < S; k++ {
+			sum = w.op(OpAdd, F, sum, tri(f(float32(k))))
+		}
+		w.op(OpDiv, F, tri(w.un(OpCvtF32, F, j)), sum)
+		prims = append(prims, Prim{Kind: PrimMap, Shape: []int{R, S}, In: []Operand{TablePos.op(), TableRequest.op()}, Out: ws,
+			Expr: w.e, Facts: Facts{Extents: map[int]int{0: R + 1, 1: RequestRows + R}}})
+		return ws
+	}
+	wyo, wxo := weights(true, ".y"), weights(false, ".x")
+
+	// The row: the table's rows by both axes' weights.
+	var x exprs
+	rr, e, k := x.coord(0), x.coord(1), x.coord(2)
+	wy := x.at(0, []int{R, S}, rr, x.op(OpDiv, U, k, x.u(uint32(S))))
+	wx := x.at(1, []int{R, S}, rr, x.op(OpRem, U, k, x.u(uint32(S))))
+	in := []Operand{wyo, wxo}
+	facts := Facts{Extents: map[int]int{0: R * S, 1: R * S}}
+	v, err := weightElement(&x, wo, S*S, E, &in, &facts, k, e)
+	if err != nil {
+		return nil, fmt.Errorf("a position table of %s: %w", wo.Format, err)
+	}
+	x.op(OpMul, F, x.op(OpMul, F, wy, wx), v)
+	return append(prims, Prim{Kind: PrimReduce, Shape: []int{R, E, S * S}, In: in, Out: c.value(o.Out[0]),
+		Combine: OpAdd, Expr: x.e, Facts: facts}), nil
 }
 
 // decomposePosAxes is each row's position rows of a table of two axes: the
