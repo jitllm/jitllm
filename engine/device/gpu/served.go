@@ -1852,11 +1852,9 @@ func (g *devTier) formTables(bs *blockScratch) {
 	if g.NoPromptPrewarm || bs == nil || bs.cs == nil {
 		return
 	}
-	if bs.p.NonCausal {
-		if bs.gridGraph != nil {
-			if _, err := g.servedGridTable(bs, bs.rows); err != nil {
-				g.LastErr = "the composed grid table: " + err.Error()
-			}
+	if bs.p.NonCausal && bs.gridGraph != nil {
+		if _, err := g.servedGridTable(bs, bs.rows); err != nil {
+			g.LastErr = "the composed grid table: " + err.Error()
 		}
 		return
 	}
