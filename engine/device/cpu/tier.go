@@ -9,15 +9,14 @@ import (
 
 // Tier is the instruction-set tier a host runs and a kernel is generated for.
 //
-// It is one answer, chosen once from the probe, and every emitter asks it
-// through EmittersFor(tier). amd64's two tiers share nothing at the encoding
+// It is one answer, chosen once from the probe. amd64's two tiers share nothing at the encoding
 // level: the AVX2 tier is VEX-encoded 256-bit code with FMA and F16C, and a
 // Goldmont Atom (SSE4.2 and nothing above) faults on the first VEX prefix. The
-// SSE tier is legacy-encoded 128-bit code (sse.go).
+// SSE tier is legacy-encoded 128-bit code (composer/x86's sse.go).
 //
-// VNNI is not a tier: it is a DotKind inside the AVX2 tier (prevnni.go). The
-// SSE tier has its own packed emitters and takes no DotKind, because any value
-// other than DotVEX handed to an AVX2 emitter emits VPDPBUSD.
+// VNNI is not a tier: it is a feature the AVX2 tier's code uses where the
+// probe finds it (Map refuses VPDPBUSD on a host without it, ErrNoVNNI). The
+// SSE tier is legacy-encoded and has no VNNI form.
 type Tier uint8
 
 const (

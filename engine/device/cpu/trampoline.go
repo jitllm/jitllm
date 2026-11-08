@@ -87,7 +87,7 @@ type Args struct {
 // process is taxed — a symptom that appears in code which never called a
 // kernel. An SSE-tier kernel must NOT: VZEROUPPER is itself VEX-encoded and
 // faults on a host with no AVX, and legacy SSE code leaves no dirty upper half
-// to clear (sse_helpers.go).
+// to clear.
 //
 // arm64: nothing is saved, because Go's arm64 ABIInternal has no callee-saved
 // registers. Kernels may use x0-x17, x19-x26 and every V register with no

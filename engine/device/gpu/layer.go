@@ -3665,8 +3665,8 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 			pos, bs.p.MaxSeq, g.maxSeqAsked)
 	case head != nil && lo < hi && bs.p.Streams() > 1:
 		// AltUp's head reads the streams' mean and DeepSeek V4's their
-		// collapse, which the host takes (altup.go, ds4.go): the blocks and
-		// the head go as two calls.
+		// collapse, a part of its own: the blocks and the head go as two
+		// calls.
 		return refuse("a head folded into %d blocks of %d streams", hi-lo, bs.p.Streams())
 	}
 	// The head reads one residual vector and writes one logit row. A ragged
@@ -4380,7 +4380,7 @@ func (g *devTier) layersSession(s backend.Session) {
 	// counter drift.
 	streamed := false
 	for li := lo; li < hi && !streamed; li++ {
-		// A batched mixture reads its selection back too (moegroup.go).
+		// A batched mixture reads its selection back too.
 		if l := g.layers[li]; l != nil && (l.stream != nil || (R > 1 && l.router != nil)) {
 			streamed = true
 		}

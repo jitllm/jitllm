@@ -11,7 +11,7 @@ import (
 
 // The seam tuner: how many blocks belong on the device, decided by measurement.
 //
-// Unlike nn/tune.go it cannot alternate per token: switching a placement costs
+// Unlike a kernel's tuner it cannot alternate per token: switching a placement costs
 // a migration far larger than a token, so arms are runs of tokens with the
 // migration between them, outside the timed window.
 //
@@ -50,7 +50,7 @@ type seamTuner struct {
 }
 
 // SeamTuneMargin is how much faster a challenger must be to be adopted. It is
-// larger than nn/tune.go's because acting on the answer costs a migration, and
+// larger than a kernel tuner's because acting on the answer costs a migration, and
 // a placement must not flap between two nearly-equal answers.
 const SeamTuneMargin = 1.05
 

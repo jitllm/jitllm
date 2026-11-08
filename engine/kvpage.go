@@ -2253,8 +2253,7 @@ func (kc *kvCache) pageKeyFill(li, n, fill int) string {
 }
 
 // pageKeyFillP is pageKeyFill for a page of p positions, whoever's it is: a
-// DeepSeek V4 block's entry page covers p = its entries times its rate
-// (ds4kv.go).
+// DeepSeek V4 block's entry page covers p = its entries times its rate.
 func (kc *kvCache) pageKeyFillP(p, n, fill int) string {
 	if fill >= p {
 		return kc.pageKeyP(p, n)

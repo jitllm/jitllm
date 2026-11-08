@@ -40,7 +40,7 @@ type geoFlag uint8
 
 const (
 	geoNonCausal geoFlag = 1 << iota // a non-causal segment's blocks: a vision tower's
-	// geoIndexKey is a selecting block's (msa.go, qsa.go): its cache row
+	// geoIndexKey is a selecting block's: its cache row
 	// carries the indexer's key as one more head, which every K/V writer and
 	// the paged pool's geometry bake, where a dense block's row does not.
 	geoIndexKey

@@ -96,7 +96,7 @@ type frontSet struct {
 	MtpCollapse []*graph.Graph
 	Head, Embed *graph.Graph
 	// cpuEmbed is embed without the streams past the first, which the CPU
-	// expands through expand (cpustreams.go) or a family's own expansion;
+	// expands through expand or a family's own expansion;
 	// given is an embedding span's rows' input (givenGraph); outNorm the
 	// output norm alone (outNormGraph). cpuInErr is why any of them did not
 	// verify.

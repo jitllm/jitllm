@@ -295,11 +295,10 @@ func dedupedAPIs(devs []backend.Device) []string {
 	return out
 }
 
-// cpuBrand is the one fact in this report with no in-tree source: nn/tune.go
-// dropped the brand string from its cache key on purpose, because a stepping
-// bump invalidates a good answer and the string says nothing about what the
-// emitter will do. It is still what a person means by "which CPU is this", so it
-// is read here and nowhere else.
+// cpuBrand is the one fact in this report with no in-tree source: nothing the
+// engine decides reads the brand string, which says nothing about what the
+// emitter will do. It is still what a person means by "which CPU is this", so
+// it is read here and nowhere else.
 func cpuBrand() string {
 	if b, err := os.ReadFile("/proc/cpuinfo"); err == nil {
 		for _, ln := range strings.Split(string(b), "\n") {
