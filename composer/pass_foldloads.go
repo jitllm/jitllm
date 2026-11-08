@@ -7,7 +7,11 @@ import "github.com/jitllm/jitllm/composer/ir"
 // read from memory as that reader's operand: the second multiplicand of a sum's step in a vector
 // loop -- the first where the second is a load that must be widened -- or
 // the second operand of a map's operation, an integer and's among them, in
-// a vector loop no scalar tail follows.
+// a vector loop no scalar tail follows. A load of a pair's later head's buffer
+// (HeadPairs) is not folded: so folded, a latent attention's second head read
+// wrong at five vectors of width (TestComposedCPUAttendValuesInKeys, 0.50
+// NMSE) where its plain load reads right; where the folded form goes wrong is
+// not found.
 type FoldLoads struct{}
 
 func (FoldLoads) Name() string { return "foldloads" }
@@ -19,7 +23,7 @@ func (p FoldLoads) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		for i, nd := range k.Nodes {
 			var b int
 			if nd.Op == OpBroadcast {
-				if ld := k.Nodes[nd.A]; ld.Op == OpLoad && !ld.Mem && !k.Bufs[ld.Buf].Half && k.uses(nd.A) == 1 {
+				if ld := k.Nodes[nd.A]; ld.Op == OpLoad && !ld.Mem && !k.Bufs[ld.Buf].Half && k.Bufs[ld.Buf].Operand.Copy == 0 && k.uses(nd.A) == 1 {
 					if m == nil {
 						m = k.clone()
 					}
@@ -40,7 +44,7 @@ func (p FoldLoads) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			}
 			foldable := func(x int) bool {
 				ld := k.Nodes[x]
-				return ld.Op == OpLoad && !ld.Mem && !k.Bufs[ld.Buf].Half && k.uses(x) == 1
+				return ld.Op == OpLoad && !ld.Mem && !k.Bufs[ld.Buf].Half && k.Bufs[ld.Buf].Operand.Copy == 0 && k.uses(x) == 1
 			}
 			if !foldable(b) {
 				if nd.Op != OpFma || !foldable(nd.A) || k.Nodes[nd.B].Op != OpLoad {
