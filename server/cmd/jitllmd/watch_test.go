@@ -91,7 +91,7 @@ func TestEveryMutationRefusesAnUnknownIdWithTheServersWords(t *testing.T) {
 		{"sessions <id>", cmdSessions, []string{"-addr", addr, "ghost"}, `session "ghost"`},
 		{"place -session", cmdPlace, []string{"-addr", addr, "-session", "ghost"}, `session "ghost"`},
 		{"place -model", cmdPlace, []string{"-addr", addr, "-model", "ghost"}, `"ghost"`},
-		{"place -move", cmdPlace, []string{"-addr", addr, "-session", "ghost", "-move", "0:3", "-to", "host"}, `"ghost"`},
+		{"place -move", cmdPlace, []string{"-addr", addr, "-session", "ghost", "-move", "0:3", "-to", "cpu"}, `"ghost"`},
 		{"place -tune-seam", cmdPlace, []string{"-addr", addr, "-session", "ghost", "-tune-seam"}, `"ghost"`},
 		{"devices <id>", cmdDevices, []string{"-addr", addr, "ghost:9"}, "ghost:9"},
 	}

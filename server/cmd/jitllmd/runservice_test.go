@@ -33,7 +33,7 @@ func TestJitllmRunGoesThroughTheService(t *testing.T) {
 		t.Fatal(ok, err)
 	}
 	e := server.New(server.Config{Admit: testdevices.Admit(), ModelDir: dir, Version: "test", Probe: func() ([]server.DeviceInfo, error) {
-		return []server.DeviceInfo{{ID: "cpu", Backend: "cpu", Kind: server.KindHost, Available: true}}, nil
+		return []server.DeviceInfo{{ID: "cpu", Backend: "cpu", Kind: server.KindCPU, Available: true}}, nil
 	}, OnDemand: server.LoadOptions{DeviceIDs: []string{"cpu"}}})
 	defer e.Close()
 	s := httptest.NewServer(e.Handler())

@@ -16,7 +16,7 @@ type Placement = session.Placement
 
 // The placements, re-exported.
 const (
-	PlaceHost     = session.PlaceHost
+	PlaceCPU      = session.PlaceCPU
 	PlaceDevice   = session.PlaceDevice
 	PlaceResident = session.PlaceResident
 )
@@ -69,8 +69,8 @@ type MemView struct {
 // MemColors is the memory map's palette. Devices is indexed by ordinal and
 // wraps.
 type MemColors struct {
-	Host, Dense, KV, Other, Track, Line, Seam, Text, Muted, OnCell widget.Color
-	Devices                                                        []widget.Color
+	CPU, Dense, KV, Other, Track, Line, Seam, Text, Muted, OnCell widget.Color
+	Devices                                                       []widget.Color
 }
 
 // MemoryMap draws where a model is: its blocks in order coloured by the device
@@ -152,7 +152,7 @@ func (m *MemoryMap) Draw(_ widget.Context, cv widget.Canvas) {
 
 func (m *MemoryMap) device(k int) widget.Color {
 	if k < 0 || len(m.colors.Devices) == 0 {
-		return m.colors.Host
+		return m.colors.CPU
 	}
 	return m.colors.Devices[k%len(m.colors.Devices)]
 }
@@ -234,7 +234,7 @@ func (m *MemoryMap) lane(cv widget.Canvas, v MemView, l MemLane, x, y, w float32
 		case u.cell >= 0 && l.Disk:
 			cv.StrokeRect(rect, m.colors.Line, 1)
 		case u.cell >= 0:
-			p := PlaceHost
+			p := PlaceCPU
 			if u.cell < len(v.Blocks) {
 				p = Placement(v.Blocks[u.cell])
 			}
@@ -270,12 +270,12 @@ func (m *MemoryMap) legend(cv widget.Canvas, v MemView, x, y, w float32) {
 		label  string
 		hollow bool
 	}
-	keys := []key{{m.colors.Host, "host", false}}
+	keys := []key{{m.colors.CPU, "cpu", false}}
 	for k, name := range v.Devices {
 		keys = append(keys, key{m.device(k), name, false})
 	}
 	keys = append(keys,
-		key{m.colors.Host, "paged out", true},
+		key{m.colors.CPU, "paged out", true},
 		key{m.colors.Dense, "dense", false},
 		key{m.colors.KV, "kv", false},
 		key{m.colors.KV, "kv pool free", true},
@@ -352,7 +352,7 @@ func layersCaption(v MemView) string {
 			s += fmt.Sprintf("%d on %s, ", dev[k], v.Devices[k])
 		}
 	}
-	s += fmt.Sprintf("%d on the host", host)
+	s += fmt.Sprintf("%d on the CPU", host)
 	if out > 0 {
 		s += fmt.Sprintf(" (%d paged out)", out)
 	}

@@ -70,7 +70,7 @@ func TestEveryEnumValueHasItsWireValue(t *testing.T) {
 		}
 	}
 	kinds := map[DeviceKind]v1.DeviceKind{
-		KindHost: v1.DeviceKind_DEVICE_KIND_CPU, KindDiscrete: v1.DeviceKind_DEVICE_KIND_DISCRETE,
+		KindCPU: v1.DeviceKind_DEVICE_KIND_CPU, KindDiscrete: v1.DeviceKind_DEVICE_KIND_DISCRETE,
 		KindIntegrated: v1.DeviceKind_DEVICE_KIND_INTEGRATED, KindUnspecified: v1.DeviceKind_DEVICE_KIND_UNSPECIFIED,
 		DeviceKind(99): v1.DeviceKind_DEVICE_KIND_UNSPECIFIED,
 	}

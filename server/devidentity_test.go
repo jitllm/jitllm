@@ -26,7 +26,7 @@ const (
 // probeDevices enumerates it.
 func thisBoxDevices() []DeviceInfo {
 	return []DeviceInfo{
-		{ID: HostGateID, Backend: "cpu", Kind: KindHost, TotalMemory: 31 << 30,
+		{ID: HostGateID, Backend: "cpu", Kind: KindCPU, TotalMemory: 31 << 30,
 			CountsTowardHostBudget: true, Available: true},
 		{ID: "vulkan:0", Backend: "vulkan", Name: sameModel, Kind: KindDiscrete,
 			TotalMemory: 4 << 30, PhysicalID: oneCard, Available: true},
@@ -163,7 +163,7 @@ func TestTheRealProbeCountsEachCardOnce(t *testing.T) {
 			marked++
 			continue
 		}
-		if d.Kind == KindHost || d.CountsTowardHostBudget || !d.Available {
+		if d.Kind == KindCPU || d.CountsTowardHostBudget || !d.Available {
 			continue
 		}
 		if prev, dup := counted[d.PhysicalID]; dup && d.PhysicalID != "" {

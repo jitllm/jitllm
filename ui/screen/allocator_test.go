@@ -62,7 +62,7 @@ func TestTheMemoryMapIsEmptyWhenNothingIsLoaded(t *testing.T) {
 func splitBlocks(n, dev int) []byte {
 	b := make([]byte, n)
 	for i := range b {
-		b[i] = byte(widgets.PlaceHost | widgets.PlaceResident)
+		b[i] = byte(widgets.PlaceCPU | widgets.PlaceResident)
 		if i < dev {
 			b[i] = byte(widgets.OnDevice(0))
 		}

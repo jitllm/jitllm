@@ -113,7 +113,7 @@ func relocateBlocks(ctx context.Context, c cli, cn *conn, session, spec, to stri
 	if err != nil {
 		return err
 	}
-	if to == "" || to == "host" {
+	if to == "" {
 		to = nn.CPU
 	}
 	req := &v1.RelocateBlocksRequest{

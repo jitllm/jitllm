@@ -53,7 +53,7 @@ func modelPath(t *testing.T, name string) string {
 // something to report without opening a driver.
 func oneCardProbe() ([]DeviceInfo, error) {
 	return []DeviceInfo{
-		{ID: "cpu", Backend: "cpu", Kind: KindHost, Name: "host", TotalMemory: 32 << 30,
+		{ID: "cpu", Backend: "cpu", Kind: KindCPU, Name: "host", TotalMemory: 32 << 30,
 			CountsTowardHostBudget: true, Available: true},
 		{ID: "cuda:0", Backend: "cuda", Kind: KindDiscrete, Name: "fake card",
 			TotalMemory: 4 << 30, FreeMemory: 3 << 30, Available: true, PhysicalID: "uuid-0"},

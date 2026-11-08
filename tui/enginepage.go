@@ -10,7 +10,7 @@ import (
 	"github.com/jitllm/jitllm/common/session"
 )
 
-type engineKeys struct{ In, Out, AllHost, AllDevice, NextDevice key.Binding }
+type engineKeys struct{ In, Out, AllCPU, AllDevice, NextDevice key.Binding }
 
 // enginePage is the cockpit: every block and where it runs, the seam moved
 // with the arrows, the rates over time, memory and the pager.
@@ -29,7 +29,7 @@ func newEnginePage(env *env) *enginePage {
 	return &enginePage{env: env, keys: engineKeys{
 		In:        bind("→", "block to device", "right", "l", "]"),
 		Out:       bind("←", "block to host", "left", "h", "["),
-		AllHost:   bind("home", "all host", "home"),
+		AllCPU:    bind("home", "all cpu", "home"),
 		AllDevice: bind("end", "all device", "end"),
 		// The device-to-device relocation: every device block, its history
 		// with it, onto the tier's next device.
@@ -38,7 +38,7 @@ func newEnginePage(env *env) *enginePage {
 }
 
 func (p *enginePage) Help() []key.Binding {
-	return []key.Binding{p.keys.Out, p.keys.In, p.keys.AllHost, p.keys.AllDevice, p.keys.NextDevice}
+	return []key.Binding{p.keys.Out, p.keys.In, p.keys.AllCPU, p.keys.AllDevice, p.keys.NextDevice}
 }
 
 func (p *enginePage) Focus() tea.Cmd   { return nil }
@@ -87,7 +87,7 @@ func (p *enginePage) Update(msg tea.Msg) tea.Cmd {
 			return p.ask(p.seam + 1)
 		case key.Matches(msg, p.keys.Out):
 			return p.ask(p.seam - 1)
-		case key.Matches(msg, p.keys.AllHost):
+		case key.Matches(msg, p.keys.AllCPU):
 			return p.ask(0)
 		case key.Matches(msg, p.keys.AllDevice):
 			return p.ask(n)

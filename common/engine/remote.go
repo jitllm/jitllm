@@ -445,7 +445,7 @@ func placementView(p *v1.Placement, devs []*v1.Device) ([]byte, session.Allocati
 	alloc := session.Allocation{NBlocks: len(p.GetBlocks()),
 		CPUBlocks: int(p.GetCpuBlockCount()), DeviceBlocks: int(p.GetDeviceBlockCount())}
 	for i, b := range p.GetBlocks() {
-		pl := session.PlaceHost
+		pl := session.PlaceCPU
 		if b.GetLocation() == v1.BlockLocation_BLOCK_LOCATION_DEVICE {
 			k, ok := ord[b.GetDeviceId()]
 			if !ok {

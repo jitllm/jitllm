@@ -127,7 +127,7 @@ func (s *series) chart(w, h int, c lipgloss.Color) string {
 }
 
 // grid draws one cell per block: a device's colour where a device runs it,
-// green on the host when its page is resident, hollow when it is read from
+// green on the CPU device when its page is resident, hollow when it is read from
 // the file on its next pass; a block that just moved flashes white. The big
 // grid sizes its cells to the width, two rows tall and numbered.
 func (t *telemetry) grid(bm []byte, w int, big bool, frame int) string {
@@ -215,7 +215,7 @@ func blockLegend(bm []byte) string {
 		}
 	}
 	sq := func(c lipgloss.Color) string { return lipgloss.NewStyle().Foreground(c).Render("■") }
-	parts := []string{sq(cBrand) + sDim().Render(fmt.Sprintf(" host %d", host))}
+	parts := []string{sq(cBrand) + sDim().Render(fmt.Sprintf(" cpu %d", host))}
 	for k := range deviceColours() {
 		if n := dev[k]; n > 0 {
 			parts = append(parts, sq(colourOf(k, deviceColours()))+sDim().Render(fmt.Sprintf(" gpu%d %d", k, n)))

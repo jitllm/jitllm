@@ -6,8 +6,8 @@ package session
 type Placement byte
 
 const (
-	// PlaceHost is a block the host runs.
-	PlaceHost Placement = 0
+	// PlaceCPU is a block the CPU device runs.
+	PlaceCPU Placement = 0
 	// PlaceDevice is a block device 0 runs; device k is OnDevice(k).
 	PlaceDevice Placement = 1
 	// PlaceResident is set when the block's page is in host memory. A host

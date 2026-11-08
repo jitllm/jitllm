@@ -51,7 +51,7 @@ func pbBackend(name string) v1.Backend {
 
 func pbKind(k DeviceKind) v1.DeviceKind {
 	switch k {
-	case KindHost:
+	case KindCPU:
 		return v1.DeviceKind_DEVICE_KIND_CPU
 	case KindDiscrete:
 		return v1.DeviceKind_DEVICE_KIND_DISCRETE
