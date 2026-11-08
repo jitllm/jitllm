@@ -59,6 +59,8 @@ type Decider struct {
 	cfg  *jlm.Config
 	lab  *jlm.DecisionLabels
 	mp   *jlm.MarkerPrompt
+	// joint is a joint head's statement: every question in one prompt.
+	joint *jlm.JointHead
 	// scores is a marker head's per option.
 	scores []float32
 	tpl  *jinja.Template
@@ -81,6 +83,19 @@ func NewDecider(in *Instance) (*Decider, error) {
 	m := in.m
 	cfg := m.Container.Config()
 	const n, g = nn.DecisionOptions, nn.DecisionGroup
+	if j := cfg.JointHead; j != nil {
+		src, ok := m.ChatTemplate("systemone")
+		if !ok {
+			return nil, fmt.Errorf("model: the container carries no systemone template, the joint head's prompt")
+		}
+		tpl, err := jinja.Compile(src)
+		if err != nil {
+			return nil, fmt.Errorf("model: the systemone template: %w", err)
+		}
+		return &Decider{in: in, cfg: cfg, joint: j, tpl: tpl, scores: make([]float32, n),
+			vals: make([]float32, n*g), keep: make([]float32, n), params: make([]float32, 2+n),
+			prior: make([]float32, n), probs: make([]float32, n), stats: make([]float32, graph.DecisionStats)}, nil
+	}
 	if mp := cfg.MarkerPrompt; mp != nil {
 		return &Decider{in: in, cfg: cfg, mp: mp, scores: make([]float32, n),
 			vals: make([]float32, n*g), keep: make([]float32, n), params: make([]float32, 2+n),
@@ -155,6 +170,9 @@ func (d *Decider) Decide(state jinja.Value, qs []DecisionQuestion) ([]DecisionAn
 		return nil, err
 	}
 	d.input = 0
+	if d.joint != nil {
+		return d.decideJoint(state, qs)
+	}
 	out := make([]DecisionAnswer, len(qs))
 	for i := range qs {
 		answer := d.answer

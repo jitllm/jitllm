@@ -3,10 +3,10 @@ package jlm
 // Clef's joint schema head (Cloudflare/clef-flash, joint_schema_model.py's
 // JointSchemaHead), as llama.cpp's converter names it (conversion/clef.py):
 // the decision.* tensors are model-level, and the head's blocks, dec.blk.N,
-// are stored at DenseBlock with Index N -- the routing blocks first
-// (Config.DecisionRouting of them), then the joint ones (Config.DecisionBlocks)
-// -- so they never meet a backbone block's number. A group of its own, counted
-// up from 800.
+// are model-level too under roles of their own (RoleDecBlock) -- the routing
+// blocks first (Config.DecisionRouting of them), then the joint ones
+// (Config.DecisionBlocks) -- so they never meet a backbone block's number. A
+// group of its own, counted up from 800.
 const (
 	// The LayerNorm over the backbone's final hidden states, and the six
 	// projections out of the backbone's width into the head's.
@@ -61,7 +61,43 @@ const (
 	RoleDecFFNDownBias     Role = 847
 )
 
+// A joint head's block k stores its tensors under roles of its own,
+// RoleDecBlock(k, r) for r of RoleDecSelfNorm..RoleDecFFNDownBias: from
+// RoleDecBlockBase, 32 a block, for decBlocks blocks.
+const (
+	RoleDecBlockBase Role = 2000
+	decBlockRoles         = 32
+	decBlocks             = 64
+)
+
+// RoleDecBlock is head block k's role of kind r (RoleDecSelfNorm ..
+// RoleDecFFNDownBias).
+func RoleDecBlock(k int, r Role) Role {
+	return RoleDecBlockBase + Role(k*decBlockRoles) + (r - RoleDecSelfNorm)
+}
+
+// DecBlockOf is the head block and the kind of a RoleDecBlock role, false
+// for any other.
+func DecBlockOf(r Role) (int, Role, bool) {
+	if r < RoleDecBlockBase || r >= RoleDecBlockBase+decBlockRoles*decBlocks {
+		return 0, 0, false
+	}
+	o := int(r - RoleDecBlockBase)
+	kind := RoleDecSelfNorm + Role(o%decBlockRoles)
+	if kind > RoleDecFFNDownBias {
+		return 0, 0, false
+	}
+	return o / decBlockRoles, kind, true
+}
+
 func decisionRoleName(r Role) (string, bool) {
+	if k, kind, ok := DecBlockOf(r); ok {
+		n, ok := decisionRoleName(kind)
+		if !ok {
+			return "", false
+		}
+		return "dec.blk." + itoa(uint64(k)) + n[len("dec"):], true
+	}
 	switch r {
 	case RoleDecHiddenNorm:
 		return "decision.hidden_norm", true

@@ -353,7 +353,8 @@ func gridRowWise(o graph.Op) bool {
 func ownsItsGrid(k graph.OpKind) bool {
 	switch k {
 	case graph.OpConv, graph.OpUnfold, graph.OpTakeRows, graph.OpRegroup, graph.OpFold, graph.OpUntile, graph.OpDropRows,
-		graph.OpRowBreak, graph.OpWrapRows, graph.OpMarkRow, graph.OpTableRows, graph.OpRowsAttend, graph.OpUpsample, graph.OpAppendRow:
+		graph.OpRowBreak, graph.OpWrapRows, graph.OpMarkRow, graph.OpTableRows, graph.OpRowsAttend, graph.OpUpsample, graph.OpAppendRow,
+		graph.OpSpanPool:
 		return true
 	}
 	return false

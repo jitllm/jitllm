@@ -28,6 +28,7 @@ is in its evidence file (MC is `docs/engineering-history/model-correctness.md`).
 | Kimi-Linear's and Kimi-K3's MLA latent norm epsilon | rms_norm_eps | the model's code: the RMSNorm class default, 1e-6 (`jlm.Config.LatentNormEps`) | MC "kimi-k3" |
 | HunyuanVL's XD-RoPE | a coordinate per rotated PAIR (`ggml_rope_multi`) | transformers: a coordinate per ELEMENT, so a pair's halves turn by different angles on a picture's rows | MC "HunyuanVL" |
 | QSA's indexer score | unscaled | llama.cpp: transformers scales by 1/sqrt(head_dim), and a positive scale on a relu sum selects the same blocks | MC "qwen4exp: Qwen3.8-Flash-Next" |
+| Clef's confidence | not the chosen option's probability (tone 0.6849 where its own largest probability is 0.7637) | Clef's systemone_answer: a choice's and a score's confidence is the largest probability (`jlm.JointHead.Confidence`) | MC "Clef's joint head as the model's readout" |
 | QSA's cache precision | the converter's f16/f32 choice | f32: QSA pools raw cached keys, which its references hold at f32; a q8_0 cache the caller forces rounds them too, and its pooling is the rounded keys' | MC "qwen4exp: what was built" |
 | the n-gram reset id | its converter writes the last of the config's end-of-sequence list as `ple.eos_token_id` | llama.cpp: the file's key (transformers' module takes the first of the list; the two agree where the list has one id) | MC "qwen4exp: Qwen3.8-Flash-Next" |
 | LFM2-VL's projector GELU | tanh form (FFN_GELU) | transformers' erf form (ACT2FN["gelu"]) | MC "LFM2-VL and d1's pictures" |

@@ -158,6 +158,8 @@ type Config struct {
 	SWAGlobalFirst bool
 	// MarkPointer is a pointer readout (jlm.Flag2MarkerPointer).
 	MarkPointer bool
+	// Joint is a joint head's readout (jlm.JointHead).
+	Joint bool
 
 	// Logit softcapping: x = c*tanh(x/c). gemma2 caps the attention scores at
 	// 50 and the output logits at 30. Zero means none. Omitting it gives fluent
@@ -872,6 +874,7 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 		OutUnrotated:     c.Flags2.Has(jlm.Flag2OutUnrotated),
 		SWAGlobalFirst:   c.Flags2.Has(jlm.Flag2SWAGlobalFirst),
 		MarkPointer:      c.Flags2.Has(jlm.Flag2MarkerPointer),
+		Joint:            c.JointHead != nil,
 		KVLoraRank:       int(c.KVLoraRank),
 		HeadDimV:         int(c.HeadDimV),
 		ExpertSigmoid:    c.Flags.Has(jlm.FlagExpertSigmoid),
@@ -2650,7 +2653,10 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 	var views []Tensor
 	for i := range c.Entries() {
 		e := &c.Entries()[i]
-		if e.Index != -1 || !e.Role.Expanded() || e.Role.Vision() || e.Block != jlm.DenseBlock {
+		// A model-level tensor of one dimension is a vector whatever its
+		// role: a joint head's norms, biases and scales, a scorer stored as
+		// the one row it is.
+		if e.Index != -1 || !(e.Role.Expanded() || e.NDim == 1) || e.Role.Vision() || e.Block != jlm.DenseBlock {
 			continue
 		}
 		v, err := vec(e.Role, e.Block)

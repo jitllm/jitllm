@@ -1068,11 +1068,21 @@ func decomposeRowsAttend(o graph.Op, c *Context) ([]Prim, error) {
 		dx.op(OpMul, F, dx.at(0, qs, q, el), dx.at(1, ks, j, kel))
 	}
 	var sx exprs
+	scoreIn := []Operand{dots, TablePos.op()}
+	scoreFacts := Facts{Extents: map[int]int{1: R + 1}}
 	{
 		j := sx.coord(2)
 		live := sx.load(1, sx.u(0))
 		d := sx.at(0, sh, sx.coord(0), sx.coord(1), j)
-		sx.sel(F, sx.op(OpLess, ir.Pred, j, live), sx.op(OpMul, F, d, sx.f(float32(a.Scale))), sx.f(minus))
+		keep := sx.op(OpMul, F, d, sx.f(float32(a.Scale)))
+		if s := uint32(a.Offset); s > 0 {
+			// Query row q reads the keys of its own range.
+			scoreIn = append(scoreIn, TableRequest.op())
+			scoreFacts.Extents[2] = RequestRows + int(s+2)*max(Q, R)
+			lo, hi := requestSlot(&sx, 2, 1, s, sx.coord(0)), requestSlot(&sx, 2, 1, s+1, sx.coord(0))
+			keep = sx.sel(F, sx.op(OpLess, ir.Pred, j, lo), sx.f(minus), sx.sel(F, sx.op(OpLess, ir.Pred, j, hi), keep, sx.f(minus)))
+		}
+		sx.sel(F, sx.op(OpLess, ir.Pred, j, live), keep, sx.f(minus))
 	}
 	var mx exprs
 	mx.at(0, sh, mx.coord(0), mx.coord(1), mx.coord(2))
@@ -1097,8 +1107,7 @@ func decomposeRowsAttend(o graph.Op, c *Context) ([]Prim, error) {
 	}
 	return []Prim{
 		{Kind: PrimReduce, Shape: []int{Q, H, R, hd}, In: []Operand{c.value(o.In[0]), c.value(o.In[1])}, Out: dots, Combine: OpAdd, Expr: dx.e},
-		{Kind: PrimMap, Shape: sh, In: []Operand{dots, TablePos.op()}, Out: scores, Expr: sx.e,
-			Facts: Facts{Extents: map[int]int{1: R + 1}}},
+		{Kind: PrimMap, Shape: sh, In: scoreIn, Out: scores, Expr: sx.e, Facts: scoreFacts},
 		{Kind: PrimReduce, Shape: sh, In: []Operand{scores}, Out: maxes, Combine: OpMax, Init: int64(math.Float32bits(minus)), Expr: mx.e},
 		{Kind: PrimMap, Shape: sh, In: []Operand{scores, maxes}, Out: weights, Expr: wx.e},
 		{Kind: PrimReduce, Shape: sh, In: []Operand{weights}, Out: sums, Combine: OpAdd, Expr: lx.e},

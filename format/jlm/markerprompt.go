@@ -192,7 +192,7 @@ func decodeMarkerPrompt(r *rbuf) *MarkerPrompt {
 		p.Nodes = append(p.Nodes, n)
 	}
 	p.Out, p.Confidence = r.u32(), PromptConfidence(r.u8())
-	if r.err == nil {
+	if r.err == nil && len(p.Nodes) > 0 {
 		if err := p.Valid(); err != nil {
 			r.err = err
 		}

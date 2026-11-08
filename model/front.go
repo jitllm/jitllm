@@ -261,6 +261,8 @@ func (m *Model) UncoveredAt(li int) (Uncovered, error) {
 		return f.HeadWhy, f.headErr
 	case li == -2:
 		return f.EmbedWhy, f.embedErr
+	case li == -3:
+		return f.poolWhy, f.poolErr
 	case li >= 0 && li < len(f.why):
 		return f.why[li], f.errs[li]
 	case li >= len(f.why) && li < len(f.why)+len(f.mtp):
@@ -356,7 +358,7 @@ func (m *Model) FrontGraphs() *frontSet {
 		mk := graph.MaskRow{NVocab: m.Cfg.NVocab}
 		s.CpuMask = mk.Build()
 	}
-	if cfg := m.Container.Config(); cfg.DecisionLabels != nil || cfg.MarkerPrompt != nil {
+	if cfg := m.Container.Config(); cfg.DecisionLabels != nil || cfg.MarkerPrompt != nil || cfg.JointHead != nil {
 		ds := graph.DecisionScores{N: nn.DecisionOptions, G: nn.DecisionGroup}
 		s.CpuDecide = ds.Build()
 	}
@@ -1484,6 +1486,186 @@ func (m *Model) headGraphOf(hidden, collapsed bool) (*graph.Graph, Uncovered, er
 // option markers, in their order, the rows past them repeating the last),
 // through the scorer -- a LayerNorm, a d-wide projection, the erf GELU and a
 // projection to one score -- into the row's score.
+// jointGraph is a joint head's readout (jlm.JointHead; Clef's
+// JointSchemaHead) as ops over the prompt's rows and the request's slots
+// (nn.Joint*): the final rows normed, a memory of them, each question's and
+// option's span averaged and each option's tokens' output embeddings too,
+// the options routed over the memory, a summary of each question's options,
+// the questions through the joint blocks, then each option's logit -- a
+// prior from its tokens against its question, and a gated joint score from
+// the cosine and a residual scorer of its question's field and its own row.
+// Row i of its output is option i's logit.
+func (m *Model) jointGraph() (*graph.Graph, error) {
+	c := m.Cfg
+	cfg := m.Container.Config()
+	all, _ := m.Inventory(jlm.DenseBlock)
+	shape := func(r jlm.Role) (graph.Shape, error) {
+		s, ok := all.Inventory[r]
+		if !ok {
+			return s, fmt.Errorf("model: a joint head that stores no %v", r)
+		}
+		return s, nil
+	}
+	mem, err := shape(jlm.RoleDecProjMemory)
+	if err != nil {
+		return nil, err
+	}
+	out, err := shape(jlm.RoleOutput)
+	if err != nil {
+		out, err = shape(jlm.RoleTokenEmbd)
+		if err != nil {
+			return nil, err
+		}
+	}
+	lexRole := jlm.RoleOutput
+	if _, ok := all.Inventory[jlm.RoleOutput]; !ok {
+		lexRole = jlm.RoleTokenEmbd
+	}
+	d, w, H := c.NEmbd, mem.Rows, int(cfg.DecisionHeads)
+	R, J := int(cfg.DecisionRouting), int(cfg.DecisionBlocks)
+	if H < 1 || w%H != 0 || J < 1 {
+		return nil, fmt.Errorf("model: a joint head %d wide in %d heads with %d joint blocks", w, H, J)
+	}
+	eps := float64(cfg.DecisionEps)
+	b := graph.NewBlock(int(jlm.DenseBlock))
+	emit := func(k graph.OpKind, in []graph.ValueID, name string, width int, wb []graph.Binding, a graph.Attrs) graph.ValueID {
+		return b.Emit(k, in, []graph.Result{{Name: name, Width: width}}, wb, a, nil, nil)[0]
+	}
+	fn := func(name string, width int, f graph.MapFn, k float64, in ...graph.ValueID) graph.ValueID {
+		return emit(graph.OpMap, in, name, width, nil, graph.Attrs{Fn: f, Const: k})
+	}
+	sum := func(name string, v graph.ValueID) graph.ValueID {
+		return emit(graph.OpReduce, []graph.ValueID{v}, name, 1, nil, graph.Attrs{Fn: graph.MapAdd})
+	}
+	ln := func(v graph.ValueID, role jlm.Role) graph.ValueID { return b.LayerNorm(v, role, eps, role+1) }
+	gelu := func(name string, v graph.ValueID, width int) (graph.ValueID, error) {
+		var e jlm.ExprBuilder
+		e.GELUErf(jlm.Operand(0))
+		act := jlm.Expr{Terms: e.T}
+		return b.Stated(name, &act, []graph.ValueID{v}, width, all)
+	}
+	slots := func(k graph.OpKind, v graph.ValueID, name string, width, slot int) graph.ValueID {
+		return emit(k, []graph.ValueID{v}, name, width, nil, graph.Attrs{Offset: slot})
+	}
+	// scale is v times the head's learned scalar i (decision.scales: the
+	// prior's, the joint score's and the gate's, as used at inference).
+	scale := func(name string, v graph.ValueID, i int) graph.ValueID {
+		return emit(graph.OpMap, []graph.ValueID{v}, name, 1, []graph.Binding{{Role: jlm.RoleDecScales, K: 3}},
+			graph.Attrs{Fn: graph.MapMul, Width: 1, Offset: i})
+	}
+	// norm2 is v over its length, the length floored at eps (F.normalize).
+	length := func(name string, v graph.ValueID, width int) graph.ValueID {
+		return fn(name+".len", 1, graph.MapSqrt, 0, sum(name+".sq", fn(name+".mul", width, graph.MapMul, 0, v, v)))
+	}
+	normalize := func(name string, v graph.ValueID, width int) graph.ValueID {
+		return fn(name, width, graph.MapDiv, 0, v, fn(name+".floor", 1, graph.MapMax, 1e-12, length(name, v, width)))
+	}
+	attend := func(name string, q, k, v graph.ValueID, heads, width, slot int) graph.ValueID {
+		hd := width / heads
+		return emit(graph.OpRowsAttend, []graph.ValueID{q, k, v}, name, width, nil,
+			graph.Attrs{NHead: heads, NKVHead: heads, HeadDim: hd, Scale: 1 / math.Sqrt(float64(hd)), Offset: slot})
+	}
+	// mha is torch's MultiheadAttention of block k: q from x, k and v from
+	// kv, through the block's projections of kind q (self or cross).
+	mha := func(k int, q0 jlm.Role, x, kv graph.ValueID, slot int) graph.ValueID {
+		role := func(r jlm.Role) jlm.Role { return jlm.RoleDecBlock(k, r) }
+		qr, kr, vr, or := q0, q0+1, q0+2, q0+3
+		bias := func(r jlm.Role) jlm.Role { return r + 4 }
+		q := b.MatVec(x, role(qr), w, role(bias(qr)))
+		kk := b.MatVec(kv, role(kr), w, role(bias(kr)))
+		v := b.MatVec(kv, role(vr), w, role(bias(vr)))
+		a := attend("attn", q, kk, v, H, w, slot)
+		return b.MatVec(a, role(or), w, role(bias(or)))
+	}
+	ffn := func(k int, x graph.ValueID) (graph.ValueID, error) {
+		role := func(r jlm.Role) jlm.Role { return jlm.RoleDecBlock(k, r) }
+		up, err := shape(role(jlm.RoleDecFFNUp))
+		if err != nil {
+			return 0, err
+		}
+		h := b.MatVec(ln(x, role(jlm.RoleDecFFNNorm)), role(jlm.RoleDecFFNUp), up.Rows, role(jlm.RoleDecFFNUpBias))
+		g, err := gelu("ffn.act", h, up.Rows)
+		if err != nil {
+			return 0, err
+		}
+		return b.Add(x, b.MatVec(g, role(jlm.RoleDecFFNDown), w, role(jlm.RoleDecFFNDownBias))), nil
+	}
+
+	x := b.In("x", d)
+	if _, ok := all.Inventory[jlm.RoleOutputNorm]; ok {
+		x = b.Norm(x, jlm.RoleOutputNorm, c.RMSEps)
+	}
+	hn := ln(x, jlm.RoleDecHiddenNorm)
+	memory := b.MatVec(hn, jlm.RoleDecProjMemory, w)
+	qv := slots(graph.OpSpanPool, hn, "question", d, nn.JointQuestionSpans)
+	ctx := slots(graph.OpSpanPool, hn, "option", d, nn.JointOptionSpans)
+	tokens := emit(graph.OpEmbed, nil, "tokens", d, []graph.Binding{{Role: lexRole, K: d, Rows: out.Rows}},
+		graph.Attrs{Request: true, Offset: nn.JointTokens})
+	lex := slots(graph.OpSpanPool, tokens, "lexical", d, nn.JointOptionSpans)
+	global := emit(graph.OpPool, []graph.ValueID{hn}, "global", d, nil, graph.Attrs{Pooling: uint8(jlm.PoolLast)})
+	qOf := slots(graph.OpTakeRows, qv, "option.question", d, nn.JointOptionQuestion)
+	opts := b.Add(b.Add(b.MatVec(ctx, jlm.RoleDecProjOptCtx, w), b.MatVec(lex, jlm.RoleDecProjOptLex, w)),
+		b.MatVec(qOf, jlm.RoleDecProjOptQ, w))
+	for k := range R {
+		mn := ln(memory, jlm.RoleDecBlock(k, jlm.RoleDecCrossKVNorm))
+		opts = b.Add(opts, mha(k, jlm.RoleDecCrossQ, ln(opts, jlm.RoleDecBlock(k, jlm.RoleDecCrossNorm)), mn, 0))
+		if opts, err = ffn(k, opts); err != nil {
+			return nil, err
+		}
+	}
+	base := b.MatVec(qv, jlm.RoleDecProjQuestion, w)
+	summary := attend("summary", base, opts, opts, 1, w, nn.JointQuestionOptions)
+	types, err := shape(jlm.RoleTokenTypes)
+	if err != nil {
+		return nil, err
+	}
+	typed := emit(graph.OpEmbed, nil, "type", w, []graph.Binding{{Role: jlm.RoleTokenTypes, K: w, Rows: types.Rows}},
+		graph.Attrs{Request: true, Offset: nn.JointQuestionTypes})
+	fields := b.Add(b.Add(b.Add(base, ln(summary, jlm.RoleDecOptSumNorm)), b.MatVec(global, jlm.RoleDecProjGlobal, w)), typed)
+	for k := R; k < R+J; k++ {
+		fields = b.Add(fields, mha(k, jlm.RoleDecSelfQ, ln(fields, jlm.RoleDecBlock(k, jlm.RoleDecSelfNorm)),
+			ln(fields, jlm.RoleDecBlock(k, jlm.RoleDecSelfNorm)), nn.JointFields))
+		fields = b.Add(fields, mha(k, jlm.RoleDecCrossQ, ln(fields, jlm.RoleDecBlock(k, jlm.RoleDecCrossNorm)), memory, 0))
+		if fields, err = ffn(k, fields); err != nil {
+			return nil, err
+		}
+	}
+	fields = ln(fields, jlm.RoleDecFieldNorm)
+	field := slots(graph.OpTakeRows, fields, "option.field", w, nn.JointOptionQuestion)
+	option := ln(opts, jlm.RoleDecOptNorm)
+	// torch's cosine_similarity: x.y over the product of the lengths, the
+	// product floored at 1e-8.
+	dot := sum("cos.dot", fn("cos.mul", w, graph.MapMul, 0, field, option))
+	lens := fn("cos.lens", 1, graph.MapMax, 1e-8, fn("cos.prod", 1, graph.MapMul, 0, length("cos.f", field, w), length("cos.o", option, w)))
+	cosine := fn("cos", 1, graph.MapDiv, 0, dot, lens)
+	features := emit(graph.OpConcat, []graph.ValueID{field, option, fn("feat.mul", w, graph.MapMul, 0, field, option),
+		fn("feat.abs", w, graph.MapAbs, 0, fn("feat.sub", w, graph.MapSub, 0, field, option))}, "features", 4*w, nil, graph.Attrs{})
+	hidden, err := gelu("scorer.act", b.MatVec(features, jlm.RoleScorer, w, jlm.RoleScorerBias), w)
+	if err != nil {
+		return nil, err
+	}
+	// The scorer's last projection is one row: stored as a matrix of one
+	// row, or as the vector it is.
+	so, err := shape(jlm.RoleScorerOut)
+	if err != nil {
+		return nil, err
+	}
+	var residual graph.ValueID
+	if so.Rows < 1 {
+		prod := emit(graph.OpMap, []graph.ValueID{hidden}, "scorer.mul", w, []graph.Binding{{Role: jlm.RoleScorerOut, K: w}},
+			graph.Attrs{Fn: graph.MapMul})
+		residual = emit(graph.OpMap, []graph.ValueID{sum("scorer.dot", prod)}, "scorer.out", 1,
+			[]graph.Binding{{Role: jlm.RoleScorerOutBias, K: 1}}, graph.Attrs{Fn: graph.MapAdd, Width: 1})
+	} else {
+		residual = b.MatVec(hidden, jlm.RoleScorerOut, 1, jlm.RoleScorerOutBias)
+	}
+	joint := b.Add(scale("joint.scaled", cosine, 1), residual)
+	anchor := normalize("anchor", b.Add(qOf, global), d)
+	prior := scale("prior", sum("prior.dot", fn("prior.mul", d, graph.MapMul, 0, normalize("lexical.unit", lex, d), anchor)), 0)
+	b.Out(b.Add(prior, scale("joint.gated", joint, 2)))
+	return b.G, graph.Verify(b.G, all)
+}
+
 // pointerGraph is a pointer readout (jlm.Flag2MarkerPointer) as ops: the
 // prompt's last row (graph.OpPool's) and the rows its request names, each
 // through the output norm and RoleScorerOut's projection, an option's score
@@ -1563,6 +1745,13 @@ func (m *Model) markGraph() (*graph.Graph, error) {
 // per element as main's (Embedder.normalize).
 func (m *Model) poolGraph() (*graph.Graph, Uncovered, error) {
 	c := m.Cfg
+	if c.Joint {
+		g, err := m.jointGraph()
+		if err != nil {
+			return nil, UncoveredUnverified, err
+		}
+		return g, Covered, nil
+	}
 	if c.MarkPointer {
 		g, err := m.pointerGraph()
 		if err != nil {

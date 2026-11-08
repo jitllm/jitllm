@@ -358,6 +358,14 @@ func filterTojson(args []Value, kwargs map[string]Value) (Value, error) {
 	// The indented form keeps key order too, as Python's json.dumps does (a
 	// Go map would sort a tool schema's keys). json.Indent re-spaces the
 	// direct encoder's output into Python's indent=N layout.
+	// separators=[item, key] replaces Python's ", " and ": ".
+	item, key := ", ", ": "
+	if sep, ok := kwargs["separators"]; ok && sep.IsList() && len(sep.AsList().Items) == 2 {
+		s := sep.AsList().Items
+		if s[0].IsString() && s[1].IsString() {
+			item, key = s[0].AsString(), s[1].AsString()
+		}
+	}
 	if indent, ok := kwargs["indent"]; ok && !indent.IsNone() && !indent.IsUndefined() {
 		var sb strings.Builder
 		if err := encodeValueJSON(&sb, args[0]); err != nil {
@@ -375,7 +383,7 @@ func filterTojson(args []Value, kwargs map[string]Value) (Value, error) {
 	// path: a handful of allocations (one strings.Builder grow + one Marshal
 	// per leaf string for escaping).
 	var sb strings.Builder
-	if err := encodeValueJSON(&sb, args[0]); err != nil {
+	if err := encodeJSON(&sb, args[0], item, key); err != nil {
 		return NewString(""), nil
 	}
 	return NewString(sb.String()), nil
@@ -395,7 +403,10 @@ func filterTojson(args []Value, kwargs map[string]Value) (Value, error) {
 //
 // Both differences would otherwise change the tokenization of every tool
 // definition that ends up in a chat prompt.
-func encodeValueJSON(sb *strings.Builder, v Value) error {
+func encodeValueJSON(sb *strings.Builder, v Value) error { return encodeJSON(sb, v, ", ", ": ") }
+
+// encodeJSON is encodeValueJSON with item and key as the separators.
+func encodeJSON(sb *strings.Builder, v Value, item, key string) error {
 	switch v.kind {
 	case KindUndefined, KindNone, KindCallable:
 		sb.WriteString("null")
@@ -427,11 +438,11 @@ func encodeValueJSON(sb *strings.Builder, v Value) error {
 
 	case KindList:
 		sb.WriteByte('[')
-		for i, item := range v.AsList().Items {
+		for i, x := range v.AsList().Items {
 			if i > 0 {
-				sb.WriteString(", ")
+				sb.WriteString(item)
 			}
-			if err := encodeValueJSON(sb, item); err != nil {
+			if err := encodeJSON(sb, x, item, key); err != nil {
 				return err
 			}
 		}
@@ -441,15 +452,15 @@ func encodeValueJSON(sb *strings.Builder, v Value) error {
 	case KindDict:
 		sb.WriteByte('{')
 		d := v.AsDict()
-		for i, key := range d.Keys {
+		for i, k := range d.Keys {
 			if i > 0 {
-				sb.WriteString(", ")
+				sb.WriteString(item)
 			}
-			if err := encodeJSONString(sb, key); err != nil {
+			if err := encodeJSONString(sb, k); err != nil {
 				return err
 			}
-			sb.WriteString(": ")
-			if err := encodeValueJSON(sb, d.Data[key]); err != nil {
+			sb.WriteString(key)
+			if err := encodeJSON(sb, d.Data[k], item, key); err != nil {
 				return err
 			}
 		}

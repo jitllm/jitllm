@@ -446,7 +446,10 @@ func identify(name string) (role jlm.Role, block int32, index int32, err error) 
 			return 0, 0, 0, fmt.Errorf("convert: %q: no head block index", name)
 		}
 		if role, ok := roleOf("dec." + r[i+1:]); ok {
-			return role, jlm.DenseBlock, int32(n), nil
+			if role < jlm.RoleDecSelfNorm || role > jlm.RoleDecFFNDownBias || n >= 64 {
+				return 0, 0, 0, fmt.Errorf("convert: %q: no head block role", name)
+			}
+			return jlm.RoleDecBlock(int(n), role), jlm.DenseBlock, -1, nil
 		}
 		return 0, 0, 0, fmt.Errorf("convert: tensor %q has no role in this container's vocabulary", name)
 	}

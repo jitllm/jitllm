@@ -9917,3 +9917,39 @@ at a temperature other than 1 the two keep different candidates; at 4,
 tempering first keeps several more (`TestSamplerCutsBeforeTheTemperature`
 pins the order and fails on the old one). One order on every device was the
 user's decision; the forward-sample gate passes on the V100 with it.
+
+## Clef's joint head as the model's readout
+
+The joint schema head went with the per-family readouts and came back as the
+model's readout graph (`model.jointGraph`), every step an op the composer
+forms over the request's slots (`nn.Joint*`): `graph.OpSpanPool` for the span
+means, `OpTakeRows` and `OpRowsAttend` reading a slot, `OpEmbed` reading a
+row's table row from a slot. The converter states what joint_schema_model.py
+hardcodes (`jlm.JointHead`); the prompt is the GGUF's systemone template
+rendered with sentinels, each piece encoded alone.
+
+Measured (`engine.TestJointDecisionMatchesTheReference`, box 51):
+
+- The fixture: 627 and 535 prompt ids and every question and option span
+  equal Clef's own code's; logits within 1.2e-6 (CPU) and 1.4e-4 (CUDA, every
+  block on the card); answers within 7e-5.
+- The release (Clef-Flash-Q8_0 against `clefgold.py real`, f32 on the BF16
+  weights): the prompts and spans token for token; on the CPU logits within
+  0.106 and 0.181 of the reference (the per-family readout read 0.076 and
+  0.156) and answers within 0.026 and 0.053 (the second a near tie, 0.504
+  against 0.459), on a card 0.040 and 0.058, answers 0.014 and 0.011 --
+  Q8_0's rounding, with the CPU's int8 activations through the backbone as
+  llama.cpp's; llama.cpp on the same file sits 0.017 and 0.038 from the
+  reference in probability.
+- Against llama.cpp's answers on the release the worst difference read 0.097
+  and 0.167, all of it in the confidence: llama.cpp's is not the chosen
+  option's probability (tone: 0.6849 beside its own largest probability
+  0.7637), where Clef's systemone_answer takes the largest probability. The
+  probabilities agree. The gate holds the release to Clef's own answers.
+
+Two silent failures surfaced on the way and are named now: a readout graph
+that does not build, and a readout weight the CPU cannot bind, both read
+"no composed form: <nil>". The second was every joint-head vector: a dense
+vector loaded only under a role `Role.Expanded` lists; a model-level tensor
+of one dimension is a vector now whatever its role, the release's 1-D
+scorer row among them.
