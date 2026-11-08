@@ -1596,10 +1596,10 @@ func (m *Model) PageFaults() int64 {
 // budget may claim. See jlm.File.Direct.
 func (m *Model) DirectIO() bool { return m.Container != nil && m.Container.Direct() }
 
-// HostResidentBlocks is how many of this model's block pages the host is
-// currently holding. RSS cannot stand in for it: a released page shows only
+// CPUResidentBlocks is how many of this model's block pages the CPU device's
+// frames currently hold. RSS cannot stand in for it: a released page shows only
 // when the collector runs, and the KV cache dwarfs the weights anyway.
-func (m *Model) HostResidentBlocks(fr *jlm.Frames) int {
+func (m *Model) CPUResidentBlocks(fr *jlm.Frames) int {
 	if m.Container == nil || fr == nil {
 		return 0
 	}

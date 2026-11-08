@@ -60,7 +60,7 @@ func TestTheSeamMovesThroughThePlacementService(t *testing.T) {
 			n, full.GetDeclines())
 	}
 	for i, b := range full.GetBlocks()[:n] {
-		if b.GetLocation() != v1.BlockLocation_BLOCK_LOCATION_DEVICE || b.GetDeviceId() != "gpu:0" || b.GetHostResident() {
+		if b.GetLocation() != v1.BlockLocation_BLOCK_LOCATION_DEVICE || b.GetDeviceId() != "gpu:0" || b.GetCpuResident() {
 			t.Fatalf("placed block %d reads %+v", i, b)
 		}
 	}
@@ -136,8 +136,8 @@ func TestTheSeamMovesThroughThePlacementService(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s := r.Msg.GetStarted(); s.GetDeviceBlocks() != n || s.GetHostBlocks() != 6-n || s.GetDeviceIds()[0] != "gpu:0" {
-		t.Fatalf("the generate reports %d device / %d host blocks on %v", s.GetDeviceBlocks(), s.GetHostBlocks(), s.GetDeviceIds())
+	if s := r.Msg.GetStarted(); s.GetDeviceBlocks() != n || s.GetCpuBlocks() != 6-n || s.GetDeviceIds()[0] != "gpu:0" {
+		t.Fatalf("the generate reports %d device / %d host blocks on %v", s.GetDeviceBlocks(), s.GetCpuBlocks(), s.GetDeviceIds())
 	}
 	ls, err := c.session.ListSessions(ctx, req(&v1.ListSessionsRequest{DeviceId: "gpu:0"}))
 	if err != nil || len(ls.Msg.GetSessions()) != 1 {

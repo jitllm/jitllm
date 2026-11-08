@@ -58,7 +58,7 @@ func (e *Engine) serveMetrics(w http.ResponseWriter, r *http.Request) {
 			func(lm *LoadedModel) float64 { return float64(lm.tokensGenerated.Load()) }},
 		{"jitllm_tokens_prefilled_total", "counter", "Prompt tokens prefilled.",
 			func(lm *LoadedModel) float64 { return float64(lm.tokensPrefilled.Load()) }},
-		{"jitllm_host_resident_bytes", "gauge", "Weight bytes resident on the host.",
+		{"jitllm_cpu_resident_bytes", "gauge", "Weight bytes resident on the CPU device.",
 			func(lm *LoadedModel) float64 { return float64(lm.m.HostBytes(lm.frames())) }},
 		{"jitllm_page_budget_bytes", "gauge", "The pager's budget.",
 			func(lm *LoadedModel) float64 { return float64(lm.m.PageBudget(lm.frames())) }},

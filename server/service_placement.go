@@ -334,7 +334,7 @@ func (s *PlacementService) moveBetweenDevices(ctx context.Context, sess *Session
 func pbRelocationPath(p string) v1.RelocationPath {
 	switch p {
 	case "host":
-		return v1.RelocationPath_RELOCATION_PATH_HOST
+		return v1.RelocationPath_RELOCATION_PATH_CPU
 	case "staged":
 		return v1.RelocationPath_RELOCATION_PATH_STAGED
 	case "peer":

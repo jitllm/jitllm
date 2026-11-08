@@ -22,7 +22,7 @@ const (
 )
 
 // Backend is the code generator a device is driven by. CPU is a first-class
-// member: the host is a placement target exactly as a card is, which is the
+// member: the CPU is a placement target exactly as a card is, which is the
 // whole point of the engine's block-placement model.
 type Backend int32
 
@@ -91,8 +91,8 @@ type DeviceKind int32
 
 const (
 	DeviceKind_DEVICE_KIND_UNSPECIFIED DeviceKind = 0
-	// The host's own cores. Its memory is the host budget by definition.
-	DeviceKind_DEVICE_KIND_HOST DeviceKind = 1
+	// The CPU's own cores. Its memory is the host budget by definition.
+	DeviceKind_DEVICE_KIND_CPU DeviceKind = 1
 	// A discrete card with its own VRAM. Its memory is a second pool.
 	// A resizable-BAR card still reports DISCRETE: a device-local host-visible
 	// heap is still VRAM.
@@ -106,13 +106,13 @@ const (
 var (
 	DeviceKind_name = map[int32]string{
 		0: "DEVICE_KIND_UNSPECIFIED",
-		1: "DEVICE_KIND_HOST",
+		1: "DEVICE_KIND_CPU",
 		2: "DEVICE_KIND_DISCRETE",
 		3: "DEVICE_KIND_INTEGRATED",
 	}
 	DeviceKind_value = map[string]int32{
 		"DEVICE_KIND_UNSPECIFIED": 0,
-		"DEVICE_KIND_HOST":        1,
+		"DEVICE_KIND_CPU":         1,
 		"DEVICE_KIND_DISCRETE":    2,
 		"DEVICE_KIND_INTEGRATED":  3,
 	}
@@ -150,7 +150,7 @@ type BlockLocation int32
 
 const (
 	BlockLocation_BLOCK_LOCATION_UNSPECIFIED BlockLocation = 0
-	BlockLocation_BLOCK_LOCATION_HOST        BlockLocation = 1
+	BlockLocation_BLOCK_LOCATION_CPU         BlockLocation = 1
 	BlockLocation_BLOCK_LOCATION_DEVICE      BlockLocation = 2
 )
 
@@ -158,12 +158,12 @@ const (
 var (
 	BlockLocation_name = map[int32]string{
 		0: "BLOCK_LOCATION_UNSPECIFIED",
-		1: "BLOCK_LOCATION_HOST",
+		1: "BLOCK_LOCATION_CPU",
 		2: "BLOCK_LOCATION_DEVICE",
 	}
 	BlockLocation_value = map[string]int32{
 		"BLOCK_LOCATION_UNSPECIFIED": 0,
-		"BLOCK_LOCATION_HOST":        1,
+		"BLOCK_LOCATION_CPU":         1,
 		"BLOCK_LOCATION_DEVICE":      2,
 	}
 )
@@ -378,7 +378,7 @@ type DeviceRef struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
 	Id      string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	Backend Backend                `protobuf:"varint,2,opt,name=backend,proto3,enum=jitllm.v1.Backend" json:"backend,omitempty"`
-	// Index within the backend. Meaningless for the host.
+	// Index within the backend. Meaningless for the CPU.
 	Index         int32 `protobuf:"varint,3,opt,name=index,proto3" json:"index,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -705,16 +705,16 @@ const file_jitllm_v1_common_proto_rawDesc = "" +
 	"\fBACKEND_CUDA\x10\x02\x12\x12\n" +
 	"\x0eBACKEND_VULKAN\x10\x03\x12\x11\n" +
 	"\rBACKEND_METAL\x10\x04\x12\x0f\n" +
-	"\vBACKEND_HIP\x10\x05*u\n" +
+	"\vBACKEND_HIP\x10\x05*t\n" +
 	"\n" +
 	"DeviceKind\x12\x1b\n" +
-	"\x17DEVICE_KIND_UNSPECIFIED\x10\x00\x12\x14\n" +
-	"\x10DEVICE_KIND_HOST\x10\x01\x12\x18\n" +
+	"\x17DEVICE_KIND_UNSPECIFIED\x10\x00\x12\x13\n" +
+	"\x0fDEVICE_KIND_CPU\x10\x01\x12\x18\n" +
 	"\x14DEVICE_KIND_DISCRETE\x10\x02\x12\x1a\n" +
-	"\x16DEVICE_KIND_INTEGRATED\x10\x03*c\n" +
+	"\x16DEVICE_KIND_INTEGRATED\x10\x03*b\n" +
 	"\rBlockLocation\x12\x1e\n" +
-	"\x1aBLOCK_LOCATION_UNSPECIFIED\x10\x00\x12\x17\n" +
-	"\x13BLOCK_LOCATION_HOST\x10\x01\x12\x19\n" +
+	"\x1aBLOCK_LOCATION_UNSPECIFIED\x10\x00\x12\x16\n" +
+	"\x12BLOCK_LOCATION_CPU\x10\x01\x12\x19\n" +
 	"\x15BLOCK_LOCATION_DEVICE\x10\x02*o\n" +
 	"\tBlockKind\x12\x1a\n" +
 	"\x16BLOCK_KIND_UNSPECIFIED\x10\x00\x12\x18\n" +

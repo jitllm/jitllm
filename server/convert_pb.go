@@ -52,7 +52,7 @@ func pbBackend(name string) v1.Backend {
 func pbKind(k DeviceKind) v1.DeviceKind {
 	switch k {
 	case KindHost:
-		return v1.DeviceKind_DEVICE_KIND_HOST
+		return v1.DeviceKind_DEVICE_KIND_CPU
 	case KindDiscrete:
 		return v1.DeviceKind_DEVICE_KIND_DISCRETE
 	case KindIntegrated:
@@ -203,7 +203,7 @@ func (e *Engine) pbSession(s *Session) *v1.Session {
 		Position:           s.snapPos.Load(),
 		DeviceIds:          s.lm.devIDs(),
 		DeviceBlocks:       devBlocks,
-		HostBlocks:         int32(s.lm.m.Cfg.NLayer) - devBlocks,
+		CpuBlocks:          int32(s.lm.m.Cfg.NLayer) - devBlocks,
 		KvBytes:            pbBytes(s.snapKV.Load()),
 		Execution:          pbExecution(sessionMode(s)),
 		QueuePosition:      s.queuePos.Load(),
@@ -268,11 +268,11 @@ func (e *Engine) pbPlacement(s *Session) *v1.Placement {
 	devCount := 0
 	for i := 0; i < c.NLayer; i++ {
 		bp := &v1.BlockPlacement{
-			Index:        int32(i),
-			Kind:         pbBlockKind(c, i),
-			Location:     v1.BlockLocation_BLOCK_LOCATION_HOST,
-			Bytes:        pbBytes(lm.m.PageBytes(i)),
-			HostResident: true,
+			Index:       int32(i),
+			Kind:        pbBlockKind(c, i),
+			Location:    v1.BlockLocation_BLOCK_LOCATION_CPU,
+			Bytes:       pbBytes(lm.m.PageBytes(i)),
+			CpuResident: true,
 		}
 		if i < len(snap.hist) {
 			h := snap.hist[i]
@@ -284,7 +284,7 @@ func (e *Engine) pbPlacement(s *Session) *v1.Placement {
 			if i < len(snap.on) && snap.on[i] != "" {
 				bp.DeviceId = snap.on[i]
 			}
-			bp.HostResident = false
+			bp.CpuResident = false
 			devCount++
 		}
 		blocks = append(blocks, bp)
@@ -306,7 +306,7 @@ func (e *Engine) pbPlacement(s *Session) *v1.Placement {
 		ModelId:          lm.id,
 		Blocks:           blocks,
 		Declines:         declines,
-		HostBlockCount:   int32(c.NLayer - devCount),
+		CpuBlockCount:    int32(c.NLayer - devCount),
 		DeviceBlockCount: int32(devCount),
 		HeadOnDevice:     snap.headOnDev,
 		Demotions:        int64(snap.demotions),
@@ -328,7 +328,7 @@ func isCapacityDecline(why string) bool {
 func pbResidency(lm *LoadedModel) *v1.Residency {
 	m, fr := lm.m, lm.frames()
 	frames, in, out := m.PageStats(fr)
-	resident := m.HostResidentBlocks(fr)
+	resident := m.CPUResidentBlocks(fr)
 	blocks := m.Cfg.NLayer
 	budget := m.PageBudget(fr)
 	// fits is a boolean because the step is a cliff: one block short of

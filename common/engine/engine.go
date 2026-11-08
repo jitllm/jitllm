@@ -369,7 +369,7 @@ func (e *Engine) activate(en *entry) error {
 	// does. A choice of cards alone keeps the model off the CPU, so there the
 	// token takes the cards' refusal instead (engine.WithDevices).
 	relocate, _ := gpu.ListsCPU(en.spec)
-	o := server.SessionOptions{ModelID: en.lm.ID(), MaxSeq: window, KeepOffHost: !relocate}
+	o := server.SessionOptions{ModelID: en.lm.ID(), MaxSeq: window, KeepOffCpu: !relocate}
 	cacheOff := "turned off in Settings"
 	if e.st.KVCache.Get() {
 		o.KVStore, o.CacheKey, cacheOff = kvCache(path)
@@ -576,12 +576,12 @@ func allocStat(m *model.Model, st *engine.Instance, g *gpu.GPU, nBlocks int) ses
 	}
 	if st != nil {
 		a.DeviceBlocks = st.GPULayers()
-		a.HostBlocks = a.NBlocks - a.DeviceBlocks
-		a.HostKV = st.KVBytes()
+		a.CPUBlocks = a.NBlocks - a.DeviceBlocks
+		a.CPUKV = st.KVBytes()
 		a.Pos, a.MaxSeq = st.Pos(), st.MaxSeq()
 	}
 	if g == nil {
-		a.HostBlocks = a.NBlocks
+		a.CPUBlocks = a.NBlocks
 		return a
 	}
 

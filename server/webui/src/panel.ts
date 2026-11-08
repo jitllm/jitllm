@@ -267,7 +267,7 @@ function drawPlacement() {
       h("p", { class: "plain" }, `A model is a stack of ${nb} layers. Each layer runs either on the CPU or on a graphics card; a card is faster when it has room.`),
       h("div", { class: "seam" }, h("b", { text: String(nb) }), ` layers: ${sentence}`),
       h("div", { class: "blocks pick", attrs: { role: "group", "aria-label": "Layers: click, shift-click or drag to select" } }, ...p.blocks.map((b) => h("i", {
-        class: "blk " + (b.location === BlockLocation.DEVICE ? "dev" : "host") + (b.kind === BlockKind.LINEAR ? " lin" : "") + (b.kind === BlockKind.VISION ? " vis" : "") + (b.location !== BlockLocation.DEVICE && !b.hostResident ? " cold" : "") + (inSel(b.index) ? " sel" : ""),
+        class: "blk " + (b.location === BlockLocation.DEVICE ? "dev" : "host") + (b.kind === BlockKind.LINEAR ? " lin" : "") + (b.kind === BlockKind.VISION ? " vis" : "") + (b.location !== BlockLocation.DEVICE && !b.cpuResident ? " cold" : "") + (inSel(b.index) ? " sel" : ""),
         title: `layer ${b.index} · ${BlockKind[b.kind].toLowerCase()} · ${b.location === BlockLocation.DEVICE ? b.deviceId : "CPU"} · ${b.bytes?.human ?? ""}`,
         attrs: { "data-i": String(b.index) },
         on: {
@@ -308,7 +308,7 @@ function drawPlacement() {
 
 function deviceCard(d: Device): HTMLElement {
   const total = n(d.totalMemory?.bytes), free = n(d.freeMemory?.bytes);
-  const kind = d.kind === DeviceKind.HOST ? "host" : d.kind === DeviceKind.INTEGRATED ? "integrated" : "discrete";
+  const kind = d.kind === DeviceKind.CPU ? "host" : d.kind === DeviceKind.INTEGRATED ? "integrated" : "discrete";
   return h("section", { class: "card dev" + (d.available ? "" : " off") },
     h("h3", {}, d.name || d.ref?.id || "device", h("span", { class: "chip", text: kind })),
     h("div", { class: "id", text: d.ref?.id ?? "" }),
@@ -354,7 +354,7 @@ let loadOpts = { device: "", budgetGiB: "", maxBlocks: "" };
 // one already listed. "cpu" asks for the host alone.
 // A software renderer is no accelerator, and a device sharing the host's memory
 // is not a second pool; both stay pickable by name but are not in the default.
-const accelerator = (d: Device) => d.kind !== DeviceKind.HOST && d.available && !d.sameDeviceAs && !/llvmpipe|swiftshader|software/i.test(d.name);
+const accelerator = (d: Device) => d.kind !== DeviceKind.CPU && d.available && !d.sameDeviceAs && !/llvmpipe|swiftshader|software/i.test(d.name);
 function gpuIds(): string[] {
   const rank = (id: string) => (id.startsWith("vulkan") ? 1 : 0);
   return live.devs.filter((d) => accelerator(d) && !d.countsTowardHostBudget).map((d) => d.ref?.id ?? "").filter(Boolean).sort((a, b) => rank(a) - rank(b));

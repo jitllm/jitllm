@@ -114,7 +114,7 @@ func TestASharedDeviceSaysItIsNotASecondPool(t *testing.T) {
 // weights separately rather than folding them in, since they never page.
 func TestTheHostRowSeparatesWhatNeverPages(t *testing.T) {
 	got := HostLine(Allocation{
-		NBlocks: 48, HostBlocks: 44, DeviceBlocks: 4,
+		NBlocks: 48, CPUBlocks: 44, DeviceBlocks: 4,
 		HostUsed: 6 << 30, HostBudget: 8 << 30, Dense: 182_100_000,
 	})
 	for _, want := range []string{"44 block(s)", "6.00 GiB", "8.00 GiB", "dense"} {

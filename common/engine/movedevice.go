@@ -170,7 +170,7 @@ func relocateRuns(c *client.Conn, sid string, runs [][2]int32, to string) (int, 
 // pathName is a RelocationPath as the status line says it.
 func pathName(p v1.RelocationPath) string {
 	switch p {
-	case v1.RelocationPath_RELOCATION_PATH_HOST:
+	case v1.RelocationPath_RELOCATION_PATH_CPU:
 		return "host"
 	case v1.RelocationPath_RELOCATION_PATH_STAGED:
 		return "staged"

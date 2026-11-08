@@ -424,7 +424,7 @@ async function run() {
     try {
     for await (const ev of infer.generate(req, { signal: busy.signal })) {
       if (ev.event.case === "started") {
-        meta.dev = ev.event.value.deviceBlocks; meta.host = ev.event.value.hostBlocks;
+        meta.dev = ev.event.value.deviceBlocks; meta.host = ev.event.value.cpuBlocks;
         live.last.prompt = ev.event.value.promptTokens;
         live.last.queued = Number(ev.event.value.queuedMillis);
       } else if (ev.event.case === "token") {

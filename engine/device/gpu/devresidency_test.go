@@ -14,7 +14,7 @@ import (
 	"github.com/jitllm/jitllm/nn"
 )
 
-// TestDeviceBlocksDoNotStayHostResident: a block is a page placed on one
+// TestDeviceBlocksDoNotStayCPUResident: a block is a page placed on one
 // resource, so a block uploaded to the device must give up its host frame; a
 // fully offloaded model once kept a second copy on the host.
 //
@@ -24,7 +24,7 @@ import (
 //
 // Pages are the observable, not RSS: a released page is garbage, and when it
 // shows up is the collector's decision.
-func TestDeviceBlocksDoNotStayHostResident(t *testing.T) {
+func TestDeviceBlocksDoNotStayCPUResident(t *testing.T) {
 	src := testmodels.Path("Qwen3-1.7B-Q4_K_M.gguf")
 	if _, err := os.Stat(src); err != nil {
 		testmodels.Missing(t, "model not present: %s (set JITLLM_MODELS to the model directory)", src)
@@ -43,7 +43,7 @@ func TestDeviceBlocksDoNotStayHostResident(t *testing.T) {
 	st := testInstance(t, m, 64)
 	defer st.Close()
 	fr := st.FramesOn(nn.CPU)
-	if n := m.HostResidentBlocks(fr); n != 0 {
+	if n := m.CPUResidentBlocks(fr); n != 0 {
 		t.Errorf("Open and an instance left %d of %d blocks host-resident; neither should fault any",
 			n, m.Cfg.NLayer)
 	}
@@ -59,11 +59,11 @@ func TestDeviceBlocksDoNotStayHostResident(t *testing.T) {
 	}
 	// Every block the device took must have given up its host page. Blocks the
 	// device declined are the host's and may be resident.
-	if got, max := m.HostResidentBlocks(fr), m.Cfg.NLayer-placed; got > max {
+	if got, max := m.CPUResidentBlocks(fr), m.Cfg.NLayer-placed; got > max {
 		t.Errorf("%d blocks are on the device, yet %d of %d are still host-resident "+
 			"(at most %d should be) -- the page was copied, not placed",
 			placed, got, m.Cfg.NLayer, max)
 	}
 	t.Logf("%d of %d blocks on the device, %d host-resident",
-		placed, m.Cfg.NLayer, m.HostResidentBlocks(fr))
+		placed, m.Cfg.NLayer, m.CPUResidentBlocks(fr))
 }

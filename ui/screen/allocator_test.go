@@ -19,7 +19,7 @@ func TestTheMemoryMapDrawsALanePerTier(t *testing.T) {
 	sh := app.NewShell(nil, nil)
 	sh.Store.BlockMap.Set(splitBlocks(48, 4))
 	sh.Store.Alloc.Set(app.Allocation{
-		NBlocks: 48, HostBlocks: 44, DeviceBlocks: 4,
+		NBlocks: 48, CPUBlocks: 44, DeviceBlocks: 4,
 		HostUsed: 6 << 30, HostBudget: 8 << 30, Dense: 182_100_000, PageBytes: 128 << 20,
 		Devices: []app.DeviceUse{{
 			Name: "0:NVIDIA GeForce RTX 3050 Ti [cuda]", Short: "cuda:0", Blocks: 4,

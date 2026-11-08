@@ -21,13 +21,13 @@ import (
 // block whose history did not come home reads O(1).
 const prefillStreamNMSE = 1e-2
 
-// TestPrefillStreamsHostBlocks runs a three-and-a-half-chunk prompt on a card that holds
+// TestPrefillStreamsCPUBlocks runs a three-and-a-half-chunk prompt on a card that holds
 // half of the model: forced on, the prompt's host blocks stream through the
 // card and come home after it, and the prompt's logits and eight decoded tokens
 // -- which read the history the streamed blocks wrote on the card and brought
 // home -- stay with the host's; forced off nothing streams; on auto exactly one
 // decision is taken.
-func TestPrefillStreamsHostBlocks(t *testing.T) {
+func TestPrefillStreamsCPUBlocks(t *testing.T) {
 	p := testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf")
 	if _, err := os.Stat(p); err != nil {
 		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)

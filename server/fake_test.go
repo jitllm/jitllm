@@ -58,7 +58,7 @@ func (f *fakeBackend) choice(ctx context.Context, o GenerateOptions, _ int, emit
 		QueuedFor:    1500 * time.Millisecond,
 		QueueDepth:   2,
 		DeviceBlocks: 22,
-		HostBlocks:   10,
+		CPUBlocks:    10,
 		DeviceIDs:    []string{"cuda:0"},
 		Prefill:      40 * time.Millisecond,
 	}}); err != nil {

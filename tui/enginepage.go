@@ -189,8 +189,8 @@ func (p *enginePage) memory(w, h int) string {
 	if a.Dense > 0 {
 		b.WriteString(kvLine("dense", session.Bytes(a.Dense), iw) + "\n")
 	}
-	if a.HostKV > 0 {
-		b.WriteString(kvLine("host kv", session.Bytes(a.HostKV), iw) + "\n")
+	if a.CPUKV > 0 {
+		b.WriteString(kvLine("cpu kv", session.Bytes(a.CPUKV), iw) + "\n")
 	}
 	if a.PageBytes > 0 {
 		b.WriteString(kvLine("page", session.Bytes(a.PageBytes), iw) + "\n")

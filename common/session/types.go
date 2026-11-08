@@ -139,14 +139,14 @@ type Allocation struct {
 	// projection -- which are read on every token and are not part of the page
 	// budget.
 	Dense uint64
-	// HostBlocks is blocks running on the host, DeviceBlocks those on a
+	// CPUBlocks is blocks running on the host, DeviceBlocks those on a
 	// device, and the two need not add to the model's depth while a block is
 	// in flight.
-	HostBlocks, DeviceBlocks, NBlocks int
+	CPUBlocks, DeviceBlocks, NBlocks int
 	// PageBytes is one block page; the file holds NBlocks of them plus Dense.
 	PageBytes uint64
-	// HostKV is the attention history the host holds for the blocks it runs.
-	HostKV uint64
+	// CPUKV is the attention history the host holds for the blocks it runs.
+	CPUKV uint64
 	// Pos is how many positions the session holds, of a MaxSeq window.
 	Pos, MaxSeq int
 }

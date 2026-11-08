@@ -55,7 +55,7 @@ func cmdSessions(ctx context.Context, c cli, args []string) error {
 			MaxSeq:               int32(*maxSeq),
 			DeviceIds:            csv(*devices),
 			RelocateWhileServing: *grow,
-			KeepOffHost:          *keepOff,
+			KeepOffCpu:           *keepOff,
 			PromptCache:          *promptCache,
 			CacheKey:             *cacheKey,
 		}
@@ -135,7 +135,7 @@ func cmdSessions(ctx context.Context, c cli, args []string) error {
 		}
 		fmt.Fprintf(c.out, "  %-20s %-20s pos %-6d %2d dev / %2d host block(s)  kv %-11s [%s]\n",
 			s.GetSessionId(), s.GetModelId(), s.GetPosition(),
-			s.GetDeviceBlocks(), s.GetHostBlocks(), bytesOf(s.GetKvBytes()), where)
+			s.GetDeviceBlocks(), s.GetCpuBlocks(), bytesOf(s.GetKvBytes()), where)
 	}
 	return nil
 }
@@ -150,7 +150,7 @@ func printSession(w io.Writer, s *v1.Session, b *v1.SessionBudget) {
 	}
 	fmt.Fprintf(w, "\nsession %s   model %s\n", s.GetSessionId(), s.GetModelId())
 	fmt.Fprintf(w, "  position   %d of %d max_seq\n", s.GetPosition(), s.GetMaxSeq())
-	fmt.Fprintf(w, "  blocks     %d on %s, %d on cpu\n", s.GetDeviceBlocks(), where, s.GetHostBlocks())
+	fmt.Fprintf(w, "  blocks     %d on %s, %d on cpu\n", s.GetDeviceBlocks(), where, s.GetCpuBlocks())
 	fmt.Fprintf(w, "  kv         %s\n", bytesOf(s.GetKvBytes()))
 	state := "idle"
 	if s.GetGenerating() {

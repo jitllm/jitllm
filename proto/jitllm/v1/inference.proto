@@ -261,7 +261,7 @@ message GenerateStarted {
   // Where the blocks ran. A caller comparing two rates needs this, and the
   // engine's own rule is that a backend is quoted with every number.
   int32 device_blocks = 7;
-  int32 host_blocks = 8;
+  int32 cpu_blocks = 8;
   repeated string device_ids = 9;
 
   // Prefill wall time. When `batched`, the prompt went in chunks inside steps

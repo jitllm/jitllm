@@ -5863,7 +5863,7 @@ here verbatim.
   `voltaMV`'s ~2.3x over the dp4a twin and its ~1280-warp split, the
   `voltaTiles` 2x2 grid, `kb0Split`'s 80 SMs, `volta70AccMT`'s halved
   accumulate, `PagedPrefill70`'s selection check, `keepsSlot`'s
-  `TestPrefillStreamsHostBlocks` case) on a V100; the integrated-GPU figures
+  `TestPrefillStreamsCPUBlocks` case) on a V100; the integrated-GPU figures
   (`restride`'s 65535-group dispatch limit, `visrows.go`'s 2.3 GB budget,
   `subbudget.go`'s 0.93 s SigLIP block under i915) on an Iris Xe; the Apple
   Silicon figures (`flashTileAttn`'s 32-row blocking, `tileGemms`' 64x64 lead)
