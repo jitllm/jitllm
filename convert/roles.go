@@ -477,7 +477,7 @@ func identify(name string) (role jlm.Role, block int32, index int32, err error) 
 	// The second temporal plane of Qwen2-VL's conv3d patch embedding, which the
 	// GGUF spells as a second 4-D tensor. It is carried as index 1, folded into
 	// index -1 by prepareTower (the sum a still image reads), and kept as
-	// itself for a video's second frame (foldPatchPlanes).
+	// RoleVPatchEmbd2 for a video's second frame (foldPatchPlanes).
 	if rest == "v.patch_embd.weight.1" {
 		return jlm.RoleVPatchEmbd, block, 1, nil
 	}

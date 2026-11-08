@@ -795,6 +795,11 @@ func encodeVision(v *Vision) []byte {
 		w.u32(a.MaxSamples)
 		encodeTower(w, a.Tower)
 	}
+	// The video record last, after the audio tower's where there is one: a
+	// container with no video is the bytes it was.
+	if v.Tower != nil && v.Tower.Video != nil {
+		encodeVideo(w, v.Tower.Video)
+	}
 	return w.b
 }
 
@@ -843,12 +848,20 @@ func decodeVision(b []byte) (*Vision, error) {
 		v.Audio.MaxSamples = r.u32()
 		v.Audio.Tower = decodeTower(r)
 	}
+	if r.err == nil && len(r.b) > 0 && v.Tower != nil {
+		v.Tower.Video = decodeVideo(r)
+	}
 	if r.err != nil {
 		return nil, r.err
 	}
 	if v.Tower != nil {
 		if err := v.Tower.Valid(); err != nil {
 			return nil, err
+		}
+		if v.Tower.Video != nil {
+			if err := v.Tower.Video.Valid(); err != nil {
+				return nil, err
+			}
 		}
 	}
 	if v.Audio != nil && v.Audio.Tower != nil {

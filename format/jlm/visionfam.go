@@ -163,6 +163,10 @@ const (
 	// second (TOpPosAxes), written at conversion (resampler.py's
 	// get_2d_sincos_pos_embed, for any grid a picture's piece reaches).
 	RoleVRsPosAxes  Role = 65494
+	// RoleVPatchEmbd2 is a two-frame patch embedding's second plane, in
+	// RoleVPatchEmbd's layout, which holds the planes' sum: a video's pair of
+	// frames x0, x1 runs as x0*(W0+W1) + (x1-x0)*W1 (Video.Entry).
+	RoleVPatchEmbd2 Role = 65493
 	RoleVMNHardNorm Role = 65496
 )
 
@@ -176,6 +180,8 @@ func visionFamRoleName(r Role) (string, bool) {
 		return "v.token_embd.tile_marks", true
 	case RoleVRsPosAxes:
 		return "resampler.pos_axes", true
+	case RoleVPatchEmbd2:
+		return "v.patch_embd.weight.1", true
 	case RoleVProj3:
 		return "mm.model.fc", true
 	case RoleVPostAttnNorm:

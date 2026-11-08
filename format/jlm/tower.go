@@ -33,6 +33,9 @@ type Tower struct {
 	// HeadFrom is the chained blocks whose rows the head reads beside the
 	// last block's: block HeadFrom[j]'s are the head's value 1+j.
 	HeadFrom []int32
+	// Video is how the tower reads a video, nil for none. It is written
+	// after the record, in the vision section's tail.
+	Video *Video
 }
 
 // ChainBlock is one block of a chained tower: the rows and width of the
@@ -363,7 +366,9 @@ const (
 	// step's live rows by Bind[0]'s Span taps a channel, channel-major, zero
 	// past the live rows (graph.OpRowConv).
 	TOpRowConv OpCode = 40
-	topCodes   OpCode = 41
+	// TOpSub is In[0] less In[1].
+	TOpSub   OpCode = 41
+	topCodes OpCode = 42
 )
 
 // A stated rotary's layout (TOpRope's Chain).
@@ -815,7 +820,7 @@ func (op *TowerOp) arity() (in int, bind [2]int) {
 		return -1, [2]int{0, 0}
 	case TOpPosTable, TOpPosResample:
 		return 0, [2]int{1, 1}
-	case TOpAdd:
+	case TOpAdd, TOpSub:
 		return 2, [2]int{0, 0}
 	case TOpStated:
 		return -1, [2]int{0, 0}

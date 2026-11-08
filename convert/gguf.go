@@ -666,7 +666,7 @@ func prepareTower(s *jlm.Source) error {
 	}
 	for i := range s.Tensors {
 		switch s.Tensors[i].Role {
-		case jlm.RoleVPatchEmbd:
+		case jlm.RoleVPatchEmbd, jlm.RoleVPatchEmbd2:
 			if err := reshapePatchEmbd(&s.Tensors[i], int(v.PatchSize), int(v.NEmbd)); err != nil {
 				return err
 			}
