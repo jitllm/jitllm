@@ -63,9 +63,9 @@ func TestComposedHeadServesWhereTheBlocksDoNot(t *testing.T) {
 					}
 					served, declined := st.ServedPart(nn.ComposedHead)
 					// Every decode step's head, and the prompt's last row's.
-					if served != len(toks)+1 || declined != 0 || st.FormedAtStep != 0 {
+					if served != len(toks)+1 || declined != 0 || st.UnformedAtStep != 0 {
 						t.Fatalf("the composed head served %d of %d steps and the prompt's last row, was declined %d (%s) and %d formed at a step",
-							served, len(toks), declined, declinesOf(st), st.FormedAtStep)
+							served, len(toks), declined, declinesOf(st), st.UnformedAtStep)
 					}
 					// The logits the tier's head capped, capped again and uncapped.
 					worst, twice, none := 0.0, 0.0, 0.0

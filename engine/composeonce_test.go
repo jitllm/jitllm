@@ -22,7 +22,7 @@ import (
 // decode steps, a second session's prompt and decode, and a ragged batch of
 // four sequences whose prompts hold more rows than the reserved width compose
 // nothing, compile no kernel and build no scratch -- Stats.PartsFormed,
-// ScratchBuilds, DeclineBuilt, FormedAtStep and Counters.Compiles stay where
+// ScratchBuilds, DeclineBuilt, UnformedAtStep and Counters.Compiles stay where
 // the placement left them, and the composer serves every chunk's every block.
 // A prompt longer than the reserved width runs in chunks of it, and the
 // scheduler admits no step wider than it (RowsWidth). Each block is composed
@@ -185,7 +185,7 @@ func composesOnce(t *testing.T, m *model.Model, g *gpu.GPU, width int, to string
 		}
 		// A part formed at a step names itself: none runs after the
 		// placement.
-		if a := st.FormedAtStep - st0.FormedAtStep; a != 0 {
+		if a := st.UnformedAtStep - st0.UnformedAtStep; a != 0 {
 			t.Fatalf("%s: %d part(s) formed at a step", what, a)
 		}
 	}

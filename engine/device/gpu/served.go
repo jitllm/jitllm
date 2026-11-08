@@ -1186,12 +1186,12 @@ func (s Stats) StepDeclines() [numPartDeclines]int {
 }
 
 // FormedPart is how many of the parts of k formed at a step rather than
-// at a placement (Stats.FormedAtStepParts).
+// at a placement (Stats.UnformedAtStepParts).
 func (s Stats) FormedPart(k nn.Parts) int {
 	n := 0
-	for i := range s.FormedAtStepParts {
+	for i := range s.UnformedAtStepParts {
 		if k&(1<<i) != 0 {
-			n += s.FormedAtStepParts[i]
+			n += s.UnformedAtStepParts[i]
 		}
 	}
 	return n
@@ -1297,8 +1297,8 @@ func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*
 		return nil, errServedCold
 	}
 	if !g.prewarming {
-		g.FormedAtStep++
-		g.FormedAtStepParts[sk.kind]++
+		g.UnformedAtStep++
+		g.UnformedAtStepParts[sk.kind]++
 		g.LastErr = fmt.Sprintf("the composed %s at %d rows was not formed at placement (keys %d, seqs %d, stream %v, held %d, clone lane %v): a step composes nothing",
 			sk.kind, sk.rows, sk.keys, sk.seqs, sk.stream, sk.held, g.lane.clone)
 		return nil, errors.New(g.LastErr)

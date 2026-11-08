@@ -111,8 +111,8 @@ func servesComposed(t *testing.T, m *model.Model, ids []int32, bound float64, vs
 				t.Fatalf("%d block step(s) declined because %s", k, gpu.DeclineName(i))
 			}
 		}
-		if st.FormedAtStep != 0 {
-			t.Fatalf("%d composed block(s) formed at a step, not at the placement", st.FormedAtStep)
+		if st.UnformedAtStep != 0 {
+			t.Fatalf("%d composed block(s) formed at a step, not at the placement", st.UnformedAtStep)
 		}
 		t.Logf("%s: %d of %d block steps served; the head served at all %d steps",
 			dev, served, len(toks)*covered, len(toks))

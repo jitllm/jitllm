@@ -104,7 +104,7 @@ func TestEveryModelRunsOnACard(t *testing.T) {
 				if n := e.DeviceBlocks(); n != m.Cfg.NLayer {
 					t.Fatalf("the card took %d of %d blocks: %v (%s)", n, m.Cfg.NLayer, e.DeviceDeclines(), g.Err())
 				}
-				formed, before := g.Stats().FormedAtStep, cardDeclines(g)
+				formed, before := g.Stats().UnformedAtStep, cardDeclines(g)
 				for i := range 3 {
 					v, err := e.Embed([]int32{1, int32(2 + i), 3})
 					if err != nil {
@@ -115,9 +115,9 @@ func TestEveryModelRunsOnACard(t *testing.T) {
 				if n := e.DeviceBlocks(); n != m.Cfg.NLayer {
 					t.Fatalf("after the steps the card holds %d of %d blocks: %s", n, m.Cfg.NLayer, g.Err())
 				}
-				if s := g.Stats(); s.FormedAtStep != formed {
+				if s := g.Stats(); s.UnformedAtStep != formed {
 					t.Fatalf("the card formed %d part(s) at a step after placement (by part %v): %s",
-						s.FormedAtStep-formed, s.FormedAtStepParts, g.Err())
+						s.UnformedAtStep-formed, s.UnformedAtStepParts, g.Err())
 				}
 				refusedAtStep(t, g, before)
 				return
@@ -125,14 +125,14 @@ func TestEveryModelRunsOnACard(t *testing.T) {
 			st := cardInstance(t, m, g)
 			defer st.Close()
 			if m.Cfg.Head != nil {
-				formed, before := g.Stats().FormedAtStep, cardDeclines(g)
+				formed, before := g.Stats().UnformedAtStep, cardDeclines(g)
 				for i := range 3 {
 					finite(t, "MarkScores on the card", markerScores(t, st, i))
 				}
 				stayedOnCard(t, st, m, g)
-				if s := g.Stats(); s.FormedAtStep != formed {
+				if s := g.Stats(); s.UnformedAtStep != formed {
 					t.Fatalf("the card formed %d part(s) at a step after placement (by part %v): %s",
-						s.FormedAtStep-formed, s.FormedAtStepParts, g.Err())
+						s.UnformedAtStep-formed, s.UnformedAtStepParts, g.Err())
 				}
 				refusedAtStep(t, g, before)
 				return
@@ -155,7 +155,7 @@ func TestEveryModelRunsOnACard(t *testing.T) {
 					t.Fatalf("the card took %d of the tower's %d blocks: %v (%s)", n, len(m.Tower.Blocks), st.tower.s.DeviceDeclines(), g.Err())
 				}
 			}
-			formed, before := g.Stats().FormedAtStep, cardDeclines(g)
+			formed, before := g.Stats().UnformedAtStep, cardDeclines(g)
 			for i := range 3 {
 				lg, err := st.Forward(int32(1 + i))
 				if err != nil {
@@ -171,9 +171,9 @@ func TestEveryModelRunsOnACard(t *testing.T) {
 				finite(t, "EncodePicture on the card", rows)
 			}
 			stayedOnCard(t, st, m, g)
-			if s := g.Stats(); s.FormedAtStep != formed {
+			if s := g.Stats(); s.UnformedAtStep != formed {
 				t.Fatalf("the card formed %d part(s) at a step after placement (by part %v): %s",
-					s.FormedAtStep-formed, s.FormedAtStepParts, g.Err())
+					s.UnformedAtStep-formed, s.UnformedAtStepParts, g.Err())
 			}
 			refusedAtStep(t, g, before)
 		})

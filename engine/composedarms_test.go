@@ -65,7 +65,7 @@ func composedCovers(t *testing.T, m *model.Model, steps, placed int, exact bool,
 	declined := map[string]int{}
 	for _, g := range gs {
 		s := g.Stats()
-		formed += s.FormedAtStep
+		formed += s.UnformedAtStep
 		for i, k := range s.BlockDeclines() {
 			if k > 0 {
 				declined[gpu.DeclineName(i)] += k
@@ -111,9 +111,9 @@ func composedRan(t *testing.T, parts nn.Parts, allow []string, gs ...*gpu.GPU) {
 		s := g.Stats()
 		n, _ := s.ServedPart(parts)
 		served += n
-		formed += s.FormedAtStep
-		if s.FormedAtStep > 0 {
-			where = append(where, fmt.Sprintf("%v (%s)", s.FormedAtStepParts, g.Err()))
+		formed += s.UnformedAtStep
+		if s.UnformedAtStep > 0 {
+			where = append(where, fmt.Sprintf("%v (%s)", s.UnformedAtStepParts, g.Err()))
 		}
 		for i := range s.BlockDeclines() {
 			if k := s.BlockDeclines()[i]; k > 0 {
@@ -159,7 +159,7 @@ func composedBlocksRan(t *testing.T, parts nn.Parts, before, want int, gs ...*gp
 	declined, formed := map[string]int{}, 0
 	for _, g := range gs {
 		s := g.Stats()
-		formed += s.FormedAtStep
+		formed += s.UnformedAtStep
 		for i, k := range s.BlockDeclines() {
 			if k > 0 {
 				declined[gpu.DeclineName(i)] += k

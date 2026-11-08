@@ -75,8 +75,8 @@ func memoryAcrossMoves(t *testing.T, m *model.Model, parts nn.Parts, io ...Optio
 		}
 		if parts != 0 {
 			s := g.Stats()
-			if s.FormedAtStep != 0 {
-				t.Fatalf("cycle %d: %d composed part(s) formed at a step: a placement did not form them", c, s.FormedAtStep)
+			if s.UnformedAtStep != 0 {
+				t.Fatalf("cycle %d: %d composed part(s) formed at a step: a placement did not form them", c, s.UnformedAtStep)
 			}
 			if c == 0 {
 				charged = s.BudgetUsed

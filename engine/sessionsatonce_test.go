@@ -298,9 +298,9 @@ func stepAtOnce(t *testing.T, m *model.Model, prompts [2][]int32, spec string, b
 		if n, d := after.ServedPart(parts); n == 0 || d != 0 {
 			t.Fatalf("the composer served %d part steps and declined %d", n, d)
 		}
-		if f := after.FormedAtStep - before.FormedAtStep; f != 0 {
+		if f := after.UnformedAtStep - before.UnformedAtStep; f != 0 {
 			t.Fatalf("%d composed part(s) formed at a step: a lane did not hold its instance (by part %v; %d KV page(s) to host memory; last %q)",
-				f, after.FormedAtStepParts, after.KVEvictions-before.KVEvictions, g.Err())
+				f, after.UnformedAtStepParts, after.KVEvictions-before.KVEvictions, g.Err())
 		}
 		if err := lanesHold(g, blocks, parts, 2); err != nil {
 			t.Fatal(err)
@@ -567,7 +567,7 @@ func evictAtOnce(t *testing.T, m *model.Model, spec string, together bool, io ..
 		if st.devCount() != m.Cfg.NLayer {
 			t.Fatalf("session %d holds %d of %d blocks on the device after the run: eviction must not "+
 				"move blocks home (%s; %d part(s) formed at a step, by part %v)", k, st.devCount(), m.Cfg.NLayer, g.Err(),
-				after.FormedAtStep-before.FormedAtStep, after.FormedAtStepParts)
+				after.UnformedAtStep-before.UnformedAtStep, after.UnformedAtStepParts)
 		}
 	}
 	r := evictArm{ev: after.KVEvictions - before.KVEvictions, passes: after.ComposedStreamPasses - before.ComposedStreamPasses}
@@ -740,7 +740,7 @@ func relocateAtOnce(t *testing.T, m *model.Model, prompts [2][]int32, spec strin
 			if n-n0 == 0 || d-d0 != 0 {
 				t.Fatalf("tier %d: the composer served %d part steps and declined %d", k+1, n-n0, d-d0)
 			}
-			if f := s[1].FormedAtStep - s[0].FormedAtStep; f != 0 {
+			if f := s[1].UnformedAtStep - s[0].UnformedAtStep; f != 0 {
 				t.Fatalf("tier %d: %d composed part(s) formed at a step: a move left a lane without its instance", k+1, f)
 			}
 		}

@@ -64,8 +64,8 @@ func TestKimiK3ServesComposed(t *testing.T) {
 				if ne += st.ReplayedPart(nn.ComposedEmbed); ne < len(toks) || de != 0 {
 					t.Fatalf("the input rows served %d times and declined %d, want every step's (%s)", ne, de, declinesOf(st))
 				}
-				if st.FormedAtStep != 0 {
-					t.Fatalf("%d composed part(s) formed at a step, not at the placement", st.FormedAtStep)
+				if st.UnformedAtStep != 0 {
+					t.Fatalf("%d composed part(s) formed at a step, not at the placement", st.UnformedAtStep)
 				}
 				worst := 0.0
 				for i := range got {

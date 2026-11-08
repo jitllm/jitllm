@@ -59,8 +59,8 @@ func TestQwen2VLTowerRunsOnTheCard(t *testing.T) {
 							t.Fatalf("%d blocks on %s: %v", blocks, dev, err)
 						}
 						// Every part the picture ran was formed at the placement.
-						if st := d.Stats(); st.FormedAtStep != 0 {
-							t.Fatalf("%d of the tower's parts formed at a step on %s, not at the placement", st.FormedAtStep, dev)
+						if st := d.Stats(); st.UnformedAtStep != 0 {
+							t.Fatalf("%d of the tower's parts formed at a step on %s, not at the placement", st.UnformedAtStep, dev)
 						}
 						e, worst := nmseOf(got, want)
 						t.Logf("%s, %d of %d tower blocks: NMSE %.3e, max|d| %.3g from the CPU device's rows", dev, blocks, nb, e, worst)

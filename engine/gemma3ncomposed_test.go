@@ -136,8 +136,8 @@ func TestGemma3nServesComposed(t *testing.T) {
 				if np == 0 || dp != 0 {
 					t.Fatalf("the prompt's blocks served %d times and declined %d (%s)", np, dp, declinesOf(st))
 				}
-				if st.FormedAtStep != 0 {
-					t.Fatalf("%d composed part(s) formed at a step, not at the placement", st.FormedAtStep)
+				if st.UnformedAtStep != 0 {
+					t.Fatalf("%d composed part(s) formed at a step, not at the placement", st.UnformedAtStep)
 				}
 				worst := 0.0
 				for i := range got {

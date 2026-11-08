@@ -302,7 +302,7 @@ func TestDecodeGroupsHoldUnderLoad(t *testing.T) {
 			defer func() {
 				s1 := gl.lm.gpuTier().Stats()
 				t.Logf("groups %d: %s; captures %d, formed at a step %d, lanes %d (waited %d), KV grows %d, evictions %d, page-ins %d, stage overlaps %d",
-					groups, time.Since(t0).Round(time.Millisecond), s1.Captures-s0.Captures, s1.FormedAtStep-s0.FormedAtStep,
+					groups, time.Since(t0).Round(time.Millisecond), s1.Captures-s0.Captures, s1.UnformedAtStep-s0.UnformedAtStep,
 					s1.Lanes, s1.LanesWaited-s0.LanesWaited, s1.KVGrows-s0.KVGrows, s1.KVEvictions-s0.KVEvictions,
 					s1.PageIns-s0.PageIns, s1.StageOverlaps-s0.StageOverlaps)
 			}()

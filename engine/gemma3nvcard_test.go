@@ -43,7 +43,7 @@ func TestGemma3nTowerRunsOnTheCard(t *testing.T) {
 					s.Close()
 					t.Fatalf("%d of %d blocks on %s: %v (%s)", blocks, nb, dev, err, gd.Err())
 				}
-				formed := gd.Stats().FormedAtStep
+				formed := gd.Stats().UnformedAtStep
 				got, err := s.EncodePicture(img)
 				if err != nil {
 					s.Close()
@@ -59,8 +59,8 @@ func TestGemma3nTowerRunsOnTheCard(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if st := gd.Stats(); st.FormedAtStep != formed {
-					t.Fatalf("%d of the tower's parts formed at a picture on %s, not at the placement", st.FormedAtStep-formed, dev)
+				if st := gd.Stats(); st.UnformedAtStep != formed {
+					t.Fatalf("%d of the tower's parts formed at a picture on %s, not at the placement", st.UnformedAtStep-formed, dev)
 				}
 				e, _ := nmseOf(got[:soft*D], g.Image.EmbdA8)
 				t.Logf("%s: %d of %d blocks on the card: NMSE %.3e from the reference", dev, blocks, nb, e)

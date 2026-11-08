@@ -459,11 +459,12 @@ type Stats struct {
 	// parts in, by part: what Steps, counted where a step is emitted,
 	// does not see.
 	PartsReplayed [nn.NumParts]int
-	// FormedAtStep counts the parts formed at a step rather than at a
-	// placement or PrepHead: a form a step met first, built inside it.
-	FormedAtStep int
-	// FormedAtStepParts is FormedAtStep by part (FormedPart).
-	FormedAtStepParts [nn.NumParts]int
+	// UnformedAtStep counts the parts a step asked for that no placement or
+	// PrepHead formed, each declined unformed (servedFor): a step composes
+	// nothing.
+	UnformedAtStep int
+	// UnformedAtStepParts is UnformedAtStep by part (FormedPart).
+	UnformedAtStepParts [nn.NumParts]int
 	// BlockForms counts, by block, the times a device formed the block's
 	// served one-row part (servedFor): the composer's keyed form, compiled
 	// once per Key and shared by blocks of one structure, with the block's
@@ -814,9 +815,9 @@ func (s *Stats) add(o Stats) {
 		s.AttendLaunches[i] += o.AttendLaunches[i]
 		s.PartsReplayed[i] += o.PartsReplayed[i]
 	}
-	s.FormedAtStep += o.FormedAtStep
-	for i := range s.FormedAtStepParts {
-		s.FormedAtStepParts[i] += o.FormedAtStepParts[i]
+	s.UnformedAtStep += o.UnformedAtStep
+	for i := range s.UnformedAtStepParts {
+		s.UnformedAtStepParts[i] += o.UnformedAtStepParts[i]
 	}
 	if n := len(o.BlockForms); n > len(s.BlockForms) {
 		s.BlockForms = append(s.BlockForms, make([]int, n-len(s.BlockForms))...)
@@ -1372,7 +1373,7 @@ type devShared struct {
 	recCap int
 	// servedForms are the forms of the parts the composer serves, by the
 	// composer's Key, every lane's (served.go). prewarming says a placement
-	// or PrepHead is forming them (Stats.FormedAtStep).
+	// or PrepHead is forming them (Stats.UnformedAtStep).
 	servedForms map[composer.Key]*partForm
 	prewarming  bool
 	// copyGraphs are the copies over x by row width (servedCopy), each one
