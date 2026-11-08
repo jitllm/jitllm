@@ -300,6 +300,10 @@ func refusalList() []refusal {
 			When: "a picture over the byte or pixel limit, or a request's pictures over the request byte limit", Message: "over the limit of"}},
 		{Refusal: capabilities.Refusal{ID: "decision-non-decider", Endpoints: []string{"/v1/systemone"},
 			When: "the model is not a decision model", Message: "is not a decision model"}},
+		{Refusal: capabilities.Refusal{ID: "decision-no-audio", Endpoints: []string{"/v1/systemone"},
+			When: "a voice clip for a model whose container carries no audio tower", Message: "does not accept audio"}},
+		{Refusal: capabilities.Refusal{ID: "decision-audio-format", Endpoints: []string{"/v1/systemone"},
+			When: "a file that is not a base64 data URL of 16 kHz mono 16-bit PCM WAV", Message: "audio"}},
 		{Refusal: capabilities.Refusal{ID: "image-format", Endpoints: []string{"/v1/chat/completions", "/v1/messages"},
 			When: "a picture that is not PNG, JPEG, WebP or GIF", Message: "the pictures accepted are"}},
 	}

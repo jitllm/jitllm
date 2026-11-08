@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"image"
@@ -100,7 +101,24 @@ func (c *compat) systemOne(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	res, err := c.b.Decide(r.Context(), DecideOptions{Model: name, State: state, Questions: qs, Images: pics.imgs})
+	// "files" are voice clips, each a data URL of an audio type over a WAV
+	// the engine reads (engine.DecodeWAV).
+	var clips [][]float32
+	if fv, ok := req.Get("files"); ok && !fv.IsNone() {
+		if !fv.IsList() {
+			s1Fail(w, http.StatusUnprocessableEntity, "must be a list of audio data URLs", "files")
+			return
+		}
+		for i, u := range fv.AsList().Items {
+			clip, err := clipURL(u)
+			if err != nil {
+				s1Fail(w, http.StatusUnprocessableEntity, err.Error(), "files", i)
+				return
+			}
+			clips = append(clips, clip)
+		}
+	}
+	res, err := c.b.Decide(r.Context(), DecideOptions{Model: name, State: state, Questions: qs, Images: pics.imgs, Clips: clips})
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrInvalid):
@@ -115,4 +133,21 @@ func (c *compat) systemOne(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write(res.Body)
+}
+
+// clipURL is a request file's samples: a data URL of an audio type, base64,
+// over a WAV the engine reads.
+func clipURL(u jinja.Value) ([]float32, error) {
+	if !u.IsString() {
+		return nil, fmt.Errorf("must be an audio data URL")
+	}
+	head, data, ok := strings.Cut(u.AsString(), ",")
+	if !ok || !strings.HasPrefix(head, "data:audio/") || !strings.HasSuffix(head, ";base64") {
+		return nil, fmt.Errorf("must be a base64 data URL of an audio type")
+	}
+	raw, err := base64.StdEncoding.DecodeString(data)
+	if err != nil {
+		return nil, fmt.Errorf("is not base64: %v", err)
+	}
+	return engine.DecodeWAV(raw)
 }
