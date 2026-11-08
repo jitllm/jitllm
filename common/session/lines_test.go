@@ -136,11 +136,11 @@ func TestPlacementLineCountsEachTierSeparately(t *testing.T) {
 	r := byte(PlaceResident)
 	blocks := []byte{
 		byte(OnDevice(0)), byte(OnDevice(0)), byte(OnDevice(1)) | r,
-		byte(PlaceHost) | r, byte(PlaceHost) | r,
-		byte(PlaceHost),
+		byte(PlaceCPU) | r, byte(PlaceCPU) | r,
+		byte(PlaceCPU),
 	}
 	got := PlacementLine(blocks)
-	for _, want := range []string{"3 of 6 block(s) on a device", "2 on the host", "1 paged out"} {
+	for _, want := range []string{"3 of 6 block(s) on a card", "2 on the CPU", "1 paged out"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("PlacementLine = %q, want it to contain %q", got, want)
 		}

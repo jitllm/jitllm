@@ -84,9 +84,9 @@ func Qwen() Model {
 		case i < 13:
 			b[i] = byte(widgets.OnDevice(1))
 		case i == 13 || (i > 20 && i < 24):
-			b[i] = byte(widgets.PlaceHost)
+			b[i] = byte(widgets.PlaceCPU)
 		default:
-			b[i] = byte(widgets.PlaceHost | widgets.PlaceResident)
+			b[i] = byte(widgets.PlaceCPU | widgets.PlaceResident)
 		}
 	}
 	b[30] = byte(widgets.OnDevice(0))
@@ -375,7 +375,7 @@ func (e *Engine) Relocate(n int) {
 		if i < n {
 			m.Blocks[i] = byte(widgets.OnDevice(0) | widgets.PlaceResident)
 		} else {
-			m.Blocks[i] = byte(widgets.PlaceHost | widgets.PlaceResident)
+			m.Blocks[i] = byte(widgets.PlaceCPU | widgets.PlaceResident)
 		}
 	}
 	m.Alloc.DeviceBlocks, m.Alloc.CPUBlocks = n, len(m.Blocks)-n

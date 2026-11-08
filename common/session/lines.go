@@ -115,12 +115,12 @@ func DeviceUseLine(d DeviceUse) string {
 }
 
 // PlacementLine counts where the blocks of the loaded model went. A byte this
-// package does not know counts as host, so the card is never over-reported.
+// package does not know counts as the CPU's, so the card is never over-reported.
 func PlacementLine(b []byte) string {
 	if len(b) == 0 {
 		return "nothing loaded yet -- placement appears here after a load"
 	}
-	var dev, paged, hostN int
+	var dev, paged, cpu int
 	for _, p := range b {
 		switch p := Placement(p); {
 		case p.Device() >= 0:
@@ -128,10 +128,10 @@ func PlacementLine(b []byte) string {
 		case !p.Resident():
 			paged++
 		default:
-			hostN++
+			cpu++
 		}
 	}
-	return fmt.Sprintf("%d of %d block(s) on a device, %d on the host, %d paged out", dev, len(b), hostN, paged)
+	return fmt.Sprintf("%d of %d block(s) on a card, %d on the CPU, %d paged out", dev, len(b), cpu, paged)
 }
 
 // PagerLine is the container pager's counters.

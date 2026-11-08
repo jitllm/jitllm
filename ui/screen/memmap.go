@@ -19,7 +19,7 @@ func memoryMap(sh *app.Shell) widget.Widget {
 	}, st.BlockMap.AsReadonly(), st.Alloc.AsReadonly())
 	c := sh.P.Colors
 	return widgets.NewMemoryMap(view, widgets.MemColors{
-		Host:    c.Outline,
+		CPU:     c.Outline,
 		Devices: []widget.Color{c.Primary, c.Tertiary, c.Secondary},
 		Dense:   c.OnSurfaceVariant,
 		KV:      sh.P.Warn,

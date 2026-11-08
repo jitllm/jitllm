@@ -262,7 +262,7 @@ func noProbe() ([]DeviceInfo, error) { return nil, nil }
 func TestSpendableTotalSubtractsAUnifiedHeapInsteadOfAddingIt(t *testing.T) {
 	host := HostInfo{WeightBudget: 8 << 30}
 	devs := []DeviceInfo{
-		{ID: "cpu", Kind: KindHost, TotalMemory: 32 << 30, CountsTowardHostBudget: true, Available: true},
+		{ID: "cpu", Kind: KindCPU, TotalMemory: 32 << 30, CountsTowardHostBudget: true, Available: true},
 		{ID: "cuda:0", Kind: KindDiscrete, TotalMemory: 4 << 30, Available: true},
 		{ID: "vulkan:1", Kind: KindIntegrated, TotalMemory: 21 << 30, CountsTowardHostBudget: true, Available: true},
 		{ID: "vulkan:2", Kind: KindDiscrete, TotalMemory: 8 << 30, Available: false}, // no compute queue

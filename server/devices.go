@@ -42,11 +42,11 @@ type DeviceInfo struct {
 // DeviceKind mirrors the proto enum.
 type DeviceKind int
 
-// The device kinds: the host CPU, a discrete card with its own memory, and an
+// The device kinds: the CPU, a discrete card with its own memory, and an
 // integrated device whose memory is the host's.
 const (
 	KindUnspecified DeviceKind = iota
-	KindHost
+	KindCPU
 	KindDiscrete
 	KindIntegrated
 )
@@ -104,7 +104,7 @@ func probeDevices(rocm string, admit backend.Restriction) ([]DeviceInfo, error) 
 		ID:                     HostGateID,
 		Backend:                "cpu",
 		Name:                   hostName(),
-		Kind:                   KindHost,
+		Kind:                   KindCPU,
 		TotalMemory:            hostTotal(),
 		FreeMemory:             sched.MemBudget(),
 		CountsTowardHostBudget: true,
@@ -296,7 +296,7 @@ func (e *Engine) Host() HostInfo {
 func SpendableTotal(host HostInfo, devs []DeviceInfo) uint64 {
 	total := host.WeightBudget
 	for _, d := range devs {
-		if d.Kind == KindHost || d.CountsTowardHostBudget || !d.Available {
+		if d.Kind == KindCPU || d.CountsTowardHostBudget || !d.Available {
 			continue
 		}
 		// markSameDevice decided which entry of a shared card counts.
