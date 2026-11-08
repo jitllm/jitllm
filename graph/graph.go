@@ -209,6 +209,11 @@ const (
 	OpDropRows
 	// OpFold is each Span consecutive rows of In[0] as one row.
 	OpFold
+	// OpSplitRows is each row of In[0] as rows of Width of its elements, in
+	// order (OpFold's inverse): output row r*(w/Width)+k is elements
+	// k*Width.. of input row r, w its width (a frame's features as a grid's
+	// cells).
+	OpSplitRows
 	// OpSplice is In[0] with a picture's rows in place: row r takes the row
 	// of In[1] (the vision segment's projector, a picture's step's rows)
 	// that the step's request names for it, where it names one.
@@ -515,6 +520,8 @@ func (k OpKind) String() string {
 		return "drop_rows"
 	case OpFold:
 		return "fold"
+	case OpSplitRows:
+		return "split_rows"
 	case OpSplice:
 		return "splice"
 	case OpPosResample:
