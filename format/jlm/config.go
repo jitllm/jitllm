@@ -720,6 +720,9 @@ type Config struct {
 	// DecisionLabels is a label readout's statement, nil for a readout of
 	// another mechanism. The twenty-fifth optional tail; see encodeConfig.
 	DecisionLabels *DecisionLabels
+	// MarkerPrompt is a marker head's prompt (Flag2HeadBlocks), nil for a
+	// readout of another mechanism. The twenty-sixth optional tail.
+	MarkerPrompt *MarkerPrompt
 
 	// Acts are the FFN activations the blocks apply, each stated in the op
 	// language (Expr), and ActLayers each layer's index into them (none:
