@@ -4,10 +4,10 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/jitllm/jitllm/internal/testbin"
 	"net"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -25,10 +25,7 @@ func TestServiceRunsUnderSystemd(t *testing.T) {
 		!strings.Contains(string(out), "degraded") {
 		t.Skipf("no systemd user manager here (%v: %s)", err, out)
 	}
-	bin := filepath.Join(t.TempDir(), "jitllmd")
-	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
-		t.Fatalf("building jitllmd: %v\n%s", err, out)
-	}
+	bin := testbin.Build(t, "jitllmd", ".", ".")
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)

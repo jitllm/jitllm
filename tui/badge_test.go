@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"github.com/jitllm/jitllm/internal/testbin"
 	"net"
 	"os/exec"
 	"path/filepath"
@@ -88,12 +89,7 @@ func TestTheStatusBarFollowsAConnectedService(t *testing.T) {
 	}
 	addr := ln.Addr().String()
 	ln.Close()
-	bin := filepath.Join(t.TempDir(), "jitllmd"+exeSuffix())
-	build := exec.Command("go", "build", "-o", bin, "./cmd/jitllmd")
-	build.Dir = filepath.Join("..", "server")
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("building jitllmd: %v\n%s", err, out)
-	}
+	bin := testbin.Build(t, "jitllmd", filepath.Join("..", "server"), "./cmd/jitllmd")
 	cmd := exec.Command(bin, "serve", "-addr", addr, "-models", t.TempDir(), "-version", "5.4.3")
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)

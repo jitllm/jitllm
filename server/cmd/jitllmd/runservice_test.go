@@ -2,11 +2,11 @@ package main
 
 import (
 	"bytes"
+	"github.com/jitllm/jitllm/internal/testbin"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -39,15 +39,7 @@ func TestJitllmRunGoesThroughTheService(t *testing.T) {
 	s := httptest.NewServer(e.Handler())
 	defer s.Close()
 
-	bin := filepath.Join(t.TempDir(), "jitllm")
-	if runtime.GOOS == "windows" {
-		bin += ".exe"
-	}
-	build := exec.Command("go", "build", "-o", bin, "./cmd/jitllm")
-	build.Dir = filepath.Join("..", "..", "..")
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("building jitllm: %v\n%s", err, out)
-	}
+	bin := testbin.Build(t, "jitllm", filepath.Join("..", "..", ".."), "./cmd/jitllm")
 	var stdout, stderr bytes.Buffer
 	run := exec.Command(bin, "run", "-addr", s.URL, "-n", "6", "story", "Once upon a time")
 	// An empty models folder: the run must not find the model itself.
