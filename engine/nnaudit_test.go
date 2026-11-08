@@ -56,7 +56,8 @@ func TestEveryModelRunsOnACard(t *testing.T) {
 	defer g.Close()
 	slow, only := os.Getenv("JITLLM_SLOW") != "", os.Getenv("JITLLM_SLOW") == "only"
 	pick := os.Getenv("JITLLM_AUDIT_MODEL")
-	ran := 0
+	ran, last, held := 0, "", [2]uint64{}
+	defer func() { heldAfter(t, g, last, &held) }()
 	for _, src := range auditModels(t) {
 		if pick != "" && !strings.Contains(src.path, pick) {
 			continue
@@ -65,6 +66,8 @@ func TestEveryModelRunsOnACard(t *testing.T) {
 			continue
 		}
 		ran++
+		heldAfter(t, g, last, &held)
+		last = src.name
 		t.Run(src.name, func(t *testing.T) {
 			path := src.path
 			if src.hf {
@@ -109,6 +112,9 @@ func TestEveryModelRunsOnACard(t *testing.T) {
 					}
 					finite(t, "Embed on the card", v)
 				}
+				if n := e.DeviceBlocks(); n != m.Cfg.NLayer {
+					t.Fatalf("after the steps the card holds %d of %d blocks: %s", n, m.Cfg.NLayer, g.Err())
+				}
 				if s := g.Stats(); s.FormedAtStep != formed {
 					t.Fatalf("the card formed %d part(s) at a step after placement (by part %v): %s",
 						s.FormedAtStep-formed, s.FormedAtStepParts, g.Err())
@@ -123,6 +129,7 @@ func TestEveryModelRunsOnACard(t *testing.T) {
 				for i := range 3 {
 					finite(t, "MarkScores on the card", markerScores(t, st, i))
 				}
+				stayedOnCard(t, st, m, g)
 				if s := g.Stats(); s.FormedAtStep != formed {
 					t.Fatalf("the card formed %d part(s) at a step after placement (by part %v): %s",
 						s.FormedAtStep-formed, s.FormedAtStepParts, g.Err())
@@ -163,6 +170,7 @@ func TestEveryModelRunsOnACard(t *testing.T) {
 				}
 				finite(t, "EncodePicture on the card", rows)
 			}
+			stayedOnCard(t, st, m, g)
 			if s := g.Stats(); s.FormedAtStep != formed {
 				t.Fatalf("the card formed %d part(s) at a step after placement (by part %v): %s",
 					s.FormedAtStep-formed, s.FormedAtStepParts, g.Err())
@@ -172,6 +180,31 @@ func TestEveryModelRunsOnACard(t *testing.T) {
 	}
 	if ran == 0 {
 		t.Fatalf("no model ran on the card (JITLLM_AUDIT_MODEL %q) -- this gate proved nothing", pick)
+	}
+}
+
+// heldAfter fails t where card g holds more after model name's subtest closed
+// its instances and the model than it held before it, the bytes charged or
+// allocated: one card serves every model in turn, and what one leaves the
+// next finds (an input table once stayed resident under the entry the next
+// model's took). held is what the card held before.
+func heldAfter(t *testing.T, g *gpu.GPU, name string, held *[2]uint64) {
+	t.Helper()
+	s := g.Stats()
+	now := [2]uint64{uint64(s.BudgetUsed), uint64(s.Allocated)}
+	if name != "" && (now[0] > held[0] || now[1] > held[1]) {
+		t.Errorf("after %s the card holds %d bytes charged and %d allocated, %d and %d before it", name, now[0], now[1], held[0], held[1])
+	}
+	*held = now
+}
+
+// stayedOnCard fails t where the card no longer holds every block after the
+// steps: a device failure moves them to the CPU (demoteAll), and the steps'
+// answers then say nothing about the card.
+func stayedOnCard(t *testing.T, st *Instance, m *model.Model, g *gpu.GPU) {
+	t.Helper()
+	if n := st.GPULayers(); n != m.Cfg.NLayer {
+		t.Fatalf("after the steps the card holds %d of %d blocks: %s", n, m.Cfg.NLayer, g.Err())
 	}
 }
 

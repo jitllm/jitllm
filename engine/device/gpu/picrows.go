@@ -379,8 +379,11 @@ func (g *devTier) rowsVector(li int, r jlm.Role, v []float32) (backend.Buf, erro
 }
 
 // releaseRows gives back what the rows hold of the model: their weights'
-// residents, and what closeRows frees. Callers hold g.mu.
+// residents, and what closeRows frees. The buffers and vectors were charged
+// as scratch (PrepRows and RunRows run in a scratch window), so they are
+// freed in one too, which refunds them. Callers hold g.mu.
 func (g *devTier) releaseRows() {
+	defer g.scratchWin().close()
 	for _, r := range g.rows.w {
 		for k, v := range g.res {
 			if v == r {

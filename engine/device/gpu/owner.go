@@ -151,8 +151,16 @@ func (g *devTier) releaseModel() {
 	g.partsClose()
 	g.releaseRows()
 	// The head's projection is keyed on its address like a lone matvec's, and
-	// goes with its scratch.
-	if bs := g.bs; bs != nil && bs.head != nil {
+	// goes with its scratch -- the home set's, whichever set is in use: a
+	// release after a picture finds the tower's set current.
+	sets := []*blockScratch{g.bs}
+	for _, s := range g.geoSets {
+		sets = append(sets, s.bs)
+	}
+	for _, bs := range sets {
+		if bs == nil || bs.head == nil {
+			continue
+		}
 		r := bs.head
 		g.dropHeadScratch(bs)
 		for k, v := range g.res {
@@ -162,6 +170,16 @@ func (g *devTier) releaseModel() {
 			}
 		}
 		if r.ok {
+			g.refund(r.bytes())
+			g.freeResident(r)
+		}
+	}
+	// Whatever else the model made resident goes with it: the input rows'
+	// tables, which a head given back leaves held (embedTable). A resident is
+	// keyed by its block or its entry, and the next model's would find it.
+	for k, r := range g.res {
+		delete(g.res, k)
+		if r != nil && r.ok {
 			g.refund(r.bytes())
 			g.freeResident(r)
 		}
@@ -192,4 +210,5 @@ func (g *devTier) releaseModel() {
 	g.geoCur = geoKey{}
 	g.visCap, g.visMax, g.visKeys, g.visSmall, g.visFirst = 0, 0, 0, 0, 0
 	g.visWarm = [2]int{}
+	g.planeCap = 0
 }
