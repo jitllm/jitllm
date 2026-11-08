@@ -1459,6 +1459,22 @@
         "message": "does not accept audio"
       },
       {
+        "id": "decision-no-video",
+        "endpoints": [
+          "/v1/systemone"
+        ],
+        "when": "a video for a model whose container states no tower that reads one",
+        "message": "does not accept video"
+      },
+      {
+        "id": "decision-video-oversize",
+        "endpoints": [
+          "/v1/systemone"
+        ],
+        "when": "a request's video frames over the pixel limit (default 8 pictures of the picture limit)",
+        "message": "over the limit of"
+      },
+      {
         "id": "decision-audio-format",
         "endpoints": [
           "/v1/systemone"

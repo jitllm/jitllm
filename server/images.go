@@ -62,6 +62,9 @@ type ImagePolicy struct {
 	MaxPixels int64
 	// MaxImages bounds the pictures of one request (default 8).
 	MaxImages int
+	// MaxVideoPixels bounds the pixels of a request's video frames together
+	// (default MaxImages pictures of MaxPixels).
+	MaxVideoPixels int64
 
 	// fetchSlots is the server-wide fetch bound, made once by withDefaults.
 	fetchSlots chan struct{}
@@ -97,6 +100,9 @@ func (p ImagePolicy) withDefaults() ImagePolicy {
 	}
 	if p.MaxImages <= 0 {
 		p.MaxImages = DefaultImageMaxImages
+	}
+	if p.MaxVideoPixels <= 0 {
+		p.MaxVideoPixels = int64(p.MaxImages) * p.MaxPixels
 	}
 	if p.FetchTimeout <= 0 {
 		p.FetchTimeout = DefaultImageFetchTimeout

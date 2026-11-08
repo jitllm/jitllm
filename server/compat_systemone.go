@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"image"
 	"io"
+	"math"
 	"net/http"
 	"strings"
 
@@ -118,7 +119,65 @@ func (c *compat) systemOne(w http.ResponseWriter, r *http.Request) {
 			clips = append(clips, clip)
 		}
 	}
-	res, err := c.b.Decide(r.Context(), DecideOptions{Model: name, State: state, Questions: qs, Images: pics.imgs, Clips: clips})
+	// "videos" are videos, each a list of picture URLs or an object of
+	// "frames", that list, and "fps", their rate; each frame is read as a
+	// picture is, the frames' pixels together bounded (MaxVideoPixels).
+	var videos []Video
+	if vv, ok := req.Get("videos"); ok && !vv.IsNone() {
+		if !vv.IsList() {
+			s1Fail(w, http.StatusUnprocessableEntity, "must be a list of videos", "videos")
+			return
+		}
+		fp := pics.p
+		fp.MaxImages = math.MaxInt
+		frames := &pictures{p: fp}
+		var px int64
+		for i, v := range vv.AsList().Items {
+			vid := Video{}
+			fv := v
+			if v.IsDict() {
+				fv, _ = v.AsDict().Get("frames")
+				if rv, ok := v.AsDict().Get("fps"); ok && !rv.IsNone() {
+					switch {
+					case rv.IsInt():
+						vid.FPS = float64(rv.AsInt())
+					case rv.IsFloat():
+						vid.FPS = rv.AsFloat()
+					}
+					if !(vid.FPS > 0) {
+						s1Fail(w, http.StatusUnprocessableEntity, "must be a positive number of frames a second", "videos", i, "fps")
+						return
+					}
+				}
+			}
+			if !fv.IsList() || len(fv.AsList().Items) == 0 {
+				s1Fail(w, http.StatusUnprocessableEntity, "must be a list of frame URLs or an object of them", "videos", i)
+				return
+			}
+			at := len(frames.imgs)
+			for j, u := range fv.AsList().Items {
+				if !u.IsString() {
+					s1Fail(w, http.StatusUnprocessableEntity, "must be an image URL", "videos", i, j)
+					return
+				}
+				url := u.AsString()
+				if err := frames.add(fmt.Sprintf("videos[%d][%d]", i, j), func() (image.Image, error) {
+					return frames.p.imageURL(r.Context(), url)
+				}); err != nil {
+					s1Fail(w, http.StatusUnprocessableEntity, err.Error(), "videos", i, j)
+					return
+				}
+				b := frames.imgs[len(frames.imgs)-1].Bounds()
+				if px += int64(b.Dx()) * int64(b.Dy()); px > fp.MaxVideoPixels {
+					s1Fail(w, http.StatusUnprocessableEntity, fmt.Sprintf("brings the request's video frames over the limit of %d pixels", fp.MaxVideoPixels), "videos", i, j)
+					return
+				}
+			}
+			vid.Frames = frames.imgs[at:]
+			videos = append(videos, vid)
+		}
+	}
+	res, err := c.b.Decide(r.Context(), DecideOptions{Model: name, State: state, Questions: qs, Images: pics.imgs, Clips: clips, Videos: videos})
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrInvalid):

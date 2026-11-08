@@ -73,6 +73,10 @@ func towerStater(p jlm.Projector) func(*jlm.Source) (*jlm.Tower, error) {
 // container of p written without one is a stale conversion.
 func StatesTower(p jlm.Projector) bool { return towerStater(p) != nil }
 
+// StatesVideo reports whether the converter states how a projector's tower
+// reads a video (jlm.Video).
+func StatesVideo(p jlm.Projector) bool { return p == jlm.ProjQwen3VL }
+
 // idefics3Tower is SmolVLM's tower as llama.cpp's mtmd runs it, which this
 // container matches: the picture squashed to the tower's square by two-tap
 // bilinear and normalised, patches through one matrix plus the learned
