@@ -185,7 +185,13 @@ func (s *Instance) blockSpec(li int) nn.BlockSpec {
 	if s.kvl.fmt == nn.KVQ8 {
 		p.KVQ8 = s.kvlAt(li).headDim
 	}
-	p.Bidir = s.c.LayerKind(li).Attends() && s.c.BidirAt(li)
+	// A non-causal model's recurrent block reads both ways too: its
+	// convolution is centred over the whole run.
+	k := s.c.LayerKind(li)
+	p.Bidir = k.Attends() && s.c.BidirAt(li) || k.Recurrent() && s.c.NonCausal
+	if k.Recurrent() && s.c.NonCausal {
+		p.Run = s.maxSeq
+	}
 	p.Whole = s.wholePicture(li)
 	return p
 }

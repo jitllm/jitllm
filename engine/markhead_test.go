@@ -38,7 +38,8 @@ type markerCase struct {
 // markerCases is Laya's fixture (f32 against the reference's f32) and the
 // published Laya (converted to BF16).
 func markerCases() []markerCase {
-	return []markerCase{{"laya/fixture/laya-fixture.gguf", "laya-fixture", 2e-3}, {"laya/gguf/Laya-BF16.gguf", "laya", 5e-2}}
+	return []markerCase{{"laya/fixture/laya-fixture.gguf", "laya-fixture", 2e-3}, {"laya/gguf/Laya-BF16.gguf", "laya", 5e-2},
+		{"d1-omni/d1-omni-600M-F16.gguf", "d1-omni", 5e-2}}
 }
 
 // TestMarkerHeadMatchesTheReference holds a marker head (jlm.Flag2HeadBlocks)

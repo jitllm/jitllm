@@ -506,9 +506,11 @@ const (
 // history holding values in its keys, the rotaries it turns by (each device
 // states its own device to the composer), where its side input starts, the
 // table of rows its rows read (Table, TableRow bytes a row; nil for none),
-// whether its history is kept at f32, whether it attends both ways inside a
-// prompt's runs (Bidir), reads the whole picture (Whole) or steps a recurrent
-// state in order (Rec) -- or why it is not to be asked (Why).
+// whether its history is kept at f32, whether it reads both ways inside a
+// prompt's runs (Bidir: attends, or convolves centred), reads the whole
+// picture (Whole) or steps a recurrent state in order (Rec) -- or why it is
+// not to be asked (Why). Run is the most rows a run of a block reading both
+// ways holds, the instance's.
 type BlockSpec struct {
 	Why           Decline
 	Source, Graph *graph.Graph
@@ -528,6 +530,7 @@ type BlockSpec struct {
 	KVQ8         int
 	Bidir, Whole bool
 	Rec          bool
+	Run          int
 }
 
 type LayerPlan struct {

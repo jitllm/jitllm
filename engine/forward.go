@@ -1429,7 +1429,7 @@ func (s *Instance) layerWeightsAt(li int, l *model.Layer, banks *[3]nn.Weight, e
 	}
 	// A LayerNorm always hands the device a bias -- zeros where the file has
 	// none (command-r) -- because the apply kernel takes one.
-	if s.c.LayerNorm {
+	if s.c.LayerNormAt(li) {
 		w.AttnNormB = s.m.LnBias(l.AttnNormB)
 		if l.FfnNorm != nil {
 			w.FFNNormB = s.m.LnBias(l.FfnNormB)
