@@ -1253,6 +1253,10 @@ type Model struct {
 	Tower      *TowerGraphs
 	TowerBase  int
 	TowerDense Layer
+	// Audio is the container's stated audio tower lowered into graphs
+	// (BuildAudioGraphs), nil for a model with none: a chained tower whose
+	// blocks follow the vision tower's.
+	Audio *TowerGraphs
 	// towerTaps is each tap's tensors (jlm.TowerTap): the dense region's at
 	// its block's index.
 	TowerTaps []Layer
@@ -1571,6 +1575,12 @@ func openContainer(path string, options ...Option) (*Model, error) {
 			return nil, err
 		}
 		m.Tower = tg
+		if a := c.Vision().Audio; a != nil && a.Tower != nil {
+			if m.Audio, err = m.BuildAudioGraphs(); err != nil {
+				c.Close()
+				return nil, err
+			}
+		}
 	}
 	return m, nil
 }
