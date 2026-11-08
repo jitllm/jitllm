@@ -612,12 +612,3 @@ func nmseF32(want, got []float32) float64 {
 	}
 	return num / den
 }
-
-// Hunyuan's dense fixture runs the five principles' relocation and paging gates
-// (principleFixtures): its after-rotary norm caches an unweighted k on every
-// tier, which a relocated history must read the same way. The mixture pages
-// under TestMoEFamiliesPageWithTheSameAnswer, as the other families do --
-// TestPagingDoesNotChangeTheAnswer counts frames of one page size, and a
-// mixture's expert pages are another.
-func init() {
-}

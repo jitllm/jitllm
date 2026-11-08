@@ -261,13 +261,6 @@ func TestSSMFamiliesOnEveryDevice(t *testing.T) {
 	}
 }
 
-// The five principles on plain Mamba-2: paging, relocation (the recurrent
-// summary moving with its block) and a batch that faults its blocks in run
-// it, and so does the allocation gate (decodealloc_test.go). Each family's
-// file registers its own fixtures the same way.
-func init() {
-}
-
 // TestSSMFamiliesPageWithTheSameAnswer is the paging principle on every
 // family, the mixtures' expert pages with it: under a one-page budget every
 // block is evicted and re-read, recurrent and attending alike, and decode,

@@ -241,13 +241,3 @@ func TestKimiK3DeviceRunsTheChunkWhole(t *testing.T) {
 		t.Skip("no device on this host")
 	}
 }
-
-// Kimi-K3 runs the five principles' relocation and paging gates
-// (principleFixtures): its KDA blocks carry a recurrent summary and its MLA
-// blocks a latent history, both of which page and move with the block.
-//
-// Its safetensors inputs (KimiK3ForConditionalGeneration, the release's
-// compressed-tensors MXFP4 experts in the second) run the generated-code
-// sweep, TestEveryModelRunsGenerated, as safetensors.
-func init() {
-}

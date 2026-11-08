@@ -9,11 +9,6 @@ import (
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
-// dbrx's mixture, its q, k and v clamped, joins the gates of the five
-// principles: relocation, paging and a warm step that allocates nothing.
-func init() {
-}
-
 // cpuFeatureFixtures are float fixtures of the attention features the front
 // end states as ops that the CPU device holds whole -- mistral3's attention
 // temperature on every layer, read at each row's position; cohere2's and
