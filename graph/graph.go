@@ -98,7 +98,9 @@ const (
 	// zero past the grid's edges: a depthwise convolution at SAME
 	// padding. Where Stride is above one the output is the grid that
 	// stride takes, ceil(H/Stride) x ceil(GridW/Stride) rows (its value's
-	// Rows), padded as TensorFlow pads, the smaller half first.
+	// Rows), padded as TensorFlow pads, the smaller half first -- or, where
+	// Offset is set, Offset rows and columns before the grid as PyTorch's
+	// padding pads (Offset Taps/2 keeps the same output grid).
 	OpConv
 	// OpMap is an elementwise function Fn of its operands: In[0], In[1] and
 	// In[2] in order, then Weight[0] (a bound vector, a stored table of

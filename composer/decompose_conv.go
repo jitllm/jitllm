@@ -38,9 +38,14 @@ func decomposeConv(o graph.Op, c *Context) ([]Prim, error) {
 	h := T / 2
 	// The padding before the grid's first row and column: h at stride one.
 	padY, padX := max((Ho-1)*s+T-H, 0)/2, max((Wo-1)*s+T-W, 0)/2
+	if p := o.Attr.Offset; p > 0 {
+		padY, padX = p, p
+	}
 	switch {
 	case T < 1 || T%2 == 0:
 		return nil, fmt.Errorf("a convolution of %d taps: a centred one is odd", T)
+	case o.Attr.Offset > T/2:
+		return nil, fmt.Errorf("a convolution of %d taps padded by %d: the output grid would grow", T, o.Attr.Offset)
 	case H*W != R:
 		return nil, fmt.Errorf("a convolution over %d rows, not a whole grid %d wide", R, W)
 	case osh[0] != Ho*Wo || osh[1] != C:
