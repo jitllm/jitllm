@@ -58,8 +58,11 @@ type towerRun struct {
 	// palette's entries; tapsW and tapsH the source size the request's taps
 	// are for.
 	pad          []uint32
-	ent          [4 * 256]byte
+	ent, ent2    [4 * 256]byte
 	tapsW, tapsH int
+	// tapsVideo says the taps in the request are a video class's, whose
+	// count is not a picture class's.
+	tapsVideo bool
 	// pics is a prompt's pictures' rows, one buffer a picture, deeps their
 	// taps' rows, and spans the prompt's spans with them in place
 	// (encodePictures).
@@ -108,7 +111,7 @@ func (in *Instance) newTowerRun(tg *model.TowerGraphs, base int, t *jlm.Tower) (
 		return nil, err
 	}
 	words := 0
-	for _, cl := range tg.Classes {
+	for _, cl := range append(tg.Classes[:len(tg.Classes):len(tg.Classes)], tg.Videos...) {
 		words = max(words, (cl.Pic.PicW+cl.Pic.PicH)*(cl.Pic.Taps+1))
 	}
 	tr := &towerRun{s: ts, base: base, req: make([]uint32, composer.RequestPicTaps+words)}
@@ -121,7 +124,8 @@ func (in *Instance) newTowerRun(tg *model.TowerGraphs, base int, t *jlm.Tower) (
 		}
 	}
 	plans := nn.TowerPlans{Head: ts.partPlan(tg.Head, nn.DeclineNoGraph, hn, nil), Chain: chain}
-	for _, cl := range tg.Classes {
+	// A video class's entry is class len(tg.Classes)+i of the parts'.
+	for _, cl := range append(tg.Classes[:len(tg.Classes):len(tg.Classes)], tg.Videos...) {
 		e := map[uint8]nn.PartPlan{}
 		for px, g := range cl.Entry {
 			e[px] = ts.partPlan(g, nn.DeclineNoGraph, cl.Rows, nil)
@@ -279,10 +283,13 @@ func (s *Instance) encodePicture(img image.Image, dst, deep []float32) ([]float3
 	ts, m := tr.s, s.m
 	tg := m.Tower
 	pl.Request(tr.req)
+	if tr.tapsVideo {
+		tr.tapsW, tr.tapsVideo = 0, false
+	}
 	if a := tg.Classes[0].Pic; a.Chain == graph.ChainPIL && (pl.W > a.PicSide || pl.H > a.PicSide) {
 		return nil, fmt.Errorf("model: a %dx%d picture is past the %d pixels a side the tower's resize reaches", pl.W, pl.H, a.PicSide)
 	}
-	D, E := int(m.Container.Vision().ProjDim), int(m.Container.Vision().NEmbd)
+	D := int(m.Container.Vision().ProjDim)
 	if want := tg.PicRows(pl.W, pl.H); len(dst) != want*D || len(deep) != len(tg.Taps)*want*D {
 		return nil, fmt.Errorf("model: %d values and %d for its taps' for a picture's %d rows of %d", len(dst), len(deep), want, D)
 	}
@@ -300,26 +307,65 @@ func (s *Instance) encodePicture(img image.Image, dst, deep []float32) ([]float3
 			sq, _ = tg.Square(pl.W, pl.H, i)
 		}
 		tr.squareRequest(pl, sq, tg.Classes[sq.Class].Pic, squares)
-		n := tg.Lead + sq.Gw*sq.Gh + tg.Tail
-		tr.size(n, E)
-		if err := tr.parts.Entry(sq.Class, pl.Px, words, tr.req, tr.posTab, n, tr.rows); err != nil {
-			return nil, fmt.Errorf("model: %w", err)
-		}
-		if err := ts.towerBlocks(tr, sq.Gw, tr.windows(tg, sq.Gw, sq.Gh)); err != nil {
-			return nil, fmt.Errorf("model: the tower's blocks: %w", err)
-		}
-		if err := tr.parts.Head(n, tr.req, tr.posTab, tr.blk, dst[at*D:]); err != nil {
-			return nil, fmt.Errorf("model: %w", err)
-		}
-		// Each tap's rows at the same rows of its plane of deep.
-		for j := range tg.Taps {
-			if err := tr.parts.Tap(j, n, tr.req, tr.posTab, tr.tapRows[j], deep[(j*len(dst)/D+at)*D:]); err != nil {
-				return nil, fmt.Errorf("model: %w", err)
-			}
+		if err := ts.towerSquare(tr, sq, sq.Class, pl.Px, words, dst, deep, at); err != nil {
+			return nil, err
 		}
 		at += tg.SquareOut(sq)
 	}
 	return dst, nil
+}
+
+// towerSquare runs square sq, its request written, through the tower: the
+// entry's class class over the step's picture words, the blocks, the head
+// into dst's rows from at, and each tap into deep's.
+func (ts *Instance) towerSquare(tr *towerRun, sq model.Square, class int, px uint8, words []uint32, dst, deep []float32, at int) error {
+	tg := ts.m.Tower
+	D, E := int(ts.m.Container.Vision().ProjDim), int(ts.m.Container.Vision().NEmbd)
+	n := tg.Lead + sq.Gw*sq.Gh + tg.Tail
+	tr.size(n, E)
+	if err := tr.parts.Entry(class, px, words, tr.req, tr.posTab, n, tr.rows); err != nil {
+		return fmt.Errorf("model: %w", err)
+	}
+	if err := ts.towerBlocks(tr, sq.Gw, tr.windows(tg, sq.Gw, sq.Gh)); err != nil {
+		return fmt.Errorf("model: the tower's blocks: %w", err)
+	}
+	if err := tr.parts.Head(n, tr.req, tr.posTab, tr.blk, dst[at*D:]); err != nil {
+		return fmt.Errorf("model: %w", err)
+	}
+	// Each tap's rows at the same rows of its plane of deep.
+	for j := range tg.Taps {
+		if err := tr.parts.Tap(j, n, tr.req, tr.posTab, tr.tapRows[j], deep[(j*len(dst)/D+at)*D:]); err != nil {
+			return fmt.Errorf("model: %w", err)
+		}
+	}
+	return nil
+}
+
+// encodePair is a video pair's rows into dst and its taps' into deep: both
+// frames resized to sq's size, the video class's entry over the two, then
+// the tower's blocks and head as a picture's square runs them.
+func (s *Instance) encodePair(f0, f1 image.Image, sq model.Square, dst, deep []float32) error {
+	tr := s.tower
+	tr.encodes++
+	words, pl, off, err := model.PairWords(f0, f1, &tr.pad, &tr.ent, &tr.ent2)
+	if err != nil {
+		return err
+	}
+	tg := s.m.Tower
+	a := tg.Videos[sq.Class].Pic
+	if a.Chain == graph.ChainPIL && (pl.W > a.PicSide || pl.H > a.PicSide) {
+		return fmt.Errorf("model: a video of %dx%d frames is past the %d pixels a side the tower's resize reaches", pl.W, pl.H, a.PicSide)
+	}
+	if want := tg.SquareOut(sq) * int(s.m.Container.Vision().ProjDim); len(dst) != want {
+		return fmt.Errorf("model: %d values for a video pair's %d", len(dst), want)
+	}
+	pl.Request(tr.req)
+	tr.req[composer.RequestPicFrame] = uint32(off)
+	if !tr.tapsVideo {
+		tr.tapsW, tr.tapsVideo = 0, true
+	}
+	tr.squareRequest(pl, sq, a, 1)
+	return tr.s.towerSquare(tr, sq, len(tg.Classes)+sq.Class, pl.Px, words, dst, deep, 0)
 }
 
 // wholePicture says tower block li attends the whole picture though its
@@ -419,7 +465,11 @@ func (s *Instance) encodePictures(spans []model.Span, from int) ([]model.Span, e
 		r := sp.N(s.c.NEmbd)
 		if sp.Picture != nil && sp.Embd == nil {
 			b := sp.Picture.Bounds()
-			if want := s.m.Tower.PicRows(b.Dx(), b.Dy()); sp.PicRows != want {
+			want := s.m.Tower.PicRows(b.Dx(), b.Dy())
+			if sp.Frame != nil {
+				want = s.m.Tower.SquareOut(s.m.Tower.VideoSquare(sp.FrameW, sp.FrameH))
+			}
+			if sp.PicRows != want {
 				return nil, fmt.Errorf("model: span %d is a picture of %d rows and the tower writes %d",
 					i, sp.PicRows, want)
 			}
@@ -438,7 +488,14 @@ func (s *Instance) encodePictures(spans []model.Span, from int) ([]model.Span, e
 			}
 			k++
 			if row+r > from {
-				if _, err := s.encodePicture(sp.Picture, sp.Embd, tr.deeps[k-1][:len(s.m.Tower.Taps)*sp.PicRows*D]); err != nil {
+				deep := tr.deeps[k-1][:len(s.m.Tower.Taps)*sp.PicRows*D]
+				var err error
+				if sp.Frame != nil {
+					err = s.encodePair(sp.Picture, sp.Frame, s.m.Tower.VideoSquare(sp.FrameW, sp.FrameH), sp.Embd, deep)
+				} else {
+					_, err = s.encodePicture(sp.Picture, sp.Embd, deep)
+				}
+				if err != nil {
 					return nil, fmt.Errorf("model: span %d: %w", i, err)
 				}
 			}

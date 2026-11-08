@@ -72,6 +72,11 @@ type TowerGraphs struct {
 	Full []bool
 	// fit is how a picture becomes the tower's squares.
 	Fit PictureFit
+	// Video is how the tower reads a video (jlm.Video), nil for none, and
+	// Videos its entry's classes over a pair of frames, one for each
+	// picture class's size.
+	Video  *jlm.Video
+	Videos []towerClass
 	// table and planes are the blocks' rotary table and its planes, nil for
 	// blocks that turn nothing.
 	Table  *graph.Graph
@@ -447,6 +452,23 @@ func (m *Model) BuildTowerGraphs() (*TowerGraphs, error) {
 		}
 		tg.Classes = append(tg.Classes, cl)
 		tg.Rows = max(tg.Rows, cl.Rows)
+	}
+	if t.Video != nil {
+		if len(t.Chain) > 0 || !fit.Own() {
+			return nil, fmt.Errorf("model: a video read by a tower whose pictures are not each of a size of its own")
+		}
+		tg.Video = t.Video
+		for i, sd := range sides {
+			cl := towerClass{Entry: map[uint8]*graph.Graph{}, Rows: tg.Classes[i].Rows}
+			for px := graph.PixRGBA8; px < graph.PixFormats; px++ {
+				g, err := videoEntry(t, px, cl.Rows-tg.Lead-tg.Tail, tg.Lead+tg.Tail, sd, dense)
+				if err != nil {
+					return nil, fmt.Errorf("model: the tower's video entry: %w", err)
+				}
+				cl.Pic, cl.Entry[px] = g.Ops[0].Attr, g
+			}
+			tg.Videos = append(tg.Videos, cl)
+		}
 	}
 	if r := t.Block.Rope; len(r.Runs) > 0 {
 		tg.Table, tg.Planes = towerRotary(t)
