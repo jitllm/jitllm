@@ -3,9 +3,12 @@ package server
 import (
 	"context"
 	"fmt"
+	"image"
 	"time"
 
 	"github.com/jitllm/jitllm/engine"
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/model"
 	"github.com/jitllm/jitllm/tok/jinja"
 )
 
@@ -23,6 +26,9 @@ type DecideOptions struct {
 	State jinja.Value
 	// Questions are the request's questions in its order.
 	Questions []engine.DecisionQuestion
+	// Images are the request's pictures, in the order the template shows
+	// them, each encoded through the model's tower.
+	Images []image.Image
 }
 
 // DecideResult is one answer per question, in question order, and the
@@ -43,10 +49,21 @@ func (e *Engine) Decide(ctx context.Context, o DecideOptions) (*DecideResult, er
 	if err != nil {
 		return nil, err
 	}
-	if lm.m.Container.Config().DecisionLabels == nil {
+	if lm.m.Container.Config().Decision == jlm.DecisionNone {
 		return nil, fmt.Errorf("%w: model %q (%s) is not a decision model: its container states no "+
-			"label readout, so no score of its forward pass is an answer the weights were trained for",
+			"readout, so no score of its forward pass is an answer the weights were trained for",
 			ErrInvalid, lm.id, lm.m.Cfg.Arch)
+	}
+	if len(o.Images) > 0 && !lm.m.SeesPictures() {
+		return nil, fmt.Errorf("%w: model %q does not accept images: it carries no vision tower", ErrInvalid, lm.id)
+	}
+	pics := make([]model.Span, len(o.Images))
+	for i, img := range o.Images {
+		sp, err := lm.m.PictureSpan(img)
+		if err != nil {
+			return nil, fmt.Errorf("%w: images[%d]: %v", ErrInvalid, i, err)
+		}
+		pics[i] = sp
 	}
 	t0 := time.Now()
 	gs := e.gatesFor(lm.gateIDs())
@@ -61,7 +78,7 @@ func (e *Engine) Decide(ctx context.Context, o DecideOptions) (*DecideResult, er
 		return nil, err
 	}
 	t1 := time.Now()
-	ans, err := d.d.Decide(o.State, o.Questions)
+	ans, err := d.d.Decide(o.State, o.Questions, pics...)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
 	}

@@ -7,6 +7,7 @@ import (
 
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/model"
 	"github.com/jitllm/jitllm/nn"
 	"github.com/jitllm/jitllm/tok/jinja"
 )
@@ -24,10 +25,15 @@ type JointQuestion struct {
 	Options [][2]int
 }
 
-// JointScores runs ids as one joint request of the questions qs and writes
-// each option's logit into out, the questions' options in order.
-func (s *Instance) JointScores(ids []int32, qs []JointQuestion, out []float32) error {
-	n, nq, no := len(ids), len(qs), 0
+// JointScores runs the prompt spans as one joint request of the questions
+// qs and writes each option's logit into out, the questions' options in
+// order. A span's rows are counted as Span.N counts them, a picture's
+// among them.
+func (s *Instance) JointScores(spans []model.Span, qs []JointQuestion, out []float32) error {
+	n, nq, no := 0, len(qs), 0
+	for i := range spans {
+		n += spans[i].N(s.c.NEmbd)
+	}
 	for i := range qs {
 		no += len(qs[i].Options)
 	}
@@ -88,9 +94,19 @@ func (s *Instance) JointScores(ids []int32, qs []JointQuestion, out []float32) e
 			slot(k, r)[0] = slot(k, 0)[0]
 		}
 	}
+	// A row's token is its id, 0 for a row no token is (a picture's).
+	r := 0
+	for i := range spans {
+		k := spans[i].N(s.c.NEmbd)
+		if len(spans[i].Embd) == 0 && len(spans[i].Tokens) == k {
+			for j, id := range spans[i].Tokens {
+				slot(nn.JointTokens, r+j)[0] = uint32(id)
+			}
+		}
+		r += k
+	}
 	for r := range n {
 		slot(nn.JointFields, r)[0], slot(nn.JointFields+1, r)[0] = 0, uint32(nq)
-		slot(nn.JointTokens, r)[0] = uint32(ids[r])
 	}
 	s.Reset()
 	s.setRequest(req)
@@ -98,7 +114,12 @@ func (s *Instance) JointScores(ids []int32, qs []JointQuestion, out []float32) e
 	s.mark = embedMode{bidir: s.c.NonCausal, whole: true, total: n, out: out[:no], req: req, wins: s.mark.wins}
 	s.emb = &s.mark
 	defer func() { s.emb = nil }()
-	_, err := s.Prefill(ids)
+	var err error
+	if len(spans) == 1 && len(spans[0].Tokens) == n && !spans[0].Bidir {
+		_, err = s.Prefill(spans[0].Tokens)
+	} else {
+		_, err = s.PrefillMixed(spans...)
+	}
 	return err
 }
 
@@ -115,7 +136,7 @@ const (
 // (jointPrompt), the head's logits taken per question as its options'
 // scores.
 func (d *Decider) decideJoint(state jinja.Value, qs []DecisionQuestion) ([]DecisionAnswer, error) {
-	ids, jq, shown, err := d.jointPrompt(state, qs)
+	spans, jq, shown, err := d.jointPrompt(state, qs)
 	if err != nil {
 		return nil, err
 	}
@@ -127,10 +148,13 @@ func (d *Decider) decideJoint(state jinja.Value, qs []DecisionQuestion) ([]Decis
 		d.scores = make([]float32, no)
 	}
 	logits := d.scores[:no]
-	if err := d.in.JointScores(ids, jq, logits); err != nil {
+	if err := d.in.JointScores(spans, jq, logits); err != nil {
 		return nil, err
 	}
-	d.input = len(ids)
+	d.input = 0
+	for i := range spans {
+		d.input += spans[i].N(d.in.c.NEmbd)
+	}
 	out := make([]DecisionAnswer, len(qs))
 	at := 0
 	for i := range qs {
@@ -158,11 +182,12 @@ func (d *Decider) decideJoint(state jinja.Value, qs []DecisionQuestion) ([]Decis
 	return out, nil
 }
 
-// jointPrompt is qs about state as one prompt's ids: the systemone template
-// rendered with the sentinels, each piece encoded alone; the questions'
-// spans; and shown[i], question i's options in the order the prompt shows
-// them, each its index among the request's.
-func (d *Decider) jointPrompt(state jinja.Value, qs []DecisionQuestion) ([]int32, []JointQuestion, [][]int, error) {
+// jointPrompt is qs about state as one prompt's spans: the systemone
+// template rendered with the sentinels, each piece encoded alone and a piece
+// holding pictures cut into their spans (Model.PromptSpans); the questions'
+// spans of its rows; and shown[i], question i's options in the order the
+// prompt shows them, each its index among the request's.
+func (d *Decider) jointPrompt(state jinja.Value, qs []DecisionQuestion) ([]model.Span, []JointQuestion, [][]int, error) {
 	j := d.joint
 	// shown[i] is question i's options in the order the prompt shows them,
 	// each its index among the request's.
@@ -211,22 +236,53 @@ func (d *Decider) jointPrompt(state jinja.Value, qs []DecisionQuestion) ([]int32
 	if j.SortKeys {
 		state, questions = sortKeys(state), sortKeys(questions)
 	}
-	text, err := d.tpl.Render(map[string]any{"images": jinja.NewList(nil), "state": state, "questions": questions,
+	text, err := d.tpl.Render(map[string]any{"images": d.images(), "state": state, "questions": questions,
 		"sep": jinja.NewString(jointSep), "mark_question": jinja.NewString(jointMarkQuestion),
 		"mark_option": jinja.NewString(jointMarkOption)})
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("model: the systemone template: %w", err)
 	}
+	// prompt is the spans before ids, the tokens since the last picture;
+	// rows counts both.
+	var prompt []model.Span
 	var ids []int32
 	var spans [][2]int
+	rows, used := 0, 0
 	for _, piece := range strings.Split(text, jointSep) {
+		if k := strings.Count(piece, decisionPicture); k > 0 {
+			if used+k > len(d.pics) {
+				return nil, nil, nil, fmt.Errorf("model: the template wrote %d pictures for %d", used+k, len(d.pics))
+			}
+			ps, err := d.in.m.PromptSpans(piece, decisionPicture, d.pics[used:used+k])
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			used += k
+			if len(ids) > 0 {
+				prompt = append(prompt, model.Span{Tokens: ids})
+				ids = nil
+			}
+			for i := range ps {
+				rows += ps[i].N(d.in.c.NEmbd)
+			}
+			prompt = append(prompt, ps...)
+			continue
+		}
 		lead := strings.HasPrefix(piece, jointMarkQuestion) || strings.HasPrefix(piece, jointMarkOption)
 		piece = strings.TrimPrefix(strings.TrimPrefix(piece, jointMarkQuestion), jointMarkOption)
-		at := len(ids)
-		ids = append(ids, d.encodePlain(piece)...)
+		at := rows
+		tok := d.encodePlain(piece)
+		ids = append(ids, tok...)
+		rows += len(tok)
 		if lead {
-			spans = append(spans, [2]int{at, len(ids)})
+			spans = append(spans, [2]int{at, rows})
 		}
+	}
+	if used != len(d.pics) {
+		return nil, nil, nil, fmt.Errorf("model: the template wrote %d of %d pictures", used, len(d.pics))
+	}
+	if len(ids) > 0 {
+		prompt = append(prompt, model.Span{Tokens: ids})
 	}
 	jq := make([]JointQuestion, len(qs))
 	no := 0
@@ -241,5 +297,5 @@ func (d *Decider) jointPrompt(state jinja.Value, qs []DecisionQuestion) ([]int32
 		jq[i] = JointQuestion{Type: int(j.TypeRows[qs[i].Type]), Span: spans[at], Options: spans[at+1 : at+1+len(qs[i].Options)]}
 		at += 1 + len(qs[i].Options)
 	}
-	return ids, jq, shown, nil
+	return prompt, jq, shown, nil
 }

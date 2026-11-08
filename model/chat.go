@@ -480,12 +480,27 @@ func (m *Model) ChatSpansToolChoice(msgs []ChatMessage, pics []Span, tools []byt
 	if err != nil {
 		return nil, err
 	}
+	return m.PromptSpans(text, ph, pics)
+}
+
+// PromptSpans is a rendered prompt as spans: text, in which ph stands for
+// each of pics in order, the text around each encoded with the markers the
+// container wraps a picture's rows in (jlm.TowerSpan) and each picture the
+// span pics holds for it.
+func (m *Model) PromptSpans(text, ph string, pics []Span) ([]Span, error) {
+	if m.Tower == nil {
+		return nil, fmt.Errorf("model: %d picture(s) and this model has no vision tower", len(pics))
+	}
+	if m.Vocab == nil {
+		return nil, fmt.Errorf("model: no tokenizer: %v", m.TokErr)
+	}
+	n := len(pics)
 	// The count is checked: a template that drops an image part, or text that
 	// happens to hold the placeholder, would put every later picture on the
 	// wrong turn.
 	segs := strings.Split(text, ph)
 	if len(segs)-1 != n {
-		return nil, fmt.Errorf("model: the chat template wrote %d image placeholder(s) %q for %d image(s)",
+		return nil, fmt.Errorf("model: the template wrote %d image placeholder(s) %q for %d image(s)",
 			len(segs)-1, ph, n)
 	}
 	mk := m.Container.Vision().Tower.Span

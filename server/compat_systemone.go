@@ -2,6 +2,8 @@ package server
 
 import (
 	"errors"
+	"fmt"
+	"image"
 	"io"
 	"net/http"
 	"strings"
@@ -78,7 +80,27 @@ func (c *compat) systemOne(w http.ResponseWriter, r *http.Request) {
 			name = ls[0].ID
 		}
 	}
-	res, err := c.b.Decide(r.Context(), DecideOptions{Model: name, State: state, Questions: qs})
+	pics := newPictures(c.img)
+	if iv, ok := req.Get("images"); ok && !iv.IsNone() {
+		if !iv.IsList() {
+			s1Fail(w, http.StatusUnprocessableEntity, "must be a list of image URLs", "images")
+			return
+		}
+		for i, u := range iv.AsList().Items {
+			if !u.IsString() {
+				s1Fail(w, http.StatusUnprocessableEntity, "must be an image URL", "images", i)
+				return
+			}
+			url := u.AsString()
+			if err := pics.add(fmt.Sprintf("images[%d]", i), func() (image.Image, error) {
+				return pics.p.imageURL(r.Context(), url)
+			}); err != nil {
+				s1Fail(w, http.StatusUnprocessableEntity, err.Error(), "images", i)
+				return
+			}
+		}
+	}
+	res, err := c.b.Decide(r.Context(), DecideOptions{Model: name, State: state, Questions: qs, Images: pics.imgs})
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrInvalid):

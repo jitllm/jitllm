@@ -55,16 +55,16 @@ type DecisionAnswer struct {
 // the container's program, jlm.MarkerPrompt, its options' scores the
 // scorer's at their markers).
 type Decider struct {
-	in   *Instance
-	cfg  *jlm.Config
-	lab  *jlm.DecisionLabels
-	mp   *jlm.MarkerPrompt
+	in  *Instance
+	cfg *jlm.Config
+	lab *jlm.DecisionLabels
+	mp  *jlm.MarkerPrompt
 	// joint is a joint head's statement: every question in one prompt.
 	joint *jlm.JointHead
 	// scores is a marker head's per option.
 	scores []float32
-	tpl  *jinja.Template
-	bidi bool
+	tpl    *jinja.Template
+	bidi   bool
 	// The readout's inputs and outputs (graph.DecisionScores), and the
 	// question's picked ids, N groups of G.
 	ids                       []int32
@@ -75,6 +75,24 @@ type Decider struct {
 	// one is a bidirectional prompt as its one span, kept so a warm question
 	// allocates nothing.
 	one [1]model.Span
+	// pics are the request's pictures, each a span the prefill encodes
+	// (Model.PictureSpan), in the order the template shows them.
+	pics []model.Span
+}
+
+// decisionPicture stands for each picture where the template writes it: the
+// rendered text is cut there and each picture's span put in its place
+// (Model.PromptSpans).
+const decisionPicture = "\x00jitllm.picture\x00"
+
+// images is what the template reads for the request's pictures: the
+// sentinel for each.
+func (d *Decider) images() jinja.Value {
+	list := make([]jinja.Value, len(d.pics))
+	for i := range list {
+		list[i] = jinja.NewString(decisionPicture)
+	}
+	return jinja.NewList(list)
 }
 
 // NewDecider is a Decider over in, whose model states a label readout or a
@@ -165,10 +183,15 @@ func (d *Decider) Prepare(qs []DecisionQuestion) error {
 
 // Decide answers every question about state, one prompt per question and
 // variant, the answers in the questions' order.
-func (d *Decider) Decide(state jinja.Value, qs []DecisionQuestion) ([]DecisionAnswer, error) {
+func (d *Decider) Decide(state jinja.Value, qs []DecisionQuestion, pics ...model.Span) ([]DecisionAnswer, error) {
 	if err := d.Prepare(qs); err != nil {
 		return nil, err
 	}
+	if len(pics) > 0 && d.mp != nil {
+		return nil, fmt.Errorf("model: a marker head's prompt program places no pictures")
+	}
+	d.pics = pics
+	defer func() { d.pics = nil }()
 	d.input = 0
 	if d.joint != nil {
 		return d.decideJoint(state, qs)
@@ -262,12 +285,22 @@ func (d *Decider) answer(state jinja.Value, q *DecisionQuestion) (DecisionAnswer
 		if err != nil {
 			return DecisionAnswer{}, err
 		}
-		ids, err := d.encode(text)
-		if err != nil {
-			return DecisionAnswer{}, err
-		}
-		if err := d.ask(ids); err != nil {
-			return DecisionAnswer{}, err
+		if len(d.pics) > 0 {
+			spans, err := d.in.m.PromptSpans(text, decisionPicture, d.pics)
+			if err != nil {
+				return DecisionAnswer{}, err
+			}
+			if err := d.askSpans(spans); err != nil {
+				return DecisionAnswer{}, err
+			}
+		} else {
+			ids, err := d.encode(text)
+			if err != nil {
+				return DecisionAnswer{}, err
+			}
+			if err := d.ask(ids); err != nil {
+				return DecisionAnswer{}, err
+			}
 		}
 		// The second variant averages with the first.
 		d.params[1] = float32(v)
@@ -395,6 +428,38 @@ func (d *Decider) ask(ids []int32) error {
 		return err
 	}
 	d.input += len(ids)
+	if !s.Picked && (s.head == nil || !s.head.Picked) {
+		return fmt.Errorf("the prompt's labels were not picked: %v", s.prepErr())
+	}
+	return nil
+}
+
+// askSpans is ask over a prompt of spans, its pictures among them.
+func (d *Decider) askSpans(spans []model.Span) error {
+	s := d.in
+	rows := 0
+	for i := range spans {
+		spans[i].Bidir = spans[i].Bidir || d.bidi
+		rows += spans[i].N(s.c.NEmbd)
+	}
+	if rows > s.MaxSeq() {
+		return fmt.Errorf("the prompt is %d rows and this instance holds %d", rows, s.MaxSeq())
+	}
+	s.Reset()
+	s.PickIDs, s.PickVals, s.Picked = d.ids, d.vals, false
+	if h := s.head; h != nil {
+		h.Pick, h.PickVals, h.Picked = d.ids, d.vals, false
+	}
+	defer func() {
+		s.PickIDs, s.PickVals = nil, nil
+		if h := s.head; h != nil {
+			h.Pick, h.PickVals = nil, nil
+		}
+	}()
+	if _, err := s.PrefillMixed(spans...); err != nil {
+		return err
+	}
+	d.input += rows
 	if !s.Picked && (s.head == nil || !s.head.Picked) {
 		return fmt.Errorf("the prompt's labels were not picked: %v", s.prepErr())
 	}
@@ -539,7 +604,7 @@ func (d *Decider) render(state jinja.Value, q *DecisionQuestion, opts []Decision
 		in = sortKeys(in)
 		dict = in.AsDict()
 	}
-	data := map[string]any{"images": jinja.NewList(nil)}
+	data := map[string]any{"images": d.images()}
 	for _, k := range dict.Keys {
 		data[k] = dict.Data[k]
 	}
