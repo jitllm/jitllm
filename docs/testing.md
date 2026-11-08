@@ -9,6 +9,7 @@ commit, all but one: `internal/testmodels/fetch.sh` downloads the rest (see
 |---|---|---|
 | `JITLLM_MODELS` | the model directory | `models/` at the repository root |
 | `JITLLM_MODEL_FREE` | `1`: a missing model skips instead of failing (CI only, see "What CI runs") | a missing model fails |
+| `JITLLM_TEST_BINDIR` | a directory holding `jitllmd` and `jitllm` built from this tree, which the tests that run a command take instead of building it (`internal/testbin`): a test binary shipped to a box with no Go toolchain | each test runs `go build` |
 | `JITLLM_RECIPE` | `srcgate.TestRecipesRun` runs only the recipe of this name (`docs/recipes/NAME.md`) | every recipe |
 | `JITLLM_RECIPE_PYTHON` | the interpreter the recipes' Python blocks run with; one that cannot `import openai` skips them by name | `python3` |
 | `JITLLM_RECIPE_NODE_MODULES` | a `node_modules` holding `openai`, linked into each recipe's directory for its JavaScript blocks | node's own resolution |

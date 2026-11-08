@@ -4,6 +4,7 @@ package engine
 
 import (
 	"context"
+	"github.com/jitllm/jitllm/internal/testbin"
 	"github.com/jitllm/jitllm/internal/testmodels/fresh"
 	"net"
 	"os"
@@ -24,13 +25,7 @@ import (
 // buildJitllmd builds server/cmd/jitllmd into the test's own directory.
 func buildJitllmd(t *testing.T) string {
 	t.Helper()
-	bin := filepath.Join(t.TempDir(), "jitllmd"+exeSuffix())
-	cmd := exec.Command("go", "build", "-o", bin, "./cmd/jitllmd")
-	cmd.Dir = filepath.Join("..", "..", "server")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("building jitllmd: %v\n%s", err, out)
-	}
-	return bin
+	return testbin.Build(t, "jitllmd", filepath.Join("..", "..", "server"), "./cmd/jitllmd")
 }
 
 // freeAddr is a loopback address nothing listens on.
