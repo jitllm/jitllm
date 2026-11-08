@@ -466,6 +466,20 @@ func (g *devTier) pagedLayer(sid uint64, l *layer, li int, p *nn.LayerPlan) erro
 	if err := g.addKVLayer(kp, li, g.kvGeomOf(p), 1+seats); err != nil {
 		return err
 	}
+	// A binary16 V pool's pages are narrowed and widened on the card when a
+	// history moves (migrateKV): their forms at the pool's page are formed
+	// here, with the block, and a move only runs them.
+	if geom := kp.layers[li].geom; geom.f16 && geom.vWords(kp.p) > 0 {
+		was := g.prewarming
+		g.prewarming = true
+		for _, widen := range []bool{false, true} {
+			if _, err := g.servedHalves(geom.kvRow, kp.p, widen); err != nil {
+				g.prewarming = was
+				return err
+			}
+		}
+		g.prewarming = was
+	}
 	// The window paged attention applies to this block (pagedStage's descW).
 	kp.layers[li].win, kp.layers[li].chunked = l.win, l.chunked
 	// A selection over the whole history (the lightning indexer, MiniMax-M3's

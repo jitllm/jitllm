@@ -54,8 +54,12 @@ func shadowDriftOn(t *testing.T, spec string) {
 	defer g.Close()
 	d := g.devs[0]
 	const n = 160
+	// The comparison's part as the placement forms it (prewarmComposedBlock):
+	// a step forms nothing.
 	d.mu.Lock()
+	d.prewarming = true
 	sv, err := d.servedShadow(&layer{graph: new(graph.Graph)}, n)
+	d.prewarming = false
 	d.mu.Unlock()
 	if err != nil {
 		t.Fatal(err)
