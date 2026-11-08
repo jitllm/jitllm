@@ -87,15 +87,12 @@ func (b *Bindings) Check(f *Form, li int, t Tensors) nn.Decline {
 				return nn.DeclineNoWeight
 			}
 		default:
-			data, p, rows := t.Bytes(x.Role)
+			data, p, _ := t.Bytes(x.Role)
 			if p == nil && len(data) == 0 {
 				if len(t.Floats(x.Role)) > 0 {
 					continue
 				}
 				return nn.DeclineNoWeight
-			}
-			if p != nil && (p.Row != 0 || p.Stride != 0 && p.Stride != rows || p.Sheet != nil) {
-				return nn.DeclineCutWeight
 			}
 		}
 	}

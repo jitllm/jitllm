@@ -68,8 +68,7 @@ type PictureRowsDevice interface {
 // expert's weights. Stride is the row count of the whole buffer and Row is
 // where this weight starts in it; both zero means the whole buffer.
 type Packed struct {
-	QS, D, SC   []byte
-	Row, Stride int
+	QS, D, SC []byte
 	// Sheet, when set, stands in for QS/D/SC: the weight is a mixture's bank
 	// whose Sheets experts live in separate container pages, so there is no
 	// one span of it anywhere. Sheet(x) is expert x's three planes, readable
