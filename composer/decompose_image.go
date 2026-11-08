@@ -1175,6 +1175,37 @@ func decomposeRowsAttend(o graph.Op, c *Context) ([]Prim, error) {
 	}...), nil
 }
 
+// decomposeFrames is each frame's samples of the step's sound
+// (graph.OpFrames): sample k = t*Stride + i - Width/2 of the clip, less
+// Const times the one before it, zero past either end.
+func decomposeFrames(o graph.Op, c *Context) ([]Prim, error) {
+	a := o.Attr
+	sh := c.rows(o.Out[0])
+	R, N := sh[0], sh[1]
+	if N != a.Width || a.Stride < 1 {
+		return nil, fmt.Errorf("frames of %d samples every %d into rows of %d", a.Width, a.Stride, N)
+	}
+	U, F := ir.U32, ir.F32
+	var x exprs
+	t, i := x.coord(0), x.coord(1)
+	n := x.load(1, x.u(RequestPicW))
+	// k+Width/2, the frame's sample on the clip, unsigned: below Width/2 is
+	// before the clip.
+	k := x.op(OpAdd, U, x.op(OpMul, U, t, x.u(uint32(a.Stride))), i)
+	half := x.u(uint32(N / 2))
+	at := x.op(OpSub, U, k, half)
+	in := x.op(OpLess, ir.Pred, x.op(OpSub, U, k, half), n)
+	inside := x.sel(ir.U32, x.op(OpLess, ir.Pred, k, half), x.u(0), x.sel(ir.U32, in, x.u(1), x.u(0)))
+	safe := x.op(OpMin, U, at, x.op(OpMax, U, x.op(OpSub, U, n, x.u(1)), x.u(0)))
+	cur := x.un(OpBitcast, F, x.load(0, safe))
+	prev := x.un(OpBitcast, F, x.load(0, x.op(OpSub, U, safe, x.u(1))))
+	prev = x.sel(F, x.op(OpLess, ir.Pred, safe, x.u(1)), x.f(0), prev)
+	v := x.op(OpSub, F, cur, x.op(OpMul, F, prev, x.f(float32(a.Const))))
+	x.sel(F, x.op(OpLess, ir.Pred, x.u(0), inside), v, x.f(0))
+	return []Prim{{Kind: PrimMap, Shape: []int{R, N}, In: []Operand{TablePicture.op(), TableRequest.op()}, Out: c.value(o.Out[0]),
+		Expr: x.e, Facts: Facts{Extents: map[int]int{0: PictureWords, 1: RequestPicW + 1}}}}, nil
+}
+
 // decomposeUpsample is a grid of rows GridW wide Span times as large each
 // way (graph.OpUpsample), one map over the output's rows and width: row r
 // of the grid Span*GridW wide reads the input row at (y/Span, x/Span).

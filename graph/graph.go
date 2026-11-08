@@ -416,6 +416,13 @@ const (
 	// OpAppendRow is In[0]'s rows, then row Offset of Weight[0]: a marker
 	// after a picture's rows that the reference embeds through a table.
 	OpAppendRow
+	// OpFrames is the step's sound as frames: the step's picture table
+	// holding a clip's samples as f32 words, as many as the request's
+	// picture width (composer.RequestPicW); row t of Out[0] is the Width
+	// samples from t*Stride - Width/2 (a centred frame), each sample
+	// y[k] = x[k] - Const*x[k-1] (a preemphasis, x[-1] zero), zero past the
+	// clip.
+	OpFrames
 	// OpSpanPool is each row r of Out[0] the mean of In[0]'s rows from the
 	// request's slot Offset to its slot Offset+1 (their row r), zero for an
 	// empty span: a question's or an option's span of a prompt.
@@ -477,6 +484,8 @@ func (k OpKind) String() string {
 		return "state_conv"
 	case OpPool:
 		return "pool"
+	case OpFrames:
+		return "frames"
 	case OpSpanPool:
 		return "span_pool"
 	case OpTakeRows:
