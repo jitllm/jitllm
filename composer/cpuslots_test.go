@@ -38,6 +38,18 @@ func slotRun(t *testing.T, g *graph.Graph, rows, live int, req []uint32, x []flo
 	return got
 }
 
+// slotForm forms graph g at rows rows on the CPU.
+func slotForm(t *testing.T, g *graph.Graph, rows int) []Code {
+	t.Helper()
+	r := Default().WithoutInt8(DeviceCPU)
+	dev := Device{Kind: DeviceCPU, Slots: 1, Lanes: 8, ISA: uint64(cpu.Probe().ISA()), ExactDiv: true}
+	_, codes, err := r.Form(Request{Graph: g, Step: Step{Rows: rows, Page: 64, Keys: 1, ActWindow: 32}, Device: dev, Apart: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return codes
+}
+
 // slotRequest is a request whose slot s holds rows[s] (its row r at word
 // RequestRows + s*live + r), padded past the last slot by the form's rows.
 func slotRequest(live, rows int, slots map[int][]uint32) []uint32 {

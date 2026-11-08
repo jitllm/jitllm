@@ -423,6 +423,11 @@ const (
 	// y[k] = x[k] - Const*x[k-1] (a preemphasis, x[-1] zero), zero past the
 	// clip.
 	OpFrames
+	// OpFeatureNorm is each column of In[0] normalised over the step's
+	// first live-Offset rows: (x - mean) / (std + Eps), std over n-1, a
+	// row from live-Offset on zero (a clip's features over its valid
+	// frames, NeMo's normalize_batch per_feature).
+	OpFeatureNorm
 	// OpSpanPool is each row r of Out[0] the mean of In[0]'s rows from the
 	// request's slot Offset to its slot Offset+1 (their row r), zero for an
 	// empty span: a question's or an option's span of a prompt.
@@ -486,6 +491,8 @@ func (k OpKind) String() string {
 		return "pool"
 	case OpFrames:
 		return "frames"
+	case OpFeatureNorm:
+		return "feature_norm"
 	case OpSpanPool:
 		return "span_pool"
 	case OpTakeRows:
