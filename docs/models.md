@@ -11,6 +11,7 @@ by name. `internal/srcgate.TestModelsDocIsGenerated` fails when the page and the
 - **31** Hugging Face safetensors classes (`architectures` in `config.json`, `convert.HFClasses`) on **24** graphs, **1** of them reached only from safetensors
 - **61** graphs in all (`jlm.Arch`)
 - **19** vision projectors (`clip.projector_type`, `convert.Projectors`)
+- **1** audio projectors (`clip.audio.projector_type`, `convert.AudioProjectors`)
 - **3** embedding encoders, and pooling on any decoder
 - **15** weight types read (`quant.Dequantable`), **11** of them packed quantizations (`quant.PackedTypes()`)
 - **87** models in the download catalogue (`jitllm library`), **9** of them with a vision tower
@@ -150,6 +151,15 @@ convert together, the text model one of the architectures above. The projector i
 | `qwen2vl_merger` | Qwen2-VL |
 | `qwen3vl_merger` | Qwen3-VL, Qwen3.5 |
 | `resampler` | MiniCPM-V 2.6, o-2.6, 4.0, 4.5 |
+
+## Audio projectors
+
+An audio tower rides its model's mmproj beside the vision tower and converts with it; the
+projector is the mmproj's `clip.audio.projector_type`.
+
+| Projector | Models |
+|---|---|
+| `d1omni_a` | d1-omni-600M's audio half (a log-mel front end, FastConformer blocks; its rows a prefix of the decision prompt) |
 
 ## Embedding models
 
