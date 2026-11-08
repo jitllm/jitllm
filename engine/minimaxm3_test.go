@@ -166,8 +166,8 @@ func m3DevViolations() []c6Violation {
 
 // TestMiniMaxM3OnEveryDevice runs each fixture with every block and the head
 // on each device present against the host: the indexer's key as the row's
-// last head, the scores, the block ranking, the selection and the gather
-// (tier/msa.go), on decode and on a prefill chunk. Then each piece taken out
+// last head, the scores, the block ranking, the selection and the gather, on
+// decode and on a prefill chunk. Then each piece taken out
 // of the device session alone.
 func TestMiniMaxM3OnEveryDevice(t *testing.T) {
 	for _, fx := range m3Fixtures() {
@@ -177,10 +177,4 @@ func TestMiniMaxM3OnEveryDevice(t *testing.T) {
 			fixtureOnEveryDeviceCounted(t, m, g, m3DevViolations(), 1e-5, true, openOpts...)
 		})
 	}
-}
-
-// MiniMax-M3 runs the five principles' relocation and paging gates
-// (principleFixtures): the indexer's key is a head of the cached row, so it
-// pages, relocates and is restored with it.
-func init() {
 }
