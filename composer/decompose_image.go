@@ -1035,8 +1035,10 @@ func decomposeRowsAttend(o graph.Op, c *Context) ([]Prim, error) {
 	if G == 0 {
 		G = H
 	}
-	if len(o.In) != 3 || len(o.Out) != 1 || H < 1 || hd < 1 || G < 1 || H%G != 0 || c.width(o.In[0]) != H*hd ||
-		c.width(o.In[1]) != G*hd || c.width(o.In[2]) != G*hd || c.width(o.Out[0]) != H*hd {
+	rel := len(o.In) == 4 && len(o.Weight) == 2
+	if !rel && len(o.In) != 3 || len(o.Out) != 1 || H < 1 || hd < 1 || G < 1 || H%G != 0 || c.width(o.In[0]) != H*hd ||
+		c.width(o.In[1]) != G*hd || c.width(o.In[2]) != G*hd || c.width(o.Out[0]) != H*hd ||
+		rel && (G != H || c.width(o.In[3]) != H*hd) {
 		return nil, fmt.Errorf("a rows attention of %d operands, %d heads of %d over %d", len(o.In), H, hd, G)
 	}
 	F, U := ir.F32, ir.U32
@@ -1067,6 +1069,59 @@ func decomposeRowsAttend(o graph.Op, c *Context) ([]Prim, error) {
 		}
 		dx.op(OpMul, F, dx.at(0, qs, q, el), dx.at(1, ks, j, kel))
 	}
+	var relPrims []Prim
+	var P, rels Operand
+	if rel {
+		// P: the projected positions live-1 down to 1-live, then each query
+		// row's dots with the rows its keys' offsets name.
+		w, tb := o.Weight[0], o.Weight[1]
+		wo, err := c.weight(w)
+		if err != nil {
+			return nil, err
+		}
+		to, err := c.weight(tb)
+		if err != nil {
+			return nil, err
+		}
+		if w.Rows != D || w.K != D || tb.K != D || tb.Rows < 1 || tb.Rows%2 == 0 {
+			return nil, fmt.Errorf("a relative-position attention of %dx%d positions and a %dx%d table over %d", w.Rows, w.K, tb.Rows, tb.K, D)
+		}
+		top := (tb.Rows + 1) / 2
+		P, rels = tmp("pos"), tmp("rel")
+		PR := 2*R - 1
+		var px exprs
+		pin := []Operand{TablePos.op()}
+		pf := Facts{Extents: map[int]int{0: R + 1}}
+		{
+			m, r, cc := px.coord(0), px.coord(1), px.coord(2)
+			live := px.op(OpMax, U, px.load(0, px.u(0)), px.u(1))
+			// Table row top-live+m holds position live-1-m.
+			row := px.op(OpMin, U, px.op(OpSub, U, px.op(OpAdd, U, px.u(uint32(top)), m), live), px.u(uint32(tb.Rows-1)))
+			wv, err := weightElement(&px, wo, D, D, &pin, &pf, r, cc)
+			if err != nil {
+				return nil, err
+			}
+			tv, err := weightElement(&px, to, tb.Rows, D, &pin, &pf, row, cc)
+			if err != nil {
+				return nil, err
+			}
+			px.op(OpMul, F, wv, tv)
+		}
+		var rx exprs
+		{
+			q, h, j, e := rx.coord(0), rx.coord(1), rx.coord(2), rx.coord(3)
+			live := rx.op(OpMax, U, rx.load(2, rx.u(0)), rx.u(1))
+			el := rx.op(OpAdd, U, rx.op(OpMul, U, h, rx.u(uint32(hd))), e)
+			// live-1-q+j, a query past the live rows clamped to P's rows.
+			at := rx.op(OpMin, U, rx.op(OpSub, U, rx.op(OpAdd, U, rx.op(OpSub, U, live, rx.u(1)), j), q), rx.u(uint32(PR-1)))
+			rx.op(OpMul, F, rx.at(0, c.rows(o.In[3]), q, el), rx.at(1, []int{PR, D}, at, el))
+		}
+		relPrims = []Prim{
+			{Kind: PrimReduce, Shape: []int{PR, D, D}, In: pin, Out: P, Combine: OpAdd, Expr: px.e, Facts: pf},
+			{Kind: PrimReduce, Shape: []int{Q, H, R, hd}, In: []Operand{c.value(o.In[3]), P, TablePos.op()}, Out: rels, Combine: OpAdd,
+				Expr: rx.e, Facts: Facts{Extents: map[int]int{2: R + 1}}},
+		}
+	}
 	var sx exprs
 	scoreIn := []Operand{dots, TablePos.op()}
 	scoreFacts := Facts{Extents: map[int]int{1: R + 1}}
@@ -1074,6 +1129,10 @@ func decomposeRowsAttend(o graph.Op, c *Context) ([]Prim, error) {
 		j := sx.coord(2)
 		live := sx.load(1, sx.u(0))
 		d := sx.at(0, sh, sx.coord(0), sx.coord(1), j)
+		if rel {
+			scoreIn = append(scoreIn, rels)
+			d = sx.op(OpAdd, F, d, sx.at(len(scoreIn)-1, sh, sx.coord(0), sx.coord(1), j))
+		}
 		keep := sx.op(OpMul, F, d, sx.f(float32(a.Scale)))
 		if s := uint32(a.Offset); s > 0 {
 			// Query row q reads the keys of its own range.
@@ -1105,7 +1164,7 @@ func decomposeRowsAttend(o graph.Op, c *Context) ([]Prim, error) {
 		q, e := ox.coord(0), ox.coord(1)
 		ox.op(OpDiv, F, ox.at(0, []int{Q, D}, q, e), ox.at(1, qh, q, ox.op(OpDiv, U, e, ox.u(uint32(hd)))))
 	}
-	return []Prim{
+	return append(relPrims, []Prim{
 		{Kind: PrimReduce, Shape: []int{Q, H, R, hd}, In: []Operand{c.value(o.In[0]), c.value(o.In[1])}, Out: dots, Combine: OpAdd, Expr: dx.e},
 		{Kind: PrimMap, Shape: sh, In: scoreIn, Out: scores, Expr: sx.e, Facts: scoreFacts},
 		{Kind: PrimReduce, Shape: sh, In: []Operand{scores}, Out: maxes, Combine: OpMax, Init: int64(math.Float32bits(minus)), Expr: mx.e},
@@ -1113,7 +1172,7 @@ func decomposeRowsAttend(o graph.Op, c *Context) ([]Prim, error) {
 		{Kind: PrimReduce, Shape: sh, In: []Operand{weights}, Out: sums, Combine: OpAdd, Expr: lx.e},
 		{Kind: PrimReduce, Shape: []int{Q, D, R}, In: []Operand{weights, c.value(o.In[2])}, Out: num, Combine: OpAdd, Expr: vx.e},
 		{Kind: PrimMap, Shape: []int{Q, D}, In: []Operand{num, sums}, Out: c.value(o.Out[0]), Expr: ox.e},
-	}, nil
+	}...), nil
 }
 
 // decomposeUpsample is a grid of rows GridW wide Span times as large each
