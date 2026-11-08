@@ -618,21 +618,21 @@ const (
 	// expAuto is GPU.AutoStream's mark: the block's experts run where the
 	// tier's defaults say (on the host unless Config.NoHybrid).
 	expAuto expertMode = iota
-	// expHost runs them on the host (hybrid), whatever the defaults.
-	expHost
+	// expCPU runs them on the CPU device (hybrid), whatever the defaults.
+	expCPU
 	// expCard sends their sheets to the card each token.
 	expCard
 )
 
 // PlaceExperts is nn.ExpertPlacer: it places block li's routed experts off
-// the card -- "host" runs them on the host (hybrid), "card" streams their
+// the card -- "cpu" runs them on the CPU device (hybrid), "card" streams their
 // sheets to it -- on every device, so the block keeps the choice wherever it
 // moves; "" clears the choice. It reports false for a word it does not know.
 func (g *GPU) PlaceExperts(li int, where string) bool {
 	var m expertMode
 	switch where {
-	case "host":
-		m = expHost
+	case nn.CPU:
+		m = expCPU
 	case "card":
 		m = expCard
 	case "":
@@ -663,13 +663,13 @@ func (g *GPU) PlaceExperts(li int, where string) bool {
 }
 
 // SetExpertMode re-decides where every marked block's experts run, for the
-// trial: "host", "card", or "" for the defaults. A block takes it the next
+// trial: "cpu", "card", or "" for the defaults. A block takes it the next
 // time it is placed. It reports how many blocks it touched.
 func (g *GPU) SetExpertMode(where string) int {
 	m := expAuto
 	switch where {
-	case "host":
-		// The composed block has no host side to measure.
+	case nn.CPU:
+		// The composed block has no CPU side to measure.
 		return 0
 	case "card":
 		m = expCard

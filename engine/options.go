@@ -244,10 +244,15 @@ func WithPrefillForwardRows(n int) Option {
 func WithSharedOverlap(on bool) Option { return func(l *loadOpts) { l.opt.noShOverlap = !on } }
 
 // WithExperts places the routed experts of every mixture block a device
-// takes: "host" (hybrid), "card" (sheets streamed every token), or "" (the
-// engine decides; the default). A -placement entry's %host or %card wins for
-// its blocks.
-func WithExperts(where string) Option { return func(l *loadOpts) { l.opt.experts = where } }
+// takes: "cpu" (hybrid; "host" is its older spelling), "card" (sheets
+// streamed every token), or "" (the engine decides; the default). A
+// -placement entry's %cpu or %card wins for its blocks.
+func WithExperts(where string) Option {
+	if where == "host" {
+		where = nn.CPU
+	}
+	return func(l *loadOpts) { l.opt.experts = where }
+}
 
 // WithStreamTrialAA turns the stream trial into its own self-control: the
 // placement made against itself, through the same migrations, so a paired
@@ -319,12 +324,12 @@ type Place struct {
 	// host when it does not fit. On must name a device. With Pin, the block
 	// stays on that device and keeps streaming.
 	Stream bool
-	// Experts places a mixture block's routed experts off the card: "host"
-	// runs them on the host's kernels while the rest of the block runs on
-	// device On (hybrid), "card" streams their sheets to it every token. ""
-	// leaves it to the engine: resident when the block fits, otherwise
-	// streamed with the experts on the host and measured against the host
-	// (WithStreamTrial). Written "N=DEV%host" or "N=DEV%card".
+	// Experts places a mixture block's routed experts off the card: "cpu"
+	// runs them on the CPU device while the rest of the block runs on device
+	// On (hybrid), "card" streams their sheets to it every token. "" leaves
+	// it to the engine: resident when the block fits, otherwise streamed with
+	// the experts on the CPU and measured against the CPU
+	// (WithStreamTrial). Written "N=DEV%cpu" or "N=DEV%card".
 	Experts string
 }
 
@@ -370,6 +375,9 @@ func WithPlacement(p Placement) Option {
 	cpu := func(pl Place) Place {
 		if pl.On == "host" {
 			pl.On = nn.CPU
+		}
+		if pl.Experts == "host" {
+			pl.Experts = nn.CPU
 		}
 		return pl
 	}
@@ -512,9 +520,12 @@ func ParsePlacement(spec string, strict bool) (Placement, error) {
 		where = strings.TrimSpace(where)
 		var pl Place
 		if w, ex, ok := strings.Cut(where, "%"); ok {
-			if ex != "host" && ex != "card" {
+			if ex == "host" {
+				ex = nn.CPU
+			}
+			if ex != nn.CPU && ex != "card" {
 				return Placement{}, fmt.Errorf("model: placement %q: %q places the experts on %q; "+
-					"the choices are %%host and %%card", spec, e, ex)
+					"the choices are %%cpu and %%card", spec, e, ex)
 			}
 			where, pl.Experts = strings.TrimSpace(w), ex
 		}

@@ -21,8 +21,8 @@ type BlockMove struct {
 	// RecBytes is the recurrent summaries the moved linear blocks carried.
 	RecBytes uint64
 	// Path is how the history travelled, the slowest any block took: "peer"
-	// card to card, "staged" through a host buffer the tier holds, "host"
-	// back to this instance's host cache and up again; "" when there was none.
+	// card to card, "staged" through a host buffer the tier holds, "cpu"
+	// back to the CPU device's pages and up again; "" when there was none.
 	Path string
 	// Copied is the bytes the tier copied between the devices (the history
 	// in the devices' own page layout).
@@ -319,7 +319,7 @@ func (p *PendingMove) Commit() (mv BlockMove, err error) {
 			path, copied, moved, err = s.moveBlockDirect(mover, li, p.to, &p.plans[i])
 		}
 		if errors.Is(err, nn.ErrNotDirect) {
-			path = "host"
+			path = nn.CPU
 			moved, err = s.moveThroughMemory(nd, li, p.to)
 		}
 		if err != nil {
@@ -356,7 +356,7 @@ func (p *PendingMove) Commit() (mv BlockMove, err error) {
 
 // slowerPath is the slower of two history paths, "" being none.
 func slowerPath(a, b string) string {
-	rank := map[string]int{"": 3, "peer": 2, "staged": 1, "host": 0}
+	rank := map[string]int{"": 3, "peer": 2, "staged": 1, nn.CPU: 0}
 	if rank[b] < rank[a] {
 		return b
 	}

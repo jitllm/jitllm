@@ -1593,7 +1593,7 @@ func loadOpts(t []tok.Option, budget uint64) ([]model.Option, []engine.Option) {
 	// JITLLM_SH_OVERLAP=0 runs a mixture's shared experts after its routed
 	// read instead of behind it.
 	// JITLLM_EXPERTS=host|card places every mixture block's routed experts
-	// off the card (engine.WithExperts); -placement's %host / %card per block.
+	// off the card (engine.WithExperts); -placement's %cpu / %card per block.
 	if e := os.Getenv("JITLLM_EXPERTS"); e != "" {
 		o = append(o, engine.WithExperts(e))
 	}

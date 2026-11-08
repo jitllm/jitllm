@@ -183,9 +183,9 @@ func blocksMoveBetweenDevicesWith(t *testing.T, path string, arm int, parts nn.P
 	}
 	_, mover := any(g.Attach()).(nn.BlockMover)
 	switch {
-	case arm == moveHost && moves[0].Path != "host":
+	case arm == moveHost && moves[0].Path != nn.CPU:
 		t.Fatalf("the host arm's history went by %q", moves[0].Path)
-	case arm != moveHost && mover && moves[0].Path == "host":
+	case arm != moveHost && mover && moves[0].Path == nn.CPU:
 		t.Fatalf("the direct arm's history came home: the direct path did not run")
 	case arm == moveWhole && mover && !m.Cfg.MoE() && moves[0].Staged != len(moves[0].Moved):
 		t.Fatalf("%d of %d blocks were prepared ahead of the move", moves[0].Staged, len(moves[0].Moved))
