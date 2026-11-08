@@ -327,10 +327,3 @@ func TestGemma4FeaturesAreLoadBearing(t *testing.T) {
 		})
 	}
 }
-
-// Gemma 4's fixtures run the five principles' relocation and paging gates
-// (principleFixtures) and the windowed-layer gate: a relocated history must
-// come home at its own layer's geometry, and the sliding layers' pages are a
-// window's.
-func init() {
-}

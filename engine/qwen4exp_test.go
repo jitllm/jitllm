@@ -13,9 +13,6 @@ import (
 
 const q4eGoldScript = "scripts/qwen4expgold.py"
 
-func init() {
-}
-
 func openQ4E(t *testing.T, name string) (*model.Model, *c6Golden, []Option) {
 	t.Helper()
 	return openGolden(t, "qwen4exp", q4eGoldScript, name)

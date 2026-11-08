@@ -197,12 +197,6 @@ func TestBatchSeamMovesCarryEveryRowAltUp(t *testing.T) {
 	batchSeamMoves(t, p, 1e-3, true, w)
 }
 
-// Gemma 3n runs the five principles' relocation and paging gates
-// (principleFixtures) and the windowed-layer gate: its sliding layers' pages
-// are a window's.
-func init() {
-}
-
 // uncorrected is the shared program p of a block's correction with its
 // coefficients read as zero: every stream's innovation weighed by one.
 func uncorrected(p *jlm.Program) *jlm.Program {

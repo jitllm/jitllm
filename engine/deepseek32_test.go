@@ -179,9 +179,3 @@ func TestDeepseek32OnEveryDevice(t *testing.T) {
 		})
 	}
 }
-
-// DeepSeek V3.2 runs the five principles' relocation and paging gates
-// (principleFixtures): the indexer's key is part of the latent row, so it
-// pages, relocates and is restored with it.
-func init() {
-}
