@@ -1154,6 +1154,7 @@ func (m *Model) mixture(b *graph.Builder, f graph.Facts, li int, x, n graph.Valu
 		}
 		return v
 	}
+	lo := len(b.G.Ops)
 	rin, ein := n, n
 	if has(jlm.RoleRouterNorm) {
 		rin = normed(x, jlm.RoleRouterNorm)
@@ -1305,6 +1306,7 @@ func (m *Model) mixture(b *graph.Builder, f graph.Facts, li int, x, n graph.Valu
 			out = b.Add(out, y)
 		}
 	}
+	b.G.Routed = graph.Region{Lo: lo, Hi: len(b.G.Ops)}
 	out = normed(out, jlm.RolePostFFNNorm2)
 	if has(jlm.RoleFFNRoutedUp) {
 		out = normed(out, jlm.RoleFFNRoutedNorm)

@@ -945,7 +945,14 @@ type Graph struct {
 	Values  []Value
 	Ops     []Op
 	In, Out []ValueID // the residual at the block's boundary
+	// Routed, where set, is the ops the front end states as the block's
+	// routed experts: its router through their weighted sum, a piece a
+	// placement may run on another device than the rest (Cut).
+	Routed Region
 }
+
+// Region is the ops [Lo, Hi) of a graph; the zero Region is none.
+type Region struct{ Lo, Hi int }
 
 func (g *Graph) value(name string, width int) ValueID {
 	g.Values = append(g.Values, Value{Name: name, Width: width})
