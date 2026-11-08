@@ -162,7 +162,7 @@ const (
 	// cos over the first half, row y of the second the row's over the
 	// second (TOpPosAxes), written at conversion (resampler.py's
 	// get_2d_sincos_pos_embed, for any grid a picture's piece reaches).
-	RoleVRsPosAxes  Role = 65494
+	RoleVRsPosAxes Role = 65494
 	// RoleVPatchEmbd2 is a two-frame patch embedding's second plane, in
 	// RoleVPatchEmbd's layout, which holds the planes' sum: a video's pair of
 	// frames x0, x1 runs as x0*(W0+W1) + (x1-x0)*W1 (Video.Entry).
