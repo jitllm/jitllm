@@ -129,6 +129,10 @@ func (r *Registry) formKernels(req Request) ([]*Kernel, error) {
 			// card by 0.34 with the pass, 2e-13 without), and a head a call
 			// reads it right.
 			k.Unpaired = k.Unpaired || req.History.ValuesInKeys
+			// A kernel over a bank in pages reads a selection a kernel before
+			// it wrote: the card reads it between the two to fault the pages
+			// in (Request.Paged), so nothing is fused into it.
+			k.Unfused = k.Unfused || k.readsTable(TableExperts)
 			k.Crowded, k.Folds, k.Unvector = sp.crowded[k.at()], foldsAPass(p), sp.unvector[k.Of]
 			k.Apart = req.Apart
 			k.Own = k.ownWrites()
