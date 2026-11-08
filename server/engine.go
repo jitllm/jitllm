@@ -1194,6 +1194,10 @@ func (e *Engine) CreateSession(o SessionOptions) (*Session, error) {
 		return nil, err
 	}
 	o.ModelID = lm.id
+	if lm.m.Cfg.NonCausal {
+		return nil, fmt.Errorf("%w: model %q is an encoder (%s): it has no decoder session to generate "+
+			"from; embed with it instead", ErrInvalid, lm.called(o.modelName), lm.m.Cfg.Arch)
+	}
 	if o.PromptCache && o.KVStore == nil {
 		// Through the model's memory cache when it has one, which layers
 		// over the same store (ttft.go, layered).
