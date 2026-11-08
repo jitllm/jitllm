@@ -156,6 +156,8 @@ type Config struct {
 	// SWAGlobalFirst makes the first layer of each period the global one
 	// (ModernBERT's), not the last.
 	SWAGlobalFirst bool
+	// MarkPointer is a pointer readout (jlm.Flag2MarkerPointer).
+	MarkPointer bool
 
 	// Logit softcapping: x = c*tanh(x/c). gemma2 caps the attention scores at
 	// 50 and the output logits at 30. Zero means none. Omitting it gives fluent
@@ -544,6 +546,10 @@ func (c *Config) NHeadAt(li int) int { return c.at(li).NHead }
 // marker head's blocks do over a trunk that does not.
 func (c *Config) LayerNormAt(li int) bool { return c.at(li).LayerNorm }
 
+// Marks says the model reads its answer at a prompt's marker rows: a marker
+// head's scorer or a pointer readout.
+func (c *Config) Marks() bool { return c.Head != nil || c.MarkPointer }
+
 // NRotAt is layer li's rotary width (see HeadDimAt).
 func (c *Config) NRotAt(li int) int {
 	if h := c.at(li); h != c {
@@ -865,6 +871,7 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 		QUnitNorm:        c.Flags2.Has(jlm.Flag2QUnitNorm),
 		OutUnrotated:     c.Flags2.Has(jlm.Flag2OutUnrotated),
 		SWAGlobalFirst:   c.Flags2.Has(jlm.Flag2SWAGlobalFirst),
+		MarkPointer:      c.Flags2.Has(jlm.Flag2MarkerPointer),
 		KVLoraRank:       int(c.KVLoraRank),
 		HeadDimV:         int(c.HeadDimV),
 		ExpertSigmoid:    c.Flags.Has(jlm.FlagExpertSigmoid),

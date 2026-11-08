@@ -103,6 +103,8 @@ func decisionOf(f *meta.File, c *jlm.Config) error {
 			return fmt.Errorf("%d decision heads do not divide a %d-wide residual", c.DecisionHeads, c.NEmbd)
 		}
 		markerHead(c)
+	} else if kind == jlm.DecisionKev {
+		c.Flags2 |= jlm.Flag2MarkerPointer
 	} else if c.DecisionBlocks != 0 {
 		return fmt.Errorf("decision type %q with %d head blocks: only laya's and clef's heads are implemented: %w", name, c.DecisionBlocks, ErrNotImplemented)
 	}

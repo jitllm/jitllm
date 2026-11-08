@@ -1407,6 +1407,8 @@ func containsValue(container, item Value) bool {
 // String() which returns a Python-style repr, printValue returns the
 // raw text for template rendering (no quotes around strings, empty
 // string for None/Undefined).
+func Print(v Value) string { return printValue(v) }
+
 func printValue(v Value) string {
 	switch v.kind {
 	case KindUndefined:

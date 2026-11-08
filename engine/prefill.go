@@ -310,7 +310,7 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 	// until every row's k and v are in the cache. A mean-pooled one is one
 	// chunk too: its readout pools every row in one call.
 	bidir := s.emb != nil && s.emb.bidir
-	whole := s.emb != nil && (s.emb.bidir || s.emb.pool == jlm.PoolMean)
+	whole := s.emb != nil && (s.emb.bidir || s.emb.whole || s.emb.pool == jlm.PoolMean)
 	chunkCap := s.chunkWidth()
 	// A speculation step that wants more than its last row's outputs runs as
 	// one chunk: the rows it wants are read out of the last chunk's residual,

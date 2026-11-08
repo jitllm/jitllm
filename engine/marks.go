@@ -16,8 +16,8 @@ import (
 func (s *Instance) MarkScores(ids []int32, qtype int, marks []int, out []float32) error {
 	n := len(ids)
 	switch {
-	case s.c.Head == nil:
-		return fmt.Errorf("model: %s reads out through no marker head", s.c.Arch)
+	case !s.c.Marks():
+		return fmt.Errorf("model: %s reads out at no marker rows", s.c.Arch)
 	case n == 0 || n > s.maxSeq:
 		return fmt.Errorf("model: %d tokens, and this instance holds %d", n, s.maxSeq)
 	case len(marks) == 0 || len(out) < len(marks):
@@ -39,7 +39,7 @@ func (s *Instance) MarkScores(ids []int32, qtype int, marks []int, out []float32
 	s.Reset()
 	s.setRequest(req)
 	defer s.setRequest(nil)
-	s.mark = embedMode{bidir: true, total: n, out: out[:len(marks)], req: req}
+	s.mark = embedMode{bidir: s.c.NonCausal, whole: true, total: n, out: out[:len(marks)], req: req}
 	s.emb = &s.mark
 	defer func() { s.emb = nil }()
 	_, err := s.Prefill(ids)

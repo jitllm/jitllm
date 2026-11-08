@@ -21,6 +21,9 @@ import (
 // embedMode is prefill's working state for one embedding run.
 type embedMode struct {
 	bidir bool
+	// whole runs the prompt as one chunk: a marker readout reads rows of
+	// every chunk.
+	whole bool
 	pool  jlm.Pooling
 	total int // positions in the sequence
 	// out is the readout (Instance.readout): through the dense heads and at unit
