@@ -123,12 +123,6 @@ func (r *Registry) formKernels(req Request) ([]*Kernel, error) {
 				return nil, fmt.Errorf("jit: cannot form %s: %w", slice(req.Graph), err)
 			}
 			k.Part, k.Unfused, k.Unjam, k.Unpaired, k.Unwide, k.Uncursored, k.Unstreamed, k.Unsplit = req.Part, sp.unfused[k.Of], sp.unjammed[k.Of], sp.unpaired[k.Of], sp.unwide[k.Of], sp.uncursored[k.Of], sp.unstreamed[k.at()], sp.unsplit[k.Of]
-			// A history whose values are its keys' rows (a latent attention's)
-			// is not read by a pair of heads a call: the paired form read it
-			// wrong on the CPU (Kimi-VL's one-key attention parted from the
-			// card by 0.34 with the pass, 2e-13 without), and a head a call
-			// reads it right.
-			k.Unpaired = k.Unpaired || req.History.ValuesInKeys
 			// A kernel over a bank in pages reads a selection a kernel before
 			// it wrote: the card reads it between the two to fault the pages
 			// in (Request.Paged), so nothing is fused into it.
