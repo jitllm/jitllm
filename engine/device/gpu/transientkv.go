@@ -2,7 +2,7 @@ package gpu
 
 import "github.com/jitllm/jitllm/nn"
 
-// One k/v pair for every non-causal block on a device.
+// One k/v pair for every non-causal block of a set on a device.
 //
 // A non-causal block's keys and values live only inside its own call
 // (nn.LayerPlan.NonCausal): the block writes them, attends over them, and the
@@ -23,12 +23,13 @@ func (g *devTier) transientKV(p *nn.LayerPlan) *kvPair {
 	cp := g.capped(p)
 	cache, vcache := g.kvCacheBytes(p, cp.MaxSeq)
 	need := uint64(cache + vcache)
-	if g.tkv != nil {
-		if g.tkv.bytes < need {
+	v := g.visOf(geoOf(p))
+	if v.tkv != nil {
+		if v.tkv.bytes < need {
 			return nil
 		}
-		g.tkvRefs++
-		return g.tkv
+		v.tkvRefs++
+		return v.tkv
 	}
 	kvp := &kvPair{shared: true, bytes: need}
 	var err error
@@ -43,26 +44,27 @@ func (g *devTier) transientKV(p *nn.LayerPlan) *kvPair {
 	}
 	g.charge(need)
 	g.KVBytes += need
-	g.tkv, g.tkvRefs = kvp, 1
+	v.tkv, v.tkvRefs = kvp, 1
 	return kvp
 }
 
-// transientKVPut drops one holder and frees the pair with the last. Callers hold
-// g.mu.
-func (g *devTier) transientKVPut() {
-	if g.tkv == nil {
+// transientKVPut drops one holder of set k's pair and frees it with the
+// last. Callers hold g.mu.
+func (g *devTier) transientKVPut(k geoKey) {
+	v := g.visOf(k)
+	if v.tkv == nil {
 		return
 	}
-	if g.tkvRefs--; g.tkvRefs > 0 {
+	if v.tkvRefs--; v.tkvRefs > 0 {
 		return
 	}
-	if g.tkv.kc != nil {
-		g.tkv.kc.Free()
+	if v.tkv.kc != nil {
+		v.tkv.kc.Free()
 	}
-	if g.tkv.vc != nil {
-		g.tkv.vc.Free()
+	if v.tkv.vc != nil {
+		v.tkv.vc.Free()
 	}
-	g.refund(g.tkv.bytes)
-	g.KVBytes -= min(g.KVBytes, g.tkv.bytes)
-	g.tkv, g.tkvRefs = nil, 0
+	g.refund(v.tkv.bytes)
+	g.KVBytes -= min(g.KVBytes, v.tkv.bytes)
+	v.tkv, v.tkvRefs = nil, 0
 }

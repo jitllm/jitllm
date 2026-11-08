@@ -265,9 +265,9 @@ func (s *Instance) openPrompt(r *route, slot, base, p0, n, chunkRows int, bidir 
 // callTellOn hands route r's device the chunk's attention before it runs:
 // a non-causal prompt's rows (embedTellOn), else the prompt's key runs in
 // the chunk (bidirTellOn). false is a device that cannot honour them.
-func (s *Instance) callTellOn(r *route, p0, n int) bool {
+func (s *Instance) callTellOn(r *route, li, p0, n int) bool {
 	if s.emb != nil && s.emb.bidir {
-		return s.embedTellOn(r, n)
+		return s.embedTellOn(r, li, n)
 	}
 	return s.bidirTellOn(r, p0, n)
 }
@@ -290,14 +290,14 @@ func (s *Instance) bidirTellOn(r *route, p0, n int) bool {
 // embedTellOn is embedTell for route r's device; a device told the prompt is
 // non-causal (nn.PromptRows) makes the chunk's run itself, handed the rows'
 // windows only where the run states them (a tower's windowed blocks).
-func (s *Instance) embedTellOn(r *route, n int) bool {
+func (s *Instance) embedTellOn(r *route, li, n int) bool {
 	if r.prompt != nil {
 		if r.wins != nil {
 			r.wins.SetRowWindows(s.emb.rowWins)
 		}
 		return true
 	}
-	if r.resv != nil && !r.resv.ReserveRows(n) {
+	if r.resv != nil && !r.resv.ReserveRows(li, n) {
 		return false
 	}
 	if r.wins == nil {

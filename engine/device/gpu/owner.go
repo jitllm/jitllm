@@ -208,7 +208,6 @@ func (g *devTier) releaseModel() {
 	// The scratch sets went with dropAllScratch; which one is in use and the
 	// non-causal set's widths are the next model's to state.
 	g.geoCur = geoKey{}
-	g.visCap, g.visMax, g.visKeys, g.visSmall, g.visFirst = 0, 0, 0, 0, 0
-	g.visWarm = [2]int{}
+	g.vis = nil
 	g.planeCap = 0
 }

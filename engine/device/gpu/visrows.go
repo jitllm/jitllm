@@ -2,6 +2,7 @@ package gpu
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/nn"
@@ -42,6 +43,79 @@ const visStart = 1024
 // before ReserveRows shrinks it.
 const visShrinkCalls = 8
 
+// visState is one non-causal set's sizing and the k/v pair its blocks share
+// (transientkv.go). cap is the rows the set is built for and max the largest
+// grid a block placed in it takes; keys the keys its k/v pairs and score rows
+// hold when it is row-chunked (LayersPhase), a picture of keys rows running
+// cap rows a call, 0 when it takes a picture whole; small the calls in a row
+// it was more than twice what they needed (ReserveRows), which shrinks it at
+// visShrinkCalls; first the rows it was first built for, every width a
+// picture's set takes doubling from it up to max (widthFor), each formed at
+// the placement (prewarmTowerWidths); chunk, for a width whose whole set did
+// not fit there, the chunk its row-chunked set was formed at; warm the
+// largest grid and the count of its blocks the widths were last formed for,
+// so a placement that changes neither forms nothing; tkv the pair and
+// tkvRefs how many hold it.
+type visState struct {
+	cap, max, keys, small, first int
+	chunk                        map[int]int
+	warm                         [2]int
+	tkv                          *kvPair
+	tkvRefs                      int
+}
+
+// visOf is set k's sizing, made on first use. Callers hold g.mu.
+func (g *devTier) visOf(k geoKey) *visState {
+	if g.vis == nil {
+		g.vis = map[geoKey]*visState{}
+	}
+	v := g.vis[k]
+	if v == nil {
+		v = &visState{}
+		g.vis[k] = v
+	}
+	return v
+}
+
+// vs is the sizing of the set in use. Callers hold g.mu.
+func (g *devTier) vs() *visState { return g.visOf(g.geoCur) }
+
+// towerVis is the sizing of the device's widest non-causal set that is not a
+// decision head's, a zero one for none: what Stats reports and a chunked call
+// reads. Callers hold g.mu.
+func (g *devTier) towerVis() *visState {
+	out := &visState{}
+	for k, v := range g.vis {
+		if k.flags&geoNonCausal != 0 && k.flags&geoNCHead == 0 && v.cap > out.cap {
+			out = v
+		}
+	}
+	return out
+}
+
+// towerSets is the keys of the non-causal sets this device's blocks run in,
+// a decision head's aside (it moves with its encoder's). Callers hold g.mu.
+func (g *devTier) towerSets() []geoKey {
+	var out []geoKey
+	for _, l := range g.layers {
+		if l != nil && l.geo.flags&geoNonCausal != 0 && l.geo.flags&geoNCHead == 0 && !slices.Contains(out, l.geo) {
+			out = append(out, l.geo)
+		}
+	}
+	return out
+}
+
+// holdsSet reports whether a block of this device runs in set k. Callers
+// hold g.mu.
+func (g *devTier) holdsSet(k geoKey) bool {
+	for _, l := range g.layers {
+		if l != nil && l.geo == k {
+			return true
+		}
+	}
+	return false
+}
+
 // visGrain is the finest step a tower's rows move in.
 const visGrain = 64
 
@@ -58,58 +132,66 @@ func visRowsFor(n, most int) int {
 	return min(roundUp(max(n, 1), step), most)
 }
 
-// towerWidthFor is the width a picture of n rows takes a set at: visFirst,
-// doubled until it holds n, never past the tower's largest grid. Every one is
-// formed at the placement (prewarmTowerWidths), so a picture's encode
-// allocates its set and composes nothing.
-func (g *devTier) towerWidthFor(n int) int {
-	w := max(g.visFirst, 1)
-	for w < n && w < g.visMax {
+// widthFor is the width a picture of n rows takes the set at: its first,
+// doubled until it holds n, never past its largest grid. Every one is formed
+// at the placement (prewarmTowerWidths), so a picture's encode allocates its
+// set and composes nothing.
+func (v *visState) widthFor(n int) int {
+	w := max(v.first, 1)
+	for w < n && w < v.max {
 		w *= 2
 	}
-	return min(w, g.visMax)
+	return min(w, v.max)
 }
 
-// prewarmTowerWidths forms the tower's parts at every width a picture's set
-// takes (towerWidthFor), building the set at each in turn and then as it was:
-// the composer runs at the placement, and an encode only allocates. A width
-// whose whole set does not fit forms the row-chunked set a picture of it
-// takes (chunkTower), its chunk kept in visChunk. Callers hold g.mu.
+// prewarmTowerWidths forms each non-causal set's parts at every width a
+// picture's set takes (widthFor), building the set at each in turn and then
+// as it was: the composer runs at the placement, and an encode only
+// allocates. A width whose whole set does not fit forms the row-chunked set a
+// picture of it takes (chunkTower), its chunk kept in the set's chunk.
+// Callers hold g.mu.
 func (g *devTier) prewarmTowerWidths() {
-	if g.NoPromptPrewarm || g.visFirst == 0 || !g.holdsTower() {
+	for _, k := range g.towerSets() {
+		g.prewarmSetWidths(k)
+	}
+}
+
+// prewarmSetWidths is prewarmTowerWidths for set k. Callers hold g.mu.
+func (g *devTier) prewarmSetWidths(k geoKey) {
+	home := g.geoCur
+	g.useGeom(k)
+	defer g.useGeom(home)
+	if g.NoPromptPrewarm || g.vs().first == 0 {
 		return
 	}
 	towers := 0
 	for _, l := range g.layers {
-		if l != nil && l.geo.flags&geoNonCausal != 0 {
+		if l != nil && l.geo == k {
 			towers++
 		}
 	}
-	if g.visWarm == [2]int{g.visMax, towers} {
+	if g.vs().warm == [2]int{g.vs().max, towers} {
 		return
 	}
-	g.visWarm = [2]int{g.visMax, towers}
-	home := g.geoCur
-	g.useGeom(geoKey{flags: geoNonCausal})
-	defer g.useGeom(home)
+	g.vs().warm = [2]int{g.vs().max, towers}
 	if g.bs == nil {
 		return
 	}
 	plan := g.bs.p
-	plan.MaxSeq = g.visMax
-	first, keys, why := g.visCap, g.visKeys, g.LastErr
+	plan.MaxSeq = g.vs().max
+	first, keys, why := g.vs().cap, g.vs().keys, g.LastErr
 	was := g.prewarming
 	g.prewarming = true
 	defer func() { g.prewarming = was }()
 	back := func() bool {
 		g.dropGraph()
-		g.visKeys = 0
+		g.vs().keys = 0
 		return g.towerComposedAt(&plan, first)
 	}
-	for w := g.visFirst; ; w = min(2*w, g.visMax) {
+	for w := g.vs().first; ; w = min(2*w, g.vs().max) {
 		if w != first || keys != 0 {
 			g.dropGraph()
-			g.visKeys = 0
+			g.vs().keys = 0
 			if !g.towerComposedAt(&plan, w) || !g.headSetAt(w) {
 				if !back() {
 					break
@@ -118,11 +200,11 @@ func (g *devTier) prewarmTowerWidths() {
 			}
 			g.formTables(g.bs)
 		}
-		if w >= g.visMax {
+		if w >= g.vs().max {
 			break
 		}
 	}
-	if (g.visCap != first || g.visKeys != 0) && !back() {
+	if (g.vs().cap != first || g.vs().keys != 0) && !back() {
 		g.LastErr = fmt.Sprintf("%s; and the tower's set at its first %d rows could not be rebuilt after its widths formed: %s",
 			why, first, g.LastErr)
 		return
@@ -133,25 +215,13 @@ func (g *devTier) prewarmTowerWidths() {
 	g.LastErr = why
 }
 
-// holdsTower reports whether a tower block (a non-causal block that runs in
-// the non-causal set, not a convolutional one) is on this device. Callers
-// hold g.mu.
-func (g *devTier) holdsTower() bool {
-	for _, l := range g.layers {
-		if l != nil && l.geo.flags&geoNonCausal != 0 {
-			return true
-		}
-	}
-	return false
-}
-
 // buildTowerScratch builds the set in use's scratch from plan p at visCap
 // rows. Callers hold g.mu with the non-causal set in use.
 func (g *devTier) buildTowerScratch(p *nn.LayerPlan) bool {
 	cp := g.capped(p)
 	rows := cp.MaxSeq
-	if g.visKeys > 0 {
-		rows = g.visCap // a row-chunked set: chunk rows, every key's width
+	if g.vs().keys > 0 {
+		rows = g.vs().cap // a row-chunked set: chunk rows, every key's width
 	}
 	if g.bs = g.initScratch(&cp, rows); g.bs == nil {
 		return false
@@ -201,8 +271,8 @@ func planeBytes(bs *blockScratch) int64 {
 // could not share). Callers hold g.mu.
 func (g *devTier) towerKV() []*kvPair {
 	var out []*kvPair
-	if g.tkv != nil && g.geoCur == (geoKey{flags: geoNonCausal}) {
-		out = append(out, g.tkv)
+	if g.vs().tkv != nil {
+		out = append(out, g.vs().tkv)
 	}
 	for _, l := range g.layers {
 		if l == nil || l.geo != g.geoCur {
@@ -262,45 +332,50 @@ func (bs *blockScratch) partBytes() int64 {
 	return n
 }
 
-// ReserveRows makes this device's tower blocks able to take a call of n rows
-// (nn.RowsReserver): their set grows to n, or shrinks to it when it has been
-// twice what the calls needed for visShrinkCalls calls in a row, and false --
-// with the set as it was -- is a budget that cannot hold it. A device holding no tower block has nothing to size. Callers must
-// NOT hold g.mu: a resize drops the captured graph and compiles.
-func (g *devTier) ReserveRows(n int) bool {
+// ReserveRows makes the set block li runs in able to take a call of n rows
+// (nn.RowsReserver): it grows to n, or shrinks to it when it has been twice
+// what the calls needed for visShrinkCalls calls in a row, and false -- with
+// the set as it was -- is a budget that cannot hold it. A device not holding
+// block li as a non-causal block has nothing to size. Callers must NOT hold
+// g.mu: a resize drops the captured graph and compiles.
+func (g *devTier) ReserveRows(li, n int) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if !g.holdsTower() {
+	l := g.layers[li]
+	if l == nil || l.geo.flags&geoNonCausal == 0 {
 		return true
 	}
-	if n > g.visMax {
-		g.LastErr = fmt.Sprintf("a call of %d rows on a tower whose largest grid is %d", n, g.visMax)
+	home := g.geoCur
+	g.useGeom(l.geo)
+	defer g.useGeom(home)
+	if n > g.vs().max {
+		g.LastErr = fmt.Sprintf("a call of %d rows on a tower whose largest grid is %d", n, g.vs().max)
 		return false
 	}
-	want := g.towerWidthFor(n)
-	if g.visKeys == 0 && n <= g.visCap && !g.towerHeld() {
+	want := g.vs().widthFor(n)
+	if g.vs().keys == 0 && n <= g.vs().cap && !g.towerHeld() {
 		// The whole set's composed parts are not held beside the blocks
 		// placed: the picture takes a chunked set.
-		g.visSmall = 0
+		g.vs().small = 0
 		return g.chunkTower(n, want)
 	}
-	if g.visKeys == 0 && (want == g.visCap || n <= g.visCap && 2*want > g.visCap) {
-		g.visSmall = 0
+	if g.vs().keys == 0 && (want == g.vs().cap || n <= g.vs().cap && 2*want > g.vs().cap) {
+		g.vs().small = 0
 		return true
 	}
-	if g.visKeys == 0 && n <= g.visCap {
-		if g.visSmall++; g.visSmall < visShrinkCalls {
+	if g.vs().keys == 0 && n <= g.vs().cap {
+		if g.vs().small++; g.vs().small < visShrinkCalls {
 			return true
 		}
 	}
-	g.visSmall = 0
+	g.vs().small = 0
 	// A row-chunked set holds a picture its keys cover, for as long as a
 	// whole set still does not fit: tried first, since a picture taken
 	// whole is fewer submissions.
 	if g.resizeTower(n, want) {
 		return true
 	}
-	if g.visKeys >= n && g.visKeys < 2*want {
+	if g.vs().keys >= n && g.vs().keys < 2*want {
 		return true
 	}
 	return g.chunkTower(n, want)
@@ -311,17 +386,17 @@ func (g *devTier) ReserveRows(n int) bool {
 func (g *devTier) TowerChunk() int {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if g.visKeys == 0 {
-		return 0
+	if v := g.towerVis(); v.keys != 0 {
+		return v.cap
 	}
-	return g.visCap
+	return 0
 }
 
 // towerKeep is the room a streamed tower's set must leave: minSlots of the
 // widest block to swap through, 0 for a resident tower. Callers hold g.mu.
 func (g *devTier) towerKeep() int64 {
 	for li, l := range g.layers {
-		if l != nil && l.geo == (geoKey{flags: geoNonCausal}) && g.stream[li] {
+		if l != nil && l.geo == g.geoCur && g.stream[li] {
 			return int64(minSlots) * int64(g.widest)
 		}
 	}
@@ -333,7 +408,7 @@ func (g *devTier) towerKeep() int64 {
 // Callers hold g.mu.
 func (g *devTier) towerWindowed() bool {
 	for _, l := range g.layers {
-		if l != nil && l.geo == (geoKey{flags: geoNonCausal}) && l.windowed {
+		if l != nil && l.geo == g.geoCur && l.windowed {
 			return true
 		}
 	}
@@ -344,26 +419,24 @@ func (g *devTier) towerWindowed() bool {
 // picture of n rows fits: k/v pairs and score rows for want keys, the rest
 // of the scratch for a chunk of rows, the widest chunk that fits, halving
 // down to visGrain. The tower then runs a picture block by block in two
-// phases a chunk at a time (LayersPhase). Refused for windowed towers and
-// where even the narrowest chunk does not fit. Callers hold g.mu.
+// phases a chunk at a time (LayersPhase). Refused for windowed towers, an
+// encoder with a decision head's set, and where even the narrowest chunk does
+// not fit. Callers hold g.mu with the set in use.
 func (g *devTier) chunkTower(n, want int) bool {
-	if g.NoTowerChunks || g.towerWindowed() || g.hasHeadSet() {
+	if g.NoTowerChunks || g.towerWindowed() || g.geoCur.flags&geoTower == 0 && g.hasHeadSet() {
 		return false
 	}
-	home := g.geoCur
-	g.useGeom(geoKey{flags: geoNonCausal})
-	defer g.useGeom(home)
 	old := g.bs
 	if old == nil {
 		return false
 	}
 	keep := g.towerKeep()
 	plan := old.p
-	plan.MaxSeq = g.visMax
-	prevCap, prevKeys, why := g.visCap, g.visKeys, g.LastErr
+	plan.MaxSeq = g.vs().max
+	prevCap, prevKeys, why := g.vs().cap, g.vs().keys, g.LastErr
 	// A call takes the chunk its width was formed at (prewarmTowerWidths);
 	// the placement searches for the widest that fits and keeps it.
-	top, formed := g.visChunk[want]
+	top, formed := g.vs().chunk[want]
 	if !g.prewarming && !formed {
 		g.LastErr = fmt.Sprintf("%s; and no row-chunked set of %d keys was formed at the placement", why, want)
 		return false
@@ -383,18 +456,18 @@ func (g *devTier) chunkTower(n, want int) bool {
 			continue
 		}
 		g.dropGraph()
-		g.visKeys = want
+		g.vs().keys = want
 		if g.towerComposedAt(&plan, c) && (keep == 0 || g.slots() >= minSlots) {
 			g.TowerChunked++
 			if g.prewarming {
-				if g.visChunk == nil {
-					g.visChunk = map[int]int{}
+				if g.vs().chunk == nil {
+					g.vs().chunk = map[int]int{}
 				}
-				g.visChunk[want] = c
+				g.vs().chunk[want] = c
 			}
 			return true
 		}
-		g.visKeys = prevKeys
+		g.vs().keys = prevKeys
 		if !g.towerAt(&plan, prevCap) {
 			g.LastErr = fmt.Sprintf("%s; and the set's %d rows could not be rebuilt: %s", why, prevCap, g.LastErr)
 			return false
@@ -408,12 +481,9 @@ func (g *devTier) chunkTower(n, want int) bool {
 	return false
 }
 
-// resizeTower moves the non-causal set to want rows for a call of n. Callers
-// hold g.mu.
+// resizeTower moves the set in use to want rows for a call of n. Callers
+// hold g.mu with the set in use.
 func (g *devTier) resizeTower(n, want int) bool {
-	home := g.geoCur
-	g.useGeom(geoKey{flags: geoNonCausal})
-	defer g.useGeom(home)
 	old := g.bs
 	if old == nil {
 		g.LastErr = "a tower block with no scratch set"
@@ -424,7 +494,7 @@ func (g *devTier) resizeTower(n, want int) bool {
 	// minSlots of the widest block to swap through; a set that leaves
 	// fewer is refused as before, and the blocks run on the CPU.
 	keep := g.towerKeep()
-	if want > g.visCap || g.visKeys > 0 {
+	if want > g.vs().cap || g.vs().keys > 0 {
 		// Asked before anything is allocated. The step may not fit where the
 		// picture's own rows would.
 		need := g.towerGrowth(old, want) + keep
@@ -449,10 +519,10 @@ func (g *devTier) resizeTower(n, want int) bool {
 		}
 	}
 	plan := old.p
-	plan.MaxSeq = g.visMax
-	prev, prevKeys := g.visCap, g.visKeys
+	plan.MaxSeq = g.vs().max
+	prev, prevKeys := g.vs().cap, g.vs().keys
 	g.dropGraph()
-	g.visKeys = 0 // a whole set
+	g.vs().keys = 0 // a whole set
 	if g.towerComposedAt(&plan, want) {
 		// The estimate is an estimate: what the set really charged must
 		// still leave a streamed tower its slot, or the first page-in of
@@ -466,7 +536,7 @@ func (g *devTier) resizeTower(n, want int) bool {
 	why := g.LastErr
 	// What fitted before fits again, its blocks' composed parts with it: the
 	// old rows, or nothing at all, and the caller moves blocks to the CPU.
-	g.visKeys = prevKeys
+	g.vs().keys = prevKeys
 	if !g.towerComposedAt(&plan, prev) {
 		g.LastErr = fmt.Sprintf("%s; and the set's %d rows could not be rebuilt: %s", why, prev, g.LastErr)
 		return false
@@ -490,7 +560,7 @@ func (g *devTier) towerAt(p *nn.LayerPlan, rows int) bool {
 		}
 		g.dropScratch(g.bs)
 		g.bs = nil
-		g.visCap = rows
+		g.vs().cap = rows
 		return g.buildTowerScratch(p) && g.towerKVAt(p)
 	}()
 	if ok && g.overBudget() {
@@ -509,11 +579,18 @@ func (g *devTier) towerAt(p *nn.LayerPlan, rows int) bool {
 // fit. Callers hold g.mu.
 func (g *devTier) towerHeld() bool {
 	for li, l := range g.layers {
-		if l != nil && l.nonCausal && g.prewarmTower(li) != "" {
+		if l != nil && l.nonCausal && g.heldWith(l.geo) && g.prewarmTower(li) != "" {
 			return false
 		}
 	}
 	return true
+}
+
+// heldWith says a block of set k is held beside the set in use: its own, or
+// a decision head's beside its encoder's, which moves with it (headSetAt).
+// Callers hold g.mu.
+func (g *devTier) heldWith(k geoKey) bool {
+	return k == g.geoCur || g.geoCur.flags&geoTower == 0 && k.flags&geoNCHead != 0
 }
 
 // towerComposedAt is towerAt holding every tower block's composed part at
@@ -568,15 +645,15 @@ func (g *devTier) towerKVAt(p *nn.LayerPlan) bool {
 	return true
 }
 
-// dropIdleTower frees the non-causal set when no tower block is left on the
-// device: the last one released, or a first one the budget refused after its
-// set was built. Callers hold g.mu.
+// dropIdleTower frees each non-causal set no block is left in: its last one
+// released, or a first one the budget refused after its set was built.
+// Callers hold g.mu.
 func (g *devTier) dropIdleTower() {
-	if g.visCap == 0 || g.holdsTower() {
-		return
-	}
 	home := g.geoCur
-	for _, k := range []geoKey{{flags: geoNonCausal}, {flags: geoNonCausal | geoNCHead}} {
+	for k, v := range g.vis {
+		if k.flags&geoNonCausal == 0 || v.cap == 0 || g.holdsSet(k) {
+			continue
+		}
 		g.useGeom(k)
 		if g.bs != nil || len(g.bbs) > 0 {
 			g.dropGraph()
@@ -586,9 +663,9 @@ func (g *devTier) dropIdleTower() {
 			g.dropScratch(g.bs)
 			g.bs = nil
 		}
+		v.cap, v.max, v.first, v.chunk, v.warm = 0, 0, 0, nil, [2]int{}
 	}
 	g.useGeom(home)
-	g.visCap, g.visMax, g.visFirst, g.visChunk, g.visWarm = 0, 0, 0, nil, [2]int{}
 }
 
 // hasHeadSet reports a decision head's own non-causal set on this device
@@ -607,7 +684,7 @@ func (g *devTier) hasHeadSet() bool {
 // with no head set has nothing to move. Callers hold g.mu and dropped the
 // graph.
 func (g *devTier) headSetAt(rows int) bool {
-	if !g.hasHeadSet() {
+	if g.geoCur.flags&geoTower != 0 || !g.hasHeadSet() {
 		return true
 	}
 	home := g.geoCur
@@ -617,7 +694,7 @@ func (g *devTier) headSetAt(rows int) bool {
 		return true
 	}
 	plan := g.bs.p
-	plan.MaxSeq = g.visMax
+	plan.MaxSeq = g.vs().max
 	if !g.towerAt(&plan, rows) {
 		g.LastErr = fmt.Sprintf("the decision head's set at %d rows: %s", rows, g.LastErr)
 		return false
@@ -625,15 +702,15 @@ func (g *devTier) headSetAt(rows int) bool {
 	return true
 }
 
-// ReserveRows asks every device (nn.RowsReserver); one holding no tower block
+// ReserveRows asks every device (nn.RowsReserver); one not holding block li
 // says yes.
-func (g *GPU) ReserveRows(n int) bool {
+func (g *GPU) ReserveRows(li, n int) bool {
 	g.resetCause(0, true)
 	g.mu.Lock()
 	ds := g.devs
 	g.mu.Unlock()
 	for _, d := range ds {
-		if !d.ReserveRows(n) {
+		if !d.ReserveRows(li, n) {
 			return false
 		}
 	}
@@ -642,9 +719,9 @@ func (g *GPU) ReserveRows(n int) bool {
 
 // ReserveRows forwards under the session's call locks: a resize rebuilds the
 // set another session's call would run in.
-func (s *gpuSession) ReserveRows(n int) bool {
+func (s *gpuSession) ReserveRows(li, n int) bool {
 	defer s.leave(s.enter())
-	return s.g.ReserveRows(n)
+	return s.g.ReserveRows(li, n)
 }
 
 // TowerChunk is the rows every device's row-chunked tower set takes a call,

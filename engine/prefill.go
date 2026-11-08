@@ -546,7 +546,7 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 			if err := s.openPrompt(r, slot, base, p0, n, chunkRows, bidir); err != nil {
 				return nil, err
 			}
-			if s.callTellOn(r, p0, n) && r.run.Layers(li, hi, p0, n, s.bx[:n*c.ResidW()], s.bcs[:n*c.RopeW()],
+			if s.callTellOn(r, li, p0, n) && r.run.Layers(li, hi, p0, n, s.bx[:n*c.ResidW()], s.bcs[:n*c.RopeW()],
 				s.bswaTable(n, c.LocalNRot()), fh) {
 				headDone = fh != nil
 				li = hi - 1
