@@ -82,8 +82,7 @@ func TestDecisionOverPicturesMatchesItsGoldens(t *testing.T) {
 		// with the CPU's int8 activations, 0.019 with its float forms (the
 		// per-family readout read 0.02); llama.cpp sits 0.0003 from the
 		// model's own code here.
-		{"d1-omni", "d1-omni/d1-omni-600M-F16.gguf", "d1-omni-600M-F16.pictures.llamacpp.json", 0.03,
-			"the card holds one non-causal set, and d1-omni's tower and text are two (task: a tower beside a non-causal text model)"},
+		{"d1-omni", "d1-omni/d1-omni-600M-F16.gguf", "d1-omni-600M-F16.pictures.llamacpp.json", 0.03, ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

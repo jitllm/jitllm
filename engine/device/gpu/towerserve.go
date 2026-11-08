@@ -32,7 +32,7 @@ func (g *devTier) towerServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratc
 		return partFeeds
 	case bs.cs == nil && rotates(l.graph):
 		return partTableHeld
-	case g.tkv == nil || g.tkv.kc == nil || g.tkv.vc == nil:
+	case g.visOf(l.geo).tkv == nil || g.visOf(l.geo).tkv.kc == nil || g.visOf(l.geo).tkv.vc == nil:
 		return partNoPool
 	case l.windowed && len(g.winRuns) == 0:
 		return partWindow
@@ -58,7 +58,7 @@ func (g *devTier) prewarmTower(li int) (roomless string) {
 	// (SetKeyRuns, SetRowWindows) are descriptors its form reads, not a
 	// shape it is formed for.
 	if bs == nil || bs.pics == nil || bs.calls == nil || bs.cs == nil && rotates(l.graph) ||
-		g.tkv == nil || g.tkv.kc == nil {
+		g.vs().tkv == nil || g.vs().tkv.kc == nil {
 		return ""
 	}
 	_, inst, _, err := g.towerStep(bs, l, li, &bs.p, bs.rows)
@@ -94,7 +94,8 @@ func (g *devTier) towerStep(bs *blockScratch, l *layer, li int, p *nn.LayerPlan,
 	// the pool's one page.
 	page := cpl.MaxSeq + 1
 	pl := &l.picPool
-	pl.geom, pl.k, pl.v, pl.tab = g.kvGeomOf(p), g.tkv.kc, g.tkv.vc, bs.zero
+	tkv := g.visOf(l.geo).tkv
+	pl.geom, pl.k, pl.v, pl.tab = g.kvGeomOf(p), tkv.kc, tkv.vc, bs.zero
 	sv, err = g.servedBlock(l, li, bs.cs, pl, bs.pics, bs.picsW, bs.roff, bs.calls, nil, cpl.MaxSeq, page, R, 0, bs)
 	if err != nil {
 		return nil, nil, nil, err

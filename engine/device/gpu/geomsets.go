@@ -47,6 +47,10 @@ const (
 	// geoNCHead is, beside geoNonCausal, a decision head's own non-causal
 	// set (nn.LayerPlan.HeadSet): it resizes with the encoder's (visrows.go).
 	geoNCHead
+	// geoTower is, beside geoNonCausal, a tower's set (nn.LayerPlan.Tower),
+	// apart from a non-causal text model's: its residual, heads and rows are
+	// not the encoder's, and the two size apart.
+	geoTower
 )
 
 // geoOf is the set block plan p runs in. A non-causal segment (a vision
@@ -56,8 +60,11 @@ const (
 // kinds over one residual, a segment takes a set of its own.
 func geoOf(p *nn.LayerPlan) geoKey {
 	if p.NonCausal {
-		if p.HeadSet {
+		switch {
+		case p.HeadSet:
 			return geoKey{flags: geoNonCausal | geoNCHead}
+		case p.Tower:
+			return geoKey{flags: geoNonCausal | geoTower}
 		}
 		return geoKey{flags: geoNonCausal}
 	}

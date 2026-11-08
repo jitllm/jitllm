@@ -1126,8 +1126,9 @@ func (g *devTier) permBytes(p *nn.LayerPlan, w *nn.LayerWeights) uint64 {
 	cp := g.capped(p)
 	cache, vcache := g.kvCacheBytes(p, cp.MaxSeq)
 	if p.NonCausal {
-		// One pair for every non-causal block, charged once (transientkv.go).
-		if g.tkv != nil && g.tkv.bytes >= uint64(cache+vcache) {
+		// One pair for every non-causal block of a set, charged once
+		// (transientkv.go).
+		if v := g.visOf(geoOf(p)); v.tkv != nil && v.tkv.bytes >= uint64(cache+vcache) {
 			return n
 		}
 		return n + uint64(cache+vcache)
@@ -1345,7 +1346,7 @@ func (g *devTier) addSessionKV(sid uint64, l *layer, p *nn.LayerPlan) bool {
 func (g *devTier) freeKV(l *layer) {
 	for sid, p := range l.kv {
 		if p.shared {
-			g.transientKVPut()
+			g.transientKVPut(l.geo)
 			delete(l.kv, sid)
 			continue
 		}
@@ -1753,10 +1754,10 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	// the tower's largest grid (visrows.go): the first block sets where it
 	// starts, ReserveRows moves it.
 	if p.NonCausal {
-		g.visMax = max(g.visMax, p.MaxSeq)
-		if g.visCap == 0 {
-			g.visCap = visRowsFor(min(p.MaxSeq, visStart), p.MaxSeq)
-			g.visFirst = g.visCap
+		g.vs().max = max(g.vs().max, p.MaxSeq)
+		if g.vs().cap == 0 {
+			g.vs().cap = visRowsFor(min(p.MaxSeq, visStart), p.MaxSeq)
+			g.vs().first = g.vs().cap
 		}
 	}
 	if g.bs == nil && p.NonCausal {
@@ -1778,12 +1779,12 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		// block runs its own width inside it (layer.nffn). An LFM2 encoder's
 		// convolution blocks and attention blocks share a set too: it carries
 		// the convolution's kernels and the q/k norm's, whichever came first.
-		want.NFFN, want.MaxSeq = max(want.NFFN, sp.NFFN), g.visMax
+		want.NFFN, want.MaxSeq = max(want.NFFN, sp.NFFN), g.vs().max
 		if want.Recurrent.Conv == 0 {
 			want.Recurrent = sp.Recurrent
 		}
 		want.QKNorm = want.QKNorm || sp.QKNorm
-		if !g.towerAt(&want, g.visCap) {
+		if !g.towerAt(&want, g.vs().cap) {
 			return false
 		}
 	} else if want := g.bs.p; !p.NonCausal && planUnion(&want, sp) {
@@ -2431,7 +2432,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 			l.kv = map[uint64]*kvPair{}
 		}
 		if old := l.kv[sid]; old != nil && old.shared {
-			g.transientKVPut()
+			g.transientKVPut(l.geo)
 		} else if old != nil {
 			// Re-preparing a block this session already holds: its previous
 			// history goes, or it leaks (see dropLayerLocal).
@@ -5170,7 +5171,7 @@ func (g *devTier) afterRelease() {
 	// The last tower block out takes its set's scratch with it, and a block
 	// out takes its parts: the next placement forms the widths again.
 	g.dropIdleTower()
-	g.visWarm = [2]int{}
+	g.vs().warm = [2]int{}
 	g.dropIfEmpty()
 	// A decline is cached: resident() keeps a failed entry so a tensor is not
 	// re-priced every matvec, and that entry says no forever. Giving budget
@@ -5281,7 +5282,7 @@ func (g *devTier) dropHistory(li int, l *layer, sid uint64) bool {
 		freed = true
 	} else if kvp != nil && kvp.shared {
 		delete(l.kv, sid)
-		g.transientKVPut()
+		g.transientKVPut(l.geo)
 		freed = true
 	} else if kvp != nil {
 		if kvp.kc != nil {
@@ -5747,8 +5748,9 @@ func (g *devTier) capped(p *nn.LayerPlan) nn.LayerPlan {
 	// HunyuanOCR): the set is built for the rows ReserveRows last sized it to
 	// (visrows.go), and a call is one submission of at most that many.
 	if q.NonCausal {
-		if g.visCap > 0 {
-			q.MaxSeq = min(q.MaxSeq, max(g.visCap, g.visKeys))
+		// The plan's own set's rows, whichever set is in use.
+		if v := g.visOf(geoOf(p)); v.cap > 0 {
+			q.MaxSeq = min(q.MaxSeq, max(v.cap, v.keys))
 		}
 		return q
 	}

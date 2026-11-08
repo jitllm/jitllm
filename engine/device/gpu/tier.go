@@ -1228,33 +1228,13 @@ type devShared struct {
 	tickets []uint64
 	quiet   int
 	idle    sync.Cond
-	// tkv is the k/v pair every non-causal block shares and tkvRefs how many
-	// hold it (transientkv.go). Guarded by mu.
-	tkv     *kvPair
-	tkvRefs int
 	// subCost is the per-block run time of a submission by its row count's
 	// class (subbudget.go). Guarded by mu.
 	subCost map[int]time.Duration
-	// visCap is the rows the non-causal set is built for and visMax the
-	// largest grid a tower placed here takes (visrows.go). Guarded by mu.
-	visCap, visMax int
-	// visKeys is the keys the set's k/v pairs and score rows hold when it is
-	// row-chunked (LayersPhase): a picture of visKeys rows runs visCap rows a
-	// call. 0 when the set takes a picture whole (visKeys is visCap).
-	visKeys int
-	// visSmall counts the calls in a row the set was more than twice what
-	// they needed (ReserveRows), which shrinks it at visShrinkCalls.
-	visSmall int
-	// visFirst is the rows the set was first built for: every width a
-	// picture's set takes doubles from it up to visMax (towerWidthFor), each
-	// formed at the placement (prewarmTowerWidths). visChunk is, for a width
-	// whose whole set did not fit there, the chunk its row-chunked set was
-	// formed at.
-	visFirst int
-	visChunk map[int]int
-	// visWarm is the largest grid and the count of tower blocks the widths
-	// were last formed for: a placement that changes neither forms nothing.
-	visWarm [2]int
+	// vis is each non-causal set's sizing and shared k/v pair, by its key
+	// (visrows.go): an encoder's, its decision head's and a tower's are each
+	// their own. Guarded by mu.
+	vis map[geoKey]*visState
 	// scratch is the budget the device's own buffers hold -- the block
 	// scratches and the staging -- and explicit the running sum of what
 	// charge and refund moved, which a scratch window subtracts so a weight or
@@ -1895,7 +1875,7 @@ func (d *devTier) stats() Stats {
 	if bb := d.bbs[d.promptW]; d.stepW == 0 && d.StepRows > 0 && bb != nil && bb.ragLogits != nil {
 		s.ReservedStep = d.promptW
 	}
-	s.TowerRows = d.visCap
+	s.TowerRows = d.towerVis().cap
 	s.Allocated, s.RoundingBytes = uint64(d.allocated()), d.rounding
 	s.BlockForms = append([]int(nil), d.blockForms...)
 	if d.shadowing() {

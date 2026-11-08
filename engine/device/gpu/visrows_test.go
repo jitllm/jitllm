@@ -41,14 +41,14 @@ func TestATowerIsBuiltForItsPicture(t *testing.T) {
 	// does not fit, and a picture's call composes nothing.
 	g.prewarmPromptWidths()
 	placed := g.Stats().ScratchBytes
-	if dt.visCap != visStart || placed == 0 {
+	if dt.towerVis().cap != visStart || placed == 0 {
 		t.Fatalf("placement built the set for %d rows and charged %d bytes, want %d rows and a charge",
-			dt.visCap, placed, visStart)
+			dt.towerVis().cap, placed, visStart)
 	}
 	cs := make([]float32, p.NEmbd)
 	run := func(n int) {
 		t.Helper()
-		if !g.ReserveRows(n) {
+		if !g.ReserveRows(0, n) {
 			t.Fatalf("a picture of %d rows refused: %s", n, g.Err())
 		}
 		if !g.Layers(0, blocks, 0, n, make([]float32, n*p.NEmbd), cs, nil, nil) {
@@ -57,25 +57,25 @@ func TestATowerIsBuiltForItsPicture(t *testing.T) {
 	}
 	run(3000)
 	grown := g.Stats().ScratchBytes
-	if dt.visCap != dt.towerWidthFor(3000) || grown <= placed {
-		t.Fatalf("a 3000-row picture: the set is %d rows and %d bytes (placed at %d)", dt.visCap, grown, placed)
+	if dt.towerVis().cap != dt.towerVis().widthFor(3000) || grown <= placed {
+		t.Fatalf("a 3000-row picture: the set is %d rows and %d bytes (placed at %d)", dt.towerVis().cap, grown, placed)
 	}
 	// The grid itself: asked of the budget, not of the card. Whole, it does
 	// not fit; with the row-chunked set refused (NoTowerChunks), so is the
 	// picture, and nothing is allocated for it.
 	bufs, held := d.bufs, live()
 	dt.NoTowerChunks = true
-	if g.ReserveRows(p.MaxSeq) {
+	if g.ReserveRows(0, p.MaxSeq) {
 		t.Fatalf("a %d-row set fit a %d MB card", p.MaxSeq, budget>>20)
 	}
 	dt.NoTowerChunks = false
-	if d.bufs != bufs || live() != held || dt.visCap != dt.towerWidthFor(3000) {
+	if d.bufs != bufs || live() != held || dt.towerVis().cap != dt.towerVis().widthFor(3000) {
 		t.Fatalf("the refused picture allocated %d buffers (%d -> %d bytes live) and left the set at %d rows",
-			d.bufs-bufs, held, live(), dt.visCap)
+			d.bufs-bufs, held, live(), dt.towerVis().cap)
 	}
 	// Row-chunked (chunkTower) it fits: k/v for every key, the rest for a
 	// chunk of rows narrower than the picture.
-	if !g.ReserveRows(p.MaxSeq) {
+	if !g.ReserveRows(0, p.MaxSeq) {
 		t.Fatalf("a %d-row picture refused row-chunked on a %d MB card: %s", p.MaxSeq, budget>>20, g.Err())
 	}
 	if c := g.TowerChunk(); c <= 0 || c >= p.MaxSeq || g.Stats().TowerChunked == 0 {
@@ -93,31 +93,31 @@ func TestATowerIsBuiltForItsPicture(t *testing.T) {
 		run(3000)
 		run(500)
 	}
-	if d.bufs != bufs || dt.visCap != dt.towerWidthFor(3000) {
+	if d.bufs != bufs || dt.towerVis().cap != dt.towerVis().widthFor(3000) {
 		t.Fatalf("pictures of 3000 and 500 rows in turn rebuilt the set: %d buffers allocated, %d rows",
-			d.bufs-bufs, dt.visCap)
+			d.bufs-bufs, dt.towerVis().cap)
 	}
 	run(3000)
 	for range visShrinkCalls - 1 {
 		run(500)
 	}
-	if dt.visCap != dt.towerWidthFor(3000) {
-		t.Fatalf("%d pictures of 500 rows in a row shrank the set to %d rows", visShrinkCalls-1, dt.visCap)
+	if dt.towerVis().cap != dt.towerVis().widthFor(3000) {
+		t.Fatalf("%d pictures of 500 rows in a row shrank the set to %d rows", visShrinkCalls-1, dt.towerVis().cap)
 	}
 	run(500)
 	small := g.Stats().ScratchBytes
 	// The set goes back to its first width, the least a picture takes
 	// (towerWidthFor), smaller than the 3000-row picture's.
-	if dt.visCap != dt.towerWidthFor(500) || small >= grown {
-		t.Fatalf("a 500-row picture after a 3000-row one: the set is %d rows and %d bytes", dt.visCap, small)
+	if dt.towerVis().cap != dt.towerVis().widthFor(500) || small >= grown {
+		t.Fatalf("a 500-row picture after a 3000-row one: the set is %d rows and %d bytes", dt.towerVis().cap, small)
 	}
 	t.Logf("a %d-row grid on a %d MB card: set %d bytes at %d rows placed, %d at %d (3000 rows), %d at %d (500 rows); "+
-		"the grid refused with nothing allocated", p.MaxSeq, budget>>20, placed, visStart, grown, dt.towerWidthFor(3000),
-		small, dt.towerWidthFor(500))
+		"the grid refused with nothing allocated", p.MaxSeq, budget>>20, placed, visStart, grown, dt.towerVis().widthFor(3000),
+		small, dt.towerVis().widthFor(500))
 	g.ReleaseLayers(0, blocks)
-	if dt.scratch != 0 || dt.visCap != 0 || live() > 4096 {
+	if dt.scratch != 0 || dt.towerVis().cap != 0 || live() > 4096 {
 		t.Fatalf("every tower block released: scratch %d bytes, set at %d rows, %d bytes live",
-			dt.scratch, dt.visCap, live())
+			dt.scratch, dt.towerVis().cap, live())
 	}
 
 	// A first block the budget refuses: its set was built, and the card
@@ -136,8 +136,8 @@ func TestATowerIsBuiltForItsPicture(t *testing.T) {
 	if g2.PrepLayer(0, p, ws[0]) {
 		t.Fatalf("a block of %d bytes placed on a budget of %d", need, need-half)
 	}
-	if left := d2.allocBytes - d2.freedBytes; left > 4096 || g2.devs[0].scratch != 0 || g2.devs[0].visCap != 0 {
+	if left := d2.allocBytes - d2.freedBytes; left > 4096 || g2.devs[0].scratch != 0 || g2.devs[0].towerVis().cap != 0 {
 		t.Fatalf("a refused tower block left %d bytes live (%d charged, set at %d rows) of the %d its set took",
-			left, g2.devs[0].scratch, g2.devs[0].visCap, od.allocBytes)
+			left, g2.devs[0].scratch, g2.devs[0].towerVis().cap, od.allocBytes)
 	}
 }

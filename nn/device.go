@@ -713,6 +713,10 @@ type LayerPlan struct {
 	// key heads after an RMSNorm trunk of 8): a device runs it in a scratch
 	// set of its own rather than declining it for the trunk's geometry.
 	HeadSet bool
+	// Tower says a NonCausal block is the model's tower's (its vision or audio
+	// segment), which a device runs in a scratch set apart from a non-causal
+	// text model's: d1-omni's encoder beside its vision tower.
+	Tower bool
 	// AttnOutGate says the q projection is double width and its second half,
 	// interleaved per head, gates the attention output through a sigmoid.
 	AttnOutGate bool
@@ -1125,13 +1129,14 @@ type SeqRunsDevice interface {
 
 // RowsReserver is an optional LayerDevice whose NonCausal blocks are built for
 // the rows of the calls they run rather than for their plan's MaxSeq (the
-// tower's largest grid): ReserveRows makes them able to take a call of n rows,
-// moving what that costs from outside any call, and reports false -- having
-// kept nothing it allocated -- when the device's budget cannot hold it. The
-// caller moves blocks off the device until it can. A device that does not
-// implement it is built for MaxSeq.
+// tower's largest grid): ReserveRows makes the set block li runs in -- the
+// call's first block's -- able to take a call of n rows, moving what that
+// costs from outside any call, and reports false -- having kept nothing it
+// allocated -- when the device's budget cannot hold it. The caller moves
+// blocks off the device until it can. A device that does not implement it is
+// built for MaxSeq.
 type RowsReserver interface {
-	ReserveRows(n int) bool
+	ReserveRows(li, n int) bool
 }
 
 // RowChunker is an optional RowsReserver whose non-causal set may take a
