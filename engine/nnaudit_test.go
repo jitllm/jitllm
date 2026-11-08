@@ -3,6 +3,8 @@ package engine
 import (
 	"errors"
 	"fmt"
+	"image"
+	"image/png"
 	"math"
 	"os"
 	"path/filepath"
@@ -128,6 +130,24 @@ func TestEveryModelRunsOnACard(t *testing.T) {
 				refusedAtStep(t, g, before)
 				return
 			}
+			var img image.Image
+			if m.Tower != nil {
+				img = auditPicture(t)
+				// A chain's blocks run as parts over their own grids, each on
+				// the device chainOn names (nil: the CPU device).
+				n := st.tower.s.GPULayers()
+				if m.Tower.Chain {
+					n = 0
+					for _, d := range st.tower.chainOn {
+						if d != nil {
+							n++
+						}
+					}
+				}
+				if n != len(m.Tower.Blocks) {
+					t.Fatalf("the card took %d of the tower's %d blocks: %v (%s)", n, len(m.Tower.Blocks), st.tower.s.DeviceDeclines(), g.Err())
+				}
+			}
 			formed, before := g.Stats().FormedAtStep, cardDeclines(g)
 			for i := range 3 {
 				lg, err := st.Forward(int32(1 + i))
@@ -135,6 +155,13 @@ func TestEveryModelRunsOnACard(t *testing.T) {
 					t.Fatalf("Forward on the card: %v (%s)", err, g.Err())
 				}
 				finite(t, "Forward on the card", lg)
+			}
+			if img != nil {
+				rows, err := st.EncodePicture(img)
+				if err != nil {
+					t.Fatalf("EncodePicture on the card: %v (%s)", err, g.Err())
+				}
+				finite(t, "EncodePicture on the card", rows)
 			}
 			if s := g.Stats(); s.FormedAtStep != formed {
 				t.Fatalf("the card formed %d part(s) at a step after placement (by part %v): %s",
@@ -356,6 +383,15 @@ func auditRun(t *testing.T, m *model.Model, io ...Option) {
 		t.Fatalf("Prefill: %v", err)
 	}
 	s.Close()
+	if m.Tower != nil {
+		ps := testInstance(t, m, 256, io...)
+		rows, err := ps.EncodePicture(auditPicture(t))
+		if err != nil {
+			t.Fatalf("EncodePicture: %v", err)
+		}
+		finite(t, "EncodePicture", rows)
+		ps.Close()
+	}
 	bs := newSessBatch(m, 2, 16, io...)
 	if _, err := bs.ForwardBatch([]int32{1, 2}); err != nil {
 		t.Fatalf("ForwardBatch: %v", err)
@@ -514,12 +550,14 @@ func auditModels(t *testing.T) []auditModel {
 			continue
 		}
 		listed[p] = true
-		mp := ""
+		mp := towerOf(p)
 		if lm.MMProj != "" {
 			if mp = libraryPath(lm.MMProj); mp == "" {
 				missing("%s: MODEL MISSING: its projector %s is not in %s", lm.Name, lm.MMProj, testmodels.Dir())
 				continue
 			}
+		}
+		if mp != "" {
 			listed[mp] = true
 		}
 		n := len(out)
@@ -528,9 +566,16 @@ func auditModels(t *testing.T) []auditModel {
 			out[n].mmproj = mp
 		}
 	}
+	withTower := func(name, p string) {
+		n := len(out)
+		add(name, p, false)
+		if len(out) > n {
+			out[n].mmproj = towerOf(p)
+		}
+	}
 	for _, p := range languageModels(t) {
 		if !listed[p] {
-			add(filepath.Base(p), p, false)
+			withTower(filepath.Base(p), p)
 		}
 	}
 	sub, _ := filepath.Glob(filepath.Join(testmodels.Dir(), "*", "*.gguf"))
@@ -539,7 +584,7 @@ func auditModels(t *testing.T) []auditModel {
 		if laterShard().MatchString(p) || listed[p] || isProjector(p) {
 			continue
 		}
-		add(filepath.Join(filepath.Base(filepath.Dir(p)), filepath.Base(p)), p, false)
+		withTower(filepath.Join(filepath.Base(filepath.Dir(p)), filepath.Base(p)), p)
 	}
 	golds, _ := filepath.Glob(filepath.Join("..", "testdata", "golden", "hf", "*.json"))
 	for _, g := range golds {
@@ -547,6 +592,8 @@ func auditModels(t *testing.T) []auditModel {
 		dir := testmodels.Path(name)
 		if fileExists(filepath.Join(dir, "config.json")) {
 			add(name+" (safetensors)", dir, true)
+		} else {
+			missing("%s: MODEL MISSING: its safetensors fixture %s is not on this box", name, dir)
 		}
 	}
 	// The decision models' files, which sit deeper than one directory down
@@ -559,9 +606,68 @@ func auditModels(t *testing.T) []auditModel {
 	for _, rel := range auditHFDirs() {
 		if dir := testmodels.Path(rel); fileExists(filepath.Join(dir, "config.json")) {
 			add(rel+" (safetensors)", dir, true)
+		} else {
+			missing("%s: MODEL MISSING: its safetensors fixture %s is not on this box", rel, dir)
 		}
 	}
 	return out
+}
+
+// towerOf is the projector GGUF converted with text GGUF p: the one the tower
+// gates pair it with, else mmproj-<its file> beside it, else none.
+func towerOf(p string) string {
+	rel := filepath.ToSlash(strings.TrimPrefix(p, testmodels.Dir()+string(filepath.Separator)))
+	if notTowers()[rel] {
+		return ""
+	}
+	if rel, ok := towerPairs()[rel]; ok {
+		if q := testmodels.Path(rel); fileExists(q) {
+			return q
+		}
+	}
+	if q := filepath.Join(filepath.Dir(p), "mmproj-"+filepath.Base(p)); fileExists(q) {
+		return q
+	}
+	return ""
+}
+
+// towerPairs are the text GGUFs, relative to the model directory, whose
+// tower's file is not named mmproj-<file> beside them, as the tower gates pair
+// them.
+func towerPairs() map[string]string {
+	return map[string]string{
+		"gemma-3-4b-it-Q4_K_M.gguf":          "vlm/mmproj-gemma-3-4b-it-f16.gguf",
+		"llava-phi-3-mini-int4.gguf":         "llava-phi-3-mini-mmproj-f16.gguf",
+		"minicpmv/MiniCPM-V-4-Q4_K_M.gguf":   "minicpmv/mmproj-MiniCPM-V-4-f16.gguf",
+		"minicpmv/Janus-Pro-1B-Q4_K_M.gguf":  "minicpmv/mmproj-Janus-Pro-1B-Q8_0.gguf",
+		"Qwen2-VL-2B-Instruct-Q4_K_M.gguf":   "mmproj-Qwen2-VL-2B-Instruct-f16.gguf",
+		"Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf": "mmproj-Qwen2.5-VL-3B-Instruct-Q8_0.gguf",
+		"qwen35/Qwen3.5-0.8B-Q4_K_M.gguf":    "mmproj-Qwen3.5-0.8B-f16.gguf",
+	}
+}
+
+// notTowers are text GGUFs whose mmproj-<file> beside them is no tower: the
+// converter refuses it as input. tinyopenjev-for-testing's is a loader test
+// file whose block MLP reads 160 wide and writes 144 (fc1 160x288, fc2
+// 288x144), which no residual width fits.
+func notTowers() map[string]bool {
+	return map[string]bool{"openjev/tinyopenjev-for-testing-Q8_0.gguf": true}
+}
+
+// auditPicture is the picture a towered model encodes in the census: the
+// tower gates' quadrants and disc.
+func auditPicture(t *testing.T) image.Image {
+	t.Helper()
+	f, err := os.Open(filepath.Join("testdata", "quad-and-disc.png"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	img, err := png.Decode(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return img
 }
 
 // auditHFDirs are safetensors inputs held to their reference outside
