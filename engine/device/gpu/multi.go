@@ -1537,7 +1537,7 @@ func (g *GPU) tail() *devTier {
 }
 
 // HeadDevice is the index into Placed() of the device holding the output
-// projection, or -1 when it is on the host. It lets a gate assert which
+// projection, or -1 when it is on the CPU. It lets a gate assert which
 // device, which HeadResident cannot.
 func (g *GPU) HeadDevice() int {
 	g.mu.Lock()
@@ -1567,7 +1567,7 @@ func (g *GPU) migrateRec(sid uint64, li int, conv, state []float32, toDevice boo
 	d := g.own[li]
 	g.mu.Unlock()
 	if d == nil {
-		return false // the block is on the host; there is nothing to move
+		return false // the block is on the CPU; there is nothing to move
 	}
 	return d.migrateRec(sid, li, conv, state, toDevice)
 }
@@ -1593,7 +1593,7 @@ func (g *GPU) PublishKVs(lis, pages []int32, keys []string) bool {
 }
 
 // ownerOf is the device holding every block of lis, nil when they are
-// spread over more than one (or one is on the host).
+// spread over more than one (or one is on the CPU).
 func (g *GPU) ownerOf(lis []int32) *devTier {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -1666,7 +1666,7 @@ func (g *GPU) migrateKV(sid uint64, li int, k, v []float32, pos int, toDevice bo
 	d := g.own[li]
 	g.mu.Unlock()
 	if d == nil {
-		return false // the block is on the host; there is nothing to move
+		return false // the block is on the CPU; there is nothing to move
 	}
 	return d.migrateKV(sid, li, k, v, pos, toDevice)
 }

@@ -3011,7 +3011,7 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 		// no slot to turn over in strands them.
 		g.LastErr = fmt.Sprintf("the output projection needs %d bytes and "+
 			"taking them would leave %d block slot(s) instead of %d for %d block(s) the card holds, so it "+
-			"stays on the host: a slot turns over every block and the "+
+			"stays on the CPU: a slot turns over every block and the "+
 			"projection runs once a token", want, after, now, g.pagesIn)
 		return false
 	}

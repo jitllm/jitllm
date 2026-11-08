@@ -298,7 +298,7 @@ func (t *seamTuner) name(c int) string {
 }
 
 // trialArm is one of the stream trial's placements: how many blocks on the
-// device, and where a streamed block's experts run ("host", "card").
+// device, and where a streamed block's experts run ("cpu", "card").
 type trialArm struct {
 	blocks  int
 	experts string

@@ -1754,7 +1754,7 @@ func (s *Instance) offerRange(lo, hi int) {
 			return
 		}
 		// A mixture block refused for room on every card goes on streamed,
-		// its base on a card and its experts off it, rather than to the host:
+		// its base on a card and its experts off it, rather than to the CPU:
 		// gpt-oss-20b on a 4 GB card held 2 of 24 blocks resident and decoded
 		// at 4.84 tok/s, and with all 24 streamed and their experts on the
 		// host at 9.56 (placement.md 16c-3). The stream trial measures it
@@ -2452,7 +2452,7 @@ func (s *Instance) roomGen() uint64 {
 	return 0
 }
 
-// relocationVictim is the block relocateFor hands to the host: the highest one
+// relocationVictim is the block relocateFor hands to the CPU: the highest one
 // on the device that refused, when the device can say which that was, and the
 // highest placed block otherwise.
 //

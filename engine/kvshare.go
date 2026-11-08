@@ -32,7 +32,7 @@ import (
 //     restore's truncation, a window's release, Close), never handed to the
 //     session's page pool, which would recycle memory others still read.
 //   - A shared page does not move to a device for one of its holders: the
-//     block stays on the host (Instance.migrateKV refuses, counted by
+//     block stays on the CPU (Instance.migrateKV refuses, counted by
 //     KVSharedRefusals). A device page shared between sessions is not
 //     implemented; a session with blocks on a device does not share
 //     (Instance.ShareKV).
@@ -590,7 +590,7 @@ func (s *Instance) kvShareDevice() bool {
 }
 
 // kvDevAt is the device holding block li's history when it names its pages
-// (nn.KVShareDevice), nil when the block is on the host.
+// (nn.KVShareDevice), nil when the block is on the CPU.
 func (s *Instance) kvDevAt(li int) nn.KVShareDevice {
 	if !s.devAt(li) {
 		return nil

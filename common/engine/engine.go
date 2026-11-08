@@ -79,7 +79,7 @@ type Engine struct {
 	m *model.Model
 	// sess is the chat's session on the active model.
 	sess *server.Session
-	// gpu is the active model's tier, nil on the host: only *gpu.GPU can
+	// gpu is the active model's tier, nil on the CPU: only *gpu.GPU can
 	// answer "how much of each card is this model using".
 	gpu  *gpu.GPU
 	path string
@@ -652,7 +652,7 @@ func (e *Engine) Relocate(n int) {
 			return
 		}
 		if e.gpu == nil {
-			e.status("this model is on the host: load it with a device to move blocks")
+			e.status("this model is on the CPU: load it with a card to move blocks")
 			return
 		}
 		var was int
