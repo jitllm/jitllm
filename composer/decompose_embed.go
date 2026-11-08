@@ -21,7 +21,8 @@ const (
 
 // decomposeEmbed is each row's token's row of the embedding (row 0 for an
 // id past a table that stops short of the vocabulary), or its position's
-// row of a position table (the position modulo Span where set), every
+// row of a position table (the position modulo Span where set), or the
+// request's question type's row (Request), every
 // element decoded from the weight's format: into an index row, each element
 // an index. Over an index row In[0], each of a row's indices' rows of the
 // table, side by side (decomposeEmbedRows).
@@ -51,6 +52,13 @@ func decomposeEmbed(o graph.Op, c *Context) ([]Prim, error) {
 		}
 		in[0] = TablePos.op()
 		facts.Extents[0] = R + 1
+	} else if o.Attr.Request {
+		// The request's question type, the same row for every row; a type
+		// past the table reads row 0.
+		tok = x.load(0, x.u(RequestType))
+		tok = x.sel(ir.U32, x.op(OpLess, ir.Pred, tok, x.u(uint32(w.Rows))), tok, x.u(0))
+		in[0] = TableRequest.op()
+		facts.Extents[0] = RequestRows + R
 	} else {
 		// A table may stop short of the ids: an id past it reads row 0.
 		tok = x.sel(ir.U32, x.op(OpLess, ir.Pred, tok, x.u(uint32(w.Rows))), tok, x.u(0))

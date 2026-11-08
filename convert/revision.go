@@ -25,6 +25,9 @@ func StateRevision(c *jlm.Config) {
 	if c.Arch == jlm.ArchOLMo3 {
 		c.RopeScaleSWA = 1
 	}
+	if c.Arch == jlm.ArchModernBERT && c.SWAWindow != 0 {
+		c.Flags2 |= jlm.Flag2SWAGlobalFirst
+	}
 	if c.Arch == jlm.ArchGemma4 && c.PLEDim == 0 && c.SWAWindow > 0 {
 		c.BidirLayers = make([]bool, c.NLayer)
 		for li := range c.BidirLayers {

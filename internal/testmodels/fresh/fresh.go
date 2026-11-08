@@ -63,7 +63,7 @@ func reconvert(path string) error {
 		rev := cfg.Revision >= jlm.StatementRevision || (cfg.SWAWindow == 0 || cfg.YarnFactor <= 1 && v == nil) &&
 			(cfg.Revision >= 2 || !storesAny(c, jlm.RoleAttnSubNorm, jlm.RoleFFNSubNorm)) &&
 			(cfg.Revision >= 3 || cfg.RopeSections == [4]uint32{}) &&
-			(cfg.Revision >= 4 || !storesPast(c, jlm.RoleFFNUp))
+			(cfg.Revision >= 5 || cfg.DecisionBlocks == 0)
 		c.Close()
 		switch {
 		case stated && tower && tools && streams && rev && labels:
@@ -108,16 +108,6 @@ func reconvert(path string) error {
 			filepath.Base(path), openErr, filepath.Base(src), err)
 	}
 	return os.Rename(tmp, path)
-}
-
-// storesPast reports that a block of c past the trunk's stores r.
-func storesPast(c *jlm.File, r jlm.Role) bool {
-	for bi := c.Config().NLayer; bi < c.H.NBlocks; bi++ {
-		if c.Has(r, int32(bi), -1) {
-			return true
-		}
-	}
-	return false
 }
 
 // storesAny reports that some block of c stores one of rs.

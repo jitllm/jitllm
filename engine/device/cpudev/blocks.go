@@ -2,6 +2,8 @@ package cpudev
 
 import (
 	"unsafe"
+
+	"github.com/jitllm/jitllm/composer"
 )
 
 // Row is one row of a block's call, as a decode step runs it: the row's
@@ -20,9 +22,11 @@ type Row struct {
 	EntryPages      []uint32
 	KeyStart, Pos   int
 	// PagePos is the positions a page of the history holds.
-	PagePos           int
-	Tok               int32
-	Toks              bool
+	PagePos int
+	Tok     int32
+	Toks    bool
+	// Req is the step's request words (nn.RequestDevice), nil for none.
+	Req               []uint32
 	RecLi             int
 	RecState, RecConv unsafe.Pointer
 	Slot              int
@@ -46,13 +50,26 @@ type Blocks struct {
 	// sidePad its residual rows and per-layer inputs where its units reach
 	// past them; fpages a page table under the page violation.
 	rowsTab, posTab, tokTab, recDesc []uint32
-	xpad, sidePad                    []float32
-	fpages                           []uint32
+	// zeroReq is the request words a call binds where the step gives none
+	// (nn.RequestDevice): its type 0 and every marker row 0.
+	zeroReq       []uint32
+	xpad, sidePad []float32
+	fpages        []uint32
 	// FaultRow reads a row's history from one past where it starts,
 	// FaultWrite writes it one before its position, FaultPage reads a call's
 	// first page from another, and FaultKeysFirst runs a bidirectional run's
 	// calls whole in one pass: a gate's violations.
 	FaultRow, FaultWrite, FaultPage, FaultKeysFirst bool
+}
+
+// req is a call's request words: the step's, or zeros for rows rows where
+// it gives none.
+func (bl *Blocks) req(r []uint32, rows int) []uint32 {
+	if r != nil {
+		return r
+	}
+	bl.Reserve(rows)
+	return bl.zeroReq
 }
 
 // NewBlocks is the rows of blocks on dev, run through run.
@@ -63,7 +80,7 @@ func (bl *Blocks) Row(li int, cb *Block, r *Row) error {
 	b := &bl.bound
 	*b = Bound{Li: li, Own: bl.dev.Own(cb.F), CS: r.CS, CSSWA: r.CSSWA, X: r.X, Stride: r.Stride, Rows: bl.rows[:], N: 1,
 		Pages: r.Pages, Keys: r.Keys, Values: r.Values, RecLi: r.RecLi, RecState: r.RecState, RecConv: r.RecConv,
-		Weights: r.Weights, Entries: r.Entries, EntryPages: r.EntryPages}
+		Weights: r.Weights, Entries: r.Entries, EntryPages: r.EntryPages, Req: bl.req(r.Req, 1)}
 	if r.Side != nil {
 		b.Side = r.Side[cb.SideOff:]
 	}
@@ -108,6 +125,7 @@ type Rows struct {
 	Spans                  []uint32
 	Pos                    []int
 	Tok                    []int32
+	Req                    []uint32
 	Seq                    []int
 	RecLi                  int
 	RecState, RecConv      unsafe.Pointer
@@ -135,6 +153,9 @@ func (bl *Blocks) Reserve(rows int) {
 	}
 	if len(bl.recDesc) < 1+7*rows {
 		bl.recDesc = make([]uint32, 1+7*rows)
+	}
+	if len(bl.zeroReq) < composer.RequestRows+rows {
+		bl.zeroReq = make([]uint32, composer.RequestRows+rows)
 	}
 	bl.run.GrowZero(rows * 4)
 }
@@ -199,7 +220,7 @@ func (bl *Blocks) calls(li int, f *Form, in *Rows, lo, hi int, stash uint8) erro
 		}
 		*b = Bound{Li: li, Own: bl.dev.Own(f), CS: in.CS[r0*in.NRot:], X: bx, Stride: bstride, Rows: bl.rowsTab, N: k,
 			Pages: bl.faultPages(in.Pages, in.PagePos, end), Side: bside, Weights: in.Weights, Keys: in.Keys, Values: in.Values,
-			Entries: in.Entries, EntryPages: in.EntryPages}
+			Entries: in.Entries, EntryPages: in.EntryPages, Req: bl.req(in.Req, f.Rows)}
 		if in.CSSWA != nil {
 			b.CSSWA = in.CSSWA[r0*in.NSWA:]
 		}

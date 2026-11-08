@@ -68,6 +68,8 @@ type gpuSession struct {
 	prompt bool
 	// toks is the rows' tokens for the next call (SetTokens).
 	toks []int32
+	// req is the request words the next calls' blocks read (SetRequest).
+	req []uint32
 }
 
 // SetPrompt says whether the session's calls that follow are a prompt's

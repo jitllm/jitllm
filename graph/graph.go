@@ -779,8 +779,10 @@ type Attrs struct {
 	// GridW is OpConv's grid width: the rows a grid row holds; Stride its
 	// step over the grid, 0 and 1 alike.
 	GridW, Stride int
-	// Positional makes OpEmbed index its table by the row's position.
-	Positional bool
+	// Positional makes OpEmbed index its table by the row's position;
+	// Request by the step request's question type, every row the same row
+	// (a marker head's question type).
+	Positional, Request bool
 	// Pooling is OpPool's: a jlm.Pooling.
 	Pooling uint8
 	// Rotary is OpRopeTable's: which of the model's rotaries the table is

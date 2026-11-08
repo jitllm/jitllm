@@ -99,6 +99,34 @@ func d1OmniConfig(f *meta.File, head uint32) (*jlm.Config, error) {
 	return c, nil
 }
 
+// markerHead states Laya's head as the model's
+// blocks after the trunk (jlm.Flag2HeadBlocks): rl_common's
+// nn.TransformerEncoderLayer and the scorer's nn.LayerNorm run at torch's
+// default epsilon, which rl_common never sets.
+func markerHead(c *jlm.Config) {
+	c.Flags2 |= jlm.Flag2HeadBlocks
+	c.DecisionEps = 1e-5
+}
+
+// headSeam is where a marker head's model-level tensor goes once its blocks
+// are the model's: the trunk's final norm closes the trunk's last block, a
+// norm over its residual (RoleLayerOutNorm), and the question types' table
+// is the first head block's, whose input adds the question's row.
+func headSeam(role jlm.Role, block int32, c *jlm.Config) (jlm.Role, int32) {
+	if !c.Flags2.Has(jlm.Flag2HeadBlocks) || block != jlm.DenseBlock {
+		return role, block
+	}
+	switch role {
+	case jlm.RoleOutputNorm:
+		return jlm.RoleLayerOutNorm, int32(c.NLayer) - 1
+	case jlm.RoleOutputNormBias:
+		return jlm.RoleLayerOutNormBias, int32(c.NLayer) - 1
+	case jlm.RoleTokenTypes:
+		return role, int32(c.NLayer)
+	}
+	return role, block
+}
+
 // decisionHeadBlock reports whether e is in a decision head's block, after
 // the trunk's.
 func decisionHeadBlock(e *jlm.Tensor, c *jlm.Config) bool {

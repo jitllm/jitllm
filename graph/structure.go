@@ -48,7 +48,7 @@ func (g *Graph) Structure() uint64 {
 		put(uint64(a.Filter))
 		put(uint64(a.Fn))
 		put(uint64(a.Order))
-		for _, on := range []bool{a.Freqs, a.Interleaved, a.Chunked, a.Bidir, a.Positional, a.Grid, a.Tiled,
+		for _, on := range []bool{a.Freqs, a.Interleaved, a.Chunked, a.Bidir, a.Positional, a.Request, a.Grid, a.Tiled,
 			a.Additive, a.RowWindows, a.Pooled, a.Firsts, a.Inverse, a.Reset, a.Exact,
 			a.Window != 0, a.Softcap != 0, a.Taps != 0, a.Dil > 1, a.GridW != 0, a.Stride > 1, a.Cycle != 0,
 			a.Experts != 0, a.TopK != 0, a.Width != 0, a.Offset != 0, a.Local != 0,

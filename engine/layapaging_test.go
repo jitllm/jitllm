@@ -53,7 +53,14 @@ func TestLayaPagesWithTheSameAnswer(t *testing.T) {
 				}
 				in := testInstance(t, m, len(ids)+1, opts...)
 				defer in.Close()
-				rows := teacherForced(t, in, ids)
+				var rows [][]float32
+				if m.Cfg.Head != nil {
+					for i := range 3 {
+						rows = append(rows, markerScores(t, in, i))
+					}
+				} else {
+					rows = teacherForced(t, in, ids)
+				}
 				_, reads, _ := m.PageStats(in.fr)
 				return rows, reads, pages
 			}

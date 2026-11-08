@@ -25,6 +25,8 @@ type Lanes struct {
 	side   []float32
 	tok    int32
 	toks   []int32
+	// req is the request words the next calls' blocks read (SetRequest).
+	req []uint32
 	// seqBuf, zeros, order, last and oruns are a rows call's scratch: the
 	// rows' sequences, a session's rows' (every one its session's 0), a
 	// linear block's rows in causal order, each sequence's last position,
@@ -167,7 +169,7 @@ func (l *Lanes) Rows(li int, f *Form, t Tensors, c *RowsCall) error {
 	in := &l.in
 	*in = Rows{X: c.X, Stride: c.Stride, Width: l.width, Streams: l.streams, Side: c.Side, SideW: c.SideW,
 		SideOff: sideOff, CS: c.CS, NRot: c.NRot, CSSWA: c.CSSWA, NSWA: c.NSWA, Pages: hb.Pages, PagePos: hb.PagePos,
-		Spans: spans, Pos: c.Pos, Tok: c.Tok, Seq: c.Seq, Weights: w, Keys: hb.Keys, Values: hb.Values,
+		Spans: spans, Pos: c.Pos, Tok: c.Tok, Req: l.req, Seq: c.Seq, Weights: w, Keys: hb.Keys, Values: hb.Values,
 		Entries: hb.Entries, EntryPages: hb.EntryPages}
 	if f.Rec {
 		in.RecLi = l.recLi(li)
@@ -231,6 +233,10 @@ func (l *Lanes) SetRowWindows(wins []nn.KeyRun) {
 // CloseRun closes the fused pool region the last call left open.
 func (l *Lanes) CloseRun() { l.e.Unfuse() }
 
+// SetRequest is the request words the next calls' blocks read
+// (nn.RequestDevice).
+func (l *Lanes) SetRequest(req []uint32) { l.req = req }
+
 // SetLayerInputs is the per-layer inputs the next call's blocks read
 // (nn.LayerInputDevice).
 func (l *Lanes) SetLayerInputs(in []float32) { l.side = in }
@@ -260,7 +266,7 @@ func (l *Lanes) Layers(lo, hi, pos, n int, x, cs, csSWA []float32, head *nn.Head
 		}
 		l.e.Fuse()
 		st := Step{X: x, Stride: l.stride, CS: cs, CSSWA: csSWA, Side: l.side, Pos: pos, Tok: l.tok, Toks: true,
-			Faults: true, Tensors: t}
+			Faults: true, Req: l.req, Tensors: t}
 		why, err := l.Row(li, &st)
 		if err != nil {
 			l.err = err
@@ -369,6 +375,10 @@ func (s *SessionLanes) SetTokens(toks []int32) { s.l.SetTokens(toks) }
 // SetLayerInputs is the per-layer inputs the next call's blocks read
 // (nn.LayerInputDevice).
 func (s *SessionLanes) SetLayerInputs(in []float32) { s.l.SetLayerInputs(in) }
+
+// SetRequest is the request words the next calls' blocks read
+// (nn.RequestDevice).
+func (s *SessionLanes) SetRequest(req []uint32) { s.l.SetRequest(req) }
 
 // ReadsTables says the blocks read the call's rotary tables (nn.TableReader).
 func (s *SessionLanes) ReadsTables() bool { return true }

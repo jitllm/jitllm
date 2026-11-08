@@ -338,6 +338,7 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 				}
 			}
 		}
+		role, block = headSeam(role, block, s.Config)
 		data := f.Bytes(t)
 		srcType := t.Type
 		// A ternary type with no code here (TQ1_0, I2_S) is re-packed as

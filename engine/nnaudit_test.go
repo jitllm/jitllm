@@ -116,6 +116,18 @@ func TestEveryModelRunsOnACard(t *testing.T) {
 			}
 			st := cardInstance(t, m, g)
 			defer st.Close()
+			if m.Cfg.Head != nil {
+				formed, before := g.Stats().FormedAtStep, cardDeclines(g)
+				for i := range 3 {
+					finite(t, "MarkScores on the card", markerScores(t, st, i))
+				}
+				if s := g.Stats(); s.FormedAtStep != formed {
+					t.Fatalf("the card formed %d part(s) at a step after placement (by part %v): %s",
+						s.FormedAtStep-formed, s.FormedAtStepParts, g.Err())
+				}
+				refusedAtStep(t, g, before)
+				return
+			}
 			formed, before := g.Stats().FormedAtStep, cardDeclines(g)
 			for i := range 3 {
 				lg, err := st.Forward(int32(1 + i))
@@ -296,6 +308,17 @@ func everyModelRunsGenerated(t *testing.T, opts ...Option) {
 	t.Logf("%d models ran on generated code", len(ran))
 }
 
+// markerScores is a marker head's scores for question i of three (its type
+// i, its markers rows 1, 3 and 5 of eight).
+func markerScores(t *testing.T, s *Instance, i int) []float32 {
+	t.Helper()
+	out := make([]float32, 3)
+	if err := s.MarkScores([]int32{1, int32(5 + i), 9, 13, 17, 21, 25, 29}, i, []int{1, 3, 5}, out); err != nil {
+		t.Fatalf("MarkScores: %v", err)
+	}
+	return out
+}
+
 // auditRun is the gate's body for one opened model: the three decoder entry
 // points, and its embedder too when the container carries pooling.
 func auditRun(t *testing.T, m *model.Model, io ...Option) {
@@ -314,6 +337,13 @@ func auditRun(t *testing.T, m *model.Model, io ...Option) {
 		finite(t, "Embed", v)
 		// An embedding model has no head to decode with: it runs as it is
 		// read, through its embedder.
+		return
+	}
+	if m.Cfg.Head != nil {
+		// A marker head reads out through its scorer: it answers questions.
+		s := testInstance(t, m, 16, io...)
+		finite(t, "MarkScores", markerScores(t, s, 0))
+		s.Close()
 		return
 	}
 	s := testInstance(t, m, 16, io...)
@@ -345,6 +375,9 @@ func auditComposedCPU(t *testing.T, name, path string, opts ...Option) {
 	}
 	defer m.Close()
 	auditRun(t, m, instOpts...)
+	if m.Cfg.Head != nil {
+		return
+	}
 	const steps = 3
 	if m.IsEmbedding() {
 		e, err := NewEmbedder(m, instOpts...)

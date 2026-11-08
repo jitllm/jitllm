@@ -1025,13 +1025,16 @@ type run struct {
 
 // tables is the rotary tables run r is handed. A run of a model of mixed
 // geometry is one geometry, built with one table (scratchPlanOf): a run of
-// blocks rotating by the second table takes it where the first goes.
+// blocks rotating by the second table takes it where the first goes. A
+// non-causal set is built with both (a trunk's beside a marker head's set).
 func (r run) tables(cs, csSWA []float32) ([]float32, []float32) {
 	switch {
 	case !r.split:
 		return cs, csSWA
 	case r.geo.local:
 		return csSWA, nil
+	case r.geo.flags&geoNonCausal != 0:
+		return cs, csSWA
 	}
 	return cs, nil
 }

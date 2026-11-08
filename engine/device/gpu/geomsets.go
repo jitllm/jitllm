@@ -202,6 +202,11 @@ func (g *devTier) SetLayerInputs(in []float32) {
 // inputs are its own, as its history is.
 func (s *gpuSession) SetLayerInputs(in []float32) { s.ple = in }
 
+// SetRequest keeps the request words this session's next calls' blocks
+// read (nn.RequestDevice), handed to every device it holds as its inputs
+// are.
+func (s *gpuSession) SetRequest(req []uint32) { s.req = req }
+
 // inputsTo hands the session's per-layer inputs to the devices enter took.
 func (s *gpuSession) inputsTo(ds []*devTier) []*devTier {
 	for _, d := range ds {
@@ -212,12 +217,24 @@ func (s *gpuSession) inputsTo(ds []*devTier) []*devTier {
 
 // inputsOn hands the session's inputs to d alone.
 func (s *gpuSession) inputsOn(d *devTier) {
-	d.setInputs(s.sid, s.ple, s.prompt, s.toks)
+	d.setInputs(s.sid, s.ple, s.prompt, s.toks, s.req)
 }
 
 // pleRows is the staged per-layer inputs, n floats: the caller's rows, then
 // zeros for a grid's padding rows. Callers hold g.mu.
 func (g *devTier) pleRows(n int) []float32 { return g.sideRows(g.pleHost, n) }
+
+// reqWords is the staged request words, n of them: the session's, then
+// zeros. Callers hold g.mu.
+func (g *devTier) reqWords(n int) []uint32 {
+	if cap(g.reqStage) < n {
+		g.reqStage = make([]uint32, n)
+	}
+	st := g.reqStage[:n]
+	m := copy(st, g.reqHost)
+	clear(st[m:])
+	return st
+}
 
 // sideRows is n floats of the caller's rows host for the blocks' side
 // input, zeros past them, staged in pleStage.

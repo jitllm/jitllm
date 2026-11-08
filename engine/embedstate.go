@@ -25,8 +25,10 @@ type embedMode struct {
 	total int // positions in the sequence
 	// out is the readout (Instance.readout): through the dense heads and at unit
 	// length, or with raw (Embedder.skipDense) at unit length before them.
-	out  []float32
-	raw  bool
+	out []float32
+	raw bool
+	// req is the request words a marker head's readout reads (Instance.req).
+	req  []uint32
 	wins []nn.KeyRun
 	// rowWins is each row's window where the run states them (a windowed
 	// tower's, TowerBlock.Window), nil where the sliding window says them.
@@ -96,7 +98,7 @@ func (e *embedMode) collect(s *Instance, base, n int) error {
 			return fmt.Errorf("model: a mean over %d of %d rows, and a mean-pooled run is one chunk", n, e.total)
 		}
 	}
-	if s.readout == nil || !s.readout.Pool(s.bx[:n*s.c.NEmbd], n, e.out, e.raw) {
+	if s.readout == nil || !s.readout.Pool(s.bx[:n*s.c.NEmbd], n, e.req, e.out, e.raw) {
 		return fmt.Errorf("model: the embedding readout has no composed form on this instance: %v", s.prepErr())
 	}
 	return nil

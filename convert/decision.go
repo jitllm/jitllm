@@ -87,6 +87,7 @@ func decisionOf(f *meta.File, c *jlm.Config) error {
 		if c.DecisionHeads == 0 || c.NEmbd%c.DecisionHeads != 0 {
 			return fmt.Errorf("%d decision heads do not divide a %d-wide residual", c.DecisionHeads, c.NEmbd)
 		}
+		markerHead(c)
 	} else if kind == jlm.DecisionClef {
 		if err := clefOf(f, c); err != nil {
 			return err
@@ -198,6 +199,7 @@ func modernBERTConfig(f *meta.File, c *jlm.Config) error {
 		if err := swaPatternOf(f, c, 3); err != nil {
 			return err
 		}
+		c.Flags2 |= jlm.Flag2SWAGlobalFirst
 	}
 	c.RopeBaseSWA = float32(f.FloatKey("rope.freq_base_swa", float64(c.RopeBase)))
 	return nil

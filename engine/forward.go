@@ -1916,10 +1916,21 @@ func (s *Instance) planFor(li int) *nn.LayerPlan {
 	// from its global ones), its v (no projection of its own) and its output
 	// scalar.
 	plan.HeadDim, plan.NKVHead, plan.NRot = c.HeadDimAt(li), c.NKVHeadAt(li), c.NRotAt(li)
+	plan.NHead = c.NHeadAt(li)
 	// The block as ops, from the container: what a device serving it whole
 	// forms (front.go), nil where the front end states none.
 	plan.Graph = s.m.Composing().BlockGraph(li)
-	plan.LocalRope = c.MixedGeom() && c.SWA(li)
+	// A marker head's blocks run in a set of their own at their geometry;
+	// the trunk's are of mixed geometry only where its blocks state their
+	// own.
+	plan.HeadSet = c.Head != nil && li >= c.Trunk
+	if plan.HeadSet {
+		h := c.Head
+		plan.NoPosEnc, plan.SWAPeriod, plan.SWAWindow, plan.LayerNorm, plan.RMSEps = true, 0, 0, true, h.RMSEps
+		plan.QKNorm, plan.QKNormWide, plan.QKNormPost = false, false, false
+	}
+	plan.MixedGeom = c.OwnGeoms() || plan.HeadSet && c.MixedGeom()
+	plan.LocalRope = c.OwnGeoms() && c.SWA(li)
 	plan.OwnGeom = plan.LocalRope || plan.HeadDim != c.HeadDim || plan.NKVHead != c.NKVHead || plan.NRot != c.NRot
 	plan.BidirOff = !c.BidirAt(li)
 	plan.VFromK, plan.OutScale = l.VFromK, l.OutScale
@@ -1977,7 +1988,7 @@ func (s *Instance) planFor(li int) *nn.LayerPlan {
 	if w := c.ExpWidth(); c.MoEAt(li) && w != c.NEmbd {
 		plan.ExpLatent = w
 	}
-	if c.NonCausal && (s.m.IsEmbedding() || s.m.Tower != nil && li >= s.m.TowerBase) {
+	if c.NonCausal && (s.m.IsEmbedding() || c.Head != nil || s.m.Tower != nil && li >= s.m.TowerBase) {
 		// A bidirectional decoder (EmbeddingGemma) and a tower: their blocks
 		// are non-causal blocks, as an encoder's are -- the sequence (a
 		// picture's rows) one call, every row over the call's rows, a sliding
