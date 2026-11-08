@@ -95,6 +95,8 @@ func shareSession(t *testing.T, m *model.Model, i int, store KVStore, share bool
 //     one prefix and each session's suffix pages; with sharing off (MemStore)
 //     each session holds its own prefix. The prefix page's reference count is
 //     N.
+//   - A session that restores under another session's prompt (the violation)
+//     parts from itself alone.
 //   - Closing every session and pruning the store returns it to zero bytes.
 func TestSharedPrefixIsHeldOnce(t *testing.T) {
 	for _, name := range shareModels() {
@@ -184,6 +186,17 @@ func TestSharedPrefixIsHeldOnce(t *testing.T) {
 					"copying store: sessions hold %d; one page of every layer is %d bytes",
 					shareN, st.Bytes(), own, alias, copyOwn, pageBytes)
 
+				// The violation: session 1 names its restore by session 0's
+				// prompt, so it takes pages it never computed; the gate must see
+				// it part from session 1 alone.
+				bad := shareSession(t, m, 1, st, true, append(append([]Option(nil), instOpts...), withKVPage(sharePage),
+					withStaleKeyFault(func([]int32) []int32 { return sharePrompt(m, 0) }))...)
+				if sameShareRun(bad, solo[1]) {
+					t.Errorf("a restore named by another session's prompt answered as session 1 alone: " +
+						"the gate cannot see a stale restore")
+				}
+				bad.s.Close()
+
 				for i := range shared {
 					shared[i].s.Close()
 					copied[i].s.Close()
@@ -195,6 +208,27 @@ func TestSharedPrefixIsHeldOnce(t *testing.T) {
 			})
 		}
 	}
+}
+
+// sameShareRun is whether two runs generated the same tokens through bit-identical
+// logits.
+func sameShareRun(a, b shareRun) bool {
+	if len(a.toks) != len(b.toks) || len(a.logits) != len(b.logits) {
+		return false
+	}
+	for i := range a.toks {
+		if a.toks[i] != b.toks[i] {
+			return false
+		}
+	}
+	for p := range a.logits {
+		for j := range a.logits[p] {
+			if math.Float32bits(a.logits[p][j]) != math.Float32bits(b.logits[p][j]) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // firstAttn is the first layer of s that keeps pages.
