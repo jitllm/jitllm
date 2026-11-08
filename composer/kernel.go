@@ -257,6 +257,16 @@ const (
 	BufShared
 )
 
+// readsTable reports whether k binds the step's table t.
+func (k *Kernel) readsTable(t Table) bool {
+	for _, b := range k.Bufs {
+		if b.Operand.Kind == OperandTable && b.Operand.Table == t {
+			return true
+		}
+	}
+	return false
+}
+
 // Buf is a kernel parameter, or workgroup memory: what it binds to and how
 // its words are typed.
 type Buf struct {
