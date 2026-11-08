@@ -66,15 +66,24 @@ func TestDecisionOverPicturesMatchesItsGoldens(t *testing.T) {
 	cases := []struct {
 		name, gguf, gold string
 		tol              float64
+		// cpuOnly names why the case runs no card arm yet.
+		cpuOnly string
 	}{
-		{"d1-3B", "d1/d1-3B-Q8_0.gguf", "d1-3B-Q8_0.pictures.llamacpp.json", 0.05},
+		{"d1-3B", "d1/d1-3B-Q8_0.gguf", "d1-3B-Q8_0.pictures.llamacpp.json", 0.05, ""},
 		// A Qwen3-VL tower: llama.cpp's departs from transformers' in its
 		// picture area bounds, its position table and its merger's GELU
 		// (docs/divergences.md), where this tower is transformers' (Clef's VL
 		// fixture below holds the same family to its own code): 0.092 and
 		// 0.070 measured against llama.cpp on the CPU and a card.
-		{"vllm-d3", "vllm-d3/vllm-d3-edge-Q8_0.gguf", "vllm-d3-edge-Q8_0.pictures.llamacpp.json", 0.1},
-		{"clef-fixture-vl", "clef/fixture-vl/clef-fixture-vl.gguf", "clef-fixture-vl.pictures.reference.json", 2e-3},
+		{"vllm-d3", "vllm-d3/vllm-d3-edge-Q8_0.gguf", "vllm-d3-edge-Q8_0.pictures.llamacpp.json", 0.1, ""},
+		{"clef-fixture-vl", "clef/fixture-vl/clef-fixture-vl.gguf", "clef-fixture-vl.pictures.reference.json", 2e-3, ""},
+		// A marker head: the pictures a prefix that reads itself alone
+		// (jlm.Flag2MediaPrefix), the text after it, uncalibrated. 0.026
+		// with the CPU's int8 activations, 0.019 with its float forms (the
+		// per-family readout read 0.02); llama.cpp sits 0.0003 from the
+		// model's own code here.
+		{"d1-omni", "d1-omni/d1-omni-600M-F16.gguf", "d1-omni-600M-F16.pictures.llamacpp.json", 0.03,
+			"the card holds one non-causal set, and d1-omni's tower and text are two (task: a tower beside a non-causal text model)"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -94,8 +103,8 @@ func TestDecisionOverPicturesMatchesItsGoldens(t *testing.T) {
 			if !m.SeesPictures() {
 				t.Fatal("the container states no tower")
 			}
-			arm := func(t *testing.T, g *gpu.GPU) {
-				in, err := NewInstance(m, 4096, WithKVF16(false))
+			arm := func(t *testing.T, g *gpu.GPU, opts ...Option) {
+				in, err := NewInstance(m, 4096, append([]Option{WithKVF16(false)}, opts...)...)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -131,6 +140,12 @@ func TestDecisionOverPicturesMatchesItsGoldens(t *testing.T) {
 				}
 			}
 			t.Run("cpu", func(t *testing.T) { arm(t, nil) })
+			// The CPU's float forms: no int8 activations, the band's floor.
+			t.Run("cpu-float", func(t *testing.T) { arm(t, nil, withCPUFloat()) })
+			if c.cpuOnly != "" {
+				t.Logf("no card arm: %s", c.cpuOnly)
+				return
+			}
 			for _, spec := range stepDevices() {
 				t.Run(spec, func(t *testing.T) {
 					g, err := openGPU(t, gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff))

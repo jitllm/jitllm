@@ -105,6 +105,8 @@ const (
 	// PromptPick the Args[1+i] for Args[0] = i.
 	PromptSelect
 	PromptPick
+	// PromptPictures is how many pictures the request carries.
+	PromptPictures
 	numPromptOps
 )
 
@@ -119,6 +121,9 @@ const (
 	PromptJSON
 	PromptJSONASCII
 	PromptTemplate
+	// PromptJSONOrEmpty is PromptJSON with none read as the empty string
+	// (d1-omni's state = "" if state is None).
+	PromptJSONOrEmpty
 )
 
 // PromptEmpty is when a description counts as empty: falsy as Python reads

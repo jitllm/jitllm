@@ -854,6 +854,15 @@ const (
 	// dotted with its marker's second half over the root of their width.
 	// Its prompt is MarkerPrompt.
 	Flag2MarkerPointer Flags2 = 1 << 13
+	// Flag2MediaPrefix means a media prefix's rows -- a request's pictures
+	// before its text -- attend and convolve within the prefix alone, the
+	// text's rows over every row (d1-omni's encoder: its media queries mask
+	// the text keys, and its convolution's right tap stops at the prefix).
+	Flag2MediaPrefix Flags2 = 1 << 14
+	// Flag2MediaUncalibrated means a decision readout asked about media
+	// reads its logits at temperature 1, its stated temperatures the text
+	// alone's (d1-omni's calibrate).
+	Flag2MediaUncalibrated Flags2 = 1 << 15
 	// Flag2SWAGlobalFirst makes the first layer of each SWAPeriod the one
 	// attending to everything, the rest windowed (ModernBERT's), where the
 	// period's last is otherwise.

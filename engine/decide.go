@@ -187,9 +187,6 @@ func (d *Decider) Decide(state jinja.Value, qs []DecisionQuestion, pics ...model
 	if err := d.Prepare(qs); err != nil {
 		return nil, err
 	}
-	if len(pics) > 0 && d.mp != nil {
-		return nil, fmt.Errorf("model: a marker head's prompt program places no pictures")
-	}
 	d.pics = pics
 	defer func() { d.pics = nil }()
 	d.input = 0
@@ -321,7 +318,11 @@ func (d *Decider) answer(state jinja.Value, q *DecisionQuestion) (DecisionAnswer
 // answerMarked asks q through a marker head: the container's prompt for it,
 // its options' scores at their markers, each option one group of its score.
 func (d *Decider) answerMarked(state jinja.Value, q *DecisionQuestion) (DecisionAnswer, error) {
-	ids, marks, err := markedPrompt(d.mp, d.encodePlain, state, q, d.in.MaxSeq())
+	prefix := 0
+	for i := range d.pics {
+		prefix += d.pics[i].N(d.in.c.NEmbd)
+	}
+	ids, marks, err := markedPrompt(d.mp, d.encodePlain, state, q, d.in.MaxSeq()-prefix, len(d.pics))
 	if err != nil {
 		return DecisionAnswer{}, err
 	}
@@ -329,10 +330,15 @@ func (d *Decider) answerMarked(state jinja.Value, q *DecisionQuestion) (Decision
 	if len(marks) != n {
 		return DecisionAnswer{}, fmt.Errorf("%d options and the prompt holds %d of their markers in %d tokens", n, len(marks), len(ids))
 	}
-	if err := d.in.MarkScores(ids, int(q.Type), marks, d.scores[:n]); err != nil {
+	if len(d.pics) > 0 {
+		err = d.in.MarkScoresAfter(d.pics, ids, int(q.Type), marks, d.scores[:n])
+	} else {
+		err = d.in.MarkScores(ids, int(q.Type), marks, d.scores[:n])
+	}
+	if err != nil {
 		return DecisionAnswer{}, err
 	}
-	d.input += len(ids)
+	d.input += prefix + len(ids)
 	clear(d.keep)
 	clear(d.vals)
 	for i := range n {
@@ -342,6 +348,9 @@ func (d *Decider) answerMarked(state jinja.Value, q *DecisionQuestion) (Decision
 		}
 	}
 	d.params[0], d.params[1] = 1/d.cfg.Temperature(q.Type, n), 0
+	if len(d.pics) > 0 && d.cfg.Flags2.Has(jlm.Flag2MediaUncalibrated) {
+		d.params[0] = 1
+	}
 	if !d.in.decideScores(d.vals, d.keep, d.params, d.prior, d.probs, d.stats) {
 		return DecisionAnswer{}, d.in.sampleDeclined("the marker readout")
 	}

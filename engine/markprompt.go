@@ -37,7 +37,7 @@ func (v *promptValue) at(i int) int {
 // markedPrompt evaluates p over question q about state: its ids and the rows
 // of its marked tokens, in order. rows is the context the prompt is bounded
 // by (jlm.PromptContext).
-func markedPrompt(p *jlm.MarkerPrompt, encode func(string) []int32, state jinja.Value, q *DecisionQuestion, rows int) ([]int32, []int, error) {
+func markedPrompt(p *jlm.MarkerPrompt, encode func(string) []int32, state jinja.Value, q *DecisionQuestion, rows, pictures int) ([]int32, []int, error) {
 	vals := make([]promptValue, len(p.Nodes))
 	k := len(q.Options)
 	for ni := range p.Nodes {
@@ -63,6 +63,8 @@ func markedPrompt(p *jlm.MarkerPrompt, encode func(string) []int32, state jinja.
 			v.toks, v.marks = [][]int32{n.IDs}, [][]int{{0}}
 		case jlm.PromptContext:
 			v.ints = []int64{int64(rows)}
+		case jlm.PromptPictures:
+			v.ints = []int64{int64(pictures)}
 		case jlm.PromptType:
 			v.texts = []string{q.Type.String()}
 		case jlm.PromptTypeIndex:
@@ -237,6 +239,9 @@ func renderPrompt(v jinja.Value, r jlm.PromptRender) string {
 	}
 	if r == jlm.PromptTemplate {
 		return jinja.Print(v)
+	}
+	if r == jlm.PromptJSONOrEmpty && (v.IsNone() || v.IsUndefined()) {
+		return ""
 	}
 	var b strings.Builder
 	if r == jlm.PromptPyStr {

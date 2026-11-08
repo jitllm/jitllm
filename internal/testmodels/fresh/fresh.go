@@ -61,6 +61,7 @@ func reconvert(path string) error {
 			(cfg.IdxHeads == 0 || cfg.Selection != nil || len(cfg.CompKinds) != 0)
 		labels := cfg.DecisionLabels != nil || !convert.StatesDecisionLabels(cfg.Decision)
 		joint := cfg.JointHead != nil || !convert.StatesJointHead(cfg.Decision)
+		media := cfg.Flags2.Has(jlm.Flag2MediaPrefix) || !convert.StatesMediaPrefix(cfg.Decision)
 		marker := cfg.MarkerPrompt != nil || cfg.Flags2&(jlm.Flag2HeadBlocks|jlm.Flag2MarkerPointer) == 0 &&
 			cfg.Decision != jlm.DecisionKev
 		rev := cfg.Revision >= jlm.StatementRevision || (cfg.SWAWindow == 0 || cfg.YarnFactor <= 1 && v == nil) &&
@@ -69,8 +70,10 @@ func reconvert(path string) error {
 			(cfg.Revision >= 5 || cfg.DecisionBlocks == 0)
 		c.Close()
 		switch {
-		case stated && tower && tools && streams && rev && labels && marker && joint:
+		case stated && tower && tools && streams && rev && labels && marker && joint && media:
 			return nil
+		case !media:
+			openErr = fmt.Errorf("it states no media prefix")
 		case !joint:
 			openErr = fmt.Errorf("it states no joint head")
 		case !marker:
