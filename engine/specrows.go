@@ -422,16 +422,24 @@ func (s *Instance) stepRowsStreams(src rowSrc, out *rowsOut) error {
 	return s.kvCheck()
 }
 
-// rowsHead projects n collapsed rows of a hyper-connected model's verification
-// into logits: on the device as a head-only ragged call, or on the host when
-// the device refuses it.
+// rowsHead projects n rows of a hyper-connected model's verification into
+// logits: on the device as a head-only ragged call, or on the CPU when the
+// device refuses it. A device that collapses the streams itself
+// (nn.Head.Collapses) is handed them as they are, as the decode's head is;
+// the CPU collapses them first for one that does not, and where the device
+// refuses.
 func (s *Instance) rowsHead(rd nn.RowsDevice, pos, slot []int, n int, logits []float32, nlogit int) error {
 	c := s.m.Cfg
 	x := s.bx[:n*c.ResidW()]
-	if err := s.collapseStreams(x, n); err != nil {
-		return err
-	}
 	h := s.head
+	devCollapse := h != nil && h.Collapses
+	if !devCollapse {
+		if err := s.collapseStreams(x, n); err != nil {
+			return err
+		}
+	} else if c.ResidStreams() {
+		s.rows.tapStreams(s, x, n)
+	}
 	if h != nil {
 		keep := h.Logits
 		h.RowLogits, h.Logits, h.LogitRows = true, logits[:nlogit*c.NVocab], nlogit
@@ -440,6 +448,11 @@ func (s *Instance) rowsHead(rd nn.RowsDevice, pos, slot []int, n int, logits []f
 		if ok {
 			s.rowsHeads++
 			return nil
+		}
+	}
+	if devCollapse {
+		if err := s.collapseStreams(x, n); err != nil {
+			return err
 		}
 	}
 	s.growRows(n)
