@@ -32,6 +32,17 @@ type DecideOptions struct {
 	// Clips are the request's voice clips, mono samples in [-1, 1] at the
 	// audio tower's rate, each encoded through it after the pictures.
 	Clips [][]float32
+	// Videos are the request's videos, shown after the pictures, each its
+	// frames read through the model's tower as it reads a video
+	// (Model.VideoSpans).
+	Videos []Video
+}
+
+// Video is a request's video: its frames in order, and their rate in frames
+// a second, 0 where the request states none.
+type Video struct {
+	Frames []image.Image
+	FPS    float64
 }
 
 // DecideResult is one answer per question, in question order, and the
@@ -63,6 +74,16 @@ func (e *Engine) Decide(ctx context.Context, o DecideOptions) (*DecideResult, er
 	if len(o.Clips) > 0 && lm.m.Audio == nil {
 		return nil, fmt.Errorf("%w: model %q does not accept audio: it carries no audio tower", ErrInvalid, lm.id)
 	}
+	if len(o.Videos) > 0 && (lm.m.Tower == nil || lm.m.Tower.Video == nil) {
+		return nil, fmt.Errorf("%w: model %q does not accept video: its container states no tower that reads one", ErrInvalid, lm.id)
+	}
+	videos := make([][]model.Span, len(o.Videos))
+	for i, v := range o.Videos {
+		var err error
+		if videos[i], err = lm.m.VideoSpans(v.Frames, v.FPS); err != nil {
+			return nil, fmt.Errorf("%w: videos[%d]: %v", ErrInvalid, i, err)
+		}
+	}
 	pics := make([]model.Span, 0, len(o.Images)+len(o.Clips))
 	for i, img := range o.Images {
 		sp, err := lm.m.PictureSpan(img)
@@ -91,7 +112,7 @@ func (e *Engine) Decide(ctx context.Context, o DecideOptions) (*DecideResult, er
 		return nil, err
 	}
 	t1 := time.Now()
-	ans, err := d.d.Decide(o.State, o.Questions, pics...)
+	ans, err := d.d.DecideMedia(o.State, o.Questions, pics, videos)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
 	}

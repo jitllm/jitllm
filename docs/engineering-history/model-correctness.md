@@ -9525,14 +9525,33 @@ mean time, `%.1f`) and its rows between markers, all inside the
 placeholder's own markers.
 
 A pair is two different frames, which a container whose patch embedding was
-folded to the planes' sum cannot read; `convert.foldPatchPlanes` now keeps
-the second plane beside the sum (`RoleVPatchEmbd` index 1), and a pair's
-row is x0*(W0+W1) + (x1-x0)*W1 (`State.patchPair`, generated gather,
-difference and add). A container converted before carries no second plane
-and refuses a video by name.
+folded to the planes' sum cannot read; `convert.foldPatchPlanes` keeps the
+second plane beside the sum (`RoleVPatchEmbd2`), and a pair's row is
+x0*(W0+W1) + (x1-x0)*W1. The converter states all of it for Qwen3-VL's
+family (`jlm.Video`, a record after the tower's in the vision section): the
+published sampling (2 frames a second, 24 assumed, 4 to 768 frames), the
+resize (`jlm.PreVideoResize`, torchvision's 8-bit antialiased bicubic,
+which the picture op's torch taps are), the timestamp's text and the outer
+markers, and an entry over two frames -- each frame through its own
+picture op (the second at the byte the request's frame word names,
+`graph.Attrs.PicFrame`), both patch gathers, their difference
+(`jlm.TOpSub`), the two matrices and the position table. The engine's
+geometry is Go (`TowerGraphs.VideoPlan`: the indices, the size, the
+times); every pixel goes through the composed entry, formed for every
+picture class's size at placement beside the picture entries. A pair is a
+picture span with its second frame (`Span.Frame`), encoded through the
+tower's blocks and head as a picture's square is.
 
-Gates (`TestClefMediaMatchesReference`, laptop host, RTX 3050 Ti under CUDA
-and Vulkan): a fixture like Clef's random one but with the release's 48x48
+On the CPU device with every block of Clef's VL fixture
+(`TestDecisionOverVideoMatchesItsGolden`, box 43): 8.8e-4 from Clef's own
+answers with the CPU's int8 activations, 4.1e-4 with its float forms,
+1.1e-3 on a V100 with every block placed, 395 prompt rows as the
+reference counts them; the video's tokens are the reference prompt's run
+token for token (`TestVideoSpansFollowTheProcessor`), and its plan is the
+processor's over eight shapes and rates (`TestVideoPlanIsTheProcessors`).
+
+Before the composer (`TestClefMediaMatchesReference`, laptop host, RTX 3050
+Ti under CUDA and Vulkan): a fixture like Clef's random one but with the release's 48x48
 position table (`clefgold.py fixture-vl`; the 8x8 table of the text
 fixture reads a picture at 128 pixels where the processor reads 384), its
 goldens with the reference's tower inputs and matrices rounded as the

@@ -63,6 +63,7 @@ func reconvert(path string) error {
 		joint := cfg.JointHead != nil || !convert.StatesJointHead(cfg.Decision)
 		media := cfg.Flags2.Has(jlm.Flag2MediaPrefix) || !convert.StatesMediaPrefix(cfg.Decision)
 		audio := v == nil || v.Audio == nil || v.Audio.Tower != nil
+		video := v == nil || v.Tower == nil || v.Tower.Video != nil || !convert.StatesVideo(v.Projector)
 		marker := cfg.MarkerPrompt != nil || cfg.Flags2&(jlm.Flag2HeadBlocks|jlm.Flag2MarkerPointer) == 0 &&
 			cfg.Decision != jlm.DecisionKev
 		rev := cfg.Revision >= jlm.StatementRevision || (cfg.SWAWindow == 0 || cfg.YarnFactor <= 1 && v == nil) &&
@@ -71,8 +72,10 @@ func reconvert(path string) error {
 			(cfg.Revision >= 5 || cfg.DecisionBlocks == 0)
 		c.Close()
 		switch {
-		case stated && tower && tools && streams && rev && labels && marker && joint && media && audio:
+		case stated && tower && tools && streams && rev && labels && marker && joint && media && audio && video:
 			return nil
+		case !video:
+			openErr = fmt.Errorf("it states no video for its tower")
 		case !audio:
 			openErr = fmt.Errorf("it states no audio tower")
 		case !media:
