@@ -319,7 +319,9 @@ func d1OmniAudioTower(a *jlm.Audio) *jlm.Tower {
 	relu := func(e *jlm.ExprBuilder) { e.Fn(jlm.FnMax, jlm.Operand(0), jlm.Num(0)) }
 	silu := func(e *jlm.ExprBuilder) { e.SiLU(jlm.Operand(0)) }
 	gelu := func(e *jlm.ExprBuilder) { e.GELUErf(jlm.Operand(0)) }
-	half := func(e *jlm.ExprBuilder) { e.Fn(jlm.FnAdd, jlm.Operand(0), e.Fn(jlm.FnMul, jlm.Operand(1), jlm.Num(0.5))) }
+	half := func(e *jlm.ExprBuilder) {
+		e.Fn(jlm.FnAdd, jlm.Operand(0), e.Fn(jlm.FnMul, jlm.Operand(1), jlm.Num(0.5)))
+	}
 	op := func(p *program, o jlm.TowerOp) uint16 { return p.op(o) }
 	lin := func(p *program, x uint16, w, b jlm.Role) uint16 {
 		return op(p, jlm.TowerOp{Code: jlm.TOpLinear, In: []uint16{x}, Bind: []jlm.Role{w, b}})

@@ -24,9 +24,13 @@ func (b *promptBuilder) opInt(op jlm.PromptOp, i int64, args ...uint32) uint32 {
 
 func (b *promptBuilder) num(i int64) uint32 { return b.opInt(jlm.PromptInt, i) }
 
-func (b *promptBuilder) text(s string) uint32 { return b.node(jlm.PromptNode{Op: jlm.PromptText, Text: s}) }
+func (b *promptBuilder) text(s string) uint32 {
+	return b.node(jlm.PromptNode{Op: jlm.PromptText, Text: s})
+}
 
-func (b *promptBuilder) ids(ids ...int32) uint32 { return b.node(jlm.PromptNode{Op: jlm.PromptIDs, IDs: ids}) }
+func (b *promptBuilder) ids(ids ...int32) uint32 {
+	return b.node(jlm.PromptNode{Op: jlm.PromptIDs, IDs: ids})
+}
 
 // StateMarkerPrompt states a marker head's prompt in s's config, its
 // sequence cut to maxLen tokens (decision.max_tokens; 0 where the file is
