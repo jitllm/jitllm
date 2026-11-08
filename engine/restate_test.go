@@ -243,35 +243,6 @@ func inBlocks(keep func(li int) bool, match func(*graph.Graph) func(int, *graph.
 	}
 }
 
-// modelWide narrows match to the graphs over every block (the head's
-// collapse), no block's own.
-func modelWide(match func(*graph.Graph) func(int, *graph.Op) bool) func(*graph.Graph) func(int, *graph.Op) bool {
-	return func(g *graph.Graph) func(int, *graph.Op) bool {
-		if g.Block >= 0 {
-			return func(int, *graph.Op) bool { return false }
-		}
-		return match(g)
-	}
-}
-
-// lastNamed matches an op writing a value named name that no other such op
-// reads: a chain's last.
-func lastNamed(name string) func(*graph.Graph) func(int, *graph.Op) bool {
-	return func(g *graph.Graph) func(int, *graph.Op) bool {
-		return func(_ int, o *graph.Op) bool {
-			if len(o.Out) == 0 || !isNamed(g, o.Out[0], name) {
-				return false
-			}
-			for _, r := range g.Ops {
-				if len(r.Out) > 0 && isNamed(g, r.Out[0], name) && slices.Contains(r.In, o.Out[0]) {
-					return false
-				}
-			}
-			return true
-		}
-	}
-}
-
 // reading matches an op of kind k reading a value named name.
 func reading(k graph.OpKind, name string) func(*graph.Graph) func(int, *graph.Op) bool {
 	return func(g *graph.Graph) func(int, *graph.Op) bool {

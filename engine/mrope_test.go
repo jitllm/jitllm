@@ -167,14 +167,6 @@ func qvlRunErr(st *Instance, g *qvlGolden, grid bool) ([][]float32, error) {
 	return out, nil
 }
 
-// qvlWorst is the worst NMSE of rows against the golden, and the argmax flips.
-func (g *qvlGolden) dtypeName() string {
-	if g.Dtype == "" {
-		return "float32"
-	}
-	return g.Dtype
-}
-
 func qvlWorst(g *qvlGolden, rows [][]float32) (float64, int) {
 	worst, flips := 0.0, 0
 	for i, lg := range rows {

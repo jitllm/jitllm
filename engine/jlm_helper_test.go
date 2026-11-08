@@ -150,10 +150,6 @@ func jlmOfPair(t testing.TB, path, mmproj string) string {
 	return dst
 }
 
-// jlmOfErr is jlmOf for a caller that decides what a failure means: a sweep
-// that must not let one model's refusal skip the whole gate.
-func jlmOfErr(path string) (string, error) { return convertPair(path, "") }
-
 // convertPair is jlmOfPair without a test: the container's path, or why there
 // is none.
 func convertPair(path, mmproj string) (string, error) {
