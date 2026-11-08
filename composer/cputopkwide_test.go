@@ -13,8 +13,9 @@ import (
 // TestComposedCPURouterOverManyExperts forms a mixture's router over 4096
 // experts on the CPU as the front end states it (softmax, the top K, the
 // picks' weights over their sum) and holds the picks to the definition and the
-// weights to a float64 softmax, on the profile as it ships and with no loop
-// across lanes: the form a register refusal leaves (Kernel.Unvector), on an
+// weights to a float64 softmax, on the profile as it ships, at one row and
+// at five (the scatter of the kept, past one row, outgrew the vector
+// registers held as one map), and with no loop across lanes: the form a register refusal leaves (Kernel.Unvector), on an
 // x86 device the top-k's orderable keys then a float's bits in the general
 // registers (Kernel.BitsGPR). Each arm asserts the form it ran.
 func TestComposedCPURouterOverManyExperts(t *testing.T) {
@@ -34,11 +35,16 @@ func TestComposedCPURouterOverManyExperts(t *testing.T) {
 	p.Off = map[string]bool{Vectorize{}.Name(): true}
 	noLanes.Profiles[DeviceCPU] = p
 	for _, arm := range []struct {
-		name  string
-		r     *Registry
-		lanes bool
-	}{{"as shipped", Default(), true}, {"no lanes", noLanes, false}} {
-		for _, K := range []int{1, 2, 8} {
+		name   string
+		r      *Registry
+		lanes  bool
+		shapes [][2]int
+	}{
+		{"as shipped", Default(), true, [][2]int{{1, 1}, {1, 2}, {1, 8}, {5, 2}, {5, 8}}},
+		{"no lanes", noLanes, false, [][2]int{{1, 1}, {1, 2}, {1, 8}}},
+	} {
+		for _, rk := range arm.shapes {
+			rows, K := rk[0], rk[1]
 			b := graph.New()
 			in := b.In("logits", E)
 			score, err := b.Stated("router.score", softmax, []graph.ValueID{in}, E, graph.Facts{})
@@ -53,39 +59,42 @@ func TestComposedCPURouterOverManyExperts(t *testing.T) {
 			wn := b.Emit(graph.OpMap, []graph.ValueID{w, sum}, []graph.Result{{Name: "router.wn", Width: K}}, nil, graph.Attrs{Fn: graph.MapDiv}, nil, nil)[0]
 			b.Out(o[0])
 			b.Out(wn)
-			_, codes, err := arm.r.Form(Request{Graph: b.G, Formats: map[jlm.Role]jlm.Type{}, Step: Step{Rows: 1, Page: 64, Keys: 1}, Device: cpuDevice(hostArm()), Apart: true})
+			_, codes, err := arm.r.Form(Request{Graph: b.G, Formats: map[jlm.Role]jlm.Type{}, Step: Step{Rows: rows, Page: 64, Keys: 1}, Device: cpuDevice(hostArm()), Apart: true})
 			if err != nil {
-				t.Fatalf("%s/top %d: forming: %v", arm.name, K, err)
+				t.Fatalf("%s/%d rows/top %d: forming: %v", arm.name, rows, K, err)
 			}
 			lanes := slices.ContainsFunc(codes, func(c Code) bool { return slices.Contains(c.Passes, Vectorize{}.Name()) })
 			if lanes != arm.lanes {
-				t.Fatalf("%s/top %d: a code across lanes %v, want %v", arm.name, K, lanes, arm.lanes)
+				t.Fatalf("%s/%d rows/top %d: a code across lanes %v, want %v", arm.name, rows, K, lanes, arm.lanes)
 			}
-			x := make([]float32, E)
-			xs := make([]uint32, E)
+			x := make([]float32, rows*E)
+			xs := make([]uint32, rows*E)
 			for i := range x {
 				x[i] = float32(4 * rng.NormFloat64())
 				xs[i] = math.Float32bits(x[i])
 			}
 			vals := map[graph.ValueID][]uint32{in: xs}
-			if err := runCPUValues(hostArm(), codes, b.G, vals, [3][]uint32{}); err != nil {
-				t.Fatalf("%s/top %d: %v", arm.name, K, err)
+			if err := runCPUGridValues(hostArm(), codes, b.G, vals, [3][]uint32{}, nil, func(graph.ValueID) int { return rows }, nil); err != nil {
+				t.Fatalf("%s/%d rows/top %d: %v", arm.name, rows, K, err)
 			}
-			order := sampleOrder(x)
-			var den, picked float64
-			for _, v := range x {
-				den += math.Exp(float64(v - x[order[0]]))
-			}
-			for p := range K {
-				picked += math.Exp(float64(x[order[p]]-x[order[0]])) / den
-			}
-			for p := range K {
-				if got := vals[o[0]][p]; int(got) != order[p] {
-					t.Fatalf("%s/top %d: place %d holds expert %d, want %d", arm.name, K, p, got, order[p])
+			for r := range rows {
+				xr := x[r*E : (r+1)*E]
+				order := sampleOrder(xr)
+				var den, picked float64
+				for _, v := range xr {
+					den += math.Exp(float64(v - xr[order[0]]))
 				}
-				want := math.Exp(float64(x[order[p]]-x[order[0]])) / den / picked
-				if got := float64(math.Float32frombits(vals[wn][p])); math.IsNaN(got) || math.Abs(got-want) > 1e-5 {
-					t.Fatalf("%s/top %d: place %d weighs %g, want %g", arm.name, K, p, got, want)
+				for p := range K {
+					picked += math.Exp(float64(xr[order[p]]-xr[order[0]])) / den
+				}
+				for p := range K {
+					if got := vals[o[0]][r*K+p]; int(got) != order[p] {
+						t.Fatalf("%s/%d rows/top %d: row %d place %d holds expert %d, want %d", arm.name, rows, K, r, p, got, order[p])
+					}
+					want := math.Exp(float64(xr[order[p]]-xr[order[0]])) / den / picked
+					if got := float64(math.Float32frombits(vals[wn][r*K+p])); math.IsNaN(got) || math.Abs(got-want) > 1e-5 {
+						t.Fatalf("%s/%d rows/top %d: row %d place %d weighs %g, want %g", arm.name, rows, K, r, p, got, want)
+					}
 				}
 			}
 		}

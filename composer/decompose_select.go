@@ -166,26 +166,35 @@ func decomposeTopKSelect(c *Context, in, sel, val Operand, S, K int) []Prim {
 	prims = append(prims, Prim{Kind: PrimReduce, Shape: []int{R, S, B}, In: []Operand{in, t}, Out: wf, Combine: OpAdd, Type: F,
 		Expr: wx.e, Facts: Facts{Extents: ext}}, words(wf, within, S))
 
+	// Each element against the threshold: 2 above it, 1 at it, 0 below. A
+	// map of its own, so that the scatter after it holds the prefix counts
+	// and not the key's order as well: the two at once outgrow a CPU's
+	// vector registers past one row.
+	cls := scratch("class", U)
+	var cx exprs
+	r, i = cx.coord(0), cx.coord(1)
+	k = keyAt(&cx, r, i)
+	tt = cx.at(1, []int{R}, r)
+	cx.sel(U, cx.op(OpLess, ir.Pred, tt, k), cx.u(2), cx.sel(U, cx.op(OpLess, ir.Pred, k, tt), cx.u(0), cx.u(1)))
+	prims = append(prims, Prim{Kind: PrimMap, Shape: []int{R, S}, In: []Operand{in, t}, Out: cls, Expr: cx.e})
+
 	// Every kept element written at its place among its row's kept, in
 	// index order; the others at the place after them, a row K+1 wide.
 	ids, vals := scratch("kept", U), scratch("kept.v", F)
 	var sx exprs
 	r, i = sx.coord(0), sx.coord(1)
 	v := sx.at(0, []int{R, S}, r, i)
-	k = sx.orderKey(v)
-	tt = sx.at(1, []int{R}, r)
+	cl := sx.at(6, []int{R, S}, r, i)
 	bi := sx.op(OpShr, U, i, sx.u(uint32(sh)))
 	w = sx.at(5, []int{R, S}, r, i)
 	ab := sx.op(OpAdd, U, sx.at(3, []int{R, nb}, r, bi), sx.op(OpAnd, U, w, sx.u(0xffff)))
 	eb := sx.op(OpAdd, U, sx.at(4, []int{R, nb}, r, bi), sx.op(OpShr, U, w, sx.u(16)))
 	need := sx.op(OpSub, U, sx.u(uint32(K)), sx.at(2, []int{R}, r))
-	isAbove := sx.op(OpLess, ir.Pred, tt, k)
-	isBelow := sx.op(OpLess, ir.Pred, k, tt)
-	kept := sx.sel(U, isAbove, sx.u(1), sx.sel(U, isBelow, sx.u(0), sx.sel(U, sx.op(OpLess, ir.Pred, eb, need), sx.u(1), sx.u(0))))
+	kept := sx.sel(U, sx.op(OpLess, ir.Pred, sx.u(1), cl), sx.u(1), sx.sel(U, sx.op(OpLess, ir.Pred, cl, sx.u(1)), sx.u(0), sx.sel(U, sx.op(OpLess, ir.Pred, eb, need), sx.u(1), sx.u(0))))
 	row := sx.op(OpMul, U, r, sx.u(uint32(K+1)))
 	place := sx.op(OpAdd, U, row, sx.op(OpAdd, U, ab, sx.op(OpMin, U, eb, need)))
 	dest := sx.sel(U, sx.op(OpLess, ir.Pred, sx.u(0), kept), place, sx.op(OpAdd, U, row, sx.u(uint32(K))))
-	prims = append(prims, Prim{Kind: PrimMap, Shape: []int{R, S}, In: []Operand{in, t, above, pre[0], pre[1], within}, Out: ids, Expr: sx.e,
+	prims = append(prims, Prim{Kind: PrimMap, Shape: []int{R, S}, In: []Operand{in, t, above, pre[0], pre[1], within, cls}, Out: ids, Expr: sx.e,
 		Stores: []PrimStore{
 			{Out: ids, Index: dest, Value: i, Extent: R * (K + 1)},
 			{Out: vals, Index: dest, Value: v, Extent: R * (K + 1)},
