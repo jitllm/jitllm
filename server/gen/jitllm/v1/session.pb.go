@@ -30,10 +30,10 @@ type Session struct {
 	// Positions currently held.
 	Position int32 `protobuf:"varint,4,opt,name=position,proto3" json:"position,omitempty"`
 	// Devices this session's blocks are placed on, and how many blocks each
-	// holds. A session with no device entry runs entirely on the host.
+	// holds. A session with no device entry runs entirely on the CPU.
 	DeviceIds    []string `protobuf:"bytes,5,rep,name=device_ids,json=deviceIds,proto3" json:"device_ids,omitempty"`
 	DeviceBlocks int32    `protobuf:"varint,6,opt,name=device_blocks,json=deviceBlocks,proto3" json:"device_blocks,omitempty"`
-	HostBlocks   int32    `protobuf:"varint,7,opt,name=host_blocks,json=hostBlocks,proto3" json:"host_blocks,omitempty"`
+	CpuBlocks    int32    `protobuf:"varint,7,opt,name=cpu_blocks,json=cpuBlocks,proto3" json:"cpu_blocks,omitempty"`
 	// Bytes of KV cache this session holds. KV is charged PER SESSION, so this
 	// is the number that decides how many sessions a card can hold -- and the
 	// engine has not measured that ceiling, which `SessionBudget` says out loud.
@@ -124,9 +124,9 @@ func (x *Session) GetDeviceBlocks() int32 {
 	return 0
 }
 
-func (x *Session) GetHostBlocks() int32 {
+func (x *Session) GetCpuBlocks() int32 {
 	if x != nil {
-		return x.HostBlocks
+		return x.CpuBlocks
 	}
 	return 0
 }
@@ -285,10 +285,10 @@ type CreateSessionRequest struct {
 	RelocateWhileServing bool `protobuf:"varint,6,opt,name=relocate_while_serving,json=relocateWhileServing,proto3" json:"relocate_while_serving,omitempty"`
 	// Sampler defaults for generate calls that do not carry their own.
 	Sampling *SamplingParams `protobuf:"bytes,7,opt,name=sampling,proto3" json:"sampling,omitempty"`
-	// Keep the session's blocks off the host when its context outgrows the
-	// device: the token takes the device's refusal rather than a block coming
-	// home. Contradicts relocate_while_serving; both set is refused.
-	KeepOffHost bool `protobuf:"varint,8,opt,name=keep_off_host,json=keepOffHost,proto3" json:"keep_off_host,omitempty"`
+	// Keep the session's blocks off the CPU when its context outgrows the
+	// device: the token takes the device's refusal rather than a block moving
+	// to the CPU. Contradicts relocate_while_serving; both set is refused.
+	KeepOffCpu bool `protobuf:"varint,8,opt,name=keep_off_cpu,json=keepOffCpu,proto3" json:"keep_off_cpu,omitempty"`
 	// Keep this session's prompt prefixes in the server's prompt store
 	// (`jitllmd serve -kv-cache DIR`), so a prompt that starts as an earlier one
 	// resumes from its cached keys and values. Refused when the server has no
@@ -383,9 +383,9 @@ func (x *CreateSessionRequest) GetSampling() *SamplingParams {
 	return nil
 }
 
-func (x *CreateSessionRequest) GetKeepOffHost() bool {
+func (x *CreateSessionRequest) GetKeepOffCpu() bool {
 	if x != nil {
-		return x.KeepOffHost
+		return x.KeepOffCpu
 	}
 	return false
 }
@@ -958,7 +958,7 @@ var File_jitllm_v1_session_proto protoreflect.FileDescriptor
 
 const file_jitllm_v1_session_proto_rawDesc = "" +
 	"\n" +
-	"\x17jitllm/v1/session.proto\x12\tjitllm.v1\x1a\x16jitllm/v1/common.proto\"\xc5\x04\n" +
+	"\x17jitllm/v1/session.proto\x12\tjitllm.v1\x1a\x16jitllm/v1/common.proto\"\xc3\x04\n" +
 	"\aSession\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x19\n" +
@@ -967,9 +967,9 @@ const file_jitllm_v1_session_proto_rawDesc = "" +
 	"\bposition\x18\x04 \x01(\x05R\bposition\x12\x1d\n" +
 	"\n" +
 	"device_ids\x18\x05 \x03(\tR\tdeviceIds\x12#\n" +
-	"\rdevice_blocks\x18\x06 \x01(\x05R\fdeviceBlocks\x12\x1f\n" +
-	"\vhost_blocks\x18\a \x01(\x05R\n" +
-	"hostBlocks\x12.\n" +
+	"\rdevice_blocks\x18\x06 \x01(\x05R\fdeviceBlocks\x12\x1d\n" +
+	"\n" +
+	"cpu_blocks\x18\a \x01(\x05R\tcpuBlocks\x12.\n" +
 	"\bkv_bytes\x18\b \x01(\v2\x13.jitllm.v1.ByteSizeR\akvBytes\x126\n" +
 	"\texecution\x18\t \x01(\x0e2\x18.jitllm.v1.ExecutionModeR\texecution\x12%\n" +
 	"\x0equeue_position\x18\n" +
@@ -986,7 +986,7 @@ const file_jitllm_v1_session_proto_rawDesc = "" +
 	"\x0fkv_bytes_in_use\x18\x02 \x01(\v2\x13.jitllm.v1.ByteSizeR\fkvBytesInUse\x12#\n" +
 	"\rsessions_open\x18\x03 \x01(\x05R\fsessionsOpen\x12?\n" +
 	"\x1csessions_per_device_measured\x18\x04 \x01(\bR\x19sessionsPerDeviceMeasured\x12'\n" +
-	"\x0funmeasured_note\x18\x05 \x01(\tR\x0eunmeasuredNote\"\xe0\x03\n" +
+	"\x0funmeasured_note\x18\x05 \x01(\tR\x0eunmeasuredNote\"\xde\x03\n" +
 	"\x14CreateSessionRequest\x12\x19\n" +
 	"\bmodel_id\x18\x01 \x01(\tR\amodelId\x12\x1d\n" +
 	"\n" +
@@ -996,8 +996,9 @@ const file_jitllm_v1_session_proto_rawDesc = "" +
 	"device_ids\x18\x04 \x03(\tR\tdeviceIds\x12/\n" +
 	"\x11max_device_blocks\x18\x05 \x01(\x05H\x00R\x0fmaxDeviceBlocks\x88\x01\x01\x124\n" +
 	"\x16relocate_while_serving\x18\x06 \x01(\bR\x14relocateWhileServing\x125\n" +
-	"\bsampling\x18\a \x01(\v2\x19.jitllm.v1.SamplingParamsR\bsampling\x12\"\n" +
-	"\rkeep_off_host\x18\b \x01(\bR\vkeepOffHost\x12!\n" +
+	"\bsampling\x18\a \x01(\v2\x19.jitllm.v1.SamplingParamsR\bsampling\x12 \n" +
+	"\fkeep_off_cpu\x18\b \x01(\bR\n" +
+	"keepOffCpu\x12!\n" +
 	"\fprompt_cache\x18\t \x01(\bR\vpromptCache\x12\x1b\n" +
 	"\tcache_key\x18\n" +
 	" \x01(\tR\bcacheKey\x12>\n" +

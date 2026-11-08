@@ -287,7 +287,7 @@ func completionOnCPU(e *env) []Check {
 		} `json:"choices"`
 		Jitllm struct {
 			DeviceBlocks int `json:"device_blocks"`
-			HostBlocks   int `json:"host_blocks"`
+			CPUBlocks    int `json:"cpu_blocks"`
 		} `json:"jitllm"`
 	}
 	if err := json.Unmarshal([]byte(out), &r); err != nil || len(r.Choices) == 0 {
@@ -295,8 +295,8 @@ func completionOnCPU(e *env) []Check {
 		return []Check{text, cpu}
 	}
 	text.Passed, text.Detail = strings.Contains(r.Choices[0].Text, lily), r.Choices[0].Text
-	cpu.Passed = r.Jitllm.DeviceBlocks == 0 && r.Jitllm.HostBlocks > 0
-	cpu.Detail = fmt.Sprintf("%d device block(s), %d host block(s)", r.Jitllm.DeviceBlocks, r.Jitllm.HostBlocks)
+	cpu.Passed = r.Jitllm.DeviceBlocks == 0 && r.Jitllm.CPUBlocks > 0
+	cpu.Detail = fmt.Sprintf("%d device block(s), %d host block(s)", r.Jitllm.DeviceBlocks, r.Jitllm.CPUBlocks)
 	return []Check{text, cpu}
 }
 

@@ -24,7 +24,7 @@ func (s *SessionService) CreateSession(ctx context.Context, req *connect.Request
 
 		callerPlaced: len(normaliseDeviceIDs(m.DeviceIds)) > 0,
 
-		KeepOffHost: m.KeepOffHost,
+		KeepOffCpu:  m.KeepOffCpu,
 		PromptCache: m.PromptCache,
 		CacheKey:    m.CacheKey,
 	}

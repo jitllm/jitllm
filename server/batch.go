@@ -653,7 +653,7 @@ func (r *row) started() {
 		QueuedFor:    r.waited,
 		QueueDepth:   r.depth,
 		DeviceBlocks: devBlocks,
-		HostBlocks:   lm.m.Cfg.NLayer - devBlocks,
+		CPUBlocks:    lm.m.Cfg.NLayer - devBlocks,
 		DeviceIDs:    lm.devIDs(),
 		Prefill:      r.prefill,
 		Execution:    ExecutionParallel,

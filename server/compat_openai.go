@@ -151,7 +151,7 @@ type oaJitllmExtra struct {
 	QueuedMillis  int64    `json:"queued_ms"`
 	QueueDepth    int32    `json:"queue_depth_on_entry"`
 	DeviceBlocks  int      `json:"device_blocks"`
-	HostBlocks    int      `json:"host_blocks"`
+	CPUBlocks     int      `json:"cpu_blocks"`
 	DeviceIDs     []string `json:"device_ids,omitempty"`
 	PrefillMillis int64    `json:"prefill_ms"`
 	// RestoredTokens is how many prompt tokens came from the prompt store.
@@ -864,7 +864,7 @@ func jitllmExtra(s *Started, f *Finished) *oaJitllmExtra {
 		QueuedMillis:   s.QueuedFor.Milliseconds(),
 		QueueDepth:     s.QueueDepth,
 		DeviceBlocks:   s.DeviceBlocks,
-		HostBlocks:     s.HostBlocks,
+		CPUBlocks:      s.CPUBlocks,
 		DeviceIDs:      s.DeviceIDs,
 		PrefillMillis:  s.Prefill.Milliseconds(),
 		RestoredTokens: s.Restored,

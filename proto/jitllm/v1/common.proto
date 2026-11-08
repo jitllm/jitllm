@@ -6,7 +6,7 @@ package jitllm.v1;
 // message in this file appears as a field of one.
 
 // Backend is the code generator a device is driven by. CPU is a first-class
-// member: the host is a placement target exactly as a card is, which is the
+// member: the CPU is a placement target exactly as a card is, which is the
 // whole point of the engine's block-placement model.
 enum Backend {
   BACKEND_UNSPECIFIED = 0;
@@ -24,8 +24,8 @@ enum Backend {
 // the host budget rather than ADD it as a second pool.
 enum DeviceKind {
   DEVICE_KIND_UNSPECIFIED = 0;
-  // The host's own cores. Its memory is the host budget by definition.
-  DEVICE_KIND_HOST = 1;
+  // The CPU's own cores. Its memory is the host budget by definition.
+  DEVICE_KIND_CPU = 1;
   // A discrete card with its own VRAM. Its memory is a second pool.
   // A resizable-BAR card still reports DISCRETE: a device-local host-visible
   // heap is still VRAM.
@@ -41,14 +41,14 @@ enum DeviceKind {
 message DeviceRef {
   string id = 1;
   Backend backend = 2;
-  // Index within the backend. Meaningless for the host.
+  // Index within the backend. Meaningless for the CPU.
   int32 index = 3;
 }
 
 // Placement of one transformer block.
 enum BlockLocation {
   BLOCK_LOCATION_UNSPECIFIED = 0;
-  BLOCK_LOCATION_HOST = 1;
+  BLOCK_LOCATION_CPU = 1;
   BLOCK_LOCATION_DEVICE = 2;
 }
 

@@ -122,7 +122,7 @@ func TestAutoPicksARunningJitllmd(t *testing.T) {
 		t.Errorf("listed %+v", m)
 	}
 	pump(t, sh, 10*time.Second, "the block map", func() bool { return len(st.BlockMap.Get()) == m.Blocks })
-	if a := st.Alloc.Get(); a.NBlocks != m.Blocks || a.HostBlocks+a.DeviceBlocks != m.Blocks {
+	if a := st.Alloc.Get(); a.NBlocks != m.Blocks || a.CPUBlocks+a.DeviceBlocks != m.Blocks {
 		t.Errorf("allocation %+v for %d blocks", a, m.Blocks)
 	}
 	if !strings.Contains(st.ModelSummary.Get(), "jitllmd at "+addr) {

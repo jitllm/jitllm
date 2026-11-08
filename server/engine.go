@@ -1132,11 +1132,11 @@ type SessionOptions struct {
 	// positive MaxDeviceBlocks, a placement the orchestrator leaves alone.
 	callerPlaced bool
 	Relocate     bool
-	// KeepOffHost turns off what an instance does by default when its context
+	// KeepOffCpu turns off what an instance does by default when its context
 	// outgrows the device: hand a block to the host. A device choice that
 	// leaves the CPU out is kept, and the token takes the device's refusal.
-	KeepOffHost bool
-	Sampling    engine.Sampler
+	KeepOffCpu bool
+	Sampling   engine.Sampler
 	// KVStore keeps the session's prompt prefixes, so a prompt that starts as
 	// an earlier one did resumes from its cached keys and values; CacheKey
 	// names what may be shared (engine.Instance.SetCacheKey). A session with a
@@ -1172,8 +1172,8 @@ func (o *SessionOptions) check(store engine.KVStore) error {
 		return fmt.Errorf("%w: max_seq %d is negative", ErrInvalid, o.MaxSeq)
 	case o.MaxDeviceBlocks < -1:
 		return fmt.Errorf("%w: max_device_blocks %d: want -1 (as many as fit) or more", ErrInvalid, o.MaxDeviceBlocks)
-	case o.Relocate && o.KeepOffHost:
-		return fmt.Errorf("%w: relocate_while_serving and keep_off_host contradict each other", ErrInvalid)
+	case o.Relocate && o.KeepOffCpu:
+		return fmt.Errorf("%w: relocate_while_serving and keep_off_cpu contradict each other", ErrInvalid)
 	case o.PromptCache && o.KVStore == nil && store == nil:
 		return fmt.Errorf("%w: prompt_cache needs a prompt store, and this server has none (jitllmd serve -kv-cache DIR)", ErrInvalid)
 	case o.CacheKey != "" && !o.PromptCache && o.KVStore == nil:
@@ -1234,7 +1234,7 @@ func (e *Engine) CreateSession(o SessionOptions) (*Session, error) {
 	lm.ttft.sessionsOpened.Add(1)
 	// Placement is the instance's: a session's placement options move it, and
 	// every session leasing it with it.
-	if o.MaxDeviceBlocks != 0 || o.Relocate || o.KeepOffHost {
+	if o.MaxDeviceBlocks != 0 || o.Relocate || o.KeepOffCpu {
 		lm.inst.With(func(in *engine.Instance) {
 			if o.MaxDeviceBlocks > 0 && tierDev != nil {
 				in.SetGPULayers(o.MaxDeviceBlocks)
@@ -1242,7 +1242,7 @@ func (e *Engine) CreateSession(o SessionOptions) (*Session, error) {
 			if o.Relocate {
 				in.SetRelocate(true)
 			}
-			if o.KeepOffHost {
+			if o.KeepOffCpu {
 				in.SetRelocate(false)
 			}
 		})
@@ -1621,7 +1621,7 @@ type Started struct {
 	QueuedFor    time.Duration
 	QueueDepth   int32
 	DeviceBlocks int
-	HostBlocks   int
+	CPUBlocks    int
 	DeviceIDs    []string
 	Prefill      time.Duration
 	Execution    ExecutionMode
@@ -2032,7 +2032,7 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 		QueuedFor:    waited,
 		QueueDepth:   depth,
 		DeviceBlocks: devBlocks,
-		HostBlocks:   lm.m.Cfg.NLayer - devBlocks,
+		CPUBlocks:    lm.m.Cfg.NLayer - devBlocks,
 		DeviceIDs:    lm.devIDs(),
 		Prefill:      prefill,
 		Execution:    ExecutionParallel,

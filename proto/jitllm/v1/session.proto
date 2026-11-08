@@ -43,10 +43,10 @@ message Session {
   int32 position = 4;
 
   // Devices this session's blocks are placed on, and how many blocks each
-  // holds. A session with no device entry runs entirely on the host.
+  // holds. A session with no device entry runs entirely on the CPU.
   repeated string device_ids = 5;
   int32 device_blocks = 6;
-  int32 host_blocks = 7;
+  int32 cpu_blocks = 7;
 
   // Bytes of KV cache this session holds. KV is charged PER SESSION, so this
   // is the number that decides how many sessions a card can hold -- and the
@@ -101,10 +101,10 @@ message CreateSessionRequest {
   // Sampler defaults for generate calls that do not carry their own.
   SamplingParams sampling = 7;
 
-  // Keep the session's blocks off the host when its context outgrows the
-  // device: the token takes the device's refusal rather than a block coming
-  // home. Contradicts relocate_while_serving; both set is refused.
-  bool keep_off_host = 8;
+  // Keep the session's blocks off the CPU when its context outgrows the
+  // device: the token takes the device's refusal rather than a block moving
+  // to the CPU. Contradicts relocate_while_serving; both set is refused.
+  bool keep_off_cpu = 8;
 
   // Keep this session's prompt prefixes in the server's prompt store
   // (`jitllmd serve -kv-cache DIR`), so a prompt that starts as an earlier one

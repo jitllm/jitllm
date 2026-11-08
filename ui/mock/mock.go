@@ -98,7 +98,7 @@ func Qwen() Model {
 		Device:  "cuda:0,vulkan:1 (2 device(s))",
 		Blocks:  b,
 		Alloc: app.Allocation{
-			NBlocks: n, HostBlocks: 34, DeviceBlocks: 14,
+			NBlocks: n, CPUBlocks: 34, DeviceBlocks: 14,
 			HostUsed: 30 * qwenPage, HostBudget: 30*qwenPage + 200<<20, Dense: 622_000_000,
 			PageBytes: qwenPage, MaxSeq: 32_768,
 			Devices: []app.DeviceUse{
@@ -378,7 +378,7 @@ func (e *Engine) Relocate(n int) {
 			m.Blocks[i] = byte(widgets.PlaceHost | widgets.PlaceResident)
 		}
 	}
-	m.Alloc.DeviceBlocks, m.Alloc.HostBlocks = n, len(m.Blocks)-n
+	m.Alloc.DeviceBlocks, m.Alloc.CPUBlocks = n, len(m.Blocks)-n
 	for k := range m.Alloc.Devices {
 		d := &m.Alloc.Devices[k]
 		was := d.Weights
@@ -485,7 +485,7 @@ func (e *Engine) finish() {
 	e.words = nil
 	m.Alloc.Pos = min(m.Alloc.Pos+n+24, m.Alloc.MaxSeq)
 	kv := uint64(m.Alloc.Pos) * kvPerPos
-	m.Alloc.HostKV = kv * uint64(m.Alloc.HostBlocks) / uint64(max(m.Alloc.NBlocks, 1))
+	m.Alloc.CPUKV = kv * uint64(m.Alloc.CPUBlocks) / uint64(max(m.Alloc.NBlocks, 1))
 	for k := range m.Alloc.Devices {
 		d := &m.Alloc.Devices[k]
 		d.KV = kv * uint64(d.Blocks) / uint64(max(m.Alloc.NBlocks, 1))

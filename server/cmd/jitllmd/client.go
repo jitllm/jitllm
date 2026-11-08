@@ -305,7 +305,7 @@ func kindName(k v1.BlockKind) string {
 
 func deviceKindName(k v1.DeviceKind) string {
 	switch k {
-	case v1.DeviceKind_DEVICE_KIND_HOST:
+	case v1.DeviceKind_DEVICE_KIND_CPU:
 		return nn.CPU
 	case v1.DeviceKind_DEVICE_KIND_DISCRETE:
 		return "discrete"

@@ -155,7 +155,7 @@ func relocateBlocks(ctx context.Context, c cli, cn *conn, session, spec, to stri
 // relocationPath names a RelocationPath for a person.
 func relocationPath(p v1.RelocationPath) string {
 	switch p {
-	case v1.RelocationPath_RELOCATION_PATH_HOST:
+	case v1.RelocationPath_RELOCATION_PATH_CPU:
 		return "the host"
 	case v1.RelocationPath_RELOCATION_PATH_STAGED:
 		return "a host buffer"
@@ -294,7 +294,7 @@ func printPlacement(w io.Writer, p *v1.Placement) {
 		}
 		kind := kindName(b.GetKind())
 		res := 0
-		if b.GetHostResident() {
+		if b.GetCpuResident() {
 			res = 1
 		}
 		if n := len(runs); n > 0 && runs[n-1].where == where && runs[n-1].kind == kind &&
@@ -322,7 +322,7 @@ func printPlacement(w io.Writer, p *v1.Placement) {
 		head = "device"
 	}
 	fmt.Fprintf(w, "  %d device / %d host block(s), output projection on the %s\n",
-		p.GetDeviceBlockCount(), p.GetHostBlockCount(), head)
+		p.GetDeviceBlockCount(), p.GetCpuBlockCount(), head)
 	fmt.Fprintf(w, "  counters: %d demotion(s), %d relocation(s), %d reclaim(s), relocating=%v\n",
 		p.GetDemotions(), p.GetRelocations(), p.GetReclaims(), p.GetRelocating())
 

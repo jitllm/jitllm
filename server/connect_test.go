@@ -83,9 +83,9 @@ func TestConnectGenerateStreamsStartedTokensFinishedInThatOrder(t *testing.T) {
 		t.Fatalf("started carries queued=%dms depth=%d, want 1500 and 2",
 			started.GetQueuedMillis(), started.GetQueueDepthOnEntry())
 	}
-	if started.GetDeviceBlocks() != 22 || started.GetHostBlocks() != 10 {
+	if started.GetDeviceBlocks() != 22 || started.GetCpuBlocks() != 10 {
 		t.Fatalf("started carries the split %d/%d, want 22/10",
-			started.GetDeviceBlocks(), started.GetHostBlocks())
+			started.GetDeviceBlocks(), started.GetCpuBlocks())
 	}
 	if fin.GetReason() != v1.FinishReason_FINISH_REASON_EOS {
 		t.Fatalf("finish reason %v, want EOS", fin.GetReason())

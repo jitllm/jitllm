@@ -144,7 +144,7 @@ func (s *scripted) Generate(ctx context.Context, o server.GenerateOptions, emit 
 		QueuedFor:    1500 * time.Millisecond,
 		QueueDepth:   2,
 		DeviceBlocks: 22,
-		HostBlocks:   10,
+		CPUBlocks:    10,
 		DeviceIDs:    []string{"cuda:0"},
 		Prefill:      40 * time.Millisecond,
 	}}); err != nil {

@@ -102,7 +102,7 @@ reports a session's seam and `-move FIRST:LAST -to host|DEVICE` relocates blocks
 mid-conversation, with their KV history.
 
 Every request's reply says where it ran:
-`"jitllm":{"device_blocks":0,"host_blocks":5,...}`.
+`"jitllm":{"device_blocks":0,"cpu_blocks":5,...}`.
 
 ## When it does not work
 

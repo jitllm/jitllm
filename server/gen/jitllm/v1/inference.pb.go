@@ -1266,7 +1266,7 @@ type GenerateStarted struct {
 	// Where the blocks ran. A caller comparing two rates needs this, and the
 	// engine's own rule is that a backend is quoted with every number.
 	DeviceBlocks int32    `protobuf:"varint,7,opt,name=device_blocks,json=deviceBlocks,proto3" json:"device_blocks,omitempty"`
-	HostBlocks   int32    `protobuf:"varint,8,opt,name=host_blocks,json=hostBlocks,proto3" json:"host_blocks,omitempty"`
+	CpuBlocks    int32    `protobuf:"varint,8,opt,name=cpu_blocks,json=cpuBlocks,proto3" json:"cpu_blocks,omitempty"`
 	DeviceIds    []string `protobuf:"bytes,9,rep,name=device_ids,json=deviceIds,proto3" json:"device_ids,omitempty"`
 	// Prefill wall time. When `batched`, the prompt went in chunks inside steps
 	// shared with requests decoding, and this spans all of them.
@@ -1359,9 +1359,9 @@ func (x *GenerateStarted) GetDeviceBlocks() int32 {
 	return 0
 }
 
-func (x *GenerateStarted) GetHostBlocks() int32 {
+func (x *GenerateStarted) GetCpuBlocks() int32 {
 	if x != nil {
-		return x.HostBlocks
+		return x.CpuBlocks
 	}
 	return 0
 }
@@ -2280,7 +2280,7 @@ const file_jitllm_v1_inference_proto_rawDesc = "" +
 	"TopLogprob\x12\x19\n" +
 	"\btoken_id\x18\x01 \x01(\x05R\atokenId\x12\x14\n" +
 	"\x05token\x18\x02 \x01(\tR\x05token\x12\x18\n" +
-	"\alogprob\x18\x03 \x01(\x02R\alogprob\"\x99\x03\n" +
+	"\alogprob\x18\x03 \x01(\x02R\alogprob\"\x97\x03\n" +
 	"\x0fGenerateStarted\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x19\n" +
@@ -2289,9 +2289,9 @@ const file_jitllm_v1_inference_proto_rawDesc = "" +
 	"\rprompt_tokens\x18\x04 \x01(\x05R\fpromptTokens\x12#\n" +
 	"\rqueued_millis\x18\x05 \x01(\x03R\fqueuedMillis\x12/\n" +
 	"\x14queue_depth_on_entry\x18\x06 \x01(\x05R\x11queueDepthOnEntry\x12#\n" +
-	"\rdevice_blocks\x18\a \x01(\x05R\fdeviceBlocks\x12\x1f\n" +
-	"\vhost_blocks\x18\b \x01(\x05R\n" +
-	"hostBlocks\x12\x1d\n" +
+	"\rdevice_blocks\x18\a \x01(\x05R\fdeviceBlocks\x12\x1d\n" +
+	"\n" +
+	"cpu_blocks\x18\b \x01(\x05R\tcpuBlocks\x12\x1d\n" +
 	"\n" +
 	"device_ids\x18\t \x03(\tR\tdeviceIds\x12%\n" +
 	"\x0eprefill_millis\x18\n" +

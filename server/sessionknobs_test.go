@@ -43,14 +43,14 @@ func TestSessionKnobsReachTheStateOverHTTP(t *testing.T) {
 		for _, bad := range []string{
 			`{"modelId":"small","maxSeq":-1}`,
 			`{"modelId":"small","maxDeviceBlocks":-2}`,
-			`{"modelId":"small","relocateWhileServing":true,"keepOffHost":true}`,
+			`{"modelId":"small","relocateWhileServing":true,"keepOffCpu":true}`,
 			`{"modelId":"small","cacheKey":"k"}`,
 		} {
 			if got := post(bad); got != http.StatusBadRequest {
 				t.Errorf("CreateSession %s: status %d, want 400", bad, got)
 			}
 		}
-		if got := post(`{"modelId":"small","sessionId":"c","maxSeq":64,"keepOffHost":true,"promptCache":true,"cacheKey":"k"}`); got != http.StatusOK {
+		if got := post(`{"modelId":"small","sessionId":"c","maxSeq":64,"keepOffCpu":true,"promptCache":true,"cacheKey":"k"}`); got != http.StatusOK {
 			t.Fatalf("a valid CreateSession: status %d", got)
 		}
 		s, err := e.Session("c")

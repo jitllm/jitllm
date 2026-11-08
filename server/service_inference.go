@@ -145,7 +145,7 @@ func pbStarted(s *Started) *v1.GenerateStarted {
 		QueuedMillis:      millis(s.QueuedFor),
 		QueueDepthOnEntry: s.QueueDepth,
 		DeviceBlocks:      int32(s.DeviceBlocks),
-		HostBlocks:        int32(s.HostBlocks),
+		CpuBlocks:         int32(s.CPUBlocks),
 		DeviceIds:         s.DeviceIDs,
 		PrefillMillis:     millis(s.Prefill),
 		Batched:           s.Batched,

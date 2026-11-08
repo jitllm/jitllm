@@ -83,7 +83,7 @@ func HostLine(a Allocation) string {
 	var b strings.Builder
 	// Runs and holds are different counts: a device block's page can be held
 	// here too, and a host block can be paged out.
-	fmt.Fprintf(&b, "runs %d block(s), holds %s of pages", a.HostBlocks, Bytes(a.HostUsed))
+	fmt.Fprintf(&b, "runs %d block(s), holds %s of pages", a.CPUBlocks, Bytes(a.HostUsed))
 	if a.HostBudget > 0 {
 		fmt.Fprintf(&b, " of a %s budget", Bytes(a.HostBudget))
 	} else {

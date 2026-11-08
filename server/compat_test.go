@@ -434,7 +434,7 @@ func TestTheQueueWaitIsReportedThroughBothShims(t *testing.T) {
 	if oa.Jitllm == nil {
 		t.Fatal("the openai response carries no jitllm extension: a caller cannot learn it queued")
 	}
-	if oa.Jitllm.QueuedMillis != 1500 || oa.Jitllm.DeviceBlocks != 22 || oa.Jitllm.HostBlocks != 10 {
+	if oa.Jitllm.QueuedMillis != 1500 || oa.Jitllm.DeviceBlocks != 22 || oa.Jitllm.CPUBlocks != 10 {
 		t.Fatalf("jitllm extension %+v does not carry the queue wait and the split", oa.Jitllm)
 	}
 	if oa.Jitllm.BytesPerToken == 0 {

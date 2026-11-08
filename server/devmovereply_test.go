@@ -138,7 +138,7 @@ func TestAMoveLandsBetweenTwoTokensOfAReply(t *testing.T) {
 		t.Fatalf("the move returned after the reply (token %d of %d): it waited for the reply, not a token", after, n)
 	case m.GetBlocksMoved() != nb || m.GetStagedBlocks() != nb:
 		t.Fatalf("moved %d and prepared %d of %d blocks ahead", m.GetBlocksMoved(), m.GetStagedBlocks(), nb)
-	case m.GetPath() == v1.RelocationPath_RELOCATION_PATH_HOST || m.GetCopied().GetBytes() == 0:
+	case m.GetPath() == v1.RelocationPath_RELOCATION_PATH_CPU || m.GetCopied().GetBytes() == 0:
 		t.Fatalf("the history went %v, %d bytes copied: the direct path did not run", m.GetPath(), m.GetCopied().GetBytes())
 	}
 	for _, blk := range m.GetPlacement().GetBlocks() {

@@ -80,7 +80,7 @@ jitllmd serve -addr 127.0.0.1:8081 -models models -load stories260K.gguf -device
 curl -s http://127.0.0.1:4242/v1/completions -H 'Content-Type: application/json' \
   -d '{"model":"stories260K","prompt":"Once upon a time","max_tokens":16,"temperature":0}'
 ```
-<!-- test: expect "host_blocks":5 -->
+<!-- test: expect "cpu_blocks":5 -->
 <!-- test: expect "decode_tokens_per_second" -->
 
 | Field | Read it as |
@@ -88,7 +88,7 @@ curl -s http://127.0.0.1:4242/v1/completions -H 'Content-Type: application/json'
 | `queued_ms`, `queue_depth_on_entry` | time waiting behind other requests: a load problem, not an engine one (`-max-batch`, `-max-queue`) |
 | `prefill_ms` | the prompt's cost; long prompts dominate here. `restored_tokens` counts prompt tokens reused from the prefix cache (`-kv-cache`) |
 | `decode_ms`, `decode_tokens_per_second` | the per-token rate |
-| `device_blocks`, `host_blocks` | where the model's blocks ran; all on the host when you expected a GPU is the commonest surprise |
+| `device_blocks`, `cpu_blocks` | where the model's blocks ran; all on the host when you expected a GPU is the commonest surprise |
 | `bytes_per_token` | weight bytes a token reads; divided into the memory bandwidth, the rate's ceiling |
 
 ## 4. Where memory went

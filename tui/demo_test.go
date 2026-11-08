@@ -32,7 +32,7 @@ func fixturePlacement() *v1.Placement {
 	for i, dev := range where {
 		b := &v1.BlockPlacement{
 			Index:              int32(i),
-			Location:           v1.BlockLocation_BLOCK_LOCATION_HOST,
+			Location:           v1.BlockLocation_BLOCK_LOCATION_CPU,
 			HistoryPerPosition: &v1.ByteSize{Bytes: 4096},
 		}
 		if dev != "" {

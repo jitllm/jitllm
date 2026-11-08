@@ -279,7 +279,7 @@ func printStarted(w io.Writer, s *v1.GenerateStarted) {
 	fmt.Fprintf(w, "queued   %s behind %d request(s)\n",
 		durMS(s.GetQueuedMillis()), s.GetQueueDepthOnEntry())
 	fmt.Fprintf(w, "blocks   %d on %s, %d on cpu\n",
-		s.GetDeviceBlocks(), where, s.GetHostBlocks())
+		s.GetDeviceBlocks(), where, s.GetCpuBlocks())
 }
 
 // printFinished reports the rate with the bytes behind it, so it can be

@@ -26,8 +26,8 @@ type RelocationPath int32
 
 const (
 	RelocationPath_RELOCATION_PATH_UNSPECIFIED RelocationPath = 0
-	// Home to the session's host cache, then up to the target.
-	RelocationPath_RELOCATION_PATH_HOST RelocationPath = 1
+	// To the session's history on the CPU device, then up to the target.
+	RelocationPath_RELOCATION_PATH_CPU RelocationPath = 1
 	// Through a host buffer the tier holds, in the devices' own page layout:
 	// two backends, or two cards the driver bounces through the host.
 	RelocationPath_RELOCATION_PATH_STAGED RelocationPath = 2
@@ -39,13 +39,13 @@ const (
 var (
 	RelocationPath_name = map[int32]string{
 		0: "RELOCATION_PATH_UNSPECIFIED",
-		1: "RELOCATION_PATH_HOST",
+		1: "RELOCATION_PATH_CPU",
 		2: "RELOCATION_PATH_STAGED",
 		3: "RELOCATION_PATH_PEER",
 	}
 	RelocationPath_value = map[string]int32{
 		"RELOCATION_PATH_UNSPECIFIED": 0,
-		"RELOCATION_PATH_HOST":        1,
+		"RELOCATION_PATH_CPU":         1,
 		"RELOCATION_PATH_STAGED":      2,
 		"RELOCATION_PATH_PEER":        3,
 	}
@@ -87,9 +87,9 @@ type BlockPlacement struct {
 	DeviceId string `protobuf:"bytes,4,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
 	// Bytes this block's page occupies.
 	Bytes *ByteSize `protobuf:"bytes,5,opt,name=bytes,proto3" json:"bytes,omitempty"`
-	// Whether the block's page is currently resident in the host pager. A block
-	// ON a device can still be non-resident on the host side.
-	HostResident bool `protobuf:"varint,6,opt,name=host_resident,json=hostResident,proto3" json:"host_resident,omitempty"`
+	// Whether the block's page is currently resident in the CPU device's
+	// frames. A block ON a card can still be non-resident there.
+	CpuResident bool `protobuf:"varint,6,opt,name=cpu_resident,json=cpuResident,proto3" json:"cpu_resident,omitempty"`
 	// What this block's history costs in the session, so a caller can draw how
 	// much of it a move carries at any position: `state_bytes` (a recurrent
 	// summary, fixed) plus `history_per_position` for each position the block
@@ -168,9 +168,9 @@ func (x *BlockPlacement) GetBytes() *ByteSize {
 	return nil
 }
 
-func (x *BlockPlacement) GetHostResident() bool {
+func (x *BlockPlacement) GetCpuResident() bool {
 	if x != nil {
-		return x.HostResident
+		return x.CpuResident
 	}
 	return false
 }
@@ -274,7 +274,7 @@ type Placement struct {
 	ModelId          string                 `protobuf:"bytes,2,opt,name=model_id,json=modelId,proto3" json:"model_id,omitempty"`
 	Blocks           []*BlockPlacement      `protobuf:"bytes,3,rep,name=blocks,proto3" json:"blocks,omitempty"`
 	Declines         []*PlacementDecline    `protobuf:"bytes,4,rep,name=declines,proto3" json:"declines,omitempty"`
-	HostBlockCount   int32                  `protobuf:"varint,5,opt,name=host_block_count,json=hostBlockCount,proto3" json:"host_block_count,omitempty"`
+	CpuBlockCount    int32                  `protobuf:"varint,5,opt,name=cpu_block_count,json=cpuBlockCount,proto3" json:"cpu_block_count,omitempty"`
 	DeviceBlockCount int32                  `protobuf:"varint,6,opt,name=device_block_count,json=deviceBlockCount,proto3" json:"device_block_count,omitempty"`
 	// True when the output projection runs on a device.
 	HeadOnDevice bool `protobuf:"varint,7,opt,name=head_on_device,json=headOnDevice,proto3" json:"head_on_device,omitempty"`
@@ -346,9 +346,9 @@ func (x *Placement) GetDeclines() []*PlacementDecline {
 	return nil
 }
 
-func (x *Placement) GetHostBlockCount() int32 {
+func (x *Placement) GetCpuBlockCount() int32 {
 	if x != nil {
-		return x.HostBlockCount
+		return x.CpuBlockCount
 	}
 	return 0
 }
@@ -819,7 +819,7 @@ type RelocateBlocksResponse struct {
 	Declined []*PlacementDecline `protobuf:"bytes,3,rep,name=declined,proto3" json:"declined,omitempty"`
 	Millis   int64               `protobuf:"varint,4,opt,name=millis,proto3" json:"millis,omitempty"`
 	// How the history of blocks moved between devices travelled. Unspecified
-	// for a move between the host and a device.
+	// for a move between the CPU and a card.
 	Path RelocationPath `protobuf:"varint,5,opt,name=path,proto3,enum=jitllm.v1.RelocationPath" json:"path,omitempty"`
 	// The history the moved blocks carried: KV pages and recurrent summaries.
 	History *ByteSize `protobuf:"bytes,6,opt,name=history,proto3" json:"history,omitempty"`
@@ -827,7 +827,7 @@ type RelocateBlocksResponse struct {
 	// session's blocks was left beside it.
 	HeadMoved bool `protobuf:"varint,7,opt,name=head_moved,json=headMoved,proto3" json:"head_moved,omitempty"`
 	// Bytes copied between the devices, in their own page layout. Zero on the
-	// HOST path, which counts `history` instead.
+	// CPU path, which counts `history` instead.
 	Copied *ByteSize `protobuf:"bytes,8,opt,name=copied,proto3" json:"copied,omitempty"`
 	// What the sequence waited between two tokens: the history's copy and the
 	// route's switch. `millis` is the whole call, which for a session that was
@@ -1416,14 +1416,14 @@ var File_jitllm_v1_placement_proto protoreflect.FileDescriptor
 
 const file_jitllm_v1_placement_proto_rawDesc = "" +
 	"\n" +
-	"\x19jitllm/v1/placement.proto\x12\tjitllm.v1\x1a\x16jitllm/v1/common.proto\"\x97\x03\n" +
+	"\x19jitllm/v1/placement.proto\x12\tjitllm.v1\x1a\x16jitllm/v1/common.proto\"\x95\x03\n" +
 	"\x0eBlockPlacement\x12\x14\n" +
 	"\x05index\x18\x01 \x01(\x05R\x05index\x12(\n" +
 	"\x04kind\x18\x02 \x01(\x0e2\x14.jitllm.v1.BlockKindR\x04kind\x124\n" +
 	"\blocation\x18\x03 \x01(\x0e2\x18.jitllm.v1.BlockLocationR\blocation\x12\x1b\n" +
 	"\tdevice_id\x18\x04 \x01(\tR\bdeviceId\x12)\n" +
-	"\x05bytes\x18\x05 \x01(\v2\x13.jitllm.v1.ByteSizeR\x05bytes\x12#\n" +
-	"\rhost_resident\x18\x06 \x01(\bR\fhostResident\x12E\n" +
+	"\x05bytes\x18\x05 \x01(\v2\x13.jitllm.v1.ByteSizeR\x05bytes\x12!\n" +
+	"\fcpu_resident\x18\x06 \x01(\bR\vcpuResident\x12E\n" +
 	"\x14history_per_position\x18\a \x01(\v2\x13.jitllm.v1.ByteSizeR\x12historyPerPosition\x12%\n" +
 	"\x0ehistory_window\x18\b \x01(\x05R\rhistoryWindow\x124\n" +
 	"\vstate_bytes\x18\t \x01(\v2\x13.jitllm.v1.ByteSizeR\n" +
@@ -1433,14 +1433,14 @@ const file_jitllm_v1_placement_proto_rawDesc = "" +
 	"blockIndex\x12\x1b\n" +
 	"\tdevice_id\x18\x02 \x01(\tR\bdeviceId\x12\x16\n" +
 	"\x06reason\x18\x03 \x01(\tR\x06reason\x12\"\n" +
-	"\rout_of_memory\x18\x04 \x01(\bR\voutOfMemory\"\xab\x03\n" +
+	"\rout_of_memory\x18\x04 \x01(\bR\voutOfMemory\"\xa9\x03\n" +
 	"\tPlacement\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x19\n" +
 	"\bmodel_id\x18\x02 \x01(\tR\amodelId\x121\n" +
 	"\x06blocks\x18\x03 \x03(\v2\x19.jitllm.v1.BlockPlacementR\x06blocks\x127\n" +
-	"\bdeclines\x18\x04 \x03(\v2\x1b.jitllm.v1.PlacementDeclineR\bdeclines\x12(\n" +
-	"\x10host_block_count\x18\x05 \x01(\x05R\x0ehostBlockCount\x12,\n" +
+	"\bdeclines\x18\x04 \x03(\v2\x1b.jitllm.v1.PlacementDeclineR\bdeclines\x12&\n" +
+	"\x0fcpu_block_count\x18\x05 \x01(\x05R\rcpuBlockCount\x12,\n" +
 	"\x12device_block_count\x18\x06 \x01(\x05R\x10deviceBlockCount\x12$\n" +
 	"\x0ehead_on_device\x18\a \x01(\bR\fheadOnDevice\x12\x1c\n" +
 	"\tdemotions\x18\b \x01(\x03R\tdemotions\x12 \n" +
@@ -1534,10 +1534,10 @@ const file_jitllm_v1_placement_proto_rawDesc = "" +
 	"\fbudget_bytes\x18\x02 \x01(\x04R\vbudgetBytes\"_\n" +
 	"\x15SetPageBudgetResponse\x122\n" +
 	"\tresidency\x18\x01 \x01(\v2\x14.jitllm.v1.ResidencyR\tresidency\x12\x12\n" +
-	"\x04fits\x18\x02 \x01(\bR\x04fits*\x81\x01\n" +
+	"\x04fits\x18\x02 \x01(\bR\x04fits*\x80\x01\n" +
 	"\x0eRelocationPath\x12\x1f\n" +
-	"\x1bRELOCATION_PATH_UNSPECIFIED\x10\x00\x12\x18\n" +
-	"\x14RELOCATION_PATH_HOST\x10\x01\x12\x1a\n" +
+	"\x1bRELOCATION_PATH_UNSPECIFIED\x10\x00\x12\x17\n" +
+	"\x13RELOCATION_PATH_CPU\x10\x01\x12\x1a\n" +
 	"\x16RELOCATION_PATH_STAGED\x10\x02\x12\x18\n" +
 	"\x14RELOCATION_PATH_PEER\x10\x032\xd9\x04\n" +
 	"\x10PlacementService\x12Q\n" +

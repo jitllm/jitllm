@@ -387,7 +387,7 @@ func TestASessionKeepsItsSequenceAcrossGenerates(t *testing.T) {
 	}
 	s := cr.Msg.GetSession()
 	if s.GetSessionId() != "a" || s.GetMaxSeq() != 128 || s.GetPosition() != 0 ||
-		s.GetHostBlocks() != 5 || s.GetDeviceBlocks() != 0 {
+		s.GetCpuBlocks() != 5 || s.GetDeviceBlocks() != 0 {
 		t.Fatalf("a fresh host session reads %+v", s)
 	}
 	// KV commits as the context grows, so a fresh session is charged nothing
@@ -889,9 +889,9 @@ func TestTheConnectStreamCarriesTheRealEnginesEvents(t *testing.T) {
 		switch ev := st.Msg().GetEvent().(type) {
 		case *v1.GenerateResponse_Started:
 			kinds = append(kinds, "started")
-			if ev.Started.GetHostBlocks() != 5 || ev.Started.GetDeviceBlocks() != 0 {
+			if ev.Started.GetCpuBlocks() != 5 || ev.Started.GetDeviceBlocks() != 0 {
 				t.Fatalf("a host-only generate reports %d host / %d device blocks",
-					ev.Started.GetHostBlocks(), ev.Started.GetDeviceBlocks())
+					ev.Started.GetCpuBlocks(), ev.Started.GetDeviceBlocks())
 			}
 		case *v1.GenerateResponse_Token:
 			kinds = append(kinds, "token")
@@ -945,13 +945,13 @@ func TestPlacementRefusesWhatAHostOnlySessionCannotDo(t *testing.T) {
 		t.Fatal(err)
 	}
 	pl := gp.Msg.GetPlacement()
-	if pl.GetHostBlockCount() != 5 || pl.GetDeviceBlockCount() != 0 || len(pl.GetBlocks()) != 5 {
+	if pl.GetCpuBlockCount() != 5 || pl.GetDeviceBlockCount() != 0 || len(pl.GetBlocks()) != 5 {
 		t.Fatalf("a host-only placement reads host=%d device=%d over %d blocks",
-			pl.GetHostBlockCount(), pl.GetDeviceBlockCount(), len(pl.GetBlocks()))
+			pl.GetCpuBlockCount(), pl.GetDeviceBlockCount(), len(pl.GetBlocks()))
 	}
 	for i, b := range pl.GetBlocks() {
-		if b.GetIndex() != int32(i) || b.GetLocation() != v1.BlockLocation_BLOCK_LOCATION_HOST ||
-			!b.GetHostResident() || b.GetBytes().GetBytes() != lm.m.PageBytes(i) ||
+		if b.GetIndex() != int32(i) || b.GetLocation() != v1.BlockLocation_BLOCK_LOCATION_CPU ||
+			!b.GetCpuResident() || b.GetBytes().GetBytes() != lm.m.PageBytes(i) ||
 			b.GetKind() != v1.BlockKind_BLOCK_KIND_ATTENTION {
 			t.Fatalf("block %d reads %+v", i, b)
 		}
@@ -1252,7 +1252,7 @@ func TestDevicesAreTheProbesAnswer(t *testing.T) {
 		t.Fatalf("%d devices, want the probe's 2", len(ld.Msg.GetDevices()))
 	}
 	host := ld.Msg.GetDevices()[0]
-	if host.GetRef().GetBackend() != v1.Backend_BACKEND_CPU || host.GetKind() != v1.DeviceKind_DEVICE_KIND_HOST ||
+	if host.GetRef().GetBackend() != v1.Backend_BACKEND_CPU || host.GetKind() != v1.DeviceKind_DEVICE_KIND_CPU ||
 		host.GetAttachedSessions() != 1 {
 		t.Fatalf("the host reads %+v; its one host-only session is attached to it", host)
 	}
