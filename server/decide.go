@@ -29,6 +29,9 @@ type DecideOptions struct {
 	// Images are the request's pictures, in the order the template shows
 	// them, each encoded through the model's tower.
 	Images []image.Image
+	// Clips are the request's voice clips, mono samples in [-1, 1] at the
+	// audio tower's rate, each encoded through it after the pictures.
+	Clips [][]float32
 }
 
 // DecideResult is one answer per question, in question order, and the
@@ -57,13 +60,23 @@ func (e *Engine) Decide(ctx context.Context, o DecideOptions) (*DecideResult, er
 	if len(o.Images) > 0 && !lm.m.SeesPictures() {
 		return nil, fmt.Errorf("%w: model %q does not accept images: it carries no vision tower", ErrInvalid, lm.id)
 	}
-	pics := make([]model.Span, len(o.Images))
+	if len(o.Clips) > 0 && lm.m.Audio == nil {
+		return nil, fmt.Errorf("%w: model %q does not accept audio: it carries no audio tower", ErrInvalid, lm.id)
+	}
+	pics := make([]model.Span, 0, len(o.Images)+len(o.Clips))
 	for i, img := range o.Images {
 		sp, err := lm.m.PictureSpan(img)
 		if err != nil {
 			return nil, fmt.Errorf("%w: images[%d]: %v", ErrInvalid, i, err)
 		}
-		pics[i] = sp
+		pics = append(pics, sp)
+	}
+	for i, clip := range o.Clips {
+		sp, err := lm.m.ClipSpan(clip)
+		if err != nil {
+			return nil, fmt.Errorf("%w: files[%d]: %v", ErrInvalid, i, err)
+		}
+		pics = append(pics, sp)
 	}
 	t0 := time.Now()
 	gs := e.gatesFor(lm.gateIDs())

@@ -9727,6 +9727,47 @@ made per call; they are the devTier's now). Swapping the attention's u and v
 on the device moves the rows to NMSE 0.097. The kernels against their loops,
 rows past the call poisoned NaN: `backend.TestConformerKernelsMatchTheLoops`.
 
+#### d1-omni's voice, stated and composed
+
+The host path and the device programs above went with main's engine, and
+with them every gate this section names but `TestD1OmniHearsAsItsReference`.
+The audio came back as a stated tower: the converter writes it as a program
+(`jlm.Audio.Tower`, its record after the vision tower's) and the model lowers
+it as a chained tower whose blocks follow the vision tower's, run by the same
+chain runner on its own instance's forms.
+
+- The entry: the clip's centred frames under the preemphasis (`graph.OpFrames`,
+  the samples laid in the step's picture table), the windowed DFT bases and
+  the filterbank as F32 tables the converter computes, log(x + 2^-24), each
+  feature over the clip's frames (`graph.OpFeatureNorm`), the features as a
+  grid of one channel (`graph.OpSplitRows`), the stride-two convolutions
+  padded as PyTorch pads (`OpUnfold`, `OpConv`), each followed by a ReLU and
+  the grid rows past the clip's length zeroed (`graph.OpClipMask`), and the
+  linear from a time row's frequencies and channels.
+- Each block: the half MLPs, the relative-position attention reading one
+  table per block -- linear_pos times the sinusoids of every position the
+  formed rows reach, a product the converter takes once (3 GFLOP a clip the
+  old path spent) -- the GLU, the centred depthwise convolution
+  (`graph.OpRowConv`), the folded BatchNorm, SiLU and the LayerNorm.
+- The live rows are the stated program's: frames one more than the hops,
+  the feature norm's offset fewer, each strided convolution's side
+  (`model.ClipRows`); the engine knows no halving.
+
+Two composer limits the clip met, each fixed in its decomposition: the clip
+mask divided the sample count, and x86 has no integer division of vector
+lanes (it now compares (row*2^k + 1)*Stride with the count); the row
+convolution's map held a predicate and a row a tap across the channel loop,
+too many at nine taps for the registers below a loop's body (it is a sum
+over the taps now).
+
+Against audio.py over the F16 weights on the repo's clip: 41 prefix rows at
+NMSE 1.56e-4 (`TestD1OmniHearsAsItsReference`); the prompt after them token
+for token, 251 rows, and the answers 0.0084 from the reference and from
+llama.cpp's probabilities (`TestD1OmniDecidesOverItsVoice`; llama.cpp's
+confidence is TypeSafe's, a recorded divergence); the server's body the
+Decider's byte for byte (`server.TestSystemOneVoiceMatchesTheEngine`). The
+audio's blocks on a card are not placed yet.
+
 ## qwen4exp: Qwen3.8-Flash-Next (plan, before the code)
 
 The graph, read off llama.cpp's `src/models/qwen4exp.cpp` and its converter

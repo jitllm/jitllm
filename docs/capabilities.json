@@ -1451,6 +1451,22 @@
         "message": "is not a decision model"
       },
       {
+        "id": "decision-no-audio",
+        "endpoints": [
+          "/v1/systemone"
+        ],
+        "when": "a voice clip for a model whose container carries no audio tower",
+        "message": "does not accept audio"
+      },
+      {
+        "id": "decision-audio-format",
+        "endpoints": [
+          "/v1/systemone"
+        ],
+        "when": "a file that is not a base64 data URL of 16 kHz mono 16-bit PCM WAV",
+        "message": "audio"
+      },
+      {
         "id": "image-format",
         "endpoints": [
           "/v1/chat/completions",
