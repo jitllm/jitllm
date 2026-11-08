@@ -79,24 +79,27 @@ type towerRun struct {
 	act        [2][]float32
 	kept       [][]float32
 	headIn     [][]float32
+	// base is the tower's first block of the model's: the vision tower's
+	// TowerBase, the audio tower's the block after the vision tower's last.
+	base int
+	// clip is an audio run's clip as the entry reads it, cut and padded,
+	// over a buffer as long as the longest clip.
+	clip []float32
 }
 
-// newTowerRun is the model's tower run, nil for a model with no tower.
-func (in *Instance) newTowerRun() (*towerRun, error) {
-	tg := in.m.Tower
-	if tg == nil {
-		return nil, nil
-	}
+// newTowerRun is a run of the model's tower tg, stated as t, its blocks the
+// model's from base on.
+func (in *Instance) newTowerRun(tg *model.TowerGraphs, base int, t *jlm.Tower) (*towerRun, error) {
 	v := in.m.Container.Vision()
 	n := tg.Rows
-	c := model.TowerConfig(in.m.TowerBase, n, v, v.Tower)
-	hi := in.m.TowerBase + len(tg.Blocks)
+	c := model.TowerConfig(base, n, v, t)
+	hi := base + len(tg.Blocks)
 	if tg.Chain {
 		// A chain's blocks run as forms over their own grids (chainRun),
 		// not as the instance's blocks over one residual.
-		hi = in.m.TowerBase
+		hi = base
 	}
-	ts, err := newInstanceOver(in.m, in.eng, in.fr, in.opt, c, n, in.m.TowerBase, hi, nil)
+	ts, err := newInstanceOver(in.m, in.eng, in.fr, in.opt, c, n, base, hi, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +111,7 @@ func (in *Instance) newTowerRun() (*towerRun, error) {
 	for _, cl := range tg.Classes {
 		words = max(words, (cl.Pic.PicW+cl.Pic.PicH)*(cl.Pic.Taps+1))
 	}
-	tr := &towerRun{s: ts, req: make([]uint32, composer.RequestPicTaps+words)}
+	tr := &towerRun{s: ts, base: base, req: make([]uint32, composer.RequestPicTaps+words)}
 	hn := n
 	var chain []nn.PartPlan
 	if tg.Chain {
@@ -286,7 +289,7 @@ func (s *Instance) encodePicture(img image.Image, dst, deep []float32) ([]float3
 	sq, squares := tg.Square(pl.W, pl.H, 0)
 	if tg.Chain {
 		tr.squareRequest(pl, sq, tg.Classes[sq.Class].Pic, squares)
-		if err := ts.chainRun(tr, tg, words, pl.Px, dst); err != nil {
+		if err := ts.chainRun(tr, tg, words, pl.Px, dst, tg.Classes[0].Rows, tg.Classes[0].Rows); err != nil {
 			return nil, fmt.Errorf("model: %w", err)
 		}
 		return dst, nil
@@ -448,11 +451,11 @@ func (tr *towerRun) chainSetup(m *model.Model, ts *Instance, tg *model.TowerGrap
 	most := o.Rows * o.Width
 	tr.chain = make([]model.Layer, len(tg.Blocks))
 	for i, g := range tg.Blocks {
-		m.Layers[m.TowerBase+i].CloneTo(&tr.chain[i])
+		m.Layers[tr.base+i].CloneTo(&tr.chain[i])
 		o := g.Values[g.Out[0]]
 		most = max(most, o.Rows*o.Width)
 	}
-	tr.lease = blockLease{m: m, fr: ts.fr, mu: &ts.bind, layers: tr.chain, lo: m.TowerBase}
+	tr.lease = blockLease{m: m, fr: ts.fr, mu: &ts.bind, layers: tr.chain, lo: tr.base}
 	tr.act = [2][]float32{make([]float32, most), make([]float32, most)}
 	for _, j := range tg.HeadFrom {
 		o := tg.Blocks[j].Values[tg.Blocks[j].Out[0]]
@@ -462,24 +465,27 @@ func (tr *towerRun) chainSetup(m *model.Model, ts *Instance, tg *model.TowerGrap
 	return nil
 }
 
-// chainRun runs a chained tower over a picture's words, its request in the
-// run's: the entry into the first block's rows, each block in turn over the
-// rows the block before it left -- its page read in and its form bound
-// there -- the rows the head reads beside the last block's kept as their
-// blocks leave them, then the head into dst.
-func (ts *Instance) chainRun(tr *towerRun, tg *model.TowerGraphs, words []uint32, px uint8, dst []float32) error {
+// chainRun runs a chained tower over a picture's or a clip's words, its
+// request in the run's: the entry into the first block's rows over live of
+// its rows, each block in turn over blockLive of the rows the block before
+// it left -- its page read in and its form bound there -- the rows the head
+// reads beside the last block's kept as their blocks leave them, then the
+// head into dst.
+func (ts *Instance) chainRun(tr *towerRun, tg *model.TowerGraphs, words []uint32, px uint8, dst []float32, live, blockLive int) error {
 	ch := tr.parts.(nn.TowerChain)
 	cl := tg.Classes[0]
 	tr.size(cl.Rows, 0)
+	tr.posTab[0] = uint32(live)
 	e := cl.Entry[px]
 	o := e.Values[e.Out[0]]
 	cur := tr.act[0][:o.Rows*o.Width]
 	if err := tr.parts.Entry(0, px, words, tr.req, tr.posTab, cl.Rows, cur); err != nil {
 		return err
 	}
+	tr.posTab[0] = uint32(blockLive)
 	k := 0
 	for i, g := range tg.Blocks {
-		li := ts.m.TowerBase + i
+		li := tr.base + i
 		o := g.Values[g.Out[0]]
 		out := tr.act[(i+1)%2][:o.Rows*o.Width]
 		if dev := tr.chainDev(i); dev != nil {

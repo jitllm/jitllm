@@ -320,6 +320,26 @@ func (m *Model) TowerFormats(g *graph.Graph) map[jlm.Role]jlm.Type {
 	return out
 }
 
+// ClipRows is the frames a clip of n samples makes in the audio tower's
+// entry and the rows of them the blocks read, both from the stated entry:
+// the centred frames one more than its hops (TOpFrames), the clip's those
+// the feature norm keeps (its Offset fewer), then each strided convolution's
+// output side, (L + 2*Offset - Span)/Stride + 1.
+func (m *Model) ClipRows(n int) (frames, rows int) {
+	for _, op := range m.Container.Vision().Audio.Tower.Entry.Ops {
+		switch {
+		case op.Code == jlm.TOpFrames:
+			frames = n/int(op.Stride) + 1
+			rows = frames
+		case op.Code == jlm.TOpFeatureNorm:
+			rows -= int(op.Offset)
+		case (op.Code == jlm.TOpUnfold || op.Code == jlm.TOpConv) && op.Stride > 1:
+			rows = max(rows+2*int(op.Offset)-int(op.Span), 0)/int(op.Stride) + 1
+		}
+	}
+	return frames, rows
+}
+
 // BuildAudioGraphs lowers the container's stated audio tower (jlm.Audio):
 // its entry over the longest clip's frames, a chained tower whose blocks
 // follow the vision tower's in the tower's block space, each block over the
