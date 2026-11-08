@@ -2761,7 +2761,7 @@ func (e *Engine) bindSession(s *Session) error {
 // bindSessionLocked is bindSession for a caller holding s.mu.
 func (e *Engine) bindSessionLocked(s *Session) error {
 	dev := s.lm.device()
-	if b := s.tier.Load(); dev == nil || (b != nil && b.d == dev) {
+	if dev == nil {
 		return nil
 	}
 	// The device is the instance's: the first session to see it places the

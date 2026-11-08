@@ -224,13 +224,22 @@ func (e *Engine) demote(v *Session, forID string) bool {
 	}
 	defer v.mu.Unlock()
 	start := time.Now()
-	var mv engine.BlockMove
+	var n int
 	var err error
-	v.in().Place(func(in *engine.Instance) { mv, err = in.MoveBlocks(0, v.lm.m.Cfg.NLayer, nn.CPU) })
-	n := len(mv.Moved)
+	// The instance leaves the card, not only its blocks: its head and the
+	// scratch it reserved there go back to the card's pool with them, and a
+	// promotion attaches it again (bindSessionLocked), reserving first.
+	v.in().Place(func(in *engine.Instance) {
+		before := in.GPULayers()
+		if err = in.SetDevice(nil); err == nil {
+			v.lm.instDev = nil
+		}
+		n = before - in.GPULayers()
+	})
 	// Every idle session of the instance moves its history to the CPU too, or
-	// its device view would keep the blocks on the card.
-	e.settle(v.lm)
+	// its device view would keep the blocks on the card: v's under the lock
+	// held here.
+	e.settle(v.lm, v)
 	v.refresh()
 	if n == 0 {
 		return false
@@ -241,8 +250,8 @@ func (e *Engine) demote(v *Session, forID string) bool {
 }
 
 // settle brings every idle session of lm under its instance's placement
-// (engine.Instance.Settle).
-func (e *Engine) settle(lm *LoadedModel) {
+// (engine.Instance.Settle); held is one whose lock the caller holds.
+func (e *Engine) settle(lm *LoadedModel, held *Session) {
 	e.mu.RLock()
 	ss := make([]*Session, 0, len(lm.sessions))
 	for _, s := range lm.sessions {
@@ -250,6 +259,10 @@ func (e *Engine) settle(lm *LoadedModel) {
 	}
 	e.mu.RUnlock()
 	for _, s := range ss {
+		if s == held {
+			lm.inst.Settle(s.ms)
+			continue
+		}
 		if !s.mu.TryLock() {
 			continue
 		}
