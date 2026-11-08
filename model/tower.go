@@ -320,6 +320,33 @@ func (m *Model) TowerFormats(g *graph.Graph) map[jlm.Role]jlm.Type {
 	return out
 }
 
+// BuildAudioGraphs lowers the container's stated audio tower (jlm.Audio):
+// its entry over the longest clip's frames, a chained tower whose blocks
+// follow the vision tower's in the tower's block space, each block over the
+// rows the subsampling leaves, and the head -- each graph verified against
+// the tensors it binds.
+func (m *Model) BuildAudioGraphs() (*TowerGraphs, error) {
+	v := m.Container.Vision()
+	a := v.Audio
+	t := a.Tower
+	dense := m.TowerFacts(jlm.DenseBlock)
+	frames := int(a.MaxSamples/a.Hop) + 1
+	b := graph.NewBlock(-1)
+	out, err := LowerProgram(b, t, &t.Entry, nil, frames, dense)
+	if err != nil {
+		return nil, fmt.Errorf("model: the audio tower's entry: %w", err)
+	}
+	b.Out(out)
+	if err := graph.Verify(b.G, dense); err != nil {
+		return nil, fmt.Errorf("model: the audio tower's entry: %w", err)
+	}
+	tg := &TowerGraphs{Classes: []towerClass{{Entry: map[uint8]*graph.Graph{graph.PixRGBA8: b.G}, Rows: frames}}, Rows: frames}
+	if err := m.chainGraphs(tg, t, int(a.NLayer), int(v.NLayer), b.G, dense); err != nil {
+		return nil, fmt.Errorf("model: the audio %w", err)
+	}
+	return tg, nil
+}
+
 // buildTowerGraphs lowers the container's stated tower, verifying each graph
 // against the tensors it binds. A container whose tower is not stated has
 // none to lower, and says which family it is so its converter can be told.
@@ -377,7 +404,7 @@ func (m *Model) BuildTowerGraphs() (*TowerGraphs, error) {
 		tg.Table, tg.Planes = towerRotary(t)
 	}
 	if len(t.Chain) > 0 {
-		if err := m.chainGraphs(tg, t, v, dense); err != nil {
+		if err := m.chainGraphs(tg, t, int(v.NLayer), 0, tg.Classes[0].Entry[graph.PixRGBA8], dense); err != nil {
 			return nil, err
 		}
 	} else {
@@ -1423,11 +1450,46 @@ func lowerValuesWith(b *graph.Builder, t *jlm.Tower, p *jlm.Program, in []graph.
 			if g == 0 {
 				g = h
 			}
-			if w%h != 0 || width(ins[1]) != g*(w/h) || width(ins[2]) != g*(w/h) {
+			if w%h != 0 || width(ins[1]) != g*(w/h) || width(ins[2]) != g*(w/h) || len(ins) == 4 && width(ins[3]) != w {
 				return nil, fmt.Errorf("attends rows %d, %d and %d wide in %d heads over %d", w, width(ins[1]), width(ins[2]), h, g)
 			}
-			out = b.Emit(graph.OpRowsAttend, ins, []graph.Result{{Name: "attended", Width: w, Rows: rowsOf(ins[0])}}, nil,
+			// The relative form reads its positions' table.
+			var bind []graph.Binding
+			if len(ins) == 4 {
+				s, err := shape(op.Bind[0])
+				if err != nil {
+					return nil, err
+				}
+				bind = []graph.Binding{{Role: op.Bind[0], K: s.K, Rows: s.Rows}}
+			}
+			out = b.Emit(graph.OpRowsAttend, ins, []graph.Result{{Name: "attended", Width: w, Rows: rowsOf(ins[0])}}, bind,
 				graph.Attrs{NHead: h, NKVHead: g, HeadDim: w / h, Scale: 1 / math.Sqrt(float64(w/h))}, nil, nil)[0]
+		case jlm.TOpFrames:
+			out = b.Emit(graph.OpFrames, nil, []graph.Result{{Name: "frames", Width: int(op.Width), Rows: rows}}, nil,
+				graph.Attrs{Width: int(op.Width), Stride: int(op.Stride), Const: float64(op.Eps)}, nil, nil)[0]
+		case jlm.TOpFeatureNorm:
+			out = b.Emit(graph.OpFeatureNorm, ins, []graph.Result{{Name: name, Width: width(ins[0])}}, nil,
+				graph.Attrs{Offset: int(op.Offset), Eps: float64(op.Eps)}, nil, nil)[0]
+		case jlm.TOpSplitRows:
+			w := int(op.Width)
+			if width(ins[0])%w != 0 {
+				return nil, fmt.Errorf("splits rows of %d into rows of %d", width(ins[0]), w)
+			}
+			out = b.Emit(graph.OpSplitRows, ins, []graph.Result{{Name: name, Width: w, Rows: rowsOf(ins[0]) * (width(ins[0]) / w)}}, nil,
+				graph.Attrs{Width: w}, nil, nil)[0]
+		case jlm.TOpClipMask:
+			out = b.Emit(graph.OpClipMask, ins, []graph.Result{{Name: name, Width: width(ins[0])}}, nil,
+				graph.Attrs{Stride: int(op.Stride), Span: int(op.Span), GridW: int(op.GridW)}, nil, nil)[0]
+		case jlm.TOpRowConv:
+			s, err := shape(op.Bind[0])
+			if err != nil {
+				return nil, err
+			}
+			if s.K != int(op.Span) || s.Rows != width(ins[0]) {
+				return nil, fmt.Errorf("convolves %d channels by %d taps from a %dx%d table", width(ins[0]), op.Span, s.Rows, s.K)
+			}
+			out = b.Emit(graph.OpRowConv, ins, []graph.Result{{Name: name, Width: width(ins[0])}},
+				[]graph.Binding{{Role: op.Bind[0], K: s.K, Rows: s.Rows}}, graph.Attrs{Taps: int(op.Span)}, nil, nil)[0]
 		case jlm.TOpUnfold, jlm.TOpConv:
 			T, st, W := int(op.Span), int(op.Stride), int(op.GridW)
 			R := rowsOf(ins[0])
@@ -1445,7 +1507,7 @@ func lowerValuesWith(b *graph.Builder, t *jlm.Tower, p *jlm.Program, in []graph.
 			} else {
 				bind = []graph.Binding{{Role: op.Bind[0], K: width(ins[0]), Rows: T * T}}
 			}
-			out = b.Emit(kind, ins, []graph.Result{res}, bind, graph.Attrs{Taps: T, Stride: st, GridW: W}, nil, nil)[0]
+			out = b.Emit(kind, ins, []graph.Result{res}, bind, graph.Attrs{Taps: T, Stride: st, GridW: W, Offset: int(op.Offset)}, nil, nil)[0]
 		case jlm.TOpUpsample:
 			S := int(op.Span)
 			out = b.Emit(graph.OpUpsample, ins, []graph.Result{{Name: name, Width: width(ins[0]), Rows: rowsOf(ins[0]) * S * S}}, nil,
@@ -2002,11 +2064,10 @@ func wholeUnits(length float64, unit int) int {
 // before it left (the entry's, for the first) and bound to its own tensors,
 // and its head over the last block's rows and each HeadFrom block's: the
 // head writes as many rows whatever the picture.
-func (m *Model) chainGraphs(tg *TowerGraphs, t *jlm.Tower, v *jlm.Vision, dense graph.Facts) error {
-	if len(t.Chain) != int(v.NLayer) {
-		return fmt.Errorf("model: the tower chains %d blocks of its %d", len(t.Chain), v.NLayer)
+func (m *Model) chainGraphs(tg *TowerGraphs, t *jlm.Tower, n, base int, e *graph.Graph, dense graph.Facts) error {
+	if len(t.Chain) != n {
+		return fmt.Errorf("model: the tower chains %d blocks of its %d", len(t.Chain), n)
 	}
-	e := tg.Classes[0].Entry[graph.PixRGBA8]
 	ev := e.Values[e.Out[0]]
 	rows, width := ev.Rows, ev.Width
 	if rows == 0 {
@@ -2018,8 +2079,8 @@ func (m *Model) chainGraphs(tg *TowerGraphs, t *jlm.Tower, v *jlm.Vision, dense 
 		if int(cb.Rows) != rows || int(cb.Width) != width {
 			return fmt.Errorf("model: the tower's block %d reads %d rows of %d after %d rows of %d", i, cb.Rows, cb.Width, rows, width)
 		}
-		f := m.TowerFacts(int32(i))
-		b := graph.NewBlock(m.TowerBase + i)
+		f := m.TowerFacts(int32(base + i))
+		b := graph.NewBlock(m.TowerBase + base + i)
 		x := b.In("x", width)
 		b.G.Values[x].Rows = rows
 		out, err := LowerProgram(b, t, &cb.Prog, []graph.ValueID{x}, rows, f)
@@ -2052,7 +2113,7 @@ func (m *Model) chainGraphs(tg *TowerGraphs, t *jlm.Tower, v *jlm.Vision, dense 
 	if err := graph.Verify(b.G, dense); err != nil {
 		return fmt.Errorf("model: the tower's head: %w", err)
 	}
-	n := b.G.Values[out].Rows
-	tg.Head, tg.Out, tg.Fixed, tg.Chain = b.G, n, n, true
+	hn := b.G.Values[out].Rows
+	tg.Head, tg.Out, tg.Fixed, tg.Chain = b.G, hn, hn, true
 	return nil
 }
