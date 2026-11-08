@@ -99,7 +99,7 @@ func (s *Instance) initStreamTrial() {
 	// Indices into arms; the incumbent is 0.
 	other := "card"
 	if s.opt.experts == "card" {
-		other = "host"
+		other = nn.CPU
 	}
 	arms := []trialArm{{blocks: full, experts: s.opt.experts}, {blocks: 0, experts: s.opt.experts}, {blocks: full, experts: other}}
 	if s.opt.trialAA {

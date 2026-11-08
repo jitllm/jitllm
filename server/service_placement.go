@@ -333,7 +333,7 @@ func (s *PlacementService) moveBetweenDevices(ctx context.Context, sess *Session
 // pbRelocationPath is engine.BlockMove.Path on the wire.
 func pbRelocationPath(p string) v1.RelocationPath {
 	switch p {
-	case "host":
+	case "cpu":
 		return v1.RelocationPath_RELOCATION_PATH_CPU
 	case "staged":
 		return v1.RelocationPath_RELOCATION_PATH_STAGED

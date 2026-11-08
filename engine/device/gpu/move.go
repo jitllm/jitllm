@@ -295,7 +295,7 @@ func copyHistory(sid uint64, li int, src, dst *devTier, pos int) (string, uint64
 	defer b.mu.Unlock()
 	path, total := "peer", uint64(0)
 	worse := func(p string) {
-		rank := map[string]int{"host": 0, "staged": 1, "peer": 2}
+		rank := map[string]int{nn.CPU: 0, "staged": 1, "peer": 2}
 		if rank[p] < rank[path] {
 			path = p
 		}
@@ -347,7 +347,7 @@ func copyHistory(sid uint64, li int, src, dst *devTier, pos int) (string, uint64
 			if err := dv.pagedMigrate(sid, key, 0, k, v, n, true); err != nil {
 				return "", 0, err
 			}
-			worse("host")
+			worse(nn.CPU)
 			total += uint64(n*kv) * 8
 			continue
 		}

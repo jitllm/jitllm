@@ -1834,14 +1834,14 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	// rows from NExpert sheets to NExpertUsed; every size derives from
 	// Weight.Rows, so the charge and the refund cannot disagree.
 	mode, auto := g.autoStream[li]
-	// hostExp says the block's experts will run on the host (hybrid): the
+	// cpuExp says the block's experts will run on the host (hybrid): the
 	// placement's choice, else the tier's defaults. Such a block keeps no bank
 	// on the card at all -- no compact bank, no expert kernels, no packed
 	// layout needed -- and a top-1 router is no obstacle, since no indexed
 	// matvec runs.
 	// The composed block reads its experts in pages on the card: only a
 	// placement's own "host" sends them to the host.
-	hostExp := auto && mode == expHost
+	cpuExp := auto && mode == expCPU
 	stream := moe && (g.StreamExperts || auto) && slots < bank
 	// A hybrid block that can hold an expert cache (Config.NoHybridCache)
 	// is placed as a streamed one -- the compact bank and its kernels on the
@@ -1852,7 +1852,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	cacheable := !g.NoHybridCache && g.StreamCacheSlots >= 0 && slots > 1 && w.Vector(jlm.RoleExpScale) == nil &&
 		w.Vector(jlm.RoleExpGateBias) == nil && w.Vector(jlm.RoleExpUpBias) == nil && w.Vector(jlm.RoleExpDownBias) == nil &&
 		w.Up.Packed != nil && w.Down.Packed != nil && (w.Gate.Packed != nil || len(w.Gate.Data) == 0)
-	hybrid := stream && hostExp && !cacheable
+	hybrid := stream && cpuExp && !cacheable
 	// cslots is the streamed bank's size in sheets, decided at the first bank
 	// matrix (cacheSlotsFor): slots without an expert cache, more with one.
 	cslots := -1
@@ -2189,7 +2189,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 				l.stream.nExpert = bank
 				// A block placed with its experts on the host keeps them off
 				// the card, which the composed card declines (expertsServe).
-				if auto && mode == expHost {
+				if auto && mode == expCPU {
 					l.stream.hybrid = true
 				}
 				l.stream.initCache(cslots, bank)
