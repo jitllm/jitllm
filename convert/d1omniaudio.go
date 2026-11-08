@@ -3,6 +3,7 @@ package convert
 import (
 	"fmt"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -22,6 +23,10 @@ import (
 // (frequency-major), the layout the grid's rows take where the reference
 // flattens them channel-major, and each block's linear_pos becomes the
 // product with the sinusoids its attention reads.
+
+// AudioProjectors is the list of audio towers (clip.audio.projector_type)
+// that convert, as Projectors is the vision towers'.
+func AudioProjectors() []string { return []string{"d1omni_a"} }
 
 // d1OmniAudioNames is every per-block audio tensor's role, by its name after
 // "a.blk.N.".
@@ -149,7 +154,7 @@ func audioOf(f *meta.File, nVis uint32) (*jlm.Audio, []jlm.Tensor, error) {
 	}
 	// Another family's audio half (Gemma 3n's) is not built: set aside
 	// (withoutAudio), as it was before this one.
-	if proj, _ := f.KV["clip.audio.projector_type"].String(); proj != "d1omni_a" {
+	if proj, _ := f.KV["clip.audio.projector_type"].String(); !slices.Contains(AudioProjectors(), proj) {
 		return nil, nil, nil
 	}
 	key := func(k string) uint32 {

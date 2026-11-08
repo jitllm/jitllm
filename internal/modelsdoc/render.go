@@ -30,13 +30,13 @@ const Command = "go run ./scripts/genmodels " + Path
 // lines is the human half of the page (describe.go), passed in so a test can
 // take one away.
 type lines struct {
-	gguf, hf, projector map[string]string
+	gguf, hf, projector, audio map[string]string
 }
 
 // Render is docs/models.md as the code makes it now. It fails when a name in
 // the converter's lists has no line in describe.go, or a line names nothing.
 func Render() ([]byte, error) {
-	return render(lines{gguf: ggufModels(), hf: hfModels(), projector: projectorModels()})
+	return render(lines{gguf: ggufModels(), hf: hfModels(), projector: projectorModels(), audio: audioModels()})
 }
 
 // covered checks that the keys of have are exactly names.
@@ -87,6 +87,10 @@ func render(d lines) ([]byte, error) {
 		return nil, err
 	}
 	if err := covered("projector", projectors, d.projector); err != nil {
+		return nil, err
+	}
+	audio := convert.AudioProjectors()
+	if err := covered("audio projector", audio, d.audio); err != nil {
 		return nil, err
 	}
 
@@ -180,6 +184,7 @@ func render(d lines) ([]byte, error) {
 		len(classes), hfGraphs, hfOnly)
 	p("- **%d** graphs in all (`jlm.Arch`)\n", len(graphs))
 	p("- **%d** vision projectors (`clip.projector_type`, `convert.Projectors`)\n", len(projectors))
+	p("- **%d** audio projectors (`clip.audio.projector_type`, `convert.AudioProjectors`)\n", len(audio))
 	p("- **%d** embedding encoders, and pooling on any decoder\n", len(encoders))
 	p("- **%d** weight types read (`quant.Dequantable`), **%d** of them packed quantizations (`quant.PackedTypes()`)\n",
 		len(read), len(quant.PackedTypes()))
@@ -233,6 +238,14 @@ func render(d lines) ([]byte, error) {
 	p("| Projector | Models |\n|---|---|\n")
 	for _, n := range projectors {
 		p("| %s | %s |\n", code(n), d.projector[n])
+	}
+
+	p("\n## Audio projectors\n\n")
+	p("An audio tower rides its model's mmproj beside the vision tower and converts with it; the\n")
+	p("projector is the mmproj's `clip.audio.projector_type`.\n\n")
+	p("| Projector | Models |\n|---|---|\n")
+	for _, n := range audio {
+		p("| %s | %s |\n", code(n), d.audio[n])
 	}
 
 	p("\n## Embedding models\n\n")

@@ -119,6 +119,14 @@ func hfModels() map[string]string {
 	}
 }
 
+// audioModels is one line per audio projector (clip.audio.projector_type,
+// convert.AudioProjectors).
+func audioModels() map[string]string {
+	return map[string]string{
+		"d1omni_a": "d1-omni-600M's audio half (a log-mel front end, FastConformer blocks; its rows a prefix of the decision prompt)",
+	}
+}
+
 // projectorModels() is one line per vision projector (clip.projector_type,
 // convert.Projectors).
 func projectorModels() map[string]string {
