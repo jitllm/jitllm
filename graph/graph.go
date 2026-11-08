@@ -400,7 +400,12 @@ const (
 	// softmax over the live rows. The keys and values are NKVHead heads (0:
 	// NHead), each read by NHead/NKVHead consecutive query heads. Out[0] has
 	// In[0]'s rows. Offset, past 0, holds query row q to the keys from the
-	// request's slot Offset to its slot Offset+1 (their row q).
+	// request's slot Offset to its slot Offset+1 (their row q). With a fourth
+	// operand and two weights it is a relative-position attention
+	// (Transformer-XL's, a FastConformer's): row q's score over key j adds
+	// In[3]'s row q dotted with P's row live-1-q+j, P = Weight[0] times the
+	// rows of Weight[1] for positions live-1 down to 1-live -- Weight[1]'s row
+	// k the position (rows+1)/2-1-k, a table stated at conversion.
 	OpRowsAttend
 	// OpUpsample is In[0], a grid of rows GridW wide, Span times as large
 	// each way: row (y, x) of Out[0] is In[0]'s row (y/Span, x/Span), the
