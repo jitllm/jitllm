@@ -292,7 +292,7 @@ func WithChatClock(now func() time.Time) model.Option {
 }
 
 // WithHeadPlacement decides whether the output projection may be placed on the
-// device. Off leaves it on the host, which is the other arm of the placement
+// device. Off leaves it on the CPU, which is the other arm of the placement
 // comparison and the way to bisect a divergence to it.
 //
 // It is a load option rather than an -ab arm because the choice is made once at
