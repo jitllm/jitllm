@@ -817,10 +817,22 @@ func (s *Instance) SetDevice(d nn.LayerDevice) error {
 // placed then), and a device this instance cannot move onto at all.
 func (s *Instance) SetDeviceLayers(d nn.LayerDevice, max int) error {
 	defer s.settleHist()
-	// The tower's blocks go where the text's do, every one offered (tower.go).
+	// The tower's blocks go where the text's do, every one offered (tower.go);
+	// a chain's run as parts of the device that serves picture rows, every
+	// one of them, and come home with a detach.
 	if s.tower != nil {
 		if err := s.tower.s.SetDeviceLayers(d, -1); err != nil {
 			return fmt.Errorf("model: the tower's blocks: %w", err)
+		}
+		if tg := s.m.Tower; tg.Chain {
+			dev, ok := d.(nn.PictureRowsDevice)
+			n := len(tg.Blocks)
+			if !ok {
+				n = 0
+			}
+			if err := s.PlaceTowerChain(dev, n); err != nil {
+				return fmt.Errorf("model: the tower's chained blocks: %w", err)
+			}
 		}
 	}
 	// MigrateKV moves float32: a binary16 or q8_0 history travels converted
