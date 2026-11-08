@@ -44,6 +44,11 @@ func reusedScratchGate(t *testing.T, path string) {
 		t.Fatal(err)
 	}
 	defer cd.Close()
+	// The device keeps the model, and what its instances hand back, while an
+	// instance holds it there: the last one's Close lets it all go. One held
+	// for the whole gate stands for the server's loaded model.
+	held := testInstance(t, m, 256, WithCPU(cd))
+	defer held.Close()
 	hs := cd.Attached(m.Id, func() any { return &hostShared{} }).(*hostShared)
 	short := m.Vocab.Encode("The capital of France is Paris, and the capital of Germany is", true)
 	long := m.Vocab.Encode("Every spring the river rose until the bridges were islands, and the "+
