@@ -106,7 +106,11 @@ func (r *Registry) formKernels(req Request) ([]*Kernel, error) {
 	if !ok {
 		return nil, fmt.Errorf("jit: no profile for %s", req.Device.Kind)
 	}
-	prof = prof.on(req.Device)
+	return r.formWith(req, prof.on(req.Device))
+}
+
+// formWith is formKernels through the passes of prof.
+func (r *Registry) formWith(req Request, prof Profile) ([]*Kernel, error) {
 	sp := newExprSplit()
 	var ks []*Kernel
 	for {

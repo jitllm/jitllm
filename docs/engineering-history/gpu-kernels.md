@@ -6954,7 +6954,16 @@ row where the composer's reads two.
   positions for rnj-1 and 1016 for stories15M, so a device that reports no
   slots splits only a session whose key bound passes it: the V100's Vulkan
   at the gate's 256 did not split, and its one-lane composed runs were
-  sound. The tier at one lane is sound: open (open-questions.md).
+  sound. The tier at one lane is sound. The cause was the split's chunk:
+  a workgroup's chunk is a multiple of its threads, lanes times warps, and
+  a partition's share of the span is rounded up to the positions'
+  alignment, 32. At 32 lanes the chunk is a whole number of alignments; at
+  one lane (504, 1016) and at eight (1200 for a head of 48) it is not, so a
+  share could pass the chunk, and the positions between counted in the
+  partition's span with no thread computing them. SplitRange now rounds the
+  chunk down to a whole number of both before it counts the partitions
+  (`composer.TestSplitChunksHoldWholeAlignments`, which fails at 8 and 1
+  lanes without it).
 - **The node-affine allocation arm named the BitNet fixtures' size.** On the
   two-socket box `TestDecodeDoesNotAllocate/.../host-numa` failed on
   synth-bitnet-f16 and synth-bitnet-i2s (`0 region(s) node-affine`) at the

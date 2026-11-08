@@ -55,6 +55,16 @@ func (s SplitRange) split(ch []*Kernel, d Device) (int, []*Kernel, bool) {
 	h := *mx.k.Heads
 	C := mx.k.Loops[mx.loop].Trip
 	g := s.Work.geometry(h, d)
+	// A partition's share is rounded up to the positions' alignment, so the
+	// chunk is a whole number of them, or a share past it leaves positions
+	// counted in the span that no thread computes: at one lane the chunk is
+	// only a multiple of the warps.
+	l := d.Lanes * g.warps
+	for _, m := range mem {
+		a := m.k.Positions.Align
+		l = l / gcd(l, a) * a
+	}
+	g.chunk = max(l, g.chunk/l*l)
 	S := s.Work.splits(g, h, C, d.Slots)
 	if S < 1 {
 		return 0, nil, false
