@@ -153,11 +153,14 @@ func streamedMatches(t *testing.T, run func(func(*gpu.Config)) ([][]float32, gpu
 	// The device bytes are asserted: a tier that uploaded the full bank and
 	// also assembled a compact one would give equal logits. An expert cache
 	// sized after placement takes the room the card had left, as many of
-	// the bank's sheets as fit (multi.go sizeAutoCaches), so it is the card
-	// less its caches that holds less than the resident bank.
-	if sb-ss.StreamCacheBytes >= rb {
-		t.Errorf("the streamed arm holds %d device bytes, %d of them expert caches, against the resident arm's %d: "+
-			"the bank is still on the card", sb, ss.StreamCacheBytes, rb)
+	// the bank's sheets as fit (multi.go sizeAutoCaches), and keeps the parts
+	// formed for the plain bank beside its own, which a dropped cache falls
+	// back to without composing (dropCaches); so it is the weights, the card
+	// less its caches and both arms' composed instances, that hold less than
+	// the resident bank's.
+	if sb-ss.StreamCacheBytes-ss.ComposedBytes >= rb-rs.ComposedBytes {
+		t.Errorf("the streamed arm holds %d device bytes, %d of them expert caches and %d composed, against the resident arm's %d (%d composed): "+
+			"the bank is still on the card", sb, ss.StreamCacheBytes, ss.ComposedBytes, rb, rs.ComposedBytes)
 	}
 
 	// The selection check, both ways: the streamed arm must stream, and the
