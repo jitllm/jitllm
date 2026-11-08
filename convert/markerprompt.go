@@ -35,10 +35,13 @@ func (b *promptBuilder) ids(ids ...int32) uint32 { return b.node(jlm.PromptNode{
 // config.max_length). A model with no marker head states none.
 func StateMarkerPrompt(s *jlm.Source, maxLen int64) error {
 	c, v := s.Config, s.Vocab
-	if c == nil || c.Flags2&jlm.Flag2HeadBlocks == 0 {
+	if c == nil || c.Flags2&(jlm.Flag2HeadBlocks|jlm.Flag2MarkerPointer) == 0 {
 		return nil
 	}
-	if v == nil || v.BOS < 0 {
+	if v == nil {
+		return fmt.Errorf("convert: a marker head's prompt needs its vocabulary")
+	}
+	if v.BOS < 0 && c.Decision != jlm.DecisionKev {
 		return fmt.Errorf("convert: a marker head's prompt needs its vocabulary's first token")
 	}
 	var p *jlm.MarkerPrompt
@@ -63,6 +66,14 @@ func StateMarkerPrompt(s *jlm.Source, maxLen int64) error {
 			maxLen = 16384
 		}
 		p, err = d1Prompt(v.BOS, d, maxLen)
+	case jlm.DecisionKev:
+		var d [5]int32
+		for i, name := range []string{"<|fim_prefix|>", "<|fim_middle|>", "<|box_start|>", "<|box_end|>", "<|fim_suffix|>"} {
+			if d[i] = tokenOf(v, name); d[i] < 0 {
+				return fmt.Errorf("convert: a kev readout's vocabulary has no %s", name)
+			}
+		}
+		p, err = kevPrompt(d)
 	default:
 		return fmt.Errorf("convert: %v states head blocks and no prompt of its kind: %w", c.Decision, ErrNotImplemented)
 	}
@@ -127,6 +138,37 @@ func layaPrompt(cls, sep, mask int32, maskText string, headMax, maxLen int64) (*
 	state := b.op(jlm.PromptCut, b.op(jlm.PromptEncode, unmask(b.opInt(jlm.PromptState, int64(jlm.PromptJSON)))), room)
 	b.p.Out = b.op(jlm.PromptCut, b.op(jlm.PromptCat, pre, state, sepIDs), ctx)
 	b.p.Confidence = jlm.ConfidenceEntropy
+	return &b.p, b.p.Valid()
+}
+
+// kevPrompt is Kev's systemone template as a program, d its delimiters
+// (fim_prefix, fim_middle, box_start, box_end, fim_suffix):
+//
+//	<|fim_prefix|>state<|fim_middle|>instructions(<|box_start|>option<|box_end|>)*<|fim_suffix|>
+//
+// each piece encoded alone, as the template's specials part them; a choice's
+// option is its key, a noul's no or yes (false then true), each with ": " and
+// its description where it has one, a score's its description alone; a
+// value printed as the template prints it, the state as llama.cpp's
+// template engine prints an object, its JSON (Jinja2 prints Python's str()
+// of it; Kev's goldens are llama.cpp's). An option's <|box_end|> is its
+// marker, the prompt's last row the pointer's query.
+func kevPrompt(d [5]int32) (*jlm.MarkerPrompt, error) {
+	var b promptBuilder
+	none := b.text("")
+	desc := b.opInt(jlm.PromptOptionText, int64(jlm.PromptTemplate))
+	empty := b.opInt(jlm.PromptOptionEmpty, int64(jlm.PromptFalsy))
+	described := b.op(jlm.PromptSelect, empty, none, b.op(jlm.PromptConcat, b.text(": "), desc))
+	choice := b.op(jlm.PromptConcat, b.op(jlm.PromptOptionKey), described)
+	score := b.op(jlm.PromptSelect, empty, none, desc)
+	noul := b.op(jlm.PromptConcat, b.op(jlm.PromptSelect, b.op(jlm.PromptLess, b.op(jlm.PromptOptionIndex), b.num(1)),
+		b.text("no"), b.text("yes")), described)
+	opt := b.op(jlm.PromptPick, b.op(jlm.PromptTypeIndex), choice, score, noul)
+	opts := b.op(jlm.PromptCat, b.ids(d[2]), b.op(jlm.PromptEncode, opt), b.node(jlm.PromptNode{Op: jlm.PromptMarked, IDs: []int32{d[3]}}))
+	state := b.op(jlm.PromptEncode, b.opInt(jlm.PromptState, int64(jlm.PromptJSON)))
+	ins := b.op(jlm.PromptEncode, b.opInt(jlm.PromptInstructions, int64(jlm.PromptTemplate)))
+	b.p.Out = b.op(jlm.PromptCut, b.op(jlm.PromptCat, b.ids(d[0]), state, b.ids(d[1]), ins, b.op(jlm.PromptFlatten, opts),
+		b.ids(d[4])), b.op(jlm.PromptContext))
 	return &b.p, b.p.Valid()
 }
 

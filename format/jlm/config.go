@@ -845,6 +845,12 @@ const (
 	// trunk's final norm (RoleLayerOutNorm), and the model's head scores the
 	// marker rows.
 	Flag2HeadBlocks Flags2 = 1 << 11
+	// Flag2MarkerPointer is a pointer readout over the final rows: the output
+	// norm and RoleScorerOut's projection of the prompt's last row and of
+	// each option's marker row, an option's score the last row's first half
+	// dotted with its marker's second half over the root of their width.
+	// Its prompt is MarkerPrompt.
+	Flag2MarkerPointer Flags2 = 1 << 13
 	// Flag2SWAGlobalFirst makes the first layer of each SWAPeriod the one
 	// attending to everything, the rest windowed (ModernBERT's), where the
 	// period's last is otherwise.

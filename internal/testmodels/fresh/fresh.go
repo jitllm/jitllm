@@ -60,7 +60,8 @@ func reconvert(path string) error {
 			(cfg.NGramBlock == 0 || convert.StatesPre(cfg)) &&
 			(cfg.IdxHeads == 0 || cfg.Selection != nil || len(cfg.CompKinds) != 0)
 		labels := cfg.DecisionLabels != nil || !convert.StatesDecisionLabels(cfg.Decision)
-		marker := cfg.MarkerPrompt != nil || !cfg.Flags2.Has(jlm.Flag2HeadBlocks)
+		marker := cfg.MarkerPrompt != nil || cfg.Flags2&(jlm.Flag2HeadBlocks|jlm.Flag2MarkerPointer) == 0 &&
+			cfg.Decision != jlm.DecisionKev
 		rev := cfg.Revision >= jlm.StatementRevision || (cfg.SWAWindow == 0 || cfg.YarnFactor <= 1 && v == nil) &&
 			(cfg.Revision >= 2 || !storesAny(c, jlm.RoleAttnSubNorm, jlm.RoleFFNSubNorm)) &&
 			(cfg.Revision >= 3 || cfg.RopeSections == [4]uint32{}) &&

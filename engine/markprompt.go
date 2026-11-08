@@ -235,6 +235,9 @@ func renderPrompt(v jinja.Value, r jlm.PromptRender) string {
 	if v.IsString() {
 		return v.AsString()
 	}
+	if r == jlm.PromptTemplate {
+		return jinja.Print(v)
+	}
 	var b strings.Builder
 	if r == jlm.PromptPyStr {
 		pyRepr(&b, v, true)

@@ -109,15 +109,16 @@ const (
 )
 
 // PromptRender is how a request value becomes text: its string where it is
-// one, else Python's str() of it (PromptPyStr) or json.dumps() of it with
-// the default separators, ensure_ascii off (PromptJSON) or on
-// (PromptJSONASCII).
+// one, else Python's str() of it (PromptPyStr), json.dumps() of it with the
+// default separators, ensure_ascii off (PromptJSON) or on (PromptJSONASCII),
+// or as a chat template prints it (PromptTemplate: none is empty).
 type PromptRender uint8
 
 const (
 	PromptPyStr PromptRender = iota
 	PromptJSON
 	PromptJSONASCII
+	PromptTemplate
 )
 
 // PromptEmpty is when a description counts as empty: falsy as Python reads

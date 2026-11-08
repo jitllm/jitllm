@@ -1484,6 +1484,45 @@ func (m *Model) headGraphOf(hidden, collapsed bool) (*graph.Graph, Uncovered, er
 // option markers, in their order, the rows past them repeating the last),
 // through the scorer -- a LayerNorm, a d-wide projection, the erf GELU and a
 // projection to one score -- into the row's score.
+// pointerGraph is a pointer readout (jlm.Flag2MarkerPointer) as ops: the
+// prompt's last row (graph.OpPool's) and the rows its request names, each
+// through the output norm and RoleScorerOut's projection, an option's score
+// the last row's first half dotted with its row's second half over the root
+// of their width.
+func (m *Model) pointerGraph() (*graph.Graph, error) {
+	c := m.Cfg
+	all, _ := m.Inventory(jlm.DenseBlock)
+	out, ok := all.Inventory[jlm.RoleScorerOut]
+	if !ok || out.Rows < 2 || out.Rows%2 != 0 {
+		return nil, fmt.Errorf("model: a pointer readout whose %v is %d wide", jlm.RoleScorerOut, out.Rows)
+	}
+	if _, ok := all.Inventory[jlm.RoleOutputNorm]; !ok {
+		return nil, fmt.Errorf("model: a pointer readout that stores no %v", jlm.RoleOutputNorm)
+	}
+	var bias []jlm.Role
+	if _, ok := all.Inventory[jlm.RoleScorerOutBias]; ok {
+		bias = []jlm.Role{jlm.RoleScorerOutBias}
+	}
+	d, w := c.NEmbd, out.Rows
+	b := graph.NewBlock(int(jlm.DenseBlock))
+	x := b.In("x", d)
+	project := func(v graph.ValueID) graph.ValueID {
+		return b.MatVec(b.Norm(v, jlm.RoleOutputNorm, c.RMSEps), jlm.RoleScorerOut, w, bias...)
+	}
+	last := b.Emit(graph.OpPool, []graph.ValueID{x}, []graph.Result{{Name: "last", Width: d}}, nil,
+		graph.Attrs{Pooling: uint8(jlm.PoolLast)}, nil, nil)[0]
+	marks := b.Emit(graph.OpTakeRows, []graph.ValueID{x}, []graph.Result{{Name: "marks", Width: d}}, nil, graph.Attrs{}, nil, nil)[0]
+	q := b.Emit(graph.OpSlice, []graph.ValueID{project(last)}, []graph.Result{{Name: "query", Width: w / 2}}, nil,
+		graph.Attrs{Width: w / 2}, nil, nil)[0]
+	k := b.Emit(graph.OpSlice, []graph.ValueID{project(marks)}, []graph.Result{{Name: "key", Width: w / 2}}, nil,
+		graph.Attrs{Offset: w / 2, Width: w / 2}, nil, nil)[0]
+	qk := b.Emit(graph.OpMap, []graph.ValueID{q, k}, []graph.Result{{Name: "qk", Width: w / 2}}, nil, graph.Attrs{Fn: graph.MapMul}, nil, nil)[0]
+	dot := b.Emit(graph.OpReduce, []graph.ValueID{qk}, []graph.Result{{Name: "dot", Width: 1}}, nil, graph.Attrs{Fn: graph.MapAdd}, nil, nil)[0]
+	b.Out(b.Emit(graph.OpMap, []graph.ValueID{dot}, []graph.Result{{Name: "score", Width: 1}}, nil,
+		graph.Attrs{Fn: graph.MapMul, Const: 1 / math.Sqrt(float64(w/2))}, nil, nil)[0])
+	return b.G, graph.Verify(b.G, all)
+}
+
 func (m *Model) markGraph() (*graph.Graph, error) {
 	c := m.Cfg
 	all, _ := m.Inventory(jlm.DenseBlock)
@@ -1524,6 +1563,13 @@ func (m *Model) markGraph() (*graph.Graph, error) {
 // per element as main's (Embedder.normalize).
 func (m *Model) poolGraph() (*graph.Graph, Uncovered, error) {
 	c := m.Cfg
+	if c.MarkPointer {
+		g, err := m.pointerGraph()
+		if err != nil {
+			return nil, UncoveredUnverified, err
+		}
+		return g, Covered, nil
+	}
 	if c.Head != nil {
 		g, err := m.markGraph()
 		if err != nil {
