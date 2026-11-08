@@ -250,10 +250,11 @@ func (d *Decider) jointPrompt(state jinja.Value, qs []DecisionQuestion) ([]model
 	rows, used := 0, 0
 	for _, piece := range strings.Split(text, jointSep) {
 		if k := strings.Count(piece, decisionPicture); k > 0 {
-			if used+k > len(d.pics) {
-				return nil, nil, nil, fmt.Errorf("model: the template wrote %d pictures for %d", used+k, len(d.pics))
+			np := len(d.pics)
+			if used+k > np+len(d.videos) {
+				return nil, nil, nil, fmt.Errorf("model: the template wrote %d pictures and videos for %d", used+k, np+len(d.videos))
 			}
-			ps, err := d.in.m.PromptSpans(piece, decisionPicture, d.pics[used:used+k])
+			ps, err := d.mediaSpans(piece, d.pics[min(used, np):min(used+k, np)], d.videos[max(used-np, 0):max(used+k-np, 0)])
 			if err != nil {
 				return nil, nil, nil, err
 			}
@@ -278,8 +279,8 @@ func (d *Decider) jointPrompt(state jinja.Value, qs []DecisionQuestion) ([]model
 			spans = append(spans, [2]int{at, rows})
 		}
 	}
-	if used != len(d.pics) {
-		return nil, nil, nil, fmt.Errorf("model: the template wrote %d of %d pictures", used, len(d.pics))
+	if used != len(d.pics)+len(d.videos) {
+		return nil, nil, nil, fmt.Errorf("model: the template wrote %d of %d pictures and videos", used, len(d.pics)+len(d.videos))
 	}
 	if len(ids) > 0 {
 		prompt = append(prompt, model.Span{Tokens: ids})

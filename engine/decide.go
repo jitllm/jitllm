@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
 
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/graph"
@@ -76,8 +77,10 @@ type Decider struct {
 	// allocates nothing.
 	one [1]model.Span
 	// pics are the request's pictures, each a span the prefill encodes
-	// (Model.PictureSpan), in the order the template shows them.
-	pics []model.Span
+	// (Model.PictureSpan), in the order the template shows them; videos its
+	// videos, each its spans (Model.VideoSpans), shown after the pictures.
+	pics   []model.Span
+	videos [][]model.Span
 }
 
 // decisionPicture stands for each picture where the template writes it: the
@@ -85,10 +88,11 @@ type Decider struct {
 // (Model.PromptSpans).
 const decisionPicture = "\x00jitllm.picture\x00"
 
-// images is what the template reads for the request's pictures: the
-// sentinel for each.
+// images is what the template reads for the request's pictures and
+// videos: the sentinel for each, the videos after the pictures, as the
+// reference's processor is handed them.
 func (d *Decider) images() jinja.Value {
-	list := make([]jinja.Value, len(d.pics))
+	list := make([]jinja.Value, len(d.pics)+len(d.videos))
 	for i := range list {
 		list[i] = jinja.NewString(decisionPicture)
 	}
@@ -184,11 +188,20 @@ func (d *Decider) Prepare(qs []DecisionQuestion) error {
 // Decide answers every question about state, one prompt per question and
 // variant, the answers in the questions' order.
 func (d *Decider) Decide(state jinja.Value, qs []DecisionQuestion, pics ...model.Span) ([]DecisionAnswer, error) {
+	return d.DecideMedia(state, qs, pics, nil)
+}
+
+// DecideMedia is Decide over pictures and videos, each video its spans
+// (Model.VideoSpans).
+func (d *Decider) DecideMedia(state jinja.Value, qs []DecisionQuestion, pics []model.Span, videos [][]model.Span) ([]DecisionAnswer, error) {
 	if err := d.Prepare(qs); err != nil {
 		return nil, err
 	}
-	d.pics = pics
-	defer func() { d.pics = nil }()
+	if len(videos) > 0 && d.mp != nil {
+		return nil, fmt.Errorf("model: a marker head's prompt states pictures and voice clips, not videos")
+	}
+	d.pics, d.videos = pics, videos
+	defer func() { d.pics, d.videos = nil, nil }()
 	d.input = 0
 	if d.joint != nil {
 		return d.decideJoint(state, qs)
@@ -204,6 +217,45 @@ func (d *Decider) Decide(state jinja.Value, qs []DecisionQuestion, pics ...model
 			return nil, fmt.Errorf("questions.%s: %w", qs[i].ID, err)
 		}
 		out[i] = a
+	}
+	return out, nil
+}
+
+// mediaSpans is text's spans with each media sentinel in place: the
+// pictures' first, as the model's prompt spans put them (Model.PromptSpans),
+// then each video's own spans, the text after each encoded as the template
+// wrote it.
+func (d *Decider) mediaSpans(text string, pics []model.Span, videos [][]model.Span) ([]model.Span, error) {
+	if len(videos) == 0 {
+		return d.in.m.PromptSpans(text, decisionPicture, pics)
+	}
+	at := 0
+	for range pics {
+		i := strings.Index(text[at:], decisionPicture)
+		if i < 0 {
+			return nil, fmt.Errorf("model: the template wrote fewer pictures than the %d asked about", len(pics))
+		}
+		at += i + len(decisionPicture)
+	}
+	var out []model.Span
+	if len(pics) > 0 {
+		ps, err := d.in.m.PromptSpans(text[:at], decisionPicture, pics)
+		if err != nil {
+			return nil, err
+		}
+		out = ps
+	}
+	segs := strings.Split(text[at:], decisionPicture)
+	if len(segs)-1 != len(videos) {
+		return nil, fmt.Errorf("model: the template wrote %d videos for %d", len(segs)-1, len(videos))
+	}
+	for i, seg := range segs {
+		if seg != "" {
+			out = append(out, model.Span{Tokens: d.in.m.Vocab.EncodeSpecial(seg, false)})
+		}
+		if i < len(videos) {
+			out = append(out, videos[i]...)
+		}
 	}
 	return out, nil
 }
@@ -282,8 +334,8 @@ func (d *Decider) answer(state jinja.Value, q *DecisionQuestion) (DecisionAnswer
 		if err != nil {
 			return DecisionAnswer{}, err
 		}
-		if len(d.pics) > 0 {
-			spans, err := d.in.m.PromptSpans(text, decisionPicture, d.pics)
+		if len(d.pics)+len(d.videos) > 0 {
+			spans, err := d.mediaSpans(text, d.pics, d.videos)
 			if err != nil {
 				return DecisionAnswer{}, err
 			}
