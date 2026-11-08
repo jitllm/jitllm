@@ -268,15 +268,17 @@ func formedModels() []string {
 // (TestMoEFamiliesOnEveryDevice serves it composed against the host).
 func mixtureModels() []string { return []string{"tiny-qwen3moe-f32.gguf", "synth-phimoe.gguf"} }
 
-// unblockedModels are the models whose rows the tier's int8 activation
-// blocks (32 wide) do not divide: stories260K's 172-wide MLP and
-// tiny-qwen3moe's 8-wide residual. The device refuses their blocks at
-// placement, by that name.
+// unblockedModels are the models whose rows the int8 activation blocks (32
+// wide) do not divide: stories260K's 172-wide MLP and tiny-qwen3moe's 8-wide
+// residual.
 func unblockedModels() []string { return []string{"stories260K.gguf", "tiny-qwen3moe-f32.gguf"} }
 
-// TestTierNamesTheRowsItCannotBlock places each of unblockedModels on every
-// device, its blocks composed: the device takes none and names the row.
-func TestTierNamesTheRowsItCannotBlock(t *testing.T) {
+// TestTierServesRowsItsBlocksDoNotDivide decodes each of unblockedModels with
+// every block and the head composed on every device: every block step served
+// and none declined -- a row narrower than a block, or not a whole number of
+// them, is blocked in its tail -- and each step's logits within 1e-2 NMSE of
+// the CPU device's decode.
+func TestTierServesRowsItsBlocksDoNotDivide(t *testing.T) {
 	ran := 0
 	for _, file := range unblockedModels() {
 		t.Run(file, func(t *testing.T) {
@@ -285,22 +287,34 @@ func TestTierNamesTheRowsItCannotBlock(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer m.Close()
+			ids := m.Vocab.Encode("Once upon a time", true)
+			toks := make([]int32, 16)
+			for i := range toks {
+				toks[i] = int32((int(ids[i%len(ids)])*7 + i) % m.Vocab.Size())
+			}
+			want := cpuDecode(t, m, ids, toks)
 			for _, dev := range stepDevices() {
 				t.Run(dev, func(t *testing.T) {
-					g, err := openGPU(t, append([]gpu.Option{gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t)...)...)
-					if err != nil || g == nil {
-						noDevice(t, dev, err)
+					got, st, _ := composedDecode(t, m, nil, dev, ids, toks, nn.ComposedBlock|nn.ComposedHead, true, false)
+					served, declined := st.ServedPart(nn.ComposedBlock)
+					if served != len(toks)*m.Cfg.NLayer || declined != 0 {
+						t.Fatalf("%d block steps served and %d declined of %d: %s",
+							served, declined, len(toks)*m.Cfg.NLayer, declinesOf(st))
 					}
-					defer g.Close()
-					s := testInstance(t, m, 64)
-					defer s.Close()
-					if err := s.SetDevice(g); err != nil {
-						t.Fatal(err)
+					worst := 0.0
+					for i := range want {
+						for _, v := range got[i] {
+							if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
+								t.Fatalf("step %d: the logits are not finite", i)
+							}
+						}
+						e, _ := nmseOf(got[i], want[i])
+						worst = max(worst, e)
 					}
-					if n, why := s.GPULayers(), g.Err(); n != 0 || !strings.Contains(why, "int8 activation blocks of 32") {
-						t.Fatalf("%s took %d of %d blocks (%q), want none, refused by the row", dev, n, m.Cfg.NLayer, why)
+					if !(worst < 1e-2) {
+						t.Fatalf("%s: worst step %.3g NMSE from the CPU device's decode", dev, worst)
 					}
-					t.Logf("%s refuses every block: %s", dev, g.Err())
+					t.Logf("%s: %d block steps served, worst step %.3g NMSE from the CPU device", dev, served, worst)
 					ran++
 				})
 			}
