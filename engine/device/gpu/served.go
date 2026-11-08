@@ -2839,14 +2839,24 @@ func (g *devTier) prewarmComposedHead(narrow bool) (roomless string) {
 		g.prewarming = false
 	}
 	// The collapse of every stream a call of the head alone runs, at a
-	// decode step's row.
+	// decode step's row and at every width a scratch is held at: a
+	// verification's rows run it at their scratch's.
 	if !g.NoPromptPrewarm && bs != nil && bs.collapse != nil {
 		g.prewarming = true
-		if _, err := g.servedCollapse(bs.collapse, 1); err != nil {
-			g.LastErr = "the composed streams' collapse: " + err.Error()
+		form := func(rows int) {
+			if _, err := g.servedCollapse(bs.collapse, rows); err != nil {
+				g.LastErr = "the composed streams' collapse: " + err.Error()
+			}
+			if _, err := g.servedRowCopy(bs.p.NEmbd, rows); err != nil {
+				g.LastErr = "the composed copy of the streams' collapse: " + err.Error()
+			}
 		}
-		if _, err := g.servedRowCopy(bs.p.NEmbd, 1); err != nil {
-			g.LastErr = "the composed copy of the streams' collapse: " + err.Error()
+		form(1)
+		for w := range g.bbs {
+			form(w)
+		}
+		if g.promptsReserved() && g.bbs[batchWidth] == nil {
+			form(batchWidth)
 		}
 		g.prewarming = false
 	}
