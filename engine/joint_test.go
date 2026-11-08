@@ -126,10 +126,14 @@ func checkJointPrompt(t *testing.T, d *Decider, req, gold string, tol float64) {
 		t.Fatal(err)
 	}
 	state, qs := decisionRequest(t, req)
-	ids, jq, shown, err := d.jointPrompt(state, qs)
+	spans, jq, shown, err := d.jointPrompt(state, qs)
 	if err != nil {
 		t.Fatalf("%s: %v", req, err)
 	}
+	if len(spans) != 1 {
+		t.Fatalf("%s: %d spans for a prompt of text alone", req, len(spans))
+	}
+	ids := spans[0].Tokens
 	if !slices.Equal(ids, g.IDs) {
 		at := 0
 		for at < min(len(ids), len(g.IDs)) && ids[at] == g.IDs[at] {
@@ -153,7 +157,7 @@ func checkJointPrompt(t *testing.T, d *Decider, req, gold string, tol float64) {
 		no += len(q.Options)
 	}
 	logits := make([]float32, no)
-	if err := d.in.JointScores(ids, jq, logits); err != nil {
+	if err := d.in.JointScores(spans, jq, logits); err != nil {
 		t.Fatalf("%s: %v", req, err)
 	}
 	worst, at := 0.0, 0

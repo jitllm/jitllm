@@ -83,7 +83,9 @@ func (d *Decider) DecisionResponse(modelID string, qs []DecisionQuestion, answer
 				if desc.IsUndefined() {
 					desc = jinja.None()
 				}
-				if d.lab.SortedLegend && !desc.IsString() {
+				// A label readout's legend may be sorted; any other's is
+				// written as the request gave it.
+				if d.lab != nil && d.lab.SortedLegend && !desc.IsString() {
 					src := sortKeys(desc).JSON()
 					var c bytes.Buffer
 					if json.Compact(&c, []byte(src)) == nil {
