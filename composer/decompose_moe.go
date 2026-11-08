@@ -1019,8 +1019,11 @@ func decomposeRowConv(o graph.Op, c *Context) ([]Prim, error) {
 	if !jlm.Verbatim(wo.Format) {
 		return nil, fmt.Errorf("a row convolution over %s taps", wo.Format)
 	}
+	// A sum over the taps, each its own trip: a map of every tap held a
+	// predicate and a row a tap across the channels' loop, more than the
+	// registers below a loop's body hold at nine taps.
 	var x exprs
-	ch := x.coord(1)
+	ch, t := x.coord(1), x.coord(2)
 	in := []Operand{c.value(o.In[0]), TablePos.op()}
 	facts := Facts{Extents: map[int]int{1: R + 1}}
 	live := x.op(OpMax, U, x.load(1, x.u(0)), x.u(1))
@@ -1034,24 +1037,17 @@ func decomposeRowConv(o graph.Op, c *Context) ([]Prim, error) {
 		at := func(w int) int { return x.load(2, x.op(OpAdd, U, x.op(OpMul, U, r, x.u(rowWords)), x.u(uint32(w)))) }
 		lo, hi = at(rowStart), x.op(OpMin, U, at(rowEnd), live)
 	}
-	tap := func(t int) int {
-		v, _ := weightElement(&x, wo, C, T, &in, &facts, ch, x.u(uint32(t)))
-		return v
+	w, err := weightElement(&x, wo, C, T, &in, &facts, ch, t)
+	if err != nil {
+		return nil, err
 	}
-	h := T / 2
-	acc := x.op(OpMul, F, x.at(0, sh, r, ch), tap(h))
-	for t := 0; t < T; t++ {
-		if t == h {
-			continue
-		}
-		// Row r+t-h, held in the step's rows; zero outside the row's bounds.
-		at := x.op(OpSub, U, x.op(OpAdd, U, r, x.u(uint32(t))), x.u(uint32(h)))
-		// lo <= at < hi as one unsigned comparison: below lo, at - lo wraps.
-		ok := x.op(OpLess, ir.Pred, x.op(OpSub, U, at, lo), x.op(OpSub, U, hi, lo))
-		v := x.at(0, sh, x.op(OpMin, U, at, x.u(uint32(R-1))), ch)
-		acc = x.op(OpAdd, F, acc, x.sel(F, ok, x.op(OpMul, F, v, tap(t)), x.f(0)))
-	}
-	return []Prim{{Kind: PrimMap, Shape: sh, In: in, Out: c.value(o.Out[0]), Expr: x.e, Facts: facts}}, nil
+	// Row r+t-T/2, held in the step's rows; zero outside the row's bounds,
+	// lo <= at < hi as one unsigned comparison (below lo, at - lo wraps).
+	at := x.op(OpSub, U, x.op(OpAdd, U, r, t), x.u(uint32(T/2)))
+	ok := x.op(OpLess, ir.Pred, x.op(OpSub, U, at, lo), x.op(OpSub, U, hi, lo))
+	v := x.at(0, sh, x.op(OpMin, U, at, x.u(uint32(R-1))), ch)
+	x.sel(F, ok, x.op(OpMul, F, v, w), x.f(0))
+	return []Prim{{Kind: PrimReduce, Shape: []int{R, C, T}, In: in, Out: c.value(o.Out[0]), Combine: OpAdd, Expr: x.e, Facts: facts}}, nil
 }
 
 // reduceTree combines each group of S elements pairwise, a map a level: of
