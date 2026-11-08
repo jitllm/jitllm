@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/model"
@@ -149,5 +150,83 @@ func TestD1OmniHearsAsItsReference(t *testing.T) {
 	}
 	if bad, _ := nmse(make([]float32, len(clip))); !(bad > 0.1) {
 		t.Fatalf("silence reads NMSE %.3e: the gate cannot see the clip", bad)
+	}
+}
+
+// TestD1OmniHearsOnTheCard places d1-omni's audio blocks on each device,
+// every block and the first half of them, each a part of its own on the card
+// (PlaceAudioChain), and holds the clip's prefix rows to the reference's
+// within three times the CPU device's distance from it, or 1e-3. No part
+// forms at a clip; the blocks placed back on the CPU device read the CPU
+// device's rows exactly.
+func TestD1OmniHearsOnTheCard(t *testing.T) {
+	m := d1OmniOpen(t)
+	defer m.Close()
+	clip, ref := voiceClip(t)
+	d := int(m.Container.Vision().Audio.ProjDim)
+	nmse := func(rows []float32) float64 {
+		var num, den float64
+		for r, row := range ref {
+			for i, w := range row {
+				g := float64(rows[r*d+i])
+				num += (g - w) * (g - w)
+				den += w * w
+			}
+		}
+		return num / den
+	}
+	host := testInstance(t, m, 256)
+	want, err := host.EncodeClip(clip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = append([]float32(nil), want...)
+	host.Close()
+	bound := max(3*nmse(want), 1e-3)
+	nb := len(m.Audio.Blocks)
+	for _, dev := range stepDevices() {
+		t.Run(dev, func(t *testing.T) {
+			gd, err := openGPU(t, gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff))
+			if err != nil || gd == nil {
+				noDevice(t, dev, err)
+			}
+			defer gd.Close()
+			for _, blocks := range []int{nb, nb / 2} {
+				s := testInstance(t, m, 256)
+				if err := s.PlaceAudioChain(gd, blocks); err != nil {
+					s.Close()
+					t.Fatalf("%d of %d blocks on %s: %v (%s)", blocks, nb, dev, err, gd.Err())
+				}
+				formed := gd.Stats().UnformedAtStep
+				got, err := s.EncodeClip(clip)
+				if err != nil {
+					s.Close()
+					t.Fatalf("%v (%s)", err, gd.Err())
+				}
+				got = append([]float32(nil), got...)
+				if err := s.PlaceAudioChain(gd, 0); err != nil {
+					s.Close()
+					t.Fatal(err)
+				}
+				back, err := s.EncodeClip(clip)
+				s.Close()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if st := gd.Stats(); st.UnformedAtStep != formed {
+					t.Fatalf("%d of the audio's parts formed at a clip on %s, not at the placement", st.UnformedAtStep-formed, dev)
+				}
+				e := nmse(got)
+				t.Logf("%s: %d of %d blocks on the card: NMSE %.3e from the reference (the CPU device's %.3e)", dev, blocks, nb, e, nmse(want))
+				if math.IsNaN(e) || e > bound {
+					t.Fatalf("%d of %d blocks on %s: NMSE %.3e from the reference (bound %.1e)", blocks, nb, dev, e, bound)
+				}
+				for j := range back {
+					if back[j] != want[j] {
+						t.Fatalf("placed back on the CPU device, element %d is %v, the CPU device's %v", j, back[j], want[j])
+					}
+				}
+			}
+		})
 	}
 }

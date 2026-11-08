@@ -538,7 +538,20 @@ func (s *Instance) PlaceTowerChain(dev nn.PictureRowsDevice, n int) error {
 	if err := s.towerReady(); err != nil {
 		return err
 	}
-	tr, tg := s.tower, s.m.Tower
+	return s.placeChain(s.tower, s.m.Tower, dev, n)
+}
+
+// PlaceAudioChain is PlaceTowerChain for the audio tower's blocks.
+func (s *Instance) PlaceAudioChain(dev nn.PictureRowsDevice, n int) error {
+	if err := s.audioReady(); err != nil {
+		return err
+	}
+	return s.placeChain(s.audio, s.m.Audio, dev, n)
+}
+
+// placeChain puts chained tower tg's first n blocks, run by tr, on dev and
+// the rest on the CPU device.
+func (s *Instance) placeChain(tr *towerRun, tg *model.TowerGraphs, dev nn.PictureRowsDevice, n int) error {
 	if !tg.Chain || n < 0 || n > len(tg.Blocks) {
 		return fmt.Errorf("model: %d of a tower's %d chained blocks (chained %v)", n, len(tg.Blocks), tg.Chain)
 	}
@@ -550,7 +563,7 @@ func (s *Instance) PlaceTowerChain(dev nn.PictureRowsDevice, n int) error {
 		if i >= n {
 			continue
 		}
-		p, err := chainPart(s.m, i, g)
+		p, err := chainPart(s.m, tr.base+i, g)
 		if err != nil {
 			return err
 		}
@@ -562,11 +575,12 @@ func (s *Instance) PlaceTowerChain(dev nn.PictureRowsDevice, n int) error {
 	return nil
 }
 
-// chainPart is chained block i as a part of a device of its own: its graph
-// over its input's rows, its matrices the container's entries, which the
-// device reads into frames of its own, and its vectors.
-func chainPart(m *model.Model, i int, g *graph.Graph) (*nn.RowsPart, error) {
-	l := &m.Layers[m.TowerBase+i]
+// chainPart is the model's block li, a chained tower's, as a part of a
+// device of its own: its graph over its input's rows, its matrices the
+// container's entries, which the device reads into frames of its own, and
+// its vectors.
+func chainPart(m *model.Model, li int, g *graph.Graph) (*nn.RowsPart, error) {
+	l := &m.Layers[li]
 	p := &nn.RowsPart{Graph: g, Rows: g.Values[g.In[0]].Rows, Weights: map[jlm.Role]nn.Weight{}, Vectors: map[jlm.Role][]float32{},
 		File: m.Container}
 	for _, o := range g.Ops {
@@ -577,7 +591,7 @@ func chainPart(m *model.Model, i int, g *graph.Graph) (*nn.RowsPart, error) {
 			}
 			t := l.Matrix(b.Role)
 			if t == nil || t.E == nil {
-				return nil, fmt.Errorf("model: the tower's block %d binds %v, which it does not hold", i, b.Role)
+				return nil, fmt.Errorf("model: block %d binds %v, which it does not hold", li, b.Role)
 			}
 			p.Weights[b.Role] = model.Wt(*t)
 		}
