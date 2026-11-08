@@ -160,7 +160,7 @@ func (m *Model) sheetOf(fr *jlm.Frames, e *jlm.Entry, x, nrow int) (nn.Packed, f
 	}
 	h.l = l
 	qs, d, sc := cf.Sheet(e, x)
-	return nn.Packed{QS: qs, D: d, SC: sc, Stride: nrow}, h.release, nil
+	return nn.Packed{QS: qs, D: d, SC: sc}, h.release, nil
 }
 
 func noRelease() {}

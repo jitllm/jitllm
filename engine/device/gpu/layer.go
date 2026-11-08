@@ -1552,35 +1552,6 @@ func lnBlock(p *nn.LayerPlan) bool { return p.LayerNorm }
 // (C6: phi-2, starcoder, falcon, nemotron).
 func ungatedFFN(p *nn.LayerPlan) bool { return p.UngatedFFN }
 
-// declineWeights names a weight this tier cannot express, or "" when every one
-// of them is expressible. declineReason is its twin for the plan: the plan says
-// what graph the block runs, and this says whether its buffers can be uploaded
-// as they are.
-func declineWeights(w *nn.LayerWeights) string {
-	for _, x := range []struct {
-		name string
-		w    nn.Weight
-	}{{"q", w.Wq}, {"k", w.Wk}, {"v", w.Wv}, {"o", w.Wo},
-		{"gate", w.Gate}, {"up", w.Up}, {"down", w.Down},
-		// MLA's five. The upload reads QS/D/SC whole and has no row base, so an
-		// offset weight would be indexed from row 0 and answer fluently; this
-		// guard checks rather than assumes none is.
-		{"q_a", w.Wqa}, {"q_b", w.Wqb}, {"kv_a", w.Wkva},
-		{"k_b", w.Wkb}, {"v_b", w.Wvb}} {
-		p := x.w.Packed
-		if p == nil || len(x.w.Data) == 0 {
-			continue
-		}
-		// Stride 0 means "the whole tensor", which is the ordinary case.
-		if p.Row != 0 || (p.Stride != 0 && p.Stride != x.w.Rows) {
-			return fmt.Sprintf("the %s projection is rows [%d,%d) of a packed tensor of %d "+
-				"(a fused qkv, phi3-style); the upload has no row base",
-				x.name, p.Row, p.Row+x.w.Rows, p.Stride)
-		}
-	}
-	return ""
-}
-
 // prepLayer is PrepLayer with the pager allowed. mayPage lets a block that does
 // not fit evict another one rather than be declined. It is a second pass, not a
 // mode: GPU.PrepLayer offers every device with mayPage false first, so a second
@@ -1649,17 +1620,6 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		}
 		g.hostFns[sid][li] = hostSide{uses: w.ExpertUses}
 		g.mu.Unlock()
-	}
-	// Shapes this tier cannot express are declined first and by name (RULE 8a):
-	// each would run wrong if skipped, so the block goes to the host whole. They
-	// are checked before any allocation so a decline takes no VRAM from the next
-	// block.
-	// A row range of a packed tensor cannot be expressed: the device layout
-	// interleaves rows, resident() uploads QS/D/SC whole, and MatVecShape has no
-	// row base, so the block runs on the host instead of reading the wrong rows.
-	if r := declineWeights(w); r != "" {
-		g.LastErr = fmt.Sprintf("block %d: %s", li, r)
-		return false
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()

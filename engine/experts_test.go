@@ -17,7 +17,7 @@ import (
 func TestEveryExpertIsADifferentExpert(t *testing.T) {
 	for _, name := range []string{
 		"tiny-qwen3moe-f32.gguf",       // F32 bank: views are byte slices
-		"Qwen3-MOE-4x0.6B-Q4_K_M.gguf", // Q4_K bank: views are nn.Packed.Row
+		"Qwen3-MOE-4x0.6B-Q4_K_M.gguf", // Q4_K bank: views are packed sheets
 	} {
 		t.Run(name, func(t *testing.T) {
 			m, err := model.Open(jlmOf(t, testmodels.Path(name)))
@@ -65,17 +65,8 @@ func TestEveryExpertIsADifferentExpert(t *testing.T) {
 					case a.Packed != nil && b.Packed != nil:
 						packed++
 						// An expert is a sheet: n_expert independent packed
-						// matrices back to back, each starting at row 0 with the
-						// sheet's own stride, so what must differ is the bytes.
-						// Disjoint spans cannot alias.
-						if b.Packed.Row != 0 {
-							t.Errorf("%s: expert %d starts at packed row %d, want 0 -- "+
-								"a sheet is addressed from its own base", r.what, i, b.Packed.Row)
-						}
-						if b.Packed.Stride != b.Rows {
-							t.Errorf("%s: expert %d has stride %d, want %d (one sheet's rows)",
-								r.what, i, b.Packed.Stride, b.Rows)
-						}
+						// matrices back to back, so what must differ is the
+						// bytes. Disjoint spans cannot alias.
 						for _, sp := range []struct {
 							name string
 							x, y []byte

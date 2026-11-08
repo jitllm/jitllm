@@ -35,7 +35,6 @@ const (
 	DeclineRecurrent
 	DeclinePageOut
 	DeclineNoWeight
-	DeclineCutWeight
 	DeclineTable
 	DeclineNotFormed
 	DeclineISA
@@ -103,8 +102,6 @@ func (d Decline) String() string {
 		return "a history page outside the layer's arena"
 	case DeclineNoWeight:
 		return "a weight or vector the block does not hold"
-	case DeclineCutWeight:
-		return "a weight cut from a larger one"
 	case DeclineTable:
 		return "a table the device does not hold"
 	case DeclineNotFormed:

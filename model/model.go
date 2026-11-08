@@ -2040,7 +2040,7 @@ func sameView(a, b Tensor) bool {
 		return false
 	}
 	return a.Packed == nil || (SameSpan(a.Packed.QS, b.Packed.QS) && SameSpan(a.Packed.D, b.Packed.D) &&
-		SameSpan(a.Packed.SC, b.Packed.SC) && a.Packed.Row == b.Packed.Row && a.Packed.Stride == b.Packed.Stride)
+		SameSpan(a.Packed.SC, b.Packed.SC))
 }
 
 // ensureBlock reads the parts of block li that every token needs: its
@@ -2330,7 +2330,7 @@ func bindSheet(c *jlm.Frames, b *Tensor, nrow, x int, v *Tensor) {
 	if v.Packed == nil {
 		v.Packed = &nn.Packed{}
 	}
-	*v.Packed = nn.Packed{QS: qs, D: d, SC: sc, Row: 0, Stride: nrow}
+	*v.Packed = nn.Packed{QS: qs, D: d, SC: sc}
 }
 
 // ExpertIO is what the routed expert read has cost: wall the decode path spent
@@ -3515,7 +3515,7 @@ func bankExpert(b Tensor, role jlm.Role, nExpert, nrow, k, e int) (Tensor, error
 		if err != nil {
 			return Tensor{}, err
 		}
-		p := &nn.Packed{QS: qs, D: dd, SC: sc, Row: 0, Stride: nrow}
+		p := &nn.Packed{QS: qs, D: dd, SC: sc}
 		return Tensor{E: b.E, Typ: b.Typ, Data: qs, Rows: nrow, K: b.K, Packed: p}, nil
 	}
 	// Not bound yet is not an error here either (an all-F32 bank lives in a
@@ -3535,19 +3535,9 @@ func bankExpert(b Tensor, role jlm.Role, nExpert, nrow, k, e int) (Tensor, error
 // byte range.
 func rows(t Tensor, from, n int) (Tensor, error) {
 	// A packed row range is not a byte range: the device layout is
-	// [sub-block][word][row], so the row offset travels with the weight.
+	// [sub-block][word][row]. A packed bank is cut by sheet in bankExpert.
 	if t.Packed != nil {
-		if from < 0 || n <= 0 || from+n > t.Rows {
-			return Tensor{}, fmt.Errorf("model: %s: rows [%d,%d) of %d do not fit",
-				t.name(), from, from+n, t.Rows)
-		}
-		stride := t.Packed.Stride
-		if stride == 0 {
-			stride = t.Rows
-		}
-		p := &nn.Packed{QS: t.Packed.QS, D: t.Packed.D, SC: t.Packed.SC,
-			Row: t.Packed.Row + from, Stride: stride}
-		return Tensor{E: t.E, Typ: t.Typ, Data: t.Data, Rows: n, K: t.K, Packed: p}, nil
+		return Tensor{}, fmt.Errorf("model: %s is packed: its rows are not a byte range", t.name())
 	}
 	be, bb := int(t.Typ.BlockElems()), int(t.Typ.BlockBytes())
 	if be == 0 || t.K%be != 0 {
