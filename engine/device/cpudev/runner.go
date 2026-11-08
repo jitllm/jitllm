@@ -1,6 +1,7 @@
 package cpudev
 
 import (
+	"slices"
 	"unsafe"
 )
 
@@ -88,7 +89,7 @@ type Runner struct {
 	sel    []int32
 	picked []bool
 	stash  []uint32
-	// FaultPicks gives a call's first row the second's picks, FaultExpert
+	// FaultPicks gives a call's first row another row's picks, FaultExpert
 	// makes another expert resident than the first the kernels read, and
 	// FaultWeight weighs each row's first pick by zero: a gate's violations.
 	FaultPicks, FaultExpert, FaultWeight bool
@@ -234,8 +235,14 @@ func (r *Runner) experts(b *Bound, f *Form, li, n int, count bool) error {
 	picks := b.Own[f.Sel][:n*k]
 	ne := r.nExpert
 	if r.FaultPicks && n > 1 {
-		// The first row given the second's picks, with its own weights.
-		copy(picks[:k], picks[k:2*k])
+		// The first row given another row's picks, with its own weights: the
+		// first row whose picks differ, or the fault would change nothing.
+		for j := 1; j < n; j++ {
+			if !slices.Equal(picks[:k], picks[j*k:(j+1)*k]) {
+				copy(picks[:k], picks[j*k:(j+1)*k])
+				break
+			}
+		}
 	}
 	if len(r.picked) < ne {
 		r.picked = make([]bool, ne)
@@ -266,8 +273,14 @@ func (r *Runner) experts(b *Bound, f *Form, li, n int, count bool) error {
 			r.picked[x] = false
 		}
 	}
-	if other >= 0 {
+	switch {
+	case other >= 0:
 		r.sel[0] = other
+	case r.FaultExpert && len(r.sel) > 1:
+		// Every expert is picked: the first is left out of what is held
+		// resident, so the kernels read its sheet where the pager holds
+		// nothing of it, or holds it evicted.
+		r.sel = r.sel[1:]
 	}
 	return r.res.Experts(li, r.sel, count)
 }

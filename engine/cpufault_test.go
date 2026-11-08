@@ -25,8 +25,9 @@ const (
 	// of the residual.
 	cpuFaultHead
 	// cpuFaultExpert makes resident and holds another expert's page than
-	// the first the selection names: a bank's sheet read where the pager
-	// holds nothing of it, or holds it evicted.
+	// the first the selection names, or leaves that one out where every
+	// expert is picked: a bank's sheet read where the pager holds nothing of
+	// it, or holds it evicted.
 	cpuFaultExpert
 	// cpuFaultStreams swaps streams 1 and 2 where the input rows' expansion
 	// writes them, and reads stream 1 in stream 2's place where the head's
@@ -43,8 +44,8 @@ const (
 	// cpuFaultWrite writes a step's new key and value at the row before its
 	// own, its own row left as the history held it.
 	cpuFaultWrite
-	// cpuFaultPicks gives a call's first row the second's picks, read with
-	// its own weights.
+	// cpuFaultPicks gives a call's first row the picks of the first row
+	// whose picks differ, read with its own weights.
 	cpuFaultPicks
 	// cpuFaultWeight drops each row's first pick's weight (weightsOf).
 	cpuFaultWeight
