@@ -103,6 +103,11 @@ func decisionOf(f *meta.File, c *jlm.Config) error {
 			return fmt.Errorf("%d decision heads do not divide a %d-wide residual", c.DecisionHeads, c.NEmbd)
 		}
 		markerHead(c)
+		// modeling_d1.py: media go before the text, the encoder's media
+		// queries masked from the text keys and its convolution's right tap
+		// stopped at the prefix (keep_right); a media request is not
+		// calibrated.
+		c.Flags2 |= jlm.Flag2MediaPrefix | jlm.Flag2MediaUncalibrated
 	} else if kind == jlm.DecisionKev {
 		c.Flags2 |= jlm.Flag2MarkerPointer
 	} else if c.DecisionBlocks != 0 {

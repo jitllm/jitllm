@@ -43,6 +43,10 @@ func clefOf(f *meta.File, c *jlm.Config) error {
 	return nil
 }
 
+// StatesMediaPrefix reports whether a decision kind's container states its
+// media prefix (jlm.Flag2MediaPrefix).
+func StatesMediaPrefix(kind jlm.DecisionKind) bool { return kind == jlm.DecisionD1Omni }
+
 // StatesJointHead reports whether a decision kind's container states a joint
 // head (jlm.JointHead).
 func StatesJointHead(kind jlm.DecisionKind) bool { return kind == jlm.DecisionClef }

@@ -874,6 +874,7 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 		OutUnrotated:     c.Flags2.Has(jlm.Flag2OutUnrotated),
 		SWAGlobalFirst:   c.Flags2.Has(jlm.Flag2SWAGlobalFirst),
 		MarkPointer:      c.Flags2.Has(jlm.Flag2MarkerPointer),
+		RowWindowed:      c.Flags2.Has(jlm.Flag2MediaPrefix),
 		Joint:            c.JointHead != nil,
 		KVLoraRank:       int(c.KVLoraRank),
 		HeadDimV:         int(c.HeadDimV),

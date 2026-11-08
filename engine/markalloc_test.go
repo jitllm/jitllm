@@ -67,7 +67,7 @@ func markerAllocs(t *testing.T, m *model.Model, g *gpu.GPU) {
 	}
 	var prompts []prompt
 	for i := range qs {
-		ids, marks, err := markedPrompt(d.mp, d.encodePlain, state, &qs[i], in.MaxSeq())
+		ids, marks, err := markedPrompt(d.mp, d.encodePlain, state, &qs[i], in.MaxSeq(), 0)
 		if err != nil {
 			t.Fatal(err)
 		}
