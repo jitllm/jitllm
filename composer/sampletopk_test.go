@@ -8,7 +8,6 @@ import (
 	"slices"
 	"unsafe"
 
-	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/graph"
 )
@@ -209,12 +208,12 @@ func runCPUGridValues(cpuOn cpuArm, codes []Code, g *graph.Graph, vals map[graph
 		if err != nil {
 			return fmt.Errorf("mapping %s: %w", c.Name, err)
 		}
-		var args cpu.Args
-		base := unsafe.Pointer(&args)
+		args := &argBlocks(1)[0]
+		base := unsafe.Pointer(args)
 		var coords []CallArg
 		var moving []movingArg
 		for _, a := range c.Args {
-			if a.Field < 0 || uintptr(a.Field)+8 > unsafe.Sizeof(args) {
+			if a.Field < 0 || uintptr(a.Field)+8 > unsafe.Sizeof(*args) {
 				code.Close()
 				return fmt.Errorf("%s: a call word at %d past the argument block", c.Name, a.Field)
 			}
@@ -282,7 +281,7 @@ func runCPUGridValues(cpuOn cpuArm, codes []Code, g *graph.Graph, vals map[graph
 				moving = append(moving, movingArg{a, *slot, elem})
 			}
 		}
-		callAll(code, &args, spaceOf(&c, harnessWorkers), coords, moving)
+		callAll(code, args, spaceOf(&c, harnessWorkers), coords, moving)
 		code.Close()
 		for so, w := range scratch {
 			for i, x := range w[scratchN[so]:] {
