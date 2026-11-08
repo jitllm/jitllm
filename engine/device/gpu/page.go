@@ -250,10 +250,10 @@ func (g *devTier) dropTensors(l *layer) uint64 {
 			continue
 		}
 		if r.shared {
-			// One buffer behind several blocks: freeing it here would take it
-			// from under every other block. Close frees it once; see
-			// devTier.sharedCompact.
+			// One buffer behind several blocks: freed with the last of them,
+			// or it outlives the model on the card (devTier.sharedCompact).
 			*rp = nil
+			freed += g.letGo(r)
 			continue
 		}
 		for k, v := range g.res {
@@ -268,7 +268,43 @@ func (g *devTier) dropTensors(l *layer) uint64 {
 		}
 		g.freeResident(r)
 	}
+	// A block given an expert cache after placement (cacheBlock) keeps the
+	// bank it was placed on beside it, where no tensor slot names it.
+	if st := l.stream; st != nil && st.cached() {
+		for m, r := range st.plain {
+			switch {
+			case r == nil || !r.ok:
+			case r.shared:
+				freed += g.letGo(r)
+			default:
+				n := r.bytes()
+				g.refund(n)
+				freed += n
+				g.freeResident(r)
+			}
+			st.plain[m] = nil
+		}
+		st.uncache()
+	}
 	return freed
+}
+
+// letGo is one block letting go of shared bank r: the last frees it and
+// refunds its bytes, which it reports. Callers hold g.mu.
+func (g *devTier) letGo(r *resident) uint64 {
+	if r.users--; r.users > 0 {
+		return 0
+	}
+	for k, v := range g.res {
+		if v == r {
+			delete(g.res, k)
+			break
+		}
+	}
+	n := r.planes()
+	g.refund(n)
+	g.freeResident(r)
+	return n
 }
 
 // dropImported pages block li out if any of its weights are wrappers over host

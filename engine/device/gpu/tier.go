@@ -44,9 +44,10 @@ type resident struct {
 	why string
 	// shared says one buffer serves several blocks: a streamed mixture's
 	// compact expert bank, live only between a block's suspension and its own
-	// FFN. The per-block free walk must skip it and must not refund it; see
-	// sharedCompact.
+	// FFN. users is the blocks holding it; the per-block free walk drops one,
+	// and the last frees it and refunds its bytes (sharedCompact).
 	shared bool
+	users  int
 	// imported says these three buffers alias the packed arena's host memory
 	// instead of holding a copy (a unified device; see backend.HostImport). It
 	// is what makes bytes() zero. pk is that arena entry, which the arena
@@ -63,10 +64,15 @@ type resident struct {
 // double-count them and decline blocks that cost nothing.
 func (r *resident) bytes() uint64 {
 	// A shared bank costs zero per block: sharedCompact charges its real bytes
-	// once when it is made and Close refunds them.
+	// once when it is made, and the last block to let it go refunds them.
 	if r == nil || !r.ok || r.imported || r.shared {
 		return 0
 	}
+	return r.planes()
+}
+
+// planes is the three buffers' bytes from the shape, whoever pays for them.
+func (r *resident) planes() uint64 {
 	qs, d, sc, err := layout.PackedWords(r.t, r.nrows, r.k)
 	if err != nil {
 		return 0
@@ -393,6 +399,9 @@ type Stats struct {
 	// ComposedBytes is the part of BudgetUsed the composed parts' instances
 	// hold: their scratch, a prompt part's at its rows and key bound.
 	ComposedBytes uint64
+	// SharedBankBytes is the part of BudgetUsed the streamed mixtures' shared
+	// compact banks hold, one a shape, while a placed block streams through it.
+	SharedBankBytes uint64
 	// ComposedArena is the part of ComposedBytes the prompt arenas hold: a
 	// scratch's buffers every prompt form at its rows shares, the widest
 	// each, which a block's move neither frees nor leaves behind.
@@ -855,6 +864,7 @@ func (s *Stats) add(o Stats) {
 	s.ScratchBytes += o.ScratchBytes
 	s.ComposedBytes += o.ComposedBytes
 	s.ComposedArena += o.ComposedArena
+	s.SharedBankBytes += o.SharedBankBytes
 	s.Allocated += o.Allocated
 	s.RoundingBytes += o.RoundingBytes
 	s.ReservedPrompt = max(s.ReservedPrompt, o.ReservedPrompt)
@@ -1864,6 +1874,11 @@ func (d *devTier) stats() Stats {
 	}
 	s.BudgetUsed = d.used
 	s.ComposedBytes, s.ComposedArena = d.instBytes, d.arenaBytes
+	for _, r := range d.res {
+		if r.shared && r.ok {
+			s.SharedBankBytes += r.planes()
+		}
+	}
 	for _, l := range d.layers {
 		if l != nil && l.stream != nil && l.stream.cached() && l.stream.plain[2] != nil {
 			for _, r := range [3]*resident{l.gate, l.up, l.down} {
@@ -2868,15 +2883,18 @@ func (g *devTier) sharedCompact(which int, q layout.Quant, rows, k, slots int) (
 		if err != nil {
 			return nil, [3]int{}, false
 		}
+		if r.ok {
+			r.users++
+		}
 		return r, [3]int{pq * 4, pd * 4, psc * 4}, r.ok
 	}
 	r, sh, ok := g.residentCompact(q, rows, k, slots)
 	if !ok {
 		return nil, sh, false
 	}
-	// Marked shared so the per-block free walk (dropTensors) leaves it alone;
-	// Close frees it once.
-	r.shared = true
+	// Marked shared so the per-block free walk (dropTensors) only lets go of
+	// it: the last block to do so frees it.
+	r.shared, r.users = true, 1
 	g.res[key] = r
 	return r, sh, true
 }
