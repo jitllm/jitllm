@@ -94,7 +94,7 @@ func Verify(g *Graph, f Facts) error {
 			return 0
 		}
 		strided := (o.Kind == OpConv || o.Kind == OpUnfold) && o.Attr.Stride > 1
-		grid := strided || o.Kind == OpRegroup || o.Kind == OpFold || o.Kind == OpDropRows ||
+		grid := strided || o.Kind == OpRegroup || o.Kind == OpFold || o.Kind == OpSplitRows || o.Kind == OpDropRows ||
 			o.Kind == OpRowBreak || o.Kind == OpWrapRows || o.Kind == OpMarkRow || o.Kind == OpTableRows || o.Kind == OpRowsAttend || o.Kind == OpUpsample || o.Kind == OpAppendRow
 		// Attention over the call's own rows takes the call's rows.
 		if o.Kind == OpRowsAttend && len(o.In) > 0 && rows(o.In[0]) == 0 {
@@ -112,6 +112,10 @@ func Verify(g *Graph, f Facts) error {
 				want = in / max(o.Attr.Span*o.Attr.Span, 1)
 			case OpFold:
 				want = in / max(o.Attr.Span, 1)
+			case OpSplitRows:
+				if w := o.Attr.Width; w > 0 && len(o.In) > 0 {
+					want = in * (g.Values[o.In[0]].Width / w)
+				}
 			case OpDropRows:
 				want = in - o.Attr.Offset
 			case OpRowBreak:

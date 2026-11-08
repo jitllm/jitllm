@@ -1259,6 +1259,27 @@ func decomposeFeatureNorm(o graph.Op, c *Context) ([]Prim, error) {
 	}, nil
 }
 
+// decomposeSplitRows is each input row's runs of Width elements as rows
+// of their own (graph.OpSplitRows).
+func decomposeSplitRows(o graph.Op, c *Context) ([]Prim, error) {
+	if len(o.In) != 1 || len(o.Out) != 1 {
+		return nil, fmt.Errorf("a row split of %d operands", len(o.In))
+	}
+	sh, ish := c.rows(o.Out[0]), c.rows(o.In[0])
+	W := sh[1]
+	if W < 1 || ish[1]%W != 0 || sh[0] != ish[0]*(ish[1]/W) {
+		return nil, fmt.Errorf("rows of %d split into %d rows of %d", ish[1], sh[0], W)
+	}
+	U := ir.U32
+	k := uint32(ish[1] / W)
+	var x exprs
+	r, e := x.coord(0), x.coord(1)
+	src := x.op(OpDiv, U, r, x.u(k))
+	at := x.op(OpAdd, U, x.op(OpMul, U, x.op(OpRem, U, r, x.u(k)), x.u(uint32(W))), e)
+	x.at(0, ish, src, at)
+	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0])}, Out: c.value(o.Out[0]), Expr: x.e}}, nil
+}
+
 // decomposeUpsample is a grid of rows GridW wide Span times as large each
 // way (graph.OpUpsample), one map over the output's rows and width: row r
 // of the grid Span*GridW wide reads the input row at (y/Span, x/Span).
