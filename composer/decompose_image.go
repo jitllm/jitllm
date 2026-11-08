@@ -1206,6 +1206,59 @@ func decomposeFrames(o graph.Op, c *Context) ([]Prim, error) {
 		Expr: x.e, Facts: Facts{Extents: map[int]int{0: PictureWords, 1: RequestPicW + 1}}}}, nil
 }
 
+// decomposeFeatureNorm is each column normalised over the step's first
+// live-Offset rows (graph.OpFeatureNorm): their sum, the squares of their
+// distances from its mean, then each row's value over the std, the rows
+// after zero.
+func decomposeFeatureNorm(o graph.Op, c *Context) ([]Prim, error) {
+	if len(o.In) != 1 || len(o.Out) != 1 || c.width(o.In[0]) != c.width(o.Out[0]) {
+		return nil, fmt.Errorf("a feature norm of %d operands", len(o.In))
+	}
+	U, F := ir.U32, ir.F32
+	sh := c.rows(o.In[0])
+	R, W := sh[0], sh[1]
+	drop := uint32(o.Attr.Offset)
+	tmp := func(name string) Operand {
+		return Operand{Kind: OperandScratch, Name: c.value(o.Out[0]).Name + "." + name, Temp: true}
+	}
+	sum, sq := tmp("sum"), tmp("sq")
+	facts := Facts{Extents: map[int]int{1: R + 1}}
+	// n is the rows the statistics read, at least one.
+	n := func(x *exprs, pos int) int {
+		live := x.load(pos, x.u(0))
+		return x.op(OpMax, U, x.sel(U, x.op(OpLess, ir.Pred, live, x.u(drop+1)), x.u(0), x.op(OpSub, U, live, x.u(drop))), x.u(1))
+	}
+	flt := func(x *exprs, v int) int { return x.un(OpCvtF32, F, x.un(OpBitcast, ir.I32, v)) }
+	var sx exprs
+	{
+		col, r := sx.coord(0), sx.coord(1)
+		v := sx.at(0, sh, r, col)
+		sx.sel(F, sx.op(OpLess, ir.Pred, r, n(&sx, 1)), v, sx.f(0))
+	}
+	var qx exprs
+	{
+		col, r := qx.coord(0), qx.coord(1)
+		mean := qx.op(OpDiv, F, qx.at(2, []int{W}, col), flt(&qx, n(&qx, 1)))
+		d := qx.op(OpSub, F, qx.at(0, sh, r, col), mean)
+		qx.sel(F, qx.op(OpLess, ir.Pred, r, n(&qx, 1)), qx.op(OpMul, F, d, d), qx.f(0))
+	}
+	var ox exprs
+	{
+		r, col := ox.coord(0), ox.coord(1)
+		cnt := n(&ox, 1)
+		mean := ox.op(OpDiv, F, ox.at(2, []int{W}, col), flt(&ox, cnt))
+		den := flt(&ox, ox.op(OpMax, U, ox.op(OpSub, U, cnt, ox.u(1)), ox.u(1)))
+		std := ox.un(OpSqrt, F, ox.op(OpDiv, F, ox.at(3, []int{W}, col), den))
+		v := ox.op(OpDiv, F, ox.op(OpSub, F, ox.at(0, sh, r, col), mean), ox.op(OpAdd, F, std, ox.f(float32(o.Attr.Eps))))
+		ox.sel(F, ox.op(OpLess, ir.Pred, r, cnt), v, ox.f(0))
+	}
+	return []Prim{
+		{Kind: PrimReduce, Shape: []int{W, R}, In: []Operand{c.value(o.In[0]), TablePos.op()}, Out: sum, Combine: OpAdd, Expr: sx.e, Facts: facts},
+		{Kind: PrimReduce, Shape: []int{W, R}, In: []Operand{c.value(o.In[0]), TablePos.op(), sum}, Out: sq, Combine: OpAdd, Expr: qx.e, Facts: facts},
+		{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0]), TablePos.op(), sum, sq}, Out: c.value(o.Out[0]), Expr: ox.e, Facts: facts},
+	}, nil
+}
+
 // decomposeUpsample is a grid of rows GridW wide Span times as large each
 // way (graph.OpUpsample), one map over the output's rows and width: row r
 // of the grid Span*GridW wide reads the input row at (y/Span, x/Span).
