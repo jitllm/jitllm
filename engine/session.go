@@ -446,7 +446,10 @@ func (s *Instance) Bind(sess *Session, f func(*Instance)) error {
 func (s *Instance) Place(f func(*Instance)) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.own != nil && s.Session != s.own {
+	// bindOwn leaves the own session bound but away: it comes back first, or
+	// the blocks it places would hold history in its view that its held
+	// routes never record, and no settle would let them go.
+	if s.own != nil && (s.Session != s.own || s.own.away) {
 		if err := s.use(s.own); err != nil {
 			return err
 		}
