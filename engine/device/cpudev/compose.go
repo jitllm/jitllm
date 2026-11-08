@@ -3,6 +3,7 @@ package cpudev
 import (
 	"errors"
 	"runtime"
+	"sync/atomic"
 
 	"github.com/jitllm/jitllm/composer"
 	hw "github.com/jitllm/jitllm/engine/cost"
@@ -24,6 +25,15 @@ type Composer struct {
 	launch  int
 	probed  bool
 	err     error
+	// placing counts the placement calls open (Place): a form is made
+	// inside one and nowhere else.
+	placing atomic.Int32
+}
+
+// Place opens the composer for one placement call, and its result closes it.
+func (c *Composer) Place() func() {
+	c.placing.Add(1)
+	return func() { c.placing.Add(-1) }
 }
 
 // NewComposer is a composition through forms for a CPU of ISA isa and
@@ -62,6 +72,10 @@ func (c *Composer) Device() composer.Device {
 // Form is request req's form of graph gr at rows rows, through the model's
 // cache.
 func (c *Composer) Form(req composer.Request, gr *graph.Graph, rows int, apart, whole, f32 bool) (*Form, error) {
+	if c.placing.Load() == 0 {
+		return nil, DeclineError{Why: nn.DeclineNotFormed,
+			Err: errors.New("the CPU device composes only inside a placement: a step composes nothing")}
+	}
 	return c.forms.Of(req, gr, rows, apart, whole, f32, c.float)
 }
 

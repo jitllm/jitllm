@@ -38,6 +38,7 @@ func (e *Exec) PlaceLanes(n int, l nn.Lease, planes [2][]float32, nExpert int, p
 // PlaceParts composes every part of p (nn.PartsPlacer): a part the plan
 // states none of is nil.
 func (e *Exec) PlaceParts(p *nn.PartsPlan) nn.PlacedParts {
+	defer e.comp.Place()()
 	var out nn.PlacedParts
 	pp := e.placeParts(p)
 	if pp.Head != nil {
@@ -66,6 +67,7 @@ func (e *Exec) PlaceParts(p *nn.PartsPlan) nn.PlacedParts {
 
 // PlaceTower composes a tower's parts on the execution (nn.TowerPlacer).
 func (e *Exec) PlaceTower(p nn.TowerPlans, dense nn.Tensors, taps []nn.Tensors) (nn.TowerParts, error) {
+	defer e.comp.Place()()
 	t, err := NewTower(e, p, dense, taps)
 	if err != nil {
 		return nil, err

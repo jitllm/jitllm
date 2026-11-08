@@ -156,6 +156,7 @@ func (e *Exec) form(p nn.BlockSpec, rows int) (*Form, error) {
 // table opened where its rows read one; false where the block is not
 // composed here.
 func (e *Exec) PrepLayer(li int, p *nn.LayerPlan, _ *nn.LayerWeights) bool {
+	defer e.comp.Place()()
 	if p.Spec == nil || !e.Holds(li) {
 		return false
 	}
