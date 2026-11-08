@@ -10,7 +10,7 @@ import "unsafe"
 // The address is aligned but it is a Go heap address, so it must not be
 // handed to a driver that keeps it, and releasing it returns memory to the
 // runtime rather than the OS. A host on this path can page but cannot import
-// (see arena_unix.go). The re-slice keeps the whole backing array alive.
+// (see map_unix.go). The re-slice keeps the whole backing array alive.
 func mapAligned(n int) ([]byte, bool, error) {
 	a := uintptr(HostAlign())
 	b := make([]byte, uintptr(n)+a)
@@ -20,7 +20,7 @@ func mapAligned(n int) ([]byte, bool, error) {
 
 func unmapAligned([]byte) {}
 
-// MapOffHeap is the heap fallback here; see arena_unix.go.
+// MapOffHeap is the heap fallback here; see map_unix.go.
 func MapOffHeap(n int) (b []byte, mapped bool, err error) { return mapAligned(n) }
 
 // UnmapOffHeap does nothing to a heap fallback.

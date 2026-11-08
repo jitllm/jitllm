@@ -37,8 +37,8 @@ func NextUse(li, cur, lo, hi int) int {
 // should be given up to make room, with the scan at cur.
 //
 // It returns -1 when nothing is resident to take. cur is never chosen: it is
-// the block being computed, and giving that up is correct (see model/ring.go --
-// a clean page re-faults to the same bytes) and is a miss inflicted on the very
+// the block being computed, and giving that up is correct (a clean page
+// re-faults to the same bytes) and is a miss inflicted on the very
 // next instruction.
 //
 // The scan is ordered rather than over a map, so the choice never depends on

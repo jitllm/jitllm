@@ -1,6 +1,6 @@
 package a64
 
-// The NEON instructions the image path's kernels (imgproc_a64.go) added:
+// The NEON instructions the image path's kernels added:
 // float64 lanes for the resampler's sin/cos table, the narrowing chain and
 // the byte and halfword stores that write exactly a pixel's samples, and the
 // loads a table lookup and a three-byte pixel need. Every base word came from

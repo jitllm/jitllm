@@ -325,10 +325,8 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 	}
 	sizeFor(chunkRows)
 
-	// The prefill pool, where the JIT has one (nn.Config.PrefillCores). A
-	// mixture stays on the decode pool: its expert GEMMs are a few routed
-	// tokens each and a wider pool measured slower (nn/prefillcores.go).
-	// Chunk by chunk it is placed beside any session decoding (serving.go).
+	// A prompt's chunks are placed beside any session decoding (serving.go);
+	// a mixture's are not: its expert GEMMs are a few routed tokens each.
 	var place *prefillPlace
 	if c.NExpert == 0 {
 		place = &prefillPlace{s: s}

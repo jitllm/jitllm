@@ -14,7 +14,7 @@ import (
 // on each device present against the host -- the hyper-connections' mixes
 // and placements, the sigmoid-gated delta rule over a state slot that carries
 // the n-gram tail, the n-gram block, QSA's pooled-key selection and the
-// mixture (tier's q4e.go and qsa.go) -- on decode and on a prefill chunk.
+// mixture -- on decode and on a prefill chunk.
 // Then each violation alone, which the device must run rather than decline.
 func TestQwen4ExpOnEveryDevice(t *testing.T) {
 	for _, fx := range q4eFixtures() {

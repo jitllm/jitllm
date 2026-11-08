@@ -370,7 +370,7 @@ type Stats struct {
 	DeclineWhy string
 	LastErr    string
 	Declined   int // tensors refused because the VRAM budget was already spent
-	// ConvBlocks is convolutional tower blocks run on the device (conv.go).
+	// ConvBlocks is convolutional tower blocks run on the device.
 	ConvBlocks int64
 	NoRoom     int // tensors the DEVICE refused: something else is using the card
 	// SessionDeclines is blocks a session could not take because its history
@@ -1454,7 +1454,7 @@ type devShared struct {
 	pagesIn   int    // blocks whose weights are resident right now
 	// The device unpack's staging: one buffer holding the widest covered
 	// tensor's raw GGUF bytes while the kernel reads them, charged like any
-	// other non-pageable allocation. See unpack.go.
+	// other non-pageable allocation.
 	// kvCap is the scratch's position capacity: what every kernel in g.bs
 	// bakes as its stride and score-row width. Every session shares the one
 	// scratch, so it grows toward the longest context any session asked for

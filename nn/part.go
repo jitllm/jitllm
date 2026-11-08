@@ -40,7 +40,7 @@ const (
 	// (the card's collapse.go).
 	PartCollapse
 	// PartConv is a convolutional tower's block whole, at its input grid's
-	// rows (the card's convblock.go).
+	// rows.
 	PartConv
 	// PartHalves is a binary16 history page's conversion, its floats
 	// narrowed or its halves widened, as a migration moves it (the card's
@@ -137,7 +137,7 @@ const (
 	// the composer serves where it serves the head (ComposedHead).
 	CollapsedHead Parts = 1 << PartCollapse
 	// ComposedConv serves a convolutional tower's blocks whole from their
-	// graphs (the card's convblock.go).
+	// graphs.
 	ComposedConv Parts = 1 << PartConv
 	// ConvertedHalves selects in Stats.ServedPart a binary16 history page's
 	// conversions a migration ran (the card's kvhalves.go).

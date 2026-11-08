@@ -483,10 +483,9 @@ func DSlots(q Quant) int {
 // known at emit time; pairing super-blocks would put it on a runtime loop
 // counter and force an unroll.
 //
-// One function for the packer and every reader; emitters bake the same
-// arithmetic, and TestPackAgainstRealWeights holds an independent restatement
-// against both. The device has two readers: kernels/matvec.go and
-// kernels/mma.go.
+// One function for the packer and every reader (the oracle among them); the
+// composer's weight reads bake the same arithmetic, and
+// TestPackAgainstRealWeights holds an independent restatement against both.
 func DIndex(q Quant, super, nrows, r int) (idx, slot int) {
 	if n := DSlots(q); n > 1 {
 		return super*((nrows+n-1)/n) + r/n, r % n

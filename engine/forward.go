@@ -266,7 +266,7 @@ type Instance struct {
 	memBudgetAsked bool
 	// sysRes is the attached device when it reports a holding of the host's
 	// memory, counted against the model's page budget while attached, and
-	// sysSeen the holding both budgets were last divided for (hostheld.go).
+	// sysSeen the holding both budgets were last divided for.
 	sysRes  nn.HostReserver
 	sysSeen uint64
 	// gpuTarget is where the seam is heading; gpuLayers is where it is.

@@ -63,8 +63,8 @@ func YarnFreqs(nrot int, base, factor float64, origCtx int, betaFast, betaSlow f
 }
 
 // TabPlanes is the folded constant block a generated rotary-table kernel reads
-// -- the four head planes, the four residual planes and mscale, in
-// engine/device/cpu/ropetab_const.go's layout. A multi-axis rotary's pairs fold at
+// -- the four head planes, the four residual planes and mscale, in that
+// order. A multi-axis rotary's pairs fold at
 // their runs' frequencies.
 //
 // It is exported for the device, which uploads the planes once per model like
