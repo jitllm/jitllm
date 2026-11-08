@@ -282,8 +282,9 @@ const (
 	// window's first n-2. A primitive.
 	OpNGramHash
 	// OpUnfold is each output row of In[0]'s grid (GridW rows a grid row)
-	// as the Taps x Taps window of rows around it at SAME padding, at
-	// Stride as OpConv takes it (Out[0] that grid's rows): tap ky*Taps+kx's
+	// as the Taps x Taps window of rows around it at SAME padding -- or, where
+	// Offset is set, Offset rows and columns before the grid (PyTorch's) --
+	// at Stride as OpConv takes it (Out[0] that grid's rows): tap ky*Taps+kx's
 	// row of In[0]'s width at element (ky*Taps+kx)*width, zero past the
 	// grid's edges and past Taps*Taps rows to Out[0]'s width. A full
 	// convolution is OpMatVec over it.
