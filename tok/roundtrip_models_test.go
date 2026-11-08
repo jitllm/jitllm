@@ -35,7 +35,13 @@ func TestEveryVocabularyGivesTheBytesBack(t *testing.T) {
 	}
 	seen := map[string]bool{}
 	checked := 0
-	filepath.WalkDir(testmodels.Dir(), func(p string, d fs.DirEntry, err error) error {
+	// WalkDir does not descend into a root that is a symlink, which a
+	// models directory often is.
+	dir, err := filepath.EvalSymlinks(testmodels.Dir())
+	if err != nil {
+		testmodels.Missing(t, "%v", err)
+	}
+	filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() || !strings.HasSuffix(p, ".jlm") {
 			return nil
 		}
