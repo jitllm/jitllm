@@ -544,11 +544,15 @@ func TestRealDevicesBothTakeBlocks(t *testing.T) {
 
 	// Arm 2: cut the first device's limit (policy), not its pool (memory):
 	// two APIs onto one card share a pool, and cutting it would starve the
-	// second device too.
-	half := g.devs[0].used / 2
+	// second device too. The cut is what the first half of the blocks hold
+	// there, so the rest cannot: half of the first arm's charge decided it by
+	// the rounding of two small buffers (128 KB of a 19.5 MB charge put the
+	// fourth block inside the cut).
 	g.ReleaseLayers(0, nblocks)
-	g.devs[0].limit = half
 	for li := 0; li < nblocks; li++ {
+		if li == nblocks/2 {
+			g.devs[0].limit = g.devs[0].used
+		}
 		if !g.PrepLayer(li, p, ws[li]) {
 			t.Fatalf("split placement: PrepLayer(%d) declined on every device: %s", li, g.Err())
 		}
