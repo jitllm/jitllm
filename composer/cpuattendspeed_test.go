@@ -89,7 +89,7 @@ func TestComposedCPUAttendSpeed(t *testing.T) {
 		for _, e := range calls {
 			n *= e
 		}
-		args := make([]cpu.Args, n)
+		args := argBlocks(n)
 		for at := range n {
 			base := unsafe.Pointer(&args[at])
 			for _, a := range c.Args {

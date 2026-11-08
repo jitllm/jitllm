@@ -9,7 +9,6 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/graph"
 )
@@ -56,8 +55,8 @@ func runCPUCallsAt(cpuOn cpuArm, codes []Code, g *graph.Graph, bufs map[string][
 		}
 		for call := range n {
 			at := of(call)
-			var args cpu.Args
-			base := unsafe.Pointer(&args)
+			args := &argBlocks(1)[0]
+			base := unsafe.Pointer(args)
 			for _, a := range c.Args {
 				slot := (*uint64)(unsafe.Add(base, a.Field))
 				o := a.Operand
@@ -121,7 +120,7 @@ func runCPUCallsAt(cpuOn cpuArm, codes []Code, g *graph.Graph, bufs map[string][
 			for _, o := range owned {
 				before = append(before, slices.Clone(own[o]))
 			}
-			code.Call(&args)
+			code.Call(args)
 			for i, o := range owned {
 				if writer[o] == nil {
 					writer[o] = make([]int, len(own[o]))

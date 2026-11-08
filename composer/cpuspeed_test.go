@@ -84,8 +84,8 @@ func TestComposedCPUMatVecSpeed(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var args cpu.Args
-			base := unsafe.Pointer(&args)
+			args := &argBlocks(1)[0]
+			base := unsafe.Pointer(args)
 			var coords []CallArg
 			var moving []movingArg
 			for _, a := range c.Args {
@@ -138,7 +138,7 @@ func TestComposedCPUMatVecSpeed(t *testing.T) {
 			n := sp.n
 			run := func() {
 				if threads <= 1 || n <= 1 {
-					callAll(code, &args, sp, coords, moving)
+					callAll(code, args, sp, coords, moving)
 					return
 				}
 				var wg sync.WaitGroup
@@ -146,8 +146,7 @@ func TestComposedCPUMatVecSpeed(t *testing.T) {
 					wg.Add(1)
 					go func() {
 						defer wg.Done()
-						a := args
-						callRange(code, &a, sp, coords, moving, w*n/threads, (w+1)*n/threads)
+						callRange(code, argCopy(args), sp, coords, moving, w*n/threads, (w+1)*n/threads)
 					}()
 				}
 				wg.Wait()

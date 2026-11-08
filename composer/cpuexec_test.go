@@ -293,12 +293,12 @@ func runCPUWorkers(cpuOn cpuArm, codes []Code, x []float32, n int, planes [3][]u
 		if err != nil {
 			return nil, fmt.Errorf("mapping %s: %w", c.Name, err)
 		}
-		var args cpu.Args
-		base := unsafe.Pointer(&args)
+		args := &argBlocks(1)[0]
+		base := unsafe.Pointer(args)
 		var coords []CallArg
 		var moving []movingArg
 		for _, a := range c.Args {
-			if a.Field < 0 || uintptr(a.Field)+8 > unsafe.Sizeof(args) {
+			if a.Field < 0 || uintptr(a.Field)+8 > unsafe.Sizeof(*args) {
 				code.Close()
 				return nil, fmt.Errorf("%s: a call word at %d past the argument block", c.Name, a.Field)
 			}
@@ -358,7 +358,7 @@ func runCPUWorkers(cpuOn cpuArm, codes []Code, x []float32, n int, planes [3][]u
 				moving = append(moving, movingArg{a, *slot, elem})
 			}
 		}
-		callAll(code, &args, spaceOf(&c, workers), coords, moving)
+		callAll(code, args, spaceOf(&c, workers), coords, moving)
 		code.Close()
 	}
 	runtime.KeepAlive(keep)
@@ -372,6 +372,25 @@ func runCPUWorkers(cpuOn cpuArm, codes []Code, x []float32, n int, planes [3][]u
 
 // callAll calls code once at each coordinate of the calls' space calls, its
 // coordinate words and its moving addresses set for each.
+// argBlocks is n call word blocks seen as the cpu.Args a kernel takes,
+// allocated as words: a call word may be a count, or an address past a
+// buffer's end, which in one of cpu.Args' pointer fields the collector takes
+// for a bad pointer (cpudev's argBlocks).
+func argBlocks(n int) []cpu.Args {
+	w := make([]argWords, n)
+	return unsafe.Slice((*cpu.Args)(unsafe.Pointer(&w[0])), n)
+}
+
+// argWords is a call word block: cpu.Args' layout, as words.
+type argWords [(unsafe.Sizeof(cpu.Args{}) + 7) / 8]uint64
+
+// argCopy is a word block of args' words, for a worker of its own.
+func argCopy(args *cpu.Args) *cpu.Args {
+	a := &argBlocks(1)[0]
+	*(*argWords)(unsafe.Pointer(a)) = *(*argWords)(unsafe.Pointer(args))
+	return a
+}
+
 func callAll(code *cpu.Code, args *cpu.Args, sp callSpace, coords []CallArg, moving []movingArg) {
 	callRange(code, args, sp, coords, moving, 0, sp.n)
 }

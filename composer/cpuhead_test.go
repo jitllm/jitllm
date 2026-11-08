@@ -11,7 +11,6 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/format/quant"
@@ -132,12 +131,12 @@ func runCPUGraph(cpuOn cpuArm, codes []Code, g *graph.Graph, rows int, x []float
 		if err != nil {
 			return nil, fmt.Errorf("mapping %s: %w", c.Name, err)
 		}
-		var args cpu.Args
-		base := unsafe.Pointer(&args)
+		args := &argBlocks(1)[0]
+		base := unsafe.Pointer(args)
 		var coords []CallArg
 		var moving []movingArg
 		for _, a := range c.Args {
-			if a.Field < 0 || uintptr(a.Field)+8 > unsafe.Sizeof(args) {
+			if a.Field < 0 || uintptr(a.Field)+8 > unsafe.Sizeof(*args) {
 				code.Close()
 				return nil, fmt.Errorf("%s: a call word at %d past the argument block", c.Name, a.Field)
 			}
@@ -192,7 +191,7 @@ func runCPUGraph(cpuOn cpuArm, codes []Code, g *graph.Graph, rows int, x []float
 				moving = append(moving, movingArg{a, *slot, elem})
 			}
 		}
-		callAll(code, &args, spaceOf(&c, harnessWorkers), coords, moving)
+		callAll(code, args, spaceOf(&c, harnessWorkers), coords, moving)
 		code.Close()
 	}
 	runtime.KeepAlive(keep)
