@@ -715,8 +715,8 @@ func TestComposedBlocksServe(t *testing.T) {
 										t.Fatalf("the prompt ran on the matrix unit with no part formed at tile %d", a.tile)
 									}
 									// Every form was built at the placement or PrepHead.
-									if st.FormedAtStep != 0 {
-										t.Fatalf("%d composed part(s) formed at a step, not at the placement", st.FormedAtStep)
+									if st.UnformedAtStep != 0 {
+										t.Fatalf("%d composed part(s) formed at a step, not at the placement", st.UnformedAtStep)
 									}
 									// Every part the arm asks for served, and none declined: a
 									// head the device does not hold (it did not fit beside the

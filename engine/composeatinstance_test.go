@@ -26,7 +26,7 @@ func composedNothingSince(t testing.TB, g *gpu.GPU, was [2]int, phase string) {
 	t.Helper()
 	if now := cardComposed(g); now != was {
 		t.Errorf("%s: the card's composer formed %d requests and compiled %d parts (%v, %s)", phase,
-			now[0]-was[0], now[1]-was[1], g.Stats().FormedAtStepParts, g.Err())
+			now[0]-was[0], now[1]-was[1], g.Stats().UnformedAtStepParts, g.Err())
 	}
 }
 
@@ -134,7 +134,7 @@ func TestComposesOnlyWithAnInstance(t *testing.T) {
 
 // TestComposesOnlyWithAnInstanceOnACard is TestComposesOnlyWithAnInstance
 // with the instance on a card: sessions' prompts and tokens, alone and stepped
-// together, form no part on the card at a step (gpu.Stats.FormedAtStep) and
+// together, form no part on the card at a step (gpu.Stats.UnformedAtStep) and
 // ask no device -- the CPU or a card the instance runs on, by its account --
 // for a form; the card formed its parts when the instance was placed.
 func TestComposesOnlyWithAnInstanceOnACard(t *testing.T) {
@@ -163,7 +163,7 @@ func TestComposesOnlyWithAnInstanceOnACard(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer pool.Unserve(in)
-			f0, k0 := g.Stats().FormedAtStep, cardComposed(g)
+			f0, k0 := g.Stats().UnformedAtStep, cardComposed(g)
 			// The placement composed: a count that never moves would pass
 			// every step below whatever it formed.
 			if k0[0] == 0 || k0[1] == 0 {
@@ -225,8 +225,8 @@ func TestComposesOnlyWithAnInstanceOnACard(t *testing.T) {
 					}
 				}
 			}
-			if n := g.Stats().FormedAtStep - f0; n != 0 {
-				t.Errorf("the card formed %d parts at a step (%v)", n, g.Stats().FormedAtStepParts)
+			if n := g.Stats().UnformedAtStep - f0; n != 0 {
+				t.Errorf("the card formed %d parts at a step (%v)", n, g.Stats().UnformedAtStepParts)
 			}
 			composedNothingSince(t, g, k0, "sessions' prompts and steps")
 			for dev, a := range asks {

@@ -92,8 +92,8 @@ func TestStreamRowsServeOnTheCard(t *testing.T) {
 				case st.StepDeclines()[nn.DeclineEmbedStreams] != 1:
 					t.Fatalf("the prompt's rows declined %d times for %q, want once",
 						st.StepDeclines()[nn.DeclineEmbedStreams], nn.DeclineName(int(nn.DeclineEmbedStreams)))
-				case st.FormedAtStep != 0:
-					t.Fatalf("%d composed part(s) formed at a step, not at the placement", st.FormedAtStep)
+				case st.UnformedAtStep != 0:
+					t.Fatalf("%d composed part(s) formed at a step, not at the placement", st.UnformedAtStep)
 				}
 				worst := 0.0
 				for i := range got {

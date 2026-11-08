@@ -603,8 +603,8 @@ func TestStatedTowerRunsOnTheCard(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if st := g.Stats(); st.FormedAtStep != 0 {
-				t.Fatalf("%d of the tower's parts formed at a step on %s, not at the placement", st.FormedAtStep, dev)
+			if st := g.Stats(); st.UnformedAtStep != 0 {
+				t.Fatalf("%d of the tower's parts formed at a step on %s, not at the placement", st.UnformedAtStep, dev)
 			}
 			var num, den float64
 			for i := range want {

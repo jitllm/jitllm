@@ -59,8 +59,8 @@ func towerRunsOnTheCard(t *testing.T, m *model.Model, img image.Image, ref []flo
 				if err != nil {
 					t.Fatal(err)
 				}
-				if st := g.Stats(); st.FormedAtStep != 0 {
-					t.Fatalf("%d of the tower's parts formed at a step on %s, not at the placement", st.FormedAtStep, dev)
+				if st := g.Stats(); st.UnformedAtStep != 0 {
+					t.Fatalf("%d of the tower's parts formed at a step on %s, not at the placement", st.UnformedAtStep, dev)
 				}
 				e, _ := nmseOf(got, want)
 				t.Logf("%s: %d of %d tower blocks on the card: NMSE %.3e from %s", dev, blocks, nb, e, what)

@@ -385,8 +385,8 @@ func TestQwen4ExpServesComposed(t *testing.T) {
 					t.Fatalf("%d block steps served and %d declined, want %d served and the rest declined for no graph (%s)",
 						served, declined, n, declinesOf(st))
 				}
-				if st.FormedAtStep != 0 {
-					t.Fatalf("%d composed part(s) formed at a step, not at the placement", st.FormedAtStep)
+				if st.UnformedAtStep != 0 {
+					t.Fatalf("%d composed part(s) formed at a step, not at the placement", st.UnformedAtStep)
 				}
 				worst := 0.0
 				for i := range got {

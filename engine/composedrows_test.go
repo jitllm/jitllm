@@ -210,7 +210,7 @@ func composedRowsServed(t *testing.T, m *model.Model, st gpu.Stats) {
 		t.Fatalf("the composer served %d block steps of %d blocks and %d heads, and declined %d and %d (%s; last error %q)",
 			nb, m.Cfg.NLayer, nh, db, dh, declinesOf(st), st.LastErr)
 	}
-	t.Logf("the composer served %d block steps and %d heads of the ragged steps, %d formed at a step", nb, nh, st.FormedAtStep)
+	t.Logf("the composer served %d block steps and %d heads of the ragged steps, %d formed at a step", nb, nh, st.UnformedAtStep)
 }
 
 // composedRowsPart is the first row and token where got parts from want past

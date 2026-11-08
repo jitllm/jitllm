@@ -759,9 +759,10 @@ Stated by the user, and the shape every entry point takes:
    at runtime** -- never in a prefill, a token or a draw, and never because a
    session opened (`engine.TestComposesOnlyWithAnInstance`,
    `Instance.Account(dev).Asks`, the CPU's as a card's; a card's
-   `FormedAtStep`). Each device composes only inside a placement call, and
+   `UnformedAtStep`). Each device composes only inside a placement call, and
    a form asked at a step is declined unformed
-   (`engine.TestTheCPUDeviceComposesNothingAtAStep`; a card's servedFor).
+   (`engine.TestTheCPUDeviceComposesNothingAtAStep`,
+   `gpu.TestTheCardComposesNothingAtAStep`).
 4. **A session is a conversation's history** -- its own KV pages, recurrent
    state, positions, logits and device view (`engine.Session`). Opening one
    composes nothing.
