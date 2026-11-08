@@ -3684,15 +3684,6 @@ func expertWidth(f *jlm.File, cfg *Config) int {
 	return 0
 }
 
-// f32Bytes is a float32 slice addressed as the bytes a kernel reads: the same
-// memory, no copy.
-func f32Bytes(v []float32) []byte {
-	if len(v) == 0 {
-		return nil
-	}
-	return unsafe.Slice((*byte)(unsafe.Pointer(&v[0])), len(v)*4)
-}
-
 // BidirAt reports that a picture's rows see each other in layer li's
 // attention.
 func (c *Config) BidirAt(li int) bool { return len(c.bidir) == 0 || c.bidir[li] }

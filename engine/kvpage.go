@@ -766,37 +766,6 @@ func kvMigBufs(kvl kvLayout, n int) (k, v, fk, fv []float32) {
 	return k, v, fk, fv
 }
 
-// migrateKVAs runs move between a history's own rows and the float32 a device
-// holds: a binary16 or q8 history leaves widened and comes back narrowed
-// through the CPU device's composed conversions (cpuKV). A binary16 history
-// returns its halves bit for bit. A q8 history leaves as d*q; quantized
-// again, each element's code comes back and each scale within an ulp (the
-// block's amax widens to 127*d), so a history that travels and returns keeps
-// its rows, and what the device wrote while it held the block is quantized
-// as the CPU's history would hold it. The device holds float32 pages: a q8
-// cache resident on a device is not implemented (kvtype.go).
-func (s *Instance) migrateKVAs(kvl kvLayout, n int, k, v, fk, fv []float32, toDevice bool, move func() bool) bool {
-	rows := n * kvl.nKV
-	own := func(x []float32) []byte {
-		return unsafe.Slice((*byte)(unsafe.Pointer(&x[0])), rows*nn.KVRowBytes(kvl.fmt, kvl.headDim))
-	}
-	conv := kvl.fmt != nn.KVF32 && rows > 0
-	if toDevice && conv {
-		if !s.convertKV(false, kvl.headDim, fk[:rows*kvl.headDim], own(k)) || !s.convertKV(false, kvl.headDim, fv[:rows*kvl.headDim], own(v)) {
-			return false
-		}
-	}
-	if !move() {
-		return false
-	}
-	if !toDevice && conv {
-		if !s.convertKV(true, kvl.headDim, fk[:rows*kvl.headDim], own(k)) || !s.convertKV(true, kvl.headDim, fv[:rows*kvl.headDim], own(v)) {
-			return false
-		}
-	}
-	return true
-}
-
 // migrateRec moves one placed linear block's running summary between the host
 // arrays and the device: migrateKV's twin, and every release path must call
 // both or the host resumes from a summary that never saw a token.

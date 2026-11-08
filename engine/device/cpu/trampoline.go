@@ -2,8 +2,6 @@
 
 package cpu
 
-import "unsafe"
-
 // Args is what a generated kernel reads. The kernel receives one pointer — in
 // RDI on amd64, x0 on arm64 — and reaches everything through this struct at
 // fixed offsets. The struct itself is architecture-neutral: every field is
@@ -97,11 +95,3 @@ type Args struct {
 //
 //go:noescape
 func callKernel(code *byte, args *Args)
-
-// f32bytes reinterprets a float32 slice as the *byte the Args weight pointer
-// expects. The attention kernels read the KV cache, which is float32, through
-// the same field the quantized kernels use for packed bytes.
-//
-// It lives here rather than beside one architecture's kernels so tests that
-// use it compile on both.
-func f32bytes(s []float32) *byte { return (*byte)(unsafe.Pointer(&s[0])) }

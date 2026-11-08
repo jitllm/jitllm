@@ -57,9 +57,9 @@ func TestACardServesAModelAgainAfterARelease(t *testing.T) {
 				for i := range l {
 					worst = math.Max(worst, math.Abs(float64(l[i]-first[i])))
 				}
-				if worst > 1e-4 || argmaxOf(l) != argmaxOf(first) {
+				if worst > 1e-4 || Greedy(l) != Greedy(first) {
 					t.Fatalf("placement %d after %d releases: argmax %d against the first's %d, logits apart by up to %.3g",
-						run+1, run, argmaxOf(l), argmaxOf(first), worst)
+						run+1, run, Greedy(l), Greedy(first), worst)
 				}
 				t.Logf("placement %d after %d releases: %d blocks, the first's logits (apart by up to %.3g)", run+1, run, placed, worst)
 			}

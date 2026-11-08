@@ -1436,7 +1436,7 @@ func kvPagesRelocateWithTheLayer(t *testing.T, path string, kt model.KVType, w *
 		sum = 0
 		// A binary16 history travels converted, widened on its way out and
 		// narrowed home through the CPU device's composed conversions
-		// (migrateKVAs): exact both ways, so the logits are held bit for bit
+		// (moveKV): exact both ways, so the logits are held bit for bit
 		// at every width.
 		s := testInstance(t, m, maxSeq, WithKVType(kt), withKVPage(page), w.opt())
 		defer s.Close()

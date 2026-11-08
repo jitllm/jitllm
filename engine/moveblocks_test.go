@@ -331,7 +331,7 @@ func TestBlocksMoveToADeviceAddedLater(t *testing.T) {
 
 // TestABinary16HistoryMovesToTheDevice: a session that built its history on
 // the host in the f16 cache moves onto a device and back mid-sequence -- its
-// rows widened on the way up and narrowed home (migrateKVAs) -- and the logits
+// rows widened on the way up and narrowed home (moveKV) -- and the logits
 // stay in the band of a host run that never moved. A host-loaded model need not
 // give up the f16 cache to keep its plasticity.
 func TestABinary16HistoryMovesToTheDevice(t *testing.T) {
