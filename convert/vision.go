@@ -26,7 +26,7 @@ func towerMatrix(r jlm.Role) bool {
 	switch r {
 	case jlm.RoleVMNStem, jlm.RoleVMNConvExp, jlm.RoleVMNConvPwl, jlm.RoleVMNPwExp,
 		jlm.RoleVMNPwProj, jlm.RoleVMNFusionExp, jlm.RoleVMNFusionProj,
-		jlm.RoleVPatchEmbd, jlm.RoleVAttnQ, jlm.RoleVAttnK, jlm.RoleVAttnV, jlm.RoleVAttnOut, jlm.RoleVFC1, jlm.RoleVFC2, jlm.RoleVFFNGate, jlm.RoleVProj, jlm.RoleVProj2, jlm.RoleVProj3, jlm.RoleVMerge, jlm.RoleVRsKV, jlm.RoleVRsQ, jlm.RoleVRsK, jlm.RoleVRsV, jlm.RoleVRsOut, jlm.RoleVRsProj, jlm.RoleVDsFC1, jlm.RoleVDsFC2, jlm.RoleVMergeConv, jlm.RoleVProjGate, jlm.RoleVProjUp, jlm.RoleVProjDown:
+		jlm.RoleVPatchEmbd, jlm.RoleVPatchEmbd2, jlm.RoleVAttnQ, jlm.RoleVAttnK, jlm.RoleVAttnV, jlm.RoleVAttnOut, jlm.RoleVFC1, jlm.RoleVFC2, jlm.RoleVFFNGate, jlm.RoleVProj, jlm.RoleVProj2, jlm.RoleVProj3, jlm.RoleVMerge, jlm.RoleVRsKV, jlm.RoleVRsQ, jlm.RoleVRsK, jlm.RoleVRsV, jlm.RoleVRsOut, jlm.RoleVRsProj, jlm.RoleVDsFC1, jlm.RoleVDsFC2, jlm.RoleVMergeConv, jlm.RoleVProjGate, jlm.RoleVProjUp, jlm.RoleVProjDown:
 		return true
 	}
 	return false
@@ -230,7 +230,7 @@ func f32ToF16(f float32) uint16 {
 // A still image is fed to both planes, so both read the same im2col output and
 // x*W0 + x*W1 = x*(W0+W1). This is exact only for a still image: two video
 // frames differ, so the second plane stays in the container beside the sum
-// (RoleVPatchEmbd, index 1), and a video's pair of frames runs as
+// (RoleVPatchEmbd2), and a video's pair of frames runs as
 // x0*(W0+W1) + (x1-x0)*W1 = x0*W0 + x1*W1.
 func foldPatchPlanes(s *jlm.Source) error {
 	var base *jlm.Tensor
@@ -261,6 +261,7 @@ func foldPatchPlanes(s *jlm.Source) error {
 			return fmt.Errorf("convert: %s + %s: %w", base.Name, t.Name, err)
 		}
 		base.Data = sum
+		t.Role, t.Index = jlm.RoleVPatchEmbd2, -1
 		keep = append(keep, *t)
 		folded++
 	}

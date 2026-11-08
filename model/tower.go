@@ -1369,6 +1369,9 @@ func lowerValuesWith(b *graph.Builder, t *jlm.Tower, p *jlm.Program, in []graph.
 				graph.Attrs{Span: int(op.Span), Offset: int(op.Offset)}, nil, nil)[0]
 		case jlm.TOpAdd:
 			out = b.Add(ins[0], ins[1])
+		case jlm.TOpSub:
+			out = b.Emit(graph.OpMap, ins, []graph.Result{{Name: "diff", Width: width(ins[0])}}, nil,
+				graph.Attrs{Fn: graph.MapSub}, nil, nil)[0]
 		case jlm.TOpLayerNorm:
 			out = b.LayerNorm(ins[0], op.Bind[0], float64(op.Eps), op.Bind[1:]...)
 		case jlm.TOpRMSNorm:

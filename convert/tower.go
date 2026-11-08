@@ -647,16 +647,77 @@ func qwenVLTower(s *jlm.Source, kind qwenVLKind) (*jlm.Tower, error) {
 	}
 	if kind == qwen3VL {
 		// The table's rows at each patch's cell, in the patches' order.
-		t.Entry.Ops = append(t.Entry.Ops,
-			jlm.TowerOp{Code: jlm.TOpPosResample, Bind: []jlm.Role{jlm.RoleVPosEmbd}, Span: side, Width: merge,
-				Chain: jlm.ResampleAligned, Filter: jlm.TapsLinear},
-			jlm.TowerOp{Code: jlm.TOpAdd, In: []uint16{2, 3}})
+		pos := jlm.TowerOp{Code: jlm.TOpPosResample, Bind: []jlm.Role{jlm.RoleVPosEmbd}, Span: side, Width: merge,
+			Chain: jlm.ResampleAligned, Filter: jlm.TapsLinear}
+		t.Entry.Ops = append(t.Entry.Ops, pos, jlm.TowerOp{Code: jlm.TOpAdd, In: []uint16{2, 3}})
 		t.Entry.Out = 4
+		if has[jlm.RoleVPatchEmbd2] {
+			if t.Video, err = qwen3vlVideo(s, int32(v.PatchSize), merge, bias(jlm.RoleVPatchEmbd, jlm.RoleVPatchBias), pos); err != nil {
+				return nil, err
+			}
+		}
 	}
 	if err := t.Valid(); err != nil {
 		return nil, fmt.Errorf("convert: qwen2vl: %w", err)
 	}
 	return t, nil
+}
+
+// Qwen3-VL's published video_preprocessor_config: two frames sampled a
+// second of a video at 24 frames a second where none is stated, 4 to 768 of
+// them, the frames' area together between size.shortest_edge and
+// size.longest_edge.
+const (
+	qwen3vlVideoFps        = 2
+	qwen3vlVideoDefaultFps = 24
+	qwen3vlVideoMinFrames  = 4
+	qwen3vlVideoMaxFrames  = 768
+	qwen3vlVideoMinPixels  = 4096
+	qwen3vlVideoMaxPixels  = 25165824
+)
+
+// qwen3vlVideo is how Qwen3-VL's tower reads a video, as transformers'
+// Qwen3VLVideoProcessor and Qwen3VLProcessor do: frames sampled at Fps,
+// resized together by torchvision's antialiased bicubic on the bytes (its
+// smart_resize over the frame count) and normalised as a picture is; each
+// pair of frames the conv3d's two temporal planes -- the first frame against
+// their sum, the frames' difference against the second plane -- with the
+// picture's position table; in the prompt "<|vision_start|>", then each
+// pair's "<t seconds>" and its picture span, then "<|vision_end|>".
+func qwen3vlVideo(s *jlm.Source, patch, merge int32, embd []jlm.Role, pos jlm.TowerOp) (*jlm.Video, error) {
+	v := s.Vision
+	vid := &jlm.Video{
+		Fps: qwen3vlVideoFps, DefaultFps: qwen3vlVideoDefaultFps,
+		MinFrames: qwen3vlVideoMinFrames, MaxFrames: qwen3vlVideoMaxFrames,
+		Pre: []jlm.PreStep{
+			{Kind: jlm.PreVideoResize, Ints: []int32{patch * merge, qwen3vlVideoMinPixels, qwen3vlVideoMaxPixels,
+				int32(jlm.FilterPILBicubic), int32(jlm.PrecTorch), 2}},
+			{Kind: jlm.PreNormalize, Floats: []float32{v.Mean[0], v.Mean[1], v.Mean[2], v.Std[0], v.Std[1], v.Std[2]}},
+		},
+		// The first frame's pixels are value 0, the second's value 1.
+		Entry: jlm.Program{NIn: 2, Out: 9, Ops: []jlm.TowerOp{
+			{Code: jlm.TOpPatchify, In: []uint16{0}, Span: patch, Width: merge},
+			{Code: jlm.TOpPatchify, In: []uint16{1}, Span: patch, Width: merge},
+			{Code: jlm.TOpSub, In: []uint16{3, 2}},
+			{Code: jlm.TOpLinear, In: []uint16{2}, Bind: embd},
+			{Code: jlm.TOpLinear, In: []uint16{4}, Bind: []jlm.Role{jlm.RoleVPatchEmbd2}},
+			{Code: jlm.TOpAdd, In: []uint16{5, 6}},
+			pos,
+			{Code: jlm.TOpAdd, In: []uint16{7, 8}},
+		}},
+		StampBefore: "<", StampAfter: " seconds>", StampDigits: 1,
+	}
+	var err error
+	if vid.Before, err = markerIDs(s, "<|vision_start|>"); err != nil {
+		return nil, err
+	}
+	if vid.After, err = markerIDs(s, "<|vision_end|>"); err != nil {
+		return nil, err
+	}
+	if err := vid.Valid(); err != nil {
+		return nil, fmt.Errorf("convert: qwen3vl: %w", err)
+	}
+	return vid, nil
 }
 
 // GLM-4V's bounds on a picture's area as its published preprocessor_config
