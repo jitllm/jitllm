@@ -240,6 +240,9 @@ type Config struct {
 	geoms     []jlm.Geom
 	mixed     bool
 	localNRot int
+	// ownGeoms says the blocks state geometries of their own (setGeoms),
+	// where mixed counts a marker head's too.
+	ownGeoms bool
 	// VNorm RMSNorms each head of v with no weight before it is cached
 	// (jlm.Flag2VNorm, Gemma 4).
 	VNorm bool
@@ -292,6 +295,21 @@ type Config struct {
 	// the same block input and adds both into it. RMSEps is the LayerNorm's
 	// epsilon when LayerNorm is set.
 	LayerNorm, Parallel bool
+
+	// Trunk is how many blocks come before a marker head's (jlm.Flag2HeadBlocks),
+	// NLayer where there is none; Head is the head blocks' own config, nil for
+	// none. Every per-block accessor answers a head block from Head.
+	Trunk int
+	Head  *Config
+}
+
+// at is the config block li runs at: Head for a marker head's block, c
+// otherwise.
+func (c *Config) at(li int) *Config {
+	if c.Head != nil && li >= c.Trunk && li < c.NLayer {
+		return c.Head
+	}
+	return c
 }
 
 // RopeAt reports whether layer il rotates q and k at all.
@@ -299,6 +317,9 @@ type Config struct {
 // Roping a NoPE layer anyway is exact at position 0, where the rotation is the
 // identity, and wrong after it.
 func (c *Config) RopeAt(il int) bool {
+	if h := c.at(il); h != c {
+		return h.RopeAt(il)
+	}
 	if c.NoPosEnc {
 		return false
 	}
@@ -368,6 +389,9 @@ func (c *Config) AttnTemp(il, pos int) float64 {
 // so at period 6 layers 0..4 are local and layer 5 is global; under
 // SWAGlobalFirst layer 0 is global and 1..5 local.
 func (c *Config) SWA(il int) bool {
+	if h := c.at(il); h != c {
+		return h.SWA(il)
+	}
 	if c.SWAGlobalFirst {
 		return c.SWAWindow > 0 && c.SWAPeriod > 1 && il%c.SWAPeriod != 0
 	}
@@ -463,6 +487,11 @@ func (c *Config) CompAt(li int) (jlm.CompKind, int) {
 // HeadDimAt, NKVHeadAt and NRotAt.
 func (c *Config) MixedGeom() bool { return c.mixed }
 
+// OwnGeoms reports that the blocks state geometries of their own
+// (jlm.Config.Geoms), the sliding ones turning by the second table as their
+// own; a marker head's geometry, its blocks' set's, is not one.
+func (c *Config) OwnGeoms() bool { return c.ownGeoms }
+
 // setGeoms takes the blocks' own geometries, gs one per block or none.
 func (c *Config) setGeoms(gs []jlm.Geom) {
 	c.geoms, c.mixed, c.localNRot = gs, false, 0
@@ -472,6 +501,7 @@ func (c *Config) setGeoms(gs []jlm.Geom) {
 			c.localNRot = max(c.localNRot, c.NRotAt(li))
 		}
 	}
+	c.ownGeoms = c.mixed
 }
 
 // LocalNRot is the rotary width the blocks reading the second table
@@ -486,6 +516,9 @@ func (c *Config) LocalNRot() int {
 // HeadDimAt, NKVHeadAt and NRotAt are layer li's attention geometry: the
 // block's own where the container states one, the model's otherwise.
 func (c *Config) HeadDimAt(li int) int {
+	if h := c.at(li); h != c {
+		return h.HeadDim
+	}
 	if li >= 0 && li < len(c.geoms) {
 		return int(c.geoms[li].HeadDim)
 	}
@@ -494,14 +527,24 @@ func (c *Config) HeadDimAt(li int) int {
 
 // NKVHeadAt is layer li's kv head count (see HeadDimAt).
 func (c *Config) NKVHeadAt(li int) int {
+	if h := c.at(li); h != c {
+		return h.NKVHead
+	}
 	if li >= 0 && li < len(c.geoms) {
 		return int(c.geoms[li].NKVHead)
 	}
 	return c.NKVHead
 }
 
+// NHeadAt is layer li's query head count: the model's, or a marker head's
+// block's own.
+func (c *Config) NHeadAt(li int) int { return c.at(li).NHead }
+
 // NRotAt is layer li's rotary width (see HeadDimAt).
 func (c *Config) NRotAt(li int) int {
+	if h := c.at(li); h != c {
+		return h.NRot
+	}
 	if li >= 0 && li < len(c.geoms) {
 		return int(c.geoms[li].NRot)
 	}
@@ -518,10 +561,10 @@ func (c *Config) KVDimAt(li int) int {
 }
 
 // GQAAt is GQA at layer li's geometry.
-func (c *Config) GQAAt(li int) int { return c.NHead / c.NKVHeadAt(li) }
+func (c *Config) GQAAt(li int) int { return c.NHeadAt(li) / c.NKVHeadAt(li) }
 
 // QDimAt is the query (and the attention output) width at layer li.
-func (c *Config) QDimAt(li int) int { return c.NHead * c.HeadDimAt(li) }
+func (c *Config) QDimAt(li int) int { return c.NHeadAt(li) * c.HeadDimAt(li) }
 
 // MaxHeadDim, MaxKVDim, MaxQDim and MaxNRot are the widest of the blocks'
 // geometries: what a buffer that serves every layer is sized by.
@@ -530,6 +573,9 @@ func (c *Config) MaxHeadDim() int {
 	for li := range c.geoms {
 		m = max(m, c.HeadDimAt(li))
 	}
+	if c.Head != nil {
+		m = max(m, c.Head.HeadDim)
+	}
 	return m
 }
 
@@ -537,6 +583,9 @@ func (c *Config) MaxHeadDim() int {
 // to KVSource(li)'s history (Gemma 4's E2B/E4B). A recurrent block in the
 // shared run keeps no history and is its own.
 func (c *Config) KVShared(li int) bool {
+	if h := c.at(li); h != c {
+		return h.KVShared(li)
+	}
 	return c.NKVShared != 0 && li >= c.NLayer-c.NKVShared && c.LayerKind(li).Attends()
 }
 
@@ -562,6 +611,9 @@ func (c *Config) KVSource(li int) int {
 // NFFNAt is block li's feed-forward width: its own where the container
 // states one, NFFN otherwise.
 func (c *Config) NFFNAt(li int) int {
+	if h := c.at(li); h != c {
+		return h.NFFN
+	}
 	if li >= 0 && li < len(c.geoms) {
 		return int(c.geoms[li].NFFN)
 	}
@@ -573,6 +625,9 @@ func (c *Config) MaxNFFN() int {
 	m := c.NFFN
 	for li := range c.geoms {
 		m = max(m, c.NFFNAt(li))
+	}
+	if c.Head != nil {
+		m = max(m, c.Head.NFFN)
 	}
 	return m
 }
@@ -593,11 +648,19 @@ func (c *Config) MaxKVDim() int {
 	for li := range c.geoms {
 		m = max(m, c.NKVHeadAt(li)*c.HeadDimAt(li))
 	}
+	if c.Head != nil {
+		m = max(m, c.Head.KVDim())
+	}
 	return m
 }
 
 // MaxQDim is the query width at the widest head.
-func (c *Config) MaxQDim() int { return c.NHead * c.MaxHeadDim() }
+func (c *Config) MaxQDim() int {
+	if c.Head != nil {
+		return max(c.NHead*c.MaxHeadDim(), c.Head.NHead*c.Head.HeadDim)
+	}
+	return c.NHead * c.MaxHeadDim()
+}
 
 // MaxNRot is the widest rotary any block turns.
 func (c *Config) MaxNRot() int {
@@ -645,6 +708,9 @@ func (c *Config) QKNormShape() (nq, nk, wq, wk int) {
 // QKNormShapeAt is QKNormShape at layer li's geometry (HeadDimAt). A split
 // geometry never has the whole-projection norm (configFrom refuses it).
 func (c *Config) QKNormShapeAt(li int) (nq, nk, wq, wk int) {
+	if h := c.at(li); h != c {
+		return h.QKNormShapeAt(li)
+	}
 	if c.QKNormWide {
 		return c.QKNormShape()
 	}
@@ -656,7 +722,10 @@ func (c *Config) QKNormShapeAt(li int) (nq, nk, wq, wk int) {
 // derivation the converter, the reader, the host and the device all read. The
 // tensors are there exactly when it is true -- jlm.Open refuses a container
 // where they are not.
-func (c *Config) QKNormAt(li int) bool { return jlm.QKNormOn(c.QKNorm, c.LayerKind(li)) }
+func (c *Config) QKNormAt(li int) bool {
+	h := c.at(li)
+	return jlm.QKNormOn(h.QKNorm, h.LayerKind(li))
+}
 
 // LayerKind is what layer i actually is. A model with no per-layer map is
 // ordinary attention all the way down, which is every architecture but one.
@@ -664,6 +733,9 @@ func (c *Config) QKNormAt(li int) bool { return jlm.QKNormOn(c.QKNorm, c.LayerKi
 // The container states it per layer; it is never derived from an architecture
 // name.
 func (c *Config) LayerKind(i int) jlm.LayerKind {
+	if h := c.at(i); h != c {
+		return h.LayerKind(i)
+	}
 	if i < 0 || i >= len(c.LayerKinds) {
 		return jlm.LayerFullAttn
 	}
@@ -788,6 +860,7 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 		KeyValue:         c.Flags2.Has(jlm.Flag2KeyValue),
 		QUnitNorm:        c.Flags2.Has(jlm.Flag2QUnitNorm),
 		OutUnrotated:     c.Flags2.Has(jlm.Flag2OutUnrotated),
+		SWAGlobalFirst:   c.Flags2.Has(jlm.Flag2SWAGlobalFirst),
 		KVLoraRank:       int(c.KVLoraRank),
 		HeadDimV:         int(c.HeadDimV),
 		ExpertSigmoid:    c.Flags.Has(jlm.FlagExpertSigmoid),
@@ -919,7 +992,35 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 	if out.NLayer == 0 || out.NEmbd == 0 || out.NHead == 0 {
 		return nil, fmt.Errorf("model: %s: the container's config is empty", out.Arch)
 	}
+	out.Trunk = out.NLayer
+	if c.Flags2.Has(jlm.Flag2HeadBlocks) {
+		h, err := headConfigOf(c, out)
+		if err != nil {
+			return nil, err
+		}
+		out.Head, out.NLayer = h, out.NLayer+int(c.DecisionBlocks)
+		out.mixed = out.mixed || h.HeadDim != out.HeadDim || h.NKVHead != out.NKVHead || h.NRot != out.NRot
+	}
 	return out, nil
+}
+
+// headConfigOf is a marker head's blocks as a config (jlm.Flag2HeadBlocks):
+// the container's DecisionHeads heads over the trunk's width, every block
+// pre-norm with LayerNorms at DecisionEps, attending both ways with no
+// position encoding and no window. Its feed-forward width is the head
+// blocks' own, which build reads off their tensors.
+func headConfigOf(c *jlm.Config, trunk *Config) (*Config, error) {
+	n, d := int(c.DecisionHeads), int(c.NEmbd)
+	if c.DecisionBlocks == 0 || n == 0 || d%n != 0 || !(c.DecisionEps > 0) {
+		return nil, fmt.Errorf("model: %s: %d head blocks of %d heads over a %d-wide residual at epsilon %v",
+			trunk.Arch, c.DecisionBlocks, n, d, c.DecisionEps)
+	}
+	hd := d / n
+	return &Config{Arch: trunk.Arch, NLayer: trunk.NLayer + int(c.DecisionBlocks), NEmbd: d, NHead: n, NKVHead: n,
+		HeadDim: hd, HeadDimV: hd, NFFN: trunk.NFFN, NVocab: trunk.NVocab, NCtx: trunk.NCtx, RMSEps: float64(c.DecisionEps),
+		LatentNormEps: float64(c.DecisionEps), EmbdScale: 1, AttnFactor: 1, ResidualScale: 1, LogitScale: 1, ExpertScale: 1,
+		AttnScale: 1 / math.Sqrt(float64(hd)), SSMNormGroups: 1, NonCausal: true, NoPosEnc: true, LayerNorm: true,
+		Trunk: trunk.NLayer}, nil
 }
 
 // tensor is one weight matrix, kept as the raw mapping plus its shape.
@@ -1279,24 +1380,7 @@ func Open(path string, options ...Option) (*Model, error) {
 		m.Close()
 		return nil, &UpgradeRequiredError{Path: path, What: "rotary layout"}
 	}
-	// A block past the trunk that stores a feed-forward reads the activation
-	// a container written before revision 4 does not state for it.
-	if c := m.Container.Config(); c.Revision < 4 && m.storesPast(jlm.RoleFFNUp) {
-		m.Close()
-		return nil, &UpgradeRequiredError{Path: path, What: "head activations"}
-	}
 	return m, nil
-}
-
-// storesPast reports that a block of the container past the trunk's stores r.
-func (m *Model) storesPast(r jlm.Role) bool {
-	c := m.Container.Config()
-	for bi := c.NLayer; bi < m.Container.H.NBlocks; bi++ {
-		if m.Container.Has(r, int32(bi), -1) {
-			return true
-		}
-	}
-	return false
 }
 
 // statesActivations is an UpgradeRequiredError where the container states no
@@ -2453,6 +2537,14 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 		return nil, err
 	}
 	cfg.expWidth = expertWidth(c, cfg)
+	// A marker head's feed-forward is as wide as its blocks store it.
+	if h := cfg.Head; h != nil {
+		e, ok := c.Find(jlm.RoleFFNUp, int32(cfg.Trunk), -1)
+		if !ok {
+			return nil, fmt.Errorf("model: the marker head's block %d stores no feed-forward", cfg.Trunk)
+		}
+		h.NFFN = e.Rows()
+	}
 	if v := c.Vision(); v != nil && v.Tower != nil && len(v.Tower.Taps) > 0 {
 		cfg.DeepTaps = len(v.Tower.Taps)
 		if cfg.DeepTaps > cfg.NLayer {
@@ -2937,7 +3029,7 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 				return nil, err
 			}
 		}
-		if (l.AttnNormB != nil || l.FfnNormB != nil) && !cfg.LayerNorm {
+		if (l.AttnNormB != nil || l.FfnNormB != nil) && !cfg.at(i).LayerNorm {
 			return nil, fmt.Errorf("model: %s: block %d has a norm bias on an RMSNorm model", cfg.Arch, bi)
 		}
 		if l.FfnNormB != nil && l.FfnNorm == nil {
@@ -3013,7 +3105,7 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 			v    []float32
 			want int
 		}{
-			{"attn_sinks", l.Vector(jlm.RoleAttnSinks), cfg.NHead},
+			{"attn_sinks", l.Vector(jlm.RoleAttnSinks), cfg.NHeadAt(i)},
 			{"router bias", l.Vector(jlm.RoleRouterBias), cfg.NExpert},
 			{"expert selection bias", l.Vector(jlm.RoleExpProbsB), cfg.NExpert},
 			{"expert gate bias", l.Vector(jlm.RoleExpGateBias), cfg.NExpert * cfg.NFFNExp},
@@ -3021,7 +3113,7 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 			{"expert down bias", l.Vector(jlm.RoleExpDownBias), cfg.NExpert * cfg.NEmbd},
 			{"attn_norm bias", l.AttnNormB, cfg.NEmbd},
 			{"ffn_norm bias", l.FfnNormB, cfg.NEmbd},
-			{"ffn_up bias", l.Vector(jlm.RoleFFNUpBias), cfg.NFFN},
+			{"ffn_up bias", l.Vector(jlm.RoleFFNUpBias), cfg.NFFNAt(i)},
 			{"ffn_down bias", l.Vector(jlm.RoleFFNDownBias), cfg.NEmbd},
 		} {
 			if b.v != nil && len(b.v) != b.want {
@@ -3703,7 +3795,12 @@ func expertWidth(f *jlm.File, cfg *Config) int {
 
 // BidirAt reports that a picture's rows see each other in layer li's
 // attention.
-func (c *Config) BidirAt(li int) bool { return len(c.bidir) == 0 || c.bidir[li] }
+func (c *Config) BidirAt(li int) bool {
+	if h := c.at(li); h != c {
+		return h.BidirAt(li)
+	}
+	return len(c.bidir) == 0 || c.bidir[li]
+}
 
 // storesAny reports that some block of the container stores one of rs.
 func (m *Model) storesAny(rs ...jlm.Role) bool {

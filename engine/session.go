@@ -79,7 +79,11 @@ type Session struct {
 	// routes is the devices the session's blocks run on (route): its card
 	// view and its calls on the CPU device (lanes, bound by the instance it
 	// leases, bindLanes).
-	routes   [2]route
+	routes [2]route
+	// req is a marker head's request words (MarkScores), mark its readout's
+	// run.
+	req      []uint32
+	mark     embedMode
 	ldRoom   nn.RoomReporter
 	ldSpill  nn.Spiller
 	ldStep   nn.SessionStepper

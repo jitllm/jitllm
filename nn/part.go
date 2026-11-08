@@ -295,7 +295,15 @@ type StreamsDevice interface {
 
 // PoolDevice is a device reading an embedding model's readout: the pooled,
 // unit-length row of a call's n rows of x into out -- with raw, the row
-// before the dense heads -- reporting whether it served it.
+// before the dense heads -- reporting whether it served it; or a marker
+// head's, the scores of the rows the request words req name.
 type PoolDevice interface {
-	Pool(x []float32, n int, out []float32, raw bool) bool
+	Pool(x []float32, n int, req []uint32, out []float32, raw bool) bool
+}
+
+// RequestDevice is a device whose blocks read the step's request words
+// (composer.TableRequest): a marker head's question type. req holds for
+// every call that follows until the next SetRequest.
+type RequestDevice interface {
+	SetRequest(req []uint32)
 }

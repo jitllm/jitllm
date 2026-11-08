@@ -117,6 +117,9 @@ type devSess struct {
 	// pleHost is the rows' per-layer embedding inputs for the next call
 	// (SetLayerInputs) and pleStage their padded staging.
 	pleHost, pleStage []float32
+	// reqHost is the request words the next call's blocks read
+	// (nn.RequestDevice), reqStage them padded to the call's rows.
+	reqHost, reqStage []uint32
 	// markAt and markRoom are, per slot, where the session's rotary marks
 	// sit in the device's arena and how many words they may take
 	// (markArena).

@@ -1512,10 +1512,13 @@ type blockScratch struct {
 	// table's planes (gridtable.go).
 	gridGraph                    *graph.Graph
 	gridPos, gridReq, gridPlanes backend.Buf
-	rec                          nn.RecurrentPlan
-	hx, hcs, hcsSWA              []float32
-	hraw                         []byte
-	hout                         []float32
+	// req is a call's request words (nn.RequestDevice), read where a block
+	// reads composer.TableRequest.
+	req             backend.Buf
+	rec             nn.RecurrentPlan
+	hx, hcs, hcsSWA []float32
+	hraw            []byte
+	hout            []float32
 }
 
 // PrepLayer is prepLayerFor for the zero session: a caller that never attached.
@@ -2743,6 +2746,7 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 	}
 	al(&bs.roff, rows*4)
 	al(&bs.zero, 4)
+	al(&bs.req, (composer.RequestRows+rows)*4)
 	// The per-layer inputs.
 	if p.PLEWidth != 0 {
 		al(&bs.pleIn, rows*p.PLEWidth*4)
@@ -4777,6 +4781,9 @@ func (g *devTier) layersSession(s backend.Session) {
 	// write per-layer embeddings alone.
 	if bs.pleIn != nil && (!embedSrv || p.PLEDim == 0) {
 		w(bs.pleIn, f32b(g.pleRows(R*p.PLEWidth)))
+	}
+	if bs.req != nil && len(g.reqHost) > 0 {
+		w(bs.req, u32b(g.reqWords(composer.RequestRows+R)))
 	}
 	switch {
 	case raxes != nil:

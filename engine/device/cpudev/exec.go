@@ -464,6 +464,7 @@ type Step struct {
 	Pos               int
 	Tok               int32
 	Toks, Faults      bool
+	Req               []uint32
 	History           History
 	Seqs              int
 	Tensors           Tensors
@@ -491,7 +492,7 @@ func (e *Exec) Run(li int, st *Step, b *Bindings) (nn.Decline, error) {
 	r := Row{X: st.X, Stride: st.Stride, CS: st.CS, CSSWA: st.CSSWA, Side: st.Side, Pages: hb.Pages,
 		KeyStart: hb.KeyStart, Pos: st.Pos, PagePos: hb.PagePos, Tok: st.Tok, Toks: st.Toks, RecLi: st.RecLi, Weights: w,
 		Faults: st.Faults, Keys: hb.Keys, Values: hb.Values, RecState: st.RecState, RecConv: st.RecConv, Slot: st.Slot,
-		Entries: hb.Entries, EntryPages: hb.EntryPages}
+		Entries: hb.Entries, EntryPages: hb.EntryPages, Req: st.Req}
 	if err := e.rows.Row(li, cb, &r); err != nil {
 		return nn.DeclineServes, err
 	}

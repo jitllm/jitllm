@@ -66,8 +66,9 @@ func NewPool(dev *Device, steps *nn.Steps, part Part, weights []unsafe.Pointer, 
 
 // Pool reads the pooled, unit-length row of x's n rows into out -- with raw,
 // the row before the dense heads -- reporting whether it served it; a
-// decline is counted by name (nn.PoolDevice).
-func (p *Pool) Pool(x []float32, n int, out []float32, raw bool) bool {
+// decline is counted by name (nn.PoolDevice). req is the request words a
+// marker head's readout reads, nil for a pool's.
+func (p *Pool) Pool(x []float32, n int, req []uint32, out []float32, raw bool) bool {
 	f, why := p.part.Form()
 	if why == nn.DeclineServes && n > len(p.pos)-1 {
 		why = nn.DeclineSessions
@@ -88,6 +89,7 @@ func (p *Pool) Pool(x []float32, n int, out []float32, raw bool) bool {
 	}
 	c.At[SrcCall], c.At[SrcPoolPos], c.At[SrcZero] = unsafe.Pointer(&p.call[0]), unsafe.Pointer(&p.pos[0]),
 		unsafe.Pointer(&p.zero[0])
+	c.At[SrcRequest] = ptr(req)
 	for i := range f.Codes {
 		p.dev.Call(c, &f.Codes[i])
 	}

@@ -30,6 +30,7 @@ type route struct {
 	recrows nn.RecRowsDevice
 	rew     nn.RecRewinder
 	rowk    nn.RecRowKeeper
+	req     nn.RequestDevice
 }
 
 func newRoute(d nn.LayerRunner) route {
@@ -52,7 +53,18 @@ func newRoute(d nn.LayerRunner) route {
 	r.recrows, _ = d.(nn.RecRowsDevice)
 	r.rew, _ = d.(nn.RecRewinder)
 	r.rowk, _ = d.(nn.RecRowKeeper)
+	r.req, _ = d.(nn.RequestDevice)
 	return r
+}
+
+// setRequest hands the step's request words to every device the session's
+// blocks run on (nn.RequestDevice), nil for none.
+func (s *Session) setRequest(req []uint32) {
+	for i := range s.routes {
+		if r := s.routes[i].req; r != nil {
+			r.SetRequest(req)
+		}
+	}
 }
 
 // The routes of a session: the attached device's view, and the CPU's lanes.

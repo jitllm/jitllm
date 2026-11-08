@@ -834,6 +834,18 @@ const (
 	// the query's position before the output projection (a value that is
 	// its rotated key carries the rotation).
 	Flag2OutUnrotated Flags2 = 1 << 10
+	// Flag2HeadBlocks is a marker head whose DecisionBlocks blocks after the
+	// trunk are the model's blocks: pre-norm, LayerNorms at DecisionEps,
+	// DecisionHeads heads attending both ways with no position encoding and
+	// no window, the first adding the question type's row of its
+	// RoleTokenTypes to its input; the trunk's last block closes on the
+	// trunk's final norm (RoleLayerOutNorm), and the model's head scores the
+	// marker rows.
+	Flag2HeadBlocks Flags2 = 1 << 11
+	// Flag2SWAGlobalFirst makes the first layer of each SWAPeriod the one
+	// attending to everything, the rest windowed (ModernBERT's), where the
+	// period's last is otherwise.
+	Flag2SWAGlobalFirst Flags2 = 1 << 12
 )
 
 // Has reports whether every bit of f2 is set.
@@ -1293,8 +1305,9 @@ func (c *Config) GLU() GLU {
 // StatementRevision is the revision of what this converter states: a
 // container written at an older one is upgraded (jitllm upgrade) where the
 // later statements matter to it. Revision 4 states a marker head's block
-// activations after the trunk's.
-const StatementRevision = 4
+// activations after the trunk's, revision 5 a period whose global layer is
+// its first.
+const StatementRevision = 5
 
 // ActQuant is a model's activation quantization.
 type ActQuant uint8
