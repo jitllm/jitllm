@@ -433,8 +433,6 @@ func (l *Lanes) blocks(lo, hi int, x, cs, csSWA []float32, seq, pos []int, own [
 		cb, why := l.e.Block(li)
 		switch {
 		case why != nn.DeclineServes:
-		case cb.Rec && base >= 0 && l.bidir:
-			why = nn.DeclineBidir
 		case cb.Rec:
 			why, err = l.recRows(li, cb, t, x, cs, csSWA, seq, pos, own, base)
 		case own != nil:
@@ -579,6 +577,11 @@ func (l *Lanes) recRows(li int, cb *Block, t Tensors, x, cs, csSWA []float32, se
 			l.e.steps.Whole++
 			return nn.DeclineServes, nil
 		}
+	}
+	if base >= 0 && l.bidir {
+		// A bidirectional chunk's rows each read the whole run (Rows'
+		// runs); the stepped form reads a row's past alone.
+		return nn.DeclineBidir, nil
 	}
 	if n > 1 {
 		l.e.steps.Stepped++

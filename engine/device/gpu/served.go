@@ -2292,14 +2292,21 @@ func (l *layer) pagedHeld() int {
 // weightsHeld says block l holds every matrix and vector its graph binds,
 // as servedBlock binds them.
 func (l *layer) weightsHeld() bool {
+	_, missing := l.missingWeight()
+	return !missing
+}
+
+// missingWeight is the first weight or vector the block's graph binds that
+// the tier does not hold, and whether there is one.
+func (l *layer) missingWeight() (jlm.Role, bool) {
 	for _, o := range l.graph.Ops {
 		for _, w := range o.Weight {
 			if l.roleVector(w.Role) == nil && (w.Rows == 0 || l.roleWeight(w.Role) == nil) {
-				return false
+				return w.Role, true
 			}
 		}
 	}
-	return true
+	return 0, false
 }
 
 // roleBuf is one of a block's vectors on the card.
@@ -2403,6 +2410,9 @@ func (g *devTier) unserved(li int) string {
 		// A tower's windows are each call's (SetKeyRuns, SetRowWindows):
 		// none is staged at a placement.
 		return ""
+	case partNoWeight:
+		r, _ := l.missingWeight()
+		return fmt.Sprintf("block %d: the composer does not serve it on this device (its graph binds %v, which the block does not hold)", li, r)
 	default:
 		return fmt.Sprintf("block %d: the composer does not serve it on this device (%s)", li, nn.DeclineName(int(why)))
 	}

@@ -130,12 +130,20 @@ func (e *Exec) Compose(li int, p nn.BlockSpec) {
 		return
 	}
 	cb.F = f
-	if cb.Rows, err = e.form(p, RowsCap); err != nil {
+	rows := RowsCap
+	if p.Rec && p.Bidir {
+		// A recurrent block attending both ways reads its neighbours across
+		// the run's rows (a centred convolution), which a call of fewer rows
+		// than the run cuts: its rows run in one call, as many as a run
+		// holds.
+		rows = max(rows, p.Run)
+	}
+	if cb.Rows, err = e.form(p, rows); err != nil {
 		cb.RowsWhy = e.comp.Decline(err)
 	}
 	e.composed[li]++
 	if cb.Rows != nil {
-		e.rows.Reserve(RowsCap)
+		e.rows.Reserve(rows)
 	}
 }
 

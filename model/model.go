@@ -540,6 +540,10 @@ func (c *Config) NKVHeadAt(li int) int {
 // block's own.
 func (c *Config) NHeadAt(li int) int { return c.at(li).NHead }
 
+// LayerNormAt says block li normalises by LayerNorm, its biases its own: a
+// marker head's blocks do over a trunk that does not.
+func (c *Config) LayerNormAt(li int) bool { return c.at(li).LayerNorm }
+
 // NRotAt is layer li's rotary width (see HeadDimAt).
 func (c *Config) NRotAt(li int) int {
 	if h := c.at(li); h != c {
