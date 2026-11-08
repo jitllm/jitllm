@@ -1,6 +1,12 @@
 package engine
 
 import (
+	"encoding/base64"
+	"encoding/json"
+	"math"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jitllm/jitllm/format/jlm"
@@ -49,5 +55,99 @@ func TestD1OmniStatesItsAudioTower(t *testing.T) {
 	}
 	if got, want := ag.Blocks[0].Block, m.TowerBase+int(m.Container.Vision().NLayer); got != want {
 		t.Fatalf("the audio's first block is block %d of the model, want %d (after the vision tower's)", got, want)
+	}
+}
+
+// d1OmniOpen is d1-omni converted with its mmproj, opened.
+func d1OmniOpen(t *testing.T) *model.Model {
+	t.Helper()
+	path := testmodels.Path("d1-omni/d1-omni-600M-F16.gguf")
+	mm := testmodels.Path("d1-omni/mmproj-d1-omni-600M-F16.gguf")
+	if !sourcePresent(path, mm) {
+		testmodels.Missing(t, "MODEL MISSING: %s and %s (see docs/testing.md) -- this gate proved nothing", path, mm)
+	}
+	m, err := model.Open(jlmOfPair(t, path, mm))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
+
+// voiceClip is the voice request's clip (testdata/decision/voice.json's
+// one file, a WAV data URL) and its reference's prefix rows' first values.
+func voiceClip(t *testing.T) ([]float32, [][]float64) {
+	t.Helper()
+	var req struct {
+		Files []string `json:"files"`
+	}
+	b, err := os.ReadFile(filepath.Join("testdata", "decision", "voice.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(b, &req); err != nil || len(req.Files) != 1 {
+		t.Fatalf("the voice request: %d files, %v", len(req.Files), err)
+	}
+	_, data, ok := strings.Cut(req.Files[0], ";base64,")
+	if !ok {
+		t.Fatal("the voice request's file is not a base64 data URL")
+	}
+	wav, err := base64.StdEncoding.DecodeString(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clip, err := DecodeWAV(wav)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var g struct {
+		Prefix [][]float64 `json:"prefix_rows"`
+	}
+	b, err = os.ReadFile(filepath.Join("testdata", "decision", "d1-omni.voice.reference.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(b, &g); err != nil {
+		t.Fatal(err)
+	}
+	return clip, g.Prefix
+}
+
+// TestD1OmniHearsAsItsReference encodes the voice request's clip through
+// d1-omni's audio tower on the CPU device and holds the prefix rows to the
+// reference's own code (audio.py over the F16 weights): as many rows, and
+// their first values within an NMSE of 1e-2, the int8 blocks' band. A clip
+// read as silence is the violation, and it must part from the reference.
+func TestD1OmniHearsAsItsReference(t *testing.T) {
+	m := d1OmniOpen(t)
+	defer m.Close()
+	s := testInstance(t, m, 256)
+	defer s.Close()
+	clip, want := voiceClip(t)
+	nmse := func(clip []float32) (float64, int) {
+		rows, err := s.EncodeClip(clip)
+		if err != nil {
+			t.Fatal(err)
+		}
+		d := int(m.Container.Vision().Audio.ProjDim)
+		var num, den float64
+		for r, row := range want {
+			for i, w := range row {
+				if r*d+i >= len(rows) {
+					return math.Inf(1), len(rows) / d
+				}
+				g := float64(rows[r*d+i])
+				num += (g - w) * (g - w)
+				den += w * w
+			}
+		}
+		return num / den, len(rows) / d
+	}
+	e, n := nmse(clip)
+	t.Logf("%d samples into %d prefix rows (the reference's %d), NMSE %.3e", len(clip), n, len(want), e)
+	if n != len(want) || math.IsNaN(e) || !(e < 1e-2) {
+		t.Fatalf("%d rows at NMSE %.3e: past the bound (the reference's %d rows, 1e-2)", n, e, len(want))
+	}
+	if bad, _ := nmse(make([]float32, len(clip))); !(bad > 0.1) {
+		t.Fatalf("silence reads NMSE %.3e: the gate cannot see the clip", bad)
 	}
 }

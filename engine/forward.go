@@ -102,6 +102,10 @@ type Instance struct {
 	// did not compose.
 	tower    *towerRun
 	towerErr error
+	// audio is the instance's run of its model's audio tower (audiorun.go),
+	// as tower is of its vision tower.
+	audio    *towerRun
+	audioErr error
 	// bidirAll makes a mixed prompt's every row one bidirectional run
 	// (bidirRuns): a non-causal decoder's prompt with pictures in it.
 	bidirAll bool
@@ -677,8 +681,14 @@ func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOp
 	// tower run of its own, composed with it (tower.go); one that does not
 	// compose keeps its error for the picture that asks.
 	if c == m.Cfg && m.Tower != nil && s.prepErr() == nil {
-		if s.tower, s.towerErr = s.newTowerRun(); s.towerErr != nil {
+		if s.tower, s.towerErr = s.newTowerRun(m.Tower, m.TowerBase, m.Container.Vision().Tower); s.towerErr != nil {
 			s.tower = nil
+		}
+	}
+	if c == m.Cfg && m.Audio != nil && s.prepErr() == nil {
+		v := m.Container.Vision()
+		if s.audio, s.audioErr = s.newTowerRun(m.Audio, m.TowerBase+int(v.NLayer), v.Audio.Tower); s.audioErr != nil {
+			s.audio = nil
 		}
 	}
 	// Read at construction too, because an embedded caller may never call
@@ -758,7 +768,8 @@ func (s *Instance) Close() error {
 		s.Session = s.own
 	}
 	s.tower.close()
-	s.tower = nil
+	s.audio.close()
+	s.tower, s.audio = nil, nil
 	if s.root {
 		defer func() {
 			if s.owners[routeLanes] != nil {
