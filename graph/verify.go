@@ -234,6 +234,11 @@ func Verify(g *Graph, f Facts) error {
 					}
 				}
 			}
+		case OpFrames:
+			if len(o.In) != 0 || len(o.Out) != 1 || o.Attr.Width < 1 || o.Attr.Stride < 1 ||
+				g.Values[o.Out[0]].Width != o.Attr.Width {
+				bad("%s: frames of %d samples every %d into %%%s", at, o.Attr.Width, o.Attr.Stride, g.Values[o.Out[0]].Name)
+			}
 		case OpPicture:
 			a := o.Attr
 			switch {
