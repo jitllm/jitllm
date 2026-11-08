@@ -315,8 +315,8 @@ func exprsValid(c *Config) error {
 			return fmt.Errorf("activation %d: %w", i, err)
 		}
 	}
-	if n := len(c.ActLayers); n != 0 && uint32(n) != c.NLayer {
-		return fmt.Errorf("jlm: %d activation indices for %d layers", n, c.NLayer)
+	if n := uint32(len(c.ActLayers)); n != 0 && n != c.NLayer && n != c.NLayer+c.DecisionBlocks {
+		return fmt.Errorf("jlm: %d activation indices for %d layers and %d head blocks", n, c.NLayer, c.DecisionBlocks)
 	}
 	for li, i := range c.ActLayers {
 		if int(i) >= len(c.Acts) {
