@@ -33,57 +33,61 @@ func stateAltUp(c *jlm.Config) {
 	c.Streams = st
 }
 
-// altProgram builds a program over nin inputs.
-type altProgram struct {
+// program builds a stated program over nin inputs.
+type program struct {
 	p *jlm.Program
 	d int32
 	c *jlm.Config
 }
 
-func newAltProgram(c *jlm.Config, nin int) *altProgram {
-	return &altProgram{p: &jlm.Program{NIn: uint16(nin)}, d: int32(c.NEmbd), c: c}
+// newProgram is a program over nin inputs that no text model's widths
+// enter.
+func newProgram(nin int) *program { return &program{p: &jlm.Program{NIn: uint16(nin)}} }
+
+func newAltProgram(c *jlm.Config, nin int) *program {
+	return &program{p: &jlm.Program{NIn: uint16(nin)}, d: int32(c.NEmbd), c: c}
 }
 
-func (a *altProgram) op(o jlm.TowerOp) uint16 {
+func (a *program) op(o jlm.TowerOp) uint16 {
 	a.p.Ops = append(a.p.Ops, o)
 	return uint16(int(a.p.NIn) + len(a.p.Ops) - 1)
 }
 
-func (a *altProgram) expr(w int32, f func(e *jlm.ExprBuilder), in ...uint16) uint16 {
+func (a *program) expr(w int32, f func(e *jlm.ExprBuilder), in ...uint16) uint16 {
 	var e jlm.ExprBuilder
 	f(&e)
 	return a.op(jlm.TowerOp{Code: jlm.TOpStated, In: in, Width: w, Expr: &jlm.Expr{Terms: e.T}})
 }
 
-func (a *altProgram) mul(w int32, x, y uint16) uint16 {
+func (a *program) mul(w int32, x, y uint16) uint16 {
 	return a.expr(w, func(e *jlm.ExprBuilder) { e.Fn(jlm.FnMul, jlm.Operand(0), jlm.Operand(1)) }, x, y)
 }
 
-func (a *altProgram) scaled(w int32, k float32, x uint16) uint16 {
+func (a *program) scaled(w int32, k float32, x uint16) uint16 {
 	return a.expr(w, func(e *jlm.ExprBuilder) { e.Fn(jlm.FnMul, jlm.Operand(0), jlm.Num(k)) }, x)
 }
 
-func (a *altProgram) add(x, y uint16) uint16 {
+func (a *program) add(x, y uint16) uint16 {
 	return a.op(jlm.TowerOp{Code: jlm.TOpAdd, In: []uint16{x, y}})
 }
 
-func (a *altProgram) slice(x uint16, off, w int32) uint16 {
+func (a *program) slice(x uint16, off, w int32) uint16 {
 	return a.op(jlm.TowerOp{Code: jlm.TOpSlice, In: []uint16{x}, Offset: off, Width: w})
 }
 
-func (a *altProgram) linear(x uint16, r jlm.Role) uint16 {
+func (a *program) linear(x uint16, r jlm.Role) uint16 {
 	return a.op(jlm.TowerOp{Code: jlm.TOpLinear, In: []uint16{x}, Bind: []jlm.Role{r}})
 }
 
 // norm is x RMS-normed and scaled by r.
-func (a *altProgram) norm(x uint16, r jlm.Role) uint16 {
+func (a *program) norm(x uint16, r jlm.Role) uint16 {
 	v := a.op(jlm.TowerOp{Code: jlm.TOpRMSNorm, In: []uint16{x}, Span: a.d, Eps: a.c.RMSEps})
 	return a.op(jlm.TowerOp{Code: jlm.TOpScale, In: []uint16{v}, Bind: []jlm.Role{r}})
 }
 
 // mag is p matched to the magnitude of r: p * sqrt(mean(r^2)) /
 // sqrt(max(mean(p^2), 1e-5)).
-func (a *altProgram) mag(p, r uint16) uint16 {
+func (a *program) mag(p, r uint16) uint16 {
 	inv := float32(1 / float64(a.d))
 	sr := a.op(jlm.TowerOp{Code: jlm.TOpSum, In: []uint16{a.mul(a.d, r, r)}})
 	sp := a.op(jlm.TowerOp{Code: jlm.TOpSum, In: []uint16{a.mul(a.d, p, p)}})
@@ -95,7 +99,7 @@ func (a *altProgram) mag(p, r uint16) uint16 {
 }
 
 // router is the router's weight for each stream over the row x.
-func (a *altProgram) router(x uint16) uint16 {
+func (a *program) router(x uint16) uint16 {
 	h := a.scaled(a.d, float32(1/float64(a.d)), a.norm(x, jlm.RoleStreamRouterNorm))
 	r := a.linear(h, jlm.RoleStreamRouter)
 	return a.expr(int32(a.c.PredStreams), func(e *jlm.ExprBuilder) { e.Fn(jlm.FnTanh, jlm.Operand(0)) }, r)

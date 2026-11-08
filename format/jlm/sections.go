@@ -789,6 +789,12 @@ func encodeVision(v *Vision) []byte {
 	if v.Tower != nil {
 		encodeTower(w, v.Tower)
 	}
+	// The audio tower after the vision tower's record, which a reader takes
+	// whole: a container with no audio tower is the bytes it was.
+	if a := v.Audio; a != nil && a.Tower != nil && v.Tower != nil {
+		w.u32(a.MaxSamples)
+		encodeTower(w, a.Tower)
+	}
 	return w.b
 }
 
@@ -833,12 +839,21 @@ func decodeVision(b []byte) (*Vision, error) {
 	if r.err == nil && len(r.b) > 0 {
 		v.Tower = decodeTower(r)
 	}
+	if r.err == nil && len(r.b) > 0 && v.Audio != nil {
+		v.Audio.MaxSamples = r.u32()
+		v.Audio.Tower = decodeTower(r)
+	}
 	if r.err != nil {
 		return nil, r.err
 	}
 	if v.Tower != nil {
 		if err := v.Tower.Valid(); err != nil {
 			return nil, err
+		}
+	}
+	if v.Audio != nil && v.Audio.Tower != nil {
+		if err := v.Audio.Tower.Valid(); err != nil {
+			return nil, fmt.Errorf("jlm: the audio tower: %w", err)
 		}
 	}
 	return v, nil
