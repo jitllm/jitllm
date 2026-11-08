@@ -24,8 +24,13 @@ type markerAnswers struct {
 		Confidence    *float64           `json:"confidence"`
 		Probabilities map[string]float64 `json:"probabilities"`
 	} `json:"answers"`
-	IDs     map[string][]int32 `json:"ids"`
-	Markers map[string][]int   `json:"markers"`
+	IDs       map[string][]int32 `json:"ids"`
+	Markers   map[string][]int   `json:"markers"`
+	Questions []struct {
+		ID      string  `json:"id"`
+		IDs     []int32 `json:"ids"`
+		Markers []int   `json:"markers"`
+	} `json:"questions"`
 }
 
 // TestMarkerPromptMatchesTheReference holds a marker head's prompt, the
@@ -94,9 +99,12 @@ func markerPromptArm(t *testing.T, m *model.Model, g *gpu.GPU, base string, tol 
 		if err != nil {
 			t.Fatal(err)
 		}
-		var ref markerAnswers
+		ref := markerAnswers{IDs: map[string][]int32{}, Markers: map[string][]int{}}
 		if err := json.Unmarshal(b, &ref); err != nil {
 			t.Fatal(err)
+		}
+		for _, q := range ref.Questions {
+			ref.IDs[q.ID], ref.Markers[q.ID] = q.IDs, q.Markers
 		}
 		state, qs := decisionRequest(t, req)
 		for i := range qs {

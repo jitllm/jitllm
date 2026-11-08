@@ -28,26 +28,59 @@ func (b *promptBuilder) text(s string) uint32 { return b.node(jlm.PromptNode{Op:
 
 func (b *promptBuilder) ids(ids ...int32) uint32 { return b.node(jlm.PromptNode{Op: jlm.PromptIDs, IDs: ids}) }
 
-// StateMarkerPrompt states a marker head's prompt in s's config: Laya's, from
-// rl_common.build_sequence, its sequence cut to maxLen tokens. A model with
-// no marker head states none.
+// StateMarkerPrompt states a marker head's prompt in s's config, its
+// sequence cut to maxLen tokens (decision.max_tokens; 0 where the file is
+// silent, the class's): Laya's, from rl_common.build_sequence (512,
+// rl_agent_config's max_len), or d1-omni's, from prompt.encode (16384,
+// config.max_length). A model with no marker head states none.
 func StateMarkerPrompt(s *jlm.Source, maxLen int64) error {
 	c, v := s.Config, s.Vocab
-	if c == nil || c.Flags2&jlm.Flag2HeadBlocks == 0 || c.Decision != jlm.DecisionLaya {
+	if c == nil || c.Flags2&jlm.Flag2HeadBlocks == 0 {
 		return nil
 	}
-	if v == nil || v.BOS < 0 || v.Sep < 0 || v.Mask < 0 || int(v.Mask) >= len(v.Tokens) {
-		return fmt.Errorf("convert: a laya readout needs its vocabulary's [CLS], [SEP] and [MASK]")
+	if v == nil || v.BOS < 0 {
+		return fmt.Errorf("convert: a marker head's prompt needs its vocabulary's first token")
 	}
-	if maxLen <= 0 {
-		return fmt.Errorf("convert: a laya readout's sequence of %d tokens", maxLen)
+	var p *jlm.MarkerPrompt
+	var err error
+	switch c.Decision {
+	case jlm.DecisionLaya:
+		if v.Sep < 0 || v.Mask < 0 || int(v.Mask) >= len(v.Tokens) {
+			return fmt.Errorf("convert: a laya readout needs its vocabulary's [CLS], [SEP] and [MASK]")
+		}
+		if maxLen == 0 {
+			maxLen = 512
+		}
+		p, err = layaPrompt(v.BOS, v.Sep, v.Mask, v.Tokens[v.Mask], int64(c.DecisionHeadTokens), maxLen)
+	case jlm.DecisionD1Omni:
+		var d [6]int32
+		for i, name := range []string{"<|reserved_7|>", "<|reserved_8|>", "<|reserved_9|>", "<|reserved_10|>", "<|reserved_11|>", "<|mask|>"} {
+			if d[i] = tokenOf(v, name); d[i] < 0 {
+				return fmt.Errorf("convert: a d1-omni readout's vocabulary has no %s", name)
+			}
+		}
+		if maxLen == 0 {
+			maxLen = 16384
+		}
+		p, err = d1Prompt(v.BOS, d, maxLen)
+	default:
+		return fmt.Errorf("convert: %v states head blocks and no prompt of its kind: %w", c.Decision, ErrNotImplemented)
 	}
-	p, err := layaPrompt(v.BOS, v.Sep, v.Mask, v.Tokens[v.Mask], int64(c.DecisionHeadTokens), maxLen)
 	if err != nil {
 		return err
 	}
 	c.MarkerPrompt = p
 	return nil
+}
+
+// tokenOf is the id of the token spelled s, -1 for none.
+func tokenOf(v *jlm.Vocab, s string) int32 {
+	for i, t := range v.Tokens {
+		if t == s {
+			return int32(i)
+		}
+	}
+	return -1
 }
 
 // layaPrompt is rl_common.build_sequence as a program:
@@ -93,6 +126,54 @@ func layaPrompt(cls, sep, mask int32, maskText string, headMax, maxLen int64) (*
 	room := b.op(jlm.PromptMax, b.num(0), b.op(jlm.PromptSub, b.op(jlm.PromptSub, ctx, b.op(jlm.PromptLen, pre)), b.num(1)))
 	state := b.op(jlm.PromptCut, b.op(jlm.PromptEncode, unmask(b.opInt(jlm.PromptState, int64(jlm.PromptJSON)))), room)
 	b.p.Out = b.op(jlm.PromptCut, b.op(jlm.PromptCat, pre, state, sepIDs), ctx)
-	b.p.EntropyConfidence = true
+	b.p.Confidence = jlm.ConfidenceEntropy
+	return &b.p, b.p.Valid()
+}
+
+// d1Prompt is d1-omni's prompt.encode as a program, d its delimiters (the
+// state's, the question's, an option's opening and closing, the decision's)
+// and its marker:
+//
+//	<bos> <state> state <q> instructions (<opt> <mask> option </opt>)* <decide>
+//
+// the options' block budget = max(96, min(24k+32, maxLen/2)) tokens, each
+// option's text cut to max(2, (budget-3k)/k); the question to max(16,
+// budget); the state to the room maxLen leaves (or the instance, the
+// smaller); the whole to it. Caller text has every <|name|> rewritten to
+// <¦name¦> before it is encoded; the instructions are Python's str() of
+// theirs, a description its string or its JSON, empty where None or "".
+// Its confidence is the largest probability (prompt.answer).
+func d1Prompt(bos int32, d [6]int32, maxLen int64) (*jlm.MarkerPrompt, error) {
+	var b promptBuilder
+	colon := b.text(": ")
+	escape := func(t uint32) uint32 {
+		return b.node(jlm.PromptNode{Op: jlm.PromptRegexp, Args: []uint32{t, b.text("<¦${1}¦>")}, Text: `<\|([A-Za-z0-9_]+)\|>`})
+	}
+	key := b.op(jlm.PromptOptionKey)
+	desc := b.opInt(jlm.PromptOptionText, int64(jlm.PromptJSON))
+	empty := b.opInt(jlm.PromptOptionEmpty, int64(jlm.PromptNoneOrEmpty))
+	idx := b.op(jlm.PromptOptionIndex)
+	choice := b.op(jlm.PromptSelect, empty, key, b.op(jlm.PromptConcat, key, colon, desc))
+	score := b.op(jlm.PromptConcat, b.text("level "), b.op(jlm.PromptFormat, idx), colon, desc)
+	noulDefault := b.op(jlm.PromptSelect, b.op(jlm.PromptLess, idx, b.num(1)), b.text("no, the statement does not hold"),
+		b.text("yes, the statement holds"))
+	noul := b.op(jlm.PromptConcat, key, colon, b.op(jlm.PromptSelect, empty, noulDefault, desc))
+	opt := b.op(jlm.PromptPick, b.op(jlm.PromptTypeIndex), choice, score, noul)
+	k := b.op(jlm.PromptOptions)
+	ctx := b.op(jlm.PromptMin, b.op(jlm.PromptContext), b.num(maxLen))
+	budget := b.op(jlm.PromptMax, b.num(96), b.op(jlm.PromptMin,
+		b.op(jlm.PromptAdd, b.op(jlm.PromptMul, k, b.num(24)), b.num(32)), b.op(jlm.PromptDiv, ctx, b.num(2))))
+	per := b.op(jlm.PromptMax, b.num(2), b.op(jlm.PromptDiv, b.op(jlm.PromptSub, budget, b.op(jlm.PromptMul, b.num(3), k)), k))
+	text := b.op(jlm.PromptCut, b.op(jlm.PromptEncode, escape(b.op(jlm.PromptConcat, b.text(" "), opt))), per)
+	opts := b.op(jlm.PromptCat, b.ids(d[2]), b.node(jlm.PromptNode{Op: jlm.PromptMarked, IDs: []int32{d[5]}}), text, b.ids(d[3]))
+	ins := escape(b.opInt(jlm.PromptInstructions, int64(jlm.PromptPyStr)))
+	question := b.op(jlm.PromptCut, b.op(jlm.PromptCat, b.ids(d[1]), b.op(jlm.PromptEncode, ins)),
+		b.op(jlm.PromptMax, b.num(16), budget))
+	question = b.op(jlm.PromptCat, question, b.op(jlm.PromptFlatten, opts), b.ids(d[4]))
+	room := b.op(jlm.PromptMax, b.num(0), b.op(jlm.PromptSub, b.op(jlm.PromptSub, ctx, b.op(jlm.PromptLen, question)), b.num(2)))
+	state := b.op(jlm.PromptCat, b.ids(d[0]),
+		b.op(jlm.PromptCut, b.op(jlm.PromptEncode, escape(b.opInt(jlm.PromptState, int64(jlm.PromptJSON)))), room))
+	b.p.Out = b.op(jlm.PromptCut, b.op(jlm.PromptCat, b.ids(bos), state, question), ctx)
+	b.p.Confidence = jlm.ConfidencePMax
 	return &b.p, b.p.Valid()
 }
