@@ -17,7 +17,7 @@ import (
 // one frame samples fewer than a pair, which the reference refuses too.
 func TestVideoPlanIsTheProcessors(t *testing.T) {
 	v := &jlm.Video{Fps: 2, DefaultFps: 24, MinFrames: 4, MaxFrames: 768, StampDigits: 1,
-		Pre: []jlm.PreStep{{Kind: jlm.PreVideoResize, Ints: []int32{32, 4096, 25165824, int32(jlm.FilterPILBicubic), int32(jlm.PrecTorch), 2}}},
+		Pre:   []jlm.PreStep{{Kind: jlm.PreVideoResize, Ints: []int32{32, 4096, 25165824, int32(jlm.FilterPILBicubic), int32(jlm.PrecTorch), 2}}},
 		Entry: jlm.Program{NIn: 2}}
 	tg := &TowerGraphs{Patch: 16, Video: v, Videos: []towerClass{{Pic: graph.Attrs{PicW: 8192}}}}
 	cases := []struct {
