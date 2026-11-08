@@ -35,6 +35,10 @@ type Span struct {
 	// cache restores past runs no tower block.
 	Picture image.Image
 	PicRows int
+	// Frame is a video pair's second frame, Picture its first, both resized
+	// to FrameW x FrameH (Model.VideoSpans).
+	Frame          image.Image
+	FrameW, FrameH int
 	// Clip is a voice clip whose rows the prefill encodes through the model's
 	// audio tower, ClipRows of them, when Embd is nil (Model.ClipSpan): its
 	// samples cut and padded as the tower reads them.
