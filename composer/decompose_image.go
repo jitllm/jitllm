@@ -32,6 +32,9 @@ const (
 	RequestPicSub
 	RequestPicOW
 	RequestPicOH
+	// RequestPicFrame is the byte a video's second frame starts at in the
+	// step's picture (graph.Attrs.PicFrame).
+	RequestPicFrame
 	// RequestMark is a square's marker row in the head's table plus one, 0
 	// for a square with none (graph.OpMarkRow), and RequestTrail the one
 	// after its rows.
@@ -106,7 +109,7 @@ func decomposePicture(o graph.Op, c *Context) ([]Prim, error) {
 	x0, x1, tx := axis(ox, sw, ow)
 	// sample is the picture's channel for (y, x), as a float.
 	sample := func(y, xx int) int {
-		return x.un(OpCvtF32, F, pictureSample(&x, a.Pixels, stride, y, xx, ch))
+		return x.un(OpCvtF32, F, pictureSample(&x, a, stride, y, xx, ch))
 	}
 	lerp := func(p, q, t int) int {
 		return x.op(OpAdd, F, x.op(OpMul, F, p, x.op(OpSub, F, x.f(1), t)), x.op(OpMul, F, q, t))
@@ -157,10 +160,14 @@ func padded(x *exprs, n, unit int) int {
 // pictureSample is channel ch of the picture's pixel (y, xx), the byte its
 // format holds or makes (U32): the picture in operand 0, the request in 1,
 // stride its rows' bytes.
-func pictureSample(x *exprs, px uint8, stride, y, xx, ch int) int {
+func pictureSample(x *exprs, a graph.Attrs, stride, y, xx, ch int) int {
 	U := ir.U32
+	px := a.Pixels
 	u := func(v int) int { return x.u(uint32(v)) }
 	byteAt := func(off int) int {
+		if a.PicFrame {
+			off = x.op(OpAdd, U, off, x.load(1, u(RequestPicFrame)))
+		}
 		w := x.load(0, x.op(OpShr, U, off, u(2)))
 		return x.op(OpAnd, U, x.op(OpShr, U, w, x.op(OpShl, U, x.op(OpAnd, U, off, u(3)), u(3))), u(255))
 	}
@@ -225,7 +232,7 @@ func decomposePicturePIL(o graph.Op, c *Context) ([]Prim, error) {
 		base := h.op(OpAdd, U, hu(RequestPicTaps), h.op(OpMul, U, xo, hu(K+1)))
 		xi := h.op(OpMin, U, h.op(OpAdd, U, h.load(1, base), t), h.op(OpSub, U, sw, hu(1)))
 		stride := h.load(1, hu(RequestPicStride))
-		h.op(OpMul, I, weight(&h, base, t), h.un(OpBitcast, I, pictureSample(&h, a.Pixels, stride, y, xi, hu(ch))))
+		h.op(OpMul, I, weight(&h, base, t), h.un(OpBitcast, I, pictureSample(&h, a, stride, y, xi, hu(ch))))
 		var hi exprs
 		hi.op(OpAdd, U, hi.op(OpMul, U, hi.op(OpAdd, U, hi.op(OpMul, U, hi.coord(0), hi.u(uint32(a.PicW))), hi.coord(1)), hi.u(3)),
 			hi.u(uint32(ch)))
