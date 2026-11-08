@@ -260,7 +260,11 @@ func (d *Decider) answer(state jinja.Value, q *DecisionQuestion) (DecisionAnswer
 			return DecisionAnswer{}, d.in.sampleDeclined("the label readout")
 		}
 	}
-	return d.result(q, r, d.lab.EntropyConfidence)
+	conf := jlm.ConfidenceOfType
+	if d.lab.EntropyConfidence {
+		conf = jlm.ConfidenceEntropy
+	}
+	return d.result(q, r, conf)
 }
 
 // answerMarked asks q through a marker head: the container's prompt for it,
@@ -290,7 +294,7 @@ func (d *Decider) answerMarked(state jinja.Value, q *DecisionQuestion) (Decision
 	if !d.in.decideScores(d.vals, d.keep, d.params, d.prior, d.probs, d.stats) {
 		return DecisionAnswer{}, d.in.sampleDeclined("the marker readout")
 	}
-	return d.result(q, 0, d.mp.EntropyConfidence)
+	return d.result(q, 0, d.mp.Confidence)
 }
 
 // encodePlain is a prompt piece's ids, the specials it spells read as theirs
@@ -298,8 +302,8 @@ func (d *Decider) answerMarked(state jinja.Value, q *DecisionQuestion) (Decision
 func (d *Decider) encodePlain(text string) []int32 { return d.in.m.Vocab.EncodeSpecial(text, false) }
 
 // result is q's answer from the readout's outputs, a noul read at r rating
-// levels where r > 0, its confidence the entropy's where entropy says.
-func (d *Decider) result(q *DecisionQuestion, r int, entropy bool) (DecisionAnswer, error) {
+// levels where r > 0, its confidence read as how says.
+func (d *Decider) result(q *DecisionQuestion, r int, how jlm.PromptConfidence) (DecisionAnswer, error) {
 	n := len(q.Options)
 	if p := d.stats[graph.DecisionPMax]; p != p {
 		return DecisionAnswer{}, fmt.Errorf("the model could not evaluate the decision (a score is NaN)")
@@ -322,8 +326,11 @@ func (d *Decider) result(q *DecisionQuestion, r int, entropy bool) (DecisionAnsw
 	} else {
 		a.Score, conf = float64(d.stats[graph.DecisionExpected]), graph.DecisionScoreConf
 	}
-	if entropy {
+	switch how {
+	case jlm.ConfidenceEntropy:
 		conf = graph.DecisionEntropyConf
+	case jlm.ConfidencePMax:
+		conf = graph.DecisionPMax
 	}
 	a.Confidence = float64(d.stats[conf])
 	return a, nil

@@ -13,14 +13,24 @@ import (
 // field holds one value an option, and every node over such values is taken
 // option by option, a scalar operand standing for every option. Out is the
 // node whose token sequence is the prompt; its marked tokens, in order, are
-// the options' markers. EntropyConfidence states an answer's confidence as
-// one minus the distribution's entropy over log k, where TypeSafe's is the
-// default.
+// the options' markers. Confidence is how an answer's confidence is read.
 type MarkerPrompt struct {
-	Nodes             []PromptNode
-	Out               uint32
-	EntropyConfidence bool
+	Nodes      []PromptNode
+	Out        uint32
+	Confidence PromptConfidence
 }
+
+// PromptConfidence is how a marker head's answer states its confidence: as a
+// label readout's question types do (ConfidenceOfType), one minus the
+// distribution's entropy over log k (ConfidenceEntropy), or its largest
+// probability (ConfidencePMax).
+type PromptConfidence uint8
+
+const (
+	ConfidenceOfType PromptConfidence = iota
+	ConfidenceEntropy
+	ConfidencePMax
+)
 
 // PromptNode is one step of a MarkerPrompt: Op over the values of the nodes
 // Args names, with Int, Text and IDs its literals.
@@ -127,6 +137,9 @@ func (p *MarkerPrompt) Valid() error {
 	if len(p.Nodes) == 0 || int(p.Out) >= len(p.Nodes) {
 		return fmt.Errorf("jlm: a marker prompt of %d nodes out at %d", len(p.Nodes), p.Out)
 	}
+	if p.Confidence > ConfidencePMax {
+		return fmt.Errorf("jlm: a marker prompt's confidence %d", p.Confidence)
+	}
 	for i, n := range p.Nodes {
 		if n.Op == PromptInvalid || n.Op >= numPromptOps {
 			return fmt.Errorf("jlm: marker prompt node %d: operation %d", i, n.Op)
@@ -161,7 +174,7 @@ func encodeMarkerPrompt(w *wbuf, p *MarkerPrompt) {
 		}
 	}
 	w.u32(p.Out)
-	w.bool(p.EntropyConfidence)
+	w.u8(uint8(p.Confidence))
 }
 
 func decodeMarkerPrompt(r *rbuf) *MarkerPrompt {
@@ -177,7 +190,7 @@ func decodeMarkerPrompt(r *rbuf) *MarkerPrompt {
 		}
 		p.Nodes = append(p.Nodes, n)
 	}
-	p.Out, p.EntropyConfidence = r.u32(), r.bool()
+	p.Out, p.Confidence = r.u32(), PromptConfidence(r.u8())
 	if r.err == nil {
 		if err := p.Valid(); err != nil {
 			r.err = err
