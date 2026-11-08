@@ -109,7 +109,7 @@ func markerPromptArm(t *testing.T, m *model.Model, g *gpu.GPU, base string, tol 
 		state, qs := decisionRequest(t, req)
 		for i := range qs {
 			q := &qs[i]
-			ids, marks, err := markedPrompt(d.mp, d.encodePlain, state, q, in.MaxSeq(), 0)
+			ids, marks, err := markedPrompt(d.mp, d.encodePlain, state, q, in.MaxSeq(), 0, 0)
 			if err != nil {
 				t.Fatalf("%s %s: %v", req, q.ID, err)
 			}

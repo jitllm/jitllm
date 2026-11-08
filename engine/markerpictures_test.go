@@ -66,7 +66,7 @@ func TestMarkerPromptWithPicturesMatchesItsCode(t *testing.T) {
 		if prefix != g.Prefix {
 			t.Fatalf("%s: the pictures take %d rows, the reference's %d", g.ID, prefix, g.Prefix)
 		}
-		ids, marks, err := markedPrompt(d.mp, d.encodePlain, state, &qs[i], in.MaxSeq()-prefix, len(pics))
+		ids, marks, err := markedPrompt(d.mp, d.encodePlain, state, &qs[i], in.MaxSeq()-prefix, len(pics), 0)
 		if err != nil {
 			t.Fatal(err)
 		}

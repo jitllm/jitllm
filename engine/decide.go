@@ -318,11 +318,14 @@ func (d *Decider) answer(state jinja.Value, q *DecisionQuestion) (DecisionAnswer
 // answerMarked asks q through a marker head: the container's prompt for it,
 // its options' scores at their markers, each option one group of its score.
 func (d *Decider) answerMarked(state jinja.Value, q *DecisionQuestion) (DecisionAnswer, error) {
-	prefix := 0
+	prefix, clips := 0, 0
 	for i := range d.pics {
 		prefix += d.pics[i].N(d.in.c.NEmbd)
+		if d.pics[i].Clip != nil {
+			clips++
+		}
 	}
-	ids, marks, err := markedPrompt(d.mp, d.encodePlain, state, q, d.in.MaxSeq()-prefix, len(d.pics))
+	ids, marks, err := markedPrompt(d.mp, d.encodePlain, state, q, d.in.MaxSeq()-prefix, len(d.pics)-clips, clips)
 	if err != nil {
 		return DecisionAnswer{}, err
 	}

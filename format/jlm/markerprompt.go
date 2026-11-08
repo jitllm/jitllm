@@ -105,8 +105,10 @@ const (
 	// PromptPick the Args[1+i] for Args[0] = i.
 	PromptSelect
 	PromptPick
-	// PromptPictures is how many pictures the request carries.
+	// PromptPictures is how many pictures the request carries, PromptClips
+	// how many voice clips.
 	PromptPictures
+	PromptClips
 	numPromptOps
 )
 

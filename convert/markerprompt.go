@@ -67,7 +67,9 @@ func StateMarkerPrompt(s *jlm.Source, maxLen int64) error {
 		}
 		// config.json's image_text_length, which the GGUF does not state:
 		// the class's.
-		p, err = d1Prompt(v.BOS, d, maxLen, 896)
+		// image_text_length and audio_text_length, D1OmniConfig's defaults:
+		// the GGUF carries neither.
+		p, err = d1Prompt(v.BOS, d, maxLen, 896, 15360)
 	case jlm.DecisionKev:
 		var d [5]int32
 		for i, name := range []string{"<|fim_prefix|>", "<|fim_middle|>", "<|box_start|>", "<|box_end|>", "<|fim_suffix|>"} {
@@ -187,7 +189,7 @@ func kevPrompt(d [5]int32) (*jlm.MarkerPrompt, error) {
 // <¦name¦> before it is encoded; the instructions are Python's str() of
 // theirs, a description its string or its JSON, empty where None or "".
 // Its confidence is the largest probability (prompt.answer).
-func d1Prompt(bos int32, d [6]int32, maxLen, imageLen int64) (*jlm.MarkerPrompt, error) {
+func d1Prompt(bos int32, d [6]int32, maxLen, imageLen, audioLen int64) (*jlm.MarkerPrompt, error) {
 	var b promptBuilder
 	colon := b.text(": ")
 	escape := func(t uint32) uint32 {
@@ -197,18 +199,29 @@ func d1Prompt(bos int32, d [6]int32, maxLen, imageLen int64) (*jlm.MarkerPrompt,
 	desc := b.opInt(jlm.PromptOptionText, int64(jlm.PromptJSON))
 	empty := b.opInt(jlm.PromptOptionEmpty, int64(jlm.PromptNoneOrEmpty))
 	idx := b.op(jlm.PromptOptionIndex)
-	choice := b.op(jlm.PromptSelect, empty, key, b.op(jlm.PromptConcat, key, colon, desc))
+	pictures := b.op(jlm.PromptLess, b.num(0), b.op(jlm.PromptPictures))
+	// After a voice clip the options are written as the audio questions
+	// were trained: a choice's as "option_000: " and its description, or
+	// its name, a noul's as plain no and yes whatever it states.
+	spoken := b.op(jlm.PromptLess, b.num(0), b.op(jlm.PromptClips))
+	pad := b.op(jlm.PromptSelect, b.op(jlm.PromptLess, idx, b.num(10)), b.text("00"),
+		b.op(jlm.PromptSelect, b.op(jlm.PromptLess, idx, b.num(100)), b.text("0"), b.text("")))
+	numbered := b.op(jlm.PromptConcat, b.text("option_"), pad, b.op(jlm.PromptFormat, idx), colon,
+		b.op(jlm.PromptSelect, empty, key, desc))
+	choice := b.op(jlm.PromptSelect, spoken, numbered, b.op(jlm.PromptSelect, empty, key, b.op(jlm.PromptConcat, key, colon, desc)))
 	score := b.op(jlm.PromptConcat, b.text("level "), b.op(jlm.PromptFormat, idx), colon, desc)
-	// A request with pictures reads a noul without criteria as no and yes
-	// (modeling_d1.py's YES_NO), and caps the text at imageLen.
-	media := b.op(jlm.PromptLess, b.num(0), b.op(jlm.PromptPictures))
+	// A request with pictures or a clip reads a noul without criteria as no
+	// and yes (modeling_d1.py's YES_NO), and caps the text at imageLen
+	// after pictures, audioLen after a clip.
+	media := b.op(jlm.PromptLess, b.num(0), b.op(jlm.PromptAdd, b.op(jlm.PromptPictures), b.op(jlm.PromptClips)))
 	noulDefault := b.op(jlm.PromptSelect, b.op(jlm.PromptLess, idx, b.num(1)),
 		b.op(jlm.PromptSelect, media, b.text("no"), b.text("no, the statement does not hold")),
 		b.op(jlm.PromptSelect, media, b.text("yes"), b.text("yes, the statement holds")))
-	noul := b.op(jlm.PromptConcat, key, colon, b.op(jlm.PromptSelect, empty, noulDefault, desc))
+	noul := b.op(jlm.PromptConcat, key, colon, b.op(jlm.PromptSelect, b.op(jlm.PromptAdd, empty, spoken), noulDefault, desc))
 	opt := b.op(jlm.PromptPick, b.op(jlm.PromptTypeIndex), choice, score, noul)
 	k := b.op(jlm.PromptOptions)
-	ctx := b.op(jlm.PromptMin, b.op(jlm.PromptContext), b.op(jlm.PromptSelect, media, b.num(imageLen), b.num(maxLen)))
+	ctx := b.op(jlm.PromptMin, b.op(jlm.PromptContext), b.op(jlm.PromptSelect, spoken, b.num(audioLen),
+		b.op(jlm.PromptSelect, pictures, b.num(imageLen), b.num(maxLen))))
 	budget := b.op(jlm.PromptMax, b.num(96), b.op(jlm.PromptMin,
 		b.op(jlm.PromptAdd, b.op(jlm.PromptMul, k, b.num(24)), b.num(32)), b.op(jlm.PromptDiv, ctx, b.num(2))))
 	per := b.op(jlm.PromptMax, b.num(2), b.op(jlm.PromptDiv, b.op(jlm.PromptSub, budget, b.op(jlm.PromptMul, b.num(3), k)), k))
@@ -219,8 +232,11 @@ func d1Prompt(bos int32, d [6]int32, maxLen, imageLen int64) (*jlm.MarkerPrompt,
 		b.op(jlm.PromptMax, b.num(16), budget))
 	question = b.op(jlm.PromptCat, question, b.op(jlm.PromptFlatten, opts), b.ids(d[4]))
 	room := b.op(jlm.PromptMax, b.num(0), b.op(jlm.PromptSub, b.op(jlm.PromptSub, ctx, b.op(jlm.PromptLen, question)), b.num(2)))
-	state := b.op(jlm.PromptCat, b.ids(d[0]),
-		b.op(jlm.PromptCut, b.op(jlm.PromptEncode, escape(b.opInt(jlm.PromptState, int64(jlm.PromptJSONOrEmpty)))), room))
+	// After a clip a null state is written as {}.
+	stateIDs := b.op(jlm.PromptEncode, escape(b.opInt(jlm.PromptState, int64(jlm.PromptJSONOrEmpty))))
+	stateIDs = b.op(jlm.PromptSelect, b.op(jlm.PromptLess, b.op(jlm.PromptLen, stateIDs), spoken),
+		b.op(jlm.PromptEncode, b.text("{}")), stateIDs)
+	state := b.op(jlm.PromptCat, b.ids(d[0]), b.op(jlm.PromptCut, stateIDs, room))
 	b.p.Out = b.op(jlm.PromptCut, b.op(jlm.PromptCat, b.ids(bos), state, question), ctx)
 	b.p.Confidence = jlm.ConfidencePMax
 	return &b.p, b.p.Valid()

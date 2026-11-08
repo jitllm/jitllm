@@ -340,6 +340,34 @@ func (m *Model) ClipRows(n int) (frames, rows int) {
 	return frames, rows
 }
 
+// ClipSpan is a voice clip as a span of the prompt: its samples -- mono, in
+// [-1, 1], at the tower's rate -- cut to the longest clip the reference
+// reads and padded with silence to half a second, as audio.waveform makes
+// them, the rows the audio tower writes for them, and a key over them.
+func (m *Model) ClipSpan(clip []float32) (Span, error) {
+	if m.Audio == nil {
+		return Span{}, fmt.Errorf("model: the model has no audio tower")
+	}
+	if len(clip) == 0 {
+		return Span{}, fmt.Errorf("model: an empty clip")
+	}
+	a := m.Container.Vision().Audio
+	n := max(min(len(clip), int(a.MaxSamples)), int(a.SampleRate)/2)
+	samples := make([]float32, n)
+	copy(samples, clip)
+	_, rows := m.ClipRows(n)
+	h := sha256.New()
+	h.Write([]byte("clip"))
+	var w [4]byte
+	for _, s := range samples {
+		binary.LittleEndian.PutUint32(w[:], math.Float32bits(s))
+		h.Write(w[:])
+	}
+	var k RowsKey
+	h.Sum(k[:0])
+	return Span{Clip: samples, ClipRows: rows, Key: &k}, nil
+}
+
 // BuildAudioGraphs lowers the container's stated audio tower (jlm.Audio):
 // its entry over the longest clip's frames, a chained tower whose blocks
 // follow the vision tower's in the tower's block space, each block over the

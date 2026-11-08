@@ -388,10 +388,20 @@ func (ts *Instance) towerBlocks(tr *towerRun, gw int, wins []nn.KeyRun) error {
 // cache -- a buffer nothing reads, with no tower block run. The caller's
 // spans are left as they were.
 func (s *Instance) encodePictures(spans []model.Span, from int) ([]model.Span, error) {
-	n := 0
+	n, clips := 0, 0
 	for _, sp := range spans {
-		if sp.Picture != nil && sp.Embd == nil {
+		switch {
+		case sp.Embd != nil:
+		case sp.Picture != nil:
 			n++
+		case sp.Clip != nil:
+			clips++
+		}
+	}
+	if clips > 0 {
+		var err error
+		if spans, err = s.encodeClips(spans, from); err != nil {
+			return nil, err
 		}
 	}
 	if n == 0 {
