@@ -43,15 +43,6 @@ func (u RopeRun) step() int {
 	return u.Step
 }
 
-// RopeRuns is the pair count the runs fill, which is the table's width in pairs.
-func RopeRuns(runs []RopeRun) int {
-	n := 0
-	for _, u := range runs {
-		n += u.Pairs
-	}
-	return n
-}
-
 // MRopeRuns is Qwen2-VL's text M-RoPE: sections[i] consecutive pairs turned by
 // coordinate i, the frequencies one sequence across all of them (llama.cpp's
 // ggml_rope_multi, transformers' mrope_section). Empty sections are skipped; a

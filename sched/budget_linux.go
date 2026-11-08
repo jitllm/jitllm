@@ -17,7 +17,7 @@ import (
 // caller does not say.
 //
 // It is eight tenths of the smallest of three limits, each read from the OS
-// when it is asked (HostMem):
+// when it is asked:
 //
 //   - what the machine has available (MemAvailable), so memory other
 //     processes hold is not counted as ours;
@@ -109,10 +109,6 @@ func minKnown(a, b uint64) uint64 {
 	}
 	return min(a, b)
 }
-
-// HostMem reads the limits now. Every read is a fresh one: what is available
-// moves, and a load sizes itself from the moment it runs.
-func HostMem() HostMemory { return host().mem() }
 
 func (m machine) mem() HostMemory {
 	h := HostMemory{Available: m.meminfoAvailable(), Cgroup: m.cgroupLimit()}
