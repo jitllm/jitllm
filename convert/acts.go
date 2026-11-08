@@ -27,6 +27,19 @@ func (e *expr) relu2(a jlm.Arg) jlm.Arg {
 	return e.Fn(jlm.FnMul, r, r)
 }
 
+func (e *expr) relu(a jlm.Arg) jlm.Arg { return e.Fn(jlm.FnMax, a, num(0)) }
+
+// statedLayers is how many of c's blocks the converter states an activation
+// for: the trunk's, and a marker head's blocks after it (Laya's and
+// d1-omni's, pre-norm blocks with a ReLU feed-forward).
+func statedLayers(c *jlm.Config) int {
+	n := int(c.NLayer)
+	if c.Decision == jlm.DecisionLaya || c.Decision == jlm.DecisionD1Omni {
+		n += int(c.DecisionBlocks)
+	}
+	return n
+}
+
 // xielu is Apertus's xIELU from the four numbers each block stores
 // (jlm.RoleXIELU: alpha_p, alpha_n, beta, eps, folded at conversion):
 //
@@ -66,6 +79,9 @@ func Activation(c *jlm.Config, li int, gated bool) (jlm.Expr, error) {
 	g, u := operand(0), operand(1)
 	var unary func(jlm.Arg) jlm.Arg
 	switch {
+	case li >= int(c.NLayer):
+		// A marker head's block (statedLayers).
+		unary = e.relu
 	case c.Flags2.Has(jlm.Flag2SwiGLUClamp):
 		// DeepSeek V4: silu(min(gate, 10)) * clamp(up, -10, 10).
 		e.Fn(jlm.FnMul, e.SiLU(e.Fn(jlm.FnMin, g, num(10))), e.clamp(u, 10))
@@ -108,7 +124,7 @@ func StateActivations(s *jlm.Source) error {
 	if c == nil || c.NLayer == 0 || c.Arch == jlm.ArchCLIP {
 		return nil
 	}
-	n := int(c.NLayer)
+	n := statedLayers(c)
 	up, gate := make([]bool, n), make([]bool, n)
 	for _, t := range s.Tensors {
 		if t.Block < 0 || int(t.Block) >= n {
@@ -163,7 +179,7 @@ func StateStored(f *jlm.File, c *jlm.Config) (bool, error) {
 			return false
 		}
 	}
-	return true, StateGated(c, gating(int(c.NLayer), stores(jlm.RoleFFNGate, jlm.RoleExpGateBank), stores(jlm.RoleFFNUp, jlm.RoleExpUpBank)))
+	return true, StateGated(c, gating(statedLayers(c), stores(jlm.RoleFFNGate, jlm.RoleExpGateBank), stores(jlm.RoleFFNUp, jlm.RoleExpUpBank)))
 }
 
 // gating is each of n layers' gating: gated unless it stores an up and no
@@ -179,7 +195,7 @@ func gating(n int, gate, up func(li int) bool) []bool {
 // StateGated states every layer's FFN activation in c, layer li gated where
 // gated[li] is.
 func StateGated(c *jlm.Config, gated []bool) error {
-	n := int(c.NLayer)
+	n := statedLayers(c)
 	if len(gated) != n {
 		return fmt.Errorf("convert: the gating of %d layers stated for %d", len(gated), n)
 	}

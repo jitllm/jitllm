@@ -1292,8 +1292,9 @@ func (c *Config) GLU() GLU {
 
 // StatementRevision is the revision of what this converter states: a
 // container written at an older one is upgraded (jitllm upgrade) where the
-// later statements matter to it.
-const StatementRevision = 3
+// later statements matter to it. Revision 4 states a marker head's block
+// activations after the trunk's.
+const StatementRevision = 4
 
 // ActQuant is a model's activation quantization.
 type ActQuant uint8

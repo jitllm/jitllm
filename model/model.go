@@ -1279,7 +1279,24 @@ func Open(path string, options ...Option) (*Model, error) {
 		m.Close()
 		return nil, &UpgradeRequiredError{Path: path, What: "rotary layout"}
 	}
+	// A block past the trunk that stores a feed-forward reads the activation
+	// a container written before revision 4 does not state for it.
+	if c := m.Container.Config(); c.Revision < 4 && m.storesPast(jlm.RoleFFNUp) {
+		m.Close()
+		return nil, &UpgradeRequiredError{Path: path, What: "head activations"}
+	}
 	return m, nil
+}
+
+// storesPast reports that a block of the container past the trunk's stores r.
+func (m *Model) storesPast(r jlm.Role) bool {
+	c := m.Container.Config()
+	for bi := c.NLayer; bi < m.Container.H.NBlocks; bi++ {
+		if m.Container.Has(r, int32(bi), -1) {
+			return true
+		}
+	}
+	return false
 }
 
 // statesActivations is an UpgradeRequiredError where the container states no
