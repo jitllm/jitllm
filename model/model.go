@@ -2686,9 +2686,9 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 	// is never reallocated once a block is bound.
 	nvis := 0
 	if v := c.Vision(); v != nil && v.Tower != nil {
-		nvis = int(v.NLayer)
+		nvis = int(v.NLayer) + audioBlocks(v)
 	}
-	m.Layers = make([]Layer, cfg.NLayer+cfg.NMTP, cfg.NLayer+cfg.NMTP+nvis)
+	m.Layers = make([]Layer, cfg.NLayer+cfg.NMTP, max(cfg.NLayer+cfg.NMTP, int(c.H.NBlocks))+nvis)
 	for i := range c.Entries() {
 		e := &c.Entries()[i]
 		if e.Index != -1 || !e.Role.Expanded() || e.Role.Vision() || e.Block < 0 || int(e.Block) >= len(m.Layers) {

@@ -103,16 +103,29 @@ func (tg *TowerGraphs) placeholder(tpl *jinja.Template, src, bos, eos, mark stri
 	return ph, nil
 }
 
+// audioBlocks is how many audio blocks follow the vision blocks in v's
+// page array (jlm.Audio).
+func audioBlocks(v *jlm.Vision) int {
+	if v.Audio == nil {
+		return 0
+	}
+	return int(v.Audio.NLayer)
+}
+
 // bindTower makes the tower's blocks layers of the model from towerBase on,
 // the page each is read from the container's vision block of that index, and
 // its entry's and head's tensors towerDense: every vector read once, every
 // matrix a descriptor recorded by its role (layer.mats), which an instance's
 // copy binds (BindDense, BindBlock).
 func (m *Model) bindTower(c *jlm.File) error {
-	if m.TowerBase != int(c.H.NBlocks) {
+	if m.TowerBase > int(c.H.NBlocks) {
 		return fmt.Errorf("model: %d text blocks over a page array of %d: the tower's pages would be another block's",
 			m.TowerBase, c.H.NBlocks)
 	}
+	// Blocks the container holds past the text model's (a decision model's
+	// head blocks) keep their pages: the tower's start after them.
+	m.Layers = m.Layers[:c.H.NBlocks]
+	m.TowerBase = int(c.H.NBlocks)
 	v := c.Vision()
 	// The tower's blocks are bound where they live: a matrix is recorded by a
 	// pointer into its layer (layer.mats), which a copy would leave behind.
@@ -120,8 +133,9 @@ func (m *Model) bindTower(c *jlm.File) error {
 	if cap(m.Layers)-n < int(v.NLayer) {
 		return fmt.Errorf("model: room for %d tower blocks after the text's, %d made", v.NLayer, cap(m.Layers)-n)
 	}
-	m.Layers = m.Layers[:n+int(v.NLayer)]
-	ls := m.Layers[n:]
+	m.Layers = m.Layers[:n+int(v.NLayer)+audioBlocks(v)]
+	ls := m.Layers[n : n+int(v.NLayer)]
+	audio := m.Layers[n+int(v.NLayer):]
 	// A tap's tensors sit at its block's index of the dense region, each tap
 	// a layer of its own.
 	var taps []jlm.TowerTap
@@ -149,6 +163,8 @@ func (m *Model) bindTower(c *jlm.File) error {
 		switch {
 		case e.Block >= 0 && int(e.Block) < len(ls):
 			l = &ls[e.Block]
+		case e.Block >= 0 && int(e.Block) < len(ls)+len(audio):
+			l = &audio[int(e.Block)-len(ls)]
 		case e.Block != jlm.DenseBlock:
 			return fmt.Errorf("model: the tower holds %v in block %d of %d", e.Role, e.Block, len(ls))
 		}
