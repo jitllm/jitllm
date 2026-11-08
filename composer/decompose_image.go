@@ -1268,15 +1268,15 @@ func decomposeClipMask(o graph.Op, c *Context) ([]Prim, error) {
 	sh := c.rows(o.In[0])
 	var x exprs
 	r := x.coord(0)
-	l := x.op(OpDiv, U, x.load(1, x.u(RequestPicW)), x.u(uint32(a.Stride)))
-	for range a.Span {
-		l = x.op(OpAdd, U, x.op(OpDiv, U, x.op(OpSub, U, x.op(OpMax, U, l, x.u(1)), x.u(1)), x.u(2)), x.sel(U, x.op(OpLess, ir.Pred, l, x.u(1)), x.u(0), x.u(1)))
-	}
 	row := r
 	if a.GridW > 0 {
 		row = x.op(OpDiv, U, r, x.u(uint32(a.GridW)))
 	}
-	x.sel(F, x.op(OpLess, ir.Pred, row, l), x.at(0, sh, r, x.coord(1)), x.f(0))
+	// Each halving is L-1 halved, plus one, so row < L after Span of them
+	// is row*2^Span < L0 = n/Stride, that is (row*2^Span + 1)*Stride <= n:
+	// no division of the sample count, which a vector of lanes has none of.
+	end := x.op(OpMul, U, x.op(OpAdd, U, x.op(OpMul, U, row, x.u(uint32(1)<<a.Span)), x.u(1)), x.u(uint32(a.Stride)))
+	x.sel(F, x.op(OpLess, ir.Pred, x.load(1, x.u(RequestPicW)), end), x.f(0), x.at(0, sh, r, x.coord(1)))
 	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0]), TableRequest.op()}, Out: c.value(o.Out[0]), Expr: x.e,
 		Facts: Facts{Extents: map[int]int{1: RequestPicW + 1}}}}, nil
 }
