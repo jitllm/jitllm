@@ -25,7 +25,7 @@ func (g *GPU) admit(model uint64, what string) (func(), bool) {
 		other := g.model
 		g.ownMu.Unlock()
 		g.refuse(fmt.Sprintf("this tier holds model %d's blocks, and a tier serves one model: "+
-			"model %d's %s stays on the host until model %d releases them (its Close)",
+			"model %d's %s stays on the CPU until model %d releases them (its Close)",
 			other, model, what, other))
 		return nil, false
 	}
