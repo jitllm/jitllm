@@ -31,6 +31,14 @@ type Audio struct {
 	// The front end's framing: a window of Window samples every Hop, padded
 	// to NFFT, at SampleRate.
 	SampleRate, NFFT, Window, Hop uint32
+	// MaxSamples is the longest clip the reference reads (audio.waveform
+	// cuts one to it); the blocks are formed for its rows.
+	MaxSamples uint32
+	// Tower is the tower as the converter states it: the front end and the
+	// subsampling its entry, each conformer block a chained block, the
+	// adapter and the residual correction its head. A container that does
+	// not state it is not heard.
+	Tower *Tower
 }
 
 // ProjD1OmniA is d1-omni's audio half (llama.cpp's "d1omni_a"); see Audio.
@@ -41,13 +49,15 @@ const ProjD1OmniA Projector = 65529
 // in the dense region. Block j of an audio tensor is tower block
 // Vision.NLayer+j.
 const (
-	// The subsampling: three convolutions over (time, frequency) and their
-	// pointwise partners, tap-major (ky, kx, c) and channel-last, with a
-	// bias each; Index is the module's layer (0, 2, 3, 5, 6).
-	RoleAConv     Role = 1000
-	RoleAConvBias Role = 1001
-	RoleASubOut   Role = 1002 // the linear after the subsampling
-	RoleASubOutB  Role = 1003
+	RoleASubOut  Role = 1002 // the linear after the subsampling
+	RoleASubOutB Role = 1003
+
+	// The front end's tables, F32: the DFT bases with the window folded in
+	// (NFFT/2+1 rows of NFFT) and the Slaney filterbank (MelBins rows of
+	// NFFT/2+1).
+	RoleADFTCos  Role = 1004
+	RoleADFTSin  Role = 1005
+	RoleAMelBank Role = 1006
 
 	// A conformer block.
 	RoleAFF1Norm   Role = 1010
@@ -66,7 +76,10 @@ const (
 	RoleAVB        Role = 1023
 	RoleAOut       Role = 1024
 	RoleAOutB      Role = 1025
-	RoleAPos       Role = 1026 // linear_pos, no bias
+	// RoleAPos is linear_pos times the sinusoids of every position the
+	// block's rows reach, F32: graph.OpRowsAttend's table, row k the
+	// position (rows+1)/2-1-k.
+	RoleAPos       Role = 1026
 	RoleAPosU      Role = 1027 // pos_bias_u, NHead x head width
 	RoleAPosV      Role = 1028
 	RoleAConvNorm  Role = 1029 // the LayerNorm before the convolution module
@@ -75,7 +88,7 @@ const (
 	RoleAGLUValB   Role = 1032
 	RoleAGLUGate   Role = 1033 // its second half, the GLU's gate
 	RoleAGLUGateB  Role = 1034
-	RoleADW        Role = 1035 // the depthwise convolution, tap-major [tap][chan]
+	RoleADW        Role = 1035 // the depthwise convolution, channel-major [chan][tap] (graph.OpRowConv's)
 	// RoleADWB is the depthwise convolution's bias as the converter reads
 	// it: folded into RoleABNShift since version 30 and written by no
 	// converter since; a version 29 container carries it, which migrate29
@@ -96,6 +109,20 @@ const (
 	RoleAOutNorm  Role = 1047
 	RoleAOutNormB Role = 1048
 
+	// The subsampling, F32: the first convolution a matrix of its 9 taps (one
+	// input channel), the depthwise ones tap-major (ky, kx) rows of the
+	// channels, the pointwise ones out x in; a bias each.
+	RoleASub0    Role = 1049
+	RoleASub0B   Role = 1050
+	RoleASubDW1  Role = 1051
+	RoleASubDW1B Role = 1052
+	RoleASubPW1  Role = 1053
+	RoleASubPW1B Role = 1054
+	RoleASubDW2  Role = 1055
+	RoleASubDW2B Role = 1056
+	RoleASubPW2  Role = 1057
+	RoleASubPW2B Role = 1058
+
 	// The adapter and the residual correction (dense).
 	RoleAAdNorm  Role = 1060
 	RoleAAdNormB Role = 1061
@@ -113,10 +140,32 @@ const (
 
 func audioRoleName(r Role) (string, bool) {
 	switch r {
-	case RoleAConv:
-		return "a.conv1d", true
-	case RoleAConvBias:
-		return "a.conv1d.bias", true
+	case RoleADFTCos:
+		return "a.dft.cos", true
+	case RoleADFTSin:
+		return "a.dft.sin", true
+	case RoleAMelBank:
+		return "a.mel", true
+	case RoleASub0:
+		return "a.conv1d.0", true
+	case RoleASub0B:
+		return "a.conv1d.0.bias", true
+	case RoleASubDW1:
+		return "a.conv1d.2", true
+	case RoleASubDW1B:
+		return "a.conv1d.2.bias", true
+	case RoleASubPW1:
+		return "a.conv1d.3", true
+	case RoleASubPW1B:
+		return "a.conv1d.3.bias", true
+	case RoleASubDW2:
+		return "a.conv1d.5", true
+	case RoleASubDW2B:
+		return "a.conv1d.5.bias", true
+	case RoleASubPW2:
+		return "a.conv1d.6", true
+	case RoleASubPW2B:
+		return "a.conv1d.6.bias", true
 	case RoleASubOut:
 		return "a.pre_encode.out", true
 	case RoleASubOutB:
@@ -154,7 +203,7 @@ func audioRoleName(r Role) (string, bool) {
 	case RoleAOutB:
 		return "a.attn_out.bias", true
 	case RoleAPos:
-		return "a.linear_pos", true
+		return "a.linear_pos.table", true
 	case RoleAPosU:
 		return "a.pos_bias_u", true
 	case RoleAPosV:
@@ -231,7 +280,7 @@ func audioRoleName(r Role) (string, bool) {
 // vector read once at load (Role.Expanded) or a convolution's taps.
 func audioMatrix(r Role) bool {
 	switch r {
-	case RoleASubOut, RoleAFF1Up, RoleAFF1Down, RoleAQ, RoleAK, RoleAV, RoleAOut, RoleAPos, RoleAGLUVal, RoleAGLUGate, RoleAPW2, RoleAFF2Up, RoleAFF2Down, RoleAAd1, RoleAAd2, RoleAResDown, RoleAResUp:
+	case RoleASubOut, RoleAFF1Up, RoleAFF1Down, RoleAQ, RoleAK, RoleAV, RoleAOut, RoleAGLUVal, RoleAGLUGate, RoleAPW2, RoleAFF2Up, RoleAFF2Down, RoleAAd1, RoleAAd2, RoleAResDown, RoleAResUp:
 		return true
 	}
 	return false
@@ -241,6 +290,17 @@ func audioMatrix(r Role) bool {
 // quantized set, a reader's bound one).
 func AudioMatrix(r Role) bool { return audioMatrix(r) }
 
+// audioTable is the audio roles a tower multiplies by at F32, never
+// quantized: the front end's tables, the subsampling's convolutions and the
+// blocks' position tables, whose error every later block carries.
+func audioTable(r Role) bool {
+	switch r {
+	case RoleADFTCos, RoleADFTSin, RoleAMelBank, RoleAPos, RoleASub0, RoleASubPW1, RoleASubPW2:
+		return true
+	}
+	return false
+}
+
 // audioRole reports whether r is one of the audio tower's roles.
 func audioRole(r Role) bool {
 	_, ok := audioRoleName(r)
@@ -249,7 +309,7 @@ func audioRole(r Role) bool {
 
 // audioExpanded is Role.Expanded for the audio roles: every vector, and the
 // convolutions' taps, which a reader copies out at load.
-func audioExpanded(r Role) bool { return audioRole(r) && !audioMatrix(r) }
+func audioExpanded(r Role) bool { return audioRole(r) && !audioMatrix(r) && !audioTable(r) }
 
 // encodeAudio is the Vision record's audio tail.
 func encodeAudio(w *wbuf, a *Audio) {

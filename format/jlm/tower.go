@@ -319,16 +319,20 @@ const (
 	// In[1] (keys) and In[2] (values), every row and both ways, Span heads
 	// scaled by one over the root of their width, over Width key/value heads
 	// (0: Span) each read by Span/Width of them (graph.OpRowsAttend): a value
-	// of In[0]'s rows, whatever the picture's grid.
+	// of In[0]'s rows, whatever the picture's grid. With In[3] and Bind[0]
+	// it is a relative-position attention: row q's score over key j adds
+	// In[3]'s row q dotted with Bind[0]'s row for the position q-j.
 	TOpRowsAttend OpCode = 31
 	// TOpUnfold is each output row of a grid GridW rows wide as the Span x
 	// Span window of rows around it at Stride, tap-major, Width wide, zero
-	// past the taps (graph.OpUnfold), padded as TensorFlow pads: a full
+	// past the taps (graph.OpUnfold), padded as TensorFlow pads or, where
+	// Offset is set, by Offset all round (PyTorch's padding): a full
 	// convolution's input, its matrix the next op's.
 	TOpUnfold OpCode = 32
 	// TOpConv is a depthwise convolution of a grid GridW rows wide by
 	// Bind[0]'s Span x Span taps (tap-major rows of the width) at Stride,
-	// padded as TensorFlow pads (graph.OpConv).
+	// padded as TensorFlow pads or by Offset all round where it is set
+	// (graph.OpConv).
 	TOpConv OpCode = 33
 	// TOpUpsample is a grid GridW rows wide Span times as large each way,
 	// each row its nearest (graph.OpUpsample).
@@ -337,7 +341,29 @@ const (
 	// (graph.OpAppendRow): a marker the reference embeds through a table of
 	// the tower's.
 	TOpAppendRow OpCode = 35
-	topCodes     OpCode = 36
+	// TOpFrames is the call's clip as frames (graph.OpFrames): the samples
+	// the step's picture table holds, as many as the request's picture
+	// width, Width of them a frame every Stride, centred, each less Eps
+	// times the one before it (a preemphasis), zero past the clip. It reads
+	// no value: an audio tower's entry has none.
+	TOpFrames OpCode = 36
+	// TOpFeatureNorm is each column of In[0] normalised over the step's
+	// first live-Offset rows by their mean and their std over n-1, plus Eps,
+	// the rows after zero (graph.OpFeatureNorm).
+	TOpFeatureNorm OpCode = 37
+	// TOpSplitRows is each row of In[0] as rows of Width of its elements
+	// (graph.OpSplitRows).
+	TOpSplitRows OpCode = 38
+	// TOpClipMask is In[0] with the rows of a grid GridW wide (0: one row a
+	// grid row) zero from the clip's valid length on: its samples over
+	// Stride, halved Span times as a stride-two convolution of three taps
+	// padded by one halves it (graph.OpClipMask).
+	TOpClipMask OpCode = 39
+	// TOpRowConv is a centred depthwise convolution of In[0] across the
+	// step's live rows by Bind[0]'s Span taps a channel, channel-major, zero
+	// past the live rows (graph.OpRowConv).
+	TOpRowConv OpCode = 40
+	topCodes   OpCode = 41
 )
 
 // A stated rotary's layout (TOpRope's Chain).
@@ -663,7 +689,7 @@ func resizes(f Filter, p Precision) bool {
 }
 
 func (p *Program) valid(name string) error {
-	if p.NIn == 0 || len(p.Ops) == 0 {
+	if len(p.Ops) == 0 || p.NIn == 0 && p.Ops[0].Code != TOpFrames {
 		return fmt.Errorf("jlm: the tower's %s has %d inputs and %d ops", name, p.NIn, len(p.Ops))
 	}
 	for i, op := range p.Ops {
@@ -687,6 +713,18 @@ func (p *Program) valid(name string) error {
 			return fmt.Errorf("jlm: the tower's %s op %d groups by %d", name, i, op.Span)
 		case op.Code == TOpRowBreak && op.Offset&^1 != 0:
 			return fmt.Errorf("jlm: the tower's %s op %d breaks rows with an offset of %d", name, i, op.Offset)
+		case op.Code == TOpRowsAttend && !(len(op.In) == 3 && len(op.Bind) == 0 || len(op.In) == 4 && len(op.Bind) == 1):
+			return fmt.Errorf("jlm: the tower's %s op %d attends over %d values by %d tables", name, i, len(op.In), len(op.Bind))
+		case op.Code == TOpFrames && (op.Width < 2 || op.Stride < 1):
+			return fmt.Errorf("jlm: the tower's %s op %d frames %d samples every %d", name, i, op.Width, op.Stride)
+		case op.Code == TOpFeatureNorm && op.Eps <= 0:
+			return fmt.Errorf("jlm: the tower's %s op %d normalises features with an epsilon of %v", name, i, op.Eps)
+		case op.Code == TOpSplitRows && op.Width < 1:
+			return fmt.Errorf("jlm: the tower's %s op %d splits rows into %d elements", name, i, op.Width)
+		case op.Code == TOpClipMask && (op.Stride < 1 || op.Span < 0):
+			return fmt.Errorf("jlm: the tower's %s op %d masks a clip of a frame every %d halved %d times", name, i, op.Stride, op.Span)
+		case op.Code == TOpRowConv && (op.Span < 1 || op.Span%2 == 0):
+			return fmt.Errorf("jlm: the tower's %s op %d convolves rows by %d taps", name, i, op.Span)
 		case (op.Code == TOpLayerNorm || op.Code == TOpRMSNorm) && op.Eps <= 0:
 			return fmt.Errorf("jlm: the tower's %s op %d has an epsilon of %v", name, i, op.Eps)
 		case op.Code == TOpNGramRows && (op.Span < 2 || op.Width <= 0 || !op.Hash.fits(op.Span, op.Width)):
@@ -719,9 +757,9 @@ func (p *Program) valid(name string) error {
 			return fmt.Errorf("jlm: the tower's %s op %d upsamples by %d a grid %d wide", name, i, op.Span, op.GridW)
 		case op.Code == TOpRowsAttend && (op.Width < 0 || op.Width > 0 && op.Span%op.Width != 0):
 			return fmt.Errorf("jlm: the tower's %s op %d attends %d heads over %d", name, i, op.Span, op.Width)
-		case op.Code != TOpUnfold && op.Code != TOpConv && op.Code != TOpUpsample && op.Code != TOpPool && op.GridW != 0:
+		case op.Code != TOpUnfold && op.Code != TOpConv && op.Code != TOpUpsample && op.Code != TOpPool && op.Code != TOpClipMask && op.GridW != 0:
 			return fmt.Errorf("jlm: the tower's %s op %d (code %d) states a grid %d wide", name, i, op.Code, op.GridW)
-		case op.Code != TOpUnfold && op.Code != TOpConv && op.Stride != 0:
+		case op.Code != TOpUnfold && op.Code != TOpConv && op.Code != TOpFrames && op.Code != TOpClipMask && op.Stride != 0:
 			return fmt.Errorf("jlm: the tower's %s op %d (code %d) states a stride of %d", name, i, op.Code, op.Stride)
 		}
 		if op.Expr != nil {
@@ -748,7 +786,13 @@ func (op *TowerOp) arity() (in int, bind [2]int) {
 	case TOpPosAxes, TOpPosBuckets, TOpTableRows:
 		return 0, [2]int{1, 1}
 	case TOpRowsAttend:
-		return 3, [2]int{0, 0}
+		return -1, [2]int{0, 1}
+	case TOpFrames:
+		return 0, [2]int{0, 0}
+	case TOpFeatureNorm, TOpSplitRows, TOpClipMask:
+		return 1, [2]int{0, 0}
+	case TOpRowConv:
+		return 1, [2]int{1, 1}
 	case TOpUnfold, TOpUpsample:
 		return 1, [2]int{0, 0}
 	case TOpConv, TOpAppendRow:
