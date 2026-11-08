@@ -17,8 +17,8 @@ import (
 func TestAGateRecordsAndNeverBlocks(t *testing.T) {
 	e := New(admitConfig(Config{ModelDir: t.TempDir(), Probe: noProbe}))
 	defer e.Close()
-	a := e.gatesFor([]string{"cuda:0", HostGateID})
-	b := e.gatesFor([]string{"cuda:0", HostGateID, "cuda:0"})
+	a := e.gatesFor([]string{"cuda:0", CPUGateID})
+	b := e.gatesFor([]string{"cuda:0", CPUGateID, "cuda:0"})
 	if len(b.gates) != 2 {
 		t.Fatalf("%d gates for two distinct ids: a repeated id must be one gate", len(b.gates))
 	}

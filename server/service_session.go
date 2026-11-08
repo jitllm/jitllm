@@ -115,7 +115,7 @@ func (s *SessionService) ResetSession(ctx context.Context, req *connect.Request[
 func (s *SessionService) GetDeviceQueue(ctx context.Context, req *connect.Request[v1.GetDeviceQueueRequest]) (*connect.Response[v1.GetDeviceQueueResponse], error) {
 	id := req.Msg.DeviceId
 	if id == "" {
-		id = HostGateID
+		id = CPUGateID
 	}
 	queue, running, waiting := s.E.deviceQueue(s.E.gateKey(id))
 	return connect.NewResponse(&v1.GetDeviceQueueResponse{

@@ -481,7 +481,7 @@ func TestASessionKeepsItsSequenceAcrossGenerates(t *testing.T) {
 	wantCode(t, "a second CloseSession", err, connect.CodeNotFound)
 }
 
-// TestListSessionsFiltersByModelAndDevice. A host-only session queues on the
+// TestListSessionsFiltersByModelAndDevice. A CPU-only session queues on the
 // host's gate, so it lists under "cpu" and not under a card it never touches.
 func TestListSessionsFiltersByModelAndDevice(t *testing.T) {
 	_, _, c := loadedEngine(t, smallModel, "small", LoadOptions{})
@@ -526,7 +526,7 @@ func TestListSessionsFiltersByModelAndDevice(t *testing.T) {
 		t.Fatal(err)
 	}
 	// No device id is the host's queue, which says how sessions share it.
-	if q.Msg.GetDeviceId() != HostGateID || !strings.Contains(q.Msg.GetNote(), "shared pool") ||
+	if q.Msg.GetDeviceId() != CPUGateID || !strings.Contains(q.Msg.GetNote(), "shared pool") ||
 		q.Msg.GetRunning() || q.Msg.GetWaiting() != 0 {
 		t.Fatalf("the idle host queue reads %+v", q.Msg)
 	}
@@ -890,7 +890,7 @@ func TestTheConnectStreamCarriesTheRealEnginesEvents(t *testing.T) {
 		case *v1.GenerateResponse_Started:
 			kinds = append(kinds, "started")
 			if ev.Started.GetCpuBlocks() != 5 || ev.Started.GetDeviceBlocks() != 0 {
-				t.Fatalf("a host-only generate reports %d host / %d device blocks",
+				t.Fatalf("a CPU-only generate reports %d host / %d device blocks",
 					ev.Started.GetCpuBlocks(), ev.Started.GetDeviceBlocks())
 			}
 		case *v1.GenerateResponse_Token:
@@ -946,7 +946,7 @@ func TestPlacementRefusesWhatAHostOnlySessionCannotDo(t *testing.T) {
 	}
 	pl := gp.Msg.GetPlacement()
 	if pl.GetCpuBlockCount() != 5 || pl.GetDeviceBlockCount() != 0 || len(pl.GetBlocks()) != 5 {
-		t.Fatalf("a host-only placement reads host=%d device=%d over %d blocks",
+		t.Fatalf("a CPU-only placement reads host=%d device=%d over %d blocks",
 			pl.GetCpuBlockCount(), pl.GetDeviceBlockCount(), len(pl.GetBlocks()))
 	}
 	for i, b := range pl.GetBlocks() {
@@ -964,7 +964,7 @@ func TestPlacementRefusesWhatAHostOnlySessionCannotDo(t *testing.T) {
 	if home.Msg.GetPlacement().GetDeviceBlockCount() != 0 {
 		t.Fatal("everything-home left a block on a device")
 	}
-	// A host-only model takes a device that exists (TestAHostLoadedModelRelocatesToADeviceAndBack);
+	// A CPU-only model takes a device that exists (TestAHostLoadedModelRelocatesToADeviceAndBack);
 	// one that does not is a precondition the caller can change.
 	_, err = c.placement.SetPlacement(ctx, req(&v1.SetPlacementRequest{SessionId: "p", DeviceIds: []string{"nosuch:0"}}))
 	wantCode(t, "SetPlacement onto a device that does not exist", err, connect.CodeFailedPrecondition)
@@ -1002,7 +1002,7 @@ func TestPlacementRefusesWhatAHostOnlySessionCannotDo(t *testing.T) {
 		err = ts.Err()
 		ts.Close()
 	}
-	wantCode(t, "TuneSeam on a host-only session", err, connect.CodeFailedPrecondition)
+	wantCode(t, "TuneSeam on a CPU-only session", err, connect.CodeFailedPrecondition)
 
 	for what, call := range map[string]func() error{
 		"GetPlacement": func() error {
@@ -1031,7 +1031,7 @@ func TestPlacementRefusesWhatAHostOnlySessionCannotDo(t *testing.T) {
 }
 
 // refusingDevice is a device that takes nothing. It stands in for a tier so
-// SetPlacement reaches Instance.SetDeviceLayers on a model loaded host-only.
+// SetPlacement reaches Instance.SetDeviceLayers on a model loaded CPU-only.
 type refusingDevice struct{}
 
 func (refusingDevice) PrepLayer(int, *nn.LayerPlan, *nn.LayerWeights) bool { return false }
@@ -1061,7 +1061,7 @@ func TestARefusedPlacementLeavesTheSessionUsable(t *testing.T) {
 	if _, err := c.inference.Complete(ctx, req(&v1.GenerateRequest{SessionId: "p", Prompt: text(story), MaxTokens: 2})); err != nil {
 		t.Fatal(err)
 	}
-	// The model gains a "tier" after the session was built host-only, so the
+	// The model gains a "tier" after the session was built CPU-only, so the
 	// session's f16 history is what the move has to carry.
 	lm.dev, lm.deviceIDs = refusingDevice{}, []string{"fake:0"}
 	defer func() { lm.dev, lm.deviceIDs = nil, nil }()
@@ -1254,7 +1254,7 @@ func TestDevicesAreTheProbesAnswer(t *testing.T) {
 	host := ld.Msg.GetDevices()[0]
 	if host.GetRef().GetBackend() != v1.Backend_BACKEND_CPU || host.GetKind() != v1.DeviceKind_DEVICE_KIND_CPU ||
 		host.GetAttachedSessions() != 1 {
-		t.Fatalf("the host reads %+v; its one host-only session is attached to it", host)
+		t.Fatalf("the host reads %+v; its one CPU-only session is attached to it", host)
 	}
 
 	gd, err := c.device.GetDevice(ctx, req(&v1.GetDeviceRequest{DeviceId: "cuda:0"}))

@@ -13,7 +13,7 @@ import (
 )
 
 // The placement surface with a real tier under it: the only way to reach the
-// seam moves, RelocateBlocks' arms and TuneSeam, which a host-only model
+// seam moves, RelocateBlocks' arms and TuneSeam, which a CPU-only model
 // refuses before it gets to them.
 
 // deviceModel is a container every block of which a device can run:
