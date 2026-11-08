@@ -352,16 +352,19 @@ func TestSessionsPageAtOnce(t *testing.T) {
 			for li := range m.Cfg.NLayer {
 				g.Stream(li, true)
 			}
+			// The head projects on the CPU in both arms: the budget that pages
+			// the blocks leaves no slot for it, where every block resident
+			// does, and a projection on another device reduces in another
+			// order. What is compared is the blocks paging.
 			place := func(prompt []int32) (*Instance, int32) {
-				st := testInstance(t, m, seq)
+				st := testInstance(t, m, seq, WithHeadPlacement(false))
 				t.Cleanup(func() { st.Close() })
 				if err := st.SetDeviceLayers(g, m.Cfg.NLayer); err != nil {
 					t.Fatal(err)
 				}
-				// The head may stay on the host: under paging a slot is
-				// worth more than the projection (tier PrepHead).
-				if st.devCount() != m.Cfg.NLayer {
-					t.Fatalf("%d of %d blocks on the device: %s", st.devCount(), m.Cfg.NLayer, g.Err())
+				if st.devCount() != m.Cfg.NLayer || st.HeadOnDevice() {
+					t.Fatalf("%d of %d blocks on the device, head there %v: %s", st.devCount(), m.Cfg.NLayer,
+						st.HeadOnDevice(), g.Err())
 				}
 				lg, err := st.Prefill(prompt)
 				if err != nil {
