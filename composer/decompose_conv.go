@@ -178,8 +178,9 @@ func decomposeConv(o graph.Op, c *Context) ([]Prim, error) {
 // width: element j of row r is channel j%C of tap j/C's row, the row that
 // tap reaches from r's grid position times the stride, less the padding
 // before the grid (TensorFlow's SAME, as decomposeConv pads); zero where
-// that row lies past the grid or j past the taps. An offset below zero
-// wraps above the side, unsigned, so one comparison tests both edges.
+// that row lies past the grid or j past the taps; an Offset is PyTorch's
+// padding, as decomposeConv takes it. An offset below zero wraps above the
+// side, unsigned, so one comparison tests both edges.
 func decomposeUnfold(o graph.Op, c *Context) ([]Prim, error) {
 	if len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) != 0 {
 		return nil, fmt.Errorf("an unfold of %d operands", len(o.In))
@@ -193,7 +194,12 @@ func decomposeUnfold(o graph.Op, c *Context) ([]Prim, error) {
 	H := R / W
 	Ho, Wo := (H+s-1)/s, (W+s-1)/s
 	padY, padX := max((Ho-1)*s+T-H, 0)/2, max((Wo-1)*s+T-W, 0)/2
+	if p := o.Attr.Offset; p > 0 {
+		padY, padX = p, p
+	}
 	switch {
+	case o.Attr.Offset > T/2:
+		return nil, fmt.Errorf("an unfold of %d taps padded by %d: the output grid would grow", T, o.Attr.Offset)
 	case T < 1 || T%2 == 0:
 		return nil, fmt.Errorf("an unfold of %d taps: a centred one is odd", T)
 	case H*W != R:
