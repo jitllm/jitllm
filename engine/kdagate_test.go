@@ -2,36 +2,15 @@ package engine
 
 import (
 	"math"
-	"strings"
 	"testing"
 
-	"github.com/jitllm/jitllm/model"
 	"github.com/jitllm/jitllm/nn"
-
-	"github.com/jitllm/jitllm/graph"
 )
-
-// kdaUngated is a linear block's graph with its output read as it is: the
-// sigmoid gate over the delta rule's normed output a copy of that output.
-// A graph of another block comes back as it was.
-func kdaUngated(t *testing.T, m *model.Model) func(*graph.Graph) *graph.Graph {
-	return func(g *graph.Graph) *graph.Graph {
-		if !m.Cfg.LayerKind(g.Block).Recurrent() {
-			return g
-		}
-		return rewriteOps(t, g, func(_ int, o *graph.Op) bool {
-			if o.Kind != graph.OpExpr || !strings.HasPrefix(g.Values[o.Out[0]].Name, "gated.") || len(o.In) != 2 {
-				return false
-			}
-			*o = graph.Op{Kind: graph.OpMap, In: o.In[1:2], Out: o.Out, Attr: graph.Attrs{Fn: graph.MapMul, Const: 1}}
-			return true
-		})
-	}
-}
 
 // TestKimiLinearKDAGateIsLoadBearing holds Kimi-Linear's composed blocks on
 // every device present to the host's logits, every block served, and its
-// Kimi Delta Attention's output gate taken out of the statement alone moving
+// Kimi Delta Attention's output gate restated as its input alone
+// (recurrentUngated) moving
 // them past 100 times the clean worst and past 1e-4.
 func TestKimiLinearKDAGateIsLoadBearing(t *testing.T) {
 	m := frontModel(t, "synth-kimilinear")
@@ -66,7 +45,7 @@ func TestKimiLinearKDAGateIsLoadBearing(t *testing.T) {
 				return worst
 			}
 			worst := run()
-			undo := rewriteEveryBlock(m, t, kdaUngated(t, m))
+			undo := recurrentUngated(m)
 			bad := run()
 			undo()
 			t.Logf("%s: clean worst NMSE %.3g, the KDA output ungated %.3g", dev, worst, bad)
