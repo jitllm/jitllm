@@ -916,6 +916,10 @@ type Attrs struct {
 	// PicTorch says the taps are torchvision's precision, not Pillow's
 	// (composer.PILTapsAt): the picture op runs the same passes on them.
 	PicTorch bool
+	// PicFrame reads the step's second frame, a video's, from the byte the
+	// request's frame word names (composer.RequestPicFrame): its planes' and
+	// palette's offsets the frame's own, its size and format the first's.
+	PicFrame bool
 	// PicBF16 says the normalisation is in bfloat16: the sample times
 	// 1/255, less the mean, over the std, each result and the mean and std
 	// rounded to bfloat16 (composer's normalized).
