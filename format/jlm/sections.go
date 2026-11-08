@@ -208,8 +208,10 @@ func encodeConfigAt(c *Config, v uint32) []byte {
 	// the first twenty-three. An older reader drops each.
 	// The twenty-fifth, a label readout's statement, implies the first
 	// twenty-four; an older reader drops it and opens the model as the
-	// backbone it is.
-	labels := c.DecisionLabels != nil
+	// backbone it is. The twenty-sixth, a marker head's prompt, implies the
+	// first twenty-five, an empty label statement standing for none.
+	marker := c.MarkerPrompt != nil
+	labels := marker || c.DecisionLabels != nil
 	delta := labels || c.DeltaDecay != nil || c.DeltaGate != nil
 	geoms := delta || len(c.Geoms) != 0
 	post := geoms || c.Streams.sharesWrites()
@@ -374,7 +376,14 @@ func encodeConfigAt(c *Config, v uint32) []byte {
 		encodePrograms(w, []*Program{c.DeltaDecay, c.DeltaGate})
 	}
 	if labels {
-		encodeDecisionLabels(w, c.DecisionLabels)
+		l := c.DecisionLabels
+		if l == nil {
+			l = &DecisionLabels{}
+		}
+		encodeDecisionLabels(w, l)
+	}
+	if marker {
+		encodeMarkerPrompt(w, c.MarkerPrompt)
 	}
 	return w.b
 }
@@ -572,7 +581,12 @@ func decodeConfigAt(b []byte, v uint32) (*Config, error) {
 		}
 	}
 	if r.err == nil && len(r.b) > 0 {
-		c.DecisionLabels = decodeDecisionLabels(r)
+		if l := decodeDecisionLabels(r); l.MaxOptions != 0 {
+			c.DecisionLabels = l
+		}
+	}
+	if r.err == nil && len(r.b) > 0 {
+		c.MarkerPrompt = decodeMarkerPrompt(r)
 	}
 	if r.err != nil {
 		return nil, r.err

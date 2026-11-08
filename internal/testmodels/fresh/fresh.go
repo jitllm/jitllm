@@ -60,14 +60,17 @@ func reconvert(path string) error {
 			(cfg.NGramBlock == 0 || convert.StatesPre(cfg)) &&
 			(cfg.IdxHeads == 0 || cfg.Selection != nil || len(cfg.CompKinds) != 0)
 		labels := cfg.DecisionLabels != nil || !convert.StatesDecisionLabels(cfg.Decision)
+		marker := cfg.MarkerPrompt != nil || !cfg.Flags2.Has(jlm.Flag2HeadBlocks)
 		rev := cfg.Revision >= jlm.StatementRevision || (cfg.SWAWindow == 0 || cfg.YarnFactor <= 1 && v == nil) &&
 			(cfg.Revision >= 2 || !storesAny(c, jlm.RoleAttnSubNorm, jlm.RoleFFNSubNorm)) &&
 			(cfg.Revision >= 3 || cfg.RopeSections == [4]uint32{}) &&
 			(cfg.Revision >= 5 || cfg.DecisionBlocks == 0)
 		c.Close()
 		switch {
-		case stated && tower && tools && streams && rev && labels:
+		case stated && tower && tools && streams && rev && labels && marker:
 			return nil
+		case !marker:
+			openErr = fmt.Errorf("it states no marker prompt for its head")
 		case !labels:
 			openErr = fmt.Errorf("it states no label readout for its decision kind")
 		case !rev:

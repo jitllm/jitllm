@@ -50,12 +50,17 @@ type DecisionAnswer struct {
 	Confidence float64
 }
 
-// Decider asks a decision model's label readout questions through one
-// instance, one request at a time.
+// Decider asks a decision model's readout questions through one instance,
+// one request at a time: a label readout's, or a marker head's (its prompt
+// the container's program, jlm.MarkerPrompt, its options' scores the
+// scorer's at their markers).
 type Decider struct {
 	in   *Instance
 	cfg  *jlm.Config
 	lab  *jlm.DecisionLabels
+	mp   *jlm.MarkerPrompt
+	// scores is a marker head's per option.
+	scores []float32
 	tpl  *jinja.Template
 	bidi bool
 	// The readout's inputs and outputs (graph.DecisionScores), and the
@@ -70,10 +75,20 @@ type Decider struct {
 	one [1]model.Span
 }
 
-// NewDecider is a Decider over in, whose model states a label readout.
+// NewDecider is a Decider over in, whose model states a label readout or a
+// marker head's prompt.
 func NewDecider(in *Instance) (*Decider, error) {
 	m := in.m
 	cfg := m.Container.Config()
+	const n, g = nn.DecisionOptions, nn.DecisionGroup
+	if mp := cfg.MarkerPrompt; mp != nil {
+		return &Decider{in: in, cfg: cfg, mp: mp, scores: make([]float32, n),
+			vals: make([]float32, n*g), keep: make([]float32, n), params: make([]float32, 2+n),
+			prior: make([]float32, n), probs: make([]float32, n), stats: make([]float32, graph.DecisionStats)}, nil
+	}
+	if cfg.Flags2.Has(jlm.Flag2HeadBlocks) {
+		return nil, fmt.Errorf("model: its marker head states no prompt; convert the model again")
+	}
 	lab := cfg.DecisionLabels
 	if lab == nil {
 		return nil, fmt.Errorf("model: %v states no label readout", cfg.Decision)
@@ -86,7 +101,6 @@ func NewDecider(in *Instance) (*Decider, error) {
 	if err != nil {
 		return nil, fmt.Errorf("model: the systemone template: %w", err)
 	}
-	const n, g = nn.DecisionOptions, nn.DecisionGroup
 	return &Decider{in: in, cfg: cfg, lab: lab, tpl: tpl, bidi: m.Cfg.NonCausal,
 		ids: make([]int32, n*g), vals: make([]float32, n*g), keep: make([]float32, n), params: make([]float32, 2+n),
 		prior: make([]float32, n), probs: make([]float32, n), stats: make([]float32, graph.DecisionStats)}, nil
@@ -97,6 +111,9 @@ func (d *Decider) InputTokens() int { return d.input }
 
 // maxOptions is the most options a question may have.
 func (d *Decider) maxOptions() int {
+	if d.lab == nil {
+		return nn.DecisionOptions
+	}
 	return min(int(d.lab.MaxOptions), nn.DecisionOptions)
 }
 
@@ -140,7 +157,11 @@ func (d *Decider) Decide(state jinja.Value, qs []DecisionQuestion) ([]DecisionAn
 	d.input = 0
 	out := make([]DecisionAnswer, len(qs))
 	for i := range qs {
-		a, err := d.answer(state, &qs[i])
+		answer := d.answer
+		if d.mp != nil {
+			answer = d.answerMarked
+		}
+		a, err := answer(state, &qs[i])
 		if err != nil {
 			return nil, fmt.Errorf("questions.%s: %w", qs[i].ID, err)
 		}
@@ -239,6 +260,47 @@ func (d *Decider) answer(state jinja.Value, q *DecisionQuestion) (DecisionAnswer
 			return DecisionAnswer{}, d.in.sampleDeclined("the label readout")
 		}
 	}
+	return d.result(q, r, d.lab.EntropyConfidence)
+}
+
+// answerMarked asks q through a marker head: the container's prompt for it,
+// its options' scores at their markers, each option one group of its score.
+func (d *Decider) answerMarked(state jinja.Value, q *DecisionQuestion) (DecisionAnswer, error) {
+	ids, marks, err := markedPrompt(d.mp, d.encodePlain, state, q, d.in.MaxSeq())
+	if err != nil {
+		return DecisionAnswer{}, err
+	}
+	n := len(q.Options)
+	if len(marks) != n {
+		return DecisionAnswer{}, fmt.Errorf("%d options and the prompt holds %d of their markers in %d tokens", n, len(marks), len(ids))
+	}
+	if err := d.in.MarkScores(ids, int(q.Type), marks, d.scores[:n]); err != nil {
+		return DecisionAnswer{}, err
+	}
+	d.input += len(ids)
+	clear(d.keep)
+	clear(d.vals)
+	for i := range n {
+		d.keep[i], d.params[2+i] = 1, float32(i)
+		for x := range nn.DecisionGroup {
+			d.vals[i*nn.DecisionGroup+x] = d.scores[i]
+		}
+	}
+	d.params[0], d.params[1] = 1/d.cfg.Temperature(q.Type, n), 0
+	if !d.in.decideScores(d.vals, d.keep, d.params, d.prior, d.probs, d.stats) {
+		return DecisionAnswer{}, d.in.sampleDeclined("the marker readout")
+	}
+	return d.result(q, 0, d.mp.EntropyConfidence)
+}
+
+// encodePlain is a prompt piece's ids, the specials it spells read as theirs
+// and none added.
+func (d *Decider) encodePlain(text string) []int32 { return d.in.m.Vocab.EncodeSpecial(text, false) }
+
+// result is q's answer from the readout's outputs, a noul read at r rating
+// levels where r > 0, its confidence the entropy's where entropy says.
+func (d *Decider) result(q *DecisionQuestion, r int, entropy bool) (DecisionAnswer, error) {
+	n := len(q.Options)
 	if p := d.stats[graph.DecisionPMax]; p != p {
 		return DecisionAnswer{}, fmt.Errorf("the model could not evaluate the decision (a score is NaN)")
 	}
@@ -260,7 +322,7 @@ func (d *Decider) answer(state jinja.Value, q *DecisionQuestion) (DecisionAnswer
 	} else {
 		a.Score, conf = float64(d.stats[graph.DecisionExpected]), graph.DecisionScoreConf
 	}
-	if d.lab.EntropyConfidence {
+	if entropy {
 		conf = graph.DecisionEntropyConf
 	}
 	a.Confidence = float64(d.stats[conf])
