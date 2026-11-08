@@ -433,6 +433,12 @@ const (
 	// row from live-Offset on zero (a clip's features over its valid
 	// frames, NeMo's normalize_batch per_feature).
 	OpFeatureNorm
+	// OpClipMask is In[0] with the rows past a clip's valid length zero: the
+	// rows a grid GridW wide (GridW 0: one row a grid row), a grid row kept
+	// below L, L the request's sample count (composer.RequestPicW) over
+	// Stride halved Span times as a stride-two convolution of three taps
+	// padded by one halves it (L = (L-1)/2+1).
+	OpClipMask
 	// OpSpanPool is each row r of Out[0] the mean of In[0]'s rows from the
 	// request's slot Offset to its slot Offset+1 (their row r), zero for an
 	// empty span: a question's or an option's span of a prompt.
@@ -498,6 +504,8 @@ func (k OpKind) String() string {
 		return "frames"
 	case OpFeatureNorm:
 		return "feature_norm"
+	case OpClipMask:
+		return "clip_mask"
 	case OpSpanPool:
 		return "span_pool"
 	case OpTakeRows:

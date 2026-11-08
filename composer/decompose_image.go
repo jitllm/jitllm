@@ -1280,6 +1280,30 @@ func decomposeSplitRows(o graph.Op, c *Context) ([]Prim, error) {
 	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0])}, Out: c.value(o.Out[0]), Expr: x.e}}, nil
 }
 
+// decomposeClipMask is each row kept where its grid row is below the
+// clip's valid length (graph.OpClipMask), zero after.
+func decomposeClipMask(o graph.Op, c *Context) ([]Prim, error) {
+	a := o.Attr
+	if len(o.In) != 1 || len(o.Out) != 1 || a.Stride < 1 || c.width(o.In[0]) != c.width(o.Out[0]) {
+		return nil, fmt.Errorf("a clip mask of %d operands every %d samples", len(o.In), a.Stride)
+	}
+	U, F := ir.U32, ir.F32
+	sh := c.rows(o.In[0])
+	var x exprs
+	r := x.coord(0)
+	l := x.op(OpDiv, U, x.load(1, x.u(RequestPicW)), x.u(uint32(a.Stride)))
+	for range a.Span {
+		l = x.op(OpAdd, U, x.op(OpDiv, U, x.op(OpSub, U, x.op(OpMax, U, l, x.u(1)), x.u(1)), x.u(2)), x.sel(U, x.op(OpLess, ir.Pred, l, x.u(1)), x.u(0), x.u(1)))
+	}
+	row := r
+	if a.GridW > 0 {
+		row = x.op(OpDiv, U, r, x.u(uint32(a.GridW)))
+	}
+	x.sel(F, x.op(OpLess, ir.Pred, row, l), x.at(0, sh, r, x.coord(1)), x.f(0))
+	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0]), TableRequest.op()}, Out: c.value(o.Out[0]), Expr: x.e,
+		Facts: Facts{Extents: map[int]int{1: RequestPicW + 1}}}}, nil
+}
+
 // decomposeUpsample is a grid of rows GridW wide Span times as large each
 // way (graph.OpUpsample), one map over the output's rows and width: row r
 // of the grid Span*GridW wide reads the input row at (y/Span, x/Span).
