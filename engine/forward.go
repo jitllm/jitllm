@@ -824,10 +824,10 @@ func (s *Instance) SetDeviceLayers(d nn.LayerDevice, max int) error {
 		}
 	}
 	// MigrateKV moves float32: a binary16 or q8_0 history travels converted
-	// (Instance.migrateKVAs).
+	// (Instance.moveKV).
 	// An empty binary16 cache steps down to the f32 the device holds; one
 	// with history keeps its format and travels converted, widened on its way
-	// to the device and narrowed home (migrateKVAs), as a q8_0 one does. A
+	// to the device and narrowed home (moveKV), as a q8_0 one does. A
 	// Instance whose CPU blocks run composed keeps the binary16 its CPU device
 	// holds (composer.Halves), in the arenas its blocks were bound to, as a cache
 	// with history does.
@@ -2132,7 +2132,7 @@ func (s *Instance) devCount() int {
 }
 
 // prepDeviceRange grows the device's prefix to n blocks. A binary16 history
-// travels widened, as SetDeviceLayers' does (migrateKVAs). The offers are
+// travels widened, as SetDeviceLayers' does (moveKV). The offers are
 // one placement, ended as an attach's is (nn.Placer): the device forms what
 // a prompt and a step of rows read over the blocks it now holds, so no step
 // after the move composes.

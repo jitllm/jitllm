@@ -4,10 +4,6 @@ package engine
 
 import (
 	"testing"
-
-	"github.com/jitllm/jitllm/model"
-
-	"github.com/jitllm/jitllm/engine/device/gpu"
 )
 
 // TestParsePlacementExperts: %host and %card name where a block's experts run,
@@ -25,34 +21,4 @@ func TestParsePlacementExperts(t *testing.T) {
 			t.Errorf("%q parsed", bad)
 		}
 	}
-}
-
-// runExperts runs ids through m, its blocks on tier g (the host alone when g
-// is nil), and returns the logits.
-func runExperts(t *testing.T, m *model.Model, g *gpu.GPU, ids []int32, io ...Option) [][]float32 {
-	t.Helper()
-	s := testInstance(t, m, 32, io...)
-	defer s.Close()
-	if g != nil {
-		s.SetDeviceLayers(g, m.Cfg.NLayer)
-	}
-	var out [][]float32
-	for _, id := range ids {
-		l, err := s.Forward(id)
-		if err != nil {
-			t.Fatal(err)
-		}
-		out = append(out, append([]float32(nil), l...))
-	}
-	return out
-}
-
-func argmaxOf(v []float32) int {
-	b := 0
-	for i := range v {
-		if v[i] > v[b] {
-			b = i
-		}
-	}
-	return b
 }

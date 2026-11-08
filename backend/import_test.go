@@ -2,7 +2,6 @@ package backend_test
 
 import (
 	"encoding/binary"
-	"math"
 	"math/rand"
 	"strconv"
 	"testing"
@@ -238,15 +237,6 @@ func mustAlloc(t *testing.T, d backend.Device, p []byte) backend.Buf {
 		t.Fatal(err)
 	}
 	return b
-}
-
-func f32s(raw []byte) []float32 {
-	out := make([]float32, len(raw)/4)
-	for i := range out {
-		out[i] = math.Float32frombits(uint32(raw[i*4]) | uint32(raw[i*4+1])<<8 |
-			uint32(raw[i*4+2])<<16 | uint32(raw[i*4+3])<<24)
-	}
-	return out
 }
 
 func allZero[T float32 | uint32](v []T) bool {

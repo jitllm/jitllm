@@ -64,17 +64,6 @@ func writer(g *graph.Graph, v graph.ValueID) int {
 	return -1
 }
 
-// readers reports whether any op from index from on, or the graph's output,
-// reads v.
-func readers(g *graph.Graph, v graph.ValueID, from int) bool {
-	for _, o := range g.Ops[from:] {
-		if slices.Contains(o.In, v) {
-			return true
-		}
-	}
-	return slices.Contains(g.Out, v)
-}
-
 // redirect makes every op from index from on, and the graph's output, read
 // to where they read v.
 func redirect(g *graph.Graph, v, to graph.ValueID, from int) {
@@ -181,22 +170,6 @@ func skipping(match func(g *graph.Graph) func(int, *graph.Op) bool, in int) func
 	}
 }
 
-// zeroing is the rewrite zeroing (zero) every op match picks; g itself where
-// it picks none.
-func zeroing(match func(g *graph.Graph) func(int, *graph.Op) bool) func(*graph.Graph) *graph.Graph {
-	return func(g *graph.Graph) *graph.Graph {
-		vs := written(g, match(g))
-		if len(vs) == 0 {
-			return g
-		}
-		out := cloned(g)
-		for _, v := range vs {
-			zero(out, writer(out, v))
-		}
-		return out
-	}
-}
-
 // editing is the rewrite applying edit to every op match picks; g itself
 // where it picks none.
 func editing(match func(g *graph.Graph) func(int, *graph.Op) bool, edit func(o *graph.Op)) func(*graph.Graph) *graph.Graph {
@@ -243,22 +216,9 @@ func inBlocks(keep func(li int) bool, match func(*graph.Graph) func(int, *graph.
 	}
 }
 
-// reading matches an op of kind k reading a value named name.
-func reading(k graph.OpKind, name string) func(*graph.Graph) func(int, *graph.Op) bool {
-	return func(g *graph.Graph) func(int, *graph.Op) bool {
-		return func(_ int, o *graph.Op) bool {
-			return o.Kind == k && slices.ContainsFunc(o.In, func(v graph.ValueID) bool { return isNamed(g, v, name) })
-		}
-	}
-}
-
 // recurrent and attends pick m's blocks by kind.
 func recurrent(m *model.Model) func(int) bool {
 	return func(li int) bool { return m.Cfg.LayerKind(li).Recurrent() }
-}
-
-func attends(m *model.Model) func(int) bool {
-	return func(li int) bool { return m.Cfg.LayerKind(li).Attends() }
 }
 
 // The pieces the gates' violations take out, each as the rewrite of the
