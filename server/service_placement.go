@@ -29,7 +29,7 @@ func (s *PlacementService) GetPlacement(ctx context.Context, req *connect.Reques
 // SetPlacement moves the seam. It takes the session's lock, so it waits for
 // a generate to finish rather than mutating the instance mid-Forward.
 // reach makes every device named part of the session's model's tier and puts
-// the session's instance on it: how a model loaded host-only, or without the
+// the session's instance on it: how a model loaded CPU-only, or without the
 // device asked for, is moved there later (Engine.attachDevice).
 func (s *PlacementService) reach(sess *Session, ids ...string) error {
 	for _, id := range ids {
@@ -112,7 +112,7 @@ func (s *PlacementService) SetPlacement(ctx context.Context, req *connect.Reques
 // A range wholly on devices that names a card moves there through
 // Engine.MoveBlocks, so a generating session keeps generating while the
 // target prepares. A card the model's tier was not opened with, and a model
-// loaded host-only, are not refused: the card joins the model's tier
+// loaded CPU-only, are not refused: the card joins the model's tier
 // (Engine.attachDevice).
 func (s *PlacementService) RelocateBlocks(ctx context.Context, req *connect.Request[v1.RelocateBlocksRequest]) (*connect.Response[v1.RelocateBlocksResponse], error) {
 	sess, err := s.E.Session(req.Msg.SessionId)
@@ -201,7 +201,7 @@ func (s *PlacementService) TuneSeam(ctx context.Context, req *connect.Request[v1
 	}
 	if sess.lm.device() == nil {
 		return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf(
-			"session %q is host-only: there is no seam to tune", sess.id))
+			"session %q is CPU-only: there is no seam to tune", sess.id))
 	}
 	sess.mu.Lock()
 	m := req.Msg

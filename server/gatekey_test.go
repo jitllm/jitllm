@@ -24,7 +24,7 @@ func serialises(t *testing.T, e *Engine, a, b *LoadedModel) bool {
 func deviceGates(lm *LoadedModel) []string {
 	var out []string
 	for _, id := range lm.gateIDs() {
-		if id != HostGateID {
+		if id != CPUGateID {
 			out = append(out, id)
 		}
 	}

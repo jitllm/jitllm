@@ -339,13 +339,13 @@ type LoadedModel struct {
 	loadedAt time.Time
 
 	// dev is the tier, shared by every session of this model: the tier owns
-	// the model, a session owns the sequence. nil for a host-only model.
+	// the model, a session owns the sequence. nil for a CPU-only model.
 	// grammars are the structured-output grammars compiled over this
 	// model's tokenizer (grammar.go).
 	grammars grammars
 
 	// The tier fields are read through device, gpuTier, devIDs and gateIDs and
-	// written only by attachDevice, under devMu: a model loaded host-only gets
+	// written only by attachDevice, under devMu: a model loaded CPU-only gets
 	// its tier when a session first asks to move to a device.
 	devMu     sync.RWMutex
 	dev       nn.LayerDevice
@@ -491,12 +491,12 @@ func (lm *LoadedModel) gateIDs() []string {
 	lm.devMu.RLock()
 	defer lm.devMu.RUnlock()
 	if len(lm.gateKeys) == 0 {
-		return []string{HostGateID}
+		return []string{CPUGateID}
 	}
 	// A partial placement runs its remaining blocks on the host, so the host
 	// gate is held too. That is not over-locking: those blocks really do run
 	// on the same cores another host session would want.
-	return append(append([]string{}, lm.gateKeys...), HostGateID)
+	return append(append([]string{}, lm.gateKeys...), CPUGateID)
 }
 
 // deviceGateKeys is the gate key of every device a tier opened -- the
@@ -522,7 +522,7 @@ func (e *Engine) deviceGateKeys(g *gpu.GPU) []string {
 // loaded tier resolved it to, or the probe's identity for it, or the id itself
 // when neither knows it (a device no model has opened has no queue).
 func (e *Engine) gateKey(id string) string {
-	if id == HostGateID {
+	if id == CPUGateID {
 		return id
 	}
 	e.gateMu.Lock()
@@ -604,7 +604,7 @@ func (e serverError) Error() string { return string(e) }
 const ErrInUse serverError = "server: still in use"
 
 // ErrPlacement is returned for a placement the session's tier cannot make: a
-// host-only session, a device the tier was not opened with, or a block another
+// CPU-only session, a device the tier was not opened with, or a block another
 // session is using where it is.
 const ErrPlacement serverError = "server: the placement cannot be made"
 
@@ -853,7 +853,7 @@ func (e *Engine) tierOptions(sessions int, tierConfig func(*gpu.Config), hostBud
 // model's tier with it, and attachDevice opens one for a model that had none.
 func (e *Engine) openTier(ids []string, sessions int, tierConfig func(*gpu.Config), hostBudget uint64) (*gpu.GPU, error) {
 	spec := strings.Join(ids, ",")
-	if spec == "" || spec == HostGateID {
+	if spec == "" || spec == CPUGateID {
 		return nil, nil
 	}
 	es, err := gpu.ParseDevices(spec)
@@ -909,7 +909,7 @@ func normaliseDeviceIDs(ids []string) []string {
 	out := make([]string, 0, len(ids))
 	for _, id := range ids {
 		id = strings.TrimSpace(id)
-		if id == "" || id == HostGateID {
+		if id == "" || id == CPUGateID {
 			continue
 		}
 		// Strip a `=BYTES` budget suffix: it names a limit, not a device.
@@ -2544,7 +2544,7 @@ func (lm *LoadedModel) Name() string { return lm.name }
 func (lm *LoadedModel) Path() string { return lm.path }
 
 // DeviceIDs is the tier this model's blocks are offered to. Empty means the
-// model is host-only and has no tier at all.
+// model is CPU-only and has no tier at all.
 func (lm *LoadedModel) DeviceIDs() []string {
 	return append([]string(nil), lm.devIDs()...)
 }
@@ -2559,7 +2559,7 @@ func (s *Session) ModelID() string { return s.modelID }
 // renders prompts and reads the model's configuration and counters.
 func (lm *LoadedModel) Model() *model.Model { return lm.m }
 
-// GPU is the model's device tier, nil for a host-only model.
+// GPU is the model's device tier, nil for a CPU-only model.
 func (lm *LoadedModel) GPU() *gpu.GPU { return lm.gpuTier() }
 
 // Inspect runs f with the session's instance, reading the session's
@@ -2669,11 +2669,11 @@ func (s *Session) finishMove(r *moveReq, res moveRes) {
 
 // attachDevice makes the device named part of the model's tier. A model that
 // has a tier takes the device with gpu.GPU.AddDevices, so its weights are not
-// held twice; one loaded host-only gets a tier opened for it (openTier, as
+// held twice; one loaded CPU-only gets a tier opened for it (openTier, as
 // LoadModel does). Either way the tier's device list is read without a lock
 // by every placement and step, so every session of the model is held off it
 // (each session's lock) for the change, and a session is not created across
-// it (attachMu). Sessions of a host-only model bind to the new tier when they
+// it (attachMu). Sessions of a CPU-only model bind to the new tier when they
 // ask to move (bindSession).
 func (e *Engine) attachDevice(lm *LoadedModel, to string) error {
 	lm.attachMu.Lock()
@@ -2803,7 +2803,7 @@ func (e *Engine) bindSessionLocked(s *Session) error {
 // refused.
 func (e *Engine) MoveBlocks(ctx context.Context, s *Session, first, last int, to string) (engine.BlockMove, error) {
 	if s.lm.device() == nil {
-		return engine.BlockMove{}, fmt.Errorf("%w: session %q was loaded host-only; there is no "+
+		return engine.BlockMove{}, fmt.Errorf("%w: session %q was loaded CPU-only; there is no "+
 			"device to move blocks to", ErrPlacement, s.id)
 	}
 	if !s.lm.holds(to) {

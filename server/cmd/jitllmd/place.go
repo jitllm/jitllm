@@ -122,7 +122,7 @@ func relocateBlocks(ctx context.Context, c cli, cn *conn, session, spec, to stri
 	resp, err := cn.Placement.RelocateBlocks(ctx, connect.NewRequest(req))
 	if err != nil {
 		// A hole in the seam, a device the session was not loaded with and a
-		// host-only model are declined by name; print the server's reason.
+		// CPU-only model are declined by name; print the server's reason.
 		return clientError("relocating blocks", cn.base, err)
 	}
 	m := resp.Msg

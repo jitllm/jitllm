@@ -17,8 +17,8 @@ import (
 // conversation on from there, and brings them home again, each reply the
 // token-for-token continuation an unmoved host session gives.
 //
-// VIOLATION SIGNATURE. Put back the host-only refusal in RelocateBlocks and
-// the first move fails with "loaded host-only"; skip bindSession and the move
+// VIOLATION SIGNATURE. Put back the CPU-only refusal in RelocateBlocks and
+// the first move fails with "loaded CPU-only"; skip bindSession and the move
 // answers 0 blocks moved; drop the history on the way and a reply parts from
 // the control's.
 func TestAHostLoadedModelRelocatesToADeviceAndBack(t *testing.T) {

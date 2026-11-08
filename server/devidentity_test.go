@@ -26,7 +26,7 @@ const (
 // probeDevices enumerates it.
 func thisBoxDevices() []DeviceInfo {
 	return []DeviceInfo{
-		{ID: HostGateID, Backend: "cpu", Kind: KindCPU, TotalMemory: 31 << 30,
+		{ID: CPUGateID, Backend: "cpu", Kind: KindCPU, TotalMemory: 31 << 30,
 			CountsTowardHostBudget: true, Available: true},
 		{ID: "vulkan:0", Backend: "vulkan", Name: sameModel, Kind: KindDiscrete,
 			TotalMemory: 4 << 30, PhysicalID: oneCard, Available: true},

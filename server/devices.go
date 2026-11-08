@@ -101,7 +101,7 @@ func (e *Engine) snapshotDevices() []DeviceInfo {
 
 func probeDevices(rocm string, admit backend.Restriction) ([]DeviceInfo, error) {
 	out := []DeviceInfo{{
-		ID:                     HostGateID,
+		ID:                     CPUGateID,
 		Backend:                "cpu",
 		Name:                   hostName(),
 		Kind:                   KindCPU,
