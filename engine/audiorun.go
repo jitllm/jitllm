@@ -6,6 +6,7 @@ import (
 
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/graph"
+	"github.com/jitllm/jitllm/model"
 )
 
 // EncodeClip is the rows a voice clip puts in the prompt: the clip -- mono
@@ -23,6 +24,11 @@ func (s *Instance) EncodeClip(clip []float32) ([]float32, error) {
 		return nil, fmt.Errorf("model: an empty clip")
 	}
 	defer s.fr.Enter()()
+	return s.encodeClip(clip)
+}
+
+// encodeClip is EncodeClip under the pager the caller holds.
+func (s *Instance) encodeClip(clip []float32) ([]float32, error) {
 	a := s.m.Container.Vision().Audio
 	tr, tg := s.audio, s.m.Audio
 	n := max(min(len(clip), int(a.MaxSamples)), int(a.SampleRate)/2)
@@ -55,4 +61,45 @@ func (s *Instance) audioReady() error {
 		return fmt.Errorf("model: the audio tower did not compose: %w", s.audioErr)
 	}
 	return fmt.Errorf("model: the model has no audio tower")
+}
+
+// encodeClips is spans with every clip span's rows in place: encoded into a
+// buffer of the audio run's (one a clip of the prompt), or, for a clip whose
+// rows all lie before row from -- restored by the prefix cache -- a buffer
+// nothing reads, with no audio block run. The caller's spans are left as
+// they were.
+func (s *Instance) encodeClips(spans []model.Span, from int) ([]model.Span, error) {
+	if err := s.audioReady(); err != nil {
+		return nil, err
+	}
+	tr := s.audio
+	D := int(s.m.Container.Vision().Audio.ProjDim)
+	tr.spans = append(tr.spans[:0], spans...)
+	k, row := 0, 0
+	for i := range tr.spans {
+		sp := &tr.spans[i]
+		r := sp.N(s.c.NEmbd)
+		if sp.Clip != nil && sp.Embd == nil {
+			if k == len(tr.pics) {
+				tr.pics = append(tr.pics, nil)
+			}
+			if cap(tr.pics[k]) < sp.ClipRows*D {
+				tr.pics[k] = make([]float32, sp.ClipRows*D)
+			}
+			sp.Embd = tr.pics[k][:sp.ClipRows*D]
+			k++
+			if row+r > from {
+				rows, err := s.encodeClip(sp.Clip)
+				if err != nil {
+					return nil, fmt.Errorf("model: span %d: %w", i, err)
+				}
+				if len(rows) != len(sp.Embd) {
+					return nil, fmt.Errorf("model: span %d is a clip of %d rows and the tower writes %d", i, sp.ClipRows, len(rows)/D)
+				}
+				copy(sp.Embd, rows)
+			}
+		}
+		row += r
+	}
+	return tr.spans, nil
 }
