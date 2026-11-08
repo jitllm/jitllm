@@ -306,8 +306,18 @@ func latentUnnormed(m *model.Model) func() {
 // latentAttnUngated leaves a latent attention's output ungated.
 func latentAttnUngated(m *model.Model) func() { return restated(m, skipping(opsNamed("att.gated"), 1)) }
 
-// recurrentUngated leaves a recurrent block's output ungated.
+// recurrentUngated leaves a recurrent block's output ungated: a delta rule's
+// stated gate over (z, o) restated as o alone (Config.DeltaGate), the op an
+// older front end names "gated" skipped to its ungated input elsewhere.
 func recurrentUngated(m *model.Model) func() {
+	if was := m.Cfg.DeltaGate; was != nil {
+		m.Cfg.DeltaGate = &jlm.Program{NIn: 2, Out: 1}
+		undo := restate(m, func(map[jlm.Role]graph.Shape) {})
+		return func() {
+			m.Cfg.DeltaGate = was
+			undo()
+		}
+	}
 	return restated(m, skipping(inBlocks(recurrent(m), opsNamed("gated")), 1))
 }
 
