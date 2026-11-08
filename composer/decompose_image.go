@@ -1035,7 +1035,7 @@ func decomposeRowsAttend(o graph.Op, c *Context) ([]Prim, error) {
 	if G == 0 {
 		G = H
 	}
-	rel := len(o.In) == 4 && len(o.Weight) == 2
+	rel := len(o.In) == 4 && len(o.Weight) == 1
 	if !rel && len(o.In) != 3 || len(o.Out) != 1 || H < 1 || hd < 1 || G < 1 || H%G != 0 || c.width(o.In[0]) != H*hd ||
 		c.width(o.In[1]) != G*hd || c.width(o.In[2]) != G*hd || c.width(o.Out[0]) != H*hd ||
 		rel && (G != H || c.width(o.In[3]) != H*hd) {
@@ -1070,57 +1070,34 @@ func decomposeRowsAttend(o graph.Op, c *Context) ([]Prim, error) {
 		dx.op(OpMul, F, dx.at(0, qs, q, el), dx.at(1, ks, j, kel))
 	}
 	var relPrims []Prim
-	var P, rels Operand
+	var rels Operand
 	if rel {
-		// P: the projected positions live-1 down to 1-live, then each query
-		// row's dots with the rows its keys' offsets name.
-		w, tb := o.Weight[0], o.Weight[1]
-		wo, err := c.weight(w)
-		if err != nil {
-			return nil, err
-		}
+		// Each query row's dots with the positions its keys' offsets name:
+		// position q-j, the table's row top-1-q+j.
+		tb := o.Weight[0]
 		to, err := c.weight(tb)
 		if err != nil {
 			return nil, err
 		}
-		if w.Rows != D || w.K != D || tb.K != D || tb.Rows < 1 || tb.Rows%2 == 0 {
-			return nil, fmt.Errorf("a relative-position attention of %dx%d positions and a %dx%d table over %d", w.Rows, w.K, tb.Rows, tb.K, D)
+		if tb.K != D || tb.Rows < 2*R-1 || tb.Rows%2 == 0 {
+			return nil, fmt.Errorf("a relative-position attention over %d rows by a %dx%d table over %d", R, tb.Rows, tb.K, D)
 		}
 		top := (tb.Rows + 1) / 2
-		P, rels = tmp("pos"), tmp("rel")
-		PR := 2*R - 1
-		var px exprs
-		pin := []Operand{TablePos.op()}
-		pf := Facts{Extents: map[int]int{0: R + 1}}
-		{
-			m, r, cc := px.coord(0), px.coord(1), px.coord(2)
-			live := px.op(OpMax, U, px.load(0, px.u(0)), px.u(1))
-			// Table row top-live+m holds position live-1-m.
-			row := px.op(OpMin, U, px.op(OpSub, U, px.op(OpAdd, U, px.u(uint32(top)), m), live), px.u(uint32(tb.Rows-1)))
-			wv, err := weightElement(&px, wo, D, D, &pin, &pf, r, cc)
-			if err != nil {
-				return nil, err
-			}
-			tv, err := weightElement(&px, to, tb.Rows, D, &pin, &pf, row, cc)
-			if err != nil {
-				return nil, err
-			}
-			px.op(OpMul, F, wv, tv)
-		}
+		rels = tmp("rel")
 		var rx exprs
+		rin := []Operand{c.value(o.In[3])}
+		rf := Facts{Extents: map[int]int{}}
 		{
 			q, h, j, e := rx.coord(0), rx.coord(1), rx.coord(2), rx.coord(3)
-			live := rx.op(OpMax, U, rx.load(2, rx.u(0)), rx.u(1))
 			el := rx.op(OpAdd, U, rx.op(OpMul, U, h, rx.u(uint32(hd))), e)
-			// live-1-q+j, a query past the live rows clamped to P's rows.
-			at := rx.op(OpMin, U, rx.op(OpSub, U, rx.op(OpAdd, U, rx.op(OpSub, U, live, rx.u(1)), j), q), rx.u(uint32(PR-1)))
-			rx.op(OpMul, F, rx.at(0, c.rows(o.In[3]), q, el), rx.at(1, []int{PR, D}, at, el))
+			row := rx.op(OpSub, U, rx.op(OpAdd, U, rx.u(uint32(top-1)), j), q)
+			pv, err := weightElement(&rx, to, tb.Rows, D, &rin, &rf, row, el)
+			if err != nil {
+				return nil, err
+			}
+			rx.op(OpMul, F, rx.at(0, c.rows(o.In[3]), q, el), pv)
 		}
-		relPrims = []Prim{
-			{Kind: PrimReduce, Shape: []int{PR, D, D}, In: pin, Out: P, Combine: OpAdd, Expr: px.e, Facts: pf},
-			{Kind: PrimReduce, Shape: []int{Q, H, R, hd}, In: []Operand{c.value(o.In[3]), P, TablePos.op()}, Out: rels, Combine: OpAdd,
-				Expr: rx.e, Facts: Facts{Extents: map[int]int{2: R + 1}}},
-		}
+		relPrims = []Prim{{Kind: PrimReduce, Shape: []int{Q, H, R, hd}, In: rin, Out: rels, Combine: OpAdd, Expr: rx.e, Facts: rf}}
 	}
 	var sx exprs
 	scoreIn := []Operand{dots, TablePos.op()}
