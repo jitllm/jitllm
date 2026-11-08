@@ -171,7 +171,9 @@ const (
 	OpPool
 	// OpTakeRows is the rows of In[0] the step's request names, in its
 	// order, Out[0]'s first rows (a decision's option markers); the rows
-	// past them repeat the last.
+	// past them repeat the last. Offset, past 0, names the request's slot
+	// the rows are read from (composer's request slots: after the marker
+	// rows, each the call's live rows long).
 	OpTakeRows
 	// OpRowConv is a centred depthwise convolution of In[0] across the
 	// step's live rows: each channel's Taps taps (Weight[0], channel-major)
@@ -397,7 +399,8 @@ const (
 	// and both ways: NHead heads of HeadDim, the scores scaled by Scale, a
 	// softmax over the live rows. The keys and values are NKVHead heads (0:
 	// NHead), each read by NHead/NKVHead consecutive query heads. Out[0] has
-	// In[0]'s rows.
+	// In[0]'s rows. Offset, past 0, holds query row q to the keys from the
+	// request's slot Offset to its slot Offset+1 (their row q).
 	OpRowsAttend
 	// OpUpsample is In[0], a grid of rows GridW wide, Span times as large
 	// each way: row (y, x) of Out[0] is In[0]'s row (y/Span, x/Span), the
@@ -406,6 +409,10 @@ const (
 	// OpAppendRow is In[0]'s rows, then row Offset of Weight[0]: a marker
 	// after a picture's rows that the reference embeds through a table.
 	OpAppendRow
+	// OpSpanPool is each row r of Out[0] the mean of In[0]'s rows from the
+	// request's slot Offset to its slot Offset+1 (their row r), zero for an
+	// empty span: a question's or an option's span of a prompt.
+	OpSpanPool
 	numOps
 )
 
@@ -463,6 +470,8 @@ func (k OpKind) String() string {
 		return "state_conv"
 	case OpPool:
 		return "pool"
+	case OpSpanPool:
+		return "span_pool"
 	case OpTakeRows:
 		return "take_rows"
 	case OpRowConv:

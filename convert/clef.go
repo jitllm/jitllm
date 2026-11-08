@@ -34,8 +34,18 @@ func clefOf(f *meta.File, c *jlm.Config) error {
 		return fmt.Errorf("a clef head's LayerNorm epsilon is %v", e)
 	}
 	c.DecisionEps = float32(e)
+	// joint_schema_model.py: QUESTION_TYPES {noul: 0, choice: 1, score: 2},
+	// render's sort_keys, question_options' sorted choices and its noul
+	// read true then false; systemone_answer's confidence the largest
+	// probability.
+	c.JointHead = &jlm.JointHead{TypeRows: [3]uint8{1, 2, 0}, SortKeys: true, SortChoices: true, NoulTrueFirst: true,
+		IDInstructions: true, Confidence: jlm.ConfidencePMax}
 	return nil
 }
+
+// StatesJointHead reports whether a decision kind's container states a joint
+// head (jlm.JointHead).
+func StatesJointHead(kind jlm.DecisionKind) bool { return kind == jlm.DecisionClef }
 
 // Clef's head tensors are named as their roles are (format/jlm/decisionroles.go),
 // with ".weight" on all but the biases and the scalars.

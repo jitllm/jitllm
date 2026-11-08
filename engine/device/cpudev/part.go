@@ -64,6 +64,9 @@ func NewPool(dev *Device, steps *nn.Steps, part Part, weights []unsafe.Pointer, 
 	return p
 }
 
+// PrepErr is why the readout formed none, the composer's error (nn.PrepReporter).
+func (p *Pool) PrepErr() error { return p.part.Err }
+
 // Pool reads the pooled, unit-length row of x's n rows into out -- with raw,
 // the row before the dense heads -- reporting whether it served it; a
 // decline is counted by name (nn.PoolDevice). req is the request words a

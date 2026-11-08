@@ -102,6 +102,12 @@ func (e *embedMode) collect(s *Instance, base, n int) error {
 		}
 	}
 	if s.readout == nil || !s.readout.Pool(s.bx[:n*s.c.NEmbd], n, e.req, e.out, e.raw) {
+		if _, err := s.m.UncoveredAt(-3); err != nil {
+			return fmt.Errorf("model: the readout's graph: %w", err)
+		}
+		if r, ok := s.readout.(nn.PrepReporter); ok && r.PrepErr() != nil {
+			return fmt.Errorf("model: the readout has no composed form on the CPU: %w", r.PrepErr())
+		}
 		return fmt.Errorf("model: the embedding readout has no composed form on this instance: %v", s.prepErr())
 	}
 	return nil

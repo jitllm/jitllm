@@ -210,7 +210,10 @@ func encodeConfigAt(c *Config, v uint32) []byte {
 	// twenty-four; an older reader drops it and opens the model as the
 	// backbone it is. The twenty-sixth, a marker head's prompt, implies the
 	// first twenty-five, an empty label statement standing for none.
-	marker := c.MarkerPrompt != nil
+	// The twenty-seventh, a joint head's statement, implies the first
+	// twenty-six, an empty marker prompt standing for none.
+	joint := c.JointHead != nil
+	marker := joint || c.MarkerPrompt != nil
 	labels := marker || c.DecisionLabels != nil
 	delta := labels || c.DeltaDecay != nil || c.DeltaGate != nil
 	geoms := delta || len(c.Geoms) != 0
@@ -383,7 +386,14 @@ func encodeConfigAt(c *Config, v uint32) []byte {
 		encodeDecisionLabels(w, l)
 	}
 	if marker {
-		encodeMarkerPrompt(w, c.MarkerPrompt)
+		p := c.MarkerPrompt
+		if p == nil {
+			p = &MarkerPrompt{}
+		}
+		encodeMarkerPrompt(w, p)
+	}
+	if joint {
+		encodeJointHead(w, c.JointHead)
 	}
 	return w.b
 }
@@ -586,7 +596,12 @@ func decodeConfigAt(b []byte, v uint32) (*Config, error) {
 		}
 	}
 	if r.err == nil && len(r.b) > 0 {
-		c.MarkerPrompt = decodeMarkerPrompt(r)
+		if p := decodeMarkerPrompt(r); len(p.Nodes) > 0 {
+			c.MarkerPrompt = p
+		}
+	}
+	if r.err == nil && len(r.b) > 0 {
+		c.JointHead = decodeJointHead(r)
 	}
 	if r.err != nil {
 		return nil, r.err

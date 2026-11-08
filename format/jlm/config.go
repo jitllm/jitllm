@@ -723,6 +723,9 @@ type Config struct {
 	// MarkerPrompt is a marker head's prompt (Flag2HeadBlocks), nil for a
 	// readout of another mechanism. The twenty-sixth optional tail.
 	MarkerPrompt *MarkerPrompt
+	// JointHead is a joint head's statement (Clef's JointSchemaHead), nil
+	// for a readout of another mechanism. The twenty-seventh optional tail.
+	JointHead *JointHead
 
 	// Acts are the FFN activations the blocks apply, each stated in the op
 	// language (Expr), and ActLayers each layer's index into them (none:

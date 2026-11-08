@@ -96,6 +96,10 @@ func Verify(g *Graph, f Facts) error {
 		strided := (o.Kind == OpConv || o.Kind == OpUnfold) && o.Attr.Stride > 1
 		grid := strided || o.Kind == OpRegroup || o.Kind == OpFold || o.Kind == OpDropRows ||
 			o.Kind == OpRowBreak || o.Kind == OpWrapRows || o.Kind == OpMarkRow || o.Kind == OpTableRows || o.Kind == OpRowsAttend || o.Kind == OpUpsample || o.Kind == OpAppendRow
+		// Attention over the call's own rows takes the call's rows.
+		if o.Kind == OpRowsAttend && len(o.In) > 0 && rows(o.In[0]) == 0 {
+			grid = false
+		}
 		for j, id := range o.Out {
 			if r := rows(id); grid && j == 0 && r < 1 {
 				bad("%s: a %s's %%%s states no rows", at, o.Kind, g.Values[id].Name)
