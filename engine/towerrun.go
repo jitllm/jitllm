@@ -143,7 +143,6 @@ func (in *Instance) newTowerRun(tg *model.TowerGraphs, base int, t *jlm.Tower) (
 			plans.BandOut = max(plans.BandOut, cl.Rows*3)
 		}
 		plans.Band = append(plans.Band, band)
-		plans.BandRuns = append(plans.BandRuns, cl.BandRuns)
 	}
 	tapsW := make([]nn.Tensors, len(tg.Taps))
 	for j, g := range tg.Taps {
@@ -335,6 +334,32 @@ func (s *Instance) encodePicture(img image.Image, dst, deep []float32) ([]float3
 	return dst, nil
 }
 
+// entry runs class class's entry of sample format px over the picture's
+// words into n rows: a banded resize's source rows a band at a time into the
+// accumulator, each of its band forms runs in order, then the entry
+// finishing it.
+func (tr *towerRun) entry(runs []uint8, class int, px uint8, words []uint32, n int, rows []float32) error {
+	h, side := int(tr.req[composer.RequestPicH]), max(int(tr.req[composer.RequestPicBandRows]), 1)
+	for _, k := range runs {
+		for b := 0; b == 0 || b < h; b += side {
+			tr.req[composer.RequestPicBand] = uint32(b)
+			if err := tr.parts.Band(class, k, words, tr.req, tr.posTab, n); err != nil {
+				return err
+			}
+		}
+	}
+	return tr.parts.Entry(class, px, words, tr.req, tr.posTab, n, rows)
+}
+
+// bandRuns is the band forms part class class's entry of sample format px
+// runs first: a picture class's, or past them a video class's.
+func bandRuns(tg *model.TowerGraphs, class int, px uint8) []uint8 {
+	if class < len(tg.Classes) {
+		return tg.Classes[class].BandRuns[px]
+	}
+	return tg.Videos[class-len(tg.Classes)].BandRuns[px]
+}
+
 // squareFits says whether square sq's resized picture fits its class
 // (graph.Attrs.Holds).
 func squareFits(sq model.Square, a graph.Attrs) error {
@@ -353,7 +378,7 @@ func (ts *Instance) towerSquare(tr *towerRun, sq model.Square, class int, px uin
 	D, E := int(ts.m.Container.Vision().ProjDim), int(ts.m.Container.Vision().NEmbd)
 	n := tg.Lead + sq.Gw*sq.Gh + tg.Tail
 	tr.size(n, E)
-	if err := tr.parts.Entry(class, px, words, tr.req, tr.posTab, n, tr.rows); err != nil {
+	if err := tr.entry(bandRuns(tg, class, px), class, px, words, n, tr.rows); err != nil {
 		return fmt.Errorf("model: %w", err)
 	}
 	if err := ts.towerBlocks(tr, sq.Gw, tr.windows(tg, sq.Gw, sq.Gh)); err != nil {
@@ -580,7 +605,7 @@ func (ts *Instance) chainRun(tr *towerRun, tg *model.TowerGraphs, words []uint32
 	e := cl.Entry[px]
 	o := e.Values[e.Out[0]]
 	cur := tr.act[0][:o.Rows*o.Width]
-	if err := tr.parts.Entry(0, px, words, tr.req, tr.posTab, cl.Rows, cur); err != nil {
+	if err := tr.entry(cl.BandRuns[px], 0, px, words, cl.Rows, cur); err != nil {
 		return err
 	}
 	tr.posTab[0] = uint32(blockLive)
