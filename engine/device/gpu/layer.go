@@ -1438,13 +1438,15 @@ type blockScratch struct {
 	// embWhy why PrepHead could not hold them. embTok and embPos are the
 	// rows' tokens and positions the composer's gather reads, embCast the
 	// rows a promise no call takes are gathered into (materializeLocked),
-	// embPLE their per-layer inputs, each as wide as the widest call.
+	// every stream of them, embPLE their per-layer inputs, each as wide as
+	// the widest call; castViews is embCast's streams at a call's rows.
 	embedGraph     *graph.Graph
 	embW, posW     *resident
 	embWhy         partDecline
 	embTok, embPos backend.Buf
 	embCast        backend.Buf
 	embPLE         backend.Buf
+	castViews      map[int][]backend.Buf
 	// embOuts is the buffers a step's input rows write (embedOuts).
 	embOuts [partIO]backend.Buf
 	// embSW and embSV are the tensors the input rows bind past the token

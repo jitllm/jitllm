@@ -127,6 +127,28 @@ func (bs *blockScratch) embedOuts(s, R int) ([]backend.Buf, error) {
 	return bs.withPLE(n), nil
 }
 
+// castStreams is what a promise made real writes at R rows of s streams:
+// embCast's views, stream-major, then the per-layer inputs where the plan
+// has them.
+func (bs *blockScratch) castStreams(s, R int) ([]backend.Buf, error) {
+	v, ok := bs.castViews[R]
+	if !ok || len(v) != s {
+		w := R * bs.embW.k * 4
+		v = make([]backend.Buf, s)
+		for k := range v {
+			var err error
+			if v[k], err = backend.View(bs.embCast, k*w, w); err != nil {
+				return nil, fmt.Errorf("tier: stream %d of %d rows gathered alone: %w", k, R, err)
+			}
+		}
+		if bs.castViews == nil {
+			bs.castViews = map[int][]backend.Buf{}
+		}
+		bs.castViews[R] = v
+	}
+	return bs.withPLE(copy(bs.embOuts[:], v)), nil
+}
+
 // withPLE is the first n of embOuts, then the per-layer inputs where the
 // plan has them: the input rows' graph writes them last.
 func (bs *blockScratch) withPLE(n int) []backend.Buf {
@@ -373,7 +395,7 @@ func (g *devTier) materializeComposed(pe *embPend) {
 	for _, b := range [...]struct {
 		buf   *backend.Buf
 		words int
-	}{{&bs.embCast, batchWidth * bs.embW.k}, {&bs.embPLE, batchWidth * bs.p.PLEWidth * min(bs.p.PLEDim, 1)}} {
+	}{{&bs.embCast, batchWidth * bs.embW.k * max(bs.embStreams(), 1)}, {&bs.embPLE, batchWidth * bs.p.PLEWidth * min(bs.p.PLEDim, 1)}} {
 		if *b.buf != nil || b.words == 0 {
 			continue
 		}
@@ -459,11 +481,10 @@ func (g *devTier) composedSession(s backend.Session) {
 	defer g.embTo.leave()
 	n, d := len(pe.ids), bs.embW.k
 	if ns := bs.embStreams(); ns > 1 {
-		// Every stream, through the scratch's own residual: the call that
-		// takes the rows uploads them.
-		// The per-layer inputs into the call's own (embPLE): the scratch's
-		// are its rows', not the call's.
-		outs, err := bs.embedOuts(ns, rd.rows)
+		// Every stream into embCast, stream-major at the call's rows: the
+		// scratch's own residual holds its rows, not the call's. The
+		// per-layer inputs into the call's own (embPLE) likewise.
+		outs, err := bs.castStreams(ns, rd.rows)
 		if err == nil && bs.p.PLEDim != 0 {
 			outs[len(outs)-1] = bs.embPLE
 		}

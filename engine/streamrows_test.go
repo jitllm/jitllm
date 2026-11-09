@@ -20,8 +20,8 @@ import (
 // collapse reduces to the row the head reads (nn.Head.Collapse). Gemma 3n's
 // blocks are served too, DeepSeek V4's are the tier's (each selects its
 // keys). Each decode step's rows and head are served, every head call's
-// collapse, the prompt's rows declined by name (the host fills a chunk's
-// first stream alone), within 1e-5 of the host's logits; each of
+// collapse, the prompt's rows gathered on the card over every stream, within
+// 1e-5 of the host's logits; each of
 // streamRowsViolations moves them past 100 times the clean worst and past
 // 1e-4.
 func TestStreamRowsServeOnTheCard(t *testing.T) {
@@ -89,8 +89,8 @@ func TestStreamRowsServeOnTheCard(t *testing.T) {
 						nc, nh, dc, dh, len(toks)+1, heads)
 				case tc.blocks && (nb != len(toks)*m.Cfg.NLayer || db != 0):
 					t.Fatalf("%d block steps served and %d declined, want %d", nb, db, len(toks)*m.Cfg.NLayer)
-				case st.StepDeclines()[nn.DeclineEmbedStreams] != 1:
-					t.Fatalf("the prompt's rows declined %d times for %q, want once",
+				case st.StepDeclines()[nn.DeclineEmbedStreams] != 0:
+					t.Fatalf("the prompt's rows declined %d times for %q: the card gathers a prompt's rows over every stream",
 						st.StepDeclines()[nn.DeclineEmbedStreams], nn.DeclineName(int(nn.DeclineEmbedStreams)))
 				case st.UnformedAtStep != 0:
 					t.Fatalf("%d composed part(s) formed at a step, not at the placement", st.UnformedAtStep)
