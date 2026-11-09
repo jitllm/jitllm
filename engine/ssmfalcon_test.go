@@ -13,7 +13,7 @@ import (
 // Mamba-2 mixer both, the mixer's projection beside the attention's four.
 func falconh1Block(m *model.Model, norm bool) bool {
 	c := m.Cfg
-	ok := c.Arch == "falcon-h1" && c.SSD() && c.SSDAttn() && c.RopeNeox && !c.NoPosEnc &&
+	ok := c.SSD() && c.SSDAttn() && c.RopeNeox && !c.NoPosEnc &&
 		c.NHead == 4 && c.NKVHead == 2 && !c.TiedEmbd
 	for i := range m.Layers {
 		l := &m.Layers[i]

@@ -27,7 +27,7 @@ type Embedder struct {
 // residual has no readout the weights were trained for.
 func NewEmbedder(m *model.Model, opts ...Option) (*Embedder, error) {
 	if !m.IsEmbedding() {
-		return nil, fmt.Errorf("model: %s is not an embedding model (its container sets no pooling)", m.Cfg.Arch)
+		return nil, fmt.Errorf("model: not an embedding model (its container sets no pooling)")
 	}
 	c := m.Cfg
 	st, err := NewInstance(m, min(c.NCtx, model.EmbedMaxSeq), opts...)
@@ -43,7 +43,7 @@ func NewEmbedder(m *model.Model, opts ...Option) (*Embedder, error) {
 // context where that is less.
 func EmbedderFor(m *model.Model) (*Embedder, error) {
 	if !m.IsEmbedding() {
-		return nil, fmt.Errorf("model: %s is not an embedding model (its container sets no pooling)", m.Cfg.Arch)
+		return nil, fmt.Errorf("model: not an embedding model (its container sets no pooling)")
 	}
 	return &Embedder{m: m, max: min(m.Cfg.NCtx, model.EmbedMaxSeq)}, nil
 }

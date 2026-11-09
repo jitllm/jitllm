@@ -14,7 +14,7 @@ import (
 // is refused.
 func TestClampTailRoundTrips(t *testing.T) {
 	base := func() *Config {
-		return &Config{Arch: ArchDBRX, NLayer: 3, NEmbd: 64, NHead: 4, NKVHead: 2,
+		return &Config{NLayer: 3, NEmbd: 64, NHead: 4, NKVHead: 2,
 			HeadDim: 16, NRot: 16, NFFN: 32, NVocab: 100352, NExpert: 4, NExpertUsed: 2,
 			NFFNExp: 32, RMSEps: 1e-5, RopeBase: 5e5, EmbdScale: 1, Flags: FlagLayerNorm | FlagRopeNeox}
 	}

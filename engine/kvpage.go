@@ -2201,10 +2201,10 @@ func (kv *kvCache) writable(li, pos int) {
 // identity (two fine-tunes of one architecture) remains the namespace's job.
 func geomDigest(c *model.Config, nseq int, l kvLayout) []byte {
 	h := sha256.New()
-	fmt.Fprintf(h, "kvgeom1|nseq=%d|elem=%s|hm=false|nkv=%d|hd=%d|L=%d|embd=%d|head=%d|rot=%d|ffn=%d|vocab=%d|rope=%g|swa=%d/%d|arch=%s|exp=%d/%d",
+	fmt.Fprintf(h, "kvgeom1|nseq=%d|elem=%s|hm=false|nkv=%d|hd=%d|L=%d|embd=%d|head=%d|rot=%d|ffn=%d|vocab=%d|rope=%g|swa=%d/%d|exp=%d/%d",
 		nseq, l.elemTag(), c.NKVHead, c.HeadDim, c.NLayer,
 		c.NEmbd, c.NHead, c.NRot, c.NFFN, c.NVocab, c.RopeBase,
-		c.SWAWindow, c.SWAPeriod, c.Arch, c.NExpert, c.NExpertUsed)
+		c.SWAWindow, c.SWAPeriod, c.NExpert, c.NExpertUsed)
 	// The blocks' own geometries, only where they have them: every other
 	// model's digest, and so every page it stored, is unchanged.
 	if c.MixedGeom() {

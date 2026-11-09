@@ -22,7 +22,7 @@ func lfm2Fixtures() []struct {
 	}{
 		{"synth-lfm2", func(m *model.Model) bool {
 			c := m.Cfg
-			ok := c.Arch == "lfm2" && c.ShortConv() && !c.SSD() && c.RopeNeox && c.QKNorm && c.NHead == 4 &&
+			ok := c.ShortConv() && !c.SSD() && c.RopeNeox && c.QKNorm && c.NHead == 4 &&
 				c.NKVHead == 2 && c.TiedEmbd && c.SSM.ConvKernel == 3
 			for i, conv := range []bool{true, false, true, true} {
 				l := &m.Layers[i]
@@ -36,7 +36,7 @@ func lfm2Fixtures() []struct {
 		}},
 		{"synth-lfm2moe", func(m *model.Model) bool {
 			c := m.Cfg
-			ok := c.Arch == "lfm2" && c.ShortConv() && c.NExpert == 8 && c.NExpertUsed == 2 && c.ExpertSigmoid &&
+			ok := c.ShortConv() && c.NExpert == 8 && c.NExpertUsed == 2 && c.ExpertSigmoid &&
 				c.NDenseLead == 1 && m.ExpSelBias() != nil && c.TiedEmbd
 			for i, conv := range []bool{true, false, true, true} {
 				ok = ok && c.LayerKind(i).Recurrent() == conv && (i == 0) != (m.Layers[i].Router.E != nil)

@@ -13,7 +13,7 @@ func TestDecisionLabelsRoundTrip(t *testing.T) {
 		NoulTrue: []string{"yes", "Yes"}, NoulFalse: []string{"no"}, NoulRatings: 9, NoulTrueFirst: true,
 		ScoreByKey: true, Reversed: true, SortKeys: true, IDInstructions: true, EntropyConfidence: true,
 		SortedLegend: true}
-	c := &Config{Arch: ArchLlama, NLayer: 1, NEmbd: 8, NHead: 1, NKVHead: 1, HeadDim: 8, NRot: 8, NFFN: 16,
+	c := &Config{NLayer: 1, NEmbd: 8, NHead: 1, NKVHead: 1, HeadDim: 8, NRot: 8, NFFN: 16,
 		NVocab: 32, NCtx: 64, Decision: DecisionLev, DecisionLabels: l}
 	got, err := decodeConfig(encodeConfig(c))
 	if err != nil {

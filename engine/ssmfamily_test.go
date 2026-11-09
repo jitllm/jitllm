@@ -36,7 +36,7 @@ func ssmBaseFixtures() []struct {
 	}{
 		{"synth-mamba2", func(m *model.Model) bool {
 			c := m.Cfg
-			ok := c.Arch == "mamba2" && c.SSD() && c.SSM.Groups == 1 && c.SSM.NHeadV == 8 &&
+			ok := c.SSD() && c.SSM.Groups == 1 && c.SSM.NHeadV == 8 &&
 				c.SSM.StateSize == 16 && c.SSM.Inner == 128 && !c.TiedEmbd
 			for i := range m.Layers {
 				l := &m.Layers[i]

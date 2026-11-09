@@ -261,7 +261,7 @@ func (r *Remote) publishModels() {
 	out := make([]session.LoadedModel, 0, len(resp.Msg.GetLoaded()))
 	for i, m := range resp.Msg.GetLoaded() {
 		r.ids[m.GetPath()] = m.GetModelId()
-		lm := session.LoadedModel{Path: m.GetPath(), Name: m.GetName(), Arch: m.GetArchitecture(),
+		lm := session.LoadedModel{Path: m.GetPath(), Name: m.GetName(),
 			Blocks: int(m.GetBlockCount()), Colour: i, Active: m.GetPath() == r.active}
 		if lm.Name == "" {
 			lm.Name = short(m.GetPath())

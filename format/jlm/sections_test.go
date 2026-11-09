@@ -12,7 +12,7 @@ import (
 // fully-populated struct is the check that sees it.
 func TestSectionsRoundTrip(t *testing.T) {
 	cfg := &Config{
-		Arch: ArchQwen3MoE, NLayer: 28, NEmbd: 2048, NHead: 16, NKVHead: 8, HeadDim: 128,
+		NLayer: 28, NEmbd: 2048, NHead: 16, NKVHead: 8, HeadDim: 128,
 		NRot: 128, NFFN: 6144, NVocab: 151936, NCtx: 40960, RMSEps: 1e-6, RopeBase: 1e6,
 		AttnFactor: 1.5, EmbdScale: 45.25, NExpert: 128, NExpertUsed: 8, NFFNExp: 768,
 		SWAWindow: 1024, SWAPeriod: 6, RopeBaseSWA: 10000,
@@ -142,9 +142,9 @@ func TestSectionsRefuseGarbage(t *testing.T) {
 	if _, err := decodeConfig([]byte{1, 2, 3}); err == nil {
 		t.Error("a 3-byte config was accepted")
 	}
-	// A config whose architecture code this format does not define.
-	c := encodeConfig(&Config{Arch: Arch(9999), NLayer: 1})
-	if _, err := decodeConfig(c); err == nil {
-		t.Error("an unknown architecture code was accepted")
+	// The record names no architecture, whatever the converter read the
+	// source as: its first two bytes are zero.
+	if b := encodeConfig(&Config{Arch: ArchLlama, NLayer: 1}); b[0] != 0 || b[1] != 0 {
+		t.Errorf("the config record names architecture %d", uint16(b[0])|uint16(b[1])<<8)
 	}
 }

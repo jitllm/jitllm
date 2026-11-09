@@ -93,8 +93,8 @@ func embedCmd(args []string) error {
 		}
 		defer e.SetDeviceLayers(nil, 0)
 	}
-	fmt.Fprintf(os.Stderr, "%s: %s, %d dims, %v pooling, %d blocks on %s, loaded in %v\n",
-		fs.Arg(0), m.Cfg.Arch, m.Cfg.NEmbd, m.Pooling(), e.DeviceBlocks(), devName, time.Since(t0).Round(time.Millisecond))
+	fmt.Fprintf(os.Stderr, "%s: %d dims, %v pooling, %d blocks on %s, loaded in %v\n",
+		fs.Arg(0), m.Cfg.NEmbd, m.Pooling(), e.DeviceBlocks(), devName, time.Since(t0).Round(time.Millisecond))
 	out := bufio.NewWriter(os.Stdout)
 	defer out.Flush()
 	one := func(text string) error {

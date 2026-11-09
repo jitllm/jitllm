@@ -12,7 +12,7 @@ import (
 // truncated tail is refused rather than read as a default.
 func TestScalesTailRoundTrips(t *testing.T) {
 	base := func() *Config {
-		return &Config{Arch: ArchGranite, NLayer: 4, NEmbd: 64, NHead: 4, NKVHead: 2,
+		return &Config{NLayer: 4, NEmbd: 64, NHead: 4, NKVHead: 2,
 			HeadDim: 16, NRot: 16, NFFN: 128, NVocab: 1000, RMSEps: 1e-5, RopeBase: 1e7, EmbdScale: 12}
 	}
 	plain := encodeConfig(base())

@@ -255,8 +255,8 @@ func TestTwoLoadedModelsAreBothLoaded(t *testing.T) {
 		}
 	}
 	r.env.f.st.Models.Set([]session.LoadedModel{
-		{Path: a, Name: "a.jlm", Arch: "llama", Blocks: 2},
-		{Path: b, Name: "b.jlm", Arch: "llama", Blocks: 2, Colour: 1, Active: true},
+		{Path: a, Name: "a.jlm", Blocks: 2},
+		{Path: b, Name: "b.jlm", Blocks: 2, Colour: 1, Active: true},
 	})
 	r.env.f.st.Active.Set(b)
 	r.pages[scrModels].(*modelsPage).scan()

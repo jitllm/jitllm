@@ -127,14 +127,14 @@ func c6BaseFixtures() []struct {
 	}{
 		{"synth-phi2", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
-			return c.Arch == "phi2" && c.LayerNorm && c.Parallel && c.RopeNeox &&
+			return c.LayerNorm && c.Parallel && c.RopeNeox &&
 				c.NRot < c.HeadDim && l.FfnNorm == nil && l.Gate.E == nil &&
 				l.AttnNormB != nil && l.Vector(jlm.RoleFFNUpBias) != nil && l.Vector(jlm.RoleFFNDownBias) != nil && l.Vector(jlm.RoleAttnQBias) != nil &&
 				l.Vector(jlm.RoleAttnOutBias) != nil && m.OutB != nil && m.OutNormB != nil
 		}},
 		{"synth-starcoder", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
-			return c.Arch == "starcoder" && c.LayerNorm && !c.Parallel && c.NoPosEnc &&
+			return c.LayerNorm && !c.Parallel && c.NoPosEnc &&
 				c.NKVHead == 1 && c.NHead > 1 && m.PosEmbd.E != nil && l.FfnNorm != nil &&
 				l.Gate.E == nil && l.AttnNormB != nil && l.FfnNormB != nil && l.Vector(jlm.RoleFFNUpBias) != nil &&
 				l.Vector(jlm.RoleFFNDownBias) != nil && l.Vector(jlm.RoleAttnQBias) != nil && l.Vector(jlm.RoleAttnKBias) != nil && l.Vector(jlm.RoleAttnVBias) != nil && l.Vector(jlm.RoleAttnOutBias) != nil &&
@@ -142,54 +142,54 @@ func c6BaseFixtures() []struct {
 		}},
 		{"synth-stablelm", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
-			return c.Arch == "stablelm" && c.LayerNorm && !c.Parallel && c.RopeNeox &&
+			return c.LayerNorm && !c.Parallel && c.RopeNeox &&
 				c.NRot*4 == c.HeadDim && l.FfnNorm != nil && l.Gate.E != nil && l.Vector(jlm.RoleAttnQBias) != nil &&
 				l.Vector(jlm.RoleAttnOutBias) == nil && l.AttnNormB != nil && m.OutNormB != nil && !c.TiedEmbd
 		}},
 		{"synth-stablelm-par", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
-			return c.Arch == "stablelm" && c.LayerNorm && c.Parallel && l.FfnNorm == nil && l.Gate.E != nil
+			return c.LayerNorm && c.Parallel && l.FfnNorm == nil && l.Gate.E != nil
 		}},
 		{"synth-starcoder2", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
-			return c.Arch == "starcoder2" && c.LayerNorm && !c.Parallel && c.RopeNeox &&
+			return c.LayerNorm && !c.Parallel && c.RopeNeox &&
 				c.NRot == c.HeadDim && c.NKVHead < c.NHead && l.Gate.E == nil && l.FfnNorm != nil &&
 				l.AttnNormB != nil && l.FfnNormB != nil && l.Vector(jlm.RoleFFNUpBias) != nil && l.Vector(jlm.RoleFFNDownBias) != nil &&
 				l.Vector(jlm.RoleAttnQBias) != nil && l.Vector(jlm.RoleAttnOutBias) != nil && m.OutNormB != nil
 		}},
 		{"synth-falcon", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
-			return c.Arch == "falcon" && c.LayerNorm && c.Parallel && c.RopeNeox && c.NKVHead == 1 &&
+			return c.LayerNorm && c.Parallel && c.RopeNeox && c.NKVHead == 1 &&
 				l.FfnNorm == nil && l.Gate.E == nil && l.Vector(jlm.RoleFFNUpBias) == nil && l.Vector(jlm.RoleAttnQBias) == nil && l.AttnNormB != nil
 		}},
 		{"synth-falcon40", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
-			return c.Arch == "falcon" && c.Parallel && c.NKVHead == 2 && l.FfnNorm != nil &&
+			return c.Parallel && c.NKVHead == 2 && l.FfnNorm != nil &&
 				l.FfnNormB != nil && l.AttnNormB != nil && l.Gate.E == nil
 		}},
 		{"synth-nemotron", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
-			return c.Arch == "nemotron" && c.LayerNorm && !c.Parallel && c.RopeNeox &&
+			return c.LayerNorm && !c.Parallel && c.RopeNeox &&
 				2*c.NRot == c.HeadDim && m.Container.Config().Flags.Has(jlm.FlagReLU2) && l.Gate.E == nil &&
 				l.FfnNorm != nil && l.AttnNormB != nil && l.Vector(jlm.RoleFFNUpBias) != nil && l.Vector(jlm.RoleFFNDownBias) != nil &&
 				m.OutNormB != nil && !c.TiedEmbd
 		}},
 		{"synth-commandr", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
-			return c.Arch == "command-r" && c.LayerNorm && c.Parallel && !c.RopeNeox &&
+			return c.LayerNorm && c.Parallel && !c.RopeNeox &&
 				c.LogitScale == 16 && c.TiedEmbd && l.FfnNorm == nil && l.Gate.E != nil &&
 				l.AttnNormB == nil && m.OutNormB == nil && c.NKVHead < c.NHead && c.SWAWindow == 0
 		}},
 		{"synth-dbrx", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
-			return c.Arch == "dbrx" && c.LayerNorm && !c.Parallel && c.RopeNeox && c.NRot == c.HeadDim &&
+			return c.LayerNorm && !c.Parallel && c.RopeNeox && c.NRot == c.HeadDim &&
 				m.Container.Config().ClampKQV == 1.5 && c.QKVAct != nil && c.NExpert == 4 && c.NExpertUsed == 2 && !c.NoExpertNorm &&
 				c.NKVHead < c.NHead && l.Router.E != nil && l.FfnNorm != nil && l.AttnNormB == nil &&
 				l.FfnNormB == nil && l.Vector(jlm.RoleAttnQBias) == nil && m.OutNormB == nil && !c.TiedEmbd
 		}},
 		{"synth-cohere2", func(m *model.Model) bool {
 			c := m.Cfg
-			return c.Arch == "command-r" && c.LayerNorm && c.Parallel && c.NoPEGlobal &&
+			return c.LayerNorm && c.Parallel && c.NoPEGlobal &&
 				c.SWAWindow == 4 && c.SWAPeriod == 4 && c.LogitScale == 4 &&
 				c.SWA(0) && !c.SWA(3) && c.RopeAt(0) && !c.RopeAt(3)
 		}},

@@ -12,7 +12,7 @@ import (
 // model states them from the file (model.olderDelta).
 func TestDeltaStatementRoundTrips(t *testing.T) {
 	base := func() *Config {
-		return &Config{Arch: ArchQwen3Next, NLayer: 4, NEmbd: 64, NHead: 4, NKVHead: 2, HeadDim: 16, NRot: 16,
+		return &Config{NLayer: 4, NEmbd: 64, NHead: 4, NKVHead: 2, HeadDim: 16, NRot: 16,
 			NFFN: 128, NVocab: 1000, RMSEps: 1e-6, RopeBase: 1e6,
 			LayerKinds: []LayerKind{LayerLinearAttn, LayerFullAttn, LayerLinearAttn, LayerFullAttn}}
 	}

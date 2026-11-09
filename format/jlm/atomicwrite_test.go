@@ -190,7 +190,7 @@ func smallSource(t *testing.T) *jlm.Source {
 	add(jlm.RoleAttnNorm, 0, jlm.TypeF32, []uint64{k}, norm())
 	return &jlm.Source{
 		Config: &jlm.Config{
-			Arch: jlm.ArchLlama, NLayer: 1, NEmbd: k, NHead: 1, NKVHead: 1,
+			NLayer: 1, NEmbd: k, NHead: 1, NKVHead: 1,
 			HeadDim: k, NRot: k, NFFN: k, NVocab: rows, NCtx: 128,
 			RMSEps: 1e-5, RopeBase: 10000, EmbdScale: 1, AttnFactor: 1,
 			Flags: jlm.FlagTiedEmbd,

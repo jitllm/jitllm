@@ -58,7 +58,7 @@ func expertSource(t *testing.T) (*jlm.Source, map[jlm.Role][2][]byte) {
 		}
 	}
 	return &jlm.Source{
-		Config: &jlm.Config{Arch: jlm.ArchQwen3MoE, NLayer: 3, NEmbd: k, NHead: 1, NKVHead: 1,
+		Config: &jlm.Config{NLayer: 3, NEmbd: k, NHead: 1, NKVHead: 1,
 			HeadDim: k, NRot: k, NFFN: k, NVocab: 8, NCtx: 128, RMSEps: 1e-5, RopeBase: 10000,
 			EmbdScale: 1, AttnFactor: 1, NExpert: nExp, NExpertUsed: 2},
 		Vocab: &jlm.Vocab{Kind: jlm.VocabBPE, Tokens: []string{"a", "b", "c", "d", "e", "f", "g", "h"},

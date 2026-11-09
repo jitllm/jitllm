@@ -18,7 +18,7 @@ import (
 // fakeEnv is a healthy machine: a code generator, no GPU, known memory.
 func fakeEnv() doctorEnv {
 	return doctorEnv{version: "test", cpuName: "fake", form: "x86, wide passes", jit: true, totalRAM: 16 << 30,
-		budget: 8 << 30, hipAbsent: "no ROCm here", archKnown: jlm.Arch.Valid}
+		budget: 8 << 30, hipAbsent: "no ROCm here"}
 }
 
 // smallContainer converts the committed stories260K into a temporary
@@ -69,7 +69,7 @@ func TestDoctorOnAHealthyCPUMachine(t *testing.T) {
 	if code != doctorOK || back.Status != "ok" || len(back.Problems) != 0 {
 		t.Fatalf("exit %d status %s problems %s", code, back.Status, problemCodes(back))
 	}
-	if back.Container == nil || !back.Container.Runs || back.Container.Version != jlm.Version || back.Container.Arch == "" {
+	if back.Container == nil || !back.Container.Runs || back.Container.Version != jlm.Version {
 		t.Fatalf("container %+v", back.Container)
 	}
 	for _, b := range back.Backends {
@@ -123,7 +123,6 @@ func writeOldContainer(t *testing.T, v uint32) string {
 // TestDoctorNamesWhatIsMissing runs each missing requirement and holds it to
 // its problem code, a next action and exit 2.
 func TestDoctorNamesWhatIsMissing(t *testing.T) {
-	small := smallContainer(t)
 	notJLM := filepath.Join(t.TempDir(), "model.gguf")
 	if err := os.WriteFile(notJLM, []byte("GGUF and more bytes"), 0o644); err != nil {
 		t.Fatal(err)
@@ -138,7 +137,6 @@ func TestDoctorNamesWhatIsMissing(t *testing.T) {
 		{"newer container", nil, writeOldContainer(t, jlm.Version+1), "container-version"},
 		{"no container", nil, filepath.Join(t.TempDir(), "absent.jlm"), "container-missing"},
 		{"a GGUF", nil, notJLM, "not-a-container"},
-		{"unknown architecture", func(e *doctorEnv) { e.archKnown = func(jlm.Arch) bool { return false } }, small, "architecture-unknown"},
 		{"no code generator", func(e *doctorEnv) { e.jit = false }, "", "no-code-generator"},
 		{"cpu below baseline", func(e *doctorEnv) { e.hostErr = errors.New("missing SSE4.1") }, "", "cpu-below-baseline"},
 	}

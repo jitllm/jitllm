@@ -73,8 +73,9 @@ func (e *expr) bounded(a jlm.Arg, c float32) jlm.Arg {
 }
 
 // Activation is the FFN activation the converter states for block li of a
-// model of config c, gated or not.
-func Activation(c *jlm.Config, li int, gated bool) (jlm.Expr, error) {
+// model of config c, gated or not; xielu where the block stores an xIELU's
+// numbers (jlm.RoleXIELU).
+func Activation(c *jlm.Config, li int, gated, xielu bool) (jlm.Expr, error) {
 	var e expr
 	g, u := operand(0), operand(1)
 	var unary func(jlm.Arg) jlm.Arg
@@ -98,7 +99,7 @@ func Activation(c *jlm.Config, li int, gated bool) (jlm.Expr, error) {
 		unary = func(a jlm.Arg) jlm.Arg { return e.GELUTanh(e.gaussTopK(a, c.SparseStd)) }
 	case c.Flags.Has(jlm.FlagGELU):
 		unary = e.GELUTanh
-	case c.Arch == jlm.ArchApertus:
+	case xielu:
 		unary = e.xielu
 	default:
 		unary = e.SiLU
@@ -125,7 +126,7 @@ func StateActivations(s *jlm.Source) error {
 		return nil
 	}
 	n := statedLayers(c)
-	up, gate := make([]bool, n), make([]bool, n)
+	up, gate, xielu := make([]bool, n), make([]bool, n), make([]bool, n)
 	for _, t := range s.Tensors {
 		if t.Block < 0 || int(t.Block) >= n {
 			continue
@@ -135,9 +136,11 @@ func StateActivations(s *jlm.Source) error {
 			up[t.Block] = true
 		case jlm.RoleFFNGate, jlm.RoleExpGateBank:
 			gate[t.Block] = true
+		case jlm.RoleXIELU:
+			xielu[t.Block] = true
 		}
 	}
-	return StateGated(c, gating(n, func(li int) bool { return gate[li] }, func(li int) bool { return up[li] }))
+	return StateGated(c, gating(n, func(li int) bool { return gate[li] }, func(li int) bool { return up[li] }), xielu)
 }
 
 // StateStored states the FFN activations of a container written before
@@ -148,7 +151,7 @@ func StateStored(f *jlm.File, c *jlm.Config) (bool, error) {
 	streams := (c.AttnResBlock == 0 && c.HCLowRank == 0 || c.Streams.N > 1) && (c.NGramBlock == 0 || StatesPre(c))
 	rev := c.Revision >= jlm.StatementRevision
 	sel := c.IdxHeads == 0 || c.Selection != nil
-	if len(c.Acts) != 0 && len(c.RouterScore.Terms) == len(RouterScore(c).Terms) && len(c.RouterWeight.Terms) == len(RouterWeight(c).Terms) && streams && rev && sel ||
+	if len(c.Acts) != 0 && (c.NExpert == 0 || len(c.RouterScore.Terms) != 0) && streams && rev && sel ||
 		c.NLayer == 0 || c.Arch == jlm.ArchCLIP {
 		return false, nil
 	}
@@ -179,7 +182,12 @@ func StateStored(f *jlm.File, c *jlm.Config) (bool, error) {
 			return false
 		}
 	}
-	return true, StateGated(c, gating(statedLayers(c), stores(jlm.RoleFFNGate, jlm.RoleExpGateBank), stores(jlm.RoleFFNUp, jlm.RoleExpUpBank)))
+	n := statedLayers(c)
+	xielu := make([]bool, n)
+	for li := range xielu {
+		xielu[li] = stores(jlm.RoleXIELU)(li)
+	}
+	return true, StateGated(c, gating(n, stores(jlm.RoleFFNGate, jlm.RoleExpGateBank), stores(jlm.RoleFFNUp, jlm.RoleExpUpBank)), xielu)
 }
 
 // gating is each of n layers' gating: gated unless it stores an up and no
@@ -193,15 +201,16 @@ func gating(n int, gate, up func(li int) bool) []bool {
 }
 
 // StateGated states every layer's FFN activation in c, layer li gated where
-// gated[li] is.
-func StateGated(c *jlm.Config, gated []bool) error {
+// gated[li] is, an xIELU where xielu[li] is. A router already stated stays
+// as it is: a container read back names no architecture to state it from.
+func StateGated(c *jlm.Config, gated, xielu []bool) error {
 	n := statedLayers(c)
-	if len(gated) != n {
-		return fmt.Errorf("convert: the gating of %d layers stated for %d", len(gated), n)
+	if len(gated) != n || len(xielu) != n {
+		return fmt.Errorf("convert: the gating of %d layers and xIELU of %d stated for %d", len(gated), len(xielu), n)
 	}
 	c.Acts, c.ActLayers = nil, make([]uint8, n)
 	for li := range n {
-		e, err := Activation(c, li, gated[li])
+		e, err := Activation(c, li, gated[li], xielu[li])
 		if err != nil {
 			return err
 		}
@@ -217,7 +226,9 @@ func StateGated(c *jlm.Config, gated []bool) error {
 	if len(c.Acts) == 1 {
 		c.ActLayers = nil
 	}
-	c.RouterScore, c.RouterWeight = RouterScore(c), RouterWeight(c)
+	if len(c.RouterScore.Terms) == 0 {
+		c.RouterScore, c.RouterWeight = RouterScore(c), RouterWeight(c)
+	}
 	for _, e := range []*jlm.Expr{&c.RouterScore, &c.RouterWeight} {
 		if len(e.Terms) != 0 {
 			if err := e.Valid(); err != nil {

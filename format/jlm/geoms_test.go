@@ -11,7 +11,7 @@ import (
 // model's, and a statement no block can run is refused.
 func TestGeomsRoundTrip(t *testing.T) {
 	base := func() *Config {
-		return &Config{Arch: ArchLlama, NLayer: 4, NEmbd: 64, NHead: 4, NKVHead: 1, HeadDim: 32, NRot: 32,
+		return &Config{NLayer: 4, NEmbd: 64, NHead: 4, NKVHead: 1, HeadDim: 32, NRot: 32,
 			NFFN: 128, NVocab: 1000, RMSEps: 1e-6, RopeBase: 1e6, SWAWindow: 64, SWAPeriod: 2}
 	}
 	c := base()

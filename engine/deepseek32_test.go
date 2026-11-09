@@ -32,7 +32,7 @@ func ds32Fixtures() []struct {
 		{"synth-deepseek32", func(m *model.Model) bool {
 			c := m.Cfg
 			s := c.Selection()
-			ok := c.Arch == "deepseek32" && c.MLA() && s != nil && s.Rank == jlm.RankBest && s.Block == 1 && s.Relu &&
+			ok := c.MLA() && s != nil && s.Rank == jlm.RankBest && s.Block == 1 && s.Relu &&
 				s.Weight != nil && c.QLoraRank == 32 && c.KVLoraRank == 16 && c.NRot == 8 && s.Heads == 8 && s.HeadDim == 16 &&
 				s.Keep == 4 && c.KVDim() == 16+8+16 && c.ExpertSigmoid && c.NExpertGroup == 2 &&
 				c.NDenseLead == 1 && c.YarnFactor == 8

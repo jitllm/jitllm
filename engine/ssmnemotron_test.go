@@ -21,7 +21,7 @@ func nemotronhFixtures() []struct {
 			// "M-M*-MM-": a mixer with its MLP, a mixer alone, the attention with
 			// its MLP, a mixer alone, a mixer with its MLP -- five blocks.
 			c := m.Cfg
-			ok := c.Arch == "nemotron_h" && c.SSD() && c.NLayer == 5 && c.SSM.Groups == 2 &&
+			ok := c.SSD() && c.NLayer == 5 && c.SSM.Groups == 2 &&
 				c.SSMNormGroups == 2 && c.NoPosEnc && m.Container.Config().Flags.Has(jlm.FlagReLU2) && c.NKVHead == 2 && !c.TiedEmbd
 			for i, want := range []struct {
 				rec, noFFN bool
@@ -37,7 +37,7 @@ func nemotronhFixtures() []struct {
 			// a mixer alone, a mixer with its mixture -- four blocks, the mixtures
 			// ungated (up and down, no gate bank) beside an ungated shared expert.
 			c := m.Cfg
-			ok := c.Arch == "nemotron_h" && c.SSD() && c.NLayer == 4 && c.NExpert == 8 && c.NExpertUsed == 2 &&
+			ok := c.SSD() && c.NLayer == 4 && c.NExpert == 8 && c.NExpertUsed == 2 &&
 				c.ExpertSigmoid && !c.NoExpertNorm && c.ExpertScale == 2.5 && c.NExpertGroup == 0 &&
 				c.NFFNExp == 64 && c.NFFNShExp == 96 && m.Container.Config().Flags.Has(jlm.FlagReLU2) && c.NoPosEnc
 			for i, want := range []struct {

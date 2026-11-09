@@ -41,7 +41,7 @@ func moeBaseFixtures() []struct {
 		{"synth-glm4moe", func(m *model.Model) bool {
 			c := m.Cfg
 			dense, moe := &m.Layers[0], &m.Layers[1]
-			return c.Arch == "glm4moe" && c.RopeNeox && 2*c.NRot == c.HeadDim && c.QKNorm &&
+			return c.RopeNeox && 2*c.NRot == c.HeadDim && c.QKNorm &&
 				c.ExpertSigmoid && !c.NoExpertNorm && c.ExpertScale == 2.5 && c.NExpert == 8 &&
 				c.NExpertUsed == 2 && c.NFFNShExp == c.NFFNExp && c.NDenseLead == 1 &&
 				c.NLayer == 3 && c.NMTP == 1 && !c.TiedEmbd &&
@@ -53,7 +53,7 @@ func moeBaseFixtures() []struct {
 		}},
 		{"synth-qwen2moe", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
-			return c.Arch == "qwen2moe" && c.RopeNeox && c.NRot == c.HeadDim && !c.QKNorm &&
+			return c.RopeNeox && c.NRot == c.HeadDim && !c.QKNorm &&
 				!c.ExpertSigmoid && c.NoExpertNorm && c.ExpertScale == 1 && c.NExpert == 8 &&
 				c.NExpertUsed == 2 && c.NFFNShExp == 2*c.NFFNExp && c.NDenseLead == 0 && c.NMTP == 0 &&
 				c.NKVHead < c.NHead && l.Router.E != nil && l.Vector(jlm.RoleExpProbsB) == nil && l.ShGate.E != nil &&
@@ -62,7 +62,7 @@ func moeBaseFixtures() []struct {
 		}},
 		{"synth-ernie45moe", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[1]
-			return c.Arch == "ernie4_5-moe" && !c.RopeNeox && c.NRot == c.HeadDim && !c.QKNorm &&
+			return !c.RopeNeox && c.NRot == c.HeadDim && !c.QKNorm &&
 				!c.ExpertSigmoid && !c.NoExpertNorm && c.ExpertScale == 1 && c.NExpert == 8 &&
 				c.NExpertUsed == 2 && c.NFFNShExp == 2*c.NFFNExp && c.NDenseLead == 1 && c.MoEStep == 2 &&
 				!c.MoEAt(0) && c.MoEAt(1) && !c.MoEAt(2) && c.MoEAt(3) && c.NMTP == 0 &&
@@ -72,12 +72,12 @@ func moeBaseFixtures() []struct {
 		}},
 		{"synth-ernie45", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
-			return c.Arch == "llama" && !c.RopeNeox && c.NRot == c.HeadDim && c.NExpert == 0 &&
+			return !c.RopeNeox && c.NRot == c.HeadDim && c.NExpert == 0 &&
 				l.Gate.E != nil && l.Vector(jlm.RoleAttnQBias) == nil && c.TiedEmbd
 		}},
 		{"synth-hunyuanmoe", func(m *model.Model) bool {
 			c := m.Cfg
-			ok := c.Arch == "hunyuan" && c.RopeNeox && c.NRot == c.HeadDim && c.HeadDim == 128 &&
+			ok := c.RopeNeox && c.NRot == c.HeadDim && c.HeadDim == 128 &&
 				c.QKNorm && c.QKNormPost && !c.QKNormWide && !c.ExpertSigmoid && !c.NoExpertNorm &&
 				c.ExpertScale == 1 && c.NExpert == 8 && c.NExpertUsed == 2 && c.NFFNShExp == c.NFFNExp &&
 				c.NDenseLead == 0 && c.NKVHead < c.NHead && c.TiedEmbd
@@ -90,7 +90,7 @@ func moeBaseFixtures() []struct {
 		}},
 		{"synth-minimaxm2", func(m *model.Model) bool {
 			c := m.Cfg
-			ok := c.Arch == "minimax-m2" && c.RopeNeox && 2*c.NRot == c.HeadDim && c.QKNorm && c.QKNormWide &&
+			ok := c.RopeNeox && 2*c.NRot == c.HeadDim && c.QKNorm && c.QKNormWide &&
 				c.ExpertSigmoid && !c.NoExpertNorm && c.ExpertScale == 1 && c.NExpert == 8 &&
 				c.NExpertUsed == 2 && c.NFFNShExp == 0 && c.NDenseLead == 0 && c.NMTP == 0 &&
 				c.NKVHead < c.NHead && !c.TiedEmbd
@@ -104,7 +104,7 @@ func moeBaseFixtures() []struct {
 		}},
 		{"synth-hunyuan", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
-			return c.Arch == "hunyuan" && c.RopeNeox && c.NRot == c.HeadDim && c.QKNorm && c.QKNormPost &&
+			return c.RopeNeox && c.NRot == c.HeadDim && c.QKNorm && c.QKNormPost &&
 				c.NExpert == 0 && c.NKVHead < c.NHead && l.Gate.E != nil && l.Vector(jlm.RoleAttnQBias) == nil &&
 				c.TiedEmbd && foldedQK(l)
 		}},

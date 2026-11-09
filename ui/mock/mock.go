@@ -53,7 +53,7 @@ func Llama() Model {
 	}
 	return Model{
 		Entry: catalog.Entry{Path: "/mock/Llama-3.2-1B-Instruct-Q4_K_M.jlm", Name: "Llama-3.2-1B-Instruct-Q4_K_M.jlm",
-			Kind: catalog.KindContainer, Size: 816 << 20, Probed: true, Quant: "Q4_K_M", Arch: "llama", NLayer: 16, NEmbd: 2048,
+			Kind: catalog.KindContainer, Size: 816 << 20, Probed: true, Quant: "Q4_K_M", NLayer: 16, NEmbd: 2048,
 			Version: catalog.CurrentVersion, MTime: time.Unix(1758300000, 0)},
 		Summary: "Llama-3.2-1B-Instruct-Q4_K_M · chat · context 4,096 · all 16 layers on the NVIDIA GeForce RTX 3050 Ti Laptop GPU",
 		Device:  "auto (1 device(s))",
@@ -92,7 +92,7 @@ func Qwen() Model {
 	b[30] = byte(widgets.OnDevice(0))
 	return Model{
 		Entry: catalog.Entry{Path: "/mock/Qwen3-30B-A3B-Q4_K_M.jlm", Name: "Qwen3-30B-A3B-Q4_K_M.jlm",
-			Kind: catalog.KindContainer, Size: 18 << 30, Probed: true, Quant: "Q4_K_M", Arch: "qwen3moe", NLayer: n, NEmbd: 2048,
+			Kind: catalog.KindContainer, Size: 18 << 30, Probed: true, Quant: "Q4_K_M", NLayer: n, NEmbd: 2048,
 			Version: catalog.CurrentVersion, MTime: time.Unix(1758310000, 0)},
 		Summary: "Qwen3-30B-A3B-Q4_K_M · chat · context 32,768 · 14 of 48 layers on 2 devices, the rest paged on the host",
 		Device:  "cuda:0,vulkan:1 (2 device(s))",
@@ -299,7 +299,7 @@ func (e *Engine) activate(m *Model) {
 	e.active = m
 	models := make([]app.LoadedModel, len(e.open))
 	for i, o := range e.open {
-		models[i] = app.LoadedModel{Path: o.Entry.Path, Name: o.Entry.Name, Arch: o.Entry.Arch,
+		models[i] = app.LoadedModel{Path: o.Entry.Path, Name: o.Entry.Name,
 			Blocks: int(o.Entry.NLayer), Colour: i, Active: o == m, Grant: o.Alloc.HostBudget}
 	}
 	snap := *m
@@ -336,7 +336,7 @@ func (e *Engine) Unload(path string) {
 	}
 	models := make([]app.LoadedModel, len(e.open))
 	for i, o := range e.open {
-		models[i] = app.LoadedModel{Path: o.Entry.Path, Name: o.Entry.Name, Arch: o.Entry.Arch,
+		models[i] = app.LoadedModel{Path: o.Entry.Path, Name: o.Entry.Name,
 			Blocks: int(o.Entry.NLayer), Colour: i, Active: o == e.active, Grant: o.Alloc.HostBudget}
 	}
 	active := e.active != nil

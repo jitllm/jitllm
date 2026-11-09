@@ -62,7 +62,7 @@ func TestContainerFromNoGGUFAtAll(t *testing.T) {
 	vocab := []string{"<unk>", "▁a", "▁b", "🙂"}
 	src := &jlm.Source{
 		Config: &jlm.Config{
-			Arch: jlm.ArchLlama, NLayer: nBlock, NEmbd: k, NHead: 1, NKVHead: 1,
+			NLayer: nBlock, NEmbd: k, NHead: 1, NKVHead: 1,
 			HeadDim: k, NRot: k, NFFN: k, NVocab: rows, NCtx: 128,
 			RMSEps: 1e-5, RopeBase: 10000, EmbdScale: 1, AttnFactor: 1,
 			Flags: jlm.FlagTiedEmbd,
@@ -98,8 +98,9 @@ func TestContainerFromNoGGUFAtAll(t *testing.T) {
 
 	// The description survives as typed fields, read with the container's own
 	// accessors: no key names, nothing to look up.
-	if got := c.Config().Arch; got != jlm.ArchLlama {
-		t.Errorf("architecture is %v", got)
+	// It names no architecture: what a block does is what it states.
+	if got := c.Config().Arch; got != jlm.ArchNone {
+		t.Errorf("the container names architecture %v", got)
 	}
 	if got := c.Config().NLayer; got != nBlock {
 		t.Errorf("NLayer is %d, want %d", got, nBlock)

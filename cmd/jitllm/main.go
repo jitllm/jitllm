@@ -416,8 +416,8 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	}
 	defer m.Close()
 	c := m.Cfg
-	fmt.Fprintf(os.Stderr, "%s L=%d d=%d heads=%d/%d head_dim=%d ffn=%d vocab=%d\n",
-		c.Arch, c.NLayer, c.NEmbd, c.NHead, c.NKVHead, c.HeadDim, c.NFFN, c.NVocab)
+	fmt.Fprintf(os.Stderr, "L=%d d=%d heads=%d/%d head_dim=%d ffn=%d vocab=%d\n",
+		c.NLayer, c.NEmbd, c.NHead, c.NKVHead, c.HeadDim, c.NFFN, c.NVocab)
 
 	if m.Vocab == nil {
 		return fmt.Errorf("%s: %w", path, m.TokErr)

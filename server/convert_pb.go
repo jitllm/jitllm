@@ -167,7 +167,6 @@ func (e *Engine) pbModelInfo(lm *LoadedModel) *v1.ModelInfo {
 		ModelId:           lm.id,
 		Path:              lm.path,
 		Name:              lm.name,
-		Architecture:      c.Arch,
 		BlockCount:        int32(c.NLayer),
 		EmbeddingDim:      int32(c.NEmbd),
 		ContextLength:     int32(c.NCtx),

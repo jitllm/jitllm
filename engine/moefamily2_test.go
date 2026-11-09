@@ -29,7 +29,7 @@ func moe2Fixtures() []struct {
 		{"synth-bailingmoe2", func(m *model.Model) bool {
 			c := m.Cfg
 			dense, moe := &m.Layers[0], &m.Layers[1]
-			return c.Arch == "bailingmoe2" && c.RopeNeox && 2*c.NRot == c.HeadDim && c.QKNorm &&
+			return c.RopeNeox && 2*c.NRot == c.HeadDim && c.QKNorm &&
 				!c.QKNormWide && c.ExpertSigmoid && !c.NoExpertNorm && c.ExpertScale == 2.5 &&
 				c.NExpert == 16 && c.NExpertUsed == 4 && c.NExpertGroup == 4 && c.NExpertGroupUsed == 2 &&
 				c.NFFNShExp == c.NFFNExp && c.NDenseLead == 1 && c.NLayer == 3 && c.NMTP == 0 &&
@@ -43,7 +43,7 @@ func moe2Fixtures() []struct {
 		{"synth-dots1", func(m *model.Model) bool {
 			c := m.Cfg
 			dense, moe := &m.Layers[0], &m.Layers[1]
-			return c.Arch == "dots1" && c.RopeNeox && c.NRot == c.HeadDim && c.QKNorm && !c.QKNormWide &&
+			return c.RopeNeox && c.NRot == c.HeadDim && c.QKNorm && !c.QKNormWide &&
 				c.ExpertSigmoid && !c.NoExpertNorm && c.ExpertScale == 2.5 && c.NExpert == 8 &&
 				c.NExpertUsed == 2 && c.NExpertGroup <= 1 && c.NFFNShExp == 2*c.NFFNExp &&
 				c.NDenseLead == 1 && c.NLayer == 3 && c.NMTP == 0 && c.NKVHead == c.NHead && !c.TiedEmbd &&
@@ -54,7 +54,7 @@ func moe2Fixtures() []struct {
 		}},
 		{"synth-phimoe", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
-			ok := c.Arch == "phimoe" && c.LayerNorm && !c.Parallel && c.RopeNeox && c.NRot == c.HeadDim &&
+			ok := c.LayerNorm && !c.Parallel && c.RopeNeox && c.NRot == c.HeadDim &&
 				len(m.Container.Config().RouterWeight.Terms) != 0 && c.NoExpertNorm && !c.ExpertSigmoid && c.NExpertGroup <= 1 &&
 				c.NExpert == 8 && c.NExpertUsed == 2 && c.NFFNShExp == 0 && c.NDenseLead == 0 &&
 				c.NKVHead < c.NHead && !c.TiedEmbd && c.SWAWindow == 0 &&

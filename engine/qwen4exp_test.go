@@ -34,7 +34,7 @@ func q4eFixtures() []struct {
 		{"synth-qwen4exp", func(m *model.Model) bool {
 			c, jc := m.Cfg, m.Container.Config()
 			s := c.Selection()
-			return c.Arch == "qwen4exp" && c.HCMult == 4 && jc.HCLowRank == 32 && s != nil && s.Rank == jlm.RankPooled &&
+			return c.HCMult == 4 && jc.HCLowRank == 32 && s != nil && s.Rank == jlm.RankPooled &&
 				s.Block == 4 && s.Keep == 2 && s.Heads == 8 && s.HeadDim == 32 && jc.NGramBlock == 3 &&
 				jc.NGram == 3 && jc.NGramHeadsPer == 2 && jc.NGramRowDim == 16 && jc.NGramConv == 4 &&
 				reflect.DeepEqual(c.DeltaGate, jlm.DeltaGateSigmoid()) && c.NRot == 16 && c.RopeNeox && c.AttnOutGate &&
@@ -45,7 +45,7 @@ func q4eFixtures() []struct {
 		// quantizer's blocks, so every tier quantizes it with a ragged tail.
 		{"synth-qwen4exp-ragged", func(m *model.Model) bool {
 			c := m.Cfg
-			return c.Arch == "qwen4exp" && c.HCMult == 4 && m.Container.Config().HCLowRank == 40 && m.Ngram != nil
+			return c.HCMult == 4 && m.Container.Config().HCLowRank == 40 && m.Ngram != nil
 		}},
 	}
 }

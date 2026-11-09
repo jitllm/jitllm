@@ -23,7 +23,7 @@ func TestStatedActivationsRoundTrip(t *testing.T) {
 		}},
 		{Terms: []Term{{Fn: FnTanh, Args: [3]Arg{in(0)}}, {Fn: FnMul, Args: [3]Arg{at(0), in(1)}}}},
 	}
-	c := &Config{Arch: ArchLlama, NLayer: 3, Acts: acts, ActLayers: []uint8{1, 0, 1}}
+	c := &Config{NLayer: 3, Acts: acts, ActLayers: []uint8{1, 0, 1}}
 	got, err := decodeConfig(encodeConfig(c))
 	if err != nil {
 		t.Fatal(err)
@@ -39,7 +39,7 @@ func TestStatedActivationsRoundTrip(t *testing.T) {
 	if e := got.ActAt(0); e == nil || len(e.Terms) != 2 {
 		t.Fatalf("layer 0 reads %v, want the second activation", e)
 	}
-	if none, err := decodeConfig(encodeConfig(&Config{Arch: ArchLlama, NLayer: 3})); err != nil || none.ActAt(0) != nil {
+	if none, err := decodeConfig(encodeConfig(&Config{NLayer: 3})); err != nil || none.ActAt(0) != nil {
 		t.Fatalf("a model that states no activation reads back %v (%v)", none.ActAt(0), err)
 	}
 	for _, bad := range []struct {
@@ -47,9 +47,9 @@ func TestStatedActivationsRoundTrip(t *testing.T) {
 		c    Config
 		want string
 	}{
-		{"a later term", Config{Arch: ArchLlama, NLayer: 1, Acts: []Expr{{Terms: []Term{{Fn: FnExp, Args: [3]Arg{at(0)}}}}}}, "earlier"},
-		{"a reduction's value", Config{Arch: ArchLlama, NLayer: 1, Acts: []Expr{{Terms: []Term{{Fn: FnAdd, Reduce: true, Args: [3]Arg{in(0)}}}}}}, "reduction"},
-		{"an index past the list", Config{Arch: ArchLlama, NLayer: 1, Acts: acts[1:], ActLayers: []uint8{1}}, "activation 1 of 1"},
+		{"a later term", Config{NLayer: 1, Acts: []Expr{{Terms: []Term{{Fn: FnExp, Args: [3]Arg{at(0)}}}}}}, "earlier"},
+		{"a reduction's value", Config{NLayer: 1, Acts: []Expr{{Terms: []Term{{Fn: FnAdd, Reduce: true, Args: [3]Arg{in(0)}}}}}}, "reduction"},
+		{"an index past the list", Config{NLayer: 1, Acts: acts[1:], ActLayers: []uint8{1}}, "activation 1 of 1"},
 	} {
 		if _, err := decodeConfig(encodeConfig(&bad.c)); err == nil || !strings.Contains(err.Error(), bad.want) {
 			t.Errorf("%s: read back with %v, want a refusal naming %q", bad.name, err, bad.want)

@@ -683,7 +683,7 @@ func TestDeepseekContainerRoundTrips(t *testing.T) {
 	}
 	defer f.Close()
 	c := f.Config()
-	if c.Arch != jlm.ArchDeepseek2 || c.KVLoraRank != 16 || c.QLoraRank != 32 ||
+	if c.Arch != jlm.ArchNone || c.KVLoraRank != 16 || c.QLoraRank != 32 ||
 		c.HeadDim != 24 || c.HeadDimV != 16 || c.NRot != 8 || c.NDenseLead != 1 ||
 		c.NExpertGroup != 2 || c.NExpertGroupUsed != 1 || c.ExpertScale != 2.5 ||
 		!c.Flags.Has(jlm.FlagExpertSigmoid) {

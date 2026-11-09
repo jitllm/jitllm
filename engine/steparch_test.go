@@ -40,11 +40,11 @@ func TestStepAcrossSessionsEveryArchitecture(t *testing.T) {
 					defer g.Close()
 					r := stepGate(t, m, g, false, instOpts...)
 					bound := stepBound(m, name, r, ctl)
-					t.Logf("STEP %s %s %s: worst logit NMSE %.3e (bound %.3e)", m.Cfg.Arch, filepath.Base(name),
+					t.Logf("STEP %s %s: worst logit NMSE %.3e (bound %.3e)", filepath.Base(name),
 						g.Name(), r.worst, bound)
 					if !(r.worst < bound) {
 						t.Fatalf("%s's step across sessions disagrees with each session alone: NMSE %.3e at row %d",
-							m.Cfg.Arch, r.worst, r.at)
+							filepath.Base(name), r.worst, r.at)
 					}
 				})
 			}
