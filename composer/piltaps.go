@@ -50,6 +50,18 @@ func pilFilter(filter uint8, x float64) float64 {
 	return 0
 }
 
+// LiveShrink is the deepest shrink of a side a picture of a size of its own
+// (graph.Attrs.PicLive) takes in one pass of its taps (LiveTaps): a request
+// holds an entry for every column and row its output may have, each its
+// class's taps wide, and a steeper shrink runs in column bands
+// (graph.PicCols), so the taps are sized for the shrinks pictures take,
+// not for the widest source a side could be.
+const LiveShrink = 16
+
+// LiveTaps is the taps a picture of a size of its own resized to an area
+// whose square's side is root holds in one pass (LiveShrink).
+func LiveTaps(filter uint8, root int) int { return PILTapCount(filter, LiveShrink*root, root) }
+
 // PILTapCount is the taps an output reaches resizing a side of at most in
 // samples to out by filter: Pillow's ksize, its support widened by the
 // reduction.

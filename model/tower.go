@@ -963,7 +963,7 @@ func towerEntry(t *jlm.Tower, px uint8, grid, extra, side int, fit PictureFit, f
 		// source's times sqrt(area / maxPix), the source at most PicSide a
 		// side (pictureFit.smartSize).
 		root := int(math.Sqrt(float64(fit.MaxPix)))
-		a.Taps = composer.PILTapCount(a.Filter, 2*max(composer.PictureMaxSide, root), root)
+		a.Taps = composer.LiveTaps(a.Filter, root)
 	case a.Chain == graph.ChainPIL:
 		// A crop's taps are a window of the resize's, whose scale is at most
 		// the crop's own.
