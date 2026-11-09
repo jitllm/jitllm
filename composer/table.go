@@ -60,6 +60,11 @@ const (
 	// TablePicture is the step's picture, its decoded samples as words
 	// (graph.OpPicture).
 	TablePicture
+	// TablePicAcc is a Pillow resize's vertical sums, accumulated over its
+	// bands (graph.Attrs.PicPass), and TablePicAccOut the same buffer
+	// written.
+	TablePicAcc
+	TablePicAccOut
 	numTables
 )
 
@@ -121,6 +126,10 @@ func (t Table) String() string {
 		return "rope.marks"
 	case TablePicture:
 		return "picture"
+	case TablePicAcc:
+		return "picture.acc"
+	case TablePicAccOut:
+		return "picture.acc.out"
 	}
 	return fmt.Sprintf("table%d", t)
 }
@@ -135,6 +144,9 @@ func (t Table) recurrent() bool { return t >= TableRecState && t <= TableRecRows
 func (o Operand) storage() Operand {
 	if o.Kind == OperandTable && o.Table == TableRecStateOut {
 		o.Table, o.Name = TableRecState, tableLabel(TableRecState, o.Instance)
+	}
+	if o.Kind == OperandTable && o.Table == TablePicAccOut {
+		o.Table, o.Name = TablePicAcc, tableLabel(TablePicAcc, o.Instance)
 	}
 	return o
 }

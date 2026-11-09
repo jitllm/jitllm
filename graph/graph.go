@@ -920,6 +920,13 @@ type Attrs struct {
 	// request's frame word names (composer.RequestPicFrame): its planes' and
 	// palette's offsets the frame's own, its size and format the first's.
 	PicFrame bool
+	// PicPass is which of a Pillow resize's passes the op runs (ChainPIL):
+	// PicWhole the picture's every row at once, PicBand one band of PicSide
+	// source rows -- its horizontal sums, and each output's vertical taps
+	// that fall in it added into the accumulator -- and PicFinish the
+	// accumulator made the picture's bytes. A picture taller than PicSide is
+	// its bands in order, then the finish.
+	PicPass uint8
 	// PicBF16 says the normalisation is in bfloat16: the sample times
 	// 1/255, less the mean, over the std, each result and the mean and std
 	// rounded to bfloat16 (composer's normalized).
@@ -1054,4 +1061,11 @@ const (
 	PixPaletted8
 	// PixFormats is one past the last sample format.
 	PixFormats
+)
+
+// A Pillow resize's passes (Attrs.PicPass).
+const (
+	PicWhole uint8 = iota
+	PicBand
+	PicFinish
 )
