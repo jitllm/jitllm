@@ -52,10 +52,14 @@ func PILTapCount(filter uint8, in, out int) int {
 	return int(math.Ceil(pilSupport(filter)*scale))*2 + 1
 }
 
+// PILEntryWords is the words a tap entry of at most k taps takes in the
+// request (PILTaps).
+func PILEntryWords(k int) int { return k + 2 }
+
 // PILTaps writes the taps of outputs from to from+n-1 of a side of in
-// samples resized to out by filter into dst, n entries of k+1 words: the
-// first sample an output reads, then its k weights in Pillow's fixed point
-// (int32, zero past its window) -- Resample.c's precompute_coeffs and
+// samples resized to out by filter into dst, n entries of PILEntryWords(k)
+// words: the first sample an output reads, how many it reads, then its k
+// weights in Pillow's fixed point (int32, zero past its window) -- Resample.c's precompute_coeffs and
 // normalize_coeffs_8bpc, in float64 as Pillow computes them, so the passes
 // the picture op runs on them are Pillow's to the bit. A window short of the
 // whole side is a crop of the resize: each output's taps are its own, and
@@ -114,8 +118,8 @@ func PILTapsAt(filter uint8, torch bool, in, out, from, n, k int, dst []uint32) 
 		for x := range xmax {
 			ww += w(x)
 		}
-		e := dst[i*(k+1) : (i+1)*(k+1)]
-		e[0] = uint32(xmin)
+		e := dst[i*PILEntryWords(k) : (i+1)*PILEntryWords(k)]
+		e[0], e[1] = uint32(xmin), uint32(xmax)
 		for x := range k {
 			v := 0.0
 			if x < xmax && ww != 0 {
@@ -127,7 +131,7 @@ func PILTapsAt(filter uint8, torch bool, in, out, from, n, k int, dst []uint32) 
 			} else {
 				q = int32(0.5 + v*float64(int(1)<<prec))
 			}
-			e[1+x] = uint32(q << (pilPrecision - prec))
+			e[2+x] = uint32(q << (pilPrecision - prec))
 		}
 	}
 }

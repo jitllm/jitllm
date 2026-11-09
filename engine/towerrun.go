@@ -112,7 +112,7 @@ func (in *Instance) newTowerRun(tg *model.TowerGraphs, base int, t *jlm.Tower) (
 	}
 	words := 0
 	for _, cl := range append(tg.Classes[:len(tg.Classes):len(tg.Classes)], tg.Videos...) {
-		words = max(words, (cl.Pic.PicW+cl.Pic.PicH)*(cl.Pic.Taps+1))
+		words = max(words, (cl.Pic.PicW+cl.Pic.PicH)*composer.PILEntryWords(cl.Pic.Taps))
 	}
 	tr := &towerRun{s: ts, base: base, req: make([]uint32, composer.RequestPicTaps+words)}
 	hn := n
@@ -173,7 +173,7 @@ func (tr *towerRun) squareRequest(pl model.PictureLayout, sq model.Square, a gra
 		return
 	}
 	composer.PILTapsAt(a.Filter, a.PicTorch, pl.W, sq.Ow, sq.X0, sq.Pw, a.Taps, tr.req[composer.RequestPicTaps:])
-	composer.PILTapsAt(a.Filter, a.PicTorch, pl.H, sq.Oh, sq.Y0, sq.Ph, a.Taps, tr.req[composer.RequestPicTaps+a.PicW*(a.Taps+1):])
+	composer.PILTapsAt(a.Filter, a.PicTorch, pl.H, sq.Oh, sq.Y0, sq.Ph, a.Taps, tr.req[composer.RequestPicTaps+a.PicW*composer.PILEntryWords(a.Taps):])
 	tr.tapsW, tr.tapsH = pl.W, pl.H
 	if squares > 1 {
 		tr.tapsW = 0
