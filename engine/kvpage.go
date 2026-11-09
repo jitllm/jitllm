@@ -1733,11 +1733,13 @@ func (kc *kvCache) fault(li, n int) error {
 	// leave zeros read back as keys the model never wrote. A layer with an
 	// arena reads the page back into its slot, where a composed CPU block
 	// addresses it (history.Arena); a failed read hands the slot back zeroed.
-	var k, v []float32
-	if !s.latent {
-		k, v = s.mem.Take()
-	}
-	if k == nil {
+	k, v := s.mem.Take()
+	switch {
+	case k != nil:
+	case s.latent:
+		k = s.mem.Alloc()
+		v = k
+	default:
 		k, v = s.mem.Alloc(), s.mem.Alloc()
 	}
 	miss := func(err error) error {
@@ -1805,11 +1807,13 @@ func (kc *kvCache) faultFill(li, n, fill int) error {
 		return ErrNoPage
 	}
 	// Into a slot of the layer's arena where it has one, zero past the fill.
-	var k, v []float32
-	if !s.latent {
-		k, v = s.mem.Take()
-	}
-	if k == nil {
+	k, v := s.mem.Take()
+	switch {
+	case k != nil:
+	case s.latent:
+		k = s.mem.Alloc()
+		v = k
+	default:
 		k, v = s.mem.Alloc(), s.mem.Alloc()
 	}
 	miss := func(err error) error {
