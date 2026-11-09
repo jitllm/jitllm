@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"unsafe"
 
+	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/nn"
 )
 
@@ -15,11 +16,21 @@ import (
 type Tower struct {
 	x     *Exec
 	entry []map[uint8]*Form
-	head  *Form
-	taps  []*Form
-	dense Tensors
-	tapsW []Tensors
-	bound Bound
+	// band is each class's band forms (graph.Attrs.PicPass), runs the band
+	// forms each entry runs first, bandRows the source rows a band takes,
+	// acc the bands' accumulators (a video pair's second frame the second)
+	// and bandOut a band form's own value; Bands counts the band runs.
+	band     []map[uint8]*Form
+	runs     []map[uint8][]uint8
+	bandRows []int
+	acc      [2][]uint32
+	bandOut  []float32
+	Bands    int
+	head     *Form
+	taps     []*Form
+	dense    Tensors
+	tapsW    []Tensors
+	bound    Bound
 	// chain is a chained tower's blocks' forms (nn.TowerChain), chainN the
 	// rows each runs over, headN the rows of the head's first input, and
 	// io a chained head's call's buffers.
@@ -44,6 +55,23 @@ func NewTower(x *Exec, p TowerPlans, dense Tensors, taps []Tensors) (*Tower, err
 		}
 		t.entry = append(t.entry, forms)
 	}
+	for _, cl := range p.Band {
+		var forms map[uint8]*Form
+		for px, pp := range cl {
+			f, err := x.FormGraph(pp)
+			if err != nil {
+				return nil, fmt.Errorf("the tower's entry band: %w", err)
+			}
+			if forms == nil {
+				forms = map[uint8]*Form{}
+			}
+			forms[px] = f
+		}
+		t.band = append(t.band, forms)
+	}
+	t.runs, t.bandRows = p.BandRuns, p.BandRows
+	t.acc = [2][]uint32{make([]uint32, p.Acc), make([]uint32, p.Acc)}
+	t.bandOut = make([]float32, p.BandOut)
 	f, err := x.FormGraph(p.Head)
 	if err != nil {
 		return nil, fmt.Errorf("the tower's head: %w", err)
@@ -79,7 +107,7 @@ func (t *Tower) run(f *Form, li int, w Tensors, n int, req, pos, pic []uint32, i
 		return fmt.Errorf("its weights: %v", why)
 	}
 	b := &t.bound
-	*b = Bound{Li: li, Own: t.x.Device().Own(f), N: n, Req: req, Pos: pos, Pic: pic, Weights: ws}
+	*b = Bound{Li: li, Own: t.x.Device().Own(f), N: n, Req: req, Pos: pos, Pic: pic, Acc: t.acc[0], Acc1: t.acc[1], Weights: ws}
 	for i, x := range io {
 		b.IO[i] = unsafe.Pointer(&x[0])
 	}
@@ -92,6 +120,20 @@ func (t *Tower) run(f *Form, li int, w Tensors, n int, req, pos, pic []uint32, i
 func (t *Tower) Entry(class int, px uint8, pic, req, pos []uint32, n int, rows []float32) error {
 	if class < 0 || class >= len(t.entry) || t.entry[class][px] == nil {
 		return fmt.Errorf("the tower's entry has no form for class %d's samples of format %d", class, px)
+	}
+	// A banded resize's source rows a band at a time into the accumulator,
+	// then the entry finishes it.
+	if class < len(t.runs) {
+		h, side := int(req[composer.RequestPicH]), t.bandRows[class]
+		for _, k := range t.runs[class][px] {
+			for b := 0; b == 0 || b < h; b += side {
+				req[composer.RequestPicBand] = uint32(b)
+				if err := t.run(t.band[class][k], -1, t.dense, n, req, pos, pic, t.bandOut); err != nil {
+					return fmt.Errorf("the tower's entry band: %w", err)
+				}
+				t.Bands++
+			}
+		}
 	}
 	if err := t.run(t.entry[class][px], -1, t.dense, n, req, pos, pic, rows); err != nil {
 		return fmt.Errorf("the tower's entry: %w", err)

@@ -10,6 +10,12 @@ import (
 // (graph.ChainPIL) has: the taps a form unrolls reach a reduction from it.
 const PictureSide = 4096
 
+// PictureMaxSide is the widest side a picture resized by Pillow's filters
+// may have: JPEG's, its sizes 16-bit. The taps a resize reads reach a
+// shrink from it; a taller picture than PictureSide is its bands
+// (graph.Attrs.PicPass).
+const PictureMaxSide = 65535
+
 // pilPrecision is Pillow's fixed point for an 8-bit resample (Resample.c's
 // PRECISION_BITS): 32 bits less the sample's 8 and 2 of headroom.
 const pilPrecision = 32 - 8 - 2

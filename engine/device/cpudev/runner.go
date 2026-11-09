@@ -56,6 +56,9 @@ type Bound struct {
 	Planes []float32
 	// Pic is the step's picture, its decoded samples' words.
 	Pic []uint32
+	// Acc is a banded resize's accumulator, Acc1 a video pair's second
+	// frame's.
+	Acc, Acc1 []uint32
 }
 
 // Resources is what a block's call reads that the caller pages in during
@@ -148,6 +151,8 @@ func (r *Runner) CallOf(b *Bound, f *Form) *Call {
 	a[SrcZero] = ptr(r.zero)
 	a[SrcRequest], a[SrcTokens], a[SrcPos] = ptr(b.Req), ptr(b.Tok), ptr(b.Pos)
 	a[SrcPicture] = ptr(b.Pic)
+	a[SrcPicAcc] = ptr(b.Acc)
+	a[SrcPicAcc1] = ptr(b.Acc1)
 	c.Weights = b.Weights
 	return c
 }

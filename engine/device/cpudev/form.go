@@ -67,6 +67,10 @@ const (
 	SrcTokens
 	// SrcPicture is the step's picture, its decoded samples' words.
 	SrcPicture
+	// SrcPicAcc is a banded resize's accumulator (composer.TablePicAcc),
+	// SrcPicAcc1 a video pair's second frame's.
+	SrcPicAcc
+	SrcPicAcc1
 	// SrcEntries and SrcEntryPages are the block's entries plane and its
 	// page table: the composer's history-1 keys and pages.
 	SrcEntries
@@ -461,6 +465,11 @@ func BuildForm(h *cpu.Target, gr *graph.Graph, codes []composer.Code, rows int, 
 					ar.src = SrcRequest
 				case t == composer.TablePicture:
 					ar.src = SrcPicture
+				case t == composer.TablePicAcc, t == composer.TablePicAccOut:
+					ar.src = SrcPicAcc
+					if o.Instance == 1 {
+						ar.src = SrcPicAcc1
+					}
 				case t == composer.TableTokens:
 					ar.src, f.Toks = SrcTokens, true
 				case t == composer.TablePos:

@@ -61,9 +61,10 @@ const (
 	RequestPicTaps
 )
 
-// PictureWords is the most words a step's picture holds: a picture 4096
+// PictureWords is the most words a step's picture holds, its bytes every
+// one a 32-bit address: a picture 4096
 // pixels square, four bytes a pixel.
-const PictureWords = 4096 * 4096
+const PictureWords = 1<<30 - 1
 
 // decomposePicture is each output pixel's channel of the step's picture:
 // on each axis the two source samples around its centre
@@ -166,6 +167,15 @@ func padded(x *exprs, n, unit int) int {
 	U := ir.U32
 	u := x.u(uint32(unit))
 	return x.op(OpMul, U, x.op(OpDiv, U, x.op(OpAdd, U, n, x.u(uint32(unit-1))), u), u)
+}
+
+// accOf is the accumulator instance a picture op's bands add into: a video
+// pair's second frame its own (graph.Attrs.PicFrame).
+func accOf(a graph.Attrs) int {
+	if a.PicFrame {
+		return 1
+	}
+	return 0
 }
 
 // picWords is the request words a picture op's frame reads its layout
@@ -329,9 +339,9 @@ func decomposePicturePIL(o graph.Op, c *Context) ([]Prim, error) {
 		first := ac.op(OpLess, ir.Pred, ac.load(1, ac.u(RequestPicBand)), ac.u(1))
 		held := ac.sel(I, first, ac.i(0), ac.un(OpBitcast, I, ac.load(2, i)))
 		ac.un(OpBitcast, U, ac.op(OpAdd, I, held, ac.load(0, i)))
-		acc := Prim{Kind: PrimMap, Shape: []int{n}, In: []Operand{vsum, TableRequest.op(), TablePicAcc.op()}, Expr: ac.e,
+		acc := Prim{Kind: PrimMap, Shape: []int{n}, In: []Operand{vsum, TableRequest.op(), TablePicAcc.of(accOf(a))}, Expr: ac.e,
 			Facts:  Facts{Extents: map[int]int{0: n, 1: reqWords, 2: n}, Whole: true},
-			Stores: []PrimStore{{Out: TablePicAccOut.op(), Index: i, Value: len(ac.e) - 1, Extent: n}}}
+			Stores: []PrimStore{{Out: TablePicAccOut.of(accOf(a)), Index: i, Value: len(ac.e) - 1, Extent: n}}}
 		var z exprs
 		z.f(0)
 		return append(prims, vred, acc, Prim{Kind: PrimMap, Shape: sh, Out: c.value(o.Out[0]), Expr: z.e}), nil
@@ -350,7 +360,7 @@ func decomposePicturePIL(o graph.Op, c *Context) ([]Prim, error) {
 	at, live := flat, mu(n)
 	in := []Operand{vsum}
 	if a.PicPass == graph.PicFinish {
-		in[0] = TablePicAcc.op()
+		in[0] = TablePicAcc.of(accOf(a))
 	}
 	ext := map[int]int{0: n}
 	var ow, oh, py, px, fch int
