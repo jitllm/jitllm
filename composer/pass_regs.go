@@ -194,14 +194,14 @@ func (p Regs) bind(k *Kernel, d Device) ([]*Kernel, bool, error) {
 	// floats do not fit; an error past them is the words not fitting.
 	try := func(st *bindState) (*Kernel, error, error) {
 		m := st.w.clone()
-		m.vwords = &vectorMemo{n: -1}
+		m.vwords = st.memoCopy()
 		b := binder86{k: m, p: p, used: map[int]bool{}, late: late, isa: x86.ISA(d.ISA)}
 		b.lives()
 		if b.gprs() != nil {
 			// The words do not fit: again with the reload registers kept
 			// out of every pool, spilling where none is free.
 			m = st.w.clone()
-			m.vwords = &vectorMemo{n: -1}
+			m.vwords = st.memoCopy()
 			b = binder86{k: m, p: p, used: map[int]bool{}, late: late, spill: true, isa: x86.ISA(d.ISA)}
 			b.lives()
 			if err := b.gprs(); err != nil {
@@ -347,11 +347,21 @@ func (st *bindState) advance(n int) int {
 	return n
 }
 
+// memoCopy is a copy of st's memo for a binding of a clone of its kernel,
+// which holds the same nodes: each of its findings is kept while the clone
+// holds as many nodes as it was found at, as the state's own are. The copy's
+// findings are replaced, never written in place, so the state's stand.
+func (st *bindState) memoCopy() *vectorMemo {
+	if st.memo == nil {
+		return &vectorMemo{n: -1}
+	}
+	return st.memo.fresh()
+}
+
 func (st *bindState) clone() *bindState {
 	c := &bindState{w: st.w.clone(), moved: maps.Clone(st.moved), sunk: maps.Clone(st.sunk), steps: st.steps}
 	if st.memo != nil {
-		m := *st.memo
-		c.memo = &m
+		c.memo = st.memo.fresh()
 	}
 	return c
 }
@@ -377,10 +387,14 @@ type binder86 struct {
 	// take: re-read from the argument block at each read instead.
 	params map[int]int
 	late   map[int]bool
-	def    map[int]int
-	last   map[int]int
-	end    map[int]int
-	start  map[int]int
+	// def and last are each value's place in the sequence and its last
+	// read's, end and start each loop's end and beginning (lives).
+	def, last  lifeTab
+	end, start lifeTab
+	// useN is each node's reads (uses), counted at useKey's counts of
+	// nodes and stores.
+	useKey [2]int
+	useN   []int
 	spans  map[int][]span
 	// reserved is the registers a spilling binding keeps for reloads and
 	// counters.
@@ -429,12 +443,12 @@ func (b *binder86) takeOver(pool []int, s span) int {
 // its end.
 func (b *binder86) loopSpan(c, r int) span {
 	k := b.k
-	s := span{2*b.start[c] + 1, 2 * b.end[c]}
+	s := span{2*b.start.of(c) + 1, 2 * b.end.of(c)}
 	l := k.Loops[c]
 	if v := c - 1; v >= 0 && l.Of == c && k.Loops[v].Lanes > 0 && l.Count > 0 && k.Nodes[l.Count-1].Op != OpConst && k.passes() &&
 		r != k.Loops[v].Reg-1 && r != k.Nodes[l.Count-1].Reg-1 {
-		if d, ok := b.def[l.Count-1]; ok && d < b.start[v] {
-			s.from = 2*b.start[v] + 1
+		if d, ok := b.def.get(l.Count - 1); ok && d < b.start.of(v) {
+			s.from = 2*b.start.of(v) + 1
 		}
 	}
 	return s
@@ -449,10 +463,10 @@ func (b *binder86) ptrSpan(ptr int) span {
 			if cu.Ptr != ptr {
 				continue
 			}
-			if s.from < 0 || 2*b.start[c]+1 < s.from {
-				s.from = 2*b.start[c] + 1
+			if s.from < 0 || 2*b.start.of(c)+1 < s.from {
+				s.from = 2*b.start.of(c) + 1
 			}
-			s.to = max(s.to, 2*b.end[c])
+			s.to = max(s.to, 2*b.end.of(c))
 		}
 	}
 	return s
@@ -474,20 +488,22 @@ func (b *binder86) take(pool []int) int {
 func (b *binder86) lives() {
 	k := b.k
 	hs := k.homesNow()
-	b.def, b.last, b.end, b.start = map[int]int{}, map[int]int{}, map[int]int{}, map[int]int{}
+	b.def.reset(len(k.Nodes))
+	b.last.reset(len(k.Nodes))
+	b.end.reset(len(k.Loops))
+	b.start.reset(len(k.Loops))
 	for pos, e := range k.Seq {
 		switch e.Kind {
 		case EntryNode:
-			b.def[e.I] = pos
+			b.def.put(e.I, pos)
 		case EntryEnd:
-			b.end[e.I] = pos
+			b.end.put(e.I, pos)
 		case EntryLoop:
-			b.start[e.I] = pos
+			b.start.put(e.I, pos)
 		}
 	}
-	start := b.start
 	use := func(v, pos, home int) {
-		d, ok := b.def[v]
+		d, ok := b.def.get(v)
 		if !ok {
 			return
 		}
@@ -496,14 +512,14 @@ func (b *binder86) lives() {
 			h = k.Nodes[v].At
 		}
 		for c := home; c >= 0; c = k.Loops[c].Parent {
-			outside := d < start[c] || d > b.end[c]
+			outside := d < b.start.of(c) || d > b.end.of(c)
 			if outside || k.Nodes[v].Op == OpFold && h == c {
-				if e, ok := b.end[c]; ok && e > pos {
+				if e, ok := b.end.get(c); ok && e > pos {
 					pos = e
 				}
 			}
 		}
-		b.last[v] = max(b.last[v], pos)
+		b.last.put(v, max(b.last.of(v), pos))
 	}
 	// A node runs in the loops its place in the sequence opens, which may
 	// be deeper than its home: a reader of a loop's counter (Induction)
@@ -642,7 +658,7 @@ func (b *binder86) gprs() error {
 		case EntryLoop:
 			if it := k.iterOf(e.I); it >= 0 && k.Nodes[it].Reg == 0 && b.uses(it) > 0 {
 				for v, r := range freed {
-					if b.last[v] < pos {
+					if b.last.of(v) < pos {
 						b.used[r] = false
 						delete(freed, v)
 					}
@@ -687,12 +703,12 @@ func (b *binder86) gprs() error {
 			continue
 		}
 		for v, r := range freed {
-			if b.last[v] < b.def[i] {
+			if b.last.of(v) < b.def.of(i) {
 				b.used[r] = false
 				delete(freed, v)
 			}
 		}
-		expired(b.def[i])
+		expired(b.def.of(i))
 		if f, ok := foldOf[i]; ok && k.Nodes[f].Reg > 0 && k.Nodes[f].Type != ir.F32 {
 			// A sum's step writes the sum's register.
 			k.Nodes[i].Reg = k.Nodes[f].Reg
@@ -710,7 +726,7 @@ func (b *binder86) gprs() error {
 		// next entry.
 		case nd.Op != OpParam && k.madeCount(i) >= 0 && k.Loops[k.madeCount(i)].Parent < 0:
 			c := k.madeCount(i)
-			if k.Loops[c].Lanes > 0 && b.last[nd.A] == b.def[i] && k.Nodes[nd.A].Reg == p.Counters[0]+1 {
+			if k.Loops[c].Lanes > 0 && b.last.of(nd.A) == b.def.of(i) && k.Nodes[nd.A].Reg == p.Counters[0]+1 {
 				r = p.Counters[0]
 			} else {
 				r = b.take([]int{p.Counters[1]})
@@ -750,7 +766,7 @@ func (b *binder86) gprs() error {
 			// A value takes the register of an operand read last here: the
 			// lowering reads both before it writes, whichever it takes.
 			dies := func(x int) bool {
-				return b.last[x] == b.def[i] && k.Nodes[x].Reg > 0 && k.Nodes[x].Spill == 0 && k.Nodes[x].Type != ir.F32 && !keeps(x) && k.Nodes[x].Op != OpIter
+				return b.last.of(x) == b.def.of(i) && k.Nodes[x].Reg > 0 && k.Nodes[x].Spill == 0 && k.Nodes[x].Type != ir.F32 && !keeps(x) && k.Nodes[x].Op != OpIter
 			}
 			switch {
 			case dies(nd.A):
@@ -782,7 +798,7 @@ func (b *binder86) gprs() error {
 			// Made in the reloaded addresses' register and stored to a slot
 			// at once: its reads load it from there. Not a sum, whose step
 			// writes its register each trip and stores nothing.
-			if s := b.slot(b.def[i], i+1); s > 0 {
+			if s := b.slot(b.def.of(i), i+1); s > 0 {
 				k.Nodes[i].Reg, k.Nodes[i].Spill = int(reloadReg)+1, s
 				continue
 			}
@@ -1011,10 +1027,10 @@ func (b *binder86) keepEnd(i int) int {
 	if nd.Op == OpFold || nd.Op == OpSpan {
 		return len(k.Seq)
 	}
-	e := max(b.def[i], b.last[i])
+	e := max(b.def.of(i), b.last.of(i))
 	for c, l := range k.Loops {
 		if l.Count == i+1 && l.Reg == nd.Reg {
-			e = max(e, b.end[c])
+			e = max(e, b.end.of(c))
 		}
 	}
 	if !k.isBaseNode(i) {
@@ -1024,7 +1040,7 @@ func (b *binder86) keepEnd(i int) int {
 		for k.Loops[c].Parent >= 0 {
 			c = k.Loops[c].Parent
 		}
-		return b.end[c]
+		return b.end.of(c)
 	}
 	hs := k.homesNow()
 	mine := map[int]bool{}
@@ -1037,7 +1053,7 @@ func (b *binder86) keepEnd(i int) int {
 		if n.Op != OpLoad || !mine[n.Buf] {
 			continue
 		}
-		e = max(e, b.def[x], b.last[x])
+		e = max(e, b.def.of(x), b.last.of(x))
 		if x < len(hs) && hs[x] >= 0 {
 			e = max(e, top(hs[x]))
 		}
@@ -1083,7 +1099,7 @@ func (b *binder86) valueSpans(keeps func(int) bool) {
 	whole := span{0, 2 * len(k.Seq)}
 	for c := range k.Loops {
 		if it := k.iterOf(c); it >= 0 && k.Nodes[it].Reg > 0 {
-			b.hold(k.Nodes[it].Reg-1, span{2*b.start[c] + 1, 2 * b.end[c]})
+			b.hold(k.Nodes[it].Reg-1, span{2*b.start.of(c) + 1, 2 * b.end.of(c)})
 		}
 	}
 	for i, nd := range k.Nodes {
@@ -1093,7 +1109,7 @@ func (b *binder86) valueSpans(keeps func(int) bool) {
 		if nd.Op != OpParam && (nd.Type == ir.F32 || nd.Op == OpConst || nd.Op == OpLoad && (nd.Mem || k.needsVector(i)) || words[i]) {
 			continue
 		}
-		d, ok := b.def[i]
+		d, ok := b.def.get(i)
 		switch {
 		case !ok:
 			b.hold(nd.Reg-1, whole)
@@ -1102,7 +1118,7 @@ func (b *binder86) valueSpans(keeps func(int) bool) {
 		case nd.Spill > 0:
 			b.hold(nd.Reg-1, span{2 * d, 2 * d})
 		default:
-			b.hold(nd.Reg-1, span{2 * d, 2 * max(d, b.last[i])})
+			b.hold(nd.Reg-1, span{2 * d, 2 * max(d, b.last.of(i))})
 		}
 	}
 }
@@ -1206,30 +1222,38 @@ type offGroup struct{ g, scale int }
 
 // uses is how many nodes and stores read node i.
 func (b *binder86) uses(i int) int {
-	n := 0
-	var buf [3]int
-	for x := range b.k.Nodes {
-		for _, a := range b.k.args(x, &buf) {
-			if a == i {
-				n++
+	k := b.k
+	if key := [2]int{len(k.Nodes) + 1, len(k.Stores)}; b.useKey != key {
+		b.useKey = key
+		b.useN = slices.Grow(b.useN[:0], len(k.Nodes))[:len(k.Nodes)]
+		clear(b.useN)
+		var buf [3]int
+		for x := range k.Nodes {
+			for _, a := range k.args(x, &buf) {
+				if a >= 0 && a < len(b.useN) {
+					b.useN[a]++
+				}
+			}
+		}
+		for x := range k.Stores {
+			for _, a := range k.storeArgs(&k.Stores[x]) {
+				if *a >= 0 && *a < len(b.useN) {
+					b.useN[*a]++
+				}
 			}
 		}
 	}
-	for x := range b.k.Stores {
-		for _, a := range b.k.storeArgs(&b.k.Stores[x]) {
-			if *a == i {
-				n++
-			}
-		}
+	if i < 0 || i >= len(b.useN) {
+		return 0
 	}
-	return n
+	return b.useN[i]
 }
 
 // slot is a red-zone slot free from sequence position from on, taken for
 // owner (1 + a value's node, or -1 for good); -1 where none is.
 func (b *binder86) slot(from, owner int) int {
 	for s := 1; s <= spillSlots; s++ {
-		if o := b.owner[s]; o == 0 || o > 0 && b.last[o-1] < from {
+		if o := b.owner[s]; o == 0 || o > 0 && b.last.of(o-1) < from {
 			b.owner[s] = owner
 			return s
 		}
@@ -1241,21 +1265,21 @@ func (b *binder86) slot(from, owner int) int {
 // register, -1 where nothing can spill: the value is stored where it is made
 // and loaded at every read, so its register is free from here on.
 func (b *binder86) evict(freed map[int]int, i int) int {
-	return b.evictAt(freed, b.def[i])
+	return b.evictAt(freed, b.def.of(i))
 }
 
 // evictAt is evict at sequence position pos.
 func (b *binder86) evictAt(freed map[int]int, pos int) int {
 	v, last := -1, -1
 	for x := range freed {
-		if l := b.last[x]; l > pos && (l > last || l == last && x < v) {
+		if l := b.last.of(x); l > pos && (l > last || l == last && x < v) {
 			v, last = x, l
 		}
 	}
 	if v < 0 {
 		return -1
 	}
-	s := b.slot(b.def[v], v+1)
+	s := b.slot(b.def.of(v), v+1)
 	if s < 0 {
 		return -1
 	}
@@ -1427,6 +1451,21 @@ type vectorMemo struct {
 	// usesS the count of stores (operandUses).
 	usesN, usesS int
 	uses         []bool
+	// made is madeCounts' answers, found at madeKey's counts of nodes,
+	// stores and loops; a copy of the memo starts its own (fresh).
+	madeKey [3]int
+	made    map[int][]int
+	// addr is addressNodes' answer, found at addrKey's counts of nodes and
+	// stores.
+	addrKey [2]int
+	addr    map[int]bool
+}
+
+// fresh is m with madeCounts' answers of its own: copies write none into
+// each other's.
+func (m vectorMemo) fresh() *vectorMemo {
+	m.made, m.madeKey = nil, [3]int{}
+	return &m
 }
 
 // vectorized reports whether any loop of k runs in vector lanes, or any
@@ -1592,7 +1631,7 @@ func (b *binder86) vectors() error {
 	// time, a sum's steps apart: free visits those alone.
 	lastAt := make([][]int, len(k.Seq))
 	for v := range k.Nodes {
-		if l, ok := b.last[v]; ok && l >= 0 && l < len(lastAt) {
+		if l, ok := b.last.get(v); ok && l >= 0 && l < len(lastAt) {
 			if _, step := stepOf[v]; !step {
 				lastAt[l] = append(lastAt[l], v)
 			}
@@ -1687,14 +1726,14 @@ func (b *binder86) vectors() error {
 	}
 	var hinted []int
 	for i, nd := range k.Nodes {
-		if _, made := b.def[i]; made && nd.Hint > 0 {
+		if _, made := b.def.get(i); made && nd.Hint > 0 {
 			hinted = append(hinted, i)
 		}
 	}
 	reserved := map[int]bool{}
 	bar := func(i int) {
 		clear(reserved)
-		d, l := b.def[i], b.last[i]
+		d, l := b.def.of(i), b.last.of(i)
 		for c, rs := range kept {
 			if sp := span[c]; sp[0] <= l && d <= sp[1] {
 				for r := range rs {
@@ -1703,7 +1742,7 @@ func (b *binder86) vectors() error {
 			}
 		}
 		for _, h := range hinted {
-			if h != i && d < b.def[h] && b.def[h] <= l {
+			if h != i && d < b.def.of(h) && b.def.of(h) <= l {
 				reserved[k.Nodes[h].Hint-1] = true
 			}
 		}
@@ -1885,7 +1924,7 @@ func (b *binder86) vectors() error {
 				first = nd.B
 			case OpFma:
 				first = nd.C
-				if b.last[nd.C] != pos || !k.needsVector(nd.C) {
+				if b.last.of(nd.C) != pos || !k.needsVector(nd.C) {
 					first = nd.A
 				}
 			case OpDot4, OpDot4U:
@@ -1897,7 +1936,7 @@ func (b *binder86) vectors() error {
 				reg = k.Nodes[f].Reg - 1
 				carry[reg] = f
 			}
-			if reg < 0 && first >= 0 && k.Nodes[first].Reg > 0 && k.needsVector(first) && b.last[first] == pos {
+			if reg < 0 && first >= 0 && k.Nodes[first].Reg > 0 && k.needsVector(first) && b.last.of(first) == pos {
 				reg = k.Nodes[first].Reg - 1
 			}
 			if reg < 0 {
@@ -1987,7 +2026,7 @@ func (b *binder86) vectors() error {
 			}
 			k.Nodes[i].Tmp = t + 1
 		}
-		if _, ok := b.last[i]; !ok {
+		if _, ok := b.last.get(i); !ok {
 			if _, step := stepOf[i]; !step {
 				busy[reg] = false
 			}
@@ -2454,23 +2493,32 @@ func (k *Kernel) sink(sunk map[int]bool) bool {
 		return nd.Op != OpFold && nd.Op != OpConst && nd.Share == 0 && nd.Spill == 0
 	}
 	words := k.vectorWords()
+	// vecs[q] and others[q] count the vector values and the entries not a
+	// node before sequence place q: a candidate's span is straight where
+	// none of the second lies in it, and holds the first's difference.
+	vecs, others := make([]int, len(k.Seq)+1), make([]int, len(k.Seq)+1)
+	needs := make([]bool, len(k.Seq))
+	for q, e := range k.Seq {
+		vecs[q+1], others[q+1] = vecs[q], others[q]
+		if e.Kind != EntryNode {
+			others[q+1]++
+			continue
+		}
+		if needs[q] = k.needsVectorOf(e.I, words); needs[q] {
+			vecs[q+1]++
+		}
+	}
 	best, gap, to := -1, 0, 0
 	for p, e := range k.Seq {
 		x := e.I
-		if e.Kind != EntryNode || sunk[x] || !movable(x) || !k.needsVectorOf(x, words) || len(readers[x]) != 1 || readers[x][0] < 0 {
+		if e.Kind != EntryNode || sunk[x] || !movable(x) || !needs[p] || len(readers[x]) != 1 || readers[x][0] < 0 {
 			continue
 		}
 		rp := pos[readers[x][0]]
-		if rp <= p+1 || !straight(p, rp) {
+		if rp <= p+1 || others[rp]-others[p+1] != 0 {
 			continue
 		}
-		n := 0
-		for q := p + 1; q < rp; q++ {
-			if k.needsVectorOf(k.Seq[q].I, words) {
-				n++
-			}
-		}
-		if n > gap {
+		if n := vecs[rp] - vecs[p+1]; n > gap {
 			best, gap, to = x, n, rp
 		}
 	}
@@ -2991,4 +3039,42 @@ func (k *Kernel) spills() bool {
 		}
 	}
 	return false
+}
+
+// lifeTab is a binder's position for each index: a value, 0 where none was
+// put, and whether one was.
+type lifeTab struct {
+	at  []int
+	set []bool
+}
+
+// reset empties t for n indexes, keeping its storage.
+func (t *lifeTab) reset(n int) {
+	t.at = slices.Grow(t.at[:0], n)[:n]
+	t.set = slices.Grow(t.set[:0], n)[:n]
+	clear(t.at)
+	clear(t.set)
+}
+
+// get is index i's position and whether one was put.
+func (t *lifeTab) get(i int) (int, bool) {
+	if i < 0 || i >= len(t.at) {
+		return 0, false
+	}
+	return t.at[i], t.set[i]
+}
+
+// of is index i's position, 0 where none was put.
+func (t *lifeTab) of(i int) int {
+	v, _ := t.get(i)
+	return v
+}
+
+// put sets index i's position to v.
+func (t *lifeTab) put(i, v int) {
+	if i >= len(t.at) {
+		t.at = append(t.at, make([]int, i+1-len(t.at))...)
+		t.set = append(t.set, make([]bool, i+1-len(t.set))...)
+	}
+	t.at[i], t.set[i] = v, true
 }

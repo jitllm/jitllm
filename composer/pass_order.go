@@ -173,6 +173,23 @@ func (o *orderer) isBase(i int) bool {
 // loop or of its tail and read by nothing else, those counts, the vector
 // loop's last; nil for any other node.
 func (k *Kernel) madeCounts(i int) []int {
+	m := k.vwords
+	if m == nil {
+		return k.findMadeCounts(i)
+	}
+	if key := [3]int{len(k.Nodes) + 1, len(k.Stores), len(k.Loops)}; m.madeKey != key {
+		m.madeKey, m.made = key, map[int][]int{}
+	}
+	if out, ok := m.made[i]; ok {
+		return out
+	}
+	out := k.findMadeCounts(i)
+	m.made[i] = out
+	return out
+}
+
+// findMadeCounts is madeCounts found anew.
+func (k *Kernel) findMadeCounts(i int) []int {
 	var tails, vectors []int
 	var buf [3]int
 	for j := range k.Nodes {
