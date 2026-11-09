@@ -35,6 +35,13 @@ func kvF16IsSelectedAndRuns(t *testing.T, opts ...Option) {
 		if err != nil {
 			continue
 		}
+		// An embedding model keeps no history between calls and has no
+		// head to decode with: it runs through its embedder, as the census
+		// runs it.
+		if m.IsEmbedding() {
+			m.Close()
+			continue
+		}
 		name := filepath.Base(p)
 		ran++
 
