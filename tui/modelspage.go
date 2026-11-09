@@ -242,7 +242,6 @@ func details(e catalog.Entry, probed bool, w int) string {
 	case e.ProbeErr != "":
 		b.WriteString(lipgloss.NewStyle().Foreground(cRed).Width(w).Render(e.ProbeErr))
 	default:
-		row("arch", e.Arch)
 		row("blocks", fmt.Sprint(e.NLayer))
 		row("width", fmt.Sprint(e.NEmbd))
 		row("context", fmt.Sprint(e.NCtx))

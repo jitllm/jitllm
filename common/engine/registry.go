@@ -42,7 +42,6 @@ func (e *Engine) publishModels() {
 			Active: e.active == en,
 		}
 		if en.m != nil {
-			lm.Arch = en.m.Cfg.Arch
 			lm.Blocks = en.m.Cfg.NLayer
 		}
 		out = append(out, lm)

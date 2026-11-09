@@ -74,8 +74,8 @@ func TestDeviceBudgetAccounting(t *testing.T) {
 		}
 	}
 	uniform := maxBase * uint64(c.NLayer)
-	t.Logf("%s: %d layers (%d attention, %d linear), page %s",
-		c.Arch, c.NLayer, nAttn, nLin, mib(m.PageSize()))
+	t.Logf("%d layers (%d attention, %d linear), page %s",
+		c.NLayer, nAttn, nLin, mib(m.PageSize()))
 	t.Logf("STORAGE  base per block max %s -> %s for all %d, uniform page",
 		mib(maxBase), gib(uniform), c.NLayer)
 	t.Logf("STORAGE  expert banks %s   dense region %s   total %s",

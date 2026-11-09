@@ -103,7 +103,6 @@ func Probe(e *Entry) {
 	e.Writer = f.FP.Writer
 
 	if c := f.Config(); c != nil {
-		e.Arch = c.Arch.String()
 		e.NLayer, e.NEmbd, e.NCtx, e.NVocab = c.NLayer, c.NEmbd, c.NCtx, c.NVocab
 		e.NExpert, e.NExpertUsed = c.NExpert, c.NExpertUsed
 	}

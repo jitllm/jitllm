@@ -434,7 +434,7 @@ func sidebar(env *env, w, h int) string {
 			ns = sBold()
 		}
 		b.WriteString(lipgloss.NewStyle().Foreground(colourOf(lm.Colour, modelColours())).Render("●") + " " + ns.Render(name) + "\n")
-		b.WriteString("  " + sDim().Render(fmt.Sprintf("%s · %d blocks", lm.Arch, lm.Blocks)) + "\n")
+		b.WriteString("  " + sDim().Render(fmt.Sprintf("%d blocks", lm.Blocks)) + "\n")
 	}
 
 	b.WriteString("\n")

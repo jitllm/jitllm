@@ -36,7 +36,7 @@ func k3Fixtures() []struct {
 	}{
 		{"synth-kimik3", func(m *model.Model) bool {
 			c := m.Cfg
-			ok := c.Arch == "kimi-k3" && m.Container.Config().AttnResBlock == 2 && c.Streams() == 4 &&
+			ok := m.Container.Config().AttnResBlock == 2 && c.Streams() == 4 &&
 				c.ExpWidth() == 32 && m.Container.Config().SituBeta != 0 && reflect.DeepEqual(c.DeltaDecay, jlm.DeltaDecayBounded(-5)) &&
 				c.LatentNormEps == float64(float32(1e-6)) && c.RMSEps == float64(float32(1e-3)) &&
 				c.ChanDecay() && c.MLA() && c.NoPosEnc && c.QLoraRank == 32 && c.KVLoraRank == 32 &&
@@ -58,7 +58,7 @@ func k3Fixtures() []struct {
 		// gates' rank (the head width) with a ragged tail.
 		{"synth-kimik3-ragged", func(m *model.Model) bool {
 			c := m.Cfg
-			return c.Arch == "kimi-k3" && c.ExpWidth() == 40 && c.ChanDecay()
+			return c.ExpWidth() == 40 && c.ChanDecay()
 		}},
 	}
 }

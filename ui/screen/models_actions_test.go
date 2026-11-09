@@ -112,11 +112,11 @@ func press(w *uiapp.Window, b *button.Widget) {
 // modelsRows is one of each kind of row the table shows.
 func modelsRows(dir string) (ready, stale, tower, gguf catalog.Entry) {
 	ready = catalog.Entry{Path: filepath.Join(dir, "ready.jlm"), Name: "ready.jlm",
-		Kind: catalog.KindContainer, Probed: true, Version: catalog.CurrentVersion, Arch: "llama"}
+		Kind: catalog.KindContainer, Probed: true, Version: catalog.CurrentVersion, NLayer: 16, NVocab: 32000}
 	stale = catalog.Entry{Path: filepath.Join(dir, "old.jlm"), Name: "old.jlm",
 		Kind: catalog.KindContainer, Probed: true, Stale: true, Version: 17, ProbeErr: "container is v17"}
 	tower = catalog.Entry{Path: filepath.Join(dir, "mmproj-x.jlm"), Name: "mmproj-x.jlm",
-		Kind: catalog.KindContainer, Probed: true, Version: catalog.CurrentVersion, Arch: "clip", HasVision: true}
+		Kind: catalog.KindContainer, Probed: true, Version: catalog.CurrentVersion, HasVision: true}
 	gguf = catalog.Entry{Path: filepath.Join(dir, "weights.gguf"), Name: "weights.gguf", Kind: catalog.KindGGUF}
 	return
 }

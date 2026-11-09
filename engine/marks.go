@@ -19,7 +19,7 @@ func (s *Instance) MarkScores(ids []int32, qtype int, marks []int, out []float32
 	n := len(ids)
 	switch {
 	case !s.c.Marks():
-		return fmt.Errorf("model: %s reads out at no marker rows", s.c.Arch)
+		return fmt.Errorf("model: the container reads out at no marker rows")
 	case n == 0 || n > s.maxSeq:
 		return fmt.Errorf("model: %d tokens, and this instance holds %d", n, s.maxSeq)
 	case len(marks) == 0 || len(out) < len(marks):
@@ -62,7 +62,7 @@ func (s *Instance) MarkScoresAfter(prefix []model.Span, ids []int32, qtype int, 
 	n := p + len(ids)
 	switch {
 	case !s.c.Marks():
-		return fmt.Errorf("model: %s reads out at no marker rows", s.c.Arch)
+		return fmt.Errorf("model: the container reads out at no marker rows")
 	case len(ids) == 0 || n > s.maxSeq:
 		return fmt.Errorf("model: %d rows, and this instance holds %d", n, s.maxSeq)
 	case len(marks) == 0 || len(out) < len(marks):

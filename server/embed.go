@@ -62,9 +62,9 @@ func (e *Engine) Embed(ctx context.Context, o EmbedOptions) (*EmbedResult, error
 	}
 	m := lm.m
 	if !m.IsEmbedding() {
-		return nil, fmt.Errorf("%w: model %q (%s) is not an embedding model: its container states no "+
+		return nil, fmt.Errorf("%w: model %q is not an embedding model: its container states no "+
 			"pooling, so its last residual has no readout the weights were trained for; generate from it instead",
-			ErrInvalid, lm.id, m.Cfg.Arch)
+			ErrInvalid, lm.id)
 	}
 	dim := m.Cfg.NEmbd
 	if o.Dimensions != 0 && o.Dimensions != dim {

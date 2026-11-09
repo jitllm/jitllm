@@ -12,7 +12,7 @@ import (
 // refused.
 func TestRevisionTailRoundTrips(t *testing.T) {
 	base := func() *Config {
-		return &Config{Arch: ArchLlama, NLayer: 4, NEmbd: 64, NHead: 4, NKVHead: 2,
+		return &Config{NLayer: 4, NEmbd: 64, NHead: 4, NKVHead: 2,
 			HeadDim: 16, NRot: 16, NFFN: 128, NVocab: 1000, RMSEps: 1e-5, RopeBase: 1e4, SWAWindow: 64, SWAPeriod: 2}
 	}
 	c := base()

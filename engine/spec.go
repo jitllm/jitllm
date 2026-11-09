@@ -314,7 +314,7 @@ func (s *Instance) Speculate(opts ...SpecOption) (*Speculator, error) {
 	mtp := o.drafter == SpecDraftMTP
 	switch {
 	case mtp && c.NMTP == 0:
-		return nil, fmt.Errorf("model: %s carries no multi-token-prediction block to draft with", c.Arch)
+		return nil, fmt.Errorf("model: the container carries no multi-token-prediction block to draft with")
 	case s.pos != 0:
 		return nil, fmt.Errorf("model: speculation starts on an empty session")
 	case s.lo != 0:

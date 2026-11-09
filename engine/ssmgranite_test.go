@@ -22,7 +22,7 @@ func granitehybridFixtures() []struct {
 	}{
 		{"synth-granitehybrid", func(m *model.Model) bool {
 			c := m.Cfg
-			return c.Arch == "granitehybrid" && c.SSD() && c.NoPosEnc && c.LogitScale == float64(float32(3.5)) &&
+			return c.SSD() && c.NoPosEnc && c.LogitScale == float64(float32(3.5)) &&
 				c.ResidualScale == float64(float32(0.35)) && c.EmbdScale == float64(float32(6)) &&
 				c.AttnScale == float64(float32(0.09)) && c.NExpert == 0 && c.NKVHead == 2 && c.NHead == 4 &&
 				c.LayerKind(0).Recurrent() && !c.LayerKind(1).Recurrent() && c.LayerKind(2).Recurrent() &&
@@ -31,7 +31,7 @@ func granitehybridFixtures() []struct {
 		}},
 		{"synth-granitehybridmoe", func(m *model.Model) bool {
 			c := m.Cfg
-			return c.Arch == "granitehybrid" && c.SSD() && c.NoPosEnc && c.NExpert == 8 && c.NExpertUsed == 2 &&
+			return c.SSD() && c.NoPosEnc && c.NExpert == 8 && c.NExpertUsed == 2 &&
 				c.NFFNShExp > 0 && !c.LayerKind(2).Recurrent() && c.LayerKind(3).Recurrent() &&
 				m.Layers[0].Router.E != nil && m.Layers[0].ShGate.E != nil && m.Layers[0].Vector(jlm.RoleShRouter) == nil &&
 				c.TiedEmbd

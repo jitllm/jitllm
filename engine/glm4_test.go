@@ -21,7 +21,7 @@ func glm4Fixtures() []struct {
 		sel  func(m *model.Model) bool
 	}{{"synth-glm4", func(m *model.Model) bool {
 		c, l := m.Cfg, &m.Layers[0]
-		return c.Arch == "glm4" && !c.RopeNeox && c.NRot < c.HeadDim && l.Vector(jlm.RoleAttnQBias) != nil && l.Vector(jlm.RoleAttnKBias) != nil &&
+		return !c.RopeNeox && c.NRot < c.HeadDim && l.Vector(jlm.RoleAttnQBias) != nil && l.Vector(jlm.RoleAttnKBias) != nil &&
 			l.Vector(jlm.RoleAttnVBias) != nil && l.Vector(jlm.RoleAttnOutBias) == nil && l.AttnNorm != nil && l.FfnNorm != nil && l.Vector(jlm.RolePostAttnNorm) != nil &&
 			l.Vector(jlm.RolePostFFNNorm) != nil && l.Gate.E != nil && c.NKVHead < c.NHead && !c.TiedEmbd
 	}}}

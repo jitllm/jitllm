@@ -108,7 +108,7 @@ func openBitNet(t *testing.T, name, golden string, typ quant.Type) (*model.Model
 // as the widest row.
 func bitnetSelected(m *model.Model, typ quant.Type) bool {
 	c := m.Cfg
-	if c.Arch != "bitnet" || !c.TokenAct || !m.Container.Config().Flags.Has(jlm.FlagReLU2) || !c.RopeNeox || !c.TiedEmbd {
+	if !c.TokenAct || !m.Container.Config().Flags.Has(jlm.FlagReLU2) || !c.RopeNeox || !c.TiedEmbd {
 		return false
 	}
 	for i := range m.Layers {

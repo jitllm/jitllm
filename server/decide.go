@@ -64,9 +64,9 @@ func (e *Engine) Decide(ctx context.Context, o DecideOptions) (*DecideResult, er
 		return nil, err
 	}
 	if lm.m.Container.Config().Decision == jlm.DecisionNone {
-		return nil, fmt.Errorf("%w: model %q (%s) is not a decision model: its container states no "+
+		return nil, fmt.Errorf("%w: model %q is not a decision model: its container states no "+
 			"readout, so no score of its forward pass is an answer the weights were trained for",
-			ErrInvalid, lm.id, lm.m.Cfg.Arch)
+			ErrInvalid, lm.id)
 	}
 	if len(o.Images) > 0 && !lm.m.SeesPictures() {
 		return nil, fmt.Errorf("%w: model %q does not accept images: it carries no vision tower", ErrInvalid, lm.id)

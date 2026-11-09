@@ -39,7 +39,7 @@ func (s *Instance) JointScores(spans []model.Span, qs []JointQuestion, out []flo
 	}
 	switch {
 	case !s.c.Joint:
-		return fmt.Errorf("model: %s states no joint head", s.c.Arch)
+		return fmt.Errorf("model: the container states no joint head")
 	case n == 0 || n > s.maxSeq:
 		return fmt.Errorf("model: %d tokens, and this instance holds %d", n, s.maxSeq)
 	case nq == 0 || no == 0 || nq > n || no > n || len(out) < no:

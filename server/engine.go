@@ -340,7 +340,7 @@ type LoadedModel struct {
 	// one pass.
 	decodeMu     sync.Mutex
 	decode       []*engine.Instance
-	decodeServed int
+	decodeServed bool
 	// cpu is the CPU device the model's instances run on, and io the options
 	// every instance of it is made with (WithCPU(cpu) among them).
 	cpu *cpudev.CPU
@@ -482,7 +482,7 @@ func (lm *LoadedModel) holds(id string) bool {
 func (lm *LoadedModel) closeModel() error {
 	lm.decodeMu.Lock()
 	dec := lm.decode
-	lm.decode, lm.decodeServed = nil, 0
+	lm.decode, lm.decodeServed = nil, false
 	lm.decodeMu.Unlock()
 	for _, in := range dec {
 		if lm.pool.Unserve(in) == nil {
@@ -892,34 +892,33 @@ func (e *Engine) makeDecodeInstances(lm *LoadedModel, n int) error {
 	return nil
 }
 
-// serveDecode serves the first n decode instances for generation, one a
-// group of the round, and takes the rest back from the pool, which refuses
-// while a session still leases one: they stay served until the next round's
-// end finds them free. An instance a round made beyond those served is
-// served here; one served beyond n would let a group's rows lease several
-// instances (dealByLease).
-func (lm *LoadedModel) serveDecode(n int) error {
+// serveDecode serves the decode instances for generation (on) or takes them
+// back from the pool, which refuses while a session still leases one: they
+// stay served until the next round's end finds them free.
+func (lm *LoadedModel) serveDecode(on bool) error {
 	lm.decodeMu.Lock()
 	defer lm.decodeMu.Unlock()
-	n = min(n, len(lm.decode))
-	was := lm.decodeServed
-	for i := was; i < n; i++ {
-		if err := lm.pool.Serve(lm.decode[i], math.MaxInt32, engine.PhaseGenerate); err != nil {
-			for _, x := range lm.decode[was:i] {
-				lm.pool.Unserve(x)
-			}
-			return err
-		}
+	if lm.decodeServed == on {
+		return nil
 	}
-	for i := n; i < was; i++ {
-		if err := lm.pool.Unserve(lm.decode[i]); err != nil {
-			for _, x := range lm.decode[n:i] {
+	for i, in := range lm.decode {
+		if on {
+			if err := lm.pool.Serve(in, math.MaxInt32, engine.PhaseGenerate); err != nil {
+				for _, x := range lm.decode[:i] {
+					lm.pool.Unserve(x)
+				}
+				return err
+			}
+			continue
+		}
+		if err := lm.pool.Unserve(in); err != nil {
+			for _, x := range lm.decode[:i] {
 				lm.pool.Serve(x, math.MaxInt32, engine.PhaseGenerate)
 			}
 			return err
 		}
 	}
-	lm.decodeServed = n
+	lm.decodeServed = on
 	return nil
 }
 
@@ -1330,8 +1329,8 @@ func (e *Engine) CreateSession(o SessionOptions) (*Session, error) {
 	}
 	o.ModelID = lm.id
 	if lm.m.Cfg.NonCausal {
-		return nil, fmt.Errorf("%w: model %q is an encoder (%s): it has no decoder session to generate "+
-			"from; embed with it instead", ErrInvalid, lm.called(o.modelName), lm.m.Cfg.Arch)
+		return nil, fmt.Errorf("%w: model %q is an encoder: it has no decoder session to generate "+
+			"from; embed with it instead", ErrInvalid, lm.called(o.modelName))
 	}
 	if o.PromptCache && o.KVStore == nil {
 		// Through the model's memory cache when it has one, which layers

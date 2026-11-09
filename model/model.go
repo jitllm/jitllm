@@ -36,7 +36,6 @@ import (
 // attention.head_count_kv, and every one of those defaulted wrong yields a model
 // that loads, runs, and produces confident nonsense.
 type Config struct {
-	Arch string
 	// TokenAct says every projection input is quantized to int8 per token
 	// by its absolute maximum, as BitNet's BitLinear does: the session's
 	// activation window is the widest row (nn.WithActWindow), so each 32-wide
@@ -807,21 +806,20 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 		return nil, fmt.Errorf("model: the container has no config section")
 	}
 	// A container with no vocabulary is a tower alone.
-	if !c.Arch.Valid() || c.NVocab == 0 {
-		return nil, fmt.Errorf("model: %v is not a language model", c.Arch)
+	if c.NVocab == 0 {
+		return nil, fmt.Errorf("model: the container holds no vocabulary: it is not a language model")
 	}
 	if c.HCMult > 1 && c.Streams.N <= 1 {
-		return nil, fmt.Errorf("model: %v carries %d hyper-connected streams the container does not state: "+
-			"convert the model again", c.Arch, c.HCMult)
+		return nil, fmt.Errorf("model: the container carries %d hyper-connected streams it does not state: "+
+			"convert the model again", c.HCMult)
 	}
 	for li, k := range c.CompKinds {
 		if k == jlm.CompCSA && !c.Selection.At(li) {
-			return nil, fmt.Errorf("model: %v's block %d compresses overlapping windows with no indexer stated: "+
-				"convert the model again", c.Arch, li)
+			return nil, fmt.Errorf("model: block %d compresses overlapping windows with no indexer stated: "+
+				"convert the model again", li)
 		}
 	}
 	out := &Config{
-		Arch:         c.Arch.String(),
 		chanDecay:    stores(jlm.RoleSSMFB),
 		NLayer:       int(c.NLayer),
 		NMTP:         int(c.NMTP),
@@ -910,8 +908,7 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 	out.compKinds, out.compRate = c.CompKinds, [3]int{0, int(c.CompRateCSA), int(c.CompRateHCA)}
 	for li := out.NLayer - out.NKVShared; li < out.NLayer; li++ {
 		if out.KVSource(li) < 0 {
-			return nil, fmt.Errorf("model: %s: KV-sharing block %d has no earlier block of its kind",
-				out.Arch, li)
+			return nil, fmt.Errorf("model: KV-sharing block %d has no earlier block of its kind", li)
 		}
 	}
 	for _, k := range c.LayerKinds {
@@ -994,8 +991,8 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 	// jlm.FlagQKNormPostRope); without the norm, or on a whole-projection one,
 	// it describes nothing the engine runs.
 	if out.QKNormPost && (!out.QKNorm || out.QKNormWide) {
-		return nil, fmt.Errorf("model: %s: FlagQKNormPostRope needs the per-head FlagQKNorm "+
-			"(QKNorm %v, QKNormWide %v)", out.Arch, out.QKNorm, out.QKNormWide)
+		return nil, fmt.Errorf("model: FlagQKNormPostRope needs the per-head FlagQKNorm "+
+			"(QKNorm %v, QKNormWide %v)", out.QKNorm, out.QKNormWide)
 	}
 	// Zero means one for both scales; see jlm.Config.
 	if out.EmbdScale == 0 {
@@ -1005,7 +1002,7 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 		out.AttnFactor = 1
 	}
 	if out.NLayer == 0 || out.NEmbd == 0 || out.NHead == 0 {
-		return nil, fmt.Errorf("model: %s: the container's config is empty", out.Arch)
+		return nil, fmt.Errorf("model: the container's config is empty")
 	}
 	out.Trunk = out.NLayer
 	if c.Flags2.Has(jlm.Flag2HeadBlocks) {
@@ -1027,11 +1024,11 @@ func configFrom(c *jlm.Config, stores func(jlm.Role) bool) (*Config, error) {
 func headConfigOf(c *jlm.Config, trunk *Config) (*Config, error) {
 	n, d := int(c.DecisionHeads), int(c.NEmbd)
 	if c.DecisionBlocks == 0 || n == 0 || d%n != 0 || !(c.DecisionEps > 0) {
-		return nil, fmt.Errorf("model: %s: %d head blocks of %d heads over a %d-wide residual at epsilon %v",
-			trunk.Arch, c.DecisionBlocks, n, d, c.DecisionEps)
+		return nil, fmt.Errorf("model: %d head blocks of %d heads over a %d-wide residual at epsilon %v",
+			c.DecisionBlocks, n, d, c.DecisionEps)
 	}
 	hd := d / n
-	return &Config{Arch: trunk.Arch, NLayer: trunk.NLayer + int(c.DecisionBlocks), NEmbd: d, NHead: n, NKVHead: n,
+	return &Config{NLayer: trunk.NLayer + int(c.DecisionBlocks), NEmbd: d, NHead: n, NKVHead: n,
 		HeadDim: hd, HeadDimV: hd, NFFN: trunk.NFFN, NVocab: trunk.NVocab, NCtx: trunk.NCtx, RMSEps: float64(c.DecisionEps),
 		LatentNormEps: float64(c.DecisionEps), EmbdScale: 1, AttnFactor: 1, ResidualScale: 1, LogitScale: 1, ExpertScale: 1,
 		AttnScale: 1 / math.Sqrt(float64(hd)), SSMNormGroups: 1, NonCausal: true, NoPosEnc: true, LayerNorm: true,
@@ -2749,7 +2746,7 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 	// An RMSNorm has no bias, so a norm bias without FlagLayerNorm is a
 	// container that disagrees with itself.
 	if m.OutNormB != nil && !cfg.LayerNorm {
-		return nil, fmt.Errorf("model: %s: a norm bias on an RMSNorm model", cfg.Arch)
+		return nil, fmt.Errorf("model: a norm bias on an RMSNorm model")
 	}
 	cfg.RopeInterleaved = c.Config().Flags.Has(jlm.FlagRopeInterleaved)
 	m.Rope = nn.Rope{NRot: cfg.NRot, Base: cfg.RopeBase, Neox: cfg.RopeNeox,
@@ -2781,8 +2778,7 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 			r.Scale = cfg.RopeScaleSWA
 		}
 		if len(r.Runs) > 0 {
-			return nil, fmt.Errorf("model: %s: rotary sections on the sliding layers' own rotary, which the converter refuses",
-				cfg.Arch)
+			return nil, fmt.Errorf("model: rotary sections on the sliding layers' own rotary, which the converter refuses")
 		}
 		m.RopeSWA = &r
 	}
@@ -3078,7 +3074,7 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 			}
 		}
 		if (l.AttnNormB != nil || l.FfnNormB != nil) && !cfg.at(i).LayerNorm {
-			return nil, fmt.Errorf("model: %s: block %d has a norm bias on an RMSNorm model", cfg.Arch, bi)
+			return nil, fmt.Errorf("model: block %d has a norm bias on an RMSNorm model", bi)
 		}
 		if l.FfnNormB != nil && l.FfnNorm == nil {
 			return nil, fmt.Errorf("model: block %d has an FFN norm bias and no FFN norm", bi)
@@ -3103,9 +3099,9 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 		if (l.Vector(jlm.RoleAttnSubNorm) != nil || l.Vector(jlm.RoleFFNSubNorm) != nil) != cfg.TokenAct ||
 			cfg.TokenAct && (len(l.Vector(jlm.RoleAttnSubNorm)) != cfg.QDimAt(i) || len(l.Vector(jlm.RoleFFNSubNorm)) != cfg.NFFNAt(i) ||
 				l.Gate.E == nil || cfg.MoEAt(i) || cfg.Parallel) {
-			return nil, fmt.Errorf("model: block %d: inner norms %d and %d wide on %s (a gated dense FFN of %d, "+
+			return nil, fmt.Errorf("model: block %d: inner norms %d and %d wide (a gated dense FFN of %d, "+
 				"attention %d wide, per-token activations %v)", bi, len(l.Vector(jlm.RoleAttnSubNorm)), len(l.Vector(jlm.RoleFFNSubNorm)),
-				cfg.Arch, cfg.NFFNAt(i), cfg.QDimAt(i), cfg.TokenAct)
+				cfg.NFFNAt(i), cfg.QDimAt(i), cfg.TokenAct)
 		}
 		// Gemma 4's per-block output scalar, when the file carries one.
 		if sc, err := optVec(jlm.RoleLayerOutScale, bi); err != nil {

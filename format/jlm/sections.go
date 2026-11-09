@@ -114,7 +114,13 @@ func encodeConfig(c *Config) []byte { return encodeConfigAt(c, Version) }
 // config that version cannot state (writeAt).
 func encodeConfigAt(c *Config, v uint32) []byte {
 	w := &wbuf{}
-	w.u16(uint16(c.Arch))
+	// From v31 the record names no architecture; the slot stays, zero, so
+	// nothing after it moves.
+	if v >= 31 {
+		w.u16(0)
+	} else {
+		w.u16(uint16(c.Arch))
+	}
 	for _, v := range []uint32{c.NLayer, c.NEmbd, c.NHead, c.NKVHead, c.HeadDim, c.NRot,
 		c.NFFN, c.NVocab, c.NCtx, c.NExpert, c.NExpertUsed, c.NFFNExp, c.SWAWindow, c.SWAPeriod} {
 		w.u32(v)
@@ -404,7 +410,10 @@ func decodeConfig(b []byte) (*Config, error) { return decodeConfigAt(b, Version)
 // migration reads an older one (migrate.go).
 func decodeConfigAt(b []byte, v uint32) (*Config, error) {
 	r := &rbuf{b: b}
-	c := &Config{Arch: Arch(r.u16())}
+	c := &Config{}
+	if a := Arch(r.u16()); v < 31 {
+		c.Arch = a
+	}
 	for _, p := range []*uint32{&c.NLayer, &c.NEmbd, &c.NHead, &c.NKVHead, &c.HeadDim, &c.NRot,
 		&c.NFFN, &c.NVocab, &c.NCtx, &c.NExpert, &c.NExpertUsed, &c.NFFNExp, &c.SWAWindow, &c.SWAPeriod} {
 		*p = r.u32()
@@ -662,9 +671,6 @@ func decodeConfigAt(b []byte, v uint32) (*Config, error) {
 		if k > CompHCA {
 			return nil, fmt.Errorf("jlm: layer %d has compression kind %d, which this format does not define", i, k)
 		}
-	}
-	if !c.Arch.Valid() {
-		return nil, fmt.Errorf("jlm: architecture code %d is not one this format defines", c.Arch)
 	}
 	// The MLA block is all-or-nothing: a rank with no rope width would
 	// attend over a key of the wrong length, fluently.

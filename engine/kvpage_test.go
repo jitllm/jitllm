@@ -178,7 +178,7 @@ func TestRelocationCrossesPages(t *testing.T) {
 func TestPageKeySeparatesAliasingGeometries(t *testing.T) {
 	toks := []int32{5, 6, 7, 8, 9, 10, 11, 12}
 	base := &model.Config{NLayer: 1, NCtx: 4096, NKVHead: 4, HeadDim: 64, NEmbd: 2048,
-		NHead: 32, NRot: 64, NFFN: 5632, NVocab: 32000, RopeBase: 10000, Arch: "llama"}
+		NHead: 32, NRot: 64, NFFN: 5632, NVocab: 32000, RopeBase: 10000}
 
 	keyOf := func(c *model.Config, nseq int, l kvLayout) string {
 		kc := newKVCache(c, "id", nseq, l, nil, 0)

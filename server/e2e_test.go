@@ -58,8 +58,8 @@ func TestEndToEndAgainstARealContainer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadModel(%q): %v", path, err)
 	}
-	t.Logf("loaded %s: arch=%s blocks=%d n_embd=%d n_ctx=%d vocab=%d chat=%v",
-		lm.Name(), lm.m.Cfg.Arch, lm.m.Cfg.NLayer, lm.m.Cfg.NEmbd, lm.m.Cfg.NCtx,
+	t.Logf("loaded %s: blocks=%d n_embd=%d n_ctx=%d vocab=%d chat=%v",
+		lm.Name(), lm.m.Cfg.NLayer, lm.m.Cfg.NEmbd, lm.m.Cfg.NCtx,
 		lm.m.Cfg.NVocab, lm.m.ChatCapable())
 
 	// ---- 1. the ConnectRPC path, streaming.

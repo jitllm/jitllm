@@ -11,12 +11,11 @@ import (
 // after the grouped router reads it unchanged.
 func TestLlama4ConfigTailIsOptional(t *testing.T) {
 	base := func() *Config {
-		return &Config{Arch: ArchLlama, NLayer: 4, NEmbd: 64, NHead: 4, NKVHead: 2,
+		return &Config{NLayer: 4, NEmbd: 64, NHead: 4, NKVHead: 2,
 			HeadDim: 16, NRot: 16, NFFN: 128, NVocab: 1000, RMSEps: 1e-5, RopeBase: 5e5}
 	}
 	plain := encodeConfig(base())
 	l4 := base()
-	l4.Arch = ArchLlama4
 	l4.SWAWindow, l4.SWAPeriod = 8192, 4
 	l4.MoEStep, l4.AttnTempScale, l4.AttnTempFloor, l4.AttnTempOffset = 2, 0.1, 8192, 1
 	l4.Flags = FlagSWAChunked | FlagNoPEGlobal | FlagQKL2Norm | FlagExpertWeightIn |

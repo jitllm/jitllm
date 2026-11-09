@@ -46,6 +46,8 @@ const Magic = "JITLLM\x00\x00"
 //
 // Revisions, newest first, each of which a previous reader would misread:
 //
+//	v31  the config record names no architecture: its first two bytes are
+//	     zero, and what a block does is what the record and the tensors state
 //	v30  the audio tower's depthwise bias folded into RoleABNShift
 //	v29  a row table (RowTable) after the page arrays, read a row at a time,
 //	     and TypeIQ4NL
@@ -70,7 +72,7 @@ const Magic = "JITLLM\x00\x00"
 //	     block, index) identity, a typed config and pre-tokenizer stages
 //	v5   Q6_K's payload is a 4-bit plus a 2-bit plane
 //	v3   no tensor is in GGUF layout
-const Version = 30
+const Version = 31
 
 // HeaderBytes is the fixed header. Everything after it is located by offset.
 // It is 192 because every offset in this header is u64; squeezing offsets

@@ -60,7 +60,7 @@ func migrateSource(audio, unfolded bool) *Source {
 	add(RoleAttnQ, 0, TypeQ4, q4(2), k, rows)
 	add(RoleAttnNorm, 0, TypeF32, vec(k, func(int) float32 { return 1 }), k)
 	src := &Source{
-		Config: &Config{Arch: ArchLlama, NLayer: 1, NEmbd: k, NHead: 1, NKVHead: 1, HeadDim: k, NRot: k,
+		Config: &Config{NLayer: 1, NEmbd: k, NHead: 1, NKVHead: 1, HeadDim: k, NRot: k,
 			NFFN: k, NVocab: rows, NCtx: 128, RMSEps: 1e-5, RopeBase: 10000, EmbdScale: 1, AttnFactor: 1,
 			Flags: FlagTiedEmbd},
 		Vocab: &Vocab{Kind: VocabSPM, Tokens: []string{"<unk>", "a", "b", "c", "d", "e", "f", "g"},

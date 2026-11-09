@@ -11,7 +11,7 @@ import (
 // score to select by, or not over the logits and the pick's, is refused.
 func TestRouterWeightTailIsOptional(t *testing.T) {
 	base := func() *Config {
-		return &Config{Arch: ArchPhiMoE, NLayer: 2, NEmbd: 64, NHead: 4, NKVHead: 2, HeadDim: 16, NRot: 16,
+		return &Config{NLayer: 2, NEmbd: 64, NHead: 4, NKVHead: 2, HeadDim: 16, NRot: 16,
 			NFFN: 128, NVocab: 1000, RMSEps: 1e-5, RopeBase: 1e4, NExpert: 4, NExpertUsed: 2,
 			Acts: []Expr{{Terms: []Term{{Fn: FnMul, Args: [3]Arg{Operand(0), Operand(1)}}}}}}
 	}

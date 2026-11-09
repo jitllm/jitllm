@@ -43,7 +43,7 @@ func qkSource(flags Flags, normOn func(b int32) bool) *Source {
 	}
 	return &Source{
 		Config: &Config{
-			Arch: ArchQwen3, NLayer: 2, NEmbd: k, NHead: 1, NKVHead: 1, HeadDim: k, NRot: k,
+			NLayer: 2, NEmbd: k, NHead: 1, NKVHead: 1, HeadDim: k, NRot: k,
 			NFFN: k, NVocab: rows, NCtx: 64, RMSEps: 1e-6, RopeBase: 10000, EmbdScale: 1, AttnFactor: 1,
 			Flags: FlagTiedEmbd | flags, LayerKinds: []LayerKind{LayerFullAttn, LayerLinearAttn},
 		},

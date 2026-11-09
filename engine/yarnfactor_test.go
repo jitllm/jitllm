@@ -29,13 +29,13 @@ func yarnFixtures() []struct {
 		// only.
 		{"synth-olmo3-af", func(m *model.Model) bool {
 			c := m.Cfg
-			return c.Arch == "olmo3" && c.YarnFactor == 8 && m.Rope.Scale == 1.5 &&
+			return c.YarnFactor == 8 && m.Rope.Scale == 1.5 &&
 				m.RopeSWA != nil && m.RopeSWA.Scale == 1 && c.AttnScale == 1/math.Sqrt(float64(c.HeadDim))
 		}},
 		// attention_factor 0.75, outranking the mscale/mscale_all_dim ratio.
 		{"synth-mistral3-af", func(m *model.Model) bool {
 			c := m.Cfg
-			return c.Arch == "mistral3" && c.YarnFactor == 16 && m.Rope.Scale == 0.75 && c.AttnScale == 1/math.Sqrt(float64(c.HeadDim))
+			return c.YarnFactor == 16 && m.Rope.Scale == 0.75 && c.AttnScale == 1/math.Sqrt(float64(c.HeadDim))
 		}},
 		// mscale == mscale_all_dim: cos and sin at exactly one, the score at
 		// mscale(8, 0.707)^2.

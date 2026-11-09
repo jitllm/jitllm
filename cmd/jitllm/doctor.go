@@ -93,7 +93,6 @@ type doctorContainer struct {
 	Version uint32 `json:"version"`
 	// Reads is the version this build reads.
 	Reads uint32 `json:"reads"`
-	Arch  string `json:"arch,omitempty"`
 	// Runs says whether this build opens it: the version matches and the
 	// architecture is one it knows.
 	Runs   bool `json:"runs"`
@@ -119,20 +118,17 @@ type doctorEnv struct {
 	budget    uint64
 	devices   []doctorDevice
 	hipAbsent string // backend.HIPMissing: why ROCm was not loaded, "" when it was
-	// archKnown says whether this build runs a container's architecture.
-	archKnown func(jlm.Arch) bool
 }
 
 // realDoctorEnv probes this machine the way `jitllm hardware` does.
 func realDoctorEnv() doctorEnv {
 	env := doctorEnv{
-		version:   buildVersion(),
-		cpuName:   cpuBrand(),
-		form:      engine.CPUForm(),
-		jit:       composer.LowersCPU(uint64(cpu.Probe().ISA())),
-		hostErr:   cpu.New().Baseline(),
-		budget:    gcPlan().Budget(),
-		archKnown: jlm.Arch.Valid,
+		version: buildVersion(),
+		cpuName: cpuBrand(),
+		form:    engine.CPUForm(),
+		jit:     composer.LowersCPU(uint64(cpu.Probe().ISA())),
+		hostErr: cpu.New().Baseline(),
+		budget:  gcPlan().Budget(),
 	}
 	if b, ok := totalRAM(); ok {
 		env.totalRAM = b
@@ -213,7 +209,7 @@ func diagnose(env doctorEnv, container string) (doctorReport, error) {
 	}
 
 	if container != "" {
-		c, problems, err := checkContainer(container, env.archKnown)
+		c, problems, err := checkContainer(container)
 		if err != nil {
 			return r, err
 		}
@@ -238,7 +234,7 @@ func (e inspectError) Error() string { return string(e) }
 // checkContainer reads a container's version and, when this build reads that
 // version, its architecture. A file that is absent or not a container is a
 // problem with a next action; a file that cannot be read is an error.
-func checkContainer(path string, archKnown func(jlm.Arch) bool) (*doctorContainer, []doctorProblem, error) {
+func checkContainer(path string) (*doctorContainer, []doctorProblem, error) {
 	c := &doctorContainer{Path: path, Reads: jlm.Version}
 	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
 		return c, []doctorProblem{{Code: "container-missing", Message: path + " does not exist",
@@ -268,14 +264,7 @@ func checkContainer(path string, archKnown func(jlm.Arch) bool) (*doctorContaine
 			Next: "re-run jitllm convert on the model this container was made from; the file is damaged or truncated"}}, nil
 	}
 	defer f.Close()
-	a := f.Config().Arch
-	c.Arch = a.String()
 	c.Vision = f.H.NVisBlocks > 0
-	if !archKnown(a) {
-		return c, []doctorProblem{{Code: "architecture-unknown",
-			Message: fmt.Sprintf("%s's architecture %s is not one this build runs", path, c.Arch),
-			Next:    "install the jitllm release that wrote it (`jitllm capabilities` lists what this one runs)"}}, nil
-	}
 	c.Runs = true
 	return c, nil, nil
 }
@@ -367,7 +356,7 @@ func doctorPrint(w io.Writer, asJSON bool, r doctorReport) int {
 		}
 	}
 	if c := r.Container; c != nil {
-		fmt.Fprintf(w, "container %s: version %d (this build reads %d), arch %s, runs %v\n", c.Path, c.Version, c.Reads, c.Arch, c.Runs)
+		fmt.Fprintf(w, "container %s: version %d (this build reads %d), runs %v\n", c.Path, c.Version, c.Reads, c.Runs)
 	}
 	for _, n := range r.Notes {
 		fmt.Fprintf(w, "note      %s\n", n)

@@ -205,7 +205,7 @@ func openModels(sh *app.Shell) widget.Widget {
 					FontSize(p.Type.BodyMedium.FontSize).Color(p.Text()).MaxLines(1).Font(sh.P.Prose()).Bold(),
 				line(sh, reactive(sh, st.Models.AsReadonly(), func() string {
 					m := at()
-					return fmt.Sprintf("%s, %d layers", m.Arch, m.Blocks)
+					return fmt.Sprintf("%d layers", m.Blocks)
 				})),
 			).Gap(2)),
 			widgets.Hide(active, primitives.Box(widgets.NewStatusPill(state.NewComputed(func() widgets.Status {

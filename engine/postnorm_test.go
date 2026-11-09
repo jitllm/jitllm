@@ -249,7 +249,7 @@ func TestPostNormDeviceErrorIsAmplification(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			nl, arch, shared := c.Cfg.NLayer, c.Cfg.Arch, c.Cfg.NKVShared
+			nl, shared := c.Cfg.NLayer, c.Cfg.NKVShared
 			// free is the first block a KV-sharing group holds: a block below it
 			// can be placed alone.
 			free := nl
@@ -261,7 +261,7 @@ func TestPostNormDeviceErrorIsAmplification(t *testing.T) {
 			// needs (Gemma 4 carries pre- and post-norms both).
 			if c.Layers[nl-1].Vector(jlm.RolePostFFNNorm) == nil {
 				c.Close()
-				t.Fatalf("%s's last block has no post-FFN norm for the violation to bend", arch)
+				t.Fatalf("%s's last block has no post-FFN norm for the violation to bend", filepath.Base(name))
 			}
 			c.Close()
 			// decode runs the chunk teacher-forced on a model opened with opts,

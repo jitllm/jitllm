@@ -7,7 +7,10 @@ package jlm
 // values documented. The architecture is a code selecting a graph this engine
 // implements, so an unimplemented one is refused at conversion.
 
-// Arch selects the block graph.
+// Arch is the converter's name for the graph a source file declares: what it
+// reads the file as, and so what it states in the container. No container
+// records it (v31): a reader runs what the config record and the tensors
+// state.
 type Arch uint16
 
 const (

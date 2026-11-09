@@ -34,7 +34,7 @@ func gemma4Fixtures() []struct {
 	}{
 		{"synth-gemma4", func(m *model.Model) bool {
 			c := m.Cfg
-			ok := c.Arch == "gemma4" && c.MixedGeom() && c.HeadDim == 32 && c.HeadDimAt(0) == 16 &&
+			ok := c.MixedGeom() && c.HeadDim == 32 && c.HeadDimAt(0) == 16 &&
 				c.NKVHead == 1 && c.NKVHeadAt(0) == 2 && c.NRot == 32 && c.NRotAt(0) == 16 &&
 				c.VNorm && c.AttnScale == 1 && c.RopeNeox && c.QKNorm && c.SWAWindow == 4 &&
 				c.SWAPeriod == 3 && c.FinalSoftcap == 30 && c.TiedEmbd && m.RopeSWA != nil &&
@@ -50,13 +50,13 @@ func gemma4Fixtures() []struct {
 		// checkpoint runs them at.
 		{"synth-gemma4-wide", func(m *model.Model) bool {
 			c := m.Cfg
-			return c.Arch == "gemma4" && c.MixedGeom() && c.HeadDim == 512 && c.HeadDimAt(0) == 256 &&
+			return c.MixedGeom() && c.HeadDim == 512 && c.HeadDimAt(0) == 256 &&
 				c.NRot == 512 && c.NRotAt(0) == 256 && c.NKVHead == 1 && c.NKVHeadAt(0) == 1 &&
 				m.Layers[2].VFromK && !m.Layers[1].VFromK
 		}},
 		{"synth-gemma4-kv", func(m *model.Model) bool {
 			c := m.Cfg
-			ok := c.Arch == "gemma4" && c.MixedGeom() && c.HeadDim == 32 && c.HeadDimAt(0) == 16 &&
+			ok := c.MixedGeom() && c.HeadDim == 32 && c.HeadDimAt(0) == 16 &&
 				c.NKVHead == 2 && c.NKVHeadAt(0) == 2 && c.VNorm
 			for i := range m.Layers {
 				ok = ok && !m.Layers[i].VFromK
@@ -65,7 +65,7 @@ func gemma4Fixtures() []struct {
 		}},
 		{"synth-gemma4-e", func(m *model.Model) bool {
 			c := m.Cfg
-			ok := c.Arch == "gemma4" && c.MixedGeom() && c.PLEDim == 32 && c.NKVShared == 2 &&
+			ok := c.MixedGeom() && c.PLEDim == 32 && c.NKVShared == 2 &&
 				c.NFFNAt(4) == 2*c.NFFN && c.NFFNAt(3) == c.NFFN &&
 				c.KVSource(4) == 3 && c.KVSource(5) == 2 && c.KVSource(1) == 1 &&
 				m.PleTok.K == 6*32 && m.PleProj.Rows == 6*32 && len(m.PleNorm) == 32
@@ -81,7 +81,7 @@ func gemma4Fixtures() []struct {
 		// ragged tail (nn's on the host, kernels.QuantizePadded on a device).
 		{"synth-gemma4-e-ragged", func(m *model.Model) bool {
 			c := m.Cfg
-			ok := c.Arch == "gemma4" && c.PLEDim == 40 && c.NKVShared == 2 && m.PleProj.Rows == 6*40
+			ok := c.PLEDim == 40 && c.NKVShared == 2 && m.PleProj.Rows == 6*40
 			for i := range m.Layers {
 				ok = ok && matRows(&m.Layers[i], jlm.RolePLEGate) == 40 && matK(&m.Layers[i], jlm.RolePLEProj) == 40
 			}
@@ -89,7 +89,7 @@ func gemma4Fixtures() []struct {
 		}},
 		{"synth-gemma4-moe", func(m *model.Model) bool {
 			c := m.Cfg
-			ok := c.Arch == "gemma4" && c.MixedGeom() && m.Layers[0].Vector(jlm.RoleFFNNorm2) != nil && c.NExpert == 8 &&
+			ok := c.MixedGeom() && m.Layers[0].Vector(jlm.RoleFFNNorm2) != nil && c.NExpert == 8 &&
 				c.NExpertUsed == 2 && c.NFFNExp == 32 && c.NFFNShExp == c.NFFN && !c.NoExpertNorm
 			for i := range m.Layers {
 				l := &m.Layers[i]

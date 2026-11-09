@@ -56,8 +56,8 @@ func decideCmd(args []string) error {
 	if err != nil {
 		return fmt.Errorf("%s: %w", fs.Arg(0), err)
 	}
-	fmt.Fprintf(os.Stderr, "%s: %s, %d blocks on %s, loaded in %v\n",
-		fs.Arg(0), m.Cfg.Arch, in.GPULayers(), devName, time.Since(t0).Round(time.Millisecond))
+	fmt.Fprintf(os.Stderr, "%s: %d blocks on %s, loaded in %v\n",
+		fs.Arg(0), in.GPULayers(), devName, time.Since(t0).Round(time.Millisecond))
 	out := bufio.NewWriter(os.Stdout)
 	defer out.Flush()
 	one := func(body []byte) error {

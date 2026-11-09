@@ -146,7 +146,7 @@ func actCases() []actCase {
 		{"squared relu", jlm.Config{Flags: jlm.FlagReLU2}, true, nil, each(func(g, u float64) float64 { r := math.Max(g, 0); return r * r * u })},
 		{"gelu erf", jlm.Config{Arch: jlm.ArchModernBERT, Flags: jlm.FlagGELU}, true, nil,
 			each(func(g, u float64) float64 { return 0.5 * g * (1 + math.Erf(g/math.Sqrt2)) * u })},
-		{"xielu", jlm.Config{Arch: jlm.ArchApertus}, false, map[jlm.Role][]float64{jlm.RoleXIELU: xieluNumbers()},
+		{"xielu", jlm.Config{}, false, map[jlm.Role][]float64{jlm.RoleXIELU: xieluNumbers()},
 			each(func(x, _ float64) float64 {
 				ap, an, b, eps := xieluNumbers()[0], xieluNumbers()[1], xieluNumbers()[2], xieluNumbers()[3]
 				if x > 0 {
@@ -228,6 +228,9 @@ func TestStatedActivationsAreTheReferences(t *testing.T) {
 				s.Tensors = append(s.Tensors, jlm.Tensor{Role: jlm.RoleFFNUp, Block: li})
 				if c.gated {
 					s.Tensors = append(s.Tensors, jlm.Tensor{Role: jlm.RoleFFNGate, Block: li})
+				}
+				for r := range c.stored {
+					s.Tensors = append(s.Tensors, jlm.Tensor{Role: r, Block: li})
 				}
 			}
 			if err := StateActivations(s); err != nil {

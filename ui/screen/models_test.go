@@ -102,7 +102,7 @@ func TestAStaleRowSaysWhatItNeeds(t *testing.T) {
 // so.
 func TestAVisionTowerOnItsOwnIsFlaggedAndNotLoadable(t *testing.T) {
 	tower := catalog.Entry{Kind: catalog.KindContainer, Probed: true, Version: catalog.CurrentVersion,
-		Arch: "clip", HasVision: true}
+		HasVision: true}
 	if got := entryShortStatus(tower); got != "vision tower" {
 		t.Errorf("shortStatus = %q, want %q", got, "vision tower")
 	}
@@ -117,7 +117,7 @@ func TestAVisionTowerOnItsOwnIsFlaggedAndNotLoadable(t *testing.T) {
 	}
 
 	model := tower
-	model.Arch = "llama" // a model WITH a tower is the normal case, and it loads
+	model.NLayer, model.NVocab = 16, 32000 // a model WITH a tower is the normal case, and it loads
 	if !ModelLoadable(model, true) || entryHint(model) != "" {
 		t.Errorf("a model carrying a tower must load with no hint: loadable=%v hint=%q",
 			ModelLoadable(model, true), entryHint(model))
@@ -255,8 +255,8 @@ func TestRescanPublishesEveryFileAndMarksAStaleContainer(t *testing.T) {
 
 	// The GGUF is listed and deliberately not probed: it is something to
 	// convert, not something to describe.
-	if src[0].Arch != "" {
-		t.Fatal("a GGUF row must not claim an architecture it was never read for")
+	if src[0].NLayer != 0 {
+		t.Fatal("a GGUF row must not claim a config it was never read for")
 	}
 
 	// A second rescan while none is running must be allowed and must not
@@ -271,10 +271,10 @@ func TestRescanPublishesEveryFileAndMarksAStaleContainer(t *testing.T) {
 // A row says what someone choosing a model asks; the engine's numbers are
 // the panel's.
 func TestAModelRowSaysWhatAChooserAsks(t *testing.T) {
-	e := catalog.Entry{Kind: catalog.KindContainer, Probed: true, Arch: "qwen3moe", NLayer: 48,
+	e := catalog.Entry{Kind: catalog.KindContainer, Probed: true, NLayer: 48,
 		Quant: "Q4_K_M", Size: 18 << 30, HasVision: true, PageSize: 1 << 20, ChunkBytes: 1 << 20}
 	got := entryFacts(e)
-	for _, want := range []string{"qwen3moe", "48 layers", "Q4_K_M", "18.00 GiB", "sees images"} {
+	for _, want := range []string{"48 layers", "Q4_K_M", "18.00 GiB", "sees images"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the row does not say %q: %s", want, got)
 		}

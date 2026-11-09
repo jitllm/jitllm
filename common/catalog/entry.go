@@ -60,7 +60,7 @@ type Entry struct {
 	Tower         bool
 
 	// Probed is true once [Probe] has run on this entry, whether or not it
-	// succeeded. A zero Arch with Probed false means "not looked at yet"; with
+	// succeeded. A zero NLayer with Probed false means "not looked at yet"; with
 	// Probed true and ProbeErr set it means "looked at and refused".
 	Probed   bool
 	ProbeErr string
@@ -75,7 +75,6 @@ type Entry struct {
 	// has one, otherwise the container's dominant tensor type.
 	Quant string
 
-	Arch        string
 	NLayer      uint32
 	NEmbd       uint32
 	NCtx        uint32

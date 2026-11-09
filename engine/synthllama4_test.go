@@ -85,7 +85,7 @@ func TestSynthLlama4MatchesTransformers(t *testing.T) {
 	c := m.Cfg
 	// Selection first: every knob must be the one the script set, or the
 	// reference is compared against a different model.
-	if c.Arch != "llama4" || !c.SWAChunked || !c.NoPEGlobal || !c.QKL2Norm || !c.ExpertWeightIn ||
+	if !c.SWAChunked || !c.NoPEGlobal || !c.QKL2Norm || !c.ExpertWeightIn ||
 		c.SWAWindow != 4 || c.SWAPeriod != 4 || c.MoEStep != 2 || c.AttnTempFloor != 4 ||
 		c.AttnTempScale == 0 || c.NFFNShExp != c.NFFNExp || m.Rope.Freqs == nil {
 		t.Fatalf("the container does not carry the fixture's graph: %+v", c)

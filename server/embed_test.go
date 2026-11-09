@@ -204,7 +204,7 @@ func TestEmbedMatchesTheEmbedder(t *testing.T) {
 			for _, x := range wantIDs {
 				total += len(x)
 			}
-			t.Logf("%s: %s, %d dims, %v pooling, at most %d tokens", name, m.Cfg.Arch, m.Cfg.NEmbd, m.Pooling(), limit)
+			t.Logf("%s: %d dims, %v pooling, at most %d tokens", name, m.Cfg.NEmbd, m.Pooling(), limit)
 
 			cl := jitllmv1connect.NewInferenceServiceClient(http.DefaultClient, url)
 			t.Run("rpc, one request of every input", func(t *testing.T) {

@@ -28,37 +28,37 @@ func denseFixtures() []struct {
 	}{
 		{"synth-apertus", func(m *model.Model) bool {
 			c, l, l1 := m.Cfg, &m.Layers[0], &m.Layers[1]
-			return c.Arch == "apertus" && !c.LayerNorm && c.RopeNeox && c.QKNorm && !c.QKNormWide &&
+			return !c.LayerNorm && c.RopeNeox && c.QKNorm && !c.QKNormWide &&
 				len(l.QNorm) == c.HeadDim && m.Container.Config().Arch == jlm.ArchApertus && l.Gate.E == nil && l.Vector(jlm.RoleFFNUpBias) == nil &&
 				len(l.Vector(jlm.RoleXIELU)) == 4 && len(l1.Vector(jlm.RoleXIELU)) == 4 && l.Vector(jlm.RoleXIELU)[0] != l1.Vector(jlm.RoleXIELU)[0] &&
 				l.Vector(jlm.RoleXIELU)[2] != l1.Vector(jlm.RoleXIELU)[2] && l.Vector(jlm.RoleXIELU)[3] < -0.01 && len(m.Rope.Freqs) == c.NRot/2 && c.NKVHead < c.NHead && !c.TiedEmbd
 		}},
 		{"synth-smollm3", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
-			return c.Arch == "smollm3" && !c.LayerNorm && !c.RopeNeox && c.NoPEGlobal &&
+			return !c.LayerNorm && !c.RopeNeox && c.NoPEGlobal &&
 				c.SWAWindow == 0 && c.SWAPeriod == 4 && c.RopeAt(0) && c.RopeAt(2) && !c.RopeAt(3) &&
 				!c.SWA(0) && c.NKVHead < c.NHead && l.Gate.E != nil && c.TiedEmbd
 		}},
 		{"synth-arcee", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
-			return c.Arch == "arcee" && !c.LayerNorm && m.Container.Config().Flags.Has(jlm.FlagReLU2) && l.Gate.E == nil &&
+			return !c.LayerNorm && m.Container.Config().Flags.Has(jlm.FlagReLU2) && l.Gate.E == nil &&
 				l.FfnNorm != nil && l.Vector(jlm.RoleFFNUpBias) == nil && c.NKVHead < c.NHead && !c.TiedEmbd
 		}},
 		{"synth-seedoss", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
-			return c.Arch == "seed_oss" && c.RopeNeox && c.HeadDim*c.NHead != c.NEmbd &&
+			return c.RopeNeox && c.HeadDim*c.NHead != c.NEmbd &&
 				l.Vector(jlm.RoleAttnQBias) != nil && l.Vector(jlm.RoleAttnKBias) != nil && l.Vector(jlm.RoleAttnVBias) != nil && l.Vector(jlm.RoleAttnOutBias) == nil && l.FfnNorm != nil &&
 				l.Vector(jlm.RolePostAttnNorm) == nil && c.NKVHead < c.NHead && !c.TiedEmbd
 		}},
 		{"synth-olmo2", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
-			return c.Arch == "olmo2" && c.RopeNeox && c.QKNorm && c.QKNormWide &&
+			return c.RopeNeox && c.QKNorm && c.QKNormWide &&
 				len(l.QNorm) == c.NHead*c.HeadDim && l.AttnNorm == nil && l.FfnNorm == nil &&
 				l.Vector(jlm.RolePostAttnNorm) != nil && l.Vector(jlm.RolePostFFNNorm) != nil && m.HasNoPreNorm() && !c.TiedEmbd
 		}},
 		{"synth-exaone4", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
-			return c.Arch == "exaone4" && c.RopeNeox && c.QKNorm && !c.QKNormWide &&
+			return c.RopeNeox && c.QKNorm && !c.QKNormWide &&
 				len(l.QNorm) == c.HeadDim && l.AttnNorm == nil && l.FfnNorm == nil &&
 				l.Vector(jlm.RolePostAttnNorm) != nil && l.Vector(jlm.RolePostFFNNorm) != nil && c.NoPEGlobal &&
 				c.SWAWindow == 4 && c.SWAPeriod == 4 && c.SWA(0) && !c.SWA(3) && c.RopeAt(2) && !c.RopeAt(3) &&
@@ -66,19 +66,19 @@ func denseFixtures() []struct {
 		}},
 		{"synth-mistral3", func(m *model.Model) bool {
 			c := m.Cfg
-			return c.Arch == "mistral3" && !c.RopeNeox && !c.NoPEGlobal && c.AttnTempScale == 0.5 &&
+			return !c.RopeNeox && !c.NoPEGlobal && c.AttnTempScale == 0.5 &&
 				c.AttnTempFloor == 4 && c.AttnTempOffs == 0 && c.YarnFactor == 16 &&
 				c.AttnTemp(0, 4) != 1 && c.AttnTemp(2, 8) != 1 && c.AttnTemp(1, 3) == 1 &&
 				m.Rope.Scale > 1.1 && m.Rope.Scale < 1.13
 		}},
 		{"synth-olmo2-gqa", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
-			return c.Arch == "olmo2" && c.QKNormWide && c.NKVHead < c.NHead &&
+			return c.QKNormWide && c.NKVHead < c.NHead &&
 				len(l.QNorm) == c.NHead*c.HeadDim && len(l.KNorm) == c.NKVHead*c.HeadDim && m.HasNoPreNorm()
 		}},
 		{"synth-olmo3", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
-			return c.Arch == "olmo3" && c.QKNormWide && c.NKVHead < c.NHead && len(l.KNorm) == c.NKVHead*c.HeadDim &&
+			return c.QKNormWide && c.NKVHead < c.NHead && len(l.KNorm) == c.NKVHead*c.HeadDim &&
 				c.SWAWindow == 4 && c.SWAPeriod == 4 && c.SWA(0) && !c.SWA(3) && c.YarnFactor == 8 &&
 				m.Rope.Scale > 1.2 && m.Rope.Scale < 1.22 && m.Rope.Freqs != nil &&
 				m.RopeSWA != nil && m.RopeSWA.Scale == 1 && m.RopeSWA.Freqs == nil && m.HasNoPreNorm()

@@ -236,8 +236,8 @@ func TestContainerCarriesTheTokenizer(t *testing.T) {
 				"a caller who deletes the source loses it")
 		}
 	}
-	if c.Config().Arch == jlm.ArchNone {
-		t.Fatal("the container carries no architecture")
+	if a := c.Config().Arch; a != jlm.ArchNone {
+		t.Fatalf("the container names architecture %v: it states what its blocks do, never a family", a)
 	}
 	v := c.Vocab()
 	t.Logf("tokenizer round-tripped over %d probes; %d tokens, %d merges, %d pre stages, %d templates",

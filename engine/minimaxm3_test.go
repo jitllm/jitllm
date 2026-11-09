@@ -33,7 +33,7 @@ func m3Fixtures() []struct {
 		{"synth-minimaxm3", func(m *model.Model) bool {
 			c := m.Cfg
 			s := c.Selection()
-			ok := c.Arch == "minimax-m3" && s != nil && s.Rank == jlm.RankBest && !c.MLA() && c.NKVHead == 2 &&
+			ok := s != nil && s.Rank == jlm.RankBest && !c.MLA() && c.NKVHead == 2 &&
 				c.HeadDim == 16 && c.NRot == 8 && c.RopeNeox && c.QKNorm && !c.QKNormWide &&
 				s.Heads == 2 && s.Groups == 2 && s.HeadDim == 16 && s.KeyWidth == 16 && s.Keep == 2 && s.Block == 4 &&
 				s.Local == 1 && c.NDenseLead == 1 && c.ExpertSigmoid && c.ExpertScale == 2 &&

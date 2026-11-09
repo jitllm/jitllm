@@ -157,7 +157,6 @@ type Allocation struct {
 type LoadedModel struct {
 	Path string
 	Name string
-	Arch string
 	// Blocks is the model's depth, which is what a placement is a fraction of.
 	Blocks int
 	// Colour indexes the transcript's palette by load order, so colours are

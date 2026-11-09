@@ -34,6 +34,8 @@ func migrationFor(v uint32) func(path string) error {
 		return migrate28
 	case 29:
 		return migrate29
+	case 30:
+		return migrate30
 	}
 	return nil
 }
@@ -167,6 +169,34 @@ func (f *File) storedBytes(e *Entry) ([]byte, error) {
 		}
 	}
 	return out, nil
+}
+
+// migrate30 is version 30 to 31. v31's config record names no
+// architecture: its first two bytes are written zero. Every other byte of
+// the record, and every tensor, is what v30 wrote, carried as it is. The
+// code is how jlm.Restate states what a container written before it was
+// stated lacks; where only the code says what that is -- ModernBERT's erf
+// GELU, Phi-3.5-MoE's routed weight -- a container that does not state it
+// yet is refused here, where the code is last read, for a conversion from
+// its source.
+func migrate30(path string) error {
+	f, err := openAt(path, 30)
+	if err != nil {
+		return err
+	}
+	switch c := f.cfg; {
+	case c.Arch == ArchModernBERT && len(c.Acts) == 0:
+		f.Close()
+		return fmt.Errorf("jlm: %s states no activations, which v31 cannot recover: convert the model again", path)
+	case c.Arch == ArchPhiMoE && c.NExpert != 0 && len(c.RouterWeight.Terms) == 0:
+		f.Close()
+		return fmt.Errorf("jlm: %s states no routed weight for its router, which v31 cannot recover: convert the model again", path)
+	}
+	src := &Source{Config: f.cfg, Vision: f.vis, Vocab: f.voc}
+	for i := range f.tab {
+		src.Tensors = append(src.Tensors, f.carried(&f.tab[i]))
+	}
+	return f.publish(path, src, 31)
 }
 
 // migrate29 is version 29 to 30: the audio tower's depthwise bias folded into

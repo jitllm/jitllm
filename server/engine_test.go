@@ -145,8 +145,8 @@ func TestModelServiceDescribesARealContainer(t *testing.T) {
 		t.Fatal(err)
 	}
 	mi := got.Msg.GetModel()
-	if mi.GetName() != "stories260K" || mi.GetArchitecture() != "llama" || mi.GetBlockCount() != 5 {
-		t.Fatalf("GetModel says name=%q arch=%q blocks=%d, want stories260K/llama/5",
+	if mi.GetName() != "stories260K" || mi.GetArchitecture() != "" || mi.GetBlockCount() != 5 {
+		t.Fatalf("GetModel says name=%q arch=%q blocks=%d, want stories260K, no architecture, 5 blocks",
 			mi.GetName(), mi.GetArchitecture(), mi.GetBlockCount())
 	}
 	// A plain llama has every block attention and none recurrent.

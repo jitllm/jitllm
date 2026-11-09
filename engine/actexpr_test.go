@@ -105,14 +105,15 @@ func actSwap(k jlm.Flags) func(*model.Model) func() {
 		s.Flags2 &^= jlm.Flag2SwiGLUClamp
 		s.SituBeta, s.SituLinearBeta, s.SparseStd = 0, 0, 0
 		s.Flags |= k
-		gated := make([]bool, c.NLayer)
+		gated, xielu := make([]bool, c.NLayer), make([]bool, c.NLayer)
 		for li := range gated {
+			xielu[li] = m.Stores(li, jlm.RoleXIELU)
 			// As the converter reads it: the dense FFN's roles or the
 			// experts' banks.
 			gate := m.Stores(li, jlm.RoleFFNGate) || m.Stores(li, jlm.RoleExpGateBank)
 			gated[li] = gate || !m.Stores(li, jlm.RoleFFNUp) && !m.Stores(li, jlm.RoleExpUpBank)
 		}
-		if err := convert.StateGated(&s, gated); err != nil {
+		if err := convert.StateGated(&s, gated, xielu); err != nil {
 			panic(err)
 		}
 		c.Acts, c.ActLayers = s.Acts, s.ActLayers
