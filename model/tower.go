@@ -770,12 +770,16 @@ func (f PictureFit) smartSize(w, h int) (ow, oh int) {
 	return ow, oh
 }
 
-// classSides is the sides of the squares a picture of its own size is
-// encoded in, smallest first: 16 units, doubling, and last the most a side
-// reaches, a picture's at most composer.PictureSide rounded up a unit.
+// classSides is the sides of the squares whose areas a picture of its own
+// size is encoded in (graph.Attrs.PicArea), smallest first: 16 units,
+// doubling, and last composer.PictureSide rounded up a unit, or the side of
+// the area the resize reaches where that is more.
 func (f PictureFit) classSides() []int {
 	u := f.unit()
 	most := (composer.PictureSide/u + 1) * u
+	if r := int(math.Ceil(math.Sqrt(float64(f.MaxPix)))); r > most {
+		most = (r + u - 1) / u * u
+	}
 	var out []int
 	for s := 16 * u; s < most; s *= 2 {
 		out = append(out, s)
@@ -937,6 +941,15 @@ func towerEntry(t *jlm.Tower, px uint8, grid, extra, side int, fit PictureFit, f
 			a.PicBF16 = s.Kind == jlm.PreNormalizeBF16
 		}
 	}
+	if a.PicLive && !a.PicBox && side > 0 {
+		// A picture of a size of its own holds its class's area, its sides
+		// any a picture reaches.
+		m := composer.PictureMaxSide
+		if a.PicPad > 0 {
+			m -= m % a.PicPad
+		}
+		a.PicW, a.PicH, a.PicArea = m, m, side*side
+	}
 	switch {
 	case a.Chain == graph.ChainPIL && a.PicLive:
 		// A picture's own size is its source's but for the rounding to the
@@ -967,7 +980,7 @@ func towerEntry(t *jlm.Tower, px uint8, grid, extra, side int, fit PictureFit, f
 	b := graph.NewBlock(-1)
 	P := int(p.Ops[0].Span)
 	pix := b.Emit(graph.OpPicture, nil, []graph.Result{{Name: "pixels", Width: 3 * P * P}}, nil, a, nil, nil)[0]
-	if a.PicLive && grid*P*P > a.PicW*a.PicH || !a.PicLive && a.PicW*a.PicH != grid*P*P {
+	if a.PicLive && grid*P*P > a.Area() || !a.PicLive && a.PicW*a.PicH != grid*P*P {
 		return nil, nil, fmt.Errorf("a %dx%d picture is not %d patches of %d", a.PicW, a.PicH, grid, P)
 	}
 	out, err := LowerProgram(b, t, p, []graph.ValueID{pix}, grid+extra, f)
@@ -1120,7 +1133,7 @@ func (tg *TowerGraphs) Square(w, h, i int) (Square, int) {
 		if i == 0 {
 			// The overview, at its own size, upscaled where nothing is cut.
 			ow, oh := f.sliceSize(float64(w), float64(h), !cut)
-			sq := Square{Class: tg.classOf(max(ow, oh)), Ow: ow, Oh: oh, Pw: ow, Ph: oh, Gw: ow / tg.Patch, Gh: oh / tg.Patch}
+			sq := Square{Class: tg.classOf(ow, oh), Ow: ow, Oh: oh, Pw: ow, Ph: oh, Gw: ow / tg.Patch, Gh: oh / tg.Patch}
 			if tg.Marks > 0 {
 				sq.Mark, sq.MarkN, sq.Trail, sq.TrailN = 1, 1, 2, 1
 			}
@@ -1130,7 +1143,7 @@ func (tg *TowerGraphs) Square(w, h, i int) (Square, int) {
 		// slice row's first after the first takes the newline before it.
 		rw, rh := f.refineSize(w, h, cols, rows)
 		sw, sh, k := rw/cols, rh/rows, i-1
-		sq := Square{Class: tg.classOf(max(sw, sh)), Ow: rw, Oh: rh, X0: k % cols * sw, Y0: k / cols * sh, Pw: sw, Ph: sh,
+		sq := Square{Class: tg.classOf(sw, sh), Ow: rw, Oh: rh, X0: k % cols * sw, Y0: k / cols * sh, Pw: sw, Ph: sh,
 			Gw: sw / tg.Patch, Gh: sh / tg.Patch}
 		if tg.Marks > 0 {
 			sq.Mark, sq.MarkN, sq.Trail, sq.TrailN = 3, 1, 4, 1
@@ -1151,10 +1164,10 @@ func (tg *TowerGraphs) Square(w, h, i int) (Square, int) {
 			// Tile i of the picture resized onto the grid, its marker the
 			// tile's place.
 			s := f.SmartTile
-			return Square{Class: class(s), Ow: cols * s, Oh: rows * s, X0: i % cols * s, Y0: i / cols * s, Pw: s, Ph: s,
+			return Square{Class: class(s, s), Ow: cols * s, Oh: rows * s, X0: i % cols * s, Y0: i / cols * s, Pw: s, Ph: s,
 				Gw: s / tg.Patch, Gh: s / tg.Patch, Mark: i/cols*span + i%cols + 1, MarkN: 1}, n
 		}
-		sq := Square{Class: class(max(ow, oh)), Ow: ow, Oh: oh, Pw: ow, Ph: oh, Gw: ow / tg.Patch, Gh: oh / tg.Patch}
+		sq := Square{Class: class(ow, oh), Ow: ow, Oh: oh, Pw: ow, Ph: oh, Gw: ow / tg.Patch, Gh: oh / tg.Patch}
 		if tiled {
 			sq.Mark, sq.MarkN = span*span+1, 1
 		}
@@ -1163,7 +1176,7 @@ func (tg *TowerGraphs) Square(w, h, i int) (Square, int) {
 	if tg.Fit.Budget > 0 {
 		ow, oh := tg.Fit.budgetSize(w, h)
 		c := 0
-		for c < len(tg.Classes)-1 && max(ow, oh) > tg.Classes[c].Pic.PicW {
+		for c < len(tg.Classes)-1 && !tg.Classes[c].Pic.Holds(ow, oh) {
 			c++
 		}
 		return Square{Class: c, Ow: ow, Oh: oh, Pw: ow, Ph: oh, Gw: ow / tg.Patch, Gh: oh / tg.Patch}, 1
@@ -1171,7 +1184,7 @@ func (tg *TowerGraphs) Square(w, h, i int) (Square, int) {
 	if tg.Fit.Cap > 0 {
 		ow, oh := tg.Fit.capSize(w, h)
 		c := 0
-		for c < len(tg.Classes)-1 && max(ow, oh) > tg.Classes[c].Pic.PicW {
+		for c < len(tg.Classes)-1 && !tg.Classes[c].Pic.Holds(ow, oh) {
 			c++
 		}
 		return Square{Class: c, Ow: ow, Oh: oh, Pw: ow, Ph: oh, Gw: ow / tg.Patch, Gh: oh / tg.Patch}, 1
@@ -1188,7 +1201,7 @@ func (tg *TowerGraphs) Square(w, h, i int) (Square, int) {
 		u := tg.Fit.Pad
 		pw, ph := (ow+u-1)/u*u, (oh+u-1)/u*u
 		c := 0
-		for c < len(tg.Classes)-1 && max(pw, ph) > tg.Classes[c].Pic.PicW {
+		for c < len(tg.Classes)-1 && !tg.Classes[c].Pic.Holds(pw, ph) {
 			c++
 		}
 		return Square{Class: c, Ow: ow, Oh: oh, Pw: ow, Ph: oh, Gw: pw / tg.Patch, Gh: ph / tg.Patch}, 1
@@ -1196,7 +1209,7 @@ func (tg *TowerGraphs) Square(w, h, i int) (Square, int) {
 	if tg.Fit.Factor > 0 {
 		ow, oh := tg.Fit.smartSize(w, h)
 		c := 0
-		for c < len(tg.Classes)-1 && max(ow, oh) > tg.Classes[c].Pic.PicW {
+		for c < len(tg.Classes)-1 && !tg.Classes[c].Pic.Holds(ow, oh) {
 			c++
 		}
 		return Square{Class: c, Ow: ow, Oh: oh, Pw: ow, Ph: oh, Gw: ow / tg.Patch, Gh: oh / tg.Patch}, 1
@@ -2124,9 +2137,9 @@ func canvasSize(w, h, s, cols, rows int) (ow, oh int) {
 
 // classOf is the class a picture of side pixels is encoded in: the smallest
 // whose picture holds it, else the largest.
-func (tg *TowerGraphs) classOf(side int) int {
+func (tg *TowerGraphs) classOf(w, h int) int {
 	c := 0
-	for c < len(tg.Classes)-1 && side > tg.Classes[c].Pic.PicW {
+	for c < len(tg.Classes)-1 && !tg.Classes[c].Pic.Holds(w, h) {
 		c++
 	}
 	return c

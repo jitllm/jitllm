@@ -110,12 +110,10 @@ type TowerPlans struct {
 	Entry []map[uint8]PartPlan
 	// Band is each class's band forms, nil where its resize runs whole
 	// (graph.Attrs.PicPass), and BandRuns the band forms each of its entries
-	// runs first, in order; BandRows the source rows a band of the class
-	// takes, Acc the words each of the bands' accumulators holds and
-	// BandOut the words a band form's own value takes.
+	// runs first, in order; Acc the words each of the bands' accumulators
+	// holds and BandOut the words a band form's own value takes.
 	Band     []map[uint8]PartPlan
 	BandRuns []map[uint8][]uint8
-	BandRows []int
 	Acc      int
 	BandOut  int
 	Head     PartPlan

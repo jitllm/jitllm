@@ -905,9 +905,11 @@ type Attrs struct {
 	// PicBox centres a live picture in the PicW x PicH frame instead, at
 	// ((PicW - w) / 2, (PicH - h) / 2), every cell outside it PicFill's
 	// sample of its channel normalised (a letterbox, made before
-	// normalising).
+	// normalising). PicArea, where set, is the most pixels a live picture
+	// holds (Area), its sides any up to PicW and PicH.
 	Pixels     uint8
 	PicW, PicH int
+	PicArea    int
 	PicSide    int
 	PicLive    bool
 	PicPad     int
@@ -933,6 +935,18 @@ type Attrs struct {
 	PicBF16   bool
 	Mean, Std [3]float64
 }
+
+// Area is the most pixels a picture op's output holds: PicArea where set,
+// PicW x PicH where not.
+func (a Attrs) Area() int {
+	if a.PicArea > 0 {
+		return a.PicArea
+	}
+	return a.PicW * a.PicH
+}
+
+// Holds says a picture op holds an output of w x h.
+func (a Attrs) Holds(w, h int) bool { return w <= a.PicW && h <= a.PicH && w*h <= a.Area() }
 
 // Op is one operation.
 type Op struct {

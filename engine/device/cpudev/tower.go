@@ -17,20 +17,19 @@ type Tower struct {
 	x     *Exec
 	entry []map[uint8]*Form
 	// band is each class's band forms (graph.Attrs.PicPass), runs the band
-	// forms each entry runs first, bandRows the source rows a band takes,
-	// acc the bands' accumulators (a video pair's second frame the second)
-	// and bandOut a band form's own value; Bands counts the band runs.
-	band     []map[uint8]*Form
-	runs     []map[uint8][]uint8
-	bandRows []int
-	acc      [2][]uint32
-	bandOut  []float32
-	Bands    int
-	head     *Form
-	taps     []*Form
-	dense    Tensors
-	tapsW    []Tensors
-	bound    Bound
+	// forms each entry runs first, acc the bands' accumulators (a video
+	// pair's second frame the second) and bandOut a band form's own value;
+	// Bands counts the band runs.
+	band    []map[uint8]*Form
+	runs    []map[uint8][]uint8
+	acc     [2][]uint32
+	bandOut []float32
+	Bands   int
+	head    *Form
+	taps    []*Form
+	dense   Tensors
+	tapsW   []Tensors
+	bound   Bound
 	// chain is a chained tower's blocks' forms (nn.TowerChain), chainN the
 	// rows each runs over, headN the rows of the head's first input, and
 	// io a chained head's call's buffers.
@@ -69,7 +68,7 @@ func NewTower(x *Exec, p TowerPlans, dense Tensors, taps []Tensors) (*Tower, err
 		}
 		t.band = append(t.band, forms)
 	}
-	t.runs, t.bandRows = p.BandRuns, p.BandRows
+	t.runs = p.BandRuns
 	t.acc = [2][]uint32{make([]uint32, p.Acc), make([]uint32, p.Acc)}
 	t.bandOut = make([]float32, p.BandOut)
 	f, err := x.FormGraph(p.Head)
@@ -124,7 +123,7 @@ func (t *Tower) Entry(class int, px uint8, pic, req, pos []uint32, n int, rows [
 	// A banded resize's source rows a band at a time into the accumulator,
 	// then the entry finishes it.
 	if class < len(t.runs) {
-		h, side := int(req[composer.RequestPicH]), t.bandRows[class]
+		h, side := int(req[composer.RequestPicH]), max(int(req[composer.RequestPicBandRows]), 1)
 		for _, k := range t.runs[class][px] {
 			for b := 0; b == 0 || b < h; b += side {
 				req[composer.RequestPicBand] = uint32(b)

@@ -349,7 +349,7 @@ func TestComposedCPUPictureLive(t *testing.T) {
 			req[RequestPicOW], req[RequestPicOH] = uint32(ow), uint32(oh)
 			if pil {
 				PILTaps(graph.FilterCubic, sw, ow, 0, ow, K, req[RequestPicTaps:])
-				PILTaps(graph.FilterCubic, sh, oh, 0, oh, K, req[RequestPicTaps+maxW*PILEntryWords(K):])
+				PILTaps(graph.FilterCubic, sh, oh, 0, oh, K, req[RequestPicTaps+ow*PILEntryWords(K):])
 			}
 			got, err := runCPUBound(hostArm(), codes, []float32{0}, rows*W, [3][]uint32{}, nil, func(o Operand) []uint32 {
 				switch o.Name {
