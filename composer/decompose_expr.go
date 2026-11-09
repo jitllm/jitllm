@@ -127,18 +127,18 @@ type exprSplit struct {
 	// unjammed the times a part's jammed form was refused, each halving
 	// its rows a call (RowJam),
 	// unpaired those formed with each head a call of its own (HeadPairs),
-	// unwide those formed with no loop's rows across lanes (Jam),
 	// uncursored those formed indexing their buffers (Cursors), unsplit
-	// those formed with their dots' runs whole (HalfSplit), unstreamed
-	// those formed walking each row group through every sub-block (Streams),
-	// unvector those formed with no loop across lanes (Vectorize).
-	unfused, unpaired, unwide, uncursored, unsplit, unvector map[int]bool
-	unstreamed, crowded                                      map[KernelAt]bool
-	unjammed                                                 map[int]int
+	// those formed with their dots' runs whole (HalfSplit), unvector those
+	// formed with no loop across lanes (Vectorize); unwide the kernels
+	// formed with no loop's rows across lanes (Jam), unstreamed those formed
+	// walking each row group through every sub-block (Streams).
+	unfused, unpaired, uncursored, unsplit, unvector map[int]bool
+	unwide, unstreamed, crowded                      map[KernelAt]bool
+	unjammed                                         map[int]int
 }
 
 func newExprSplit() *exprSplit {
-	return &exprSplit{terms: map[exprAt]bool{}, whole: map[int][]exprSize{}, unfused: map[int]bool{}, unjammed: map[int]int{}, unpaired: map[int]bool{}, unwide: map[int]bool{}, uncursored: map[int]bool{}, unsplit: map[int]bool{}, unvector: map[int]bool{}, unstreamed: map[KernelAt]bool{}, crowded: map[KernelAt]bool{}}
+	return &exprSplit{terms: map[exprAt]bool{}, whole: map[int][]exprSize{}, unfused: map[int]bool{}, unjammed: map[int]int{}, unpaired: map[int]bool{}, unwide: map[KernelAt]bool{}, uncursored: map[int]bool{}, unsplit: map[int]bool{}, unvector: map[int]bool{}, unstreamed: map[KernelAt]bool{}, crowded: map[KernelAt]bool{}}
 }
 
 // splitRefused forms a part whose refused kernel walked a weight's planes
@@ -192,9 +192,9 @@ func (sp *exprSplit) splitRefused(err error) bool {
 			sp.unpaired[of], more = true, true
 		}
 	}
-	for _, of := range pe.Wide {
-		if !sp.unwide[of] {
-			sp.unwide[of], more = true, true
+	for _, at := range pe.Wide {
+		if !sp.unwide[at] {
+			sp.unwide[at], more = true, true
 		}
 	}
 	if more {
