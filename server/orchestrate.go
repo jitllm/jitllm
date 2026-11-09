@@ -165,7 +165,11 @@ func (e *Engine) place(s *Session, why orchWhy) int {
 	start := time.Now()
 	var got int
 	var to []string
-	s.in().Place(func(in *engine.Instance) {
+	s.lm.placeAll(s.in(), func(in *engine.Instance, mirror bool) {
+		if mirror {
+			in.PlaceBlocks(0, s.lm.m.Cfg.NLayer)
+			return
+		}
 		before := in.Locations()
 		in.PlaceBlocks(0, s.lm.m.Cfg.NLayer)
 		for li, at := range in.Locations() {
