@@ -325,6 +325,85 @@ type bindState struct {
 	// found at changed, and a binding that walks its steps one by one
 	// would otherwise find them again at every step.
 	memo *vectorMemo
+	// sc is what each step builds and the next builds again over.
+	sc stepScratch
+}
+
+// stepScratch is what a binding's steps build afresh at every step and keep
+// between them: each node's place in the sequence, its readers, and sink's
+// prefix counts. A step of hundreds of nodes made a slice a node otherwise,
+// and the collector's marking of them came to a third of composing.
+type stepScratch struct {
+	pos, off, rd, fill, vecs, others []int
+	needs                            []bool
+}
+
+func sized[T any](s []T, n int) []T {
+	if cap(s) < n {
+		return make([]T, n)
+	}
+	return s[:n]
+}
+
+// places is each node's place in k's sequence, -1 for none.
+func (sc *stepScratch) places(k *Kernel) []int {
+	pos := sized(sc.pos, len(k.Nodes))
+	sc.pos = pos
+	for i := range pos {
+		pos[i] = -1
+	}
+	for p, e := range k.Seq {
+		if e.Kind == EntryNode {
+			pos[e.I] = p
+		}
+	}
+	return pos
+}
+
+// readers lays out the readers in the sequence of each node placed there:
+// node a's are rd[off[a]:off[a+1]], in node order, a reader once however
+// many of its operands read a; with stores, then a -1 for each store
+// operand reading a.
+func (sc *stepScratch) readers(k *Kernel, pos []int, stores bool) (off, rd []int) {
+	n := len(k.Nodes)
+	off = sized(sc.off, n+1)
+	clear(off)
+	var buf [3]int
+	each := func(f func(a, j int)) {
+		for j := range k.Nodes {
+			if pos[j] < 0 {
+				continue
+			}
+			as := k.args(j, &buf)
+			for t, a := range as {
+				if a < 0 || a >= n || pos[a] < 0 || slices.Contains(as[:t], a) {
+					continue
+				}
+				f(a, j)
+			}
+		}
+		if stores {
+			for i := range k.Stores {
+				for _, a := range k.storeArgs(&k.Stores[i]) {
+					if *a >= 0 && *a < n {
+						f(*a, -1)
+					}
+				}
+			}
+		}
+	}
+	each(func(a, _ int) { off[a+1]++ })
+	for a := range n {
+		off[a+1] += off[a]
+	}
+	rd, fill := sized(sc.rd, off[n]), sized(sc.fill, n)
+	copy(fill, off[:n])
+	each(func(a, j int) {
+		rd[fill[a]] = j
+		fill[a]++
+	})
+	sc.off, sc.rd, sc.fill = off, rd, fill
+	return off, rd
 }
 
 // advance takes up to n steps more, the rematerializations first: the steps
@@ -339,7 +418,7 @@ func (st *bindState) advance(n int) int {
 	st.w.vwords = st.memo
 	defer func() { st.w.vwords = nil }()
 	for i := range n {
-		if !st.w.rematerialize(st.moved) && !st.w.sink(st.sunk) {
+		if !st.w.rematerialize(st.moved, &st.sc) && !st.w.sink(st.sunk, &st.sc) {
 			return i
 		}
 		st.steps++
@@ -2373,40 +2452,22 @@ func (k *Kernel) chains() map[int]int {
 // rematerialize loads a constant where each of its readers in the loops
 // reads it, rather than once before the loops: the constant read first in
 // its loops' trips. False where none is left to move.
-func (k *Kernel) rematerialize(moved map[int]bool) bool {
-	// pos is each node's place in the sequence, -1 for none.
-	pos := make([]int, len(k.Nodes))
-	for i := range pos {
-		pos[i] = -1
-	}
-	for p, e := range k.Seq {
-		if e.Kind == EntryNode {
-			pos[e.I] = p
-		}
-	}
+func (k *Kernel) rematerialize(moved map[int]bool, sc *stepScratch) bool {
+	pos := sc.places(k)
 	hs := k.homesNow()
-	// Each node's readers in the sequence, a reader once an operand it reads
-	// the node through, made once: asked of every candidate, a scan of the
-	// kernel each made a rematerialization quadratic in its nodes.
-	readers := make([][]int, len(k.Nodes))
-	var buf [3]int
-	for j := range k.Nodes {
-		if pos[j] < 0 {
-			continue
-		}
-		for _, a := range k.args(j, &buf) {
-			readers[a] = append(readers[a], j)
-		}
-	}
+	// Each node's readers in the sequence, made once: asked of every
+	// candidate, a scan of the kernel each made a rematerialization
+	// quadratic in its nodes.
+	off, rd := sc.readers(k, pos, false)
 	pick := func(outside bool) int {
 		best, at := -1, -1
 		for i, nd := range k.Nodes {
 			p := pos[i]
 			in := p >= 0
-			if o := k.Bufs[nd.Buf].Operand.Kind; !in || moved[i] || nd.Op != OpLoad || o != OperandConsts && k.Bufs[nd.Buf].Words == nil || hs[i] >= 0 {
+			if o := k.Bufs[nd.Buf].Operand.Kind; !in || nd.Op != OpLoad || hs[i] >= 0 || o != OperandConsts && k.Bufs[nd.Buf].Words == nil || moved[i] {
 				continue
 			}
-			rs := readers[i]
+			rs := rd[off[i]:off[i+1]]
 			ok := len(rs) > 0
 			first := -1
 			for _, r := range rs {
@@ -2443,43 +2504,16 @@ func (k *Kernel) rematerialize(moved map[int]bool) bool {
 // most vector values between it and its reader moves first; false where
 // none is left. A paired kernel's statements stand beside their twins and
 // stay.
-func (k *Kernel) sink(sunk map[int]bool) bool {
+func (k *Kernel) sink(sunk map[int]bool, sc *stepScratch) bool {
 	for _, c := range k.copies() {
 		if c > 0 {
 			return false
 		}
 	}
-	// pos is each node's place in the sequence (-1 for none) and readers
-	// the sequenced nodes reading it (-1 a store): slices a node each, as
-	// the binding steps through every sink.
-	pos := make([]int, len(k.Nodes))
-	for i := range pos {
-		pos[i] = -1
-	}
-	for p, e := range k.Seq {
-		if e.Kind == EntryNode {
-			pos[e.I] = p
-		}
-	}
-	readers := make([][]int, len(k.Nodes))
-	var buf [3]int
-	for j := range k.Nodes {
-		if pos[j] < 0 {
-			continue
-		}
-		for _, a := range k.args(j, &buf) {
-			if a >= 0 && a < len(pos) && pos[a] >= 0 && !slices.Contains(readers[a], j) {
-				readers[a] = append(readers[a], j)
-			}
-		}
-	}
-	for i := range k.Stores {
-		for _, a := range k.storeArgs(&k.Stores[i]) {
-			if *a >= 0 && *a < len(readers) {
-				readers[*a] = append(readers[*a], -1)
-			}
-		}
-	}
+	// pos is each node's place in the sequence (-1 for none), and node a's
+	// readers rd[off[a]:off[a+1]] the sequenced nodes reading it (-1 a store).
+	pos := sc.places(k)
+	off, rd := sc.readers(k, pos, true)
 	straight := func(from, to int) bool {
 		for q := from + 1; q < to; q++ {
 			if k.Seq[q].Kind != EntryNode {
@@ -2496,8 +2530,10 @@ func (k *Kernel) sink(sunk map[int]bool) bool {
 	// vecs[q] and others[q] count the vector values and the entries not a
 	// node before sequence place q: a candidate's span is straight where
 	// none of the second lies in it, and holds the first's difference.
-	vecs, others := make([]int, len(k.Seq)+1), make([]int, len(k.Seq)+1)
-	needs := make([]bool, len(k.Seq))
+	vecs, others := sized(sc.vecs, len(k.Seq)+1), sized(sc.others, len(k.Seq)+1)
+	needs := sized(sc.needs, len(k.Seq))
+	sc.vecs, sc.others, sc.needs = vecs, others, needs
+	vecs[0], others[0] = 0, 0
 	for q, e := range k.Seq {
 		vecs[q+1], others[q+1] = vecs[q], others[q]
 		if e.Kind != EntryNode {
@@ -2511,10 +2547,10 @@ func (k *Kernel) sink(sunk map[int]bool) bool {
 	best, gap, to := -1, 0, 0
 	for p, e := range k.Seq {
 		x := e.I
-		if e.Kind != EntryNode || sunk[x] || !movable(x) || !needs[p] || len(readers[x]) != 1 || readers[x][0] < 0 {
+		if e.Kind != EntryNode || !needs[p] || off[x+1]-off[x] != 1 || rd[off[x]] < 0 || !movable(x) || sunk[x] {
 			continue
 		}
-		rp := pos[readers[x][0]]
+		rp := pos[rd[off[x]]]
 		if rp <= p+1 || others[rp]-others[p+1] != 0 {
 			continue
 		}
@@ -2539,7 +2575,7 @@ func (k *Kernel) sink(sunk map[int]bool) bool {
 					continue
 				}
 				only := true
-				for _, r := range readers[x] {
+				for _, r := range rd[off[x]:off[x+1]] {
 					only = only && r >= 0 && group[r]
 				}
 				if only {
