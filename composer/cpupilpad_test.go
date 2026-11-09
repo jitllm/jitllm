@@ -50,7 +50,7 @@ func TestComposedCPUPicturePILPadded(t *testing.T) {
 		req[RequestPicW], req[RequestPicH], req[RequestPicStride] = w, h, w*4
 		req[RequestPicOW], req[RequestPicOH] = ow, oh
 		PILTaps(graph.FilterCubic, w, ow, 0, ow, K, req[RequestPicTaps:])
-		PILTaps(graph.FilterCubic, h, oh, 0, oh, K, req[RequestPicTaps+64*PILEntryWords(K):])
+		PILTaps(graph.FilterCubic, h, oh, 0, oh, K, req[RequestPicTaps+ow*PILEntryWords(K):])
 		got, err := runCPUBound(hostArm(), codes, []float32{0}, rows*W, [3][]uint32{}, nil, func(o Operand) []uint32 {
 			switch o.Name {
 			case "request":

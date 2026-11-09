@@ -10023,3 +10023,40 @@ that does not build, and a readout weight the CPU cannot bind, both read
 vector loaded only under a role `Role.Expanded` lists; a model-level tensor
 of one dimension is a vector now whatever its role, the release's 1-D
 scorer row among them.
+
+## A picture of any size and aspect: bands and area classes
+
+A tower resizing by Pillow's filters refused a picture past 4096 pixels a
+side: its horizontal sums held that many source rows and its taps reached
+that far. The resize now runs in bands of source rows into an accumulator
+the CPU device's tower holds, each band summing only the vertical taps
+whose source rows are its own, and a finish that makes the integer sums
+bytes once -- Pillow's rounding is at the end, so the bands are exact
+(`composer.TestComposedCPUPicturePILBands`, every byte the whole pass's and
+Pillow's; a band skipped is the violation).
+
+That left the resized picture bounded by its class's square: a 320x9000
+picture keeps its size under Qwen2-VL's smart resize, past every square,
+and overran the taps' request. Squares sized for the longest side a
+picture of max_pixels reaches would be that side squared. A class of a
+picture of its own size now holds its square's AREA (`graph.Attrs.PicArea`)
+with any sides up to 65535: the sums are laid out at the output's live
+width, the vertical sums hold the area and the horizontal sums the
+square's side of PicSide rows, so a band of an output wider than the
+square holds fewer rows (`composer.PicBandRows`). An output no wider than
+its square keeps PicSide rows a band and the same buffers as before, by
+construction. A picture picks the smallest class whose area holds it
+(`Attrs.Holds`), so a wide picture also runs fewer rows than the square of
+its longer side did. `composer.TestComposedCPUPicturePILRectangles` runs a
+wide output, its transpose, a square and one of 16-row bands through one
+formed band pass and finish against Pillow; advancing a band past the rows
+it holds is its violation. `TestATallPictureRunsInBands` encodes 320x9000,
+9000x320 and 8300x8300 through synth-qwen2vl's tower and counts each
+picture's bands.
+
+Presizing the tower's row buffers to the largest class at placement was
+proposed and not taken: the largest class's rows times the embedding width
+over every buffer is a gigabyte or more held by an instance that may never
+see a large picture. The buffers grow to the largest square seen, and a
+warm encode of a size already seen allocates nothing
+(`TestWarmImageEncodeDoesNotAllocate`).

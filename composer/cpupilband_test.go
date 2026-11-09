@@ -58,6 +58,7 @@ func TestComposedCPUPicturePILBands(t *testing.T) {
 		whole, band, fin := form(graph.PicWhole, max(c.w, c.h)), form(graph.PicBand, c.side), form(graph.PicFinish, c.side)
 		req := make([]uint32, RequestPicTaps+(c.ow+c.oh)*PILEntryWords(K))
 		req[RequestPicW], req[RequestPicH], req[RequestPicStride] = uint32(c.w), uint32(c.h), uint32(c.w*4)
+		req[RequestPicBandRows] = uint32(c.side)
 		PILTaps(c.filter, c.w, c.ow, 0, c.ow, K, req[RequestPicTaps:])
 		PILTaps(c.filter, c.h, c.oh, 0, c.oh, K, req[RequestPicTaps+c.ow*PILEntryWords(K):])
 		acc := make([]uint32, c.ow*c.oh*3)

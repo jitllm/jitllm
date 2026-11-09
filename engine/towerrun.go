@@ -112,7 +112,7 @@ func (in *Instance) newTowerRun(tg *model.TowerGraphs, base int, t *jlm.Tower) (
 	}
 	words := 0
 	for _, cl := range append(tg.Classes[:len(tg.Classes):len(tg.Classes)], tg.Videos...) {
-		words = max(words, (cl.Pic.PicW+cl.Pic.PicH)*composer.PILEntryWords(cl.Pic.Taps))
+		words = max(words, composer.PicEntries(cl.Pic)*composer.PILEntryWords(cl.Pic.Taps))
 	}
 	tr := &towerRun{s: ts, base: base, req: make([]uint32, composer.RequestPicTaps+words)}
 	hn := n
@@ -139,12 +139,11 @@ func (in *Instance) newTowerRun(tg *model.TowerGraphs, base int, t *jlm.Tower) (
 			band[px] = ts.partPlan(g, nn.DeclineNoGraph, cl.Rows, nil)
 		}
 		if band != nil {
-			plans.Acc = max(plans.Acc, cl.Pic.PicW*cl.Pic.PicH*3)
+			plans.Acc = max(plans.Acc, cl.Pic.Area()*3)
 			plans.BandOut = max(plans.BandOut, cl.Rows*3)
 		}
 		plans.Band = append(plans.Band, band)
 		plans.BandRuns = append(plans.BandRuns, cl.BandRuns)
-		plans.BandRows = append(plans.BandRows, cl.Pic.PicSide)
 	}
 	tapsW := make([]nn.Tensors, len(tg.Taps))
 	for j, g := range tg.Taps {
@@ -183,11 +182,12 @@ func (tr *towerRun) squareRequest(pl model.PictureLayout, sq model.Square, a gra
 	tr.req[composer.RequestMark], tr.req[composer.RequestTrail] = uint32(sq.Mark), uint32(sq.Trail)
 	tr.req[composer.RequestMarkN], tr.req[composer.RequestTrailN] = uint32(sq.MarkN), uint32(sq.TrailN)
 	tr.req[composer.RequestPicOW], tr.req[composer.RequestPicOH] = uint32(sq.Pw), uint32(sq.Ph)
+	tr.req[composer.RequestPicBandRows] = uint32(composer.PicBandRows(a, sq.Pw))
 	if a.Chain != graph.ChainPIL || squares == 1 && pl.W == tr.tapsW && pl.H == tr.tapsH {
 		return
 	}
 	composer.PILTapsAt(a.Filter, a.PicTorch, pl.W, sq.Ow, sq.X0, sq.Pw, a.Taps, tr.req[composer.RequestPicTaps:])
-	composer.PILTapsAt(a.Filter, a.PicTorch, pl.H, sq.Oh, sq.Y0, sq.Ph, a.Taps, tr.req[composer.RequestPicTaps+a.PicW*composer.PILEntryWords(a.Taps):])
+	composer.PILTapsAt(a.Filter, a.PicTorch, pl.H, sq.Oh, sq.Y0, sq.Ph, a.Taps, tr.req[composer.RequestPicTaps+sq.Pw*composer.PILEntryWords(a.Taps):])
 	tr.tapsW, tr.tapsH = pl.W, pl.H
 	if squares > 1 {
 		tr.tapsW = 0
@@ -335,11 +335,12 @@ func (s *Instance) encodePicture(img image.Image, dst, deep []float32) ([]float3
 	return dst, nil
 }
 
-// squareFits says whether square sq's resized picture fits its class's
-// square: an aspect a side past the largest class's does not yet.
+// squareFits says whether square sq's resized picture fits its class
+// (graph.Attrs.Holds).
 func squareFits(sq model.Square, a graph.Attrs) error {
-	if sq.Pw > a.PicW || sq.Ph > a.PicH {
-		return fmt.Errorf("model: a picture resized to %dx%d is past the tower's largest square, %dx%d", sq.Pw, sq.Ph, a.PicW, a.PicH)
+	if !a.Holds(sq.Pw, sq.Ph) {
+		return fmt.Errorf("model: a picture resized to %dx%d is past what the tower's largest class holds, %d pixels at most %dx%d",
+			sq.Pw, sq.Ph, a.Area(), a.PicW, a.PicH)
 	}
 	return nil
 }

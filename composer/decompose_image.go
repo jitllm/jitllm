@@ -44,8 +44,10 @@ const (
 	RequestFrameP3
 	RequestFrameSub
 	// RequestPicBand is the first source row of a band a Pillow resize's
-	// band pass runs over (graph.PicBand).
+	// band pass runs over (graph.PicBand), and RequestPicBandRows the source
+	// rows a band holds (PicBandRows).
 	RequestPicBand
+	RequestPicBandRows
 	// RequestMark is a square's marker row in the head's table plus one, 0
 	// for a square with none (graph.OpMarkRow), and RequestTrail the one
 	// after its rows.
@@ -217,16 +219,18 @@ func pictureSample(x *exprs, a graph.Attrs, stride, y, xx, ch int) int {
 
 // decomposePicturePIL is a picture resized by Pillow's antialiased filter
 // (graph.ChainPIL), its taps in the request (PILTaps): for each source row
-// (PicSide of them) and output column's channel the sum over the tap axis
-// (Taps at most, its trips the column's window's count) of each weight times
-// its sample, in integers; then for each output pixel's channel the same over
+// of a band and output column's channel the sum over the tap axis (Taps at
+// most, its trips the column's window's count) of each weight times its
+// sample, in integers; then for each output pixel's channel the same over
 // its rows, each term the horizontal sum made a byte -- from half Pillow's
 // unit, clamped at zero, shifted down by its fixed point and clamped to 255;
 // then that sum made a byte, read as [0, 1] and normalised by its channel's
 // mean and std; zero past the picture, and where the picture is padded
 // (PicPad) laid out over its padded grid, a pad cell a zero sample
 // normalised. A source row or column past the picture's reads its last, at
-// a weight of zero.
+// a weight of zero. The sums are laid out at the output's live width, the
+// vertical ones holding the op's area (graph.Attrs.Area) and the horizontal
+// ones PicHCap pixels, so a band holds PicBandRows source rows.
 func decomposePicturePIL(o graph.Op, c *Context) ([]Prim, error) {
 	a := o.Attr
 	U, F, I := ir.U32, ir.F32, ir.I32
@@ -236,12 +240,32 @@ func decomposePicturePIL(o graph.Op, c *Context) ([]Prim, error) {
 		return nil, fmt.Errorf("a picture's rows of %d samples, not whole pixels", W)
 	}
 	E := PILEntryWords(K)
-	tapsV := RequestPicTaps + a.PicW*E
-	reqWords := tapsV + a.PicH*E
+	A, HC := a.Area(), PicHCap(a)
+	reqWords := RequestPicTaps + PicEntries(a)*E
 	name := c.Graph.Values[o.Out[0]].Name
-	hsh := []int{a.PicSide, a.PicW, 3}
 	hsum := Operand{Kind: OperandScratch, Name: name + ".rows", Elem: I}
 	vsum := Operand{Kind: OperandScratch, Name: name + ".cols", Elem: I}
+	// liveW is the output's width (U32): the request's, at most PicW, for a
+	// picture of its own size, and PicW for one of the op's.
+	liveW := func(x *exprs) int {
+		if !a.PicLive {
+			return x.u(uint32(a.PicW))
+		}
+		return x.op(OpMin, U, x.op(OpMax, U, x.load(1, x.u(RequestPicOW)), x.u(1)), x.u(uint32(a.PicW)))
+	}
+	// liveH is the output's height (U32), as liveW its width.
+	liveH := func(x *exprs) int {
+		if !a.PicLive {
+			return x.u(uint32(a.PicH))
+		}
+		return x.op(OpMin, U, x.op(OpMax, U, x.load(1, x.u(RequestPicOH)), x.u(1)), x.u(uint32(a.PicH)))
+	}
+	// rowEntry is output row oy's tap entry, after the columns' (U32), oy at
+	// most the last live row.
+	rowEntry := func(x *exprs, oy int) int {
+		oy = x.op(OpMin, U, oy, x.op(OpSub, U, liveH(x), x.u(1)))
+		return x.op(OpAdd, U, x.u(RequestPicTaps), x.op(OpMul, U, x.op(OpAdd, U, liveW(x), oy), x.u(uint32(E))))
+	}
 	// finish is a sum of weights times bytes as Pillow's byte (U32).
 	finish := func(x *exprs, acc int) int {
 		v := x.un(OpBitcast, U, x.op(OpMax, I, x.op(OpAdd, I, acc, x.i(1<<(pilPrecision-1))), x.i(0)))
@@ -261,12 +285,15 @@ func decomposePicturePIL(o graph.Op, c *Context) ([]Prim, error) {
 	}
 	facts := Facts{Extents: map[int]int{0: PictureWords, 1: reqWords}}
 
-	// The horizontal pass, a reduction a channel: the channel a constant.
+	// The horizontal pass, a reduction a channel: the channel a constant,
+	// sum i the band's source row i / w and output column i % w.
 	var prims []Prim
 	for ch := range 3 {
 		var h exprs
-		r, xo, t := h.coord(0), h.coord(1), h.coord(2)
+		i, t := h.coord(0), h.coord(1)
 		hu := func(v int) int { return h.u(uint32(v)) }
+		w := liveW(&h)
+		r, xo := h.op(OpDiv, U, i, w), h.op(OpRem, U, i, w)
 		sw := h.op(OpMax, U, h.load(1, hu(RequestPicW)), hu(1))
 		srcH := h.op(OpMax, U, h.load(1, hu(RequestPicH)), hu(1))
 		src := r
@@ -279,31 +306,28 @@ func decomposePicturePIL(o graph.Op, c *Context) ([]Prim, error) {
 		stride := h.load(1, hu(picWordsOf(a).stride))
 		h.op(OpMul, I, weight(&h, base, t), h.un(OpBitcast, I, pictureSample(&h, a, stride, y, xi, hu(ch))))
 		var hi exprs
-		hi.op(OpAdd, U, hi.op(OpMul, U, hi.op(OpAdd, U, hi.op(OpMul, U, hi.coord(0), hi.u(uint32(a.PicW))), hi.coord(1)), hi.u(3)),
-			hi.u(uint32(ch)))
+		hi.op(OpAdd, U, hi.op(OpMul, U, hi.coord(0), hi.u(3)), hi.u(uint32(ch)))
 		hr := trips(func(x *exprs) int {
-			return x.op(OpAdd, U, x.u(RequestPicTaps), x.op(OpMul, U, x.coord(1), x.u(uint32(E))))
+			return x.op(OpAdd, U, x.u(RequestPicTaps), x.op(OpMul, U, x.op(OpRem, U, x.coord(0), liveW(x)), x.u(uint32(E))))
 		})
-		hr.Axis = 2
-		hf := Facts{Extents: facts.Extents, OutExtent: a.PicSide * a.PicW * 3, Range: hr}
-		prims = append(prims, Prim{Kind: PrimReduce, Shape: []int{a.PicSide, a.PicW, K}, In: []Operand{TablePicture.op(), TableRequest.op()},
+		hr.Axis = 1
+		hf := Facts{Extents: facts.Extents, OutExtent: HC * 3, Range: hr}
+		prims = append(prims, Prim{Kind: PrimReduce, Shape: []int{HC, K}, In: []Operand{TablePicture.op(), TableRequest.op()},
 			Out: hsum, Combine: OpAdd, Type: I, Expr: h.e, Index: hi.e, Facts: hf})
 	}
 
-	vr := trips(func(x *exprs) int {
-		return x.op(OpAdd, U, x.u(uint32(tapsV)), x.op(OpMul, U, x.coord(0), x.u(uint32(E))))
-	})
+	vr := trips(func(x *exprs) int { return rowEntry(x, x.op(OpDiv, U, x.coord(0), liveW(x))) })
 	if a.PicPass == graph.PicBand {
 		// A band's pass reads only the taps whose source rows are its own:
-		// from max(band, first) to min(band + PicSide, first + count), each
+		// from max(band, first) to min(band + rows, first + count), each
 		// less the window's first row.
 		var lo, hi exprs
 		bound := func(x *exprs, last bool) {
-			e := x.op(OpAdd, U, x.u(uint32(tapsV)), x.op(OpMul, U, x.coord(0), x.u(uint32(E))))
+			e := rowEntry(x, x.op(OpDiv, U, x.coord(0), liveW(x)))
 			first, band := x.load(1, e), x.load(1, x.u(RequestPicBand))
 			from := x.op(OpSub, U, x.op(OpMax, U, band, first), first)
 			if last {
-				to := x.op(OpMin, U, x.op(OpAdd, U, band, x.u(uint32(a.PicSide))),
+				to := x.op(OpMin, U, x.op(OpAdd, U, band, x.load(1, x.u(RequestPicBandRows))),
 					x.op(OpAdd, U, first, x.load(1, x.op(OpAdd, U, e, x.u(1)))))
 				x.op(OpSub, U, x.op(OpMax, U, to, x.op(OpAdd, U, first, from)), first)
 			}
@@ -312,25 +336,29 @@ func decomposePicturePIL(o graph.Op, c *Context) ([]Prim, error) {
 		bound(&hi, true)
 		vr = &Range{First: lo.e, End: hi.e}
 	}
-	vr.Axis = 3
+	vr.Axis = 2
 	var v exprs
-	oy, ox, vch, vt := v.coord(0), v.coord(1), v.coord(2), v.coord(3)
+	j, vch, vt := v.coord(0), v.coord(1), v.coord(2)
 	if a.PicPass == graph.PicBand {
 		vt = v.pos()
 	}
 	vu := func(n int) int { return v.u(uint32(n)) }
+	vw := liveW(&v)
+	oy, ox := v.op(OpDiv, U, j, vw), v.op(OpRem, U, j, vw)
 	vsrcH := v.op(OpMax, U, v.load(1, vu(RequestPicH)), vu(1))
-	vbase := v.op(OpAdd, U, vu(tapsV), v.op(OpMul, U, oy, vu(E)))
+	vbase := rowEntry(&v, oy)
 	yi := v.op(OpMin, U, v.op(OpAdd, U, v.load(1, vbase), vt), v.op(OpSub, U, vsrcH, vu(1)))
 	if a.PicPass == graph.PicBand {
 		// The tap's source row in the band's sums.
 		yi = v.op(OpSub, U, yi, v.load(1, vu(RequestPicBand)))
 	}
-	v.op(OpMul, I, weight(&v, vbase, vt), v.un(OpBitcast, I, finish(&v, v.at(2, hsh, yi, ox, vch))))
+	hat := v.op(OpMin, U, v.op(OpAdd, U, v.op(OpMul, U, v.op(OpAdd, U, v.op(OpMul, U, yi, vw), ox), vu(3)), vch), vu(HC*3-1))
+	v.op(OpMul, I, weight(&v, vbase, vt), v.un(OpBitcast, I, finish(&v, v.load(2, hat))))
 
-	n := a.PicW * a.PicH * 3
-	vred := Prim{Kind: PrimReduce, Shape: []int{a.PicH, a.PicW, 3, K}, In: []Operand{TablePicture.op(), TableRequest.op(), hsum},
-		Out: vsum, Combine: OpAdd, Type: I, Expr: v.e, Facts: Facts{Extents: facts.Extents, Range: vr}}
+	n := A * 3
+	vext := map[int]int{0: PictureWords, 1: reqWords, 2: HC * 3}
+	vred := Prim{Kind: PrimReduce, Shape: []int{A, 3, K}, In: []Operand{TablePicture.op(), TableRequest.op(), hsum},
+		Out: vsum, Combine: OpAdd, Type: I, Expr: v.e, Facts: Facts{Extents: vext, Range: vr}}
 	if a.PicPass == graph.PicBand {
 		// The band's sums added into the accumulator, the first band's
 		// replacing what it held; the op's own value is zeros.
@@ -355,8 +383,8 @@ func decomposePicturePIL(o graph.Op, c *Context) ([]Prim, error) {
 	flat := m.op(OpAdd, U, m.op(OpMul, U, m.coord(0), mu(W)), m.coord(1))
 	col := m.coord(1)
 	mch := m.op(OpSub, U, col, m.op(OpMul, U, m.op(OpShr, U, m.op(OpMul, U, col, mu(0xAAAB)), mu(17)), mu(3)))
-	// A live picture is dense in the output and laid at the form's width in
-	// the sums: its pixel (y, x) is sum (y, x) of the reductions above.
+	// A live picture is dense in the output and laid at its live width in
+	// the sums: its pixel (y, x) is sum y * w + x of the reductions above.
 	at, live := flat, mu(n)
 	in := []Operand{vsum}
 	if a.PicPass == graph.PicFinish {
@@ -367,13 +395,12 @@ func decomposePicturePIL(o graph.Op, c *Context) ([]Prim, error) {
 	if a.PicLive {
 		in = append(in, TableRequest.op())
 		ext[1] = reqWords
-		ow = m.op(OpMin, U, m.op(OpMax, U, m.load(1, mu(RequestPicOW)), mu(1)), mu(a.PicW))
-		oh = m.op(OpMin, U, m.op(OpMax, U, m.load(1, mu(RequestPicOH)), mu(1)), mu(a.PicH))
+		ow, oh = liveW(&m), liveH(&m)
 		wd, hd, fx, fy := frame(&m, a, ow, oh)
 		pix, ch := m.op(OpDiv, U, flat, mu(3)), m.op(OpRem, U, flat, mu(3))
 		py, px = m.op(OpSub, U, m.op(OpDiv, U, pix, wd), fy), m.op(OpSub, U, m.op(OpRem, U, pix, wd), fx)
 		fch = ch
-		at = m.op(OpAdd, U, m.op(OpMul, U, m.op(OpAdd, U, m.op(OpMul, U, py, mu(a.PicW)), px), mu(3)), ch)
+		at = m.op(OpAdd, U, m.op(OpMul, U, m.op(OpAdd, U, m.op(OpMul, U, py, ow), px), mu(3)), ch)
 		live = m.op(OpMul, U, m.op(OpMul, U, wd, hd), mu(3))
 	}
 	norm := func(b int) int { return normalized(&m, a, mch, b) }

@@ -58,6 +58,42 @@ func PILTapCount(filter uint8, in, out int) int {
 	return int(math.Ceil(pilSupport(filter)*scale))*2 + 1
 }
 
+// PicHCap is the pixels a Pillow resize's horizontal sums hold: PicSide
+// source rows of the op's width, or for a picture of its own size of the
+// width of its area's square -- a wider output's band holds fewer rows
+// (PicBandRows).
+func PicHCap(a graph.Attrs) int {
+	if a.PicArea == 0 {
+		return a.PicSide * a.PicW
+	}
+	s := int(math.Sqrt(float64(a.PicArea)))
+	for s*s > a.PicArea {
+		s--
+	}
+	for (s+1)*(s+1) <= a.PicArea {
+		s++
+	}
+	return a.PicSide * min(a.PicW, s)
+}
+
+// PicBandRows is the source rows a band of a Pillow resize to an output ow
+// wide holds: PicSide, or as many as its horizontal sums hold (PicHCap).
+func PicBandRows(a graph.Attrs, ow int) int {
+	ow = min(max(ow, 1), max(a.PicW, 1))
+	return max(min(a.PicSide, PicHCap(a)/ow), 1)
+}
+
+// PicEntries is the most tap entries a Pillow resize's request holds, its
+// output's columns' and rows' together (PILTaps): PicW + PicH, or for a
+// picture of its own size the most an output of its area reaches.
+func PicEntries(a graph.Attrs) int {
+	if a.PicArea == 0 {
+		return a.PicW + a.PicH
+	}
+	ceil := func(n, d int) int { return (n + d - 1) / d }
+	return max(a.PicW+min(a.PicH, ceil(a.PicArea, a.PicW)), a.PicH+min(a.PicW, ceil(a.PicArea, a.PicH)))
+}
+
 // PILEntryWords is the words a tap entry of at most k taps takes in the
 // request (PILTaps).
 func PILEntryWords(k int) int { return k + 2 }

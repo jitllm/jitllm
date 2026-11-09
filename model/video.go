@@ -75,7 +75,7 @@ func (tg *TowerGraphs) VideoPlan(n, w, h int, fps float64) (VideoPlan, error) {
 // smallest video class whose frame holds it, else the largest.
 func (tg *TowerGraphs) VideoSquare(ow, oh int) Square {
 	c := 0
-	for c < len(tg.Videos)-1 && max(ow, oh) > tg.Videos[c].Pic.PicW {
+	for c < len(tg.Videos)-1 && !tg.Videos[c].Pic.Holds(ow, oh) {
 		c++
 	}
 	return Square{Class: c, Ow: ow, Oh: oh, Pw: ow, Ph: oh, Gw: ow / tg.Patch, Gh: oh / tg.Patch}
@@ -115,7 +115,7 @@ func videoSize(k, w, h int, r []int32) (int, int, error) {
 func videoEntry(t *jlm.Tower, px0, px1 uint8, grid, extra, side int, f graph.Facts) (*graph.Graph, error) {
 	v := t.Video
 	r := v.Pre[0].Ints
-	a := graph.Attrs{Pixels: px0, PicW: side, PicH: side, PicLive: true}
+	a := graph.Attrs{Pixels: px0, PicW: composer.PictureMaxSide, PicH: composer.PictureMaxSide, PicArea: side * side, PicLive: true}
 	if err := resizeChain(&a, jlm.Filter(r[3])); err != nil {
 		return nil, err
 	}
