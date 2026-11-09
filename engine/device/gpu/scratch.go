@@ -2,6 +2,7 @@ package gpu
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/format/layout"
@@ -644,14 +645,22 @@ func (g *devTier) prewarmHeadKernels() {
 	was := g.prewarming
 	g.prewarming = true
 	defer func() { g.prewarming = was }()
+	// Every width a chunk folds its last row at: the reserved prompt width
+	// and its grains, the ragged step's, and every batched scratch held --
+	// where no prompt width fits beside the blocks, a scratch of another
+	// width still runs the chunks.
 	widths := []int{g.promptW, g.stepW}
 	if grain := g.promptGrain(); !g.NoExactPrompt && grain > 0 {
 		for w := grain; w < g.promptW; w += grain {
 			widths = append(widths, w)
 		}
 	}
-	for _, w := range widths {
-		if w < 2 {
+	for w := range g.bbs {
+		widths = append(widths, w)
+	}
+	slices.Sort(widths)
+	for i, w := range widths {
+		if w < 2 || i > 0 && w == widths[i-1] {
 			continue
 		}
 		if _, err := g.servedRowTake(hb, hb.p.NEmbd, w); err != nil {
