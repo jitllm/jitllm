@@ -2779,6 +2779,15 @@ func (g *devTier) promptForms(bb *blockScratch) {
 		}
 	}
 	for li := range g.layers {
+		// A block of another geometry forms at its own set's scratch of
+		// these rows: the current set's holds this set's rotary alone, and
+		// a sliding block's second table would bind nothing.
+		if g.geoUsed && g.geomFor(li, li+1) != g.geoCur {
+			prev := g.enterGeomOf(li)
+			g.prewarmPromptBlock(g.bbs[bb.rows], li)
+			g.useGeom(prev)
+			continue
+		}
 		g.prewarmPromptBlock(bb, li)
 	}
 }
