@@ -94,9 +94,10 @@ func (s *Instance) initStreamTrial() {
 	}
 	full := s.gpuLayers
 	// The arms: the placement made (its experts where the device put them),
-	// the host, and the streamed blocks with their experts on the other side
-	// -- sent to the card if they ran on the host, and the other way round.
-	// Indices into arms; the incumbent is 0.
+	// the CPU device, and the blocks with their experts on the other side of
+	// the bus -- sent to the card if they ran on the CPU device, and kept on
+	// the CPU device beside the rest of each block on the card (cut.go) if
+	// they ran on the card. Indices into arms; the incumbent is 0.
 	other := "card"
 	if s.opt.experts == "card" {
 		other = nn.CPU
@@ -319,11 +320,13 @@ func (t *seamTuner) place(s *Instance, c int) bool {
 	t.at = c
 	if a.experts != t.mode || moved && a.blocks > 0 && s.GPULayers() == a.blocks {
 		if a.experts != t.mode {
-			em, ok := s.ld.(nn.ExpertModer)
-			if !ok {
-				return false
+			// Where the experts run is the instance's placement, taken by
+			// each block as it is offered again below; the card's marks
+			// follow it.
+			s.opt.experts = a.experts
+			if em, ok := s.ld.(nn.ExpertModer); ok {
+				em.SetExpertMode(a.experts)
 			}
-			em.SetExpertMode(a.experts)
 			t.mode = a.experts
 		}
 		s.SetGPULayers(0)

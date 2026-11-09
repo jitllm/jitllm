@@ -489,6 +489,7 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 			for hi < s.hi && s.routeAt(hi) == r && !s.tapsAfter(hi-1) {
 				hi++
 			}
+			hi = s.runEnd(li, hi)
 			// The last chunk carries the head when the device runs every
 			// block, so the projection runs on the last row inside the same
 			// submission. A device that cannot refuses before submitting and
@@ -502,7 +503,7 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 			// A tap reads every chunk's residual, which a folded head keeps
 			// on the device.
 			if li == s.lo && hi == s.hi && base+n == total && s.emb == nil && s.head != nil && !s.noHeadFold && s.rowTap == nil &&
-				!c.StreamHead() && r.run == nn.LayerRunner(s.ld) {
+				!c.StreamHead() && r.run == nn.LayerRunner(s.ld) && !s.cutAt(hi-1) {
 				fh = s.head
 				// A speculation step folds the head only over the rows it
 				// wants; otherwise the host projects them after the loop.
@@ -546,10 +547,19 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 			if err := s.openPrompt(r, slot, base, p0, n, chunkRows, bidir); err != nil {
 				return nil, err
 			}
+			s.cutFor(r, hi-1, n)
 			if s.callTellOn(r, li, p0, n) && r.run.Layers(li, hi, p0, n, s.bx[:n*c.ResidW()], s.bcs[:n*c.RopeW()],
 				s.bswaTable(n, c.LocalNRot()), fh) {
 				headDone = fh != nil
 				li = hi - 1
+				if s.cutAt(li) {
+					if err := s.openPrompt(&s.routes[routeLanes], slot, base, p0, n, chunkRows, bidir); err != nil {
+						return nil, err
+					}
+					if err := s.cutRest(li, p0, n, s.bx[:n*c.ResidW()], s.bcs[:n*c.RopeW()], s.bswaTable(n, c.LocalNRot())); err != nil {
+						return nil, err
+					}
+				}
 				s.keepTaps(li, n)
 				continue
 			}

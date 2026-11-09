@@ -420,6 +420,7 @@ const (
 	errStepNoRows   modelError = "model: the instance's device runs no ragged rows (no nn.RowsDevice)"
 	errStepNoHead   modelError = "model: the head is not on a device"
 	errStepSplit    modelError = "model: not every block of the instance is on the device"
+	errStepCut      modelError = "model: a block runs cut, its routed experts on the CPU device: its rows take the routed step"
 )
 
 // routedStepper reports whether the runs can go as one routed step across

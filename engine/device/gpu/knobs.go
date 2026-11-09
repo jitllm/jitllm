@@ -283,10 +283,3 @@ func WithPersistDeps(on bool, grid int) Option {
 func WithAutoStream(on bool) Option {
 	return WithConfig(func(c *Config) { c.NoAutoStream = !on })
 }
-
-// WithHybridCache sets whether a hybrid block gets an expert cache on the
-// card: its hottest experts run there, beside the host running the rest of
-// each token's selection. On by default.
-func WithHybridCache(on bool) Option {
-	return WithConfig(func(c *Config) { c.NoHybridCache = !on })
-}

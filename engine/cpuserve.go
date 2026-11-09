@@ -138,11 +138,16 @@ func sideAtBinding(gr *graph.Graph) int {
 // step's history geometry and the instance's rotaries -- or what keeps the
 // block off the composer's CPU path before it is asked (cpuWhy).
 func (s *Instance) blockSpec(li int) nn.BlockSpec {
+	return s.specOf(li, s.m.Composing().BlockGraph(li))
+}
+
+// specOf is blockSpec over g: block li's graph, or a half of it cut at its
+// routed experts (cutBlock).
+func (s *Instance) specOf(li int, g *graph.Graph) nn.BlockSpec {
 	p := nn.BlockSpec{Why: s.blockWhy(li), Rec: s.c.LayerKind(li).Recurrent()}
 	if p.Why != nn.DeclineServes {
 		return p
 	}
-	g := s.m.Composing().BlockGraph(li)
 	gr := *g
 	gr.Block = 0
 	p.Source, p.Graph, p.SideOff = g, &gr, sideAtBinding(&gr)

@@ -3810,6 +3810,21 @@ was placed on. A float bank (the qwen4exp fixture's) has no packed sheets and
 keeps the plain hybrid path. `gpu.WithHybridCache(false)` /
 `JITLLM_GPU_HYBRID_CACHE=0` keeps the plain hybrid path everywhere.
 
+**The host split, as it stood, and what replaced it.** The rows above were
+measured on the tier's own split: a block marked hybrid kept its bank off
+the card and the tier ran the misses on the host beside its cached experts.
+Once the composer was the only path, a block marked so was declined by the
+card (`partExpertsHost`) and ran whole on the CPU device: the placement was
+honoured by not running the block on the card at all. The cut replaces it
+(engine/cut.go): the front end states a mixture's routed experts
+(`graph.Graph.Routed`), `graph.Cut` splits the block there, the card forms
+the first half -- attention, the shared expert, every op not reading the
+routed sum -- and writes its crossing values to the call's cut, and the CPU
+device forms the experts and the rest of the block over that row. The card
+holds no bank; `WithHybridCache`, `JITLLM_GPU_HYBRID_CACHE` and the card's
+"host" word went with the split. The cut has not been measured against the
+rows above; that is the trial's question.
+
 Gates: `TestSplitExpertsMatchTheHost` (Kimi-K3-0.40B Q8_0, the latent
 mixture; DeepSeek-V2-Lite Q4_K_M at a six-block seam, a shared expert and no
 latent; the qwen4exp fixture, a float bank that must fall back) holds a tight

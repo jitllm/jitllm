@@ -1149,7 +1149,6 @@ const (
 	partEmbedWeight  = nn.DeclineEmbedWeight
 	partEmbedToken   = nn.DeclineEmbedToken
 	partExperts      = nn.DeclineExperts
-	partExpertsHost  = nn.DeclineExpertsHost
 	partExpertsRows  = nn.DeclineExpertsRows
 	partEmbedStreams = nn.DeclineEmbedStreams
 	partRecurrent    = nn.DeclineRecurrent
@@ -2221,8 +2220,6 @@ func (l *layer) expertsServe(rows int) partDecline {
 	switch {
 	case !banks:
 		return partServes
-	case l.stream != nil && l.stream.hybrid:
-		return partExpertsHost
 	case !held:
 		return partExperts
 	case l.stream != nil && rows > l.pagedRows():
@@ -2235,7 +2232,7 @@ func (l *layer) expertsServe(rows int) partDecline {
 // time, at most w: no more than every streamed block's pages hold.
 func (g *devTier) pagedCall(lo, hi, w int) int {
 	for li := lo; li < hi; li++ {
-		if l := g.layers[li]; l != nil && l.stream != nil && !l.stream.hybrid {
+		if l := g.layers[li]; l != nil && l.stream != nil {
 			w = min(w, max(l.pagedRows(), 1))
 		}
 	}

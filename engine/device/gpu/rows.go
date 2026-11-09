@@ -147,7 +147,7 @@ func (g *devTier) layersRows(lo, hi int, rs *ragStep, x, cs, csSWA []float32, he
 		case l == nil || !l.ok:
 			g.mu.Unlock()
 			return fail("block %d is not on this device", li)
-		case l.nonCausal || l.stream != nil && !l.stream.hybrid:
+		case l.nonCausal || l.stream != nil:
 			g.mu.Unlock()
 			return fail("block %d is non-causal or streamed", li)
 		}

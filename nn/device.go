@@ -513,17 +513,21 @@ const (
 type BlockSpec struct {
 	Why           Decline
 	Source, Graph *graph.Graph
-	SideOff       int
-	Formats       map[jlm.Role]jlm.Type
-	Strides       map[jlm.Role]int
-	Page, Keys    int
-	ActWindow     int
-	Seqs          int
-	ValuesInKeys  bool
-	Rotaries      []graph.Rotary
-	Table         *jlm.Entry
-	TableRow      int
-	F32           bool
+	// Cut, where set, is the width of the row Graph reads in place of the
+	// residual: the second half of the block cut in two (graph.Cut), its
+	// input the call's cut (CutDevice), its output the residual.
+	Cut          int
+	SideOff      int
+	Formats      map[jlm.Role]jlm.Type
+	Strides      map[jlm.Role]int
+	Page, Keys   int
+	ActWindow    int
+	Seqs         int
+	ValuesInKeys bool
+	Rotaries     []graph.Rotary
+	Table        *jlm.Entry
+	TableRow     int
+	F32          bool
 	// KVQ8, past 0, is the head width of a q8 history's rows (F32 is then
 	// true: no store narrows to halves).
 	KVQ8         int
@@ -541,6 +545,11 @@ type LayerPlan struct {
 	// it states none of: what a device asks the composer to form when it
 	// serves the block whole.
 	Graph *graph.Graph
+	// Cut, where set, is the width of a row of the block's crossing values:
+	// Graph is the first half of the block cut in two (graph.Cut), the other
+	// half another device's, and the half writes its rows to the call's cut
+	// (CutDevice) rather than the residual.
+	Cut int
 	// Tables are the step's rotary tables as the front end states them (the
 	// model's rotary's, then the local layers' where SWAPeriod is set; nil
 	// for none): what a device serving the tables forms, writing cs and
@@ -1382,6 +1391,12 @@ type ErrReporter interface{ Err() string }
 type LayerRunner interface {
 	Layers(lo, hi, pos, n int, x, cs, csSWA []float32, head *Head) bool
 }
+
+// CutDevice is a device holding one half of a block cut in two
+// (graph.Cut, LayerPlan.Cut): the next call's cut row, its rows' crossing
+// values end to end -- written by the call whose last block is a first half,
+// read by the call whose first block is a second half.
+type CutDevice interface{ SetCut(cut []float32) }
 
 // TokenReader takes the tokens of the rows the next call runs, for the
 // blocks that read them (an n-gram block's hash).

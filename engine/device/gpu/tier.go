@@ -279,12 +279,6 @@ type Config struct {
 	// block's stated cache gives that block the plain bank
 	// (Stats.StreamCacheShort).
 	StreamCacheSlots int
-	// NoHybridCache gives a hybrid block no expert cache on the card. With
-	// one (the default, sized from the room left after placement), the
-	// experts the cache holds run on the card while the host runs the rest
-	// of the selection beside them, and the cache keeps the block's most
-	// selected experts (streamBank.split).
-	NoHybridCache bool
 	// NoAutoStream leaves a mixture block that no device can hold resident
 	// on the host, as before GPU.AutoStream, instead of streaming it.
 	NoAutoStream bool
@@ -2007,10 +2001,10 @@ func (g *devTier) setRecSteps(sid uint64, n int) {
 
 // setInputs hands session sid's per-layer inputs to this device for its
 // next call (gpuSession.inputsTo).
-func (g *devTier) setInputs(sid uint64, ple []float32, prompt bool, toks []int32, req []uint32) {
+func (g *devTier) setInputs(sid uint64, ple []float32, prompt bool, toks []int32, req []uint32, cut []float32) {
 	g.mu.Lock()
 	ds := g.sessOf(sid)
-	ds.pleHost, ds.prompt, ds.reqHost = ple, prompt, req
+	ds.pleHost, ds.prompt, ds.reqHost, ds.cutHost = ple, prompt, req, cut
 	ds.stepToks = append(ds.stepToks[:0], toks...)
 	g.mu.Unlock()
 }
