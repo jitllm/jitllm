@@ -176,6 +176,9 @@ func composesOnce(t *testing.T, m *model.Model, g *gpu.GPU, width int, to string
 		t.Helper()
 		t.Logf("%s: %s", what, g.Err())
 		st := g.Stats()
+		if n := st.LaneBuilds - st0.LaneBuilds; n > 0 {
+			t.Logf("%s: %d scratch(es) of lanes cloned for sessions running at once", what, n)
+		}
 		if f, k, sb, c := st.PartsFormed-st0.PartsFormed, st.PartKernels-st0.PartKernels, st.ScratchBuilds-st0.ScratchBuilds,
 			g.Counters().Compiles()-c0; f != 0 || k != 0 || sb != 0 || c != 0 {
 			mu.Lock()

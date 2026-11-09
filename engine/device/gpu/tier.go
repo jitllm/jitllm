@@ -470,8 +470,10 @@ type Stats struct {
 	// held no compiled form of), PartKernels their kernels' driver
 	// compiles, and ScratchBuilds the batched scratches built: the census
 	// of what a placement composes, which no prompt, step or session after
-	// it moves.
-	PartsFormed, PartKernels, ScratchBuilds int
+	// it moves. LaneBuilds is the scratches a lane cloned for a session
+	// running beside another built (cloneLane): lane0's forms, composing
+	// and compiling nothing, sized by how many sessions run at once.
+	PartsFormed, PartKernels, ScratchBuilds, LaneBuilds int
 	// FormAsks counts the forms asked of the device's form cache, a
 	// compiled one among them: what a placement, a relocation or a lane
 	// forming a part moves, and no warm step does.
@@ -827,6 +829,7 @@ func (s *Stats) add(o Stats) {
 	s.ComposerRuns += o.ComposerRuns
 	s.PartKernels += o.PartKernels
 	s.ScratchBuilds += o.ScratchBuilds
+	s.LaneBuilds += o.LaneBuilds
 	if o.ReservedRows > 0 && (s.ReservedRows == 0 || o.ReservedRows < s.ReservedRows) {
 		s.ReservedRows = o.ReservedRows
 	}
