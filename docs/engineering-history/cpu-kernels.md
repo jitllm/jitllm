@@ -5060,6 +5060,93 @@ device kernels XOR the planes into the full weight first and center once.
   per-row accumulator and one extra pass, and measured 0.9965 on prefill --
   correct, and paid for.
 
+## The composed CPU's first board: one refused kernel took a block's jam
+
+The first scan of the composed engine against llama.cpp on a Xeon E5-2680 v4
+(one socket, 12 threads, `jitllm speed -devices cpu` against llama.cpp
+b11514's CPU release, `llama-bench -t 12`, one pass, a scan rather than a
+board row) put prefill at a tenth: Llama-3.2-1B Q4_K_M pp512 31 tok/s
+against 328, Llama-3.1-8B 4.7 against 45.8. Decode was 0.79-0.95. On the
+V100 the same build was ahead (Llama-3.2-1B pp512 19519 against 15660,
+tg128 597 against 464).
+
+**The kernel was not the cause.** The composed 512-row Q4_K matmul,
+formed alone (`TestComposedCPUMatVecSpeed`, `JITLLM_CPU_STEP=512`), ran
+31 GMAC/s on one thread and 250 on twelve. In the model the same weight's
+64-row call took 186 us against 43 us alone, and its code was 8626 B
+against 17525.
+
+**`Code.Passes` named the difference: the block's matmuls had no `jam`.**
+The CPU forms a block as one part. One attention kernel of it, jammed and
+running two heads a call, was refused by the register binding ("a pair's
+later head with no twin"); `splitRefused` then formed the part again with
+`unwide` set *for the part*, so every projection of the block lost its jam,
+and the attention kernel lost its pairs and its jam at once and ran scalar.
+
+- `unwide` is now the refused kernel's (`KernelAt`, as `Streamed` and
+  `Crowded` were): pp512 31 -> ~105.
+- a refused kernel gives up its pairs first and its jam only if refused
+  again: the attention kernel keeps its jam, pp512 ~215.
+- The decode forms are byte-identical across both (51 kernels, passes
+  included): decode is unchanged by construction.
+- The prompt's width (`cpudev.RowsCap` 64, 256, 512) made no difference
+  before or after.
+
+### What is left is a core's work per cycle
+
+The matmul is ~94% of the 512-row prompt. On the second socket, measured in
+one pass: the composed Q4_K 8192x2048 512-row kernel 32 GMAC/s on one thread,
+284 on twelve (the drop is the all-core AVX2 clock, not memory: its weight
+lines hit L2); llama.cpp's pp512 36.4 tok/s at `-t 1`, ~45 GMAC/s a core, 328
+at `-t 12`. Precise samples on the kernel (`perf record -e cycles:pp` by
+address, anonymous code): ~42% of its cycles in the per-sub-block float
+epilogue (`vcvtdq2ps`, `vmulps`, `vsubps`, `vaddps`, the scale's
+`vcvtph2ps`), with `vpmaddubsw` on port 0 at about half the cycles. The
+prefetch's cache level does not matter (T1/T2 within 1%, NTA -25%). A
+plane stride of 2^15 bytes aliases L1 sets: 8256 rows instead of 8192 is
++16% on one thread and twelve.
+
+**The integer fold, tried.** A k-quant model's activations already take one
+scale a 256-element window (`composer.ActWindow`), so a super-block's terms
+share the window's scale and the super-scales, and the sub-block scales are
+integers: `acc + xs*(d*float(sum sc_t*dot_t) - dmin*sum m_t*csum_t)` is the
+sum with one conversion a super-block, llama.cpp's q8_K shape and main's
+NEON GEMM's (277 -> 500 on the M4, above). Built three ways:
+
+- three reductions (dot, integer super-block sum, float sum): correct, 3x
+  slower -- `Fuse` unrolls both levels into one loop, `Streams`, `Jam`'s
+  `Periods` and `Vectorize` no longer recognise the trip, and 1737 moves of
+  scalar address arithmetic come out of the unrolled terms;
+- two reductions kept, a pass folding a trip's eight terms after `Periods`,
+  then before `Jam` (unrolling the group itself), the sub-scale applied
+  inside the dot's widening `vpmaddwd` (scale in both halves of a lane, no
+  `vpmulld`): correct, applied, and refused by the binding at every jam on
+  AVX2's 16 vector registers, so it falls to the streamed form at 17-18
+  GMAC/s. At jam 4 what is live is the four sums and the eight decoded
+  sub-scales, all decoded at the trip's top and each held to its own
+  sub-block; with the bias summed per step, the rows' window scales and the
+  super-scale besides.
+
+The fold needs its sub-block decodes placed beside their use (or
+rematerialised from the scale word) before it can keep jam 4 on AVX2; on a
+32-register ISA it should fit as it is.
+
+**Mixtures: the expert bank's cursor.** olmoe-1b-7b decoded 15 tok/s against
+60, reading 742.8 MB a token at 14.1 GB/s, 22% of the 63 GB/s wall measured
+in the same process. Its expert kernels carried the dense matvec's body (128
+`vpmaddubsw`) plus 1194 moves against 49: a bank's index adds the selected
+sheet, a loaded value, and the cursor walk needs constant differences, so
+every load re-read the bank's base and an index from the stack. A loop whose
+accesses all add one term made outside it can take its cursor at that term
+(`Cursor.Init`): the expert kernel went to 9186 B and 287 moves, olmoe tg64
+11.4 -> 15.3. It did not land: Qwen3-30B-A3B went 3.79 -> 2.47, its streamed
+expert form refused by the binding once the initialisers' copies held their
+registers through the kernel, and with the initialiser the first thing a
+refusal gives up, both models form exactly as before. The bank gate caught
+two wrong forms on the way: the binder let a copy, then a loop's counter,
+take the register an initialiser still held, since all three are written as
+the loop starts.
+
 ## Design notes moved out of source comments
 
 Each entry below is a comment that stood in the named source file,
