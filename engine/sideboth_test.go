@@ -67,8 +67,10 @@ func TestTapsBesidePerLayerInputs(t *testing.T) {
 				return out
 			}
 			// The CPU's forms are the same with taps and without, bit for bit;
-			// a card's wider side row may take another reduction order, held
-			// to a band a per-layer input read where the taps are would leave.
+			// a card's wider side row may take another reduction order, the
+			// prompt's gather on the card among them (1.1e-8 on synth-gemma3n),
+			// held to a band a per-layer input read where the taps are -- a
+			// read of zeros -- would leave.
 			same := func(arm string, want, got [][]float32, band float64) {
 				for i := range want {
 					if e := logitNMSE(got[i], want[i]); e > band || band == 0 && e != 0 {
@@ -90,7 +92,7 @@ func TestTapsBesidePerLayerInputs(t *testing.T) {
 						noDevice(t, spec, err)
 					}
 					defer g.Close()
-					same(spec, run(false, g), run(true, g), 1e-9)
+					same(spec, run(false, g), run(true, g), 1e-7)
 				})
 			}
 		})
