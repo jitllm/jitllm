@@ -54,18 +54,31 @@ type decGroup struct {
 	runs  []engine.Run
 	out   [][]float32
 	err   error
-	t0    time.Time
+	// res is out's backing list, the group's own (engine.StepJoint).
+	res [][]float32
+	t0  time.Time
 	// steps is how many steps the group took in this round.
 	steps int
 	// start hands the worker a step; it is closed with the loop.
 	start chan struct{}
 }
 
+// step takes the group's step, its results in its own list.
+func (g *decGroup) step() {
+	if g.res == nil {
+		g.res = make([][]float32, 0, len(g.runs))
+	}
+	g.out, g.err = engine.StepJoint(g.runs, g.res)
+	if g.out != nil {
+		g.res = g.out
+	}
+}
+
 // groupWorker steps g each time the loop hands it a step, until the loop
 // closes.
 func (lp *stepLoop) groupWorker(g *decGroup) {
 	for range g.start {
-		g.out, g.err = engine.StepJoint(g.runs)
+		g.step()
 		lp.landed <- g
 	}
 }
@@ -242,7 +255,7 @@ func (lp *stepLoop) launch(g *decGroup) bool {
 	g.t0 = time.Now()
 	g.steps++
 	if lp.serialGroups {
-		g.out, g.err = engine.StepJoint(g.runs)
+		g.step()
 		lp.landed <- g
 		return true
 	}

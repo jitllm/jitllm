@@ -59,7 +59,7 @@ func TestStepRowsAreTheirOwn(t *testing.T) {
 		// its prompt through Prefill and a token through Forward.
 		lone := false
 		step := func(runs ...engine.Run) [][]float32 {
-			stepf := engine.StepJoint
+			stepf := func(runs []engine.Run) ([][]float32, error) { return engine.StepJoint(runs, nil) }
 			if lone && len(runs) == 1 {
 				stepf = engine.StepRuns
 			}
