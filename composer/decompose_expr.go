@@ -144,7 +144,7 @@ func newExprSplit() *exprSplit {
 // splitRefused forms a part whose refused kernel walked a weight's planes
 // along the rows (Streams) without that walk; else one whose refused kernel
 // ran several rows a call with half the rows a call, and nothing else; else
-// one whose refused kernel ran two heads a call with a head a call, and one
+// one whose refused kernel ran two heads a call with a head a call; else one
 // whose refused kernel jammed a loop's rows across lanes with none; else one
 // whose refused kernel walked its addresses
 // indexing them; else a map a term the largest expression formed whole
@@ -191,6 +191,9 @@ func (sp *exprSplit) splitRefused(err error) bool {
 		if !sp.unpaired[of] {
 			sp.unpaired[of], more = true, true
 		}
+	}
+	if more {
+		return true
 	}
 	for _, at := range pe.Wide {
 		if !sp.unwide[at] {
