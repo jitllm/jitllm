@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -434,8 +433,7 @@ func auditRun(t *testing.T, m *model.Model, io ...Option) {
 
 // auditComposedCPU is the gate's composed CPU arm: every entry point again
 // with the CPU's blocks on what the composer forms for it, and a decode whose
-// every block step is counted, served or declined by name -- all of them
-// served on the models the composer serves on the CPU (cpuServedModels).
+// every block step is counted and served, a decline failing by name.
 // The decode, a prefill, a decision model's questions and a tower's pictures
 // each ask the composer for nothing once the instance is made.
 func auditComposedCPU(t *testing.T, name, path string, opts ...Option) {
@@ -513,8 +511,8 @@ func auditComposedCPU(t *testing.T, name, path string, opts ...Option) {
 		t.Fatalf("the census counts %d block steps on the CPU, where the decode ran %d", total, want)
 	}
 	t.Logf("composed CPU: %d of %d block steps served; declined: %s (%v)", served, total, strings.Join(named, ", "), s.Account(nn.CPU).FormErr)
-	if slices.Contains(cpuServedModels(), name) && served != total {
-		t.Fatalf("a model the composer serves on the CPU declined %d block steps", total-served)
+	if served != total {
+		t.Fatalf("the composed CPU declined %d of %d block steps: %s (%v)", total-served, total, strings.Join(named, ", "), s.Account(nn.CPU).FormErr)
 	}
 	asked = s.Account(nn.CPU).Asks
 	if _, err := s.Prefill([]int32{1, 2, 3, 4, 5}); err != nil {
