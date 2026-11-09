@@ -227,11 +227,14 @@ func (gl *groupedLoad) run(t *testing.T, groups int, serial bool) groupedResult 
 // prompt's steps, so its tokens may part at a near tie and only its answer is
 // required. Every request answers in full, the groups ran grouped steps, and
 // the devices serve a request after each arm. One group runs again after the
-// groups, and its waves must repeat the first's token for token: the
-// comparison holds the groups to one group only where one group repeats
-// itself. Nothing parts at a margin: a joint step's rows are their own
-// (TestStepRowsAreTheirOwn), so any parting fails, the host's gap at it
-// logged.
+// groups, and its waves must agree with the first's. Agreeing is the
+// engine's band, not equality: which rows share a step moves with when
+// requests arrive, and a row's arithmetic with its step's companions, so a
+// request may part where its two best tokens are a tie on the host --
+// within tieMargin, the teacher-forced gap at the parting (sameAsAlone's
+// rule) -- and nothing past a tie is compared. A parting past the margin
+// fails, and one request held to another's answer must fail: the
+// comparison sees a wrong row.
 //
 // JITLLM_SERVER_GROUP_LOAD is conc,reqs,long,short,gen (default
 // 16,2,3072,384,64, the prompts cut to the model's context).
@@ -357,8 +360,9 @@ func TestDecodeGroupsHoldUnderLoad(t *testing.T) {
 		// The one-group arm again: the comparison holds groups to it only if
 		// one group repeats itself, token for token.
 		againW, _, _ := arm(1)
-		parted := func(what string, got, want [][]int32, hold bool) int {
-			n := 0
+		// parted counts the requests of got parting from want's, and of them
+		// those parting past a tie on the host, each failed where hold.
+		parted := func(what string, got, want [][]int32, hold bool) (n, wrong int) {
 			for i := range got {
 				if slices.Equal(got[i], want[i]) {
 					continue
@@ -368,16 +372,32 @@ func TestDecodeGroupsHoldUnderLoad(t *testing.T) {
 				for j < gen && got[i][j] == want[i][j] {
 					j++
 				}
+				gap := hostGap(t, gl.lm.m, prompt(i), want[i][:j], got[i][j], want[i][j])
+				if gap <= tieMargin {
+					t.Logf("%s: request %d parts at token %d, a tie (%.3f apart on the host)", what, i, j, gap)
+					continue
+				}
+				wrong++
 				if hold {
-					t.Errorf("%s: request %d parts at token %d (%.3f apart on the host): %v, %v in one group",
-						what, i, j, hostGap(t, gl.lm.m, prompt(i), want[i][:j], got[i][j], want[i][j]), got[i][j:], want[i][j:])
+					t.Errorf("%s: request %d parts at token %d, %.3f apart on the host: %v, %v in one group",
+						what, i, j, gap, got[i][j:], want[i][j:])
 				}
 			}
-			return n
+			return n, wrong
 		}
-		aa := parted("one group twice", againW, oneW, true)
+		aa, _ := parted("one group twice", againW, oneW, true)
+		// The violation: each request held to the next one's answer.
+		shifted := make([][]int32, len(oneW))
+		for i := range oneW {
+			shifted[i] = oneW[(i+1)%len(oneW)]
+		}
+		if _, wrong := parted("", shifted, oneW, false); wrong == 0 {
+			t.Error("every request held to another's answer parts at a tie: the comparison cannot see a wrong row")
+		}
+		pw, _ := parted("groups in waves", gotW, oneW, invariant)
+		pl, _ := parted("", gotL, oneL, false)
 		t.Logf("%d grouped steps; requests parting from one group's tokens: %d of %d in waves, %d of %d in a closed loop; one group twice: %d",
-			steps, parted("groups in waves", gotW, oneW, invariant), len(gotW), parted("", gotL, oneL, false), len(gotL), aa)
+			steps, pw, len(gotW), pl, len(gotL), aa)
 	})
 }
 
