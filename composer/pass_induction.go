@@ -131,6 +131,18 @@ func (p Induction) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 // every node an index is computed from, a fold's reads not followed, as
 // readsNode walks them.
 func (k *Kernel) addressNodes() map[int]bool {
+	m := k.vwords
+	if m == nil {
+		return k.findAddressNodes()
+	}
+	if key := [2]int{len(k.Nodes) + 1, len(k.Stores)}; m.addrKey != key {
+		m.addrKey, m.addr = key, k.findAddressNodes()
+	}
+	return m.addr
+}
+
+// findAddressNodes is addressNodes found anew.
+func (k *Kernel) findAddressNodes() map[int]bool {
 	seen := map[int]bool{}
 	var stack []int
 	push := func(i int) {
