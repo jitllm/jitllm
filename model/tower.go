@@ -1954,9 +1954,6 @@ func PictureWords(img image.Image, pad *[]uint32, ent *[4 * 256]byte) ([]uint32,
 		return nil, l, err
 	}
 	p := planes[0]
-	if planes[1] == nil && len(p)%4 == 0 && uintptr(unsafe.Pointer(&p[0]))%4 == 0 {
-		return unsafe.Slice((*uint32)(unsafe.Pointer(&p[0])), len(p)/4), l, nil
-	}
 	end := len(p)
 	if planes[2] != nil {
 		end = l.p3 + len(planes[2])
@@ -1965,7 +1962,10 @@ func PictureWords(img image.Image, pad *[]uint32, ent *[4 * 256]byte) ([]uint32,
 	}
 	n := (end + 3) / 4
 	if n > composer.PictureWords {
-		return nil, l, fmt.Errorf("model: a picture of %d bytes is past the %d the picture table holds", end, 4*composer.PictureWords)
+		return nil, l, fmt.Errorf("model: a picture of %d bytes is past the %d its samples' U32 offsets reach", end, 4*composer.PictureWords)
+	}
+	if planes[1] == nil && len(p)%4 == 0 && uintptr(unsafe.Pointer(&p[0]))%4 == 0 {
+		return unsafe.Slice((*uint32)(unsafe.Pointer(&p[0])), len(p)/4), l, nil
 	}
 	if cap(*pad) < n {
 		*pad = make([]uint32, n)

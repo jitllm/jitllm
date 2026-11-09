@@ -67,9 +67,8 @@ const (
 	RequestPicTaps
 )
 
-// PictureWords is the most words a step's picture holds, its bytes every
-// one a 32-bit address: a picture 4096
-// pixels square, four bytes a pixel.
+// PictureWords is the most words a step's picture holds: its samples are
+// read at U32 byte offsets (pictureSample).
 const PictureWords = 1<<30 - 1
 
 // decomposePicture is each output pixel's channel of the step's picture:
