@@ -436,6 +436,8 @@ func auditRun(t *testing.T, m *model.Model, io ...Option) {
 // with the CPU's blocks on what the composer forms for it, and a decode whose
 // every block step is counted, served or declined by name -- all of them
 // served on the models the composer serves on the CPU (cpuServedModels).
+// The decode, a prefill, a decision model's questions and a tower's pictures
+// each ask the composer for nothing once the instance is made.
 func auditComposedCPU(t *testing.T, name, path string, opts ...Option) {
 	instOpts := opts
 	m, err := model.Open(path)
@@ -445,6 +447,15 @@ func auditComposedCPU(t *testing.T, name, path string, opts ...Option) {
 	defer m.Close()
 	auditRun(t, m, instOpts...)
 	if m.Cfg.Head != nil {
+		s := testInstance(t, m, 16, instOpts...)
+		defer s.Close()
+		asked := s.Account(nn.CPU).Asks
+		for i := range 3 {
+			finite(t, "MarkScores", markerScores(t, s, i))
+		}
+		if n := s.Account(nn.CPU).Asks - asked; n != 0 {
+			t.Fatalf("the questions asked the composer for %d form(s) after the instance was made", n)
+		}
 		return
 	}
 	const steps = 3
@@ -504,6 +515,28 @@ func auditComposedCPU(t *testing.T, name, path string, opts ...Option) {
 	t.Logf("composed CPU: %d of %d block steps served; declined: %s (%v)", served, total, strings.Join(named, ", "), s.Account(nn.CPU).FormErr)
 	if slices.Contains(cpuServedModels(), name) && served != total {
 		t.Fatalf("a model the composer serves on the CPU declined %d block steps", total-served)
+	}
+	asked = s.Account(nn.CPU).Asks
+	if _, err := s.Prefill([]int32{1, 2, 3, 4, 5}); err != nil {
+		t.Fatalf("Prefill: %v", err)
+	}
+	if n := s.Account(nn.CPU).Asks - asked; n != 0 {
+		t.Fatalf("the prefill asked the composer for %d form(s) after the instance was made", n)
+	}
+	if m.Tower != nil {
+		ps := testInstance(t, m, 256, instOpts...)
+		defer ps.Close()
+		asked := ps.Account(nn.CPU).Asks
+		for range 2 {
+			rows, err := ps.EncodePicture(auditPicture(t))
+			if err != nil {
+				t.Fatalf("EncodePicture: %v", err)
+			}
+			finite(t, "EncodePicture", rows)
+		}
+		if n := ps.Account(nn.CPU).Asks - asked; n != 0 {
+			t.Fatalf("the pictures asked the composer for %d form(s) after the instance was made", n)
+		}
 	}
 }
 
