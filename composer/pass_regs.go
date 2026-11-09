@@ -231,7 +231,8 @@ func (p Regs) bind(k *Kernel, d Device) ([]*Kernel, bool, error) {
 	// of tries where the walk took hundreds; it takes a count that binds,
 	// the first one where binding is monotone from there. Where galloping
 	// finds none, the walk goes on from walkSteps, so a kernel the walk binds
-	// is never refused.
+	// is never refused. A failure no step left can lower (hopeless) ends
+	// the walk where it stands.
 	end := len(k.Nodes) - 1
 	cur := &bindState{w: w, moved: moved, sunk: map[int]bool{}}
 	var why error
@@ -244,7 +245,7 @@ func (p Regs) bind(k *Kernel, d Device) ([]*Kernel, bool, error) {
 			return []*Kernel{m}, true, nil
 		}
 		why = w2
-		if cur.steps == end || cur.advance(1) == 0 {
+		if cur.steps == end || cur.hopeless(why) || cur.advance(1) == 0 {
 			return nil, false, bindFailed(k.Name, why)
 		}
 		if cur.steps == walkSteps {
@@ -258,6 +259,8 @@ func (p Regs) bind(k *Kernel, d Device) ([]*Kernel, bool, error) {
 		return nil, false, err
 	case m != nil:
 		return []*Kernel{m}, true, nil
+	case cur.hopeless(w2):
+		return nil, false, bindFailed(k.Name, w2)
 	}
 	failed, why := cur.clone(), w2
 	for gap := 1; cur.steps < end; gap *= 2 {
@@ -269,6 +272,9 @@ func (p Regs) bind(k *Kernel, d Device) ([]*Kernel, bool, error) {
 			return nil, false, err
 		}
 		if bound == nil {
+			if cur.hopeless(w2) {
+				return nil, false, bindFailed(k.Name, w2)
+			}
 			failed, why = cur.clone(), w2
 			continue
 		}
@@ -297,6 +303,9 @@ func (p Regs) bind(k *Kernel, d Device) ([]*Kernel, bool, error) {
 			return []*Kernel{m}, true, nil
 		}
 		why = w2
+		if cur.hopeless(why) {
+			break
+		}
 	}
 	return nil, false, bindFailed(k.Name, why)
 }
@@ -312,6 +321,80 @@ func bindFailed(name string, why error) error {
 		why = errors.New("no binding within a rematerialization per node")
 	}
 	return fmt.Errorf("%s: the floats do not fit the vector registers: %w: %w", name, ErrRegisterPressure, why)
+}
+
+// pressureAt is a binding's floats not fitting the vector registers at
+// one node: the node, its place in the sequence, and the binding.
+type pressureAt struct {
+	node, pos int
+	op        Op
+	in        *binder86
+}
+
+func (e *pressureAt) Error() string {
+	return fmt.Sprintf("more floats live at once than the vector registers, at node %d (%s)", e.node, e.op)
+}
+
+// hopeless reports whether why, a binding of st's kernel failing for its
+// floats, is one no steps left can bind (lowers).
+func (st *bindState) hopeless(why error) bool {
+	var pa *pressureAt
+	return errors.As(why, &pa) && !st.lowers(pa.in, pa.pos)
+}
+
+// lowers reports whether a step left to take could hold fewer floats live
+// across sequence position pos, where binding b found more than the vector
+// registers: a constant loaded before the loops that b holds across pos, or
+// a vector value a sink could move past pos -- made in the straight run pos
+// is in, before it, read by a node of the run after it and by no store.
+// Every other step shortens no live range crossing pos, and a step's other
+// effect is to lengthen one, so where none is left no count of steps binds.
+func (st *bindState) lowers(b *binder86, pos int) bool {
+	k := b.k
+	hs := k.homesNow()
+	for i, nd := range k.Nodes {
+		d, ok := b.def.get(i)
+		if !ok || st.moved[i] || nd.Op != OpLoad || hs[i] >= 0 {
+			continue
+		}
+		if o := k.Bufs[nd.Buf].Operand.Kind; o != OperandConsts && k.Bufs[nd.Buf].Words == nil {
+			continue
+		}
+		if d < pos && b.last.of(i) > pos {
+			return true
+		}
+	}
+	for _, c := range k.copies() {
+		if c > 0 {
+			return false
+		}
+	}
+	// A sink moves a candidate of its own filter, with its group, to just
+	// before the candidate's one reader; it holds fewer floats across pos
+	// where a vector value of the group is made before pos and the reader
+	// comes after it. Sinks move values later and never earlier, so a value
+	// a later sink carries across pos is one a candidate's group carries
+	// now.
+	var sc stepScratch
+	at := sc.places(k)
+	off, rd := sc.readers(k, at, true)
+	words := k.vectorWords()
+	for p, e := range k.Seq {
+		x := e.I
+		if e.Kind != EntryNode || off[x+1]-off[x] != 1 || rd[off[x]] < 0 || !k.sinkMovable(x) || st.sunk[x] || !k.needsVectorOf(x, words) {
+			continue
+		}
+		to := at[rd[off[x]]]
+		if to <= pos || to <= p+1 || !k.straightSeq(p, to) {
+			continue
+		}
+		for g := range k.sinkGroup(x, to, at, off, rd) {
+			if at[g] < pos && k.needsVectorOf(g, words) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // bindState is a kernel some steps of Regs' rematerializations and sinks on,
@@ -1863,9 +1946,10 @@ func (b *binder86) vectors() error {
 		return -1
 	}
 	hs := k.homesNow()
+	at := 0
 	give := func(i, r int) error {
 		if r < 0 {
-			return fmt.Errorf("more floats live at once than the vector registers, at node %d (%s)", i, k.Nodes[i].Op)
+			return &pressureAt{node: i, pos: at, op: k.Nodes[i].Op, in: b}
 		}
 		busy[r], tag[r] = true, 0
 		k.Nodes[i].Reg = r + 1
@@ -1930,6 +2014,7 @@ func (b *binder86) vectors() error {
 	}
 	cp := k.copies()
 	for pos, e := range k.Seq {
+		at = pos
 		if e.Kind == EntryNode && cp[e.I] > 0 {
 			free(pos, false)
 			continue
@@ -2533,18 +2618,6 @@ func (k *Kernel) sink(sunk map[int]bool, sc *stepScratch) bool {
 	// readers rd[off[a]:off[a+1]] the sequenced nodes reading it (-1 a store).
 	pos := sc.places(k)
 	off, rd := sc.readers(k, pos, true)
-	straight := func(from, to int) bool {
-		for q := from + 1; q < to; q++ {
-			if k.Seq[q].Kind != EntryNode {
-				return false
-			}
-		}
-		return true
-	}
-	movable := func(i int) bool {
-		nd := k.Nodes[i]
-		return nd.Op != OpFold && nd.Op != OpConst && nd.Share == 0 && nd.Spill == 0
-	}
 	words := k.vectorWords()
 	// vecs[q] and others[q] count the vector values and the entries not a
 	// node before sequence place q: a candidate's span is straight where
@@ -2566,7 +2639,7 @@ func (k *Kernel) sink(sunk map[int]bool, sc *stepScratch) bool {
 	best, gap, to := -1, 0, 0
 	for p, e := range k.Seq {
 		x := e.I
-		if e.Kind != EntryNode || !needs[p] || off[x+1]-off[x] != 1 || rd[off[x]] < 0 || !movable(x) || sunk[x] {
+		if e.Kind != EntryNode || !needs[p] || off[x+1]-off[x] != 1 || rd[off[x]] < 0 || !k.sinkMovable(x) || sunk[x] {
 			continue
 		}
 		rp := pos[rd[off[x]]]
@@ -2581,28 +2654,7 @@ func (k *Kernel) sink(sunk map[int]bool, sc *stepScratch) bool {
 		return false
 	}
 	sunk[best] = true
-	group := map[int]bool{best: true}
-	for grew := true; grew; {
-		grew = false
-		for i := range group {
-			for _, a := range k.Operands(&k.Nodes[i]) {
-				x := *a
-				if x < 0 || x >= len(pos) || group[x] || !movable(x) || pos[x] >= to {
-					continue
-				}
-				if pos[x] < 0 || !straight(pos[x], pos[best]) {
-					continue
-				}
-				only := true
-				for _, r := range rd[off[x]:off[x+1]] {
-					only = only && r >= 0 && group[r]
-				}
-				if only {
-					group[x], grew = true, true
-				}
-			}
-		}
-	}
+	group := k.sinkGroup(best, to, pos, off, rd)
 	var out, moving []Entry
 	for p, e := range k.Seq {
 		if p == to {
@@ -2616,6 +2668,52 @@ func (k *Kernel) sink(sunk map[int]bool, sc *stepScratch) bool {
 	}
 	k.Seq = out
 	return true
+}
+
+// sinkMovable reports whether a sink may move node i.
+func (k *Kernel) sinkMovable(i int) bool {
+	nd := k.Nodes[i]
+	return nd.Op != OpFold && nd.Op != OpConst && nd.Share == 0 && nd.Spill == 0
+}
+
+// straightSeq reports whether the sequence between places from and to holds
+// nodes alone.
+func (k *Kernel) straightSeq(from, to int) bool {
+	for q := from + 1; q < to; q++ {
+		if k.Seq[q].Kind != EntryNode {
+			return false
+		}
+	}
+	return true
+}
+
+// sinkGroup is what a sink of best to sequence place to moves: best, and
+// each value of its straight run before to that the group alone reads. pos
+// and the readers rd[off[a]:off[a+1]] are sink's.
+func (k *Kernel) sinkGroup(best, to int, pos, off, rd []int) map[int]bool {
+	group := map[int]bool{best: true}
+	for grew := true; grew; {
+		grew = false
+		for i := range group {
+			for _, a := range k.Operands(&k.Nodes[i]) {
+				x := *a
+				if x < 0 || x >= len(pos) || group[x] || !k.sinkMovable(x) || pos[x] >= to {
+					continue
+				}
+				if pos[x] < 0 || !k.straightSeq(pos[x], pos[best]) {
+					continue
+				}
+				only := true
+				for _, r := range rd[off[x]:off[x+1]] {
+					only = only && r >= 0 && group[r]
+				}
+				if only {
+					group[x], grew = true, true
+				}
+			}
+		}
+	}
+	return group
 }
 
 // wholeVector reports whether load i reads a word of fixed words that the
