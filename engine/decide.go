@@ -146,6 +146,10 @@ func NewDecider(in *Instance) (*Decider, error) {
 // InputTokens is how many prompt tokens the last Decide ran.
 func (d *Decider) InputTokens() int { return d.input }
 
+// Use points the decider at instance in: the instance a session's lease
+// hands it (Session.Run), which may differ from one lease to the next.
+func (d *Decider) Use(in *Instance) { d.in = in }
+
 // maxOptions is the most options a question may have.
 func (d *Decider) maxOptions() int {
 	if d.lab == nil {
