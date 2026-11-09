@@ -4,7 +4,7 @@ cannot run, from the fixture's own transformers class (the user's decision for
 such fixtures: the model's reference, not llama.cpp, not jitllm's CPU path).
 -> testdata/golden/rows/<gguf name>.json
 
-  $JITLLM_HF_PY scripts/rowsgold.py <transformers dir> <gguf name>
+  $JITLLM_HF_PY scripts/rowsgold.py <transformers dir> <gguf name> [experts]
 
 The gate's sequences, as engine/cpurows_test.go builds them: its text's ids,
 a prompt of each length with the decode tokens after it, and a batch of three
@@ -15,6 +15,10 @@ stride-th logit (a vocabulary of 150 thousand logits a row would make the
 golden tens of megabytes), base64 little-endian float32. The gate holds its
 reference to these rows over the same logits, and fails where its own ids
 differ from the golden's.
+
+With "experts", the golden is TestComposedCPUExpertPagesServe's instead: one
+sequence, the text's first id and its next EXPERTS-1 forced a step each, kept
+at a quarter of the logits -- a mixture fixture's gate reads no other.
 """
 import base64, json, os, struct, sys
 import torch
@@ -28,18 +32,21 @@ TEXT = ("The river rose every spring until the bridges were islands, "
         "and the clerk counted barrels of salt on the upper floor. ") * 60
 LENGTHS, DECODE = [5, 33, 100], 6
 SAMPLES = 4096
+EXPERTS = 40
 
 
-def main(d, name):
+def main(d, name, experts=False):
     tok = Tokenizer.from_file(os.path.join(d, "tokenizer.json"))
     ids = tok.encode(TEXT).ids
     cfg = AutoConfig.from_pretrained(d)
     m = AutoModelForCausalLM.from_pretrained(d, config=cfg, dtype=torch.float32)
     m.eval()
-    stride = max(1, cfg.vocab_size // SAMPLES)
+    stride = max(1, cfg.vocab_size // (SAMPLES // 4 if experts else SAMPLES))
     seqs = [(ids[:n], ids[n:n + DECODE]) for n in LENGTHS]
     steps = ids[200:200 + DECODE]
     seqs += [(p, steps) for p in (ids[:7], ids[40:73], ids[100:150])]
+    if experts:
+        seqs = [(ids[:1], ids[1:EXPERTS])]
     out = []
     for p, t in seqs:
         with torch.no_grad():
@@ -56,4 +63,4 @@ def main(d, name):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1], sys.argv[2])
+    main(sys.argv[1], sys.argv[2], sys.argv[3:] == ["experts"])

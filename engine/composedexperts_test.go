@@ -242,10 +242,16 @@ func TestComposedCPUExpertPagesServe(t *testing.T) {
 	for _, file := range names {
 		t.Run(file, func(t *testing.T) {
 			path := jlmOf(t, testmodels.Path(file))
+			// A fixture llama.cpp cannot read is held to its transformers
+			// class over the golden's text, forced a step a token.
+			src := fixtureSource(testmodels.Path(file))
 			fm, openOpts := cpuFloat(t, path, page)
 			toks := cpuTokens(t, fm, steps, openOpts...)
+			if g := rowsGolden(src); g != "" {
+				toks = goldenIDs(t, g, steps)
+			}
 			fm.Close()
-			want, band := cpuReference(t, path, fixtureSource(testmodels.Path(file)), page, toks)
+			want, band := cpuReference(t, path, src, page, toks)
 			run := func(f cpuFault, io ...Option) ([][]float32, int64) {
 				m, err := model.Open(path)
 				if err != nil {
