@@ -518,8 +518,11 @@ func (d *Decider) askSpans(spans []model.Span) error {
 	if h := s.head; h != nil {
 		h.Pick, h.PickVals, h.Picked = d.ids, d.vals, false
 	}
+	// A non-causal decoder's prompt is one run: its text sees the pictures
+	// after it, as its full-attention layers do in the reference.
+	s.bidirAll = d.bidi
 	defer func() {
-		s.PickIDs, s.PickVals = nil, nil
+		s.PickIDs, s.PickVals, s.bidirAll = nil, nil, false
 		if h := s.head; h != nil {
 			h.Pick, h.PickVals = nil, nil
 		}

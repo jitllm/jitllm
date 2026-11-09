@@ -70,12 +70,11 @@ func TestDecisionOverPicturesMatchesItsGoldens(t *testing.T) {
 		cpuOnly string
 	}{
 		{"d1-3B", "d1/d1-3B-Q8_0.gguf", "d1-3B-Q8_0.pictures.llamacpp.json", 0.05, ""},
-		// A Qwen3-VL tower: llama.cpp's departs from transformers' in its
-		// picture area bounds, its position table and its merger's GELU
-		// (docs/divergences.md), where this tower is transformers' (Clef's VL
-		// fixture below holds the same family to its own code): 0.092 and
-		// 0.070 measured against llama.cpp on the CPU and a card.
-		{"vllm-d3", "vllm-d3/vllm-d3-edge-Q8_0.gguf", "vllm-d3-edge-Q8_0.pictures.llamacpp.json", 0.1, ""},
+		// A non-causal decoder: its prompt is one bidirectional run, the
+		// pictures' rows among the text's. 0.039, 0.030 and 0.028 on the CPU,
+		// its float forms and a card; with each span its own run the text
+		// before a picture never saw it and read 0.092 and 0.070.
+		{"vllm-d3", "vllm-d3/vllm-d3-edge-Q8_0.gguf", "vllm-d3-edge-Q8_0.pictures.llamacpp.json", 0.05, ""},
 		{"clef-fixture-vl", "clef/fixture-vl/clef-fixture-vl.gguf", "clef-fixture-vl.pictures.reference.json", 2e-3, ""},
 		// A marker head: the pictures a prefix that reads itself alone
 		// (jlm.Flag2MediaPrefix), the text after it, uncalibrated. 0.026
