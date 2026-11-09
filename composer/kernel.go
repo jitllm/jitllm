@@ -556,31 +556,46 @@ func (n *Kernel) clone() *Kernel {
 	c := *n
 	c.Space = append([]int(nil), n.Space...)
 	c.Loops = append([]Loop(nil), n.Loops...)
-	for i := range c.Loops {
-		c.Loops[i].Cursors = append([]Cursor(nil), c.Loops[i].Cursors...)
-	}
+	detach(len(c.Loops), func(i int) *[]Cursor { return &c.Loops[i].Cursors })
 	c.Seq = append([]Entry(nil), n.Seq...)
 	c.Args = append([]Arg(nil), n.Args...)
 	c.Ptrs = append([]Ptr(nil), n.Ptrs...)
 	c.Lines = append([]AheadLine(nil), n.Lines...)
-	for i := range c.Bufs {
-		c.Bufs[i].Dims = append([]int(nil), c.Bufs[i].Dims...)
-	}
-	c.Nodes = append([]Node(nil), n.Nodes...)
-	for i := range c.Nodes {
-		c.Nodes[i].Ax = append([]int(nil), c.Nodes[i].Ax...)
-	}
-	c.Stores = append([]Store(nil), n.Stores...)
-	for i := range c.Stores {
-		c.Stores[i].Ax = append([]int(nil), c.Stores[i].Ax...)
-	}
 	c.Bufs = append([]Buf(nil), n.Bufs...)
+	detach(len(c.Bufs), func(i int) *[]int { return &c.Bufs[i].Dims })
+	c.Nodes = append([]Node(nil), n.Nodes...)
+	detach(len(c.Nodes), func(i int) *[]int { return &c.Nodes[i].Ax })
+	c.Stores = append([]Store(nil), n.Stores...)
+	detach(len(c.Stores), func(i int) *[]int { return &c.Stores[i].Ax })
 	c.Passes = append([]string(nil), n.Passes...)
 	if n.Quarter != nil {
 		q := *n.Quarter
 		c.Quarter = &q
 	}
 	return &c
+}
+
+// detach gives each of n slices (at) a copy of its own, all in one backing
+// array: a clone copied a slice a node otherwise, a binding cloning its
+// kernel at every try. Each copy's capacity ends at its length, so an append
+// to one moves it out rather than writing into the next; an empty one is
+// nil, as a copy by append is.
+func detach[T any](n int, at func(i int) *[]T) {
+	total := 0
+	for i := range n {
+		total += len(*at(i))
+	}
+	back := make([]T, 0, total)
+	for i := range n {
+		p := at(i)
+		if len(*p) == 0 {
+			*p = nil
+			continue
+		}
+		lo := len(back)
+		back = append(back, *p...)
+		*p = back[lo:len(back):len(back)]
+	}
 }
 
 func (n *Kernel) Elements() int {
