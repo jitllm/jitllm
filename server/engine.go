@@ -474,9 +474,21 @@ func (lm *LoadedModel) holds(id string) bool {
 }
 
 // closeTiers closes the model's tier.
-// closeModel closes the instances lm's pool serves, then the model, then the
-// CPU device they ran on.
+// closeModel closes the model's decode groups' instances and the instances
+// its pool serves, then the model, then the CPU device they ran on. A decode
+// instance is the pool's only while a grouped round runs, and one made
+// after its round began is never (serveDecode serves them once): the pool's
+// close does not reach it, so each is taken back and closed here.
 func (lm *LoadedModel) closeModel() error {
+	lm.decodeMu.Lock()
+	dec := lm.decode
+	lm.decode, lm.decodeServed = nil, false
+	lm.decodeMu.Unlock()
+	for _, in := range dec {
+		if lm.pool.Unserve(in) == nil {
+			in.Close()
+		}
+	}
 	lm.pool.Close()
 	err := lm.m.Close()
 	lm.cpu.Close()
