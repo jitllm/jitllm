@@ -79,7 +79,7 @@ func groupedStepAllocs(t *testing.T, path string, io ...Option) {
 					for _, r := range groups[k] {
 						r.Tokens[0] = int32(3 + (s+k)%64)
 					}
-					if _, err := StepJoint(groups[k]); err != nil && fail[k] == nil {
+					if _, err := StepJoint(groups[k], nil); err != nil && fail[k] == nil {
 						fail[k] = err
 					}
 				}
@@ -157,7 +157,7 @@ func groupedCensus(t *testing.T, m *model.Model, g *gpu.GPU, ids []int32, io ...
 		go func() {
 			defer wg.Done()
 			for range steps {
-				out, err := StepJoint(groups[k])
+				out, err := StepJoint(groups[k], nil)
 				if err != nil {
 					fail[k] = err
 					return

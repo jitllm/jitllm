@@ -87,18 +87,24 @@ const MaxStepRows = nn.MaxDevicePrefillChunk
 // after another (Prefill for a chunk, Forward for one token), which is the
 // same answer.
 func StepRuns(runs []Run) ([][]float32, error) {
-	return stepRuns(runs, false)
+	return stepRuns(runs, false, nil)
 }
 
 // StepJoint is StepRuns for runs a caller grouped itself -- the server's
 // decode groups: a lone Steppable session's tokens go through the joint arm too,
 // as a step of one session, where StepRuns runs it on the one-at-a-time arm.
 // A row then takes the same step in a group of one as among others.
-func StepJoint(runs []Run) ([][]float32, error) {
-	return stepRuns(runs, true)
+//
+// The run-by-run list is out, the caller's own, reused from its length 0:
+// a leased instance's result list is its next step's, so a group holding
+// its results while another group steps the instance would read the other
+// group's logits. out is filled before the instance is let go; nil returns
+// the instance's own list, as StepRuns does.
+func StepJoint(runs []Run, out [][]float32) ([][]float32, error) {
+	return stepRuns(runs, true, out)
 }
 
-func stepRuns(runs []Run, lone bool) ([][]float32, error) {
+func stepRuns(runs []Run, lone bool, out [][]float32) ([][]float32, error) {
 	in, err := leasedOn(runs)
 	if err != nil {
 		return nil, err
@@ -127,9 +133,17 @@ func stepRuns(runs []Run, lone bool) ([][]float32, error) {
 			in.growStep()
 			in.seamStep()
 		}
+		return ownList(lg, err, out)
+	}
+	return ownList(stepRunsOn(runs, lone))
+}
+
+// ownList is a step's run-by-run logits in out where the caller gave one.
+func ownList(lg [][]float32, err error, out ...[][]float32) ([][]float32, error) {
+	if err != nil || len(out) == 0 || out[0] == nil {
 		return lg, err
 	}
-	return stepRunsOn(runs, lone)
+	return append(out[0][:0], lg...), nil
 }
 
 // leasedOn is the instance the runs' sessions lease, nil for runs of
