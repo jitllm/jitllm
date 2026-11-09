@@ -122,6 +122,9 @@ type Driver struct {
 	cuMemcpyPeer          func(CUdevptr, CUctx, CUdevptr, CUctx, uint64) CUresult
 	cuDeviceCanAccessPeer func(*int32, CUdevice, CUdevice) CUresult
 	cuCtxEnablePeerAccess func(CUctx, uint32) CUresult
+	// cuCtxDisablePeerAccess is optional: a driver without it keeps a pair
+	// it enabled.
+	cuCtxDisablePeerAccess func(CUctx) CUresult
 
 	// A queue's copies and its wait, bound only if the driver has all of them,
 	// like the graph calls.

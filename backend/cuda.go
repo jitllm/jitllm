@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"runtime"
@@ -168,12 +169,58 @@ func (c *cudaDev) peerTo(f *cudaDev) bool {
 			f.do(func() { err = f.d.EnablePeerAccess(c.d) })
 		}
 		ok = err == nil
+		if ok && !c.peerSound(f) {
+			c.do(func() { c.d.DisablePeerAccess(f.d) })
+			f.do(func() { f.d.DisablePeerAccess(c.d) })
+			ok = false
+		}
 	}
 	if c.peers == nil {
 		c.peers = map[*cudaDev]bool{}
 	}
 	c.peers[f] = ok
 	return ok
+}
+
+// peerSound copies a pattern from f's memory into c's with peer access on
+// and reads it back. A driver can let two cards address each other while a
+// direct copy between them across PCIe bridges corrupts (an IOMMU or ACS on
+// the path): two V100s joined only by PCIe bridges took a move's history at
+// 10 MB/s and delivered it wrong, where a pair joined by NVLink copied it
+// whole. So the copy is measured, once a pair; a pair whose pattern does
+// not come back copies through the host instead.
+func (c *cudaDev) peerSound(f *cudaDev) bool {
+	const n = 4 << 20
+	want := make([]byte, n)
+	for i := range want {
+		want[i] = byte(uint32(i) * 2654435761 >> 24)
+	}
+	sb, err := f.Alloc(n)
+	if err != nil {
+		return false
+	}
+	defer sb.Free()
+	db, err := c.Alloc(n)
+	if err != nil {
+		return false
+	}
+	defer db.Free()
+	if sb.Write(want) != nil {
+		return false
+	}
+	err = errCUDAClosed
+	f.do(func() { err = f.syncAll() })
+	if err != nil {
+		return false
+	}
+	err = errCUDAClosed
+	c.do(func() {
+		if err = c.drv.CopyPeer(db.(*cudaBuf).b, c.d, 0, sb.(*cudaBuf).b, f.d, 0, n); err == nil {
+			err = c.syncAll()
+		}
+	})
+	got := make([]byte, n)
+	return err == nil && db.Read(got) == nil && bytes.Equal(got, want)
 }
 
 // openCUDA is what backend.Open uses: the first card.
