@@ -21,8 +21,10 @@ import (
 func TestTiktokenVocabMatchesLlamaCpp(t *testing.T) {
 	dir := testmodels.Path("Kimi-Linear-48B-A3B-Instruct")
 	gg := testmodels.Path("Moonlight-16B-A3B-Instruct-Q4_K_M.gguf")
-	if !fileExists(filepath.Join(dir, "tiktoken.model")) || !fileExists(gg) {
-		testmodels.Missing(t, "MODEL MISSING: %s/tiktoken.model or %s (set JITLLM_MODELS to the model directory) -- this gate proved nothing", dir, gg)
+	for _, p := range []string{filepath.Join(dir, "tiktoken.model"), filepath.Join(dir, "tokenizer_config.json"), gg} {
+		if !fileExists(p) {
+			testmodels.Missing(t, "MODEL MISSING: %s (set JITLLM_MODELS to the model directory) -- this gate proved nothing", p)
+		}
 	}
 	ours, err := hfTiktokenVocab(dirFiles(dir), 163840)
 	if err != nil {
@@ -60,7 +62,10 @@ func TestTiktokenVocabMatchesLlamaCpp(t *testing.T) {
 		}
 	}
 	for _, id := range []int32{ours.BOS, ours.EOS} {
-		if id < base || ours.Tokens[id] != ref.Tokens[id] || ours.Kinds[id] != jlm.TokenControl {
+		if id < base || int(id) >= len(ours.Tokens) || int(id) >= len(ref.Tokens) {
+			t.Fatalf("special %d is not one of the %d tokens past the %d base ones", id, len(ours.Tokens)-base, base)
+		}
+		if ours.Tokens[id] != ref.Tokens[id] || ours.Kinds[id] != jlm.TokenControl {
 			t.Errorf("special %d: ours %q, llama.cpp %q", id, ours.Tokens[id], ref.Tokens[id])
 		}
 	}
