@@ -4640,3 +4640,32 @@ record finds it filled, and the fill drops guesses nobody started
 (`SetSpeculation`); a wrong guess stays charged until demanded or evicted.
 Gates: `format/jlm/readsvc_test.go`, each run against a violation. No timing
 claim is made here.
+
+## Two models on one card: what a demotion gives back
+
+`server.TestTheTalkingModelGetsTheCard` puts two models on a card that holds
+one (1200 MB of a V100) and promotes the one talking. It failed: after the
+first model was demoted the second got one block. Three things were in the
+way, each traced on the card before it was changed.
+
+- A demotion moved the victim's blocks to the CPU and left its instance
+  attached. Its tier then held 0 blocks and no history, and 664 MB of the
+  pool: the output projection and the scratch reserved at attach
+  (`Reserve`, before any block is offered). A demotion now detaches the
+  instance (`SetDevice(nil)`), and a promotion attaches it again, reserving
+  first. Releasing only the head whenever a release left a device empty was
+  tried and refused: that release also runs inside a step's room-making
+  (`roomRuns`), and taking the head there broke the step it made room for.
+- Every block's history was held by two views, the stepped session's and
+  the instance's own. `bindOwn` leaves the own session bound but away, and
+  `Place` used it only when another session was bound, so blocks the own
+  session placed never reached its held routes, and no settle let them go:
+  the instance read 0 blocks on the card while the tier held 25. `Place`
+  now brings the own session back when it is away.
+- Victims were sessions only, so a model loaded with the card listed and
+  never given a session held the card for good
+  (`TestAPinnedSessionIsNotMoved/pinned` skipped on every run). Such an idle
+  model is now a victim when no session is.
+
+After all three the talking model holds the card on every turn (7
+promotions, 5 demotions over three turns) and the pinned arm runs.

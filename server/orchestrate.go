@@ -131,12 +131,16 @@ func (e *Engine) promote(s *Session) error {
 	}
 	e.place(s, whyGenerating)
 	for instBlocks(lm) < n {
-		v := e.demotionVictim(s)
-		if v == nil {
+		if v := e.demotionVictim(s); v != nil {
+			if !e.demote(v, s.id) {
+				continue
+			}
+		} else if o := e.idleVictim(lm); o != nil {
+			if !e.demoteIdle(o, s.id) {
+				break
+			}
+		} else {
 			break
-		}
-		if !e.demote(v, s.id) {
-			continue
 		}
 		if e.place(s, whyRoomMade) == 0 {
 			// The room that victim gave back let no block in: the card's
@@ -224,18 +228,7 @@ func (e *Engine) demote(v *Session, forID string) bool {
 	}
 	defer v.mu.Unlock()
 	start := time.Now()
-	var n int
-	var err error
-	// The instance leaves the card, not only its blocks: its head and the
-	// scratch it reserved there go back to the card's pool with them, and a
-	// promotion attaches it again (bindSessionLocked), reserving first.
-	v.in().Place(func(in *engine.Instance) {
-		before := in.GPULayers()
-		if err = in.SetDevice(nil); err == nil {
-			v.lm.instDev = nil
-		}
-		n = before - in.GPULayers()
-	})
+	n, err := detach(v.lm, v.in())
 	// Every idle session of the instance moves its history to the CPU too, or
 	// its device view would keep the blocks on the card: v's under the lock
 	// held here.
@@ -245,6 +238,57 @@ func (e *Engine) demote(v *Session, forID string) bool {
 		return false
 	}
 	e.orch.note(OrchMove{At: start, Session: v.id, Model: v.lm.id, Blocks: n, To: nn.CPU, Why: whyMakeRoom, For: forID, Err: err,
+		Millis: float64(time.Since(start).Microseconds()) / 1000})
+	return true
+}
+
+// detach takes lm's instance in off its card, not only its blocks: its head
+// and the scratch it reserved there go back to the card's pool with them,
+// and a promotion attaches it again (bindSessionLocked), reserving first. It
+// is how many blocks left the card.
+func detach(lm *LoadedModel, in *engine.Instance) (int, error) {
+	var n int
+	var err error
+	in.Place(func(in *engine.Instance) {
+		before := in.GPULayers()
+		if err = in.SetDevice(nil); err == nil {
+			lm.instDev = nil
+		}
+		n = before - in.GPULayers()
+	})
+	return n, err
+}
+
+// idleVictim is another model than lm whose instance holds blocks on a card
+// and no session -- placed at its load and not talked to since -- whose
+// devices list the CPU and whose placement no caller named: a demotion
+// victim when no session is one. nil when there is none.
+func (e *Engine) idleVictim(lm *LoadedModel) *LoadedModel {
+	e.mu.RLock()
+	var cand []*LoadedModel
+	for _, o := range e.models {
+		if o != lm && !o.callerPlaced && o.cpuListed && len(o.sessions) == 0 && o.device() != nil {
+			cand = append(cand, o)
+		}
+	}
+	e.mu.RUnlock()
+	for _, o := range cand {
+		if instBlocks(o) > 0 {
+			return o
+		}
+	}
+	return nil
+}
+
+// demoteIdle detaches the idle model o's instance from its card for the
+// session named for (detach).
+func (e *Engine) demoteIdle(o *LoadedModel, forID string) bool {
+	start := time.Now()
+	n, err := detach(o, o.inst)
+	if n == 0 {
+		return false
+	}
+	e.orch.note(OrchMove{At: start, Model: o.id, Blocks: n, To: nn.CPU, Why: whyMakeRoom, For: forID, Err: err,
 		Millis: float64(time.Since(start).Microseconds()) / 1000})
 	return true
 }
