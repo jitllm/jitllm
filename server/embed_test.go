@@ -577,7 +577,7 @@ func TestUnloadWaitsForEmbedsInFlight(t *testing.T) {
 	default:
 	}
 	// The held embedder still works: the model under it is open.
-	if v, err := held.Embed(lm.m.EmbedIDs(embedTexts()[0])); err != nil || firstDiff(v, want[0]) >= 0 {
+	if v, err := held.embed(context.Background(), lm.m.EmbedIDs(embedTexts()[0])); err != nil || firstDiff(v, want[0]) >= 0 {
 		t.Fatalf("the held embedder after the unload began: %v", err)
 	}
 	lm.giveEmbedder(held)
