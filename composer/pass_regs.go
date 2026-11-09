@@ -320,6 +320,11 @@ type bindState struct {
 	w           *Kernel
 	moved, sunk map[int]bool
 	steps       int
+	// memo is w's vector words and homes (Kernel.vwords), kept across
+	// advances: each is found again only where the count of nodes it was
+	// found at changed, and a binding that walks its steps one by one
+	// would otherwise find them again at every step.
+	memo *vectorMemo
 }
 
 // advance takes up to n steps more, the rematerializations first: the steps
@@ -328,7 +333,10 @@ type bindState struct {
 // node, and a sink moves one in the sequence, which neither the words nor
 // the homes read.
 func (st *bindState) advance(n int) int {
-	st.w.vwords = &vectorMemo{n: -1}
+	if st.memo == nil {
+		st.memo = &vectorMemo{n: -1}
+	}
+	st.w.vwords = st.memo
 	defer func() { st.w.vwords = nil }()
 	for i := range n {
 		if !st.w.rematerialize(st.moved) && !st.w.sink(st.sunk) {
@@ -340,7 +348,12 @@ func (st *bindState) advance(n int) int {
 }
 
 func (st *bindState) clone() *bindState {
-	return &bindState{w: st.w.clone(), moved: maps.Clone(st.moved), sunk: maps.Clone(st.sunk), steps: st.steps}
+	c := &bindState{w: st.w.clone(), moved: maps.Clone(st.moved), sunk: maps.Clone(st.sunk), steps: st.steps}
+	if st.memo != nil {
+		m := *st.memo
+		c.memo = &m
+	}
+	return c
 }
 
 type binder86 struct {
@@ -460,7 +473,7 @@ func (b *binder86) take(pool []int) int {
 // as a sum does in its own loop.
 func (b *binder86) lives() {
 	k := b.k
-	hs := k.Homes()
+	hs := k.homesNow()
 	b.def, b.last, b.end, b.start = map[int]int{}, map[int]int{}, map[int]int{}, map[int]int{}
 	for pos, e := range k.Seq {
 		switch e.Kind {
@@ -1012,7 +1025,7 @@ func (b *binder86) keepEnd(i int) int {
 		}
 		return b.end[c]
 	}
-	hs := k.Homes()
+	hs := k.homesNow()
 	mine := map[int]bool{}
 	for j, bf := range k.Bufs {
 		if bf.Base == i+1 {
@@ -1606,7 +1619,7 @@ func (b *binder86) vectors() error {
 	innermost := func(c int) bool { return c >= 0 && len(k.innerLoops(c)) == 0 }
 	// reads is the reads of each sum in its own loop; one after the loop
 	// reads its last step, which its register holds.
-	reads, hr := map[int]int{}, k.Homes()
+	reads, hr := map[int]int{}, k.homesNow()
 	within := func(at, f int) bool { return at >= 0 && k.Nodes[f].Op == OpFold && k.within(at, k.Nodes[f].At) }
 	for j := range k.Nodes {
 		if k.Nodes[j].Op == OpFold || j >= len(hr) {
@@ -1632,7 +1645,7 @@ func (b *binder86) vectors() error {
 	}
 	shared := map[int]int{}
 	next := b.p.Scalars - 1
-	hs0 := k.Homes()
+	hs0 := k.homesNow()
 	kept := map[int]map[int]bool{}
 	for i, nd := range k.Nodes {
 		if nd.Hint == 0 || i >= len(hs0) {
@@ -1710,7 +1723,7 @@ func (b *binder86) vectors() error {
 		}
 		return -1
 	}
-	hs := k.Homes()
+	hs := k.homesNow()
 	give := func(i, r int) error {
 		if r < 0 {
 			return fmt.Errorf("more floats live at once than the vector registers, at node %d (%s)", i, k.Nodes[i].Op)
@@ -2292,7 +2305,7 @@ func (k *Kernel) operandReg(t, i int) int {
 // the sum it is added into; 0 for the rest.
 func (k *Kernel) chains() map[int]int {
 	out := map[int]int{}
-	hs := k.Homes()
+	hs := k.homesNow()
 	for c, l := range k.Loops {
 		folds := k.foldsOf(c)
 		if l.Copies < 2 || len(folds) < 2 || l.once() {
@@ -2326,7 +2339,7 @@ func (k *Kernel) rematerialize(moved map[int]bool) bool {
 			pos[e.I] = p
 		}
 	}
-	hs := k.Homes()
+	hs := k.homesNow()
 	// Each node's readers in the sequence, a reader once an operand it reads
 	// the node through, made once: asked of every candidate, a scan of the
 	// kernel each made a rematerialization quadratic in its nodes.
@@ -2839,10 +2852,11 @@ func (k *Kernel) operandUses() []bool {
 	return uses
 }
 
-// forgetUses drops the binding's operandUses after an operand is re-pointed.
+// forgetUses drops the binding's operandUses and homes after an operand is
+// re-pointed: a node's home follows what it reads.
 func (k *Kernel) forgetUses() {
 	if k.vwords != nil {
-		k.vwords.usesN = 0
+		k.vwords.usesN, k.vwords.homesN = 0, 0
 	}
 }
 
