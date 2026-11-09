@@ -1,8 +1,12 @@
 package engine
 
 import (
+	"encoding/base64"
+	"encoding/binary"
+	"encoding/json"
 	"math"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -244,6 +248,9 @@ func lcppBand(t *testing.T, src string, layers int, ref [][]float32, seqs ...lcp
 	for i := range band {
 		band[i] = floor
 	}
+	if g := rowsGolden(src); g != "" {
+		return hfBand(t, g, floor, ref, seqs...)
+	}
 	dir := os.Getenv("JITLLM_LCPP")
 	if dir == "" {
 		t.Fatal("JITLLM_LCPP is unset: it names a CUDA build of llama.cpp holding scripts/lcpplogits, the band's reference")
@@ -277,6 +284,92 @@ func lcppBand(t *testing.T, src string, layers int, ref [][]float32, seqs ...lcp
 		if at != len(ref) {
 			t.Fatalf("llama.cpp gave %d rows where the reference has %d", at, len(ref))
 		}
+	}
+	return band
+}
+
+// rowsGolden is the transformers golden holding the band's reference for a
+// fixture llama.cpp cannot run (scripts/rowsgold.py), "" for every other: the
+// user's decision for such fixtures is the model's own reference, not
+// llama.cpp and not jitllm's CPU path. llama.cpp asserts n_expert_groups <
+// n_expert on synth-deepseek-yarn-af.
+func rowsGolden(src string) string {
+	switch filepath.Base(src) {
+	case "synth-deepseek-yarn-af.gguf":
+		return filepath.Join("..", "testdata", "golden", "rows", "synth-deepseek-yarn-af.gguf.json")
+	}
+	return ""
+}
+
+// hfBand is lcppBand from a transformers golden: each row's distance between
+// the golden's row for seqs and ref's, over the logits the golden keeps
+// (every stride-th), no narrower than floor. A sequence the golden does not
+// hold -- the gate's ids not the golden's -- fails rather than narrowing.
+func hfBand(t *testing.T, path string, floor float64, ref [][]float32, seqs ...lcppSeq) []float64 {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("the band's transformers golden: %v -- run scripts/rowsgold.py", err)
+	}
+	var g struct {
+		Stride int `json:"stride"`
+		Seqs   []struct {
+			IDs  []int32  `json:"ids"`
+			Toks []int32  `json:"toks"`
+			Rows []string `json:"rows"`
+		} `json:"seqs"`
+	}
+	if err := json.Unmarshal(raw, &g); err != nil || g.Stride < 1 {
+		t.Fatalf("the band's transformers golden %s: %v (stride %d)", path, err, g.Stride)
+	}
+	band := make([]float64, len(ref))
+	for i := range band {
+		band[i] = floor
+	}
+	at := 0
+	for _, sq := range seqs {
+		var rows []string
+		for _, gs := range g.Seqs {
+			if slices.Equal(gs.IDs, sq.ids) && slices.Equal(gs.Toks, sq.toks) {
+				rows = gs.Rows
+				break
+			}
+		}
+		if rows == nil {
+			t.Fatalf("the transformers golden %s holds no sequence of %d ids and %d steps the gate asks for: its ids are not the gate's (scripts/rowsgold.py)",
+				path, len(sq.ids), len(sq.toks))
+		}
+		pick := sq.rows
+		if pick == nil {
+			pick = make([]int, len(rows))
+			for i := range pick {
+				pick[i] = i
+			}
+		}
+		for _, r := range pick {
+			if at >= len(ref) || r >= len(rows) {
+				t.Fatalf("the golden's rows do not line up with the reference's: row %d of %d at %d of %d", r, len(rows), at, len(ref))
+			}
+			b, err := base64.StdEncoding.DecodeString(rows[r])
+			if err != nil || len(b)%4 != 0 {
+				t.Fatalf("the golden's row %d: %v", r, err)
+			}
+			var num, den float64
+			for k := range len(b) / 4 {
+				j := k * g.Stride
+				if j >= len(ref[at]) {
+					t.Fatalf("the golden's row %d reaches logit %d of a reference row of %d", r, j, len(ref[at]))
+				}
+				h, w := float64(math.Float32frombits(binary.LittleEndian.Uint32(b[4*k:]))), float64(ref[at][j])
+				num += (h - w) * (h - w)
+				den += w * w
+			}
+			band[at] = max(band[at], num/den)
+			at++
+		}
+	}
+	if at != len(ref) {
+		t.Fatalf("the golden gave %d rows where the reference has %d", at, len(ref))
 	}
 	return band
 }
