@@ -5688,7 +5688,11 @@ func (g *devTier) prepBatch(width int) bool {
 		if bs == nil {
 			return false
 		}
-		g.ScratchBuilds++
+		if g.lane != nil && g.lane.clone {
+			g.LaneBuilds++
+		} else {
+			g.ScratchBuilds++
+		}
 		bs.tok = tok
 		g.bbs[width] = bs
 		// A width built after placement filled the card must not take what
