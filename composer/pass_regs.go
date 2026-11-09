@@ -1706,21 +1706,37 @@ func (b *binder86) vectors() error {
 			stepOf[nd.A] = i
 		}
 	}
-	// lastAt is the values each entry of the sequence reads for the last
-	// time, a sum's steps apart: free visits those alone.
-	lastAt := make([][]int, len(k.Seq))
-	for v := range k.Nodes {
-		if l, ok := b.last.get(v); ok && l >= 0 && l < len(lastAt) {
+	// lastAt[lastOff[q]:lastOff[q+1]] is the values entry q of the sequence
+	// reads for the last time, a sum's steps apart: free visits those alone.
+	lastOff := make([]int, len(k.Seq)+1)
+	lastOf := func(v int) int {
+		if l, ok := b.last.get(v); ok && l >= 0 && l < len(k.Seq) {
 			if _, step := stepOf[v]; !step {
-				lastAt[l] = append(lastAt[l], v)
+				return l
 			}
+		}
+		return -1
+	}
+	for v := range k.Nodes {
+		if l := lastOf(v); l >= 0 {
+			lastOff[l+1]++
+		}
+	}
+	for q := range len(k.Seq) {
+		lastOff[q+1] += lastOff[q]
+	}
+	lastAt, fill := make([]int, lastOff[len(k.Seq)]), append([]int(nil), lastOff[:len(k.Seq)]...)
+	for v := range k.Nodes {
+		if l := lastOf(v); l >= 0 {
+			lastAt[fill[l]] = v
+			fill[l]++
 		}
 	}
 	// carry is the registers of sums whose one reader took the sum's
 	// register: each stays the sum's to its last read, for its step.
 	carry := map[int]int{}
 	free := func(pos int, spent bool) {
-		for _, v := range lastAt[pos] {
+		for _, v := range lastAt[lastOff[pos]:lastOff[pos+1]] {
 			if k.Nodes[v].Reg > 0 && k.needsVector(v) && busy[k.Nodes[v].Reg-1] {
 				r := k.Nodes[v].Reg - 1
 				if f, ok := carry[r]; ok && f != v {
