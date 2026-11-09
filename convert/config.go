@@ -980,6 +980,11 @@ func llama4Config(f *meta.File, c *jlm.Config) error {
 // chosen -- the model's reference, which parts from llama.cpp only on a file
 // that states a factor the formula would not give.
 func ropeScalingOf(f *meta.File, c *jlm.Config) error {
+	// The context the rotary was trained to: YaRN scales from it, and
+	// LongRoPE turns its long factors past it (model.RopeFor).
+	if v := f.UintKey("rope.scaling.original_context_length", 0); v > 0 {
+		c.YarnOrigCtx = uint32(v)
+	}
 	kind := ""
 	if kv, ok := f.Key("rope.scaling.type"); ok {
 		s, ok := kv.String()

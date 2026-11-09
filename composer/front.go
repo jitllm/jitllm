@@ -121,9 +121,8 @@ func TableGraph(r graph.Rotary, i int) *graph.Graph {
 func unread(f Model, block int32, read ...jlm.Role) error {
 	for _, e := range f.Entries() {
 		// The rotary's factors are the step's table's, built from the
-		// engine's rotary as main's host runs it (rope_factors_long unread
-		// there too); a vision tensor is the tower's segment, and the text
-		// model's tensors are not the tower's.
+		// rotary the instance turns (model.RopeFor); a vision tensor is the
+		// tower's segment, and the text model's tensors are not the tower's.
 		switch e.Role {
 		case jlm.RoleRopeFreqs, jlm.RoleRopeFactorsShort, jlm.RoleRopeFactorsLong:
 			continue

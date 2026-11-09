@@ -266,17 +266,29 @@ func (m *Model) RopeMarksCap(maxSeq int) int {
 }
 
 // cpuTablePlanes is rotary table i's planes as its composed form reads them
-// (composer.TablePlanes): the model's rotary's, folded over its axes where it
-// has several, or its sliding blocks'; nil where the model has no such
-// rotary.
-func (m *Model) CpuTablePlanes(i int) []float32 {
+// (composer.TablePlanes) for an instance of context ctx: its rotary's
+// (RopeFor), folded over its axes where it has several, or its sliding
+// blocks'; nil where the model has no such rotary.
+func (m *Model) CpuTablePlanes(i, ctx int) []float32 {
+	r := m.RopeFor(ctx)
 	switch {
-	case i == 0 && len(m.Rope.Runs) > 0:
-		return RopeAxesPlanes(&m.Rope, m.Cfg.NRot, m.Cfg.RopeXD)
+	case i == 0 && len(r.Runs) > 0:
+		return RopeAxesPlanes(r, m.Cfg.NRot, m.Cfg.RopeXD)
 	case i == 0:
-		return RopeTabPlanes(&m.Rope, m.Cfg.NRot)
+		return RopeTabPlanes(r, m.Cfg.NRot)
 	}
 	return RopeTabPlanes(m.RopeSWA, m.Cfg.LocalNRot())
+}
+
+// RopeFor is the rotary an instance of context ctx turns: the long factors'
+// (RopeLong) where ctx passes the context the short factors were trained to,
+// llama.cpp's rule on its context, and the model's rotary otherwise. An
+// instance turns one rotary for its whole history.
+func (m *Model) RopeFor(ctx int) *nn.Rope {
+	if m.RopeLong != nil && ctx > m.LongCtx {
+		return m.RopeLong
+	}
+	return &m.Rope
 }
 
 // namedVector is the vector a field of block l holds under r, and whether a

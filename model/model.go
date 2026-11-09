@@ -1287,6 +1287,12 @@ type Model struct {
 	// ropeSWA is the LOCAL layers' rotary where an architecture trains two
 	// bases, and nil where it trains one -- which is every model but gemma3.
 	RopeSWA *nn.Rope
+	// RopeLong is the rotary with the container's long factors
+	// (rope_factors_long), which an instance whose context passes LongCtx
+	// turns (RopeFor); nil where the container holds none. LongCtx is the
+	// context the short factors were trained to.
+	RopeLong *nn.Rope
+	LongCtx  int
 	// Ngram is the n-gram block's table.
 	Ngram *ngramTable
 	// onesHD is a HeadDim-wide vector of ones: the weight Llama 4's weightless
@@ -2781,9 +2787,8 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 		m.RopeSWA = &r
 	}
 	// Per-pair rotary factors are a tensor: llama 3.1+ ships rope_freqs and
-	// phi3 rope_factors_short/long, dividing theta per pair. phi3 picks by
-	// sequence length; short is right below its original context (4096), and
-	// the long switch is not implemented.
+	// phi3 rope_factors_short/long, dividing theta per pair: the short within
+	// the original context, the long an instance past it turns (RopeLong).
 	for _, role := range []jlm.Role{jlm.RoleRopeFreqs, jlm.RoleRopeFactorsShort} {
 		if c.Has(role, jlm.DenseBlock, -1) {
 			if m.Rope.Freqs, err = vec(role, jlm.DenseBlock); err != nil {
@@ -2798,6 +2803,21 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 	if cfg.YarnFactor > 0 || cfg.RopeLinear > 0 {
 		if m.Rope.Freqs, err = ropeScale(cfg, m.Rope.Freqs); err != nil {
 			return nil, err
+		}
+	}
+	if c.Has(jlm.RoleRopeFactorsLong, jlm.DenseBlock, -1) {
+		long := m.Rope
+		if long.Freqs, err = vec(jlm.RoleRopeFactorsLong, jlm.DenseBlock); err != nil {
+			return nil, err
+		}
+		if cfg.YarnFactor > 0 || cfg.RopeLinear > 0 {
+			if long.Freqs, err = ropeScale(cfg, long.Freqs); err != nil {
+				return nil, err
+			}
+		}
+		m.RopeLong, m.LongCtx = &long, cfg.YarnOrigCtx
+		if m.LongCtx == 0 {
+			m.LongCtx = cfg.NCtx
 		}
 	}
 	if cfg.TiedEmbd {
