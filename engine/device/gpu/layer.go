@@ -4948,6 +4948,12 @@ func (g *devTier) layersSession(s backend.Session) {
 	default:
 		err = s.Read(bs.x, bs.hraw[:nrow*p.NEmbd*4])
 	}
+	// Input rows gathered here wrote the per-layer inputs on this device
+	// alone; blocks after the call's, on another device, upload them from
+	// the session's own (pleRows), as from a gather of its own (readPLE).
+	if w := nrow * p.PLEWidth; err == nil && embedSrv && head == nil && p.PLEDim != 0 && w > 0 && len(g.pleHost) >= w {
+		err = s.Read(bs.pleIn, f32b(g.pleHost[:w]))
+	}
 }
 
 // recorderOf is s as a backend.Recorder, asserted once per session object:
