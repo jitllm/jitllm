@@ -127,7 +127,7 @@ func videoEntry(t *jlm.Tower, px0, px1 uint8, grid, extra, side int, f graph.Fac
 	a.PicBF16 = n.Kind == jlm.PreNormalizeBF16
 	if a.Chain == graph.ChainPIL {
 		root := int(math.Sqrt(float64(r[2]) / float64(v.MaxFrames)))
-		a.Taps = composer.PILTapCount(a.Filter, 2*max(composer.PictureMaxSide, root), root)
+		a.Taps = composer.LiveTaps(a.Filter, root)
 		// Its frames run in bands (towerClass.Band); the entry finishes
 		// their sums.
 		a.PicPass = graph.PicFinish
