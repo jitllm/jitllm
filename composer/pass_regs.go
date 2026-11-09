@@ -1538,6 +1538,9 @@ type vectorMemo struct {
 	// stores.
 	addrKey [2]int
 	addr    map[int]bool
+	// dotN is the count of nodes dot was found at, plus one (0: none).
+	dotN int
+	dot  []bool
 }
 
 // fresh is m with madeCounts' answers of its own: copies write none into
@@ -2911,21 +2914,42 @@ func (k *Kernel) dotZero(i int) bool {
 	if nd := k.Nodes[i]; nd.Op != OpConst || nd.Imm != 0 || nd.Type == ir.F32 {
 		return false
 	}
-	read := false
+	return k.dotZeros()[i]
+}
+
+// dotZeros is dotZero for every node, found in one walk of the operands:
+// kept while a register binding runs as operandUses is, where needsVector
+// asked it of every node and each asking walked the kernel.
+func (k *Kernel) dotZeros() []bool {
+	m := k.vwords
+	if m != nil && m.dotN == len(k.Nodes)+1 {
+		return m.dot
+	}
+	n := len(k.Nodes)
+	zero := func(i int) bool {
+		nd := k.Nodes[i]
+		return nd.Op == OpConst && nd.Imm == 0 && nd.Type != ir.F32
+	}
+	read, other := make([]bool, n), make([]bool, n)
 	for j := range k.Nodes {
 		nd := &k.Nodes[j]
-		if j == i || nd.Op == OpFold && nd.B == i && nd.A != i {
-			continue
-		}
 		for _, a := range k.Operands(nd) {
-			if *a != i {
+			i := *a
+			if i < 0 || i >= n || i == j || !zero(i) || nd.Op == OpFold && nd.B == i && nd.A != i {
 				continue
 			}
 			if !nd.Op.byteDot() || a != &nd.C || nd.A == i || nd.B == i {
-				return false
+				other[i] = true
+			} else {
+				read[i] = true
 			}
-			read = true
 		}
+	}
+	for i := range read {
+		read[i] = read[i] && !other[i]
+	}
+	if m != nil {
+		m.dotN, m.dot = n+1, read
 	}
 	return read
 }
@@ -2973,7 +2997,7 @@ func (k *Kernel) operandUses() []bool {
 // re-pointed: a node's home follows what it reads.
 func (k *Kernel) forgetUses() {
 	if k.vwords != nil {
-		k.vwords.usesN, k.vwords.homesN = 0, 0
+		k.vwords.usesN, k.vwords.homesN, k.vwords.dotN = 0, 0, 0
 	}
 }
 
