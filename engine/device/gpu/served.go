@@ -2065,19 +2065,16 @@ func attendWindow(gr *graph.Graph) (int, bool) {
 // reads in at the elements it writes out at is not enough: a launch clamps
 // its surplus threads to the last element, and every lane storing an
 // element may store before another lane reads it, adding twice (RULE 13).
-// streamsInPlace says a form of n residual streams writes each stream's
-// output over its input (each stream one view of x): a form that does not
-// has no copy to run through, and is refused by name.
-func (f *partForm) streamsInPlace(n int) error {
-	if n < 2 {
-		return nil
-	}
-	for k := range n {
+// apart says a form of n residual streams (one where n < 2) writes some
+// stream's output before it last reads that stream's input: its outputs are
+// written apart, in bs.h, and copied over x after (servedCopy).
+func (f *partForm) apart(n int) bool {
+	for k := range max(n, 1) {
 		if !f.inPlace(k, k) {
-			return fmt.Errorf("tier: a block of %d residual streams writes stream %d before it last reads it", n, k)
+			return true
 		}
 	}
-	return nil
+	return false
 }
 
 func (f *partForm) inPlace(in, out int) bool {
@@ -2495,10 +2492,7 @@ func (g *devTier) servedStep(bs *blockScratch, l *layer, li int, p *nn.LayerPlan
 		}
 		return nil, nil, nil, err
 	}
-	if err := sv.f.streamsInPlace(len(l.graph.Out)); err != nil {
-		return nil, nil, nil, err
-	}
-	if !sv.f.inPlace(0, 0) {
+	if sv.f.apart(len(l.graph.Out)) {
 		if cp, err = g.servedCopy(bs, R); err != nil {
 			return nil, nil, nil, err
 		}
@@ -2515,15 +2509,15 @@ const errStreamForm tierError = "the composed block over passes"
 
 // servedCopy is the copy of a block's output from bs.h over x at a step of
 // rows, formed through the composer like any other part, for a form that
-// cannot write its output over x (partForm.inPlace). bs.h holds a row of
-// every step's rows: a block of several residual streams writes each over
-// its own view of x or is refused (streamsInPlace), and never reaches here.
+// cannot write its output over x (partForm.apart). bs.h holds every step
+// row at the residual's width, its streams laid out as x's
+// (servedStreamsApart), so one copy of rows rows of that width moves them
+// all.
 func (g *devTier) servedCopy(bs *blockScratch, rows int) (*servedPart, error) {
-	w := bs.p.ResidW()
-	if w != bs.p.NEmbd || rows > bs.rows {
-		return nil, fmt.Errorf("tier: a block output of %d rows of %d apart from x, where the scratch holds %d of %d", rows, w, bs.rows, bs.p.NEmbd)
+	if rows > bs.rows {
+		return nil, fmt.Errorf("tier: a block output of %d rows apart from x, where the scratch holds %d", rows, bs.rows)
 	}
-	return g.servedRowCopy(w, rows)
+	return g.servedRowCopy(bs.p.ResidW(), rows)
 }
 
 // prewarmComposed forms every placed block's part and the head's at
@@ -2579,7 +2573,7 @@ func (g *devTier) prewarmComposedBlock(li int, narrow bool) (roomless string) {
 			}
 			return ""
 		}
-		if !sv.f.inPlace(0, 0) {
+		if sv.f.apart(len(l.graph.Out)) {
 			if _, err := g.servedCopy(bs, 1); err != nil {
 				g.LastErr = "the composed block's copy: " + err.Error()
 			}
@@ -2682,7 +2676,7 @@ func (g *devTier) promptServed(l *layer, li int, bb *blockScratch) bool {
 			}
 			return false
 		}
-		if !sv.f.inPlace(0, 0) {
+		if sv.f.apart(len(l.graph.Out)) {
 			if _, err := g.servedCopy(bb, bb.rows); err != nil {
 				g.LastErr = "the composed prompt block's copy: " + err.Error()
 				return false
@@ -2730,7 +2724,7 @@ func (g *devTier) streamServed(l *layer, li int, bb *blockScratch) bool {
 			}
 			return false
 		}
-		if !sv.f.inPlace(0, 0) {
+		if sv.f.apart(len(l.graph.Out)) {
 			if _, err := g.servedCopy(bb, bb.rows); err != nil {
 				g.LastErr = err.Error()
 				return false
