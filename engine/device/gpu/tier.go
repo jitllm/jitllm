@@ -1221,7 +1221,10 @@ type devShared struct {
 	clk     subClock
 	tickets []uint64
 	quiet   int
-	idle    sync.Cond
+	// alone is a submission running alone with g.mu let go (rowsAlone): none
+	// other starts until it ends.
+	alone int
+	idle  sync.Cond
 	// subCost is the per-block run time of a submission by its row count's
 	// class (subbudget.go). Guarded by mu.
 	subCost map[int]time.Duration
@@ -1338,11 +1341,12 @@ type devShared struct {
 	// of its label.
 	ord int
 	res map[resKey]*resident
-	// actWin is the activation amax window the CPU tier chose; see
-	// nn.JIT.SetDevice. Zero means the default 32. It is copied per device
-	// rather than kept in Config because it is written after Open and read on
-	// the serving path, so it lives under the lock that reads it.
-	actWin int
+	// actWin is the model's activation amax window (model.ActWindow), zero
+	// for the default 32. Every step sets it (shareActWindow), so it is an
+	// atomic: a step must not wait on the device's lock, which a stage over
+	// several sessions' rows holds until it completes, before its own first
+	// stage.
+	actWin atomic.Int32
 	// recCap caches whether sessions can capture: 0 unknown, 1 yes, -1 no.
 	recCap int
 	// servedForms are the forms of the parts the composer serves, by the
@@ -1883,11 +1887,7 @@ func (g *GPU) Pools() []*Pool { return g.pools }
 
 // SetActWindow tells the tier which activation amax window this session uses,
 // so its host-side quantize matches the CPU tier's byte for byte.
-func (g *devTier) SetActWindow(w int) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	g.actWin = w
-}
+func (g *devTier) SetActWindow(w int) { g.actWin.Store(int32(w)) }
 
 // Bytes is what the device's budget has spent, the driver's rounding of every
 // buffer included. The rounding is settled first: a buffer allocated or freed
