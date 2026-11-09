@@ -119,8 +119,9 @@ func TestSPMWordHeapsMatchOneHeap(t *testing.T) {
 			continue
 		}
 		v, err := New(vc)
-		// A score merge only: not byte-level BPE, not Gemma 4's rank merge.
-		if err != nil || v.bpe != nil || v.spmBPE != nil {
+		// A score merge only: not byte-level BPE, not Gemma 4's rank merge,
+		// not WordPiece (an encoder's vocabulary holds no scores).
+		if err != nil || v.bpe != nil || v.spmBPE != nil || v.wpm != nil {
 			continue
 		}
 		checked++
