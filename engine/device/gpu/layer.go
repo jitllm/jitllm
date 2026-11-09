@@ -1508,7 +1508,10 @@ type blockScratch struct {
 	// its offset (x is stream-major), the inputs and the outputs a block of
 	// several streams binds (servedStreams).
 	streams map[int][2][]backend.Buf
-	dRows   backend.Buf
+	// streamsApart is streams with each stream's output a view of h at
+	// x's offset, for a form that writes its streams apart (servedCopy).
+	streamsApart map[int][2][]backend.Buf
+	dRows        backend.Buf
 	// cRows is the composer's recurrent descriptor in the shared form.
 	cRows backend.Buf
 	// gridGraph is a non-causal set's grid table (LayerPlan.GridPlanes), and
@@ -2635,7 +2638,7 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 	}
 	// Every stream, stream-major (altup.go); one stream elsewhere.
 	al(&bs.x, rows*p.ResidW()*4)
-	al(&bs.h, rows*p.NEmbd*4)
+	al(&bs.h, rows*p.ResidW()*4)
 	// The score row a picture's chunks are sized by (visionChunk).
 	bs.sstride = scoreStride(p, rows)
 	bs.arows = rows
@@ -2790,6 +2793,30 @@ func (bs *blockScratch) servedStreams(rows, n int) (in, out []backend.Buf, err e
 		bs.streams = map[int][2][]backend.Buf{}
 	}
 	bs.streams[rows] = [2][]backend.Buf{in, out}
+	return in, out, nil
+}
+
+// servedStreamsApart is servedStreams with each stream's output a view of h
+// at x's offset, for a form that writes a stream before it last reads it:
+// the copy after (servedCopy) moves them over x.
+func (bs *blockScratch) servedStreamsApart(rows, n int) (in, out []backend.Buf, err error) {
+	if v, ok := bs.streamsApart[rows]; ok && len(v[1]) == n {
+		return v[0], v[1], nil
+	}
+	if in, _, err = bs.servedStreams(rows, n); err != nil {
+		return nil, nil, err
+	}
+	w := rows * bs.p.NEmbd * 4
+	out = make([]backend.Buf, n)
+	for k := range out {
+		if out[k], err = backend.View(bs.h, k*w, w); err != nil {
+			return nil, nil, fmt.Errorf("tier: stream %d of a residual of %d rows apart from x: %w", k, rows, err)
+		}
+	}
+	if bs.streamsApart == nil {
+		bs.streamsApart = map[int][2][]backend.Buf{}
+	}
+	bs.streamsApart[rows] = [2][]backend.Buf{in, out}
 	return in, out, nil
 }
 
@@ -4447,7 +4474,11 @@ func (g *devTier) layersSession(s backend.Session) {
 				}
 				if len(l.graph.Out) > 1 {
 					var verr error
-					if in, outs, verr = bs.servedStreams(R, len(l.graph.Out)); verr != nil {
+					streams := bs.servedStreams
+					if cp != nil {
+						streams = bs.servedStreamsApart
+					}
+					if in, outs, verr = streams(R, len(l.graph.Out)); verr != nil {
 						if err == nil {
 							err = verr
 						}
