@@ -144,10 +144,9 @@ func hfLongRopeConsume(c *hfConfig) (*hfLongRope, error) {
 }
 
 // apply writes the factors as the rope_factors_short/long tensors the GGUF
-// carries (convert_hf_to_gguf.py writes the same two vectors) and the
-// magnitude into AttnFactor. The engine turns the short factors -- right below
-// the original context; the long switch is not implemented on either input
-// (model.go). The magnitude is the class's: PhimoeRotaryEmbedding multiplies
+// carries (convert_hf_to_gguf.py writes the same two vectors), the original
+// context the engine keys the long factors on (model.RopeFor), and the
+// magnitude into AttnFactor. The magnitude is the class's: PhimoeRotaryEmbedding multiplies
 // cos and sin by short_mscale, and transformers' LongRoPE by attention_factor,
 // or sqrt(1 + ln(ctx/orig)/ln(orig)) where neither is stated.
 func (lr *hfLongRope) apply(c *hfConfig, cfg *jlm.Config) error {
@@ -159,6 +158,7 @@ func (lr *hfLongRope) apply(c *hfConfig, cfg *jlm.Config) error {
 	if lr.OrigCtx == 0 {
 		return fmt.Errorf("convert: %s: LongRoPE without original_max_position_embeddings", c.path)
 	}
+	cfg.YarnOrigCtx = lr.OrigCtx
 	switch {
 	case lr.ShortScale != nil:
 		cfg.AttnFactor = float32(*lr.ShortScale)

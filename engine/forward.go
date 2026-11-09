@@ -925,7 +925,7 @@ func (s *Instance) SetDeviceLayers(d nn.LayerDevice, max int) error {
 		SWAPeriod: swaPeriodFor(c),
 		// The folded constants the host's rotary kernel reads, so the device
 		// builds its own table and the two tiers agree by construction.
-		RopeTab:    model.RopeTabPlanes(&s.m.Rope, c.NRot),
+		RopeTab:    model.RopeTabPlanes(s.m.RopeFor(s.maxSeq), c.NRot),
 		RopeTabSWA: model.RopeTabPlanes(s.m.RopeSWA, c.LocalNRot()),
 		// The tables as the front end states them, and a multi-axis
 		// rotary's planes, for a device that serves them (front.go).

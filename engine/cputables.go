@@ -65,7 +65,7 @@ func (s *Instance) rotaries() []graph.Rotary {
 // read them: its tower's, or the model's (cpuTablePlanes).
 func (s *Instance) tablePlanes(i int) []float32 {
 	if !s.towered() {
-		return s.m.CpuTablePlanes(i)
+		return s.m.CpuTablePlanes(i, s.maxSeq)
 	}
 	if i == 0 {
 		return s.m.Tower.Planes
