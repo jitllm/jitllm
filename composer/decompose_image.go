@@ -48,6 +48,10 @@ const (
 	// rows a band holds (PicBandRows).
 	RequestPicBand
 	RequestPicBandRows
+	// RequestPicCol is the first source column of a band of columns a
+	// Pillow resize's column pass runs over (graph.PicCols): 0 replaces the
+	// horizontal accumulator, any other adds into it.
+	RequestPicCol
 	// RequestMark is a square's marker row in the head's table plus one, 0
 	// for a square with none (graph.OpMarkRow), and RequestTrail the one
 	// after its rows.
@@ -289,6 +293,10 @@ func decomposePicturePIL(o graph.Op, c *Context) ([]Prim, error) {
 	// sum i the band's source row i / w and output column i % w.
 	var prims []Prim
 	for ch := range 3 {
+		if a.PicColumns {
+			// The row band's horizontal sums are its column bands'.
+			break
+		}
 		var h exprs
 		i, t := h.coord(0), h.coord(1)
 		hu := func(v int) int { return h.u(uint32(v)) }
@@ -297,7 +305,7 @@ func decomposePicturePIL(o graph.Op, c *Context) ([]Prim, error) {
 		sw := h.op(OpMax, U, h.load(1, hu(RequestPicW)), hu(1))
 		srcH := h.op(OpMax, U, h.load(1, hu(RequestPicH)), hu(1))
 		src := r
-		if a.PicPass == graph.PicBand {
+		if a.PicPass == graph.PicBand || a.PicPass == graph.PicCols {
 			src = h.op(OpAdd, U, r, h.load(1, hu(RequestPicBand)))
 		}
 		y := h.op(OpMin, U, src, h.op(OpSub, U, srcH, hu(1)))
@@ -316,6 +324,23 @@ func decomposePicturePIL(o graph.Op, c *Context) ([]Prim, error) {
 			Out: hsum, Combine: OpAdd, Type: I, Expr: h.e, Index: hi.e, Facts: hf})
 	}
 
+	if a.PicPass == graph.PicCols {
+		// The column band's sums added into the horizontal accumulator, the
+		// first column band's replacing what it held; the op's own value is
+		// zeros.
+		n := HC * 3
+		var ac exprs
+		i := ac.coord(0)
+		first := ac.op(OpLess, ir.Pred, ac.load(1, ac.u(RequestPicCol)), ac.u(1))
+		held := ac.sel(I, first, ac.i(0), ac.un(OpBitcast, I, ac.load(2, i)))
+		ac.un(OpBitcast, U, ac.op(OpAdd, I, held, ac.load(0, i)))
+		acc := Prim{Kind: PrimMap, Shape: []int{n}, In: []Operand{hsum, TableRequest.op(), TablePicHAcc.of(accOf(a))}, Expr: ac.e,
+			Facts:  Facts{Extents: map[int]int{0: n, 1: reqWords, 2: n}, Whole: true},
+			Stores: []PrimStore{{Out: TablePicHAccOut.of(accOf(a)), Index: i, Value: len(ac.e) - 1, Extent: n}}}
+		var z exprs
+		z.f(0)
+		return append(prims, acc, Prim{Kind: PrimMap, Shape: sh, Out: c.value(o.Out[0]), Expr: z.e}), nil
+	}
 	vr := trips(func(x *exprs) int { return rowEntry(x, x.op(OpDiv, U, x.coord(0), liveW(x))) })
 	if a.PicPass == graph.PicBand {
 		// A band's pass reads only the taps whose source rows are its own:
@@ -353,11 +378,15 @@ func decomposePicturePIL(o graph.Op, c *Context) ([]Prim, error) {
 		yi = v.op(OpSub, U, yi, v.load(1, vu(RequestPicBand)))
 	}
 	hat := v.op(OpMin, U, v.op(OpAdd, U, v.op(OpMul, U, v.op(OpAdd, U, v.op(OpMul, U, yi, vw), ox), vu(3)), vch), vu(HC*3-1))
-	v.op(OpMul, I, weight(&v, vbase, vt), v.un(OpBitcast, I, finish(&v, v.load(2, hat))))
+	hs, hv := hsum, v.load(2, hat)
+	if a.PicColumns {
+		hs, hv = TablePicHAcc.of(accOf(a)), v.un(OpBitcast, I, hv)
+	}
+	v.op(OpMul, I, weight(&v, vbase, vt), v.un(OpBitcast, I, finish(&v, hv)))
 
 	n := A * 3
 	vext := map[int]int{0: PictureWords, 1: reqWords, 2: HC * 3}
-	vred := Prim{Kind: PrimReduce, Shape: []int{A, 3, K}, In: []Operand{TablePicture.op(), TableRequest.op(), hsum},
+	vred := Prim{Kind: PrimReduce, Shape: []int{A, 3, K}, In: []Operand{TablePicture.op(), TableRequest.op(), hs},
 		Out: vsum, Combine: OpAdd, Type: I, Expr: v.e, Facts: Facts{Extents: vext, Range: vr}}
 	if a.PicPass == graph.PicBand {
 		// The band's sums added into the accumulator, the first band's

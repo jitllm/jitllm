@@ -927,8 +927,16 @@ type Attrs struct {
 	// source rows -- its horizontal sums, and each output's vertical taps
 	// that fall in it added into the accumulator -- and PicFinish the
 	// accumulator made the picture's bytes. A picture taller than PicSide is
-	// its bands in order, then the finish.
+	// its bands in order, then the finish. PicCols is one band of source
+	// columns' horizontal sums over a band of source rows, added into the
+	// horizontal accumulator (the first column band replacing what it held):
+	// a picture whose windows outrun the entries' taps runs each row band's
+	// column bands, then that row band's pass over their sums (PicColumns).
 	PicPass uint8
+	// PicColumns says a band pass reads its horizontal sums from the
+	// horizontal accumulator its column bands (PicCols) added into, rather
+	// than making them.
+	PicColumns bool
 	// PicBF16 says the normalisation is in bfloat16: the sample times
 	// 1/255, less the mean, over the std, each result and the mean and std
 	// rounded to bfloat16 (composer's normalized).
@@ -1082,4 +1090,5 @@ const (
 	PicWhole uint8 = iota
 	PicBand
 	PicFinish
+	PicCols
 )

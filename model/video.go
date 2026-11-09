@@ -216,6 +216,45 @@ func pairKey(f0, f1 image.Image, sq Square) (*RowsKey, error) {
 // (towerClass.Band): a video pair's second frame (frame 1) its own.
 func BandKey(frame int, px uint8) uint8 { return uint8(frame)<<4 | px }
 
+// ColsKey is the band graph a band key's column bands run (graph.PicCols),
+// and ColBandKey the band graph that then reads their sums
+// (graph.Attrs.PicColumns): a picture whose windows outrun its taps runs
+// these in place of the band graph.
+func ColsKey(band uint8) uint8 { return band | 1<<6 }
+
+// ColBandKey is ColsKey's row band.
+func ColBandKey(band uint8) uint8 { return band | 1<<7 }
+
+// ColumnPic is picture op a as its column graphs run it (ColsKey,
+// ColBandKey): their row bands are of at most Taps rows, so their
+// horizontal sums hold that many.
+func ColumnPic(a graph.Attrs) graph.Attrs {
+	a.PicSide = min(a.PicSide, a.Taps)
+	return a
+}
+
+// columnBands adds band graph key's column graphs to bands (ColsKey,
+// ColBandKey).
+func columnBands(bands map[uint8]*graph.Graph, key uint8, f graph.Facts) error {
+	g := bands[key]
+	o := g.Ops[0]
+	for _, c := range []struct {
+		key     uint8
+		pass    uint8
+		columns bool
+	}{{ColsKey(key), graph.PicCols, false}, {ColBandKey(key), graph.PicBand, true}} {
+		a := ColumnPic(o.Attr)
+		a.PicPass, a.PicColumns = c.pass, c.columns
+		b := graph.NewBlock(-1)
+		b.Out(b.Emit(graph.OpPicture, nil, []graph.Result{{Name: g.Values[o.Out[0]].Name, Width: 3}}, nil, a, nil, nil)[0])
+		if err := graph.Verify(b.G, f); err != nil {
+			return err
+		}
+		bands[c.key] = b.G
+	}
+	return nil
+}
+
 // PairKey is the entry a video pair of frames in sample formats px0 and px1
 // takes (TowerGraphs.Videos): every ordered pair of formats is an entry of
 // its own, each frame's picture op reading its own layout.

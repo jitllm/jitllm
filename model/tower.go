@@ -460,6 +460,9 @@ func (m *Model) BuildTowerGraphs() (*TowerGraphs, error) {
 					cl.Band, cl.BandRuns = map[uint8]*graph.Graph{}, map[uint8][]uint8{}
 				}
 				cl.Band[BandKey(0, px)], cl.BandRuns[px] = band, []uint8{BandKey(0, px)}
+				if err := columnBands(cl.Band, BandKey(0, px), dense); err != nil {
+					return nil, fmt.Errorf("model: the tower's entry columns: %w", err)
+				}
 			}
 		}
 		tg.Classes = append(tg.Classes, cl)
@@ -496,6 +499,9 @@ func (m *Model) BuildTowerGraphs() (*TowerGraphs, error) {
 							return nil, fmt.Errorf("model: the tower's video band: %w", err)
 						}
 						cl.Band[BandKey(frame, px)] = b.G
+						if err := columnBands(cl.Band, BandKey(frame, px), dense); err != nil {
+							return nil, fmt.Errorf("model: the tower's video columns: %w", err)
+						}
 					}
 				}
 				for px0 := graph.PixRGBA8; px0 < graph.PixFormats; px0++ {

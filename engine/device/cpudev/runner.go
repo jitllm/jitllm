@@ -57,8 +57,9 @@ type Bound struct {
 	// Pic is the step's picture, its decoded samples' words.
 	Pic []uint32
 	// Acc is a banded resize's accumulator, Acc1 a video pair's second
-	// frame's.
-	Acc, Acc1 []uint32
+	// frame's; HAcc and HAcc1 their horizontal sums over column bands.
+	Acc, Acc1   []uint32
+	HAcc, HAcc1 []uint32
 }
 
 // Resources is what a block's call reads that the caller pages in during
@@ -153,6 +154,8 @@ func (r *Runner) CallOf(b *Bound, f *Form) *Call {
 	a[SrcPicture] = ptr(b.Pic)
 	a[SrcPicAcc] = ptr(b.Acc)
 	a[SrcPicAcc1] = ptr(b.Acc1)
+	a[SrcPicHAcc] = ptr(b.HAcc)
+	a[SrcPicHAcc1] = ptr(b.HAcc1)
 	c.Weights = b.Weights
 	return c
 }
