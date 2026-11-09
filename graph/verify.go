@@ -263,8 +263,10 @@ func Verify(g *Graph, f Facts) error {
 				bad("%s: a picture resampled by chain %d and filter %d (%d taps)", at, a.Chain, a.Filter, a.Taps)
 			case a.Std[0] == 0 || a.Std[1] == 0 || a.Std[2] == 0:
 				bad("%s: a picture normalised by a std of 0", at)
-			case a.PicPass > PicFinish || a.PicPass != PicWhole && a.Chain != ChainPIL:
+			case a.PicPass > PicCols || a.PicPass != PicWhole && a.Chain != ChainPIL:
 				bad("%s: a picture's pass %d by chain %d", at, a.PicPass, a.Chain)
+			case a.PicColumns && a.PicPass != PicBand:
+				bad("%s: a picture's pass %d reading its column bands' sums", at, a.PicPass)
 			}
 		case OpAdd:
 			if len(o.In) != 2 || len(o.Out) != 1 || width(o.In[0]) != width(o.In[1]) || width(o.Out[0]) != width(o.In[0]) {

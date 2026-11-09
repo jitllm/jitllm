@@ -20,6 +20,7 @@ type Tower struct {
 	// band form's own value; Bands counts the band runs.
 	band    []map[uint8]*Form
 	acc     [2][]uint32
+	hacc    [2][]uint32
 	bandOut []float32
 	Bands   int
 	head    *Form
@@ -66,6 +67,7 @@ func NewTower(x *Exec, p TowerPlans, dense Tensors, taps []Tensors) (*Tower, err
 		t.band = append(t.band, forms)
 	}
 	t.acc = [2][]uint32{make([]uint32, p.Acc), make([]uint32, p.Acc)}
+	t.hacc = [2][]uint32{make([]uint32, p.HAcc), make([]uint32, p.HAcc)}
 	t.bandOut = make([]float32, p.BandOut)
 	f, err := x.FormGraph(p.Head)
 	if err != nil {
@@ -102,7 +104,7 @@ func (t *Tower) run(f *Form, li int, w Tensors, n int, req, pos, pic []uint32, i
 		return fmt.Errorf("its weights: %v", why)
 	}
 	b := &t.bound
-	*b = Bound{Li: li, Own: t.x.Device().Own(f), N: n, Req: req, Pos: pos, Pic: pic, Acc: t.acc[0], Acc1: t.acc[1], Weights: ws}
+	*b = Bound{Li: li, Own: t.x.Device().Own(f), N: n, Req: req, Pos: pos, Pic: pic, Acc: t.acc[0], Acc1: t.acc[1], HAcc: t.hacc[0], HAcc1: t.hacc[1], Weights: ws}
 	for i, x := range io {
 		b.IO[i] = unsafe.Pointer(&x[0])
 	}

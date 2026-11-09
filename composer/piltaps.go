@@ -119,30 +119,7 @@ func PILTapsAt(filter uint8, torch bool, in, out, from, n, k int, dst []uint32) 
 	fscale := max(scale, 1)
 	support := pilSupport(filter) * fscale
 	ss := 1 / fscale
-	prec := pilPrecision
-	if torch {
-		// The largest weight over every output of the axis, as torchvision
-		// computes it before it rounds any.
-		most := 0.0
-		for o := range out {
-			center := (float64(o) + 0.5) * scale
-			xmin := max(int(center-support+0.5), 0)
-			xmax := min(int(center+support+0.5), in) - xmin
-			ww := 0.0
-			for x := range xmax {
-				ww += pilFilter(filter, (float64(x+xmin)-center+0.5)*ss)
-			}
-			for x := range xmax {
-				if ww != 0 {
-					most = max(most, pilFilter(filter, (float64(x+xmin)-center+0.5)*ss)/ww)
-				}
-			}
-		}
-		prec = 0
-		for prec < 21 && int(0.5+most*float64(int(1)<<(prec+1))) < 1<<15 {
-			prec++
-		}
-	}
+	prec := pilPrec(filter, torch, in, out)
 	for i := range n {
 		o := from + i
 		center := (float64(o) + 0.5) * scale
@@ -167,13 +144,102 @@ func PILTapsAt(filter uint8, torch bool, in, out, from, n, k int, dst []uint32) 
 			if x < xmax && ww != 0 {
 				v = w(x) / ww
 			}
-			var q int32
-			if v < 0 {
-				q = int32(-0.5 + v*float64(int(1)<<prec))
-			} else {
-				q = int32(0.5 + v*float64(int(1)<<prec))
-			}
-			e[2+x] = uint32(q << (pilPrecision - prec))
+			e[2+x] = pilFixed(v, prec)
 		}
 	}
+}
+
+// PILChunk is PILTapsAt clipped to the source samples lo to hi-1, a band
+// of at most k: each entry's first sample is the later of its window's and
+// lo, its count the window's samples from there below hi (none where the
+// window misses the band), its weights the whole window's, normalised over
+// all of it -- so the bands' sums of an output add to the one pass's, and
+// the 8-bit sample is rounded once, after the last band. Only an entry's
+// counted weights are written: the passes read no other, and a band
+// touches only the outputs whose windows meet it. prec is the side's
+// precision (PILPrec).
+func PILChunk(filter uint8, prec, in, out, from, n, k, lo, hi int, dst []uint32) {
+	scale := float64(in) / float64(out)
+	fscale := max(scale, 1)
+	support := pilSupport(filter) * fscale
+	ss := 1 / fscale
+	for i := range n {
+		o := from + i
+		center := (float64(o) + 0.5) * scale
+		xmin := max(int(center-support+0.5), 0)
+		xmax := min(int(center+support+0.5), in) - xmin
+		if o >= out {
+			xmax = 0
+		}
+		first := max(xmin, lo)
+		count := min(max(min(xmin+xmax, hi)-first, 0), k)
+		e := dst[i*PILEntryWords(k) : (i+1)*PILEntryWords(k)]
+		e[0], e[1] = uint32(first), uint32(count)
+		if count == 0 {
+			continue
+		}
+		w := func(x int) float64 { return pilFilter(filter, (float64(x+xmin)-center+0.5)*ss) }
+		ww := 0.0
+		for x := range xmax {
+			ww += w(x)
+		}
+		for x := range count {
+			v := 0.0
+			if ww != 0 {
+				v = w(first-xmin+x) / ww
+			}
+			e[2+x] = pilFixed(v, prec)
+		}
+	}
+}
+
+// PILPrec is the precision a side of in samples resized to out by filter
+// rounds its weights at: Pillow's, or torchvision's where torch says
+// (PILTapsAt). PILChunk takes it once a side rather than each band.
+func PILPrec(filter uint8, torch bool, in, out int) int { return pilPrec(filter, torch, in, out) }
+
+// pilFixed is weight v in Pillow's fixed point at precision prec, shifted up
+// to Pillow's own.
+func pilFixed(v float64, prec int) uint32 {
+	var q int32
+	if v < 0 {
+		q = int32(-0.5 + v*float64(int(1)<<prec))
+	} else {
+		q = int32(0.5 + v*float64(int(1)<<prec))
+	}
+	return uint32(q << (pilPrecision - prec))
+}
+
+// pilPrec is the precision a side of in samples resized to out rounds its
+// weights at: Pillow's, or torchvision's where torch says (PILTapsAt).
+func pilPrec(filter uint8, torch bool, in, out int) int {
+	scale := float64(in) / float64(out)
+	fscale := max(scale, 1)
+	support := pilSupport(filter) * fscale
+	ss := 1 / fscale
+	prec := pilPrecision
+	if torch {
+		// The largest weight over every output of the axis, as torchvision
+		// computes it before it rounds any.
+		most := 0.0
+		for o := range out {
+			center := (float64(o) + 0.5) * scale
+			xmin := max(int(center-support+0.5), 0)
+			xmax := min(int(center+support+0.5), in) - xmin
+			ww := 0.0
+			for x := range xmax {
+				ww += pilFilter(filter, (float64(x+xmin)-center+0.5)*ss)
+			}
+			for x := range xmax {
+				if ww != 0 {
+					most = max(most, pilFilter(filter, (float64(x+xmin)-center+0.5)*ss)/ww)
+				}
+			}
+		}
+		prec = 0
+		for prec < 21 && int(0.5+most*float64(int(1)<<(prec+1))) < 1<<15 {
+			prec++
+		}
+	}
+	return prec
 }

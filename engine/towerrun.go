@@ -21,7 +21,14 @@ type towerRun struct {
 	// parts is the entry, the head and the taps on the device that runs
 	// them (nn.TowerParts).
 	parts nn.TowerParts
-	s     *Instance
+	// cols says the square squareRequest wrote runs in column bands, its
+	// windows outrunning its taps, and colsPl, colsSq and colsPic are its
+	// picture, square and class's picture op (columnEntry).
+	cols    bool
+	colsPl  model.PictureLayout
+	colsSq  model.Square
+	colsPic graph.Attrs
+	s       *Instance
 	// tok and given are the picture's rows as a prompt's source (prefillSrc).
 	tok   []int32
 	given [1]givenRun
@@ -141,6 +148,7 @@ func (in *Instance) newTowerRun(tg *model.TowerGraphs, base int, t *jlm.Tower) (
 		if band != nil {
 			plans.Acc = max(plans.Acc, cl.Pic.Area()*3)
 			plans.BandOut = max(plans.BandOut, cl.Rows*3)
+			plans.HAcc = max(plans.HAcc, composer.PicHCap(model.ColumnPic(cl.Pic))*3)
 		}
 		plans.Band = append(plans.Band, band)
 	}
@@ -182,6 +190,15 @@ func (tr *towerRun) squareRequest(pl model.PictureLayout, sq model.Square, a gra
 	tr.req[composer.RequestMarkN], tr.req[composer.RequestTrailN] = uint32(sq.MarkN), uint32(sq.TrailN)
 	tr.req[composer.RequestPicOW], tr.req[composer.RequestPicOH] = uint32(sq.Pw), uint32(sq.Ph)
 	tr.req[composer.RequestPicBandRows] = uint32(composer.PicBandRows(a, sq.Pw))
+	// A window wider than the taps on either axis runs in column bands, its
+	// entries written band by band (entry).
+	tr.cols = a.Chain == graph.ChainPIL &&
+		(composer.PILTapCount(a.Filter, pl.W, sq.Ow) > a.Taps || composer.PILTapCount(a.Filter, pl.H, sq.Oh) > a.Taps)
+	if tr.cols {
+		tr.colsPl, tr.colsSq, tr.colsPic, tr.tapsW = pl, sq, a, 0
+		tr.req[composer.RequestPicBandRows] = uint32(min(composer.PicBandRows(model.ColumnPic(a), sq.Pw), a.Taps))
+		return
+	}
 	if a.Chain != graph.ChainPIL || squares == 1 && pl.W == tr.tapsW && pl.H == tr.tapsH {
 		return
 	}
@@ -299,9 +316,6 @@ func (s *Instance) encodePicture(img image.Image, dst, deep []float32) ([]float3
 	if tr.tapsVideo {
 		tr.tapsW, tr.tapsVideo = 0, false
 	}
-	if a := tg.Classes[0].Pic; a.Chain == graph.ChainPIL && (pl.W > composer.PictureMaxSide || pl.H > composer.PictureMaxSide) {
-		return nil, fmt.Errorf("model: a %dx%d picture is past the %d pixels a side a picture holds", pl.W, pl.H, composer.PictureMaxSide)
-	}
 	D := int(m.Container.Vision().ProjDim)
 	if want := tg.PicRows(pl.W, pl.H); len(dst) != want*D || len(deep) != len(tg.Taps)*want*D {
 		return nil, fmt.Errorf("model: %d values and %d for its taps' for a picture's %d rows of %d", len(dst), len(deep), want, D)
@@ -339,11 +353,45 @@ func (s *Instance) encodePicture(img image.Image, dst, deep []float32) ([]float3
 // accumulator, each of its band forms runs in order, then the entry
 // finishing it.
 func (tr *towerRun) entry(runs []uint8, class int, px uint8, words []uint32, n int, rows []float32) error {
+	if tr.cols {
+		return tr.columnEntry(runs, class, px, words, n, rows)
+	}
 	h, side := int(tr.req[composer.RequestPicH]), max(int(tr.req[composer.RequestPicBandRows]), 1)
 	for _, k := range runs {
 		for b := 0; b == 0 || b < h; b += side {
 			tr.req[composer.RequestPicBand] = uint32(b)
 			if err := tr.parts.Band(class, k, words, tr.req, tr.posTab, n); err != nil {
+				return err
+			}
+		}
+	}
+	return tr.parts.Entry(class, px, words, tr.req, tr.posTab, n, rows)
+}
+
+// columnEntry is entry for a picture whose windows outrun its taps
+// (squareRequest): each band of source rows, its row taps clipped to the
+// band, runs its bands of Taps source columns, each with its own share of
+// every output's column taps (composer.PILChunk), their sums added into the
+// horizontal accumulator; then the row band's pass over those sums into the
+// vertical one; then the entry finishes it.
+func (tr *towerRun) columnEntry(runs []uint8, class int, px uint8, words []uint32, n int, rows []float32) error {
+	a, pl, sq := tr.colsPic, tr.colsPl, tr.colsSq
+	K, E := a.Taps, composer.PILEntryWords(a.Taps)
+	side := max(int(tr.req[composer.RequestPicBandRows]), 1)
+	colTaps, rowTaps := tr.req[composer.RequestPicTaps:], tr.req[composer.RequestPicTaps+sq.Pw*E:]
+	colPrec, rowPrec := composer.PILPrec(a.Filter, a.PicTorch, pl.W, sq.Ow), composer.PILPrec(a.Filter, a.PicTorch, pl.H, sq.Oh)
+	for _, k := range runs {
+		for rb := 0; rb < pl.H; rb += side {
+			tr.req[composer.RequestPicBand] = uint32(rb)
+			composer.PILChunk(a.Filter, rowPrec, pl.H, sq.Oh, sq.Y0, sq.Ph, K, rb, min(rb+side, pl.H), rowTaps)
+			for cb := 0; cb < pl.W; cb += K {
+				tr.req[composer.RequestPicCol] = uint32(cb)
+				composer.PILChunk(a.Filter, colPrec, pl.W, sq.Ow, sq.X0, sq.Pw, K, cb, min(cb+K, pl.W), colTaps)
+				if err := tr.parts.Band(class, model.ColsKey(k), words, tr.req, tr.posTab, n); err != nil {
+					return err
+				}
+			}
+			if err := tr.parts.Band(class, model.ColBandKey(k), words, tr.req, tr.posTab, n); err != nil {
 				return err
 			}
 		}
@@ -408,9 +456,6 @@ func (s *Instance) encodePair(f0, f1 image.Image, sq model.Square, dst, deep []f
 	}
 	tg := s.m.Tower
 	a := tg.Videos[sq.Class].Pic
-	if a.Chain == graph.ChainPIL && (pl.W > composer.PictureMaxSide || pl.H > composer.PictureMaxSide) {
-		return fmt.Errorf("model: a video of %dx%d frames is past the %d pixels a side a picture holds", pl.W, pl.H, composer.PictureMaxSide)
-	}
 	if want := tg.SquareOut(sq) * int(s.m.Container.Vision().ProjDim); len(dst) != want {
 		return fmt.Errorf("model: %d values for a video pair's %d", len(dst), want)
 	}

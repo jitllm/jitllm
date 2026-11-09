@@ -114,8 +114,11 @@ type TowerPlans struct {
 	Band    []map[uint8]PartPlan
 	Acc     int
 	BandOut int
-	Head    PartPlan
-	Taps    []PartPlan
+	// HAcc is the words each horizontal accumulator a picture's column
+	// bands add into holds (graph.PicCols).
+	HAcc int
+	Head PartPlan
+	Taps []PartPlan
 	// Chain is a chained tower's blocks' plans in order (jlm.Tower.Chain),
 	// each over its block's own grid, its weights the block's tensors.
 	Chain []PartPlan

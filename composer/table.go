@@ -65,6 +65,11 @@ const (
 	// written.
 	TablePicAcc
 	TablePicAccOut
+	// TablePicHAcc is a Pillow resize's horizontal sums over a band of source
+	// rows, accumulated over its bands of source columns (graph.PicCols), and
+	// TablePicHAccOut the same buffer written.
+	TablePicHAcc
+	TablePicHAccOut
 	numTables
 )
 
@@ -130,6 +135,10 @@ func (t Table) String() string {
 		return "picture.acc"
 	case TablePicAccOut:
 		return "picture.acc.out"
+	case TablePicHAcc:
+		return "picture.hacc"
+	case TablePicHAccOut:
+		return "picture.hacc.out"
 	}
 	return fmt.Sprintf("table%d", t)
 }
@@ -147,6 +156,9 @@ func (o Operand) storage() Operand {
 	}
 	if o.Kind == OperandTable && o.Table == TablePicAccOut {
 		o.Table, o.Name = TablePicAcc, tableLabel(TablePicAcc, o.Instance)
+	}
+	if o.Kind == OperandTable && o.Table == TablePicHAccOut {
+		o.Table, o.Name = TablePicHAcc, tableLabel(TablePicHAcc, o.Instance)
 	}
 	return o
 }

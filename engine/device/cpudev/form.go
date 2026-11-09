@@ -71,6 +71,10 @@ const (
 	// SrcPicAcc1 a video pair's second frame's.
 	SrcPicAcc
 	SrcPicAcc1
+	// SrcPicHAcc is a resize's horizontal sums over its column bands
+	// (composer.TablePicHAcc), SrcPicHAcc1 a video pair's second frame's.
+	SrcPicHAcc
+	SrcPicHAcc1
 	// SrcEntries and SrcEntryPages are the block's entries plane and its
 	// page table: the composer's history-1 keys and pages.
 	SrcEntries
@@ -469,6 +473,11 @@ func BuildForm(h *cpu.Target, gr *graph.Graph, codes []composer.Code, rows int, 
 					ar.src = SrcPicAcc
 					if o.Instance == 1 {
 						ar.src = SrcPicAcc1
+					}
+				case t == composer.TablePicHAcc, t == composer.TablePicHAccOut:
+					ar.src = SrcPicHAcc
+					if o.Instance == 1 {
+						ar.src = SrcPicHAcc1
 					}
 				case t == composer.TableTokens:
 					ar.src, f.Toks = SrcTokens, true
