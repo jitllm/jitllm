@@ -109,15 +109,13 @@ type KVConvPlan struct {
 type TowerPlans struct {
 	Entry []map[uint8]PartPlan
 	// Band is each class's band forms, nil where its resize runs whole
-	// (graph.Attrs.PicPass), and BandRuns the band forms each of its entries
-	// runs first, in order; Acc the words each of the bands' accumulators
+	// (graph.Attrs.PicPass); Acc the words each of the bands' accumulators
 	// holds and BandOut the words a band form's own value takes.
-	Band     []map[uint8]PartPlan
-	BandRuns []map[uint8][]uint8
-	Acc      int
-	BandOut  int
-	Head     PartPlan
-	Taps     []PartPlan
+	Band    []map[uint8]PartPlan
+	Acc     int
+	BandOut int
+	Head    PartPlan
+	Taps    []PartPlan
 	// Chain is a chained tower's blocks' plans in order (jlm.Tower.Chain),
 	// each over its block's own grid, its weights the block's tensors.
 	Chain []PartPlan

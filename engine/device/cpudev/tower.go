@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"unsafe"
 
-	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/nn"
 )
 
@@ -16,12 +15,10 @@ import (
 type Tower struct {
 	x     *Exec
 	entry []map[uint8]*Form
-	// band is each class's band forms (graph.Attrs.PicPass), runs the band
-	// forms each entry runs first, acc the bands' accumulators (a video
-	// pair's second frame the second) and bandOut a band form's own value;
-	// Bands counts the band runs.
+	// band is each class's band forms (graph.Attrs.PicPass), acc the bands'
+	// accumulators (a video pair's second frame the second) and bandOut a
+	// band form's own value; Bands counts the band runs.
 	band    []map[uint8]*Form
-	runs    []map[uint8][]uint8
 	acc     [2][]uint32
 	bandOut []float32
 	Bands   int
@@ -68,7 +65,6 @@ func NewTower(x *Exec, p TowerPlans, dense Tensors, taps []Tensors) (*Tower, err
 		}
 		t.band = append(t.band, forms)
 	}
-	t.runs = p.BandRuns
 	t.acc = [2][]uint32{make([]uint32, p.Acc), make([]uint32, p.Acc)}
 	t.bandOut = make([]float32, p.BandOut)
 	f, err := x.FormGraph(p.Head)
@@ -120,23 +116,22 @@ func (t *Tower) Entry(class int, px uint8, pic, req, pos []uint32, n int, rows [
 	if class < 0 || class >= len(t.entry) || t.entry[class][px] == nil {
 		return fmt.Errorf("the tower's entry has no form for class %d's samples of format %d", class, px)
 	}
-	// A banded resize's source rows a band at a time into the accumulator,
-	// then the entry finishes it.
-	if class < len(t.runs) {
-		h, side := int(req[composer.RequestPicH]), max(int(req[composer.RequestPicBandRows]), 1)
-		for _, k := range t.runs[class][px] {
-			for b := 0; b == 0 || b < h; b += side {
-				req[composer.RequestPicBand] = uint32(b)
-				if err := t.run(t.band[class][k], -1, t.dense, n, req, pos, pic, t.bandOut); err != nil {
-					return fmt.Errorf("the tower's entry band: %w", err)
-				}
-				t.Bands++
-			}
-		}
-	}
 	if err := t.run(t.entry[class][px], -1, t.dense, n, req, pos, pic, rows); err != nil {
 		return fmt.Errorf("the tower's entry: %w", err)
 	}
+	return nil
+}
+
+// Band runs picture class class's band form key over the band req names
+// into its accumulator (nn.TowerParts).
+func (t *Tower) Band(class int, key uint8, pic, req, pos []uint32, n int) error {
+	if class < 0 || class >= len(t.band) || t.band[class][key] == nil {
+		return fmt.Errorf("the tower's entry has no band form %d for class %d", key, class)
+	}
+	if err := t.run(t.band[class][key], -1, t.dense, n, req, pos, pic, t.bandOut); err != nil {
+		return fmt.Errorf("the tower's entry band: %w", err)
+	}
+	t.Bands++
 	return nil
 }
 
