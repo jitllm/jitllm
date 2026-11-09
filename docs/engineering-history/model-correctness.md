@@ -9542,6 +9542,16 @@ picture class's size at placement beside the picture entries. A pair is a
 picture span with its second frame (`Span.Frame`), encoded through the
 tower's blocks and head as a picture's square is.
 
+A pair's frames each read their own layout. `PairWords` once refused a
+pair whose frames decode to different sample layouts (a paletted frame
+beside an RGBA one), both being read in the first frame's. The second
+frame now has its layout words of its own in the request
+(`RequestFrameStride` to `RequestFrameSub`), and the video entry is formed
+for every ordered pair of the four sample formats (`PairKey`): sixteen a
+class in place of four, at placement. `TestAVideoPairMixesLayouts` holds
+the sixteen to the RGBA pair's rows bit for bit, on frames made gray and
+held gray, paletted, YCbCr and RGBA.
+
 On the CPU device with every block of Clef's VL fixture
 (`TestDecisionOverVideoMatchesItsGolden`, box 43): 8.8e-4 from Clef's own
 answers with the CPU's int8 activations, 4.1e-4 with its float forms,

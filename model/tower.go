@@ -460,12 +460,14 @@ func (m *Model) BuildTowerGraphs() (*TowerGraphs, error) {
 		tg.Video = t.Video
 		for i, sd := range sides {
 			cl := towerClass{Entry: map[uint8]*graph.Graph{}, Rows: tg.Classes[i].Rows}
-			for px := graph.PixRGBA8; px < graph.PixFormats; px++ {
-				g, err := videoEntry(t, px, cl.Rows-tg.Lead-tg.Tail, tg.Lead+tg.Tail, sd, dense)
-				if err != nil {
-					return nil, fmt.Errorf("model: the tower's video entry: %w", err)
+			for px0 := graph.PixRGBA8; px0 < graph.PixFormats; px0++ {
+				for px1 := graph.PixRGBA8; px1 < graph.PixFormats; px1++ {
+					g, err := videoEntry(t, px0, px1, cl.Rows-tg.Lead-tg.Tail, tg.Lead+tg.Tail, sd, dense)
+					if err != nil {
+						return nil, fmt.Errorf("model: the tower's video entry: %w", err)
+					}
+					cl.Pic, cl.Entry[PairKey(px0, px1)] = g.Ops[0].Attr, g
 				}
-				cl.Pic, cl.Entry[px] = g.Ops[0].Attr, g
 			}
 			tg.Videos = append(tg.Videos, cl)
 		}
@@ -1763,6 +1765,12 @@ func (l PictureLayout) Request(req []uint32) {
 	req[composer.RequestPicW], req[composer.RequestPicH], req[composer.RequestPicStride] = uint32(l.W), uint32(l.H), uint32(l.stride)
 	req[composer.RequestPicCStride], req[composer.RequestPicP2], req[composer.RequestPicP3] = uint32(l.cstride), uint32(l.p2), uint32(l.p3)
 	req[composer.RequestPicSub] = uint32(l.sub)
+}
+
+// RequestFrame writes the layout's words as a video pair's second frame's.
+func (l PictureLayout) RequestFrame(req []uint32) {
+	req[composer.RequestFrameStride], req[composer.RequestFrameCStride] = uint32(l.stride), uint32(l.cstride)
+	req[composer.RequestFrameP2], req[composer.RequestFrameP3], req[composer.RequestFrameSub] = uint32(l.p2), uint32(l.p3), uint32(l.sub)
 }
 
 // picturePlanes is a decoded picture's layout and the planes the step's

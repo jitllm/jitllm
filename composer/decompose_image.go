@@ -35,6 +35,14 @@ const (
 	// RequestPicFrame is the byte a video's second frame starts at in the
 	// step's picture (graph.Attrs.PicFrame).
 	RequestPicFrame
+	// RequestFrameStride through RequestFrameSub are the second frame's own
+	// layout, as RequestPicStride through RequestPicSub are the first's: a
+	// pair's frames may decode to different layouts.
+	RequestFrameStride
+	RequestFrameCStride
+	RequestFrameP2
+	RequestFrameP3
+	RequestFrameSub
 	// RequestPicBand is the first source row of a band a Pillow resize's
 	// band pass runs over (graph.PicBand).
 	RequestPicBand
@@ -93,7 +101,7 @@ func decomposePicture(o graph.Op, c *Context) ([]Prim, error) {
 	ox := x.op(OpSub, U, x.op(OpRem, U, pix, wd), fx)
 	sw := x.op(OpMax, U, x.load(1, u(RequestPicW)), u(1))
 	sh2 := x.op(OpMax, U, x.load(1, u(RequestPicH)), u(1))
-	stride := x.load(1, u(RequestPicStride))
+	stride := x.load(1, u(picWordsOf(a).stride))
 	// axis is cell's two taps over a source n samples wide into size: the
 	// floor of its centre in integers ((2cell+1)n + size) / 2size - 1, its
 	// fraction in floats, both indices clamped to the source.
@@ -160,12 +168,23 @@ func padded(x *exprs, n, unit int) int {
 	return x.op(OpMul, U, x.op(OpDiv, U, x.op(OpAdd, U, n, x.u(uint32(unit-1))), u), u)
 }
 
+// picWords is the request words a picture op's frame reads its layout
+// from: a video pair's second frame its own (graph.Attrs.PicFrame).
+type picWords struct{ stride, cstride, p2, p3, sub int }
+
+func picWordsOf(a graph.Attrs) picWords {
+	if a.PicFrame {
+		return picWords{RequestFrameStride, RequestFrameCStride, RequestFrameP2, RequestFrameP3, RequestFrameSub}
+	}
+	return picWords{RequestPicStride, RequestPicCStride, RequestPicP2, RequestPicP3, RequestPicSub}
+}
+
 // pictureSample is channel ch of the picture's pixel (y, xx), the byte its
 // format holds or makes (U32): the picture in operand 0, the request in 1,
 // stride its rows' bytes.
 func pictureSample(x *exprs, a graph.Attrs, stride, y, xx, ch int) int {
 	U := ir.U32
-	px := a.Pixels
+	px, pw := a.Pixels, picWordsOf(a)
 	u := func(v int) int { return x.u(uint32(v)) }
 	byteAt := func(off int) int {
 		if a.PicFrame {
@@ -179,9 +198,9 @@ func pictureSample(x *exprs, a graph.Attrs, stride, y, xx, ch int) int {
 	case graph.PixRGBA8:
 		at = x.op(OpAdd, U, x.op(OpAdd, U, x.op(OpMul, U, y, stride), x.op(OpMul, U, xx, u(4))), ch)
 	case graph.PixPaletted8:
-		at = x.op(OpAdd, U, x.op(OpAdd, U, x.load(1, u(RequestPicP2)), x.op(OpMul, U, byteAt(at), u(4))), ch)
+		at = x.op(OpAdd, U, x.op(OpAdd, U, x.load(1, u(pw.p2)), x.op(OpMul, U, byteAt(at), u(4))), ch)
 	case graph.PixYCbCr8:
-		return ycbcr(x, byteAt, at, y, xx, ch)
+		return ycbcr(x, pw, byteAt, at, y, xx, ch)
 	}
 	return byteAt(at)
 }
@@ -247,7 +266,7 @@ func decomposePicturePIL(o graph.Op, c *Context) ([]Prim, error) {
 		y := h.op(OpMin, U, src, h.op(OpSub, U, srcH, hu(1)))
 		base := h.op(OpAdd, U, hu(RequestPicTaps), h.op(OpMul, U, xo, hu(E)))
 		xi := h.op(OpMin, U, h.op(OpAdd, U, h.load(1, base), t), h.op(OpSub, U, sw, hu(1)))
-		stride := h.load(1, hu(RequestPicStride))
+		stride := h.load(1, hu(picWordsOf(a).stride))
 		h.op(OpMul, I, weight(&h, base, t), h.un(OpBitcast, I, pictureSample(&h, a, stride, y, xi, hu(ch))))
 		var hi exprs
 		hi.op(OpAdd, U, hi.op(OpMul, U, hi.op(OpAdd, U, hi.op(OpMul, U, hi.coord(0), hi.u(uint32(a.PicW))), hi.coord(1)), hi.u(3)),
@@ -371,20 +390,20 @@ func decomposePicturePIL(o graph.Op, c *Context) ([]Prim, error) {
 // planes; converted as image/color.YCbCrToRGB does, in integers -- luma
 // times 0x10101 plus the channel's chroma terms, clamped to 24 bits, the top
 // byte.
-func ycbcr(x *exprs, byteAt func(int) int, at, y, xx, ch int) int {
+func ycbcr(x *exprs, pw picWords, byteAt func(int) int, at, y, xx, ch int) int {
 	U, I := ir.U32, ir.I32
 	u := func(v int) int { return x.u(uint32(v)) }
-	s := x.load(1, u(RequestPicSub))
+	s := x.load(1, u(pw.sub))
 	field := func(k int) int { return x.op(OpAnd, U, x.op(OpShr, U, s, u(8*k)), u(255)) }
 	cy := x.op(OpShr, U, x.op(OpAdd, U, y, field(3)), field(1))
 	cx := x.op(OpShr, U, x.op(OpAdd, U, xx, field(2)), field(0))
-	coff := x.op(OpAdd, U, x.op(OpMul, U, cy, x.load(1, u(RequestPicCStride))), cx)
+	coff := x.op(OpAdd, U, x.op(OpMul, U, cy, x.load(1, u(pw.cstride))), cx)
 	yy := x.un(OpBitcast, I, x.op(OpMul, U, byteAt(at), u(0x10101)))
 	chroma := func(plane int) int {
 		b := byteAt(x.op(OpAdd, U, x.load(1, u(plane)), coff))
 		return x.op(OpSub, I, x.un(OpBitcast, I, b), x.i(128))
 	}
-	cb, cr := chroma(RequestPicP2), chroma(RequestPicP3)
+	cb, cr := chroma(pw.p2), chroma(pw.p3)
 	// The channel's two chroma weights: red 0 and 91881, green -22554 and
 	// -46802, blue 116130 and 0 -- each channel YCbCrToRGB's one sum.
 	byChannel := func(r, g, b int32) int {

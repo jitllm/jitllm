@@ -112,10 +112,10 @@ func videoSize(k, w, h int, r []int32) (int, int, error) {
 // frames' rows, grid patch rows and extra rows beside them, for frames at
 // most side pixels a side. The taps reach the deepest shrink the video's
 // bounds allow: a frame of the most frames' share of the area.
-func videoEntry(t *jlm.Tower, px uint8, grid, extra, side int, f graph.Facts) (*graph.Graph, error) {
+func videoEntry(t *jlm.Tower, px0, px1 uint8, grid, extra, side int, f graph.Facts) (*graph.Graph, error) {
 	v := t.Video
 	r := v.Pre[0].Ints
-	a := graph.Attrs{Pixels: px, PicW: side, PicH: side, PicLive: true}
+	a := graph.Attrs{Pixels: px0, PicW: side, PicH: side, PicLive: true}
 	if err := resizeChain(&a, jlm.Filter(r[3])); err != nil {
 		return nil, err
 	}
@@ -132,7 +132,7 @@ func videoEntry(t *jlm.Tower, px uint8, grid, extra, side int, f graph.Facts) (*
 	P := int(v.Entry.Ops[0].Span)
 	b := graph.NewBlock(-1)
 	f0 := b.Emit(graph.OpPicture, nil, []graph.Result{{Name: "frame", Width: 3 * P * P}}, nil, a, nil, nil)[0]
-	a.PicFrame = true
+	a.Pixels, a.PicFrame = px1, true
 	f1 := b.Emit(graph.OpPicture, nil, []graph.Result{{Name: "frame.next", Width: 3 * P * P}}, nil, a, nil, nil)[0]
 	out, err := LowerProgram(b, t, &v.Entry, []graph.ValueID{f0, f1}, grid+extra, f)
 	if err != nil {
@@ -209,44 +209,56 @@ func pairKey(f0, f1 image.Image, sq Square) (*RowsKey, error) {
 	return &k, nil
 }
 
+// PairKey is the entry a video pair of frames in sample formats px0 and px1
+// takes (TowerGraphs.Videos): every ordered pair of formats is an entry of
+// its own, each frame's picture op reading its own layout.
+func PairKey(px0, px1 uint8) uint8 { return px0<<4 | px1 }
+
 // PairWords is a video pair's frames as the step's picture table reads
 // them -- the first frame's planes, then the second's from the word after
-// its last -- their one layout and the byte the second starts at. The
-// frames' palettes are written into ent0 and ent1, the table into pad,
-// which grows to hold it.
-func PairWords(f0, f1 image.Image, pad *[]uint32, ent0, ent1 *[4 * 256]byte) ([]uint32, PictureLayout, int, error) {
+// its last -- each frame's layout and the byte the second starts at. The
+// frames are one size, as the reference stacks them, and may decode to
+// different layouts. The frames' palettes are written into ent0 and ent1,
+// the table into pad, which grows to hold it.
+func PairWords(f0, f1 image.Image, pad *[]uint32, ent0, ent1 *[4 * 256]byte) ([]uint32, PictureLayout, PictureLayout, int, error) {
 	l, p0, err := picturePlanes(f0, ent0)
 	if err != nil {
-		return nil, l, 0, err
+		return nil, l, l, 0, err
 	}
 	l1, p1, err := picturePlanes(f1, ent1)
 	if err != nil {
-		return nil, l, 0, err
+		return nil, l, l1, 0, err
 	}
-	if l != l1 {
-		return nil, l, 0, fmt.Errorf("model: a video's frames are laid out as %+v and %+v; a pair is read in one", l, l1)
+	if l.W != l1.W || l.H != l1.H {
+		return nil, l, l1, 0, fmt.Errorf("model: a video's frames are %dx%d and %dx%d; a pair is one size", l.W, l.H, l1.W, l1.H)
 	}
-	end := len(p0[0])
-	if p0[2] != nil {
-		end = l.p3 + len(p0[2])
-	} else if p0[1] != nil {
-		end = l.p2 + len(p0[1])
+	end := func(l PictureLayout, p [3][]byte) int {
+		switch {
+		case p[2] != nil:
+			return l.p3 + len(p[2])
+		case p[1] != nil:
+			return l.p2 + len(p[1])
+		}
+		return len(p[0])
 	}
-	off := (end + 3) &^ 3
-	n := (off + end + 3) / 4
+	off := (end(l, p0) + 3) &^ 3
+	n := (off + end(l1, p1) + 3) / 4
 	if n > composer.PictureWords {
-		return nil, l, 0, fmt.Errorf("model: a video pair of %d bytes is past the %d the picture table holds", off+end, 4*composer.PictureWords)
+		return nil, l, l1, 0, fmt.Errorf("model: a video pair of %d bytes is past the %d the picture table holds", 4*n, 4*composer.PictureWords)
 	}
 	if cap(*pad) < n {
 		*pad = make([]uint32, n)
 	}
 	words := (*pad)[:n]
 	b := unsafe.Slice((*byte)(unsafe.Pointer(&words[0])), 4*n)
-	for i, p := range [][3][]byte{p0, p1} {
+	for i, f := range [2]struct {
+		l PictureLayout
+		p [3][]byte
+	}{{l, p0}, {l1, p1}} {
 		at := b[i*off:]
-		copy(at, p[0])
-		copy(at[l.p2:], p[1])
-		copy(at[l.p3:], p[2])
+		copy(at, f.p[0])
+		copy(at[f.l.p2:], f.p[1])
+		copy(at[f.l.p3:], f.p[2])
 	}
-	return words, l, off, nil
+	return words, l, l1, off, nil
 }
