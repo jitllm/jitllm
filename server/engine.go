@@ -19,6 +19,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -330,6 +331,16 @@ type LoadedModel struct {
 	// placement the load states, served to every session by pool.
 	inst *engine.Instance
 	pool *engine.Pool
+	// decode is the instances the model's decode groups step on beside inst
+	// (makeDecodeInstances), guarded by decodeMu: of inst's placement, so
+	// groups on several cards each take an instance of their own and overlap
+	// rather than take one in turn. Made when the step loop first groups, nil
+	// until then; served for generation while a grouped round runs
+	// (serveDecode), so a step outside one leases inst and runs every row in
+	// one pass.
+	decodeMu     sync.Mutex
+	decode       []*engine.Instance
+	decodeServed bool
 	// cpu is the CPU device the model's instances run on, and io the options
 	// every instance of it is made with (WithCPU(cpu) among them).
 	cpu *cpudev.CPU
@@ -821,6 +832,117 @@ func (e *Engine) makeInstance(lm *LoadedModel) error {
 	return nil
 }
 
+// makeDecodeInstances composes the instances the model's decode groups step
+// on, n in all with inst, when the step loop first groups its decoding rows:
+// each made with the model's options (its placement among them) and its
+// blocks moved where inst's are now, then served for generation. The tier
+// owns the weights and a session its history, so an instance more is its
+// composition, made here and not in a step, and its step scratch; a session
+// leasing one or another moves nothing between instances of one placement.
+func (e *Engine) makeDecodeInstances(lm *LoadedModel, n int) error {
+	lm.decodeMu.Lock()
+	defer lm.decodeMu.Unlock()
+	if len(lm.decode) >= n {
+		return nil
+	}
+	var at []string
+	lm.inst.With(func(in *engine.Instance) { at = in.Locations() })
+	for len(lm.decode) < n {
+		in, err := engine.NewInstance(lm.m, e.defaultMaxSeq(lm), lm.io...)
+		if err != nil {
+			return err
+		}
+		if dev := lm.device(); dev != nil {
+			max := lm.maxBlocks
+			if max == 0 {
+				max = -1
+			}
+			if err := in.SetDeviceLayers(dev, max); err != nil {
+				in.Close()
+				return err
+			}
+		}
+		var merr error
+		in.Place(func(in *engine.Instance) {
+			for li, to := range in.Locations() {
+				if li < len(at) && to != at[li] && merr == nil {
+					_, merr = in.MoveBlocks(li, li+1, at[li])
+				}
+			}
+		})
+		if merr != nil {
+			in.Close()
+			return merr
+		}
+		lm.decode = append(lm.decode, in)
+		e.applyPageBudget(lm, in)
+	}
+	return nil
+}
+
+// serveDecode serves the decode instances for generation (on) or takes them
+// back from the pool, which refuses while a session still leases one: they
+// stay served until the next round's end finds them free.
+func (lm *LoadedModel) serveDecode(on bool) error {
+	lm.decodeMu.Lock()
+	defer lm.decodeMu.Unlock()
+	if lm.decodeServed == on {
+		return nil
+	}
+	for i, in := range lm.decode {
+		if on {
+			if err := lm.pool.Serve(in, math.MaxInt32, engine.PhaseGenerate); err != nil {
+				for _, x := range lm.decode[:i] {
+					lm.pool.Unserve(x)
+				}
+				return err
+			}
+			continue
+		}
+		if err := lm.pool.Unserve(in); err != nil {
+			for _, x := range lm.decode[:i] {
+				lm.pool.Serve(x, math.MaxInt32, engine.PhaseGenerate)
+			}
+			return err
+		}
+	}
+	lm.decodeServed = on
+	return nil
+}
+
+// isDecode reports whether in is one of the model's decode instances.
+func (lm *LoadedModel) isDecode(in *engine.Instance) bool {
+	lm.decodeMu.Lock()
+	defer lm.decodeMu.Unlock()
+	return slices.Contains(lm.decode, in)
+}
+
+// instances is every instance of the model's: inst, then its decode groups'.
+func (lm *LoadedModel) instances() []*engine.Instance {
+	lm.decodeMu.Lock()
+	defer lm.decodeMu.Unlock()
+	return append([]*engine.Instance{lm.inst}, lm.decode...)
+}
+
+// placeAll runs f on in under Place, then on every other instance of the
+// model's, mirror true: a placement is the model's, so the instances a
+// session may lease hold one, and a session leasing one or another moves
+// nothing. A caller reads what f found only where mirror is false.
+func (lm *LoadedModel) placeAll(in *engine.Instance, f func(in *engine.Instance, mirror bool)) error {
+	if err := in.Place(func(in *engine.Instance) { f(in, false) }); err != nil {
+		return err
+	}
+	for _, x := range lm.instances() {
+		if x == in {
+			continue
+		}
+		if err := x.Place(func(x *engine.Instance) { f(x, true) }); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // tierOptions are the options every tier of this server opens with, whether it
 // opens (openTier) or takes a device later (attachDevice).
 func (e *Engine) tierOptions(sessions int, tierConfig func(*gpu.Config), hostBudget uint64) []gpu.Option {
@@ -1235,7 +1357,7 @@ func (e *Engine) CreateSession(o SessionOptions) (*Session, error) {
 	// Placement is the instance's: a session's placement options move it, and
 	// every session leasing it with it.
 	if o.MaxDeviceBlocks != 0 || o.Relocate || o.KeepOffCpu {
-		lm.inst.With(func(in *engine.Instance) {
+		lm.placeAll(lm.inst, func(in *engine.Instance, _ bool) {
 			if o.MaxDeviceBlocks > 0 && tierDev != nil {
 				in.SetGPULayers(o.MaxDeviceBlocks)
 			}
@@ -2578,7 +2700,11 @@ func (s *Session) Inspect(f func(st *engine.Instance)) {
 func (e *Engine) SetDeviceBlocks(s *Session, n int) int {
 	s.mu.Lock()
 	var got int
-	if err := s.in().Place(func(in *engine.Instance) { got = in.SetGPULayers(n) }); err != nil {
+	if err := s.lm.placeAll(s.in(), func(in *engine.Instance, mirror bool) {
+		if n := in.SetGPULayers(n); !mirror {
+			got = n
+		}
+	}); err != nil {
 		got = s.in().GPULayers()
 	}
 	s.refresh()
@@ -2650,8 +2776,18 @@ func (s *Session) serveMove(final bool) {
 	}
 	var mv engine.BlockMove
 	var err error
-	if berr := s.in().Bind(s.ms, func(*engine.Instance) { mv, err = r.pm.Commit() }); berr != nil {
+	in := s.in()
+	if berr := in.Bind(s.ms, func(*engine.Instance) { mv, err = r.pm.Commit() }); berr != nil {
 		err = berr
+	}
+	if err == nil {
+		// The model's other instances take the same move, so every
+		// instance a session may lease holds one placement.
+		for _, x := range s.lm.instances() {
+			if x != in {
+				x.Place(func(x *engine.Instance) { x.MoveBlocks(r.first, r.last+1, r.to) })
+			}
+		}
 	}
 	s.refresh()
 	s.finishMove(r, moveRes{mv, err})
@@ -2771,14 +2907,18 @@ func (e *Engine) bindSessionLocked(s *Session) error {
 		if s.lm.instDev == dev {
 			return
 		}
-		prev := in.GPULayers()
-		if err = in.SetDeviceLayers(dev, 0); err != nil {
+		if err = placeOn(in, dev); err != nil {
 			return
 		}
-		s.lm.instDev = dev
-		if prev > 0 {
-			in.SetGPULayers(prev)
+		for _, x := range s.lm.instances()[1:] {
+			if perr := x.Place(func(x *engine.Instance) { err = placeOn(x, dev) }); perr != nil && err == nil {
+				err = perr
+			}
+			if err != nil {
+				return
+			}
 		}
+		s.lm.instDev = dev
 	})
 	if err == nil {
 		err = ierr
@@ -2788,6 +2928,18 @@ func (e *Engine) bindSessionLocked(s *Session) error {
 	}
 	s.tier.Store(&tierBox{dev})
 	s.refresh()
+	return nil
+}
+
+// placeOn places in's blocks on dev, as many as it held on its last device.
+func placeOn(in *engine.Instance, dev nn.LayerDevice) error {
+	prev := in.GPULayers()
+	if err := in.SetDeviceLayers(dev, 0); err != nil {
+		return err
+	}
+	if prev > 0 {
+		in.SetGPULayers(prev)
+	}
 	return nil
 }
 
@@ -2938,7 +3090,7 @@ func (e *Engine) applyPageBudget(lm *LoadedModel, newest *engine.Instance) {
 		return // every block is on a device for every session; nothing faults here
 	}
 	if lm.inst != nil {
-		lm.inst.With(func(in *engine.Instance) { in.SetPageBudget(pagerBudget(avail)) })
+		lm.placeAll(lm.inst, func(in *engine.Instance, _ bool) { in.SetPageBudget(pagerBudget(avail)) })
 	}
 }
 

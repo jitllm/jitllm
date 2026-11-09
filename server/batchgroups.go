@@ -170,6 +170,53 @@ func (s *Session) movePending() bool {
 	return s.move != nil
 }
 
+// dealByLease deals the decoding rows into groups gs: by the instance each
+// row's session leases for generation, an instance a group, the model's
+// decode groups served instances of their own (makeDecodeInstances, one a
+// group, made the first time the loop groups), so each group steps an
+// instance no other group takes; round robin over the one instance where they
+// could not be made. A row still leasing the model's own instance, or one
+// whose instance holds more than its share of the rows, leases again: the
+// pool gives it the decode instance with the fewest leases.
+func (lp *stepLoop) dealByLease(gs []*decGroup) {
+	n := len(gs)
+	err := lp.e.makeDecodeInstances(lp.lm, n)
+	if err == nil {
+		err = lp.lm.serveDecode(true)
+	}
+	if err != nil {
+		for i, r := range lp.rows {
+			gs[i%n].rows = append(gs[i%n].rows, r)
+		}
+		return
+	}
+	share := (len(lp.rows) + n - 1) / n
+	clear(lp.groupOf)
+	clear(lp.perInst)
+	for _, r := range lp.rows {
+		if l := r.s.ms.Lease(); l != nil && l.Phase == engine.PhaseGenerate {
+			lp.perInst[l.Instance]++
+		}
+	}
+	for i, r := range lp.rows {
+		k := i % n
+		if l := r.s.ms.Lease(); l != nil && l.Phase == engine.PhaseGenerate && (l.Instance == lp.lm.inst || lp.perInst[l.Instance] > share) {
+			lp.perInst[l.Instance]--
+			r.s.ms.Release()
+		}
+		if r.s.ms.Acquire(lp.ctx, engine.PhaseGenerate) == nil {
+			in := r.s.ms.Lease().Instance
+			g, ok := lp.groupOf[in]
+			if !ok {
+				g = len(lp.groupOf) % n
+				lp.groupOf[in] = g
+			}
+			k = g
+		}
+		gs[k].rows = append(gs[k].rows, r)
+	}
+}
+
 // decodeGrouped deals the decoding rows round robin into n groups and steps
 // each on its own until something ends grouped decoding, or each took limit
 // steps (0 for no limit), then lets every group land.
@@ -186,9 +233,7 @@ func (lp *stepLoop) decodeGrouped(n, limit int) {
 	for _, g := range gs {
 		g.rows = g.rows[:0]
 	}
-	for i, r := range lp.rows {
-		gs[i%n].rows = append(gs[i%n].rows, r)
-	}
+	lp.dealByLease(gs)
 	lp.stats.groupRounds.Add(1)
 	busy, drain := 0, false
 	for _, g := range gs {
@@ -223,6 +268,19 @@ func (lp *stepLoop) decodeGrouped(n, limit int) {
 		clear(g.rows)
 		g.rows = g.rows[:0]
 	}
+	lp.endDecodeGroups()
+}
+
+// endDecodeGroups hands back every decoding row's lease on a decode
+// instance and takes the decode instances back from the pool: a step after
+// the round leases the model's own instance, every row in one pass.
+func (lp *stepLoop) endDecodeGroups() {
+	for _, r := range lp.rows {
+		if l := r.s.ms.Lease(); l != nil && lp.lm.isDecode(l.Instance) {
+			r.s.ms.Release()
+		}
+	}
+	lp.lm.serveDecode(false)
 }
 
 // launch samples g's rows' next tokens, retiring those that end here, and

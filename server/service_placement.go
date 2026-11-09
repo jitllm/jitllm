@@ -68,7 +68,7 @@ func (s *PlacementService) SetPlacement(ctx context.Context, req *connect.Reques
 	start := time.Now()
 	sess.mu.Lock()
 	var perr error
-	ierr := sess.in().Place(func(st *engine.Instance) {
+	ierr := sess.lm.placeAll(sess.in(), func(st *engine.Instance, mirror bool) {
 		if len(want) == 0 {
 			// Everything on the CPU.
 			st.SetGPULayers(0)
@@ -78,7 +78,10 @@ func (s *PlacementService) SetPlacement(ctx context.Context, req *connect.Reques
 				max = int(*m.MaxDeviceBlocks)
 			}
 			if max < 0 {
-				if perr = st.SetDeviceLayers(sess.lm.device(), -1); perr != nil {
+				if err := st.SetDeviceLayers(sess.lm.device(), -1); err != nil {
+					if !mirror {
+						perr = err
+					}
 					return
 				}
 			} else {
@@ -144,7 +147,11 @@ func (s *PlacementService) RelocateBlocks(ctx context.Context, req *connect.Requ
 	start := time.Now()
 	sess.mu.Lock()
 	var mv engine.BlockMove
-	if perr := sess.in().Place(func(st *engine.Instance) { mv, err = st.MoveBlocks(first, last+1, to) }); perr != nil {
+	if perr := sess.lm.placeAll(sess.in(), func(st *engine.Instance, mirror bool) {
+		if m, e := st.MoveBlocks(first, last+1, to); !mirror {
+			mv, err = m, e
+		}
+	}); perr != nil {
 		err = perr
 	}
 	sess.refresh()
@@ -184,7 +191,7 @@ func (s *PlacementService) SetRelocation(ctx context.Context, req *connect.Reque
 		return nil, connectErr(err)
 	}
 	sess.mu.Lock()
-	sess.in().With(func(st *engine.Instance) { st.SetRelocate(req.Msg.Enabled) })
+	sess.lm.placeAll(sess.in(), func(st *engine.Instance, _ bool) { st.SetRelocate(req.Msg.Enabled) })
 	sess.refresh()
 	sess.mu.Unlock()
 	return connect.NewResponse(&v1.SetRelocationResponse{Enabled: req.Msg.Enabled}), nil

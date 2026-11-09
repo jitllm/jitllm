@@ -142,6 +142,12 @@ type stepLoop struct {
 	// nanoseconds, that bound the quantum from below (stepLoop.quantum).
 	parkNs, resumeNs, stepNs float64
 
+	// groupOf is the group a decoding row's leased instance steps in, while
+	// the model serves decode groups instances of their own (dealByLease).
+	groupOf map[*engine.Instance]int
+	// perInst counts the decoding rows each instance holds while dealByLease
+	// deals them.
+	perInst map[*engine.Instance]int
 	// groupsCfg is Config.DecodeGroups; groups the decode groups' long-lived
 	// workers, made as a model first needs them, and landed where each tells
 	// the loop its step is done (batchgroups.go); refusedGroups those whose
@@ -240,6 +246,8 @@ func newStepLoop(e *Engine, lm *LoadedModel) *stepLoop {
 		budget:      newStepBudget(e.cfg.StepPromptTokens, e.cfg.PromptChunk, e.cfg.StepCost),
 		fair:        fairLevel(e.cfg.Fairness),
 		groupsCfg:   e.cfg.DecodeGroups,
+		groupOf:     map[*engine.Instance]int{},
+		perInst:     map[*engine.Instance]int{},
 		ctx:         ctx,
 		quit:        quit,
 		done:        make(chan struct{}),
