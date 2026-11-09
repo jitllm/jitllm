@@ -525,13 +525,14 @@ func (b *binder86) lives() {
 			if len(open) > 0 {
 				at = open[len(open)-1]
 			}
-			for _, a := range k.Operands(&nd) {
-				use(*a, pos, at)
+			var buf, xbuf [3]int
+			for _, a := range k.args(e.I, &buf) {
+				use(a, pos, at)
 				// A load its reader takes as a memory operand reads its
 				// index where the reader runs, not where the load sits.
-				if x := &k.Nodes[*a]; x.Op == OpLoad && x.Mem {
-					for _, ix := range k.Operands(x) {
-						use(*ix, pos, at)
+				if x := &k.Nodes[a]; x.Op == OpLoad && x.Mem {
+					for _, ix := range k.args(a, &xbuf) {
+						use(ix, pos, at)
 					}
 				}
 			}
@@ -1621,13 +1622,14 @@ func (b *binder86) vectors() error {
 	// reads its last step, which its register holds.
 	reads, hr := map[int]int{}, k.homesNow()
 	within := func(at, f int) bool { return at >= 0 && k.Nodes[f].Op == OpFold && k.within(at, k.Nodes[f].At) }
+	var buf [3]int
 	for j := range k.Nodes {
 		if k.Nodes[j].Op == OpFold || j >= len(hr) {
 			continue
 		}
-		for _, a := range k.Operands(&k.Nodes[j]) {
-			if within(hr[j], *a) {
-				reads[*a]++
+		for _, a := range k.args(j, &buf) {
+			if within(hr[j], a) {
+				reads[a]++
 			}
 		}
 	}
@@ -2333,7 +2335,11 @@ func (k *Kernel) chains() map[int]int {
 // reads it, rather than once before the loops: the constant read first in
 // its loops' trips. False where none is left to move.
 func (k *Kernel) rematerialize(moved map[int]bool) bool {
-	pos := map[int]int{}
+	// pos is each node's place in the sequence, -1 for none.
+	pos := make([]int, len(k.Nodes))
+	for i := range pos {
+		pos[i] = -1
+	}
 	for p, e := range k.Seq {
 		if e.Kind == EntryNode {
 			pos[e.I] = p
@@ -2344,18 +2350,20 @@ func (k *Kernel) rematerialize(moved map[int]bool) bool {
 	// the node through, made once: asked of every candidate, a scan of the
 	// kernel each made a rematerialization quadratic in its nodes.
 	readers := make([][]int, len(k.Nodes))
-	for j, x := range k.Nodes {
-		if _, in := pos[j]; !in {
+	var buf [3]int
+	for j := range k.Nodes {
+		if pos[j] < 0 {
 			continue
 		}
-		for _, a := range k.Operands(&x) {
-			readers[*a] = append(readers[*a], j)
+		for _, a := range k.args(j, &buf) {
+			readers[a] = append(readers[a], j)
 		}
 	}
 	pick := func(outside bool) int {
 		best, at := -1, -1
 		for i, nd := range k.Nodes {
-			p, in := pos[i]
+			p := pos[i]
+			in := p >= 0
 			if o := k.Bufs[nd.Buf].Operand.Kind; !in || moved[i] || nd.Op != OpLoad || o != OperandConsts && k.Bufs[nd.Buf].Words == nil || hs[i] >= 0 {
 				continue
 			}
@@ -2402,26 +2410,35 @@ func (k *Kernel) sink(sunk map[int]bool) bool {
 			return false
 		}
 	}
-	pos := map[int]int{}
+	// pos is each node's place in the sequence (-1 for none) and readers
+	// the sequenced nodes reading it (-1 a store): slices a node each, as
+	// the binding steps through every sink.
+	pos := make([]int, len(k.Nodes))
+	for i := range pos {
+		pos[i] = -1
+	}
 	for p, e := range k.Seq {
 		if e.Kind == EntryNode {
 			pos[e.I] = p
 		}
 	}
-	readers := map[int][]int{}
+	readers := make([][]int, len(k.Nodes))
+	var buf [3]int
 	for j := range k.Nodes {
-		if _, in := pos[j]; !in {
+		if pos[j] < 0 {
 			continue
 		}
-		for _, a := range k.Operands(&k.Nodes[j]) {
-			if _, in := pos[*a]; in && !slices.Contains(readers[*a], j) {
-				readers[*a] = append(readers[*a], j)
+		for _, a := range k.args(j, &buf) {
+			if a >= 0 && a < len(pos) && pos[a] >= 0 && !slices.Contains(readers[a], j) {
+				readers[a] = append(readers[a], j)
 			}
 		}
 	}
 	for i := range k.Stores {
 		for _, a := range k.storeArgs(&k.Stores[i]) {
-			readers[*a] = append(readers[*a], -1)
+			if *a >= 0 && *a < len(readers) {
+				readers[*a] = append(readers[*a], -1)
+			}
 		}
 	}
 	straight := func(from, to int) bool {
@@ -2467,10 +2484,10 @@ func (k *Kernel) sink(sunk map[int]bool) bool {
 		for i := range group {
 			for _, a := range k.Operands(&k.Nodes[i]) {
 				x := *a
-				if group[x] || !movable(x) || pos[x] >= to {
+				if x < 0 || x >= len(pos) || group[x] || !movable(x) || pos[x] >= to {
 					continue
 				}
-				if _, in := pos[x]; !in || !straight(pos[x], pos[best]) {
+				if pos[x] < 0 || !straight(pos[x], pos[best]) {
 					continue
 				}
 				only := true
@@ -2830,14 +2847,14 @@ func (k *Kernel) operandUses() []bool {
 		return m.uses
 	}
 	uses := make([]bool, len(k.Nodes))
+	var buf [3]int
 	for j := range k.Nodes {
-		nd := k.Nodes[j]
-		if nd.Op == OpFold {
+		if k.Nodes[j].Op == OpFold {
 			continue
 		}
-		for _, a := range k.Operands(&nd) {
-			if *a != j && *a >= 0 && *a < len(uses) {
-				uses[*a] = true
+		for _, a := range k.args(j, &buf) {
+			if a != j && a >= 0 && a < len(uses) {
+				uses[a] = true
 			}
 		}
 	}
