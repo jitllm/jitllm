@@ -591,7 +591,9 @@ func (ts *Instance) chainRun(tr *towerRun, tg *model.TowerGraphs, words []uint32
 		out := tr.act[(i+1)%2][:o.Rows*o.Width]
 		if dev := tr.chainDev(i); dev != nil {
 			n := g.Values[g.In[0]].Rows
-			if !dev.RunRows(tr.chainParts[i], n, tr.req, tr.posTab[:n+1], cur, out) {
+			// A block reads the request's words before the picture op's
+			// taps, which only the entry reads.
+			if !dev.RunRows(tr.chainParts[i], n, tr.req[:composer.RequestPicTaps], tr.posTab[:n+1], cur, out) {
 				return fmt.Errorf("the tower's block %d did not run on its device", i)
 			}
 		} else {
