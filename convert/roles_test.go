@@ -45,7 +45,7 @@ func TestEveryTensorHasARole(t *testing.T) {
 			continue
 		}
 		files++
-		_, cfgErr := configOf(f)
+		cfg, cfgErr := configOf(f)
 		// configOf cannot read a bare mmproj (no text config), and the clip
 		// override must not swallow a real refusal: an unimplemented projector
 		// is a scope decision (ErrNotImplemented), not a missing role.
@@ -65,10 +65,10 @@ func TestEveryTensorHasARole(t *testing.T) {
 				n = r
 			}
 			tensors++
-			// Qwen3.5's and Qwen3.8-Flash-Next's split gates never reach the
-			// name table: sourceOf fuses them into ssm_ba first
+			// A split beta and alpha never reach the name table: sourceOf
+			// fuses them into ssm_ba first, by the config's architecture
 			// (fuseBetaAlpha, gated by its own test).
-			if (f.Arch() == "qwen35" || f.Arch() == "qwen35moe" || f.Arch() == "qwen4exp") && splitBetaAlpha(n) {
+			if cfgErr == nil && (cfg.Arch == jlm.ArchQwen3Next || cfg.Arch == jlm.ArchQwen4Exp) && splitBetaAlpha(n) {
 				continue
 			}
 			// A tower's tensors are named as conversion names them
