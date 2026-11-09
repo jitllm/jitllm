@@ -14,6 +14,9 @@ type Embedder struct {
 	m      *model.Model
 	st     *Instance
 	pooled []float32
+	// max is the tokens an embedder on a session's lease embeds at most
+	// (EmbedderFor), 0 for one with an instance of its own.
+	max int
 	// skipDense reads the vector out before any projection head, matching
 	// llama.cpp on a GGUF converted without the dense modules. Tests only.
 	skipDense bool
@@ -34,11 +37,36 @@ func NewEmbedder(m *model.Model, opts ...Option) (*Embedder, error) {
 	return &Embedder{m: m, st: st, pooled: make([]float32, st.poolWidth())}, nil
 }
 
+// EmbedderFor is an embedder of m that runs on the instance a session's
+// lease hands it (Use) rather than an instance of its own: it composes
+// nothing. It embeds at most model.EmbedMaxSeq tokens, or the model's
+// context where that is less.
+func EmbedderFor(m *model.Model) (*Embedder, error) {
+	if !m.IsEmbedding() {
+		return nil, fmt.Errorf("model: %s is not an embedding model (its container sets no pooling)", m.Cfg.Arch)
+	}
+	return &Embedder{m: m, max: min(m.Cfg.NCtx, model.EmbedMaxSeq)}, nil
+}
+
+// Use points the embedder at instance in, a lease of its session's
+// (Session.Run).
+func (e *Embedder) Use(in *Instance) {
+	e.st = in
+	if w := in.poolWidth(); len(e.pooled) != w {
+		e.pooled = make([]float32, w)
+	}
+}
+
 // Close releases the embedder's session.
 func (e *Embedder) Close() { e.st.Close() }
 
 // MaxTokens is the longest sequence Embed takes: the session's context.
-func (e *Embedder) MaxTokens() int { return e.st.maxSeq }
+func (e *Embedder) MaxTokens() int {
+	if e.max > 0 {
+		return e.max
+	}
+	return e.st.maxSeq
+}
 
 // EmbedText tokenizes text the way the model's own tokenizer does -- the
 // special tokens it adds, and for a last-token pooled model the EOS it pools

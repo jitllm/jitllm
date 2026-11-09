@@ -107,7 +107,7 @@ func (e *Engine) Embed(ctx context.Context, o EmbedOptions) (*EmbedResult, error
 		return nil, err
 	}
 	defer lm.giveEmbedder(emb)
-	if limit := emb.MaxTokens(); limit > 0 {
+	if limit := emb.e.MaxTokens(); limit > 0 {
 		for i, ids := range seqs {
 			if len(ids) > limit {
 				return nil, fmt.Errorf("%w: input %d is %d tokens and model %q embeds at most %d; "+
@@ -130,7 +130,7 @@ func (e *Engine) Embed(ctx context.Context, o EmbedOptions) (*EmbedResult, error
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		v, err := emb.Embed(ids)
+		v, err := emb.embed(ctx, ids)
 		if err != nil {
 			return nil, err
 		}
@@ -143,19 +143,45 @@ func (e *Engine) Embed(ctx context.Context, o EmbedOptions) (*EmbedResult, error
 	return res, nil
 }
 
-// embedders is a model's idle embedders. An Embedder is one sequence at a time
-// and owns a worker pool (an encoder) or a session (a decoder), so it is built
-// once and reused. Nothing bounds how many run at once: each concurrent request
-// takes one (building it when the list is empty), so the list grows to the
-// highest concurrency the model has seen and keeps that many idle.
+// embedder is an Embedder and the session it embeds through: a history on
+// the model's instance, which each input leases (Session.Run), so an
+// embedder composes nothing.
+type embedder struct {
+	ms *engine.Session
+	e  *engine.Embedder
+}
+
+func (x *embedder) close() { x.ms.Close() }
+
+// embed is ids' vector, embedded on a lease of x's session: x's own slice,
+// which its next call overwrites.
+func (x *embedder) embed(ctx context.Context, ids []int32) ([]float32, error) {
+	var v []float32
+	var embedded error
+	err := x.ms.Run(ctx, engine.PhasePrefill, func(in *engine.Instance) error {
+		x.e.Use(in)
+		v, embedded = x.e.Embed(ids)
+		return embedded
+	})
+	if embedded != nil {
+		return nil, embedded
+	}
+	return v, err
+}
+
+// embedders is a model's idle embedders. An embedder is one sequence at a
+// time, so it is kept and reused. Nothing bounds how many run at once: each
+// concurrent request takes one (opening it when the list is empty), so the
+// list grows to the highest concurrency the model has seen and keeps that
+// many idle.
 type embedders struct {
-	free   []*engine.Embedder
+	free   []*embedder
 	busy   int
 	closed bool
 	idle   chan struct{} // closed when busy reaches zero after close
 }
 
-func (lm *LoadedModel) takeEmbedder() (*engine.Embedder, error) {
+func (lm *LoadedModel) takeEmbedder() (*embedder, error) {
 	lm.embMu.Lock()
 	if lm.emb.closed {
 		lm.embMu.Unlock()
@@ -169,32 +195,31 @@ func (lm *LoadedModel) takeEmbedder() (*engine.Embedder, error) {
 		return x, nil
 	}
 	lm.embMu.Unlock()
-	x, err := engine.NewEmbedder(lm.m, lm.io...)
+	e, err := engine.EmbedderFor(lm.m)
 	if err != nil {
 		lm.giveEmbedder(nil)
 		return nil, err
 	}
-	// Its blocks go where a session's would, through its Instance.
-	if lm.device() != nil {
-		if err := x.SetDeviceLayers(lm.device(), lm.deviceBlocks()); err != nil {
-			x.Close()
-			lm.giveEmbedder(nil)
-			return nil, err
-		}
+	lm.attachMu.RLock()
+	ms, err := lm.pool.NewSession(e.MaxTokens())
+	lm.attachMu.RUnlock()
+	if err != nil {
+		lm.giveEmbedder(nil)
+		return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
 	}
-	return x, nil
+	return &embedder{ms: ms, e: e}, nil
 }
 
 // giveEmbedder returns an embedder to the free list, or closes it when the
 // model is being unloaded -- before the model, which is the order the engine
 // requires of everything holding a Instance.
-func (lm *LoadedModel) giveEmbedder(x *engine.Embedder) {
+func (lm *LoadedModel) giveEmbedder(x *embedder) {
 	lm.embMu.Lock()
 	defer lm.embMu.Unlock()
 	lm.emb.busy--
 	if lm.emb.closed {
 		if x != nil {
-			x.Close()
+			x.close()
 		}
 		if lm.emb.busy == 0 {
 			close(lm.emb.idle)
@@ -222,18 +247,9 @@ func (lm *LoadedModel) closeEmbedders() {
 	idle := lm.emb.idle
 	lm.embMu.Unlock()
 	for _, x := range free {
-		x.Close()
+		x.close()
 	}
 	if busy > 0 {
 		<-idle
 	}
-}
-
-// deviceBlocks is how many blocks an embedder offers the model's device: the
-// load's cap, or every one (-1).
-func (lm *LoadedModel) deviceBlocks() int {
-	if lm.maxBlocks != 0 {
-		return lm.maxBlocks
-	}
-	return -1
 }
