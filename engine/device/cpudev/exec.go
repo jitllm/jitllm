@@ -123,7 +123,7 @@ func (e *Exec) Compose(li int, p nn.BlockSpec) {
 	if cb.Why != nn.DeclineServes {
 		return
 	}
-	cb.Graph, cb.SideOff, cb.Bidir, cb.Whole, cb.Rec = p.Source, p.SideOff, p.Bidir, p.Whole, p.Rec
+	cb.Graph, cb.SideOff, cb.Bidir, cb.Whole, cb.Rec, cb.Cut = p.Source, p.SideOff, p.Bidir, p.Whole, p.Rec, p.Cut
 	f, err := e.form(p, 1)
 	if err != nil {
 		cb.Why = e.comp.Decline(err)
@@ -156,7 +156,7 @@ func (e *Exec) form(p nn.BlockSpec, rows int) (*Form, error) {
 			Keys: composer.Pool{Q8: p.KVQ8}, Values: composer.Pool{Q8: p.KVQ8}},
 		Rotaries: p.Rotaries, More: composer.MoreOf(&gr)}
 	req.Graph, req.Step.Rows, req.Device = &gr, rows, e.comp.Device()
-	return e.comp.Form(req, &gr, rows, false, false, p.F32)
+	return e.comp.Form(req, &gr, rows, p.Cut > 0, false, p.F32)
 }
 
 // PrepLayer composes block li from the statement plan carries
@@ -466,8 +466,10 @@ func (e *Exec) FormPart(p PartPlan) Part {
 // (RecLi's, its sequence's Slot). Faults lets a gate's row violations reach
 // the call.
 type Step struct {
-	X                 []float32
-	Stride            int
+	X      []float32
+	Stride int
+	// Cut is the call's cut row, which a block cut in two reads (Block.Cut).
+	Cut               []float32
 	CS, CSSWA, Side   []float32
 	Pos               int
 	Tok               int32
@@ -489,9 +491,14 @@ func (e *Exec) Run(li int, st *Step, b *Bindings) (nn.Decline, error) {
 	if why != nn.DeclineServes {
 		return why, nil
 	}
-	hb, why, err := st.History.Prepare(li, st.Pos, st.Seqs)
-	if why != nn.DeclineServes || err != nil {
-		return why, err
+	// A block cut in two reads no history here: its half beside the
+	// history is another device's, and so is the history.
+	var hb nn.HistoryBinding
+	if cb.Cut == 0 {
+		var err error
+		if hb, why, err = st.History.Prepare(li, st.Pos, st.Seqs); why != nn.DeclineServes || err != nil {
+			return why, err
+		}
 	}
 	w, why := b.Bind(cb.F, li, st.Tensors)
 	if why != nn.DeclineServes {
@@ -500,11 +507,13 @@ func (e *Exec) Run(li int, st *Step, b *Bindings) (nn.Decline, error) {
 	r := Row{X: st.X, Stride: st.Stride, CS: st.CS, CSSWA: st.CSSWA, Side: st.Side, Pages: hb.Pages,
 		KeyStart: hb.KeyStart, Pos: st.Pos, PagePos: hb.PagePos, Tok: st.Tok, Toks: st.Toks, RecLi: st.RecLi, Weights: w,
 		Faults: st.Faults, Keys: hb.Keys, Values: hb.Values, RecState: st.RecState, RecConv: st.RecConv, Slot: st.Slot,
-		Entries: hb.Entries, EntryPages: hb.EntryPages, Req: st.Req}
+		Entries: hb.Entries, EntryPages: hb.EntryPages, Req: st.Req, Cut: st.Cut}
 	if err := e.rows.Row(li, cb, &r); err != nil {
 		return nn.DeclineServes, err
 	}
-	st.History.Commit(li, st.Pos)
+	if cb.Cut == 0 {
+		st.History.Commit(li, st.Pos)
+	}
 	return nn.DeclineServes, nil
 }
 

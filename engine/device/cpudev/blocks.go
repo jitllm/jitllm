@@ -1,6 +1,7 @@
 package cpudev
 
 import (
+	"github.com/jitllm/jitllm/graph"
 	"unsafe"
 
 	"github.com/jitllm/jitllm/composer"
@@ -13,8 +14,10 @@ import (
 // one, its recurrent state and window and the slot it reads and writes,
 // and the block's weights. Faults says the history-word violations apply.
 type Row struct {
-	X               []float32
-	Stride          int
+	X      []float32
+	Stride int
+	// Cut is the row a block cut in two reads in place of the residual.
+	Cut             []float32
 	CS, CSSWA, Side []float32
 	Pages           []uint32
 	Keys, Values    unsafe.Pointer
@@ -52,9 +55,9 @@ type Blocks struct {
 	rowsTab, posTab, tokTab, recDesc []uint32
 	// zeroReq is the request words a call binds where the step gives none
 	// (nn.RequestDevice): its type 0 and every marker row 0.
-	zeroReq       []uint32
-	xpad, sidePad []float32
-	fpages        []uint32
+	zeroReq               []uint32
+	xpad, sidePad, cutPad []float32
+	fpages                []uint32
 	// FaultRow reads a row's history from one past where it starts,
 	// FaultWrite writes it one before its position, FaultPage reads a call's
 	// first page from another, and FaultKeysFirst runs a bidirectional run's
@@ -83,6 +86,9 @@ func (bl *Blocks) Row(li int, cb *Block, r *Row) error {
 		Weights: r.Weights, Entries: r.Entries, EntryPages: r.EntryPages, Req: bl.req(r.Req, 1)}
 	if r.Side != nil {
 		b.Side = r.Side[cb.SideOff:]
+	}
+	if cb.Cut > 0 {
+		cutIO(b, cb.Graph, r.Cut, b.Side, r.X)
 	}
 	bl.pos1 = [2]uint32{1, uint32(r.Pos)}
 	b.Pos = bl.pos1[:]
@@ -132,6 +138,21 @@ type Rows struct {
 	Conv                   []float32
 	ConvLen                int
 	Weights                []unsafe.Pointer
+	// Cut is the rows' cut rows, CutW wide, which a block cut in two reads
+	// in place of the residual (Block.Cut); Graph is that block's graph.
+	Cut   []float32
+	CutW  int
+	Graph *graph.Graph
+}
+
+// cutIO binds a block cut in two's buffers apart (Call.IO): its cut row,
+// its side input where its graph reads one, and the residual it writes.
+func cutIO(b *Bound, g *graph.Graph, cut, side, x []float32) {
+	b.IO[0] = unsafe.Pointer(unsafe.SliceData(cut))
+	if len(g.In) > 1 {
+		b.IO[1] = unsafe.Pointer(unsafe.SliceData(side))
+	}
+	b.IO[len(g.In)] = unsafe.Pointer(unsafe.SliceData(x))
 }
 
 const (
@@ -194,9 +215,12 @@ func (bl *Blocks) calls(li int, f *Form, in *Rows, lo, hi int, stash uint8) erro
 			faultRow(t, bl.FaultRow, bl.FaultWrite)
 		}
 		bx, bstride := in.X[r0*d:], in.Stride
-		var bside []float32
+		var bside, bcut []float32
 		if in.Side != nil {
 			bside = in.Side[r0*pw:]
+		}
+		if in.Cut != nil {
+			bcut = in.Cut[r0*in.CutW:]
 		}
 		staged := f.Unit > 1 && k%f.Unit != 0
 		if staged {
@@ -214,6 +238,13 @@ func (bl *Blocks) calls(li int, f *Form, in *Rows, lo, hi int, stash uint8) erro
 				copy(bl.sidePad, bside[:k*pw])
 				bside = bl.sidePad
 			}
+			if bcut != nil {
+				if len(bl.cutPad) < f.Rows*in.CutW {
+					bl.cutPad = make([]float32, f.Rows*in.CutW)
+				}
+				copy(bl.cutPad, bcut[:k*in.CutW])
+				bcut = bl.cutPad
+			}
 		}
 		if bside != nil {
 			bside = bside[in.SideOff:]
@@ -223,6 +254,9 @@ func (bl *Blocks) calls(li int, f *Form, in *Rows, lo, hi int, stash uint8) erro
 			Entries: in.Entries, EntryPages: in.EntryPages, Req: bl.req(in.Req, f.Rows)}
 		if in.CSSWA != nil {
 			b.CSSWA = in.CSSWA[r0*in.NSWA:]
+		}
+		if bcut != nil {
+			cutIO(b, in.Graph, bcut, bside, bx)
 		}
 		bl.posTab[0] = uint32(k)
 		for i := range f.Rows {

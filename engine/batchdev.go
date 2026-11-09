@@ -33,6 +33,8 @@ func (s *Instance) rowsRefusal() error {
 		return errStepNoHead
 	case s.devCount() != s.hi-s.lo:
 		return errStepSplit
+	case s.anyCut():
+		return errStepCut
 	}
 	return nil
 }

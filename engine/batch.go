@@ -23,7 +23,7 @@ func (s *Instance) rowsRouted(tokens []int32, seq, pos []int, nlogit, seqs int) 
 	n := len(tokens)
 	// The ragged head applies the final softcap itself, as decode's head does.
 	// AltUp's head reads the streams' mean, which the host takes (altup.go).
-	headOnDev := s.devCount() > 0 && s.headWithLastBlock() && !c.StreamHead()
+	headOnDev := s.devCount() > 0 && s.headWithLastBlock() && !c.StreamHead() && !s.cutAt(s.hi-1)
 	s.growRows(n)
 	if len(s.blogits) < nlogit*c.NVocab {
 		s.blogits = make([]float32, nlogit*c.NVocab)
@@ -72,15 +72,30 @@ func (s *Instance) rowsRouted(tokens []int32, seq, pos []int, nlogit, seqs int) 
 		for hi < s.hi && s.routeOf(hi) == k {
 			hi++
 		}
+		hi = s.runEnd(li, hi)
 		if err := s.openRows(r, seq, pos, tokens); err != nil {
 			return nil, err
 		}
 		withHead := headOnDev && hi == s.hi
+		s.cutFor(r, hi-1, n)
 		var err error
 		if len(s.rowOwn) > 0 {
 			err = s.sessionsOn(k, li, hi, pos, s.bx[:n*c.ResidW()], cs, csSWA, withHead, s.blogits[:nlogit*c.NVocab], nlogit)
 		} else {
 			err = s.rowsOn(r, li, hi, pos, slot, s.bx[:n*c.ResidW()], cs, csSWA, withHead, s.blogits[:nlogit*c.NVocab], nlogit)
+		}
+		// A block cut at its routed experts: their half on the CPU device, over
+		// every row the card's half left in the cut.
+		if err == nil && s.cutAt(hi-1) {
+			cr := &s.routes[routeLanes]
+			if err = s.openRows(cr, seq, pos, tokens); err == nil {
+				s.cutFor(cr, hi-1, n)
+				if len(s.rowOwn) > 0 {
+					err = s.sessionsOn(routeLanes, hi-1, hi, pos, s.bx[:n*c.ResidW()], cs, csSWA, false, nil, 0)
+				} else {
+					err = s.rowsOn(cr, hi-1, hi, pos, slot, s.bx[:n*c.ResidW()], cs, csSWA, false, nil, 0)
+				}
+			}
 		}
 		if err != nil {
 			return nil, err

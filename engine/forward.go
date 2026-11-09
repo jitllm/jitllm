@@ -389,6 +389,11 @@ type Instance struct {
 	// card's route (what -gpu-layers sizes and seamtune moves), while a hybrid
 	// whose kinds alternate can have placed blocks with a prefix of zero.
 	blockRoutes []int8
+	// cutW[li], where set, is the width of block li's crossing row: the
+	// block runs cut at its routed experts, its first half on its card and
+	// its second on the CPU device (cut.go); cutRow is a call's rows of it.
+	cutW   []int
+	cutRow []float32
 	// places are the devices of routes, each one's side of a placement, and
 	// fromFrames says which run a block from the instance's frames.
 	places     [2]nn.BlockPlacer
@@ -1512,6 +1517,9 @@ type offer struct {
 	li     int
 	l      model.Layer
 	cloned bool
+	// half is an offer of the block's first half (cutBlock): its banks and
+	// router are the CPU device's, never read for the card.
+	half bool
 	// banks is the routed banks' Weights over bankFr (model.Model.BankWeight),
 	// built at the first gather over those frames and kept.
 	banks  [3]nn.Weight
@@ -1544,16 +1552,27 @@ func (o *offer) layer() *model.Layer {
 	return &o.l
 }
 
+// halfWeights is block li's weights as a card is offered its first half
+// (offerCut): bound and read as offerWeights', the banks and the router left
+// out, and no expert read asked for.
+func (s *Instance) halfWeights(li int) nn.LayerWeights {
+	o := &offer{s: s, li: li, half: true}
+	return nn.LayerWeights{Ensure: o.ensure, Bind: o.bind}
+}
+
 // gather points dst at the copy's spans in fr, keeping dst's callbacks: a
 // callback missed here is cleared by the first Ensure (a missed
 // PrefetchExperts disables the streamed read/upload pipeline).
 func (o *offer) gather(dst *nn.LayerWeights, fr *jlm.Frames) {
-	if o.bankFr != fr {
+	if o.bankFr != fr && !o.half {
 		m, l := o.s.m, &o.l
 		o.banks = [3]nn.Weight{m.BankWeight(fr, l.Gate), m.BankWeight(fr, l.Up), m.BankWeight(fr, l.Down)}
 		o.bankFr = fr
 	}
 	w := o.s.layerWeightsAt(o.li, &o.l, &o.banks, &o.extra)
+	if o.half {
+		w.Router = nn.Weight{}
+	}
 	w.Bind, w.Ensure, w.EnsureExperts = dst.Bind, dst.Ensure, dst.EnsureExperts
 	w.PrefetchExperts, w.SpeculateExperts = dst.PrefetchExperts, dst.SpeculateExperts
 	w.ExpertUses = dst.ExpertUses
@@ -1580,7 +1599,7 @@ func (o *offer) ensure(dst *nn.LayerWeights, fr *jlm.Frames) error {
 	if err := s.m.PageIn(fr, o.li, o.layer()); err != nil {
 		return err
 	}
-	if s.c.MoE() {
+	if s.c.MoE() && !o.half {
 		if err := s.m.EnsureBlockExperts(fr, o.li); err != nil {
 			return err
 		}
@@ -1676,14 +1695,28 @@ func (s *Instance) offerRange(lo, hi int) {
 		// Where the block's routed experts run, when a placement or the caller
 		// says: set before the size check, so a block placed with its experts
 		// off the card is not refused for a bank it will not hold.
-		if ep, ok := ld.(nn.ExpertPlacer); ok && c.MoEAt(li) {
-			where := s.opt.experts
-			if named && place.Experts != "" {
-				where = place.Experts
+		where := s.opt.experts
+		if named && place.Experts != "" {
+			where = place.Experts
+		}
+		// A block whose experts the placement keeps on the CPU device goes to
+		// the card cut at them: the rest of the block there, the experts
+		// here (offerCut).
+		if c.MoEAt(li) && expertsOnCPU(where) && !(named && onCPU(place.On)) {
+			took, err := s.offerCut(adm, li)
+			if err != nil {
+				s.placeErr = err
+				return
 			}
-			if where != "" {
-				ep.PlaceExperts(li, where)
+			if !took {
+				s.noteDecline(fmt.Sprintf("the device declined block %d's half beside its routed experts, which the placement keeps on the CPU device", li))
+				continue
 			}
+			s.releasePlacedPage(ld, li)
+			continue
+		}
+		if ep, ok := ld.(nn.ExpertPlacer); ok && c.MoEAt(li) && where != "" {
+			ep.PlaceExperts(li, where)
 		}
 		// The same for a size no device can hold: a mixture block with its
 		// bank can be bigger than a card, and reading it to learn that cost
@@ -2024,6 +2057,9 @@ func (s *Instance) planFor(li int) *nn.LayerPlan {
 // and recomputes gpuLayers as the contiguous prefix on the card's route (with
 // holes, "li + 1" is not a length).
 func (s *Instance) place(li int, to int8) {
+	if to != routeView {
+		s.clearCut(li)
+	}
 	if from := s.blockRoutes[li]; from != to && from != slotNone {
 		s.handOver(li, int(from), int(to))
 	}
@@ -3113,7 +3149,7 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 	//
 	// AltUp's head reads the streams' mean, which the host takes, so the
 	// projection is never folded into the last run.
-	folded := s.head != nil && s.routeAt(s.hi-1).run == nn.LayerRunner(s.ld) && !c.StreamHead()
+	folded := s.head != nil && s.routeAt(s.hi-1).run == nn.LayerRunner(s.ld) && !c.StreamHead() && !s.cutAt(s.hi-1)
 	// Not a defer inside the loop: one there takes every defer in this
 	// function off the open-coded path, and a heap defer record costs a decode
 	// token an allocation whenever the runtime's per-P pool runs dry.
@@ -3132,6 +3168,7 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 		for hi < s.hi && s.routeAt(hi) == r {
 			hi++
 		}
+		hi = s.runEnd(li, hi)
 		var fold *nn.Head
 		if folded && hi == s.hi {
 			fold = s.head
@@ -3140,6 +3177,7 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 		if err := s.openRun(r); err != nil {
 			return nil, err
 		}
+		s.cutFor(r, hi-1, 1)
 		if !r.run.Layers(li, hi, s.pos, 1, s.resid(), s.cs[:c.RopeW()], s.swaTable(c.LocalNRot()), fold) {
 			if err := s.runRefusal(r, li); err != nil {
 				return nil, err
@@ -3171,6 +3209,14 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 			folded = false
 			li = s.lo - 1
 			continue
+		}
+		if s.cutAt(hi - 1) {
+			if err := s.openRun(&s.routes[routeLanes]); err != nil {
+				return nil, err
+			}
+			if err := s.cutRest(hi-1, s.pos, 1, s.resid(), s.cs[:c.RopeW()], s.swaTable(c.LocalNRot())); err != nil {
+				return nil, err
+			}
 		}
 		s.trace(hi-1, "ffn_resid", s.x)
 		if fold != nil {

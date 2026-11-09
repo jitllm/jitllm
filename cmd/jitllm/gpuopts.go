@@ -161,8 +161,6 @@ func gpuOptions() []gpu.Option {
 		{"JITLLM_GPU_STREAM_CACHE", num("JITLLM_GPU_STREAM_CACHE") > 0,
 			func(c *gpu.Config) { c.StreamCacheSlots = num("JITLLM_GPU_STREAM_CACHE") }},
 		{"JITLLM_GPU_NO_AUTOSTREAM", set("JITLLM_GPU_NO_AUTOSTREAM"), func(c *gpu.Config) { c.NoAutoStream = true }},
-		// =0 gives a hybrid block no expert cache on the card (gpu.WithHybridCache).
-		{"JITLLM_GPU_HYBRID_CACHE", os.Getenv("JITLLM_GPU_HYBRID_CACHE") == "0", func(c *gpu.Config) { c.NoHybridCache = true }},
 		{"JITLLM_GPU_STREAM_NOPIN", set("JITLLM_GPU_STREAM_NOPIN"), func(c *gpu.Config) { c.StreamNoPin = true }},
 		{"JITLLM_GPU_STREAM_GROUPS", num("JITLLM_GPU_STREAM_GROUPS") > 0,
 			func(c *gpu.Config) { c.StreamGroups = num("JITLLM_GPU_STREAM_GROUPS") }},

@@ -163,7 +163,7 @@ func (g *devTier) sizeFrames(f *jlm.File) {
 	g.mu.Lock()
 	for _, l := range g.layers {
 		st := l.stream
-		if st == nil || st.hybrid {
+		if st == nil {
 			continue
 		}
 		var each int

@@ -117,6 +117,8 @@ type devSess struct {
 	// pleHost is the rows' per-layer embedding inputs for the next call
 	// (SetLayerInputs) and pleStage their padded staging.
 	pleHost, pleStage []float32
+	// cutHost is the cut rows the next call's first half writes (SetCut).
+	cutHost []float32
 	// reqHost is the request words the next call's blocks read
 	// (nn.RequestDevice), reqStage them padded to the call's rows.
 	reqHost, reqStage []uint32

@@ -209,6 +209,17 @@ func (g *devTier) SetLayerInputs(in []float32) {
 // inputs are its own, as its history is.
 func (s *gpuSession) SetLayerInputs(in []float32) { s.ple = in }
 
+// SetCut keeps the cut rows this session's next call's first half writes
+// (nn.CutDevice), handed to every device it holds as its inputs are.
+func (s *gpuSession) SetCut(cut []float32) { s.cut = cut }
+
+// SetCut is the cut rows the next call's first half writes (nn.CutDevice).
+func (g *devTier) SetCut(cut []float32) {
+	g.mu.Lock()
+	g.cutHost = cut
+	g.mu.Unlock()
+}
+
 // SetRequest keeps the request words this session's next calls' blocks
 // read (nn.RequestDevice), handed to every device it holds as its inputs
 // are.
@@ -224,7 +235,7 @@ func (s *gpuSession) inputsTo(ds []*devTier) []*devTier {
 
 // inputsOn hands the session's inputs to d alone.
 func (s *gpuSession) inputsOn(d *devTier) {
-	d.setInputs(s.sid, s.ple, s.prompt, s.toks, s.req)
+	d.setInputs(s.sid, s.ple, s.prompt, s.toks, s.req, s.cut)
 }
 
 // pleRows is the staged per-layer inputs, n floats: the caller's rows, then

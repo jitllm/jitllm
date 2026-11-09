@@ -23,8 +23,10 @@ type Lanes struct {
 	seqs   int
 	stride int
 	side   []float32
-	tok    int32
-	toks   []int32
+	// cut is the cut rows the next call's block cut in two reads (SetCut).
+	cut  []float32
+	tok  int32
+	toks []int32
 	// req is the request words the next calls' blocks read (SetRequest).
 	req []uint32
 	// seqBuf, zeros, order, last and oruns are a rows call's scratch: the
@@ -123,6 +125,9 @@ func (l *Lanes) RowsForm(li int, t Tensors) (*Form, nn.Decline) {
 // runs, or says why f cannot run them: a history past f's key bound, a page
 // outside the arena.
 func (l *Lanes) ReadyRows(li int, f *Form, pos []int) nn.Decline {
+	if cb, _ := l.e.Block(li); cb != nil && cb.Cut > 0 {
+		return nn.DeclineServes
+	}
 	return l.h.PrepareRows(li, pos, f.Keys)
 }
 
@@ -134,11 +139,15 @@ func (l *Lanes) Rows(li int, f *Form, t Tensors, c *RowsCall) error {
 	if f.Toks && c.Tok == nil {
 		return fmt.Errorf("model: block %d reads its rows' tokens, which the step gives none of", li)
 	}
-	hb, err := l.h.Rows(li, l.seqs)
-	if err != nil {
-		return err
-	}
 	cb, _ := l.e.Block(li)
+	cut := cb != nil && cb.Cut > 0
+	var hb nn.HistoryBinding
+	if !cut {
+		var err error
+		if hb, err = l.h.Rows(li, l.seqs); err != nil {
+			return err
+		}
+	}
 	var sideOff int
 	var bidir, whole bool
 	if cb != nil {
@@ -151,7 +160,10 @@ func (l *Lanes) Rows(li int, f *Form, t Tensors, c *RowsCall) error {
 	spans := l.spans[:4*n]
 	end := 0
 	for i, p := range c.Pos {
-		e, st := p+1, l.h.KeyStart(li, p)
+		e, st := p+1, 0
+		if !cut {
+			st = l.h.KeyStart(li, p)
+		}
 		if runs {
 			lo, hi := runOf(l.runs, p)
 			e = max(e, hi)
@@ -171,6 +183,9 @@ func (l *Lanes) Rows(li int, f *Form, t Tensors, c *RowsCall) error {
 		SideOff: sideOff, CS: c.CS, NRot: c.NRot, CSSWA: c.CSSWA, NSWA: c.NSWA, Pages: hb.Pages, PagePos: hb.PagePos,
 		Spans: spans, Pos: c.Pos, Tok: c.Tok, Req: l.req, Seq: c.Seq, Weights: w, Keys: hb.Keys, Values: hb.Values,
 		Entries: hb.Entries, EntryPages: hb.EntryPages}
+	if cb != nil && cb.Cut > 0 {
+		in.Cut, in.CutW, in.Graph = l.cut, cb.Cut, cb.Graph
+	}
 	if f.Rec {
 		in.RecLi = l.recLi(li)
 		in.RecState, in.RecConv = l.recAddrs(in.RecLi)
@@ -179,7 +194,9 @@ func (l *Lanes) Rows(li int, f *Form, t Tensors, c *RowsCall) error {
 	if err := l.e.rows.Rows(li, f, in, runs); err != nil {
 		return err
 	}
-	l.h.Commit(li, end-1)
+	if !cut {
+		l.h.Commit(li, end-1)
+	}
 	return nil
 }
 
@@ -241,6 +258,10 @@ func (l *Lanes) SetRequest(req []uint32) { l.req = req }
 // (nn.LayerInputDevice).
 func (l *Lanes) SetLayerInputs(in []float32) { l.side = in }
 
+// SetCut is the cut rows the next call's block cut in two reads
+// (nn.CutDevice).
+func (l *Lanes) SetCut(cut []float32) { l.cut = cut }
+
 // Layers runs blocks [lo, hi) for the row at pos in x, its rotary tables cs
 // and csSWA, one row at a time and no head: false where a block is declined
 // (Declined) or fails (Err).
@@ -266,7 +287,7 @@ func (l *Lanes) Layers(lo, hi, pos, n int, x, cs, csSWA []float32, head *nn.Head
 		}
 		l.e.Fuse()
 		st := Step{X: x, Stride: l.stride, CS: cs, CSSWA: csSWA, Side: l.side, Pos: pos, Tok: l.tok, Toks: true,
-			Faults: true, Req: l.req, Tensors: t}
+			Faults: true, Req: l.req, Tensors: t, Cut: l.cut}
 		why, err := l.Row(li, &st)
 		if err != nil {
 			l.err = err
@@ -375,6 +396,10 @@ func (s *SessionLanes) SetTokens(toks []int32) { s.l.SetTokens(toks) }
 // SetLayerInputs is the per-layer inputs the next call's blocks read
 // (nn.LayerInputDevice).
 func (s *SessionLanes) SetLayerInputs(in []float32) { s.l.SetLayerInputs(in) }
+
+// SetCut is the cut rows the next call's block cut in two reads
+// (nn.CutDevice).
+func (s *SessionLanes) SetCut(cut []float32) { s.l.SetCut(cut) }
 
 // SetRequest is the request words the next calls' blocks read
 // (nn.RequestDevice).

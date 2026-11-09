@@ -70,6 +70,8 @@ type gpuSession struct {
 	toks []int32
 	// req is the request words the next calls' blocks read (SetRequest).
 	req []uint32
+	// cut is the cut rows the next call's first half writes (SetCut).
+	cut []float32
 }
 
 // SetPrompt says whether the session's calls that follow are a prompt's

@@ -31,6 +31,7 @@ type route struct {
 	rew     nn.RecRewinder
 	rowk    nn.RecRowKeeper
 	req     nn.RequestDevice
+	cut     nn.CutDevice
 }
 
 func newRoute(d nn.LayerRunner) route {
@@ -54,6 +55,7 @@ func newRoute(d nn.LayerRunner) route {
 	r.rew, _ = d.(nn.RecRewinder)
 	r.rowk, _ = d.(nn.RecRowKeeper)
 	r.req, _ = d.(nn.RequestDevice)
+	r.cut, _ = d.(nn.CutDevice)
 	return r
 }
 

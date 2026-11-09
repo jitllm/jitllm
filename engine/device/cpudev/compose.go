@@ -105,6 +105,10 @@ type Block struct {
 	Graph *graph.Graph
 	F     *Form
 	Rows  *Form
+	// Cut, where set, is the width of the cut row the block reads: the
+	// second half of a block cut in two (nn.BlockSpec.Cut), formed with its
+	// input and output buffers apart (Call.IO).
+	Cut int
 	// SideOff is where the block's slice of the rows' per-layer inputs
 	// starts in each row: the call binds the side input there, so blocks
 	// that differ by their slice alone share a form.

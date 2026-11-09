@@ -30,6 +30,10 @@ import (
 
 // layer is one block's device-resident state.
 type layer struct {
+	// cut, where set, is the width of the block's crossing row: the layer
+	// is the first half of a block cut in two (nn.LayerPlan.Cut), writing
+	// its rows to the scratch's cut, read back to the session's (SetCut).
+	cut int
 	// ngram is an n-gram block's table, read in a call at a time.
 	ngram *ngramRows
 	// graph is the block as ops from the model's front end
@@ -226,14 +230,9 @@ type streamBank struct {
 	// spec hands the host's read service a guess and nil abandons the
 	// unstarted ones (nn.LayerWeights.SpeculateExperts).
 	spec func(sel []uint32, fr *jlm.Frames)
-	// hybrid says the placement keeps the block's experts off the card: the
-	// composed card declines the block (partExpertsHost).
-	hybrid bool
-	li     int // the block, for the session's host side (hostFor)
-	// The split (hybrid with a cache): heat counts each expert's selections,
-	// halved every heatHalf tokens; hit marks which of this token's
-	// selection the cache holds; dw is the card's weights (a miss's zeroed),
-	// and msel and mw the misses the host runs.
+	li   int // the block, for the session's host side (hostFor)
+	// heat counts each expert's selections, halved every heatHalf tokens;
+	// hit marks which of this token's selection the cache holds.
 	heat []uint32
 	own  []uint32
 	// owned counts the tokens st.own has counted, for its halving.
@@ -1501,6 +1500,10 @@ type blockScratch struct {
 	// staged per submission, a block's gate, its slice of the inputs, their
 	// product and the projection back. nil elsewhere.
 	pleIn backend.Buf
+	// cut is a call's rows of a cut block's crossing values (layer.cut),
+	// cutBytes its size, grown to the widest call.
+	cut      backend.Buf
+	cutBytes int
 	// streams is, by a step's rows, each residual stream of x as a view at
 	// its offset (x is stream-major), the inputs and the outputs a block of
 	// several streams binds (servedStreams).
@@ -1759,7 +1762,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	if g.layers == nil {
 		g.layers = map[int]*layer{}
 	}
-	l := &layer{nonCausal: p.NonCausal, windowed: p.Windowed, geo: geoOf(p), vFromK: p.VFromK, graph: p.Graph}
+	l := &layer{nonCausal: p.NonCausal, windowed: p.Windowed, geo: geoOf(p), vFromK: p.VFromK, graph: p.Graph, cut: p.Cut}
 	l.win, l.chunked = attendWindow(p.Graph)
 	if p.NonCausal {
 		l.nffn, l.ungated = p.NFFN, ungatedFFN(p)
@@ -1793,26 +1796,8 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	// A streamed bank is priced at its compact size by scaling the three bank
 	// rows from NExpert sheets to NExpertUsed; every size derives from
 	// Weight.Rows, so the charge and the refund cannot disagree.
-	mode, auto := g.autoStream[li]
-	// cpuExp says the block's experts will run on the host (hybrid): the
-	// placement's choice, else the tier's defaults. Such a block keeps no bank
-	// on the card at all -- no compact bank, no expert kernels, no packed
-	// layout needed -- and a top-1 router is no obstacle, since no indexed
-	// matvec runs.
-	// The composed block reads its experts in pages on the card: only a
-	// placement's own "host" sends them to the host.
-	cpuExp := auto && mode == expCPU
+	_, auto := g.autoStream[li]
 	stream := moe && (g.StreamExperts || auto) && slots < bank
-	// A hybrid block that can hold an expert cache (Config.NoHybridCache)
-	// is placed as a streamed one -- the compact bank and its kernels on the
-	// card -- marked hybrid, so the cache sized after placement has kernels
-	// to run its experts with (streamBank.split). One whose experts carry
-	// biases or a per-expert scale keeps no bank, as cacheSlotsFor refuses them,
-	// and so does a float bank, which has no packed sheets to send.
-	cacheable := !g.NoHybridCache && g.StreamCacheSlots >= 0 && slots > 1 && w.Vector(jlm.RoleExpScale) == nil &&
-		w.Vector(jlm.RoleExpGateBias) == nil && w.Vector(jlm.RoleExpUpBias) == nil && w.Vector(jlm.RoleExpDownBias) == nil &&
-		w.Up.Packed != nil && w.Down.Packed != nil && (w.Gate.Packed != nil || len(w.Gate.Data) == 0)
-	hybrid := stream && cpuExp && !cacheable
 	// cslots is the streamed bank's size in sheets, decided at the first bank
 	// matrix (cacheSlotsFor): slots without an expert cache, more with one.
 	cslots := -1
@@ -2007,6 +1992,12 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		if ungatedFFN(p) && i == 4 {
 			continue
 		}
+		// A half of a block cut in two holds what it was offered: its banks
+		// and router are another device's, and a weight its graph binds and
+		// the offer left out fails its composition by name.
+		if p.Cut > 0 && len(x.Data) == 0 {
+			continue
+		}
 		// A KV-sharing block has no k or v matrix (slots 1, 2): it attends to
 		// its source's history.
 		if p.KVShared && (i == 1 || i == 2) {
@@ -2102,16 +2093,6 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		// trailing dimension), which PackWeights and the upload want; the kernel is
 		// built for one expert's rows and does the offset, so it is divided below.
 		var r *resident
-		if hybrid && i >= 4 && i <= 6 {
-			// Nothing of the bank goes on the card; the host runs it.
-			if l.stream == nil {
-				l.stream = &streamBank{sel: make([]uint32, slots), fr: fr,
-					ensure: w.Ensure, sel2: w.EnsureExperts,
-					pre: w.PrefetchExperts, spec: w.SpeculateExperts, w: *w, hybrid: true, nExpert: bank, li: li}
-				g.StreamBlocks++
-			}
-			continue
-		}
 		if stream && i >= 4 && i <= 6 {
 			q, qok := quantOf(x.T)
 			if !qok {
@@ -2147,11 +2128,6 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 					ensure: w.Ensure, sel2: w.EnsureExperts,
 					pre: w.PrefetchExperts, spec: w.SpeculateExperts, w: *w, li: li}
 				l.stream.nExpert = bank
-				// A block placed with its experts on the host keeps them off
-				// the card, which the composed card declines (expertsServe).
-				if auto && mode == expCPU {
-					l.stream.hybrid = true
-				}
 				l.stream.initCache(cslots, bank)
 				g.StreamBlocks++
 			}
@@ -4313,6 +4289,11 @@ func (g *devTier) layersSession(s backend.Session) {
 	pickOnly := a.pickOnly
 	pickHeadSrv := a.pickHeadSrv
 	collapse := a.collapse
+	// A call whose last block is a first half reads the cut back, not x.
+	cutW := 0
+	if hi > lo && hi <= len(g.layers) && g.layers[hi-1] != nil {
+		cutW = g.layers[hi-1].cut
+	}
 	var err error
 	direct := false
 	defer func() { a.err, a.direct = err, direct }()
@@ -4455,6 +4436,15 @@ func (g *devTier) layersSession(s backend.Session) {
 				// offset in x.
 				in := []backend.Buf{bs.x, bs.pleIn}
 				outs := []backend.Buf{out}
+				if l.cut > 0 {
+					if cerr := g.cutScratch(bs, R*l.cut*4); cerr != nil {
+						if err == nil {
+							err = cerr
+						}
+						continue
+					}
+					outs[0] = bs.cut
+				}
 				if len(l.graph.Out) > 1 {
 					var verr error
 					if in, outs, verr = bs.servedStreams(R, len(l.graph.Out)); verr != nil {
@@ -4893,6 +4883,11 @@ func (g *devTier) layersSession(s backend.Session) {
 		direct = true
 	case head != nil:
 		err = s.Read(hb.headOut(), hb.hRaw)
+	case cutW > 0 && len(g.cutHost) < nrow*cutW:
+		err = fmt.Errorf("tier: a cut call of %d rows of %d, where the caller holds %d floats", nrow, cutW, len(g.cutHost))
+	case cutW > 0:
+		err = s.Read(bs.cut, f32b(g.cutHost[:nrow*cutW]))
+		direct = true
 	case len(x) == nrow*p.ResidW() && (p.Streams() == 1 || nrow == R):
 		err = s.Read(bs.x, f32b(x))
 		direct = true
@@ -6062,3 +6057,22 @@ func bindsRole(g *graph.Graph, r jlm.Role) bool {
 // gridded says plan p's rows turn by their picture's grid (servedGridTable)
 // rather than by their positions.
 func gridded(p *nn.LayerPlan) bool { return p.NonCausal && len(p.GridPlanes) > 0 }
+
+// cutScratch makes bs's cut hold n bytes, a cut block's rows at a call
+// (layer.cut): allocated at the first such call and grown at a wider one.
+func (g *devTier) cutScratch(bs *blockScratch, n int) error {
+	if bs.cutBytes >= n {
+		return nil
+	}
+	if bs.cut != nil {
+		bs.cut.Free()
+		bs.cut, bs.cutBytes = nil, 0
+	}
+	b, err := g.dev.Alloc(n)
+	if err != nil {
+		g.NoRoom++
+		return fmt.Errorf("tier: a cut block's rows: %w", err)
+	}
+	bs.cut, bs.cutBytes = b, n
+	return nil
+}

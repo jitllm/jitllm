@@ -615,24 +615,21 @@ func (g *GPU) streamsInstead(li int, p *nn.LayerPlan) bool {
 type expertMode int
 
 const (
-	// expAuto is GPU.AutoStream's mark: the block's experts run where the
-	// tier's defaults say (on the host unless Config.NoHybrid).
+	// expAuto is GPU.AutoStream's mark: the block's experts stream to the
+	// card where it cannot hold their bank.
 	expAuto expertMode = iota
-	// expCPU runs them on the CPU device (hybrid), whatever the defaults.
-	expCPU
 	// expCard sends their sheets to the card each token.
 	expCard
 )
 
-// PlaceExperts is nn.ExpertPlacer: it places block li's routed experts off
-// the card -- "cpu" runs them on the CPU device (hybrid), "card" streams their
-// sheets to it -- on every device, so the block keeps the choice wherever it
-// moves; "" clears the choice. It reports false for a word it does not know.
+// PlaceExperts is nn.ExpertPlacer: "card" streams block li's routed experts'
+// sheets to the card, on every device, so the block keeps the choice
+// wherever it moves; "" clears the choice. It reports false for a word it
+// does not know. Experts on the CPU device are the instance's placement: the
+// card then holds the block's first half (nn.LayerPlan.Cut).
 func (g *GPU) PlaceExperts(li int, where string) bool {
 	var m expertMode
 	switch where {
-	case nn.CPU:
-		m = expCPU
 	case "card":
 		m = expCard
 	case "":
@@ -669,7 +666,8 @@ func (g *GPU) SetExpertMode(where string) int {
 	m := expAuto
 	switch where {
 	case nn.CPU:
-		// The composed block has no CPU side to measure.
+		// A block whose experts run on the CPU device is the instance's to
+		// cut (nn.LayerPlan.Cut): the card holds no bank of it to mark.
 		return 0
 	case "card":
 		m = expCard
@@ -781,7 +779,7 @@ func (g *devTier) sizeAutoCaches() {
 	for _, l := range g.layers {
 		// A block whose experts carry biases keeps its plain bank: see
 		// cacheSlotsFor.
-		if l == nil || l.stream == nil || l.stream.cached() || l.stream.hybrid && g.NoHybridCache || l.down == nil ||
+		if l == nil || l.stream == nil || l.stream.cached() || l.down == nil ||
 			l.roleVector(jlm.RoleExpGateBias) != nil || l.roleVector(jlm.RoleExpUpBias) != nil || l.roleVector(jlm.RoleExpDownBias) != nil {
 			continue
 		}

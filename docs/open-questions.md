@@ -14,6 +14,7 @@ and the code has moved since (RULE 12). Paths below are under
 
 | open item | what is recorded | evidence |
 |---|---|---|
+| a cut block's second half reads its whole base page | a block cut at its routed experts (engine/cut.go) runs its second half on the CPU device, which pages in the block's base page -- the attention's weights with the router's and the norms' -- to read the few the half binds, bytes the card already holds; a page is fixed at conversion, so reading less needs the half's weights in a page of their own, or the page read in part (EnsureRange). The cut has not been measured against the card's old host split either | placement.md "The host split, as it stood, and what replaced it" |
 | native Q3_K packing | the one format still widened (+34.5% over its GGUF); native needs a 2-bit primary plane, a third emitter shape whose per-byte cost has never been measured -- one `nn.TestPerByteCost` row would settle whether it pays | cpu-kernels.md "Native narrow packing" |
 | AVX-512 on the Xeon D | worth 3.1% of a decode token there; admitted and scheduled behind larger levers, needs an EVEX encoder and the 32-register allocation | cpu-kernels.md "The Xeon D-2123IT" |
 | Metal decode's unattributed term | 93.7% of an M4 decode token attributed to measured causes and ~0.56 ms not; no single term is over 5% of the token | gpu-kernels.md "Metal decode against the oracles" |
