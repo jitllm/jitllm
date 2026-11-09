@@ -3609,7 +3609,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 			g.quiesce()
 			break
 		}
-		if g.quiet == 0 {
+		if g.quiet == 0 && g.alone == 0 {
 			break
 		}
 		g.idle.Wait()
@@ -4175,7 +4175,27 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 		return refuse("a submission that must run alone was prepared to run beside others")
 	}
 	g.prologueHeld = false
-	if excl {
+	if excl && g.quiet == 0 && g.rowsAlone(lo, hi, rag, bs, sid) {
+		// Alone, but with g.mu let go for the run: a step over several
+		// sessions' rows writes the device's batched scratch and nothing else
+		// of the device's, so no other submission starts (alone) while every
+		// other session's bookkeeping goes on -- the next step's room and
+		// inputs on this device, which would otherwise wait out this stage
+		// and keep a second card's stage from starting beside it. What
+		// changes what a submission reads quiesces, which waits for this one
+		// as for any in flight (its ticket).
+		g.alone++
+		t := g.beginSub()
+		g.inSub, g.Stats = true, &g.acc
+		g.runUnlocked(g.subFn)
+		g.inSub, g.Stats = false, &g.tot
+		g.tot.add(g.acc)
+		g.acc = Stats{}
+		g.endSub(t)
+		g.alone--
+		g.idle.Broadcast()
+		g.freeStale()
+	} else if excl {
 		// Alone on the device, as every submission was before sessions ran
 		// at once: nothing else is in flight (the wait was before the
 		// prologue), and nothing starts while g.mu is held across it.

@@ -109,6 +109,17 @@ func (g *devTier) exclusiveRange(lo, hi int, rag *ragStep, bs *blockScratch) boo
 	return false
 }
 
+// rowsAlone reports that a submission of blocks [lo, hi) runs alone only
+// for being a step over several sessions' rows: none of its blocks is one
+// exclusiveRange names for what it writes, and no row reads history in host
+// memory. Callers hold g.mu.
+func (g *devTier) rowsAlone(lo, hi int, rag *ragStep, bs *blockScratch, sid uint64) bool {
+	if rag == nil || rag.sid == nil || g.evictedFor(sid, rag) {
+		return false
+	}
+	return !g.exclusiveRange(lo, hi, nil, bs)
+}
+
 // evictedFor reports that a call of session sid -- or, in a step over several
 // sessions' rows, of any of them -- reads history with pages in host memory: it
 // streams them through the pool's free pages (pagedstream.go), which another
