@@ -295,10 +295,28 @@ func lcppBand(t *testing.T, src string, layers int, ref [][]float32, seqs ...lcp
 // n_expert on synth-deepseek-yarn-af.
 func rowsGolden(src string) string {
 	switch filepath.Base(src) {
-	case "synth-deepseek-yarn-af.gguf":
-		return filepath.Join("..", "testdata", "golden", "rows", "synth-deepseek-yarn-af.gguf.json")
+	case "synth-deepseek-yarn-af.gguf", "synth-glm4moe-hf", "synth-qwen2moe-hf", "synth-ernie45moe-hf", "synth-hunyuanmoe-hf",
+		"synth-dots1-hf", "synth-deepseek", "synth-deepseek-lite":
+		return filepath.Join("..", "testdata", "golden", "rows", filepath.Base(src)+".json")
 	}
 	return ""
+}
+
+// goldenIDs is the text's ids a transformers golden holds (rowsgold.py), the
+// first n.
+func goldenIDs(t *testing.T, path string, n int) []int32 {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("the transformers golden: %v -- run scripts/rowsgold.py", err)
+	}
+	var g struct {
+		IDs []int32 `json:"ids"`
+	}
+	if err := json.Unmarshal(raw, &g); err != nil || len(g.IDs) < n {
+		t.Fatalf("the transformers golden %s: %v (%d ids, %d wanted)", path, err, len(g.IDs), n)
+	}
+	return g.IDs[:n]
 }
 
 // hfBand is lcppBand from a transformers golden: each row's distance between
