@@ -347,7 +347,7 @@ func (ts *Instance) towerSquare(tr *towerRun, sq model.Square, class int, px uin
 func (s *Instance) encodePair(f0, f1 image.Image, sq model.Square, dst, deep []float32) error {
 	tr := s.tower
 	tr.encodes++
-	words, pl, off, err := model.PairWords(f0, f1, &tr.pad, &tr.ent, &tr.ent2)
+	words, pl, pl1, off, err := model.PairWords(f0, f1, &tr.pad, &tr.ent, &tr.ent2)
 	if err != nil {
 		return err
 	}
@@ -360,12 +360,13 @@ func (s *Instance) encodePair(f0, f1 image.Image, sq model.Square, dst, deep []f
 		return fmt.Errorf("model: %d values for a video pair's %d", len(dst), want)
 	}
 	pl.Request(tr.req)
+	pl1.RequestFrame(tr.req)
 	tr.req[composer.RequestPicFrame] = uint32(off)
 	if !tr.tapsVideo {
 		tr.tapsW, tr.tapsVideo = 0, true
 	}
 	tr.squareRequest(pl, sq, a, 1)
-	return tr.s.towerSquare(tr, sq, len(tg.Classes)+sq.Class, pl.Px, words, dst, deep, 0)
+	return tr.s.towerSquare(tr, sq, len(tg.Classes)+sq.Class, model.PairKey(pl.Px, pl1.Px), words, dst, deep, 0)
 }
 
 // wholePicture says tower block li attends the whole picture though its
