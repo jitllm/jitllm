@@ -408,7 +408,11 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 		// the residual before it fails, so a restart begins from the
 		// embeddings again.
 		//
+		// gathered says the card wrote the chunk's input rows, every stream
+		// of them where the model has several, as embedOnDevice's token.
+		gathered := false
 		refill := func() error {
+			gathered = false
 			// On the card when the block run starts there and the device
 			// gathers the step's input rows (nn.Head.GatherRow), or its tier
 			// gathers the tied embedding: far faster than the host (EmbedRows).
@@ -424,9 +428,14 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 					s.growBPLE(n)
 					s.layerInputs(s.bple[:n*c.PleWidth()])
 				}
-				if s.ldEmbed != nil && s.ldEmbed.EmbedRows(rowIDs[base:base+n], p0, s.bx[:n*c.NEmbd]) {
+				dst := s.bx[:n*c.NEmbd]
+				if c.StreamHead() {
+					dst = s.bx[:n*c.ResidW()]
+				}
+				if s.ldEmbed != nil && s.ldEmbed.EmbedRows(rowIDs[base:base+n], p0, dst) {
 					// A token chunk's tap rows are zeros.
 					s.tokenSide(n)
+					gathered = true
 					return nil
 				}
 			}
@@ -456,7 +465,7 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 		if c.StreamHead() {
 			fill := refill
 			refill = func() error {
-				if err := fill(); err != nil {
+				if err := fill(); err != nil || gathered {
 					return err
 				}
 				return s.expandStreams(s.bx[:n*c.ResidW()], n, base)
