@@ -13,6 +13,11 @@ func testInstance(tb testing.TB, m *model.Model, maxSeq int, opts ...Option) *In
 	if err != nil {
 		tb.Fatal(err)
 	}
+	tb.Cleanup(func() {
+		if d := s.DeviceDemotions(); d > 0 && !faultsInjected {
+			tb.Errorf("the device failed %d time(s) and every block moved to the CPU device: %+v", d, s.Evacuations())
+		}
+	})
 	return s
 }
 
