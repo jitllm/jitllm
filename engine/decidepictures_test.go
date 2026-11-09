@@ -75,6 +75,12 @@ func TestDecisionOverPicturesMatchesItsGoldens(t *testing.T) {
 		// its float forms and a card; with each span its own run the text
 		// before a picture never saw it and read 0.092 and 0.070.
 		{"vllm-d3", "vllm-d3/vllm-d3-edge-Q8_0.gguf", "vllm-d3-edge-Q8_0.pictures.llamacpp.json", 0.05, ""},
+		// The same request against the model's own runtime (d3_runtime.py in
+		// float32 on the CPU; scripts/d3gold.py): 0.068 on the CPU's float
+		// forms and 0.070 on a card, where the checkpoint's own bfloat16 run
+		// stands 0.068 from its float32 one; this GGUF's Q8_0 weights are
+		// 0.036 of it (an F32 conversion read 0.032).
+		{"vllm-d3-runtime", "vllm-d3/vllm-d3-edge-Q8_0.gguf", "vllm-d3-edge.pictures.reference.json", 0.08, ""},
 		{"clef-fixture-vl", "clef/fixture-vl/clef-fixture-vl.gguf", "clef-fixture-vl.pictures.reference.json", 2e-3, ""},
 		// A marker head: the pictures a prefix that reads itself alone
 		// (jlm.Flag2MediaPrefix), the text after it, uncalibrated. 0.026
@@ -83,6 +89,9 @@ func TestDecisionOverPicturesMatchesItsGoldens(t *testing.T) {
 		// model's own code here.
 		{"d1-omni", "d1-omni/d1-omni-600M-F16.gguf", "d1-omni-600M-F16.pictures.llamacpp.json", 0.03, ""},
 	}
+	// int8Tol is a case's tolerance on the CPU's int8 activations where it is
+	// wider than its float forms': vllm-d3's runtime case read 0.137 there.
+	int8Tol := map[string]float64{"vllm-d3-runtime": 0.15}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			src, ok := existingModel(testmodels.Path(c.gguf))
@@ -101,7 +110,7 @@ func TestDecisionOverPicturesMatchesItsGoldens(t *testing.T) {
 			if !m.SeesPictures() {
 				t.Fatal("the container states no tower")
 			}
-			arm := func(t *testing.T, g *gpu.GPU, opts ...Option) {
+			arm := func(t *testing.T, tol float64, g *gpu.GPU, opts ...Option) {
 				in, err := NewInstance(m, 4096, append([]Option{WithKVF16(false)}, opts...)...)
 				if err != nil {
 					t.Fatal(err)
@@ -125,7 +134,7 @@ func TestDecisionOverPicturesMatchesItsGoldens(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				worst := checkDecisions(t, qs, ans, readDecisionGold(t, c.gold), c.tol)
+				worst := checkDecisions(t, qs, ans, readDecisionGold(t, c.gold), tol)
 				t.Logf("%d pictures, %d prompt rows, worst difference %.5f", len(pics), d.InputTokens(), worst)
 				// The violation: the same request with no pictures is not
 				// the golden's answer.
@@ -137,9 +146,9 @@ func TestDecisionOverPicturesMatchesItsGoldens(t *testing.T) {
 					t.Fatal("VIOLATION arm: the answers without the pictures are the answers with them")
 				}
 			}
-			t.Run("cpu", func(t *testing.T) { arm(t, nil) })
+			t.Run("cpu", func(t *testing.T) { arm(t, max(c.tol, int8Tol[c.name]), nil) })
 			// The CPU's float forms: no int8 activations, the band's floor.
-			t.Run("cpu-float", func(t *testing.T) { arm(t, nil, withCPUFloat()) })
+			t.Run("cpu-float", func(t *testing.T) { arm(t, c.tol, nil, withCPUFloat()) })
 			if c.cpuOnly != "" {
 				t.Logf("no card arm: %s", c.cpuOnly)
 				return
@@ -151,7 +160,7 @@ func TestDecisionOverPicturesMatchesItsGoldens(t *testing.T) {
 						noDevice(t, spec, err)
 					}
 					defer g.Close()
-					arm(t, g)
+					arm(t, c.tol, g)
 				})
 			}
 		})
