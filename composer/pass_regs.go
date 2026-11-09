@@ -323,8 +323,13 @@ type bindState struct {
 }
 
 // advance takes up to n steps more, the rematerializations first: the steps
-// taken, fewer where none is left.
+// taken, fewer where none is left. Its steps keep the kernel's vector words
+// (Kernel.vwords) while it holds as many nodes: a rematerialization adds a
+// node, and a sink moves one in the sequence, which neither the words nor
+// the homes read.
 func (st *bindState) advance(n int) int {
+	st.w.vwords = &vectorMemo{n: -1}
+	defer func() { st.w.vwords = nil }()
 	for i := range n {
 		if !st.w.rematerialize(st.moved) && !st.w.sink(st.sunk) {
 			return i
