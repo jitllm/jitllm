@@ -19,6 +19,9 @@ func (drv *Driver) loadPeer(lib *ffi.Lib) {
 	drv.cuMemcpyPeer = ffi.Fn5[CUresult, CUdevptr, CUctx, CUdevptr, CUctx, uint64](lib, "cuMemcpyPeer")
 	drv.cuDeviceCanAccessPeer = ffi.Fn3[CUresult, *int32, CUdevice, CUdevice](lib, "cuDeviceCanAccessPeer")
 	drv.cuCtxEnablePeerAccess = ffi.Fn2[CUresult, CUctx, uint32](lib, "cuCtxEnablePeerAccess")
+	if lib.Has("cuCtxDisablePeerAccess") {
+		drv.cuCtxDisablePeerAccess = ffi.Fn1[CUresult, CUctx](lib, "cuCtxDisablePeerAccess")
+	}
 }
 
 // PeerCopyAvailable reports whether this driver copies between contexts.
@@ -47,6 +50,15 @@ func (d *Device) EnablePeerAccess(peer *Device) error {
 		return d.drv.call(r, "cuCtxEnablePeerAccess")
 	}
 	return nil
+}
+
+// DisablePeerAccess undoes EnablePeerAccess for the context current on the
+// calling thread -- d's, on its owner thread.
+func (d *Device) DisablePeerAccess(peer *Device) error {
+	if d.drv.cuCtxDisablePeerAccess == nil {
+		return fmt.Errorf("cuda: this driver has no cuCtxDisablePeerAccess")
+	}
+	return d.drv.call(d.drv.cuCtxDisablePeerAccess(peer.ctx), "cuCtxDisablePeerAccess")
 }
 
 // CopyPeer copies n bytes of src (an allocation of srcDev) at srcOff to dst
