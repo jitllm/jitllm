@@ -88,11 +88,11 @@ func TestComposedCPUPicturePIL(t *testing.T) {
 			t.Fatalf("%s: %v", name, err)
 		}
 		run := func(filter uint8) []float32 {
-			req := make([]uint32, RequestPicTaps+(c.ow+c.oh)*(K+1))
+			req := make([]uint32, RequestPicTaps+(c.ow+c.oh)*PILEntryWords(K))
 			req[RequestPicW], req[RequestPicH], req[RequestPicStride] = uint32(c.w), uint32(c.h), uint32(stride)
 			req[RequestPicCStride], req[RequestPicP2], req[RequestPicP3], req[RequestPicSub] = uint32(cstride), uint32(p2), uint32(p3), uint32(sub)
 			PILTaps(filter, c.w, c.fw, x0, c.ow, K, req[RequestPicTaps:])
-			PILTaps(filter, c.h, c.fh, y0, c.oh, K, req[RequestPicTaps+c.ow*(K+1):])
+			PILTaps(filter, c.h, c.fh, y0, c.oh, K, req[RequestPicTaps+c.ow*PILEntryWords(K):])
 			got, err := runCPUBound(hostArm(), codes, []float32{0}, rows*W, [3][]uint32{}, nil, func(o Operand) []uint32 {
 				switch o.Name {
 				case "request":

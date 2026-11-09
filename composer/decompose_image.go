@@ -46,7 +46,7 @@ const (
 	RequestTrailN
 	// RequestPicTaps is where a picture resized by Pillow's filters
 	// (graph.ChainPIL) has its taps: the output's columns' (PILTaps), then
-	// its rows', each entry Taps+1 words.
+	// its rows', each entry PILEntryWords(Taps) words.
 	RequestPicTaps
 )
 
@@ -186,7 +186,7 @@ func pictureSample(x *exprs, a graph.Attrs, stride, y, xx, ch int) int {
 // decomposePicturePIL is a picture resized by Pillow's antialiased filter
 // (graph.ChainPIL), its taps in the request (PILTaps): for each source row
 // (PicSide of them) and output column's channel the sum over the tap axis
-// (Taps long, its weights zero past the column's window) of each weight times
+// (Taps at most, its trips the column's window's count) of each weight times
 // its sample, in integers; then for each output pixel's channel the same over
 // its rows, each term the horizontal sum made a byte -- from half Pillow's
 // unit, clamped at zero, shifted down by its fixed point and clamped to 255;
@@ -203,8 +203,9 @@ func decomposePicturePIL(o graph.Op, c *Context) ([]Prim, error) {
 	if W%3 != 0 || W >= 1<<15 {
 		return nil, fmt.Errorf("a picture's rows of %d samples, not whole pixels", W)
 	}
-	tapsV := RequestPicTaps + a.PicW*(K+1)
-	reqWords := tapsV + a.PicH*(K+1)
+	E := PILEntryWords(K)
+	tapsV := RequestPicTaps + a.PicW*E
+	reqWords := tapsV + a.PicH*E
 	name := c.Graph.Values[o.Out[0]].Name
 	hsh := []int{a.PicSide, a.PicW, 3}
 	hsum := Operand{Kind: OperandScratch, Name: name + ".rows", Elem: I}
@@ -216,7 +217,15 @@ func decomposePicturePIL(o graph.Op, c *Context) ([]Prim, error) {
 	}
 	// weight is tap t's weight at entry base of the request's taps.
 	weight := func(x *exprs, base, t int) int {
-		return x.un(OpBitcast, I, x.load(1, x.op(OpAdd, U, x.op(OpAdd, U, base, x.u(1)), t)))
+		return x.un(OpBitcast, I, x.load(1, x.op(OpAdd, U, x.op(OpAdd, U, base, x.u(2)), t)))
+	}
+	// trips is a tap axis as a range: the entry's count of taps, at entry
+	// base's word after its first sample, the loop's trips.
+	trips := func(entry func(x *exprs) int) *Range {
+		var lo, hi exprs
+		lo.u(0)
+		hi.load(1, hi.op(OpAdd, U, entry(&hi), hi.u(1)))
+		return &Range{First: lo.e, End: hi.e}
 	}
 	facts := Facts{Extents: map[int]int{0: PictureWords, 1: reqWords}}
 
@@ -229,23 +238,31 @@ func decomposePicturePIL(o graph.Op, c *Context) ([]Prim, error) {
 		sw := h.op(OpMax, U, h.load(1, hu(RequestPicW)), hu(1))
 		srcH := h.op(OpMax, U, h.load(1, hu(RequestPicH)), hu(1))
 		y := h.op(OpMin, U, r, h.op(OpSub, U, srcH, hu(1)))
-		base := h.op(OpAdd, U, hu(RequestPicTaps), h.op(OpMul, U, xo, hu(K+1)))
+		base := h.op(OpAdd, U, hu(RequestPicTaps), h.op(OpMul, U, xo, hu(E)))
 		xi := h.op(OpMin, U, h.op(OpAdd, U, h.load(1, base), t), h.op(OpSub, U, sw, hu(1)))
 		stride := h.load(1, hu(RequestPicStride))
 		h.op(OpMul, I, weight(&h, base, t), h.un(OpBitcast, I, pictureSample(&h, a, stride, y, xi, hu(ch))))
 		var hi exprs
 		hi.op(OpAdd, U, hi.op(OpMul, U, hi.op(OpAdd, U, hi.op(OpMul, U, hi.coord(0), hi.u(uint32(a.PicW))), hi.coord(1)), hi.u(3)),
 			hi.u(uint32(ch)))
-		hf := Facts{Extents: facts.Extents, OutExtent: a.PicSide * a.PicW * 3}
+		hr := trips(func(x *exprs) int {
+			return x.op(OpAdd, U, x.u(RequestPicTaps), x.op(OpMul, U, x.coord(1), x.u(uint32(E))))
+		})
+		hr.Axis = 2
+		hf := Facts{Extents: facts.Extents, OutExtent: a.PicSide * a.PicW * 3, Range: hr}
 		prims = append(prims, Prim{Kind: PrimReduce, Shape: []int{a.PicSide, a.PicW, K}, In: []Operand{TablePicture.op(), TableRequest.op()},
 			Out: hsum, Combine: OpAdd, Type: I, Expr: h.e, Index: hi.e, Facts: hf})
 	}
 
+	vr := trips(func(x *exprs) int {
+		return x.op(OpAdd, U, x.u(uint32(tapsV)), x.op(OpMul, U, x.coord(0), x.u(uint32(E))))
+	})
+	vr.Axis = 3
 	var v exprs
 	oy, ox, vch, vt := v.coord(0), v.coord(1), v.coord(2), v.coord(3)
 	vu := func(n int) int { return v.u(uint32(n)) }
 	vsrcH := v.op(OpMax, U, v.load(1, vu(RequestPicH)), vu(1))
-	vbase := v.op(OpAdd, U, vu(tapsV), v.op(OpMul, U, oy, vu(K+1)))
+	vbase := v.op(OpAdd, U, vu(tapsV), v.op(OpMul, U, oy, vu(E)))
 	yi := v.op(OpMin, U, v.op(OpAdd, U, v.load(1, vbase), vt), v.op(OpSub, U, vsrcH, vu(1)))
 	v.op(OpMul, I, weight(&v, vbase, vt), v.un(OpBitcast, I, finish(&v, v.at(2, hsh, yi, ox, vch))))
 
@@ -282,7 +299,7 @@ func decomposePicturePIL(o graph.Op, c *Context) ([]Prim, error) {
 	m.sel(F, m.op(OpLess, ir.Pred, flat, live), val, m.f(0))
 	return append(prims,
 		Prim{Kind: PrimReduce, Shape: []int{a.PicH, a.PicW, 3, K}, In: []Operand{TablePicture.op(), TableRequest.op(), hsum},
-			Out: vsum, Combine: OpAdd, Type: I, Expr: v.e, Facts: facts},
+			Out: vsum, Combine: OpAdd, Type: I, Expr: v.e, Facts: Facts{Extents: facts.Extents, Range: vr}},
 		Prim{Kind: PrimMap, Shape: sh, In: in, Out: c.value(o.Out[0]), Expr: m.e,
 			Facts: Facts{Extents: ext}}), nil
 }
