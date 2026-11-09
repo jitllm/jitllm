@@ -4,6 +4,7 @@ package engine
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/jitllm/jitllm/model"
@@ -22,7 +23,15 @@ import (
 //
 // Build with -tags jitllmfault; tier reads JITLLM_DEVICE_FAIL_AT at Open.
 func TestDemotedDevicePrefillFinishesOnTheCPU(t *testing.T) {
-	p := testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf")
+	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "gemma4/google_gemma-4-E2B-it-Q4_K_M.gguf"} {
+		t.Run(filepath.Base(name), func(t *testing.T) { demotedPrefillFinishes(t, testmodels.Path(name)) })
+	}
+}
+
+// demotedPrefillFinishes is TestDemotedDevicePrefillFinishesOnTheCPU on the
+// model at p: a model of per-layer inputs and shared history (Gemma 4) as
+// much as a plain one.
+func demotedPrefillFinishes(t *testing.T, p string) {
 	if _, err := os.Stat(p); err != nil {
 		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS) -- this gate proved nothing", err)
 	}
