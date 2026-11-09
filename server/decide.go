@@ -112,22 +112,38 @@ func (e *Engine) Decide(ctx context.Context, o DecideOptions) (*DecideResult, er
 		return nil, err
 	}
 	t1 := time.Now()
-	ans, err := d.d.DecideMedia(o.State, o.Questions, pics, videos)
+	var ans []engine.DecisionAnswer
+	var asked error
+	err = d.ms.Run(ctx, engine.PhasePrefill, func(in *engine.Instance) error {
+		if d.d == nil {
+			if d.d, asked = engine.NewDecider(in); asked != nil {
+				return asked
+			}
+		}
+		d.d.Use(in)
+		ans, asked = d.d.DecideMedia(o.State, o.Questions, pics, videos)
+		return asked
+	})
+	if asked != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalid, asked)
+	}
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
+		return nil, err
 	}
 	lm.tokensPrefilled.Add(int64(d.d.InputTokens()))
 	return &DecideResult{ModelID: lm.id, Answers: ans, Body: d.d.DecisionResponse(lm.id, o.Questions, ans),
 		InputTokens: d.d.InputTokens(), QueuedFor: t1.Sub(t0), Took: time.Since(t1)}, nil
 }
 
-// decider is a Decider and the instance it asks through.
+// decider is a Decider and the session it asks through: a history on the
+// model's instance, which a question leases (Session.Run), so a decider
+// composes nothing. Its Decider is made on its first lease.
 type decider struct {
-	in *engine.Instance
+	ms *engine.Session
 	d  *engine.Decider
 }
 
-func (x *decider) close() { x.in.Close() }
+func (x *decider) close() { x.ms.Close() }
 
 // deciders is a model's idle deciders, as embedders are its embedders: one
 // per concurrent request, built when none is idle and kept.
@@ -152,23 +168,14 @@ func (lm *LoadedModel) takeDecider(maxSeq int) (*decider, error) {
 		return x, nil
 	}
 	lm.decMu.Unlock()
-	in, err := engine.NewInstance(lm.m, maxSeq, lm.io...)
-	if err == nil && lm.device() != nil {
-		if err = in.SetDeviceLayers(lm.device(), lm.deviceBlocks()); err != nil {
-			in.Close()
-		}
-	}
+	lm.attachMu.RLock()
+	ms, err := lm.pool.NewSession(maxSeq)
+	lm.attachMu.RUnlock()
 	if err != nil {
-		lm.giveDecider(nil)
-		return nil, err
-	}
-	d, err := engine.NewDecider(in)
-	if err != nil {
-		in.Close()
 		lm.giveDecider(nil)
 		return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
 	}
-	return &decider{in: in, d: d}, nil
+	return &decider{ms: ms}, nil
 }
 
 // giveDecider returns a decider to the free list, or closes it when the model
