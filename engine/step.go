@@ -214,7 +214,9 @@ func reserveRuns(runs []Run) error {
 // its own recurrent seat and, where the step wants logits from the card's
 // head, the per-row head; where one has no room, blocks move to the CPU,
 // every session's history with them, until it has (relocateUntil). A step
-// whose scratch does not build is that step's error.
+// whose scratch does not build is that step's error. rows is the most the
+// step submits at once: a step of more than MaxStepRows runs one instance
+// after another, each prefill in chunks of at most that many.
 func roomRuns(runs []Run, rows int) error {
 	in := runs[0].Instance
 	if in.ld == nil || in.devCount() == 0 {
@@ -306,7 +308,7 @@ func stepRunsOn(runs []Run, lone bool) ([][]float32, error) {
 	if err := reserveRuns(runs); err != nil {
 		return nil, err
 	}
-	if err := roomRuns(runs, rows); err != nil {
+	if err := roomRuns(runs, min(rows, MaxStepRows)); err != nil {
 		return nil, err
 	}
 	if pictures {
