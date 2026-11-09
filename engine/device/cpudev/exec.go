@@ -98,7 +98,12 @@ func (e *Exec) Place(n int, ex Lease, planes [2][]float32, nExpert int, prof boo
 		e.lanes = NewLanes(e, e.b, ex, st.Width, st.Seqs, st.Streams, st.ConvLen, st.Trace)
 	}
 	e.blocks = make([]*Block, n)
-	e.composed = make([]int, n)
+	// The counts are the instance's whole life: a placement again for a new
+	// history format (Instance.setKVFmt) forgets the forms, not that they
+	// were composed.
+	if len(e.composed) != n {
+		e.composed = make([]int, n)
+	}
 	if e.dev == nil {
 		e.dev = NewDevice(e.workers)
 		e.dev.Prof = prof
