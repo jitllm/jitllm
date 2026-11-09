@@ -50,6 +50,51 @@ type orderer struct {
 	// its trip read, those values: its step runs once they have.
 	after   map[int][]int
 	scopeOf int
+	// memo is evalArgs' depths for one call, cleared at each (args): what is
+	// made changes as need recurses, so no depth outlives its call.
+	memo map[int]int
+	// twins is each two-operand node's key (twinKey) to the nodes sharing
+	// it, in node order: need's candidates for a node's twin.
+	twins map[twinKey][]int
+	// readers is each node's readers, the nodes then the stores reading it
+	// (reads), and countsOf each loop's counts (counts): the nodes, loops
+	// and homes they come from are fixed while the orderer runs.
+	readers  *readerIndex
+	countsOf map[int]map[int]bool
+}
+
+// readerIndex is, for each node, the nodes and the stores reading it.
+type readerIndex struct {
+	nodes, stores [][]int
+}
+
+// twinKey is a two-operand node's operation and operands.
+type twinKey struct {
+	op      Op
+	a, b, c int
+}
+
+// args is evalArgs over nd with o's scratch memo.
+func (o *orderer) args(nd *Node) []*int {
+	if o.memo == nil {
+		o.memo = map[int]int{}
+	}
+	clear(o.memo)
+	return o.k.evalArgs(nd, o.memo, o.made)
+}
+
+// twinsOf is the nodes with nd's operation and operands, in node order.
+func (o *orderer) twinsOf(nd *Node) []int {
+	if o.twins == nil {
+		o.twins = map[twinKey][]int{}
+		for j, x := range o.k.Nodes {
+			if arity(x.Op) == 2 {
+				k := twinKey{x.Op, x.A, x.B, x.C}
+				o.twins[k] = append(o.twins[k], j)
+			}
+		}
+	}
+	return o.twins[twinKey{nd.Op, nd.A, nd.B, nd.C}]
 }
 
 func (o *orderer) run() {
@@ -232,26 +277,28 @@ func (o *orderer) need(i, c int) {
 	if nd.Op == OpZip || nd.Op == OpUnpack {
 		o.stages(nd.A, nd.B, c)
 	}
-	for _, a := range k.evalArgs(&nd, map[int]int{}, o.made) {
+	for _, a := range o.args(&nd) {
 		switch k.Nodes[*a].Op {
 		case OpAnd, OpAndNot, OpOr, OpXor:
-			for _, b := range k.evalArgs(&k.Nodes[*a], map[int]int{}, o.made) {
+			for _, b := range o.args(&k.Nodes[*a]) {
 				if !o.constLoad(*b) {
 					o.need(*b, c)
 				}
 			}
 		}
 	}
-	for _, a := range k.evalArgs(&nd, map[int]int{}, o.made) {
+	for _, a := range o.args(&nd) {
 		o.need(*a, c)
 	}
 	if nd.Share > 0 {
 		o.beforeShare(i, c)
 	}
 	o.node(i)
-	for j, x := range k.Nodes {
-		if j != i && !o.done[j] && x.Op == nd.Op && x.A == nd.A && x.B == nd.B && x.C == nd.C && x.Imm != nd.Imm && arity(x.Op) == 2 && o.home[j] == c {
-			o.node(j)
+	if arity(nd.Op) == 2 {
+		for _, j := range o.twinsOf(&nd) {
+			if j != i && !o.done[j] && k.Nodes[j].Imm != nd.Imm && o.home[j] == c {
+				o.node(j)
+			}
 		}
 	}
 }
@@ -482,7 +529,7 @@ func (o *orderer) together(xs []int, c int) {
 	// another, as the sums are read: side by side, each sum would hold
 	// its own value where one shared value is all a sum after another
 	// holds.
-	args := k.evalArgs(&nds[0], map[int]int{}, o.made)
+	args := o.args(&nds[0])
 	for _, shared := range []bool{false, true} {
 		for _, a := range args {
 			if ys := at(place(a)); ys != nil && !o.leaves(ys) && one(ys) == shared && (shared || o.sharedToMake(ys, c) > 1) {
@@ -651,22 +698,28 @@ func (o *orderer) shareComputed(folds []int, c int) bool {
 // loop inside it, or one of d's stores, reaching it.
 func (o *orderer) reads(d, i int) bool {
 	k := o.k
-	for j, nd := range k.Nodes {
-		if h, ok := o.home[j]; ok && h >= 0 && k.within(h, d) {
-			for _, a := range k.Operands(&nd) {
-				if *a == i {
-					return true
-				}
+	if o.readers == nil {
+		r := &readerIndex{nodes: make([][]int, len(k.Nodes)), stores: make([][]int, len(k.Nodes))}
+		for j := range k.Nodes {
+			for _, a := range k.Operands(&k.Nodes[j]) {
+				r.nodes[*a] = append(r.nodes[*a], j)
 			}
 		}
-	}
-	for _, s := range k.Stores {
-		if s.At >= 0 && k.within(s.At, d) && !s.Barrier && !s.Run {
-			for _, a := range k.storeArgs(&s) {
-				if *a == i {
-					return true
-				}
+		for si := range k.Stores {
+			for _, a := range k.storeArgs(&k.Stores[si]) {
+				r.stores[*a] = append(r.stores[*a], si)
 			}
+		}
+		o.readers = r
+	}
+	for _, j := range o.readers.nodes[i] {
+		if h, ok := o.home[j]; ok && h >= 0 && k.within(h, d) {
+			return true
+		}
+	}
+	for _, si := range o.readers.stores[i] {
+		if s := &k.Stores[si]; s.At >= 0 && k.within(s.At, d) && !s.Barrier && !s.Run {
+			return true
 		}
 	}
 	return false
@@ -675,8 +728,15 @@ func (o *orderer) reads(d, i int) bool {
 // counts is the nodes the counts of loop d and the loops in it are made
 // from.
 func (o *orderer) counts(d int) map[int]bool {
+	if out, ok := o.countsOf[d]; ok {
+		return out
+	}
+	if o.countsOf == nil {
+		o.countsOf = map[int]map[int]bool{}
+	}
 	k := o.k
 	out := map[int]bool{}
+	o.countsOf[d] = out
 	var walk func(i int)
 	walk = func(i int) {
 		if out[i] {
@@ -789,7 +849,7 @@ func (o *orderer) byFirstRead(d int, keep func(int) bool) []int {
 		return out
 	}
 	dry := orderer{k: k, done: maps.Clone(o.done), loopDone: maps.Clone(o.loopDone), home: o.home, depths: map[int]int{}, words: o.words,
-		after: map[int][]int{}, scopeOf: o.scopeOf}
+		after: map[int][]int{}, scopeOf: o.scopeOf, twins: o.twins, readers: o.readers, countsOf: o.countsOf}
 	for _, i := range out {
 		dry.done[i] = true
 	}

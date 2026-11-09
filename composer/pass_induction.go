@@ -139,10 +139,11 @@ func (k *Kernel) addressNodes() map[int]bool {
 			stack = append(stack, i)
 		}
 	}
-	for _, nd := range k.Nodes {
-		if nd.Op == OpLoad {
-			for _, a := range k.Operands(&nd) {
-				push(*a)
+	var buf [3]int
+	for j := range k.Nodes {
+		if k.Nodes[j].Op == OpLoad {
+			for _, a := range k.args(j, &buf) {
+				push(a)
 			}
 		}
 	}
@@ -158,9 +159,9 @@ func (k *Kernel) addressNodes() map[int]bool {
 	for len(stack) > 0 {
 		i := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
-		if nd := k.Nodes[i]; nd.Op != OpFold {
-			for _, a := range k.Operands(&nd) {
-				push(*a)
+		if k.Nodes[i].Op != OpFold {
+			for _, a := range k.args(i, &buf) {
+				push(a)
 			}
 		}
 	}
