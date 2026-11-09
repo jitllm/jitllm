@@ -90,8 +90,13 @@ type TowerGraphs struct {
 // format, its picture op's attributes and its rows.
 type towerClass struct {
 	Entry map[uint8]*graph.Graph
-	Pic   graph.Attrs
-	Rows  int
+	// Band is the class's band graphs, where its resize is Pillow's
+	// (graph.PicBand), by BandKey; BandRuns the band graphs each entry runs
+	// first, in order. Its entries' picture ops then finish the bands' sums.
+	Band     map[uint8]*graph.Graph
+	BandRuns map[uint8][]uint8
+	Pic      graph.Attrs
+	Rows     int
 }
 
 // placeholder is what the template src writes for an image part, read off it
@@ -444,11 +449,18 @@ func (m *Model) BuildTowerGraphs() (*TowerGraphs, error) {
 		}
 		cl := towerClass{Entry: map[uint8]*graph.Graph{}, Rows: grid + tg.Lead + tg.Tail}
 		for px := graph.PixRGBA8; px < graph.PixFormats; px++ {
-			g, err := towerEntry(t, px, grid, tg.Lead+tg.Tail, sd, fit, dense)
+			g, band, err := towerEntry(t, px, grid, tg.Lead+tg.Tail, sd, fit, dense)
 			if err != nil {
 				return nil, fmt.Errorf("model: the tower's entry: %w", err)
 			}
 			cl.Pic, cl.Entry[px] = g.Ops[0].Attr, g
+			cl.Pic.PicPass = graph.PicWhole
+			if band != nil {
+				if cl.Band == nil {
+					cl.Band, cl.BandRuns = map[uint8]*graph.Graph{}, map[uint8][]uint8{}
+				}
+				cl.Band[BandKey(0, px)], cl.BandRuns[px] = band, []uint8{BandKey(0, px)}
+			}
 		}
 		tg.Classes = append(tg.Classes, cl)
 		tg.Rows = max(tg.Rows, cl.Rows)
@@ -467,6 +479,29 @@ func (m *Model) BuildTowerGraphs() (*TowerGraphs, error) {
 						return nil, fmt.Errorf("model: the tower's video entry: %w", err)
 					}
 					cl.Pic, cl.Entry[PairKey(px0, px1)] = g.Ops[0].Attr, g
+					cl.Pic.PicPass = graph.PicWhole
+				}
+			}
+			if cl.Pic.Chain == graph.ChainPIL {
+				// Each frame's bands into its own accumulator, the first
+				// frame's then the second's.
+				cl.Band, cl.BandRuns = map[uint8]*graph.Graph{}, map[uint8][]uint8{}
+				for px := graph.PixRGBA8; px < graph.PixFormats; px++ {
+					for frame := range 2 {
+						a := cl.Pic
+						a.Pixels, a.PicFrame, a.PicPass = px, frame == 1, graph.PicBand
+						b := graph.NewBlock(-1)
+						b.Out(b.Emit(graph.OpPicture, nil, []graph.Result{{Name: "frame.band", Width: 3}}, nil, a, nil, nil)[0])
+						if err := graph.Verify(b.G, dense); err != nil {
+							return nil, fmt.Errorf("model: the tower's video band: %w", err)
+						}
+						cl.Band[BandKey(frame, px)] = b.G
+					}
+				}
+				for px0 := graph.PixRGBA8; px0 < graph.PixFormats; px0++ {
+					for px1 := graph.PixRGBA8; px1 < graph.PixFormats; px1++ {
+						cl.BandRuns[PairKey(px0, px1)] = []uint8{BandKey(0, px0), BandKey(1, px1)}
+					}
 				}
 			}
 			tg.Videos = append(tg.Videos, cl)
@@ -835,63 +870,63 @@ func towerFit(t *jlm.Tower) (PictureFit, error) {
 // preprocessing as one op (graph.OpPicture), then its entry program over
 // the grid's patch rows and extra rows beside them (a class row's, before
 // or after); for a picture of a size of its own, at most side pixels a side.
-func towerEntry(t *jlm.Tower, px uint8, grid, extra, side int, fit PictureFit, f graph.Facts) (*graph.Graph, error) {
+func towerEntry(t *jlm.Tower, px uint8, grid, extra, side int, fit PictureFit, f graph.Facts) (*graph.Graph, *graph.Graph, error) {
 	a := graph.Attrs{Pixels: px, Std: [3]float64{1, 1, 1}}
 	for _, s := range t.Pre {
 		switch s.Kind {
 		case jlm.PreResize:
 			a.PicW, a.PicH = int(s.Ints[0]), int(s.Ints[1])
 			if err := resizeChain(&a, jlm.Filter(s.Ints[2])); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			a.PicTorch = jlm.Precision(s.Ints[3]) == jlm.PrecTorch
 		case jlm.PreResizeShort:
 			a.PicW, a.PicH = int(s.Ints[0]), int(s.Ints[0])
 			if err := resizeChain(&a, jlm.Filter(s.Ints[1])); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 		case jlm.PreSmartResize:
 			a.PicW, a.PicH, a.PicLive = side, side, true
 			if err := resizeChain(&a, jlm.Filter(s.Ints[3])); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 		case jlm.PreSliceUHD:
 			a.PicW, a.PicH, a.PicLive = side, side, true
 			if err := resizeChain(&a, jlm.Filter(s.Ints[3])); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			a.PicTorch = jlm.Precision(s.Ints[4]) == jlm.PrecTorch
 		case jlm.PreTileSmart:
 			a.PicW, a.PicH, a.PicLive = side, side, true
 			if err := resizeChain(&a, jlm.Filter(s.Ints[7])); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			a.PicTorch = jlm.Precision(s.Ints[8]) == jlm.PrecTorch
 		case jlm.PreAspectBudget:
 			a.PicW, a.PicH, a.PicLive = side, side, true
 			if err := resizeChain(&a, jlm.Filter(s.Ints[3])); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 		case jlm.PreCapUnit:
 			a.PicW, a.PicH, a.PicLive = side, side, true
 			if err := resizeChain(&a, jlm.Filter(s.Ints[2])); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 		case jlm.PreNaFlex:
 			a.PicW, a.PicH, a.PicLive = side, side, true
 			if err := resizeChain(&a, jlm.Filter(s.Ints[3])); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 		case jlm.PreLongBox:
 			a.PicW, a.PicH, a.PicLive, a.PicBox = int(s.Ints[0]), int(s.Ints[0]), true, true
 			a.PicFill = [3]uint8{uint8(s.Ints[2]), uint8(s.Ints[3]), uint8(s.Ints[4])}
 			if err := resizeChain(&a, jlm.Filter(s.Ints[5])); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 		case jlm.PreLimitPad:
 			a.PicW, a.PicH, a.PicLive, a.PicPad = side, side, true, int(s.Ints[2])
 			if err := resizeChain(&a, jlm.Filter(s.Ints[3])); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 		case jlm.PreCenterCrop:
 			a.PicW, a.PicH = int(s.Ints[0]), int(s.Ints[1])
@@ -909,25 +944,38 @@ func towerEntry(t *jlm.Tower, px uint8, grid, extra, side int, fit PictureFit, f
 		// source's times sqrt(area / maxPix), the source at most PicSide a
 		// side (pictureFit.smartSize).
 		root := int(math.Sqrt(float64(fit.MaxPix)))
-		a.Taps = composer.PILTapCount(a.Filter, 2*max(a.PicSide, root), root)
+		a.Taps = composer.PILTapCount(a.Filter, 2*max(composer.PictureMaxSide, root), root)
 	case a.Chain == graph.ChainPIL:
 		// A crop's taps are a window of the resize's, whose scale is at most
 		// the crop's own.
-		a.Taps = max(composer.PILTapCount(a.Filter, a.PicSide, a.PicW), composer.PILTapCount(a.Filter, a.PicSide, a.PicH))
+		a.Taps = max(composer.PILTapCount(a.Filter, composer.PictureMaxSide, a.PicW), composer.PILTapCount(a.Filter, composer.PictureMaxSide, a.PicH))
+	}
+	// A Pillow resize runs in bands of PicSide source rows (its band graph)
+	// and the entry finishes their sums.
+	var band *graph.Graph
+	if a.Chain == graph.ChainPIL {
+		ba := a
+		ba.PicPass = graph.PicBand
+		bb := graph.NewBlock(-1)
+		bb.Out(bb.Emit(graph.OpPicture, nil, []graph.Result{{Name: "pixels.band", Width: 3}}, nil, ba, nil, nil)[0])
+		if err := graph.Verify(bb.G, f); err != nil {
+			return nil, nil, err
+		}
+		band, a.PicPass = bb.G, graph.PicFinish
 	}
 	p := &t.Entry
 	b := graph.NewBlock(-1)
 	P := int(p.Ops[0].Span)
 	pix := b.Emit(graph.OpPicture, nil, []graph.Result{{Name: "pixels", Width: 3 * P * P}}, nil, a, nil, nil)[0]
 	if a.PicLive && grid*P*P > a.PicW*a.PicH || !a.PicLive && a.PicW*a.PicH != grid*P*P {
-		return nil, fmt.Errorf("a %dx%d picture is not %d patches of %d", a.PicW, a.PicH, grid, P)
+		return nil, nil, fmt.Errorf("a %dx%d picture is not %d patches of %d", a.PicW, a.PicH, grid, P)
 	}
 	out, err := LowerProgram(b, t, p, []graph.ValueID{pix}, grid+extra, f)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	b.Out(out)
-	return b.G, graph.Verify(b.G, f)
+	return b.G, band, graph.Verify(b.G, f)
 }
 
 // towerTiles is the nested order the tower's patch rows are in: merge x

@@ -131,6 +131,20 @@ func (in *Instance) newTowerRun(tg *model.TowerGraphs, base int, t *jlm.Tower) (
 			e[px] = ts.partPlan(g, nn.DeclineNoGraph, cl.Rows, nil)
 		}
 		plans.Entry = append(plans.Entry, e)
+		var band map[uint8]nn.PartPlan
+		for px, g := range cl.Band {
+			if band == nil {
+				band = map[uint8]nn.PartPlan{}
+			}
+			band[px] = ts.partPlan(g, nn.DeclineNoGraph, cl.Rows, nil)
+		}
+		if band != nil {
+			plans.Acc = max(plans.Acc, cl.Pic.PicW*cl.Pic.PicH*3)
+			plans.BandOut = max(plans.BandOut, cl.Rows*3)
+		}
+		plans.Band = append(plans.Band, band)
+		plans.BandRuns = append(plans.BandRuns, cl.BandRuns)
+		plans.BandRows = append(plans.BandRows, cl.Pic.PicSide)
 	}
 	tapsW := make([]nn.Tensors, len(tg.Taps))
 	for j, g := range tg.Taps {
@@ -286,14 +300,17 @@ func (s *Instance) encodePicture(img image.Image, dst, deep []float32) ([]float3
 	if tr.tapsVideo {
 		tr.tapsW, tr.tapsVideo = 0, false
 	}
-	if a := tg.Classes[0].Pic; a.Chain == graph.ChainPIL && (pl.W > a.PicSide || pl.H > a.PicSide) {
-		return nil, fmt.Errorf("model: a %dx%d picture is past the %d pixels a side the tower's resize reaches", pl.W, pl.H, a.PicSide)
+	if a := tg.Classes[0].Pic; a.Chain == graph.ChainPIL && (pl.W > composer.PictureMaxSide || pl.H > composer.PictureMaxSide) {
+		return nil, fmt.Errorf("model: a %dx%d picture is past the %d pixels a side a picture holds", pl.W, pl.H, composer.PictureMaxSide)
 	}
 	D := int(m.Container.Vision().ProjDim)
 	if want := tg.PicRows(pl.W, pl.H); len(dst) != want*D || len(deep) != len(tg.Taps)*want*D {
 		return nil, fmt.Errorf("model: %d values and %d for its taps' for a picture's %d rows of %d", len(dst), len(deep), want, D)
 	}
 	sq, squares := tg.Square(pl.W, pl.H, 0)
+	if err := squareFits(sq, tg.Classes[sq.Class].Pic); err != nil {
+		return nil, err
+	}
 	if tg.Chain {
 		tr.squareRequest(pl, sq, tg.Classes[sq.Class].Pic, squares)
 		if err := ts.chainRun(tr, tg, words, pl.Px, dst, tg.Classes[0].Rows, tg.Classes[0].Rows); err != nil {
@@ -305,6 +322,9 @@ func (s *Instance) encodePicture(img image.Image, dst, deep []float32) ([]float3
 	for i := range squares {
 		if i > 0 {
 			sq, _ = tg.Square(pl.W, pl.H, i)
+			if err := squareFits(sq, tg.Classes[sq.Class].Pic); err != nil {
+				return nil, err
+			}
 		}
 		tr.squareRequest(pl, sq, tg.Classes[sq.Class].Pic, squares)
 		if err := ts.towerSquare(tr, sq, sq.Class, pl.Px, words, dst, deep, at); err != nil {
@@ -313,6 +333,15 @@ func (s *Instance) encodePicture(img image.Image, dst, deep []float32) ([]float3
 		at += tg.SquareOut(sq)
 	}
 	return dst, nil
+}
+
+// squareFits says whether square sq's resized picture fits its class's
+// square: an aspect a side past the largest class's does not yet.
+func squareFits(sq model.Square, a graph.Attrs) error {
+	if sq.Pw > a.PicW || sq.Ph > a.PicH {
+		return fmt.Errorf("model: a picture resized to %dx%d is past the tower's largest square, %dx%d", sq.Pw, sq.Ph, a.PicW, a.PicH)
+	}
+	return nil
 }
 
 // towerSquare runs square sq, its request written, through the tower: the
@@ -353,8 +382,8 @@ func (s *Instance) encodePair(f0, f1 image.Image, sq model.Square, dst, deep []f
 	}
 	tg := s.m.Tower
 	a := tg.Videos[sq.Class].Pic
-	if a.Chain == graph.ChainPIL && (pl.W > a.PicSide || pl.H > a.PicSide) {
-		return fmt.Errorf("model: a video of %dx%d frames is past the %d pixels a side the tower's resize reaches", pl.W, pl.H, a.PicSide)
+	if a.Chain == graph.ChainPIL && (pl.W > composer.PictureMaxSide || pl.H > composer.PictureMaxSide) {
+		return fmt.Errorf("model: a video of %dx%d frames is past the %d pixels a side a picture holds", pl.W, pl.H, composer.PictureMaxSide)
 	}
 	if want := tg.SquareOut(sq) * int(s.m.Container.Vision().ProjDim); len(dst) != want {
 		return fmt.Errorf("model: %d values for a video pair's %d", len(dst), want)
@@ -364,6 +393,9 @@ func (s *Instance) encodePair(f0, f1 image.Image, sq model.Square, dst, deep []f
 	tr.req[composer.RequestPicFrame] = uint32(off)
 	if !tr.tapsVideo {
 		tr.tapsW, tr.tapsVideo = 0, true
+	}
+	if err := squareFits(sq, a); err != nil {
+		return err
 	}
 	tr.squareRequest(pl, sq, a, 1)
 	return tr.s.towerSquare(tr, sq, len(tg.Classes)+sq.Class, model.PairKey(pl.Px, pl1.Px), words, dst, deep, 0)

@@ -127,7 +127,10 @@ func videoEntry(t *jlm.Tower, px0, px1 uint8, grid, extra, side int, f graph.Fac
 	a.PicBF16 = n.Kind == jlm.PreNormalizeBF16
 	if a.Chain == graph.ChainPIL {
 		root := int(math.Sqrt(float64(r[2]) / float64(v.MaxFrames)))
-		a.Taps = composer.PILTapCount(a.Filter, 2*max(a.PicSide, root), root)
+		a.Taps = composer.PILTapCount(a.Filter, 2*max(composer.PictureMaxSide, root), root)
+		// Its frames run in bands (towerClass.Band); the entry finishes
+		// their sums.
+		a.PicPass = graph.PicFinish
 	}
 	P := int(v.Entry.Ops[0].Span)
 	b := graph.NewBlock(-1)
@@ -208,6 +211,10 @@ func pairKey(f0, f1 image.Image, sq Square) (*RowsKey, error) {
 	hs.Sum(k[:0])
 	return &k, nil
 }
+
+// BandKey is the band graph a frame's picture op in sample format px takes
+// (towerClass.Band): a video pair's second frame (frame 1) its own.
+func BandKey(frame int, px uint8) uint8 { return uint8(frame)<<4 | px }
 
 // PairKey is the entry a video pair of frames in sample formats px0 and px1
 // takes (TowerGraphs.Videos): every ordered pair of formats is an entry of
