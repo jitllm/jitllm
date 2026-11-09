@@ -8,23 +8,37 @@ import (
 	"github.com/jitllm/jitllm/model"
 )
 
-// TestDecisionOverVideoMatchesItsGolden asks Clef's VL fixture the video
+// TestDecisionOverVideoMatchesItsGolden asks a decision model the video
 // request -- a clip's frames with no rate stated -- and holds its answers to
-// the golden Clef's own code gave on its release's processor, on the CPU
-// device (int8 activations and float forms) and on each card with every
-// block placed. The violation: the same request with no video is not the
-// golden's answer.
+// the golden its own code gave: Clef's VL fixture to Clef's code on its
+// release's processor, vllm-d3 to its runtime (d3_runtime.py; scripts/
+// d3gold.py), which reads a list of frames as a clip at 2 a second
+// (VIDEO_FPS) -- the rate its case states; on the CPU device (int8
+// activations and float forms) and on each card with every block placed.
+// The violation: the same request with no video is not the golden's answer.
 func TestDecisionOverVideoMatchesItsGolden(t *testing.T) {
-	src, ok := existingModel(testmodels.Path("clef/fixture-vl/clef-fixture-vl.gguf"))
+	for _, c := range []struct {
+		name, gguf, gold string
+		tol, fps         float64
+	}{
+		{"clef-fixture-vl", "clef/fixture-vl/clef-fixture-vl.gguf", "clef-fixture-vl.video.reference.json", 2e-3, 0},
+		{"vllm-d3-runtime", "vllm-d3/vllm-d3-edge-Q8_0.gguf", "vllm-d3-edge.video.reference.json", 0.05, 2},
+	} {
+		t.Run(c.name, func(t *testing.T) { videoMatchesItsGolden(t, c.gguf, c.gold, c.tol, c.fps) })
+	}
+}
+
+func videoMatchesItsGolden(t *testing.T, gguf, gold string, tol, fps float64) {
+	src, ok := existingModel(testmodels.Path(gguf))
 	if !ok {
-		testmodels.Missing(t, "MODEL MISSING: %s (scripts/clefgold.py makes it)", testmodels.Path("clef/fixture-vl/clef-fixture-vl.gguf"))
+		testmodels.Missing(t, "MODEL MISSING: %s (scripts/decisiongold.sh names its source)", testmodels.Path(gguf))
 	}
 	m, err := model.Open(jlmOfPair(t, src, towerOf(src)))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	video, err := m.VideoSpans(decisionVideo(t, "video"), 0)
+	video, err := m.VideoSpans(decisionVideo(t, "video"), fps)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +65,7 @@ func TestDecisionOverVideoMatchesItsGolden(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		worst := checkDecisions(t, qs, ans, readDecisionGold(t, "clef-fixture-vl.video.reference.json"), 2e-3)
+		worst := checkDecisions(t, qs, ans, readDecisionGold(t, gold), tol)
 		t.Logf("%d prompt rows, worst difference %.5f", d.InputTokens(), worst)
 		blind, err := d.Decide(state, qs)
 		if err != nil {
