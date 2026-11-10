@@ -1127,26 +1127,25 @@ func (g *devTier) spreadParts(src, nl *lane, gr *graph.Graph) error {
 type partDecline = nn.Decline
 
 const (
-	partServes       = nn.DeclineServes
-	partNoGraph      = nn.DeclineNoGraph
-	partNoPool       = nn.DeclineNoPool
-	partFeeds        = nn.DeclineFeeds
-	partWindow       = nn.DeclineWindow
-	partHeadShape    = nn.DeclineHeadShape
-	partCaller       = nn.DeclineCaller
-	partNoRoom       = nn.DeclineNoRoom
-	partHeadOther    = nn.DeclineHeadOther
-	partNoTable      = nn.DeclineNoTable
-	partTableHeld    = nn.DeclineTableHeld
-	partNoSample     = nn.DeclineNoSample
-	partNoEmbed      = nn.DeclineNoEmbed
-	partEmbedWeight  = nn.DeclineEmbedWeight
-	partExperts      = nn.DeclineExperts
-	partEmbedStreams = nn.DeclineEmbedStreams
-	partRecurrent    = nn.DeclineRecurrent
-	partNoWeight     = nn.DeclineNoWeight
-	partNotFormed    = nn.DeclineNotFormed
-	numPartDeclines  = nn.NumDeclines
+	partServes      = nn.DeclineServes
+	partNoGraph     = nn.DeclineNoGraph
+	partNoPool      = nn.DeclineNoPool
+	partFeeds       = nn.DeclineFeeds
+	partWindow      = nn.DeclineWindow
+	partHeadShape   = nn.DeclineHeadShape
+	partCaller      = nn.DeclineCaller
+	partNoRoom      = nn.DeclineNoRoom
+	partHeadOther   = nn.DeclineHeadOther
+	partNoTable     = nn.DeclineNoTable
+	partTableHeld   = nn.DeclineTableHeld
+	partNoSample    = nn.DeclineNoSample
+	partNoEmbed     = nn.DeclineNoEmbed
+	partEmbedWeight = nn.DeclineEmbedWeight
+	partExperts     = nn.DeclineExperts
+	partRecurrent   = nn.DeclineRecurrent
+	partNoWeight    = nn.DeclineNoWeight
+	partNotFormed   = nn.DeclineNotFormed
+	numPartDeclines = nn.NumDeclines
 )
 
 // DeclineName is the reason a decline count is kept under, by its index in

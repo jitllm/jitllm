@@ -89,9 +89,6 @@ func TestStreamRowsServeOnTheCard(t *testing.T) {
 						nc, nh, dc, dh, len(toks)+1, heads)
 				case tc.blocks && (nb != len(toks)*m.Cfg.NLayer || db != 0):
 					t.Fatalf("%d block steps served and %d declined, want %d", nb, db, len(toks)*m.Cfg.NLayer)
-				case st.StepDeclines()[nn.DeclineEmbedStreams] != 0:
-					t.Fatalf("the prompt's rows declined %d times for %q: the card gathers a prompt's rows over every stream",
-						st.StepDeclines()[nn.DeclineEmbedStreams], nn.DeclineName(int(nn.DeclineEmbedStreams)))
 				case st.UnformedAtStep != 0:
 					t.Fatalf("%d composed part(s) formed at a step, not at the placement", st.UnformedAtStep)
 				}

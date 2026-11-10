@@ -31,7 +31,6 @@ const (
 	DeclineISA
 	DeclineUnplaced
 	DeclineExperts
-	DeclineEmbedStreams
 	NumDeclines
 )
 
@@ -79,8 +78,6 @@ func (d Decline) String() string {
 		return "a block not composed for the device at its placement"
 	case DeclineExperts:
 		return "routed experts not held whole on the device (streamed, cached, run on another device or in expert pages)"
-	case DeclineEmbedStreams:
-		return "input rows over every residual stream into the rows of one"
 	case DeclineISA:
 		return "a CPU the composer's CPU lowering does not emit for (x86-64 below SSE4.1 and SSSE3)"
 	}

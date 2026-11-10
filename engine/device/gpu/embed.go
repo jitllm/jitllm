@@ -65,7 +65,8 @@ func (g *devTier) EmbedRows(ids []int32, pos int, dst []float32) bool {
 	if why == partServes && bs.embStreams() > 1 && len(dst) != n*bs.embW.k*bs.embStreams() {
 		// The streams past the first are the graph's too: the destination
 		// is the whole stream-major residual.
-		why = partEmbedStreams
+		g.LastErr = fmt.Sprintf("input rows of %d tokens into %d words: the graph writes %d streams", n, len(dst), bs.embStreams())
+		return false
 	}
 	if why == partServes && !g.embedBufs(bs) {
 		why = partNoRoom

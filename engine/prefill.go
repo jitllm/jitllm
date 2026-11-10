@@ -428,10 +428,7 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 					s.growBPLE(n)
 					s.layerInputs(s.bple[:n*c.PleWidth()])
 				}
-				dst := s.bx[:n*c.NEmbd]
-				if c.StreamHead() {
-					dst = s.bx[:n*c.ResidW()]
-				}
+				dst := s.bx[:n*c.ResidW()]
 				if s.ldEmbed != nil && s.ldEmbed.EmbedRows(rowIDs[base:base+n], p0, dst) {
 					// A token chunk's tap rows are zeros.
 					s.tokenSide(n)

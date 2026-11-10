@@ -44,7 +44,6 @@ func TestTheDeclinesOnlyShrink(t *testing.T) {
 		"DeclinePageOut",
 		"DeclineNoWeight",
 		"DeclineExperts",
-		"DeclineEmbedStreams",
 	}
 	got := declineReasons(string(b))
 	if len(got) < len(allowed) {
