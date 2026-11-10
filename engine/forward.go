@@ -236,21 +236,8 @@ type Instance struct {
 	// declines counts, by reason, the blocks no device took. See DeviceDeclines.
 	declines map[string]int
 
-	// The recurrent state of a hybrid's linear layers, which is not a KV
-	// cache: rconv holds the last conv-1 columns the convolution needs and
-	// rstate one vDim x kDim matrix per value head, both constant in the
-	// context length. Indexed [layer][row*len + i], nil for a full-attention
-	// layer and for non-hybrids. dg carries the geometry.
+	// dg is the geometry of a hybrid's linear layers' recurrent state.
 	dg model.DeltaGeom
-	// The delta rule's scratch, allocated only for a hybrid. dOut is per
-	// value head so the heads can run in parallel without sharing.
-	// dLowRank is the rank-kDim temporary KDA's two low-rank gates project
-	// through, and dGateWaste receives the half of DeltaGate32JIT's pair that
-	// the call in question is not for. Both nil on qwen3next.
-	// mvCalls counts mv: each one reads its weight once, the count a gate
-	// holds a batched path to (TestLinearRowsCounts).
-	// dSB and dSC are a Mamba-1 block's B and C, and dZeroA the zero rates
-	// its dt goes through SSDGate32JIT against (only the softplus is kept).
 
 	// res keeps the hot experts resident and drops the rest; nil when the model
 	// fits its budget, which is every model but a large MoE on a small one.

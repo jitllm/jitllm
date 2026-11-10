@@ -583,10 +583,7 @@ func TestComposedCPUHeadSlices(t *testing.T) {
 }
 
 // xieluEngineTol is the error the engine's gate allows the CPU xIELU kernel at
-// x, a few units in the last place of each term the result is a sum of: the
-// function engine/device/cpu's TestXIELUMatchesTheOracle holds main's kernel to, copied
-// from it. The device kernel's gate (backend's TestXIELUMatchesTheOracle) takes
-// 2e-6 of the same sum, for the backend's own exp.
+// x, a few units in the last place of each term the result is a sum of.
 func xieluEngineTol(x float64, p [4]float32) float64 {
 	ap, an, b, e := float64(p[0]), float64(p[1]), float64(p[2]), float64(p[3])
 	m := math.Min(x, e)

@@ -12,8 +12,8 @@ import (
 
 // TestStreamedExpertBankMatchesTheResidentOne compares a mixture's routed bank
 // assembled per token (StreamExperts) against the same bank held resident on
-// the card. The kernel cannot tell a compact bank from the full one (see
-// backend.TestIndexedMatVecMatchesACompactBank), so the bar is bit equality:
+// the card. The kernel cannot tell a compact bank from the full one, so the
+// bar is bit equality:
 // sheets uploaded in the wrong order would be finite and fluent. The tuner is
 // pinned, and the stream counters show which arm ran.
 func TestStreamedExpertBankMatchesTheResidentOne(t *testing.T) {

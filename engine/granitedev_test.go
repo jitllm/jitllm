@@ -223,10 +223,8 @@ func TestGraniteOnEveryDevice(t *testing.T) {
 // reads 2.9x and Metal 1.0x. 4x would fail on the draw alone (the host against
 // split 4 is 4.2x that pair on Vulkan). The arithmetic is not the band's to
 // prove: on f32 fixtures the scales read 1e-14 against the host
-// (TestGraniteScalesOnEveryDevice), and the activation quantizer and the scaled
-// residual add are the host's bit for bit on every device
-// (TestQuantizeOnTheRoundingBoundary, TestAddScaledRoundsOnce). Every
-// violation clears the band 10x and more.
+// (TestGraniteScalesOnEveryDevice). Every violation clears the band 10x and
+// more.
 const graniteBand = denseStepBand
 
 // graniteDevModels is the models TestGraniteOnEveryDevice runs.

@@ -95,7 +95,7 @@ func teacherForce(t *testing.T, m *model.Model, ids []int32, io ...Option) [][]f
 // mlaFixtures is the list both batched MLA gates walk. JITLLM_MLA_MODEL points
 // them at a real DeepSeek instead (no fixture carries rope_scaling), e.g.
 //
-//	./scripts/cap 24G -- taskset -c 0,2,4,6,8,10 go test ./engine/model/ \
+//	./scripts/cap 24G -- taskset -c 0,2,4,6,8,10 go test ./engine/ \
 //	  -run 'TestMLA(Prefill|Batch)MatchesDecode' -count=1 -v \
 //	  -args -test.timeout=30m
 //	  # with JITLLM_MLA_MODEL=DeepSeek-V2-Lite.Q4_K_M

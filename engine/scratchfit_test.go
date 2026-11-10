@@ -215,7 +215,7 @@ func promptFits(t *testing.T, m *model.Model, spec string, io ...Option) {
 	// The violation is the card asked for what it does not have, and the
 	// driver saying out of memory. Where that lands depends on what the
 	// process left on the card: in a fresh process it is the chunk's scratch,
-	// and the chunk goes in pieces; after TestQwenVLMatchesLlamaCppTeacherForced
+	// and the chunk goes in pieces; after a gate that left the card fuller
 	// in the same process it is the head's last planes at placement, and the
 	// chunk runs whole on the room the head never took. Both are the driver
 	// refusing what the budget admitted. The composer's prompt part may meet

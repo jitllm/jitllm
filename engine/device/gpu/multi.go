@@ -6,7 +6,6 @@ import (
 	"slices"
 	"sort"
 	"strings"
-	"unsafe"
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/format/jlm"
@@ -1963,27 +1962,6 @@ func (g *GPU) HoldsExperts(li int) bool {
 	defer d.mu.Unlock()
 	l, ok := d.layers[li]
 	return ok && l.stream == nil
-}
-
-// RopeRows reads back the rotary table the first device's width-row batched
-// scratch built last: row r at r*NRot, the layout nn.Rope.Table writes. It is
-// for a gate that checks the table itself, since logit tolerances hide a table
-// built for the wrong positions (model.TestRopeTablePrefillChunkMatchesTheUpload).
-func (g *GPU) RopeRows(width int) ([]float32, error) {
-	g.mu.Lock()
-	d := g.devs[0]
-	g.mu.Unlock()
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	bs := d.bbs[width]
-	if bs == nil || bs.cs == nil {
-		return nil, fmt.Errorf("tier: no %d-row batched scratch with a rotary table", width)
-	}
-	raw := make([]byte, width*bs.p.RopeW()*4)
-	if err := bs.cs.Read(raw); err != nil {
-		return nil, err
-	}
-	return unsafe.Slice((*float32)(unsafe.Pointer(&raw[0])), width*bs.p.RopeW()), nil
 }
 
 // CacheCoverage is, for every block with an expert cache, the share of its

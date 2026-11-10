@@ -40,6 +40,11 @@ const (
 	numUncovered
 )
 
+// routerSumFloor guards a router's renormalising divide: the selected weights'
+// sum is floored before it divides them. The oracle guards its own divide
+// with the same floor (TestRouterFloorMatchesTheOracle).
+const routerSumFloor = 1e-20
+
 func (u Uncovered) String() string {
 	switch u {
 	case Covered:
@@ -1256,7 +1261,7 @@ func (m *Model) mixture(b *graph.Builder, f graph.Facts, li int, x, n graph.Valu
 		w = take("router.w", score)
 	}
 	if !c.NoExpertNorm {
-		w = mapc("router.wn", graph.MapDiv, 0, K, nil, w, mapc("router.sum", graph.MapAdd, 1e-20, 1, nil, reduce("router.wsum", w, 0, 1)))
+		w = mapc("router.wn", graph.MapDiv, 0, K, nil, w, mapc("router.sum", graph.MapAdd, routerSumFloor, 1, nil, reduce("router.wsum", w, 0, 1)))
 	}
 	if s := c.ExpertScale; s != 0 && s != 1 {
 		w = mapc("router.scaled", graph.MapMul, s, K, nil, w)

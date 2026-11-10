@@ -61,8 +61,8 @@ func lpCheck(logits []float32, chosen int32, got float32, top []TopLogprob, n in
 // log-softmax of the raw logits -- before temperature, which the request
 // samples at 0.8 so the claim "raw" is load-bearing. The same check is run
 // against the temperature-scaled distribution at every step and must reject
-// it. (The kernel's own violations -- the maximum not subtracted, ln(sum)
-// dropped -- fail nn.TestLogSoftmaxMatchesTheOracle.)
+// it. (The composed form's own violations fail
+// composer.TestComposedCPULogprobs.)
 func TestLogprobsMatchTheOracle(t *testing.T) {
 	mp, ok := existingModel(models()["stories15M"])
 	if !ok {

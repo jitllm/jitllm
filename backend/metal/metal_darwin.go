@@ -293,8 +293,7 @@ func OpenWith(o Opts) (*Ctx, error) {
 // off, where Metal's own default is on, unless the context asked for it. PTX and SPIR-V lower the IR with IEEE
 // rounding; fast math may contract, reassociate and assume finite values, so
 // the same IR would give a different number per kernel, and masked softmaxes
-// depend on -inf handling. backend.TestRMSNormQuantIsNormThenQuantize guards
-// it. An explicit fma() is still one instruction.
+// depend on -inf handling. An explicit fma() is still one instruction.
 func (rt *objc) strictMath(fast bool) ID {
 	if fast {
 		return 0 // nil options: Metal's defaults, fast math on

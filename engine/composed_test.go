@@ -186,7 +186,7 @@ func cpuDecode(t *testing.T, m *model.Model, ids, toks []int32, io ...Option) []
 // temperature on every layer, Llama 4's weightless q/k norm, temperature on
 // its unrotated layers and input-weighted top-1 experts, and HunyuanVL's
 // XD-RoPE, whose pair halves turn by two coordinates (on a text row, one
-// position: TestHunyuanVLTextMatchesTransformers decodes after a picture).
+// position).
 func servedBaseModels() []string {
 	return []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen3-0.6B-Q8_0.gguf", "tinyllama-1.1b-q3_K_M.gguf",
 		"gemma-2b.gguf", "Qwen2-1.5B-Instruct-Q4_K_M.gguf", "Qwen3-1.7B-Q4_K_M.gguf", "qwen2.5-1.5b-instruct-q4_k_m.gguf",

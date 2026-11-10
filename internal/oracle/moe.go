@@ -113,13 +113,13 @@ func (f MoEFault) String() string {
 	return "?"
 }
 
-// moeSumFloor guards the renormalising divide. It is kernels.MoESumFloor and
-// the two are asserted equal by TestRouterFloorMatchesTheKernel: an oracle that
-// guards differently from the kernel it gates is not an oracle.
+// moeSumFloor guards the renormalising divide. It is the composed router's
+// floor and the two are asserted equal by model.TestRouterFloorMatchesTheOracle:
+// an oracle that guards differently from the kernel it gates is not an oracle.
 const moeSumFloor = 1e-20
 
 // MoESumFloorForTest exposes that constant so a gate in another package can
-// assert it equals the kernel's. See nn.TestRouterFloorMatchesTheKernel.
+// assert it equals the kernel's. See model.TestRouterFloorMatchesTheOracle.
 const MoESumFloorForTest = moeSumFloor
 
 // moeLexTopK is the k largest of v, descending, with the lowest index winning a

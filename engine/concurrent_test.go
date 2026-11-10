@@ -52,8 +52,7 @@ func TestConcurrentMultiDeviceDoesNotLeak(t *testing.T) {
 		// instances are built and attached serially, forwards run concurrently:
 		// sessions are admitted one at a time and then served together, as a
 		// server does. (Concurrent construction is gated by
-		// nn.TestConcurrentNewJITKeepsEachJITsOptions and
-		// TestConcurrentOpenKeepsEachModelsOptions.)
+		// TestConcurrentInstancesKeepTheirOptions.)
 		ss := make([]*Instance, workers)
 		// Closed explicitly, not by defer, so the device ledger can be read
 		// while the tier is still open.

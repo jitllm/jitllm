@@ -11,8 +11,6 @@ import (
 
 // mmaDevices is the devices that can compile an ir.OpMMA, asked once each, so a
 // backend without MMA does not produce a skip for every cell of a sweep.
-// lowertest's TestMMACoversExactlyWhatItClaims asserts which backends lower MMA
-// and why the others decline.
 //
 // The probe is one tile with the results stored, so nothing is dead-coded away,
 // and it compiles the same shape the sweeps use. pOut takes the accumulator's
