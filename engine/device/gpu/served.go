@@ -1114,7 +1114,7 @@ func (g *devTier) spreadParts(src, nl *lane, gr *graph.Graph) error {
 		if nl.served == nil {
 			nl.served = map[servedKey]*servedPart{}
 		}
-		nl.served[sk] = &servedPart{sl: sv.sl.clone(), f: sv.f, inst: in, args: sv.f.launchArgs(), n: sv.n, m: sv.m}
+		nl.served[sk] = &servedPart{sl: sv.formed.clone(), formed: sv.formed, f: sv.f, inst: in, args: sv.f.launchArgs(), n: sv.n, m: sv.m}
 	}
 	return nil
 }
@@ -1259,7 +1259,11 @@ const partIO = 8
 // binds, reused every step: its own instance, or for a prompt part none,
 // its instance its scratch's (promptInst).
 type servedPart struct {
-	sl      composedPart
+	sl composedPart
+	// formed is sl as it formed: a lane's holder rebinds sl's tables every
+	// step without g.mu, so a new lane's instance is cloned from this, which
+	// nothing writes.
+	formed  composedPart
 	f       *partForm
 	inst    *partInst
 	args    [][]backend.Buf
@@ -1419,7 +1423,7 @@ func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*
 		return nil, fail(fmt.Errorf("a part of %d inputs and %d outputs, past the %d a served part binds", len(sl.graph.In), len(sl.graph.Out), partIO))
 	}
 	f.refs++
-	sv := &servedPart{sl: sl, f: f, inst: in, args: f.launchArgs(), n: len(sl.graph.In), m: len(sl.graph.Out)}
+	sv := &servedPart{sl: sl, formed: sl.clone(), f: f, inst: in, args: f.launchArgs(), n: len(sl.graph.In), m: len(sl.graph.Out)}
 	g.served[sk] = sv
 	if sk.kind == nn.PartBlock && !sk.stream && sk.graph.Block >= 0 {
 		if b := sk.graph.Block; b >= len(g.blockForms) {

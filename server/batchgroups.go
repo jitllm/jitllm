@@ -182,7 +182,7 @@ func (lp *stepLoop) dealByLease(gs []*decGroup) {
 	n := len(gs)
 	err := lp.e.makeDecodeInstances(lp.lm, n)
 	if err == nil {
-		err = lp.lm.serveDecode(true)
+		err = lp.lm.serveDecode(n)
 	}
 	if err != nil {
 		for i, r := range lp.rows {
@@ -280,7 +280,7 @@ func (lp *stepLoop) endDecodeGroups() {
 			r.s.ms.Release()
 		}
 	}
-	lp.lm.serveDecode(false)
+	lp.lm.serveDecode(0)
 }
 
 // launch samples g's rows' next tokens, retiring those that end here, and
