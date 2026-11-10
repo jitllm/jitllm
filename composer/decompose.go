@@ -72,6 +72,7 @@ func decompositions() map[graph.OpKind]Decomposition {
 		graph.OpPosResample:  decomposePosResample,
 		graph.OpPicture:      decomposePicture,
 		graph.OpFrames:       decomposeFrames,
+		graph.OpSound:        decomposeSound,
 		graph.OpClipMask:     decomposeClipMask,
 		graph.OpSplitRows:    decomposeSplitRows,
 		graph.OpFeatureNorm:  decomposeFeatureNorm,

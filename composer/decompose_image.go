@@ -1343,13 +1343,25 @@ func decomposeFrames(o graph.Op, c *Context) ([]Prim, error) {
 	in := x.op(OpLess, ir.Pred, x.op(OpSub, U, k, half), n)
 	inside := x.sel(ir.U32, x.op(OpLess, ir.Pred, k, half), x.u(0), x.sel(ir.U32, in, x.u(1), x.u(0)))
 	safe := x.op(OpMin, U, at, x.op(OpMax, U, x.op(OpSub, U, n, x.u(1)), x.u(0)))
-	cur := x.un(OpBitcast, F, x.load(0, safe))
-	prev := x.un(OpBitcast, F, x.load(0, x.op(OpSub, U, safe, x.u(1))))
+	// The samples are a sound op's where the frames read one (f32), the
+	// step's picture table's words where not.
+	src, words := TablePicture.op(), PictureWords
+	if len(o.In) == 1 {
+		src, words = c.value(o.In[0]), c.width(o.In[0])
+	}
+	sample := func(i int) int {
+		if len(o.In) == 1 {
+			return x.load(0, i)
+		}
+		return x.un(OpBitcast, F, x.load(0, i))
+	}
+	cur := sample(safe)
+	prev := sample(x.op(OpSub, U, safe, x.u(1)))
 	prev = x.sel(F, x.op(OpLess, ir.Pred, safe, x.u(1)), x.f(0), prev)
 	v := x.op(OpSub, F, cur, x.op(OpMul, F, prev, x.f(float32(a.Const))))
 	x.sel(F, x.op(OpLess, ir.Pred, x.u(0), inside), v, x.f(0))
-	return []Prim{{Kind: PrimMap, Shape: []int{R, N}, In: []Operand{TablePicture.op(), TableRequest.op()}, Out: c.value(o.Out[0]),
-		Expr: x.e, Facts: Facts{Extents: map[int]int{0: PictureWords, 1: RequestPicW + 1}}}}, nil
+	return []Prim{{Kind: PrimMap, Shape: []int{R, N}, In: []Operand{src, TableRequest.op()}, Out: c.value(o.Out[0]),
+		Expr: x.e, Facts: Facts{Extents: map[int]int{0: words, 1: RequestPicW + 1}}}}, nil
 }
 
 // decomposeFeatureNorm is each column normalised over the step's first
