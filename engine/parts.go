@@ -27,58 +27,58 @@ func (s *Instance) partsPlan() *nn.PartsPlan {
 	fg := s.m.FrontGraphs()
 	p := &nn.PartsPlan{D: s.c.NEmbd, NVocab: s.c.NVocab, TopLog: model.MaxTopLogprobs,
 		HeadNorm: fg.OutNorm != nil, HeadW: nn.PartWeights{Block: -1, Of: s.ws.tensors(-1, nil)}}
-	part := func(g *graph.Graph, none nn.Decline, rows int) nn.PartPlan { return s.partPlan(g, none, rows, nil) }
-	p.Head[0] = part(fg.CpuHead, nn.DeclineNoGraph, 1)
-	p.Head[1] = part(fg.CpuHidden, nn.DeclineNoGraph, 1)
-	p.Head[2] = part(fg.CpuHidden, nn.DeclineNoGraph, cpuRowsCap)
-	p.Head[3] = part(fg.PickHead, nn.DeclineNoGraph, 1)
+	part := func(g *graph.Graph, rows int) nn.PartPlan { return s.partPlan(g, rows, nil) }
+	p.Head[0] = part(fg.CpuHead, 1)
+	p.Head[1] = part(fg.CpuHidden, 1)
+	p.Head[2] = part(fg.CpuHidden, cpuRowsCap)
+	p.Head[3] = part(fg.PickHead, 1)
 	for i, g := range []*graph.Graph{fg.CpuSample, fg.CpuWalk, fg.CpuRow, fg.CpuCut, fg.CpuWalkProb, fg.CpuCutProb,
 		fg.CpuCutK, fg.CpuCutKProb} {
-		p.Head[4+i] = part(g, nn.DeclineNoSample, 1)
+		p.Head[4+i] = part(g, 1)
 	}
 	p.Head[12] = nn.PartPlan{Skip: true}
 	if fg.OutNorm != nil {
-		p.Head[12] = part(fg.OutNorm, nn.DeclineNoGraph, cpuRowsCap)
+		p.Head[12] = part(fg.OutNorm, cpuRowsCap)
 	}
-	p.Head[13] = part(fg.CpuLogprobs, nn.DeclineNoSample, 1)
-	p.Head[14] = part(fg.CpuMask, nn.DeclineNoSample, 1)
+	p.Head[13] = part(fg.CpuLogprobs, 1)
+	p.Head[14] = part(fg.CpuMask, 1)
 	p.Head[15] = nn.PartPlan{Skip: true}
 	if fg.CpuDecide != nil {
-		p.Head[15] = part(fg.CpuDecide, nn.DeclineNoSample, 1)
+		p.Head[15] = part(fg.CpuDecide, 1)
 	}
 
 	if s.c.StatesStreams() {
 		p.Streams, p.NStreams = true, s.c.Streams()
-		p.StreamParts[0] = part(fg.Expand, nn.DeclineNoGraph, 1)
-		p.StreamParts[1] = part(fg.Expand, nn.DeclineNoGraph, cpuRowsCap)
+		p.StreamParts[0] = part(fg.Expand, 1)
+		p.StreamParts[1] = part(fg.Expand, cpuRowsCap)
 		collapse := fg.Collapse
 		cw := nn.PartWeights{Block: -1, Of: s.ws.tensors(-1, nil)}
 		if i := s.lo - s.c.NLayer; i >= 0 && i < len(fg.MtpCollapse) {
 			collapse, cw = fg.MtpCollapse[i], nn.PartWeights{Block: s.lo, Of: s.ws.tensors(s.lo, s.layer(s.lo))}
 		}
-		p.StreamParts[2] = part(collapse, nn.DeclineNoGraph, 1)
-		p.StreamParts[3] = part(collapse, nn.DeclineNoGraph, cpuRowsCap)
+		p.StreamParts[2] = part(collapse, 1)
+		p.StreamParts[3] = part(collapse, cpuRowsCap)
 		p.StreamW, p.CollapseW = nn.PartWeights{Block: -1, Of: s.ws.tensors(-1, nil)}, cw
 	}
 
 	if g := fg.Pool; g != nil {
-		p.Pool, p.PoolPart, p.PoolW = true, part(g, nn.DeclineNoGraph, s.maxSeq), nn.PartWeights{Block: -1, Of: s.ws.tensors(-1, nil)}
+		p.Pool, p.PoolPart, p.PoolW = true, part(g, s.maxSeq), nn.PartWeights{Block: -1, Of: s.ws.tensors(-1, nil)}
 		p.PoolRows, p.PoolWidth, p.PoolRaw = s.maxSeq, s.poolWidth(), len(g.Out) > 1
 	}
 
 	if i := s.lo - s.c.NLayer; i >= 0 && i < len(fg.MtpEntry) {
 		g := fg.MtpEntry[i]
 		p.Entry, p.EntryWidth = true, s.c.ResidW()
-		p.EntryParts = [2]nn.PartPlan{part(g, nn.DeclineNoGraph, 1), part(g, nn.DeclineNoGraph, cpuRowsCap)}
+		p.EntryParts = [2]nn.PartPlan{part(g, 1), part(g, cpuRowsCap)}
 		p.EntryW = nn.PartWeights{Block: s.lo, Of: s.ws.tensors(s.lo, s.layer(s.lo))}
 	}
 
-	p.Inputs[0] = part(fg.CpuEmbed, nn.DeclineNoEmbed, 1)
-	p.Inputs[1] = part(fg.CpuEmbed, nn.DeclineNoEmbed, cpuRowsCap)
+	p.Inputs[0] = part(fg.CpuEmbed, 1)
+	p.Inputs[1] = part(fg.CpuEmbed, cpuRowsCap)
 	p.Inputs[2], p.Inputs[3] = nn.PartPlan{Skip: true}, nn.PartPlan{Skip: true}
 	if fg.Given != nil {
-		p.Inputs[2] = part(fg.Given, nn.DeclineNoEmbed, 1)
-		p.Inputs[3] = part(fg.Given, nn.DeclineNoEmbed, cpuRowsCap)
+		p.Inputs[2] = part(fg.Given, 1)
+		p.Inputs[3] = part(fg.Given, cpuRowsCap)
 	}
 	p.PleW = s.c.InputSideWidth()
 	p.Given, p.WritesX = fg.Given != nil, fg.Given != nil && (len(fg.Given.Out) > 1 || p.PleW == 0)
@@ -122,12 +122,12 @@ func (s *Instance) partsPlan() *nn.PartsPlan {
 			nb := graph.New()
 			nb.Out(nb.Emit(narrow, []graph.ValueID{nb.In("kv.f", c.FW)},
 				[]graph.Result{{Name: "kv.h", Width: c.HW, Elem: graph.ElemU32}}, nil, graph.Attrs{}, nil, nil)...)
-			c.Narrow = part(nb.G, nn.DeclineNoGraph, cpuRowsCap)
+			c.Narrow = part(nb.G, cpuRowsCap)
 			wb := graph.New()
 			h := wb.In("kv.h", c.HW)
 			wb.G.Values[h].Elem = graph.ElemU32
 			wb.Out(wb.Emit(widen, []graph.ValueID{h}, []graph.Result{{Name: "kv.f", Width: c.FW}}, nil, graph.Attrs{}, nil, nil)...)
-			c.Widen = part(wb.G, nn.DeclineNoGraph, cpuRowsCap)
+			c.Widen = part(wb.G, cpuRowsCap)
 			p.KV[f] = append(p.KV[f], c)
 		}
 	}
@@ -138,8 +138,10 @@ func (s *Instance) partsPlan() *nn.PartsPlan {
 // tablePlan is rotary table graph g as a part at rows rows, the most marks a
 // sequence holds the instance's.
 func (s *Instance) tablePlan(g *graph.Graph, rows int) nn.PartPlan {
-	return nn.PartPlan{Graph: g, Rows: rows, Seqs: 1, Marks: s.marksCap(), ActWindow: s.m.ActWindow,
-		None: nn.DeclineNoGraph}
+	if g == nil {
+		return nn.PartPlan{Skip: true}
+	}
+	return nn.PartPlan{Graph: g, Rows: rows, Seqs: 1, Marks: s.marksCap(), ActWindow: s.m.ActWindow}
 }
 
 // placeParts makes the instance's parts on the CPU device from partsPlan.

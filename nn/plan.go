@@ -49,8 +49,8 @@ type PartPlan struct {
 	Graph                        *graph.Graph
 	Formats                      map[jlm.Role]jlm.Type
 	Rows, Seqs, Marks, ActWindow int
-	None                         Decline
-	// Skip is a part the model has none of: not composed, not asked.
+	// Skip is a part the model has none of: not composed, not asked. A plan
+	// with no graph is one.
 	Skip bool
 }
 

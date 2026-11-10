@@ -1383,6 +1383,14 @@ func Open(path string, options ...Option) (*Model, error) {
 		m.Close()
 		return nil, err
 	}
+	if err := m.Unstated(); err != nil {
+		m.Close()
+		return nil, err
+	}
+	// The check leaves the graphs to be built when first asked, from the
+	// config as it is then: the front set is keyed on the config's address,
+	// and a test states another model by setting a field of it in place.
+	m.Front.Set = nil
 	// Sliding layers with a scaled rotary or beside a tower read what a
 	// container written before revision 2 does not state.
 	if c := m.Container.Config(); c.Revision < 2 && c.SWAWindow > 0 &&

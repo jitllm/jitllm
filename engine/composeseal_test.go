@@ -32,7 +32,7 @@ func TestTheCPUDeviceComposesNothingAtAStep(t *testing.T) {
 	}
 	x := execOf(s)
 	asked := s.Account(nn.CPU).Asks
-	_, err = x.FormGraph(s.partPlan(g, nn.DeclineNoGraph, 7, nil))
+	_, err = x.FormGraph(s.partPlan(g, 7, nil))
 	var d cpudev.DeclineError
 	if !errors.As(err, &d) || d.Why != nn.DeclineNotFormed {
 		t.Fatalf("a form asked after placement: %v, want a not-formed decline", err)
@@ -42,7 +42,7 @@ func TestTheCPUDeviceComposesNothingAtAStep(t *testing.T) {
 	}
 	t.Logf("after placement: %v", err)
 	done := x.Composer().Place()
-	f, err := x.FormGraph(s.partPlan(g, nn.DeclineNoGraph, 7, nil))
+	f, err := x.FormGraph(s.partPlan(g, 7, nil))
 	done()
 	if err != nil || f == nil {
 		t.Fatalf("VIOLATION arm: inside a placement the same form did not form: %v", err)

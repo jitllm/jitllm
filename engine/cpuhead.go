@@ -25,11 +25,11 @@ import (
 // jlm.DenseBlock, for the head's), over's for the roles over names. A role
 // the block reads from another's tensor (a prediction block's embedding, the
 // trunk's table) takes that tensor's format.
-func (s *Instance) partPlan(g *graph.Graph, none nn.Decline, rows int, over map[jlm.Role]jlm.Type) nn.PartPlan {
-	p := nn.PartPlan{Graph: g, Rows: rows, ActWindow: s.m.ActWindow, None: none}
+func (s *Instance) partPlan(g *graph.Graph, rows int, over map[jlm.Role]jlm.Type) nn.PartPlan {
 	if g == nil {
-		return p
+		return nn.PartPlan{Skip: true}
 	}
+	p := nn.PartPlan{Graph: g, Rows: rows, ActWindow: s.m.ActWindow}
 	p.Formats = map[jlm.Role]jlm.Type{}
 	f := s.m.Composing()
 	var l *model.Layer
