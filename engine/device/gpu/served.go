@@ -2595,13 +2595,6 @@ func (g *devTier) prewarmComposedBlock(li int, narrow bool) (roomless string) {
 		g.prewarmPromptBlock(bb, li)
 	}
 	g.fitReserved()
-	// The shadow arm's comparison of the block's two outputs.
-	if g.shadowing() {
-		if _, err := g.servedShadow(l, bs.p.NEmbd); err != nil {
-			g.LastErr = "the composed shadow: " + err.Error()
-			return
-		}
-	}
 	// Every other lane's instance too: a session's first step after a move
 	// forms nothing.
 	g.eachLane(func(o *lane) {

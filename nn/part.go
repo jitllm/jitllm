@@ -10,9 +10,6 @@ const (
 	PartHead Part = iota + 1
 	// PartBlock is a whole block, its graph the model's front end's.
 	PartBlock
-	// PartShadow is the shadow arm's comparison of a block's two outputs
-	// (the card's shadow.go).
-	PartShadow
 	// PartPrompt is a whole block at a prompt chunk's rows: one sequence's
 	// positions, each row its own descriptor.
 	PartPrompt
@@ -61,8 +58,6 @@ func (k Part) String() string {
 		return "head"
 	case PartBlock:
 		return "block"
-	case PartShadow:
-		return "shadow"
 	case PartPrompt:
 		return "prompt block"
 	case PartTable:
@@ -103,9 +98,6 @@ const (
 	ComposedHead Parts = 1 << PartHead
 	// ComposedBlock serves a block whole from its graph (LayerPlan.Graph).
 	ComposedBlock Parts = 1 << PartBlock
-	// ComparedShadow selects the shadow arm's comparisons in Stats.ServedPart:
-	// Config.ComposedShadow is its switch.
-	ComparedShadow Parts = 1 << PartShadow
 	// ComposedPrompt serves a prompt chunk's blocks whole at the chunk's
 	// rows: a form a width, as the tier keeps a scratch a width.
 	ComposedPrompt Parts = 1 << PartPrompt
