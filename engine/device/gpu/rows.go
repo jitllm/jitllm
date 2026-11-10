@@ -410,18 +410,20 @@ func (g *devTier) prepRowsHead(bs *blockScratch, rowsHead *nn.Head, n int) bool 
 	}
 	head := g.bs.head
 	if need := g.rowsHeadNeed(bs, head.nrows, rowsHead.Softcap); need > 0 && !g.room(need) {
-		return fail(fmt.Errorf("the logits of %d rows need %d bytes, %d of %d used", R, need, g.used, g.limit))
+		return fail(fmt.Errorf("the logits of %d rows need %d bytes, %d of %d used", g.headRows(bs, head.nrows), need, g.used, g.limit))
 	}
+	H := g.headRows(bs, head.nrows)
 	// The composer's head over rows serves any count of them at bs's width
 	// (servedHead), formed here, outside any step; a head it does not serve
 	// is refused at the step, so the tier builds no projection of its own.
 	if g.bs.headServes(g.bs.hNorm, false, false) != partServes {
 		return fail(errors.New("the composer does not serve the head over rows"))
 	}
-	_, err := g.servedHead(g.bs, g.bs.hNorm, R)
+	_, err := g.servedHead(g.bs, g.bs.hNorm, H)
 	if err != nil {
-		return fail(fmt.Errorf("the composed head over %d rows: %w", R, err))
+		return fail(fmt.Errorf("the composed head over %d rows: %w", H, err))
 	}
+
 	if !bs.ragBuilt {
 		if !g.ragSampleServes() {
 			return fail(errors.New("the composer states no sample for the head"))
@@ -432,22 +434,28 @@ func (g *devTier) prepRowsHead(bs *blockScratch, rowsHead *nn.Head, n int) bool 
 			freeRagOut(bs)
 		}
 		if bs.ragLogits == nil {
-			if bs.ragLogits, err = g.dev.Alloc(R * head.nrows * 4); err == nil {
-				bs.ragVocab = head.nrows
-				bs.ragTok, err = g.dev.Alloc(R * 4)
-			}
+			err = g.allocRagOut(bs, head.nrows, g.bs.p.NEmbd)
 		}
 		if err != nil {
+			freeRagOut(bs)
 			return fail(err)
+		}
+		// A step wanting more rows than the logits hold takes them a chunk
+		// at a time into a staging set of H rows (headChunk): the take is
+		// formed here, over the request it reads.
+		if H < R {
+			if _, err := g.servedRowTakeOf(bs.headReq, g.bs.p.NEmbd, R, H); err != nil {
+				return fail(fmt.Errorf("the composed take of %d of %d rows: %w", H, R, err))
+			}
 		}
 		bs.ragBuilt = true
 	}
 	// The composed sample of the rows' tokens (ragTokens), formed and held
 	// here at the width: the step forms nothing, and the reservation counts
 	// it.
-	_, err = g.servedSampleAt(g.bs.sampleGraph, R)
+	_, err = g.servedSampleAt(g.bs.sampleGraph, bs.ragRows)
 	if err != nil {
-		return fail(fmt.Errorf("the composed sample over %d rows: %w", R, err))
+		return fail(fmt.Errorf("the composed sample over %d rows: %w", bs.ragRows, err))
 	}
 	return true
 }
@@ -462,7 +470,7 @@ func (g *devTier) rowsHeadNeed(bs *blockScratch, nrows int, softcap float32) uin
 	var n uint64
 	fresh := bs.ragLogits == nil || bs.ragVocab != nrows
 	if fresh {
-		n += g.footprint(bs.rows*nrows*4) + g.footprint(bs.rows*4)
+		n += g.ragOutBytes(bs, nrows, g.bs.p.NEmbd)
 	}
 	return n
 }
@@ -491,7 +499,7 @@ func (g *devTier) ragTokens(lc *launcher, bs, hb *blockScratch, n int, served bo
 	if !served {
 		return errors.New("rows: the composed sample was not asked for the step's tokens")
 	}
-	sv, err := g.servedSampleAt(hb.sampleGraph, bs.rows)
+	sv, err := g.servedSampleAt(hb.sampleGraph, bs.ragRows)
 	if err != nil {
 		return err
 	}
@@ -852,13 +860,13 @@ func (g *devTier) rowsHeadRoom(bs *blockScratch, head *nn.Head) bool {
 	fresh := !bs.ragBuilt && bs.ragLogits != nil && bs.ragVocab != vocab
 	var need uint64
 	if !bs.ragBuilt && (bs.ragLogits == nil || fresh) {
-		need += g.footprint(R*vocab*4) + g.footprint(R*4)
+		need += g.ragOutBytes(bs, vocab, g.bs.p.NEmbd)
 	}
 	if need == 0 || g.kvCompact(need+g.promisedBytes(), nil) {
 		return true
 	}
 	g.LastErr = fmt.Sprintf("a %d-row step's per-row head (%d bytes) does not fit the budget (%d of %d bytes charged)",
-		R, need, g.used, g.limit)
+		min(R, g.headRows(bs, vocab)), need, g.used, g.limit)
 	return false
 }
 

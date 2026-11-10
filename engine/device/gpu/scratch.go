@@ -2,6 +2,7 @@ package gpu
 
 import (
 	"fmt"
+	"github.com/jitllm/jitllm/composer"
 	"slices"
 
 	"github.com/jitllm/jitllm/backend"
@@ -358,12 +359,7 @@ func (g *devTier) reserveRowsHead(bs *blockScratch, p *nn.LayerPlan) bool {
 		return true
 	}
 	defer g.scratchWin().close()
-	var err error
-	if bs.ragLogits, err = g.dev.Alloc(bs.rows * p.Vocab * 4); err == nil {
-		bs.ragVocab = p.Vocab
-		bs.ragTok, err = g.dev.Alloc(bs.rows * 4)
-	}
-	if err != nil {
+	if err := g.allocRagOut(bs, p.Vocab, p.NEmbd); err != nil {
 		freeRagOut(bs)
 		g.LastErr = "rows: " + err.Error()
 		return false
@@ -371,15 +367,57 @@ func (g *devTier) reserveRowsHead(bs *blockScratch, p *nn.LayerPlan) bool {
 	return true
 }
 
+// headRows is the rows of vocab logits a ragged step's per-row head holds on
+// scratch bs: its every row, or as many as HeadRowBytes allows.
+func (g *devTier) headRows(bs *blockScratch, vocab int) int {
+	limit := g.HeadRowBytes
+	if limit <= 0 {
+		limit = 64 << 20
+	}
+	return max(1, min(bs.rows, limit/(4*max(vocab, 1))))
+}
+
+// allocRagOut allocates bs's per-row logits and tokens for a head of vocab
+// rows at headRows' count, and where that is short of the scratch's rows the
+// staging a chunk's rows are taken into and the take's request.
+func (g *devTier) allocRagOut(bs *blockScratch, vocab, nembd int) error {
+	n := g.headRows(bs, vocab)
+	var err error
+	if bs.ragLogits, err = g.dev.Alloc(n * vocab * 4); err != nil {
+		return err
+	}
+	bs.ragVocab, bs.ragRows = vocab, n
+	if bs.ragTok, err = g.dev.Alloc(n * 4); err != nil {
+		return err
+	}
+	if n < bs.rows {
+		if bs.headIn, err = g.dev.Alloc(n * nembd * 4); err != nil {
+			return err
+		}
+		bs.headReq, err = g.dev.Alloc(4 * (composer.RequestRows + n))
+	}
+	return err
+}
+
+// ragOutBytes is what allocRagOut allocates for bs at a head of vocab rows.
+func (g *devTier) ragOutBytes(bs *blockScratch, vocab, nembd int) uint64 {
+	n := g.headRows(bs, vocab)
+	b := g.footprint(n*vocab*4) + g.footprint(n*4)
+	if n < bs.rows {
+		b += g.footprint(n*nembd*4) + g.footprint(4*(composer.RequestRows+n))
+	}
+	return b
+}
+
 // freeRagOut frees a ragged step's per-row logits and tokens.
 func freeRagOut(bs *blockScratch) {
-	for _, b := range []*backend.Buf{&bs.ragLogits, &bs.ragTok} {
+	for _, b := range []*backend.Buf{&bs.ragLogits, &bs.ragTok, &bs.headIn, &bs.headReq} {
 		if *b != nil {
 			(*b).Free()
 			*b = nil
 		}
 	}
-	bs.ragVocab = 0
+	bs.ragVocab, bs.ragRows = 0, 0
 }
 
 // batchFor is the batched scratch a chunk or step of width w runs in: its own

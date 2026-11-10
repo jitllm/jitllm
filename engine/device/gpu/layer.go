@@ -1421,7 +1421,12 @@ type blockScratch struct {
 	ragBuilt          bool
 	ragLogits, ragTok backend.Buf
 	ragVocab          int // the rows of ragLogits a row holds
-	sstride           int // the score row stride; padded at rows > 1
+	// ragRows is the rows ragLogits and ragTok hold (headRows); headIn and
+	// headReq a chunk's rows taken out of x and the take's request, built
+	// where ragRows is short of the scratch's rows (headChunk).
+	ragRows         int
+	headIn, headReq backend.Buf
+	sstride         int // the score row stride; padded at rows > 1
 	// arows is how many query rows one pass of the attention kernels takes:
 	// rows, except for a vision block whose score planes would be too large,
 	// which runs its attention in query chunks (visionattn.go). qc and xc are a
@@ -4564,14 +4569,16 @@ func (g *devTier) layersSession(s backend.Session) {
 		// form, every stage its graph states applied.
 		if head != nil && (rag != nil || allRows) {
 			// The wanted rows (they lead) at their own count.
+			// The first of them the logits hold; the rest are headChunk's,
+			// after the submission.
 			out := bs.ragLogits
-			rows := ragHead
+			rows := min(ragHead, bs.ragRows)
 			if g.rowsFaulted("headrow") {
 				rows = 1
 			}
-			// The head of the step's scratch's capacity, its rows the wanted
-			// ones: one form whatever the count.
-			sv, serr := g.servedHead(hb, hNorm, bs.rows)
+			// The head of the logits' capacity, its rows the wanted ones: one
+			// form whatever the count.
+			sv, serr := g.servedHead(hb, hNorm, bs.ragRows)
 			if serr == nil {
 				sv.rows, sv.sl.tables[tableKey(composer.TableCall)] = rows, bs.headCalls
 				serr = sv.runHead(g, lc, bs.x, out, bs.h)
@@ -4580,7 +4587,7 @@ func (g *devTier) layersSession(s backend.Session) {
 				err = serr
 			}
 			if err == nil {
-				err = g.ragTokens(lc, bs, hb, ragHead, sampleSrv)
+				err = g.ragTokens(lc, bs, hb, min(ragHead, bs.ragRows), sampleSrv)
 			}
 		} else if fold {
 			// The chunk's last row, into the decode scratch, and decode's
@@ -4835,6 +4842,9 @@ func (g *devTier) layersSession(s backend.Session) {
 	}
 	if bs.headCalls != nil && R > 1 && ragHead > 0 {
 		hr := ragHead
+		if bs.ragRows > 0 {
+			hr = min(hr, bs.ragRows)
+		}
 		if g.rowsFaulted("headrow") {
 			hr = 1
 		}
@@ -4896,7 +4906,7 @@ func (g *devTier) layersSession(s backend.Session) {
 		src, rows := bs.h, 1
 		switch {
 		case rag != nil || allRows:
-			rows = ragHead
+			rows = min(ragHead, bs.ragRows)
 		case fold:
 			src = hb.h
 		}
@@ -4912,21 +4922,14 @@ func (g *devTier) layersSession(s backend.Session) {
 	}
 	switch {
 	case (rag != nil || allRows) && head != nil:
-		tb := slices.Grow(g.subBytes.tok[:0], 4*R)[:4*R]
-		g.subBytes.tok = tb
-		if err = s.Read(bs.ragTok, tb); err == nil {
-			for r := range ragHead {
-				head.Tokens[r] = int32(binary.LittleEndian.Uint32(tb[4*r:]))
-			}
+		// The first chunk's tokens and logits, in ragTok and ragLogits
+		// [ragRows][vocab]; the wanted rows lead.
+		n := min(ragHead, bs.ragRows)
+		if err = g.readHeadChunk(s, bs, head, 0, n, p.NEmbd, false); err == nil && head.RowLogits && len(head.Logits) < ragHead*g.bs.head.nrows {
+			err = fmt.Errorf("rows: %d logits for %d rows of %d", len(head.Logits), ragHead, g.bs.head.nrows)
 		}
-		// The rows' logits are already in ragLogits, [R][vocab]; the first
-		// ragHead rows are the wanted ones.
-		if need := ragHead * g.bs.head.nrows; err == nil && head.RowLogits {
-			if len(head.Logits) < need {
-				err = fmt.Errorf("rows: %d logits for %d rows of %d", len(head.Logits), ragHead, g.bs.head.nrows)
-			} else {
-				err = s.Read(bs.ragOut(), f32b(head.Logits[:need]))
-			}
+		for k := n; err == nil && k < ragHead; k += bs.ragRows {
+			err = g.headChunk(s, lc, bs, hb, hNorm, head, k, min(bs.ragRows, ragHead-k), p.NEmbd, sampleSrv)
 		}
 		direct = true
 	case sampleK > 0:
@@ -6092,6 +6095,83 @@ func (g *devTier) initKVCap(p *nn.LayerPlan) {
 	// Paged history has no capacity to grow: no kernel bakes one, so the
 	// scratch is built for the whole context once and every session shares it.
 	g.paged, g.kvCap = true, p.MaxSeq
+}
+
+// headChunk heads rows [k, k+n) of a ragged step's wanted rows, past the
+// ones its logits hold (ragRows), after the submission: the rows are taken
+// out of the residual into the staging set (headIn), headed and sampled there
+// as the submission heads its first, and their tokens, logits and normed rows
+// read into the call's at k.
+func (g *devTier) headChunk(s backend.Session, lc *launcher, bs, hb *blockScratch, hNorm backend.Buf, head *nn.Head, k, n, nembd int, sampleSrv bool) error {
+	if bs.headIn == nil || bs.headReq == nil {
+		return fmt.Errorf("rows: %d wanted rows past the %d the logits hold, with no staging built", k+n, bs.ragRows)
+	}
+	b := g.subBytes.fold[:0]
+	for range composer.RequestRows {
+		b = binary.LittleEndian.AppendUint32(b, 0)
+	}
+	for r := range bs.ragRows {
+		b = binary.LittleEndian.AppendUint32(b, uint32(k+min(r, n-1)))
+	}
+	g.subBytes.fold = b
+	if err := s.Write(bs.headReq, b); err != nil {
+		return err
+	}
+	binary.LittleEndian.PutUint32(g.subBytes.headCalls[:], uint32(n))
+	if err := s.Write(bs.headCalls, g.subBytes.headCalls[:]); err != nil {
+		return err
+	}
+	tk, err := g.servedRowTakeOf(bs.headReq, nembd, bs.rows, bs.ragRows)
+	if err != nil {
+		return err
+	}
+	g.rows.takeIn[0], g.rows.takeOut[0] = bs.x, bs.headIn
+	if err := tk.run(g, lc, tk.inst, g.rows.takeIn[:], g.rows.takeOut[:]); err != nil {
+		return err
+	}
+	sv, err := g.servedHead(hb, hNorm, bs.ragRows)
+	if err != nil {
+		return err
+	}
+	sv.rows, sv.sl.tables[tableKey(composer.TableCall)] = n, bs.headCalls
+	if err := sv.runHead(g, lc, bs.headIn, bs.ragLogits, bs.h); err != nil {
+		return err
+	}
+	if err := g.ragTokens(lc, bs, hb, n, sampleSrv); err != nil {
+		return err
+	}
+	g.HeadChunks++
+	return g.readHeadChunk(s, bs, head, k, n, nembd, true)
+}
+
+// readHeadChunk reads a head chunk's n rows into the call's at k: their
+// tokens, their logits where the call asks for every row's, and their normed
+// rows (nn.Head.Hidden) where hidden says the chunk wrote them.
+func (g *devTier) readHeadChunk(s backend.Session, bs *blockScratch, head *nn.Head, k, n, nembd int, hidden bool) error {
+	tb := slices.Grow(g.subBytes.tok[:0], 4*bs.ragRows)[:4*bs.ragRows]
+	g.subBytes.tok = tb
+	if err := s.Read(bs.ragTok, tb); err != nil {
+		return err
+	}
+	for r := range n {
+		head.Tokens[k+r] = int32(binary.LittleEndian.Uint32(tb[4*r:]))
+	}
+	vocab := g.bs.head.nrows
+	if head.RowLogits {
+		if len(head.Logits) < (k+n)*vocab {
+			return fmt.Errorf("rows: %d logits for %d rows of %d", len(head.Logits), k+n, vocab)
+		}
+		if err := s.Read(bs.ragOut(), f32b(head.Logits[k*vocab:(k+n)*vocab])); err != nil {
+			return err
+		}
+	}
+	if hidden && head.Hidden != nil {
+		if len(head.Hidden) < (k+n)*nembd {
+			return fmt.Errorf("a %d-float hidden destination for %d rows of %d", len(head.Hidden), k+n, nembd)
+		}
+		return s.Read(bs.h, f32b(head.Hidden[k*nembd:(k+n)*nembd]))
+	}
+	return nil
 }
 
 // foldReqBuf holds the decode scratch's request for the folded head's row

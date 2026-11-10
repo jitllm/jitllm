@@ -19,11 +19,13 @@ func (c *Copy) Build() *Graph {
 // one: a chunk's last row into the row its head reads.
 type TakeRow struct {
 	Width int
+	// Rows is how many rows the request names, 1 where it is 0.
+	Rows int
 }
 
 func (c *TakeRow) Build() *Graph {
 	b := New()
 	in := b.In("in", c.Width)
-	b.Out(b.Emit(OpTakeRows, []ValueID{in}, []Result{{Name: "row", Width: c.Width, Rows: 1}}, nil, Attrs{}, nil, nil)[0])
+	b.Out(b.Emit(OpTakeRows, []ValueID{in}, []Result{{Name: "row", Width: c.Width, Rows: max(c.Rows, 1)}}, nil, Attrs{}, nil, nil)[0])
 	return b.G
 }
