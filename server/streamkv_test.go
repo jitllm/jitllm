@@ -28,8 +28,8 @@ import (
 func TestSixtyFourRequestsWhoseHistoryStreams(t *testing.T) {
 	for wave, w := range sixtyFour(t, 2, false) {
 		t.Logf("wave %d: %d of 64 requests failed; %d joint steps, %d admissions put off for room, "+
-			"%d refusals, %d evictions, %d streamed passes", wave, w.failed, w.joint, w.waits, w.refusals,
-			w.evictions, w.passes)
+			"%d refusals, %d rows parked for room, %d evictions, %d streamed passes", wave, w.failed, w.joint, w.waits,
+			w.refusals, w.roomParks, w.evictions, w.passes)
 		if w.failed > 0 {
 			t.Fatalf("wave %d: %d of 64 requests failed", wave, w.failed)
 		}
@@ -49,7 +49,8 @@ func TestSixtyFourRequestsWhoseHistoryStreams(t *testing.T) {
 func TestSixtyFourRequestsGateDiscriminates(t *testing.T) {
 	w := sixtyFour(t, 1, true)[0]
 	t.Logf("violation: %d of 64 requests failed; %d joint steps, %d admissions put off, %d refusals, "+
-		"%d evictions, %d streamed passes", w.failed, w.joint, w.waits, w.refusals, w.evictions, w.passes)
+		"%d rows parked for room, %d evictions, %d streamed passes", w.failed, w.joint, w.waits, w.refusals,
+		w.roomParks, w.evictions, w.passes)
 	if w.waits != 0 {
 		t.Fatalf("%d admissions were put off with admission off", w.waits)
 	}
@@ -80,7 +81,10 @@ func TestSixtyFourRequestsTimeSliced(t *testing.T) {
 type waveCounts struct {
 	failed                                    int
 	joint, waits, refusals, evictions, passes int64
-	parks, short                              int64
+	// roomParks is the rows parked because their step alone had no room for
+	// their history (parkForRoom).
+	roomParks    int64
+	parks, short int64
 }
 
 // sixtyFour loads Llama 3.2 1B wholly onto gpu:0 with the budget 1 GiB past
@@ -115,7 +119,7 @@ func sixtyFour(t *testing.T, waves int, admitAll bool, level ...int) []waveCount
 	st := &lm.loop.stats
 	var out []waveCounts
 	for wave := range waves {
-		j0, w0, r0 := st.jointSteps.Load(), st.kvWaits.Load(), st.refusals.Load()
+		j0, w0, r0, rp0 := st.jointSteps.Load(), st.kvWaits.Load(), st.refusals.Load(), st.roomParks.Load()
 		p0, q0 := st.parks.Load(), st.shortResumes.Load()
 		s0 := lm.gpu.Stats()
 		errs := make([]error, n)
@@ -138,11 +142,14 @@ func sixtyFour(t *testing.T, waves int, admitAll bool, level ...int) []waveCount
 				wc.failed++
 				if wc.failed <= 3 && !admitAll {
 					t.Errorf("wave %d, request %d: %v", wave, i, err)
+				} else if wc.failed == 1 {
+					t.Logf("wave %d, request %d, the first to fail: %v", wave, i, err)
 				}
 			}
 		}
 		s1 := lm.gpu.Stats()
 		wc.joint, wc.waits, wc.refusals = st.jointSteps.Load()-j0, st.kvWaits.Load()-w0, st.refusals.Load()-r0
+		wc.roomParks = st.roomParks.Load() - rp0
 		wc.evictions, wc.passes = int64(s1.KVEvictions-s0.KVEvictions), int64(s1.KVStreamPasses-s0.KVStreamPasses)
 		wc.parks, wc.short = st.parks.Load()-p0, st.shortResumes.Load()-q0
 		out = append(out, wc)

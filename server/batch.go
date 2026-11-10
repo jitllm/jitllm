@@ -172,6 +172,9 @@ type batchCounters struct {
 	// kvWaits counts admissions put off because the card's room for history
 	// was promised to the rows already admitted (stepLoop.kvRoom).
 	kvWaits atomic.Int64
+	// roomParks counts rows parked because their step alone had no room for
+	// their history (parkForRoom).
+	roomParks atomic.Int64
 	// pipelinedChunks is prompt chunks that ran as a pipelined prefill
 	// beside the step rather than as rows of it.
 	pipelinedChunks atomic.Int64
@@ -323,6 +326,9 @@ type row struct {
 	slice, resumedAt int
 	parked           bool
 	held             []float32
+	// refeed says the row's next token was sampled and sent before a step
+	// that had no room for it: the row feeds that token again on resume.
+	refeed bool
 	// startStep is the loop's step count when the row's prompt was in.
 	startStep int64
 
@@ -801,7 +807,15 @@ func (lp *stepLoop) decodeUnits() []unit {
 	units := lp.units[:0]
 	lp.walk = append(lp.walk[:0], lp.rows...)
 	for _, r := range lp.walk {
-		if !r.prompting() && lp.nextToken(r) {
+		if r.prompting() {
+			continue
+		}
+		if r.refeed {
+			r.refeed = false
+			units = append(units, unit{r: r, tokens: r.next[:], logits: true})
+			continue
+		}
+		if lp.nextToken(r) {
 			units = append(units, unit{r: r, tokens: r.next[:], logits: true})
 		}
 	}
@@ -1051,7 +1065,9 @@ func (lp *stepLoop) step(units []unit) {
 	for _, u := range solo {
 		out, err := engine.StepRuns([]engine.Run{{Session: u.r.s.ms, Tokens: u.tokens, Logits: u.logits}})
 		if err != nil {
-			lp.finish(u.r, FinishError, "", err)
+			if !lp.parkForRoom(u, err) {
+				lp.finish(u.r, FinishError, "", err)
+			}
 			continue
 		}
 		lp.stats.soloRows.Add(int64(len(u.tokens)))
@@ -1061,6 +1077,25 @@ func (lp *stepLoop) step(units []unit) {
 	if timed && !(lp.refused && lp.refusedFor == lp.shape) {
 		lp.choice.observe(len(units)-npiped, chose, time.Since(t0))
 	}
+}
+
+// parkForRoom parks u's row when its step alone had no room for its history
+// (engine.ErrNoRoom) and other rows hold the card: their pages come back as
+// they retire, and the row resumes with them, its token fed again. A row
+// alone has nothing to wait for; one whose recurrent state the step advanced
+// cannot run its tokens twice. Both end with the error.
+func (lp *stepLoop) parkForRoom(u unit, err error) bool {
+	if !errors.Is(err, engine.ErrNoRoom) || u.r.s.recurrenceAdvanced() {
+		return false
+	}
+	lp.mu.Lock()
+	defer lp.mu.Unlock()
+	if len(lp.rows) < 2 || lp.parkRow(u.r) != nil {
+		return false
+	}
+	u.r.refeed = !u.prompt
+	lp.stats.roomParks.Add(1)
+	return true
 }
 
 // leased has every unit's session hold a lease for its phase -- a prompt's

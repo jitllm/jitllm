@@ -201,7 +201,7 @@ func reserveRuns(runs []Run) error {
 		room := min((need+63)&^63, se.limit)
 		if !se.ld.ReserveKV(room) {
 			if room = need; !se.ld.ReserveKV(room) && !r.Instance.reserveMoving(se, need) {
-				return fmt.Errorf("model: the device has no room for run %d's %d positions of history", i, need)
+				return fmt.Errorf("%w: run %d's %d positions", ErrNoRoom, i, need)
 			}
 		}
 		se.kvRoom = room
