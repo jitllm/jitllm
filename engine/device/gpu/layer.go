@@ -3319,12 +3319,16 @@ func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []floa
 			}
 			return true
 		}
-		// Every fallback below cuts x by rows, which a stream-major residual
-		// (AltUp's, DeepSeek V4's) is not.
-		if dbs != nil && dbs.p.Streams() > 1 && (head != nil && noFold || !ok || bbs == nil) {
-			g.LastErr = fmt.Sprintf("a %d-row chunk of %d streams this device would have to cut by rows", n,
-				dbs.p.Streams())
-			return false
+		// Every fallback below cuts x by rows: each cut is its rows of every
+		// stream and of the per-row inputs.
+		ns := 1
+		if dbs != nil {
+			ns = dbs.p.Streams()
+		}
+		side := g.side()
+		defer g.sideAt(side, 0, n)
+		if ns > 1 && (head != nil && noFold || !ok || bbs == nil) {
+			g.realEmbed()
 		}
 		// A head rides only the one-submission path. Every fallback splits the
 		// chunk, so there the head runs on the last row as its own submission;
@@ -3355,7 +3359,9 @@ func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []floa
 			g.mu.Lock()
 			adv := g.recSteps
 			g.mu.Unlock()
-			if !g.layersFor(sid, hi, hi, pos+n-1, 1, x[(n-1)*e:n*e], rcs, rswa, head) {
+			xs := g.streamCut(x, ns, e, n-1, 1, n)
+			g.sideAt(side, n-1, n)
+			if !g.layersFor(sid, hi, hi, pos+n-1, 1, xs, rcs, rswa, head) {
 				g.mu.Lock()
 				g.recSteps += adv
 				g.mu.Unlock()
@@ -3383,9 +3389,12 @@ func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []floa
 					}
 				}
 				e := dbs.p.NEmbd
-				if !g.layersFor(sid, lo, hi, pos+off, m, x[off*e:(off+m)*e], rcs, rswa, nil) {
+				xs := g.streamCut(x, ns, e, off, m, n)
+				g.sideAt(side, off, n)
+				if !g.layersFor(sid, lo, hi, pos+off, m, xs, rcs, rswa, nil) {
 					return false
 				}
+				streamPut(x, xs, ns, e, off, m, n)
 			}
 			return true
 		}
@@ -3409,7 +3418,8 @@ func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []floa
 			// one at a time. Returning false would restart the chunk on the host,
 			// which on a hybrid re-runs linear blocks whose state already advanced.
 			for i := 0; i < n; i++ {
-				row := x[i*dbs.p.NEmbd : (i+1)*dbs.p.NEmbd]
+				row := g.streamCut(x, ns, dbs.p.NEmbd, i, 1, n)
+				g.sideAt(side, i, n)
 				var rcs, rswa []float32
 				if nr := dbs.p.RopeW(); nr > 0 {
 					rcs = cs[i*nr : (i+1)*nr]
@@ -3423,6 +3433,7 @@ func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []floa
 				if !g.submit(sid, dbs, lo, hi, pos+i, row, rcs, rswa, nil) {
 					return false
 				}
+				streamPut(x, row, ns, dbs.p.NEmbd, i, 1, n)
 			}
 			return true
 		}
