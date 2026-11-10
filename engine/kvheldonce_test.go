@@ -36,7 +36,9 @@ func kvDuplicates(t *testing.T, st *Instance) int {
 				if held {
 					dup++ // the host holds a page of the card's history
 				}
-				if (n+1)*pg.p <= st.pos && kvStoreHas(kc, kc.pageKey(li, n), li, n, pg.pp) {
+				// The store holding it for no one is a mirror; one other
+				// sessions on the host still read is theirs.
+				if (n+1)*pg.p <= st.pos && kvStoreHas(kc, kc.pageKey(li, n), li, n, pg.pp) && !heldByOthers(kc, kc.pageKey(li, n), li, n) {
 					dup++ // the store holds it: it came home
 				}
 				continue
@@ -50,6 +52,13 @@ func kvDuplicates(t *testing.T, st *Instance) int {
 		}
 	}
 	return dup
+}
+
+// heldByOthers says a shared store's page key names for layer li's page n is
+// held by some session.
+func heldByOthers(kc *kvCache, key string, li, n int) bool {
+	st, ok := kc.store.(*SharedStore)
+	return ok && st.Refs(key, li*2, n) > 0
 }
 
 // kvStoreHas says kc's store holds the page key names for layer li's page n.

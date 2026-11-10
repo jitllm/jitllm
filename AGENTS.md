@@ -53,7 +53,7 @@ gate below before it counts.
 | **JIT** | every kernel is emitted at run time for the device in front of it; no pregenerated or copied kernels (RULE 8) | `cpu.TestNoAssemblyBesidesTheTrampolines`; device code only from the composer's forms (no hand-written kernels) |
 | **No Go compute** | no arithmetic a token runs is a Go loop; a missing kernel is a BASIC generated kernel, never a fallback (RULE 8) | `TestNoProductionCodeImportsTheOracle`, `engine.TestEveryModelRunsGenerated` |
 | **Relocation** | any block, its KV pages and its recurrent state can move between any two devices, the CPU among them, mid-sequence, with the same answer; no device is a default where blocks live, and every move names its destination | `TestLayerRelocatesToAnotherDevice`, `TestBlocksMoveBetweenDevices`, `TestRelocatedBlocksComeBack`, `TestKVPagesRelocateWithTheLayer`, `TestBatchSeamMovesCarryEveryRow(Hybrid)`, `TestMLASeamMovesWithItsHistory`, `TestShrinkingTheSeamMovesTheSummaryToTheCPU`; decision models: `TestDecisionRelocatesMidPrompt`, `TestDecisionMovesBetweenCards`, `TestDecisionDistributes` |
-| **Paging** | paging is the design, never a mode: a model that does not fit pages, a budget below the model evicts and re-reads with the same answer, every entry point faults its blocks in, and a windowed layer holds its window and not the context (placement.md 15z) | `TestPagingDoesNotChangeTheAnswer`, `TestOpenHonoursAPageBudget`, `TestForwardBatchFaultsItsBlocksIn`, `TestTwoPagedModels*`, `TestWindowedLayersHoldTheirWindow`, `TestPrefixCacheRestoresAWindowedLayer`, `TestKVIsHeldOnce` (a position's history in one place: no page held by a session and the prefix cache both, no host copy of a card's history), `TestBlocksPageOnTheListedCard` (cards listed without the CPU, `WithCPU(false)`, page the model on themselves and nothing runs on the CPU); decision models: `TestDecisionPagesWithTheSameAnswer` |
+| **Paging** | paging is the design, never a mode: a model that does not fit pages, a budget below the model evicts and re-reads with the same answer, every entry point faults its blocks in, and a windowed layer holds its window and not the context (placement.md 15z) | `TestPagingDoesNotChangeTheAnswer`, `TestOpenHonoursAPageBudget`, `TestForwardBatchFaultsItsBlocksIn`, `TestTwoPagedModels*`, `TestWindowedLayersHoldTheirWindow`, `TestPrefixCacheRestoresAWindowedLayer`, `TestKVIsHeldOnce` (a position's history in one place per device: no page a session holds beside the prefix cache's on its device, no host mirror of a card's history), `TestSharedPrefixMovesToTheCard`, `TestBlocksPageOnTheListedCard` (cards listed without the CPU, `WithCPU(false)`, page the model on themselves and nothing runs on the CPU); decision models: `TestDecisionPagesWithTheSameAnswer` |
 | **Low to no Go allocation** | a warm decode token and a warm step make zero engine heap allocations on the host and every device backend; weights and frames live off the heap (RULE 2f) | `engine.TestDecodeDoesNotAllocate` (JITLLM_ALLOC_MODELS adds models), `TestTwoPagedModels*`; a decision model's warm question: `TestDecisionDoesNotAllocate` |
 
 A new architecture is added to each gate's model list, not only to the
@@ -843,10 +843,15 @@ and the sessions-per-device budget.
   jitllm is an inference os multimodel multi devices multi instances"*. A
   session's view letting a block go leaves it on the card for every other view
   holding it (`engine.TestABatchLeavesAnotherSessionAlone`).
-- **KV is never held twice.** Host storage follows ownership: a page lives on
-  the host or on the device that owns it, never as a standing mirror of both,
-  and a prefix shared between sessions is one page (`SharedStore`), not a copy
-  per session.
+- **KV is held once per device** (stated by the user). Each session reads each
+  position's history from one place. On one device, sessions and the prefix
+  cache share one page for a prefix they agree on (`SharedStore` on the host,
+  the card's named pages on a card), never a copy per session. Devices may each
+  hold a copy for sessions placed on them independently: a sharing session's
+  block moves to a card like any other, taking the card's page of its prefix
+  or naming the one it brings (`kvCache.nameMoved`). A session keeps no mirror
+  of a history it moved, and a host page the card now holds goes at its last
+  holder's release.
 - **A device that shares the host's memory is not a second pool.** An integrated
   GPU's heap and Apple Silicon's are system RAM: `UnifiedMemory()` reports it on
   every backend with one contract -- SUBTRACT, DO NOT ADD. Vulkan decides this by
