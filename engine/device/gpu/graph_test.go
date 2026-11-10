@@ -73,7 +73,7 @@ type fakeDev struct {
 	inSession   int
 	failCapture bool
 	// failCompile makes every Compile fail, as a driver that rejects the
-	// emitted code does. See TestCompileFailureIsCounted.
+	// emitted code does. See TestCompileFailureIsDeclined.
 	failCompile bool
 	// name distinguishes two fakes in a failure message; "fake" when unset.
 	name string
