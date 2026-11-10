@@ -351,6 +351,15 @@ func (g *devTier) allocPages(sid uint64, kp *kvPool, l *kvLayerPool, s seqID, co
 			}
 		}
 	}
+	// The room made may sit fenced behind a submission in flight (a stream's
+	// pass, an eviction's copy): what is free by now is what the call takes,
+	// and a shortfall is no room, as the budget's is.
+	if len(l.free) < count {
+		l.fence()
+	}
+	if len(l.free) < count {
+		return fmt.Errorf("%w: %d page(s) wanted, %d free once the room was made", ErrKVCapacity, count, len(l.free))
+	}
 	take := l.free[len(l.free)-count:]
 	l.owned[s] = append(l.owned[s], take...)
 	l.free = l.free[:len(l.free)-count]
