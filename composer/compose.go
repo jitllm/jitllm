@@ -276,6 +276,7 @@ func (r *Registry) generated(f Model, run []PartPlan, first int, s Step, sp *exp
 			}
 			k.Part, k.Of, k.Unfused, k.Unjam, k.Unpaired, k.Uncursored, k.Unsplit = pp.Part.Kind, first+i, sp.unfused[first+i], sp.unjammed[first+i], sp.unpaired[first+i], sp.uncursored[first+i], sp.unsplit[first+i]
 			k.Unwide, k.Unstreamed, k.Crowded, k.Folds, k.Unvector = sp.unwide[k.at()], sp.unstreamed[k.at()], sp.crowded[k.at()], foldsAPass(p), sp.unvector[first+i]
+			k.Uninit, k.Copied = sp.uninit[k.at()], sp.copied[k.at()]
 			ks = append(ks, k)
 		}
 	}

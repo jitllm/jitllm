@@ -39,8 +39,14 @@ type Kernel struct {
 	// Quarter is the primitive's Facts.Quarter, as nodes.
 	Quarter   *Quarter
 	Positions *Positions
-	Heads     *Heads
-	Part      PartKind
+	// Uninit, where set, is a kernel whose initializer takes (Cursor.Init)
+	// the registers refused: its cursors take none.
+	Uninit bool
+	// Copied, where set, is such a kernel formed again before it gives them
+	// up: its loops walk no base in place, each walking a copy taken from it.
+	Copied bool
+	Heads  *Heads
+	Part   PartKind
 	// Apart is Request.Apart: the graph's inputs and outputs are buffers
 	// of their own.
 	Apart bool
@@ -235,6 +241,9 @@ type Cursor struct {
 	Buf, Elems int
 	Ptr, From  int
 	Take       bool
+	// Init, where set, is 1 + the node of the elements a take adds to its
+	// source's address: a base the loop around picks, made before the loop.
+	Init int
 }
 
 // Ptr is a copy of buffer Buf's address a loop advances in its place, in

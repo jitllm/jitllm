@@ -432,6 +432,11 @@ func (k *Kernel) compact() {
 				walk(x - 1)
 			}
 		}
+		for _, cu := range l.Cursors {
+			if cu.Init > 0 {
+				walk(cu.Init - 1)
+			}
+		}
 	}
 	for _, x := range []int{k.Rows, k.Clamp, k.TileBase, k.TileLast, k.TileFirst} {
 		if x > 0 {
@@ -496,6 +501,9 @@ func (k *Kernel) compact() {
 	for i := range k.Loops {
 		l := &k.Loops[i]
 		l.Count, l.Span, l.Elem, l.End = re(l.Count), re(l.Span), re(l.Elem), re(l.End)
+		for j := range l.Cursors {
+			l.Cursors[j].Init = re(l.Cursors[j].Init)
+		}
 	}
 	k.Rows, k.Clamp = re(k.Rows), re(k.Clamp)
 	k.TileBase, k.TileLast, k.TileFirst = re(k.TileBase), re(k.TileLast), re(k.TileFirst)

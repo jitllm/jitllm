@@ -71,6 +71,11 @@ func (k *Kernel) Live() map[int]bool {
 		if l.Count > 0 {
 			walk(l.Count - 1)
 		}
+		for _, cu := range l.Cursors {
+			if cu.Init > 0 {
+				walk(cu.Init - 1)
+			}
+		}
 	}
 	return seen
 }

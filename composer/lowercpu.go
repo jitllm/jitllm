@@ -1487,6 +1487,17 @@ func (e *x86Lowerer) take(c int) {
 			}
 			continue
 		}
+		if cu.Take && cu.Init > 0 {
+			src, ix := e.ptrReg(cu.Buf, cu.From), e.reg(cu.Init-1)
+			at := x86.Idx(src, ix, uint8(ElemBytes(k.Bufs[cu.Buf])), 0)
+			if cu.Ptr > 0 && k.Ptrs[cu.Ptr-1].Spill > 0 {
+				a.LEAQ(reloadReg, at)
+				a.MOVStore(spillSlot(k.Ptrs[cu.Ptr-1].Spill), reloadReg)
+			} else {
+				a.LEAQ(e.ptrReg(cu.Buf, cu.Ptr), at)
+			}
+			continue
+		}
 		if cu.Take && cu.Ptr > 0 && k.Ptrs[cu.Ptr-1].Spill > 0 {
 			a.MOVStore(spillSlot(k.Ptrs[cu.Ptr-1].Spill), e.ptrReg(cu.Buf, cu.From))
 		} else if cu.Take {
