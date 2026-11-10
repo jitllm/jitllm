@@ -31,7 +31,7 @@ import (
 //
 // The NTK-alpha rotary base (rope_theta * alpha^(d/(d-2))) is already folded
 // into rope.freq_base by llama.cpp's converter; a GGUF says nothing else.
-func hunyuanConfig(f *meta.File, c *jlm.Config) error {
+func hunyuanConfig(f *meta.File, c *Config) error {
 	c.Flags |= jlm.FlagRopeNeox | jlm.FlagQKNorm | jlm.FlagQKNormPostRope
 	if kv, ok := f.Key("expert_gating_func"); ok {
 		if v, _ := kv.Uint(); v != 1 {
@@ -56,11 +56,11 @@ func hunyuanConfig(f *meta.File, c *jlm.Config) error {
 
 // hunyuanVLConfig is HunyuanVL's text model: hunyuan-dense's (hunyuanConfig)
 // under XD-RoPE's four sections (rope.dimension_sections, per element; see
-// jlm.ArchHunyuanVL). llama.cpp's converter writes the NTK alpha beside
+// ArchHunyuanVL). llama.cpp's converter writes the NTK alpha beside
 // rope.freq_base rather than folding it in, and its loader and transformers'
 // HunYuanVLRotaryEmbedding both take base = theta * alpha^(d/(d-2)) over the
 // rotary's width.
-func hunyuanVLConfig(f *meta.File, name string, c *jlm.Config) error {
+func hunyuanVLConfig(f *meta.File, name string, c *Config) error {
 	if err := hunyuanConfig(f, c); err != nil {
 		return fmt.Errorf("convert: %s: %w", name, err)
 	}

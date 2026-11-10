@@ -10,7 +10,7 @@ import (
 	"github.com/jitllm/jitllm/format/quant"
 )
 
-// BitNet b1.58 (jlm.ArchBitNet). Its seven projections are ternary, and every
+// BitNet b1.58 (ArchBitNet). Its seven projections are ternary, and every
 // source form of them reaches the container as a ternary type -- TQ2_0's
 // 2-bit codes, with the scale an f16 (TypeTQ2) or, where no f16 holds it, an
 // f32 (TypeTQ2F) -- through one of the conversions here, each exact:
@@ -36,7 +36,7 @@ import (
 //
 // The graph's other facts -- squared ReLU on the gate, NEOX rotary on the
 // rows as shipped, the two inner norms, per-token int8 activations -- are the
-// arch's (bitnetConfig, jlm.ArchBitNet).
+// arch's (bitnetConfig, ArchBitNet).
 
 // bitnetProjections are the roles a BitNet block runs as BitLinear.
 func bitnetProjections(r jlm.Role) bool {
@@ -52,7 +52,7 @@ func bitnetProjections(r jlm.Role) bool {
 // BitNetForCausalLM, declares relu2 (transformers' BitNetConfig.hidden_act)
 // and rotates with rotate_half over the rows as shipped, which its converter
 // does not permute. bitnet.cpp's graph runs SiLU here (RULE 7m).
-func bitnetConfig(c *jlm.Config) {
+func bitnetConfig(c *Config) {
 	c.Flags |= jlm.FlagRopeNeox | jlm.FlagReLU2
 }
 
@@ -249,8 +249,8 @@ func bitnetScaleOf(name string) (string, bool) {
 // type, its optional per-tensor scale folded into each block's scale, and
 // anything that is not ternary is refused by name. scales maps a weight's
 // name to its scale.
-func bitnetTensors(s *jlm.Source, scales map[string]float32) error {
-	if s.Config == nil || s.Config.Arch != jlm.ArchBitNet {
+func bitnetTensors(c *Config, s *jlm.Source, scales map[string]float32) error {
+	if c == nil || c.Arch != ArchBitNet {
 		if len(scales) > 0 {
 			return fmt.Errorf("convert: %d projection scales on a model that is not BitNet", len(scales))
 		}

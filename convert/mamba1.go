@@ -23,10 +23,10 @@ import (
 // channels; its rank is read off that tensor, not stated in the config.
 
 // mamba1Arch reports the architectures whose recurrent layers are Mamba-1's.
-func mamba1Arch(a jlm.Arch) bool { return a == jlm.ArchMamba || a == jlm.ArchJamba }
+func mamba1Arch(a Arch) bool { return a == ArchMamba || a == ArchJamba }
 
 // mamba1Config reads the Mamba-1 geometry into c.
-func mamba1Config(f *meta.File, c *jlm.Config) error {
+func mamba1Config(f *meta.File, c *Config) error {
 	inner := uint32(f.UintKey("ssm.inner_size", 0))
 	c.SSM = jlm.SSMConfig{
 		ConvKernel: uint32(f.UintKey("ssm.conv_kernel", 0)),
@@ -42,7 +42,7 @@ func mamba1Config(f *meta.File, c *jlm.Config) error {
 	// Neither family rotates: Jamba's attention carries no position at all,
 	// and a plain Mamba has no attention (configOf set a placeholder head).
 	c.Flags |= jlm.FlagNoPosEnc
-	if c.Arch == jlm.ArchJamba {
+	if c.Arch == ArchJamba {
 		// JambaSparseMoeBlock takes the top-k of the softmax and never
 		// renormalises; llama.cpp's builder passes false as a literal. A file
 		// stating otherwise describes a model neither runs.
@@ -78,7 +78,7 @@ func mamba1Kinds(f *meta.File, n uint32) ([]jlm.LayerKind, error) {
 // unfuseMamba1 splits in_proj and x_proj into their outputs (see the top of
 // this file). Row ranges of a row-major matrix are byte ranges, so the bytes
 // are the source's.
-func unfuseMamba1(e *jlm.Tensor, c *jlm.Config) ([]jlm.Tensor, bool, error) {
+func unfuseMamba1(e *jlm.Tensor, c *Config) ([]jlm.Tensor, bool, error) {
 	if c == nil || !mamba1Arch(c.Arch) {
 		return nil, false, nil
 	}
@@ -129,9 +129,8 @@ func unfuseMamba1(e *jlm.Tensor, c *jlm.Config) ([]jlm.Tensor, bool, error) {
 // (ssm.dt_b_c_rms) as weights of ones, one set per Mamba-1 block, so the
 // engine runs them exactly as Jamba's weighted ones. rank is each block's dt
 // bottleneck, read off its x_proj.
-func mamba1UnitNorms(f *meta.File, s *jlm.Source) error {
-	c := s.Config
-	if c == nil || c.Arch != jlm.ArchMamba {
+func mamba1UnitNorms(c *Config, f *meta.File, s *jlm.Source) error {
+	if c == nil || c.Arch != ArchMamba {
 		return nil
 	}
 	if kv, ok := f.Key("ssm.dt_b_c_rms"); !ok {

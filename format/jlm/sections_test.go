@@ -142,9 +142,9 @@ func TestSectionsRefuseGarbage(t *testing.T) {
 	if _, err := decodeConfig([]byte{1, 2, 3}); err == nil {
 		t.Error("a 3-byte config was accepted")
 	}
-	// The record names no architecture, whatever the converter read the
-	// source as: its first two bytes are zero.
-	if b := encodeConfig(&Config{Arch: ArchLlama, NLayer: 1}); b[0] != 0 || b[1] != 0 {
+	// The record names no architecture, whatever an older record it was
+	// migrated from named: its first two bytes are zero.
+	if b := encodeConfig(&Config{legacy: 7, NLayer: 1}); b[0] != 0 || b[1] != 0 {
 		t.Errorf("the config record names architecture %d", uint16(b[0])|uint16(b[1])<<8)
 	}
 }

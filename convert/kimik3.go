@@ -86,7 +86,7 @@ const k3LatentNormEps = 1e-6
 // asserts it; KimiMoEGate would honour softmax, which no K3 states). The situ
 // bounds are the published 4 and 25, which the kernels bake; another pair is
 // refused by name, as DeepSeek V4's clamp is.
-func kimiK3Config(f *meta.File, c *jlm.Config) error {
+func kimiK3Config(f *meta.File, c *Config) error {
 	kinds, err := k3Kinds(f, c.NLayer)
 	if err != nil {
 		return err
@@ -176,9 +176,8 @@ func k3Kinds(f *meta.File, n uint32) ([]jlm.LayerKind, error) {
 // bank ([taps, channels] with the channels in the same order), the output
 // projection as RoleSSMOut, and the per-head decay rate -exp(A_log) (llama.cpp's
 // converter folds it) repeated per channel, which is the rate KDA's gate reads.
-func kimiK3Tensors(s *jlm.Source) error {
-	c := s.Config
-	if c.Arch != jlm.ArchKimiK3 {
+func kimiK3Tensors(c *Config, s *jlm.Source) error {
+	if c.Arch != ArchKimiK3 {
 		return nil
 	}
 	type parts struct{ q, k, v, cq, ck, cv *jlm.Tensor }
@@ -324,7 +323,7 @@ func k3JoinConv(ts []*jlm.Tensor, taps, ch uint64) (jlm.Tensor, error) {
 }
 
 // k3ExpandA repeats each head's decay rate over its head_dim channels.
-func k3ExpandA(e jlm.Tensor, c *jlm.Config) (jlm.Tensor, error) {
+func k3ExpandA(e jlm.Tensor, c *Config) (jlm.Tensor, error) {
 	heads, kd := int(c.SSM.NHeadV), int(c.SSM.StateSize)
 	b, err := e.Bytes()
 	if err != nil {

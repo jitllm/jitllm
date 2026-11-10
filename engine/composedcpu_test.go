@@ -663,7 +663,7 @@ func expEdges() []float32 {
 // FFN, as the front end copies it, over a row of n.
 func xieluGraph(t *testing.T, n int) (g *graph.Graph, x, y graph.ValueID) {
 	t.Helper()
-	e, err := convert.Activation(&jlm.Config{NLayer: 1}, 0, false, true)
+	e, err := convert.Activation(&convert.Config{Config: &jlm.Config{NLayer: 1}}, 0, false, true)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -405,26 +405,26 @@ func indexedRole(name string) (jlm.Role, bool) {
 // name is the FFN's input norm (ffn_norm by position, which they do not ship
 // under that name). Resolving it here keeps the source's ambiguity out of the
 // container.
-func retarget(arch jlm.Arch, role jlm.Role) jlm.Role {
-	if (arch == jlm.ArchQwen3Next || arch == jlm.ArchGPTOSS || arch == jlm.ArchGLM4MoE || arch == jlm.ArchGLM4VMoE ||
-		arch == jlm.ArchSeedOSS) &&
+func retarget(arch Arch, role jlm.Role) jlm.Role {
+	if (arch == ArchQwen3Next || arch == ArchGPTOSS || arch == ArchGLM4MoE || arch == ArchGLM4VMoE ||
+		arch == ArchSeedOSS) &&
 		role == jlm.RolePostAttnNorm {
 		return jlm.RoleFFNNorm
 	}
 	// DBRX's attn_output_norm is its FFN pre-norm (llama.cpp's dbrx.cpp),
 	// where BERT's is applied after the residual add.
-	if arch == jlm.ArchDBRX && role == jlm.RoleAttnOutNorm {
+	if arch == ArchDBRX && role == jlm.RoleAttnOutNorm {
 		return jlm.RoleFFNNorm
 	}
 	// LFM2's final norm is named token_embd_norm (llama.cpp's
 	// LLM_TENSOR_OUTPUT_NORM_LFM2, "fix for wrong tensor name"); it is applied
 	// after the last block, not to the embeddings.
-	if (arch == jlm.ArchLFM2 || arch == jlm.ArchLFM2Enc) && role == jlm.RoleTokenEmbdNorm {
+	if (arch == ArchLFM2 || arch == ArchLFM2Enc) && role == jlm.RoleTokenEmbdNorm {
 		return jlm.RoleOutputNorm
 	}
 	// Qwen3.8-Flash-Next's n-gram table carries Gemma's per-layer table name
 	// and is another object: a row table of hashed n-grams.
-	if arch == jlm.ArchQwen4Exp && role == jlm.RolePLETokEmbd {
+	if arch == ArchQwen4Exp && role == jlm.RolePLETokEmbd {
 		return jlm.RoleNGramTable
 	}
 	return role

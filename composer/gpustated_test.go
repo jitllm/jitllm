@@ -10,7 +10,6 @@ import (
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/convert"
-	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/internal/testlock"
 )
@@ -29,7 +28,7 @@ func TestComposedGPUStatedReduce(t *testing.T) {
 		t.Fatal("no GPU backend on this host: the gate proved nothing")
 	}
 	const guard = 64
-	e := convert.SparseMixerWeight(jlm.PhiMoEJitter)
+	e := convert.SparseMixerWeight(convert.PhiMoEJitter)
 	for _, d := range devs {
 		defer d.Close()
 		t.Run(d.API(), func(t *testing.T) {
@@ -112,7 +111,7 @@ func TestComposedGPUStatedReduce(t *testing.T) {
 // (m - s)/max(|s|, m) is not past twice the jitter, the softmax of the kept
 // ones relative to m.
 func statedMixer(dst, s []float32, m float32) {
-	eps2 := float32(2 * float64(jlm.PhiMoEJitter))
+	eps2 := float32(2 * float64(convert.PhiMoEJitter))
 	var sum float32
 	for i, v := range s {
 		ratio := (m - v) / max(float32(math.Abs(float64(v))), m)

@@ -30,7 +30,7 @@ import (
 // magnitude every block's scale at the precision it has.
 func bitnetHF() *hfArch {
 	return &hfArch{
-		arch:        jlm.ArchBitNet,
+		arch:        ArchBitNet,
 		blockPrefix: llamaHF().blockPrefix,
 		model:       llamaHF().model,
 		block: blockPlus(hfLlamaBlockNoBias(), map[string]jlm.Role{
@@ -116,7 +116,7 @@ func bitnetFormOf(c *hfConfig) (bitnetForm, error) {
 
 // bitnetHFConfig reads BitNetConfig with its class defaults, and the
 // quantization_config's form.
-func bitnetHFConfig(c *hfConfig, names []string) (*jlm.Config, error) {
+func bitnetHFConfig(c *hfConfig, names []string) (*Config, error) {
 	if _, err := bitnetFormOf(c); err != nil {
 		return nil, err
 	}
@@ -124,7 +124,7 @@ func bitnetHFConfig(c *hfConfig, names []string) (*jlm.Config, error) {
 	if c.act() == "" {
 		c.HiddenAct = "relu2"
 	}
-	cfg, err := hfConfigWith(jlm.ArchBitNet, 0, "relu2")(c, names)
+	cfg, err := hfConfigWith(ArchBitNet, 0, "relu2")(c, names)
 	if err != nil {
 		return nil, err
 	}
@@ -135,7 +135,7 @@ func bitnetHFConfig(c *hfConfig, names []string) (*jlm.Config, error) {
 // bitnetGather consumes every projection's weight_scale: it is read with its
 // weight (bitnetRetype), never stored. A weight_scale with no projection, or
 // a form that has none, is refused.
-func bitnetGather(c *jlm.Config, names []string, _ func(string) ([]float32, error)) ([]jlm.Tensor, map[string]bool, error) {
+func bitnetGather(c *Config, names []string, _ func(string) ([]float32, error)) ([]jlm.Tensor, map[string]bool, error) {
 	used := map[string]bool{}
 	have := map[string]bool{}
 	for _, n := range names {

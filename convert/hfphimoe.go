@@ -14,10 +14,10 @@ import (
 // LayerNorm with a bias, biased q/k/v/o and a biased head, NEOX rotary (so q
 // and k are not permuted, as convert_hf_to_gguf.py does not permute them), and
 // phi3's LongRoPE where the config states it. The router is sparsemixer, which
-// the arch code carries (jlm.PhiMoEJitter); phimoeConfig is the GGUF half.
+// the arch code carries (PhiMoEJitter); phimoeConfig is the GGUF half.
 func phimoeHF() *hfArch {
 	return &hfArch{
-		arch:        jlm.ArchPhiMoE,
+		arch:        ArchPhiMoE,
 		blockPrefix: llamaHF().blockPrefix,
 		model: map[string]jlm.Role{
 			"model.embed_tokens.weight": jlm.RoleTokenEmbd,
@@ -58,15 +58,15 @@ func phimoeHF() *hfArch {
 // than run at the wrong threshold. input_jitter_noise perturbs training only
 // and is not read. A window shorter than the context slides every layer, as
 // phi3's does on both inputs.
-func phimoeHFConfig(c *hfConfig, names []string) (*jlm.Config, error) {
+func phimoeHFConfig(c *hfConfig, names []string) (*Config, error) {
 	if raw, ok := c.keys["router_jitter_noise"]; ok {
 		var j float64
 		if err := json.Unmarshal(raw, &j); err != nil {
 			return nil, fmt.Errorf("convert: %s: router_jitter_noise: %w", c.path, err)
 		}
-		if float32(j) != jlm.PhiMoEJitter {
+		if float32(j) != PhiMoEJitter {
 			return nil, fmt.Errorf("convert: %s: router_jitter_noise %v, and phimoe's sparsemixer "+
-				"threshold is the arch's %v: %w", c.path, j, jlm.PhiMoEJitter, ErrNotImplemented)
+				"threshold is the arch's %v: %w", c.path, j, PhiMoEJitter, ErrNotImplemented)
 		}
 	}
 	if c.NumExpertsPerTok != 2 {
@@ -81,7 +81,7 @@ func phimoeHFConfig(c *hfConfig, names []string) (*jlm.Config, error) {
 	if c.SlidingWindow != nil {
 		win, c.SlidingWindow = *c.SlidingWindow, nil
 	}
-	cfg, err := hfConfigWith(jlm.ArchPhiMoE, jlm.FlagLayerNorm|jlm.FlagRopeNeox, "silu")(c, names)
+	cfg, err := hfConfigWith(ArchPhiMoE, jlm.FlagLayerNorm|jlm.FlagRopeNeox, "silu")(c, names)
 	if err != nil {
 		return nil, err
 	}
@@ -149,7 +149,7 @@ func hfLongRopeConsume(c *hfConfig) (*hfLongRope, error) {
 // magnitude into AttnFactor. The magnitude is the class's: PhimoeRotaryEmbedding multiplies
 // cos and sin by short_mscale, and transformers' LongRoPE by attention_factor,
 // or sqrt(1 + ln(ctx/orig)/ln(orig)) where neither is stated.
-func (lr *hfLongRope) apply(c *hfConfig, cfg *jlm.Config) error {
+func (lr *hfLongRope) apply(c *hfConfig, cfg *Config) error {
 	pairs := int(cfg.NRot / 2)
 	if len(lr.Short) != pairs || len(lr.Long) != pairs {
 		return fmt.Errorf("convert: %s: LongRoPE factors %d short and %d long for %d rotary pairs",

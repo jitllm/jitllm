@@ -21,11 +21,11 @@ import (
 // (Tensor.Stored), so the result is byte for byte the container a fresh
 // conversion at the new version writes (TestUpgradeIsAFreshConversion).
 
-// Stating is what a container written before v31 must state that only its
-// architecture's code says, an error naming what it lacks (convert.LegacyStated):
-// the converter's knowledge, handed to the migration that reads the
-// architecture a v30 container names. Nil checks nothing.
-type Stating func(c *Config) error
+// Stating is what a container written before v31 must state that only the
+// architecture code its record names says, an error naming what it lacks
+// (convert.LegacyStated): the converter's knowledge, handed to the migration
+// that reads the old record. The code is opaque here. Nil checks nothing.
+type Stating func(code uint16, c *Config) error
 
 // migrationFor is the step that rewrites the version v container at path as
 // version v+1, or nil when there is none, st what v30 must state. Every
@@ -195,7 +195,7 @@ func migrate30(path string, st Stating) error {
 		return err
 	}
 	if st != nil {
-		if err := st(f.cfg); err != nil {
+		if err := st(f.cfg.legacy, f.cfg); err != nil {
 			f.Close()
 			return fmt.Errorf("jlm: %s %w, which v31 cannot recover: convert the model again", path, err)
 		}

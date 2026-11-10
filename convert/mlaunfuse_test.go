@@ -87,7 +87,7 @@ func TestUnfuseMLASplitsTheAbsorbedPair(t *testing.T) {
 				Name: "blk.0.attn_kv_b.weight"}
 			e.Dims[0], e.Dims[1] = lat, rows
 
-			out, split, err := unfuseMLA(&e, cfg)
+			out, split, err := unfuseMLA(&e, &Config{Config: cfg})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -231,7 +231,7 @@ func TestUnfuseMLARefusesAShapeItCannotSplit(t *testing.T) {
 		{"no kv_lora_rank", mk(128, 3*(64+32)), &jlm.Config{NHead: 3, HeadDim: 80, NRot: 16}},
 	} {
 		t.Run(v.name, func(t *testing.T) {
-			if _, split, err := unfuseMLA(v.e, v.c); err == nil {
+			if _, split, err := unfuseMLA(v.e, &Config{Config: v.c}); err == nil {
 				t.Fatalf("accepted (split=%v) -- this gate proved nothing", split)
 			} else {
 				t.Logf("refused: %v", err)
@@ -241,7 +241,7 @@ func TestUnfuseMLARefusesAShapeItCannotSplit(t *testing.T) {
 	// A tensor that is not the fused pair passes straight through.
 	e := mk(128, 3*(64+32))
 	e.Role = jlm.RoleAttnQ
-	if _, split, err := unfuseMLA(e, base()); err != nil || split {
+	if _, split, err := unfuseMLA(e, &Config{Config: base()}); err != nil || split {
 		t.Fatalf("attn_q was split=%v err=%v: unfuseMLA must ignore what is not its tensor", split, err)
 	}
 }

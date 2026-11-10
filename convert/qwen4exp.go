@@ -79,7 +79,7 @@ func qwen4expRoleOf(name string) (jlm.Role, bool) {
 // it), a QSA block whose ratio differs from another's or sits on a linear
 // block, more than one n-gram block or one on an attention block, and
 // constants too short for the heads they describe.
-func qwen4expConfig(f *meta.File, c *jlm.Config) error {
+func qwen4expConfig(f *meta.File, c *Config) error {
 	c.DeltaGate = jlm.DeltaGateSigmoid()
 	if err := partialRotary(c); err != nil {
 		return err
@@ -145,7 +145,7 @@ func qwen4expConfig(f *meta.File, c *jlm.Config) error {
 
 // ngramConfig reads the n-gram embedding's keys, the hash constants as the
 // unsigned integers they are.
-func ngramConfig(f *meta.File, c *jlm.Config) error {
+func ngramConfig(f *meta.File, c *Config) error {
 	kv, ok := f.Key("ple.layers")
 	if !ok {
 		return nil

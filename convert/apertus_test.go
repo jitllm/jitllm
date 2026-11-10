@@ -25,11 +25,11 @@ func TestApertusFoldsItsActivation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Arch != jlm.ArchApertus || !c.Flags.Has(jlm.FlagQKNorm) || !c.Flags.Has(jlm.FlagRopeNeox) {
+	if c.Arch != ArchApertus || !c.Flags.Has(jlm.FlagQKNorm) || !c.Flags.Has(jlm.FlagRopeNeox) {
 		t.Fatalf("arch %v flags %v", c.Arch, c.Flags)
 	}
-	s := &jlm.Source{Config: c}
-	if err := apertusXIELU(f, s); err != nil {
+	s := &jlm.Source{Config: c.Config}
+	if err := apertusXIELU(c, f, s); err != nil {
 		t.Fatal(err)
 	}
 	if len(s.Tensors) != 2 {

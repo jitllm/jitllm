@@ -16,7 +16,7 @@ import (
 // stores says block li (-1 the dense tensors) stores role.
 func StateStreams(c *jlm.Config, stores func(r jlm.Role, li int32) bool) {
 	if c.PredStreams > 1 && c.NLayer > 0 {
-		stateAltUp(c)
+		stateAltUp(&Config{Config: c})
 		c.PredStreams = 0
 		return
 	}
@@ -25,7 +25,7 @@ func StateStreams(c *jlm.Config, stores func(r jlm.Role, li int32) bool) {
 		return
 	}
 	if c.HCIters > 0 && c.HCMult > 1 && c.NLayer > 0 {
-		stateMHC(c)
+		stateMHC(&Config{Config: c})
 		return
 	}
 	if c.AttnResBlock == 0 || c.NLayer == 0 {

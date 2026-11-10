@@ -9,7 +9,7 @@ by name. `internal/srcgate.TestModelsDocIsGenerated` fails when the page and the
 
 - **69** GGUF text architecture names (`general.architecture`, `convert.Architectures`) on **60** graphs
 - **31** Hugging Face safetensors classes (`architectures` in `config.json`, `convert.HFClasses`) on **24** graphs, **1** of them reached only from safetensors
-- **61** graphs in all (`jlm.Arch`)
+- **61** graphs in all (`convert.Arch`)
 - **19** vision projectors (`clip.projector_type`, `convert.Projectors`)
 - **1** audio projectors (`clip.audio.projector_type`, `convert.AudioProjectors`)
 - **3** embedding encoders, and pooling on any decoder

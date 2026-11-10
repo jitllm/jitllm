@@ -345,7 +345,7 @@ func routerSwap(sigmoid bool) func(*model.Model) func() {
 		if sigmoid {
 			s.Flags |= jlm.FlagExpertSigmoid
 		}
-		c.RouterScore = convert.RouterScore(&s)
+		c.RouterScore = convert.RouterScore(&convert.Config{Config: &s})
 		undo := restate(m, func(map[jlm.Role]graph.Shape) {})
 		return func() {
 			c.RouterScore = was

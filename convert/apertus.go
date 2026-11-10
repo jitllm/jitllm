@@ -21,7 +21,7 @@ import (
 //
 // The activation is the arch's: a GGUF names it only through the xielu.* keys
 // apertusXIELU folds.
-func apertusConfig(f *meta.File, c *jlm.Config) error {
+func apertusConfig(f *meta.File, c *Config) error {
 	c.Flags |= jlm.FlagQKNorm | jlm.FlagRopeNeox
 	for _, k := range []string{"xielu.alpha_p", "xielu.alpha_n", "xielu.beta", "xielu.eps"} {
 		if _, ok := xieluKey(f, k); !ok {
@@ -34,9 +34,8 @@ func apertusConfig(f *meta.File, c *jlm.Config) error {
 // apertusXIELU writes each block's xIELU numbers (llama.cpp's converter
 // stores the raw parameters as four per-layer keys, a scalar standing for
 // every layer) as that block's RoleXIELU vector, folded.
-func apertusXIELU(f *meta.File, s *jlm.Source) error {
-	c := s.Config
-	if c == nil || c.Arch != jlm.ArchApertus {
+func apertusXIELU(c *Config, f *meta.File, s *jlm.Source) error {
+	if c == nil || c.Arch != ArchApertus {
 		return nil
 	}
 	n := int(c.NLayer)

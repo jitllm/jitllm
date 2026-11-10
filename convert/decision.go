@@ -56,7 +56,7 @@ func questionTypes(name string) (jlm.QuestionType, bool) {
 // is not a decision model and is left alone; a type this engine has no readout
 // for is refused, since the model would otherwise convert into the backbone
 // and answer a decision request by generating text.
-func decisionOf(f *meta.File, c *jlm.Config) error {
+func decisionOf(f *meta.File, c *Config) error {
 	v, ok := f.Key("decision.type")
 	if !ok {
 		return nil
@@ -73,7 +73,7 @@ func decisionOf(f *meta.File, c *jlm.Config) error {
 	c.DecisionLabels = decisionLabelsOf(kind)
 	c.DecisionBlocks = uint32(f.UintKey("decision.block_count", 0))
 	if kind == jlm.DecisionLaya {
-		if c.Arch != jlm.ArchModernBERT || c.DecisionBlocks == 0 {
+		if c.Arch != ArchModernBERT || c.DecisionBlocks == 0 {
 			return fmt.Errorf("a laya readout is a ModernBERT encoder with head blocks, and this is %v with %d", c.Arch, c.DecisionBlocks)
 		}
 		if c.DecisionHeadTokens = uint32(f.UintKey("decision.max_head_tokens", 0)); c.DecisionHeadTokens == 0 {
@@ -162,7 +162,7 @@ func decisionOf(f *meta.File, c *jlm.Config) error {
 // head, and feed_forward_length is per block because the head's MLP is 4x
 // wide. From here on NLayer is the encoder; the head is blocks NLayer.. and
 // Config.DecisionBlocks says how many.
-func modernBERTConfig(f *meta.File, c *jlm.Config) error {
+func modernBERTConfig(f *meta.File, c *Config) error {
 	// Its norms are LayerNorms without a bias.
 	c.RMSEps = float32(f.FloatKey("attention.layer_norm_epsilon", 1e-5))
 	c.Flags |= jlm.FlagNonCausal | jlm.FlagRopeNeox | jlm.FlagGELU | jlm.FlagLayerNorm

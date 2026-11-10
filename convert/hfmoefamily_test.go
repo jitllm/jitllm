@@ -36,7 +36,7 @@ func TestMixtureFamiliesConvertAlikeFromEitherInput(t *testing.T) {
 				name string
 				x, y any
 			}{
-				{"Arch", ca.Arch, cb.Arch}, {"NLayer", ca.NLayer, cb.NLayer}, {"NMTP", ca.NMTP, cb.NMTP},
+				{"NLayer", ca.NLayer, cb.NLayer}, {"NMTP", ca.NMTP, cb.NMTP},
 				{"NEmbd", ca.NEmbd, cb.NEmbd}, {"NHead", ca.NHead, cb.NHead}, {"NKVHead", ca.NKVHead, cb.NKVHead},
 				{"HeadDim", ca.HeadDim, cb.HeadDim}, {"NRot", ca.NRot, cb.NRot}, {"NFFN", ca.NFFN, cb.NFFN},
 				{"NVocab", ca.NVocab, cb.NVocab}, {"RMSEps", ca.RMSEps, cb.RMSEps},

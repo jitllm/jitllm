@@ -68,7 +68,7 @@ func TestEveryTensorHasARole(t *testing.T) {
 			// A split beta and alpha never reach the name table: sourceOf
 			// fuses them into ssm_ba first, by the config's architecture
 			// (fuseBetaAlpha, gated by its own test).
-			if cfgErr == nil && (cfg.Arch == jlm.ArchQwen3Next || cfg.Arch == jlm.ArchQwen4Exp) && splitBetaAlpha(n) {
+			if cfgErr == nil && (cfg.Arch == ArchQwen3Next || cfg.Arch == ArchQwen4Exp) && splitBetaAlpha(n) {
 				continue
 			}
 			// A tower's tensors are named as conversion names them

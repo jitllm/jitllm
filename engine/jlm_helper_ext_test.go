@@ -132,7 +132,7 @@ func containerModels(t testing.TB) []string {
 			continue
 		}
 		c := f.Config()
-		lm := c != nil && c.Arch != jlm.ArchNone && c.NLayer > 0
+		lm := c != nil && c.NLayer > 0 && c.NVocab > 0
 		f.Close()
 		if lm {
 			out = append(out, p)

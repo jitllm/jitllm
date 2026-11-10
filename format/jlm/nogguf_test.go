@@ -98,10 +98,6 @@ func TestContainerFromNoGGUFAtAll(t *testing.T) {
 
 	// The description survives as typed fields, read with the container's own
 	// accessors: no key names, nothing to look up.
-	// It names no architecture: what a block does is what it states.
-	if got := c.Config().Arch; got != jlm.ArchNone {
-		t.Errorf("the container names architecture %v", got)
-	}
 	if got := c.Config().NLayer; got != nBlock {
 		t.Errorf("NLayer is %d, want %d", got, nBlock)
 	}

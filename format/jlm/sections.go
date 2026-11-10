@@ -119,7 +119,7 @@ func encodeConfigAt(c *Config, v uint32) []byte {
 	if v >= 31 {
 		w.u16(0)
 	} else {
-		w.u16(uint16(c.Arch))
+		w.u16(c.legacy)
 	}
 	for _, v := range []uint32{c.NLayer, c.NEmbd, c.NHead, c.NKVHead, c.HeadDim, c.NRot,
 		c.NFFN, c.NVocab, c.NCtx, c.NExpert, c.NExpertUsed, c.NFFNExp, c.SWAWindow, c.SWAPeriod} {
@@ -411,8 +411,8 @@ func decodeConfig(b []byte) (*Config, error) { return decodeConfigAt(b, Version)
 func decodeConfigAt(b []byte, v uint32) (*Config, error) {
 	r := &rbuf{b: b}
 	c := &Config{}
-	if a := Arch(r.u16()); v < 31 {
-		c.Arch = a
+	if a := r.u16(); v < 31 {
+		c.legacy = a
 	}
 	for _, p := range []*uint32{&c.NLayer, &c.NEmbd, &c.NHead, &c.NKVHead, &c.HeadDim, &c.NRot,
 		&c.NFFN, &c.NVocab, &c.NCtx, &c.NExpert, &c.NExpertUsed, &c.NFFNExp, &c.SWAWindow, &c.SWAPeriod} {

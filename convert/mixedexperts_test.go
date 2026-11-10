@@ -38,7 +38,7 @@ func TestMixedExpertTypesStackAsF32(t *testing.T) {
 		{jlm.RoleExpGateBank, 0}: {gate0, f16},
 		{jlm.RoleExpUpBank, 0}:   {up0, up1},
 	}
-	out, err := stackGGUFExperts(experts, c)
+	out, err := stackGGUFExperts(experts, &Config{Config: c})
 	if err != nil {
 		t.Fatal(err)
 	}

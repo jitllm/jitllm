@@ -9,7 +9,6 @@ import (
 
 	"github.com/jitllm/jitllm/convert"
 	"github.com/jitllm/jitllm/convert/gguf"
-	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // TestTheCensusCoversEveryGraph holds the census's models to the converter's
@@ -38,8 +37,8 @@ func TestTheCensusCoversEveryGraph(t *testing.T) {
 
 // censusWants is the graphs the converter's two lists convert to, each with
 // the first name that reaches it, and the projectors it reads.
-func censusWants() (map[jlm.Arch]string, map[string]bool) {
-	want := map[jlm.Arch]string{}
+func censusWants() (map[convert.Arch]string, map[string]bool) {
+	want := map[convert.Arch]string{}
 	for _, a := range convert.Architectures() {
 		// A projector's own container: its towers are the projectors below.
 		if a == "clip" {
@@ -71,7 +70,7 @@ func censusWants() (map[jlm.Arch]string, map[string]bool) {
 func censusGaps(t *testing.T, ms []auditModel) (graphs, projectors []string) {
 	t.Helper()
 	want, proj := censusWants()
-	have := map[jlm.Arch]bool{}
+	have := map[convert.Arch]bool{}
 	carried := map[string]bool{}
 	for _, m := range ms {
 		if m.hf {

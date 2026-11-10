@@ -11,7 +11,7 @@ import (
 // turned by the sliding layers' own rotary (built where they state a base or
 // a width of their own), and a KV-sharing block whose source is not an
 // earlier block of its own head width and kv heads.
-func geometryFits(c *jlm.Config) error {
+func geometryFits(c *Config) error {
 	_, slidingRope := slidingRotary(c)
 	for b := range int(c.NLayer) {
 		if r := c.NRotAt(b); r != c.NRot && !(slidingRope && c.Sliding(b)) {
@@ -33,7 +33,7 @@ func geometryFits(c *jlm.Config) error {
 // slidingRotary is the width the sliding layers' own rotary turns -- the
 // widest of theirs -- and whether the model builds one: where they state a
 // base or a width of their own.
-func slidingRotary(c *jlm.Config) (uint32, bool) {
+func slidingRotary(c *Config) (uint32, bool) {
 	var local uint32
 	for b := range int(c.NLayer) {
 		if c.Sliding(b) {
@@ -49,27 +49,27 @@ func slidingRotary(c *jlm.Config) (uint32, bool) {
 // Encoder reports whether a is an embedding encoder (the BERT family): its
 // blocks non-causal, with no KV cache and no logits. A decoder that pools
 // (FlagPoolMean and its siblings) is not one.
-func Encoder(a jlm.Arch) bool {
-	return a == jlm.ArchBERT || a == jlm.ArchNomicBERT || a == jlm.ArchModernBERT || a == jlm.ArchLFM2Enc
+func Encoder(a Arch) bool {
+	return a == ArchBERT || a == ArchNomicBERT || a == ArchModernBERT || a == ArchLFM2Enc
 }
 
 // xdRope reports whether a's M-RoPE assigns its axes per element of the
 // rotary rather than per pair (HunyuanVL).
-func xdRope(a jlm.Arch) bool { return a == jlm.ArchHunyuanVL }
+func xdRope(a Arch) bool { return a == ArchHunyuanVL }
 
 // interleavedMRope reports whether a's M-RoPE sections are interleaved over a
 // head's pairs rather than laid out as contiguous runs (Qwen2-VL's). Qwen3.5
 // (ArchQwen3Next with sections) is Qwen3-VL's split under its own tower;
 // qwen3next itself carries no sections and has no runs.
-func interleavedMRope(a jlm.Arch) bool {
-	return a == jlm.ArchQwen3VL || a == jlm.ArchQwen3VLMoE || a == jlm.ArchQwen3Next || a == jlm.ArchQwen4Exp
+func interleavedMRope(a Arch) bool {
+	return a == ArchQwen3VL || a == ArchQwen3VLMoE || a == ArchQwen3Next || a == ArchQwen4Exp
 }
 
 // ropeFits refuses a rotary the blocks cannot turn as stated: sections that
 // do not cover the head's rotated pairs (an XD-RoPE's chunks covering the
 // whole head, never interleaved), and an encoder rotating a block by a
 // rotary of no width.
-func ropeFits(c *jlm.Config) error {
+func ropeFits(c *Config) error {
 	var pairs uint32
 	for _, n := range c.RopeSections {
 		pairs += n
@@ -101,7 +101,7 @@ func ropeFits(c *jlm.Config) error {
 
 // compressing reports that block b compresses its history, which it turns
 // by the model's rotary as its entries do.
-func compressing(c *jlm.Config, b int) bool {
+func compressing(c *Config, b int) bool {
 	if b >= len(c.CompKinds) {
 		return false
 	}

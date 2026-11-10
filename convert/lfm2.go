@@ -11,7 +11,7 @@ import (
 // shortconv.l_cache taps over every channel of the residual, in the delta
 // rule's terms a convolution with no state beside it (SSM.Inner is NEmbd,
 // and there are no heads).
-func lfm2Config(f *meta.File, c *jlm.Config) error {
+func lfm2Config(f *meta.File, c *Config) error {
 	l := uint32(f.UintKey("shortconv.l_cache", 0))
 	if l < 2 {
 		return fmt.Errorf("shortconv.l_cache %d: a short convolution needs two taps or more", l)
@@ -34,8 +34,8 @@ func lfm2Config(f *meta.File, c *jlm.Config) error {
 // its three outputs, in the order llama.cpp's lfm2 graph views them: B, C,
 // then x. Row ranges of a row-major matrix are byte ranges, so the bytes are
 // the source's.
-func unfuseLFM2(e *jlm.Tensor, c *jlm.Config) ([]jlm.Tensor, bool, error) {
-	if c == nil || c.Arch != jlm.ArchLFM2 && c.Arch != jlm.ArchLFM2Enc || e.Role != jlm.RoleSSMInProj {
+func unfuseLFM2(e *jlm.Tensor, c *Config) ([]jlm.Tensor, bool, error) {
+	if c == nil || c.Arch != ArchLFM2 && c.Arch != ArchLFM2Enc || e.Role != jlm.RoleSSMInProj {
 		return nil, false, nil
 	}
 	n := uint64(c.NEmbd)

@@ -14,15 +14,15 @@ func TestLocalAxesAreRefused(t *testing.T) {
 	secs := [4]uint32{16, 24, 24, 0}
 	for _, tc := range []struct {
 		name   string
-		c      jlm.Config
+		c      Config
 		refuse bool
 	}{
-		{"sections alone", jlm.Config{Arch: jlm.ArchQwen2VL, NRot: 128, RopeSections: secs}, false},
-		{"a local base alone", jlm.Config{Arch: jlm.ArchGemma3, NRot: 128, RopeBaseSWA: 10000}, false},
-		{"a local width alone", jlm.Config{Arch: jlm.ArchGemma3, NRot: 128, Geoms: widths(128, 64)}, false},
-		{"the same local width", jlm.Config{Arch: jlm.ArchQwen2VL, NRot: 128, Geoms: widths(128, 128), RopeSections: secs}, false},
-		{"sections under a local base", jlm.Config{Arch: jlm.ArchQwen2VL, NRot: 128, RopeBaseSWA: 10000, RopeSections: secs}, true},
-		{"sections under a local width", jlm.Config{Arch: jlm.ArchQwen2VL, NRot: 128, Geoms: widths(128, 64), RopeSections: secs}, true},
+		{"sections alone", Config{Arch: ArchQwen2VL, Config: &jlm.Config{NRot: 128, RopeSections: secs}}, false},
+		{"a local base alone", Config{Arch: ArchGemma3, Config: &jlm.Config{NRot: 128, RopeBaseSWA: 10000}}, false},
+		{"a local width alone", Config{Arch: ArchGemma3, Config: &jlm.Config{NRot: 128, Geoms: widths(128, 64)}}, false},
+		{"the same local width", Config{Arch: ArchQwen2VL, Config: &jlm.Config{NRot: 128, Geoms: widths(128, 128), RopeSections: secs}}, false},
+		{"sections under a local base", Config{Arch: ArchQwen2VL, Config: &jlm.Config{NRot: 128, RopeBaseSWA: 10000, RopeSections: secs}}, true},
+		{"sections under a local width", Config{Arch: ArchQwen2VL, Config: &jlm.Config{NRot: 128, Geoms: widths(128, 64), RopeSections: secs}}, true},
 	} {
 		err := localAxes(&tc.c)
 		switch {

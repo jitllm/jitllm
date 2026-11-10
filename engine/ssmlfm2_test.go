@@ -8,7 +8,7 @@ import (
 	"github.com/jitllm/jitllm/format/jlm"
 )
 
-// LFM2 (jlm.ArchLFM2) on the state-space harness (ssmfamily_test.go):
+// LFM2 (lfm2) on the state-space harness (ssmfamily_test.go):
 // Lfm2ForCausalLM with three gated short convolutions and one attention block
 // (scripts/ssmgold.py). Its recurrence is a convolution window alone, which
 // TestSSDFeaturesAreLoadBearing's window violation covers.

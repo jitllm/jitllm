@@ -57,7 +57,7 @@ func gemma3nRoleOf(name string) (jlm.Role, bool) {
 //	  quantile per layer, -inf where none)
 //
 // LAuReL and AltUp's per-block matrices are tensors (gemma3nTensors).
-func gemma3nConfig(f *meta.File, c *jlm.Config) error {
+func gemma3nConfig(f *meta.File, c *Config) error {
 	c.EmbdScale = float32(math.Sqrt(float64(c.NEmbd)))
 	c.Flags |= jlm.FlagGELU | jlm.FlagRopeNeox | jlm.FlagQKNorm
 	c.Flags2 |= jlm.Flag2VNorm
@@ -124,7 +124,7 @@ func gemma3nConfig(f *meta.File, c *jlm.Config) error {
 // layer has none (icdf(0)). The published pattern is one value on a leading
 // run of layers, which is what the container holds; any other shape is
 // refused rather than approximated.
-func sparsityOf(f *meta.File, c *jlm.Config) error {
+func sparsityOf(f *meta.File, c *Config) error {
 	kv, ok := f.Key("activation_sparsity_scale")
 	if !ok {
 		return nil
@@ -157,9 +157,8 @@ func sparsityOf(f *meta.File, c *jlm.Config) error {
 // matrices, stacked in one tensor in the file, become one tensor per stream;
 // each block's prediction and correction coefficients are read as float
 // matrices the router's weights multiply (stateAltUp).
-func gemma3nTensors(s *jlm.Source) error {
-	c := s.Config
-	if c == nil || c.Arch != jlm.ArchGemma3n {
+func gemma3nTensors(c *Config, s *jlm.Source) error {
+	if c == nil || c.Arch != ArchGemma3n {
 		return nil
 	}
 	n, a := uint64(c.NEmbd), uint64(c.PredStreams)

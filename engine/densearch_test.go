@@ -10,7 +10,7 @@ import (
 	"github.com/jitllm/jitllm/graph"
 )
 
-// The dense llama-family architectures (jlm.ArchSmolLM3 and its siblings) are
+// The dense llama-family architectures (smollm3 and its siblings) are
 // gated by the classic-transformer (C6) harness: transformers' own class,
 // written to GGUF by llama.cpp's convert_hf_to_gguf.py (scripts/c6gold.py), on
 // decode, prefill at every length and the batch, against the host and against
@@ -29,7 +29,7 @@ func denseFixtures() []struct {
 		{"synth-apertus", func(m *model.Model) bool {
 			c, l, l1 := m.Cfg, &m.Layers[0], &m.Layers[1]
 			return !c.LayerNorm && c.RopeNeox && c.QKNorm && !c.QKNormWide &&
-				len(l.QNorm) == c.HeadDim && m.Container.Config().Arch == jlm.ArchApertus && l.Gate.E == nil && l.Vector(jlm.RoleFFNUpBias) == nil &&
+				len(l.QNorm) == c.HeadDim && l.Gate.E == nil && l.Vector(jlm.RoleFFNUpBias) == nil &&
 				len(l.Vector(jlm.RoleXIELU)) == 4 && len(l1.Vector(jlm.RoleXIELU)) == 4 && l.Vector(jlm.RoleXIELU)[0] != l1.Vector(jlm.RoleXIELU)[0] &&
 				l.Vector(jlm.RoleXIELU)[2] != l1.Vector(jlm.RoleXIELU)[2] && l.Vector(jlm.RoleXIELU)[3] < -0.01 && len(m.Rope.Freqs) == c.NRot/2 && c.NKVHead < c.NHead && !c.TiedEmbd
 		}},

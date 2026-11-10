@@ -43,7 +43,7 @@ func TestABlockOfAnotherGeometryIsRefused(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c := base()
 			tc.change(c)
-			err := geometryFits(c)
+			err := geometryFits(&Config{Config: c})
 			switch {
 			case tc.refuse && !errors.Is(err, ErrNotImplemented):
 				t.Fatalf("refused with %v, want ErrNotImplemented", err)

@@ -35,7 +35,7 @@ func TestARotaryItsBlocksCannotTurnIsRefused(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c := &jlm.Config{NLayer: 2, NHead: 2, NKVHead: 2, HeadDim: 64, NRot: 64}
 			tc.change(c)
-			err := ropeFits(c)
+			err := ropeFits(&Config{Config: c})
 			switch {
 			case tc.refuse && !errors.Is(err, ErrNotImplemented):
 				t.Fatalf("refused with %v, want ErrNotImplemented", err)

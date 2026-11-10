@@ -75,7 +75,7 @@ func (e *expr) bounded(a jlm.Arg, c float32) jlm.Arg {
 // Activation is the FFN activation the converter states for block li of a
 // model of config c, gated or not; xielu where the block stores an xIELU's
 // numbers (jlm.RoleXIELU).
-func Activation(c *jlm.Config, li int, gated, xielu bool) (jlm.Expr, error) {
+func Activation(c *Config, li int, gated, xielu bool) (jlm.Expr, error) {
 	var e expr
 	g, u := operand(0), operand(1)
 	var unary func(jlm.Arg) jlm.Arg
@@ -93,7 +93,7 @@ func Activation(c *jlm.Config, li int, gated, xielu bool) (jlm.Expr, error) {
 		e.Fn(jlm.FnMul, e.Fn(jlm.FnMul, e.bounded(g, c.SituBeta), e.Fn(jlm.FnSigmoid, g)), e.bounded(u, c.SituLinearBeta))
 	case c.Flags.Has(jlm.FlagReLU2):
 		unary = e.relu2
-	case c.Arch == jlm.ArchModernBERT:
+	case c.Arch == ArchModernBERT:
 		unary = e.GELUErf
 	case c.Flags.Has(jlm.FlagGELU) && c.SparseStd != 0 && li < int(c.NSparse):
 		unary = func(a jlm.Arg) jlm.Arg { return e.GELUTanh(e.gaussTopK(a, c.SparseStd)) }
@@ -120,12 +120,11 @@ func Activation(c *jlm.Config, li int, gated, xielu bool) (jlm.Expr, error) {
 // expression a distinct activation, and each layer's index into them where
 // the layers differ. A layer is gated unless it stores an up and no gate
 // (a dense one or an expert bank).
-func StateActivations(s *jlm.Source) error {
-	c := s.Config
-	if c == nil || c.NLayer == 0 || c.Arch == jlm.ArchCLIP {
+func StateActivations(c *Config, s *jlm.Source) error {
+	if c == nil || c.NLayer == 0 || c.Arch == ArchCLIP {
 		return nil
 	}
-	n := statedLayers(c)
+	n := statedLayers(c.Config)
 	up, gate, xielu := make([]bool, n), make([]bool, n), make([]bool, n)
 	for _, t := range s.Tensors {
 		if t.Block < 0 || int(t.Block) >= n {
@@ -147,16 +146,17 @@ func StateActivations(s *jlm.Source) error {
 // they were stated, from its config and the tensors it stores, as
 // StateActivations states a source's; false for one that states them or has
 // no layers (jlm.Restate).
-func StateStored(f *jlm.File, c *jlm.Config) (bool, error) {
-	streams := (c.AttnResBlock == 0 && c.HCLowRank == 0 || c.Streams.N > 1) && (c.NGramBlock == 0 || StatesPre(c))
+func StateStored(f *jlm.File, jc *jlm.Config) (bool, error) {
+	c := &Config{Config: jc}
+	streams := (c.AttnResBlock == 0 && c.HCLowRank == 0 || c.Streams.N > 1) && (c.NGramBlock == 0 || StatesPre(c.Config))
 	rev := c.Revision >= jlm.StatementRevision
 	sel := c.IdxHeads == 0 || c.Selection != nil
 	if len(c.Acts) != 0 && (c.NExpert == 0 || len(c.RouterScore.Terms) != 0) && streams && rev && sel ||
-		c.NLayer == 0 || c.Arch == jlm.ArchCLIP {
+		c.NLayer == 0 {
 		return false, nil
 	}
 	if !streams {
-		StateStreams(c, func(r jlm.Role, li int32) bool {
+		StateStreams(c.Config, func(r jlm.Role, li int32) bool {
 			_, ok := f.Find(r, li, -1)
 			return ok
 		})
@@ -165,7 +165,7 @@ func StateStored(f *jlm.File, c *jlm.Config) (bool, error) {
 		StateRevision(c)
 	}
 	if !sel {
-		if err := StateSelection(c, func(r jlm.Role, li int32) bool {
+		if err := StateSelection(c.Config, func(r jlm.Role, li int32) bool {
 			_, ok := f.Find(r, li, -1)
 			return ok
 		}); err != nil {
@@ -182,7 +182,7 @@ func StateStored(f *jlm.File, c *jlm.Config) (bool, error) {
 			return false
 		}
 	}
-	n := statedLayers(c)
+	n := statedLayers(c.Config)
 	xielu := make([]bool, n)
 	for li := range xielu {
 		xielu[li] = stores(jlm.RoleXIELU)(li)
@@ -203,8 +203,8 @@ func gating(n int, gate, up func(li int) bool) []bool {
 // StateGated states every layer's FFN activation in c, layer li gated where
 // gated[li] is, an xIELU where xielu[li] is. A router already stated stays
 // as it is: a container read back names no architecture to state it from.
-func StateGated(c *jlm.Config, gated, xielu []bool) error {
-	n := statedLayers(c)
+func StateGated(c *Config, gated, xielu []bool) error {
+	n := statedLayers(c.Config)
 	if len(gated) != n || len(xielu) != n {
 		return fmt.Errorf("convert: the gating of %d layers and xIELU of %d stated for %d", len(gated), len(xielu), n)
 	}
@@ -243,14 +243,14 @@ func StateGated(c *jlm.Config, gated, xielu []bool) error {
 // from its logits (operand 0), the formula its family's reference computes:
 // what the selection ranks, and the routed weights are read from where the
 // config states no RouterWeight. None for a model with no mixture.
-func RouterScore(c *jlm.Config) jlm.Expr {
+func RouterScore(c *Config) jlm.Expr {
 	if c.NExpert == 0 {
 		return jlm.Expr{}
 	}
 	var e expr
 	x := operand(0)
 	switch {
-	case c.Arch == jlm.ArchPhiMoE:
+	case c.Arch == ArchPhiMoE:
 		// The raw logits: sparsemixer picks by them (RouterWeight).
 		e.Fn(jlm.FnMul, x, num(1))
 	case c.Flags2.Has(jlm.Flag2ExpertSqrtSoftplus):
@@ -275,11 +275,11 @@ func RouterScore(c *jlm.Config) jlm.Expr {
 // sparsemixer (transformers' PhimoeTopKRouter in eval), the softmax over the
 // logits s_j kept where (m - s_j)/max(|s_j|, m) is not past twice its
 // jitter, read at the pick. None for every other model.
-func RouterWeight(c *jlm.Config) jlm.Expr {
-	if c.NExpert == 0 || c.Arch != jlm.ArchPhiMoE {
+func RouterWeight(c *Config) jlm.Expr {
+	if c.NExpert == 0 || c.Arch != ArchPhiMoE {
 		return jlm.Expr{}
 	}
-	return SparseMixerWeight(jlm.PhiMoEJitter)
+	return SparseMixerWeight(PhiMoEJitter)
 }
 
 // SparseMixerWeight is sparsemixer's routed weight at jitter eps

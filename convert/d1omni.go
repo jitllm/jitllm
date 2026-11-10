@@ -16,7 +16,7 @@ import (
 // head: LayerNorm blocks with a fused, biased q|k|v and a ReLU MLP). Every
 // per-layer key is written for all of them. The trunk is read as the lfm2 it
 // is, through a view of the file cut to its blocks, and stated as
-// jlm.ArchLFM2Enc; the head's blocks convert after it, as Laya's do.
+// ArchLFM2Enc; the head's blocks convert after it, as Laya's do.
 
 // d1OmniHead is the head's block count when f is d1-omni.
 func d1OmniHead(f *meta.File) (uint32, bool) {
@@ -58,7 +58,7 @@ func trunkView(f *meta.File, n uint32) (*meta.File, error) {
 
 // d1OmniConfig is configOf for d1-omni: the trunk's lfm2 config, made an
 // encoder, with the head's blocks after it.
-func d1OmniConfig(f *meta.File, head uint32) (*jlm.Config, error) {
+func d1OmniConfig(f *meta.File, head uint32) (*Config, error) {
 	total := uint32(f.UintKey("block_count", 0))
 	if head == 0 || head >= total {
 		return nil, fmt.Errorf("convert: d1-omni with %d head blocks in %d", head, total)
@@ -94,7 +94,7 @@ func d1OmniConfig(f *meta.File, head uint32) (*jlm.Config, error) {
 	// default, 16384), not the base model's 128000 the file states: a state
 	// is cut to it, and a picture prefix comes off it.
 	c.NCtx = uint32(f.UintKey("decision.max_length", 16384))
-	c.Arch = jlm.ArchLFM2Enc
+	c.Arch = ArchLFM2Enc
 	c.Flags |= jlm.FlagNonCausal
 	return c, nil
 }
@@ -103,7 +103,7 @@ func d1OmniConfig(f *meta.File, head uint32) (*jlm.Config, error) {
 // blocks after the trunk (jlm.Flag2HeadBlocks): rl_common's
 // nn.TransformerEncoderLayer and the scorer's nn.LayerNorm run at torch's
 // default epsilon, which rl_common never sets.
-func markerHead(c *jlm.Config) {
+func markerHead(c *Config) {
 	c.Flags2 |= jlm.Flag2HeadBlocks
 	c.DecisionEps = 1e-5
 }
@@ -112,7 +112,7 @@ func markerHead(c *jlm.Config) {
 // are the model's: the trunk's final norm closes the trunk's last block, a
 // norm over its residual (RoleLayerOutNorm), and the question types' table
 // is the first head block's, whose input adds the question's row.
-func headSeam(role jlm.Role, block int32, c *jlm.Config) (jlm.Role, int32) {
+func headSeam(role jlm.Role, block int32, c *Config) (jlm.Role, int32) {
 	if !c.Flags2.Has(jlm.Flag2HeadBlocks) || block != jlm.DenseBlock {
 		return role, block
 	}
@@ -129,7 +129,7 @@ func headSeam(role jlm.Role, block int32, c *jlm.Config) (jlm.Role, int32) {
 
 // decisionHeadBlock reports whether e is in a decision head's block, after
 // the trunk's.
-func decisionHeadBlock(e *jlm.Tensor, c *jlm.Config) bool {
+func decisionHeadBlock(e *jlm.Tensor, c *Config) bool {
 	return c.Decision != jlm.DecisionNone && c.DecisionBlocks > 0 && e.Block >= int32(c.NLayer) &&
 		e.Block < int32(c.NLayer+c.DecisionBlocks)
 }
@@ -137,7 +137,7 @@ func decisionHeadBlock(e *jlm.Tensor, c *jlm.Config) bool {
 // unfuseThirds splits a head block's fused q|k|v (or its bias) into three
 // equal parts of the residual's width, row ranges (or element ranges) of the
 // source's bytes.
-func unfuseThirds(e *jlm.Tensor, c *jlm.Config) ([]jlm.Tensor, bool, error) {
+func unfuseThirds(e *jlm.Tensor, c *Config) ([]jlm.Tensor, bool, error) {
 	n := uint64(c.NEmbd)
 	roles := []jlm.Role{jlm.RoleAttnQ, jlm.RoleAttnK, jlm.RoleAttnV}
 	var unit uint64

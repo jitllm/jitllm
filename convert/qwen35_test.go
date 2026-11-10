@@ -104,9 +104,6 @@ func TestQwen35ConvertsIntoQwen3NextsContainer(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := s.Config
-	if c.Arch != jlm.ArchQwen3Next {
-		t.Fatalf("arch %v, want qwen3next's graph", c.Arch)
-	}
 	if c.NLayer != 1 || c.NMTP != 1 {
 		t.Fatalf("NLayer %d, NMTP %d: the MTP block must be one prediction block past a one-block trunk",
 			c.NLayer, c.NMTP)
