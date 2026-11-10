@@ -28,7 +28,7 @@ type Head struct {
 	NoNorm bool
 	// Pick, where set, projects only the rows of Pick ids, the graph's
 	// second input: the logits at those ids, a decision's labels, in place of
-	// the vocabulary's. A head with a bias does not pick.
+	// the vocabulary's.
 	Pick int
 }
 
@@ -61,8 +61,11 @@ func (h *Head) Build() *Graph {
 	}
 	var l ValueID
 	if h.Pick > 0 {
-		l = b.Emit(OpMatVec, []ValueID{n, ids}, []Result{{Name: "picked", Width: h.Pick}},
-			[]Binding{{Role: h.Output, K: h.NEmbd, Rows: h.NVocab}}, Attrs{}, nil, nil)[0]
+		w := []Binding{{Role: h.Output, K: h.NEmbd, Rows: h.NVocab}}
+		for _, r := range bias {
+			w = append(w, Binding{Role: r, K: h.NVocab})
+		}
+		l = b.Emit(OpMatVec, []ValueID{n, ids}, []Result{{Name: "picked", Width: h.Pick}}, w, Attrs{}, nil, nil)[0]
 	} else {
 		l = b.MatVec(n, h.Output, h.NVocab, bias...)
 	}

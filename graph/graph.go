@@ -30,9 +30,10 @@ const (
 	// ones.
 	OpHeadNorm
 	// OpMatVec is out = W x, W's rows the output; Weight[0] is W, an
-	// optional Weight[1] its bias added after. With a selection In[1] (u32)
-	// and no bias, element j of Out[0] is W's row In[1][j] times x: the rows
-	// it names alone, a name past W's rows read as its last.
+	// optional Weight[1] its bias added after. With a selection In[1] (u32),
+	// element j of Out[0] is W's row In[1][j] times x, plus the bias's element
+	// In[1][j]: the rows it names alone, a name past W's rows read as its
+	// last.
 	OpMatVec
 	// OpRope turns each head's first NRot elements by the position, in the
 	// pair Layout, at Base: the NRot from Offset of the head where it is

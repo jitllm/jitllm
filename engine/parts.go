@@ -31,11 +31,7 @@ func (s *Instance) partsPlan() *nn.PartsPlan {
 	p.Head[0] = part(fg.CpuHead, nn.DeclineNoGraph, 1)
 	p.Head[1] = part(fg.CpuHidden, nn.DeclineNoGraph, 1)
 	p.Head[2] = part(fg.CpuHidden, nn.DeclineNoGraph, cpuRowsCap)
-	none := nn.DeclineNoGraph
-	if fg.CpuHead != nil {
-		none = nn.DeclineHeadBias
-	}
-	p.Head[3] = part(fg.PickHead, none, 1)
+	p.Head[3] = part(fg.PickHead, nn.DeclineNoGraph, 1)
 	for i, g := range []*graph.Graph{fg.CpuSample, fg.CpuWalk, fg.CpuRow, fg.CpuCut, fg.CpuWalkProb, fg.CpuCutProb,
 		fg.CpuCutK, fg.CpuCutKProb} {
 		p.Head[4+i] = part(g, nn.DeclineNoSample, 1)

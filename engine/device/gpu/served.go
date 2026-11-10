@@ -1684,30 +1684,40 @@ func (g *devTier) servedHead(bs *blockScratch, norm backend.Buf, rows int) (*ser
 }
 
 // servedPickHead is the head projecting the picked rows alone
-// (nn.Head.PickHead): the head's norm and its weight bound as servedHead
-// binds them, the ids its second input. One form for the head's label bound,
-// the labels a run-time input.
+// (nn.Head.PickHead): the head's norm, its weight and its bias bound as
+// servedHead binds them, the ids its second input. One form for the head's
+// label bound, the labels a run-time input.
 func (g *devTier) servedPickHead(bs *blockScratch, norm backend.Buf) (*servedPart, error) {
 	gr, w := bs.pickHead, bs.head
 	if gr == nil || len(gr.In) != 2 || len(gr.Out) != 1 || len(gr.Ops) < 2 || len(gr.Ops[0].Weight) < 1 ||
-		gr.Ops[1].Kind != graph.OpMatVec || len(gr.Ops[1].In) != 2 || len(gr.Ops[1].Weight) != 1 {
+		gr.Ops[1].Kind != graph.OpMatVec || len(gr.Ops[1].In) != 2 || len(gr.Ops[1].Weight) < 1 || len(gr.Ops[1].Weight) > 2 {
 		return nil, errors.New("the composed pick head: a graph that is not a norm and a row-selected projection")
 	}
 	t, ok := jlmType(w.t)
 	if !ok {
 		return nil, fmt.Errorf("the composed pick head: format %d has no container type", w.t)
 	}
-	n, out := gr.Ops[0].Weight, gr.Ops[1].Weight[0].Role
+	n, mv := gr.Ops[0].Weight, gr.Ops[1].Weight
+	out := mv[0].Role
+	if len(mv) == 2 && bs.hBias == nil {
+		return nil, fmt.Errorf("the composed pick head: its graph adds %v, which the tier does not hold", mv[1].Role)
+	}
 	bind := func(sl *composedPart) {
 		sl.weights[out], sl.vectors[n[0].Role] = w, norm
 		if len(n) == 2 {
 			sl.vectors[n[1].Role] = bs.hNormB
+		}
+		if len(mv) == 2 {
+			sl.vectors[mv[1].Role] = bs.hBias
 		}
 	}
 	sk := servedKey{kind: nn.PartHead, graph: gr, rows: 1, t: t}
 	sv, err := g.servedFor(sk, func() (composedPart, error) {
 		sl := composedPart{kind: nn.PartHead, graph: gr, formats: map[jlm.Role]jlm.Type{out: t},
 			weights: map[jlm.Role]*resident{}, vectors: map[jlm.Role]backend.Buf{}}
+		if len(mv) == 2 {
+			sl.formats[mv[1].Role] = jlm.TypeF32
+		}
 		bind(&sl)
 		return sl, nil
 	})

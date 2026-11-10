@@ -102,8 +102,16 @@ func headWant(t *testing.T, h *headWeights, s graph.Head, x []float32, rows int)
 // input's or a scratch's where the output goes over a value nothing reads
 // after. The input is cloned, for a kernel may run over it.
 func runCPUGraph(cpuOn cpuArm, codes []Code, g *graph.Graph, rows int, x []float32, h *headWeights) ([]float32, error) {
+	return runCPUGraphWith(cpuOn, codes, g, rows, x, h, nil)
+}
+
+// runCPUGraphWith is runCPUGraph with the words of g's other inputs.
+func runCPUGraphWith(cpuOn cpuArm, codes []Code, g *graph.Graph, rows int, x []float32, h *headWeights, inputs map[graph.ValueID][]uint32) ([]float32, error) {
 	x = slices.Clone(x)
 	vals := map[graph.ValueID][]uint32{}
+	for v, w := range inputs {
+		vals[v] = slices.Clone(w)
+	}
 	nan := math.Float32bits(float32(math.NaN()))
 	value := func(v graph.ValueID) []uint32 {
 		if w, ok := vals[v]; ok {
@@ -211,6 +219,12 @@ func runCPUGraph(cpuOn cpuArm, codes []Code, g *graph.Graph, rows int, x []float
 // formHeadOnCPU forms head graph g for the CPU over rows and runs it.
 func formHeadOnCPU(t *testing.T, cpuOn cpuArm, g *graph.Graph, rows int, x []float32, h *headWeights) ([]float32, error) {
 	t.Helper()
+	return formHeadOnCPUWith(t, cpuOn, g, rows, x, h, nil)
+}
+
+// formHeadOnCPUWith is formHeadOnCPU with the words of g's other inputs.
+func formHeadOnCPUWith(t *testing.T, cpuOn cpuArm, g *graph.Graph, rows int, x []float32, h *headWeights, inputs map[graph.ValueID][]uint32) ([]float32, error) {
+	t.Helper()
 	formats := map[jlm.Role]jlm.Type{jlm.RoleOutput: jlm.TypeF32}
 	for _, o := range g.Ops {
 		for _, w := range o.Weight {
@@ -229,7 +243,7 @@ func formHeadOnCPU(t *testing.T, cpuOn cpuArm, g *graph.Graph, rows int, x []flo
 	if err != nil {
 		return nil, fmt.Errorf("forming: %w", err)
 	}
-	got, err := runCPUGraph(cpuOn, codes, g, rows, x, h)
+	got, err := runCPUGraphWith(cpuOn, codes, g, rows, x, h, inputs)
 	if err != nil {
 		return nil, fmt.Errorf("%w; the head forms into:\n%s", err, describeCodes(codes))
 	}

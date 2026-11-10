@@ -1838,11 +1838,8 @@ func (m *Model) pickHeadGraph() (*graph.Graph, error) {
 		_, ok := f.Inventory[r]
 		return ok
 	}
-	if stored(jlm.RoleOutputBias) {
-		return nil, nil
-	}
 	h := graph.Head{NEmbd: c.NEmbd, NVocab: c.NVocab, Eps: c.RMSEps, LayerNorm: c.LayerNorm,
-		NormBias: stored(jlm.RoleOutputNormBias), Output: jlm.RoleOutput,
+		NormBias: stored(jlm.RoleOutputNormBias), Bias: stored(jlm.RoleOutputBias), Output: jlm.RoleOutput,
 		Softcap: float64(c.FinalSoftcap), Scale: c.LogitScale, Pick: nn.PickMax}
 	if !stored(h.Output) {
 		h.Output = jlm.RoleTokenEmbd

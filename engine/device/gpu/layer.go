@@ -4051,10 +4051,10 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	// where the prompt is: the head projecting the picked rows alone, where
 	// it serves the head, no stage is left after the projection and the
 	// picked rows' form is the head's own arithmetic at them, else the gather
-	// over the logits.
+	// over the logits. The projection's bias is the pick head's own.
 	pickAsked := pickWant
 	pickHeadSrv := pickAsked && composedHead && headWhy == partServes && hb.pickHead != nil && head.PickHead == hb.pickHead &&
-		head.Stages&(nn.HeadBias|nn.HeadScale|nn.HeadCap) == 0 && hb.pickRowsExact()
+		head.Stages&(nn.HeadScale|nn.HeadCap) == 0 && hb.pickRowsExact()
 	pickSrv := pickAsked && !pickHeadSrv && hb.pickGraph != nil && head.PickGraph == hb.pickGraph
 	pick := pickWant && g.prepPick(head, pickHeadSrv || pickSrv)
 	pickHeadSrv, pickSrv = pickHeadSrv && pick, pickSrv && pick
