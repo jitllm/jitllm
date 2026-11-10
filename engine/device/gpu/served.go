@@ -1127,7 +1127,6 @@ type partDecline = nn.Decline
 const (
 	partServes       = nn.DeclineServes
 	partNoGraph      = nn.DeclineNoGraph
-	partPersist      = nn.DeclinePersist
 	partNoPool       = nn.DeclineNoPool
 	partFeeds        = nn.DeclineFeeds
 	partWindow       = nn.DeclineWindow
@@ -1622,9 +1621,8 @@ func headShape(gr *graph.Graph) (headSpec, bool) {
 // asked for, serves where it is: the model's head graph (headShape) -- a
 // norm, the vocabulary's projection with its bias, and what the graph does to
 // the logits after it, the final softcap and the scale -- with the norm and
-// the vectors it binds the tier's, not the label pick, not inside the
-// persistent block.
-func (bs *blockScratch) headServes(norm backend.Buf, pickOnly, persist bool) partDecline {
+// the vectors it binds the tier's, not the label pick.
+func (bs *blockScratch) headServes(norm backend.Buf, pickOnly bool) partDecline {
 	hs, ok := headShape(bs.headGraph)
 	hh, hok := headShape(bs.headHidden)
 	switch {
@@ -1636,8 +1634,6 @@ func (bs *blockScratch) headServes(norm backend.Buf, pickOnly, persist bool) par
 		return partHeadBias
 	case pickOnly:
 		return partPick
-	case persist:
-		return partPersist
 	}
 	return partServes
 }
@@ -2361,9 +2357,9 @@ func (l *layer) namedVector(r jlm.Role) (backend.Buf, bool) {
 // blockServes is why block li of this step is not one the composer serves
 // whole, serves where it is: a graph from the front end, a block the caller
 // leaves to it, the paged history, the window the plan holds the block to
-// (windowHeld), outside the persistent block, and every weight and vector
-// its graph binds held (weightsHeld).
-func (g *devTier) blockServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratch, persist, prompt bool) partDecline {
+// (windowHeld), and every weight and vector its graph binds held
+// (weightsHeld).
+func (g *devTier) blockServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratch, prompt bool) partDecline {
 	pk := bs.pkv
 	switch {
 	case l.graph == nil:
@@ -2372,8 +2368,6 @@ func (g *devTier) blockServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratc
 		return l.expertsServe(1)
 	case !l.weightsHeld():
 		return partNoWeight
-	case persist:
-		return partPersist
 	case l.linear && !g.recHeld(l, p, bs):
 		return partRecurrent
 	case len(l.graph.Out) != p.Streams() || len(l.graph.In) > len(l.graph.Out) && (len(l.graph.In) != len(l.graph.Out)+1 || bs.pleIn == nil):
@@ -2402,7 +2396,7 @@ func (g *devTier) unserved(li int) string {
 	if bs == nil || l == nil {
 		return ""
 	}
-	switch why := g.blockServes(l, li, &bs.p, bs, false, false); why {
+	switch why := g.blockServes(l, li, &bs.p, bs, false); why {
 	case partServes, partCaller, partNoPool:
 		return ""
 	case partWindow:
@@ -2559,7 +2553,7 @@ func (g *devTier) prewarmComposedBlock(li int, narrow bool) (roomless string) {
 	g.kvPages()
 	g.prewarming = true
 	defer func() { g.prewarming = false }()
-	if g.blockServes(l, li, &bs.p, bs, false, false) == partServes {
+	if g.blockServes(l, li, &bs.p, bs, false) == partServes {
 		rcs := bs.cs
 		serve := func() (*servedPart, error) {
 			return g.servedBlock(l, li, rcs, g.kvp.layers[l.kvSrc], bs.pkv.pRow, g.windowDesc(bs.pkv, l), bs.zero, bs.calls, bs.dRows, bs.p.MaxSeq,
@@ -2638,7 +2632,7 @@ func (g *devTier) promptRoomless(li int) string {
 	g.prewarming = true
 	defer func() { g.prewarming = was }()
 	bb, l := g.bbs[g.promptW], g.layers[li]
-	if bb == nil || l == nil || g.blockServes(l, li, &bb.p, bb, false, true) != partServes {
+	if bb == nil || l == nil || g.blockServes(l, li, &bb.p, bb, true) != partServes {
 		return ""
 	}
 	bb.instNoRoom = false
@@ -2654,7 +2648,7 @@ func (g *devTier) promptRoomless(li int) string {
 // outside the submission. Callers hold g.mu.
 func (g *devTier) promptServed(l *layer, li int, bb *blockScratch) bool {
 	if bb.rows < 2 || bb.pkv == nil || g.kvp == nil ||
-		g.blockServes(l, li, &bb.p, bb, false, true) != partServes {
+		g.blockServes(l, li, &bb.p, bb, true) != partServes {
 		return false
 	}
 	rcs := bb.cs
@@ -2883,7 +2877,7 @@ func (g *devTier) prewarmComposedHead(narrow bool) (roomless string) {
 		g.prewarming = false
 	}
 	if g.NoPromptPrewarm || bs == nil || bs.head == nil ||
-		bs.headServes(bs.hNorm, false, false) != partServes {
+		bs.headServes(bs.hNorm, false) != partServes {
 		return
 	}
 	g.prewarming = true

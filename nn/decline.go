@@ -11,7 +11,6 @@ type Decline uint8
 const (
 	DeclineServes Decline = iota
 	DeclineNoGraph
-	DeclinePersist
 	DeclineNoPool
 	DeclineWindow
 	DeclineHeadShape
@@ -50,8 +49,6 @@ func (d Decline) String() string {
 		return "served"
 	case DeclineNoGraph:
 		return "no graph from the front end"
-	case DeclinePersist:
-		return "inside the persistent block"
 	case DeclineNoPool:
 		return "no paged history on the device"
 	case DeclineWindow:
