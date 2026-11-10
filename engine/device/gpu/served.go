@@ -1130,7 +1130,6 @@ const (
 	partPersist      = nn.DeclinePersist
 	partSkip         = nn.DeclineSkip
 	partNoPool       = nn.DeclineNoPool
-	partPrefill      = nn.DeclinePrefill
 	partStream       = nn.DeclineStream
 	partFeeds        = nn.DeclineFeeds
 	partWindow       = nn.DeclineWindow
@@ -2355,9 +2354,8 @@ func (l *layer) namedVector(r jlm.Role) (backend.Buf, bool) {
 
 // blockServes is why block li of this step is not one the composer serves
 // whole, serves where it is: a graph from the front end, a block the caller
-// leaves to it, the paged decode -- or a prompt chunk's, which the tier's
-// own kernels would run through its paged prefill attention -- the window
-// the plan holds the block to (windowHeld),
+// leaves to it, the paged history, the window the plan holds the block to
+// (windowHeld),
 // outside the persistent block and a fault probe, and every weight and
 // vector its graph binds held (weightsHeld).
 func (g *devTier) blockServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratch, persist, prompt bool) partDecline {
@@ -2393,8 +2391,8 @@ func (g *devTier) blockServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratc
 // unserved is why placed block li is one the composer does not serve on
 // this device, "" where it does: prepLayer declines it, so it runs on the
 // CPU device's composed form, never on the tier's own kernels. A step's own
-// conditions (a history mid-prefill, a fault probe, the caller's keep, the
-// pool a step builds) are not a placement's to decide.
+// conditions (a fault probe, the caller's keep, the pool a step builds) are
+// not a placement's to decide.
 func (g *devTier) unserved(li int) string {
 	defer g.useGeom(g.enterGeomOf(li))
 	bs, l := g.bs, g.layers[li]
@@ -2402,7 +2400,7 @@ func (g *devTier) unserved(li int) string {
 		return ""
 	}
 	switch why := g.blockServes(l, li, &bs.p, bs, false, false); why {
-	case partServes, partPrefill, partSkip, partCaller, partNoPool:
+	case partServes, partSkip, partCaller, partNoPool:
 		return ""
 	case partWindow:
 		// A tower's windows are each call's (SetKeyRuns, SetRowWindows):
