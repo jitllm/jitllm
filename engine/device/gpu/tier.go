@@ -243,6 +243,10 @@ type Config struct {
 	// that runs such steps reserves their scratch and their per-row logits at
 	// placement too; 0 runs none and reserves nothing for them.
 	StepRows int
+	// HeadRowBytes is what a ragged step's per-row logits may hold, 64 MiB
+	// where it is 0: a step wanting more rows than fit runs its head over them
+	// a chunk at a time (headChunk).
+	HeadRowBytes int
 	// NoScratchReserve builds the batched scratch at the first prompt, as the
 	// device did before the reservation: the other arm of its gates.
 	NoScratchReserve bool
@@ -630,6 +634,9 @@ type Stats struct {
 	// KVWindowReleased counts a windowed layer's pages released behind its
 	// window (devTier.windowPages), one per layer-page.
 	KVWindowReleased int
+	// HeadChunks counts the head chunks a ragged step ran past the rows its
+	// per-row logits hold (headChunk).
+	HeadChunks int
 	// KVPagesMapped counts the named pages a prefix cache restore put into a
 	// sequence's table on the card, no byte moved (kvshare.go), and
 	// KVPagesCopied the named pages a write copied first.
@@ -934,6 +941,7 @@ func (s *Stats) add(o Stats) {
 	s.KVStageReads += o.KVStageReads
 	s.KVWindowReleased += o.KVWindowReleased
 	s.KVPagesMapped += o.KVPagesMapped
+	s.HeadChunks += o.HeadChunks
 	s.KVPagesCopied += o.KVPagesCopied
 	s.KVPositionsMigrated += o.KVPositionsMigrated
 	s.RecPointsKept += o.RecPointsKept
@@ -1360,8 +1368,10 @@ type devShared struct {
 	// copyGraphs are the copies over x by row width (servedCopy), each one
 	// graph so its part keys alike every step.
 	copyGraphs map[int]*graph.Graph
-	// takeGraphs are the folded head's row takes by width (servedRowTake).
-	takeGraphs map[int]*graph.Graph
+	// takeGraphs are the folded head's row takes by width (servedRowTake),
+	// takesGraphs a head chunk's by width and rows (servedRowTakeOf).
+	takeGraphs  map[int]*graph.Graph
+	takesGraphs map[[2]int]*graph.Graph
 	// blockForms is Stats.BlockForms, this device's.
 	blockForms []int
 	// everyRows is the word a served part whose call states no rows reads
