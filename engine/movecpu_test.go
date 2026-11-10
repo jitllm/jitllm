@@ -177,20 +177,41 @@ func blocksMoveToTheCPUAndBack(t *testing.T, path string, composed bool) {
 		ids = append(ids, Greedy(l))
 	}
 	moved := run(ids, true)
-	var worstAll float64
+	// The card parts from the CPU in the reduction-order band, which an
+	// absolute logit difference cannot state: it grows with the logits'
+	// scale (mamba-130m's reach 43, and a coherent prefill reads 3.18 apart).
+	// The band is the card census's; a history a move dropped or misplaced
+	// reads in tenths at every token after it. A mixture's routed bank is
+	// computed on the card in arithmetic of the card's own, within its band,
+	// and that can carry the next block's router across a near-tie: one
+	// token takes another expert and parts in tenths, the next agrees again
+	// (synth-qwen35moe-hybrid-mtp-q8_0's tokens 2 and 4, 0.117 and 0.089,
+	// the rest 1e-3). A mixture is held at the median of its tokens, and
+	// every token below 1.
+	const moveBand, mixtureWorst = 5e-2, 1.0
+	mixture := m.Cfg.NExpert > 1
+	var worstAll, nmseAll float64
+	var es []float64
 	for i := range ctl {
 		var worst float64
 		for j, v := range ctl[i] {
 			worst = max(worst, math.Abs(float64(v-moved[i][j])))
 		}
+		e, _ := nmseOf(moved[i], ctl[i])
+		es = append(es, e)
 		switch {
-		case math.IsNaN(worst):
+		case math.IsNaN(worst) || math.IsNaN(e):
 			t.Fatalf("token %d: a non-finite logit", i)
-		case worst > 2.5:
-			t.Fatalf("token %d: %g from the CPU control, outside the band", i, worst)
+		case !mixture && !(e < moveBand):
+			t.Fatalf("token %d: %.3e NMSE from the CPU control (worst logit %.4g), outside the band %.0e", i, e, worst, moveBand)
+		case mixture && !(e < mixtureWorst):
+			t.Fatalf("token %d: the mixture's %.3e NMSE from the CPU control (worst logit %.4g), past %.0g at any token", i, e, worst, mixtureWorst)
 		}
-		worstAll = max(worstAll, worst)
+		worstAll, nmseAll = max(worstAll, worst), max(nmseAll, e)
 	}
-	t.Logf("%d tokens, %d blocks moved %s -> cpu -> %s -> half cpu -> %s; worst logit %.4g from the CPU control",
-		ntok, n, a, b, a, worstAll)
+	if med := median(es); mixture && !(med < moveBand) {
+		t.Fatalf("the mixture's tokens are %.3e NMSE from the CPU control at the median, outside the band %.0e", med, moveBand)
+	}
+	t.Logf("%d tokens, %d blocks moved %s -> cpu -> %s -> half cpu -> %s; worst %.3e NMSE (logit %.4g), median %.3e, from the CPU control",
+		ntok, n, a, b, a, nmseAll, worstAll, median(es))
 }
