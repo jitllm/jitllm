@@ -2,15 +2,89 @@ package gpu
 
 import (
 	"fmt"
+
+	"github.com/jitllm/jitllm/nn"
 )
 
 // A tier is one model. Its blocks are keyed by index (GPU.own, devTier.layers)
 // and each device holds one head and one scratch built from the first plan it
 // saw, so a second model's block li offered beside the first's would be taken
 // for the first's: shared, run against the wrong scratch, or its head answered
-// by the first model's projection. Nothing in a block's index says which model
-// it is, so the offer says (nn.LayerPlan.Model, nn.Head.Model) and the tier
-// refuses another model's offers while anything of the first is placed.
+// by the first model's projection. So a second model's instance is given a
+// tier of its own over the same devices (ForModel), and an offer reaching a
+// tier another model holds -- the zero session, which has one history -- is
+// refused by name (nn.LayerPlan.Model, nn.Head.Model).
+
+// ForModel is the tier model's blocks are placed on (nn.ModelTier): this one
+// when it is free or already model's, otherwise a sibling of model's own.
+func (g *GPU) ForModel(model uint64) nn.LayerDevice { return g.forModel(model) }
+
+// ForModel on a session is its tier's: the session is the tier's view, and
+// the instance that resolved it attaches again on the tier it is given.
+func (s *gpuSession) ForModel(model uint64) nn.LayerDevice { return s.g.forModel(model) }
+
+// forModel is ForModel's tier. A sibling asks its parent, so every instance
+// of a model reaches one tier whichever of the family it was handed.
+func (g *GPU) forModel(model uint64) *GPU {
+	if g.parent != nil {
+		return g.parent.forModel(model)
+	}
+	g.ownMu.Lock()
+	defer g.ownMu.Unlock()
+	if s := g.sibs[model]; s != nil {
+		return s
+	}
+	if g.claim == model || g.claimFree() {
+		g.claim = model
+		return g
+	}
+	if g.sibs == nil {
+		g.sibs = map[uint64]*GPU{}
+	}
+	s := g.sibling()
+	g.sibs[model] = s
+	return s
+}
+
+// claimFree reports that the model this tier was given has let it go: no
+// instance holds it and nothing of it is placed. Callers hold g.ownMu.
+func (g *GPU) claimFree() bool {
+	return g.claim == 0 || g.holdsOf[g.claim] == 0 && !(g.held && g.holds())
+}
+
+// sibling is a tier over g's devices for another model: their memory pools,
+// counters and options, and blocks, scratch, KV, packed arena and head of its
+// own. Callers hold g.ownMu.
+func (g *GPU) sibling() *GPU {
+	cfg := *g.Config
+	cfg.arena = NewArena(g.Config.arena.Limit())
+	s := &GPU{Config: &cfg, own: map[int]*devTier{}, geo: map[int]geoKey{}, counters: g.counters,
+		parent: g, pools: g.pools, hostPool: g.hostPool}
+	for i, d := range g.devs {
+		s.devs = append(s.devs, s.borrow(d, i))
+	}
+	return s
+}
+
+// borrow is s's device over d's: the same backend device, pool and budget,
+// a state of its own.
+func (s *GPU) borrow(d *devTier, ord int) *devTier {
+	dv := newDevice(&devShared{
+		Config:   s.Config,
+		tot:      Stats{Device: d.tot.Device},
+		dev:      d.dev,
+		cnt:      d.cnt,
+		pool:     d.pool,
+		why:      d.why,
+		ord:      ord,
+		name:     d.name,
+		res:      map[resKey]*resident{},
+		limit:    d.limit,
+		borrowed: true,
+	})
+	dv.imp, dv.impAlign = d.imp, d.impAlign
+	return dv
+}
 
 // admit takes the tier for model, or refuses -- naming why, in every device's
 // LastErr -- when another model has anything placed on it. what names the

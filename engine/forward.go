@@ -832,6 +832,11 @@ func (s *Instance) SetDevice(d nn.LayerDevice) error {
 // named a device not attached, a strict one that could not be met (nothing is
 // placed then), and a device this instance cannot move onto at all.
 func (s *Instance) SetDeviceLayers(d nn.LayerDevice, max int) error {
+	// A device serving several models gives this one its own tier, and every
+	// call below reaches that one.
+	if mt, ok := d.(nn.ModelTier); ok {
+		d = mt.ForModel(s.m.Id)
+	}
 	defer s.settleHist()
 	// The tower's blocks go where the text's do, every one offered (tower.go);
 	// a chain's run as parts of the device that serves picture rows, every

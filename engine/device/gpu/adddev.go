@@ -59,5 +59,12 @@ func (g *GPU) AddDevices(spec string, options ...Option) ([]string, error) {
 		g.addSlot(base+i, slots[i])
 		added[i] = names[i]
 	}
+	g.ownMu.Lock()
+	for _, s := range g.sibs {
+		for i := base; i < len(g.devs); i++ {
+			s.devs = append(s.devs, s.borrow(g.devs[i], i))
+		}
+	}
+	g.ownMu.Unlock()
 	return added, nil
 }

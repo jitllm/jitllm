@@ -2,7 +2,6 @@ package engine
 
 import (
 	"math"
-	"strings"
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
@@ -15,12 +14,15 @@ import (
 // this one's read ~1.
 const ownerBound = 1e-2
 
-// TestATierServesOneModel offers two models of the same shape and different
-// weights to one tier. A tier keys blocks by index, so the second model's
-// block li offered beside the first's was taken for it: the second model ran
-// the first's weights, fluent and wrong. The second must be refused by name,
-// run on the host, and get the tier once the first is closed.
-func TestATierServesOneModel(t *testing.T) {
+// TestATierServesASecondModelOnItsOwnTier offers two models of the same shape
+// and different weights to one tier. A tier keys blocks by index, so the
+// second model's block li offered beside the first's would be taken for it:
+// the second model would run the first's weights, fluent and wrong. The second
+// model's instance is given a tier of its own over the same card (GPU.ForModel):
+// it places its blocks there and answers as its host run does, the first
+// answers as before, and closing the first leaves the second as it was. A tier
+// that refused it (the second model on the host) or mixed the two fails.
+func TestATierServesASecondModelOnItsOwnTier(t *testing.T) {
 	ids := []int32{1, 2, 3, 4}
 	a, openOpts := hybridModelOpt(t, hyOpt{moe: true, layers: 4})
 	b, openOpts2 := hybridModelOpt(t, hyOpt{moe: true, layers: 4, seed: 11})
@@ -58,12 +60,16 @@ func TestATierServesOneModel(t *testing.T) {
 	}
 	hb := testInstance(t, b, 16, openOpts2...)
 	want := logits(hb)
+	// The four tokens again at positions 4..7: what a session that ran the
+	// first four reads next.
+	wantNext := logits(hb)
 	hb.Close()
-	if d := worst(want, func() [][]float32 {
+	wantA := func() [][]float32 {
 		ha := testInstance(t, a, 16, openOpts...)
 		defer ha.Close()
 		return logits(ha)
-	}()); d < 0.1 {
+	}()
+	if d := worst(want, wantA); d < 0.1 {
 		t.Fatalf("the two models read NMSE %.3e apart on the host: mixing them could not be seen", d)
 	}
 
@@ -83,47 +89,45 @@ func TestATierServesOneModel(t *testing.T) {
 	}
 
 	sb := testInstance(t, b, 16, openOpts2...)
+	defer sb.Close()
 	if err := sb.SetDeviceLayers(g, n); err != nil {
 		t.Fatal(err)
 	}
-	got := logits(sb)
-	d := worst(got, want)
-	if sb.GPULayers() != 0 || sb.head != nil || d > ownerBound {
-		t.Fatalf("the second model placed %d block(s) (head %v) beside the first's and reads "+
-			"NMSE %.3e against its own host run: it ran the first model's weights",
-			sb.GPULayers(), sb.head != nil, d)
+	if sb.GPULayers() == 0 {
+		t.Fatalf("the second model placed no block while the first holds %d: %v %s", sa.GPULayers(), sb.DeviceDeclines(), g.Err())
 	}
-	if e := g.Err(); !strings.Contains(e, "serves one model") {
-		t.Fatalf("the refusal does not say why: %q", e)
+	if d := worst(logits(sb), want); d > ownerBound {
+		t.Fatalf("the second model placed %d block(s) beside the first's and reads NMSE %.3e against "+
+			"its own host run: it ran the first model's weights", sb.GPULayers(), d)
 	}
-	t.Logf("refused while the first holds %d block(s): %s; NMSE %.3e on the host",
-		sa.GPULayers(), g.Err(), d)
-	sb.Close()
+	if d := worst(logits(sa), wantA); d > ownerBound {
+		t.Fatalf("the first model reads NMSE %.3e against its host run beside the second", d)
+	}
+	t.Logf("the first holds %d block(s) and the second %d on one card", sa.GPULayers(), sb.GPULayers())
 
-	// The first model is unaffected by the refusal, and closing it frees the
-	// tier for the second.
-	logits(sa)
+	// The first closes: the second keeps its tier and its answer, and a new
+	// instance of it reaches the same tier.
 	sa.Close()
 	if err := a.Close(); err != nil {
 		t.Fatal(err)
 	}
 	for dev, held := range g.Placed() {
 		if held != 0 {
-			t.Fatalf("device %d still holds %d block(s) after the first model closed", dev, held)
+			t.Fatalf("device %d still holds %d of the first model's block(s) after it closed", dev, held)
 		}
 	}
-	sb = testInstance(t, b, 16, openOpts2...)
-	defer sb.Close()
-	if err := sb.SetDeviceLayers(g, n); err != nil {
+	if d := worst(logits(sb), wantNext); d > ownerBound {
+		t.Fatalf("the second model reads NMSE %.3e after the first closed", d)
+	}
+	sc := testInstance(t, b, 16, openOpts2...)
+	defer sc.Close()
+	if err := sc.SetDeviceLayers(g, n); err != nil {
 		t.Fatal(err)
 	}
-	if sb.GPULayers() == 0 {
-		t.Fatalf("the tier stayed refused after the first model closed: %s", g.Err())
+	if sc.GPULayers() == 0 {
+		t.Fatalf("a second instance of the second model placed nothing: %v", sc.DeviceDeclines())
 	}
-	if d := worst(logits(sb), want); d > ownerBound {
-		t.Fatalf("after the first model closed the second placed %d block(s) and reads "+
-			"NMSE %.3e against its host run", sb.GPULayers(), d)
-	} else {
-		t.Logf("after the first closed: %d of %d block(s) placed, NMSE %.3e", sb.GPULayers(), n, d)
+	if d := worst(logits(sc), want); d > ownerBound {
+		t.Fatalf("a second instance of the second model reads NMSE %.3e against its host run", d)
 	}
 }
