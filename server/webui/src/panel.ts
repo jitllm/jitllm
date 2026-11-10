@@ -135,7 +135,7 @@ function engine(force: boolean) {
   const ctxLen = info?.contextLength ?? 0;
   const model = card("Model " + (id || ""),
     info ? h("div", { class: "kvs" },
-      kv("architecture", info.architecture), kv("blocks", String(info.blockCount)),
+      kv("blocks", String(info.blockCount)),
       kv("width", String(info.embeddingDim)), kv("vocab", String(info.vocabSize)),
       info.expertCount ? kv("experts", `${info.expertsUsed} of ${info.expertCount}`) : null,
       info.linearBlocks ? kv("attn / linear", `${info.attentionBlocks} / ${info.linearBlocks}`) : null) : h("p", { class: "dim", text: id ? "Reading the model's details…" : "No model selected." }),
@@ -386,7 +386,7 @@ function modelsTab(force: boolean) {
     const chat = h("button", { class: "btn sm", text: "Chat", title: "Start a new conversation on this model", on: { click: () => ctx.newChatOn(x.modelId) } });
     const users = live.stats?.models.find((s) => s.modelId === x.modelId)?.sessions ?? 0;
     return h("div", { class: "row" },
-      h("div", { class: "grow" }, h("b", { text: x.modelId }), h("div", { class: "dim small", text: `${x.architecture} · ${x.blockCount} layers · ${x.defaultDeviceIds.length ? x.defaultDeviceIds.join(", ") : "CPU"} · ctx ${x.contextLength} · ${users} session${users === 1 ? "" : "s"}` })),
+      h("div", { class: "grow" }, h("b", { text: x.modelId }), h("div", { class: "dim small", text: `${x.blockCount} layers · ${x.defaultDeviceIds.length ? x.defaultDeviceIds.join(", ") : "CPU"} · ctx ${x.contextLength} · ${users} session${users === 1 ? "" : "s"}` })),
       chat, un);
   });
   const files = m.files.filter((f) => f.modelId === "" && !f.name.startsWith("mmproj-") && f.name.toLowerCase().includes(filter.toLowerCase()));

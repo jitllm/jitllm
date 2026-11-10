@@ -211,8 +211,8 @@ func listModels(w io.Writer, m *v1.ListModelsResponse) {
 		if ids := lm.GetDefaultDeviceIds(); len(ids) > 0 {
 			where = strings.Join(ids, ",")
 		}
-		fmt.Fprintf(w, "  %-24s %-22s %-10s %3d blocks  %6d ctx  page %-11s  %d session(s)  [%s]\n",
-			lm.GetModelId(), lm.GetName(), lm.GetArchitecture(), lm.GetBlockCount(),
+		fmt.Fprintf(w, "  %-24s %-22s %3d blocks  %6d ctx  page %-11s  %d session(s)  [%s]\n",
+			lm.GetModelId(), lm.GetName(), lm.GetBlockCount(),
 			lm.GetContextLength(), bytesOf(lm.GetPageSize()), lm.GetSessionCount(), where)
 	}
 	files := m.GetFiles()
@@ -257,7 +257,6 @@ func describeModel(w io.Writer, m *v1.ModelInfo) {
 	}
 	fmt.Fprintf(w, "\n%s\n", m.GetModelId())
 	fmt.Fprintf(w, "  path         %s\n", m.GetPath())
-	fmt.Fprintf(w, "  architecture %s\n", m.GetArchitecture())
 	fmt.Fprintf(w, "  geometry     %d block(s), %d embd, %d ctx, %d vocab\n",
 		m.GetBlockCount(), m.GetEmbeddingDim(), m.GetContextLength(), m.GetVocabSize())
 	if m.GetExpertCount() > 0 {
