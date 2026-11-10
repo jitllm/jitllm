@@ -149,14 +149,6 @@ type Config struct {
 	// (composer.Registry.WithoutSplits): a reference apart from the composer's
 	// splits.
 	ComposedUnsplit bool
-	// ComposedShadow runs the composer's form of each block it would serve
-	// beside the tier's own kernels, on a copy of the block's input and into
-	// buffers of its own, and compares the two outputs on the device with a
-	// reduction the composer forms (Stats.ShadowWorst). The tier's kernels
-	// serve: the stream, the history and the logits are theirs whatever the
-	// form computes, so the option changes no answer. It needs
-	// nn.ComposedBlock, and works on a step issued or recorded alike.
-	ComposedShadow bool
 	// ComposedLanes, where not zero, is the subgroup the composer forms the
 	// served parts for in place of the device's (pickLanes): a narrower one,
 	// which a gate forms at to hold each lane count's forms to the tier. A
@@ -498,16 +490,6 @@ type Stats struct {
 	// normed rows the caller read back (nn.Head.Hidden), HiddenRows those
 	// rows: a speculation step's verification is one call of several.
 	HiddenHeads, HiddenRows int
-	// ShadowWorst is, per block the composer's form ran beside the tier's own
-	// kernels (Config.ComposedShadow), the worst drift of the form's output
-	// from the tier's over the steps compared: the squared distance between
-	// them over the squared distance the tier's block moved its input,
-	// capped at graph.DriftCap. ShadowSteps counts the steps each block was
-	// compared in, as the device counted them, a replayed recording's
-	// included. Both are read from the device, from the blocks it holds when
-	// the stats are taken: a block released or moved starts again.
-	ShadowWorst []float32
-	ShadowSteps []int
 	// Forgotten counts lone-matvec copies dropped because the host said the
 	// bytes at their address changed (Forget): the selection check that a
 	// refilled frame reached the device at all.
@@ -842,15 +824,6 @@ func (s *Stats) add(o Stats) {
 	}
 	s.HiddenHeads += o.HiddenHeads
 	s.HiddenRows += o.HiddenRows
-	// A block is on one device, so its slot is the only one that is not zero.
-	if n := len(o.ShadowWorst); n > len(s.ShadowWorst) {
-		s.ShadowWorst = append(s.ShadowWorst, make([]float32, n-len(s.ShadowWorst))...)
-		s.ShadowSteps = append(s.ShadowSteps, make([]int, n-len(s.ShadowSteps))...)
-	}
-	for i, w := range o.ShadowWorst {
-		s.ShadowWorst[i] = max(s.ShadowWorst[i], w)
-		s.ShadowSteps[i] += o.ShadowSteps[i]
-	}
 	s.Forgotten += o.Forgotten
 	if o.LastErr != "" {
 		s.LastErr = o.LastErr
@@ -1898,9 +1871,6 @@ func (d *devTier) stats() Stats {
 	s.TowerRows = d.towerVis().cap
 	s.Allocated, s.RoundingBytes = uint64(d.allocated()), d.rounding
 	s.BlockForms = append([]int(nil), d.blockForms...)
-	if d.shadowing() {
-		d.shadowStats(&s)
-	}
 	return s
 }
 

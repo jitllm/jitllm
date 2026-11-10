@@ -144,10 +144,6 @@ type layer struct {
 	geo      geoKey
 	vFromK   bool
 	outScale backend.Buf
-	// shadow is the shadow arm's state for the block (Config.ComposedShadow):
-	// the worst drift of the form from the tier's kernels and the steps
-	// compared, two floats the comparison keeps (shadow.go).
-	shadow backend.Buf
 	// MoE only: the F32 router matrix and its matvec. gate/up/down above hold
 	// the banks in that case, and their mv carries slots > 0.
 	router backend.Buf
@@ -2252,12 +2248,6 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	if p.OutScale != 0 {
 		up(&l.outScale, []float32{p.OutScale})
 		l.auxBytes += 4
-	}
-	// The shadow arm's state, the worst drift and the steps compared, both
-	// zero: written here, since a device buffer is not.
-	if g.shadowing() && p.Graph != nil {
-		up(&l.shadow, []float32{0, 0})
-		l.auxBytes += 8
 	}
 	if w.AttnNormB != nil {
 		up(&l.nAttnB, w.AttnNormB)
@@ -5035,7 +5025,6 @@ func (l *layer) auxBufs() []backend.Buf {
 		l.ssmTaps.qs, // a linear block's convolution
 		l.router,
 		l.outScale, // Gemma 4's output scalar
-		l.shadow,   // the shadow arm's state
 		l.pleOff,   // Gemma 4's per-layer embedding
 	)
 }

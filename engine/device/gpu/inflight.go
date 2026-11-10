@@ -87,8 +87,7 @@ func (g *devTier) runUnlocked(f func(backend.Session)) {
 // sessions' rows, or a call streaming evicted history through free pages
 // another session's prologue could take. A composed part runs beside the
 // others: its form is the device's, its buffers and launch arguments the
-// lane's (served.go). A block the shadow arm compares keeps its worst drift in
-// a slot of its own, which one submission at a time updates. Callers hold g.mu.
+// lane's (served.go). Callers hold g.mu.
 func (g *devTier) exclusiveRange(lo, hi int, rag *ragStep, bs *blockScratch) bool {
 	if rag != nil && rag.sid != nil {
 		return true
@@ -101,8 +100,7 @@ func (g *devTier) exclusiveRange(lo, hi int, rag *ragStep, bs *blockScratch) boo
 		if l == nil {
 			continue
 		}
-		if l.nonCausal || l.linear || l.withAttn || l.stream != nil ||
-			l.shadow != nil {
+		if l.nonCausal || l.linear || l.withAttn || l.stream != nil {
 			return true
 		}
 	}
