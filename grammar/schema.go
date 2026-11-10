@@ -18,7 +18,8 @@ import (
 // prefixItems (followed by items or not), minItems, maxItems, minLength,
 // maxLength, an integer's minimum, maximum, exclusiveMinimum and
 // exclusiveMaximum, format (date, time, date-time and uuid; any other is an
-// annotation, as JSON Schema 2020-12 reads it), enum, const, anyOf, oneOf (as
+// annotation, as JSON Schema 2020-12 reads it), pattern (pattern.go), enum,
+// const, anyOf, oneOf (as
 // anyOf: the grammar cannot exclude a value two branches both match), $ref
 // into #/$defs or #/definitions, and the annotations. An object with
 // properties takes no other keys: absent additionalProperties is read as
@@ -269,7 +270,7 @@ func annotation(k string) bool {
 func handled(k string) bool {
 	switch k {
 	case "type", "properties", "required", "additionalProperties", "items", "prefixItems", "minItems", "maxItems", "minLength", "maxLength", "enum", "const", "anyOf", "oneOf", "$ref",
-		"minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "format":
+		"minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "format", "pattern":
 		return true
 	}
 	return false
@@ -352,7 +353,7 @@ func (c *converter) visitObject(s map[string]any, name string) (string, error) {
 			// Any value, a number among them within the bounds: the integers
 			// there, the bounds built for them alone.
 			types = []string{"object", "array", "string", "integer", "boolean", "null"}
-		case s["format"] != nil:
+		case s["format"] != nil || s["pattern"] != nil:
 			types = []string{"object", "array", "string", "number", "boolean", "null"}
 		default:
 			return c.prim("value"), nil
@@ -418,6 +419,20 @@ func (c *converter) typed(s map[string]any, t, name string) (string, error) {
 		lo, hi, err := bounds(s, "minLength", "maxLength")
 		if err != nil {
 			return "", err
+		}
+		if pt, ok := s["pattern"]; ok {
+			ps, ok := pt.(string)
+			if !ok {
+				return "", fmt.Errorf("grammar: pattern must be a string")
+			}
+			if lo != 0 || hi >= 0 || s["format"] != nil {
+				return "", ErrUnsupported{"pattern beside minLength, maxLength or format"}
+			}
+			body, err := c.pattern(ps)
+			if err != nil {
+				return "", err
+			}
+			return c.add(name, `"\"" ( `+body+` ) "\"" `+c.prim("space")), nil
 		}
 		if f, ok := s["format"]; ok {
 			fs, ok := f.(string)

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand/v2"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -209,6 +210,60 @@ func schemaCases() []schemaCase {
 		{`{"prefixItems":[{"type":"integer","maximum":3}],"items":{"type":"boolean"},"maxItems":3}`, `[2,true,false]`, `[2,true,false,true]`},
 		{`{"type":"object","properties":{"a":{"type":"integer"}},"required":["a","b"]}`, `{"a":1,"b":[1,"x"]}`, `{"a":1}`},
 		{`{"type":"object","required":["k"]}`, `{"k":null}`, `{}`},
+		{`{"type":"string","pattern":"^[A-Z]{2}-\\d{3}$"}`, `"AB-123"`, `"AB-12"`},
+		{`{"type":"string","pattern":"^(cat|dog)s?$"}`, `"dogs"`, `"hot dogs"`},
+		{`{"type":"string","pattern":"^[^a-z\"]+$"}`, `"AB 1"`, `"Ab"`},
+		{`{"type":"string","pattern":"^a.c$"}`, `"a\u0007c"`, `"a\nc"`},
+	}
+}
+
+// TestPatternsMatchTheirLanguage holds a pattern's grammar to Go's regexp,
+// which agrees with ECMA-262 on every pattern and alphabet here: every
+// string of up to four characters from the alphabet, written as JSON writes
+// it, is taken exactly where the regexp finds a match in it.
+func TestPatternsMatchTheirLanguage(t *testing.T) {
+	v := newToyVocab()
+	alphabet := []rune{'a', 'b', 'c', 'A', '-', '1', '"', '\\', ' ', '\n', 'é'}
+	var strs []string
+	var grow func(prefix []rune)
+	grow = func(prefix []rune) {
+		strs = append(strs, string(prefix))
+		if len(prefix) == 4 {
+			return
+		}
+		for _, r := range alphabet {
+			grow(append(slices.Clone(prefix), r))
+		}
+	}
+	grow(nil)
+	for _, pt := range []string{`^a*b$`, `ab|c`, `^(a|b)+$`, `[^a]`, `^[a-c]{2,3}$`, `^\d+-?$`, `"`, `^\\`, `a.c`, `^$`,
+		`^(?:ab)?c$`, `[\w-]+`, `^[^\n]*$`, `é`, `^[\s"]{2}`, `^a|b$`, `^(a|)c$`, `[^-a-c1]$`, `\x41`, `^\u00e9?a`} {
+		// Go's regexp spells ECMA-262's \u escape \x{}.
+		goRe := pt
+		if g, ok := map[string]string{`^\u00e9?a`: `^\x{e9}?a`}[pt]; ok {
+			goRe = g
+		}
+		re := regexp.MustCompile(goRe)
+		schema, err := json.Marshal(map[string]any{"type": "string", "pattern": pt})
+		if err != nil {
+			t.Fatal(err)
+		}
+		src, err := FromJSONSchema(schema)
+		if err != nil {
+			t.Fatalf("%s: %v", pt, err)
+		}
+		m := NewMatcher(mustParse(t, src), IndexTokens(v))
+		for _, s := range strs {
+			var b strings.Builder
+			e := json.NewEncoder(&b)
+			e.SetEscapeHTML(false)
+			if err := e.Encode(s); err != nil {
+				t.Fatal(err)
+			}
+			if got, want := accepts(m, strings.TrimSuffix(b.String(), "\n")), re.MatchString(s); got != want {
+				t.Fatalf("pattern %s: %q taken %v, the regexp %v\n%s", pt, s, got, want, src)
+			}
+		}
 	}
 }
 
@@ -323,7 +378,9 @@ func walk(t *testing.T, m *Matcher, v *toyVocab, rng *rand.Rand, limit int) stri
 
 func TestSchemaRefusesByName(t *testing.T) {
 	for kw, schema := range map[string]string{
-		"pattern":              `{"type":"string","pattern":"^a$"}`,
+		"lookaround":           `{"type":"string","pattern":"^(?=a)a$"}`,
+		"backreference":        `{"type":"string","pattern":"(a)\\1"}`,
+		"word boundary":        `{"type":"string","pattern":"\\bx"}`,
 		"minimum":              `{"type":"number","minimum":3}`,
 		"allOf":                `{"allOf":[{"type":"string"}]}`,
 		"uniqueItems":          `{"type":"array","uniqueItems":true}`,
