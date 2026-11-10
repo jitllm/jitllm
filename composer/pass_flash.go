@@ -113,7 +113,21 @@ func rangeChain(ch []*Kernel) (expChain, bool) {
 		}
 	}
 	c.n = len(c.mem) + 1
-	return c, c.wt != nil && c.sm != nil && c.vl != nil
+	if c.wt == nil || c.sm == nil || c.vl == nil {
+		return c, false
+	}
+	// The normalization reads the chain's own maximum, sum and weighted
+	// sum: a map merging another reduction's partial beside them (an
+	// attention over two histories) is not this chain's division.
+	for _, nd := range c.last.Nodes {
+		if nd.Op != OpLoad {
+			continue
+		}
+		if o := c.last.Bufs[nd.Buf].Operand; o.Kind == OperandScratch && o != c.mx.out && o != c.sm.out && o != c.vl.out {
+			return c, false
+		}
+	}
+	return c, true
 }
 
 // flashSide is a member's reads at a row, a head and a position: the

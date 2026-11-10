@@ -520,6 +520,18 @@ const flashTail = 6
 // and its own scratch poisoned, and reads value out back.
 func launchAttend(d backend.Device, codes []composer.Code, vals map[graph.ValueID][]uint32, tables map[string][]uint32,
 	vecs map[jlm.Role][]uint32, out graph.ValueID) ([]uint32, error) {
+	return launchKeyed(d, codes, vals, tables, vecs, fmt.Sprintf("v%d", out), len(vals[out]))
+}
+
+// launchTable is launchAttend reading back table name.
+func launchTable(d backend.Device, codes []composer.Code, vals map[graph.ValueID][]uint32, tables map[string][]uint32,
+	name string) ([]uint32, error) {
+	return launchKeyed(d, codes, vals, tables, nil, "t"+name, len(tables[name]))
+}
+
+// launchKeyed is launchAttend reading back the n words bound as outKey.
+func launchKeyed(d backend.Device, codes []composer.Code, vals map[graph.ValueID][]uint32, tables map[string][]uint32,
+	vecs map[jlm.Role][]uint32, outKey string, n int) ([]uint32, error) {
 	bufs := map[string]backend.Buf{}
 	defer func() {
 		for _, b := range bufs {
@@ -584,12 +596,15 @@ func launchAttend(d backend.Device, codes []composer.Code, vals map[graph.ValueI
 			return nil, fmt.Errorf("launching %s: %w", c.Name, err)
 		}
 	}
-	w := vals[out]
-	p := make([]byte, 4*len(w))
-	if err := bufs[fmt.Sprintf("v%d", out)].Read(p); err != nil {
+	b, ok := bufs[outKey]
+	if !ok {
+		return nil, fmt.Errorf("no code binds %s", outKey)
+	}
+	p := make([]byte, 4*n)
+	if err := b.Read(p); err != nil {
 		return nil, err
 	}
-	res := make([]uint32, len(w))
+	res := make([]uint32, n)
 	for i := range res {
 		res[i] = binary.LittleEndian.Uint32(p[4*i:])
 	}
