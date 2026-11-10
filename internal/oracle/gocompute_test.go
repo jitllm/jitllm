@@ -38,6 +38,11 @@ func goComputeAllowed() map[string]string {
 		// as Pillow's taps are once a size (the sound op reads it).
 		"composer/swr.go:swrBank": "libswresample's polyphase filter bank, built once a pair of rates as resample.c builds it: a constant table the sound op reads",
 		"composer/swr.go:poly":    "av_bessel_i0's rational approximation, evaluated for the bank's Kaiser window once a tap",
+		// A request's and a picture's geometry, and a graph's attributes.
+		"engine/decide.go:answer":        "a rating question's levels, i/(r-1) for its r answers, once a question: the readout's parameters",
+		"model/tower.go:lowerValuesWith": "a tower op's attention scale, 1/sqrt of its head width, once an op: the graph's attribute",
+		"model/tower.go:sliceGrid":       "MiniCPM-V's slice grid, the factor pairs' log aspects against the picture's (get_sliced_grid): geometry from its sizes",
+		"model/video.go:VideoPlan":       "a video's sampled frames, numpy's linspace over its count, and their times: geometry from its frames and rate",
 	}
 }
 
