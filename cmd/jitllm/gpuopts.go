@@ -66,19 +66,6 @@ func gpuOptions() []gpu.Option {
 	if set("JITLLM_GPU_POISON_KV") {
 		o = append(o, gpu.WithPoisonKV(true))
 	}
-	var skip []string
-	if v := str("JITLLM_GPU_SKIP"); v != "" {
-		skip = append(skip, strings.Split(v, ",")...)
-	}
-	if set("JITLLM_GPU_NOATTN") {
-		skip = append(skip, "attn")
-	}
-	if set("JITLLM_GPU_NOFFN") {
-		skip = append(skip, "ffn")
-	}
-	if len(skip) > 0 {
-		o = append(o, gpu.WithSkip(skip...))
-	}
 	b := gpu.BatchShape{
 		Tok:    num("JITLLM_GPU_TOK"),
 		RowT:   num("JITLLM_GPU_ROWT"),

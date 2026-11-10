@@ -18,21 +18,20 @@ import (
 // knobs are the measurement and bisection switches that are not Config fields.
 // Zero is the shipping default for every one of them.
 type knobs struct {
-	api           string          // pin the backend by API name
-	verbose       bool            // trace the opens, the device probe and the ordering
-	tune          TuneMode        // probe the devices, or keep the order given
-	lanes         int             // pin the subgroup width: 0 ask, 1, or 32
-	poisonKV      bool            // fill a fresh KV cache with NaN (RULE 13)
-	poisonScratch bool            // and the block scratch, its twin
-	dropSegments  bool            // every composed split sums all but its last segment
-	ropeFault     [2]int          // the rotary tables read each row at k times its position plus d
-	skip          map[string]bool // produce wrong answers on purpose; see WithSkip
-	batch         BatchShape      // the batched prefill's tile shape
-	mmaMT         int             // warp-matrix tile, rows
-	mmaNT         int             // warp-matrix tile, columns
-	arena         uint64          // packed-arena retention budget
-	scaleFault    ScaleFault      // drop one of Granite's scales on purpose
-	pageFault     PageFault       // read a routed expert's wrong page on purpose
+	api           string     // pin the backend by API name
+	verbose       bool       // trace the opens, the device probe and the ordering
+	tune          TuneMode   // probe the devices, or keep the order given
+	lanes         int        // pin the subgroup width: 0 ask, 1, or 32
+	poisonKV      bool       // fill a fresh KV cache with NaN (RULE 13)
+	poisonScratch bool       // and the block scratch, its twin
+	dropSegments  bool       // every composed split sums all but its last segment
+	ropeFault     [2]int     // the rotary tables read each row at k times its position plus d
+	batch         BatchShape // the batched prefill's tile shape
+	mmaMT         int        // warp-matrix tile, rows
+	mmaNT         int        // warp-matrix tile, columns
+	arena         uint64     // packed-arena retention budget
+	scaleFault    ScaleFault // drop one of Granite's scales on purpose
+	pageFault     PageFault  // read a routed expert's wrong page on purpose
 }
 
 // TuneMode is whether the tier measures the devices it was given.
@@ -211,23 +210,6 @@ const (
 
 // WithPageFault breaks the composed path's expert pages on purpose.
 func WithPageFault(f PageFault) Option { return func(o *openOpts) { o.kb.pageFault = f } }
-
-// WithSkip omits parts of a multi-block submission -- "attn", "ffn", or the
-// finer keys the submission builder tests. It produces wrong answers on
-// purpose, to bisect a divergence inside a submission, and belongs only in a
-// gate.
-func WithSkip(keys ...string) Option {
-	return func(o *openOpts) {
-		if o.kb.skip == nil {
-			o.kb.skip = map[string]bool{}
-		}
-		for _, k := range keys {
-			if k != "" {
-				o.kb.skip[k] = true
-			}
-		}
-	}
-}
 
 // WithBatchShape sets the batched prefill's tile geometry; see BatchShape.
 func WithBatchShape(b BatchShape) Option { return func(o *openOpts) { o.kb.batch = b } }
