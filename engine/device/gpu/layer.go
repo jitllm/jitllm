@@ -69,9 +69,6 @@ type layer struct {
 	// inferred from a nil weight.
 	linear                 bool
 	ssmGate, ssmBA, ssmOut *resident
-	// centred is a short convolution with no state over a whole non-causal
-	// call (nn.RecurrentPlan.Centred).
-	centred bool
 	// KDA's two low-rank gates, nil on qwen3next.
 	ssmFA, ssmFB, ssmGA, ssmGB *resident
 	// ssmTaps is the convolution's taps a channel's contiguous, which the
@@ -2306,8 +2303,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	l.linear = linear
 	l.withAttn = p.Recurrent.WithAttn
 	l.noFFN = p.NoFFN
-	l.centred = p.Recurrent.Centred
-	if linear && !l.centred {
+	if linear {
 		if !g.addSessionRec(sid, l, p) {
 			return false
 		}
