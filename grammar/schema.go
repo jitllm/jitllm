@@ -14,7 +14,8 @@ import (
 // would let through output the schema forbids.
 //
 // Supported: type (one or a list), properties, required, additionalProperties
-// (false, or true or a schema on an object without properties), items,
+// (false, true or a schema: beside properties, the keys none of them name),
+// allOf over object schemas (schemaobj.go), items,
 // prefixItems (followed by items or not), minItems, maxItems, minLength,
 // maxLength, an integer's minimum, maximum, exclusiveMinimum and
 // exclusiveMaximum, format (date, time, date-time and uuid; any other is an
@@ -270,7 +271,7 @@ func annotation(k string) bool {
 func handled(k string) bool {
 	switch k {
 	case "type", "properties", "required", "additionalProperties", "items", "prefixItems", "minItems", "maxItems", "minLength", "maxLength", "enum", "const", "anyOf", "oneOf", "$ref",
-		"minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "format", "pattern":
+		"minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "format", "pattern", "allOf":
 		return true
 	}
 	return false
@@ -303,6 +304,13 @@ func (c *converter) visitObject(s map[string]any, name string) (string, error) {
 		}
 		ref, _ := r.(string)
 		return c.ref(ref)
+	}
+	if _, ok := s["allOf"]; ok {
+		merged, err := c.mergeAll(s)
+		if err != nil {
+			return "", err
+		}
+		return c.visitObject(merged, name)
 	}
 	if v, ok := s["const"]; ok {
 		return c.jsonLiteral(v)
@@ -622,12 +630,23 @@ func (c *converter) object(s map[string]any, name string) (string, error) {
 		kv := fmt.Sprintf(`%s ":" %s %s`, c.prim("string"), sp, val)
 		return c.add(name, fmt.Sprintf(`"{" %s ( %s ( "," %s %s )* )? "}" %s`, sp, kv, sp, kv, sp)), nil
 	}
-	if hasAddl && addl != false && len(keysOf(props)) > 0 {
-		return "", ErrUnsupported{"additionalProperties other than false beside properties"}
-	}
 	// The properties in the schema's order: a map loses it, so read the
 	// keys again from the source where it has one.
 	order := append(keysOf(props), unlisted...)
+	// more is a key and value beside the properties, a key none of them
+	// names: written after them, as many as the output writes.
+	more := ""
+	if hasAddl && addl != false && len(keysOf(props)) > 0 {
+		val, err := c.visit(addl, name+"-more")
+		if err != nil {
+			return "", err
+		}
+		key, err := c.keyNot(order, name)
+		if err != nil {
+			return "", err
+		}
+		more = c.add(name+"-more-kv", fmt.Sprintf(`%s ":" %s %s`, key, sp, val))
+	}
 	var reqKV, optKV []string
 	for _, k := range order {
 		ks, ok := props[k]
@@ -662,6 +681,10 @@ func (c *converter) object(s map[string]any, name string) (string, error) {
 		}
 		rest = c.add(fmt.Sprintf("%s-rest-%d", name, i), body)
 	}
+	tail := ""
+	if more != "" {
+		tail = fmt.Sprintf(` ( "," %s %s )*`, sp, more)
+	}
 	body := `"{" ` + sp + " "
 	switch {
 	case len(reqKV) > 0:
@@ -669,8 +692,13 @@ func (c *converter) object(s map[string]any, name string) (string, error) {
 		if rest != "" {
 			body += fmt.Sprintf(` ( "," %s %s )?`, sp, rest)
 		}
+		body += tail
+	case rest != "" && more != "":
+		body += fmt.Sprintf(`( ( %s | %s )%s )?`, rest, more, tail)
 	case rest != "":
 		body += rest + "?"
+	case more != "":
+		body += fmt.Sprintf(`( %s%s )?`, more, tail)
 	}
 	return c.add(name, body+` "}" `+sp), nil
 }
@@ -743,12 +771,9 @@ func decodeOrdered(d *json.Decoder) (any, error) {
 	return t, nil
 }
 
-// ref is the rule for a $ref into the root's $defs or definitions, made
-// once, so a recursive schema refers to itself.
-func (c *converter) ref(ref string) (string, error) {
-	if n, ok := c.refs[ref]; ok {
-		return n, nil
-	}
+// refTarget is the schema a $ref into the root's $defs or definitions, or
+// the root itself, names.
+func (c *converter) refTarget(ref string) (any, error) {
 	var path string
 	switch {
 	case strings.HasPrefix(ref, "#/$defs/"):
@@ -756,19 +781,31 @@ func (c *converter) ref(ref string) (string, error) {
 	case strings.HasPrefix(ref, "#/definitions/"):
 		path = "definitions"
 	case ref == "#":
-		path = ""
+		return c.root, nil
 	default:
-		return "", ErrUnsupported{fmt.Sprintf("$ref %q (only #, #/$defs/... and #/definitions/...)", ref)}
+		return nil, ErrUnsupported{fmt.Sprintf("$ref %q (only #, #/$defs/... and #/definitions/...)", ref)}
 	}
-	target := c.root
+	defs, _ := c.root.(map[string]any)[path].(map[string]any)
+	t, ok := defs[strings.TrimPrefix(ref, "#/"+path+"/")]
+	if !ok {
+		return nil, fmt.Errorf("grammar: $ref %q names nothing", ref)
+	}
+	return t, nil
+}
+
+// ref is the rule for a $ref into the root's $defs or definitions, made
+// once, so a recursive schema refers to itself.
+func (c *converter) ref(ref string) (string, error) {
+	if n, ok := c.refs[ref]; ok {
+		return n, nil
+	}
+	target, err := c.refTarget(ref)
+	if err != nil {
+		return "", err
+	}
 	key := "root-ref"
-	if path != "" {
-		key = strings.TrimPrefix(ref, "#/"+path+"/")
-		defs, _ := c.root.(map[string]any)[path].(map[string]any)
-		var ok bool
-		if target, ok = defs[key]; !ok {
-			return "", fmt.Errorf("grammar: $ref %q names nothing", ref)
-		}
+	if ref != "#" {
+		key = ref[strings.LastIndex(ref, "/")+1:]
 	}
 	// Reserve the name before visiting, for recursion.
 	n := c.add("ref-"+key, "")
