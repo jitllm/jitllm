@@ -3973,12 +3973,10 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	tableSrv := false
 	var raxes []byte
 	if bs.cs != nil && p.NRot > 0 && !gridSrv && lo < hi && rrows >= 1 {
-		if why := g.tableServes(bs, p, pos, rrows, rag); why != partServes {
-			g.Steps.Decline(nn.PartTable, why)
-			return refuse("the composer does not serve the rotary tables: %s", DeclineName(int(why)))
-		} else {
-			tableSrv = true
+		if err := g.tableServes(bs, p, pos, rrows, rag); err != nil {
+			return refuse("the rotary tables: %v", err)
 		}
+		tableSrv = true
 	}
 	if gridSrv {
 		if _, err := g.servedGridTable(bs, R); err != nil {

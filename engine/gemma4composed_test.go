@@ -64,7 +64,7 @@ func TestGemma4ServesComposed(t *testing.T) {
 					np, dp := st.ServedPart(nn.ComposedPrompt)
 					t.Logf("%s: the tables served %d times, declined %d; block steps served %d, declined %d; the prompt's %d served, %d declined (%s)",
 						dev, served, td, nb, db, np, dp, declinesOf(st))
-					if want := (len(toks) + 1) * composedTables(m); served < want || td != 0 || st.StepDeclines()[nn.DeclineNoTable] != 0 {
+					if want := (len(toks) + 1) * composedTables(m); served < want || td != 0 {
 						t.Fatalf("the tables served %d times (want at least %d, a table a geometry's run of each step and the prompt) and declined %d", served, want, td)
 					}
 					if n := st.FormedPart(nn.ComposedTable); n != 0 {

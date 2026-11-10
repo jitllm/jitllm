@@ -368,9 +368,9 @@ func TestTheCensusSeesADeclinedStep(t *testing.T) {
 		t.Fatalf("hardware limits and earlier declines were named: %v", got)
 	}
 	after[nn.DeclineNotFormed]++
-	after[nn.DeclineNoTable] = 2
+	after[nn.DeclineFeeds] = 2
 	if got := stepDeclines(before, after); len(got) != 2 {
-		t.Fatalf("a step declined as not formed and two for a table gave %v, want two findings", got)
+		t.Fatalf("a step declined as not formed and two for its feeds gave %v, want two findings", got)
 	}
 }
 
