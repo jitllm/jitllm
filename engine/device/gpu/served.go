@@ -1135,7 +1135,6 @@ const (
 	partHeadShape   = nn.DeclineHeadShape
 	partCaller      = nn.DeclineCaller
 	partNoRoom      = nn.DeclineNoRoom
-	partHeadOther   = nn.DeclineHeadOther
 	partTableHeld   = nn.DeclineTableHeld
 	partNoSample    = nn.DeclineNoSample
 	partNoEmbed     = nn.DeclineNoEmbed

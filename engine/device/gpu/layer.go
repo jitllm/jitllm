@@ -4019,12 +4019,12 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	// (nn.ComposedPrompt).
 	composedHead := head != nil
 	if composedHead {
-		switch {
-		case head.Graph != hb.headGraph || head.HiddenGraph != hb.headHidden:
-			headWhy = partHeadOther
-		default:
-			headWhy = hb.headServes(hNorm)
+		// The tier holds the head its model placed (headGraphs), every
+		// instance of the model offering the same graphs.
+		if head.Graph != hb.headGraph || head.HiddenGraph != hb.headHidden {
+			return refuse("the head offered is not the one its model placed on the tier")
 		}
+		headWhy = hb.headServes(hNorm)
 		if headWhy == partServes {
 			applied |= head.Stages
 		}
