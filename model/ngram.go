@@ -59,6 +59,16 @@ func loadNGramTable(m *Model, cfg *Config, f *jlm.File) error {
 	return nil
 }
 
+// NGramImage is the id the blocks' n-gram windows read for a row naming no
+// token -- a picture's, a supplied embedding's -- and whether they read one.
+func (c *Config) NGramImage() (int32, bool) {
+	op := c.ngramOp()
+	if op == nil {
+		return 0, false
+	}
+	return int32(op.Hash.Image), true
+}
+
 // ngramOp is the blocks' stated n-gram op (jlm.TOpNGramRows), nil where they
 // state none.
 func (c *Config) ngramOp() *jlm.TowerOp {

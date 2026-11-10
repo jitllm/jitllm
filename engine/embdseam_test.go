@@ -80,19 +80,23 @@ func embdRows(t *testing.T, m *model.Model, ids []int32) []float32 {
 }
 
 // seamTokens makes ids[lo:hi] -- the rows a gate sends through the embedding
-// seam -- token 0 on a model whose rows read their token past the embedding:
-// per-layer embeddings (Gemma 4's E models) and a router that routes by token
-// (DeepSeek V4's hash-routed blocks). An embedding row has no token, and the
-// seam takes token 0's (ple.go, as llama.cpp does for an image's rows; a
-// token-routed gather reads row 0 for a row naming none): the token path
-// equals the seam exactly for that token and no other, so that is the token
-// the comparison runs.
+// seam -- the token an embedding row stands for on a model whose rows read
+// their token past the embedding: per-layer embeddings (Gemma 4's E models)
+// and a router that routes by token (DeepSeek V4's hash-routed blocks) take
+// token 0's (ple.go, as llama.cpp does for an image's rows; a token-routed
+// gather reads row 0 for a row naming none), and an n-gram block's window
+// the model's image id (graph.OpNGramWindow), as the row's own and as a later
+// row's predecessor. The token path equals the seam exactly for that token
+// and no other, so that is the token the comparison runs.
 func seamTokens(m *model.Model, ids []int32, lo, hi int) []int32 {
-	if m.Cfg.PLEDim == 0 && !routesByToken(m) {
+	img, ngram := m.Cfg.NGramImage()
+	if m.Cfg.PLEDim == 0 && !routesByToken(m) && !ngram {
 		return ids
 	}
 	ids = append([]int32(nil), ids...)
-	clear(ids[lo:hi])
+	for i := lo; i < hi; i++ {
+		ids[i] = img
+	}
 	return ids
 }
 
