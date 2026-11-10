@@ -314,7 +314,7 @@ type Config struct {
 	// comparison, which must give the same logits bit for bit.
 	KVKeepWindow bool
 	// KVCowFault is the shared-page gate's violation
-	// (model.TestDecisionReusesThePrefix): a write into a page the prefix
+	// (engine.TestCardCopiesASharedPageItWrites): a write into a page the prefix
 	// cache names lands in it in place, under every sequence holding it.
 	// False in every real run.
 	KVCowFault bool

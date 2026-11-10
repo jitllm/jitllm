@@ -116,8 +116,8 @@ type modelOpts struct {
 	// WithoutSplits). Only a test sets it, for a gate's reference arm.
 	cpuFloat bool
 
-	// staleKeyFault is the decision prefix gate's violation
-	// (TestDecisionReusesThePrefix): the key a restore names its pages by, in
+	// staleKeyFault is the shared prefix gate's violation
+	// (TestSharedPrefixIsHeldOnce): the key a restore names its pages by, in
 	// place of the prompt's. Nil in every real run.
 	staleKeyFault func(key []int32) []int32
 	// stepShareFault, when set, gives every row of a routed step the first run's
