@@ -136,10 +136,22 @@ func TestComposesOnlyWithAnInstance(t *testing.T) {
 // with the instance on a card: sessions' prompts and tokens, alone and stepped
 // together, form no part on the card at a step (gpu.Stats.UnformedAtStep) and
 // ask no device -- the CPU or a card the instance runs on, by its account --
-// for a form; the card formed its parts when the instance was placed.
+// for a form; the card formed its parts when the instance was placed. The
+// mixture runs a second time with its experts streamed: a prompt through a
+// streamed block is cut to the rows its pages hold (pagedCall), and those
+// calls' forms are the placement's too.
 func TestComposesOnlyWithAnInstanceOnACard(t *testing.T) {
-	for _, src := range []string{testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf"), models()["qwen3moe"]} {
-		t.Run(filepath.Base(src), func(t *testing.T) {
+	streamed := gpu.WithConfig(func(c *gpu.Config) { c.StreamExperts = true; c.NoAutoStream = true })
+	for _, arm := range []struct {
+		src    string
+		stream bool
+	}{{testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf"), false}, {models()["qwen3moe"], false}, {models()["qwen3moe"], true}} {
+		src := arm.src
+		name := filepath.Base(src)
+		if arm.stream {
+			name += "/streamed"
+		}
+		t.Run(name, func(t *testing.T) {
 			path, ok := existingModel(src)
 			if !ok {
 				t.Fatalf("model not present: %s (nor its container)", src)
@@ -149,7 +161,11 @@ func TestComposesOnlyWithAnInstanceOnACard(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer m.Close()
-			g := swaTier(t)
+			var extra []gpu.Option
+			if arm.stream {
+				extra = append(extra, streamed)
+			}
+			g := swaTierWith(t, extra...)
 			defer g.Close()
 			ctx := context.Background()
 			in := testInstance(t, m, 128)
@@ -157,6 +173,9 @@ func TestComposesOnlyWithAnInstanceOnACard(t *testing.T) {
 			in.SetDevice(g)
 			if in.GPULayers() != m.Cfg.NLayer {
 				t.Fatalf("placed %d of %d blocks: %q", in.GPULayers(), m.Cfg.NLayer, g.Err())
+			}
+			if sb := g.Stats().StreamBlocks; arm.stream != (sb > 0) {
+				t.Fatalf("streamed arm %v placed %d streamed blocks", arm.stream, sb)
 			}
 			pool := NewPool()
 			if err := pool.Serve(in, 0); err != nil {
