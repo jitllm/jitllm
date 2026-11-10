@@ -14,7 +14,9 @@ import (
 // TestTheDeclinesOnlyShrink holds nn's decline reasons to the list below. A
 // device may decline a part only for a reason the engine allows -- the part
 // served, the caller keeping it, its buffers not fitting, a CPU below the
-// emitter's baseline -- or for one still open: a refusal to be implemented,
+// emitter's baseline, and the composition's seal: a step that meets a part
+// placement did not form, or a block not composed for the device, may not
+// compose it (TestComposesOnlyWithAnInstance) -- or for one still open: a refusal to be implemented,
 // never one to add. A reason added fails the gate; one implemented away
 // leaves the list with it. The violation, a reason the list does not hold,
 // is seen.
@@ -24,7 +26,7 @@ func TestTheDeclinesOnlyShrink(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	allowed := []string{"DeclineServes", "DeclineCaller", "DeclineNoRoom", "DeclineISA"}
+	allowed := []string{"DeclineServes", "DeclineCaller", "DeclineNoRoom", "DeclineISA", "DeclineNotFormed", "DeclineUnplaced"}
 	open := []string{
 		"DeclineNoGraph",
 		"DeclinePersist",
@@ -47,8 +49,6 @@ func TestTheDeclinesOnlyShrink(t *testing.T) {
 		"DeclinePageOut",
 		"DeclineNoWeight",
 		"DeclineTable",
-		"DeclineNotFormed",
-		"DeclineUnplaced",
 		"DeclineExperts",
 		"DeclineBidir",
 		"DeclineSessions",
