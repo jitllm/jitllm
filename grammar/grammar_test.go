@@ -214,6 +214,33 @@ func schemaCases() []schemaCase {
 		{`{"type":"string","pattern":"^(cat|dog)s?$"}`, `"dogs"`, `"hot dogs"`},
 		{`{"type":"string","pattern":"^[^a-z\"]+$"}`, `"AB 1"`, `"Ab"`},
 		{`{"type":"string","pattern":"^a.c$"}`, `"a\u0007c"`, `"a\nc"`},
+		{`{"allOf":[{"type":"object","properties":{"a":{"type":"integer"}},"required":["a"]},` +
+			`{"properties":{"b":{"type":"string","maxLength":3}},"required":["b"]}]}`, `{"a":1,"b":"x"}`, `{"a":1}`},
+		{`{"type":"object","properties":{"a":{"type":"integer"}},"additionalProperties":{"type":"boolean"}}`,
+			`{"a":1,"x":true}`, `{"a":1,"x":2}`},
+		{`{"type":"object","properties":{"k":{"type":"null"}},"additionalProperties":true,"required":["k"]}`,
+			`{"k":null,"z":[1]}`, `{"z":1}`},
+	}
+}
+
+// TestAdditionalKeysRepeatNoProperty holds the keys an object writes beside
+// its properties to the names none of them has, decoded: a listed name is
+// refused there however it is spelled.
+func TestAdditionalKeysRepeatNoProperty(t *testing.T) {
+	src, err := FromJSONSchema([]byte(`{"type":"object","properties":{"ab":{"type":"integer"},"a":{"type":"integer"}},` +
+		`"additionalProperties":{"type":"boolean"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := NewMatcher(mustParse(t, src), IndexTokens(newToyVocab()))
+	for s, want := range map[string]bool{
+		`{"ab":1}`: true, `{"abc":true}`: true, `{"b":true}`: true, `{"":true}`: true, `{"a":1,"x":false,"y":true}`: true,
+		`{"a":true}`: false, `{"ab":true}`: false, `{"ab":1,"ab":true}`: false, `{"\u0061":true}`: false,
+		`{"a\u0062":true}`: false, `{"x":true,"a":1}`: false,
+	} {
+		if accepts(m, s) != want {
+			t.Errorf("%s taken %v, want %v", s, !want, want)
+		}
 	}
 }
 
@@ -378,14 +405,13 @@ func walk(t *testing.T, m *Matcher, v *toyVocab, rng *rand.Rand, limit int) stri
 
 func TestSchemaRefusesByName(t *testing.T) {
 	for kw, schema := range map[string]string{
-		"lookaround":           `{"type":"string","pattern":"^(?=a)a$"}`,
-		"backreference":        `{"type":"string","pattern":"(a)\\1"}`,
-		"word boundary":        `{"type":"string","pattern":"\\bx"}`,
-		"minimum":              `{"type":"number","minimum":3}`,
-		"allOf":                `{"allOf":[{"type":"string"}]}`,
-		"uniqueItems":          `{"type":"array","uniqueItems":true}`,
-		"$ref":                 `{"$ref":"https://example.com/s.json"}`,
-		"additionalProperties": `{"type":"object","properties":{"a":{}},"additionalProperties":true}`,
+		"lookaround":    `{"type":"string","pattern":"^(?=a)a$"}`,
+		"backreference": `{"type":"string","pattern":"(a)\\1"}`,
+		"word boundary": `{"type":"string","pattern":"\\bx"}`,
+		"minimum":       `{"type":"number","minimum":3}`,
+		"allOf":         `{"allOf":[{"type":"string","maxLength":2},{"maxLength":3}]}`,
+		"uniqueItems":   `{"type":"array","uniqueItems":true}`,
+		"$ref":          `{"$ref":"https://example.com/s.json"}`,
 	} {
 		_, err := FromJSONSchema([]byte(schema))
 		var u ErrUnsupported

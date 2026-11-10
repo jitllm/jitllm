@@ -6,6 +6,7 @@ package schemacheck
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math/big"
 	"regexp"
 	"slices"
@@ -33,6 +34,22 @@ func Validate(root, s, doc any) error {
 	}
 	if e, ok := m["enum"].([]any); ok && !slices.ContainsFunc(e, func(x any) bool { return jsonEqual(x, doc) }) {
 		return fmt.Errorf("%v is not in the enum %v", doc, e)
+	}
+	if a, ok := m["allOf"].([]any); ok {
+		for _, x := range a {
+			// A part reads absent additionalProperties as JSON Schema does,
+			// true: its properties are not the whole object.
+			if xm, ok := x.(map[string]any); ok {
+				if _, has := xm["additionalProperties"]; !has {
+					xm = maps.Clone(xm)
+					xm["additionalProperties"] = true
+					x = xm
+				}
+			}
+			if err := Validate(root, x, doc); err != nil {
+				return err
+			}
+		}
 	}
 	if a, ok := m["anyOf"].([]any); ok {
 		for _, x := range a {
@@ -114,6 +131,11 @@ func Validate(root, s, doc any) error {
 	case map[string]any:
 		props, _ := m["properties"].(map[string]any)
 		req, _ := m["required"].([]any)
+		if _, merged := m["allOf"]; merged && props == nil {
+			// The parts hold their own properties: each part's object is
+			// held to that part above.
+			break
+		}
 		for _, r := range req {
 			if _, ok := d[r.(string)]; !ok {
 				return fmt.Errorf("%v lacks %v", d, r)
@@ -130,7 +152,9 @@ func Validate(root, s, doc any) error {
 				switch {
 				case hasAddl && addl == false:
 					return fmt.Errorf("%v has %q, which additionalProperties false forbids", d, k)
-				case hasAddl && addl != true:
+				case hasAddl && addl == true:
+					continue
+				case hasAddl:
 					ps = addl
 				case props != nil && !slices.Contains(req, any(k)):
 					return fmt.Errorf("%v has %q, not a property", d, k)
