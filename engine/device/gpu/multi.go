@@ -142,6 +142,15 @@ func (g *GPU) SetActWindow(w int) {
 // Close closes every device. A tier whose second device failed to open never
 // reaches here; New closes the whole list itself.
 func (g *GPU) Close() {
+	// A sibling borrows these devices: it lets go of what it placed on them
+	// before they close.
+	g.ownMu.Lock()
+	sibs := g.sibs
+	g.sibs = nil
+	g.ownMu.Unlock()
+	for _, s := range sibs {
+		s.Close()
+	}
 	g.settle()
 	for _, d := range g.devs {
 		d.Close()

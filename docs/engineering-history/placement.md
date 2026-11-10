@@ -2289,6 +2289,19 @@ is admitted onto a device that has seen nothing. `engine.TestATierServesOneModel
 amplification gate still opens a tier per arm, which is now a choice rather than
 the only correct arrangement.
 
+**A second model gets a tier of its own instead of the refusal.** The refusal
+was honest and still a refusal: the second model's instance ran on the CPU
+while the first held the card. A tier handed to an instance of another model
+now gives it a sibling (`GPU.ForModel`, `nn.ModelTier`, resolved once in
+`SetDeviceLayers`): the same backend devices, memory pools, budgets and
+counters, with blocks, scratch, KV pool, packed arena and head of its own --
+what the server already builds by opening a tier per model over one pool
+registry. Only the zero session, one history for whoever calls it, still
+refuses another model's offers. `engine.TestATierServesASecondModelOnItsOwnTier`
+replaces `TestATierServesOneModel`: the second model places its 4 blocks beside
+the first's 4 and both answer within 1e-2 NMSE of their host runs, before and
+after the first closes; on the refusing tier it placed none.
+
 ## ★ 15w. A STREAMED CONTAINER ON A UNIFIED DEVICE RAN ON THE HOST: THE ARENA WAS ASKED TO REPACK BYTES ALREADY IN THE DEVICE LAYOUT.
 
 `devTier.resident` tried the packed arena (`importing()`: a unified heap, a

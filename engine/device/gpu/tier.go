@@ -1435,6 +1435,9 @@ type devShared struct {
 	stream map[int]bool
 	// name is Slot.Name.
 	name string
+	// borrowed says dev is another tier's (a sibling's, owner.go): Close
+	// leaves it open.
+	borrowed bool
 	// The pager's state. A block's weights live in a slot and may leave; its KV
 	// cache, norms and biases may not, having no backing store. See page.go.
 	widest uint64 // the widest block's pageable bytes seen on this device
@@ -1496,6 +1499,12 @@ type GPU struct {
 	held  bool
 	// holdsOf counts the instances holding each model on the tier (HoldModel).
 	holdsOf map[uint64]int
+	// claim is the model ForModel gave this tier to; sibs is the tier of each
+	// other model that asked while it was held, and parent, on one of those,
+	// the tier whose devices it borrows. Under ownMu. See owner.go.
+	claim  uint64
+	sibs   map[uint64]*GPU
+	parent *GPU
 	// sessions is the last session id Attach gave out; 0 is the zero session.
 	sessions atomic.Uint64
 	// devs is every device, in the order they were opened (AddDevices
@@ -2078,7 +2087,9 @@ func (g *devTier) Close() {
 	// the staging, refunded as they go.
 	g.dropAllScratch()
 	g.closePersistCache()
-	g.dev.Close()
+	if !g.borrowed {
+		g.dev.Close()
+	}
 }
 
 // dropGraph releases the captured launch sequence. Anything that can move a

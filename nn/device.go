@@ -1383,6 +1383,13 @@ type ModelOwner interface {
 	ReleaseModel(model uint64)
 }
 
+// ModelTier is a device that serves several models by handing each its own
+// tier over the same hardware: ForModel is the device model's blocks are
+// offered to, the same one for every instance of the model.
+type ModelTier interface {
+	ForModel(model uint64) LayerDevice
+}
+
 // ErrReporter says why the device's last call refused.
 type ErrReporter interface{ Err() string }
 
