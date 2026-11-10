@@ -432,7 +432,7 @@ func expertGrouped(o graph.Op, c *Context, wo Operand, out Operand) ([]Prim, err
 	E, P, K, rows := w.Sheets, pairsOf(o, c), w.K, w.Rows
 	R, G := c.Step.Rows, groupRows
 	Q := R * P
-	most := (Q + E*(G-1) + G - 1) / G * G
+	most := (Q + min(Q, E)*(G-1) + G - 1) / G * G
 	stride := pairStride(o)
 	W := (P-1)*stride + K
 	U, F := ir.U32, ir.F32
