@@ -163,8 +163,10 @@ func (e *lowerer) run() (*ir.Kernel, error) {
 		}
 		e.params = append(e.params, b.Param(fmt.Sprintf("p%d", i), bf.Elem))
 	}
+	// A group a subgroup's shuffles reduce whole reads no workgroup array.
+	butterflies := e.lanes >= ir.SubgroupLanes && n.Group <= ir.SubgroupLanes
 	for i, nd := range n.Nodes {
-		if nd.Op == OpGroupSum || nd.Op == OpGroupMax || nd.Op == OpExchange {
+		if nd.Op == OpExchange || (nd.Op == OpGroupSum || nd.Op == OpGroupMax) && !butterflies {
 			e.shared[i] = b.Shared(fmt.Sprintf("r%d", i), ir.F32, n.Group)
 		}
 	}
