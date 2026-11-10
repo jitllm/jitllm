@@ -103,8 +103,8 @@ func phimoeConfig(f *meta.File, c *Config) error {
 	if q, ok := f.Layer(0, "attn_q.weight"); ok && len(q.Dims) == 2 &&
 		q.Dims[1] != uint64(c.NHead)*uint64(c.HeadDim) {
 		return fmt.Errorf("blk.0.attn_q.weight has %d rows for %d heads of %d: the file states no "+
-			"attention.key_length for its head width; convert the model from its safetensors",
-			q.Dims[1], c.NHead, c.HeadDim)
+			"attention.key_length for its head width; convert the model from its safetensors: %w",
+			q.Dims[1], c.NHead, c.HeadDim, ErrBadInput)
 	}
 	if err := partialRotary(c); err != nil {
 		return err

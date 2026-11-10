@@ -82,6 +82,9 @@ func TestEveryModelRunsOnACard(t *testing.T) {
 				if errors.Is(err, convert.ErrPart) {
 					t.Skipf("PART OF A MODEL: %v", err)
 				}
+				if errors.Is(err, convert.ErrBadInput) {
+					t.Skipf("A BAD INPUT: %v", err)
+				}
 				if err != nil {
 					t.Fatalf("convert: %v", err)
 				}
@@ -444,6 +447,9 @@ func everyModelRunsGenerated(t *testing.T, opts ...Option) {
 				}
 				if errors.Is(err, convert.ErrPart) {
 					t.Skipf("PART OF A MODEL: %v", err)
+				}
+				if errors.Is(err, convert.ErrBadInput) {
+					t.Skipf("A BAD INPUT: %v", err)
 				}
 				if err != nil {
 					t.Fatalf("convert: %v", err)

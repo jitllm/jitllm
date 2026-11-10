@@ -1,6 +1,7 @@
 package convert
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -29,7 +30,7 @@ func TestPhimoeRefusesAHeadWidthTheFileDoesNotState(t *testing.T) {
 		t.Fatalf("q at the keys' width: %v", err)
 	}
 	_, err := configOf(file(32))
-	if err == nil || !strings.Contains(err.Error(), "key_length") {
-		t.Fatalf("q at half the keys' width converted: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "key_length") || !errors.Is(err, ErrBadInput) {
+		t.Fatalf("q at half the keys' width converted, or not as a bad input: %v", err)
 	}
 }

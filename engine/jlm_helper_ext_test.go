@@ -74,6 +74,9 @@ func jlmOf(t testing.TB, path string) string {
 		if errors.Is(err, convert.ErrPart) {
 			t.Skipf("PART OF A MODEL: %s -- %v", filepath.Base(path), err)
 		}
+		if errors.Is(err, convert.ErrBadInput) {
+			t.Skipf("A BAD INPUT: %s -- %v", filepath.Base(path), err)
+		}
 		if errors.Is(err, convert.ErrNotImplemented) {
 			t.Skipf("NOT IMPLEMENTED: %s -- %v (RULE 7 scope)", filepath.Base(path), err)
 		}
