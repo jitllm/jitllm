@@ -350,32 +350,62 @@ func (m *Model) ClipRows(n int) (frames, rows int) {
 	return frames, rows
 }
 
-// ClipSpan is a voice clip as a span of the prompt: its samples -- mono, in
-// [-1, 1], at the tower's rate -- cut to the longest clip the reference
-// reads and padded with silence to half a second, as audio.waveform makes
-// them, the rows the audio tower writes for them, and a key over them.
-func (m *Model) ClipSpan(clip []float32) (Span, error) {
-	if m.Audio == nil {
-		return Span{}, fmt.Errorf("model: the model has no audio tower")
-	}
-	if len(clip) == 0 {
-		return Span{}, fmt.Errorf("model: an empty clip")
-	}
+// ClipLength is the samples the audio tower reads of a clip that makes
+// outputs at its rate: cut to the longest clip the reference reads and padded
+// with silence to half a second, as audio.waveform makes them.
+func (m *Model) ClipLength(outputs int) int {
 	a := m.Container.Vision().Audio
-	n := max(min(len(clip), int(a.MaxSamples)), int(a.SampleRate)/2)
-	samples := make([]float32, n)
-	copy(samples, clip)
+	return max(min(outputs, int(a.MaxSamples)), int(a.SampleRate)/2)
+}
+
+// ClipSamples is the samples a clip makes at the audio tower's rate as the
+// tower reads them: ffmpeg's resample of its mono mix (composer.SWR,
+// composer.MonoMix), cut and padded (ClipLength).
+func (m *Model) ClipSamples(c Clip) (int, error) {
+	if m.Audio == nil {
+		return 0, fmt.Errorf("model: the model has no audio tower")
+	}
+	if composer.SoundBytes(c.Format) == 0 || c.Channels < 1 || c.Rate < 1 {
+		return 0, fmt.Errorf("model: a clip of sample format %d, %d channel(s) at %d Hz", c.Format, c.Channels, c.Rate)
+	}
+	if c.Frames() == 0 {
+		return 0, fmt.Errorf("model: an empty clip")
+	}
+	if _, err := composer.MonoMix(c.Channels, c.Mask); err != nil {
+		return 0, err
+	}
+	s, err := composer.NewSWR(c.Rate, int(m.Container.Vision().Audio.SampleRate))
+	if err != nil {
+		return 0, err
+	}
+	if s.Taps*c.Channels > composer.SoundTapsMax {
+		return 0, fmt.Errorf("model: a clip of %d channel(s) at %d Hz resamples through %d taps of each, past the sound op's %d",
+			c.Channels, c.Rate, s.Taps, composer.SoundTapsMax)
+	}
+	_, n := s.Clip(c.Frames())
+	return m.ClipLength(n), nil
+}
+
+// ClipSpan is a voice clip as a span of the prompt: the clip as its
+// container stores it, the rows the audio tower writes for it (ClipSamples)
+// and a key over what decides them.
+func (m *Model) ClipSpan(clip Clip) (Span, error) {
+	n, err := m.ClipSamples(clip)
+	if err != nil {
+		return Span{}, err
+	}
 	_, rows := m.ClipRows(n)
 	h := sha256.New()
 	h.Write([]byte("clip"))
-	var w [4]byte
-	for _, s := range samples {
-		binary.LittleEndian.PutUint32(w[:], math.Float32bits(s))
+	var w [8]byte
+	for _, v := range [...]uint64{uint64(clip.Format), uint64(clip.Channels), uint64(clip.Rate), clip.Mask} {
+		binary.LittleEndian.PutUint64(w[:], v)
 		h.Write(w[:])
 	}
+	h.Write(clip.PCM)
 	var k RowsKey
 	h.Sum(k[:0])
-	return Span{Clip: samples, ClipRows: rows, Key: &k}, nil
+	return Span{Clip: &clip, ClipRows: rows, Key: &k}, nil
 }
 
 // BuildAudioGraphs lowers the container's stated audio tower (jlm.Audio):
@@ -389,17 +419,35 @@ func (m *Model) BuildAudioGraphs() (*TowerGraphs, error) {
 	t := a.Tower
 	dense := m.TowerFacts(jlm.DenseBlock)
 	frames := int(a.MaxSamples/a.Hop) + 1
-	b := graph.NewBlock(-1)
-	out, err := LowerProgram(b, t, &t.Entry, nil, frames, dense)
-	if err != nil {
-		return nil, fmt.Errorf("model: the audio tower's entry: %w", err)
+	// An entry a sample format: the clip's samples at the tower's rate, made
+	// by the sound op from its PCM as it lies, are what the stated entry's
+	// frames read.
+	tg := &TowerGraphs{Classes: []towerClass{{Entry: map[uint8]*graph.Graph{}, Rows: frames}}, Rows: frames}
+	var first *graph.Graph
+	for f := graph.SoundU8; f < graph.SoundFormats; f++ {
+		b := graph.NewBlock(-1)
+		snd := b.Emit(graph.OpSound, nil, []graph.Result{{Name: "sound", Width: int(a.MaxSamples), Rows: 1}}, nil,
+			graph.Attrs{Sound: f, Taps: composer.SoundTapsMax}, nil, nil)[0]
+		at := len(b.G.Ops)
+		out, err := LowerProgram(b, t, &t.Entry, nil, frames, dense)
+		if err != nil {
+			return nil, fmt.Errorf("model: the audio tower's entry: %w", err)
+		}
+		for i := at; i < len(b.G.Ops); i++ {
+			if b.G.Ops[i].Kind == graph.OpFrames {
+				b.G.Ops[i].In = []graph.ValueID{snd}
+			}
+		}
+		b.Out(out)
+		if err := graph.Verify(b.G, dense); err != nil {
+			return nil, fmt.Errorf("model: the audio tower's entry: %w", err)
+		}
+		tg.Classes[0].Entry[f] = b.G
+		if first == nil {
+			first = b.G
+		}
 	}
-	b.Out(out)
-	if err := graph.Verify(b.G, dense); err != nil {
-		return nil, fmt.Errorf("model: the audio tower's entry: %w", err)
-	}
-	tg := &TowerGraphs{Classes: []towerClass{{Entry: map[uint8]*graph.Graph{graph.PixRGBA8: b.G}, Rows: frames}}, Rows: frames}
-	if err := m.chainGraphs(tg, t, int(a.NLayer), int(v.NLayer), b.G, dense); err != nil {
+	if err := m.chainGraphs(tg, t, int(a.NLayer), int(v.NLayer), first, dense); err != nil {
 		return nil, fmt.Errorf("model: the audio %w", err)
 	}
 	return tg, nil

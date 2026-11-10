@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/jitllm/jitllm/engine"
+	"github.com/jitllm/jitllm/model"
 	"github.com/jitllm/jitllm/tok/jinja"
 )
 
@@ -103,8 +104,8 @@ func (c *compat) systemOne(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// "files" are voice clips, each a data URL of an audio type over a WAV
-	// the engine reads (engine.DecodeWAV).
-	var clips [][]float32
+	// the engine reads (engine.ReadWAV).
+	var clips []model.Clip
 	if fv, ok := req.Get("files"); ok && !fv.IsNone() {
 		if !fv.IsList() {
 			s1Fail(w, http.StatusUnprocessableEntity, "must be a list of audio data URLs", "files")
@@ -194,19 +195,19 @@ func (c *compat) systemOne(w http.ResponseWriter, r *http.Request) {
 	w.Write(res.Body)
 }
 
-// clipURL is a request file's samples: a data URL of an audio type, base64,
+// clipURL is a request file's clip: a data URL of an audio type, base64,
 // over a WAV the engine reads.
-func clipURL(u jinja.Value) ([]float32, error) {
+func clipURL(u jinja.Value) (model.Clip, error) {
 	if !u.IsString() {
-		return nil, fmt.Errorf("must be an audio data URL")
+		return model.Clip{}, fmt.Errorf("must be an audio data URL")
 	}
 	head, data, ok := strings.Cut(u.AsString(), ",")
 	if !ok || !strings.HasPrefix(head, "data:audio/") || !strings.HasSuffix(head, ";base64") {
-		return nil, fmt.Errorf("must be a base64 data URL of an audio type")
+		return model.Clip{}, fmt.Errorf("must be a base64 data URL of an audio type")
 	}
 	raw, err := base64.StdEncoding.DecodeString(data)
 	if err != nil {
-		return nil, fmt.Errorf("is not base64: %v", err)
+		return model.Clip{}, fmt.Errorf("is not base64: %v", err)
 	}
-	return engine.DecodeWAV(raw)
+	return engine.ReadWAV(raw)
 }

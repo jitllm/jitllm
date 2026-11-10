@@ -43,7 +43,7 @@ func TestSystemOneVoiceMatchesTheEngine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	clip, err := engine.DecodeWAV(raw)
+	clip, err := engine.ReadWAV(raw)
 	if err != nil {
 		t.Fatal(err)
 	}

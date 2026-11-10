@@ -84,9 +84,9 @@ func Verify(g *Graph, f Facts) error {
 		}
 		// An op's values are rows of one grid; an op that makes a grid -- a
 		// strided convolution, a regroup of S*S rows into one, a fold of Span
-		// consecutive rows, a row drop -- states its output's rows, and a
-		// regroup's, a fold's and a drop's follow their input's where those
-		// are the input's own.
+		// consecutive rows, a row drop, a clip's frames -- states its output's
+		// rows, and a regroup's, a fold's and a drop's follow their input's
+		// where those are the input's own.
 		rows := func(id ValueID) int {
 			if valid(id) {
 				return g.Values[id].Rows
@@ -95,7 +95,7 @@ func Verify(g *Graph, f Facts) error {
 		}
 		strided := (o.Kind == OpConv || o.Kind == OpUnfold) && o.Attr.Stride > 1
 		grid := strided || o.Kind == OpRegroup || o.Kind == OpFold || o.Kind == OpSplitRows || o.Kind == OpDropRows ||
-			o.Kind == OpRowBreak || o.Kind == OpWrapRows || o.Kind == OpMarkRow || o.Kind == OpTableRows || o.Kind == OpRowsAttend || o.Kind == OpUpsample || o.Kind == OpAppendRow
+			o.Kind == OpRowBreak || o.Kind == OpWrapRows || o.Kind == OpMarkRow || o.Kind == OpTableRows || o.Kind == OpRowsAttend || o.Kind == OpUpsample || o.Kind == OpAppendRow || o.Kind == OpFrames
 		// Attention over the call's own rows takes the call's rows.
 		if o.Kind == OpRowsAttend && len(o.In) > 0 && rows(o.In[0]) == 0 {
 			grid = false

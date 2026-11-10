@@ -40,9 +40,9 @@ type Span struct {
 	Frame          image.Image
 	FrameW, FrameH int
 	// Clip is a voice clip whose rows the prefill encodes through the model's
-	// audio tower, ClipRows of them, when Embd is nil (Model.ClipSpan): its
-	// samples cut and padded as the tower reads them.
-	Clip     []float32
+	// audio tower, ClipRows of them, when Embd is nil (Model.ClipSpan): the
+	// clip as its container stores it.
+	Clip     *Clip
 	ClipRows int
 	// Deep is an Embd span's tap rows (jlm.TowerTap, Qwen3-VL's deepstack),
 	// [taps][rows][NEmbd]: text block i adds tap i's rows into the span's
