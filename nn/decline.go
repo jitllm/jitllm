@@ -14,8 +14,6 @@ const (
 	DeclineNoPool
 	DeclineWindow
 	DeclineHeadShape
-	DeclineHeadNorm
-	DeclinePick
 	DeclineCaller
 	DeclineNoRoom
 	DeclineHeadBias
@@ -51,11 +49,7 @@ func (d Decline) String() string {
 	case DeclineWindow:
 		return "a graph whose window is not the plan's"
 	case DeclineHeadShape:
-		return "a head graph other than a norm, its projection and elementwise ops after it"
-	case DeclineHeadNorm:
-		return "no norm buffer, a norm of another kind than the tier's, or a norm bias it holds none of"
-	case DeclinePick:
-		return "a head that picks labels only"
+		return "a head graph other than a norm, its projection and elementwise ops after it, or one naming a vector the head does not carry"
 	case DeclineCaller:
 		return "the caller keeps it on the tier's kernels"
 	case DeclineNoRoom:

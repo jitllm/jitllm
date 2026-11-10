@@ -2936,6 +2936,20 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	if ferr != nil {
 		foot = uint64(len(h.W.Data))
 	}
+	// The norm's bias and the output bias are the vectors the head's graph
+	// names, held with the projection and admitted with it.
+	spec, _ := headShape(h.Graph)
+	if spec.hasNormBias && len(h.NormB) != len(h.Norm) {
+		g.LastErr = fmt.Sprintf("a LayerNorm head with a %d-wide bias for a %d-wide norm", len(h.NormB), len(h.Norm))
+		return false
+	}
+	if spec.hasBias {
+		if len(h.Bias) != h.W.Rows {
+			g.LastErr = fmt.Sprintf("an output bias of %d for a %d-row projection", len(h.Bias), h.W.Rows)
+			return false
+		}
+		foot += uint64(h.W.Rows * 4)
+	}
 	// They shrink with the reserved width. A caller that did not list the CPU
 	// has no other device for the head, so the width gives way first; with
 	// the CPU listed the head goes home and the reservation holds.
@@ -3012,13 +3026,7 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 			return false
 		}
 	}
-	// A LayerNorm head needs its bias; an RMSNorm one has none.
-	if lnBlock(&bs.p) {
-		if len(h.NormB) != len(h.Norm) {
-			g.LastErr = fmt.Sprintf("a LayerNorm head with a %d-wide bias for a %d-wide norm",
-				len(h.NormB), len(h.Norm))
-			return false
-		}
+	if spec.hasNormBias {
 		if bs.hNormB, err = g.dev.Alloc(len(h.NormB) * 4); err != nil {
 			return false
 		}
@@ -3046,19 +3054,20 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 		g.LastErr = "the input rows' tables have no room beside the head and the blocks placed: " + g.LastErr
 		return false
 	}
-	// The output bias, for a head graph the composer serves that binds it. A
-	// head without it (no room, a bias of another width) is declined by name
-	// (partHeadBias) and the caller adds the bias.
-	if spec, ok := headShape(h.Graph); ok && spec.hasBias && len(h.Bias) == h.W.Rows &&
-		g.room(uint64(h.W.Rows*4)) {
-		if b, e := g.dev.Alloc(h.W.Rows * 4); e == nil {
-			if b.Write(f32b(h.Bias)) == nil {
-				bs.hBias = b
-				g.charge(uint64(h.W.Rows * 4))
-			} else {
+	if spec.hasBias {
+		b, e := g.dev.Alloc(h.W.Rows * 4)
+		if e == nil {
+			if e = b.Write(f32b(h.Bias)); e != nil {
 				b.Free()
 			}
 		}
+		if e != nil {
+			g.giveBackHead(bs)
+			g.LastErr = "the output bias: " + e.Error()
+			return false
+		}
+		bs.hBias = b
+		g.charge(uint64(h.W.Rows * 4))
 	}
 	// The greedy token on the device (nn.Head.ArgmaxOnly): the word the
 	// composed sample writes. Without it the head still runs and every
@@ -3082,7 +3091,7 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	}
 	// A head the composer does not serve on this device runs on the CPU
 	// device's composed head, never on the tier's own kernels.
-	if why := bs.headServes(bs.hNorm, false); why != partServes {
+	if why := bs.headServes(bs.hNorm); why != partServes {
 		g.giveBackHead(bs)
 		g.Declined++
 		g.LastErr = fmt.Sprintf("the composer does not serve the head on this device (%s)", DeclineName(int(why)))
@@ -4020,7 +4029,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 		case head.Graph != hb.headGraph || head.HiddenGraph != hb.headHidden:
 			headWhy = partHeadOther
 		default:
-			headWhy = hb.headServes(hNorm, false)
+			headWhy = hb.headServes(hNorm)
 		}
 		if headWhy == partServes {
 			applied |= head.Stages
