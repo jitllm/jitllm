@@ -50,6 +50,80 @@ func TestEveryNamedGateExists(t *testing.T) {
 	}
 }
 
+// TestEveryGateACommentNamesExists holds the module's comments to the same
+// rule: a comment that names a test as the gate behind a claim names one a
+// _test.go declares. Main's kernels went with their gates and left twenty
+// comments citing them, each a claim of coverage nothing gave (RULE 12). This
+// file is left out: it spells the names' grammar. The violation, a comment
+// citing a name no file declares, is seen.
+func TestEveryGateACommentNamesExists(t *testing.T) {
+	testmodels.SourceTree(t)
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	declared, err := declaredTests(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(declared) < 500 {
+		t.Fatalf("read %d Test functions under %s: the gate read nothing", len(declared), root)
+	}
+	self, err := filepath.Abs("namedgates_test.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cited := 0
+	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case ".git", "node_modules", "models", "testdata", "gen":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(p, ".go") || p == self {
+			return nil
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		for i, line := range strings.Split(string(b), "\n") {
+			for _, n := range commentGates(line) {
+				cited++
+				if !gateDeclared(declared, n) {
+					rel, _ := filepath.Rel(root, p)
+					t.Errorf("%s:%d names %s, which no _test.go declares", rel, i+1, n.String())
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cited < 500 {
+		t.Fatalf("the comments cite %d gates: the gate read nothing", cited)
+	}
+	if v := commentGates(`x := 1 // held by TestNoSuchGateAnywhere`); len(v) != 1 || gateDeclared(declared, v[0]) {
+		t.Errorf("the violation: a comment citing a name no file declares was not seen (%v)", v)
+	}
+}
+
+// commentGates is every test name the comment on line names, nothing outside
+// the comment: a string or an identifier spelled like a test is not a claim.
+func commentGates(line string) []gateName {
+	i := strings.Index(line, "//")
+	if i < 0 {
+		return nil
+	}
+	return namedGates(line[i:])
+}
+
 // gateName is a test AGENTS.md names: a whole name, or a prefix (Name*).
 type gateName struct {
 	name   string

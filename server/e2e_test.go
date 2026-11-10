@@ -24,7 +24,7 @@ import (
 //
 //	JITLLM_SERVER_MODEL=<something>.jlm \
 //	  ./scripts/cap 24G -- taskset -c 0,2,4,6,8,10 \
-//	  go test ./server/ -run TestEndToEnd -count=1 -v
+//	  go test ./server/ -run TestEndToEndAgainstARealContainer -count=1 -v
 //
 // Unset, it skips with that command in the message. Set, it never skips: a
 // missing file, a GGUF or an unopenable container is a failure.
