@@ -194,7 +194,17 @@ func promptFits(t *testing.T, m *model.Model, spec string, io ...Option) {
 		defer g.Close()
 		b.fill(t, limit+slack)
 		defer b.empty()
-		st := testInstance(t, m, len(ids)+16, io...)
+		var st *Instance
+		if reserve {
+			st = testInstance(t, m, len(ids)+16, io...)
+		} else {
+			// The violation's card fails the step and its blocks go to the
+			// CPU: no demotion-free run is asked of it.
+			var err error
+			if st, err = NewInstance(m, len(ids)+16, io...); err != nil {
+				t.Fatal(err)
+			}
+		}
 		defer st.Close()
 		if err := st.SetDevice(g); err != nil {
 			return g.Stats(), 0, err
@@ -222,7 +232,10 @@ func promptFits(t *testing.T, m *model.Model, spec string, io ...Option) {
 	// the full card first, as the budget refusing it at the chunk: the same
 	// violation, caught a step earlier.
 	roomRefused := err != nil && strings.Contains(err.Error(), "which the device's budget does not hold")
-	if !roomRefused && (!isOOM(st2.LastErr) || st2.PromptSplits == 0 && st2.NoRoom == 0) {
+	// Or the chunk's scratch is a form the placement did not make, which the
+	// step may not compose (the seal), and the card hands its blocks back.
+	sealed := strings.Contains(st2.LastErr, "was not formed at placement")
+	if !roomRefused && !sealed && (!isOOM(st2.LastErr) || st2.PromptSplits == 0 && st2.NoRoom == 0) {
 		t.Fatalf("without the reservation the chunk ran whole on %d blocks (%d splits, %d uploads refused, %q): "+
 			"the card was not full, so this gate does not discriminate", n2, st2.PromptSplits, st2.NoRoom, st2.LastErr)
 	}
@@ -260,8 +273,20 @@ func stepFits(t *testing.T, m *model.Model, spec string, io ...Option) {
 		}
 	}
 	// open places two sessions and readies the decoding one.
-	open := func(g *gpu.GPU) (a, d *Instance, next int32, err error) {
-		a, d = testInstance(t, m, len(chunk)+8, io...), testInstance(t, m, len(lead)+8, io...)
+	// A violation's card fails the step and its blocks go to the CPU: its
+	// instances are not asked for a demotion-free run (strict false).
+	open := func(g *gpu.GPU, strict bool) (a, d *Instance, next int32, err error) {
+		mk := func(n int) *Instance {
+			if strict {
+				return testInstance(t, m, n, io...)
+			}
+			in, err := NewInstance(m, n, io...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return in
+		}
+		a, d = mk(len(chunk)+8), mk(len(lead)+8)
 		for _, st := range []*Instance{a, d} {
 			if err = st.SetDevice(g); err != nil {
 				return
@@ -276,7 +301,7 @@ func stepFits(t *testing.T, m *model.Model, spec string, io ...Option) {
 	size := func(reserve bool) gpu.Stats {
 		g := fitTier(t, spec, 0, cfgFor(reserve))
 		defer g.Close()
-		a, d, _, err := open(g)
+		a, d, _, err := open(g, true)
 		defer a.Close()
 		defer d.Close()
 		if err != nil {
@@ -302,7 +327,7 @@ func stepFits(t *testing.T, m *model.Model, spec string, io ...Option) {
 	run := func(reserve bool) (gpu.Stats, int, bool, error) {
 		g := fitTier(t, spec, 0, cfgFor(reserve))
 		defer g.Close()
-		a, d, next, err := open(g)
+		a, d, next, err := open(g, reserve)
 		defer a.Close()
 		defer d.Close()
 		if err != nil {
@@ -335,8 +360,12 @@ func stepFits(t *testing.T, m *model.Model, spec string, io ...Option) {
 	}
 	st2, n2, joint2, err := run(false)
 	t.Logf("unreserved: %d of %d blocks, joint %v, err %v: %s", n2, m.Cfg.NLayer, joint2, err, st2.LastErr)
-	if err == nil || !joint2 || !isOOM(err.Error()) {
-		t.Fatalf("without the reservation the %d-row step did not run out of memory (joint %v, err %v): the card "+
-			"was not full, so this gate does not discriminate", MaxStepRows, joint2, err)
+	// Without the reservation the step's scratch is a form the placement did
+	// not make, which the step may not compose (the seal) however its rows
+	// are stepped, or a buffer the full card does not have.
+	sealed := err != nil && strings.Contains(err.Error(), "was not formed at placement")
+	if err == nil || !sealed && (!joint2 || !isOOM(err.Error())) {
+		t.Fatalf("without the reservation the %d-row step ran (joint %v, err %v): the card was not full, so this "+
+			"gate does not discriminate", MaxStepRows, joint2, err)
 	}
 }
