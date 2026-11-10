@@ -603,7 +603,7 @@ func (l *Lanes) recRows(li int, cb *Block, t Tensors, x, cs, csSWA []float32, se
 			return nn.DeclineServes, nil
 		}
 	}
-	if base >= 0 && l.bidir {
+	if base >= 0 && l.bidir && cb.Bidir && n > 1 {
 		// A bidirectional chunk's rows each read the whole run (Rows'
 		// runs); the stepped form reads a row's past alone.
 		return nn.DeclineBidir, nil
