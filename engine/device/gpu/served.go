@@ -1142,7 +1142,6 @@ const (
 	partNoEmbed      = nn.DeclineNoEmbed
 	partEmbedWeight  = nn.DeclineEmbedWeight
 	partExperts      = nn.DeclineExperts
-	partExpertsRows  = nn.DeclineExpertsRows
 	partEmbedStreams = nn.DeclineEmbedStreams
 	partRecurrent    = nn.DeclineRecurrent
 	partNoWeight     = nn.DeclineNoWeight
@@ -2196,7 +2195,7 @@ func (l *layer) namedWeight(r jlm.Role) *resident {
 // compact bank, each expert reached through the step's table (pagedRun) --
 // at a call of no more rows than its pages hold the selections of
 // (pagedRows), its experts sent to the card rather than run on the host.
-func (l *layer) expertsServe(rows int) partDecline {
+func (l *layer) expertsServe() partDecline {
 	held, banks := true, false
 	for _, o := range l.graph.Ops {
 		for _, w := range o.Weight {
@@ -2211,8 +2210,6 @@ func (l *layer) expertsServe(rows int) partDecline {
 		return partServes
 	case !held:
 		return partExperts
-	case l.stream != nil && rows > l.pagedRows():
-		return partExpertsRows
 	}
 	return partServes
 }
@@ -2351,8 +2348,8 @@ func (g *devTier) blockServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratc
 	switch {
 	case l.graph == nil:
 		return partNoGraph
-	case l.expertsServe(1) != partServes:
-		return l.expertsServe(1)
+	case l.expertsServe() != partServes:
+		return l.expertsServe()
 	case !l.weightsHeld():
 		return partNoWeight
 	case l.linear && !g.recHeld(l, p, bs):
