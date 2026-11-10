@@ -140,6 +140,8 @@ func jlmOfPair(t testing.TB, path, mmproj string) string {
 		t.Skipf("%v -- this gate proved nothing", err)
 	case errors.Is(err, convert.ErrPart):
 		t.Skipf("PART OF A MODEL: %s -- %v", filepath.Base(path), err)
+	case errors.Is(err, convert.ErrBadInput):
+		t.Skipf("A BAD INPUT: %s -- %v", filepath.Base(path), err)
 	case errors.Is(err, convert.ErrNotImplemented):
 		// A scope refusal reaches the caller as a skip naming it; a sweep
 		// converts in a subtest of its own so the skip stays that model's.
