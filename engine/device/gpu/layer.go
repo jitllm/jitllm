@@ -1401,8 +1401,7 @@ type blockScratch struct {
 	p     nn.LayerPlan
 	// rows is how many token positions this scratch runs at once: 1 for decode
 	// and the prefill chunk width for the batched arm. Every buffer is sized
-	// rows-wide and every kernel is the Rows variant, which is byte-identical
-	// at rows == 1 (TestDenseKernelsUnchanged).
+	// rows-wide.
 	rows                int
 	tok                 int
 	qtile, ktile, atile int
@@ -2087,8 +2086,8 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 			e = bank
 			if stream {
 				// The kernel is told the bank is k experts and indexes it with
-				// 0..k-1; backend.TestIndexedMatVecMatchesACompactBank is where
-				// "the same answer, bit for bit" comes from. With an expert
+				// 0..k-1; engine.TestStreamedExpertBankMatchesTheResidentOne
+				// holds it to the resident bank bit for bit. With an expert
 				// cache it is told the cache's size and indexed by slot.
 				if cslots < 0 {
 					// An auto-streamed block is placed on the plain bank;

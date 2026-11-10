@@ -50,8 +50,7 @@ const composedRopeGuard = 0x7fc0dead
 
 // composedRopeAxes holds run's tables at rows rows.
 func composedRopeAxes(t *testing.T, run ropeRunner, rows int) {
-	// The table's bound against the float64 table's
-	// (TestRopeTableOnDeviceMatchesHost's).
+	// The table's bound against the float64 table's.
 	const bound = 3e-7
 	cases := []struct {
 		pairs       int

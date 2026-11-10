@@ -2903,7 +2903,7 @@ func (g *devTier) sharedCompact(which int, q layout.Quant, rows, k, slots int) (
 // which streamBank.fill supplies. k sheets back to back in one allocation are a
 // bank of k experts, because the container packs a bank as independent
 // matrices and PackedWords is linear in the row count
-// (backend.TestIndexedMatVecMatchesACompactBank).
+// (engine.TestStreamedExpertBankMatchesTheResidentOne).
 //
 // It is not in g.res: a compact bank is a block's scratch, and sharing it
 // through that map would hand a token another block's experts.

@@ -56,7 +56,7 @@ func Add(n int) (*ir.Kernel, error) {
 // arm64): ir.Fma. A multiply and an add written apart are fused or not at the
 // compiler's whim -- ptxas and both Vulkan drivers here fused them, Metal did
 // not, and its scaled residual then parted from the host's in the last bit of
-// 2.8% of every block's elements (TestAddScaledRoundsOnce).
+// 2.8% of every block's elements.
 func AddScaled(n int) (*ir.Kernel, error) {
 	b := ir.New("add_scaled", [3]int{128, 1, 1})
 	pA := b.Param("pA", ir.F32)

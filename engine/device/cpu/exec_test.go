@@ -71,8 +71,7 @@ func TestExecuteScalar(t *testing.T) {
 // accumulating four products into each 32-bit lane. That asymmetry decides the
 // weight layout, so it is worth asserting rather than assuming.
 func TestExecuteVPDPBUSD(t *testing.T) {
-	// This one executes VPDPBUSD itself; the AVX2 sequence that replaces it
-	// on a non-VNNI host is gated by TestExecuteVEXDotMatchesVPDPBUSD.
+	// This one executes VPDPBUSD itself.
 	requireVNNI(t)
 	var a x86.Buf
 	a.MOVLoad(x86.RSI, x86.At(x86.RDI, 16)) // args.A  — unsigned side

@@ -163,8 +163,7 @@ func batchedMixtureCase(t *testing.T, name string, float, violate bool) float64 
 	}
 	// The bound is the batched path's own: the arms differ in attention too,
 	// already ~1e-3 on dense models, while a swapped slot or wrong expert reads
-	// ~2e-2. backend.TestGroupedMatVecMatchesPerSlot holds the per-column
-	// arithmetic bit-exact; this gates the orchestration.
+	// ~2e-2.
 	if !(nmse < 1e-2) {
 		t.Fatalf("last-row logits NMSE %.3e between batched and row-by-row", nmse)
 	}

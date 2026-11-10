@@ -10,7 +10,7 @@ import (
 	"github.com/jitllm/jitllm/nn"
 )
 
-// TestATierRefusesASecondModel is the router's half of model.TestATierServesOneModel
+// TestATierRefusesASecondModel is the router's half of engine.TestATierServesASecondModelOnItsOwnTier
 // on the fake: a block of model 2 is refused by name while model 1 holds
 // anything, ReleaseModel of a model that does not hold the tier changes
 // nothing, and ReleaseModel of the one that does gives back every buffer it

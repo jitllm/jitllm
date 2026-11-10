@@ -229,8 +229,8 @@ func (h *hipDev) Alloc(n int) (Buf, error) {
 // Compile lowers the kernel for this device's arch, has comgr generate and
 // link a code object, and refuses one whose metadata says it was generated at
 // a wave size the device does not run or spills to scratch -- a fault the
-// offline gate (lowertest.TestAMDGPULowersForEveryTarget) holds every shipped
-// kernel to, checked here too because a shape no gate registered reaches it.
+// offline gate (engine.TestComposedFormsLowerForAMDGPU) holds every composed
+// form to, checked here too because a shape no gate registered reaches it.
 func (h *hipDev) Compile(k *ir.Kernel) (Kernel, error) {
 	h.ctr.compiles.Add(1)
 	src, err := amdgpu.Lower(k, h.tg)
