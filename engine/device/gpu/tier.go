@@ -2109,6 +2109,9 @@ func quantOf(t quant.Type) (layout.Quant, bool) {
 	if q, ok := layout.FloatOf(t); ok {
 		return q, true
 	}
+	if q, ok := layout.VerbatimOf(t); ok {
+		return q, true
+	}
 	return layout.QuantOf(t)
 }
 

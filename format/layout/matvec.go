@@ -42,11 +42,16 @@ const (
 	// TQ2F is TQ2 with its scale an f32 (quant.TQ2_F32): the d word is the
 	// scale's bits, one row a word (DSlots 1). See qinfo.d32.
 	TQ2F
+	// IQ4NL is quant.IQ4_NL as the container carries it: its own 18-byte
+	// blocks of 32, an f16 scale and 32 nibbles indexing quant.IQ4NLValues().
+	// Its "pack" is a copy of the blocks, read through jlm.DecodeVerbatim.
+	// QuantOf never returns it; only the device tier asks, via VerbatimOf.
+	IQ4NL
 )
 
 func (q Quant) String() string {
 	return [...]string{"Q4_0", "Q8_0", "Q4_K", "Q3_K", "Q5_K", "Q6_K", "Q5_0", "MXFP4",
-		"F32", "F16", "BF16", "Q5_1", "TQ2", "TQ2F"}[q]
+		"F32", "F16", "BF16", "Q5_1", "TQ2", "TQ2F", "IQ4_NL"}[q]
 }
 
 // FloatOf maps an unquantized weight type to its device format.
@@ -58,6 +63,15 @@ func FloatOf(t quant.Type) (Quant, bool) {
 		return Float16, true
 	case quant.BF16:
 		return BFloat16, true
+	}
+	return 0, false
+}
+
+// VerbatimOf maps a blocked type the container carries verbatim to its
+// device format.
+func VerbatimOf(t quant.Type) (Quant, bool) {
+	if t == quant.IQ4_NL {
+		return IQ4NL, true
 	}
 	return 0, false
 }

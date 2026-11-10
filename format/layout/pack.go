@@ -50,6 +50,17 @@ func PackWeights(t Quant, src []byte, nrows, k int) (qs, d, sc []uint32, err err
 // d and sc are cleared here: packRows ORs its scale words (rows and sub-blocks
 // share words), so leftover contents would OR into the new scales.
 func PackWeightsInto(t Quant, src []byte, nrows, k int, qs, d, sc []uint32) error {
+	if t == IQ4NL {
+		n := nrows * k / 32 * 18
+		if k <= 0 || k%32 != 0 || nrows <= 0 || len(src) < n || len(qs) < (n+3)/4 {
+			return fmt.Errorf("kernels: PackWeights: IQ4_NL %dx%d from %d bytes into %d words", nrows, k, len(src), len(qs))
+		}
+		clear(qs)
+		for i, b := range src[:n] {
+			qs[i/4] |= uint32(b) << (8 * (i % 4))
+		}
+		return nil
+	}
 	qi := qtab(t)
 	// A float format is sized in elements, not blocks: its "block" is the
 	// activation granule and raw rows have none. The quantized formats keep the
@@ -497,6 +508,12 @@ func DIndex(q Quant, super, nrows, r int) (idx, slot int) {
 // without building them, so a budget decision costs nothing.
 // TestPackedWordsMatchesPack holds it to PackWeights format by format.
 func PackedWords(t Quant, nrows, k int) (qs, d, sc int, err error) {
+	if t == IQ4NL {
+		if k <= 0 || k%32 != 0 {
+			return 0, 0, 0, fmt.Errorf("kernels: PackedWords: k=%d is not a multiple of 32", k)
+		}
+		return (nrows*k/32*18 + 3) / 4, 0, 0, nil
+	}
 	qi := qtab(t)
 	// A float format is answered before the block check because it has no
 	// block: qtab's blockE 32 is the activation granule, and MLA's absorbed
