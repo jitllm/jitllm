@@ -67,7 +67,7 @@ func TestConcurrentMultiDeviceDoesNotLeak(t *testing.T) {
 			}
 		}()
 		for w := range ss {
-			ss[w] = testInstance(t, m, 48)
+			ss[w] = cycleInstance(t, m, 48)
 			ss[w].SetDevice(g)
 		}
 		st0 := g.Stats()
