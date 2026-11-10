@@ -577,15 +577,12 @@ func TestEvictionActuallyLowersKVBytes(t *testing.T) {
 	}
 }
 
-// TestBatchSealsAgainstTheSlowestRow: with rows at different positions, no page
-// a lagging row can still write may be offered to the store or evicted.
-//
-// A page holds every row's slots, so sealing against the high-water mark (as
-// advance() once did while admitting a new row) offers a page the new row is
-// still writing, and its next write re-creates it zeroed, taking the other rows'
-// history with it. The assertion is on the seal point rather than on tokens,
-// which diverge only when eviction and a re-fault happen to line up.
-func TestBatchSealsAgainstTheSlowestRow(t *testing.T) {
+// TestEachSessionSealsItsOwnHistory: a session owns its history, so a page
+// is one sequence's and seals as that sequence passes it, whatever another
+// session of the same instance has written: one session past several pages
+// stores them while a second, admitted at position 0, stores none, and the
+// second stores its own as it passes them, leaving the first's as they were.
+func TestEachSessionSealsItsOwnHistory(t *testing.T) {
 	path := jlmOf(t, testmodels.Path("tinyllama-1.1b-q3_K_M.gguf"))
 	m, err := model.Open(path)
 	if err != nil {
@@ -594,50 +591,38 @@ func TestBatchSealsAgainstTheSlowestRow(t *testing.T) {
 	defer m.Close()
 
 	const maxSeq, page, nseq = 64, 8, 2
-	s := newSessBatch(m, nseq, maxSeq, withKVPage(page))
-	defer s.Close()
-	s.SetKVStore(NewMemStore())
-
-	// Row 0 runs past several pages; row 1 stays at zero, as a newly admitted
-	// row does.
+	b := newSessBatch(m, nseq, maxSeq, withKVPage(page))
+	defer b.Close()
+	for i := range nseq {
+		b.row(i).SetKVStore(NewMemStore())
+	}
 	prompt := make([]int32, 40)
 	for i := range prompt {
 		prompt[i] = int32(300 + i)
 	}
-	if _, err := s.PrefillSeq(0, prompt); err != nil {
+	if _, err := b.PrefillSeq(0, prompt); err != nil {
 		t.Fatal(err)
 	}
-	if s.SeqPos(0) < 4*page {
-		t.Fatalf("row 0 reached %d, under four %d-position pages -- there is no page for "+
-			"the high-water mark to wrongly seal", s.SeqPos(0), page)
+	first, _, _ := b.row(0).KVPageStats()
+	other, _, _ := b.row(1).KVPageStats()
+	switch {
+	case first == 0:
+		t.Fatalf("a session %d positions in, past %d-position pages, stored none: its pages never sealed", b.SeqPos(0), page)
+	case other != 0:
+		t.Fatalf("a session at position 0 stored %d page(s) after another session's prompt: that prompt sealed into its history", other)
 	}
-	if s.SeqPos(1) != 0 {
-		t.Fatalf("row 1 is at %d; this gate needs a lagging row", s.SeqPos(1))
-	}
-
-	// Nothing may be sealed at all: row 1 will write into page 0 onwards.
-	stored, _, evicted := s.KVPageStats()
-	if stored != 0 || evicted != 0 {
-		t.Fatalf("with row 1 at position 0, %d page(s) were stored and %d evicted: "+
-			"seal ran against the furthest row (%d), not the slowest",
-			stored, evicted, s.SeqPos(0))
-	}
-	for li := range s.kv.layers {
-		if n := s.kv.layers[li].lastSealed; n != 0 {
-			t.Fatalf("layer %d marked %d page(s) sealed while row 1 can still write them",
-				li, n)
-		}
-	}
-
-	// Bring the lagging row up and the pages become sealable, so the gate
-	// measures the seal point and not a store that never works.
-	if _, err := s.PrefillSeq(1, prompt); err != nil {
+	if _, err := b.PrefillSeq(1, prompt); err != nil {
 		t.Fatal(err)
 	}
-	if stored, _, _ := s.KVPageStats(); stored == 0 {
-		t.Fatal("no page was stored even with both rows past several pages, so the " +
-			"assertion above would hold with sealing removed entirely")
+	after, _, _ := b.row(0).KVPageStats()
+	other, _, _ = b.row(1).KVPageStats()
+	switch {
+	case other == 0:
+		t.Fatalf("the second session %d positions in stored no page", b.SeqPos(1))
+	case after != first:
+		t.Fatalf("the second session's prompt moved the first's stored pages from %d to %d", first, after)
 	}
+	t.Logf("each session stored its own pages: %d and %d", first, other)
 }
 
 // TestPrefixCacheSurvivesTheProcess: one process writes the pages and exits, a
@@ -984,28 +969,46 @@ func TestNamespaceSurvivesTheF16StepDown(t *testing.T) {
 	}
 }
 
-// TestBatchRefusesACacheNamespace: a page holds every row's slots, so no single
-// sequence's tokens can name it.
-func TestBatchRefusesACacheNamespace(t *testing.T) {
+// TestEachSessionNamesItsOwnPages: a session's pages are its own sequence's,
+// so under a namespace each is named after that session's tokens: two
+// sessions of one instance with different prompts name their first pages
+// apart, and a third with the first's prompt names it as the first does --
+// the name is the content's, not the session's.
+func TestEachSessionNamesItsOwnPages(t *testing.T) {
 	path := jlmOf(t, testmodels.Path("tinyllama-1.1b-q3_K_M.gguf"))
 	m, err := model.Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	b := newSessBatch(m, 2, 32)
+	const ns, page = "tinyllama/q3_K_M/f32", 8
+	b := newSessBatch(m, 3, 32, withKVPage(page))
 	defer b.Close()
-	if err := b.SetCacheKey("tinyllama/q3_K_M/f32"); err == nil {
-		t.Fatal("a 2-row batch accepted a cache namespace: it would fill a store with " +
-			"pages named after row 0's tokens that hold every row's slots, and which " +
-			"PrefillCached refuses to read back")
+	for i := range 3 {
+		if err := b.row(i).SetCacheKey(ns); err != nil {
+			t.Fatalf("session %d was refused a namespace: %v", i, err)
+		}
 	}
-	// A single-sequence instance still accepts one, or the refusal is not about
-	// batching.
-	s := testInstance(t, m, 32)
-	defer s.Close()
-	if err := s.SetCacheKey("tinyllama/q3_K_M/f32"); err != nil {
-		t.Fatalf("a single-sequence instance was refused a namespace: %v", err)
+	x, y := make([]int32, 2*page), make([]int32, 2*page)
+	for i := range x {
+		x[i], y[i] = int32(300+i), int32(400+i)
+	}
+	for i, p := range [][]int32{x, y, x} {
+		if _, err := b.PrefillSeq(i, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	key := func(i int) string { return b.row(i).kv.pageKey(0, 0) }
+	for i := range 3 {
+		if !strings.HasPrefix(key(i), ns+"/") {
+			t.Fatalf("session %d names its first page %q, outside the namespace %q", i, key(i), ns)
+		}
+	}
+	switch {
+	case key(0) == key(1):
+		t.Fatalf("two sessions' different prompts name their first pages alike (%q)", key(0))
+	case key(0) != key(2):
+		t.Fatalf("one prompt in two sessions names its first page %q and %q: the name is not the content's", key(0), key(2))
 	}
 }
 
