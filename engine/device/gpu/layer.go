@@ -3884,6 +3884,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 			g.pagedStage(pk, p, pk.rows)
 			// A call over evicted history streams (pagedstream.go).
 			if e := g.pagedStreamPrep(sid, bs, pk.rows); e != nil {
+				g.noteRoom(e)
 				return refuse("paged attention: %v", e)
 			}
 		}

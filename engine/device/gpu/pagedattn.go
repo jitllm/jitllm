@@ -317,6 +317,7 @@ func (g *devTier) pagedAppendRows(sid uint64, rows []pagedRow) bool {
 	}
 	g.pgSeqs = seqEnds(g.pgSeqs, rows)
 	if err := g.pagedAppend(sid, g.pgSeqs); err != nil {
+		g.noteRoom(err)
 		g.LastErr = err.Error()
 		return false
 	}
@@ -954,6 +955,7 @@ func (g *devTier) reserveKVSeqs(sid uint64, bases, ends []int) bool {
 		g.pgSeqs = append(g.pgSeqs, seqEnd{seqID{sid, b}, ends[i], -1})
 	}
 	if err := g.pagedAppend(sid, g.pgSeqs); err != nil {
+		g.noteRoom(err)
 		g.LastErr = err.Error()
 		return false
 	}

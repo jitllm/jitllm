@@ -40,9 +40,9 @@ func (s *Instance) refusalOf(li int, why string, cause nn.FailCause) error {
 	case nn.FailBuild:
 		s.buildRefused++
 		return &nn.BuildError{Layer: li, Err: errors.New(why)}
-	case nn.FailDecline:
+	case nn.FailDecline, nn.FailRoom:
 		s.declined++
-		return errDeclined{li, why}
+		return errDeclined{li, why, cause == nn.FailRoom}
 	}
 	return nil
 }
@@ -52,11 +52,29 @@ func (s *Instance) refusalOf(li int, why string, cause nn.FailCause) error {
 type errDeclined struct {
 	layer int
 	why   string
+	room  bool
 }
 
 func (e errDeclined) Error() string {
 	return fmt.Sprintf("model: the device declined block %d: %s", e.layer, e.why)
 }
+
+// Unwrap is ErrNoRoom for a decline for room.
+func (e errDeclined) Unwrap() error {
+	if e.room {
+		return ErrNoRoom
+	}
+	return nil
+}
+
+// ErrNoRoom is a call the device declined for room for its history: run with
+// fewer rows beside it, or once another sequence gives its pages back, it
+// may fit.
+const ErrNoRoom roomError = "model: the device has no room for the call's history now"
+
+type roomError string
+
+func (e roomError) Error() string { return string(e) }
 
 // Evacuations is every way work left a device since the instance began, by why.
 // A fault is a driver error or a device lost, and only a fault moves work. A
@@ -80,7 +98,7 @@ type Evacuations struct {
 func (s *Instance) Evacuations() Evacuations {
 	return Evacuations{
 		DemotedFault:   s.demotedBy[nn.FailFault],
-		DemotedDecline: s.demotedBy[nn.FailDecline],
+		DemotedDecline: s.demotedBy[nn.FailDecline] + s.demotedBy[nn.FailRoom],
 		Relocated:      s.devRelocated,
 		BuildRefused:   s.buildRefused,
 		Declined:       s.declined,

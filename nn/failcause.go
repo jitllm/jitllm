@@ -11,8 +11,11 @@ import (
 type FailCause uint8
 
 const (
-	// FailDecline is a refusal that names a limit: room, a width, a setting.
+	// FailDecline is a refusal that names a limit: a width, a setting.
 	FailDecline FailCause = iota
+	// FailRoom is a decline for room: the device holds no page for the
+	// call's history now, and may once other sequences give theirs back.
+	FailRoom
 	// FailBuild is a kernel that did not build on the device: its form, its
 	// lowering, its compile or its link.
 	FailBuild
@@ -22,6 +25,8 @@ const (
 
 func (c FailCause) String() string {
 	switch c {
+	case FailRoom:
+		return "room"
 	case FailBuild:
 		return "build"
 	case FailFault:

@@ -1,6 +1,8 @@
 package gpu
 
 import (
+	"errors"
+
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/composer/ir"
 	"github.com/jitllm/jitllm/nn"
@@ -20,6 +22,13 @@ func (g *devTier) noteCause(c nn.FailCause) {
 		if uint32(c) <= old || at.CompareAndSwap(old, uint32(c)) {
 			return
 		}
+	}
+}
+
+// noteRoom records a call refused for room (ErrKVCapacity) as one.
+func (g *devTier) noteRoom(err error) {
+	if errors.Is(err, ErrKVCapacity) {
+		g.noteCause(nn.FailRoom)
 	}
 }
 
