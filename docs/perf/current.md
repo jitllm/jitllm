@@ -237,6 +237,28 @@ MODEL.gguf -t 12 -c 8192 -np 1 -ngl 0|99`; one request by hand is
 `decisionbench -url http://127.0.0.1:PORT -model MODEL -file centipedes-large.tsv
 -cycle -window 8s`.
 
+## The composed CPU's mixture decode: the bank cursor, two passes
+
+The composed CPU decodes a mixture well below llama.cpp on the Xeon (olmoe
+about 12 tok/s against about 60). The first lever measured against it walks
+a bank's expert sheet with a cursor (composer: "a bank's expert sheet is
+walked by a cursor, and a refused kernel retries with copies"). RULE 2 rows:
+box 49's second socket (Xeon E5-2680 v4, 12 cores, numactl --membind=1
+taskset -c 14-25), jitllm's CPU decode against itself, tg64 after pp128, 20
+ABBA rounds, one process a sample, each A/B after a same-binary A/A. Medians
+of the per-round ratios, IQR/median in brackets:
+
+| model | pass | A/A | A/B | tok/s at the median |
+|---|---|---|---|---|
+| olmoe-1b-7b Q4_K_M | 1 | 0.9991 (0.012) | 1.0933 (0.008) | 11.32 -> 12.42 |
+| olmoe-1b-7b Q4_K_M | 2 | 1.0053 (0.011) | 1.0967 (0.012) | 11.27 -> 12.38 |
+| Qwen3-30B-A3B Q4_K_M | 1 | 0.9974 (0.012) | 1.1021 (0.012) | 3.92 -> 4.31 |
+| Qwen3-30B-A3B Q4_K_M | 2 | 0.9987 (0.011) | 1.0980 (0.017) | 3.93 -> 4.32 |
+
+olmoe reads 742.8 MB a token (TestComposedCPUProfile), so 12.38 tok/s is
+9.2 GB/s. This socket's wall was not measured in the same process, so the
+fraction of it is unresolved.
+
 ## ★ THE FINAL BOARD: THREE HOSTS, FIVE ENGINES, ONE PASS PER HOST
 
 The M4 Metal 3B-7B section below has its own method (a paired harness and a
