@@ -1128,7 +1128,6 @@ const (
 	partServes       = nn.DeclineServes
 	partNoGraph      = nn.DeclineNoGraph
 	partPersist      = nn.DeclinePersist
-	partSkip         = nn.DeclineSkip
 	partNoPool       = nn.DeclineNoPool
 	partStream       = nn.DeclineStream
 	partFeeds        = nn.DeclineFeeds
@@ -2355,9 +2354,8 @@ func (l *layer) namedVector(r jlm.Role) (backend.Buf, bool) {
 // blockServes is why block li of this step is not one the composer serves
 // whole, serves where it is: a graph from the front end, a block the caller
 // leaves to it, the paged history, the window the plan holds the block to
-// (windowHeld),
-// outside the persistent block and a fault probe, and every weight and
-// vector its graph binds held (weightsHeld).
+// (windowHeld), outside the persistent block, and every weight and vector
+// its graph binds held (weightsHeld).
 func (g *devTier) blockServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratch, persist, prompt bool) partDecline {
 	pk := bs.pkv
 	switch {
@@ -2369,8 +2367,6 @@ func (g *devTier) blockServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratc
 		return partNoWeight
 	case persist:
 		return partPersist
-	case len(g.kb.skip) != 0:
-		return partSkip
 	case l.linear && !g.recHeld(l, p, bs):
 		return partRecurrent
 	case len(l.graph.Out) != p.Streams() || len(l.graph.In) > len(l.graph.Out) && (len(l.graph.In) != len(l.graph.Out)+1 || bs.pleIn == nil):
@@ -2391,8 +2387,8 @@ func (g *devTier) blockServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratc
 // unserved is why placed block li is one the composer does not serve on
 // this device, "" where it does: prepLayer declines it, so it runs on the
 // CPU device's composed form, never on the tier's own kernels. A step's own
-// conditions (a fault probe, the caller's keep, the pool a step builds) are
-// not a placement's to decide.
+// conditions (the caller's keep, the pool a step builds) are not a
+// placement's to decide.
 func (g *devTier) unserved(li int) string {
 	defer g.useGeom(g.enterGeomOf(li))
 	bs, l := g.bs, g.layers[li]
@@ -2400,7 +2396,7 @@ func (g *devTier) unserved(li int) string {
 		return ""
 	}
 	switch why := g.blockServes(l, li, &bs.p, bs, false, false); why {
-	case partServes, partSkip, partCaller, partNoPool:
+	case partServes, partCaller, partNoPool:
 		return ""
 	case partWindow:
 		// A tower's windows are each call's (SetKeyRuns, SetRowWindows):

@@ -13,7 +13,6 @@ import (
 func TestKnobsArePerTier(t *testing.T) {
 	pinned := []Option{WithDeviceTune(TuneOff), WithLanes(ir.SubgroupLanes),
 		WithBatchShape(BatchShape{RowT: 2, QTile: 2, AttnNT: 1, Parts: 32}), WithMMATile(2, 1),
-		WithSkip("attn"),
 		WithPoisonScratch(true)}
 	plain := []Option{WithDeviceTune(TuneOff)}
 	open := func(opts []Option) *devTier {
@@ -48,7 +47,7 @@ func TestKnobsArePerTier(t *testing.T) {
 		if q.tiles != tilesFor(knobs{}) {
 			t.Errorf("pinned first=%v: default tier tiles %+v, want the defaults", pinnedFirst, q.tiles)
 		}
-		if !p.kb.skip["attn"] || q.kb.skip["attn"] || !p.kb.poisonScratch || q.kb.poisonScratch {
+		if !p.kb.poisonScratch || q.kb.poisonScratch {
 			t.Errorf("pinned first=%v: a knob leaked between tiers: pinned %+v, default %+v",
 				pinnedFirst, p.kb, q.kb)
 		}

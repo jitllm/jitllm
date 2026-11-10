@@ -12,7 +12,6 @@ const (
 	DeclineServes Decline = iota
 	DeclineNoGraph
 	DeclinePersist
-	DeclineSkip
 	DeclineNoPool
 	DeclineStream
 	DeclineWindow
@@ -54,8 +53,6 @@ func (d Decline) String() string {
 		return "no graph from the front end"
 	case DeclinePersist:
 		return "inside the persistent block"
-	case DeclineSkip:
-		return "a fault probe skips blocks"
 	case DeclineNoPool:
 		return "no paged history on the device"
 	case DeclineStream:
