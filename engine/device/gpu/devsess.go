@@ -147,6 +147,8 @@ type devSess struct {
 	// stepRS is the ragStep GPU.layersRows hands this device, its slices
 	// reused from step to step.
 	stepRS ragStep
+	// grp is rowsInGroups' scratch, reused.
+	grp rowGroups
 	// cutX is streamCut's residual: a call's rows of every stream.
 	cutX []float32
 	// rag is the rows of an in-flight LayersRows; see rows.go.

@@ -74,6 +74,17 @@ func (g *devTier) LayersRows(lo, hi int, pos, slot []int, seqLen int, x, cs, csS
 	return v.layersRows(lo, hi, rs, x, cs, csSWA, head)
 }
 
+// rowGroups is rowsInGroups' scratch: the order a step's rows run in, a
+// group's rows in it, and the group's step, head and rows gathered.
+type rowGroups struct {
+	rs                           ragStep
+	head                         nn.Head
+	ord, gi, pos, slot           []int
+	sid                          []uint64
+	x, cs, sw, ple, cut, lg, hid []float32
+	tok, toks                    []int32
+}
+
 // layersRows is LayersRows for rs's rows, each of its own session where
 // rs.sid is set and of rs.self's otherwise.
 func (g *devTier) layersRows(lo, hi int, rs *ragStep, x, cs, csSWA []float32, head *nn.Head) bool {
@@ -100,6 +111,15 @@ func (g *devTier) layersRows(lo, hi int, rs *ragStep, x, cs, csSWA []float32, he
 	if n < 1 || len(slot) != n || lo < 0 || lo > hi || (lo == hi && head == nil) {
 		return fail("%d positions, %d slots, blocks [%d,%d)", n, len(slot), lo, hi)
 	}
+	g.mu.Lock()
+	grp := g.pagedCall(lo, hi, n)
+	if g.rowsComposed(lo, hi) || lo == hi && g.headReserved() {
+		grp = min(grp, max(g.promptW, 1))
+	}
+	g.mu.Unlock()
+	if grp < n {
+		return g.rowsInGroups(lo, hi, grp, rs, x, cs, csSWA, head)
+	}
 	if g.NoBatch {
 		return fail("NoBatch is set")
 	}
@@ -125,16 +145,12 @@ func (g *devTier) layersRows(lo, hi int, rs *ragStep, x, cs, csSWA []float32, he
 	g.mu.Lock()
 	// A step the composer serves whole runs in the reserved width, its rows
 	// the call's, as a prompt does (rowsComposed): no width is built,
-	// formed or compiled for its count of rows, and a wider step is refused
-	// (RowsWidth admits none). So does a head over the rows on a device
-	// that holds none of the step's blocks.
+	// formed or compiled for its count of rows, and a wider step ran as
+	// steps of that width (rowsInGroups). So does a head over the rows on a
+	// device that holds none of the step's blocks.
 	composed := g.rowsComposed(lo, hi) || lo == hi && g.headReserved()
 	w := g.promptW
-	switch {
-	case composed && n > g.promptW:
-		g.mu.Unlock()
-		return fail("%d rows, more than the reserved width %d the composer serves", n, g.promptW)
-	case !composed:
+	if !composed {
 		w = g.rowsWidth(lo, n)
 	}
 	if w > batchWidth {
@@ -147,9 +163,9 @@ func (g *devTier) layersRows(lo, hi int, rs *ragStep, x, cs, csSWA []float32, he
 		case l == nil || !l.ok:
 			g.mu.Unlock()
 			return fail("block %d is not on this device", li)
-		case l.nonCausal || l.stream != nil:
+		case l.nonCausal:
 			g.mu.Unlock()
-			return fail("block %d is non-causal or streamed", li)
+			return fail("block %d is non-causal", li)
 		}
 	}
 	// The step's own width, or the reserved one when that does not fit.
@@ -206,6 +222,148 @@ func (g *devTier) layersRows(lo, hi int, rs *ragStep, x, cs, csSWA []float32, he
 		}
 	}
 	g.mu.Unlock()
+	return true
+}
+
+// rowsInGroups runs rs's rows as steps of grp rows each. A step's rows are
+// sequences of their own or a sequence's next positions, each row's history
+// written before any row attends: so the groups take the rows in position
+// order, a row's earlier positions in a group before its own, and in each
+// group the rows wanting the head lead, as they lead the step. Each group's
+// rows, their side inputs among them, are gathered into the session's
+// scratch and its outputs scattered back.
+func (g *devTier) rowsInGroups(lo, hi, grp int, rs *ragStep, x, cs, csSWA []float32, head *nn.Head) bool {
+	n := len(rs.pos)
+	xw, rw, sw := len(x)/n, len(cs)/n, len(csSWA)/n
+	want, vocab, embd := 0, 0, 0
+	if head != nil {
+		if len(head.Tokens) < n {
+			head.Tokens = make([]int32, n)
+		}
+		want = head.WantedRows(n)
+	}
+	g.mu.Lock()
+	if g.bs != nil {
+		embd = g.bs.p.NEmbd
+		if g.bs.head != nil {
+			vocab = g.bs.head.nrows
+		}
+	}
+	// The rows are gathered from x, so a promised gather is made real first.
+	if pe := g.embPend; pe != nil {
+		g.embPend = nil
+		g.materializeLocked(pe)
+	}
+	ple, cut, toks := g.pleHost, g.cutHost, g.stepToks
+	g.mu.Unlock()
+	defer func() {
+		g.mu.Lock()
+		g.pleHost, g.cutHost, g.stepToks = ple, cut, toks
+		g.mu.Unlock()
+	}()
+	pw, cw, tw := 0, 0, 0
+	if len(ple)%n == 0 {
+		pw = len(ple) / n
+	}
+	if len(cut)%n == 0 {
+		cw = len(cut) / n
+	}
+	if len(toks) >= n {
+		tw = 1
+	}
+	q := &g.grp
+	q.ord = q.ord[:0]
+	for r := range n {
+		i := len(q.ord)
+		q.ord = append(q.ord, r)
+		for ; i > 0 && rs.pos[q.ord[i-1]] > rs.pos[r]; i-- {
+			q.ord[i] = q.ord[i-1]
+		}
+		q.ord[i] = r
+	}
+	for a := 0; a < n; a += grp {
+		b := min(a+grp, n)
+		gi := q.gi[:0]
+		for _, r := range q.ord[a:b] {
+			if r < want {
+				gi = append(gi, r)
+			}
+		}
+		k := len(gi)
+		for _, r := range q.ord[a:b] {
+			if r >= want {
+				gi = append(gi, r)
+			}
+		}
+		q.gi = gi
+		m := len(gi)
+		q.pos, q.slot, q.sid = q.pos[:0], q.slot[:0], q.sid[:0]
+		q.x, q.cs, q.sw, q.ple, q.toks = q.x[:0], q.cs[:0], q.sw[:0], q.ple[:0], q.toks[:0]
+		for _, r := range gi {
+			q.pos, q.slot = append(q.pos, rs.pos[r]), append(q.slot, rs.slot[r])
+			if rs.sid != nil {
+				q.sid = append(q.sid, rs.sid[r])
+			}
+			q.x = append(q.x, x[r*xw:(r+1)*xw]...)
+			q.cs = append(q.cs, cs[r*rw:(r+1)*rw]...)
+			q.sw = append(q.sw, csSWA[r*sw:(r+1)*sw]...)
+			q.ple = append(q.ple, ple[r*pw:(r+1)*pw]...)
+			q.toks = append(q.toks, toks[r*tw:(r+1)*tw]...)
+		}
+		q.cut = slices.Grow(q.cut[:0], m*cw)[:m*cw]
+		runs, runSid, runSeat, sess, keys := q.rs.runs[:0], q.rs.runSid[:0], q.rs.runSeat[:0], q.rs.sess[:0], q.rs.keys[:0]
+		q.rs = ragStep{pos: q.pos, slot: q.slot, self: rs.self, seqLen: rs.seqLen, again: rs.again,
+			runs: runs, runSid: runSid, runSeat: runSeat, sess: sess, keys: keys}
+		if rs.sid != nil {
+			q.rs.sid = q.sid
+		}
+		var h *nn.Head
+		if head != nil && k > 0 {
+			q.head = *head
+			q.tok = slices.Grow(q.tok[:0], m)[:m]
+			q.head.Tokens, q.head.LogitRows, q.head.Logits, q.head.Hidden = q.tok, k, nil, nil
+			if head.RowLogits && vocab > 0 {
+				q.lg = slices.Grow(q.lg[:0], k*vocab)[:k*vocab]
+				q.head.Logits = q.lg
+			}
+			if head.Hidden != nil && embd > 0 {
+				q.hid = slices.Grow(q.hid[:0], k*embd)[:k*embd]
+				q.head.Hidden = q.hid
+			}
+			h = &q.head
+		}
+		g.mu.Lock()
+		if pw > 0 {
+			g.pleHost = q.ple
+		}
+		if cw > 0 {
+			g.cutHost = q.cut
+		}
+		if tw > 0 {
+			g.stepToks = q.toks
+		}
+		g.mu.Unlock()
+		if !g.layersRows(lo, hi, &q.rs, q.x, q.cs, q.sw, h) {
+			return false
+		}
+		for i, r := range gi {
+			copy(x[r*xw:(r+1)*xw], q.x[i*xw:(i+1)*xw])
+			copy(cut[r*cw:(r+1)*cw], q.cut[i*cw:(i+1)*cw])
+		}
+		if h == nil {
+			continue
+		}
+		head.Applied = h.Applied
+		for i, r := range gi[:k] {
+			head.Tokens[r] = q.tok[i]
+			if h.Logits != nil && len(head.Logits) >= (r+1)*vocab {
+				copy(head.Logits[r*vocab:(r+1)*vocab], q.lg[i*vocab:(i+1)*vocab])
+			}
+			if h.Hidden != nil && len(head.Hidden) >= (r+1)*embd {
+				copy(head.Hidden[r*embd:(r+1)*embd], q.hid[i*embd:(i+1)*embd])
+			}
+		}
+	}
 	return true
 }
 
