@@ -50,7 +50,6 @@ func TestTheDeclinesOnlyShrink(t *testing.T) {
 		"DeclineTable",
 		"DeclineExperts",
 		"DeclineBidir",
-		"DeclineSessions",
 		"DeclineExpertsRows",
 		"DeclineEmbedStreams",
 	}

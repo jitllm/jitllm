@@ -37,7 +37,6 @@ const (
 	DeclineUnplaced
 	DeclineExperts
 	DeclineBidir
-	DeclineSessions
 	DeclineExpertsRows
 	DeclineEmbedStreams
 	NumDeclines
@@ -99,8 +98,6 @@ func (d Decline) String() string {
 		return "routed experts not held whole on the device (streamed, cached, run on another device or in expert pages)"
 	case DeclineBidir:
 		return "a run of rows attending both ways"
-	case DeclineSessions:
-		return "a row whose history the CPU's form does not bound (another model's session, or past its keys)"
 	case DeclineExpertsRows:
 		return "routed experts in pages at a step of several rows"
 	case DeclineEmbedStreams:
