@@ -1140,7 +1140,6 @@ const (
 	partTableHeld    = nn.DeclineTableHeld
 	partNoSample     = nn.DeclineNoSample
 	partNoEmbed      = nn.DeclineNoEmbed
-	partEmbedFormat  = nn.DeclineEmbedFormat
 	partEmbedWeight  = nn.DeclineEmbedWeight
 	partExperts      = nn.DeclineExperts
 	partExpertsRows  = nn.DeclineExpertsRows
@@ -1910,12 +1909,8 @@ func (bs *blockScratch) embedServes() partDecline {
 				}
 				continue
 			}
-			r := bs.embTable(w.Role)
-			if r == nil || !r.ok {
+			if r := bs.embTable(w.Role); r == nil || !r.ok {
 				return partEmbedWeight
-			}
-			if _, ok := jlmType(r.t); !ok {
-				return partEmbedFormat
 			}
 		}
 	}

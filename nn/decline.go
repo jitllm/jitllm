@@ -22,7 +22,6 @@ const (
 	DeclineTableHeld
 	DeclineNoSample
 	DeclineNoEmbed
-	DeclineEmbedFormat
 	DeclineEmbedWeight
 	DeclineFeeds
 	DeclineRecurrent
@@ -65,8 +64,6 @@ func (d Decline) String() string {
 		return "no sample graph from the front end"
 	case DeclineNoEmbed:
 		return "no input rows graph from the front end"
-	case DeclineEmbedFormat:
-		return "input rows in a format with no container type"
 	case DeclineEmbedWeight:
 		return "input rows reading a weight other than the token embedding and a position table"
 	case DeclineFeeds:
