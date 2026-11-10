@@ -9794,8 +9794,43 @@ NMSE 1.56e-4 (`TestD1OmniHearsAsItsReference`); the prompt after them token
 for token, 251 rows, and the answers 0.0084 from the reference and from
 llama.cpp's probabilities (`TestD1OmniDecidesOverItsVoice`; llama.cpp's
 confidence is TypeSafe's, a recorded divergence); the server's body the
-Decider's byte for byte (`server.TestSystemOneVoiceMatchesTheEngine`). The
-audio's blocks on a card are not placed yet.
+Decider's byte for byte (`server.TestSystemOneVoiceMatchesTheEngine`). On a
+card the tower's blocks place as the vision tower's do: all 17 on a V100 at
+NMSE 8.1e-5 from the reference, 8 of 17 at 1.33e-4, the CPU device's 1.56e-4
+(`TestD1OmniHearsOnTheCard`).
+
+#### d1-omni's voice from any WAV
+
+The tower read 16 kHz mono 16-bit PCM and nothing else, and converted the
+samples in a Go loop. A clip is now read as its file stores it
+(`engine.ReadWAV`, `model.Clip`): PCM of 8, 16, 24 or 32 bits and IEEE float
+of 32 or 64, a WAVE_FORMAT_EXTENSIBLE file's speakers' mask with it; another
+codec is refused at the file. The entry's first op makes it the tower's
+16 kHz mono floats in generated code (`graph.OpSound`): each sample's
+conversion, the mix to mono, and the resample to the tower's rate.
+
+Which resampler is the user's decision: ffmpeg's, as `ffmpeg -ar 16000 -ac 1`
+runs it with its default options. The mix is libswresample's default matrix
+(`composer.MonoMix`), unnormalised for a float output, so stereo is
+(L+R)/sqrt(2). The resample is swr's polyphase filter (`composer.NewSWR`): 32
+taps at unit scale, up to 2^10 phases, a Kaiser window of beta 9, a cutoff at
+0.97 of the output's Nyquist, the bank built in float64 as resample.c builds
+it and kept in float32, and swr's edge rules: a mirrored start, a reflected
+flush, and a clip shorter than the filter extended by half again. Go
+computes the bank, once a rate, and each output's first tap, bank row and
+fraction: the filter's coefficients and the step's geometry, both named in
+the oracle's lists. Every sample's arithmetic is the sound op's two ranged
+sums and its blend.
+
+Against ffmpeg's own outputs on 24 clips (every sample format, rates from
+7999 Hz to 96 kHz, mono to 7.1, four clips of 60 to 141 samples around the
+filter's length;
+`scripts/soundgold.sh`,
+`testdata/golden/sound`): within 5e-6 of every output
+(`composer.TestComposedCPUSound`). A clip read as another sample format and
+the channels averaged rather than mixed are each outside it. The repo's
+clip through ReadWAV and the sound op still gives the 41 prefix rows at NMSE
+1.56e-4 (`TestD1OmniHearsAsItsReference`).
 
 ## qwen4exp: Qwen3.8-Flash-Next (plan, before the code)
 
