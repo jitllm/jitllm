@@ -651,7 +651,7 @@ The SSE tier binds the same way on amd64:
 - **Run the WHOLE suite on the SSE host, not a filtered slice**, natively on the
   Atom:
 
-      model.test -test.run 'TestEveryModelRunsSSE|TestGreedyMatchesLlamaCpp|TestBatchMatchesForward|TestPrefillMatchesForward|TestEveryModelRunsGenerated|TestHybridRuns|TestTowerEncodes'
+      model.test -test.run 'TestEveryModelRunsSSE|TestGreedyMatchesLlamaCpp|TestBatchMatchesForward|TestPrefillMatchesForward|TestEveryModelRunsGenerated|TestHybridRuns|TestStatedTowerEncodesAPicture'
 
 - **The SSE and AVX2 tiers are two transcriptions, not one**: a comparison
   between them pins the KV width and holds the SSE arm to a same-process control
