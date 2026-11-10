@@ -2,6 +2,8 @@ package engine
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/jitllm/jitllm/engine/device/cpu"
@@ -57,6 +59,7 @@ func (s *Instance) pageOnCards(lo, hi int) error {
 			ep.PlaceExperts(li, "card")
 		}
 	}
+	was := maps.Clone(s.declines)
 	s.offerRange(lo, hi)
 	if s.placeErr != nil {
 		return s.placeErr
@@ -65,12 +68,26 @@ func (s *Instance) pageOnCards(lo, hi int) error {
 		return nil
 	}
 	why := "the cards refused them"
-	if er, ok := s.ld.(nn.ErrReporter); ok && er.Err() != "" {
+	if d := s.declinesSince(was); len(d) > 0 {
+		why = strings.Join(d, "; ")
+	} else if er, ok := s.ld.(nn.ErrReporter); ok && er.Err() != "" {
 		why = er.Err()
-	} else if d := s.DeviceDeclines(); len(d) > 0 {
-		why = d[0].Why
 	}
 	return errCPUUnlisted(fmt.Sprintf("blocks %v run on no listed card even paged (%s)", off, why))
+}
+
+// declinesSince is the decline reasons noted since the counts were was, in
+// order: the device's last error is a later block's by the end of a range,
+// and may be one its first pass gave before it placed.
+func (s *Instance) declinesSince(was map[string]int) []string {
+	var out []string
+	for why, n := range s.declines {
+		if n > was[why] {
+			out = append(out, why)
+		}
+	}
+	slices.Sort(out)
+	return out
 }
 
 // cpuOfDevices is what the device specs a model was opened with state about
