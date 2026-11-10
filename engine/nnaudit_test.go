@@ -56,6 +56,9 @@ func TestEveryModelRunsOnACard(t *testing.T) {
 	slow, only := os.Getenv("JITLLM_SLOW") != "", os.Getenv("JITLLM_SLOW") == "only"
 	pick := os.Getenv("JITLLM_AUDIT_MODEL")
 	ran, last, held := 0, "", [2]uint64{}
+	// seen says a relocation has moved an instance's account: the count
+	// composedNothing reads can see a composition.
+	seen := false
 	defer func() { heldAfter(t, g, last, &held) }()
 	for _, src := range auditModels(t) {
 		if pick != "" && !strings.Contains(src.path, pick) {
@@ -155,6 +158,7 @@ func TestEveryModelRunsOnACard(t *testing.T) {
 				}
 			}
 			formed, before := g.Stats().UnformedAtStep, cardDeclines(g)
+			asked := instanceAsks(st)
 			for i := range 3 {
 				lg, err := st.Forward(int32(1 + i))
 				if err != nil {
@@ -170,15 +174,53 @@ func TestEveryModelRunsOnACard(t *testing.T) {
 				finite(t, "EncodePicture on the card", rows)
 			}
 			stayedOnCard(t, st, m, g)
+			composedNothing(t, st, asked)
 			if s := g.Stats(); s.UnformedAtStep != formed {
 				t.Fatalf("the card formed %d part(s) at a step after placement (by part %v): %s",
 					s.UnformedAtStep-formed, s.UnformedAtStepParts, g.Err())
 			}
 			refusedAtStep(t, g, before)
+			// The violation, once: a block moved to the CPU composes there,
+			// and the account composedNothing reads must see it.
+			if !seen && m.Cfg.NLayer > 1 {
+				was := instanceAsks(st)
+				if st.SetGPULayers(m.Cfg.NLayer-1) == m.Cfg.NLayer-1 {
+					if instanceAsks(st)[nn.CPU] == was[nn.CPU] {
+						t.Fatalf("moving block %d to the CPU asked it for no form: composedNothing cannot see a composition", m.Cfg.NLayer-1)
+					}
+					seen = true
+				}
+			}
 		})
 	}
 	if ran == 0 {
 		t.Fatalf("no model ran on the card (JITLLM_AUDIT_MODEL %q) -- this gate proved nothing", pick)
+	}
+	if !seen {
+		t.Fatal("no model moved a block to the CPU: composedNothing was never shown to see a composition")
+	}
+}
+
+// instanceAsks is how many forms instance s has asked of each device it runs
+// on, the CPU among them, by its account.
+func instanceAsks(s *Instance) map[string]int64 {
+	asks := map[string]int64{nn.CPU: s.Account(nn.CPU).Asks}
+	for _, at := range s.Locations() {
+		if at != "" {
+			asks[at] = s.Account(at).Asks
+		}
+	}
+	return asks
+}
+
+// composedNothing fails t where instance s asked any device for a form since
+// asked was read: tokens and pictures run what placement composed.
+func composedNothing(t *testing.T, s *Instance, asked map[string]int64) {
+	t.Helper()
+	for dev, n := range instanceAsks(s) {
+		if d := n - asked[dev]; d != 0 {
+			t.Errorf("after placement the instance asked %s for %d form(s)", dev, d)
+		}
 	}
 }
 
