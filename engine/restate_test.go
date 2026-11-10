@@ -22,13 +22,19 @@ func restated(m *model.Model, rewrite func(g *graph.Graph) *graph.Graph) func() 
 	s := m.FrontGraphs()
 	set := *s
 	set.Blocks = slices.Clone(s.Blocks)
+	changed := false
 	for li, g := range set.Blocks {
 		if g != nil {
 			set.Blocks[li] = rewrite(g)
+			changed = changed || set.Blocks[li] != g
 		}
 	}
 	if s.Collapse != nil {
 		set.Collapse = rewrite(s.Collapse)
+		changed = changed || set.Collapse != s.Collapse
+	}
+	if !changed {
+		panic("restated: the rewrite matched no op of any block, so the violation states the model unchanged")
 	}
 	m.Front.Mu.Lock()
 	was := m.Front.Set
