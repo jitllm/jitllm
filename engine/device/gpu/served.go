@@ -508,7 +508,9 @@ func (f *partForm) passHalves() error {
 // one stream, so the earlier holder is done with it. A constant, a buffer
 // first read (it carries what an earlier call left), and a paged form's
 // selection and page table, which the host reads and writes between its
-// halves, keep buffers of their own. Callers form f outside any step.
+// halves, keep buffers of their own. A binding that neither reads nor
+// writes a buffer, a parameter its code never touches, is no use of it.
+// Callers form f outside any step.
 func (f *partForm) share(paged bool) {
 	n := len(f.own)
 	first, last := make([]int, n), make([]int, n)
@@ -518,7 +520,7 @@ func (f *partForm) share(paged bool) {
 	}
 	for ci, args := range f.args {
 		for _, a := range args {
-			if a.kind != partOwn {
+			if a.kind != partOwn || !a.read && !a.writes {
 				continue
 			}
 			if first[a.i] < 0 {

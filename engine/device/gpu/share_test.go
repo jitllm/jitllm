@@ -74,4 +74,18 @@ func TestAFormSharesBuffersByTheirLives(t *testing.T) {
 	if p.slot[2] == p.slot[0] || p.slot[2] == p.slot[1] || p.slot[0] == p.slot[1] {
 		t.Fatalf("a paged form's selection or table shares a device buffer: slots %v", p.slot)
 	}
+
+	// A code that lists a buffer and neither reads nor writes it does not
+	// begin its life: written by code 1, read by code 2, it passes to the
+	// scratch's arena as any buffer live within one call.
+	u := func(i int) partArg { return partArg{kind: partOwn, i: i} }
+	q := &partForm{
+		codes: make([]partCode, 3),
+		own:   []partBuf{{n: 64}, {n: 1 << 20}},
+		args:  [][]partArg{{w(0), u(1)}, {r(0), w(1)}, {r(1)}},
+	}
+	q.share(false)
+	if q.arenaAt[q.slot[1]] < 0 {
+		t.Fatalf("a buffer bound unused before its first write is held as carried state (arena %v, slots %v)", q.arenaAt, q.slot)
+	}
 }
