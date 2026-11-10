@@ -33,9 +33,9 @@ import (
 //     session's page pool, which would recycle memory others still read.
 //   - A shared page does not move to a device for one of its holders: the
 //     block stays on the CPU (Instance.migrateKV refuses, counted by
-//     KVSharedRefusals). A device page shared between sessions is not
-//     implemented; a session with blocks on a device does not share
-//     (Instance.ShareKV).
+//     KVSharedRefusals), since the prefix would be held twice, on the host
+//     for the others and on the card for it. On a card the prefix cache
+//     names the card's own pages (engine/device/gpu/kvshare.go).
 //   - A recurrent layer's summary is not paged by position: it is kept as a
 //     restore point beside the pages (recpoint.go), a copy of a state that
 //     moves on, through the store's Get and Set. A batch is refused: its

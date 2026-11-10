@@ -133,8 +133,10 @@ type Instance struct {
 	ws    weightSource
 	lease blockLease
 	// kvConv is the device converting a binary16 or q8 history's rows, nil
-	// for a history of floats.
-	kvConv nn.KVConvDevice
+	// for a history of floats; kvConvs every format's, by nn.KVFmt, the ones
+	// a session in another format is carried through (recode).
+	kvConv  nn.KVConvDevice
+	kvConvs [nn.KVFormats]nn.KVConvDevice
 	// heads is the device running the head and the samplers.
 	heads nn.HeadDevice
 	// entry is the device writing a prediction block's entry rows, nil on an

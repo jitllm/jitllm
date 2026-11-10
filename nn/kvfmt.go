@@ -33,6 +33,9 @@ const (
 	KVQ8
 )
 
+// KVFormats is how many KV formats there are, what a table by format holds.
+const KVFormats = int(KVQ8) + 1
+
 // KVQ8Block is the elements one q8 scale covers.
 const KVQ8Block = 32
 
