@@ -3291,7 +3291,9 @@ func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []floa
 		// A call the composer serves longer than the reserved width runs in
 		// chunks of it, the last carrying the head, folded as a call of the
 		// reserved width folds it; each chunk is its rows of every stream.
-		if composed && n > sub && dbs != nil && !(head != nil && head.RowLogits) && !noFold {
+		// The head's own path below runs the blocks as a call of their own,
+		// head-less: cut here like any other.
+		if composed && n > sub && dbs != nil && !(head != nil && (head.RowLogits || noFold)) {
 			nr, e, ns := dbs.p.RopeW(), dbs.p.NEmbd, dbs.p.Streams()
 			g.mu.Lock()
 			g.PromptSplits++
