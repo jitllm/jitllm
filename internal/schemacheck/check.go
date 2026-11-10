@@ -60,6 +60,15 @@ func Validate(root, s, doc any) error {
 			return err
 		}
 	case string:
+		if pt, ok := m["pattern"].(string); ok {
+			re, err := regexp.Compile(pt)
+			if err != nil {
+				return fmt.Errorf("pattern %q is not one Go's regexp reads: %v", pt, err)
+			}
+			if !re.MatchString(d) {
+				return fmt.Errorf("%q does not match %s", d, pt)
+			}
+		}
 		if f, ok := m["format"].(string); ok {
 			if err := hasFormat(f, d); err != nil {
 				return fmt.Errorf("%q is not a %s: %v", d, f, err)

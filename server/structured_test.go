@@ -239,7 +239,7 @@ func TestResponseFormatOverHTTP(t *testing.T) {
 	}
 	status, body := postRaw(t, c.url+"/v1/chat/completions", fmt.Sprintf(`{"model":%q,"messages":[{"role":"user",`+
 		`"content":"x"}],"response_format":{"type":"json_schema","json_schema":{"name":"p","schema":`+
-		`{"type":"string","pattern":"^a+$"}}}}`, sm.id))
+		`{"type":"string","pattern":"^(?=a)a+$"}}}}`, sm.id))
 	if status != 400 || !strings.Contains(body, "pattern") {
 		t.Fatalf("an unsupported keyword: %d %s, want 400 naming pattern", status, body)
 	}
