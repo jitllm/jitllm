@@ -15,6 +15,19 @@ import (
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
+// cycleInstance is NewInstance failing t: an instance an open/close cycle
+// makes, which nothing past its Close may hold. testInstance's cleanup holds
+// every instance it makes until the test ends, and the model under it, so a
+// cycle made through it reads as the model's bytes never coming back.
+func cycleInstance(t *testing.T, m *model.Model, maxSeq int, opts ...Option) *Instance {
+	t.Helper()
+	s, err := NewInstance(m, maxSeq, opts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
 func rssKB(t *testing.T) int {
 	t.Helper()
 	b, err := os.ReadFile("/proc/self/status")
@@ -58,7 +71,7 @@ func TestModelOpenCloseDoesNotLeak(t *testing.T) {
 		if err != nil {
 			t.Skip(err)
 		}
-		s := testInstance(t, m, 16)
+		s := cycleInstance(t, m, 16)
 		if _, err := s.Forward(1); err != nil {
 			t.Fatal(err)
 		}
@@ -76,7 +89,7 @@ func TestModelOpenCloseDoesNotLeak(t *testing.T) {
 		if err != nil {
 			t.Fatalf("round %d: %v", i, err)
 		}
-		s := testInstance(t, m, 32)
+		s := cycleInstance(t, m, 32)
 		for k := 0; k < 4; k++ {
 			if _, err := s.Forward(int32(1 + k)); err != nil {
 				t.Fatalf("round %d: %v", i, err)
@@ -142,7 +155,7 @@ func TestPagedModelOpenCloseDoesNotLeak(t *testing.T) {
 		if err != nil {
 			t.Skip(err)
 		}
-		s := testInstance(t, m, 16, tight(m))
+		s := cycleInstance(t, m, 16, tight(m))
 		if _, err := s.Forward(1); err != nil {
 			t.Fatal(err)
 		}
@@ -160,7 +173,7 @@ func TestPagedModelOpenCloseDoesNotLeak(t *testing.T) {
 		if err != nil {
 			t.Fatalf("round %d: %v", i, err)
 		}
-		s := testInstance(t, m, 24, tight(m))
+		s := cycleInstance(t, m, 24, tight(m))
 		for k := 0; k < 3; k++ {
 			if _, err := s.Forward(int32(1 + k)); err != nil {
 				t.Fatalf("round %d: %v", i, err)
