@@ -73,8 +73,9 @@ func (p *Pool) PrepErr() error { return p.part.Err }
 // marker head's readout reads, nil for a pool's.
 func (p *Pool) Pool(x []float32, n int, req []uint32, out []float32, raw bool) bool {
 	f, why := p.part.Form()
+	// More rows than the readout was formed for are a shape it was not.
 	if why == nn.DeclineServes && n > len(p.pos)-1 {
-		why = nn.DeclineSessions
+		why = nn.DeclineNotFormed
 	}
 	if why != nn.DeclineServes {
 		p.steps.Decline(nn.PartPool, why)

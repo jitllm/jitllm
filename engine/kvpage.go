@@ -2935,8 +2935,9 @@ func (kv *kvCache) PrepareRows(li int, pos []int, keys int) nn.Decline {
 		}
 		start, end = min(start, pg.keyStart(p)), max(end, p+1)
 	}
+	// Rows past the keys the form holds are a shape it was not formed for.
 	if end > keys {
-		return nn.DeclineSessions
+		return nn.DeclineNotFormed
 	}
 	if e > 0 {
 		if why := kv.readable(e, 0, end-1); why != nn.DeclineServes {
