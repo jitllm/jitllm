@@ -68,6 +68,28 @@ func (a *Buf) SHRX(dst, src, cnt Reg) {
 	a.modrmReg(dst, src)
 }
 
+// SARX is dst = src >> cnt, arithmetic, on 64 bits (BMI2).
+func (a *Buf) SARX(dst, src, cnt Reg) {
+	a.useISA(ISABMI2, "sarx")
+	a.vex(dst, cnt, src, noIndex, false, pF3, m0F38, 1)
+	a.u8(0xF7)
+	a.modrmReg(dst, src)
+}
+
+// IDIVQ divides rdx:rax by src, signed, on 64 bits: the quotient in rax and
+// the remainder in rdx.
+func (a *Buf) IDIVQ(src Reg) {
+	a.rex(true, Y0, noIndex, src)
+	a.u8(0xF7)
+	a.modrmReg(Reg(7), src)
+}
+
+// CQO is rdx:rax = rax sign-extended.
+func (a *Buf) CQO() {
+	a.u8(0x48)
+	a.u8(0x99)
+}
+
 // SHLX is dst = src << cnt on 64 bits (BMI2).
 func (a *Buf) SHLX(dst, src, cnt Reg) {
 	a.useISA(ISABMI2, "shlx")

@@ -338,6 +338,10 @@ func (e *x86Lowerer) nodeSSE(i int) {
 	case OpAddSub:
 		e.bin(a.ADDSUBPS, false, e.reg(i), e.reg(nd.A), e.reg(nd.B))
 	case OpSar:
+		if e.gpr(i) {
+			e.integer(i)
+			return
+		}
 		e.shiftSSE(i)
 	case OpEq:
 		e.bin(func(d, x, y x86.Reg) { a.CMPPS(d, x, y, 0) }, true, e.reg(i), e.reg(nd.A), e.reg(nd.B))

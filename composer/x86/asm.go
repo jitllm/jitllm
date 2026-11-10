@@ -626,6 +626,14 @@ func (a *Buf) SHLCL(dst Reg) {
 	a.modrmReg(Reg(4), dst)
 }
 
+// SARimm is dst >>= imm, arithmetic, on 64 bits.
+func (a *Buf) SARimm(dst Reg, imm byte) {
+	a.rex(true, Y0, noIndex, dst)
+	a.u8(0xC1)
+	a.modrmReg(Reg(7), dst)
+	a.u8(imm)
+}
+
 func (a *Buf) SHLimm(dst Reg, imm byte) {
 	a.rex(true, Y0, noIndex, dst)
 	a.u8(0xC1)
