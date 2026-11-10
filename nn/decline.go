@@ -24,7 +24,6 @@ const (
 	DeclineNoEmbed
 	DeclineEmbedFormat
 	DeclineEmbedWeight
-	DeclineEmbedToken
 	DeclineFeeds
 	DeclineRecurrent
 	DeclinePageOut
@@ -70,8 +69,6 @@ func (d Decline) String() string {
 		return "input rows in a format with no container type"
 	case DeclineEmbedWeight:
 		return "input rows reading a weight other than the token embedding and a position table"
-	case DeclineEmbedToken:
-		return "a token or position outside its table's rows"
 	case DeclineFeeds:
 		return "a block graph reading more than the residual and per-layer inputs the device holds"
 	case DeclineRecurrent:

@@ -1142,7 +1142,6 @@ const (
 	partNoEmbed      = nn.DeclineNoEmbed
 	partEmbedFormat  = nn.DeclineEmbedFormat
 	partEmbedWeight  = nn.DeclineEmbedWeight
-	partEmbedToken   = nn.DeclineEmbedToken
 	partExperts      = nn.DeclineExperts
 	partExpertsRows  = nn.DeclineExpertsRows
 	partEmbedStreams = nn.DeclineEmbedStreams

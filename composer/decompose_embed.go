@@ -30,7 +30,8 @@ func requestSlot(x *exprs, rq, pj int, s uint32, r int) int {
 
 // decomposeEmbed is each row's token's row of the embedding (row 0 for an
 // id past a table that stops short of the vocabulary), or its position's
-// row of a position table (the position modulo Span where set), or the
+// row of a position table (the position modulo Span where set, row 0 for a
+// position past the table), or the
 // request's question type's row (Request), every
 // element decoded from the weight's format: into an index row, each element
 // an index. Over an index row In[0], each of a row's indices' rows of the
@@ -58,6 +59,8 @@ func decomposeEmbed(o graph.Op, c *Context) ([]Prim, error) {
 		tok = x.load(0, x.op(OpAdd, ir.U32, r, x.u(1)))
 		if s := o.Attr.Span; s > 0 {
 			tok = x.op(OpRem, ir.U32, tok, x.u(uint32(s)))
+		} else {
+			tok = x.sel(ir.U32, x.op(OpLess, ir.Pred, tok, x.u(uint32(w.Rows))), tok, x.u(0))
 		}
 		in[0] = TablePos.op()
 		facts.Extents[0] = R + 1

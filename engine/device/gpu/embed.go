@@ -57,9 +57,15 @@ func (g *devTier) EmbedRows(ids []int32, pos int, dst []float32) bool {
 	if n > 1 || g.prompt {
 		kind = nn.PartEmbedRows
 	}
+	if !bs.embedDst(n, dst) {
+		g.LastErr = fmt.Sprintf("input rows of %d tokens into %d words: the destination is neither the rows' nor every stream's", n, len(dst))
+		return false
+	}
 	why := bs.embedServes()
-	if why == partServes {
-		why = bs.embedFits(ids, pos, dst)
+	if why == partServes && bs.embStreams() > 1 && len(dst) != n*bs.embW.k*bs.embStreams() {
+		// The streams past the first are the graph's too: the destination
+		// is the whole stream-major residual.
+		why = partEmbedStreams
 	}
 	if why == partServes && !g.embedBufs(bs) {
 		why = partNoRoom
@@ -74,31 +80,13 @@ func (g *devTier) EmbedRows(ids []int32, pos int, dst []float32) bool {
 	return true
 }
 
-// embedFits is why the rows of tokens ids at positions pos onwards into dst
-// are not the composer's input rows, serves where they are: each token a row
-// of the embedding, each position one of the position table's, and dst the
-// rows' width, or every stream's where the graph writes the first or every
-// stream.
-func (bs *blockScratch) embedFits(ids []int32, pos int, dst []float32) partDecline {
-	w := bs.embW
-	n, s := len(ids)*w.k, bs.embStreams()
-	switch {
-	case s > 1 && len(dst) != n*s:
-		// The streams past the first are the graph's too: the destination
-		// is the whole stream-major residual.
-		return partEmbedStreams
-	case s == 1 && len(dst) != n && len(dst) != n*bs.p.Streams():
-		return partEmbedToken
-	}
-	for _, id := range ids {
-		if id < 0 || int(id) >= w.nrows {
-			return partEmbedToken
-		}
-	}
-	if p := bs.posW; p != nil && (pos < 0 || pos+len(ids) > p.nrows) {
-		return partEmbedToken
-	}
-	return partServes
+// embedDst reports whether dst holds the input rows of n tokens: the rows'
+// width, or every stream's. A token or position past its table is no reason
+// to hand the rows back: the composer's graph reads row 0 for it on every
+// device.
+func (bs *blockScratch) embedDst(n int, dst []float32) bool {
+	n *= bs.embW.k
+	return len(dst) == n || len(dst) == n*bs.p.Streams()
 }
 
 // embStreams is how many residual streams the input rows' graph writes: its
