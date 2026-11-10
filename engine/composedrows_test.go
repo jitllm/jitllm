@@ -108,7 +108,7 @@ func composedRowsTokens(t *testing.T, m *model.Model, io ...Option) {
 			toks, logits, steps, st := rowsTokens(t, m, io, ids, gen, gpu.WithDevices(dev))
 			ns, ds := st.ServedPart(nn.ComposedSample)
 			ns += st.ReplayedPart(nn.ComposedSample)
-			if ns != steps || ds != 0 || st.StepDeclines()[nn.DeclineNoSample] != 0 || st.FormedPart(nn.ComposedSample) != 0 {
+			if ns != steps || ds != 0 || st.FormedPart(nn.ComposedSample) != 0 {
 				t.Fatalf("the composer selected the tokens of %d of %d ragged steps, declined %d, formed %d at a step (%s; last error %q)",
 					ns, steps, ds, st.FormedPart(nn.ComposedSample), declinesOf(st), st.LastErr)
 			}
