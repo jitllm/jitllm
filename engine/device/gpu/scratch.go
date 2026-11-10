@@ -358,6 +358,10 @@ func (g *devTier) reserveRowsHead(bs *blockScratch, p *nn.LayerPlan) bool {
 	if p.Vocab <= 0 || bs.ragLogits != nil {
 		return true
 	}
+	if need := g.ragOutBytes(bs, p.Vocab, p.NEmbd); !g.room(need) {
+		g.LastErr = fmt.Sprintf("rows: the logits of %d rows need %d bytes, %d of %d used", g.headRows(bs, p.Vocab), need, g.used, g.limit)
+		return false
+	}
 	defer g.scratchWin().close()
 	if err := g.allocRagOut(bs, p.Vocab, p.NEmbd); err != nil {
 		freeRagOut(bs)
