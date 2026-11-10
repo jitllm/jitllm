@@ -423,8 +423,9 @@ const (
 	// OpAppendRow is In[0]'s rows, then row Offset of Weight[0]: a marker
 	// after a picture's rows that the reference embeds through a table.
 	OpAppendRow
-	// OpFrames is the step's sound as frames: the step's picture table
-	// holding a clip's samples as f32 words, as many as the request's
+	// OpFrames is the step's sound as frames: In[0]'s samples where it has
+	// one (a sound op's), the step's picture table holding a clip's samples
+	// as f32 words where not, as many as the request's
 	// picture width (composer.RequestPicW); row t of Out[0] is the Width
 	// samples from t*Stride - Width/2 (a centred frame), each sample
 	// y[k] = x[k] - Const*x[k-1] (a preemphasis, x[-1] zero), zero past the
@@ -445,6 +446,17 @@ const (
 	// request's slot Offset to its slot Offset+1 (their row r), zero for an
 	// empty span: a question's or an option's span of a prompt.
 	OpSpanPool
+	// OpSound is the step's clip as mono samples at a rate (Out[0], one row
+	// of its Width samples, zero past the clip's outputs): the step's
+	// picture table holds the clip's header, its PCM in Sound's sample
+	// format and its resample's plan (composer.SoundTable), and each output
+	// is the sum, over its window's taps and each tap's channels, of a
+	// sample times its channel's weight in the mono mix times its phase's
+	// filter at that tap -- blended toward the next phase's sum by the
+	// output's fraction where the ratio interpolates -- libswresample's
+	// rematrix and resample (composer.SWR, composer.MonoMix), at most Taps
+	// taps times channels. A primitive.
+	OpSound
 	numOps
 )
 
@@ -504,6 +516,8 @@ func (k OpKind) String() string {
 		return "pool"
 	case OpFrames:
 		return "frames"
+	case OpSound:
+		return "sound"
 	case OpFeatureNorm:
 		return "feature_norm"
 	case OpClipMask:
@@ -895,6 +909,8 @@ type Attrs struct {
 	// without it a division takes the device's, within the gates' band like
 	// every other kernel form.
 	Exact bool
+	// Sound is OpSound's sample format (SoundU8 to SoundF64).
+	Sound uint8
 	// Pixels, PicW, PicH, Mean and Std are OpPicture's: the picture's sample
 	// format, the size it is resampled to, and each channel's mean and std;
 	// PicSide is the most a side of a picture resampled by Pillow's filters
@@ -1084,6 +1100,22 @@ const (
 	PixPaletted8
 	// PixFormats is one past the last sample format.
 	PixFormats
+)
+
+// A clip's sample formats (OpSound), as a WAV stores them, interleaved.
+const (
+	// SoundU8 is an unsigned byte a sample, 128 its zero.
+	SoundU8 uint8 = 1 + iota
+	// SoundS16, SoundS24 and SoundS32 are signed little-endian integers of
+	// 16, 24 and 32 bits.
+	SoundS16
+	SoundS24
+	SoundS32
+	// SoundF32 and SoundF64 are little-endian IEEE floats of 32 and 64 bits.
+	SoundF32
+	SoundF64
+	// SoundFormats is one past the last sample format.
+	SoundFormats
 )
 
 // A Pillow resize's passes (Attrs.PicPass).
