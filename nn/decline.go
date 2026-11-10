@@ -31,12 +31,10 @@ const (
 	DeclineRecurrent
 	DeclinePageOut
 	DeclineNoWeight
-	DeclineTable
 	DeclineNotFormed
 	DeclineISA
 	DeclineUnplaced
 	DeclineExperts
-	DeclineBidir
 	DeclineExpertsRows
 	DeclineEmbedStreams
 	NumDeclines
@@ -88,16 +86,12 @@ func (d Decline) String() string {
 		return "a history page outside the layer's arena"
 	case DeclineNoWeight:
 		return "a weight or vector the block does not hold"
-	case DeclineTable:
-		return "a table the device does not hold"
 	case DeclineNotFormed:
 		return "the composer did not form the block"
 	case DeclineUnplaced:
 		return "a block not composed for the device at its placement"
 	case DeclineExperts:
 		return "routed experts not held whole on the device (streamed, cached, run on another device or in expert pages)"
-	case DeclineBidir:
-		return "a run of rows attending both ways"
 	case DeclineExpertsRows:
 		return "routed experts in pages at a step of several rows"
 	case DeclineEmbedStreams:
