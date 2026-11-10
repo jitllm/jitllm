@@ -1,6 +1,9 @@
 package engine
 
 import (
+	"encoding/base64"
+	"encoding/binary"
+	"encoding/json"
 	"math"
 	"math/rand"
 	"os"
@@ -263,12 +266,29 @@ func TestComposedCPUExpertPagesServe(t *testing.T) {
 				return got, in
 			}
 			got, residentIn := run(cpuFaultNone)
-			med, worst, widest := cpuBandTo(t, want, got, band)
-			t.Logf("over %d steps the composed CPU is %.3f of the band from the float reference at the median, worst NMSE %.3g where the band's widest is %.3g",
-				steps, med, worst, widest)
-			if !(med <= bandRatio) || !(worst <= bandWorst*widest) {
-				t.Fatalf("the composed CPU mixture leaves the band: median ratio %.3f (bound %.1f), worst %.3g (bound %.1f x %.3g)",
-					med, bandRatio, worst, bandWorst, widest)
+			if q := q8Golden(t, file, src); q != "" {
+				seq := lcppSeq{toks[:1], toks[1:], nil}
+				d := hfBand(t, q, 0, got, seq)
+				loss := goldenApart(t, q, rowsGolden(src), seq)
+				ratios := make([]float64, len(d))
+				for i := range d {
+					ratios[i] = d[i] / band[i]
+				}
+				med, worst, widest := median(ratios), slices.Max(d), slices.Max(band)
+				t.Logf("over %d steps the composed CPU is %.3g NMSE from its numerical reference at the median (%.3f of the float floor), %.3g at worst where the floor's widest is %.3g; the reference is %.3g from the float class at the median (the quantization's loss)",
+					steps, median(d), med, worst, widest, median(loss))
+				if !(med <= bandRatio) || !(worst <= bandWorst*widest) {
+					t.Fatalf("the composed CPU mixture leaves its numerical reference: median %.3f of the float floor (bound %.1f), worst %.3g (bound %.1f x %.3g)",
+						med, bandRatio, worst, bandWorst, widest)
+				}
+			} else {
+				med, worst, widest := cpuBandTo(t, want, got, band)
+				t.Logf("over %d steps the composed CPU is %.3f of the band from the float reference at the median, worst NMSE %.3g where the band's widest is %.3g",
+					steps, med, worst, widest)
+				if !(med <= bandRatio) || !(worst <= bandWorst*widest) {
+					t.Fatalf("the composed CPU mixture leaves the band: median ratio %.3f (bound %.1f), worst %.3g (bound %.1f x %.3g)",
+						med, bandRatio, worst, bandWorst, widest)
+				}
 			}
 			paged, pagedIn := run(cpuFaultNone, WithPageBudget(1))
 			if pagedIn <= residentIn {
@@ -290,6 +310,67 @@ func TestComposedCPUExpertPagesServe(t *testing.T) {
 			t.Logf("%d page-ins under one page against %d resident, every logit identical; the wrong page held moves them %.3e", pagedIn, residentIn, far)
 		})
 	}
+}
+
+// q8Golden is the numerical reference's golden of a q8 fixture whose float
+// class has a golden (rowsGolden), "" for any other; one it lacks fails.
+func q8Golden(t *testing.T, file, src string) string {
+	t.Helper()
+	g := rowsGolden(src)
+	if !strings.HasSuffix(file, q8Suffix) || g == "" {
+		return ""
+	}
+	q := strings.TrimSuffix(g, ".json") + ".q8.json"
+	if _, err := os.Stat(q); err != nil {
+		t.Fatalf("the numerical reference of %s: %v -- run scripts/rowsgold.py experts q8", file, err)
+	}
+	return q
+}
+
+// goldenApart is each row's NMSE between two goldens' rows for seq.
+func goldenApart(t *testing.T, a, b string, seq lcppSeq) []float64 {
+	t.Helper()
+	return hfBand(t, a, 0, goldenRows(t, b, seq), seq)
+}
+
+// goldenRows is a golden's rows for seq, spread back to full rows at their
+// stride (the logits between are zero, and hfBand reads only the stride's).
+func goldenRows(t *testing.T, path string, seq lcppSeq) [][]float32 {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var g struct {
+		Stride int `json:"stride"`
+		Seqs   []struct {
+			IDs  []int32  `json:"ids"`
+			Toks []int32  `json:"toks"`
+			Rows []string `json:"rows"`
+		} `json:"seqs"`
+	}
+	if err := json.Unmarshal(raw, &g); err != nil || g.Stride < 1 {
+		t.Fatalf("%s: %v", path, err)
+	}
+	for _, gs := range g.Seqs {
+		if !slices.Equal(gs.IDs, seq.ids) || !slices.Equal(gs.Toks, seq.toks) {
+			continue
+		}
+		out := make([][]float32, len(gs.Rows))
+		for i, r := range gs.Rows {
+			b, err := base64.StdEncoding.DecodeString(r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			out[i] = make([]float32, len(b)/4*g.Stride)
+			for k := range len(b) / 4 {
+				out[i][k*g.Stride] = math.Float32frombits(binary.LittleEndian.Uint32(b[4*k:]))
+			}
+		}
+		return out
+	}
+	t.Fatalf("%s holds no sequence the gate asks for", path)
+	return nil
 }
 
 // cpuExpertPromptModels are the mixtures whose prompts and batched steps
