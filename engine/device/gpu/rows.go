@@ -416,7 +416,7 @@ func (g *devTier) prepRowsHead(bs *blockScratch, rowsHead *nn.Head, n int) bool 
 	// The composer's head over rows serves any count of them at bs's width
 	// (servedHead), formed here, outside any step; a head it does not serve
 	// is refused at the step, so the tier builds no projection of its own.
-	if g.bs.headServes(g.bs.hNorm, false, false) != partServes {
+	if g.bs.headServes(g.bs.hNorm, false) != partServes {
 		return fail(errors.New("the composer does not serve the head over rows"))
 	}
 	_, err := g.servedHead(g.bs, g.bs.hNorm, H)

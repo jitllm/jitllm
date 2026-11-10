@@ -506,7 +506,7 @@ func (g *devTier) reservedFor(part nn.Parts) *blockScratch {
 // reserved width, formed there at placement (prewarmComposedHead).
 func (g *devTier) headReserved() bool {
 	return g.reservedFor(nn.ComposedHead) != nil && g.bs != nil && g.bs.head != nil &&
-		g.bs.headServes(g.bs.hNorm, false, false) == partServes
+		g.bs.headServes(g.bs.hNorm, false) == partServes
 }
 
 // rangeComposed reports whether the composer serves, as part, every block of
@@ -541,7 +541,7 @@ func (g *devTier) composedBlock(li int, bb *blockScratch) bool {
 		why, ok := g.notComposedWhy[k]
 		if !ok {
 			why = fmt.Sprintf("block %d's prompt is not the composer's at %d rows (%s; %s): its prompts run at their own widths",
-				li, bb.rows, g.blockServes(l, li, &bb.p, bb, false, true), g.LastErr)
+				li, bb.rows, g.blockServes(l, li, &bb.p, bb, true), g.LastErr)
 			if g.notComposedWhy == nil {
 				g.notComposedWhy = map[[2]int]string{}
 			}

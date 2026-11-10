@@ -3082,7 +3082,7 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	}
 	// A head the composer does not serve on this device runs on the CPU
 	// device's composed head, never on the tier's own kernels.
-	if why := bs.headServes(bs.hNorm, false, false); why != partServes {
+	if why := bs.headServes(bs.hNorm, false); why != partServes {
 		g.giveBackHead(bs)
 		g.Declined++
 		g.LastErr = fmt.Sprintf("the composer does not serve the head on this device (%s)", DeclineName(int(why)))
@@ -4020,7 +4020,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 		case head.Graph != hb.headGraph || head.HiddenGraph != hb.headHidden:
 			headWhy = partHeadOther
 		default:
-			headWhy = hb.headServes(hNorm, false, persistOn)
+			headWhy = hb.headServes(hNorm, false)
 		}
 		if headWhy == partServes {
 			applied |= head.Stages
@@ -4443,7 +4443,7 @@ func (g *devTier) layersSession(s backend.Session) {
 			if l.nonCausal {
 				kind = nn.PartTower
 			}
-			why := g.blockServes(l, li, p, bs, persist, kind == nn.PartPrompt)
+			why := g.blockServes(l, li, p, bs, kind == nn.PartPrompt)
 			if why == partServes && R > 1 {
 				why = l.expertsServe(nrow)
 			}
