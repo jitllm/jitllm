@@ -607,9 +607,12 @@ func (g *devTier) rowsHeld() bool {
 	return ok
 }
 
-// rowsReserved reports whether every block placed on the device has its
-// ragged rows in the reserved width (rowsComposed): a step of any count of
-// rows up to it builds, forms and compiles nothing. Callers hold g.mu.
+// rowsReserved reports whether every block placed on the device that a
+// ragged step can run has its ragged rows in the reserved width
+// (rowsComposed): a step of any count of rows up to it builds, forms and
+// compiles nothing. A non-causal block takes no ragged rows (layersRows
+// refuses it): a tower's blocks run their pictures in their own geometry.
+// Callers hold g.mu.
 func (g *devTier) rowsReserved() bool {
 	bb := g.reservedFor(nn.ComposedBlock)
 	if bb == nil {
@@ -617,7 +620,7 @@ func (g *devTier) rowsReserved() bool {
 	}
 	n := 0
 	for li, l := range g.layers {
-		if l == nil || !l.ok {
+		if l == nil || !l.ok || l.nonCausal {
 			continue
 		}
 		if !g.composedBlock(li, bb) {
