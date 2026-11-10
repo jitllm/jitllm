@@ -206,7 +206,7 @@ func TestAnInstanceOnTheCPUAndOneOnACardShareTheFrames(t *testing.T) {
 			y := testInstance(t, m, len(ids)+len(more)+1, cpu, WithPageBudget(all/2))
 			defer y.Close()
 			seam(y)
-			if x.fr != y.fr {
+			if !x.fr.Shares(y.fr) {
 				x.Close()
 				t.Fatal("two instances on one CPU device page into two frames: this gate proved nothing")
 			}
