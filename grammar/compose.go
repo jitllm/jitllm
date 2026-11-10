@@ -3,6 +3,7 @@ package grammar
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -55,7 +56,10 @@ type Prop struct {
 // writes them, each converted to a value rule named after name: the
 // arguments of a family that writes each argument on its own (an XML
 // parameter, a Python keyword) rather than as one JSON object. A schema
-// with no properties has none.
+// with no properties has none. A property whose schema the converter does
+// not build (ErrUnsupported) takes any JSON value, as model.ToolGrammar
+// takes any object for a whole schema it does not build: the call is still
+// forced.
 func (b *Builder) Properties(schema []byte, name string) ([]Prop, error) {
 	if s := bytes.TrimSpace(schema); len(s) == 0 || string(s) == "null" {
 		return nil, nil
@@ -83,6 +87,9 @@ func (b *Builder) Properties(schema []byte, name string) ([]Prop, error) {
 	var out []Prop
 	for _, k := range keysOf(props) {
 		v, err := b.c.visit(props[k], name+"-"+k)
+		if errors.As(err, new(ErrUnsupported)) {
+			v, err = b.c.prim("value"), nil
+		}
 		if err != nil {
 			return nil, err
 		}
