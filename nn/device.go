@@ -847,13 +847,7 @@ type RecurrentPlan struct {
 	// heads and no state beside the convolution's window over Chans channels.
 	// Wq is x, SSMWeights.Gate is B and SSMWeights.BA is C, and the block is
 	// out_proj(C * conv(B * x)).
-	ShortConv bool
-	// Centred is a ShortConv over a whole non-causal call (LFM2's encoder,
-	// d1-omni's trunk): three taps on the rows before, at and after each
-	// row, zero past either end, and no state. A tap reads a neighbour only
-	// where the row's window holds it (nn.RowWindowDevice), so a media
-	// prefix's last row does not read the text's first.
-	Centred                bool
+	ShortConv              bool
 	NormGroups             int
 	NormBeforeGate, NoNorm bool
 	// TailLen is what the block's state carries per sequence after the delta

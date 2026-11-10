@@ -2407,7 +2407,7 @@ func (g *devTier) unserved(li int) string {
 // composer's own descriptor (bs.cRows).
 func (g *devTier) recHeld(l *layer, p *nn.LayerPlan, bs *blockScratch) bool {
 	return l.pool != nil && bs.dRows != nil && (l.pool.s[1] != nil || g.recShared && bs.cRows != nil) &&
-		!l.centred && (p.Recurrent.TailLen == 0 || tailStated(l.graph, p.Recurrent.StateLen))
+		(p.Recurrent.TailLen == 0 || tailStated(l.graph, p.Recurrent.StateLen))
 }
 
 // tailStated says graph g's delta rule reads its state at slots of n floats:
