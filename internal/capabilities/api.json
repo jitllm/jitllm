@@ -803,7 +803,7 @@
       "endpoints": [
         "/v1/systemone"
       ],
-      "when": "a file that is not a base64 data URL of 16 kHz mono 16-bit PCM WAV",
+      "when": "a file that is not a base64 data URL of a WAV of PCM (8, 16, 24 or 32 bits) or IEEE float (32 or 64 bits)",
       "message": "audio"
     },
     {
