@@ -3,6 +3,7 @@ package engine
 import (
 	"math"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/jitllm/jitllm/graph"
@@ -68,8 +69,10 @@ func ds32Violations() []c6Violation {
 					if o.Kind != graph.OpRope || len(o.Out) == 0 {
 						return false
 					}
-					n := g.Values[o.Out[0]].Name
-					return n == "idx.k.rope" || n == "idx.q.rope"
+					// The indexer's key and query rotaries, its stated
+					// programs' (Model.blockOps, "rope" and the builder's
+					// suffix); the attention's are named for their operand.
+					return strings.HasPrefix(g.Values[o.Out[0]].Name, "rope.")
 				}
 			}, func(o *graph.Op) { o.Attr.Layout = graph.RopeNorm }))
 		}},
