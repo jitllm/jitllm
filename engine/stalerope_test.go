@@ -18,8 +18,10 @@ import (
 // container with rotary sections written before revision 3, which states no
 // layout for them (jlm.FlagRopeInterleaved, jlm.FlagRopeXD) and would turn
 // Qwen3-VL's interleaved split as contiguous runs, with the upgrade command;
-// and to opening it, the split interleaved, once `jitllm upgrade`'s
-// restatement states the layout.
+// and `jitllm upgrade`'s restatement to refusing to state a layout only the
+// architecture says, which a v31 container records none of (the v30
+// migration states it: TestLegacyStatedRefusesWhatV31CannotRecover), so the
+// container is never opened with the split turned contiguous.
 func TestOpenRefusesARotaryLayoutItDoesNotState(t *testing.T) {
 	path := testmodels.Path("synth-qwen3vl.gguf")
 	if _, err := os.Stat(path); err != nil {
@@ -54,15 +56,14 @@ func TestOpenRefusesARotaryLayoutItDoesNotState(t *testing.T) {
 	if !strings.Contains(err.Error(), "jitllm upgrade "+old) {
 		t.Fatalf("the refusal names no upgrade command: %v", err)
 	}
-	if changed, err := jlm.Restate(old, convert.StateStored); err != nil || !changed {
-		t.Fatalf("restating: changed %v, %v", changed, err)
+	if changed, err := jlm.Restate(old, convert.StateStored); err == nil || changed {
+		t.Fatalf("restating a layout no record states: changed %v, %v", changed, err)
 	}
 	m, err = model.Open(old)
-	if err != nil {
-		t.Fatalf("the upgraded container: %v", err)
-	}
-	defer m.Close()
-	if !m.Cfg.RopeInterleaved {
-		t.Fatal("the upgraded container's split is not interleaved")
+	if !errors.As(err, &up) {
+		if m != nil {
+			m.Close()
+		}
+		t.Fatalf("the container opened after a restatement that stated nothing (err %v)", err)
 	}
 }
