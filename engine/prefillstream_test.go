@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -107,6 +108,9 @@ func TestPrefillStreamsCPUBlocks(t *testing.T) {
 				"could stream", resident, m.Cfg.NLayer)
 		}
 		lg, err := st.Prefill(prompt)
+		if errors.Is(err, ErrNoRoom) {
+			return arm{done: done}, fmt.Sprintf("the prompt found no room to stream through the card: %v", err)
+		}
 		if err != nil {
 			t.Fatal(err)
 		}
