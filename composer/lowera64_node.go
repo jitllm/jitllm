@@ -875,6 +875,17 @@ func (e *a64Lowerer) take(c int) {
 			}
 			continue
 		}
+		if cu.Take && cu.Init > 0 {
+			src, ix := e.ptrReg(cu.Buf, cu.From), e.xr(cu.Init-1)
+			sh := uint8(bits.TrailingZeros(uint(ElemBytes(k.Bufs[cu.Buf]))))
+			if cu.Ptr > 0 && k.Ptrs[cu.Ptr-1].Spill > 0 {
+				e.a.ADDlsl(e.gp(reloadReg), src, ix, sh)
+				e.slot(a64.A64StrX, uint8(e.gp(reloadReg)), k.Ptrs[cu.Ptr-1].Spill)
+			} else {
+				e.a.ADDlsl(e.ptrReg(cu.Buf, cu.Ptr), src, ix, sh)
+			}
+			continue
+		}
 		if cu.Take && cu.Ptr > 0 && k.Ptrs[cu.Ptr-1].Spill > 0 {
 			e.slot(a64.A64StrX, uint8(e.ptrReg(cu.Buf, cu.From)), k.Ptrs[cu.Ptr-1].Spill)
 		} else if cu.Take {

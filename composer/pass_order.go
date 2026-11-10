@@ -769,6 +769,11 @@ func (o *orderer) counts(d int) map[int]bool {
 		if l.Count > 0 && k.within(e, d) {
 			walk(l.Count - 1)
 		}
+		for _, cu := range l.Cursors {
+			if cu.Init > 0 && k.within(e, d) {
+				walk(cu.Init - 1)
+			}
+		}
 	}
 	return out
 }
@@ -782,6 +787,11 @@ func (o *orderer) countsFor(c, d int) {
 	for _, e := range k.preorder() {
 		if l := k.Loops[e]; l.Count > 0 && k.within(e, d) {
 			if n := l.Count - 1; o.home[n] == c && !o.done[n] {
+				cs = append(cs, n)
+			}
+		}
+		for _, cu := range k.Loops[e].Cursors {
+			if n := cu.Init - 1; cu.Init > 0 && k.within(e, d) && o.home[n] == c && !o.done[n] {
 				cs = append(cs, n)
 			}
 		}

@@ -164,6 +164,9 @@ func (k *Kernel) redirectMany(same map[int]int) {
 		next(&l.Span)
 		next(&l.Elem)
 		next(&l.End)
+		for j := range l.Cursors {
+			next(&l.Cursors[j].Init)
+		}
 	}
 	next(&k.Rows)
 	next(&k.Clamp)
@@ -212,6 +215,9 @@ func (k *Kernel) redirectAll(from, to int) {
 		re(&l.Span)
 		re(&l.Elem)
 		re(&l.End)
+		for j := range l.Cursors {
+			re(&l.Cursors[j].Init)
+		}
 	}
 	re(&k.Rows)
 	re(&k.Clamp)

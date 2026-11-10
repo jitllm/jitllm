@@ -84,6 +84,10 @@ type cursorer struct {
 	disp   map[int]int64
 	ptr    map[int]int
 	cursor map[int]Cursor
+	// inits is the term a loop's take adds to its source (Cursor.Init), by
+	// loop; hs the kernel's homes as the walk began.
+	inits map[int]lin
+	hs    []int
 	// only, where set, is the accesses the cursorer lays (accessID), and
 	// copied walks them on a copy of the address rather than the address.
 	only   map[int]bool
@@ -144,13 +148,14 @@ func strideGroups(k *Kernel, b int) []map[int]bool {
 }
 
 func newCursorer(k *Kernel, b int) *cursorer {
-	return &cursorer{k: k, g: newAlg(k), base: k.Bufs[b].Base, buf: b, disp: map[int]int64{}, ptr: map[int]int{}, cursor: map[int]Cursor{}}
+	return &cursorer{k: k, g: newAlg(k), base: k.Bufs[b].Base, buf: b, disp: map[int]int64{}, ptr: map[int]int{}, cursor: map[int]Cursor{}, inits: map[int]lin{}}
 }
 
 func (cu *cursorer) run() bool {
 	k := cu.k
 	live := k.Live()
 	hs := k.Homes()
+	cu.hs = hs
 	for i, nd := range k.Nodes {
 		if nd.Op == OpLoad && live[i] && k.Bufs[nd.Buf].Base == cu.base && (cu.only == nil || cu.only[accessID(i, -1)]) {
 			cu.as = append(cu.as, cAccess{access: access{node: i, store: -1}, home: hs[i], ix: cu.g.of(nd.A)})
@@ -178,6 +183,12 @@ func (cu *cursorer) run() bool {
 	if _, ok := cu.walk(-1, start, 0, cu.copied, lin{}, all, ix); !ok {
 		k.Ptrs = k.Ptrs[:ptrs]
 		return false
+	}
+	for c, t := range cu.inits {
+		if l, ok := cu.cursor[c]; ok && l.Take {
+			l.Init = cu.g.build(t) + 1
+			cu.cursor[c] = l
+		}
 	}
 	for c, l := range cu.cursor {
 		k.Loops[c].Cursors = append(k.Loops[c].Cursors, l)
@@ -310,9 +321,26 @@ func (cu *cursorer) walk(p, ptr, from int, fresh bool, pos lin, as []int, ix []l
 				qFrom = from
 			}
 		}
+		if cu.k.Copied && q == 0 && !take {
+			q, take, qFrom = cu.newPtr(), true, 0
+		}
 		walkAt := at
 		if cont {
 			walkAt = famAt[family(c)]
+		}
+		// Accesses that all add a base the loop around picks walk a copy
+		// taken at that base.
+		if !cont && !passes {
+			if t, ok := cu.invariant(c, rest, walkAt); ok {
+				if !aside {
+					q, take, qFrom, aside = cu.newPtr(), true, ptr, true
+					if fresh {
+						qFrom = from
+					}
+				}
+				cu.inits[c] = t
+				walkAt = g.merged(addLin(walkAt, t))
+			}
 		}
 		net, ok := cu.walk(c, q, 0, false, walkAt, mine, rest)
 		if !ok {
@@ -344,6 +372,85 @@ func (cu *cursorer) walk(p, ptr, from int, fresh bool, pos lin, as []int, ix []l
 	moved := copyLin(at)
 	moved.add(pos, -1)
 	return g.merged(moved), true
+}
+
+// invariant is the term past at that every access of a weight in loop c
+// adds (rest, c's iteration taken out) where no loop in c moves it and it is
+// no constant: a base the loop around picks, an expert's sheet read from the
+// selection, every node of it made before c in a scope around c, each of its
+// terms read from memory and added. False where the accesses add
+// different terms, or the element is wider than an address's scale.
+func (cu *cursorer) invariant(c int, rest []lin, at lin) (lin, bool) {
+	k, g := cu.k, cu.g
+	if k.Uninit || k.Bufs[cu.buf].Operand.Kind != OperandWeight {
+		return nil, false
+	}
+	switch ElemBytes(k.Bufs[cu.buf]) {
+	case 1, 2, 4, 8:
+	default:
+		return nil, false
+	}
+	var t lin
+	for j := range rest {
+		r := copyLin(rest[j])
+		for d := range k.Loops {
+			if d != c && k.within(d, c) {
+				if it := k.iterOf(d); it >= 0 {
+					_, r = g.coef(r, g.id(atom{node: it}))
+				}
+			}
+		}
+		r.add(at, -1)
+		r = g.merged(r)
+		delete(r, "")
+		if j == 0 {
+			t = r
+		} else if !t.equal(r) {
+			return nil, false
+		}
+	}
+	if len(t) == 0 || g.moves(t, c) {
+		return nil, false
+	}
+	// The term is a base read from memory -- an expert's sheet, a page --
+	// added, never subtracted: a take's index is the term's unsigned value
+	// widened to an address.
+	for m, f := range t {
+		loaded := false
+		for _, a := range monoIDs(m) {
+			for _, n := range g.nodes(a) {
+				loaded = loaded || cu.loaded(n)
+			}
+		}
+		if f < 0 || !loaded {
+			return nil, false
+		}
+	}
+	for m := range t {
+		for _, a := range monoIDs(m) {
+			for _, n := range g.nodes(a) {
+				if h := cu.hs[n]; h >= 0 && (h == c || !k.within(c, h)) {
+					return nil, false
+				}
+			}
+		}
+	}
+	return t, true
+}
+
+// loaded reports whether node n is, or is computed from, a value loaded from
+// memory.
+func (cu *cursorer) loaded(n int) bool {
+	nd := cu.k.Nodes[n]
+	if nd.Op == OpLoad {
+		return true
+	}
+	for _, a := range cu.k.Operands(&nd) {
+		if cu.loaded(*a) {
+			return true
+		}
+	}
+	return false
 }
 
 // familyMoves reports whether a loop of family f among loops moves the

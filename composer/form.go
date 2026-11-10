@@ -131,7 +131,8 @@ func (r *Registry) formWith(req Request, prof Profile) ([]*Kernel, error) {
 			// it wrote: the card reads it between the two to fault the pages
 			// in (Request.Paged), so nothing is fused into it.
 			k.Unfused = k.Unfused || k.readsTable(TableExperts)
-			k.Crowded, k.Folds, k.Unvector = sp.crowded[k.at()], foldsAPass(p), sp.unvector[k.Of]
+			k.Crowded, k.Folds, k.Unvector, k.Uninit = sp.crowded[k.at()], foldsAPass(p), sp.unvector[k.Of], sp.uninit[k.at()]
+			k.Copied = sp.copied[k.at()]
 			k.Apart = req.Apart
 			k.Own = k.ownWrites()
 			k.Capacity = liveOf(p, req.Step, req.Graph)

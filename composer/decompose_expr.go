@@ -134,11 +134,17 @@ type exprSplit struct {
 	// walking each row group through every sub-block (Streams).
 	unfused, unpaired, uncursored, unsplit, unvector map[int]bool
 	unwide, unstreamed, crowded                      map[KernelAt]bool
-	unjammed                                         map[int]int
+	// uninit is the kernels formed with no initializer take (Cursor.Init),
+	// the first a refusal gives up.
+	uninit map[KernelAt]bool
+	// copied is the kernels formed with their bases walked by copies
+	// (Kernel.Copied), what a refusal tries before uninit.
+	copied   map[KernelAt]bool
+	unjammed map[int]int
 }
 
 func newExprSplit() *exprSplit {
-	return &exprSplit{terms: map[exprAt]bool{}, whole: map[int][]exprSize{}, unfused: map[int]bool{}, unjammed: map[int]int{}, unpaired: map[int]bool{}, unwide: map[KernelAt]bool{}, uncursored: map[int]bool{}, unsplit: map[int]bool{}, unvector: map[int]bool{}, unstreamed: map[KernelAt]bool{}, crowded: map[KernelAt]bool{}}
+	return &exprSplit{terms: map[exprAt]bool{}, whole: map[int][]exprSize{}, unfused: map[int]bool{}, unjammed: map[int]int{}, unpaired: map[int]bool{}, unwide: map[KernelAt]bool{}, uninit: map[KernelAt]bool{}, copied: map[KernelAt]bool{}, uncursored: map[int]bool{}, unsplit: map[int]bool{}, unvector: map[int]bool{}, unstreamed: map[KernelAt]bool{}, crowded: map[KernelAt]bool{}}
 }
 
 // splitRefused forms a part whose refused kernel walked a weight's planes
@@ -159,6 +165,17 @@ func (sp *exprSplit) splitRefused(err error) bool {
 		return false
 	}
 	more := false
+	for _, at := range pe.Inited {
+		switch {
+		case !sp.copied[at]:
+			sp.copied[at], more = true, true
+		case !sp.uninit[at]:
+			sp.uninit[at], more = true, true
+		}
+	}
+	if more {
+		return true
+	}
 	for _, at := range pe.Crowded {
 		if !sp.crowded[at] {
 			sp.crowded[at], more = true, true

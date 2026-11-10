@@ -106,6 +106,18 @@ func (k *Kernel) at() KernelAt {
 	return KernelAt{Of: k.Of}
 }
 
+// inited reports whether a cursor of k takes its copy at an initializer.
+func (k *Kernel) inited() bool {
+	for _, l := range k.Loops {
+		for _, cu := range l.Cursors {
+			if cu.Init > 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // ErrRegisterPressure is a kernel Regs refuses for holding more values live
 // at once than the device's registers.
 const ErrRegisterPressure registerError = "register pressure"
@@ -129,6 +141,9 @@ type PressureError struct {
 	// Split is the parts a refused kernel cut its byte dots' runs in
 	// (HalfSplit).
 	Split []int
+	// Inited is the refused kernels whose cursors took a copy at an
+	// initializer (Cursor.Init).
+	Inited []KernelAt
 	// Streamed is the refused kernels that walked along the rows a
 	// sub-block at a time (Streams), Crowded those of them whose walk held
 	// every plane in one rows loop.
@@ -170,6 +185,9 @@ func (p Regs) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			}
 			if k.Split {
 				refused.Split = append(refused.Split, k.Of)
+			}
+			if k.inited() {
+				refused.Inited = append(refused.Inited, k.at())
 			}
 			return nil, false, nil
 		}
@@ -610,6 +628,14 @@ func (b *binder86) loopSpan(c, r int) span {
 	k := b.k
 	s := span{2*b.start.of(c) + 1, 2 * b.end.of(c)}
 	l := k.Loops[c]
+	// The counter is set before the loop's takes read their initializers
+	// (x86Lowerer.take): it is held from the loop's start, where they are
+	// last read.
+	for _, cu := range l.Cursors {
+		if cu.Init > 0 {
+			s.from = 2 * b.start.of(c)
+		}
+	}
 	if v := c - 1; v >= 0 && l.Of == c && k.Loops[v].Lanes > 0 && l.Count > 0 && k.Nodes[l.Count-1].Op != OpConst && k.passes() &&
 		r != k.Loops[v].Reg-1 && r != k.Nodes[l.Count-1].Reg-1 {
 		if d, ok := b.def.get(l.Count - 1); ok && d < b.start.of(v) {
@@ -628,8 +654,15 @@ func (b *binder86) ptrSpan(ptr int) span {
 			if cu.Ptr != ptr {
 				continue
 			}
-			if s.from < 0 || 2*b.start.of(c)+1 < s.from {
-				s.from = 2*b.start.of(c) + 1
+			// A take that adds an initializer reads it as the copy is
+			// written: the copy is held from the loop's start, where the
+			// initializer is last read, so the two take different registers.
+			from := 2*b.start.of(c) + 1
+			if cu.Init > 0 {
+				from--
+			}
+			if s.from < 0 || from < s.from {
+				s.from = from
 			}
 			s.to = max(s.to, 2*b.end.of(c))
 		}
@@ -726,6 +759,11 @@ func (b *binder86) lives() {
 			l := k.Loops[e.I]
 			if l.Count > 0 {
 				use(l.Count-1, pos, l.Parent)
+			}
+			for _, cu := range l.Cursors {
+				if cu.Init > 0 {
+					use(cu.Init-1, pos, l.Parent)
+				}
 			}
 			open = append(open, e.I)
 		}
@@ -1308,7 +1346,7 @@ func (k *Kernel) offsetGroups(lastLoop map[int]int) map[int]offGroup {
 			if cu.Take {
 				sources[[2]int{cu.Buf, cu.From}] = true
 			}
-			if cu.Ptr == 0 {
+			if cu.Ptr == 0 || cu.Init > 0 {
 				continue
 			}
 			if cu.Take {
