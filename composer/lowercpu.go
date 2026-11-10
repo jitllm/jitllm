@@ -570,6 +570,10 @@ func (e *x86Lowerer) node(i int) {
 	case OpAddSub:
 		a.VADDSUBPS(e.reg(i), e.reg(nd.A), e.reg(nd.B))
 	case OpSar:
+		if e.gpr(i) {
+			e.integer(i)
+			return
+		}
 		if k.Nodes[nd.B].Op != OpConst && !e.words[nd.B] {
 			a.MOVStore(shiftCount(), e.reg(nd.B))
 			a.VPSRADMem(e.reg(i), e.reg(nd.A), shiftCount())
@@ -963,9 +967,13 @@ func (e *x86Lowerer) shiftCL(op Op, dst, x, y x86.Reg) {
 			a.MOVQ(x86.RCX, y)
 		}
 	}
-	if op == OpShr {
+	switch op {
+	case OpShr:
 		a.SHRCL(reloadReg)
-	} else {
+	case OpSar:
+		a.MOVSXD(reloadReg, reloadReg)
+		a.SARCL(reloadReg)
+	default:
 		a.SHLCL(reloadReg)
 	}
 	a.MOVLoad(x86.RCX, shiftCount())
@@ -1082,6 +1090,56 @@ func (e *x86Lowerer) divReg(op Op, dst, x, y x86.Reg, c uint32) {
 	a.MOVQ(dst, reloadReg)
 }
 
+// idivReg is divReg signed: x and y sign-extended to 64 bits, so no
+// quotient overflows (the least 32-bit value by -1 is cut back as 32-bit
+// division wraps it), and a divisor of zero gives all ones and x as the
+// unsigned division does.
+func (e *x86Lowerer) idivReg(op Op, dst, x, y x86.Reg) {
+	a := e.a
+	a.MOVStore(divSave(0), x86.RAX)
+	a.MOVStore(divSave(1), x86.RDX)
+	load := func(to, r x86.Reg) {
+		switch r {
+		case x86.RAX:
+			a.MOVLLoad(to, divSave(0))
+		case x86.RDX:
+			a.MOVLLoad(to, divSave(1))
+		default:
+			a.MOVL(to, r)
+		}
+	}
+	if x == reloadReg {
+		load(x86.RAX, x)
+		if y != reloadReg {
+			load(reloadReg, y)
+		}
+	} else {
+		load(reloadReg, y)
+		load(x86.RAX, x)
+	}
+	a.MOVSXD(x86.RAX, x86.RAX)
+	a.MOVSXD(reloadReg, reloadReg)
+	zero, done := a.Label(), a.Label()
+	a.TESTQ(reloadReg, reloadReg)
+	a.JZ(zero)
+	a.CQO()
+	a.IDIVQ(reloadReg)
+	a.TESTQ(reloadReg, reloadReg)
+	a.JNZ(done)
+	a.Bind(zero)
+	a.MOVL(x86.RDX, x86.RAX)
+	a.MOVLimm(x86.RAX, ^uint32(0))
+	a.Bind(done)
+	if op == OpDiv {
+		a.MOVL(reloadReg, x86.RAX)
+	} else {
+		a.MOVL(reloadReg, x86.RDX)
+	}
+	a.MOVLoad(x86.RAX, divSave(0))
+	a.MOVLoad(x86.RDX, divSave(1))
+	a.MOVQ(dst, reloadReg)
+}
+
 // gpr reports whether node i is held in a general register: an integer a
 // vector register does not hold.
 func (e *x86Lowerer) gpr(i int) bool {
@@ -1177,6 +1235,19 @@ func (e *x86Lowerer) integer(i int) {
 			e.divConst(nd.Op, dst, src, uint32(c.Imm))
 			return
 		}
+		if nd.Op == OpDiv || nd.Op == OpRem {
+			switch {
+			case nd.Type == ir.U32 && c.Imm != 0:
+				e.divReg(nd.Op, dst, src, reloadReg, uint32(c.Imm))
+			case nd.Type == ir.U32:
+				a.MOVLimm(reloadReg, 0)
+				e.divReg(nd.Op, dst, src, reloadReg, 0)
+			default:
+				a.MOVLimm(reloadReg, uint32(c.Imm))
+				e.idivReg(nd.Op, dst, src, reloadReg)
+			}
+			return
+		}
 		if nd.Op == OpMul {
 			a.IMULimm(dst, src, imm)
 		} else {
@@ -1188,6 +1259,9 @@ func (e *x86Lowerer) integer(i int) {
 				a.SHRimm(dst, byte(c.Imm))
 			case OpShl:
 				a.SHLimm(dst, byte(c.Imm))
+			case OpSar:
+				a.MOVSXD(dst, dst)
+				a.SARimm(dst, byte(c.Imm))
 			case OpAnd:
 				a.ANDimm32(dst, imm)
 			case OpAdd:
@@ -1222,7 +1296,7 @@ func (e *x86Lowerer) integer(i int) {
 			x = e.reg(A)
 		}
 		y := e.reg(B)
-		if (nd.Op == OpShr || nd.Op == OpShl) && e.isa&x86.ISABMI2 == 0 {
+		if (nd.Op == OpShr || nd.Op == OpShl || nd.Op == OpSar) && e.isa&x86.ISABMI2 == 0 {
 			e.shiftCL(nd.Op, dst, x, y)
 			if nd.Op == OpShl {
 				a.MOVL(dst, dst)
@@ -1233,11 +1307,18 @@ func (e *x86Lowerer) integer(i int) {
 			e.divReg(nd.Op, dst, x, y, 0)
 			return
 		}
+		if nd.Op == OpDiv || nd.Op == OpRem {
+			e.idivReg(nd.Op, dst, x, y)
+			return
+		}
 		switch nd.Op {
 		case OpShr:
 			a.SHRX(dst, x, y)
 		case OpShl:
 			a.SHLX(dst, x, y)
+		case OpSar:
+			a.MOVSXD(reloadReg, x)
+			a.SARX(dst, reloadReg, y)
 		case OpSub:
 			if dst == y {
 				a.NEGQ(dst)
@@ -1285,7 +1366,7 @@ func (e *x86Lowerer) integer(i int) {
 		}
 	}
 	switch nd.Op {
-	case OpAdd, OpSub, OpMul, OpShl, OpXor, OpOr, OpMin, OpMax:
+	case OpAdd, OpSub, OpMul, OpShl, OpSar, OpXor, OpOr, OpMin, OpMax:
 		// An immediate sign-extends: xor or or by one with its top bit set
 		// sets the high half too.
 		a.MOVL(dst, dst)
