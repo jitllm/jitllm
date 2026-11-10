@@ -64,12 +64,28 @@ func TestComposedCPUBlocksServe(t *testing.T) {
 			}
 			defer m.Close()
 			toks := cpuTokens(t, m, steps, withKVPage(page))
+			// A transformers golden holds its own text's sequences.
+			if g := rowsGolden(fixtureSource(testmodels.Path(file))); g != "" {
+				toks = goldenIDs(t, g, steps)
+			}
 			want, band := cpuReference(t, path, fixtureSource(testmodels.Path(file)), page, toks)
 			got := cpuLogits(t, m, toks, cpuFaultNone, true, withKVPage(page))
 			med, worst, widest := cpuBandTo(t, want, got, band)
 			_, agree := cpuCompare(want, got)
 			t.Logf("over %d steps the composed CPU is %.3f of the band from the float reference at the median, worst NMSE %.3g where the band's widest is %.3g; argmax agrees with the reference %d/%d",
 				steps, med, worst, widest, agree, steps)
+			// A q8 fixture's numerical reference is its class run as the
+			// container's Q8_0 runs (scripts/rowsgold.py experts q8), at the
+			// float floor, as the pages gate holds it.
+			if q := q8Golden(t, file, fixtureSource(testmodels.Path(file))); q != "" {
+				d := hfBand(t, q, 0, got, lcppSeq{toks[:1], toks[1:], nil})
+				ratios := make([]float64, len(d))
+				for i := range d {
+					ratios[i] = d[i] / band[i]
+				}
+				med, worst = median(ratios), slices.Max(d)
+				t.Logf("against its numerical reference: %.3f of the float floor at the median, worst %.3g", med, worst)
+			}
 			if !(med <= bandRatio) || !(worst <= bandWorst*widest) {
 				t.Fatalf("the composed CPU blocks leave the band: median ratio %.3f (bound %.1f), worst %.3g (bound %.1f x %.3g)",
 					med, bandRatio, worst, bandWorst, widest)
