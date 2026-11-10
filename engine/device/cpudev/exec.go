@@ -440,17 +440,15 @@ func (e *Exec) FormGraph(p PartPlan) (*Form, error) {
 	return e.comp.Form(req, p.Graph, p.Rows, true, false, false)
 }
 
-// FormPart is p composed as a part the device serves, or why not: the front
-// end states no graph (None), the host's instructions lower no form, or the
-// composer declines it.
+// FormPart is p composed as a part the device serves, or why not: the host's
+// instructions lower no form, or the composer declines it. A part the model
+// has none of is not composed.
 func (e *Exec) FormPart(p PartPlan) Part {
-	if p.Skip {
+	if p.Skip || p.Graph == nil {
 		return Part{}
 	}
 	part := Part{Composed: true}
 	switch {
-	case p.Graph == nil:
-		part.Why = p.None
 	case !e.comp.Lowers():
 		part.Why = nn.DeclineISA
 	default:

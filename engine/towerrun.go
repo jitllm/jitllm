@@ -132,15 +132,15 @@ func (in *Instance) newTowerRun(tg *model.TowerGraphs, base int, t *jlm.Tower) (
 	if tg.Chain {
 		hn = tg.Head.Values[tg.Head.In[0]].Rows
 		for _, g := range tg.Blocks {
-			chain = append(chain, ts.partPlan(g, nn.DeclineNoGraph, g.Values[g.In[0]].Rows, in.m.TowerFormats(g)))
+			chain = append(chain, ts.partPlan(g, g.Values[g.In[0]].Rows, in.m.TowerFormats(g)))
 		}
 	}
-	plans := nn.TowerPlans{Head: ts.partPlan(tg.Head, nn.DeclineNoGraph, hn, nil), Chain: chain}
+	plans := nn.TowerPlans{Head: ts.partPlan(tg.Head, hn, nil), Chain: chain}
 	// A video class's entry is class len(tg.Classes)+i of the parts'.
 	for _, cl := range append(tg.Classes[:len(tg.Classes):len(tg.Classes)], tg.Videos...) {
 		e := map[uint8]nn.PartPlan{}
 		for px, g := range cl.Entry {
-			e[px] = ts.partPlan(g, nn.DeclineNoGraph, cl.Rows, nil)
+			e[px] = ts.partPlan(g, cl.Rows, nil)
 		}
 		plans.Entry = append(plans.Entry, e)
 		var band map[uint8]nn.PartPlan
@@ -148,7 +148,7 @@ func (in *Instance) newTowerRun(tg *model.TowerGraphs, base int, t *jlm.Tower) (
 			if band == nil {
 				band = map[uint8]nn.PartPlan{}
 			}
-			band[px] = ts.partPlan(g, nn.DeclineNoGraph, cl.Rows, nil)
+			band[px] = ts.partPlan(g, cl.Rows, nil)
 		}
 		if band != nil {
 			plans.Acc = max(plans.Acc, cl.Pic.Area()*3)
@@ -159,7 +159,7 @@ func (in *Instance) newTowerRun(tg *model.TowerGraphs, base int, t *jlm.Tower) (
 	}
 	tapsW := make([]nn.Tensors, len(tg.Taps))
 	for j, g := range tg.Taps {
-		plans.Taps = append(plans.Taps, in.partPlan(g, nn.DeclineNoGraph, n, in.m.TowerTapFormats(int32(tg.TapBlocks[j]), g)))
+		plans.Taps = append(plans.Taps, in.partPlan(g, n, in.m.TowerTapFormats(int32(tg.TapBlocks[j]), g)))
 		tapsW[j] = &ts.dense.TowerTaps[j]
 	}
 	parts, err := ts.places[routeLanes].(nn.TowerPlacer).PlaceTower(plans, &ts.dense.TowerDense, tapsW)

@@ -4,7 +4,6 @@ import (
 	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/graph"
-	"github.com/jitllm/jitllm/nn"
 )
 
 // towerForm is graph g composed on the instance's CPU execution at rows
@@ -13,5 +12,5 @@ import (
 func (s *Instance) towerForm(g *graph.Graph, rows int, over map[jlm.Role]jlm.Type) (*cpudev.Form, error) {
 	x := execOf(s)
 	defer x.Composer().Place()()
-	return x.FormGraph(s.partPlan(g, nn.DeclineNoGraph, rows, over))
+	return x.FormGraph(s.partPlan(g, rows, over))
 }

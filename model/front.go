@@ -17,8 +17,9 @@ import (
 // graph of generic ops of each block, the head and the input rows, built from
 // what the container states and nothing else: no graph here asks what family
 // a model is. A block whose features the op language does not state yet has
-// no graph, and Uncovered says why by name; main's runtime runs every model
-// whatever its graphs are, so a missing graph refuses nothing at Open.
+// no graph, and Uncovered says why by name; the devices run only what the
+// graphs state, so Open refuses a model with a part the front end states no
+// graph for (Unstated).
 
 // Uncovered is why the front end states no graph for a block, the head or
 // the input rows, Covered where it does: a feature the op language does not
@@ -257,6 +258,35 @@ func (m *Model) Uncovered(li int) Uncovered {
 func (m *Model) UncoveredErr(li int) error {
 	_, err := m.UncoveredAt(li)
 	return err
+}
+
+// Unstated is why the front end states no graph for a part the model has --
+// a block, the head where it projects to its vocabulary, the input rows, the
+// readout -- nil where it states each: the devices run only what the graphs
+// state, so such a model runs nowhere and Open refuses it, naming the part.
+func (m *Model) Unstated() error {
+	f := m.FrontGraphs()
+	refuse := func(what string, why Uncovered, err error) error {
+		if err != nil {
+			return fmt.Errorf("model: the front end states no graph for %s: %s: %w", what, why, err)
+		}
+		return fmt.Errorf("model: the front end states no graph for %s: %s", what, why)
+	}
+	for li := range m.Cfg.NLayer + m.Cfg.NMTP {
+		if (Composing{m.Container, m}).BlockGraph(li) == nil {
+			why, err := m.UncoveredAt(li)
+			return refuse(fmt.Sprintf("block %d", li), why, err)
+		}
+	}
+	switch {
+	case f.CpuHead == nil && f.HeadWhy != UncoveredPooling:
+		return refuse("the head", f.HeadWhy, f.headErr)
+	case f.CpuEmbed == nil:
+		return refuse("the input rows", f.EmbedWhy, f.CpuInErr)
+	case f.Pool == nil && f.poolWhy != Covered:
+		return refuse("the readout", f.poolWhy, f.poolErr)
+	}
+	return nil
 }
 
 func (m *Model) UncoveredAt(li int) (Uncovered, error) {
