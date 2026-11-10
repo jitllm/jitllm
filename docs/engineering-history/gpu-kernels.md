@@ -6336,6 +6336,21 @@ on chip (norm into the matvec's activation, the reduce into its consumer) and
 so removes phases, which is the composer's next step rather than this one.
 Off by default (RULE 6: a clear regression).
 
+Measured again once the persistent block runs the composed forms (the
+decline that kept a composed block on per-op launches gone): V100, CUDA,
+Llama-3.2-1B Q4_K_M, in-process `verify -ab`, n=21 rounds, the split tuner
+off, one pass on a card whose host was running another job's CPU gates:
+
+| depth | A/A | persistent vs per-op | dependency counters vs per-op |
+|---|---|---|---|
+| 0 | 0.9964 (IQR 1.9%) | 0.9614 (0.9%) | 0.9401 (1.0%) |
+| 512 | 0.9954 (1.7%) | 0.9608 (1.0%) | 0.9428 (0.6%) |
+
+396 persistent kernels a run (429 with counters at depth 0) carrying 996
+per-op launches in 996 phases, 7 plans built, none fell back: composed, a
+block is still one phase a launch, and the loss is the barrier's for the
+launch boundary it replaces, as above. Both stay off.
+
 ## The dependency-counter block: correct, and slower than both
 
 `Config.PersistDeps` (`gpu.WithPersistDeps`, `JITLLM_GPU_PERSIST=deps`;
