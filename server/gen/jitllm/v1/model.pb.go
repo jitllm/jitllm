@@ -279,7 +279,6 @@ type ModelInfo struct {
 	ModelId       string                 `protobuf:"bytes,1,opt,name=model_id,json=modelId,proto3" json:"model_id,omitempty"`
 	Path          string                 `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
 	Name          string                 `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
-	Architecture  string                 `protobuf:"bytes,4,opt,name=architecture,proto3" json:"architecture,omitempty"`
 	BlockCount    int32                  `protobuf:"varint,5,opt,name=block_count,json=blockCount,proto3" json:"block_count,omitempty"`
 	EmbeddingDim  int32                  `protobuf:"varint,6,opt,name=embedding_dim,json=embeddingDim,proto3" json:"embedding_dim,omitempty"`
 	ContextLength int32                  `protobuf:"varint,7,opt,name=context_length,json=contextLength,proto3" json:"context_length,omitempty"`
@@ -381,13 +380,6 @@ func (x *ModelInfo) GetPath() string {
 func (x *ModelInfo) GetName() string {
 	if x != nil {
 		return x.Name
-	}
-	return ""
-}
-
-func (x *ModelInfo) GetArchitecture() string {
-	if x != nil {
-		return x.Architecture
 	}
 	return ""
 }
@@ -1739,12 +1731,11 @@ const file_jitllm_v1_model_proto_rawDesc = "" +
 	"\bmodel_id\x18\t \x01(\tR\amodelId\x12\"\n" +
 	"\fcapabilities\x18\n" +
 	" \x03(\tR\fcapabilities\x12%\n" +
-	"\x0econtext_length\x18\v \x01(\x05R\rcontextLength\"\xd5\a\n" +
+	"\x0econtext_length\x18\v \x01(\x05R\rcontextLength\"\xc5\a\n" +
 	"\tModelInfo\x12\x19\n" +
 	"\bmodel_id\x18\x01 \x01(\tR\amodelId\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\x12\x12\n" +
-	"\x04name\x18\x03 \x01(\tR\x04name\x12\"\n" +
-	"\farchitecture\x18\x04 \x01(\tR\farchitecture\x12\x1f\n" +
+	"\x04name\x18\x03 \x01(\tR\x04name\x12\x1f\n" +
 	"\vblock_count\x18\x05 \x01(\x05R\n" +
 	"blockCount\x12#\n" +
 	"\rembedding_dim\x18\x06 \x01(\x05R\fembeddingDim\x12%\n" +
@@ -1769,7 +1760,7 @@ const file_jitllm_v1_model_proto_rawDesc = "" +
 	"\aencoder\x18\x17 \x01(\bR\aencoder\x12\x18\n" +
 	"\aaliases\x18\x18 \x03(\tR\aaliases\x12&\n" +
 	"\x0fdefault_max_seq\x18\x19 \x01(\x05R\rdefaultMaxSeq\x12\"\n" +
-	"\fcapabilities\x18\x1a \x03(\tR\fcapabilities\"R\n" +
+	"\fcapabilities\x18\x1a \x03(\tR\fcapabilitiesJ\x04\b\x04\x10\x05R\farchitecture\"R\n" +
 	"\x11ListModelsRequest\x12\x1c\n" +
 	"\tdirectory\x18\x01 \x01(\tR\tdirectory\x12\x1f\n" +
 	"\vloaded_only\x18\x02 \x01(\bR\n" +

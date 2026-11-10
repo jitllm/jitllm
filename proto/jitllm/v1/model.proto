@@ -90,7 +90,9 @@ message ModelInfo {
   string path = 2;
   string name = 3;
 
-  string architecture = 4;
+  // The container names no architecture: the model is its stated graph.
+  reserved 4;
+  reserved "architecture";
   int32 block_count = 5;
   int32 embedding_dim = 6;
   int32 context_length = 7;
