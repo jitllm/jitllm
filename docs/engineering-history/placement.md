@@ -4697,3 +4697,16 @@ way, each traced on the card before it was changed.
 
 After all three the talking model holds the card on every turn (7
 promotions, 5 demotions over three turns) and the pinned arm runs.
+
+## Closed: the head declined on a device its blocks filled
+
+The output projection is placed after the blocks, so on a budget that held
+every block and not the projection beside them the placement kept the blocks
+and left the projection home: a 9.7 GB decision model on a 16 GB unified device
+put all its blocks on the card and the 1.1 GB projection was declined for room.
+placeHead priced the trade (blocks given up while their reads sum to less than
+the projection's, less a crossing) only on a device already partial, on the
+argument that a full device would gain a seam; the seam is the crossing the
+price already charges. With every block resident and nothing left to stream,
+the projection now buys its room with the last blocks once that crossing is
+paid (`TestTheHeadBuysItsRoomOnAFullDevice`, which fails on the old rule).
