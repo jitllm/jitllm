@@ -94,7 +94,7 @@ func contains(s, sub string) bool {
 // whatever case its extension is written in (the desktop catalog matches .JLM
 // case-insensitively).
 func TestAnUpperCaseExtensionIsStillAContainer(t *testing.T) {
-	src := testmodels.Path("stories260K.jlm")
+	src := jlmOf(t, testmodels.Path("stories260K.jlm"))
 	b, err := os.ReadFile(src)
 	if err != nil {
 		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- RULE 11, fetch it; this gate proves nothing without it", err)

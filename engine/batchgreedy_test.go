@@ -17,7 +17,7 @@ import (
 // the same device, and demands the same tokens per row. A row that read another
 // row's history, or its own at the wrong base, parts from its solo run.
 func TestForwardBatchGreedyMatchesEachSequenceAlone(t *testing.T) {
-	p := testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.jlm")
+	p := jlmOf(t, testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.jlm"))
 	if _, err := os.Stat(p); err != nil {
 		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
