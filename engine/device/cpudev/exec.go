@@ -120,7 +120,7 @@ func (e *Exec) Place(n int, ex Lease, planes [2][]float32, nExpert int, prof boo
 // Compose composes block li from p: the form of one row and the rows'
 // form, through the model's keyed cache, counted (Composed).
 func (e *Exec) Compose(li int, p nn.BlockSpec) {
-	cb := &Block{Why: p.Why}
+	cb := &Block{Why: p.Why, Err: p.Err}
 	e.blocks[li] = cb
 	if !e.comp.Lowers() {
 		cb.Why = nn.DeclineISA

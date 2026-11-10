@@ -144,7 +144,8 @@ func (s *Instance) blockSpec(li int) nn.BlockSpec {
 // specOf is blockSpec over g: block li's graph, or a half of it cut at its
 // routed experts (cutBlock).
 func (s *Instance) specOf(li int, g *graph.Graph) nn.BlockSpec {
-	p := nn.BlockSpec{Why: s.blockWhy(li), Rec: s.c.LayerKind(li).Recurrent()}
+	p := nn.BlockSpec{Rec: s.c.LayerKind(li).Recurrent()}
+	p.Why, p.Err = s.blockErr(li)
 	if p.Why != nn.DeclineServes {
 		return p
 	}
@@ -226,14 +227,14 @@ func (s *kvPages) arenaSlots() int {
 	return 0
 }
 
-// blockWhy is what keeps block li off the composer's CPU path before it is
-// asked, as the model and its history state it: no graph, an input the
-// device is handed none of, a bank with no expert pages (the forms read a
-// bank as one view of its experts in the frames' expert pages,
-// jlm.Frames.BankView), a recurrent block with no state, a history format
-// the forms do not read (the CPU keeps a history binary16 itself,
-// composer.Halves, or at f32 without that pass) or pages outside an arena.
-func (s *Instance) blockWhy(li int) nn.Decline {
+// blockErr is what keeps block li off the composer's CPU path before it is
+// asked, as the model and its history state it, nil where nothing does: no
+// graph, an input the device is handed none of, a bank with no expert pages
+// (the forms read a bank as one view of its experts in the frames' expert
+// pages, jlm.Frames.BankView), a recurrent block with no state -- each the
+// instance's statement broken, named -- or a paged history with no arena,
+// one with no room for its pages (DeclineNoRoom).
+func (s *Instance) blockErr(li int) (nn.Decline, error) {
 	c := s.c
 	g := s.m.Composing().BlockGraph(li)
 	// A block sharing another's history reads its source's pages.
@@ -241,17 +242,18 @@ func (s *Instance) blockWhy(li int) nn.Decline {
 	l := &s.m.Layers[li]
 	switch {
 	case g == nil:
-		return nn.DeclineNoGraph
+		return nn.DeclineNotFormed, fmt.Errorf("block %d: the front end states no graph for it", li)
 	case len(g.Out) != c.Streams() || len(g.In) > len(g.Out)+1 || len(g.In) > len(g.Out) && c.SideWidth() == 0:
-		return nn.DeclineFeeds
+		return nn.DeclineNotFormed, fmt.Errorf("block %d: its graph reads %d inputs and writes %d streams, the model %d streams and a side input %d wide",
+			li, len(g.In), len(g.Out), c.Streams(), c.SideWidth())
 	case c.MoEAt(li) && (s.m.Container == nil ||
 		!s.places[routeLanes].(nn.BankViewer).BankViews(li, len(s.m.Layers), [3]*jlm.Entry{l.Gate.E, l.Up.E, l.Down.E}) || l.Up.E == nil || l.Down.E == nil):
-		return nn.DeclineExperts
+		return nn.DeclineNotFormed, fmt.Errorf("block %d: its expert banks have no view in the frames' expert pages", li)
 	case c.LayerKind(li).Recurrent() && !s.keepsRec(li):
-		return nn.DeclineRecurrent
+		return nn.DeclineNotFormed, fmt.Errorf("block %d: a recurrent block whose state the instance keeps none of", li)
 	case pg.p > 0 && pg.arena() == nil:
 		// A paged history with no arena is one with no room for its pages.
-		return nn.DeclineNoRoom
+		return nn.DeclineNoRoom, nil
 	}
-	return nn.DeclineServes
+	return nn.DeclineServes, nil
 }

@@ -114,6 +114,9 @@ type Block struct {
 	// that differ by their slice alone share a form.
 	SideOff int
 	Why     nn.Decline
+	// Err is what broke the block's statement, where that is why
+	// (nn.BlockSpec.Err).
+	Err error
 	// RowsWhy is why the rows' form is not served, where it is not.
 	RowsWhy nn.Decline
 	// Bidir says the block attends bidirectionally inside a prompt's runs,
