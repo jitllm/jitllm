@@ -161,8 +161,11 @@ func StateStored(f *jlm.File, jc *jlm.Config) (bool, error) {
 			return ok
 		})
 	}
+	// What a revision states it states from the architecture, which a v31
+	// container records none of: the v30 migration stated it (LegacyStated).
 	if !rev {
-		StateRevision(c)
+		return false, fmt.Errorf("a container below revision %d states what only its architecture said, "+
+			"and v31 records no architecture: convert the model again", jlm.StatementRevision)
 	}
 	if !sel {
 		if err := StateSelection(c.Config, func(r jlm.Role, li int32) bool {
