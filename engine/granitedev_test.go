@@ -154,7 +154,9 @@ func TestGraniteOnEveryDevice(t *testing.T) {
 							e = max(e, logitNMSE(bad[i], host[i]))
 						}
 						t.Logf("violation %q on %s: worst logit NMSE %.3e (%.0fx the band)", v.name, dev, e, e/band)
-						if !(e > 10*band) {
+						// The arm's own check refuses past one band; three leave
+						// a clean run's spread room on either side.
+						if !(e > 3*band) {
 							t.Errorf("%s: the gate cannot see it -- worst NMSE %.3e against a band of %.3e",
 								v.name, e, band)
 						}
