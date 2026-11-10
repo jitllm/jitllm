@@ -490,7 +490,7 @@ func BuildForm(h *cpu.Target, gr *graph.Graph, codes []composer.Code, rows int, 
 					}
 				default:
 					f.Close()
-					return nil, DeclineError{nn.DeclineTable, fmt.Errorf("%s reads the table %s", c.Name, o.Name)}
+					return nil, fmt.Errorf("%s reads the table %s, which the CPU's call site does not provide", c.Name, o.Name)
 				}
 			default:
 				f.Close()

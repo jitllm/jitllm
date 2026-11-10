@@ -606,7 +606,8 @@ func (l *Lanes) recRows(li int, cb *Block, t Tensors, x, cs, csSWA []float32, se
 	if base >= 0 && l.bidir && cb.Bidir && n > 1 {
 		// A bidirectional chunk's rows each read the whole run (Rows'
 		// runs); the stepped form reads a row's past alone.
-		return nn.DeclineBidir, nil
+		return nn.DeclineServes, fmt.Errorf("block %d: a bidirectional chunk of %d rows runs whole on its rows' form, "+
+			"one sequence in order with no rewind mark, and these rows are not one", li, n)
 	}
 	if n > 1 {
 		l.e.steps.Stepped++
