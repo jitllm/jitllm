@@ -21,11 +21,15 @@ import (
 // as goComputeAllowed()'s do.
 func imagePathAllowed() map[string]string {
 	return map[string]string{
-		"model.go:AttnTemp":     "Llama 4's attention temperature at a position, the config's statement its gates read; the composed blocks state it as ops",
-		"model.go:configFrom":   "YaRN's attention scale from the config, once at open",
-		"hotness.go:ExpertUses": "expert-use accounting for the report",
-		"tower.go:TileGrid":     "InternVL's tile grid, the candidate counts walked against the picture's aspect: geometry from the picture's sizes",
-		"model.go:ropeScale":    "a scaled rotary's per-pair divisors, the shipped factors times the scaling, once at open",
+		"model.go:AttnTemp":        "Llama 4's attention temperature at a position, the config's statement its gates read; the composed blocks state it as ops",
+		"model.go:configFrom":      "YaRN's attention scale from the config, once at open",
+		"hotness.go:ExpertUses":    "expert-use accounting for the report",
+		"tower.go:TileGrid":        "InternVL's tile grid, the candidate counts walked against the picture's aspect: geometry from the picture's sizes",
+		"model.go:ropeScale":       "a scaled rotary's per-pair divisors, the shipped factors times the scaling, once at open",
+		"decide.go:answer":         "a rating question's levels, i/(r-1) for its r answers, once a question: the readout's parameters",
+		"tower.go:lowerValuesWith": "a tower op's attention scale, 1/sqrt of its head width, once an op: the graph's attribute",
+		"tower.go:sliceGrid":       "MiniCPM-V's slice grid, the factor pairs' log aspects against the picture's: geometry from its sizes",
+		"video.go:VideoPlan":       "a video's sampled frames, numpy's linspace over its count: geometry from its frames and rate",
 	}
 }
 
@@ -35,13 +39,13 @@ func imagePathAllowed() map[string]string {
 // or a patch's. An entry that no loop calls any more fails the gate.
 func imagePathCallees() map[string]string {
 	return map[string]string{
-		"seamtune.go:seamStep":                  "the seam tuner's timing statistics, once a step (RULE 8b's measurement)",
-		"prefillstream.go:after":                "the prompt streamer's timing of a chunk, once a chunk (RULE 8b's measurement)",
-		"delta.go:Delta":                        "a recurrent block's geometry and scale from the config, once a block at open",
-		"tower.go:towerEntry":                   "a tower's entry stated as a graph, once at open: its constants are the graph's",
-		"tower.go:towerBlock":                   "a tower's block stated as a graph, once a block at open: its constants are the graph's",
-		"front.go:blockGraph":                   "a block's graph stated from the config, once a block at open: its constants are the graph's",
-		"frontstreams.go:streamCollapseGraphAt": "a block's streams' collapse stated as a graph, once a block at open: its constants are the graph's",
+		"prefillstream.go:after":   "the prompt streamer's timing of a chunk, once a chunk (RULE 8b's measurement)",
+		"delta.go:Delta":           "a recurrent block's geometry and scale from the config, once a block at open",
+		"tower.go:towerEntry":      "a tower's entry stated as a graph, once at open: its constants are the graph's",
+		"tower.go:towerBlock":      "a tower's block stated as a graph, once a block at open: its constants are the graph's",
+		"front.go:blockGraph":      "a block's graph stated from the config, once a block at open: its constants are the graph's",
+		"markprompt.go:promptStep": "a prompt template's integer division, a number the prompt prints: no pixel's arithmetic",
+		"video.go:videoEntry":      "a video's entry graph, its normalisation constants from the container and its side from the frame budget",
 	}
 }
 
