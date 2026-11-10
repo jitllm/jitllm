@@ -580,6 +580,7 @@ func (g *devTier) pageInHold(li, lo, hi int) bool {
 	if need := l.pg.bytes + l.pg.round; !g.kvCompact(need, nil) && !g.reclaim(need, li, lo, hi) {
 		g.LastErr = fmt.Sprintf("block %d needs %d bytes and nothing can be paged out (%d of %d used, %d slot(s))",
 			li, l.pg.bytes+l.pg.round, g.used, g.limit, g.slots())
+		g.noteCause(nn.FailRoom)
 		return false
 	}
 	// Whatever the recording named is about to be joined by buffers that did not
