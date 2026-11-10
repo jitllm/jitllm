@@ -74,24 +74,18 @@ func bidirCount(runs []nn.KeyRun, at int) int {
 	return 0
 }
 
-// bidirCheck refuses a call whose rows [pos, pos+nrow) cut a run, and, on the
-// contiguous cache, one whose windowed layers would mask a run's row from the
-// wrong anchor: those window kernels place a row's window behind its key
-// COUNT, which a run moves to its end, where the reference anchors it at the
-// row's own position. The two agree while the count is inside the window,
-// which is every image in the first window's worth of context. The paged
-// cache's row descriptor carries the window's start apart from the end
-// (pagedStage), so it has no such limit.
-func bidirCheck(runs []nn.KeyRun, pos, nrow int, p *nn.LayerPlan, paged bool) string {
+// bidirCheck refuses a call whose rows [pos, pos+nrow) cut a run: the engine
+// never cuts one (a prefill chunk ends at a run's end), so a cut is a caller's
+// contract broken. A windowed layer's row descriptor carries the window's
+// start apart from the run's end (pagedStage), so a run past the window is
+// masked from the reference's anchor.
+func bidirCheck(runs []nn.KeyRun, pos, nrow int) string {
 	for _, r := range runs {
 		if r.Lo >= pos+nrow || r.Hi <= pos {
 			continue
 		}
 		if r.Lo < pos || r.Hi > pos+nrow {
 			return "a bidirectional run is cut by this call's rows"
-		}
-		if !paged && p.SWAWindow > 0 && r.Hi > p.SWAWindow {
-			return "a bidirectional run ends past the sliding window, where the window kernels anchor it at the run's end"
 		}
 	}
 	return ""

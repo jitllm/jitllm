@@ -3401,7 +3401,7 @@ func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []floa
 		if (!ok || bbs == nil) && dbs == nil {
 			return false
 		}
-		if (!ok || bbs == nil) && bidirCheck(g.bidir, pos, 1, &dbs.p, true) != "" && g.attendsIn(lo, hi) {
+		if (!ok || bbs == nil) && bidirCheck(g.bidir, pos, 1) != "" && g.attendsIn(lo, hi) {
 			// One row at a time cuts a bidirectional run the chunk holds,
 			// which attention cannot read row by row: refused before any
 			// block runs (nothing has advanced), so the chunk restarts on
@@ -3824,7 +3824,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	// linear blocks, which scan their rows in order) cuts no run: a run is
 	// a key count, and only attention reads one.
 	if len(g.bidir) > 0 && !p.NonCausal && g.attendsIn(lo, hi) {
-		if why := bidirCheck(g.bidir, pos, nrow, p, g.pagedPlan(p)); why != "" {
+		if why := bidirCheck(g.bidir, pos, nrow); why != "" {
 			return refuse("rows [%d,%d): %s", pos, pos+nrow, why)
 		}
 	}
