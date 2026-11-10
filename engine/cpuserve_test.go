@@ -204,7 +204,12 @@ func cpuFaultsOf(t *testing.T, m *model.Model) []cpuFault {
 		}
 	}
 	if attends {
-		fs = append(fs, cpuFaultPage, cpuFaultRow, cpuFaultWrite)
+		fs = append(fs, cpuFaultPage, cpuFaultRow)
+		// A history shifted by a row is the same keys, which attention with
+		// no positional encoding cannot order.
+		if !m.Cfg.NoPosEnc {
+			fs = append(fs, cpuFaultWrite)
+		}
 	}
 	if rec > 1 {
 		fs = append(fs, cpuFaultRec)
