@@ -166,6 +166,7 @@ func TestEveryModelRunsOnACard(t *testing.T) {
 				}
 				finite(t, "Forward on the card", lg)
 			}
+			cardAgrees(t, m, g)
 			if img != nil {
 				rows, err := st.EncodePicture(img)
 				if err != nil {
@@ -221,6 +222,75 @@ func composedNothing(t *testing.T, s *Instance, asked map[string]int64) {
 		if d := n - asked[dev]; d != 0 {
 			t.Errorf("after placement the instance asked %s for %d form(s)", dev, d)
 		}
+	}
+}
+
+// cardBand is how far a model's card logits may part from the composed
+// CPU's over a prompt and two steps: across the census the band of every
+// block on the card reads up to 2.7e-2 (stablelm-2-1.6b's second step),
+// and a block the card computes wrongly reads in tenths (synth-deepseek4's
+// 2.69).
+const cardBand = 5e-2
+
+// cardMixtureWorst bounds a mixture's one point past cardBand. The card
+// multiplies a routed bank on binary16 tiles, and its error can carry the
+// next block's router across a near-tie: one row takes another expert and
+// its logits part in tenths, then the next step agrees again. synth-gptoss's
+// 13-row prompt reads 0.311 there, and 1.8e-4 with its experts on the CPU
+// at float32, the router still on the card. A mixture is held at the median
+// of its points to cardBand and at every point to this; a wrong block reads
+// past it at every point.
+const cardMixtureWorst = 1.0
+
+// cardAgrees holds model m's logits on card g -- a prompt of text through
+// Prefill, then two decode steps of the text -- to the composed CPU's at the
+// card's float32 history, within cardBand at each.
+func cardAgrees(t *testing.T, m *model.Model, g *gpu.GPU) {
+	t.Helper()
+	toks := m.Vocab.Encode("The capital of France is Paris, and the river that runs through it is", true)
+	if len(toks) > 14 {
+		toks = toks[:14]
+	}
+	if len(toks) < 4 {
+		t.Fatalf("the text is %d tokens", len(toks))
+	}
+	st := cardInstance(t, m, g)
+	defer st.Close()
+	ref := testInstance(t, m, 16, WithKVF16(false))
+	defer ref.Close()
+	n := len(toks) - 2
+	got, err := st.Prefill(toks[:n])
+	if err != nil {
+		t.Fatalf("Prefill on the card: %v (%s)", err, g.Err())
+	}
+	want, err := ref.Prefill(toks[:n])
+	if err != nil {
+		t.Fatalf("Prefill on the CPU: %v", err)
+	}
+	var es []float64
+	for i := n; ; i++ {
+		e, _ := nmseOf(got, want)
+		es = append(es, e)
+		switch {
+		case math.IsNaN(e):
+			t.Errorf("position %d: the card's logits are not finite against the CPU's", i-1)
+		case m.Cfg.NExpert <= 1 && !(e < cardBand):
+			t.Errorf("position %d: the card's logits are %.3e NMSE from the CPU's (bound %.0e)", i-1, e, cardBand)
+		case m.Cfg.NExpert > 1 && !(e < cardMixtureWorst):
+			t.Errorf("position %d: the mixture's card logits are %.3e NMSE from the CPU's (bound %.0e at any point)", i-1, e, cardMixtureWorst)
+		}
+		if i == len(toks) {
+			break
+		}
+		if got, err = st.Forward(toks[i]); err != nil {
+			t.Fatalf("Forward on the card: %v (%s)", err, g.Err())
+		}
+		if want, err = ref.Forward(toks[i]); err != nil {
+			t.Fatalf("Forward on the CPU: %v", err)
+		}
+	}
+	if med := median(es); m.Cfg.NExpert > 1 && !(med < cardBand) {
+		t.Errorf("the mixture's card logits are %.3e NMSE from the CPU's at the median of %v (bound %.0e)", med, es, cardBand)
 	}
 }
 
