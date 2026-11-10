@@ -211,9 +211,12 @@ func (g *devTier) prepEmbed(bs *blockScratch, h *nn.Head) {
 // embedTable is w resident for the input rows, taken under paging only where
 // it costs no block slot, as the head is (PrepHead).
 func (g *devTier) embedTable(f *jlm.File, w nn.Weight) (*resident, partDecline) {
-	q, ok := quantOf(w.T)
-	if !ok || len(w.Data) == 0 {
-		return nil, partEmbedFormat
+	// Every type a container stores is a device format
+	// (TestEveryContainerTypeIsADeviceFormat).
+	q, _ := quantOf(w.T)
+	if len(w.Data) == 0 {
+		g.LastErr = fmt.Sprintf("the input rows' %v table holds no bytes", w.T)
+		return nil, partNoWeight
 	}
 	// A table already held costs nothing more: a head given back for room
 	// leaves its tables held (PrepHead).
