@@ -377,18 +377,18 @@ func expertWeight(o graph.Op, c *Context, wo Operand, x *exprs, inp *[]Operand, 
 	in := *inp
 	defer func() { *inp = in }()
 	var wv int
-	if st := c.Strides[w.Role]; jlm.Verbatim(wo.Format) && st > 0 && pairStride(o) != 0 {
+	if st := c.Strides[w.Role]; jlm.VerbatimRows(wo.Format) && st > 0 && pairStride(o) != 0 {
 		// Each sheet stride words from the last: the sheet's rows read
 		// from its own start.
-		width := 2
-		if wo.Format == jlm.TypeF32 {
-			width = 4
+		words, err := jlm.VerbatimWords(wo.Format, rows, K)
+		if err != nil {
+			return 0, err
 		}
 		p := &packed{x: x, in: &in, facts: facts, codes: -1, sheet: sel, stride: st, planes: [3]int{len(in), -1, -1}}
-		facts.Extents[len(in)] = (held-1)*st + (rows*K*width+3)/4
+		facts.Extents[len(in)] = (held-1)*st + words
 		in = append(in, wo)
 		wv = jlm.DecodeVerbatim[int](p, wo.Format, K, row, col)
-	} else if jlm.Verbatim(wo.Format) {
+	} else if jlm.VerbatimRows(wo.Format) {
 		v, err := weightElement(x, wo, held*rows, K, &in, facts, x.op(OpAdd, U, x.op(OpMul, U, sel, x.u(uint32(rows))), row), col)
 		if err != nil {
 			return 0, err
