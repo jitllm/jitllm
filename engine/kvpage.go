@@ -2876,7 +2876,7 @@ func (kv *kvCache) Prepare(li, pos, nseq int) (cpudev.HistoryBinding, nn.Decline
 	pg := &kv.layers[hl]
 	if pg.p > 0 {
 		if why := kv.prepare(hl, pos); why != nn.DeclineServes {
-			return cpudev.HistoryBinding{}, why, nil
+			return cpudev.HistoryBinding{}, nn.DeclineServes, kv.unread(why)
 		}
 	}
 	pages, err := kv.table(hl, nseq)
@@ -2888,7 +2888,7 @@ func (kv *kvCache) Prepare(li, pos, nseq int) (cpudev.HistoryBinding, nn.Decline
 	if e := kv.entOf(hl); e > 0 {
 		kv.owned(e, pos)
 		if why := kv.readable(e, 0, pos); why != nn.DeclineServes {
-			return cpudev.HistoryBinding{}, why, nil
+			return cpudev.HistoryBinding{}, nn.DeclineServes, kv.unread(why)
 		}
 		if b.EntryPages, err = kv.table(e, nseq); err != nil {
 			return cpudev.HistoryBinding{}, nn.DeclineServes, err
@@ -2896,6 +2896,16 @@ func (kv *kvCache) Prepare(li, pos, nseq int) (cpudev.HistoryBinding, nn.Decline
 		b.Entries, _ = kvAddrs(&kv.layers[e])
 	}
 	return b, nn.DeclineServes, nil
+}
+
+// unread is why a block's history could not be read for a step: the page
+// fault that left a page out of its arena (faultIn), which fails the request
+// as the missing page it is, or the decline why where none was recorded.
+func (kv *kvCache) unread(why nn.Decline) error {
+	if p := kv.err.Swap(nil); p != nil {
+		return *p
+	}
+	return fmt.Errorf("model: %v", why)
 }
 
 // entOf is block li's entries plane's slot, 0 where it keeps none or its
