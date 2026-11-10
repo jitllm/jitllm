@@ -187,6 +187,8 @@ func jlmType(q layout.Quant) (jlm.Type, bool) {
 		return jlm.TypeF16, true
 	case layout.BFloat16:
 		return jlm.TypeBF16, true
+	case layout.IQ4NL:
+		return jlm.TypeIQ4NL, true
 	}
 	for _, t := range quant.PackedTypes() {
 		if k, ok := layout.QuantOf(t); ok && k == q {
