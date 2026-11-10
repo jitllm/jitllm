@@ -1131,11 +1131,8 @@ const (
 	partFeeds        = nn.DeclineFeeds
 	partWindow       = nn.DeclineWindow
 	partHeadShape    = nn.DeclineHeadShape
-	partHeadNorm     = nn.DeclineHeadNorm
-	partPick         = nn.DeclinePick
 	partCaller       = nn.DeclineCaller
 	partNoRoom       = nn.DeclineNoRoom
-	partHeadBias     = nn.DeclineHeadBias
 	partHeadOther    = nn.DeclineHeadOther
 	partNoTable      = nn.DeclineNoTable
 	partTableHeld    = nn.DeclineTableHeld
@@ -1621,19 +1618,13 @@ func headShape(gr *graph.Graph) (headSpec, bool) {
 // asked for, serves where it is: the model's head graph (headShape) -- a
 // norm, the vocabulary's projection with its bias, and what the graph does to
 // the logits after it, the final softcap and the scale -- with the norm and
-// the vectors it binds the tier's, not the label pick.
-func (bs *blockScratch) headServes(norm backend.Buf, pickOnly bool) partDecline {
+// the vectors it binds the tier's (PrepHead uploads each the graph names).
+func (bs *blockScratch) headServes(norm backend.Buf) partDecline {
 	hs, ok := headShape(bs.headGraph)
 	hh, hok := headShape(bs.headHidden)
-	switch {
-	case !ok || !hok || hh != hs || len(bs.headHidden.Out) != 2:
+	if !ok || !hok || hh != hs || len(bs.headHidden.Out) != 2 ||
+		!hs.noNorm && (norm == nil || hs.hasNormBias && bs.hNormB == nil) || hs.hasBias && bs.hBias == nil {
 		return partHeadShape
-	case !hs.noNorm && (norm == nil || hs.layerNorm != lnBlock(&bs.p) || hs.hasNormBias && bs.hNormB == nil):
-		return partHeadNorm
-	case hs.hasBias && bs.hBias == nil:
-		return partHeadBias
-	case pickOnly:
-		return partPick
 	}
 	return partServes
 }
@@ -2878,7 +2869,7 @@ func (g *devTier) prewarmComposedHead(narrow bool) (roomless string) {
 		g.prewarming = false
 	}
 	if g.NoPromptPrewarm || bs == nil || bs.head == nil ||
-		bs.headServes(bs.hNorm, false) != partServes {
+		bs.headServes(bs.hNorm) != partServes {
 		return
 	}
 	g.prewarming = true
