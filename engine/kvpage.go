@@ -645,11 +645,6 @@ func (s *kvPages) gather(l kvLayout, slot, n int, k, v []float32) bool {
 	if s.p == 0 || n <= 0 {
 		return true
 	}
-	// A shared page does not move to a device for one of its holders: the
-	// block stays on the CPU (kvshare.go).
-	if s.anyShared() {
-		return false
-	}
 	pl := s.layout(l)
 	kvDim := l.kvDim()
 	// A windowed layer's pages below what its window still reaches were

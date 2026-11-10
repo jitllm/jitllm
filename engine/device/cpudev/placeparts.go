@@ -16,7 +16,7 @@ type Parts struct {
 	Entry   *Entry
 	Inputs  *Inputs
 	Tables  *Tables
-	KVConv  *KVConv
+	KVConv  [nn.KVFormats]*KVConv
 }
 
 // PlaceParts composes every part of p and makes it the part the instance
@@ -68,13 +68,20 @@ func (e *Exec) placeParts(p *PartsPlan) Parts {
 		one[i], many[i] = e.FormPart(t.One), e.FormPart(t.Many)
 	}
 	out.Tables = NewTables(e.dev, one, many, p.TablePlanes, p.TableWidths, boundWeights{e.b, p.TablesW})
-	if p.KV != nil {
-		conv := make([]KVConvForms, len(p.KV))
-		for i, k := range p.KV {
+	e.kvconv = nil
+	for f, plans := range p.KV {
+		if len(plans) == 0 {
+			continue
+		}
+		conv := make([]KVConvForms, len(plans))
+		for i, k := range plans {
 			conv[i] = KVConvForms{FW: k.FW, HW: k.HW, Narrow: e.FormPart(k.Narrow), Widen: e.FormPart(k.Widen)}
 		}
-		out.KVConv = NewKVConv(e.dev, conv, p.KVHalf)
-		e.kvconv = out.KVConv
+		kc := NewKVConv(e.dev, conv, nn.KVFmt(f) == nn.KVF16)
+		out.KVConv[f] = kc
+		if nn.KVFmt(f) == p.KVFmt {
+			e.kvconv = kc
+		}
 	}
 	return out
 }

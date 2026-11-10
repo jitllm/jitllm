@@ -90,8 +90,10 @@ type PartsPlan struct {
 	TablePlanes         [2][]float32
 	TableWidths         [2]int
 	TablesW             PartWeights
-	KV                  []KVConvPlan
-	KVHalf              bool
+	// KV is each history format's conversions, by KVFmt (KVF32's are
+	// none): the instance's own, KVFmt, and every one a session may bring.
+	KV    [KVFormats][]KVConvPlan
+	KVFmt KVFmt
 }
 
 // TablePlan is a rotary's table: a row's and a call's rows'.
@@ -150,7 +152,7 @@ type PlacedParts struct {
 	Entry   EntryDevice
 	Inputs  InputsDevice
 	Tables  TablesDevice
-	KVConv  KVConvDevice
+	KVConv  [KVFormats]KVConvDevice
 }
 
 // LanePlacer readies a device for a placement of n blocks read through l,

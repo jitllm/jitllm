@@ -59,8 +59,10 @@ func (e *Exec) PlaceParts(p *nn.PartsPlan) nn.PlacedParts {
 	if pp.Tables != nil {
 		out.Tables = pp.Tables
 	}
-	if pp.KVConv != nil {
-		out.KVConv = pp.KVConv
+	for f, c := range pp.KVConv {
+		if c != nil {
+			out.KVConv[f] = c
+		}
 	}
 	return out
 }

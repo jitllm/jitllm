@@ -253,10 +253,11 @@ func (sv *served) only(p Phase) bool {
 	return true
 }
 
-// holds says s's history fits instance s0: the same blocks, the same KV
-// format, and no more positions than it was composed for.
+// holds says s's history fits instance s0: the same blocks and no more
+// positions than it was composed for. A history in another format is laid
+// out in s0's when s0 takes it (Instance.relayout).
 func (s0 *Instance) holds(s *Session) bool {
-	return s.model == s0.m && s.limit <= s0.maxSeq && (s.kvFormat == s0.kvFmt || s.pos == 0) && s.span == [2]int{s0.lo, s0.hi}
+	return s.model == s0.m && s.limit <= s0.maxSeq && s.span == [2]int{s0.lo, s0.hi}
 }
 
 // NewSession is a session of up to maxSeq positions laid out as s's history

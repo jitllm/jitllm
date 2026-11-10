@@ -161,26 +161,51 @@ func (s *Instance) histWritten() bool {
 	return false
 }
 
-// relayout lays the bound session's empty history out in the instance's
-// format: one opened before the instance stepped its cache down for a
-// device (SetDeviceLayers). A session with history keeps the format it was
-// written in, and is refused here as the pool refuses it.
+// relayout lays the bound session's history out in the instance's format:
+// one written before the instance stepped its cache down for a device
+// (SetDeviceLayers), or on an instance of another format. What it wrote
+// comes along (recode).
 func (s *Instance) relayout() error {
 	sess := s.Session
-	if sess.pos != 0 {
-		return fmt.Errorf("model: the session's history is %v and the instance's %v", sess.kvFormat, s.kvFmt)
-	}
 	l := s.kvl
 	l.maxSeq = sess.limit
 	old := sess.kv
-	sess.kv = newKVCacheRange(s.c, old.id, 1, l, old.store, s.opt.kvPage, s.lo, s.hi, old.view, s.storage().PagePool(), s.entPlanes())
-	sess.kv.reserve(sess.limit)
-	sess.kv.ns, sess.kv.budget = old.ns, old.budget
-	if err := sess.kv.useArenas(sess.limit, s.kvArenaFor); err != nil {
+	kv := newKVCacheRange(s.c, old.id, 1, l, old.store, s.opt.kvPage, s.lo, s.hi, old.view, s.storage().PagePool(), s.entPlanes())
+	kv.reserve(sess.limit)
+	kv.ns, kv.budget = old.ns, old.budget
+	if err := kv.useArenas(sess.limit, s.kvArenaFor); err != nil {
 		return err
 	}
+	if err := s.recode(old, kv); err != nil {
+		kv.giveBack()
+		return err
+	}
+	sess.kv = kv
 	old.giveBack()
 	sess.kvFormat = s.kvFmt
+	return nil
+}
+
+// recode carries the bound session's history of s.pos positions from old,
+// in the format it was written in, into kv, in the instance's: each block's
+// the CPU holds faulted in, widened to float32 and narrowed again through
+// the CPU device's conversions of each format, composed with the instance
+// (partsPlan), through kvCache.MigrateKV. A block whose history
+// is on a device keeps it there, in the device's own format.
+func (s *Instance) recode(old, kv *kvCache) error {
+	sess := s.Session
+	for li := s.lo; li < s.hi && li < len(old.layers) && s.pos > 0; li++ {
+		if old.layers[li].p == 0 || s.c.KVShared(li) || li < len(sess.held) && sess.held[li] == routeView {
+			continue
+		}
+		old.window(li, 0, s.pos)
+		l := old.kvl.atLayer(s.c, li)
+		n := s.pos * l.nKV * l.headDim
+		k, v := make([]float32, n), make([]float32, n)
+		if !old.MigrateKV(li, k, v, s.pos, false, s.kvConvs[old.kvl.fmt]) || !kv.MigrateKV(li, k, v, s.pos, true, s.kvConvs[kv.kvl.fmt]) {
+			return fmt.Errorf("model: block %d's history of %d positions would not go from %v to %v", li, s.pos, sess.kvFormat, s.kvFmt)
+		}
+	}
 	return nil
 }
 

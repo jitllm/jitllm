@@ -107,36 +107,35 @@ func (s *Instance) partsPlan() *nn.PartsPlan {
 	p.TablePlanes = [2][]float32{s.tablePlanes(0), s.tablePlanes(1)}
 	p.TablesW = nn.PartWeights{Block: cpuTablesBlock, Of: s.ws.tensors(cpuTablesBlock, nil)}
 
-	narrow, widen := graph.OpHalves, graph.OpWidenHalves
-	var widths []int
-	switch s.kvl.fmt {
-	case nn.KVF16:
-		widths = []int{kvHalfRow}
-	case nn.KVQ8:
-		narrow, widen = graph.OpQ8Rows, graph.OpWidenQ8Rows
-		for li := s.lo; li < s.hi; li++ {
-			if hd := s.kvlAt(li).headDim; !slices.Contains(widths, hd) {
-				widths = append(widths, hd)
+	for _, f := range []nn.KVFmt{nn.KVF16, nn.KVQ8} {
+		narrow, widen := graph.OpHalves, graph.OpWidenHalves
+		widths := []int{kvHalfRow}
+		if f == nn.KVQ8 {
+			narrow, widen, widths = graph.OpQ8Rows, graph.OpWidenQ8Rows, nil
+			for li := s.lo; li < s.hi; li++ {
+				if hd := s.kvlAt(li).headDim; !slices.Contains(widths, hd) {
+					widths = append(widths, hd)
+				}
 			}
 		}
-	}
-	for _, fw := range widths {
-		c := nn.KVConvPlan{FW: fw, HW: fw / 2}
-		if s.kvl.fmt == nn.KVQ8 {
-			c.HW = graph.Q8RowWords(fw)
+		for _, fw := range widths {
+			c := nn.KVConvPlan{FW: fw, HW: fw / 2}
+			if f == nn.KVQ8 {
+				c.HW = graph.Q8RowWords(fw)
+			}
+			nb := graph.New()
+			nb.Out(nb.Emit(narrow, []graph.ValueID{nb.In("kv.f", c.FW)},
+				[]graph.Result{{Name: "kv.h", Width: c.HW, Elem: graph.ElemU32}}, nil, graph.Attrs{}, nil, nil)...)
+			c.Narrow = part(nb.G, nn.DeclineNoGraph, cpuRowsCap)
+			wb := graph.New()
+			h := wb.In("kv.h", c.HW)
+			wb.G.Values[h].Elem = graph.ElemU32
+			wb.Out(wb.Emit(widen, []graph.ValueID{h}, []graph.Result{{Name: "kv.f", Width: c.FW}}, nil, graph.Attrs{}, nil, nil)...)
+			c.Widen = part(wb.G, nn.DeclineNoGraph, cpuRowsCap)
+			p.KV[f] = append(p.KV[f], c)
 		}
-		nb := graph.New()
-		nb.Out(nb.Emit(narrow, []graph.ValueID{nb.In("kv.f", c.FW)},
-			[]graph.Result{{Name: "kv.h", Width: c.HW, Elem: graph.ElemU32}}, nil, graph.Attrs{}, nil, nil)...)
-		c.Narrow = part(nb.G, nn.DeclineNoGraph, cpuRowsCap)
-		wb := graph.New()
-		h := wb.In("kv.h", c.HW)
-		wb.G.Values[h].Elem = graph.ElemU32
-		wb.Out(wb.Emit(widen, []graph.ValueID{h}, []graph.Result{{Name: "kv.f", Width: c.FW}}, nil, graph.Attrs{}, nil, nil)...)
-		c.Widen = part(wb.G, nn.DeclineNoGraph, cpuRowsCap)
-		p.KV = append(p.KV, c)
 	}
-	p.KVHalf = s.kvl.fmt == nn.KVF16
+	p.KVFmt = s.kvl.fmt
 	return p
 }
 
@@ -150,7 +149,7 @@ func (s *Instance) tablePlan(g *graph.Graph, rows int) nn.PartPlan {
 // placeParts makes the instance's parts on the CPU device from partsPlan.
 func (s *Instance) placeParts() {
 	pp := s.places[routeLanes].(nn.PartsPlacer).PlaceParts(s.partsPlan())
-	s.kvConv = nil
+	s.kvConv, s.kvConvs = nil, [nn.KVFormats]nn.KVConvDevice{}
 	if pp.Head == nil {
 		return
 	}
@@ -164,7 +163,6 @@ func (s *Instance) placeParts() {
 	if pp.Entry != nil {
 		s.entry = pp.Entry
 	}
-	if pp.KVConv != nil {
-		s.kvConv = pp.KVConv
-	}
+	s.kvConvs = pp.KVConv
+	s.kvConv = pp.KVConv[s.kvl.fmt]
 }
