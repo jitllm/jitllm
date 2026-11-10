@@ -57,8 +57,10 @@ func (k *Kernel) smallWords() []bool {
 			case OpIter, OpLength, OpSpan, OpCoord, OpParam:
 				s = true
 			case OpLoad:
-				// The step's tables hold positions, rows and pages.
-				s = k.Bufs[nd.Buf].Operand.Kind == OperandTable
+				// The step's tables hold positions, rows and pages; its tokens
+				// hold -1 for a row that names none.
+				o := k.Bufs[nd.Buf].Operand
+				s = o.Kind == OperandTable && o.Table != TableTokens
 			case OpConst:
 				s = nd.Imm >= 0 && nd.Imm < 1<<31
 			case OpAdd, OpMul, OpShl, OpMin, OpMax, OpDiv:
