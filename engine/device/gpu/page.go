@@ -777,6 +777,11 @@ func (g *devTier) SetBudget(bytes uint64) int {
 		g.pageOut(v)
 	}
 	g.Slots = g.slots()
+	// A raised budget is the tier tuned, outside any step: the per-row head
+	// a squeeze held back for room forms in the room it makes.
+	if !lowered {
+		g.prepRowsReserved()
+	}
 	return g.pagesIn
 }
 

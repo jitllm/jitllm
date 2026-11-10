@@ -614,9 +614,17 @@ func (g *devTier) rowsHeld() bool {
 // refuses it): a tower's blocks run their pictures in their own geometry.
 // Callers hold g.mu.
 func (g *devTier) rowsReserved() bool {
+	n, ok := g.reservedBlocks()
+	return ok && n > 0
+}
+
+// reservedBlocks counts the causal blocks placed on the device and reports
+// whether each has its ragged rows in the reserved width: none placed is
+// every one composed. Callers hold g.mu.
+func (g *devTier) reservedBlocks() (int, bool) {
 	bb := g.reservedFor(nn.ComposedBlock)
 	if bb == nil {
-		return false
+		return 0, false
 	}
 	n := 0
 	for li, l := range g.layers {
@@ -624,11 +632,11 @@ func (g *devTier) rowsReserved() bool {
 			continue
 		}
 		if !g.composedBlock(li, bb) {
-			return false
+			return n, false
 		}
 		n++
 	}
-	return n > 0
+	return n, true
 }
 
 // prewarmPromptWidths builds, at the end of a placement, the kernels of every
