@@ -4452,11 +4452,7 @@ func (g *devTier) layersSession(s backend.Session) {
 			if why == partServes {
 				var serr error
 				sv, inst, cp, serr = g.servedStep(bs, l, li, p, R, rag == nil || rag.oneSequence())
-				switch {
-				case errors.Is(serr, errStreamForm):
-					g.LastErr = serr.Error()
-					sv, inst, cp, why = nil, nil, nil, partStream
-				case serr != nil:
+				if serr != nil {
 					if err == nil {
 						err = serr
 					}

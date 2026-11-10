@@ -1129,7 +1129,6 @@ const (
 	partNoGraph      = nn.DeclineNoGraph
 	partPersist      = nn.DeclinePersist
 	partNoPool       = nn.DeclineNoPool
-	partStream       = nn.DeclineStream
 	partFeeds        = nn.DeclineFeeds
 	partWindow       = nn.DeclineWindow
 	partHeadShape    = nn.DeclineHeadShape
@@ -2509,8 +2508,8 @@ func (g *devTier) servedStep(bs *blockScratch, l *layer, li int, p *nn.LayerPlan
 	return sv, g.promptInst(bs, sv.f), cp, nil
 }
 
-// errStreamForm is a block whose form over passes did not form: it declines
-// as one whose history streams (partStream).
+// errStreamForm names a block whose form over passes did not form: its step
+// fails with it, as any form's that does not build.
 const errStreamForm tierError = "the composed block over passes"
 
 // servedCopy is the copy of a block's output from bs.h over x at a step of

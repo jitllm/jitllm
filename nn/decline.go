@@ -13,7 +13,6 @@ const (
 	DeclineNoGraph
 	DeclinePersist
 	DeclineNoPool
-	DeclineStream
 	DeclineWindow
 	DeclineHeadShape
 	DeclineHeadNorm
@@ -55,8 +54,6 @@ func (d Decline) String() string {
 		return "inside the persistent block"
 	case DeclineNoPool:
 		return "no paged history on the device"
-	case DeclineStream:
-		return "the history streams"
 	case DeclineWindow:
 		return "a graph whose window is not the plan's"
 	case DeclineHeadShape:

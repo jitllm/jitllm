@@ -90,7 +90,7 @@ func TestOpenHonoursAPageBudget(t *testing.T) {
 		if served == 0 {
 			t.Error("the composed CPU served no block step of the paged model")
 		}
-		for _, why := range []nn.Decline{nn.DeclineStream, nn.DeclineNoRoom} {
+		for _, why := range []nn.Decline{nn.DeclineNoRoom} {
 			if declined[why] > 0 {
 				t.Errorf("the composed CPU declined %d block step(s): %s", declined[why], nn.DeclineName(int(why)))
 			}
