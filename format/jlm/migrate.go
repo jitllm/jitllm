@@ -21,10 +21,17 @@ import (
 // (Tensor.Stored), so the result is byte for byte the container a fresh
 // conversion at the new version writes (TestUpgradeIsAFreshConversion).
 
+// Stating is what a container written before v31 must state that only its
+// architecture's code says, an error naming what it lacks (convert.LegacyStated):
+// the converter's knowledge, handed to the migration that reads the
+// architecture a v30 container names. Nil checks nothing.
+type Stating func(c *Config) error
+
 // migrationFor is the step that rewrites the version v container at path as
-// version v+1, or nil when there is none. Every Version bump adds the entry
-// for the version before it (TestEveryVersionHasItsMigration).
-func migrationFor(v uint32) func(path string) error {
+// version v+1, or nil when there is none, st what v30 must state. Every
+// Version bump adds the entry for the version before it
+// (TestEveryVersionHasItsMigration).
+func migrationFor(v uint32, st Stating) func(path string) error {
 	switch v {
 	case 26:
 		return migrate26
@@ -35,13 +42,15 @@ func migrationFor(v uint32) func(path string) error {
 	case 29:
 		return migrate29
 	case 30:
-		return migrate30
+		return func(path string) error { return migrate30(path, st) }
 	}
 	return nil
 }
 
 // Upgradable reports whether a chain of migrations reaches Version from v.
-func Upgradable(v uint32) bool { return upgradableWith(migrationFor, v) }
+func Upgradable(v uint32) bool {
+	return upgradableWith(func(v uint32) func(string) error { return migrationFor(v, nil) }, v)
+}
 
 func upgradableWith(steps func(uint32) func(string) error, v uint32) bool {
 	if v >= Version {
@@ -73,9 +82,12 @@ func ReadVersion(path string) (uint32, error) {
 }
 
 // Upgrade brings the container at path to Version through the migrations,
-// and reports the version it started at. A current container is left as it
-// is; one no chain reaches is refused, naming the convert command.
-func Upgrade(path string) (from uint32, err error) { return upgradeWith(migrationFor, path) }
+// st what a v30 container must state, and reports the version it started at.
+// A current container is left as it is; one no chain reaches is refused,
+// naming the convert command.
+func Upgrade(path string, st Stating) (from uint32, err error) {
+	return upgradeWith(func(v uint32) func(string) error { return migrationFor(v, st) }, path)
+}
 
 func upgradeWith(steps func(uint32) func(string) error, path string) (from uint32, err error) {
 	from, err = ReadVersion(path)
@@ -173,24 +185,20 @@ func (f *File) storedBytes(e *Entry) ([]byte, error) {
 
 // migrate30 is version 30 to 31. v31's config record names no
 // architecture: its first two bytes are written zero. Every other byte of
-// the record, and every tensor, is what v30 wrote, carried as it is. The
-// code is how jlm.Restate states what a container written before it was
-// stated lacks; where only the code says what that is -- ModernBERT's erf
-// GELU, Phi-3.5-MoE's routed weight -- a container that does not state it
-// yet is refused here, where the code is last read, for a conversion from
-// its source.
-func migrate30(path string) error {
+// the record, and every tensor, is what v30 wrote, carried as it is. Where
+// only an architecture's code says what a container must state, st says it,
+// and a container that does not state it yet is refused here, where the
+// architecture is last read, for a conversion from its source.
+func migrate30(path string, st Stating) error {
 	f, err := openAt(path, 30)
 	if err != nil {
 		return err
 	}
-	switch c := f.cfg; {
-	case c.Arch == ArchModernBERT && len(c.Acts) == 0:
-		f.Close()
-		return fmt.Errorf("jlm: %s states no activations, which v31 cannot recover: convert the model again", path)
-	case c.Arch == ArchPhiMoE && c.NExpert != 0 && len(c.RouterWeight.Terms) == 0:
-		f.Close()
-		return fmt.Errorf("jlm: %s states no routed weight for its router, which v31 cannot recover: convert the model again", path)
+	if st != nil {
+		if err := st(f.cfg); err != nil {
+			f.Close()
+			return fmt.Errorf("jlm: %s %w, which v31 cannot recover: convert the model again", path, err)
+		}
 	}
 	src := &Source{Config: f.cfg, Vision: f.vis, Vocab: f.voc}
 	for i := range f.tab {

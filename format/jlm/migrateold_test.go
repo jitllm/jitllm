@@ -123,7 +123,7 @@ func TestOldWritersUpgradeToAFreshConversion(t *testing.T) {
 			} else if !strings.Contains(err.Error(), "jitllm upgrade") {
 				t.Fatalf("the refusal %q does not name jitllm upgrade", err)
 			}
-			from, err := Upgrade(p)
+			from, err := Upgrade(p, nil)
 			if err != nil || from != v {
 				t.Fatalf("Upgrade: from %d, %v", from, err)
 			}
@@ -153,7 +153,7 @@ func TestOldWritersUpgradeToAFreshConversion(t *testing.T) {
 				if v == s {
 					return func(path string) error { return setVersion(path, s+1) }
 				}
-				return migrationFor(v)
+				return migrationFor(v, nil)
 			}
 			p := oldFixture(t, s)
 			if _, err := upgradeWith(stamp, p); err == nil {
@@ -175,7 +175,7 @@ func TestOldWritersUpgradeToAFreshConversion(t *testing.T) {
 				if v == s {
 					return nil
 				}
-				return migrationFor(v)
+				return migrationFor(v, nil)
 			}
 			p := oldFixture(t, 26)
 			if _, err := upgradeWith(without, p); err == nil || !strings.Contains(err.Error(), "jitllm convert") {
@@ -217,7 +217,7 @@ func TestEachStepIsItsVersionsWriter(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := migrationFor(v)(p); err != nil {
+			if err := migrationFor(v, nil)(p); err != nil {
 				t.Fatal(err)
 			}
 			got, err := os.ReadFile(p)
