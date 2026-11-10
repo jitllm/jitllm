@@ -14,7 +14,7 @@ import (
 // the migration from the version before it: a container its source no
 // longer exists for would otherwise have no way forward.
 func TestEveryVersionHasItsMigration(t *testing.T) {
-	if migrationFor(Version-1) == nil {
+	if migrationFor(Version-1, nil) == nil {
 		t.Fatalf("Version is %d and there is no migration from %d (migrate.go): every bump adds one",
 			Version, Version-1)
 	}
@@ -22,7 +22,7 @@ func TestEveryVersionHasItsMigration(t *testing.T) {
 		t.Fatalf("version 26 no longer upgrades to %d: a migration in the chain is missing", Version)
 	}
 	for v := uint32(0); v < 1000; v++ {
-		if migrationFor(v) != nil && v >= Version {
+		if migrationFor(v, nil) != nil && v >= Version {
 			t.Errorf("a migration from version %d, which is not older than %d", v, Version)
 		}
 	}
@@ -124,7 +124,7 @@ func TestUpgradeIsAFreshConversion(t *testing.T) {
 			} else if !strings.Contains(err.Error(), "jitllm upgrade") {
 				t.Fatalf("the refusal %q does not name jitllm upgrade", err)
 			}
-			from, err := Upgrade(p)
+			from, err := Upgrade(p, nil)
 			if err != nil || from != 29 {
 				t.Fatalf("Upgrade: from %d, %v", from, err)
 			}
@@ -140,7 +140,7 @@ func TestUpgradeIsAFreshConversion(t *testing.T) {
 				t.Fatal(err)
 			}
 			f.Close()
-			if from, err := Upgrade(p); err != nil || from != Version {
+			if from, err := Upgrade(p, nil); err != nil || from != Version {
 				t.Fatalf("upgrading a current container: from %d, %v", from, err)
 			}
 			if !audio {
@@ -151,7 +151,7 @@ func TestUpgradeIsAFreshConversion(t *testing.T) {
 				if v == 29 {
 					return func(path string) error { return setVersion(path, 30) }
 				}
-				return migrationFor(v)
+				return migrationFor(v, nil)
 			}
 			q := old()
 			if _, err := upgradeWith(stamp, q); err != nil {

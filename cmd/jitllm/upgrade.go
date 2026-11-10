@@ -15,7 +15,7 @@ import (
 // the container was converted from is not needed.
 func upgradeCmd(args []string) error {
 	for _, path := range args {
-		from, err := jlm.Upgrade(path)
+		from, err := jlm.Upgrade(path, convert.LegacyStated)
 		if err != nil {
 			return err
 		}
