@@ -119,7 +119,7 @@ func hfQKNormPresent(c *hfConfig, names []string, q, k string) (bool, error) {
 // block (num_nextn_predict_layers) carried and set aside as DeepSeek's is.
 func glm4moeHF() *hfArch {
 	return &hfArch{
-		arch:        jlm.ArchGLM4MoE,
+		arch:        ArchGLM4MoE,
 		blockPrefix: llamaHF().blockPrefix,
 		model:       llamaHF().model,
 		block: blockPlus(qwen3Block(), map[string]jlm.Role{
@@ -144,7 +144,7 @@ func glm4moeHF() *hfArch {
 
 // glm4moeHFConfig reads GLM's keys. The gate is a sigmoid whatever the file
 // says (Glm4MoeTopkRouter hardcodes it; hardcodesSigmoid), as on the GGUF side.
-func glm4moeHFConfig(c *hfConfig, names []string) (*jlm.Config, error) {
+func glm4moeHFConfig(c *hfConfig, names []string) (*Config, error) {
 	if err := hfGateAgrees(c); err != nil {
 		return nil, err
 	}
@@ -165,7 +165,7 @@ func glm4moeHFConfig(c *hfConfig, names []string) (*jlm.Config, error) {
 			}
 		}
 	}
-	cfg, err := hfConfigWith(jlm.ArchGLM4MoE, jlm.FlagRopeNeox, "silu")(c, names)
+	cfg, err := hfConfigWith(ArchGLM4MoE, jlm.FlagRopeNeox, "silu")(c, names)
 	if err != nil {
 		return nil, err
 	}
@@ -193,7 +193,7 @@ func glm4moeHFConfig(c *hfConfig, names []string) (*jlm.Config, error) {
 // scaled by its own sigmoid gate (RoleShRouter, qwen3next's).
 func qwen2moeHF() *hfArch {
 	return &hfArch{
-		arch:        jlm.ArchQwen2MoE,
+		arch:        ArchQwen2MoE,
 		blockPrefix: llamaHF().blockPrefix,
 		model:       llamaHF().model,
 		block: blockPlus(llamaHF().block, map[string]jlm.Role{
@@ -214,13 +214,13 @@ func qwen2moeHF() *hfArch {
 // width hfMoEConfig refuses for every other class. The weights are not
 // renormalised unless norm_topk_prob says so (Qwen2MoeConfig's default, every
 // published config, llama.cpp's literal).
-func qwen2moeHFConfig(c *hfConfig, names []string) (*jlm.Config, error) {
+func qwen2moeHFConfig(c *hfConfig, names []string) (*Config, error) {
 	if err := hfGateAgrees(c); err != nil {
 		return nil, err
 	}
 	sh := c.SharedExpertIntermediateSize
 	c.SharedExpertIntermediateSize = 0
-	cfg, err := hfConfigWith(jlm.ArchQwen2MoE, jlm.FlagRopeNeox, "silu")(c, names)
+	cfg, err := hfConfigWith(ArchQwen2MoE, jlm.FlagRopeNeox, "silu")(c, names)
 	if err != nil {
 		return nil, err
 	}
@@ -242,12 +242,12 @@ func qwen2moeHFConfig(c *hfConfig, names []string) (*jlm.Config, error) {
 // llama nothing is permuted.
 func ernie45HF() *hfArch {
 	return &hfArch{
-		arch:        jlm.ArchLlama,
+		arch:        ArchLlama,
 		blockPrefix: llamaHF().blockPrefix,
 		model:       llamaHF().model,
 		block:       llamaHF().block,
 		ignore:      llamaHF().ignore,
-		config:      hfConfigWith(jlm.ArchLlama, 0, "silu"),
+		config:      hfConfigWith(ArchLlama, 0, "silu"),
 	}
 }
 
@@ -256,7 +256,7 @@ func ernie45HF() *hfArch {
 // beside shared experts, after a dense lead and interleaved by a step.
 func ernie45moeHF() *hfArch {
 	return &hfArch{
-		arch:        jlm.ArchErnie45MoE,
+		arch:        ArchErnie45MoE,
 		blockPrefix: llamaHF().blockPrefix,
 		model:       llamaHF().model,
 		block: blockPlus(llamaHF().block, map[string]jlm.Role{
@@ -277,12 +277,12 @@ func ernie45moeHF() *hfArch {
 // (il+1) % moe_layer_interval == 0 and il lies in [moe_layer_start_index,
 // moe_layer_end_index]; the container's rule is the first two (NDenseLead,
 // MoEStep), so an end before the last block is refused.
-func ernie45moeHFConfig(c *hfConfig, names []string) (*jlm.Config, error) {
+func ernie45moeHFConfig(c *hfConfig, names []string) (*Config, error) {
 	if err := hfGateAgrees(c); err != nil {
 		return nil, err
 	}
 	bad := func(f string, a ...any) error { return fmt.Errorf("convert: "+c.path+": "+f, a...) }
-	cfg, err := hfConfigWith(jlm.ArchErnie45MoE, 0, "silu")(c, names)
+	cfg, err := hfConfigWith(ArchErnie45MoE, 0, "silu")(c, names)
 	if err != nil {
 		return nil, err
 	}
@@ -330,7 +330,7 @@ func ernie45moeHFConfig(c *hfConfig, names []string) (*jlm.Config, error) {
 // and jlm.FlagQKNormPostRope); the checkpoint is NEOX and unpermuted.
 func hunyuanHF() *hfArch {
 	return &hfArch{
-		arch:        jlm.ArchHunyuan,
+		arch:        ArchHunyuan,
 		blockPrefix: llamaHF().blockPrefix,
 		model:       llamaHF().model,
 		block: blockPlus(llamaHF().block, map[string]jlm.Role{
@@ -356,7 +356,7 @@ func hunyuanHF() *hfArch {
 // intermediate_size, a renormalised softmax. transformers builds the experts
 // from intermediate_size and llama.cpp from moe_intermediate_size; a file
 // where they differ is refused (RULE 7m: the references would disagree).
-func hunyuanHFConfig(c *hfConfig, names []string) (*jlm.Config, error) {
+func hunyuanHFConfig(c *hfConfig, names []string) (*Config, error) {
 	bad := func(f string, a ...any) error { return fmt.Errorf("convert: "+c.path+": "+f, a...) }
 	if err := hfGateAgrees(c); err != nil {
 		return nil, err
@@ -379,7 +379,7 @@ func hunyuanHFConfig(c *hfConfig, names []string) (*jlm.Config, error) {
 	// hfMoEConfig reads none of Hunyuan's spellings; keep it from seeing a
 	// mixture it would misread.
 	c.NumExperts, c.MoEIntermediateSize = 0, 0
-	cfg, err := hfConfigWith(jlm.ArchHunyuan, jlm.FlagRopeNeox, "silu")(c, names)
+	cfg, err := hfConfigWith(ArchHunyuan, jlm.FlagRopeNeox, "silu")(c, names)
 	if err != nil {
 		return nil, err
 	}

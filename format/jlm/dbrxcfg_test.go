@@ -48,7 +48,4 @@ func TestClampTailRoundTrips(t *testing.T) {
 			t.Errorf("a clamp of %g decoded", bad)
 		}
 	}
-	if ArchDBRX.String() != "dbrx" || !ArchDBRX.Valid() {
-		t.Errorf("ArchDBRX is %q, valid %v", ArchDBRX, ArchDBRX.Valid())
-	}
 }

@@ -48,6 +48,9 @@ func TestDenseSafetensorsMatchesItsGGUF(t *testing.T) {
 			a, b := hfSource(t, dir), ggufSource(t, gp)
 			ca, cb := reflect.ValueOf(*a.Config), reflect.ValueOf(*b.Config)
 			for i := 0; i < ca.NumField(); i++ {
+				if !ca.Type().Field(i).IsExported() {
+					continue
+				}
 				x, y := ca.Field(i).Interface(), cb.Field(i).Interface()
 				if !reflect.DeepEqual(x, y) {
 					t.Errorf("Config.%s: safetensors %v, gguf %v", ca.Type().Field(i).Name, x, y)
@@ -89,7 +92,7 @@ func TestDenseSafetensorsMatchesItsGGUF(t *testing.T) {
 			}
 			compared++
 			if !t.Failed() {
-				t.Logf("%v: every Config field and %d tensors identical", a.Config.Arch, same)
+				t.Logf("every Config field and %d tensors identical", same)
 			}
 		})
 	}
@@ -122,64 +125,64 @@ func TestDenseHFClassDefaults(t *testing.T) {
 		class string
 		extra string
 		names []string
-		check func(c *jlm.Config) string
+		check func(c *Config) string
 	}{
-		{"SmolLM3ForCausalLM", ``, nil, func(c *jlm.Config) string {
+		{"SmolLM3ForCausalLM", ``, nil, func(c *Config) string {
 			// kv 4, base 2e6, eps 1e-6, tied, NoPE every 4th layer.
 			return denseOK(c.NKVHead == 4 && c.RopeBase == 2e6 && c.RMSEps == 1e-6 &&
 				c.Flags.Has(jlm.FlagTiedEmbd) && c.NCtx == 32768 &&
 				c.Flags.Has(jlm.FlagNoPEGlobal) && c.SWAPeriod == 4 && c.SWAWindow == 0)
 		}},
-		{"SmolLM3ForCausalLM", `, "no_rope_layer_interval": 2, "sliding_window": 4096`, nil, func(c *jlm.Config) string {
+		{"SmolLM3ForCausalLM", `, "no_rope_layer_interval": 2, "sliding_window": 4096`, nil, func(c *Config) string {
 			// use_sliding_window defaults to false, so the window is unread.
 			return denseOK(c.SWAPeriod == 2 && c.SWAWindow == 0)
 		}},
-		{"ArceeForCausalLM", ``, head, func(c *jlm.Config) string {
+		{"ArceeForCausalLM", ``, head, func(c *Config) string {
 			return denseOK(c.NKVHead == 4 && c.HeadDim == 16 && c.Flags.Has(jlm.FlagReLU2) && c.NCtx == 4096 &&
 				c.RMSEps == 1e-5 && !c.Flags.Has(jlm.FlagTiedEmbd))
 		}},
-		{"SeedOssForCausalLM", ``, head, func(c *jlm.Config) string {
+		{"SeedOssForCausalLM", ``, head, func(c *Config) string {
 			return denseOK(c.NKVHead == 8 && c.HeadDim == 128 && c.NRot == 128 && c.RMSEps == 1e-6 &&
 				c.NCtx == 524288 && c.Flags.Has(jlm.FlagRopeNeox))
 		}},
-		{"Olmo2ForCausalLM", ``, head, func(c *jlm.Config) string {
+		{"Olmo2ForCausalLM", ``, head, func(c *Config) string {
 			return denseOK(c.NKVHead == 4 && c.HeadDim == 16 && c.RopeBase == 1e4 && c.SWAWindow == 0 &&
 				c.Flags.Has(jlm.FlagQKNormWide))
 		}},
-		{"Olmo3ForCausalLM", ``, head, func(c *jlm.Config) string {
+		{"Olmo3ForCausalLM", ``, head, func(c *Config) string {
 			// Window 4096 on three layers in four, base 5e5 for both kinds.
-			return denseOK(c.Arch == jlm.ArchOLMo3 && c.SWAWindow == 4096 && c.SWAPeriod == 4 &&
+			return denseOK(c.Arch == ArchOLMo3 && c.SWAWindow == 4096 && c.SWAPeriod == 4 &&
 				c.RopeBase == 5e5 && c.RopeBaseSWA == 5e5 && !c.Flags.Has(jlm.FlagNoPEGlobal))
 		}},
-		{"Olmo3ForCausalLM", `, "rope_theta": 10000.0`, head, func(c *jlm.Config) string {
+		{"Olmo3ForCausalLM", `, "rope_theta": 10000.0`, head, func(c *Config) string {
 			// The class pops rope_theta for the full layers alone: the
 			// sliding ones keep 5e5.
-			return denseOK(c.Arch == jlm.ArchOLMo3 && c.RopeBase == 1e4 && c.RopeBaseSWA == 5e5)
+			return denseOK(c.Arch == ArchOLMo3 && c.RopeBase == 1e4 && c.RopeBaseSWA == 5e5)
 		}},
 		{"Olmo3ForCausalLM", `, "num_key_value_heads": 2, "rope_scaling": {"rope_type": "yarn", "factor": 8.0,
-			"original_max_position_embeddings": 8192}`, head, func(c *jlm.Config) string {
+			"original_max_position_embeddings": 8192}`, head, func(c *Config) string {
 			// YaRN on the full layers, with its magnitude; the sliding
 			// layers' plain rotary is the arch's (SWARopePlain).
-			return denseOK(c.Arch == jlm.ArchOLMo3 && c.NKVHead == 2 && c.YarnFactor == 8 &&
+			return denseOK(c.Arch == ArchOLMo3 && c.NKVHead == 2 && c.YarnFactor == 8 &&
 				c.YarnOrigCtx == 8192 && c.AttnFactor > 1.2 && c.AttnFactor < 1.21 && c.RopeBaseSWA == 5e5)
 		}},
-		{"Olmo2ForCausalLM", `, "num_key_value_heads": 2`, head, func(c *jlm.Config) string {
-			return denseOK(c.Arch == jlm.ArchOLMo2 && c.NKVHead == 2 && c.Flags.Has(jlm.FlagQKNormWide))
+		{"Olmo2ForCausalLM", `, "num_key_value_heads": 2`, head, func(c *Config) string {
+			return denseOK(c.Arch == ArchOLMo2 && c.NKVHead == 2 && c.Flags.Has(jlm.FlagQKNormWide))
 		}},
-		{"Olmo3ForCausalLM", `, "sliding_window": null`, head, func(c *jlm.Config) string {
+		{"Olmo3ForCausalLM", `, "sliding_window": null`, head, func(c *Config) string {
 			return denseOK(c.SWAWindow == 0 && c.SWAPeriod == 0)
 		}},
-		{"Exaone4ForCausalLM", `, "num_key_value_heads": 2`, head, func(c *jlm.Config) string {
+		{"Exaone4ForCausalLM", `, "num_key_value_heads": 2`, head, func(c *Config) string {
 			// Window 4096 on three layers in four, NoPE on the fourth.
 			return denseOK(c.SWAWindow == 4096 && c.SWAPeriod == 4 && c.Flags.Has(jlm.FlagNoPEGlobal) &&
 				!c.Flags.Has(jlm.FlagQKNormWide) && c.NCtx == 2048)
 		}},
 		{"Exaone4ForCausalLM", `, "num_key_value_heads": 2, "sliding_window": null,
 			"layer_types": ["full_attention", "full_attention", "full_attention", "full_attention"]`, head,
-			func(c *jlm.Config) string {
+			func(c *Config) string {
 				return denseOK(c.SWAWindow == 0 && !c.Flags.Has(jlm.FlagNoPEGlobal))
 			}},
-		{"Ministral3ForCausalLM", `, "num_key_value_heads": 2, "rope_theta": 5.0`, head, func(c *jlm.Config) string {
+		{"Ministral3ForCausalLM", `, "num_key_value_heads": 2, "rope_theta": 5.0`, head, func(c *Config) string {
 			// No rope_parameters: the class's own YaRN dict, whose base is
 			// 1e6 whatever rope_theta says; head_dim 128.
 			return denseOK(c.HeadDim == 128 && c.RopeBase == 1e6 && c.YarnFactor == 16 &&

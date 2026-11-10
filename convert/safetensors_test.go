@@ -190,7 +190,7 @@ func TestSynthModelConverts(t *testing.T) {
 		t.Fatalf("the unmutated fixture does not convert, so no refusal below proves anything: %v", err)
 	}
 	c := s.Config
-	if c.Arch != jlm.ArchLlama || c.NLayer != sNLayer || c.NEmbd != sNEmbd ||
+	if c.NLayer != sNLayer || c.NEmbd != sNEmbd ||
 		c.NHead != sNHead || c.NKVHead != sNKV || c.HeadDim != sHeadD ||
 		c.NFFN != sNFFN || c.NVocab != sNVocab || c.NRot != sHeadD {
 		t.Fatalf("config %+v", c)

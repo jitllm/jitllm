@@ -17,7 +17,6 @@ import (
 
 	"github.com/jitllm/jitllm/convert"
 	"github.com/jitllm/jitllm/convert/library"
-	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
 )
 
@@ -97,12 +96,12 @@ func render(d lines) ([]byte, error) {
 	// Group both lists by the graph each name converts to. The vision tower's
 	// own name (clip) is not a text architecture; it goes with the projectors.
 	type graph struct {
-		arch    jlm.Arch
+		arch    convert.Arch
 		gguf    []string
 		classes []string
 	}
-	graphs := map[jlm.Arch]*graph{}
-	at := func(a jlm.Arch) *graph {
+	graphs := map[convert.Arch]*graph{}
+	at := func(a convert.Arch) *graph {
 		g := graphs[a]
 		if g == nil {
 			g = &graph{arch: a}
@@ -114,7 +113,7 @@ func render(d lines) ([]byte, error) {
 	textNames := 0
 	for _, n := range names {
 		a, _ := convert.ArchitectureGraph(n)
-		if a == jlm.ArchCLIP {
+		if a == convert.ArchCLIP {
 			towers = append(towers, n)
 			continue
 		}
@@ -182,7 +181,7 @@ func render(d lines) ([]byte, error) {
 		textNames, ggufGraphs)
 	p("- **%d** Hugging Face safetensors classes (`architectures` in `config.json`, `convert.HFClasses`) on **%d** graphs, **%d** of them reached only from safetensors\n",
 		len(classes), hfGraphs, hfOnly)
-	p("- **%d** graphs in all (`jlm.Arch`)\n", len(graphs))
+	p("- **%d** graphs in all (`convert.Arch`)\n", len(graphs))
 	p("- **%d** vision projectors (`clip.projector_type`, `convert.Projectors`)\n", len(projectors))
 	p("- **%d** audio projectors (`clip.audio.projector_type`, `convert.AudioProjectors`)\n", len(audio))
 	p("- **%d** embedding encoders, and pooling on any decoder\n", len(encoders))

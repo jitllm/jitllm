@@ -23,7 +23,7 @@ func TestDbrxCarriesItsClamp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Arch != jlm.ArchDBRX || c.ClampKQV != 8 || !c.Flags.Has(jlm.FlagLayerNorm) ||
+	if c.Arch != ArchDBRX || c.ClampKQV != 8 || !c.Flags.Has(jlm.FlagLayerNorm) ||
 		!c.Flags.Has(jlm.FlagRopeNeox) || c.Flags.Has(jlm.FlagParallel) || c.NExpert != 4 {
 		t.Fatalf("dbrx config %+v", c)
 	}
@@ -36,13 +36,13 @@ func TestDbrxCarriesItsClamp(t *testing.T) {
 	if _, err := configOf(headerOnly("llama", s)); !errors.Is(err, ErrNotImplemented) {
 		t.Errorf("a llama carrying a clamp: %v, want ErrNotImplemented", err)
 	}
-	if r := retarget(jlm.ArchDBRX, jlm.RoleAttnOutNorm); r != jlm.RoleFFNNorm {
+	if r := retarget(ArchDBRX, jlm.RoleAttnOutNorm); r != jlm.RoleFFNNorm {
 		t.Errorf("dbrx's attn_output_norm is %v, want the FFN norm", r)
 	}
-	if r := retarget(jlm.ArchBERT, jlm.RoleAttnOutNorm); r != jlm.RoleAttnOutNorm {
+	if r := retarget(ArchBERT, jlm.RoleAttnOutNorm); r != jlm.RoleAttnOutNorm {
 		t.Errorf("bert's attn_output_norm became %v", r)
 	}
-	if !fusesQKV(jlm.ArchDBRX) {
+	if !fusesQKV(ArchDBRX) {
 		t.Error("dbrx's attn_qkv is not split at conversion")
 	}
 }

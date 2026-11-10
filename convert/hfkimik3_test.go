@@ -39,12 +39,12 @@ func k3Sources(t *testing.T, dir, gp string) (hf, gg map[k3Key]*jlm.Tensor) {
 	a, b := hfSource(t, dir), ggufSource(t, gp)
 	ca, cb := reflect.ValueOf(*a.Config), reflect.ValueOf(*b.Config)
 	for i := 0; i < ca.NumField(); i++ {
+		if !ca.Type().Field(i).IsExported() {
+			continue
+		}
 		if x, y := ca.Field(i).Interface(), cb.Field(i).Interface(); !reflect.DeepEqual(x, y) {
 			t.Errorf("Config.%s: safetensors %v, gguf %v", ca.Type().Field(i).Name, x, y)
 		}
-	}
-	if a.Config.Arch != jlm.ArchKimiK3 {
-		t.Fatalf("arch %v", a.Config.Arch)
 	}
 	index := func(s *jlm.Source) map[k3Key]*jlm.Tensor {
 		m := map[k3Key]*jlm.Tensor{}
@@ -480,7 +480,7 @@ func TestALogPaddingIsTakenOnlyWhenZero(t *testing.T) {
 	c := &jlm.Config{SSM: jlm.SSMConfig{NHeadV: 2, StateSize: 3}}
 	e := jlm.Tensor{Type: jlm.TypeF32, NDim: 1, Dims: [4]uint64{4}, Name: "A_log"}
 	padded := f32AsBytes([]float32{0.5, -1, 0, 0})
-	out, err := kimiExpandALog(e, padded, c)
+	out, err := kimiExpandALog(e, padded, &Config{Config: c})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -490,7 +490,7 @@ func TestALogPaddingIsTakenOnlyWhenZero(t *testing.T) {
 	if !bytes.Equal(out[0].Data, want) || out[0].Dims[0] != 6 {
 		t.Fatalf("padded A_log expanded to %v", k3Values(t, &out[0]))
 	}
-	if _, err := kimiExpandALog(e, f32AsBytes([]float32{0.5, -1, 0, 2}), c); err == nil {
+	if _, err := kimiExpandALog(e, f32AsBytes([]float32{0.5, -1, 0, 2}), &Config{Config: c}); err == nil {
 		t.Fatal("a tail that is not zero padding was taken")
 	}
 }

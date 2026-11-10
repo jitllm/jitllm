@@ -19,7 +19,7 @@ import "github.com/jitllm/jitllm/format/jlm"
 //
 // s the block's three stored scales, base its stored bias; the head reads
 // sum_k pre_k x_k through a gate of its own (one scale, no post or comb).
-func stateMHC(c *jlm.Config) {
+func stateMHC(c *Config) {
 	n := int(c.HCMult)
 	s := jlm.Streams{N: uint8(n), Expand: make([]*jlm.Program, n-1), Blocks: make([]jlm.BlockStreams, c.NLayer+c.NMTP)}
 	for li := range s.Blocks {
@@ -81,7 +81,7 @@ func (g *mhcProg) vector(of uint16, r jlm.Role, w int32) uint16 {
 
 // mix is the streams' normed row through fn, each of the segments (their
 // widths ws) times its stored scale, plus the stored base.
-func (g *mhcProg) mix(c *jlm.Config, fn, scale, base jlm.Role, ws ...int32) uint16 {
+func (g *mhcProg) mix(c *Config, fn, scale, base jlm.Role, ws ...int32) uint16 {
 	streams := make([]uint16, g.n)
 	for k := range streams {
 		streams[k] = uint16(k)
@@ -112,7 +112,7 @@ func (g *mhcProg) collapse(d int32, w uint16) uint16 {
 	return acc
 }
 
-func mhcSub(c *jlm.Config, fn, scale, base jlm.Role) jlm.SubStreams {
+func mhcSub(c *Config, fn, scale, base jlm.Role) jlm.SubStreams {
 	n, d, eps := int32(c.HCMult), int32(c.NEmbd), c.HCEps
 	g := newMHCProg(int(n))
 	m := g.mix(c, fn, scale, base, n, n, n*n)
@@ -182,7 +182,7 @@ func mhcSub(c *jlm.Config, fn, scale, base jlm.Role) jlm.SubStreams {
 	return u
 }
 
-func mhcHead(c *jlm.Config) jlm.SubStreams {
+func mhcHead(c *Config) jlm.SubStreams {
 	n, d, eps := int32(c.HCMult), int32(c.NEmbd), c.HCEps
 	g := newMHCProg(int(n))
 	m := g.mix(c, jlm.RoleHCHeadFn, jlm.RoleHCHeadScale, jlm.RoleHCHeadBase, n)

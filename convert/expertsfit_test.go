@@ -39,7 +39,7 @@ func TestAMixtureWithNoReferenceIsRefused(t *testing.T) {
 			if tc.in {
 				c.Flags |= jlm.FlagExpertWeightIn
 			}
-			err := expertsFit(&jlm.Source{Config: c, Tensors: tc.ts})
+			err := expertsFit(&Config{Config: c}, &jlm.Source{Config: c, Tensors: tc.ts})
 			switch {
 			case tc.refuse && !errors.Is(err, ErrNotImplemented):
 				t.Fatalf("refused with %v, want ErrNotImplemented", err)

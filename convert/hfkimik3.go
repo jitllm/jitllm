@@ -28,7 +28,7 @@ import (
 // linear one), and the situ activation, a config key.
 func kimiK3HF() *hfArch {
 	return &hfArch{
-		arch:        jlm.ArchKimiK3,
+		arch:        ArchKimiK3,
 		blockPrefix: k3BlockPrefix,
 		model: map[string]jlm.Role{
 			"language_model.model.embed_tokens.weight": jlm.RoleTokenEmbd,
@@ -186,7 +186,7 @@ func k3TextConfigOf(c *hfConfig) (*k3TextConfig, error) {
 // the two inputs cannot drift apart. Every absent key takes
 // KimiLinearConfig's default; every graph the engine does not run is refused
 // by its key.
-func kimiK3HFConfig(c *hfConfig, names []string) (*jlm.Config, error) {
+func kimiK3HFConfig(c *hfConfig, names []string) (*Config, error) {
 	tc, err := k3TextConfigOf(c)
 	if err != nil {
 		return nil, err
@@ -443,7 +443,7 @@ const k3OutputRes = "language_model.model.output_attn_res"
 // model with residual attention (attn_res_block_size) carries every pair;
 // one without carries none, and a stray pair is left unconsumed for identify
 // to refuse.
-func kimiK3Gather(c *jlm.Config, names []string, read func(string) ([]float32, error)) ([]jlm.Tensor, map[string]bool, error) {
+func kimiK3Gather(c *Config, names []string, read func(string) ([]float32, error)) ([]jlm.Tensor, map[string]bool, error) {
 	if c.AttnResBlock == 0 {
 		return nil, nil, nil
 	}

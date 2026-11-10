@@ -320,7 +320,7 @@ func hfSourceOf(dir hfDir, shards []*safetensors.File) (*jlm.Source, error) {
 	if err := localAxes(cfg); err != nil {
 		return nil, err
 	}
-	s := &jlm.Source{Config: cfg}
+	s := &jlm.Source{Config: cfg.Config}
 
 	voc, err := hfVocabOf(dir, cfg.NVocab)
 	if err != nil {
@@ -531,27 +531,27 @@ func hfSourceOf(dir hfDir, shards []*safetensors.File) (*jlm.Source, error) {
 	if len(s.Tensors) == 0 {
 		return nil, fmt.Errorf("convert: %s: no tensor in this model has a role", dir)
 	}
-	if err := StateActivations(s); err != nil {
+	if err := StateActivations(cfg, s); err != nil {
 		return nil, err
 	}
-	StateStreams(s.Config, sourceStores(s))
-	if err := StateSelection(s.Config, sourceStores(s)); err != nil {
+	StateStreams(cfg.Config, sourceStores(s))
+	if err := StateSelection(cfg.Config, sourceStores(s)); err != nil {
 		return nil, err
 	}
-	if err := expertsFit(s); err != nil {
+	if err := expertsFit(cfg, s); err != nil {
 		return nil, err
 	}
-	if err := valueWidthFits(s.Config); err != nil {
+	if err := valueWidthFits(cfg); err != nil {
 		return nil, err
 	}
-	if err := geometryFits(s.Config); err != nil {
+	if err := geometryFits(cfg); err != nil {
 		return nil, err
 	}
-	if err := ropeFits(s.Config); err != nil {
+	if err := ropeFits(cfg); err != nil {
 		return nil, err
 	}
-	StateDelta(s.Config, sourceStores(s))
-	StateRevision(s.Config)
+	StateDelta(cfg.Config, sourceStores(s))
+	StateRevision(cfg)
 	return s, nil
 }
 
@@ -559,7 +559,7 @@ func hfSourceOf(dir hfDir, shards []*safetensors.File) (*jlm.Source, error) {
 // architecture's fixup, and hand them over. A fixup that changed a matrix's
 // type or shape at that point would have been laid out wrong already, so it
 // is refused rather than written.
-func lazyFixup(ha *hfArch, e jlm.Tensor, read func() ([]byte, error), c *jlm.Config) func() ([]byte, error) {
+func lazyFixup(ha *hfArch, e jlm.Tensor, read func() ([]byte, error), c *Config) func() ([]byte, error) {
 	return func() ([]byte, error) {
 		data, err := read()
 		if err != nil {
@@ -592,7 +592,7 @@ func indexOf(xs []string, x string) int {
 // on k and type, and a missing source is a refusal: Kimi-Linear's mixed
 // projection is sliced by arithmetic, so a missing v would be read past the
 // end and a missing q would silently promote k into q's rows.
-func concatRows(fuses map[bankKey][]*jlm.Tensor, ha *hfArch, c *jlm.Config) ([]jlm.Tensor, error) {
+func concatRows(fuses map[bankKey][]*jlm.Tensor, ha *hfArch, c *Config) ([]jlm.Tensor, error) {
 	keys := make([]bankKey, 0, len(fuses))
 	for k := range fuses {
 		keys = append(keys, k)
@@ -693,7 +693,7 @@ type bankKey struct {
 // back are the [E, rows, k] GGUF bank shape the engine already reads
 // (model.bankExpert slices it). A missing expert is a refusal: the router has
 // NExpert rows.
-func stackBanks(banks map[bankKey][]*jlm.Tensor, c *jlm.Config) ([]jlm.Tensor, error) {
+func stackBanks(banks map[bankKey][]*jlm.Tensor, c *Config) ([]jlm.Tensor, error) {
 	keys := make([]bankKey, 0, len(banks))
 	for k := range banks {
 		keys = append(keys, k)
@@ -737,7 +737,7 @@ func stackBanks(banks map[bankKey][]*jlm.Tensor, c *jlm.Config) ([]jlm.Tensor, e
 // The source is row-major [out, in], so a row range is a byte range. The row
 // counts come from the config and must sum to the tensor's: parts sized by a
 // wrong geometry are plausible wrong tensors.
-func splitRows(e jlm.Tensor, data []byte, roles []jlm.Role, c *jlm.Config) ([]jlm.Tensor, error) {
+func splitRows(e jlm.Tensor, data []byte, roles []jlm.Role, c *Config) ([]jlm.Tensor, error) {
 	if e.NDim != 2 {
 		return nil, fmt.Errorf("convert: %s is fused and %d-dimensional", e.Name, e.NDim)
 	}
@@ -767,7 +767,7 @@ func splitRows(e jlm.Tensor, data []byte, roles []jlm.Role, c *jlm.Config) ([]jl
 
 // hfHeadDimV is the value head's width. jlm.Config stores zero where it equals
 // HeadDim, so every reader has to ask rather than read the field.
-func hfHeadDimV(c *jlm.Config) uint32 {
+func hfHeadDimV(c *Config) uint32 {
 	if c.HeadDimV != 0 {
 		return c.HeadDimV
 	}
@@ -775,7 +775,7 @@ func hfHeadDimV(c *jlm.Config) uint32 {
 }
 
 // hfRows is a projection's output width, from the config alone.
-func hfRows(r jlm.Role, c *jlm.Config) uint64 {
+func hfRows(r jlm.Role, c *Config) uint64 {
 	switch r {
 	case jlm.RoleAttnQ:
 		return uint64(c.NHead) * uint64(c.HeadDim)
@@ -1026,7 +1026,7 @@ func (c *hfConfig) act() string {
 // testdata/golden/hf that model.TestSafetensorsMatchTransformers compares
 // against transformers.
 type hfArch struct {
-	arch jlm.Arch
+	arch Arch
 	// model holds whole-name, model-level tensors.
 	model map[string]jlm.Role
 	// block holds the suffix after "model.layers.N.".
@@ -1067,17 +1067,17 @@ type hfArch struct {
 	// projection q|k|v by arithmetic, so any other order has the right shape
 	// and every head wrong.
 	fuseOrder map[jlm.Role][]string
-	config    func(*hfConfig, []string) (*jlm.Config, error)
+	config    func(*hfConfig, []string) (*Config, error)
 	// gather folds source tensors whose VALUES the converter needs into
 	// tensors of its own before anything is written (Apertus's four xIELU
 	// scalars a block become one RoleXIELU vector). It reads through read and
 	// returns what it made and the source names it consumed, which the
 	// identify loop then skips. Optional.
-	gather func(c *jlm.Config, names []string, read func(name string) ([]float32, error)) ([]jlm.Tensor, map[string]bool, error)
+	gather func(c *Config, names []string, read func(name string) ([]float32, error)) ([]jlm.Tensor, map[string]bool, error)
 	// fixup rewrites a tensor's bytes on the way in. Optional: an architecture
 	// whose weights are already in the container's layout leaves it nil and
 	// setData carries the bytes through.
-	fixup func(*jlm.Tensor, []byte, *jlm.Config) error
+	fixup func(*jlm.Tensor, []byte, *Config) error
 	// retype gives a tensor a container type its source dtype does not map
 	// to, before anything is laid out: the type, the [rows, cols] shape and
 	// the read that produces its bytes (BitNet's ternary projections, from
@@ -1098,7 +1098,7 @@ type hfRetyped struct {
 // hfSplit cuts one source tensor into the container tensors it holds. Each
 // returned tensor carries its own Data; the caller does not touch them again
 // except to check their shapes.
-type hfSplit func(jlm.Tensor, []byte, *jlm.Config) ([]jlm.Tensor, error)
+type hfSplit func(jlm.Tensor, []byte, *Config) ([]jlm.Tensor, error)
 
 // blockRest is the block-relative name identify matched -- the key `split`
 // uses -- or name itself for a model-level tensor. identify has already
@@ -1116,7 +1116,7 @@ func (a *hfArch) blockRest(name string) string {
 }
 
 // setData runs the architecture's fixup, or carries the bytes through.
-func (a *hfArch) setData(e *jlm.Tensor, data []byte, c *jlm.Config) error {
+func (a *hfArch) setData(e *jlm.Tensor, data []byte, c *Config) error {
 	if a.fixup == nil {
 		e.Data = data
 		return nil
@@ -1213,11 +1213,11 @@ func HFClasses() []string {
 
 // HFClassGraph is the graph a Hugging Face class converts to, and whether the
 // class is in the list. As on the GGUF side, the config can refine it (OLMo 3
-// with a window is jlm.ArchOLMo3); this is the class's own entry.
-func HFClassGraph(class string) (jlm.Arch, bool) {
+// with a window is ArchOLMo3); this is the class's own entry.
+func HFClassGraph(class string) (Arch, bool) {
 	a, ok := hfArchTable()[class]
 	if !ok {
-		return jlm.ArchNone, false
+		return ArchNone, false
 	}
 	return a.arch, true
 }
@@ -1293,7 +1293,7 @@ func leadingIndex(name, s string) (int32, string, error) {
 // mismatch. It is the gate on the name table: a q projection wired to k has
 // the same shape under MHA and answers fluently, so the mapping can only be
 // checked against arithmetic (gate/up are NFFN rows, q is NHead*HeadDim...).
-func hfCheckShape(e *jlm.Tensor, c *jlm.Config) error {
+func hfCheckShape(e *jlm.Tensor, c *Config) error {
 	want := func(dims ...uint64) error {
 		if int(e.NDim) != len(dims) {
 			return fmt.Errorf("convert: %s is %d-dimensional, and %v is %d",
@@ -1417,7 +1417,7 @@ func hfCheckShape(e *jlm.Tensor, c *jlm.Config) error {
 
 func llamaHF() *hfArch {
 	return &hfArch{
-		arch:        jlm.ArchLlama,
+		arch:        ArchLlama,
 		blockPrefix: "model.layers.",
 		model: map[string]jlm.Role{
 			"model.embed_tokens.weight": jlm.RoleTokenEmbd,
@@ -1451,7 +1451,7 @@ func llamaHF() *hfArch {
 			"model.rotary_emb.inv_freq":     true,
 			"self_attn.rotary_emb.inv_freq": true,
 		},
-		config: hfConfigWith(jlm.ArchLlama, 0, "silu"),
+		config: hfConfigWith(ArchLlama, 0, "silu"),
 		fixup:  llamaHFFixup,
 	}
 }
@@ -1462,12 +1462,12 @@ func llamaHF() *hfArch {
 // qwen3 permuting would also misalign the per-head q/k norm weight.
 func qwen2HF() *hfArch {
 	return &hfArch{
-		arch:        jlm.ArchQwen2,
+		arch:        ArchQwen2,
 		blockPrefix: llamaHF().blockPrefix,
 		model:       llamaHF().model,
 		block:       llamaHF().block,
 		ignore:      llamaHF().ignore,
-		config:      hfConfigWith(jlm.ArchQwen2, jlm.FlagRopeNeox, "silu"),
+		config:      hfConfigWith(ArchQwen2, jlm.FlagRopeNeox, "silu"),
 	}
 }
 
@@ -1483,12 +1483,12 @@ func qwen3Block() map[string]jlm.Role {
 
 func qwen3HF() *hfArch {
 	return &hfArch{
-		arch:        jlm.ArchQwen3,
+		arch:        ArchQwen3,
 		blockPrefix: llamaHF().blockPrefix,
 		model:       llamaHF().model,
 		block:       qwen3Block(),
 		ignore:      llamaHF().ignore,
-		config:      hfConfigWith(jlm.ArchQwen3, jlm.FlagRopeNeox|jlm.FlagQKNorm, "silu"),
+		config:      hfConfigWith(ArchQwen3, jlm.FlagRopeNeox|jlm.FlagQKNorm, "silu"),
 	}
 }
 
@@ -1505,14 +1505,14 @@ func hfExperts() map[string]jlm.Role {
 // qwen3's attention with the dense FFN replaced by a router and experts.
 func qwen3moeHF() *hfArch {
 	return &hfArch{
-		arch:         jlm.ArchQwen3MoE,
+		arch:         ArchQwen3MoE,
 		blockPrefix:  llamaHF().blockPrefix,
 		model:        llamaHF().model,
 		block:        blockPlus(qwen3Block(), map[string]jlm.Role{"mlp.gate.weight": jlm.RoleRouter}),
 		expertPrefix: "mlp.experts.",
 		expert:       hfExperts(),
 		ignore:       llamaHF().ignore,
-		config:       hfConfigWith(jlm.ArchQwen3MoE, jlm.FlagRopeNeox|jlm.FlagQKNorm, "silu"),
+		config:       hfConfigWith(ArchQwen3MoE, jlm.FlagRopeNeox|jlm.FlagQKNorm, "silu"),
 	}
 }
 
@@ -1521,19 +1521,19 @@ func qwen3moeHF() *hfArch {
 // not renormalised (norm_topk_prob, read by hfMoEConfig).
 func olmoeHF() *hfArch {
 	return &hfArch{
-		arch:         jlm.ArchOLMoE,
+		arch:         ArchOLMoE,
 		blockPrefix:  llamaHF().blockPrefix,
 		model:        llamaHF().model,
 		block:        qwen3moeHF().block,
 		expertPrefix: "mlp.experts.",
 		expert:       hfExperts(),
 		ignore:       llamaHF().ignore,
-		config: func(c *hfConfig, names []string) (*jlm.Config, error) {
+		config: func(c *hfConfig, names []string) (*Config, error) {
 			// clip_qkv clamps q, k and v to [-x, x]; nothing here does.
 			if c.ClipQKV != nil {
 				return nil, fmt.Errorf("convert: %s: clip_qkv %v is not implemented", c.path, *c.ClipQKV)
 			}
-			cfg, err := hfConfigWith(jlm.ArchOLMoE, jlm.FlagRopeNeox|jlm.FlagQKNorm|jlm.FlagQKNormWide, "silu")(c, names)
+			cfg, err := hfConfigWith(ArchOLMoE, jlm.FlagRopeNeox|jlm.FlagQKNorm|jlm.FlagQKNormWide, "silu")(c, names)
 			if err != nil {
 				return nil, err
 			}
@@ -1553,7 +1553,7 @@ func olmoeHF() *hfArch {
 // top-k; the class has no norm_topk_prob.
 func mixtralHF() *hfArch {
 	return &hfArch{
-		arch:        jlm.ArchLlama,
+		arch:        ArchLlama,
 		blockPrefix: llamaHF().blockPrefix,
 		model:       llamaHF().model,
 		block: map[string]jlm.Role{
@@ -1572,8 +1572,8 @@ func mixtralHF() *hfArch {
 			"w2.weight": jlm.RoleExpDownBank,
 		},
 		ignore: llamaHF().ignore,
-		config: func(c *hfConfig, names []string) (*jlm.Config, error) {
-			cfg, err := hfConfigWith(jlm.ArchLlama, 0, "silu")(c, names)
+		config: func(c *hfConfig, names []string) (*Config, error) {
+			cfg, err := hfConfigWith(ArchLlama, 0, "silu")(c, names)
 			if err != nil {
 				return nil, err
 			}
@@ -1591,17 +1591,17 @@ func mixtralHF() *hfArch {
 // true, so an absent key means tied.
 func gemmaHF() *hfArch {
 	return &hfArch{
-		arch:        jlm.ArchGemma,
+		arch:        ArchGemma,
 		blockPrefix: llamaHF().blockPrefix,
 		model:       llamaHF().model,
 		block:       llamaHF().block,
 		ignore:      llamaHF().ignore,
-		config: func(c *hfConfig, names []string) (*jlm.Config, error) {
+		config: func(c *hfConfig, names []string) (*Config, error) {
 			if c.TieWordEmbeddings == nil {
 				t := true
 				c.TieWordEmbeddings = &t
 			}
-			cfg, err := hfConfigWith(jlm.ArchGemma, jlm.FlagRopeNeox|jlm.FlagGELU, "gelu_pytorch_tanh")(c, names)
+			cfg, err := hfConfigWith(ArchGemma, jlm.FlagRopeNeox|jlm.FlagGELU, "gelu_pytorch_tanh")(c, names)
 			if err != nil {
 				return nil, err
 			}
@@ -1618,7 +1618,7 @@ func gemmaHF() *hfArch {
 // the second. RoleFFNUp is the fused tensor's role, as the schema says.
 func phi3HF() *hfArch {
 	return &hfArch{
-		arch:        jlm.ArchPhi3,
+		arch:        ArchPhi3,
 		blockPrefix: llamaHF().blockPrefix,
 		model:       llamaHF().model,
 		block: map[string]jlm.Role{
@@ -1634,13 +1634,13 @@ func phi3HF() *hfArch {
 			jlm.RoleFFNUp:   {jlm.RoleFFNGate, jlm.RoleFFNUp},
 		},
 		ignore: llamaHF().ignore,
-		config: func(c *hfConfig, names []string) (*jlm.Config, error) {
+		config: func(c *hfConfig, names []string) (*Config, error) {
 			// phi3 slides every layer (allLocal), as the GGUF path does.
 			win := uint32(0)
 			if c.SlidingWindow != nil && (c.UseSlidingWindow == nil || *c.UseSlidingWindow) {
 				win, c.SlidingWindow = *c.SlidingWindow, nil
 			}
-			cfg, err := hfConfigWith(jlm.ArchPhi3, jlm.FlagRopeNeox, "silu")(c, names)
+			cfg, err := hfConfigWith(ArchPhi3, jlm.FlagRopeNeox, "silu")(c, names)
 			if err != nil {
 				return nil, err
 			}
@@ -1664,7 +1664,7 @@ func phi3HF() *hfArch {
 // block first_k_dense_replace agrees with.
 func deepseek2HF() *hfArch {
 	return &hfArch{
-		arch:        jlm.ArchDeepseek2,
+		arch:        ArchDeepseek2,
 		blockPrefix: llamaHF().blockPrefix,
 		model:       llamaHF().model,
 		block: map[string]jlm.Role{
@@ -1722,7 +1722,7 @@ func deepseek2HF() *hfArch {
 	}
 }
 
-func deepseekHFConfig(c *hfConfig, names []string) (*jlm.Config, error) {
+func deepseekHFConfig(c *hfConfig, names []string) (*Config, error) {
 	// The prediction blocks are this spelling's: Kimi-Linear, the other caller
 	// of deepseekHFConfigFFN, ships none. DeepseekV3Config defaults the count
 	// to 1, and transformers drops the block's tensors on load and so on save:
@@ -1743,7 +1743,7 @@ func deepseekHFConfig(c *hfConfig, names []string) (*jlm.Config, error) {
 // as a parameter. Kimi-Linear carries the same MLA geometry and the same V3
 // router under "block_sparse_moe." instead of "mlp.", and the layer-set check
 // below is the one place that spelling reaches.
-func deepseekHFConfigFFN(c *hfConfig, names []string, ffn string) (*jlm.Config, error) {
+func deepseekHFConfigFFN(c *hfConfig, names []string, ffn string) (*Config, error) {
 	bad := func(f string, a ...any) error {
 		return fmt.Errorf("convert: "+c.path+": "+f, a...)
 	}
@@ -1759,7 +1759,7 @@ func deepseekHFConfigFFN(c *hfConfig, names []string, ffn string) (*jlm.Config, 
 			"this architecture is multi-head latent attention and all four describe its geometry",
 			c.KVLoraRank, c.QKNopeHeadDim, c.QKRopeHeadDim, c.VHeadDim)
 	}
-	cfg, err := hfConfigWith(jlm.ArchDeepseek2, 0, "silu")(c, names)
+	cfg, err := hfConfigWith(ArchDeepseek2, 0, "silu")(c, names)
 	if err != nil {
 		return nil, err
 	}
@@ -1794,7 +1794,7 @@ func deepseekHFConfigFFN(c *hfConfig, names []string, ffn string) (*jlm.Config, 
 // Both forms are real and only the config says which: V2-Lite has
 // "q_lora_rank": null and a one-step q_proj; larger models go through
 // q_a_proj, a norm and q_b_proj. A mismatch would leave weights unread.
-func deepseekQueryForm(c *hfConfig, cfg *jlm.Config, names []string) error {
+func deepseekQueryForm(c *hfConfig, cfg *Config, names []string) error {
 	var oneStep, twoStep bool
 	for _, n := range names {
 		switch {
@@ -1823,7 +1823,7 @@ func deepseekQueryForm(c *hfConfig, cfg *jlm.Config, names []string) error {
 //
 // hfMoEConfig has already run and seen no mixture, which is correct: DeepSeek
 // spells its count n_routed_experts, and its knobs have no equivalent there.
-func deepseekMoE(c *hfConfig, cfg *jlm.Config, names []string, ffn string) error {
+func deepseekMoE(c *hfConfig, cfg *Config, names []string, ffn string) error {
 	bad := func(f string, a ...any) error {
 		return fmt.Errorf("convert: "+c.path+": "+f, a...)
 	}
@@ -1892,7 +1892,7 @@ func deepseekMoE(c *hfConfig, cfg *jlm.Config, names []string, ffn string) error
 // The names are disjoint, so without this check the converter would believe
 // the key over the weights: a mismatched block would run a router with no
 // bank, or never read its dense tensors.
-func deepseekLayerSets(c *hfConfig, cfg *jlm.Config, names []string, ffn string) error {
+func deepseekLayerSets(c *hfConfig, cfg *Config, names []string, ffn string) error {
 	const pfx = "model.layers."
 	dense := make(map[int32]bool, cfg.NLayer)
 	moe := make(map[int32]bool, cfg.NLayer)
@@ -1976,7 +1976,7 @@ func deepseekLayerSets(c *hfConfig, cfg *jlm.Config, names []string, ffn string)
 // numbers. The outputs are sheeted one per head (jlm.sheetsOf) so the graph
 // can address a head through SheetSpan; it is also llama.cpp's wk_b shape
 // {qk_nope, kv_lora_rank, n_head}.
-func deepseekSplitKVB(e jlm.Tensor, data []byte, c *jlm.Config) ([]jlm.Tensor, error) {
+func deepseekSplitKVB(e jlm.Tensor, data []byte, c *Config) ([]jlm.Tensor, error) {
 	if e.NDim != 2 {
 		return nil, fmt.Errorf("convert: %s is %d-dimensional", e.Name, e.NDim)
 	}
@@ -2086,7 +2086,7 @@ func hfYarnConsume(c *hfConfig) (*hfYarn, error) {
 // multiply the softmax scale by mscale(f, mscale_all_dim) squared
 // (yarn_apply_mscale) whatever the rotary did; that is YarnLogMul, set only for
 // ArchDeepseek2. No other class here scales the score.
-func hfYarnApply(y *hfYarn, cfg *jlm.Config) {
+func hfYarnApply(y *hfYarn, cfg *Config) {
 	if y == nil || y.Factor <= 1 {
 		return
 	}
@@ -2113,7 +2113,7 @@ func hfYarnApply(y *hfYarn, cfg *jlm.Config) {
 	default:
 		cfg.AttnFactor *= float32(ms(1))
 	}
-	if cfg.Arch == jlm.ArchDeepseek2 && set(y.MScaleAllDim) {
+	if cfg.Arch == ArchDeepseek2 && set(y.MScaleAllDim) {
 		cfg.YarnLogMul = float32(0.1 * *y.MScaleAllDim)
 	}
 }
@@ -2133,8 +2133,8 @@ func blockPlus(base, extra map[string]jlm.Role) map[string]jlm.Role {
 
 // hfConfigWith is llamaHFConfig for one architecture: its flags, and the one
 // activation its feed-forward computes.
-func hfConfigWith(arch jlm.Arch, flags jlm.Flags, act string) func(*hfConfig, []string) (*jlm.Config, error) {
-	return func(c *hfConfig, names []string) (*jlm.Config, error) {
+func hfConfigWith(arch Arch, flags jlm.Flags, act string) func(*hfConfig, []string) (*Config, error) {
+	return func(c *hfConfig, names []string) (*Config, error) {
 		// The activation is a graph fact, so a different one is a refusal:
 		// erf GELU and gelu_pytorch_tanh differ, and SiLU on a GELU checkpoint
 		// runs fluently.
@@ -2151,7 +2151,7 @@ func hfConfigWith(arch jlm.Arch, flags jlm.Flags, act string) func(*hfConfig, []
 	}
 }
 
-func llamaHFConfig(arch jlm.Arch, c *hfConfig, names []string) (*jlm.Config, error) {
+func llamaHFConfig(arch Arch, c *hfConfig, names []string) (*Config, error) {
 	bad := func(f string, a ...any) error {
 		return fmt.Errorf("convert: "+c.path+": "+f, a...)
 	}
@@ -2181,8 +2181,7 @@ func llamaHFConfig(arch jlm.Arch, c *hfConfig, names []string) (*jlm.Config, err
 		return nil, bad("sliding_window %d is in use and is not implemented from "+
 			"safetensors", *c.SlidingWindow)
 	}
-	cfg := &jlm.Config{
-		Arch:       arch,
+	cfg := &Config{Arch: arch, Config: &jlm.Config{
 		NLayer:     c.NumHiddenLayers,
 		NEmbd:      c.HiddenSize,
 		NHead:      c.NumAttentionHeads,
@@ -2192,7 +2191,7 @@ func llamaHFConfig(arch jlm.Arch, c *hfConfig, names []string) (*jlm.Config, err
 		RopeBase:   10000,
 		EmbdScale:  1,
 		AttnFactor: 1,
-	}
+	}}
 	if cfg.NCtx == 0 {
 		cfg.NCtx = 2048
 	}
@@ -2249,7 +2248,7 @@ func llamaHFConfig(arch jlm.Arch, c *hfConfig, names []string) (*jlm.Config, err
 //
 // Being a mixture is read off the keys, as configOf reads expert_count:
 // mixtral is llama's Arch with an expert count.
-func hfMoEConfig(c *hfConfig, cfg *jlm.Config) error {
+func hfMoEConfig(c *hfConfig, cfg *Config) error {
 	n := max(c.NumExperts, c.NumLocalExperts)
 	if n == 0 {
 		return nil
@@ -2331,7 +2330,7 @@ func hfRopeScalingOK(c *hfConfig) error {
 // converted from either format is the same container, which is what makes the
 // cross-format gate possible and keeps one rotary layout in the engine. Getting
 // it wrong still looks fine on short prompts.
-func llamaHFFixup(e *jlm.Tensor, data []byte, c *jlm.Config) error {
+func llamaHFFixup(e *jlm.Tensor, data []byte, c *Config) error {
 	var heads uint32
 	switch e.Role {
 	case jlm.RoleAttnQ, jlm.RoleAttnQBias:
@@ -2365,7 +2364,7 @@ func llamaHFFixup(e *jlm.Tensor, data []byte, c *jlm.Config) error {
 // Every norm, including the final one, as convert_hf_to_gguf.py does. An f16
 // norm comes out f32: adding one in half precision would round differently
 // from the reference.
-func gemmaHFFixup(e *jlm.Tensor, data []byte, c *jlm.Config) error {
+func gemmaHFFixup(e *jlm.Tensor, data []byte, c *Config) error {
 	switch e.Role {
 	case jlm.RoleAttnNorm, jlm.RoleFFNNorm, jlm.RoleOutputNorm:
 	default:
@@ -2435,7 +2434,7 @@ func hardcodesSigmoid(archs []string) bool {
 // o_proj mean different things in linear and full layers, hence blockLinear.
 func kimiLinearHF() *hfArch {
 	return &hfArch{
-		arch:        jlm.ArchKimiLinear,
+		arch:        ArchKimiLinear,
 		blockPrefix: llamaHF().blockPrefix,
 		model:       llamaHF().model,
 		block: map[string]jlm.Role{
@@ -2526,7 +2525,7 @@ func kimiLinearHF() *hfArch {
 // channel), which reverses to ne = [taps, 1, channels]; the container's
 // RoleSSMConv1d is [kernel, channels]. No byte moves. Left 3-D, concatRows
 // would join ne1 (1 for each) and produce three channels, not 3*channels.
-func kimiSqueezeConv1d(e jlm.Tensor, data []byte, c *jlm.Config) ([]jlm.Tensor, error) {
+func kimiSqueezeConv1d(e jlm.Tensor, data []byte, c *Config) ([]jlm.Tensor, error) {
 	if e.NDim != 3 || e.Dims[1] != 1 {
 		return nil, fmt.Errorf("convert: %s: a causal convolution is [channels, 1, taps]; "+
 			"this one has ne %v over %d dimension(s)", e.Name, e.Dims, e.NDim)
@@ -2544,7 +2543,7 @@ func kimiSqueezeConv1d(e jlm.Tensor, data []byte, c *jlm.Config) ([]jlm.Tensor, 
 // times here rather than broadcast every token.
 //
 // The source is [1, 1, heads, 1], which reverses to ne = [1, heads, 1, 1].
-func kimiExpandALog(e jlm.Tensor, data []byte, c *jlm.Config) ([]jlm.Tensor, error) {
+func kimiExpandALog(e jlm.Tensor, data []byte, c *Config) ([]jlm.Tensor, error) {
 	heads, kDim := int(c.SSM.NHeadV), int(c.SSM.StateSize)
 	if e.Type != jlm.TypeF32 {
 		return nil, fmt.Errorf("convert: %s: A_log is %v; the decay is derived from it at "+
@@ -2662,7 +2661,7 @@ func kimiNormalize(c *hfConfig) error {
 // first normalises the re-spelled mixture keys (see hfConfig); a checkpoint
 // carrying two spellings with different values is refused, since there is no
 // way to know which its weights were trained under (RULE 7m).
-func kimiLinearHFConfig(c *hfConfig, names []string) (*jlm.Config, error) {
+func kimiLinearHFConfig(c *hfConfig, names []string) (*Config, error) {
 	bad := func(f string, a ...any) error {
 		return fmt.Errorf("convert: "+c.path+": "+f, a...)
 	}
@@ -2740,7 +2739,7 @@ func kimiLinearHFConfig(c *hfConfig, names []string) (*jlm.Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	cfg.Arch = jlm.ArchKimiLinear
+	cfg.Arch = ArchKimiLinear
 	// The full blocks are MLA with NoPE: KimiLinearAttention never applies the
 	// rotary and concatenates the qk_rope_head_dim channels into the key as is.
 	cfg.Flags |= jlm.FlagNoPosEnc

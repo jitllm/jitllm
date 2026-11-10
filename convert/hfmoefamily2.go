@@ -16,7 +16,7 @@ import (
 // is a sigmoid whatever the file says (Dots1TopkRouter; hardcodesSigmoid).
 func dots1HF() *hfArch {
 	return &hfArch{
-		arch:        jlm.ArchDots1,
+		arch:        ArchDots1,
 		blockPrefix: llamaHF().blockPrefix,
 		model:       llamaHF().model,
 		block: blockPlus(qwen3Block(), map[string]jlm.Role{
@@ -36,7 +36,7 @@ func dots1HF() *hfArch {
 // dots1HFConfig reads dots.llm1's keys. Its config carries layer_types even
 // with no window: every entry must be full attention, the sliding layers being
 // what the GGUF side refuses too.
-func dots1HFConfig(c *hfConfig, names []string) (*jlm.Config, error) {
+func dots1HFConfig(c *hfConfig, names []string) (*Config, error) {
 	if err := hfGateAgrees(c); err != nil {
 		return nil, err
 	}
@@ -47,7 +47,7 @@ func dots1HFConfig(c *hfConfig, names []string) (*jlm.Config, error) {
 		}
 	}
 	c.LayerTypes = nil
-	cfg, err := hfConfigWith(jlm.ArchDots1, jlm.FlagRopeNeox|jlm.FlagQKNorm, "silu")(c, names)
+	cfg, err := hfConfigWith(ArchDots1, jlm.FlagRopeNeox|jlm.FlagQKNorm, "silu")(c, names)
 	if err != nil {
 		return nil, err
 	}

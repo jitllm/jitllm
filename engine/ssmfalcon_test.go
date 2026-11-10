@@ -5,7 +5,7 @@ import (
 	"github.com/jitllm/jitllm/model"
 )
 
-// Falcon-H1 (jlm.ArchFalconH1) on the Mamba-2 harness (ssmfamily_test.go):
+// Falcon-H1 (falcon-h1) on the Mamba-2 harness (ssmfamily_test.go):
 // FalconH1ForCausalLM with every muP multiplier far from one
 // (scripts/ssmgold.py), with the grouped gated norm every published size but
 // 0.5B carries and without it, as 0.5B ships.

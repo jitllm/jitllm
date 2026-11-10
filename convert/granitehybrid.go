@@ -12,7 +12,7 @@ import (
 // attention layers carry no rotary at all: llama.cpp's converter writes
 // rope.scaling.finetuned false for every hybrid but Bamba, and its builder
 // skips the rotation on exactly that switch.
-func graniteHybridConfig(f *meta.File, c *jlm.Config) error {
+func graniteHybridConfig(f *meta.File, c *Config) error {
 	ls, ok := f.Key("logit_scale")
 	if !ok {
 		return fmt.Errorf("no logit_scale, which every Granite carries")

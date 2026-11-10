@@ -17,157 +17,157 @@ import (
 // reference implementation's source; an unimplemented architecture fails here,
 // at conversion, rather than at load.
 
-func archOf() map[string]jlm.Arch {
-	return map[string]jlm.Arch{
-		"llama":     jlm.ArchLlama, // llama2 and llama3 are this arch too
-		"qwen2":     jlm.ArchQwen2,
-		"qwen3":     jlm.ArchQwen3,
-		"qwen3moe":  jlm.ArchQwen3MoE,
-		"olmoe":     jlm.ArchOLMoE,
-		"gemma":     jlm.ArchGemma,
-		"phi3":      jlm.ArchPhi3, // phi4 uses this arch string too
-		"clip":      jlm.ArchCLIP,
-		"qwen3next": jlm.ArchQwen3Next,
+func archOf() map[string]Arch {
+	return map[string]Arch{
+		"llama":     ArchLlama, // llama2 and llama3 are this arch too
+		"qwen2":     ArchQwen2,
+		"qwen3":     ArchQwen3,
+		"qwen3moe":  ArchQwen3MoE,
+		"olmoe":     ArchOLMoE,
+		"gemma":     ArchGemma,
+		"phi3":      ArchPhi3, // phi4 uses this arch string too
+		"clip":      ArchCLIP,
+		"qwen3next": ArchQwen3Next,
 		// Qwen3.5/3.6 are qwen3next's block re-cut, and every cut is in the file:
 		// beta and alpha arrive as two tensors (fused back by fuseBetaAlpha), the
 		// value heads are tiled (jlm.FlagDeltaKeyTiled), qwen35's FFN is dense, and
 		// the interleaved M-RoPE is exactly NEOX for a text prompt. See qwen35Of.
-		"qwen35":    jlm.ArchQwen3Next,
-		"qwen35moe": jlm.ArchQwen3Next,
+		"qwen35":    ArchQwen3Next,
+		"qwen35moe": ArchQwen3Next,
 		// Clef-Flash: Qwen3.5-9B's text model under another name, with a joint
 		// schema head after it that the decision readout reads (decisionOf,
 		// jlm.DecisionClef).
-		"clef":    jlm.ArchQwen3Next,
-		"qwen2vl": jlm.ArchQwen2VL,
-		"gemma2":  jlm.ArchGemma2,
-		"gemma3":  jlm.ArchGemma3,
-		"gpt-oss": jlm.ArchGPTOSS,
+		"clef":    ArchQwen3Next,
+		"qwen2vl": ArchQwen2VL,
+		"gemma2":  ArchGemma2,
+		"gemma3":  ArchGemma3,
+		"gpt-oss": ArchGPTOSS,
 		// DeepSeek-V2/V3/R1, Kimi-K2 and Moonlight-16B-A3B. Not GLM: see
-		// jlm.ArchDeepseek2 for which GLM is this graph and which is not.
-		"deepseek2": jlm.ArchDeepseek2,
+		// ArchDeepseek2 for which GLM is this graph and which is not.
+		"deepseek2": ArchDeepseek2,
 		// The BERT family of embedding models: all-minilm, mxbai-embed-large,
 		// bge-large and the bert-sized snowflake-arctic-embed tags declare "bert";
-		// nomic-embed-text declares "nomic-bert". See jlm.ArchBERT.
-		"bert":       jlm.ArchBERT,
-		"nomic-bert": jlm.ArchNomicBERT,
+		// nomic-embed-text declares "nomic-bert". See ArchBERT.
+		"bert":       ArchBERT,
+		"nomic-bert": ArchNomicBERT,
 		// ModernBERT, and the decision encoders built on it (Laya). See
-		// jlm.ArchModernBERT.
-		"modern-bert": jlm.ArchModernBERT,
+		// ArchModernBERT.
+		"modern-bert": ArchModernBERT,
 		// Llama 4 Scout (16 experts) and Maverick (128), text only. See
-		// jlm.ArchLlama4 for the five things that make it not llama.
-		"llama4": jlm.ArchLlama4,
+		// ArchLlama4 for the five things that make it not llama.
+		"llama4": ArchLlama4,
 		// IBM Granite 3.x/4.0, dense and mixture: llama's block with four scaling
-		// constants. See jlm.ArchGranite. (granitehybrid, the Mamba-2 hybrid, is a
+		// constants. See ArchGranite. (granitehybrid, the Mamba-2 hybrid, is a
 		// different graph and is not here.)
-		"granite":    jlm.ArchGranite,
-		"granitemoe": jlm.ArchGranite,
+		"granite":    ArchGranite,
+		"granitemoe": ArchGranite,
 		// The classic-transformer blocks (C6): LayerNorm with biases, ungated
-		// FFNs, parallel residuals. See jlm.ArchPhi2.
-		"phi2":      jlm.ArchPhi2,
-		"starcoder": jlm.ArchStarcoder,
+		// FFNs, parallel residuals. See ArchPhi2.
+		"phi2":      ArchPhi2,
+		"starcoder": ArchStarcoder,
 		// Cohere: Command-R, Aya and Aya Expanse declare "command-r"; Command-R7B
-		// and Command-A declare "cohere2". See jlm.ArchCommandR.
-		"command-r":  jlm.ArchCommandR,
-		"cohere2":    jlm.ArchCommandR,
-		"stablelm":   jlm.ArchStableLM,
-		"starcoder2": jlm.ArchStarcoder2,
-		"falcon":     jlm.ArchFalcon,
-		"nemotron":   jlm.ArchNemotron,
+		// and Command-A declare "cohere2". See ArchCommandR.
+		"command-r":  ArchCommandR,
+		"cohere2":    ArchCommandR,
+		"stablelm":   ArchStableLM,
+		"starcoder2": ArchStarcoder2,
+		"falcon":     ArchFalcon,
+		"nemotron":   ArchNemotron,
 		// Databricks' DBRX: the C6 kit's bias-free LayerNorm on a mixture, with
-		// q, k and v clamped. See jlm.ArchDBRX.
-		"dbrx": jlm.ArchDBRX,
+		// q, k and v clamped. See ArchDBRX.
+		"dbrx": ArchDBRX,
 		// GLM-4.5, GLM-4.6 and GLM-4.5-Air: DeepSeek-V3's router on GQA attention.
-		// See jlm.ArchGLM4MoE.
-		"glm4moe": jlm.ArchGLM4MoE,
-		// Qwen1.5-MoE and Qwen2-57B-A14B. See jlm.ArchQwen2MoE.
-		"qwen2moe": jlm.ArchQwen2MoE,
+		// See ArchGLM4MoE.
+		"glm4moe": ArchGLM4MoE,
+		// Qwen1.5-MoE and Qwen2-57B-A14B. See ArchQwen2MoE.
+		"qwen2moe": ArchQwen2MoE,
 		// ERNIE 4.5: the dense models are llama's graph exactly (interleaved
 		// rotary, tied head, biases only as tensors), as llama3 is; the mixtures
-		// are their own. See jlm.ArchErnie45MoE.
-		"ernie4_5":     jlm.ArchLlama,
-		"ernie4_5-moe": jlm.ArchErnie45MoE,
+		// are their own. See ArchErnie45MoE.
+		"ernie4_5":     ArchLlama,
+		"ernie4_5-moe": ArchErnie45MoE,
 		// The dense llama-family group: each is llama's block with switches the
-		// graph already runs. See convert/dense.go and jlm.ArchSmolLM3.
-		"smollm3":  jlm.ArchSmolLM3,
-		"arcee":    jlm.ArchArcee,
-		"seed_oss": jlm.ArchSeedOSS,
-		"olmo2":    jlm.ArchOLMo2, // OLMo 3 declares olmo2 too
-		"exaone4":  jlm.ArchExaone4,
-		"mistral3": jlm.ArchMistral3,
+		// graph already runs. See convert/dense.go and ArchSmolLM3.
+		"smollm3":  ArchSmolLM3,
+		"arcee":    ArchArcee,
+		"seed_oss": ArchSeedOSS,
+		"olmo2":    ArchOLMo2, // OLMo 3 declares olmo2 too
+		"exaone4":  ArchExaone4,
+		"mistral3": ArchMistral3,
 		// Tencent's Hunyuan, mixture and dense: one graph, q/k norm after the
-		// rotary. See jlm.ArchHunyuan.
-		"hunyuan-moe":   jlm.ArchHunyuan,
-		"hunyuan-dense": jlm.ArchHunyuan,
+		// rotary. See ArchHunyuan.
+		"hunyuan-moe":   ArchHunyuan,
+		"hunyuan-dense": ArchHunyuan,
 		// MiniMax-M2/M2.1/M2.5: OLMoE's whole-projection q/k norm on GQA with
 		// partial NEOX rotary, and DeepSeek-V3's sigmoid router without a shared
-		// expert. See jlm.ArchMiniMaxM2.
-		"minimax-m2": jlm.ArchMiniMaxM2,
+		// expert. See ArchMiniMaxM2.
+		"minimax-m2": ArchMiniMaxM2,
 		// Gemma 4 (text): gemma3's block with its global layers at another
-		// attention geometry. See jlm.ArchGemma4.
-		"gemma4": jlm.ArchGemma4,
+		// attention geometry. See ArchGemma4.
+		"gemma4": ArchGemma4,
 		// DeepSeek V3.2: deepseek2's graph with DeepSeek Sparse Attention's
-		// lightning indexer. See jlm.ArchDeepseek32.
-		"deepseek32": jlm.ArchDeepseek32,
+		// lightning indexer. See ArchDeepseek32.
+		"deepseek32": ArchDeepseek32,
 		// Gemma 3n (text): gemma3's attention with Gemma 4's E-model pieces,
-		// inside AltUp's parallel residual streams. See jlm.ArchGemma3n.
-		"gemma3n": jlm.ArchGemma3n,
+		// inside AltUp's parallel residual streams. See ArchGemma3n.
+		"gemma3n": ArchGemma3n,
 		// The state-space hybrids: Mamba-2 blocks (jlm.LayerSSD), alone or beside
-		// attention. See convert/ssm.go and jlm.ArchMamba2.
-		"mamba2":        jlm.ArchMamba2,
-		"granitehybrid": jlm.ArchGraniteHybrid,
+		// attention. See convert/ssm.go and ArchMamba2.
+		"mamba2":        ArchMamba2,
+		"granitehybrid": ArchGraniteHybrid,
 		// Nemotron-H and Nemotron Nano 2: one mixer a source layer, merged into
 		// blocks at conversion (convert/nemotronh.go).
-		"nemotron_h": jlm.ArchNemotronH,
+		"nemotron_h": ArchNemotronH,
 		// Nemotron 3 (Nano): the same blocks with the MLP a mixture of ungated
 		// experts. See nemotronConfig.
-		"nemotron_h_moe": jlm.ArchNemotronH,
+		"nemotron_h_moe": ArchNemotronH,
 		// Mamba-1: plain Mamba and FalconMamba (one arch, the latter's dt/B/C
 		// norms written as ones), and Jamba beside attention. See convert/mamba1.go.
-		"mamba": jlm.ArchMamba,
-		"jamba": jlm.ArchJamba,
+		"mamba": ArchMamba,
+		"jamba": ArchJamba,
 		// Falcon-H1: attention and Mamba-2 side by side in every block.
-		"falcon-h1": jlm.ArchFalconH1,
+		"falcon-h1": ArchFalconH1,
 		// LFM2: gated short convolutions beside attention (convert/lfm2.go).
-		"lfm2": jlm.ArchLFM2,
+		"lfm2": ArchLFM2,
 		// LFM2's mixture (LFM2-8B-A1B, LFM2-24B-A2B): the same blocks with a
 		// sigmoid top-k after a dense lead, read off the keys as for any mixture.
-		"lfm2moe": jlm.ArchLFM2,
+		"lfm2moe": ArchLFM2,
 		// MiniMax-M3 (text): MiniMax-M2's attention with DeepSeek-V3's mixture
-		// and MiniMax Sparse Attention. See jlm.ArchMiniMaxM3.
-		"minimax-m3": jlm.ArchMiniMaxM3,
+		// and MiniMax Sparse Attention. See ArchMiniMaxM3.
+		"minimax-m3": ArchMiniMaxM3,
 		// The modern text group: Ling 2.0, dots.llm1, Phi-3.5-MoE and Apertus.
-		// See convert/moefamily2.go, convert/apertus.go and jlm.ArchBailingMoE2.
-		"bailingmoe2": jlm.ArchBailingMoE2,
-		"dots1":       jlm.ArchDots1,
-		"phimoe":      jlm.ArchPhiMoE,
-		"apertus":     jlm.ArchApertus,
+		// See convert/moefamily2.go, convert/apertus.go and ArchBailingMoE2.
+		"bailingmoe2": ArchBailingMoE2,
+		"dots1":       ArchDots1,
+		"phimoe":      ArchPhiMoE,
+		"apertus":     ArchApertus,
 		// BitNet b1.58 2B-4T as bitnet.cpp's converter names it (convert/bitnet.go,
-		// jlm.ArchBitNet). llama.cpp's own "bitnet" is 1bitLLM's reproduction, a
+		// ArchBitNet). llama.cpp's own "bitnet" is 1bitLLM's reproduction, a
 		// SiLU gate, and its converter cannot write transformers' BitNetForCausalLM
 		// at all (it maps none of its inner-norm names); it is not this graph.
-		"bitnet-b1.58": jlm.ArchBitNet,
+		"bitnet-b1.58": ArchBitNet,
 		// DeepSeek V4 (text): hyper-connected residual streams, single-key MQA
-		// over a sliding window and a compressed history. See jlm.ArchDeepseek4.
-		"deepseek4": jlm.ArchDeepseek4,
+		// over a sliding window and a compressed history. See ArchDeepseek4.
+		"deepseek4": ArchDeepseek4,
 
 		// Qwen3-VL's text models: qwen3 and qwen3moe under an interleaved M-RoPE.
-		// See jlm.ArchQwen3VL.
-		"qwen3vl":    jlm.ArchQwen3VL,
-		"qwen3vlmoe": jlm.ArchQwen3VLMoE,
-		// GLM-4-0414 and the text model of GLM-4.1V / 4.6V-Flash. See jlm.ArchGLM4.
+		// See ArchQwen3VL.
+		"qwen3vl":    ArchQwen3VL,
+		"qwen3vlmoe": ArchQwen3VLMoE,
+		// GLM-4-0414 and the text model of GLM-4.1V / 4.6V-Flash. See ArchGLM4.
 		// GLM-4.5V's and 4.6V's is glm4moe with M-RoPE sections, which configOf
-		// carries as jlm.ArchGLM4VMoE.
-		"glm4": jlm.ArchGLM4,
+		// carries as ArchGLM4VMoE.
+		"glm4": ArchGLM4,
 		// HunyuanVL's text model (HunyuanOCR): hunyuan-dense's block under
-		// XD-RoPE. See jlm.ArchHunyuanVL.
-		"hunyuan_vl": jlm.ArchHunyuanVL,
+		// XD-RoPE. See ArchHunyuanVL.
+		"hunyuan_vl": ArchHunyuanVL,
 		// Kimi-K3 (text): Kimi-Linear's KDA + MLA hybrid with residual attention,
-		// a latent mixture and the situ activation. See jlm.ArchKimiK3.
-		"kimi-k3": jlm.ArchKimiK3,
+		// a latent mixture and the situ activation. See ArchKimiK3.
+		"kimi-k3": ArchKimiK3,
 		// Qwen3.8-Flash-Next (text): qwen3next's hybrid inside low-rank gated
 		// hyper-connections, with QSA block selection and an n-gram embedding.
-		// See jlm.ArchQwen4Exp.
-		"qwen4exp": jlm.ArchQwen4Exp,
+		// See ArchQwen4Exp.
+		"qwen4exp": ArchQwen4Exp,
 	}
 }
 
@@ -194,15 +194,15 @@ func Architectures() []string {
 
 // ArchitectureGraph is the graph a GGUF architecture name converts to, and
 // whether the name is in the list. Several names share one graph. The file can
-// refine it further (olmo2 with a sliding window is jlm.ArchOLMo3, glm4moe
-// with M-RoPE sections jlm.ArchGLM4VMoE); this is the name's own entry.
-func ArchitectureGraph(name string) (jlm.Arch, bool) {
+// refine it further (olmo2 with a sliding window is ArchOLMo3, glm4moe
+// with M-RoPE sections ArchGLM4VMoE); this is the name's own entry.
+func ArchitectureGraph(name string) (Arch, bool) {
 	a, ok := archOf()[name]
 	return a, ok
 }
 
-func configOf(f *meta.File) (*jlm.Config, error) {
-	var c *jlm.Config
+func configOf(f *meta.File) (*Config, error) {
+	var c *Config
 	var err error
 	if head, ok := d1OmniHead(f); ok {
 		c, err = d1OmniConfig(f, head)
@@ -219,7 +219,7 @@ func configOf(f *meta.File) (*jlm.Config, error) {
 // layers' own base or a block's own width: a table over several position
 // axes on the local layers, which no architecture in archOf or hfArchTable
 // states.
-func localAxes(c *jlm.Config) error {
+func localAxes(c *Config) error {
 	second := c.RopeBaseSWA != 0
 	for b := range c.Geoms {
 		second = second || c.Geoms[b].NRot != c.NRot
@@ -233,7 +233,7 @@ func localAxes(c *jlm.Config) error {
 
 // configOfFile is configOf for every file but the ones read through a view
 // (d1OmniConfig).
-func configOfFile(f *meta.File) (*jlm.Config, error) {
+func configOfFile(f *meta.File) (*Config, error) {
 	name := f.Arch()
 	arch, ok := archOf()[name]
 	if !ok {
@@ -245,15 +245,14 @@ func configOfFile(f *meta.File) (*jlm.Config, error) {
 	// layerCount reads the attention layers' count and lets the all-recurrent
 	// one through (ssdConfig fills a placeholder geometry).
 	count := perLayerCount
-	if ssdArch(arch) || arch == jlm.ArchLFM2 || mamba1Arch(arch) || arch == jlm.ArchKimiK3 {
+	if ssdArch(arch) || arch == ArchLFM2 || mamba1Arch(arch) || arch == ArchKimiK3 {
 		count = attnLayerCount
 	}
 	nhead, err := count(f, "attention.head_count", 0)
 	if err != nil {
 		return nil, fmt.Errorf("convert: %s: %w", name, err)
 	}
-	c := &jlm.Config{
-		Arch:       arch,
+	c := &Config{Arch: arch, Config: &jlm.Config{
 		NLayer:     uint32(f.UintKey("block_count", 0)),
 		NEmbd:      uint32(f.UintKey("embedding_length", 0)),
 		NHead:      nhead,
@@ -263,7 +262,7 @@ func configOfFile(f *meta.File) (*jlm.Config, error) {
 		RopeBase:   float32(f.FloatKey("rope.freq_base", 10000)),
 		EmbdScale:  1,
 		AttnFactor: float32(f.FloatKey("rope.scaling.attn_factor", 1)),
-	}
+	}}
 	if c.NHead == 0 && (ssdArch(arch) || mamba1Arch(arch)) {
 		// No layer attends (plain Mamba-2): one placeholder head as wide as
 		// the embedding keeps every attention-shaped derivation finite, and
@@ -276,12 +275,12 @@ func configOfFile(f *meta.File) (*jlm.Config, error) {
 	// Absent head_count_kv means MHA, not zero heads. Gemma 4 writes one per
 	// layer that differs between its sliding and global layers, which
 	// gemma4Config reads against the sliding pattern.
-	if arch != jlm.ArchGemma4 {
+	if arch != ArchGemma4 {
 		if c.NKVHead, err = count(f, "attention.head_count_kv", c.NHead); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
 	}
-	if c.NKVHead == 0 && arch != jlm.ArchGemma4 {
+	if c.NKVHead == 0 && arch != ArchGemma4 {
 		c.NKVHead = c.NHead
 	}
 	// key_length when present, else embd/heads. For gemma these coincide at 256,
@@ -314,7 +313,7 @@ func configOfFile(f *meta.File) (*jlm.Config, error) {
 	}
 
 	switch arch {
-	case jlm.ArchDeepseek2, jlm.ArchDeepseek32:
+	case ArchDeepseek2, ArchDeepseek32:
 		// The two latent ranks. The explicit key is the authority; value_length is
 		// the fallback because on this arch it is kv_lora_rank (the absorbed row,
 		// see above). The safetensors path reads these from config.json directly, so
@@ -324,34 +323,34 @@ func configOfFile(f *meta.File) (*jlm.Config, error) {
 		// Absent on V2-Lite, whose q_lora_rank is null: it projects the query
 		// straight to NHead*HeadDim, and model.mlaProject asks the config.
 		c.QLoraRank = uint32(f.UintKey("attention.q_lora_rank", 0))
-		if arch == jlm.ArchDeepseek32 {
+		if arch == ArchDeepseek32 {
 			if err := deepseek32Config(f, c); err != nil {
 				return nil, fmt.Errorf("convert: %s: %w", name, err)
 			}
 		}
-	case jlm.ArchLlama:
+	case ArchLlama:
 		// llama3 is this arch too: it differs only in values the header carries
 		// (rope base, GQA, vocabulary size) and in its BPE tokenizer.
-	case jlm.ArchBitNet:
+	case ArchBitNet:
 		bitnetConfig(c)
-	case jlm.ArchQwen2:
+	case ArchQwen2:
 		// llama's graph with biases on q, k and v, which are tensors.
 		c.Flags |= jlm.FlagRopeNeox
-	case jlm.ArchQwen3:
+	case ArchQwen3:
 		// Each head of q and k is RMSNormed with a shared head_dim-wide weight,
 		// after the projection and before RoPE (after RoPE also runs, and is wrong).
 		c.Flags |= jlm.FlagRopeNeox | jlm.FlagQKNorm
-	case jlm.ArchQwen3MoE:
+	case ArchQwen3MoE:
 		// qwen3's attention with a mixture FFN; being a mixture is read from the
 		// file below, not from the architecture.
 		c.Flags |= jlm.FlagRopeNeox | jlm.FlagQKNorm
-	case jlm.ArchOLMoE:
+	case ArchOLMoE:
 		// qwen3moe's shape with two differences, read off the reference source:
 		//  1. the q/k RMSNorm spans the whole projection ({n_embd}, before the
 		//     reshape into heads), where qwen3's is {head_dim} and per head;
 		//  2. the mixture weights are not renormalised.
 		c.Flags |= jlm.FlagRopeNeox | jlm.FlagQKNorm | jlm.FlagQKNormWide | jlm.FlagNoExpertNorm
-	case jlm.ArchPhi3:
+	case ArchPhi3:
 		// phi3, and phi4 which uses this arch string too. No fusion flags: the
 		// converter unfuses phi3's attn_qkv and fused ffn_up (see unfuse), because
 		// a packed row range has no byte range and the device tier cannot slice one.
@@ -384,14 +383,14 @@ func configOfFile(f *meta.File) (*jlm.Config, error) {
 		if win > 0 {
 			c.SWAWindow, c.SWAPeriod = win, allLocal(c.NLayer)
 		}
-	case jlm.ArchGemma:
+	case ArchGemma:
 		// The embedding is scaled by sqrt(n_embd) and the FFN activation is GELU.
 		// The RMSNorm +1 is already baked into the weights by the HF converter, so
 		// it is not applied again. Gemma's rotary is NEOX, not NORM: NORM runs
 		// fluently and is wrong, and every tier agrees with itself either way.
 		c.EmbdScale = float32(math.Sqrt(float64(c.NEmbd)))
 		c.Flags |= jlm.FlagGELU | jlm.FlagRopeNeox
-	case jlm.ArchGemma2:
+	case ArchGemma2:
 		// gemma1's block plus three load-bearing differences.
 		c.EmbdScale = float32(math.Sqrt(float64(c.NEmbd)))
 		c.Flags |= jlm.FlagGELU | jlm.FlagRopeNeox
@@ -409,7 +408,7 @@ func configOfFile(f *meta.File) (*jlm.Config, error) {
 		// two fields rather than a flag.
 		c.AttnSoftcap = float32(f.FloatKey("attn_logit_softcapping", 0))
 		c.FinalSoftcap = float32(f.FloatKey("final_logit_softcapping", 0))
-	case jlm.ArchGemma3:
+	case ArchGemma3:
 		c.EmbdScale = float32(math.Sqrt(float64(c.NEmbd)))
 		c.Flags |= jlm.FlagGELU | jlm.FlagRopeNeox | jlm.FlagQKNorm
 		// Five local then one global: SWAPeriod 6. No window key means no sliding
@@ -426,7 +425,7 @@ func configOfFile(f *meta.File) (*jlm.Config, error) {
 		// gemma3 removed gemma2's attention softcap; its final softcap is optional.
 		c.FinalSoftcap = float32(f.FloatKey("final_logit_softcapping", 0))
 		gemmaAttnScale(c)
-	case jlm.ArchQwen3Next, jlm.ArchQwen4Exp:
+	case ArchQwen3Next, ArchQwen4Exp:
 		// A hybrid: most layers run a gated delta rule over a recurrent state
 		// and every fourth runs ordinary attention. NEOX rope on the attention
 		// layers, per-head q/k norms, an output gate folded into the q
@@ -445,12 +444,12 @@ func configOfFile(f *meta.File) (*jlm.Config, error) {
 		if err := qwen35Of(f, name, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
-		if arch == jlm.ArchQwen4Exp {
+		if arch == ArchQwen4Exp {
 			if err := qwen4expConfig(f, c); err != nil {
 				return nil, fmt.Errorf("convert: %s: %w", name, err)
 			}
 		}
-	case jlm.ArchQwen2VL:
+	case ArchQwen2VL:
 		// qwen2's graph with multimodal rope: the sections split each head's rotary
 		// pairs between the (t, h, w) components of a position (Qwen2-VL-2B is
 		// [16, 24, 24, 0], summing to NRot/2 = 64). See mropeSectionsOf.
@@ -458,14 +457,14 @@ func configOfFile(f *meta.File) (*jlm.Config, error) {
 		if err := mropeSectionsOf(f, name, c); err != nil {
 			return nil, err
 		}
-	case jlm.ArchQwen3VL, jlm.ArchQwen3VLMoE:
+	case ArchQwen3VL, ArchQwen3VLMoE:
 		// qwen3's and qwen3moe's blocks under an INTERLEAVED M-RoPE (Qwen3-VL-2B
-		// is [24, 20, 20, 0] of 64 pairs). See jlm.ArchQwen3VL.
+		// is [24, 20, 20, 0] of 64 pairs). See ArchQwen3VL.
 		c.Flags |= jlm.FlagRopeNeox | jlm.FlagQKNorm
 		if err := mropeSectionsOf(f, name, c); err != nil {
 			return nil, err
 		}
-	case jlm.ArchGPTOSS:
+	case ArchGPTOSS:
 		// NEOX rope (llama.cpp's rope-type table groups it with qwen3), the
 		// clamped swiglu-oai activation, and a sliding window on alternate
 		// layers starting at layer 0 -- set_swa_pattern(2), the same rule
@@ -480,43 +479,43 @@ func configOfFile(f *meta.File) (*jlm.Config, error) {
 		// "truncate": false, where llama.cpp floors and ceils it for every model.
 		// This matches the model's own definition (RULE 7m).
 		c.Flags |= jlm.FlagYarnExact
-	case jlm.ArchLlama4:
+	case ArchLlama4:
 		if err := llama4Config(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
-	case jlm.ArchGranite:
+	case ArchGranite:
 		if err := graniteConfig(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
-	case jlm.ArchPhi2:
+	case ArchPhi2:
 		if err := phi2Config(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
-	case jlm.ArchStarcoder:
+	case ArchStarcoder:
 		if err := starcoderConfig(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
-	case jlm.ArchCommandR:
+	case ArchCommandR:
 		if err := commandRConfig(f, c, name == "cohere2"); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
-	case jlm.ArchStarcoder2:
+	case ArchStarcoder2:
 		// llama.cpp's starcoder2.cpp: the classic sequential block, every
 		// matrix biased, NEOX rotary over the whole head.
 		layerNormEps(f, c)
 		c.Flags |= jlm.FlagLayerNorm | jlm.FlagRopeNeox | jlm.FlagGELU
-	case jlm.ArchStableLM:
+	case ArchStableLM:
 		if err := stableLMConfig(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
-	case jlm.ArchFalcon:
+	case ArchFalcon:
 		// llama.cpp's falcon.cpp: the parallel block, NEOX rotary over the
 		// whole head, an ungated GELU FFN, LayerNorm with biases and no
 		// matrix biases. The two-norm form is resolved at the tensor names
 		// (falconNorms).
 		layerNormEps(f, c)
 		c.Flags |= jlm.FlagLayerNorm | jlm.FlagParallel | jlm.FlagRopeNeox | jlm.FlagGELU
-	case jlm.ArchNemotron:
+	case ArchNemotron:
 		// llama.cpp's nemotron.cpp: the sequential block, NEOX rotary on
 		// rope.dimension_count of head_dim, up -> relu^2 -> down.
 		layerNormEps(f, c)
@@ -524,23 +523,23 @@ func configOfFile(f *meta.File) (*jlm.Config, error) {
 		if err := partialRotary(c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
-	case jlm.ArchDBRX:
+	case ArchDBRX:
 		if err := dbrxConfig(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
-	case jlm.ArchGLM4MoE:
+	case ArchGLM4MoE:
 		if err := glm4moeConfig(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
 		// GLM-4.5V / 4.6V: the same block under Qwen2-VL's M-RoPE, a code of
-		// its own (jlm.ArchGLM4VMoE).
+		// its own (ArchGLM4VMoE).
 		if _, ok := f.Key("rope.dimension_sections"); ok {
-			c.Arch = jlm.ArchGLM4VMoE
+			c.Arch = ArchGLM4VMoE
 			if err := mropeSectionsOf(f, name, c); err != nil {
 				return nil, err
 			}
 		}
-	case jlm.ArchGLM4:
+	case ArchGLM4:
 		// llama's block with biased q/k/v (tensors), a norm after the
 		// attention and after the MLP (RolePostAttnNorm, RolePostFFNNorm), a
 		// fused gate|up (unfuse), and a rotary on rope.dimension_count of each
@@ -559,90 +558,90 @@ func configOfFile(f *meta.File) (*jlm.Config, error) {
 			return nil, fmt.Errorf("convert: %s: a glm4 file with prediction layers (GLM-OCR): %w",
 				name, ErrNotImplemented)
 		}
-	case jlm.ArchQwen2MoE:
+	case ArchQwen2MoE:
 		if err := qwen2moeConfig(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
-	case jlm.ArchErnie45MoE:
+	case ArchErnie45MoE:
 		if err := ernie45moeConfig(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
-	case jlm.ArchSmolLM3, jlm.ArchArcee, jlm.ArchSeedOSS, jlm.ArchOLMo2, jlm.ArchExaone4, jlm.ArchMistral3, jlm.ArchOLMo3:
+	case ArchSmolLM3, ArchArcee, ArchSeedOSS, ArchOLMo2, ArchExaone4, ArchMistral3, ArchOLMo3:
 		if err := denseConfig(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
-	case jlm.ArchHunyuan:
+	case ArchHunyuan:
 		if err := hunyuanConfig(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
-	case jlm.ArchHunyuanVL:
+	case ArchHunyuanVL:
 		if err := hunyuanVLConfig(f, name, c); err != nil {
 			return nil, err
 		}
-	case jlm.ArchMiniMaxM2:
+	case ArchMiniMaxM2:
 		if err := minimaxM2Config(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
-	case jlm.ArchGemma4:
+	case ArchGemma4:
 		if err := gemma4Config(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
-	case jlm.ArchGemma3n:
+	case ArchGemma3n:
 		if err := gemma3nConfig(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
-	case jlm.ArchMamba2, jlm.ArchGraniteHybrid, jlm.ArchNemotronH, jlm.ArchFalconH1:
+	case ArchMamba2, ArchGraniteHybrid, ArchNemotronH, ArchFalconH1:
 		if err := ssdConfig(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
-	case jlm.ArchMamba, jlm.ArchJamba:
+	case ArchMamba, ArchJamba:
 		if err := mamba1Config(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
 		if c.LayerKinds, err = mamba1Kinds(f, c.NLayer); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
-	case jlm.ArchLFM2:
+	case ArchLFM2:
 		if err := lfm2Config(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
-	case jlm.ArchMiniMaxM3:
+	case ArchMiniMaxM3:
 		if err := minimaxM3Config(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
-	case jlm.ArchBailingMoE2:
+	case ArchBailingMoE2:
 		if err := bailingmoe2Config(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
-	case jlm.ArchDots1:
+	case ArchDots1:
 		if err := dots1Config(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
-	case jlm.ArchPhiMoE:
+	case ArchPhiMoE:
 		if err := phimoeConfig(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
-	case jlm.ArchApertus:
+	case ArchApertus:
 		if err := apertusConfig(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
-	case jlm.ArchDeepseek4:
+	case ArchDeepseek4:
 		if err := deepseek4Config(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
-	case jlm.ArchKimiK3:
+	case ArchKimiK3:
 		if err := kimiK3Config(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
-	case jlm.ArchCLIP:
+	case ArchCLIP:
 		return nil, fmt.Errorf("convert: %q is a vision tower, not a language model", name)
-	case jlm.ArchBERT, jlm.ArchNomicBERT:
+	case ArchBERT, ArchNomicBERT:
 		// The encoder's norms are LayerNorms under attention.layer_norm_epsilon
 		// (all-minilm's is 1e-12); layer_norm_rms_epsilon read above is absent.
 		c.RMSEps = float32(f.FloatKey("attention.layer_norm_epsilon", 1e-12))
 		// An encoder has no causal mask: every token attends to every token.
 		c.Flags |= jlm.FlagNonCausal | jlm.FlagLayerNorm
-		if arch == jlm.ArchNomicBERT {
+		if arch == ArchNomicBERT {
 			// Rotary on q and k in place of the position table, NEOX-paired
 			// (llama.cpp's rope-type table groups nomic-bert with qwen2). The
 			// base comes off rope.freq_base -- 1000 on nomic-embed-text-v1.5.
@@ -655,7 +654,7 @@ func configOfFile(f *meta.File) (*jlm.Config, error) {
 			// A learned position table in the input rows and no rotary.
 			c.Flags |= jlm.FlagGELU | jlm.FlagNoPosEnc
 		}
-	case jlm.ArchModernBERT:
+	case ArchModernBERT:
 		if err := modernBERTConfig(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
@@ -663,7 +662,7 @@ func configOfFile(f *meta.File) (*jlm.Config, error) {
 
 	// A clamp on any other architecture is refused, not dropped: this converter
 	// writes it only for ArchDBRX, whose code an older reader refuses.
-	if arch != jlm.ArchDBRX {
+	if arch != ArchDBRX {
 		if v := f.FloatKey("attention.clamp_kqv", 0); v != 0 {
 			return nil, fmt.Errorf("convert: %s: attention.clamp_kqv %g outside dbrx: %w",
 				name, v, ErrNotImplemented)
@@ -715,7 +714,7 @@ func configOfFile(f *meta.File) (*jlm.Config, error) {
 
 	// The per-layer kinds are read off the tensors (a layer with a recurrent
 	// block is linear), not off an "every fourth layer" rule keyed on the name.
-	if (c.Arch == jlm.ArchQwen3Next || c.Arch == jlm.ArchQwen4Exp || ssdArch(c.Arch) || c.Arch == jlm.ArchLFM2) && c.LayerKinds == nil {
+	if (c.Arch == ArchQwen3Next || c.Arch == ArchQwen4Exp || ssdArch(c.Arch) || c.Arch == ArchLFM2) && c.LayerKinds == nil {
 		rec := jlm.LayerLinearAttn
 		if ssdArch(c.Arch) {
 			rec = jlm.LayerSSD
@@ -823,7 +822,7 @@ func configOfFile(f *meta.File) (*jlm.Config, error) {
 		// key with a default of false, and DeepSeek-V2-Lite's config.json says
 		// norm_topk_prob: false. Renormalising it generates fluent nonsense from the
 		// first token. See docs/engineering-history/model-correctness.md.
-		if arch == jlm.ArchDeepseek2 || arch == jlm.ArchDeepseek32 || arch == jlm.ArchQwen2MoE {
+		if arch == ArchDeepseek2 || arch == ArchDeepseek32 || arch == ArchQwen2MoE {
 			if _, ok := f.Key("expert_weights_norm"); !ok {
 				c.Flags |= jlm.FlagNoExpertNorm
 			}
@@ -837,7 +836,7 @@ func configOfFile(f *meta.File) (*jlm.Config, error) {
 				c.Flags |= jlm.FlagExpertSigmoid
 			case 4:
 				// sqrt(softplus): DeepSeek V4's alone (deepseek4Config).
-				if arch != jlm.ArchDeepseek4 {
+				if arch != ArchDeepseek4 {
 					return nil, fmt.Errorf("convert: %s: expert_gating_func 4 (sqrt-softplus) outside "+
 						"deepseek4: %w", name, ErrNotImplemented)
 				}
@@ -850,7 +849,7 @@ func configOfFile(f *meta.File) (*jlm.Config, error) {
 		// scoring_func, so llama.cpp's converter writes no gating key for a
 		// checkpoint that leaves it out; a key saying softmax contradicts the
 		// class and is refused.
-		if arch == jlm.ArchDeepseek32 {
+		if arch == ArchDeepseek32 {
 			if kv, ok := f.Key("expert_gating_func"); ok {
 				if v, _ := kv.Uint(); v != 2 {
 					return nil, fmt.Errorf("convert: %s: expert_gating_func %d, and "+
@@ -865,7 +864,7 @@ func configOfFile(f *meta.File) (*jlm.Config, error) {
 		// llama.cpp's kimi-k3 converter writes topk_group (1) as the used
 		// count and no group count beside it: one group, all of it used, which
 		// is the ungrouped selection.
-		if arch == jlm.ArchKimiK3 && c.NExpertGroup == 0 && c.NExpertGroupUsed == 1 {
+		if arch == ArchKimiK3 && c.NExpertGroup == 0 && c.NExpertGroupUsed == 1 {
 			c.NExpertGroupUsed = 0
 		}
 		if (c.NExpertGroup == 0) != (c.NExpertGroupUsed == 0) {
@@ -877,7 +876,7 @@ func configOfFile(f *meta.File) (*jlm.Config, error) {
 	// The leading dense run is read for every architecture, as a property of the
 	// file. Llama 4's shared expert is as wide as a routed one and the file does
 	// not say so (llama.cpp sets n_ff_shexp = n_ff_exp), which needs NFFNExp.
-	if arch == jlm.ArchLlama4 && c.NFFNShExp == 0 {
+	if arch == ArchLlama4 && c.NFFNShExp == 0 {
 		c.NFFNShExp = c.NFFNExp
 	}
 	// A dense model has no shared expert, whatever a key says: granite-4.0-micro
@@ -890,22 +889,22 @@ func configOfFile(f *meta.File) (*jlm.Config, error) {
 		return nil, fmt.Errorf("convert: %s: leading_dense_block_count %d in a %d-block model",
 			name, c.NDenseLead, c.NLayer)
 	}
-	if arch == jlm.ArchNemotronH {
+	if arch == ArchNemotronH {
 		if err := nemotronMixture(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
 	}
-	if arch == jlm.ArchErnie45MoE || arch == jlm.ArchHunyuan || arch == jlm.ArchBailingMoE2 || arch == jlm.ArchDots1 {
+	if arch == ArchErnie45MoE || arch == ArchHunyuan || arch == ArchBailingMoE2 || arch == ArchDots1 {
 		if err := ernieSharedWidth(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
 	}
-	if arch == jlm.ArchGemma4 {
+	if arch == ArchGemma4 {
 		if err := gemma4MoEConfig(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
 	}
-	if arch == jlm.ArchMiniMaxM3 {
+	if arch == ArchMiniMaxM3 {
 		if err := minimaxM3Blocks(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
@@ -920,7 +919,7 @@ func configOfFile(f *meta.File) (*jlm.Config, error) {
 // (8192), the temperature's scale (0.1), floor (8192) and offset (1), and a
 // NoPE period of 4; each is read here from a key a file may carry and falls
 // back to that constant.
-func llama4Config(f *meta.File, c *jlm.Config) error {
+func llama4Config(f *meta.File, c *Config) error {
 	// Normal rotary over adjacent pairs, as llama.cpp's rope-type table and
 	// transformers do; the checkpoint is not permuted the way llama's is.
 	//
@@ -979,7 +978,7 @@ func llama4Config(f *meta.File, c *jlm.Config) error {
 // grok alone and derives the magnitude for every other architecture: RULE 7m,
 // chosen -- the model's reference, which parts from llama.cpp only on a file
 // that states a factor the formula would not give.
-func ropeScalingOf(f *meta.File, c *jlm.Config) error {
+func ropeScalingOf(f *meta.File, c *Config) error {
 	// The context the rotary was trained to: YaRN scales from it, and
 	// LongRoPE turns its long factors past it (model.RopeFor).
 	if v := f.UintKey("rope.scaling.original_context_length", 0); v > 0 {
@@ -1022,7 +1021,7 @@ func ropeScalingOf(f *meta.File, c *jlm.Config) error {
 		// writes 0.1*mscale_all_dim here and divides by 0.1 at load, so it
 		// replaces the 0.1 rather than scaling it.
 		logMul := 0.1
-		if c.Arch == jlm.ArchMistral3 {
+		if c.Arch == ArchMistral3 {
 			if haveExplicit {
 				c.AttnFactor *= float32(explicit)
 				return nil
@@ -1048,12 +1047,12 @@ func ropeScalingOf(f *meta.File, c *jlm.Config) error {
 		switch {
 		case haveExplicit:
 			c.AttnFactor *= float32(explicit)
-		case c.Arch == jlm.ArchDeepseek4:
+		case c.Arch == ArchDeepseek4:
 			// DeepSeek V4 scales neither: transformers forces the compressed
 			// rotary's attention_factor to 1 and scores at head_dim^-1/2, and
 			// llama.cpp's builder passes an attn_factor that cancels ggml's
 			// own magnitude and a kq_scale of 1/sqrt(head_dim).
-		case c.Arch != jlm.ArchDeepseek2 && c.Arch != jlm.ArchDeepseek32:
+		case c.Arch != ArchDeepseek2 && c.Arch != ArchDeepseek32:
 			c.AttnFactor *= float32(logMul*math.Log(float64(factor)) + 1)
 		}
 		return nil
@@ -1078,7 +1077,7 @@ func allLocal(nLayer uint32) uint32 { return nLayer + 1 }
 // pair with i%3 == 0 at or past 3*sections[0] to a fourth axis instead; no
 // published split reaches one, and one that would is refused rather than
 // resolved, since the two references would then rotate it differently.
-func mropeSectionsOf(f *meta.File, name string, c *jlm.Config) error {
+func mropeSectionsOf(f *meta.File, name string, c *Config) error {
 	kv, ok := f.Key("rope.dimension_sections")
 	if !ok {
 		return fmt.Errorf("convert: %s: no rope.dimension_sections, which "+

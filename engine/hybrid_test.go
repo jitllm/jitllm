@@ -262,7 +262,7 @@ func hybridModelOpt(t *testing.T, o hyOpt) (*model.Model, []Option) {
 		kindsTok[i] = jlm.TokenNormal
 	}
 	cfg := &jlm.Config{
-		Arch: jlm.ArchQwen3Next, NLayer: uint32(nLayer), NEmbd: uint32(embd),
+		NLayer: uint32(nLayer), NEmbd: uint32(embd),
 		NHead: uint32(head), NKVHead: uint32(kvHead), HeadDim: uint32(headD), NRot: uint32(rot),
 		NFFN: uint32(ffn), NVocab: hyVocab, NCtx: 64, RMSEps: 1e-6,
 		RopeBase: 10000, EmbdScale: 1, AttnFactor: 1,
@@ -290,7 +290,7 @@ func hybridModelOpt(t *testing.T, o hyOpt) (*model.Model, []Option) {
 		},
 		Tensors: tensors,
 	}
-	if err := convert.StateActivations(src); err != nil {
+	if err := convert.StateActivations(&convert.Config{Config: cfg}, src); err != nil {
 		t.Fatal(err)
 	}
 	dst := filepath.Join(t.TempDir(), "hybrid"+jlm.Ext)

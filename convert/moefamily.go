@@ -36,7 +36,7 @@ import (
 //
 // Grouped selection is read off the keys as for any mixture. Every published
 // GLM-4.5 has n_group 1 and topk_group 1, which is the ungrouped top-k.
-func glm4moeConfig(f *meta.File, c *jlm.Config) error {
+func glm4moeConfig(f *meta.File, c *Config) error {
 	c.Flags |= jlm.FlagRopeNeox | jlm.FlagExpertSigmoid
 	if err := partialRotary(c); err != nil {
 		return err
@@ -75,7 +75,7 @@ func glm4moeConfig(f *meta.File, c *jlm.Config) error {
 // mlp_only_layers); no GGUF key carries either, llama.cpp requires every block
 // to be a mixture, and no published checkpoint uses them. A block with no
 // router is refused by name rather than run as a mixture with no router.
-func qwen2moeConfig(f *meta.File, c *jlm.Config) error {
+func qwen2moeConfig(f *meta.File, c *Config) error {
 	c.Flags |= jlm.FlagRopeNeox
 	if f.UintKey("expert_count", 0) == 0 {
 		return fmt.Errorf("no expert_count: qwen2moe is a mixture")
@@ -111,7 +111,7 @@ func qwen2moeConfig(f *meta.File, c *jlm.Config) error {
 //
 // moe_layer_end_index has no key and llama.cpp takes every block past the lead;
 // every published ERNIE ends at its last block, which is that.
-func ernie45moeConfig(f *meta.File, c *jlm.Config) error {
+func ernie45moeConfig(f *meta.File, c *Config) error {
 	if kv, ok := f.Key("expert_gating_func"); ok {
 		if v, _ := kv.Uint(); v != 1 {
 			return fmt.Errorf("expert_gating_func %d, and Ernie4_5_MoeTopKRouter is softmax: %w",
@@ -136,7 +136,7 @@ func ernie45moeConfig(f *meta.File, c *jlm.Config) error {
 // converter writes intermediate_size // num_key_value_heads, where the class
 // builds moe_intermediate_size * moe_num_shared_experts; the two agree on
 // every published ERNIE and nothing ties them, and the tensor is the fact.
-func ernieSharedWidth(f *meta.File, c *jlm.Config) error {
+func ernieSharedWidth(f *meta.File, c *Config) error {
 	for i := 0; i < int(c.NLayer); i++ {
 		t, ok := f.Get("blk." + itoa(i) + ".ffn_gate_shexp.weight")
 		if !ok {

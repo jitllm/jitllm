@@ -13,7 +13,7 @@ import (
 // views it as, in that order, with GQA widths. Every element carries its own
 // index, so a swapped or shifted range reads the wrong numbers.
 func TestUnfuseSplitsAFusedQKVBias(t *testing.T) {
-	c := &jlm.Config{Arch: jlm.ArchPhi2, NHead: 4, NKVHead: 2, HeadDim: 8}
+	c := &Config{Arch: ArchPhi2, Config: &jlm.Config{NHead: 4, NKVHead: 2, HeadDim: 8}}
 	q, kv := 32, 16
 	n := q + 2*kv
 	data := make([]byte, 4*n)

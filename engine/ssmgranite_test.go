@@ -8,7 +8,7 @@ import (
 	"github.com/jitllm/jitllm/format/jlm"
 )
 
-// Granite 4.0-H (jlm.ArchGraniteHybrid) on the Mamba-2 harness
+// Granite 4.0-H (granitehybrid) on the Mamba-2 harness
 // (ssmfamily_test.go): its dense and mixture fixtures, built by
 // GraniteMoeHybridForCausalLM (scripts/ssmgold.py), join every gate there and
 // the dense one the five principles' through principleFixtures.

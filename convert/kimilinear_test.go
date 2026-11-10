@@ -72,9 +72,6 @@ func klRaw(t testing.TB, f *safetensors.File, name string) []byte {
 func TestKimiLinearConverts(t *testing.T) {
 	s, _ := kimiSource(t)
 	c := s.Config
-	if c.Arch != jlm.ArchKimiLinear {
-		t.Errorf("arch %v", c.Arch)
-	}
 	// The kind map, and it is interleaved: a prefix reader passes the length
 	// check and fails here.
 	want := []jlm.LayerKind{jlm.LayerLinearAttn, jlm.LayerFullAttn, jlm.LayerLinearAttn}

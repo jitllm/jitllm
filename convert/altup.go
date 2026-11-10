@@ -20,7 +20,7 @@ import (
 //	y      = (x_0 + sum_k mag(U_k x_k, x_0)) / s        the head's row
 //
 // mag(p, r) = p * sqrt(mean(r^2)) / sqrt(max(mean(p^2), 1e-5)).
-func stateAltUp(c *jlm.Config) {
+func stateAltUp(c *Config) {
 	n := int(c.PredStreams)
 	st := jlm.Streams{N: uint8(n), Expand: make([]*jlm.Program, n-1), Blocks: make([]jlm.BlockStreams, c.NLayer)}
 	for k := 1; k < n; k++ {
@@ -37,14 +37,14 @@ func stateAltUp(c *jlm.Config) {
 type program struct {
 	p *jlm.Program
 	d int32
-	c *jlm.Config
+	c *Config
 }
 
 // newProgram is a program over nin inputs that no text model's widths
 // enter.
 func newProgram(nin int) *program { return &program{p: &jlm.Program{NIn: uint16(nin)}} }
 
-func newAltProgram(c *jlm.Config, nin int) *program {
+func newAltProgram(c *Config, nin int) *program {
 	return &program{p: &jlm.Program{NIn: uint16(nin)}, d: int32(c.NEmbd), c: c}
 }
 
@@ -106,7 +106,7 @@ func (a *program) router(x uint16) uint16 {
 }
 
 // altExpand is stream k of the input rows from stream 0.
-func altExpand(c *jlm.Config, k int) *jlm.Program {
+func altExpand(c *Config, k int) *jlm.Program {
 	a := newAltProgram(c, 1)
 	e := a.linear(0, jlm.RoleStreamExpand)
 	a.p.Out = a.mag(a.slice(e, int32(k-1)*a.d, a.d), 0)
@@ -115,7 +115,7 @@ func altExpand(c *jlm.Config, k int) *jlm.Program {
 
 // altPredict is a block's predictions: the read over every stream is the
 // coefficients, and each stream's write its prediction from every stream.
-func altPredict(c *jlm.Config) jlm.SubStreams {
+func altPredict(c *Config) jlm.SubStreams {
 	n := int(c.PredStreams)
 	a := newAltProgram(c, n)
 	a.p.Out = a.linear(a.router(0), jlm.RoleStreamPredictCoef)
@@ -140,7 +140,7 @@ func altPredict(c *jlm.Config) jlm.SubStreams {
 // altLaurel is the attention's join over the running residual and its
 // output: the two and the side branch over the attention's normed input,
 // over sqrt(2).
-func altLaurel(c *jlm.Config) *jlm.Program {
+func altLaurel(c *Config) *jlm.Program {
 	a := newAltProgram(c, 2)
 	n := a.norm(0, jlm.RoleAttnNorm)
 	side := a.add(n, a.norm(a.linear(a.linear(n, jlm.RoleLowRankIn), jlm.RoleLowRankOut), jlm.RoleLowRankNorm))
@@ -154,7 +154,7 @@ func altLaurel(c *jlm.Config) *jlm.Program {
 // innovation and the per-layer input gated from the corrected active
 // stream; each write the stream corrected, the per-layer input added past
 // the active one.
-func altCorrect(c *jlm.Config, li int) jlm.SubStreams {
+func altCorrect(c *Config, li int) jlm.SubStreams {
 	n, p := int(c.PredStreams), int32(c.PLEDim)
 	u := jlm.SubStreams{From: []int8{jlm.StreamRun, jlm.StreamIn, jlm.StreamSide}, Read: &jlm.Program{NIn: 3, Out: 0},
 		Exports: []uint16{0, 1, 2}}
@@ -189,7 +189,7 @@ func altCorrect(c *jlm.Config, li int) jlm.SubStreams {
 
 // altCollapse is the head's row: stream 0 and each other stream's
 // unembedding matched to it, averaged.
-func altCollapse(c *jlm.Config) jlm.SubStreams {
+func altCollapse(c *Config) jlm.SubStreams {
 	n := int(c.PredStreams)
 	a := newAltProgram(c, n)
 	acc := uint16(0)

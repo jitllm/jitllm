@@ -99,12 +99,12 @@ func hfPostNormBlock() map[string]jlm.Role {
 // container is ArchSmolLM3's adjacent-pair layout).
 func smollm3HF() *hfArch {
 	return &hfArch{
-		arch:        jlm.ArchSmolLM3,
+		arch:        ArchSmolLM3,
 		blockPrefix: llamaHF().blockPrefix,
 		model:       llamaHF().model,
 		block:       llamaHF().block,
 		ignore:      llamaHF().ignore,
-		config: func(c *hfConfig, names []string) (*jlm.Config, error) {
+		config: func(c *hfConfig, names []string) (*Config, error) {
 			hfClassDefaults{kvHeads: 4, ropeTheta: 2e6, rmsEps: 1e-6, tied: true, nCtx: 32768}.apply(c)
 			// The window is SmolLM3Attention's only when use_sliding_window, which
 			// the class defaults to false; llamaHFConfig refuses one in use.
@@ -112,7 +112,7 @@ func smollm3HF() *hfArch {
 				f := false
 				c.UseSlidingWindow = &f
 			}
-			cfg, err := hfConfigWith(jlm.ArchSmolLM3, 0, "silu")(c, names)
+			cfg, err := hfConfigWith(ArchSmolLM3, 0, "silu")(c, names)
 			if err != nil {
 				return nil, err
 			}
@@ -190,7 +190,7 @@ func boolInt(b bool) int {
 // no gate_proj, so a gate in the file is refused as an unknown name).
 func arceeHF() *hfArch {
 	return &hfArch{
-		arch:        jlm.ArchArcee,
+		arch:        ArchArcee,
 		blockPrefix: llamaHF().blockPrefix,
 		model:       llamaHF().model,
 		block: map[string]jlm.Role{
@@ -208,7 +208,7 @@ func arceeHF() *hfArch {
 			"mlp.down_proj.weight":            jlm.RoleFFNDown,
 		},
 		ignore: llamaHF().ignore,
-		config: func(c *hfConfig, names []string) (*jlm.Config, error) {
+		config: func(c *hfConfig, names []string) (*Config, error) {
 			hfClassDefaults{ropeTheta: 1e4, rmsEps: 1e-5, nCtx: 4096}.apply(c)
 			// ArceeConfig's hidden_act defaults to relu2, and ArceeMLP applies
 			// whatever it names ungated; relu2 is the one this graph computes.
@@ -217,7 +217,7 @@ func arceeHF() *hfArch {
 			}
 			// The class never reads sliding_window.
 			c.SlidingWindow = nil
-			return hfConfigWith(jlm.ArchArcee, jlm.FlagReLU2, "relu2")(c, names)
+			return hfConfigWith(ArchArcee, jlm.FlagReLU2, "relu2")(c, names)
 		},
 		fixup: llamaHFFixup,
 	}
@@ -227,15 +227,15 @@ func arceeHF() *hfArch {
 // rotary unpermuted, and a head wider than hidden/heads by class default.
 func seedOssHF() *hfArch {
 	return &hfArch{
-		arch:        jlm.ArchSeedOSS,
+		arch:        ArchSeedOSS,
 		blockPrefix: llamaHF().blockPrefix,
 		model:       llamaHF().model,
 		block:       llamaHF().block,
 		ignore:      llamaHF().ignore,
-		config: func(c *hfConfig, names []string) (*jlm.Config, error) {
+		config: func(c *hfConfig, names []string) (*Config, error) {
 			hfClassDefaults{kvHeads: 8, headDim: 128, ropeTheta: 1e4, rmsEps: 1e-6, nCtx: 524288}.apply(c)
 			c.SlidingWindow = nil // the class never reads it
-			return hfConfigWith(jlm.ArchSeedOSS, jlm.FlagRopeNeox, "silu")(c, names)
+			return hfConfigWith(ArchSeedOSS, jlm.FlagRopeNeox, "silu")(c, names)
 		},
 	}
 }
@@ -253,12 +253,12 @@ func olmo2Block() map[string]jlm.Role {
 
 func olmo2HF() *hfArch {
 	return &hfArch{
-		arch:        jlm.ArchOLMo2,
+		arch:        ArchOLMo2,
 		blockPrefix: llamaHF().blockPrefix,
 		model:       llamaHF().model,
 		block:       olmo2Block(),
 		ignore:      llamaHF().ignore,
-		config: func(c *hfConfig, names []string) (*jlm.Config, error) {
+		config: func(c *hfConfig, names []string) (*Config, error) {
 			hfClassDefaults{ropeTheta: 1e4, rmsEps: 1e-5, nCtx: 2048}.apply(c)
 			c.SlidingWindow = nil // Olmo2Attention has no window
 			return olmo2HFConfig(c, names)
@@ -269,22 +269,22 @@ func olmo2HF() *hfArch {
 // olmo2HFConfig is OLMo 2's config. The k norm spans NKVHead*HeadDim, which a
 // GQA OLMo 2 (the 32B) makes narrower than q's; hfCheckShape holds each norm to
 // its own projection's width.
-func olmo2HFConfig(c *hfConfig, names []string) (*jlm.Config, error) {
-	return hfConfigWith(jlm.ArchOLMo2, jlm.FlagRopeNeox|jlm.FlagQKNorm|jlm.FlagQKNormWide, "silu")(c, names)
+func olmo2HFConfig(c *hfConfig, names []string) (*Config, error) {
+	return hfConfigWith(ArchOLMo2, jlm.FlagRopeNeox|jlm.FlagQKNorm|jlm.FlagQKNormWide, "silu")(c, names)
 }
 
 // olmo3: OLMo 2's block, a window on the layers layer_types calls
 // sliding_attention (three in four by class default), and a rotary per layer
 // type: the full layers' may be YaRN, the sliding layers' is a default rotary
-// at their own base -- jlm.ArchOLMo3, as the GGUF path converts it.
+// at their own base -- ArchOLMo3, as the GGUF path converts it.
 func olmo3HF() *hfArch {
 	return &hfArch{
-		arch:        jlm.ArchOLMo2,
+		arch:        ArchOLMo2,
 		blockPrefix: llamaHF().blockPrefix,
 		model:       llamaHF().model,
 		block:       olmo2Block(),
 		ignore:      llamaHF().ignore,
-		config: func(c *hfConfig, names []string) (*jlm.Config, error) {
+		config: func(c *hfConfig, names []string) (*Config, error) {
 			hfClassDefaults{rmsEps: 1e-5, nCtx: 2048}.apply(c)
 			theta, local, full, err := olmo3Rope(c)
 			if err != nil {
@@ -323,7 +323,7 @@ func olmo3HF() *hfArch {
 			}
 			if period > 0 {
 				cfg.SWAWindow, cfg.SWAPeriod = win, period
-				cfg.Arch, cfg.RopeBaseSWA = jlm.ArchOLMo3, float32(local)
+				cfg.Arch, cfg.RopeBaseSWA = ArchOLMo3, float32(local)
 			}
 			return cfg, nil
 		},
@@ -417,12 +417,12 @@ func olmo3Rope(c *hfConfig) (global, local float64, full json.RawMessage, err er
 // sliding_window is None or the layer slides).
 func exaone4HF() *hfArch {
 	return &hfArch{
-		arch:        jlm.ArchExaone4,
+		arch:        ArchExaone4,
 		blockPrefix: llamaHF().blockPrefix,
 		model:       llamaHF().model,
 		block:       hfPostNormBlock(),
 		ignore:      llamaHF().ignore,
-		config: func(c *hfConfig, names []string) (*jlm.Config, error) {
+		config: func(c *hfConfig, names []string) (*Config, error) {
 			hfClassDefaults{kvHeads: 32, ropeTheta: 1e4, rmsEps: 1e-5, nCtx: 2048}.apply(c)
 			win := uint32(0)
 			switch {
@@ -432,7 +432,7 @@ func exaone4HF() *hfArch {
 				win = *c.SlidingWindow
 			}
 			c.SlidingWindow = nil
-			cfg, err := hfConfigWith(jlm.ArchExaone4, jlm.FlagRopeNeox|jlm.FlagQKNorm, "silu")(c, names)
+			cfg, err := hfConfigWith(ArchExaone4, jlm.FlagRopeNeox|jlm.FlagQKNorm, "silu")(c, names)
 			if err != nil {
 				return nil, err
 			}
@@ -527,19 +527,19 @@ func hfWindowPeriod(c *hfConfig, kinds []string, n uint32) (uint32, error) {
 // llama_4_scaling_beta as the attention temperature on every layer.
 func ministral3HF() *hfArch {
 	return &hfArch{
-		arch:        jlm.ArchMistral3,
+		arch:        ArchMistral3,
 		blockPrefix: llamaHF().blockPrefix,
 		model:       llamaHF().model,
 		block:       hfLlamaBlockNoBias(),
 		ignore:      llamaHF().ignore,
-		config: func(c *hfConfig, names []string) (*jlm.Config, error) {
+		config: func(c *hfConfig, names []string) (*Config, error) {
 			hfClassDefaults{kvHeads: 8, headDim: 128, rmsEps: 1e-5, nCtx: 262144}.apply(c)
 			r, err := ministral3Rope(c)
 			if err != nil {
 				return nil, err
 			}
 			c.RopeTheta, c.RopeScaling, c.PartialRotaryFactor = r.theta, nil, nil
-			cfg, err := hfConfigWith(jlm.ArchMistral3, 0, "silu")(c, names)
+			cfg, err := hfConfigWith(ArchMistral3, 0, "silu")(c, names)
 			if err != nil {
 				return nil, err
 			}
@@ -675,7 +675,7 @@ func ministral3Rope(c *hfConfig) (*hfMinistral3Rope, error) {
 
 // write sets what the container carries of r, as denseConfig and
 // ropeScalingOf set it from a GGUF.
-func (r *hfMinistral3Rope) write(cfg *jlm.Config) {
+func (r *hfMinistral3Rope) write(cfg *Config) {
 	if r.temp != 0 {
 		cfg.AttnTempScale, cfg.AttnTempFloor, cfg.AttnTempOffset = float32(r.temp), r.tempFloor, 0
 	}

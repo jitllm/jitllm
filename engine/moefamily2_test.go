@@ -10,7 +10,7 @@ import (
 	"github.com/jitllm/jitllm/graph"
 )
 
-// The modern text families (jlm.ArchBailingMoE2 and its siblings) join the
+// The modern text families (bailingmoe2 and its siblings) join the
 // mixture-family harness: scripts/moegold.py builds each fixture with the
 // family's own reference class -- inclusionAI's remote code for Ling 2.0 --
 // with every parameter and the router's selection bias randomised, and writes
@@ -198,7 +198,7 @@ func moe2DevViolations() map[string][]c6Violation {
 // renormalised.
 func llamaCppPhiMoERouter(m *model.Model) func() {
 	undo := cfgMut(m, func(c *model.Config) { c.NoExpertNorm = false })
-	undoR := statedRouter(m, convert.RouterScore(&jlm.Config{NExpert: 2}), jlm.Expr{})
+	undoR := statedRouter(m, convert.RouterScore(&convert.Config{Config: &jlm.Config{NExpert: 2}}), jlm.Expr{})
 	return func() { undoR(); undo() }
 }
 
@@ -220,7 +220,7 @@ func statedRouter(m *model.Model, score, weight jlm.Expr) func() {
 // renormalised: sparsemixer with no mask, and both of its experts' shared
 // denominator.
 func unmaskedSoftmax(m *model.Model) func() {
-	return statedRouter(m, convert.RouterScore(&jlm.Config{NExpert: 2}), jlm.Expr{})
+	return statedRouter(m, convert.RouterScore(&convert.Config{Config: &jlm.Config{NExpert: 2}}), jlm.Expr{})
 }
 
 // mixerEps runs sparsemixer at another jitter_eps.

@@ -85,7 +85,7 @@ func (p *nemotronPlan) remap(role jlm.Role, block int32) (jlm.Role, int32, error
 // routed_scaling_factor) beside one ungated shared expert. The class
 // hardcodes the sigmoid and llama.cpp's builder passes it as a literal; the
 // GGUF carries no gating key, so the converter sets it.
-func nemotronConfig(f *meta.File, c *jlm.Config) error {
+func nemotronConfig(f *meta.File, c *Config) error {
 	p, err := nemotronPlanOf(f)
 	if err != nil {
 		return err
@@ -112,7 +112,7 @@ func nemotronConfig(f *meta.File, c *jlm.Config) error {
 
 // nemotronMixture is the mixture half of nemotronConfig, run once configOf
 // has read the file's generic mixture keys.
-func nemotronMixture(f *meta.File, c *jlm.Config) error {
+func nemotronMixture(f *meta.File, c *Config) error {
 	if c.NExpert > 0 {
 		if kv, ok := f.Key("expert_gating_func"); ok {
 			if v, _ := kv.Uint(); v != 2 {

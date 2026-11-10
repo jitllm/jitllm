@@ -24,7 +24,7 @@ func TestAValueOfAnotherWidthIsRefused(t *testing.T) {
 		{"an MLA model's narrower value", 64, 16, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			err := valueWidthFits(&jlm.Config{HeadDim: 128, HeadDimV: tc.v, KVLoraRank: tc.lat})
+			err := valueWidthFits(&Config{Config: &jlm.Config{HeadDim: 128, HeadDimV: tc.v, KVLoraRank: tc.lat}})
 			switch {
 			case tc.refuse && !errors.Is(err, ErrNotImplemented):
 				t.Fatalf("refused with %v, want ErrNotImplemented", err)

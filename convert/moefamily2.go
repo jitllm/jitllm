@@ -7,7 +7,7 @@ import (
 	"github.com/jitllm/jitllm/format/jlm"
 )
 
-// The modern text families added as one group (jlm.ArchBailingMoE2 and its
+// The modern text families added as one group (ArchBailingMoE2 and its
 // siblings in format/jlm/archmoe2.go). Each reads its architecture's constants
 // here; what a mixture states in keys (expert counts, groups, the shared
 // expert, the dense lead, the routed scale, the prediction blocks) is read for
@@ -37,7 +37,7 @@ import (
 // The per-head norm is not optional in the class's published configs
 // (use_qk_norm true) and llama.cpp creates both tensors as required, so a
 // block missing either is refused rather than run without it.
-func bailingmoe2Config(f *meta.File, c *jlm.Config) error {
+func bailingmoe2Config(f *meta.File, c *Config) error {
 	c.Flags |= jlm.FlagRopeNeox | jlm.FlagExpertSigmoid | jlm.FlagQKNorm
 	if err := partialRotary(c); err != nil {
 		return err
@@ -74,7 +74,7 @@ func requireQKNorm(f *meta.File, who string) error {
 //	biased q/k/v/o, a biased head             -> tensors
 //	NEOX LongRoPE, short factors below the    -> phi3's path: rope_factors_short,
 //	original context                             AttnFactor
-//	sparsemixer top-2, not renormalised       -> the arch's code (jlm.ArchPhiMoE),
+//	sparsemixer top-2, not renormalised       -> the arch's code (ArchPhiMoE),
 //	                                             FlagNoExpertNorm (llama.cpp runs
 //	                                             a renormalised softmax top-2)
 //
@@ -92,7 +92,7 @@ func requireQKNorm(f *meta.File, who string) error {
 // llama.cpp's converter writes its own attn_factor (1.190) instead. The two
 // inputs therefore differ by that number on the real model; the safetensors
 // path reads the class's.
-func phimoeConfig(f *meta.File, c *jlm.Config) error {
+func phimoeConfig(f *meta.File, c *Config) error {
 	c.Flags |= jlm.FlagLayerNorm | jlm.FlagRopeNeox | jlm.FlagNoExpertNorm
 	// A head narrower than embedding/heads (Phi-tiny-MoE's 128 against
 	// 4096/16) is stated only by head_dim in config.json, and llama.cpp's
@@ -144,7 +144,7 @@ func phimoeConfig(f *meta.File, c *jlm.Config) error {
 // config carries one; every published dots.llm1 states sliding_window null
 // and llama.cpp applies none, so a file stating a window is refused by name
 // rather than run with every layer global.
-func dots1Config(f *meta.File, c *jlm.Config) error {
+func dots1Config(f *meta.File, c *Config) error {
 	c.Flags |= jlm.FlagRopeNeox | jlm.FlagExpertSigmoid | jlm.FlagQKNorm
 	if f.UintKey("expert_count", 0) == 0 {
 		return fmt.Errorf("no expert_count: dots1 is a mixture")

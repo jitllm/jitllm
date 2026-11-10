@@ -84,7 +84,7 @@ const ds4SwiGLULimit = 10
 // The reference-to-container table and the reasons in full:
 // docs/engineering-history/model-correctness.md,
 // "convert/deepseek4.go: deepseek4Config".
-func deepseek4Config(f *meta.File, c *jlm.Config) error {
+func deepseek4Config(f *meta.File, c *Config) error {
 	c.Flags2 |= jlm.Flag2SwiGLUClamp | jlm.Flag2ExpertSqrtSoftplus | jlm.Flag2RopeTail | jlm.Flag2KeyValue |
 		jlm.Flag2QUnitNorm | jlm.Flag2OutUnrotated
 	if c.NKVHead != 1 {
@@ -191,7 +191,7 @@ func ds4Clamp(f *meta.File) error {
 // neither a sliding window alone, and its ratio must say the same. llama.cpp
 // tells the two kinds apart by the ratio (4 against 128); transformers by the
 // layer type, each type at one rate -- which is what the container carries.
-func ds4Kinds(f *meta.File, c *jlm.Config) error {
+func ds4Kinds(f *meta.File, c *Config) error {
 	kv, ok := f.Key("attention.compress_ratios")
 	if !ok {
 		return fmt.Errorf("no attention.compress_ratios")
@@ -258,9 +258,8 @@ func ds4Kinds(f *meta.File, c *jlm.Config) error {
 // {group width, OLoraRank, OGroups}, the same bytes, so the container packs
 // each group as its own sheet and a reader cuts a group the way it cuts an
 // expert.
-func ds4Tensors(s *jlm.Source) error {
-	c := s.Config
-	if c.Arch != jlm.ArchDeepseek4 {
+func ds4Tensors(c *Config, s *jlm.Source) error {
+	if c.Arch != ArchDeepseek4 {
 		return nil
 	}
 	gw := uint64(c.NHead/c.OGroups) * uint64(c.HeadDim)
@@ -282,7 +281,7 @@ func ds4Tensors(s *jlm.Source) error {
 // ds4HashTable is a hash-routed block's token-id table, I32 in the file, as
 // the F32 the container stores (ids are exact well past any expert count).
 // Every id is checked against the expert count, since it indexes the banks.
-func ds4HashTable(t *meta.Tensor, data []byte, c *jlm.Config) ([]byte, error) {
+func ds4HashTable(t *meta.Tensor, data []byte, c *Config) ([]byte, error) {
 	if t.Type != quant.Type(26) {
 		return nil, fmt.Errorf("convert: %s is %s, want I32", t.Name, t.Type)
 	}

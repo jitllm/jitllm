@@ -17,11 +17,11 @@ import (
 // back as it is.
 func TestUnsparsifiedIsThePlainActivation(t *testing.T) {
 	c := &jlm.Config{NLayer: 4, Flags: jlm.FlagGELU, NSparse: 2, SparseStd: 1.6448536}
-	sparse, err := convert.Activation(c, 0, true, false)
+	sparse, err := convert.Activation(&convert.Config{Config: c}, 0, true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	plain, err := convert.Activation(c, 3, true, false)
+	plain, err := convert.Activation(&convert.Config{Config: c}, 3, true, false)
 	if err != nil {
 		t.Fatal(err)
 	}

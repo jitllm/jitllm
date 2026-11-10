@@ -18,7 +18,7 @@ import (
 // four xIELU scalars a block gathered into its RoleXIELU vector.
 func apertusHF() *hfArch {
 	return &hfArch{
-		arch:        jlm.ArchApertus,
+		arch:        ArchApertus,
 		blockPrefix: llamaHF().blockPrefix,
 		model:       llamaHF().model,
 		block: map[string]jlm.Role{
@@ -45,7 +45,7 @@ func apertusHF() *hfArch {
 
 // apertusHFConfig reads ApertusConfig: hidden_act must be xielu, and q/k are
 // normed per head (qk_norm) before the rotary, with no post-norm block.
-func apertusHFConfig(c *hfConfig, names []string) (*jlm.Config, error) {
+func apertusHFConfig(c *hfConfig, names []string) (*Config, error) {
 	for _, k := range []struct {
 		key  string
 		want bool
@@ -65,7 +65,7 @@ func apertusHFConfig(c *hfConfig, names []string) (*jlm.Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	cfg, err := hfConfigWith(jlm.ArchApertus, jlm.FlagQKNorm|jlm.FlagRopeNeox, "xielu")(c, names)
+	cfg, err := hfConfigWith(ArchApertus, jlm.FlagQKNorm|jlm.FlagRopeNeox, "xielu")(c, names)
 	if err != nil {
 		return nil, err
 	}
@@ -84,7 +84,7 @@ func apertusHFConfig(c *hfConfig, names []string) (*jlm.Config, error) {
 // apertusGather folds each block's mlp.act_fn.{alpha_p, alpha_n, beta, eps}
 // into its RoleXIELU vector through xieluTensor, the GGUF path's own fold,
 // so the two inputs write the same bytes. Every block must carry all four.
-func apertusGather(c *jlm.Config, names []string, read func(string) ([]float32, error)) ([]jlm.Tensor, map[string]bool, error) {
+func apertusGather(c *Config, names []string, read func(string) ([]float32, error)) ([]jlm.Tensor, map[string]bool, error) {
 	used := map[string]bool{}
 	for _, n := range names {
 		if strings.Contains(n, ".mlp.act_fn.") {

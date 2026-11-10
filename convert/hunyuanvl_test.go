@@ -25,7 +25,7 @@ func TestHunyuanVLTurnsTheWholeHead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Arch != jlm.ArchHunyuanVL || c.NRot != c.HeadDim || !c.Flags.Has(jlm.FlagRopeNeox) {
+	if c.Arch != ArchHunyuanVL || c.NRot != c.HeadDim || !c.Flags.Has(jlm.FlagRopeNeox) {
 		t.Fatalf("arch %v, %d of %d dimensions turned, NEOX %v", c.Arch, c.NRot, c.HeadDim, c.Flags.Has(jlm.FlagRopeNeox))
 	}
 	if _, err := configOf(file(8, []int32{1, 1, 1, 1})); err == nil || !strings.Contains(err.Error(), "the reference turns the whole head") {

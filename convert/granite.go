@@ -5,17 +5,16 @@ import (
 	"math"
 
 	"github.com/jitllm/jitllm/convert/meta"
-	"github.com/jitllm/jitllm/format/jlm"
 )
 
-// graniteConfig reads Granite's four scaling constants (jlm.ArchGranite).
+// graniteConfig reads Granite's four scaling constants (ArchGranite).
 //
 // llama.cpp's granite graph multiplies the embedding by embedding_scale, each
 // attention and FFN output by residual_scale before its residual add, takes
 // attention.scale as the score multiplier, and divides the logits by
 // logit_scale. All are far from one and each is fluent when ignored. The
 // mixture is read off expert_count like every other.
-func graniteConfig(f *meta.File, c *jlm.Config) error {
+func graniteConfig(f *meta.File, c *Config) error {
 	// llama.cpp requires logit_scale; the other three are optional there.
 	ls, ok := f.Key("logit_scale")
 	if !ok {
@@ -49,8 +48,8 @@ func graniteConfig(f *meta.File, c *jlm.Config) error {
 // The 27B is the one gemma whose score is not 1/sqrt(head_dim): its
 // query_pre_attn_scalar is n_embd/n_head. The GGUF states neither the scalar
 // nor the size, so like llama.cpp this keys it on the layer count (46, 62).
-func gemmaAttnScale(c *jlm.Config) {
-	if (c.Arch == jlm.ArchGemma2 && c.NLayer == 46) || (c.Arch == jlm.ArchGemma3 && c.NLayer == 62) {
+func gemmaAttnScale(c *Config) {
+	if (c.Arch == ArchGemma2 && c.NLayer == 46) || (c.Arch == ArchGemma3 && c.NLayer == 62) {
 		c.AttnScale = float32(1 / math.Sqrt(float64(c.NEmbd/c.NHead)))
 	}
 }
@@ -90,7 +89,7 @@ func perLayerCount(f *meta.File, key string, def uint32) (uint32, error) {
 // The key is either a period or a per-layer bool array. The container says
 // it only as a period (Config.SWA(il) is il%period < period-1), so an array is
 // accepted exactly when it is that rule for some period.
-func swaPatternOf(f *meta.File, c *jlm.Config, def uint32) error {
+func swaPatternOf(f *meta.File, c *Config, def uint32) error {
 	c.SWAPeriod = def
 	kv, ok := f.Key("attention.sliding_window_pattern")
 	if !ok {

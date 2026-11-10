@@ -17,9 +17,9 @@ import (
 // slices a Mamba-2 block exactly as it slices qwen3next's.
 
 // ssdArch reports the architectures whose recurrent layers are Mamba-2's.
-func ssdArch(a jlm.Arch) bool {
+func ssdArch(a Arch) bool {
 	switch a {
-	case jlm.ArchMamba2, jlm.ArchGraniteHybrid, jlm.ArchNemotronH, jlm.ArchFalconH1:
+	case ArchMamba2, ArchGraniteHybrid, ArchNemotronH, ArchFalconH1:
 		return true
 	}
 	return false
@@ -58,7 +58,7 @@ func attnLayerCount(f *meta.File, key string, def uint32) (uint32, error) {
 }
 
 // ssdConfig reads the Mamba-2 geometry and each family's switches into c.
-func ssdConfig(f *meta.File, c *jlm.Config) error {
+func ssdConfig(f *meta.File, c *Config) error {
 	c.SSM = jlm.SSMConfig{
 		ConvKernel: uint32(f.UintKey("ssm.conv_kernel", 0)),
 		Groups:     uint32(f.UintKey("ssm.group_count", 1)),
@@ -86,14 +86,14 @@ func ssdConfig(f *meta.File, c *jlm.Config) error {
 		}
 	}
 	switch c.Arch {
-	case jlm.ArchMamba2:
+	case ArchMamba2:
 		// No layer attends; the placeholder head configOf set rotates nothing.
 		c.Flags |= jlm.FlagNoPosEnc
-	case jlm.ArchGraniteHybrid:
+	case ArchGraniteHybrid:
 		return graniteHybridConfig(f, c)
-	case jlm.ArchNemotronH:
+	case ArchNemotronH:
 		return nemotronConfig(f, c)
-	case jlm.ArchFalconH1:
+	case ArchFalconH1:
 		// llama.cpp's rope-type table puts falcon-h1 with NEOX; every muP
 		// multiplier is already in the weights (its converter folds them).
 		c.Flags |= jlm.FlagRopeNeox
@@ -110,7 +110,7 @@ func ssdConfig(f *meta.File, c *jlm.Config) error {
 // in the order C | B | x. The convolution's filters and bias are permuted the
 // same way, so the convolution runs over q | k | v. GGUF rows are byte ranges,
 // so all of it is copies; nothing is re-quantized.
-func unfuseSSD(e *jlm.Tensor, c *jlm.Config) ([]jlm.Tensor, bool, error) {
+func unfuseSSD(e *jlm.Tensor, c *Config) ([]jlm.Tensor, bool, error) {
 	if c == nil || !ssdArch(c.Arch) {
 		return nil, false, nil
 	}

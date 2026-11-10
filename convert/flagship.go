@@ -9,7 +9,7 @@ import (
 	"github.com/jitllm/jitllm/format/jlm"
 )
 
-// The flagship architectures (jlm.ArchMiniMaxM2 and the group around it).
+// The flagship architectures (ArchMiniMaxM2 and the group around it).
 // docs/design/model-coverage.md section 9 is the survey they were chosen
 // from, with what each needs and what it costs.
 
@@ -81,7 +81,7 @@ func flagshipRoleOf(name string) (jlm.Role, bool) {
 // The indexer's query is projected from the query latent, so a model without
 // q_lora_rank has nothing to project it from and is refused; its rotary is
 // the model's on the first rope.dimension_count dimensions of each head.
-func deepseek32Config(f *meta.File, c *jlm.Config) error {
+func deepseek32Config(f *meta.File, c *Config) error {
 	c.IdxHeads = uint32(f.UintKey("attention.indexer.head_count", 0))
 	c.IdxHeadDim = uint32(f.UintKey("attention.indexer.key_length", 0))
 	c.IdxTopK = uint32(f.UintKey("attention.indexer.top_k", 0))
@@ -111,7 +111,7 @@ func deepseek32Config(f *meta.File, c *jlm.Config) error {
 //
 // The reference-to-container table: docs/engineering-history/
 // model-correctness.md, "convert/flagship.go: gemma4Config".
-func gemma4Config(f *meta.File, c *jlm.Config) error {
+func gemma4Config(f *meta.File, c *Config) error {
 	c.EmbdScale = float32(math.Sqrt(float64(c.NEmbd)))
 	c.Flags |= jlm.FlagGELU | jlm.FlagRopeNeox | jlm.FlagQKNorm
 	c.Flags2 |= jlm.Flag2VNorm
@@ -236,7 +236,7 @@ func gemma4Config(f *meta.File, c *jlm.Config) error {
 // divides by the top-k sum unconditionally and llama.cpp's builder passes
 // true as a literal, so a file writing expert_weights_norm false describes a
 // model nothing runs and is refused.
-func minimaxM2Config(f *meta.File, c *jlm.Config) error {
+func minimaxM2Config(f *meta.File, c *Config) error {
 	c.Flags |= jlm.FlagRopeNeox | jlm.FlagQKNorm | jlm.FlagQKNormWide | jlm.FlagExpertSigmoid
 	if err := partialRotary(c); err != nil {
 		return err
@@ -284,7 +284,7 @@ func minimaxM2Config(f *meta.File, c *jlm.Config) error {
 // The reference-to-container table and the reasons in full:
 // docs/engineering-history/model-correctness.md,
 // "convert/flagship.go: minimaxM3Config".
-func minimaxM3Config(f *meta.File, c *jlm.Config) error {
+func minimaxM3Config(f *meta.File, c *Config) error {
 	c.Flags |= jlm.FlagRopeNeox | jlm.FlagQKNorm | jlm.FlagExpertSigmoid | jlm.FlagSwiGLUOAI
 	if err := partialRotary(c); err != nil {
 		return err
@@ -332,7 +332,7 @@ func minimaxM3Config(f *meta.File, c *jlm.Config) error {
 // on every block past the dense lead (llama.cpp's is_sparse, and the
 // published sparse_attention_freq), never inside it. Read after the dense
 // lead, which configOf reads with the mixture.
-func minimaxM3Blocks(f *meta.File, c *jlm.Config) error {
+func minimaxM3Blocks(f *meta.File, c *Config) error {
 	for i := 0; i < int(c.NLayer); i++ {
 		_, ok := f.Get("blk." + itoa(i) + ".indexer.q_proj.weight")
 		if want := i >= int(c.NDenseLead); ok != want {
@@ -348,7 +348,7 @@ func minimaxM3Blocks(f *meta.File, c *jlm.Config) error {
 // bank. The bytes are still the source's row-major blocks, so each expert's
 // half is a byte range; the banks are new buffers because an expert's two
 // halves interleave with the next expert's.
-func splitGateUpBank(e *jlm.Tensor, c *jlm.Config) ([]jlm.Tensor, bool, error) {
+func splitGateUpBank(e *jlm.Tensor, c *Config) ([]jlm.Tensor, bool, error) {
 	src, ok := sourceType(e.Type)
 	if !ok {
 		return nil, false, fmt.Errorf("convert: %s is %v, which has no source type", e.Name, e.Type)
@@ -390,9 +390,8 @@ func splitGateUpBank(e *jlm.Tensor, c *jlm.Config) ([]jlm.Tensor, bool, error) {
 // A mixture block's dense MLP (jlm.Flag2DenseMoE) moves to the shared expert's
 // roles, since its gate/up/down roles are its banks, and the router's scale
 // becomes its input's norm weight, router.scale * n_embd^-1/2.
-func gemma4Tensors(s *jlm.Source) error {
-	c := s.Config
-	if c == nil || c.Arch != jlm.ArchGemma4 {
+func gemma4Tensors(c *Config, s *jlm.Source) error {
+	if c == nil || c.Arch != ArchGemma4 {
 		return nil
 	}
 	if c.NKVShared != 0 {
@@ -444,7 +443,7 @@ func gemma4Tensors(s *jlm.Source) error {
 // Gemma4TextRouter divides by the top-k sum and llama.cpp's builder passes
 // true -- with no routed scale or groups, and the dense MLP carried as an
 // ungated shared expert at the dense width.
-func gemma4MoEConfig(f *meta.File, c *jlm.Config) error {
+func gemma4MoEConfig(f *meta.File, c *Config) error {
 	if c.NExpert == 0 {
 		return nil
 	}
@@ -465,12 +464,12 @@ func gemma4MoEConfig(f *meta.File, c *jlm.Config) error {
 }
 
 // sliding reports that block i of c's pattern slides.
-func sliding(c *jlm.Config, i int) bool { return uint32(i)%c.SWAPeriod < c.SWAPeriod-1 }
+func sliding(c *Config, i int) bool { return uint32(i)%c.SWAPeriod < c.SWAPeriod-1 }
 
 // blockGeoms is each block's geometry: the sliding layers' swa where the
 // pattern slides, the model's elsewhere, and ffns' feed-forward width where it
 // is stated per layer; none at all when every block is the model's.
-func blockGeoms(c *jlm.Config, swa jlm.Geom, ffns []int32) []jlm.Geom {
+func blockGeoms(c *Config, swa jlm.Geom, ffns []int32) []jlm.Geom {
 	model := jlm.Geom{NKVHead: c.NKVHead, HeadDim: c.HeadDim, NRot: c.NRot, NFFN: c.NFFN}
 	gs := make([]jlm.Geom, c.NLayer)
 	differ := false

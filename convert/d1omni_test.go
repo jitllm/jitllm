@@ -27,7 +27,7 @@ func TestD1OmniConfigIsTheTrunks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Arch != jlm.ArchLFM2Enc || !c.Flags.Has(jlm.FlagNonCausal) || c.NLayer != 16 || c.DecisionBlocks != 2 ||
+	if c.Arch != ArchLFM2Enc || !c.Flags.Has(jlm.FlagNonCausal) || c.NLayer != 16 || c.DecisionBlocks != 2 ||
 		c.NFFN != 4608 || c.NKVHead != 8 || c.Decision != jlm.DecisionD1Omni || c.DecisionHeads != 16 {
 		t.Fatalf("arch %v flags %v layers %d+%d ffn %d kv heads %d readout %v head heads %d",
 			c.Arch, c.Flags, c.NLayer, c.DecisionBlocks, c.NFFN, c.NKVHead, c.Decision, c.DecisionHeads)

@@ -13,8 +13,8 @@ import (
 // they attend with, and the head's LayerNorm epsilon -- torch's default, which
 // the reference never sets and the converter writes as layer_norm_epsilon. The
 // backbone is qwen35 under another name (the arch "clef").
-func clefOf(f *meta.File, c *jlm.Config) error {
-	if c.Arch != jlm.ArchQwen3Next || f.Arch() != "clef" {
+func clefOf(f *meta.File, c *Config) error {
+	if c.Arch != ArchQwen3Next || f.Arch() != "clef" {
 		return fmt.Errorf("a clef readout is the clef arch's qwen35 backbone, and this is %s (%v)", f.Arch(), c.Arch)
 	}
 	c.DecisionRouting = uint32(f.UintKey("decision.routing_block_count", 0))

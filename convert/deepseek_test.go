@@ -93,9 +93,6 @@ func TestDeepseekConverts(t *testing.T) {
 			t.Errorf("%s = %d, want %d", k.name, k.got, k.exp)
 		}
 	}
-	if c.Arch != jlm.ArchDeepseek2 {
-		t.Errorf("Arch = %v, want deepseek2", c.Arch)
-	}
 	if c.ExpertScale != 2.5 {
 		t.Errorf("ExpertScale = %v, want 2.5", c.ExpertScale)
 	}
@@ -225,7 +222,7 @@ func TestDeepseekKVBSplitIsAbsorbed(t *testing.T) {
 func deepseekCheckKVB(t *testing.T, s *jlm.Source, c *jlm.Config, src map[int32][]float32) {
 	t.Helper()
 	nope := int(c.HeadDim - c.NRot)
-	vdim := int(hfHeadDimV(c))
+	vdim := int(hfHeadDimV(&Config{Config: c}))
 	lat, heads := int(c.KVLoraRank), int(c.NHead)
 	find := func(role jlm.Role, block int32) *jlm.Tensor {
 		for i := range s.Tensors {
@@ -456,7 +453,7 @@ func TestSynthDeepseekConverts(t *testing.T) {
 		t.Fatalf("the unmutated fixture does not convert, so no refusal below proves anything: %v", err)
 	}
 	c := s.Config
-	if c.Arch != jlm.ArchDeepseek2 || c.HeadDim != dsHeadD || c.HeadDimV != dsVDim ||
+	if c.HeadDim != dsHeadD || c.HeadDimV != dsVDim ||
 		c.NRot != dsRope || c.QLoraRank != dsQLora || c.KVLoraRank != dsLat ||
 		c.NDenseLead != dsLead || c.NExpert != dsExp || c.NExpertUsed != dsUsed ||
 		c.NFFNExp != dsExpFFN || c.NFFNShExp != dsExpFFN ||
@@ -683,7 +680,7 @@ func TestDeepseekContainerRoundTrips(t *testing.T) {
 	}
 	defer f.Close()
 	c := f.Config()
-	if c.Arch != jlm.ArchNone || c.KVLoraRank != 16 || c.QLoraRank != 32 ||
+	if c.KVLoraRank != 16 || c.QLoraRank != 32 ||
 		c.HeadDim != 24 || c.HeadDimV != 16 || c.NRot != 8 || c.NDenseLead != 1 ||
 		c.NExpertGroup != 2 || c.NExpertGroupUsed != 1 || c.ExpertScale != 2.5 ||
 		!c.Flags.Has(jlm.FlagExpertSigmoid) {

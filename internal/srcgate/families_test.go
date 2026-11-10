@@ -37,16 +37,18 @@ func familyGeneric(s string) bool {
 	return false
 }
 
-// TestNoFamilyCode holds the engine to knowing no family: no architecture
-// constant is read outside convert/ and format/jlm, no architecture is asked
-// what it means past the converter (a method on an Arch value but its name
-// and validity), format/jlm compares an architecture only in its name tables,
-// and no file, type, function, method, field, variable or constant under
-// familyDirs is named for a family. The names are the architecture
-// constants' own (ArchQwen4Exp is qwen4exp, its stem qwen) and familyShort.
-// Comments and strings are not read. The violations -- an architecture
-// compared in a model, an architecture asked in a model, an architecture
-// compared in format/jlm, a family's field, a family's file -- are seen.
+// TestNoFamilyCode holds the engine to knowing no family: the architecture
+// is the converter's alone, so nothing under familyDirs imports convert/ or
+// reads its architecture type or constants, nothing asks an architecture
+// what it means (a method on an Arch value but its name and validity),
+// format/jlm declares no architecture (no type, constant, name table or field
+// named for one), and no file, type, function, method, field, variable or
+// constant under familyDirs is named for a family. The names are the
+// architecture constants' own (ArchQwen4Exp is qwen4exp, its stem qwen) and
+// familyShort. Comments and strings are not read. The violations -- the
+// converter imported in a model, an architecture read and asked there, an
+// architecture declared in format/jlm, a family's field, a family's file --
+// are seen.
 func TestNoFamilyCode(t *testing.T) {
 	testmodels.SourceTree(t)
 	root, err := filepath.Abs(filepath.Join("..", ".."))
@@ -94,7 +96,7 @@ func TestNoFamilyCode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tables := 0
+	read := 0
 	for _, p := range jf {
 		if strings.HasSuffix(p, "_test.go") {
 			continue
@@ -104,48 +106,46 @@ func TestNoFamilyCode(t *testing.T) {
 			t.Fatal(err)
 		}
 		rel, _ := filepath.Rel(root, p)
-		bad, n := fam.comparedIn(rel, src)
-		tables += n
-		for _, b := range bad {
+		read++
+		for _, b := range declaresArch(rel, src) {
 			t.Errorf("%s", b)
 		}
 	}
-	if tables < 5 {
-		t.Fatalf("read %d architecture name tables in format/jlm: the gate read nothing", tables)
+	if read < 20 {
+		t.Fatalf("read %d files in format/jlm: the gate read nothing", read)
 	}
 
 	viol := `package model
 
-import "github.com/jitllm/jitllm/format/jlm"
+import "github.com/jitllm/jitllm/convert"
 
 type layer struct{ q4e bool }
 
-func swa(a jlm.Arch) bool { return a == jlm.ArchGemma4 }
+func swa(a convert.Arch) bool { return a == convert.ArchGemma4 }
 
 func isQwen3Block() {}
 
 func opPhi() {}
 
-func rope(c *jlm.Config) bool { return c.Arch.XDRope() || c.Arch.Valid() }
+func rope(c *convert.Config) bool { return c.Arch.XDRope() || c.Arch.Valid() }
 `
 	got := fam.inSource("model/viol.go", []byte(viol))
-	if len(got) != 4 {
-		t.Errorf("the violations gave %d findings, want 4 (a field, an architecture, a function, an architecture asked): %v", len(got), got)
+	if len(got) != 6 {
+		t.Errorf("the violations gave %d findings, want 6 (the converter imported, a field, the architecture type, "+
+			"an architecture, a function, an architecture asked): %v", len(got), got)
 	}
 	jviol := `package jlm
 
-func (a Arch) XDRope() bool { return a == ArchHunyuanVL }
+type Arch uint16
 
-func viewArchName(a Arch) (string, bool) {
-	switch a {
-	case ArchHunyuanVL:
-		return "hunyuan_vl", true
-	}
-	return "", false
-}
+const ArchHunyuanVL Arch = 1
+
+func viewArchName(a Arch) (string, bool) { return "hunyuan_vl", a == 1 }
+
+type Config struct{ Arch uint16 }
 `
-	if bad, n := fam.comparedIn("format/jlm/viol.go", []byte(jviol)); len(bad) != 1 || n != 1 {
-		t.Errorf("an architecture compared beside a name table gave %v and %d table(s), want one finding and one table", bad, n)
+	if bad := declaresArch("format/jlm/viol.go", []byte(jviol)); len(bad) != 4 {
+		t.Errorf("an architecture declared in format/jlm gave %v, want 4 findings (a type, a constant, a table, a field)", bad)
 	}
 	for _, n := range []string{"q4erun.go", "gemma4.go", "k3run.go"} {
 		if !fam.fileNamed(n) {
@@ -166,10 +166,10 @@ type families struct {
 	full, stems []string
 }
 
-// familyNames reads the architecture constants from format/jlm.
+// familyNames reads the architecture constants from the converter.
 func familyNames(t *testing.T, root string) families {
 	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, filepath.Join(root, "format", "jlm"), func(fi os.FileInfo) bool {
+	pkgs, err := parser.ParseDir(fset, filepath.Join(root, "convert"), func(fi os.FileInfo) bool {
 		return !strings.HasSuffix(fi.Name(), "_test.go")
 	}, 0)
 	if err != nil {
@@ -281,50 +281,49 @@ func (f families) identNamed(id string) bool {
 	return false
 }
 
-// comparedIn is every architecture constant format/jlm source compares
-// outside a name table (a function named ...ArchName, name or Valid), and how
-// many name tables it holds.
-func (f families) comparedIn(rel string, src []byte) ([]string, int) {
+// declaresArch is every declaration in format/jlm source that names an
+// architecture: a type, constant, function or field called Arch, Arch... or
+// ...ArchName.
+func declaresArch(rel string, src []byte) []string {
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, rel, src, 0)
 	if err != nil {
-		return []string{rel + ": " + err.Error()}, 0
+		return []string{rel + ": " + err.Error()}
+	}
+	named := func(n string) bool {
+		return n == "Arch" || strings.HasSuffix(n, "ArchName") ||
+			strings.HasPrefix(n, "Arch") && len(n) > 4 && unicode.IsUpper(rune(n[4]))
 	}
 	var out []string
-	tables := 0
-	for _, d := range file.Decls {
-		fd, ok := d.(*ast.FuncDecl)
-		if !ok || fd.Body == nil {
-			continue
-		}
-		name := fd.Name.Name
-		if strings.HasSuffix(name, "ArchName") {
-			tables++
-			continue
-		}
-		if name == "name" || name == "Valid" {
-			continue
-		}
-		ast.Inspect(fd.Body, func(n ast.Node) bool {
-			var ids []ast.Expr
-			switch x := n.(type) {
-			case *ast.BinaryExpr:
-				if x.Op == token.EQL || x.Op == token.NEQ {
-					ids = []ast.Expr{x.X, x.Y}
-				}
-			case *ast.CaseClause:
-				ids = x.List
-			}
-			for _, e := range ids {
-				if id, ok := e.(*ast.Ident); ok && f.arch[id.Name] {
-					out = append(out, fset.Position(id.Pos()).String()+": "+name+" compares "+id.Name+
-						": what an architecture means is stated by the converter")
-				}
-			}
-			return true
-		})
+	at := func(p token.Pos, what, n string) {
+		out = append(out, fset.Position(p).String()+": "+what+" "+n+": the architecture is the converter's alone")
 	}
-	return out, tables
+	ast.Inspect(file, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.FuncDecl:
+			if named(x.Name.Name) {
+				at(x.Pos(), "a function", x.Name.Name)
+			}
+		case *ast.TypeSpec:
+			if named(x.Name.Name) {
+				at(x.Pos(), "a type", x.Name.Name)
+			}
+		case *ast.ValueSpec:
+			for _, nm := range x.Names {
+				if named(nm.Name) {
+					at(nm.Pos(), "a value", nm.Name)
+				}
+			}
+		case *ast.Field:
+			for _, nm := range x.Names {
+				if named(nm.Name) {
+					at(nm.Pos(), "a field", nm.Name)
+				}
+			}
+		}
+		return true
+	})
+	return out
 }
 
 // fileNamed is whether a file's name starts with a family's name: k3run.go,
@@ -367,8 +366,12 @@ func (f families) inSource(rel string, src []byte) []string {
 	at := func(p token.Pos) string { return fset.Position(p).String() }
 	ast.Inspect(file, func(n ast.Node) bool {
 		switch x := n.(type) {
+		case *ast.ImportSpec:
+			if x.Path.Value == `"github.com/jitllm/jitllm/convert"` {
+				out = append(out, at(x.Pos())+": imports the converter: the architecture is its alone")
+			}
 		case *ast.SelectorExpr:
-			if id, ok := x.X.(*ast.Ident); ok && id.Name == "jlm" && f.arch[x.Sel.Name] {
+			if id, ok := x.X.(*ast.Ident); ok && id.Name == "convert" && (x.Sel.Name == "Arch" || f.arch[x.Sel.Name]) {
 				out = append(out, at(x.Pos())+": reads "+x.Sel.Name+": the container states what the architecture means")
 			}
 		case *ast.CallExpr:

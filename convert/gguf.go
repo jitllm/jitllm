@@ -85,7 +85,7 @@ func buildGGUF(f, vf *meta.File, src, mmproj string, o options) (*jlm.Source, er
 		if a := vf.Arch(); a != "clip" {
 			return nil, fmt.Errorf("convert: %s is architecture %q, not a vision tower", mmproj, a)
 		}
-		if s.Config.Arch == jlm.ArchCLIP {
+		if f.Arch() == "clip" {
 			return nil, fmt.Errorf("convert: %s is itself a vision tower; the first "+
 				"argument is the TEXT model", src)
 		}
@@ -148,6 +148,7 @@ func buildGGUF(f, vf *meta.File, src, mmproj string, o options) (*jlm.Source, er
 // sourceOf translates a parsed source model into the container's own terms.
 func sourceOf(f *meta.File) (*jlm.Source, error) {
 	s := &jlm.Source{}
+	var c *Config
 	tower := f.Arch() == "clip"
 	if tower {
 		v, err := visionOf(f)
@@ -157,18 +158,18 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 		// A tower still needs a Config, because a container always has one; its
 		// language-model fields are the tower's where they mean the same thing.
 		s.Vision = v
-		s.Config = &jlm.Config{
-			Arch: jlm.ArchCLIP, NLayer: v.NLayer, NEmbd: v.NEmbd, NHead: v.NHead,
+		c = &Config{Arch: ArchCLIP, Config: &jlm.Config{
+			NLayer: v.NLayer, NEmbd: v.NEmbd, NHead: v.NHead,
 			NKVHead: v.NHead, HeadDim: v.NEmbd / max32(v.NHead, 1), NFFN: v.NFFN,
 			RMSEps: v.Eps, EmbdScale: 1, AttnFactor: 1, Flags: v.Flags,
-		}
+		}}
 	} else {
-		c, err := configOf(f)
-		if err != nil {
+		var err error
+		if c, err = configOf(f); err != nil {
 			return nil, err
 		}
-		s.Config = c
 	}
+	s.Config = c.Config
 	voc, err := vocabOf(f)
 	if err != nil {
 		return nil, err
@@ -178,7 +179,7 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 	s.Tensors = make([]jlm.Tensor, 0, len(f.Tensors))
 	// Nemotron-H's one-mixer layers merge into blocks (convert/nemotronh.go).
 	var nemo *nemotronPlan
-	if !tower && s.Config.Arch == jlm.ArchNemotronH {
+	if !tower && c.Arch == ArchNemotronH {
 		if nemo, err = nemotronPlanOf(f); err != nil {
 			return nil, fmt.Errorf("convert: %w", err)
 		}
@@ -201,7 +202,7 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 		}
 		// Qwen3.5's re-cut of qwen3next's file is undone before the name table
 		// sees it: beta and alpha are fused back into ssm_ba (fuseBetaAlpha).
-		if !tower && (s.Config.Arch == jlm.ArchQwen3Next || s.Config.Arch == jlm.ArchQwen4Exp) {
+		if !tower && (c.Arch == ArchQwen3Next || c.Arch == ArchQwen4Exp) {
 			if splitBetaAlpha(t.Name) && strings.HasSuffix(t.Name, ".ssm_alpha.weight") {
 				alphas++
 				continue // fused into its layer's ssm_beta below
@@ -211,7 +212,7 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 				if !ok {
 					return nil, fmt.Errorf("convert: %q: no block index", t.Name)
 				}
-				e, err := fuseBetaAlpha(f, t, s.Config, b)
+				e, err := fuseBetaAlpha(f, t, c, b)
 				if err != nil {
 					return nil, err
 				}
@@ -265,12 +266,12 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 		}
 		// DeepSeek V4's token-id tables are I32, which is not a weight type
 		// here: carried as F32 ids (ds4HashTable).
-		if !tower && s.Config.Arch == jlm.ArchDeepseek4 && strings.HasSuffix(t.Name, ".ffn_gate_tid2eid.weight") {
+		if !tower && c.Arch == ArchDeepseek4 && strings.HasSuffix(t.Name, ".ffn_gate_tid2eid.weight") {
 			_, block, _, err := identify(t.Name)
 			if err != nil {
 				return nil, err
 			}
-			b, err := ds4HashTable(t, f.Bytes(t), s.Config)
+			b, err := ds4HashTable(t, f.Bytes(t), c)
 			if err != nil {
 				return nil, err
 			}
@@ -282,7 +283,7 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 		}
 		// BitNet's optional per-tensor projection scale is folded into its
 		// weight's blocks (bitnetTensors).
-		if w, ok := bitnetScaleOf(t.Name); ok && !tower && s.Config.Arch == jlm.ArchBitNet {
+		if w, ok := bitnetScaleOf(t.Name); ok && !tower && c.Arch == ArchBitNet {
 			e := jlm.Tensor{NDim: uint8(len(t.Dims)), Data: f.Bytes(t), Name: t.Name}
 			copy(e.Dims[:], t.Dims)
 			if e.Type, err = typeOf(t.Type); err != nil {
@@ -326,19 +327,19 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 		if !role.Vision() {
 			// retarget is the text architecture's rename table; a tower's roles
 			// are not its to rewrite, and a merged container has both.
-			role = retarget(s.Config.Arch, role)
+			role = retarget(c.Arch, role)
 			if nemo != nil {
 				if role, block, err = nemo.remap(role, block); err != nil {
 					return nil, fmt.Errorf("convert: %s: %w", t.Name, err)
 				}
 			}
-			if s.Config.Arch == jlm.ArchFalcon {
+			if c.Arch == ArchFalcon {
 				if role, err = falconNorms(f, role); err != nil {
 					return nil, fmt.Errorf("convert: %s: %w", t.Name, err)
 				}
 			}
 		}
-		role, block = headSeam(role, block, s.Config)
+		role, block = headSeam(role, block, c)
 		data := f.Bytes(t)
 		srcType := t.Type
 		// A ternary type with no code here (TQ1_0, I2_S) is re-packed as
@@ -363,12 +364,12 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 		if bank, ok := expertBank(role); ok && index >= 0 {
 			// The index comes from a tensor name, so it is bounded by the config
 			// before it sizes anything (RULE 9).
-			if uint32(index) >= s.Config.NExpert {
-				return nil, fmt.Errorf("convert: %s: expert %d of %d", t.Name, index, s.Config.NExpert)
+			if uint32(index) >= c.NExpert {
+				return nil, fmt.Errorf("convert: %s: expert %d of %d", t.Name, index, c.NExpert)
 			}
 			k := bankKey{bank, block}
 			if experts[k] == nil {
-				experts[k] = make([]*jlm.Tensor, s.Config.NExpert)
+				experts[k] = make([]*jlm.Tensor, c.NExpert)
 			}
 			if experts[k][index] != nil {
 				return nil, fmt.Errorf("convert: %s: expert %d twice", t.Name, index)
@@ -381,31 +382,31 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 		// packing choice of the file. Once packed, a row range has no byte range
 		// and the device tier cannot slice it; here the bytes are still GGUF
 		// row-major, so a row range is a byte range and the split is three slices.
-		sub, split, uerr := unfuse(&e, s.Config)
+		sub, split, uerr := unfuse(&e, c)
 		if uerr != nil {
 			return nil, uerr
 		}
 		// MLA's fused up-projection likewise, except its k half is transposed per
 		// head and so cannot keep the source's block layout. See unfuseMLA.
 		if !split {
-			if sub, split, uerr = unfuseMLA(&e, s.Config); uerr != nil {
+			if sub, split, uerr = unfuseMLA(&e, c); uerr != nil {
 				return nil, uerr
 			}
 		}
 		// Mamba-2's in_proj likewise, and its convolved channels reordered to
 		// the delta rule's q | k | v. See unfuseSSD.
 		if !split {
-			if sub, split, uerr = unfuseSSD(&e, s.Config); uerr != nil {
+			if sub, split, uerr = unfuseSSD(&e, c); uerr != nil {
 				return nil, uerr
 			}
 		}
 		if !split {
-			if sub, split, uerr = unfuseLFM2(&e, s.Config); uerr != nil {
+			if sub, split, uerr = unfuseLFM2(&e, c); uerr != nil {
 				return nil, uerr
 			}
 		}
 		if !split {
-			if sub, split, uerr = unfuseMamba1(&e, s.Config); uerr != nil {
+			if sub, split, uerr = unfuseMamba1(&e, c); uerr != nil {
 				return nil, uerr
 			}
 		}
@@ -415,38 +416,38 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 		}
 		s.Tensors = append(s.Tensors, e)
 	}
-	bs, err := stackGGUFExperts(experts, s.Config)
+	bs, err := stackGGUFExperts(experts, c)
 	if err != nil {
 		return nil, err
 	}
 	s.Tensors = append(s.Tensors, bs...)
-	if s.Tensors, err = nextnTensors(s.Tensors, s.Config); err != nil {
+	if s.Tensors, err = nextnTensors(s.Tensors, c); err != nil {
 		return nil, err
 	}
 	if err := foldPostRopeQKNorm(s); err != nil {
 		return nil, err
 	}
-	if err := gemma4Tensors(s); err != nil {
+	if err := gemma4Tensors(c, s); err != nil {
 		return nil, err
 	}
-	if err := gemma3nTensors(s); err != nil {
+	if err := gemma3nTensors(c, s); err != nil {
 		return nil, err
 	}
 	if !tower {
-		if err := mamba1UnitNorms(f, s); err != nil {
+		if err := mamba1UnitNorms(c, f, s); err != nil {
 			return nil, err
 		}
-		if err := apertusXIELU(f, s); err != nil {
+		if err := apertusXIELU(c, f, s); err != nil {
 			return nil, err
 		}
 	}
-	if err := bitnetTensors(s, scales); err != nil {
+	if err := bitnetTensors(c, s, scales); err != nil {
 		return nil, err
 	}
-	if err := ds4Tensors(s); err != nil {
+	if err := ds4Tensors(c, s); err != nil {
 		return nil, err
 	}
-	if err := kimiK3Tensors(s); err != nil {
+	if err := kimiK3Tensors(c, s); err != nil {
 		return nil, err
 	}
 	// An alpha with no beta was skipped above and never fused: a layer whose
@@ -478,27 +479,27 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 			return nil, err
 		}
 	}
-	if err := StateActivations(s); err != nil {
+	if err := StateActivations(c, s); err != nil {
 		return nil, err
 	}
-	StateStreams(s.Config, sourceStores(s))
-	if err := StateSelection(s.Config, sourceStores(s)); err != nil {
+	StateStreams(c.Config, sourceStores(s))
+	if err := StateSelection(c.Config, sourceStores(s)); err != nil {
 		return nil, err
 	}
-	if err := expertsFit(s); err != nil {
+	if err := expertsFit(c, s); err != nil {
 		return nil, err
 	}
-	if err := valueWidthFits(s.Config); err != nil {
+	if err := valueWidthFits(c); err != nil {
 		return nil, err
 	}
-	if err := geometryFits(s.Config); err != nil {
+	if err := geometryFits(c); err != nil {
 		return nil, err
 	}
-	if err := ropeFits(s.Config); err != nil {
+	if err := ropeFits(c); err != nil {
 		return nil, err
 	}
-	StateDelta(s.Config, sourceStores(s))
-	StateRevision(s.Config)
+	StateDelta(c.Config, sourceStores(s))
+	StateRevision(c)
 	if err := StateMarkerPrompt(s, int64(f.UintKey("decision.max_tokens", 0))); err != nil {
 		return nil, err
 	}
@@ -543,7 +544,7 @@ func bankStemOf(r jlm.Role) string {
 //
 // A bank whose experts disagree on type is stacked from its sheets widened
 // to F32 (widenedF32): a bank is one matrix of one type.
-func stackGGUFExperts(experts map[bankKey][]*jlm.Tensor, c *jlm.Config) ([]jlm.Tensor, error) {
+func stackGGUFExperts(experts map[bankKey][]*jlm.Tensor, c *Config) ([]jlm.Tensor, error) {
 	byBlock := map[int32]map[bankKey][]*jlm.Tensor{}
 	for k, v := range experts {
 		if byBlock[k.block] == nil {
@@ -703,7 +704,7 @@ func max32(a, b uint32) uint32 {
 // A GGUF matrix is row-major with every row a whole number of quantization
 // blocks, so a row range is a contiguous byte range -- which stops being true
 // once the container packs it.
-func unfuse(e *jlm.Tensor, c *jlm.Config) ([]jlm.Tensor, bool, error) {
+func unfuse(e *jlm.Tensor, c *Config) ([]jlm.Tensor, bool, error) {
 	if c != nil && e.Role == jlm.RoleExpUpBank && e.NDim == 3 && c.NFFNExp != 0 &&
 		e.Dims[1] == 2*uint64(c.NFFNExp) {
 		return splitGateUpBank(e, c)
@@ -814,13 +815,13 @@ func falconNorms(f *meta.File, role jlm.Role) (jlm.Role, error) {
 
 // fusesQKV says which architectures' attn_qkv is attention's q|k|v rather
 // than some other block's fused projection (qwen3next's delta rule).
-func fusesQKV(a jlm.Arch) bool {
+func fusesQKV(a Arch) bool {
 	switch a {
-	case jlm.ArchPhi3, jlm.ArchNomicBERT, jlm.ArchModernBERT, jlm.ArchPhi2, jlm.ArchStarcoder, jlm.ArchFalcon, jlm.ArchDBRX,
-		jlm.ArchBailingMoE2,
+	case ArchPhi3, ArchNomicBERT, ArchModernBERT, ArchPhi2, ArchStarcoder, ArchFalcon, ArchDBRX,
+		ArchBailingMoE2,
 		// glm4's q, k and v are separate tensors; its gate|up is fused, which
 		// this switch also admits.
-		jlm.ArchGLM4:
+		ArchGLM4:
 		return true
 	}
 	return false
@@ -828,7 +829,7 @@ func fusesQKV(a jlm.Arch) bool {
 
 // unfuseBias splits a fused q|k|v bias into its three parts. It is a vector,
 // so the parts are element ranges and the split is three slices of bytes.
-func unfuseBias(e *jlm.Tensor, c *jlm.Config) ([]jlm.Tensor, bool, error) {
+func unfuseBias(e *jlm.Tensor, c *Config) ([]jlm.Tensor, bool, error) {
 	q, kv := uint64(c.NHead)*uint64(c.HeadDim), uint64(c.NKVHead)*uint64(c.HeadDim)
 	if e.NDim != 1 || e.Dims[0] != q+2*kv {
 		return nil, false, fmt.Errorf("convert: %s is %v, want one dimension of %d (q %d + k %d + v %d)",
@@ -870,7 +871,7 @@ func unfuseBias(e *jlm.Tensor, c *jlm.Config) ([]jlm.Tensor, bool, error) {
 // exactly. attn_k_b is W_k transposed per head, because the absorb folds it
 // into the query (score = (W_k^T . q_nope) . c); a transpose moves the axis the
 // quantization blocks run along, so that half is dequantized and re-stored.
-func unfuseMLA(e *jlm.Tensor, c *jlm.Config) ([]jlm.Tensor, bool, error) {
+func unfuseMLA(e *jlm.Tensor, c *Config) ([]jlm.Tensor, bool, error) {
 	if c == nil || e.Role != jlm.RoleAttnKVB {
 		return nil, false, nil
 	}

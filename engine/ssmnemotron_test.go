@@ -5,7 +5,7 @@ import (
 	"github.com/jitllm/jitllm/model"
 )
 
-// Nemotron-H (jlm.ArchNemotronH) on the Mamba-2 harness (ssmfamily_test.go):
+// Nemotron-H (nemotron_h) on the Mamba-2 harness (ssmfamily_test.go):
 // its fixture, built by NemotronHForCausalLM (scripts/ssmgold.py) with one
 // mixer a source layer merged at conversion, joins every gate there and the
 // five principles' through principleFixtures.

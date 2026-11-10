@@ -17,7 +17,7 @@ import (
 // layerNormEps reads the LayerNorm epsilon, which is a different key from the
 // RMSNorm one: these files carry attention.layer_norm_epsilon and no
 // layer_norm_rms_epsilon.
-func layerNormEps(f *meta.File, c *jlm.Config) {
+func layerNormEps(f *meta.File, c *Config) {
 	c.RMSEps = float32(f.FloatKey("attention.layer_norm_epsilon", 1e-5))
 }
 
@@ -25,7 +25,7 @@ func layerNormEps(f *meta.File, c *jlm.Config) {
 // even (the pairs) and fit inside the head. The rotated dimensions lead and
 // the tail passes through, which is what every C6 graph's ggml_rope_ext does
 // with n_rot < head_dim.
-func partialRotary(c *jlm.Config) error {
+func partialRotary(c *Config) error {
 	if c.NRot == 0 || c.NRot%2 != 0 || c.NRot > c.HeadDim {
 		return fmt.Errorf("rotary width %d on a %d-wide head", c.NRot, c.HeadDim)
 	}
@@ -42,7 +42,7 @@ func partialRotary(c *jlm.Config) error {
 // llama.cpp scales q by 1/sqrt(head_dim) before the product "to avoid
 // precision issues" and runs the softmax at scale 1; that is the same function
 // as scaling the scores, which is what this engine does.
-func phi2Config(f *meta.File, c *jlm.Config) error {
+func phi2Config(f *meta.File, c *Config) error {
 	layerNormEps(f, c)
 	c.Flags |= jlm.FlagLayerNorm | jlm.FlagParallel | jlm.FlagRopeNeox | jlm.FlagGELU
 	if err := partialRotary(c); err != nil {
@@ -62,7 +62,7 @@ func phi2Config(f *meta.File, c *jlm.Config) error {
 //
 // The position table's length bounds the context: a position past it has no
 // embedding, so NCtx is clamped to the table's rows.
-func starcoderConfig(f *meta.File, c *jlm.Config) error {
+func starcoderConfig(f *meta.File, c *Config) error {
 	layerNormEps(f, c)
 	c.Flags |= jlm.FlagLayerNorm | jlm.FlagNoPosEnc | jlm.FlagGELU
 	t, ok := f.Get("position_embd.weight")
@@ -96,7 +96,7 @@ func starcoderConfig(f *meta.File, c *jlm.Config) error {
 //
 // command-r-plus's per-head q/k LayerNorm ({head_dim, n_head}, a weight per
 // head) is refused by name: running without it would be fluent and wrong.
-func commandRConfig(f *meta.File, c *jlm.Config, cohere2 bool) error {
+func commandRConfig(f *meta.File, c *Config, cohere2 bool) error {
 	layerNormEps(f, c)
 	c.Flags |= jlm.FlagLayerNorm | jlm.FlagParallel
 	if _, ok := f.Get("blk.0.attn_q_norm.weight"); ok {
@@ -139,7 +139,7 @@ func commandRConfig(f *meta.File, c *jlm.Config, cohere2 bool) error {
 // The residual is read off the tensor, as llama.cpp reads it
 // ("if (model.layers[il].ffn_norm)"); use_parallel_residual is not consulted,
 // since some files say true while carrying an ffn_norm in every block.
-func stableLMConfig(f *meta.File, c *jlm.Config) error {
+func stableLMConfig(f *meta.File, c *Config) error {
 	layerNormEps(f, c)
 	c.Flags |= jlm.FlagLayerNorm | jlm.FlagRopeNeox
 	if _, ok := f.Get("blk.0.attn_q_norm.weight"); ok {
@@ -165,7 +165,7 @@ func stableLMConfig(f *meta.File, c *jlm.Config) error {
 //
 // The clamp must be positive and finite: zero would mean no clamp, which is
 // not DBRX, and a negative or NaN bound clamps nothing sensibly.
-func dbrxConfig(f *meta.File, c *jlm.Config) error {
+func dbrxConfig(f *meta.File, c *Config) error {
 	layerNormEps(f, c)
 	c.Flags |= jlm.FlagLayerNorm | jlm.FlagRopeNeox
 	v := f.FloatKey("attention.clamp_kqv", 0)

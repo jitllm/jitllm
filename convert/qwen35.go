@@ -13,7 +13,7 @@ import (
 // qwen35Of reads what a Qwen3.5 / Qwen3.6 file says beyond qwen3next's keys:
 // the value-head order and the M-RoPE sections. Its multi-token-prediction
 // blocks are nextnOf's, as every architecture's are. It is a no-op on a qwen3next file (no nextn layers, no sections).
-func qwen35Of(f *meta.File, name string, c *jlm.Config) error {
+func qwen35Of(f *meta.File, name string, c *Config) error {
 	// The value heads are tiled in every qwen35 GGUF: llama.cpp's converter
 	// reorders them from HuggingFace's grouped order so its graph can
 	// ggml_repeat the keys. With one value head per key head the permutation is
@@ -64,7 +64,7 @@ func qwen35Of(f *meta.File, name string, c *jlm.Config) error {
 // When the two share a type the interleave is byte copies; otherwise both are
 // dequantized and re-stored as Q8_0 along the same k (tiny: two rows per value
 // head).
-func fuseBetaAlpha(f *meta.File, beta *meta.Tensor, c *jlm.Config, block int32) (jlm.Tensor, error) {
+func fuseBetaAlpha(f *meta.File, beta *meta.Tensor, c *Config, block int32) (jlm.Tensor, error) {
 	alphaName := strings.TrimSuffix(beta.Name, "ssm_beta.weight") + "ssm_alpha.weight"
 	alpha, ok := f.Get(alphaName)
 	if !ok {

@@ -17,7 +17,7 @@ import (
 //
 // Each prediction block must carry its eh_proj: a count with no block behind
 // it would be a model that says it can draft and cannot.
-func nextnOf(f *meta.File, c *jlm.Config) error {
+func nextnOf(f *meta.File, c *Config) error {
 	nextn := uint32(f.UintKey("nextn_predict_layers", 0))
 	if nextn == 0 {
 		return nil
@@ -45,7 +45,7 @@ func nextnOf(f *meta.File, c *jlm.Config) error {
 // published checkpoint here: the model then reads the trunk's, and the
 // container does not carry a vocabulary-sized matrix twice. A copy that
 // differs is kept, and the engine reads it.
-func nextnTensors(ts []jlm.Tensor, c *jlm.Config) ([]jlm.Tensor, error) {
+func nextnTensors(ts []jlm.Tensor, c *Config) ([]jlm.Tensor, error) {
 	var head, embd *jlm.Tensor
 	for i := range ts {
 		t := &ts[i]

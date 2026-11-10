@@ -120,9 +120,9 @@ func selectionFits(c *jlm.Config, s *jlm.Selection) error {
 		mixed = mixed || g.HeadDim != c.HeadDim || g.NKVHead != c.NKVHead || g.NRot != c.NRot
 	}
 	if s.KeyWidth != c.HeadDim || s.Groups != 1 && s.Groups != c.NKVHead || mixed || c.NKVShared != 0 {
-		return fmt.Errorf("convert: %v selects with %d group(s) of keys %d wide over %d kv heads of %d "+
+		return fmt.Errorf("convert: the model selects with %d group(s) of keys %d wide over %d kv heads of %d "+
 			"(blocks of several geometries %v, %d sharing their KV): the key is cached as one head of the "+
-			"history: %w", c.Arch, s.Groups, s.KeyWidth, c.NKVHead, c.HeadDim, mixed, c.NKVShared, ErrNotImplemented)
+			"history: %w", s.Groups, s.KeyWidth, c.NKVHead, c.HeadDim, mixed, c.NKVShared, ErrNotImplemented)
 	}
 	return nil
 }

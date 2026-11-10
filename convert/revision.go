@@ -11,7 +11,7 @@ import "github.com/jitllm/jitllm/format/jlm"
 // ones; the E-models and Gemma 3 every layer, as the engine runs them), and
 // a model's activation quantization (BitNet b1.58's BitLinear: int8 per
 // token by its absolute maximum).
-func StateRevision(c *jlm.Config) {
+func StateRevision(c *Config) {
 	c.Revision = jlm.StatementRevision
 	if interleavedMRope(c.Arch) {
 		c.Flags |= jlm.FlagRopeInterleaved
@@ -19,16 +19,16 @@ func StateRevision(c *jlm.Config) {
 	if xdRope(c.Arch) {
 		c.Flags |= jlm.FlagRopeXD
 	}
-	if c.Arch == jlm.ArchBitNet {
+	if c.Arch == ArchBitNet {
 		c.ActQuant = jlm.ActQuantRowInt8
 	}
-	if c.Arch == jlm.ArchOLMo3 {
+	if c.Arch == ArchOLMo3 {
 		c.RopeScaleSWA = 1
 	}
-	if c.Arch == jlm.ArchModernBERT && c.SWAWindow != 0 {
+	if c.Arch == ArchModernBERT && c.SWAWindow != 0 {
 		c.Flags2 |= jlm.Flag2SWAGlobalFirst
 	}
-	if c.Arch == jlm.ArchGemma4 && c.PLEDim == 0 && c.SWAWindow > 0 {
+	if c.Arch == ArchGemma4 && c.PLEDim == 0 && c.SWAWindow > 0 {
 		c.BidirLayers = make([]bool, c.NLayer)
 		for li := range c.BidirLayers {
 			c.BidirLayers[li] = c.Sliding(li)

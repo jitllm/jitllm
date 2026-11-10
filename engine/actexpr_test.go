@@ -100,7 +100,6 @@ func actSwap(k jlm.Flags) func(*model.Model) func() {
 		c := m.Container.Config()
 		was, wasL := c.Acts, c.ActLayers
 		s := *c
-		s.Arch = jlm.ArchLlama
 		s.Flags &^= jlm.FlagGELU | jlm.FlagReLU2 | jlm.FlagSwiGLUOAI
 		s.Flags2 &^= jlm.Flag2SwiGLUClamp
 		s.SituBeta, s.SituLinearBeta, s.SparseStd = 0, 0, 0
@@ -113,7 +112,7 @@ func actSwap(k jlm.Flags) func(*model.Model) func() {
 			gate := m.Stores(li, jlm.RoleFFNGate) || m.Stores(li, jlm.RoleExpGateBank)
 			gated[li] = gate || !m.Stores(li, jlm.RoleFFNUp) && !m.Stores(li, jlm.RoleExpUpBank)
 		}
-		if err := convert.StateGated(&s, gated, xielu); err != nil {
+		if err := convert.StateGated(&convert.Config{Config: &s}, gated, xielu); err != nil {
 			panic(err)
 		}
 		c.Acts, c.ActLayers = s.Acts, s.ActLayers

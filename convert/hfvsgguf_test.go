@@ -94,7 +94,6 @@ func TestSafetensorsConfigMatchesItsGGUF(t *testing.T) {
 		name string
 		x, y any
 	}{
-		{"Arch", a.Arch, b.Arch},
 		{"NLayer", a.NLayer, b.NLayer},
 		{"NEmbd", a.NEmbd, b.NEmbd},
 		{"NHead", a.NHead, b.NHead},
@@ -122,8 +121,8 @@ func TestSafetensorsConfigMatchesItsGGUF(t *testing.T) {
 	if n != len(fields) {
 		t.Fatalf("%d of %d config fields agree", n, len(fields))
 	}
-	t.Logf("%d config fields agree; arch=%v L=%d d=%d heads=%d/%d hd=%d ffn=%d vocab=%d flags=%v",
-		n, a.Arch, a.NLayer, a.NEmbd, a.NHead, a.NKVHead, a.HeadDim, a.NFFN, a.NVocab, a.Flags)
+	t.Logf("%d config fields agree; L=%d d=%d heads=%d/%d hd=%d ffn=%d vocab=%d flags=%v",
+		n, a.NLayer, a.NEmbd, a.NHead, a.NKVHead, a.HeadDim, a.NFFN, a.NVocab, a.Flags)
 }
 
 // TestSafetensorsTensorsMatchTheirGGUF is the name-mapping and rotary-layout

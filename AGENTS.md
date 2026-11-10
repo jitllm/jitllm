@@ -399,13 +399,17 @@ Further rules for every entry:
   every kernel is gated against the oracle. `quant.PackedTypes`
   (`format/quant/types.go`) is the canonical list of packed types a gate sweeps;
   a hand-written copy anywhere else is a bug waiting.
-- **Arch codes** are allocated by group: the dense llama family from the top of
-  the code space down (`format/jlm/archdense.go`), the flagships counting up from
-  44 (`format/jlm/archflagship.go`), the state-space families from 100
-  (`format/jlm/archssm.go`), the vision families from the top down
-  (`format/jlm/visionfam.go`), the encoders after BERT from 150
-  (`format/jlm/archencoder.go`), the vision-language families' text models up
-  from 200 (`format/jlm/archvision.go`). `Arch.Valid` asks the name tables.
+- **The architecture is the converter's alone** (`convert.Arch`,
+  `convert/arch.go`): it names which reference a source is read against, and
+  nothing past the converter -- not the container, not `model/`, `engine/`, the
+  devices or the composer -- holds one (`srcgate.TestNoFamilyCode`). A container
+  written before v31 carries its old code as an opaque number for the
+  migration's check (`jlm.Stating`, `convert.LegacyStated`). Codes are allocated
+  by group: the dense llama family from the top of the code space down, the
+  flagships counting up from 44, the state-space families from 100, the vision
+  families from the top down, the encoders after BERT from 150, the
+  vision-language families' text models up from 200; they must not move, since a
+  pre-v31 container's code is read by number.
 
 ### The architectures and projectors
 

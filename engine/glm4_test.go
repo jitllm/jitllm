@@ -5,7 +5,7 @@ import (
 	"github.com/jitllm/jitllm/model"
 )
 
-// GLM-4-0414's text block (jlm.ArchGLM4), the text model of GLM-4.1V and
+// GLM-4-0414's text block (glm4), the text model of GLM-4.1V and
 // GLM-4.6V-Flash, is gated by the classic-transformer (C6) harness as the
 // dense llama family is (densearch_test.go): transformers' own Glm4ForCausalLM
 // written to GGUF by llama.cpp's converter (scripts/c6gold.py synth-glm4),
