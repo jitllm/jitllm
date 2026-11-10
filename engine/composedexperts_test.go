@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"math"
 	"math/rand"
 	"os"
@@ -392,7 +393,9 @@ func cpuMixtureRowsModels() []string {
 // TestComposedCPUExpertPromptsServe runs each mixture's prompts and batched
 // steps on the CPU device composed: a prompt of more rows than a call of
 // the rows' form holds and its decode, and a batch of three sequences, each
-// prompted into its own slot and stepped together. Every call holds the
+// prompted into its own slot and stepped together -- the sequences of
+// scripts/rowsgold.py, whose transformers rows are the band of a fixture
+// llama.cpp cannot read, over that golden's ids. Every call holds the
 // experts its rows pick, each once (cpuExperts), every block step served
 // and none declined, the logits within main's own spread (or, for a float
 // mixture, within f32's reduction order); under a one-page budget the
@@ -401,7 +404,7 @@ func cpuMixtureRowsModels() []string {
 // than one a row reads, a row given another row's picks, each row's first
 // pick's weight dropped -- moves the prompt's logits.
 func TestComposedCPUExpertPromptsServe(t *testing.T) {
-	const page, pn, decode = 32, 72, 4
+	const page, pn, decode = 32, 100, 6
 	names := cpuExpertPromptModels()
 	if extra := os.Getenv("JITLLM_PAGED_EXPERTS"); extra != "" {
 		names = append(names, strings.Split(extra, ",")...)
@@ -422,14 +425,18 @@ func TestComposedCPUExpertPromptsServe(t *testing.T) {
 			defer fm.Close()
 			// Tokens spread over the vocabulary: a random fixture's greedy
 			// tokens repeat, and rows of one token pick one set of experts.
+			// A transformers golden holds its own text's.
 			v := fm.Cfg.NVocab
 			rng := rand.New(rand.NewSource(7))
-			ids := make([]int32, 140)
+			ids := make([]int32, 200+decode)
 			for i := range ids {
 				ids[i] = int32(v/8 + rng.Intn(v/2-v/8))
 			}
-			prompts := [][]int32{ids[:7], ids[10:43], ids[50 : pn+50]}
-			steps := ids[pn+50 : pn+50+decode]
+			if g := rowsGolden(fixtureSource(testmodels.Path(file))); g != "" {
+				ids = goldenIDs(t, g, len(ids))
+			}
+			prompts := [][]int32{ids[:7], ids[40:73], ids[100:150]}
+			steps := ids[200 : 200+decode]
 			// The prompt's last row and each batched sequence's prompt row:
 			// logits the prompt's rows' form alone made.
 			promptRows := []int{0}
@@ -459,6 +466,30 @@ func TestComposedCPUExpertPromptsServe(t *testing.T) {
 			med, worst, widest := cpuBandTo(t, want, got, band)
 			t.Logf("prompts of %d rows and a batch: %.3f of the band at the median, worst NMSE %.3g where the band's widest is %.3g",
 				pn, med, worst, widest)
+			// A q8 fixture's numerical reference is its q8 golden, at the
+			// float floor, as the pages gate holds it.
+			if q := q8Golden(t, file, fixtureSource(testmodels.Path(file))); q != "" {
+				d := hfBand(t, q, 0, got, seqs...)
+				ratios := make([]float64, len(d))
+				for i := range d {
+					ratios[i] = d[i] / band[i]
+				}
+				med, worst = median(ratios), 0
+				for i, x := range d {
+					if x > bandWorst*widest {
+						toks := slices.Concat(ids[:pn], ids[pn:pn+i%(1+decode)])
+						if s := i / (1 + decode); s > 0 {
+							toks = slices.Concat(prompts[s-1], steps[:i%(1+decode)])
+						}
+						if why := q8Flip(t, path, page, toks); why != "" {
+							t.Logf("row %d: %.3g against its numerical reference, a top-k flip:%s", i, x, why)
+							continue
+						}
+					}
+					worst = max(worst, x)
+				}
+				t.Logf("against its numerical reference: %.3f of the float floor at the median, worst unflipped %.3g", med, worst)
+			}
 			if !(med <= bandRatio) || !(worst <= bandWorst*widest) {
 				t.Fatalf("the composed CPU's mixture prompts leave the band: median ratio %.3f (bound %.1f), worst %.3g (bound %.1f x %.3g)",
 					med, bandRatio, worst, bandWorst, widest)
@@ -747,4 +778,45 @@ func streamSelected(t *testing.T, st gpu.Stats, a streamArm) {
 	case a == streamCache && st.StreamRowFills == 0:
 		t.Fatalf("no call of several rows filled its pages (%d fills)", st.StreamFills)
 	}
+}
+
+// q8Flip names the mixture blocks that pick other experts for the last of
+// toks on the composed CPU's q8 forms than on its float forms over the same
+// weights, "" where every block picks alike. A mixture's top-k is
+// discontinuous, so a row whose selection the rounding flipped is excused,
+// and only that one (hfQ8NMSE).
+func q8Flip(t *testing.T, path string, page int, toks []int32) string {
+	t.Helper()
+	pick := func(io ...Option) []string {
+		m, err := model.Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer m.Close()
+		st := testInstance(t, m, len(toks)+1, io...)
+		defer st.Close()
+		sel := make([]string, m.Cfg.NLayer)
+		for i, id := range toks {
+			last := i == len(toks)-1
+			st.Trace(func(l int, n string, v []float32) {
+				if last && n == "moe_topk" {
+					sel[l] = fmt.Sprint(v)
+				}
+			})
+			if _, err := st.Forward(id); err != nil {
+				t.Fatal(err)
+			}
+		}
+		st.Trace(nil)
+		return sel
+	}
+	q8 := pick(withKVPage(page))
+	fl := pick(WithKVF16(false), withCPUFloat(), withKVPage(page))
+	flipped := ""
+	for l := range q8 {
+		if q8[l] != fl[l] {
+			flipped += fmt.Sprintf(" block %d float %s, q8 %s;", l, fl[l], q8[l])
+		}
+	}
+	return flipped
 }
