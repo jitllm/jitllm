@@ -508,10 +508,12 @@ const (
 // whether its history is kept at f32, whether it reads both ways inside a
 // prompt's runs (Bidir: attends, or convolves centred), reads the whole
 // picture (Whole) or steps a recurrent state in order (Rec) -- or why it is
-// not to be asked (Why). Run is the most rows a run of a block reading both
-// ways holds, the instance's.
+// not to be asked (Why), and where that is the statement broken, what broke
+// it (Err). Run is the most rows a run of a block reading both ways holds,
+// the instance's.
 type BlockSpec struct {
 	Why           Decline
+	Err           error
 	Source, Graph *graph.Graph
 	// Cut, where set, is the width of the row Graph reads in place of the
 	// residual: the second half of the block cut in two (graph.Cut), its
