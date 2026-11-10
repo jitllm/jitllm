@@ -232,6 +232,11 @@ func blocksPageOnTheListedCard(t *testing.T, path, spec string) {
 			!strings.Contains(err.Error(), "CPU is not one of the devices listed") {
 			t.Fatalf("a 1 MiB card with the CPU unlisted: err %v", err)
 		}
+		// The reason is the one the card gave the block it refused again,
+		// not the device's last word on another block.
+		if !strings.Contains(err.Error(), "block 0 ") {
+			t.Fatalf("the refusal does not name block 0's own reason: %v", err)
+		}
 		if st.devCount() != 0 {
 			t.Fatalf("%d blocks left placed after the refusal", st.devCount())
 		}
