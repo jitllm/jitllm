@@ -2534,7 +2534,8 @@ func (g *devTier) prewarmComposed() {
 // prewarmComposedBlock forms block li's part where the composer serves it:
 // at the placement, and at every placement of the block after it (a move, a
 // seam grown back), which a step would otherwise meet first. A form that
-// does not build is named in LastErr and leaves the other blocks to form.
+// does not build, or does not fit, is the block's reason to be declined,
+// named in LastErr; the other blocks still form.
 // Callers hold g.mu.
 func (g *devTier) prewarmComposedBlock(li int, narrow bool) (roomless string) {
 	if l := g.layers[li]; l != nil && l.nonCausal {
@@ -2570,7 +2571,7 @@ func (g *devTier) prewarmComposedBlock(li int, narrow bool) (roomless string) {
 			if errors.As(err, new(partRoomError)) {
 				return fmt.Sprintf("block %d: its composed part does not fit beside the blocks placed (%s)", li, err)
 			}
-			return ""
+			return fmt.Sprintf("block %d: its composed part does not build on this device (%s)", li, err)
 		}
 		if sv.f.apart(len(l.graph.Out)) {
 			if _, err := g.servedCopy(bs, 1); err != nil {
