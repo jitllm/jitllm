@@ -1187,7 +1187,9 @@ const seamCrossBytes = 2 << 20
 func (s *Instance) placeHead() {
 	// WithHeadPlacement(false) leaves the projection on the host -- the other
 	// arm of the placement comparison, and the way to bisect a divergence to it.
-	if s.ld == nil || s.head != nil || !s.opt.headPlace {
+	// A tower's run has no output head: the projection is the text model's,
+	// placed by the text instance.
+	if s.ld == nil || s.head != nil || !s.opt.headPlace || s.c != s.m.Cfg {
 		return
 	}
 	// A prediction block's own head is in the block's page.
@@ -1238,11 +1240,23 @@ func (s *Instance) placeHead() {
 	// attention block's keys (TestDecisionRelocatesMidPrompt under a budget
 	// the head does not fit).
 	restore := func() {
+		s.residentAgain(streamed)
 		if s.gpuLayers >= was {
 			return
 		}
 		from := s.gpuLayers
-		s.offerRange(from, was)
+		// Placed again as a placement is: the device forms the blocks'
+		// prompt widths when it closes (EndPlacement), and a block offered
+		// outside one would compose them at the first prompt.
+		if pl, ok := s.ld.(nn.Placer); ok {
+			pl.BeginPlacement()
+			s.placing = true
+			s.offerRange(from, was)
+			s.placing = false
+			pl.EndPlacement()
+		} else {
+			s.offerRange(from, was)
+		}
 		if s.pos == 0 {
 			return
 		}
@@ -1259,24 +1273,24 @@ func (s *Instance) placeHead() {
 			s.head, s.headReady = h, h
 			return
 		}
-		// With every block on the card the room is bought by streaming the
-		// last resident mixture blocks instead: each stays on the card, its
-		// routed experts sent per token.
+		// With every block on the card the room is bought first by streaming
+		// the last resident mixture blocks: each stays on the card, its routed
+		// experts sent per token. Past them it is bought with the last blocks,
+		// as on a partial device, once the seam that opens is paid for.
 		if s.gpuLayers >= s.hi {
 			if li, ok := s.streamForHead(&budget); ok {
 				streamed = append(streamed, li)
 				continue
 			}
-			s.residentAgain(streamed)
-			return
+			if budget < seamCrossBytes {
+				restore()
+				return
+			}
+			budget -= seamCrossBytes
 		}
-		// Only buy room when the device is already partial. With every block
-		// resident the head is pure upside and a refusal means the card is
-		// simply full; giving up a block there would trade a whole block's
-		// bytes for the head's and add a seam that does not exist.
 		// A block given up for the head runs on the CPU, which only a caller
 		// that listed it lets the engine choose.
-		if s.gpuLayers >= s.hi || s.gpuLayers == s.lo+1 || !s.listed(routeLanes) {
+		if s.gpuLayers == s.lo+1 || !s.listed(routeLanes) {
 			restore()
 			return
 		}

@@ -183,13 +183,3 @@ after it ("THE DECODE ROW TILE, RE-BUILT AS ADJACENT ROWS").
   a wider budget (a smaller tile) or the masks folded into the unpack's existing
   constants. `TestGEMMUnpackKonstsAreHoisted` prices them: they are the entire
   gap between its bound and the pool size.
-- **The output head is placed after the blocks, so it is what a full budget
-  declines.** When every block fits a device's budget but the head does not,
-  the default placement fills the budget with blocks and leaves the head (or a
-  decision model's head) on the host. The head is read on every token, a block
-  once per token, so the head should be placed before the last blocks, and the
-  blocks that no longer fit should stream or stay home. Seen on a 16 GB unified
-  device, whose budget is a share of host RAM: a 9.7 GB decision model put all
-  its blocks on the card and the 1.1 GB projection was declined for room.
-  Nothing is wrong with the answer; the lever is which bytes go to the card
-  first.
