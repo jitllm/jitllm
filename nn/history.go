@@ -45,8 +45,9 @@ type History interface {
 	// PrepareRows makes block li's history ready for rows at pos, in any
 	// order: every row's page written before any is read, the keys every
 	// row reads resident; keys is the most the call's form reads. A decline
-	// says why not.
-	PrepareRows(li int, pos []int, keys int) Decline
+	// says why the form cannot take them, an error why a page could not be
+	// had.
+	PrepareRows(li int, pos []int, keys int) (Decline, error)
 	// Rows is how a call of rows binds block li's history, its page table
 	// nseq sequences wide.
 	Rows(li, nseq int) (HistoryBinding, error)

@@ -250,7 +250,8 @@ func (s *Instance) blockWhy(li int) nn.Decline {
 	case c.LayerKind(li).Recurrent() && !s.keepsRec(li):
 		return nn.DeclineRecurrent
 	case pg.p > 0 && pg.arena() == nil:
-		return nn.DeclinePageOut
+		// A paged history with no arena is one with no room for its pages.
+		return nn.DeclineNoRoom
 	}
 	return nn.DeclineServes
 }

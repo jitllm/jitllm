@@ -2832,22 +2832,22 @@ func (kv *kvCache) owned(li, pos int) {
 }
 
 // readable makes the pages of block li's positions [start, pos] resident,
-// in the layer's arena, or says why they are not.
-func (kv *kvCache) readable(li, start, pos int) nn.Decline {
+// in the layer's arena, or says why one is not (pageErr).
+func (kv *kvCache) readable(li, start, pos int) error {
 	pg := &kv.layers[li]
 	n, _ := pg.page(pos)
 	kv.window(li, start, pos-start)
 	for p := start / pg.p; p <= n; p++ {
 		if !pg.mem.ArenaPage(p) {
-			return nn.DeclinePageOut
+			return kv.pageErr(li, p)
 		}
 	}
-	return nn.DeclineServes
+	return nil
 }
 
 // prepare makes block li's history ready for a row at pos: its page written
 // and its window read.
-func (kv *kvCache) prepare(li, pos int) nn.Decline {
+func (kv *kvCache) prepare(li, pos int) error {
 	kv.owned(li, pos)
 	return kv.readable(li, kv.layers[li].keyStart(pos), pos)
 }
@@ -2875,8 +2875,8 @@ func (kv *kvCache) Prepare(li, pos, nseq int) (cpudev.HistoryBinding, nn.Decline
 	hl := kv.src[li]
 	pg := &kv.layers[hl]
 	if pg.p > 0 {
-		if why := kv.prepare(hl, pos); why != nn.DeclineServes {
-			return cpudev.HistoryBinding{}, nn.DeclineServes, kv.unread(why)
+		if err := kv.prepare(hl, pos); err != nil {
+			return cpudev.HistoryBinding{}, nn.DeclineServes, err
 		}
 	}
 	pages, err := kv.table(hl, nseq)
@@ -2887,8 +2887,8 @@ func (kv *kvCache) Prepare(li, pos, nseq int) (cpudev.HistoryBinding, nn.Decline
 	b.Keys, b.Values = kvAddrs(pg)
 	if e := kv.entOf(hl); e > 0 {
 		kv.owned(e, pos)
-		if why := kv.readable(e, 0, pos); why != nn.DeclineServes {
-			return cpudev.HistoryBinding{}, nn.DeclineServes, kv.unread(why)
+		if err := kv.readable(e, 0, pos); err != nil {
+			return cpudev.HistoryBinding{}, nn.DeclineServes, err
 		}
 		if b.EntryPages, err = kv.table(e, nseq); err != nil {
 			return cpudev.HistoryBinding{}, nn.DeclineServes, err
@@ -2900,12 +2900,13 @@ func (kv *kvCache) Prepare(li, pos, nseq int) (cpudev.HistoryBinding, nn.Decline
 
 // unread is why a block's history could not be read for a step: the page
 // fault that left a page out of its arena (faultIn), which fails the request
-// as the missing page it is, or the decline why where none was recorded.
-func (kv *kvCache) unread(why nn.Decline) error {
-	if p := kv.err.Swap(nil); p != nil {
-		return *p
+// pageErr is why block li's page p is not in its arena after its read: the
+// fault the store gave (faultIn), or the page itself.
+func (kv *kvCache) pageErr(li, p int) error {
+	if e := kv.err.Swap(nil); e != nil {
+		return *e
 	}
-	return fmt.Errorf("model: %v", why)
+	return fmt.Errorf("model: block %d's history page %d is not in its arena after its read", li, p)
 }
 
 // entOf is block li's entries plane's slot, 0 where it keeps none or its
@@ -2930,11 +2931,11 @@ func (kv *kvCache) Commit(li, pos int) {
 // PrepareRows is cpudev.History's: block li's history block's pages for the
 // rows at pos, every row's page written before any is read (a step's rows
 // stand in any order, and a page holds every sequence's positions).
-func (kv *kvCache) PrepareRows(li int, pos []int, keys int) nn.Decline {
+func (kv *kvCache) PrepareRows(li int, pos []int, keys int) (nn.Decline, error) {
 	hl := kv.src[li]
 	pg := &kv.layers[hl]
 	if pg.p == 0 {
-		return nn.DeclineServes
+		return nn.DeclineServes, nil
 	}
 	start, end := pos[0], 0
 	e := kv.entOf(hl)
@@ -2947,14 +2948,14 @@ func (kv *kvCache) PrepareRows(li int, pos []int, keys int) nn.Decline {
 	}
 	// Rows past the keys the form holds are a shape it was not formed for.
 	if end > keys {
-		return nn.DeclineNotFormed
+		return nn.DeclineNotFormed, nil
 	}
 	if e > 0 {
-		if why := kv.readable(e, 0, end-1); why != nn.DeclineServes {
-			return why
+		if err := kv.readable(e, 0, end-1); err != nil {
+			return nn.DeclineServes, err
 		}
 	}
-	return kv.readable(hl, start, end-1)
+	return nn.DeclineServes, kv.readable(hl, start, end-1)
 }
 
 // Rows is cpudev.History's: how a call of rows binds block li's history
