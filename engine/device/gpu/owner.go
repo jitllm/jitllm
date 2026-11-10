@@ -254,7 +254,7 @@ func (g *devTier) releaseModel() {
 	for k, r := range g.res {
 		delete(g.res, k)
 		if r != nil && r.ok {
-			g.refund(r.bytes())
+			g.refund(r.charged())
 			g.freeResident(r)
 		}
 	}

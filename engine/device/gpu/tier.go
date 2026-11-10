@@ -71,6 +71,16 @@ func (r *resident) bytes() uint64 {
 	return r.planes()
 }
 
+// charged is what the budget holds for r while the tier keeps it: its
+// bytes, or a shared bank's planes, charged once when it was made
+// (sharedCompact) and refunded by whoever frees it.
+func (r *resident) charged() uint64 {
+	if r != nil && r.ok && r.shared {
+		return r.planes()
+	}
+	return r.bytes()
+}
+
 // planes is the three buffers' bytes from the shape, whoever pays for them.
 func (r *resident) planes() uint64 {
 	qs, d, sc, err := layout.PackedWords(r.t, r.nrows, r.k)
