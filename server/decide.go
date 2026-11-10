@@ -29,9 +29,10 @@ type DecideOptions struct {
 	// Images are the request's pictures, in the order the template shows
 	// them, each encoded through the model's tower.
 	Images []image.Image
-	// Clips are the request's voice clips, mono samples in [-1, 1] at the
-	// audio tower's rate, each encoded through it after the pictures.
-	Clips [][]float32
+	// Clips are the request's voice clips as their files store them
+	// (engine.ReadWAV), each encoded through the audio tower after the
+	// pictures.
+	Clips []model.Clip
 	// Videos are the request's videos, shown after the pictures, each its
 	// frames read through the model's tower as it reads a video
 	// (Model.VideoSpans).

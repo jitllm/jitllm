@@ -92,9 +92,14 @@ type towerRun struct {
 	// base is the tower's first block of the model's: the vision tower's
 	// TowerBase, the audio tower's the block after the vision tower's last.
 	base int
-	// clip is an audio run's clip as the entry reads it, cut and padded,
-	// over a buffer as long as the longest clip.
-	clip []float32
+	// clip is an audio run's step picture table, a clip's PCM and its plan
+	// (composer.SoundTable), over a buffer as long as the longest clip's; swr
+	// is the resampler from the last clip's rate, mix its channels' weights
+	// (for mixOf, its channels and mask).
+	clip  []uint32
+	swr   composer.SWR
+	mix   []float32
+	mixOf [2]uint64
 }
 
 // newTowerRun is a run of the model's tower tg, stated as t, its blocks the
@@ -617,9 +622,13 @@ func (tr *towerRun) chainSetup(m *model.Model, ts *Instance, tg *model.TowerGrap
 	if _, ok := tr.parts.(nn.TowerChain); !ok {
 		return fmt.Errorf("model: the device holding the tower runs no chained blocks")
 	}
-	e := tg.Classes[0].Entry[graph.PixRGBA8]
-	o := e.Values[e.Out[0]]
-	most := o.Rows * o.Width
+	// The entry's rows as long as its widest class's: a clip's sample
+	// formats', a picture's.
+	most := 0
+	for _, e := range tg.Classes[0].Entry {
+		o := e.Values[e.Out[0]]
+		most = max(most, o.Rows*o.Width)
+	}
 	tr.chain = make([]model.Layer, len(tg.Blocks))
 	for i, g := range tg.Blocks {
 		m.Layers[tr.base+i].CloneTo(&tr.chain[i])

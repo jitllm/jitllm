@@ -34,8 +34,10 @@ func goComputeAllowed() map[string]string {
 		"graph/sample.go:selection":   "the draw's graph: the binade thresholds it states as constants, once when the graph is built",
 		// Geometry from a picture's sizes.
 		"model/tower.go:TileGrid": "InternVL's tile grid, the candidate counts walked against the picture's aspect",
-		// A format decoder, as image/png's is for a picture.
-		"engine/wav.go:DecodeWAV": "a WAV container's 16-bit PCM read into floats",
+		// A clip's resample: libswresample's filter bank, once a pair of rates,
+		// as Pillow's taps are once a size (the sound op reads it).
+		"composer/swr.go:swrBank": "libswresample's polyphase filter bank, built once a pair of rates as resample.c builds it: a constant table the sound op reads",
+		"composer/swr.go:poly":    "av_bessel_i0's rational approximation, evaluated for the bank's Kaiser window once a tap",
 	}
 }
 

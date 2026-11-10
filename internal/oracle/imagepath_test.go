@@ -24,7 +24,6 @@ func imagePathAllowed() map[string]string {
 		"model.go:AttnTemp":     "Llama 4's attention temperature at a position, the config's statement its gates read; the composed blocks state it as ops",
 		"model.go:configFrom":   "YaRN's attention scale from the config, once at open",
 		"hotness.go:ExpertUses": "expert-use accounting for the report",
-		"wav.go:DecodeWAV":      "a WAV container's 16-bit PCM read into floats: a format decoder, as image/png's is for a picture",
 		"tower.go:TileGrid":     "InternVL's tile grid, the candidate counts walked against the picture's aspect: geometry from the picture's sizes",
 		"model.go:ropeScale":    "a scaled rotary's per-pair divisors, the shipped factors times the scaling, once at open",
 	}

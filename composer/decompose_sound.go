@@ -40,6 +40,10 @@ const (
 	SoundPCMAt = SoundMixAt + SoundChannelsMax
 )
 
+// SoundTapsMax is the most taps times channels a sound op's sums run (the
+// form's graph.Attrs.Taps): a clip at 10 MHz, or of 64 channels at 1.5 MHz.
+const SoundTapsMax = 1 << 20
+
 // SoundBytes is the bytes a sample of format f takes in a clip's PCM.
 func SoundBytes(f uint8) int {
 	switch f {

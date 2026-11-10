@@ -2,43 +2,55 @@ package engine
 
 import (
 	"fmt"
-	"unsafe"
 
 	"github.com/jitllm/jitllm/composer"
-	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/model"
 )
 
-// EncodeClip is the rows a voice clip puts in the prompt: the clip -- mono
-// samples in [-1, 1] at the tower's rate, cut to the longest the reference
-// reads and padded with silence to half a second, as audio.waveform makes
-// it -- through the audio tower's entry, its chained blocks and its head on
-// the CPU device's composed forms, one row of the text model's width for
-// each row the blocks read. The rows are the instance's until its next
-// encode.
-func (s *Instance) EncodeClip(clip []float32) ([]float32, error) {
+// EncodeClip is the rows a voice clip puts in the prompt: the clip as its
+// container stores it, mixed to mono and resampled to the tower's rate as
+// ffmpeg does (graph.OpSound), cut and padded as the tower reads it
+// (Model.ClipLength), through the audio tower's entry, its chained blocks and
+// its head on the CPU device's composed forms, one row of the text model's
+// width for each row the blocks read. The rows are the instance's until its
+// next encode.
+func (s *Instance) EncodeClip(clip model.Clip) ([]float32, error) {
 	if err := s.audioReady(); err != nil {
 		return nil, err
 	}
-	if len(clip) == 0 {
-		return nil, fmt.Errorf("model: an empty clip")
-	}
 	defer s.fr.Enter()()
-	return s.encodeClip(clip)
+	return s.encodeClip(&clip)
 }
 
 // encodeClip is EncodeClip under the pager the caller holds.
-func (s *Instance) encodeClip(clip []float32) ([]float32, error) {
+func (s *Instance) encodeClip(clip *model.Clip) ([]float32, error) {
 	a := s.m.Container.Vision().Audio
 	tr, tg := s.audio, s.m.Audio
-	n := max(min(len(clip), int(a.MaxSamples)), int(a.SampleRate)/2)
-	if tr.clip == nil {
-		tr.clip = make([]float32, a.MaxSamples)
+	if composer.SoundBytes(clip.Format) == 0 || clip.Frames() == 0 {
+		return nil, fmt.Errorf("model: a clip of sample format %d and %d frames", clip.Format, clip.Frames())
 	}
-	buf := tr.clip[:n]
-	clear(buf[copy(buf, clip):])
-	// The samples are the step's picture table, f32 words as they lie.
-	words := unsafe.Slice((*uint32)(unsafe.Pointer(unsafe.SliceData(buf))), n)
+	if tr.swr.In != clip.Rate || tr.swr.Out != int(a.SampleRate) {
+		swr, err := composer.NewSWR(clip.Rate, int(a.SampleRate))
+		if err != nil {
+			return nil, err
+		}
+		tr.swr = swr
+	}
+	if tr.mixOf != [2]uint64{uint64(clip.Channels), clip.Mask} {
+		mix, err := composer.MonoMix(clip.Channels, clip.Mask)
+		if err != nil {
+			return nil, err
+		}
+		tr.mix, tr.mixOf = mix, [2]uint64{uint64(clip.Channels), clip.Mask}
+	}
+	if tr.swr.Taps*clip.Channels > composer.SoundTapsMax {
+		return nil, fmt.Errorf("model: a clip of %d channel(s) at %d Hz resamples through %d taps of each, past the sound op's %d",
+			clip.Channels, clip.Rate, tr.swr.Taps, composer.SoundTapsMax)
+	}
+	// The clip's PCM as it lies and its plan are the step's picture table.
+	words, outputs := composer.SoundTable(tr.clip, clip.PCM, clip.Channels, clip.Frames(), tr.mix, tr.swr, int(a.MaxSamples))
+	tr.clip = words
+	n := s.m.ClipLength(outputs)
 	tr.req[composer.RequestPicW] = uint32(n)
 	frames, rows := s.m.ClipRows(n)
 	D := int(a.ProjDim)
@@ -46,7 +58,7 @@ func (s *Instance) encodeClip(clip []float32) ([]float32, error) {
 		tr.out = make([]float32, tg.Out*D)
 	}
 	dst := tr.out[:tg.Out*D]
-	if err := tr.s.chainRun(tr, tg, words, graph.PixRGBA8, dst, frames, rows); err != nil {
+	if err := tr.s.chainRun(tr, tg, words, clip.Format, dst, frames, rows); err != nil {
 		return nil, fmt.Errorf("model: the audio tower: %w", err)
 	}
 	return dst[:rows*D], nil

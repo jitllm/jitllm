@@ -76,7 +76,7 @@ func d1OmniOpen(t *testing.T) *model.Model {
 
 // voiceClip is the voice request's clip (testdata/decision/voice.json's
 // one file, a WAV data URL) and its reference's prefix rows' first values.
-func voiceClip(t *testing.T) ([]float32, [][]float64) {
+func voiceClip(t *testing.T) (model.Clip, [][]float64) {
 	t.Helper()
 	var req struct {
 		Files []string `json:"files"`
@@ -96,7 +96,7 @@ func voiceClip(t *testing.T) ([]float32, [][]float64) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	clip, err := DecodeWAV(wav)
+	clip, err := ReadWAV(wav)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +124,7 @@ func TestD1OmniHearsAsItsReference(t *testing.T) {
 	s := testInstance(t, m, 256)
 	defer s.Close()
 	clip, want := voiceClip(t)
-	nmse := func(clip []float32) (float64, int) {
+	nmse := func(clip model.Clip) (float64, int) {
 		rows, err := s.EncodeClip(clip)
 		if err != nil {
 			t.Fatal(err)
@@ -144,11 +144,13 @@ func TestD1OmniHearsAsItsReference(t *testing.T) {
 		return num / den, len(rows) / d
 	}
 	e, n := nmse(clip)
-	t.Logf("%d samples into %d prefix rows (the reference's %d), NMSE %.3e", len(clip), n, len(want), e)
+	t.Logf("%d samples into %d prefix rows (the reference's %d), NMSE %.3e", clip.Frames(), n, len(want), e)
 	if n != len(want) || math.IsNaN(e) || !(e < 1e-2) {
 		t.Fatalf("%d rows at NMSE %.3e: past the bound (the reference's %d rows, 1e-2)", n, e, len(want))
 	}
-	if bad, _ := nmse(make([]float32, len(clip))); !(bad > 0.1) {
+	silent := clip
+	silent.PCM = make([]byte, len(clip.PCM))
+	if bad, _ := nmse(silent); !(bad > 0.1) {
 		t.Fatalf("silence reads NMSE %.3e: the gate cannot see the clip", bad)
 	}
 }
