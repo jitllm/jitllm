@@ -307,7 +307,8 @@ func refusalList() []refusal {
 		{Refusal: capabilities.Refusal{ID: "decision-video-oversize", Endpoints: []string{"/v1/systemone"},
 			When: "a request's video frames over the pixel limit (default 8 pictures of the picture limit)", Message: "over the limit of"}},
 		{Refusal: capabilities.Refusal{ID: "decision-audio-format", Endpoints: []string{"/v1/systemone"},
-			When: "a file that is not a base64 data URL of 16 kHz mono 16-bit PCM WAV", Message: "audio"}},
+			When:    "a file that is not a base64 data URL of a WAV of PCM (8, 16, 24 or 32 bits) or IEEE float (32 or 64 bits)",
+			Message: "audio"}},
 		{Refusal: capabilities.Refusal{ID: "image-format", Endpoints: []string{"/v1/chat/completions", "/v1/messages"},
 			When: "a picture that is not PNG, JPEG, WebP or GIF", Message: "the pictures accepted are"}},
 	}
