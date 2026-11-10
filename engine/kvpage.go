@@ -478,10 +478,8 @@ type kvCache struct {
 	// a windowed layer's coverage is walked from zero, as a full layer's is.
 	walkWindow bool
 	// share is the store this session's sealed pages are held once in
-	// (Instance.ShareKV), nil when it shares nothing; shareRefused counts the
-	// device moves a shared page refused.
-	share        *SharedStore
-	shareRefused int64
+	// (Instance.ShareKV), nil when it shares nothing.
+	share *SharedStore
 }
 
 // View is the session's view of the CPU device's history (cpudev.History).
@@ -736,14 +734,14 @@ func (s *Instance) migrateKV(li, pos int, toDevice bool) bool {
 		// position zero is success -- the same answer the tier gives.
 		return s.moveKV(li, 0, nil, nil, from, to)
 	}
-	// A shared page does not move to a device for one of its holders: the
-	// block stays on the CPU (kvshare.go).
-	if toDevice && pg.anyShared() {
-		s.kv.shareRefused++
+	_, _, fk, fv := kvMigBufs(s.kvlAt(li), pos)
+	if !s.moveKV(li, pos, fk, fv, from, to) {
 		return false
 	}
-	_, _, fk, fv := kvMigBufs(s.kvlAt(li), pos)
-	return s.moveKV(li, pos, fk, fv, from, to)
+	if toDevice && s.kv.share != nil {
+		s.kv.nameMoved(li, pos)
+	}
+	return true
 }
 
 // kvMigBufs is the buffers a migration of n positions of layout kvl moves

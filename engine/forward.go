@@ -1053,9 +1053,6 @@ func (s *Instance) SetDeviceLayers(d nn.LayerDevice, max int) error {
 				if e, ok := s.ld.(nn.ErrReporter); ok && e.Err() != "" {
 					why = e.Err()
 				}
-				if s.kv.layers[li].anyShared() {
-					why = "its pages are shared with another sequence"
-				}
 				for range placed[i:] {
 					s.noteDecline(fmt.Sprintf("block %d's history (%d positions) did not move to the device: %s", li, s.pos, why))
 				}

@@ -31,11 +31,12 @@ import (
 //   - A reference is dropped wherever the session lets a page go (eviction, a
 //     restore's truncation, a window's release, Close), never handed to the
 //     session's page pool, which would recycle memory others still read.
-//   - A shared page does not move to a device for one of its holders: the
-//     block stays on the CPU (Instance.migrateKV refuses, counted by
-//     KVSharedRefusals), since the prefix would be held twice, on the host
-//     for the others and on the card for it. On a card the prefix cache
-//     names the card's own pages (engine/device/gpu/kvshare.go).
+//   - Held once means once per device: on a card the prefix cache names the
+//     card's own pages (engine/device/gpu/kvshare.go), and a block of a
+//     sharing session that moves to a card takes the card's named page for
+//     each sealed page of its prefix, or names the page it moved
+//     (kvCache.nameMoved). The host pages it held stay with their other
+//     holders and are forgotten at the last one's release (SharedStore.idle).
 //   - A recurrent layer's summary is not paged by position: it is kept as a
 //     restore point beside the pages (recpoint.go), a copy of a state that
 //     moves on, through the store's Get and Set. A batch is refused: its
@@ -72,6 +73,9 @@ type sharedPage struct {
 	// gone means Drop or Prune took it out of the index: no session can
 	// acquire it again, and it is forgotten once the last holder lets go.
 	gone bool
+	// idle means a card holds the page now: it is retired at the last
+	// holder's release rather than kept for the next prompt (SharedStore.idle).
+	idle bool
 }
 
 // lenReader is a page whose size is known before it is read (bytes.Reader).
@@ -237,8 +241,24 @@ func (m *SharedStore) release(b []float32) {
 	if e.refs < 0 {
 		panic("model: a shared kv page released more often than it was taken")
 	}
-	if e.refs == 0 && e.gone {
+	switch {
+	case e.refs == 0 && e.gone:
 		m.forget(e)
+	case e.refs == 0 && e.idle:
+		m.retire(e)
+	}
+}
+
+// idle marks the held page b as one a card holds now: its other holders keep
+// reading it, and it is retired at the last one's release.
+func (m *SharedStore) idle(b []float32) {
+	if len(b) == 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if e := m.held[&b[0]]; e != nil {
+		e.idle = true
 	}
 }
 
@@ -334,8 +354,7 @@ func (m *SharedStore) forget(e *sharedPage) {
 //
 // Refused by name: a batch (its pages hold every row's slots), DeepSeek V4 (its
 // compressed entries are a second history keyed by entry), and a session with
-// blocks on a device (a device page shared between sessions is not
-// implemented).
+// blocks on a device that names no pages (nn.KVShareDevice).
 // UnshareKV ends ShareKV: the session's references go, and it keeps no store
 // and no namespace. The sequence starts over (Reset).
 func (s *Instance) UnshareKV() {
@@ -382,10 +401,6 @@ func (s *Instance) KVSharedBytes() uint64 {
 	}
 	return n
 }
-
-// KVSharedRefusals is how many times a block holding shared pages was kept
-// off a device: a shared page does not move for one of its holders.
-func (s *Instance) KVSharedRefusals() int64 { return s.kv.shareRefused }
 
 // isShared says page n aliases a SharedStore's page.
 func (s *kvPages) isShared(n int) bool { return n < len(s.shared) && s.shared[n] }
@@ -515,6 +530,36 @@ func (kc *kvCache) publishSealed(li, n int, key string) {
 	}
 	s.setPage(n, k, v)
 	s.markShared(n, true)
+}
+
+// nameMoved names, on the card block li's history of pos positions has just
+// moved to, every sealed page of it: the card's page under that name where
+// the card names one already -- the page just moved is let go -- else the
+// moved page, under it. A host page the session held shared is marked idle:
+// the card holds the prefix now.
+func (kc *kvCache) nameMoved(li, pos int) {
+	d := kc.devAt(li)
+	s := &kc.layers[li]
+	if d == nil || s.p == 0 {
+		return
+	}
+	for n := s.liveFrom(pos); (n+1)*s.p <= pos; n++ {
+		key := kc.pageKey(li, n)
+		if key == "" {
+			break
+		}
+		if !d.MapKV(li, n, key, pos) {
+			kc.queuePublish(li, n, key)
+		}
+		if s.isShared(n) {
+			kc.share.idle(s.mem.K(n))
+			if !s.latent {
+				kc.share.idle(s.mem.V(n))
+			}
+		}
+	}
+	kc.flushPublish()
+	s.lastSealed = max(s.lastSealed, pos/s.p)
 }
 
 // faultShared aliases page n of layer li from the store, or reports a miss.
