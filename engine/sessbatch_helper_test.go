@@ -49,8 +49,9 @@ func (b *sessBatch) row(i int) *Session {
 	return b.sess[i]
 }
 
-// ForwardBatch steps token i of every row at the row's next position and
-// returns the rows' logits back to back.
+// ForwardBatch steps token i of every row at the row's next position, the
+// rows one group (StepJoint) whatever their count, and returns their logits
+// back to back.
 func (b *sessBatch) ForwardBatch(tokens []int32) ([]float32, error) {
 	if len(tokens) != b.nseq {
 		return nil, fmt.Errorf("model: ForwardBatch got %d tokens for %d sequences", len(tokens), b.nseq)
@@ -62,7 +63,7 @@ func (b *sessBatch) ForwardBatch(tokens []int32) ([]float32, error) {
 		}
 		b.runs[i] = Run{Session: s, Tokens: tokens[i : i+1], Logits: true}
 	}
-	lg, err := StepRuns(b.runs)
+	lg, err := StepJoint(b.runs, nil)
 	if err != nil {
 		return nil, err
 	}
