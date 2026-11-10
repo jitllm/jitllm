@@ -33,8 +33,6 @@ func TestTheDeclinesOnlyShrink(t *testing.T) {
 		"DeclineWindow",
 		"DeclineHeadShape",
 		"DeclineTableHeld",
-		"DeclineNoEmbed",
-		"DeclineEmbedWeight",
 		"DeclineFeeds",
 		"DeclineRecurrent",
 		"DeclineNoWeight",

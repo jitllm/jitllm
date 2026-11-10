@@ -85,10 +85,9 @@ func TestGemma4ServesComposed(t *testing.T) {
 					// rows that read them run there and write the inputs.
 					if m.Cfg.PLEDim != 0 {
 						ne, de := st.ServedPart(nn.ComposedEmbed)
-						dw := st.StepDeclines()[nn.DeclineEmbedWeight]
-						t.Logf("%s: the input rows served %d times, declined %d (%d for the per-layer tables)", dev, ne, de, dw)
-						if ne == 0 || de != 0 || dw != 0 {
-							t.Fatalf("the input rows served %d times and declined %d (%d for the per-layer tables): the card's input rows did not write the per-layer inputs", ne, de, dw)
+						t.Logf("%s: the input rows served %d times, declined %d", dev, ne, de)
+						if ne == 0 || de != 0 {
+							t.Fatalf("the input rows served %d times and declined %d: the card's input rows did not write the per-layer inputs (%s)", ne, de, st.LastErr)
 						}
 					}
 				})

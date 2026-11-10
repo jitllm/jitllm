@@ -2,6 +2,7 @@ package gpu
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"slices"
 	"unsafe"
@@ -61,7 +62,15 @@ func (g *devTier) EmbedRows(ids []int32, pos int, dst []float32) bool {
 		g.LastErr = fmt.Sprintf("input rows of %d tokens into %d words: the destination is neither the rows' nor every stream's", n, len(dst))
 		return false
 	}
-	why := bs.embedServes()
+	eerr := bs.embedServes()
+	why := partServes
+	switch {
+	case errors.Is(eerr, errEmbedRoom):
+		why = partNoRoom
+	case eerr != nil:
+		g.LastErr = eerr.Error()
+		why = partNotFormed
+	}
 	if why == partServes && bs.embStreams() > 1 && len(dst) != n*bs.embW.k*bs.embStreams() {
 		// The streams past the first are the graph's too: the destination
 		// is the whole stream-major residual.
@@ -379,7 +388,7 @@ func (g *devTier) materializeComposed(pe *embPend) {
 	}
 	defer g.scratchWin().close() // the scratch's own buffers (scratch.go)
 	bs := g.bs
-	if bs == nil || bs.embedServes() != partServes || !g.embedBufs(bs) {
+	if bs == nil || bs.embedServes() != nil || !g.embedBufs(bs) {
 		g.LastErr = "the composer's input rows were promised and are no longer held"
 		return
 	}

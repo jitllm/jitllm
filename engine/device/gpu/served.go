@@ -1136,8 +1136,6 @@ const (
 	partCaller      = nn.DeclineCaller
 	partNoRoom      = nn.DeclineNoRoom
 	partTableHeld   = nn.DeclineTableHeld
-	partNoEmbed     = nn.DeclineNoEmbed
-	partEmbedWeight = nn.DeclineEmbedWeight
 	partExperts     = nn.DeclineExperts
 	partRecurrent   = nn.DeclineRecurrent
 	partNoWeight    = nn.DeclineNoWeight
@@ -1894,34 +1892,41 @@ func (g *devTier) prewarmComposedTables() {
 	}
 }
 
-// embedServes is why a step's or a prompt chunk's input rows are not the
-// ones the composer is asked for, serves where they are: the front end's
-// graph of the input rows, each of whose weights is a table the device holds
-// in a format the composer reads -- the token embedding (the head where it is
-// the embedding, nn.Head.TokEmbd otherwise) and a learned position table
-// (nn.Head.PosEmbd).
-func (bs *blockScratch) embedServes() partDecline {
-	if bs.embedGraph == nil {
-		return partNoEmbed
-	}
-	if bs.embWhy != partServes {
-		return bs.embWhy
+// embedServes is nil where the composer serves a step's or a prompt chunk's
+// input rows: the front end's graph of the input rows, each of whose weights
+// is a table the device holds in a format the composer reads -- the token
+// embedding (the head where it is the embedding, nn.Head.TokEmbd otherwise),
+// a learned position table (nn.Head.PosEmbd) and every other tensor the graph
+// names (nn.Head.Streams). Where their room was short it is errEmbedRoom, and
+// the host writes the rows; otherwise it names what the card was not handed.
+func (bs *blockScratch) embedServes() error {
+	switch {
+	case bs.embedGraph == nil:
+		return errors.New("the input rows: the head was offered with no graph of them")
+	case bs.embWhy == partNoRoom:
+		return errEmbedRoom
+	case bs.embWhy != partServes:
+		return fmt.Errorf("the input rows' tables: %s", DeclineName(int(bs.embWhy)))
 	}
 	for _, o := range bs.embedGraph.Ops {
 		for _, w := range o.Weight {
 			if w.Rows == 0 {
 				if bs.embSV[w.Role] == nil {
-					return partEmbedWeight
+					return fmt.Errorf("the input rows' graph names %v, a vector the head did not carry", w.Role)
 				}
 				continue
 			}
 			if r := bs.embTable(w.Role); r == nil || !r.ok {
-				return partEmbedWeight
+				return fmt.Errorf("the input rows' graph names %v, a table the card does not hold", w.Role)
 			}
 		}
 	}
-	return partServes
+	return nil
 }
+
+// errEmbedRoom is input rows whose tables found no room beside the head and
+// the blocks placed (prepEmbed): the host writes the rows.
+const errEmbedRoom tierError = "the input rows' tables have no room on the card"
 
 // embTable is the resident table of role the input rows read, nil for a
 // role the device holds none of.
@@ -2757,7 +2762,7 @@ func (g *devTier) promptForms(bb *blockScratch) {
 	defer func() { g.prewarming = was }()
 	g.formTables(bb)
 	// The input rows at bb's rows, where the composer gathers a chunk's.
-	if bs := g.bs; bs != nil && bs.embedServes() == partServes && g.embedBufs(bs) {
+	if bs := g.bs; bs != nil && bs.embedServes() == nil && g.embedBufs(bs) {
 		if _, err := g.servedEmbed(bs, bb.rows); err != nil {
 			g.LastErr = "the composed input rows: " + err.Error()
 		}
@@ -2847,7 +2852,7 @@ func (g *devTier) prewarmComposedHead(narrow bool) (roomless string) {
 	// The input rows at one row, at every prompt width the lane holds a
 	// scratch for, and at every exact width a chunk's scratch is cut to
 	// (keepExact), as prewarmPromptWidths forms the blocks'.
-	if !g.NoPromptPrewarm && bs != nil && bs.embedServes() == partServes && g.embedBufs(bs) {
+	if !g.NoPromptPrewarm && bs != nil && bs.embedServes() == nil && g.embedBufs(bs) {
 		g.prewarming = true
 		form := func(rows int) {
 			if _, err := g.servedEmbed(bs, rows); err != nil {

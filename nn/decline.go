@@ -17,8 +17,6 @@ const (
 	DeclineCaller
 	DeclineNoRoom
 	DeclineTableHeld
-	DeclineNoEmbed
-	DeclineEmbedWeight
 	DeclineFeeds
 	DeclineRecurrent
 	DeclineNoWeight
@@ -47,10 +45,6 @@ func (d Decline) String() string {
 		return "its buffers do not fit the device's budget"
 	case DeclineTableHeld:
 		return "a table whose planes or positions the tier does not hold"
-	case DeclineNoEmbed:
-		return "no input rows graph from the front end"
-	case DeclineEmbedWeight:
-		return "input rows reading a weight other than the token embedding and a position table"
 	case DeclineFeeds:
 		return "a block graph reading more than the residual and per-layer inputs the device holds"
 	case DeclineRecurrent:
