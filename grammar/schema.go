@@ -15,12 +15,16 @@ import (
 //
 // Supported: type (one or a list), properties, required, additionalProperties
 // (false, or true or a schema on an object without properties), items,
-// prefixItems, minItems, maxItems, minLength, maxLength, enum, const, anyOf,
-// oneOf (as anyOf: the grammar cannot exclude a value two branches both
-// match), $ref into #/$defs or #/definitions, and the annotations. An object
-// with properties takes no other keys: absent additionalProperties is read
-// as false, as OpenAI's strict mode requires, and every output stays valid
-// under the schema either way.
+// prefixItems (followed by items or not), minItems, maxItems, minLength,
+// maxLength, an integer's minimum, maximum, exclusiveMinimum and
+// exclusiveMaximum, format (date, time, date-time and uuid; any other is an
+// annotation, as JSON Schema 2020-12 reads it), enum, const, anyOf, oneOf (as
+// anyOf: the grammar cannot exclude a value two branches both match), $ref
+// into #/$defs or #/definitions, and the annotations. An object with
+// properties takes no other keys: absent additionalProperties is read as
+// false, as OpenAI's strict mode requires, and every output stays valid under
+// the schema either way. A key required and given no schema is written with
+// any value.
 
 // ErrUnsupported is a schema keyword or form the converter does not build.
 type ErrUnsupported struct{ What string }
@@ -264,7 +268,8 @@ func annotation(k string) bool {
 // handled are the validation keywords the converter builds.
 func handled(k string) bool {
 	switch k {
-	case "type", "properties", "required", "additionalProperties", "items", "prefixItems", "minItems", "maxItems", "minLength", "maxLength", "enum", "const", "anyOf", "oneOf", "$ref":
+	case "type", "properties", "required", "additionalProperties", "items", "prefixItems", "minItems", "maxItems", "minLength", "maxLength", "enum", "const", "anyOf", "oneOf", "$ref",
+		"minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "format":
 		return true
 	}
 	return false
@@ -343,6 +348,12 @@ func (c *converter) visitObject(s map[string]any, name string) (string, error) {
 			types = []string{"array"}
 		case s["minLength"] != nil || s["maxLength"] != nil:
 			types = []string{"string"}
+		case hasBounds(s):
+			// Any value, a number among them within the bounds: the integers
+			// there, the bounds built for them alone.
+			types = []string{"object", "array", "string", "integer", "boolean", "null"}
+		case s["format"] != nil:
+			types = []string{"object", "array", "string", "number", "boolean", "null"}
 		default:
 			return c.prim("value"), nil
 		}
@@ -384,12 +395,41 @@ func onlyAnnotations(s map[string]any, except string) bool {
 
 func (c *converter) typed(s map[string]any, t, name string) (string, error) {
 	switch t {
-	case "boolean", "null", "integer", "number":
+	case "boolean", "null":
+		return c.prim(t), nil
+	case "integer":
+		if !hasBounds(s) {
+			return c.prim(t), nil
+		}
+		lo, hi, some, err := intBounds(s)
+		if err != nil {
+			return "", err
+		}
+		if !some {
+			return "", ErrUnsupported{fmt.Sprintf("an integer range nothing satisfies (%v to %v)", lo, hi)}
+		}
+		return c.add(name, "( "+intRange(lo, hi)+" ) "+c.prim("space")), nil
+	case "number":
+		if hasBounds(s) {
+			return "", ErrUnsupported{"minimum, maximum and their exclusive forms on a number"}
+		}
 		return c.prim(t), nil
 	case "string":
 		lo, hi, err := bounds(s, "minLength", "maxLength")
 		if err != nil {
 			return "", err
+		}
+		if f, ok := s["format"]; ok {
+			fs, ok := f.(string)
+			if !ok {
+				return "", fmt.Errorf("grammar: format must be a string")
+			}
+			if body, built := c.formatString(fs); built {
+				if lo != 0 || hi >= 0 {
+					return "", ErrUnsupported{fmt.Sprintf("format %q beside minLength or maxLength", fs)}
+				}
+				return c.add(name, `"\"" `+body+` "\"" `+c.prim("space")), nil
+			}
 		}
 		if lo == 0 && hi < 0 {
 			return c.prim("string"), nil
@@ -455,9 +495,6 @@ func (c *converter) array(s map[string]any, name string) (string, error) {
 		if !ok {
 			return "", fmt.Errorf("grammar: prefixItems must be an array")
 		}
-		if it, ok := s["items"]; ok && it != false {
-			return "", ErrUnsupported{"prefixItems with items other than false"}
-		}
 		parts := make([]string, len(ps))
 		for i, x := range ps {
 			e, err := c.visit(x, fmt.Sprintf("%s-%d", name, i))
@@ -470,7 +507,29 @@ func (c *converter) array(s map[string]any, name string) (string, error) {
 		if len(parts) > 0 {
 			body += strings.Join(parts, ` "," `+sp+" ") + " "
 		}
-		return c.add(name, body+`"]" `+sp), nil
+		it, more := s["items"]
+		if !more || it == false {
+			return c.add(name, body+`"]" `+sp), nil
+		}
+		// Every prefix item, then the items after them: the array's bounds
+		// count both.
+		if len(parts) > 0 {
+			item, err := c.visit(it, name+"-item")
+			if err != nil {
+				return "", err
+			}
+			lo, hi, err := bounds(s, "minItems", "maxItems")
+			if err != nil {
+				return "", err
+			}
+			if hi >= 0 && hi < len(parts) {
+				return "", ErrUnsupported{fmt.Sprintf("maxItems %d below the %d prefixItems a written array holds", hi, len(parts))}
+			}
+			if hi >= 0 {
+				hi -= len(parts)
+			}
+			return c.add(name, fmt.Sprintf(`%s( "," %s %s )%s "]" %s`, body, sp, item, rep(max(lo-len(parts), 0), hi), sp)), nil
+		}
 	}
 	item := c.prim("value")
 	if it, ok := s["items"]; ok {
@@ -511,7 +570,30 @@ func (c *converter) object(s map[string]any, name string) (string, error) {
 		return "", fmt.Errorf("grammar: properties must be an object")
 	}
 	addl, hasAddl := s["additionalProperties"]
-	if len(keysOf(props)) == 0 {
+	req := map[string]bool{}
+	// unlisted are the keys required and given no schema in properties:
+	// written with any value, or with additionalProperties' schema.
+	var unlisted []string
+	if r, ok := s["required"]; ok {
+		rs, ok := r.([]any)
+		if !ok {
+			return "", fmt.Errorf("grammar: required must be an array")
+		}
+		for _, x := range rs {
+			n, ok := x.(string)
+			if !ok {
+				return "", fmt.Errorf("grammar: required lists names")
+			}
+			if _, ok := props[n]; !ok && !req[n] {
+				if addl == false {
+					return "", ErrUnsupported{fmt.Sprintf("required %q beside additionalProperties false, which nothing satisfies", n)}
+				}
+				unlisted = append(unlisted, n)
+			}
+			req[n] = true
+		}
+	}
+	if len(keysOf(props)) == 0 && len(unlisted) == 0 {
 		switch {
 		case !hasAddl || addl == true:
 			return c.prim("object"), nil
@@ -525,32 +607,22 @@ func (c *converter) object(s map[string]any, name string) (string, error) {
 		kv := fmt.Sprintf(`%s ":" %s %s`, c.prim("string"), sp, val)
 		return c.add(name, fmt.Sprintf(`"{" %s ( %s ( "," %s %s )* )? "}" %s`, sp, kv, sp, kv, sp)), nil
 	}
-	if hasAddl && addl != false {
+	if hasAddl && addl != false && len(keysOf(props)) > 0 {
 		return "", ErrUnsupported{"additionalProperties other than false beside properties"}
-	}
-	req := map[string]bool{}
-	if r, ok := s["required"]; ok {
-		rs, ok := r.([]any)
-		if !ok {
-			return "", fmt.Errorf("grammar: required must be an array")
-		}
-		for _, x := range rs {
-			n, ok := x.(string)
-			if !ok {
-				return "", fmt.Errorf("grammar: required lists names")
-			}
-			if _, ok := props[n]; !ok {
-				return "", ErrUnsupported{fmt.Sprintf("required %q with no schema in properties", n)}
-			}
-			req[n] = true
-		}
 	}
 	// The properties in the schema's order: a map loses it, so read the
 	// keys again from the source where it has one.
-	order := keysOf(props)
+	order := append(keysOf(props), unlisted...)
 	var reqKV, optKV []string
 	for _, k := range order {
-		v, err := c.visit(props[k], name+"-"+k)
+		ks, ok := props[k]
+		if !ok {
+			ks = true
+			if hasAddl && addl != true {
+				ks = addl
+			}
+		}
+		v, err := c.visit(ks, name+"-"+k)
 		if err != nil {
 			return "", err
 		}

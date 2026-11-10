@@ -3,9 +3,11 @@ package grammar
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"math/rand/v2"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -197,6 +199,53 @@ func schemaCases() []schemaCase {
 			`{"b":null}`, `{"c":true,"a":"k"}`},
 		{`{"type":["string","null"],"maxLength":5}`, `null`, `"toolong"`},
 		{`{"prefixItems":[{"type":"integer"},{"type":"string","maxLength":2}],"items":false}`, `[1,"ab"]`, `[1]`},
+		{`{"type":"integer","minimum":-12,"exclusiveMaximum":250}`, `-12`, `250`},
+		{`{"type":"array","items":{"type":"integer","exclusiveMinimum":0.5,"maximum":1e3}}`, `[1,1000]`, `[0]`},
+		{`{"type":"object","properties":{"d":{"type":"string","format":"date"},"t":{"type":"string","format":"date-time"},` +
+			`"c":{"type":"string","format":"time"},"u":{"type":"string","format":"uuid"},"h":{"type":"string","format":"hostname"}},` +
+			`"required":["d","t","u"]}`,
+			`{"d":"2024-02-28","t":"2024-11-10T15:04:05.123+01:00","u":"123e4567-e89b-12d3-a456-426614174000","h":"x"}`,
+			`{"d":"2024-02-30","t":"2024-11-10T15:04:05Z","u":"123e4567-e89b-12d3-a456-426614174000"}`},
+		{`{"prefixItems":[{"type":"integer","maximum":3}],"items":{"type":"boolean"},"maxItems":3}`, `[2,true,false]`, `[2,true,false,true]`},
+		{`{"type":"object","properties":{"a":{"type":"integer"}},"required":["a","b"]}`, `{"a":1,"b":[1,"x"]}`, `{"a":1}`},
+		{`{"type":"object","required":["k"]}`, `{"k":null}`, `{}`},
+	}
+}
+
+// TestIntegerRangesAreExact holds an integer's bounds to the integers they
+// admit, each one written as JSON writes it: every integer around each range
+// is taken exactly where it lies within, across lengths and signs; a range
+// unbounded above reaches the sixteen digits the integer primitive writes.
+func TestIntegerRangesAreExact(t *testing.T) {
+	v := newToyVocab()
+	for _, rg := range [][2]int{{0, 0}, {0, 9}, {7, 7}, {10, 19}, {5, 123}, {-17, 4}, {-250, -3}, {99, 1000},
+		{-1000, -999}, {0, 1000}, {-1, 1}, {101, 1099}, {-9001, 87}} {
+		src, err := FromJSONSchema([]byte(fmt.Sprintf(`{"type":"integer","minimum":%d,"maximum":%d}`, rg[0], rg[1])))
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := NewMatcher(mustParse(t, src), IndexTokens(v))
+		for x := rg[0] - 120; x <= rg[1]+120; x++ {
+			if got, want := accepts(m, strconv.Itoa(x)), rg[0] <= x && x <= rg[1]; got != want {
+				t.Fatalf("[%d, %d]: %d accepted %v\n%s", rg[0], rg[1], x, got, src)
+			}
+		}
+		if accepts(m, "0"+strconv.Itoa(rg[1])) || accepts(m, "-0") {
+			t.Fatalf("[%d, %d]: a leading zero or -0 is taken", rg[0], rg[1])
+		}
+	}
+	src, err := FromJSONSchema([]byte(`{"type":"integer","exclusiveMinimum":4}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := NewMatcher(mustParse(t, src), IndexTokens(v))
+	for s, want := range map[string]bool{"4": false, "5": true, "9999999999999999": true, "10000000000000000": false, "-5": false} {
+		if accepts(m, s) != want {
+			t.Errorf("above 4: %s accepted %v", s, !want)
+		}
+	}
+	if _, err := FromJSONSchema([]byte(`{"type":"integer","minimum":3.5,"maximum":3.9}`)); err == nil {
+		t.Error("a range no integer lies in was built")
 	}
 }
 
@@ -275,9 +324,9 @@ func walk(t *testing.T, m *Matcher, v *toyVocab, rng *rand.Rand, limit int) stri
 func TestSchemaRefusesByName(t *testing.T) {
 	for kw, schema := range map[string]string{
 		"pattern":              `{"type":"string","pattern":"^a$"}`,
-		"minimum":              `{"type":"integer","minimum":3}`,
+		"minimum":              `{"type":"number","minimum":3}`,
 		"allOf":                `{"allOf":[{"type":"string"}]}`,
-		"format":               `{"type":"string","format":"date"}`,
+		"uniqueItems":          `{"type":"array","uniqueItems":true}`,
 		"$ref":                 `{"$ref":"https://example.com/s.json"}`,
 		"additionalProperties": `{"type":"object","properties":{"a":{}},"additionalProperties":true}`,
 	} {
