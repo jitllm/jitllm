@@ -177,6 +177,12 @@ func (s *gpuSession) SnapRecs(lis []int32, key string) bool {
 	return s.g.snapRecs(s.sid, lis, key)
 }
 
+// SharePage is the tier's page of block li for this session (nn.KVShareDevice).
+func (s *gpuSession) SharePage(li int) int {
+	defer s.leave(s.enter())
+	return s.g.kvPageOf(s.sid, li)
+}
+
 func (s *gpuSession) PublishKVs(lis, pages []int32, keys []string) bool {
 	defer s.leave(s.enter())
 	return s.g.publishKVsBatch(s.sid, lis, pages, keys)
