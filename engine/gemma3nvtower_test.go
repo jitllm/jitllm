@@ -148,7 +148,7 @@ func TestGemma3nTowerMatchesTransformers(t *testing.T) {
 		return s[0] * s[1] * s[2]
 	}
 	stem := make([]float32, size("stem"))
-	if err := tr.parts.Entry(0, pl.Px, words, tr.req, tr.posTab, cl.Rows, stem); err != nil {
+	if err := tr.entry(bandRuns(tg, 0, pl.Px), 0, pl.Px, words, cl.Rows, stem); err != nil {
 		t.Fatal(err)
 	}
 	e, _ := nmseOf(stem, g3nvTap(t, "stem.a8", len(stem)))
