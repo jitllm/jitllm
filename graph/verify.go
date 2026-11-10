@@ -169,9 +169,12 @@ func Verify(g *Graph, f Facts) error {
 		}
 		switch o.Kind {
 		case OpMatVec:
-			if len(o.In) == 2 && len(o.Out) == 1 && len(o.Weight) == 1 {
+			if len(o.In) == 2 && len(o.Out) == 1 && (len(o.Weight) == 1 || len(o.Weight) == 2) {
 				if w := o.Weight[0]; w.K != width(o.In[0]) || width(o.In[1]) != width(o.Out[0]) || g.Values[o.In[1]].Elem != ElemU32 {
 					bad("%s: %v of rows of %d selected by %d ids over a row of %d into %d", at, w.Role, w.K, width(o.In[1]), width(o.In[0]), width(o.Out[0]))
+				}
+				if len(o.Weight) == 2 && (o.Weight[1].Rows != 0 || o.Weight[1].K != o.Weight[0].Rows) {
+					bad("%s: bias %v of %d on a selection of %d rows", at, o.Weight[1].Role, o.Weight[1].K, o.Weight[0].Rows)
 				}
 				break
 			}

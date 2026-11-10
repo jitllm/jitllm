@@ -249,8 +249,12 @@ func pairStride(o graph.Op) int {
 // j the selected row of the matrix against the input, the selection bounded
 // by the matrix. Over Q8_0 it is the plain matvec's form at those rows;
 // over any other format the matrix is read by expert matvec's decode, its
-// sheets the matrix's rows.
+// sheets the matrix's rows. A bias is added after, each pair its selected
+// row's element (decomposeRowsBiased).
 func decomposeMatVecRows(o graph.Op, c *Context) ([]Prim, error) {
+	if len(o.Weight) == 2 && len(o.In) == 2 && len(o.Out) == 1 {
+		return decomposeRowsBiased(o, c)
+	}
 	if len(o.Weight) != 1 || len(o.In) != 2 || len(o.Out) != 1 || c.width(o.Out[0]) != c.width(o.In[1]) {
 		return nil, fmt.Errorf("a row-selected matvec of %d weights over %d operands", len(o.Weight), len(o.In))
 	}
@@ -280,6 +284,38 @@ func decomposeMatVecRows(o graph.Op, c *Context) ([]Prim, error) {
 		return nil, err
 	}
 	return []Prim{p}, nil
+}
+
+// decomposeRowsBiased is a row-selected matvec with a bias: the product, then
+// each pair plus the bias's element at its selected row, the selection
+// bounded by the matrix as the product's is.
+func decomposeRowsBiased(o graph.Op, c *Context) ([]Prim, error) {
+	b := o.Weight[1]
+	if f := c.Formats[b.Role]; f != jlm.TypeF32 {
+		return nil, fmt.Errorf("a bias %s stored as %s", b.Role, f)
+	}
+	inner := o
+	inner.Weight = o.Weight[:1]
+	prims, err := decomposeMatVecRows(inner, c)
+	if err != nil {
+		return nil, err
+	}
+	out := c.value(o.Out[0])
+	raw := Operand{Kind: OperandScratch, Name: out.Name + ".raw"}
+	for i := range prims {
+		if prims[i].Out == out {
+			prims[i].Out = raw
+		}
+	}
+	sh := c.rows(o.Out[0])
+	V := o.Weight[0].Rows
+	var x exprs
+	r, j := x.coord(0), x.coord(1)
+	id := x.op(OpMin, ir.U32, x.at(1, sh, r, j), x.u(uint32(V-1)))
+	x.op(OpAdd, ir.F32, x.at(0, sh, r, j), x.load(2, id))
+	bias := Operand{Kind: OperandVector, Role: b.Role, Name: b.Role.String()}
+	return append(prims, Prim{Kind: PrimMap, Shape: sh, In: []Operand{raw, c.value(o.In[1]), bias}, Out: out, Expr: x.e,
+		Facts: Facts{Extents: map[int]int{2: V}}}), nil
 }
 
 // sheetRow is the packed weight a pair reads and the row of it: the pair's
