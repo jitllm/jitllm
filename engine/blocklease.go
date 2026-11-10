@@ -23,6 +23,12 @@ type blockLease struct {
 	hot    *Hotness
 	layers []model.Layer
 	lo     int
+	// trace is the instance's tracer (WithTrace), read at each call: a
+	// call's selection is traced as moe_topk, its experts in the order its
+	// rows pick them, each once (cpudev.Runner.experts); picks is its
+	// values.
+	trace *func(layer int, name string, v []float32)
+	picks []float32
 }
 
 // Held is nn.Source's: block li's page is in.
@@ -43,6 +49,13 @@ func (l *blockLease) Ensure(li int) (nn.Tensors, error) {
 func (l *blockLease) Experts(li int, sel []int32, count bool) error {
 	l.mu.Lock()
 	err := l.m.EnsureExperts(l.fr, li, sel, l.hold, &l.layers[li-l.lo])
+	if err == nil && l.trace != nil && *l.trace != nil {
+		l.picks = l.picks[:0]
+		for _, e := range sel {
+			l.picks = append(l.picks, float32(e))
+		}
+		(*l.trace)(li, "moe_topk", l.picks)
+	}
 	l.mu.Unlock()
 	if err != nil {
 		return err
