@@ -1497,6 +1497,11 @@ func (sv *servedPart) pagedRun(g *devTier, lc *launcher, s backend.Session, inst
 		return err
 	}
 	st.count(uses)
+	one := g.kb.pageFault == PageFaultSwap && len(st.sel) == 1 && nExpert > 1
+	var picked uint32
+	if one {
+		picked, st.sel[0] = st.sel[0], (st.sel[0]+1)%uint32(nExpert)
+	}
 	tf := time.Now()
 	switch {
 	case g.kb.pageFault != PageFaultStale:
@@ -1526,9 +1531,12 @@ func (sv *servedPart) pagedRun(g *devTier, lc *launcher, s backend.Session, inst
 			st.tab[e] = uint32(j)
 		}
 	}
-	if g.kb.pageFault == PageFaultSwap && len(st.sel) > 1 {
+	switch {
+	case g.kb.pageFault == PageFaultSwap && len(st.sel) > 1:
 		a, b := st.sel[0], st.sel[1]
 		st.tab[a], st.tab[b] = st.tab[b], st.tab[a]
+	case one:
+		st.tab[picked] = st.tab[st.sel[0]]
 	}
 	if err := s.WriteAt(inst.bufs[f.table], 0, u32b(st.tab)); err != nil {
 		return err

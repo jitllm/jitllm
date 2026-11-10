@@ -201,7 +201,8 @@ const (
 	// PageFaultNone is the engine.
 	PageFaultNone PageFault = iota
 	// PageFaultSwap writes the page table with the step's first two
-	// selected experts' pages swapped: a page read from the wrong expert.
+	// selected experts' pages swapped: a page read from the wrong expert. A
+	// step selecting one expert reads the next expert's sheets into its page.
 	PageFaultSwap
 	// PageFaultStale maps the step's selection onto pages without reading a
 	// missed expert into the page it takes: an eviction not re-read.
