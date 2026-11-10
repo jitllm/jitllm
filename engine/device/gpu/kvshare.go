@@ -193,6 +193,26 @@ func (g *devTier) MapKV(li, page int, key string, end int) bool {
 	return g.mapKVs(0, li, page, key, end)
 }
 
+// SharePage is the zero session's page of block li (nn.KVShareDevice).
+func (g *devTier) SharePage(li int) int { return g.kvPageOf(0, li) }
+
+// kvPageOf is the positions a page of block li's pool holds for session sid,
+// 0 where its pages are not named.
+func (g *devTier) kvPageOf(sid uint64, li int) int {
+	sv := g.as(sid)
+	if sv == nil {
+		return 0
+	}
+	defer sv.done()
+	g = sv
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if kp, l := g.sharedLayer(li); l != nil {
+		return kp.p
+	}
+	return 0
+}
+
 // PublishKVs is publishKV for the zero session over many names.
 func (g *devTier) PublishKVs(lis, pages []int32, keys []string) bool {
 	return g.publishKVsBatch(0, lis, pages, keys)

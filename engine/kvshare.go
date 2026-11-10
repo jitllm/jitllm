@@ -538,7 +538,7 @@ func (kc *kvCache) publishSealed(li, n int, key string) {
 // moved page, under it. A host page the session held shared is marked idle:
 // the card holds the prefix now.
 func (kc *kvCache) nameMoved(li, pos int) {
-	d := kc.devAt(li)
+	d := kc.cardPage(li)
 	s := &kc.layers[li]
 	if d == nil || s.p == 0 {
 		return
@@ -569,7 +569,7 @@ func (kc *kvCache) faultShared(li, n int, key string) error {
 	// put into the session's table on the card (nn.KVShareDevice.MapKV), no
 	// byte moved.
 	if d := kc.devAt(li); d != nil {
-		if !d.MapKV(li, n, key, kc.mapEnd) {
+		if kc.cardPage(li) == nil || !d.MapKV(li, n, key, kc.mapEnd) {
 			return ErrNoPage
 		}
 		kc.mapped += 2

@@ -1859,12 +1859,22 @@ func kvChunkFills(fill int) []int {
 // queuePublish is a name for page n of block li on the card, sent with the
 // prompt's others (flushPublish).
 func (kc *kvCache) queuePublish(li, n int, key string) {
-	if key == "" {
+	if key == "" || kc.cardPage(li) == nil {
 		return
 	}
 	kc.pubLi = append(kc.pubLi, int32(li))
 	kc.pubPage = append(kc.pubPage, int32(n))
 	kc.pubKey = append(kc.pubKey, key)
+}
+
+// cardPage is the device holding block li's history where it cuts the
+// history into pages as this cache does, so a page key names the same
+// positions there; nil where it does not, or where the block is on the CPU.
+func (kc *kvCache) cardPage(li int) nn.KVShareDevice {
+	if d := kc.devAt(li); d != nil && d.SharePage(li) == kc.layers[li].p {
+		return d
+	}
+	return nil
 }
 
 // flushPublish sends the queued names to the device, in one call.

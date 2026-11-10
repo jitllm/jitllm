@@ -1251,6 +1251,10 @@ type KVShareDevice interface {
 	// PublishKVs is PublishKV for many names in one call: name i is block
 	// lis[i]'s page pages[i] by keys[i]. False when any was refused.
 	PublishKVs(lis, pages []int32, keys []string) bool
+	// SharePage is the positions one of block li's pages holds on the device, 0
+	// where it names none: a page is named by the caller's key only where
+	// the two cut the history alike.
+	SharePage(li int) int
 }
 
 // RecShareDevice is a device that keeps a linear block's restore points where

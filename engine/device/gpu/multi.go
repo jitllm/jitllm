@@ -1661,6 +1661,20 @@ func (g *GPU) publishKV(sid uint64, li, page int, key string) bool {
 	return d != nil && d.publishKVs(sid, li, page, key)
 }
 
+// SharePage is the zero session's page of block li on the device holding it
+// (nn.KVShareDevice).
+func (g *GPU) SharePage(li int) int { return g.kvPageOf(0, li) }
+
+func (g *GPU) kvPageOf(sid uint64, li int) int {
+	g.mu.Lock()
+	d := g.own[li]
+	g.mu.Unlock()
+	if d == nil {
+		return 0
+	}
+	return d.kvPageOf(sid, li)
+}
+
 func (g *GPU) mapKV(sid uint64, li, page int, key string, end int) bool {
 	g.mu.Lock()
 	d := g.own[li]
