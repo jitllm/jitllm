@@ -169,6 +169,12 @@ type refusing struct {
 
 func (r *refusing) Attach() nn.LayerDevice { return &refusingView{r.GPU.Attach(), r} }
 
+// ForModel keeps the refusals: SetDeviceLayers attaches the model's tier
+// (nn.ModelTier), which answers as the first card does too.
+func (r *refusing) ForModel(model uint64) nn.LayerDevice {
+	return &refusing{GPU: r.GPU.ForModel(model).(*gpu.GPU), firstCard: r.firstCard}
+}
+
 type refusingView struct {
 	nn.LayerDevice
 	r *refusing
