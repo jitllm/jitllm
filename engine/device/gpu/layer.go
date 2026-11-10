@@ -4062,26 +4062,25 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	sampleSrv := false
 	ragSample := head != nil && (rag != nil || allRows)
 	if head != nil && (argmax || sampleK > 0 || pick || ragSample) {
-		why := partServes
+		var serr string
 		switch {
 		case ragSample && (hb.sampleGraph == nil || head.Sample != hb.sampleGraph):
-			why = partNoSample
+			serr = "a ragged step's sample graph is not the one placed"
 		case ragSample:
 			sampleSrv = true
 		case pick && pickAsked && (pickSrv || pickHeadSrv):
 			sampleSrv = true
 		case pick && pickAsked:
-			why = partNoSample
+			serr = "the label pick has neither its head over the picked rows nor its pick over the logits placed"
 		case sampleK > 0:
 			sampleSrv = true
 		case bs.sampleGraph == nil || head.Sample != bs.sampleGraph:
-			why = partNoSample
+			serr = "the step's sample graph is not the one placed"
 		default:
 			sampleSrv = true
 		}
-		if why != partServes {
-			g.Steps.Decline(nn.PartSample, why)
-			return refuse("the composer does not serve the step's token: %s", DeclineName(int(why)))
+		if serr != "" {
+			return refuse("the composer does not serve the step's token: %s", serr)
 		}
 	}
 	// A pick that projects its labels' rows alone leaves no logits.

@@ -1136,7 +1136,6 @@ const (
 	partCaller      = nn.DeclineCaller
 	partNoRoom      = nn.DeclineNoRoom
 	partTableHeld   = nn.DeclineTableHeld
-	partNoSample    = nn.DeclineNoSample
 	partNoEmbed     = nn.DeclineNoEmbed
 	partEmbedWeight = nn.DeclineEmbedWeight
 	partExperts     = nn.DeclineExperts

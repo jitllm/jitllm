@@ -17,7 +17,6 @@ const (
 	DeclineCaller
 	DeclineNoRoom
 	DeclineTableHeld
-	DeclineNoSample
 	DeclineNoEmbed
 	DeclineEmbedWeight
 	DeclineFeeds
@@ -48,8 +47,6 @@ func (d Decline) String() string {
 		return "its buffers do not fit the device's budget"
 	case DeclineTableHeld:
 		return "a table whose planes or positions the tier does not hold"
-	case DeclineNoSample:
-		return "no sample graph from the front end"
 	case DeclineNoEmbed:
 		return "no input rows graph from the front end"
 	case DeclineEmbedWeight:
