@@ -159,12 +159,10 @@ func TestGraniteOnEveryDevice(t *testing.T) {
 								v.name, e, band)
 						}
 					}
-					// Three sessions stepping as rows against each alone, clean
-					// and with the step's own break: its rows fuse the residual
-					// into the projections unscaled, where each session alone
-					// does not. The step's fused projections exist only for
-					// quantized weights, which is why this arm is here and not
-					// on the f32 fixtures.
+					// Three sessions stepping as rows against each alone. The
+					// step gate's own faults are its discrimination
+					// (stepfault_test.go): a break of the model's statement moves
+					// the step and each session alone together.
 					step := func(opts ...gpu.Option) stepResult {
 						g, err := openGPU(t, slices.Concat([]gpu.Option{gpu.WithDevices(dev),
 							gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t), opts)...)
@@ -176,31 +174,16 @@ func TestGraniteOnEveryDevice(t *testing.T) {
 					}
 					// A mixture's step takes the every-architecture step gate's
 					// mixture bound (stepBound): 5e-2, or eight times its own
-					// order-only control where that is wider. Its break must
-					// clear that band and ten times the clean step rather than
-					// ten bands: the control reads up to 1.8e-02 on an
-					// integrated Vulkan device, a band of 0.147, where the break reads 1.27 against a
-					// clean step of 7.7e-03.
-					stepBand, need := band, 10*band
+					// order-only control where that is wider.
+					stepBand := band
 					if m.Cfg.MoE() {
 						stepBand = max(mixtureStepNMSE, denseStepBand*orderControl(t, m, dev, openOpts...))
 					}
 					r := step()
-					undo := cfgMut(m, func(c *model.Config) { c.ResidualScale = 1 })
-					rb := step()
-					undo()
-					t.Logf("step across sessions on %s: worst logit NMSE %.3e against each alone, band %.3e; with "+
-						"its residual scale not stated %.3e", dev, r.worst, stepBand, rb.worst)
+					t.Logf("step across sessions on %s: worst logit NMSE %.3e against each alone, band %.3e", dev, r.worst, stepBand)
 					if !(r.worst < stepBand) {
 						t.Fatalf("a Granite's step across sessions on %s parts from each session alone: NMSE %.3e, "+
 							"band %.3e", dev, r.worst, stepBand)
-					}
-					if m.Cfg.MoE() {
-						need = max(stepBand, 10*r.worst)
-					}
-					if !(rb.worst > need) {
-						t.Errorf("a step's residual scale not stated: the step gate cannot see it -- NMSE %.3e against "+
-							"%.3e (band %.3e, clean step %.3e)", rb.worst, need, stepBand, r.worst)
 					}
 					ran++
 				})
