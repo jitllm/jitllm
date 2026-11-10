@@ -3284,22 +3284,19 @@ func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []floa
 			}
 			return false
 		}
-		// Every fallback below cuts x by rows, which a stream-major residual
-		// (AltUp's, DeepSeek V4's) is not: such a chunk is refused whole, and
-		// the instance runs it on the host.
-		if dbs != nil && dbs.p.Streams() > 1 && (head != nil && noFold || !ok || bbs == nil) {
-			g.LastErr = fmt.Sprintf("a %d-row chunk of %d streams this device would have to cut by rows", n,
-				dbs.p.Streams())
-			return false
-		}
 		// A call the composer serves longer than the reserved width runs in
 		// chunks of it, the last carrying the head, folded as a call of the
-		// reserved width folds it.
+		// reserved width folds it; each chunk is its rows of every stream.
 		if composed && n > sub && dbs != nil && !(head != nil && head.RowLogits) && !noFold {
-			nr, e := dbs.p.RopeW(), dbs.p.NEmbd
+			nr, e, ns := dbs.p.RopeW(), dbs.p.NEmbd, dbs.p.Streams()
 			g.mu.Lock()
 			g.PromptSplits++
 			g.mu.Unlock()
+			side := g.side()
+			defer g.sideAt(side, 0, n)
+			if ns > 1 {
+				g.realEmbed()
+			}
 			for off := 0; off < n; off += sub {
 				m := min(sub, n-off)
 				var rcs, rswa []float32
@@ -3313,11 +3310,21 @@ func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []floa
 				if off+m == n {
 					h = head
 				}
-				if !g.layersFor(sid, lo, hi, pos+off, m, x[off*e:(off+m)*e], rcs, rswa, h) {
+				xs := g.streamCut(x, ns, e, off, m, n)
+				g.sideAt(side, off, n)
+				if !g.layersFor(sid, lo, hi, pos+off, m, xs, rcs, rswa, h) {
 					return false
 				}
+				streamPut(x, xs, ns, e, off, m, n)
 			}
 			return true
+		}
+		// Every fallback below cuts x by rows, which a stream-major residual
+		// (AltUp's, DeepSeek V4's) is not.
+		if dbs != nil && dbs.p.Streams() > 1 && (head != nil && noFold || !ok || bbs == nil) {
+			g.LastErr = fmt.Sprintf("a %d-row chunk of %d streams this device would have to cut by rows", n,
+				dbs.p.Streams())
+			return false
 		}
 		// A head rides only the one-submission path. Every fallback splits the
 		// chunk, so there the head runs on the last row as its own submission;

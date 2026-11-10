@@ -1293,7 +1293,16 @@ func (g *GPU) pipeline(sid uint64, rs []run, pos, n int, x, cs, csSWA []float32,
 // every run before the next piece starts, the head on the last piece of the
 // last run.
 func (g *GPU) pieces(sid uint64, rs []run, pos, n int, x, cs, csSWA []float32, tail *nn.Head) bool {
-	e, r := len(x)/n, len(cs)/n
+	ns := rs[0].dev.streams()
+	e, r := len(x)/n/ns, len(cs)/n
+	sides := make([]sideRows, len(rs))
+	for i, rn := range rs {
+		sides[i] = rn.dev.side()
+		defer rn.dev.sideAt(sides[i], 0, n)
+		if ns > 1 {
+			rn.dev.realEmbed()
+		}
+	}
 	rw := 0
 	if len(csSWA) > 0 {
 		rw = len(csSWA) / n
@@ -1310,9 +1319,12 @@ func (g *GPU) pieces(sid uint64, rs []run, pos, n int, x, cs, csSWA []float32, t
 				h = tail
 			}
 			c0, c1 := rn.tables(cs[lo*r:(lo+cnt)*r], sw)
-			if !rn.dev.layersFor(sid, rn.lo, rn.hi, pos+lo, cnt, x[lo*e:(lo+cnt)*e], c0, c1, h) {
+			xs := rn.dev.streamCut(x, ns, e, lo, cnt, n)
+			rn.dev.sideAt(sides[i], lo, n)
+			if !rn.dev.layersFor(sid, rn.lo, rn.hi, pos+lo, cnt, xs, c0, c1, h) {
 				return false
 			}
+			streamPut(x, xs, ns, e, lo, cnt, n)
 		}
 	}
 	return true
@@ -1349,11 +1361,6 @@ func (g *GPU) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []float32,
 		// sliding layers' scratch set, not the one holding the head -- and
 		// gets its own submission.
 		tail = nil
-	}
-	// The pieces cut x by rows, which AltUp's stream-major residual is not
-	// (altup.go): such a chunk is refused whole.
-	if n > batchWidth && rs[0].dev.streams() > 1 {
-		return false
 	}
 	if n > batchWidth && !rs[0].dev.nonCausalAt(lo) && g.split {
 		// The pieces go one after another: two runs of one device at two
