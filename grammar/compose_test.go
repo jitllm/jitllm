@@ -84,4 +84,23 @@ func TestBuilderComposesSchemas(t *testing.T) {
 		ps[1].Key != "a" || ps[1].Type != "integer" || !ps[1].Required {
 		t.Fatalf("properties %+v", ps)
 	}
+	// A property the converter does not build takes any value; the others
+	// keep their own rule.
+	value := func(i int, s string) bool {
+		nb := NewBuilder()
+		ps, err := nb.Properties([]byte(`{"type":"object","properties":{"u":{"type":"array","uniqueItems":true},"n":{"type":"integer"}}}`), "q")
+		if err != nil {
+			t.Fatalf("a property not built refused the arguments: %v", err)
+		}
+		return takes(textMatcher(t, nb.Text(ps[i].Rule)), s)
+	}
+	for _, c := range []struct {
+		i    int
+		s    string
+		want bool
+	}{{0, `[1,1]`, true}, {0, `"x"`, true}, {1, `3`, true}, {1, `"x"`, false}} {
+		if got := value(c.i, c.s); got != c.want {
+			t.Errorf("property %d takes %s: %v, want %v", c.i, c.s, got, c.want)
+		}
+	}
 }

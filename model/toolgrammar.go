@@ -61,8 +61,9 @@ func (c ToolChoice) templateValue() any {
 // call (Reasoning).
 //
 // A parameter schema the converter does not build (grammar.ErrUnsupported)
-// constrains that tool's arguments to any JSON object rather than refusing
-// the request: the call itself is still forced.
+// constrains that tool's arguments to any JSON object, and an argument the
+// syntax writes on its own to any JSON value, rather than refusing the
+// request: the call itself is still forced.
 func (m *Model) ToolGrammar(tools ToolSet, choice ToolChoice, prompt string) (string, error) {
 	src, _ := m.ChatTemplateFor(true)
 	syn, err := m.ToolSyntax()
@@ -186,17 +187,9 @@ func (g *toolGrammar) args(name string) (string, error) {
 	return r, err
 }
 
-// props is name's arguments one by one, for a form that writes them so; a
-// schema it cannot build is refused, a form writing arguments one by one
-// having no way to say "any object".
+// props is name's arguments one by one, for a form that writes them so.
 func (g *toolGrammar) props(name string) ([]grammar.Prop, error) {
-	ps, err := g.b.Properties(g.tools.schemas[name], "arg-"+name)
-	var unsupported grammar.ErrUnsupported
-	if errors.As(err, &unsupported) {
-		return nil, fmt.Errorf("tool %q: a forced call writes its arguments one by one in this model's "+
-			"syntax, and its schema is not built: %v", name, err)
-	}
-	return ps, err
+	return g.b.Properties(g.tools.schemas[name], "arg-"+name)
 }
 
 // list joins items as the reply writes them: in their order, each present
