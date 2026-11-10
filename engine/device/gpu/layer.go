@@ -4449,8 +4449,14 @@ func (g *devTier) layersSession(s backend.Session) {
 				kind = nn.PartTower
 			}
 			why := g.blockServes(l, li, p, bs, kind == nn.PartPrompt)
-			if why == partServes && R > 1 {
-				why = l.expertsServe(nrow)
+			if why == partServes && R > 1 && l.stream != nil && nrow > l.pagedRows() {
+				// pagedCall holds every composed call to the rows a streamed
+				// block's pages hold.
+				if err == nil {
+					err = fmt.Errorf("block %d: a call of %d rows reached a streamed block whose pages hold %d: it was not cut (pagedCall)",
+						li, nrow, l.pagedRows())
+				}
+				continue
 			}
 			var sv, cp *servedPart
 			var inst *partInst
