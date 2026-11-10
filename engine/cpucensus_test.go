@@ -215,8 +215,15 @@ func TestCPUComposesOnce(t *testing.T) {
 				defer g.Close()
 				r := testInstance(t, m, 512, withKVPage(32), WithCPU(cd))
 				defer r.Close()
+				// An empty binary16 history steps down to the card's f32 at the
+				// attach, and the CPU's blocks are composed again for it.
+				was := r.kvFmt
 				if err := r.SetDeviceLayers(g, 0); err != nil {
 					t.Fatal(err)
+				}
+				placed := 1
+				if was != r.kvFmt {
+					placed = 2
 				}
 				half := nl / 2
 				turn := func(what string, at, n int) {
@@ -250,9 +257,9 @@ func TestCPUComposesOnce(t *testing.T) {
 						}
 					}
 					for li, n := range r.Account(nn.CPU).Forms {
-						w := 1
+						w := placed
 						if li < half && what != "the placement" {
-							w = 2
+							w++
 						}
 						if n != w {
 							t.Fatalf("%s: block %d composed for the CPU %d time(s), want %d", what, li, n, w)
