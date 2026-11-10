@@ -3,8 +3,10 @@ package engine
 import (
 	"fmt"
 	"math"
+	"slices"
 	"testing"
 
+	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/internal/testmodels"
@@ -22,6 +24,13 @@ import (
 // activation moves every sum after it. The bounds are the engines'
 // quantization noise (llama.cpp quantizes a k-quant matvec's input per 256,
 // this engine per 32).
+//
+// A composed block hands back its output alone, so each node is read where
+// it can be: one of the residual's width as block 0's output, the block
+// restated to end at it; the roped K from the history block 0 wrote; the
+// router's experts from the selection the CPU pages in (moe_topk). kqv_out,
+// the heads before their projection, is wider than a block's output; the
+// attention residual after it carries a missing sink.
 //
 // Position 0 is an identity rotation, so the roped K is the unroped K times
 // YaRN's magnitude, 1.3466 -- which is what makes the K row a YaRN check even
@@ -41,32 +50,99 @@ func gptossMatchesLlamaCppIntermediates(t *testing.T, opts ...Option) {
 		t.Fatal(err)
 	}
 	defer m.Close()
+	// An f32 history: the roped K is read back from it.
+	instOpts = append(append([]Option(nil), instOpts...), WithKVF16(false))
+	b0 := m.FrontGraphs().Blocks[0]
+	// The nodes of the residual's width: the attention norm (the first
+	// norm), the attention residual (the add of the block's input) and the
+	// experts' sum (the other input of the last add).
+	var norm, resid, moe graph.ValueID = -1, -1, -1
+	for _, o := range b0.Ops {
+		switch {
+		case o.Kind == graph.OpNorm && norm < 0:
+			norm = o.Out[0]
+		case o.Kind == graph.OpAdd && resid < 0 && slices.Contains(o.In, b0.In[0]):
+			resid = o.Out[0]
+		}
+	}
+	if last := b0.Ops[len(b0.Ops)-1]; last.Kind == graph.OpAdd && len(last.In) == 2 && last.In[0] == resid {
+		moe = last.In[1]
+	}
+	if norm < 0 || resid < 0 || moe < 0 {
+		t.Fatalf("block 0 states no attention norm (%d), attention residual (%d) or experts' sum (%d) where the gate reads them", norm, resid, moe)
+	}
 	sums := map[string]float64{}
 	var topk []float32
-	trace := WithTrace(func(l int, name string, v []float32) {
-		if name == "moe_topk" && l == 0 {
-			topk = append([]float32(nil), v...)
+	run := func(name string, end graph.ValueID) []float32 {
+		t.Helper()
+		if end >= 0 {
+			defer restated(m, func(g *graph.Graph) *graph.Graph {
+				if g != b0 {
+					return g
+				}
+				// The ops end needs, and the history's writes with what they
+				// read: an op left past them would read the block's input after
+				// the output, written over it, replaced it.
+				out := cloned(g)
+				need := map[graph.ValueID]bool{end: true}
+				var ops []graph.Op
+				for i := len(out.Ops) - 1; i >= 0; i-- {
+					o := out.Ops[i]
+					if len(o.Out) > 0 && !slices.ContainsFunc(o.Out, func(v graph.ValueID) bool { return need[v] }) {
+						continue
+					}
+					ops = append(ops, o)
+					for _, v := range o.In {
+						need[v] = true
+					}
+				}
+				slices.Reverse(ops)
+				out.Ops, out.Out = ops, []graph.ValueID{end}
+				return out
+			})()
 		}
-		var s float64
-		for _, x := range v {
-			s += float64(x)
+		trace := WithTrace(func(l int, n string, v []float32) {
+			switch {
+			case l == 0 && n == "moe_topk" && end < 0:
+				topk = append([]float32(nil), v...)
+			case l == 0 && n == "ffn_resid":
+				var s float64
+				for _, x := range v {
+					s += float64(x)
+				}
+				sums[name] = s
+			}
+		})
+		st := testInstance(t, m, 8, append(append([]Option(nil), instOpts...), trace)...)
+		defer st.Close()
+		logits, err := st.Forward(976)
+		if err != nil {
+			t.Fatal(err)
 		}
-		sums[fmt.Sprintf("%s-%d", name, l)] = s
-	})
-	st := testInstance(t, m, 8, append(append([]Option(nil), instOpts...), trace)...)
-	defer st.Close()
-	logits, err := st.Forward(976)
-	if err != nil {
-		t.Fatal(err)
+		if end < 0 {
+			l := st.kvlAt(0)
+			k, v := make([]float32, l.kvDim()), make([]float32, l.kvDim())
+			if !st.kv.MigrateKV(0, k, v, 1, false, st.kvConv) {
+				t.Fatal("block 0's history was not gathered")
+			}
+			var s float64
+			for _, x := range k {
+				s += float64(x)
+			}
+			sums["k-0"] = s
+		}
+		return logits
 	}
-	sums["moe_out-0"] = sums["ffn_resid-0"] - sums["attn_resid-0"]
+	logits := run("ffn_resid-0", -1)
+	run("attn_norm-0", norm)
+	run("attn_resid-0", resid)
+	run("moe_out-0", moe)
 	for _, c := range []struct {
 		ours, theirs string
 		want, tol    float64 // tol is relative
 	}{
 		{"attn_norm-0", "attn_norm-0", -27.703680, 1e-5},
 		{"k-0", "Kcur-0 (roped)", -4.469628, 2e-3},
-		{"attn-0", "kqv_out-0", -38.742336, 5e-3},
 		{"attn_resid-0", "ffn_inp-0", -96.851616, 5e-3},
 		{"moe_out-0", "ffn_moe_out-0", 87.151596, 3e-2},
 	} {
