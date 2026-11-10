@@ -106,8 +106,9 @@ func trackedFiles(t *testing.T, root string) []string {
 			return nil
 		}
 		// A worktree's .git is a file naming the main checkout's path; it is
-		// git's, not the tree's, like the .git directory skipped above.
-		if d.Name() == ".git" {
+		// git's, not the tree's, like the .git directory skipped above, and a
+		// models link names the model disk, like the models directory.
+		if d.Name() == ".git" || d.Name() == "models" && d.Type()&fs.ModeSymlink != 0 {
 			return nil
 		}
 		rel, _ := filepath.Rel(root, p)
