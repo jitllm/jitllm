@@ -137,6 +137,8 @@ rnj/EssentialAI_rnj-1-instruct-Q4_K_M.gguf         bartowski/EssentialAI_rnj-1-i
 # --- vision: text model and projector ---
 SmolVLM-256M-Instruct-Q8_0.gguf                    ggml-org/SmolVLM-256M-Instruct-GGUF                    SmolVLM-256M-Instruct-Q8_0.gguf                                                 175054528    default
 mmproj-SmolVLM-256M-Instruct-Q8_0.gguf             ggml-org/SmolVLM-256M-Instruct-GGUF                    mmproj-SmolVLM-256M-Instruct-Q8_0.gguf                                          103769856    default
+SmolVLM-500M-Instruct-Q8_0.gguf                    ggml-org/SmolVLM-500M-Instruct-GGUF                    SmolVLM-500M-Instruct-Q8_0.gguf                                                 436806912    default
+mmproj-SmolVLM-500M-Instruct-Q8_0.gguf             ggml-org/SmolVLM-500M-Instruct-GGUF                    mmproj-SmolVLM-500M-Instruct-Q8_0.gguf                                          108783360    default
 Qwen2-VL-2B-Instruct-Q4_K_M.gguf                   ggml-org/Qwen2-VL-2B-Instruct-GGUF                     Qwen2-VL-2B-Instruct-Q4_K_M.gguf                                                986046944    default
 mmproj-Qwen2-VL-2B-Instruct-Q8_0.gguf              ggml-org/Qwen2-VL-2B-Instruct-GGUF                     mmproj-Qwen2-VL-2B-Instruct-Q8_0.gguf                                           709883360    default
 llava-phi-3-mini-int4.gguf                         xtuner/llava-phi-3-mini-gguf                           llava-phi-3-mini-int4.gguf                                                      2318919200   default
