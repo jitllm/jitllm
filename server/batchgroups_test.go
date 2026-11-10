@@ -74,7 +74,9 @@ func TestBatchDecodeGroupsKeepTheTokens(t *testing.T) {
 						continue
 					}
 					if invariant {
-						t.Fatalf("row %d: %v in groups, %v in one group", i, got.ids[i], one.ids[i])
+						sameAsAlone(t, gl.lm.m, fmt.Sprintf("row %d in groups", i),
+							fmt.Sprintf("%s %d", gatePrompts()[i%len(gatePrompts())], i), got.ids[i], one.ids[i])
+						continue
 					}
 					j := 0
 					for j < len(got.ids[i]) && got.ids[i][j] == one.ids[i][j] {
