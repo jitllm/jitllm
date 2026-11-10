@@ -14,7 +14,6 @@ const (
 	DeclinePersist
 	DeclineSkip
 	DeclineNoPool
-	DeclinePrefill
 	DeclineStream
 	DeclineWindow
 	DeclineHeadShape
@@ -59,8 +58,6 @@ func (d Decline) String() string {
 		return "a fault probe skips blocks"
 	case DeclineNoPool:
 		return "no paged history on the device"
-	case DeclinePrefill:
-		return "the history is mid-prefill"
 	case DeclineStream:
 		return "the history streams"
 	case DeclineWindow:
