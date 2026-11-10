@@ -16,9 +16,12 @@ golden tens of megabytes), base64 little-endian float32. The gate holds its
 reference to these rows over the same logits, and fails where its own ids
 differ from the golden's.
 
-With "experts", the golden is TestComposedCPUExpertPagesServe's instead: one
-sequence, the text's first id and its next EXPERTS-1 forced a step each, kept
-at a quarter of the logits -- a mixture fixture's gate reads no other.
+With "experts", the golden is the mixture gates' instead, kept at a quarter
+of the logits: TestComposedCPUExpertPagesServe's sequence, the text's first id
+and its next EXPERTS-1 forced a step each; TestComposedCPUBlocksServe's, the
+same over 2*EXPERTS-1; and TestComposedCPUExpertPromptsServe's, the longest
+prompt with the decode tokens after it and the batch of three prompts with the
+steps after each.
 
 With "q8" as well, the class runs as the engine's numbers do on the fixture's
 @q8 container (the user's decision for the mixture gates' reference): every
@@ -108,7 +111,9 @@ def main(d, name, experts=False, q8=False):
     steps = ids[200:200 + DECODE]
     seqs += [(p, steps) for p in (ids[:7], ids[40:73], ids[100:150])]
     if experts:
-        seqs = [(ids[:1], ids[1:EXPERTS])]
+        seqs = [(ids[:1], ids[1:EXPERTS]), (ids[:1], ids[1:2 * EXPERTS])]
+        seqs += [(ids[:LENGTHS[-1]], ids[LENGTHS[-1]:LENGTHS[-1] + DECODE])]
+        seqs += [(p, steps) for p in (ids[:7], ids[40:73], ids[100:150])]
     out = []
     for p, t in seqs:
         with torch.no_grad():
