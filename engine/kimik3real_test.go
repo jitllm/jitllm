@@ -53,6 +53,10 @@ type k3RealGolden struct {
 // sharply trained model -- and the Kazakh checkpoint, float16 already. An
 // exact arm runs the violations too. Q8_0 and MXFP4 are quantizations, held to
 // the float32 reference within their band.
+// k3TileNMSE is a card's prefill's band: binary16 Q K^T tiles, up to 4.7e-7
+// on CUDA (c6dev_test), the F16 checkpoints 2.4e-8.
+const k3TileNMSE = 1e-6
+
 func k3RealModels() []struct {
 	golden, file string
 	nmse         float64
@@ -223,8 +227,20 @@ func TestKimiK3RealMatchesReference(t *testing.T) {
 				}
 				t.Logf("%d sequences teacher-forced, decode and prefill: worst NMSE %.3e (bound %.0e; by arm %v), "+
 					"%d confident argmax flips (allowed %d), %d ties", len(g.Seqs), worst, c.nmse, by, flips, c.flips, ties)
-				if worst > c.nmse || flips > c.flips {
-					t.Errorf("worst NMSE %.3e, %d flips", worst, flips)
+				// A card's prompt chunk takes Q K^T through binary16 tiles where
+				// it has them (c6dev_test's band); the arms its history came from
+				// are held to that band, decode to the arm's own.
+				for what, w := range by {
+					bound := c.nmse
+					if gpux != nil && what != "decode" {
+						bound = max(bound, k3TileNMSE)
+					}
+					if w > bound {
+						t.Errorf("%s: worst NMSE %.3e against %.0e", what, w, bound)
+					}
+				}
+				if flips > c.flips {
+					t.Errorf("%d confident argmax flips, %d allowed", flips, c.flips)
 				}
 			}
 			t.Run("host", func(t *testing.T) {
