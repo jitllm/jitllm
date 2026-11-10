@@ -8,6 +8,7 @@ import (
 
 	"github.com/jitllm/jitllm/model"
 
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
@@ -79,18 +80,31 @@ func embdRows(t *testing.T, m *model.Model, ids []int32) []float32 {
 }
 
 // seamTokens makes ids[lo:hi] -- the rows a gate sends through the embedding
-// seam -- token 0 on a model with per-layer embeddings (Gemma 4's E models).
-// Such a row's per-layer input reads its token, which an embedding row does
-// not have, and the seam takes token 0's (ple.go, as llama.cpp does for an
-// image's rows): the token path equals the seam exactly for that token and no
-// other, so that is the token the comparison runs.
+// seam -- token 0 on a model whose rows read their token past the embedding:
+// per-layer embeddings (Gemma 4's E models) and a router that routes by token
+// (DeepSeek V4's hash-routed blocks). An embedding row has no token, and the
+// seam takes token 0's (ple.go, as llama.cpp does for an image's rows; a
+// token-routed gather reads row 0 for a row naming none): the token path
+// equals the seam exactly for that token and no other, so that is the token
+// the comparison runs.
 func seamTokens(m *model.Model, ids []int32, lo, hi int) []int32 {
-	if m.Cfg.PLEDim == 0 {
+	if m.Cfg.PLEDim == 0 && !routesByToken(m) {
 		return ids
 	}
 	ids = append([]int32(nil), ids...)
 	clear(ids[lo:hi])
 	return ids
+}
+
+// routesByToken reports whether a block of m routes its rows by their token
+// (jlm.RoleHashExperts).
+func routesByToken(m *model.Model) bool {
+	for li := range m.Cfg.NLayer {
+		if m.Stores(li, jlm.RoleHashExperts) {
+			return true
+		}
+	}
+	return false
 }
 
 // TestForwardEmbdMatchesForward runs with tuning off for
