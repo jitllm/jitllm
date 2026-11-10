@@ -18,7 +18,7 @@ import (
 // gates start from.
 func relocationModel(t *testing.T) (*model.Model, []int32, uint64) {
 	t.Helper()
-	p := testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.jlm")
+	p := jlmOf(t, testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.jlm"))
 	if _, err := os.Stat(p); err != nil {
 		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}

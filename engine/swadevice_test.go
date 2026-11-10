@@ -161,7 +161,7 @@ func TestSlidingWindowRunsOnTheDevice(t *testing.T) {
 		{"gemma-3-1b-it-Q4_K_M.jlm", 400, 1e-3, 128},
 	} {
 		t.Run(fmt.Sprintf("%s/window%d", c.file, c.window), func(t *testing.T) {
-			p := testmodels.Path(c.file)
+			p := jlmOf(t, testmodels.Path(c.file))
 			if _, err := os.Stat(p); err != nil {
 				testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 			}
@@ -227,7 +227,7 @@ func TestSlidingWindowRunsOnTheDevice(t *testing.T) {
 // window gets no window, see windowFor). The short session stays open, so its
 // cache is carried through the growth too.
 func TestATierServesALargerSecondSession(t *testing.T) {
-	p := testmodels.Path("gemma-3-1b-it-Q4_K_M.jlm")
+	p := jlmOf(t, testmodels.Path("gemma-3-1b-it-Q4_K_M.jlm"))
 	if _, err := os.Stat(p); err != nil {
 		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}

@@ -56,7 +56,7 @@ func batchAloneGate(t *testing.T, env, def, kind string, is func(model.Config) b
 	if name == "" {
 		name = def
 	}
-	p := testmodels.Path(name)
+	p := jlmOf(t, testmodels.Path(name))
 	if _, err := os.Stat(p); err != nil {
 		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
@@ -155,7 +155,7 @@ func TestSharedRecurrentStateMatchesTheDoubledOne(t *testing.T) {
 	if name == "" {
 		name = "qwen35/Qwen3.5-0.8B-Q4_K_M.jlm"
 	}
-	p := testmodels.Path(name)
+	p := jlmOf(t, testmodels.Path(name))
 	if _, err := os.Stat(p); err != nil {
 		testmodels.Missing(t, "MODEL MISSING: %v -- this gate proved nothing", err)
 	}

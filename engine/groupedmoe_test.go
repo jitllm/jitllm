@@ -60,7 +60,7 @@ func TestBatchedMixturePrefillFloatBanks(t *testing.T) {
 // NMSE between the arms; violate (a fault armed) returns it before the bounds,
 // for the caller to demand it broke them.
 func batchedMixtureCase(t *testing.T, name string, float, violate bool) float64 {
-	p := testmodels.Path(name)
+	p := jlmOf(t, testmodels.Path(name))
 	if _, err := os.Stat(p); err != nil {
 		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}

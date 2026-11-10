@@ -22,7 +22,7 @@ func TestChatCapableAgreesWithChatPrompt(t *testing.T) {
 		{"base", testmodels.Path("stories260K.jlm")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			m, err := model.Open(tc.path)
+			m, err := model.Open(jlmOf(t, tc.path))
 			if err != nil {
 				testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 			}

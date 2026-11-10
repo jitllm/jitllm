@@ -19,7 +19,7 @@ import (
 // band, and the counters saying which path each arm took. Two shapes: a tail
 // after a full chunk, and a prompt that is only a few rows.
 func TestShortChunkRunsAsRaggedStep(t *testing.T) {
-	p := testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.jlm")
+	p := jlmOf(t, testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.jlm"))
 	if _, err := os.Stat(p); err != nil {
 		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
