@@ -6,8 +6,11 @@ package schemacheck
 import (
 	"encoding/json"
 	"fmt"
+	"math/big"
+	"regexp"
 	"slices"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -52,7 +55,16 @@ func Validate(root, s, doc any) error {
 		return fmt.Errorf("%v is not of type %v", doc, types)
 	}
 	switch d := doc.(type) {
+	case json.Number:
+		if err := inBounds(m, d); err != nil {
+			return err
+		}
 	case string:
+		if f, ok := m["format"].(string); ok {
+			if err := hasFormat(f, d); err != nil {
+				return fmt.Errorf("%q is not a %s: %v", d, f, err)
+			}
+		}
 		n := utf8.RuneCountInString(d)
 		if x, ok := m["maxLength"].(float64); ok && float64(n) > x {
 			return fmt.Errorf("%q is longer than %v", d, x)
@@ -67,8 +79,13 @@ func Validate(root, s, doc any) error {
 		if x, ok := m["minItems"].(float64); ok && float64(len(d)) < x {
 			return fmt.Errorf("%d items, under %v", len(d), x)
 		}
+		// items holds the items after the prefix; a prefix with no items
+		// after it is held to its own length.
+		after := 0
+		it, more := m["items"]
+		more = more && it != false
 		if p, ok := m["prefixItems"].([]any); ok {
-			if len(d) != len(p) {
+			if len(d) < len(p) || !more && len(d) != len(p) {
 				return fmt.Errorf("%d items for %d prefix items", len(d), len(p))
 			}
 			for i := range p {
@@ -76,9 +93,10 @@ func Validate(root, s, doc any) error {
 					return err
 				}
 			}
+			after = len(p)
 		}
-		if it, ok := m["items"]; ok && it != false {
-			for _, x := range d {
+		if more {
+			for _, x := range d[after:] {
 				if err := Validate(root, it, x); err != nil {
 					return err
 				}
@@ -92,13 +110,24 @@ func Validate(root, s, doc any) error {
 				return fmt.Errorf("%v lacks %v", d, r)
 			}
 		}
+		addl, hasAddl := m["additionalProperties"]
 		for k, x := range d {
 			ps, ok := props[k]
 			if !ok {
-				if props != nil {
+				// A key no property names: refused where the schema forbids
+				// others, held to additionalProperties' schema where it gives
+				// one, and refused where it lists properties and does not
+				// require this key (the converter's strict reading).
+				switch {
+				case hasAddl && addl == false:
+					return fmt.Errorf("%v has %q, which additionalProperties false forbids", d, k)
+				case hasAddl && addl != true:
+					ps = addl
+				case props != nil && !slices.Contains(req, any(k)):
 					return fmt.Errorf("%v has %q, not a property", d, k)
+				default:
+					continue
 				}
-				continue
 			}
 			if err := Validate(root, ps, x); err != nil {
 				return err
@@ -106,6 +135,50 @@ func Validate(root, s, doc any) error {
 		}
 	}
 	return nil
+}
+
+// inBounds holds number n to schema m's minimum, maximum and their
+// exclusive forms, compared exactly.
+func inBounds(m map[string]any, n json.Number) error {
+	x, ok := new(big.Rat).SetString(string(n))
+	if !ok {
+		return fmt.Errorf("%s is not a number", n)
+	}
+	for _, k := range []string{"minimum", "exclusiveMinimum", "maximum", "exclusiveMaximum"} {
+		v, ok := m[k]
+		if !ok {
+			continue
+		}
+		b, ok := new(big.Rat).SetString(fmt.Sprint(v))
+		if !ok {
+			return fmt.Errorf("%s %v is not a number", k, v)
+		}
+		c := x.Cmp(b)
+		if k == "minimum" && c < 0 || k == "exclusiveMinimum" && c <= 0 || k == "maximum" && c > 0 || k == "exclusiveMaximum" && c >= 0 {
+			return fmt.Errorf("%s is outside %s %v", n, k, v)
+		}
+	}
+	return nil
+}
+
+// hasFormat holds s to format f, RFC 3339's date, time and date-time and
+// RFC 4122's uuid, read by the time package and a pattern; any other format
+// asserts nothing.
+func hasFormat(f, s string) error {
+	var err error
+	switch f {
+	case "date":
+		_, err = time.Parse("2006-01-02", s)
+	case "time":
+		_, err = time.Parse("15:04:05Z07:00", s)
+	case "date-time":
+		_, err = time.Parse(time.RFC3339, s)
+	case "uuid":
+		if !regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`).MatchString(s) {
+			err = fmt.Errorf("not five groups of hex digits")
+		}
+	}
+	return err
 }
 
 func isType(doc any, t string) bool {
