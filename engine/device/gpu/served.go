@@ -1136,7 +1136,6 @@ const (
 	partCaller      = nn.DeclineCaller
 	partNoRoom      = nn.DeclineNoRoom
 	partHeadOther   = nn.DeclineHeadOther
-	partNoTable     = nn.DeclineNoTable
 	partTableHeld   = nn.DeclineTableHeld
 	partNoSample    = nn.DeclineNoSample
 	partNoEmbed     = nn.DeclineNoEmbed
@@ -1786,25 +1785,26 @@ func (g *devTier) servedTable(gr *graph.Graph, R, marks int, cs, planes, rows ba
 	return sv, nil
 }
 
-// tableServes is why the tables of a call of R rows (rag's, a ragged step's)
-// at cache position pos are not the ones the composer is asked for, serves
-// where they are: a graph for each table bs holds (scratchTable), as wide as
-// its rows, the planes and positions each reads, and over several axes each
-// row's positions on them, which the caller states for the call (callAxes).
-// Callers hold g.mu.
-func (g *devTier) tableServes(bs *blockScratch, p *nn.LayerPlan, pos, R int, rag *ragStep) partDecline {
+// tableServes is nil where the composer serves the tables of a call of R
+// rows (rag's, a ragged step's) at cache position pos: a graph for each
+// table bs holds (scratchTable), as wide as its rows, and the planes and
+// positions each reads held. The front end states every table a rotating
+// model turns by and the placement holds their buffers, so a table missing
+// either is the step's error, named. Callers hold g.mu.
+func (g *devTier) tableServes(bs *blockScratch, p *nn.LayerPlan, pos, R int, rag *ragStep) error {
 	for i := range bs.tableCount() {
 		gr := scratchTable(bs, p, i)
-		if gr == nil || gr.Values[gr.Out[0]].Width != bs.p.RopeW() {
-			return partNoTable
+		if gr == nil {
+			return fmt.Errorf("the plan states no graph for rotary table %d", i)
 		}
-		cs, planes, at := g.tableBinds(bs, i)
-		switch {
-		case cs == nil || planes == nil || at == nil:
-			return partTableHeld
+		if w := gr.Values[gr.Out[0]].Width; w != bs.p.RopeW() {
+			return fmt.Errorf("rotary table %d's graph is %d wide, its rows %d", i, w, bs.p.RopeW())
+		}
+		if cs, planes, at := g.tableBinds(bs, i); cs == nil || planes == nil || at == nil {
+			return fmt.Errorf("rotary table %d's buffers are not held (table %v, planes %v, positions %v)", i, cs != nil, planes != nil, at != nil)
 		}
 	}
-	return partServes
+	return nil
 }
 
 // tableCount is how many tables bs holds: cs, and csSWA where the plan has

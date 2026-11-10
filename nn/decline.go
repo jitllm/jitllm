@@ -17,7 +17,6 @@ const (
 	DeclineCaller
 	DeclineNoRoom
 	DeclineHeadOther
-	DeclineNoTable
 	DeclineTableHeld
 	DeclineNoSample
 	DeclineNoEmbed
@@ -50,8 +49,6 @@ func (d Decline) String() string {
 		return "its buffers do not fit the device's budget"
 	case DeclineHeadOther:
 		return "a head graph of another State than the offered one"
-	case DeclineNoTable:
-		return "no table graph from the front end"
 	case DeclineTableHeld:
 		return "a table whose planes or positions the tier does not hold"
 	case DeclineNoSample:
