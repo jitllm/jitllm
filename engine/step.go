@@ -696,6 +696,9 @@ func stepTogether(runs []Run, rows int, ss nn.SessionStepper) ([][]float32, erro
 		defer func() { h.RowLogits, h.Logits, h.LogitRows = false, keep, 0 }()
 	}
 	s0.layerInputs(s0.bple[:rows*c.SideWidth()])
+	if tr, ok := ss.(nn.TokenReader); ok {
+		tr.SetTokens(s0.stepTok)
+	}
 	if !ss.LayersSessions(s0.lo, s0.hi, sess, pos, x, cs, csSWA, h) {
 		why := "no reason given"
 		if e, ok := s0.ld.(nn.ErrReporter); ok {
