@@ -296,7 +296,7 @@ func lcppBand(t *testing.T, src string, layers int, ref [][]float32, seqs ...lcp
 func rowsGolden(src string) string {
 	switch filepath.Base(src) {
 	case "synth-deepseek-yarn-af.gguf", "synth-glm4moe-hf", "synth-qwen2moe-hf", "synth-ernie45moe-hf", "synth-hunyuanmoe-hf",
-		"synth-dots1-hf", "synth-deepseek", "synth-deepseek-lite":
+		"synth-dots1-hf", "synth-deepseek", "synth-deepseek-lite", "synth-deepseek-dense", "synth-kimilinear":
 		return filepath.Join("..", "testdata", "golden", "rows", filepath.Base(src)+".json")
 	}
 	return ""
