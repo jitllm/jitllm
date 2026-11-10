@@ -124,9 +124,9 @@ func (l *Lanes) RowsForm(li int, t Tensors) (*Form, nn.Decline) {
 // ReadyRows makes block li's history ready for the rows at pos its form f
 // runs, or says why f cannot run them: a history past f's key bound, a page
 // outside the arena.
-func (l *Lanes) ReadyRows(li int, f *Form, pos []int) nn.Decline {
+func (l *Lanes) ReadyRows(li int, f *Form, pos []int) (nn.Decline, error) {
 	if cb, _ := l.e.Block(li); cb != nil && cb.Cut > 0 {
-		return nn.DeclineServes
+		return nn.DeclineServes, nil
 	}
 	return l.h.PrepareRows(li, pos, f.Keys)
 }
@@ -506,8 +506,8 @@ func (l *Lanes) rows(li int, t Tensors, x, cs, csSWA []float32, seq, pos []int) 
 	if why != nn.DeclineServes {
 		return why, nil
 	}
-	if why := l.ReadyRows(li, f, pos); why != nn.DeclineServes {
-		return why, nil
+	if why, err := l.ReadyRows(li, f, pos); err != nil || why != nn.DeclineServes {
+		return why, err
 	}
 	c := l.call(x, cs, csSWA, seq, pos, 0, len(pos), len(pos))
 	return nn.DeclineServes, l.Rows(li, f, t, &c)
@@ -542,8 +542,8 @@ func (l *Lanes) sessionRows(li int, t Tensors, x, cs, csSWA []float32, pos []int
 			return why, nil
 		}
 		o.attach()
-		if why := o.l.ReadyRows(li, f, pos[r.a:r.b]); why != nn.DeclineServes {
-			return why, nil
+		if why, err := o.l.ReadyRows(li, f, pos[r.a:r.b]); err != nil || why != nn.DeclineServes {
+			return why, err
 		}
 	}
 	for _, r := range l.oruns {
@@ -575,8 +575,8 @@ func (l *Lanes) recRows(li int, cb *Block, t Tensors, x, cs, csSWA []float32, se
 	}
 	if own == nil && l.keep.whole() {
 		if f := l.recWhole(li, t, cb, seq, pos); f != nil {
-			if why := l.ReadyRows(li, f, pos); why != nn.DeclineServes {
-				return why, nil
+			if why, err := l.ReadyRows(li, f, pos); err != nil || why != nn.DeclineServes {
+				return why, err
 			}
 			if l.ChunkFault && base > 0 {
 				l.clearRec(li, seq[0])
