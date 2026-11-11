@@ -543,3 +543,45 @@ func TestQwen3VLStatesItsTaps(t *testing.T) {
 		t.Errorf("the entry's third op is %+v, want the 8x8 table's resample", op)
 	}
 }
+
+// TestGELUTowersStateTheExactForm converts Janus-Pro's and HunyuanVL's
+// towers and reads back the erf GELU their classes run ("gelu", ACT2FN's
+// GELUActivation), where the file states only GELU and llama.cpp runs its
+// tanh form; and a file whose tower is not GELU is refused, not read as
+// one.
+func TestGELUTowersStateTheExactForm(t *testing.T) {
+	var erf jlm.ExprBuilder
+	erf.GELUErf(jlm.Operand(0))
+	want := jlm.Expr{Terms: erf.T}
+	for _, c := range []struct{ text, mmproj string }{
+		{"minicpmv/Janus-Pro-1B-Q4_K_M.gguf", "minicpmv/mmproj-Janus-Pro-1B-Q8_0.gguf"},
+		{"synth-hunyuanvl.gguf", "mmproj-synth-hunyuanvl.gguf"},
+	} {
+		src, mm := testmodels.Path(c.text), testmodels.Path(c.mmproj)
+		for _, p := range []string{src, mm} {
+			if _, err := os.Stat(p); err != nil {
+				testmodels.Missing(t, "MODEL MISSING: %v (see docs/testing.md) -- this gate proved nothing", err)
+			}
+		}
+		dst := filepath.Join(t.TempDir(), "tower.jlm")
+		if _, err := FromGGUFs(src, mm, dst, jlm.Fingerprint{Writer: "gate"}); err != nil {
+			t.Fatal(err)
+		}
+		f, err := jlm.Open(dst)
+		if err != nil {
+			t.Fatal(err)
+		}
+		v := f.Vision()
+		if v == nil || v.Tower == nil || !reflect.DeepEqual(v.Tower.Block.Act, want) {
+			f.Close()
+			t.Fatalf("%s's tower blocks run %+v, the exact GELU is %+v", c.mmproj, v.Tower.Block.Act, want)
+		}
+		f.Close()
+	}
+	if _, err := erfGELU(&jlm.Vision{Flags: jlm.FlagQuickGELU}, "x"); err == nil {
+		t.Fatal("a tower of QuickGELU was stated as the exact GELU")
+	}
+	if _, err := erfGELU(&jlm.Vision{}, "x"); err == nil {
+		t.Fatal("a tower of SiLU was stated as the exact GELU")
+	}
+}

@@ -4781,7 +4781,8 @@ rounds; on the photo (896x448 -> 384x192) the two agree.
     tower against transformers   1.47e-02 (photo), 4.15e-02 (square); aligner 1.35e-02, 2.94e-02
 
 The tower's number is three things, measured apart on transformers' own tower:
-its MLP's erf GELU is tanh here as in llama.cpp's use_gelu (7e-4); the mmproj's
+its MLP's erf GELU was tanh here as in llama.cpp's use_gelu (7e-4), and is
+the erf form now (`convert.erfGELU`, below); the mmproj's
 weights are Q8_0 (with the tanh, 6.3e-3 and 2.7e-3); the engine's int8
 activations over 24 blocks are the rest. Against llama.cpp's own run of the
 same Q8_0 file on its 384 checkerboard, relative RMS over the dump's 36 values:
@@ -4806,6 +4807,20 @@ The tower pages under budgets of 1 and 3 vision pages bit-identically (23 and
 21 evictions), relocates device -> host -> device with the two device encodes
 identical on CUDA, Vulkan and Metal, and a decode after a picture makes 0 engine
 allocations on the host, CUDA, Vulkan and Metal.
+
+The tower's GELU is the erf form now, as SigLIP's vision config states
+("gelu") and transformers runs it; llama.cpp's use_gelu runs the tanh form
+(docs/divergences.md). The converter states it for Janus-Pro and HunyuanVL
+alike (`convert.erfGELU`, refusing a tower whose flags state another
+activation; `convert.TestGELUTowersStateTheExactForm`, which fails with the
+tanh form stated). On the CPU device (box 43), erf against tanh: Janus-Pro's
+aligner rows against transformers 1.39e-2 against 1.43e-2 on the photo and
+2.20e-2 against 2.95e-2 on the square; synth-hunyuanvl's 20 tower rows
+3.35e-4 against 2.97e-4 from transformers' f32 tower and its logits 5.9e-4
+(one argmax flip, within the one its draws make) against 4.4e-4 -- the int8
+activations' error, which the GELU's form moves either way by less than the
+gate's band. The form is the reference's; the difference is not a speed or
+an accuracy claim.
 
 ## M-RoPE, the 2-D vision rotary as one capability, and Qwen2.5-VL
 
