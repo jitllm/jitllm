@@ -16,12 +16,13 @@ import (
 
 // VideoPlan is how the tower reads a video (jlm.Video): the frames it
 // samples, an odd count's last repeated, two to a picture of the tower; the
-// square both frames of a pair are resized to; and each pair's time as the
-// prompt writes it.
+// square both frames of a pair are resized to; each pair's time as the
+// prompt writes it, or, joined, the positions its pairs stand apart.
 type VideoPlan struct {
 	Frames []int
 	Square Square
 	Stamps []string
+	Stride int
 }
 
 // VideoPlan is the plan for a video of n frames of w x h pixels at fps
@@ -40,28 +41,42 @@ func (tg *TowerGraphs) VideoPlan(n, w, h int, fps float64) (VideoPlan, error) {
 	if !(rate > 0) {
 		rate = float64(v.DefaultFps)
 	}
-	k := min(max(int(float64(n)/rate*float64(v.Fps)), int(v.MinFrames)), int(v.MaxFrames), n)
-	if k < int(r[5]) {
-		return VideoPlan{}, fmt.Errorf("model: a video of %d frames samples %d, fewer than the %d a picture of the tower takes", n, k, r[5])
-	}
 	var p VideoPlan
-	// numpy's linspace(0, n-1, k), rounded half to even.
-	for i := range k {
-		at := float64(n-1) * float64(i) / float64(k-1)
-		if k > 1 {
-			at = float64(i) * (float64(n-1) / float64(k-1))
+	k := n
+	if v.EveryFrame {
+		for i := range n {
+			p.Frames = append(p.Frames, i)
 		}
-		if i == k-1 {
-			at = float64(n - 1)
+	} else {
+		k = min(max(int(float64(n)/rate*float64(v.Fps)), int(v.MinFrames)), int(v.MaxFrames), n)
+		if k < int(r[5]) {
+			return VideoPlan{}, fmt.Errorf("model: a video of %d frames samples %d, fewer than the %d a picture of the tower takes", n, k, r[5])
 		}
-		p.Frames = append(p.Frames, int(math.RoundToEven(at)))
+		// numpy's linspace(0, n-1, k), rounded half to even.
+		for i := range k {
+			at := float64(n-1) * float64(i) / float64(k-1)
+			if k > 1 {
+				at = float64(i) * (float64(n-1) / float64(k-1))
+			}
+			if i == k-1 {
+				at = float64(n - 1)
+			}
+			p.Frames = append(p.Frames, int(math.RoundToEven(at)))
+		}
 	}
 	for len(p.Frames)%pair != 0 {
 		p.Frames = append(p.Frames, p.Frames[len(p.Frames)-1])
 	}
-	for i := 0; i < len(p.Frames); i += pair {
-		t := (float64(p.Frames[i])/rate + float64(p.Frames[i+pair-1])/rate) / 2
-		p.Stamps = append(p.Stamps, strconv.FormatFloat(t, 'f', int(v.StampDigits), 64))
+	switch {
+	case v.Joined && v.PerSecond > 0:
+		p.Stride = int(v.PerSecond) * int(float64(pair)/rate)
+	case v.Joined:
+		p.Stride = 1
+	default:
+		for i := 0; i < len(p.Frames); i += pair {
+			t := (float64(p.Frames[i])/rate + float64(p.Frames[i+pair-1])/rate) / 2
+			p.Stamps = append(p.Stamps, strconv.FormatFloat(t, 'f', int(v.StampDigits), 64))
+		}
 	}
 	ow, oh, err := videoSize(k, w, h, r)
 	if err != nil {
@@ -82,11 +97,16 @@ func (tg *TowerGraphs) VideoSquare(ow, oh int) Square {
 }
 
 // videoSize is the size jlm.PreVideoResize resizes k sampled frames of
-// w x h to.
+// w x h to: each frame alone where the step says so (Ints[6]), the count
+// then read as one and no side lifted.
 func videoSize(k, w, h int, r []int32) (int, int, error) {
 	f, minPix, maxPix, t := float64(r[0]), float64(r[1]), float64(r[2]), float64(r[5])
+	alone := len(r) > 6 && r[6] == 1
+	if alone {
+		k, t = 1, 1
+	}
 	fh, fw := float64(h), float64(w)
-	if h < int(r[0]) || w < int(r[0]) {
+	if !alone && (h < int(r[0]) || w < int(r[0])) {
 		s := max(f/fh, f/fw)
 		fh, fw = math.Trunc(fh*s), math.Trunc(fw*s)
 	}
@@ -126,7 +146,12 @@ func videoEntry(t *jlm.Tower, px0, px1 uint8, grid, extra, side int, f graph.Fac
 	}
 	a.PicBF16 = n.Kind == jlm.PreNormalizeBF16
 	if a.Chain == graph.ChainPIL {
+		// A frame sized alone is a picture of its own size (its area's
+		// bound its own); else the most frames share the area.
 		root := int(math.Sqrt(float64(r[2]) / float64(v.MaxFrames)))
+		if len(r) > 6 && r[6] == 1 {
+			root = int(math.Sqrt(float64(r[2])))
+		}
 		a.Taps = composer.LiveTaps(a.Filter, root)
 		// Its frames run in bands (towerClass.Band); the entry finishes
 		// their sums.
@@ -176,6 +201,25 @@ func (m *Model) VideoSpans(frames []image.Image, fps float64) ([]Span, error) {
 	}
 	toks := append([]int32(nil), v.Before...)
 	var out []Span
+	if v.Joined {
+		// One grid of the pairs, each pair's rows a span of its own and one
+		// frame of it.
+		out = append(out, Span{Tokens: toks})
+		pairs := len(p.Frames) / 2
+		for i := range pairs {
+			f0, f1 := frames[p.Frames[2*i]], frames[p.Frames[2*i+1]]
+			k, err := pairKey(f0, f1, p.Square)
+			if err != nil {
+				return nil, err
+			}
+			g := grid
+			if !g.Zero() {
+				g.T, g.Frame, g.Frames, g.Stride = pairs, i, 1, p.Stride
+			}
+			out = append(out, Span{Picture: f0, Frame: f1, FrameW: p.Square.Ow, FrameH: p.Square.Oh, PicRows: rows, Grid: g, Key: k})
+		}
+		return append(out, Span{Tokens: append([]int32(nil), v.After...)}), nil
+	}
 	for i, st := range p.Stamps {
 		f0, f1 := frames[p.Frames[2*i]], frames[p.Frames[2*i+1]]
 		k, err := pairKey(f0, f1, p.Square)

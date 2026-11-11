@@ -79,12 +79,14 @@ const (
 	// MarkT, MarkH and MarkW are a grid's frames, rows and columns (under
 	// XD-RoPE the columns hold a row's line ends), MarkEnds an XD-RoPE
 	// picture's text-like rows before and after its grid, MarkIndex its
-	// ordinal in the sequence.
+	// ordinal in the sequence, MarkStride the positions a grid's temporal
+	// axis steps from one frame to the next.
 	MarkT
 	MarkH
 	MarkW
 	MarkEnds
 	MarkIndex
+	MarkStride
 	MarkWords
 )
 

@@ -5161,6 +5161,50 @@ a Qwen3-VL mixture's packed experts as [E, out, in] and llama.cpp's converter
 transposes the published [E, in, out]; the fixture is rewritten in the
 published layout before conversion (`experts_as_published`).
 
+## Qwen2-VL's and Qwen2.5-VL's videos
+
+The refusal gate's phrases missed "reads no", so "the tower reads no video"
+stood for Qwen2-VL and Qwen2.5-VL, whose processor takes one, without a
+line in its list. The gate's phrases now take "reads no" and "states no",
+and `convert.TestEveryVideoProcessorIsStated` holds every projector the
+converter states a tower for to an entry naming its reference's video
+processor: stated where it takes one, or a named gap (GLM-4V, InternVL,
+SmolVLM and Gemma 4 take one and are not stated).
+
+Their video is not Qwen3-VL's. transformers' Qwen2VLVideoProcessor (5.17)
+reads every frame (`do_sample_frames` false), sizes each frame alone by the
+picture's smart_resize within `size` (128*28^2 to 768*28^2, with no lift of a
+short side and no frame count), repeats an odd count's last frame, and
+pairs them as Qwen3-VL's do; get_rope_index lays the pairs out as ONE grid
+of T pairs between `<|vision_start|>` and `<|vision_end|>`, no timestamps,
+the temporal axis stepping 1 a pair (Qwen2-VL) or tokens_per_second *
+int(2 / fps) (Qwen2.5-VL: `second_per_grid_ts`, its seconds truncated), the
+text after at the start plus max(H, W) whatever T, and the decode at one
+past the prompt's highest position (`mrope_position_deltas`) -- which a
+temporal axis longer than the text after it moves.
+
+What the converter states (`jlm.Video` with an optional tail: `Joined`,
+`EveryFrame`, `PerSecond`; `PreVideoResize`'s seventh int for a frame
+sized alone) is the class's defaults, the mmproj stating none: the bounds
+of the class, not of the published checkpoint, which has no
+video_preprocessor_config.json and so takes the picture's min_pixels and
+max_pixels in transformers; tokens_per_second the published checkpoints' 2,
+not the class's 4 (docs/divergences.md). qwen-vl-utils, the models' own
+pipeline, samples 2 frames a second and bounds a video's whole pixels; from
+v5.22 transformers does so by default (`cap_pixels_per_frame`). A video's
+pairs are spans of one grid (`ImageGrid.Frame`, `Frames`, `Stride`); the
+mark carries the stride (`graph.MarkStride`), which `OpRopePos` multiplies a
+row's frame by, so every device turns it from the mark as it turns a
+picture. A record this build writes for these towers is refused by an
+older reader (its resize states seven ints), never misread.
+
+The golden is scripts/qwenvlvideogold.py on qwenvlgold.py's fixtures, read
+not rebuilt: five 300x340 frames with a moving disc (resized to 308x336,
+three pairs of 11x12 merged rows), the continuation decoded through the
+cache as generate runs it. On Qwen2.5-VL at half a frame a second the pairs
+stand 8 apart (positions 4, 12, 20 on t), the text after the video ends at
+17, and the first decoded row turns at 21.
+
 ## Qwen3.5's tower, and GLM-4.1V / 4.5V / 4.6V
 
 **Qwen3.5** is Qwen3-VL's tower with no deepstack taps in front of qwen35's

@@ -25,7 +25,7 @@ func marksLayout(r *model.RopeMarks, slot, p0, n int) [][4]int {
 			case graph.MarkText:
 				rows[i] = [4]int{j + base, j + base, j + base, j + base}
 			case graph.MarkGrid:
-				t := base + j/(h*w)
+				t := base + j/(h*w)*int(m[graph.MarkStride])
 				rows[i] = [4]int{t, base + (j/w)%h, base + j%w, t}
 			default:
 				ends := int(m[graph.MarkEnds])

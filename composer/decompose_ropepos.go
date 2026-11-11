@@ -59,12 +59,13 @@ func decomposeRopePos(o graph.Op, c *Context) ([]Prim, error) {
 	f := func(w int) int { return word(&x, m, w) }
 	at, base, kind := f(graph.MarkAt), f(graph.MarkBase), f(graph.MarkKind)
 	h, w, ends, idx := f(graph.MarkH), f(graph.MarkW), f(graph.MarkEnds), f(graph.MarkIndex)
+	stride := f(graph.MarkStride)
 	below := func(v, n int) int { return x.op(OpLess, P, v, x.u(uint32(n))) }
 	j := x.op(OpSub, U, p, at)
 	text := x.op(OpAdd, U, j, base)
 	w1 := x.op(OpMax, U, w, x.u(1))
 	hw := x.op(OpMax, U, x.op(OpMul, U, h, w), x.u(1))
-	t := x.op(OpAdd, U, base, x.op(OpDiv, U, j, hw))
+	t := x.op(OpAdd, U, base, x.op(OpMul, U, x.op(OpDiv, U, j, hw), stride))
 	grid := [ropeAxes]int{t, x.op(OpAdd, U, base, x.op(OpRem, U, x.op(OpDiv, U, j, w1), x.op(OpMax, U, h, x.u(1)))),
 		x.op(OpAdd, U, base, x.op(OpRem, U, j, w1)), t}
 	jj := x.op(OpSub, U, j, ends)

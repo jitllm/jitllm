@@ -42,7 +42,6 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 MODELS = refenv.models()
 TOK = refenv.under("QVL_TOK", "qvl", "hf", "Qwen2-VL-2B-Instruct")
 HFDIR = refenv.under("QVL_HF", "qvl", "fixtures")
-LCPP = refenv.need("LCPP_SRC", "a llama.cpp source checkout")
 PY = sys.executable
 OUT = os.path.join(HERE, "..", "testdata", "golden", "qwenvl")
 NLOGIT = 512
@@ -449,7 +448,7 @@ def build(name):
         if os.path.exists(os.path.join(tokdir, f)):
             shutil.copy(os.path.join(tokdir, f), d)
     for kind, dst in (("", name + ".gguf"), ("--mmproj", "mmproj-" + name + ".gguf")):
-        args = [PY, os.path.join(LCPP, "convert_hf_to_gguf.py"), d, "--outtype", "f32",
+        args = [PY, os.path.join(refenv.lcpp_src(), "convert_hf_to_gguf.py"), d, "--outtype", "f32",
                 "--outfile", os.path.join(MODELS, dst)]
         if kind:
             args.append(kind)

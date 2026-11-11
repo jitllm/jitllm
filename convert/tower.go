@@ -75,7 +75,9 @@ func StatesTower(p jlm.Projector) bool { return towerStater(p) != nil }
 
 // StatesVideo reports whether the converter states how a projector's tower
 // reads a video (jlm.Video).
-func StatesVideo(p jlm.Projector) bool { return p == jlm.ProjQwen3VL }
+func StatesVideo(p jlm.Projector) bool {
+	return p == jlm.ProjQwen2VL || p == jlm.ProjQwen25VL || p == jlm.ProjQwen3VL
+}
 
 // idefics3Tower is SmolVLM's tower as llama.cpp's mtmd runs it, which this
 // container matches: the picture squashed to the tower's square by two-tap
@@ -649,6 +651,11 @@ func qwenVLTower(s *jlm.Source, kind qwenVLKind) (*jlm.Tower, error) {
 			{Code: jlm.TOpLinear, In: []uint16{4}, Bind: []jlm.Role{jlm.RoleVDsFC2, jlm.RoleVDsFC2Bias}},
 		}}})
 	}
+	if kind != qwen3VL && has[jlm.RoleVPatchEmbd2] {
+		if t.Video, err = qwen2vlVideo(s, kind, int32(v.PatchSize), merge, bias(jlm.RoleVPatchEmbd, jlm.RoleVPatchBias)); err != nil {
+			return nil, err
+		}
+	}
 	if kind == qwen3VL {
 		// The table's rows at each patch's cell, in the patches' order.
 		pos := jlm.TowerOp{Code: jlm.TOpPosResample, Bind: []jlm.Role{jlm.RoleVPosEmbd}, Span: side, Width: merge,
@@ -665,6 +672,66 @@ func qwenVLTower(s *jlm.Source, kind qwenVLKind) (*jlm.Tower, error) {
 		return nil, fmt.Errorf("convert: qwen2vl: %w", err)
 	}
 	return t, nil
+}
+
+// Qwen2VLVideoProcessor's class defaults, which an mmproj does not state:
+// every frame read (do_sample_frames false), each frame's area alone
+// between size.shortest_edge and size.longest_edge, no bound on a video's
+// whole (cap_pixels_per_frame unset), and a video of no stated rate at 24
+// frames a second (VideoMetadata.sampled_fps) (docs/divergences.md).
+const (
+	qwen2vlVideoMinPixels  = 128 * 28 * 28
+	qwen2vlVideoMaxPixels  = 28 * 28 * 768
+	qwen2vlVideoDefaultFps = 24
+)
+
+// Qwen2.5-VL's vision_config.tokens_per_second as its published
+// checkpoints state it, which its mmproj does not; the class default is 4
+// (docs/divergences.md).
+const qwen25vlTokensPerSecond = 2
+
+// qwen2vlVideo is how Qwen2-VL's and Qwen2.5-VL's towers read a video, as
+// transformers' Qwen2VLVideoProcessor and the models' get_rope_index do:
+// every frame, an odd count's last repeated, each resized alone by
+// torchvision's antialiased bicubic and normalised as a picture is; each
+// pair the conv3d's two temporal planes as Qwen3-VL's are; in the prompt
+// "<|vision_start|>", every pair's rows as one grid, then
+// "<|vision_end|>", the pairs a position apart on the temporal axis
+// (Qwen2-VL) or tokens_per_second times the whole seconds a pair takes
+// (Qwen2.5-VL).
+func qwen2vlVideo(s *jlm.Source, kind qwenVLKind, patch, merge int32, embd []jlm.Role) (*jlm.Video, error) {
+	v := s.Vision
+	vid := &jlm.Video{
+		DefaultFps: qwen2vlVideoDefaultFps, EveryFrame: true, Joined: true,
+		Pre: []jlm.PreStep{
+			{Kind: jlm.PreVideoResize, Ints: []int32{patch * merge, qwen2vlVideoMinPixels, qwen2vlVideoMaxPixels,
+				int32(jlm.FilterPILBicubic), int32(jlm.PrecTorch), 2, 1}},
+			{Kind: jlm.PreNormalize, Floats: []float32{v.Mean[0], v.Mean[1], v.Mean[2], v.Std[0], v.Std[1], v.Std[2]}},
+		},
+		// The first frame's pixels are value 0, the second's value 1.
+		Entry: jlm.Program{NIn: 2, Out: 7, Ops: []jlm.TowerOp{
+			{Code: jlm.TOpPatchify, In: []uint16{0}, Span: patch, Width: merge},
+			{Code: jlm.TOpPatchify, In: []uint16{1}, Span: patch, Width: merge},
+			{Code: jlm.TOpSub, In: []uint16{3, 2}},
+			{Code: jlm.TOpLinear, In: []uint16{2}, Bind: embd},
+			{Code: jlm.TOpLinear, In: []uint16{4}, Bind: []jlm.Role{jlm.RoleVPatchEmbd2}},
+			{Code: jlm.TOpAdd, In: []uint16{5, 6}},
+		}},
+	}
+	if kind == qwen25VL {
+		vid.PerSecond = qwen25vlTokensPerSecond
+	}
+	var err error
+	if vid.Before, err = markerIDs(s, "<|vision_start|>"); err != nil {
+		return nil, err
+	}
+	if vid.After, err = markerIDs(s, "<|vision_end|>"); err != nil {
+		return nil, err
+	}
+	if err := vid.Valid(); err != nil {
+		return nil, fmt.Errorf("convert: qwen2vl: %w", err)
+	}
+	return vid, nil
 }
 
 // Qwen3-VL's published video_preprocessor_config: two frames sampled a

@@ -25,6 +25,17 @@ func testVideo() *Video {
 	}
 }
 
+// testJoinedVideo is Qwen2.5-VL's: every frame, each sized alone, the
+// pairs one grid two positions a second apart.
+func testJoinedVideo() *Video {
+	v := testVideo()
+	v.Fps, v.MinFrames, v.MaxFrames = 0, 0, 0
+	v.EveryFrame, v.Joined, v.PerSecond = true, true, 2
+	v.Pre[0].Ints = []int32{28, 100352, 602112, int32(FilterPILBicubic), int32(PrecTorch), 2, 1}
+	v.StampBefore, v.StampAfter, v.StampDigits = "", "", 0
+	return v
+}
+
 // TestVideoRoundTrips writes a stated tower's video record into the vision
 // section's tail and reads the same record back, behind an audio tower's
 // and with none; a section with no video reads back with none.
@@ -49,9 +60,26 @@ func TestVideoRoundTrips(t *testing.T) {
 		if !reflect.DeepEqual(got.Tower.Video, v.Tower.Video) {
 			t.Fatalf("audio %v: the video read back as\n%+v\nnot\n%+v", audio, got.Tower.Video, v.Tower.Video)
 		}
+		v.Tower.Video = testJoinedVideo()
+		if got, err = decodeVision(encodeVision(v)); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(got.Tower.Video, v.Tower.Video) {
+			t.Fatalf("audio %v: the joined video read back as\n%+v\nnot\n%+v", audio, got.Tower.Video, v.Tower.Video)
+		}
 		if audio && (got.Audio == nil || got.Audio.Tower == nil) {
 			t.Fatal("the audio tower did not survive the video after it")
 		}
+	}
+	// A flag this build does not know is refused, not read past: the
+	// tail's flags are the word before PerSecond.
+	var w wbuf
+	encodeVideo(&w, testJoinedVideo())
+	w.b[len(w.b)-8] |= 1 << 7
+	r := rbuf{b: w.b}
+	decodeVideo(&r)
+	if r.err == nil {
+		t.Fatal("a video of a flag this build does not read was read")
 	}
 }
 
@@ -72,6 +100,24 @@ func TestVideoRefusesWhatItCannotRead(t *testing.T) {
 		"digits":          func(v *Video) { v.StampDigits = 12 },
 	} {
 		v := testVideo()
+		breaks(v)
+		if v.Valid() == nil {
+			t.Errorf("%s: Valid accepted it", name)
+		}
+	}
+	if err := testJoinedVideo().Valid(); err != nil {
+		t.Fatal(err)
+	}
+	for name, breaks := range map[string]func(*Video){
+		"every frame sampled":     func(v *Video) { v.Fps = 2 },
+		"every frame bounded":     func(v *Video) { v.MaxFrames = 768 },
+		"every frame by count":    func(v *Video) { v.Pre[0].Ints[6] = 0 },
+		"every frame, count read": func(v *Video) { v.Pre[0].Ints = v.Pre[0].Ints[:6] },
+		"alone of three kinds":    func(v *Video) { v.Pre[0].Ints[6] = 2 },
+		"negative per second":     func(v *Video) { v.PerSecond = -1 },
+		"per second, not joined":  func(v *Video) { v.Joined = false },
+	} {
+		v := testJoinedVideo()
 		breaks(v)
 		if v.Valid() == nil {
 			t.Errorf("%s: Valid accepted it", name)

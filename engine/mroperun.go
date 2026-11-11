@@ -101,8 +101,12 @@ func (s *Instance) xdRope(slot, p0 int, spans []model.Span) (next int, err error
 // and says the rotary position the row after the prompt takes: an image's
 // rows a grid from the position its span starts at (graph.MarkGrid), the
 // text after it at that position plus max(H, W) (transformers'
-// get_rope_index: current_pos += max(h, w), whatever T). A single-axis
-// model's rows all advance like text, the image's too.
+// get_rope_index: current_pos += max(h, w), whatever T). A video whose
+// pairs are spans of their own is one grid over them, its frames Stride
+// apart on the temporal axis. The row after the prompt takes one past the
+// highest position the prompt holds where a grid's frames reach past the
+// text (transformers' rope deltas: max + 1 - the prompt's length). A
+// single-axis model's rows all advance like text, the image's too.
 //
 // An embedding span with no grid is rows that advance like text: the
 // embedding seam carries more than images (a vocabulary row looked up
@@ -123,10 +127,17 @@ func (s *Instance) spanRope(slot, p0 int, spans []model.Span) (next int, err err
 		return r, nil
 	}
 	s.rewindRope(slot, p0-1)
-	p := p0
+	p, hi := p0, r-1
+	// open is the grid a video's next pair continues, frame its next frame.
+	var open model.ImageGrid
+	frame := 0
 	for i, sp := range spans {
 		n := sp.N(c.NEmbd)
 		if !sp.Rows() || sp.Grid.Zero() {
+			if open.T > 0 {
+				return 0, fmt.Errorf("model: span %d interrupts a video's grid at frame %d of %d", i, frame, open.T)
+			}
+			hi = max(hi, r+n-1)
 			r, p = r+n, p+n
 			continue
 		}
@@ -135,9 +146,31 @@ func (s *Instance) spanRope(slot, p0 int, spans []model.Span) (next int, err err
 			return 0, fmt.Errorf("model: span %d is %d embedding rows and its grid %dx%dx%d is %d",
 				i, n, g.T, g.H, g.W, g.Rows())
 		}
-		s.rmarks.Add(slot, [graph.MarkWords]uint32{graph.MarkAt: uint32(p), graph.MarkBase: uint32(r), graph.MarkKind: graph.MarkGrid,
-			graph.MarkT: uint32(g.T), graph.MarkH: uint32(g.H), graph.MarkW: uint32(g.W)})
-		r, p = r+max(g.H, g.W), p+n
+		switch {
+		case open.T > 0 && (g.Frame != frame || g.T != open.T || g.H != open.H || g.W != open.W || g.Stride != open.Stride):
+			return 0, fmt.Errorf("model: span %d is frame %d of a %dx%dx%d grid where frame %d of a %dx%dx%d one is next",
+				i, g.Frame, g.T, g.H, g.W, frame, open.T, open.H, open.W)
+		case open.T == 0 && g.Frame != 0:
+			return 0, fmt.Errorf("model: span %d starts a grid at frame %d", i, g.Frame)
+		case open.T == 0:
+			s.rmarks.Add(slot, [graph.MarkWords]uint32{graph.MarkAt: uint32(p), graph.MarkBase: uint32(r), graph.MarkKind: graph.MarkGrid,
+				graph.MarkT: uint32(g.T), graph.MarkH: uint32(g.H), graph.MarkW: uint32(g.W), graph.MarkStride: uint32(g.Stride)})
+			hi = max(hi, r+(g.T-1)*g.Stride, r+max(g.H, g.W)-1)
+		}
+		p += n
+		if g.Last() {
+			open, frame = model.ImageGrid{}, 0
+			r += max(g.H, g.W)
+			s.rmarks.Add(slot, [graph.MarkWords]uint32{graph.MarkAt: uint32(p), graph.MarkBase: uint32(r), graph.MarkKind: graph.MarkText})
+			continue
+		}
+		open, frame = g, g.Frame+g.Frames
+	}
+	if open.T > 0 {
+		return 0, fmt.Errorf("model: the prompt ends at frame %d of a video's %d", frame, open.T)
+	}
+	if hi+1 > r {
+		r = hi + 1
 		s.rmarks.Add(slot, [graph.MarkWords]uint32{graph.MarkAt: uint32(p), graph.MarkBase: uint32(r), graph.MarkKind: graph.MarkText})
 	}
 	s.sendMarks()

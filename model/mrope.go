@@ -33,10 +33,26 @@ type ImageGrid struct {
 	// each row of the merged grid and wraps the picture in a begin and an end
 	// row (Line 1, Ends 1). Zero for every other projector.
 	Line, Ends int
+	// Frame and Frames, where Frames is set, are the frames of the grid a
+	// span holds, from frame Frame: a video whose pairs are spans of their
+	// own and one grid together (jlm.Video.Joined). Zero Frames is all T.
+	Frame, Frames int
+	// Stride is the positions the temporal axis steps from one frame to the
+	// next (jlm.Video.PerSecond); a grid of one frame reads none.
+	Stride int
 }
 
-// Rows is how many embedding rows the grid covers.
-func (g ImageGrid) Rows() int { return g.T*g.H*(g.W+g.Line) + 2*g.Ends }
+// Rows is how many embedding rows the span of the grid covers.
+func (g ImageGrid) Rows() int {
+	f := g.T
+	if g.Frames > 0 {
+		f = g.Frames
+	}
+	return f*g.H*(g.W+g.Line) + 2*g.Ends
+}
+
+// Last says the span holds the grid's last frame.
+func (g ImageGrid) Last() bool { return g.Frames == 0 || g.Frame+g.Frames == g.T }
 
 func (g ImageGrid) Zero() bool { return g == ImageGrid{} }
 
