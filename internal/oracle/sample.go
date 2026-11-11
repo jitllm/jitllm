@@ -138,6 +138,37 @@ func typicalCut(p []float64, in []bool, typ float64) (keep []bool, margin float6
 	return keep, margin
 }
 
+// TopNSigma is v with llama.cpp's top-n-sigma: every value under the largest
+// less n standard deviations of the finite values at -Inf (none where n is
+// not above 0), and how near a value is to that edge.
+func TopNSigma(v []float32, n float64) ([]float32, float64) {
+	out := append([]float32(nil), v...)
+	if n <= 0 {
+		return out, math.Inf(1)
+	}
+	mx, sum, cnt := math.Inf(-1), 0.0, 0
+	for _, x := range v {
+		if !math.IsInf(float64(x), -1) {
+			mx, sum, cnt = max(mx, float64(x)), sum+float64(x), cnt+1
+		}
+	}
+	mean, ss := sum/float64(cnt), 0.0
+	for _, x := range v {
+		if !math.IsInf(float64(x), -1) {
+			ss += (float64(x) - mean) * (float64(x) - mean)
+		}
+	}
+	edge := mx - n*math.Sqrt(ss/float64(cnt))
+	margin := math.Inf(1)
+	for i, x := range v {
+		margin = min(margin, math.Abs(float64(x)-edge)/(1+math.Abs(edge)))
+		if float64(x) < edge {
+			out[i] = float32(math.Inf(-1))
+		}
+	}
+	return out, margin
+}
+
 // xtcCut is llama.cpp's XTC over the survivors surv (in their order, largest
 // first) with probabilities p, the share of their softmax at temperature 1:
 // those at or above thr, every one but the last of them, where two or more

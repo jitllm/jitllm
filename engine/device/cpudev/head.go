@@ -53,8 +53,8 @@ type Head struct {
 	// variant's (then k, then the same three).
 	walkArgs [8]float32
 	rowArgs  [2]float32
-	cutArgs  [7]float32
-	cutKArgs [8]float32
+	cutArgs  [8]float32
+	cutKArgs [9]float32
 	// ids is the row's ids, 0 to the vocabulary's last, which the draws with
 	// no top-k read.
 	ids []uint32
@@ -299,7 +299,7 @@ func ext(a *nn.DrawArgs) (typ, xtc float32, on bool) {
 	if a.XTC > 0 {
 		xtc, on = a.XTC, true
 	}
-	return typ, xtc, on
+	return typ, xtc, on || a.Sigma > 0
 }
 
 // Draw is a's sampled token over logits at the uniform u: a top-k draw's
@@ -310,7 +310,7 @@ func ext(a *nn.DrawArgs) (typ, xtc float32, on bool) {
 // False where none serves it.
 func (h *Head) Draw(logits []float32, a nn.DrawArgs, u float32) (int32, bool) {
 	n := len(logits)
-	if a.TopK > 0 && a.TopK < n && a.TopK <= nn.SampleMaxK {
+	if a.TopK > 0 && a.TopK < n && a.TopK <= nn.SampleMaxK && a.Sigma <= 0 {
 		return h.walk(logits, &a, u)
 	}
 	typ, xtc, typOn := ext(&a)
@@ -319,16 +319,16 @@ func (h *Head) Draw(logits []float32, a nn.DrawArgs, u float32) (int32, bool) {
 	switch {
 	case a.TopK > 0 && a.TopK < n:
 		p, words = &h.p.CutK, unsafe.Pointer(&h.cutKArgs[0])
-		h.cutKArgs = [8]float32{a.InvTemp, a.TopP, a.MinP, u, float32(a.TopK), typ, xtc, 1}
+		h.cutKArgs = [9]float32{a.InvTemp, a.TopP, a.MinP, u, float32(a.TopK), a.Sigma, typ, xtc, 1}
 		if typOn {
 			p = &h.p.CutKTyp
 		}
 	case typOn:
 		p, words = &h.p.CutTyp, unsafe.Pointer(&h.cutArgs[0])
-		h.cutArgs = [7]float32{a.InvTemp, a.TopP, a.MinP, u, typ, xtc, 1}
+		h.cutArgs = [8]float32{a.InvTemp, a.TopP, a.MinP, u, a.Sigma, typ, xtc, 1}
 	case a.MinP > 0 || a.TopP < 1:
 		p, words = &h.p.Cut, unsafe.Pointer(&h.cutArgs[0])
-		h.cutArgs = [7]float32{a.InvTemp, a.TopP, a.MinP, u}
+		h.cutArgs = [8]float32{a.InvTemp, a.TopP, a.MinP, u}
 	}
 	f, _, why := h.form(p, false)
 	if why != nn.DeclineServes {
@@ -372,7 +372,7 @@ func (h *Head) Dist(logits []float32, a nn.DrawArgs, pall []float32) (dense bool
 		return false, nil, nil, false
 	}
 	topK := a.TopK > 0 && a.TopK < n
-	bounded := topK && a.TopK <= nn.SampleMaxK
+	bounded := topK && a.TopK <= nn.SampleMaxK && a.Sigma <= 0
 	typ, xtc, typOn := ext(&a)
 	p := &h.p.CutProb
 	switch {
@@ -397,10 +397,10 @@ func (h *Head) Dist(logits []float32, a nn.DrawArgs, pall []float32) (dense bool
 			unsafe.Pointer(&h.probVals[0]), unsafe.Pointer(&h.probIDs[0]))
 	} else {
 		words := unsafe.Pointer(&h.cutArgs[0])
-		h.cutArgs = [7]float32{a.InvTemp, a.TopP, a.MinP, 0, typ, xtc, a.XTCMix}
+		h.cutArgs = [8]float32{a.InvTemp, a.TopP, a.MinP, 0, a.Sigma, typ, xtc, a.XTCMix}
 		if topK {
 			words = unsafe.Pointer(&h.cutKArgs[0])
-			h.cutKArgs = [8]float32{a.InvTemp, a.TopP, a.MinP, 0, float32(a.TopK), typ, xtc, a.XTCMix}
+			h.cutKArgs = [9]float32{a.InvTemp, a.TopP, a.MinP, 0, float32(a.TopK), a.Sigma, typ, xtc, a.XTCMix}
 		}
 		h.run(f, nil, 1, unsafe.Pointer(&logits[0]), win, unsafe.Pointer(&h.pen[0]), unsafe.Pointer(&h.ids[0]), words,
 			unsafe.Pointer(&pall[0]))

@@ -266,6 +266,12 @@ func TestLlamaRefusals(t *testing.T) {
 	if smp := f.opts().Sampling; smp.XTCProbability != 0.5 || smp.XTCThreshold != 0.2 {
 		t.Errorf("XTC reached the sampler as %v and %v", smp.XTCProbability, smp.XTCThreshold)
 	}
+	if code, out := llamaPost(t, s, "/completion", `{"prompt":"x","top_n_sigma":1.5}`); code != 200 {
+		t.Fatalf("top_n_sigma: %d %v", code, out)
+	}
+	if got := f.opts().Sampling.TopNSigma; got != 1.5 {
+		t.Errorf("top_n_sigma reached the sampler as %v", got)
+	}
 	// The error body is llama-server's.
 	_, out := llamaPost(t, s, "/completion", `{"prompt":"x","mirostat":1}`)
 	e := out["error"].(map[string]any)

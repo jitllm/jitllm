@@ -169,7 +169,7 @@ func (s *Instance) greedy(logits []float32) (int32, bool) {
 func (s *Instance) drawArgs(smp *Sampler, xtc, mix float32) nn.DrawArgs {
 	topp, minp := smp.cuts()
 	a := nn.DrawArgs{TopK: smp.TopK, InvTemp: float32(1 / smp.Temp), TopP: topp, MinP: minp, Typical: float32(smp.TypicalP),
-		XTC: xtc, XTCMix: mix, Penalty: smp.penalties()}
+		XTC: xtc, XTCMix: mix, Sigma: float32(smp.TopNSigma), Penalty: smp.penalties()}
 	if !a.Penalty.Off() {
 		a.Window = smp.window(s.c.NVocab)
 	}
@@ -193,7 +193,7 @@ func (s *Instance) distOf(logits []float32, smp *Sampler, d *specDist) bool {
 	if s.heads == nil || n != s.c.NVocab {
 		return false
 	}
-	bounded := smp.TopK > 0 && smp.TopK < n && smp.TopK <= nn.SampleMaxK
+	bounded := smp.TopK > 0 && smp.TopK < n && smp.TopK <= nn.SampleMaxK && smp.TopNSigma <= 0
 	if !bounded {
 		d.pall = grow32(d.pall, n)
 	}

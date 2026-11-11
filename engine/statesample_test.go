@@ -50,6 +50,8 @@ func TestStateSampleIsComposed(t *testing.T) {
 		{"top-k past the walk and typical-p", Sampler{Temp: 0.9, TopK: 1000, TypicalP: 0.9, MinP: 0.01, Seed: 37}},
 		{"XTC", Sampler{Temp: 1, XTCProbability: 0.6, XTCThreshold: 0.05, Seed: 41}},
 		{"top-k and XTC", Sampler{Temp: 1.1, TopK: 40, XTCProbability: 0.5, XTCThreshold: 0.1, MinP: 0.02, Seed: 43}},
+		{"top-n-sigma", Sampler{Temp: 1, TopNSigma: 1.5, Seed: 47}},
+		{"top-k and top-n-sigma", Sampler{Temp: 1.2, TopK: 40, TopNSigma: 1, TopP: 0.9, Seed: 53}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			st := testInstance(t, m, 96)
@@ -115,12 +117,19 @@ func sampleRef(logits []float32, hist []int, s Sampler, u, xtc float64) (int32, 
 	}
 	invT := float32(1 / s.Temp)
 	topp, minp := s.cuts()
+	sig := math.Inf(1)
+	if s.TopNSigma > 0 {
+		v := append([]float32(nil), logits...)
+		oracle.PenalizeOnce(v, hist, pen)
+		logits, sig = oracle.TopNSigma(v, s.TopNSigma)
+		hist, pen = nil, 1
+	}
 	if s.TopK > 0 && s.TopK < len(logits) {
 		v := append([]float32(nil), logits...)
 		oracle.PenalizeOnce(v, hist, pen)
 		tok, mg := oracle.SampleWalk(v, s.TopK, s.TopK, float64(invT), float64(topp), float64(minp), float64(s.typical()), xtc, u)
-		return int32(tok), mg
+		return int32(tok), min(mg, sig)
 	}
 	tok, mg := oracle.SampleCut(logits, hist, pen, invT, float64(topp), float64(minp), float64(s.typical()), xtc, u)
-	return int32(tok), mg
+	return int32(tok), min(mg, sig)
 }

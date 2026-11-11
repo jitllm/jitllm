@@ -231,8 +231,11 @@ type DrawArgs struct {
 	// threshold this draw, 0 for none; XTCMix the probability a
 	// distribution mixes its cut in at.
 	Typical, XTC, XTCMix float32
-	Penalty              Penalties
-	Window               []float32
+	// Sigma is top-n-sigma's n, off where not above 0: a draw with it runs
+	// the cut's typical forms, top-k or not.
+	Sigma   float32
+	Penalty Penalties
+	Window  []float32
 }
 
 // Penalties are a draw's penalties over the tokens its window holds, as
