@@ -175,8 +175,10 @@ func (s *SampleRow) Build() *Graph {
 // is nearest the row's entropy, in that order, up to the first whose mass up
 // to and including it passes typical-p; the cuts read their softmax
 // renormalized, and the survivors are walked whether or not a cut fires.
-// XTC follows the cuts (sample.cut's last three words are typical-p, XTC's
-// threshold and its probability): of the survivors at or above the threshold
+// Before them all, top-n-sigma: every logit under the largest less n
+// standard deviations of the row's finite logits goes to -Inf. sample.cut's
+// last four words are n (on above 0), typical-p, XTC's threshold and its
+// probability. XTC follows the cuts: of the survivors at or above the threshold
 // in their softmax, all but the last in the order, where two or more are;
 // with Prob the distribution is the mixture, XTC's at its probability. Its inputs are SampleRow's,
 // with sample.cut (1/T, top-p +Inf where off, min-p 0 where off, then u) for
@@ -206,7 +208,7 @@ func (s *SampleCut) Build() *Graph {
 		words = 5
 	}
 	if s.Typical {
-		words += 3
+		words += 4
 	}
 	cut := b.In("sample.cut", words)
 	e := sampleEmitter{b}
@@ -215,6 +217,23 @@ func (s *SampleCut) Build() *Graph {
 	id := e.mapc(MapMul, 1, "sample.idf", n, ids)
 	notv := func(name string, w int, x ValueID) ValueID {
 		return e.mapc(MapAdd, 1, name, w, e.mapc(MapMul, -1, name+".neg", w, x))
+	}
+	if s.Typical {
+		// Top-n-sigma: the finite logits' mean and deviation, the threshold
+		// the largest less n of them (-Inf where n is not above 0).
+		ns := e.word(cut, words-4, "sample.sigma")
+		fin := notv("sample.sig.fin", n, e.mapc(MapLess, -math.MaxFloat32, "sample.sig.inf", n, v))
+		cnt := e.one(OpReduce, "sample.sig.count", 1, Attrs{Fn: MapAdd}, fin)
+		mean := e.mapc(MapDiv, 0, "sample.sig.mean", 1, e.one(OpReduce, "sample.sig.sum", 1, Attrs{Fn: MapAdd},
+			e.mapc(MapWhere, 0, "sample.sig.fv", n, fin, v)), cnt)
+		dv := e.mapc(MapWhere, 0, "sample.sig.dv", n, fin, e.mapc(MapSub, 0, "sample.sig.d", n, v, mean))
+		dev := e.mapc(MapSqrt, 0, "sample.sig.dev", 1, e.mapc(MapDiv, 0, "sample.sig.var", 1,
+			e.one(OpReduce, "sample.sig.ss", 1, Attrs{Fn: MapAdd}, e.mapc(MapMul, 0, "sample.sig.d2", n, dv, dv)), cnt))
+		vmax := e.one(OpReduce, "sample.sig.max", 1, Attrs{Fn: MapMax}, v)
+		on := notv("sample.sig.on", 1, e.mapc(MapLess, math.SmallestNonzeroFloat32, "sample.sig.off", 1, ns))
+		thr := e.mapc(MapWhere, math.Inf(-1), "sample.sig.thr", 1, on,
+			e.mapc(MapSub, 0, "sample.sig.edge", 1, vmax, e.mapc(MapMul, 0, "sample.sig.ndev", 1, ns, dev)))
+		v = e.mapc(MapWhere, math.Inf(-1), "sample.sig.v", n, notv("sample.sig.keep", n, e.mapc(MapLess, 0, "sample.sig.under", n, v, thr)), v)
 	}
 	order := e.softmax(v, "sample.q1")
 	all := e.mapc(MapLess, 2, "sample.all", n, order)

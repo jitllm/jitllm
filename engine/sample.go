@@ -12,8 +12,8 @@ import (
 // itself is the composed forms' (Instance.Sample: graph.Sample, SampleWalk,
 // SampleRow and SampleCut), which read the window as a count row.
 //
-// The filters run penalty, top-k, typical-p, top-p, min-p, XTC, then the
-// temperature, llama.cpp's order: typical-p, top-p and min-p cut the
+// The filters run penalty, top-n-sigma, top-k, typical-p, top-p, min-p,
+// XTC, then the temperature, llama.cpp's order: typical-p, top-p and min-p cut the
 // candidates' softmax at temperature 1, each over what the one before it
 // left, and the temperature shapes only the draw over what survives them. Equal logits are ordered
 // higher logit first, lower id on a tie.
@@ -27,6 +27,7 @@ type Sampler struct {
 	// probability a draw cuts the survivors at or above the threshold but
 	// the least; off at probability 0 or a threshold past 0.5.
 	XTCProbability, XTCThreshold float64
+	TopNSigma                    float64 // 0 or below = disabled; llama.cpp's top_n_sigma
 	RepeatPen                    float64 // 1 = disabled
 	RepeatLastN                  int     // how far back the penalties look; 0 = 64
 	// PresencePen and FreqPen are llama.cpp's presence and frequency
@@ -100,9 +101,10 @@ func (s *Sampler) penalties() nn.Penalties {
 }
 
 // Bounded reports whether a draw over n logits is a top-k draw, the one a
-// device can select for (nn.Head.SampleK): sampled, with 0 < TopK < n.
+// device can select for (nn.Head.SampleK): sampled, with 0 < TopK < n and no
+// top-n-sigma, which reads the whole row.
 func (s *Sampler) Bounded(n int) bool {
-	return s != nil && s.Temp > 0 && s.TopK > 0 && s.TopK < n && s.TopK <= MaxTopK
+	return s != nil && s.Temp > 0 && s.TopK > 0 && s.TopK < n && s.TopK <= MaxTopK && s.TopNSigma <= 0
 }
 
 // MaxTopK is above every vocabulary a container states, so a top-k past it is

@@ -70,7 +70,7 @@ func TestComposedCPUSampleProb(t *testing.T) {
 					vals[in["sample.ids"]] = append([]uint32(nil), ids...)
 					vals[in["sample.cut"]] = []uint32{f(invT), f(topp), f(minp), 0}
 					if a.typ {
-						vals[in["sample.cut"]] = append(vals[in["sample.cut"]], f(typ), f(xtc), f(mix))
+						vals[in["sample.cut"]] = append(vals[in["sample.cut"]], 0, f(typ), f(xtc), f(mix))
 					}
 				}
 				if err := runCPUValues(hostArm(), codes, g, vals, [3][]uint32{}); err != nil {
