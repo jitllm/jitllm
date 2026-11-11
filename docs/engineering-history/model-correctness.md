@@ -6879,6 +6879,20 @@ and the draws:
 Gemma 4's one argmax flip on the CPU device and under CUDA sits within the
 two its draws make; every other arm flips none past a near tie.
 
+LFM2-VL's model joined the gate after, its golden the fixture's own
+(scripts/lfm2visiongold.py --fixture writes the processor's ids, the
+continuation and transformers' logits beside the fixture, with every piece's
+projector rows at f32 and at the engine's arithmetic): the picture cut into
+3x2 tiles and a thumbnail, each piece's marker row from the container's
+table and then its rows, 1783 rows in all. On box 42, the rows 2.2e-4 from
+transformers' f32 rows, the six decoded rows' logits 5.9e-4 on the CPU
+device, 5.8e-4 under CUDA and Vulkan, every block on a V100, against a bound
+of 1.1e-3, no flips; the rows reversed 1374x the bound. The marker rows are
+held to the table exactly by `TestLFM2VLTowerMatchesTransformers`; zeroed,
+seven rows among 1783 move the logits by less than the tower's own error
+does (5.6e-4 against a bound of 1.1e-3), so they are not this gate's
+violation.
+
 ## Pixtral / Mistral 3 vision: Qwen2.5-VL's kit with three pieces of its own
 
 Mistral Small 3.x, Ministral 3 and Pixtral-12B share llama.cpp's projector

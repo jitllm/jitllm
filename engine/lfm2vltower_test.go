@@ -4,9 +4,11 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"image/color"
 	"image/png"
 	"math"
 	"os"
+	"slices"
 	"testing"
 
 	"github.com/jitllm/jitllm/format/jlm"
@@ -115,28 +117,7 @@ func TestLFM2VLTowerMatchesTransformers(t *testing.T) {
 	}
 	emb := readF32File(t, base+".emb_a8")
 	D := int(m.Container.Vision().ProjDim)
-	var marks []float32
-	for i := range m.Container.Entries() {
-		e := &m.Container.Entries()[i]
-		if e.Role != jlm.RoleVTileMarks {
-			continue
-		}
-		typ, ok := jlm.SourceType(e.Type)
-		qs, err := m.Container.ReadPayload(e)
-		if !ok || err != nil {
-			t.Fatalf("the marker table of %v: %v", e.Type, err)
-		}
-		marks = make([]float32, int(e.Dims[0])*int(e.Dims[1]))
-		if err := quant.Dequant32(typ, qs, marks); err != nil {
-			t.Fatal(err)
-		}
-		if int(e.Dims[0]) != D {
-			t.Fatalf("the marker table's rows are %d wide, not %d", e.Dims[0], D)
-		}
-	}
-	if marks == nil {
-		t.Fatal("the container has no marker table")
-	}
+	marks := tileMarks(t, m)
 	var got, want []float32
 	pos, ref := 0, 0
 	worstMark := 0.0
@@ -181,6 +162,115 @@ func TestLFM2VLTowerMatchesTransformers(t *testing.T) {
 	if n == len(g.Pieces) {
 		t.Fatal("VIOLATION: a tolerance of a million still cuts the picture into the processor's pieces")
 	}
+}
+
+// tileMarks is m's marker table: a row for each piece marker the tower
+// writes before a piece's rows, the text table's row of its token.
+func tileMarks(t *testing.T, m *model.Model) []float32 {
+	t.Helper()
+	D := int(m.Container.Vision().ProjDim)
+	for i := range m.Container.Entries() {
+		e := &m.Container.Entries()[i]
+		if e.Role != jlm.RoleVTileMarks {
+			continue
+		}
+		typ, ok := jlm.SourceType(e.Type)
+		qs, err := m.Container.ReadPayload(e)
+		if !ok || err != nil {
+			t.Fatalf("the marker table of %v: %v", e.Type, err)
+		}
+		marks := make([]float32, int(e.Dims[0])*int(e.Dims[1]))
+		if err := quant.Dequant32(typ, qs, marks); err != nil {
+			t.Fatal(err)
+		}
+		if int(e.Dims[0]) != D {
+			t.Fatalf("the marker table's rows are %d wide, not %d", e.Dims[0], D)
+		}
+		return marks
+	}
+	t.Fatal("the container has no marker table")
+	return nil
+}
+
+// lfm2E2EGolden is synth-lfm2vl's end-to-end record from what
+// scripts/lfm2visiongold.py --fixture writes beside the fixture: the
+// processor's ids around the picture's run and the run itself, the
+// continuation and transformers' logits after the prompt, the picture, and
+// every piece's projector rows (f32 and at the engine's arithmetic).
+func lfm2E2EGolden(t *testing.T) *towerE2EGolden {
+	t.Helper()
+	base := testmodels.Path("synth-lfm2vl-gold/picture")
+	raw, err := os.ReadFile(base + ".json")
+	if err != nil {
+		testmodels.Missing(t, "GOLDEN MISSING: %v -- run scripts/lfm2visiongold.py --fixture (RULE 11)", err)
+	}
+	var r struct {
+		IDs        []int32    `json:"ids"`
+		ImageToken int32      `json:"image_token"`
+		Cont       []int32    `json:"cont"`
+		Logits     []e2eLogit `json:"logits"`
+	}
+	if err := json.Unmarshal(raw, &r); err != nil {
+		t.Fatal(err)
+	}
+	first, last := slices.Index(r.IDs, r.ImageToken), -1
+	for i, id := range r.IDs {
+		if id == r.ImageToken {
+			last = i
+		}
+	}
+	if first < 1 {
+		t.Fatalf("the golden's ids hold no picture run after a marker (the first <image> at %d)", first)
+	}
+	f, err := os.Open(base + ".png")
+	if err != nil {
+		testmodels.Missing(t, "PICTURE MISSING: %v", err)
+	}
+	img, err := png.Decode(f)
+	f.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := &towerE2EGolden{Pre: r.IDs[:first-1], Rows: r.IDs[first-1 : last+1], Post: r.IDs[last+1:], Cont: r.Cont, Logits: r.Logits}
+	b := img.Bounds()
+	g.Image.W, g.Image.H = b.Dx(), b.Dy()
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			c := color.NRGBAModel.Convert(img.At(x, y)).(color.NRGBA)
+			g.Image.RGB = append(g.Image.RGB, c.R, c.G, c.B)
+		}
+	}
+	g.Image.Embd, g.Image.EmbdA8 = readF32File(t, base+".emb"), readF32File(t, base+".emb_a8")
+	return g
+}
+
+// lfm2Lay lays synth-lfm2vl's projector rows as its picture's span: each
+// piece's marker row, then the piece's rows. TestLFM2VLTowerMatchesTransformers
+// holds the marker rows to the table exactly: seven rows among 1783 move
+// the logits by less than the tower's own error does.
+func lfm2Lay(t *testing.T, m *model.Model, g *towerE2EGolden, rows []float32, _ []int) []float32 {
+	t.Helper()
+	D, tg, marks := m.Cfg.NEmbd, m.Tower, tileMarks(t, m)
+	var out []float32
+	at := 0
+	for i := 0; ; i++ {
+		sq, n := tg.Square(g.Image.W, g.Image.H, i)
+		if i >= n {
+			break
+		}
+		k := tg.SquareOut(sq) - 1
+		if (at+k)*D > len(rows) {
+			t.Fatalf("piece %d's %d rows overrun the reference's %d", i, k, len(rows)/D)
+		}
+		out = append(out, marks[(sq.Mark-1)*D:sq.Mark*D]...)
+		out = append(out, rows[at*D:(at+k)*D]...)
+		at += k
+	}
+	if at*D != len(rows) || len(out) != len(g.Rows)*D {
+		t.Fatalf("the pieces lay %d of the reference's %d rows into %d span rows, the processor's run %d",
+			at, len(rows)/D, len(out)/D, len(g.Rows))
+	}
+	return out
 }
 
 // TestLFM2VLTowerRunsOnTheCard places synth-lfm2vl's tower on each device,

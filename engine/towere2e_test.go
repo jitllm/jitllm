@@ -52,6 +52,9 @@ type e2eLogit struct {
 // towerE2E is one fixture of TestStatedTowerMatchesTransformersEndToEnd.
 type towerE2E struct {
 	name, dir, script string
+	// load reads a golden kept beside the fixture rather than in
+	// testdata/golden/dir (nil is testdata's).
+	load func(t *testing.T) *towerE2EGolden
 	// around is the reference's ids before and after the picture's rows.
 	around func(g *towerE2EGolden) (pre, post []int32)
 	// lay is the picture's span rows for the tower's rows in the reference's
@@ -63,7 +66,8 @@ type towerE2E struct {
 }
 
 // TestStatedTowerMatchesTransformersEndToEnd holds Gemma 4's, Gemma 3n's,
-// Llama 4's, Phi-4's and Pixtral's models to transformers from the pixels:
+// Llama 4's, Phi-4's, Pixtral's and LFM2-VL's models to transformers from
+// the pixels:
 // the reference's prompt around the picture, the picture encoded by the
 // prefill through the stated tower, its rows attending as the container
 // states (jlm.TowerSpan.Bidir, jlm.Config.BidirLayers), then the
@@ -92,6 +96,7 @@ func TestStatedTowerMatchesTransformersEndToEnd(t *testing.T) {
 			}},
 		{name: "synth-phi4v", dir: "phi4v", script: "phi4visiongold.py", around: asIs, lay: same},
 		{name: "synth-pixtral", dir: "pixtral", script: "pixtralgold.py", around: asIs, lay: pixtralLay, violations: pixtralViolations},
+		{name: "synth-lfm2vl", script: "lfm2visiongold.py --fixture", load: lfm2E2EGolden, around: asIs, lay: lfm2Lay},
 	} {
 		t.Run(c.name, func(t *testing.T) { statedTowerEndToEnd(t, c) })
 	}
@@ -112,13 +117,17 @@ type e2eArm struct {
 }
 
 func statedTowerEndToEnd(t *testing.T, c towerE2E) {
-	raw, err := os.ReadFile(filepath.Join("..", "testdata", "golden", c.dir, c.name+".json"))
-	if err != nil {
-		t.Fatalf("GOLDEN MISSING: %v -- run scripts/%s", err, c.script)
-	}
 	g := &towerE2EGolden{}
-	if err := json.Unmarshal(raw, g); err != nil {
-		t.Fatal(err)
+	if c.load != nil {
+		g = c.load(t)
+	} else {
+		raw, err := os.ReadFile(filepath.Join("..", "testdata", "golden", c.dir, c.name+".json"))
+		if err != nil {
+			t.Fatalf("GOLDEN MISSING: %v -- run scripts/%s", err, c.script)
+		}
+		if err := json.Unmarshal(raw, g); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if len(g.Logits) < 2 || len(g.Logits) > len(g.Cont)+1 || len(g.Image.EmbdA8) != len(g.Image.Embd) {
 		t.Fatalf("the golden has %d logit rows for %d decoded ids and rows of %d and %d values: it holds no end-to-end record",

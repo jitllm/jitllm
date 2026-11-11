@@ -152,8 +152,8 @@ reference's pixels and rows at the engine's arithmetic, and run on a card
 "open":
 
 - the text model and its tower together against transformers' logits for
-  Janus, MiniCPM-V and LFM2-VL (the Qwen family, GLM-4.1V, HunyuanVL,
-  Kimi-VL, Gemma 4, Gemma 3n, Llama 4, Phi-4 and Pixtral have one);
+  Janus and MiniCPM-V (the Qwen family, GLM-4.1V, HunyuanVL, Kimi-VL,
+  Gemma 4, Gemma 3n, Llama 4, Phi-4, Pixtral and LFM2-VL have one);
 - the real checkpoints against their reference: Qwen2.5-VL-3B, HunyuanOCR,
   Kimi-VL (Moonshot's code), Gemma 4, Gemma 3n, Phi-4, Pixtral and LFM2;
   what remains of them is the colour-naming gates over a quadrant picture;
