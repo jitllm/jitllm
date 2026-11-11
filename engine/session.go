@@ -547,3 +547,47 @@ func (s *Instance) As(sess *Session, f func(*Instance)) {
 	}
 	f(s)
 }
+
+// HistorySpans is the session's history as a prompt that rebuilds it: each
+// run of token ids a span of them, and each picture's rows the span rows
+// gives for the key they were named by (model.Span.Key), so a fresh session
+// prefilling them holds what this one holds. Rows nothing named
+// (ForwardEmbd, an embedding span with no key) have nothing to rebuild them
+// from.
+func (s *Session) HistorySpans(rows func(model.RowsKey) (model.Span, bool)) ([]model.Span, error) {
+	kc := s.kv
+	if len(kc.seq) != s.pos {
+		return nil, fmt.Errorf("model: the history names %d of its %d positions; the rest are rows nothing named",
+			len(kc.seq), s.pos)
+	}
+	var out []model.Span
+	for i := 0; i < len(kc.seq); {
+		if kc.seq[i] >= 0 {
+			j := i
+			for j < len(kc.seq) && kc.seq[j] >= 0 {
+				j++
+			}
+			out = append(out, model.Span{Tokens: slices.Clone(kc.seq[i:j])})
+			i = j
+			continue
+		}
+		k := kc.named[-1-kc.seq[i]].key
+		sp, ok := rows(k)
+		n := 0
+		if ok {
+			n = sp.N(s.model.Cfg.NEmbd)
+		}
+		if n == 0 || i+n > len(kc.seq) {
+			return nil, fmt.Errorf("model: position %d holds a picture's rows, and no span of them is given", i)
+		}
+		for j := range n {
+			v := kc.seq[i+j]
+			if v >= 0 || kc.named[-1-v].key != k || kc.named[-1-v].row != int32(j) {
+				return nil, fmt.Errorf("model: positions %d to %d hold rows other than the given picture's", i, i+n)
+			}
+		}
+		out = append(out, sp)
+		i += n
+	}
+	return out, nil
+}

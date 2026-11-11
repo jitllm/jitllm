@@ -648,15 +648,6 @@
       "message": "max_tokens is required and must be positive"
     },
     {
-      "id": "n-session",
-      "endpoints": [
-        "/v1/chat/completions",
-        "/v1/completions"
-      ],
-      "when": "n above 1 with jitllm_session",
-      "message": "several choices run on fresh sessions of a model"
-    },
-    {
       "id": "embedding-non-embedder",
       "endpoints": [
         "/v1/embeddings"
