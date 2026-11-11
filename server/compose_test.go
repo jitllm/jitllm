@@ -14,7 +14,7 @@ import (
 // TestGrammarComposesWithLogprobsAndChoices: logprobs on a constrained reply
 // are the raw distribution's (vLLM's default), so a token the grammar forces
 // keeps the log-probability the model gave it rather than 0; n choices are
-// each held to the grammar; and speculation with logprobs or with n is
+// each held to the grammar; and speculation with n is
 // refused by name.
 func TestGrammarComposesWithLogprobsAndChoices(t *testing.T) {
 	sm := structuredModels()[1]
@@ -86,8 +86,7 @@ func TestGrammarComposesWithLogprobsAndChoices(t *testing.T) {
 
 	on := &Speculation{Enabled: true}
 	for what, o := range map[string]GenerateOptions{
-		"logprobs": {ModelID: sm.id, Prompt: prompt, MaxTokens: 4, Speculation: on, Logprobs: true},
-		"n":        {ModelID: sm.id, Prompt: prompt, MaxTokens: 4, Speculation: on, Seeds: []int64{1, 2}, Sampling: &engine.Sampler{Temp: 1}},
+		"n": {ModelID: sm.id, Prompt: prompt, MaxTokens: 4, Speculation: on, Seeds: []int64{1, 2}, Sampling: &engine.Sampler{Temp: 1}},
 	} {
 		err := e.Generate(context.Background(), o, func(Event) error { return nil })
 		if !errors.Is(err, ErrInvalid) {

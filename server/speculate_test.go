@@ -1,9 +1,11 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"slices"
 	"strings"
@@ -63,6 +65,49 @@ func TestSpeculationMatchesPlainGreedy(t *testing.T) {
 	if plain != spec || plain == "" {
 		t.Fatalf("/v1/chat/completions: %q with jitllm_speculate, %q without", spec, plain)
 	}
+}
+
+// TestSpeculationKeepsLogprobs: a greedy generate with speculation and
+// logprobs gives plain greedy's tokens, each with the log-probability plain
+// decode gives it -- a verification row's against decode's -- on a copying
+// prompt whose drafts the trunk accepts.
+func TestSpeculationKeepsLogprobs(t *testing.T) {
+	e, lm, _ := loadedEngine(t, instructModel, "inst", LoadOptions{})
+	conv, err := lm.m.ChatIDsTools([]model.ChatMessage{{Role: "user", Content: "Repeat this sentence twice, word for " +
+		"word: the quick brown fox jumps over the lazy dog while the farmer watches from the old wooden fence."}}, nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := func(spec *Speculation) ([]int32, []float32) {
+		var ids []int32
+		var lps []float32
+		err := e.Generate(context.Background(), GenerateOptions{ModelID: "inst", Prompt: Prompt{Kind: PromptIDs, IDs: conv},
+			MaxTokens: 48, Logprobs: true, TopLogprobs: 2, Speculation: spec}, func(ev Event) error {
+			if ev.Kind == EventToken && ev.Token.ID >= 0 {
+				if ev.Token.Logprob == nil {
+					t.Fatalf("token %d came with no logprob", len(ids))
+				}
+				ids = append(ids, ev.Token.ID)
+				lps = append(lps, ev.Token.Logprob.Logprob)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ids, lps
+	}
+	want, wlp := run(nil)
+	got, glp := run(&Speculation{Enabled: true})
+	if !slices.Equal(got, want) || len(want) < 16 {
+		t.Fatalf("speculation gave %v, plain greedy %v", got, want)
+	}
+	for i := range want {
+		if d := math.Abs(float64(glp[i] - wlp[i])); d > 2e-2*(1+math.Abs(float64(wlp[i]))) {
+			t.Fatalf("token %d: logprob %.5f with speculation, %.5f without", i, glp[i], wlp[i])
+		}
+	}
+	t.Logf("%d tokens, each with plain decode's logprob", len(want))
 }
 
 // TestSpeculationRefusesAContinuePastItsRound: a session whose speculative
