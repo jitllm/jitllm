@@ -1441,6 +1441,17 @@ func lowerValuesWith(b *graph.Builder, t *jlm.Tower, p *jlm.Program, in []graph.
 			}
 		}
 	}
+	// An elementwise op's inputs are read at the width its result is: a
+	// video's frames' difference is read by the second plane, padded as
+	// the first is.
+	for i := len(p.Ops) - 1; i >= 0; i-- {
+		op := &p.Ops[i]
+		if k := readAt[len(in)+i]; k > 0 && (op.Code == jlm.TOpSub || op.Code == jlm.TOpAdd) {
+			for _, v := range op.In {
+				readAt[int(v)] = max(readAt[int(v)], k)
+			}
+		}
+	}
 	width := func(v graph.ValueID) int { return b.G.Values[v].Width }
 	// rowsOf is a value's rows: its own, where an op that changes the count
 	// made it, else the program's.

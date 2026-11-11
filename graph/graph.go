@@ -308,7 +308,8 @@ const (
 	// last mark at or before the position says how the row turns -- as
 	// text (MarkText), at the position plus the mark's base less its first
 	// position on every axis; as a cell of a picture's grid (MarkGrid), its
-	// frame, row and column after the mark's base; as an XD-RoPE picture's
+	// frame times the mark's stride, row and column after the mark's base;
+	// as an XD-RoPE picture's
 	// (MarkGridXD), its position, column, row and the picture's ordinal --
 	// and a row before every mark turns at its position. Out[0] is four
 	// indices a row. A primitive.

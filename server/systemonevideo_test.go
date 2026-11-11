@@ -24,7 +24,7 @@ import (
 // Decider writes for the same request and video, byte for byte, the video
 // given as a list of frames and as an object of them with no rate. The same
 // request without its "videos" is a different body: the video reached the
-// model. A model whose tower reads no video refuses one by name.
+// model.
 func TestSystemOneVideoMatchesTheEngine(t *testing.T) {
 	path := testmodels.Path(filepath.Join("clef", "fixture-vl", "clef-fixture-vl-vlm.jlm"))
 	fresh.Must(t, path)

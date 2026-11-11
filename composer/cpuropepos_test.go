@@ -34,7 +34,7 @@ func ropePosOracle(p uint32, marks []ropeMark) [4]uint32 {
 		return [4]uint32{j + base, j + base, j + base, j + base}
 	case graph.MarkGrid:
 		h, w := m[graph.MarkH], m[graph.MarkW]
-		t := base + j/(h*w)
+		t := base + j/(h*w)*m[graph.MarkStride]
 		return [4]uint32{t, base + (j/w)%h, base + j%w, t}
 	}
 	ends, h, w := m[graph.MarkEnds], m[graph.MarkH], m[graph.MarkW]
@@ -58,7 +58,7 @@ func TestComposedCPURopePos(t *testing.T) {
 	const M = 4
 	seqs := [][]ropeMark{
 		nil,
-		{{5, 9, graph.MarkText}, {10, 12, graph.MarkGrid, 2, 2, 3}, {22, 15, graph.MarkText}},
+		{{5, 9, graph.MarkText}, {10, 12, graph.MarkGrid, 2, 2, 3, 0, 0, 3}, {22, 15, graph.MarkText}},
 		{{4, 0, graph.MarkGridXD, 1, 2, 3, 1, 0}, {12, 0, graph.MarkGridXD, 1, 1, 2, 0, 1}},
 	}
 	rows := [][2]uint32{{3, 0}, {7, 1}, {11, 1}, {19, 1}, {25, 1}, {4, 2}, {7, 2}, {13, 2}}

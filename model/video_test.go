@@ -60,3 +60,42 @@ func TestVideoPlanIsTheProcessors(t *testing.T) {
 		t.Error("a video of one frame was planned as a pair")
 	}
 }
+
+// TestJoinedVideoPlanIsTheProcessors holds the plan to Qwen2VLVideoProcessor
+// on its class defaults and to get_rope_index: every frame, an odd count's
+// last repeated, each frame sized alone by smart_resize (sizes from
+// transformers' own), and the pairs a position apart (Qwen2-VL) or
+// tokens_per_second * int(2 / fps) apart (Qwen2.5-VL), a video of no stated
+// rate at 24 frames a second.
+func TestJoinedVideoPlanIsTheProcessors(t *testing.T) {
+	cases := []struct {
+		n, w, h   int
+		fps       float64
+		perSecond int32
+		frames    []int
+		gw, gh    int
+		stride    int
+	}{
+		{5, 160, 120, 0, 0, []int{0, 1, 2, 3, 4, 4}, 28, 20, 1},
+		{4, 1280, 720, 30, 2, []int{0, 1, 2, 3}, 72, 40, 0},
+		{4, 640, 360, 2, 2, []int{0, 1, 2, 3}, 46, 26, 2},
+		{3, 3000, 2000, 1, 2, []int{0, 1, 2, 2}, 66, 44, 4},
+		{1, 20, 20, 0.5, 2, []int{0, 0}, 24, 24, 8},
+		{2, 33, 600, 0, 2, []int{0, 1}, 6, 98, 0},
+	}
+	for _, c := range cases {
+		v := &jlm.Video{DefaultFps: 24, EveryFrame: true, Joined: true, PerSecond: c.perSecond,
+			Pre: []jlm.PreStep{{Kind: jlm.PreVideoResize, Ints: []int32{28, 100352, 602112,
+				int32(jlm.FilterPILBicubic), int32(jlm.PrecTorch), 2, 1}}},
+			Entry: jlm.Program{NIn: 2}}
+		tg := &TowerGraphs{Patch: 14, Video: v, Videos: []towerClass{{Pic: graph.Attrs{PicW: 8192}}}}
+		p, err := tg.VideoPlan(c.n, c.w, c.h, c.fps)
+		if err != nil {
+			t.Fatalf("%d frames of %dx%d at %v: %v", c.n, c.w, c.h, c.fps, err)
+		}
+		if !reflect.DeepEqual(p.Frames, c.frames) || p.Square.Gw != c.gw || p.Square.Gh != c.gh || p.Stride != c.stride || p.Stamps != nil {
+			t.Errorf("%d frames of %dx%d at %v: frames %v grid %dx%d stride %d times %v, want %v %dx%d %d", c.n, c.w, c.h, c.fps,
+				p.Frames, p.Square.Gw, p.Square.Gh, p.Stride, p.Stamps, c.frames, c.gw, c.gh, c.stride)
+		}
+	}
+}

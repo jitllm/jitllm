@@ -2,6 +2,7 @@ package convert
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -76,4 +77,119 @@ func TestQwen3VLStatesItsVideo(t *testing.T) {
 	if _, ok := f.Find(jlm.RoleVPatchEmbd, jlm.DenseBlock, 1); ok {
 		t.Fatal("the second plane is held twice")
 	}
+}
+
+// TestQwen2VLStatesItsVideo converts Qwen2-VL's and Qwen2.5-VL's fixtures
+// and reads the video each container states: every frame, each resized
+// alone within Qwen2VLVideoProcessor's bounds, the pairs one grid with no
+// time, a frame apart on the temporal axis for Qwen2-VL and
+// tokens_per_second apart a second for Qwen2.5-VL, the entry binding the
+// second patch plane.
+func TestQwen2VLStatesItsVideo(t *testing.T) {
+	for _, c := range []struct {
+		name      string
+		perSecond int32
+	}{{"synth-qwen2vl", 0}, {"synth-qwen25vl", 2}} {
+		t.Run(c.name, func(t *testing.T) {
+			src := testmodels.Path(c.name + ".gguf")
+			mm := testmodels.Path("mmproj-" + c.name + ".gguf")
+			for _, p := range []string{src, mm} {
+				if _, err := os.Stat(p); err != nil {
+					testmodels.Missing(t, "MODEL MISSING: %v (run scripts/qwenvlgold.py %s) -- this gate proved nothing", err, c.name)
+				}
+			}
+			dst := filepath.Join(t.TempDir(), c.name+".jlm")
+			if _, err := FromGGUFs(src, mm, dst, jlm.Fingerprint{Writer: "gate"}); err != nil {
+				t.Fatal(err)
+			}
+			f, err := jlm.Open(dst)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer f.Close()
+			v := f.Vision()
+			if v == nil || v.Tower == nil || v.Tower.Video == nil {
+				t.Fatal("the container states no video")
+			}
+			vid := v.Tower.Video
+			if !vid.EveryFrame || !vid.Joined || vid.PerSecond != c.perSecond || vid.DefaultFps != 24 || vid.StampDigits != 0 {
+				t.Fatalf("the video reads %+v", vid)
+			}
+			if got := vid.Pre[0].Ints; len(got) != 7 || got[1] != 100352 || got[2] != 602112 || got[6] != 1 ||
+				jlm.Precision(got[4]) != jlm.PrecTorch {
+				t.Fatalf("the video resizes with %v", got)
+			}
+			var binds []jlm.Role
+			for _, op := range vid.Entry.Ops {
+				binds = append(binds, op.Bind...)
+			}
+			if !slices.Contains(binds, jlm.RoleVPatchEmbd2) || !slices.Contains(binds, jlm.RoleVPatchEmbd) {
+				t.Fatalf("the video's entry binds %v", binds)
+			}
+			if _, ok := f.Find(jlm.RoleVPatchEmbd2, jlm.DenseBlock, -1); !ok {
+				t.Fatal("the container holds no second plane")
+			}
+		})
+	}
+}
+
+// TestEveryVideoProcessorIsStated holds every projector the converter
+// states a tower for to an entry saying whether its reference processor
+// takes a video, and every one that does to a video the converter states
+// or to a named gap: the work the model's refusal of a video is.
+func TestEveryVideoProcessorIsStated(t *testing.T) {
+	// The reference's video processor, "" for a processor that takes none
+	// (MiniCPM-V's and Kimi-VL's read a video's frames as pictures).
+	processor := map[string]string{
+		"d1omni_v": "", "gemma3": "", "gemma3nv": "", "gemma4v": "Gemma4VideoProcessor",
+		"glm4v": "Glm4vVideoProcessor", "hunyuanvl": "", "idefics3": "SmolVLMVideoProcessor",
+		"internvl": "InternVLVideoProcessor", "janus_pro": "", "kimivl": "", "lfm2": "",
+		"llama4": "", "mlp": "", "phi4": "", "pixtral": "",
+		"qwen2.5vl_merger": "Qwen2VLVideoProcessor", "qwen2vl_merger": "Qwen2VLVideoProcessor",
+		"qwen3vl_merger": "Qwen3VLVideoProcessor", "resampler": "",
+	}
+	gaps := map[string]bool{"gemma4v": true, "glm4v": true, "idefics3": true, "internvl": true}
+	for _, name := range Projectors() {
+		p := projectorOf()[name]
+		if !StatesTower(p) {
+			continue
+		}
+		cls, ok := processor[name]
+		if err := videoStatement(name, cls, ok, StatesVideo(p), gaps[name]); err != nil {
+			t.Error(err)
+		}
+	}
+	for name := range gaps {
+		t.Logf("a gap: %s's %s takes a video the converter does not state", name, processor[name])
+	}
+	for _, v := range []struct {
+		listed, states, gap bool
+		cls                 string
+	}{
+		{false, false, false, ""},
+		{true, true, false, ""},
+		{true, true, true, "Qwen2VLVideoProcessor"},
+		{true, false, false, "Qwen2VLVideoProcessor"},
+	} {
+		if videoStatement("p", v.cls, v.listed, v.states, v.gap) == nil {
+			t.Errorf("the violation %+v was not seen", v)
+		}
+	}
+}
+
+// videoStatement is whether projector name's video is stated as its
+// reference processor's class cls says (listed, an entry for it at all):
+// stated where the processor takes one, unless it is a named gap.
+func videoStatement(name, cls string, listed, states, gap bool) error {
+	switch {
+	case !listed:
+		return fmt.Errorf("%s: no entry says whether its reference processor takes a video", name)
+	case cls == "" && states:
+		return fmt.Errorf("%s: the converter states a video for a processor that takes none", name)
+	case cls != "" && states && gap:
+		return fmt.Errorf("%s: stated, and still named a gap", name)
+	case cls != "" && !states && !gap:
+		return fmt.Errorf("%s: %s takes a video and the converter states none", name, cls)
+	}
+	return nil
 }
