@@ -106,9 +106,21 @@ func TestQwen2VLTowerMatchesTransformers(t *testing.T) {
 }
 
 // qvlTowers are the Qwen2-VL family fixtures whose towers the converter
-// states: Qwen2-VL's, and Qwen2.5-VL's with its windows.
+// states: Qwen2-VL's, Qwen2.5-VL's with its windows, Qwen3-VL's and
+// Qwen3.5's, and GLM-4.1V's and GLM-4.5V's, a 2x2 convolution merging them.
 func qvlTowers() []string {
-	return []string{"synth-qwen2vl", "synth-qwen25vl", "synth-qwen35vl", "synth-qwen3vl", "synth-qwen3vlmoe"}
+	return []string{"synth-qwen2vl", "synth-qwen25vl", "synth-qwen35vl", "synth-qwen3vl", "synth-qwen3vlmoe",
+		"synth-glm4v", "synth-glm4vmoe"}
+}
+
+// qvlEndToEnd are the towers the end-to-end gate holds. GLM-4.5V's is not:
+// its mixture answers a tower error of the engine's size with routing
+// flips that move the logits as far as its picture laid out as text does
+// (9.5e-2 against 0.197), so no bound parts the two; its text model is
+// held on the reference's tower rows (TestMRopeMatchesTransformers) and
+// its tower alone (TestQwen2VLTowerMatchesTransformers).
+func qvlEndToEnd() []string {
+	return slices.DeleteFunc(qvlTowers(), func(n string) bool { return n == "synth-glm4vmoe" })
 }
 
 func qwen2VLTowerMatchesTransformers(t *testing.T, name string) {
@@ -220,7 +232,7 @@ func qwen2VLTowerMatchesTransformers(t *testing.T, name string) {
 // reference by TestQwen2VLTowerMatchesTransformers. The violations are the
 // picture's rows laid out as text and, with taps, the taps zeroed.
 func TestQwen2VLMatchesTransformers(t *testing.T) {
-	for _, name := range qvlTowers() {
+	for _, name := range qvlEndToEnd() {
 		t.Run(name, func(t *testing.T) { qwen2VLMatchesTransformers(t, name) })
 	}
 }
