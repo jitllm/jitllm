@@ -1356,7 +1356,9 @@ func decomposeFrames(o graph.Op, c *Context) ([]Prim, error) {
 		return x.un(OpBitcast, F, x.load(0, i))
 	}
 	cur := sample(safe)
-	prev := sample(x.op(OpSub, U, safe, x.u(1)))
+	// The sample before the clip's first is zero: its index is the first's,
+	// so no word before the samples is read.
+	prev := sample(x.op(OpSub, U, x.op(OpMax, U, safe, x.u(1)), x.u(1)))
 	prev = x.sel(F, x.op(OpLess, ir.Pred, safe, x.u(1)), x.f(0), prev)
 	v := x.op(OpSub, F, cur, x.op(OpMul, F, prev, x.f(float32(a.Const))))
 	x.sel(F, x.op(OpLess, ir.Pred, x.u(0), inside), v, x.f(0))
