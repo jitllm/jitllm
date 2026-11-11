@@ -730,9 +730,8 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 		llFailErr(w, fmt.Errorf("%w: n_probs=%d is outside [0, %d]", ErrInvalid, set.NProbs, model.MaxTopLogprobs))
 		return
 	}
-	if set.RepeatLastN != 64 && set.RepeatLastN != 0 {
-		llFailErr(w, fmt.Errorf("%w: repeat_last_n=%d is not supported: the repeat penalty looks back 64 tokens (0 disables it)",
-			ErrInvalid, set.RepeatLastN))
+	if set.RepeatLastN < -1 {
+		llFailErr(w, fmt.Errorf("%w: repeat_last_n=%d is below -1 (the context)", ErrInvalid, set.RepeatLastN))
 		return
 	}
 	if len(stop) > 0 && string(stop) != "null" {
@@ -780,7 +779,7 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 		Prompt:    Prompt{Kind: PromptIDs, IDs: ids},
 		Stop:      set.Stop,
 		IgnoreEOS: set.IgnoreEOS,
-		Sampling:  llamaSampler(set),
+		Sampling:  llamaSampler(set, info.NCtx),
 		Logprobs:  set.NProbs > 0,
 	}
 	o.TopLogprobs = set.NProbs
@@ -818,13 +817,18 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 	run.whole()
 }
 
-// llamaSampler is the engine's sampler for a request's settings. Temperature 0
-// is greedy, as in llama.cpp; an unset seed (-1) draws its own.
-func llamaSampler(s llamaSettings) *engine.Sampler {
+// llamaSampler is the engine's sampler for a request's settings over a
+// context of nctx tokens. Temperature 0 is greedy, as in llama.cpp; an unset
+// seed (-1) draws its own; repeat_last_n 0 turns the penalty off and -1 is
+// the context.
+func llamaSampler(s llamaSettings, nctx int) *engine.Sampler {
 	sm := &engine.Sampler{Temp: s.Temperature, TopP: s.TopP, MinP: s.MinP, TopK: max(s.TopK, 0),
-		RepeatPen: s.RepeatPenalty, Seed: s.Seed}
-	if s.RepeatLastN == 0 {
+		RepeatPen: s.RepeatPenalty, RepeatLastN: s.RepeatLastN, Seed: s.Seed}
+	switch s.RepeatLastN {
+	case 0:
 		sm.RepeatPen = 1
+	case -1:
+		sm.RepeatLastN = nctx
 	}
 	if s.Seed < 0 {
 		sm.Seed = rand.Int64()
