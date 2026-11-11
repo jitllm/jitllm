@@ -18,29 +18,30 @@ import (
 // (transientKV), read as the one page of a pool of the block's geometry,
 // written and read inside the block's own launch as the tier's kernels do.
 
-// towerServes is why non-causal block li is not one the composer serves at
-// bs's rows, serves where it is: the scratch holds the rows' descriptors
-// and, where the block rotates, the rows' rotary table; the device holds its
-// transient pair; the block attends over the whole run or the windows the
-// call staged (SetKeyRuns, SetRowWindows) -- a symmetric window its graph
-// states is the form's own, computed from each row's place in the run
-// (composer's history.start/end); and the composer forms it at the
-// scratch's rows.
-func (g *devTier) towerServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratch) partDecline {
+// towerServes is nil where the composer serves non-causal block li at bs's
+// rows, and what is missing where it does not: the scratch holds the rows'
+// descriptors and, where the block rotates, the rows' rotary table; the
+// device holds its transient pair; the block attends over the whole run or
+// the windows the call staged (SetKeyRuns, SetRowWindows) -- a symmetric
+// window its graph states is the form's own, computed from each row's place
+// in the run (composer's history.start/end); and the composer forms it at
+// the scratch's rows. The pair and the windows are each call's
+// (errStepCond).
+func (g *devTier) towerServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratch) error {
 	switch {
 	case bs.pics == nil || bs.calls == nil:
-		return partFeeds
+		return errors.New("the scratch holds no picture rows' descriptors")
 	case bs.cs == nil && rotates(l.graph):
-		return partTableHeld
+		return errors.New("the scratch holds no rotary table for a block that turns its rows")
 	case g.visOf(l.geo).tkv == nil || g.visOf(l.geo).tkv.kc == nil || g.visOf(l.geo).tkv.vc == nil:
-		return partNoPool
+		return fmt.Errorf("%w: no transient key and value pair on the device", errStepCond)
 	case l.windowed && len(g.winRuns) == 0:
-		return partWindow
+		return fmt.Errorf("%w: a windowed block with no windows staged", errStepCond)
 	}
 	if _, _, _, err := g.towerStep(bs, l, li, p, bs.rows); err != nil {
-		return nn.DeclineNotFormed
+		return fmt.Errorf("the composed tower block: %w", err)
 	}
-	return partServes
+	return nil
 }
 
 // prewarmTower forms non-causal block li's part at its set's rows and holds

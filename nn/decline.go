@@ -11,12 +11,9 @@ type Decline uint8
 const (
 	DeclineServes Decline = iota
 	DeclineNoGraph
-	DeclineNoPool
-	DeclineWindow
 	DeclineHeadShape
 	DeclineCaller
 	DeclineNoRoom
-	DeclineTableHeld
 	DeclineFeeds
 	DeclineRecurrent
 	DeclineNoWeight
@@ -33,18 +30,12 @@ func (d Decline) String() string {
 		return "served"
 	case DeclineNoGraph:
 		return "no graph from the front end"
-	case DeclineNoPool:
-		return "no paged history on the device"
-	case DeclineWindow:
-		return "a graph whose window is not the plan's"
 	case DeclineHeadShape:
 		return "a head graph other than a norm, its projection and elementwise ops after it, or one naming a vector the head does not carry"
 	case DeclineCaller:
 		return "the caller keeps it on the tier's kernels"
 	case DeclineNoRoom:
 		return "its buffers do not fit the device's budget"
-	case DeclineTableHeld:
-		return "a table whose planes or positions the tier does not hold"
 	case DeclineFeeds:
 		return "a block graph reading more than the residual and per-layer inputs the device holds"
 	case DeclineRecurrent:

@@ -540,7 +540,7 @@ func (g *devTier) composedBlock(li int, bb *blockScratch) bool {
 		k := [2]int{li, bb.rows}
 		why, ok := g.notComposedWhy[k]
 		if !ok {
-			why = fmt.Sprintf("block %d's prompt is not the composer's at %d rows (%s; %s): its prompts run at their own widths",
+			why = fmt.Sprintf("block %d's prompt is not the composer's at %d rows (%v; %s): its prompts run at their own widths",
 				li, bb.rows, g.blockServes(l, li, &bb.p, bb, true), g.LastErr)
 			if g.notComposedWhy == nil {
 				g.notComposedWhy = map[[2]int]string{}
