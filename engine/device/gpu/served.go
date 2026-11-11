@@ -262,7 +262,7 @@ func (g *devTier) askPart(r *composer.Registry, sl *composedPart, rows int) (com
 		Formats:  sl.formats,
 		Paged:    sl.paged,
 		Apart:    sl.apart,
-		Step:     composer.Step{Rows: rows, Page: max(sl.page, 64), Keys: max(sl.keys, 1), ActWindow: int(g.actWin.Load()), Seqs: sl.seqs, Marks: sl.marks},
+		Step:     composer.Step{Rows: rows, Page: max(sl.page, composedPageMin), Keys: max(sl.keys, 1), ActWindow: int(g.actWin.Load()), Seqs: sl.seqs, Marks: sl.marks},
 		Rotaries: sl.rotaries,
 		Device:   dev,
 		History:  sl.history,
