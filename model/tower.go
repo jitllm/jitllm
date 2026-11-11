@@ -1870,9 +1870,9 @@ func TowerConfig(base, rows int, v *jlm.Vision, t *jlm.Tower) *Config {
 // for a second and third plane (YCbCr's chroma, a palette) their stride, byte
 // offsets and the chroma subsampling (composer.RequestPicSub).
 type PictureLayout struct {
-	Px                         uint8
-	W, H, stride               int
-	cstride, p2, p3, sub, wide int
+	Px                              uint8
+	W, H, stride                    int
+	cstride, p2, p3, sub, wide, ink int
 }
 
 // request writes the layout's words into the step's request.
@@ -1880,13 +1880,14 @@ func (l PictureLayout) Request(req []uint32) {
 	req[composer.RequestPicW], req[composer.RequestPicH], req[composer.RequestPicStride] = uint32(l.W), uint32(l.H), uint32(l.stride)
 	req[composer.RequestPicCStride], req[composer.RequestPicP2], req[composer.RequestPicP3] = uint32(l.cstride), uint32(l.p2), uint32(l.p3)
 	req[composer.RequestPicSub], req[composer.RequestPicWide] = uint32(l.sub), uint32(l.wide)
+	req[composer.RequestPicInk] = uint32(l.ink)
 }
 
 // RequestFrame writes the layout's words as a video pair's second frame's.
 func (l PictureLayout) RequestFrame(req []uint32) {
 	req[composer.RequestFrameStride], req[composer.RequestFrameCStride] = uint32(l.stride), uint32(l.cstride)
 	req[composer.RequestFrameP2], req[composer.RequestFrameP3], req[composer.RequestFrameSub] = uint32(l.p2), uint32(l.p3), uint32(l.sub)
-	req[composer.RequestFrameWide] = uint32(l.wide)
+	req[composer.RequestFrameWide], req[composer.RequestFrameInk] = uint32(l.wide), uint32(l.ink)
 }
 
 // picturePlanes is a decoded picture's layout and the planes the step's
@@ -1915,6 +1916,8 @@ func picturePlanes(img image.Image, ent *[4 * 256]byte) (PictureLayout, [3][]byt
 		l.Px, l.stride, l.wide, planes[0] = graph.PixRGBA8, p.Stride, 1, rows(p.Pix, p.Stride, 8)
 	case *image.Gray16:
 		l.Px, l.stride, l.wide, planes[0] = graph.PixGray8, p.Stride, 1, rows(p.Pix, p.Stride, 2)
+	case *image.CMYK:
+		l.Px, l.stride, l.ink, planes[0] = graph.PixRGBA8, p.Stride, 1, rows(p.Pix, p.Stride, 4)
 	case *image.YCbCr:
 		return ycbcrPlanes(l, p)
 	case *image.NYCbCrA:
@@ -2072,9 +2075,9 @@ func pictureKey(img image.Image) (*RowsKey, error) {
 		return nil, err
 	}
 	hs := sha256.New()
-	var hdr [33]byte
+	var hdr [37]byte
 	hdr[0] = l.Px
-	for i, v := range [8]int{l.W, l.H, l.stride, l.cstride, l.p2, l.p3, l.sub, l.wide} {
+	for i, v := range [9]int{l.W, l.H, l.stride, l.cstride, l.p2, l.p3, l.sub, l.wide, l.ink} {
 		binary.LittleEndian.PutUint32(hdr[1+4*i:], uint32(v))
 	}
 	hs.Write(hdr[:])
