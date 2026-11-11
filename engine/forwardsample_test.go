@@ -21,7 +21,8 @@ import (
 // draw; the walk's own definition is jit's TestComposedCPUSampleWalk.
 func TestForwardSampleMatchesSampleOverForward(t *testing.T) {
 	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M", "gemma-2-2b-it-Q4_K_M"} {
-		t.Run(name, func(t *testing.T) { forwardSampleMatches(t, name) })
+		t.Run(name, func(t *testing.T) { forwardSampleMatches(t, name, sampleGateSampler) })
+		t.Run(name+"-typical", func(t *testing.T) { forwardSampleMatches(t, name, typicalGateSampler) })
 	}
 }
 
@@ -29,7 +30,15 @@ func sampleGateSampler() *Sampler {
 	return &Sampler{Temp: 1.3, TopK: 40, TopP: 0.6, MinP: 0.02, RepeatPen: 1.3, RepeatLastN: 32, Seed: 4242}
 }
 
-func forwardSampleMatches(t *testing.T, name string) {
+// typicalGateSampler is sampleGateSampler's draw with typical-p, which the
+// card's walk cuts among its candidates.
+func typicalGateSampler() *Sampler {
+	s := sampleGateSampler()
+	s.TypicalP, s.Seed = 0.85, 4243
+	return s
+}
+
+func forwardSampleMatches(t *testing.T, name string, smp func() *Sampler) {
 	p := testmodels.Path(name + ".jlm")
 	if src := testmodels.Path(name + ".gguf"); fileExists(src) {
 		p = jlmOf(t, src)
@@ -54,7 +63,7 @@ func forwardSampleMatches(t *testing.T, name string) {
 			t.Skipf("CARD TOO SMALL: placed %d of %d blocks, head on the device %v (%s) -- this gate proved nothing here",
 				st.GPULayers(), m.Cfg.NLayer, st.HeadOnDevice(), g.Err())
 		}
-		sm := sampleGateSampler()
+		sm := smp()
 		logits, err := st.Prefill(ids)
 		if err != nil {
 			t.Fatal(err)

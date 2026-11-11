@@ -3077,7 +3077,7 @@ func (s *Instance) ForwardSample(token int32, smp *Sampler) (int32, error) {
 		if !h.SamplePenalty.Off() {
 			h.SampleWindow = smp.window(s.c.NVocab)
 		}
-		h.WalkArgs, h.Token = [5]float32{float32(k), float32(1 / smp.Temp), topp, minp, u}, -1
+		h.WalkArgs, h.Token = [6]float32{float32(k), float32(1 / smp.Temp), topp, minp, u, smp.typical()}, -1
 		defer func() { h.SampleK, h.Sampled = 0, false }()
 	}
 	logits, err := s.Forward(token)

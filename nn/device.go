@@ -356,7 +356,8 @@ type Head struct {
 	// logits: SampleWalk over the k best of the row after SamplePenalty, on
 	// each token whose count in SampleWindow (a row over the vocabulary) is
 	// above zero, at WalkArgs (k, 1/T, top-p +Inf where off, min-p 0 where
-	// off, and the caller's uniform) -- exactly the CPU's draw
+	// off, the caller's uniform, and typical-p +Inf where off) -- exactly the
+	// CPU's draw
 	// (engine.Instance.Sample). Penalties that are off leave the row as it
 	// is, whatever the window holds. A tier that serves it sets Token and Sampled and
 	// leaves Logits untouched; one that cannot fills Logits as always. See
@@ -365,7 +366,7 @@ type Head struct {
 	SampleWindow  []float32
 	SamplePenalty Penalties
 	Sampled       bool
-	WalkArgs      [5]float32
+	WalkArgs      [6]float32
 	// Pick, when non-empty, asks for the logits at these vocabulary ids alone
 	// in place of the row: a decision readout's label ids. A tier that serves
 	// it fills PickVals (as long as Pick at least), leaves Logits untouched

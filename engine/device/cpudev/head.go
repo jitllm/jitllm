@@ -1,6 +1,7 @@
 package cpudev
 
 import (
+	"math"
 	"unsafe"
 
 	"github.com/jitllm/jitllm/nn"
@@ -11,13 +12,14 @@ import (
 // latter at a chunk's rows (Rows), the label pick's, the greedy sampler's,
 // a top-k draw's walk, a draw's row and cut with no top-k and its top-k
 // variant, their distributions, the output norm alone, the log-softmax's
-// and a constrained draw's mask.
+// and a constrained draw's mask; the Typ forms are the cuts with typical-p.
 type HeadParts struct {
-	Head, Hidden, Rows, Pick          Part
-	Sample, Walk, Row, Cut            Part
-	WalkProb, CutProb, CutK, CutKProb Part
-	OutNorm, Logprobs, Mask           Part
-	Decide                            Part
+	Head, Hidden, Rows, Pick                 Part
+	Sample, Walk, Row, Cut                   Part
+	WalkProb, CutProb, CutK, CutKProb        Part
+	OutNorm, Logprobs, Mask                  Part
+	Decide                                   Part
+	CutTyp, CutTypProb, CutKTyp, CutKTypProb Part
 }
 
 // Head is the head and the samplers on the CPU device, composed once at the
@@ -44,13 +46,14 @@ type Head struct {
 	// pen is the penalties a draw reads.
 	noWin []float32
 	pen   nn.Penalties
-	// walkArgs is the walk's words: k, 1/T, top-p, min-p and u; rowArgs
-	// the row's (1/T, u), cutArgs the cut's (1/T, top-p, min-p, u) and
-	// cutKArgs its top-k variant's (then k).
-	walkArgs [5]float32
+	// walkArgs is the walk's words: k, 1/T, top-p, min-p, u and typical-p;
+	// rowArgs the row's (1/T, u), cutArgs the cut's (1/T, top-p, min-p, u,
+	// then typical-p for its typical form) and cutKArgs its top-k variant's
+	// (then k, then typical-p).
+	walkArgs [6]float32
 	rowArgs  [2]float32
-	cutArgs  [4]float32
-	cutKArgs [5]float32
+	cutArgs  [5]float32
+	cutKArgs [6]float32
 	// ids is the row's ids, 0 to the vocabulary's last, which the draws with
 	// no top-k read.
 	ids []uint32
@@ -87,7 +90,9 @@ func NewHead(dev *Device, steps *nn.Steps, p HeadParts, norm bool, w Weights, d,
 		h.pickIDs, h.pickVals = make([]uint32, nn.PickMax), make([]float32, nn.PickMax)
 	}
 	q := &h.p
-	if q.Walk.F != nil || q.Row.F != nil || q.Cut.F != nil || q.WalkProb.F != nil || q.CutProb.F != nil || q.CutK.F != nil || q.CutKProb.F != nil {
+	cuts := q.Row.F != nil || q.Cut.F != nil || q.CutProb.F != nil || q.CutK.F != nil || q.CutKProb.F != nil ||
+		q.CutTyp.F != nil || q.CutTypProb.F != nil || q.CutKTyp.F != nil || q.CutKTypProb.F != nil
+	if cuts || q.Walk.F != nil || q.WalkProb.F != nil {
 		h.noWin = make([]float32, nv)
 	}
 	if q.WalkProb.F != nil {
@@ -96,7 +101,7 @@ func NewHead(dev *Device, steps *nn.Steps, p HeadParts, norm bool, w Weights, d,
 	if q.Logprobs.F != nil {
 		h.lpRow, h.lpIDs = make([]float32, nv), make([]uint32, min(topLog, nv))
 	}
-	if q.Row.F != nil || q.Cut.F != nil || q.CutProb.F != nil || q.CutK.F != nil || q.CutKProb.F != nil {
+	if cuts {
 		h.ids = make([]uint32, nv)
 		for i := range h.ids {
 			h.ids[i] = uint32(i)
@@ -282,24 +287,42 @@ func (h *Head) window(a *nn.DrawArgs) unsafe.Pointer {
 	return unsafe.Pointer(&a.Window[0])
 }
 
+// typical is a's typical-p as the forms read it, +Inf where it is off, and
+// whether it is on.
+func typical(a *nn.DrawArgs) (float32, bool) {
+	if a.Typical > 0 && a.Typical < 1 {
+		return a.Typical, true
+	}
+	return float32(math.Inf(1)), false
+}
+
 // Draw is a's sampled token over logits at the uniform u: a top-k draw's
 // walk, or with no top-k the row's or, where top-p or min-p is set, the
-// cut's, or with a top-k past the walk's bound the cut's top-k variant.
+// cut's, or with a top-k past the walk's bound the cut's top-k variant; a
+// cut with typical-p is the cut's typical form, which a draw with no top-k
+// takes whatever its other cuts.
 // False where none serves it.
 func (h *Head) Draw(logits []float32, a nn.DrawArgs, u float32) (int32, bool) {
 	n := len(logits)
 	if a.TopK > 0 && a.TopK < n && a.TopK <= nn.SampleMaxK {
 		return h.walk(logits, &a, u)
 	}
+	typ, typOn := typical(&a)
 	p, words := &h.p.Row, unsafe.Pointer(&h.rowArgs[0])
 	h.rowArgs = [2]float32{a.InvTemp, u}
 	switch {
 	case a.TopK > 0 && a.TopK < n:
 		p, words = &h.p.CutK, unsafe.Pointer(&h.cutKArgs[0])
-		h.cutKArgs = [5]float32{a.InvTemp, a.TopP, a.MinP, u, float32(a.TopK)}
+		h.cutKArgs = [6]float32{a.InvTemp, a.TopP, a.MinP, u, float32(a.TopK), typ}
+		if typOn {
+			p = &h.p.CutKTyp
+		}
+	case typOn:
+		p, words = &h.p.CutTyp, unsafe.Pointer(&h.cutArgs[0])
+		h.cutArgs = [5]float32{a.InvTemp, a.TopP, a.MinP, u, typ}
 	case a.MinP > 0 || a.TopP < 1:
 		p, words = &h.p.Cut, unsafe.Pointer(&h.cutArgs[0])
-		h.cutArgs = [4]float32{a.InvTemp, a.TopP, a.MinP, u}
+		h.cutArgs = [5]float32{a.InvTemp, a.TopP, a.MinP, u}
 	}
 	f, _, why := h.form(p, false)
 	if why != nn.DeclineServes {
@@ -325,7 +348,8 @@ func (h *Head) walk(logits []float32, a *nn.DrawArgs, u float32) (int32, bool) {
 		return 0, false
 	}
 	win := h.window(a)
-	h.walkArgs = [5]float32{float32(a.TopK), a.InvTemp, a.TopP, a.MinP, u}
+	typ, _ := typical(a)
+	h.walkArgs = [6]float32{float32(a.TopK), a.InvTemp, a.TopP, a.MinP, u, typ}
 	h.run(f, nil, 1, unsafe.Pointer(&logits[0]), win, unsafe.Pointer(&h.pen[0]), unsafe.Pointer(&h.walkArgs[0]),
 		unsafe.Pointer(&h.token[0]))
 	h.steps.Serve(nn.PartSample)
@@ -343,12 +367,17 @@ func (h *Head) Dist(logits []float32, a nn.DrawArgs, pall []float32) (dense bool
 	}
 	topK := a.TopK > 0 && a.TopK < n
 	bounded := topK && a.TopK <= nn.SampleMaxK
+	typ, typOn := typical(&a)
 	p := &h.p.CutProb
 	switch {
 	case bounded:
 		p = &h.p.WalkProb
+	case topK && typOn:
+		p = &h.p.CutKTypProb
 	case topK:
 		p = &h.p.CutKProb
+	case typOn:
+		p = &h.p.CutTypProb
 	}
 	f, _, why := h.form(p, false)
 	if why != nn.DeclineServes {
@@ -357,15 +386,15 @@ func (h *Head) Dist(logits []float32, a nn.DrawArgs, pall []float32) (dense bool
 	}
 	win := h.window(&a)
 	if bounded {
-		h.walkArgs = [5]float32{float32(a.TopK), a.InvTemp, a.TopP, a.MinP, 0}
+		h.walkArgs = [6]float32{float32(a.TopK), a.InvTemp, a.TopP, a.MinP, 0, typ}
 		h.run(f, nil, 1, unsafe.Pointer(&logits[0]), win, unsafe.Pointer(&h.pen[0]), unsafe.Pointer(&h.walkArgs[0]),
 			unsafe.Pointer(&h.probVals[0]), unsafe.Pointer(&h.probIDs[0]))
 	} else {
 		words := unsafe.Pointer(&h.cutArgs[0])
-		h.cutArgs = [4]float32{a.InvTemp, a.TopP, a.MinP, 0}
+		h.cutArgs = [5]float32{a.InvTemp, a.TopP, a.MinP, 0, typ}
 		if topK {
 			words = unsafe.Pointer(&h.cutKArgs[0])
-			h.cutKArgs = [5]float32{a.InvTemp, a.TopP, a.MinP, 0, float32(a.TopK)}
+			h.cutKArgs = [6]float32{a.InvTemp, a.TopP, a.MinP, 0, float32(a.TopK), typ}
 		}
 		h.run(f, nil, 1, unsafe.Pointer(&logits[0]), win, unsafe.Pointer(&h.pen[0]), unsafe.Pointer(&h.ids[0]), words,
 			unsafe.Pointer(&pall[0]))

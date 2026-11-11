@@ -88,7 +88,7 @@ func TestComposedCPUSampleCut(t *testing.T) {
 		if c%50 == 0 {
 			u = 0
 		}
-		want, margin := oracle.SampleCut(l, hist, pen, invT, topp, minp, u)
+		want, margin := oracle.SampleCut(l, hist, pen, invT, topp, minp, math.Inf(1), u)
 		got := draw(l, hist, pen, invT, float32(topp), float32(minp), float32(u))
 		cases++
 		if margin < 1e-4 {
@@ -160,7 +160,7 @@ func TestComposedCPUSampleCutTopK(t *testing.T) {
 			topp, minp = float64(float32(0.5+0.49*rng.Float64())), float64(float32(0.02*rng.Float64()))
 		}
 		u := float64(float32(rng.Float64()))
-		want, margin := oracle.SampleWalk(v, n, k, float64(invT), topp, minp, u)
+		want, margin := oracle.SampleWalk(v, n, k, float64(invT), topp, minp, math.Inf(1), u)
 		lw := make([]uint32, n)
 		for i, x := range l {
 			lw[i] = f(x)
