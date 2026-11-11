@@ -420,10 +420,6 @@ func (e *compat) openAICompletions(w http.ResponseWriter, r *http.Request) {
 		oaFail(w, http.StatusBadRequest, "prompt must be a string, an array of strings, or token ids", "invalid_request_error")
 		return
 	}
-	if len(ps) > 1 && req.Stream {
-		oaFail(w, http.StatusBadRequest, "a list of prompts cannot be streamed; send one request per prompt", "invalid_request_error")
-		return
-	}
 	maxTok := 0
 	if req.MaxTokens != nil {
 		maxTok = *req.MaxTokens
@@ -436,11 +432,6 @@ func (e *compat) openAICompletions(w http.ResponseWriter, r *http.Request) {
 	seeds, err := oaChoiceSeeds(req.N, req.Seed)
 	if err != nil {
 		oaFail(w, http.StatusBadRequest, err.Error(), "invalid_request_error")
-		return
-	}
-	if len(ps) > 1 && (lpr.on || len(seeds) > 0) {
-		oaFail(w, http.StatusBadRequest, "logprobs and n with a list of prompts are not built; "+
-			"send one request per prompt", "invalid_request_error")
 		return
 	}
 	o := GenerateOptions{
@@ -464,11 +455,7 @@ func (e *compat) openAICompletions(w http.ResponseWriter, r *http.Request) {
 		oaBindFail(w, err)
 		return
 	}
-	if len(ps) > 1 {
-		e.runCompletions(w, r, o, ps, req.Model)
-		return
-	}
-	e.runOpenAI(w, r, o, req.Model, req.Stream, false)
+	e.runOpenAI(w, r, o, req.Model, req.Stream, false, ps...)
 }
 
 // oaChoice is one continuation's state while a response is built.
@@ -521,65 +508,14 @@ func (c *oaChoice) legacyLogprobs(lp bool) *oaLegacyLogprobs {
 	return out
 }
 
-// runCompletions answers a list of prompts with one choice each, in order. The
-// prompts run one after another, each with a copy of the sampler, so a seeded
-// request draws the same text for a prompt wherever it sits in the list.
-func (e *compat) runCompletions(w http.ResponseWriter, r *http.Request, o GenerateOptions, ps []Prompt, modelName string) {
-	type choice struct {
-		Index        int       `json:"index"`
-		Text         string    `json:"text"`
-		FinishReason *string   `json:"finish_reason"`
-		Logprobs     *struct{} `json:"logprobs"`
-	}
-	var choices []choice
-	usage := &oaUsage{}
-	for i, p := range ps {
-		oi := o
-		oi.Prompt = p
-		if o.Sampling != nil {
-			sc := *o.Sampling
-			oi.Sampling = &sc
-		}
-		var text strings.Builder
-		var fin *Finished
-		err := e.b.Generate(r.Context(), oi, func(ev Event) error {
-			switch ev.Kind {
-			case EventToken:
-				text.WriteString(ev.Token.Text)
-			case EventFinished:
-				fin = ev.Finished
-			}
-			return nil
-		})
-		if err != nil {
-			oaFailErr(w, err)
-			return
-		}
-		if fin == nil {
-			oaFail(w, http.StatusInternalServerError,
-				"the generate finished without a finished event", "server_error")
-			return
-		}
-		reason := oaFinish(fin.Reason)
-		choices = append(choices, choice{Index: i, Text: text.String(), FinishReason: &reason})
-		usage.PromptTokens += fin.PromptTokens
-		usage.CompletionTokens += fin.CompletionTokens
-	}
-	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
-	writeJSON(w, http.StatusOK, struct {
-		ID      string   `json:"id"`
-		Object  string   `json:"object"`
-		Created int64    `json:"created"`
-		Model   string   `json:"model"`
-		Choices []choice `json:"choices"`
-		Usage   *oaUsage `json:"usage"`
-	}{"cmpl-" + e.b.NextID("oa"), "text_completion", time.Now().Unix(), modelName, choices, usage})
-}
-
 // runOpenAI is the one place a generate becomes an OpenAI response, streaming
 // or not. Both entry points funnel through it so the two shapes cannot drift.
 // Several choices (n) arrive as one generate whose events carry their index.
-func (e *compat) runOpenAI(w http.ResponseWriter, r *http.Request, o GenerateOptions, modelName string, stream, chat bool) {
+// A list of prompts (ps, more than one) runs one generate a prompt, one after
+// another, each with a copy of the sampler so a seeded request draws the same
+// text for a prompt wherever it sits in the list; prompt p's choices are
+// p*n to p*n+n-1.
+func (e *compat) runOpenAI(w http.ResponseWriter, r *http.Request, o GenerateOptions, modelName string, stream, chat bool, ps ...Prompt) {
 	id := "chatcmpl-" + e.b.NextID("oa")
 	object, deltaObject := "chat.completion", "chat.completion.chunk"
 	if !chat {
@@ -593,7 +529,8 @@ func (e *compat) runOpenAI(w http.ResponseWriter, r *http.Request, o GenerateOpt
 	if o.Prompt.Chat != nil {
 		tools = o.Prompt.Chat.Tools
 	}
-	n := max(len(o.Seeds), 1)
+	per := max(len(o.Seeds), 1)
+	n := per * max(len(ps), 1)
 	cs := make([]*oaChoice, n)
 	for i := range cs {
 		cs[i] = &oaChoice{tt: newToolText(tools), legacy: &oaLegacyLogprobs{}}
@@ -604,11 +541,14 @@ func (e *compat) runOpenAI(w http.ResponseWriter, r *http.Request, o GenerateOpt
 			if c.fin == nil {
 				continue
 			}
-			// The prompt is counted once: every choice after the first
+			// A prompt is counted once: every choice of it after the first
 			// restored it rather than running it.
-			if i == 0 {
-				u.PromptTokens = c.fin.PromptTokens
-				u.PromptTokensDetails = &oaPromptTokenInfo{CachedTokens: c.fin.Restored}
+			if i%per == 0 {
+				if u.PromptTokensDetails == nil {
+					u.PromptTokensDetails = &oaPromptTokenInfo{}
+				}
+				u.PromptTokens += c.fin.PromptTokens
+				u.PromptTokensDetails.CachedTokens += c.fin.Restored
 			}
 			u.CompletionTokens += c.fin.CompletionTokens
 		}
@@ -633,9 +573,30 @@ func (e *compat) runOpenAI(w http.ResponseWriter, r *http.Request, o GenerateOpt
 		}
 		return cs[ev.Choice]
 	}
+	generate := func(emit func(Event) error) error {
+		if len(ps) <= 1 {
+			return e.b.Generate(r.Context(), o, emit)
+		}
+		for p, pr := range ps {
+			op := o
+			op.Prompt = pr
+			if o.Sampling != nil {
+				sc := *o.Sampling
+				op.Sampling = &sc
+			}
+			err := e.b.Generate(r.Context(), op, func(ev Event) error {
+				ev.Choice += p * per
+				return emit(ev)
+			})
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 
 	if !stream {
-		err := e.b.Generate(r.Context(), o, func(ev Event) error {
+		err := generate(func(ev Event) error {
 			c := choice(ev)
 			switch ev.Kind {
 			case EventStarted:
@@ -750,7 +711,7 @@ func (e *compat) runOpenAI(w http.ResponseWriter, r *http.Request, o GenerateOpt
 		}
 		sse.send(last)
 	}
-	gerr := e.b.Generate(r.Context(), o, func(ev Event) error {
+	gerr := generate(func(ev Event) error {
 		c := choice(ev)
 		i := ev.Choice
 		switch ev.Kind {

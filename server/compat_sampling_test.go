@@ -72,14 +72,12 @@ func TestUnsupportedSamplingIsRefusedNotIgnored(t *testing.T) {
 		{oaChat, `{"model":"m-1","logprobs":true,"top_logprobs":21,` + msgs + `}`, "top_logprobs"},
 		{oaText, `{"model":"m-1","logprobs":21,"prompt":"hi"}`, "logprobs"},
 		{oaText, `{"model":"m-1","logprobs":true,"prompt":"hi"}`, "logprobs"},
-		{oaText, `{"model":"m-1","n":2,"prompt":["a","b"]}`, "list of prompts"},
 		{oaChat, `{"model":"m-1","presence_penalty":0.5,` + msgs + `}`, "presence_penalty"},
 		{oaText, `{"model":"m-1","frequency_penalty":0.5,"prompt":"hi"}`, "frequency_penalty"},
 		{oaChat, `{"model":"m-1","temperature":-1,` + msgs + `}`, "temperature"},
 		{oaChat, `{"model":"m-1","top_p":1.5,` + msgs + `}`, "top_p"},
 		{oaChat, `{"model":"m-1","min_p":2,` + msgs + `}`, "min_p"},
 		{oaChat, `{"model":"m-1","repetition_penalty":0,` + msgs + `}`, "repetition_penalty"},
-		{oaText, `{"model":"m-1","stream":true,"prompt":["a","b"]}`, "list of prompts"},
 		{anMsgs, `{"model":"m-1","max_tokens":8,"temperature":-0.5,` + msgs + `}`, "temperature"},
 	} {
 		resp := post(t, s, c.path, c.body)
@@ -117,6 +115,73 @@ func TestAListOfPromptsIsAChoiceEach(t *testing.T) {
 		}
 		if out.Usage.PromptTokens != 21 || out.Usage.CompletionTokens != 6 || out.Usage.TotalTokens != 27 {
 			t.Fatalf("%s: usage %+v, want the three generates summed", prompt, out.Usage)
+		}
+	}
+}
+
+// TestAListOfPromptsStreamsAndTakesN: a list of prompts streams every
+// prompt's choice, numbered in order, and with n each prompt's n choices sit
+// at p*n..p*n+n-1, streamed or not; the usage counts each prompt once.
+func TestAListOfPromptsStreamsAndTakesN(t *testing.T) {
+	f := &fakeBackend{tokens: []string{"a", "b"}, reason: FinishMaxTokens}
+	s := serve(t, f)
+	resp := post(t, s, oaText, `{"model":"m-1","max_tokens":2,"stream":true,"prompt":["one","two","three"]}`)
+	text := map[int]string{}
+	var finished []int
+	var usage *oaUsage
+	body, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(body), "\n") {
+		data, ok := strings.CutPrefix(line, "data: ")
+		if !ok || data == "[DONE]" {
+			continue
+		}
+		var ch struct {
+			Choices []struct {
+				Index        int     `json:"index"`
+				Text         string  `json:"text"`
+				FinishReason *string `json:"finish_reason"`
+			} `json:"choices"`
+			Usage *oaUsage `json:"usage"`
+		}
+		if err := json.Unmarshal([]byte(data), &ch); err != nil {
+			t.Fatalf("%s: %v", data, err)
+		}
+		for _, c := range ch.Choices {
+			text[c.Index] += c.Text
+			if c.FinishReason != nil {
+				finished = append(finished, c.Index)
+			}
+		}
+		if ch.Usage != nil {
+			usage = ch.Usage
+		}
+	}
+	if len(text) != 3 || text[0] != "ab" || text[1] != "ab" || text[2] != "ab" || len(finished) != 3 ||
+		finished[0] != 0 || finished[1] != 1 || finished[2] != 2 {
+		t.Fatalf("streamed choices %v, finished in order %v", text, finished)
+	}
+	if usage == nil || usage.PromptTokens != 21 || usage.CompletionTokens != 6 {
+		t.Fatalf("the stream's usage %+v, want the three generates summed", usage)
+	}
+	resp = post(t, s, oaText, `{"model":"m-1","max_tokens":2,"n":2,"prompt":["one","two"]}`)
+	var out struct {
+		Choices []struct {
+			Index int    `json:"index"`
+			Text  string `json:"text"`
+		} `json:"choices"`
+	}
+	json.NewDecoder(resp.Body).Decode(&out)
+	resp.Body.Close()
+	if len(out.Choices) != 4 {
+		t.Fatalf("n=2 over two prompts: %d choices, want 4", len(out.Choices))
+	}
+	for i, c := range out.Choices {
+		if c.Index != i || c.Text != "ab" {
+			t.Fatalf("n=2 over two prompts: choice %d is %+v", i, c)
 		}
 	}
 }
