@@ -4583,6 +4583,33 @@ plane (70 MB here) is no longer allocated.
                all 27 blocks: 3.1e-4, 3.0e-4, 2.2e-3, 2.3e-3
     internvl   after block 0: 1.9e-8, 1.7e-8, 4.4e-8; all 24 blocks: 7.4e-4, 7.4e-4, 7.5e-4
 
+### The checkpoint towers on a card, held to transformers
+
+The vision runtime's deletion (16caf8b4f) took the gates above with it, and
+the stated towers' card gate placed SmolVLM's alone. Its successor,
+`TestCheckpointTowersRunOnTheCard`, places Gemma 3's, InternVL3-1B's and
+llava-phi-3-mini's stated towers on each card, every block and then half
+with the rest on the CPU device, over the quadrant picture, and holds each
+device's rows to transformers' own (scripts/visiongold.py; llava's golden is
+its CLIP tower and two-layer projector over the checkpoint's vision tensors).
+
+The first form of it held the cards to the CPU device's rows within the
+reduction-order band (1e-3), and failed on the deepest towers: llava on CUDA
+at 1e-2 from the CPU device and on Vulkan at 5.5e-3, Gemma 3 and InternVL3
+past 1e-3 on CUDA. Over 23-27 blocks each device's int8 activations part it
+from the others by more than the band, and the falsifiable statement is each
+device's distance from the reference: no device further from it than twice
+the CPU device is (V100, box 42):
+
+    rows' NMSE from transformers   CPU       CUDA all / half    Vulkan all / half
+    gemma3 (27 blocks)             3.9e-3    5.2e-4 / 7.2e-4    4.0e-3 / 4.1e-3
+    internvl3 (24)                 6.2e-3    5.1e-3 / 5.2e-3    6.1e-3 / 6.0e-3
+    llava (23)                     1.1e-2    5.5e-4 / 6.3e-4    1.1e-2 / 1.1e-2
+
+A grey picture of the same size reads 0.62-1.16 from the reference, the
+violation. CUDA's tensor-core path sits closer to the f32 reference than the
+CPU device's int8 activations.
+
 ### The principles
 
 The towers' blocks page under a two-page budget with the unbudgeted answer bit

@@ -159,8 +159,6 @@ reference's pixels and rows at the engine's arithmetic, and run on a card
   what remains of them is the colour-naming gates over a quadrant picture;
 - the towers against llama.cpp's mtmd, teacher-forced: SmolVLM, Gemma 3,
   InternVL;
-- Gemma 3's, InternVL's and llava's towers with every block on a card (the
-  card gate places SmolVLM's);
 - Laya's features-are-load-bearing gate;
 - a tower's encode resumed across a relocation mid-picture.
 
