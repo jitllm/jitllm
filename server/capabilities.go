@@ -262,8 +262,6 @@ func refusalList() []refusal {
 		{Refusal: capabilities.Refusal{ID: "anthropic-max-tokens", Endpoints: []string{"/v1/messages"},
 			When: "max_tokens is absent or not positive", Message: "max_tokens is required and must be positive"},
 			probe: `{"model":"m","messages":[{"role":"user","content":"hi"}]}`},
-		{Refusal: capabilities.Refusal{ID: "n-session", Endpoints: []string{"/v1/chat/completions", "/v1/completions"},
-			When: "n above 1 with jitllm_session", Message: "several choices run on fresh sessions of a model"}},
 		{Refusal: capabilities.Refusal{ID: "embedding-non-embedder", Endpoints: []string{"/v1/embeddings"},
 			When: "the model is not an embedding model", Message: "is not an embedding model"}},
 		{Refusal: capabilities.Refusal{ID: "unsupported-part", Endpoints: []string{"/v1/chat/completions"},

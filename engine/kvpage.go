@@ -611,10 +611,14 @@ func (kc *kvCache) release(low int) {
 	}
 }
 
-// reserve sizes every layer's page index for maxSeq positions.
+// reserve sizes every layer's page index and the token sequence for maxSeq
+// positions.
 func (kc *kvCache) reserve(maxSeq int) {
 	for li := kc.lo; li < len(kc.layers); li++ {
 		kc.layers[li].reserve(maxSeq)
+	}
+	if cap(kc.seq) < maxSeq {
+		kc.seq = append(make([]int32, 0, maxSeq), kc.seq...)
 	}
 }
 
@@ -2370,13 +2374,10 @@ func int32bytes(v []int32) []byte {
 	return unsafe.Slice((*byte)(unsafe.Pointer(&v[0])), len(v)*4)
 }
 
-// note records the ids this sequence has consumed, which is what pageKey hashes.
-// It is a no-op without a namespace, so nothing is tracked for a session that
-// does not want content addressing.
+// note records the ids this sequence has consumed: what pageKey hashes under a
+// namespace, and what rebuilds the history on a fresh session
+// (Session.HistorySpans) with or without one.
 func (kc *kvCache) note(pos int, ids ...int32) {
-	if kc.ns == "" {
-		return
-	}
 	// seq[i] is the id at position i: a token's, or a named picture row's
 	// (nameRow; PrefillMixed notes every row of a mixed prompt). Only rows
 	// with no name advance the position with no id -- ForwardEmbd's, and an

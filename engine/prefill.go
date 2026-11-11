@@ -48,6 +48,7 @@ func (s *Instance) PrefillLogits(tokens []int32, logits, hidden []float32) error
 		s.retireErr = nil
 		return err
 	}
+	s.kv.note(s.seqPos(0), tokens...)
 	return s.stepRows(tokenRows(tokens), &rowsOut{logits: logits, hidden: hidden})
 }
 
@@ -100,7 +101,7 @@ func (s *Instance) prefillSpans(slot int, spans ...model.Span) ([]float32, error
 	s.markRope(slot, p0+total, next-(p0+total))
 	// Every row's id for the page keys: a named picture's rows are named as
 	// tokens are (spanKey), so the pages from here on can be sealed and found.
-	if slot == 0 && s.kv.ns != "" {
+	if slot == 0 {
 		s.kv.note(p0, s.spanKey(p0, spans)...)
 	}
 	defer s.tokensOf(spans)()

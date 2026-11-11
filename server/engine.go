@@ -1210,6 +1210,10 @@ type Session struct {
 	// continued (under mu).
 	spec    Speculation
 	specRan bool
+	// rows are the pictures the history holds, by the key their rows were
+	// named by: what rebuilds the history on a fresh session (history).
+	// Guarded by mu.
+	rows map[model.RowsKey]model.Span
 
 	lastUsed  atomic.Int64
 	generated atomic.Int64
@@ -1723,6 +1727,10 @@ type GenerateOptions struct {
 	// (counting from 1) and the output free after it: the break the
 	// structured-output gates must see.
 	maskSkip int
+	// from is the leading prompt positions a choice of a named session's
+	// request spends rebuilding that session's history (generateN): its
+	// echo, prompt logprobs and prompt counts start after them.
+	from int
 	// LogitBias is added to the logits before every penalty and cut, as
 	// llama.cpp's logit_bias sampler adds it: each entry's bias at its
 	// token, or at every token of its text, the entries summed where they
@@ -2124,9 +2132,19 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 		if err := s.attachStore(store); err != nil {
 			return err
 		}
+		clear(s.rows)
+	}
+	for _, sp := range o.Prompt.Spans {
+		if sp.Rows() && sp.Key != nil {
+			if s.rows == nil {
+				s.rows = map[model.RowsKey]model.Span{}
+			}
+			s.rows[*sp.Key] = sp
+		}
 	}
 
-	if lp := e.joins(s); lp != nil && !spans && !s.cached && !speculate && con == nil && !(o.Echo && o.Logprobs) {
+	if lp := e.joins(s); lp != nil && !spans && !s.cached && !speculate && con == nil && !(o.Echo && o.Logprobs) &&
+		o.from == 0 {
 		return e.generateBatched(ctx, lp, s, o, ids, ephemeral, store, emit)
 	}
 
@@ -2220,6 +2238,15 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 	s.prefilled.Add(int64(prompted))
 	lm.tokensPrefilled.Add(int64(prompted))
 	prefill := time.Since(prefillStart)
+	if o.from > 0 {
+		prompted, restored = prompted-o.from, max(restored-o.from, 0)
+		if !spans {
+			ids = ids[o.from:]
+		}
+		if len(promptLP) > 0 {
+			promptLP = promptLP[o.from:]
+		}
+	}
 
 	tools, err := lm.toolStream(o)
 	if err != nil {
@@ -2435,16 +2462,38 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 // computes no prompt position -- the prefix cache's own path, which is how
 // the engine forks a sequence. Started.Restored reports it per choice.
 //
+// A named session's choice 0 runs on it, as a generate with one choice
+// would, and leaves its reply there; every other choice runs on a fresh
+// session that first rebuilds the named one's history (Session.history),
+// restored from the memory cache where the cache holds it, and reports only
+// the request's prompt as its own (GenerateOptions.from).
+//
 // The choices run one after another, each alone on the model's gates: a
 // Instance owns a pool, and n of them at once on the same cores is the worst
 // configuration the engine has. Each samples with its own seed and its events
 // carry its index.
 func (e *Engine) generateN(ctx context.Context, o GenerateOptions, emit func(Event) error) error {
-	if o.SessionID != "" || o.Continue {
-		return fmt.Errorf("%w: several choices run on fresh sessions of a model; "+
-			"a named session or continue_session takes one", ErrInvalid)
+	var named *Session
+	var hist []model.Span
+	var lm *LoadedModel
+	var err error
+	if o.SessionID != "" {
+		if named, err = e.Session(o.SessionID); err != nil {
+			return err
+		}
+		lm = named.lm
+		if o.Continue {
+			named.mu.Lock()
+			hist, err = named.history()
+			named.mu.Unlock()
+			if err != nil {
+				return err
+			}
+		}
+	} else if lm, err = e.Model(o.ModelID); err != nil {
+		return err
 	}
-	lm, err := e.Model(o.ModelID)
+	fork, from, err := e.forkPrompt(named, o, hist)
 	if err != nil {
 		return err
 	}
@@ -2463,12 +2512,19 @@ func (e *Engine) generateN(ctx context.Context, o GenerateOptions, emit func(Eve
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		s, err := e.CreateSession(SessionOptions{ModelID: o.ModelID, KVStore: store, CacheKey: ns})
-		if err != nil {
-			return err
-		}
 		oi := o
 		oi.Seeds = nil
+		s := named
+		if i > 0 || named == nil {
+			so := SessionOptions{ModelID: lm.id, KVStore: store, CacheKey: ns}
+			if named != nil {
+				so.MaxSeq, so.Sampling, so.Speculation = named.maxSeq, named.sampling, named.spec
+			}
+			if s, err = e.CreateSession(so); err != nil {
+				return err
+			}
+			oi.Prompt, oi.from, oi.Continue = fork, from, false
+		}
 		oi.ModelID, oi.SessionID = "", s.id
 		sm := s.sampling
 		if o.Sampling != nil {
@@ -2478,19 +2534,67 @@ func (e *Engine) generateN(ctx context.Context, o GenerateOptions, emit func(Eve
 		oi.Sampling = &sm
 		err = e.Generate(ctx, oi, func(ev Event) error {
 			ev.Choice = i
-			if ev.Started != nil {
+			if ev.Started != nil && s != named {
 				st := *ev.Started
 				st.Ephemeral = true
 				ev.Started = &st
 			}
 			return emit(ev)
 		})
-		e.CloseSession(s.id)
+		if s != named {
+			e.CloseSession(s.id)
+		}
 		if err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// forkPrompt is what a choice on a fresh session prefills: o's prompt, after
+// hist -- a named session's history (Session.history) -- when there is one;
+// from is the positions hist takes.
+func (e *Engine) forkPrompt(named *Session, o GenerateOptions, hist []model.Span) (Prompt, int, error) {
+	if len(hist) == 0 {
+		return o.Prompt, 0, nil
+	}
+	lm := named.lm
+	var ps []model.Span
+	switch {
+	case o.Prompt.Kind == PromptSpans:
+		ps = o.Prompt.Spans
+	case o.Prompt.Kind == PromptChat && o.Prompt.Chat != nil && len(o.Prompt.Chat.Images) > 0:
+		var err error
+		if ps, err = pictureSpans(named, o); err != nil {
+			return Prompt{}, 0, err
+		}
+	default:
+		ids, err := e.encode(lm, o.Prompt, o.ModelName)
+		if err != nil {
+			return Prompt{}, 0, err
+		}
+		ps = []model.Span{{Tokens: ids}}
+	}
+	all := append(slices.Clone(hist), ps...)
+	from := model.SpanPositions(hist, lm.m.Cfg.NEmbd)
+	var ids []int32
+	for _, sp := range all {
+		if sp.Rows() {
+			return Prompt{Kind: PromptSpans, Spans: all, Chat: o.Prompt.Chat}, from, nil
+		}
+		ids = append(ids, sp.Tokens...)
+	}
+	return Prompt{Kind: PromptIDs, IDs: ids, Chat: o.Prompt.Chat}, from, nil
+}
+
+// history is the session's history as a prompt a fresh session rebuilds it
+// from (engine.Session.HistorySpans), each picture the span it was
+// prefilled from. The caller holds mu.
+func (s *Session) history() ([]model.Span, error) {
+	return s.ms.HistorySpans(func(k model.RowsKey) (model.Span, bool) {
+		sp, ok := s.rows[k]
+		return sp, ok
+	})
 }
 
 // resolveSession returns the named session, or creates an ephemeral one for a
