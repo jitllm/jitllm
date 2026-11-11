@@ -183,16 +183,17 @@ type oaErrorBody struct {
 // the string form rejects the default request of the official python client.
 // The text parts are joined, and a file part of text is its text after a blank
 // line (oaPartFile.text, a stored file read by files); each image_url part is
-// returned in order with its index, for the caller to decode. A part the model
-// cannot be shown (audio, a PDF) is refused by index rather than dropped, so a
-// request never succeeds with the model having seen less than the client sent.
-func oaContent(raw json.RawMessage, files storedFiles) (string, []oaImagePart, error) {
+// returned in order with its index, for the caller to decode, and each video
+// part (oaVideoOf) with its frames. A part the model cannot be shown (audio,
+// a PDF) is refused by index rather than dropped, so a request never
+// succeeds with the model having seen less than the client sent.
+func oaContent(raw json.RawMessage, files storedFiles) (string, []oaImagePart, []oaVideoPart, error) {
 	if len(raw) == 0 || string(raw) == "null" {
-		return "", nil, nil
+		return "", nil, nil, nil
 	}
 	var s string
 	if err := json.Unmarshal(raw, &s); err == nil {
-		return s, nil, nil
+		return s, nil, nil, nil
 	}
 	var parts []struct {
 		Type     string `json:"type"`
@@ -200,23 +201,32 @@ func oaContent(raw json.RawMessage, files storedFiles) (string, []oaImagePart, e
 		ImageURL *struct {
 			URL string `json:"url"`
 		} `json:"image_url"`
-		File *oaPartFile `json:"file"`
+		Video json.RawMessage `json:"video"`
+		File  *oaPartFile     `json:"file"`
 		oaPartFile
 	}
 	if err := json.Unmarshal(raw, &parts); err != nil {
-		return "", nil, fmt.Errorf("content must be a string or an array of content parts")
+		return "", nil, nil, fmt.Errorf("content must be a string or an array of content parts")
 	}
 	var b strings.Builder
 	var imgs []oaImagePart
+	var vids []oaVideoPart
 	for i, p := range parts {
 		switch p.Type {
 		case "text", "":
 			b.WriteString(p.Text)
 		case "image_url":
 			if p.ImageURL == nil || p.ImageURL.URL == "" {
-				return "", nil, fmt.Errorf("content[%d] is an image_url part with no image_url.url", i)
+				return "", nil, nil, fmt.Errorf("content[%d] is an image_url part with no image_url.url", i)
 			}
 			imgs = append(imgs, oaImagePart{index: i, url: p.ImageURL.URL})
+		case "video":
+			v, err := oaVideoOf(p.Video)
+			if err != nil {
+				return "", nil, nil, fmt.Errorf("content[%d] %v", i, err)
+			}
+			v.index = i
+			vids = append(vids, v)
 		case "file", "input_file":
 			f := p.File
 			if f == nil {
@@ -224,17 +234,50 @@ func oaContent(raw json.RawMessage, files storedFiles) (string, []oaImagePart, e
 			}
 			text, err := f.text(files)
 			if err != nil {
-				return "", nil, fmt.Errorf("content[%d] %v", i, err)
+				return "", nil, nil, fmt.Errorf("content[%d] %v", i, err)
 			}
 			if b.Len() > 0 {
 				b.WriteString("\n\n")
 			}
 			b.WriteString(text)
 		case "input_audio":
-			return "", nil, fmt.Errorf("content[%d] is a %q part, which this server does not take", i, p.Type)
+			return "", nil, nil, fmt.Errorf("content[%d] is a %q part, which this server does not take", i, p.Type)
 		}
 	}
-	return b.String(), imgs, nil
+	return b.String(), imgs, vids, nil
+}
+
+// oaVideoPart is a video part of a message's content: its frames' picture
+// URLs and their rate, 0 where the part states none.
+type oaVideoPart struct {
+	index int
+	urls  []string
+	fps   float64
+}
+
+// oaVideoOf is a video part's "video": a list of frame URLs, or an object of
+// "frames", that list, and "fps", their rate -- the shape /v1/systemone
+// takes a video in.
+func oaVideoOf(raw json.RawMessage) (oaVideoPart, error) {
+	var urls []string
+	if err := json.Unmarshal(raw, &urls); err == nil && len(urls) > 0 {
+		return oaVideoPart{urls: urls}, nil
+	}
+	var obj struct {
+		Frames []string `json:"frames"`
+		FPS    *float64 `json:"fps"`
+	}
+	if err := json.Unmarshal(raw, &obj); err != nil || len(obj.Frames) == 0 {
+		return oaVideoPart{}, errors.New("is a video part whose video is no list of frame URLs or object of them")
+	}
+	v := oaVideoPart{urls: obj.Frames}
+	if obj.FPS != nil {
+		if !(*obj.FPS > 0) {
+			return oaVideoPart{}, errors.New("is a video part whose fps is not a positive number of frames a second")
+		}
+		v.fps = *obj.FPS
+	}
+	return v, nil
 }
 
 // storedFiles reads a file the Files API holds: its name and bytes.
@@ -372,8 +415,10 @@ func (e *compat) openAIChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	chat := &ChatInput{AddGenerationPrompt: true}
 	pics := newPictures(e.img)
+	frames := pics.videoFrames()
+	var px int64
 	for i, m := range req.Messages {
-		c, imgs, err := oaContent(m.Content, e.storedFile)
+		c, imgs, vids, err := oaContent(m.Content, e.storedFile)
 		if err != nil {
 			oaFail(w, http.StatusBadRequest, fmt.Sprintf("messages[%d].%v", i, err), "invalid_request_error")
 			return
@@ -387,8 +432,18 @@ func (e *compat) openAIChatCompletions(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		for _, vp := range vids {
+			v, err := frames.readVideo(r.Context(), vp.urls, vp.fps, &px, func(j int) string {
+				return fmt.Sprintf("messages[%d].content[%d].video[%d]", i, vp.index, j)
+			})
+			if err != nil {
+				oaFail(w, http.StatusBadRequest, err.Error(), "invalid_request_error")
+				return
+			}
+			chat.Videos = append(chat.Videos, v)
+		}
 		cm := chatMessage(m.Role, c)
-		cm.Images = len(imgs)
+		cm.Images, cm.Videos = len(imgs), len(vids)
 		cm.ToolCallID, cm.Name = m.ToolCallID, m.Name
 		for _, tc := range m.ToolCalls {
 			cm.ToolCalls = append(cm.ToolCalls, model.ToolCall{ID: tc.ID, Name: tc.Function.Name,

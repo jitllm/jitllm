@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"image"
 	"io"
-	"math"
 	"net/http"
 	"strings"
 
@@ -129,23 +128,21 @@ func (c *compat) systemOne(w http.ResponseWriter, r *http.Request) {
 			s1Fail(w, http.StatusUnprocessableEntity, "must be a list of videos", "videos")
 			return
 		}
-		fp := pics.p
-		fp.MaxImages = math.MaxInt
-		frames := &pictures{p: fp}
+		frames := pics.videoFrames()
 		var px int64
 		for i, v := range vv.AsList().Items {
-			vid := Video{}
+			var fps float64
 			fv := v
 			if v.IsDict() {
 				fv, _ = v.AsDict().Get("frames")
 				if rv, ok := v.AsDict().Get("fps"); ok && !rv.IsNone() {
 					switch {
 					case rv.IsInt():
-						vid.FPS = float64(rv.AsInt())
+						fps = float64(rv.AsInt())
 					case rv.IsFloat():
-						vid.FPS = rv.AsFloat()
+						fps = rv.AsFloat()
 					}
-					if !(vid.FPS > 0) {
+					if !(fps > 0) {
 						s1Fail(w, http.StatusUnprocessableEntity, "must be a positive number of frames a second", "videos", i, "fps")
 						return
 					}
@@ -155,26 +152,19 @@ func (c *compat) systemOne(w http.ResponseWriter, r *http.Request) {
 				s1Fail(w, http.StatusUnprocessableEntity, "must be a list of frame URLs or an object of them", "videos", i)
 				return
 			}
-			at := len(frames.imgs)
+			var urls []string
 			for j, u := range fv.AsList().Items {
 				if !u.IsString() {
 					s1Fail(w, http.StatusUnprocessableEntity, "must be an image URL", "videos", i, j)
 					return
 				}
-				url := u.AsString()
-				if err := frames.add(fmt.Sprintf("videos[%d][%d]", i, j), func() (image.Image, error) {
-					return frames.p.imageURL(r.Context(), url)
-				}); err != nil {
-					s1Fail(w, http.StatusUnprocessableEntity, err.Error(), "videos", i, j)
-					return
-				}
-				b := frames.imgs[len(frames.imgs)-1].Bounds()
-				if px += int64(b.Dx()) * int64(b.Dy()); px > fp.MaxVideoPixels {
-					s1Fail(w, http.StatusUnprocessableEntity, fmt.Sprintf("brings the request's video frames over the limit of %d pixels", fp.MaxVideoPixels), "videos", i, j)
-					return
-				}
+				urls = append(urls, u.AsString())
 			}
-			vid.Frames = frames.imgs[at:]
+			vid, err := frames.readVideo(r.Context(), urls, fps, &px, func(j int) string { return fmt.Sprintf("videos[%d][%d]", i, j) })
+			if err != nil {
+				s1Fail(w, http.StatusUnprocessableEntity, err.Error(), "videos", i)
+				return
+			}
 			videos = append(videos, vid)
 		}
 	}

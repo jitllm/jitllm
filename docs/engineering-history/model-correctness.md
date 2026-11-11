@@ -7210,6 +7210,23 @@ fluently -- and the only visible trace was token 60535 leading the id list.
 `misplacedFlag` refuses it in every subcommand, matching the flags the SET
 DEFINES rather than a leading dash, so `"-42 degrees is"` still runs as a prompt.
 
+### A video in a chat turn
+
+The front ends took pictures and no video until the chat path learned one:
+Model.VideoSpans was reached by the decision readouts alone. A chat message
+now carries its videos after its pictures (`ChatMessage.Videos`), the
+template renders each as a {"type": "video"} part, and `ChatSpansMedia`
+puts a video's spans where the template writes one -- the placeholder
+found as the picture's is, by rendering a turn with the part and without
+it. A turn that names a video and is given none, or the reverse, and a
+placeholder inside another, are refused as the input's checks. The server
+reads a video part as frame URLs or an object of them and a rate; `jitllm
+run -video DIR` reads a directory of frames in name order. Held to
+Qwen2VLProcessor's own chat rendering of a picture, a video and text
+(`TestChatVideoFollowsTheProcessor`, scripts/chatvideogold.py: 315 ids, 6
+picture rows, 280 video rows), and through the server and the CLI to the
+engine's own run of the turn.
+
 ## The stop set: what the file states, carried into the container
 
 ★ **THE CONVERTER DROPPED EVERY STOP ID BUT EOS, AND A REPLY RAN ON PAST ITS

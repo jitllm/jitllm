@@ -105,7 +105,7 @@ func (e *Engine) CheckAdmission(o GenerateOptions) error {
 	if lm == nil {
 		return nil
 	}
-	if o.Prompt.Chat != nil && len(o.Prompt.Chat.Images) > 0 && !lm.m.SeesPictures() {
+	if o.Prompt.Chat.carriesMedia() && !lm.m.SeesPictures() {
 		return fmt.Errorf("%w: model %q does not accept images: it carries no vision tower", ErrInvalid, lm.id)
 	}
 	if t := &lm.ttft; t.queueCap > 0 && int(t.inflight.Load()) >= t.queueCap {

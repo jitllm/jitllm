@@ -81,8 +81,8 @@ type TowerGraphs struct {
 	// blocks that turn nothing.
 	Table  *graph.Graph
 	Planes []float32
-	// holders is what each chat template writes for a picture, by the
-	// template's source (picturePlaceholder).
+	// holders is what each chat template writes for a picture and for a
+	// video, by the template's source (mediaPlaceholder).
 	holders sync.Map
 }
 
@@ -99,18 +99,25 @@ type towerClass struct {
 	Rows     int
 }
 
-// placeholder is what the template src writes for an image part, read off it
-// once.
-func (tg *TowerGraphs) placeholder(tpl *jinja.Template, src, bos, eos, mark string) (string, error) {
-	if ph, ok := tg.holders.Load(src); ok {
+// placeholder is what the template src writes for an image part, or a video
+// part, read off it once.
+func (tg *TowerGraphs) placeholder(tpl *jinja.Template, src, bos, eos, mark string, video bool) (string, error) {
+	key := holderKey{src, video}
+	if ph, ok := tg.holders.Load(key); ok {
 		return ph.(string), nil
 	}
-	ph, err := picturePlaceholder(tpl, src, bos, eos, mark)
+	ph, err := mediaPlaceholder(tpl, src, bos, eos, mark, video)
 	if err != nil {
 		return "", err
 	}
-	tg.holders.Store(src, ph)
+	tg.holders.Store(key, ph)
 	return ph, nil
+}
+
+// holderKey names a template's placeholder: its source and the part's kind.
+type holderKey struct {
+	src   string
+	video bool
 }
 
 // audioBlocks is how many audio blocks follow the vision blocks in v's
