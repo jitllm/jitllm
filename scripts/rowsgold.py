@@ -44,6 +44,9 @@ OUT = os.path.join(HERE, "..", "testdata", "golden", "rows")
 TEXT = ("The river rose every spring until the bridges were islands, "
         "and the clerk counted barrels of salt on the upper floor. ") * 60
 LENGTHS, DECODE = [5, 33, 100], 6
+# TestComposedCPURowsServe's batch steps its prompts as many times as its
+# median needs rows (engine/cpurows_test.go's batchDecode).
+BATCH_DECODE = 20
 SAMPLES = 4096
 EXPERTS = 40
 
@@ -108,8 +111,8 @@ def main(d, name, experts=False, q8=False):
         name += ".q8"
     stride = max(1, cfg.vocab_size // (SAMPLES // 4 if experts else SAMPLES))
     seqs = [(ids[:n], ids[n:n + DECODE]) for n in LENGTHS]
+    seqs += [(p, ids[200:200 + BATCH_DECODE]) for p in (ids[:7], ids[40:73], ids[100:150])]
     steps = ids[200:200 + DECODE]
-    seqs += [(p, steps) for p in (ids[:7], ids[40:73], ids[100:150])]
     if experts:
         seqs = [(ids[:1], ids[1:EXPERTS]), (ids[:1], ids[1:2 * EXPERTS])]
         seqs += [(ids[:LENGTHS[-1]], ids[LENGTHS[-1]:LENGTHS[-1] + DECODE])]

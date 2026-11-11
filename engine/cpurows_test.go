@@ -45,7 +45,11 @@ func cpuRowsModels() []struct {
 // violation -- the first history page pointed at another slot, each row's
 // first key moved by one -- leaves the band.
 func TestComposedCPURowsServe(t *testing.T) {
-	const page, decode = 32, 6
+	// A batch steps its sequences batchDecode times: its median is of
+	// ratios two runs' rounding sets apart row by row, and over 21 rows it
+	// read 0.71 and 1.73 for stories15M's q8_0 and q4_0, whose paths sit as
+	// near the float forms as llama.cpp's; over 63, 1.39 and 1.07.
+	const page, decode, batchDecode = 32, 6, 20
 	text := strings.Repeat("The river rose every spring until the bridges were islands, "+
 		"and the clerk counted barrels of salt on the upper floor. ", 60)
 	for _, tc := range cpuRowsModels() {
@@ -108,7 +112,7 @@ func TestComposedCPURowsServe(t *testing.T) {
 
 			// A batch of three sequences, each prompted into its own slot.
 			prompts := [][]int32{ids[:7], ids[40:73], ids[100:150]}
-			steps := ids[200 : 200+decode]
+			steps := ids[200 : 200+batchDecode]
 			bw := cpuBatch(t, fm, prompts, steps, cpuFaultNone, true, fOpts...)
 			var seqs, sseqs []lcppSeq
 			// A session's first step is three of its rows, its logits the
@@ -131,7 +135,7 @@ func TestComposedCPURowsServe(t *testing.T) {
 			}
 			var alone [][]float32
 			for _, p := range prompts {
-				alone = append(alone, cpuPrompt(t, cm, append(append([]int32(nil), p...), steps...), len(p), decode, cpuFaultNone, true, cOpts...)...)
+				alone = append(alone, cpuPrompt(t, cm, append(append([]int32(nil), p...), steps...), len(p), batchDecode, cpuFaultNone, true, cOpts...)...)
 			}
 			// cpuBatch's rows are by sequence, each its prompt's row and its
 			// steps', as alone's are.
