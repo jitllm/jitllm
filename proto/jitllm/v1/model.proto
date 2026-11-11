@@ -294,11 +294,12 @@ message ToolCall {
   string arguments = 3;
 }
 
-// ChatImage is one picture: its encoded bytes, PNG, JPEG, WebP or GIF (its
-// first frame), within the server's byte and pixel limits.
+// ChatImage is one picture: its encoded bytes, PNG, JPEG, WebP, GIF (its
+// first frame), BMP or TIFF, within the server's byte and pixel limits.
 message ChatImage {
   bytes data = 1;
-  // The declared media type (image/png, image/jpeg, image/webp, image/gif);
+  // The declared media type (image/png, image/jpeg, image/webp, image/gif,
+  // image/bmp, image/tiff);
   // empty takes the bytes' own. A declared type the bytes are not is refused.
   string media_type = 2;
   // The picture by reference instead of by bytes, exclusive with `data`: a
