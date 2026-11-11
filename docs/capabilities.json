@@ -770,6 +770,11 @@
             "note": "0..20, only with logprobs"
           },
           {
+            "name": "logit_bias",
+            "type": "object",
+            "note": "token id to a bias in [-100, 100], added before the penalties; the generate decodes alone"
+          },
+          {
             "name": "tools",
             "type": "array",
             "note": "an array of {type: function, function}; handed to the model's own chat template"
@@ -918,6 +923,11 @@
             "name": "top_logprobs",
             "type": "integer",
             "note": "not read on this route; logprobs is the count"
+          },
+          {
+            "name": "logit_bias",
+            "type": "object",
+            "note": "token id to a bias in [-100, 100], added before the penalties; the generate decodes alone"
           },
           {
             "name": "jitllm_session",

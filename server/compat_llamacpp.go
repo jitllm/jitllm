@@ -4,8 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"math"
 	"math/rand/v2"
 	"net/http"
+	"slices"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -143,7 +147,6 @@ func llamaFields() map[string]llamaField {
 		"adaptive_target":       {numLE(-1), "adaptive-p sampling is not built"},
 		"adaptive_decay":        {anyValue, ""},
 		"min_keep":              {numIs(0), "min_keep is not built"},
-		"logit_bias":            {emptyJSON, "logit bias is not built"},
 		"samplers":              {samplerSubset, "only the samplers penalties, top_k, top_p, min_p and temperature exist"},
 		"n_indent":              {numIs(0), "n_indent is not built"},
 		"n_keep":                {numIs(0), "there is no context shift, so n_keep has nothing to keep"},
@@ -171,6 +174,7 @@ func llamaRead() map[string]bool {
 		"cache_prompt": true, "n_probs": true, "grammar": true, "json_schema": true,
 		"id_slot": true, "ignore_eos": true, "return_tokens": true, "repeat_penalty": true,
 		"repeat_last_n": true, "presence_penalty": true, "frequency_penalty": true, "model": true,
+		"logit_bias": true,
 		// /infill's own.
 		"input_prefix": true, "input_suffix": true, "input_extra": true,
 	}
@@ -812,6 +816,10 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 			return
 		}
 	}
+	if o.LogitBias, err = llamaLogitBias(body["logit_bias"]); err != nil {
+		llFailErr(w, err)
+		return
+	}
 	o.Grammar = set.Grammar
 	if err := c.b.BindTarget(&o, "", info.ID); err != nil {
 		llFailErr(w, err)
@@ -824,6 +832,75 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 		return
 	}
 	run.whole()
+}
+
+// llamaLogitBias is llama-server's logit_bias: an array of [token, bias]
+// pairs, or an object from token to bias in key order, a token an id or a
+// text every token of which takes the bias, a bias a number or false (the
+// token banned). What llama-server would skip -- an entry that is not a
+// pair, a bias that is neither -- is refused here, as is an empty text.
+func llamaLogitBias(raw json.RawMessage) ([]TokenBias, error) {
+	if len(raw) == 0 || emptyJSON(raw) {
+		return nil, nil
+	}
+	bias := func(v json.RawMessage) (float32, error) {
+		var f float64
+		if json.Unmarshal(v, &f) == nil {
+			return float32(f), nil
+		}
+		var b bool
+		if json.Unmarshal(v, &b) == nil && !b {
+			return float32(math.Inf(-1)), nil
+		}
+		return 0, fmt.Errorf("%w: logit_bias %s is not a number or false", ErrInvalid, v)
+	}
+	entry := func(tok string, id int32, v json.RawMessage) (TokenBias, error) {
+		b, err := bias(v)
+		if err != nil {
+			return TokenBias{}, err
+		}
+		if n, err := strconv.ParseInt(tok, 10, 32); err == nil {
+			return TokenBias{ID: int32(n), Bias: b}, nil
+		}
+		if tok == "" {
+			return TokenBias{}, fmt.Errorf("%w: logit_bias names an empty text", ErrInvalid)
+		}
+		return TokenBias{ID: id, Text: tok, Bias: b}, nil
+	}
+	var out []TokenBias
+	var pairs [][]json.RawMessage
+	if json.Unmarshal(raw, &pairs) == nil {
+		for _, p := range pairs {
+			if len(p) != 2 {
+				return nil, fmt.Errorf("%w: logit_bias entry %d is not a [token, bias] pair", ErrInvalid, len(out))
+			}
+			var tok string
+			var id int32
+			if json.Unmarshal(p[0], &id) == nil {
+				tok = strconv.Itoa(int(id))
+			} else if json.Unmarshal(p[0], &tok) != nil {
+				return nil, fmt.Errorf("%w: logit_bias token %s is not an id or a text", ErrInvalid, p[0])
+			}
+			e, err := entry(tok, id, p[1])
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, e)
+		}
+		return out, nil
+	}
+	var obj map[string]json.RawMessage
+	if json.Unmarshal(raw, &obj) != nil {
+		return nil, fmt.Errorf("%w: logit_bias is an array of [token, bias] pairs or an object from token to bias", ErrInvalid)
+	}
+	for _, k := range slices.Sorted(maps.Keys(obj)) {
+		e, err := entry(k, 0, obj[k])
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, nil
 }
 
 // llamaSampler is the engine's sampler for a request's settings over a

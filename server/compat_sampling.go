@@ -3,7 +3,10 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math/rand/v2"
+	"slices"
+	"strconv"
 
 	"github.com/jitllm/jitllm/engine"
 )
@@ -32,18 +35,39 @@ import (
 //	logprobs,
 //	top_logprobs        the raw distribution's log-probabilities; read by the
 //	                    OpenAI routes (compat_choices.go)
+//	logit_bias          token id to a bias in [-100, 100], added to the logits
+//	                    before the penalties (GenerateOptions.LogitBias)
 type oaSampling struct {
-	Temperature       *float64        `json:"temperature"`
-	TopP              *float64        `json:"top_p"`
-	TopK              *int            `json:"top_k"`
-	MinP              *float64        `json:"min_p"`
-	RepetitionPenalty *float64        `json:"repetition_penalty"`
-	PresencePenalty   *float64        `json:"presence_penalty"`
-	FrequencyPenalty  *float64        `json:"frequency_penalty"`
-	Seed              *int64          `json:"seed"`
-	N                 *int            `json:"n"`
-	Logprobs          json.RawMessage `json:"logprobs"`
-	TopLogprobs       *int            `json:"top_logprobs"`
+	Temperature       *float64           `json:"temperature"`
+	TopP              *float64           `json:"top_p"`
+	TopK              *int               `json:"top_k"`
+	MinP              *float64           `json:"min_p"`
+	RepetitionPenalty *float64           `json:"repetition_penalty"`
+	PresencePenalty   *float64           `json:"presence_penalty"`
+	FrequencyPenalty  *float64           `json:"frequency_penalty"`
+	Seed              *int64             `json:"seed"`
+	N                 *int               `json:"n"`
+	Logprobs          json.RawMessage    `json:"logprobs"`
+	TopLogprobs       *int               `json:"top_logprobs"`
+	LogitBias         map[string]float64 `json:"logit_bias"`
+}
+
+// logitBias is logit_bias as the engine takes it, in token order: a key that
+// is not a token id, or a bias outside [-100, 100], is refused.
+func (q *oaSampling) logitBias() ([]TokenBias, error) {
+	var out []TokenBias
+	for _, k := range slices.Sorted(maps.Keys(q.LogitBias)) {
+		id, err := strconv.ParseInt(k, 10, 32)
+		if err != nil {
+			return nil, fmt.Errorf("%w: logit_bias key %q is not a token id", ErrInvalid, k)
+		}
+		v := q.LogitBias[k]
+		if v < -100 || v > 100 {
+			return nil, fmt.Errorf("%w: logit_bias %v for token %d is outside [-100, 100]", ErrInvalid, v, id)
+		}
+		out = append(out, TokenBias{ID: int32(id), Bias: float32(v)})
+	}
+	return out, nil
 }
 
 // samplingFields are the sampling values both surfaces validate, held as

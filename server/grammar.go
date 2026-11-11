@@ -72,11 +72,25 @@ type constraint struct {
 	// on is ignore_eos: the reply does not end while the grammar lets it go
 	// on (grammar.Matcher.AllowOn).
 	on bool
+	// ub is the request's logit bias over the vocabulary (logitBias), nil
+	// for none, and biased the logits plus it, which the grammar's mask then
+	// reads.
+	ub, biased []float32
 }
 
-// mask is logits with every token the grammar does not allow at -inf, in
-// the constraint's own copy, through in's composed mask.
+// mask is logits plus the request's logit bias, with every token the
+// grammar does not allow at -inf, in the constraint's own copies, through
+// in's composed mask. m is nil for a bias alone.
 func (c *constraint) mask(in *engine.Instance, logits []float32) ([]float32, error) {
+	if c.ub != nil {
+		if err := in.MaskRow(c.biased, logits, c.ub); err != nil {
+			return nil, err
+		}
+		logits = c.biased
+	}
+	if c.m == nil {
+		return logits, nil
+	}
 	n := len(logits)
 	if cap(c.lg) < n {
 		c.lg, c.bias = make([]float32, n), make([]float32, n)
@@ -101,6 +115,9 @@ func (c *constraint) mask(in *engine.Instance, logits []float32) ([]float32, err
 
 // accept advances past tok; false where the grammar does not allow it.
 func (c *constraint) accept(tok int32) bool {
+	if c.m == nil {
+		return true
+	}
 	st, ok := c.m.Accept(c.st, tok)
 	if ok {
 		c.st = st
@@ -157,6 +174,28 @@ func (lm *LoadedModel) toolStream(o GenerateOptions) (*model.ToolStream, error) 
 		return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
 	}
 	return ts, nil
+}
+
+// logitBias is a request's logit bias as a row over the model's logits:
+// each entry's bias at its token, or at every token its text encodes to
+// without specials, summed where entries meet, as llama.cpp's sampler adds
+// them one after another. A token outside the vocabulary is refused.
+func (lm *LoadedModel) logitBias(bs []TokenBias) ([]float32, error) {
+	n := lm.m.Cfg.NVocab
+	row := make([]float32, n)
+	for _, b := range bs {
+		ids := []int32{b.ID}
+		if b.Text != "" {
+			ids = lm.m.Vocab.Encode(b.Text, false)
+		}
+		for _, id := range ids {
+			if id < 0 || int(id) >= n {
+				return nil, fmt.Errorf("%w: logit_bias token id %d is outside the vocabulary of %d", ErrInvalid, id, n)
+			}
+			row[id] += b.Bias
+		}
+	}
+	return row, nil
 }
 
 // toolConstraint is the constraint a chat whose tool_choice forces a call

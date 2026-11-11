@@ -1723,6 +1723,12 @@ type GenerateOptions struct {
 	// (counting from 1) and the output free after it: the break the
 	// structured-output gates must see.
 	maskSkip int
+	// LogitBias is added to the logits before every penalty and cut, as
+	// llama.cpp's logit_bias sampler adds it: each entry's bias at its
+	// token, or at every token of its text, the entries summed where they
+	// meet; -Inf bans a token. A biased generate decodes as a constrained
+	// one does.
+	LogitBias []TokenBias
 	// Logprobs puts each sampled token's log-probability on its Token event,
 	// with the TopLogprobs (0..model.MaxTopLogprobs) most likely alternatives.
 	// They are the model's raw distribution, before temperature and penalties
@@ -1734,6 +1740,14 @@ type GenerateOptions struct {
 	// events carry Event.Choice = i. The prompt is prefilled once; every
 	// other choice restores its pages and its logits (generateN).
 	Seeds []int64
+}
+
+// TokenBias is one logit_bias entry: Bias at token ID, or at every token
+// Text encodes to (without specials) where Text is set.
+type TokenBias struct {
+	ID   int32
+	Text string
+	Bias float32
 }
 
 // EventKind discriminates Event.
@@ -2080,6 +2094,17 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 	if con != nil {
 		con.on = o.IgnoreEOS
 	}
+	if len(o.LogitBias) > 0 {
+		ub, err := lm.logitBias(o.LogitBias)
+		if err != nil {
+			return err
+		}
+		if con == nil {
+			con = &constraint{}
+		}
+		con.ub, con.biased = ub, make([]float32, len(ub))
+		speculate = false
+	}
 	if o.Continue && s.specRan {
 		return fmt.Errorf("%w: session %q stopped inside a speculative round, and its model ran past the "+
 			"reply; it cannot be continued -- generate without continue_session", ErrInvalid, s.id)
@@ -2293,7 +2318,7 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 				if n+1 != o.maskSkip {
 					return fmt.Errorf("server: token %d is outside the grammar its mask allowed", next)
 				}
-				con = nil // the gate's break: the reply leaves its grammar
+				con.m = nil // the gate's break: the reply leaves its grammar
 			}
 		case len(pend) == 0:
 			// Every token a round returns is observed into the sampler.
@@ -2320,7 +2345,7 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 				tlp, pendLP = pendLP[0], pendLP[1:]
 			}
 		}
-		if (!o.IgnoreEOS || con != nil) && lm.m.Vocab.IsEOG(next) {
+		if (!o.IgnoreEOS || con != nil && con.m != nil) && lm.m.Vocab.IsEOG(next) {
 			reason = FinishEOS
 			break
 		}

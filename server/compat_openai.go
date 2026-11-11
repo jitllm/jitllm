@@ -442,6 +442,10 @@ func (e *compat) openAIChatCompletions(w http.ResponseWriter, r *http.Request) {
 		oaFailErr(w, err)
 		return
 	}
+	if o.LogitBias, err = req.logitBias(); err != nil {
+		oaFailErr(w, err)
+		return
+	}
 	lpr.apply(&o)
 	if err := e.b.BindTarget(&o, req.JitllmSession, req.Model); err != nil {
 		oaBindFail(w, err)
@@ -518,6 +522,10 @@ func (e *compat) openAICompletions(w http.ResponseWriter, r *http.Request) {
 		DecodeGroups: req.JitllmDecodeGroups,
 	}
 	if o.Grammar, err = oaResponseFormat(req.ResponseFormat); err != nil {
+		oaFailErr(w, err)
+		return
+	}
+	if o.LogitBias, err = req.logitBias(); err != nil {
 		oaFailErr(w, err)
 		return
 	}
