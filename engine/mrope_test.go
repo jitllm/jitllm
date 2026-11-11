@@ -28,6 +28,11 @@ func qvlFixtures() []string {
 		"synth-glm4v", "synth-glm4vmoe"}
 }
 
+// qvlLaidOut are qvlFixtures and HunyuanVL's (scripts/hunyuanvlgold.py),
+// whose rows XD-RoPE lays out on four axes: the fixtures whose picture moves
+// a row's rotary position.
+func qvlLaidOut() []string { return append(qvlFixtures(), "synth-hunyuanvl") }
+
 // qvlGolden is scripts/qwenvlgold.py's record of transformers' own
 // Qwen2-VL family on a prompt of text, one non-square image and text, then a
 // continuation decoded token by token.
@@ -183,10 +188,11 @@ func qvlWorst(g *qvlGolden, rows [][]float32) (float64, int) {
 }
 
 // TestMRopeLaysTheImageOutAsTransformersDoes holds spanRope to transformers'
-// get_rope_index row for row -- the prompt's text, the image's (t, h, w) and
-// the text after it -- and ropeOf's continuation to its rope delta.
+// get_rope_index row for row -- the prompt's text, the image's (t, h, w), or
+// under XD-RoPE (position, column, row, picture), and the text after it --
+// and ropeOf's continuation to its rope delta.
 func TestMRopeLaysTheImageOutAsTransformersDoes(t *testing.T) {
-	for _, name := range qvlFixtures() {
+	for _, name := range qvlLaidOut() {
 		t.Run(name, func(t *testing.T) { mRopeLaysTheImageOutAsTransformersDoes(t, name) })
 	}
 }
@@ -202,12 +208,20 @@ func mRopeLaysTheImageOutAsTransformersDoes(t *testing.T, name string) {
 		t.Fatal(err)
 	}
 	rows := marksLayout(&st.rmarks, 0, 0, spanRows(m, sp))
-	if len(rows)+len(g.Cont) != len(g.Pos) {
-		t.Fatalf("%d prompt rows and %d continuation, transformers lays out %d", len(rows), len(g.Cont), len(g.Pos))
+	// The axes the reference lays a row out on, three or XD-RoPE's four.
+	axes, pos := 3, make([][4]int, 0, len(g.Pos))
+	for _, p := range g.Pos {
+		pos = append(pos, [4]int{p[0], p[1], p[2]})
+	}
+	if len(g.Pos4) > 0 {
+		axes, pos = 4, g.Pos4
+	}
+	if len(rows)+len(g.Cont) != len(pos) {
+		t.Fatalf("%d prompt rows and %d continuation, transformers lays out %d", len(rows), len(g.Cont), len(pos))
 	}
 	for i, r := range rows {
-		if [3]int(r[:3]) != g.Pos[i] {
-			t.Fatalf("row %d at %v, transformers %v", i, r, g.Pos[i])
+		if !slices.Equal(r[:axes], pos[i][:axes]) {
+			t.Fatalf("row %d at %v, transformers %v", i, r, pos[i])
 		}
 	}
 	end := len(rows)
@@ -215,10 +229,17 @@ func mRopeLaysTheImageOutAsTransformersDoes(t *testing.T, name string) {
 		t.Fatalf("the continuation resumes %d off its cache position, transformers' rope delta is %d", d, g.Delta)
 	}
 	for j := range g.Cont {
-		want := g.Pos[end+j]
-		if p := next + j; want != [3]int{p, p, p} {
+		p := next + j
+		if want := pos[end+j]; !slices.Equal(want[:axes], []int{p, p, p, p}[:axes]) {
 			t.Fatalf("continuation row %d at %d, transformers %v", j, p, want)
 		}
+	}
+	// The violation: the picture's rows laid out as text.
+	if _, err := st.spanRope(0, 0, qvlSpans(g, false)); err != nil {
+		t.Fatal(err)
+	}
+	if text := marksLayout(&st.rmarks, 0, 0, spanRows(m, sp)); slices.Equal(text, rows) {
+		t.Fatal("VIOLATION: the picture laid out as text lays out as its grid does")
 	}
 	t.Logf("%d prompt rows, image grid %v, rope delta %d", len(rows), g.Image.Grid, g.Delta)
 }
@@ -417,7 +438,7 @@ func mRopeMatchesTransformers(t *testing.T, name string) {
 // (t, h, w), with the text after it resuming elsewhere -- restores nothing
 // past the text before the image.
 func TestMRopePrefixCacheKeysOnPositions(t *testing.T) {
-	for _, name := range qvlFixtures() {
+	for _, name := range qvlLaidOut() {
 		t.Run(name, func(t *testing.T) { mRopePrefixCacheKeysOnPositions(t, name) })
 	}
 }
@@ -514,9 +535,11 @@ func mRopePrefixCacheKeysOnPositions(t *testing.T, name string) {
 // own conditions, each against transformers: a one-frame page budget (every
 // block evicted and re-read every token), the blocks relocated onto a device
 // and back home in the middle of the continuation, and a warm decode after
-// the image at zero engine allocations on the host and every device.
+// the image at zero engine allocations on the host and every device. Kimi-VL
+// is among them, its picture's rows advancing as text over DeepSeek-V3's
+// model.
 func TestMRopeKeepsTheFivePrinciples(t *testing.T) {
-	for _, name := range qvlFixtures() {
+	for _, name := range append(qvlLaidOut(), "synth-kimivl") {
 		t.Run(name, func(t *testing.T) { mRopeKeepsTheFivePrinciples(t, name) })
 	}
 }
