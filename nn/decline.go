@@ -14,13 +14,11 @@ const (
 	DeclineHeadShape
 	DeclineCaller
 	DeclineNoRoom
-	DeclineFeeds
 	DeclineRecurrent
 	DeclineNoWeight
 	DeclineNotFormed
 	DeclineISA
 	DeclineUnplaced
-	DeclineExperts
 	NumDeclines
 )
 
@@ -36,8 +34,6 @@ func (d Decline) String() string {
 		return "the caller keeps it on the tier's kernels"
 	case DeclineNoRoom:
 		return "its buffers do not fit the device's budget"
-	case DeclineFeeds:
-		return "a block graph reading more than the residual and per-layer inputs the device holds"
 	case DeclineRecurrent:
 		return "a recurrent state the form does not step (a tail or a variant it does not hold, none held, or the CPU's several rows)"
 	case DeclineNoWeight:
@@ -46,8 +42,6 @@ func (d Decline) String() string {
 		return "the composer did not form the block"
 	case DeclineUnplaced:
 		return "a block not composed for the device at its placement"
-	case DeclineExperts:
-		return "routed experts not held whole on the device (streamed, cached, run on another device or in expert pages)"
 	case DeclineISA:
 		return "a CPU the composer's CPU lowering does not emit for (x86-64 below SSE4.1 and SSSE3)"
 	}

@@ -136,7 +136,7 @@ func TestComposedExpertPagesServe(t *testing.T) {
 							switch {
 							case st.StreamBlocks < moe:
 								t.Fatalf("%d blocks placed streamed of the %d mixtures: the configuration under test was not selected", st.StreamBlocks, moe)
-							case declined != 0 || st.BlockDeclines()[nn.DeclineExperts] != 0:
+							case declined != 0:
 								t.Fatalf("%d block steps declined (%s)", declined, declinesOf(st))
 							case served != steps*nLayer:
 								t.Fatalf("%d block steps served of %d", served, steps*nLayer)

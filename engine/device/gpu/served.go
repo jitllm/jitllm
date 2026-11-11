@@ -1131,11 +1131,9 @@ type partDecline = nn.Decline
 const (
 	partServes      = nn.DeclineServes
 	partNoGraph     = nn.DeclineNoGraph
-	partFeeds       = nn.DeclineFeeds
 	partHeadShape   = nn.DeclineHeadShape
 	partCaller      = nn.DeclineCaller
 	partNoRoom      = nn.DeclineNoRoom
-	partExperts     = nn.DeclineExperts
 	partRecurrent   = nn.DeclineRecurrent
 	partNoWeight    = nn.DeclineNoWeight
 	partNotFormed   = nn.DeclineNotFormed
