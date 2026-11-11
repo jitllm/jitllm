@@ -5321,3 +5321,28 @@ segment is chosen only once all are.
 The ragged tail runs the vector body with the lanes past the end filled
 with NaN, as topk.go's does; only the last segment is ragged, but K is a
 register, so every segment's code handles it.
+
+## Closed by the deletion: two open items on main's arm64 k-quant GEMM
+
+As they stood in open-questions.md, closed when main's CPU kernels went
+(502922438) with gemmk_a64.go and the gate that priced them:
+
+- **Q4_K and Q5_K still cannot use the arm64 INTEGER fold** (36.9% of a
+  tinyllama prefill's MACs). They now get the other half of it -- the activation
+  scale applied once per super-block instead of per sub-block, worth +8.5% and
+  +7.7% -- but keeping the DOT integer needs int32 min scales, i.e. a SECOND flag
+  in `emitA64KScales` (gemmk_a64.go's intFold comment warns that widening `intSc` applies dmin
+  twice or not at all) AND a third accumulator array that does not fit at 2x2.
+  Worth the remaining 5 -> 3 instructions per (sub-block, row, vector). They DO
+  now have a constant pool -- `dareg` stopped reserving registers it only reads
+  in the epilogue, which is worth another +5.8%/+3.1% and got Q6_K +2.8%.
+- **`emitA64KScales` rebuilds three mask immediates per ROW per super-block**, so
+  the shipping 2x2 spends six MOVIs a super-block on loop invariants. Hoisting
+  them needs three more pool slots than any format has spare, so it wants either
+  a wider budget (a smaller tile) or the masks folded into the unpack's existing
+  constants. A gate of main's, TestGEMMUnpackKonstsAreHoisted, priced them: they
+  were the entire gap between its bound and the pool size.
+
+The composed CPU's k-quant forms are the composer's (`composer/x86`,
+`composer/a64`); whether either point recurs there is the composer's to
+measure.

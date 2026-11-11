@@ -12,7 +12,7 @@ is in its evidence file (MC is `docs/engineering-history/model-correctness.md`).
 | llama4 tokenizer label "default" | gpt-4o with ignore_merges false | the model's tokenizer.json (o200k, ignore_merges) | MC "llama4 IS THE FIFTEENTH ARCHITECTURE" |
 | YaRN stated `attention_factor` | never read | transformers: the stated value on cos and sin | MC "YaRN's attention_factor" |
 | YaRN correction range | floored and ceiled | unrounded where the config says `truncate: false` (`FlagYarnExact`) | MC "gpt-oss IS THE TWELFTH ARCHITECTURE" |
-| the router's renormalising divisor | a clamp | DeepSeek's `sum + 1e-20` (`nn.TestRouterFloorMatchesTheKernel`) | MC "The router's renormalising divisor floor" |
+| the router's renormalising divisor | a clamp | DeepSeek's `sum + 1e-20` (`model.TestRouterFloorMatchesTheOracle`) | MC "The router's renormalising divisor floor" |
 | ERNIE's divisor floor and shared width | -- | DeepSeek's floor; width read off the tensor | MC "ernie4_5-moe and ernie4_5" |
 | starcoder2's config sliding window | not applied | llama.cpp (the GGUF carries no window) | MC "The classic-transformer kit (C6)" |
 | falcon's GELU | tanh approximation | llama.cpp (the model trains with erf) | same |
