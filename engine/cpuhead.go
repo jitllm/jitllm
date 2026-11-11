@@ -171,6 +171,12 @@ func (s *Instance) drawArgs(smp *Sampler, xtc, mix float32) nn.DrawArgs {
 	rng, ex := smp.dyn()
 	a := nn.DrawArgs{TopK: smp.TopK, DynRange: rng, DynExp: ex, InvTemp: float32(1 / smp.Temp), TopP: topp, MinP: minp, Typical: float32(smp.TypicalP),
 		XTC: xtc, XTCMix: mix, Sigma: float32(smp.TopNSigma), Penalty: smp.penalties()}
+	if smp.Mirostat != 0 {
+		a.Mirostat, a.Penalty = smp.Mirostat, nn.NoPenalties()
+		var mu *float32
+		a.MiroTau, a.MiroEta, mu = smp.miro()
+		a.MiroMu, a.Mu = *mu, mu
+	}
 	if !a.Penalty.Off() {
 		a.Window = smp.window(s.c.NVocab)
 	}

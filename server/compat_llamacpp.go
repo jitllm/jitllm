@@ -135,9 +135,6 @@ func llamaFields() map[string]llamaField {
 		"dry_allowed_length":    {anyValue, ""},
 		"dry_penalty_last_n":    {anyValue, ""},
 		"dry_sequence_breakers": {anyValue, ""},
-		"mirostat":              {numIs(0), "Mirostat is not built"},
-		"mirostat_tau":          {anyValue, ""},
-		"mirostat_eta":          {anyValue, ""},
 		"adaptive_target":       {numLE(-1), "adaptive-p sampling is not built"},
 		"adaptive_decay":        {anyValue, ""},
 		"min_keep":              {numIs(0), "min_keep is not built"},
@@ -170,6 +167,7 @@ func llamaRead() map[string]bool {
 		"repeat_last_n": true, "presence_penalty": true, "frequency_penalty": true, "model": true,
 		"logit_bias": true, "typical_p": true, "xtc_probability": true, "xtc_threshold": true,
 		"top_n_sigma": true, "dynatemp_range": true, "dynatemp_exponent": true,
+		"mirostat": true, "mirostat_tau": true, "mirostat_eta": true,
 		// /infill's own.
 		"input_prefix": true, "input_suffix": true, "input_extra": true,
 	}
@@ -548,6 +546,8 @@ type llamaSettings struct {
 	Temperature, TopP, MinP, RepeatPenalty     float64
 	TypicalP, XTCProbability, XTCThreshold     float64
 	TopNSigma, DynatempRange, DynatempExponent float64
+	Mirostat                                   int
+	MirostatTau, MirostatEta                   float64
 	PresencePenalty, FrequencyPenalty          float64
 	TopK, RepeatLastN, NPredict, NProbs        int
 	Seed                                       int64
@@ -558,7 +558,7 @@ type llamaSettings struct {
 
 // llamaDefaults are llama-server's defaults for an absent field.
 func llamaDefaults() llamaSettings {
-	return llamaSettings{Temperature: 0.8, TopP: 0.95, MinP: 0.05, TopK: 40, RepeatPenalty: 1, TypicalP: 1, XTCThreshold: 0.1, TopNSigma: -1, DynatempExponent: 1,
+	return llamaSettings{Temperature: 0.8, TopP: 0.95, MinP: 0.05, TopK: 40, RepeatPenalty: 1, TypicalP: 1, XTCThreshold: 0.1, TopNSigma: -1, DynatempExponent: 1, MirostatTau: 5, MirostatEta: 0.1,
 		RepeatLastN: 64, NPredict: -1, Seed: -1, Stop: []string{}}
 }
 
@@ -568,6 +568,7 @@ func llamaParams(s llamaSettings, _ int, _ []int32, _ int) map[string]any {
 		"top_k": s.TopK, "top_p": s.TopP, "min_p": s.MinP, "typical_p": s.TypicalP, "repeat_last_n": s.RepeatLastN,
 		"xtc_probability": s.XTCProbability, "xtc_threshold": s.XTCThreshold, "top_n_sigma": s.TopNSigma,
 		"dynatemp_range": s.DynatempRange, "dynatemp_exponent": s.DynatempExponent,
+		"mirostat": s.Mirostat, "mirostat_tau": s.MirostatTau, "mirostat_eta": s.MirostatEta,
 		"repeat_penalty": s.RepeatPenalty, "presence_penalty": s.PresencePenalty, "frequency_penalty": s.FrequencyPenalty,
 		"stop": s.Stop, "ignore_eos": s.IgnoreEOS, "stream": s.Stream,
 		"n_probs": s.NProbs, "grammar": s.Grammar, "json_schema": s.JSONSchema,
@@ -658,7 +659,8 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 		return
 	}
 	set := llamaDefaults()
-	var temp, topP, minP, typP, xtcP, xtcT, nSigma, dynR, dynE, repeat, presence, frequency *float64
+	var temp, topP, minP, typP, xtcP, xtcT, nSigma, dynR, dynE, mTau, mEta, repeat, presence, frequency *float64
+	var miro *int
 	var topK, lastN, nPredict, maxTokens, nProbs, slot *int
 	var seed *int64
 	var stop json.RawMessage
@@ -679,6 +681,9 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 	rd(decodeField(body, "top_n_sigma", &nSigma))
 	rd(decodeField(body, "dynatemp_range", &dynR))
 	rd(decodeField(body, "dynatemp_exponent", &dynE))
+	rd(decodeField(body, "mirostat", &miro))
+	rd(decodeField(body, "mirostat_tau", &mTau))
+	rd(decodeField(body, "mirostat_eta", &mEta))
 	rd(decodeField(body, "repeat_penalty", &repeat))
 	rd(decodeField(body, "presence_penalty", &presence))
 	rd(decodeField(body, "frequency_penalty", &frequency))
@@ -723,6 +728,19 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 	}
 	if dynE != nil {
 		set.DynatempExponent = *dynE
+	}
+	if miro != nil {
+		if *miro < 0 || *miro > 2 {
+			llFailErr(w, fmt.Errorf("%w: mirostat=%d: 0, 1 or 2", ErrInvalid, *miro))
+			return
+		}
+		set.Mirostat = *miro
+	}
+	if mTau != nil {
+		set.MirostatTau = *mTau
+	}
+	if mEta != nil {
+		set.MirostatEta = *mEta
 	}
 	if repeat != nil {
 		set.RepeatPenalty = *repeat
@@ -933,7 +951,8 @@ func llamaLogitBias(raw json.RawMessage) ([]TokenBias, error) {
 func llamaSampler(s llamaSettings, nctx int) *engine.Sampler {
 	sm := &engine.Sampler{Temp: s.Temperature, TopP: s.TopP, MinP: s.MinP, TypicalP: s.TypicalP,
 		XTCProbability: s.XTCProbability, XTCThreshold: s.XTCThreshold, TopNSigma: s.TopNSigma,
-		DynatempRange: s.DynatempRange, DynatempExponent: s.DynatempExponent, TopK: max(s.TopK, 0),
+		DynatempRange: s.DynatempRange, DynatempExponent: s.DynatempExponent, Mirostat: s.Mirostat,
+		MirostatTau: s.MirostatTau, MirostatEta: s.MirostatEta, TopK: max(s.TopK, 0),
 		RepeatPen: s.RepeatPenalty, RepeatLastN: s.RepeatLastN, PresencePen: s.PresencePenalty,
 		FreqPen: s.FrequencyPenalty, Seed: s.Seed}
 	switch s.RepeatLastN {

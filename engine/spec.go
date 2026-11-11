@@ -569,6 +569,11 @@ func (sp *Speculator) Next(sm *Sampler) ([]int32, error) {
 	if sp.limit > 0 {
 		k = min(k, sp.limit-1)
 	}
+	// A Mirostat draw's mu moves with every token it draws: a round drafts
+	// nothing and draws its one token, plain decode.
+	if !greedy && sm.Mirostat != 0 {
+		k = 0
+	}
 	if k < 0 {
 		return nil, errFull{t.maxSeq, t.reqSeq}
 	}

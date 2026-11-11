@@ -196,6 +196,82 @@ func DynTemp(p []float64, invT float64, dyn [2]float64) float64 {
 	return min(1/(lo+(hi-lo)*pw), 1e30)
 }
 
+// SampleMirostat is llama.cpp's Mirostat draw (graph.SampleMirostat) in
+// float64 over the row's softmax at 1/T (each logit times 1/T in float32):
+// version 2 the tokens of at most mu bits, the best always; version 1 the k
+// most likely, k from the 100 best's Zipf estimate; the walk at u over the
+// survivors renormalized; and mu less eta times the token's surprise past
+// tau. It returns the token, the next mu and how far the draw is from
+// flipping.
+func SampleMirostat(logits []float32, v1 bool, invT float32, tau, eta, mu, u float64) (tok uint32, mu2, margin float64) {
+	n := len(logits)
+	m := math.Inf(-1)
+	for _, x := range logits {
+		m = max(m, float64(x*invT))
+	}
+	q := make([]float64, n)
+	sum := 0.0
+	for i, x := range logits {
+		q[i] = math.Exp(float64(x*invT) - m)
+		sum += q[i]
+	}
+	for i := range q {
+		q[i] /= sum
+	}
+	order := make([]int, n)
+	for i := range order {
+		order[i] = i
+	}
+	sort.SliceStable(order, func(a, b int) bool { return q[order[a]] > q[order[b]] })
+	margin = math.Inf(1)
+	keep := 0
+	if v1 {
+		mm := min(100, n)
+		num, den := 0.0, 0.0
+		for i := 0; i < mm-1; i++ {
+			t := math.Log(float64(i+2) / float64(i+1))
+			num += t * math.Log(q[order[i]]/q[order[i+1]])
+			den += t * t
+		}
+		s := num / den
+		eps := s - 1
+		k := math.Pow(eps*math.Pow(2, mu)/(1-math.Pow(float64(n), -eps)), 1/s)
+		if k >= 1 {
+			margin = min(margin, (k-math.Floor(k))/k, (math.Floor(k)+1-k)/k)
+			keep = min(int(k), n)
+		} else {
+			keep = 1
+		}
+	} else {
+		floor := math.Pow(2, -mu)
+		for _, i := range order {
+			margin = min(margin, math.Abs(q[i]-floor)/floor)
+			if q[i] < floor {
+				break
+			}
+			keep++
+		}
+		keep = max(keep, 1)
+	}
+	surv := order[:keep]
+	mass := 0.0
+	for _, i := range surv {
+		mass += q[i]
+	}
+	target, upto := u*mass, 0.0
+	tok = uint32(surv[keep-1])
+	landed := false
+	for _, i := range surv {
+		upto += q[i]
+		margin = min(margin, math.Abs(upto-target)/mass)
+		if !landed && upto > target {
+			tok, landed = uint32(i), true
+		}
+	}
+	bits := -math.Log2(q[tok] / mass)
+	return tok, mu - eta*(bits-tau), margin
+}
+
 // xtcCut is llama.cpp's XTC over the survivors surv (in their order, largest
 // first) with probabilities p, the share of their softmax at temperature 1:
 // those at or above thr, every one but the last of them, where two or more

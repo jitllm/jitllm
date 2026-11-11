@@ -205,7 +205,7 @@ func TestLlamaRefusals(t *testing.T) {
 	f := &llamaFake{fakeBackend: &fakeBackend{tokens: []string{"a"}, reason: FinishEOS}}
 	s := llamaServe(t, f)
 	refuse := map[string]string{
-		"mirostat": `2`, "dry_multiplier": `0.8`,
+		"mirostat": `3`, "dry_multiplier": `0.8`,
 		"presence_penalty": `3`, "frequency_penalty": `-3`,
 		"logit_bias": `[[15]]`, "samplers": `["dry","top_k"]`, "n_cmpl": `2`, "id_slot": `3`,
 		"n_predict": `0`, "n_keep": `5`, "lora": `[{"id":0,"scale":1}]`, "post_sampling_probs": `true`,
@@ -278,8 +278,14 @@ func TestLlamaRefusals(t *testing.T) {
 	if smp := f.opts().Sampling; smp.DynatempRange != 0.5 || smp.DynatempExponent != 2 {
 		t.Errorf("the dynamic temperature reached the sampler as %v and %v", smp.DynatempRange, smp.DynatempExponent)
 	}
+	if code, out := llamaPost(t, s, "/completion", `{"prompt":"x","mirostat":2,"mirostat_tau":4,"mirostat_eta":0.2}`); code != 200 {
+		t.Fatalf("mirostat: %d %v", code, out)
+	}
+	if smp := f.opts().Sampling; smp.Mirostat != 2 || smp.MirostatTau != 4 || smp.MirostatEta != 0.2 {
+		t.Errorf("Mirostat reached the sampler as %d, %v and %v", smp.Mirostat, smp.MirostatTau, smp.MirostatEta)
+	}
 	// The error body is llama-server's.
-	_, out := llamaPost(t, s, "/completion", `{"prompt":"x","mirostat":1}`)
+	_, out := llamaPost(t, s, "/completion", `{"prompt":"x","mirostat":3}`)
 	e := out["error"].(map[string]any)
 	if e["code"] != float64(400) || e["type"] != "invalid_request_error" || e["message"] == "" {
 		t.Fatalf("error shape: %v", out)
