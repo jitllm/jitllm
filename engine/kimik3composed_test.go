@@ -133,7 +133,7 @@ func TestKimiK3ServesComposedOnCPU(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer ref.Close()
-			want := partCPULogits(t, ref, g.IDs, cpuFaultNone, true, ref.Cfg.NLayer, nn.DeclineServes, instOpts...)
+			want := partCPULogits(t, ref, g.IDs, cpuFaultNone, true, ref.Cfg.NLayer, instOpts...)
 			instOpts2 := []Option{withCPUFloat()}
 			m, err := model.Open(path)
 			if err != nil {
@@ -144,7 +144,7 @@ func TestKimiK3ServesComposedOnCPU(t *testing.T) {
 				t.Fatal("the bank's input rows are expanded, or the head's mix over it is not stated")
 			}
 			run := func(f cpuFault) float64 {
-				return worstFrom(want, partCPULogits(t, m, g.IDs, f, true, m.Cfg.NLayer, nn.DeclineServes, instOpts2...))
+				return worstFrom(want, partCPULogits(t, m, g.IDs, f, true, m.Cfg.NLayer, instOpts2...))
 			}
 			worst := run(cpuFaultNone)
 			t.Logf("the composed CPU head's mix from the reference: worst NMSE %.3g over %d steps", worst, len(g.IDs))

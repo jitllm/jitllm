@@ -10,7 +10,6 @@ type Decline uint8
 
 const (
 	DeclineServes Decline = iota
-	DeclineNoGraph
 	DeclineCaller
 	DeclineNoRoom
 	DeclineNoWeight
@@ -24,8 +23,6 @@ func (d Decline) String() string {
 	switch d {
 	case DeclineServes:
 		return "served"
-	case DeclineNoGraph:
-		return "no graph from the front end"
 	case DeclineCaller:
 		return "the caller keeps it on the tier's kernels"
 	case DeclineNoRoom:
