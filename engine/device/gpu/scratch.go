@@ -36,6 +36,15 @@ func (g *devTier) allocated() int64 {
 // footprint is what one n-byte buffer costs the card: n rounded up to the
 // driver's granularity (backend.AllocCounter.FootprintOf), n where the device
 // does not say.
+// slack is what buffers not yet made can spend beyond their footprints
+// (backend.AllocCounter.Slack), 0 where the device does not say.
+func (g *devTier) slack() uint64 {
+	if g.cnt != nil {
+		return g.cnt.Slack()
+	}
+	return 0
+}
+
 func (g *devTier) footprint(n int) uint64 {
 	if g.cnt != nil {
 		return g.cnt.FootprintOf(n)

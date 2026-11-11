@@ -205,6 +205,9 @@ func (d *fakeDev) FootprintOf(n int) uint64 {
 	return uint64((n + d.page - 1) / d.page * d.page)
 }
 
+// Slack implements backend.AllocCounter: every buffer is its own.
+func (d *fakeDev) Slack() uint64 { return 0 }
+
 // Footprint implements backend.AllocCounter: each live buffer rounded up to
 // page bytes, the way a driver hands memory out; a zero page rounds nothing.
 func (d *fakeDev) Footprint() uint64 {

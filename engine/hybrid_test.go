@@ -1328,7 +1328,10 @@ func TestMoEDeviceReadsOnlyTheBanksItTakes(t *testing.T) {
 	// on an open card holds a wider reservation than the same budget buys, and
 	// the bytes it frees admit blocks the measurement did not count -- the
 	// budgets measured for one and two blocks placed three and four.
-	noReserve := gpu.WithConfig(func(c *gpu.Config) { c.NoScratchReserve = true })
+	// Nor are blocks streamed: a block refused resident would go on streamed,
+	// so every budget places all eight and none separates an admission from
+	// the offer.
+	noReserve := gpu.WithConfig(func(c *gpu.Config) { c.NoScratchReserve = true; c.NoAutoStream = true })
 	// Measure what n blocks cost rather than relying on what the default budget
 	// happens to admit.
 	cost := func(n int) (int, uint64) {
@@ -1345,11 +1348,17 @@ func TestMoEDeviceReadsOnlyTheBanksItTakes(t *testing.T) {
 		return s.GPULayers(), g.Bytes()
 	}
 	nOneP, bOne := cost(1)
-	nTwoP, used := cost(2)
-	if nOneP != 1 || nTwoP != 2 || bOne == 0 || used <= bOne {
-		t.Skipf("this card places %d and %d block(s) holding %d and %d bytes, so "+
-			"one and two blocks cannot be separated here", nOneP, nTwoP, bOne, used)
+	nTwoP, bTwo := cost(2)
+	nThreeP, bThree := cost(3)
+	if nOneP != 1 || nTwoP != 2 || nThreeP != 3 || bOne == 0 || bTwo <= bOne || bThree <= bTwo {
+		t.Skipf("this card places %d, %d and %d block(s) holding %d, %d and %d bytes, so "+
+			"one and two blocks cannot be separated here", nOneP, nTwoP, nThreeP, bOne, bTwo, bThree)
 	}
+	// Each budget halfway between n blocks' bytes and n+1's: the room a
+	// check holds back beyond the bytes it prices (the pieces small buffers
+	// are carved from, backend.AllocCounter.Slack) is far below a block, so
+	// n fit and n+1 do not.
+	budOne, used := (bOne+bTwo)/2, (bTwo+bThree)/2
 
 	// chunks reports what SetDeviceLayers read off the file under `budget`
 	// bytes of card, and how many blocks it placed.
@@ -1376,12 +1385,12 @@ func TestMoEDeviceReadsOnlyTheBanksItTakes(t *testing.T) {
 	// it was measured at; what the gate needs is that the smaller admits
 	// fewer, and both fewer than the eight offered.
 	two, nTwo := chunks(used)
-	one, nOne := chunks(bOne)
+	one, nOne := chunks(budOne)
 	t.Logf("budget %d B: %d block(s), %d chunk(s) read", used, nTwo, two)
-	t.Logf("budget %d B: %d block(s), %d chunk(s) read", bOne, nOne, one)
+	t.Logf("budget %d B: %d block(s), %d chunk(s) read", budOne, nOne, one)
 	if nOne < 1 || nOne >= nTwo || nTwo >= 8 {
 		t.Fatalf("budgets of %d and %d B placed %d and %d of 8 blocks: they do not "+
-			"separate an admission from the offer", bOne, used, nOne, nTwo)
+			"separate an admission from the offer", budOne, used, nOne, nTwo)
 	}
 	if one >= two {
 		t.Fatalf("placing %d blocks of 8 read %d chunk(s) against %d for %d: "+
