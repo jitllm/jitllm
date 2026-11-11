@@ -482,8 +482,11 @@ type Stats struct {
 	PartsFormed, PartKernels, ScratchBuilds, LaneBuilds int
 	// FormAsks counts the forms asked of the device's form cache, a
 	// compiled one among them: what a placement, a relocation or a lane
-	// forming a part moves, and no warm step does.
+	// forming a part moves, and no warm step does. FormTook is the time
+	// those asks took: composing each part and compiling its kernels, a
+	// compiled one's lookup among them.
 	FormAsks int
+	FormTook time.Duration
 	// FormErr is the first form or lowering the device did not build.
 	FormErr error
 	// ComposerRuns is the times the device's composer formed a request
@@ -822,6 +825,7 @@ func (s *Stats) add(o Stats) {
 	}
 	s.PartsFormed += o.PartsFormed
 	s.FormAsks += o.FormAsks
+	s.FormTook += o.FormTook
 	if s.FormErr == nil {
 		s.FormErr = o.FormErr
 	}

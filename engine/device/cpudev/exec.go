@@ -364,7 +364,7 @@ func (e *Exec) AccountOn(dev string) (nn.Account, bool) {
 	if dev != nn.CPU {
 		return nn.Account{}, false
 	}
-	return nn.Account{Steps: e.steps, Forms: e.Composed(), Asks: e.comp.forms.Asks(), FormErr: e.comp.Err()}, true
+	return nn.Account{Steps: e.steps, Forms: e.Composed(), Asks: e.comp.forms.Asks(), Composing: e.comp.forms.Took(), FormErr: e.comp.Err()}, true
 }
 
 // BeginPrefill starts a prompt as a phase of the device's workers, on its
