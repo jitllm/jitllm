@@ -81,10 +81,20 @@ func (k *Kernel) jammable(o, i int) bool {
 }
 
 // jamSteps is jammable, with the elements o's iteration moves each store
-// by: one, or for a float stored at a flat index, any constant.
+// by: one, or for a float stored at a flat index, any constant. Inner
+// loop i's bounds are one for every lane, so none reads o's iteration.
 func (k *Kernel) jamSteps(o, i int) ([]int, bool) {
 	it := k.iterOf(o)
 	if it < 0 || k.readsAsValue(i, it) {
+		return nil, false
+	}
+	li := k.Loops[i]
+	for _, b := range []int{li.Count, li.Span, li.End} {
+		if b > 0 && k.readsNode(b-1, it) {
+			return nil, false
+		}
+	}
+	if pos := k.Positions; pos != nil && pos.Loop == i && (k.readsNode(pos.First, it) || k.readsNode(pos.End, it)) {
 		return nil, false
 	}
 	hs := k.Homes()

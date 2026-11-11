@@ -202,10 +202,10 @@ func decomposeSound(o graph.Op, c *Context) ([]Prim, error) {
 		return x.e
 	}
 	// span is the sums' trips: the window's taps times the channels, the
-	// same for every output -- a count that differs by row holds an
-	// induction of the rows in the vector registers, and the jam's tail
-	// does not carry one (Jam.stripTail) -- none for a clip of no outputs,
-	// and for the second phase none where the ratio does not interpolate.
+	// same for every output, so the outputs jam into lanes (a count that
+	// differs by row keeps them serial, Kernel.jamSteps) -- none for a clip
+	// of no outputs, and for the second phase none where the ratio does not
+	// interpolate.
 	span := func(next bool) *Range {
 		var lo, hi exprs
 		lo.u(0)

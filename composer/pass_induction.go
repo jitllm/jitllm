@@ -127,9 +127,10 @@ func (p Induction) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 	})
 }
 
-// addressNodes is the nodes that feed an index a load or a store reads:
-// every node an index is computed from, a fold's reads not followed, as
-// readsNode walks them.
+// addressNodes is the nodes that feed an index a load or a store reads,
+// or a loop's bounds: every node one is computed from, a fold's reads not
+// followed, as readsNode walks them. A count is a general register's, as
+// an address is.
 func (k *Kernel) addressNodes() map[int]bool {
 	m := k.vwords
 	if m == nil {
@@ -166,6 +167,13 @@ func (k *Kernel) findAddressNodes() map[int]bool {
 		push(s.Ix)
 		for _, a := range s.Ax {
 			push(a)
+		}
+	}
+	for _, l := range k.Loops {
+		for _, b := range []int{l.Count, l.Span, l.End} {
+			if b > 0 {
+				push(b - 1)
+			}
 		}
 	}
 	for len(stack) > 0 {
