@@ -63,6 +63,15 @@ type Video struct {
 	// StampDigits places rather than the mean of its frames' rounded; and
 	// StampLast writes it after the pair's span rather than before it.
 	StampFirst, StampLast bool
+	// Whole reads each frame alone as a picture of the tower's own, its last
+	// square: the whole frame at the size the picture's last square takes
+	// (a tiled tower's thumbnail), through the picture's resize, entry,
+	// blocks and head; Pre and Entry state nothing.
+	Whole bool
+	// StampIndex writes a frame's number from 1 in place of its time; and
+	// Between is the text between one frame's span and the next's.
+	StampIndex bool
+	Between    string
 }
 
 // Valid says the record is one this build can read.
@@ -71,9 +80,32 @@ func (v *Video) Valid() error {
 	if v.EveryFrame {
 		sampled = v.Fps == 0 && v.MinFrames == 0 && v.MaxFrames == 0
 	}
-	if !sampled || !(v.DefaultFps > 0) || v.StampDigits < 0 || v.StampDigits > 9 {
+	// The rate is read where frames are sampled or stamped with a time.
+	timed := !v.EveryFrame || !v.StampIndex
+	if !sampled || timed && !(v.DefaultFps > 0) || v.DefaultFps < 0 || v.StampDigits < 0 || v.StampDigits > 9 {
 		return fmt.Errorf("jlm: the video samples %v frames a second (%v unstated), %d to %d, its times to %d places",
 			v.Fps, v.DefaultFps, v.MinFrames, v.MaxFrames, v.StampDigits)
+	}
+	if v.PerSecond < 0 || v.PerSecond > 0 && !v.Joined {
+		return fmt.Errorf("jlm: a video of %d positions a second whose pairs are not one grid", v.PerSecond)
+	}
+	if v.Steps && (v.EveryFrame || v.MaxSeconds < 1) || !v.Steps && v.MaxSeconds != 0 {
+		return fmt.Errorf("jlm: a video sampled in steps %v up to %d seconds, every frame %v", v.Steps, v.MaxSeconds, v.EveryFrame)
+	}
+	if v.Joined && (v.StampFirst || v.StampLast) {
+		return fmt.Errorf("jlm: a video of one grid writes no time to place")
+	}
+	if v.StampIndex && v.StampFirst {
+		return fmt.Errorf("jlm: a video that writes a frame's number and its first time")
+	}
+	if v.Whole {
+		if len(v.Pre) != 0 || v.Entry.NIn != 0 || len(v.Entry.Ops) != 0 || v.Joined {
+			return fmt.Errorf("jlm: a video of whole frames that states a resize, an entry or one grid of its own")
+		}
+		return nil
+	}
+	if v.StampIndex || v.Between != "" {
+		return fmt.Errorf("jlm: a video of pairs numbered or parted as whole frames are")
 	}
 	if len(v.Pre) != 2 || v.Pre[0].Kind != PreVideoResize ||
 		v.Pre[1].Kind != PreNormalize && v.Pre[1].Kind != PreNormalizeBF16 || len(v.Pre[1].Floats) != 6 {
@@ -86,15 +118,6 @@ func (v *Video) Valid() error {
 	if v.EveryFrame && (len(v.Pre[0].Ints) < 7 || v.Pre[0].Ints[6] != 1) {
 		// Every frame of a resize over the count shrinks without a floor.
 		return fmt.Errorf("jlm: a video of every frame resized over their count")
-	}
-	if v.PerSecond < 0 || v.PerSecond > 0 && !v.Joined {
-		return fmt.Errorf("jlm: a video of %d positions a second whose pairs are not one grid", v.PerSecond)
-	}
-	if v.Steps && (v.EveryFrame || v.MaxSeconds < 1) || !v.Steps && v.MaxSeconds != 0 {
-		return fmt.Errorf("jlm: a video sampled in steps %v up to %d seconds, every frame %v", v.Steps, v.MaxSeconds, v.EveryFrame)
-	}
-	if v.Joined && (v.StampFirst || v.StampLast) {
-		return fmt.Errorf("jlm: a video of one grid writes no time to place")
 	}
 	if v.Entry.NIn != 2 || len(v.Entry.Ops) == 0 || v.Entry.Ops[0].Code != TOpPatchify {
 		return fmt.Errorf("jlm: the video's entry reads %d frames and does not start with their patches", v.Entry.NIn)
@@ -136,7 +159,8 @@ func encodeVideo(w *wbuf, v *Video) {
 		on   bool
 		flag uint32
 	}{{v.Joined, videoJoined}, {v.EveryFrame, videoEveryFrame}, {v.Steps, videoSteps},
-		{v.StampFirst, videoStampFirst}, {v.StampLast, videoStampLast}} {
+		{v.StampFirst, videoStampFirst}, {v.StampLast, videoStampLast}, {v.Whole, videoWhole},
+		{v.StampIndex, videoStampIndex}, {v.Between != "", videoBetween}} {
 		if x.on {
 			f |= x.flag
 		}
@@ -146,6 +170,9 @@ func encodeVideo(w *wbuf, v *Video) {
 		w.i32(v.PerSecond)
 		if v.Steps {
 			w.i32(v.MaxSeconds)
+		}
+		if v.Between != "" {
+			w.str(v.Between)
 		}
 	}
 }
@@ -157,7 +184,10 @@ const (
 	videoSteps
 	videoStampFirst
 	videoStampLast
-	videoKnown = videoStampLast<<1 - 1
+	videoWhole
+	videoStampIndex
+	videoBetween
+	videoKnown = videoBetween<<1 - 1
 )
 
 func decodeVideo(r *rbuf) *Video {
@@ -183,8 +213,12 @@ func decodeVideo(r *rbuf) *Video {
 		f := r.u32()
 		v.Joined, v.EveryFrame, v.PerSecond = f&videoJoined != 0, f&videoEveryFrame != 0, r.i32()
 		v.Steps, v.StampFirst, v.StampLast = f&videoSteps != 0, f&videoStampFirst != 0, f&videoStampLast != 0
+		v.Whole, v.StampIndex = f&videoWhole != 0, f&videoStampIndex != 0
 		if v.Steps {
 			v.MaxSeconds = r.i32()
+		}
+		if f&videoBetween != 0 {
+			v.Between = r.str()
 		}
 		// A flag a later build states is a video this one would read wrong.
 		if f&^videoKnown != 0 {

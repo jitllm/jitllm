@@ -16,9 +16,10 @@ import (
 )
 
 // VideoPlan is how the tower reads a video (jlm.Video): the frames it
-// samples, an odd count's last repeated, two to a picture of the tower; the
-// square both frames of a pair are resized to; each pair's time as the
-// prompt writes it, or, joined, the positions its pairs stand apart.
+// samples, an odd count's last repeated, two to a picture of the tower, or
+// each one a picture whole; the square a pair's frames are resized to, or a
+// whole frame's last square; each picture's time or number as the prompt
+// writes it, or, joined, the positions its pairs stand apart.
 type VideoPlan struct {
 	Frames []int
 	Square Square
@@ -36,8 +37,14 @@ func (tg *TowerGraphs) VideoPlan(n, w, h int, fps float64) (VideoPlan, error) {
 	if n < 1 || w < 1 || h < 1 {
 		return VideoPlan{}, fmt.Errorf("model: a video of %d frames of %dx%d", n, w, h)
 	}
-	r := v.Pre[0].Ints
-	pair := int(v.Entry.NIn)
+	// A whole frame is one picture of the tower; a pair's frames are sized
+	// together, in counts of Ints[5].
+	pair, per := int(v.Entry.NIn), 1
+	if v.Whole {
+		pair = 1
+	} else {
+		per = int(v.Pre[0].Ints[5])
+	}
 	rate := fps
 	if !(rate > 0) {
 		rate = float64(v.DefaultFps)
@@ -56,13 +63,13 @@ func (tg *TowerGraphs) VideoPlan(n, w, h int, fps float64) (VideoPlan, error) {
 		}
 		// The repeated frame is sized with the rest.
 		k = len(p.Frames)
-		if k < int(r[5]) {
-			return VideoPlan{}, fmt.Errorf("model: a video of %d frames samples %d, fewer than the %d a picture of the tower takes", n, k, r[5])
+		if k < per {
+			return VideoPlan{}, fmt.Errorf("model: a video of %d frames samples %d, fewer than the %d a picture of the tower takes", n, k, per)
 		}
 	default:
 		k = min(max(int(float64(n)/rate*float64(v.Fps)), int(v.MinFrames)), int(v.MaxFrames), n)
-		if k < int(r[5]) {
-			return VideoPlan{}, fmt.Errorf("model: a video of %d frames samples %d, fewer than the %d a picture of the tower takes", n, k, r[5])
+		if k < per {
+			return VideoPlan{}, fmt.Errorf("model: a video of %d frames samples %d, fewer than the %d a picture of the tower takes", n, k, per)
 		}
 		// numpy's linspace(0, n-1, k), rounded half to even.
 		for i := range k {
@@ -84,6 +91,10 @@ func (tg *TowerGraphs) VideoPlan(n, w, h int, fps float64) (VideoPlan, error) {
 		p.Stride = int(v.PerSecond) * int(float64(pair)/rate)
 	case v.Joined:
 		p.Stride = 1
+	case v.StampIndex:
+		for i := range len(p.Frames) / pair {
+			p.Stamps = append(p.Stamps, strconv.Itoa(i+1))
+		}
 	case v.StampFirst:
 		// Python's int of the first frame's time, at StampDigits places.
 		unit := math.Pow(10, float64(v.StampDigits))
@@ -97,7 +108,11 @@ func (tg *TowerGraphs) VideoPlan(n, w, h int, fps float64) (VideoPlan, error) {
 			p.Stamps = append(p.Stamps, strconv.FormatFloat(t, 'f', int(v.StampDigits), 64))
 		}
 	}
-	ow, oh, err := videoSize(k, w, h, r)
+	if v.Whole {
+		p.Square = tg.LastSquare(w, h)
+		return p, nil
+	}
+	ow, oh, err := videoSize(k, w, h, v.Pre[0].Ints)
 	if err != nil {
 		return VideoPlan{}, err
 	}
@@ -224,9 +239,9 @@ func videoEntry(t *jlm.Tower, px0, px1 uint8, grid, extra, side int, f graph.Fac
 
 // VideoSpans is the spans a video of frames at fps frames a second (0 where
 // the caller states none) stands in a prompt as (jlm.Video): Before, then
-// for each pair of the frames it samples the pair's time and the tower's
-// span around the pair's rows, then After. The frames are one size, as the
-// reference stacks them.
+// for each pair of the frames it samples, or each frame read whole, its
+// time or number and the tower's span around its rows, then After. The
+// frames are one size, as the reference stacks them.
 func (m *Model) VideoSpans(frames []image.Image, fps float64) ([]Span, error) {
 	tg := m.Tower
 	if tg == nil || tg.Video == nil {
@@ -260,7 +275,7 @@ func (m *Model) VideoSpans(frames []image.Image, fps float64) ([]Span, error) {
 		pairs := len(p.Frames) / 2
 		for i := range pairs {
 			f0, f1 := frames[p.Frames[2*i]], frames[p.Frames[2*i+1]]
-			k, err := pairKey(f0, f1, p.Square)
+			k, err := videoKey(p.Square, f0, f1)
 			if err != nil {
 				return nil, err
 			}
@@ -272,37 +287,64 @@ func (m *Model) VideoSpans(frames []image.Image, fps float64) ([]Span, error) {
 		}
 		return append(out, Span{Tokens: append([]int32(nil), v.After...)}), nil
 	}
+	// The text between two pictures' spans -- a time written after the one,
+	// Between, a time or number written before the next -- is encoded as
+	// one, as the reference tokenizes it.
+	text := ""
 	for i, st := range p.Stamps {
-		f0, f1 := frames[p.Frames[2*i]], frames[p.Frames[2*i+1]]
-		k, err := pairKey(f0, f1, p.Square)
-		if err != nil {
-			return nil, err
+		stamp := v.StampBefore + st + v.StampAfter
+		if i > 0 {
+			text += v.Between
 		}
-		stamp := m.Vocab.Encode(v.StampBefore+st+v.StampAfter, false)
 		if !v.StampLast {
-			toks = append(toks, stamp...)
+			text += stamp
 		}
-		toks = append(toks, t.Span.Before...)
-		out = append(out, Span{Tokens: toks},
-			Span{Picture: f0, Frame: f1, FrameW: p.Square.Ow, FrameH: p.Square.Oh, PicRows: rows, Grid: grid, Key: k})
-		toks = append([]int32(nil), t.Span.After...)
+		toks = append(append(toks, m.encodeText(text)...), t.Span.Before...)
+		var sp Span
+		if v.Whole {
+			f := frames[p.Frames[i]]
+			k, err := videoKey(p.Square, f)
+			if err != nil {
+				return nil, err
+			}
+			sp = Span{Picture: f, Whole: true, PicRows: rows, Grid: grid, Key: k}
+		} else {
+			f0, f1 := frames[p.Frames[2*i]], frames[p.Frames[2*i+1]]
+			k, err := videoKey(p.Square, f0, f1)
+			if err != nil {
+				return nil, err
+			}
+			sp = Span{Picture: f0, Frame: f1, FrameW: p.Square.Ow, FrameH: p.Square.Oh, PicRows: rows, Grid: grid, Key: k}
+		}
+		out = append(out, Span{Tokens: toks}, sp)
+		toks, text = append([]int32(nil), t.Span.After...), ""
 		if v.StampLast {
-			toks = append(toks, stamp...)
+			text = stamp
 		}
 	}
-	return append(out, Span{Tokens: append(toks, v.After...)}), nil
+	return append(out, Span{Tokens: append(append(toks, m.encodeText(text)...), v.After...)}), nil
 }
 
-// pairKey names a video pair by everything the tower reads of it: both
-// frames, as pictureKey names one, and the square they are resized to.
-func pairKey(f0, f1 image.Image, sq Square) (*RowsKey, error) {
+// encodeText is text's tokens with no specials, none for no text (a
+// tokenizer's dummy prefix would otherwise make one of nothing).
+func (m *Model) encodeText(text string) []int32 {
+	if text == "" {
+		return nil
+	}
+	return m.Vocab.Encode(text, false)
+}
+
+// videoKey names a video's picture -- a pair, or a frame read whole -- by
+// everything the tower reads of it: its frames, as pictureKey names one,
+// and the square they are resized to.
+func videoKey(sq Square, frames ...image.Image) (*RowsKey, error) {
 	hs := sha256.New()
 	hs.Write([]byte("video"))
 	var sz [8]byte
 	binary.LittleEndian.PutUint32(sz[:], uint32(sq.Ow))
 	binary.LittleEndian.PutUint32(sz[4:], uint32(sq.Oh))
 	hs.Write(sz[:])
-	for _, f := range []image.Image{f0, f1} {
+	for _, f := range frames {
 		k, err := pictureKey(f)
 		if err != nil {
 			return nil, err

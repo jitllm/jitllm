@@ -202,7 +202,7 @@ func TestEveryVideoProcessorIsStated(t *testing.T) {
 		"qwen2.5vl_merger": "Qwen2VLVideoProcessor", "qwen2vl_merger": "Qwen2VLVideoProcessor",
 		"qwen3vl_merger": "Qwen3VLVideoProcessor", "resampler": "",
 	}
-	gaps := map[string]bool{"gemma4v": true, "idefics3": true, "internvl": true}
+	gaps := map[string]bool{"gemma4v": true, "idefics3": true}
 	for _, name := range Projectors() {
 		p := projectorOf()[name]
 		if !StatesTower(p) {

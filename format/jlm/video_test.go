@@ -46,6 +46,12 @@ func testStepVideo() *Video {
 	return v
 }
 
+// testWholeVideo is InternVL's: every frame read whole as the picture's
+// last square, numbered from 1, a line between one frame and the next.
+func testWholeVideo() *Video {
+	return &Video{EveryFrame: true, Whole: true, StampIndex: true, StampBefore: "Frame", StampAfter: ": ", Between: "\n"}
+}
+
 // TestVideoRoundTrips writes a stated tower's video record into the vision
 // section's tail and reads the same record back, behind an audio tower's
 // and with none; a section with no video reads back with none.
@@ -84,15 +90,23 @@ func TestVideoRoundTrips(t *testing.T) {
 		if !reflect.DeepEqual(got.Tower.Video, v.Tower.Video) {
 			t.Fatalf("audio %v: the stepped video read back as\n%+v\nnot\n%+v", audio, got.Tower.Video, v.Tower.Video)
 		}
+		v.Tower.Video = testWholeVideo()
+		if got, err = decodeVision(encodeVision(v)); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(got.Tower.Video, v.Tower.Video) {
+			t.Fatalf("audio %v: the whole frames read back as\n%+v\nnot\n%+v", audio, got.Tower.Video, v.Tower.Video)
+		}
 		if audio && (got.Audio == nil || got.Audio.Tower == nil) {
 			t.Fatal("the audio tower did not survive the video after it")
 		}
 	}
 	// A flag this build does not know is refused, not read past: the
-	// tail's flags are the word before PerSecond.
+	// tail's flags are the word before PerSecond, the first past the known
+	// its second byte's lowest bit.
 	var w wbuf
 	encodeVideo(&w, testJoinedVideo())
-	w.b[len(w.b)-8] |= 1 << 7
+	w.b[len(w.b)-7] |= 1
 	r := rbuf{b: w.b}
 	decodeVideo(&r)
 	if r.err == nil {
@@ -149,8 +163,26 @@ func TestVideoRefusesWhatItCannotRead(t *testing.T) {
 		"seconds with no steps":  func(v *Video) { v.Steps = false },
 		"a time in one grid":     func(v *Video) { v.Joined = true },
 		"a first time unsampled": func(v *Video) { v.Fps = 0 },
+		"pairs numbered":         func(v *Video) { v.StampFirst, v.StampIndex = false, true },
+		"pairs parted":           func(v *Video) { v.Between = "\n" },
 	} {
 		v := testStepVideo()
+		breaks(v)
+		if v.Valid() == nil {
+			t.Errorf("%s: Valid accepted it", name)
+		}
+	}
+	if err := testWholeVideo().Valid(); err != nil {
+		t.Fatal(err)
+	}
+	for name, breaks := range map[string]func(*Video){
+		"whole frames resized":     func(v *Video) { v.Pre = testVideo().Pre },
+		"whole frames' own entry":  func(v *Video) { v.Entry = testVideo().Entry },
+		"whole frames in one grid": func(v *Video) { v.Joined = true },
+		"numbered and timed":       func(v *Video) { v.StampFirst = true },
+		"sampled with no rate":     func(v *Video) { v.EveryFrame, v.Fps, v.MinFrames, v.MaxFrames = false, 2, 1, 8 },
+	} {
+		v := testWholeVideo()
 		breaks(v)
 		if v.Valid() == nil {
 			t.Errorf("%s: Valid accepted it", name)

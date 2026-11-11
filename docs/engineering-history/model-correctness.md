@@ -5242,6 +5242,33 @@ advancing as text and each pair's frames swapped are its violations. The
 pairs as one grid is no violation it can write: the rope's layout refuses a
 grid the times interrupt.
 
+## InternVL's video
+
+InternVL reads a video as pictures, not pairs: InternVLVideoProcessor (5.17)
+squashes every frame to the picture's square and normalises it as the
+picture is, and InternVLProcessor writes each as "Frame{n}: " and the
+picture's span, a line between one frame and the next. The checkpoints
+publish no video_preprocessor_config.json, so the processor reads
+preprocessor_config.json: InternVL3-1B-hf's frames are 448x448 with
+ImageNet's mean and deviation, every frame read (do_sample_frames false).
+A frame is then exactly the picture's last square -- the thumbnail of a
+tiled picture, or its one square -- and transformers agrees to the bit:
+three frames of 640x360 through the video processor and through the image
+processor's thumbnail give the same rows (scripts/internvlvideogold.py).
+
+So the container states the video as whole frames (`jlm.Video.Whole`): no
+resize, entry or class of its own, each frame a span of the picture's last
+square (`model.Span.Whole`, `TowerGraphs.LastSquare`), "Frame" and ": "
+around its number (`StampIndex`) and a line between (`Between`), the text
+between two spans encoded as one as the reference tokenizes it.
+`TestInternVLVideoMatchesTransformers` holds InternVL3-1B (Q8_0) to it: the
+801 ids the processor writes, each frame's rows the frame's picture's last
+square to the bit, and within 2e-2 of transformers' f32 rows -- the CPU
+device at 9.3e-3, CUDA at 8.6e-3 and Vulkan at 9.4e-3 with every tower
+block on the card (V100), the quadrant picture's rows at 6.2e-3. No line
+between the frames, and each frame's first square in place of its last
+(0.49), are its violations.
+
 ## Qwen3.5's tower, and GLM-4.1V / 4.5V / 4.6V
 
 **Qwen3.5** is Qwen3-VL's tower with no deepstack taps in front of qwen35's

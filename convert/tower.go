@@ -76,7 +76,7 @@ func StatesTower(p jlm.Projector) bool { return towerStater(p) != nil }
 // StatesVideo reports whether the converter states how a projector's tower
 // reads a video (jlm.Video).
 func StatesVideo(p jlm.Projector) bool {
-	return p == jlm.ProjQwen2VL || p == jlm.ProjQwen25VL || p == jlm.ProjQwen3VL || p == jlm.ProjGLM4V
+	return p == jlm.ProjQwen2VL || p == jlm.ProjQwen25VL || p == jlm.ProjQwen3VL || p == jlm.ProjGLM4V || p == jlm.ProjInternVL
 }
 
 // idefics3Tower is SmolVLM's tower as llama.cpp's mtmd runs it, which this
@@ -465,6 +465,15 @@ func internvlTower(s *jlm.Source) (*jlm.Tower, error) {
 	if t.Span.After, err = markerIDs(s, "</img>"); err != nil {
 		return nil, err
 	}
+	// InternVLVideoProcessor at the checkpoints' settings, which are the
+	// picture's (they publish no video_preprocessor_config.json, and the
+	// processor reads preprocessor_config.json): every frame
+	// (do_sample_frames false) squashed to the picture's square and
+	// normalised as it is -- the picture's thumbnail, to the bit
+	// (scripts/internvlvideogold.py); in the prompt "Frame{n}: " and the
+	// frame's span, a line between one frame and the next
+	// (InternVLProcessor.replace_video_token).
+	t.Video = &jlm.Video{EveryFrame: true, Whole: true, StampIndex: true, StampBefore: "Frame", StampAfter: ": ", Between: "\n"}
 	if err := t.Valid(); err != nil {
 		return nil, fmt.Errorf("convert: internvl: %w", err)
 	}

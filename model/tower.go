@@ -524,10 +524,13 @@ func (m *Model) BuildTowerGraphs() (*TowerGraphs, error) {
 		tg.Rows = max(tg.Rows, cl.Rows)
 	}
 	if t.Video != nil {
-		if len(t.Chain) > 0 || !fit.Own() {
+		if len(t.Chain) > 0 || !t.Video.Whole && !fit.Own() {
 			return nil, fmt.Errorf("model: a video read by a tower whose pictures are not each of a size of its own")
 		}
 		tg.Video = t.Video
+	}
+	if t.Video != nil && !t.Video.Whole {
+		// A whole frame is a picture: its classes are the picture's.
 		for i, sd := range sides {
 			cl := towerClass{Entry: map[uint8]*graph.Graph{}, Rows: tg.Classes[i].Rows}
 			for px0 := graph.PixRGBA8; px0 < graph.PixFormats; px0++ {
@@ -1326,6 +1329,16 @@ func (tg *TowerGraphs) SquareOut(sq Square) int {
 		return n
 	}
 	return sq.Gw * sq.Gh * tg.Out / grid
+}
+
+// LastSquare is a w x h picture's last square: a tiled tower's thumbnail,
+// the whole picture at a square's size, or its one square.
+func (tg *TowerGraphs) LastSquare(w, h int) Square {
+	sq, n := tg.Square(w, h, 0)
+	if n > 1 {
+		sq, _ = tg.Square(w, h, n-1)
+	}
+	return sq
 }
 
 // picRows is the rows a w x h picture becomes: its squares' every row.
