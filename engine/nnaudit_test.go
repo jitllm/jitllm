@@ -61,8 +61,9 @@ func TestEveryModelRunsOnACard(t *testing.T) {
 	// composedNothing reads can see a composition.
 	seen := false
 	defer func() { heldAfter(t, g, last, &held) }()
-	for _, src := range auditModels(t) {
-		if pick != "" && !strings.Contains(src.path, pick) {
+	shard, shards := auditShard(t)
+	for k, src := range auditModels(t) {
+		if pick != "" && !strings.Contains(src.path, pick) || k%shards != shard {
 			continue
 		}
 		if pick == "" && (!slow && src.size > 2<<30 || only && src.size <= 2<<30) {
@@ -477,9 +478,10 @@ func everyModelRunsGenerated(t *testing.T, opts ...Option) {
 	pick := os.Getenv("JITLLM_AUDIT_MODEL")
 	slow, only := os.Getenv("JITLLM_SLOW") != "", os.Getenv("JITLLM_SLOW") == "only"
 	var ran, refused, large []string
-	for _, src := range auditModels(t) {
+	shard, shards := auditShard(t)
+	for k, src := range auditModels(t) {
 		name := src.name
-		if pick != "" && !strings.Contains(src.path, pick) {
+		if pick != "" && !strings.Contains(src.path, pick) || k%shards != shard {
 			continue
 		}
 		if pick == "" && only && src.size <= 2<<30 {
@@ -761,6 +763,21 @@ func libraryPath(file string) string {
 // whole model.
 func laterShard() *regexp.Regexp {
 	return regexp.MustCompile(`-0*([2-9]|[1-9][0-9]+)-of-[0-9]+\.gguf$`)
+}
+
+// auditShard is JITLLM_AUDIT_SHARD's "i/n": a sweep runs the models whose
+// place in auditModels' list is i modulo n, so n runs on n cards cover the
+// list once; every model where it is unset.
+func auditShard(t *testing.T) (int, int) {
+	s := os.Getenv("JITLLM_AUDIT_SHARD")
+	if s == "" {
+		return 0, 1
+	}
+	var i, n int
+	if _, err := fmt.Sscanf(s, "%d/%d", &i, &n); err != nil || n < 1 || i < 0 || i >= n {
+		t.Fatalf("JITLLM_AUDIT_SHARD %q is not i/n with 0 <= i < n", s)
+	}
+	return i, n
 }
 
 // auditModels is everything TestEveryModelRunsGenerated sweeps. On a host
