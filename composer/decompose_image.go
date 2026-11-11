@@ -20,8 +20,9 @@ const (
 // the byte offsets of its second and third planes in the step's picture
 // (YCbCr's chroma, or a palette's entries), and its chroma subsampling: the
 // horizontal and vertical shifts from a pixel to its chroma sample, then a
-// sub-picture's phase on each axis, a byte each; then the width and height
-// it is resampled to, where the op's size is the request's (PicLive).
+// sub-picture's phase on each axis, a byte each; its samples' width, and a
+// video pair's second frame's; then the width and height it is resampled to,
+// where the op's size is the request's (PicLive).
 const (
 	RequestPicW = RequestRows + iota
 	RequestPicH
@@ -30,6 +31,10 @@ const (
 	RequestPicP2
 	RequestPicP3
 	RequestPicSub
+	// RequestPicWide and RequestFrameWide are a frame's samples' width as a
+	// shift: 0 a byte, 1 two bytes, big-endian, of which the high is read.
+	RequestPicWide
+	RequestFrameWide
 	RequestPicOW
 	RequestPicOH
 	// RequestPicFrame is the byte a video's second frame starts at in the
@@ -185,13 +190,13 @@ func accOf(a graph.Attrs) int {
 
 // picWords is the request words a picture op's frame reads its layout
 // from: a video pair's second frame its own (graph.Attrs.PicFrame).
-type picWords struct{ stride, cstride, p2, p3, sub int }
+type picWords struct{ stride, cstride, p2, p3, sub, wide int }
 
 func picWordsOf(a graph.Attrs) picWords {
 	if a.PicFrame {
-		return picWords{RequestFrameStride, RequestFrameCStride, RequestFrameP2, RequestFrameP3, RequestFrameSub}
+		return picWords{RequestFrameStride, RequestFrameCStride, RequestFrameP2, RequestFrameP3, RequestFrameSub, RequestFrameWide}
 	}
-	return picWords{RequestPicStride, RequestPicCStride, RequestPicP2, RequestPicP3, RequestPicSub}
+	return picWords{RequestPicStride, RequestPicCStride, RequestPicP2, RequestPicP3, RequestPicSub, RequestPicWide}
 }
 
 // pictureSample is channel ch of the picture's pixel (y, xx), the byte its
@@ -208,10 +213,14 @@ func pictureSample(x *exprs, a graph.Attrs, stride, y, xx, ch int) int {
 		w := x.load(0, x.op(OpShr, U, off, u(2)))
 		return x.op(OpAnd, U, x.op(OpShr, U, w, x.op(OpShl, U, x.op(OpAnd, U, off, u(3)), u(3))), u(255))
 	}
+	// wide is a sample's index within its row as the byte its high byte is.
+	wide := func(i int) int { return x.op(OpShl, U, i, x.load(1, u(pw.wide))) }
 	at := x.op(OpAdd, U, x.op(OpMul, U, y, stride), xx)
 	switch px {
 	case graph.PixRGBA8:
-		at = x.op(OpAdd, U, x.op(OpAdd, U, x.op(OpMul, U, y, stride), x.op(OpMul, U, xx, u(4))), ch)
+		at = x.op(OpAdd, U, x.op(OpMul, U, y, stride), wide(x.op(OpAdd, U, x.op(OpMul, U, xx, u(4)), ch)))
+	case graph.PixGray8:
+		at = x.op(OpAdd, U, x.op(OpMul, U, y, stride), wide(xx))
 	case graph.PixPaletted8:
 		at = x.op(OpAdd, U, x.op(OpAdd, U, x.load(1, u(pw.p2)), x.op(OpMul, U, byteAt(at), u(4))), ch)
 	case graph.PixYCbCr8:

@@ -1086,10 +1086,12 @@ const (
 
 // A picture's sample formats (OpPicture), as an image decoder leaves them.
 const (
-	// PixRGBA8 is four bytes a pixel, red, green, blue and an alpha the
-	// picture drops.
+	// PixRGBA8 is four samples a pixel, red, green, blue and an alpha the
+	// picture drops, each a byte or, as the step's request says, two bytes
+	// of which the first is read.
 	PixRGBA8 uint8 = 1 + iota
-	// PixGray8 is one byte a pixel, every channel's.
+	// PixGray8 is one sample a pixel, every channel's, a byte or two as
+	// PixRGBA8's.
 	PixGray8
 	// PixYCbCr8 is a luma plane and two chroma planes, a byte a sample, the
 	// chroma subsampled as the step's request says; a pixel's red, green and
