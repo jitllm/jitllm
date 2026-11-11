@@ -6101,9 +6101,14 @@ func nonCausalConflict(bs *blockScratch, p *nn.LayerPlan) string {
 	return ""
 }
 
+// composedPageMin is the fewest positions a composed part's history page
+// holds (composer.Step.Page): a part lays its keys out at that stride, so a
+// history of fewer positions is allocated for that many.
+const composedPageMin = 64
+
 // kvCacheBytes is one session's K and V cache for one block at capacity c.
 func (g *devTier) kvCacheBytes(p *nn.LayerPlan, c int) (cache, vcache int) {
-	cache = (c + 1) * p.KVRow() * 4
+	cache = max(c+1, composedPageMin) * p.KVRow() * 4
 	// MLA has no V buffer: one row per position, the value its prefix.
 	if p.MLA() {
 		return cache, 0

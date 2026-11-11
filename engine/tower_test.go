@@ -569,6 +569,68 @@ func (d *ycbcrDst) Set(x, y int, c color.Color) {
 	d.Y[d.YOffset(x, y)], d.Cb[d.COffset(x, y)], d.Cr[d.COffset(x, y)] = yy, cb, cr
 }
 
+// TestANarrowTowerRunsOnTheCard encodes a picture through synth-janus's
+// tower, whose largest grid (16 rows) is narrower than a composed history
+// page, with every tower block on each card: the rows sit within the
+// reduction-order band of the CPU device's. A pair allocated for its 17
+// positions while its parts wrote keys at a page's stride put them 7e-2 to
+// 1.9e-1 away and corrupted the process's heap.
+func TestANarrowTowerRunsOnTheCard(t *testing.T) {
+	path, mm := testmodels.Path("synth-janus.gguf"), testmodels.Path("mmproj-synth-janus.gguf")
+	if !sourcePresent(path, mm) {
+		testmodels.Missing(t, "MODEL MISSING: %s and %s (see docs/testing.md) -- this gate proved nothing", path, mm)
+	}
+	m, err := model.Open(jlmOfPair(t, path, mm))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	if m.Tower.Rows >= 64 {
+		t.Fatalf("the tower's largest grid is %d rows: no narrower than a page, this gate proves nothing", m.Tower.Rows)
+	}
+	rgb := make([]byte, 3*64*64)
+	for i := range rgb {
+		rgb[i] = byte(i*37 + i/97*11)
+	}
+	pic := rgbPicture(rgb, 64, 64)
+	host := testInstance(t, m, 128)
+	want, err := host.EncodePicture(pic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = slices.Clone(want)
+	host.Close()
+	for _, dev := range stepDevices() {
+		t.Run(dev, func(t *testing.T) {
+			g, err := openGPU(t, gpu.WithDevices(dev), gpu.WithDeviceTune(gpu.TuneOff))
+			if err != nil || g == nil {
+				noDevice(t, dev, err)
+			}
+			defer g.Close()
+			s := testInstance(t, m, 128)
+			defer s.Close()
+			s.SetDeviceFallback(false)
+			if err := s.SetDevice(g); err != nil {
+				t.Fatal(err)
+			}
+			if n := s.tower.s.GPULayers(); n != len(m.Tower.Blocks) {
+				t.Fatalf("%d of the tower's %d blocks placed on %s: %s", n, len(m.Tower.Blocks), dev, g.Err())
+			}
+			for range 3 {
+				got, err := s.EncodePicture(pic)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if n, w := nmseOf(got, want); math.IsNaN(n) || n > 1e-3 {
+					t.Fatalf("the picture's rows on %s sit at NMSE %.3e from the CPU device's (max|d| %.3g)", dev, n, w)
+				} else {
+					t.Logf("%s: the %d-row tower's rows at NMSE %.3e from the CPU device's", dev, m.Tower.Rows, n)
+				}
+			}
+		})
+	}
+}
+
 // TestStatedTowerRunsOnTheCard places an instance of SmolVLM on each device,
 // which offers its tower run every tower block: all 12 are placed there, the
 // picture's rows sit within the reduction-order band of the CPU device's

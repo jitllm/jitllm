@@ -91,9 +91,9 @@ func rotates(gr *graph.Graph) bool {
 // the scratch's instance it launches in (servedStep).
 func (g *devTier) towerStep(bs *blockScratch, l *layer, li int, p *nn.LayerPlan, R int) (sv *servedPart, inst *partInst, cp *servedPart, err error) {
 	cpl := g.capped(p)
-	// The pair holds MaxSeq+1 positions of the block's row (kvCacheBytes):
-	// the pool's one page.
-	page := cpl.MaxSeq + 1
+	// The pair holds MaxSeq+1 positions of the block's row, at least a
+	// composed page's (kvCacheBytes): the pool's one page.
+	page := max(cpl.MaxSeq+1, composedPageMin)
 	pl := &l.picPool
 	tkv := g.visOf(l.geo).tkv
 	pl.geom, pl.k, pl.v, pl.tab = g.kvGeomOf(p), tkv.kc, tkv.vc, bs.zero
