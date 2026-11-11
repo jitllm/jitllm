@@ -1130,7 +1130,6 @@ type partDecline = nn.Decline
 
 const (
 	partServes      = nn.DeclineServes
-	partNoGraph     = nn.DeclineNoGraph
 	partCaller      = nn.DeclineCaller
 	partNoRoom      = nn.DeclineNoRoom
 	partNoWeight    = nn.DeclineNoWeight

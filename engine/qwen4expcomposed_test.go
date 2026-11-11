@@ -48,7 +48,7 @@ func TestQwen4ExpServesComposedOnCPU(t *testing.T) {
 				return w
 			}
 			run := func(f cpuFault) float64 {
-				return golden(partCPULogits(t, m, toks, f, true, m.Cfg.NLayer, nn.DeclineNoGraph, openOpts...), 0)
+				return golden(partCPULogits(t, m, toks, f, true, m.Cfg.NLayer, openOpts...), 0)
 			}
 			worst := run(cpuFaultNone)
 			t.Logf("every block composed: worst NMSE %.3g against transformers over %d steps", worst, len(toks))
@@ -113,21 +113,21 @@ func q4ePrompt(t *testing.T, m *model.Model, ids []int32, n int, composed bool, 
 		return out
 	}
 	for i, k := range declined {
-		if nn.Decline(i) != nn.DeclineNoGraph && k > 0 {
+		if k > 0 {
 			t.Errorf("%d block steps declined: %s (%v)", k, nn.DeclineName(i), s.Account(nn.CPU).FormErr)
 		}
 	}
 	if served == 0 {
 		t.Fatal("no block step of the prompt served")
 	}
-	t.Logf("a prompt of %d: %d block steps served, %d declined for no graph", n, served, declined[nn.DeclineNoGraph])
+	t.Logf("a prompt of %d: %d block steps served", n, served)
 	return out
 }
 
 // partCPULogits is each step's logits decoding toks; on the composed arm
 // `served` blocks serve every step, every other block step is declined for
 // why alone, and every head step and streams' row is served.
-func partCPULogits(t *testing.T, m *model.Model, toks []int32, f cpuFault, composed bool, served int, why nn.Decline, io ...Option) [][]float32 {
+func partCPULogits(t *testing.T, m *model.Model, toks []int32, f cpuFault, composed bool, served int, io ...Option) [][]float32 {
 	t.Helper()
 	s := testInstance(t, m, len(toks)+1, io...)
 	defer s.Close()
@@ -148,15 +148,12 @@ func partCPULogits(t *testing.T, m *model.Model, toks []int32, f cpuFault, compo
 		return out
 	}
 	for i, n := range declined {
-		if nn.Decline(i) != why && n > 0 {
+		if n > 0 {
 			t.Errorf("%d block steps declined: %s (%v)", n, nn.DeclineName(i), s.Account(nn.CPU).FormErr)
 		}
 	}
 	if want := len(toks) * served; got != want {
 		t.Fatalf("%d block steps served, want %d", got, want)
-	}
-	if want := len(toks) * (m.Cfg.NLayer - served); declined[why] != want {
-		t.Fatalf("%d block steps declined for %s, want %d", declined[why], nn.DeclineName(int(why)), want)
 	}
 	heads, hdecl := s.Account(nn.CPU).Steps.Of(nn.ComposedHead)
 	for i, n := range hdecl {
@@ -360,10 +357,6 @@ func TestQwen4ExpServesComposed(t *testing.T) {
 			if !fx.sel(m) {
 				t.Fatal("the container does not carry the fixture's graph")
 			}
-			covered := coveredBlocks(m)
-			if covered == 0 {
-				t.Fatal("no block is stated: the gate selects nothing")
-			}
 			ids := g.IDs
 			host := testInstance(t, m, len(ids)+1, openOpts...)
 			var want [][]float32
@@ -380,9 +373,8 @@ func TestQwen4ExpServesComposed(t *testing.T) {
 				t.Helper()
 				got, st, _ := composedDecode(t, m, openOpts, dev, prompt, toks, nn.ComposedBlock, true, false)
 				served, declined := st.ServedPart(nn.ComposedBlock)
-				if n := len(toks) * covered; served != n || declined != len(toks)*(m.Cfg.NLayer-covered) ||
-					st.BlockDeclines()[nn.DeclineNoGraph] != declined {
-					t.Fatalf("%d block steps served and %d declined, want %d served and the rest declined for no graph (%s)",
+				if n := len(toks) * m.Cfg.NLayer; served != n || declined != 0 {
+					t.Fatalf("%d block steps served and %d declined, want every one of %d served (%s)",
 						served, declined, n, declinesOf(st))
 				}
 				if st.UnformedAtStep != 0 {

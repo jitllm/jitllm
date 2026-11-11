@@ -28,7 +28,6 @@ func TestTheDeclinesOnlyShrink(t *testing.T) {
 	}
 	allowed := []string{"DeclineServes", "DeclineCaller", "DeclineNoRoom", "DeclineISA", "DeclineNotFormed", "DeclineUnplaced"}
 	open := []string{
-		"DeclineNoGraph",
 		"DeclineNoWeight",
 	}
 	got := declineReasons(string(b))
