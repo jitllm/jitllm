@@ -1134,7 +1134,6 @@ const (
 	partHeadShape   = nn.DeclineHeadShape
 	partCaller      = nn.DeclineCaller
 	partNoRoom      = nn.DeclineNoRoom
-	partRecurrent   = nn.DeclineRecurrent
 	partNoWeight    = nn.DeclineNoWeight
 	partNotFormed   = nn.DeclineNotFormed
 	numPartDeclines = nn.NumDeclines

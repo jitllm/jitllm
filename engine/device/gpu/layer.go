@@ -4512,11 +4512,13 @@ func (g *devTier) layersSession(s backend.Session) {
 					}
 					continue
 				}
-				switch {
-				case why != partServes:
-				case l.linear && !g.bindRec(sv, bs, sid, l):
-					inst, why = nil, partRecurrent
-				case inst == nil:
+				if l.linear && !g.bindRec(sv, bs, sid, l) {
+					if err == nil {
+						err = fmt.Errorf("tier: block %d at %d rows: its recurrent state is not bound to the step's slots", li, R)
+					}
+					continue
+				}
+				if inst == nil {
 					why = partNoRoom
 				}
 				if R > 1 && sv != nil {

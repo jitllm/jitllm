@@ -14,7 +14,6 @@ const (
 	DeclineHeadShape
 	DeclineCaller
 	DeclineNoRoom
-	DeclineRecurrent
 	DeclineNoWeight
 	DeclineNotFormed
 	DeclineISA
@@ -34,8 +33,6 @@ func (d Decline) String() string {
 		return "the caller keeps it on the tier's kernels"
 	case DeclineNoRoom:
 		return "its buffers do not fit the device's budget"
-	case DeclineRecurrent:
-		return "a recurrent state the form does not step (a tail or a variant it does not hold, none held, or the CPU's several rows)"
 	case DeclineNoWeight:
 		return "a weight or vector the block does not hold"
 	case DeclineNotFormed:

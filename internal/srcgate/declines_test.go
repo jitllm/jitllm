@@ -30,7 +30,6 @@ func TestTheDeclinesOnlyShrink(t *testing.T) {
 	open := []string{
 		"DeclineNoGraph",
 		"DeclineHeadShape",
-		"DeclineRecurrent",
 		"DeclineNoWeight",
 	}
 	got := declineReasons(string(b))
