@@ -123,6 +123,45 @@ type Faults struct {
 	// paged, rec, rows and room name one violation each (SetPagedFault,
 	// SetRecFault, SetRowsFault, SetRoomFault); "" is none.
 	paged, rec, rows, room string
+	// block fails the call-th submission that reaches block at, there
+	// (SetBlockFault); call 0 arms none. reached counts the submissions that
+	// reached it since it was armed.
+	block struct {
+		at, call int
+		reached  atomic.Int64
+	}
+}
+
+// SetBlockFault fails the call-th submission from now on to reach block at,
+// at that block: the blocks before it in the submission have run, it and
+// the ones after it have not, as a kernel failing there leaves them. call 0
+// disarms.
+func (f *Faults) SetBlockFault(at, call int) {
+	f.block.at, f.block.call = at, call
+	f.block.reached.Store(0)
+}
+
+// BlockFaultReached is how many submissions reached the armed block.
+func (f *Faults) BlockFaultReached() int64 { return f.block.reached.Load() }
+
+const errInjectedBlock tierError = "injected block failure (SetBlockFault)"
+
+// blockFaultArmed reports a block fault armed (SetBlockFault): the step is
+// issued block by block, never replayed, so the fault can land between them.
+func (g *devTier) blockFaultArmed() bool { return g.fault != nil && g.fault.block.call > 0 }
+
+// blockFault is the injected failure of block li in this submission, where
+// the faults name it (SetBlockFault); nil elsewhere.
+func (g *devTier) blockFault(li int) error {
+	f := g.fault
+	if f == nil || f.block.call == 0 || f.block.at != li {
+		return nil
+	}
+	if f.block.reached.Add(1) != int64(f.block.call) {
+		return nil
+	}
+	g.noteCause(nn.FailFault)
+	return errInjectedBlock
 }
 
 type tierFaults = Faults

@@ -3576,6 +3576,16 @@ in the middle and compares the tail against a pure-host run: **1e-4 with the
 rescue, 8.5e-01 without.** A `phase@block` injector is what the other three
 need and is owed.
 
+The injector is `gpu.Faults.SetBlockFault(block, call)`: the call-th
+submission to reach a block fails there, the blocks before it having run,
+and an armed fault keeps the step off the graph replay so it lands between
+blocks. `TestAMidBlockFailureNeverAppliesARecurrenceTwice` (jitllmfault)
+fails a hybrid's token at block 0, which restarts on the host at 1.25e-3
+NMSE from the host's, and at block 1 past linear block 0, which refuses the
+restart (errRecurRetry). With the served loop's linear-block count removed,
+the second arm answers instead: the restart applied block 0's recurrence
+twice.
+
 ★ **AND THREE `fmt.Fprintf(os.Stderr, "DBG ...")` WERE IN SHIPPING CODE** on
 that same path (`engine/kvpage.go`), from the MigrateRec work. Deleted.
 

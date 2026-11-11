@@ -29,7 +29,6 @@ and the code has moved since (RULE 12). Paths below are under
 | what an iGPU keeps with no block | the tier keeps a device's block scratch and the head after its blocks come home and after the session detaches (~31 MiB of host memory on the Iris Xe for stories15M) | same |
 | sessions per device | concurrent sessions on one device, and how many a card holds at a given context, are bounded by pages and unmeasured | same |
 | the cut against the card's old host split | a block cut at its routed experts (engine/cut.go) runs its second half on the CPU device, reading only the weights that half binds; it has not been measured against the card's old host split | placement.md "The host split, as it stood, and what replaced it" |
-| a mid-block fault injector | `injectedFail()` acts on whole calls; a `phase@block` injector is owed for the mid-block failure paths | placement.md "Qwen3-Next-80B on the card" |
 | hybrid restore points during prefill | a hybrid restores at one point per prompt; capturing more during prefill is priced and unbuilt | placement.md "The prefix cache" |
 | a dense lead block's page size | it sets the base page for every block (15.4% padding on Moonlight); a fourth array or charging filled bytes would remove it | placement.md "No mmap of files" |
 | reading the next layer ahead | the over-committed case wants the next layer's reads issued before this layer's compute; benchmark against neurostream on bytes read per token | below, "A page is a whole block when the model does not fit" |
