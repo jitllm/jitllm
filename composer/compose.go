@@ -246,7 +246,7 @@ func (r *Registry) Kernels(f Model, run []PartPlan, first int, s Step) ([]*Kerne
 		if err != nil {
 			return nil, err
 		}
-		ks, err = prof.run(ks, run[0].Device)
+		ks, err = prof.counted(ks, run[0].Device, r.cache)
 		if sp.splitRefused(err) {
 			continue
 		}

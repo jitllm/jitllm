@@ -210,6 +210,10 @@ type Account struct {
 	// lowering, compiling and mapping its code, a cached form's lookup among
 	// them.
 	Composing time.Duration
+	// Passes is where composing went: the time each composer pass took
+	// over every form the device made, by the pass's name, and the
+	// lowerings' as "lower".
+	Passes map[string]time.Duration
 	// FormErr is the first part the device did not form, nil for none.
 	FormErr error
 }

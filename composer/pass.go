@@ -1,6 +1,9 @@
 package composer
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 // Pass is one optimization: IR in, rewritten IR out. It decides from the
 // IR's shape and structure and the device, never from names.
@@ -64,7 +67,11 @@ type Int8Form struct {
 	SumCodes bool
 }
 
-func (p Profile) run(ks []*Kernel, d Device) ([]*Kernel, error) {
+// run applies p's passes to ks in order.
+func (p Profile) run(ks []*Kernel, d Device) ([]*Kernel, error) { return p.counted(ks, d, nil) }
+
+// counted is run with each pass's time counted into c.
+func (p Profile) counted(ks []*Kernel, d Device, c *formCache) ([]*Kernel, error) {
 	if p.Off[Vectorize{}.Name()] {
 		// No loop across lanes: the form the registers' refusal leaves.
 		for _, k := range ks {
@@ -75,7 +82,9 @@ func (p Profile) run(ks []*Kernel, d Device) ([]*Kernel, error) {
 		if p.Off[ps.Name()] {
 			continue
 		}
+		t0 := time.Now()
 		out, err := ps.Apply(ks, d)
+		c.clock(ps.Name(), time.Since(t0))
 		if err != nil {
 			return nil, fmt.Errorf("jit: pass %s: %w", ps.Name(), err)
 		}

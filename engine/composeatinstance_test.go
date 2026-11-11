@@ -1,9 +1,13 @@
 package engine
 
 import (
+	"cmp"
 	"context"
+	"maps"
 	"path/filepath"
+	"slices"
 	"testing"
+	"time"
 
 	"github.com/jitllm/jitllm/model"
 
@@ -70,6 +74,18 @@ func TestComposesOnlyWithAnInstance(t *testing.T) {
 				t.Fatalf("%d forms asked in making the instance and no time counted composing them", c0)
 			}
 			t.Logf("making the instance asked %d forms in %v", c0, a0.Composing)
+			var spent time.Duration
+			names := slices.Collect(maps.Keys(a0.Passes))
+			for _, n := range names {
+				spent += a0.Passes[n]
+			}
+			if spent <= 0 || spent > a0.Composing {
+				t.Fatalf("the passes and lowerings took %v of %v composing: the time is not counted where it goes", spent, a0.Composing)
+			}
+			slices.SortFunc(names, func(x, y string) int { return cmp.Compare(a0.Passes[y], a0.Passes[x]) })
+			for _, n := range names[:min(8, len(names))] {
+				t.Logf("  %-14s %v", n, a0.Passes[n])
+			}
 			samplers := []*Sampler{nil, {Temp: 0.8, TopK: 40, Seed: 1}, {Temp: 0.7, TopP: 0.9, Seed: 2},
 				{Temp: 1, MinP: 0.05, Seed: 3}, {Temp: 0.9, TopK: 20, RepeatPen: 1.2, Seed: 4}}
 			prompts := [][]int32{{1, 45, 79, 33}, {1, 65, 108, 250, 205, 63}}
