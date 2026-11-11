@@ -200,13 +200,14 @@ func TestLlamaSamplingDefaultsAndMapping(t *testing.T) {
 // TestLlamaRefusals: every parameter the engine cannot honour is refused
 // naming itself, and its neutral value is accepted.
 func TestLlamaRefusals(t *testing.T) {
-	s := llamaServe(t, &llamaFake{fakeBackend: &fakeBackend{tokens: []string{"a"}, reason: FinishEOS}})
+	f := &llamaFake{fakeBackend: &fakeBackend{tokens: []string{"a"}, reason: FinishEOS}}
+	s := llamaServe(t, f)
 	refuse := map[string]string{
 		"mirostat": `2`, "dry_multiplier": `0.8`, "xtc_probability": `0.5`, "typical_p": `0.9`,
 		"presence_penalty": `0.3`, "frequency_penalty": `0.3`, "dynatemp_range": `0.5`,
 		"logit_bias": `[[15,1.0]]`, "samplers": `["dry","top_k"]`, "n_cmpl": `2`, "id_slot": `3`,
 		"n_predict": `0`, "n_keep": `5`, "lora": `[{"id":0,"scale":1}]`, "post_sampling_probs": `true`,
-		"timings_per_token": `true`, "t_max_predict_ms": `100`, "n_probs": `99`, "repeat_last_n": `128`,
+		"timings_per_token": `true`, "t_max_predict_ms": `100`, "n_probs": `99`, "repeat_last_n": `-2`,
 		"response_fields": `["content"]`, "mystery_field": `1`,
 	}
 	for k, v := range refuse {
@@ -221,6 +222,15 @@ func TestLlamaRefusals(t *testing.T) {
 		"n_keep":0,"timings_per_token":false,"top_n_sigma":-1,"repeat_last_n":64}`
 	if code, out := llamaPost(t, s, "/completion", accept); code != 200 {
 		t.Fatalf("neutral values refused: %d %v", code, out)
+	}
+	// repeat_last_n is the sampler's window, -1 the context (the fake's 2048).
+	for v, want := range map[string]int{`128`: 128, `-1`: 2048} {
+		if code, out := llamaPost(t, s, "/completion", `{"prompt":"x","repeat_penalty":1.1,"repeat_last_n":`+v+`}`); code != 200 {
+			t.Fatalf("repeat_last_n=%s: %d %v", v, code, out)
+		}
+		if got := f.opts().Sampling.RepeatLastN; got != want {
+			t.Errorf("repeat_last_n=%s reached the sampler as %d, want %d", v, got, want)
+		}
 	}
 	// The error body is llama-server's.
 	_, out := llamaPost(t, s, "/completion", `{"prompt":"x","mirostat":1}`)

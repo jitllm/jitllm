@@ -40,9 +40,12 @@ func (s *Sampler) Observe(t int32) {
 	if n <= 0 {
 		n = 64
 	}
-	// The window slides within its backing array: a slice cut from the front
-	// would leave each append less room, and grow it again every window or
-	// so of tokens.
+	// The window slides within its backing array, reserved once: a slice cut
+	// from the front would leave each append less room, and grow it again
+	// every window or so of tokens.
+	if cap(s.hist) < n {
+		s.hist = append(make([]int32, 0, n), s.hist...)
+	}
 	if len(s.hist) >= n {
 		drop := len(s.hist) - n + 1
 		for _, e := range s.hist[:drop] {
