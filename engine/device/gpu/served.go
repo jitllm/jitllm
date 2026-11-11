@@ -1363,6 +1363,7 @@ func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*
 		}
 		sl.tables[tableKey(composer.TableCall)] = every
 	}
+	t0 := time.Now()
 	key, codes, err := g.askPart(r, &sl, sk.rows)
 	if err != nil {
 		return nil, fail(fmt.Errorf("the composed %s: %w", sk.kind, err))
@@ -1378,6 +1379,7 @@ func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*
 		f.key = key
 		g.servedForms[key] = f
 	}
+	g.FormTook += time.Since(t0)
 	var in *partInst
 	// A form over a history read in passes is laid on its scratch's arena
 	// (streamPart).

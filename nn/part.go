@@ -1,5 +1,7 @@
 package nn
 
+import "time"
+
 // A part of a model a device serves an instance from its composed forms: a
 // whole block, the head, a step's rotary table, a picture's rows... Every
 // device counts what it serves by part, the CPU as each card.
@@ -204,6 +206,10 @@ type Account struct {
 	// one among them: what an instance's creation, relocation or tuning
 	// moves, and a prefill or a generated token must not.
 	Asks int64
+	// Composing is the time those asks took: composing each form and
+	// lowering, compiling and mapping its code, a cached form's lookup among
+	// them.
+	Composing time.Duration
 	// FormErr is the first part the device did not form, nil for none.
 	FormErr error
 }

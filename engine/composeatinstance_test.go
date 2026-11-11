@@ -64,7 +64,12 @@ func TestComposesOnlyWithAnInstance(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer pool.Unserve(in)
-			c0 := in.Account(nn.CPU).Asks
+			a0 := in.Account(nn.CPU)
+			c0 := a0.Asks
+			if a0.Composing <= 0 {
+				t.Fatalf("%d forms asked in making the instance and no time counted composing them", c0)
+			}
+			t.Logf("making the instance asked %d forms in %v", c0, a0.Composing)
 			samplers := []*Sampler{nil, {Temp: 0.8, TopK: 40, Seed: 1}, {Temp: 0.7, TopP: 0.9, Seed: 2},
 				{Temp: 1, MinP: 0.05, Seed: 3}, {Temp: 0.9, TopK: 20, RepeatPen: 1.2, Seed: 4}}
 			prompts := [][]int32{{1, 45, 79, 33}, {1, 65, 108, 250, 205, 63}}
@@ -119,14 +124,17 @@ func TestComposesOnlyWithAnInstance(t *testing.T) {
 					}
 				}
 			}
-			if n := in.Account(nn.CPU).Asks - c0; n != 0 {
+			a1 := in.Account(nn.CPU)
+			if n := a1.Asks - c0; n != 0 {
 				t.Errorf("sessions' prompts and tokens asked the composer %d times", n)
 			}
-			c1 := in.Account(nn.CPU).Asks
+			if d := a1.Composing - a0.Composing; d != 0 {
+				t.Errorf("sessions' prompts and tokens spent %v composing", d)
+			}
 			second := testInstance(t, m, 64, WithCPU(cd))
 			second.Close()
-			if in.Account(nn.CPU).Asks == c1 {
-				t.Errorf("making an instance asked the composer for nothing: the count cannot see a composition")
+			if a2 := in.Account(nn.CPU); a2.Asks == a1.Asks || a2.Composing == a1.Composing {
+				t.Errorf("making an instance moved the count to %d and the time to %v: the account cannot see a composition", a2.Asks, a2.Composing)
 			}
 		})
 	}
