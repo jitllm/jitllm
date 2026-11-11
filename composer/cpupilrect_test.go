@@ -64,7 +64,8 @@ func TestComposedCPUPicturePILRectangles(t *testing.T) {
 			req[i] = 0xdeadbeef
 		}
 		req[RequestPicW], req[RequestPicH], req[RequestPicStride] = uint32(c.w), uint32(c.h), uint32(c.w*4)
-		req[RequestPicOW], req[RequestPicOH], req[RequestPicWide] = uint32(c.ow), uint32(c.oh), 0
+		req[RequestPicOW], req[RequestPicOH] = uint32(c.ow), uint32(c.oh)
+		req[RequestPicWide], req[RequestPicInk] = 0, 0
 		B := PicBandRows(a, c.ow)
 		req[RequestPicBandRows] = uint32(B)
 		short = short || B < side

@@ -1088,7 +1088,9 @@ const (
 const (
 	// PixRGBA8 is four samples a pixel, red, green, blue and an alpha the
 	// picture drops, each a byte or, as the step's request says, two bytes
-	// of which the first is read.
+	// of which the first is read; or, as the request says, cyan, magenta,
+	// yellow and key, made red, green and blue as Pillow's convert("RGB")
+	// makes them.
 	PixRGBA8 uint8 = 1 + iota
 	// PixGray8 is one sample a pixel, every channel's, a byte or two as
 	// PixRGBA8's.

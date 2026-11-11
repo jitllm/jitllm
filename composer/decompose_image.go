@@ -20,8 +20,9 @@ const (
 // the byte offsets of its second and third planes in the step's picture
 // (YCbCr's chroma, or a palette's entries), and its chroma subsampling: the
 // horizontal and vertical shifts from a pixel to its chroma sample, then a
-// sub-picture's phase on each axis, a byte each; its samples' width, and a
-// video pair's second frame's; then the width and height it is resampled to,
+// sub-picture's phase on each axis, a byte each; its samples' width and
+// whether they are ink, and a video pair's second frame's; then the width
+// and height it is resampled to,
 // where the op's size is the request's (PicLive).
 const (
 	RequestPicW = RequestRows + iota
@@ -35,6 +36,11 @@ const (
 	// shift: 0 a byte, 1 two bytes, big-endian, of which the high is read.
 	RequestPicWide
 	RequestFrameWide
+	// RequestPicInk and RequestFrameInk are 1 where a frame's four samples a
+	// pixel are cyan, magenta, yellow and key (graph.PixRGBA8), 0 where red,
+	// green, blue and alpha.
+	RequestPicInk
+	RequestFrameInk
 	RequestPicOW
 	RequestPicOH
 	// RequestPicFrame is the byte a video's second frame starts at in the
@@ -190,13 +196,13 @@ func accOf(a graph.Attrs) int {
 
 // picWords is the request words a picture op's frame reads its layout
 // from: a video pair's second frame its own (graph.Attrs.PicFrame).
-type picWords struct{ stride, cstride, p2, p3, sub, wide int }
+type picWords struct{ stride, cstride, p2, p3, sub, wide, ink int }
 
 func picWordsOf(a graph.Attrs) picWords {
 	if a.PicFrame {
-		return picWords{RequestFrameStride, RequestFrameCStride, RequestFrameP2, RequestFrameP3, RequestFrameSub, RequestFrameWide}
+		return picWords{RequestFrameStride, RequestFrameCStride, RequestFrameP2, RequestFrameP3, RequestFrameSub, RequestFrameWide, RequestFrameInk}
 	}
-	return picWords{RequestPicStride, RequestPicCStride, RequestPicP2, RequestPicP3, RequestPicSub, RequestPicWide}
+	return picWords{RequestPicStride, RequestPicCStride, RequestPicP2, RequestPicP3, RequestPicSub, RequestPicWide, RequestPicInk}
 }
 
 // pictureSample is channel ch of the picture's pixel (y, xx), the byte its
@@ -218,7 +224,14 @@ func pictureSample(x *exprs, a graph.Attrs, stride, y, xx, ch int) int {
 	at := x.op(OpAdd, U, x.op(OpMul, U, y, stride), xx)
 	switch px {
 	case graph.PixRGBA8:
-		at = x.op(OpAdd, U, x.op(OpMul, U, y, stride), wide(x.op(OpAdd, U, x.op(OpMul, U, xx, u(4)), ch)))
+		row, px4 := x.op(OpMul, U, y, stride), x.op(OpMul, U, xx, u(4))
+		v := byteAt(x.op(OpAdd, U, row, wide(x.op(OpAdd, U, px4, ch))))
+		// An ink sample made a colour with its key as Pillow's convert("RGB")
+		// makes it: nk - MULDIV255(v, nk), nk the key's complement.
+		nk := x.op(OpSub, U, u(255), byteAt(x.op(OpAdd, U, row, wide(x.op(OpAdd, U, px4, u(3))))))
+		t := x.op(OpAdd, U, x.op(OpMul, U, v, nk), u(128))
+		inked := x.op(OpSub, U, nk, x.op(OpShr, U, x.op(OpAdd, U, x.op(OpShr, U, t, u(8)), t), u(8)))
+		return x.sel(U, x.op(OpLess, ir.Pred, u(0), x.load(1, u(pw.ink))), inked, v)
 	case graph.PixGray8:
 		at = x.op(OpAdd, U, x.op(OpMul, U, y, stride), wide(xx))
 	case graph.PixPaletted8:
