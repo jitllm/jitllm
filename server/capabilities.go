@@ -273,7 +273,7 @@ func refusalList() []refusal {
 			When: "a content part of type input_audio, file or input_file", Message: "which this server does not take"},
 			probe: `{"model":"m","messages":[{"role":"user","content":[{"type":"input_audio","input_audio":{}}]}]}`},
 		{Refusal: capabilities.Refusal{ID: "document-block", Endpoints: []string{"/v1/messages"},
-			When: "a document content block", Message: "is a document block, which this server does not take"}},
+			When: "a document content block whose source is a PDF or a file", Message: "this server reads no PDF"}},
 		{Refusal: capabilities.Refusal{ID: "image-non-vision", Endpoints: []string{"/v1/chat/completions", "/v1/messages"},
 			When: "a picture for a model whose container carries no vision tower", Message: "does not accept images"}},
 		{Refusal: capabilities.Refusal{ID: "image-fetch-off", Endpoints: []string{"/v1/chat/completions", "/v1/messages"},
