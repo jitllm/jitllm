@@ -2856,10 +2856,7 @@ const maxGraphs = 8
 // A shape that does not match an existing bank gets its own, so a model whose
 // blocks differ is correct rather than refused.
 func (g *devTier) sharedCompact(which int, q layout.Quant, rows, k, slots int) (*resident, [3]int, bool) {
-	// which is in the key because gate and up have the same shape: without it
-	// they would share one buffer and the gate matvec would read the up
-	// weights (TestStreamedExpertBankMatchesTheResidentOne).
-	key := resKey{block: -(2 + which), slot: slots, nrows: rows, k: k, t: q}
+	key := sharedKey(which, q, rows, k, slots)
 	if r, ok := g.res[key]; ok {
 		pq, pd, psc, err := layout.PackedWords(q, rows, k)
 		if err != nil {
@@ -2879,6 +2876,14 @@ func (g *devTier) sharedCompact(which int, q layout.Quant, rows, k, slots int) (
 	r.shared, r.users = true, 1
 	g.res[key] = r
 	return r, sh, true
+}
+
+// sharedKey is the device's shared compact bank for matrix which of a shape.
+// which is in the key because gate and up have the same shape: without it
+// they would share one buffer and the gate matvec would read the up weights
+// (TestStreamedExpertBankMatchesTheResidentOne).
+func sharedKey(which int, q layout.Quant, rows, k, slots int) resKey {
+	return resKey{block: -(2 + which), slot: slots, nrows: rows, k: k, t: q}
 }
 
 // residentCompact allocates a routed bank of exactly `slots` expert sheets and
