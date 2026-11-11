@@ -7,21 +7,21 @@ import (
 	"github.com/jitllm/jitllm/backend"
 )
 
-// TestSmallBuffersShareAPiece: on CUDA a buffer of 16 KiB or less is a slot
-// of a 64 KiB piece shared with buffers of its size, so forty small buffers
-// cost the card a few pieces, not forty, and every one holds its own bytes.
-// Freed, they give every piece back. The violation is a buffer a piece of its
-// own: forty pieces.
+// TestSmallBuffersShareAPiece: on CUDA and Vulkan a buffer of 16 KiB or less
+// is a slot of a 64 KiB piece shared with buffers of its size, so forty small
+// buffers cost the card a few pieces, not forty, and every one holds its own
+// bytes. Freed, they give every piece back. The violation is a buffer a piece
+// of its own: forty pieces.
 func TestSmallBuffersShareAPiece(t *testing.T) {
 	gpuLock(t)
-	ran, devs := 0, everyDevice(t)
+	ran, devs := map[string]int{}, everyDevice(t)
 	for _, d := range devs {
 		ac, ok := d.(backend.AllocCounter)
-		if d.API() != "ptx" || !ok {
+		if d.API() != "ptx" && d.API() != "spirv" || !ok {
 			continue
 		}
-		ran++
-		t.Run(d.Name(), func(t *testing.T) {
+		ran[d.API()]++
+		t.Run(d.API()+"/"+d.Name(), func(t *testing.T) {
 			sizes := []int{4, 100, 1000, 4096, 9000, 16384, 256, 3}
 			f0, a0 := ac.Footprint(), ac.Allocated()
 			var bufs []backend.Buf
@@ -64,7 +64,8 @@ func TestSmallBuffersShareAPiece(t *testing.T) {
 			}
 		})
 	}
-	if ran == 0 {
-		t.Fatalf("no CUDA device in %d devices: the gate ran nothing", len(devs))
+	if len(ran) == 0 {
+		t.Fatalf("no CUDA or Vulkan device in %d devices: the gate ran nothing", len(devs))
 	}
+	t.Logf("ran on %v", ran)
 }

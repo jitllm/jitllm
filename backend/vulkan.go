@@ -3,6 +3,7 @@ package backend
 import (
 	"unsafe"
 
+	"errors"
 	"fmt"
 	"strconv"
 	"sync"
@@ -15,6 +16,8 @@ import (
 type vkDev struct {
 	allocCount
 	once
+	// small is the pieces buffers of smallMax or less are carved from.
+	small smallPool[*vulkan.Buf]
 	// ctr is what the device counts into (Opts.Counters).
 	ctr   *Counters
 	c     *vulkan.Ctx
@@ -180,6 +183,18 @@ func (v *vkDev) Mem() (free, total uint64, err error) { return v.c.Mem() }
 func (v *vkDev) UnifiedMemory() bool { return v.c.UnifiedMemory() }
 
 func (v *vkDev) Alloc(n int) (Buf, error) {
+	if n > 0 && n <= smallMax {
+		// A slot of a shared piece (smallPool): a piece made before Close
+		// has no device behind it, and a slot of one is no buffer.
+		if v.done.Load() {
+			return nil, errors.New("vulkan: the device is closed")
+		}
+		p, w, off, err := v.small.take(n, &v.allocCount, func() (*vulkan.Buf, error) { return v.c.Alloc(smallPage) })
+		if err != nil {
+			return nil, err
+		}
+		return &vkBuf{b: w, ctr: v.ctr, acc: v.take(n, 0), dev: v, piece: p, off: off}, nil
+	}
 	b, err := v.c.Alloc(n)
 	if err != nil {
 		return nil, err
@@ -249,6 +264,11 @@ type vkBuf struct {
 	b   *vulkan.Buf
 	ctr *Counters
 	acc *counted
+	// piece is the shared piece a small buffer is a slot of, at off, and dev
+	// the device whose pool holds it; nil for a buffer of its own.
+	dev   *vkDev
+	piece *smallPiece[*vulkan.Buf]
+	off   int
 }
 
 func (b *vkBuf) Write(p []byte) error { return b.b.Write(p) }
@@ -261,6 +281,15 @@ func (b *vkBuf) Read(p []byte) error {
 }
 
 func (b *vkBuf) Free() {
+	if p := b.piece; p != nil {
+		b.piece = nil
+		if b.dev.small.give(p, b.off) {
+			p.b.Free()
+			p.acc.give()
+		}
+		b.acc.give()
+		return
+	}
 	b.b.Free()
 	b.acc.give()
 }

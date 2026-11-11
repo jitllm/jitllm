@@ -111,10 +111,15 @@ func (c *cudaDev) FootprintOf(n int) uint64 {
 func (c *cudaDev) Slack() uint64 { return smallClasses * smallPage }
 
 // FootprintOf implements AllocCounter.
-func (v *vkDev) FootprintOf(n int) uint64 { return uint64(vulkanFootprint(n)) }
+func (v *vkDev) FootprintOf(n int) uint64 {
+	if n > 0 && n <= smallMax {
+		return uint64(smallFootprint(n))
+	}
+	return uint64(vulkanFootprint(n))
+}
 
-// Slack implements AllocCounter: every buffer is its own allocation.
-func (v *vkDev) Slack() uint64 { return 0 }
+// Slack implements AllocCounter: a new piece a slot class.
+func (v *vkDev) Slack() uint64 { return smallClasses * smallPage }
 
 // FootprintOf implements AllocCounter: counted as asked (see mtlDev.Alloc).
 func (m *mtlDev) FootprintOf(n int) uint64 { return uint64(n) }
