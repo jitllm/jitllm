@@ -168,6 +168,7 @@ sweep by name and are never resolved.
 | `JITLLM_GREEDY_PAIR` | `engine.TestGreedyMatchesLlamaCpp` | `<gguf>=<container>`, each name or path | GGUFs converted by the test |
 | `JITLLM_KVSWEEP_MODEL` | `engine.TestPagedKVIsTokenIdenticalOnEveryModel` | substring | every model under 2 GiB |
 | `JITLLM_AUDIT_MODEL` | `engine.TestEveryModelRunsGenerated` | substring, any size | every model under 2 GiB (`JITLLM_SLOW=1`: all) in the directory, one level down, and the safetensors fixtures with an `hf` golden |
+| `JITLLM_AUDIT_SHARD` | `engine.TestEveryModelRunsGenerated`, `engine.TestEveryModelRunsOnACard` | `i/n`: the models whose place in the sweep's list is i modulo n, so n runs (one a card) cover it once | the whole list |
 | `JITLLM_TOKMODEL` | `engine.TestTokenizerCost` | substring | its fixed list |
 | `JITLLM_ROLE_MODEL` | `convert.TestEveryTensorHasARole` | substring | every GGUF |
 | `JITLLM_ST_MODEL` | `convert.TestSafetensorsArchCoverage` | substring | every HuggingFace directory |
