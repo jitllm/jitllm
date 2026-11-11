@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"math"
 	"os"
 	"testing"
 
@@ -47,6 +48,8 @@ func TestStateSampleIsComposed(t *testing.T) {
 		{"typical-p", Sampler{Temp: 1, TypicalP: 0.8, Seed: 29}},
 		{"top-k and typical-p", Sampler{Temp: 1.1, TopK: 40, TypicalP: 0.7, TopP: 0.95, RepeatPen: 1.3, Seed: 31}},
 		{"top-k past the walk and typical-p", Sampler{Temp: 0.9, TopK: 1000, TypicalP: 0.9, MinP: 0.01, Seed: 37}},
+		{"XTC", Sampler{Temp: 1, XTCProbability: 0.6, XTCThreshold: 0.05, Seed: 41}},
+		{"top-k and XTC", Sampler{Temp: 1.1, TopK: 40, XTCProbability: 0.5, XTCThreshold: 0.1, MinP: 0.02, Seed: 43}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			st := testInstance(t, m, 96)
@@ -65,11 +68,15 @@ func TestStateSampleIsComposed(t *testing.T) {
 					hist = append(hist, int(h))
 				}
 				u := peek.uniform()
+				xtc := math.Inf(1)
+				if t := peek.xtcDraw(); t > 0 {
+					xtc = float64(t)
+				}
 				got, err := st.Sample(&composed, lg)
 				if err != nil {
 					t.Fatal(err)
 				}
-				if ref, mg := sampleRef(lg, hist, c.smp, u); got != ref {
+				if ref, mg := sampleRef(lg, hist, c.smp, u, xtc); got != ref {
 					if mg >= 1e-6 {
 						t.Fatalf("draw %d: the composed draw is %d, its definition's %d (u %.9f, margin %.3g)", i, got, ref, u, mg)
 					}
@@ -101,7 +108,7 @@ func TestStateSampleIsComposed(t *testing.T) {
 // sampleRef is the draw s makes over logits at u by its definition
 // (internal/oracle): the walk over a top-k's candidates, else the cut, which
 // is the row's where no cut fires; and how far the draw is from flipping.
-func sampleRef(logits []float32, hist []int, s Sampler, u float64) (int32, float64) {
+func sampleRef(logits []float32, hist []int, s Sampler, u, xtc float64) (int32, float64) {
 	pen := float32(1)
 	if s.RepeatPen > 1 && len(hist) > 0 {
 		pen = float32(s.RepeatPen)
@@ -111,9 +118,9 @@ func sampleRef(logits []float32, hist []int, s Sampler, u float64) (int32, float
 	if s.TopK > 0 && s.TopK < len(logits) {
 		v := append([]float32(nil), logits...)
 		oracle.PenalizeOnce(v, hist, pen)
-		tok, mg := oracle.SampleWalk(v, s.TopK, s.TopK, float64(invT), float64(topp), float64(minp), float64(s.typical()), u)
+		tok, mg := oracle.SampleWalk(v, s.TopK, s.TopK, float64(invT), float64(topp), float64(minp), float64(s.typical()), xtc, u)
 		return int32(tok), mg
 	}
-	tok, mg := oracle.SampleCut(logits, hist, pen, invT, float64(topp), float64(minp), float64(s.typical()), u)
+	tok, mg := oracle.SampleCut(logits, hist, pen, invT, float64(topp), float64(minp), float64(s.typical()), xtc, u)
 	return int32(tok), mg
 }

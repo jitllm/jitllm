@@ -30,11 +30,11 @@ func sampleGateSampler() *Sampler {
 	return &Sampler{Temp: 1.3, TopK: 40, TopP: 0.6, MinP: 0.02, RepeatPen: 1.3, RepeatLastN: 32, Seed: 4242}
 }
 
-// typicalGateSampler is sampleGateSampler's draw with typical-p, which the
-// card's walk cuts among its candidates.
+// typicalGateSampler is sampleGateSampler's draw with typical-p and XTC,
+// which the card's walk cuts among its candidates.
 func typicalGateSampler() *Sampler {
 	s := sampleGateSampler()
-	s.TypicalP, s.Seed = 0.85, 4243
+	s.TypicalP, s.XTCProbability, s.XTCThreshold, s.Seed = 0.85, 0.5, 0.08, 4243
 	return s
 }
 

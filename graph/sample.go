@@ -80,9 +80,13 @@ func penalizedRow(b *Builder, l, win, pen ValueID) ValueID {
 // inverse-CDF walk at a uniform u the caller draws over the survivors'
 // softmax at the temperature -- the first survivor whose mass up to and
 // including it passes u times the survivors' mass, the last survivor where
-// rounding leaves none. Its inputs are SampleTopK's, then sample.walk (k,
-// 1/T, top-p +Inf where off, min-p 0 where off, u, then typical-p +Inf where
-// off); its output the token. The mass before each survivor is a KxK sum,
+// rounding leaves none. XTC cuts the survivors before the walk
+// (sampleEmitter.xtc). Its inputs are SampleTopK's, then sample.walk (k,
+// 1/T, top-p +Inf where off, min-p 0 where off, u, typical-p +Inf where off,
+// XTC's threshold +Inf where off, then XTC's probability, which only Prob
+// reads); its output the token. With Prob the distribution is the mixture
+// the draw is: the XTC cut's at its probability, the survivors' before it at
+// the rest. The mass before each survivor is a KxK sum,
 // as top-p's. With Prob the outputs are the distribution the draw draws
 // from (u unread): each candidate's share of the survivors' softmax at the
 // temperature (0 where it is cut), then the candidates' ids.
@@ -94,15 +98,21 @@ type SampleWalk struct {
 func (s *SampleWalk) Build() *Graph {
 	b := New()
 	vals, ids := s.emit(b)
-	walk := b.In("sample.walk", 6)
+	walk := b.In("sample.walk", 8)
 	K := b.G.Values[vals].Width
 	e := sampleEmitter{b}
-	place, d, keep := e.cuts(vals, walk)
+	place, d, cut := e.cuts(vals, walk)
+	keep := e.xtc(e.mapc(MapExp, 0, "sample.xtc.ed", K, d), cut, place, e.word(walk, 6, "sample.xtc"))
 	invT, u := e.word(walk, 1, "sample.invtemp"), e.word(walk, 4, "sample.u")
-	et := e.mapc(MapMul, 0, "sample.et", K, e.mapc(MapExp, 0, "sample.etd", K, e.mapc(MapMul, 0, "sample.dt", K, d, invT)), keep)
+	edt := e.mapc(MapExp, 0, "sample.etd", K, e.mapc(MapMul, 0, "sample.dt", K, d, invT))
+	et := e.mapc(MapMul, 0, "sample.et", K, edt, keep)
 	mass := e.one(OpReduce, "sample.mass", 1, Attrs{Fn: MapAdd}, et)
 	if s.Prob {
-		b.Out(e.mapc(MapDiv, 0, "sample.pt", K, et, mass), ids)
+		pt := e.mapc(MapDiv, 0, "sample.pt", K, et, mass)
+		ec := e.mapc(MapMul, 0, "sample.et.cut", K, edt, cut)
+		pc := e.mapc(MapDiv, 0, "sample.pt.cut", K, ec, e.one(OpReduce, "sample.mass.cut", 1, Attrs{Fn: MapAdd}, ec))
+		mix := e.word(walk, 7, "sample.xtc.p")
+		b.Out(e.mapc(MapAdd, 0, "sample.pt.mix", K, pc, e.mapc(MapMul, 0, "sample.pt.mixd", K, e.mapc(MapSub, 0, "sample.pt.d", K, pt, pc), mix)), ids)
 		return b.G
 	}
 	upto := e.mapc(MapAdd, 0, "sample.upto", K, e.before(et, place, "sample.walk"), et)
@@ -164,7 +174,11 @@ func (s *SampleRow) Build() *Graph {
 // typical tokens (llama.cpp's typical sampler): those whose surprise -log p
 // is nearest the row's entropy, in that order, up to the first whose mass up
 // to and including it passes typical-p; the cuts read their softmax
-// renormalized, and the survivors are walked whether or not a cut fires. Its inputs are SampleRow's,
+// renormalized, and the survivors are walked whether or not a cut fires.
+// XTC follows the cuts (sample.cut's last three words are typical-p, XTC's
+// threshold and its probability): of the survivors at or above the threshold
+// in their softmax, all but the last in the order, where two or more are;
+// with Prob the distribution is the mixture, XTC's at its probability. Its inputs are SampleRow's,
 // with sample.cut (1/T, top-p +Inf where off, min-p 0 where off, then u) for
 // sample.row; its output the token. With Prob the output is the
 // distribution the draw draws from (u unread), each token's probability:
@@ -192,7 +206,7 @@ func (s *SampleCut) Build() *Graph {
 		words = 5
 	}
 	if s.Typical {
-		words++
+		words += 3
 	}
 	cut := b.In("sample.cut", words)
 	e := sampleEmitter{b}
@@ -218,7 +232,7 @@ func (s *SampleCut) Build() *Graph {
 		// The pool's entropy H, each token's key exp(-|log q1 + H|) -- the
 		// nearest the entropy first -- and the pool cut where the mass up to
 		// one passes typical-p, q1 renormalized over what is left.
-		typ := e.word(cut, words-1, "sample.typical")
+		typ := e.word(cut, words-3, "sample.typical")
 		lq := e.mapc(MapLog, 0, "sample.typ.log", n, q1)
 		plogp := e.mapc(MapWhere, 0, "sample.typ.plogp", n, q1, e.mapc(MapMul, 0, "sample.typ.pl", n, q1, lq))
 		h := e.mapc(MapMul, -1, "sample.typ.h", 1, e.one(OpReduce, "sample.typ.hsum", 1, Attrs{Fn: MapAdd}, plogp))
@@ -254,9 +268,32 @@ func (s *SampleCut) Build() *Graph {
 	}
 	// The survivors' softmax at the temperature, walked in the cut's order.
 	scaled := e.mapc(MapMul, 0, "sample.scaled", n, v, invT)
-	top := e.one(OpReduce, "sample.top", 1, Attrs{Fn: MapMax}, e.mapc(MapWhere, math.Inf(-1), "sample.keptscaled", n, keep, scaled))
-	et := e.mapc(MapWhere, 0, "sample.et", n, keep, e.mapc(MapExp, 0, "sample.ete", n, e.mapc(MapSub, 0, "sample.etd", n, scaled, top)))
-	pt := e.mapc(MapDiv, 0, "sample.pt", n, et, e.one(OpReduce, "sample.etsum", 1, Attrs{Fn: MapAdd}, et))
+	share := func(keep ValueID, name string) ValueID {
+		top := e.one(OpReduce, name+".top", 1, Attrs{Fn: MapMax}, e.mapc(MapWhere, math.Inf(-1), name+".keptscaled", n, keep, scaled))
+		et := e.mapc(MapWhere, 0, name+".et", n, keep, e.mapc(MapExp, 0, name+".ete", n, e.mapc(MapSub, 0, name+".etd", n, scaled, top)))
+		return e.mapc(MapDiv, 0, name+".pt", n, et, e.one(OpReduce, name+".etsum", 1, Attrs{Fn: MapAdd}, et))
+	}
+	pt := share(keep, "sample")
+	if s.Typical {
+		// XTC: of the survivors' softmax at temperature 1, those at or above
+		// the threshold but the last in the order -- the least, the higher id
+		// of two equal.
+		thr := e.word(cut, words-2, "sample.xtc")
+		kq := e.mapc(MapMul, 0, "sample.xtc.q", n, q1, keep)
+		ps := e.mapc(MapDiv, 0, "sample.xtc.p", n, kq, e.one(OpReduce, "sample.xtc.sum", 1, Attrs{Fn: MapAdd}, kq))
+		above := e.mapc(MapMul, 0, "sample.xtc.above", n, keep, notv("sample.xtc.notbelow", n, e.mapc(MapLess, 0, "sample.xtc.below", n, ps, thr)))
+		least := e.one(OpReduce, "sample.xtc.least", 1, Attrs{Fn: MapMin}, e.mapc(MapWhere, math.Inf(1), "sample.xtc.qs", n, above, q1))
+		atLeast := e.mapc(MapMul, 0, "sample.xtc.atleast", n, above, e.mapc(MapEqual, 0, "sample.xtc.isleast", n, q1, least))
+		lastID := e.one(OpReduce, "sample.xtc.lastid", 1, Attrs{Fn: MapMax}, e.mapc(MapWhere, -1, "sample.xtc.ids", n, atLeast, id))
+		last := e.mapc(MapMul, 0, "sample.xtc.last", n, atLeast, e.mapc(MapEqual, 0, "sample.xtc.islast", n, id, lastID))
+		cutPt := pt
+		keep = e.mapc(MapAdd, 0, "sample.xtc.keep", n, e.mapc(MapSub, 0, "sample.xtc.rest", n, keep, above), last)
+		pt = share(keep, "sample.xtc")
+		if s.Prob {
+			mix := e.word(cut, words-1, "sample.xtc.mix")
+			pt = e.mapc(MapAdd, 0, "sample.pt.mix", n, cutPt, e.mapc(MapMul, 0, "sample.pt.mixd", n, e.mapc(MapSub, 0, "sample.pt.mixe", n, pt, cutPt), mix))
+		}
+	}
 	q := e.softmax(scaled, "sample.q")
 	if s.Prob {
 		b.Out(e.mapc(MapAdd, 0, "sample.prob", n, q, e.mapc(MapMul, 0, "sample.prob.cut", n, e.mapc(MapSub, 0, "sample.prob.d", n, pt, q), fired)))
@@ -299,6 +336,21 @@ func (e sampleEmitter) before(x, place ValueID, name string) ValueID {
 	tr := e.one(OpTile, name+".place.rows", K*K, Attrs{Span: K}, place)
 	lower := e.mapc(MapMul, 0, name+".lower", K*K, tx, e.mapc(MapLess, 0, name+".lt", K*K, tr, place))
 	return e.one(OpReduce, name+".before", K, Attrs{Fn: MapAdd, Span: K}, lower)
+}
+
+// xtc is keep less XTC's cut at threshold thr (+Inf where off): of the
+// survivors' softmax at temperature 1 (w their unnormalized weights, keep
+// 0/1), those at or above thr, every one but the last in place, where two or
+// more are.
+func (e sampleEmitter) xtc(w, keep, place, thr ValueID) ValueID {
+	K := e.b.G.Values[w].Width
+	wk := e.mapc(MapMul, 0, "sample.xtc.w", K, w, keep)
+	ps := e.mapc(MapDiv, 0, "sample.xtc.p", K, wk, e.one(OpReduce, "sample.xtc.sum", 1, Attrs{Fn: MapAdd}, wk))
+	above := e.mapc(MapMul, 0, "sample.xtc.above", K, keep,
+		e.mapc(MapAdd, 1, "sample.xtc.notbelow", K, e.mapc(MapMul, -1, "sample.xtc.below.neg", K, e.mapc(MapLess, 0, "sample.xtc.below", K, ps, thr))))
+	last := e.one(OpReduce, "sample.xtc.last", 1, Attrs{Fn: MapMax}, e.mapc(MapWhere, -1, "sample.xtc.places", K, above, place))
+	drop := e.mapc(MapMul, 0, "sample.xtc.drop", K, above, e.mapc(MapLess, 0, "sample.xtc.before", K, place, last))
+	return e.mapc(MapSub, 0, "sample.xtc.keep", K, keep, drop)
 }
 
 // cuts is the K candidates' (vals, best first) places, their distances from
