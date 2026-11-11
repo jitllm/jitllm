@@ -5205,6 +5205,43 @@ cache as generate runs it. On Qwen2.5-VL at half a frame a second the pairs
 stand 8 apart (positions 4, 12, 20 on t), the text after the video ends at
 17, and the first decoded row turns at 21.
 
+## GLM-4V's video
+
+GLM-4V's video is neither Qwen's. Glm4vVideoProcessor (5.17) samples in whole
+steps of the rate: over a video's round((n-1)/r)+1 seconds, rounded half to
+even, max(floor(d*2), 1) frames at ceil(i*r/2), clamped to the last frame,
+each taken once, an odd count's last repeated before the frames are sized;
+past max_duration (300 s) int(300*2) frames over linspace(0, d) seconds, or
+every frame where that is as many. The frames are sized together by
+Qwen3-VL's smart_resize over their count within 12544 and 47040000 pixels
+(the class's, which the published video_preprocessor_config.json repeats),
+and each pair is the conv3d's two planes, the patches RMSNormed and the
+resampled table added as a picture's. In the prompt each pair is a picture
+of its own -- get_rope_index splits the video's grid into T grids of one
+pair -- between `<|begin_of_image|>` and `<|end_of_image|>`, followed by its
+first frame's time, Python's int of index / r; the template's
+`<|begin_of_video|>` and `<|end_of_video|>` stay around them
+(Glm4vProcessor.replace_video_token).
+
+What the converter states (`convert.glm4vVideo`): `jlm.Video.Steps` and
+`MaxSeconds`, `StampFirst` (the first frame's time, cut to StampDigits
+places, not the mean rounded) and `StampLast` (the time after the pair, not
+before it), in the video tail's flags. The tail now refuses a flag bit its
+build does not know, so a later statement in it is refused, never read past
+as a Qwen3-VL video. A video given no rate is read at 24 frames a second,
+the rate the processor writes its times at; its sampler refuses one
+(docs/divergences.md).
+
+The golden is scripts/qwenvlvideogold.py's GLM branch, built through
+Glm4vProcessor itself, so its ids carry the processor's times and markers:
+eight 300x340 frames at four a second, sampled 0, 2, 4, 6, 7, 7, three pairs
+of 11x12 merged rows timed 0, 1 and 1. `TestGLM4VVideoMatchesTransformers`
+holds the plan, the prompt id for id, every position, each pair's rows and
+the logits to it; each pair's time written before it, the pairs' rows
+advancing as text and each pair's frames swapped are its violations. The
+pairs as one grid is no violation it can write: the rope's layout refuses a
+grid the times interrupt.
+
 ## Qwen3.5's tower, and GLM-4.1V / 4.5V / 4.6V
 
 **Qwen3.5** is Qwen3-VL's tower with no deepstack taps in front of qwen35's

@@ -36,6 +36,16 @@ func testJoinedVideo() *Video {
 	return v
 }
 
+// testStepVideo is GLM-4V's: two frames a second in whole steps over at
+// most 300 seconds, each pair's first frame's whole seconds after it.
+func testStepVideo() *Video {
+	v := testVideo()
+	v.MinFrames, v.MaxFrames, v.Steps, v.MaxSeconds = 1, 600, true, 300
+	v.StampFirst, v.StampLast = true, true
+	v.StampBefore, v.StampAfter, v.StampDigits = "", "", 0
+	return v
+}
+
 // TestVideoRoundTrips writes a stated tower's video record into the vision
 // section's tail and reads the same record back, behind an audio tower's
 // and with none; a section with no video reads back with none.
@@ -66,6 +76,13 @@ func TestVideoRoundTrips(t *testing.T) {
 		}
 		if !reflect.DeepEqual(got.Tower.Video, v.Tower.Video) {
 			t.Fatalf("audio %v: the joined video read back as\n%+v\nnot\n%+v", audio, got.Tower.Video, v.Tower.Video)
+		}
+		v.Tower.Video = testStepVideo()
+		if got, err = decodeVision(encodeVision(v)); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(got.Tower.Video, v.Tower.Video) {
+			t.Fatalf("audio %v: the stepped video read back as\n%+v\nnot\n%+v", audio, got.Tower.Video, v.Tower.Video)
 		}
 		if audio && (got.Audio == nil || got.Audio.Tower == nil) {
 			t.Fatal("the audio tower did not survive the video after it")
@@ -118,6 +135,22 @@ func TestVideoRefusesWhatItCannotRead(t *testing.T) {
 		"per second, not joined":  func(v *Video) { v.Joined = false },
 	} {
 		v := testJoinedVideo()
+		breaks(v)
+		if v.Valid() == nil {
+			t.Errorf("%s: Valid accepted it", name)
+		}
+	}
+	if err := testStepVideo().Valid(); err != nil {
+		t.Fatal(err)
+	}
+	for name, breaks := range map[string]func(*Video){
+		"steps of every frame":   func(v *Video) { v.EveryFrame = true },
+		"steps over no seconds":  func(v *Video) { v.MaxSeconds = 0 },
+		"seconds with no steps":  func(v *Video) { v.Steps = false },
+		"a time in one grid":     func(v *Video) { v.Joined = true },
+		"a first time unsampled": func(v *Video) { v.Fps = 0 },
+	} {
+		v := testStepVideo()
 		breaks(v)
 		if v.Valid() == nil {
 			t.Errorf("%s: Valid accepted it", name)

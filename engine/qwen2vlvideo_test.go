@@ -17,9 +17,12 @@ import (
 // qvlVideoGolden is scripts/qwenvlvideogold.py's record of a video through a
 // Qwen2-VL family fixture.
 type qvlVideoGolden struct {
-	Pre   []int32 `json:"pre"`
-	Post  []int32 `json:"post"`
-	Cont  []int32 `json:"cont"`
+	Pre  []int32 `json:"pre"`
+	Post []int32 `json:"post"`
+	Cont []int32 `json:"cont"`
+	// IDs is the whole prompt as the processor writes it, where the golden
+	// is built through it (GLM-4V's).
+	IDs   []int32 `json:"ids"`
 	Video struct {
 		N    int     `json:"n"`
 		H    int     `json:"h"`
@@ -27,6 +30,8 @@ type qvlVideoGolden struct {
 		Fps  float64 `json:"fps"`
 		RGB  []byte  `json:"rgb"`
 		Grid [3]int  `json:"grid"`
+		// Frames is the frames the processor samples, where it samples.
+		Frames []int `json:"frames"`
 		// Embd is every pair's tower rows in f32, EmbdA8 at the engine's
 		// arithmetic (the matrices at Q8_0, their inputs at int8).
 		Embd   []float32 `json:"embd"`

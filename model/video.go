@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"image"
 	"math"
+	"slices"
 	"strconv"
 	"unsafe"
 
@@ -43,11 +44,22 @@ func (tg *TowerGraphs) VideoPlan(n, w, h int, fps float64) (VideoPlan, error) {
 	}
 	var p VideoPlan
 	k := n
-	if v.EveryFrame {
+	switch {
+	case v.EveryFrame:
 		for i := range n {
 			p.Frames = append(p.Frames, i)
 		}
-	} else {
+	case v.Steps:
+		p.Frames = stepFrames(n, rate, float64(v.Fps), int(v.MaxSeconds))
+		for len(p.Frames)%pair != 0 {
+			p.Frames = append(p.Frames, p.Frames[len(p.Frames)-1])
+		}
+		// The repeated frame is sized with the rest.
+		k = len(p.Frames)
+		if k < int(r[5]) {
+			return VideoPlan{}, fmt.Errorf("model: a video of %d frames samples %d, fewer than the %d a picture of the tower takes", n, k, r[5])
+		}
+	default:
 		k = min(max(int(float64(n)/rate*float64(v.Fps)), int(v.MinFrames)), int(v.MaxFrames), n)
 		if k < int(r[5]) {
 			return VideoPlan{}, fmt.Errorf("model: a video of %d frames samples %d, fewer than the %d a picture of the tower takes", n, k, r[5])
@@ -72,6 +84,13 @@ func (tg *TowerGraphs) VideoPlan(n, w, h int, fps float64) (VideoPlan, error) {
 		p.Stride = int(v.PerSecond) * int(float64(pair)/rate)
 	case v.Joined:
 		p.Stride = 1
+	case v.StampFirst:
+		// Python's int of the first frame's time, at StampDigits places.
+		unit := math.Pow(10, float64(v.StampDigits))
+		for i := 0; i < len(p.Frames); i += pair {
+			t := math.Trunc(float64(p.Frames[i])/rate*unit) / unit
+			p.Stamps = append(p.Stamps, strconv.FormatFloat(t, 'f', int(v.StampDigits), 64))
+		}
 	default:
 		for i := 0; i < len(p.Frames); i += pair {
 			t := (float64(p.Frames[i])/rate + float64(p.Frames[i+pair-1])/rate) / 2
@@ -84,6 +103,39 @@ func (tg *TowerGraphs) VideoPlan(n, w, h int, fps float64) (VideoPlan, error) {
 	}
 	p.Square = tg.VideoSquare(ow, oh)
 	return p, nil
+}
+
+// stepFrames is jlm.Video.Steps' sampling of n frames at rate r: the frames
+// at whole steps of r / fps over the video's seconds, each once.
+func stepFrames(n int, r, fps float64, maxSeconds int) []int {
+	last := n - 1
+	d := math.RoundToEven(float64(last)/r) + 1
+	var at []int
+	if d <= float64(maxSeconds) {
+		for i := range max(int(math.Floor(d*fps)), 1) {
+			at = append(at, min(last, int(math.Ceil(float64(i)*r/fps))))
+		}
+	} else if c := int(float64(maxSeconds) * fps); c >= n {
+		for i := range n {
+			at = append(at, i)
+		}
+	} else {
+		// numpy's linspace(0, d, c) seconds.
+		for i := range c {
+			t := d
+			if i < c-1 {
+				t = float64(i) * (d / float64(c-1))
+			}
+			at = append(at, min(last, int(math.Ceil(t*r))))
+		}
+	}
+	var out []int
+	for _, f := range at {
+		if !slices.Contains(out, f) {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 // VideoSquare is a video pair's square, its frames resized to ow x oh: the
@@ -226,11 +278,17 @@ func (m *Model) VideoSpans(frames []image.Image, fps float64) ([]Span, error) {
 		if err != nil {
 			return nil, err
 		}
-		toks = append(toks, m.Vocab.Encode(v.StampBefore+st+v.StampAfter, false)...)
+		stamp := m.Vocab.Encode(v.StampBefore+st+v.StampAfter, false)
+		if !v.StampLast {
+			toks = append(toks, stamp...)
+		}
 		toks = append(toks, t.Span.Before...)
 		out = append(out, Span{Tokens: toks},
 			Span{Picture: f0, Frame: f1, FrameW: p.Square.Ow, FrameH: p.Square.Oh, PicRows: rows, Grid: grid, Key: k})
-		toks = append(append([]int32(nil), t.Span.After...), nil...)
+		toks = append([]int32(nil), t.Span.After...)
+		if v.StampLast {
+			toks = append(toks, stamp...)
+		}
 	}
 	return append(out, Span{Tokens: append(toks, v.After...)}), nil
 }
