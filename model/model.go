@@ -2079,6 +2079,41 @@ func (m *Model) buildBasePlans() {
 	}
 }
 
+// RolesPlan is the ranges of block li's page holding its entries of roles,
+// the routed banks never among them (moe() reads the sheets a token picks):
+// what a part binding only those reads of the page.
+func (m *Model) RolesPlan(li int, roles []jlm.Role) []jlm.Range {
+	c := m.Container
+	if c == nil || li >= int(c.H.NBlocks) {
+		return nil
+	}
+	var rs []jlm.Range
+	for i := range c.Entries() {
+		e := &c.Entries()[i]
+		if e.Role.Vision() || e.Block != int32(li) || e.Role.Expanded() || c.ExpertPaged(e) || !slices.Contains(roles, e.Role) {
+			continue
+		}
+		switch e.Role {
+		case jlm.RoleExpGateBank, jlm.RoleExpUpBank, jlm.RoleExpDownBank:
+			continue
+		}
+		rs = appendSpans(rs, c, e)
+	}
+	return rs
+}
+
+// PageInRanges is PageIn reading only ranges rs of block li's page, binding
+// l at the whole page: a span outside rs is the right length and unread.
+func (m *Model) PageInRanges(fr *jlm.Frames, li int, rs []jlm.Range, l *Layer) error {
+	if m.Container == nil || li >= len(m.Layers) || li >= m.Container.NPages() {
+		return nil
+	}
+	if err := fr.EnsureRanges(li, rs); err != nil {
+		return err
+	}
+	return bindPacked(fr, m.Cfg, l)
+}
+
 // ensureBlockExperts reads the whole block, routed expert banks included. A
 // device is handed the entire bank at PrepLayer and cannot come back for an
 // expert later, so it must be read first; otherwise the upload takes whatever
