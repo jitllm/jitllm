@@ -100,6 +100,7 @@ func (a *Buf) SHLX(dst, src, cnt Reg) {
 
 // MOVL is dst = src's low 32 bits, zero-extended.
 func (a *Buf) MOVL(dst, src Reg) {
+	defer a.wrote(a.heldOK, dst)
 	a.rex(false, src, noIndex, dst)
 	a.u8(0x89)
 	a.modrmReg(src, dst)
@@ -184,6 +185,7 @@ func (a *Buf) MOVMemImm(m Mem, imm int32) {
 
 // ADDMemImm8 adds imm to the 64-bit word at m.
 func (a *Buf) ADDMemImm8(m Mem, imm int8) {
+	defer a.stored(a.heldOK, m, 8)
 	idx := noIndex
 	if m.hasIndex() {
 		idx = m.Index
@@ -196,6 +198,7 @@ func (a *Buf) ADDMemImm8(m Mem, imm int8) {
 
 // ADDMemImm32 adds imm to the 64-bit word at m.
 func (a *Buf) ADDMemImm32(m Mem, imm int32) {
+	defer a.stored(a.heldOK, m, 8)
 	idx := noIndex
 	if m.hasIndex() {
 		idx = m.Index

@@ -134,6 +134,37 @@ func (a *Buf) u32(v uint32) {
 	a.heldOK = 0
 }
 
+// wrote restores the loads held before an instruction that writes the
+// general register dst and no memory: dst's own is forgotten, and every load
+// read through dst.
+func (a *Buf) wrote(was uint16, dst Reg) {
+	for i, h := range a.held {
+		if Reg(i) == dst || h.Base == dst || h.hasIndex() && h.Index == dst {
+			was &^= 1 << i
+		}
+	}
+	a.heldOK = was
+}
+
+// stored restores the loads held before an instruction that writes size
+// bytes at m and no register, less those the store may overwrite: on the
+// stack, the slots it overlaps, the kernel's spill area being its own;
+// through any other base, every load not from a stack slot.
+func (a *Buf) stored(was uint16, m Mem, size int32) {
+	for i, h := range a.held {
+		stack := h.Base == RSP && !h.hasIndex()
+		switch {
+		case m.Base == RSP && !m.hasIndex():
+			if stack && h.Disp < m.Disp+size && m.Disp < h.Disp+8 {
+				was &^= 1 << i
+			}
+		case m.Base == RSP || !stack:
+			was &^= 1 << i
+		}
+	}
+	a.heldOK = was
+}
+
 // keepHeld restores the loads held before an instruction that writes no
 // memory and no register but those among regs: the rest are still held.
 func (a *Buf) keepHeld(was uint16, regs ...Reg) {
@@ -585,12 +616,7 @@ func (a *Buf) MOVLoad(dst Reg, m Mem) {
 	a.rex(true, dst, idx, m.Base)
 	a.u8(0x8B)
 	a.modrmMem(dst, m)
-	for i, h := range a.held {
-		if Reg(i) == dst || h.Base == dst || h.hasIndex() && h.Index == dst {
-			was &^= 1 << i
-		}
-	}
-	a.heldOK = was
+	a.wrote(was, dst)
 	if m.Base != dst && !(m.hasIndex() && m.Index == dst) {
 		a.held[dst] = m
 		a.heldOK |= 1 << dst
@@ -602,6 +628,7 @@ func (a *Buf) CPUID() { a.u8(0x0F); a.u8(0xA2) }
 func (a *Buf) XGETBV() { a.u8(0x0F); a.u8(0x01); a.u8(0xD0) }
 
 func (a *Buf) MOVStore(m Mem, src Reg) {
+	defer a.stored(a.heldOK, m, 8)
 	idx := noIndex
 	if m.hasIndex() {
 		idx = m.Index
@@ -612,6 +639,7 @@ func (a *Buf) MOVStore(m Mem, src Reg) {
 }
 
 func (a *Buf) LEAQ(dst Reg, m Mem) {
+	defer a.wrote(a.heldOK, dst)
 	idx := noIndex
 	if m.hasIndex() {
 		idx = m.Index
@@ -622,12 +650,14 @@ func (a *Buf) LEAQ(dst Reg, m Mem) {
 }
 
 func (a *Buf) MOVQ(dst, src Reg) {
+	defer a.wrote(a.heldOK, dst)
 	a.rex(true, src, noIndex, dst)
 	a.u8(0x89)
 	a.modrmReg(src, dst)
 }
 
 func (a *Buf) ADDQ(dst, src Reg) {
+	defer a.wrote(a.heldOK, dst)
 	a.rex(true, src, noIndex, dst)
 	a.u8(0x01)
 	a.modrmReg(src, dst)
@@ -644,12 +674,14 @@ func (a *Buf) ADDQmem(dst Reg, m Mem) {
 }
 
 func (a *Buf) SUBQ(dst, src Reg) {
+	defer a.wrote(a.heldOK, dst)
 	a.rex(true, src, noIndex, dst)
 	a.u8(0x29)
 	a.modrmReg(src, dst)
 }
 
 func (a *Buf) MOVimm32(dst Reg, imm int32) {
+	defer a.wrote(a.heldOK, dst)
 	a.rex(true, Y0, noIndex, dst)
 	a.u8(0xC7)
 	a.modrmReg(Y0, dst)
@@ -707,6 +739,7 @@ func (a *Buf) ANDimm8(dst Reg, imm int8) {
 }
 
 func (a *Buf) ADDimm(dst Reg, imm int32) {
+	defer a.wrote(a.heldOK, dst)
 	a.rex(true, Y0, noIndex, dst)
 	if imm >= -128 && imm <= 127 {
 		a.u8(0x83)
@@ -720,6 +753,7 @@ func (a *Buf) ADDimm(dst Reg, imm int32) {
 }
 
 func (a *Buf) MOVimm(dst Reg, imm int64) {
+	defer a.wrote(a.heldOK, dst)
 	a.rex(true, Y0, noIndex, dst)
 	a.u8(0xC7)
 	a.modrmReg(Y0, dst)
@@ -727,6 +761,7 @@ func (a *Buf) MOVimm(dst Reg, imm int64) {
 }
 
 func (a *Buf) SUBimm(dst Reg, imm int32) {
+	defer a.wrote(a.heldOK, dst)
 	a.rex(true, Y0, noIndex, dst)
 	if imm >= -128 && imm <= 127 {
 		a.u8(0x83)

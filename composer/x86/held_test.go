@@ -51,6 +51,34 @@ func TestReloadsAreElidedOnlyWhileHeld(t *testing.T) {
 			t.Errorf("after %s the reload was elided", name)
 		}
 	}
+	for name, c := range map[string]struct {
+		held     Mem
+		between  func(*Buf)
+		keepHeld bool
+	}{
+		"a move into another register":     {slot, func(a *Buf) { a.MOVQ(RBX, R9) }, true},
+		"index arithmetic":                 {slot, func(a *Buf) { a.ADDQ(R9, R12); a.MOVL(R9, R9); a.ADDimm(R9, 0xc00) }, true},
+		"a move into it":                   {slot, func(a *Buf) { a.MOVQ(R15, R9) }, false},
+		"a write to its base":              {slot, func(a *Buf) { a.ADDimm(RSP, 8) }, false},
+		"a lea into it":                    {slot, func(a *Buf) { a.LEAQ(R15, At(R9, 4)) }, false},
+		"a store to another slot":          {slot, func(a *Buf) { a.MOVStore(At(RSP, -0x50), R9) }, true},
+		"a store to its slot":              {slot, func(a *Buf) { a.MOVStore(At(RSP, -0x14c), R9) }, false},
+		"a store through a heap base":      {slot, func(a *Buf) { a.MOVStore(At(R8, 0), R9) }, true},
+		"a store through an indexed stack": {slot, func(a *Buf) { a.MOVStore(Idx(RSP, R9, 1, 0), R9) }, false},
+		"a heap load, a heap store":        {At(RDI, 0x88), func(a *Buf) { a.MOVStore(At(R8, 0), R9) }, false},
+		"an argument word, a stack store":  {At(RDI, 0x88), func(a *Buf) { a.MOVStore(At(RSP, -0x50), R9) }, true},
+		"an add into its slot":             {slot, func(a *Buf) { a.ADDMemImm8(slot, 0x20) }, false},
+		"an add into another slot":         {slot, func(a *Buf) { a.ADDMemImm8(At(RSP, -0x158), 0x20) }, true},
+	} {
+		var a Buf
+		a.MOVLoad(R15, c.held)
+		c.between(&a)
+		n := a.Len()
+		a.MOVLoad(R15, c.held)
+		if elided := a.Len() == n; elided != c.keepHeld {
+			t.Errorf("after %s the reload elided %v, want %v", name, elided, c.keepHeld)
+		}
+	}
 	var a Buf
 	a.MOVLoad(R13, At(R15, 8))
 	a.MOVLoad(R15, other)
