@@ -1131,7 +1131,6 @@ type partDecline = nn.Decline
 const (
 	partServes      = nn.DeclineServes
 	partNoGraph     = nn.DeclineNoGraph
-	partHeadShape   = nn.DeclineHeadShape
 	partCaller      = nn.DeclineCaller
 	partNoRoom      = nn.DeclineNoRoom
 	partNoWeight    = nn.DeclineNoWeight
@@ -1535,87 +1534,69 @@ func (sv *servedPart) pagedRun(g *devTier, lc *launcher, s backend.Session, inst
 	return nil
 }
 
-// headSpec is a head graph the tier serves: a norm (an RMSNorm, or a
-// LayerNorm with its optional bias) or none (graph.Head.NoNorm), the
-// projection to the vocabulary with its optional bias, and a chain of
-// elementwise ops on its logits, whatever they compute.
+// headSpec is what a head graph binds, whatever its ops compute: its one
+// matrix, the projection to the vocabulary, and the vectors the tier holds
+// for a head -- the norm's scale and bias, the projection's bias. Its input
+// is the rows, its outputs the logits and, where it writes them too, the
+// rows it read them from (graph.Head.Hidden).
 type headSpec struct {
-	norm, normBias, out, bias               jlm.Role
-	layerNorm, hasNormBias, hasBias, noNorm bool
+	out                           jlm.Role
+	hasNorm, hasNormBias, hasBias bool
 }
 
-// headShape is gr read as a head the tier serves, false for any other graph.
-// Its outputs are the logits, then the norm's rows where it writes them too
-// (graph.Head.Hidden).
+// headShape is what gr binds, false for a graph the tier holds no buffers
+// for: other than one input and one or two outputs, an output that is its
+// input, a matrix other than one projection, or a vector other than the
+// head's.
 func headShape(gr *graph.Graph) (headSpec, bool) {
 	var hs headSpec
 	if gr == nil || len(gr.In) != 1 || len(gr.Out) < 1 || len(gr.Out) > 2 || len(gr.Ops) < 1 {
 		return hs, false
 	}
-	ops, rows := gr.Ops, gr.In[0]
-	switch n := ops[0]; {
-	case n.Kind == graph.OpNorm && len(n.Weight) == 1:
-	case n.Kind == graph.OpLayerNorm && (len(n.Weight) == 1 || len(n.Weight) == 2):
-		hs.layerNorm = true
-	default:
-		// No norm: the projection reads the rows as they come, and the
-		// hidden rows are their copy, the graph's last op.
-		hs.noNorm = true
-	}
-	if !hs.noNorm {
-		n := ops[0]
-		if len(n.In) != 1 || n.In[0] != gr.In[0] || len(n.Out) != 1 {
+	for _, v := range gr.Out {
+		if v == gr.In[0] {
 			return hs, false
 		}
-		hs.norm, rows, ops = n.Weight[0].Role, n.Out[0], ops[1:]
-		if len(n.Weight) == 2 {
-			hs.normBias, hs.hasNormBias = n.Weight[1].Role, true
+	}
+	matrix := false
+	for _, o := range gr.Ops {
+		for _, w := range o.Weight {
+			switch {
+			case w.Rows > 0:
+				if matrix && w.Role != hs.out {
+					return hs, false
+				}
+				hs.out, matrix = w.Role, true
+			case w.Role == jlm.RoleOutputNorm:
+				hs.hasNorm = true
+			case w.Role == jlm.RoleOutputNormBias:
+				hs.hasNormBias = true
+			case w.Role == jlm.RoleOutputBias:
+				hs.hasBias = true
+			default:
+				return hs, false
+			}
 		}
 	}
-	hidden := rows
-	if hs.noNorm && len(gr.Out) == 2 {
-		c := ops[len(ops)-1]
-		if c.Kind != graph.OpSlice || len(c.In) != 1 || c.In[0] != gr.In[0] || len(c.Out) != 1 || c.Attr.Offset != 0 ||
-			gr.Values[c.Out[0]].Width != gr.Values[gr.In[0]].Width {
-			return hs, false
-		}
-		hidden, ops = c.Out[0], ops[:len(ops)-1]
-	}
-	if len(gr.Out) == 2 && gr.Out[1] != hidden || len(ops) < 1 {
-		return hs, false
-	}
-	mv := ops[0]
-	if mv.Kind != graph.OpMatVec || len(mv.In) != 1 || mv.In[0] != rows || len(mv.Out) != 1 ||
-		len(mv.Weight) < 1 || len(mv.Weight) > 2 {
-		return hs, false
-	}
-	hs.out = mv.Weight[0].Role
-	if len(mv.Weight) == 2 {
-		hs.bias, hs.hasBias = mv.Weight[1].Role, true
-	}
-	last := mv.Out[0]
-	for _, o := range ops[1:] {
-		if o.Kind != graph.OpMap || len(o.Weight) != 0 || len(o.In) != 1 || o.In[0] != last || len(o.Out) != 1 {
-			return hs, false
-		}
-		last = o.Out[0]
-	}
-	return hs, gr.Out[0] == last
+	return hs, matrix
 }
 
-// headServes is why a step's head is not the one the composer is
-// asked for, serves where it is: the model's head graph (headShape) -- a
-// norm, the vocabulary's projection with its bias, and what the graph does to
-// the logits after it, the final softcap and the scale -- with the norm and
-// the vectors it binds the tier's (PrepHead uploads each the graph names).
-func (bs *blockScratch) headServes(norm backend.Buf) partDecline {
+// headServes is nil where the composer serves a step's head as the model's
+// head graph states it -- the graph read as what it binds (headShape), the
+// hidden rows' graph binding the same, and every vector it names held
+// (PrepHead uploads each) -- and why not where it does not.
+func (bs *blockScratch) headServes(norm backend.Buf) error {
 	hs, ok := headShape(bs.headGraph)
 	hh, hok := headShape(bs.headHidden)
-	if !ok || !hok || hh != hs || len(bs.headHidden.Out) != 2 ||
-		!hs.noNorm && (norm == nil || hs.hasNormBias && bs.hNormB == nil) || hs.hasBias && bs.hBias == nil {
-		return partHeadShape
+	switch {
+	case !ok || !hok:
+		return errors.New("the head's graph binds a matrix other than its one projection, or a vector the tier holds no head buffer for")
+	case hh != hs || len(bs.headHidden.Out) != 2:
+		return errors.New("the head's hidden rows graph binds other than its head, or writes no rows")
+	case hs.hasNorm && norm == nil, hs.hasNormBias && bs.hNormB == nil, hs.hasBias && bs.hBias == nil:
+		return errors.New("the head's graph names a vector the tier did not upload")
 	}
-	return partServes
+	return nil
 }
 
 // runHead launches the served head sv on in, its logits into out and its
@@ -1639,7 +1620,7 @@ func (g *devTier) servedHead(bs *blockScratch, norm backend.Buf, rows int) (*ser
 	}
 	hs, ok := headShape(gr)
 	if !ok {
-		return nil, errors.New("the composed head: a graph that is not a norm, a projection and elementwise ops")
+		return nil, errors.New("the composed head: a graph binding a matrix other than its one projection, or a vector the tier holds no head buffer for")
 	}
 	t, ok := jlmType(w.t)
 	if !ok {
@@ -1647,14 +1628,14 @@ func (g *devTier) servedHead(bs *blockScratch, norm backend.Buf, rows int) (*ser
 	}
 	bind := func(sl *composedPart) {
 		sl.weights[hs.out] = w
-		if !hs.noNorm {
-			sl.vectors[hs.norm] = norm
+		if hs.hasNorm {
+			sl.vectors[jlm.RoleOutputNorm] = norm
 		}
 		if hs.hasNormBias {
-			sl.vectors[hs.normBias] = bs.hNormB
+			sl.vectors[jlm.RoleOutputNormBias] = bs.hNormB
 		}
 		if hs.hasBias {
-			sl.vectors[hs.bias] = bs.hBias
+			sl.vectors[jlm.RoleOutputBias] = bs.hBias
 		}
 	}
 	sk := servedKey{kind: nn.PartHead, graph: gr, rows: rows, t: t}
@@ -1662,7 +1643,7 @@ func (g *devTier) servedHead(bs *blockScratch, norm backend.Buf, rows int) (*ser
 		sl := composedPart{kind: nn.PartHead, graph: gr, formats: map[jlm.Role]jlm.Type{hs.out: t},
 			weights: map[jlm.Role]*resident{}, vectors: map[jlm.Role]backend.Buf{}}
 		if hs.hasBias {
-			sl.formats[hs.bias] = jlm.TypeF32
+			sl.formats[jlm.RoleOutputBias] = jlm.TypeF32
 		}
 		bind(&sl)
 		return sl, nil
@@ -2863,7 +2844,7 @@ func (g *devTier) prewarmComposedHead(narrow bool) (roomless string) {
 		g.prewarming = false
 	}
 	if g.NoPromptPrewarm || bs == nil || bs.head == nil ||
-		bs.headServes(bs.hNorm) != partServes {
+		bs.headServes(bs.hNorm) != nil {
 		return
 	}
 	g.prewarming = true
