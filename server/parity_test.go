@@ -338,10 +338,6 @@ func TestNativeRefusesWhatTheOpenAIRoutesRefuse(t *testing.T) {
 			chat(parityMessages(), func(m *v1.GenerateRequest, _ *v1.ChatPrompt) {
 				m.Logprobs, m.TopLogprobs = true, ptr(int32(21))
 			}), "top_logprobs must be between"},
-		{"logprobs with echo", "/v1/completions", `{"model":"m-1","prompt":"x","echo":true,"logprobs":1}`,
-			&v1.GenerateRequest{ModelId: "m-1", EchoPrompt: true, Logprobs: true, TopLogprobs: ptr(int32(1)),
-				Prompt: &v1.PromptInput{Input: &v1.PromptInput_Text{Text: "x"}}},
-			"logprobs with echo"},
 		{"tool_choice names an undeclared tool", "/v1/chat/completions",
 			chatBody(`"tools":[` + weather + `],"tool_choice":{"type":"function","function":{"name":"get_time"}}`),
 			chat(parityMessages(), toolsAnd(&v1.ToolChoice{Mode: v1.ToolChoiceMode_TOOL_CHOICE_MODE_FUNCTION,

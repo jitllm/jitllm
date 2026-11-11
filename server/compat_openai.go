@@ -433,10 +433,6 @@ func (e *compat) openAICompletions(w http.ResponseWriter, r *http.Request) {
 		oaFail(w, http.StatusBadRequest, err.Error(), "invalid_request_error")
 		return
 	}
-	if lpr.on && req.Echo {
-		oaFail(w, http.StatusBadRequest, errLogprobsWithEcho, "invalid_request_error")
-		return
-	}
 	seeds, err := oaChoiceSeeds(req.N, req.Seed)
 	if err != nil {
 		oaFail(w, http.StatusBadRequest, err.Error(), "invalid_request_error")
