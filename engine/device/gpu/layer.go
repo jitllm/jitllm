@@ -4485,8 +4485,14 @@ func (g *devTier) layersSession(s backend.Session) {
 			if l.nonCausal {
 				kind = nn.PartTower
 			}
-			why := g.blockServes(l, li, p, bs, kind == nn.PartPrompt)
-			if why == partServes && R > 1 && l.stream != nil && nrow > l.pagedRows() {
+			if berr := g.blockServes(l, li, p, bs, kind == nn.PartPrompt); berr != nil {
+				if err == nil {
+					err = fmt.Errorf("tier: the composer does not serve block %d at %d rows: %w", li, R, berr)
+				}
+				continue
+			}
+			why := partServes
+			if R > 1 && l.stream != nil && nrow > l.pagedRows() {
 				// pagedCall holds every composed call to the rows a streamed
 				// block's pages hold.
 				if err == nil {

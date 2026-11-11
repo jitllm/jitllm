@@ -1131,13 +1131,10 @@ type partDecline = nn.Decline
 const (
 	partServes      = nn.DeclineServes
 	partNoGraph     = nn.DeclineNoGraph
-	partNoPool      = nn.DeclineNoPool
 	partFeeds       = nn.DeclineFeeds
-	partWindow      = nn.DeclineWindow
 	partHeadShape   = nn.DeclineHeadShape
 	partCaller      = nn.DeclineCaller
 	partNoRoom      = nn.DeclineNoRoom
-	partTableHeld   = nn.DeclineTableHeld
 	partExperts     = nn.DeclineExperts
 	partRecurrent   = nn.DeclineRecurrent
 	partNoWeight    = nn.DeclineNoWeight
@@ -2203,13 +2200,13 @@ func (l *layer) namedWeight(r jlm.Role) *resident {
 	return nil
 }
 
-// expertsServe is why block l's routed experts are not where its form
-// reads them, serves where they are: every bank its graph binds held whole
-// on the card, or a streamed block's in pages -- its cache's slots or its
-// compact bank, each expert reached through the step's table (pagedRun) --
-// at a call of no more rows than its pages hold the selections of
-// (pagedRows), its experts sent to the card rather than run on the host.
-func (l *layer) expertsServe() partDecline {
+// expertsHeld says block l's routed experts are where its form reads them:
+// every bank its graph binds held whole on the card, or a streamed block's
+// in pages -- its cache's slots or its compact bank, each expert reached
+// through the step's table (pagedRun) -- at a call of no more rows than its
+// pages hold the selections of (pagedRows), its experts sent to the card
+// rather than run on the host.
+func (l *layer) expertsHeld() bool {
 	held, banks := true, false
 	for _, o := range l.graph.Ops {
 		for _, w := range o.Weight {
@@ -2219,13 +2216,7 @@ func (l *layer) expertsServe() partDecline {
 			}
 		}
 	}
-	switch {
-	case !banks:
-		return partServes
-	case !held:
-		return partExperts
-	}
-	return partServes
+	return !banks || held
 }
 
 // pagedCall is the rows a composed call over blocks [lo, hi) takes at a
@@ -2352,36 +2343,44 @@ func (l *layer) namedVector(r jlm.Role) (backend.Buf, bool) {
 	return nil, false
 }
 
-// blockServes is why block li of this step is not one the composer serves
-// whole, serves where it is: a graph from the front end, a block the caller
-// leaves to it, the paged history, the window the plan holds the block to
-// (windowHeld), and every weight and vector its graph binds held
-// (weightsHeld).
-func (g *devTier) blockServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratch, prompt bool) partDecline {
+// blockServes is nil where the composer serves block li of this step whole,
+// and what is missing where it does not: a graph from the front end, its
+// experts where its form reads them (expertsHeld), every weight and vector
+// its graph binds held (weightsHeld), a recurrent block's state where the
+// form steps it (recHeld), the residual streams and the rows' per-layer
+// inputs it reads, and the paged history -- which a step builds, so that is
+// the step's own condition (errStepCond).
+func (g *devTier) blockServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratch, prompt bool) error {
 	pk := bs.pkv
 	switch {
 	case l.graph == nil:
-		return partNoGraph
-	case l.expertsServe() != partServes:
-		return l.expertsServe()
+		return errors.New("the block has no graph from the front end")
+	case !l.expertsHeld():
+		return errors.New("a bank its graph binds is neither whole on the card nor in a streamed block's pages")
 	case !l.weightsHeld():
-		return partNoWeight
+		r, _ := l.missingWeight()
+		return fmt.Errorf("its graph binds %v, which the block does not hold", r)
 	case l.linear && !g.recHeld(l, p, bs):
-		return partRecurrent
+		return errors.New("its recurrent state is not where the form steps it")
 	case len(l.graph.Out) != p.Streams() || len(l.graph.In) > len(l.graph.Out) && (len(l.graph.In) != len(l.graph.Out)+1 || bs.pleIn == nil):
 		// A block reads each residual stream and, past them, the rows'
 		// per-layer inputs.
-		return partFeeds
+		return fmt.Errorf("its graph reads %d inputs and writes %d streams, where the step holds %d streams and per-layer inputs %v",
+			len(l.graph.In), len(l.graph.Out), p.Streams(), bs.pleIn != nil)
 	case l.linear && !l.withAttn:
-		return partServes
+		return nil
 	case l.nonCausal:
 		return g.towerServes(l, li, p, bs)
 	case pk == nil || g.kvp == nil || g.kvp.layers[l.kvSrc] == nil:
 		// A block sharing another's history reads its source's pool.
-		return partNoPool
+		return fmt.Errorf("%w: no paged history on the device", errStepCond)
 	}
-	return partServes
+	return nil
 }
+
+// errStepCond marks what a step stages itself -- the paged history it
+// builds, a call's windows -- which no placement decides on (unserved).
+const errStepCond tierError = "a step's own condition"
 
 // unserved is why placed block li is one the composer does not serve on
 // this device, "" where it does: prepLayer declines it, so it runs on the
@@ -2394,19 +2393,10 @@ func (g *devTier) unserved(li int) string {
 	if bs == nil || l == nil {
 		return ""
 	}
-	switch why := g.blockServes(l, li, &bs.p, bs, false); why {
-	case partServes, partCaller, partNoPool:
-		return ""
-	case partWindow:
-		// A tower's windows are each call's (SetKeyRuns, SetRowWindows):
-		// none is staged at a placement.
-		return ""
-	case partNoWeight:
-		r, _ := l.missingWeight()
-		return fmt.Sprintf("block %d: the composer does not serve it on this device (its graph binds %v, which the block does not hold)", li, r)
-	default:
-		return fmt.Sprintf("block %d: the composer does not serve it on this device (%s)", li, nn.DeclineName(int(why)))
+	if err := g.blockServes(l, li, &bs.p, bs, false); err != nil && !errors.Is(err, errStepCond) {
+		return fmt.Sprintf("block %d: the composer does not serve it on this device (%v)", li, err)
 	}
+	return ""
 }
 
 // recHeld says linear block l's recurrent state is where the composer's
@@ -2552,7 +2542,7 @@ func (g *devTier) prewarmComposedBlock(li int, narrow bool) (roomless string) {
 	g.kvPages()
 	g.prewarming = true
 	defer func() { g.prewarming = false }()
-	if g.blockServes(l, li, &bs.p, bs, false) == partServes {
+	if g.blockServes(l, li, &bs.p, bs, false) == nil {
 		rcs := bs.cs
 		serve := func() (*servedPart, error) {
 			return g.servedBlock(l, li, rcs, g.kvp.layers[l.kvSrc], bs.pkv.pRow, g.windowDesc(bs.pkv, l), bs.zero, bs.calls, bs.dRows, bs.p.MaxSeq,
@@ -2631,7 +2621,7 @@ func (g *devTier) promptRoomless(li int) string {
 	g.prewarming = true
 	defer func() { g.prewarming = was }()
 	bb, l := g.bbs[g.promptW], g.layers[li]
-	if bb == nil || l == nil || g.blockServes(l, li, &bb.p, bb, true) != partServes {
+	if bb == nil || l == nil || g.blockServes(l, li, &bb.p, bb, true) != nil {
 		return ""
 	}
 	bb.instNoRoom = false
@@ -2647,7 +2637,7 @@ func (g *devTier) promptRoomless(li int) string {
 // outside the submission. Callers hold g.mu.
 func (g *devTier) promptServed(l *layer, li int, bb *blockScratch) bool {
 	if bb.rows < 2 || bb.pkv == nil || g.kvp == nil ||
-		g.blockServes(l, li, &bb.p, bb, true) != partServes {
+		g.blockServes(l, li, &bb.p, bb, true) != nil {
 		return false
 	}
 	rcs := bb.cs
