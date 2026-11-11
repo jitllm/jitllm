@@ -1,6 +1,8 @@
 package server
 
 import (
+	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jitllm/jitllm/model"
 )
@@ -178,11 +181,12 @@ type oaErrorBody struct {
 // oaContent accepts both content shapes the API has shipped: a bare string,
 // and the content-part array every SDK sends. A shim that only took
 // the string form rejects the default request of the official python client.
-// The text parts are joined; each image_url part is returned in order with its
-// index, for the caller to decode. A part the model cannot be shown (audio, a
-// file) is refused by index rather than dropped, so a request never succeeds
-// with the model having seen less than the client sent.
-func oaContent(raw json.RawMessage) (string, []oaImagePart, error) {
+// The text parts are joined, and a file part of text is its text after a blank
+// line (oaPartFile.text, a stored file read by files); each image_url part is
+// returned in order with its index, for the caller to decode. A part the model
+// cannot be shown (audio, a PDF) is refused by index rather than dropped, so a
+// request never succeeds with the model having seen less than the client sent.
+func oaContent(raw json.RawMessage, files storedFiles) (string, []oaImagePart, error) {
 	if len(raw) == 0 || string(raw) == "null" {
 		return "", nil, nil
 	}
@@ -196,6 +200,8 @@ func oaContent(raw json.RawMessage) (string, []oaImagePart, error) {
 		ImageURL *struct {
 			URL string `json:"url"`
 		} `json:"image_url"`
+		File *oaPartFile `json:"file"`
+		oaPartFile
 	}
 	if err := json.Unmarshal(raw, &parts); err != nil {
 		return "", nil, fmt.Errorf("content must be a string or an array of content parts")
@@ -211,11 +217,76 @@ func oaContent(raw json.RawMessage) (string, []oaImagePart, error) {
 				return "", nil, fmt.Errorf("content[%d] is an image_url part with no image_url.url", i)
 			}
 			imgs = append(imgs, oaImagePart{index: i, url: p.ImageURL.URL})
-		case "input_audio", "file", "input_file":
+		case "file", "input_file":
+			f := p.File
+			if f == nil {
+				f = &p.oaPartFile
+			}
+			text, err := f.text(files)
+			if err != nil {
+				return "", nil, fmt.Errorf("content[%d] %v", i, err)
+			}
+			if b.Len() > 0 {
+				b.WriteString("\n\n")
+			}
+			b.WriteString(text)
+		case "input_audio":
 			return "", nil, fmt.Errorf("content[%d] is a %q part, which this server does not take", i, p.Type)
 		}
 	}
 	return b.String(), imgs, nil
+}
+
+// storedFiles reads a file the Files API holds: its name and bytes.
+type storedFiles func(id string) (string, []byte, error)
+
+// oaPartFile is a file content part's file: chat's {"file": {...}}, or the
+// responses API's fields on the part itself.
+type oaPartFile struct {
+	FileData string `json:"file_data"`
+	FileID   string `json:"file_id"`
+	Filename string `json:"filename"`
+}
+
+// text is the file's text after its file name and a blank line: file_data's
+// bytes where its data URL's type is text (text/*, application/json), or the
+// stored file's where they are.
+func (f oaPartFile) text(files storedFiles) (string, error) {
+	name, body := f.Filename, ""
+	switch {
+	case f.FileData != "":
+		head, data, ok := strings.Cut(f.FileData, ",")
+		if !ok || !strings.HasPrefix(head, "data:") || !strings.HasSuffix(head, ";base64") {
+			return "", errors.New("file_data is not a base64 data URL")
+		}
+		mime, _, _ := strings.Cut(strings.TrimSuffix(strings.TrimPrefix(head, "data:"), ";base64"), ";")
+		if !strings.HasPrefix(mime, "text/") && mime != "application/json" {
+			return "", fmt.Errorf("is a %s file, and this server reads no PDF: send its text", mime)
+		}
+		raw, err := base64.StdEncoding.DecodeString(data)
+		if err != nil {
+			return "", fmt.Errorf("file_data is not base64: %v", err)
+		}
+		body = string(raw)
+	case f.FileID != "":
+		stored, raw, err := files(f.FileID)
+		if err != nil {
+			return "", fmt.Errorf("names file %q: %v", f.FileID, err)
+		}
+		if bytes.HasPrefix(raw, []byte("%PDF")) || !utf8.Valid(raw) {
+			return "", fmt.Errorf("names file %q, which is not text, and this server reads no PDF: send its text", f.FileID)
+		}
+		if name == "" {
+			name = stored
+		}
+		body = string(raw)
+	default:
+		return "", errors.New("is a file part with neither file_data nor file_id")
+	}
+	if name == "" {
+		return body, nil
+	}
+	return name + "\n\n" + body, nil
 }
 
 // oaImagePart is an image_url part of a message's content.
@@ -302,7 +373,7 @@ func (e *compat) openAIChatCompletions(w http.ResponseWriter, r *http.Request) {
 	chat := &ChatInput{AddGenerationPrompt: true}
 	pics := newPictures(e.img)
 	for i, m := range req.Messages {
-		c, imgs, err := oaContent(m.Content)
+		c, imgs, err := oaContent(m.Content, e.storedFile)
 		if err != nil {
 			oaFail(w, http.StatusBadRequest, fmt.Sprintf("messages[%d].%v", i, err), "invalid_request_error")
 			return

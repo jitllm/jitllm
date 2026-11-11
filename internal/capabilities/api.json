@@ -677,8 +677,16 @@
       "endpoints": [
         "/v1/chat/completions"
       ],
-      "when": "a content part of type input_audio, file or input_file",
+      "when": "a content part of type input_audio",
       "message": "which this server does not take"
+    },
+    {
+      "id": "file-part-not-text",
+      "endpoints": [
+        "/v1/chat/completions"
+      ],
+      "when": "a file or input_file content part whose data is not text (a data URL not of text/* or application/json, or a stored file that is a PDF or not UTF-8)",
+      "message": "and this server reads no PDF"
     },
     {
       "id": "document-block",

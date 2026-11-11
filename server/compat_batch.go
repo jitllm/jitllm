@@ -225,19 +225,42 @@ func (b *batches) getFile(id string) (*oaFile, error) {
 // ---------------------------------------------------------------- routes
 
 func (c *compat) batchesFor(w http.ResponseWriter) *batches {
-	c.batchOnce.Do(func() {
-		bs, ok := c.b.(BatchStore)
-		if !ok {
-			c.batchErr = errors.New("this backend keeps no files")
-			return
-		}
-		c.batch, c.batchErr = newBatches(bs.BatchDir(), c.mux)
-	})
+	c.batchOnce.Do(c.openBatches)
 	if c.batchErr != nil {
 		oaFail(w, http.StatusNotImplemented, "files and batches: "+c.batchErr.Error(), "server_error")
 		return nil
 	}
 	return c.batch
+}
+
+func (c *compat) openBatches() {
+	bs, ok := c.b.(BatchStore)
+	if !ok {
+		c.batchErr = errors.New("this backend keeps no files")
+		return
+	}
+	c.batch, c.batchErr = newBatches(bs.BatchDir(), c.mux)
+}
+
+// storedFile is the file id the Files API holds: its name and bytes
+// (storedFiles).
+func (c *compat) storedFile(id string) (string, []byte, error) {
+	c.batchOnce.Do(c.openBatches)
+	if c.batchErr != nil {
+		return "", nil, c.batchErr
+	}
+	if !validID(id) {
+		return "", nil, errors.New("not a file id")
+	}
+	f, err := c.batch.getFile(id)
+	if err != nil {
+		return "", nil, errors.New("no such file")
+	}
+	raw, err := os.ReadFile(c.batch.fileData(id))
+	if err != nil {
+		return "", nil, err
+	}
+	return f.Filename, raw, nil
 }
 
 // openAIFiles is /v1/files and /v1/files/{id}[/content].
@@ -267,8 +290,8 @@ func (c *compat) openAIFiles(w http.ResponseWriter, r *http.Request) {
 		}
 		defer f.Close()
 		purpose := r.FormValue("purpose")
-		if purpose != "batch" {
-			oaFail(w, http.StatusBadRequest, `purpose must be "batch": it is the only one this server runs`, "invalid_request_error")
+		if purpose != "batch" && purpose != "user_data" {
+			oaFail(w, http.StatusBadRequest, `purpose must be "batch" or "user_data": the files this server reads`, "invalid_request_error")
 			return
 		}
 		data, err := io.ReadAll(io.LimitReader(f, maxBatchFile+1))
