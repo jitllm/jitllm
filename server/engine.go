@@ -2090,14 +2090,12 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 		return err
 	} else if tc != nil {
 		con = tc
-		speculate = false
 	} else if o.Grammar != "" {
 		m, err := lm.matcher(o.Grammar)
 		if err != nil {
 			return err
 		}
 		con = &constraint{m: m, st: m.Start()}
-		speculate = false
 	}
 	if con != nil {
 		con.on = o.IgnoreEOS
@@ -2111,7 +2109,6 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 			con = &constraint{}
 		}
 		con.ub, con.biased = ub, make([]float32, len(ub))
-		speculate = false
 	}
 	if o.Continue && s.specRan {
 		return fmt.Errorf("%w: session %q stopped inside a speculative round, and its model ran past the "+
@@ -2194,6 +2191,9 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 		}
 		if o.Logprobs {
 			opts = append(opts, engine.WithSpecLogits())
+		}
+		if con != nil {
+			opts = append(opts, engine.WithSpecConstraint(con.spec(st)))
 		}
 		if sp, err = st.Speculate(opts...); err != nil {
 			s.ms.Unhold(st)
