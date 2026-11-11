@@ -1,6 +1,7 @@
 package cpudev
 
 import (
+	"fmt"
 	"unsafe"
 
 	"github.com/jitllm/jitllm/format/jlm"
@@ -17,6 +18,7 @@ type Bindings struct {
 	table    *jlm.RowView
 	tableRow int
 	bound    map[bindKey]*bound
+	err      error
 }
 
 // NewBindings binds forms to weights read into fr (nil for weights from no
@@ -32,12 +34,26 @@ type bindKey struct {
 }
 
 // bound is a form's weights where its call reads them, at the frame they
-// were resolved at, and why not where the CPU cannot read one.
+// were resolved at, and the weight its block does not hold where one is
+// missing.
 type bound struct {
 	frame unsafe.Pointer
 	addrs []unsafe.Pointer
-	why   nn.Decline
+	err   error
 }
+
+// why is the bound weights' decline: a form binding a weight its block does
+// not hold is not formed for it (Bindings.Err).
+func (w *bound) why() nn.Decline {
+	if w.err != nil {
+		return nn.DeclineNotFormed
+	}
+	return nn.DeclineServes
+}
+
+// Err is the weight the last form bound without it was missing, nil where
+// every form found its weights.
+func (b *Bindings) Err() error { return b.err }
 
 // Bind is form f's weights for block li, read in t, where its call reads
 // them: resolved and checked once for the block's frame, and again only
@@ -52,7 +68,7 @@ func (b *Bindings) Bind(f *Form, li int, t Tensors) ([]unsafe.Pointer, nn.Declin
 	k := bindKey{f, li, t}
 	w := b.bound[k]
 	if w != nil && w.frame == frame {
-		return w.addrs, w.why
+		return w.addrs, w.why()
 	}
 	if w == nil {
 		if b.bound == nil {
@@ -62,29 +78,32 @@ func (b *Bindings) Bind(f *Form, li int, t Tensors) ([]unsafe.Pointer, nn.Declin
 		b.bound[k] = w
 	}
 	w.frame, w.addrs = frame, w.addrs[:0]
-	if w.why = b.Check(f, li, t); w.why == nn.DeclineServes {
+	if w.err = b.Check(f, li, t); w.err == nil {
 		for _, x := range f.Weights {
 			w.addrs = append(w.addrs, b.at(li, t, x))
 		}
+	} else {
+		b.err = w.err
 	}
-	return w.addrs, w.why
+	return w.addrs, w.why()
 }
 
-// Check says every weight f binds for block li is one t holds whole.
-func (b *Bindings) Check(f *Form, li int, t Tensors) nn.Decline {
+// Check says every weight f binds for block li is one t holds whole, or
+// names the one it does not.
+func (b *Bindings) Check(f *Form, li int, t Tensors) error {
 	for _, x := range f.Weights {
 		switch {
 		case x.Vector:
 			if len(t.Floats(x.Role)) == 0 {
-				return nn.DeclineNoWeight
+				return fmt.Errorf("block %d: its form binds the vector %v, which the block does not hold", li, x.Role)
 			}
 		case jlm.ExpertBank(x.Role):
 			if li < 0 || li >= len(b.banks) || b.banks[li][x.Role-jlm.RoleExpGateBank][x.Region] == nil {
-				return nn.DeclineNoWeight
+				return fmt.Errorf("block %d: its form binds the bank %v, which has no view in the expert pages", li, x.Role)
 			}
 		case x.Role == jlm.RoleNGramTable:
 			if b.table == nil {
-				return nn.DeclineNoWeight
+				return fmt.Errorf("block %d: its form binds the n-gram table, which has no view in the frames", li)
 			}
 		default:
 			data, p, _ := t.Bytes(x.Role)
@@ -92,11 +111,11 @@ func (b *Bindings) Check(f *Form, li int, t Tensors) nn.Decline {
 				if len(t.Floats(x.Role)) > 0 {
 					continue
 				}
-				return nn.DeclineNoWeight
+				return fmt.Errorf("block %d: its form binds the matrix %v, which the block does not hold", li, x.Role)
 			}
 		}
 	}
-	return nn.DeclineServes
+	return nil
 }
 
 // at is where block li's weight x is read: a vector's, a plane of a

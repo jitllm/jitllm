@@ -173,24 +173,24 @@ func (g *devTier) readPLE(s backend.Session, b backend.Buf, n int) error {
 // prepEmbed holds the tables the head's input rows read (nn.Head.Embed)
 // where the composer serves them: the token embedding, the head itself
 // where it is the embedding, and a learned position table, each uploaded
-// once for the model. A table that does not fit is named (bs.embWhy).
+// once for the model. A table that does not fit is named (bs.embErr).
 // Callers hold mu.
 func (g *devTier) prepEmbed(bs *blockScratch, h *nn.Head) {
-	bs.embW, bs.posW, bs.embWhy = nil, nil, partServes
+	bs.embW, bs.posW, bs.embErr = nil, nil, nil
 	if h.Embed == nil {
 		return
 	}
 	bs.embW = bs.head
 	if !h.Embeds {
-		bs.embW, bs.embWhy = g.embedTable(h.File, h.TokEmbd)
+		bs.embW, bs.embErr = g.embedTable(h.File, h.TokEmbd)
 	}
-	if len(h.PosEmbd.Data) > 0 && bs.embWhy == partServes {
-		bs.posW, bs.embWhy = g.embedTable(h.File, h.PosEmbd)
+	if len(h.PosEmbd.Data) > 0 && bs.embErr == nil {
+		bs.posW, bs.embErr = g.embedTable(h.File, h.PosEmbd)
 	}
 	clear(bs.embSW)
 	clear(bs.embSV)
 	p := h.Streams
-	if p == nil || bs.embWhy != partServes {
+	if p == nil || bs.embErr != nil {
 		return
 	}
 	// The expansion's and the per-layer inputs' tensors, held as the
@@ -202,7 +202,7 @@ func (g *devTier) prepEmbed(bs *blockScratch, h *nn.Head) {
 		r, err := g.rowsWeight(p.File, w)
 		if err != nil {
 			g.LastErr = fmt.Sprintf("the input rows' %v: %v", role, err)
-			bs.embWhy = partNoRoom
+			bs.embErr = errEmbedRoom
 			return
 		}
 		bs.embSW[role] = r
@@ -211,7 +211,7 @@ func (g *devTier) prepEmbed(bs *blockScratch, h *nn.Head) {
 		b, err := g.rowsVector(p.Graph.Block, role, v)
 		if err != nil {
 			g.LastErr = fmt.Sprintf("the input rows' %v: %v", role, err)
-			bs.embWhy = partNoRoom
+			bs.embErr = errEmbedRoom
 			return
 		}
 		bs.embSV[role] = b
@@ -220,36 +220,35 @@ func (g *devTier) prepEmbed(bs *blockScratch, h *nn.Head) {
 
 // embedTable is w resident for the input rows, taken under paging only where
 // it costs no block slot, as the head is (PrepHead).
-func (g *devTier) embedTable(f *jlm.File, w nn.Weight) (*resident, partDecline) {
+func (g *devTier) embedTable(f *jlm.File, w nn.Weight) (*resident, error) {
 	// Every type a container stores is a device format
 	// (TestEveryContainerTypeIsADeviceFormat).
 	q, _ := quantOf(w.T)
 	if len(w.Data) == 0 {
-		g.LastErr = fmt.Sprintf("the input rows' %v table holds no bytes", w.T)
-		return nil, partNoWeight
+		return nil, fmt.Errorf("the input rows' %v table holds no bytes", w.T)
 	}
 	// A table already held costs nothing more: a head given back for room
 	// leaves its tables held (PrepHead).
 	held := g.res[adhocKey(w.Entry, w.Data, q, w.Rows, w.K)]
 	if len(g.stream) > 0 && (held == nil || !held.ok) {
 		if now, after := g.slots(), g.slotsIfPerm(uint64(len(w.Data))); after < now {
-			return nil, partNoRoom
+			return nil, errEmbedRoom
 		}
 	}
 	if held == nil || !held.ok {
 		own, release, err := g.ownWeight(f, w)
 		if err != nil {
 			g.LastErr = "the input rows' table: " + err.Error()
-			return nil, partNoRoom
+			return nil, errEmbedRoom
 		}
 		defer release()
 		w = own
 	}
 	r := g.resident(-1, 0, w.Entry, q, w.Data, w.Rows, w.K, w.Packed)
 	if r == nil || !r.ok {
-		return nil, partNoRoom
+		return nil, errEmbedRoom
 	}
-	return r, partServes
+	return r, nil
 }
 
 // embedBufs makes bs's token and position words for the composer's gather

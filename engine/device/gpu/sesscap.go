@@ -25,7 +25,7 @@ func moveHead(dst, src *blockScratch) {
 	dst.embedGraph = src.embedGraph
 	dst.collapse = src.collapse
 	dst.embSW, dst.embSV = src.embSW, src.embSV
-	dst.embW, dst.posW, dst.embWhy = src.embW, src.posW, src.embWhy
+	dst.embW, dst.posW, dst.embErr = src.embW, src.posW, src.embErr
 	src.head, src.mvHead, src.headGraph, src.sampleGraph = nil, mv{}, nil, nil
 	src.hNorm, src.hNormB, src.hBias, src.logits, src.hRaw, src.hOut = nil, nil, nil, nil, nil, nil
 }

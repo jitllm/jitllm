@@ -49,7 +49,7 @@ func (e *Exec) placeParts(p *PartsPlan) Parts {
 			ws, why := boundWeights{e.b, p.PoolW}.Bind(f)
 			if why != nn.DeclineServes {
 				part.F, part.Why = nil, why
-				part.Err = fmt.Errorf("the readout's weights: %s", nn.DeclineName(int(why)))
+				part.Err = fmt.Errorf("the readout's weights: %w", e.b.Err())
 			}
 			weights = ws
 		}

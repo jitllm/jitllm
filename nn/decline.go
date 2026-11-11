@@ -12,7 +12,6 @@ const (
 	DeclineServes Decline = iota
 	DeclineCaller
 	DeclineNoRoom
-	DeclineNoWeight
 	DeclineNotFormed
 	DeclineISA
 	DeclineUnplaced
@@ -27,8 +26,6 @@ func (d Decline) String() string {
 		return "the caller keeps it on the tier's kernels"
 	case DeclineNoRoom:
 		return "its buffers do not fit the device's budget"
-	case DeclineNoWeight:
-		return "a weight or vector the block does not hold"
 	case DeclineNotFormed:
 		return "the composer did not form the block"
 	case DeclineUnplaced:
