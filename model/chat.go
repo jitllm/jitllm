@@ -3,6 +3,7 @@ package model
 import (
 	"fmt"
 	"maps"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -20,6 +21,8 @@ type ChatMessage struct {
 	// Images is how many pictures this turn carries, placed before Content.
 	// No model renders one until a tower runs: the render refuses it.
 	Images int
+	// Videos is how many videos it carries, after its pictures.
+	Videos int
 	// ToolCalls are the calls an assistant turn made (see tools.go).
 	ToolCalls []ToolCall
 	// ToolCallID and Name identify a "tool" turn's result: which call it
@@ -213,15 +216,19 @@ func RenderCompiled(tpl *jinja.Template, src, bos, eos string, clock func() time
 	messages := func(stringArgs bool) ([]any, error) {
 		ms := make([]any, len(msgs))
 		for i, x := range msgs {
-			if x.Images > 0 && !pics {
-				return nil, fmt.Errorf("model: message %d carries %d image(s); ChatSpans is the "+
-					"path for a picture", i, x.Images)
+			if x.Images+x.Videos > 0 && !pics {
+				return nil, fmt.Errorf("model: message %d carries %d image(s) and %d video(s); ChatSpans is the "+
+					"path for them", i, x.Images, x.Videos)
 			}
 			if x.Images > 0 && !typed && mark == "" {
 				return nil, fmt.Errorf("model: message %d carries %d image(s) and this chat "+
 					"template reads a message as a string, so it writes no image part", i, x.Images)
 			}
-			content := contentValue(x.Content, x.Images, parts || typed && x.Images > 0)
+			if x.Videos > 0 && !typed {
+				return nil, fmt.Errorf("model: message %d carries %d video(s) and this chat "+
+					"template reads a message as a string, so it writes no video part", i, x.Videos)
+			}
+			content := contentValue(x.Content, x.Images, x.Videos, parts || typed && x.Images+x.Videos > 0)
 			if x.Images > 0 && !typed {
 				content = strings.Repeat(mark, x.Images) + x.Content
 			}
@@ -307,8 +314,8 @@ func SystemRendered(tpl *jinja.Template, ctx map[string]any, parts bool) bool {
 	const probe = "jitllm-system-probe"
 	pc := maps.Clone(ctx)
 	pc["messages"] = []any{
-		map[string]any{"role": "system", "content": contentValue(probe, 0, parts)},
-		map[string]any{"role": "user", "content": contentValue("User message", 0, parts)},
+		map[string]any{"role": "system", "content": contentValue(probe, 0, 0, parts)},
+		map[string]any{"role": "user", "content": contentValue("User message", 0, 0, parts)},
 	}
 	pc["add_generation_prompt"] = true
 	out, err := tpl.Render(pc)
@@ -338,9 +345,9 @@ func (m *Model) ChatIDsToolChoice(msgs []ChatMessage, tools []byte, choice ToolC
 		return nil, fmt.Errorf("model: no tokenizer: %v", m.TokErr)
 	}
 	for i, x := range msgs {
-		if x.Images > 0 {
-			return nil, fmt.Errorf("model: message %d carries an image; ChatSpans is the "+
-				"path for that, since an image is embeddings and not ids", i)
+		if x.Images > 0 || x.Videos > 0 {
+			return nil, fmt.Errorf("model: message %d carries a picture or a video; ChatSpans is the "+
+				"path for that, since its rows are embeddings and not ids", i)
 		}
 	}
 	text, err := m.ChatPromptToolChoice(msgs, tools, choice, addGenerationPrompt)
@@ -404,14 +411,17 @@ func readsContentParts(tpl *jinja.Template) bool {
 }
 
 // contentValue presents a message in the shape the template reads: its text,
-// or its images first as typed parts and then its text.
-func contentValue(text string, images int, parts bool) any {
+// or its images first as typed parts, then its videos, then its text.
+func contentValue(text string, images, videos int, parts bool) any {
 	if !parts {
 		return text
 	}
-	out := make([]any, 0, images+1)
+	out := make([]any, 0, images+videos+1)
 	for range images {
 		out = append(out, map[string]any{"type": "image"})
+	}
+	for range videos {
+		out = append(out, map[string]any{"type": "video"})
 	}
 	return append(out, map[string]any{"type": "text", "text": text})
 }
@@ -432,19 +442,30 @@ func (m *Model) ChatSpans(msgs []ChatMessage, pics []Span, addGenerationPrompt b
 // ChatIDsToolChoice renders them.
 func (m *Model) ChatSpansToolChoice(msgs []ChatMessage, pics []Span, tools []byte, choice ToolChoice,
 	addGenerationPrompt bool) ([]Span, error) {
-	n := 0
+	return m.ChatSpansMedia(msgs, pics, nil, tools, choice, addGenerationPrompt)
+}
+
+// ChatSpansMedia is ChatSpansToolChoice with videos: in place of each video
+// of the messages, in order, videos[i] -- a video's spans (Model.VideoSpans),
+// its markers its own -- where the template writes a video part.
+func (m *Model) ChatSpansMedia(msgs []ChatMessage, pics []Span, videos [][]Span, tools []byte, choice ToolChoice,
+	addGenerationPrompt bool) ([]Span, error) {
+	n, nv := 0, 0
 	for _, x := range msgs {
-		n += x.Images
+		n, nv = n+x.Images, nv+x.Videos
 	}
 	if n != len(pics) {
 		return nil, fmt.Errorf("model: %d image(s) in the messages and %d picture(s)", n, len(pics))
 	}
-	if n == 0 {
+	if nv != len(videos) {
+		return nil, fmt.Errorf("model: %d video(s) in the messages and %d given", nv, len(videos))
+	}
+	if n+nv == 0 {
 		ids, err := m.ChatIDsToolChoice(msgs, tools, choice, addGenerationPrompt)
 		return []Span{{Tokens: ids}}, err
 	}
 	if m.Tower == nil {
-		return nil, fmt.Errorf("model: %d image(s) and this model has no vision tower", n)
+		return nil, fmt.Errorf("model: %d image(s), %d video(s) and this model has no vision tower", n, nv)
 	}
 	if m.Vocab == nil {
 		return nil, fmt.Errorf("model: no tokenizer: %v", m.TokErr)
@@ -472,15 +493,22 @@ func (m *Model) ChatSpansToolChoice(msgs []ChatMessage, pics []Span, tools []byt
 	}
 	bos, eos := m.SpecialText()
 	mark := m.Container.Vision().Tower.Span.Mark
-	ph, err := m.Tower.placeholder(tpl, src, bos, eos, mark)
-	if err != nil {
-		return nil, err
+	var ph, vph string
+	if n > 0 {
+		if ph, err = m.Tower.placeholder(tpl, src, bos, eos, mark, false); err != nil {
+			return nil, err
+		}
+	}
+	if nv > 0 {
+		if vph, err = m.Tower.placeholder(tpl, src, bos, eos, mark, true); err != nil {
+			return nil, err
+		}
 	}
 	text, err := RenderCompiled(tpl, src, bos, eos, m.chatClock, msgs, tools, choice, addGenerationPrompt, true, mark)
 	if err != nil {
 		return nil, err
 	}
-	return m.PromptSpans(text, ph, pics)
+	return m.PromptSpansMedia(text, ph, vph, pics, videos)
 }
 
 // PromptSpans is a rendered prompt as spans: text, in which ph stands for
@@ -488,20 +516,54 @@ func (m *Model) ChatSpansToolChoice(msgs []ChatMessage, pics []Span, tools []byt
 // container wraps a picture's rows in (jlm.TowerSpan) and each picture the
 // span pics holds for it.
 func (m *Model) PromptSpans(text, ph string, pics []Span) ([]Span, error) {
+	return m.PromptSpansMedia(text, ph, "", pics, nil)
+}
+
+// PromptSpansMedia is PromptSpans with videos: vph stands for each of
+// videos in order, the placeholder text and the video's markers both
+// replaced by the video's spans, which are its markers and its pairs.
+func (m *Model) PromptSpansMedia(text, ph, vph string, pics []Span, videos [][]Span) ([]Span, error) {
 	if m.Tower == nil {
-		return nil, fmt.Errorf("model: %d picture(s) and this model has no vision tower", len(pics))
+		return nil, fmt.Errorf("model: %d picture(s), %d video(s) and this model has no vision tower", len(pics), len(videos))
 	}
 	if m.Vocab == nil {
 		return nil, fmt.Errorf("model: no tokenizer: %v", m.TokErr)
 	}
-	n := len(pics)
-	// The count is checked: a template that drops an image part, or text that
-	// happens to hold the placeholder, would put every later picture on the
-	// wrong turn.
-	segs := strings.Split(text, ph)
-	if len(segs)-1 != n {
-		return nil, fmt.Errorf("model: the template wrote %d image placeholder(s) %q for %d image(s)",
-			len(segs)-1, ph, n)
+	if ph != "" && vph != "" && (strings.Contains(ph, vph) || strings.Contains(vph, ph)) {
+		return nil, fmt.Errorf("model: the template writes %q for an image and %q for a video, one inside the other", ph, vph)
+	}
+	// Where each placeholder stands, in the order the text holds them.
+	type hold struct {
+		at, end int
+		video   bool
+	}
+	var holds []hold
+	for _, k := range []struct {
+		ph    string
+		video bool
+	}{{ph, false}, {vph, true}} {
+		for i := 0; k.ph != ""; {
+			j := strings.Index(text[i:], k.ph)
+			if j < 0 {
+				break
+			}
+			holds = append(holds, hold{i + j, i + j + len(k.ph), k.video})
+			i += j + len(k.ph)
+		}
+	}
+	slices.SortFunc(holds, func(a, b hold) int { return a.at - b.at })
+	// The counts are checked: a template that drops an image part, or text
+	// that happens to hold the placeholder, would put every later picture on
+	// the wrong turn.
+	np := 0
+	for _, h := range holds {
+		if !h.video {
+			np++
+		}
+	}
+	if np != len(pics) || len(holds)-np != len(videos) {
+		return nil, fmt.Errorf("model: the template wrote %d image placeholder(s) %q and %d video placeholder(s) %q for %d image(s) and %d video(s)",
+			np, ph, len(holds)-np, vph, len(pics), len(videos))
 	}
 	mk := m.Container.Vision().Tower.Span
 	var out []Span
@@ -512,37 +574,56 @@ func (m *Model) PromptSpans(text, ph string, pics []Span) ([]Span, error) {
 	}
 	// Text around a picture is encoded with the prompt beside it, as the
 	// processor expands its placeholder into a string before tokenizing it.
-	for i, seg := range segs {
-		if i > 0 {
+	prev, picture, pi, vi := 0, false, 0, 0
+	for k := 0; k <= len(holds); k++ {
+		end := len(text)
+		if k < len(holds) {
+			end = holds[k].at
+		}
+		seg := text[prev:end]
+		if picture {
 			seg = mk.AfterText + seg
 		}
-		if i < n {
+		pic := k < len(holds) && !holds[k].video
+		if pic {
 			if mk.IndexBefore != "" || mk.IndexAfter != "" {
-				seg += mk.IndexBefore + strconv.Itoa(i) + mk.IndexAfter
+				seg += mk.IndexBefore + strconv.Itoa(pi) + mk.IndexAfter
 			}
 			seg += mk.BeforeText
 		}
 		add(m.Vocab.EncodeSpecial(seg, false))
-		if i < n {
+		switch {
+		case pic:
 			add(mk.Before)
-			p := pics[i]
+			p := pics[pi]
 			p.Bidir = p.Bidir || mk.Bidir
 			out = append(out, p)
 			add(mk.After)
+			pi++
+		case k < len(holds):
+			out = append(out, videos[vi]...)
+			vi++
 		}
+		if k < len(holds) {
+			prev = holds[k].end
+		}
+		picture = pic
 	}
 	return out, nil
 }
 
-// picturePlaceholder is what the template writes for one image part: a user
-// turn rendered with a picture before its text and without one differ by
-// that text, which is what is left of the first between the two's common
-// prefix and suffix.
-func picturePlaceholder(tpl *jinja.Template, src, bos, eos, mark string) (string, error) {
+// mediaPlaceholder is what the template writes for one image part, or for
+// one video part: a user turn rendered with one before its text and without
+// differ by that text, which is what is left of the first between the two's
+// common prefix and suffix.
+func mediaPlaceholder(tpl *jinja.Template, src, bos, eos, mark string, video bool) (string, error) {
 	const probe = "\u2042probe\u2042"
-	turn := func(images int) (string, error) {
-		return RenderCompiled(tpl, src, bos, eos, nil, []ChatMessage{{Role: "user", Content: probe, Images: images}},
-			nil, ToolChoice{}, false, true, mark)
+	turn := func(n int) (string, error) {
+		msg := ChatMessage{Role: "user", Content: probe, Images: n}
+		if video {
+			msg.Images, msg.Videos = 0, n
+		}
+		return RenderCompiled(tpl, src, bos, eos, nil, []ChatMessage{msg}, nil, ToolChoice{}, false, true, mark)
 	}
 	with, err := turn(1)
 	if err != nil {
@@ -562,7 +643,11 @@ func picturePlaceholder(tpl *jinja.Template, src, bos, eos, mark string) (string
 	}
 	ph := with[p : len(with)-s]
 	if ph == "" || strings.Contains(ph, probe) || strings.Count(with, ph) != 1 {
-		return "", fmt.Errorf("model: the chat template writes no text of its own for an image part (%q)", ph)
+		what := "an image"
+		if video {
+			what = "a video"
+		}
+		return "", fmt.Errorf("model: the chat template writes no text of its own for %s part (%q)", what, ph)
 	}
 	return ph, nil
 }

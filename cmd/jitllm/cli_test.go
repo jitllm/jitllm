@@ -196,7 +196,7 @@ func runSmall(t *testing.T, n int, maxmem uint64) (stdout, stderr string) {
 	sm := &engine.Sampler{RepeatPen: 1, RepeatLastN: 64}
 	stdout, stderr, err := capture(t, func() error {
 		return run(path, "Once upon a time", n, 0, "cpu", -1, 0, maxmem, false, false, false, false,
-			sm, "", nil, nil, "", 0, 0, nil, nil)
+			sm, mediaSpec{}, nil, nil, "", 0, 0, nil, nil)
 	})
 	if err != nil {
 		t.Fatalf("run: %v\n%s", err, stderr)
@@ -388,21 +388,21 @@ func TestSubcommandsRefuseAModelTheyCannotUse(t *testing.T) {
 	}
 	_, stderr, err := capture(t, func() error {
 		return run(path, "hi", 2, 0, "cpu", -1, 0, 1<<30, false, false, false, false,
-			&engine.Sampler{}, "", nil, &chatSpec{}, "", 0, 0, nil, nil)
+			&engine.Sampler{}, mediaSpec{}, nil, &chatSpec{}, "", 0, 0, nil, nil)
 	})
 	if err == nil || !strings.Contains(err.Error(), "carries no chat template") {
 		t.Errorf("-chat on a base model: %v\n%s", err, stderr)
 	}
 	_, _, err = capture(t, func() error {
 		return run(path, "hi", 2, 0, "cpu", -1, 0, 1<<30, false, false, false, false,
-			&engine.Sampler{}, "x.png", nil, nil, "", 0, 0, nil, nil)
+			&engine.Sampler{}, mediaSpec{image: "x.png"}, nil, nil, "", 0, 0, nil, nil)
 	})
 	if err == nil || !strings.Contains(err.Error(), "carries no vision tower") {
 		t.Errorf("-image: %v", err)
 	}
 	_, _, err = capture(t, func() error {
 		return run(path, "", 2, 8, "cpu", -1, 0, 1<<30, false, false, false, false,
-			&engine.Sampler{}, "", nil, nil, "", 0, 0, nil, nil)
+			&engine.Sampler{}, mediaSpec{}, nil, nil, "", 0, 0, nil, nil)
 	})
 	// An empty prompt still carries the BOS, so -depth has something to
 	// repeat; it must run rather than refuse.
@@ -411,7 +411,7 @@ func TestSubcommandsRefuseAModelTheyCannotUse(t *testing.T) {
 	}
 	_, _, err = capture(t, func() error {
 		return run(path, "hi", 2, 0, "cpu", -1, 0, 1<<30, false, false, false, false,
-			&engine.Sampler{}, "", nil, nil, "", 0, 1<<20, nil, nil)
+			&engine.Sampler{}, mediaSpec{}, nil, nil, "", 0, 1<<20, nil, nil)
 	})
 	if err == nil || !strings.Contains(err.Error(), "-kv-budget needs -kv-cache") {
 		t.Errorf("-kv-budget with no -kv-cache: %v", err)

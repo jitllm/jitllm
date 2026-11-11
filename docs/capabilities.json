@@ -692,7 +692,7 @@
           {
             "name": "messages",
             "type": "array",
-            "note": "role and content; content is a string or content parts: text, and image_url (a data: URL in base64, or an https URL when the server lists hosts it may fetch from); PNG, JPEG, WebP, GIF, BMP or TIFF, at most 20 MiB each, 64 MiB and 8 pictures a request, 16777216 pixels each, on a model with a vision tower; file parts of text are the turn's text, audio parts are refused. tool_calls and tool_call_id carry a tool turn"
+            "note": "role and content; content is a string or content parts: text, image_url (a data: URL in base64, or an https URL when the server lists hosts it may fetch from) and video (its frames' image URLs as a list, or as {\"frames\": [...], \"fps\": rate}, the frames' pixels together bounded as /v1/systemone's are, on a model whose tower reads a video); PNG, JPEG, WebP, GIF, BMP or TIFF, at most 20 MiB each, 64 MiB and 8 pictures a request, 16777216 pixels each, on a model with a vision tower; file parts of text are the turn's text, audio parts are refused. tool_calls and tool_call_id carry a tool turn"
           },
           {
             "name": "max_tokens",

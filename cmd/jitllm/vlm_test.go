@@ -39,7 +39,7 @@ func TestImageRunsThroughTheTower(t *testing.T) {
 		t.Helper()
 		out, stderr, err := capture(t, func() error {
 			return run(path, "Describe this image in one sentence.", 32, 0, "cpu", -1, 0, 1<<30, false, false,
-				false, false, &engine.Sampler{}, img, nil, nil, cache, 0, 0, nil, nil)
+				false, false, &engine.Sampler{}, mediaSpec{image: img}, nil, nil, cache, 0, 0, nil, nil)
 		})
 		if err != nil {
 			t.Fatalf("run -image %s: %v\n%s", img, err, stderr)

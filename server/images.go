@@ -11,6 +11,7 @@ import (
 	_ "image/gif" // a GIF's first frame, which image.Decode returns
 	_ "image/jpeg"
 	_ "image/png"
+	"math"
 	"net/netip"
 	"strings"
 	"time"
@@ -344,6 +345,31 @@ type pictures struct {
 func newPictures(p ImagePolicy) *pictures {
 	p.spent = new(int64)
 	return &pictures{p: p}
+}
+
+// videoFrames is a request's collector of video frames beside ps: its
+// policy and byte count, no bound on how many pictures.
+func (ps *pictures) videoFrames() *pictures {
+	p := ps.p
+	p.MaxImages = math.MaxInt
+	return &pictures{p: p}
+}
+
+// readVideo reads a video of frame URLs at fps frames a second (0 where the
+// request states none) into ps as pictures are read, each frame's pixels
+// added to *px and the request's held to MaxVideoPixels; part names frame j.
+func (ps *pictures) readVideo(ctx context.Context, urls []string, fps float64, px *int64, part func(j int) string) (Video, error) {
+	at := len(ps.imgs)
+	for j, url := range urls {
+		if err := ps.add(part(j), func() (image.Image, error) { return ps.p.imageURL(ctx, url) }); err != nil {
+			return Video{}, err
+		}
+		b := ps.imgs[len(ps.imgs)-1].Bounds()
+		if *px += int64(b.Dx()) * int64(b.Dy()); *px > ps.p.MaxVideoPixels {
+			return Video{}, fmt.Errorf("%s brings the request's video frames over the limit of %d pixels", part(j), ps.p.MaxVideoPixels)
+		}
+	}
+	return Video{Frames: ps.imgs[at:], FPS: fps}, nil
 }
 
 // add decodes one picture with load, naming part on failure.

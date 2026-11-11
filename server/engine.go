@@ -1660,6 +1660,10 @@ type ChatInput struct {
 	// them out where the model's chat template puts its image markers
 	// (Engine.pictureSpans), so a chat with pictures runs as PromptSpans.
 	Images []image.Image
+	// Videos is its videos, in the order the client sent them;
+	// Messages[i].Videos says how many are message i's, laid out where the
+	// template puts a video part.
+	Videos []Video
 	// Tools is the tool list the template renders, a JSON array in the
 	// OpenAI shape ([{"type": "function", "function": {...}}]); nil for none.
 	Tools []byte
@@ -2027,7 +2031,7 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 		return fmt.Errorf("server: model %q has no tokenizer: %v", lm.called(o.ModelName), lm.m.TokErr)
 	}
 
-	if o.Prompt.Kind == PromptChat && o.Prompt.Chat != nil && len(o.Prompt.Chat.Images) > 0 {
+	if o.Prompt.Kind == PromptChat && o.Prompt.Chat.carriesMedia() {
 		sp, err := pictureSpans(s, o)
 		if err != nil {
 			return err
@@ -2563,7 +2567,7 @@ func (e *Engine) forkPrompt(named *Session, o GenerateOptions, hist []model.Span
 	switch {
 	case o.Prompt.Kind == PromptSpans:
 		ps = o.Prompt.Spans
-	case o.Prompt.Kind == PromptChat && o.Prompt.Chat != nil && len(o.Prompt.Chat.Images) > 0:
+	case o.Prompt.Kind == PromptChat && o.Prompt.Chat.carriesMedia():
 		var err error
 		if ps, err = pictureSpans(named, o); err != nil {
 			return Prompt{}, 0, err
@@ -2649,9 +2653,13 @@ func (e *Engine) encode(lm *LoadedModel, p Prompt, name string) ([]int32, error)
 	return nil, fmt.Errorf("%w: unknown prompt kind %d", ErrInvalid, p.Kind)
 }
 
-// pictureSpans lays a chat with pictures out as spans: the template's text,
-// and each picture where its message's image part stands, which the prefill
-// encodes through the model's tower (model.Model.PictureSpan).
+// carriesMedia says the chat holds a picture or a video.
+func (ch *ChatInput) carriesMedia() bool { return ch != nil && len(ch.Images)+len(ch.Videos) > 0 }
+
+// pictureSpans lays a chat with pictures and videos out as spans: the
+// template's text, and each picture where its message's image part stands
+// and each video where its video part does, which the prefill encodes
+// through the model's tower (model.Model.PictureSpan, VideoSpans).
 func pictureSpans(s *Session, o GenerateOptions) ([]model.Span, error) {
 	ch, m := o.Prompt.Chat, s.lm.m
 	if !m.SeesPictures() {
@@ -2670,11 +2678,19 @@ func pictureSpans(s *Session, o GenerateOptions) ([]model.Span, error) {
 		}
 		pics[i] = sp
 	}
+	videos := make([][]model.Span, len(ch.Videos))
+	for i, v := range ch.Videos {
+		sp, err := m.VideoSpans(v.Frames, v.FPS)
+		if err != nil {
+			return nil, fmt.Errorf("%w: video %d: %v", ErrInvalid, i, err)
+		}
+		videos[i] = sp
+	}
 	msgs := ch.Messages
 	if ch.HasSystem {
 		msgs = append([]model.ChatMessage{{Role: "system", Content: ch.System}}, msgs...)
 	}
-	sp, err := m.ChatSpansToolChoice(msgs, pics, ch.Tools, ch.ToolChoice, ch.AddGenerationPrompt)
+	sp, err := m.ChatSpansMedia(msgs, pics, videos, ch.Tools, ch.ToolChoice, ch.AddGenerationPrompt)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
 	}

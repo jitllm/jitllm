@@ -361,7 +361,7 @@ type chatSpec struct {
 	repl   bool
 }
 
-func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram, maxmem uint64, grow, tuneSeam, noFallback, relocate bool, sm *engine.Sampler, imgPath string, topts []tok.Option, chat *chatSpec, kvCacheDir string, kvCacheMaxBytes, kvBudget uint64, place *engine.Placement, specOpts []engine.SpecOption, open ...engine.Option) error {
+func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram, maxmem uint64, grow, tuneSeam, noFallback, relocate bool, sm *engine.Sampler, media mediaSpec, topts []tok.Option, chat *chatSpec, kvCacheDir string, kvCacheMaxBytes, kvBudget uint64, place *engine.Placement, specOpts []engine.SpecOption, open ...engine.Option) error {
 	if v := os.Getenv("JITLLM_N"); v != "" {
 		if p, err := strconv.Atoi(v); err == nil {
 			n = p
@@ -451,8 +451,8 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	ids := m.Vocab.Encode(prompt, true)
 	replying := chat != nil && chat.repl
 	if replying {
-		if imgPath != "" || specOpts != nil || depth > 0 {
-			return fmt.Errorf("the interactive chat takes neither -image, -spec nor -depth; give a prompt to use them")
+		if media.any() || specOpts != nil || depth > 0 {
+			return fmt.Errorf("the interactive chat takes neither -image, -video, -spec nor -depth; give a prompt to use them")
 		}
 		ids = nil
 	} else if chat != nil {
@@ -488,8 +488,8 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	// part, which the prefill encodes through the model's tower.
 	var spans []model.Span
 	extra := 0
-	if imgPath != "" {
-		if spans, err = imageSpans(m, imgPath, prompt, chat); err != nil {
+	if media.any() {
+		if spans, err = mediaSpans(m, media, prompt, chat); err != nil {
 			return err
 		}
 		extra = model.SpanPositions(spans, m.Cfg.NEmbd) - len(ids)
@@ -677,8 +677,8 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	// rows the draft must also see, so neither combines with it.
 	var sp *engine.Speculator
 	if specOpts != nil {
-		if imgPath != "" || kvCacheDir != "" {
-			return fmt.Errorf("-spec combines with neither -image nor -kv-cache: the prediction block " +
+		if media.any() || kvCacheDir != "" {
+			return fmt.Errorf("-spec combines with neither -image, -video nor -kv-cache: the prediction block " +
 				"reads the trunk's hidden state at every prompt position, which an image's embeddings " +
 				"and a restored prefix do not produce")
 		}
@@ -692,7 +692,7 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	// Instance, untimed, and resets it before the run that is measured: the
 	// expert caches fill and the tuners settle as a server's would. The
 	// device's counters printed at the end include the warm-ups.
-	if k, _ := strconv.Atoi(os.Getenv("JITLLM_WARMUP")); k > 0 && sp == nil && imgPath == "" && kvCacheDir == "" {
+	if k, _ := strconv.Atoi(os.Getenv("JITLLM_WARMUP")); k > 0 && sp == nil && !media.any() && kvCacheDir == "" {
 		t0 := time.Now()
 		if wids == nil {
 			wids = ids
@@ -1382,6 +1382,8 @@ func runCmd(args []string) error {
 	seed := fs.Int64("seed", 0, "RNG seed for sampling")
 	// No -mmproj: the vision tower is in the container.
 	imgPath := fs.String("image", "", "image to place in the prompt; the container must carry a vision tower")
+	videoDir := fs.String("video", "", "a directory of a video's frames, in name order, to place in the prompt after -image; the model's tower must read a video")
+	videoFps := fs.Float64("video-fps", 0, "-video's frames a second; 0 is the model's default")
 	tokJSON := fs.String("tokenizer", "", "a HuggingFace tokenizer.json whose pre-tokenizer replaces the one tokenizer.ggml.pre names")
 	// The cache namespace is not a flag: the engine hashes the geometry into
 	// every page key and names the model from the container path.
@@ -1493,7 +1495,7 @@ func runCmd(args []string) error {
 	} else if *placeStrict {
 		return fmt.Errorf("-placement-strict needs -placement")
 	}
-	return run(path, prompt, *n, *depth, *dev, *layers, *vram, *maxmem, *grow, *tuneSeam, *noFallback, *relocate, sm, *imgPath, topts, cs, *kvCache, *kvCacheMax, *kvBudget, place, specOpts, regionLabels(*cpuProf != "")...)
+	return run(path, prompt, *n, *depth, *dev, *layers, *vram, *maxmem, *grow, *tuneSeam, *noFallback, *relocate, sm, mediaSpec{image: *imgPath, video: *videoDir, fps: *videoFps}, topts, cs, *kvCache, *kvCacheMax, *kvBudget, place, specOpts, regionLabels(*cpuProf != "")...)
 }
 
 // tokenizerOption turns a -tokenizer path into the tok.Option it names, plus the
@@ -1919,34 +1921,79 @@ func rateOf(n int, d time.Duration) string {
 	return fmt.Sprintf("%.2f tok/s", float64(n)/d.Seconds())
 }
 
-// imageSpans is -image's prompt: the picture at path where the chat template
-// writes its image part in a user turn of prompt (after chat's system prompt
-// when it gives one), which the prefill encodes through the tower. A
-// completion prompt has no place for a picture, so -image takes the template.
-func imageSpans(m *model.Model, path, prompt string, chat *chatSpec) ([]model.Span, error) {
+// mediaSpans is -image's and -video's prompt: the picture and the video's
+// frames where the chat template writes its image and video parts in a user
+// turn of prompt (after chat's system prompt when it gives one), which the
+// prefill encodes through the tower. A completion prompt has no place for a
+// picture, so -image and -video take the template.
+func mediaSpans(m *model.Model, media mediaSpec, prompt string, chat *chatSpec) ([]model.Span, error) {
 	if !m.SeesPictures() {
-		return nil, fmt.Errorf("-image: the model carries no vision tower")
+		return nil, fmt.Errorf("-image and -video: the model carries no vision tower")
 	}
 	if !m.HasChatTemplate() {
-		return nil, fmt.Errorf("-image: the model carries no chat template, so its picture has no place in the prompt")
+		return nil, fmt.Errorf("-image and -video: the model carries no chat template, so a picture has no place in the prompt")
 	}
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("-image: %w", err)
+	var pics []model.Span
+	if media.image != "" {
+		img, err := readPicture(media.image)
+		if err != nil {
+			return nil, fmt.Errorf("-image: %w", err)
+		}
+		pic, err := m.PictureSpan(img)
+		if err != nil {
+			return nil, fmt.Errorf("-image: %s: %w", media.image, err)
+		}
+		pics = append(pics, pic)
 	}
-	defer f.Close()
-	img, _, err := image.Decode(f)
-	if err != nil {
-		return nil, fmt.Errorf("-image: %s: %w", path, err)
-	}
-	pic, err := m.PictureSpan(img)
-	if err != nil {
-		return nil, fmt.Errorf("-image: %s: %w", path, err)
+	var videos [][]model.Span
+	if media.video != "" {
+		names, err := os.ReadDir(media.video)
+		if err != nil {
+			return nil, fmt.Errorf("-video: %w", err)
+		}
+		var frames []image.Image
+		for _, e := range names {
+			if e.IsDir() {
+				continue
+			}
+			img, err := readPicture(filepath.Join(media.video, e.Name()))
+			if err != nil {
+				return nil, fmt.Errorf("-video: %w", err)
+			}
+			frames = append(frames, img)
+		}
+		sp, err := m.VideoSpans(frames, media.fps)
+		if err != nil {
+			return nil, fmt.Errorf("-video: %s: %w", media.video, err)
+		}
+		videos = append(videos, sp)
 	}
 	var msgs []model.ChatMessage
 	if chat != nil && chat.system != "" {
 		msgs = append(msgs, model.ChatMessage{Role: "system", Content: chat.system})
 	}
-	msgs = append(msgs, model.ChatMessage{Role: "user", Content: prompt, Images: 1})
-	return m.ChatSpans(msgs, []model.Span{pic}, true)
+	msgs = append(msgs, model.ChatMessage{Role: "user", Content: prompt, Images: len(pics), Videos: len(videos)})
+	return m.ChatSpansMedia(msgs, pics, videos, nil, model.ToolChoice{}, true)
+}
+
+// mediaSpec is what -image, -video and -video-fps place in the prompt.
+type mediaSpec struct {
+	image, video string
+	fps          float64
+}
+
+func (s mediaSpec) any() bool { return s.image != "" || s.video != "" }
+
+// readPicture is the picture the file at path holds.
+func readPicture(path string) (image.Image, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	img, _, err := image.Decode(f)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	return img, nil
 }
