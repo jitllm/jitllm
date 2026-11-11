@@ -113,6 +113,52 @@ func (c *constraint) mask(in *engine.Instance, logits []float32) ([]float32, err
 	return c.lg, err
 }
 
+// specConstraint is a generate's constraint as its Speculator reads it
+// (engine.SpecConstraint): states[i] the grammar's state after the round's
+// first i pushed tokens, states[0] the committed one, which the generate's
+// constraint holds once the round commits.
+type specConstraint struct {
+	c      *constraint
+	in     *engine.Instance
+	states []grammar.State
+}
+
+// spec is c as a Speculator on in reads it.
+func (c *constraint) spec(in *engine.Instance) *specConstraint {
+	return &specConstraint{c: c, in: in, states: []grammar.State{c.st}}
+}
+
+// Mask is the logits the constraint allows after the round's first depth
+// pushes, through in's composed mask.
+func (s *specConstraint) Mask(depth int, logits []float32) ([]float32, error) {
+	st := s.c.st
+	s.c.st = s.states[depth]
+	lg, err := s.c.mask(s.in, logits)
+	s.c.st = st
+	return lg, err
+}
+
+// Push advances the round past tok, false where the grammar does not allow
+// it; a bias alone allows every token.
+func (s *specConstraint) Push(tok int32) bool {
+	at := s.states[len(s.states)-1]
+	if s.c.m != nil {
+		var ok bool
+		if at, ok = s.c.m.Accept(at, tok); !ok {
+			return false
+		}
+	}
+	s.states = append(s.states, at)
+	return true
+}
+
+// Commit keeps the round's first n pushes: the generate's constraint
+// advances past them.
+func (s *specConstraint) Commit(n int) {
+	s.c.st = s.states[n]
+	s.states = append(s.states[:0], s.c.st)
+}
+
 // accept advances past tok; false where the grammar does not allow it.
 func (c *constraint) accept(tok int32) bool {
 	if c.m == nil {

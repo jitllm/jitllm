@@ -74,6 +74,43 @@ type specOpts struct {
 	stop func(int32) bool
 	// logits is WithSpecLogits.
 	logits bool
+	// con is WithSpecConstraint's.
+	con SpecConstraint
+}
+
+// SpecConstraint holds a speculation to what a constraint allows -- a
+// grammar, a forced call, a logit bias. A round pushes the tokens it drafts;
+// Mask is the logits the constraint allows after the round's first depth
+// pushes (a copy of its own, -inf where it allows nothing); Push advances
+// past tok, false and unchanged where tok is not allowed; Commit keeps the
+// round's first n pushes and drops the rest, starting the next round.
+type SpecConstraint interface {
+	Mask(depth int, logits []float32) ([]float32, error)
+	Push(tok int32) bool
+	Commit(n int)
+}
+
+// WithSpecConstraint holds every token the Speculator draws, drafts and
+// accepts to c (SpecConstraint).
+func WithSpecConstraint(c SpecConstraint) SpecOption { return func(o *specOpts) { o.con = c } }
+
+// masked is lg as the constraint allows it after the round's first depth
+// pushes, lg itself with none.
+func (sp *Speculator) masked(depth int, lg []float32) ([]float32, error) {
+	if sp.opt.con == nil {
+		return lg, nil
+	}
+	return sp.opt.con.Mask(depth, lg)
+}
+
+// commit keeps the round's first a pushes and then y, the round's last
+// token.
+func (sp *Speculator) commit(a int, y int32) {
+	if c := sp.opt.con; c != nil {
+		c.Commit(a)
+		c.Push(y)
+		c.Commit(1)
+	}
 }
 
 // SpecOption configures a Speculator.
@@ -443,10 +480,15 @@ func (sp *Speculator) Start(prompt []int32, sm *Sampler) (int32, error) {
 	if err != nil {
 		return 0, err
 	}
-	y, err := sp.t.Sample(sm, logits)
+	lgm, err := sp.masked(0, logits)
 	if err != nil {
 		return 0, err
 	}
+	y, err := sp.t.Sample(sm, lgm)
+	if err != nil {
+		return 0, err
+	}
+	sp.commit(0, y)
 	if sp.opt.logits {
 		sp.lgs = append(sp.lgs[:0], logits)
 	}
@@ -616,6 +658,14 @@ func (sp *Speculator) Next(sm *Sampler) ([]int32, error) {
 	}
 	if sp.d == nil {
 		drafts = sp.propose(drafts, max(k, 0))
+		if c := sp.opt.con; c != nil {
+			for i, x := range drafts {
+				if !c.Push(x) {
+					drafts = drafts[:i]
+					break
+				}
+			}
+		}
 		k = 0 // the loop below is the prediction block's
 	}
 	for i := 0; i < k; i++ {
@@ -628,12 +678,15 @@ func (sp *Speculator) Next(sm *Sampler) ([]int32, error) {
 		var x int32
 		var px float64
 		if greedy {
-			var err error
-			if x, err = sp.t.Sample(nil, sp.dlog); err != nil {
+			dm, err := sp.masked(len(drafts), sp.dlog)
+			if err != nil {
+				return nil, err
+			}
+			if x, err = sp.t.Sample(nil, dm); err != nil {
 				return nil, err
 			}
 			if sp.opt.minP > 0 {
-				top, err := sp.t.topProb(sp.dlog, &sp.dist)
+				top, err := sp.t.topProb(dm, &sp.dist)
 				if err != nil {
 					return nil, err
 				}
@@ -648,16 +701,22 @@ func (sp *Speculator) Next(sm *Sampler) ([]int32, error) {
 				}
 			}
 			q := &sp.qdists[i]
+			dl, err := sp.masked(len(drafts), dl)
+			if err != nil {
+				return nil, err
+			}
 			if err := sp.t.dist(sm, dl, q); err != nil {
 				return nil, err
 			}
-			var err error
 			if x, err = sp.t.Sample(sm, dl); err != nil {
 				return nil, err
 			}
 			px = float64(q.prob(x))
 		}
 		if sp.opt.minP > 0 && px < sp.opt.minP {
+			break
+		}
+		if c := sp.opt.con; c != nil && !c.Push(x) {
 			break
 		}
 		drafts = append(drafts, x)
@@ -689,7 +748,7 @@ func (sp *Speculator) Next(sm *Sampler) ([]int32, error) {
 	sp.tout.from = from
 	sp.tout.logits = grow32(sp.tout.logits, (nr-from)*c.NVocab)
 	sp.tout.hidden = grow32(sp.tout.hidden, (nr-from)*c.SpecHidW())
-	sp.tout.argmax = greedy && !sp.opt.logits
+	sp.tout.argmax = greedy && !sp.opt.logits && sp.opt.con == nil
 	if t.recurrent() && kd > 0 {
 		switch sp.mode {
 		case SpecRollbackRows:
@@ -716,7 +775,11 @@ func (sp *Speculator) Next(sm *Sampler) ([]int32, error) {
 			if sp.tout.tokens != nil {
 				return sp.tout.tokens[j], nil
 			}
-			return sp.t.Sample(nil, lg(j))
+			m, err := sp.masked(j, lg(j))
+			if err != nil {
+				return 0, err
+			}
+			return sp.t.Sample(nil, m)
 		}
 		for a < kd {
 			t, err := tok(a)
@@ -731,7 +794,7 @@ func (sp *Speculator) Next(sm *Sampler) ([]int32, error) {
 		if sp.fault == faultAcceptUnchecked && a < kd {
 			a++
 		}
-		if y = sp.tout.token; y < 0 {
+		if y = sp.tout.token; y < 0 || sp.opt.con != nil {
 			var err error
 			if y, err = tok(a); err != nil {
 				return nil, err
@@ -740,7 +803,11 @@ func (sp *Speculator) Next(sm *Sampler) ([]int32, error) {
 	} else {
 		sm.mark(&sp.smark)
 		for a < kd {
-			if err := sp.t.dist(sm, lg(a), &sp.dist); err != nil {
+			m, err := sp.masked(a, lg(a))
+			if err != nil {
+				return nil, err
+			}
+			if err := sp.t.dist(sm, m, &sp.dist); err != nil {
 				return nil, err
 			}
 			px, qx := sp.dist.prob(drafts[a]), sp.qdists[a].prob(drafts[a])
@@ -751,17 +818,21 @@ func (sp *Speculator) Next(sm *Sampler) ([]int32, error) {
 			}
 			break
 		}
-		var err error
+		m, err := sp.masked(a, lg(a))
+		if err != nil {
+			return nil, err
+		}
 		if a < kd {
-			y, err = sp.residual(sm, lg(a), a, drafts[a])
+			y, err = sp.residual(sm, m, a, drafts[a])
 		} else {
-			y, err = sp.t.Sample(sm, lg(a))
+			y, err = sp.t.Sample(sm, m)
 		}
 		if err != nil {
 			return nil, err
 		}
 		sm.restore(&sp.smark)
 	}
+	sp.commit(a, y)
 	sp.offer(kd, a)
 	sp.stats.Accepted += int64(a)
 	if sp.opt.logits {
@@ -872,7 +943,7 @@ func (sp *Speculator) Next(sm *Sampler) ([]int32, error) {
 func (sp *Speculator) decode(sm *Sampler, greedy bool) ([]int32, error) {
 	t0 := time.Now()
 	var y int32
-	if greedy && !sp.opt.logits {
+	if greedy && !sp.opt.logits && sp.opt.con == nil {
 		var err error
 		if y, err = sp.t.ForwardGreedy(sp.next); err != nil {
 			return nil, err
@@ -882,13 +953,18 @@ func (sp *Speculator) decode(sm *Sampler, greedy bool) ([]int32, error) {
 		if err != nil {
 			return nil, err
 		}
-		if y, err = sp.t.Sample(sm, lg); err != nil {
+		m, err := sp.masked(0, lg)
+		if err != nil {
+			return nil, err
+		}
+		if y, err = sp.t.Sample(sm, m); err != nil {
 			return nil, err
 		}
 		if sp.opt.logits {
 			sp.lgs = append(sp.lgs[:0], lg)
 		}
 	}
+	sp.commit(0, y)
 	sm.Observe(y)
 	sp.next = y
 	sp.stats.Rounds++
