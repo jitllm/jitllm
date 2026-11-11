@@ -153,9 +153,8 @@ sweep by name and are never resolved.
 | `JITLLM_MODEL` | `engine.TestFusionCeiling` | one model file | every model |
 | | `engine.TestForwardEmbdMatchesForward`, `TestPrefillMixedMatchesPrefill` | one model file | every language model under 2 GiB |
 | | `engine.TestPrefillRegionProbe` | one model file | `tinyllama-1.1b-q3_K_M.gguf` |
-| | `engine.TestDeviceDecodeRate`, `TestSamplerPerf` | one model file (a container for the sampler) | test skips |
+| | `engine.TestDeviceDecodeRate` | one model file | test skips |
 | `JITLLM_BENCH_MODEL` | `model` gates that call `benchModel` (e.g. `TestPrefillMatchesForward`) | one model file | the smallest quantized language model in the directory |
-| | `engine.TestABKQuantAccsEndToEnd` | a k-quant model file | test skips |
 | | `engine.BenchmarkGemmaDecode` | one model file | `gemma-2b.gguf` |
 | `JITLLM_ROUTE_MODEL` | `engine.TestRoutingLocality`, `TestHotnessIsAProbability` | a mixture-of-experts model file | test skips |
 | `JITLLM_MLA_MODEL` | `engine.TestMLAPrefillMatchesDecode`, `TestMLABatchMatchesDecode` | a real MLA model (name or path) | the synth-deepseek fixtures |
@@ -196,7 +195,7 @@ repository that opens a device: a comma-separated list of `cuda:N`, `vulkan:N`,
 `hip:N` and `metal` (a bare backend name is refused, since "every Vulkan
 device" is what a selection exists to say no to).
 
-    JITLLM_TEST_DEVICES=cuda:2,vulkan:2 ./scripts/cap 8G -- go test ./engine -run TestSchedulerOnDevice
+    JITLLM_TEST_DEVICES=cuda:2,vulkan:2 ./scripts/cap 8G -- go test ./engine -run TestSchedulerOnDeviceMatchesEachSequenceAlone
 
 Unset, every test opens what it always opened. Set, no test opens any other
 device. Ordinals are the backend's own: a CUDA ordinal is the driver's (under
@@ -279,7 +278,7 @@ The `model` device gates take the same limit, as `gpu.WithVulkanMaxGroups`:
 default-device gates open (`TestSchedulerOnDevice*`, `TestSlidingWindowRunsOnTheDevice`
 and every other caller of `swaTier`). `JITLLM_TEST_DEVICES` names their device:
 
-    JITLLM_TEST_DEVICES=vulkan:1 JITLLM_VK_MAXGROUPS=7 ./scripts/cap 8G -- go test ./engine -run 'TestSchedulerOnDevice' -count=1
+    JITLLM_TEST_DEVICES=vulkan:1 JITLLM_VK_MAXGROUPS=7 ./scripts/cap 8G -- go test ./engine -run 'TestSchedulerOnDeviceHybrid|TestSchedulerOnDeviceLatent|TestSchedulerOnDeviceMatchesEachSequenceAlone' -count=1
 
 `cmd/jitllm` reads `JITLLM_VK_DEVICE` and `JITLLM_VK_MAXGROUPS` too, as
 `gpu.WithVulkanDevice` and `gpu.WithVulkanMaxGroups`.
@@ -321,21 +320,6 @@ block bound with the shallow control past it too.
   an f32 history), each step's llama.cpp arms teacher-forced on the same tokens (`cpuReference`,
   `lcppBand`). Float-weight fixtures (`TestComposedCPUFeaturesAreLoadBearing`,
   `TestComposedCPUSelectsKeys`) are held to the float forms over the same history within 1e-5.
-
-## The shadow arm
-
-`gpu.WithComposedShadow()` (`Config.ComposedShadow`) runs the composer's form of each block it would serve
-beside the tier's own kernels, at every one-row step, and a reduction the
-composer forms from generic ops (`graph.Drift`) writes the block's worst drift
-from the tier's output into a slot of its own, read back as
-`Stats().ShadowWorst` and `ShadowSteps`. The tier's kernels serve, so the
-option changes no answer. `TestComposedShadowHoldsEveryBlock` runs the four
-checkpoints in `shadowModels` on every device selected, with and without the
-captured graph, and holds them to the tier's logits bit for bit, to the spread
-of the tier's backends at every depth, and to flagging a rewrite of one block's
-graph at that block and no other:
-
-    JITLLM_TEST_DEVICES=cuda:2,vulkan:2 ./scripts/cap 8G -- go test ./engine -run TestComposedShadowHoldsEveryBlock
 
 ## Reference scripts
 

@@ -11,13 +11,16 @@ import (
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
-// TestEveryNamedGateExists holds AGENTS.md to the tree: every test it names
-// as a gate is a Test function a _test.go file of the module declares. A gate
-// renamed, deleted or written over leaves its name behind as a claim of
-// coverage nothing gives -- TestStreamRowsServeOnTheCard went with 9757b669a,
-// which wrote another gate over its file, and ran nothing for a fan before
-// anyone saw. A name followed by * names a prefix, and Name(Suffix) both
-// Name and NameSuffix. The violation, a name no file declares, is seen.
+// TestEveryNamedGateExists holds AGENTS.md and the reviewed lists it routes
+// to (namedGateDocs) to the tree: every test they name as a gate is a Test
+// function a _test.go file of the module declares. A gate renamed, deleted
+// or written over leaves its name behind as a claim of coverage nothing
+// gives -- TestStreamRowsServeOnTheCard went with 9757b669a, which wrote
+// another gate over its file, and ran nothing for a fan before anyone saw;
+// the per-family vision runtime's deletion left 69 names in
+// docs/architectures.md. A name followed by * names a prefix, and
+// Name(Suffix) both Name and NameSuffix. The violation, a name no file
+// declares, is seen.
 func TestEveryNamedGateExists(t *testing.T) {
 	testmodels.SourceTree(t)
 	root, err := filepath.Abs(filepath.Join("..", ".."))
@@ -31,23 +34,37 @@ func TestEveryNamedGateExists(t *testing.T) {
 	if len(declared) < 500 {
 		t.Fatalf("read %d Test functions under %s: the gate read nothing", len(declared), root)
 	}
-	text, err := os.ReadFile(filepath.Join(root, "AGENTS.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	named := namedGates(string(text))
-	if len(named) < 30 {
-		t.Fatalf("AGENTS.md names %d gates: the gate read nothing", len(named))
-	}
-	for _, n := range named {
-		if !gateDeclared(declared, n) {
-			t.Errorf("AGENTS.md names %s, which no _test.go declares", n.String())
+	total := 0
+	for _, doc := range namedGateDocs() {
+		text, err := os.ReadFile(filepath.Join(root, doc))
+		if err != nil {
+			t.Fatal(err)
 		}
+		named := namedGates(string(text))
+		if doc == "AGENTS.md" && len(named) < 30 {
+			t.Fatalf("AGENTS.md names %d gates: the gate read nothing", len(named))
+		}
+		total += len(named)
+		for _, n := range named {
+			if !gateDeclared(declared, n) {
+				t.Errorf("%s names %s, which no _test.go declares", doc, n.String())
+			}
+		}
+	}
+	if total < 200 {
+		t.Fatalf("the docs name %d gates: the gate read nothing", total)
 	}
 	if v := namedGates("the gate `TestNoSuchGateAnywhere` and `TestTwoPagedModels*`"); len(v) != 2 ||
 		gateDeclared(declared, v[0]) || !gateDeclared(declared, v[1]) {
 		t.Errorf("the violation: a name no file declares was not seen, or a prefix that one does was not found (%v)", v)
 	}
+}
+
+// namedGateDocs is AGENTS.md and the lists it routes to that are a reviewed
+// artefact, not evidence: the evidence files record gates as they stood.
+func namedGateDocs() []string {
+	return []string{"AGENTS.md", "docs/architectures.md", "docs/divergences.md", "docs/testing.md",
+		"docs/checks.md", "docs/capabilities.md", "docs/open-questions.md"}
 }
 
 // TestEveryGateACommentNamesExists holds the module's comments to the same

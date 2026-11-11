@@ -14,7 +14,7 @@ and the code has moved since (RULE 12). Paths below are under
 
 | open item | what is recorded | evidence |
 |---|---|---|
-| native Q3_K packing | the one format still widened (+34.5% over its GGUF); native needs a 2-bit primary plane, a third emitter shape whose per-byte cost has never been measured -- one `nn.TestPerByteCost` row would settle whether it pays | cpu-kernels.md "Native narrow packing" |
+| native Q3_K packing | the one format still widened (+34.5% over its GGUF); native needs a 2-bit primary plane, a third emitter shape whose per-byte cost has never been measured -- a measurement of it would settle whether it pays (main's per-byte gate went with its kernels) | cpu-kernels.md "Native narrow packing" |
 | AVX-512 on the Xeon D | worth 3.1% of a decode token there; admitted and scheduled behind larger levers, needs an EVEX encoder and the 32-register allocation | cpu-kernels.md "The Xeon D-2123IT" |
 | Metal decode's unattributed term | 93.7% of an M4 decode token attributed to measured causes and ~0.56 ms not; no single term is over 5% of the token | gpu-kernels.md "Metal decode against the oracles" |
 | fusion on Metal | dispatch overhead is 6.2% of a dense token, and merging adjacent elementwise runs can recover ~1.4% of it; a mixture layer has far more to gain | same |
@@ -143,6 +143,27 @@ after it ("THE DECODE ROW TILE, RE-BUILT AS ADJACENT ROWS").
   arm, but on BYTES READ PER TOKEN, which is the quantity jitllm is 15x wrong
   on.
 
+## Vision gates the per-family runtime took
+
+The per-family vision runtime's deletion (16caf8b4f) took about 150 gates
+with it. Each tower has a successor -- its stated tower held to its
+reference's pixels and rows at the engine's arithmetic, and run on a card
+-- but these were not replaced, and docs/architectures.md marks each row's
+"open":
+
+- the text model and its tower together against transformers' logits for
+  Gemma 4, Gemma 3n, Llama 4, Phi-4, Pixtral, Janus, MiniCPM-V and LFM2-VL
+  (the Qwen family, GLM-4.1V, HunyuanVL and Kimi-VL have one);
+- the real checkpoints against their reference: Qwen2.5-VL-3B, HunyuanOCR,
+  Kimi-VL (Moonshot's code), Gemma 4, Gemma 3n, Phi-4, Pixtral and LFM2;
+  what remains of them is the colour-naming gates over a quadrant picture;
+- the towers against llama.cpp's mtmd, teacher-forced: SmolVLM, Gemma 3,
+  InternVL;
+- Gemma 3's, InternVL's and llava's towers with every block on a card (the
+  card gate places SmolVLM's);
+- Laya's features-are-load-bearing gate;
+- a tower's encode resumed across a relocation mid-picture.
+
 ## Smaller open items
 
 - Q4_K/Q5_K are not Tok-invariant on SPIR-V — ~40% of elements differ at 6.1e-05,
@@ -165,18 +186,3 @@ after it ("THE DECODE ROW TILE, RE-BUILT AS ADJACENT ROWS").
   self-control 0.9985). Take the amd64 row on a rested box before trusting the
   default, and note it changes logits by 0.2-0.94 -- inside the engine's own
   CPU-vs-device band, but a change.
-- **Q4_K and Q5_K still cannot use the arm64 INTEGER fold** (36.9% of a
-  tinyllama prefill's MACs). They now get the other half of it -- the activation
-  scale applied once per super-block instead of per sub-block, worth +8.5% and
-  +7.7% -- but keeping the DOT integer needs int32 min scales, i.e. a SECOND flag
-  in `emitA64KScales` (gemmk_a64.go's intFold comment warns that widening `intSc` applies dmin
-  twice or not at all) AND a third accumulator array that does not fit at 2x2.
-  Worth the remaining 5 -> 3 instructions per (sub-block, row, vector). They DO
-  now have a constant pool -- `dareg` stopped reserving registers it only reads
-  in the epilogue, which is worth another +5.8%/+3.1% and got Q6_K +2.8%.
-- **`emitA64KScales` rebuilds three mask immediates per ROW per super-block**, so
-  the shipping 2x2 spends six MOVIs a super-block on loop invariants. Hoisting
-  them needs three more pool slots than any format has spare, so it wants either
-  a wider budget (a smaller tile) or the masks folded into the unpack's existing
-  constants. `TestGEMMUnpackKonstsAreHoisted` prices them: they are the entire
-  gap between its bound and the pool size.
