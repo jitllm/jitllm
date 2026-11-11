@@ -81,10 +81,12 @@ func penalizedRow(b *Builder, l, win, pen ValueID) ValueID {
 // softmax at the temperature -- the first survivor whose mass up to and
 // including it passes u times the survivors' mass, the last survivor where
 // rounding leaves none. XTC cuts the survivors before the walk
-// (sampleEmitter.xtc). Its inputs are SampleTopK's, then sample.walk (k,
-// 1/T, top-p +Inf where off, min-p 0 where off, u, typical-p +Inf where off,
-// XTC's threshold +Inf where off, then XTC's probability, which only Prob
-// reads); its output the token. With Prob the distribution is the mixture
+// (sampleEmitter.xtc), and a dynamic temperature replaces 1/T over what is
+// left (sampleEmitter.dynTemp). Its inputs are SampleTopK's, then
+// sample.walk (k, 1/T, top-p +Inf where off, min-p 0 where off, u,
+// typical-p +Inf where off, XTC's threshold +Inf where off, XTC's
+// probability, which only Prob reads, then the dynamic temperature's range,
+// on above 0, and exponent); its output the token. With Prob the distribution is the mixture
 // the draw is: the XTC cut's at its probability, the survivors' before it at
 // the rest. The mass before each survivor is a KxK sum,
 // as top-p's. With Prob the outputs are the distribution the draw draws
@@ -98,18 +100,21 @@ type SampleWalk struct {
 func (s *SampleWalk) Build() *Graph {
 	b := New()
 	vals, ids := s.emit(b)
-	walk := b.In("sample.walk", 8)
+	walk := b.In("sample.walk", 10)
 	K := b.G.Values[vals].Width
 	e := sampleEmitter{b}
 	place, d, cut := e.cuts(vals, walk)
 	keep := e.xtc(e.mapc(MapExp, 0, "sample.xtc.ed", K, d), cut, place, e.word(walk, 6, "sample.xtc"))
 	invT, u := e.word(walk, 1, "sample.invtemp"), e.word(walk, 4, "sample.u")
-	edt := e.mapc(MapExp, 0, "sample.etd", K, e.mapc(MapMul, 0, "sample.dt", K, d, invT))
+	rng, ex := e.word(walk, 8, "sample.dyn.range"), e.word(walk, 9, "sample.dyn.exp")
+	ed := e.mapc(MapExp, 0, "sample.dyn.ed", K, d)
+	edt := e.mapc(MapExp, 0, "sample.etd", K, e.mapc(MapMul, 0, "sample.dt", K, d, e.dynTemp(ed, keep, invT, rng, ex, "sample.dyn")))
 	et := e.mapc(MapMul, 0, "sample.et", K, edt, keep)
 	mass := e.one(OpReduce, "sample.mass", 1, Attrs{Fn: MapAdd}, et)
 	if s.Prob {
 		pt := e.mapc(MapDiv, 0, "sample.pt", K, et, mass)
-		ec := e.mapc(MapMul, 0, "sample.et.cut", K, edt, cut)
+		edc := e.mapc(MapExp, 0, "sample.etd.cut", K, e.mapc(MapMul, 0, "sample.dt.cut", K, d, e.dynTemp(ed, cut, invT, rng, ex, "sample.dyn.cut")))
+		ec := e.mapc(MapMul, 0, "sample.et.cut", K, edc, cut)
 		pc := e.mapc(MapDiv, 0, "sample.pt.cut", K, ec, e.one(OpReduce, "sample.mass.cut", 1, Attrs{Fn: MapAdd}, ec))
 		mix := e.word(walk, 7, "sample.xtc.p")
 		b.Out(e.mapc(MapAdd, 0, "sample.pt.mix", K, pc, e.mapc(MapMul, 0, "sample.pt.mixd", K, e.mapc(MapSub, 0, "sample.pt.d", K, pt, pc), mix)), ids)
@@ -177,8 +182,10 @@ func (s *SampleRow) Build() *Graph {
 // renormalized, and the survivors are walked whether or not a cut fires.
 // Before them all, top-n-sigma: every logit under the largest less n
 // standard deviations of the row's finite logits goes to -Inf. sample.cut's
-// last four words are n (on above 0), typical-p, XTC's threshold and its
-// probability. XTC follows the cuts: of the survivors at or above the threshold
+// words past its base are n (on above 0), typical-p, XTC's threshold, its
+// probability, and the dynamic temperature's range (on above 0) and
+// exponent, which sets the walk's temperature over the survivors
+// (sampleEmitter.dynTemp). XTC follows the cuts: of the survivors at or above the threshold
 // in their softmax, all but the last in the order, where two or more are;
 // with Prob the distribution is the mixture, XTC's at its probability. Its inputs are SampleRow's,
 // with sample.cut (1/T, top-p +Inf where off, min-p 0 where off, then u) for
@@ -207,8 +214,10 @@ func (s *SampleCut) Build() *Graph {
 	if s.TopK {
 		words = 5
 	}
+	// x is the first of the Typical forms' words.
+	x := words
 	if s.Typical {
-		words += 4
+		words += 6
 	}
 	cut := b.In("sample.cut", words)
 	e := sampleEmitter{b}
@@ -221,7 +230,7 @@ func (s *SampleCut) Build() *Graph {
 	if s.Typical {
 		// Top-n-sigma: the finite logits' mean and deviation, the threshold
 		// the largest less n of them (-Inf where n is not above 0).
-		ns := e.word(cut, words-4, "sample.sigma")
+		ns := e.word(cut, x, "sample.sigma")
 		fin := notv("sample.sig.fin", n, e.mapc(MapLess, -math.MaxFloat32, "sample.sig.inf", n, v))
 		cnt := e.one(OpReduce, "sample.sig.count", 1, Attrs{Fn: MapAdd}, fin)
 		mean := e.mapc(MapDiv, 0, "sample.sig.mean", 1, e.one(OpReduce, "sample.sig.sum", 1, Attrs{Fn: MapAdd},
@@ -251,7 +260,7 @@ func (s *SampleCut) Build() *Graph {
 		// The pool's entropy H, each token's key exp(-|log q1 + H|) -- the
 		// nearest the entropy first -- and the pool cut where the mass up to
 		// one passes typical-p, q1 renormalized over what is left.
-		typ := e.word(cut, words-3, "sample.typical")
+		typ := e.word(cut, x+1, "sample.typical")
 		lq := e.mapc(MapLog, 0, "sample.typ.log", n, q1)
 		plogp := e.mapc(MapWhere, 0, "sample.typ.plogp", n, q1, e.mapc(MapMul, 0, "sample.typ.pl", n, q1, lq))
 		h := e.mapc(MapMul, -1, "sample.typ.h", 1, e.one(OpReduce, "sample.typ.hsum", 1, Attrs{Fn: MapAdd}, plogp))
@@ -288,6 +297,11 @@ func (s *SampleCut) Build() *Graph {
 	// The survivors' softmax at the temperature, walked in the cut's order.
 	scaled := e.mapc(MapMul, 0, "sample.scaled", n, v, invT)
 	share := func(keep ValueID, name string) ValueID {
+		scaled := scaled
+		if s.Typical {
+			it := e.dynTemp(q1, keep, invT, e.word(cut, x+4, name+".dyn.range"), e.word(cut, x+5, name+".dyn.exp"), name+".dyn")
+			scaled = e.mapc(MapMul, 0, name+".scaled", n, v, it)
+		}
 		top := e.one(OpReduce, name+".top", 1, Attrs{Fn: MapMax}, e.mapc(MapWhere, math.Inf(-1), name+".keptscaled", n, keep, scaled))
 		et := e.mapc(MapWhere, 0, name+".et", n, keep, e.mapc(MapExp, 0, name+".ete", n, e.mapc(MapSub, 0, name+".etd", n, scaled, top)))
 		return e.mapc(MapDiv, 0, name+".pt", n, et, e.one(OpReduce, name+".etsum", 1, Attrs{Fn: MapAdd}, et))
@@ -297,7 +311,7 @@ func (s *SampleCut) Build() *Graph {
 		// XTC: of the survivors' softmax at temperature 1, those at or above
 		// the threshold but the last in the order -- the least, the higher id
 		// of two equal.
-		thr := e.word(cut, words-2, "sample.xtc")
+		thr := e.word(cut, x+2, "sample.xtc")
 		kq := e.mapc(MapMul, 0, "sample.xtc.q", n, q1, keep)
 		ps := e.mapc(MapDiv, 0, "sample.xtc.p", n, kq, e.one(OpReduce, "sample.xtc.sum", 1, Attrs{Fn: MapAdd}, kq))
 		above := e.mapc(MapMul, 0, "sample.xtc.above", n, keep, notv("sample.xtc.notbelow", n, e.mapc(MapLess, 0, "sample.xtc.below", n, ps, thr)))
@@ -309,7 +323,7 @@ func (s *SampleCut) Build() *Graph {
 		keep = e.mapc(MapAdd, 0, "sample.xtc.keep", n, e.mapc(MapSub, 0, "sample.xtc.rest", n, keep, above), last)
 		pt = share(keep, "sample.xtc")
 		if s.Prob {
-			mix := e.word(cut, words-1, "sample.xtc.mix")
+			mix := e.word(cut, x+3, "sample.xtc.mix")
 			pt = e.mapc(MapAdd, 0, "sample.pt.mix", n, cutPt, e.mapc(MapMul, 0, "sample.pt.mixd", n, e.mapc(MapSub, 0, "sample.pt.mixe", n, pt, cutPt), mix))
 		}
 	}
@@ -355,6 +369,35 @@ func (e sampleEmitter) before(x, place ValueID, name string) ValueID {
 	tr := e.one(OpTile, name+".place.rows", K*K, Attrs{Span: K}, place)
 	lower := e.mapc(MapMul, 0, name+".lower", K*K, tx, e.mapc(MapLess, 0, name+".lt", K*K, tr, place))
 	return e.one(OpReduce, name+".before", K, Attrs{Fn: MapAdd, Span: K}, lower)
+}
+
+// dynTemp is the reciprocal temperature a draw over the survivors keep
+// (0/1, w their weights at temperature 1, any scale) runs at: invT, or where
+// rng is above 0 and two or more survive llama.cpp's dynamic temperature,
+// lo + (hi - lo)*(H/Hmax)^ex with T = 1/invT, lo = max(0, T - rng), hi = T +
+// rng, H the survivors' entropy and Hmax the log of their count; its
+// reciprocal held to 1e30, which a temperature of 0 makes greedy.
+func (e sampleEmitter) dynTemp(w, keep, invT, rng, ex ValueID, name string) ValueID {
+	K := e.b.G.Values[w].Width
+	wk := e.mapc(MapMul, 0, name+".w", K, w, keep)
+	ps := e.mapc(MapDiv, 0, name+".p", K, wk, e.one(OpReduce, name+".sum", 1, Attrs{Fn: MapAdd}, wk))
+	plogp := e.mapc(MapWhere, 0, name+".plogp", K, ps, e.mapc(MapMul, 0, name+".pl", K, ps, e.mapc(MapLog, 0, name+".log", K, ps)))
+	h := e.mapc(MapMul, -1, name+".h", 1, e.one(OpReduce, name+".hsum", 1, Attrs{Fn: MapAdd}, plogp))
+	size := e.one(OpReduce, name+".size", 1, Attrs{Fn: MapAdd}, keep)
+	norm := e.mapc(MapDiv, 0, name+".norm", 1, h, e.mapc(MapLog, 0, name+".hmax", 1, size))
+	pw := e.mapc(MapWhere, 0, name+".pow", 1, norm, e.mapc(MapExp, 0, name+".powe", 1,
+		e.mapc(MapMul, 0, name+".powl", 1, ex, e.mapc(MapLog, 0, name+".normlog", 1, norm))))
+	t := e.mapc(MapRecip, 0, name+".t", 1, invT)
+	lo := e.mapc(MapMax, 0, name+".lo", 1, e.mapc(MapSub, 0, name+".lod", 1, t, rng), e.mapc(MapMul, 0, name+".zero", 1, rng, e.mapc(MapLess, -1, name+".nil", 1, rng)))
+	span := e.mapc(MapSub, 0, name+".span", 1, e.mapc(MapAdd, 0, name+".hi", 1, t, rng), lo)
+	dyn := e.mapc(MapAdd, 0, name+".dyn", 1, lo, e.mapc(MapMul, 0, name+".dynd", 1, span, pw))
+	inv := e.mapc(MapMin, 1e30, name+".inv", 1, e.mapc(MapRecip, 0, name+".invd", 1, dyn))
+	not := func(x ValueID, nm string) ValueID {
+		return e.mapc(MapAdd, 1, nm, 1, e.mapc(MapMul, -1, nm+".neg", 1, x))
+	}
+	on := e.mapc(MapMul, 0, name+".on", 1, not(e.mapc(MapLess, 1.5, name+".single", 1, size), name+".multi"),
+		not(e.mapc(MapLess, math.SmallestNonzeroFloat32, name+".rangeoff", 1, rng), name+".ranged"))
+	return e.where(name+".invt", 1, on, inv, invT)
 }
 
 // xtc is keep less XTC's cut at threshold thr (+Inf where off): of the

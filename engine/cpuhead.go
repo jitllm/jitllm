@@ -168,7 +168,8 @@ func (s *Instance) greedy(logits []float32) (int32, bool) {
 // for none) and its mixture mix (a distribution's).
 func (s *Instance) drawArgs(smp *Sampler, xtc, mix float32) nn.DrawArgs {
 	topp, minp := smp.cuts()
-	a := nn.DrawArgs{TopK: smp.TopK, InvTemp: float32(1 / smp.Temp), TopP: topp, MinP: minp, Typical: float32(smp.TypicalP),
+	rng, ex := smp.dyn()
+	a := nn.DrawArgs{TopK: smp.TopK, DynRange: rng, DynExp: ex, InvTemp: float32(1 / smp.Temp), TopP: topp, MinP: minp, Typical: float32(smp.TypicalP),
 		XTC: xtc, XTCMix: mix, Sigma: float32(smp.TopNSigma), Penalty: smp.penalties()}
 	if !a.Penalty.Off() {
 		a.Window = smp.window(s.c.NVocab)

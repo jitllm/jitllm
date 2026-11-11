@@ -10,8 +10,8 @@ import (
 	"github.com/jitllm/jitllm/internal/oracle"
 )
 
-// TestComposedCPUSampleTypical holds the draws with typical-p, XTC and
-// top-n-sigma -- a top-k
+// TestComposedCPUSampleTypical holds the draws with typical-p, XTC,
+// top-n-sigma and a dynamic temperature -- a top-k
 // draw's walk, the cut with no top-k and its top-k variant past the walk's
 // bound (graph.SampleCut's Typical forms) -- on the CPU device to their
 // definition (internal/oracle): llama.cpp's locally typical cut, the
@@ -19,8 +19,9 @@ import (
 // passes typical-p, then top-p and min-p over the survivors renormalized, then
 // XTC's cut of all but the least of those past its threshold; top-n-sigma,
 // the cut's forms', masks the row before them all. Every decisive draw is the
-// definition's, and typical-p moves the token on a share of them, XTC and
-// top-n-sigma each on a share of theirs: the gate sees every cut.
+// definition's, and typical-p moves the token on a share of them, XTC,
+// top-n-sigma and the dynamic temperature each on a share of theirs: the gate
+// sees every cut.
 func TestComposedCPUSampleTypical(t *testing.T) {
 	const n, K = 300, 16
 	type arm struct {
@@ -54,7 +55,7 @@ func TestComposedCPUSampleTypical(t *testing.T) {
 			f := func(x float64) uint32 { return math.Float32bits(float32(x)) }
 			inf := math.Inf(1)
 			rng := rand.New(rand.NewSource(43))
-			decisive, cases, moved, xtcs, xmoved, sigs, smoved := 0, 0, 0, 0, 0, 0, 0
+			decisive, cases, moved, xtcs, xmoved, sigs, smoved, dyns, dmoved := 0, 0, 0, 0, 0, 0, 0, 0, 0
 			for c := range 400 {
 				l := make([]float32, n)
 				for i := range l {
@@ -80,6 +81,10 @@ func TestComposedCPUSampleTypical(t *testing.T) {
 				if c%3 == 0 {
 					xtc = float64(float32(0.02 + 0.2*rng.Float64()))
 				}
+				dyn := [2]float64{}
+				if c%5 == 2 {
+					dyn = [2]float64{float64(float32(0.2 + 0.8*rng.Float64())), float64(float32(0.5 + 1.5*rng.Float64()))}
+				}
 				// Top-n-sigma is the cut's forms' alone; the walk never reads it.
 				ns, lo, sm := 0.0, l, inf
 				if !a.walk && c%4 == 1 {
@@ -93,28 +98,31 @@ func TestComposedCPUSampleTypical(t *testing.T) {
 				}
 				vals := map[graph.ValueID][]uint32{in["logits"]: lw, in["sample.window"]: make([]uint32, n),
 					in["sample.penalty"]: {f(1), 0, 0}, tokV: {0}}
-				var want, plain, noX, noS uint32
+				var want, plain, noX, noS, noD uint32
 				var margin float64
 				switch {
 				case a.walk:
-					want, margin = oracle.SampleWalk(l, K, k, invT, topp, minp, typ, xtc, u)
-					plain, _ = oracle.SampleWalk(l, K, k, invT, topp, minp, inf, xtc, u)
-					noX, _ = oracle.SampleWalk(l, K, k, invT, topp, minp, typ, inf, u)
-					vals[in["sample.walk"]] = []uint32{f(float64(k)), f(invT), f(topp), f(minp), f(u), f(typ), f(xtc), 0}
+					want, margin = oracle.SampleWalk(l, K, k, invT, topp, minp, typ, xtc, dyn, u)
+					plain, _ = oracle.SampleWalk(l, K, k, invT, topp, minp, inf, xtc, dyn, u)
+					noX, _ = oracle.SampleWalk(l, K, k, invT, topp, minp, typ, inf, dyn, u)
+					noD, _ = oracle.SampleWalk(l, K, k, invT, topp, minp, typ, xtc, [2]float64{}, u)
+					vals[in["sample.walk"]] = []uint32{f(float64(k)), f(invT), f(topp), f(minp), f(u), f(typ), f(xtc), 0, f(dyn[0]), f(dyn[1])}
 				case a.topK:
-					want, margin = oracle.SampleWalk(lo, n, k, invT, topp, minp, typ, xtc, u)
-					plain, _ = oracle.SampleWalk(lo, n, k, invT, topp, minp, inf, xtc, u)
-					noX, _ = oracle.SampleWalk(lo, n, k, invT, topp, minp, typ, inf, u)
-					noS, _ = oracle.SampleWalk(l, n, k, invT, topp, minp, typ, xtc, u)
+					want, margin = oracle.SampleWalk(lo, n, k, invT, topp, minp, typ, xtc, dyn, u)
+					plain, _ = oracle.SampleWalk(lo, n, k, invT, topp, minp, inf, xtc, dyn, u)
+					noX, _ = oracle.SampleWalk(lo, n, k, invT, topp, minp, typ, inf, dyn, u)
+					noS, _ = oracle.SampleWalk(l, n, k, invT, topp, minp, typ, xtc, dyn, u)
+					noD, _ = oracle.SampleWalk(lo, n, k, invT, topp, minp, typ, xtc, [2]float64{}, u)
 					vals[in["sample.ids"]] = append([]uint32(nil), ids...)
-					vals[in["sample.cut"]] = []uint32{f(invT), f(topp), f(minp), f(u), f(float64(k)), f(ns), f(typ), f(xtc), 0}
+					vals[in["sample.cut"]] = []uint32{f(invT), f(topp), f(minp), f(u), f(float64(k)), f(ns), f(typ), f(xtc), 0, f(dyn[0]), f(dyn[1])}
 				default:
-					want, margin = oracle.SampleCut(lo, nil, 1, float32(invT), topp, minp, typ, xtc, u)
-					plain, _ = oracle.SampleCut(lo, nil, 1, float32(invT), topp, minp, inf, xtc, u)
-					noX, _ = oracle.SampleCut(lo, nil, 1, float32(invT), topp, minp, typ, inf, u)
-					noS, _ = oracle.SampleCut(l, nil, 1, float32(invT), topp, minp, typ, xtc, u)
+					want, margin = oracle.SampleCut(lo, nil, 1, float32(invT), topp, minp, typ, xtc, dyn, u)
+					plain, _ = oracle.SampleCut(lo, nil, 1, float32(invT), topp, minp, inf, xtc, dyn, u)
+					noX, _ = oracle.SampleCut(lo, nil, 1, float32(invT), topp, minp, typ, inf, dyn, u)
+					noS, _ = oracle.SampleCut(l, nil, 1, float32(invT), topp, minp, typ, xtc, dyn, u)
+					noD, _ = oracle.SampleCut(lo, nil, 1, float32(invT), topp, minp, typ, xtc, [2]float64{}, u)
 					vals[in["sample.ids"]] = append([]uint32(nil), ids...)
-					vals[in["sample.cut"]] = []uint32{f(invT), f(topp), f(minp), f(u), f(ns), f(typ), f(xtc), 0}
+					vals[in["sample.cut"]] = []uint32{f(invT), f(topp), f(minp), f(u), f(ns), f(typ), f(xtc), 0, f(dyn[0]), f(dyn[1])}
 				}
 				if err := runCPUValues(hostArm(), codes, g, vals, [3][]uint32{}); err != nil {
 					t.Fatal(err)
@@ -127,6 +135,12 @@ func TestComposedCPUSampleTypical(t *testing.T) {
 				decisive++
 				if want != plain {
 					moved++
+				}
+				if dyn[0] > 0 {
+					dyns++
+					if want != noD {
+						dmoved++
+					}
 				}
 				if ns > 0 {
 					sigs++
@@ -148,9 +162,9 @@ func TestComposedCPUSampleTypical(t *testing.T) {
 			if decisive < cases*7/10 {
 				t.Fatalf("%d of %d draws decisive: the comparison sees too little", decisive, cases)
 			}
-			if moved < decisive/10 || xmoved < xtcs/10 || smoved < sigs/10 {
-				t.Fatalf("typical-p moved %d of %d decisive draws, XTC %d of %d, top-n-sigma %d of %d: the gate cannot see a cut",
-					moved, decisive, xmoved, xtcs, smoved, sigs)
+			if moved < decisive/10 || xmoved < xtcs/10 || smoved < sigs/10 || dmoved < dyns/10 {
+				t.Fatalf("typical-p moved %d of %d decisive draws, XTC %d of %d, top-n-sigma %d of %d, the dynamic temperature %d of %d: "+
+					"the gate cannot see a cut", moved, decisive, xmoved, xtcs, smoved, sigs, dmoved, dyns)
 			}
 			t.Logf("%d of %d draws decisive and right, %d of them moved by typical-p, %d of %d by XTC", decisive, cases, moved, xmoved, xtcs)
 		})

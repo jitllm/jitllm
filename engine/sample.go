@@ -13,7 +13,8 @@ import (
 // SampleRow and SampleCut), which read the window as a count row.
 //
 // The filters run penalty, top-n-sigma, top-k, typical-p, top-p, min-p,
-// XTC, then the temperature, llama.cpp's order: typical-p, top-p and min-p cut the
+// XTC, then the temperature (dynamic where DynatempRange is set),
+// llama.cpp's order: typical-p, top-p and min-p cut the
 // candidates' softmax at temperature 1, each over what the one before it
 // left, and the temperature shapes only the draw over what survives them. Equal logits are ordered
 // higher logit first, lower id on a tie.
@@ -28,8 +29,11 @@ type Sampler struct {
 	// the least; off at probability 0 or a threshold past 0.5.
 	XTCProbability, XTCThreshold float64
 	TopNSigma                    float64 // 0 or below = disabled; llama.cpp's top_n_sigma
-	RepeatPen                    float64 // 1 = disabled
-	RepeatLastN                  int     // how far back the penalties look; 0 = 64
+	// DynatempRange and DynatempExponent are llama.cpp's dynamic
+	// temperature: off where the range is not above 0; an exponent of 0 is 1.
+	DynatempRange, DynatempExponent float64
+	RepeatPen                       float64 // 1 = disabled
+	RepeatLastN                     int     // how far back the penalties look; 0 = 64
 	// PresencePen and FreqPen are llama.cpp's presence and frequency
 	// penalties over the same window: 0 = disabled.
 	PresencePen, FreqPen float64
@@ -148,6 +152,19 @@ func (s *Sampler) xtcDraw() float32 {
 		return 0
 	}
 	return thr
+}
+
+// dyn is the dynamic temperature as a draw reads it: its range, 0 where off,
+// and exponent.
+func (s *Sampler) dyn() (rng, ex float32) {
+	if s.DynatempRange <= 0 {
+		return 0, 1
+	}
+	ex = float32(s.DynatempExponent)
+	if ex == 0 {
+		ex = 1
+	}
+	return float32(s.DynatempRange), ex
 }
 
 // seed starts the sampler's stream on first use.
