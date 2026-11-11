@@ -278,6 +278,10 @@ func TestInternVLStatesItsTower(t *testing.T) {
 		s.Mark != "<image>\n" || s.AfterText != "\n" {
 		t.Errorf("the picture's span is %+v, want <img> (%d) and </img> (%d) for the chat's \"<image>\"", s, img, end)
 	}
+	if vid := tw.Video; vid == nil || !vid.EveryFrame || !vid.Whole || !vid.StampIndex || vid.StampBefore != "Frame" ||
+		vid.StampAfter != ": " || vid.Between != "\n" || len(vid.Before) != 0 || len(vid.After) != 0 {
+		t.Errorf("the video reads %+v, want every frame whole, \"Frame{n}: \" before each and a line between", vid)
+	}
 }
 
 // TestQwen2VLStatesItsTower converts synth-qwen2vl's two files

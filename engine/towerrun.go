@@ -282,7 +282,7 @@ func (s *Instance) EncodePicture(img image.Image) ([]float32, error) {
 	if cap(s.tower.out) < n {
 		s.tower.out, s.tower.deep = make([]float32, n), make([]float32, k*n)
 	}
-	return s.encodePicture(img, s.tower.out[:n], s.tower.deep[:k*n])
+	return s.encodePicture(img, false, s.tower.out[:n], s.tower.deep[:k*n])
 }
 
 // EncodedTaps is the last picture EncodePicture encoded's taps' rows
@@ -307,8 +307,9 @@ func (s *Instance) towerReady() error {
 }
 
 // encodePicture is EncodePicture into dst, the head's rows, and deep, its
-// taps' ([taps][rows][width]), under the pager the caller holds.
-func (s *Instance) encodePicture(img image.Image, dst, deep []float32) ([]float32, error) {
+// taps' ([taps][rows][width]), under the pager the caller holds; whole, a
+// video's frame read whole, its last square alone (model.Span.Whole).
+func (s *Instance) encodePicture(img image.Image, whole bool, dst, deep []float32) ([]float32, error) {
 	tr := s.tower
 	tr.encodes++
 	words, pl, err := model.PictureWords(img, &tr.pad, &tr.ent)
@@ -322,10 +323,15 @@ func (s *Instance) encodePicture(img image.Image, dst, deep []float32) ([]float3
 		tr.tapsW, tr.tapsVideo = 0, false
 	}
 	D := int(m.Container.Vision().ProjDim)
-	if want := tg.PicRows(pl.W, pl.H); len(dst) != want*D || len(deep) != len(tg.Taps)*want*D {
+	sq, squares := tg.Square(pl.W, pl.H, 0)
+	want := tg.PicRows(pl.W, pl.H)
+	if whole {
+		sq = tg.LastSquare(pl.W, pl.H)
+		want, squares = tg.SquareOut(sq), 1
+	}
+	if len(dst) != want*D || len(deep) != len(tg.Taps)*want*D {
 		return nil, fmt.Errorf("model: %d values and %d for its taps' for a picture's %d rows of %d", len(dst), len(deep), want, D)
 	}
-	sq, squares := tg.Square(pl.W, pl.H, 0)
 	if err := squareFits(sq, tg.Classes[sq.Class].Pic); err != nil {
 		return nil, err
 	}
@@ -575,8 +581,11 @@ func (s *Instance) encodePictures(spans []model.Span, from int) ([]model.Span, e
 		if sp.Picture != nil && sp.Embd == nil {
 			b := sp.Picture.Bounds()
 			want := s.m.Tower.PicRows(b.Dx(), b.Dy())
-			if sp.Frame != nil {
+			switch {
+			case sp.Frame != nil:
 				want = s.m.Tower.SquareOut(s.m.Tower.VideoSquare(sp.FrameW, sp.FrameH))
+			case sp.Whole:
+				want = s.m.Tower.SquareOut(s.m.Tower.LastSquare(b.Dx(), b.Dy()))
 			}
 			if sp.PicRows != want {
 				return nil, fmt.Errorf("model: span %d is a picture of %d rows and the tower writes %d",
@@ -602,7 +611,7 @@ func (s *Instance) encodePictures(spans []model.Span, from int) ([]model.Span, e
 				if sp.Frame != nil {
 					err = s.encodePair(sp.Picture, sp.Frame, s.m.Tower.VideoSquare(sp.FrameW, sp.FrameH), sp.Embd, deep)
 				} else {
-					_, err = s.encodePicture(sp.Picture, sp.Embd, deep)
+					_, err = s.encodePicture(sp.Picture, sp.Whole, sp.Embd, deep)
 				}
 				if err != nil {
 					return nil, fmt.Errorf("model: span %d: %w", i, err)
