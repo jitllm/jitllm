@@ -87,6 +87,12 @@ type Buf struct {
 	err      error
 
 	regs regUse
+
+	// held is what MOVLoad last read into each general register, still
+	// there for the registers set in heldOK: no instruction since has named
+	// the register or may have written memory, and no label was bound.
+	held   [16]Mem
+	heldOK uint16
 }
 
 type fixup struct {
@@ -115,8 +121,27 @@ func (a *Buf) fail(format string, args ...any) {
 
 func (a *Buf) Len() int { return len(a.b) }
 
-func (a *Buf) u8(v byte)    { a.b = append(a.b, v) }
-func (a *Buf) u32(v uint32) { a.b = append(a.b, byte(v), byte(v>>8), byte(v>>16), byte(v>>24)) }
+// u8 and u32 write an instruction's bytes, and forget every load held: an
+// instruction is taken to write any register and memory unless its helper
+// says what it writes (keepHeld).
+func (a *Buf) u8(v byte) {
+	a.b = append(a.b, v)
+	a.heldOK = 0
+}
+
+func (a *Buf) u32(v uint32) {
+	a.b = append(a.b, byte(v), byte(v>>8), byte(v>>16), byte(v>>24))
+	a.heldOK = 0
+}
+
+// keepHeld restores the loads held before an instruction that writes no
+// memory and no register but those among regs: the rest are still held.
+func (a *Buf) keepHeld(was uint16, regs ...Reg) {
+	for _, r := range regs {
+		was &^= 1 << (r & 15)
+	}
+	a.heldOK = was
+}
 
 func (a *Buf) rex(w bool, r, x, b Reg) {
 	v := byte(0x40) | r.hi()<<2 | x.hi()<<1 | b.hi()
@@ -210,14 +235,21 @@ func (a *Buf) vop(op byte, pp, mm, w byte, dst, src1, src2 Reg) {
 	a.vopL(op, pp, mm, w, true, dst, src1, src2)
 }
 
+// vopL is a VEX instruction over registers: it writes dst, which may name
+// a general register, and nothing else.
 func (a *Buf) vopL(op byte, pp, mm, w byte, l256 bool, dst, src1, src2 Reg) {
+	was := a.heldOK
 	a.regs.vec(dst, src1, src2)
 	a.vex(dst, src1, src2, noIndex, l256, pp, mm, w)
 	a.u8(op)
 	a.modrmReg(dst, src2)
+	a.keepHeld(was, dst, src1, src2)
 }
 
+// vopMem is a VEX instruction that reads m: a load or a computation,
+// writing dst and nothing else. A store goes through vopStore.
 func (a *Buf) vopMem(op byte, pp, mm, w byte, dst, src1 Reg, m Mem) {
+	was := a.heldOK
 	a.regs.vec(dst, src1)
 	idx := noIndex
 	if m.hasIndex() {
@@ -226,6 +258,14 @@ func (a *Buf) vopMem(op byte, pp, mm, w byte, dst, src1 Reg, m Mem) {
 	a.vex(dst, src1, m.Base, idx, true, pp, mm, w)
 	a.u8(op)
 	a.modrmMem(dst, m)
+	a.keepHeld(was, dst, src1)
+}
+
+// vopStore is a VEX instruction that writes m from src: it may write what a
+// held load read, so every one is forgotten.
+func (a *Buf) vopStore(op byte, pp, mm, w byte, src Reg, m Mem) {
+	a.vopMem(op, pp, mm, w, src, Y0, m)
+	a.heldOK = 0
 }
 
 func (a *Buf) VPDPBUSD(dst, src1, src2 Reg) { a.vop(0x50, p66, m0F38, 0, dst, src1, src2) }
@@ -286,14 +326,16 @@ func (a *Buf) VPSLLDMem(dst, src Reg, m Mem) { a.vopMem(0xF2, p66, m0F, 0, dst, 
 func (a *Buf) VPSRADMem(dst, src Reg, m Mem) { a.vopMem(0xE2, p66, m0F, 0, dst, src, m) }
 
 func (a *Buf) vshiftImm(op byte, ext, dst, src Reg, imm byte) {
+	was := a.heldOK
 	a.vex(Reg(ext), dst, src, noIndex, true, p66, m0F, 0)
 	a.u8(op)
 	a.modrmReg(Reg(ext), src)
 	a.u8(imm)
+	a.keepHeld(was, dst, src)
 }
 
 func (a *Buf) VMOVDQULoad(dst Reg, m Mem)  { a.vopMem(0x6F, pF3, m0F, 0, dst, Y0, m) }
-func (a *Buf) VMOVDQUStore(m Mem, src Reg) { a.vopMem(0x7F, pF3, m0F, 0, src, Y0, m) }
+func (a *Buf) VMOVDQUStore(m Mem, src Reg) { a.vopStore(0x7F, pF3, m0F, 0, src, m) }
 
 func (a *Buf) VPBROADCASTD(dst Reg, m Mem)  { a.vopMem(0x58, p66, m0F38, 0, dst, Y0, m) }
 func (a *Buf) VPBROADCASTDReg(dst, src Reg) { a.vop(0x58, p66, m0F38, 0, dst, Y0, src) }
@@ -529,7 +571,13 @@ func (a *Buf) VZEROUPPER() {
 	a.u8(0x77)
 }
 
+// MOVLoad loads dst from m, or nothing where dst still holds that load. It
+// writes dst alone: what dst held goes, and every load read through it.
 func (a *Buf) MOVLoad(dst Reg, m Mem) {
+	if a.heldOK&(1<<dst) != 0 && a.held[dst] == m {
+		return
+	}
+	was := a.heldOK
 	idx := noIndex
 	if m.hasIndex() {
 		idx = m.Index
@@ -537,6 +585,16 @@ func (a *Buf) MOVLoad(dst Reg, m Mem) {
 	a.rex(true, dst, idx, m.Base)
 	a.u8(0x8B)
 	a.modrmMem(dst, m)
+	for i, h := range a.held {
+		if Reg(i) == dst || h.Base == dst || h.hasIndex() && h.Index == dst {
+			was &^= 1 << i
+		}
+	}
+	a.heldOK = was
+	if m.Base != dst && !(m.hasIndex() && m.Index == dst) {
+		a.held[dst] = m
+		a.heldOK |= 1 << dst
+	}
 }
 
 func (a *Buf) CPUID() { a.u8(0x0F); a.u8(0xA2) }
@@ -719,9 +777,12 @@ func (a *Buf) Label() int {
 	return len(a.labels) - 1
 }
 
+// Bind binds label l here, where a jump may arrive with any register
+// holding anything: every held load is forgotten.
 func (a *Buf) Bind(l int) {
 	a.labels[l] = len(a.b)
 	a.patch()
+	a.heldOK = 0
 }
 
 func (a *Buf) JNZ(l int) { a.jcc(0x75, 0x85, l) }
