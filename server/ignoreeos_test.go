@@ -166,7 +166,7 @@ func TestIgnoreEOSRunsToMaxTokensBatched(t *testing.T) {
 // the same generate without ignore_eos ends early; a grammar of two words
 // ends on one of them, with ignore_eos or without.
 func TestIgnoreEOSRunsToTheGrammarsEnd(t *testing.T) {
-	e, lm, _ := loadedEngine(t, instructModel, "inst", LoadOptions{})
+	e, lm, c := loadedEngine(t, instructModel, "inst", LoadOptions{})
 	conv, err := lm.m.ChatIDsTools([]model.ChatMessage{{Role: "user", Content: ignoreEOSQuestion}}, nil, true)
 	if err != nil {
 		t.Fatal(err)
@@ -200,6 +200,29 @@ func TestIgnoreEOSRunsToTheGrammarsEnd(t *testing.T) {
 	if f1.Reason != FinishMaxTokens || f1.CompletionTokens != ignoreEOSMax {
 		t.Fatalf("letters with ignore_eos: %q, finish %v after %d tokens, want max_tokens after %d", long,
 			f1.Reason, f1.CompletionTokens, ignoreEOSMax)
+	}
+	// llama-server's /completion takes the grammar and ignore_eos together.
+	prompt, err := json.Marshal(conv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.Post(c.url+"/completion", "application/json", strings.NewReader(fmt.Sprintf(
+		`{"prompt":%s,"n_predict":%d,"temperature":0,"grammar":%q,"ignore_eos":true}`, prompt, ignoreEOSMax, letters)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out struct {
+		Predicted int    `json:"tokens_predicted"`
+		StopType  string `json:"stop_type"`
+	}
+	if err := json.Unmarshal(b, &out); err != nil || resp.StatusCode != 200 || out.Predicted != ignoreEOSMax ||
+		out.StopType != "limit" {
+		t.Fatalf("/completion, letters with ignore_eos: %d %s, want %d tokens to the limit", resp.StatusCode, b, ignoreEOSMax)
 	}
 	for _, ignore := range []bool{false, true} {
 		txt, f := run(`root ::= "Paris" | "London"`, ignore)

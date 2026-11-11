@@ -805,10 +805,6 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 		}
 	}
 	o.Grammar = set.Grammar
-	if o.IgnoreEOS && o.Grammar != "" {
-		llFailErr(w, fmt.Errorf("%w: ignore_eos with a grammar", ErrInvalid))
-		return
-	}
 	if err := c.b.BindTarget(&o, "", info.ID); err != nil {
 		llFailErr(w, err)
 		return
