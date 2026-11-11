@@ -1514,12 +1514,13 @@ func (x *ToolCall) GetArguments() string {
 	return ""
 }
 
-// ChatImage is one picture: its encoded bytes, PNG, JPEG, WebP or GIF (its
-// first frame), within the server's byte and pixel limits.
+// ChatImage is one picture: its encoded bytes, PNG, JPEG, WebP, GIF (its
+// first frame), BMP or TIFF, within the server's byte and pixel limits.
 type ChatImage struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Data  []byte                 `protobuf:"bytes,1,opt,name=data,proto3" json:"data,omitempty"`
-	// The declared media type (image/png, image/jpeg, image/webp, image/gif);
+	// The declared media type (image/png, image/jpeg, image/webp, image/gif,
+	// image/bmp, image/tiff);
 	// empty takes the bytes' own. A declared type the bytes are not is refused.
 	MediaType string `protobuf:"bytes,2,opt,name=media_type,json=mediaType,proto3" json:"media_type,omitempty"`
 	// The picture by reference instead of by bytes, exclusive with `data`: a

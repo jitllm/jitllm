@@ -176,7 +176,7 @@ print(msg.content[0].text)
 
 ## Pictures
 
-On a model converted with its vision projector (`jitllm convert model.gguf mmproj.gguf out.jlm`), a chat request may carry pictures: `image_url` content parts on `/v1/chat/completions`, `image` blocks on `/v1/messages`, and `images` on a Connect `ChatMessage`. PNG, JPEG, WebP and GIF (its first frame) are taken, inline as base64:
+On a model converted with its vision projector (`jitllm convert model.gguf mmproj.gguf out.jlm`), a chat request may carry pictures: `image_url` content parts on `/v1/chat/completions`, `image` blocks on `/v1/messages`, and `images` on a Connect `ChatMessage`. PNG, JPEG, WebP, GIF (its first frame), BMP and TIFF are taken, inline as base64:
 
 ```json
 {"model": "smolvlm", "messages": [{"role": "user", "content": [

@@ -138,7 +138,7 @@ reply was cut by a stop string inside a round refuses `continue_session`.
 Pictures: on a model whose container carries a vision tower, a chat request
 may carry pictures -- OpenAI `image_url` content parts on
 `/v1/chat/completions`, Anthropic `image` blocks on `/v1/messages`. PNG, JPEG,
-WebP and GIF (its first frame) are decoded, inline as a `data:` URL
+WebP, GIF (its first frame), BMP and TIFF are decoded, inline as a `data:` URL
 (`data:image/png;base64,...`) or an Anthropic `base64` source whose
 `media_type` must match the bytes. The pictures keep the order the client sent
 them and go where the model's own chat template puts its image markers (a

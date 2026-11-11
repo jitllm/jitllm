@@ -815,8 +815,8 @@ export const ToolCallSchema: GenMessage<ToolCall> = /*@__PURE__*/
   messageDesc(file_jitllm_v1_model, 19);
 
 /**
- * ChatImage is one picture: its encoded bytes, PNG, JPEG, WebP or GIF (its
- * first frame), within the server's byte and pixel limits.
+ * ChatImage is one picture: its encoded bytes, PNG, JPEG, WebP, GIF (its
+ * first frame), BMP or TIFF, within the server's byte and pixel limits.
  *
  * @generated from message jitllm.v1.ChatImage
  */
@@ -827,7 +827,8 @@ export type ChatImage = Message<"jitllm.v1.ChatImage"> & {
   data: Uint8Array;
 
   /**
-   * The declared media type (image/png, image/jpeg, image/webp, image/gif);
+   * The declared media type (image/png, image/jpeg, image/webp, image/gif,
+   * image/bmp, image/tiff);
    * empty takes the bytes' own. A declared type the bytes are not is refused.
    *
    * @generated from field: string media_type = 2;
