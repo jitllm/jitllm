@@ -87,6 +87,10 @@ type Instance struct {
 	// device it opened (engineState.ownCPU); the instances it makes itself
 	// share it.
 	root bool
+	// draft is the draft session over the prediction block the instance's
+	// speculations share (specDraft), made for the device draftOn.
+	draft   *Instance
+	draftOn nn.LayerDevice
 	// mu is held by a call running on the instance: sessions leasing it run
 	// one call at a time, or together as one step's rows (StepRuns).
 	mu sync.Mutex
@@ -764,6 +768,10 @@ func (s *Instance) dev() nn.LayerDevice {
 func (s *Instance) Close() error {
 	if s.own != nil {
 		s.Session = s.own
+	}
+	if s.draft != nil {
+		s.draft.Close()
+		s.draft = nil
 	}
 	s.tower.close()
 	s.audio.close()

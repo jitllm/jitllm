@@ -43,9 +43,17 @@ func specKeepsTheDistribution(t *testing.T, m *model.Model, temp, topP float64, 
 	samp := func(seed int64) *Sampler {
 		return &Sampler{Temp: temp, TopK: topK, TopP: topP, Seed: seed}
 	}
+	// Each arm's instance is made once and reset between draws: an
+	// instance is a composition, a draw only a history.
+	pst := testInstance(t, m, len(prompt)+8, io...)
+	defer pst.Close()
+	tst := testInstance(t, m, len(prompt)+16, io...)
+	defer tst.Close()
+	sst := testInstance(t, m, len(prompt)+16, io...)
+	defer sst.Close()
 	plain := func(seed int64) []int32 {
-		st := testInstance(t, m, len(prompt)+8, io...)
-		defer st.Close()
+		st := pst
+		st.Reset()
 		sm := samp(seed)
 		lg, err := st.Prefill(prompt)
 		if err != nil {
@@ -74,8 +82,8 @@ func specKeepsTheDistribution(t *testing.T, m *model.Model, temp, topP float64, 
 	// acceptance ratio and residual decide the third token -- the one a
 	// violation must move.
 	trunkAfter := func(ctx []int32) []float32 {
-		st := testInstance(t, m, len(prompt)+len(ctx)+2, io...)
-		defer st.Close()
+		st := tst
+		st.Reset()
 		lg, err := st.Prefill(append(append([]int32(nil), prompt...), ctx...))
 		if err != nil {
 			t.Fatal(err)
@@ -83,8 +91,8 @@ func specKeepsTheDistribution(t *testing.T, m *model.Model, temp, topP float64, 
 		return append([]float32(nil), lg...)
 	}
 	spec := func(seed int64, fault specFault) ([]int32, SpecStats) {
-		st := testInstance(t, m, len(prompt)+16, io...)
-		defer st.Close()
+		st := sst
+		st.Reset()
 		sp, err := st.Speculate(WithSpecDraft(2))
 		if err != nil {
 			t.Fatal(err)

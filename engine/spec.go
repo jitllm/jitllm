@@ -310,7 +310,7 @@ const (
 // block. A device the session is on is attached to the draft as well, so the
 // prediction block runs where the trunk does when it fits.
 func (s *Instance) Speculate(opts ...SpecOption) (*Speculator, error) {
-	m, c := s.m, s.c
+	c := s.c
 	var o specOpts
 	for _, f := range opts {
 		f(&o)
@@ -338,18 +338,11 @@ func (s *Instance) Speculate(opts ...SpecOption) (*Speculator, error) {
 		// where the trunk can verify, and the round's last token -- decided,
 		// not yet fed -- has its draft row at the position the trunk will feed
 		// it at, which on a full context is one past the trunk's last.
-		d, err := newInstanceOver(m, s.eng, s.fr, s.opt, m.Cfg, s.maxSeq+1, c.NLayer, c.NLayer+1, nil)
+		d, err := s.specDraft()
 		if err != nil {
 			return nil, err
 		}
 		sp.d = d
-		sp.d.relocate = false
-		if s.device != nil {
-			if err := sp.d.SetDevice(s.device); err != nil {
-				sp.d.Close()
-				return nil, err
-			}
-		}
 	}
 	sp.mode = sp.opt.rollback
 	if sp.mode == SpecRollbackAuto {
@@ -389,12 +382,38 @@ func (sp *Speculator) Stats() SpecStats {
 	return st
 }
 
-// Close releases the draft session. The trunk session is the caller's.
-func (sp *Speculator) Close() error {
-	if sp.d == nil {
-		return nil
+// Close ends the Speculator. Its draft session is the trunk's, kept for the
+// trunk's next speculation (Instance.specDraft), and the trunk is the
+// caller's.
+func (sp *Speculator) Close() error { return nil }
+
+// specDraft is the instance's draft session over its prediction block, made
+// at its first speculation and reset for each after, so a speculation
+// composes nothing once the instance has drafted. It runs where the trunk
+// does: one made for another device is made again.
+func (s *Instance) specDraft() (*Instance, error) {
+	if s.draft != nil && s.draftOn == s.device {
+		s.draft.Reset()
+		return s.draft, nil
 	}
-	return sp.d.Close()
+	if s.draft != nil {
+		s.draft.Close()
+		s.draft = nil
+	}
+	m, c := s.m, s.c
+	d, err := newInstanceOver(m, s.eng, s.fr, s.opt, m.Cfg, s.maxSeq+1, c.NLayer, c.NLayer+1, nil)
+	if err != nil {
+		return nil, err
+	}
+	d.relocate = false
+	if s.device != nil {
+		if err := d.SetDevice(s.device); err != nil {
+			d.Close()
+			return nil, err
+		}
+	}
+	s.draft, s.draftOn = d, s.device
+	return d, nil
 }
 
 // Logits is the row the i-th token of the last Start or Next was drawn from,
