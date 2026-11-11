@@ -6816,6 +6816,69 @@ and `PrepLayer` is called from `offerRange` and nowhere else in the package.
   transposes, the widening and the rest of the pixel path went to generated
   code later: "Image preprocessing is generated code".)
 
+### Five towers' models from the pixels, held to transformers
+
+The per-family runtime's deletion (16caf8b4f) took every gate that held a
+text model and its tower together to transformers' logits for Gemma 4,
+Gemma 3n, Llama 4, Phi-4 and Pixtral. `TestStatedTowerMatchesTransformersEndToEnd`
+is their successor: the reference's prompt around one picture, the picture
+encoded by the prefill through the stated tower, its rows attending as the
+container states, the continuation decoded, on the CPU device and on each
+card with every text and tower block placed. Each fixture's golden
+(scripts/*visiongold.py, pixtralgold.py) carries transformers' logits at each
+decoded position and the tower's rows at f32 and at the engine's int8
+activations; the bound is the Qwen2-VL gate's, twice the worse of the
+reference's int8 rows and eight draws of the tower's own error carried
+through the text model.
+
+What the first runs found:
+
+- **Gemma 4's pictures were causal on every layer.** The converter stated
+  the layers a picture's rows see each other on (`BidirLayers`, the sliding
+  ones of the 26B and 31B: StateRevision) and never stated the tower's span
+  bidirectional, which is what makes the prefill read them. The gate's first
+  run stopped there (the reference's picture attends both ways, the container
+  states its rows causal), and rows run causal read 1.5 from transformers'
+  logits (the causal violation below). `gemma4vTower` states the span
+  bidirectional where the text model states the layers, and the E-models'
+  pictures stay causal, as transformers runs both. A container converted
+  before that states its pictures causal; the suite's freshness check
+  reconverts one (`TestACausalPictureBesideBidirectionalLayersIsReconverted`),
+  and a container with no source beside it is converted again by hand.
+- **A flip at a near tie is not a flip.** Llama 4's fixture decodes rows
+  whose two leading logits sit 0.07 apart; the CPU device and both cards took
+  the second there, as the draws of the tower's own error do. A flip counts
+  only past `tieMargin` (0.5 of a logit, forward_test.go's), and the rest are
+  named in the log.
+- **A chained tower places its parts, not its blocks.** Gemma 3n's tower is
+  MobileNet-V5 chained to the text model (`PlaceTowerChain`); the gate counted
+  the tower's blocks on the card and found none. It counts what the chain
+  placed (`towerOnCard`).
+- **Gemma 4's rows attend both ways on half the layers, and the violation
+  that makes them attend both ways on every layer moved them 0.23-0.25
+  against a bound of 0.11 from the clean reference** -- but against
+  transformers' own run under that mask (scripts/gemma4visiongold.py
+  `--every`, `logits_every`) it reads 3.7e-2 on the CPU device, 4.7e-2 under
+  CUDA and 4.9e-2 under Vulkan. Both sides are asserted: past the bound from
+  the clean reference, within it from the reference run the same way. The
+  causal violation is held the same way (`logits_causal`).
+
+Box 43, the CPU device and a V100 under CUDA and under Vulkan, every text and
+tower block on the card; seven decoded rows each, the logits' worst NMSE
+against transformers, the bound twice the worse of the reference's int8 rows
+and the draws:
+
+| fixture | rows | rows vs f32 | CPU / CUDA / Vulkan | bound | violations |
+|---|---|---|---|---|---|
+| synth-gemma4v | 266 | 1.2e-4 | 2.6e-2 / 3.4e-2 / 3.5e-2 | 0.112 | reversed 18x, causal 14x, both ways on every layer 2.1-2.2x |
+| synth-gemma3nv | 257 | 7.8e-4 | 1.0e-3 / 9.4e-4 / 8.0e-4 | 1.6e-3 | reversed 419x |
+| synth-llama4v | 85 | 1.2e-5 | 1.5e-2 / 1.1e-2 / 1.5e-2 | 2.1e-2 | reversed 105x, global tile first 19x |
+| synth-phi4v | 247 | 3.6e-4 | 3.5e-3 / 2.9e-3 / 3.4e-3 | 2.6e-2 | reversed 92x |
+| synth-pixtral | 39 | 1.3e-3 | 1.0e-2 / 2.8e-3 / 7.3e-3 | 0.157 | reversed 13x, without breaks 8x |
+
+Gemma 4's one argmax flip on the CPU device and under CUDA sits within the
+two its draws make; every other arm flips none past a near tie.
+
 ## Pixtral / Mistral 3 vision: Qwen2.5-VL's kit with three pieces of its own
 
 Mistral Small 3.x, Ministral 3 and Pixtral-12B share llama.cpp's projector
