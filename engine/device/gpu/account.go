@@ -8,7 +8,14 @@ func (g *GPU) AccountOn(dev string) (nn.Account, bool) {
 	for _, d := range g.devs {
 		if d.name == dev {
 			s := d.stats()
-			return nn.Account{Steps: s.Steps, Forms: s.BlockForms, Asks: int64(s.FormAsks), Composing: s.FormTook, FormErr: s.FormErr}, true
+			a := nn.Account{Steps: s.Steps, Forms: s.BlockForms, Asks: int64(s.FormAsks), Composing: s.FormTook, FormErr: s.FormErr}
+			d.mu.Lock()
+			r := d.composer
+			d.mu.Unlock()
+			if r != nil {
+				a.Passes = r.PassTimes()
+			}
+			return a, true
 		}
 	}
 	return nn.Account{}, false

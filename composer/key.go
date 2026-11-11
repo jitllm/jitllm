@@ -4,10 +4,12 @@ import (
 	"cmp"
 	"fmt"
 	"hash/fnv"
+	"maps"
 	"math"
 	"reflect"
 	"slices"
 	"sync"
+	"time"
 )
 
 // Key names a request by everything it is formed from: its graph (every
@@ -25,6 +27,22 @@ type formCache struct {
 	mu sync.Mutex
 	m  map[Key]formed
 	n  int64
+	// took is the time each pass took over the kernels it was given, by
+	// its name, and the lowerings' as "lower", under tmu: a form runs its
+	// passes holding mu.
+	tmu  sync.Mutex
+	took map[string]time.Duration
+}
+
+// clock adds d to what the step named took; a registry with no cache
+// counts nothing.
+func (c *formCache) clock(name string, d time.Duration) {
+	if c == nil {
+		return
+	}
+	c.tmu.Lock()
+	c.took[name] += d
+	c.tmu.Unlock()
 }
 
 type formed struct {
@@ -33,7 +51,21 @@ type formed struct {
 	err   error
 }
 
-func newFormCache() *formCache { return &formCache{m: map[Key]formed{}} }
+func newFormCache() *formCache {
+	return &formCache{m: map[Key]formed{}, took: map[string]time.Duration{}}
+}
+
+// PassTimes is the time each pass took over every form r and its copies
+// made, by the pass's name, and the lowerings' as "lower": where composing
+// went. Nil where r keeps no cache.
+func (r *Registry) PassTimes() map[string]time.Duration {
+	if r.cache == nil {
+		return nil
+	}
+	r.cache.tmu.Lock()
+	defer r.cache.tmu.Unlock()
+	return maps.Clone(r.cache.took)
+}
 
 // keyOf is req's Key and the words it hashes: req, then the profile and the
 // lowering of its device and the registry's decompositions, each walked

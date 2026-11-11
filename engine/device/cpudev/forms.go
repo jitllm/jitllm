@@ -34,6 +34,18 @@ func (c *Forms) Asks() int64 { return c.asks.Load() }
 // was not formed yet, finding what was.
 func (c *Forms) Took() time.Duration { return time.Duration(c.took.Load()) }
 
+// PassTimes is where Took went: each composer pass's time over every form
+// asked of c, and the lowerings' (composer.Registry.PassTimes).
+func (c *Forms) PassTimes() map[string]time.Duration {
+	c.mu.Lock()
+	reg := c.reg
+	c.mu.Unlock()
+	if reg == nil {
+		return nil
+	}
+	return reg.PassTimes()
+}
+
 // Of is request req's form, its graph gr at rows rows (BuildForm's apart
 // and whole): asked of the registry keeping histories at f32 where f32 is
 // set, and forming no int8 or split kernels where float is.

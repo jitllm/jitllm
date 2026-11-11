@@ -3,6 +3,7 @@ package composer
 import (
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/graph"
@@ -88,7 +89,9 @@ func (r *Registry) form(req Request) ([]Code, error) {
 	if err != nil {
 		return nil, err
 	}
+	t0 := time.Now()
 	codes, err := r.Lower(ks, req.Device)
+	r.cache.clock("lower", time.Since(t0))
 	if err != nil {
 		return nil, err
 	}
@@ -138,7 +141,7 @@ func (r *Registry) formWith(req Request, prof Profile) ([]*Kernel, error) {
 			k.Capacity = liveOf(p, req.Step, req.Graph)
 			ks = append(ks, k)
 		}
-		ks, err = prof.run(ks, req.Device)
+		ks, err = prof.counted(ks, req.Device, r.cache)
 		if sp.splitRefused(err) {
 			continue
 		}
