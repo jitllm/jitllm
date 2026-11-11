@@ -26,13 +26,15 @@ import (
 // selection names and the grouped rows projected on the matrix unit, over
 // the packed formats of the served mixtures, a selection that leaves
 // experts without a pair and gives one most of them, at calls of 1 to the
-// capacity's rows, and a bank of as many experts as the capacity's rows
-// (olmoe's 64 at a 64-row chunk), whose grouping no call's rows may cut.
-// Each pair must match the oracle's matvec of its row
+// capacity's rows, and a bank of 64 experts at 512 rows, whose grouping no
+// call's rows may cut. Each pair must match the oracle's matvec of its row
 // against its expert's sheet, a call must write no pair of a row past its
-// own and nothing past the result, and a kernel must multiply tiles. Two
-// violations must fail: every pair's expert moved by one, and a pair's
-// result against the next pair's reference.
+// own and nothing past the result, and a kernel must multiply tiles. The
+// same 64 experts at 64 rows of two pairs would pad each pair to 33
+// grouped rows, past groupSlack: the per-pair form runs there, multiplying
+// no tile, held to the oracle the same way. Two violations must fail:
+// every pair's expert moved by one, and a pair's result against the next
+// pair's reference.
 func TestComposedGPUExperts(t *testing.T) {
 	testlock.GPU(t)
 	devs, closeAll := matrixDevices(t)
@@ -52,8 +54,9 @@ func TestComposedGPUExperts(t *testing.T) {
 		d := devs[name]
 		for _, bank := range []struct {
 			capacity, E, K int
-			tiled          bool
-		}{{100, 8, 256, false}, {64, 64, 256, false}, {100, 8, 2048, false}, {100, 8, 256, true}} {
+			tiled, grouped bool
+		}{{100, 8, 256, false, true}, {512, 64, 256, false, true}, {64, 64, 256, false, false}, {100, 8, 2048, false, true},
+			{100, 8, 256, true, true}} {
 			capacity, E, K, tiled := bank.capacity, bank.E, bank.K, bank.tiled
 			calls := []int{1, 17, 64}
 			if capacity != 64 {
@@ -129,8 +132,11 @@ func TestComposedGPUExperts(t *testing.T) {
 								}
 							}
 						}
-						if tiles == 0 {
+						if bank.grouped && tiles == 0 {
 							t.Fatalf("%s: no kernel was formed on the matrix unit", what)
+						}
+						if !bank.grouped && tiles > 0 {
+							t.Fatalf("%s: %d experts at %d rows grouped onto the matrix unit past groupSlack", what, E, capacity)
 						}
 						if tiled && byRow == 0 {
 							t.Fatalf("%s: the tiled input's halves are not its %d rows'", what, capacity)
@@ -194,9 +200,21 @@ func TestComposedGPUExperts(t *testing.T) {
 							}
 							return res[:L*P*rows]
 						}
+						// The per-pair form is the int8 matvec a pair at a time
+						// (expertInt8) over the step's activation window where the
+						// format takes one, else the decoded sheets': held to
+						// whichever of the two references it computes.
+						ref8 := ref
+						if !bank.grouped {
+							ref8 = make([]float32, len(ref))
+							for s := range capacity * P {
+								copy(ref8[s*rows:], int8Projection(t, typ, sheets[sels[s]], xs[s*K:(s+1)*K], rows, K, 32, false))
+							}
+						}
 						worst := 0.0
 						for _, L := range calls {
-							e := gpuNMSE(run(L), ref[:L*P*rows])
+							got := run(L)
+							e := min(gpuNMSE(got, ref[:L*P*rows]), gpuNMSE(got, ref8[:L*P*rows]))
 							if math.IsNaN(e) || !(e < 2e-6) {
 								t.Fatalf("%s: a call of %d rows reads NMSE %.3e against the oracle", what, L, e)
 							}
@@ -219,7 +237,8 @@ func TestComposedGPUExperts(t *testing.T) {
 						ran++
 					}
 				}
-				t.Logf("%s: %d expert matvecs grouped onto the matrix unit, held to the oracle at calls of %v rows", name, ran, calls)
+				t.Logf("%s: %d expert matvecs (grouped onto the matrix unit: %v) held to the oracle at calls of %v rows", name, ran,
+					bank.grouped, calls)
 			})
 		}
 	}
