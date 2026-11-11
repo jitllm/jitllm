@@ -65,7 +65,7 @@ func (s *Instance) Sample(smp *Sampler, logits []float32) (int32, error) {
 		return 0, s.sampleDeclined("the greedy token")
 	}
 	u := float32(smp.uniform())
-	if t, ok := s.draw(logits, smp, u); ok {
+	if t, ok := s.draw(logits, smp, u, smp.xtcDraw()); ok {
 		return t, nil
 	}
 	return 0, s.sampleDeclined("the draw")
@@ -164,11 +164,12 @@ func (s *Instance) greedy(logits []float32) (int32, bool) {
 	return s.heads.Greedy(logits)
 }
 
-// drawArgs is smp's draw as a device reads it.
-func (s *Instance) drawArgs(smp *Sampler) nn.DrawArgs {
+// drawArgs is smp's draw as a device reads it, at XTC's threshold xtc (0
+// for none) and its mixture mix (a distribution's).
+func (s *Instance) drawArgs(smp *Sampler, xtc, mix float32) nn.DrawArgs {
 	topp, minp := smp.cuts()
 	a := nn.DrawArgs{TopK: smp.TopK, InvTemp: float32(1 / smp.Temp), TopP: topp, MinP: minp, Typical: float32(smp.TypicalP),
-		Penalty: smp.penalties()}
+		XTC: xtc, XTCMix: mix, Penalty: smp.penalties()}
 	if !a.Penalty.Off() {
 		a.Window = smp.window(s.c.NVocab)
 	}
@@ -177,11 +178,11 @@ func (s *Instance) drawArgs(smp *Sampler) nn.DrawArgs {
 
 // draw is smp's sampled token over logits at the uniform u smp drew for the
 // call (nn.HeadDevice.Draw), or false where none serves it.
-func (s *Instance) draw(logits []float32, smp *Sampler, u float32) (int32, bool) {
+func (s *Instance) draw(logits []float32, smp *Sampler, u, xtc float32) (int32, bool) {
 	if s.heads == nil {
 		return 0, false
 	}
-	return s.heads.Draw(logits, s.drawArgs(smp), u)
+	return s.heads.Draw(logits, s.drawArgs(smp, xtc, 0), u)
 }
 
 // distOf fills d with the distribution smp draws from over logits: a top-k
@@ -196,7 +197,8 @@ func (s *Instance) distOf(logits []float32, smp *Sampler, d *specDist) bool {
 	if !bounded {
 		d.pall = grow32(d.pall, n)
 	}
-	dense, ids, vals, ok := s.heads.Dist(logits, s.drawArgs(smp), d.pall)
+	thr, mix := smp.xtc()
+	dense, ids, vals, ok := s.heads.Dist(logits, s.drawArgs(smp, thr, mix), d.pall)
 	if !ok {
 		return false
 	}

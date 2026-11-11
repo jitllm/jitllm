@@ -10,14 +10,15 @@ import (
 	"github.com/jitllm/jitllm/internal/oracle"
 )
 
-// TestComposedCPUSampleTypical holds the draws with typical-p -- a top-k
+// TestComposedCPUSampleTypical holds the draws with typical-p and XTC -- a top-k
 // draw's walk, the cut with no top-k and its top-k variant past the walk's
 // bound (graph.SampleCut's Typical forms) -- on the CPU device to their
 // definition (internal/oracle): llama.cpp's locally typical cut, the
 // candidates whose surprise is nearest the entropy until the mass before one
-// passes typical-p, then top-p and min-p over the survivors renormalized.
-// Every decisive draw is the definition's, and typical-p moves the token on a
-// share of them: the gate sees the cut.
+// passes typical-p, then top-p and min-p over the survivors renormalized, then
+// XTC's cut of all but the least of those past its threshold. Every decisive
+// draw is the definition's, and typical-p moves the token on a share of them,
+// XTC on a share of its: the gate sees both cuts.
 func TestComposedCPUSampleTypical(t *testing.T) {
 	const n, K = 300, 16
 	type arm struct {
@@ -51,7 +52,7 @@ func TestComposedCPUSampleTypical(t *testing.T) {
 			f := func(x float64) uint32 { return math.Float32bits(float32(x)) }
 			inf := math.Inf(1)
 			rng := rand.New(rand.NewSource(43))
-			decisive, cases, moved := 0, 0, 0
+			decisive, cases, moved, xtcs, xmoved := 0, 0, 0, 0, 0
 			for c := range 400 {
 				l := make([]float32, n)
 				for i := range l {
@@ -73,6 +74,10 @@ func TestComposedCPUSampleTypical(t *testing.T) {
 					minp = float64(float32(0.05 * rng.Float64()))
 				}
 				typ := float64(float32(0.2 + 0.75*rng.Float64()))
+				xtc := inf
+				if c%3 == 0 {
+					xtc = float64(float32(0.02 + 0.2*rng.Float64()))
+				}
 				u := float64(float32(rng.Float64()))
 				lw := make([]uint32, n)
 				for i, v := range l {
@@ -80,23 +85,26 @@ func TestComposedCPUSampleTypical(t *testing.T) {
 				}
 				vals := map[graph.ValueID][]uint32{in["logits"]: lw, in["sample.window"]: make([]uint32, n),
 					in["sample.penalty"]: {f(1), 0, 0}, tokV: {0}}
-				var want, plain uint32
+				var want, plain, noX uint32
 				var margin float64
 				switch {
 				case a.walk:
-					want, margin = oracle.SampleWalk(l, K, k, invT, topp, minp, typ, u)
-					plain, _ = oracle.SampleWalk(l, K, k, invT, topp, minp, inf, u)
-					vals[in["sample.walk"]] = []uint32{f(float64(k)), f(invT), f(topp), f(minp), f(u), f(typ)}
+					want, margin = oracle.SampleWalk(l, K, k, invT, topp, minp, typ, xtc, u)
+					plain, _ = oracle.SampleWalk(l, K, k, invT, topp, minp, inf, xtc, u)
+					noX, _ = oracle.SampleWalk(l, K, k, invT, topp, minp, typ, inf, u)
+					vals[in["sample.walk"]] = []uint32{f(float64(k)), f(invT), f(topp), f(minp), f(u), f(typ), f(xtc), 0}
 				case a.topK:
-					want, margin = oracle.SampleWalk(l, n, k, invT, topp, minp, typ, u)
-					plain, _ = oracle.SampleWalk(l, n, k, invT, topp, minp, inf, u)
+					want, margin = oracle.SampleWalk(l, n, k, invT, topp, minp, typ, xtc, u)
+					plain, _ = oracle.SampleWalk(l, n, k, invT, topp, minp, inf, xtc, u)
+					noX, _ = oracle.SampleWalk(l, n, k, invT, topp, minp, typ, inf, u)
 					vals[in["sample.ids"]] = append([]uint32(nil), ids...)
-					vals[in["sample.cut"]] = []uint32{f(invT), f(topp), f(minp), f(u), f(float64(k)), f(typ)}
+					vals[in["sample.cut"]] = []uint32{f(invT), f(topp), f(minp), f(u), f(float64(k)), f(typ), f(xtc), 0}
 				default:
-					want, margin = oracle.SampleCut(l, nil, 1, float32(invT), topp, minp, typ, u)
-					plain, _ = oracle.SampleCut(l, nil, 1, float32(invT), topp, minp, inf, u)
+					want, margin = oracle.SampleCut(l, nil, 1, float32(invT), topp, minp, typ, xtc, u)
+					plain, _ = oracle.SampleCut(l, nil, 1, float32(invT), topp, minp, inf, xtc, u)
+					noX, _ = oracle.SampleCut(l, nil, 1, float32(invT), topp, minp, typ, inf, u)
 					vals[in["sample.ids"]] = append([]uint32(nil), ids...)
-					vals[in["sample.cut"]] = []uint32{f(invT), f(topp), f(minp), f(u), f(typ)}
+					vals[in["sample.cut"]] = []uint32{f(invT), f(topp), f(minp), f(u), f(typ), f(xtc), 0}
 				}
 				if err := runCPUValues(hostArm(), codes, g, vals, [3][]uint32{}); err != nil {
 					t.Fatal(err)
@@ -109,6 +117,12 @@ func TestComposedCPUSampleTypical(t *testing.T) {
 				if want != plain {
 					moved++
 				}
+				if !math.IsInf(xtc, 1) {
+					xtcs++
+					if want != noX {
+						xmoved++
+					}
+				}
 				if got := vals[tokV][0]; got != want {
 					t.Fatalf("case %d (k %d, 1/T %.3f, top-p %.4f, min-p %.4f, typical-p %.4f, u %.6f): drew %d, want %d (margin %.3g)",
 						c, k, invT, topp, minp, typ, u, got, want, margin)
@@ -117,10 +131,10 @@ func TestComposedCPUSampleTypical(t *testing.T) {
 			if decisive < cases*7/10 {
 				t.Fatalf("%d of %d draws decisive: the comparison sees too little", decisive, cases)
 			}
-			if moved < decisive/10 {
-				t.Fatalf("typical-p moved %d of %d decisive draws: the gate cannot see the cut", moved, decisive)
+			if moved < decisive/10 || xmoved < xtcs/10 {
+				t.Fatalf("typical-p moved %d of %d decisive draws, XTC %d of %d: the gate cannot see a cut", moved, decisive, xmoved, xtcs)
 			}
-			t.Logf("%d of %d draws decisive and right, %d of them moved by typical-p", decisive, cases, moved)
+			t.Logf("%d of %d draws decisive and right, %d of them moved by typical-p, %d of %d by XTC", decisive, cases, moved, xmoved, xtcs)
 		})
 	}
 }

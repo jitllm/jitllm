@@ -51,7 +51,7 @@ func TestComposedCPUSampleProb(t *testing.T) {
 				ids[i] = uint32(i)
 			}
 			f := math.Float32bits
-			typ := float32(math.Inf(1))
+			typ, xtc, mix := float32(math.Inf(1)), float32(math.Inf(1)), float32(0)
 			prob := func(l []float32, hist []int, pen, invT float32, k int, topp, minp float32, x int) float64 {
 				lw := make([]uint32, n)
 				for i, v := range l {
@@ -65,12 +65,12 @@ func TestComposedCPUSampleProb(t *testing.T) {
 					vals[o] = make([]uint32, g.Values[o].Width)
 				}
 				if a.k {
-					vals[in["sample.walk"]] = []uint32{f(float32(k)), f(invT), f(topp), f(minp), 0, f(typ)}
+					vals[in["sample.walk"]] = []uint32{f(float32(k)), f(invT), f(topp), f(minp), 0, f(typ), f(xtc), f(mix)}
 				} else {
 					vals[in["sample.ids"]] = append([]uint32(nil), ids...)
 					vals[in["sample.cut"]] = []uint32{f(invT), f(topp), f(minp), 0}
 					if a.typ {
-						vals[in["sample.cut"]] = append(vals[in["sample.cut"]], f(typ))
+						vals[in["sample.cut"]] = append(vals[in["sample.cut"]], f(typ), f(xtc), f(mix))
 					}
 				}
 				if err := runCPUValues(hostArm(), codes, g, vals, [3][]uint32{}); err != nil {
@@ -128,8 +128,12 @@ func TestComposedCPUSampleProb(t *testing.T) {
 				}
 				if a.typ {
 					typ = float32(0.2 + 0.75*rng.Float64())
+					xtc, mix = float32(math.Inf(1)), 0
+					if c%2 == 1 {
+						xtc, mix = float32(0.02+0.2*rng.Float64()), float32(rng.Float64())
+					}
 				}
-				want, margin := oracle.SampleProb(l, hist, pen, invT, k, topp, minp, float64(typ), x)
+				want, margin := oracle.SampleProb(l, hist, pen, invT, k, topp, minp, float64(typ), float64(xtc), float64(mix), x)
 				if margin < 1e-4 {
 					continue
 				}

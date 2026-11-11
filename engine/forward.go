@@ -3,6 +3,7 @@ package engine
 import (
 	"bytes"
 	"fmt"
+	"math"
 	"os"
 	"slices"
 	"sort"
@@ -3069,6 +3070,7 @@ func (s *Instance) ForwardSample(token int32, smp *Sampler) (int32, error) {
 	// The call's one uniform, whichever arm draws with it: the device's
 	// walk, the device's candidates, the CPU's walk or the logits.
 	u := float32(smp.uniform())
+	xtc := smp.xtcDraw()
 	if onDev && smp.TopK > 0 && smp.TopK <= MaxTopK {
 		k := smp.TopK
 		topp, minp := smp.cuts()
@@ -3077,7 +3079,11 @@ func (s *Instance) ForwardSample(token int32, smp *Sampler) (int32, error) {
 		if !h.SamplePenalty.Off() {
 			h.SampleWindow = smp.window(s.c.NVocab)
 		}
-		h.WalkArgs, h.Token = [6]float32{float32(k), float32(1 / smp.Temp), topp, minp, u, smp.typical()}, -1
+		walkXTC := float32(math.Inf(1))
+		if xtc > 0 {
+			walkXTC = xtc
+		}
+		h.WalkArgs, h.Token = [8]float32{float32(k), float32(1 / smp.Temp), topp, minp, u, smp.typical(), walkXTC, 1}, -1
 		defer func() { h.SampleK, h.Sampled = 0, false }()
 	}
 	logits, err := s.Forward(token)
@@ -3090,7 +3096,7 @@ func (s *Instance) ForwardSample(token int32, smp *Sampler) (int32, error) {
 		s.SampledOnDevice++
 		tok = h.Token
 	default:
-		t, ok := s.draw(logits, smp, u)
+		t, ok := s.draw(logits, smp, u, xtc)
 		if !ok {
 			return 0, s.sampleDeclined("the draw")
 		}

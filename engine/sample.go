@@ -12,19 +12,23 @@ import (
 // itself is the composed forms' (Instance.Sample: graph.Sample, SampleWalk,
 // SampleRow and SampleCut), which read the window as a count row.
 //
-// The filters run penalty, top-k, typical-p, top-p, min-p, then the
+// The filters run penalty, top-k, typical-p, top-p, min-p, XTC, then the
 // temperature, llama.cpp's order: typical-p, top-p and min-p cut the
 // candidates' softmax at temperature 1, each over what the one before it
 // left, and the temperature shapes only the draw over what survives them. Equal logits are ordered
 // higher logit first, lower id on a tie.
 type Sampler struct {
-	Temp        float64 // 0 = greedy; llama.cpp's --temp
-	TopK        int     // 0 = disabled
-	TopP        float64 // 0 or 1 = disabled; nucleus
-	MinP        float64 // 0 = disabled; keep tokens above MinP * p(best)
-	TypicalP    float64 // 0 or 1 = disabled; llama.cpp's typical_p
-	RepeatPen   float64 // 1 = disabled
-	RepeatLastN int     // how far back the penalties look; 0 = 64
+	Temp     float64 // 0 = greedy; llama.cpp's --temp
+	TopK     int     // 0 = disabled
+	TopP     float64 // 0 or 1 = disabled; nucleus
+	MinP     float64 // 0 = disabled; keep tokens above MinP * p(best)
+	TypicalP float64 // 0 or 1 = disabled; llama.cpp's typical_p
+	// XTCProbability and XTCThreshold are llama.cpp's XTC: with that
+	// probability a draw cuts the survivors at or above the threshold but
+	// the least; off at probability 0 or a threshold past 0.5.
+	XTCProbability, XTCThreshold float64
+	RepeatPen                    float64 // 1 = disabled
+	RepeatLastN                  int     // how far back the penalties look; 0 = 64
 	// PresencePen and FreqPen are llama.cpp's presence and frequency
 	// penalties over the same window: 0 = disabled.
 	PresencePen, FreqPen float64
@@ -122,6 +126,26 @@ func (s *Sampler) typical() float32 {
 		return float32(s.TypicalP)
 	}
 	return float32(math.Inf(1))
+}
+
+// xtc is XTC's threshold as a draw reads it (nn.DrawArgs.XTC, 0 for none)
+// and its probability, 0 where off. A threshold of 0 reads as the least
+// float above it, which every survivor passes as it passes 0.
+func (s *Sampler) xtc() (thr, p float32) {
+	if s.XTCProbability <= 0 || s.XTCThreshold > 0.5 {
+		return 0, 0
+	}
+	return max(float32(s.XTCThreshold), math.SmallestNonzeroFloat32), float32(min(s.XTCProbability, 1))
+}
+
+// xtcDraw is XTC's threshold for one draw: its chance taken from the
+// stream after the draw's uniform, 0 where it misses or is off.
+func (s *Sampler) xtcDraw() float32 {
+	thr, p := s.xtc()
+	if p == 0 || float32(s.uniform()) > p {
+		return 0
+	}
+	return thr
 }
 
 // seed starts the sampler's stream on first use.
