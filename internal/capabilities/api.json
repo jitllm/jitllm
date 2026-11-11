@@ -161,7 +161,7 @@
         {
           "name": "prompt",
           "type": "array",
-          "note": "a string, an array of strings, token ids, or arrays of token ids; a list cannot stream"
+          "note": "a string, an array of strings, token ids, or arrays of token ids; a list's prompts run in order, prompt p's choices p*n to p*n+n-1"
         },
         {
           "name": "max_tokens",
@@ -171,7 +171,7 @@
         {
           "name": "stream",
           "type": "bool",
-          "note": "SSE frames as the API sends them; one prompt only"
+          "note": "SSE frames as the API sends them"
         },
         {
           "name": "stop",
@@ -612,22 +612,6 @@
       ],
       "when": "tool_choice names a tool the request does not declare",
       "message": "which is not among the request's tools"
-    },
-    {
-      "id": "completions-list-stream",
-      "endpoints": [
-        "/v1/completions"
-      ],
-      "when": "a list of prompts with stream",
-      "message": "a list of prompts cannot be streamed"
-    },
-    {
-      "id": "completions-list-logprobs-n",
-      "endpoints": [
-        "/v1/completions"
-      ],
-      "when": "logprobs or n with a list of prompts",
-      "message": "logprobs and n with a list of prompts are not built"
     },
     {
       "id": "embedding-format",
