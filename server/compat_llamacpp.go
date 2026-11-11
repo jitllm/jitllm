@@ -413,7 +413,7 @@ func (c *compat) llamaApplyTemplate(w http.ResponseWriter, r *http.Request) {
 	}
 	var cms []model.ChatMessage
 	for i, m := range msgs {
-		text, imgs, err := oaContent(m.Content)
+		text, imgs, err := oaContent(m.Content, c.storedFile)
 		if err != nil || len(imgs) > 0 {
 			llFail(w, http.StatusBadRequest, fmt.Sprintf("messages[%d]: content must be text", i), "invalid_request_error")
 			return

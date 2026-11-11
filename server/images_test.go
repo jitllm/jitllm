@@ -201,6 +201,9 @@ func TestImageRefusalsNameThePart(t *testing.T) {
 			"messages[0].content[0] is an image_url part with no image_url.url"},
 		{"/v1/chat/completions", `{"model":"m-1","messages":[{"role":"user","content":[{"type":"input_audio"}]}]}`,
 			`messages[0].content[0] is a "input_audio" part`},
+		{"/v1/chat/completions", `{"model":"m-1","messages":[{"role":"user","content":[
+			{"type":"file","file":{"file_data":"data:application/pdf;base64,JVBERi0=","filename":"a.pdf"}}]}]}`,
+			"messages[0].content[0] is a application/pdf file, and this server reads no PDF"},
 		{"/v1/messages", `{"model":"m-1","max_tokens":4,"messages":[{"role":"user","content":[
 			{"type":"image","source":{"type":"base64","media_type":"image/tiff","data":"` + png64 + `"}}]}]}`,
 			`messages[0].content[0].source has media_type "image/tiff"`},
@@ -260,6 +263,58 @@ func TestADocumentBlockIsTheTurnsText(t *testing.T) {
 		}
 	}
 }
+
+// TestAFileContentPartIsItsText: an OpenAI file part of text -- chat's file
+// object, the responses API's fields on the part, text/plain, markdown or
+// JSON, and a file the Files API holds, named by id -- reaches the chat as its
+// file name and its text, after the turn's text. A stored PDF is refused.
+func TestAFileContentPartIsItsText(t *testing.T) {
+	f := &fakeBackend{tokens: []string{"ok"}, reason: FinishEOS}
+	s := serve(t, filesBackend{f, t.TempDir()})
+	code, up := uploadBatchFile(t, s.URL, "user_data", "the stored body")
+	_, pdf := uploadBatchFile(t, s.URL, "user_data", "%PDF-1.4 x")
+	if code != 200 {
+		t.Fatalf("the upload: %d", code)
+	}
+	for part, want := range map[string]string{
+		`{"type":"file","file":{"file_data":"data:text/plain;base64,dGhlIGJvZHk=","filename":"notes.txt"}}`:         "Read this.\n\nnotes.txt\n\nthe body",
+		`{"type":"input_file","file_data":"data:text/plain;base64,dGhlIGJvZHk=","filename":"notes.txt"}`:            "Read this.\n\nnotes.txt\n\nthe body",
+		`{"type":"file","file":{"file_data":"data:application/json;base64,eyJhIjoxfQ=="}}`:                          "Read this.\n\n{\"a\":1}",
+		`{"type":"file","file":{"file_data":"data:text/markdown;charset=utf-8;base64,IyBIaQ==","filename":"a.md"}}`: "Read this.\n\na.md\n\n# Hi",
+		`{"type":"file","file":{"file_id":"` + up.ID + `"}}`:                                                        "Read this.\n\n" + up.Filename + "\n\nthe stored body",
+	} {
+		resp := post(t, s, "/v1/chat/completions", `{"model":"m-1","messages":[{"role":"user","content":[`+
+			`{"type":"text","text":"Read this."},`+part+`]}]}`)
+		raw, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != 200 {
+			t.Fatalf("%s: %d %s", part, resp.StatusCode, raw)
+		}
+		ch := f.last.Prompt.Chat
+		if ch == nil || len(ch.Messages) == 0 || ch.Messages[len(ch.Messages)-1].Content != want {
+			t.Fatalf("%s: the turn reads %+v, want %q", part, ch, want)
+		}
+	}
+	for part, want := range map[string]string{
+		`{"type":"file","file":{"file_id":"` + pdf.ID + `"}}`: "which is not text, and this server reads no PDF",
+		`{"type":"file","file":{"file_id":"file-none"}}`:      `names file \"file-none\": no such file`,
+	} {
+		resp := post(t, s, "/v1/chat/completions", `{"model":"m-1","messages":[{"role":"user","content":[`+part+`]}]}`)
+		raw, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != 400 || !strings.Contains(string(raw), want) {
+			t.Fatalf("%s: %d %s, want 400 containing %q", part, resp.StatusCode, raw, want)
+		}
+	}
+}
+
+// filesBackend is a fake backend with a Files API store.
+type filesBackend struct {
+	*fakeBackend
+	dir string
+}
+
+func (f filesBackend) BatchDir() string { return f.dir }
 
 func jsonEscape(s string) string {
 	b, _ := json.Marshal(s)
