@@ -25,6 +25,8 @@ import (
 // inline with the context bound (see do and inline).
 type cudaDev struct {
 	allocCount
+	// small is the pieces buffers of smallMax or less are carved from.
+	small smallPool
 	// ctr is what the device counts into (Opts.Counters).
 	ctr *Counters
 	d   *cuda.Device
@@ -943,6 +945,9 @@ func (c *cudaDev) Close() {
 }
 
 func (c *cudaDev) Alloc(n int) (Buf, error) {
+	if n > 0 && n <= smallMax {
+		return c.allocSmall(n)
+	}
 	var b *cuda.Buffer
 	var err error = errCUDAClosed
 	c.do(func() { b, err = c.d.Alloc(n) })
@@ -1085,6 +1090,10 @@ type cudaBuf struct {
 	b   *cuda.Buffer
 	dev *cudaDev
 	acc *counted
+	// piece is the shared piece a small buffer is a slot of, at off; nil
+	// for a buffer of its own.
+	piece *smallPiece
+	off   int
 }
 
 // Write and Read are real device copies here, unlike the mapped backends. That
@@ -1169,6 +1178,12 @@ func (b *cudaBuf) Read(p []byte) error {
 }
 
 func (b *cudaBuf) Free() {
+	if p := b.piece; p != nil {
+		b.piece = nil
+		b.acc.give()
+		b.dev.freeSmall(p, b.off)
+		return
+	}
 	b.dev.do(func() { b.b.Free() })
 	b.acc.give()
 }

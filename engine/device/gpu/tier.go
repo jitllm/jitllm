@@ -1079,7 +1079,7 @@ func (g *devTier) room(n uint64) bool {
 	// card, not yet to the budget: settled first, or a reclaim that pages
 	// blocks out never sees the room it made.
 	g.settleRounding()
-	n += g.reserved()
+	n += g.reserved() + g.slack()
 	return g.used+n <= g.limit && g.pool.room(n)
 }
 
@@ -1090,6 +1090,7 @@ func (g *devTier) roomSeat(need uint64, live int, hist uint64) bool {
 	if g.Sessions > 1 && live < g.Sessions {
 		res := g.reserved()
 		credit := min(hist, res)
+		need += g.slack()
 		return g.used+res-credit+need <= g.limit && g.pool.room(res-credit+need)
 	}
 	return g.room(need)
