@@ -665,6 +665,33 @@ func (st *streamBank) forget() {
 	}
 }
 
+// compactNeed is what a streamed block's banks spend on the card when it is
+// placed: its own bank of cslots sheets (an expert cache), or the device's
+// shared bank of slots sheets where none of that shape is held yet.
+func (g *devTier) compactNeed(ws []nn.Weight, slots, cslots int) uint64 {
+	var n uint64
+	for i := 4; i <= 6; i++ {
+		x := ws[i]
+		q, ok := quantOf(x.T)
+		if !ok || x.Rows == 0 {
+			continue
+		}
+		rows, sheets := x.Rows/slots, cslots
+		if cslots <= slots {
+			sheets = slots
+			if r, held := g.res[sharedKey(i, q, rows, x.K, slots)]; held && r.ok {
+				continue
+			}
+		}
+		pq, pd, psc, err := layout.PackedWords(q, rows, x.K)
+		if err != nil {
+			continue
+		}
+		n += g.planeFootprint(pq*sheets) + g.planeFootprint(pd*sheets) + g.planeFootprint(psc*sheets)
+	}
+	return n
+}
+
 // cacheSlotsFor is a streamed block's bank size in sheets: the selection, or
 // want (Config.StreamCacheSlots) when that is bigger and the device has room for
 // the block's own bank of that many beside what it already holds. A block
@@ -1839,6 +1866,19 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	// pushed the card over budget and made trim() page every token.
 	perm := g.permBytes(p, w)
 	need += perm
+	// A streamed bank is spent with the block: its own of cslots sheets, or
+	// the device's shared one where this block is the first to make it.
+	// Priced apart from the block, the room the block was admitted for went
+	// to the bank and its own tensors no longer fit.
+	if stream {
+		cslots = g.cacheSlotsFor(p, ws, g.StreamCacheSlots, slots, bank, w.Vector(jlm.RoleExpScale) != nil)
+		bankNeed := g.compactNeed(ws, slots, cslots)
+		if cslots > slots && !g.room(need+bankNeed) {
+			cslots = slots
+			bankNeed = g.compactNeed(ws, slots, cslots)
+		}
+		need += bankNeed
+	}
 	// Before the block's weights: the prompt's and the step's scratch are
 	// budgeted first, with room left for this block, so a card that cannot
 	// hold both takes a block fewer -- or a narrower chunk -- rather than
