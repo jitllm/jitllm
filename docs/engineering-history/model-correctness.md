@@ -9640,6 +9640,19 @@ encoder and the head now each hold the set for their own geometry
 (`JIT.AttnSetFor`). The real checkpoint could not have shown it: 1024 wide at
 16 heads, both widths are 64.
 
+The per-family runtime's knobs that removed Laya's features one at a time
+went with it. `TestLayaFeaturesAreLoadBearing` removes each by restating the
+fixture's container instead, and holds every removal to moving a score past
+ten times the band `TestMarkerHeadMatchesTheReference` holds the container
+to (2e-3): every layer global 0.68, one rotary base 0.068, pairs
+interleaved 0.34, an RMS norm 0.17, the gated SiLU for GELU 0.13, and every
+question asked through the choice's type row 0.23. The activation is the
+container's stated expression (GELU with erf, as the model's
+hidden_activation reads): the gate's first form cleared FlagGELU and moved
+no score, since the converter set that flag for ModernBERT and nothing read
+it there. The converter no longer sets it, and the gate restates the
+expression (`actsWith`).
+
 ## LFM2-VL and d1's pictures
 
 d1-3B (LiquidAI/d1-3B, its GGUF and `mmproj-d1-3B-F16.gguf`) reads

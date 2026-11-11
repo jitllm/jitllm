@@ -93,28 +93,42 @@ func statedViolations(m *model.Model) []c6Violation {
 	return vs
 }
 
+// actsWith is m's container config with its activations as the converter
+// states them for flag k (0: the gated SiLU).
+func actsWith(m *model.Model, k jlm.Flags) jlm.Config {
+	c := m.Container.Config()
+	s := *c
+	s.Flags &^= jlm.FlagGELU | jlm.FlagReLU2 | jlm.FlagSwiGLUOAI
+	s.Flags2 &^= jlm.Flag2SwiGLUClamp
+	s.SituBeta, s.SituLinearBeta, s.SparseStd = 0, 0, 0
+	s.Flags |= k
+	// Every block the container states an activation for: the trunk's, and
+	// a marker head's after it where the activations are stated per layer.
+	n := len(c.ActLayers)
+	if n == 0 {
+		n = int(c.NLayer)
+	}
+	gated, xielu := make([]bool, n), make([]bool, n)
+	for li := range gated {
+		xielu[li] = m.Stores(li, jlm.RoleXIELU)
+		// As the converter reads it: the dense FFN's roles or the
+		// experts' banks.
+		gate := m.Stores(li, jlm.RoleFFNGate) || m.Stores(li, jlm.RoleExpGateBank)
+		gated[li] = gate || !m.Stores(li, jlm.RoleFFNUp) && !m.Stores(li, jlm.RoleExpUpBank)
+	}
+	if err := convert.StateGated(&convert.Config{Config: &s}, gated, xielu); err != nil {
+		panic(err)
+	}
+	return s
+}
+
 // actSwap runs every block under the activation the converter states for
 // flag k (0: the gated SiLU), as a container of that activation states it.
 func actSwap(k jlm.Flags) func(*model.Model) func() {
 	return func(m *model.Model) func() {
 		c := m.Container.Config()
 		was, wasL := c.Acts, c.ActLayers
-		s := *c
-		s.Flags &^= jlm.FlagGELU | jlm.FlagReLU2 | jlm.FlagSwiGLUOAI
-		s.Flags2 &^= jlm.Flag2SwiGLUClamp
-		s.SituBeta, s.SituLinearBeta, s.SparseStd = 0, 0, 0
-		s.Flags |= k
-		gated, xielu := make([]bool, c.NLayer), make([]bool, c.NLayer)
-		for li := range gated {
-			xielu[li] = m.Stores(li, jlm.RoleXIELU)
-			// As the converter reads it: the dense FFN's roles or the
-			// experts' banks.
-			gate := m.Stores(li, jlm.RoleFFNGate) || m.Stores(li, jlm.RoleExpGateBank)
-			gated[li] = gate || !m.Stores(li, jlm.RoleFFNUp) && !m.Stores(li, jlm.RoleExpUpBank)
-		}
-		if err := convert.StateGated(&convert.Config{Config: &s}, gated, xielu); err != nil {
-			panic(err)
-		}
+		s := actsWith(m, k)
 		c.Acts, c.ActLayers = s.Acts, s.ActLayers
 		undo := restate(m, func(map[jlm.Role]graph.Shape) {})
 		return func() {
