@@ -1,8 +1,10 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/jitllm/jitllm/engine"
 	"io"
 	"net/http"
 	"strings"
@@ -156,4 +158,54 @@ func TestIgnoreEOSRunsToMaxTokensBatched(t *testing.T) {
 			v1.FinishReason_FINISH_REASON_MAX_TOKENS: "length",
 		}[r.finished.GetReason()], len(r.ids)
 	})
+}
+
+// TestIgnoreEOSRunsToTheGrammarsEnd: ignore_eos under a grammar keeps the
+// reply from ending while the grammar lets it go on, and ends it where the
+// grammar can go no further. A grammar of letters runs to max_tokens where
+// the same generate without ignore_eos ends early; a grammar of two words
+// ends on one of them, with ignore_eos or without.
+func TestIgnoreEOSRunsToTheGrammarsEnd(t *testing.T) {
+	e, lm, _ := loadedEngine(t, instructModel, "inst", LoadOptions{})
+	conv, err := lm.m.ChatIDsTools([]model.ChatMessage{{Role: "user", Content: ignoreEOSQuestion}}, nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := func(grammar string, ignore bool) (string, *Finished) {
+		var text strings.Builder
+		var fin *Finished
+		err := e.Generate(context.Background(), GenerateOptions{ModelID: "inst", Prompt: Prompt{Kind: PromptIDs, IDs: conv},
+			MaxTokens: ignoreEOSMax, Sampling: &engine.Sampler{Temp: 0}, Grammar: grammar, IgnoreEOS: ignore},
+			func(ev Event) error {
+				switch ev.Kind {
+				case EventToken:
+					text.WriteString(ev.Token.Text)
+				case EventFinished:
+					fin = ev.Finished
+				}
+				return nil
+			})
+		if err != nil || fin == nil {
+			t.Fatalf("grammar %q, ignore_eos %v: %v", grammar, ignore, err)
+		}
+		return text.String(), fin
+	}
+	letters := `root ::= [a-zA-Z ,.]+`
+	early, f0 := run(letters, false)
+	if f0.Reason != FinishEOS || f0.CompletionTokens >= ignoreEOSMax {
+		t.Fatalf("letters without ignore_eos: %q, finish %v after %d tokens; the gate needs a reply that ends "+
+			"before the limit", early, f0.Reason, f0.CompletionTokens)
+	}
+	long, f1 := run(letters, true)
+	if f1.Reason != FinishMaxTokens || f1.CompletionTokens != ignoreEOSMax {
+		t.Fatalf("letters with ignore_eos: %q, finish %v after %d tokens, want max_tokens after %d", long,
+			f1.Reason, f1.CompletionTokens, ignoreEOSMax)
+	}
+	for _, ignore := range []bool{false, true} {
+		txt, f := run(`root ::= "Paris" | "London"`, ignore)
+		if (txt != "Paris" && txt != "London") || f.Reason != FinishEOS {
+			t.Fatalf("two words, ignore_eos %v: %q, finish %v", ignore, txt, f.Reason)
+		}
+	}
+	t.Logf("letters: %q in %d tokens, %d with ignore_eos", early, f0.CompletionTokens, f1.CompletionTokens)
 }

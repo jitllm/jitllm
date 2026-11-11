@@ -69,6 +69,9 @@ type constraint struct {
 	// at the tokens the grammar allows while a mask is taken, -inf elsewhere
 	// and between.
 	lg, bias []float32
+	// on is ignore_eos: the reply does not end while the grammar lets it go
+	// on (grammar.Matcher.AllowOn).
+	on bool
 }
 
 // mask is logits with every token the grammar does not allow at -inf, in
@@ -82,9 +85,17 @@ func (c *constraint) mask(in *engine.Instance, logits []float32) ([]float32, err
 		}
 	}
 	c.lg, c.bias = c.lg[:n], c.bias[:n]
-	c.m.Allow(c.st, c.bias, 0)
+	if c.on {
+		c.m.AllowOn(c.st, c.bias, 0)
+	} else {
+		c.m.Allow(c.st, c.bias, 0)
+	}
 	err := in.MaskRow(c.lg, logits, c.bias)
-	c.m.Allow(c.st, c.bias, float32(math.Inf(-1)))
+	if c.on {
+		c.m.AllowOn(c.st, c.bias, float32(math.Inf(-1)))
+	} else {
+		c.m.Allow(c.st, c.bias, float32(math.Inf(-1)))
+	}
 	return c.lg, err
 }
 
