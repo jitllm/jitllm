@@ -4574,6 +4574,15 @@ func (g *devTier) layersSession(s backend.Session) {
 						continue
 					}
 				}
+				// A failure injected at this block (jitllmfault): it and the
+				// blocks after it do not run, as a kernel failing here leaves
+				// them.
+				if ferr := g.blockFault(li); ferr != nil {
+					if err == nil {
+						err = ferr
+					}
+					continue
+				}
 				var serr error
 				switch {
 				case sv.f.rowSplit > 0:
@@ -4731,8 +4740,10 @@ func (g *devTier) layersSession(s backend.Session) {
 		// - A streamed block: the mid-FFN host readback and upload have no place
 		//   in a replay.
 		// - History streamed from host memory: its uploads and waits are per call.
+		// - A failure injected at a block (jitllmfault): it lands between
+		//   blocks only when they are issued one by one.
 		if (R > 1 && rag == nil) || !parOK || g.NoGraph || g.graphOff || g.PerLayerSubmit ||
-			a.paging || streamed || bs.pkv != nil && bs.pkv.st != nil {
+			a.paging || streamed || bs.pkv != nil && bs.pkv.st != nil || g.blockFaultArmed() {
 			te := time.Now()
 			emit()
 			g.TEmit += time.Since(te)
