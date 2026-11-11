@@ -199,9 +199,6 @@ func generateOptionsWith(ctx context.Context, m *v1.GenerateRequest, p ImagePoli
 	if err != nil {
 		return o, errInvalid(err)
 	}
-	if lpr.on && m.EchoPrompt {
-		return o, invalid("%s", errLogprobsWithEcho)
-	}
 	lpr.apply(&o)
 
 	rfJSON, err := pbResponseFormatJSON(m.ResponseFormat)

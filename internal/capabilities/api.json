@@ -181,7 +181,7 @@
         {
           "name": "echo",
           "type": "bool",
-          "note": "prepend the prompt to the text; refused with logprobs"
+          "note": "prepend the prompt to the text; with logprobs, its tokens' log-probabilities first, the first null"
         },
         {
           "name": "ignore_eos",
@@ -620,14 +620,6 @@
       ],
       "when": "a list of prompts with stream",
       "message": "a list of prompts cannot be streamed"
-    },
-    {
-      "id": "completions-logprobs-echo",
-      "endpoints": [
-        "/v1/completions"
-      ],
-      "when": "logprobs with echo",
-      "message": "logprobs with echo would need the prompt's own"
     },
     {
       "id": "completions-list-logprobs-n",

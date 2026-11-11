@@ -3,7 +3,9 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"math/rand/v2"
+	"strconv"
 
 	"github.com/jitllm/jitllm/model"
 )
@@ -63,9 +65,28 @@ type oaChatLogprobs struct {
 // alternatives as a token -> logprob map.
 type oaLegacyLogprobs struct {
 	Tokens        []string             `json:"tokens"`
-	TokenLogprobs []float32            `json:"token_logprobs"`
+	TokenLogprobs nullableLogprobs     `json:"token_logprobs"`
 	TopLogprobs   []map[string]float32 `json:"top_logprobs"`
 	TextOffset    []int                `json:"text_offset"`
+}
+
+// nullableLogprobs is token_logprobs, a NaN sent as null: an echoed
+// prompt's first token, which nothing before it predicts.
+type nullableLogprobs []float32
+
+func (l nullableLogprobs) MarshalJSON() ([]byte, error) {
+	b := []byte{'['}
+	for i, v := range l {
+		if i > 0 {
+			b = append(b, ',')
+		}
+		if v != v {
+			b = append(b, "null"...)
+			continue
+		}
+		b = strconv.AppendFloat(b, float64(v), 'g', -1, 32)
+	}
+	return append(b, ']'), nil
 }
 
 func oaBytes(s string) []int {
@@ -88,6 +109,12 @@ func oaChatEntry(t *TokenLogprob) oaLogprobContent {
 // add appends one token, its offset the completion text's length so far.
 func (l *oaLegacyLogprobs) add(t *TokenLogprob, offset int) {
 	l.Tokens = append(l.Tokens, t.Text)
+	l.TextOffset = append(l.TextOffset, offset)
+	if t.Null {
+		l.TokenLogprobs = append(l.TokenLogprobs, float32(math.NaN()))
+		l.TopLogprobs = append(l.TopLogprobs, nil)
+		return
+	}
 	l.TokenLogprobs = append(l.TokenLogprobs, t.Logprob)
 	m := make(map[string]float32, len(t.Top))
 	for _, a := range t.Top {
@@ -96,7 +123,6 @@ func (l *oaLegacyLogprobs) add(t *TokenLogprob, offset int) {
 		}
 	}
 	l.TopLogprobs = append(l.TopLogprobs, m)
-	l.TextOffset = append(l.TextOffset, offset)
 }
 
 // oaLogprobRequest is what both routes' logprobs fields come down to.
@@ -136,11 +162,6 @@ func logprobRequestOf(on bool, top *int) (oaLogprobRequest, error) {
 	}
 	return r, nil
 }
-
-// errLogprobsWithEcho is the refusal of logprobs on a generate that echoes its
-// prompt, on both surfaces.
-const errLogprobsWithEcho = "logprobs with echo would need the prompt's own " +
-	"log-probabilities, which are not built"
 
 // oaLegacyLogprobsOf reads /v1/completions' `logprobs`, an alternative count;
 // top_logprobs is chat's field and is refused here rather than ignored.

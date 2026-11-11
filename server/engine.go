@@ -1793,6 +1793,9 @@ type TokenLogprob struct {
 	Text    string
 	Logprob float32
 	Top     []TopToken
+	// Null is an echoed prompt's first token, which nothing before it
+	// predicts: OpenAI's null.
+	Null bool
 }
 
 // TopToken is one alternative at a step.
@@ -1832,6 +1835,39 @@ func takeLogprob(in *engine.Instance, l *engine.Logprobs, v tokenDecoder, logits
 		out.Top[i] = TopToken{ID: t.ID, Text: v.Decode([]int32{t.ID}), Logprob: t.Logprob}
 	}
 	return out, nil
+}
+
+// promptLogprobs prefills ids on st a chunk of rows at a time with every
+// row's logits (engine.Instance.PrefillLogits): each prompt token after the
+// first gets its log-probability under the rows before it (takeLogprob), the
+// first a null, and the last row's logits are what the first sampled token is
+// drawn from.
+func (lm *LoadedModel) promptLogprobs(st *engine.Instance, ids []int32, l *engine.Logprobs) ([]float32, []*TokenLogprob, error) {
+	const chunk = 64
+	nv, nd := lm.m.Cfg.NVocab, lm.m.Cfg.NEmbd
+	rows, hid := make([]float32, min(chunk, len(ids))*nv), make([]float32, min(chunk, len(ids))*nd)
+	out := make([]*TokenLogprob, len(ids))
+	out[0] = &TokenLogprob{Text: lm.m.Vocab.Decode(ids[:1]), Null: true}
+	last := make([]float32, nv)
+	for a := 0; a < len(ids); a += chunk {
+		n := min(chunk, len(ids)-a)
+		if err := st.PrefillLogits(ids[a:a+n], rows[:n*nv], hid[:n*nd]); err != nil {
+			return nil, nil, err
+		}
+		for j := range n {
+			row := rows[j*nv : (j+1)*nv]
+			if g := a + j; g+1 < len(ids) {
+				tl, err := takeLogprob(st, l, lm.m.Vocab, row, ids[g+1])
+				if err != nil {
+					return nil, nil, err
+				}
+				out[g+1] = tl
+			} else {
+				copy(last, row)
+			}
+		}
+	}
+	return last, out, nil
 }
 
 // FinishReason mirrors the proto enum.
@@ -2026,7 +2062,7 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 	if o.Speculation != nil {
 		spec = *o.Speculation
 	}
-	speculate := spec.Enabled && !spans && !o.Continue
+	speculate := spec.Enabled && !spans && !o.Continue && !(o.Echo && o.Logprobs)
 	if speculate && o.Logprobs {
 		return fmt.Errorf("%w: speculation with logprobs is not built: a round decides several tokens "+
 			"from one verification and reads back no distribution for each", ErrInvalid)
@@ -2059,7 +2095,7 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 	// through its Speculator, which neither restores nor seals, so it runs
 	// without the store rather than leave pages named by a prompt it did not
 	// record.
-	store := e.useStore(s, o) && !speculate
+	store := e.useStore(s, o) && !speculate && !(o.Echo && o.Logprobs)
 	if !o.Continue {
 		if err := s.reset(ctx); err != nil {
 			return err
@@ -2069,7 +2105,7 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 		}
 	}
 
-	if lp := e.joins(s); lp != nil && !spans && !s.cached && !speculate && con == nil {
+	if lp := e.joins(s); lp != nil && !spans && !s.cached && !speculate && con == nil && !(o.Echo && o.Logprobs) {
 		return e.generateBatched(ctx, lp, s, o, ids, ephemeral, store, emit)
 	}
 
@@ -2100,6 +2136,7 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 	var first int32
 	prompted := len(ids)
 	restored := 0
+	var promptLP []*TokenLogprob
 	// The prefill runs on the instance the session leases for it, held for
 	// the whole prompt.
 	st, err := s.ms.Hold(ctx, engine.PhasePrefill)
@@ -2128,6 +2165,8 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 			logits, err = st.PrefillCachedMixed(o.Prompt.Spans...)
 		}
 		restored = s.ms.KVRestored()
+	case o.Echo && o.Logprobs:
+		logits, promptLP, err = lm.promptLogprobs(st, ids, newLogprobs(o))
 	case (s.cached || store) && !o.Continue:
 		logits, err = st.PrefillCached(ids)
 		restored = s.ms.KVRestored()
@@ -2179,6 +2218,12 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 			ID: -1, Text: lm.m.Vocab.Decode(ids), Index: -1,
 		}}); err != nil {
 			return err
+		}
+		// The prompt's log-probabilities ride on tokens of no text after it.
+		for _, tl := range promptLP {
+			if err := emit(Event{Kind: EventToken, Token: &Token{ID: -1, Index: -1, Logprob: tl}}); err != nil {
+				return err
+			}
 		}
 	}
 

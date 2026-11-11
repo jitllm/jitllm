@@ -194,7 +194,6 @@ func TestCompletionsLogprobsShape(t *testing.T) {
 	// Refused as the API refuses them.
 	for _, bad := range []string{
 		`{"model":"small","prompt":"x","logprobs":21}`,
-		`{"model":"small","prompt":"x","logprobs":2,"echo":true}`,
 		`{"model":"small","prompt":"x","n":0}`,
 	} {
 		if code := postJSON(t, c.url, "/v1/completions", bad, nil); code != 400 {

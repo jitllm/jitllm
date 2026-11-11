@@ -38,6 +38,19 @@ func (s *Instance) Prefill(tokens []int32) ([]float32, error) {
 	return s.prefillInto(0, tokens)
 }
 
+// PrefillLogits is Prefill with every row's logits, row-major over tokens into
+// logits (len(tokens)*NVocab), and their normed rows into hidden
+// (len(tokens)*NEmbd): a prompt's own distribution, one pass over the weights
+// for all its rows, the speculation step's (stepRows).
+func (s *Instance) PrefillLogits(tokens []int32, logits, hidden []float32) error {
+	defer s.fr.Enter()()
+	if err := s.retireErr; err != nil {
+		s.retireErr = nil
+		return err
+	}
+	return s.stepRows(tokenRows(tokens), &rowsOut{logits: logits, hidden: hidden})
+}
+
 // PrefillMixed prefills a prompt made of token runs and precomputed embedding
 // runs. It is the prefill half of the embedding seam; see
 // ForwardEmbd.

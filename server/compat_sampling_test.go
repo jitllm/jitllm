@@ -72,7 +72,6 @@ func TestUnsupportedSamplingIsRefusedNotIgnored(t *testing.T) {
 		{oaChat, `{"model":"m-1","logprobs":true,"top_logprobs":21,` + msgs + `}`, "top_logprobs"},
 		{oaText, `{"model":"m-1","logprobs":21,"prompt":"hi"}`, "logprobs"},
 		{oaText, `{"model":"m-1","logprobs":true,"prompt":"hi"}`, "logprobs"},
-		{oaText, `{"model":"m-1","logprobs":2,"echo":true,"prompt":"hi"}`, "echo"},
 		{oaText, `{"model":"m-1","n":2,"prompt":["a","b"]}`, "list of prompts"},
 		{oaChat, `{"model":"m-1","presence_penalty":0.5,` + msgs + `}`, "presence_penalty"},
 		{oaText, `{"model":"m-1","frequency_penalty":0.5,"prompt":"hi"}`, "frequency_penalty"},
