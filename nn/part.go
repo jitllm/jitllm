@@ -235,8 +235,14 @@ type DrawArgs struct {
 	// the cut's typical forms, top-k or not. DynRange and DynExp are the
 	// dynamic temperature's range, off where not above 0, and exponent.
 	Sigma, DynRange, DynExp float32
-	Penalty                 Penalties
-	Window                  []float32
+	// Mirostat is a Mirostat draw's version, 0 for none, with its tau, eta
+	// and mu; Mu receives the next mu.
+	Mirostat         int
+	MiroTau, MiroEta float32
+	MiroMu           float32
+	Mu               *float32
+	Penalty          Penalties
+	Window           []float32
 }
 
 // Penalties are a draw's penalties over the tokens its window holds, as

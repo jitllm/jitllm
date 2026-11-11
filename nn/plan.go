@@ -62,7 +62,7 @@ type PartPlan struct {
 // row's and a call's; KV is the history's conversions, nil for a history of
 // floats.
 type PartsPlan struct {
-	Head     [20]PartPlan
+	Head     [22]PartPlan
 	HeadNorm bool
 	HeadW    PartWeights
 	// D is a row's width, NVocab the vocabulary, TopLog the most log

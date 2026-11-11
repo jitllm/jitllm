@@ -32,8 +32,17 @@ type Sampler struct {
 	// DynatempRange and DynatempExponent are llama.cpp's dynamic
 	// temperature: off where the range is not above 0; an exponent of 0 is 1.
 	DynatempRange, DynatempExponent float64
-	RepeatPen                       float64 // 1 = disabled
-	RepeatLastN                     int     // how far back the penalties look; 0 = 64
+	// Mirostat is llama.cpp's Mirostat version, 0 for none, 1 or 2; it
+	// replaces every other filter and the penalties, as llama.cpp's chain
+	// does. MirostatTau (0 is 5) is its target surprise in bits, MirostatEta
+	// (0 is 0.1) its learning rate.
+	Mirostat                 int
+	MirostatTau, MirostatEta float64
+	// mu is Mirostat's running estimate, 2*tau before its first draw.
+	mu          float32
+	muSet       bool
+	RepeatPen   float64 // 1 = disabled
+	RepeatLastN int     // how far back the penalties look; 0 = 64
 	// PresencePen and FreqPen are llama.cpp's presence and frequency
 	// penalties over the same window: 0 = disabled.
 	PresencePen, FreqPen float64
@@ -108,7 +117,7 @@ func (s *Sampler) penalties() nn.Penalties {
 // device can select for (nn.Head.SampleK): sampled, with 0 < TopK < n and no
 // top-n-sigma, which reads the whole row.
 func (s *Sampler) Bounded(n int) bool {
-	return s != nil && s.Temp > 0 && s.TopK > 0 && s.TopK < n && s.TopK <= MaxTopK && s.TopNSigma <= 0
+	return s != nil && s.Temp > 0 && s.TopK > 0 && s.TopK < n && s.TopK <= MaxTopK && s.TopNSigma <= 0 && s.Mirostat == 0
 }
 
 // MaxTopK is above every vocabulary a container states, so a top-k past it is
@@ -165,6 +174,21 @@ func (s *Sampler) dyn() (rng, ex float32) {
 		ex = 1
 	}
 	return float32(s.DynatempRange), ex
+}
+
+// miro is a Mirostat draw's tau, eta and mu, mu at 2*tau before the first.
+func (s *Sampler) miro() (tau, eta float32, mu *float32) {
+	tau, eta = float32(s.MirostatTau), float32(s.MirostatEta)
+	if tau == 0 {
+		tau = 5
+	}
+	if eta == 0 {
+		eta = 0.1
+	}
+	if !s.muSet {
+		s.mu, s.muSet = 2*tau, true
+	}
+	return tau, eta, &s.mu
 }
 
 // seed starts the sampler's stream on first use.

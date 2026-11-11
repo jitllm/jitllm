@@ -346,6 +346,84 @@ func (s *SampleCut) Build() *Graph {
 	return b.G
 }
 
+// SampleMirostat is llama.cpp's Mirostat draw: over the logits' softmax at
+// the temperature, in its order (the larger first, the lower id of two
+// equal), version 2 keeps the tokens whose surprise -log2 p is at most mu,
+// the best always; version 1 (V1) the k most likely, k the integer part of
+// ((e 2^mu)/(1 - N^-e))^(1/s), at least 1 and at most the row, where s is
+// the Zipf exponent its m = 100 most likely estimate and e = s - 1. The
+// survivors' renormalized probabilities are walked at a uniform u the caller
+// draws, as SampleRow walks the row. Its inputs are the logits,
+// sample.window and sample.penalty (read as SampleTopK reads them; a
+// Mirostat draw passes them off), sample.ids and sample.miro (1/T, tau, eta,
+// mu, then u); its outputs the token and mu less eta times the token's
+// surprise past tau.
+type SampleMirostat struct {
+	NVocab int
+	V1     bool
+}
+
+func (s *SampleMirostat) Build() *Graph {
+	b := New()
+	n := s.NVocab
+	l := b.In("logits", n)
+	win := b.In("sample.window", n)
+	pen := b.In("sample.penalty", 3)
+	ids := b.In("sample.ids", n)
+	b.G.Values[ids].Elem = ElemU32
+	miro := b.In("sample.miro", 5)
+	e := sampleEmitter{b}
+	invT, tau, eta, mu, u := e.word(miro, 0, "miro.invtemp"), e.word(miro, 1, "miro.tau"), e.word(miro, 2, "miro.eta"),
+		e.word(miro, 3, "miro.mu"), e.word(miro, 4, "miro.u")
+	v := penalizedRow(b, l, win, pen)
+	id := e.mapc(MapMul, 1, "miro.idf", n, ids)
+	q := e.softmax(e.mapc(MapMul, 0, "miro.scaled", n, v, invT), "miro.q")
+	all := e.mapc(MapLess, 2, "miro.all", n, q)
+	var keep ValueID
+	if s.V1 {
+		m := min(100, n)
+		top := b.Emit(OpTopK, []ValueID{q}, []Result{{Name: "miro.top.ids", Width: m, Elem: ElemU32}, {Name: "miro.top", Width: m}}, nil,
+			Attrs{TopK: m}, nil, nil)[1]
+		pi := e.one(OpSlice, "miro.pi", m-1, Attrs{Offset: 0, Width: m - 1}, top)
+		pn := e.one(OpSlice, "miro.pn", m-1, Attrs{Offset: 1, Width: m - 1}, top)
+		bi := e.mapc(MapLog, 0, "miro.b", m-1, e.mapc(MapDiv, 0, "miro.ratio", m-1, pi, pn))
+		ii := e.one(OpSlice, "miro.i", m-1, Attrs{Offset: 0, Width: m - 1}, id)
+		ti := e.mapc(MapLog, 0, "miro.t", m-1, e.mapc(MapDiv, 0, "miro.tr", m-1, e.mapc(MapAdd, 2, "miro.i2", m-1, ii), e.mapc(MapAdd, 1, "miro.i1", m-1, ii)))
+		sh := e.mapc(MapDiv, 0, "miro.s", 1, e.one(OpReduce, "miro.tb", 1, Attrs{Fn: MapAdd}, e.mapc(MapMul, 0, "miro.tbi", m-1, ti, bi)),
+			e.one(OpReduce, "miro.tt", 1, Attrs{Fn: MapAdd}, e.mapc(MapMul, 0, "miro.tti", m-1, ti, ti)))
+		eps := e.mapc(MapAdd, -1, "miro.eps", 1, sh)
+		num := e.mapc(MapMul, 0, "miro.num", 1, eps, e.mapc(MapExp, 0, "miro.pow2", 1, e.mapc(MapMul, math.Ln2, "miro.mu2", 1, mu)))
+		den := e.mapc(MapAdd, 1, "miro.den", 1, e.mapc(MapMul, -1, "miro.denn", 1,
+			e.mapc(MapExp, 0, "miro.npow", 1, e.mapc(MapMul, -math.Log(float64(n)), "miro.nlog", 1, eps))))
+		k := e.mapc(MapExp, 0, "miro.k", 1, e.mapc(MapDiv, 0, "miro.klog", 1, e.mapc(MapLog, 0, "miro.kl", 1, e.mapc(MapDiv, 0, "miro.kb", 1, num, den)), sh))
+		// The integer part where k is past 1 (-k < -1, false for no number),
+		// else 1; at most the row.
+		kk := e.mapc(MapMin, float64(n), "miro.kk", 1, e.mapc(MapRound, 0, "miro.kfloor", 1, e.mapc(MapAdd, -0.5, "miro.kh", 1,
+			e.mapc(MapWhere, 1, "miro.kok", 1, e.mapc(MapLess, -1, "miro.kgt", 1, e.mapc(MapMul, -1, "miro.kneg", 1, k)), k))))
+		kth := e.selection(q, id, all, all, e.mapc(MapAdd, -1, "miro.k.target", 1, kk), false)
+		keep = e.upTo(q, id, kth, "miro.topk")
+	} else {
+		// At most mu bits: p at least 2^-mu, the best always.
+		floor := e.mapc(MapExp, 0, "miro.floor", 1, e.mapc(MapMul, -math.Ln2, "miro.mubits", 1, mu))
+		in := e.mapc(MapAdd, 1, "miro.in", n, e.mapc(MapMul, -1, "miro.out", n, e.mapc(MapLess, 0, "miro.below", n, q, floor)))
+		p0 := e.one(OpReduce, "miro.p0", 1, Attrs{Fn: MapMax}, q)
+		atBest := e.mapc(MapEqual, 0, "miro.atbest", n, q, p0)
+		bestID := e.one(OpReduce, "miro.bestid", 1, Attrs{Fn: MapMin}, e.mapc(MapWhere, math.Inf(1), "miro.bestids", n, atBest, id))
+		best := e.mapc(MapMul, 0, "miro.best", n, atBest, e.mapc(MapEqual, 0, "miro.isbest", n, id, bestID))
+		keep = e.mapc(MapMax, 0, "miro.keep", n, in, best)
+	}
+	kq := e.mapc(MapMul, 0, "miro.kq", n, q, keep)
+	pt := e.mapc(MapDiv, 0, "miro.pt", n, kq, e.one(OpReduce, "miro.ksum", 1, Attrs{Fn: MapAdd}, kq))
+	walkT := e.mapc(MapMul, 0, "miro.walk.target", 1, u, e.one(OpReduce, "miro.ptsum", 1, Attrs{Fn: MapAdd}, pt))
+	chosen := e.selection(q, id, pt, keep, walkT, false)
+	ptok := e.one(OpReduce, "miro.ptok", 1, Attrs{Fn: MapAdd}, e.mapc(MapMul, 0, "miro.ptokv", n, pt, chosen))
+	// Its surprise in bits, and mu less eta times its excess over tau.
+	bits := e.mapc(MapMul, -1/math.Ln2, "miro.bits", 1, e.mapc(MapLog, 0, "miro.ln", 1, ptok))
+	mu2 := e.mapc(MapSub, 0, "miro.mu.next", 1, mu, e.mapc(MapMul, 0, "miro.step", 1, eta, e.mapc(MapSub, 0, "miro.err", 1, bits, tau)))
+	b.Out(e.argmax(chosen), mu2)
+	return b.G
+}
+
 // sampleEmitter is the ops SampleWalk, SampleRow and SampleCut share on b.
 type sampleEmitter struct{ b *Builder }
 

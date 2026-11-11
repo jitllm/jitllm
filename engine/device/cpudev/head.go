@@ -12,7 +12,8 @@ import (
 // latter at a chunk's rows (Rows), the label pick's, the greedy sampler's,
 // a top-k draw's walk, a draw's row and cut with no top-k and its top-k
 // variant, their distributions, the output norm alone, the log-softmax's
-// and a constrained draw's mask; the Typ forms are the cuts with typical-p.
+// and a constrained draw's mask; the Typ forms are the cuts with typical-p,
+// Miro and MiroV1 Mirostat's draws.
 type HeadParts struct {
 	Head, Hidden, Rows, Pick                 Part
 	Sample, Walk, Row, Cut                   Part
@@ -20,6 +21,7 @@ type HeadParts struct {
 	OutNorm, Logprobs, Mask                  Part
 	Decide                                   Part
 	CutTyp, CutTypProb, CutKTyp, CutKTypProb Part
+	Miro, MiroV1                             Part
 }
 
 // Head is the head and the samplers on the CPU device, composed once at the
@@ -52,6 +54,10 @@ type Head struct {
 	// threshold and probability for its typical form) and cutKArgs its top-k
 	// variant's (then k, then the same three).
 	walkArgs [10]float32
+	// miroArgs is a Mirostat draw's words (1/T, tau, eta, mu, u), miroMu the
+	// next mu it writes.
+	miroArgs [5]float32
+	miroMu   [1]float32
 	rowArgs  [2]float32
 	cutArgs  [10]float32
 	cutKArgs [11]float32
@@ -92,7 +98,7 @@ func NewHead(dev *Device, steps *nn.Steps, p HeadParts, norm bool, w Weights, d,
 	}
 	q := &h.p
 	cuts := q.Row.F != nil || q.Cut.F != nil || q.CutProb.F != nil || q.CutK.F != nil || q.CutKProb.F != nil ||
-		q.CutTyp.F != nil || q.CutTypProb.F != nil || q.CutKTyp.F != nil || q.CutKTypProb.F != nil
+		q.CutTyp.F != nil || q.CutTypProb.F != nil || q.CutKTyp.F != nil || q.CutKTypProb.F != nil || q.Miro.F != nil || q.MiroV1.F != nil
 	if cuts || q.Walk.F != nil || q.WalkProb.F != nil {
 		h.noWin = make([]float32, nv)
 	}
@@ -310,6 +316,9 @@ func ext(a *nn.DrawArgs) (typ, xtc float32, on bool) {
 // False where none serves it.
 func (h *Head) Draw(logits []float32, a nn.DrawArgs, u float32) (int32, bool) {
 	n := len(logits)
+	if a.Mirostat != 0 {
+		return h.mirostat(logits, &a, u)
+	}
 	if a.TopK > 0 && a.TopK < n && a.TopK <= nn.SampleMaxK && a.Sigma <= 0 {
 		return h.walk(logits, &a, u)
 	}
@@ -338,6 +347,29 @@ func (h *Head) Draw(logits []float32, a nn.DrawArgs, u float32) (int32, bool) {
 	win := h.window(&a)
 	h.run(f, nil, 1, unsafe.Pointer(&logits[0]), win, unsafe.Pointer(&h.pen[0]), unsafe.Pointer(&h.ids[0]), words,
 		unsafe.Pointer(&h.token[0]))
+	h.steps.Serve(nn.PartSample)
+	return int32(h.token[0]), true
+}
+
+// mirostat is a's Mirostat draw over logits at the uniform u, the next mu
+// written to a.Mu, or false where the form declines.
+func (h *Head) mirostat(logits []float32, a *nn.DrawArgs, u float32) (int32, bool) {
+	p := &h.p.Miro
+	if a.Mirostat == 1 {
+		p = &h.p.MiroV1
+	}
+	f, _, why := h.form(p, false)
+	if why != nn.DeclineServes {
+		h.steps.Decline(nn.PartSample, why)
+		return 0, false
+	}
+	h.pen = nn.NoPenalties()
+	h.miroArgs = [5]float32{a.InvTemp, a.MiroTau, a.MiroEta, a.MiroMu, u}
+	h.run(f, nil, 1, unsafe.Pointer(&logits[0]), unsafe.Pointer(&h.noWin[0]), unsafe.Pointer(&h.pen[0]), unsafe.Pointer(&h.ids[0]),
+		unsafe.Pointer(&h.miroArgs[0]), unsafe.Pointer(&h.token[0]), unsafe.Pointer(&h.miroMu[0]))
+	if a.Mu != nil {
+		*a.Mu = h.miroMu[0]
+	}
 	h.steps.Serve(nn.PartSample)
 	return int32(h.token[0]), true
 }

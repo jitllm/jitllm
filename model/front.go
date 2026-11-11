@@ -133,6 +133,8 @@ type frontSet struct {
 	CpuCutK, CpuCutKProb               *graph.Graph
 	CpuCutTyp, CpuCutTypProb           *graph.Graph
 	CpuCutKTyp, CpuCutKTypProb         *graph.Graph
+	// CpuMiro and CpuMiroV1 are Mirostat's draws, version 2 and 1.
+	CpuMiro, CpuMiroV1 *graph.Graph
 	// cpuLogprobs is the logits' log-softmax and their MaxTopLogprobs most
 	// likely tokens, cpuMask a constrained draw's masked logits.
 	CpuLogprobs, CpuMask *graph.Graph
@@ -397,6 +399,8 @@ func (m *Model) FrontGraphs() *frontSet {
 			c.NVocab, c.Typical = m.Cfg.NVocab, true
 			*typ[i] = c.Build()
 		}
+		m2, m1 := graph.SampleMirostat{NVocab: m.Cfg.NVocab}, graph.SampleMirostat{NVocab: m.Cfg.NVocab, V1: true}
+		s.CpuMiro, s.CpuMiroV1 = m2.Build(), m1.Build()
 		lp := graph.Logprobs{NVocab: m.Cfg.NVocab, K: MaxTopLogprobs}
 		s.CpuLogprobs = lp.Build()
 		mk := graph.MaskRow{NVocab: m.Cfg.NVocab}

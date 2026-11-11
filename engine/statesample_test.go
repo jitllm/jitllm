@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"fmt"
 	"math"
 	"os"
 	"testing"
@@ -26,6 +27,65 @@ import (
 // in ten must be decisive. The graphs' exactness is jit's
 // TestComposedCPUSampleRow/Cut/Walk; this gate says Instance.Sample runs them
 // with the inputs the sampler draws from.
+// TestMirostatIsComposed: Mirostat's two versions through Instance.Sample on
+// stories15M, every draw the definition's token at the definition's mu
+// (internal/oracle), mu carried draw to draw, and Mirostat moves the token
+// against the row's plain draw on a share of them.
+func TestMirostatIsComposed(t *testing.T) {
+	if _, err := os.Stat(models()["stories15M"]); err != nil {
+		t.Fatalf("MODEL MISSING: %v", err)
+	}
+	m, err := model.Open(jlmOf(t, models()["stories15M"]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	for _, v := range []int{1, 2} {
+		t.Run(fmt.Sprintf("v%d", v), func(t *testing.T) {
+			st := testInstance(t, m, 96)
+			defer st.Close()
+			smp := Sampler{Temp: 0.9, Mirostat: v, MirostatTau: 4, MirostatEta: 0.2, Seed: 67}
+			peek := smp
+			lg, err := st.Prefill([]int32{1, 450, 3014, 471, 263})
+			if err != nil {
+				t.Fatal(err)
+			}
+			const draws = 48
+			near, moved := 0, 0
+			for i := range draws {
+				u := peek.uniform()
+				mu := float64(smp.mu)
+				if !smp.muSet {
+					mu = 2 * smp.MirostatTau
+				}
+				got, err := st.Sample(&smp, lg)
+				if err != nil {
+					t.Fatal(err)
+				}
+				ref, mu2, mg := oracle.SampleMirostat(lg, v == 1, float32(1/smp.Temp), smp.MirostatTau, smp.MirostatEta, mu, u)
+				if plain, _ := oracle.SampleRow(lg, nil, 1, float32(1/smp.Temp), u); plain != ref {
+					moved++
+				}
+				if uint32(got) != ref {
+					if mg >= 1e-6 {
+						t.Fatalf("draw %d: the composed draw is %d, its definition's %d (mu %.4f, u %.6f, margin %.3g)", i, got, ref, mu, u, mg)
+					}
+					near++
+				} else if d := math.Abs(float64(smp.mu) - mu2); d > 1e-3*(1+math.Abs(mu2)) {
+					t.Fatalf("draw %d: mu is %.6f after the draw, its definition's %.6f", i, smp.mu, mu2)
+				}
+				if lg, err = st.Forward(got); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if near > draws/10 || moved == 0 {
+				t.Fatalf("%d of %d draws within rounding of an edge, %d moved by Mirostat: the comparison sees too little", near, draws, moved)
+			}
+			t.Logf("%d draws composed and their mu carried, %d near an edge, %d moved against the plain draw", draws, near, moved)
+		})
+	}
+}
+
 func TestStateSampleIsComposed(t *testing.T) {
 	if _, err := os.Stat(models()["stories15M"]); err != nil {
 		t.Fatalf("MODEL MISSING: %v", err)

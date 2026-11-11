@@ -49,6 +49,7 @@ func (s *Instance) partsPlan() *nn.PartsPlan {
 	for i, g := range []*graph.Graph{fg.CpuCutTyp, fg.CpuCutTypProb, fg.CpuCutKTyp, fg.CpuCutKTypProb} {
 		p.Head[16+i] = part(g, 1)
 	}
+	p.Head[20], p.Head[21] = part(fg.CpuMiro, 1), part(fg.CpuMiroV1, 1)
 
 	if s.c.StatesStreams() {
 		p.Streams, p.NStreams = true, s.c.Streams()
