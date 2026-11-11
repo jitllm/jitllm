@@ -50,12 +50,12 @@ NAMES = {
 FRAMES, FRAME_H, FRAME_W = 5, 300, 340
 
 
-def frames():
+def frames(n=FRAMES):
     # The picture's gradients with a disc that moves, so each pair's frames
     # differ and the entry's second plane (the frames' difference) is read.
     y, x = np.mgrid[0:FRAME_H, 0:FRAME_W].astype(np.float64)
     out = []
-    for f in range(FRAMES):
+    for f in range(n):
         r = 255 * (0.5 + 0.5 * np.sin((x + 7 * f) / 9.0))
         g = 255 * (y / FRAME_H)
         b = 255 * (((x - 60 - 40 * f) ** 2 + (y - 150) ** 2) < 50 ** 2)
@@ -170,6 +170,75 @@ def build(name):
           f"{len(rows)} logit rows")
 
 
+GLM = {"synth-glm4v": "Glm4vForConditionalGeneration"}
+# GLM-4V's video: EIGHT frames at four a second, which its processor samples
+# at two a second in whole steps -- frames 0, 2, 4, 6 and 7, the odd count's
+# last repeated -- so three pairs, their times 0, 1 and 1 seconds.
+GLM_FRAMES, GLM_FPS = 8, 4
+
+
+def build_glm(name):
+    import transformers
+    from transformers import AutoTokenizer, Glm4vImageProcessorPil, Glm4vProcessor, Glm4vVideoProcessor
+    from transformers.video_utils import VideoMetadata
+    d = os.path.join(qg.HFDIR, name)
+    m = getattr(transformers, GLM[name]).from_pretrained(d, dtype=torch.float32, attn_implementation="eager").eval()
+    cfg = m.config
+    tok = AutoTokenizer.from_pretrained(d)
+    proc = Glm4vProcessor(image_processor=Glm4vImageProcessorPil.from_pretrained(d), tokenizer=tok,
+                          video_processor=Glm4vVideoProcessor())
+    vids = frames(GLM_FRAMES)
+    text = "<|user|>\n<|begin_of_video|><|video|><|end_of_video|>What happens in the video?<|assistant|>\n"
+    md = VideoMetadata(total_num_frames=GLM_FRAMES, fps=GLM_FPS)
+    out = proc(text=[text], videos=[np.stack(vids)], video_metadata=[md], return_tensors="pt")
+    ids = [int(i) for i in out["input_ids"][0]]
+    t_ids, t_types = out["input_ids"], out["mm_token_type_ids"]
+    pv, thw = out["pixel_values_videos"], out["video_grid_thw"]
+    merge = cfg.vision_config.spatial_merge_size
+    gt, gh, gw = [int(v) for v in thw[0]]
+    begin = tok.convert_tokens_to_ids("<|begin_of_video|>")
+    end = tok.convert_tokens_to_ids("<|end_of_video|>")
+    pre, post = ids[:ids.index(begin)], ids[ids.index(end) + 1:]
+    cont = tok.encode(" A disc moves.", add_special_tokens=False)
+    feats = video_features(m, pv, thw)
+    mq = copy.deepcopy(m)
+    quantize_video_tower(mq)
+    feats_a8 = video_features_a8(mq, pv, thw)
+    with torch.no_grad():
+        pos, delta = m.model.get_rope_index(t_ids, t_types, video_grid_thw=thw)
+        m.model.rope_deltas = None
+        o = m(input_ids=t_ids, pixel_values_videos=pv, video_grid_thw=thw, mm_token_type_ids=t_types, use_cache=True)
+        lg = [o.logits[0, -1]]
+        pkv = o.past_key_values
+        for t in cont[:-1]:
+            o = m(input_ids=torch.tensor([[t]]), past_key_values=pkv, use_cache=True)
+            pkv = o.past_key_values
+            lg.append(o.logits[0, -1])
+    rows = [{"argmax": int(r.argmax()), "max": float(r.max()),
+             "head": [round(float(x), 7) for x in r[:qg.NLOGIT]]} for r in lg]
+    sampled = [int(i) for i in proc.video_processor.sample_frames(
+        VideoMetadata(total_num_frames=GLM_FRAMES, fps=GLM_FPS))]
+    g = {
+        "pre": pre, "post": post, "cont": cont, "ids": ids,
+        "video": {"n": GLM_FRAMES, "h": FRAME_H, "w": FRAME_W, "fps": GLM_FPS, "frames": sampled,
+                  "rgb": qg.b64(np.stack(vids)),
+                  "grid": [gt, gh // merge, gw // merge],
+                  "embd": [round(float(x), 8) for x in feats.reshape(-1)],
+                  "embd_a8": [round(float(x), 8) for x in feats_a8.reshape(-1)]},
+        "pos": pos[:, 0, :].T.tolist(),
+        "delta": int(delta.reshape(-1)[0]),
+        "logits": rows,
+    }
+    os.makedirs(qg.OUT, exist_ok=True)
+    with open(os.path.join(qg.OUT, name + ".video.json"), "w") as f:
+        json.dump(g, f)
+    print(f"{name}: {len(ids)} ids, frames {sampled}, {gt} pairs of {gh // merge}x{gw // merge} merged, "
+          f"positions to {int(pos.max())}, rope delta {g['delta']}, {len(rows)} logit rows")
+
+
 if __name__ == "__main__":
-    for n in sys.argv[1:] or NAMES:
-        build(n)
+    for n in sys.argv[1:] or list(NAMES) + list(GLM):
+        if n in GLM:
+            build_glm(n)
+        else:
+            build(n)

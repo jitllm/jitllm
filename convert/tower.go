@@ -76,7 +76,7 @@ func StatesTower(p jlm.Projector) bool { return towerStater(p) != nil }
 // StatesVideo reports whether the converter states how a projector's tower
 // reads a video (jlm.Video).
 func StatesVideo(p jlm.Projector) bool {
-	return p == jlm.ProjQwen2VL || p == jlm.ProjQwen25VL || p == jlm.ProjQwen3VL
+	return p == jlm.ProjQwen2VL || p == jlm.ProjQwen25VL || p == jlm.ProjQwen3VL || p == jlm.ProjGLM4V
 }
 
 // idefics3Tower is SmolVLM's tower as llama.cpp's mtmd runs it, which this
@@ -897,10 +897,75 @@ func glm4vTower(s *jlm.Source) (*jlm.Tower, error) {
 	if t.Span.After, err = markerIDs(s, "<|end_of_image|>"); err != nil {
 		return nil, err
 	}
+	if has[jlm.RoleVPatchEmbd2] {
+		if t.Video, err = glm4vVideo(s, t, int32(v.PatchSize), merge, bias(jlm.RoleVPatchEmbd, jlm.RoleVPatchBias)); err != nil {
+			return nil, err
+		}
+	}
 	if err := t.Valid(); err != nil {
 		return nil, fmt.Errorf("convert: glm4v: %w", err)
 	}
 	return t, nil
+}
+
+// GLM-4V's video as Glm4vVideoProcessor states it at its class defaults,
+// which GLM-4.1V's published video_preprocessor_config.json repeats: two
+// frames a second over at most 300 seconds, the frames held to 12544 and
+// 47040000 pixels over their count; and 24 frames a second where the request
+// states none, the rate its processor writes the times at.
+const (
+	glm4vVideoFps        = 2
+	glm4vVideoMaxSeconds = 300
+	glm4vVideoMinPixels  = 12544
+	glm4vVideoMaxPixels  = 47040000
+	glm4vVideoDefaultFps = 24
+)
+
+// glm4vVideo is GLM-4V's video as Glm4vVideoProcessor and Glm4vModel read
+// one: its frames sampled in whole steps of the rate (sample_frames), sized
+// together by smart_resize over their count with torch's bicubic and
+// normalised; each pair the conv3d's two planes -- the first frame against
+// their sum, the frames' difference against the second -- then the
+// picture's norm and position table. In the prompt it is
+// <|begin_of_video|>, each pair as a picture followed by its first frame's
+// whole seconds, then <|end_of_video|> (Glm4vProcessor.replace_video_token).
+func glm4vVideo(s *jlm.Source, pic *jlm.Tower, patch, merge int32, embd []jlm.Role) (*jlm.Video, error) {
+	v := s.Vision
+	vid := &jlm.Video{
+		Fps: glm4vVideoFps, DefaultFps: glm4vVideoDefaultFps, MinFrames: 1, MaxFrames: glm4vVideoFps * glm4vVideoMaxSeconds,
+		Steps: true, MaxSeconds: glm4vVideoMaxSeconds, StampFirst: true, StampLast: true,
+		Pre: []jlm.PreStep{
+			{Kind: jlm.PreVideoResize, Ints: []int32{patch * merge, glm4vVideoMinPixels, glm4vVideoMaxPixels,
+				int32(jlm.FilterPILBicubic), int32(jlm.PrecTorch), 2}},
+			{Kind: jlm.PreNormalize, Floats: []float32{v.Mean[0], v.Mean[1], v.Mean[2], v.Std[0], v.Std[1], v.Std[2]}},
+		},
+		// The first frame's pixels are value 0, the second's value 1.
+		Entry: jlm.Program{NIn: 2, Out: 10, Ops: []jlm.TowerOp{
+			{Code: jlm.TOpPatchify, In: []uint16{0}, Span: patch, Width: merge},
+			{Code: jlm.TOpPatchify, In: []uint16{1}, Span: patch, Width: merge},
+			{Code: jlm.TOpSub, In: []uint16{3, 2}},
+			{Code: jlm.TOpLinear, In: []uint16{2}, Bind: embd},
+			{Code: jlm.TOpLinear, In: []uint16{4}, Bind: []jlm.Role{jlm.RoleVPatchEmbd2}},
+			{Code: jlm.TOpAdd, In: []uint16{5, 6}},
+			{Code: jlm.TOpRMSNorm, In: []uint16{7}, Bind: []jlm.Role{jlm.RoleVEmbdNorm}, Eps: v.Eps},
+			pic.Entry.Ops[3],
+			{Code: jlm.TOpAdd, In: []uint16{8, 9}},
+		}},
+	}
+	if pos := vid.Entry.Ops[7]; pos.Code != jlm.TOpPosResample {
+		return nil, fmt.Errorf("convert: glm4v: the picture's entry adds no resampled table where its video's would")
+	}
+	var err error
+	if vid.Before, err = markerIDs(s, "<|begin_of_video|>"); err != nil {
+		return nil, err
+	}
+	if vid.After, err = markerIDs(s, "<|end_of_video|>"); err != nil {
+		return nil, err
+	}
+	if err := vid.Valid(); err != nil {
+		return nil, fmt.Errorf("convert: glm4v: %w", err)
+	}
+	return vid, nil
 }
 
 // Kimi-VL's processor's in_token_limit, which its mmproj does not state

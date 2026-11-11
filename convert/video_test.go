@@ -133,6 +133,60 @@ func TestQwen2VLStatesItsVideo(t *testing.T) {
 	}
 }
 
+// TestGLM4VStatesItsVideo converts GLM-4.1V's and GLM-4.5V's fixtures and
+// reads the video each container states: two frames a second in whole
+// steps over at most 300 seconds, the frames sized over their count within
+// Glm4vVideoProcessor's bounds, each pair a picture between
+// <|begin_of_video|> and <|end_of_video|> followed by its first frame's
+// whole seconds, the entry binding the second patch plane, the patches'
+// norm and the resampled position table.
+func TestGLM4VStatesItsVideo(t *testing.T) {
+	for _, name := range []string{"synth-glm4v", "synth-glm4vmoe"} {
+		t.Run(name, func(t *testing.T) {
+			src := testmodels.Path(name + ".gguf")
+			mm := testmodels.Path("mmproj-" + name + ".gguf")
+			for _, p := range []string{src, mm} {
+				if _, err := os.Stat(p); err != nil {
+					testmodels.Missing(t, "MODEL MISSING: %v (run scripts/qwenvlgold.py %s) -- this gate proved nothing", err, name)
+				}
+			}
+			dst := filepath.Join(t.TempDir(), name+".jlm")
+			if _, err := FromGGUFs(src, mm, dst, jlm.Fingerprint{Writer: "gate"}); err != nil {
+				t.Fatal(err)
+			}
+			f, err := jlm.Open(dst)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer f.Close()
+			v := f.Vision()
+			if v == nil || v.Tower == nil || v.Tower.Video == nil {
+				t.Fatal("the container states no video")
+			}
+			vid := v.Tower.Video
+			if !vid.Steps || vid.Fps != 2 || vid.MaxSeconds != 300 || vid.DefaultFps != 24 || !vid.StampFirst ||
+				!vid.StampLast || vid.StampDigits != 0 || vid.Joined || vid.EveryFrame {
+				t.Fatalf("the video reads %+v", vid)
+			}
+			if got := vid.Pre[0].Ints; len(got) != 6 || got[1] != 12544 || got[2] != 47040000 || got[5] != 2 {
+				t.Fatalf("the video resizes with %v", got)
+			}
+			var binds []jlm.Role
+			resampled := false
+			for _, op := range vid.Entry.Ops {
+				binds = append(binds, op.Bind...)
+				resampled = resampled || op.Code == jlm.TOpPosResample
+			}
+			if !slices.Contains(binds, jlm.RoleVPatchEmbd2) || !slices.Contains(binds, jlm.RoleVEmbdNorm) || !resampled {
+				t.Fatalf("the video's entry binds %v, its table resampled %v", binds, resampled)
+			}
+			if len(vid.Before) != 1 || len(vid.After) != 1 || len(v.Tower.Span.Before) != 1 || len(v.Tower.Span.After) != 1 {
+				t.Fatalf("the video is %v ... %v, a pair %v ... %v", vid.Before, vid.After, v.Tower.Span.Before, v.Tower.Span.After)
+			}
+		})
+	}
+}
+
 // TestEveryVideoProcessorIsStated holds every projector the converter
 // states a tower for to an entry saying whether its reference processor
 // takes a video, and every one that does to a video the converter states
@@ -148,7 +202,7 @@ func TestEveryVideoProcessorIsStated(t *testing.T) {
 		"qwen2.5vl_merger": "Qwen2VLVideoProcessor", "qwen2vl_merger": "Qwen2VLVideoProcessor",
 		"qwen3vl_merger": "Qwen3VLVideoProcessor", "resampler": "",
 	}
-	gaps := map[string]bool{"gemma4v": true, "glm4v": true, "idefics3": true, "internvl": true}
+	gaps := map[string]bool{"gemma4v": true, "idefics3": true, "internvl": true}
 	for _, name := range Projectors() {
 		p := projectorOf()[name]
 		if !StatesTower(p) {

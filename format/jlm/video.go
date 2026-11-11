@@ -49,6 +49,20 @@ type Video struct {
 	// (do_sample_frames false): Fps, MinFrames and MaxFrames zero, each
 	// frame resized alone.
 	EveryFrame bool
+	// Steps samples a video of n frames at rate r in whole steps of r / Fps
+	// (GLM-4V's sample_frames): over its d = round((n-1) / r) + 1 seconds,
+	// rounded half to even, max(floor(d * Fps), 1) frames at ceil(i * r /
+	// Fps); past MaxSeconds, int(MaxSeconds * Fps) frames at ceil(t * r)
+	// for t linspace(0, d), or every frame where that is as many; each
+	// clamped to the last frame and taken once, an odd count's last
+	// repeated before the frames are sized. MaxFrames is the most it
+	// samples.
+	Steps      bool
+	MaxSeconds int32
+	// StampFirst writes a pair's time as its first frame's, cut to
+	// StampDigits places rather than the mean of its frames' rounded; and
+	// StampLast writes it after the pair's span rather than before it.
+	StampFirst, StampLast bool
 }
 
 // Valid says the record is one this build can read.
@@ -75,6 +89,12 @@ func (v *Video) Valid() error {
 	}
 	if v.PerSecond < 0 || v.PerSecond > 0 && !v.Joined {
 		return fmt.Errorf("jlm: a video of %d positions a second whose pairs are not one grid", v.PerSecond)
+	}
+	if v.Steps && (v.EveryFrame || v.MaxSeconds < 1) || !v.Steps && v.MaxSeconds != 0 {
+		return fmt.Errorf("jlm: a video sampled in steps %v up to %d seconds, every frame %v", v.Steps, v.MaxSeconds, v.EveryFrame)
+	}
+	if v.Joined && (v.StampFirst || v.StampLast) {
+		return fmt.Errorf("jlm: a video of one grid writes no time to place")
 	}
 	if v.Entry.NIn != 2 || len(v.Entry.Ops) == 0 || v.Entry.Ops[0].Code != TOpPatchify {
 		return fmt.Errorf("jlm: the video's entry reads %d frames and does not start with their patches", v.Entry.NIn)
@@ -111,16 +131,22 @@ func encodeVideo(w *wbuf, v *Video) {
 	}
 	// The tail, written only where it states something: a video of a
 	// stamp a pair is the bytes it was.
-	if v.Joined || v.EveryFrame || v.PerSecond != 0 {
-		var f uint32
-		if v.Joined {
-			f |= videoJoined
+	var f uint32
+	for _, x := range []struct {
+		on   bool
+		flag uint32
+	}{{v.Joined, videoJoined}, {v.EveryFrame, videoEveryFrame}, {v.Steps, videoSteps},
+		{v.StampFirst, videoStampFirst}, {v.StampLast, videoStampLast}} {
+		if x.on {
+			f |= x.flag
 		}
-		if v.EveryFrame {
-			f |= videoEveryFrame
-		}
+	}
+	if f != 0 || v.PerSecond != 0 {
 		w.u32(f)
 		w.i32(v.PerSecond)
+		if v.Steps {
+			w.i32(v.MaxSeconds)
+		}
 	}
 }
 
@@ -128,6 +154,10 @@ func encodeVideo(w *wbuf, v *Video) {
 const (
 	videoJoined = 1 << iota
 	videoEveryFrame
+	videoSteps
+	videoStampFirst
+	videoStampLast
+	videoKnown = videoStampLast<<1 - 1
 )
 
 func decodeVideo(r *rbuf) *Video {
@@ -152,8 +182,12 @@ func decodeVideo(r *rbuf) *Video {
 	if r.err == nil && len(r.b) > 0 {
 		f := r.u32()
 		v.Joined, v.EveryFrame, v.PerSecond = f&videoJoined != 0, f&videoEveryFrame != 0, r.i32()
+		v.Steps, v.StampFirst, v.StampLast = f&videoSteps != 0, f&videoStampFirst != 0, f&videoStampLast != 0
+		if v.Steps {
+			v.MaxSeconds = r.i32()
+		}
 		// A flag a later build states is a video this one would read wrong.
-		if f&^(videoJoined|videoEveryFrame) != 0 {
+		if f&^videoKnown != 0 {
 			r.err = fmt.Errorf("jlm: a video stated with flags %#x this build does not read", f)
 		}
 	}
