@@ -26,7 +26,7 @@ import (
 type cudaDev struct {
 	allocCount
 	// small is the pieces buffers of smallMax or less are carved from.
-	small smallPool
+	small smallPool[*cuda.Buffer]
 	// ctr is what the device counts into (Opts.Counters).
 	ctr *Counters
 	d   *cuda.Device
@@ -1092,7 +1092,7 @@ type cudaBuf struct {
 	acc *counted
 	// piece is the shared piece a small buffer is a slot of, at off; nil
 	// for a buffer of its own.
-	piece *smallPiece
+	piece *smallPiece[*cuda.Buffer]
 	off   int
 }
 
