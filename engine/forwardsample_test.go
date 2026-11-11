@@ -34,7 +34,7 @@ func sampleGateSampler() *Sampler {
 // which the card's walk cuts among its candidates.
 func typicalGateSampler() *Sampler {
 	s := sampleGateSampler()
-	s.TypicalP, s.XTCProbability, s.XTCThreshold, s.Seed = 0.85, 0.5, 0.08, 4243
+	s.TypicalP, s.XTCProbability, s.XTCThreshold, s.DynatempRange, s.Seed = 0.85, 0.5, 0.08, 0.4, 4243
 	return s
 }
 

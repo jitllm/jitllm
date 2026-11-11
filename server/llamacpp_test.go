@@ -206,7 +206,7 @@ func TestLlamaRefusals(t *testing.T) {
 	s := llamaServe(t, f)
 	refuse := map[string]string{
 		"mirostat": `2`, "dry_multiplier": `0.8`,
-		"presence_penalty": `3`, "frequency_penalty": `-3`, "dynatemp_range": `0.5`,
+		"presence_penalty": `3`, "frequency_penalty": `-3`,
 		"logit_bias": `[[15]]`, "samplers": `["dry","top_k"]`, "n_cmpl": `2`, "id_slot": `3`,
 		"n_predict": `0`, "n_keep": `5`, "lora": `[{"id":0,"scale":1}]`, "post_sampling_probs": `true`,
 		"timings_per_token": `true`, "t_max_predict_ms": `100`, "n_probs": `99`, "repeat_last_n": `-2`,
@@ -271,6 +271,12 @@ func TestLlamaRefusals(t *testing.T) {
 	}
 	if got := f.opts().Sampling.TopNSigma; got != 1.5 {
 		t.Errorf("top_n_sigma reached the sampler as %v", got)
+	}
+	if code, out := llamaPost(t, s, "/completion", `{"prompt":"x","dynatemp_range":0.5,"dynatemp_exponent":2}`); code != 200 {
+		t.Fatalf("dynatemp: %d %v", code, out)
+	}
+	if smp := f.opts().Sampling; smp.DynatempRange != 0.5 || smp.DynatempExponent != 2 {
+		t.Errorf("the dynamic temperature reached the sampler as %v and %v", smp.DynatempRange, smp.DynatempExponent)
 	}
 	// The error body is llama-server's.
 	_, out := llamaPost(t, s, "/completion", `{"prompt":"x","mirostat":1}`)

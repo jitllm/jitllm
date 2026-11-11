@@ -39,7 +39,7 @@ func TestComposedCPUSampleWalk(t *testing.T) {
 		}
 		vals := map[graph.ValueID][]uint32{
 			in["logits"]: lw, in["sample.window"]: append([]uint32(nil), win...), in["sample.penalty"]: {math.Float32bits(1), 0, 0},
-			in["sample.walk"]: {math.Float32bits(float32(k)), math.Float32bits(invT), math.Float32bits(topp), math.Float32bits(minp), math.Float32bits(u), math.Float32bits(float32(math.Inf(1))), math.Float32bits(float32(math.Inf(1))), 0},
+			in["sample.walk"]: {math.Float32bits(float32(k)), math.Float32bits(invT), math.Float32bits(topp), math.Float32bits(minp), math.Float32bits(u), math.Float32bits(float32(math.Inf(1))), math.Float32bits(float32(math.Inf(1))), 0, 0, math.Float32bits(1)},
 			tokV:              {0},
 		}
 		if err := runCPUValues(hostArm(), codes, g, vals, [3][]uint32{}); err != nil {
@@ -70,7 +70,7 @@ func TestComposedCPUSampleWalk(t *testing.T) {
 		case 1:
 			u = float64(math.Nextafter32(1, 0))
 		}
-		want, margin := oracle.SampleWalk(l, K, k, invT, topp, minp, math.Inf(1), math.Inf(1), u)
+		want, margin := oracle.SampleWalk(l, K, k, invT, topp, minp, math.Inf(1), math.Inf(1), [2]float64{}, u)
 		got := walk(l, k, float32(invT), float32(topp), float32(minp), float32(u))
 		cases++
 		if margin < 1e-4 && c%50 != 0 {

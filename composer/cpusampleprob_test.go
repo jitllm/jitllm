@@ -65,12 +65,12 @@ func TestComposedCPUSampleProb(t *testing.T) {
 					vals[o] = make([]uint32, g.Values[o].Width)
 				}
 				if a.k {
-					vals[in["sample.walk"]] = []uint32{f(float32(k)), f(invT), f(topp), f(minp), 0, f(typ), f(xtc), f(mix)}
+					vals[in["sample.walk"]] = []uint32{f(float32(k)), f(invT), f(topp), f(minp), 0, f(typ), f(xtc), f(mix), 0, f(1)}
 				} else {
 					vals[in["sample.ids"]] = append([]uint32(nil), ids...)
 					vals[in["sample.cut"]] = []uint32{f(invT), f(topp), f(minp), 0}
 					if a.typ {
-						vals[in["sample.cut"]] = append(vals[in["sample.cut"]], 0, f(typ), f(xtc), f(mix))
+						vals[in["sample.cut"]] = append(vals[in["sample.cut"]], 0, f(typ), f(xtc), f(mix), 0, f(1))
 					}
 				}
 				if err := runCPUValues(hostArm(), codes, g, vals, [3][]uint32{}); err != nil {
@@ -133,7 +133,7 @@ func TestComposedCPUSampleProb(t *testing.T) {
 						xtc, mix = float32(0.02+0.2*rng.Float64()), float32(rng.Float64())
 					}
 				}
-				want, margin := oracle.SampleProb(l, hist, pen, invT, k, topp, minp, float64(typ), float64(xtc), float64(mix), x)
+				want, margin := oracle.SampleProb(l, hist, pen, invT, k, topp, minp, float64(typ), float64(xtc), float64(mix), [2]float64{}, x)
 				if margin < 1e-4 {
 					continue
 				}

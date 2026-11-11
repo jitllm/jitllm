@@ -232,10 +232,11 @@ type DrawArgs struct {
 	// distribution mixes its cut in at.
 	Typical, XTC, XTCMix float32
 	// Sigma is top-n-sigma's n, off where not above 0: a draw with it runs
-	// the cut's typical forms, top-k or not.
-	Sigma   float32
-	Penalty Penalties
-	Window  []float32
+	// the cut's typical forms, top-k or not. DynRange and DynExp are the
+	// dynamic temperature's range, off where not above 0, and exponent.
+	Sigma, DynRange, DynExp float32
+	Penalty                 Penalties
+	Window                  []float32
 }
 
 // Penalties are a draw's penalties over the tokens its window holds, as
