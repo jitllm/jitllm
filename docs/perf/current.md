@@ -1048,7 +1048,12 @@ Vulkan, model-correctness.md "kimi-k3") plus these answers.
   its weights are read -- the process read ~510 GB through a buffered handle
   before printing the device line. Per-card VRAM: cuda:7 peaked at 11,286 MiB
   (6.93 GiB resident plus scratch), the other seven at 342-346 MiB idle and
-  up to 4,174 MiB while a block was being tried.
+  up to 4,174 MiB while a block was being tried. Closed since, in two parts:
+  the device prices a block from its bytes before it is read
+  (`nn.SizeDecliner`, `gpu.GPU.DeclineSize` over `Model.BlockBytes`), and a
+  mixture block above every card's whole budget goes on streamed by default
+  (`nn.AutoStreamer`). The k3-streaming rows below place 78 of 93 by default,
+  and 1 with `JITLLM_GPU_NO_AUTOSTREAM=1` in 3m20s of wall rather than 25.
 - **`JITLLM_GPU_STREAM=1` places every block** (placement.md "Qwen3-Next-80B
   on the card"): a mixture block goes on the card without its routed bank and the
   submission uploads the 16 routed experts' sheets each step. 93/93 blocks and
@@ -1060,7 +1065,10 @@ Vulkan, model-correctness.md "kimi-k3") plus these answers.
   upload: 641.54 s of the 649.60 s of block compute is `stream cost: upload`,
   3404 fills (92 mixture blocks x 37 steps) at 188 ms each, none overlapped
   with a read. If a fill moves the 16 routed expert pages (268 MiB) that is
-  ~1.4 GiB/s over PCIe, far under the link.
+  ~1.4 GiB/s over PCIe, far under the link. That timer held three things, a
+  serial disk read, a faulting copy and a pageable transfer (placement.md
+  16c), and with them fixed the same placement decodes at 3.55 s a token in
+  the k3-streaming rows below, beside the host's 3.61-3.69.
 
 ### Kimi-K3 streamed on the cards (k3-streaming)
 
