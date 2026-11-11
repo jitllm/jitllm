@@ -1132,7 +1132,6 @@ const (
 	partServes      = nn.DeclineServes
 	partCaller      = nn.DeclineCaller
 	partNoRoom      = nn.DeclineNoRoom
-	partNoWeight    = nn.DeclineNoWeight
 	partNotFormed   = nn.DeclineNotFormed
 	numPartDeclines = nn.NumDeclines
 )
@@ -1879,10 +1878,8 @@ func (bs *blockScratch) embedServes() error {
 	switch {
 	case bs.embedGraph == nil:
 		return errors.New("the input rows: the head was offered with no graph of them")
-	case bs.embWhy == partNoRoom:
-		return errEmbedRoom
-	case bs.embWhy != partServes:
-		return fmt.Errorf("the input rows' tables: %s", DeclineName(int(bs.embWhy)))
+	case bs.embErr != nil:
+		return bs.embErr
 	}
 	for _, o := range bs.embedGraph.Ops {
 		for _, w := range o.Weight {

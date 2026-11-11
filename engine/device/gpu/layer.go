@@ -1459,14 +1459,14 @@ type blockScratch struct {
 	// embedGraph is the input rows as ops (nn.Head.Embed); embW and posW the
 	// tables they read, the token embedding (the head where it is the
 	// embedding) and a learned position table, resident for the model, and
-	// embWhy why PrepHead could not hold them. embTok and embPos are the
+	// embErr why PrepHead could not hold them (errEmbedRoom for room). embTok and embPos are the
 	// rows' tokens and positions the composer's gather reads, embCast the
 	// rows a promise no call takes are gathered into (materializeLocked),
 	// every stream of them, embPLE their per-layer inputs, each as wide as
 	// the widest call; castViews is embCast's streams at a call's rows.
 	embedGraph     *graph.Graph
 	embW, posW     *resident
-	embWhy         partDecline
+	embErr         error
 	embTok, embPos backend.Buf
 	embCast        backend.Buf
 	embPLE         backend.Buf
@@ -3084,7 +3084,7 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	// The input rows' tables are the head's: a head whose tables have no room
 	// is given back, so placement buys the room as it does for the head
 	// (placeHead), rather than met by its first step.
-	if bs.embWhy == partNoRoom {
+	if errors.Is(bs.embErr, errEmbedRoom) {
 		g.giveBackHead(bs)
 		g.Declined++
 		g.LastErr = "the input rows' tables have no room beside the head and the blocks placed: " + g.LastErr

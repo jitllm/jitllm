@@ -333,6 +333,9 @@ func (l *Lanes) Err() string {
 	if cb, _ := l.e.Block(l.at); cb != nil && cb.Err != nil {
 		return fmt.Sprintf("the composer does not serve block %d on the CPU: %v", l.at, cb.Err)
 	}
+	if err := l.e.b.Err(); l.why == nn.DeclineNotFormed && err != nil {
+		return fmt.Sprintf("the composer does not serve block %d on the CPU: %v", l.at, err)
+	}
 	if l.why == nn.DeclineNotFormed && l.e.comp.Err() != nil {
 		return fmt.Sprintf("the composer does not serve block %d on the CPU: %s (the first: %v)", l.at, nn.DeclineName(int(l.why)), l.e.comp.Err())
 	}

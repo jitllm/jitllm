@@ -101,7 +101,7 @@ func NewTower(x *Exec, p TowerPlans, dense Tensors, taps []Tensors) (*Tower, err
 func (t *Tower) run(f *Form, li int, w Tensors, n int, req, pos, pic []uint32, io ...[]float32) error {
 	ws, why := t.x.Bindings().Bind(f, li, w)
 	if why != nn.DeclineServes {
-		return fmt.Errorf("its weights: %v", why)
+		return fmt.Errorf("its weights: %w", t.x.Bindings().Err())
 	}
 	b := &t.bound
 	*b = Bound{Li: li, Own: t.x.Device().Own(f), N: n, Req: req, Pos: pos, Pic: pic, Acc: t.acc[0], Acc1: t.acc[1], HAcc: t.hacc[0], HAcc1: t.hacc[1], Weights: ws}

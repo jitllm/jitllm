@@ -680,7 +680,7 @@ func (g *devTier) shareHead(dst, src *blockScratch) bool {
 	dst.embedGraph = src.embedGraph
 	dst.collapse = src.collapse
 	dst.embSW, dst.embSV = src.embSW, src.embSV
-	dst.embW, dst.posW, dst.embWhy = src.embW, src.posW, src.embWhy
+	dst.embW, dst.posW, dst.embErr = src.embW, src.posW, src.embErr
 	dst.headShared = true
 	n := src.mvHead.rows
 	var err error

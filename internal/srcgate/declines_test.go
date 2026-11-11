@@ -27,9 +27,7 @@ func TestTheDeclinesOnlyShrink(t *testing.T) {
 		t.Fatal(err)
 	}
 	allowed := []string{"DeclineServes", "DeclineCaller", "DeclineNoRoom", "DeclineISA", "DeclineNotFormed", "DeclineUnplaced"}
-	open := []string{
-		"DeclineNoWeight",
-	}
+	var open []string
 	got := declineReasons(string(b))
 	if len(got) < len(allowed) {
 		t.Fatalf("read %d decline reasons: the gate read nothing", len(got))

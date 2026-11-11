@@ -11,7 +11,6 @@ import (
 	"github.com/jitllm/jitllm/engine/device/cpudev"
 
 	"github.com/jitllm/jitllm/model"
-	"github.com/jitllm/jitllm/nn"
 
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/format/jlm"
@@ -84,8 +83,8 @@ func projectorFrom(t *testing.T, s *Instance, from, to int, rows []float32, gw, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if why := execOf(ts).Bindings().Check(f, -1, &ts.dense.TowerDense); why != nn.DeclineServes {
-		t.Fatalf("the projector's weights: %v", why)
+	if err := execOf(ts).Bindings().Check(f, -1, &ts.dense.TowerDense); err != nil {
+		t.Fatalf("the projector's weights: %v", err)
 	}
 	outRows := b.G.Values[out].Rows
 	if outRows == 0 {
