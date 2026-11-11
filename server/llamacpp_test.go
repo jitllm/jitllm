@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -205,7 +207,7 @@ func TestLlamaRefusals(t *testing.T) {
 	refuse := map[string]string{
 		"mirostat": `2`, "dry_multiplier": `0.8`, "xtc_probability": `0.5`, "typical_p": `0.9`,
 		"presence_penalty": `3`, "frequency_penalty": `-3`, "dynatemp_range": `0.5`,
-		"logit_bias": `[[15,1.0]]`, "samplers": `["dry","top_k"]`, "n_cmpl": `2`, "id_slot": `3`,
+		"logit_bias": `[[15]]`, "samplers": `["dry","top_k"]`, "n_cmpl": `2`, "id_slot": `3`,
 		"n_predict": `0`, "n_keep": `5`, "lora": `[{"id":0,"scale":1}]`, "post_sampling_probs": `true`,
 		"timings_per_token": `true`, "t_max_predict_ms": `100`, "n_probs": `99`, "repeat_last_n": `-2`,
 		"response_fields": `["content"]`, "mystery_field": `1`,
@@ -238,6 +240,18 @@ func TestLlamaRefusals(t *testing.T) {
 	}
 	if smp := f.opts().Sampling; smp.PresencePen != 0.4 || smp.FreqPen != -0.25 {
 		t.Errorf("the penalties reached the sampler as %v and %v", smp.PresencePen, smp.FreqPen)
+	}
+	// logit_bias in both forms reaches the generate: ids, texts and false.
+	for body, want := range map[string][]TokenBias{
+		`[[15,1.5],["ab",false]]`: {{ID: 15, Bias: 1.5}, {Text: "ab", Bias: float32(math.Inf(-1))}},
+		`{"7":-2,"cd":false}`:     {{ID: 7, Bias: -2}, {Text: "cd", Bias: float32(math.Inf(-1))}},
+	} {
+		if code, out := llamaPost(t, s, "/completion", `{"prompt":"x","logit_bias":`+body+`}`); code != 200 {
+			t.Fatalf("logit_bias %s: %d %v", body, code, out)
+		}
+		if got := f.opts().LogitBias; !slices.Equal(got, want) {
+			t.Errorf("logit_bias %s reached the generate as %v, want %v", body, got, want)
+		}
 	}
 	// The error body is llama-server's.
 	_, out := llamaPost(t, s, "/completion", `{"prompt":"x","mirostat":1}`)

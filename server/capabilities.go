@@ -211,6 +211,7 @@ func withSampling(m map[string]string, logprobs map[string]string) map[string]st
 		"repetition_penalty": "positive; 1 disables; over the last 64 tokens",
 		"presence_penalty":   "[-2, 2]; 0 disables; llama.cpp's, over repetition_penalty's window",
 		"frequency_penalty":  "[-2, 2]; 0 disables; llama.cpp's, over repetition_penalty's window",
+		"logit_bias":         "token id to a bias in [-100, 100], added before the penalties; the generate decodes alone",
 		"seed":               "the draw's seed; seed+i for choice i",
 		"n":                  fmt.Sprintf("1..%d continuations of one prompt, prefilled once; each on a fresh session", maxChoices),
 	} {
