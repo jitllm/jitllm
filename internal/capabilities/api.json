@@ -638,15 +638,6 @@
       "message": "max_tokens is required and must be positive"
     },
     {
-      "id": "speculation-logprobs",
-      "endpoints": [
-        "/v1/chat/completions",
-        "/v1/completions"
-      ],
-      "when": "speculative decoding with logprobs",
-      "message": "speculation with logprobs is not built"
-    },
-    {
       "id": "speculation-n",
       "endpoints": [
         "/v1/chat/completions",

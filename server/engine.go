@@ -2063,10 +2063,6 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 		spec = *o.Speculation
 	}
 	speculate := spec.Enabled && !spans && !o.Continue && !(o.Echo && o.Logprobs)
-	if speculate && o.Logprobs {
-		return fmt.Errorf("%w: speculation with logprobs is not built: a round decides several tokens "+
-			"from one verification and reads back no distribution for each", ErrInvalid)
-	}
 	var con *constraint
 	if tc, err := lm.toolConstraint(o, tail); err != nil {
 		return err
@@ -2137,6 +2133,10 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 	prompted := len(ids)
 	restored := 0
 	var promptLP []*TokenLogprob
+	// firstLP and pendLP are a speculative generate's first token's and its
+	// round's pending tokens' log-probabilities.
+	var firstLP *TokenLogprob
+	var pendLP []*TokenLogprob
 	// The prefill runs on the instance the session leases for it, held for
 	// the whole prompt.
 	st, err := s.ms.Hold(ctx, engine.PhasePrefill)
@@ -2149,12 +2149,17 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 		if !o.IgnoreEOS {
 			opts = append(opts, engine.WithSpecStop(lm.m.Vocab.IsEOG))
 		}
+		if o.Logprobs {
+			opts = append(opts, engine.WithSpecLogits())
+		}
 		if sp, err = st.Speculate(opts...); err != nil {
 			s.ms.Unhold(st)
 			return fmt.Errorf("%w: %v", ErrInvalid, err)
 		}
 		defer sp.Close()
-		first, err = sp.Start(ids, &sampler)
+		if first, err = sp.Start(ids, &sampler); err == nil && o.Logprobs {
+			firstLP, err = takeLogprob(st, newLogprobs(o), lm.m.Vocab, sp.Logits(0), first)
+		}
 	case spans:
 		prompted = model.SpanPositions(o.Prompt.Spans, lm.m.Cfg.NEmbd)
 		if o.Continue {
@@ -2240,7 +2245,7 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 	// yet; the first is Start's.
 	var pend []int32
 	if sp != nil {
-		pend = []int32{first}
+		pend, pendLP = []int32{first}, []*TokenLogprob{firstLP}
 	}
 
 	lpw := newLogprobs(o)
@@ -2298,6 +2303,12 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 				return err
 			}
 			pend, err = sp.Next(&sampler)
+			pendLP = pendLP[:0]
+			for i := 0; err == nil && lpw != nil && i < len(pend); i++ {
+				var tl *TokenLogprob
+				tl, err = takeLogprob(in, lpw, lm.m.Vocab, sp.Logits(i), pend[i])
+				pendLP = append(pendLP, tl)
+			}
 			s.ms.Unhold(in)
 			if err != nil {
 				return err
@@ -2305,6 +2316,9 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 		}
 		if sp != nil {
 			next, pend = pend[0], pend[1:]
+			if len(pendLP) > 0 {
+				tlp, pendLP = pendLP[0], pendLP[1:]
+			}
 		}
 		if (!o.IgnoreEOS || con != nil) && lm.m.Vocab.IsEOG(next) {
 			reason = FinishEOS

@@ -261,8 +261,6 @@ func refusalList() []refusal {
 		{Refusal: capabilities.Refusal{ID: "anthropic-max-tokens", Endpoints: []string{"/v1/messages"},
 			When: "max_tokens is absent or not positive", Message: "max_tokens is required and must be positive"},
 			probe: `{"model":"m","messages":[{"role":"user","content":"hi"}]}`},
-		{Refusal: capabilities.Refusal{ID: "speculation-logprobs", Endpoints: []string{"/v1/chat/completions", "/v1/completions"},
-			When: "speculative decoding with logprobs", Message: "speculation with logprobs is not built"}},
 		{Refusal: capabilities.Refusal{ID: "speculation-n", Endpoints: []string{"/v1/chat/completions", "/v1/completions"},
 			When: "speculative decoding with n above 1", Message: "speculation with several choices is not built"}},
 		{Refusal: capabilities.Refusal{ID: "n-session", Endpoints: []string{"/v1/chat/completions", "/v1/completions"},

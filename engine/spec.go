@@ -72,10 +72,17 @@ type specOpts struct {
 	ngMin, ngMax int
 	// stop is WithSpecStop's set.
 	stop func(int32) bool
+	// logits is WithSpecLogits.
+	logits bool
 }
 
 // SpecOption configures a Speculator.
 type SpecOption func(*specOpts)
+
+// WithSpecLogits keeps, for every token a call decides, the logits it was
+// drawn from (Speculator.Logits): a verification then reads its rows' logits
+// back where a greedy one would take the card's argmax alone.
+func WithSpecLogits() SpecOption { return func(o *specOpts) { o.logits = true } }
 
 // WithSpecDraft fixes how many tokens a round drafts. Zero, the default,
 // chooses per round from what this session has measured: the acceptance at
@@ -175,6 +182,9 @@ func (s SpecStats) TokensPerRound() float64 {
 type Speculator struct {
 	t, d *Instance
 	opt  specOpts
+	// lgs is the last call's tokens' logits, one row a token, where
+	// WithSpecLogits keeps them.
+	lgs  [][]float32
 	mode SpecRollback
 	// mli is the prediction block's index: unset, and d nil, where prompt
 	// lookup drafts.
@@ -387,6 +397,16 @@ func (sp *Speculator) Close() error {
 	return sp.d.Close()
 }
 
+// Logits is the row the i-th token of the last Start or Next was drawn from,
+// valid until the next call; nil where the Speculator was not made
+// WithSpecLogits.
+func (sp *Speculator) Logits(i int) []float32 {
+	if i < 0 || i >= len(sp.lgs) {
+		return nil
+	}
+	return sp.lgs[i]
+}
+
 // Start runs the prompt through the trunk and the prediction block and returns
 // the first generated token, chosen by sm (nil is greedy). It observes the
 // token into sm, as Next does every token it returns.
@@ -407,6 +427,9 @@ func (sp *Speculator) Start(prompt []int32, sm *Sampler) (int32, error) {
 	y, err := sp.t.Sample(sm, logits)
 	if err != nil {
 		return 0, err
+	}
+	if sp.opt.logits {
+		sp.lgs = append(sp.lgs[:0], logits)
 	}
 	sm.Observe(y)
 	sp.stats.Emitted++
@@ -642,7 +665,7 @@ func (sp *Speculator) Next(sm *Sampler) ([]int32, error) {
 	sp.tout.from = from
 	sp.tout.logits = grow32(sp.tout.logits, (nr-from)*c.NVocab)
 	sp.tout.hidden = grow32(sp.tout.hidden, (nr-from)*c.SpecHidW())
-	sp.tout.argmax = greedy
+	sp.tout.argmax = greedy && !sp.opt.logits
 	if t.recurrent() && kd > 0 {
 		switch sp.mode {
 		case SpecRollbackRows:
@@ -717,6 +740,12 @@ func (sp *Speculator) Next(sm *Sampler) ([]int32, error) {
 	}
 	sp.offer(kd, a)
 	sp.stats.Accepted += int64(a)
+	if sp.opt.logits {
+		sp.lgs = sp.lgs[:0]
+		for j := range a + 1 {
+			sp.lgs = append(sp.lgs, lg(j))
+		}
+	}
 
 	// Rollback: the trunk keeps the rows through the last accepted draft.
 	keep := P + r + 1 + a
@@ -819,7 +848,7 @@ func (sp *Speculator) Next(sm *Sampler) ([]int32, error) {
 func (sp *Speculator) decode(sm *Sampler, greedy bool) ([]int32, error) {
 	t0 := time.Now()
 	var y int32
-	if greedy {
+	if greedy && !sp.opt.logits {
 		var err error
 		if y, err = sp.t.ForwardGreedy(sp.next); err != nil {
 			return nil, err
@@ -831,6 +860,9 @@ func (sp *Speculator) decode(sm *Sampler, greedy bool) ([]int32, error) {
 		}
 		if y, err = sp.t.Sample(sm, lg); err != nil {
 			return nil, err
+		}
+		if sp.opt.logits {
+			sp.lgs = append(sp.lgs[:0], lg)
 		}
 	}
 	sm.Observe(y)
