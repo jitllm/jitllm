@@ -195,7 +195,7 @@ func decomposeExpertMatVec(o graph.Op, c *Context) ([]Prim, error) {
 		out = Operand{Kind: OperandScratch, Name: out.Name + ".unbiased", Temp: true}
 	}
 	var prims []Prim
-	if c.matrix && len(o.In) == 2 && wo.Format != jlm.TypeF32 {
+	if c.matrix && len(o.In) == 2 && wo.Format != jlm.TypeF32 && groupedRows(c.Step.Rows*P, E) <= groupSlack*c.Step.Rows*P {
 		ps, err := expertGrouped(o, c, wo, out)
 		if err != nil {
 			return nil, err
@@ -447,6 +447,18 @@ func expertWeight(o graph.Op, c *Context, wo Operand, x *exprs, inp *[]Operand, 
 // one expert's weight.
 const groupRows = 64
 
+// groupedRows is the grouped rows a step of q pairs over e experts reserves:
+// the pairs, and each run they can reach padded to groupRows, rounded to it.
+func groupedRows(q, e int) int {
+	return (q + min(q, e)*(groupRows-1) + groupRows - 1) / groupRows * groupRows
+}
+
+// groupSlack is how many grouped rows a pair may cost before the grouped
+// form gives way to the per-pair one: the matrix unit runs a padded row for
+// less than the pair form runs a pair, but not for a fraction of it. A
+// choice of this code, not a measured rate.
+const groupSlack = 16
+
 // rankBlock is the pairs a block of a grouping's ranks counts its experts
 // over.
 const rankBlock = 64
@@ -468,7 +480,7 @@ func expertGrouped(o graph.Op, c *Context, wo Operand, out Operand) ([]Prim, err
 	E, P, K, rows := w.Sheets, pairsOf(o, c), w.K, w.Rows
 	R, G := c.Step.Rows, groupRows
 	Q := R * P
-	most := (Q + min(Q, E)*(G-1) + G - 1) / G * G
+	most := groupedRows(Q, E)
 	stride := pairStride(o)
 	W := (P-1)*stride + K
 	U, F := ir.U32, ir.F32
