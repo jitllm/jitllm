@@ -61,7 +61,7 @@ func TestComposedCPUPicture(t *testing.T) {
 		}
 		words := unsafe.Slice((*uint32)(unsafe.Pointer(&pix[0])), len(pix)/4)
 		run := func(w int) []float32 {
-			req := make([]uint32, RequestPicStride+1)
+			req := make([]uint32, RequestPicOW)
 			req[RequestPicW], req[RequestPicH], req[RequestPicStride] = uint32(w), uint32(c.h), uint32(stride)
 			got, err := runCPUBound(hostArm(), codes, []float32{0}, rows*W, [3][]uint32{}, nil, func(o Operand) []uint32 {
 				switch o.Name {
@@ -247,7 +247,7 @@ func TestComposedCPUPictureFormats(t *testing.T) {
 			forms[c.px] = codes
 		}
 		run := func(c pictureCase) []float32 {
-			req := make([]uint32, RequestPicSub+1)
+			req := make([]uint32, RequestPicOW)
 			req[RequestPicW], req[RequestPicH], req[RequestPicStride] = uint32(c.w), uint32(c.h), uint32(c.stride)
 			req[RequestPicCStride], req[RequestPicP2], req[RequestPicP3] = uint32(c.cstride), uint32(c.p2), uint32(c.p3)
 			req[RequestPicSub] = uint32(c.sub)
