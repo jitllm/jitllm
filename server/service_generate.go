@@ -275,7 +275,7 @@ func chatInput(ctx context.Context, in *v1.ChatPrompt, p ImagePolicy) (*ChatInpu
 					var ok bool
 					if mt, ok = imageMediaType(img.GetMediaType()); !ok {
 						return nil, fmt.Errorf("has media_type %q; the pictures accepted are image/png, "+
-							"image/jpeg, image/webp and image/gif", img.GetMediaType())
+							"image/jpeg, image/webp, image/gif, image/bmp and image/tiff", img.GetMediaType())
 					}
 				}
 				return pics.p.decodeImage(img.GetData(), mt)

@@ -635,7 +635,7 @@ func (p ImagePolicy) anImage(ctx context.Context, src *anImageSource) (image.Ima
 		mt, ok := imageMediaType(src.MediaType)
 		if !ok {
 			return nil, fmt.Errorf("has media_type %q; the pictures accepted are image/png, image/jpeg, "+
-				"image/webp and image/gif", src.MediaType)
+				"image/webp, image/gif, image/bmp and image/tiff", src.MediaType)
 		}
 		return p.decodeBase64Image(src.Data, mt)
 	case "url":

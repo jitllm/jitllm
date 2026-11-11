@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 
+	_ "golang.org/x/image/bmp"
+	_ "golang.org/x/image/tiff"
 	_ "golang.org/x/image/webp"
 )
 
@@ -168,6 +170,8 @@ func imageFormats() map[string]string {
 		"jpeg": "image/jpeg",
 		"gif":  "image/gif",
 		"webp": "image/webp",
+		"bmp":  "image/bmp",
+		"tiff": "image/tiff",
 	}
 }
 
@@ -201,11 +205,11 @@ func (p ImagePolicy) decodeImage(b []byte, mt string) (image.Image, error) {
 	}
 	cfg, format, err := image.DecodeConfig(bytes.NewReader(b))
 	if err != nil {
-		return nil, fmt.Errorf("is not a PNG, JPEG, WebP or GIF picture: %v", err)
+		return nil, fmt.Errorf("is not a PNG, JPEG, WebP, GIF, BMP or TIFF picture: %v", err)
 	}
 	got, ok := imageFormats()[format]
 	if !ok {
-		return nil, fmt.Errorf("is %s; the pictures accepted are PNG, JPEG, WebP and GIF", format)
+		return nil, fmt.Errorf("is %s; the pictures accepted are PNG, JPEG, WebP, GIF, BMP and TIFF", format)
 	}
 	if mt != "" && mt != got {
 		return nil, fmt.Errorf("is declared %s and its bytes are %s", mt, got)
@@ -281,7 +285,7 @@ func (p ImagePolicy) decodeDataURL(u string) (image.Image, error) {
 	mt, ok := imageMediaType(params[0])
 	if !ok {
 		return nil, fmt.Errorf("is a data: URL of type %q; the pictures accepted are image/png, "+
-			"image/jpeg, image/webp and image/gif", params[0])
+			"image/jpeg, image/webp, image/gif, image/bmp and image/tiff", params[0])
 	}
 	b64 := false
 	for _, x := range params[1:] {
