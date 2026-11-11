@@ -552,8 +552,9 @@ func auditRun(t *testing.T, m *model.Model, io ...Option) {
 // auditComposedCPU is the gate's composed CPU arm: every entry point again
 // with the CPU's blocks on what the composer forms for it, and a decode whose
 // every block step is counted and served, a decline failing by name.
-// The decode, a prefill, a decision model's questions and a tower's pictures
-// each ask the composer for nothing once the instance is made.
+// The decode, a prefill, two sessions stepped together, a decision model's
+// questions and a tower's pictures each ask the composer for nothing once the
+// instance is made.
 func auditComposedCPU(t *testing.T, name, path string, opts ...Option) {
 	instOpts := opts
 	m, err := model.Open(path)
@@ -638,6 +639,17 @@ func auditComposedCPU(t *testing.T, name, path string, opts ...Option) {
 	}
 	if n := s.Account(nn.CPU).Asks - asked; n != 0 {
 		t.Fatalf("the prefill asked the composer for %d form(s) after the instance was made", n)
+	}
+	bs := newSessBatch(m, 2, 16, instOpts...)
+	defer bs.Close()
+	asked = bs.Account(nn.CPU).Asks
+	for i := range steps {
+		if _, err := bs.ForwardBatch([]int32{int32(1 + i), int32(4 + i)}); err != nil {
+			t.Fatalf("ForwardBatch: %v", err)
+		}
+	}
+	if n := bs.Account(nn.CPU).Asks - asked; n != 0 {
+		t.Fatalf("two sessions stepped together asked the composer for %d form(s) after the instance was made", n)
 	}
 	if m.Tower != nil {
 		ps := testInstance(t, m, 256, instOpts...)
