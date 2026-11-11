@@ -38,7 +38,7 @@ func TestComposedCPUSampleWalk(t *testing.T) {
 			lw[i] = math.Float32bits(v)
 		}
 		vals := map[graph.ValueID][]uint32{
-			in["logits"]: lw, in["sample.window"]: append([]uint32(nil), win...), in["sample.penalty"]: {math.Float32bits(1)},
+			in["logits"]: lw, in["sample.window"]: append([]uint32(nil), win...), in["sample.penalty"]: {math.Float32bits(1), 0, 0},
 			in["sample.walk"]: {math.Float32bits(float32(k)), math.Float32bits(invT), math.Float32bits(topp), math.Float32bits(minp), math.Float32bits(u)},
 			tokV:              {0},
 		}

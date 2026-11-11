@@ -167,8 +167,8 @@ func (s *Instance) greedy(logits []float32) (int32, bool) {
 // drawArgs is smp's draw as a device reads it.
 func (s *Instance) drawArgs(smp *Sampler) nn.DrawArgs {
 	topp, minp := smp.cuts()
-	a := nn.DrawArgs{TopK: smp.TopK, InvTemp: float32(1 / smp.Temp), TopP: topp, MinP: minp, Penalty: smp.penalty()}
-	if a.Penalty != 1 {
+	a := nn.DrawArgs{TopK: smp.TopK, InvTemp: float32(1 / smp.Temp), TopP: topp, MinP: minp, Penalty: smp.penalties()}
+	if !a.Penalty.Off() {
 		a.Window = smp.window(s.c.NVocab)
 	}
 	return a

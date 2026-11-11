@@ -209,8 +209,8 @@ func withSampling(m map[string]string, logprobs map[string]string) map[string]st
 		"top_k":              "0 or -1 disables",
 		"min_p":              "[0, 1]; 0 disables",
 		"repetition_penalty": "positive; 1 disables; over the last 64 tokens",
-		"presence_penalty":   "only 0: a non-zero value is refused (repetition_penalty is the engine's)",
-		"frequency_penalty":  "only 0: a non-zero value is refused (repetition_penalty is the engine's)",
+		"presence_penalty":   "[-2, 2]; 0 disables; llama.cpp's, over repetition_penalty's window",
+		"frequency_penalty":  "[-2, 2]; 0 disables; llama.cpp's, over repetition_penalty's window",
 		"seed":               "the draw's seed; seed+i for choice i",
 		"n":                  fmt.Sprintf("1..%d continuations of one prompt, prefilled once; each on a fresh session", maxChoices),
 	} {
@@ -233,12 +233,12 @@ type refusal struct {
 
 func refusalList() []refusal {
 	return []refusal{
-		{Refusal: capabilities.Refusal{ID: "presence-penalty", Endpoints: []string{"/v1/chat/completions", "/v1/completions"},
-			When: "presence_penalty is non-zero", Message: "presence_penalty is not supported"},
-			probe: `{"model":"m","messages":[{"role":"user","content":"hi"}],"presence_penalty":0.5}`},
-		{Refusal: capabilities.Refusal{ID: "frequency-penalty", Endpoints: []string{"/v1/chat/completions", "/v1/completions"},
-			When: "frequency_penalty is non-zero", Message: "frequency_penalty is not supported"},
-			probe: `{"model":"m","messages":[{"role":"user","content":"hi"}],"frequency_penalty":0.5}`},
+		{Refusal: capabilities.Refusal{ID: "presence-penalty-range", Endpoints: []string{"/v1/chat/completions", "/v1/completions"},
+			When: "presence_penalty is outside [-2, 2]", Message: "presence_penalty 3 is outside [-2, 2]"},
+			probe: `{"model":"m","messages":[{"role":"user","content":"hi"}],"presence_penalty":3}`},
+		{Refusal: capabilities.Refusal{ID: "frequency-penalty-range", Endpoints: []string{"/v1/chat/completions", "/v1/completions"},
+			When: "frequency_penalty is outside [-2, 2]", Message: "frequency_penalty 3 is outside [-2, 2]"},
+			probe: `{"model":"m","messages":[{"role":"user","content":"hi"}],"frequency_penalty":3}`},
 		{Refusal: capabilities.Refusal{ID: "n-range", Endpoints: []string{"/v1/chat/completions", "/v1/completions"},
 			When: fmt.Sprintf("n is outside 1..%d", maxChoices), Message: fmt.Sprintf("n must be between 1 and %d", maxChoices)},
 			probe: fmt.Sprintf(`{"model":"m","messages":[{"role":"user","content":"hi"}],"n":%d}`, maxChoices+1)},

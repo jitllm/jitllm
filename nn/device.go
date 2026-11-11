@@ -357,13 +357,13 @@ type Head struct {
 	// each token whose count in SampleWindow (a row over the vocabulary) is
 	// above zero, at WalkArgs (k, 1/T, top-p +Inf where off, min-p 0 where
 	// off, and the caller's uniform) -- exactly the CPU's draw
-	// (engine.Instance.Sample). A penalty of 1 leaves the row as it is, whatever
-	// the window holds. A tier that serves it sets Token and Sampled and
+	// (engine.Instance.Sample). Penalties that are off leave the row as it
+	// is, whatever the window holds. A tier that serves it sets Token and Sampled and
 	// leaves Logits untouched; one that cannot fills Logits as always. See
 	// engine.Instance.ForwardSample.
 	SampleK       int
 	SampleWindow  []float32
-	SamplePenalty float32
+	SamplePenalty Penalties
 	Sampled       bool
 	WalkArgs      [5]float32
 	// Pick, when non-empty, asks for the logits at these vocabulary ids alone

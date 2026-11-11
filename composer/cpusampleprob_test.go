@@ -56,7 +56,7 @@ func TestComposedCPUSampleProb(t *testing.T) {
 				}
 				win := windowWords(hist, n)
 				vals := map[graph.ValueID][]uint32{
-					in["logits"]: lw, in["sample.window"]: win, in["sample.penalty"]: {f(pen)},
+					in["logits"]: lw, in["sample.window"]: win, in["sample.penalty"]: {f(pen), 0, 0},
 				}
 				for _, o := range out {
 					vals[o] = make([]uint32, g.Values[o].Width)

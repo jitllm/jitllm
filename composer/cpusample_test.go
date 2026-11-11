@@ -155,7 +155,7 @@ func gateComposedCPUSampleTopK(t *testing.T, cpuOn cpuArm) {
 			for i, v := range c.Logits {
 				lw[i] = math.Float32bits(v)
 			}
-			vals := map[graph.ValueID][]uint32{g.In[0]: lw, g.In[1]: SampleWindow(c, shift), g.In[2]: {math.Float32bits(c.Pen)}}
+			vals := map[graph.ValueID][]uint32{g.In[0]: lw, g.In[1]: SampleWindow(c, shift), g.In[2]: {math.Float32bits(c.Pen), 0, 0}}
 			formOnCPU(t, cpuOn, g, vals)
 			return wordsF32(vals[g.Out[0]]), vals[g.Out[1]]
 		}

@@ -3072,9 +3072,9 @@ func (s *Instance) ForwardSample(token int32, smp *Sampler) (int32, error) {
 	if onDev && smp.TopK > 0 && smp.TopK <= MaxTopK {
 		k := smp.TopK
 		topp, minp := smp.cuts()
-		h.SampleK, h.SamplePenalty, h.Sampled = k, smp.penalty(), false
+		h.SampleK, h.SamplePenalty, h.Sampled = k, smp.penalties(), false
 		h.SampleWindow = nil
-		if h.SamplePenalty != 1 {
+		if !h.SamplePenalty.Off() {
 			h.SampleWindow = smp.window(s.c.NVocab)
 		}
 		h.WalkArgs, h.Token = [5]float32{float32(k), float32(1 / smp.Temp), topp, minp, u}, -1

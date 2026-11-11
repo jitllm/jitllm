@@ -41,9 +41,9 @@ type Head struct {
 	probIDs  []uint32
 	token    [1]uint32
 	// noWin is a window that holds no token, for a draw with no penalty;
-	// pen is the penalty a draw reads.
+	// pen is the penalties a draw reads.
 	noWin []float32
-	pen   [1]float32
+	pen   nn.Penalties
 	// walkArgs is the walk's words: k, 1/T, top-p, min-p and u; rowArgs
 	// the row's (1/T, u), cutArgs the cut's (1/T, top-p, min-p, u) and
 	// cutKArgs its top-k variant's (then k).
@@ -272,11 +272,11 @@ func (h *Head) Greedy(logits []float32) (int32, bool) {
 	return int32(h.token[0]), true
 }
 
-// window writes a's penalty where the draws read it and is the window row
-// they read: a's, or a row holding no token where the penalty is off.
+// window writes a's penalties where the draws read them and is the window
+// row they read: a's, or a row holding no token where they are off.
 func (h *Head) window(a *nn.DrawArgs) unsafe.Pointer {
-	h.pen[0] = a.Penalty
-	if a.Penalty == 1 || len(a.Window) == 0 {
+	h.pen = a.Penalty
+	if a.Penalty.Off() || len(a.Window) == 0 {
 		return unsafe.Pointer(&h.noWin[0])
 	}
 	return unsafe.Pointer(&a.Window[0])

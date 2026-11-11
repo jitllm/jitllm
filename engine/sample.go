@@ -3,6 +3,8 @@ package engine
 import (
 	"math"
 	"math/rand"
+
+	"github.com/jitllm/jitllm/nn"
 )
 
 // Sampler is how a token is drawn from logits: its configuration, the
@@ -20,8 +22,11 @@ type Sampler struct {
 	TopP        float64 // 0 or 1 = disabled; nucleus
 	MinP        float64 // 0 = disabled; keep tokens above MinP * p(best)
 	RepeatPen   float64 // 1 = disabled
-	RepeatLastN int     // how far back RepeatPen looks; 0 = 64
-	Seed        int64
+	RepeatLastN int     // how far back the penalties look; 0 = 64
+	// PresencePen and FreqPen are llama.cpp's presence and frequency
+	// penalties over the same window: 0 = disabled.
+	PresencePen, FreqPen float64
+	Seed                 int64
 
 	rng  *rand.Rand
 	hist []int32
@@ -31,9 +36,10 @@ type Sampler struct {
 	win []float32
 }
 
-// Observe records a token so RepeatPen can see it. Harmless when disabled.
+// Observe records a token so the penalties can see it. Harmless when they
+// are disabled.
 func (s *Sampler) Observe(t int32) {
-	if s == nil || s.RepeatPen == 1 || s.RepeatPen == 0 {
+	if s == nil || (s.RepeatPen == 1 || s.RepeatPen == 0) && s.PresencePen == 0 && s.FreqPen == 0 {
 		return
 	}
 	n := s.RepeatLastN
@@ -73,12 +79,18 @@ func (s *Sampler) window(n int) []float32 {
 	return s.win[:n]
 }
 
-// penalty is the repeat penalty a draw applies, 1 where it applies none.
-func (s *Sampler) penalty() float32 {
-	if s.RepeatPen > 1 && len(s.hist) > 0 {
-		return float32(s.RepeatPen)
+// penalties are the penalties a draw applies, none where the window holds
+// no token.
+func (s *Sampler) penalties() nn.Penalties {
+	p := nn.NoPenalties()
+	if len(s.hist) == 0 {
+		return p
 	}
-	return 1
+	if s.RepeatPen > 1 {
+		p[0] = float32(s.RepeatPen)
+	}
+	p[1], p[2] = float32(s.PresencePen), float32(s.FreqPen)
+	return p
 }
 
 // Bounded reports whether a draw over n logits is a top-k draw, the one a
