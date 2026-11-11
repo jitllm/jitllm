@@ -65,3 +65,52 @@ func TestAnOldContainerIsReconverted(t *testing.T) {
 		t.Fatal("a container with no source beside it changed")
 	}
 }
+
+// TestACausalPictureBesideBidirectionalLayersIsReconverted: a merged vision
+// container whose text model states the layers a picture's rows see each
+// other on and whose tower states its pictures causal, as the converter wrote
+// Gemma 4's before it stated the span, is reconverted from its sources.
+func TestACausalPictureBesideBidirectionalLayersIsReconverted(t *testing.T) {
+	dir := t.TempDir()
+	srcs := []string{testmodels.Path("synth-gemma4v.gguf"), testmodels.Path("mmproj-synth-gemma4v.gguf")}
+	for _, p := range srcs {
+		if _, err := os.Stat(p); err != nil {
+			testmodels.Missing(t, "MODEL MISSING: %v -- this gate proved nothing", err)
+		}
+		if err := os.Symlink(p, filepath.Join(dir, filepath.Base(p))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dst := filepath.Join(dir, "synth-gemma4v-vlm"+jlm.Ext)
+	if _, err := convert.FromGGUFs(srcs[0], srcs[1], dst, jlm.Fingerprint{Host: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := jlm.Restate(dst, func(f *jlm.File, c *jlm.Config) (bool, error) {
+		v := f.Vision()
+		if len(c.BidirLayers) == 0 || v == nil || v.Tower == nil || !v.Tower.Span.Bidir {
+			t.Fatalf("the fixture states %d bidirectional layers and no bidirectional span: it tests nothing", len(c.BidirLayers))
+		}
+		v.Tower.Span.Bidir = false
+		return true, nil
+	}); err != nil || !changed {
+		t.Fatalf("stating the pictures causal: changed %v, %v", changed, err)
+	}
+	bidir := func() bool {
+		t.Helper()
+		c, err := jlm.Open(dst)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		return c.Vision().Tower.Span.Bidir
+	}
+	if bidir() {
+		t.Fatal("the restated container states its pictures bidirectional: the gate cannot see a reconversion")
+	}
+	if err := Container(dst); err != nil {
+		t.Fatal(err)
+	}
+	if !bidir() {
+		t.Fatal("a container stating its pictures causal beside bidirectional layers was left as it is")
+	}
+}

@@ -27,7 +27,9 @@ import (
 // does not open and has X.gguf beside it is reconverted from that, and a
 // merged vision container X-vlm.jlm written before the converter stated its
 // projector's tower is reconverted from X.gguf and mmproj-X.gguf, and one
-// whose chat template states no tool form is reconverted too. An absent
+// whose chat template states no tool form is reconverted too, as is one whose
+// tower states its pictures causal beside the layers its text model states
+// they see each other on (Gemma 4's, before the converter stated it). An absent
 // container with its source beside it is converted from it: a missing
 // artefact is a task. A container that opens and states all of that, a path
 // that is not a container and one with no source are left alone, and the
@@ -64,6 +66,7 @@ func reconvert(path string) error {
 		media := cfg.Flags2.Has(jlm.Flag2MediaPrefix) || !convert.StatesMediaPrefix(cfg.Decision)
 		audio := v == nil || v.Audio == nil || v.Audio.Tower != nil
 		video := v == nil || v.Tower == nil || v.Tower.Video != nil || !convert.StatesVideo(v.Projector)
+		bidir := v == nil || v.Tower == nil || len(c.Config().BidirLayers) == 0 || v.Tower.Span.Bidir
 		marker := cfg.MarkerPrompt != nil || cfg.Flags2&(jlm.Flag2HeadBlocks|jlm.Flag2MarkerPointer) == 0 &&
 			cfg.Decision != jlm.DecisionKev
 		rev := cfg.Revision >= jlm.StatementRevision || (cfg.SWAWindow == 0 || cfg.YarnFactor <= 1 && v == nil) &&
@@ -72,8 +75,10 @@ func reconvert(path string) error {
 			(cfg.Revision >= 5 || cfg.DecisionBlocks == 0)
 		c.Close()
 		switch {
-		case stated && tower && tools && streams && rev && labels && marker && joint && media && audio && video:
+		case stated && tower && tools && streams && rev && labels && marker && joint && media && audio && video && bidir:
 			return nil
+		case !bidir:
+			openErr = fmt.Errorf("it states the layers a picture's rows see each other on, and its pictures causal")
 		case !video:
 			openErr = fmt.Errorf("it states no video for its tower")
 		case !audio:

@@ -1467,7 +1467,8 @@ const gemma4SoftTokens = 280
 // sqrt(NEmbd), the standardisation where the checkpoint has it (the
 // converter stores its bias negated, the shift it adds), an RMSNorm with no
 // weight and the projection. A picture is <|image>, its rows, <image|>, the
-// template's <|image|> its mark.
+// template's <|image|> its mark, its rows bidirectional on the layers the
+// text model states.
 func gemma4vTower(s *jlm.Source) (*jlm.Tower, error) {
 	v := s.Vision
 	has := towerRoles(s)
@@ -1547,7 +1548,10 @@ func gemma4vTower(s *jlm.Source) (*jlm.Tower, error) {
 			Rope: jlm.TowerRope{Base: 100, Dim: hd / 2, Neox: true,
 				Runs: []jlm.TowerRopeRun{{Pairs: hd / 4, Axis: 1}, {Pairs: hd / 4, Axis: 0}}}},
 		Head: head,
-		Span: jlm.TowerSpan{Mark: "<|image|>"},
+		// A picture's rows see each other where the text model states the
+		// layers they do (use_bidirectional_attention "vision": StateRevision),
+		// and are causal on the E-models, as transformers runs both.
+		Span: jlm.TowerSpan{Mark: "<|image|>", Bidir: len(s.Config.BidirLayers) > 0},
 	}
 	if t.Span.Before, err = markerIDs(s, "<|image>"); err != nil {
 		return nil, err
