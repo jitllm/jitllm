@@ -207,7 +207,15 @@ func (m *Matcher) Allowed(st State) ([]int32, bool) {
 // leaves the grammar. A constrained draw opens its row of -inf with 0 before
 // the draw (its logits plus the row, the caller's) and closes it with -inf
 // after.
-func (m *Matcher) Allow(st State, bias []float32, v float32) int {
+func (m *Matcher) Allow(st State, bias []float32, v float32) int { return m.allow(st, bias, v, true) }
+
+// AllowOn is Allow for an output that does not end while it may go on
+// (ignore_eos): the end-of-generation tokens only where st allows no other.
+func (m *Matcher) AllowOn(st State, bias []float32, v float32) int {
+	return m.allow(st, bias, v, false)
+}
+
+func (m *Matcher) allow(st State, bias []float32, v float32, end bool) int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	al := m.allowedAt(st)
@@ -218,7 +226,7 @@ func (m *Matcher) Allow(st State, bias []float32, v float32) int {
 			n++
 		}
 	}
-	if al.end || len(al.toks) == 0 {
+	if end && al.end || len(al.toks) == 0 {
 		for _, t := range m.v.eog {
 			if int(t) < len(bias) {
 				bias[t] = v

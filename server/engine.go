@@ -1696,7 +1696,9 @@ type GenerateOptions struct {
 	QueueTimeout time.Duration
 	// IgnoreEOS keeps generating past an end-of-generation token, up to
 	// MaxTokens: the token is emitted and fed like any other (vLLM's
-	// ignore_eos). Stop strings still end the generate.
+	// ignore_eos). Stop strings still end the generate. Under a grammar or a
+	// forced tool call the reply does not end while the grammar lets it go
+	// on, and ends where the grammar can go no further.
 	IgnoreEOS bool
 	// CachePrompt is a request that marked a cache breakpoint (Anthropic's
 	// cache_control). Every generate that starts its sequence goes through
@@ -2033,23 +2035,18 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 	if tc, err := lm.toolConstraint(o, tail); err != nil {
 		return err
 	} else if tc != nil {
-		if o.IgnoreEOS {
-			return fmt.Errorf("%w: a forced tool call ends its reply with an end-of-generation token, "+
-				"and ignore_eos would run past it", ErrInvalid)
-		}
 		con = tc
 		speculate = false
 	} else if o.Grammar != "" {
-		if o.IgnoreEOS {
-			return fmt.Errorf("%w: a grammar ends its reply with an end-of-generation token, and ignore_eos "+
-				"would run past it", ErrInvalid)
-		}
 		m, err := lm.matcher(o.Grammar)
 		if err != nil {
 			return err
 		}
 		con = &constraint{m: m, st: m.Start()}
 		speculate = false
+	}
+	if con != nil {
+		con.on = o.IgnoreEOS
 	}
 	if o.Continue && s.specRan {
 		return fmt.Errorf("%w: session %q stopped inside a speculative round, and its model ran past the "+
@@ -2264,7 +2261,7 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 		if sp != nil {
 			next, pend = pend[0], pend[1:]
 		}
-		if !o.IgnoreEOS && lm.m.Vocab.IsEOG(next) {
+		if (!o.IgnoreEOS || con != nil) && lm.m.Vocab.IsEOG(next) {
 			reason = FinishEOS
 			break
 		}

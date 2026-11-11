@@ -177,6 +177,23 @@ func TestAllowOpensWhatTheGrammarAllows(t *testing.T) {
 	if a := testing.AllocsPerRun(50, func() { m.Allow(st, bias, 0); m.Allow(st, bias, ninf) }); a != 0 {
 		t.Fatalf("an allow of a visited state allocates %.0f times", a)
 	}
+	// AllowOn keeps the end out where the grammar may go on, and lets it in
+	// where nothing else is allowed.
+	m.AllowOn(st, bias, 0)
+	for i, x := range bias {
+		if (i == 'c') != (x == 0) {
+			t.Fatalf("on after a: bias %d is %v", i, x)
+		}
+	}
+	m.AllowOn(st, bias, ninf)
+	end, _ := m.Accept(st, 'c')
+	m.AllowOn(end, bias, 0)
+	for i, x := range bias {
+		if (int32(i) == v.eog()) != (x == 0) {
+			t.Fatalf("on at the end: bias %d is %v", i, x)
+		}
+	}
+	m.AllowOn(end, bias, ninf)
 }
 
 // schemaCases are schemas with outputs of bounded length, a document each
