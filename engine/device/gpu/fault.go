@@ -218,6 +218,72 @@ func (g *devTier) rewriteComposer(r *composer.Registry) {
 			return d(o, c)
 		}
 	}
+	// A joint step's form: several sequences' rows (composer.Step.Seqs 0),
+	// as the mixture fault's.
+	joint := func(c *composer.Context) bool { return c.Step.Rows > 1 && c.Step.Seqs != 1 }
+	named := func(o graph.Op, c *composer.Context) string {
+		if len(o.Out) == 0 {
+			return ""
+		}
+		return stem(c.Graph.Values[o.Out[0]].Name)
+	}
+	m := r.Decompositions[graph.OpMap]
+	switch v := g.fault.rows; v {
+	case "nocap", "notemp":
+		r.Decompositions[graph.OpMap] = func(o graph.Op, c *composer.Context) ([]composer.Prim, error) {
+			if !joint(c) {
+				return m(o, c)
+			}
+			switch n := named(o, c); {
+			case v == "nocap" && n == "capped":
+				// The capped logits are the projection's, the cap's input.
+				if raw, ok := capInput(c.Graph); ok {
+					o.In, o.Attr.Const = []graph.ValueID{raw}, 1
+				}
+			case v == "notemp" && n == "q.temp":
+				o.In, o.Attr.Fn, o.Attr.Const = o.In[:1], graph.MapMul, 1
+			}
+			return m(o, c)
+		}
+	case "nowin":
+		d := r.Decompositions[graph.OpAttend]
+		r.Decompositions[graph.OpAttend] = func(o graph.Op, c *composer.Context) ([]composer.Prim, error) {
+			if joint(c) {
+				o.Attr.Window, o.Attr.Chunked = 0, false
+			}
+			return d(o, c)
+		}
+	case "nope":
+		d := r.Decompositions[graph.OpRope]
+		r.Decompositions[graph.OpRope] = func(o graph.Op, c *composer.Context) ([]composer.Prim, error) {
+			if !joint(c) {
+				return d(o, c)
+			}
+			return m(graph.Op{Kind: graph.OpMap, In: o.In[:1], Out: o.Out, Attr: graph.Attrs{Fn: graph.MapMul, Const: 1}}, c)
+		}
+	}
+}
+
+// capInput is the logits head graph gr caps (graph.Head's softcap): the
+// input of its "softcap.arg".
+func capInput(gr *graph.Graph) (graph.ValueID, bool) {
+	for _, o := range gr.Ops {
+		if len(o.Out) == 1 && len(o.In) > 0 && stem(gr.Values[o.Out[0]].Name) == "softcap.arg" {
+			return o.In[0], true
+		}
+	}
+	return 0, false
+}
+
+// stem is a value's name as its graph's builder was given it: the builder
+// names each value apart with "." and its index (graph.Builder.value).
+func stem(name string) string {
+	if i := strings.LastIndexByte(name, '.'); i >= 0 {
+		if _, err := strconv.Atoi(name[i+1:]); err == nil {
+			return name[:i]
+		}
+	}
+	return name
 }
 
 // expertsSource is the experts' gate output in gr, their up's where they
@@ -292,10 +358,11 @@ func (f *Faults) SetRecFault(v string) { f.rec = v }
 func (c *Config) recFaulted(f string) bool { return c.fault != nil && c.fault.rec == f }
 
 // SetRowsFault names a deliberate error in a ragged step's head, so its gate can
-// run the violation and demand it fails (RULE 10):
+// run the violation and demand it fails (RULE 10). The four of a joint
+// step's features -- nocap, nope, notemp and nowin -- rewrite the composer's
+// registry (rewriteComposer) for the forms of several sequences' rows alone,
+// as the mixture fault does, so a session alone is untouched:
 //
-//	"headone"  the one-row head launches decode's own kernel, which reads the
-//	           wanted row's sums where the second row's scales are
 //	"nocap"    the per-row head skips the final softcap: every row's argmax
 //	           and logits are the uncapped projection's
 //	"headrow"  the composed per-row head projects the first wanted row
@@ -305,11 +372,10 @@ func (c *Config) recFaulted(f string) bool { return c.fault != nil && c.fault.re
 //	"nohidden" the composed head is the graph that writes the logits
 //	           alone: the hidden readback reads normed rows nothing wrote
 //	"noswa"    a step hands the device no local rotary table at all
-//	"nope"     a ragged step rotates the layers Llama 4 leaves unrotated
+//	"nope"     a ragged step leaves the layers Llama 4 rotates unrotated:
+//	           which layers turn is the feature
 //	"notemp"   a ragged step skips Llama 4's attention temperature
 //	"nowin"    a ragged step's windowed or chunked layers attend every key
-//	"ragtab"   a ragged step's run-table prefill reads its rows' keys through
-//	          the decode descriptors, where those rows are empty
 //	"piccausal" a composed non-causal block's rows attend causally: each
 //	           row's descriptor ends at itself (picDesc)
 //
