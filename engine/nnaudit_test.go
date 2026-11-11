@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"image"
@@ -184,6 +185,7 @@ func TestEveryModelRunsOnACard(t *testing.T) {
 					s.UnformedAtStep-formed, s.UnformedAtStepParts, g.Err())
 			}
 			refusedAtStep(t, g, before)
+			stepsTogetherOnCard(t, st, m, g)
 			// The violation, once: a block moved to the CPU composes there,
 			// and the account composedNothing reads must see it.
 			if !seen && m.Cfg.NLayer > 1 {
@@ -319,6 +321,60 @@ func stayedOnCard(t *testing.T, st *Instance, m *model.Model, g *gpu.GPU) {
 	t.Helper()
 	if n := st.GPULayers(); n != m.Cfg.NLayer {
 		t.Fatalf("after the steps the card holds %d of %d blocks: %s", n, m.Cfg.NLayer, g.Err())
+	}
+}
+
+// stepsTogetherOnCard steps two sessions of instance st together on card g,
+// three tokens each, and fails t where the steps asked any device for a
+// form, formed a part, were declined or did not run on the card: a batch
+// runs what placement composed, as a session alone does.
+func stepsTogetherOnCard(t *testing.T, st *Instance, m *model.Model, g *gpu.GPU) {
+	t.Helper()
+	pool := NewPool()
+	if err := pool.Serve(st, 2); err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Unserve(st)
+	var sess [2]*Session
+	for i := range sess {
+		s, err := pool.NewSession(16)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer s.Close()
+		sess[i] = s
+	}
+	was, before, asked := g.Stats(), cardDeclines(g), instanceAsks(st)
+	var runs [2]Run
+	for step := range 3 {
+		for i, s := range sess {
+			if err := s.Acquire(context.Background(), PhaseGenerate); err != nil {
+				t.Fatal(err)
+			}
+			runs[i] = Run{Session: s, Tokens: []int32{int32(1 + step + 3*i)}, Logits: true}
+		}
+		lg, err := StepJoint(runs[:], nil)
+		if err != nil {
+			t.Fatalf("two sessions stepped together on the card: %v (%s)", err, g.Err())
+		}
+		for _, l := range lg {
+			finite(t, "two sessions stepped together on the card", l)
+		}
+	}
+	stayedOnCard(t, st, m, g)
+	composedNothing(t, st, asked)
+	now := g.Stats()
+	if now.UnformedAtStep != was.UnformedAtStep {
+		t.Fatalf("two sessions stepped together formed %d part(s) on the card after placement (by part %v): %s",
+			now.UnformedAtStep-was.UnformedAtStep, now.UnformedAtStepParts, g.Err())
+	}
+	refusedAtStep(t, g, before)
+	// The card counts the submissions it emits, not those a recording
+	// replays (gpu.Stats.Steps): every block once, at the least.
+	served, _ := now.Steps.Of(nn.ComposedBlock)
+	if had, _ := was.Steps.Of(nn.ComposedBlock); served-had < m.Cfg.NLayer {
+		t.Fatalf("two sessions stepped together served %d block step(s) on the card, where %d blocks ran",
+			served-had, m.Cfg.NLayer)
 	}
 }
 
