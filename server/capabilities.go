@@ -133,7 +133,7 @@ func fieldNotes() map[string]map[string]string {
 	return map[string]map[string]string{
 		"/v1/chat/completions": withSampling(map[string]string{
 			"model":                 "a loaded model's id or name",
-			"messages":              fmt.Sprintf("role and content; content is a string or content parts: text, and image_url (a data: URL in base64, or an https URL when the server lists hosts it may fetch from); PNG, JPEG, WebP or GIF, at most %d MiB each, %d MiB and %d pictures a request, %d pixels each, on a model with a vision tower; audio and file parts are refused. tool_calls and tool_call_id carry a tool turn", DefaultImageMaxBytes>>20, DefaultImageMaxRequestBytes>>20, DefaultImageMaxImages, DefaultImageMaxPixels),
+			"messages":              fmt.Sprintf("role and content; content is a string or content parts: text, and image_url (a data: URL in base64, or an https URL when the server lists hosts it may fetch from); PNG, JPEG, WebP, GIF, BMP or TIFF, at most %d MiB each, %d MiB and %d pictures a request, %d pixels each, on a model with a vision tower; file parts of text are the turn's text, audio parts are refused. tool_calls and tool_call_id carry a tool turn", DefaultImageMaxBytes>>20, DefaultImageMaxRequestBytes>>20, DefaultImageMaxImages, DefaultImageMaxPixels),
 			"max_tokens":            "the completion's token limit; absent is the session's KV capacity",
 			"max_completion_tokens": "max_tokens's newer spelling; max_tokens wins when both are set",
 			"stream":                "SSE frames as the API sends them",
@@ -299,7 +299,7 @@ func refusalList() []refusal {
 			When:    "a file that is not a base64 data URL of a WAV of PCM (8, 16, 24 or 32 bits) or IEEE float (32 or 64 bits)",
 			Message: "audio"}},
 		{Refusal: capabilities.Refusal{ID: "image-format", Endpoints: []string{"/v1/chat/completions", "/v1/messages"},
-			When: "a picture that is not PNG, JPEG, WebP or GIF", Message: "the pictures accepted are"}},
+			When: "a picture that is not PNG, JPEG, WebP, GIF, BMP or TIFF", Message: "the pictures accepted are"}},
 	}
 }
 

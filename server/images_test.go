@@ -18,6 +18,9 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"golang.org/x/image/bmp"
+	"golang.org/x/image/tiff"
 )
 
 // The pictures of a chat request, without a model: what each shim accepts,
@@ -85,12 +88,25 @@ func TestImagePolicyDecodesEachFormat(t *testing.T) {
 	if err := jpeg.Encode(&jpg, image.NewGray(image.Rect(0, 0, 9, 4)), nil); err != nil {
 		t.Fatal(err)
 	}
+	var bm, tf bytes.Buffer
+	pic := image.NewNRGBA(image.Rect(0, 0, 7, 2))
+	for i := range pic.Pix {
+		pic.Pix[i] = uint8(i * 9)
+	}
+	if err := bmp.Encode(&bm, pic); err != nil {
+		t.Fatal(err)
+	}
+	if err := tiff.Encode(&tf, pic, nil); err != nil {
+		t.Fatal(err)
+	}
 	cases := []struct {
 		mt   string
 		b    []byte
 		w, h int
 	}{
 		{"image/png", testPNG(t, 5, 3, color.White), 5, 3},
+		{"image/bmp", bm.Bytes(), 7, 2},
+		{"image/tiff", tf.Bytes(), 7, 2},
 		{"image/webp", readTestdata(t, "blue-purple-pink.lossy.webp"), 0, 0},
 		{"image/gif", gifb.Bytes(), 2, 1},
 		{"image/jpg", jpg.Bytes(), 9, 4},
@@ -114,7 +130,7 @@ func TestImagePolicyRefusals(t *testing.T) {
 		p               ImagePolicy
 	}{
 		{"not base64", "data:image/png;base64,@@@@", "not valid base64", p},
-		{"unsupported type", dataURL("image/bmp", small), `"image/bmp"`, p},
+		{"unsupported type", dataURL("image/avif", small), `"image/avif"`, p},
 		{"not base64 encoded", "data:image/png," + string(small), "not base64", p},
 		{"no comma", "data:image/png;base64", "no comma", p},
 		{"declared type differs", dataURL("image/jpeg", small), "declared image/jpeg and its bytes are image/png", p},
@@ -205,8 +221,8 @@ func TestImageRefusalsNameThePart(t *testing.T) {
 			{"type":"file","file":{"file_data":"data:application/pdf;base64,JVBERi0=","filename":"a.pdf"}}]}]}`,
 			"messages[0].content[0] is a application/pdf file, and this server reads no PDF"},
 		{"/v1/messages", `{"model":"m-1","max_tokens":4,"messages":[{"role":"user","content":[
-			{"type":"image","source":{"type":"base64","media_type":"image/tiff","data":"` + png64 + `"}}]}]}`,
-			`messages[0].content[0].source has media_type "image/tiff"`},
+			{"type":"image","source":{"type":"base64","media_type":"image/avif","data":"` + png64 + `"}}]}]}`,
+			`messages[0].content[0].source has media_type "image/avif"`},
 		{"/v1/messages", `{"model":"m-1","max_tokens":4,"messages":[{"role":"user","content":[
 			{"type":"image","source":{"type":"base64","media_type":"image/jpeg","data":"` + png64 + `"}}]}]}`,
 			"messages[0].content[0].source is declared image/jpeg and its bytes are image/png"},
