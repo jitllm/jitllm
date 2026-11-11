@@ -163,9 +163,10 @@ func decisionOf(f *meta.File, c *Config) error {
 // wide. From here on NLayer is the encoder; the head is blocks NLayer.. and
 // Config.DecisionBlocks says how many.
 func modernBERTConfig(f *meta.File, c *Config) error {
-	// Its norms are LayerNorms without a bias.
+	// Its norms are LayerNorms without a bias; its activation, GELU with erf,
+	// the encoder's stated expression (Activation).
 	c.RMSEps = float32(f.FloatKey("attention.layer_norm_epsilon", 1e-5))
-	c.Flags |= jlm.FlagNonCausal | jlm.FlagRopeNeox | jlm.FlagGELU | jlm.FlagLayerNorm
+	c.Flags |= jlm.FlagNonCausal | jlm.FlagRopeNeox | jlm.FlagLayerNorm
 	if v, ok := f.Key("hidden_activation"); ok {
 		// IBM's Granite Embedding R2 runs the same graph under SiLU; nothing
 		// here has a fixture for it.
