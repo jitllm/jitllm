@@ -20,13 +20,15 @@ import (
 func TestComposedCPUSampleProb(t *testing.T) {
 	const n, K, H = 300, 16, 8
 	type arm struct {
-		name string
-		g    *graph.Graph
-		k    bool
+		name   string
+		g      *graph.Graph
+		k, typ bool
 	}
 	for _, a := range []arm{
-		{"walk", (&graph.SampleWalk{SampleTopK: graph.SampleTopK{NVocab: n, K: K}, Prob: true}).Build(), true},
-		{"cut", (&graph.SampleCut{NVocab: n, Prob: true}).Build(), false},
+		{"walk", (&graph.SampleWalk{SampleTopK: graph.SampleTopK{NVocab: n, K: K}, Prob: true}).Build(), true, false},
+		{"cut", (&graph.SampleCut{NVocab: n, Prob: true}).Build(), false, false},
+		{"walk-typical", (&graph.SampleWalk{SampleTopK: graph.SampleTopK{NVocab: n, K: K}, Prob: true}).Build(), true, true},
+		{"cut-typical", (&graph.SampleCut{NVocab: n, Prob: true, Typical: true}).Build(), false, true},
 	} {
 		t.Run(a.name, func(t *testing.T) {
 			g := a.g
@@ -49,6 +51,7 @@ func TestComposedCPUSampleProb(t *testing.T) {
 				ids[i] = uint32(i)
 			}
 			f := math.Float32bits
+			typ := float32(math.Inf(1))
 			prob := func(l []float32, hist []int, pen, invT float32, k int, topp, minp float32, x int) float64 {
 				lw := make([]uint32, n)
 				for i, v := range l {
@@ -62,10 +65,13 @@ func TestComposedCPUSampleProb(t *testing.T) {
 					vals[o] = make([]uint32, g.Values[o].Width)
 				}
 				if a.k {
-					vals[in["sample.walk"]] = []uint32{f(float32(k)), f(invT), f(topp), f(minp), 0}
+					vals[in["sample.walk"]] = []uint32{f(float32(k)), f(invT), f(topp), f(minp), 0, f(typ)}
 				} else {
 					vals[in["sample.ids"]] = append([]uint32(nil), ids...)
 					vals[in["sample.cut"]] = []uint32{f(invT), f(topp), f(minp), 0}
+					if a.typ {
+						vals[in["sample.cut"]] = append(vals[in["sample.cut"]], f(typ))
+					}
 				}
 				if err := runCPUValues(hostArm(), codes, g, vals, [3][]uint32{}); err != nil {
 					t.Fatal(err)
@@ -120,7 +126,10 @@ func TestComposedCPUSampleProb(t *testing.T) {
 					sort.SliceStable(byLogit, func(i, j int) bool { return l[byLogit[i]] > l[byLogit[j]] })
 					x = byLogit[rng.Intn(K)]
 				}
-				want, margin := oracle.SampleProb(l, hist, pen, invT, k, topp, minp, x)
+				if a.typ {
+					typ = float32(0.2 + 0.75*rng.Float64())
+				}
+				want, margin := oracle.SampleProb(l, hist, pen, invT, k, topp, minp, float64(typ), x)
 				if margin < 1e-4 {
 					continue
 				}
@@ -134,7 +143,9 @@ func TestComposedCPUSampleProb(t *testing.T) {
 						c, k, hist, pen, invT, topp, minp, x, got, want)
 				}
 			}
-			if decisive < 200 || nonzero < 40 {
+			// Typical-p cuts the best tokens often, so fewer of the drawn ones
+			// survive it.
+			if decisive < 200 || nonzero < 40 && !a.typ || nonzero < 20 {
 				t.Fatalf("%d decisive cases, %d of a survivor: the comparison sees too little", decisive, nonzero)
 			}
 			t.Logf("%d probabilities right, %d of them a survivor's", decisive, nonzero)

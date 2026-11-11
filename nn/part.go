@@ -227,8 +227,10 @@ type KVConvDevice interface {
 type DrawArgs struct {
 	TopK                int
 	InvTemp, TopP, MinP float32
-	Penalty             Penalties
-	Window              []float32
+	// Typical is typical-p, off at 0 and at 1 or more.
+	Typical float32
+	Penalty Penalties
+	Window  []float32
 }
 
 // Penalties are a draw's penalties over the tokens its window holds, as

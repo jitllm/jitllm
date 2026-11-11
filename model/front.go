@@ -125,10 +125,14 @@ type frontSet struct {
 	// cpuHead's logits; cpuRow and cpuCut the draw with no top-k, with no cut
 	// and with one; cpuWalkProb and cpuCutProb the distributions the walk and
 	// the cut draw from; cpuCutK and cpuCutKProb a top-k draw past the
-	// walk's bound and its distribution.
+	// walk's bound and its distribution; the four Typ graphs are the cut's
+	// with typical-p (graph.SampleCut's Typical), apart so a draw without it
+	// pays for none of it.
 	CpuSample, CpuWalk, CpuRow, CpuCut *graph.Graph
 	CpuWalkProb, CpuCutProb            *graph.Graph
 	CpuCutK, CpuCutKProb               *graph.Graph
+	CpuCutTyp, CpuCutTypProb           *graph.Graph
+	CpuCutKTyp, CpuCutKTypProb         *graph.Graph
 	// cpuLogprobs is the logits' log-softmax and their MaxTopLogprobs most
 	// likely tokens, cpuMask a constrained draw's masked logits.
 	CpuLogprobs, CpuMask *graph.Graph
@@ -388,6 +392,11 @@ func (m *Model) FrontGraphs() *frontSet {
 		s.CpuCutK = ck.Build()
 		ckp := graph.SampleCut{NVocab: m.Cfg.NVocab, TopK: true, Prob: true}
 		s.CpuCutKProb = ckp.Build()
+		typ := []**graph.Graph{&s.CpuCutTyp, &s.CpuCutTypProb, &s.CpuCutKTyp, &s.CpuCutKTypProb}
+		for i, c := range []graph.SampleCut{{}, {Prob: true}, {TopK: true}, {TopK: true, Prob: true}} {
+			c.NVocab, c.Typical = m.Cfg.NVocab, true
+			*typ[i] = c.Build()
+		}
 		lp := graph.Logprobs{NVocab: m.Cfg.NVocab, K: MaxTopLogprobs}
 		s.CpuLogprobs = lp.Build()
 		mk := graph.MaskRow{NVocab: m.Cfg.NVocab}

@@ -75,13 +75,14 @@ func penalizedRow(b *Builder, l, win, pen ValueID) ValueID {
 }
 
 // SampleWalk is SampleTopK's candidates drawn as the host's sampler draws
-// them: of the first k, top-p and then min-p over their softmax at
-// temperature 1, the best always kept, then the inverse-CDF walk at a uniform
-// u the caller draws over the survivors' softmax at the temperature -- the
-// first survivor whose mass up to and including it passes u times the
-// survivors' mass, the last survivor where rounding leaves none. Its inputs
-// are SampleTopK's, then sample.walk (k, 1/T, top-p +Inf where off, min-p 0
-// where off, then u); its output the token. The mass before each survivor is a KxK sum,
+// them: of the first k, typical-p, then top-p and min-p over the survivors'
+// softmax at temperature 1, the best survivor always kept, then the
+// inverse-CDF walk at a uniform u the caller draws over the survivors'
+// softmax at the temperature -- the first survivor whose mass up to and
+// including it passes u times the survivors' mass, the last survivor where
+// rounding leaves none. Its inputs are SampleTopK's, then sample.walk (k,
+// 1/T, top-p +Inf where off, min-p 0 where off, u, then typical-p +Inf where
+// off); its output the token. The mass before each survivor is a KxK sum,
 // as top-p's. With Prob the outputs are the distribution the draw draws
 // from (u unread): each candidate's share of the survivors' softmax at the
 // temperature (0 where it is cut), then the candidates' ids.
@@ -93,7 +94,7 @@ type SampleWalk struct {
 func (s *SampleWalk) Build() *Graph {
 	b := New()
 	vals, ids := s.emit(b)
-	walk := b.In("sample.walk", 5)
+	walk := b.In("sample.walk", 6)
 	K := b.G.Values[vals].Width
 	e := sampleEmitter{b}
 	place, d, keep := e.cuts(vals, walk)
@@ -158,7 +159,12 @@ func (s *SampleRow) Build() *Graph {
 // up to and including it reaches top-p, that one kept, the best always; the
 // survivors' softmax at the temperature is walked in that order at a uniform
 // u the caller draws, as SampleRow walks the row. Where neither cut fires
-// anywhere in the row, the draw is SampleRow's. Its inputs are SampleRow's,
+// anywhere in the row, the draw is SampleRow's. With Typical, sample.cut's
+// last word is typical-p, and before the cuts the row keeps its locally
+// typical tokens (llama.cpp's typical sampler): those whose surprise -log p
+// is nearest the row's entropy, in that order, up to the first whose mass up
+// to and including it passes typical-p; the cuts read their softmax
+// renormalized, and the survivors are walked whether or not a cut fires. Its inputs are SampleRow's,
 // with sample.cut (1/T, top-p +Inf where off, min-p 0 where off, then u) for
 // sample.row; its output the token. With Prob the output is the
 // distribution the draw draws from (u unread), each token's probability:
@@ -169,8 +175,8 @@ func (s *SampleRow) Build() *Graph {
 // k-th found by a selection counting tokens), and the survivors are walked
 // whether or not a cut fires.
 type SampleCut struct {
-	NVocab     int
-	Prob, TopK bool
+	NVocab              int
+	Prob, TopK, Typical bool
 }
 
 func (s *SampleCut) Build() *Graph {
@@ -184,6 +190,9 @@ func (s *SampleCut) Build() *Graph {
 	words := 4
 	if s.TopK {
 		words = 5
+	}
+	if s.Typical {
+		words++
 	}
 	cut := b.In("sample.cut", words)
 	e := sampleEmitter{b}
@@ -205,6 +214,21 @@ func (s *SampleCut) Build() *Graph {
 		inK := e.mapc(MapMul, 0, "sample.q1k", n, order, pool)
 		q1 = e.mapc(MapDiv, 0, "sample.q1kn", n, inK, e.one(OpReduce, "sample.q1ksum", 1, Attrs{Fn: MapAdd}, inK))
 	}
+	if s.Typical {
+		// The pool's entropy H, each token's key exp(-|log q1 + H|) -- the
+		// nearest the entropy first -- and the pool cut where the mass up to
+		// one passes typical-p, q1 renormalized over what is left.
+		typ := e.word(cut, words-1, "sample.typical")
+		lq := e.mapc(MapLog, 0, "sample.typ.log", n, q1)
+		plogp := e.mapc(MapWhere, 0, "sample.typ.plogp", n, q1, e.mapc(MapMul, 0, "sample.typ.pl", n, q1, lq))
+		h := e.mapc(MapMul, -1, "sample.typ.h", 1, e.one(OpReduce, "sample.typ.hsum", 1, Attrs{Fn: MapAdd}, plogp))
+		key := e.mapc(MapExp, 0, "sample.typ.key", n, e.mapc(MapMul, -1, "sample.typ.shiftneg", n,
+			e.mapc(MapAbs, 0, "sample.typ.shift", n, e.mapc(MapAdd, 0, "sample.typ.d", n, lq, h))))
+		edge := e.selection(key, id, q1, pool, typ, false)
+		pool = e.mapc(MapMul, 0, "sample.typ.keep", n, e.upTo(key, id, edge, "sample.typ.edge"), pool)
+		kq := e.mapc(MapMul, 0, "sample.typ.q", n, q1, pool)
+		q1 = e.mapc(MapDiv, 0, "sample.typ.qn", n, kq, e.one(OpReduce, "sample.typ.qsum", 1, Attrs{Fn: MapAdd}, kq))
+	}
 	// The best: the largest probability, the lowest id of those.
 	p0 := e.one(OpReduce, "sample.p0", 1, Attrs{Fn: MapMax}, q1)
 	atBest := e.mapc(MapEqual, 0, "sample.atbest", n, q1, p0)
@@ -223,8 +247,9 @@ func (s *SampleCut) Build() *Graph {
 	keep := e.mapc(MapMax, 0, "sample.keep", n,
 		e.mapc(MapMul, 0, "sample.keeppmk", n, e.mapc(MapMul, 0, "sample.keeppm", n, keepP, notv("sample.above.floor", n, below)), pool), best)
 	fired := e.mapc(MapMax, 0, "sample.fired", 1, topFired, minFired)
-	if s.TopK {
-		// A top-k draw walks its survivors whether or not a cut fires.
+	if s.TopK || s.Typical {
+		// A top-k or typical draw walks its survivors whether or not a cut
+		// fires.
 		fired = e.mapc(MapLess, 2, "sample.fired.k", 1, fired)
 	}
 	// The survivors' softmax at the temperature, walked in the cut's order.
@@ -239,7 +264,7 @@ func (s *SampleCut) Build() *Graph {
 	}
 	walkT := e.mapc(MapMul, 0, "sample.walk.target", 1, u, e.one(OpReduce, "sample.ptsum", 1, Attrs{Fn: MapAdd}, pt))
 	walk := e.selection(order, id, pt, keep, walkT, false)
-	if s.TopK {
+	if s.TopK || s.Typical {
 		b.Out(e.argmax(walk))
 		return b.G
 	}
@@ -278,12 +303,17 @@ func (e sampleEmitter) before(x, place ValueID, name string) ValueID {
 
 // cuts is the K candidates' (vals, best first) places, their distances from
 // the best, and whether each survives: among the first k (params' word 0),
-// top-p over the softmax at temperature 1 (word 2: a candidate survives while
-// the mass before it is under top-p) and min-p (word 3: while its
-// probability is at least min-p times the best's), the best always.
+// typical-p over their softmax at temperature 1 (word 5, +Inf where off: in
+// the order of their surprise's distance from the entropy, the nearest
+// first, a candidate survives while the mass before it is at most
+// typical-p, the nearest always), then over the survivors' softmax top-p
+// (word 2: while the mass before it is under top-p) and min-p (word 3: while
+// its probability is at least min-p times the best survivor's), the best
+// survivor always.
 func (e sampleEmitter) cuts(vals, params ValueID) (place, d, keep ValueID) {
 	K := e.b.G.Values[vals].Width
 	k, topp, minp := e.word(params, 0, "sample.k"), e.word(params, 2, "sample.topp"), e.word(params, 3, "sample.minp")
+	typ := e.word(params, 5, "sample.typical")
 	rank := e.b.Emit(OpRank, []ValueID{vals}, []Result{{Name: "sample.rank", Width: K, Elem: ElemU32}}, nil, Attrs{}, nil, nil)[0]
 	place = e.mapc(MapMul, 1, "sample.place.f", K, rank)
 	inK := e.mapc(MapLess, 0, "sample.ink", K, place, k)
@@ -291,12 +321,36 @@ func (e sampleEmitter) cuts(vals, params ValueID) (place, d, keep ValueID) {
 	d = e.mapc(MapSub, 0, "sample.d", K, vals, v0)
 	ex := e.mapc(MapMul, 0, "sample.e", K, e.mapc(MapExp, 0, "sample.ed", K, d), inK)
 	p := e.mapc(MapDiv, 0, "sample.p", K, ex, e.one(OpReduce, "sample.sum", 1, Attrs{Fn: MapAdd}, ex))
+	// Typical-p: the entropy, each candidate's key -|log p + H| (-Inf past
+	// the k), their order by it and the mass before each in that order.
+	lp := e.mapc(MapLog, 0, "sample.typ.log", K, p)
+	plogp := e.mapc(MapWhere, 0, "sample.typ.plogp", K, p, e.mapc(MapMul, 0, "sample.typ.pl", K, p, lp))
+	h := e.mapc(MapMul, -1, "sample.typ.h", 1, e.one(OpReduce, "sample.typ.hsum", 1, Attrs{Fn: MapAdd}, plogp))
+	key := e.mapc(MapWhere, math.Inf(-1), "sample.typ.key", K, inK, e.mapc(MapMul, -1, "sample.typ.shiftneg", K,
+		e.mapc(MapAbs, 0, "sample.typ.shift", K, e.mapc(MapAdd, 0, "sample.typ.d", K, lp, h))))
+	trank := e.b.Emit(OpRank, []ValueID{key}, []Result{{Name: "sample.typ.rank", Width: K, Elem: ElemU32}}, nil, Attrs{}, nil, nil)[0]
+	tplace := e.mapc(MapMul, 1, "sample.typ.place", K, trank)
+	tbefore := e.before(p, tplace, "sample.typ")
+	// over is before > typical-p, as -before < -typical-p.
+	over := e.mapc(MapLess, 0, "sample.typ.over", K, e.mapc(MapMul, -1, "sample.typ.before.neg", K, tbefore),
+		e.mapc(MapMul, -1, "sample.typ.neg", 1, typ))
+	keepT := e.mapc(MapMax, 0, "sample.typ.keep", K,
+		e.mapc(MapMul, 0, "sample.typ.keepk", K, e.mapc(MapAdd, 1, "sample.typ.notover", K, e.mapc(MapMul, -1, "sample.typ.over.neg", K, over)), inK),
+		e.mapc(MapLess, 1, "sample.typ.first", K, tplace))
+	// The survivors renormalized where typical-p is on (under 2), p as it
+	// is where it is off.
+	pk := e.mapc(MapMul, 0, "sample.typ.p", K, p, keepT)
+	on := e.mapc(MapLess, 2, "sample.typ.on", 1, typ)
+	p = e.mapc(MapAdd, 0, "sample.p2", K, p, e.mapc(MapMul, 0, "sample.p2.on", K,
+		e.mapc(MapSub, 0, "sample.p2.d", K, e.mapc(MapDiv, 0, "sample.typ.pn", K, pk, e.one(OpReduce, "sample.typ.psum", 1, Attrs{Fn: MapAdd}, pk)), p), on))
 	keepP := e.mapc(MapLess, 0, "sample.keep.p", K, e.before(p, place, "sample"), topp)
 	floor := e.mapc(MapMul, 0, "sample.floor", 1, e.one(OpReduce, "sample.pmax", 1, Attrs{Fn: MapMax}, p), minp)
 	under := e.mapc(MapLess, 0, "sample.under", K, p, floor)
 	keepM := e.mapc(MapAdd, 1, "sample.keep.m", K, e.mapc(MapMul, -1, "sample.under.neg", K, under))
-	first := e.mapc(MapLess, 1, "sample.first", K, place)
-	keep = e.mapc(MapMax, 0, "sample.keep", K, e.mapc(MapMul, 0, "sample.keep.pmk", K, e.mapc(MapMul, 0, "sample.keep.pm", K, keepP, keepM), inK), first)
+	// The best survivor: the lowest place typical-p keeps.
+	fp := e.one(OpReduce, "sample.first.place", 1, Attrs{Fn: MapMin}, e.mapc(MapWhere, math.Inf(1), "sample.first.places", K, keepT, place))
+	first := e.mapc(MapEqual, 0, "sample.first", K, place, fp)
+	keep = e.mapc(MapMax, 0, "sample.keep", K, e.mapc(MapMul, 0, "sample.keep.pmk", K, e.mapc(MapMul, 0, "sample.keep.pm", K, keepP, keepM), keepT), first)
 	return place, d, keep
 }
 

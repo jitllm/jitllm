@@ -117,7 +117,7 @@ func samplerSubset(r json.RawMessage) bool {
 	}
 	for _, n := range names {
 		switch n {
-		case "penalties", "top_k", "top_p", "min_p", "temperature":
+		case "penalties", "top_k", "typ_p", "top_p", "min_p", "temperature":
 		default:
 			return false
 		}
@@ -132,7 +132,6 @@ func llamaFields() map[string]llamaField {
 	return map[string]llamaField{
 		"dynatemp_range":        {numIs(0), "dynamic temperature is not built"},
 		"dynatemp_exponent":     {anyValue, ""},
-		"typical_p":             {numIs(1), "locally typical sampling is not built"},
 		"dry_multiplier":        {numIs(0), "DRY sampling is not built"},
 		"dry_base":              {anyValue, ""},
 		"dry_allowed_length":    {anyValue, ""},
@@ -147,7 +146,7 @@ func llamaFields() map[string]llamaField {
 		"adaptive_target":       {numLE(-1), "adaptive-p sampling is not built"},
 		"adaptive_decay":        {anyValue, ""},
 		"min_keep":              {numIs(0), "min_keep is not built"},
-		"samplers":              {samplerSubset, "only the samplers penalties, top_k, top_p, min_p and temperature exist"},
+		"samplers":              {samplerSubset, "only the samplers penalties, top_k, typ_p, top_p, min_p and temperature exist"},
 		"n_indent":              {numIs(0), "n_indent is not built"},
 		"n_keep":                {numIs(0), "there is no context shift, so n_keep has nothing to keep"},
 		"n_discard":             {numIs(0), "there is no context shift"},
@@ -174,7 +173,7 @@ func llamaRead() map[string]bool {
 		"cache_prompt": true, "n_probs": true, "grammar": true, "json_schema": true,
 		"id_slot": true, "ignore_eos": true, "return_tokens": true, "repeat_penalty": true,
 		"repeat_last_n": true, "presence_penalty": true, "frequency_penalty": true, "model": true,
-		"logit_bias": true,
+		"logit_bias": true, "typical_p": true,
 		// /infill's own.
 		"input_prefix": true, "input_suffix": true, "input_extra": true,
 	}
@@ -551,6 +550,7 @@ func serveLlamaHealth(_ *Engine, w http.ResponseWriter, _ *http.Request) {
 // generation_settings reports them.
 type llamaSettings struct {
 	Temperature, TopP, MinP, RepeatPenalty float64
+	TypicalP                               float64
 	PresencePenalty, FrequencyPenalty      float64
 	TopK, RepeatLastN, NPredict, NProbs    int
 	Seed                                   int64
@@ -561,18 +561,18 @@ type llamaSettings struct {
 
 // llamaDefaults are llama-server's defaults for an absent field.
 func llamaDefaults() llamaSettings {
-	return llamaSettings{Temperature: 0.8, TopP: 0.95, MinP: 0.05, TopK: 40, RepeatPenalty: 1,
+	return llamaSettings{Temperature: 0.8, TopP: 0.95, MinP: 0.05, TopK: 40, RepeatPenalty: 1, TypicalP: 1,
 		RepeatLastN: 64, NPredict: -1, Seed: -1, Stop: []string{}}
 }
 
 func llamaParams(s llamaSettings, _ int, _ []int32, _ int) map[string]any {
 	return map[string]any{
 		"n_predict": s.NPredict, "max_tokens": s.NPredict, "seed": s.Seed, "temperature": s.Temperature,
-		"top_k": s.TopK, "top_p": s.TopP, "min_p": s.MinP, "repeat_last_n": s.RepeatLastN,
+		"top_k": s.TopK, "top_p": s.TopP, "min_p": s.MinP, "typical_p": s.TypicalP, "repeat_last_n": s.RepeatLastN,
 		"repeat_penalty": s.RepeatPenalty, "presence_penalty": s.PresencePenalty, "frequency_penalty": s.FrequencyPenalty,
 		"stop": s.Stop, "ignore_eos": s.IgnoreEOS, "stream": s.Stream,
 		"n_probs": s.NProbs, "grammar": s.Grammar, "json_schema": s.JSONSchema,
-		"samplers": []string{"penalties", "top_k", "top_p", "min_p", "temperature"},
+		"samplers": []string{"penalties", "top_k", "typ_p", "top_p", "min_p", "temperature"},
 	}
 }
 
@@ -659,7 +659,7 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 		return
 	}
 	set := llamaDefaults()
-	var temp, topP, minP, repeat, presence, frequency *float64
+	var temp, topP, minP, typP, repeat, presence, frequency *float64
 	var topK, lastN, nPredict, maxTokens, nProbs, slot *int
 	var seed *int64
 	var stop json.RawMessage
@@ -674,6 +674,7 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 	rd(decodeField(body, "temperature", &temp))
 	rd(decodeField(body, "top_p", &topP))
 	rd(decodeField(body, "min_p", &minP))
+	rd(decodeField(body, "typical_p", &typP))
 	rd(decodeField(body, "repeat_penalty", &repeat))
 	rd(decodeField(body, "presence_penalty", &presence))
 	rd(decodeField(body, "frequency_penalty", &frequency))
@@ -700,6 +701,9 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 	}
 	if minP != nil {
 		set.MinP = *minP
+	}
+	if typP != nil {
+		set.TypicalP = *typP
 	}
 	if repeat != nil {
 		set.RepeatPenalty = *repeat
@@ -908,7 +912,7 @@ func llamaLogitBias(raw json.RawMessage) ([]TokenBias, error) {
 // seed (-1) draws its own; repeat_last_n 0 turns the penalty off and -1 is
 // the context.
 func llamaSampler(s llamaSettings, nctx int) *engine.Sampler {
-	sm := &engine.Sampler{Temp: s.Temperature, TopP: s.TopP, MinP: s.MinP, TopK: max(s.TopK, 0),
+	sm := &engine.Sampler{Temp: s.Temperature, TopP: s.TopP, MinP: s.MinP, TypicalP: s.TypicalP, TopK: max(s.TopK, 0),
 		RepeatPen: s.RepeatPenalty, RepeatLastN: s.RepeatLastN, PresencePen: s.PresencePenalty,
 		FreqPen: s.FrequencyPenalty, Seed: s.Seed}
 	switch s.RepeatLastN {

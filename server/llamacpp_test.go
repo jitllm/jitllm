@@ -205,7 +205,7 @@ func TestLlamaRefusals(t *testing.T) {
 	f := &llamaFake{fakeBackend: &fakeBackend{tokens: []string{"a"}, reason: FinishEOS}}
 	s := llamaServe(t, f)
 	refuse := map[string]string{
-		"mirostat": `2`, "dry_multiplier": `0.8`, "xtc_probability": `0.5`, "typical_p": `0.9`,
+		"mirostat": `2`, "dry_multiplier": `0.8`, "xtc_probability": `0.5`,
 		"presence_penalty": `3`, "frequency_penalty": `-3`, "dynatemp_range": `0.5`,
 		"logit_bias": `[[15]]`, "samplers": `["dry","top_k"]`, "n_cmpl": `2`, "id_slot": `3`,
 		"n_predict": `0`, "n_keep": `5`, "lora": `[{"id":0,"scale":1}]`, "post_sampling_probs": `true`,
@@ -252,6 +252,13 @@ func TestLlamaRefusals(t *testing.T) {
 		if got := f.opts().LogitBias; !slices.Equal(got, want) {
 			t.Errorf("logit_bias %s reached the generate as %v, want %v", body, got, want)
 		}
+	}
+	// typical_p reaches the sampler.
+	if code, out := llamaPost(t, s, "/completion", `{"prompt":"x","typical_p":0.7,"samplers":["typ_p","temperature"]}`); code != 200 {
+		t.Fatalf("typical_p: %d %v", code, out)
+	}
+	if got := f.opts().Sampling.TypicalP; got != 0.7 {
+		t.Errorf("typical_p reached the sampler as %v", got)
 	}
 	// The error body is llama-server's.
 	_, out := llamaPost(t, s, "/completion", `{"prompt":"x","mirostat":1}`)

@@ -12,15 +12,17 @@ import (
 // itself is the composed forms' (Instance.Sample: graph.Sample, SampleWalk,
 // SampleRow and SampleCut), which read the window as a count row.
 //
-// The filters run penalty, top-k, top-p, min-p, then the temperature: top-p
-// and min-p cut the candidates' softmax at temperature 1, and the temperature
-// shapes only the draw over what survives them. Equal logits are ordered
+// The filters run penalty, top-k, typical-p, top-p, min-p, then the
+// temperature, llama.cpp's order: typical-p, top-p and min-p cut the
+// candidates' softmax at temperature 1, each over what the one before it
+// left, and the temperature shapes only the draw over what survives them. Equal logits are ordered
 // higher logit first, lower id on a tie.
 type Sampler struct {
 	Temp        float64 // 0 = greedy; llama.cpp's --temp
 	TopK        int     // 0 = disabled
 	TopP        float64 // 0 or 1 = disabled; nucleus
 	MinP        float64 // 0 = disabled; keep tokens above MinP * p(best)
+	TypicalP    float64 // 0 or 1 = disabled; llama.cpp's typical_p
 	RepeatPen   float64 // 1 = disabled
 	RepeatLastN int     // how far back the penalties look; 0 = 64
 	// PresencePen and FreqPen are llama.cpp's presence and frequency
@@ -112,6 +114,14 @@ func (s *Sampler) cuts() (topp, minp float32) {
 		topp = float32(s.TopP)
 	}
 	return topp, float32(s.MinP)
+}
+
+// typical is typical-p as the draw reads it: +Inf where off.
+func (s *Sampler) typical() float32 {
+	if s.TypicalP > 0 && s.TypicalP < 1 {
+		return float32(s.TypicalP)
+	}
+	return float32(math.Inf(1))
 }
 
 // seed starts the sampler's stream on first use.
