@@ -2419,10 +2419,6 @@ func (e *Engine) generateN(ctx context.Context, o GenerateOptions, emit func(Eve
 		return fmt.Errorf("%w: several choices run on fresh sessions of a model; "+
 			"a named session or continue_session takes one", ErrInvalid)
 	}
-	if o.Speculation != nil && o.Speculation.Enabled {
-		return fmt.Errorf("%w: speculation with several choices is not built: the choices prefill "+
-			"through a shared prompt store, which a Speculator does not use", ErrInvalid)
-	}
 	lm, err := e.Model(o.ModelID)
 	if err != nil {
 		return err
