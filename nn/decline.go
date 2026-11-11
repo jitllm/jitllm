@@ -11,7 +11,6 @@ type Decline uint8
 const (
 	DeclineServes Decline = iota
 	DeclineNoGraph
-	DeclineHeadShape
 	DeclineCaller
 	DeclineNoRoom
 	DeclineNoWeight
@@ -27,8 +26,6 @@ func (d Decline) String() string {
 		return "served"
 	case DeclineNoGraph:
 		return "no graph from the front end"
-	case DeclineHeadShape:
-		return "a head graph other than a norm, its projection and elementwise ops after it, or one naming a vector the head does not carry"
 	case DeclineCaller:
 		return "the caller keeps it on the tier's kernels"
 	case DeclineNoRoom:

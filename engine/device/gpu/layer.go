@@ -3125,12 +3125,12 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 		g.LastErr = why
 		return false
 	}
-	// A head the composer does not serve on this device runs on the CPU
-	// device's composed head, never on the tier's own kernels.
-	if why := bs.headServes(bs.hNorm); why != partServes {
+	// A head graph binding what the tier holds no buffer for is the model's
+	// error, named; it is never left to the tier's own kernels.
+	if err := bs.headServes(bs.hNorm); err != nil {
 		g.giveBackHead(bs)
 		g.Declined++
-		g.LastErr = fmt.Sprintf("the composer does not serve the head on this device (%s)", DeclineName(int(why)))
+		g.LastErr = "the composed head: " + err.Error()
 		return false
 	}
 	g.prepRowsReserved()
@@ -4064,10 +4064,10 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 		if head.Graph != hb.headGraph || head.HiddenGraph != hb.headHidden {
 			return refuse("the head offered is not the one its model placed on the tier")
 		}
-		headWhy = hb.headServes(hNorm)
-		if headWhy == partServes {
-			applied |= head.Stages
+		if err := hb.headServes(hNorm); err != nil {
+			return refuse("the composed head: %v", err)
 		}
+		applied |= head.Stages
 	}
 	if head != nil {
 		left = head.Stages &^ applied
