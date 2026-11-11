@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Build the Gemma 4 vision fixture and record transformers' answers.
 
-    $JITLLM_HF_PY scripts/gemma4visiongold.py
+    $JITLLM_HF_PY scripts/gemma4visiongold.py [--every]
     JITLLM_MODELS=/path/to/models   (where the GGUFs go)
     CV_TOK=<dir holding gemma4/ tokenizer files>   (gemma4gold.py's)
+
+--every adds the every-layer run (logits_every) to the golden of the saved
+fixture, after checking the fixture still gives the golden's logits.
 
 -> $JITLLM_MODELS/synth-gemma4v.gguf, $JITLLM_MODELS/mmproj-synth-gemma4v.gguf
    and testdata/golden/gemma4v/synth-gemma4v.json
@@ -208,6 +211,64 @@ def b64(img):
     return base64.b64encode(img.reshape(-1).tobytes()).decode()
 
 
+def every_layer(m, t_ids, pix, pos, types):
+    """The logits with the picture's rows bidirectional on every layer, the
+    global ones too: the violation the engine's restated container must
+    read as. transformers' full-attention mask, given the sliding one's
+    blockwise overlay."""
+    import transformers.models.gemma4.modeling_gemma4 as g4
+    stated = g4.create_masks_for_vision_model
+
+    def every(config, inputs_embeds, attention_mask, past_key_values, position_ids, block_sequence_ids):
+        masks = stated(config=config, inputs_embeds=inputs_embeds, attention_mask=attention_mask,
+                       past_key_values=past_key_values, position_ids=position_ids,
+                       block_sequence_ids=block_sequence_ids)
+        masks["full_attention"] = g4.create_causal_mask(
+            config=config, inputs_embeds=inputs_embeds, attention_mask=attention_mask,
+            past_key_values=past_key_values, position_ids=position_ids,
+            or_mask_function=g4.blockwise_overlay(block_sequence_ids))
+        return masks
+
+    g4.create_masks_for_vision_model = every
+    try:
+        with torch.no_grad():
+            return m(input_ids=t_ids, pixel_values=pix, image_position_ids=pos, mm_token_type_ids=types).logits[0]
+    finally:
+        g4.create_masks_for_vision_model = stated
+
+
+def add_every():
+    """--every: the saved fixture's golden given the every-layer run, after
+    checking the fixture still gives the golden's logits."""
+    from transformers import Gemma4ForConditionalGeneration
+    from transformers.models.gemma4.image_processing_pil_gemma4 import Gemma4ImageProcessorPil
+    d = os.path.join(HFDIR, NAME)
+    m = Gemma4ForConditionalGeneration.from_pretrained(d, torch_dtype=torch.float32).eval()
+    m.config._attn_implementation = "eager"
+    m.config.text_config._attn_implementation = "eager"
+    path = os.path.join(OUT, NAME + ".json")
+    with open(path) as f:
+        g = json.load(f)
+    pv = Gemma4ImageProcessorPil(max_soft_tokens=280)(images=[picture(IMG_H, IMG_W)], return_tensors="pt")
+    pix, pos = pv["pixel_values"], pv["image_position_ids"]
+    IMG = 258880
+    ids = g["pre"] + [g["boi"]] + [IMG] * g["image"]["soft"] + [g["eoi"]] + g["post"] + g["cont"]
+    t_ids = torch.tensor([ids])
+    types = torch.tensor([[1 if i == IMG else 0 for i in ids]])
+    first = len(ids) - len(g["cont"]) - 1
+    with torch.no_grad():
+        lg = m(input_ids=t_ids, pixel_values=pix, image_position_ids=pos, mm_token_type_ids=types).logits[0]
+    worst = max(abs(float(lg[first + i][j]) - h) for i, r in enumerate(g["logits"]) for j, h in enumerate(r["head"]))
+    assert worst < 1e-4, f"the saved fixture gives logits {worst} from the golden's"
+    ev = every_layer(m, t_ids, pix, pos, types)
+    g["logits_every"] = [{"argmax": int(r.argmax()), "max": float(r.max()),
+                          "margin": float(r.topk(2).values[0] - r.topk(2).values[1]),
+                          "head": [round(float(x), 7) for x in r[:NLOGIT]]} for r in ev[first:]]
+    with open(path, "w") as f:
+        json.dump(g, f)
+    print(f"{NAME}: the fixture gives the golden's logits ({worst:.1e}); logits_every added")
+
+
 def main():
     from transformers import AutoTokenizer, Gemma4ForConditionalGeneration
     from transformers.models.gemma4.image_processing_pil_gemma4 import Gemma4ImageProcessorPil
@@ -273,8 +334,10 @@ def main():
         sel = (t_ids[0] == IMG).nonzero().reshape(-1)
         emb[0, sel] = feats_a8.to(emb.dtype)
         lg8 = m(inputs_embeds=emb, mm_token_type_ids=types).logits[0]
-        # The violation's logits: the image's rows causal on every layer.
+        # The violations' logits: the image's rows causal on every layer,
+        # and bidirectional on every layer.
         causal = m(input_ids=t_ids, pixel_values=pix, image_position_ids=pos).logits[0]
+    every = every_layer(m, t_ids, pix, pos, types)
     # The patch rows as the processor laid them out, (ky, kx, c) each.
     px = pix[0][valid]
     g = {
@@ -287,6 +350,7 @@ def main():
         "logits": logit_rows(lg),
         "logits_a8": logit_rows(lg8),
         "logits_causal": logit_rows(causal),
+        "logits_every": logit_rows(every),
     }
     os.makedirs(OUT, exist_ok=True)
     with open(os.path.join(OUT, NAME + ".json"), "w") as f:
@@ -295,4 +359,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    add_every() if sys.argv[1:] == ["--every"] else main()
