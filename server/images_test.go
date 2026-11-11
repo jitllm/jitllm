@@ -213,7 +213,10 @@ func TestImageRefusalsNameThePart(t *testing.T) {
 		{"/v1/messages", `{"model":"m-1","max_tokens":4,"messages":[{"role":"user","content":[{"type":"image"}]}]}`,
 			"messages[0].content[0].source is missing"},
 		{"/v1/messages", `{"model":"m-1","max_tokens":4,"messages":[{"role":"user","content":[{"type":"document"}]}]}`,
-			"messages[0].content[0] is a document block"},
+			"messages[0].content[0].source is missing"},
+		{"/v1/messages", `{"model":"m-1","max_tokens":4,"messages":[{"role":"user","content":[
+			{"type":"document","source":{"type":"base64","media_type":"application/pdf","data":"JVBERi0="}}]}]}`,
+			"messages[0].content[0].source is a application/pdf document, and this server reads no PDF"},
 		{"/v1/messages", `{"model":"m-1","max_tokens":4,"messages":[{"role":"user","content":[
 			{"type":"tool_result","tool_use_id":"t","content":[{"type":"image","source":{}}]}]}]}`,
 			"messages[0].content[0].content[0] is an image block"},
@@ -229,6 +232,31 @@ func TestImageRefusalsNameThePart(t *testing.T) {
 		}
 		if f.last.Prompt.Kind != PromptNone {
 			t.Errorf("%s: a refused request reached the generate", c.path)
+		}
+	}
+}
+
+// TestADocumentBlockIsTheTurnsText: an Anthropic document block of text
+// -- a text source, content blocks, base64 text/plain -- reaches the chat
+// turn as text after the turn's own, its title and context first.
+func TestADocumentBlockIsTheTurnsText(t *testing.T) {
+	for src, want := range map[string]string{
+		`{"type":"text","media_type":"text/plain","data":"the body"}`:       "Read this.\n\nNotes\n\nfrom a meeting\n\nthe body",
+		`{"type":"content","content":[{"type":"text","text":"the body"}]}`:  "Read this.\n\nNotes\n\nfrom a meeting\n\nthe body",
+		`{"type":"base64","media_type":"text/plain","data":"dGhlIGJvZHk="}`: "Read this.\n\nNotes\n\nfrom a meeting\n\nthe body",
+	} {
+		f := &fakeBackend{tokens: []string{"ok"}, reason: FinishEOS}
+		s := serve(t, f)
+		resp := post(t, s, "/v1/messages", `{"model":"m-1","max_tokens":4,"messages":[{"role":"user","content":[`+
+			`{"type":"text","text":"Read this."},{"type":"document","title":"Notes","context":"from a meeting","source":`+src+`}]}]}`)
+		raw, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != 200 {
+			t.Fatalf("%s: %d %s", src, resp.StatusCode, raw)
+		}
+		ch := f.last.Prompt.Chat
+		if ch == nil || len(ch.Messages) == 0 || ch.Messages[len(ch.Messages)-1].Content != want {
+			t.Fatalf("%s: the turn reads %+v, want %q", src, ch, want)
 		}
 	}
 }

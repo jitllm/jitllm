@@ -1361,8 +1361,8 @@
         "endpoints": [
           "/v1/messages"
         ],
-        "when": "a document content block",
-        "message": "is a document block, which this server does not take"
+        "when": "a document content block whose source is a PDF or a file",
+        "message": "this server reads no PDF"
       },
       {
         "id": "image-non-vision",
