@@ -29,6 +29,10 @@ type blockLease struct {
 	// values.
 	trace *func(layer int, name string, v []float32)
 	picks []float32
+	// cut is the instance's read plans of its cut blocks (Instance.cutPlans):
+	// a block with one pages in only those ranges, the rest of its page its
+	// card's.
+	cut *[][]jlm.Range
 }
 
 // Held is nn.Source's: block li's page is in.
@@ -43,6 +47,9 @@ func (l *blockLease) Ensure(li int) (nn.Tensors, error) {
 	t := &l.layers[li-l.lo]
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if l.cut != nil && li-l.lo < len(*l.cut) && (*l.cut)[li-l.lo] != nil {
+		return t, l.m.PageInRanges(l.fr, li, (*l.cut)[li-l.lo], t)
+	}
 	return t, l.m.PageIn(l.fr, li, t)
 }
 

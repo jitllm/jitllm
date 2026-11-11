@@ -2,7 +2,9 @@ package engine
 
 import (
 	"fmt"
+	"slices"
 
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/nn"
 )
@@ -61,7 +63,29 @@ func (s *Instance) offerCut(adm nn.LayerDevice, li int) (took bool, err error) {
 		s.cutW = append(s.cutW, make([]int, len(s.m.Layers)-len(s.cutW))...)
 	}
 	s.cutW[li] = first.Cut
+	// The second half reads of the block's page only what it binds: the
+	// rest is the card's.
+	if len(s.cutPlans) < s.hi-s.lo {
+		s.cutPlans = append(s.cutPlans, make([][]jlm.Range, s.hi-s.lo-len(s.cutPlans))...)
+	}
+	s.cutPlans[li-s.lo] = s.m.RolesPlan(li, boundRoles(rest.Graph))
 	return true, nil
+}
+
+// boundRoles is every weight role g's ops bind, once each.
+func boundRoles(g *graph.Graph) []jlm.Role {
+	var rs []jlm.Role
+	if g == nil {
+		return rs
+	}
+	for _, o := range g.Ops {
+		for _, w := range o.Weight {
+			if !slices.Contains(rs, w.Role) {
+				rs = append(rs, w.Role)
+			}
+		}
+	}
+	return rs
 }
 
 // cutAt says block li runs cut: its first half on its card, its second on
@@ -88,6 +112,9 @@ func (s *Instance) clearCut(li int) {
 	s.places[routeLanes].ReleaseLayers(li, li+1)
 	s.holdFrame(li, routeLanes, -1)
 	s.cutW[li] = 0
+	if li-s.lo < len(s.cutPlans) {
+		s.cutPlans[li-s.lo] = nil
+	}
 }
 
 // runEnd is the end of a run of blocks [li, hi) on one route: the block

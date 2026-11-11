@@ -384,6 +384,9 @@ type Instance struct {
 	// its second on the CPU device (cut.go); cutRow is a call's rows of it.
 	cutW   []int
 	cutRow []float32
+	// cutPlans[li-lo], where set, is what cut block li's second half reads
+	// of its page (cut.go), read through the block lease.
+	cutPlans [][]jlm.Range
 	// places are the devices of routes, each one's side of a placement, and
 	// fromFrames says which run a block from the instance's frames.
 	places     [2]nn.BlockPlacer

@@ -61,6 +61,22 @@ func TestRoutedExpertsRunOnTheCPUBesideTheCard(t *testing.T) {
 				if mixtures == 0 {
 					t.Fatal("the fixture has no mixture block")
 				}
+				// A cut block's second half reads of its page only the
+				// weights it binds, fewer than the block's base: the card
+				// holds the attention's.
+				for li := range m.Cfg.NLayer {
+					if !s.cutAt(li) {
+						continue
+					}
+					var n uint64
+					for _, r := range s.cutPlans[li-s.lo] {
+						n += r.N
+					}
+					total, bank := m.BlockBytes(li)
+					if n == 0 || n >= total-bank {
+						t.Fatalf("cut block %d's second half reads %d bytes of a %d-byte base", li, n, total-bank)
+					}
+				}
 				cpu0, _ := s.Account(nn.CPU).Steps.Of(nn.ComposedBlock)
 				st0 := g.Stats()
 				l, err := s.Prefill(ids)
