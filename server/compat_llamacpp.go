@@ -129,8 +129,6 @@ func llamaFields() map[string]llamaField {
 		"dynatemp_range":        {numIs(0), "dynamic temperature is not built"},
 		"dynatemp_exponent":     {anyValue, ""},
 		"typical_p":             {numIs(1), "locally typical sampling is not built"},
-		"presence_penalty":      {numIs(0), "the sampler has no presence penalty; repeat_penalty is built"},
-		"frequency_penalty":     {numIs(0), "the sampler has no frequency penalty; repeat_penalty is built"},
 		"dry_multiplier":        {numIs(0), "DRY sampling is not built"},
 		"dry_base":              {anyValue, ""},
 		"dry_allowed_length":    {anyValue, ""},
@@ -172,7 +170,7 @@ func llamaRead() map[string]bool {
 		"n_predict": true, "max_tokens": true, "stop": true, "seed": true, "stream": true,
 		"cache_prompt": true, "n_probs": true, "grammar": true, "json_schema": true,
 		"id_slot": true, "ignore_eos": true, "return_tokens": true, "repeat_penalty": true,
-		"repeat_last_n": true, "model": true,
+		"repeat_last_n": true, "presence_penalty": true, "frequency_penalty": true, "model": true,
 		// /infill's own.
 		"input_prefix": true, "input_suffix": true, "input_extra": true,
 	}
@@ -549,6 +547,7 @@ func serveLlamaHealth(_ *Engine, w http.ResponseWriter, _ *http.Request) {
 // generation_settings reports them.
 type llamaSettings struct {
 	Temperature, TopP, MinP, RepeatPenalty float64
+	PresencePenalty, FrequencyPenalty      float64
 	TopK, RepeatLastN, NPredict, NProbs    int
 	Seed                                   int64
 	Stop                                   []string
@@ -566,7 +565,8 @@ func llamaParams(s llamaSettings, _ int, _ []int32, _ int) map[string]any {
 	return map[string]any{
 		"n_predict": s.NPredict, "max_tokens": s.NPredict, "seed": s.Seed, "temperature": s.Temperature,
 		"top_k": s.TopK, "top_p": s.TopP, "min_p": s.MinP, "repeat_last_n": s.RepeatLastN,
-		"repeat_penalty": s.RepeatPenalty, "stop": s.Stop, "ignore_eos": s.IgnoreEOS, "stream": s.Stream,
+		"repeat_penalty": s.RepeatPenalty, "presence_penalty": s.PresencePenalty, "frequency_penalty": s.FrequencyPenalty,
+		"stop": s.Stop, "ignore_eos": s.IgnoreEOS, "stream": s.Stream,
 		"n_probs": s.NProbs, "grammar": s.Grammar, "json_schema": s.JSONSchema,
 		"samplers": []string{"penalties", "top_k", "top_p", "min_p", "temperature"},
 	}
@@ -655,7 +655,7 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 		return
 	}
 	set := llamaDefaults()
-	var temp, topP, minP, repeat *float64
+	var temp, topP, minP, repeat, presence, frequency *float64
 	var topK, lastN, nPredict, maxTokens, nProbs, slot *int
 	var seed *int64
 	var stop json.RawMessage
@@ -671,6 +671,8 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 	rd(decodeField(body, "top_p", &topP))
 	rd(decodeField(body, "min_p", &minP))
 	rd(decodeField(body, "repeat_penalty", &repeat))
+	rd(decodeField(body, "presence_penalty", &presence))
+	rd(decodeField(body, "frequency_penalty", &frequency))
 	rd(decodeField(body, "top_k", &topK))
 	rd(decodeField(body, "repeat_last_n", &lastN))
 	rd(decodeField(body, "n_predict", &nPredict))
@@ -697,6 +699,12 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 	}
 	if repeat != nil {
 		set.RepeatPenalty = *repeat
+	}
+	if presence != nil {
+		set.PresencePenalty = *presence
+	}
+	if frequency != nil {
+		set.FrequencyPenalty = *frequency
 	}
 	if topK != nil {
 		set.TopK = *topK
@@ -748,7 +756,8 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 		}
 	}
 	fs := samplingFields{Temperature: &set.Temperature, TopP: &set.TopP, MinP: &set.MinP,
-		RepetitionPenalty: &set.RepeatPenalty, TopK: &set.TopK}
+		RepetitionPenalty: &set.RepeatPenalty, PresencePenalty: &set.PresencePenalty,
+		FrequencyPenalty: &set.FrequencyPenalty, TopK: &set.TopK}
 	if set.TopK == 0 {
 		fs.TopK = nil // llama.cpp's 0 is "disabled"
 	}
@@ -823,10 +832,11 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 // the context.
 func llamaSampler(s llamaSettings, nctx int) *engine.Sampler {
 	sm := &engine.Sampler{Temp: s.Temperature, TopP: s.TopP, MinP: s.MinP, TopK: max(s.TopK, 0),
-		RepeatPen: s.RepeatPenalty, RepeatLastN: s.RepeatLastN, Seed: s.Seed}
+		RepeatPen: s.RepeatPenalty, RepeatLastN: s.RepeatLastN, PresencePen: s.PresencePenalty,
+		FreqPen: s.FrequencyPenalty, Seed: s.Seed}
 	switch s.RepeatLastN {
 	case 0:
-		sm.RepeatPen = 1
+		sm.RepeatPen, sm.PresencePen, sm.FreqPen = 1, 0, 0
 	case -1:
 		sm.RepeatLastN = nctx
 	}

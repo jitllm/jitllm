@@ -26,8 +26,7 @@ import (
 //	repetition_penalty  1 = disabled; llama.cpp's repeat_penalty over the last 64
 //	seed                the draw's seed; without one each request draws its own
 //	presence_penalty,
-//	frequency_penalty   the engine's sampler has neither, so a non-zero value is
-//	                    refused rather than ignored
+//	frequency_penalty   0 = disabled, in [-2, 2]; llama.cpp's over the same window
 //	n                   continuations of one prompt, prefilled once; read by
 //	                    the OpenAI routes (compat_choices.go)
 //	logprobs,
@@ -62,14 +61,13 @@ func (q *oaSampling) fields() samplingFields {
 		q.FrequencyPenalty, q.TopK}
 }
 
-// validate refuses a value outside its range, and the two penalties the
-// engine's sampler does not have.
+// validate refuses a value outside its range.
 func (q samplingFields) validate() error {
-	if q.PresencePenalty != nil && *q.PresencePenalty != 0 {
-		return fmt.Errorf("presence_penalty is not supported; repetition_penalty is")
+	if q.PresencePenalty != nil && (*q.PresencePenalty < -2 || *q.PresencePenalty > 2) {
+		return fmt.Errorf("presence_penalty %v is outside [-2, 2]", *q.PresencePenalty)
 	}
-	if q.FrequencyPenalty != nil && *q.FrequencyPenalty != 0 {
-		return fmt.Errorf("frequency_penalty is not supported; repetition_penalty is")
+	if q.FrequencyPenalty != nil && (*q.FrequencyPenalty < -2 || *q.FrequencyPenalty > 2) {
+		return fmt.Errorf("frequency_penalty %v is outside [-2, 2]", *q.FrequencyPenalty)
 	}
 	if q.Temperature != nil && *q.Temperature < 0 {
 		return fmt.Errorf("temperature %v is negative", *q.Temperature)
@@ -97,7 +95,7 @@ func (q *oaSampling) sampler(session string) (*engine.Sampler, error) {
 		return nil, err
 	}
 	if session != "" && q.Temperature == nil && q.TopP == nil && q.TopK == nil &&
-		q.MinP == nil && q.RepetitionPenalty == nil && q.Seed == nil {
+		q.MinP == nil && q.RepetitionPenalty == nil && q.PresencePenalty == nil && q.FrequencyPenalty == nil && q.Seed == nil {
 		return nil, nil
 	}
 	s := &engine.Sampler{Temp: 1, TopP: 1}
@@ -115,6 +113,12 @@ func (q *oaSampling) sampler(session string) (*engine.Sampler, error) {
 	}
 	if q.RepetitionPenalty != nil {
 		s.RepeatPen = *q.RepetitionPenalty
+	}
+	if q.PresencePenalty != nil {
+		s.PresencePen = *q.PresencePenalty
+	}
+	if q.FrequencyPenalty != nil {
+		s.FreqPen = *q.FrequencyPenalty
 	}
 	if q.Seed != nil {
 		s.Seed = *q.Seed

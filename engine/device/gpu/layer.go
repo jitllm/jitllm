@@ -4888,12 +4888,14 @@ func (g *devTier) layersSession(s backend.Session) {
 	}
 	switch {
 	case sampleK > 0 && sampleSrv:
-		// The composed sampler reads the penalty, the window where a penalty
-		// applies (a penalty of 1 leaves the row whatever the window holds)
-		// and the walk's words.
-		binary.LittleEndian.PutUint32(g.subBytes.penalty[:], math.Float32bits(head.SamplePenalty))
+		// The composed sampler reads the penalties, the window where they
+		// apply (penalties that are off leave the row whatever the window
+		// holds) and the walk's words.
+		for i, p := range head.SamplePenalty {
+			binary.LittleEndian.PutUint32(g.subBytes.penalty[4*i:], math.Float32bits(p))
+		}
 		w(g.samplePenalty, g.subBytes.penalty[:])
-		if head.SamplePenalty != 1 {
+		if !head.SamplePenalty.Off() {
 			w(g.sampleWindow, f32b(head.SampleWindow))
 		}
 		w(g.sampleWalk, f32b(head.WalkArgs[:]))
@@ -5037,8 +5039,8 @@ type stagingBytes struct {
 	embPos           []byte // the composer's gather's positions (embedWords)
 	fold             []byte // the folded head's row take's request (foldWords)
 	one              [4]byte
-	calls, headCalls [4]byte // a call's rows (blockScratch.calls, headCalls)
-	penalty          [4]byte // the sampler's penalty (nn.Head.SamplePenalty)
+	calls, headCalls [4]byte  // a call's rows (blockScratch.calls, headCalls)
+	penalty          [12]byte // the sampler's penalties (nn.Head.SamplePenalty)
 }
 
 // u32b is v as four little-endian bytes in the devTier's own scratch, for a

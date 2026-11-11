@@ -130,7 +130,7 @@ func sampleOnGPU(t *testing.T, d backend.Device, dv composer.Device, g *graph.Gr
 	for i, v := range c.Logits {
 		lw[i] = math.Float32bits(v)
 	}
-	vals := map[graph.ValueID][]uint32{g.In[0]: lw, g.In[1]: composer.SampleWindow(c, shift), g.In[2]: {math.Float32bits(c.Pen)}}
+	vals := map[graph.ValueID][]uint32{g.In[0]: lw, g.In[1]: composer.SampleWindow(c, shift), g.In[2]: {math.Float32bits(c.Pen), 0, 0}}
 	if err := runGraphValues(d, codes, op.kerns, g, vals); err != nil {
 		t.Fatalf("%s: %v", c.Name, err)
 	}

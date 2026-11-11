@@ -56,7 +56,7 @@ func TestComposedCPUSampleRow(t *testing.T) {
 		}
 		win := windowWords(hist, n)
 		vals := map[graph.ValueID][]uint32{
-			in["logits"]: lw, in["sample.window"]: win, in["sample.penalty"]: {math.Float32bits(pen)},
+			in["logits"]: lw, in["sample.window"]: win, in["sample.penalty"]: {math.Float32bits(pen), 0, 0},
 			in["sample.ids"]: append([]uint32(nil), ids...), in["sample.row"]: {math.Float32bits(invT), math.Float32bits(u)},
 			tokV: {0},
 		}

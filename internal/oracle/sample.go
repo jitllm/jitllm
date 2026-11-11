@@ -38,6 +38,21 @@ func PenalizeOnce(v []float32, hist []int, pen float32) {
 	}
 }
 
+// Penalize is v with llama.cpp's penalties on each token hist holds: the
+// repeat penalty once (PenalizeOnce), then frequency times its count plus
+// presence subtracted, each step rounded to float32.
+func Penalize(v []float32, hist []int, rep, presence, frequency float32) {
+	PenalizeOnce(v, hist, rep)
+	count := map[int]int{}
+	for _, h := range hist {
+		count[h]++
+	}
+	for t, c := range count {
+		f := float32(float32(c) * frequency)
+		v[t] = float32(v[t] - float32(f+presence))
+	}
+}
+
 // SampleRow is the draw with no top-k and no cut: the repeat penalty once on
 // each token the window holds, in float32 (PenalizeOnce), the row's softmax
 // at 1/T in float64, its order (the larger first, the lower id of two equal),

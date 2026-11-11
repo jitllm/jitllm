@@ -19,7 +19,7 @@ const sampleMaxK = nn.SampleMaxK
 // call reads the logits back. Callers hold g.mu, outside any Session.
 func (g *devTier) prepSample(head *nn.Head) bool {
 	n, k := head.W.Rows, head.SampleK
-	if k < 1 || k >= n || k > sampleMaxK || head.SamplePenalty != 1 && len(head.SampleWindow) != n {
+	if k < 1 || k >= n || k > sampleMaxK || !head.SamplePenalty.Off() && len(head.SampleWindow) != n {
 		return false
 	}
 	w := g.scratchWin()
@@ -34,7 +34,7 @@ func (g *devTier) sampleBufs(n int) bool {
 	if l.sampleWindow != nil {
 		return l.sampleN == n
 	}
-	sizes := [...]int{4 * n, 4, 4 * len(nn.Head{}.WalkArgs)}
+	sizes := [...]int{4 * n, 4 * len(nn.Penalties{}), 4 * len(nn.Head{}.WalkArgs)}
 	var bufs [len(sizes)]backend.Buf
 	for i, sz := range sizes {
 		b, err := g.dev.Alloc(sz)

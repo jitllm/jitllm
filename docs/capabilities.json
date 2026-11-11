@@ -742,12 +742,12 @@
           {
             "name": "presence_penalty",
             "type": "number",
-            "note": "only 0: a non-zero value is refused (repetition_penalty is the engine's)"
+            "note": "[-2, 2]; 0 disables; llama.cpp's, over repetition_penalty's window"
           },
           {
             "name": "frequency_penalty",
             "type": "number",
-            "note": "only 0: a non-zero value is refused (repetition_penalty is the engine's)"
+            "note": "[-2, 2]; 0 disables; llama.cpp's, over repetition_penalty's window"
           },
           {
             "name": "seed",
@@ -892,12 +892,12 @@
           {
             "name": "presence_penalty",
             "type": "number",
-            "note": "only 0: a non-zero value is refused (repetition_penalty is the engine's)"
+            "note": "[-2, 2]; 0 disables; llama.cpp's, over repetition_penalty's window"
           },
           {
             "name": "frequency_penalty",
             "type": "number",
-            "note": "only 0: a non-zero value is refused (repetition_penalty is the engine's)"
+            "note": "[-2, 2]; 0 disables; llama.cpp's, over repetition_penalty's window"
           },
           {
             "name": "seed",
@@ -1238,22 +1238,22 @@
     ],
     "refusals": [
       {
-        "id": "presence-penalty",
+        "id": "presence-penalty-range",
         "endpoints": [
           "/v1/chat/completions",
           "/v1/completions"
         ],
-        "when": "presence_penalty is non-zero",
-        "message": "presence_penalty is not supported"
+        "when": "presence_penalty is outside [-2, 2]",
+        "message": "presence_penalty 3 is outside [-2, 2]"
       },
       {
-        "id": "frequency-penalty",
+        "id": "frequency-penalty-range",
         "endpoints": [
           "/v1/chat/completions",
           "/v1/completions"
         ],
-        "when": "frequency_penalty is non-zero",
-        "message": "frequency_penalty is not supported"
+        "when": "frequency_penalty is outside [-2, 2]",
+        "message": "frequency_penalty 3 is outside [-2, 2]"
       },
       {
         "id": "n-range",

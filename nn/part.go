@@ -222,14 +222,26 @@ type KVConvDevice interface {
 }
 
 // DrawArgs is a draw's sampler: its top-k (0 for none), 1/T, top-p and
-// min-p, and its repeat penalty with the window it counts (nil where the
-// penalty is 1).
+// min-p, and its penalties with the window they count (nil where they are
+// off).
 type DrawArgs struct {
 	TopK                int
 	InvTemp, TopP, MinP float32
-	Penalty             float32
+	Penalty             Penalties
 	Window              []float32
 }
+
+// Penalties are a draw's penalties over the tokens its window holds, as
+// llama.cpp applies them: the repeat penalty once a token (1 is none), then
+// presence once a token and frequency once a count subtracted (0 is none).
+type Penalties [3]float32
+
+// NoPenalties leaves every logit as it is.
+func NoPenalties() Penalties { return Penalties{1, 0, 0} }
+
+// Off reports whether p leaves every logit as it is, whatever the window
+// holds.
+func (p Penalties) Off() bool { return p == NoPenalties() }
 
 // HeadDevice is a device running the head and the samplers: the head over a
 // row (Head) or a call's rows (HeadRows), the output norm alone, a label

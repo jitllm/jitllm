@@ -310,12 +310,12 @@ func TestNativeRefusesWhatTheOpenAIRoutesRefuse(t *testing.T) {
 		native            *v1.GenerateRequest
 		contains          string
 	}{
-		{"presence_penalty", "/v1/chat/completions", chatBody(`"presence_penalty":0.5`),
-			chat(parityMessages(), samp(func(s *v1.SamplingParams) { s.PresencePenalty = ptr(float32(0.5)) })),
-			"presence_penalty is not supported"},
-		{"frequency_penalty", "/v1/chat/completions", chatBody(`"frequency_penalty":0.5`),
-			chat(parityMessages(), samp(func(s *v1.SamplingParams) { s.FrequencyPenalty = ptr(float32(0.5)) })),
-			"frequency_penalty is not supported"},
+		{"presence_penalty above 2", "/v1/chat/completions", chatBody(`"presence_penalty":3`),
+			chat(parityMessages(), samp(func(s *v1.SamplingParams) { s.PresencePenalty = ptr(float32(3)) })),
+			"outside [-2, 2]"},
+		{"frequency_penalty below -2", "/v1/chat/completions", chatBody(`"frequency_penalty":-3`),
+			chat(parityMessages(), samp(func(s *v1.SamplingParams) { s.FrequencyPenalty = ptr(float32(-3)) })),
+			"outside [-2, 2]"},
 		{"negative temperature", "/v1/chat/completions", chatBody(`"temperature":-1`),
 			chat(parityMessages(), samp(func(s *v1.SamplingParams) { s.Temperature = ptr(float32(-1)) })), "is negative"},
 		{"top_p above 1", "/v1/chat/completions", chatBody(`"top_p":2`),

@@ -18,11 +18,12 @@ func (s *Sample) Build() *Graph {
 	return g
 }
 
-// SampleTopK is the sampler's candidates: the repeat penalty over the row
+// SampleTopK is the sampler's candidates: the penalties over the row
 // (penalizedRow), then its K largest, largest first and the lower id on a
 // tie. Its inputs are the logits, sample.window (each token's count in the
-// repeat window, as floats) and sample.penalty; its outputs the K values and
-// their ids. A request for k <= K reads the first k, and none of the form
+// repeat window, as floats) and sample.penalty (the repeat, presence and
+// frequency penalties, nn.Penalties); its outputs the K values and their
+// ids. A request for k <= K reads the first k, and none of the form
 // depends on k or on the window's length.
 type SampleTopK struct {
 	NVocab, K int
@@ -40,18 +41,22 @@ func (s *SampleTopK) emit(b *Builder) (vals, ids ValueID) {
 	K := min(s.K, s.NVocab)
 	l := b.In("logits", s.NVocab)
 	win := b.In("sample.window", s.NVocab)
-	pen := b.In("sample.penalty", 1)
+	pen := b.In("sample.penalty", 3)
 	v := penalizedRow(b, l, win, pen)
 	cand := b.Emit(OpTopK, []ValueID{v}, []Result{{Name: "sample.ids", Width: K, Elem: ElemU32}, {Name: "sample.vals", Width: K}}, nil,
 		Attrs{TopK: K}, nil, nil)
 	return cand[1], cand[0]
 }
 
-// penalizedRow is the repeat penalty over logits l: a token the window
-// holds (its count in win above zero) once, whatever its count -- a
-// positive logit divided by the penalty, correctly rounded, any other
-// multiplied by it -- and every other token as it is.
+// penalizedRow is llama.cpp's penalties over logits l, on each token the
+// window holds (its count in win above zero): the repeat penalty once,
+// whatever its count -- a positive logit divided by it, correctly rounded,
+// any other multiplied by it -- then frequency times its count plus
+// presence subtracted. Every other token is as it is. pen is the three
+// penalties' words, in that order.
 func penalizedRow(b *Builder, l, win, pen ValueID) ValueID {
+	e := sampleEmitter{b}
+	rep, pres, freq := e.word(pen, 0, "sample.repeat"), e.word(pen, 1, "sample.presence"), e.word(pen, 2, "sample.frequency")
 	in := func(i int) Arg { return Arg{Kind: ArgIn, Index: i} }
 	term := func(i int) Arg { return Arg{Kind: ArgTerm, Index: i} }
 	terms := []Term{
@@ -60,8 +65,12 @@ func penalizedRow(b *Builder, l, win, pen ValueID) ValueID {
 		{Fn: MapWhere, Args: [3]Arg{in(0), term(0), term(1)}},
 		{Fn: MapLess, Args: [3]Arg{{Kind: ArgConst, Const: 0}, in(1)}},
 		{Fn: MapWhere, Args: [3]Arg{term(3), term(2), in(0)}},
+		{Fn: MapMul, Args: [3]Arg{in(1), in(4)}},
+		{Fn: MapMul, Args: [3]Arg{term(3), in(3)}},
+		{Fn: MapAdd, Args: [3]Arg{term(5), term(6)}},
+		{Fn: MapSub, Args: [3]Arg{term(4), term(7)}},
 	}
-	return b.Emit(OpExpr, []ValueID{l, win, pen}, []Result{{Name: "sample.penalized", Width: b.G.Values[l].Width}}, nil,
+	return b.Emit(OpExpr, []ValueID{l, win, rep, pres, freq}, []Result{{Name: "sample.penalized", Width: b.G.Values[l].Width}}, nil,
 		Attrs{Expr: terms, Exact: true}, nil, nil)[0]
 }
 
@@ -128,7 +137,7 @@ func (s *SampleRow) Build() *Graph {
 	b := New()
 	l := b.In("logits", s.NVocab)
 	win := b.In("sample.window", s.NVocab)
-	pen := b.In("sample.penalty", 1)
+	pen := b.In("sample.penalty", 3)
 	ids := b.In("sample.ids", s.NVocab)
 	b.G.Values[ids].Elem = ElemU32
 	row := b.In("sample.row", 2)
@@ -169,7 +178,7 @@ func (s *SampleCut) Build() *Graph {
 	n := s.NVocab
 	l := b.In("logits", n)
 	win := b.In("sample.window", s.NVocab)
-	pen := b.In("sample.penalty", 1)
+	pen := b.In("sample.penalty", 3)
 	ids := b.In("sample.ids", n)
 	b.G.Values[ids].Elem = ElemU32
 	words := 4

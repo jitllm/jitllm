@@ -386,6 +386,12 @@ func pbSampling(p *v1.SamplingParams) *engine.Sampler {
 	if p.RepeatLastN != nil {
 		s.RepeatLastN = int(*p.RepeatLastN)
 	}
+	if p.PresencePenalty != nil {
+		s.PresencePen = float64(*p.PresencePenalty)
+	}
+	if p.FrequencyPenalty != nil {
+		s.FreqPen = float64(*p.FrequencyPenalty)
+	}
 	return s
 }
 
