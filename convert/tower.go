@@ -149,6 +149,19 @@ func idefics3Tower(s *jlm.Source) (*jlm.Tower, error) {
 	return t, nil
 }
 
+// erfGELU is the activation of a tower whose class's hidden_act is "gelu"
+// (ACT2FN's GELUActivation, the erf form): the file says only that the tower
+// runs GELU, which llama.cpp's graph runs in the tanh form.
+func erfGELU(v *jlm.Vision, family string) (jlm.Expr, error) {
+	if !v.Flags.Has(jlm.FlagGELU) || v.Flags.Has(jlm.FlagQuickGELU) {
+		return jlm.Expr{}, fmt.Errorf("convert: %s: the tower's activation is not GELU", family)
+	}
+	var e jlm.ExprBuilder
+	e.GELUErf(jlm.Operand(0))
+	x := jlm.Expr{Terms: e.T}
+	return x, x.Valid()
+}
+
 // towerFFNByShape names each tower block's two MLP matrices by what they do,
 // not what the file calls them: the one that expands NEmbd to the MLP's
 // width is RoleVFC1, the one that contracts it back RoleVFC2, their biases
@@ -1087,11 +1100,12 @@ func kimivlTower(s *jlm.Source) (*jlm.Tower, error) {
 // bounds on the area) and normalised; its patches in raster order -- the
 // processor's, unlike Qwen-VL's merge windows -- through a biased matrix,
 // plus a learned square table resampled bilinear (interpolate,
-// align_corners false); LayerNorm blocks with no rotary; then the
-// merger: an RMSNorm, each 2x2 raster window one row through the 2x2
-// convolution as a matrix, the exact GELU, the 1x1 convolution, a newline
-// row after each merged row, a linear, the begin and end rows around the
-// picture and an RMSNorm -- H*(W+1)+2 rows. A picture is its start marker,
+// align_corners false); LayerNorm blocks with no rotary and the exact GELU
+// (its vision config's "gelu"); then the merger: an RMSNorm, each 2x2
+// raster window one row through the 2x2 convolution as a matrix, the exact
+// GELU, the 1x1 convolution, a newline row after each merged row, a linear,
+// the begin and end rows around the picture and an RMSNorm -- H*(W+1)+2
+// rows. A picture is its start marker,
 // its rows and its end marker, its grid the text model's XD-RoPE grid over
 // the merge with the newline column and the two end rows.
 func hunyuanvlTower(s *jlm.Source) (*jlm.Tower, error) {
@@ -1121,7 +1135,7 @@ func hunyuanvlTower(s *jlm.Source) (*jlm.Tower, error) {
 	if side < 2 || side*side != table {
 		return nil, fmt.Errorf("convert: hunyuanvl: a position table of %d rows is not a square grid", table)
 	}
-	act, err := v.Activation(false)
+	act, err := erfGELU(v, "hunyuanvl")
 	if err != nil {
 		return nil, err
 	}
@@ -1189,10 +1203,10 @@ const janusMinSide = 14
 // Pillow's BICUBIC filter so its longer side is the tower's and centred on
 // the tower's square of the processor's background colour (the mean as
 // bytes), then normalised; SigLIP's patches through a biased matrix plus
-// the position table, its blocks and post-LayerNorm; then the aligner --
-// llava's two matrices with the exact GELU between. A picture is
-// "<begin_of_image>", its rows, "<end_of_image>", the template's
-// "<image_placeholder>" its mark.
+// the position table, its blocks (the exact GELU, JanusVisionConfig's
+// "gelu") and post-LayerNorm; then the aligner -- llava's two matrices with
+// the exact GELU between. A picture is "<begin_of_image>", its rows,
+// "<end_of_image>", the template's "<image_placeholder>" its mark.
 func janusTower(s *jlm.Source) (*jlm.Tower, error) {
 	v := s.Vision
 	has := towerRoles(s)
@@ -1210,7 +1224,7 @@ func janusTower(s *jlm.Source) (*jlm.Tower, error) {
 			hidden = int32(t.Dims[1])
 		}
 	}
-	act, err := v.Activation(false)
+	act, err := erfGELU(v, "janus")
 	if err != nil {
 		return nil, err
 	}
