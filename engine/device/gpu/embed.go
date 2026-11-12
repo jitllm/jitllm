@@ -387,7 +387,7 @@ func (g *devTier) materializeComposed(pe *embPend) {
 	}
 	defer g.scratchWin().close() // the scratch's own buffers (scratch.go)
 	bs := g.bs
-	if bs == nil || bs.embedServes() != nil || !g.embedBufs(bs) {
+	if bs == nil || !bs.embedServed() || !g.embedBufs(bs) {
 		g.LastErr = "the composer's input rows were promised and are no longer held"
 		return
 	}

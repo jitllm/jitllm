@@ -3832,7 +3832,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 		// The composer's gather (nn.ComposedEmbed) at the call's rows; a call
 		// it cannot write them for (a ragged step's rows, each its own
 		// sequence's) takes them made real by the same form.
-		if len(pe.ids) == nrow && nrow <= R && rag == nil && g.bs.embedServes() == nil && g.embedBufs(g.bs) &&
+		if len(pe.ids) == nrow && nrow <= R && rag == nil && g.bs.embedServed() && g.embedBufs(g.bs) &&
 			g.bs.embW.k == p.NEmbd {
 			embedSrv = true
 		} else {
