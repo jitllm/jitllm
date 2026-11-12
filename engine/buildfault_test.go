@@ -3,8 +3,9 @@
 package engine
 
 import (
-	"errors"
 	"math"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/jitllm/jitllm/model"
@@ -18,7 +19,7 @@ import (
 
 const faultModel = "Llama-3.2-1B-Instruct-Q4_K_M.gguf"
 
-func faultTier(t *testing.T, parts nn.Parts, extra ...gpu.Option) *gpu.GPU {
+func faultTier(t *testing.T, extra ...gpu.Option) *gpu.GPU {
 	t.Helper()
 	o := append(append([]gpu.Option{gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t)...), extra...)
 	if testdevices.Selected() {
@@ -32,45 +33,53 @@ func faultTier(t *testing.T, parts nn.Parts, extra ...gpu.Option) *gpu.GPU {
 }
 
 type faultRun struct {
-	err           error
-	ev            Evacuations
-	demotions     int
-	before, after int
-	spills        int
+	placed    int
+	why       string
+	cause     nn.FailCause
+	toks      []int32
+	err       error
+	ev        Evacuations
+	demotions int
 }
 
-// buildFaultRun prefills a prompt and steps a few tokens on a device whose
-// composer cannot form a matvec, the failure reported as a build failure or,
-// for the violation, as the device failing.
-func buildFaultRun(t *testing.T, m *model.Model, parts nn.Parts, asDevice bool, io ...Option) faultRun {
+// faultGreedy prefills ids and takes three greedy tokens.
+func faultGreedy(st *Instance, ids []int32) ([]int32, error) {
+	logits, err := st.Prefill(ids)
+	var toks []int32
+	for i := 0; err == nil && i < 3; i++ {
+		id := argmaxID(logits)
+		toks = append(toks, id)
+		logits, err = st.Forward(id)
+	}
+	return toks, err
+}
+
+// buildFaultRun places the blocks on a device whose composer cannot form a
+// matvec -- the failure reported as a build failure or, for the violation, as
+// the device failing -- then prefills a prompt and steps a few tokens.
+func buildFaultRun(t *testing.T, m *model.Model, ids []int32, asDevice bool, io ...Option) faultRun {
 	t.Helper()
 	var f gpu.Faults
 	f.SetFormFault(true, graph.OpMatVec, asDevice)
-	g := faultTier(t, parts, gpu.WithFaults(&f))
+	g := faultTier(t, gpu.WithFaults(&f))
 	defer g.Close()
-	ids := m.Vocab.Encode("The capital of France is Paris, and the capital of Germany is", true)
 	st := testInstance(t, m, len(ids)+8, io...)
 	defer st.Close()
 	st.SetDevice(g)
-	r := faultRun{before: st.GPULayers()}
-	if r.before == 0 {
-		t.Fatalf("no block on the device: %s", g.Err())
-	}
-	logits, err := st.Prefill(ids)
-	for i := 0; err == nil && i < 3; i++ {
-		_, err = st.Forward(argmaxID(logits))
-	}
-	r.err = err
+	r := faultRun{placed: st.GPULayers(), why: g.Err(), cause: g.ErrCause()}
+	r.toks, r.err = faultGreedy(st, ids)
 	r.ev, r.demotions = st.Evacuations(), st.DeviceDemotions()
-	r.after, r.spills = st.GPULayers(), st.Spills()
 	return r
 }
 
 // TestBuildFailureMovesNothing fails the composer's form of every matvec (a
-// rewrite of its registry) and demands the call that needed the form return
-// the named nn.BuildError with no block moved, none demoted, none relocated.
-// The violation reports the same failure as the device failing: the instance must
-// then demote, which proves the gate can tell the two apart (RULE 10).
+// rewrite of its registry). Forms are built where the blocks are placed, never
+// at a step, so the placement meets the failure: every block is declined
+// there, named as a form that does not build, the device records a build
+// failure, and the prompt and its steps run on the CPU device with its
+// answer -- nothing demoted, relocated or refused. The violation reports the
+// same failure as the device failing, which a call meeting it would demote
+// for: the gate must tell the two apart (RULE 10).
 func TestBuildFailureMovesNothing(t *testing.T) {
 	p := testmodels.Path(faultModel)
 	instOpts := []Option{WithKVF16(false)}
@@ -79,34 +88,35 @@ func TestBuildFailureMovesNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	for _, c := range []struct {
-		name  string
-		parts nn.Parts
-	}{{"block", nn.ComposedBlock}, {"head", nn.ComposedHead}} {
-		t.Run(c.name, func(t *testing.T) {
-			r := buildFaultRun(t, m, c.parts, false, instOpts...)
-			var be *nn.BuildError
-			if !errors.As(r.err, &be) {
-				t.Fatalf("a form that does not build gave %v, want an nn.BuildError", r.err)
-			}
-			t.Logf("refused: %v", r.err)
-			if r.ev.BuildRefused == 0 {
-				t.Fatalf("the refusal was not counted: %+v", r.ev)
-			}
-			if r.demotions != 0 || r.ev.DemotedFault != 0 || r.ev.DemotedDecline != 0 || r.ev.Relocated != 0 ||
-				r.spills != 0 || r.after != r.before {
-				t.Fatalf("a build failure moved work: %+v, demotions %d, spills %d, %d of %d blocks left on the device",
-					r.ev, r.demotions, r.spills, r.after, r.before)
-			}
-
-			v := buildFaultRun(t, m, c.parts, true, instOpts...)
-			if v.ev.DemotedFault == 0 || v.after != 0 {
-				t.Fatalf("the violation ran without evacuating (%+v, %d blocks left): the gate cannot tell a build "+
-					"failure from a device fault", v.ev, v.after)
-			}
-			t.Logf("the violation evacuated: %+v", v.ev)
-		})
+	ids := m.Vocab.Encode("The capital of France is Paris, and the capital of Germany is", true)
+	host := testInstance(t, m, len(ids)+8, instOpts...)
+	want, err := faultGreedy(host, ids)
+	host.Close()
+	if err != nil {
+		t.Fatal(err)
 	}
+
+	r := buildFaultRun(t, m, ids, false, instOpts...)
+	if r.placed != 0 || !strings.Contains(r.why, "does not build") {
+		t.Fatalf("a form that does not build: %d blocks placed, the device said %q", r.placed, r.why)
+	}
+	if r.cause != nn.FailBuild {
+		t.Fatalf("a form that does not build is recorded as %v, want %v", r.cause, nn.FailBuild)
+	}
+	if r.err != nil || !slices.Equal(r.toks, want) {
+		t.Fatalf("the declined blocks on the CPU device: %v, tokens %v, the CPU's %v", r.err, r.toks, want)
+	}
+	if r.demotions != 0 || r.ev != (Evacuations{}) {
+		t.Fatalf("a build failure moved work: %+v, %d demotions", r.ev, r.demotions)
+	}
+	t.Logf("declined at the placement: %s", r.why)
+
+	v := buildFaultRun(t, m, ids, true, instOpts...)
+	if v.cause == nn.FailBuild {
+		t.Fatalf("the violation is recorded as a build failure (%q): the gate cannot tell a build failure from a "+
+			"device fault", v.why)
+	}
+	t.Logf("the violation is recorded as %v", v.cause)
 }
 
 // TestDeviceFaultAtDecodeEvacuatesAndIsCounted fails the device's first call,
@@ -130,7 +140,7 @@ func TestDeviceFaultAtDecodeEvacuatesAndIsCounted(t *testing.T) {
 	want = append([]float32(nil), want...)
 
 	t.Setenv("JITLLM_DEVICE_FAIL_AT", "1")
-	g := faultTier(t, 0)
+	g := faultTier(t)
 	defer g.Close()
 	dev := testInstance(t, m, 8, instOpts...)
 	defer dev.Close()
