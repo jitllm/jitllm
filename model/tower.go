@@ -524,12 +524,12 @@ func (m *Model) BuildTowerGraphs() (*TowerGraphs, error) {
 		tg.Rows = max(tg.Rows, cl.Rows)
 	}
 	if t.Video != nil {
-		if len(t.Chain) > 0 || !t.Video.Whole && !fit.Own() {
+		if len(t.Chain) > 0 || !t.Video.AsPictures() && !fit.Own() {
 			return nil, fmt.Errorf("model: a video read by a tower whose pictures are not each of a size of its own")
 		}
 		tg.Video = t.Video
 	}
-	if t.Video != nil && !t.Video.Whole {
+	if t.Video != nil && !t.Video.AsPictures() {
 		// A whole frame is a picture: its classes are the picture's.
 		for i, sd := range sides {
 			cl := towerClass{Entry: map[uint8]*graph.Graph{}, Rows: tg.Classes[i].Rows}

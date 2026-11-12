@@ -15,16 +15,93 @@ import (
 	"github.com/jitllm/jitllm/graph"
 )
 
-// VideoPlan is how the tower reads a video (jlm.Video): the frames it
-// samples, an odd count's last repeated, two to a picture of the tower, or
-// each one a picture whole; the square a pair's frames are resized to, or a
-// whole frame's last square; each picture's time or number as the prompt
-// writes it, or, joined, the positions its pairs stand apart.
-type VideoPlan struct {
+// VideoSample is what a video's statement samples (SampleVideo): the video
+// of N frames read at Rate frames a second, the frames sampled -- K of them,
+// then the last repeated to fill a group -- and, one grid, the positions its
+// groups stand apart.
+type VideoSample struct {
+	N      int
+	Rate   float64
 	Frames []int
-	Square Square
-	Stamps []string
+	K      int
 	Stride int
+}
+
+// SampleVideo evaluates v's count, indices and stride for a video of n
+// frames at fps frames a second, 0 where the caller states none: each
+// frame once where v says so, the last repeated to fill a group.
+func SampleVideo(v *jlm.Video, n int, fps float64) (VideoSample, error) {
+	if n < 1 {
+		return VideoSample{}, fmt.Errorf("model: a video of %d frames", n)
+	}
+	s := VideoSample{N: n, Rate: fps}
+	if !(s.Rate > 0) {
+		s.Rate = float64(v.DefaultFps)
+	}
+	var in [jlm.VideoOperands]float64
+	in[jlm.VideoN], in[jlm.VideoRate] = float64(n), s.Rate
+	c, err := evalSize(&v.Count, in[:])
+	if err != nil {
+		return VideoSample{}, fmt.Errorf("model: the video's count: %w", err)
+	}
+	if !(c >= 1 && (v.MaxFrames == 0 || c <= float64(v.MaxFrames))) {
+		return VideoSample{}, fmt.Errorf("model: a video of %d frames at %v a second samples %v, where it states 1 to %d",
+			n, s.Rate, c, v.MaxFrames)
+	}
+	k := int(c)
+	in[jlm.VideoK] = float64(k)
+	for i := range k {
+		in[jlm.VideoAt] = float64(i)
+		x, err := evalSize(&v.Index, in[:])
+		if err != nil {
+			return VideoSample{}, fmt.Errorf("model: the video's index: %w", err)
+		}
+		if math.IsNaN(x) {
+			return VideoSample{}, fmt.Errorf("model: the video's frame %d of %d is at %v", i, k, x)
+		}
+		f := int(min(max(math.Trunc(x), 0), float64(n-1)))
+		if v.Once && slices.Contains(s.Frames, f) {
+			continue
+		}
+		s.Frames = append(s.Frames, f)
+	}
+	s.K = len(s.Frames)
+	for len(s.Frames)%int(v.Group) != 0 {
+		s.Frames = append(s.Frames, s.Frames[len(s.Frames)-1])
+	}
+	if v.Stride != nil {
+		x, err := evalSize(v.Stride, in[:])
+		if err != nil {
+			return VideoSample{}, fmt.Errorf("model: the video's stride: %w", err)
+		}
+		s.Stride = int(x)
+	}
+	return s, nil
+}
+
+// VideoFrameSize is the size v's own resize gives sample s's frames of
+// w x h pixels, its count the one v states the resize reads.
+func VideoFrameSize(v *jlm.Video, s VideoSample, w, h int) (int, int, error) {
+	if v.AsPictures() {
+		return 0, 0, fmt.Errorf("model: a video read as pictures is sized as a picture is")
+	}
+	sized, err := evalSize(&v.Sized, []float64{float64(s.K), float64(len(s.Frames))})
+	if err != nil {
+		return 0, 0, fmt.Errorf("model: the video's sized count: %w", err)
+	}
+	r := v.Pre[0].Ints
+	if per := int(r[5]); !(len(r) > 6 && r[6] == 1) && int(sized) < per {
+		return 0, 0, fmt.Errorf("model: a video of %d frames samples %d, fewer than the %d a picture of the tower takes", s.N, int(sized), per)
+	}
+	return videoSize(int(sized), w, h, r)
+}
+
+// VideoPlan is how the tower reads a video (jlm.Video): what it samples, and
+// the square a group's frames are resized to, or a frame's last square
+// where it is read as a picture.
+type VideoPlan struct {
+	VideoSample
+	Square Square
 }
 
 // VideoPlan is the plan for a video of n frames of w x h pixels at fps
@@ -37,120 +114,142 @@ func (tg *TowerGraphs) VideoPlan(n, w, h int, fps float64) (VideoPlan, error) {
 	if n < 1 || w < 1 || h < 1 {
 		return VideoPlan{}, fmt.Errorf("model: a video of %d frames of %dx%d", n, w, h)
 	}
-	// A whole frame is one picture of the tower; a pair's frames are sized
-	// together, in counts of Ints[5].
-	pair, per := int(v.Entry.NIn), 1
-	if v.Whole {
-		pair = 1
-	} else {
-		per = int(v.Pre[0].Ints[5])
-	}
-	rate := fps
-	if !(rate > 0) {
-		rate = float64(v.DefaultFps)
-	}
-	var p VideoPlan
-	k := n
-	switch {
-	case v.EveryFrame:
-		for i := range n {
-			p.Frames = append(p.Frames, i)
-		}
-	case v.Steps:
-		p.Frames = stepFrames(n, rate, float64(v.Fps), int(v.MaxSeconds))
-		for len(p.Frames)%pair != 0 {
-			p.Frames = append(p.Frames, p.Frames[len(p.Frames)-1])
-		}
-		// The repeated frame is sized with the rest.
-		k = len(p.Frames)
-		if k < per {
-			return VideoPlan{}, fmt.Errorf("model: a video of %d frames samples %d, fewer than the %d a picture of the tower takes", n, k, per)
-		}
-	default:
-		k = min(max(int(float64(n)/rate*float64(v.Fps)), int(v.MinFrames)), int(v.MaxFrames), n)
-		if k < per {
-			return VideoPlan{}, fmt.Errorf("model: a video of %d frames samples %d, fewer than the %d a picture of the tower takes", n, k, per)
-		}
-		// numpy's linspace(0, n-1, k), rounded half to even.
-		for i := range k {
-			at := float64(n-1) * float64(i) / float64(k-1)
-			if k > 1 {
-				at = float64(i) * (float64(n-1) / float64(k-1))
-			}
-			if i == k-1 {
-				at = float64(n - 1)
-			}
-			p.Frames = append(p.Frames, int(math.RoundToEven(at)))
-		}
-	}
-	for len(p.Frames)%pair != 0 {
-		p.Frames = append(p.Frames, p.Frames[len(p.Frames)-1])
-	}
-	switch {
-	case v.Joined && v.PerSecond > 0:
-		p.Stride = int(v.PerSecond) * int(float64(pair)/rate)
-	case v.Joined:
-		p.Stride = 1
-	case v.StampIndex:
-		for i := range len(p.Frames) / pair {
-			p.Stamps = append(p.Stamps, strconv.Itoa(i+1))
-		}
-	case v.StampFirst:
-		// Python's int of the first frame's time, at StampDigits places.
-		unit := math.Pow(10, float64(v.StampDigits))
-		for i := 0; i < len(p.Frames); i += pair {
-			t := math.Trunc(float64(p.Frames[i])/rate*unit) / unit
-			p.Stamps = append(p.Stamps, strconv.FormatFloat(t, 'f', int(v.StampDigits), 64))
-		}
-	default:
-		for i := 0; i < len(p.Frames); i += pair {
-			t := (float64(p.Frames[i])/rate + float64(p.Frames[i+pair-1])/rate) / 2
-			p.Stamps = append(p.Stamps, strconv.FormatFloat(t, 'f', int(v.StampDigits), 64))
-		}
-	}
-	if v.Whole {
-		p.Square = tg.LastSquare(w, h)
-		return p, nil
-	}
-	ow, oh, err := videoSize(k, w, h, v.Pre[0].Ints)
+	s, err := SampleVideo(v, n, fps)
 	if err != nil {
 		return VideoPlan{}, err
 	}
-	p.Square = tg.VideoSquare(ow, oh)
-	return p, nil
+	if v.AsPictures() {
+		return VideoPlan{VideoSample: s, Square: tg.LastSquare(w, h)}, nil
+	}
+	ow, oh, err := VideoFrameSize(v, s, w, h)
+	if err != nil {
+		return VideoPlan{}, err
+	}
+	return VideoPlan{VideoSample: s, Square: tg.VideoSquare(ow, oh)}, nil
 }
 
-// stepFrames is jlm.Video.Steps' sampling of n frames at rate r: the frames
-// at whole steps of r / fps over the video's seconds, each once.
-func stepFrames(n int, r, fps float64, maxSeconds int) []int {
-	last := n - 1
-	d := math.RoundToEven(float64(last)/r) + 1
-	var at []int
-	if d <= float64(maxSeconds) {
-		for i := range max(int(math.Floor(d*fps)), 1) {
-			at = append(at, min(last, int(math.Ceil(float64(i)*r/fps))))
+// evalSize is a stated expression of a video's sizes (jlm.Video's count,
+// indices, stride and prompt values) at operands in, in float64 as the
+// processors compute them in numpy and torch: geometry from the video's
+// frames and rate, once a video, not arithmetic a token runs.
+func evalSize(e *jlm.Expr, in []float64) (float64, error) {
+	vals := make([]float64, len(e.Terms))
+	arg := func(a jlm.Arg) float64 {
+		switch a.Kind {
+		case jlm.ArgIn:
+			return in[a.Index]
+		case jlm.ArgTerm:
+			return vals[a.Index]
 		}
-	} else if c := int(float64(maxSeconds) * fps); c >= n {
-		for i := range n {
-			at = append(at, i)
+		return float64(a.Value)
+	}
+	for k, t := range e.Terms {
+		if t.Reduce {
+			return 0, fmt.Errorf("model: term %d of a video's size reduces a row", k)
 		}
-	} else {
-		// numpy's linspace(0, d, c) seconds.
-		for i := range c {
-			t := d
-			if i < c-1 {
-				t = float64(i) * (d / float64(c-1))
+		a, b, c := arg(t.Args[0]), arg(t.Args[1]), arg(t.Args[2])
+		var v float64
+		switch t.Fn {
+		case jlm.FnAdd:
+			v = a + b
+		case jlm.FnSub:
+			v = a - b
+		case jlm.FnMul:
+			v = a * b
+		case jlm.FnDiv:
+			v = a / b
+		case jlm.FnMax:
+			v = max(a, b)
+		case jlm.FnMin:
+			v = min(a, b)
+		case jlm.FnSqrt:
+			v = math.Sqrt(a)
+		case jlm.FnWhere:
+			v = c
+			if a > 0 {
+				v = b
 			}
-			at = append(at, min(last, int(math.Ceil(t*r))))
+		case jlm.FnLess:
+			if a < b {
+				v = 1
+			}
+		case jlm.FnEqual:
+			if a == b {
+				v = 1
+			}
+		case jlm.FnFma:
+			v = math.FMA(a, b, c)
+		case jlm.FnAbs:
+			v = math.Abs(a)
+		case jlm.FnRound:
+			v = math.Round(a)
+		case jlm.FnFloor:
+			v = math.Floor(a)
+		case jlm.FnCeil:
+			v = math.Ceil(a)
+		case jlm.FnTrunc:
+			v = math.Trunc(a)
+		case jlm.FnRoundEven:
+			v = math.RoundToEven(a)
+		case jlm.FnF32:
+			v = float64(float32(a))
+		case jlm.FnRecip:
+			v = 1 / a
+		case jlm.FnLog:
+			v = math.Log(a)
+		case jlm.FnExp:
+			v = math.Exp(a)
+		default:
+			return 0, fmt.Errorf("model: term %d of a video's size is %v, not a function of sizes", k, t.Fn)
 		}
+		vals[k] = v
 	}
-	var out []int
-	for _, f := range at {
-		if !slices.Contains(out, f) {
-			out = append(out, f)
+	return vals[len(vals)-1], nil
+}
+
+// formatValue is v as f writes it in a video's prompt.
+func formatValue(f *jlm.ValueFormat, v float64) (string, error) {
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return "", fmt.Errorf("model: a video's prompt writes a value of %v", v)
+	}
+	switch f.Kind {
+	case jlm.FormatDecimal:
+		if f.Trunc {
+			u := math.Pow(10, float64(f.Digits))
+			v = math.Trunc(v*u) / u
 		}
+		return strconv.FormatFloat(v, 'f', int(f.Digits), 64), nil
+	case jlm.FormatClock:
+		if v < 0 {
+			return "", fmt.Errorf("model: a clock of %v seconds", v)
+		}
+		rem, out := int64(v), ""
+		if f.Days[0] != "" {
+			if d := rem / 86400; d > 0 {
+				out = strconv.FormatInt(d, 10) + f.Days[min(d-1, 1)]
+			}
+			rem %= 86400
+		}
+		sep := ""
+		for i, unit := range [3]int64{3600, 60, 1} {
+			w := int(f.Clock[i])
+			if w == 0 {
+				continue
+			}
+			n := rem / unit
+			rem -= n * unit
+			out += sep + fmt.Sprintf("%0*d", w, n)
+			sep = f.Sep
+		}
+		return out, nil
+	case jlm.FormatTable:
+		i := int(math.Trunc(v))
+		if !(v >= 0) || i >= len(f.Strings) {
+			return "", fmt.Errorf("model: a value of %v past its table of %d", v, len(f.Strings))
+		}
+		return f.Strings[i], nil
 	}
-	return out
+	return "", fmt.Errorf("model: a value written by format %d", f.Kind)
 }
 
 // VideoSquare is a video pair's square, its frames resized to ow x oh: the
@@ -237,92 +336,213 @@ func videoEntry(t *jlm.Tower, px0, px1 uint8, grid, extra, side int, f graph.Fac
 	return b.G, graph.Verify(b.G, f)
 }
 
+// VideoParts is a video as a prompt places it: its spans, and the text the
+// video's prompt writes before its first ids or rows and after its last,
+// apart, for the caller to encode with the prompt's text beside them, as a
+// processor expands its placeholder into a string before tokenizing it.
+type VideoParts struct {
+	Lead  string
+	Spans []Span
+	Tail  string
+}
+
 // VideoSpans is the spans a video of frames at fps frames a second (0 where
-// the caller states none) stands in a prompt as (jlm.Video): Before, then
-// for each pair of the frames it samples, or each frame read whole, its
-// time or number and the tower's span around its rows, then After. The
-// frames are one size, as the reference stacks them.
+// the caller states none) stands in a prompt as (jlm.Video), its text at
+// either end encoded alone (VideoParts).
 func (m *Model) VideoSpans(frames []image.Image, fps float64) ([]Span, error) {
+	vp, err := m.VideoParts(frames, fps)
+	if err != nil {
+		return nil, err
+	}
+	out := vp.Spans
+	if lead := m.encodeText(vp.Lead); len(lead) > 0 {
+		out = append([]Span{{Tokens: lead}}, out...)
+	}
+	if tail := m.encodeText(vp.Tail); len(tail) > 0 {
+		out = append(out, Span{Tokens: tail})
+	}
+	return out, nil
+}
+
+// VideoParts is the video of frames at fps frames a second as its prompt
+// writes it (jlm.Video.Prompt): its pieces in order, the text between two
+// ids or rows encoded as one, as the reference tokenizes it, each group's
+// rows a picture span. The frames are one size, as the reference stacks
+// them.
+func (m *Model) VideoParts(frames []image.Image, fps float64) (VideoParts, error) {
 	tg := m.Tower
 	if tg == nil || tg.Video == nil {
-		return nil, fmt.Errorf("model: the model reads no video")
+		return VideoParts{}, fmt.Errorf("model: the model reads no video")
 	}
 	if len(frames) == 0 {
-		return nil, fmt.Errorf("model: a video of no frames")
+		return VideoParts{}, fmt.Errorf("model: a video of no frames")
 	}
 	sz := frames[0].Bounds().Size()
 	for i, f := range frames {
 		if f.Bounds().Size() != sz {
-			return nil, fmt.Errorf("model: frame %d of a video is %v and frame 0 %v", i, f.Bounds().Size(), sz)
+			return VideoParts{}, fmt.Errorf("model: frame %d of a video is %v and frame 0 %v", i, f.Bounds().Size(), sz)
 		}
 	}
 	p, err := tg.VideoPlan(len(frames), sz.X, sz.Y, fps)
 	if err != nil {
-		return nil, err
+		return VideoParts{}, err
 	}
-	v, t := tg.Video, m.Container.Vision().Tower
+	items, err := VideoLayout(tg.Video, p.VideoSample)
+	if err != nil {
+		return VideoParts{}, err
+	}
 	rows := tg.SquareOut(p.Square)
 	var grid ImageGrid
 	if tg.GridDiv > 0 {
 		grid = ImageGrid{T: 1, H: p.Square.Gh / tg.GridDiv, W: p.Square.Gw / tg.GridDiv, Line: tg.Line, Ends: tg.Ends}
 	}
-	toks := append([]int32(nil), v.Before...)
-	var out []Span
-	if v.Joined {
-		// One grid of the pairs, each pair's rows a span of its own and one
-		// frame of it.
-		out = append(out, Span{Tokens: toks})
-		pairs := len(p.Frames) / 2
-		for i := range pairs {
-			f0, f1 := frames[p.Frames[2*i]], frames[p.Frames[2*i+1]]
-			k, err := videoKey(p.Square, f0, f1)
+	var out VideoParts
+	var toks []int32
+	for i, it := range items {
+		switch {
+		case it.Group >= 0:
+			if len(toks) > 0 {
+				out.Spans = append(out.Spans, Span{Tokens: toks})
+			}
+			toks = nil
+			sp, err := videoSpan(tg.Video, p, frames, it.Group, rows, grid)
 			if err != nil {
-				return nil, err
+				return VideoParts{}, err
 			}
-			g := grid
-			if !g.Zero() {
-				g.T, g.Frame, g.Frames, g.Stride = pairs, i, 1, p.Stride
-			}
-			out = append(out, Span{Picture: f0, Frame: f1, FrameW: p.Square.Ow, FrameH: p.Square.Oh, PicRows: rows, Grid: g, Key: k})
-		}
-		return append(out, Span{Tokens: append([]int32(nil), v.After...)}), nil
-	}
-	// The text between two pictures' spans -- a time written after the one,
-	// Between, a time or number written before the next -- is encoded as
-	// one, as the reference tokenizes it.
-	text := ""
-	for i, st := range p.Stamps {
-		stamp := v.StampBefore + st + v.StampAfter
-		if i > 0 {
-			text += v.Between
-		}
-		if !v.StampLast {
-			text += stamp
-		}
-		toks = append(append(toks, m.encodeText(text)...), t.Span.Before...)
-		var sp Span
-		if v.Whole {
-			f := frames[p.Frames[i]]
-			k, err := videoKey(p.Square, f)
-			if err != nil {
-				return nil, err
-			}
-			sp = Span{Picture: f, Whole: true, PicRows: rows, Grid: grid, Key: k}
-		} else {
-			f0, f1 := frames[p.Frames[2*i]], frames[p.Frames[2*i+1]]
-			k, err := videoKey(p.Square, f0, f1)
-			if err != nil {
-				return nil, err
-			}
-			sp = Span{Picture: f0, Frame: f1, FrameW: p.Square.Ow, FrameH: p.Square.Oh, PicRows: rows, Grid: grid, Key: k}
-		}
-		out = append(out, Span{Tokens: toks}, sp)
-		toks, text = append([]int32(nil), t.Span.After...), ""
-		if v.StampLast {
-			text = stamp
+			out.Spans = append(out.Spans, sp)
+		case it.IDs != nil:
+			toks = append(toks, it.IDs...)
+		case i == 0:
+			out.Lead = it.Text
+		case i == len(items)-1:
+			out.Tail = it.Text
+		default:
+			toks = append(toks, m.encodeText(it.Text)...)
 		}
 	}
-	return append(out, Span{Tokens: append(append(toks, m.encodeText(text)...), v.After...)}), nil
+	if len(toks) > 0 {
+		out.Spans = append(out.Spans, Span{Tokens: toks})
+	}
+	return out, nil
+}
+
+// VideoItem is one item of a video's prompt laid out (VideoLayout): text,
+// ids, or the rows of group Group (-1 for text or ids).
+type VideoItem struct {
+	Text  string
+	IDs   []int32
+	Group int
+}
+
+// VideoLayout is v's prompt for sample s, its pieces in order: each value
+// written, the groups' bodies repeated with their operands, and the text
+// between two ids or rows joined into one item, as the reference tokenizes
+// it.
+func VideoLayout(v *jlm.Video, s VideoSample) ([]VideoItem, error) {
+	l := videoLayout{v: v, s: s}
+	l.in[jlm.VideoN], l.in[jlm.VideoRate] = float64(s.N), s.Rate
+	l.in[jlm.VideoK], l.in[jlm.VideoSeconds] = float64(s.K), float64(s.N)/s.Rate
+	if err := l.pieces(v.Prompt); err != nil {
+		return nil, err
+	}
+	l.text()
+	return l.out, nil
+}
+
+// videoLayout lays a video's prompt out (VideoLayout): the text pending
+// until the next ids or rows, and the operands its values read.
+type videoLayout struct {
+	v       *jlm.Video
+	s       VideoSample
+	in      [jlm.VideoOperands]float64
+	pending string
+	out     []VideoItem
+}
+
+// text ends the text pending before ids or rows, an item of its own.
+func (l *videoLayout) text() {
+	if l.pending != "" {
+		l.out = append(l.out, VideoItem{Text: l.pending, Group: -1})
+	}
+	l.pending = ""
+}
+
+func (l *videoLayout) pieces(ps []jlm.VideoPiece) error {
+	for _, pc := range ps {
+		switch pc.Kind {
+		case jlm.PieceIDs:
+			l.text()
+			l.out = append(l.out, VideoItem{IDs: pc.IDs, Group: -1})
+		case jlm.PieceText:
+			l.pending += pc.Text
+		case jlm.PieceValue:
+			x, err := evalSize(&pc.Value, l.in[:])
+			if err != nil {
+				return err
+			}
+			s, err := formatValue(&pc.Format, x)
+			if err != nil {
+				return err
+			}
+			l.pending += s
+		case jlm.PieceGroups:
+			if err := l.groups(pc); err != nil {
+				return err
+			}
+		case jlm.PieceSpan:
+			l.text()
+			l.out = append(l.out, VideoItem{Group: int(l.in[jlm.VideoGroup])})
+		}
+	}
+	return nil
+}
+
+// groups lays piece pc's body out once per group, its Between before every
+// one but the first, each with its group's operands.
+func (l *videoLayout) groups(pc jlm.VideoPiece) error {
+	g := int(l.v.Group)
+	for j := range len(l.s.Frames) / g {
+		if j > 0 {
+			if err := l.pieces(pc.Between); err != nil {
+				return err
+			}
+		}
+		f0, f1 := l.s.Frames[j*g], l.s.Frames[j*g+g-1]
+		l.in[jlm.VideoGroup] = float64(j)
+		l.in[jlm.VideoF0], l.in[jlm.VideoT0] = float64(f0), float64(f0)/l.s.Rate
+		l.in[jlm.VideoF1], l.in[jlm.VideoT1] = float64(f1), float64(f1)/l.s.Rate
+		if err := l.pieces(pc.Body); err != nil {
+			return err
+		}
+	}
+	for _, k := range []int{jlm.VideoGroup, jlm.VideoF0, jlm.VideoT0, jlm.VideoF1, jlm.VideoT1} {
+		l.in[k] = 0
+	}
+	return nil
+}
+
+// videoSpan is group j's rows: a frame read as a picture, or a group read
+// by the video's entry; one frame of a grid of every group where the video
+// states a stride.
+func videoSpan(v *jlm.Video, p VideoPlan, frames []image.Image, j, rows int, grid ImageGrid) (Span, error) {
+	g := int(v.Group)
+	if v.AsPictures() {
+		f := frames[p.Frames[j]]
+		k, err := videoKey(p.Square, f)
+		if err != nil {
+			return Span{}, err
+		}
+		return Span{Picture: f, Whole: true, PicRows: rows, Grid: grid, Key: k}, nil
+	}
+	f0, f1 := frames[p.Frames[j*g]], frames[p.Frames[j*g+g-1]]
+	k, err := videoKey(p.Square, f0, f1)
+	if err != nil {
+		return Span{}, err
+	}
+	if v.Stride != nil && !grid.Zero() {
+		grid.T, grid.Frame, grid.Frames, grid.Stride = len(p.Frames)/g, j, 1, p.Stride
+	}
+	return Span{Picture: f0, Frame: f1, FrameW: p.Square.Ow, FrameH: p.Square.Oh, PicRows: rows, Grid: grid, Key: k}, nil
 }
 
 // encodeText is text's tokens with no specials, none for no text (a

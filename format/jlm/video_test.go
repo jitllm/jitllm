@@ -1,13 +1,22 @@
 package jlm
 
 import (
+	"math"
 	"reflect"
 	"testing"
 )
 
+// in is the expression whose value is operand i.
+func in(i uint32) Expr { return Expr{Terms: []Term{{Fn: FnAdd, Args: [3]Arg{Operand(i), Num(0)}}}} }
+
+// testVideo is a video of pairs: two frames a second, 4 to 768 of them,
+// resized together, each pair's mean time to one place and its span.
 func testVideo() *Video {
+	var c, mean ExprBuilder
+	c.Fn(FnMin, c.Fn(FnMax, c.Fn(FnTrunc, c.Fn(FnMul, c.Fn(FnDiv, Operand(VideoN), Operand(VideoRate)), Num(2))), Num(4)), Num(768))
+	mean.Fn(FnDiv, mean.Fn(FnAdd, Operand(VideoT0), Operand(VideoT1)), Num(2))
 	return &Video{
-		Fps: 2, DefaultFps: 24, MinFrames: 4, MaxFrames: 768,
+		DefaultFps: 24, Count: Expr{Terms: c.T}, Index: in(VideoAt), MaxFrames: 768, Group: 2, Sized: in(0),
 		Pre: []PreStep{
 			{Kind: PreVideoResize, Ints: []int32{32, 4096, 25165824, int32(FilterPILBicubic), int32(PrecTorch), 2}},
 			{Kind: PreNormalize, Floats: []float32{0.5, 0.5, 0.5, 0.5, 0.5, 0.5}},
@@ -20,41 +29,56 @@ func testVideo() *Video {
 			{Code: TOpLinear, In: []uint16{4}, Bind: []Role{RoleVPatchEmbd2}},
 			{Code: TOpAdd, In: []uint16{5, 6}},
 		}},
-		StampBefore: "<", StampAfter: " seconds>", StampDigits: 1,
-		Before: []int32{248053}, After: []int32{248054},
+		Prompt: []VideoPiece{{Kind: PieceIDs, IDs: []int32{248053}}, {Kind: PieceGroups, Body: []VideoPiece{
+			{Kind: PieceText, Text: "<"},
+			{Kind: PieceValue, Value: Expr{Terms: mean.T}, Format: ValueFormat{Kind: FormatDecimal, Digits: 1}},
+			{Kind: PieceText, Text: " seconds>"},
+			{Kind: PieceSpan},
+		}}, {Kind: PieceIDs, IDs: []int32{248054}}},
 	}
 }
 
-// testJoinedVideo is Qwen2.5-VL's: every frame, each sized alone, the
-// pairs one grid two positions a second apart.
-func testJoinedVideo() *Video {
+// testGridVideo reads every frame, each sized alone, the pairs one grid
+// two positions a second apart.
+func testGridVideo() *Video {
 	v := testVideo()
-	v.Fps, v.MinFrames, v.MaxFrames = 0, 0, 0
-	v.EveryFrame, v.Joined, v.PerSecond = true, true, 2
+	v.Count, v.Index, v.MaxFrames = in(VideoN), in(VideoAt), 0
 	v.Pre[0].Ints = []int32{28, 100352, 602112, int32(FilterPILBicubic), int32(PrecTorch), 2, 1}
-	v.StampBefore, v.StampAfter, v.StampDigits = "", "", 0
+	var s ExprBuilder
+	s.Fn(FnMul, Num(2), s.Fn(FnTrunc, s.Fn(FnDiv, Num(2), Operand(VideoRate))))
+	v.Stride = &Expr{Terms: s.T}
+	v.Prompt = []VideoPiece{{Kind: PieceIDs, IDs: []int32{1}}, {Kind: PieceGroups, Body: []VideoPiece{{Kind: PieceSpan}}},
+		{Kind: PieceIDs, IDs: []int32{2}}}
 	return v
 }
 
-// testStepVideo is GLM-4V's: two frames a second in whole steps over at
-// most 300 seconds, each pair's first frame's whole seconds after it.
-func testStepVideo() *Video {
-	v := testVideo()
-	v.MinFrames, v.MaxFrames, v.Steps, v.MaxSeconds = 1, 600, true, 300
-	v.StampFirst, v.StampLast = true, true
-	v.StampBefore, v.StampAfter, v.StampDigits = "", "", 0
-	return v
-}
-
-// testWholeVideo is InternVL's: every frame read whole as the picture's
-// last square, numbered from 1, a line between one frame and the next.
-func testWholeVideo() *Video {
-	return &Video{EveryFrame: true, Whole: true, StampIndex: true, StampBefore: "Frame", StampAfter: ": ", Between: "\n"}
+// testPictureVideo reads each frame as a picture: its count in words from
+// a table, its length as a clock with days, and each frame numbered from 1
+// and timed as minutes and seconds, a line between one frame and the next.
+func testPictureVideo() *Video {
+	var j1 ExprBuilder
+	j1.Fn(FnAdd, Operand(VideoGroup), Num(1))
+	return &Video{Count: in(VideoN), Index: in(VideoAt), Group: 1, Sized: in(0), Prompt: []VideoPiece{
+		{Kind: PieceText, Text: "A video of "},
+		{Kind: PieceValue, Value: in(VideoK), Format: ValueFormat{Kind: FormatTable, Strings: []string{"zero", "one", "two"}}},
+		{Kind: PieceText, Text: " frames, "},
+		{Kind: PieceValue, Value: in(VideoSeconds), Format: ValueFormat{Kind: FormatClock, Clock: [3]int32{1, 2, 2}, Sep: ":",
+			Days: [2]string{" day, ", " days, "}}},
+		{Kind: PieceGroups, Between: []VideoPiece{{Kind: PieceText, Text: "\n"}}, Body: []VideoPiece{
+			{Kind: PieceText, Text: "Frame"},
+			{Kind: PieceValue, Value: Expr{Terms: j1.T}, Format: ValueFormat{Kind: FormatDecimal}},
+			{Kind: PieceValue, Value: in(VideoT0), Format: ValueFormat{Kind: FormatClock, Clock: [3]int32{0, 2, 2}, Sep: ":"}},
+			{Kind: PieceIDs, IDs: []int32{7}}, {Kind: PieceSpan}, {Kind: PieceIDs, IDs: []int32{8}},
+		}},
+		{Kind: PieceText, Text: "\n\n"},
+	}}
 }
 
 // TestVideoRoundTrips writes a stated tower's video record into the vision
 // section's tail and reads the same record back, behind an audio tower's
-// and with none; a section with no video reads back with none.
+// and with none; a section with no video reads back with none. A record of
+// the build before this one's statement, and one of a flag this build does
+// not read, are refused rather than read.
 func TestVideoRoundTrips(t *testing.T) {
 	for _, audio := range []bool{false, true} {
 		v := &Vision{NLayer: 12, NEmbd: 768, NHead: 12, NFFN: 3072, ImageSize: 512, PatchSize: 16,
@@ -69,66 +93,80 @@ func TestVideoRoundTrips(t *testing.T) {
 		if got.Tower.Video != nil {
 			t.Fatalf("audio %v: a section with no video read one back", audio)
 		}
-		v.Tower.Video = testVideo()
-		if got, err = decodeVision(encodeVision(v)); err != nil {
-			t.Fatal(err)
-		}
-		if !reflect.DeepEqual(got.Tower.Video, v.Tower.Video) {
-			t.Fatalf("audio %v: the video read back as\n%+v\nnot\n%+v", audio, got.Tower.Video, v.Tower.Video)
-		}
-		v.Tower.Video = testJoinedVideo()
-		if got, err = decodeVision(encodeVision(v)); err != nil {
-			t.Fatal(err)
-		}
-		if !reflect.DeepEqual(got.Tower.Video, v.Tower.Video) {
-			t.Fatalf("audio %v: the joined video read back as\n%+v\nnot\n%+v", audio, got.Tower.Video, v.Tower.Video)
-		}
-		v.Tower.Video = testStepVideo()
-		if got, err = decodeVision(encodeVision(v)); err != nil {
-			t.Fatal(err)
-		}
-		if !reflect.DeepEqual(got.Tower.Video, v.Tower.Video) {
-			t.Fatalf("audio %v: the stepped video read back as\n%+v\nnot\n%+v", audio, got.Tower.Video, v.Tower.Video)
-		}
-		v.Tower.Video = testWholeVideo()
-		if got, err = decodeVision(encodeVision(v)); err != nil {
-			t.Fatal(err)
-		}
-		if !reflect.DeepEqual(got.Tower.Video, v.Tower.Video) {
-			t.Fatalf("audio %v: the whole frames read back as\n%+v\nnot\n%+v", audio, got.Tower.Video, v.Tower.Video)
+		for name, vid := range map[string]*Video{"pairs": testVideo(), "grid": testGridVideo(), "pictures": testPictureVideo()} {
+			v.Tower.Video = vid
+			if got, err = decodeVision(encodeVision(v)); err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+			if !reflect.DeepEqual(got.Tower.Video, v.Tower.Video) {
+				t.Fatalf("audio %v: the %s video read back as\n%+v\nnot\n%+v", audio, name, got.Tower.Video, v.Tower.Video)
+			}
 		}
 		if audio && (got.Audio == nil || got.Audio.Tower == nil) {
 			t.Fatal("the audio tower did not survive the video after it")
 		}
 	}
-	// A flag this build does not know is refused, not read past: the
-	// tail's flags are the word before PerSecond, the first past the known
-	// its second byte's lowest bit.
 	var w wbuf
-	encodeVideo(&w, testJoinedVideo())
-	w.b[len(w.b)-7] |= 1
-	r := rbuf{b: w.b}
-	decodeVideo(&r)
-	if r.err == nil {
+	encodeVideo(&w, testGridVideo())
+	b := append([]byte(nil), w.b...)
+	// The build before read a rate where this record's NaN is.
+	b[0], b[1], b[2], b[3] = 0, 0, 0x40, 0x40
+	r := rbuf{b: b}
+	if decodeVideo(&r); r.err == nil {
+		t.Fatal("a record of the statement before this one was read")
+	}
+	// The flags are the byte after the record's revision, rate and count
+	// and index expressions.
+	b = append([]byte(nil), w.b...)
+	r = rbuf{b: b}
+	r.u32()
+	r.u32()
+	r.f32()
+	var e Expr
+	decodeExpr(&r, &e)
+	decodeExpr(&r, &e)
+	b[len(b)-len(r.b)] |= 4
+	r = rbuf{b: b}
+	if decodeVideo(&r); r.err == nil {
 		t.Fatal("a video of a flag this build does not read was read")
+	}
+	if math.Float32bits(float32(math.NaN())) != 0x7fc00000 {
+		t.Fatal("the marker is not the quiet NaN the record states")
 	}
 }
 
 // TestVideoRefusesWhatItCannotRead holds Valid to each field it bounds: a
 // record broken in one of them is refused.
 func TestVideoRefusesWhatItCannotRead(t *testing.T) {
-	if err := testVideo().Valid(); err != nil {
-		t.Fatal(err)
+	for name, v := range map[string]*Video{"pairs": testVideo(), "grid": testGridVideo(), "pictures": testPictureVideo()} {
+		if err := v.Valid(); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
 	}
 	for name, breaks := range map[string]func(*Video){
-		"no rate":         func(v *Video) { v.Fps = 0 },
-		"frames reversed": func(v *Video) { v.MinFrames, v.MaxFrames = 8, 4 },
-		"no resize":       func(v *Video) { v.Pre = v.Pre[1:] },
-		"unknown filter":  func(v *Video) { v.Pre[0].Ints[3] = 99 },
-		"one frame":       func(v *Video) { v.Entry.NIn = 1 },
-		"no patches":      func(v *Video) { v.Entry.Ops[0].Code = TOpAdd },
-		"unread value":    func(v *Video) { v.Entry.Ops[2].In = []uint16{3, 9} },
-		"digits":          func(v *Video) { v.StampDigits = 12 },
+		"a negative rate":            func(v *Video) { v.DefaultFps = -1 },
+		"groups of three":            func(v *Video) { v.Group = 3 },
+		"a count of the index":       func(v *Video) { v.Count = in(VideoAt) },
+		"an index of a group":        func(v *Video) { v.Index = in(VideoGroup) },
+		"a sized count of three":     func(v *Video) { v.Sized = in(2) },
+		"a stride of the count":      func(v *Video) { s := in(VideoK); v.Stride = &s },
+		"a count of a stored vector": func(v *Video) { v.Count.Terms[0].Args[0] = Arg{Kind: ArgStored, Role: RoleVPosEmbd} },
+		"a count reduced":            func(v *Video) { v.Count.Terms[0].Reduce = true },
+		"no resize":                  func(v *Video) { v.Pre = v.Pre[1:] },
+		"unknown filter":             func(v *Video) { v.Pre[0].Ints[3] = 99 },
+		"one frame read":             func(v *Video) { v.Entry.NIn = 1 },
+		"no patches":                 func(v *Video) { v.Entry.Ops[0].Code = TOpAdd },
+		"unread value":               func(v *Video) { v.Entry.Ops[2].In = []uint16{3, 9} },
+		"sized together, unbounded":  func(v *Video) { v.MaxFrames = 0 },
+		"digits":                     func(v *Video) { v.Prompt[1].Body[1].Format.Digits = 12 },
+		"an unknown format":          func(v *Video) { v.Prompt[1].Body[1].Format.Kind = 9 },
+		"an unknown piece":           func(v *Video) { v.Prompt[0].Kind = 9 },
+		"no ids":                     func(v *Video) { v.Prompt[0].IDs = nil },
+		"no text":                    func(v *Video) { v.Prompt[1].Body[0].Text = "" },
+		"rows outside a group":       func(v *Video) { v.Prompt = append(v.Prompt, VideoPiece{Kind: PieceSpan}) },
+		"groups within a group": func(v *Video) {
+			v.Prompt[1].Body = append(v.Prompt[1].Body, VideoPiece{Kind: PieceGroups})
+		},
 	} {
 		v := testVideo()
 		breaks(v)
@@ -136,53 +174,18 @@ func TestVideoRefusesWhatItCannotRead(t *testing.T) {
 			t.Errorf("%s: Valid accepted it", name)
 		}
 	}
-	if err := testJoinedVideo().Valid(); err != nil {
-		t.Fatal(err)
-	}
 	for name, breaks := range map[string]func(*Video){
-		"every frame sampled":     func(v *Video) { v.Fps = 2 },
-		"every frame bounded":     func(v *Video) { v.MaxFrames = 768 },
-		"every frame by count":    func(v *Video) { v.Pre[0].Ints[6] = 0 },
-		"every frame, count read": func(v *Video) { v.Pre[0].Ints = v.Pre[0].Ints[:6] },
-		"alone of three kinds":    func(v *Video) { v.Pre[0].Ints[6] = 2 },
-		"negative per second":     func(v *Video) { v.PerSecond = -1 },
-		"per second, not joined":  func(v *Video) { v.Joined = false },
+		"pictures resized":      func(v *Video) { v.Pre = testVideo().Pre },
+		"pictures in one grid":  func(v *Video) { v.Stride = testGridVideo().Stride },
+		"pictures in pairs":     func(v *Video) { v.Group = 2 },
+		"a clock of no fields":  func(v *Video) { v.Prompt[3].Format.Clock = [3]int32{} },
+		"days with no hours":    func(v *Video) { v.Prompt[3].Format.Clock[0] = 0 },
+		"one word for days":     func(v *Video) { v.Prompt[3].Format.Days[1] = "" },
+		"an empty table":        func(v *Video) { v.Prompt[1].Format.Strings = nil },
+		"a field of five":       func(v *Video) { v.Prompt[3].Format.Clock[1] = 5 },
+		"a value of an operand": func(v *Video) { v.Prompt[1].Value = in(VideoOperands) },
 	} {
-		v := testJoinedVideo()
-		breaks(v)
-		if v.Valid() == nil {
-			t.Errorf("%s: Valid accepted it", name)
-		}
-	}
-	if err := testStepVideo().Valid(); err != nil {
-		t.Fatal(err)
-	}
-	for name, breaks := range map[string]func(*Video){
-		"steps of every frame":   func(v *Video) { v.EveryFrame = true },
-		"steps over no seconds":  func(v *Video) { v.MaxSeconds = 0 },
-		"seconds with no steps":  func(v *Video) { v.Steps = false },
-		"a time in one grid":     func(v *Video) { v.Joined = true },
-		"a first time unsampled": func(v *Video) { v.Fps = 0 },
-		"pairs numbered":         func(v *Video) { v.StampFirst, v.StampIndex = false, true },
-		"pairs parted":           func(v *Video) { v.Between = "\n" },
-	} {
-		v := testStepVideo()
-		breaks(v)
-		if v.Valid() == nil {
-			t.Errorf("%s: Valid accepted it", name)
-		}
-	}
-	if err := testWholeVideo().Valid(); err != nil {
-		t.Fatal(err)
-	}
-	for name, breaks := range map[string]func(*Video){
-		"whole frames resized":     func(v *Video) { v.Pre = testVideo().Pre },
-		"whole frames' own entry":  func(v *Video) { v.Entry = testVideo().Entry },
-		"whole frames in one grid": func(v *Video) { v.Joined = true },
-		"numbered and timed":       func(v *Video) { v.StampFirst = true },
-		"sampled with no rate":     func(v *Video) { v.EveryFrame, v.Fps, v.MinFrames, v.MaxFrames = false, 2, 1, 8 },
-	} {
-		v := testWholeVideo()
+		v := testPictureVideo()
 		breaks(v)
 		if v.Valid() == nil {
 			t.Errorf("%s: Valid accepted it", name)

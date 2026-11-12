@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/model"
 )
@@ -101,11 +102,11 @@ func TestInternVLVideoMatchesTransformers(t *testing.T) {
 	if got := ids(video); !slices.Equal(got, g.IDs) {
 		t.Fatalf("the prompt\n  got  %v\n  want %v", got, g.IDs)
 	}
-	v := m.Tower.Video
-	between := v.Between
-	v.Between = ""
+	grp := videoGroups(t, m.Tower.Video)
+	between := grp.Between
+	grp.Between = nil
 	bare, err := m.VideoSpans(frames, 0)
-	v.Between = between
+	grp.Between = between
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,4 +199,17 @@ func TestInternVLVideoMatchesTransformers(t *testing.T) {
 			}
 		})
 	}
+}
+
+// videoGroups is the piece of v's prompt its groups are written by, which
+// a violation rewrites.
+func videoGroups(t *testing.T, v *jlm.Video) *jlm.VideoPiece {
+	t.Helper()
+	for i := range v.Prompt {
+		if v.Prompt[i].Kind == jlm.PieceGroups {
+			return &v.Prompt[i]
+		}
+	}
+	t.Fatal("the video's prompt writes no groups")
+	return nil
 }

@@ -693,27 +693,32 @@ const (
 type MapFn = jlm.Fn
 
 const (
-	MapAdd      = jlm.FnAdd      // a + b
-	MapSub      = jlm.FnSub      // a - b
-	MapMul      = jlm.FnMul      // a * b
-	MapDiv      = jlm.FnDiv      // a / b
-	MapMax      = jlm.FnMax      // max(a, b)
-	MapMin      = jlm.FnMin      // min(a, b)
-	MapExp      = jlm.FnExp      // exp(a)
-	MapSigmoid  = jlm.FnSigmoid  // 1 / (1 + exp(-a))
-	MapSoftplus = jlm.FnSoftplus // log(1 + exp(a))
-	MapSqrt     = jlm.FnSqrt     // sqrt(a)
-	MapWhere    = jlm.FnWhere    // b where a > 0, else c
-	MapLess     = jlm.FnLess     // 1 where a < b, else 0
-	MapFma      = jlm.FnFma      // a*b + c, the product not rounded before the sum
-	MapExpm1    = jlm.FnExpm1    // exp(a) - 1, exact near zero where the difference cancels
-	MapAbs      = jlm.FnAbs      // |a|
-	MapRound    = jlm.FnRound    // a to the nearest integer, halves away from zero
-	MapRecip    = jlm.FnRecip    // 1 / a
-	MapTanh     = jlm.FnTanh     // tanh(a)
-	MapErf      = jlm.FnErf      // erf(a)
-	MapEqual    = jlm.FnEqual    // 1 where a == b, else 0; over two index rows, their integers
-	MapLog      = jlm.FnLog      // the natural logarithm of a
+	MapAdd       = jlm.FnAdd       // a + b
+	MapSub       = jlm.FnSub       // a - b
+	MapMul       = jlm.FnMul       // a * b
+	MapDiv       = jlm.FnDiv       // a / b
+	MapMax       = jlm.FnMax       // max(a, b)
+	MapMin       = jlm.FnMin       // min(a, b)
+	MapExp       = jlm.FnExp       // exp(a)
+	MapSigmoid   = jlm.FnSigmoid   // 1 / (1 + exp(-a))
+	MapSoftplus  = jlm.FnSoftplus  // log(1 + exp(a))
+	MapSqrt      = jlm.FnSqrt      // sqrt(a)
+	MapWhere     = jlm.FnWhere     // b where a > 0, else c
+	MapLess      = jlm.FnLess      // 1 where a < b, else 0
+	MapFma       = jlm.FnFma       // a*b + c, the product not rounded before the sum
+	MapExpm1     = jlm.FnExpm1     // exp(a) - 1, exact near zero where the difference cancels
+	MapAbs       = jlm.FnAbs       // |a|
+	MapRound     = jlm.FnRound     // a to the nearest integer, halves away from zero
+	MapRecip     = jlm.FnRecip     // 1 / a
+	MapTanh      = jlm.FnTanh      // tanh(a)
+	MapErf       = jlm.FnErf       // erf(a)
+	MapEqual     = jlm.FnEqual     // 1 where a == b, else 0; over two index rows, their integers
+	MapLog       = jlm.FnLog       // the natural logarithm of a
+	MapFloor     = jlm.FnFloor     // the greatest integer not above a
+	MapCeil      = jlm.FnCeil      // the least integer not below a
+	MapTrunc     = jlm.FnTrunc     // a's integer part, toward zero
+	MapRoundEven = jlm.FnRoundEven // a to the nearest integer, halves to the even one
+	MapF32       = jlm.FnF32       // a rounded to binary32
 )
 
 // Order is an OpReduce's: the order its additions run in is part of its
