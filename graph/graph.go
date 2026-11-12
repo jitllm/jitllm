@@ -1110,7 +1110,9 @@ const (
 	// makes them.
 	PixRGBA8 uint8 = 1 + iota
 	// PixGray8 is one sample a pixel, every channel's, a byte or two as
-	// PixRGBA8's.
+	// PixRGBA8's; with the request's ink word set the sample is an alpha,
+	// white where there is any and black where there is none, as
+	// image/color's NRGBAModel makes it (image.Alpha, image.Alpha16).
 	PixGray8
 	// PixYCbCr8 is a luma plane and two chroma planes, a byte a sample, the
 	// chroma subsampled as the step's request says; a pixel's red, green and

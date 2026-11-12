@@ -257,6 +257,11 @@ func pictureSample(x *exprs, a graph.Attrs, stride, y, xx, ch int) int {
 		return x.unpremul(sample(ch), sample(u(3)))
 	case graph.PixGray8:
 		at = x.op(OpAdd, U, x.op(OpMul, U, y, stride), wide(xx))
+		// An alpha sample (ink set) is any of its bytes made white.
+		v := byteAt(at)
+		alpha := x.op(OpOr, U, v, byteAt(x.op(OpAdd, U, at, x.load(1, u(pw.wide)))))
+		white := x.sel(U, x.op(OpLess, ir.Pred, u(0), alpha), u(255), u(0))
+		return x.sel(U, x.op(OpLess, ir.Pred, u(0), x.load(1, u(pw.ink))), white, v)
 	case graph.PixPaletted8:
 		at = x.op(OpAdd, U, x.op(OpAdd, U, x.load(1, u(pw.p2)), x.op(OpMul, U, byteAt(at), u(4))), ch)
 	case graph.PixYCbCr8:

@@ -524,6 +524,7 @@ func TestPictureFormatsEncodeAsTheirPixels(t *testing.T) {
 	b := img.Bounds()
 	rgba64, nrgba64, gray16, cmyk := image.NewRGBA64(b), image.NewNRGBA64(b), image.NewGray16(b), image.NewCMYK(b)
 	rgbaA, rgba64A, nrgbaA := image.NewRGBA(b), image.NewRGBA64(b), image.NewNRGBA(b)
+	alpha, alpha16 := image.NewAlpha(b), image.NewAlpha16(b)
 	for y := b.Min.Y; y < b.Max.Y; y++ {
 		for x := b.Min.X; x < b.Max.X; x++ {
 			c := color.NRGBAModel.Convert(img.At(x, y)).(color.NRGBA)
@@ -536,6 +537,8 @@ func TestPictureFormatsEncodeAsTheirPixels(t *testing.T) {
 			rgbaA.Set(x, y, color.NRGBA{c.R, c.G, c.B, a})
 			nrgbaA.SetNRGBA(x, y, color.NRGBA{c.R, c.G, c.B, a})
 			rgba64A.Set(x, y, color.NRGBA64{wide(c.R), wide(c.G), wide(c.B), uint16(a)<<8 | uint16(x*5+y)})
+			alpha.SetAlpha(x, y, color.Alpha{a})
+			alpha16.SetAlpha16(x, y, color.Alpha16{uint16(a&0xf0)<<8 | uint16(x*5+y)%3})
 		}
 	}
 	for _, c := range []struct {
@@ -544,6 +547,7 @@ func TestPictureFormatsEncodeAsTheirPixels(t *testing.T) {
 	}{{"jpeg 4:2:0", jpg(false)}, {"jpeg 4:2:0 at an odd corner", jpg(true)},
 		{"ycbcr 4:4:4", full}, {"ycbcr with alpha", withA}, {"paletted", pal},
 		{"rgba 16-bit", rgba64}, {"nrgba 16-bit", nrgba64}, {"gray 16-bit", gray16}, {"cmyk", cmyk},
+		{"alpha", alpha}, {"alpha 16-bit", alpha16},
 		{"premultiplied rgba with alpha", rgbaA}, {"premultiplied rgba 16-bit with alpha", rgba64A}, {"nrgba with alpha", nrgbaA}} {
 		got, err := s.EncodePicture(c.img)
 		if err != nil {
