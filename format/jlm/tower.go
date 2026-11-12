@@ -4,7 +4,7 @@ import "fmt"
 
 // TowerVersion is the stated tower's revision. A record of a later one is
 // refused, not read as this one.
-const TowerVersion = 11
+const TowerVersion = 12
 
 // Tower is a vision tower as the converter states it: what the engine builds
 // the tower from, with no family's name in it. The converter knows a family

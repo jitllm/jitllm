@@ -5,20 +5,6 @@ import (
 	"math"
 )
 
-// PreVideoResize resamples a video's frames to one size of the video's own,
-// each side a multiple of Ints[0] pixels: a frame a side shorter than Ints[0]
-// scaled up first so that side is Ints[0], each side truncated; each side
-// rounded half to even to a multiple; then, where the frame count rounded
-// half to even to a multiple of Ints[5] times that area passes Ints[2], both
-// sides scaled down by sqrt(count * area / Ints[2]) of the unrounded sides
-// and floored to a multiple, at least one, or where it falls short of
-// Ints[1], scaled up by sqrt(Ints[1] / (count * area)) and ceiled to one
-// (Qwen3-VL's video smart_resize); with filter Ints[3] in arithmetic Ints[4].
-// Ints[6], where stated, is 1 for each frame sized alone: no side lifted
-// and the count not read, the area held to [Ints[1], Ints[2]] (Qwen2-VL's
-// video smart_resize, the picture's).
-const PreVideoResize PreKind = 16
-
 // Video is how a tower reads a video (Tower.Video; docs/design/
 // video-statement.md): which frames it samples, how many frames one picture
 // of the tower reads, how they are sized, and what the prompt writes around
@@ -179,20 +165,18 @@ func (v *Video) Valid() error {
 		}
 		return nil
 	}
-	if v.Frames != nil {
-		return fmt.Errorf("jlm: a video of an entry of its own states a geometry of a picture's")
+	// Its frames' size is their geometry's: one square, of the frames
+	// evaluated with the count they share the area among (PicFrames).
+	if v.Frames == nil {
+		return fmt.Errorf("jlm: a video of an entry of its own states no geometry of its frames")
 	}
-	if len(v.Pre) != 2 || v.Pre[0].Kind != PreVideoResize ||
+	if err := v.Frames.Valid(); err != nil {
+		return fmt.Errorf("jlm: the video's frames: %w", err)
+	}
+	if len(v.Pre) != 2 || v.Pre[0].Kind != PreResizeLive || len(v.Pre[0].Ints) != 2 ||
+		!resizes(Filter(v.Pre[0].Ints[0]), Precision(v.Pre[0].Ints[1])) ||
 		v.Pre[1].Kind != PreNormalize && v.Pre[1].Kind != PreNormalizeBF16 || len(v.Pre[1].Floats) != 6 {
-		return fmt.Errorf("jlm: the video's steps are not a resize and a normalisation")
-	}
-	if s := v.Pre[0].Ints; len(s) != 6 && len(s) != 7 || s[0] <= 0 || s[1] <= 0 || s[2] < s[1] ||
-		!resizes(Filter(s[3]), Precision(s[4])) || s[5] < 1 || len(s) == 7 && s[6] != 0 && s[6] != 1 {
-		return fmt.Errorf("jlm: the video resizes with %v", s)
-	}
-	if alone := len(v.Pre[0].Ints) == 7 && v.Pre[0].Ints[6] == 1; !alone && v.MaxFrames < 1 {
-		// The resize shares the area among the most frames a video samples.
-		return fmt.Errorf("jlm: a video whose frames are sized together, of no most frames")
+		return fmt.Errorf("jlm: the video's steps are not a resize to the frames' size and a normalisation")
 	}
 	if v.Group != 2 || v.Entry.NIn != 2 || len(v.Entry.Ops) == 0 || v.Entry.Ops[0].Code != TOpPatchify {
 		return fmt.Errorf("jlm: the video's entry reads %d frames of a group of %d and does not start with their patches",

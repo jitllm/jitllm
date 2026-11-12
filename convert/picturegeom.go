@@ -85,6 +85,7 @@ func pw() jlm.Arg { return jlm.Operand(jlm.PicW) }
 func ph() jlm.Arg { return jlm.Operand(jlm.PicH) }
 func pi() jlm.Arg { return jlm.Operand(jlm.PicSquare) }
 func pn() jlm.Arg { return jlm.Operand(jlm.PicCount) }
+func pf() jlm.Arg { return jlm.Operand(jlm.PicFrames) }
 
 // k is the exact constant v.
 func k(v float64) jlm.Arg { return jlm.ExactNum(v) }
@@ -235,6 +236,79 @@ func (b *geom) smartSize(w, h jlm.Arg, factor, minPix, maxPix int, lift bool) (o
 		}
 	}
 	return b.value(side(w, rw)), b.value(side(h, rh))
+}
+
+// FramesOf is the geometry of video v's frames where it reads them through
+// an entry of its own: one square, the size its resize (PreVideoResize)
+// gives frames of w x h sized together in PicFrames, read in the entry's
+// patches; none where the processor refuses them.
+func FramesOf(v *jlm.Video) (*jlm.PictureGeometry, error) {
+	if len(v.Entry.Ops) == 0 || v.Entry.Ops[0].Code != jlm.TOpPatchify || v.Entry.Ops[0].Span < 1 {
+		return nil, fmt.Errorf("convert: a video's frames' geometry of an entry that does not begin with their patches")
+	}
+	for _, s := range v.Pre {
+		if s.Kind != PreVideoResize {
+			continue
+		}
+		if len(s.Ints) != 6 && len(s.Ints) != 7 || s.Ints[0] <= 0 || s.Ints[5] < 1 {
+			return nil, fmt.Errorf("convert: a video resized with %v", s.Ints)
+		}
+		in := func(i int) int { return int(s.Ints[i]) }
+		alone := len(s.Ints) == 7 && s.Ints[6] == 1
+		return videoGeometry(in(0), in(1), in(2), in(5), alone, int(v.Entry.Ops[0].Span)), nil
+	}
+	return nil, fmt.Errorf("convert: a video's frames never resized")
+}
+
+// videoGeometry is Qwen's video smart_resize (PreVideoResize) of frames
+// sized together in PicFrames, or each alone, in multiples of factor; a
+// frame past an aspect of 200, or fewer frames than per sized together,
+// becomes no square.
+func videoGeometry(factor, minPix, maxPix, per int, alone bool, patch int) *jlm.PictureGeometry {
+	b := newGeom()
+	fa := k(float64(factor))
+	w, h, n, t := pw(), ph(), pf(), k(float64(per))
+	if alone {
+		n, t = k(1), k(1)
+	} else {
+		small := func(e *sizes) jlm.Arg { return e.add(e.less(w, fa), e.less(h, fa)) }
+		scale := func(e *sizes) jlm.Arg { return e.max(e.div(fa, h), e.div(fa, w)) }
+		lw := b.value(func(e *sizes) jlm.Arg { return e.where(small(e), e.trunc(e.mul(w, scale(e))), w) })
+		lh := b.value(func(e *sizes) jlm.Arg { return e.where(small(e), e.trunc(e.mul(h, scale(e))), h) })
+		w, h = lw, lh
+	}
+	wb := b.value(func(e *sizes) jlm.Arg { return e.mul(e.roundEven(e.div(w, fa)), fa) })
+	hb := b.value(func(e *sizes) jlm.Arg { return e.mul(e.roundEven(e.div(h, fa)), fa) })
+	tb := b.value(func(e *sizes) jlm.Arg { return e.mul(e.roundEven(e.div(n, t)), t) })
+	side := func(v, r jlm.Arg) func(e *sizes) jlm.Arg {
+		return func(e *sizes) jlm.Arg {
+			area := e.mul(n, e.mul(w, h))
+			pix := e.mul(tb, e.mul(wb, hb))
+			down := e.sqrt(e.div(area, k(float64(maxPix))))
+			up := e.sqrt(e.div(k(float64(minPix)), area))
+			shrunk := e.max(fa, e.mul(e.floor(e.div(e.div(v, down), fa)), fa))
+			grown := e.mul(e.ceil(e.div(e.mul(v, up), fa)), fa)
+			return e.where(e.less(k(float64(maxPix)), pix), shrunk, e.where(e.less(pix, k(float64(minPix))), grown, r))
+		}
+	}
+	ow, oh := b.value(side(w, wb)), b.value(side(h, hb))
+	b.count(func(e *sizes) jlm.Arg {
+		long := e.less(k(200), e.div(e.max(w, h), e.min(w, h)))
+		few := k(0)
+		if !alone {
+			few = e.less(pf(), t)
+		}
+		return e.where(e.add(long, few), k(0), k(1))
+	})
+	p := k(float64(patch))
+	gw := b.value(func(e *sizes) jlm.Arg { return e.idiv(ow, p) })
+	gh := b.value(func(e *sizes) jlm.Arg { return e.idiv(oh, p) })
+	b.whole(ow, oh, gw, gh)
+	most := maxPix
+	if !alone {
+		most = maxPix / per
+	}
+	return b.done(factor, most, most/(patch*patch))
 }
 
 // smartGeometry is a picture at its own size under smart_resize (smartSize),

@@ -27,7 +27,6 @@ func TestContainerStepsAreGeneric(t *testing.T) {
 		"PreCanvas":        "the resized picture laid on a canvas of a fill colour, the geometry's",
 		"PreNormalize":     "the mean and std each channel takes",
 		"PreNormalizeBF16": "PreNormalize in bfloat16, as torch computes it on a bfloat16 tensor",
-		"PreVideoResize":   "a video's frames' resize to one size of the video's own; the next to move to the converter",
 	}
 	root := filepath.Join("..", "..")
 	files, err := filepath.Glob(filepath.Join(root, "format", "jlm", "*.go"))

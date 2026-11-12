@@ -18,16 +18,19 @@ into it, the engine evaluates it.
     Index        sampled frame i's index: an expression of N, R, the count
                  K and i, truncated toward zero and held to [0, N-1]
     Once         a frame the same as the one sampled before it is dropped
-    MaxFrames    the most frames Count gives: what the entry's taps are
-                 sized for
+    MaxFrames    the most frames Count gives
     Group        frames one picture of the tower reads: 2 for a pair
                  entry, 1 for a frame read whole; an odd count's last frame
                  repeated to fill the last group
-    Pre, Entry   the frames' own resize and entry; no entry stated: each
-                 frame is read as a picture is, through the picture's
-                 entry, at its last square -- under the picture's steps, or
-                 under Pre where stated, the picture's steps with one
-                 resize of its own (jlm.Video.PicturesValid)
+    Pre, Entry   the frames' own steps (a resize to the frames' size and
+                 a normalisation) and entry; no entry stated: each frame is
+                 read as a picture is, through the picture's entry and
+                 steps, at its last square
+    Frames       the frames' geometry (jlm.PictureGeometry): with an entry
+                 of their own, one square, evaluated with the count Sized
+                 gives as jlm.PicFrames, none where the processor refuses
+                 the frames; read as pictures, where their processor
+                 resizes them its own way, in place of the picture's
     Stride       where stated, the groups are one grid, group j at j times
                  this on the text model's temporal axis (an expression of
                  R and the group's frames); where not, each group is a
@@ -94,10 +97,13 @@ the other rounding is. The sampler's expressions are evaluated on the host
 in float64, as numpy and torch compute them: geometry from the sizes, as the
 picture's resize plan is.
 
-## Not yet stated
+## The frames' size
 
-The frames' resize step of a video with an entry of its own
-(`jlm.PreVideoResize`, Qwen's video smart_resize) is still one processor's
-resize in the container. The picture's are the converter's now, stated as
-geometry and lowered to generic steps (docs/design/picture-statement.md);
-this one is the next to go the same way.
+A processor's resize of the frames is the converter's, as the picture's
+are (docs/design/picture-statement.md): Qwen's video smart_resize is
+`convert.PreVideoResize`, stated as the frames' geometry -- the frames
+sized together share the area, so the count is an operand of it
+(`jlm.PicFrames`) -- and lowered to `jlm.PreResizeLive`. Frames past an
+aspect of 200, or fewer frames sized together than the processor's
+temporal patch, are a count of no square, which the engine refuses as the
+processor does.
