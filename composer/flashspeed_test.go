@@ -114,6 +114,7 @@ func BenchmarkComposedFlash(t *testing.B) {
 					t.Fatal(err)
 				}
 				args := make([][]backend.Buf, len(codes))
+				scratch := scratchBytes(codes)
 				for ci, cd := range codes {
 					for i, bd := range cd.Binds {
 						o := bd.Operand
@@ -127,7 +128,8 @@ func BenchmarkComposedFlash(t *testing.B) {
 						case bd.Words != nil:
 							key, words = fmt.Sprintf("c%d.%d", ci, i), bd.Words
 						case o.Kind == composer.OperandScratch || o.Kind == composer.OperandValue:
-							key, words = fmt.Sprintf("s%d.%s.%d", o.Kind, o.Name, o.Value), make([]uint32, max(bd.Bytes, 4)/4)
+							key = scratchKey(o)
+							words = make([]uint32, scratch[key]/4)
 						default:
 							t.Fatalf("%s binds %+v, which the probe does not hold", cd.Name, o)
 						}

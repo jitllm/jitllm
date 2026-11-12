@@ -529,6 +529,24 @@ func launchTable(d backend.Device, codes []composer.Code, vals map[graph.ValueID
 	return launchKeyed(d, codes, vals, tables, nil, "t"+name, len(tables[name]))
 }
 
+// scratchKey is the key a launcher holds scratch operand o's buffer under.
+func scratchKey(o composer.Operand) string { return fmt.Sprintf("s%d.%s.%d", o.Kind, o.Name, o.Value) }
+
+// scratchBytes is each scratch buffer's bytes over codes: its widest binding,
+// as the tier sizes it (served.go). A code that reaches none of a scratch
+// binds it at 0 bytes, and a code after it reads all of it.
+func scratchBytes(codes []composer.Code) map[string]int64 {
+	n := map[string]int64{}
+	for _, c := range codes {
+		for _, bd := range c.Binds {
+			if o := bd.Operand; o.Kind == composer.OperandScratch || o.Kind == composer.OperandValue {
+				n[scratchKey(o)] = max(n[scratchKey(o)], bd.Bytes, 4)
+			}
+		}
+	}
+	return n
+}
+
 // launchKeyed is launchAttend reading back the n words bound as outKey.
 func launchKeyed(d backend.Device, codes []composer.Code, vals map[graph.ValueID][]uint32, tables map[string][]uint32,
 	vecs map[jlm.Role][]uint32, outKey string, n int) ([]uint32, error) {
@@ -558,6 +576,7 @@ func launchKeyed(d backend.Device, codes []composer.Code, vals map[graph.ValueID
 		bufs[key] = b
 		return b, nil
 	}
+	scratch := scratchBytes(codes)
 	for ci, c := range codes {
 		k, err := d.Compile(c.GPU)
 		if err != nil {
@@ -578,7 +597,8 @@ func launchKeyed(d backend.Device, codes []composer.Code, vals map[graph.ValueID
 			case bd.Words != nil:
 				key, w = fmt.Sprintf("c%d.%d", ci, i), bd.Words
 			case o.Kind == composer.OperandScratch || o.Kind == composer.OperandValue:
-				key, w = fmt.Sprintf("s%d.%s.%d", o.Kind, o.Name, o.Value), poisoned(int(max(bd.Bytes, 4)/4))
+				key = scratchKey(o)
+				w = poisoned(int(scratch[key] / 4))
 			default:
 				k.Close()
 				return nil, fmt.Errorf("%s binds %+v, which the gate does not hold", c.Name, o)

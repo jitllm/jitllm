@@ -358,6 +358,7 @@ func (r *passRunner) run(codes []composer.Code, lo, hi int, vals map[graph.Value
 	var outVal graph.ValueID
 	wrote := false
 	r.calls++
+	scratch := scratchBytes(codes)
 	for ci := lo; ci < hi; ci++ {
 		c := codes[ci]
 		k, err := r.d.Compile(c.GPU)
@@ -388,7 +389,8 @@ func (r *passRunner) run(codes []composer.Code, lo, hi int, vals map[graph.Value
 			case bd.Words != nil:
 				key, w = fmt.Sprintf("c%d.%d", ci, i), bd.Words
 			case o.Kind == composer.OperandScratch || o.Kind == composer.OperandValue:
-				key, w = fmt.Sprintf("s%d.%s.%d", o.Kind, o.Name, o.Value), poisoned(int(max(bd.Bytes, 4)/4))
+				key = scratchKey(o)
+				w = poisoned(int(scratch[key] / 4))
 			default:
 				k.Close()
 				return nil, fmt.Errorf("%s binds %+v, which the gate does not hold", c.Name, o)
