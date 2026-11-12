@@ -5106,6 +5106,43 @@ prefetch's cache level does not matter (T1/T2 within 1%, NTA -25%). A
 plane stride of 2^15 bytes aliases L1 sets: 8256 rows instead of 8192 is
 +16% on one thread and twelve.
 
+**Where a prompt token's cycles go, counted against llama.cpp.** Llama-3.2-1B
+Q4_K_M, one core of the E5-2680 v4, each process's own counters, a prompt
+token as the pp512-minus-pp64 difference (896 tokens: `jitllm speed` and
+`llama-bench -r 1` both run the prompt twice). Taken beside a census lane on
+the same socket, so the cache-level counts carry its L3 traffic; the
+instruction and port counts do not.
+
+    per prompt token           jitllm     llama.cpp
+    cycles                     191.6M     101.1M
+    instructions               301.9M     256.7M   (IPC 1.58 / 2.54)
+    uops from the legacy
+      decoder                  39%        1%
+    slots the front end
+      left undelivered         5%         1%
+    stall cycles               48.4M      5.3M
+      with a memory miss       41.1M      4.3M
+      with an L2 miss pending  30.3M      1.0M
+    loads missing L1           6.95M      1.63M
+    loads missing L2           3.66M      0.05M
+    port 0 / 1 / 5 uops        74 / 54 / 46M   56 / 35 / 62M
+
+The front end is not the gap (the ffn kernels' unrolled trip, ~1460
+instructions, decodes from the legacy decoder, but delivers). Neither are the
+ports: the ffn_gate prompt kernel's trip (8 rows x 4 tokens x one 256-element
+super-block: 256 `vpmaddubsw`, 224 `vpaddw`, 352 `vbroadcastss`, 32
+`vpmaddwd`) has a port-0 floor near 391 cycles against the 1463 instructions
+it retires. Memory is: 37M of the 90M-cycle difference is cycles stalled on a
+miss, and the composed kernel's loads miss L2 73 times as often. The kernel
+walks a call's rows eight at a time and, for each, every plane of the
+row's super-blocks: 32 loads a super-block, each a plane (8192 x 4 bytes)
+from the last, so all of a row group's lines fall in one L1 set and one L2 set
+(both 8-way, indexed below bit 12 and bit 15), a 64-byte line serves two
+consecutive row groups and is evicted in between, and the L2 streamer, which
+follows a stream inside a 4 KiB page, never trains. llama.cpp's repacked
+`block_q4_Kx8` puts a row group's super-block in 1152 contiguous bytes: its
+lines stream into L2 ahead of the loads.
+
 **The integer fold, tried.** A k-quant model's activations already take one
 scale a 256-element window (`composer.ActWindow`), so a super-block's terms
 share the window's scale and the super-scales, and the sub-block scales are
