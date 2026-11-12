@@ -5517,7 +5517,7 @@ The table at perturb's default scale was invisible beside the patch
 embedding (bilinear 7.2e-4 against a clean 3.1e-4); it takes the Qwen
 fixtures' x4.
 
-**The real Kimi-VL-A3B-Instruct's tower** (`TestKimiVLRealTowerMatchesMoonshot`,
+**The real Kimi-VL-A3B-Instruct's tower** (`TestKimiVLRealMatchesMoonshot`,
 `scripts/kimivlreal.py`): the whole 16B reference does not fit the laptop, so
 its MoonViT and projector are built by Moonshot's code from the first
 shard's tensors alone, converted at F16 by llama.cpp's converter, and run on
@@ -5529,6 +5529,15 @@ quad-and-disc.png (28x28 patches, 196 rows of 2048):
 | against Moonshot's float32 (the int8 alone moves it 3.2e-3) | 3.1e-3 |
 | every tower block on cuda:0 / vulkan:0, against Moonshot's | 1.2e-3 / 9.9e-4 |
 | no per-patch LayerNorm (the violation) | 14 |
+
+That gate went with the per-family runtime (16caf8b4f). On the stated tower
+the same golden reads 9.9e-4 at the engine's arithmetic and 3.1e-3 against
+Moonshot's float32; every block on cuda:0 8.7e-4 and half of them 1.0e-3,
+on vulkan:0 3.4e-3 both, each within twice the CPU device's 3.1e-3; the
+rotary's column and row pairs swapped read 0.80. Moonlight-16B's vocabulary
+spells none of the tower's markers, which the converter now refuses, so the
+pair's text model is Kimi-VL-A3B-Thinking-2506's; nothing past the tower is
+read.
 
 The tower's capacity is what any picture under the token limit pads to,
 5108 rows -- four times a prime. The device's query chunking searched only
@@ -8500,6 +8509,17 @@ reporting on the moon landing."* -- and on a blank picture of the same size
 arms run at the picture's own ceiling: 3600 patches of scratch beside the
 text model's share do not fit a 4 GB card, and the placement declines by
 budget, as it should.
+
+That gate went with the per-family runtime (16caf8b4f);
+`TestPhi4RealMatchesTransformers` holds the stated tower to the same
+goldens: every sample of both pictures the processor's to the bit, the
+projector's rows 4.6e-4 (the photo, 56x28) and 8.4e-4 (the square, 24x24),
+and on the photo every block on cuda:0 1.4e-4 and half of them 1.5e-4, on
+vulkan:0 3.8e-4 and 3.7e-4 (a 32 GB V100: the whole tower's scratch fits).
+The violation, the table resized plain bilinear with its corners aligned --
+on grids past the table's 16x16 antialiasing changes nothing, and the
+composer forms no antialiased resize with aligned corners, which no
+reference states -- reads 0.33 and 2.0e-2.
 
 ## deepseek4: hyper-connections, and entries that outlive the window
 
