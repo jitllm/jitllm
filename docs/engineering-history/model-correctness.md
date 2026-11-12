@@ -4745,6 +4745,38 @@ documented rule (the tokenizer adds no special the template did not render,
 `TestChatTemplateIsAppliedAndSpecialsAreNotDoubled`), does not. The answers above came without it. The
 teacher-forced gate builds llama.cpp's prompt, BOS included.
 
+### The text model's LongRoPE, which the GGUF drops
+
+MiniCPM-V 4's text model is LongRoPE: its config.json's rope_scaling turns
+each rotary pair by a short factor running 1.0 to 31.0 (and a long one past
+original_max_position_embeddings). llama.cpp's converter writes neither for
+this architecture: the published MiniCPM-V-4 GGUF names no rope scaling and
+runs q and k with plain rope, and a newer converter names `longrope` with no
+factors. jitllm took the second as an unknown scaling and refused it, and
+converted the first silently as llama.cpp runs it.
+
+`jitllm convert -config` (`convert.WithModelConfig`) reads the publisher's
+config.json beside the GGUF and states the factors as the
+rope_factors_short/long tensors phi3's GGUFs carry, the original context and
+the magnitude -- the safetensors path's statement (`hfLongRope`), the same
+code. A GGUF that carries its factors keeps them; one that names LongRoPE
+with none and no config is refused by name at conversion.
+
+synth-minicpmv is transformers' MiniCPMV at toy size (hidden 256, two
+layers; a two-layer tower 64 wide; 16 queries; eight factors 1.0 to 6.5,
+the published curve's shape), every parameter and buffer randomised and
+rounded to bf16, its text model and mmproj written by llama.cpp's own
+converters (scripts/minicpmvgold.py --fixture). End to end from the pixels,
+converted with its config.json:
+
+    the tower's 18 rows (16 queries, <image>, </image>)   NMSE 3.5e-04
+    6 decoded positions                     worst 7.5e-03, 0 argmax flips
+      (a tower error of the engine's size moves them 6.6e-03)
+    violations   the picture's rows reversed            1.97  (149x the bound)
+                 the factors at 1.0, llama.cpp's rotary  1.71  (129x)
+
+The second violation is what the published GGUF runs.
+
 ### As it stood in AGENTS.md
 
 ★ **A TOWER READS ANY GRID NOW, AND A PICTURE MAY BE SEVERAL ENCODES.**

@@ -996,6 +996,10 @@ func ropeScalingOf(f *meta.File, c *Config) error {
 	switch kind {
 	case "", "none":
 		return nil
+	case "longrope", "su":
+		// The factors are tensors: the file's own, or the publisher's
+		// config.json's where the file dropped them (applyModelConfig).
+		return nil
 	case "linear":
 		if factor > 0 && factor != 1 {
 			c.RopeLinear = factor

@@ -9,6 +9,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/jitllm/jitllm/convert"
 	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
@@ -63,6 +64,10 @@ type towerE2E struct {
 	lay func(t *testing.T, m *model.Model, g *towerE2EGolden, rows []float32, tiles []int) []float32
 	// violations are the fixture's own, beside the rows reversed.
 	violations func(x *e2eArm)
+	// config is the publisher's config.json beside the fixture, under the
+	// model directory, that the conversion states what the GGUF dropped from
+	// (convert.WithModelConfig); "" converts the pair alone.
+	config string
 }
 
 // TestStatedTowerMatchesTransformersEndToEnd holds Gemma 4's, Gemma 3n's,
@@ -90,7 +95,7 @@ func TestStatedTowerMatchesTransformersEndToEnd(t *testing.T) {
 		{name: "synth-gemma4v", dir: "gemma4v", script: "gemma4visiongold.py", around: gemma, lay: same, violations: gemma4MaskViolations},
 		{name: "synth-gemma3nv", dir: "gemma3nv", script: "gemma3nvisiongold.py", lay: gemma3nLay,
 			around: func(g *towerE2EGolden) ([]int32, []int32) { return append(slices.Clone(g.Pre), g.BOI), g.Post }},
-		{name: "synth-llama4v", dir: "llama4v", script: "llama4visiongold.py", lay: llama4Lay, violations: llama4Violations,
+		{name: "synth-llama4v", dir: "llama4v", script: "llama4visiongold.py", lay: markedLay, violations: llama4Violations,
 			around: func(g *towerE2EGolden) ([]int32, []int32) {
 				return append(slices.Clone(g.Pre), g.Rows[0]), append([]int32{g.Rows[len(g.Rows)-1]}, g.Post...)
 			}},
@@ -98,6 +103,10 @@ func TestStatedTowerMatchesTransformersEndToEnd(t *testing.T) {
 		{name: "synth-pixtral", dir: "pixtral", script: "pixtralgold.py", around: asIs, lay: pixtralLay, violations: pixtralViolations},
 		{name: "synth-lfm2vl", script: "lfm2visiongold.py --fixture", load: lfm2E2EGolden, around: asIs, lay: lfm2Lay},
 		{name: "synth-janus", dir: "janus", script: "janusgold.py --fixture", around: asIs, lay: same, violations: causalViolations},
+		{name: "synth-minicpmv", dir: "minicpmv", script: "minicpmvgold.py --fixture", lay: markedLay,
+			config: "vlmb/fixtures/synth-minicpmv/config.json", violations: longRopeViolations,
+			// The processor's <image> and </image> are the rows the tower writes around the overview.
+			around: func(g *towerE2EGolden) ([]int32, []int32) { return g.Pre[:len(g.Pre)-1], g.Post[1:] }},
 	} {
 		t.Run(c.name, func(t *testing.T) { statedTowerEndToEnd(t, c) })
 	}
@@ -138,7 +147,12 @@ func statedTowerEndToEnd(t *testing.T, c towerE2E) {
 	if !sourcePresent(text, proj) {
 		testmodels.Missing(t, "MODEL MISSING: %s and its mmproj (set JITLLM_MODELS) -- run scripts/%s (RULE 11)", text, c.script)
 	}
-	path := jlmOfPair(t, text, proj)
+	var path string
+	if c.config != "" {
+		path = jlmWithConfig(t, text, proj, testmodels.Path(c.config))
+	} else {
+		path = jlmOfPair(t, text, proj)
+	}
 	m, err := model.Open(path)
 	if err != nil {
 		t.Fatal(err)
@@ -326,6 +340,61 @@ func causalViolations(x *e2eArm) {
 	x.violation("the picture's rows bidirectional", x.m, both)
 }
 
+// jlmWithConfig converts the pair with the publisher's config.json (cfg)
+// stating what the GGUF dropped, into the test's own directory.
+func jlmWithConfig(t *testing.T, text, proj, cfg string) string {
+	t.Helper()
+	dst := filepath.Join(t.TempDir(), filepath.Base(text)+jlm.Ext)
+	if _, err := convert.FromGGUFs(text, proj, dst, jlm.Fingerprint{Host: "test", Writer: BuildIDForTest()},
+		convert.WithModelConfig(cfg)); err != nil {
+		t.Fatal(err)
+	}
+	return dst
+}
+
+// longRopeViolations: the model converted with its LongRoPE factors restated
+// to one -- the rotary llama.cpp's GGUF runs, which drops them.
+func longRopeViolations(x *e2eArm) {
+	t := x.t
+	raw, err := os.ReadFile(testmodels.Path(x.c.config))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	// transformers 5 writes the scaling into rope_parameters.
+	rs, ok := cfg["rope_scaling"].(map[string]any)
+	if !ok {
+		rs, _ = cfg["rope_parameters"].(map[string]any)
+	}
+	short, _ := rs["short_factor"].([]any)
+	if len(short) == 0 {
+		t.Fatalf("%s states no LongRoPE short factors", x.c.config)
+	}
+	ones := make([]float64, len(short))
+	for i := range ones {
+		ones[i] = 1
+	}
+	rs["short_factor"], rs["long_factor"] = ones, ones
+	dir := t.TempDir()
+	b, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	text, proj := testmodels.Path(x.c.name+".gguf"), testmodels.Path("mmproj-"+x.c.name+".gguf")
+	m, err := model.Open(jlmWithConfig(t, text, proj, dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	x.violation("the LongRoPE factors dropped", m, x.picture)
+}
+
 // gemma4MaskViolations: the picture's rows causal, which is transformers'
 // own causal run and not the bidirectional one; and the container restated
 // with the rows bidirectional on every layer, Gemma 3's mask, where Gemma
@@ -396,10 +465,10 @@ func restatedEveryLayerBidir(t *testing.T, src string) *model.Model {
 	return every
 }
 
-// llama4Lay is Llama 4's tiles' rows laid out as the picture's span: each
-// tile's marker row ahead of it and its trailing one after, the marker rows
-// the container's table's; tiles[i] is the tile in place i.
-func llama4Lay(t *testing.T, m *model.Model, g *towerE2EGolden, rows []float32, tiles []int) []float32 {
+// markedLay is a picture's pieces' rows laid out as its span: each piece's
+// marker row ahead of it and its trailing one after, the marker rows the
+// container's table's; tiles[i] is the piece in place i.
+func markedLay(t *testing.T, m *model.Model, g *towerE2EGolden, rows []float32, tiles []int) []float32 {
 	t.Helper()
 	tg := m.Tower
 	D := m.Cfg.NEmbd
@@ -435,7 +504,7 @@ func llama4Violations(x *e2eArm) {
 	for i := range n - 1 {
 		order = append(order, i)
 	}
-	x.violation("the global tile first", x.m, x.rows(llama4Lay(x.t, x.m, x.g, x.g.Image.EmbdA8, order)))
+	x.violation("the global tile first", x.m, x.rows(markedLay(x.t, x.m, x.g, x.g.Image.EmbdA8, order)))
 }
 
 // gemma3nLay is Gemma 3n's soft rows with the end-of-image row after them:
