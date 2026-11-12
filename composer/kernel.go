@@ -45,8 +45,12 @@ type Kernel struct {
 	// Copied, where set, is such a kernel formed again before it gives them
 	// up: its loops walk no base in place, each walking a copy taken from it.
 	Copied bool
-	Heads  *Heads
-	Part   PartKind
+	// Tailed is a kernel whose cursors took a base a loop's tail accesses
+	// did not add (cursorer.invariant), Untailed one formed with them
+	// counting, so taking none there.
+	Tailed, Untailed bool
+	Heads            *Heads
+	Part             PartKind
 	// Apart is Request.Apart: the graph's inputs and outputs are buffers
 	// of their own.
 	Apart bool

@@ -32,7 +32,7 @@ func TestSplitChunksHoldWholeAlignments(t *testing.T) {
 				n := b.KVAppend(b.In("k", sh[1]*sh[2]), b.In("v", sh[1]*sh[2]), 0)
 				b.Out(b.Attend(b.In("q", sh[0]*sh[2]), n, graph.Attrs{NHead: sh[0], NKVHead: sh[1], HeadDim: sh[2], Scale: 0.1}))
 				ks, err := r.formWith(Request{Graph: b.G, Step: Step{Rows: 1, Page: 128, Keys: keys, ActWindow: 32}, Device: dev,
-					History: History{Keys: Pool{ByDim: true}, Values: Pool{Half: true}}}, prof)
+					History: History{Keys: Pool{ByDim: true}, Values: Pool{Half: true}}}, prof, nil)
 				if err != nil {
 					t.Fatalf("%s: %v", name, err)
 				}
