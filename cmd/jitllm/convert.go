@@ -35,7 +35,8 @@ func convertCmd(args []string) error {
 		"the source's: a tokenizer_config.json, a chat_template.json, a .jinja file or a "+
 		"model directory")
 	modelCfg := fs.String("config", "", "GGUF only: the publisher's config.json (or its directory), "+
-		"which states what the GGUF dropped: a LongRoPE's factors")
+		"which states what the GGUF dropped: a LongRoPE's factors, and the pictures' resampling filter "+
+		"from the preprocessor_config.json beside it")
 	head := fs.String("head", "", "a GGUF of the model's multi-token-prediction head, published "+
 		"apart from it (unsloth's MTP/mtp-*.gguf): converted as the model's prediction block")
 	plan := fs.Bool("plan", false, "safetensors only: read the shards' headers (by range, for a "+

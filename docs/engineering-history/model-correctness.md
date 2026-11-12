@@ -10260,6 +10260,21 @@ the channels averaged rather than mixed are each outside it. The repo's
 clip through ReadWAV and the sound op still gives the 41 prefix rows at NMSE
 1.56e-4 (`TestD1OmniHearsAsItsReference`).
 
+### LFM2-VL's real checkpoint
+
+LiquidAI's LFM2-VL-450M (its GGUF and mmproj as published) against its own
+Lfm2VlForConditionalGeneration on the photo (`scripts/lfm2vlreal.py`): one
+piece of 26x36 patches, 234 rows. The pixels parted first: 434348 of 718848
+samples, worst by 0.259. The engine's were torchvision's bilinear resize to
+the bit and the processor's torchvision's bicubic to the bit. The mmproj
+names no `clip.vision.image_resize_algo`, so the converter took the class's
+default, bilinear (Lfm2VlImageProcessor.resample); the checkpoint's
+preprocessor_config.json states `resample: 3`. llama.cpp reads the same file
+bilinear too. The publisher's preprocessor_config.json given at conversion
+(`-config`, beside the config.json it already reads) now states the filter:
+every sample the processor's, the rows at NMSE 2.4e-3
+(`TestLFM2VLRealMatchesTransformers`; converted without it, the violation).
+
 ## qwen4exp: Qwen3.8-Flash-Next (plan, before the code)
 
 The graph, read off llama.cpp's `src/models/qwen4exp.cpp` and its converter

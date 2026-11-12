@@ -949,7 +949,8 @@ JIT and state) was llama.cpp's technical debt, not a property of the model.
   side on transformers' own tower rows), the real checkpoints against
   transformers (`TestRealTowersMatchTransformers`: Gemma 4, Gemma 3n and
   Ministral 3's towers; `TestQwenVLRealMatchesTransformers`: the Qwen family's
-  and HunyuanOCR's whole models), `TestChatSpansFollowTheTemplate`,
+  and HunyuanOCR's whole models; `TestLFM2VLRealMatchesTransformers`: LFM2-VL's
+  tower converted with its publisher's processor config), `TestChatSpansFollowTheTemplate`,
   `TestPictureFormatsEncodeAsTheirPixels`, `composer.TestComposedCPUPicture*`,
   `composer.TestComposedCPURegroup`, `composer.TestComposedCPUPatchifyTiles`
   and `composer.TestComposedCPUUntile` (the windows' order, against

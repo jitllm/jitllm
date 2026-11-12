@@ -2,7 +2,9 @@ package convert
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -91,4 +93,44 @@ func modelConfigOf(path string) (*hfConfig, error) {
 		return nil, fmt.Errorf("convert: %s: %w", t.path, err)
 	}
 	return t, nil
+}
+
+// applyProcessorConfig states the tower's resampling filter from the
+// publisher's preprocessor_config.json beside its config.json
+// (WithModelConfig), where the mmproj names none: LiquidAI's LFM2-VL files
+// carry no image_resize_algo, and the processor resamples as its
+// preprocessor_config says, not as its class defaults. Pillow's 2 is
+// bilinear and 3 bicubic; a config stating neither leaves the file's.
+func (o *options) applyProcessorConfig(v *jlm.Vision) error {
+	if o.modelConfig == "" || v == nil {
+		return nil
+	}
+	dir := o.modelConfig
+	if fi, err := os.Stat(dir); err == nil && !fi.IsDir() {
+		dir = filepath.Dir(dir)
+	}
+	path := filepath.Join(dir, "preprocessor_config.json")
+	raw, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("convert: %w", err)
+	}
+	var p struct {
+		Resample *int `json:"resample"`
+	}
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return fmt.Errorf("convert: %s: %w", path, err)
+	}
+	if p.Resample == nil {
+		return nil
+	}
+	switch *p.Resample {
+	case 2:
+		v.Flags &^= jlm.FlagVisionBicubic
+	case 3:
+		v.Flags |= jlm.FlagVisionBicubic
+	}
+	return nil
 }
