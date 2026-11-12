@@ -1883,20 +1883,44 @@ func (bs *blockScratch) embedServes() error {
 	case bs.embErr != nil:
 		return bs.embErr
 	}
+	role, vector, ok := bs.embedGap()
+	switch {
+	case ok:
+		return nil
+	case vector:
+		return fmt.Errorf("the input rows' graph names %v, a vector the head did not carry", role)
+	}
+	return fmt.Errorf("the input rows' graph names %v, a table the card does not hold", role)
+}
+
+// embedServed is embedServes without its reason, allocating nothing: a step
+// asks it every token.
+func (bs *blockScratch) embedServed() bool {
+	if bs.embedGraph == nil || bs.embErr != nil {
+		return false
+	}
+	_, _, ok := bs.embedGap()
+	return ok
+}
+
+// embedGap is the first weight the input rows' graph names that the card
+// was not handed, and whether it is a vector rather than a table; ok where
+// there is none.
+func (bs *blockScratch) embedGap() (role jlm.Role, vector, ok bool) {
 	for _, o := range bs.embedGraph.Ops {
 		for _, w := range o.Weight {
 			if w.Rows == 0 {
 				if bs.embSV[w.Role] == nil {
-					return fmt.Errorf("the input rows' graph names %v, a vector the head did not carry", w.Role)
+					return w.Role, true, false
 				}
 				continue
 			}
 			if r := bs.embTable(w.Role); r == nil || !r.ok {
-				return fmt.Errorf("the input rows' graph names %v, a table the card does not hold", w.Role)
+				return w.Role, false, false
 			}
 		}
 	}
-	return nil
+	return 0, false, true
 }
 
 // errEmbedRoom is input rows whose tables found no room beside the head and
