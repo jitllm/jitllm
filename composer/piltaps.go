@@ -22,15 +22,25 @@ const pilPrecision = 32 - 8 - 2
 
 // pilSupport is a Pillow filter's support at unit scale.
 func pilSupport(filter uint8) float64 {
-	if filter == graph.FilterCubic {
+	switch filter {
+	case graph.FilterCubic:
 		return 2
+	case graph.FilterLanczos:
+		return 3
 	}
 	return 1
 }
 
-// pilFilter is the filter's weight at x (Resample.c's bilinear_filter and
-// bicubic_filter, a = -0.5).
+// pilFilter is the filter's weight at x (Resample.c's bilinear_filter,
+// bicubic_filter with a = -0.5, and lanczos_filter over [-3, 3), its
+// bounds as Pillow writes them).
 func pilFilter(filter uint8, x float64) float64 {
+	if filter == graph.FilterLanczos {
+		if -3 <= x && x < 3 {
+			return sinc(x) * sinc(x/3)
+		}
+		return 0
+	}
 	if x < 0 {
 		x = -x
 	}
@@ -48,6 +58,15 @@ func pilFilter(filter uint8, x float64) float64 {
 		return (((x-5)*x+8)*x - 4) * a
 	}
 	return 0
+}
+
+// sinc is Resample.c's sinc_filter: sin(pi x) / (pi x), 1 at 0.
+func sinc(x float64) float64 {
+	if x == 0 {
+		return 1
+	}
+	x *= math.Pi
+	return math.Sin(x) / x
 }
 
 // LiveShrink is the deepest shrink of a side a picture of a size of its own

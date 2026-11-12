@@ -266,7 +266,7 @@ func Verify(g *Graph, f Facts) error {
 			case a.PicCanvas && !a.PicLive || !a.PicCanvas && a.PicFill != [3]uint8{}:
 				bad("%s: a picture on a canvas %v (filled %v), its size %v", at, a.PicCanvas, a.PicFill, a.PicLive)
 			case !(a.Chain == ChainHalfPixel && a.Filter == FilterLinear) &&
-				!(a.Chain == ChainPIL && (a.Filter == FilterBilinear || a.Filter == FilterCubic) && a.Taps > 0 && a.PicSide > 0):
+				!(a.Chain == ChainPIL && PILFilter(a.Filter) && a.Taps > 0 && a.PicSide > 0):
 				bad("%s: a picture resampled by chain %d and filter %d (%d taps)", at, a.Chain, a.Filter, a.Taps)
 			case a.Std[0] == 0 || a.Std[1] == 0 || a.Std[2] == 0:
 				bad("%s: a picture normalised by a std of 0", at)

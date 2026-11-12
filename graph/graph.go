@@ -1085,7 +1085,14 @@ const (
 	// side weighted by a triangle as wide as the reduction (one sample at
 	// least) about the cell's centre, normalised by the weights' sum.
 	FilterAntialias
+	// FilterLanczos is Pillow's LANCZOS: the sinc windowed by the sinc a
+	// third as wide, over three samples each side, widened by the reduction.
+	FilterLanczos
 )
+
+// PILFilter reports whether f is one of Pillow's filters a ChainPIL
+// resample runs.
+func PILFilter(f uint8) bool { return f == FilterBilinear || f == FilterCubic || f == FilterLanczos }
 
 // A picture's sample formats (OpPicture), as an image decoder leaves them.
 const (

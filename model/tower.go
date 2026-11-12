@@ -867,6 +867,8 @@ func resizeChain(a *graph.Attrs, f jlm.Filter) error {
 		a.Chain, a.Filter, a.PicSide = graph.ChainPIL, graph.FilterBilinear, composer.PictureSide
 	case jlm.FilterPILBicubic:
 		a.Chain, a.Filter, a.PicSide = graph.ChainPIL, graph.FilterCubic, composer.PictureSide
+	case jlm.FilterPILLanczos:
+		a.Chain, a.Filter, a.PicSide = graph.ChainPIL, graph.FilterLanczos, composer.PictureSide
 	default:
 		return fmt.Errorf("a resize by filter %d, which no picture op runs", f)
 	}

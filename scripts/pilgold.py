@@ -35,7 +35,8 @@ def pattern(w, h):
     return Image.frombytes("RGB", (w, h), bytes(b))
 
 
-FILTERS = {"bilinear": Image.Resampling.BILINEAR, "bicubic": Image.Resampling.BICUBIC}
+FILTERS = {"bilinear": Image.Resampling.BILINEAR, "bicubic": Image.Resampling.BICUBIC,
+           "lanczos": Image.Resampling.LANCZOS}
 
 CASES = [
     ("pattern", 97, 61, 48, 48, "bilinear"),
@@ -48,6 +49,14 @@ CASES = [
     ("pattern", 4096, 3000, 448, 448, "bicubic"),
     ("quad-and-disc.png", 0, 0, 896, 896, "bilinear"),
     ("quad-and-disc.png", 0, 0, 336, 336, "bicubic"),
+    # Idefics3's (SmolVLM's): the longer side to 2048, then the sides to
+    # whole 512 tiles, then the global square, each from the one before.
+    ("pattern", 97, 61, 48, 48, "lanczos"),
+    ("pattern", 20, 33, 48, 48, "lanczos"),
+    ("pattern", 640, 488, 2048, 1562, "lanczos"),
+    ("pattern", 2048, 1562, 2048, 2048, "lanczos"),
+    ("pattern", 2048, 2048, 512, 512, "lanczos"),
+    ("quad-and-disc.png", 0, 0, 512, 512, "lanczos"),
 ]
 
 
@@ -57,7 +66,7 @@ def main():
         if src == "pattern":
             img = pattern(w, h)
         else:
-            img = Image.open(os.path.join(ROOT, "engine", "model", "testdata", src)).convert("RGB")
+            img = Image.open(os.path.join(ROOT, "engine", "testdata", src)).convert("RGB")
             w, h = img.size
         got = img.resize((ow, oh), resample=FILTERS[f]).tobytes()
         case = {"src": src, "w": w, "h": h, "ow": ow, "oh": oh, "filter": f,

@@ -185,6 +185,9 @@ const (
 	// filters: the kernel widened by the reduction's scale.
 	FilterPILBilinear Filter = 2
 	FilterPILBicubic  Filter = 3
+	// FilterPILLanczos is Pillow's LANCZOS, the sinc windowed by the sinc a
+	// third as wide, at Pillow's precision alone.
+	FilterPILLanczos Filter = 4
 )
 
 // Precision is the arithmetic a resample keeps its samples, taps and sums in.
@@ -710,6 +713,8 @@ func resizes(f Filter, p Precision) bool {
 		return p == PrecFloat
 	case FilterPILBilinear, FilterPILBicubic:
 		return p == PrecPIL || p == PrecTorch
+	case FilterPILLanczos:
+		return p == PrecPIL
 	}
 	return false
 }
