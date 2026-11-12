@@ -76,6 +76,8 @@ func (s *Builder) Stated(name string, e *jlm.Expr, in []ValueID, width int, f Fa
 					out.Args[i] = Arg{Kind: ArgConst, Const: float64(a.Value)}
 				case jlm.ArgWidth:
 					out.Args[i] = Arg{Kind: ArgConst, Const: float64(width)}
+				case jlm.ArgExact:
+					return 0, fmt.Errorf("the expression holds an exact constant, which only the host evaluates")
 				case jlm.ArgStored:
 					sh, ok := f.Inventory[a.Role]
 					if !ok {

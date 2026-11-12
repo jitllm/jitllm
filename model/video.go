@@ -128,26 +128,45 @@ func (tg *TowerGraphs) VideoPlan(n, w, h int, fps float64) (VideoPlan, error) {
 	return VideoPlan{VideoSample: s, Square: tg.VideoSquare(ow, oh)}, nil
 }
 
-// evalSize is a stated expression of a video's sizes (jlm.Video's count,
-// indices, stride and prompt values) at operands in, in float64 as the
-// processors compute them in numpy and torch: geometry from the video's
-// frames and rate, once a video, not arithmetic a token runs.
+// evalSize is a stated expression of a video's or a picture's sizes
+// (jlm.Video's count, indices, stride and prompt values, a picture's
+// geometry) at operands in, in float64 as the processors compute them in
+// numpy, torch and Python: geometry from the frames' and pictures' sizes,
+// once a video or a picture, not arithmetic a token runs.
 func evalSize(e *jlm.Expr, in []float64) (float64, error) {
-	vals := make([]float64, len(e.Terms))
-	arg := func(a jlm.Arg) float64 {
-		switch a.Kind {
-		case jlm.ArgIn:
-			return in[a.Index]
-		case jlm.ArgTerm:
-			return vals[a.Index]
-		}
-		return float64(a.Value)
+	v, _, err := evalInto(e, in, nil)
+	return v, err
+}
+
+// evalInto is evalSize with vals the terms' scratch, grown and returned.
+func evalInto(e *jlm.Expr, in, vals []float64) (float64, []float64, error) {
+	if cap(vals) < len(e.Terms) {
+		vals = make([]float64, len(e.Terms))
 	}
+	vals = vals[:len(e.Terms)]
+	v, err := evalTerms(e, in, vals)
+	return v, vals, err
+}
+
+// arg is operand a's value, the terms' values so far vals.
+func arg(a jlm.Arg, in, vals []float64) float64 {
+	switch a.Kind {
+	case jlm.ArgIn:
+		return in[a.Index]
+	case jlm.ArgTerm:
+		return vals[a.Index]
+	case jlm.ArgExact:
+		return a.Exact
+	}
+	return float64(a.Value)
+}
+
+func evalTerms(e *jlm.Expr, in, vals []float64) (float64, error) {
 	for k, t := range e.Terms {
 		if t.Reduce {
-			return 0, fmt.Errorf("model: term %d of a video's size reduces a row", k)
+			return 0, fmt.Errorf("model: term %d of a size reduces a row", k)
 		}
-		a, b, c := arg(t.Args[0]), arg(t.Args[1]), arg(t.Args[2])
+		a, b, c := arg(t.Args[0], in, vals), arg(t.Args[1], in, vals), arg(t.Args[2], in, vals)
 		var v float64
 		switch t.Fn {
 		case jlm.FnAdd:
@@ -200,7 +219,7 @@ func evalSize(e *jlm.Expr, in []float64) (float64, error) {
 		case jlm.FnExp:
 			v = math.Exp(a)
 		default:
-			return 0, fmt.Errorf("model: term %d of a video's size is %v, not a function of sizes", k, t.Fn)
+			return 0, fmt.Errorf("model: term %d of a size is %v, not a function of sizes", k, t.Fn)
 		}
 		vals[k] = v
 	}
