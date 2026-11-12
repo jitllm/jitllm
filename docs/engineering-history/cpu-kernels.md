@@ -5152,32 +5152,47 @@ the loop starts.
 At one core there are no workers and no spin, so user-space instructions
 are the work (RULE 1). Box 50's second socket (Xeon E5-2680 v4), jitllm
 6292018d8 at `JITLLM_CORES=1` beside llama.cpp's CPU build at `-t 1`, a
-token's instructions as the 80-token run less the 16-token run over the 64
-between (`perf stat -e instructions:u`), runs repeating to 0.1%:
+token's counts as the 80-token run less the 16-token run (`perf stat`),
+runs repeating to 0.1%. `jitllm speed` decodes its `-n` twice, an untimed
+warm-up of the same length and then the timed run, where llama-bench's
+warm-up decodes one token: the difference is 128 of jitllm's tokens and 64
+of llama.cpp's. (This section first divided both by 64 and read jitllm at
+twice llama.cpp's instructions; it was not.)
 
 | model | jitllm | llama.cpp | ratio |
 |---|---|---|---|
-| olmoe-1b-7b Q4_K_M | 1.133 G | 0.517 G | 2.19 |
-| Qwen3-30B-A3B Q4_K_M | 2.811 G | 1.364 G | 2.06 |
-| Llama-3.2-1B Q4_K_M (dense) | 1.091 G | 0.526 G | 2.07 |
+| olmoe-1b-7b Q4_K_M | 0.566 G | 0.517 G | 1.10 |
+| Qwen3-30B-A3B Q4_K_M | 1.406 G | 1.364 G | 1.03 |
+| Llama-3.2-1B Q4_K_M (dense) | 0.546 G | 0.526 G | 1.04 |
 
 Sampled by instruction (`perf record -e instructions:u`, `JITLLM_PERFMAP=1`
 naming the generated code), 95% of a decode token's generated instructions
 are the fused matvecs (`reduce+reduce`); llama.cpp's are
 `ggml_gemv_q4_K_8x8_q8_K` (58% of its run, on weights it repacks eight rows
-at a time at load, 14% more) and `ggml_vec_dot_q6_K_q8_K` (19%). A mixture
-takes twice llama.cpp's instructions exactly as the dense model does: the
-matvec's per-sub-block float epilogue above, not the routing.
-
-The time is another matter. At one core, interleaved in one pass on the same
+at a time at load, 14% more) and `ggml_vec_dot_q6_K_q8_K` (19%). The work is
+at par; the time is not. At one core, interleaved in one pass on the same
 socket while census lanes ran elsewhere on the box (a direction, not a board
 row), Llama-3.2-1B decoded 9.60 and 9.55 tok/s against llama.cpp's 10.77 and
-10.84 (0.89) and olmoe 2.47 and 2.77 against 11.26 and 10.87 (0.24). The
-dense matvec keeps up with twice the instructions -- one core's bandwidth
-caps both engines -- where the mixture loses four times what its
-instructions account for: what is left is stalls in the expert path, and
-the twelve-core board's 0.2 is mostly that rather than the region's
-coordination.
+10.84 (0.89) and olmoe 2.47 and 2.77 against 11.26 and 10.87 (0.24).
+
+Where a token's cycles go, the same pass and divisors:
+
+| per token | user cycles | IPC | LLC load misses | per 1k instructions | page walks |
+|---|---|---|---|---|---|
+| olmoe, jitllm | 526 M | 1.06 | 6.23 M | 11.1 | 1.0% |
+| olmoe, llama.cpp | 280 M | 1.85 | 0.84 M | 1.6 | 0.2% |
+| Llama-3.2-1B, jitllm | 314 M | 1.72 | 0.35 M | 0.6 | 0.7% |
+| Llama-3.2-1B, llama.cpp | 282 M | 1.87 | 0.71 M | 1.4 | 0.1% |
+
+The dense matvec misses the last-level cache half as often as llama.cpp's:
+the hardware prefetcher keeps ahead of it. The expert path misses 7.4 times
+as often -- some 400 MB a token fetched on demand rather than ahead -- and
+that, not instructions and not page walks (huge pages would buy 1%), is the
+mixture's loss. The rate also climbs with the run: olmoe's timed decode is
+2.9-3.0 tok/s over 64 tokens and 4.2 over 256, because `speed`'s timed
+decode runs on a fresh instance, whose expert pages are read at their first
+routing (O_DIRECT, cold in every process, where llama.cpp's mmap reads a
+warm page cache).
 
 **The cold spill, tried.** The expert kernels' bindings spill copies a
 loop walks every trip (gate Q4_K 104 stack references, down Q6_K 185, down
