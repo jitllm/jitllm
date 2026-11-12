@@ -96,9 +96,8 @@ picture's resize plan is.
 
 ## Not yet stated
 
-The frames' resize steps (`jlm.PreVideoResize`, Qwen's video smart_resize)
-and several of the picture's (`PreSmartResize`, `PreNaFlex`,
-`PreLongBox`) are still one processor's resize each. They are the next
-statement to generalise: a resize whose output size is an expression of the
-picture's, with the processors' searches (NaFlex's scale search) stated as
-bounded iterations.
+The frames' resize step of a video with an entry of its own
+(`jlm.PreVideoResize`, Qwen's video smart_resize) is still one processor's
+resize in the container. The picture's are the converter's now, stated as
+geometry and lowered to generic steps (docs/design/picture-statement.md);
+this one is the next to go the same way.

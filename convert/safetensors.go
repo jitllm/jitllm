@@ -132,10 +132,19 @@ func originOf(name string, open []*safetensors.File) string {
 type Option func(*options)
 
 type options struct {
-	q8           bool   // WithQ8, safetensors only
-	chatTemplate string // WithChatTemplate
-	head         string // WithHead, GGUF only
-	modelConfig  string // WithModelConfig, GGUF only
+	q8           bool               // WithQ8, safetensors only
+	chatTemplate string             // WithChatTemplate
+	head         string             // WithHead, GGUF only
+	modelConfig  string             // WithModelConfig, GGUF only
+	pictureStep  func(*jlm.PreStep) // WithPictureStep, GGUF only
+}
+
+// WithPictureStep edits each picture step the tower's stater writes, before
+// the converter states the picture's geometry from them and lowers them:
+// a processor's step restated, as a gate restates one to see the geometry
+// follow it.
+func WithPictureStep(edit func(*jlm.PreStep)) Option {
+	return func(o *options) { o.pictureStep = edit }
 }
 
 // WithModelConfig reads what a GGUF dropped from the publisher's config.json

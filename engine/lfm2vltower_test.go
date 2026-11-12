@@ -11,6 +11,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/jitllm/jitllm/convert"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/internal/testmodels"
@@ -156,7 +157,7 @@ func TestLFM2VLTowerMatchesTransformers(t *testing.T) {
 
 	// The violation: a tolerance that keeps the picture whole.
 	stated := tg.Geometry
-	restateStep(t, m, jlm.PreTileSmart, func(s *jlm.PreStep) { s.Floats[0] = 1e6 })
+	restateStep(t, m, "synth-lfm2vl", convert.PreTileSmart, func(s *jlm.PreStep) { s.Floats[0] = 1e6 })
 	_, n := squareOf(t, tg, b.Dx(), b.Dy(), 0)
 	tg.Geometry = stated
 	if n == len(g.Pieces) {

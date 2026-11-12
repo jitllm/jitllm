@@ -14,7 +14,7 @@ import (
 // (jlm.Tower): the converter knows the family, so the engine need not. A
 // family whose statement is not written yet states none, and the engine
 // refuses its container by name until it is.
-func statedTower(s *jlm.Source) (*jlm.Tower, error) {
+func statedTower(s *jlm.Source, o options) (*jlm.Tower, error) {
 	if s.Vision == nil {
 		return nil, nil
 	}
@@ -26,6 +26,21 @@ func statedTower(s *jlm.Source) (*jlm.Tower, error) {
 	if err != nil || t == nil {
 		return t, err
 	}
+	if o.pictureStep != nil {
+		edit := func(steps []jlm.PreStep) {
+			for i := range steps {
+				o.pictureStep(&steps[i])
+			}
+		}
+		edit(t.Pre)
+		if t.Video != nil && t.Video.AsPictures() {
+			edit(t.Video.Pre)
+		}
+	}
+	// The picture's geometry is stated from the stater's steps, which are
+	// then lowered to the container's generic ones; a video's frames read
+	// as pictures under steps of their own take a geometry of their own and
+	// the picture's steps.
 	if t.Geometry, err = GeometryOf(t, s.Vision); err != nil {
 		return nil, err
 	}
@@ -35,9 +50,13 @@ func statedTower(s *jlm.Source) (*jlm.Tower, error) {
 		if v.Frames, err = GeometryOf(&frames, s.Vision); err != nil {
 			return nil, fmt.Errorf("convert: the video's frames: %w", err)
 		}
+		v.Pre = nil
+	}
+	if t.Pre, err = lowerPicture(t.Pre); err != nil {
+		return nil, err
 	}
 	if err := t.Valid(); err != nil {
-		return nil, fmt.Errorf("convert: the picture's geometry: %w", err)
+		return nil, fmt.Errorf("convert: the stated tower (%v): %w", s.Vision.Projector, err)
 	}
 	return t, nil
 }
@@ -166,9 +185,6 @@ func idefics3Tower(s *jlm.Source) (*jlm.Tower, error) {
 		return nil, err
 	}
 	t.Video = idefics3Video(frame, t.Span.After)
-	if err := t.Valid(); err != nil {
-		return nil, fmt.Errorf("convert: idefics3: %w", err)
-	}
 	withVideoTemplate(s.Vocab, smolvlmVideoTemplate)
 	return t, nil
 }
@@ -430,9 +446,6 @@ func gemma3Tower(s *jlm.Source) (*jlm.Tower, error) {
 		}},
 		Span: jlm.TowerSpan{BeforeText: "\n\n<start_of_image>", AfterText: "<end_of_image>\n\n", Bidir: true},
 	}
-	if err := t.Valid(); err != nil {
-		return nil, fmt.Errorf("convert: gemma3: %w", err)
-	}
 	return t, nil
 }
 
@@ -510,8 +523,8 @@ func llavaTower(s *jlm.Source) (*jlm.Tower, error) {
 	t := &jlm.Tower{
 		Version: jlm.TowerVersion,
 		Pre: []jlm.PreStep{
-			{Kind: jlm.PreResizeShort, Ints: []int32{side, int32(jlm.FilterPILBicubic), int32(jlm.PrecPIL)}},
-			{Kind: jlm.PreCenterCrop, Ints: []int32{side, side}},
+			{Kind: PreResizeShort, Ints: []int32{side, int32(jlm.FilterPILBicubic), int32(jlm.PrecPIL)}},
+			{Kind: PreCenterCrop, Ints: []int32{side, side}},
 			{Kind: jlm.PreNormalize, Floats: []float32{v.Mean[0], v.Mean[1], v.Mean[2], v.Std[0], v.Std[1], v.Std[2]}},
 		},
 		Entry: entry,
@@ -519,9 +532,6 @@ func llavaTower(s *jlm.Source) (*jlm.Tower, error) {
 			Norm: jlm.NormLayer, Eps: v.Eps, Act: act},
 		Head: head,
 		Span: jlm.TowerSpan{Mark: "<image>\n", AfterText: "\n"},
-	}
-	if err := t.Valid(); err != nil {
-		return nil, fmt.Errorf("convert: llava: %w", err)
 	}
 	return t, nil
 }
@@ -573,7 +583,7 @@ func internvlTower(s *jlm.Source) (*jlm.Tower, error) {
 	t := &jlm.Tower{
 		Version: jlm.TowerVersion,
 		Pre: []jlm.PreStep{
-			{Kind: jlm.PreTile, Ints: []int32{1, 12, 1}},
+			{Kind: PreTile, Ints: []int32{1, 12, 1}},
 			{Kind: jlm.PreResize, Ints: []int32{side, side, int32(jlm.FilterPILBicubic), int32(jlm.PrecPIL)}},
 			{Kind: jlm.PreNormalize, Floats: []float32{v.Mean[0], v.Mean[1], v.Mean[2], v.Std[0], v.Std[1], v.Std[2]}},
 		},
@@ -620,9 +630,6 @@ func internvlTower(s *jlm.Source) (*jlm.Tower, error) {
 		Prompt: []jlm.VideoPiece{{Kind: jlm.PieceGroups, Between: []jlm.VideoPiece{textPiece("\n")},
 			Body: append([]jlm.VideoPiece{textPiece("Frame"), valuePiece(num1.expr(), jlm.ValueFormat{Kind: jlm.FormatDecimal}),
 				textPiece(": ")}, pictureSpan(&t.Span)...)}}}
-	if err := t.Valid(); err != nil {
-		return nil, fmt.Errorf("convert: internvl: %w", err)
-	}
 	return t, nil
 }
 
@@ -762,7 +769,7 @@ func qwenVLTower(s *jlm.Source, kind qwenVLKind) (*jlm.Tower, error) {
 	t := &jlm.Tower{
 		Version: jlm.TowerVersion,
 		Pre: []jlm.PreStep{
-			{Kind: jlm.PreSmartResize, Ints: []int32{int32(v.PatchSize) * merge, minPix, maxPix,
+			{Kind: PreSmartResize, Ints: []int32{int32(v.PatchSize) * merge, minPix, maxPix,
 				int32(jlm.FilterPILBicubic), int32(jlm.PrecPIL)}},
 			{Kind: jlm.PreNormalize, Floats: []float32{v.Mean[0], v.Mean[1], v.Mean[2], v.Std[0], v.Std[1], v.Std[2]}},
 		},
@@ -822,9 +829,6 @@ func qwenVLTower(s *jlm.Source, kind qwenVLKind) (*jlm.Tower, error) {
 				return nil, err
 			}
 		}
-	}
-	if err := t.Valid(); err != nil {
-		return nil, fmt.Errorf("convert: qwen2vl: %w", err)
 	}
 	return t, nil
 }
@@ -1036,7 +1040,7 @@ func glm4vTower(s *jlm.Source) (*jlm.Tower, error) {
 	t := &jlm.Tower{
 		Version: jlm.TowerVersion,
 		Pre: []jlm.PreStep{
-			{Kind: jlm.PreSmartResize, Ints: []int32{int32(v.PatchSize) * merge, glm4vMinPixels, glm4vMaxPixels,
+			{Kind: PreSmartResize, Ints: []int32{int32(v.PatchSize) * merge, glm4vMinPixels, glm4vMaxPixels,
 				int32(jlm.FilterPILBicubic), int32(jlm.PrecPIL), 1}},
 			{Kind: jlm.PreNormalize, Floats: []float32{v.Mean[0], v.Mean[1], v.Mean[2], v.Std[0], v.Std[1], v.Std[2]}},
 		},
@@ -1079,9 +1083,6 @@ func glm4vTower(s *jlm.Source) (*jlm.Tower, error) {
 		if t.Video, err = glm4vVideo(s, t, int32(v.PatchSize), merge, bias(jlm.RoleVPatchEmbd, jlm.RoleVPatchBias)); err != nil {
 			return nil, err
 		}
-	}
-	if err := t.Valid(); err != nil {
-		return nil, fmt.Errorf("convert: glm4v: %w", err)
 	}
 	return t, nil
 }
@@ -1239,7 +1240,7 @@ func kimivlTower(s *jlm.Source) (*jlm.Tower, error) {
 	t := &jlm.Tower{
 		Version: jlm.TowerVersion,
 		Pre: []jlm.PreStep{
-			{Kind: jlm.PreLimitPad, Ints: []int32{int32(v.PatchSize), kimivlTokenLimit, int32(v.PatchSize) * merge,
+			{Kind: PreLimitPad, Ints: []int32{int32(v.PatchSize), kimivlTokenLimit, int32(v.PatchSize) * merge,
 				int32(jlm.FilterPILBicubic), int32(jlm.PrecPIL)}},
 			{Kind: jlm.PreNormalize, Floats: []float32{v.Mean[0], v.Mean[1], v.Mean[2], v.Std[0], v.Std[1], v.Std[2]}},
 		},
@@ -1271,9 +1272,6 @@ func kimivlTower(s *jlm.Source) (*jlm.Tower, error) {
 	}
 	if t.Span.After, err = markerIDs(s, "<|media_end|>"); err != nil {
 		return nil, err
-	}
-	if err := t.Valid(); err != nil {
-		return nil, fmt.Errorf("convert: kimivl: %w", err)
 	}
 	return t, nil
 }
@@ -1335,7 +1333,7 @@ func hunyuanvlTower(s *jlm.Source) (*jlm.Tower, error) {
 	t := &jlm.Tower{
 		Version: jlm.TowerVersion,
 		Pre: []jlm.PreStep{
-			{Kind: jlm.PreSmartResize, Ints: []int32{int32(v.PatchSize) * merge, int32(v.MinPixels), int32(v.MaxPixels),
+			{Kind: PreSmartResize, Ints: []int32{int32(v.PatchSize) * merge, int32(v.MinPixels), int32(v.MaxPixels),
 				int32(jlm.FilterPILBicubic), int32(jlm.PrecPIL)}},
 			{Kind: jlm.PreNormalize, Floats: []float32{v.Mean[0], v.Mean[1], v.Mean[2], v.Std[0], v.Std[1], v.Std[2]}},
 		},
@@ -1371,9 +1369,6 @@ func hunyuanvlTower(s *jlm.Source) (*jlm.Tower, error) {
 	}
 	if t.Span.After, err = markerIDs(s, "<\uff5chy_place\u2581holder\u2581no\u2581101\uff5c>"); err != nil {
 		return nil, err
-	}
-	if err := t.Valid(); err != nil {
-		return nil, fmt.Errorf("convert: hunyuanvl: %w", err)
 	}
 	return t, nil
 }
@@ -1444,7 +1439,7 @@ func janusTower(s *jlm.Source) (*jlm.Tower, error) {
 	t := &jlm.Tower{
 		Version: jlm.TowerVersion,
 		Pre: []jlm.PreStep{
-			{Kind: jlm.PreLongBox, Ints: []int32{side, janusMinSide, fill[0], fill[1], fill[2],
+			{Kind: PreLongBox, Ints: []int32{side, janusMinSide, fill[0], fill[1], fill[2],
 				int32(jlm.FilterPILBicubic), int32(jlm.PrecPIL)}},
 			{Kind: jlm.PreNormalize, Floats: []float32{v.Mean[0], v.Mean[1], v.Mean[2], v.Std[0], v.Std[1], v.Std[2]}},
 		},
@@ -1465,9 +1460,6 @@ func janusTower(s *jlm.Source) (*jlm.Tower, error) {
 	}
 	if t.Span.After, err = markerIDs(s, "<end_of_image>"); err != nil {
 		return nil, err
-	}
-	if err := t.Valid(); err != nil {
-		return nil, fmt.Errorf("convert: janus: %w", err)
 	}
 	return t, nil
 }
@@ -1518,7 +1510,7 @@ func phi4Tower(s *jlm.Source) (*jlm.Tower, error) {
 	t := &jlm.Tower{
 		Version: jlm.TowerVersion,
 		Pre: []jlm.PreStep{
-			{Kind: jlm.PreNaFlex, Ints: []int32{P, int32(v.MinPixels) / (P * P), int32(v.MaxPixels) / (P * P),
+			{Kind: PreNaFlex, Ints: []int32{P, int32(v.MinPixels) / (P * P), int32(v.MaxPixels) / (P * P),
 				int32(jlm.FilterPILBilinear), int32(jlm.PrecPIL)}},
 			{Kind: jlm.PreNormalize, Floats: []float32{v.Mean[0], v.Mean[1], v.Mean[2], v.Std[0], v.Std[1], v.Std[2]}},
 		},
@@ -1539,9 +1531,6 @@ func phi4Tower(s *jlm.Source) (*jlm.Tower, error) {
 			{Code: jlm.TOpLinear, In: []uint16{2}, Bind: bias(jlm.RoleVProj2, jlm.RoleVProj2Bias)},
 		}},
 		Span: jlm.TowerSpan{Mark: "<image>"},
-	}
-	if err := t.Valid(); err != nil {
-		return nil, fmt.Errorf("convert: phi4: %w", err)
 	}
 	return t, nil
 }
@@ -1627,7 +1616,7 @@ func pixtralTower(s *jlm.Source) (*jlm.Tower, error) {
 	t := &jlm.Tower{
 		Version: jlm.TowerVersion,
 		Pre: []jlm.PreStep{
-			{Kind: jlm.PreCapUnit, Ints: []int32{int32(v.ImageSize), int32(v.PatchSize) * merge,
+			{Kind: PreCapUnit, Ints: []int32{int32(v.ImageSize), int32(v.PatchSize) * merge,
 				int32(jlm.FilterPILBicubic), int32(jlm.PrecPIL)}},
 			{Kind: jlm.PreNormalize, Floats: []float32{v.Mean[0], v.Mean[1], v.Mean[2], v.Std[0], v.Std[1], v.Std[2]}},
 		},
@@ -1640,9 +1629,6 @@ func pixtralTower(s *jlm.Source) (*jlm.Tower, error) {
 	}
 	if t.Span.After, err = markerIDs(s, "[IMG_END]"); err != nil {
 		return nil, err
-	}
-	if err := t.Valid(); err != nil {
-		return nil, fmt.Errorf("convert: pixtral: %w", err)
 	}
 	return t, nil
 }
@@ -1730,7 +1716,7 @@ func gemma4vTower(s *jlm.Source) (*jlm.Tower, error) {
 	t := &jlm.Tower{
 		Version: jlm.TowerVersion,
 		Pre: []jlm.PreStep{
-			{Kind: jlm.PreAspectBudget, Ints: []int32{gemma4SoftTokens * merge * merge, P, P * merge,
+			{Kind: PreAspectBudget, Ints: []int32{gemma4SoftTokens * merge * merge, P, P * merge,
 				int32(jlm.FilterPILBicubic), int32(jlm.PrecPIL)}},
 			{Kind: jlm.PreNormalize, Floats: []float32{v.Mean[0], v.Mean[1], v.Mean[2], v.Std[0], v.Std[1], v.Std[2]}},
 		},
@@ -1758,9 +1744,6 @@ func gemma4vTower(s *jlm.Source) (*jlm.Tower, error) {
 		return nil, err
 	}
 	t.Video = gemma4vVideo(t, merge)
-	if err := t.Valid(); err != nil {
-		return nil, fmt.Errorf("convert: gemma4v: %w", err)
-	}
 	return t, nil
 }
 
@@ -1873,7 +1856,7 @@ func lfm2Tower(s *jlm.Source) (*jlm.Tower, error) {
 	t := &jlm.Tower{
 		Version: jlm.TowerVersion,
 		Pre: []jlm.PreStep{
-			{Kind: jlm.PreTileSmart, Ints: []int32{int32(v.TileSize), int32(v.MinTiles), int32(v.MaxTiles), P, P * merge,
+			{Kind: PreTileSmart, Ints: []int32{int32(v.TileSize), int32(v.MinTiles), int32(v.MaxTiles), P, P * merge,
 				int32(v.MinPixels), int32(v.MaxPixels), int32(filter), int32(jlm.PrecTorch)}, Floats: []float32{v.Tolerance}},
 			{Kind: jlm.PreNormalize, Floats: []float32{v.Mean[0], v.Mean[1], v.Mean[2], v.Std[0], v.Std[1], v.Std[2]}},
 		},
@@ -1895,9 +1878,6 @@ func lfm2Tower(s *jlm.Source) (*jlm.Tower, error) {
 	}
 	if t.Span.After, err = markerIDs(s, "<|image_end|>"); err != nil {
 		return nil, err
-	}
-	if err := t.Valid(); err != nil {
-		return nil, fmt.Errorf("convert: lfm2: %w", err)
 	}
 	return t, nil
 }
@@ -1979,7 +1959,7 @@ func llama4Tower(s *jlm.Source) (*jlm.Tower, error) {
 		Version: jlm.TowerVersion,
 		Pre: []jlm.PreStep{
 			{Kind: jlm.PreResize, Ints: []int32{side, side, int32(jlm.FilterPILBilinear), int32(jlm.PrecTorch)}},
-			{Kind: jlm.PreBestFit, Ints: []int32{int32(v.MaxTiles)}},
+			{Kind: PreBestFit, Ints: []int32{int32(v.MaxTiles)}},
 			{Kind: jlm.PreNormalizeBF16, Floats: []float32{v.Mean[0], v.Mean[1], v.Mean[2], v.Std[0], v.Std[1], v.Std[2]}},
 		},
 		Entry: entry,
@@ -1998,9 +1978,6 @@ func llama4Tower(s *jlm.Source) (*jlm.Tower, error) {
 	}
 	if err := markTable(s, []string{"<|tile_x_separator|>", "<|tile_y_separator|>", "<|image|>"}); err != nil {
 		return nil, err
-	}
-	if err := t.Valid(); err != nil {
-		return nil, fmt.Errorf("convert: llama4: %w", err)
 	}
 	return t, nil
 }
@@ -2103,16 +2080,13 @@ func minicpmvTower(s *jlm.Source) (*jlm.Tower, error) {
 	t := &jlm.Tower{
 		Version: jlm.TowerVersion,
 		Pre: []jlm.PreStep{
-			{Kind: jlm.PreSliceUHD, Ints: []int32{int32(v.ImageSize), P, sliceMax, int32(jlm.FilterPILBicubic), int32(jlm.PrecPIL)}},
+			{Kind: PreSliceUHD, Ints: []int32{int32(v.ImageSize), P, sliceMax, int32(jlm.FilterPILBicubic), int32(jlm.PrecPIL)}},
 			{Kind: jlm.PreNormalize, Floats: []float32{v.Mean[0], v.Mean[1], v.Mean[2], v.Std[0], v.Std[1], v.Std[2]}},
 		},
 		Entry: entry,
 		Block: jlm.TowerBlock{NHead: v.NHead, NKVHead: v.NHead, HeadDim: v.NEmbd / v.NHead, Norm: jlm.NormLayer, Eps: v.Eps, Act: act},
 		Head:  head,
 		Span:  jlm.TowerSpan{Mark: "(<image>./</image>)", IndexBefore: "<image_id>", IndexAfter: "</image_id>"},
-	}
-	if err := t.Valid(); err != nil {
-		return nil, fmt.Errorf("convert: minicpmv: %w", err)
 	}
 	return t, nil
 }

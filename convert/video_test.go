@@ -298,7 +298,8 @@ func TestGemma4StatesItsVideo(t *testing.T) {
 		}
 	}
 	dst := filepath.Join(t.TempDir(), name+".jlm")
-	if _, err := FromGGUFs(src, mm, dst, jlm.Fingerprint{Writer: "gate"}); err != nil {
+	var stated []jlm.PreStep
+	if _, err := FromGGUFs(src, mm, dst, jlm.Fingerprint{Writer: "gate"}, statedSteps(&stated)); err != nil {
 		t.Fatal(err)
 	}
 	f, err := jlm.Open(dst)
@@ -311,8 +312,11 @@ func TestGemma4StatesItsVideo(t *testing.T) {
 		t.Fatal("the container states no video")
 	}
 	vid := v.Tower.Video
-	if !vid.AsPictures() || len(vid.Pre) == 0 || vid.Pre[0].Kind != jlm.PreAspectBudget || vid.Pre[0].Ints[0] != 630 {
-		t.Fatalf("the video reads %+v", vid)
+	// The stater writes the picture's steps, then the frames' own.
+	half := len(stated) / 2
+	if !vid.AsPictures() || len(vid.Pre) != 0 || vid.Frames == nil || len(stated) != 2*half ||
+		stated[half].Kind != PreAspectBudget || stated[half].Ints[0] != 630 {
+		t.Fatalf("the video reads %+v, its frames' processor steps %+v", vid, stated[half:])
 	}
 	if !v.Tower.Span.Bidir {
 		t.Fatal("the frames' rows are causal where the text model sees vision bidirectionally")

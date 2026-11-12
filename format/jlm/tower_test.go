@@ -18,8 +18,8 @@ func sampleTower(t *testing.T) *Tower {
 		Pre: []PreStep{
 			{Kind: PreResize, Ints: []int32{512, 512, int32(FilterTwoTap), int32(PrecFloat)}},
 			{Kind: PreNormalize, Floats: []float32{0.5, 0.5, 0.5, 0.5, 0.5, 0.5}},
-			{Kind: PreTile, Ints: []int32{1, 12, 1}},
-			{Kind: PreSmartResize, Ints: []int32{28, 3136, 12845056, int32(FilterPILBicubic), int32(PrecPIL)}},
+			{Kind: PreResizeLive, Ints: []int32{int32(FilterPILBicubic), int32(PrecPIL)}},
+			{Kind: PreCanvas, Ints: []int32{127, 127, 127, 0, 0}},
 		},
 		Entry: Program{NIn: 1, Out: 5, Ops: []TowerOp{
 			{Code: TOpPatchify, In: []uint16{0}, Span: 16},
@@ -89,18 +89,11 @@ func TestTowerRefusesWhatItCannotRead(t *testing.T) {
 		{"an unknown step", "kind", func(t *Tower) { t.Pre[0].Kind = 99 }},
 		{"a filter in the wrong arithmetic", "resizes", func(t *Tower) { t.Pre[0].Ints[3] = int32(PrecPIL) }},
 		{"a std of zero", "std of 0", func(t *Tower) { t.Pre[1].Floats[4] = 0 }},
-		{"a shorter side of nothing", "shorter side", func(t *Tower) {
-			t.Pre[0] = PreStep{Kind: PreResizeShort, Ints: []int32{0, int32(FilterPILBicubic), int32(PrecPIL)}}
-		}},
-		{"a shorter side in the wrong arithmetic", "shorter side", func(t *Tower) {
-			t.Pre[0] = PreStep{Kind: PreResizeShort, Ints: []int32{336, int32(FilterPILBicubic), int32(PrecFloat)}}
-		}},
-		{"a crop of no height", "crops", func(t *Tower) { t.Pre = append(t.Pre, PreStep{Kind: PreCenterCrop, Ints: []int32{336, 0}}) }},
-		{"fewer tiles at most than at least", "tiles", func(t *Tower) { t.Pre = append(t.Pre, PreStep{Kind: PreTile, Ints: []int32{4, 2, 1}}) }},
-		{"a thumbnail of 2", "tiles", func(t *Tower) { t.Pre = append(t.Pre, PreStep{Kind: PreTile, Ints: []int32{1, 12, 2}}) }},
-		{"a smart resize under its own least", "its own size", func(t *Tower) {
-			t.Pre = append(t.Pre, PreStep{Kind: PreSmartResize, Ints: []int32{28, 3136, 100, int32(FilterPILBicubic), int32(PrecPIL)}})
-		}},
+		{"a processor's own step", "kind", func(t *Tower) { t.Pre[2].Kind = 100 }},
+		{"a live resize in the wrong arithmetic", "each square's size", func(t *Tower) { t.Pre[2].Ints[1] = int32(PrecFloat) }},
+		{"a canvas before any live resize", "canvas", func(t *Tower) { t.Pre[2], t.Pre[3] = t.Pre[3], t.Pre[2] }},
+		{"a canvas colour past a byte", "canvas", func(t *Tower) { t.Pre[3].Ints[1] = 256 }},
+		{"a canvas of a width and no height", "canvas", func(t *Tower) { t.Pre[3].Ints[3] = 384 }},
 		{"a fold of nothing", "groups by 0", func(t *Tower) { t.Head.Ops[4].Span = 0 }},
 		{"a rotary on a third axis", "run", func(t *Tower) { t.Block.Rope.Runs[1].Axis = 2 }},
 		{"a rotary wider than the head", "pairs", func(t *Tower) { t.Block.Rope.Runs[0].Pairs = 40 }},

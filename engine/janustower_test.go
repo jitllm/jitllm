@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/jitllm/jitllm/format/jlm"
@@ -108,16 +109,17 @@ func TestJanusTowerMatchesTransformers(t *testing.T) {
 	}
 	// The violation: a black box.
 	rec := v.Tower
-	was := rec.Pre[0].Ints[2:5]
-	keep := [3]int32{was[0], was[1], was[2]}
-	rec.Pre[0].Ints[2], rec.Pre[0].Ints[3], rec.Pre[0].Ints[4] = 0, 0, 0
+	ci := slices.IndexFunc(rec.Pre, func(s jlm.PreStep) bool { return s.Kind == jlm.PreCanvas })
+	if ci < 0 {
+		t.Fatalf("the tower's steps %+v lay the picture on no canvas", rec.Pre)
+	}
+	fill := rec.Pre[ci].Ints[:3]
+	keep := [3]int32{fill[0], fill[1], fill[2]}
+	fill[0], fill[1], fill[2] = 0, 0, 0
 	black, err := m.BuildTowerGraphs()
-	rec.Pre[0].Ints[2], rec.Pre[0].Ints[3], rec.Pre[0].Ints[4] = keep[0], keep[1], keep[2]
+	fill[0], fill[1], fill[2] = keep[0], keep[1], keep[2]
 	if err != nil {
 		t.Fatal(err)
-	}
-	if rec.Pre[0].Kind != jlm.PreLongBox {
-		t.Fatalf("the tower's first step is %d, not the box", rec.Pre[0].Kind)
 	}
 	m.Tower = black
 	bs := testInstance(t, m, 64, WithKVF16(false))

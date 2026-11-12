@@ -29,29 +29,29 @@ func GeometryOf(t *jlm.Tower, v *jlm.Vision) (*jlm.PictureGeometry, error) {
 		switch s.Kind {
 		case jlm.PreResize:
 			fixedW, fixedH = in(0), in(1)
-		case jlm.PreResizeShort:
+		case PreResizeShort:
 			short = in(0)
-		case jlm.PreCenterCrop:
+		case PreCenterCrop:
 			fixedW, fixedH = in(0), in(1)
-		case jlm.PreTile:
+		case PreTile:
 			minT, maxT, thumb = in(0), in(1), in(2) == 1
-		case jlm.PreBestFit:
+		case PreBestFit:
 			minT, maxT, thumb, canvas = 1, in(0), true, true
-		case jlm.PreSmartResize:
+		case PreSmartResize:
 			return smartGeometry(in(0), in(1), in(2), len(s.Ints) == 6 && in(5) == 1, p), nil
-		case jlm.PreNaFlex:
+		case PreNaFlex:
 			return naflexGeometry(in(0), in(1), in(2)), nil
-		case jlm.PreLimitPad:
+		case PreLimitPad:
 			return limitGeometry(in(0), in(1), in(2), p), nil
-		case jlm.PreLongBox:
+		case PreLongBox:
 			return boxGeometry(in(0), in(1), side), nil
-		case jlm.PreCapUnit:
+		case PreCapUnit:
 			return capGeometry(in(0), in(1), p), nil
-		case jlm.PreAspectBudget:
+		case PreAspectBudget:
 			return budgetGeometry(in(0), in(1), in(2), p), nil
-		case jlm.PreTileSmart:
+		case PreTileSmart:
 			return smartTileGeometry(in(0), in(1), in(2), in(3), in(4), in(5), in(6), s.Floats[0], p), nil
-		case jlm.PreSliceUHD:
+		case PreSliceUHD:
 			return sliceGeometry(in(0), in(1), in(2), p, marks), nil
 		}
 	}

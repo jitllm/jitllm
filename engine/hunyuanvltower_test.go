@@ -4,6 +4,7 @@ import (
 	"math"
 	"testing"
 
+	"github.com/jitllm/jitllm/convert"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/model"
 )
@@ -29,7 +30,7 @@ func TestHunyuanVLTowerMatchesTransformers(t *testing.T) {
 	pixels := func(lo, hi int) func(s *jlm.PreStep) {
 		return func(s *jlm.PreStep) { s.Ints[1], s.Ints[2] = int32(lo), int32(hi) }
 	}
-	restateStep(t, m, jlm.PreSmartResize, pixels(g.Prep.Min, g.Prep.Max))
+	restateStep(t, m, "synth-hunyuanvl", convert.PreSmartResize, pixels(g.Prep.Min, g.Prep.Max))
 	px, sq := towerPixels(t, s, rgbPicture(g.Prep.RGB, g.Prep.W, g.Prep.H))
 	if sq.Gw*tg.Patch != g.Prep.OutW || sq.Gh*tg.Patch != g.Prep.OutH {
 		t.Fatalf("a %dx%d picture resized to %dx%d, the processor's %dx%d", g.Prep.W, g.Prep.H,
@@ -48,12 +49,12 @@ func TestHunyuanVLTowerMatchesTransformers(t *testing.T) {
 		t.Fatalf("%d of %d samples differ from the processor's", differ, len(px))
 	}
 	t.Logf("a %dx%d picture resized to %dx%d: every one of %d samples the processor's", g.Prep.W, g.Prep.H, sq.Pw, sq.Ph, len(px))
-	restateStep(t, m, jlm.PreSmartResize, pixels(g.Prep.Min, 1<<30))
+	restateStep(t, m, "synth-hunyuanvl", convert.PreSmartResize, pixels(g.Prep.Min, 1<<30))
 	if _, bad := towerPixels(t, s, rgbPicture(g.Prep.RGB, g.Prep.W, g.Prep.H)); bad.Pw == g.Prep.OutW && bad.Ph == g.Prep.OutH {
 		t.Fatal("VIOLATION: a resize with no bound on the area reaches the processor's size")
 	}
 	// The golden encodes its picture at its own size (do_resize=False).
-	restateStep(t, m, jlm.PreSmartResize, pixels(g.Image.W*g.Image.H, g.Image.W*g.Image.H))
+	restateStep(t, m, "synth-hunyuanvl", convert.PreSmartResize, pixels(g.Image.W*g.Image.H, g.Image.W*g.Image.H))
 
 	want := model.ImageGrid{T: g.Image.Grid[0], H: g.Image.Grid[1], W: g.Image.Grid[2], Line: 1, Ends: 1}
 	if gr, err := tg.SpanGrid(g.Image.W, g.Image.H); err != nil || gr != want {
