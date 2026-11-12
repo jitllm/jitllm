@@ -116,12 +116,25 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 			}
 			// The stream trial pinned off with the tuners: it migrates blocks
 			// between its runs, and a migration's page-ins are not a decode.
-			instOpts2 := []Option{WithStreamTrial(false), resident}
+			// One CPU device for every arm's instance below, as a front end
+			// holds one: its parts are composed once, not again for each
+			// arm's device.
+			cd, err := OpenCPU()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer cd.Close()
+			instOpts2 := []Option{WithStreamTrial(false), resident, WithCPU(cd)}
 			m, err := model.Open(jlmOf(t, p))
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer m.Close()
+			// The device keeps a model's forms while an instance holds the
+			// model there (HoldModel): one held across the arms, as a
+			// serving engine's are, keeps them for every arm's instances.
+			hold := testInstance(t, m, 8, instOpts2...)
+			defer hold.Close()
 			t.Run("host", func(t *testing.T) {
 				decodeAllocs(t, m, nil, instOpts2...)
 			})
