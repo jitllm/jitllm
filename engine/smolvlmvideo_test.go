@@ -168,6 +168,21 @@ func TestSmolVLMVideoMatchesTransformers(t *testing.T) {
 	if slices.Equal(ids(apart), g.IDs) {
 		t.Fatal("VIOLATION: the video's text encoded apart from the prompt's writes the processor's prompt")
 	}
+	// The chat, as the front ends build it (model.ChatSpansMedia): the
+	// fixture's template writes the turn the golden's text is, and the
+	// video's text at either end is encoded with the template's.
+	vp, err := m.VideoParts(frames, g.Video.Fps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chat, err := m.ChatSpansMedia([]model.ChatMessage{{Role: "user", Content: "Describe the video.", Videos: 1}}, nil,
+		[]model.VideoParts{vp}, nil, model.ToolChoice{}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ids(chat); !slices.Equal(got, g.IDs) {
+		t.Fatalf("the chat's prompt\n  got  %v\n  want %v", got, g.IDs)
+	}
 	t.Logf("%d ids, the processor's; frames %v; %d frames, %d rows each; the processor's own resize parts the rows by NMSE %.3e",
 		len(g.IDs), plan.Frames, len(pics), g.Video.Soft, g.Video.Divergence)
 

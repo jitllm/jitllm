@@ -371,6 +371,14 @@ func TestSmolVLMStatesItsVideo(t *testing.T) {
 	if !vid.AsPictures() || len(vid.Pre) != 0 {
 		t.Fatalf("the video reads %+v, want each frame the picture's square", vid)
 	}
+	// SmolVLMProcessor renders a conversation carrying a video by its own
+	// template, the published one writing no video part.
+	if body, ok := f.Vocab().Template("video"); !ok || body != smolvlmVideoTemplate {
+		t.Fatalf("the container states the video template %v: want SmolVLMProcessor's", ok)
+	}
+	if _, ok := f.Vocab().Template("default"); !ok {
+		t.Fatal("the model's own template is not named default beside the video's")
+	}
 	stamp := regexp.MustCompile(`\nFrame from (\d\d:\d\d):`)
 	for _, c := range []struct {
 		n           int

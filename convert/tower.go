@@ -152,7 +152,38 @@ func idefics3Tower(s *jlm.Source) (*jlm.Tower, error) {
 	if err := t.Valid(); err != nil {
 		return nil, fmt.Errorf("convert: idefics3: %w", err)
 	}
+	withVideoTemplate(s.Vocab, smolvlmVideoTemplate)
 	return t, nil
+}
+
+// smolvlmVideoTemplate is the chat template SmolVLMProcessor renders a
+// conversation carrying a video by, its published one taking none
+// (processing_smolvlm.py's DEFAULT_CHAT_TEMPLATE): the published one with a
+// video part written "<video>".
+const smolvlmVideoTemplate = "<|im_start|>{% for message in messages %}{{message['role'] | capitalize}}" +
+	"{% if message['content'][0]['type'] == 'image' %}{{':'}}{% else %}{{': '}}{% endif %}" +
+	"{% for line in message['content'] %}{% if line['type'] == 'text' %}{{line['text']}}" +
+	"{% elif line['type'] == 'image' %}{{ '<image>' }}{% elif line['type'] == 'video' %}{{ '<video>' }}{% endif %}" +
+	"{% endfor %}<end_of_utterance>\n{% endfor %}{% if add_generation_prompt %}{{ 'Assistant:' }}{% endif %}"
+
+// withVideoTemplate states the template a conversation carrying a video
+// renders by, where the reference's processor keeps one of its own: named
+// "video" beside the model's (model.ChatTemplateFor), the model's one
+// unnamed template named "default" so the two are told apart. A model with
+// no template, or one stating its own for a video, is left as it is.
+func withVideoTemplate(v *jlm.Vocab, body string) {
+	if v == nil || len(v.Templates) == 0 {
+		return
+	}
+	for _, t := range v.Templates {
+		if t.Name == "video" {
+			return
+		}
+	}
+	if len(v.Templates) == 1 && v.Templates[0].Name == "" {
+		v.Templates[0].Name = "default"
+	}
+	v.Templates = append(v.Templates, jlm.ChatTemplate{Name: "video", Body: body})
 }
 
 // SmolVLM2's video_sampling, and the rate SmolVLMProcessor takes for a

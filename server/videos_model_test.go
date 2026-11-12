@@ -54,7 +54,7 @@ func discFrames(t *testing.T, n, w, h int) [][]byte {
 func engineVideoRun(t *testing.T, e *Engine, lm *LoadedModel, frames [][]byte, fps float64) string {
 	t.Helper()
 	msg := model.ChatMessage{Role: "user", Content: askVideo}
-	var vids [][]model.Span
+	var vids []model.VideoParts
 	if len(frames) > 0 {
 		var imgs []image.Image
 		for _, f := range frames {
@@ -64,11 +64,11 @@ func engineVideoRun(t *testing.T, e *Engine, lm *LoadedModel, frames [][]byte, f
 			}
 			imgs = append(imgs, img)
 		}
-		sp, err := lm.m.VideoSpans(imgs, fps)
+		vp, err := lm.m.VideoParts(imgs, fps)
 		if err != nil {
 			t.Fatal(err)
 		}
-		vids, msg.Videos = [][]model.Span{sp}, 1
+		vids, msg.Videos = []model.VideoParts{vp}, 1
 	}
 	spans, err := lm.m.ChatSpansMedia([]model.ChatMessage{msg}, nil, vids, nil, model.ToolChoice{}, true)
 	if err != nil {

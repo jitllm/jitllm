@@ -80,13 +80,13 @@ func TestChatVideoFollowsTheProcessor(t *testing.T) {
 			}
 			ps = append(ps, sp)
 		}
-		var vs [][]model.Span
+		var vs []model.VideoParts
 		for _, v := range vids {
-			sp, err := m.VideoSpans(v, 0)
+			vp, err := m.VideoParts(v, 0)
 			if err != nil {
 				t.Fatal(err)
 			}
-			vs = append(vs, sp)
+			vs = append(vs, vp)
 		}
 		spans, err := m.ChatSpansMedia([]model.ChatMessage{msg}, ps, vs, nil, model.ToolChoice{}, true)
 		if err != nil {

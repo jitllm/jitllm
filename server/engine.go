@@ -2659,7 +2659,7 @@ func (ch *ChatInput) carriesMedia() bool { return ch != nil && len(ch.Images)+le
 // pictureSpans lays a chat with pictures and videos out as spans: the
 // template's text, and each picture where its message's image part stands
 // and each video where its video part does, which the prefill encodes
-// through the model's tower (model.Model.PictureSpan, VideoSpans).
+// through the model's tower (model.Model.PictureSpan, VideoParts).
 func pictureSpans(s *Session, o GenerateOptions) ([]model.Span, error) {
 	ch, m := o.Prompt.Chat, s.lm.m
 	if !m.SeesPictures() {
@@ -2678,13 +2678,13 @@ func pictureSpans(s *Session, o GenerateOptions) ([]model.Span, error) {
 		}
 		pics[i] = sp
 	}
-	videos := make([][]model.Span, len(ch.Videos))
+	videos := make([]model.VideoParts, len(ch.Videos))
 	for i, v := range ch.Videos {
-		sp, err := m.VideoSpans(v.Frames, v.FPS)
+		vp, err := m.VideoParts(v.Frames, v.FPS)
 		if err != nil {
 			return nil, fmt.Errorf("%w: video %d: %v", ErrInvalid, i, err)
 		}
-		videos[i] = sp
+		videos[i] = vp
 	}
 	msgs := ch.Messages
 	if ch.HasSystem {

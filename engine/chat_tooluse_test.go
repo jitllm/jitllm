@@ -13,28 +13,33 @@ import (
 // A request picks between named templates as transformers' get_chat_template
 // does: tools take "tool_use" when there is one, anything else takes "default",
 // a single unnamed template serves every request, and several with no default
-// are refused.
+// are refused. A conversation carrying a video takes "video" where the model
+// has one, as a processor that keeps its own template for one does.
 func TestARequestPicksItsTemplateAsTransformersDoes(t *testing.T) {
 	one := []jlm.ChatTemplate{{Body: "only"}}
 	named := []jlm.ChatTemplate{{Name: "default", Body: "D"}, {Name: "rag", Body: "R"}, {Name: "tool_use", Body: "T"}}
 	noTool := []jlm.ChatTemplate{{Name: "default", Body: "D"}, {Name: "rag", Body: "R"}}
 	noDefault := []jlm.ChatTemplate{{Name: "rag", Body: "R"}, {Name: "tool_use", Body: "T"}}
+	video := []jlm.ChatTemplate{{Name: "default", Body: "D"}, {Name: "video", Body: "V"}}
 	for _, c := range []struct {
-		name  string
-		ts    []jlm.ChatTemplate
-		tools bool
-		want  string // "" is a refusal
+		name         string
+		ts           []jlm.ChatTemplate
+		tools, video bool
+		want         string // "" is a refusal
 	}{
-		{"one, no tools", one, false, "only"},
-		{"one, tools", one, true, "only"},
-		{"named, no tools", named, false, "D"},
-		{"named, tools", named, true, "T"},
-		{"no tool_use, tools", noTool, true, "D"},
-		{"no default, tools", noDefault, true, "T"},
-		{"no default, no tools", noDefault, false, ""},
-		{"none", nil, false, ""},
+		{"one, no tools", one, false, false, "only"},
+		{"one, tools", one, true, false, "only"},
+		{"named, no tools", named, false, false, "D"},
+		{"named, tools", named, true, false, "T"},
+		{"no tool_use, tools", noTool, true, false, "D"},
+		{"no default, tools", noDefault, true, false, "T"},
+		{"no default, no tools", noDefault, false, false, ""},
+		{"none", nil, false, false, ""},
+		{"video, a video", video, false, true, "V"},
+		{"video, none", video, false, false, "D"},
+		{"no video template, a video", named, false, true, "D"},
 	} {
-		got, err := model.PickChatTemplate(c.ts, c.tools)
+		got, err := model.PickChatTemplate(c.ts, c.tools, c.video)
 		switch {
 		case c.want == "" && err == nil:
 			t.Errorf("%s: picked %q, want a refusal", c.name, got)
@@ -63,10 +68,10 @@ func TestAToolsRequestRendersWithToolUse(t *testing.T) {
 	}
 	def, _ := m.ChatTemplate("default")
 	tu, _ := m.ChatTemplate("tool_use")
-	if got, err := m.ChatTemplateFor(true); err != nil || got != tu {
+	if got, err := m.ChatTemplateFor(true, false); err != nil || got != tu {
 		t.Errorf("with tools: picked the wrong template (%v)", err)
 	}
-	if got, err := m.ChatTemplateFor(false); err != nil || got != def {
+	if got, err := m.ChatTemplateFor(false, false); err != nil || got != def {
 		t.Errorf("without tools: picked the wrong template (%v)", err)
 	}
 	msgs := []model.ChatMessage{{Role: "user", Content: "weather in Paris?"}}
