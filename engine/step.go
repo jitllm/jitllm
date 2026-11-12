@@ -350,9 +350,9 @@ func stepRunsOn(runs []Run, lone bool) ([][]float32, error) {
 	return out, nil
 }
 
-// stepPictures is StepRuns for a step that holds pictures: each run's encode
-// advances by its blocks, each mixed chunk prefills, and the token runs then
-// step as StepRuns steps them.
+// stepPictures is StepRuns for a step that holds pictures: each mixed chunk
+// prefills, its pictures encoded there, and the token runs then step as
+// StepRuns steps them.
 func stepPictures(runs []Run) ([][]float32, error) {
 	out := make([][]float32, len(runs))
 	var toks []Run
