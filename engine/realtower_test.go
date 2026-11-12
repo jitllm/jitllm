@@ -21,18 +21,12 @@ import (
 // and their activations int8, which is what separates the two -- and then
 // every block on each card and half of them, held to transformers within
 // twice the CPU device's distance, a grey picture of the photo's size the
-// violation. Gemma 3n's tower runs on the CPU device alone: its MobileNet
-// rows overflow binary16 on CUDA's matrix unit.
+// violation.
 func TestRealTowersMatchTransformers(t *testing.T) {
-	for _, c := range []struct {
-		name, golden, text, proj string
-		// cards is whether the tower runs on each device too; Gemma 3n's
-		// MobileNet rows on CUDA's matrix unit overflow binary16.
-		cards bool
-	}{
-		{"gemma-4-E2B-it", "vlmb/hf/gemma-4-E2B-it/goldens", "vlmb/gemma-4-E2B-it-Q4_K_M.gguf", "vlmb/mmproj-gemma-4-E2B-it-BF16.gguf", true},
-		{"gemma-3n-E2B-it", "vlmb/hf/gemma-3n-E2B-it/goldens", "gemma3n/gemma-3n-E2B-it-Q4_K_M.gguf", "gemma3n/mmproj-gemma-3n-E2B-it-f16.gguf", false},
-		{"Ministral-3-3B", "vlmb/hf/Ministral-3-3B/goldens", "newarch/Ministral-3-3B-Instruct-2512-Q4_K_M.gguf", "vlmb/mmproj-Ministral-3-3B-BF16.gguf", true},
+	for _, c := range []struct{ name, golden, text, proj string }{
+		{"gemma-4-E2B-it", "vlmb/hf/gemma-4-E2B-it/goldens", "vlmb/gemma-4-E2B-it-Q4_K_M.gguf", "vlmb/mmproj-gemma-4-E2B-it-BF16.gguf"},
+		{"gemma-3n-E2B-it", "vlmb/hf/gemma-3n-E2B-it/goldens", "gemma3n/gemma-3n-E2B-it-Q4_K_M.gguf", "gemma3n/mmproj-gemma-3n-E2B-it-f16.gguf"},
+		{"Ministral-3-3B", "vlmb/hf/Ministral-3-3B/goldens", "newarch/Ministral-3-3B-Instruct-2512-Q4_K_M.gguf", "vlmb/mmproj-Ministral-3-3B-BF16.gguf"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			dir := testmodels.Path(c.golden)
@@ -89,9 +83,7 @@ func TestRealTowersMatchTransformers(t *testing.T) {
 			if len(rows) != len(want) || math.IsNaN(nm) || nm > 3e-2 {
 				t.Fatalf("the real tower's %d values read NMSE %.3e against transformers' %d", len(rows), nm, len(want))
 			}
-			if c.cards {
-				towerRunsOnTheCard(t, m, img, withFeatures(m.Tower, sq, full, want, D), 0, opts...)
-			}
+			towerRunsOnTheCard(t, m, img, withFeatures(m.Tower, sq, full, want, D), 0, opts...)
 		})
 	}
 }

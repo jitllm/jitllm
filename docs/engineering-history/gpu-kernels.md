@@ -11245,3 +11245,26 @@ row where the composer's reads two.
 - **A run of one-workgroup phases takes the part's input readers or its output writers** (Phases, atTheEdge): the order the tier writes an output over its input by holds while no launch holds both. gpt-oss-20b's router after its norm and matvec, five launches of 128 threads, runs as one: event-timed kernels 6.92 -> 6.22 ms a token; same card, A/A 0.988, composed over tuned main 0.887 -> 0.914.
   tg128, V100 CUDA, process per sample, two card rotations, both main arms from one cache warmed on the card (A/A 0.931-1.064): composed over tuned main 0.960/0.959 (8B), 0.934/0.944 (Phi-3.5), 1.039/1.036 (gemma-3-4b), 0.992/0.989 (1B), 0.974/0.909 (Qwen2.5), 0.981/0.989 (Qwen3-1.7B), 0.931/0.920 (gpt-oss-20b); Qwen3-30B-A3B on two cards 0.893 (one sample).
   Refused: the int8 form made in gate/up's workgroups (a k-quant model's amax window is 256, a workgroup's rows 32); fewer rows a workgroup where a split leaves units idle (1B 0.955, Qwen3 0.946, gpt-oss 0.970); Phi's attention norm in q/k/v's workgroups (0.985: 3.6 waves, and q/k/v read three copies of its int8 form).
+
+## A matrix form's last row, over a folded leading axis
+
+A kernel's leading axis is not always the step's rows: Gemma 3n's MobileNet
+tower downsamples its multi-query attention's keys and values two by two, so
+their projections run over 576 rows of a 2304-row step, each a quarter's
+four (Kernel.Capacity counts the step's rows, Space[0] the kernel's). The
+matrix form held its rows to the call's live rows as though they were its
+own: its last row was 2303, its five 128-row workgroups computed rows 576 to
+639 too, reading 64 rows past the normed keys and writing 64 rows past the
+projections' outputs. The tower on CUDA returned 524288 of its 526336
+values non-finite with every chained block on the card from block 17, its
+first multi-query attention; a bisection over the blocks' matrix kernels by
+shape named the two projections ([576 64] over 640) alone, and kept off the
+matrix unit the first 18 blocks read 4.075e-3 from the CPU device.
+
+The last row is now the call's share of the kernel's own (liveElements over
+Space[0]), the step's rows where the two agree, so every projection whose
+rows are the step's forms as it did. composer.TestComposedGPUMatrixFoldedRows
+forms a projection of the same shape over four rows folded into one and
+holds the rows a call reaches to the oracle and every word past them and the
+guard after the result untouched; HEAD fails it. Rows past binary16's range
+were an earlier explanation of the same NaN, and a wrong one.
