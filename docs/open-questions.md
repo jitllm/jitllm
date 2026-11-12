@@ -155,8 +155,6 @@ reference's pixels and rows at the engine's arithmetic, and run on a card
   has its reference's gate: TestQwenVLRealMatchesTransformers,
   TestRealTowersMatchTransformers, TestLFM2VLRealMatchesTransformers,
   TestKimiVLRealMatchesMoonshot and TestPhi4RealMatchesTransformers);
-- SmolVLM's tower against llama.cpp's mtmd (Gemma 3's and InternVL's
-  have one, TestTowerAnswersMatchLlamaMtmd);
 - a tower's encode resumed across a relocation mid-picture.
 
 ## Smaller open items
