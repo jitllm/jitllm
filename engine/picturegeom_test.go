@@ -58,7 +58,10 @@ func TestPictureGeometryHoldsItsSweep(t *testing.T) {
 			}
 			want, ok := sums[src.name]
 			if !ok {
-				t.Fatalf("no sum is recorded for %s", src.name)
+				// The sum printed is for review against a gate that holds the
+				// tower's pixels to its processor, never to record unread.
+				got, err := sweepSum(m.Tower, false)
+				t.Fatalf("no sum is recorded for %s (its geometry sums to %s, %v)", src.name, got, err)
 			}
 			ran++
 			if got, err := sweepSum(m.Tower, false); err != nil || got != want {

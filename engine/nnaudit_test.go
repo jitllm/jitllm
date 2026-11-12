@@ -745,18 +745,27 @@ type auditModel struct {
 }
 
 // libraryPath is where the model directory holds a catalog file: at its top,
-// or a directory or two down; "" where it holds none.
-func libraryPath(file string) string {
+// or a directory or two down, a copy with its tower beside it before one
+// without; "" where it holds none. copies is every place it is held, so a
+// box holding a file twice lists it once, under the catalog's name.
+func libraryPath(file string) (p string, copies []string) {
 	if p := testmodels.Path(file); fileExists(p) {
-		return p
+		copies = append(copies, p)
 	}
 	for _, pat := range []string{filepath.Join("*", file), filepath.Join("*", "*", file)} {
-		if ps, _ := filepath.Glob(filepath.Join(testmodels.Dir(), pat)); len(ps) > 0 {
-			sort.Strings(ps)
-			return ps[0]
+		ps, _ := filepath.Glob(filepath.Join(testmodels.Dir(), pat))
+		sort.Strings(ps)
+		copies = append(copies, ps...)
+	}
+	for _, c := range copies {
+		if towerOf(c) != "" {
+			return c, copies
 		}
 	}
-	return ""
+	if len(copies) == 0 {
+		return "", nil
+	}
+	return copies[0], copies
 }
 
 // laterShard is the second and later file of a split GGUF; the first names the
@@ -811,15 +820,17 @@ func auditModels(t *testing.T) []auditModel {
 		missing = t.Logf
 	}
 	for _, lm := range library.Models() {
-		p := libraryPath(lm.File)
+		p, copies := libraryPath(lm.File)
 		if p == "" {
 			missing("%s: MODEL MISSING: %s is not in %s (https://huggingface.co/%s)", lm.Name, lm.File, testmodels.Dir(), lm.Repo)
 			continue
 		}
-		listed[p] = true
+		for _, c := range copies {
+			listed[c] = true
+		}
 		mp := towerOf(p)
 		if lm.MMProj != "" {
-			if mp = libraryPath(lm.MMProj); mp == "" {
+			if mp, _ = libraryPath(lm.MMProj); mp == "" {
 				missing("%s: MODEL MISSING: its projector %s is not in %s", lm.Name, lm.MMProj, testmodels.Dir())
 				continue
 			}
@@ -911,6 +922,15 @@ func towerPairs() map[string]string {
 		"Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf": "mmproj-Qwen2.5-VL-3B-Instruct-Q8_0.gguf",
 		"qwen35/Qwen3.5-0.8B-Q4_K_M.gguf":    "mmproj-Qwen3.5-0.8B-f16.gguf",
 		"d1/d1-3B-Q8_0.gguf":                 "d1/mmproj-d1-3B-F16.gguf",
+	}
+}
+
+// modelConfigs are the GGUFs, relative to the model directory, that convert
+// only with their publisher's config.json (convert.WithModelConfig):
+// llama.cpp's converter names a LongRoPE it writes no factors of.
+func modelConfigs() map[string]string {
+	return map[string]string{
+		"synth-minicpmv.gguf": "vlmb/fixtures/synth-minicpmv/config.json",
 	}
 }
 
