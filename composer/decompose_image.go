@@ -72,6 +72,13 @@ const (
 	// where it is 0.
 	RequestMarkN
 	RequestTrailN
+	// RequestPicCW and RequestPicCH are the canvas a live picture is laid
+	// on (graph.Attrs.PicCanvas), RequestPicCX and RequestPicCY the
+	// picture's corner on it.
+	RequestPicCW
+	RequestPicCH
+	RequestPicCX
+	RequestPicCY
 	// RequestPicTaps is where a picture resized by Pillow's filters
 	// (graph.ChainPIL) has its taps: the output's columns' (PILTaps), then
 	// its rows', each entry PILEntryWords(Taps) words.
@@ -86,8 +93,8 @@ const PictureWords = 1<<30 - 1
 // on each axis the two source samples around its centre
 // ((i+0.5)*n/size - 0.5, clamped to the picture), weighted 1-t and t,
 // horizontal first, then the sample read as [0, 1] and normalised by its
-// channel's mean and std; zero past the picture, and where the picture is
-// padded (PicPad) laid out over its padded grid, a pad cell a zero sample
+// channel's mean and std; zero past the picture, and where it is laid on a
+// canvas (PicCanvas), a cell of the canvas outside it the fill's sample
 // normalised.
 func decomposePicture(o graph.Op, c *Context) ([]Prim, error) {
 	a := o.Attr
@@ -145,25 +152,27 @@ func decomposePicture(o graph.Op, c *Context) ([]Prim, error) {
 	v := lerp(lerp(sample(y0, x0), sample(y0, x1), tx), lerp(sample(y1, x0), sample(y1, x1), tx), ty)
 	norm := func(v int) int { return normalized(&x, a, ch, v) }
 	v = norm(v)
-	if a.PicPad > 0 || a.PicBox {
+	if a.PicCanvas {
 		pad := norm(fillOf(&x, a, ch))
 		v = x.sel(F, x.op(OpLess, ir.Pred, ox, ow), x.sel(F, x.op(OpLess, ir.Pred, oy, oh), v, pad), pad)
 	}
 	x.sel(F, x.op(OpLess, ir.Pred, pix, x.op(OpMul, U, wd, hd)), v, x.f(0))
 	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{TablePicture.op(), TableRequest.op()}, Out: c.value(o.Out[0]), Expr: x.e,
-		Facts: Facts{Extents: map[int]int{0: PictureWords, 1: RequestPicOH + 1}}}}, nil
+		Facts: Facts{Extents: map[int]int{0: PictureWords, 1: RequestPicCY + 1}}}}, nil
 }
 
-// frame is a live picture's frame and its place in it: the output w x h
-// rounded up to the pad's units, or the op's PicW x PicH with the picture
-// centred (PicBox), or the output itself; the picture's corner (U32s).
+// frame is a live picture's frame and its place in it: the canvas the
+// request states, at most the op's PicW x PicH (PicCanvas), or the output
+// w x h itself; the picture's corner (U32s).
 func frame(x *exprs, a graph.Attrs, w, h int) (fw, fh, x0, y0 int) {
-	if !a.PicBox {
-		return padded(x, w, a.PicPad), padded(x, h, a.PicPad), x.u(0), x.u(0)
+	if !a.PicCanvas {
+		return w, h, x.u(0), x.u(0)
 	}
 	U := ir.U32
-	fw, fh = x.u(uint32(a.PicW)), x.u(uint32(a.PicH))
-	return fw, fh, x.op(OpShr, U, x.op(OpSub, U, fw, w), x.u(1)), x.op(OpShr, U, x.op(OpSub, U, fh, h), x.u(1))
+	fw = x.op(OpMin, U, x.op(OpMax, U, x.load(1, x.u(RequestPicCW)), w), x.u(uint32(a.PicW)))
+	fh = x.op(OpMin, U, x.op(OpMax, U, x.load(1, x.u(RequestPicCH)), h), x.u(uint32(a.PicH)))
+	return fw, fh, x.op(OpMin, U, x.load(1, x.u(RequestPicCX)), x.op(OpSub, U, fw, w)),
+		x.op(OpMin, U, x.load(1, x.u(RequestPicCY)), x.op(OpSub, U, fh, h))
 }
 
 // fillOf is channel ch's fill sample (F32): the box's colour, zero for a
@@ -172,17 +181,6 @@ func fillOf(x *exprs, a graph.Attrs, ch int) int {
 	F := ir.F32
 	f := func(c int) int { return x.f(float32(a.PicFill[c])) }
 	return x.sel(F, x.op(OpLess, ir.Pred, ch, x.u(1)), f(0), x.sel(F, x.op(OpLess, ir.Pred, ch, x.u(2)), f(1), f(2)))
-}
-
-// padded is n rounded up to a multiple of unit (U32), n itself where unit is
-// zero.
-func padded(x *exprs, n, unit int) int {
-	if unit <= 0 {
-		return n
-	}
-	U := ir.U32
-	u := x.u(uint32(unit))
-	return x.op(OpMul, U, x.op(OpDiv, U, x.op(OpAdd, U, n, x.u(uint32(unit-1))), u), u)
 }
 
 // accOf is the accumulator instance a picture op's bands add into: a video
@@ -250,8 +248,8 @@ func pictureSample(x *exprs, a graph.Attrs, stride, y, xx, ch int) int {
 // its rows, each term the horizontal sum made a byte -- from half Pillow's
 // unit, clamped at zero, shifted down by its fixed point and clamped to 255;
 // then that sum made a byte, read as [0, 1] and normalised by its channel's
-// mean and std; zero past the picture, and where the picture is padded
-// (PicPad) laid out over its padded grid, a pad cell a zero sample
+// mean and std; zero past the picture, and where it is laid on a canvas
+// (PicCanvas), a cell of the canvas outside it the fill's sample
 // normalised. A source row or column past the picture's reads its last, at
 // a weight of zero. The sums are laid out at the output's live width, the
 // vertical ones holding the op's area (graph.Attrs.Area) and the horizontal
@@ -459,7 +457,7 @@ func decomposePicturePIL(o graph.Op, c *Context) ([]Prim, error) {
 		sum = m.un(OpBitcast, I, sum)
 	}
 	val := norm(m.un(OpCvtF32, F, finish(&m, sum)))
-	if a.PicLive && (a.PicPad > 0 || a.PicBox) {
+	if a.PicLive && a.PicCanvas {
 		pad := norm(fillOf(&m, a, fch))
 		val = m.sel(F, m.op(OpLess, ir.Pred, px, ow), m.sel(F, m.op(OpLess, ir.Pred, py, oh), val, pad), pad)
 	}

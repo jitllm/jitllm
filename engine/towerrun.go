@@ -198,6 +198,8 @@ func (tr *towerRun) squareRequest(pl model.PictureLayout, sq model.Square, a gra
 	tr.req[composer.RequestMark], tr.req[composer.RequestTrail] = uint32(sq.Mark), uint32(sq.Trail)
 	tr.req[composer.RequestMarkN], tr.req[composer.RequestTrailN] = uint32(sq.MarkN), uint32(sq.TrailN)
 	tr.req[composer.RequestPicOW], tr.req[composer.RequestPicOH] = uint32(sq.Pw), uint32(sq.Ph)
+	tr.req[composer.RequestPicCW], tr.req[composer.RequestPicCH] = uint32(sq.Cw), uint32(sq.Ch)
+	tr.req[composer.RequestPicCX], tr.req[composer.RequestPicCY] = uint32(sq.Cx), uint32(sq.Cy)
 	tr.req[composer.RequestPicBandRows] = uint32(composer.PicBandRows(a, sq.Pw))
 	// A window wider than the taps on either axis runs in column bands, its
 	// entries written band by band (entry).
@@ -454,6 +456,10 @@ func squareFits(sq model.Square, a graph.Attrs) error {
 	if !a.Holds(sq.Pw, sq.Ph) {
 		return fmt.Errorf("model: a picture resized to %dx%d is past what the tower's largest class holds, %d pixels at most %dx%d",
 			sq.Pw, sq.Ph, a.Area(), a.PicW, a.PicH)
+	}
+	if a.PicCanvas && (!a.Holds(sq.Cw, sq.Ch) || sq.Cx+sq.Pw > sq.Cw || sq.Cy+sq.Ph > sq.Ch) {
+		return fmt.Errorf("model: a picture of %dx%d at (%d, %d) on a canvas of %dx%d, the class's at most %dx%d of %d pixels",
+			sq.Pw, sq.Ph, sq.Cx, sq.Cy, sq.Cw, sq.Ch, a.PicW, a.PicH, a.Area())
 	}
 	return nil
 }

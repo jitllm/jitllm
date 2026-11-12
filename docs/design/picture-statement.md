@@ -16,11 +16,11 @@ geometry, the engine evaluates it.
 
 The pixels are: a resize (Pillow's or torchvision's taps, or two taps, in
 the stated arithmetic) to a size fixed at conversion or given by the call
-(`graph.Attrs.PicLive`), the result laid on a canvas -- centred on a square
-of a fill colour (`PicBox`) or padded right and down to a unit (`PicPad`)
--- a window of it, and the normalisation (`PreNormalize`,
-`PreNormalizeBF16`). The picture op (`composer/decompose_image.go`) reads
-the sizes from the call's request words and the canvas from attributes.
+(`graph.Attrs.PicLive`), the result laid on a canvas of a fill colour
+(`PicCanvas`, `PicFill`) -- a window of it, and the normalisation
+(`PreNormalize`, `PreNormalizeBF16`). The picture op
+(`composer/decompose_image.go`) reads the sizes and the canvas from the
+call's request words.
 
 What is per family is the geometry: the size a picture resizes to, how many
 squares it becomes, each square's window, grid and marker rows, and the
@@ -71,9 +71,10 @@ sides double from 16 units to the area the resize reaches. A video whose
 frames are read as pictures under steps of their own states their geometry
 beside the picture's (`jlm.Video.Frames`).
 
-Still to go: the picture op reads the canvas and the picture's corner on it
-from the request, as it reads the resize size, and the fill colour from its
-attributes; `PicBox` and `PicPad` go.
+The picture op reads the canvas and the picture's corner on it from the
+request (`composer.RequestPicCW` to `RequestPicCY`), as it reads the resize
+size, and the fill colour from its attributes: one `graph.Attrs.PicCanvas`
+lays a live picture on a canvas, a pad and a letterbox alike.
 
 ## Migration
 
@@ -89,7 +90,7 @@ attributes; `PicBox` and `PicPad` go.
    gate of step 2: `engine.TestPictureGeometryHoldsItsSweep` holds each
    tower's squares over the same sweep to the sums the fits gave
    (`engine/testdata/picturegeom.sums`, recorded while step 2's gate held
-   the two equal). Then the picture op takes the canvas from the call.
+   the two equal). The picture op then takes the canvas from the call.
 4. The family kinds go from `format/jlm`; the record's revision moves and
    an older container is reconverted.
 

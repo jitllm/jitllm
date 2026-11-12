@@ -312,6 +312,8 @@ func limitGeometry(limitPatch, limit, pad, patch int) *jlm.PictureGeometry {
 	}
 	gw, gh := b.value(padded(ow)), b.value(padded(oh))
 	b.one(ow, oh, gw, gh)
+	b.field(jlm.SqCw, func(e *sizes) jlm.Arg { return e.mul(gw, k(float64(patch))) })
+	b.field(jlm.SqCh, func(e *sizes) jlm.Arg { return e.mul(gh, k(float64(patch))) })
 	u, most, maxPatches := pad/patch, widestPicture/patch, 0
 	for a := 0; a <= most; a++ {
 		other := most
