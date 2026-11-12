@@ -39,16 +39,9 @@ func TestPictureGeometryHoldsItsSweep(t *testing.T) {
 		}
 	}
 	ran := 0
-	for _, src := range auditModels(t) {
-		if src.hf || src.mmproj == "" || src.size > 3<<30 {
-			continue
-		}
+	for _, src := range towerSources(t) {
 		t.Run(src.name, func(t *testing.T) {
-			path, err := convertPair(src.path, src.mmproj)
-			if err != nil {
-				t.Fatalf("convert: %v", err)
-			}
-			m, err := model.Open(path)
+			m, err := model.Open(pairContainer(t, src))
 			if err != nil {
 				t.Fatal(err)
 			}

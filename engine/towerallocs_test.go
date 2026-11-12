@@ -11,19 +11,30 @@ import (
 // third time under an allocation profile: the warm encode makes no engine
 // heap allocation (RULE 2f) -- on a tower of one square (SmolVLM's) and on
 // one of pictures of their own size, its entry formed for classes and its
-// buffers grown to the largest picture yet (synth-qwen2vl). The counter
+// buffers grown to the largest picture yet (synth-qwen2vl), and on every
+// stated tower's fixture over a picture of no tower's square. The counter
 // must see an allocation where there is one: the first encode, which grows
 // the tower's buffers and its forms' own.
 func TestWarmImageEncodeDoesNotAllocate(t *testing.T) {
-	arms := []struct {
+	type encodeArm struct {
 		name string
 		open func(*testing.T) (*model.Model, image.Image, []Option)
-	}{
+	}
+	arms := []encodeArm{
 		{"smolvlm", func(t *testing.T) (*model.Model, image.Image, []Option) { m, img := openSmolVLM(t); return m, img, nil }},
 		{"qwen2vl", func(t *testing.T) (*model.Model, image.Image, []Option) {
 			m, g, openOpts := openQVLTower(t, "synth-qwen2vl")
 			return m, rgbPicture(g.Image.RGB, g.Image.W, g.Image.H), openOpts
 		}},
+	}
+	for _, src := range towerFixtures(t) {
+		arms = append(arms, encodeArm{src.name, func(t *testing.T) (*model.Model, image.Image, []Option) {
+			m, err := model.Open(pairContainer(t, src))
+			if err != nil {
+				t.Fatal(err)
+			}
+			return m, principlePicture(), nil
+		}})
 	}
 	for _, arm := range arms {
 		t.Run(arm.name, func(t *testing.T) {
