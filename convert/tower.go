@@ -76,7 +76,8 @@ func StatesTower(p jlm.Projector) bool { return towerStater(p) != nil }
 // StatesVideo reports whether the converter states how a projector's tower
 // reads a video (jlm.Video).
 func StatesVideo(p jlm.Projector) bool {
-	return p == jlm.ProjQwen2VL || p == jlm.ProjQwen25VL || p == jlm.ProjQwen3VL || p == jlm.ProjGLM4V || p == jlm.ProjInternVL
+	return p == jlm.ProjQwen2VL || p == jlm.ProjQwen25VL || p == jlm.ProjQwen3VL || p == jlm.ProjGLM4V || p == jlm.ProjInternVL ||
+		p == jlm.ProjGemma4V
 }
 
 // idefics3Tower is SmolVLM's tower as llama.cpp's mtmd runs it, which this
@@ -1630,10 +1631,40 @@ func gemma4vTower(s *jlm.Source) (*jlm.Tower, error) {
 	if t.Span.After, err = markerIDs(s, "<image|>"); err != nil {
 		return nil, err
 	}
+	t.Video = gemma4vVideo(t, merge)
 	if err := t.Valid(); err != nil {
 		return nil, fmt.Errorf("convert: gemma4v: %w", err)
 	}
 	return t, nil
+}
+
+// Gemma4VideoProcessor's class defaults, which the checkpoints publish.
+const (
+	gemma4VideoFrames     = 32
+	gemma4VideoSoftTokens = 70
+	gemma4VideoDefaultFps = 24
+)
+
+// gemma4vVideo is how Gemma 4's tower reads a video, as
+// Gemma4VideoProcessor at the checkpoints' settings (their
+// processor_config.json, the class defaults) and
+// Gemma4Processor.replace_video_token do: min(N, 32) frames at
+// torch.arange(0, N, N / K) in double, as float32, truncated; each read as
+// a picture resized at its aspect within 70 soft tokens' patches; in the
+// prompt each frame's time as MM:SS (24 frames a second where the request
+// states none), a space and the frame's span, the frames a space apart.
+func gemma4vVideo(pic *jlm.Tower, merge int32) *jlm.Video {
+	var c, ix sizes
+	c.min(c.op(jlm.VideoN), num(gemma4VideoFrames))
+	ix.fn(jlm.FnF32, ix.mul(ix.op(jlm.VideoAt), ix.div(ix.op(jlm.VideoN), ix.op(jlm.VideoK))))
+	pre := slices.Clone(pic.Pre)
+	pre[0].Ints = slices.Clone(pre[0].Ints)
+	pre[0].Ints[0] = gemma4VideoSoftTokens * merge * merge
+	clock := jlm.ValueFormat{Kind: jlm.FormatClock, Clock: [3]int32{0, 2, 2}, Sep: ":"}
+	body := append([]jlm.VideoPiece{valuePiece(opExpr(jlm.VideoT0), clock), textPiece(" ")}, pictureSpan(&pic.Span)...)
+	return &jlm.Video{DefaultFps: gemma4VideoDefaultFps, Count: c.expr(), Index: ix.expr(), MaxFrames: gemma4VideoFrames,
+		Group: 1, Sized: opExpr(0), Pre: pre,
+		Prompt: []jlm.VideoPiece{{Kind: jlm.PieceGroups, Between: []jlm.VideoPiece{textPiece(" ")}, Body: body}}}
 }
 
 // lfm2Tower is LFM2-VL's tower (and d1's) as transformers'

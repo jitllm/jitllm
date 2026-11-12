@@ -5285,6 +5285,43 @@ block on the card (V100), the quadrant picture's rows at 6.2e-3. No line
 between the frames, and each frame's first square in place of its last
 (0.49), are its violations.
 
+## Gemma 4's video
+
+Gemma 4 reads a video as pictures too, but not at the picture's size:
+Gemma4VideoProcessor (the class defaults the checkpoints publish in their
+processor_config.json) samples 32 frames uniformly -- frame i at
+int(i * n / 32), torch.arange in double cast to float32 -- and resizes each
+at its aspect within 70 soft tokens' patches (630 at the 3x3 pool), where
+a picture takes 280; Gemma4Processor writes each frame's time as MM:SS, a
+space and the frame's span, the frames a space apart, at 24 frames a
+second where the request states none. Each frame's soft tokens are a vision
+group of their own (mm_token_type_ids 2), so on the larger models they see
+each other both ways on the sliding layers, as a picture's do.
+
+The container states it on the one video statement ("Video as one
+statement" below; `convert.gemma4vVideo`): the count min(N, 32), the index
+f32(i * (N / K)), and the frames read as pictures under the picture's own
+steps with their resize's budget stated anew (`jlm.Video.PicturesValid`
+holds the steps to the picture's but for one resize). A frame's square is
+its last square under those steps (`TowerGraphs.FrameSquare`, the
+picture's `Square` under the frames' fit), in the picture's classes, which
+the frames' area may not pass; a group's span carries the tower span's
+bidirectional flag; and a picture op's taps are cached by the size it
+resizes to as well as the size it reads, since a frame and a picture of one
+size now resize to two. A video shorter than 32 frames reads every frame,
+where sample_frames refuses it (docs/divergences.md).
+
+`TestGemma4VideoMatchesTransformers` holds synth-gemma4v to it
+(scripts/gemma4videogold.py: forty 96x128 frames at eight a second, frames
+0, 1, 2, 3, 5, ... sampled, each 21x27 patches and 63 soft tokens, stamps
+00:00 to 00:04): the plan and the 2317 ids Gemma4Processor writes, each
+frame's rows at the engine's arithmetic within the picture gate's 2e-3, and
+the logits within twice what a tower error of the engine's size moves them
+by, on the CPU device and with every block of the text model and the tower
+on each card. The times written as seconds (the stated clock rewritten as a
+decimal), the frames' rows reversed and the frames' rows causal -- which
+must read as transformers' own causal run does -- are its violations.
+
 ## Video as one statement
 
 The video record grew a field per processor -- Joined, PerSecond and

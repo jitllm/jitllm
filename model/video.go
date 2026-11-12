@@ -119,7 +119,7 @@ func (tg *TowerGraphs) VideoPlan(n, w, h int, fps float64) (VideoPlan, error) {
 		return VideoPlan{}, err
 	}
 	if v.AsPictures() {
-		return VideoPlan{VideoSample: s, Square: tg.LastSquare(w, h)}, nil
+		return VideoPlan{VideoSample: s, Square: tg.FrameSquare(w, h)}, nil
 	}
 	ow, oh, err := VideoFrameSize(v, s, w, h)
 	if err != nil {
@@ -409,6 +409,8 @@ func (m *Model) VideoParts(frames []image.Image, fps float64) (VideoParts, error
 			if err != nil {
 				return VideoParts{}, err
 			}
+			// A group's rows see each other as a picture's do.
+			sp.Bidir = m.Container.Vision().Tower.Span.Bidir
 			out.Spans = append(out.Spans, sp)
 		case it.IDs != nil:
 			toks = append(toks, it.IDs...)

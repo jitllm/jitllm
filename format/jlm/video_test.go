@@ -175,7 +175,6 @@ func TestVideoRefusesWhatItCannotRead(t *testing.T) {
 		}
 	}
 	for name, breaks := range map[string]func(*Video){
-		"pictures resized":      func(v *Video) { v.Pre = testVideo().Pre },
 		"pictures in one grid":  func(v *Video) { v.Stride = testGridVideo().Stride },
 		"pictures in pairs":     func(v *Video) { v.Group = 2 },
 		"a clock of no fields":  func(v *Video) { v.Prompt[3].Format.Clock = [3]int32{} },
@@ -189,6 +188,42 @@ func TestVideoRefusesWhatItCannotRead(t *testing.T) {
 		breaks(v)
 		if v.Valid() == nil {
 			t.Errorf("%s: Valid accepted it", name)
+		}
+	}
+}
+
+// TestPictureVideoStepsAreThePictures holds a video read as pictures under
+// steps of its own to its tower's picture steps: one resize stated anew is
+// read, and each other change refused, by the tower's own check too.
+func TestPictureVideoStepsAreThePictures(t *testing.T) {
+	steps := func(tw *Tower) []PreStep {
+		out := make([]PreStep, len(tw.Pre))
+		for i, s := range tw.Pre {
+			out[i] = PreStep{Kind: s.Kind, Ints: append([]int32(nil), s.Ints...), Floats: append([]float32(nil), s.Floats...)}
+		}
+		return out
+	}
+	for name, c := range map[string]struct {
+		edit func(pre []PreStep) []PreStep
+		ok   bool
+	}{
+		"the picture's":         {func(pre []PreStep) []PreStep { return pre }, true},
+		"a resize of its own":   {func(pre []PreStep) []PreStep { pre[3].Ints[2] = 3136 * 64; return pre }, true},
+		"a step fewer":          {func(pre []PreStep) []PreStep { return pre[:3] }, false},
+		"a kind of its own":     {func(pre []PreStep) []PreStep { pre[2].Kind = PreCenterCrop; return pre }, false},
+		"its own normalisation": {func(pre []PreStep) []PreStep { pre[1].Floats[0] = 0.25; return pre }, false},
+		"two resizes":           {func(pre []PreStep) []PreStep { pre[0].Ints[0] = 256; pre[3].Ints[2] = 3136 * 64; return pre }, false},
+		"a resize unread":       {func(pre []PreStep) []PreStep { pre[3].Ints[3] = 99; return pre }, false},
+	} {
+		tw := sampleTower(t)
+		v := testPictureVideo()
+		v.Pre = c.edit(steps(tw))
+		tw.Video = v
+		if err := v.PicturesValid(tw); (err == nil) != c.ok {
+			t.Errorf("%s: PicturesValid says %v", name, err)
+		}
+		if err := tw.Valid(); (err == nil) != c.ok {
+			t.Errorf("%s: the tower's Valid says %v", name, err)
 		}
 	}
 }

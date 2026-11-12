@@ -23,8 +23,11 @@ into it, the engine evaluates it.
     Group        frames one picture of the tower reads: 2 for a pair
                  entry, 1 for a frame read whole; an odd count's last frame
                  repeated to fill the last group
-    Pre, Entry   the frames' own resize and entry; none stated: each frame
-                 is read as a picture is, at the picture's last square
+    Pre, Entry   the frames' own resize and entry; no entry stated: each
+                 frame is read as a picture is, through the picture's
+                 entry, at its last square -- under the picture's steps, or
+                 under Pre where stated, the picture's steps with one
+                 resize of its own (jlm.Video.PicturesValid)
     Stride       where stated, the groups are one grid, group j at j times
                  this on the text model's temporal axis (an expression of
                  R and the group's frames); where not, each group is a

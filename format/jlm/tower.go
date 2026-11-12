@@ -678,6 +678,12 @@ func (t *Tower) Valid() error {
 	if t.Span.GridDiv < 0 {
 		return fmt.Errorf("jlm: the tower's rows are a grid divided by %d", t.Span.GridDiv)
 	}
+	if t.Video != nil {
+		if err := t.Video.Valid(); err != nil {
+			return err
+		}
+		return t.Video.PicturesValid(t)
+	}
 	return nil
 }
 
