@@ -88,19 +88,21 @@ func (m *Model) ChatPromptToolChoice(msgs []ChatMessage, tools []byte, choice To
 // carrying tools takes "tool_use" when the model has one, and anything else
 // takes "default". Several with no default is refused by name rather than
 // guessed at, as transformers refuses it. tools is transformers' `tools is not
-// None`: an empty list still asks for tool_use.
-func (m *Model) ChatTemplateFor(tools bool) (string, error) {
+// None`: an empty list still asks for tool_use. A conversation carrying a
+// video takes "video" where the model has one: the template a processor
+// keeps for one, which the converter states beside the model's own.
+func (m *Model) ChatTemplateFor(tools, video bool) (string, error) {
 	var ts []jlm.ChatTemplate
 	if m != nil && m.Container != nil {
 		if v := m.Container.Vocab(); v != nil {
 			ts = v.Templates
 		}
 	}
-	return PickChatTemplate(ts, tools)
+	return PickChatTemplate(ts, tools, video)
 }
 
 // pickChatTemplate is chatTemplateFor over a template list.
-func PickChatTemplate(ts []jlm.ChatTemplate, tools bool) (string, error) {
+func PickChatTemplate(ts []jlm.ChatTemplate, tools, video bool) (string, error) {
 	if len(ts) == 0 {
 		return "", fmt.Errorf("model: this container carries no chat template; it is a base model, not an instruct one")
 	}
@@ -114,6 +116,11 @@ func PickChatTemplate(ts []jlm.ChatTemplate, tools bool) (string, error) {
 			}
 		}
 		return "", false
+	}
+	if video {
+		if b, ok := find("video"); ok {
+			return b, nil
+		}
 	}
 	if tools {
 		if b, ok := find("tool_use"); ok {
@@ -133,7 +140,7 @@ func PickChatTemplate(ts []jlm.ChatTemplate, tools bool) (string, error) {
 
 // renderChat is ChatPrompt through the template a request picks.
 func (m *Model) renderChat(msgs []ChatMessage, tools []byte, choice ToolChoice, addGenerationPrompt bool) (string, error) {
-	src, err := m.ChatTemplateFor(len(tools) > 0)
+	src, err := m.ChatTemplateFor(len(tools) > 0, carriesVideo(msgs))
 	if err != nil {
 		return "", err
 	}
@@ -410,6 +417,16 @@ func readsContentParts(tpl *jinja.Template) bool {
 	return err == nil && strings.Contains(out, probe) && !strings.Contains(out, unread)
 }
 
+// carriesVideo reports a conversation with a video in one of its messages.
+func carriesVideo(msgs []ChatMessage) bool {
+	for _, x := range msgs {
+		if x.Videos > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // contentValue presents a message in the shape the template reads: its text,
 // or its images first as typed parts, then its videos, then its text.
 func contentValue(text string, images, videos int, parts bool) any {
@@ -446,9 +463,10 @@ func (m *Model) ChatSpansToolChoice(msgs []ChatMessage, pics []Span, tools []byt
 }
 
 // ChatSpansMedia is ChatSpansToolChoice with videos: in place of each video
-// of the messages, in order, videos[i] -- a video's spans (Model.VideoSpans),
-// its markers its own -- where the template writes a video part.
-func (m *Model) ChatSpansMedia(msgs []ChatMessage, pics []Span, videos [][]Span, tools []byte, choice ToolChoice,
+// of the messages, in order, videos[i] (Model.VideoParts), its markers its
+// own, its text at either end encoded with the prompt's beside it -- where
+// the template writes a video part.
+func (m *Model) ChatSpansMedia(msgs []ChatMessage, pics []Span, videos []VideoParts, tools []byte, choice ToolChoice,
 	addGenerationPrompt bool) ([]Span, error) {
 	n, nv := 0, 0
 	for _, x := range msgs {
@@ -483,7 +501,7 @@ func (m *Model) ChatSpansMedia(msgs []ChatMessage, pics []Span, videos [][]Span,
 				i, len(p.Embd), m.Cfg.NEmbd)
 		}
 	}
-	src, err := m.ChatTemplateFor(len(tools) > 0)
+	src, err := m.ChatTemplateFor(len(tools) > 0, carriesVideo(msgs))
 	if err != nil {
 		return nil, err
 	}
@@ -521,8 +539,10 @@ func (m *Model) PromptSpans(text, ph string, pics []Span) ([]Span, error) {
 
 // PromptSpansMedia is PromptSpans with videos: vph stands for each of
 // videos in order, the placeholder text and the video's markers both
-// replaced by the video's spans, which are its markers and its pairs.
-func (m *Model) PromptSpansMedia(text, ph, vph string, pics []Span, videos [][]Span) ([]Span, error) {
+// replaced by the video's spans, which are its markers and its groups, and
+// its lead and tail joined to the text either side, as the processor
+// expands its placeholder into a string before tokenizing it.
+func (m *Model) PromptSpansMedia(text, ph, vph string, pics []Span, videos []VideoParts) ([]Span, error) {
 	if m.Tower == nil {
 		return nil, fmt.Errorf("model: %d picture(s), %d video(s) and this model has no vision tower", len(pics), len(videos))
 	}
@@ -574,22 +594,25 @@ func (m *Model) PromptSpansMedia(text, ph, vph string, pics []Span, videos [][]S
 	}
 	// Text around a picture is encoded with the prompt beside it, as the
 	// processor expands its placeholder into a string before tokenizing it.
-	prev, picture, pi, vi := 0, false, 0, 0
+	prev, after, pi, vi := 0, "", 0, 0
 	for k := 0; k <= len(holds); k++ {
 		end := len(text)
 		if k < len(holds) {
 			end = holds[k].at
 		}
-		seg := text[prev:end]
-		if picture {
-			seg = mk.AfterText + seg
-		}
+		seg := after + text[prev:end]
+		after = ""
 		pic := k < len(holds) && !holds[k].video
-		if pic {
+		switch {
+		case pic:
 			if mk.IndexBefore != "" || mk.IndexAfter != "" {
 				seg += mk.IndexBefore + strconv.Itoa(pi) + mk.IndexAfter
 			}
 			seg += mk.BeforeText
+			after = mk.AfterText
+		case k < len(holds):
+			seg += videos[vi].Lead
+			after = videos[vi].Tail
 		}
 		add(m.Vocab.EncodeSpecial(seg, false))
 		switch {
@@ -601,13 +624,12 @@ func (m *Model) PromptSpansMedia(text, ph, vph string, pics []Span, videos [][]S
 			add(mk.After)
 			pi++
 		case k < len(holds):
-			out = append(out, videos[vi]...)
+			out = append(out, videos[vi].Spans...)
 			vi++
 		}
 		if k < len(holds) {
 			prev = holds[k].end
 		}
-		picture = pic
 	}
 	return out, nil
 }

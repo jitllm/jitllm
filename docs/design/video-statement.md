@@ -56,10 +56,11 @@ F1 and seconds T1, and the video's seconds N / R for the prompt and the
 stride.
 
 Text at either end of the prompt is the video's lead and tail
-(`model.VideoParts`): a caller placing the video in a chat should encode
-them with the prompt's text beside them, as a processor expands its
-placeholder into a string before tokenizing it. `Model.VideoSpans` encodes
-them alone; the chat front ends taking the parts is open.
+(`model.VideoParts`): the chat (`Model.ChatSpansMedia`, which the server
+and `jitllm run` build their prompts with) encodes them with the
+template's text beside them, as a processor expands its placeholder into a
+string before tokenizing it. `Model.VideoSpans`, for a caller placing a
+video with no text beside it, encodes them alone.
 
 ## The processors, as statements
 

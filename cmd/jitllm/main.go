@@ -1945,7 +1945,7 @@ func mediaSpans(m *model.Model, media mediaSpec, prompt string, chat *chatSpec) 
 		}
 		pics = append(pics, pic)
 	}
-	var videos [][]model.Span
+	var videos []model.VideoParts
 	if media.video != "" {
 		names, err := os.ReadDir(media.video)
 		if err != nil {
@@ -1962,7 +1962,7 @@ func mediaSpans(m *model.Model, media mediaSpec, prompt string, chat *chatSpec) 
 			}
 			frames = append(frames, img)
 		}
-		sp, err := m.VideoSpans(frames, media.fps)
+		sp, err := m.VideoParts(frames, media.fps)
 		if err != nil {
 			return nil, fmt.Errorf("-video: %s: %w", media.video, err)
 		}

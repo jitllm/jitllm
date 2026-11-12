@@ -5349,6 +5349,13 @@ code, and how the one statement ("Video as one statement" below) says it
   "\n\n" alone is one. `Model.VideoParts` hands the caller the video's
   leading and trailing text apart from its spans; `VideoSpans` encodes them
   alone.
+- **A conversation with a video renders by the processor's own template.**
+  SmolVLM2's published chat template writes nothing for a video part;
+  SmolVLMProcessor.apply_chat_template swaps in its DEFAULT_CHAT_TEMPLATE,
+  which writes "<video>", whenever a message carries one. The converter
+  states that template as the container's "video" template beside the
+  model's "default", and `Model.ChatTemplateFor` takes it for a
+  conversation carrying a video, as it takes "tool_use" for one with tools.
 - **The frames are not padded.** SmolVLMVideoProcessor's resize keeps a
   frame's aspect to the processor's size (2048 for SmolVLM2, since
   video_sampling's video_size is overwritten by size) and then squares it

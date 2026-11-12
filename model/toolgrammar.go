@@ -65,7 +65,7 @@ func (c ToolChoice) templateValue() any {
 // syntax writes on its own to any JSON value, rather than refusing the
 // request: the call itself is still forced.
 func (m *Model) ToolGrammar(tools ToolSet, choice ToolChoice, prompt string) (string, error) {
-	src, _ := m.ChatTemplateFor(true)
+	src, _ := m.ChatTemplateFor(true, false)
 	syn, err := m.ToolSyntax()
 	if err != nil {
 		return "", err
