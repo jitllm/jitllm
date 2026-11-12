@@ -5207,6 +5207,28 @@ register, no reload register for a copy over a spilled value's read, never a
 count its loop counts down in -- it binds correctly (282 composer CPU gates)
 and spills more: 104/185/310 -> 241/193/256. Not landed.
 
+### A scalar map past the vector registers
+
+A SmolVLM-256M container an earlier converter wrote, before the picture
+statements were rewritten, opens and its tower's entry is refused:
+"the tower's entry: jit: pass regs: map: the floats do not fit the vector
+registers ... at node 38 (bitcast)". The refused kernel is the last form the
+refusal tries, a scalar map (no loop across lanes) of 768 trips: a bilinear
+picture resample. Outside its loop it holds in vector registers a dozen u32
+constants, the loads of the picture's geometry and chains made from them
+(load, max, cvtf32; bitcast, sub), past sixteen. The binding's steps only
+reload constants (rematerialize) and sink values to their reader; neither
+touches a chain or a constant read by both general-register and vector code.
+
+Tried, not landed: a third step kind after those two, making again at each
+reader in the loop a cheap vector invariant whose operands are no vector
+values (a load of a buffer the kernel never writes, a conversion, bitcast,
+broadcast or integer and float arithmetic). It moved the refusal from node 38
+to node 19 after 184 steps: what is left is chains whose operands are
+themselves vector values, and constants read by hoisted general-register
+code. The same model converted by the current converter binds, so no model
+the census runs is refused; an old container is.
+
 ## Design notes moved out of source comments
 
 Each entry below is a comment that stood in the named source file,
