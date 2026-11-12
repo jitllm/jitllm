@@ -32,15 +32,11 @@ func TestAnAttachedPictureReachesTheModel(t *testing.T) {
 	if _, err := os.Stat(pic); err != nil {
 		t.Fatalf("IMAGE MISSING: %v", err)
 	}
-	// A private cache dir: a prefix an earlier run left on disk restores the
-	// picture's rows whole, the image cache is never asked, and the history
-	// half below reads 0 hits.
-	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	blank := filepath.Join(t.TempDir(), "blank.png")
 	writeGrey(t, blank, 384)
 	// A private cache folder: the prefix cache outlives the process, and pages
-	// an earlier run left restore this test's prompts whole, so neither the
-	// tower nor the image cache runs and the follow-up's assertion reads 0 hits.
+	// an earlier run left would restore this test's prompts whole, the tower
+	// running for none of them.
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 
 	sh := newTestShell()
@@ -92,6 +88,30 @@ func TestAnAttachedPictureReachesTheModel(t *testing.T) {
 	if !strings.Contains(follow, "yellow") {
 		t.Errorf("the follow-up does not see the picture from the history: %q", follow)
 	}
+}
+
+// The memory map draws the model's whole block space. A vision tower's blocks
+// are blocks of the model, placed and paged like the text blocks, so a map
+// that stopped at the text blocks would hide them.
+func TestTheMemoryMapCoversTheTowersBlocks(t *testing.T) {
+	visionModel := testmodels.Path("SmolVLM-256M-Instruct-Q8_0-vlm.jlm")
+	fresh.Must(t, visionModel)
+	if _, err := os.Stat(visionModel); err != nil {
+		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
+	}
+	sh := newTestShell()
+	e := New(sh, sh.state())
+	defer e.Close()
+	e.Load(visionModel)
+	pump(t, sh, 180*time.Second, "the model to load", func() bool { return sh.Store.Loaded.Get() })
+	text, all := e.m.Cfg.NLayer, e.m.Blocks()
+	if all <= text {
+		t.Fatalf("%s has %d blocks against %d text blocks: no tower blocks to draw, so this proves nothing", visionModel, all, text)
+	}
+	if got := len(sh.Store.BlockMap.Get()); got != all {
+		t.Fatalf("the memory map draws %d blocks, the model has %d (%d of them text)", got, all, text)
+	}
+	t.Logf("the memory map draws all %d blocks, %d of them the tower's", all, all-text)
 }
 
 func writeGrey(t *testing.T, path string, n int) {
