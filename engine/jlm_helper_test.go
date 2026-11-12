@@ -198,7 +198,11 @@ func convertPair(path, mmproj string) (string, error) {
 		return "", err
 	}
 	sweepServedCopies(dst)
-	if _, err := convert.FromGGUFs(path, mmproj, tmp, jlm.Fingerprint{Host: "test", Writer: BuildIDForTest()}); err != nil {
+	var opts []convert.Option
+	if rel, err := filepath.Rel(testmodels.Dir(), path); err == nil && modelConfigs()[rel] != "" {
+		opts = append(opts, convert.WithModelConfig(testmodels.Path(modelConfigs()[rel])))
+	}
+	if _, err := convert.FromGGUFs(path, mmproj, tmp, jlm.Fingerprint{Host: "test", Writer: BuildIDForTest()}, opts...); err != nil {
 		os.Remove(tmp)
 		return "", err
 	}
