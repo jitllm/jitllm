@@ -260,9 +260,10 @@ template does). -chat-template stores another in its place:
       Mistral-7B-Instruct-v0.3-Q4_K_M.gguf
 
 A GGUF can drop what its model's config.json states: llama.cpp's converter writes
-no LongRoPE factors for MiniCPM-V's text model. -config reads them from the
-publisher's file; a GGUF that names LongRoPE and carries no factors is refused
-without it:
+no LongRoPE factors for MiniCPM-V's text model, and LFM2-VL's mmproj names no
+resampling filter. -config reads them from the publisher's files (config.json and
+the preprocessor_config.json beside it); a GGUF that names LongRoPE and carries no
+factors is refused without it:
   -config FILE           a config.json or the model directory holding one
 
 It also takes a HuggingFace reference, which is downloaded first:

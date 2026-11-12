@@ -113,3 +113,58 @@ func TestModelConfigStatesWhatTheGGUFDropped(t *testing.T) {
 	}
 	t.Logf("%d short and %d long factors, original context %d, from %s", len(rs.Short), len(rs.Long), rs.OrigCtx, cfg)
 }
+
+// TestProcessorConfigStatesTheResample converts synth-lfm2vl beside a
+// publisher's preprocessor_config.json (WithModelConfig) stating each of
+// Pillow's bilinear (2) and bicubic (3): the tower's resize takes the
+// config's filter whatever the mmproj names, and a config stating neither
+// leaves the mmproj's.
+func TestProcessorConfigStatesTheResample(t *testing.T) {
+	src, proj := testmodels.Path("synth-lfm2vl.gguf"), testmodels.Path("mmproj-synth-lfm2vl.gguf")
+	for _, p := range []string{src, proj} {
+		if !fileExists(p) {
+			testmodels.Missing(t, "MODEL MISSING: %s (scripts/lfm2visiongold.py --fixture makes it) -- this gate proved nothing", p)
+		}
+	}
+	filter := func(body string) int32 {
+		t.Helper()
+		var o options
+		if body != "" {
+			o.modelConfig = t.TempDir()
+			for name, b := range map[string]string{"config.json": "{}", "preprocessor_config.json": body} {
+				if err := os.WriteFile(filepath.Join(o.modelConfig, name), []byte(b), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		f, err := gguf.Open(src)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer f.Close()
+		vf, err := gguf.Open(proj)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer vf.Close()
+		s, err := buildGGUF(f, vf, src, proj, o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pre := s.Vision.Tower.Pre[0]
+		if pre.Kind != jlm.PreTileSmart || len(pre.Ints) < 8 {
+			t.Fatalf("the tower's first step is %+v, not the tiled resize", pre)
+		}
+		return pre.Ints[7]
+	}
+	file := filter("")
+	bilinear, bicubic := filter(`{"resample": 2}`), filter(`{"resample": 3}`)
+	if bilinear != int32(jlm.FilterPILBilinear) || bicubic != int32(jlm.FilterPILBicubic) {
+		t.Fatalf("resample 2 states filter %d and 3 states %d, want %d and %d",
+			bilinear, bicubic, jlm.FilterPILBilinear, jlm.FilterPILBicubic)
+	}
+	if other := filter(`{"resample": 0}`); other != file {
+		t.Fatalf("a config stating neither filter states %d, the mmproj's %d", other, file)
+	}
+	t.Logf("the mmproj's filter %d; the config's bilinear %d and bicubic %d", file, bilinear, bicubic)
+}
