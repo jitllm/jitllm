@@ -1478,14 +1478,28 @@ func (e *x86Lowerer) take(c int) {
 	} else if it >= 0 && k.Nodes[it].Spill > 0 {
 		a.MOVMemImm(spillSlot(k.Nodes[it].Spill), 0)
 	}
-	order, ok := k.takeOrder(c)
+	steps, ok := k.takeOrder(c)
 	if !ok {
-		e.fail("loop %d's takes each write a register another reads", c)
+		e.fail("loop %d's takes each write a register another reads, and every spill slot the stack guard leaves is taken", c)
 		return
 	}
 	zeroed := map[int]bool{}
-	for _, i := range order {
-		cu := l.Cursors[i]
+	for _, st := range steps {
+		cu := l.Cursors[st.I]
+		if st.To == takeUnpark {
+			a.MOVLoad(e.ptrReg(cu.Buf, cu.Ptr), spillSlot(st.Slot))
+			continue
+		}
+		if st.To == takePark {
+			if cu.Init > 0 {
+				src, ix := e.ptrReg(cu.Buf, cu.From), e.reg(cu.Init-1)
+				a.LEAQ(reloadReg, x86.Idx(src, ix, uint8(ElemBytes(k.Bufs[cu.Buf])), 0))
+			} else if src := e.ptrReg(cu.Buf, cu.From); src != reloadReg {
+				a.MOVQ(reloadReg, src)
+			}
+			a.MOVStore(spillSlot(st.Slot), reloadReg)
+			continue
+		}
 		if cu.Take && cu.Ptr > 0 && k.Ptrs[cu.Ptr-1].Off > 0 {
 			if off := k.Ptrs[cu.Ptr-1].Off; !zeroed[off] {
 				a.XORQ(x86.Reg(off-1), x86.Reg(off-1))
