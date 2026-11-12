@@ -151,9 +151,11 @@ reference's pixels and rows at the engine's arithmetic, and run on a card
 -- but these were not replaced, and docs/architectures.md marks each row's
 "open":
 
-- the real checkpoints against their reference: Qwen2.5-VL-3B, HunyuanOCR,
-  Kimi-VL (Moonshot's code), Gemma 4, Gemma 3n, Phi-4, Pixtral and LFM2;
-  what remains of them is the colour-naming gates over a quadrant picture;
+- the real checkpoints against their reference: Kimi-VL (Moonshot's code),
+  Phi-4 and LFM2 (the Qwen family, HunyuanOCR, Gemma 4, Gemma 3n and
+  Ministral 3 have one, TestQwenVLRealMatchesTransformers and
+  TestRealTowersMatchTransformers); what remains of them is the
+  colour-naming gates over a quadrant picture;
 - SmolVLM's tower against llama.cpp's mtmd (Gemma 3's and InternVL's
   have one, TestTowerAnswersMatchLlamaMtmd);
 - a tower's encode resumed across a relocation mid-picture.

@@ -80,12 +80,19 @@ func (s *Instance) partsPlan() *nn.PartsPlan {
 	p.Inputs[0] = part(fg.CpuEmbed, 1)
 	p.Inputs[1] = part(fg.CpuEmbed, cpuRowsCap)
 	p.Inputs[2], p.Inputs[3] = nn.PartPlan{Skip: true}, nn.PartPlan{Skip: true}
-	if fg.Given != nil {
-		p.Inputs[2] = part(fg.Given, 1)
-		p.Inputs[3] = part(fg.Given, cpuRowsCap)
+	// A tower's rows are its entry's: the text model's given rows' graph
+	// (a position row, per-layer inputs) is not theirs, and run over them it
+	// wrote the text model's rows in their place.
+	given := fg.Given
+	if s.towered() {
+		given = nil
+	}
+	if given != nil {
+		p.Inputs[2] = part(given, 1)
+		p.Inputs[3] = part(given, cpuRowsCap)
 	}
 	p.PleW = s.c.InputSideWidth()
-	p.Given, p.WritesX = fg.Given != nil, fg.Given != nil && (len(fg.Given.Out) > 1 || p.PleW == 0)
+	p.Given, p.WritesX = given != nil, given != nil && (len(given.Out) > 1 || p.PleW == 0)
 	p.InputsW = nn.PartWeights{Block: cpuInputRows, Of: s.ws.tensors(cpuInputRows, nil)}
 
 	tabs := s.tableGraphs()
