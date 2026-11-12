@@ -147,7 +147,9 @@ func newExprSplit() *exprSplit {
 	return &exprSplit{terms: map[exprAt]bool{}, whole: map[int][]exprSize{}, unfused: map[int]bool{}, unjammed: map[int]int{}, unpaired: map[int]bool{}, unwide: map[KernelAt]bool{}, uninit: map[KernelAt]bool{}, copied: map[KernelAt]bool{}, uncursored: map[int]bool{}, unsplit: map[int]bool{}, unvector: map[int]bool{}, unstreamed: map[KernelAt]bool{}, crowded: map[KernelAt]bool{}}
 }
 
-// splitRefused forms a part whose refused kernel walked a weight's planes
+// splitRefused forms a part whose refused kernel took copies at a bank's
+// sheet (Cursor.Init) with its bases copied, then uncrowded, then with no
+// such takes; else one whose refused kernel walked a weight's planes
 // along the rows (Streams) without that walk; else one whose refused kernel
 // ran several rows a call with half the rows a call, and nothing else; else
 // one whose refused kernel ran two heads a call with a head a call; else one
@@ -165,10 +167,19 @@ func (sp *exprSplit) splitRefused(err error) bool {
 		return false
 	}
 	more := false
+	crowded := map[KernelAt]bool{}
+	for _, at := range pe.Crowded {
+		crowded[at] = true
+	}
 	for _, at := range pe.Inited {
 		switch {
 		case !sp.copied[at]:
 			sp.copied[at], more = true, true
+		case crowded[at] && !sp.crowded[at]:
+			// A walk holding every plane in one rows loop gives that up
+			// before its takes do: a take at a sheet's base is what keeps
+			// a bank's planes walked by cursors at all.
+			sp.crowded[at], more = true, true
 		case !sp.uninit[at]:
 			sp.uninit[at], more = true, true
 		}
