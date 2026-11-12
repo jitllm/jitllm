@@ -430,9 +430,10 @@ func (s *hipSession) Launch(k Kernel, groups, width int, bufs ...Buf) error {
 		// The module's argument storage is shared by every caller of the
 		// kernel and two queues launch it at once: a queue fills its own.
 		if len(args) > len(s.q.vals) {
-			return fmt.Errorf("backend: hip: %d kernel arguments is too many", len(args))
+			s.q.vals = make([]uintptr, len(args))
+			s.q.ptrs = make([]unsafe.Pointer, len(args))
 		}
-		return s.h.d.LaunchArgs(s.q.st, hk.m, groups, width, args, s.q.vals[:], s.q.ptrs[:])
+		return s.h.d.LaunchArgs(s.q.st, hk.m, groups, width, args, s.q.vals, s.q.ptrs)
 	}
 	return s.h.d.Launch(nil, hk.m, groups, width, args)
 }
@@ -449,8 +450,8 @@ type hipQueue struct {
 	h    *hipDev
 	st   *hip.Stream
 	mu   sync.Mutex
-	vals [24]uintptr
-	ptrs [24]unsafe.Pointer
+	vals []uintptr
+	ptrs []unsafe.Pointer
 }
 
 func (h *hipDev) NewQueue() (Queue, error) {

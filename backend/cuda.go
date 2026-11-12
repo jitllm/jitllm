@@ -422,17 +422,16 @@ func (s *cudaSession) Launch(k Kernel, groups, width int, bufs ...Buf) error {
 		return err
 	}
 	m := ck.m
-	args := m.Args(len(bufs))
+	var args []unsafe.Pointer
 	if s.q != nil {
 		// The module's argument array is shared by every caller of the kernel,
 		// and two queues launch it at once: a queued session fills its own.
-		args = s.q.args[:min(len(bufs), len(s.q.args))]
 		if len(bufs) > len(s.q.args) {
-			args = nil
+			s.q.args = make([]unsafe.Pointer, len(bufs))
 		}
-	}
-	if args == nil {
-		return fmt.Errorf("backend: cuda: %d kernel arguments is too many", len(bufs))
+		args = s.q.args[:len(bufs)]
+	} else {
+		args = m.Args(len(bufs))
 	}
 	for i, b := range bufs {
 		// A nil buffer is an error, not a panic: every caller can fall back to
@@ -1040,6 +1039,8 @@ func (c *cudaDev) Compile(k *ir.Kernel) (Kernel, error) {
 		if m, err = c.d.Load(src, k.Name); err != nil {
 			return
 		}
+		// Its argument array at the kernel's width, so no launch grows it.
+		m.Args(len(k.Params))
 		if n := ptx.DynamicShared(k); n > 0 {
 			if err = m.SetDynamicShared(n); err != nil {
 				m.Unload()
@@ -1366,7 +1367,7 @@ type cudaQueue struct {
 	c    *cudaDev
 	st   *cuda.Stream
 	mu   sync.Mutex
-	args [64]unsafe.Pointer
+	args []unsafe.Pointer
 	s    cudaSession
 	// stage is page-locked host memory every copy of this queue goes through,
 	// used from the front and reset once the stream has drained. A copy from

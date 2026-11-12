@@ -504,10 +504,11 @@ type Module struct {
 	drv *Driver
 	m   CUmodule
 	f   CUfunc
-	// args is the argument array cuLaunchKernel is handed, reused to avoid
-	// allocating per launch. Per-module mutable state is safe because every
-	// driver call runs on the one goroutine backend.cudaDev owns.
-	args [maxArgs]unsafe.Pointer
+	// args is the argument array cuLaunchKernel is handed, as wide as the
+	// widest launch and reused, so a launch allocates nothing. Per-module
+	// mutable state is safe because every driver call runs on the one
+	// goroutine backend.cudaDev owns.
+	args []unsafe.Pointer
 	// maxGrid is the loading device's MaxGrid; see LaunchArgs.
 	maxGrid int
 	// sms and devCoop are the loading device's; see Resident.
@@ -520,12 +521,6 @@ type Module struct {
 	// SetDynamicShared.
 	dynShared int
 }
-
-// maxArgs bounds a kernel's parameter list. The widest per-op kernel is
-// kernels.MatVecSegments over q, k and v with biases, at 17; a persistent
-// kernel composed from a block's launches (ir.Persist) takes every buffer
-// they bind.
-const maxArgs = 64
 
 // Load compiles PTX and looks up the entry point.
 //
@@ -552,11 +547,14 @@ func (d *Device) Load(ptx, entry string) (*Module, error) {
 func (m *Module) Unload() { m.drv.cuModuleUnload(m.m) }
 
 // Args hands back the module's own argument scratch, n entries wide, for a
-// caller that fills it with Buffer.Arg and passes it to LaunchArgs. It returns
-// nil for a parameter list this module cannot describe.
+// caller that fills it with Buffer.Arg and passes it to LaunchArgs; a width
+// past the widest so far grows it once. The kernel's parameter list is bound
+// by the toolchain's own limit, which Load meets: ptxas refuses an entry
+// whose parameters pass CUDA's 4 KB (CUDA C++ Programming Guide, "Function
+// Parameters").
 func (m *Module) Args(n int) []unsafe.Pointer {
-	if n <= 0 || n > len(m.args) {
-		return nil
+	if n > len(m.args) {
+		m.args = make([]unsafe.Pointer, n)
 	}
 	return m.args[:n]
 }
@@ -564,9 +562,6 @@ func (m *Module) Args(n int) []unsafe.Pointer {
 // Launch runs the kernel on the legacy stream.
 func (m *Module) Launch(grid, block int, bufs ...*Buffer) error {
 	args := m.Args(len(bufs))
-	if args == nil {
-		return fmt.Errorf("cuda: %d kernel arguments, max %d", len(bufs), maxArgs)
-	}
 	for i := range bufs {
 		args[i] = bufs[i].Arg()
 	}
