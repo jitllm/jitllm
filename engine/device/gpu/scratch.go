@@ -602,8 +602,35 @@ func (g *devTier) narrowReserved(beside string) bool {
 	g.promptW = w
 	g.ReservedRows = w
 	g.placeGen.Add(1)
+	g.narrowSets(w)
 	g.promptForms(g.bbs[w])
 	return true
+}
+
+// narrowSets narrows every other causal scratch set that reserved more than
+// w rows to w: a prompt runs in chunks of the set in use's reserved width
+// (ReservedRows), so the rows a wider set holds past it are room no chunk
+// reaches. promptForms then forms each set's blocks at w in their own set.
+// A set whose scratch does not build at w keeps none, its prompts formed at
+// their own widths. Callers hold g.mu.
+func (g *devTier) narrowSets(w int) {
+	if !g.geoUsed {
+		return
+	}
+	defer g.useGeom(g.geoCur)
+	for _, k := range g.geoKeys() {
+		g.useGeom(k)
+		if g.bs == nil || g.bs.p.NonCausal || g.promptW <= w {
+			continue
+		}
+		if g.promptW != g.stepW {
+			g.dropBatch(g.promptW)
+		}
+		g.promptW = 0
+		if g.prepBatch(w) {
+			g.promptW = w
+		}
+	}
 }
 
 // rowsHeld is rowsReserved asked as a question of sizes: a block it finds

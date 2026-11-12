@@ -4744,3 +4744,22 @@ What is still one per tier is the projection: an instance moving its head
 moves every instance's on that tier (AGENTS.md, Scope). The gate,
 engine.TestTwoInstancesRunABlockOnTwoCards, moves the upper half of the
 second instance's blocks and leaves its head beside the lower half.
+
+## Every geometry set narrows with the reserved width
+
+A split model keeps a scratch set per geometry (geomsets.go), each with its
+reserved width. The reserved width narrowed only in the set in use
+(narrowReserved): Gemma 4 31B on a 16 GB V100 narrowed its home set from 512
+rows to 256 to make room for the head's per-row logits and kept its fifty
+sliding blocks' set at 512, though a prompt runs in chunks of the home set's
+width and no chunk reaches past 256 rows in any set. Every other causal set
+wider than the new width now narrows with it (narrowSets), before the prompt
+forms are made, so each set's blocks are formed at the width they run.
+
+The card census's Gemma 4 31B arm on a 16 GB V100, with and without this,
+read after placement (gpu.Stats): the composed parts 3194511284 bytes ->
+2377150540, their arena 282083328 -> 192430080, the scratch 207450248 ->
+170805384 -- 944 MB of the card back -- and the paged blocks' slots 34 ->
+35, the forwards paging 89 blocks in -> 78. Both pass every check of the
+arm: the card's answer against the CPU's, two sessions stepped together,
+nothing formed at a step.
