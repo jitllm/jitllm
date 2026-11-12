@@ -1504,7 +1504,9 @@ func TowerConfig(base, rows int, v *jlm.Vision, t *jlm.Tower) *Config {
 // pictureLayout is how a decoded picture's samples sit in the step's picture
 // table: their format, the picture's size and its rows' stride in bytes, and
 // for a second and third plane (YCbCr's chroma, a palette) their stride, byte
-// offsets and the chroma subsampling (composer.RequestPicSub).
+// offsets and the chroma subsampling (composer.RequestPicSub); wide says a
+// sample is two bytes, and ink is the format's own reading: RGBA's fourth
+// byte CMYK's key, gray's samples alphas.
 type PictureLayout struct {
 	Px                              uint8
 	W, H, stride                    int
@@ -1558,6 +1560,10 @@ func picturePlanes(img image.Image, ent *[4 * 256]byte) (PictureLayout, [3][]byt
 		l.Px, l.stride, l.wide, planes[0] = graph.PixRGBAPremul, p.Stride, 1, rows(p.Pix, p.Stride, 8)
 	case *image.Gray16:
 		l.Px, l.stride, l.wide, planes[0] = graph.PixGray8, p.Stride, 1, rows(p.Pix, p.Stride, 2)
+	case *image.Alpha:
+		l.Px, l.stride, l.ink, planes[0] = graph.PixGray8, p.Stride, 1, rows(p.Pix, p.Stride, 1)
+	case *image.Alpha16:
+		l.Px, l.stride, l.wide, l.ink, planes[0] = graph.PixGray8, p.Stride, 1, 1, rows(p.Pix, p.Stride, 2)
 	case *image.CMYK:
 		l.Px, l.stride, l.ink, planes[0] = graph.PixRGBA8, p.Stride, 1, rows(p.Pix, p.Stride, 4)
 	case *image.YCbCr:
