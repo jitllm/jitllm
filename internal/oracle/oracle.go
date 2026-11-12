@@ -391,6 +391,26 @@ func DWConv32(dst, src []float32, h, w, c, k, st int, filt []float32) {
 	}
 }
 
+// DWConvLine32 is a depthwise convolution of src, a line of r rows of c
+// channels, by k centred taps a channel (filt, tap-major) at stride st,
+// padded as DWConv32 pads a grid one column wide, the rows past either end
+// zero, accumulated in float64 and written to dst.
+func DWConvLine32(dst, src []float32, r, c, k, st int, filt []float32) {
+	ro := (r + st - 1) / st
+	p := max((ro-1)*st+k-r, 0) / 2
+	for y := range ro {
+		for ch := range c {
+			var acc float64
+			for t := range k {
+				if yy := y*st + t - p; yy >= 0 && yy < r {
+					acc += float64(src[yy*c+ch]) * float64(filt[t*c+ch])
+				}
+			}
+			dst[y*c+ch] = float32(acc)
+		}
+	}
+}
+
 // Conv32 is a full convolution of src, an h x w grid of rows of c channels,
 // by wt's cout filters of k x k taps (filter o's row kp wide, tap ky*k+kx's
 // c channels at (ky*k+kx)*c, the rest past k*k*c unread) at stride st,
