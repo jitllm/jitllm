@@ -43,8 +43,9 @@ const floatFormsNMSE = 1e-5
 // history (stepShare). Each must part from the sessions alone by more than
 // the bound.
 //
-// A dense model, a hybrid (recurrent state per row), a mixture and a sliding
-// window model.
+// A dense model, a hybrid (recurrent state per row), a mixture, a sliding
+// window model, a latent attention's (its cached rows per session) and a
+// selection's (its indexer's keys per session).
 func TestStepRunsOnTheCPUSharesOnePass(t *testing.T) { stepRunsOnTheCPUSharesOnePass(t) }
 
 // stepRunsOnTheCPUSharesOnePass is TestStepRunsOnTheCPUSharesOnePass with opts on every model it opens.
@@ -54,6 +55,8 @@ func stepRunsOnTheCPUSharesOnePass(t *testing.T, opts ...Option) {
 		{"hybrid", "qwen35/Qwen3.5-0.8B-Q4_K_M.gguf"},
 		{"moe", "Qwen3-MOE-4x0.6B-Q4_K_M.gguf"},
 		{"swa", "gemma-3-1b-it-Q4_K_M.gguf"},
+		{"mla", "synth-deepseek-yarn.gguf"},
+		{"selection", "synth-deepseek32.gguf"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			p := testmodels.Path(c.file)
@@ -71,6 +74,9 @@ func stepRunsOnTheCPUSharesOnePass(t *testing.T, opts ...Option) {
 			}
 			if c.name == "moe" && !m.Cfg.MoE() {
 				t.Fatalf("%s is not a mixture", c.file)
+			}
+			if c.name == "mla" && !m.Cfg.MLA() || c.name == "selection" && m.Cfg.Selection() == nil {
+				t.Fatalf("%s is not a %s model", c.file, c.name)
 			}
 			plan := runsPlan{early: []string{"The capital of France is", "Water boils at a temperature of"},
 				late:  "The clerk counted barrels of salt on the upper floor, and",

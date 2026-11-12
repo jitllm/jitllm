@@ -477,11 +477,6 @@ func (s *Instance) RoutedRefusal() error {
 		return errRoutedNoStepper
 	case s.lo != 0 || s.hi != c.NLayer:
 		return errRoutedPartial
-	case c.MLA() || c.Selection() != nil:
-		// A latent's cached rows and a selection's are read through the
-		// batch's own slots; a row of another session there would read the
-		// wrong history.
-		return errRoutedCache
 	}
 	return nil
 }
@@ -490,7 +485,6 @@ func (s *Instance) RoutedRefusal() error {
 const (
 	errRoutedNoStepper modelError = "model: a device that steps no rows of different sessions runs some of the instance's blocks or its head"
 	errRoutedPartial   modelError = "model: the instance runs part of the model (a prediction block)"
-	errRoutedCache     modelError = "model: the architecture's cached rows are read per batch slot (MLA, a selection)"
 )
 
 // PromptChunk is how many prompt tokens this instance's Prefill takes in one
