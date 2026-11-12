@@ -2009,11 +2009,11 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 				// construction rather than by a missing tensor.
 				continue
 			case (i == 20 || i == 21) && p.Recurrent.ChanDecay && len(w.SSM.Gate.Data) != 0:
-				// Kimi-K3's full-rank output gate is slot 10's, and there is no
+				// A full-rank output gate is slot 10's, and there is no
 				// low-rank pair.
 				continue
 			case len(x.Data) == 0:
-				g.LastErr = fmt.Sprintf("block %d: the plan is a Kimi Delta Attention "+
+				g.LastErr = fmt.Sprintf("block %d: the plan is a channel-decay delta "+
 					"block and %s is empty", li, weightRole(i))
 				return false
 			}
@@ -6006,13 +6006,13 @@ func planConflict(bs *blockScratch, p *nn.LayerPlan) string {
 	if a, b := bs.p.SWAWindow, p.SWAWindow; a > 0 && b > 0 && a != b {
 		return fmt.Sprintf("a sliding window of %d keys on a tier built for %d", b, a)
 	}
-	// Llama 4's attention is baked the same way (chunk, temperature table, norm,
-	// input weighting), and planUnion widens none of it.
+	// A chunked attention is baked the same way (chunk, temperature table,
+	// norm, input weighting), and planUnion widens none of it.
 	if a, b := bs.p, *p; a.SWAChunked != b.SWAChunked || a.NoPEGlobal != b.NoPEGlobal ||
 		a.QKL2Norm != b.QKL2Norm || a.ExpertWeightIn != b.ExpertWeightIn ||
 		a.AttnTempScale != b.AttnTempScale || a.AttnTempFloor != b.AttnTempFloor ||
 		a.AttnTempOffset != b.AttnTempOffset {
-		return "Llama 4 attention of a different shape from the one this tier was built for"
+		return "a chunked attention of a different shape from the one this tier was built for"
 	}
 	// The activation kernels bake whether the FFN has a gate.
 	if a, b := bs.p, *p; !a.NoFFN && !b.NoFFN && ungatedFFN(&a) != ungatedFFN(&b) {
