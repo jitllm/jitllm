@@ -864,11 +864,6 @@ func decodeVision(b []byte) (*Vision, error) {
 		if err := v.Tower.Valid(); err != nil {
 			return nil, err
 		}
-		if v.Tower.Video != nil {
-			if err := v.Tower.Video.Valid(); err != nil {
-				return nil, err
-			}
-		}
 	}
 	if v.Audio != nil && v.Audio.Tower != nil {
 		if err := v.Audio.Tower.Valid(); err != nil {

@@ -70,8 +70,9 @@ type TowerGraphs struct {
 	// Tail is the class rows after the patches (TOpTailRow).
 	Tail int
 	Full []bool
-	// fit is how a picture becomes the tower's squares.
-	Fit PictureFit
+	// fit is how a picture becomes the tower's squares, and FrameFit how a
+	// video's frame read as one does where the video states steps of its own.
+	Fit, FrameFit PictureFit
 	// Video is how the tower reads a video (jlm.Video), nil for none, and
 	// Videos its entry's classes over a pair of frames, one for each
 	// picture class's size.
@@ -528,6 +529,17 @@ func (m *Model) BuildTowerGraphs() (*TowerGraphs, error) {
 			return nil, fmt.Errorf("model: a video read by a tower whose pictures are not each of a size of its own")
 		}
 		tg.Video = t.Video
+		if t.Video.AsPictures() && len(t.Video.Pre) > 0 {
+			// The frames go through the picture's classes: the steps' resize
+			// reaches no more than the picture's does.
+			if tg.FrameFit, err = towerFit(&jlm.Tower{Pre: t.Video.Pre}); err != nil {
+				return nil, fmt.Errorf("model: the video's frames: %w", err)
+			}
+			if tg.FrameFit.MaxPix > fit.MaxPix {
+				return nil, fmt.Errorf("model: the container's video frames reach %d pixels, past its pictures' %d",
+					tg.FrameFit.MaxPix, fit.MaxPix)
+			}
+		}
 	}
 	if t.Video != nil && !t.Video.AsPictures() {
 		// A whole frame is a picture: its classes are the picture's.
@@ -1187,8 +1199,11 @@ type Square struct {
 // square is square i of a w x h picture and how many the picture has: one
 // at its own size in the smallest class that holds it, or a fixed square,
 // a crop or a tile at the entry's size.
-func (tg *TowerGraphs) Square(w, h, i int) (Square, int) {
-	if f := tg.Fit; f.Slice > 0 {
+func (tg *TowerGraphs) Square(w, h, i int) (Square, int) { return tg.squareUnder(tg.Fit, w, h, i) }
+
+// squareUnder is Square for a picture resized under fit.
+func (tg *TowerGraphs) squareUnder(fit PictureFit, w, h, i int) (Square, int) {
+	if f := fit; f.Slice > 0 {
 		cols, rows, cut := f.sliceGrid(w, h)
 		n := 1
 		if cut {
@@ -1217,7 +1232,7 @@ func (tg *TowerGraphs) Square(w, h, i int) (Square, int) {
 		}
 		return sq, n
 	}
-	if f := tg.Fit; f.SmartTile > 0 {
+	if f := fit; f.SmartTile > 0 {
 		cols, rows, tiled, ow, oh := f.smartLayout(w, h)
 		n, span := 1, f.SmartMax
 		if tiled {
@@ -1237,32 +1252,32 @@ func (tg *TowerGraphs) Square(w, h, i int) (Square, int) {
 		}
 		return sq, n
 	}
-	if tg.Fit.Budget > 0 {
-		ow, oh := tg.Fit.budgetSize(w, h)
+	if fit.Budget > 0 {
+		ow, oh := fit.budgetSize(w, h)
 		c := 0
 		for c < len(tg.Classes)-1 && !tg.Classes[c].Pic.Holds(ow, oh) {
 			c++
 		}
 		return Square{Class: c, Ow: ow, Oh: oh, Pw: ow, Ph: oh, Gw: ow / tg.Patch, Gh: oh / tg.Patch}, 1
 	}
-	if tg.Fit.Cap > 0 {
-		ow, oh := tg.Fit.capSize(w, h)
+	if fit.Cap > 0 {
+		ow, oh := fit.capSize(w, h)
 		c := 0
 		for c < len(tg.Classes)-1 && !tg.Classes[c].Pic.Holds(ow, oh) {
 			c++
 		}
 		return Square{Class: c, Ow: ow, Oh: oh, Pw: ow, Ph: oh, Gw: ow / tg.Patch, Gh: oh / tg.Patch}, 1
 	}
-	if tg.Fit.Box > 0 {
+	if fit.Box > 0 {
 		// Resized inside the box, which the picture op lays it in.
-		ow, oh := tg.Fit.boxSize(w, h)
+		ow, oh := fit.boxSize(w, h)
 		return Square{Ow: ow, Oh: oh, Pw: ow, Ph: oh, Gw: tg.Side, Gh: tg.Side}, 1
 	}
-	if tg.Fit.Limit > 0 {
+	if fit.Limit > 0 {
 		// Resized to its own size and laid over its padded grid by the
 		// picture op: the window the size itself, the grid the padded one.
-		ow, oh := tg.Fit.limitSize(w, h)
-		u := tg.Fit.Pad
+		ow, oh := fit.limitSize(w, h)
+		u := fit.Pad
 		pw, ph := (ow+u-1)/u*u, (oh+u-1)/u*u
 		c := 0
 		for c < len(tg.Classes)-1 && !tg.Classes[c].Pic.Holds(pw, ph) {
@@ -1270,8 +1285,8 @@ func (tg *TowerGraphs) Square(w, h, i int) (Square, int) {
 		}
 		return Square{Class: c, Ow: ow, Oh: oh, Pw: ow, Ph: oh, Gw: pw / tg.Patch, Gh: ph / tg.Patch}, 1
 	}
-	if tg.Fit.Factor > 0 {
-		ow, oh := tg.Fit.smartSize(w, h)
+	if fit.Factor > 0 {
+		ow, oh := fit.smartSize(w, h)
 		c := 0
 		for c < len(tg.Classes)-1 && !tg.Classes[c].Pic.Holds(ow, oh) {
 			c++
@@ -1279,10 +1294,10 @@ func (tg *TowerGraphs) Square(w, h, i int) (Square, int) {
 		return Square{Class: c, Ow: ow, Oh: oh, Pw: ow, Ph: oh, Gw: ow / tg.Patch, Gh: oh / tg.Patch}, 1
 	}
 	a := tg.Classes[0].Pic
-	cols, _, n := tg.Fit.Tiles(w, h, a.PicW)
-	ow, oh, x0, y0 := tg.Fit.Window(w, h, a.PicW, a.PicH, i)
+	cols, _, n := fit.Tiles(w, h, a.PicW)
+	ow, oh, x0, y0 := fit.Window(w, h, a.PicW, a.PicH, i)
 	sq := Square{Ow: ow, Oh: oh, X0: x0, Y0: y0, Pw: a.PicW, Ph: a.PicH, Gw: tg.Side, Gh: tg.Side}
-	if tg.Fit.Canvas && tg.Marks > 0 {
+	if fit.Canvas && tg.Marks > 0 {
 		// The canvas's markers (jlm.PreBestFit): before the last square the
 		// third, after a tile its row's separator, after a row's last the
 		// rows'.
@@ -1333,12 +1348,24 @@ func (tg *TowerGraphs) SquareOut(sq Square) int {
 
 // LastSquare is a w x h picture's last square: a tiled tower's thumbnail,
 // the whole picture at a square's size, or its one square.
-func (tg *TowerGraphs) LastSquare(w, h int) Square {
-	sq, n := tg.Square(w, h, 0)
+func (tg *TowerGraphs) LastSquare(w, h int) Square { return tg.lastUnder(tg.Fit, w, h) }
+
+func (tg *TowerGraphs) lastUnder(fit PictureFit, w, h int) Square {
+	sq, n := tg.squareUnder(fit, w, h, 0)
 	if n > 1 {
-		sq, _ = tg.Square(w, h, n-1)
+		sq, _ = tg.squareUnder(fit, w, h, n-1)
 	}
 	return sq
+}
+
+// FrameSquare is the square a video's w x h frame read as a picture is
+// (jlm.Video.AsPictures): its last square, resized under the video's own
+// steps where it states them (FrameFit).
+func (tg *TowerGraphs) FrameSquare(w, h int) Square {
+	if tg.Video != nil && len(tg.Video.Pre) > 0 {
+		return tg.lastUnder(tg.FrameFit, w, h)
+	}
+	return tg.LastSquare(w, h)
 }
 
 // picRows is the rows a w x h picture becomes: its squares' every row.

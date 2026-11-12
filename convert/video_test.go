@@ -282,6 +282,61 @@ func TestGLM4VStatesItsVideo(t *testing.T) {
 	}
 }
 
+// TestGemma4StatesItsVideo converts synth-gemma4v's two files
+// (scripts/gemma4visiongold.py) and holds the stated video to the
+// checkpoints' Gemma4VideoProcessor and Gemma4Processor: 32 frames sampled
+// uniformly, each read as a picture within 70 soft tokens' patches (630 at
+// the 3x3 pool), its time as MM:SS at 24 frames a second where none is
+// stated, a space after it and between the frames; its rows bidirectional
+// as the picture's are, the text model seeing vision bidirectionally.
+func TestGemma4StatesItsVideo(t *testing.T) {
+	const name = "synth-gemma4v"
+	src, mm := testmodels.Path(name+".gguf"), testmodels.Path("mmproj-"+name+".gguf")
+	for _, p := range []string{src, mm} {
+		if _, err := os.Stat(p); err != nil {
+			testmodels.Missing(t, "MODEL MISSING: %v (run scripts/gemma4visiongold.py) -- this gate proved nothing", err)
+		}
+	}
+	dst := filepath.Join(t.TempDir(), name+".jlm")
+	if _, err := FromGGUFs(src, mm, dst, jlm.Fingerprint{Writer: "gate"}); err != nil {
+		t.Fatal(err)
+	}
+	f, err := jlm.Open(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	v := f.Vision()
+	if v == nil || v.Tower == nil || v.Tower.Video == nil {
+		t.Fatal("the container states no video")
+	}
+	vid := v.Tower.Video
+	if !vid.AsPictures() || len(vid.Pre) == 0 || vid.Pre[0].Kind != jlm.PreAspectBudget || vid.Pre[0].Ints[0] != 630 {
+		t.Fatalf("the video reads %+v", vid)
+	}
+	if !v.Tower.Span.Bidir {
+		t.Fatal("the frames' rows are causal where the text model sees vision bidirectionally")
+	}
+	// torch.arange(0, 40, 40 / 32), truncated; at 24 frames a second the
+	// last frame's time is 38/24 seconds.
+	s, items := sampleVideo(t, vid, 40, 0)
+	want := []int{0, 1, 2, 3, 5, 6, 7, 8, 10, 11, 12, 13, 15, 16, 17, 18, 20, 21, 22, 23, 25, 26, 27, 28, 30, 31, 32, 33,
+		35, 36, 37, 38}
+	if !slices.Equal(s.Frames, want) {
+		t.Errorf("40 frames sample %v, want %v", s.Frames, want)
+	}
+	b, a := v.Tower.Span.Before[0], v.Tower.Span.After[0]
+	got := layoutOf(t, vid, s)
+	head := fmt.Sprintf("00:00 [%d]{0}[%d] 00:00 [%d]{1}[%d] ", b, a, b, a)
+	tail := fmt.Sprintf(" 00:01 [%d]{31}[%d]", b, a)
+	if !strings.HasPrefix(got, head) || !strings.HasSuffix(got, tail) || len(items) != 4*32 {
+		t.Errorf("the prompt reads %q (%d items), want it to begin %q and end %q", got, len(items), head, tail)
+	}
+	if s, _ := sampleVideo(t, vid, 3000, 30); s.Frames[1] != 93 || s.Frames[31] != 2906 {
+		t.Errorf("3000 frames sample %v", s.Frames)
+	}
+}
+
 // TestEveryVideoProcessorIsStated holds every projector the converter
 // states a tower for to an entry saying whether its reference processor
 // takes a video, and every one that does to a video the converter states
@@ -297,7 +352,7 @@ func TestEveryVideoProcessorIsStated(t *testing.T) {
 		"qwen2.5vl_merger": "Qwen2VLVideoProcessor", "qwen2vl_merger": "Qwen2VLVideoProcessor",
 		"qwen3vl_merger": "Qwen3VLVideoProcessor", "resampler": "",
 	}
-	gaps := map[string]bool{"gemma4v": true, "idefics3": true}
+	gaps := map[string]bool{"idefics3": true}
 	for _, name := range Projectors() {
 		p := projectorOf()[name]
 		if !StatesTower(p) {

@@ -62,11 +62,12 @@ type towerRun struct {
 	out, deep []float32
 	encodes   int
 	// pad holds a picture's planes where they are not read in place, ent a
-	// palette's entries; tapsW and tapsH the source size the request's taps
-	// are for.
-	pad          []uint32
-	ent, ent2    [4 * 256]byte
-	tapsW, tapsH int
+	// palette's entries; tapsW and tapsH the source size, tapsOw and tapsOh the
+	// size it resizes to, the request's taps are for.
+	pad            []uint32
+	ent, ent2      [4 * 256]byte
+	tapsW, tapsH   int
+	tapsOw, tapsOh int
 	// tapsVideo says the taps in the request are a video class's, whose
 	// count is not a picture class's.
 	tapsVideo bool
@@ -204,12 +205,12 @@ func (tr *towerRun) squareRequest(pl model.PictureLayout, sq model.Square, a gra
 		tr.req[composer.RequestPicBandRows] = uint32(min(composer.PicBandRows(model.ColumnPic(a), sq.Pw), a.Taps))
 		return
 	}
-	if a.Chain != graph.ChainPIL || squares == 1 && pl.W == tr.tapsW && pl.H == tr.tapsH {
+	if a.Chain != graph.ChainPIL || squares == 1 && pl.W == tr.tapsW && pl.H == tr.tapsH && sq.Ow == tr.tapsOw && sq.Oh == tr.tapsOh {
 		return
 	}
 	composer.PILTapsAt(a.Filter, a.PicTorch, pl.W, sq.Ow, sq.X0, sq.Pw, a.Taps, tr.req[composer.RequestPicTaps:])
 	composer.PILTapsAt(a.Filter, a.PicTorch, pl.H, sq.Oh, sq.Y0, sq.Ph, a.Taps, tr.req[composer.RequestPicTaps+sq.Pw*composer.PILEntryWords(a.Taps):])
-	tr.tapsW, tr.tapsH = pl.W, pl.H
+	tr.tapsW, tr.tapsH, tr.tapsOw, tr.tapsOh = pl.W, pl.H, sq.Ow, sq.Oh
 	if squares > 1 {
 		tr.tapsW = 0
 	}
@@ -326,7 +327,7 @@ func (s *Instance) encodePicture(img image.Image, whole bool, dst, deep []float3
 	sq, squares := tg.Square(pl.W, pl.H, 0)
 	want := tg.PicRows(pl.W, pl.H)
 	if whole {
-		sq = tg.LastSquare(pl.W, pl.H)
+		sq = tg.FrameSquare(pl.W, pl.H)
 		want, squares = tg.SquareOut(sq), 1
 	}
 	if len(dst) != want*D || len(deep) != len(tg.Taps)*want*D {
@@ -585,7 +586,7 @@ func (s *Instance) encodePictures(spans []model.Span, from int) ([]model.Span, e
 			case sp.Frame != nil:
 				want = s.m.Tower.SquareOut(s.m.Tower.VideoSquare(sp.FrameW, sp.FrameH))
 			case sp.Whole:
-				want = s.m.Tower.SquareOut(s.m.Tower.LastSquare(b.Dx(), b.Dy()))
+				want = s.m.Tower.SquareOut(s.m.Tower.FrameSquare(b.Dx(), b.Dy()))
 			}
 			if sp.PicRows != want {
 				return nil, fmt.Errorf("model: span %d is a picture of %d rows and the tower writes %d",

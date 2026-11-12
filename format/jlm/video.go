@@ -3,6 +3,7 @@ package jlm
 import (
 	"fmt"
 	"math"
+	"reflect"
 )
 
 // PreVideoResize resamples a video's frames to one size of the video's own,
@@ -163,7 +164,8 @@ func (v *Video) Valid() error {
 	if err := piecesValid(v.Prompt, false); err != nil {
 		return err
 	}
-	if len(v.Pre) == 0 && v.Entry.NIn == 0 && len(v.Entry.Ops) == 0 {
+	if v.AsPictures() {
+		// Steps of its own are held to the tower's (PicturesValid).
 		if v.Group != 1 || v.Stride != nil {
 			return fmt.Errorf("jlm: a video read as pictures of %d frames, one grid %v", v.Group, v.Stride != nil)
 		}
@@ -188,10 +190,45 @@ func (v *Video) Valid() error {
 	return v.Entry.valid("video entry")
 }
 
-// AsPictures reports a video whose frames are each read as a picture is: it
-// states no resize or entry of its own.
+// AsPictures reports a video whose frames are each read as a picture is,
+// through the picture's entry: it states no entry of its own, and its steps,
+// where it states any, are the picture's with a resize of its own.
 func (v *Video) AsPictures() bool {
-	return len(v.Pre) == 0 && v.Entry.NIn == 0 && len(v.Entry.Ops) == 0
+	return v.Entry.NIn == 0 && len(v.Entry.Ops) == 0
+}
+
+// PicturesValid says the steps of a video read as pictures (AsPictures)
+// are tower t's picture steps with at most one resize stated anew: the
+// frames go through the picture's entry and its normalisation.
+func (v *Video) PicturesValid(t *Tower) error {
+	if !v.AsPictures() || len(v.Pre) == 0 {
+		return nil
+	}
+	if len(v.Pre) != len(t.Pre) {
+		return fmt.Errorf("jlm: a video's frames read as pictures in %d steps, the tower's pictures in %d", len(v.Pre), len(t.Pre))
+	}
+	differ := 0
+	for i := range v.Pre {
+		a, b := &v.Pre[i], &t.Pre[i]
+		switch {
+		case a.Kind != b.Kind:
+			return fmt.Errorf("jlm: a video's frame step %d is of kind %d, the picture's %d", i, a.Kind, b.Kind)
+		case reflect.DeepEqual(a, b):
+		case a.Kind == PreNormalize || a.Kind == PreNormalizeBF16:
+			return fmt.Errorf("jlm: a video's frames normalised as the tower's pictures are not")
+		default:
+			differ++
+		}
+	}
+	if differ > 1 {
+		return fmt.Errorf("jlm: a video's frames resized in %d steps of their own, not one", differ)
+	}
+	pt := *t
+	pt.Pre, pt.Video = v.Pre, nil
+	if err := pt.Valid(); err != nil {
+		return fmt.Errorf("jlm: a video's frame steps: %w", err)
+	}
+	return nil
 }
 
 // scalar refuses an expression of sizes that reads a stored vector, the
