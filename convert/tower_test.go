@@ -6,7 +6,9 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"unsafe"
 
+	"github.com/jitllm/jitllm/convert/gguf"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/model"
@@ -17,8 +19,12 @@ import (
 // container's stated tower (jlm.Tower) to what the converter knows of
 // idefics3: it validates, every weight its programs bind is a tensor of the
 // container, its square and patch grid are the tower's, its shuffle the
-// file's, and its markers are mtmd's overview pieces. The record read back
-// from the file is the one the conversion stated.
+// file's; the picture cut as Idefics3's processor cuts it (PreLongTiles, the
+// longer side to four squares, its "\n\n" one token of this vocabulary)
+// and resized by torchvision's Lanczos; the head writing its markers
+// (TOpMarkRow) from a table whose rows are the text table's rows of
+// Idefics3Processor's tokens, and none around the span. The record read
+// back from the file is the one the conversion stated.
 // statedSteps records each picture step the tower's stater writes, before
 // the converter states the geometry from them and lowers them.
 func statedSteps(steps *[]jlm.PreStep) Option {
@@ -34,7 +40,8 @@ func TestSmolVLMStatesItsTower(t *testing.T) {
 		}
 	}
 	dst := filepath.Join(t.TempDir(), "smolvlm.jlm")
-	if _, err := FromGGUFs(src, mm, dst, jlm.Fingerprint{Writer: "gate"}); err != nil {
+	var steps []jlm.PreStep
+	if _, err := FromGGUFs(src, mm, dst, jlm.Fingerprint{Writer: "gate"}, statedSteps(&steps)); err != nil {
 		t.Fatal(err)
 	}
 	f, err := jlm.Open(dst)
@@ -55,8 +62,23 @@ func TestSmolVLMStatesItsTower(t *testing.T) {
 			t.Errorf("the tower binds %v, which the container does not hold", r)
 		}
 	}
-	if got := tw.Pre[0].Ints[:2]; got[0] != int32(v.ImageSize) || got[1] != int32(v.ImageSize) {
-		t.Errorf("the picture is resized to %v, want the tower's %d square", got, v.ImageSize)
+	side := int32(v.ImageSize)
+	if got := tw.Pre[0].Ints; got[0] != side || got[1] != side || jlm.Filter(got[2]) != jlm.FilterPILLanczos ||
+		jlm.Precision(got[3]) != jlm.PrecTorch {
+		t.Errorf("the picture is resized as %v, want the tower's %d square by torchvision's Lanczos", got, side)
+	}
+	// The picture's steps come first, then the video frames': the frame's
+	// cut is one square at the tower's size.
+	var cuts [][]int32
+	for _, s := range steps {
+		if s.Kind == PreLongTiles {
+			cuts = append(cuts, s.Ints)
+		}
+	}
+	if want := [][]int32{{4 * side, 1, idefics3Grid}, {side, 1, idefics3Grid}}; !reflect.DeepEqual(cuts, want) ||
+		tw.Geometry == nil {
+		t.Errorf("the cuts are %v (geometry %v), want the picture's longer side to %d and a frame's to %d, a double newline of one token, a grid of %d",
+			cuts, tw.Geometry != nil, 4*side, side, idefics3Grid)
 	}
 	if got := tw.Entry.Ops[0].Span; got != int32(v.PatchSize) {
 		t.Errorf("patches of %d, want the tower's %d", got, v.PatchSize)
@@ -64,33 +86,67 @@ func TestSmolVLMStatesItsTower(t *testing.T) {
 	if got := tw.Head.Ops[1]; got.Code != jlm.TOpRegroup || got.Span != int32(v.Scale) {
 		t.Errorf("the head's second op is %+v, want the file's shuffle of %d", got, v.Scale)
 	}
+	if last := tw.Head.Ops[len(tw.Head.Ops)-1]; last.Code != jlm.TOpMarkRow || last.Span != 3 || last.Offset != 1 {
+		t.Errorf("the head's last op is %+v, want the markers' runs of at most 3 before and 1 after", last)
+	}
+	if len(tw.Span.Before) != 0 || len(tw.Span.After) != 0 {
+		t.Errorf("markers %v / %v around the span, want the head's alone", tw.Span.Before, tw.Span.After)
+	}
 	voc, err := tok.New(f.Vocab())
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, c := range []struct {
-		ids  []int32
-		want []string
-	}{
-		{tw.Span.Before, []string{"\n\n", "<fake_token_around_image>", "<global-img>"}},
-		{tw.Span.After, []string{"<fake_token_around_image>"}},
-	} {
-		// A special token decodes to nothing, so each marker is held to the
-		// id its piece looks up.
-		var want []int32
-		for _, p := range c.want {
-			id, ok := voc.ID(p)
-			if !ok {
-				t.Fatalf("%q is no token of SmolVLM's vocabulary", p)
-			}
-			want = append(want, id)
-		}
-		if !reflect.DeepEqual(c.ids, want) {
-			t.Errorf("the span's markers are %v, want mtmd's %q at %v", c.ids, c.want, want)
+	// A special token decodes to nothing, so each marker is held to the id
+	// its piece looks up, and the table's row to that id's text row.
+	names := []string{"\n", "\n\n", "<fake_token_around_image>", "<global-img>"}
+	for r := range idefics3Grid {
+		for c := range idefics3Grid {
+			names = append(names, "<fake_token_around_image>", fmt.Sprintf("<row_%d_col_%d>", r+1, c+1))
 		}
 	}
-	t.Logf("%d steps, %d entry ops, %d head ops, %d weights bound, markers %v / %v",
-		len(tw.Pre), len(tw.Entry.Ops), len(tw.Head.Ops), len(tw.Roles()), tw.Span.Before, tw.Span.After)
+	gf, err := gguf.Open(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gf.Close()
+	vf, err := gguf.Open(mm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer vf.Close()
+	s, err := buildGGUF(gf, vf, src, mm, options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var table []float32
+	for i := range s.Tensors {
+		if e := &s.Tensors[i]; e.Role == jlm.RoleVTileMarks {
+			b, err := e.Bytes()
+			if err != nil {
+				t.Fatal(err)
+			}
+			table = unsafe.Slice((*float32)(unsafe.Pointer(&b[0])), len(b)/4)
+		}
+	}
+	k := int(s.Config.NEmbd)
+	if len(table) != len(names)*k {
+		t.Fatalf("a marker table of %d values, want %d rows of %d", len(table), len(names), k)
+	}
+	for i, p := range names {
+		id, ok := voc.ID(p)
+		if !ok {
+			t.Fatalf("%q is no token of SmolVLM's vocabulary", p)
+		}
+		row, err := tokenRow(s, int(id))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(table[i*k:(i+1)*k], row) {
+			t.Errorf("marker row %d is not %q's text row (token %d)", i+1, p, id)
+		}
+	}
+	t.Logf("%d steps, %d entry ops, %d head ops, %d weights bound, %d marker rows",
+		len(tw.Pre), len(tw.Entry.Ops), len(tw.Head.Ops), len(tw.Roles()), len(names))
 }
 
 // TestGemma3StatesItsTower converts Gemma 3 4B's two files and holds the

@@ -26,6 +26,13 @@ func statedTower(s *jlm.Source, o options) (*jlm.Tower, error) {
 	if err != nil || t == nil {
 		return t, err
 	}
+	if o.longestEdge > 0 {
+		for i := range t.Pre {
+			if t.Pre[i].Kind == PreLongTiles {
+				t.Pre[i].Ints[0] = o.longestEdge
+			}
+		}
+	}
 	if o.pictureStep != nil {
 		edit := func(steps []jlm.PreStep) {
 			for i := range steps {
@@ -124,13 +131,17 @@ func StatesVideo(p jlm.Projector) bool {
 		p == jlm.ProjGemma4V || p == jlm.ProjIdefics3
 }
 
-// idefics3Tower is SmolVLM's tower as llama.cpp's mtmd runs it, which this
-// container matches: the picture squashed to the tower's square by two-tap
-// bilinear and normalised, patches through one matrix plus the learned
-// position table, the SigLIP blocks, a post LayerNorm, the pixel shuffle and
-// the one projector matrix, and the overview image's markers around its
-// rows. transformers' Idefics3ImageProcessor also cuts a large picture into
-// tiles with a Lanczos resize; this states the square alone (docs/divergences.md).
+// idefics3Tower is SmolVLM's tower as transformers' Idefics3ImageProcessor
+// and Idefics3ForConditionalGeneration run it: the picture's longer side to
+// four of the tower's squares (every published SmolVLM processor's
+// size.longest_edge, which a conversion given its preprocessor_config.json
+// reads from it), then cut into whole squares and a global view of the
+// whole (PreLongTiles), each by torchvision's Lanczos and normalised;
+// patches through one matrix plus the learned position table, the SigLIP
+// blocks, a post LayerNorm, the pixel shuffle and the one projector matrix;
+// then each square's markers as Idefics3Processor writes them, from the
+// text table's rows (TOpMarkRow). A video's frame is one square of the
+// longer side at the tower's, its markers a picture of one square's.
 func idefics3Tower(s *jlm.Source) (*jlm.Tower, error) {
 	v := s.Vision
 	has := towerRoles(s)
@@ -157,12 +168,43 @@ func idefics3Tower(s *jlm.Source) (*jlm.Tower, error) {
 		}
 		return []jlm.Role{w}
 	}
+	side := int32(v.ImageSize)
+	fake, err := markerIDs(s, "<fake_token_around_image>")
+	if err != nil {
+		return nil, err
+	}
+	global, err := markerIDs(s, "<global-img>", "\n")
+	if err != nil {
+		return nil, err
+	}
+	// The global view follows the last row's newline and one of its own,
+	// which the tokenizer reads as one token where it has one.
+	double, err := markerIDs(s, "\n\n")
+	if err != nil {
+		double = []int32{global[1], global[1]}
+	}
+	marks := append([]int32{global[1]}, double...)
+	marks = append(marks, fake[0], global[0])
+	for r := range idefics3Grid {
+		for c := range idefics3Grid {
+			tile, err := markerIDs(s, fmt.Sprintf("<row_%d_col_%d>", r+1, c+1))
+			if err != nil {
+				return nil, err
+			}
+			marks = append(marks, fake[0], tile[0])
+		}
+	}
+	if err := markRows(s, marks); err != nil {
+		return nil, err
+	}
+	resize := jlm.PreStep{Kind: jlm.PreResize, Ints: []int32{side, side, int32(jlm.FilterPILLanczos), int32(jlm.PrecTorch)}}
+	norm := jlm.PreStep{Kind: jlm.PreNormalize, Floats: []float32{v.Mean[0], v.Mean[1], v.Mean[2], v.Std[0], v.Std[1], v.Std[2]}}
+	tiles := func(longest int32) []jlm.PreStep {
+		return []jlm.PreStep{resize, {Kind: PreLongTiles, Ints: []int32{longest, int32(len(double)), idefics3Grid}}, norm}
+	}
 	t := &jlm.Tower{
 		Version: jlm.TowerVersion,
-		Pre: []jlm.PreStep{
-			{Kind: jlm.PreResize, Ints: []int32{int32(v.ImageSize), int32(v.ImageSize), int32(jlm.FilterTwoTap), int32(jlm.PrecFloat)}},
-			{Kind: jlm.PreNormalize, Floats: []float32{v.Mean[0], v.Mean[1], v.Mean[2], v.Std[0], v.Std[1], v.Std[2]}},
-		},
+		Pre:     tiles(4 * side),
 		// The pixels are value 0.
 		Entry: jlm.Program{NIn: 1, Out: 4, Ops: []jlm.TowerOp{
 			{Code: jlm.TOpPatchify, In: []uint16{0}, Span: int32(v.PatchSize)},
@@ -173,29 +215,21 @@ func idefics3Tower(s *jlm.Source) (*jlm.Tower, error) {
 		Block: jlm.TowerBlock{NHead: v.NHead, NKVHead: v.NHead, HeadDim: v.NEmbd / v.NHead,
 			Norm: jlm.NormLayer, Eps: v.Eps, Act: act},
 		// The last block's rows are value 0.
-		Head: jlm.Program{NIn: 1, Out: 3, Ops: []jlm.TowerOp{
+		Head: jlm.Program{NIn: 1, Out: 4, Ops: []jlm.TowerOp{
 			{Code: jlm.TOpLayerNorm, In: []uint16{0}, Bind: bias(jlm.RoleVPostNorm, jlm.RoleVPostNormBias), Eps: v.Eps},
 			{Code: jlm.TOpRegroup, In: []uint16{1}, Span: int32(v.Scale)},
 			{Code: jlm.TOpLinear, In: []uint16{2}, Bind: bias(jlm.RoleVProj, jlm.RoleVProjBias)},
+			{Code: jlm.TOpMarkRow, In: []uint16{3}, Bind: []jlm.Role{jlm.RoleVTileMarks}, Span: int32(len(double) + 2), Offset: 1},
 		}},
 	}
-	// mtmd's overview image: "\n\n" <fake_token_around_image> <global-img>,
-	// the rows, <fake_token_around_image>, each looked up by its decoded
-	// piece (tok.Vocab.ID), as mtmd's lookup_token does.
-	if t.Span.Before, err = markerIDs(s, "\n\n", "<fake_token_around_image>", "<global-img>"); err != nil {
-		return nil, err
-	}
-	if t.Span.After, err = markerIDs(s, "<fake_token_around_image>"); err != nil {
-		return nil, err
-	}
-	frame, err := markerIDs(s, "<fake_token_around_image>", "<global-img>")
-	if err != nil {
-		return nil, err
-	}
-	t.Video = idefics3Video(frame, t.Span.After)
+	t.Video = idefics3Video(tiles(side))
 	withVideoTemplate(s.Vocab, smolvlmVideoTemplate)
 	return t, nil
 }
+
+// idefics3Grid is the most tiles a side Idefics3Processor names, its
+// <row_R_col_C> tokens' rows and columns.
+const idefics3Grid = 6
 
 // smolvlmVideoTemplate is the chat template SmolVLMProcessor renders a
 // conversation carrying a video by, its published one taking none
@@ -240,13 +274,11 @@ const (
 // SmolVLM2's video_sampling and SmolVLMProcessor.replace_video_token do:
 // max(min(round(N / R), 64), 1) frames at numpy's linspace over the frames,
 // a second in from either end of a video past 66 seconds, truncated and each
-// taken once; each frame read as the picture's square; an introduction
-// counting them in words (num2words) and giving the video's length as
-// H:MM:SS, then each frame's "\nFrame from MM:SS:" and the frame between
-// before and after -- not the picture's own markers, which open with a
-// line -- and "\n\n" after the last. The frames are resized as the picture
-// is (docs/divergences.md).
-func idefics3Video(before, after []int32) *jlm.Video {
+// taken once; each frame read as a picture under steps of its own, pre;
+// an introduction counting them in words (num2words) and giving the
+// video's length as H:MM:SS, then each frame's "\nFrame from MM:SS:" and
+// the frame, its markers the head's, and "\n\n" after the last.
+func idefics3Video(pre []jlm.PreStep) *jlm.Video {
 	var c sizes
 	c.max(c.min(c.fn(jlm.FnRoundEven, c.mul(num(smolvlmVideoFps), c.div(c.op(jlm.VideoN), c.op(jlm.VideoRate)))),
 		num(smolvlmVideoFrames)), num(1))
@@ -269,14 +301,14 @@ func idefics3Video(before, after []int32) *jlm.Video {
 	clock := jlm.ValueFormat{Kind: jlm.FormatClock, Clock: [3]int32{1, 2, 2}, Sep: ":", Days: [2]string{" day, ", " days, "}}
 	stamp := jlm.ValueFormat{Kind: jlm.FormatClock, Clock: [3]int32{0, 2, 2}, Sep: ":"}
 	return &jlm.Video{DefaultFps: smolvlmVideoDefaultFps, Count: c.expr(), Index: ix.expr(), Once: true,
-		MaxFrames: smolvlmVideoFrames, Group: 1, Sized: opExpr(0), Prompt: []jlm.VideoPiece{
+		MaxFrames: smolvlmVideoFrames, Group: 1, Sized: opExpr(0), Pre: pre, Prompt: []jlm.VideoPiece{
 			textPiece("You are provided the following series of "),
 			valuePiece(opExpr(jlm.VideoK), jlm.ValueFormat{Kind: jlm.FormatTable, Strings: words}),
 			textPiece(" frames from a "),
 			valuePiece(opExpr(jlm.VideoSeconds), clock),
 			textPiece(" [H:MM:SS] video.\n"),
 			{Kind: jlm.PieceGroups, Body: []jlm.VideoPiece{textPiece("\nFrame from "), valuePiece(opExpr(jlm.VideoT0), stamp),
-				textPiece(":"), idsPiece(before), spanPiece(), idsPiece(after)}},
+				textPiece(":"), spanPiece()}},
 			textPiece("\n\n"),
 		}}
 }

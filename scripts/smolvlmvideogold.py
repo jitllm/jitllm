@@ -19,11 +19,12 @@ introduction (the count in words, the duration as H:MM:SS), each frame's
 is SEVENTY frames of 40 x 24 at a frame a second, so the sampler skips the
 first and last second and truncates its linspace.
 
-The frames are resized as the engine resizes a picture of the tower (mtmd's
-squash to the square, two taps at half-pixel centres) rather than as the
-video processor does (torchvision's Lanczos to the longer side, then to the
-square: docs/divergences.md); the golden holds everything else to the
-reference, and records that divergence's own size. It carries:
+The frames are resized as the engine resizes them -- torchvision's Lanczos
+straight to the square, the one pass of the picture op at torchvision's
+precision -- rather than as the video processor does (torchvision's Lanczos
+to the longer side, then to the square: docs/divergences.md); the golden
+holds everything else to the reference, and records that divergence's own
+size. It carries:
 
     pre_text, post_text  the text around the video, which the video's own
                          text at either end is tokenized with
@@ -71,21 +72,15 @@ def frames():
     return np.stack(out)
 
 
-def two_tap(img, n):
-    """The engine's squash of an 8-bit picture to n x n: two taps a sample
-    at half-pixel centres, clamped at the edges, in float32 (jlm.FilterTwoTap)."""
-    x = img.astype(np.float32)
-
-    def axis(src):
-        v = np.maximum((np.arange(n, dtype=np.float32) + 0.5) * np.float32(src / n) - 0.5, 0)
-        lo = np.minimum(np.floor(v).astype(int), src - 1)
-        return lo, np.minimum(lo + 1, src - 1), (v - lo).astype(np.float32)
-
-    lo, hi, t = axis(img.shape[1])
-    x = x[:, lo] * (1 - t)[None, :, None] + x[:, hi] * t[None, :, None]
-    lo, hi, t = axis(img.shape[0])
-    x = x[lo] * (1 - t)[:, None, None] + x[hi] * t[:, None, None]
-    return x
+def lanczos(img, n):
+    """The engine's resize of an 8-bit frame to n x n: torchvision's
+    antialiased Lanczos of a uint8 tensor, one pass (jlm.FilterPILLanczos at
+    jlm.PrecTorch)."""
+    import torchvision.transforms.v2.functional as TF
+    from torchvision.transforms import InterpolationMode
+    t = torch.from_numpy(np.ascontiguousarray(img)).permute(2, 0, 1).contiguous()
+    out = TF.resize(t, [n, n], interpolation=InterpolationMode.LANCZOS, antialias=True)
+    return out.permute(1, 2, 0).numpy().astype(np.float32)
 
 
 def q8rows(w):
@@ -223,7 +218,7 @@ def main():
     sampled = [int(i) for i in meta.frames_indices]
     pv_ref = enc["pixel_values"][0]
     # The frames over the engine's pixels.
-    eng = np.stack([(two_tap(vid[i], SIDE) / 255.0 - 0.5) / 0.5 for i in sampled]).astype(np.float32)
+    eng = np.stack([(lanczos(vid[i], SIDE) / 255.0 - 0.5) / 0.5 for i in sampled]).astype(np.float32)
     pv = torch.from_numpy(eng).permute(0, 3, 1, 2).contiguous()
     feats = features(m, pv)
     ref = features(m, pv_ref)

@@ -5431,6 +5431,55 @@ dump and the sum 0.48% off: the tower's int8 activations against llama.cpp's
 f32 and f16 compounding over twelve blocks. The shipping normalisation, the
 violation, reads 0.87 and 136%; a patch-order or shuffle bug reads O(1).
 
+## SmolVLM's picture as Idefics3 cuts it
+
+The container stated SmolVLM's picture as llama.cpp's mtmd encodes it: one
+512 square, squashed by two taps, between "\n\n<fake_token_around_image>
+<global-img>" and "<fake_token_around_image>". That was llama.cpp's
+re-implementation, not the model's processor. transformers'
+Idefics3ImageProcessor -- SmolVLM's own, its torchvision backend the one
+AutoImageProcessor loads -- does this to a picture:
+
+- **The longer side to the config's longest edge** (2048 for SmolVLM-256M
+  and -500M, 1536 for the 2.2B: four of the tower's squares in every
+  published config), the shorter at the aspect, truncated and made even,
+  at least one (`_resize_output_size_rescale_to_max_len`).
+- **Each side up to whole tiles** of max_image_size (the tower's 512): the
+  longer side's, then the shorter from it at that resize's aspect,
+  truncated and rounded up (`resize_for_vision_encoder`).
+- **The tiles row-major, then the global view** -- that picture resized to
+  one tile -- where there is more than one (`split_images`).
+- **Every resize torchvision's Lanczos** on a uint8 tensor (resample 1),
+  since torchvision 0.27 Pillow's filter at torchvision's int16 weight
+  precision (`oracle.TorchResizeBy`, `jlm.PrecTorch`).
+- **The prompt** (Idefics3Processor): each tile
+  `<fake_token_around_image><row_R_col_C>` and its 64 rows, a newline after
+  each row of tiles, then `\n<fake_token_around_image><global-img>`, the
+  global view's 64 rows and `<fake_token_around_image>`. The last row's
+  newline and the global view's are one "\n\n" token in SmolLM2's BPE.
+
+The converter states it as a processor kind (`convert.PreLongTiles`, the
+longest edge read from the publisher's preprocessor_config.json where the
+conversion has one), its geometry (`convert.longTileGeometry`) held to
+transformers' own arithmetic over 32 picture sizes and both configs
+(`convert.TestLongTileGeometryFollowsTheProcessor`,
+scripts/idefics3sizes.py), and the markers as the head's rows
+(`TOpMarkRow`) from a table whose rows are the text table's rows of those
+tokens. A video's frame is one square with the global image's markers,
+which is what SmolVLMProcessor writes for a frame.
+
+What is not the processor's is that each square is one resize of the
+picture: the processor resizes two or three times over, each pass rounding
+to 8 bits, and the picture op runs one. On the photo (640x488,
+scripts/smolvlmreal.py) a tile's pixels part from the processor's by NMSE
+2-4e-5, five 8-bit levels at most, and the global view's -- three resizes
+there -- by 3.2e-4, sixteen levels; transformers' own f32 tower turns those
+into rows 6e-5 to 7.3e-4 apart a tile and 4.5e-3 on the global view, 4.9e-4
+over the picture. `TestSmolVLMRealMatchesTransformers` holds SmolVLM-256M
+to it square by square: the pixels within 1e-4 a tile and 1e-3 the global
+view, the rows within 3e-2 (the int8 activations' share); the tiles reversed
+and a grey picture are its violations.
+
 ## Video as one statement
 
 The video record grew a field per processor -- Joined, PerSecond and

@@ -22,7 +22,7 @@ func GeometryOf(t *jlm.Tower, v *jlm.Vision) (*jlm.PictureGeometry, error) {
 	for _, op := range t.Head.Ops {
 		marks = marks || op.Code == jlm.TOpMarkRow
 	}
-	var fixedW, fixedH, short, minT, maxT int
+	var fixedW, fixedH, short, minT, maxT, longest, doubled, grid int
 	thumb, canvas := false, false
 	for _, s := range t.Pre {
 		in := func(i int) int { return int(s.Ints[i]) }
@@ -37,6 +37,8 @@ func GeometryOf(t *jlm.Tower, v *jlm.Vision) (*jlm.PictureGeometry, error) {
 			minT, maxT, thumb = in(0), in(1), in(2) == 1
 		case PreBestFit:
 			minT, maxT, thumb, canvas = 1, in(0), true, true
+		case PreLongTiles:
+			longest, doubled, grid = in(0), in(1), in(2)
 		case PreSmartResize:
 			return smartGeometry(in(0), in(1), in(2), len(s.Ints) == 6 && in(5) == 1, p), nil
 		case PreNaFlex:
@@ -56,6 +58,12 @@ func GeometryOf(t *jlm.Tower, v *jlm.Vision) (*jlm.PictureGeometry, error) {
 		}
 	}
 	switch {
+	case longest > 0 && fixedW > 0:
+		if (longest+fixedW-1)/fixedW > grid {
+			return nil, fmt.Errorf("convert: a longer side of %d pixels is more tiles of %d than the %d a side the processor names",
+				longest, fixedW, grid)
+		}
+		return longTileGeometry(longest, fixedW, side, doubled, grid, marks), nil
 	case canvas:
 		return canvasGeometry(maxT, fixedW, side, marks), nil
 	case maxT > 0:
@@ -507,6 +515,58 @@ func tileGeometry(minT, maxT int, thumb bool, s, side int) *jlm.PictureGeometry 
 	cols, rows := b.closestGrid(minT, maxT, s)
 	b.tiles(cols, rows, thumb, s, side, func(e *sizes) jlm.Arg { return e.mul(cols, k(float64(s))) },
 		func(e *sizes) jlm.Arg { return e.mul(rows, k(float64(s))) })
+	return b.done(0, s*s, side*side)
+}
+
+// longTileGeometry is Idefics3's cut (SmolVLM's): the picture's longer side
+// resized to longest pixels and its shorter at the aspect, truncated, a
+// whole even number, at least one (_resize_output_size_rescale_to_max_len);
+// then the longer side up to whole s-pixel tiles and the shorter at that
+// resize's aspect, truncated and up to whole tiles
+// (resize_for_vision_encoder); cut row-major, then for more than one tile
+// the whole resized to one tile (split_images); each read as a side x side
+// grid. With marks, the marker runs PreLongTiles states, the double
+// newline doubled rows of the table and the tiles' pairs a grid-square
+// grid's.
+func longTileGeometry(longest, s, side, doubled, grid int, marks bool) *jlm.PictureGeometry {
+	b := newGeom()
+	l, sz := k(float64(longest)), k(float64(s))
+	atLeast := func(e *sizes, a, c jlm.Arg) jlm.Arg { return e.sub(k(1), e.less(a, c)) }
+	even := func(e *sizes, v jlm.Arg) jlm.Arg { return e.max(e.add(v, e.mod(v, k(2))), k(1)) }
+	wide := b.value(func(e *sizes) jlm.Arg { return atLeast(e, pw(), ph()) })
+	w1 := b.value(func(e *sizes) jlm.Arg { return e.where(wide, l, even(e, e.trunc(e.mul(l, e.div(pw(), ph()))))) })
+	h1 := b.value(func(e *sizes) jlm.Arg { return e.where(wide, even(e, e.trunc(e.div(l, e.div(pw(), ph())))), l) })
+	up := func(e *sizes, v jlm.Arg) jlm.Arg { return e.mul(e.ceil(e.div(v, sz)), sz) }
+	wide1 := b.value(func(e *sizes) jlm.Arg { return atLeast(e, w1, h1) })
+	w2 := b.value(func(e *sizes) jlm.Arg {
+		return e.where(wide1, up(e, w1), up(e, e.trunc(e.mul(up(e, h1), e.div(w1, h1)))))
+	})
+	h2 := b.value(func(e *sizes) jlm.Arg {
+		return e.where(wide1, up(e, e.trunc(e.div(up(e, w1), e.div(w1, h1)))), up(e, h1))
+	})
+	cols := b.value(func(e *sizes) jlm.Arg { return e.div(w2, sz) })
+	rows := b.value(func(e *sizes) jlm.Arg { return e.div(h2, sz) })
+	n := b.value(func(e *sizes) jlm.Arg { return e.mul(cols, rows) })
+	b.tiles(cols, rows, true, s, side, func(e *sizes) jlm.Arg { return w2 }, func(e *sizes) jlm.Arg { return h2 })
+	if marks {
+		span := k(float64(grid))
+		fake, pairs := k(float64(2+doubled)), float64(4+doubled)
+		one := func(e *sizes) jlm.Arg { return e.equal(n, k(1)) }
+		tile := func(e *sizes) jlm.Arg { return e.mul(e.less(k(1), n), e.less(pi(), n)) }
+		global := func(e *sizes) jlm.Arg { return e.mul(e.less(k(1), n), e.equal(pi(), n)) }
+		b.field(jlm.SqMark, func(e *sizes) jlm.Arg {
+			place := e.add(e.mul(e.idiv(pi(), cols), span), e.mod(pi(), cols))
+			return e.where(tile(e), e.add(k(pairs), e.mul(k(2), place)), e.where(global(e), k(2), fake))
+		})
+		b.field(jlm.SqMarkN, func(e *sizes) jlm.Arg {
+			return e.where(one(e), k(2), e.where(global(e), k(float64(doubled+2)), k(2)))
+		})
+		rowEnd := func(e *sizes) jlm.Arg {
+			return e.mul(e.equal(e.mod(pi(), cols), e.sub(cols, k(1))), e.less(e.idiv(pi(), cols), e.sub(rows, k(1))))
+		}
+		b.field(jlm.SqTrail, func(e *sizes) jlm.Arg { return e.where(tile(e), rowEnd(e), fake) })
+		b.field(jlm.SqTrailN, func(e *sizes) jlm.Arg { return e.where(tile(e), rowEnd(e), k(1)) })
+	}
 	return b.done(0, s*s, side*side)
 }
 
