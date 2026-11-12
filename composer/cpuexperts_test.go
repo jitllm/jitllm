@@ -41,12 +41,14 @@ func gateComposedCPUExpertPages(
 		table[e] = uint32(s)
 	}
 	ran, unformed, arms := 0, 0, 0
-	// The later shapes are a small mixture's (synth-gptoss: 64 wide, gate
-	// and up 128 rows) on a wide pool, with and without VNNI.
+	// The middle shapes are a small mixture's (synth-gptoss: 64 wide, gate
+	// and up 128 rows) on a wide pool, with and without VNNI; the last a real
+	// one's (OLMoE's gate and up: 1024 rows of 2048, eight superblocks a row)
+	// on a socket's twelve.
 	for _, sh := range []struct {
 		K, rows, slots int
 		vnni           bool
-	}{{256, 32, 6, true}, {64, 128, 14, true}, {64, 128, 14, false}, {64, 64, 14, false}} {
+	}{{256, 32, 6, true}, {64, 128, 14, true}, {64, 128, 14, false}, {64, 64, 14, false}, {2048, 1024, 12, true}} {
 		K, rows := sh.K, sh.rows
 		dev := cpuDevice(cpuOn)
 		dev.Slots = sh.slots
@@ -140,6 +142,9 @@ func gateComposedCPUExpertPages(
 						for i := range sels {
 							sels[i] = uint32(slotExpert[rng.Intn(held)])
 						}
+						// The first pick is past the bank's first sheet: a stride a
+						// word short moves sheet e by e words, sheet 0 not at all.
+						sels[0] = uint32(slotExpert[0])
 						ref := xs
 						if typ != quant.F32 && arm.r.Profiles[DeviceCPU].Int8 != nil {
 							ref = int8Row(xs, 32)
