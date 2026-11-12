@@ -3,6 +3,8 @@ package engine
 import (
 	"fmt"
 	"time"
+
+	"github.com/jitllm/jitllm/nn"
 )
 
 // PlaceBlocks is MoveBlocks from the CPU with the tier choosing the card:
@@ -47,7 +49,16 @@ func (s *Instance) placeOnto(lo, hi int, to string) ([]int, error) {
 	}
 	was := s.placeErr
 	s.offerOn, s.placeErr = to, nil
-	s.offerRange(lo, hi)
+	// The offers are one placement, ended as an attach's is (nn.Placer): the
+	// device forms what a prompt, a step of rows and a picture of each width
+	// read over the blocks it now holds, so no step after the move composes.
+	if pl, ok := s.ld.(nn.Placer); ok {
+		pl.BeginPlacement()
+		s.offerRange(lo, hi)
+		pl.EndPlacement()
+	} else {
+		s.offerRange(lo, hi)
+	}
 	err := s.placeErr
 	s.offerOn, s.placeErr = "", was
 	var placed []int
