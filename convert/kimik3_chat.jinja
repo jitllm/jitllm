@@ -1,0 +1,45 @@
+{%- macro body(c) -%}
+{%- if c is string -%}{{ c }}
+{%- elif c is defined and c is not none -%}
+{%- for p in c -%}
+{%- if p.type == 'image' or p.type == 'image_url' -%}<|kimi_image_placeholder|>
+{%- else -%}{{ p.text }}
+{%- endif -%}
+{%- endfor -%}
+{%- endif -%}
+{%- endmacro -%}
+{%- set think = thinking if thinking is defined else true -%}
+{%- set effort = thinking_effort if thinking_effort is defined else 'max' -%}
+{%- if think and effort is not none and not (effort in ['low', 'high', 'max']) -%}
+{{ raise_exception('Unsupported thinking_effort: ' ~ effort ~ '; supported values are high, low and max.') }}
+{%- endif -%}
+{%- if think and effort in ['low', 'high', 'max'] -%}
+<|open|>message role="system" type="thinking-effort"<|sep|>`thinking_effort` guides on how much to think in your thinking channel (not including the response channel), supported values include `low`, `medium`, `high`, and `max`.
+Now the system is invoked with `thinking_effort={{ effort }}`.<|close|>message<|sep|><|end_of_msg|>
+{%- endif -%}
+{%- for m in messages -%}
+{%- if m.role == 'tool' -%}
+{{ raise_exception('Kimi K3: this transcription of build_chat_segments renders no tool turn.') }}
+{%- elif m.role == 'user' or m.role == 'system' or m.role == 'assistant' -%}
+<|open|>message role="{{ m.role }}"
+{%- if m.name %} name="{{ m.name|string|replace('&', '&amp;')|replace('"', '&quot;') }}"
+{%- endif -%}
+<|sep|>
+{%- if m.role == 'assistant' -%}
+{%- if think -%}
+<|open|>think<|sep|>
+{%- set r = m.reasoning_content if m.reasoning_content else m.reasoning -%}
+{%- if r is defined and r is not none and r|string|trim -%}{{ r }}
+{%- endif -%}
+<|close|>think<|sep|>
+{%- endif -%}
+<|open|>response<|sep|>{{ body(m.content) }}<|close|>response<|sep|>
+{%- else -%}
+{{ body(m.content) }}
+{%- endif -%}
+<|close|>message<|sep|><|end_of_msg|>
+{%- endif -%}
+{%- endfor -%}
+{%- if add_generation_prompt -%}
+<|open|>message role="assistant"<|sep|><|open|>{{ 'think' if think else 'response' }}<|sep|>
+{%- endif -%}

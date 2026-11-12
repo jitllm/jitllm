@@ -349,6 +349,9 @@ func hfSourceOf(dir hfDir, shards []*safetensors.File) (*jlm.Source, error) {
 	if voc.Stop, err = hfStops(dir, voc); err != nil {
 		return nil, err
 	}
+	if len(voc.Templates) == 0 && ha.template != "" {
+		voc.Templates = []jlm.ChatTemplate{{Body: ha.template}}
+	}
 	s.Vocab = voc
 
 	s.Tensors = make([]jlm.Tensor, 0, len(names)+len(hc.extra))
@@ -1047,6 +1050,9 @@ func (c *hfConfig) act() string {
 // against transformers.
 type hfArch struct {
 	arch Arch
+	// template is the class's chat template where its release states none:
+	// one that renders its chat in code ships no Jinja.
+	template string
 	// model holds whole-name, model-level tensors.
 	model map[string]jlm.Role
 	// block holds the suffix after "model.layers.N.".

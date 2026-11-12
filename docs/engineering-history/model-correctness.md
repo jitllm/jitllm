@@ -9271,6 +9271,37 @@ BF16 as it is and halve the pages with it, about 1.67 TB by the same
 arithmetic; whether to build it, or to convert with -q8, is the user's
 decision.
 
+### The chat template, transcribed
+
+The release ships no Jinja template: tokenizer_config.json has no
+chat_template key and the repo no chat_template.jinja, because
+`tokenization_kimi.py`'s `apply_chat_template` renders through Python
+(`encoding_k3.build_chat_segments`: XTML over `<|open|>`, `<|sep|>`,
+`<|close|>` and `<|end_of_msg|>`, thinking on and `thinking_effort` "max"
+by default). The converter found no template, called the model a base model,
+and the container answered completions only.
+
+The class now states a transcription (`convert/kimik3_chat.jinja`, the
+`hfArch.template` a release stating none takes): the thinking-effort system
+turn, system, user and assistant turns -- an assistant's think channel open
+and closed even when empty, its reasoning written where it has any, the
+channel dropped with thinking off -- names escaped as attributes, text
+parts, and the generation prompt opening the think channel (the response
+channel with thinking off). A tool turn raises: tool calls, the tool
+declaration and the response-format turns are not transcribed, and the
+template never names `tools`, so a request carrying tools is refused at the
+render rather than rendered without them.
+
+`scripts/kimik3chatgold.py` runs the release's own `encoding_k3.py` over 16
+conversations (testdata/golden/kimik3_chat.json) and
+`convert.TestKimiK3ChatTemplateMatchesItsRenderer` holds the transcription
+to its text byte for byte, seven of the cases through
+`model.RenderChatTemplate`, the path a chat request takes; a stray space in
+the think channel's close parts from the golden. The renderer encodes a
+turn's text as ordinary text and only the markers as special tokens, where
+the engine encodes the rendered prompt whole: the two agree unless a turn's
+own text spells a marker.
+
 ## Image preprocessing is generated code
 
 Only the resize's integer passes ran on generated code (`nn.ResampleRowJIT`);

@@ -29,6 +29,7 @@ import (
 func kimiK3HF() *hfArch {
 	return &hfArch{
 		arch:        ArchKimiK3,
+		template:    kimiK3ChatTemplate,
 		blockPrefix: k3BlockPrefix,
 		model: map[string]jlm.Role{
 			"language_model.model.embed_tokens.weight": jlm.RoleTokenEmbd,
