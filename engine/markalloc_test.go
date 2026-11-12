@@ -89,7 +89,7 @@ func markerAllocs(t *testing.T, m *model.Model, g *gpu.GPU) {
 	}
 	one()
 	one()
-	if n := testing.AllocsPerRun(2, one); n != 0 {
-		t.Errorf("%v allocations over %d warm questions", n, len(prompts))
+	if w := countAllocs(one); w.engine != 0 {
+		t.Errorf("%d engine allocations over %d warm questions:\n%s", w.engine, len(prompts), w.where)
 	}
 }

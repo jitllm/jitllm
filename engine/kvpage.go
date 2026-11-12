@@ -1280,10 +1280,16 @@ func (s *Instance) PrefillCachedMixed(spans ...model.Span) ([]float32, error) {
 // spanKey is the id per row the pages of a mixed prompt starting at position
 // p0 are named by: a token's own id, and for an image row a reference to the
 // row's name in the cache's table (kvCache.nameRow). It stops at the first
-// embedding span with no key, so it may be shorter than the prompt.
+// embedding span with no key, so it may be shorter than the prompt. The ids
+// are the instance's (spanKeys), good until its next call.
 func (s *Instance) spanKey(p0 int, spans []model.Span) []int32 {
+	s.spanKeys = s.appendSpanKey(s.spanKeys[:0], p0, spans)
+	return s.spanKeys
+}
+
+// appendSpanKey is spanKey appended to key.
+func (s *Instance) appendSpanKey(key []int32, p0 int, spans []model.Span) []int32 {
 	nembd := s.c.NEmbd
-	var key []int32
 	for _, sp := range spans {
 		if !sp.Rows() {
 			key = append(key, sp.Tokens...)
