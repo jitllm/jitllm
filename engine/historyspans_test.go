@@ -30,7 +30,7 @@ func TestHistorySpansRebuildTheHistory(t *testing.T) {
 		return spans
 	}
 	given := func(k model.RowsKey) (model.Span, bool) { return pic, pic.Key != nil && k == *pic.Key }
-	a := testInstance(t, m, 1024)
+	a := testInstance(t, m, 2048)
 	defer a.Close()
 	lg, err := a.PrefillMixed(chat(pic)...)
 	if err != nil {
@@ -59,7 +59,7 @@ func TestHistorySpansRebuildTheHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b := testInstance(t, m, 1024)
+	b := testInstance(t, m, 2048)
 	defer b.Close()
 	if _, err := b.PrefillMixed(hist...); err != nil {
 		t.Fatal(err)
@@ -75,7 +75,7 @@ func TestHistorySpansRebuildTheHistory(t *testing.T) {
 	if _, err := a.HistorySpans(func(model.RowsKey) (model.Span, bool) { return model.Span{}, false }); err == nil {
 		t.Fatal("a lookup that knows no picture gave a history")
 	}
-	c := testInstance(t, m, 1024)
+	c := testInstance(t, m, 2048)
 	defer c.Close()
 	enc, err := c.EncodePicture(img)
 	if err != nil {
@@ -93,7 +93,7 @@ func TestHistorySpansRebuildTheHistory(t *testing.T) {
 			bad[i] = model.Span{Embd: make([]float32, len(enc))}
 		}
 	}
-	d := testInstance(t, m, 1024)
+	d := testInstance(t, m, 2048)
 	defer d.Close()
 	if _, err := d.PrefillMixed(bad...); err != nil {
 		t.Fatal(err)

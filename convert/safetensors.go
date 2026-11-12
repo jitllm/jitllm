@@ -137,6 +137,7 @@ type options struct {
 	head         string             // WithHead, GGUF only
 	modelConfig  string             // WithModelConfig, GGUF only
 	pictureStep  func(*jlm.PreStep) // WithPictureStep, GGUF only
+	longestEdge  int32              // the processor config's size.longest_edge, 0 for none
 }
 
 // WithPictureStep edits each picture step the tower's stater writes, before

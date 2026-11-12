@@ -54,8 +54,10 @@ func TestStatedTowerComposesOnTheCPU(t *testing.T) {
 		t.Fatalf("%d block graphs for a tower of %d", len(tg.Blocks), v.NLayer)
 	case len(tg.Classes) != 1 || tg.Rows != int(v.ImageSize/v.PatchSize)*int(v.ImageSize/v.PatchSize):
 		t.Fatalf("the entry writes %d rows in %d classes for %d patches of %d", tg.Rows, len(tg.Classes), v.ImageSize, v.PatchSize)
-	case tg.Out != tg.Rows/int(v.Scale*v.Scale):
-		t.Fatalf("the head writes %d rows, want %d shuffled by %d", tg.Out, tg.Rows, v.Scale)
+	case tg.Out-tg.Marks != tg.Rows/int(v.Scale*v.Scale):
+		t.Fatalf("the head writes %d rows beside %d marker rows, want %d shuffled by %d", tg.Out-tg.Marks, tg.Marks, tg.Rows, v.Scale)
+	case tg.Marks == 0:
+		t.Fatal("the head writes no marker rows: Idefics3's fake image and tile markers are the tower's rows")
 	}
 	s := testInstance(t, m, 64)
 	defer s.Close()
@@ -205,9 +207,11 @@ func openSmolVLM(t *testing.T) (*model.Model, image.Image) {
 }
 
 // TestStatedTowerEncodesAPicture runs a picture through SmolVLM's stated
-// tower on the CPU device: 64 rows of the language model's width, finite and
-// not one row repeated, the same rows bit for bit when the picture is encoded
-// again, other rows for another picture, and a warm encode allocates nothing.
+// tower on the CPU device: a 384-pixel square cut as Idefics3's processor
+// cuts it, 16 tiles and the global view of 64 rows each with their markers
+// -- 1127 rows of the language model's width -- finite and not one row
+// repeated, the same rows bit for bit when the picture is encoded again,
+// other rows for another picture, and a warm encode allocates nothing.
 func TestStatedTowerEncodesAPicture(t *testing.T) {
 	m, img := openSmolVLM(t)
 	defer m.Close()
@@ -218,8 +222,13 @@ func TestStatedTowerEncodesAPicture(t *testing.T) {
 		t.Fatal(err)
 	}
 	v := m.Container.Vision()
-	if len(rows) != m.Tower.Out*int(v.ProjDim) || m.Tower.Out != 64 {
-		t.Fatalf("%d floats in %d rows, want 64 rows of %d", len(rows), m.Tower.Out, v.ProjDim)
+	b := img.Bounds()
+	n, err := m.Tower.PicRows(b.Dx(), b.Dy())
+	// 16 tiles of a marker pair and 64 rows, a newline after three rows'
+	// last, the global view's three markers, 64 rows and one.
+	const want = 16*(2+64) + 3 + 3 + 64 + 1
+	if err != nil || n != want || len(rows) != n*int(v.ProjDim) {
+		t.Fatalf("%d floats, %d rows (%v), want %d rows of %d", len(rows), n, err, want, v.ProjDim)
 	}
 	d := int(v.ProjDim)
 	same := true
@@ -264,7 +273,7 @@ func TestStatedTowerEncodesAPicture(t *testing.T) {
 	}); n != 0 {
 		t.Fatalf("a warm encode allocates %v times", n)
 	}
-	t.Logf("64 rows of %d, deterministic, %g from a grey picture's, no allocation warm", d, diff)
+	t.Logf("%d rows of %d, deterministic, %g from a grey picture's, no allocation warm", n, d, diff)
 }
 
 // TestStatedTowerSeesThePicture asks SmolVLM to describe a picture through
@@ -390,17 +399,11 @@ func flatSpans(spans []model.Span) []int32 {
 	return out
 }
 
-// TestChatSpansFollowTheTemplate pins the picture's marker sequence, which no
-// numerical gate sees: with every marker wrong the picture still arrives,
-// unannounced. The markers are mtmd's (tools/mtmd/mtmd.cpp at b10825), which
-// the converter states in the container:
-//
-//	tok_ov_img_start = {"\n\n", "<fake_token_around_image>", "<global-img>"}
-//	tok_ov_img_end   = {"<fake_token_around_image>"}
-//
-// and the turn is SmolVLM's own template's, which departs from mtmd by one
-// token on purpose: it writes "User:" before an image-led turn, where mtmd
-// emits "User: ". The placeholder ("<image>") is read off the template.
+// TestChatSpansFollowTheTemplate pins the turn around a picture, which no
+// numerical gate sees: SmolVLM's own template writes "User:" before an
+// image-led turn and the picture where its placeholder ("<image>", read off
+// the template) stands. The picture's markers are its own rows, the head's
+// (TOpMarkRow), so its span is one run between the text's tokens.
 func TestChatSpansFollowTheTemplate(t *testing.T) {
 	m, _ := openSmolVLM(t)
 	defer m.Close()
@@ -410,8 +413,8 @@ func TestChatSpansFollowTheTemplate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	//                <|im_start|> User  :   \n\n  <fake…> <global-img> IMG <fake…>
-	want := []int32{1, 11126, 42, 1116, 49189, 49152, -1, 49189,
+	//                <|im_start|> User  :  IMG
+	want := []int32{1, 11126, 42, -1,
 		// Describe  the  image  .  <end_of_utterance>  \n  Ass  istant  :
 		37964, 260, 2443, 30, 49279, 198, 9519, 9531, 42}
 	if got := flatSpans(spans); !slices.Equal(got, want) {
@@ -655,7 +658,7 @@ func TestStatedTowerRunsOnTheCard(t *testing.T) {
 				noDevice(t, dev, err)
 			}
 			defer g.Close()
-			s := testInstance(t, m, 256)
+			s := testInstance(t, m, 2048)
 			defer s.Close()
 			s.SetDeviceFallback(false)
 			if err := s.SetDevice(g); err != nil {

@@ -474,9 +474,9 @@ func markTable(s *jlm.Source, names []string) error {
 			ids[tok] = i
 		}
 	}
-	var table []float32
-	k := 0
+	rows := make([]int32, len(names))
 	for at, name := range names {
+		rows[at] = -1
 		if name == "" {
 			continue
 		}
@@ -493,13 +493,27 @@ func markTable(s *jlm.Source, names []string) error {
 		if !ok {
 			return fmt.Errorf("convert: the vocabulary has no %q, a picture's marker", name)
 		}
-		row, err := tokenRow(s, id)
+		rows[at] = int32(id)
+	}
+	return markRows(s, rows)
+}
+
+// markRows writes a picture's marker rows (jlm.RoleVTileMarks): the text
+// table's row of each token in order, a zero row for -1.
+func markRows(s *jlm.Source, ids []int32) error {
+	var table []float32
+	k := 0
+	for at, id := range ids {
+		if id < 0 {
+			continue
+		}
+		row, err := tokenRow(s, int(id))
 		if err != nil {
 			return err
 		}
 		if table == nil {
 			k = len(row)
-			table = make([]float32, len(names)*k)
+			table = make([]float32, len(ids)*k)
 		}
 		copy(table[at*k:(at+1)*k], row)
 	}
@@ -507,7 +521,7 @@ func markTable(s *jlm.Source, names []string) error {
 		return fmt.Errorf("convert: a marker table of no markers")
 	}
 	e := jlm.Tensor{Role: jlm.RoleVTileMarks, Block: jlm.DenseBlock, Index: -1, Name: "v.token_embd.tile_marks"}
-	setF32Dims(&e, table, uint64(k), uint64(len(names)))
+	setF32Dims(&e, table, uint64(k), uint64(len(ids)))
 	s.Tensors = append(s.Tensors, e)
 	return nil
 }

@@ -100,7 +100,11 @@ func modelConfigOf(path string) (*hfConfig, error) {
 // (WithModelConfig), where the mmproj names none: LiquidAI's LFM2-VL files
 // carry no image_resize_algo, and the processor resamples as its
 // preprocessor_config says, not as its class defaults. Pillow's 2 is
-// bilinear and 3 bicubic; a config stating neither leaves the file's.
+// bilinear and 3 bicubic; a config stating neither leaves the file's. Its
+// size.longest_edge is the longer side a tiling processor resizes a
+// picture to before it cuts it (Idefics3's), kept for the stater's step
+// (statedTower); its max_image_size.longest_edge, the tile, is the
+// tower's square or the config is refused.
 func (o *options) applyProcessorConfig(v *jlm.Vision) error {
 	if o.modelConfig == "" || v == nil {
 		return nil
@@ -117,11 +121,23 @@ func (o *options) applyProcessorConfig(v *jlm.Vision) error {
 	if err != nil {
 		return fmt.Errorf("convert: %w", err)
 	}
+	type edge struct {
+		LongestEdge int32 `json:"longest_edge"`
+	}
 	var p struct {
-		Resample *int `json:"resample"`
+		Resample *int  `json:"resample"`
+		Size     *edge `json:"size"`
+		MaxImage *edge `json:"max_image_size"`
 	}
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return fmt.Errorf("convert: %s: %w", path, err)
+	}
+	if p.Size != nil && p.Size.LongestEdge > 0 {
+		if p.MaxImage != nil && p.MaxImage.LongestEdge != int32(v.ImageSize) {
+			return fmt.Errorf("convert: %s cuts tiles of %d and the tower reads squares of %d", path,
+				p.MaxImage.LongestEdge, v.ImageSize)
+		}
+		o.longestEdge = p.Size.LongestEdge
 	}
 	if p.Resample == nil {
 		return nil

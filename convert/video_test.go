@@ -350,9 +350,9 @@ func TestGemma4StatesItsVideo(t *testing.T) {
 // SmolVLMProcessor.replace_video_token: a frame a second, at most 64, by
 // linspace a second in from either end of a video past 66 seconds; the
 // introduction's count in num2words' words and duration as timedelta writes
-// it; each frame's "\nFrame from MM:SS:" and the frame between the global
-// image's markers, without the line the picture's open with; "\n\n" after
-// the last.
+// it; each frame's "\nFrame from MM:SS:" and the frame, one square whose
+// markers are the global image's without the line the picture's open with;
+// "\n\n" after the last.
 func TestSmolVLMStatesItsVideo(t *testing.T) {
 	const name = "synth-smolvlm2"
 	src, mm := testmodels.Path(name+".gguf"), testmodels.Path("mmproj-"+name+".gguf")
@@ -420,13 +420,21 @@ func TestSmolVLMStatesItsVideo(t *testing.T) {
 				c.n, c.fps, len(fr), fr, times, items[0].Text, c.count, c.head, c.tail, c.first, c.last, c.intro)
 		}
 	}
-	span := v.Tower.Span
+	// Each frame is one square at the tower's size, its markers the head's
+	// rows of the global image's run without the line the picture's opens
+	// with: <fake_token_around_image><global-img>, then
+	// <fake_token_around_image>.
+	side := int(v.ImageSize)
+	sq, n, err := model.GeometrySquare(vid.Frames, 40, 24, 0)
+	if err != nil || n != 1 || sq.Ow != side || sq.Oh != side || sq.Mark != 3 || sq.MarkN != 2 || sq.Trail != 3 || sq.TrailN != 1 {
+		t.Errorf("a 40x24 frame is %d squares, the first %+v (%v): want one %d square, markers 3 and 4 before it and 3 after",
+			n, sq, err, side)
+	}
 	s, _ := sampleVideo(t, vid, 2, 1)
-	want := fmt.Sprintf("You are provided the following series of two frames from a 0:00:02 [H:MM:SS] video.\n"+
-		"\nFrame from 00:00:%s{0}%s\nFrame from 00:01:%s{1}%s\n\n", ids(span.Before[1:]), ids(span.After), ids(span.Before[1:]),
-		ids(span.After))
-	if got := layoutOf(t, vid, s); len(span.Before) != 3 || got != want {
-		t.Errorf("a video of two frames reads\n%q\nwant\n%q (the picture's markers %v ... %v)", got, want, span.Before, span.After)
+	want := "You are provided the following series of two frames from a 0:00:02 [H:MM:SS] video.\n" +
+		"\nFrame from 00:00:{0}\nFrame from 00:01:{1}\n\n"
+	if got := layoutOf(t, vid, s); got != want {
+		t.Errorf("a video of two frames reads\n%q\nwant\n%q", got, want)
 	}
 	for n, w := range map[int]string{0: "zero", 5: "five", 21: "twenty-one", 64: "sixty-four", 100: "one hundred",
 		105: "one hundred and five", 999: "nine hundred and ninety-nine"} {
@@ -434,15 +442,6 @@ func TestSmolVLMStatesItsVideo(t *testing.T) {
 			t.Errorf("cardinal(%d) = %q, num2words %q", n, got, w)
 		}
 	}
-}
-
-// ids is token ids written as layoutOf writes them.
-func ids(in []int32) string {
-	var b strings.Builder
-	for _, id := range in {
-		fmt.Fprintf(&b, "[%d]", id)
-	}
-	return b.String()
 }
 
 // TestEveryVideoProcessorIsStated holds every projector the converter

@@ -31,7 +31,7 @@ func TestTwoTurnImageChatRestoresPastThePicture(t *testing.T) {
 	}
 	run := func(store KVStore, msgs []model.ChatMessage, pic image.Image, named bool) result {
 		t.Helper()
-		st := testInstance(t, m, 1024)
+		st := testInstance(t, m, 2048)
 		defer st.Close()
 		st.SetKVStore(store)
 		mustKey(t, st, "tower/two-turn")

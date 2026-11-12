@@ -106,6 +106,15 @@ func TestSmolVLMVideoMatchesTransformers(t *testing.T) {
 		t.Fatal("VIOLATION: a sampler that skips no second takes the processor's frames")
 	}
 	enc := func(s string) []int32 { return m.Vocab.EncodeSpecial(s, false) }
+	sq, err := m.Tower.FrameSquare(g.Video.W, g.Video.H)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake, okF := m.Vocab.ID("<fake_token_around_image>")
+	global, okG := m.Vocab.ID("<global-img>")
+	if !okF || !okG || sq.MarkN != 2 || sq.TrailN != 1 {
+		t.Fatalf("a frame's markers are runs of %d and %d (%v, %v), want the processor's two and one", sq.MarkN, sq.TrailN, okF, okG)
+	}
 	// The prompt: the video's text at either end with the prompt's beside it.
 	prompt := func() []model.Span {
 		vp, err := m.VideoParts(frames, g.Video.Fps)
@@ -118,6 +127,9 @@ func TestSmolVLMVideoMatchesTransformers(t *testing.T) {
 		}
 		return append(append([]model.Span{{Tokens: head}}, vp.Spans...), model.Span{Tokens: enc(vp.Tail + g.PostText)})
 	}
+	// A frame's span is its markers' rows about its own, the processor's
+	// <fake_token_around_image><global-img>, its image tokens and
+	// <fake_token_around_image>.
 	ids := func(sp []model.Span) []int32 {
 		var out []int32
 		for _, s := range sp {
@@ -125,9 +137,11 @@ func TestSmolVLMVideoMatchesTransformers(t *testing.T) {
 				out = append(out, s.Tokens...)
 				continue
 			}
-			for range s.N(m.Cfg.NEmbd) {
+			out = append(out, fake, global)
+			for range s.N(m.Cfg.NEmbd) - 3 {
 				out = append(out, g.ImageToken)
 			}
+			out = append(out, fake)
 		}
 		return out
 	}
@@ -136,8 +150,9 @@ func TestSmolVLMVideoMatchesTransformers(t *testing.T) {
 	for i, sp := range full {
 		if sp.Picture != nil {
 			pics = append(pics, i)
-			if sp.PicRows != g.Video.Soft || sp.Bidir {
-				t.Fatalf("frame %d is %d rows, bidirectional %v; the processor's %d, causal", len(pics)-1, sp.PicRows, sp.Bidir, g.Video.Soft)
+			if sp.PicRows != g.Video.Soft+3 || sp.Bidir {
+				t.Fatalf("frame %d is %d rows, bidirectional %v; the processor's %d and three markers, causal", len(pics)-1,
+					sp.PicRows, sp.Bidir, g.Video.Soft)
 			}
 		}
 	}
@@ -147,15 +162,17 @@ func TestSmolVLMVideoMatchesTransformers(t *testing.T) {
 	if got := ids(full); !slices.Equal(got, g.IDs) {
 		t.Fatalf("the prompt\n  got  %v\n  want %v", got, g.IDs)
 	}
-	// The violation: each frame between the picture's own markers, the
-	// stated ids before it rewritten.
-	before := &videoGroups(t, v).Body[3]
-	marks := before.IDs
-	before.IDs = m.Container.Vision().Tower.Span.Before
-	mtmd := ids(prompt())
-	before.IDs = marks
-	if slices.Equal(mtmd, g.IDs) {
-		t.Fatal("VIOLATION: the picture's own markers write the processor's prompt")
+	// The violation: each frame read as the picture's global view, whose
+	// markers open with the newline after the tiles.
+	own := v.Frames
+	v.Frames = nil
+	gsq, err := m.Tower.FrameSquare(g.Video.W, g.Video.H)
+	v.Frames = own
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gsq.MarkN == sq.MarkN && gsq.Mark == sq.Mark {
+		t.Fatal("VIOLATION: a frame read as the picture's global view takes the processor's markers")
 	}
 	alone, err := m.VideoSpans(frames, g.Video.Fps)
 	if err != nil {
@@ -231,9 +248,18 @@ func TestSmolVLMVideoMatchesTransformers(t *testing.T) {
 			s.Close()
 			t.Fatal(err)
 		}
+		// Each frame's rows between its markers, which are the head's table's.
+		d := m.Cfg.NEmbd
+		table := markerTable(t, m, d)
+		lead, tail := table[(sq.Mark-1)*d:(sq.Mark+1)*d], table[(sq.Trail-1)*d:sq.Trail*d]
 		var rows []float32
 		for _, at := range pics {
-			rows = append(rows, encd[at].Embd...)
+			e := encd[at].Embd
+			n := len(e) / d
+			if n != g.Video.Soft+3 || !slices.Equal(e[:2*d], lead) || !slices.Equal(e[(n-1)*d:], tail) {
+				t.Fatalf("frame span %d is %d rows, its markers not the table's rows %d, %d and %d", at, n, sq.Mark, sq.Mark+1, sq.Trail)
+			}
+			rows = append(rows, e[2*d:(n-1)*d]...)
 		}
 		s.Close()
 		if len(rows) != len(g.Video.EmbdA8) {
@@ -259,7 +285,7 @@ func TestSmolVLMVideoMatchesTransformers(t *testing.T) {
 		given := func(src []float32) []model.Span {
 			out := slices.Clone(full)
 			for i, at := range pics {
-				out[at] = model.Span{Embd: src[i*per : (i+1)*per]}
+				out[at] = model.Span{Embd: slices.Concat(lead, src[i*per:(i+1)*per], tail)}
 			}
 			return out
 		}

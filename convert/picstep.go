@@ -129,6 +129,24 @@ const (
 	// it is wide, or fewer frames than Ints[5] sized together, the
 	// processor refuses.
 	PreVideoResize
+	// PreLongTiles cuts the picture into tiles as Idefics3's processor does
+	// (SmolVLM's): its longer side resized to Ints[0] pixels and its
+	// shorter at the aspect, truncated and made even, at least one; then
+	// each side up to whole tiles of the resize step's size, the shorter
+	// from the longer at that size's aspect (resize_for_vision_encoder);
+	// cut row-major, then, for more than one tile, the whole resized to
+	// one tile (split_images). Each square is one resize of the picture by
+	// the resize step, where the processor resizes it two or three times
+	// over (docs/divergences.md). A grid wider than Ints[2] tiles a side
+	// the processor cannot name. A head's marker runs (TOpMarkRow) are a
+	// table of a newline, the global view's run -- a double newline,
+	// Ints[1] rows of it, then <fake_token_around_image> and <global-img>
+	// -- then for each tile of an Ints[2]-square grid, row-major,
+	// <fake_token_around_image> and its <row_R_col_C>: a tile its pair, a
+	// row's last tile but the last row's the newline after it, the global
+	// view its run and <fake_token_around_image> after it, a picture of one
+	// tile its last two and that.
+	PreLongTiles
 )
 
 // liveFilter is where a processor's own resize of each square's own size
@@ -199,7 +217,7 @@ func lowerPicture(steps []jlm.PreStep) ([]jlm.PreStep, error) {
 				return nil, fmt.Errorf("convert: a centre crop after no shorter side's resize")
 			}
 			out[len(out)-1].Ints[0], out[len(out)-1].Ints[1] = s.Ints[0], s.Ints[1]
-		case PreTile, PreBestFit:
+		case PreTile, PreBestFit, PreLongTiles:
 		default:
 			out = append(out, jlm.PreStep{Kind: s.Kind, Ints: slices.Clone(s.Ints), Floats: slices.Clone(s.Floats)})
 		}
