@@ -66,8 +66,8 @@ type towerE2E struct {
 }
 
 // TestStatedTowerMatchesTransformersEndToEnd holds Gemma 4's, Gemma 3n's,
-// Llama 4's, Phi-4's, Pixtral's and LFM2-VL's models to transformers from
-// the pixels:
+// Llama 4's, Phi-4's, Pixtral's, LFM2-VL's and Janus-Pro's models to
+// transformers from the pixels:
 // the reference's prompt around the picture, the picture encoded by the
 // prefill through the stated tower, its rows attending as the container
 // states (jlm.TowerSpan.Bidir, jlm.Config.BidirLayers), then the
@@ -79,7 +79,7 @@ type towerE2E struct {
 // fixture's rows reversed is a violation, and each fixture's layout or mask
 // has its own: Gemma 4's rows causal (held to transformers' causal run) and
 // bidirectional on every layer, Llama 4's global tile first, Pixtral's rows
-// without their breaks.
+// without their breaks, Janus-Pro's causal rows bidirectional.
 func TestStatedTowerMatchesTransformersEndToEnd(t *testing.T) {
 	gemma := func(g *towerE2EGolden) ([]int32, []int32) {
 		return append(slices.Clone(g.Pre), g.BOI), append([]int32{g.EOI}, g.Post...)
@@ -97,6 +97,7 @@ func TestStatedTowerMatchesTransformersEndToEnd(t *testing.T) {
 		{name: "synth-phi4v", dir: "phi4v", script: "phi4visiongold.py", around: asIs, lay: same},
 		{name: "synth-pixtral", dir: "pixtral", script: "pixtralgold.py", around: asIs, lay: pixtralLay, violations: pixtralViolations},
 		{name: "synth-lfm2vl", script: "lfm2visiongold.py --fixture", load: lfm2E2EGolden, around: asIs, lay: lfm2Lay},
+		{name: "synth-janus", dir: "janus", script: "janusgold.py --fixture", around: asIs, lay: same, violations: causalViolations},
 	} {
 		t.Run(c.name, func(t *testing.T) { statedTowerEndToEnd(t, c) })
 	}
@@ -316,6 +317,13 @@ func (x *e2eArm) violation(what string, m *model.Model, sp model.Span) [][]float
 	}
 	x.t.Logf("violation (%s): %.3e, %.0fx the bound", what, bad, bad/x.bound)
 	return got
+}
+
+// causalViolations: a causal picture's rows seeing each other both ways.
+func causalViolations(x *e2eArm) {
+	both := x.picture
+	both.Bidir = true
+	x.violation("the picture's rows bidirectional", x.m, both)
 }
 
 // gemma4MaskViolations: the picture's rows causal, which is transformers'
