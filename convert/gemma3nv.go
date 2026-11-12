@@ -473,9 +473,13 @@ func gemma3nvTower(s *jlm.Source) (*jlm.Tower, error) {
 		jlm.RoleVMNHardEmbd); err != nil {
 		return nil, err
 	}
-	eoi := -1
+	// Gemma3nConfig's eoi_token_id is its first hard token; a GGUF whose
+	// vocabulary stops at the text table's end does not spell it.
+	eoi := gemma3nVocabOffset
 	if s.Vocab != nil {
-		eoi = slices.Index(s.Vocab.Tokens, "<end_of_image>")
+		if i := slices.Index(s.Vocab.Tokens, "<end_of_image>"); i >= 0 {
+			eoi = i
+		}
 	}
 	_, hard := dims(jlm.RoleVMNHardEmbd, jlm.DenseBlock)
 	if eoi < gemma3nVocabOffset || eoi-gemma3nVocabOffset >= hard {
