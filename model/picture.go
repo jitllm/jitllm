@@ -214,7 +214,7 @@ func (ps *PictureSquares) At(i int) (Square, error) {
 	}
 	sq := Square{Ow: f[jlm.SqOw], Oh: f[jlm.SqOh], X0: f[jlm.SqX0], Y0: f[jlm.SqY0], Pw: f[jlm.SqPw], Ph: f[jlm.SqPh],
 		Gw: f[jlm.SqGw], Gh: f[jlm.SqGh], Mark: f[jlm.SqMark], MarkN: f[jlm.SqMarkN], Trail: f[jlm.SqTrail],
-		TrailN: f[jlm.SqTrailN]}
+		TrailN: f[jlm.SqTrailN], Cw: f[jlm.SqCw], Ch: f[jlm.SqCh], Cx: f[jlm.SqCx], Cy: f[jlm.SqCy]}
 	if tg := ps.tg; tg != nil {
 		sq.Class = tg.classOf(sq.Gw*tg.Patch, sq.Gh*tg.Patch)
 	}

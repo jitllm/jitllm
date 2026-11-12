@@ -695,13 +695,13 @@ func towerEntry(t *jlm.Tower, px uint8, grid, extra, side, maxPix int, f graph.F
 				return nil, nil, err
 			}
 		case jlm.PreLongBox:
-			a.PicW, a.PicH, a.PicLive, a.PicBox = int(s.Ints[0]), int(s.Ints[0]), true, true
+			a.PicW, a.PicH, a.PicLive, a.PicCanvas = int(s.Ints[0]), int(s.Ints[0]), true, true
 			a.PicFill = [3]uint8{uint8(s.Ints[2]), uint8(s.Ints[3]), uint8(s.Ints[4])}
 			if err := resizeChain(&a, jlm.Filter(s.Ints[5])); err != nil {
 				return nil, nil, err
 			}
 		case jlm.PreLimitPad:
-			a.PicW, a.PicH, a.PicLive, a.PicPad = side, side, true, int(s.Ints[2])
+			a.PicW, a.PicH, a.PicLive, a.PicCanvas = side, side, true, true
 			if err := resizeChain(&a, jlm.Filter(s.Ints[3])); err != nil {
 				return nil, nil, err
 			}
@@ -714,14 +714,10 @@ func towerEntry(t *jlm.Tower, px uint8, grid, extra, side, maxPix int, f graph.F
 			a.PicBF16 = s.Kind == jlm.PreNormalizeBF16
 		}
 	}
-	if a.PicLive && !a.PicBox && side > 0 {
+	if a.PicLive && side > 0 {
 		// A picture of a size of its own holds its class's area, its sides
 		// any a picture reaches.
-		m := composer.PictureMaxSide
-		if a.PicPad > 0 {
-			m -= m % a.PicPad
-		}
-		a.PicW, a.PicH, a.PicArea = m, m, side*side
+		a.PicW, a.PicH, a.PicArea = composer.PictureMaxSide, composer.PictureMaxSide, side*side
 	}
 	switch {
 	case a.Chain == graph.ChainPIL && a.PicLive:
@@ -823,6 +819,10 @@ type Square struct {
 	// MarkN and TrailN their lengths (TOpMarkRow, composer.RequestMark and
 	// RequestTrail).
 	Mark, Trail, MarkN, TrailN int
+	// Cw x Ch is the canvas the resized picture is laid on and (Cx, Cy) its
+	// corner on it (graph.Attrs.PicCanvas): the resize itself at (0, 0)
+	// where the tower lays it on none.
+	Cw, Ch, Cx, Cy int
 }
 
 // squareOut is the rows the head writes for square sq: its patches over
