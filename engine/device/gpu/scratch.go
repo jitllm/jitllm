@@ -629,10 +629,12 @@ func (g *devTier) rowsReserved() bool {
 
 // reservedBlocks counts the causal blocks placed on the device and reports
 // whether each has its ragged rows in the reserved width: none placed is
-// every one composed. Callers hold g.mu.
+// every one composed. A block of another geometry is asked in its own set's
+// reserved width, where a ragged step runs it (rowsComposed over a range of
+// one set) and where its set formed it: the set in use may have narrowed
+// alone (narrowReserved). Callers hold g.mu.
 func (g *devTier) reservedBlocks() (int, bool) {
-	bb := g.reservedFor(nn.ComposedBlock)
-	if bb == nil {
+	if g.reservedFor(nn.ComposedBlock) == nil {
 		return 0, false
 	}
 	n := 0
@@ -640,12 +642,24 @@ func (g *devTier) reservedBlocks() (int, bool) {
 		if l == nil || !l.ok || l.nonCausal {
 			continue
 		}
-		if !g.composedBlock(li, bb) {
+		if !g.composedInSet(li) {
 			return n, false
 		}
 		n++
 	}
 	return n, true
+}
+
+// composedInSet is composedBlock asked in block li's own set, at that set's
+// reserved width. Callers hold g.mu.
+func (g *devTier) composedInSet(li int) bool {
+	defer g.useGeom(g.enterGeomOf(li))
+	bb := g.reservedFor(nn.ComposedBlock)
+	if bb == nil {
+		g.LastErr = fmt.Sprintf("block %d's set reserves no width: its prompts run at their own widths", li)
+		return false
+	}
+	return g.composedBlock(li, bb)
 }
 
 // prewarmPromptWidths builds, at the end of a placement, the kernels of every
