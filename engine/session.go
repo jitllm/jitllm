@@ -316,7 +316,9 @@ func (s *Instance) moveHistory(li int, dev bool) error {
 }
 
 // ownDeviceOf is the device the instance's own session runs block li on,
-// where the bound session is another one whose view names devices.
+// where the bound session is another one whose view names devices. A tier
+// whose devices carry no name has one route a block, the bound session's
+// own (PrepLayer): there is no name to place by.
 func (s *Instance) ownDeviceOf(li int) (string, bool) {
 	if s.own == nil || s.own == s.Session {
 		return "", false
@@ -328,7 +330,8 @@ func (s *Instance) ownDeviceOf(li int) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	return nd.DeviceOf(li)
+	on, ok := nd.DeviceOf(li)
+	return on, ok && on != ""
 }
 
 // devAtFn and recFns are s's methods a session's cache asks through, made
