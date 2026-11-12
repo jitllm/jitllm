@@ -31,8 +31,10 @@ placement).
 ## The statement
 
     Geometry    bindings, in order: each a value (an expression, jlm.Expr,
-                of the picture's w and h and the bindings before it), or a
-                choice from a table the converter writes
+                of the picture's w and h, the frames a video's resize
+                shares the area among -- 1 for a picture -- and the
+                bindings before it), or a choice from a table the
+                converter writes
     Count       the squares the picture becomes: an expression
     Square      square i's resize size (Ow, Oh), window (X0, Y0, Pw, Ph),
                 patch grid (Gw, Gh), canvas (Cw, Ch) and corner on it, and

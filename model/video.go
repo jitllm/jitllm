@@ -89,11 +89,34 @@ func VideoFrameSize(v *jlm.Video, s VideoSample, w, h int) (int, int, error) {
 	if err != nil {
 		return 0, 0, fmt.Errorf("model: the video's sized count: %w", err)
 	}
-	r := v.Pre[0].Ints
-	if per := int(r[5]); !(len(r) > 6 && r[6] == 1) && int(sized) < per {
-		return 0, 0, fmt.Errorf("model: a video of %d frames samples %d, fewer than the %d a picture of the tower takes", s.N, int(sized), per)
+	ow, oh, err := FrameSize(v.Frames, int(sized), w, h)
+	if err != nil {
+		return 0, 0, fmt.Errorf("model: a video of %d frames sampling %d: %w", s.N, len(s.Frames), err)
 	}
-	return videoSize(int(sized), w, h, r)
+	return ow, oh, nil
+}
+
+// FrameSize is the size geometry g gives frames of w x h pixels sized
+// together in frames (jlm.PicFrames): its one square's resize. Frames the
+// geometry makes no square of, its processor refuses.
+func FrameSize(g *jlm.PictureGeometry, frames, w, h int) (int, int, error) {
+	if g == nil {
+		return 0, 0, fmt.Errorf("model: the video states no geometry of its frames")
+	}
+	e := geometry{g: g}
+	if err := e.bind(w, h, frames); err != nil {
+		return 0, 0, err
+	}
+	n, err := e.count()
+	if err != nil || n != 1 {
+		return 0, 0, fmt.Errorf("model: %dx%d frames sized together in %d are %d squares, which the video's resize refuses (%v)",
+			w, h, frames, n, err)
+	}
+	f, err := e.square(0, 1)
+	if err != nil {
+		return 0, 0, err
+	}
+	return f[jlm.SqOw], f[jlm.SqOh], nil
 }
 
 // VideoPlan is how the tower reads a video (jlm.Video): what it samples, and
@@ -285,63 +308,27 @@ func (tg *TowerGraphs) VideoSquare(ow, oh int) Square {
 	return Square{Class: c, Ow: ow, Oh: oh, Pw: ow, Ph: oh, Gw: ow / tg.Patch, Gh: oh / tg.Patch}
 }
 
-// videoSize is the size jlm.PreVideoResize resizes k sampled frames of
-// w x h to: each frame alone where the step says so (Ints[6]), the count
-// then read as one and no side lifted.
-func videoSize(k, w, h int, r []int32) (int, int, error) {
-	f, minPix, maxPix, t := float64(r[0]), float64(r[1]), float64(r[2]), float64(r[5])
-	alone := len(r) > 6 && r[6] == 1
-	if alone {
-		k, t = 1, 1
-	}
-	fh, fw := float64(h), float64(w)
-	if !alone && (h < int(r[0]) || w < int(r[0])) {
-		s := max(f/fh, f/fw)
-		fh, fw = math.Trunc(fh*s), math.Trunc(fw*s)
-	}
-	if max(fh, fw)/min(fh, fw) > 200 {
-		return 0, 0, fmt.Errorf("model: a video of %dx%d frames is past the aspect of 200 its resize reads", w, h)
-	}
-	hb, wb := math.RoundToEven(fh/f)*f, math.RoundToEven(fw/f)*f
-	tb := math.RoundToEven(float64(k)/t) * t
-	switch {
-	case tb*hb*wb > maxPix:
-		beta := math.Sqrt(float64(k) * fh * fw / maxPix)
-		hb, wb = max(f, math.Floor(fh/beta/f)*f), max(f, math.Floor(fw/beta/f)*f)
-	case tb*hb*wb < minPix:
-		beta := math.Sqrt(minPix / (float64(k) * fh * fw))
-		hb, wb = math.Ceil(fh*beta/f)*f, math.Ceil(fw*beta/f)*f
-	}
-	return int(wb), int(hb), nil
-}
-
 // videoEntry is the video's entry for frames of sample format px: each
 // frame through the resize the video states (graph.OpPicture, the second
 // frame's from the request's frame word), then the entry program over both
 // frames' rows, grid patch rows and extra rows beside them, for frames at
-// most side pixels a side. The taps reach the deepest shrink the video's
-// bounds allow: a frame of the most frames' share of the area.
+// most side pixels a side, sized as the frames' geometry says
+// (jlm.Video.Frames) and tapped as a picture of its own size is.
 func videoEntry(t *jlm.Tower, px0, px1 uint8, grid, extra, side int, f graph.Facts) (*graph.Graph, error) {
 	v := t.Video
 	r := v.Pre[0].Ints
 	a := graph.Attrs{Pixels: px0, PicW: composer.PictureMaxSide, PicH: composer.PictureMaxSide, PicArea: side * side, PicLive: true}
-	if err := resizeChain(&a, jlm.Filter(r[3])); err != nil {
+	if err := resizeChain(&a, jlm.Filter(r[0])); err != nil {
 		return nil, err
 	}
-	a.PicTorch = jlm.Precision(r[4]) == jlm.PrecTorch
+	a.PicTorch = jlm.Precision(r[1]) == jlm.PrecTorch
 	n := v.Pre[1]
 	for c := range 3 {
 		a.Mean[c], a.Std[c] = float64(n.Floats[c]), float64(n.Floats[3+c])
 	}
 	a.PicBF16 = n.Kind == jlm.PreNormalizeBF16
 	if a.Chain == graph.ChainPIL {
-		// A frame sized alone is a picture of its own size (its area's
-		// bound its own); else the most frames share the area.
-		root := int(math.Sqrt(float64(r[2]) / float64(v.MaxFrames)))
-		if len(r) > 6 && r[6] == 1 {
-			root = int(math.Sqrt(float64(r[2])))
-		}
-		a.Taps = composer.LiveTaps(a.Filter, root)
+		a.Taps = composer.LiveTaps(a.Filter, int(math.Sqrt(float64(v.Frames.Bounds.MaxPix))))
 		// Its frames run in bands (towerClass.Band); the entry finishes
 		// their sums.
 		a.PicPass = graph.PicFinish

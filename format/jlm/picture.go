@@ -20,13 +20,15 @@ type PictureGeometry struct {
 }
 
 // The operands a picture's expressions read: its width and height, the
-// square's number and the squares' count (Square's expressions), then the
+// square's number and the squares' count (Square's expressions), the frames
+// a video's resize shares the area among (1 for a picture), then the
 // bindings in order from PicBound.
 const (
 	PicW = iota
 	PicH
 	PicSquare
 	PicCount
+	PicFrames
 	PicBound
 )
 

@@ -18,9 +18,10 @@ func testVideo() *Video {
 	return &Video{
 		DefaultFps: 24, Count: Expr{Terms: c.T}, Index: in(VideoAt), MaxFrames: 768, Group: 2, Sized: in(0),
 		Pre: []PreStep{
-			{Kind: PreVideoResize, Ints: []int32{32, 4096, 25165824, int32(FilterPILBicubic), int32(PrecTorch), 2}},
+			{Kind: PreResizeLive, Ints: []int32{int32(FilterPILBicubic), int32(PrecTorch)}},
 			{Kind: PreNormalize, Floats: []float32{0.5, 0.5, 0.5, 0.5, 0.5, 0.5}},
 		},
+		Frames: testGeometry(),
 		Entry: Program{NIn: 2, Out: 7, Ops: []TowerOp{
 			{Code: TOpPatchify, In: []uint16{0}, Span: 16, Width: 2},
 			{Code: TOpPatchify, In: []uint16{1}, Span: 16, Width: 2},
@@ -38,12 +39,12 @@ func testVideo() *Video {
 	}
 }
 
-// testGridVideo reads every frame, each sized alone, the pairs one grid
+// testGridVideo reads every frame, bilinear, the pairs one grid
 // two positions a second apart.
 func testGridVideo() *Video {
 	v := testVideo()
 	v.Count, v.Index, v.MaxFrames = in(VideoN), in(VideoAt), 0
-	v.Pre[0].Ints = []int32{28, 100352, 602112, int32(FilterPILBicubic), int32(PrecTorch), 2, 1}
+	v.Pre[0].Ints = []int32{int32(FilterPILBilinear), int32(PrecTorch)}
 	var s ExprBuilder
 	s.Fn(FnMul, Num(2), s.Fn(FnTrunc, s.Fn(FnDiv, Num(2), Operand(VideoRate))))
 	v.Stride = &Expr{Terms: s.T}
@@ -83,6 +84,8 @@ func TestVideoRoundTrips(t *testing.T) {
 	for _, audio := range []bool{false, true} {
 		v := &Vision{NLayer: 12, NEmbd: 768, NHead: 12, NFFN: 3072, ImageSize: 512, PatchSize: 16,
 			ProjDim: 576, Scale: 4, Eps: 1e-6, Projector: ProjIdefics3, Tower: sampleTower(t)}
+		// The frames' geometry is written after the picture's.
+		v.Tower.Geometry = testGeometry()
 		if audio {
 			v.Audio = &Audio{NLayer: 1, NEmbd: 8, NHead: 2, NFFN: 16, ProjDim: 8, MaxSamples: 480000, Tower: sampleTower(t)}
 		}
@@ -153,11 +156,12 @@ func TestVideoRefusesWhatItCannotRead(t *testing.T) {
 		"a count of a stored vector": func(v *Video) { v.Count.Terms[0].Args[0] = Arg{Kind: ArgStored, Role: RoleVPosEmbd} },
 		"a count reduced":            func(v *Video) { v.Count.Terms[0].Reduce = true },
 		"no resize":                  func(v *Video) { v.Pre = v.Pre[1:] },
-		"unknown filter":             func(v *Video) { v.Pre[0].Ints[3] = 99 },
+		"unknown filter":             func(v *Video) { v.Pre[0].Ints[0] = 99 },
 		"one frame read":             func(v *Video) { v.Entry.NIn = 1 },
 		"no patches":                 func(v *Video) { v.Entry.Ops[0].Code = TOpAdd },
 		"unread value":               func(v *Video) { v.Entry.Ops[2].In = []uint16{3, 9} },
-		"sized together, unbounded":  func(v *Video) { v.MaxFrames = 0 },
+		"frames of no geometry":      func(v *Video) { v.Frames = nil },
+		"frames below a unit":        func(v *Video) { v.Frames.Bounds.Unit = -1 },
 		"digits":                     func(v *Video) { v.Prompt[1].Body[1].Format.Digits = 12 },
 		"an unknown format":          func(v *Video) { v.Prompt[1].Body[1].Format.Kind = 9 },
 		"an unknown piece":           func(v *Video) { v.Prompt[0].Kind = 9 },

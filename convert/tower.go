@@ -33,7 +33,7 @@ func statedTower(s *jlm.Source, o options) (*jlm.Tower, error) {
 			}
 		}
 		edit(t.Pre)
-		if t.Video != nil && t.Video.AsPictures() {
+		if t.Video != nil {
 			edit(t.Video.Pre)
 		}
 	}
@@ -44,13 +44,21 @@ func statedTower(s *jlm.Source, o options) (*jlm.Tower, error) {
 	if t.Geometry, err = GeometryOf(t, s.Vision); err != nil {
 		return nil, err
 	}
-	if v := t.Video; v != nil && v.AsPictures() && len(v.Pre) > 0 {
+	switch v := t.Video; {
+	case v != nil && v.AsPictures() && len(v.Pre) > 0:
 		frames := *t
 		frames.Pre = v.Pre
 		if v.Frames, err = GeometryOf(&frames, s.Vision); err != nil {
 			return nil, fmt.Errorf("convert: the video's frames: %w", err)
 		}
 		v.Pre = nil
+	case v != nil && !v.AsPictures():
+		if v.Frames, err = FramesOf(v); err != nil {
+			return nil, err
+		}
+		if v.Pre, err = lowerPicture(v.Pre); err != nil {
+			return nil, err
+		}
 	}
 	if t.Pre, err = lowerPicture(t.Pre); err != nil {
 		return nil, err
@@ -872,7 +880,7 @@ func qwen2vlVideo(s *jlm.Source, kind qwenVLKind, patch, merge int32, embd []jlm
 	vid := &jlm.Video{
 		DefaultFps: qwen2vlVideoDefaultFps, Count: count, Index: index, Group: 2, Sized: opExpr(0), Stride: &stride,
 		Pre: []jlm.PreStep{
-			{Kind: jlm.PreVideoResize, Ints: []int32{patch * merge, qwen2vlVideoMinPixels, qwen2vlVideoMaxPixels,
+			{Kind: PreVideoResize, Ints: []int32{patch * merge, qwen2vlVideoMinPixels, qwen2vlVideoMaxPixels,
 				int32(jlm.FilterPILBicubic), int32(jlm.PrecTorch), 2, 1}},
 			{Kind: jlm.PreNormalize, Floats: []float32{v.Mean[0], v.Mean[1], v.Mean[2], v.Std[0], v.Std[1], v.Std[2]}},
 		},
@@ -895,9 +903,6 @@ func qwen2vlVideo(s *jlm.Source, kind qwenVLKind, patch, merge int32, embd []jlm
 		return nil, err
 	}
 	vid.Prompt = []jlm.VideoPiece{idsPiece(start), {Kind: jlm.PieceGroups, Body: []jlm.VideoPiece{spanPiece()}}, idsPiece(end)}
-	if err := vid.Valid(); err != nil {
-		return nil, fmt.Errorf("convert: qwen2vl: %w", err)
-	}
 	return vid, nil
 }
 
@@ -940,7 +945,7 @@ func qwen3vlVideo(s *jlm.Source, span *jlm.TowerSpan, patch, merge int32, embd [
 		DefaultFps: qwen3vlVideoDefaultFps, Count: c.expr(), Index: ix.expr(), MaxFrames: qwen3vlVideoMaxFrames,
 		Group: 2, Sized: opExpr(0),
 		Pre: []jlm.PreStep{
-			{Kind: jlm.PreVideoResize, Ints: []int32{patch * merge, qwen3vlVideoMinPixels, qwen3vlVideoMaxPixels,
+			{Kind: PreVideoResize, Ints: []int32{patch * merge, qwen3vlVideoMinPixels, qwen3vlVideoMaxPixels,
 				int32(jlm.FilterPILBicubic), int32(jlm.PrecTorch), 2}},
 			{Kind: jlm.PreNormalize, Floats: []float32{v.Mean[0], v.Mean[1], v.Mean[2], v.Std[0], v.Std[1], v.Std[2]}},
 		},
@@ -967,9 +972,6 @@ func qwen3vlVideo(s *jlm.Source, span *jlm.TowerSpan, patch, merge int32, embd [
 	body := append([]jlm.VideoPiece{textPiece("<"), valuePiece(mean.expr(), jlm.ValueFormat{Kind: jlm.FormatDecimal, Digits: 1}),
 		textPiece(" seconds>")}, pictureSpan(span)...)
 	vid.Prompt = []jlm.VideoPiece{idsPiece(start), {Kind: jlm.PieceGroups, Body: body}, idsPiece(end)}
-	if err := vid.Valid(); err != nil {
-		return nil, fmt.Errorf("convert: qwen3vl: %w", err)
-	}
 	return vid, nil
 }
 
@@ -1138,7 +1140,7 @@ func glm4vVideo(s *jlm.Source, pic *jlm.Tower, patch, merge int32, embd []jlm.Ro
 		// The repeated frame is sized with the rest.
 		Group: 2, Sized: opExpr(1),
 		Pre: []jlm.PreStep{
-			{Kind: jlm.PreVideoResize, Ints: []int32{patch * merge, glm4vVideoMinPixels, glm4vVideoMaxPixels,
+			{Kind: PreVideoResize, Ints: []int32{patch * merge, glm4vVideoMinPixels, glm4vVideoMaxPixels,
 				int32(jlm.FilterPILBicubic), int32(jlm.PrecTorch), 2}},
 			{Kind: jlm.PreNormalize, Floats: []float32{v.Mean[0], v.Mean[1], v.Mean[2], v.Std[0], v.Std[1], v.Std[2]}},
 		},
@@ -1169,9 +1171,6 @@ func glm4vVideo(s *jlm.Source, pic *jlm.Tower, patch, merge int32, embd []jlm.Ro
 	// Each pair as a picture, then its first frame's whole seconds.
 	body := append(pictureSpan(&pic.Span), valuePiece(opExpr(jlm.VideoT0), jlm.ValueFormat{Kind: jlm.FormatDecimal, Trunc: true}))
 	vid.Prompt = []jlm.VideoPiece{idsPiece(start), {Kind: jlm.PieceGroups, Body: body}, idsPiece(end)}
-	if err := vid.Valid(); err != nil {
-		return nil, fmt.Errorf("convert: glm4v: %w", err)
-	}
 	return vid, nil
 }
 

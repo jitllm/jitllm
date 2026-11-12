@@ -47,7 +47,7 @@ func imagePathCallees() map[string]string {
 		"tower.go:towerBlock":      "a tower's block stated as a graph, once a block at open: its constants are the graph's",
 		"front.go:blockGraph":      "a block's graph stated from the config, once a block at open: its constants are the graph's",
 		"markprompt.go:promptStep": "a prompt template's integer division, a number the prompt prints: no pixel's arithmetic",
-		"video.go:videoEntry":      "a video's entry graph, its normalisation constants from the container and its side from the frame budget",
+		"video.go:videoEntry":      "a video's entry graph, its normalisation constants from the container and its taps from the frames' bounds",
 	}
 }
 

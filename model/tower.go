@@ -530,7 +530,7 @@ func (m *Model) BuildTowerGraphs() (*TowerGraphs, error) {
 			return nil, fmt.Errorf("model: a video read by a tower whose pictures are not each of a size of its own")
 		}
 		tg.Video = t.Video
-		if f := t.Video.Frames; f != nil && (f.Bounds.MaxPix > bounds.MaxPix || f.Bounds.MaxPatches > bounds.MaxPatches) {
+		if f := t.Video.Frames; f != nil && t.Video.AsPictures() && (f.Bounds.MaxPix > bounds.MaxPix || f.Bounds.MaxPatches > bounds.MaxPatches) {
 			// The frames go through the picture's classes: their resize
 			// reaches no more than the picture's does.
 			return nil, fmt.Errorf("model: the container's video frames reach %d pixels, past its pictures' %d",

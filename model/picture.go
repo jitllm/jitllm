@@ -17,10 +17,11 @@ type geometry struct {
 	vals []float64
 }
 
-// bind evaluates the statement's bindings for a picture of w x h pixels:
+// bind evaluates the statement's bindings for a picture of w x h pixels,
+// or frames of it sized together in frames:
 // the operands its count and squares read.
-func (e *geometry) bind(w, h int) error {
-	e.in = append(e.in[:0], float64(w), float64(h), 0, 0)
+func (e *geometry) bind(w, h, frames int) error {
+	e.in = append(e.in[:0], float64(w), float64(h), 0, 0, float64(frames))
 	for k := range e.g.Bind {
 		b := &e.g.Bind[k]
 		if b.Choice == nil {
@@ -191,7 +192,7 @@ func (ps *PictureSquares) of(tg *TowerGraphs, g *jlm.PictureGeometry, w, h int) 
 	if g == nil {
 		return 0, fmt.Errorf("model: the tower states no picture geometry")
 	}
-	if err := ps.e.bind(w, h); err != nil {
+	if err := ps.e.bind(w, h, 1); err != nil {
 		return 0, err
 	}
 	n, err := ps.e.count()

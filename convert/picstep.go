@@ -113,6 +113,22 @@ const (
 	// slice row's first after the first taking the last two (a newline and
 	// <slice>) before it.
 	PreSliceUHD
+	// PreVideoResize resamples a video's frames to one size of the video's
+	// own, each side a multiple of Ints[0] pixels: a frame a side shorter
+	// than Ints[0] scaled up first so that side is Ints[0], each side
+	// truncated; each side rounded half to even to a multiple; then, where
+	// the frame count rounded half to even to a multiple of Ints[5] times
+	// that area passes Ints[2], both sides scaled down by
+	// sqrt(count * area / Ints[2]) of the unrounded sides and floored to a
+	// multiple, at least one, or where it falls short of Ints[1], scaled up
+	// by sqrt(Ints[1] / (count * area)) and ceiled to one (Qwen3-VL's video
+	// smart_resize); with filter Ints[3] in arithmetic Ints[4]. Ints[6],
+	// where stated, is 1 for each frame sized alone: no side lifted and the
+	// count not read, the area held to [Ints[1], Ints[2]] (Qwen2-VL's video
+	// smart_resize, the picture's). A frame more than 200 times as long as
+	// it is wide, or fewer frames than Ints[5] sized together, the
+	// processor refuses.
+	PreVideoResize
 )
 
 // liveFilter is where a processor's own resize of each square's own size
@@ -124,7 +140,7 @@ func liveFilter(k jlm.PreKind) (filter, prec int, ok bool) {
 		return 3, -1, true
 	case PreLimitPad:
 		return 3, -1, true
-	case PreSliceUHD:
+	case PreSliceUHD, PreVideoResize:
 		return 3, 4, true
 	case PreTileSmart:
 		return 7, 8, true

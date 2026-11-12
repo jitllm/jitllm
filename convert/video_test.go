@@ -30,7 +30,8 @@ func TestQwen3VLStatesItsVideo(t *testing.T) {
 		}
 	}
 	dst := filepath.Join(t.TempDir(), "qwen3vl.jlm")
-	if _, err := FromGGUFs(src, mm, dst, jlm.Fingerprint{Writer: "gate"}); err != nil {
+	var stated []jlm.PreStep
+	if _, err := FromGGUFs(src, mm, dst, jlm.Fingerprint{Writer: "gate"}, statedSteps(&stated)); err != nil {
 		t.Fatal(err)
 	}
 	f, err := jlm.Open(dst)
@@ -46,7 +47,7 @@ func TestQwen3VLStatesItsVideo(t *testing.T) {
 	if err := vid.Valid(); err != nil {
 		t.Fatal(err)
 	}
-	if got := vid.Pre[0].Ints; got[1] != 4096 || got[2] != 25165824 || jlm.Precision(got[4]) != jlm.PrecTorch {
+	if got := videoResize(t, stated, vid); got[1] != 4096 || got[2] != 25165824 || jlm.Precision(got[4]) != jlm.PrecTorch {
 		t.Fatalf("the video resizes with %v", got)
 	}
 	// Qwen3VLVideoProcessor's and Qwen3VLProcessor's own, on the bounds
@@ -142,7 +143,8 @@ func TestQwen2VLStatesItsVideo(t *testing.T) {
 				}
 			}
 			dst := filepath.Join(t.TempDir(), c.name+".jlm")
-			if _, err := FromGGUFs(src, mm, dst, jlm.Fingerprint{Writer: "gate"}); err != nil {
+			var stated []jlm.PreStep
+			if _, err := FromGGUFs(src, mm, dst, jlm.Fingerprint{Writer: "gate"}, statedSteps(&stated)); err != nil {
 				t.Fatal(err)
 			}
 			f, err := jlm.Open(dst)
@@ -155,7 +157,7 @@ func TestQwen2VLStatesItsVideo(t *testing.T) {
 				t.Fatal("the container states no video")
 			}
 			vid := v.Tower.Video
-			if got := vid.Pre[0].Ints; len(got) != 7 || got[1] != 100352 || got[2] != 602112 || got[6] != 1 ||
+			if got := videoResize(t, stated, vid); len(got) != 7 || got[1] != 100352 || got[2] != 602112 || got[6] != 1 ||
 				jlm.Precision(got[4]) != jlm.PrecTorch {
 				t.Fatalf("the video resizes with %v", got)
 			}
@@ -197,7 +199,8 @@ func TestGLM4VStatesItsVideo(t *testing.T) {
 				}
 			}
 			dst := filepath.Join(t.TempDir(), name+".jlm")
-			if _, err := FromGGUFs(src, mm, dst, jlm.Fingerprint{Writer: "gate"}); err != nil {
+			var stated []jlm.PreStep
+			if _, err := FromGGUFs(src, mm, dst, jlm.Fingerprint{Writer: "gate"}, statedSteps(&stated)); err != nil {
 				t.Fatal(err)
 			}
 			f, err := jlm.Open(dst)
@@ -210,7 +213,7 @@ func TestGLM4VStatesItsVideo(t *testing.T) {
 				t.Fatal("the container states no video")
 			}
 			vid := v.Tower.Video
-			if got := vid.Pre[0].Ints; len(got) != 6 || got[1] != 12544 || got[2] != 47040000 || got[5] != 2 {
+			if got := videoResize(t, stated, vid); len(got) != 6 || got[1] != 12544 || got[2] != 47040000 || got[5] != 2 {
 				t.Fatalf("the video resizes with %v", got)
 			}
 			// Glm4vVideoProcessor.sample_frames, the times Glm4vProcessor
@@ -595,4 +598,24 @@ func wholeSeconds(items []model.VideoItem) []string {
 		}
 	}
 	return out
+}
+
+// videoResize is the video's own resize among the stater's steps, the
+// container's held to the generic resize in its filter and arithmetic and a
+// normalisation, the frames' geometry stated beside them.
+func videoResize(t *testing.T, stated []jlm.PreStep, vid *jlm.Video) []int32 {
+	t.Helper()
+	if vid.Frames == nil || len(vid.Pre) != 2 || vid.Pre[0].Kind != jlm.PreResizeLive {
+		t.Fatalf("the container's video steps are %+v, its frames' geometry stated %v", vid.Pre, vid.Frames != nil)
+	}
+	for _, s := range stated {
+		if s.Kind == PreVideoResize {
+			if s.Ints[3] != vid.Pre[0].Ints[0] || s.Ints[4] != vid.Pre[0].Ints[1] {
+				t.Fatalf("the processor resizes with %v, the container with %v", s.Ints, vid.Pre[0].Ints)
+			}
+			return s.Ints
+		}
+	}
+	t.Fatalf("the processor's steps %+v resize no video", stated)
+	return nil
 }
