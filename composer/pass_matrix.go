@@ -599,9 +599,15 @@ func (p Matrix) form(k *Kernel, d Device, f bilinear, made map[string]Buf) []*Ke
 		m.Resident = p.Resident
 	}
 
+	// The last live row is the kernel's own: a step's rows where its rows are
+	// the step's, else the call's share of R (Kernel.Capacity) -- a quarter of
+	// them under a fold of four rows.
 	last := m.u32(R - 1)
-	if k.Capacity > 0 {
+	switch {
+	case k.Capacity == R:
 		last = m.bin(OpSub, U, m.liveRows(k.Capacity), m.u32(1))
+	case k.Capacity > 0:
+		last = m.bin(OpSub, U, m.liveElements([]int{R}, k.Capacity), m.u32(1))
 	}
 	lastOut := m.u32(N - 1)
 	r0 := m.bin(OpMul, U, m.add(Node{Op: OpCoord, A: 0, Type: U}), m.u32(TR))
