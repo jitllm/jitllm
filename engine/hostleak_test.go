@@ -15,19 +15,6 @@ import (
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
-// cycleInstance is NewInstance failing t: an instance an open/close cycle
-// makes, which nothing past its Close may hold. testInstance's cleanup holds
-// every instance it makes until the test ends, and the model under it, so a
-// cycle made through it reads as the model's bytes never coming back.
-func cycleInstance(t *testing.T, m *model.Model, maxSeq int, opts ...Option) *Instance {
-	t.Helper()
-	s, err := NewInstance(m, maxSeq, opts...)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return s
-}
-
 func rssKB(t *testing.T) int {
 	t.Helper()
 	b, err := os.ReadFile("/proc/self/status")
