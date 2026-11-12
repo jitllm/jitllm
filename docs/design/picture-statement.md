@@ -1,16 +1,17 @@
 # A picture's preprocessing, stated
 
-Each picture step kind (`jlm.PreKind`) past the generic ones is one
-processor's resize: `PreSmartResize` is Qwen2-VL's smart_resize, `PreNaFlex`
-SigLIP2's, `PreAspectBudget` Gemma 4's, `PreCapUnit` Pixtral's, `PreLongBox`
-Janus's, `PreLimitPad` Kimi-VL's, `PreTile` InternVL's grid, `PreBestFit`
-Llama 4's canvas, `PreTileSmart` LFM2-VL's, `PreSliceUHD` MiniCPM-V's. Each
-has a branch in `model.PictureFit`, `TowerGraphs.Square`, `Tiles`,
-`Window` and `classSides`. A step kind with one family behind it is that
-family's code (AGENTS.md, "the architecture is the converter's alone"), as
-the video record's flags were (docs/design/video-statement.md). This is the
-statement that replaces them: the converter writes each processor's
-geometry, the engine evaluates it.
+A processor's resize is one family's: Qwen2-VL's smart_resize, SigLIP2's
+NaFlex, Gemma 4's aspect budget, Pixtral's cap, Janus's letterbox, Kimi-VL's
+pad, InternVL's grid, Llama 4's canvas, LFM2-VL's tiles, MiniCPM-V's slices.
+They were container step kinds once, each with a branch in the model's
+picture fit, its squares, tiles, windows and classes: a step kind with one
+family behind it is that family's code (AGENTS.md, "the architecture is the
+converter's alone"), as the video record's flags were
+(docs/design/video-statement.md). This is the statement that replaced them:
+the processors' steps are the converter's (`convert.PreSmartResize` and the
+rest, `convert/picstep.go`), the converter states each processor's geometry
+from them and lowers them to generic steps, and the engine evaluates the
+geometry.
 
 ## What is already generic
 
@@ -40,8 +41,10 @@ placement).
     Bounds      the largest area and patch count a square reaches, and the
                 unit its sides are whole multiples of: what the classes
                 formed at placement hold
-    Steps       resize (filter, arithmetic), place (fill colour),
-                normalise -- the pixels' generic steps
+    Steps       a resize to a fixed window (jlm.PreResize) or to each
+                square's own size (jlm.PreResizeLive), a canvas
+                (jlm.PreCanvas, its fill colour and, where it is fixed,
+                its size), the normalisation -- the pixels' generic steps
 
 A choice scans the table's rows in order: the first eligible row, then any
 row of a lexicographically smaller cost, or of an equal cost where its tie
@@ -68,8 +71,13 @@ nothing (the instance's tower run holds one). A square's class is the
 smallest that holds its grid. The classes are formed from `Bounds`: a Unit
 of 0 says every square is the entry's own size, one class; otherwise class
 sides double from 16 units to the area the resize reaches. A video whose
-frames are read as pictures under steps of their own states their geometry
-beside the picture's (`jlm.Video.Frames`).
+frames are read as pictures takes the picture's steps; where its processor
+resizes them its own way, the converter states their geometry beside the
+picture's (`jlm.Video.Frames`).
+
+A gate that restates a processor's bound converts the fixture again with
+the step edited (`convert.WithPictureStep`) and takes the geometry the
+converter states from it.
 
 The picture op reads the canvas and the picture's corner on it from the
 request (`composer.RequestPicCW` to `RequestPicCY`), as it reads the resize
@@ -91,8 +99,9 @@ lays a live picture on a canvas, a pad and a letterbox alike.
    tower's squares over the same sweep to the sums the fits gave
    (`engine/testdata/picturegeom.sums`, recorded while step 2's gate held
    the two equal). The picture op then takes the canvas from the call.
-4. The family kinds go from `format/jlm`; the record's revision moves and
-   an older container is reconverted.
+4. The family kinds go from `format/jlm` into the converter, which lowers
+   them (`lowerPicture`); the tower record's revision moves to 11 and an
+   older container is reconverted.
 
 Each step keeps every tower's transformers gates, its card and seam gates,
 `TestATallPictureRunsInBands` and the warm allocation gate green.

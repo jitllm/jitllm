@@ -140,7 +140,7 @@ func buildGGUF(f, vf *meta.File, src, mmproj string, o options) (*jlm.Source, er
 		if err := o.applyProcessorConfig(s.Vision); err != nil {
 			return nil, err
 		}
-		if s.Vision.Tower, err = statedTower(s); err != nil {
+		if s.Vision.Tower, err = statedTower(s, o); err != nil {
 			return nil, err
 		}
 	}

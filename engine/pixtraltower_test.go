@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/jitllm/jitllm/convert"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/model"
@@ -67,7 +68,7 @@ func TestPixtralTowerMatchesTransformers(t *testing.T) {
 	s := testInstance(t, m, 64, WithKVF16(false))
 	defer s.Close()
 	stated := tg.Geometry
-	restateStep(t, m, jlm.PreCapUnit, func(s *jlm.PreStep) { s.Ints[0] = int32(g.Prep.Longest) })
+	restateStep(t, m, "synth-pixtral", convert.PreCapUnit, func(s *jlm.PreStep) { s.Ints[0] = int32(g.Prep.Longest) })
 	px, sq := towerPixels(t, s, rgbPicture(g.Prep.RGB, g.Prep.W, g.Prep.H))
 	tg.Geometry = stated
 	if sq.Gw*tg.Patch != g.Prep.OutW || sq.Gh*tg.Patch != g.Prep.OutH {

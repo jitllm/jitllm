@@ -29,7 +29,7 @@ import (
 type TowerGraphs struct {
 	// classes is every size the entry is formed for, smallest first: a
 	// fixed tower's one, or squares of growing sides for a picture resized
-	// to a size of its own (jlm.PreSmartResize).
+	// to a size of its own (jlm.PreResizeLive).
 	Classes []towerClass
 	Blocks  []*graph.Graph
 	Head    *graph.Graph
@@ -657,56 +657,18 @@ func towerEntry(t *jlm.Tower, px uint8, grid, extra, side, maxPix int, f graph.F
 				return nil, nil, err
 			}
 			a.PicTorch = jlm.Precision(s.Ints[3]) == jlm.PrecTorch
-		case jlm.PreResizeShort:
-			a.PicW, a.PicH = int(s.Ints[0]), int(s.Ints[0])
-			if err := resizeChain(&a, jlm.Filter(s.Ints[1])); err != nil {
-				return nil, nil, err
-			}
-		case jlm.PreSmartResize:
+		case jlm.PreResizeLive:
 			a.PicW, a.PicH, a.PicLive = side, side, true
-			if err := resizeChain(&a, jlm.Filter(s.Ints[3])); err != nil {
+			if err := resizeChain(&a, jlm.Filter(s.Ints[0])); err != nil {
 				return nil, nil, err
 			}
-		case jlm.PreSliceUHD:
-			a.PicW, a.PicH, a.PicLive = side, side, true
-			if err := resizeChain(&a, jlm.Filter(s.Ints[3])); err != nil {
-				return nil, nil, err
+			a.PicTorch = jlm.Precision(s.Ints[1]) == jlm.PrecTorch
+		case jlm.PreCanvas:
+			a.PicCanvas = true
+			a.PicFill = [3]uint8{uint8(s.Ints[0]), uint8(s.Ints[1]), uint8(s.Ints[2])}
+			if s.Ints[3] > 0 {
+				a.PicW, a.PicH = int(s.Ints[3]), int(s.Ints[4])
 			}
-			a.PicTorch = jlm.Precision(s.Ints[4]) == jlm.PrecTorch
-		case jlm.PreTileSmart:
-			a.PicW, a.PicH, a.PicLive = side, side, true
-			if err := resizeChain(&a, jlm.Filter(s.Ints[7])); err != nil {
-				return nil, nil, err
-			}
-			a.PicTorch = jlm.Precision(s.Ints[8]) == jlm.PrecTorch
-		case jlm.PreAspectBudget:
-			a.PicW, a.PicH, a.PicLive = side, side, true
-			if err := resizeChain(&a, jlm.Filter(s.Ints[3])); err != nil {
-				return nil, nil, err
-			}
-		case jlm.PreCapUnit:
-			a.PicW, a.PicH, a.PicLive = side, side, true
-			if err := resizeChain(&a, jlm.Filter(s.Ints[2])); err != nil {
-				return nil, nil, err
-			}
-		case jlm.PreNaFlex:
-			a.PicW, a.PicH, a.PicLive = side, side, true
-			if err := resizeChain(&a, jlm.Filter(s.Ints[3])); err != nil {
-				return nil, nil, err
-			}
-		case jlm.PreLongBox:
-			a.PicW, a.PicH, a.PicLive, a.PicCanvas = int(s.Ints[0]), int(s.Ints[0]), true, true
-			a.PicFill = [3]uint8{uint8(s.Ints[2]), uint8(s.Ints[3]), uint8(s.Ints[4])}
-			if err := resizeChain(&a, jlm.Filter(s.Ints[5])); err != nil {
-				return nil, nil, err
-			}
-		case jlm.PreLimitPad:
-			a.PicW, a.PicH, a.PicLive, a.PicCanvas = side, side, true, true
-			if err := resizeChain(&a, jlm.Filter(s.Ints[3])); err != nil {
-				return nil, nil, err
-			}
-		case jlm.PreCenterCrop:
-			a.PicW, a.PicH = int(s.Ints[0]), int(s.Ints[1])
 		case jlm.PreNormalize, jlm.PreNormalizeBF16:
 			for c := range 3 {
 				a.Mean[c], a.Std[c] = float64(s.Floats[c]), float64(s.Floats[3+c])

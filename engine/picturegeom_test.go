@@ -7,12 +7,12 @@ import (
 	"hash"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
 	"github.com/jitllm/jitllm/convert"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/model"
 )
 
@@ -147,40 +147,42 @@ func putSquare(h hash.Hash, sq model.Square) {
 	}
 }
 
-// restateStep rewrites m's tower step of kind k by edit and has the
-// converter state the picture's geometry again from the steps
-// (convert.GeometryOf): a golden made under the processor's other bounds,
-// or a gate's violation. The container's own steps are left as they are,
-// and the tower's classes as they were formed.
-func restateStep(t *testing.T, m *model.Model, k jlm.PreKind, edit func(s *jlm.PreStep)) {
+// restateStep converts fixture name's pair again with the processor's step
+// of kind k rewritten by edit (convert.WithPictureStep) and gives m the
+// picture geometry the converter states from it: a golden made under the
+// processor's other bounds, or a gate's violation. The tower's classes stay
+// as they were formed.
+func restateStep(t *testing.T, m *model.Model, name string, k jlm.PreKind, edit func(s *jlm.PreStep)) {
 	t.Helper()
-	if !restateIfStated(t, m, k, edit) {
-		t.Fatalf("the tower states no step of kind %d", k)
+	if !restateIfStated(t, m, name, k, edit) {
+		t.Fatalf("%s's processor states no step of kind %d", name, k)
 	}
 }
 
 // restateIfStated is restateStep's restatement, false and m left as it
-// was where the tower states no step of kind k.
-func restateIfStated(t *testing.T, m *model.Model, k jlm.PreKind, edit func(s *jlm.PreStep)) bool {
+// was where the processor states no step of kind k.
+func restateIfStated(t *testing.T, m *model.Model, name string, k jlm.PreKind, edit func(s *jlm.PreStep)) bool {
 	t.Helper()
-	v := m.Container.Vision()
-	tw := *v.Tower
-	tw.Pre = slices.Clone(tw.Pre)
 	found := false
-	for i := range tw.Pre {
-		if s := &tw.Pre[i]; s.Kind == k {
-			s.Ints, s.Floats = slices.Clone(s.Ints), slices.Clone(s.Floats)
+	restate := convert.WithPictureStep(func(s *jlm.PreStep) {
+		if s.Kind == k {
 			edit(s)
 			found = true
 		}
+	})
+	text, proj := testmodels.Path(name+".gguf"), testmodels.Path("mmproj-"+name+".gguf")
+	dst := filepath.Join(t.TempDir(), name+jlm.Ext)
+	if _, err := convert.FromGGUFs(text, proj, dst, jlm.Fingerprint{Host: "test", Writer: BuildIDForTest()}, restate); err != nil {
+		t.Fatal(err)
 	}
 	if !found {
 		return false
 	}
-	g, err := convert.GeometryOf(&tw, v)
+	f, err := jlm.Open(dst)
 	if err != nil {
 		t.Fatal(err)
 	}
-	m.Tower.Geometry = g
+	defer f.Close()
+	m.Tower.Geometry = f.Vision().Tower.Geometry
 	return true
 }

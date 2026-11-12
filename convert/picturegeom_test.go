@@ -47,7 +47,7 @@ func TestTileGeometryFollowsTheReference(t *testing.T) {
 	}
 }
 
-// TestNaflexGeometryMatchesProcessor holds the NaFlex geometry (jlm.PreNaFlex)
+// TestNaflexGeometryMatchesProcessor holds the NaFlex geometry (PreNaFlex)
 // to transformers' get_image_size_for_max_num_patches on pictures below the
 // least patch count, inside the range and above the most
 // (scripts/phi4visiongold.py --model-free); the count unclamped is the

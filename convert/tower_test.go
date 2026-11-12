@@ -19,6 +19,12 @@ import (
 // container, its square and patch grid are the tower's, its shuffle the
 // file's, and its markers are mtmd's overview pieces. The record read back
 // from the file is the one the conversion stated.
+// statedSteps records each picture step the tower's stater writes, before
+// the converter states the geometry from them and lowers them.
+func statedSteps(steps *[]jlm.PreStep) Option {
+	return WithPictureStep(func(s *jlm.PreStep) { *steps = append(*steps, *s) })
+}
+
 func TestSmolVLMStatesItsTower(t *testing.T) {
 	src := testmodels.Path("SmolVLM-256M-Instruct-Q8_0.gguf")
 	mm := testmodels.Path("mmproj-SmolVLM-256M-Instruct-Q8_0.gguf")
@@ -162,7 +168,8 @@ func TestLlavaStatesItsTower(t *testing.T) {
 		}
 	}
 	dst := filepath.Join(t.TempDir(), "llava.jlm")
-	if _, err := FromGGUFs(src, mm, dst, jlm.Fingerprint{Writer: "gate"}); err != nil {
+	var stated []jlm.PreStep
+	if _, err := FromGGUFs(src, mm, dst, jlm.Fingerprint{Writer: "gate"}, statedSteps(&stated)); err != nil {
 		t.Fatal(err)
 	}
 	f, err := jlm.Open(dst)
@@ -183,10 +190,14 @@ func TestLlavaStatesItsTower(t *testing.T) {
 			t.Errorf("the tower binds %v, which the container does not hold", r)
 		}
 	}
-	if len(tw.Pre) != 3 || tw.Pre[0].Kind != jlm.PreResizeShort || tw.Pre[1].Kind != jlm.PreCenterCrop ||
-		tw.Pre[0].Ints[0] != 336 || jlm.Filter(tw.Pre[0].Ints[1]) != jlm.FilterPILBicubic ||
-		tw.Pre[1].Ints[0] != 336 || tw.Pre[1].Ints[1] != 336 {
-		t.Errorf("the picture's steps are %+v, want Pillow's bicubic of the shorter side to 336 and its 336 centre", tw.Pre)
+	if len(stated) != 3 || stated[0].Kind != PreResizeShort || stated[1].Kind != PreCenterCrop ||
+		stated[0].Ints[0] != 336 || jlm.Filter(stated[0].Ints[1]) != jlm.FilterPILBicubic ||
+		stated[1].Ints[0] != 336 || stated[1].Ints[1] != 336 {
+		t.Errorf("the processor's steps are %+v, want Pillow's bicubic of the shorter side to 336 and its 336 centre", stated)
+	}
+	if len(tw.Pre) != 2 || tw.Pre[0].Kind != jlm.PreResize || tw.Pre[0].Ints[0] != 336 || tw.Pre[0].Ints[1] != 336 ||
+		jlm.Filter(tw.Pre[0].Ints[2]) != jlm.FilterPILBicubic || tw.Geometry == nil {
+		t.Errorf("the container's steps are %+v, want Pillow's bicubic onto the 336 window, the geometry stated", tw.Pre)
 	}
 	var entry, head []jlm.OpCode
 	for _, op := range tw.Entry.Ops {
@@ -230,7 +241,8 @@ func TestInternVLStatesItsTower(t *testing.T) {
 		}
 	}
 	dst := filepath.Join(t.TempDir(), "internvl.jlm")
-	if _, err := FromGGUFs(src, mm, dst, jlm.Fingerprint{Writer: "gate"}); err != nil {
+	var stated []jlm.PreStep
+	if _, err := FromGGUFs(src, mm, dst, jlm.Fingerprint{Writer: "gate"}, statedSteps(&stated)); err != nil {
 		t.Fatal(err)
 	}
 	f, err := jlm.Open(dst)
@@ -251,9 +263,12 @@ func TestInternVLStatesItsTower(t *testing.T) {
 			t.Errorf("the tower binds %v, which the container does not hold", r)
 		}
 	}
-	if len(tw.Pre) != 3 || tw.Pre[0].Kind != jlm.PreTile || !reflect.DeepEqual(tw.Pre[0].Ints, []int32{1, 12, 1}) ||
-		tw.Pre[1].Ints[0] != 448 || jlm.Filter(tw.Pre[1].Ints[2]) != jlm.FilterPILBicubic {
-		t.Errorf("the picture's steps are %+v, want 1 to 12 tiles and a thumbnail, Pillow's bicubic to 448", tw.Pre)
+	if len(stated) != 3 || stated[0].Kind != PreTile || !reflect.DeepEqual(stated[0].Ints, []int32{1, 12, 1}) ||
+		stated[1].Ints[0] != 448 || jlm.Filter(stated[1].Ints[2]) != jlm.FilterPILBicubic {
+		t.Errorf("the processor's steps are %+v, want 1 to 12 tiles and a thumbnail, Pillow's bicubic to 448", stated)
+	}
+	if len(tw.Pre) != 2 || tw.Pre[0].Kind != jlm.PreResize || tw.Pre[0].Ints[0] != 448 || tw.Geometry == nil {
+		t.Errorf("the container's steps are %+v, want each tile resized to 448, the geometry stated", tw.Pre)
 	}
 	var head []jlm.OpCode
 	for _, op := range tw.Head.Ops {
@@ -311,7 +326,8 @@ func TestQwen2VLStatesItsTower(t *testing.T) {
 		}
 	}
 	dst := filepath.Join(t.TempDir(), "qwen2vl.jlm")
-	if _, err := FromGGUFs(src, mm, dst, jlm.Fingerprint{Writer: "gate"}); err != nil {
+	var stated []jlm.PreStep
+	if _, err := FromGGUFs(src, mm, dst, jlm.Fingerprint{Writer: "gate"}, statedSteps(&stated)); err != nil {
 		t.Fatal(err)
 	}
 	f, err := jlm.Open(dst)
@@ -332,9 +348,13 @@ func TestQwen2VLStatesItsTower(t *testing.T) {
 			t.Errorf("the tower binds %v, which the container does not hold", r)
 		}
 	}
-	if len(tw.Pre) != 2 || tw.Pre[0].Kind != jlm.PreSmartResize ||
-		!reflect.DeepEqual(tw.Pre[0].Ints, []int32{28, 56 * 56, 28 * 28 * 1280, int32(jlm.FilterPILBicubic), int32(jlm.PrecPIL)}) {
-		t.Errorf("the picture's steps are %+v, want a size of its own in 28s within 56^2 and 28^2*1280, Pillow's bicubic", tw.Pre)
+	if len(stated) != 2 || stated[0].Kind != PreSmartResize ||
+		!reflect.DeepEqual(stated[0].Ints, []int32{28, 56 * 56, 28 * 28 * 1280, int32(jlm.FilterPILBicubic), int32(jlm.PrecPIL)}) {
+		t.Errorf("the processor's steps are %+v, want a size of its own in 28s within 56^2 and 28^2*1280, Pillow's bicubic", stated)
+	}
+	if len(tw.Pre) != 2 || tw.Pre[0].Kind != jlm.PreResizeLive || tw.Geometry == nil ||
+		!reflect.DeepEqual(tw.Pre[0].Ints, []int32{int32(jlm.FilterPILBicubic), int32(jlm.PrecPIL)}) {
+		t.Errorf("the container's steps are %+v, want Pillow's bicubic to each square's own size, the geometry stated", tw.Pre)
 	}
 	if op := tw.Entry.Ops[0]; op.Code != jlm.TOpPatchify || op.Span != 14 || op.Width != 2 || op.Offset != 0 {
 		t.Errorf("the patches are %+v, want 14 a side in 2x2 windows' order", op)
@@ -441,7 +461,8 @@ func TestQwen35VLStatesItsTower(t *testing.T) {
 		}
 	}
 	dst := filepath.Join(t.TempDir(), "qwen35vl.jlm")
-	if _, err := FromGGUFs(src, mm, dst, jlm.Fingerprint{Writer: "gate"}); err != nil {
+	var stated []jlm.PreStep
+	if _, err := FromGGUFs(src, mm, dst, jlm.Fingerprint{Writer: "gate"}, statedSteps(&stated)); err != nil {
 		t.Fatal(err)
 	}
 	f, err := jlm.Open(dst)
@@ -462,8 +483,11 @@ func TestQwen35VLStatesItsTower(t *testing.T) {
 			t.Errorf("the tower binds %v, which the container does not hold", r)
 		}
 	}
-	if pre := tw.Pre[0]; pre.Kind != jlm.PreSmartResize || pre.Ints[0] != 32 || pre.Ints[1] != 65536 || pre.Ints[2] != 16777216 {
-		t.Errorf("the resize is %+v, want merge windows of 32 pixels within [65536, 16777216]", pre)
+	if pre := stated[0]; pre.Kind != PreSmartResize || pre.Ints[0] != 32 || pre.Ints[1] != 65536 || pre.Ints[2] != 16777216 {
+		t.Errorf("the processor's resize is %+v, want merge windows of 32 pixels within [65536, 16777216]", pre)
+	}
+	if tw.Pre[0].Kind != jlm.PreResizeLive || tw.Geometry == nil {
+		t.Errorf("the container's resize is %+v, want each square's own size, the geometry stated", tw.Pre[0])
 	}
 	var entry []jlm.OpCode
 	for _, op := range tw.Entry.Ops {

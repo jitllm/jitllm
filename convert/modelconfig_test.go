@@ -129,6 +129,14 @@ func TestProcessorConfigStatesTheResample(t *testing.T) {
 	filter := func(body string) int32 {
 		t.Helper()
 		var o options
+		// The stater's own step, before the converter lowers it.
+		var pre *jlm.PreStep
+		o.pictureStep = func(s *jlm.PreStep) {
+			if pre == nil {
+				c := *s
+				pre = &c
+			}
+		}
 		if body != "" {
 			o.modelConfig = t.TempDir()
 			for name, b := range map[string]string{"config.json": "{}", "preprocessor_config.json": body} {
@@ -147,12 +155,10 @@ func TestProcessorConfigStatesTheResample(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer vf.Close()
-		s, err := buildGGUF(f, vf, src, proj, o)
-		if err != nil {
+		if _, err := buildGGUF(f, vf, src, proj, o); err != nil {
 			t.Fatal(err)
 		}
-		pre := s.Vision.Tower.Pre[0]
-		if pre.Kind != jlm.PreTileSmart || len(pre.Ints) < 8 {
+		if pre == nil || pre.Kind != PreTileSmart || len(pre.Ints) < 8 {
 			t.Fatalf("the tower's first step is %+v, not the tiled resize", pre)
 		}
 		return pre.Ints[7]

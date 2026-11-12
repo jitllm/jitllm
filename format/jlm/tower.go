@@ -4,7 +4,7 @@ import "fmt"
 
 // TowerVersion is the stated tower's revision. A record of a later one is
 // refused, not read as this one.
-const TowerVersion = 10
+const TowerVersion = 11
 
 // Tower is a vision tower as the converter states it: what the engine builds
 // the tower from, with no family's name in it. The converter knows a family
@@ -69,108 +69,19 @@ const (
 	// PreNormalize turns each channel c of a sample read as [0, 1] into
 	// (v - Floats[c]) / Floats[3+c]: the mean, then the std.
 	PreNormalize PreKind = 2
-	// PreResizeShort resamples the picture, aspect kept, so its shorter side
-	// is Ints[0] pixels and its longer int(Ints[0] * long / short), with
-	// filter Ints[1] in arithmetic Ints[2].
-	PreResizeShort PreKind = 3
-	// PreCenterCrop is the Ints[0] x Ints[1] window of the picture as the
-	// step before left it, at ((w - Ints[0]) / 2, (h - Ints[1]) / 2)
-	// truncated.
-	PreCenterCrop PreKind = 4
-	// PreTile cuts the picture into tiles, each a picture the tower sees:
-	// between Ints[0] and Ints[1] of them, the columns x rows grid whose
-	// aspect is closest to the picture's (a tie to the larger grid while the
-	// picture's area is more than half of it, the grids every columns x rows
-	// pair, columns outer, stably sorted by tile count), the picture resized
-	// by the resize step to the grid's size in squares and cut row-major;
-	// then, where Ints[2] is 1 and the grid is more than one tile, the whole
-	// picture resized to one square. A picture's rows are every tile's in
-	// that order.
-	PreTile PreKind = 5
-	// PreSmartResize resamples the picture to a size of its own, each side a
-	// multiple of Ints[0] pixels: each rounded half to even to one; then,
-	// where the area passes Ints[2] pixels, both scaled down by
-	// sqrt(area / Ints[2]) and floored to one, or where it falls short of
-	// Ints[1], scaled up by sqrt(Ints[1] / area) and ceiled to one
-	// (Qwen2-VL's smart_resize); with filter Ints[3] in arithmetic Ints[4].
-	// Ints[5], where stated, is 1 for a picture a side shorter than Ints[0]
-	// scaled up first so that side is Ints[0], each side truncated
-	// (GLM-4V's smart_resize), 0 for none.
-	PreSmartResize PreKind = 6
-	// PreLimitPad keeps the picture at its size unless its whole Ints[0]
-	// pixel patches pass Ints[1], where both sides are scaled by
-	// sqrt(Ints[1] / patches) and truncated, with filter Ints[3] in
-	// arithmetic Ints[4]; then pads it black, before it is normalised, on
-	// the right and at the bottom to multiples of Ints[2] pixels (Kimi-VL's
-	// rescale with pad_input).
-	PreLimitPad PreKind = 7
-	// PreLongBox resizes the picture so its longer side is Ints[0] pixels
-	// and its shorter round-half-even(side * Ints[0] / longer), at least
-	// Ints[1], with filter Ints[5] in arithmetic Ints[6]; then centres it
-	// on an Ints[0]-pixel square of the colour Ints[2..4] (bytes, before
-	// normalising), each margin the floor of half the slack (Janus's
-	// resize and pad_to_square).
-	PreLongBox PreKind = 8
-	// PreNaFlex resamples the picture to a size of its own in whole
-	// Ints[0]-pixel patches: its own whole patches' count clamped to
-	// [Ints[1], Ints[2]], then the largest scale whose sides, each ceiled
-	// to a patch and at least one, hold that many, found by bisection
-	// (SigLIP2's get_image_size_for_max_num_patches); with filter Ints[3] in
-	// arithmetic Ints[4].
-	PreNaFlex PreKind = 9
-	// PreCapUnit resamples the picture so neither side passes Ints[0]
-	// pixels -- both divided by longer / Ints[0] and floored, where the
-	// longer passes it -- then each side rounded up to a whole Ints[1]
-	// pixels, with filter Ints[2] in arithmetic Ints[3] (Pixtral's resize).
-	PreCapUnit PreKind = 10
-	// PreAspectBudget resamples the picture to the largest size of its
-	// aspect within Ints[0] patches of Ints[1] pixels, each side a whole
-	// Ints[2] pixels: both scaled by sqrt(budget area / area) and floored
-	// to the unit; a side that floors to nothing one unit, the other the
-	// aspect's whole multiple of it, at most the budget's units a row
-	// (Gemma 4's get_aspect_ratio_preserving_size); with filter Ints[3] in
-	// arithmetic Ints[4].
-	PreAspectBudget PreKind = 11
-	// PreTileSmart is a picture one piece at its own size or cut: its own
-	// size each side a whole Ints[4] pixels, rounded half to even, then
-	// scaled into [Ints[5], Ints[6]] pixels as PreSmartResize scales it; a
-	// picture whose sides rounded so (at least an Ints[3]-pixel patch each)
-	// hold more than Floats[0] times Ints[6] pixels is cut into the grid of
-	// Ints[1] to Ints[2] Ints[0]-pixel tiles closest to its aspect (as
-	// PreTile chooses one), resized onto the grid and cut row-major, then
-	// the whole at its own size as a thumbnail (LFM2-VL's); with filter
-	// Ints[7] in arithmetic Ints[8].
-	PreTileSmart PreKind = 12
-	// PreBestFit cuts the picture into tiles as PreTile does, on the canvas
-	// of at most Ints[0] tiles whose limiting scale is the smallest upscale,
-	// or failing any the largest downscale, the smallest area breaking a tie
-	// (the canvases every rows x columns pair by tile count from Ints[0]
-	// down, grouped by aspect in the order each first appears): the picture
-	// resized by the resize step onto it without distortion, at most its
-	// canvas and upscaled to at most one tile, laid at its top left with
-	// black past it and cut row-major; then, for more than one tile, the
-	// whole picture resized to one tile more (Llama 4's). A head's marker
-	// rows (TOpMarkRow) are a table of three: after a tile not its row's
-	// last the first, after a row's last the second, before the picture's
-	// last tile the third.
-	PreBestFit PreKind = 13
-	// PreSliceUHD is llava-uhd's cut (MiniCPM-V's): an overview at its own
-	// size -- Ints[0]^2 pixels at the picture's aspect, each side a whole
-	// Ints[1]-pixel patch, rounded half to even -- then, where the picture's
-	// area over Ints[0]^2 rounds up past one, the slices of the grid of at
-	// most Ints[2] whose aspect is closest to the picture's (of the counts
-	// one either side of that multiple): the picture resized to a whole
-	// number of best-sized slices and cut row-major; the overview upscaled
-	// only where nothing is cut. With filter Ints[3] in arithmetic Ints[4].
-	// A head's marker runs (TOpMarkRow) are a table of six: <image> and
-	// </image> about the overview, <slice> and </slice> about a slice, a
-	// slice row's first after the first taking the last two (a newline and
-	// <slice>) before it.
-	PreSliceUHD PreKind = 15
 	// PreNormalizeBF16 is PreNormalize in bfloat16: the sample times 1/255,
 	// less the mean, over the std, each result and the mean and std rounded
 	// to bfloat16 as torch's arithmetic on a bfloat16 tensor rounds them.
 	PreNormalizeBF16 PreKind = 14
+	// PreResizeLive resamples the picture to each square's own size, which
+	// the picture's geometry states (PictureGeometry), with filter Ints[0]
+	// in arithmetic Ints[1].
+	PreResizeLive PreKind = 17
+	// PreCanvas lays the resized picture on the canvas each square states,
+	// at the corner it states, every cell outside the picture the colour
+	// Ints[0..2] (bytes, before normalising); the canvas at most Ints[3] x
+	// Ints[4] pixels, or, where those are 0, the class's.
+	PreCanvas PreKind = 18
 )
 
 // Filter is a resampling filter.
@@ -309,10 +220,8 @@ const (
 	// patch grid's over Width, or where Width is 0 all of In[0]'s rows --
 	// after a run of at most Span consecutive
 	// rows of Bind[0] and before a run of at most Offset: the runs the
-	// piece's place names under the picture's fit. Under PreTileSmart a tile
-	// at grid row r and column c of a grid of at most M tiles takes row
-	// r*M+c before it and the thumbnail row M*M; PreBestFit and PreSliceUHD
-	// state theirs; a picture of one piece takes none.
+	// picture's geometry names for the piece (PictureGeometry's Mark and
+	// Trail fields); a piece it names none takes none.
 	TOpMarkRow OpCode = 27
 	// TOpTailRow is In[0] with its last row Bind[0]'s one row: a class row
 	// after the patches, in the row the entry leaves for it.
@@ -551,65 +460,18 @@ func (t *Tower) Valid() error {
 			if len(s.Ints) != 4 || s.Ints[0] <= 0 || s.Ints[1] <= 0 || !resizes(Filter(s.Ints[2]), Precision(s.Ints[3])) {
 				return fmt.Errorf("jlm: the tower's step %d resizes with %v", i, s.Ints)
 			}
-		case PreResizeShort:
-			if len(s.Ints) != 3 || s.Ints[0] <= 0 || !resizes(Filter(s.Ints[1]), Precision(s.Ints[2])) {
-				return fmt.Errorf("jlm: the tower's step %d resizes the shorter side with %v", i, s.Ints)
+		case PreResizeLive:
+			if len(s.Ints) != 2 || !resizes(Filter(s.Ints[0]), Precision(s.Ints[1])) {
+				return fmt.Errorf("jlm: the tower's step %d resizes to each square's size with %v", i, s.Ints)
 			}
-		case PreCenterCrop:
-			if len(s.Ints) != 2 || s.Ints[0] <= 0 || s.Ints[1] <= 0 {
-				return fmt.Errorf("jlm: the tower's step %d crops to %v", i, s.Ints)
-			}
-		case PreSmartResize:
-			if len(s.Ints) < 5 || len(s.Ints) > 6 || s.Ints[0] <= 0 || s.Ints[1] <= 0 || s.Ints[2] < s.Ints[1] ||
-				!resizes(Filter(s.Ints[3]), Precision(s.Ints[4])) || len(s.Ints) == 6 && s.Ints[5]&^1 != 0 {
-				return fmt.Errorf("jlm: the tower's step %d resizes to its own size with %v", i, s.Ints)
-			}
-		case PreLimitPad:
-			if len(s.Ints) != 5 || s.Ints[0] <= 0 || s.Ints[1] <= 0 || s.Ints[2] <= 0 || s.Ints[2]%s.Ints[0] != 0 ||
-				!resizes(Filter(s.Ints[3]), Precision(s.Ints[4])) {
-				return fmt.Errorf("jlm: the tower's step %d limits and pads with %v", i, s.Ints)
-			}
-		case PreSliceUHD:
-			if len(s.Ints) != 5 || s.Ints[0] <= 0 || s.Ints[1] <= 0 || s.Ints[2] < 1 ||
-				!resizes(Filter(s.Ints[3]), Precision(s.Ints[4])) {
-				return fmt.Errorf("jlm: the tower's step %d slices with %v", i, s.Ints)
-			}
-		case PreBestFit:
-			if len(s.Ints) != 1 || s.Ints[0] < 1 {
-				return fmt.Errorf("jlm: the tower's step %d fits a canvas of %v tiles", i, s.Ints)
+		case PreCanvas:
+			if len(s.Ints) != 5 || s.Ints[0]&^255 != 0 || s.Ints[1]&^255 != 0 || s.Ints[2]&^255 != 0 ||
+				s.Ints[3] < 0 || s.Ints[4] < 0 || (s.Ints[3] == 0) != (s.Ints[4] == 0) || i == 0 || t.Pre[i-1].Kind != PreResizeLive {
+				return fmt.Errorf("jlm: the tower's step %d lays the picture on a canvas with %v, not after a resize to its own size", i, s.Ints)
 			}
 		case PreNormalizeBF16:
 			if len(s.Floats) != 6 {
 				return fmt.Errorf("jlm: the tower's step %d normalizes with %d numbers, want 6", i, len(s.Floats))
-			}
-		case PreTileSmart:
-			if len(s.Ints) != 9 || len(s.Floats) != 1 || s.Ints[0] <= 0 || s.Ints[1] < 1 || s.Ints[2] < s.Ints[1] ||
-				s.Ints[3] <= 0 || s.Ints[4] <= 0 || s.Ints[4]%s.Ints[3] != 0 || s.Ints[0]%s.Ints[4] != 0 ||
-				s.Ints[5] <= 0 || s.Ints[6] < s.Ints[5] || !(s.Floats[0] > 0) || !resizes(Filter(s.Ints[7]), Precision(s.Ints[8])) {
-				return fmt.Errorf("jlm: the tower's step %d tiles or sizes with %v %v", i, s.Ints, s.Floats)
-			}
-		case PreAspectBudget:
-			if len(s.Ints) != 5 || s.Ints[0] <= 0 || s.Ints[1] <= 0 || s.Ints[2] <= 0 || s.Ints[2]%s.Ints[1] != 0 ||
-				!resizes(Filter(s.Ints[3]), Precision(s.Ints[4])) {
-				return fmt.Errorf("jlm: the tower's step %d resizes within a budget with %v", i, s.Ints)
-			}
-		case PreCapUnit:
-			if len(s.Ints) != 4 || s.Ints[0] <= 0 || s.Ints[1] <= 0 || !resizes(Filter(s.Ints[2]), Precision(s.Ints[3])) {
-				return fmt.Errorf("jlm: the tower's step %d caps the picture with %v", i, s.Ints)
-			}
-		case PreNaFlex:
-			if len(s.Ints) != 5 || s.Ints[0] <= 0 || s.Ints[1] <= 0 || s.Ints[2] < s.Ints[1] ||
-				!resizes(Filter(s.Ints[3]), Precision(s.Ints[4])) {
-				return fmt.Errorf("jlm: the tower's step %d resizes by patch count with %v", i, s.Ints)
-			}
-		case PreLongBox:
-			if len(s.Ints) != 7 || s.Ints[0] <= 0 || s.Ints[1] <= 0 || s.Ints[1] > s.Ints[0] ||
-				s.Ints[2]&^255 != 0 || s.Ints[3]&^255 != 0 || s.Ints[4]&^255 != 0 || !resizes(Filter(s.Ints[5]), Precision(s.Ints[6])) {
-				return fmt.Errorf("jlm: the tower's step %d boxes with %v", i, s.Ints)
-			}
-		case PreTile:
-			if len(s.Ints) != 3 || s.Ints[0] < 1 || s.Ints[1] < s.Ints[0] || s.Ints[2]&^1 != 0 {
-				return fmt.Errorf("jlm: the tower's step %d tiles by %v", i, s.Ints)
 			}
 		case PreNormalize:
 			if len(s.Floats) != 6 {
@@ -689,18 +551,9 @@ func (t *Tower) Valid() error {
 		if err := t.Geometry.Valid(); err != nil {
 			return err
 		}
-		// A tower whose geometry is stated states its video's frames' too,
-		// where their steps are their own.
-		if v := t.Video; v != nil && v.AsPictures() && (v.Frames != nil) != (len(v.Pre) > 0) {
-			return fmt.Errorf("jlm: a video read as pictures of %d steps of its own, its frames' geometry stated %v",
-				len(v.Pre), v.Frames != nil)
-		}
 	}
 	if t.Video != nil {
-		if err := t.Video.Valid(); err != nil {
-			return err
-		}
-		return t.Video.PicturesValid(t)
+		return t.Video.Valid()
 	}
 	return nil
 }

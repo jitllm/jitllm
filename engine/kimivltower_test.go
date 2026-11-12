@@ -4,6 +4,7 @@ import (
 	"math"
 	"testing"
 
+	"github.com/jitllm/jitllm/convert"
 	"github.com/jitllm/jitllm/format/jlm"
 )
 
@@ -27,7 +28,7 @@ func TestKimiVLTowerMatchesTransformers(t *testing.T) {
 
 	stated := tg.Geometry
 	limit := func(n int) func(s *jlm.PreStep) { return func(s *jlm.PreStep) { s.Ints[1] = int32(n) } }
-	restateStep(t, m, jlm.PreLimitPad, limit(g.Prep.Max))
+	restateStep(t, m, "synth-kimivl", convert.PreLimitPad, limit(g.Prep.Max))
 	px, sq := towerPixels(t, s, rgbPicture(g.Prep.RGB, g.Prep.W, g.Prep.H))
 	if sq.Gw*tg.Patch != g.Prep.OutW || sq.Gh*tg.Patch != g.Prep.OutH {
 		t.Fatalf("a %dx%d picture padded to %dx%d, the processor's %dx%d", g.Prep.W, g.Prep.H,
@@ -47,7 +48,7 @@ func TestKimiVLTowerMatchesTransformers(t *testing.T) {
 	}
 	t.Logf("a %dx%d picture resized to %dx%d and padded to %dx%d: every one of %d samples the processor's",
 		g.Prep.W, g.Prep.H, sq.Ow, sq.Oh, sq.Gw*tg.Patch, sq.Gh*tg.Patch, len(px))
-	restateStep(t, m, jlm.PreLimitPad, limit(2*g.Prep.Max))
+	restateStep(t, m, "synth-kimivl", convert.PreLimitPad, limit(2*g.Prep.Max))
 	if _, bad := towerPixels(t, s, rgbPicture(g.Prep.RGB, g.Prep.W, g.Prep.H)); bad.Gw*tg.Patch == g.Prep.OutW &&
 		bad.Gh*tg.Patch == g.Prep.OutH {
 		t.Fatal("VIOLATION: a limit doubled reaches the processor's size")

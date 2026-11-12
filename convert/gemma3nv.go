@@ -690,9 +690,6 @@ func gemma3nvTower(s *jlm.Source) (*jlm.Tower, error) {
 		{Code: jlm.TOpRMSNorm, In: []uint16{13}, Eps: eps},
 		{Code: jlm.TOpAppendRow, In: []uint16{14}, Bind: []jlm.Role{jlm.RoleVMNHardEmbd}, Offset: int32(eoi - gemma3nVocabOffset)},
 	}}
-	if err := t.Valid(); err != nil {
-		return nil, fmt.Errorf("convert: gemma3nv: %w", err)
-	}
 	kept := s.Tensors[:0]
 	for _, x := range s.Tensors {
 		if x.Role != jlm.RoleVMNGeom && x.Role != jlm.RoleVMNHardOffset {

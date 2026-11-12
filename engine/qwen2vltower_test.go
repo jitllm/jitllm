@@ -9,6 +9,7 @@ import (
 	"testing"
 	"unsafe"
 
+	"github.com/jitllm/jitllm/convert"
 	"github.com/jitllm/jitllm/engine/device/cpudev"
 
 	"github.com/jitllm/jitllm/format/jlm"
@@ -137,7 +138,7 @@ func qwen2VLTowerMatchesTransformers(t *testing.T, name string) {
 	pixels := func(lo, hi int) func(s *jlm.PreStep) {
 		return func(s *jlm.PreStep) { s.Ints[1], s.Ints[2] = int32(lo), int32(hi) }
 	}
-	restateStep(t, m, jlm.PreSmartResize, pixels(g.Prep.Min, g.Prep.Max))
+	restateStep(t, m, name, convert.PreSmartResize, pixels(g.Prep.Min, g.Prep.Max))
 	px, sq := towerPixels(t, s, rgbPicture(g.Prep.RGB, g.Prep.W, g.Prep.H))
 	if sq.Pw != g.Prep.OutW || sq.Ph != g.Prep.OutH {
 		t.Fatalf("a %dx%d picture resized to %dx%d, the processor's %dx%d", g.Prep.W, g.Prep.H, sq.Pw, sq.Ph, g.Prep.OutW, g.Prep.OutH)
@@ -157,12 +158,12 @@ func qwen2VLTowerMatchesTransformers(t *testing.T, name string) {
 		t.Fatalf("%d of %d samples differ from the processor's", differ, len(px))
 	}
 	t.Logf("a %dx%d picture resized to %dx%d: every one of %d samples the processor's", g.Prep.W, g.Prep.H, sq.Pw, sq.Ph, len(px))
-	restateStep(t, m, jlm.PreSmartResize, pixels(g.Prep.Min, 1<<30))
+	restateStep(t, m, name, convert.PreSmartResize, pixels(g.Prep.Min, 1<<30))
 	if _, bad := towerPixels(t, s, rgbPicture(g.Prep.RGB, g.Prep.W, g.Prep.H)); bad.Pw == g.Prep.OutW && bad.Ph == g.Prep.OutH {
 		t.Fatal("VIOLATION: a resize with no bound on the area reaches the processor's size")
 	}
 	// The golden encodes its picture at its own size (do_resize=False).
-	restateStep(t, m, jlm.PreSmartResize, pixels(g.Image.W*g.Image.H, g.Image.W*g.Image.H))
+	restateStep(t, m, name, convert.PreSmartResize, pixels(g.Image.W*g.Image.H, g.Image.W*g.Image.H))
 
 	img := rgbPicture(g.Image.RGB, g.Image.W, g.Image.H)
 	if gr, err := tg.SpanGrid(g.Image.W, g.Image.H); err != nil || gr != (model.ImageGrid{T: g.Image.Grid[0], H: g.Image.Grid[1], W: g.Image.Grid[2]}) {
@@ -248,7 +249,7 @@ func qwen2VLMatchesTransformers(t *testing.T, name string) {
 	// The golden encodes the picture at its own size (do_resize=False), which
 	// a smart resize's published bounds need not admit (Qwen3-VL's floor is
 	// 65536 pixels); a patch limit's (Kimi-VL's) admits it as published.
-	restateIfStated(t, m, jlm.PreSmartResize, func(s *jlm.PreStep) {
+	restateIfStated(t, m, name, convert.PreSmartResize, func(s *jlm.PreStep) {
 		s.Ints[1], s.Ints[2] = int32(g.Image.W*g.Image.H), int32(g.Image.W*g.Image.H)
 	})
 	picture, err := m.PictureSpan(img)

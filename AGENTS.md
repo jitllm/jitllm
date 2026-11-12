@@ -926,7 +926,7 @@ JIT and state) was llama.cpp's technical debt, not a property of the model.
   reads, known before a block runs), so the prefix cache names the rows after
   it as it names text, and a restore past the picture runs no tower block
   (`TestTwoTurnImageChatRestoresPastThePicture`).
-- **A picture of a size of its own** (`jlm.PreSmartResize`) is encoded in the
+- **A picture of a size of its own** (`jlm.PreResizeLive`) is encoded in the
   smallest of the squares the entry is formed for at placement, its rows the
   call's live rows (`composer.TestComposedCPUFoldFollowsTheCall`).
 - **The tower runs on the device** through the one placement path
