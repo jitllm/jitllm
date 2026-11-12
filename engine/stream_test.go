@@ -344,9 +344,13 @@ func TestAutoStreamPlacesWhatCannotFit(t *testing.T) {
 		g.Close()
 	}
 	// A budget that holds one mixture block resident but not every one: the
-	// rest are refused for room, and stream instead of going home.
+	// rest are refused for room, and stream instead of going home. Its room
+	// is what the auto arm spent with every block streamed and one block's
+	// bank more, so a second bank does not fit beside the first; a fixed
+	// multiple of the block leaves out the scratch and composed parts the
+	// streamed blocks need.
 	{
-		_, rs2, rp2 := run(gpu.WithBudget(biggest * 3 / 2))
+		_, rs2, rp2 := run(gpu.WithBudget(ss.BudgetUsed + biggest - base))
 		if rs2.StreamBlocks == 0 || rp2 < 2 {
 			t.Fatalf("a card with room for one resident block: %d placed, %d streamed -- the "+
 				"blocks refused for room went to the host", rp2, rs2.StreamBlocks)
