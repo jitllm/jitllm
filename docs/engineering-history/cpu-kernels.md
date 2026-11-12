@@ -5147,6 +5147,51 @@ two wrong forms on the way: the binder let a copy, then a loop's counter,
 take the register an initialiser still held, since all three are written as
 the loop starts.
 
+### The mixture decode counted against llama.cpp
+
+At one core there are no workers and no spin, so user-space instructions
+are the work (RULE 1). Box 50's second socket (Xeon E5-2680 v4), jitllm
+6292018d8 at `JITLLM_CORES=1` beside llama.cpp's CPU build at `-t 1`, a
+token's instructions as the 80-token run less the 16-token run over the 64
+between (`perf stat -e instructions:u`), runs repeating to 0.1%:
+
+| model | jitllm | llama.cpp | ratio |
+|---|---|---|---|
+| olmoe-1b-7b Q4_K_M | 1.133 G | 0.517 G | 2.19 |
+| Qwen3-30B-A3B Q4_K_M | 2.811 G | 1.364 G | 2.06 |
+| Llama-3.2-1B Q4_K_M (dense) | 1.091 G | 0.526 G | 2.07 |
+
+Sampled by instruction (`perf record -e instructions:u`, `JITLLM_PERFMAP=1`
+naming the generated code), 95% of a decode token's generated instructions
+are the fused matvecs (`reduce+reduce`); llama.cpp's are
+`ggml_gemv_q4_K_8x8_q8_K` (58% of its run, on weights it repacks eight rows
+at a time at load, 14% more) and `ggml_vec_dot_q6_K_q8_K` (19%). A mixture
+takes twice llama.cpp's instructions exactly as the dense model does: the
+matvec's per-sub-block float epilogue above, not the routing.
+
+The time is another matter. At one core, interleaved in one pass on the same
+socket while census lanes ran elsewhere on the box (a direction, not a board
+row), Llama-3.2-1B decoded 9.60 and 9.55 tok/s against llama.cpp's 10.77 and
+10.84 (0.89) and olmoe 2.47 and 2.77 against 11.26 and 10.87 (0.24). The
+dense matvec keeps up with twice the instructions -- one core's bandwidth
+caps both engines -- where the mixture loses four times what its
+instructions account for: what is left is stalls in the expert path, and
+the twelve-core board's 0.2 is mostly that rather than the region's
+coordination.
+
+**The cold spill, tried.** The expert kernels' bindings spill copies a
+loop walks every trip (gate Q4_K 104 stack references, down Q6_K 185, down
+Q4_K 310 at olmoe's shapes). A value held across a copy's span and read in
+it only where a loop begins -- a count -- spilled to free the copy its
+register took the down Q4_K kernel to 143. It faulted: a copy can hold a
+reload register (R13, RBX) only in a kernel that reloads nothing, a rule
+decided before the copies bind, and the spill made a loop's count a reload
+landing in that register (`mov rbx, [rsp-8]` over the copy, the walk then
+reading address 0xc2). Guarded -- no spill whose read meets a held reload
+register, no reload register for a copy over a spilled value's read, never a
+count its loop counts down in -- it binds correctly (282 composer CPU gates)
+and spills more: 104/185/310 -> 241/193/256. Not landed.
+
 ## Design notes moved out of source comments
 
 Each entry below is a comment that stood in the named source file,
