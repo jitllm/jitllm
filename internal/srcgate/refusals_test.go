@@ -53,11 +53,61 @@ func TestNoRefusalButInputsAndLimits(t *testing.T) {
 		"backend/grid.go:states no co-residency limit":               "a device's limit: no grid barrier without one (RULE 13)",
 		"backend/metal.go:states no gpu-core-count":                  "a device's limit: no core count, no co-residency (RULE 13)",
 		"backend/vulkan.go:states no compute-unit count":             "a device's limit: no compute-unit count, no co-residency (RULE 13)",
+
+		"engine/decide.go:too many options":                           "a question past its label set's own bound (the converter states each set's MaxOptions): the input's check",
+		"engine/forward.go:cannot place it by name":                   "a placement naming a card on an instance whose device names none (the card tier names every device it holds): the caller's check",
+		"engine/forward.go:cannot place a block by name":              "a placement or a move naming a card on an instance whose device names none: the caller's check",
+		"engine/forward.go:cannot be continued on the CPU":            "a device that failed mid-sequence took the history it held: a hardware fault, reported by name",
+		"engine/seamtune.go:too wide to decide":                       "the tuner's measurement gate (RULE 2): a split too noisy to decide keeps the placement it has",
+		"engine/listed.go:this device cannot page a block":            "cards listed without the CPU on a device that names none (the card tier pages on itself, TestBlocksPageOnTheListedCard): the caller's check",
+		"engine/device/cpu/baseline_amd64.go:cannot run the engine":   "the amd64 floor, SSE4.1 and SSSE3 (RULE 8, nn.HostRefusal): the host's instructions",
+		"engine/device/cpu/baseline.go:cannot run here":               "a tier asked of a host whose instructions lack it (cpu:sse and its kin): the host's instructions",
+		"engine/device/cpudev/tower.go:has no form for class":         "the tower forms an entry for every class its geometry states and every sample format at placement: an index past them is the caller's check",
+		"engine/device/gpu/served.go:a pass cannot run again over":    "RULE 13: a kernel reading what it writes in one phase is the composer's contract broken, refused before it runs wrong",
+		"engine/device/gpu/open.go:cannot be listed beside":           "a device list naming a set and a member of it: the input's check",
+		"engine/device/gpu/layer.go:which has no device kernel":       "a weight type no container carries (off quant.Dequantable, or TQ1_0, which the converter repacks): the container's check",
+		"nn/device.go:cannot move between the devices directly":       "a mover's answer for a move it does not make itself: the caller carries the history through the host",
+		"composer/form.go:cannot form":                                "names the part whose composition failed; the failure is the wrapped error's, under its own phrase",
+		"composer/compose.go:jit: no lowering for":                    "a device kind the registry holds no lowering for: every device the backends open has one",
+		"composer/msl/msl.go:an ldmatrix load":                        "NVIDIA's ldmatrix lane contract, formed only where the profile lowers it",
+		"composer/msl/msl.go:float only":                              "Metal's simdgroup_matrix types are half, bfloat and float: the composer forms no integer matrix op for Metal",
+		"composer/msl/msl.go:no lowering for %s":                      "an op past the lowering's switch: every op the composer forms for Metal is lowered (the census on the M4)",
+		"composer/spirv/lower.go:an ldmatrix load":                    "NVIDIA's ldmatrix lane contract, formed only where the profile lowers it",
+		"composer/spirv/lower.go:no lowering for %s":                  "an op past the lowering's switch: every op the composer forms for Vulkan is lowered (the census on Vulkan)",
+		"composer/ptx/lower.go:no lowering for %s":                    "an op past the lowering's switch: every op the composer forms for CUDA is lowered (the census on CUDA)",
+		"composer/amdgpu/lower.go:an ldmatrix load":                   "NVIDIA's ldmatrix lane contract, formed only where the profile lowers it",
+		"composer/amdgpu/lower.go:32-lane mma.sync":                   "NVIDIA's mma.sync fragment layout, which neither MFMA nor WMMA has: formed only for sm_70 and up",
+		"composer/amdgpu/lower.go:yet: the matrix units":              "the AMD lowering states what its instructions express; the composer forms no tile op it refuses",
+		"composer/amdgpu/lower.go:amdgpu: no lowering for %s":         "an op past the lowering's switch: the AMD profile forms only what it lowers",
+		"composer/lowera64_node.go:has no form of without i8mm":       "the composer forms an unsigned byte dot only under Int8Form.UnsignedDot's instruction sets, which no arm64 profile states",
+		"format/layout/pack.go:cannot hold as a normal scale":         "an MXFP4 scale below f32's normal range on nonzero codes, which a device flushes to zero: the container's check",
+		"format/jlm/write.go:cannot state":                            "a container version with no field for it: the writer's check",
+		"format/jlm/migrate.go:which v31 cannot recover":              "a container older than the migration reads: convert it again",
+		"backend/backend.go:cannot be assumed":                        "a device that promises no subgroup width: its own statement, and the kernel asked has a scalar twin",
+		"backend/cuda/api.go:cannot map host memory":                  "a device without host mapping (CU_DEVICE_ATTRIBUTE_CAN_MAP_HOST_MEMORY): the device's limit",
+		"backend/cuda.go:cannot be asked for":                         "a CUDA warp is 32 lanes: the hardware's width",
+		"backend/hip.go:cannot be asked for":                          "amdgcn's wave: the hardware's width",
+		"backend/metal.go:cannot be asked for":                        "Metal's SIMD-group width: the hardware's",
+		"backend/vulkan.go:seam tuner cannot place blocks":            "a default, not a refusal: a software Vulkan device runs on the host's own cores, and naming it takes it",
+		"backend/metal/metal_darwin.go:is not available (macOS 15+)":  "an OS API before macOS 15: the platform's",
+		"backend/metal/metal_other.go:not available on this platform": "Metal outside Apple's platforms",
+		"backend/vulkan/device.go:does not support":                   "a driver without VK_EXT_memory_budget: free memory unknown and reported, nothing refused",
+		"backend/cuda/cuda.go:cannot record an event node":            "a driver without cuEventRecordWithFlags: the driver's",
+		"backend/grid.go:cannot bound its residency":                  "a device's limit: no grid barrier without a co-residency bound (RULE 13)",
+		"backend/cuda/funcattr.go:cannot ask for":                     "a driver without cuFuncSetAttribute: no dynamic shared memory past the static 48 KB (the driver's)",
+		"backend/vulkan/run.go:cannot guarantee a":                    "a device that cannot pin a subgroup width (VK_EXT_subgroup_size_control): the device's limit",
+		"backend/vulkan/run.go:host memory cannot be imported":        "a driver without VK_EXT_external_memory_host: the driver's",
+		"backend/vulkan/run.go:cannot import %d bytes":                "the driver's answer to a host import",
+		"backend/vulkan/subgroup.go:subgroup shuffles":                "a device without subgroup shuffles: the device's limit",
+		"backend/vulkan/subgroup.go:lanes and cannot be":              "a device whose subgroup width varies: the device's limit",
+		"backend/vulkan/subgroup.go:cannot be promised":               "a device whose subgroup width varies: the device's limit",
+		"backend/vulkan/subgroup.go:cannot be pinned":                 "a device whose subgroup width varies: the device's limit",
 	}
 	// phrase is a string literal that says the code refuses: something
-	// refused, not implemented, not supported or not built, or a model, a
-	// container or a device that reads or states no such thing.
-	phrase := regexp.MustCompile(`"[^"\n]*(?i:not implemented|is not supported|are not supported|not built|unsupported|is refused|refuses|\b(?:reads|states) no\b)[^"\n]*"`)
+	// refused, not implemented, not supported, not built or not available,
+	// a model, a container or a device that reads or states no such thing,
+	// cannot or has no form or lowering of it, or has too many of it.
+	phrase := regexp.MustCompile(`"[^"\n]*(?i:not implemented|is not supported|are not supported|not built|unsupported|is refused|refuses|\b(?:reads|states) no\b|cannot|can not|too many|too wide|no device kernel|no lowering|does not support|not pre-packed|has no form|no form of|not available)[^"\n]*"`)
 	root := filepath.Join("..", "..")
 	found := map[string]bool{}
 	var files int
@@ -104,7 +154,8 @@ func TestNoRefusalButInputsAndLimits(t *testing.T) {
 		}
 	}
 	t.Logf("%d files, %d refusals, each an input check or a limit", files, len(found))
-	for _, v := range []string{`"model: a sliding window is not supported"`, `"model: the block reads no window"`, `"model: the tower states no grid"`} {
+	for _, v := range []string{`"model: a sliding window is not supported"`, `"model: the block reads no window"`, `"model: the tower states no grid"`,
+		`"tier: block 3 cannot move to cuda:1"`, `"tier: 70 kernel arguments is too many"`, `"tier: its bank is not pre-packed"`} {
 		if _, ok := allowedKey(allowed, "engine/forward.go", v); ok || !phrase.MatchString(v) {
 			t.Errorf("the violation %s, a refusal the list does not hold, was not seen", v)
 		}
