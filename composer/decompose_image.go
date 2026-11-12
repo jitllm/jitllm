@@ -259,7 +259,7 @@ func decomposePicturePIL(o graph.Op, c *Context) ([]Prim, error) {
 	U, F, I := ir.U32, ir.F32, ir.I32
 	sh := c.rows(o.Out[0])
 	W, K := sh[1], a.Taps
-	if W%3 != 0 || W >= 1<<15 {
+	if !a.PicBytes && W%3 != 0 || W >= 1<<15 {
 		return nil, fmt.Errorf("a picture's rows of %d samples, not whole pixels", W)
 	}
 	E := PILEntryWords(K)
@@ -425,6 +425,12 @@ func decomposePicturePIL(o graph.Op, c *Context) ([]Prim, error) {
 	if a.PicPass == graph.PicFinish {
 		prims = nil
 	}
+	if a.PicBytes {
+		if a.PicPass == graph.PicWhole {
+			prims = append(prims, vred)
+		}
+		return append(prims, pictureBytes(c, o, n, reqWords, vsum, liveW, liveH, finish)), nil
+	}
 
 	var m exprs
 	mu := func(n int) int { return m.u(uint32(n)) }
@@ -467,6 +473,40 @@ func decomposePicturePIL(o graph.Op, c *Context) ([]Prim, error) {
 	}
 	return append(prims, Prim{Kind: PrimMap, Shape: sh, In: in, Out: c.value(o.Out[0]), Expr: m.e,
 		Facts: Facts{Extents: ext}}), nil
+}
+
+// pictureBytes is a Pillow resize's map writing its bytes (PicBytes): pixel
+// p's word its three channels' sums made bytes, lowest first, and 255 above
+// them; zero past the live picture, which is dense at its live width as its
+// sums are.
+func pictureBytes(c *Context, o graph.Op, n, reqWords int, vsum Operand, liveW, liveH func(*exprs) int, finish func(*exprs, int) int) Prim {
+	a := o.Attr
+	U, I := ir.U32, ir.I32
+	sh := c.rows(o.Out[0])
+	var b exprs
+	bu := func(n int) int { return b.u(uint32(n)) }
+	p := b.op(OpAdd, U, b.op(OpMul, U, b.coord(0), bu(sh[1])), b.coord(1))
+	in := []Operand{vsum}
+	if a.PicPass == graph.PicFinish {
+		in[0] = TablePicAcc.of(accOf(a))
+	}
+	ext := map[int]int{0: n}
+	live := bu(a.PicW * a.PicH)
+	if a.PicLive {
+		in = append(in, TableRequest.op())
+		ext[1] = reqWords
+		live = b.op(OpMul, U, liveW(&b), liveH(&b))
+	}
+	word := bu(0xff000000)
+	for ch := range 3 {
+		s := b.load(0, b.op(OpMin, U, b.op(OpAdd, U, b.op(OpMul, U, p, bu(3)), bu(ch)), bu(n-1)))
+		if a.PicPass == graph.PicFinish {
+			s = b.un(OpBitcast, I, s)
+		}
+		word = b.op(OpOr, U, word, b.op(OpShl, U, finish(&b, s), bu(8*ch)))
+	}
+	b.sel(U, b.op(OpLess, ir.Pred, p, live), word, bu(0))
+	return Prim{Kind: PrimMap, Shape: sh, In: in, Out: c.value(o.Out[0]), Expr: b.e, Facts: Facts{Extents: ext}}
 }
 
 // ycbcr is channel ch of the YCbCr pixel (y, xx), its luma at byte at: its

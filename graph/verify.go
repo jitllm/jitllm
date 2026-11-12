@@ -274,6 +274,8 @@ func Verify(g *Graph, f Facts) error {
 				bad("%s: a picture's pass %d by chain %d", at, a.PicPass, a.Chain)
 			case a.PicColumns && a.PicPass != PicBand:
 				bad("%s: a picture's pass %d reading its column bands' sums", at, a.PicPass)
+			case a.PicBytes && (a.Chain != ChainPIL || a.PicCanvas || g.Values[o.Out[0]].Elem != ElemU32 || width(o.Out[0]) != a.PicW):
+				bad("%s: a picture's bytes by chain %d (on a canvas %v) into rows of %d", at, a.Chain, a.PicCanvas, width(o.Out[0]))
 			}
 		case OpAdd:
 			if len(o.In) != 2 || len(o.Out) != 1 || width(o.In[0]) != width(o.In[1]) || width(o.Out[0]) != width(o.In[0]) {
