@@ -80,6 +80,19 @@ func VerbatimOf(t quant.Type) (Quant, bool) {
 // tensor-core kernel.
 func IsFloat(q Quant) bool { return q.info().float > 0 }
 
+// IsRaw reports whether q's device form is the container's own bytes, a row
+// a run of them: a float format's rows, or a verbatim format's blocks.
+func IsRaw(q Quant) bool { return IsFloat(q) || q == IQ4NL }
+
+// RawRowBytes is a row of k elements' bytes in raw format q (IsRaw): a
+// float format's elements, a verbatim format's 18-byte blocks of 32.
+func RawRowBytes(q Quant, k int) int {
+	if q == IQ4NL {
+		return k / 32 * 18
+	}
+	return k * q.info().float
+}
+
 // info is the whole format table.
 //
 // Every format reduces to value = scale*q - bias, which is what lets one

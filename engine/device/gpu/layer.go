@@ -581,6 +581,14 @@ func (g *devTier) upRingReady() bool {
 	return true
 }
 
+// rawStride is an expert's bytes in raw bank q of rows k elements wide, its
+// sheet n bytes: a float bank's sheet is its rows, a verbatim bank's rounds
+// its blocks up to a word.
+func rawStride(q layout.Quant, n, k int) int {
+	row := layout.RawRowBytes(q, k)
+	return n / row * row
+}
+
 // upload copies items' sheets through the ring onto the copy queue, at their
 // slots. A sheet plane larger than the ring goes the ordered way.
 func (st *streamBank) upload(g *devTier, up backend.Uploader, l *layer, nExpert int, items []streamItem) error {
@@ -592,8 +600,8 @@ func (st *streamBank) upload(g *devTier, up backend.Uploader, l *layer, nExpert 
 			continue
 		}
 		pk := pair.w.Packed
-		float := pk == nil && layout.IsFloat(pair.r.t) && len(pair.w.Data) > 0
-		if pair.r == nil || !pair.r.ok || pk == nil && !float {
+		raw := pk == nil && layout.IsRaw(pair.r.t) && len(pair.w.Data) > 0
+		if pair.r == nil || !pair.r.ok || pk == nil && !raw {
 			return fmt.Errorf("tier: streamed bank %d has no host side", m)
 		}
 		for pl := 0; pl < 3; pl++ {
@@ -617,7 +625,7 @@ func (st *streamBank) upload(g *devTier, up backend.Uploader, l *layer, nExpert 
 					g.ringUsed = 0
 				}
 				buf := g.upRing[g.ringUsed : g.ringUsed+n : g.ringUsed+n]
-				if !float && pk.Sheet != nil {
+				if !raw && pk.Sheet != nil {
 					sp, rel, err := pk.Sheet(int(it.e))
 					if err != nil {
 						rel()
@@ -631,17 +639,20 @@ func (st *streamBank) upload(g *devTier, up backend.Uploader, l *layer, nExpert 
 					copy(buf, src)
 					rel()
 				} else {
-					// A float bank's rows are its one plane.
-					whole := pair.w.Data
-					if !float {
+					// A raw bank's rows are its one plane, an expert's
+					// stride bytes of it.
+					whole, stride := pair.w.Data, n
+					if raw {
+						stride = rawStride(pair.r.t, n, pair.r.k)
+					} else {
 						whole = [3][]byte{pk.QS, pk.D, pk.SC}[pl]
 					}
-					off := int(it.e) * n
-					if off+n > len(whole) {
+					off := int(it.e) * stride
+					if off+stride > len(whole) {
 						return fmt.Errorf("tier: expert %d plane %d wants bytes %d..%d of %d",
-							it.e, pl, off, off+n, len(whole))
+							it.e, pl, off, off+stride, len(whole))
 					}
-					copy(buf, whole[off:off+n])
+					copy(buf, whole[off:off+stride])
 				}
 				g.ringUsed += n
 				if err := up.Upload(dst, it.slot*n, buf); err != nil {
@@ -807,8 +818,8 @@ func (st *streamBank) put(g *devTier, s backend.Session, l *layer, nExpert int, 
 			continue
 		}
 		pk := pair.w.Packed
-		float := pk == nil && layout.IsFloat(pair.r.t) && len(pair.w.Data) > 0
-		if pair.r == nil || !pair.r.ok || pk == nil && !float {
+		raw := pk == nil && layout.IsRaw(pair.r.t) && len(pair.w.Data) > 0
+		if pair.r == nil || !pair.r.ok || pk == nil && !raw {
 			return fmt.Errorf("tier: streamed bank %d has no host side", m)
 		}
 		for pl := 0; pl < 3; pl++ {
@@ -816,8 +827,15 @@ func (st *streamBank) put(g *devTier, s backend.Session, l *layer, nExpert int, 
 			if n == 0 {
 				continue // this format has no such plane
 			}
+			// A verbatim bank's expert is its blocks, which the sheet rounds
+			// up to a word: such an expert is copied, never sent from its
+			// frame, whose n bytes would run into the next expert's.
+			stride := n
+			if raw {
+				stride = rawStride(pair.r.t, n, pair.r.k)
+			}
 			dst := [3]backend.Buf{pair.r.qs, pair.r.d, pair.r.sc}[pl]
-			direct := n >= g.directBytes() || !contiguous
+			direct := (n >= g.directBytes() || !contiguous) && stride == n
 			var buf []byte
 			if !direct {
 				buf = g.streamStage(m, pl, n*(hi-lo))
@@ -834,7 +852,7 @@ func (st *streamBank) put(g *devTier, s backend.Session, l *layer, nExpert int, 
 				var src []byte
 				release := func() {}
 				ts := time.Now()
-				if !float && pk.Sheet != nil {
+				if !raw && pk.Sheet != nil {
 					sp, rel, err := pk.Sheet(int(e))
 					release = rel
 					if err != nil {
@@ -843,21 +861,22 @@ func (st *streamBank) put(g *devTier, s backend.Session, l *layer, nExpert int, 
 					}
 					src = [3][]byte{sp.QS, sp.D, sp.SC}[pl]
 				} else {
-					// A float bank's rows are its one plane.
+					// A raw bank's rows are its one plane, an expert's
+					// stride bytes of it.
 					whole := pair.w.Data
-					if !float {
+					if !raw {
 						whole = [3][]byte{pk.QS, pk.D, pk.SC}[pl]
 					}
-					off := int(e) * n
-					if off+n > len(whole) {
+					off := int(e) * stride
+					if off+stride > len(whole) {
 						return fmt.Errorf("tier: expert %d plane %d wants bytes %d..%d of %d",
-							e, pl, off, off+n, len(whole))
+							e, pl, off, off+stride, len(whole))
 					}
-					src = whole[off : off+n]
+					src = whole[off : off+stride]
 				}
-				if len(src) != n {
+				if len(src) != stride {
 					release()
-					return fmt.Errorf("tier: expert %d plane %d is %d bytes, want %d", e, pl, len(src), n)
+					return fmt.Errorf("tier: expert %d plane %d is %d bytes, want %d", e, pl, len(src), stride)
 				}
 				tc := time.Now()
 				g.TStreamSheet += tc.Sub(ts)
@@ -2142,10 +2161,11 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 					li, weightRole(i), x.T)
 				return false
 			}
-			if x.Packed == nil && (!layout.IsFloat(q) || len(x.Data) == 0) {
-				// A streamed bank sends a sheet at a time: a packed bank's planes,
-				// or a float bank's own rows (its one plane, expert-major).
-				g.LastErr = fmt.Sprintf("block %d: %s is not pre-packed, so its bank cannot be streamed",
+			if x.Packed == nil && (!layout.IsRaw(q) || len(x.Data) == 0) {
+				// A streamed bank sends a sheet at a time: a packed bank's
+				// planes, or a raw bank's own rows (its one plane,
+				// expert-major) -- a float or a verbatim format's.
+				g.LastErr = fmt.Sprintf("block %d: %s holds neither its packed planes nor its rows",
 					li, weightRole(i))
 				return false
 			}
