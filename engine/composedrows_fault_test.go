@@ -15,8 +15,9 @@ import (
 
 // TestComposedRowsDiscriminate runs the composed rows' gates under each
 // violation of the rows the composer serves and demands each fires (RULE
-// 10): a ragged row stating half its position ("pos") and every row reading the
-// first row's pages ("alias") must part a row from the host past a tie, as
+// 10): a ragged row stating half its position ("pos") and every row reading
+// the calling session's pages ("session") must part a row from the host past a
+// tie, as
 // must a per-row head that projects the first wanted row alone ("headrow"),
 // whose other rows' logits are another step's; and a folded head reading the
 // chunk's first row ("foldrow") must part from the tail call
@@ -37,7 +38,7 @@ func TestComposedRowsDiscriminate(t *testing.T) {
 		for _, f := range []struct {
 			name string
 			arm  func(*gpu.Faults, string)
-		}{{"pos", (*gpu.Faults).SetPagedFault}, {"alias", (*gpu.Faults).SetPagedFault}, {"headrow", (*gpu.Faults).SetRowsFault}} {
+		}{{"pos", (*gpu.Faults).SetPagedFault}, {"session", (*gpu.Faults).SetPagedFault}, {"headrow", (*gpu.Faults).SetRowsFault}} {
 			t.Run(dev+"/"+f.name, func(t *testing.T) {
 				var faults gpu.Faults
 				f.arm(&faults, f.name)

@@ -309,11 +309,9 @@ func (c *Config) formFaultedAsDevice() bool {
 }
 
 // SetPagedFault names a deliberate error in the paged history's wiring, so a gate
-// can run each violation and demand it fails (RULE 10); the kernels' own are
-// kernels.SetPagedFault.
+// can run each violation and demand it fails (RULE 10):
 //
 //	"window"  a windowed layer reads the full descriptors: no window at all
-//	"alias"   every row of a batch reads the first row's pages
 //	"softwidth" the staged prefill's softmax launched 64 wide whatever its
 //	          lanes: two subgroups on one item, where Metal runs the width
 //	          it is given

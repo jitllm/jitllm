@@ -417,9 +417,6 @@ func (g *devTier) pagedRows(sid uint64, dst []pagedRow, R, nrow, pos int, rag *r
 		switch {
 		case rag != nil && r < len(rag.pos):
 			base := rag.slot[r] - rag.pos[r]
-			if g.pagedFaulted("alias") {
-				base = rag.slot[0] - rag.pos[0]
-			}
 			s := sid
 			if rag.sid != nil && !g.pagedFaulted("session") {
 				s = rag.sid[r]
