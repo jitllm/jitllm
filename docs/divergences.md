@@ -37,6 +37,7 @@ is in its evidence file (MC is `docs/engineering-history/model-correctness.md`).
 | d1's pictures over 1024x1024 | handed to mtmd as they came | d1's runner.py: resized to 1 MiPx with Pillow BICUBIC first (cap_pixels) | same |
 | InternVL's class token | last | first, as the reference | MC "Gemma 3 vision and InternVL" |
 | MiniCPM-V's image ids, resize and slicing | three departures from the processor | the processor | MC "MiniCPM-V" |
+| MiniCPM-V's text rotary | plain rope: its converter writes no LongRoPE factors (the published GGUF names no scaling; a newer converter names longrope with no factors) | the publisher's config.json given at conversion (`jitllm convert -config`, `convert.WithModelConfig`); a GGUF naming LongRoPE with no factors and no config is refused | MC "MiniCPM-V" |
 | Kimi-K3-0.40B-MXFP4's dynamic MXFP4 input activations | -- (its converter moves the weights alone) | the release's W4A16: the experts' weights moved, their activations the engine's MXFP4 kernels' own | MC "The release from safetensors" |
 | BitNet b1.58 2B-4T's graph | llama.cpp's `bitnet` is 1bitLLM's reproduction (SiLU gate, NORM rotary) and its converter maps neither inner norm; bitnet.cpp's `bitnet-b1.58` runs SiLU too | transformers' BitNetForCausalLM: squared ReLU, NEOX (on the release, NLL 1.70 against SiLU's 2.51); `bitnet` is refused by name | MC "BitNet b1.58" |
 | BitNet's activation quantization | per 256-element block (q8_K, TQ2_0's dot) | transformers: per token, int8 absmax over the whole row | same |

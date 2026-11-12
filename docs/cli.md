@@ -60,6 +60,7 @@ nothing in it is moved.
 | `-o DIR` | where the container and a downloaded source land; the output path is optional |
 | `-q8` | safetensors only: store weight matrices as Q8_0 |
 | `-chat-template FILE` | store this file's chat template(s) in place of the source's |
+| `-config FILE` | GGUF only: the publisher's config.json (or its directory), for what the GGUF dropped: a LongRoPE's factors (MiniCPM-V's) |
 | `-plan` | safetensors only: print the container the conversion would write, from the shards' headers, without converting |
 
 The container carries the configuration, tokenizer, stop tokens, chat templates

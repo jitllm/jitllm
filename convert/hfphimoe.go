@@ -150,13 +150,24 @@ func hfLongRopeConsume(c *hfConfig) (*hfLongRope, error) {
 // cos and sin by short_mscale, and transformers' LongRoPE by attention_factor,
 // or sqrt(1 + ln(ctx/orig)/ln(orig)) where neither is stated.
 func (lr *hfLongRope) apply(c *hfConfig, cfg *Config) error {
+	ts, err := lr.state(c.path, cfg)
+	if err != nil {
+		return err
+	}
+	c.extra = append(c.extra, ts...)
+	return nil
+}
+
+// state is apply's statement for a config read from path: the two factor
+// vectors, with the original context and the magnitude set on cfg.
+func (lr *hfLongRope) state(path string, cfg *Config) ([]jlm.Tensor, error) {
 	pairs := int(cfg.NRot / 2)
 	if len(lr.Short) != pairs || len(lr.Long) != pairs {
-		return fmt.Errorf("convert: %s: LongRoPE factors %d short and %d long for %d rotary pairs",
-			c.path, len(lr.Short), len(lr.Long), pairs)
+		return nil, fmt.Errorf("convert: %s: LongRoPE factors %d short and %d long for %d rotary pairs",
+			path, len(lr.Short), len(lr.Long), pairs)
 	}
 	if lr.OrigCtx == 0 {
-		return fmt.Errorf("convert: %s: LongRoPE without original_max_position_embeddings", c.path)
+		return nil, fmt.Errorf("convert: %s: LongRoPE without original_max_position_embeddings", path)
 	}
 	cfg.YarnOrigCtx = lr.OrigCtx
 	switch {
@@ -176,8 +187,7 @@ func (lr *hfLongRope) apply(c *hfConfig, cfg *Config) error {
 		return jlm.Tensor{Role: role, Block: jlm.DenseBlock, Index: -1, Type: jlm.TypeF32, NDim: 1,
 			Dims: [4]uint64{uint64(len(f))}, Data: b, Name: name}
 	}
-	c.extra = append(c.extra,
+	return []jlm.Tensor{
 		vec(jlm.RoleRopeFactorsShort, "rope_factors_short.weight", lr.Short),
-		vec(jlm.RoleRopeFactorsLong, "rope_factors_long.weight", lr.Long))
-	return nil
+		vec(jlm.RoleRopeFactorsLong, "rope_factors_long.weight", lr.Long)}, nil
 }

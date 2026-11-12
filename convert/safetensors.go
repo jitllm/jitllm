@@ -135,7 +135,17 @@ type options struct {
 	q8           bool   // WithQ8, safetensors only
 	chatTemplate string // WithChatTemplate
 	head         string // WithHead, GGUF only
+	modelConfig  string // WithModelConfig, GGUF only
 }
+
+// WithModelConfig reads what a GGUF dropped from the publisher's config.json
+// (path is the file or its model directory): a text model's LongRoPE
+// factors, which llama.cpp's converter writes for no llama-arch model --
+// MiniCPM-V 4's run from 1.0 to 31.0 across the rotary pairs, and its GGUF
+// turns q and k with plain rope without them. The publisher's statement is
+// the authority (RULE 7m), as WithChatTemplate's template is; a GGUF that
+// carries its factors keeps them.
+func WithModelConfig(path string) Option { return func(o *options) { o.modelConfig = path } }
 
 // WithHead converts a GGUF together with its multi-token-prediction head,
 // published as a GGUF of its own: the head's blocks become the model's

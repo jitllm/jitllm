@@ -174,7 +174,7 @@ func usage() {
   jitllm batch [-devices SPEC] [-batch N] [-n N] <model.jlm> <prompt...>
   jitllm verify [flags] <model.jlm>
   jitllm upgrade <model.jlm>...   bring containers from an older jitllm to this build's version, in place
-  jitllm convert [-o DIR] [-chat-template FILE] [-head mtp.gguf] <model.gguf|model-dir|URL|NAME> [mmproj.gguf|URL] [out.jlm]
+  jitllm convert [-o DIR] [-chat-template FILE] [-config FILE] [-head mtp.gguf] <model.gguf|model-dir|URL|NAME> [mmproj.gguf|URL] [out.jlm]
   jitllm library [-refs]   the models convert fetches by NAME
 
 run flags:
@@ -258,6 +258,12 @@ template does). -chat-template stores another in its place:
                          A file with no template, or one that does not compile, is refused
   jitllm convert -chat-template Mistral-7B-Instruct-v0.3/tokenizer_config.json \
       Mistral-7B-Instruct-v0.3-Q4_K_M.gguf
+
+A GGUF can drop what its model's config.json states: llama.cpp's converter writes
+no LongRoPE factors for MiniCPM-V's text model. -config reads them from the
+publisher's file; a GGUF that names LongRoPE and carries no factors is refused
+without it:
+  -config FILE           a config.json or the model directory holding one
 
 It also takes a HuggingFace reference, which is downloaded first:
   hf://OWNER/REPO/FILE.gguf            the short form; @REV pins a branch, tag or sha
