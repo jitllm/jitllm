@@ -194,6 +194,7 @@ func (g *GPU) releaseHeld() {
 	}
 	g.mu.Lock()
 	clear(g.own)
+	clear(g.route)
 	g.head, g.cur, g.spillFrom = nil, 0, nil
 	g.planN, g.share = 0, nil
 	g.split = false

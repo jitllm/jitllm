@@ -542,7 +542,7 @@ func (g *GPU) layersRows(c *rowsCall, self uint64, lo, hi int, pos, slot []int, 
 	beside := g.rowsCalls.Add(1) > 1
 	defer g.rowsCalls.Add(-1)
 	g.mu.Lock()
-	rs, ok := g.runsInto(c.runs, lo, hi)
+	rs, ok := g.runsInto(self, c.runs, lo, hi)
 	c.runs = nil
 	why := ""
 	switch {

@@ -52,7 +52,7 @@ gate below before it counts.
 |---|---|---|
 | **JIT** | every kernel is emitted at run time for the device in front of it; no pregenerated or copied kernels (RULE 8) | `cpu.TestNoAssemblyBesidesTheTrampolines`; device code only from the composer's forms (no hand-written kernels) |
 | **No Go compute** | no arithmetic a token runs is a Go loop; a missing kernel is a BASIC generated kernel, never a fallback (RULE 8) | `TestNoProductionCodeImportsTheOracle`, `engine.TestEveryModelRunsGenerated` |
-| **Relocation** | any block, its KV pages and its recurrent state can move between any two devices, the CPU among them, mid-sequence, with the same answer; no device is a default where blocks live, and every move names its destination | `TestLayerRelocatesToAnotherDevice`, `TestBlocksMoveBetweenDevices`, `TestRelocatedBlocksComeBack`, `TestKVPagesRelocateWithTheLayer`, `TestBatchSeamMovesCarryEveryRow(Hybrid)`, `TestMLASeamMovesWithItsHistory`, `TestShrinkingTheSeamMovesTheSummaryToTheCPU`; decision models: `TestDecisionRelocatesMidPrompt`, `TestDecisionMovesBetweenCards`, `TestDecisionDistributes` |
+| **Relocation** | any block, its KV pages and its recurrent state can move between any two devices, the CPU among them, mid-sequence, with the same answer; no device is a default where blocks live, and every move names its destination | `TestLayerRelocatesToAnotherDevice`, `TestBlocksMoveBetweenDevices`, `TestRelocatedBlocksComeBack`, `TestKVPagesRelocateWithTheLayer`, `TestBatchSeamMovesCarryEveryRow(Hybrid)`, `TestMLASeamMovesWithItsHistory`, `TestShrinkingTheSeamMovesTheSummaryToTheCPU`, `TestTwoInstancesRunABlockOnTwoCards` (one block on two cards, each instance on its own copy); decision models: `TestDecisionRelocatesMidPrompt`, `TestDecisionMovesBetweenCards`, `TestDecisionDistributes` |
 | **Paging** | paging is the design, never a mode: a model that does not fit pages, a budget below the model evicts and re-reads with the same answer, every entry point faults its blocks in, and a windowed layer holds its window and not the context (placement.md 15z) | `TestPagingDoesNotChangeTheAnswer`, `TestOpenHonoursAPageBudget`, `TestForwardBatchFaultsItsBlocksIn`, `TestTwoPagedModels*`, `TestWindowedLayersHoldTheirWindow`, `TestPrefixCacheRestoresAWindowedLayer`, `TestKVIsHeldOnce` (a position's history in one place per device: no page a session holds beside the prefix cache's on its device, no host mirror of a card's history), `TestSharedPrefixMovesToTheCard`, `TestBlocksPageOnTheListedCard` (cards listed without the CPU, `WithCPU(false)`, page the model on themselves and nothing runs on the CPU); decision models: `TestDecisionPagesWithTheSameAnswer` |
 | **Low to no Go allocation** | a warm decode token and a warm step make zero engine heap allocations on the host and every device backend; weights and frames live off the heap (RULE 2f) | `engine.TestDecodeDoesNotAllocate` (JITLLM_ALLOC_MODELS adds models), `TestTwoPagedModels*`; a decision model's warm question: `TestDecisionDoesNotAllocate` |
 
@@ -825,9 +825,11 @@ into a call site.
 
 **What is missing is the PLURAL**: several devices at once rather than one,
 layer migration across devices rather than only to and from the host, and
-device-side paging. Not done, named rather than implied: two instances putting
-one block on different cards of one tier (the tier keeps one route a block),
-and the sessions-per-device budget.
+device-side paging. Two instances put one block on different cards of one
+tier, each session routed to its own copy (`TestTwoInstancesRunABlockOnTwoCards`).
+Not done, named rather than implied: the projection is one per tier (an
+instance moving its head moves every instance's), and the sessions-per-device
+budget.
 
 - **The libraries read no environment.** Every knob is a `With...()` option;
   `cmd/jitllm` reads the `JITLLM_*` names and passes them through. The one file

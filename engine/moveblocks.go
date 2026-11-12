@@ -446,11 +446,17 @@ func (s *Instance) DeviceOf(li int) (string, bool) {
 	return "", true
 }
 
-// named is the device that names where the instance's blocks are: the bound
-// session's view, or the device the instance is placed on where that session
-// has none (one that never ran there); the route is the tier's, the same
-// through every view.
+// named is the device that names where the instance's blocks are: its own
+// session's view, which every placement runs through (Place) -- another
+// instance on the tier may run a block on another card, each view routed to
+// its own copy -- else the bound session's, or the device the instance is
+// placed on where neither has one.
 func (s *Instance) named() (nn.NamedDevice, bool) {
+	if s.own != nil {
+		if nd, ok := s.own.ld.(nn.NamedDevice); ok {
+			return nd, true
+		}
+	}
 	if nd, ok := s.ld.(nn.NamedDevice); ok {
 		return nd, true
 	}

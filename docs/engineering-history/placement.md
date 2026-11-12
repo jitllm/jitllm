@@ -4720,3 +4720,27 @@ argument that a full device would gain a seam; the seam is the crossing the
 price already charges. With every block resident and nothing left to stream,
 the projection now buys its room with the last blocks once that crossing is
 paid (`TestTheHeadBuysItsRoomOnAFullDevice`, which fails on the old rule).
+
+## One block on two cards of a tier: a session's own route
+
+The tier kept one route a block (GPU.own). Two instances of one model on a
+tier shared every block's device, and an instance moving a block another
+instance's sessions held history on was refused ("so it cannot move to"),
+a choice of this code's, not a limit of the cards: nothing on a card stops
+two copies of a block's weights, each with its own sessions' history.
+
+A session now carries routes of its own (GPU.route) for the blocks it runs
+on another card than the block's own, and every per-session path asks the
+session's device for a block (GPU.at) rather than the block's: the runs a
+call is cut into, the history's moves and pages, the rows' gather, the KV
+reservation, and the session view's answers. A move of a copy other
+sessions hold history on gives the target a copy of its own; the moving
+session's route and history go there and the copy stays for the others,
+until its last session goes (leaveCopy, dropCopy). A copy is a placement
+like any other: its weights page as the block's do, and KV stays held once
+per device, a session's history on the one copy it runs.
+
+What is still one per tier is the projection: an instance moving its head
+moves every instance's on that tier (AGENTS.md, Scope). The gate,
+engine.TestTwoInstancesRunABlockOnTwoCards, moves the upper half of the
+second instance's blocks and leaves its head beside the lower half.
