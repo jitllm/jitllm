@@ -331,7 +331,7 @@ func (cu *cursorer) walk(p, ptr, from int, fresh bool, pos lin, as []int, ix []l
 		// Accesses that all add a base the loop around picks walk a copy
 		// taken at that base.
 		if !cont && !passes {
-			if t, ok := cu.invariant(c, rest, walkAt); ok {
+			if t, ok := cu.invariant(c, mine, rest, walkAt); ok {
 				if !aside {
 					q, take, qFrom, aside = cu.newPtr(), true, ptr, true
 					if fresh {
@@ -378,9 +378,13 @@ func (cu *cursorer) walk(p, ptr, from int, fresh bool, pos lin, as []int, ix []l
 // adds (rest, c's iteration taken out) where no loop in c moves it and it is
 // no constant: a base the loop around picks, an expert's sheet read from the
 // selection, every node of it made before c in a scope around c, each of its
-// terms read from memory and added. False where the accesses add
-// different terms, or the element is wider than an address's scale.
-func (cu *cursorer) invariant(c int, rest []lin, at lin) (lin, bool) {
+// terms read from memory and added. A loop's tail walks on where its loop's
+// copy stands and names its start another way, so its accesses (mine, as
+// rest) do not count unless the kernel is formed with them counting
+// (Kernel.Untailed); a term they would have refused marks the kernel
+// Tailed. False where the accesses add different terms, or the element is
+// wider than an address's scale.
+func (cu *cursorer) invariant(c int, mine []int, rest []lin, at lin) (lin, bool) {
 	k, g := cu.k, cu.g
 	if k.Uninit || k.Bufs[cu.buf].Operand.Kind != OperandWeight {
 		return nil, false
@@ -391,6 +395,8 @@ func (cu *cursorer) invariant(c int, rest []lin, at lin) (lin, bool) {
 		return nil, false
 	}
 	var t lin
+	var tails []lin
+	first := true
 	for j := range rest {
 		r := copyLin(rest[j])
 		for d := range k.Loops {
@@ -403,8 +409,12 @@ func (cu *cursorer) invariant(c int, rest []lin, at lin) (lin, bool) {
 		r.add(at, -1)
 		r = g.merged(r)
 		delete(r, "")
-		if j == 0 {
-			t = r
+		if h := cu.as[mine[j]].home; !k.Untailed && h >= 0 && k.Loops[h].Of > 0 {
+			tails = append(tails, r)
+			continue
+		}
+		if first {
+			t, first = r, false
 		} else if !t.equal(r) {
 			return nil, false
 		}
@@ -434,6 +444,9 @@ func (cu *cursorer) invariant(c int, rest []lin, at lin) (lin, bool) {
 				}
 			}
 		}
+	}
+	for _, r := range tails {
+		k.Tailed = k.Tailed || !t.equal(r)
 	}
 	return t, true
 }

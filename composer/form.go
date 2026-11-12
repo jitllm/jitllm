@@ -85,13 +85,21 @@ func (r *Registry) Formed() int64 {
 }
 
 func (r *Registry) form(req Request) ([]Code, error) {
-	ks, err := r.formKernels(req)
+	prof, ok := r.Profiles[req.Device.Kind]
+	if !ok {
+		return nil, fmt.Errorf("jit: no profile for %s", req.Device.Kind)
+	}
+	prof = prof.on(req.Device)
+	ks, err := r.formWith(req, prof, nil)
 	if err != nil {
 		return nil, err
 	}
 	t0 := time.Now()
 	codes, err := r.Lower(ks, req.Device)
 	r.cache.clock("lower", time.Since(t0))
+	if err == nil {
+		codes, err = r.untailed(req, prof, ks, codes)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -109,12 +117,53 @@ func (r *Registry) formKernels(req Request) ([]*Kernel, error) {
 	if !ok {
 		return nil, fmt.Errorf("jit: no profile for %s", req.Device.Kind)
 	}
-	return r.formWith(req, prof.on(req.Device))
+	return r.formWith(req, prof.on(req.Device), nil)
 }
 
-// formWith is formKernels through the passes of prof.
-func (r *Registry) formWith(req Request, prof Profile) ([]*Kernel, error) {
+// untailed is codes, the lowering of ks, or the request formed again with
+// its tailed kernels' tail accesses counting (Kernel.Tailed), whichever
+// spills less: a base taken past the tails holds a register through the
+// loop around, which pays where it keeps the walk off the stack and costs
+// where the loop had no register to spare.
+func (r *Registry) untailed(req Request, prof Profile, ks []*Kernel, codes []PartCode) ([]PartCode, error) {
+	tailed := map[KernelAt]bool{}
+	for _, k := range ks {
+		if k.Tailed {
+			tailed[k.at()] = true
+		}
+	}
+	if len(tailed) == 0 || stackRefs(codes) == 0 {
+		return codes, nil
+	}
+	ks2, err := r.formWith(req, prof, tailed)
+	if err != nil {
+		return codes, nil
+	}
+	t0 := time.Now()
+	codes2, err := r.Lower(ks2, req.Device)
+	r.cache.clock("lower", time.Since(t0))
+	if err != nil || stackRefs(codes2) >= stackRefs(codes) {
+		return codes, nil
+	}
+	return codes2, nil
+}
+
+// stackRefs is the spills of codes, every stack operand of every code.
+func stackRefs(codes []PartCode) int {
+	n := 0
+	for _, c := range codes {
+		n += c.Code.Regs.Stack
+	}
+	return n
+}
+
+// formWith is formKernels through the passes of prof, the kernels at
+// untailed formed with their tail accesses counting (Kernel.Untailed).
+func (r *Registry) formWith(req Request, prof Profile, untailed map[KernelAt]bool) ([]*Kernel, error) {
 	sp := newExprSplit()
+	for at := range untailed {
+		sp.untailed[at] = true
+	}
 	var ks []*Kernel
 	for {
 		c := r.context(req.Graph, req.Part, req.Formats, req.Rotaries, req.Step, req.Device)
@@ -135,7 +184,7 @@ func (r *Registry) formWith(req Request, prof Profile) ([]*Kernel, error) {
 			// in (Request.Paged), so nothing is fused into it.
 			k.Unfused = k.Unfused || k.readsTable(TableExperts)
 			k.Crowded, k.Folds, k.Unvector, k.Uninit = sp.crowded[k.at()], foldsAPass(p), sp.unvector[k.Of], sp.uninit[k.at()]
-			k.Copied = sp.copied[k.at()]
+			k.Copied, k.Untailed = sp.copied[k.at()], sp.untailed[k.at()]
 			k.Apart = req.Apart
 			k.Own = k.ownWrites()
 			k.Capacity = liveOf(p, req.Step, req.Graph)
