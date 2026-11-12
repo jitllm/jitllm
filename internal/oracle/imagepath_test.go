@@ -30,9 +30,10 @@ func imagePathAllowed() map[string]string {
 		"tower.go:lowerValuesWith": "a tower op's attention scale, 1/sqrt of its head width, once an op: the graph's attribute",
 		"tower.go:sliceGrid":       "MiniCPM-V's slice grid, the factor pairs' log aspects against the picture's: geometry from its sizes",
 		"video.go:SampleVideo":     "a video's sampled frames, its stated count and indices evaluated over its frames and rate: geometry from its frames and rate",
-		"video.go:evalSize":        "a video's stated sizes, count, indices, stride and times evaluated over its frames, rate and sides: geometry",
+		"video.go:evalTerms":       "a video's or a picture's stated sizes, count, indices, stride and times evaluated over its frames, rate and sides: geometry",
 		"video.go:formatValue":     "a value the video's prompt writes, rounded to its stated decimals: text the prompt prints",
 		"video.go:pieces":          "the video's prompt pieces, each value evaluated and written: text the prompt prints",
+		"picture.go:square":        "a picture square's fields, its stated geometry evaluated over the picture's sides and checked whole: geometry from its sizes",
 	}
 }
 

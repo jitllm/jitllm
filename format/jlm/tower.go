@@ -36,6 +36,10 @@ type Tower struct {
 	// Video is how the tower reads a video, nil for none. It is written
 	// after the record, in the vision section's tail.
 	Video *Video
+	// Geometry is how a picture becomes the tower's squares, nil where the
+	// steps say it (docs/design/picture-statement.md). It is written after
+	// the video, in the tail.
+	Geometry *PictureGeometry
 }
 
 // ChainBlock is one block of a chained tower: the rows and width of the
@@ -677,6 +681,11 @@ func (t *Tower) Valid() error {
 	}
 	if t.Span.GridDiv < 0 {
 		return fmt.Errorf("jlm: the tower's rows are a grid divided by %d", t.Span.GridDiv)
+	}
+	if t.Geometry != nil {
+		if err := t.Geometry.Valid(); err != nil {
+			return err
+		}
 	}
 	if t.Video != nil {
 		if err := t.Video.Valid(); err != nil {

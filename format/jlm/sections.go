@@ -806,6 +806,10 @@ func encodeVision(v *Vision) []byte {
 	if v.Tower != nil && v.Tower.Video != nil {
 		encodeVideo(w, v.Tower.Video)
 	}
+	// The picture's geometry after it, each record opened by its own tag.
+	if v.Tower != nil && v.Tower.Geometry != nil {
+		encodeGeometry(w, v.Tower.Geometry)
+	}
 	return w.b
 }
 
@@ -854,8 +858,14 @@ func decodeVision(b []byte) (*Vision, error) {
 		v.Audio.MaxSamples = r.u32()
 		v.Audio.Tower = decodeTower(r)
 	}
-	if r.err == nil && len(r.b) > 0 && v.Tower != nil {
+	if r.err == nil && len(r.b) > 0 && v.Tower != nil && tailTag(r) != geometryTag {
 		v.Tower.Video = decodeVideo(r)
+	}
+	if r.err == nil && len(r.b) > 0 && v.Tower != nil {
+		v.Tower.Geometry = decodeGeometry(r)
+	}
+	if r.err == nil && len(r.b) > 0 {
+		r.err = fmt.Errorf("jlm: %d bytes after the vision section's last record", len(r.b))
 	}
 	if r.err != nil {
 		return nil, r.err

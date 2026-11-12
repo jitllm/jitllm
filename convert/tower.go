@@ -22,7 +22,17 @@ func statedTower(s *jlm.Source) (*jlm.Tower, error) {
 	if f == nil {
 		return nil, nil
 	}
-	return f(s)
+	t, err := f(s)
+	if err != nil || t == nil {
+		return t, err
+	}
+	if t.Geometry, err = geometryOf(t, s.Vision); err != nil {
+		return nil, err
+	}
+	if err := t.Valid(); err != nil {
+		return nil, fmt.Errorf("convert: the picture's geometry: %w", err)
+	}
+	return t, nil
 }
 
 // towerStater is what states projector p's tower, nil for a projector whose

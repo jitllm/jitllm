@@ -1,6 +1,9 @@
 package jlm
 
-import "fmt"
+import (
+	"fmt"
+	"math"
+)
 
 // Fn is a function of the op language: an elementwise map of an expression's
 // term, or a reduction's combiner. The codes are this format's, and the block
@@ -147,6 +150,10 @@ const (
 	ArgStored
 	// ArgWidth is the row's width, as a constant: a mean's divisor.
 	ArgWidth
+	// ArgExact is Exact: a constant a binary32 cannot hold, read only by an
+	// expression the host evaluates in float64 (ValidOver), as Python
+	// computes a size.
+	ArgExact
 )
 
 // Arg is a term's operand.
@@ -155,7 +162,11 @@ type Arg struct {
 	Index uint32
 	Role  Role
 	Value float32
+	Exact float64
 }
+
+// ExactNum is the operand that is the constant v, exactly.
+func ExactNum(v float64) Arg { return Arg{Kind: ArgExact, Exact: v} }
 
 // MaxExprIn is the operands an expression reads at most.
 const MaxExprIn = 2
@@ -172,15 +183,27 @@ func (a Arg) String() string {
 		return fmt.Sprintf("%v[%d]", a.Role, a.Index)
 	case ArgWidth:
 		return "width"
+	case ArgExact:
+		return fmt.Sprintf("%v", a.Exact)
 	}
 	return "?"
 }
 
-// Valid reports why e is not an expression this format defines, nil when it
-// is one.
-func (e *Expr) Valid() error { return e.ValidOver(MaxExprIn) }
+// Valid reports why e is not an expression this format defines for a
+// kernel, nil when it is one: its constants binary32's.
+func (e *Expr) Valid() error {
+	for k, t := range e.Terms {
+		for _, a := range t.Args {
+			if a.Kind == ArgExact {
+				return fmt.Errorf("jlm: term %d holds an exact constant, which only the host evaluates", k)
+			}
+		}
+	}
+	return e.ValidOver(MaxExprIn)
+}
 
-// ValidOver is Valid for an expression of in operands.
+// ValidOver is Valid for an expression of in operands the host evaluates,
+// its constants exact where they are stated so.
 func (e *Expr) ValidOver(in int) error {
 	if len(e.Terms) == 0 {
 		return fmt.Errorf("jlm: an expression of no terms")
@@ -210,7 +233,7 @@ func (e *Expr) ValidOver(in int) error {
 				return fmt.Errorf("jlm: term %d reads operand %d", k, a.Index)
 			case a.Kind == ArgTerm && int(a.Index) >= k:
 				return fmt.Errorf("jlm: term %d reads term %d, not an earlier one", k, a.Index)
-			case a.Kind == ArgNone || a.Kind > ArgWidth:
+			case a.Kind == ArgNone || a.Kind > ArgExact:
 				return fmt.Errorf("jlm: term %d's operand %d is of kind %d", k, j, a.Kind)
 			}
 		}
@@ -278,6 +301,8 @@ func encodeExpr(w *wbuf, e *Expr) {
 				w.u32(a.Index)
 			case ArgConst:
 				w.f32(a.Value)
+			case ArgExact:
+				w.u64(math.Float64bits(a.Exact))
 			case ArgStored:
 				w.u16(uint16(a.Role))
 				w.u32(a.Index)
@@ -318,6 +343,8 @@ func decodeExpr(r *rbuf, e *Expr) {
 				a.Index = r.u32()
 			case ArgConst:
 				a.Value = r.f32()
+			case ArgExact:
+				a.Exact = math.Float64frombits(r.u64())
 			case ArgStored:
 				a.Role = Role(r.u16())
 				a.Index = r.u32()
