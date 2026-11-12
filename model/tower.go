@@ -70,9 +70,9 @@ type TowerGraphs struct {
 	// Tail is the class rows after the patches (TOpTailRow).
 	Tail int
 	Full []bool
-	// fit is how a picture becomes the tower's squares, and FrameFit how a
-	// video's frame read as one does where the video states steps of its own.
-	Fit, FrameFit PictureFit
+	// Geometry is how a picture becomes the tower's squares
+	// (jlm.PictureGeometry, PictureSquares).
+	Geometry *jlm.PictureGeometry
 	// Video is how the tower reads a video (jlm.Video), nil for none, and
 	// Videos its entry's classes over a pair of frames, one for each
 	// picture class's size.
@@ -476,14 +476,14 @@ func (m *Model) BuildTowerGraphs() (*TowerGraphs, error) {
 	if len(ops) == 0 || ops[0].Code != jlm.TOpPatchify || t.Entry.NIn != 1 {
 		return nil, fmt.Errorf("model: the tower's entry does not begin with the picture's patches")
 	}
-	fit, err := towerFit(t)
-	if err != nil {
-		return nil, fmt.Errorf("model: the tower's entry: %w", err)
+	geom := t.Geometry
+	if geom == nil {
+		return nil, fmt.Errorf("model: the container states no picture geometry (%v): convert it again", v.Projector)
 	}
 	P := int(ops[0].Span)
 	merge, window := towerTiles(t)
 	tg := &TowerGraphs{Lead: int(ops[0].Offset), GridDiv: int(t.Span.GridDiv), Merge: merge, Window: window,
-		Side: int(v.ImageSize / v.PatchSize), Patch: P, Fit: fit}
+		Side: int(v.ImageSize / v.PatchSize), Patch: P, Geometry: geom}
 	if len(t.Chain) > 0 {
 		// A chain's entry reads the picture's every patch of P: its grid is
 		// the picture's, whatever the container's patch.
@@ -494,18 +494,19 @@ func (m *Model) BuildTowerGraphs() (*TowerGraphs, error) {
 			tg.Tail = 1
 		}
 	}
+	bounds := geom.Bounds
 	sides := []int{0}
-	if fit.Own() {
-		sides = fit.classSides()
+	if bounds.Unit > 0 {
+		sides = classSides(bounds)
 	}
 	for _, sd := range sides {
 		grid := tg.Side * tg.Side
 		if sd > 0 {
-			grid = min((sd/P)*(sd/P), fit.maxPatches(P))
+			grid = min((sd/P)*(sd/P), int(bounds.MaxPatches))
 		}
 		cl := towerClass{Entry: map[uint8]*graph.Graph{}, Rows: grid + tg.Lead + tg.Tail}
 		for px := graph.PixRGBA8; px < graph.PixFormats; px++ {
-			g, band, err := towerEntry(t, px, grid, tg.Lead+tg.Tail, sd, fit, dense)
+			g, band, err := towerEntry(t, px, grid, tg.Lead+tg.Tail, sd, int(bounds.MaxPix), dense)
 			if err != nil {
 				return nil, fmt.Errorf("model: the tower's entry: %w", err)
 			}
@@ -525,20 +526,15 @@ func (m *Model) BuildTowerGraphs() (*TowerGraphs, error) {
 		tg.Rows = max(tg.Rows, cl.Rows)
 	}
 	if t.Video != nil {
-		if len(t.Chain) > 0 || !t.Video.AsPictures() && !fit.Own() {
+		if len(t.Chain) > 0 || !t.Video.AsPictures() && bounds.Unit == 0 {
 			return nil, fmt.Errorf("model: a video read by a tower whose pictures are not each of a size of its own")
 		}
 		tg.Video = t.Video
-		if t.Video.AsPictures() && len(t.Video.Pre) > 0 {
-			// The frames go through the picture's classes: the steps' resize
+		if f := t.Video.Frames; f != nil && (f.Bounds.MaxPix > bounds.MaxPix || f.Bounds.MaxPatches > bounds.MaxPatches) {
+			// The frames go through the picture's classes: their resize
 			// reaches no more than the picture's does.
-			if tg.FrameFit, err = towerFit(&jlm.Tower{Pre: t.Video.Pre}); err != nil {
-				return nil, fmt.Errorf("model: the video's frames: %w", err)
-			}
-			if tg.FrameFit.MaxPix > fit.MaxPix {
-				return nil, fmt.Errorf("model: the container's video frames reach %d pixels, past its pictures' %d",
-					tg.FrameFit.MaxPix, fit.MaxPix)
-			}
+			return nil, fmt.Errorf("model: the container's video frames reach %d pixels, past its pictures' %d",
+				f.Bounds.MaxPix, bounds.MaxPix)
 		}
 	}
 	if t.Video != nil && !t.Video.AsPictures() {
@@ -647,310 +643,11 @@ func (m *Model) BuildTowerGraphs() (*TowerGraphs, error) {
 	return tg, nil
 }
 
-// pictureFit is how a picture becomes the tower's squares: resized as a
-// whole to the picture op's size; its shorter side resized to short and its
-// centre cropped to it; or cut into between minTiles and maxTiles tiles of
-// it, a thumbnail of the whole after them where thumb says (jlm.PreTile).
-type PictureFit struct {
-	Short              int
-	MinTiles, MaxTiles int
-	Thumb              bool
-	// Slice, SlicePatch and SliceMax are llava-uhd's cut (jlm.PreSliceUHD):
-	// an overview of about Slice^2 pixels, each side whole SlicePatch-pixel
-	// patches, and at most SliceMax slices; 0 where there is none.
-	Slice, SlicePatch, SliceMax int
-	// Canvas says the tiles are a best-fitting canvas's (jlm.PreBestFit):
-	// the picture resized onto it without distortion, at its top left.
-	Canvas bool
-	// factor, minPix and maxPix are a resize to the picture's own size
-	// (jlm.PreSmartResize); factor 0 where there is none.
-	Factor, MinPix, MaxPix int
-	// lift scales a picture a side shorter than factor up first
-	// (jlm.PreSmartResize's Ints[5]); naflex sizes it by its patch count
-	// instead, MinPix and MaxPix whole patches' pixels (jlm.PreNaFlex).
-	lift, naflex bool
-	// Limit, Pad and LimitPatch are a resize past a patch count and a pad
-	// (jlm.PreLimitPad): a picture of more than Limit whole LimitPatch-pixel
-	// patches scaled down to about that many, then padded to multiples of
-	// Pad pixels; Limit 0 where there is none.
-	Limit, Pad, LimitPatch int
-	// Box and BoxMin are a resize by the longer side into a Box-pixel square
-	// (jlm.PreLongBox): the shorter side at least BoxMin; Box 0 where there
-	// is none.
-	Box, BoxMin int
-	// Cap and CapUnit are a resize that keeps the longer side at most Cap
-	// pixels, each side then rounded up to a whole CapUnit (jlm.PreCapUnit);
-	// Cap 0 where there is none.
-	Cap, CapUnit int
-	// SmartTile is the tile side of a picture tiled past its size bound or
-	// sized its own way under it (jlm.PreTileSmart), 0 where there is none:
-	// SmartMin to SmartMax tiles, its own size whole SmartUnits between
-	// MinPix and MaxPix, cut where its sides, rounded so (at least a
-	// SmartPatch each), hold more than Tolerance times its piece's bound.
-	SmartTile, SmartMin, SmartMax, SmartPatch, SmartUnit, SmartMaxPix int
-	Tolerance                                                         float64
-	// Budget, BudgetPatch and BudgetUnit are a resize to the largest size
-	// of the picture's aspect within Budget patches of BudgetPatch pixels,
-	// each side whole BudgetUnits (jlm.PreAspectBudget); Budget 0 where
-	// there is none.
-	Budget, BudgetPatch, BudgetUnit int
-}
-
-// budgetSize is a w x h picture's size within the patch budget (Gemma 4's
-// get_aspect_ratio_preserving_size): both sides scaled by
-// sqrt(budget area / area) and floored to whole units; a side that floors
-// to nothing one unit and the other the aspect's whole multiple of it, at
-// most the budget's units a row -- in float64, as Python computes them.
-func (f PictureFit) budgetSize(w, h int) (int, int) {
-	p, u := f.BudgetPatch, f.BudgetUnit
-	s := math.Sqrt(float64(f.Budget*p*p) / (float64(h) * float64(w)))
-	th := int(math.Floor(s*float64(h)/float64(u))) * u
-	tw := int(math.Floor(s*float64(w)/float64(u))) * u
-	g := u / p
-	most := (f.Budget / (g * g)) * u
-	switch {
-	case th == 0 && tw == 0:
-		th, tw = u, u
-	case th == 0:
-		th, tw = u, min(int(math.Floor(float64(w)/float64(h)))*u, most)
-	case tw == 0:
-		tw, th = u, min(int(math.Floor(float64(h)/float64(w)))*u, most)
-	}
-	return tw, th
-}
-
-// capSize is a w x h picture's size under the cap (PixtralImageProcessor's
-// get_resize_output_image_size): both sides divided by the longer over Cap
-// and floored where it passes Cap, then each rounded up to a whole unit.
-func (f PictureFit) capSize(w, h int) (int, int) {
-	if r := math.Max(float64(w), float64(h)) / float64(f.Cap); r > 1 {
-		w, h = int(math.Floor(float64(w)/r)), int(math.Floor(float64(h)/r))
-	}
-	u := f.CapUnit
-	return ((max(w, 1)-1)/u + 1) * u, ((max(h, 1)-1)/u + 1) * u
-}
-
-// boxSize is a w x h picture's size inside its box (Janus's resize): the
-// longer side the box's, the shorter rounded half to even to its share of
-// it and at least BoxMin -- in float64, as Python computes them.
-func (f PictureFit) boxSize(w, h int) (int, int) {
-	d := float64(f.Box) / float64(max(w, h))
-	return max(int(math.RoundToEven(float64(w)*d)), f.BoxMin), max(int(math.RoundToEven(float64(h)*d)), f.BoxMin)
-}
-
-// Own reports that a picture is encoded at a size of its own.
-func (f PictureFit) Own() bool {
-	return f.Factor > 0 || f.Limit > 0 || f.Cap > 0 || f.Budget > 0 || f.SmartTile > 0 || f.Slice > 0
-}
-
-// smartLayout is how a w x h picture is cut under jlm.PreTileSmart: cols x
-// rows tiles where tiled, and its own size (the thumbnail, or the one piece
-// where not).
-func (f PictureFit) smartLayout(w, h int) (cols, rows int, tiled bool, ow, oh int) {
-	ow, oh = PictureFit{Factor: f.SmartUnit, MinPix: f.MinPix, MaxPix: f.SmartMaxPix}.smartSize(w, h)
-	u := f.SmartUnit
-	round := func(v int) int { return max(f.SmartPatch, int(math.RoundToEven(float64(v)/float64(u)))*u) }
-	if float64(round(h)*round(w)) <= float64(f.SmartMaxPix)*f.Tolerance {
-		return 1, 1, false, ow, oh
-	}
-	cols, rows = TileGrid(w, h, f.SmartTile, f.SmartMin, f.SmartMax)
-	return cols, rows, true, ow, oh
-}
-
-// unit is the multiple a picture of its own size's encoded sides are.
-func (f PictureFit) unit() int {
-	switch {
-	case f.Limit > 0:
-		return f.Pad
-	case f.Cap > 0:
-		return f.CapUnit
-	case f.Budget > 0:
-		return f.BudgetUnit
-	case f.SmartTile > 0:
-		return f.SmartUnit
-	case f.Slice > 0:
-		return f.SlicePatch
-	}
-	return f.Factor
-}
-
-// limitSize is a w x h picture's size under a patch limit (Kimi-VL's
-// rescale): kept, unless its whole patches pass Limit, where both sides are
-// scaled by sqrt(Limit / patches) and truncated -- in float64, as Python
-// computes them.
-func (f PictureFit) limitSize(w, h int) (int, int) {
-	p := f.LimitPatch
-	if n := (w / p) * (h / p); n > f.Limit {
-		s := math.Sqrt(float64(f.Limit) / float64(n))
-		return int(float64(w) * s), int(float64(h) * s)
-	}
-	return w, h
-}
-
-// maxPatches is the most patches a picture of its own size encodes in, of
-// p pixels: under an area bound, the area's; under a patch limit, the most a
-// picture pads to -- a side of a whole patches pads to at most a over the
-// pad's patches plus one of them, and its other side has at most Limit/a
-// (any number up to a picture's longest side where a is zero).
-func (f PictureFit) maxPatches(p int) int {
-	if f.Limit == 0 {
-		return f.MaxPix / (p * p)
-	}
-	u := f.Pad / p
-	pad := func(a int) int { return (a/u + 1) * u }
-	most := composer.PictureSide / p
-	best := 0
-	for a := 0; a <= most; a++ {
-		b := most
-		if a > 0 {
-			b = min(most, f.Limit/a)
-		}
-		best = max(best, pad(a)*pad(b))
-	}
-	return best
-}
-
-// smartSize is a w x h picture's own size (Qwen2-VL's smart_resize): each
-// side rounded half to even to a multiple of factor, at least one; then,
-// past maxPix pixels, both scaled down by sqrt(area/maxPix) and floored to
-// one, or short of minPix, scaled up by sqrt(minPix/area) and ceiled -- in
-// float64, as Python computes them.
-func (f PictureFit) smartSize(w, h int) (ow, oh int) {
-	fa := f.Factor
-	if f.naflex {
-		return naflexSize(w, h, fa, f.MinPix/(fa*fa), f.MaxPix/(fa*fa))
-	}
-	if f.lift && (w < fa || h < fa) {
-		s := math.Max(float64(fa)/float64(h), float64(fa)/float64(w))
-		w, h = int(float64(w)*s), int(float64(h)*s)
-	}
-	round := func(v int) int {
-		q, r := v/fa, v%fa
-		if 2*r > fa || 2*r == fa && q%2 == 1 {
-			q++
-		}
-		return max(q, 1) * fa
-	}
-	ow, oh = round(w), round(h)
-	area := float64(w) * float64(h)
-	switch {
-	case ow*oh > f.MaxPix:
-		beta := math.Sqrt(area / float64(f.MaxPix))
-		oh = max(fa, int(math.Floor(float64(h)/beta/float64(fa)))*fa)
-		ow = max(fa, int(math.Floor(float64(w)/beta/float64(fa)))*fa)
-	case ow*oh < f.MinPix:
-		beta := math.Sqrt(float64(f.MinPix) / area)
-		oh = int(math.Ceil(float64(h)*beta/float64(fa))) * fa
-		ow = int(math.Ceil(float64(w)*beta/float64(fa))) * fa
-	}
-	return ow, oh
-}
-
-// classSides is the sides of the squares whose areas a picture of its own
-// size is encoded in (graph.Attrs.PicArea), smallest first: 16 units,
-// doubling, and last composer.PictureSide rounded up a unit, or the side of
-// the area the resize reaches where that is more.
-func (f PictureFit) classSides() []int {
-	u := f.unit()
-	most := (composer.PictureSide/u + 1) * u
-	if r := int(math.Ceil(math.Sqrt(float64(f.MaxPix)))); r > most {
-		most = (r + u - 1) / u * u
-	}
-	var out []int
-	for s := 16 * u; s < most; s *= 2 {
-		out = append(out, s)
-	}
-	return append(out, most)
-}
-
-// towerFit is how the record's steps make a picture the tower's squares,
-// or why they cannot.
-func towerFit(t *jlm.Tower) (PictureFit, error) {
-	var fit PictureFit
-	cropped, pil, sized := false, false, false
-	for _, s := range t.Pre {
-		switch s.Kind {
-		case jlm.PreResize:
-			sized, pil = true, jlm.Filter(s.Ints[2]) != jlm.FilterTwoTap
-		case jlm.PreResizeShort:
-			fit.Short, sized, pil = int(s.Ints[0]), true, jlm.Filter(s.Ints[1]) != jlm.FilterTwoTap
-		case jlm.PreSmartResize:
-			fit.Factor, fit.MinPix, fit.MaxPix = int(s.Ints[0]), int(s.Ints[1]), int(s.Ints[2])
-			fit.lift = len(s.Ints) == 6 && s.Ints[5] == 1
-			sized, pil = true, jlm.Filter(s.Ints[3]) != jlm.FilterTwoTap
-		case jlm.PreTileSmart:
-			fit.SmartTile, fit.SmartMin, fit.SmartMax = int(s.Ints[0]), int(s.Ints[1]), int(s.Ints[2])
-			fit.SmartPatch, fit.SmartUnit, fit.MinPix, fit.SmartMaxPix = int(s.Ints[3]), int(s.Ints[4]), int(s.Ints[5]), int(s.Ints[6])
-			fit.Tolerance = float64(s.Floats[0])
-			// The area the reduction reaches: a piece's bound or a tile's.
-			fit.MaxPix = max(fit.SmartMaxPix, fit.SmartTile*fit.SmartTile)
-			sized, pil = true, jlm.Filter(s.Ints[7]) != jlm.FilterTwoTap
-		case jlm.PreSliceUHD:
-			fit.Slice, fit.SlicePatch, fit.SliceMax = int(s.Ints[0]), int(s.Ints[1]), int(s.Ints[2])
-			// The area the reduction reaches: a piece's, each side rounded up
-			// a patch.
-			fit.MaxPix = (fit.Slice + fit.SlicePatch) * (fit.Slice + fit.SlicePatch)
-			sized, pil = true, jlm.Filter(s.Ints[3]) != jlm.FilterTwoTap
-		case jlm.PreAspectBudget:
-			fit.Budget, fit.BudgetPatch, fit.BudgetUnit = int(s.Ints[0]), int(s.Ints[1]), int(s.Ints[2])
-			// The area the reduction reaches: the budget's.
-			fit.MaxPix = fit.Budget * fit.BudgetPatch * fit.BudgetPatch
-			sized, pil = true, jlm.Filter(s.Ints[3]) != jlm.FilterTwoTap
-		case jlm.PreCapUnit:
-			fit.Cap, fit.CapUnit = int(s.Ints[0]), int(s.Ints[1])
-			// The area the reduction reaches: the cap's, rounded up a unit.
-			side := (fit.Cap + fit.CapUnit - 1) / fit.CapUnit * fit.CapUnit
-			fit.MaxPix = side * side
-			sized, pil = true, jlm.Filter(s.Ints[2]) != jlm.FilterTwoTap
-		case jlm.PreNaFlex:
-			p := int(s.Ints[0])
-			fit.Factor, fit.MinPix, fit.MaxPix, fit.naflex = p, int(s.Ints[1])*p*p, int(s.Ints[2])*p*p, true
-			sized, pil = true, jlm.Filter(s.Ints[3]) != jlm.FilterTwoTap
-		case jlm.PreLongBox:
-			fit.Box, fit.BoxMin = int(s.Ints[0]), int(s.Ints[1])
-			// The area the reduction reaches: the box's.
-			fit.MaxPix = fit.Box * fit.Box
-			sized, pil = true, jlm.Filter(s.Ints[5]) != jlm.FilterTwoTap
-		case jlm.PreLimitPad:
-			fit.LimitPatch, fit.Limit, fit.Pad = int(s.Ints[0]), int(s.Ints[1]), int(s.Ints[2])
-			// The area the reduction reaches: the limit's patches.
-			fit.MaxPix = fit.Limit * fit.LimitPatch * fit.LimitPatch
-			sized, pil = true, jlm.Filter(s.Ints[3]) != jlm.FilterTwoTap
-		case jlm.PreCenterCrop:
-			cropped = true
-		case jlm.PreTile:
-			fit.MinTiles, fit.MaxTiles, fit.Thumb = int(s.Ints[0]), int(s.Ints[1]), s.Ints[2] == 1
-		case jlm.PreBestFit:
-			fit.MinTiles, fit.MaxTiles, fit.Thumb, fit.Canvas = 1, int(s.Ints[0]), true, true
-		}
-	}
-	ways := 0
-	for _, w := range []bool{fit.Short > 0, fit.MaxTiles > 0, fit.Factor > 0, fit.Limit > 0, fit.Box > 0, fit.Cap > 0, fit.Budget > 0, fit.SmartTile > 0, fit.Slice > 0} {
-		if w {
-			ways++
-		}
-	}
-	switch {
-	case !sized:
-		return fit, fmt.Errorf("the picture is never resized to the tower's size")
-	case fit.Short > 0 && !cropped:
-		return fit, fmt.Errorf("a picture resized by its shorter side and never cropped has no one size")
-	case ways > 1:
-		return fit, fmt.Errorf("a picture cropped, tiled or sized its own way at once")
-	case ways > 0 && !pil:
-		// A crop, a tile and a size of the picture's own are a resize's
-		// windows and live sizes, which only Pillow's taps (composer.PILTaps)
-		// take.
-		return fit, fmt.Errorf("a window or a size of its own of a picture resized by the two-tap filter")
-	}
-	return fit, nil
-}
-
 // towerEntry is the entry for pictures of sample format px: the record's
 // preprocessing as one op (graph.OpPicture), then its entry program over
 // the grid's patch rows and extra rows beside them (a class row's, before
 // or after); for a picture of a size of its own, at most side pixels a side.
-func towerEntry(t *jlm.Tower, px uint8, grid, extra, side int, fit PictureFit, f graph.Facts) (*graph.Graph, *graph.Graph, error) {
+func towerEntry(t *jlm.Tower, px uint8, grid, extra, side, maxPix int, f graph.Facts) (*graph.Graph, *graph.Graph, error) {
 	a := graph.Attrs{Pixels: px, Std: [3]float64{1, 1, 1}}
 	for _, s := range t.Pre {
 		switch s.Kind {
@@ -1032,7 +729,7 @@ func towerEntry(t *jlm.Tower, px uint8, grid, extra, side int, fit PictureFit, f
 		// factor and the area's bound: a side under twice smaller than the
 		// source's times sqrt(area / maxPix), the source at most PicSide a
 		// side (pictureFit.smartSize).
-		root := int(math.Sqrt(float64(fit.MaxPix)))
+		root := int(math.Sqrt(float64(maxPix)))
 		a.Taps = composer.LiveTaps(a.Filter, root)
 	case a.Chain == graph.ChainPIL:
 		// A crop's taps are a window of the resize's, whose scale is at most
@@ -1114,74 +811,6 @@ func TowerRotaryOf(t *jlm.Tower) graph.Rotary {
 	return g
 }
 
-// tiles is a w x h picture's tile grid in squares of side s and how many
-// squares it becomes, the thumbnail among them: one square for a tower
-// that does not tile.
-func (f PictureFit) Tiles(w, h, s int) (cols, rows, n int) {
-	if f.MaxTiles == 0 {
-		return 1, 1, 1
-	}
-	if f.Canvas {
-		rows, cols = bestFit(w, h, s, f.MaxTiles)
-	} else {
-		cols, rows = TileGrid(w, h, s, f.MinTiles, f.MaxTiles)
-	}
-	n = cols * rows
-	if f.Thumb && n > 1 {
-		n++
-	}
-	return cols, rows, n
-}
-
-// window is square t of a w x h picture as the picture op's taps take it:
-// the size the picture is resized to and the square's corner in it.
-func (f PictureFit) Window(w, h, pw, ph, t int) (ow, oh, x0, y0 int) {
-	switch {
-	case f.Short > 0:
-		// transformers' center_crop: the offsets floored.
-		ow, oh = shortSide(w, h, f.Short)
-		return ow, oh, (ow - pw) / 2, (oh - ph) / 2
-	case f.MaxTiles > 0:
-		cols, rows, _ := f.Tiles(w, h, pw)
-		if t < cols*rows {
-			if f.Canvas {
-				ow, oh = canvasSize(w, h, pw, cols, rows)
-				return ow, oh, (t % cols) * pw, (t / cols) * ph
-			}
-			return cols * pw, rows * ph, (t % cols) * pw, (t / cols) * ph
-		}
-	}
-	return pw, ph, 0, 0
-}
-
-// tileGrid is the (columns, rows) grid of between minT and maxT tiles of
-// side s whose aspect is closest to a w x h picture's: a tie goes to the
-// later (larger) grid while the picture's area is more than half the grid's,
-// the grids in the reference's own order -- every (columns, rows) pair,
-// columns outer, stably sorted by tile count (InternVL's
-// find_closest_aspect_ratio, transformers' get_optimal_tiled_canvas).
-func TileGrid(w, h, s, minT, maxT int) (cols, rows int) {
-	aspect, area := float64(w)/float64(h), float64(w*h)
-	bc, br, best := 1, 1, -1.0
-	// By tile count, then in generation order: the stable sort, walked.
-	for n := minT; n <= maxT; n++ {
-		for c := 1; c <= maxT; c++ {
-			if n%c != 0 {
-				continue
-			}
-			r := n / c
-			d := math.Abs(aspect - float64(c)/float64(r))
-			switch {
-			case best < 0 || d < best:
-				bc, br, best = c, r, d
-			case d == best && area > 0.5*float64(s*s*c*r):
-				bc, br = c, r
-			}
-		}
-	}
-	return bc, br
-}
-
 // square is one square of a picture as the tower encodes it: the class its
 // entry is formed for, the size the picture is resized to and the window of
 // it the square is -- its corner and its size -- and its patch grid.
@@ -1194,123 +823,6 @@ type Square struct {
 	// MarkN and TrailN their lengths (TOpMarkRow, composer.RequestMark and
 	// RequestTrail).
 	Mark, Trail, MarkN, TrailN int
-}
-
-// square is square i of a w x h picture and how many the picture has: one
-// at its own size in the smallest class that holds it, or a fixed square,
-// a crop or a tile at the entry's size.
-func (tg *TowerGraphs) Square(w, h, i int) (Square, int) { return tg.squareUnder(tg.Fit, w, h, i) }
-
-// squareUnder is Square for a picture resized under fit.
-func (tg *TowerGraphs) squareUnder(fit PictureFit, w, h, i int) (Square, int) {
-	if f := fit; f.Slice > 0 {
-		cols, rows, cut := f.sliceGrid(w, h)
-		n := 1
-		if cut {
-			n += cols * rows
-		}
-		if i == 0 {
-			// The overview, at its own size, upscaled where nothing is cut.
-			ow, oh := f.sliceSize(float64(w), float64(h), !cut)
-			sq := Square{Class: tg.classOf(ow, oh), Ow: ow, Oh: oh, Pw: ow, Ph: oh, Gw: ow / tg.Patch, Gh: oh / tg.Patch}
-			if tg.Marks > 0 {
-				sq.Mark, sq.MarkN, sq.Trail, sq.TrailN = 1, 1, 2, 1
-			}
-			return sq, n
-		}
-		// Slice i-1 of the picture resized to whole best-sized slices; a
-		// slice row's first after the first takes the newline before it.
-		rw, rh := f.refineSize(w, h, cols, rows)
-		sw, sh, k := rw/cols, rh/rows, i-1
-		sq := Square{Class: tg.classOf(sw, sh), Ow: rw, Oh: rh, X0: k % cols * sw, Y0: k / cols * sh, Pw: sw, Ph: sh,
-			Gw: sw / tg.Patch, Gh: sh / tg.Patch}
-		if tg.Marks > 0 {
-			sq.Mark, sq.MarkN, sq.Trail, sq.TrailN = 3, 1, 4, 1
-			if k > 0 && k%cols == 0 {
-				sq.Mark, sq.MarkN = 5, 2
-			}
-		}
-		return sq, n
-	}
-	if f := fit; f.SmartTile > 0 {
-		cols, rows, tiled, ow, oh := f.smartLayout(w, h)
-		n, span := 1, f.SmartMax
-		if tiled {
-			n = cols*rows + 1
-		}
-		class := tg.classOf
-		if i < n-1 {
-			// Tile i of the picture resized onto the grid, its marker the
-			// tile's place.
-			s := f.SmartTile
-			return Square{Class: class(s, s), Ow: cols * s, Oh: rows * s, X0: i % cols * s, Y0: i / cols * s, Pw: s, Ph: s,
-				Gw: s / tg.Patch, Gh: s / tg.Patch, Mark: i/cols*span + i%cols + 1, MarkN: 1}, n
-		}
-		sq := Square{Class: class(ow, oh), Ow: ow, Oh: oh, Pw: ow, Ph: oh, Gw: ow / tg.Patch, Gh: oh / tg.Patch}
-		if tiled {
-			sq.Mark, sq.MarkN = span*span+1, 1
-		}
-		return sq, n
-	}
-	if fit.Budget > 0 {
-		ow, oh := fit.budgetSize(w, h)
-		c := 0
-		for c < len(tg.Classes)-1 && !tg.Classes[c].Pic.Holds(ow, oh) {
-			c++
-		}
-		return Square{Class: c, Ow: ow, Oh: oh, Pw: ow, Ph: oh, Gw: ow / tg.Patch, Gh: oh / tg.Patch}, 1
-	}
-	if fit.Cap > 0 {
-		ow, oh := fit.capSize(w, h)
-		c := 0
-		for c < len(tg.Classes)-1 && !tg.Classes[c].Pic.Holds(ow, oh) {
-			c++
-		}
-		return Square{Class: c, Ow: ow, Oh: oh, Pw: ow, Ph: oh, Gw: ow / tg.Patch, Gh: oh / tg.Patch}, 1
-	}
-	if fit.Box > 0 {
-		// Resized inside the box, which the picture op lays it in.
-		ow, oh := fit.boxSize(w, h)
-		return Square{Ow: ow, Oh: oh, Pw: ow, Ph: oh, Gw: tg.Side, Gh: tg.Side}, 1
-	}
-	if fit.Limit > 0 {
-		// Resized to its own size and laid over its padded grid by the
-		// picture op: the window the size itself, the grid the padded one.
-		ow, oh := fit.limitSize(w, h)
-		u := fit.Pad
-		pw, ph := (ow+u-1)/u*u, (oh+u-1)/u*u
-		c := 0
-		for c < len(tg.Classes)-1 && !tg.Classes[c].Pic.Holds(pw, ph) {
-			c++
-		}
-		return Square{Class: c, Ow: ow, Oh: oh, Pw: ow, Ph: oh, Gw: pw / tg.Patch, Gh: ph / tg.Patch}, 1
-	}
-	if fit.Factor > 0 {
-		ow, oh := fit.smartSize(w, h)
-		c := 0
-		for c < len(tg.Classes)-1 && !tg.Classes[c].Pic.Holds(ow, oh) {
-			c++
-		}
-		return Square{Class: c, Ow: ow, Oh: oh, Pw: ow, Ph: oh, Gw: ow / tg.Patch, Gh: oh / tg.Patch}, 1
-	}
-	a := tg.Classes[0].Pic
-	cols, _, n := fit.Tiles(w, h, a.PicW)
-	ow, oh, x0, y0 := fit.Window(w, h, a.PicW, a.PicH, i)
-	sq := Square{Ow: ow, Oh: oh, X0: x0, Y0: y0, Pw: a.PicW, Ph: a.PicH, Gw: tg.Side, Gh: tg.Side}
-	if fit.Canvas && tg.Marks > 0 {
-		// The canvas's markers (jlm.PreBestFit): before the last square the
-		// third, after a tile its row's separator, after a row's last the
-		// rows'.
-		switch {
-		case i == n-1:
-			sq.Mark, sq.MarkN = 3, 1
-		case i%cols < cols-1:
-			sq.Trail, sq.TrailN = 1, 1
-		default:
-			sq.Trail, sq.TrailN = 2, 1
-		}
-	}
-	return sq, n
 }
 
 // squareOut is the rows the head writes for square sq: its patches over
@@ -1346,39 +858,6 @@ func (tg *TowerGraphs) SquareOut(sq Square) int {
 	return sq.Gw * sq.Gh * tg.Out / grid
 }
 
-// LastSquare is a w x h picture's last square: a tiled tower's thumbnail,
-// the whole picture at a square's size, or its one square.
-func (tg *TowerGraphs) LastSquare(w, h int) Square { return tg.lastUnder(tg.Fit, w, h) }
-
-func (tg *TowerGraphs) lastUnder(fit PictureFit, w, h int) Square {
-	sq, n := tg.squareUnder(fit, w, h, 0)
-	if n > 1 {
-		sq, _ = tg.squareUnder(fit, w, h, n-1)
-	}
-	return sq
-}
-
-// FrameSquare is the square a video's w x h frame read as a picture is
-// (jlm.Video.AsPictures): its last square, resized under the video's own
-// steps where it states them (FrameFit).
-func (tg *TowerGraphs) FrameSquare(w, h int) Square {
-	if tg.Video != nil && len(tg.Video.Pre) > 0 {
-		return tg.lastUnder(tg.FrameFit, w, h)
-	}
-	return tg.LastSquare(w, h)
-}
-
-// picRows is the rows a w x h picture becomes: its squares' every row.
-func (tg *TowerGraphs) PicRows(w, h int) int {
-	sq, n := tg.Square(w, h, 0)
-	rows := tg.SquareOut(sq)
-	for i := 1; i < n; i++ {
-		sq, _ = tg.Square(w, h, i)
-		rows += tg.SquareOut(sq)
-	}
-	return rows
-}
-
 // resizeChain sets a's resample to filter f's.
 func resizeChain(a *graph.Attrs, f jlm.Filter) error {
 	switch f {
@@ -1394,14 +873,63 @@ func resizeChain(a *graph.Attrs, f jlm.Filter) error {
 	return nil
 }
 
-// shortSide is a w x h picture's size with its shorter side resized to s
-// and its longer to int(s * long / short), as transformers'
-// get_resize_output_image_size sizes a shortest_edge resize.
-func shortSide(w, h, s int) (int, int) {
-	if w <= h {
-		return s, int(float64(s) * float64(h) / float64(w))
+// Square is square i of a w x h picture and how many the picture has, as
+// the tower's geometry states them (PictureSquares).
+func (tg *TowerGraphs) Square(w, h, i int) (Square, int, error) {
+	var ps PictureSquares
+	n, err := ps.Of(tg, w, h)
+	if err != nil {
+		return Square{}, 0, err
 	}
-	return int(float64(s) * float64(w) / float64(h)), s
+	sq, err := ps.At(i)
+	return sq, n, err
+}
+
+// LastSquare is a w x h picture's last square: a tiled tower's thumbnail,
+// or its one square.
+func (tg *TowerGraphs) LastSquare(w, h int) (Square, error) {
+	var ps PictureSquares
+	if _, err := ps.Of(tg, w, h); err != nil {
+		return Square{}, err
+	}
+	return ps.Last()
+}
+
+// FrameSquare is the square a video's w x h frame read as a picture is
+// (jlm.Video.AsPictures): its last square, under the frames' own geometry
+// where the video states one.
+func (tg *TowerGraphs) FrameSquare(w, h int) (Square, error) {
+	var ps PictureSquares
+	if _, err := ps.FrameOf(tg, w, h); err != nil {
+		return Square{}, err
+	}
+	return ps.Last()
+}
+
+// PicRows is the rows a w x h picture becomes: its squares' every row.
+func (tg *TowerGraphs) PicRows(w, h int) (int, error) {
+	var ps PictureSquares
+	if _, err := ps.Of(tg, w, h); err != nil {
+		return 0, err
+	}
+	return ps.Rows()
+}
+
+// classSides is the sides of the squares whose areas a picture of its own
+// size is encoded in (graph.Attrs.PicArea), smallest first: 16 units,
+// doubling, and last composer.PictureSide rounded up a unit, or the side of
+// the area the resize reaches where that is more.
+func classSides(b jlm.PictureBounds) []int {
+	u := int(b.Unit)
+	most := (composer.PictureSide/u + 1) * u
+	if r := int(math.Ceil(math.Sqrt(float64(b.MaxPix)))); r > most {
+		most = (r + u - 1) / u * u
+	}
+	var out []int
+	for s := 16 * u; s < most; s *= 2 {
+		out = append(out, s)
+	}
+	return append(out, most)
 }
 
 // towerHead is the head over the last block's rows, and the rows it writes.
@@ -2110,18 +1638,29 @@ func (m *Model) PictureSpan(img image.Image) (Span, error) {
 		return Span{}, err
 	}
 	b := img.Bounds()
-	return Span{Picture: img, PicRows: m.Tower.PicRows(b.Dx(), b.Dy()), Grid: m.Tower.SpanGrid(b.Dx(), b.Dy()), Key: k}, nil
+	rows, err := m.Tower.PicRows(b.Dx(), b.Dy())
+	if err != nil {
+		return Span{}, err
+	}
+	grid, err := m.Tower.SpanGrid(b.Dx(), b.Dy())
+	if err != nil {
+		return Span{}, err
+	}
+	return Span{Picture: img, PicRows: rows, Grid: grid, Key: k}, nil
 }
 
-// spanGrid is the grid a w x h picture's rows are for the language model's
+// SpanGrid is the grid a w x h picture's rows are for the language model's
 // rotary (jlm.TowerSpan.GridDiv): its one square's patch grid with each side
 // divided; none where the rows advance as text.
-func (tg *TowerGraphs) SpanGrid(w, h int) ImageGrid {
+func (tg *TowerGraphs) SpanGrid(w, h int) (ImageGrid, error) {
 	if tg.GridDiv == 0 {
-		return ImageGrid{}
+		return ImageGrid{}, nil
 	}
-	sq, _ := tg.Square(w, h, 0)
-	return ImageGrid{T: 1, H: sq.Gh / tg.GridDiv, W: sq.Gw / tg.GridDiv, Line: tg.Line, Ends: tg.Ends}
+	sq, _, err := tg.Square(w, h, 0)
+	if err != nil {
+		return ImageGrid{}, err
+	}
+	return ImageGrid{T: 1, H: sq.Gh / tg.GridDiv, W: sq.Gw / tg.GridDiv, Line: tg.Line, Ends: tg.Ends}, nil
 }
 
 // pictureKey names a picture by everything the tower reads of it: its
@@ -2159,104 +1698,6 @@ func programFrame(p *jlm.Program) (line, merge, trim int) {
 	return 0, 0, 0
 }
 
-// naflexSize is the size SigLIP2's NaFlex processor resamples a w x h
-// picture to: its own whole patches' count clamped to [lo, hi] patches, then
-// transformers' get_image_size_for_max_num_patches -- a bisection for the
-// largest scale whose sides, ceiled to whole patches, hold that many.
-func naflexSize(w, h, patch, lo, hi int) (int, int) {
-	n := max((w/patch)*(h/patch), 1)
-	target := min(max(n, lo), hi)
-	scaled := func(scale float64, size int) int {
-		v := math.Ceil(float64(size)*scale/float64(patch)) * float64(patch)
-		return int(math.Max(float64(patch), v))
-	}
-	const eps = 1e-5
-	smin, smax := eps/10, 100.0
-	for smax-smin >= eps {
-		sc := (smin + smax) / 2
-		th, tw := scaled(sc, h), scaled(sc, w)
-		if float64(th)/float64(patch)*(float64(tw)/float64(patch)) <= float64(target) {
-			smin = sc
-		} else {
-			smax = sc
-		}
-	}
-	return scaled(smin, w), scaled(smin, h)
-}
-
-// canvases is every rows x columns canvas of at most most tiles in the
-// order jlm.PreBestFit walks them: tile counts from most down, each count's
-// factor pairs by rows ascending, grouped by aspect in the order each
-// first appears.
-func canvases(most int) [][2]int {
-	var ratios []float64
-	byRatio := map[float64][][2]int{}
-	for n := most; n >= 1; n-- {
-		for r := 1; r <= n; r++ {
-			if n%r != 0 {
-				continue
-			}
-			c := n / r
-			q := float64(r) / float64(c)
-			if _, ok := byRatio[q]; !ok {
-				ratios = append(ratios, q)
-			}
-			byRatio[q] = append(byRatio[q], [2]int{r, c})
-		}
-	}
-	var out [][2]int
-	for _, q := range ratios {
-		out = append(out, byRatio[q]...)
-	}
-	return out
-}
-
-// bestFit is a w x h picture's canvas of s-pixel tiles (jlm.PreBestFit):
-// the one whose limiting scale is the smallest upscale, or failing any the
-// largest downscale, the smallest area breaking a tie -- the scales
-// float32, as the reference divides two integer tensors.
-func bestFit(w, h, s, most int) (rows, cols int) {
-	cs := canvases(most)
-	scale := make([]float32, len(cs))
-	for i, c := range cs {
-		sw := float32(c[1]*s) / float32(w)
-		sh := float32(c[0]*s) / float32(h)
-		scale[i] = min(sh, sw)
-	}
-	sel, up := float32(0), false
-	for _, v := range scale {
-		if v >= 1 && (!up || v < sel) {
-			sel, up = v, true
-		}
-	}
-	if !up {
-		for _, v := range scale {
-			sel = max(sel, v)
-		}
-	}
-	best := -1
-	for i, v := range scale {
-		if v == sel && (best < 0 || cs[i][0]*cs[i][1] < cs[best][0]*cs[best][1]) {
-			best = i
-		}
-	}
-	return cs[best][0], cs[best][1]
-}
-
-// canvasSize is the size a w x h picture is resized to on a cols x rows
-// canvas of s-pixel tiles: the largest of its aspect within the canvas and
-// within its own size raised to one tile, the shorter scale's side floored.
-func canvasSize(w, h, s, cols, rows int) (ow, oh int) {
-	th, tw := min(max(h, s), rows*s), min(max(w, s), cols*s)
-	sw, sh := float64(tw)/float64(w), float64(th)/float64(h)
-	if sw < sh {
-		ow, oh = tw, min(int(math.Floor(float64(h)*sw)), th)
-	} else {
-		oh, ow = th, min(int(math.Floor(float64(w)*sh)), tw)
-	}
-	return max(ow, 1), max(oh, 1)
-}
-
 // classOf is the class a picture of side pixels is encoded in: the smallest
 // whose picture holds it, else the largest.
 func (tg *TowerGraphs) classOf(w, h int) int {
@@ -2265,63 +1706,6 @@ func (tg *TowerGraphs) classOf(w, h int) int {
 		c++
 	}
 	return c
-}
-
-// sliceGrid is jlm.PreSliceUHD's grid of a w x h picture: cols x rows
-// slices, and whether it is cut at all -- the counts one either side of the
-// picture's area over Slice^2 rounded up, each count's factor pairs in
-// order, the first whose aspect is closest to the picture's
-// (get_sliced_grid, in float64 as Python computes it).
-func (f PictureFit) sliceGrid(w, h int) (cols, rows int, cut bool) {
-	logRatio := math.Log(float64(w) / float64(h))
-	ratio := float64(w) * float64(h) / float64(f.Slice*f.Slice)
-	multiple := min(int(math.Ceil(ratio)), f.SliceMax)
-	if multiple <= 1 {
-		return 1, 1, false
-	}
-	best, least := [2]int{1, 1}, math.Inf(1)
-	for _, n := range []int{multiple - 1, multiple, multiple + 1} {
-		if n == 1 || n > f.SliceMax {
-			continue
-		}
-		for m := 1; m <= n; m++ {
-			if n%m != 0 {
-				continue
-			}
-			if e := math.Abs(logRatio - math.Log(float64(m)/float64(n/m))); e < least {
-				best, least = [2]int{m, n / m}, e
-			}
-		}
-	}
-	return best[0], best[1], true
-}
-
-// sliceSize is a w x h piece's size under jlm.PreSliceUHD (find_best_resize):
-// past Slice^2 pixels, or where up, Slice^2 at its aspect -- the height
-// truncated, the width the truncated height times the aspect, truncated --
-// then each side whole patches, rounded half to even, at least one.
-func (f PictureFit) sliceSize(w, h float64, up bool) (int, int) {
-	if w*h > float64(f.Slice*f.Slice) || up {
-		r := w / h
-		h = math.Trunc(float64(f.Slice) / math.Sqrt(r))
-		w = math.Trunc(h * r)
-	}
-	return wholeUnits(w, f.SlicePatch), wholeUnits(h, f.SlicePatch)
-}
-
-// refineSize is the size a w x h picture is resized to before it is cut
-// into cols x rows slices (get_refine_size): whole slices, each the best
-// size of the picture's own slice, upscaled where it must be.
-func (f PictureFit) refineSize(w, h, cols, rows int) (int, int) {
-	rw, rh := wholeUnits(float64(w), cols), wholeUnits(float64(h), rows)
-	sw, sh := f.sliceSize(float64(rw)/float64(cols), float64(rh)/float64(rows), true)
-	return sw * cols, sh * rows
-}
-
-// wholeUnits is length rounded half to even to whole units, at least one
-// (the processor's ensure_divide).
-func wholeUnits(length float64, unit int) int {
-	return max(int(math.RoundToEven(length/float64(unit)))*unit, unit)
 }
 
 // chainGraphs lowers a chained tower's blocks, each over the grid the block

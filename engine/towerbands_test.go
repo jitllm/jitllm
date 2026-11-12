@@ -33,7 +33,7 @@ func TestATallPictureRunsInBands(t *testing.T) {
 func tallPicture(t *testing.T, s *Instance, w, h int) {
 	t.Helper()
 	tg := s.m.Tower
-	sq, _ := tg.Square(w, h, 0)
+	sq, _ := squareOf(t, tg, w, h, 0)
 	a := tg.Classes[sq.Class].Pic
 	if !a.Holds(sq.Pw, sq.Ph) {
 		t.Fatalf("a %dx%d picture resizes to %dx%d, past class %d", w, h, sq.Pw, sq.Ph, sq.Class)

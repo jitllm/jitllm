@@ -33,7 +33,7 @@ func TestAPictureWiderThanItsTapsRunsInColumns(t *testing.T) {
 	defer s.Close()
 	const w, h = 66500, 16
 	tg := m.Tower
-	sq, _ := tg.Square(w, h, 0)
+	sq, _ := squareOf(t, tg, w, h, 0)
 	a := tg.Classes[sq.Class].Pic
 	if composer.PILTapCount(a.Filter, w, sq.Ow) <= a.Taps {
 		t.Fatalf("a %dx%d picture resized to %dx%d reads %d taps an output, which its %d hold: the case runs no column band",

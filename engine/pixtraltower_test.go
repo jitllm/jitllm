@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/model"
 )
@@ -65,10 +66,10 @@ func TestPixtralTowerMatchesTransformers(t *testing.T) {
 	tg := m.Tower
 	s := testInstance(t, m, 64, WithKVF16(false))
 	defer s.Close()
-	was := tg.Fit.Cap
-	tg.Fit.Cap = g.Prep.Longest
+	stated := tg.Geometry
+	restateStep(t, m, jlm.PreCapUnit, func(s *jlm.PreStep) { s.Ints[0] = int32(g.Prep.Longest) })
 	px, sq := towerPixels(t, s, rgbPicture(g.Prep.RGB, g.Prep.W, g.Prep.H))
-	tg.Fit.Cap = was
+	tg.Geometry = stated
 	if sq.Gw*tg.Patch != g.Prep.OutW || sq.Gh*tg.Patch != g.Prep.OutH {
 		t.Fatalf("a %dx%d picture resized to %dx%d, the processor's %dx%d", g.Prep.W, g.Prep.H,
 			sq.Gw*tg.Patch, sq.Gh*tg.Patch, g.Prep.OutW, g.Prep.OutH)

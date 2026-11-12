@@ -74,7 +74,7 @@ func chainPixels(t *testing.T, s *Instance, img image.Image) []float32 {
 		t.Fatal(err)
 	}
 	pl.Request(tr.req)
-	sq, squares := tg.Square(pl.W, pl.H, 0)
+	sq, squares := squareOf(t, tg, pl.W, pl.H, 0)
 	cl := tg.Classes[sq.Class]
 	a := cl.Pic
 	a.Pixels = pl.Px
@@ -139,7 +139,7 @@ func TestGemma3nTowerMatchesTransformers(t *testing.T) {
 		t.Fatal(err)
 	}
 	pl.Request(tr.req)
-	sq, squares := tg.Square(pl.W, pl.H, 0)
+	sq, squares := squareOf(t, tg, pl.W, pl.H, 0)
 	tr.squareRequest(pl, sq, tg.Classes[sq.Class].Pic, squares)
 	cl := tg.Classes[0]
 	tr.size(cl.Rows, 0)

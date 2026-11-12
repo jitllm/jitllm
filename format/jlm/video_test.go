@@ -218,6 +218,7 @@ func TestPictureVideoStepsAreThePictures(t *testing.T) {
 		tw := sampleTower(t)
 		v := testPictureVideo()
 		v.Pre = c.edit(steps(tw))
+		v.Frames = tw.Geometry
 		tw.Video = v
 		if err := v.PicturesValid(tw); (err == nil) != c.ok {
 			t.Errorf("%s: PicturesValid says %v", name, err)

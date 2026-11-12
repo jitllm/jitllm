@@ -79,7 +79,7 @@ func TestGeometryRefusesWhatItCannotRead(t *testing.T) {
 		"a count past the operands":     func(g *PictureGeometry) { g.Count.Terms[0].Args[0] = Operand(PicBound + 3) },
 		"a field of a stored vector":    func(g *PictureGeometry) { g.Square[0].Terms[0].Args[0] = Arg{Kind: ArgStored, Role: RoleVPosEmbd} },
 		"a field reduced":               func(g *PictureGeometry) { g.Square[0].Terms[0].Reduce = true },
-		"no unit":                       func(g *PictureGeometry) { g.Bounds.Unit = 0 },
+		"a unit below none":             func(g *PictureGeometry) { g.Bounds.Unit = -1 },
 		"an area under a unit":          func(g *PictureGeometry) { g.Bounds.MaxPix = 1 },
 		"no patches":                    func(g *PictureGeometry) { g.Bounds.MaxPatches = 0 },
 	} {

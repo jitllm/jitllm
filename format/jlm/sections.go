@@ -809,6 +809,9 @@ func encodeVision(v *Vision) []byte {
 	// The picture's geometry after it, each record opened by its own tag.
 	if v.Tower != nil && v.Tower.Geometry != nil {
 		encodeGeometry(w, v.Tower.Geometry)
+		if v.Tower.Video != nil && v.Tower.Video.Frames != nil {
+			encodeGeometry(w, v.Tower.Video.Frames)
+		}
 	}
 	return w.b
 }
@@ -863,6 +866,9 @@ func decodeVision(b []byte) (*Vision, error) {
 	}
 	if r.err == nil && len(r.b) > 0 && v.Tower != nil {
 		v.Tower.Geometry = decodeGeometry(r)
+	}
+	if r.err == nil && len(r.b) > 0 && v.Tower != nil && v.Tower.Video != nil {
+		v.Tower.Video.Frames = decodeGeometry(r)
 	}
 	if r.err == nil && len(r.b) > 0 {
 		r.err = fmt.Errorf("jlm: %d bytes after the vision section's last record", len(r.b))

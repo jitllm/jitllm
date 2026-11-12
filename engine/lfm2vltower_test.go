@@ -84,7 +84,7 @@ func TestLFM2VLTowerMatchesTransformers(t *testing.T) {
 		t.Fatal(err)
 	}
 	b := img.Bounds()
-	if _, n := tg.Square(b.Dx(), b.Dy(), 0); n != len(g.Pieces) || g.Cols*g.Rows < 2 {
+	if _, n := squareOf(t, tg, b.Dx(), b.Dy(), 0); n != len(g.Pieces) || g.Cols*g.Rows < 2 {
 		t.Fatalf("the picture is %d pieces, the processor's %d (%dx%d tiles)", n, len(g.Pieces), g.Cols, g.Rows)
 	}
 	s := testInstance(t, m, 64, WithKVF16(false))
@@ -122,7 +122,7 @@ func TestLFM2VLTowerMatchesTransformers(t *testing.T) {
 	pos, ref := 0, 0
 	worstMark := 0.0
 	for i := range g.Pieces {
-		sq, _ := tg.Square(b.Dx(), b.Dy(), i)
+		sq, _ := squareOf(t, tg, b.Dx(), b.Dy(), i)
 		n := tg.SquareOut(sq) - 1
 		mark := marks[(sq.Mark-1)*D : sq.Mark*D]
 		for j, v := range rows[pos*D : (pos+1)*D] {
@@ -131,7 +131,7 @@ func TestLFM2VLTowerMatchesTransformers(t *testing.T) {
 		if (ref+n)*D > len(emb) || (pos+1+n)*D > len(rows) {
 			var each []string
 			for j := range g.Pieces {
-				q, _ := tg.Square(b.Dx(), b.Dy(), j)
+				q, _ := squareOf(t, tg, b.Dx(), b.Dy(), j)
 				each = append(each, fmt.Sprintf("%dx%d patches -> %d", q.Gh, q.Gw, tg.SquareOut(q)))
 			}
 			t.Fatalf("piece %d overruns: the reference has %d rows, the engine %d; the pieces %v (the processor's %v)",
@@ -155,10 +155,10 @@ func TestLFM2VLTowerMatchesTransformers(t *testing.T) {
 	}
 
 	// The violation: a tolerance that keeps the picture whole.
-	tol := tg.Fit.Tolerance
-	tg.Fit.Tolerance = 1e6
-	_, n := tg.Square(b.Dx(), b.Dy(), 0)
-	tg.Fit.Tolerance = tol
+	stated := tg.Geometry
+	restateStep(t, m, jlm.PreTileSmart, func(s *jlm.PreStep) { s.Floats[0] = 1e6 })
+	_, n := squareOf(t, tg, b.Dx(), b.Dy(), 0)
+	tg.Geometry = stated
 	if n == len(g.Pieces) {
 		t.Fatal("VIOLATION: a tolerance of a million still cuts the picture into the processor's pieces")
 	}
@@ -254,7 +254,7 @@ func lfm2Lay(t *testing.T, m *model.Model, g *towerE2EGolden, rows []float32, _ 
 	var out []float32
 	at := 0
 	for i := 0; ; i++ {
-		sq, n := tg.Square(g.Image.W, g.Image.H, i)
+		sq, n := squareOf(t, tg, g.Image.W, g.Image.H, i)
 		if i >= n {
 			break
 		}

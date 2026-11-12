@@ -78,6 +78,7 @@ type PictureChoice struct {
 
 // PictureBounds is what every square stays within: its grid's sides whole
 // Units of pixels, its grid at most MaxPix pixels and MaxPatches patches.
+// Unit 0 says every square's grid is the entry's own, one size.
 type PictureBounds struct {
 	Unit, MaxPix, MaxPatches int32
 }
@@ -153,7 +154,7 @@ func (g *PictureGeometry) Valid() error {
 			return fmt.Errorf("jlm: a picture square's field %d: %w", f, err)
 		}
 	}
-	if b := g.Bounds; b.Unit < 1 || b.MaxPix < b.Unit*b.Unit || b.MaxPatches < 1 {
+	if b := g.Bounds; b.Unit < 0 || b.MaxPix < max(b.Unit*b.Unit, 1) || b.MaxPatches < 1 {
 		return fmt.Errorf("jlm: a picture's squares bounded by %+v", b)
 	}
 	return nil

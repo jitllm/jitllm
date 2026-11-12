@@ -49,6 +49,10 @@ type Video struct {
 	// last square.
 	Pre   []PreStep
 	Entry Program
+	// Frames is how a frame read as a picture becomes the tower's squares
+	// where its steps are its own, nil where they are the picture's. It is
+	// written after the picture's geometry, in the vision section's tail.
+	Frames *PictureGeometry
 	// Stride, where stated, makes the groups one grid, group j at j times
 	// its value on the text model's temporal axis, of N and R; where not,
 	// each group is a picture span of its own.
@@ -169,7 +173,13 @@ func (v *Video) Valid() error {
 		if v.Group != 1 || v.Stride != nil {
 			return fmt.Errorf("jlm: a video read as pictures of %d frames, one grid %v", v.Group, v.Stride != nil)
 		}
+		if v.Frames != nil {
+			return v.Frames.Valid()
+		}
 		return nil
+	}
+	if v.Frames != nil {
+		return fmt.Errorf("jlm: a video of an entry of its own states a geometry of a picture's")
 	}
 	if len(v.Pre) != 2 || v.Pre[0].Kind != PreVideoResize ||
 		v.Pre[1].Kind != PreNormalize && v.Pre[1].Kind != PreNormalizeBF16 || len(v.Pre[1].Floats) != 6 {

@@ -20,13 +20,16 @@ func TestHunyuanVLTowerMatchesTransformers(t *testing.T) {
 	m, g, openOpts := openQVLTower(t, "synth-hunyuanvl")
 	defer m.Close()
 	tg := m.Tower
-	if tg == nil || tg.GridDiv != 2 || tg.Line != 1 || tg.Ends != 1 || tg.Frame != 2 || tg.Fit.Factor != 2*tg.Patch {
+	if tg == nil || tg.GridDiv != 2 || tg.Line != 1 || tg.Ends != 1 || tg.Frame != 2 || tg.Geometry.Bounds.Unit != int32(2*tg.Patch) {
 		t.Fatalf("the tower is %+v: want a grid over 2x2 windows with a newline column and two end rows", tg)
 	}
 	s := testInstance(t, m, 64, openOpts...)
 	defer s.Close()
 
-	tg.Fit.MinPix, tg.Fit.MaxPix = g.Prep.Min, g.Prep.Max
+	pixels := func(lo, hi int) func(s *jlm.PreStep) {
+		return func(s *jlm.PreStep) { s.Ints[1], s.Ints[2] = int32(lo), int32(hi) }
+	}
+	restateStep(t, m, jlm.PreSmartResize, pixels(g.Prep.Min, g.Prep.Max))
 	px, sq := towerPixels(t, s, rgbPicture(g.Prep.RGB, g.Prep.W, g.Prep.H))
 	if sq.Gw*tg.Patch != g.Prep.OutW || sq.Gh*tg.Patch != g.Prep.OutH {
 		t.Fatalf("a %dx%d picture resized to %dx%d, the processor's %dx%d", g.Prep.W, g.Prep.H,
@@ -45,16 +48,16 @@ func TestHunyuanVLTowerMatchesTransformers(t *testing.T) {
 		t.Fatalf("%d of %d samples differ from the processor's", differ, len(px))
 	}
 	t.Logf("a %dx%d picture resized to %dx%d: every one of %d samples the processor's", g.Prep.W, g.Prep.H, sq.Pw, sq.Ph, len(px))
-	tg.Fit.MaxPix = 1 << 30
+	restateStep(t, m, jlm.PreSmartResize, pixels(g.Prep.Min, 1<<30))
 	if _, bad := towerPixels(t, s, rgbPicture(g.Prep.RGB, g.Prep.W, g.Prep.H)); bad.Pw == g.Prep.OutW && bad.Ph == g.Prep.OutH {
 		t.Fatal("VIOLATION: a resize with no bound on the area reaches the processor's size")
 	}
 	// The golden encodes its picture at its own size (do_resize=False).
-	tg.Fit.MinPix, tg.Fit.MaxPix = g.Image.W*g.Image.H, g.Image.W*g.Image.H
+	restateStep(t, m, jlm.PreSmartResize, pixels(g.Image.W*g.Image.H, g.Image.W*g.Image.H))
 
 	want := model.ImageGrid{T: g.Image.Grid[0], H: g.Image.Grid[1], W: g.Image.Grid[2], Line: 1, Ends: 1}
-	if gr := tg.SpanGrid(g.Image.W, g.Image.H); gr != want {
-		t.Fatalf("the picture's grid is %+v, the reference's %+v", gr, want)
+	if gr, err := tg.SpanGrid(g.Image.W, g.Image.H); err != nil || gr != want {
+		t.Fatalf("the picture's grid is %+v (%v), the reference's %+v", gr, err, want)
 	}
 	img := rgbPicture(g.Image.RGB, g.Image.W, g.Image.H)
 	rows, err := s.EncodePicture(img)

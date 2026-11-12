@@ -62,11 +62,18 @@ today): an exact constant kind, valid only in a host-evaluated expression.
 
 ## The engine
 
-`PictureFit` and its per-kind sizes, `Tiles` and `Window` go; `Square` is
-the evaluator of the statement, its class the smallest that holds the
-square's grid. `classSides` reads `Bounds`. The picture op reads the canvas
-and the picture's corner on it from the request, as it reads the resize
-size, and the fill colour from its attributes; `PicBox` and `PicPad` go.
+`model.PictureSquares` evaluates the statement: a picture bound once, each
+square after, its scratch kept by the caller so a warm encode allocates
+nothing (the instance's tower run holds one). A square's class is the
+smallest that holds its grid. The classes are formed from `Bounds`: a Unit
+of 0 says every square is the entry's own size, one class; otherwise class
+sides double from 16 units to the area the resize reaches. A video whose
+frames are read as pictures under steps of their own states their geometry
+beside the picture's (`jlm.Video.Frames`).
+
+Still to go: the picture op reads the canvas and the picture's corner on it
+from the request, as it reads the resize size, and the fill colour from its
+attributes; `PicBox` and `PicPad` go.
 
 ## Migration
 
@@ -78,8 +85,11 @@ size, and the fill colour from its attributes; `PicBox` and `PicPad` go.
    fixture and a sweep of sizes (aspects past each threshold, each tie, the
    bounds) -- the old code is held to the processors already, so this holds
    the statement to them.
-3. `Square` evaluates the statement; the old sizes, `Tiles` and `Window`
-   go; the picture op takes the canvas from the call.
+3. `Square` evaluates the statement and the fits go. With them goes the
+   gate of step 2: `engine.TestPictureGeometryHoldsItsSweep` holds each
+   tower's squares over the same sweep to the sums the fits gave
+   (`engine/testdata/picturegeom.sums`, recorded while step 2's gate held
+   the two equal). Then the picture op takes the canvas from the call.
 4. The family kinds go from `format/jlm`; the record's revision moves and
    an older container is reconverted.
 

@@ -124,7 +124,7 @@ func miniCPMVPicture(t *testing.T, m *model.Model, name, path string, vitBound, 
 		t.Fatalf("a %dx%d picture, the golden's %dx%d", b.Dx(), b.Dy(), g.W, g.H)
 	}
 	tg := m.Tower
-	_, n := tg.Square(g.W, g.H, 0)
+	_, n := squareOf(t, tg, g.W, g.H, 0)
 	if n != len(g.Pieces) {
 		t.Fatalf("%d pieces, the processor cut %d", n, len(g.Pieces))
 	}
@@ -204,7 +204,7 @@ func miniCPMVPicture(t *testing.T, m *model.Model, name, path string, vitBound, 
 			pos += n
 		}
 		for i := range g.Pieces {
-			sq, _ := tg.Square(g.W, g.H, i)
+			sq, _ := squareOf(t, tg, g.W, g.H, i)
 			if sq.Mark > 0 {
 				run(sq.Mark, sq.MarkN)
 			}

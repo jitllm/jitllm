@@ -5,10 +5,10 @@ import (
 	"github.com/jitllm/jitllm/format/jlm"
 )
 
-// geometryOf is the geometry of tower t's picture, from the steps its
+// GeometryOf is the geometry of tower t's picture, from the steps its
 // stater wrote: the resize each states, read in the entry's patches, a
 // fixed square's grid side x side, the markers where the head writes them.
-func geometryOf(t *jlm.Tower, v *jlm.Vision) (*jlm.PictureGeometry, error) {
+func GeometryOf(t *jlm.Tower, v *jlm.Vision) (*jlm.PictureGeometry, error) {
 	ops := t.Entry.Ops
 	if len(ops) == 0 || ops[0].Code != jlm.TOpPatchify || ops[0].Span < 1 || v.PatchSize == 0 {
 		return nil, fmt.Errorf("convert: a picture's geometry of an entry that does not begin with its patches")
@@ -42,7 +42,7 @@ func geometryOf(t *jlm.Tower, v *jlm.Vision) (*jlm.PictureGeometry, error) {
 		case jlm.PreNaFlex:
 			return naflexGeometry(in(0), in(1), in(2)), nil
 		case jlm.PreLimitPad:
-			return limitGeometry(in(0), in(1), in(2), p, in(1)), nil
+			return limitGeometry(in(0), in(1), in(2), p), nil
 		case jlm.PreLongBox:
 			return boxGeometry(in(0), in(1), side), nil
 		case jlm.PreCapUnit:
@@ -185,7 +185,7 @@ func (e *sizes) idiv(a, b jlm.Arg) jlm.Arg { return e.floor(e.div(a, b)) }
 func fixedGeometry(w, h, side int) *jlm.PictureGeometry {
 	b := newGeom()
 	b.one(k(float64(w)), k(float64(h)), k(float64(side)), k(float64(side)))
-	return b.done(1, w*h, side*side)
+	return b.done(0, w*h, side*side)
 }
 
 // shortCropGeometry is a picture resized so its shorter side is short and
@@ -201,7 +201,7 @@ func shortCropGeometry(short, w, h, side int) *jlm.PictureGeometry {
 	b.field(jlm.SqPh, func(e *sizes) jlm.Arg { return k(float64(h)) })
 	b.field(jlm.SqX0, func(e *sizes) jlm.Arg { return e.idiv(e.sub(ow, k(float64(w))), k(2)) })
 	b.field(jlm.SqY0, func(e *sizes) jlm.Arg { return e.idiv(e.sub(oh, k(float64(h))), k(2)) })
-	return b.done(1, w*h, side*side)
+	return b.done(0, w*h, side*side)
 }
 
 // smartSize binds a picture's own size under Qwen2-VL's smart_resize: where
@@ -292,8 +292,11 @@ func naflexGeometry(patch, lo, hi int) *jlm.PictureGeometry {
 // limitGeometry is a picture kept at its size unless its whole limitPatch
 // patches pass limit, where both sides are scaled by sqrt(limit / patches)
 // and truncated; read over its grid padded to multiples of pad pixels
-// (Kimi-VL's rescale with pad_input).
-func limitGeometry(limitPatch, limit, pad, patch, maxPatches int) *jlm.PictureGeometry {
+// (Kimi-VL's rescale with pad_input). Its squares reach the most patches a
+// picture pads to: a side of a whole patches pads to at most a over the
+// pad's patches plus one of them, and its other side has at most limit/a
+// (any up to the widest picture where a is zero).
+func limitGeometry(limitPatch, limit, pad, patch int) *jlm.PictureGeometry {
 	b := newGeom()
 	lp := k(float64(limitPatch))
 	scale := func(e *sizes) jlm.Arg {
@@ -309,7 +312,15 @@ func limitGeometry(limitPatch, limit, pad, patch, maxPatches int) *jlm.PictureGe
 	}
 	gw, gh := b.value(padded(ow)), b.value(padded(oh))
 	b.one(ow, oh, gw, gh)
-	return b.done(pad, maxPatches*patch*patch, maxPatches)
+	u, most, maxPatches := pad/patch, widestPicture/patch, 0
+	for a := 0; a <= most; a++ {
+		other := most
+		if a > 0 {
+			other = min(most, limit/a)
+		}
+		maxPatches = max(maxPatches, (a/u+1)*u*((other/u+1)*u))
+	}
+	return b.done(pad, limit*limitPatch*limitPatch, maxPatches)
 }
 
 // boxGeometry is a picture resized so its longer side is box pixels and its
@@ -326,7 +337,7 @@ func boxGeometry(box, boxMin, side int) *jlm.PictureGeometry {
 	b.field(jlm.SqCh, func(e *sizes) jlm.Arg { return bx })
 	b.field(jlm.SqCx, func(e *sizes) jlm.Arg { return e.idiv(e.sub(bx, ow), k(2)) })
 	b.field(jlm.SqCy, func(e *sizes) jlm.Arg { return e.idiv(e.sub(bx, oh), k(2)) })
-	return b.done(1, box*box, side*side)
+	return b.done(0, box*box, side*side)
 }
 
 // capGeometry is a picture whose longer side, past capSide, is brought to it
@@ -378,7 +389,7 @@ func budgetGeometry(budget, budgetPatch, unit, patch int) *jlm.PictureGeometry {
 		return e.where(both, u, e.where(onlyH, u, e.where(onlyW, fromW, th)))
 	})
 	b.ownSize(ow, oh, patch)
-	return b.done(unit, budget*budgetPatch*budgetPatch, budget)
+	return b.done(unit, budget*budgetPatch*budgetPatch, budget*budgetPatch*budgetPatch/(patch*patch))
 }
 
 // grids is every columns x rows grid of minT to maxT tiles in the order the
@@ -420,7 +431,7 @@ func tileGeometry(minT, maxT int, thumb bool, s, side int) *jlm.PictureGeometry 
 	cols, rows := b.closestGrid(minT, maxT, s)
 	b.tiles(cols, rows, thumb, s, side, func(e *sizes) jlm.Arg { return e.mul(cols, k(float64(s))) },
 		func(e *sizes) jlm.Arg { return e.mul(rows, k(float64(s))) })
-	return b.done(1, s*s, side*side)
+	return b.done(0, s*s, side*side)
 }
 
 // tiles states cols x rows tiles of s pixels cut from the picture resized to
@@ -524,7 +535,7 @@ func canvasGeometry(most, s, side int, marks bool) *jlm.PictureGeometry {
 		})
 		b.field(jlm.SqTrailN, func(e *sizes) jlm.Arg { return e.sub(k(1), last(e)) })
 	}
-	return b.done(1, s*s, side*side)
+	return b.done(0, s*s, side*side)
 }
 
 // smartTileGeometry is LFM2-VL's: the picture at its own size (smartSize

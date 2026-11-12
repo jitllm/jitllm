@@ -32,6 +32,9 @@ type towerRun struct {
 	// tok and given are the picture's rows as a prompt's source (prefillSrc).
 	tok   []int32
 	given [1]givenRun
+	// squares evaluates the picture being encoded's squares from the
+	// tower's geometry, its scratch kept from one picture to the next.
+	squares model.PictureSquares
 	// tapRows is the rows each tap's block leaves (tapBuf their buffers,
 	// grown with the square) and mode's taps the card's run keeping them
 	// (embedMode.taps).
@@ -278,7 +281,14 @@ func (s *Instance) EncodePicture(img image.Image) ([]float32, error) {
 	}
 	defer s.fr.Enter()()
 	b := img.Bounds()
-	n := s.m.Tower.PicRows(b.Dx(), b.Dy()) * int(s.m.Container.Vision().ProjDim)
+	if _, err := s.tower.squares.Of(s.m.Tower, b.Dx(), b.Dy()); err != nil {
+		return nil, err
+	}
+	rows, err := s.tower.squares.Rows()
+	if err != nil {
+		return nil, err
+	}
+	n := rows * int(s.m.Container.Vision().ProjDim)
 	k := len(s.m.Tower.Taps)
 	if cap(s.tower.out) < n {
 		s.tower.out, s.tower.deep = make([]float32, n), make([]float32, k*n)
@@ -324,11 +334,27 @@ func (s *Instance) encodePicture(img image.Image, whole bool, dst, deep []float3
 		tr.tapsW, tr.tapsVideo = 0, false
 	}
 	D := int(m.Container.Vision().ProjDim)
-	sq, squares := tg.Square(pl.W, pl.H, 0)
-	want := tg.PicRows(pl.W, pl.H)
+	ps := &tr.squares
+	var sq model.Square
+	var squares, want int
 	if whole {
-		sq = tg.FrameSquare(pl.W, pl.H)
+		if _, err := ps.FrameOf(tg, pl.W, pl.H); err != nil {
+			return nil, err
+		}
+		if sq, err = ps.Last(); err != nil {
+			return nil, err
+		}
 		want, squares = tg.SquareOut(sq), 1
+	} else {
+		if squares, err = ps.Of(tg, pl.W, pl.H); err != nil {
+			return nil, err
+		}
+		if want, err = ps.Rows(); err != nil {
+			return nil, err
+		}
+		if sq, err = ps.At(0); err != nil {
+			return nil, err
+		}
 	}
 	if len(dst) != want*D || len(deep) != len(tg.Taps)*want*D {
 		return nil, fmt.Errorf("model: %d values and %d for its taps' for a picture's %d rows of %d", len(dst), len(deep), want, D)
@@ -346,7 +372,9 @@ func (s *Instance) encodePicture(img image.Image, whole bool, dst, deep []float3
 	at := 0
 	for i := range squares {
 		if i > 0 {
-			sq, _ = tg.Square(pl.W, pl.H, i)
+			if sq, err = ps.At(i); err != nil {
+				return nil, err
+			}
 			if err := squareFits(sq, tg.Classes[sq.Class].Pic); err != nil {
 				return nil, err
 			}
@@ -581,12 +609,24 @@ func (s *Instance) encodePictures(spans []model.Span, from int) ([]model.Span, e
 		r := sp.N(s.c.NEmbd)
 		if sp.Picture != nil && sp.Embd == nil {
 			b := sp.Picture.Bounds()
-			want := s.m.Tower.PicRows(b.Dx(), b.Dy())
+			var want int
+			var err error
 			switch {
 			case sp.Frame != nil:
 				want = s.m.Tower.SquareOut(s.m.Tower.VideoSquare(sp.FrameW, sp.FrameH))
 			case sp.Whole:
-				want = s.m.Tower.SquareOut(s.m.Tower.FrameSquare(b.Dx(), b.Dy()))
+				var sq model.Square
+				if _, err = tr.squares.FrameOf(s.m.Tower, b.Dx(), b.Dy()); err == nil {
+					sq, err = tr.squares.Last()
+				}
+				want = s.m.Tower.SquareOut(sq)
+			default:
+				if _, err = tr.squares.Of(s.m.Tower, b.Dx(), b.Dy()); err == nil {
+					want, err = tr.squares.Rows()
+				}
+			}
+			if err != nil {
+				return nil, fmt.Errorf("model: span %d: %w", i, err)
 			}
 			if sp.PicRows != want {
 				return nil, fmt.Errorf("model: span %d is a picture of %d rows and the tower writes %d",

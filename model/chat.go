@@ -492,7 +492,11 @@ func (m *Model) ChatSpansMedia(msgs []ChatMessage, pics []Span, videos []VideoPa
 		switch {
 		case p.Embd == nil && p.Picture != nil:
 			b := p.Picture.Bounds()
-			if want := m.Tower.PicRows(b.Dx(), b.Dy()); p.PicRows != want {
+			want, err := m.Tower.PicRows(b.Dx(), b.Dy())
+			if err != nil {
+				return nil, fmt.Errorf("model: picture %d: %w", i, err)
+			}
+			if p.PicRows != want {
 				return nil, fmt.Errorf("model: picture %d takes %d rows and the tower writes %d",
 					i, p.PicRows, want)
 			}
