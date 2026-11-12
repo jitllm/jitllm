@@ -938,6 +938,12 @@ type Attrs struct {
 	// PicTorch says the taps are torchvision's precision, not Pillow's
 	// (composer.PILTapsAt): the picture op runs the same passes on them.
 	PicTorch bool
+	// PicBytes writes the resampled picture's bytes rather than its
+	// normalised samples (ChainPIL): Out[0] a word a pixel, its three
+	// channels' bytes from the lowest and 255 above them -- a picture the
+	// next resize reads as the step's (PixRGBA8), as a processor resizing
+	// more than once reads its own uint8 output.
+	PicBytes bool
 	// PicFrame reads the step's second frame, a video's, from the byte the
 	// request's frame word names (composer.RequestPicFrame): its planes' and
 	// palette's offsets the frame's own, its size and format the first's.
