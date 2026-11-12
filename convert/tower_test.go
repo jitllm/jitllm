@@ -67,18 +67,25 @@ func TestSmolVLMStatesItsTower(t *testing.T) {
 		jlm.Precision(got[3]) != jlm.PrecTorch {
 		t.Errorf("the picture is resized as %v, want the tower's %d square by torchvision's Lanczos", got, side)
 	}
-	// The picture's steps come first, then the video frames': the frame's
-	// cut is one square at the tower's size.
+	// The picture's steps come first, then the video frames': a frame's
+	// longer side goes to the picture's longest edge too, then the frame is
+	// one square at the tower's size.
 	var cuts [][]int32
 	for _, s := range steps {
 		if s.Kind == PreLongTiles {
 			cuts = append(cuts, s.Ints)
 		}
 	}
-	if want := [][]int32{{4 * side, 1, idefics3Grid}, {side, 1, idefics3Grid}}; !reflect.DeepEqual(cuts, want) ||
+	if want := [][]int32{{4 * side, 1, idefics3Grid, 0}, {4 * side, 1, idefics3Grid, 1}}; !reflect.DeepEqual(cuts, want) ||
 		tw.Geometry == nil {
-		t.Errorf("the cuts are %v (geometry %v), want the picture's longer side to %d and a frame's to %d, a double newline of one token, a grid of %d",
-			cuts, tw.Geometry != nil, 4*side, side, idefics3Grid)
+		t.Errorf("the cuts are %v (geometry %v), want the picture's and a frame's longer side to %d, a frame one square, a double newline of one token, a grid of %d",
+			cuts, tw.Geometry != nil, 4*side, idefics3Grid)
+	}
+	if g := tw.Geometry; g != nil && len(g.Stages) != 2 {
+		t.Errorf("the picture is resized in %d stages before its cut, want the processor's two", len(g.Stages))
+	}
+	if v := tw.Video; v == nil || v.Frames == nil || len(v.Frames.Stages) != 1 {
+		t.Error("a frame is not resized once before its square, as SmolVLMVideoProcessor resizes it")
 	}
 	if got := tw.Entry.Ops[0].Span; got != int32(v.PatchSize) {
 		t.Errorf("patches of %d, want the tower's %d", got, v.PatchSize)

@@ -5468,17 +5468,26 @@ scripts/idefics3sizes.py), and the markers as the head's rows
 tokens. A video's frame is one square with the global image's markers,
 which is what SmolVLMProcessor writes for a frame.
 
-What is not the processor's is that each square is one resize of the
-picture: the processor resizes two or three times over, each pass rounding
-to 8 bits, and the picture op runs one. On the photo (640x488,
-scripts/smolvlmreal.py) a tile's pixels part from the processor's by NMSE
-2-4e-5, five 8-bit levels at most, and the global view's -- three resizes
-there -- by 3.2e-4, sixteen levels; transformers' own f32 tower turns those
-into rows 6e-5 to 7.3e-4 apart a tile and 4.5e-3 on the global view, 4.9e-4
-over the picture. `TestSmolVLMRealMatchesTransformers` holds SmolVLM-256M
-to it square by square: the pixels within 1e-4 a tile and 1e-3 the global
-view, the rows within 3e-2 (the int8 activations' share); the tiles reversed
-and a grey picture are its violations.
+Each square was first one resize of the picture, where the processor
+resizes two or three times over, each pass rounding to 8 bits. On the photo
+(640x488, scripts/smolvlmreal.py) a tile's pixels parted from the
+processor's by NMSE 2-4e-5, five 8-bit levels at most, and the global
+view's -- three resizes there -- by 3.2e-4, sixteen levels; transformers'
+own f32 tower turned those into rows 6e-5 to 7.3e-4 apart a tile and 4.5e-3
+on the global view, 4.9e-4 over the picture.
+
+The resizes are now the picture geometry's stages (jlm.PictureGeometry.
+Stages): the longer side to the longest edge, then up to whole tiles, each
+a stage class's entry on the CPU device writing its bytes a word a pixel
+(graph.Attrs.PicBytes) for the next to read as an RGBA8 picture, the
+squares cut from the second. A video frame takes the first stage and then
+its square, as SmolVLMVideoProcessor resizes it (its video size the
+picture's longest edge where the config states both).
+`TestSmolVLMRealMatchesTransformers` holds SmolVLM-256M square by square:
+the pixels the processor's (NMSE 1e-10, 1e-5 a sample), the rows within
+3e-2 (the int8 activations' share); the tiles reversed and a grey picture
+are its violations, and the tree before the stages, one resize a square,
+fails it (NMSE 1.9-3.9e-5, up to 0.039 a sample on the tiles).
 
 ## Video as one statement
 

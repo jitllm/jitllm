@@ -140,6 +140,28 @@ func (e *geometry) square(i, n int) ([jlm.SquareFields]int, error) {
 	return out, nil
 }
 
+// stage is the bound picture's size after stage i of its whole-picture
+// resizes (jlm.PictureStage).
+func (e *geometry) stage(i int) (w, h int, err error) {
+	s := &e.g.Stages[i]
+	var wh [2]int
+	for j, x := range []*jlm.Expr{&s.W, &s.H} {
+		v, err := e.eval(x, e.in)
+		if err != nil {
+			return 0, 0, fmt.Errorf("model: picture stage %d's size: %w", i, err)
+		}
+		k, ok := whole(v)
+		if !ok || k < 1 {
+			return 0, 0, fmt.Errorf("model: picture stage %d's side is %v", i, v)
+		}
+		wh[j] = k
+	}
+	if wh[0]*wh[1] > int(s.MaxPix) {
+		return 0, 0, fmt.Errorf("model: picture stage %d resizes to %dx%d, past its %d pixels", i, wh[0], wh[1], s.MaxPix)
+	}
+	return wh[0], wh[1], nil
+}
+
 // whole is v as an int where it is a whole number an int holds.
 func whole(v float64) (int, bool) {
 	if v != math.Trunc(v) || math.Abs(v) > 1<<40 {
@@ -221,6 +243,13 @@ func (ps *PictureSquares) At(i int) (Square, error) {
 	}
 	return sq, nil
 }
+
+// Stages is how many whole-picture resizes the bound picture takes before
+// its squares are cut (jlm.PictureGeometry.Stages), and Stage the size
+// after stage i: the squares are of the last.
+func (ps *PictureSquares) Stages() int { return len(ps.e.g.Stages) }
+
+func (ps *PictureSquares) Stage(i int) (w, h int, err error) { return ps.e.stage(i) }
 
 // Last is the bound picture's last square: a tiled tower's thumbnail, or
 // its one square.

@@ -36,7 +36,7 @@ func TestLongTileGeometryFollowsTheProcessor(t *testing.T) {
 	}
 	const doubled = 1
 	parts := func(longest, tile, w, h, rows, cols, squares int) error {
-		geo := longTileGeometry(longest, tile, tile/16, doubled, idefics3Grid, true)
+		geo := longTileGeometry(longest, tile, tile/16, doubled, idefics3Grid, true, false)
 		_, n, err := model.GeometrySquare(geo, w, h, 0)
 		if err != nil {
 			return err

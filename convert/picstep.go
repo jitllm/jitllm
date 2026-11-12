@@ -135,9 +135,11 @@ const (
 	// each side up to whole tiles of the resize step's size, the shorter
 	// from the longer at that size's aspect (resize_for_vision_encoder);
 	// cut row-major, then, for more than one tile, the whole resized to
-	// one tile (split_images). Each square is one resize of the picture by
-	// the resize step, where the processor resizes it two or three times
-	// over (docs/divergences.md). A grid wider than Ints[2] tiles a side
+	// one tile (split_images); where Ints[3] is 1, a video frame
+	// (SmolVLMVideoProcessor), the first resize to one tile and no cut.
+	// Each resize the processor makes is a stage of the picture's geometry
+	// (jlm.PictureGeometry.Stages), reading the last one's bytes, by the
+	// resize step's filter. A grid wider than Ints[2] tiles a side
 	// the processor cannot name. A head's marker runs (TOpMarkRow) are a
 	// table of a newline, the global view's run -- a double newline,
 	// Ints[1] rows of it, then <fake_token_around_image> and <global-img>

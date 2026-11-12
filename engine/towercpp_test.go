@@ -23,9 +23,9 @@ import (
 // The debug tool builds the picture in memory as raw samples, 1 and 0 on
 // every channel, and normalises nothing, so the container is converted with
 // its normalisation restated to the identity (convert.WithPictureStep) and
-// given the same checkerboard at the tower's size, whose global view -- the
-// last of the squares Idefics3's processor cuts it into, the 64 rows llama.cpp
-// encodes -- is resized by the identity. The dump prints three leading and three trailing values of rows
+// given the checkerboard four squares a side, whose first tile -- a crop of
+// the picture every resize of the processor's leaves as it is -- is the
+// 64 rows llama.cpp encodes. The dump prints three leading and three trailing values of rows
 // 0, 1, 2, 61, 62 and 63 and the whole tensor's sum: the samples catch a
 // layout bug (the patch order, the shuffle's), the sum sees every element.
 // The bar is relative RMS: the int8 activations here against llama.cpp's
@@ -69,7 +69,12 @@ func TestSmolVLMTowerMatchesLlamaCpp(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer m.Close()
-		side := int(m.Container.Vision().ImageSize)
+		// Four squares a side: the processor's resizes of the whole picture
+		// are the identity there and its first tile is the checkerboard's
+		// corner as it is, the picture llama.cpp encodes. At the tower's own
+		// side the picture would be resized up and down again before its
+		// global view is cut.
+		side := 4 * int(m.Container.Vision().ImageSize)
 		cb := image.NewNRGBA(image.Rect(0, 0, side, side))
 		for y := range side {
 			for x := range side {
@@ -83,18 +88,32 @@ func TestSmolVLMTowerMatchesLlamaCpp(t *testing.T) {
 		}
 		s := testInstance(t, m, 64)
 		defer s.Close()
+		// The tile's samples are the checkerboard's two levels, half each,
+		// whatever the normalisation makes of them: a resize would leave
+		// levels between.
+		px, _ := towerPixelsAt(t, s, cb, 0)
+		levels := map[float32]int{}
+		for _, v := range px {
+			levels[v]++
+		}
+		if len(levels) != 2 || 2*levels[px[0]] != len(px) {
+			t.Fatalf("the first tile's samples take %d levels (%v): the picture was resized before it was cut, and is not llama.cpp's", len(levels), levels)
+		}
 		out, err := s.EncodePicture(cb)
 		if err != nil {
 			t.Fatal(err)
 		}
 		pd := m.Cfg.NEmbd
-		// The global view is the picture's last square, the checkerboard at
-		// its own size: its 64 rows before the one marker that closes it.
-		n := len(out) / pd
-		if n < 65 || len(out) != n*pd {
-			t.Fatalf("the tower writes %d values, not whole rows of %d past the global view's 64 and its marker", len(out), pd)
+		// The first tile's rows follow its markers.
+		sq, _, err := m.Tower.Square(side, side, 0)
+		if err != nil {
+			t.Fatal(err)
 		}
-		out = out[(n-65)*pd : (n-1)*pd]
+		at, k := sq.MarkN, m.Tower.SquareOut(sq)-sq.MarkN-sq.TrailN
+		if k != 64 || len(out) < (at+k)*pd {
+			t.Fatalf("the first tile is %d rows after %d markers of the picture's %d values", k, at, len(out))
+		}
+		out = out[at*pd : (at+k)*pd]
 		var sse, sy2, total float64
 		for i, row := range rows {
 			for j := range 6 {

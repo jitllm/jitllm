@@ -17,6 +17,18 @@ type PictureGeometry struct {
 	Count  Expr
 	Square [SquareFields]Expr
 	Bounds PictureBounds
+	// Stages are whole-picture resizes made before the squares, in order,
+	// each reading the last one's bytes as a processor resizing its own
+	// uint8 output does; the squares' sizes and windows are then of the last
+	// stage. Each is its width and height of the operands, and the most
+	// pixels it reaches (MaxPix), which sizes its class at placement.
+	Stages []PictureStage
+}
+
+// PictureStage is one whole-picture resize (PictureGeometry.Stages).
+type PictureStage struct {
+	W, H   Expr
+	MaxPix int32
 }
 
 // The operands a picture's expressions read: its width and height, the
@@ -88,6 +100,7 @@ type PictureBounds struct {
 // Limits on a statement's size: a reader allocates nothing past them.
 const (
 	maxPictureBinds  = 512
+	maxPictureStages = 8
 	maxPictureCols   = 8
 	maxPictureRows   = 4096
 	maxPictureCosts  = 4
@@ -159,6 +172,20 @@ func (g *PictureGeometry) Valid() error {
 	if b := g.Bounds; b.Unit < 0 || b.MaxPix < max(b.Unit*b.Unit, 1) || b.MaxPatches < 1 {
 		return fmt.Errorf("jlm: a picture's squares bounded by %+v", b)
 	}
+	if len(g.Stages) > maxPictureStages {
+		return fmt.Errorf("jlm: a picture resized in %d stages", len(g.Stages))
+	}
+	for k := range g.Stages {
+		s := &g.Stages[k]
+		if s.MaxPix < 1 {
+			return fmt.Errorf("jlm: picture stage %d reaching %d pixels", k, s.MaxPix)
+		}
+		for _, e := range []*Expr{&s.W, &s.H} {
+			if err := hostExprValid(e, in); err != nil {
+				return fmt.Errorf("jlm: picture stage %d's size: %w", k, err)
+			}
+		}
+	}
 	return nil
 }
 
@@ -187,8 +214,9 @@ func hostExprValid(e *Expr, in int) error {
 // no geometry refuses the tail rather than read it as a video.
 const geometryTag = 0x7fc00002
 
-// pictureRecord is the geometry record's revision.
-const pictureRecord = 1
+// pictureRecord is the geometry record's revision; revision 1, before the
+// stages, is read as a geometry of none.
+const pictureRecord = 2
 
 func encodeGeometry(w *wbuf, g *PictureGeometry) {
 	w.u32(geometryTag)
@@ -220,6 +248,12 @@ func encodeGeometry(w *wbuf, g *PictureGeometry) {
 	w.i32(g.Bounds.Unit)
 	w.i32(g.Bounds.MaxPix)
 	w.i32(g.Bounds.MaxPatches)
+	w.u32(uint32(len(g.Stages)))
+	for i := range g.Stages {
+		encodeExpr(w, &g.Stages[i].W)
+		encodeExpr(w, &g.Stages[i].H)
+		w.i32(g.Stages[i].MaxPix)
+	}
 }
 
 func decodeGeometry(r *rbuf) *PictureGeometry {
@@ -227,8 +261,9 @@ func decodeGeometry(r *rbuf) *PictureGeometry {
 		r.err = fmt.Errorf("jlm: a picture geometry tagged %#x", tag)
 		return nil
 	}
-	if rev := r.u32(); r.err == nil && rev != pictureRecord {
-		r.err = fmt.Errorf("jlm: a picture geometry of revision %d, where this build reads %d", rev, pictureRecord)
+	rev := r.u32()
+	if r.err == nil && (rev < 1 || rev > pictureRecord) {
+		r.err = fmt.Errorf("jlm: a picture geometry of revision %d, where this build reads up to %d", rev, pictureRecord)
 		return nil
 	}
 	g := &PictureGeometry{}
@@ -276,6 +311,22 @@ func decodeGeometry(r *rbuf) *PictureGeometry {
 		decodeExpr(r, &g.Square[f])
 	}
 	g.Bounds = PictureBounds{Unit: r.i32(), MaxPix: r.i32(), MaxPatches: r.i32()}
+	if rev < 2 {
+		return g
+	}
+	n = r.count(9)
+	if n > maxPictureStages {
+		r.err = fmt.Errorf("jlm: a picture resized in %d stages", n)
+		return nil
+	}
+	if n > 0 {
+		g.Stages = make([]PictureStage, n)
+	}
+	for i := range g.Stages {
+		decodeExpr(r, &g.Stages[i].W)
+		decodeExpr(r, &g.Stages[i].H)
+		g.Stages[i].MaxPix = r.i32()
+	}
 	return g
 }
 

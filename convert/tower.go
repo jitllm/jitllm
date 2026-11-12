@@ -27,9 +27,15 @@ func statedTower(s *jlm.Source, o options) (*jlm.Tower, error) {
 		return t, err
 	}
 	if o.longestEdge > 0 {
-		for i := range t.Pre {
-			if t.Pre[i].Kind == PreLongTiles {
-				t.Pre[i].Ints[0] = o.longestEdge
+		steps := [][]jlm.PreStep{t.Pre}
+		if t.Video != nil {
+			steps = append(steps, t.Video.Pre)
+		}
+		for _, pre := range steps {
+			for i := range pre {
+				if pre[i].Kind == PreLongTiles {
+					pre[i].Ints[0] = o.longestEdge
+				}
 			}
 		}
 	}
@@ -199,12 +205,12 @@ func idefics3Tower(s *jlm.Source) (*jlm.Tower, error) {
 	}
 	resize := jlm.PreStep{Kind: jlm.PreResize, Ints: []int32{side, side, int32(jlm.FilterPILLanczos), int32(jlm.PrecTorch)}}
 	norm := jlm.PreStep{Kind: jlm.PreNormalize, Floats: []float32{v.Mean[0], v.Mean[1], v.Mean[2], v.Std[0], v.Std[1], v.Std[2]}}
-	tiles := func(longest int32) []jlm.PreStep {
-		return []jlm.PreStep{resize, {Kind: PreLongTiles, Ints: []int32{longest, int32(len(double)), idefics3Grid}}, norm}
+	tiles := func(longest, frame int32) []jlm.PreStep {
+		return []jlm.PreStep{resize, {Kind: PreLongTiles, Ints: []int32{longest, int32(len(double)), idefics3Grid, frame}}, norm}
 	}
 	t := &jlm.Tower{
 		Version: jlm.TowerVersion,
-		Pre:     tiles(4 * side),
+		Pre:     tiles(4*side, 0),
 		// The pixels are value 0.
 		Entry: jlm.Program{NIn: 1, Out: 4, Ops: []jlm.TowerOp{
 			{Code: jlm.TOpPatchify, In: []uint16{0}, Span: int32(v.PatchSize)},
@@ -222,7 +228,9 @@ func idefics3Tower(s *jlm.Source) (*jlm.Tower, error) {
 			{Code: jlm.TOpMarkRow, In: []uint16{3}, Bind: []jlm.Role{jlm.RoleVTileMarks}, Span: int32(len(double) + 2), Offset: 1},
 		}},
 	}
-	t.Video = idefics3Video(tiles(side))
+	// A frame's longer side goes to the picture's longest edge first:
+	// SmolVLMVideoProcessor takes the processor's size for its video size.
+	t.Video = idefics3Video(tiles(4*side, 1))
 	withVideoTemplate(s.Vocab, smolvlmVideoTemplate)
 	return t, nil
 }

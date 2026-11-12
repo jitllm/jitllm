@@ -23,7 +23,7 @@ func GeometryOf(t *jlm.Tower, v *jlm.Vision) (*jlm.PictureGeometry, error) {
 		marks = marks || op.Code == jlm.TOpMarkRow
 	}
 	var fixedW, fixedH, short, minT, maxT, longest, doubled, grid int
-	thumb, canvas := false, false
+	thumb, canvas, frame := false, false, false
 	for _, s := range t.Pre {
 		in := func(i int) int { return int(s.Ints[i]) }
 		switch s.Kind {
@@ -39,6 +39,7 @@ func GeometryOf(t *jlm.Tower, v *jlm.Vision) (*jlm.PictureGeometry, error) {
 			minT, maxT, thumb, canvas = 1, in(0), true, true
 		case PreLongTiles:
 			longest, doubled, grid = in(0), in(1), in(2)
+			frame = len(s.Ints) > 3 && in(3) == 1
 		case PreSmartResize:
 			return smartGeometry(in(0), in(1), in(2), len(s.Ints) == 6 && in(5) == 1, p), nil
 		case PreNaFlex:
@@ -63,7 +64,7 @@ func GeometryOf(t *jlm.Tower, v *jlm.Vision) (*jlm.PictureGeometry, error) {
 			return nil, fmt.Errorf("convert: a longer side of %d pixels is more tiles of %d than the %d a side the processor names",
 				longest, fixedW, grid)
 		}
-		return longTileGeometry(longest, fixedW, side, doubled, grid, marks), nil
+		return longTileGeometry(longest, fixedW, side, doubled, grid, marks, frame), nil
 	case canvas:
 		return canvasGeometry(maxT, fixedW, side, marks), nil
 	case maxT > 0:
@@ -523,12 +524,14 @@ func tileGeometry(minT, maxT int, thumb bool, s, side int) *jlm.PictureGeometry 
 // whole even number, at least one (_resize_output_size_rescale_to_max_len);
 // then the longer side up to whole s-pixel tiles and the shorter at that
 // resize's aspect, truncated and up to whole tiles
-// (resize_for_vision_encoder); cut row-major, then for more than one tile
+// (resize_for_vision_encoder), each resize a stage of its own; cut
+// row-major, or for a frame (SmolVLMVideoProcessor) the first resize to one
+// tile and no cut; then for more than one tile
 // the whole resized to one tile (split_images); each read as a side x side
 // grid. With marks, the marker runs PreLongTiles states, the double
 // newline doubled rows of the table and the tiles' pairs a grid-square
 // grid's.
-func longTileGeometry(longest, s, side, doubled, grid int, marks bool) *jlm.PictureGeometry {
+func longTileGeometry(longest, s, side, doubled, grid int, marks, frame bool) *jlm.PictureGeometry {
 	b := newGeom()
 	l, sz := k(float64(longest)), k(float64(s))
 	atLeast := func(e *sizes, a, c jlm.Arg) jlm.Arg { return e.sub(k(1), e.less(a, c)) }
@@ -539,9 +542,15 @@ func longTileGeometry(longest, s, side, doubled, grid int, marks bool) *jlm.Pict
 	up := func(e *sizes, v jlm.Arg) jlm.Arg { return e.mul(e.ceil(e.div(v, sz)), sz) }
 	wide1 := b.value(func(e *sizes) jlm.Arg { return atLeast(e, w1, h1) })
 	w2 := b.value(func(e *sizes) jlm.Arg {
+		if frame {
+			return sz
+		}
 		return e.where(wide1, up(e, w1), up(e, e.trunc(e.mul(up(e, h1), e.div(w1, h1)))))
 	})
 	h2 := b.value(func(e *sizes) jlm.Arg {
+		if frame {
+			return sz
+		}
 		return e.where(wide1, up(e, e.trunc(e.div(up(e, w1), e.div(w1, h1)))), up(e, h1))
 	})
 	cols := b.value(func(e *sizes) jlm.Arg { return e.div(w2, sz) })
@@ -566,6 +575,17 @@ func longTileGeometry(longest, s, side, doubled, grid int, marks bool) *jlm.Pict
 		}
 		b.field(jlm.SqTrail, func(e *sizes) jlm.Arg { return e.where(tile(e), rowEnd(e), fake) })
 		b.field(jlm.SqTrailN, func(e *sizes) jlm.Arg { return e.where(tile(e), rowEnd(e), k(1)) })
+	}
+	// The processor resizes the picture twice before it cuts, each resize
+	// reading the last one's uint8 output: the squares are of the second. A
+	// frame's square is the first resized once more.
+	most := (longest + s - 1) / s * s
+	b.g.Stages = []jlm.PictureStage{
+		{W: built(func(e *sizes) jlm.Arg { return w1 }), H: built(func(e *sizes) jlm.Arg { return h1 }), MaxPix: int32(longest * longest)},
+		{W: built(func(e *sizes) jlm.Arg { return w2 }), H: built(func(e *sizes) jlm.Arg { return h2 }), MaxPix: int32(most * most)},
+	}
+	if frame {
+		b.g.Stages = b.g.Stages[:1]
 	}
 	return b.done(0, s*s, side*side)
 }

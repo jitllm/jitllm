@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"image"
 	"slices"
+	"unsafe"
 
 	"github.com/jitllm/jitllm/model"
 
@@ -104,6 +105,10 @@ type towerRun struct {
 	swr   composer.SWR
 	mix   []float32
 	mixOf [2]uint64
+	// stageOut is the picture's bytes after each whole-picture resize
+	// (model.TowerGraphs.Stages), a word a pixel, the stages taking turns:
+	// each reads the last one's.
+	stageOut [2][]float32
 }
 
 // newTowerRun is a run of the model's tower tg, stated as t, its blocks the
@@ -126,11 +131,20 @@ func (in *Instance) newTowerRun(tg *model.TowerGraphs, base int, t *jlm.Tower) (
 		ts.Close()
 		return nil, err
 	}
-	words := 0
-	for _, cl := range append(tg.Classes[:len(tg.Classes):len(tg.Classes)], tg.Videos...) {
+	// A video class's entry is class len(tg.Classes)+i of the parts', and a
+	// picture stage's past them.
+	classes := append(append(tg.Classes[:len(tg.Classes):len(tg.Classes)], tg.Videos...), tg.Stages...)
+	words, stage := 0, 0
+	for _, cl := range classes {
 		words = max(words, composer.PicEntries(cl.Pic)*composer.PILEntryWords(cl.Pic.Taps))
 	}
+	for _, cl := range tg.Stages {
+		stage = max(stage, cl.Rows*model.StageWidth)
+	}
 	tr := &towerRun{s: ts, base: base, req: make([]uint32, composer.RequestPicTaps+words)}
+	if stage > 0 {
+		tr.stageOut = [2][]float32{make([]float32, stage), make([]float32, stage)}
+	}
 	hn := n
 	var chain []nn.PartPlan
 	if tg.Chain {
@@ -140,8 +154,7 @@ func (in *Instance) newTowerRun(tg *model.TowerGraphs, base int, t *jlm.Tower) (
 		}
 	}
 	plans := nn.TowerPlans{Head: ts.partPlan(tg.Head, hn, nil), Chain: chain}
-	// A video class's entry is class len(tg.Classes)+i of the parts'.
-	for _, cl := range append(tg.Classes[:len(tg.Classes):len(tg.Classes)], tg.Videos...) {
+	for _, cl := range classes {
 		e := map[uint8]nn.PartPlan{}
 		for px, g := range cl.Entry {
 			e[px] = ts.partPlan(g, cl.Rows, nil)
@@ -347,6 +360,9 @@ func (s *Instance) encodePicture(img image.Image, whole bool, dst, deep []float3
 			return nil, err
 		}
 		want, squares = tg.SquareOut(sq), 1
+		if words, pl, err = tr.stages(tg, ps, words, pl); err != nil {
+			return nil, err
+		}
 	} else {
 		if squares, err = ps.Of(tg, pl.W, pl.H); err != nil {
 			return nil, err
@@ -355,6 +371,9 @@ func (s *Instance) encodePicture(img image.Image, whole bool, dst, deep []float3
 			return nil, err
 		}
 		if sq, err = ps.At(0); err != nil {
+			return nil, err
+		}
+		if words, pl, err = tr.stages(tg, ps, words, pl); err != nil {
 			return nil, err
 		}
 	}
@@ -441,13 +460,51 @@ func (tr *towerRun) columnEntry(runs []uint8, class int, px uint8, words []uint3
 	return tr.parts.Entry(class, px, words, tr.req, tr.posTab, n, rows)
 }
 
+// stages runs the bound picture's whole-picture resizes (ps.Stages) over its
+// words laid out as pl, each a stage class's entry writing its bytes a word a
+// pixel, which the next reads as an RGBA8 picture; it is the last one's words
+// and layout, the picture's own where it states none.
+func (tr *towerRun) stages(tg *model.TowerGraphs, ps *model.PictureSquares, words []uint32, pl model.PictureLayout) ([]uint32, model.PictureLayout, error) {
+	base := len(tg.Classes) + len(tg.Videos)
+	for i := range ps.Stages() {
+		w, h, err := ps.Stage(i)
+		if err != nil {
+			return nil, pl, err
+		}
+		// The smallest stage class that holds it (model.TowerGraphs.Stages).
+		c := -1
+		for j := range tg.Stages {
+			if tg.Stages[j].Pic.Holds(w, h) {
+				c = j
+				break
+			}
+		}
+		if c < 0 {
+			return nil, pl, fmt.Errorf("model: picture stage %d resizes to %dx%d, past every stage class", i, w, h)
+		}
+		cl := tg.Stages[c]
+		out := tr.stageOut[i%2]
+		pl.Request(tr.req)
+		tr.squareRequest(pl, model.Square{Ow: w, Oh: h, Pw: w, Ph: h, Cw: w, Ch: h}, cl.Pic, 2)
+		if err := tr.entry(bandRuns(tg, base+c, pl.Px), base+c, pl.Px, words, cl.Rows, out); err != nil {
+			return nil, pl, fmt.Errorf("model: picture stage %d: %w", i, err)
+		}
+		words, pl = unsafe.Slice((*uint32)(unsafe.Pointer(&out[0])), w*h), model.RGBA8Layout(w, h)
+	}
+	pl.Request(tr.req)
+	return words, pl, nil
+}
+
 // bandRuns is the band forms part class class's entry of sample format px
 // runs first: a picture class's, or past them a video class's.
 func bandRuns(tg *model.TowerGraphs, class int, px uint8) []uint8 {
-	if class < len(tg.Classes) {
+	switch {
+	case class < len(tg.Classes):
 		return tg.Classes[class].BandRuns[px]
+	case class < len(tg.Classes)+len(tg.Videos):
+		return tg.Videos[class-len(tg.Classes)].BandRuns[px]
 	}
-	return tg.Videos[class-len(tg.Classes)].BandRuns[px]
+	return tg.Stages[class-len(tg.Classes)-len(tg.Videos)].BandRuns[px]
 }
 
 // squareFits says whether square sq's resized picture fits its class

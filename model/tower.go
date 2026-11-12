@@ -78,6 +78,11 @@ type TowerGraphs struct {
 	// picture class's size.
 	Video  *jlm.Video
 	Videos []towerClass
+	// Stages is the entries of the whole-picture resizes the geometries
+	// state before their squares (jlm.PictureGeometry.Stages), smallest
+	// first, each up to its pixels: the picture's bytes at a stage's size,
+	// which the next stage and the squares read.
+	Stages []towerClass
 	// table and planes are the blocks' rotary table and its planes, nil for
 	// blocks that turn nothing.
 	Table  *graph.Graph
@@ -525,6 +530,28 @@ func (m *Model) BuildTowerGraphs() (*TowerGraphs, error) {
 		tg.Classes = append(tg.Classes, cl)
 		tg.Rows = max(tg.Rows, cl.Rows)
 	}
+	// The stages' classes, the picture's and a video frame's, are one set:
+	// each the tower's resize up to its pixels, smallest first.
+	var most []int
+	stated := [][]jlm.PictureStage{geom.Stages}
+	if t.Video != nil && t.Video.Frames != nil {
+		stated = append(stated, t.Video.Frames.Stages)
+	}
+	for _, stages := range stated {
+		for _, st := range stages {
+			if !slices.Contains(most, int(st.MaxPix)) {
+				most = append(most, int(st.MaxPix))
+			}
+		}
+	}
+	slices.Sort(most)
+	for _, n := range most {
+		cl, err := stageClass(t, n, dense)
+		if err != nil {
+			return nil, fmt.Errorf("model: the tower's picture stage of %d pixels: %w", n, err)
+		}
+		tg.Stages = append(tg.Stages, cl)
+	}
 	if t.Video != nil {
 		if len(t.Chain) > 0 || !t.Video.AsPictures() && bounds.Unit == 0 {
 			return nil, fmt.Errorf("model: a video read by a tower whose pictures are not each of a size of its own")
@@ -641,6 +668,65 @@ func (m *Model) BuildTowerGraphs() (*TowerGraphs, error) {
 		tg.Taps, tg.TapBlocks = append(tg.Taps, g), append(tg.TapBlocks, int(tp.Block))
 	}
 	return tg, nil
+}
+
+// StageWidth is the words a row of a stage's bytes holds: the live picture
+// lies dense over them (graph.Attrs.PicBytes).
+const StageWidth = 4096
+
+// stageClass is a whole-picture resize's entry (jlm.PictureStage) for each
+// sample format: the record's resize filter at any size of at most maxPix
+// pixels, its bytes (graph.Attrs.PicBytes) a word a pixel over rows of
+// StageWidth words, Pillow's band passes first.
+func stageClass(t *jlm.Tower, maxPix int, f graph.Facts) (towerClass, error) {
+	var a graph.Attrs
+	for _, s := range t.Pre {
+		switch s.Kind {
+		case jlm.PreResize:
+			if err := resizeChain(&a, jlm.Filter(s.Ints[2])); err != nil {
+				return towerClass{}, err
+			}
+			a.PicTorch = jlm.Precision(s.Ints[3]) == jlm.PrecTorch
+		case jlm.PreResizeLive:
+			if err := resizeChain(&a, jlm.Filter(s.Ints[0])); err != nil {
+				return towerClass{}, err
+			}
+			a.PicTorch = jlm.Precision(s.Ints[1]) == jlm.PrecTorch
+		}
+	}
+	if a.Chain != graph.ChainPIL {
+		return towerClass{}, fmt.Errorf("a stage resized by chain %d: a stage's bytes are a Pillow resize's", a.Chain)
+	}
+	a.Std, a.PicLive, a.PicBytes = [3]float64{1, 1, 1}, true, true
+	a.PicW, a.PicH, a.PicArea = composer.PictureMaxSide, composer.PictureMaxSide, maxPix
+	a.Taps = composer.LiveTaps(a.Filter, int(math.Sqrt(float64(maxPix))))
+	cl := towerClass{Entry: map[uint8]*graph.Graph{}, Band: map[uint8]*graph.Graph{}, BandRuns: map[uint8][]uint8{},
+		Rows: (maxPix + StageWidth - 1) / StageWidth}
+	for px := graph.PixRGBA8; px < graph.PixFormats; px++ {
+		a.Pixels = px
+		ba := a
+		ba.PicPass, ba.PicBytes = graph.PicBand, false
+		bb := graph.NewBlock(-1)
+		bb.Out(bb.Emit(graph.OpPicture, nil, []graph.Result{{Name: "stage.band", Width: 3}}, nil, ba, nil, nil)[0])
+		if err := graph.Verify(bb.G, f); err != nil {
+			return towerClass{}, err
+		}
+		ea := a
+		ea.PicPass = graph.PicFinish
+		b := graph.NewBlock(-1)
+		b.Out(b.Emit(graph.OpPicture, nil, []graph.Result{{Name: "stage", Width: StageWidth, Elem: graph.ElemU32}}, nil, ea, nil, nil)[0])
+		if err := graph.Verify(b.G, f); err != nil {
+			return towerClass{}, err
+		}
+		key := BandKey(0, px)
+		cl.Entry[px], cl.Band[key], cl.BandRuns[px] = b.G, bb.G, []uint8{key}
+		if err := columnBands(cl.Band, key, f); err != nil {
+			return towerClass{}, err
+		}
+	}
+	cl.Pic = a
+	cl.Pic.PicPass = graph.PicWhole
+	return cl, nil
 }
 
 // towerEntry is the entry for pictures of sample format px: the record's
@@ -1423,6 +1509,12 @@ type PictureLayout struct {
 	Px                              uint8
 	W, H, stride                    int
 	cstride, p2, p3, sub, wide, ink int
+}
+
+// RGBA8Layout is a w x h picture of RGBA8 words, a row w words: a picture
+// stage's bytes (graph.Attrs.PicBytes) as the next resize reads them.
+func RGBA8Layout(w, h int) PictureLayout {
+	return PictureLayout{Px: graph.PixRGBA8, W: w, H: h, stride: 4 * w}
 }
 
 // request writes the layout's words into the step's request.

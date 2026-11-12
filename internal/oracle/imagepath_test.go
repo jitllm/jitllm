@@ -32,6 +32,7 @@ func imagePathAllowed() map[string]string {
 		"video.go:formatValue":     "a value the video's prompt writes, rounded to its stated decimals: text the prompt prints",
 		"video.go:pieces":          "the video's prompt pieces, each value evaluated and written: text the prompt prints",
 		"picture.go:square":        "a picture square's fields, its stated geometry evaluated over the picture's sides and checked whole: geometry from its sizes",
+		"picture.go:stage":         "a whole-picture resize stage's sides, its stated geometry evaluated over the picture's sides and checked whole: geometry from its sizes",
 	}
 }
 
@@ -45,6 +46,7 @@ func imagePathCallees() map[string]string {
 		"delta.go:Delta":           "a recurrent block's geometry and scale from the config, once a block at open",
 		"tower.go:towerEntry":      "a tower's entry stated as a graph, once at open: its constants are the graph's",
 		"tower.go:towerBlock":      "a tower's block stated as a graph, once a block at open: its constants are the graph's",
+		"tower.go:stageClass":      "a resize stage's class stated as graphs, its taps from the class's pixel bound, once a class at open",
 		"front.go:blockGraph":      "a block's graph stated from the config, once a block at open: its constants are the graph's",
 		"markprompt.go:promptStep": "a prompt template's integer division, a number the prompt prints: no pixel's arithmetic",
 		"video.go:videoEntry":      "a video's entry graph, its normalisation constants from the container and its taps from the frames' bounds",
