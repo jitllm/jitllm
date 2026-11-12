@@ -48,12 +48,16 @@ func pilSource(t *testing.T, c pilCase) []byte {
 	return out
 }
 
-// TestPILResizeMatchesPillow holds PILResize to the bytes Pillow's resize
-// wrote for every case scripts/pilgold.py records: bilinear and bicubic, a
-// picture shrunk, grown and of another aspect, up to 4096 wide, and the test
-// picture at Gemma 3's and CLIP's sizes. A filter of the other kind is the
+// TestPILResizeMatchesPillow holds PILResizeBy to the bytes Pillow's resize
+// wrote for every case scripts/pilgold.py records: bilinear, bicubic and
+// Lanczos, a picture shrunk, grown and of another aspect, up to 4096 wide,
+// the test picture at Gemma 3's, CLIP's and SmolVLM's sizes, and Idefics3's
+// three resizes one after another. A filter of another kind is the
 // violation.
 func TestPILResizeMatchesPillow(t *testing.T) {
+	filters := map[string]PILFilter{"bilinear": PILBilinear, "bicubic": PILBicubic, "lanczos": PILLanczos}
+	// other is the filter each case's violation resizes by instead.
+	other := map[PILFilter]PILFilter{PILBilinear: PILBicubic, PILBicubic: PILBilinear, PILLanczos: PILBicubic}
 	raw, err := os.ReadFile(filepath.Join("..", "..", "testdata", "golden", "pil", "resample.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -68,9 +72,15 @@ func TestPILResizeMatchesPillow(t *testing.T) {
 	if len(g.Cases) == 0 {
 		t.Fatal("no cases")
 	}
+	ran := map[PILFilter]int{}
 	for _, c := range g.Cases {
+		f, ok := filters[c.Filter]
+		if !ok {
+			t.Fatalf("%s %dx%d to %dx%d: filter %q", c.Src, c.W, c.H, c.OW, c.OH, c.Filter)
+		}
+		ran[f]++
 		src := pilSource(t, c)
-		got := PILResize(src, c.W, c.H, c.OW, c.OH, c.Filter == "bicubic")
+		got := PILResizeBy(src, c.W, c.H, c.OW, c.OH, f)
 		sum := sha256.Sum256(got)
 		if h := hex.EncodeToString(sum[:]); h != c.SHA256 {
 			for i, b := range c.Bytes {
@@ -80,10 +90,15 @@ func TestPILResizeMatchesPillow(t *testing.T) {
 			}
 			t.Fatalf("%s %dx%d to %dx%d %s: sha256 %s, Pillow's %s", c.Src, c.W, c.H, c.OW, c.OH, c.Filter, h, c.SHA256)
 		}
-		other := sha256.Sum256(PILResize(src, c.W, c.H, c.OW, c.OH, c.Filter != "bicubic"))
-		if hex.EncodeToString(other[:]) == c.SHA256 && (c.W != c.OW || c.H != c.OH) {
-			t.Fatalf("%s %dx%d to %dx%d: the other filter writes the same bytes", c.Src, c.W, c.H, c.OW, c.OH)
+		v := sha256.Sum256(PILResizeBy(src, c.W, c.H, c.OW, c.OH, other[f]))
+		if hex.EncodeToString(v[:]) == c.SHA256 && (c.W != c.OW || c.H != c.OH) {
+			t.Fatalf("%s %dx%d to %dx%d: another filter writes the same bytes", c.Src, c.W, c.H, c.OW, c.OH)
 		}
 		t.Logf("%s %dx%d to %dx%d %s: Pillow %s's bytes", c.Src, c.W, c.H, c.OW, c.OH, c.Filter, g.Pillow)
+	}
+	for _, f := range filters {
+		if ran[f] == 0 {
+			t.Errorf("no case resizes by filter %d", f)
+		}
 	}
 }

@@ -2,13 +2,30 @@ package oracle
 
 import "math"
 
-// PILResize is Pillow's Image.resize of an RGB picture, three bytes a pixel,
-// w x h, to ow x oh by its BILINEAR filter, or BICUBIC where cubic: Resample.c's
-// ImagingResample for 8-bit images -- each output's window and weights from
-// the reduction's scale in float64, the weights in 22-bit fixed point, a
-// horizontal pass to bytes where the width changes, then a vertical one where
-// the height does.
+// PILFilter is one of Pillow's antialiased resample filters.
+type PILFilter int
+
+const (
+	PILBilinear PILFilter = iota
+	PILBicubic
+	PILLanczos
+)
+
+// PILResize is PILResizeBy with Pillow's BILINEAR filter, or BICUBIC where
+// cubic.
 func PILResize(rgb []byte, w, h, ow, oh int, cubic bool) []byte {
+	if cubic {
+		return PILResizeBy(rgb, w, h, ow, oh, PILBicubic)
+	}
+	return PILResizeBy(rgb, w, h, ow, oh, PILBilinear)
+}
+
+// PILResizeBy is Pillow's Image.resize of an RGB picture, three bytes a
+// pixel, w x h, to ow x oh by filter f: Resample.c's ImagingResample for
+// 8-bit images -- each output's window and weights from the reduction's
+// scale in float64, the weights in 22-bit fixed point, a horizontal pass to
+// bytes where the width changes, then a vertical one where the height does.
+func PILResizeBy(rgb []byte, w, h, ow, oh int, f PILFilter) []byte {
 	support, filter := 1.0, func(x float64) float64 {
 		x = math.Abs(x)
 		if x < 1 {
@@ -16,7 +33,8 @@ func PILResize(rgb []byte, w, h, ow, oh int, cubic bool) []byte {
 		}
 		return 0
 	}
-	if cubic {
+	switch f {
+	case PILBicubic:
 		support, filter = 2, func(x float64) float64 {
 			const a = -0.5
 			x = math.Abs(x)
@@ -25,6 +43,22 @@ func PILResize(rgb []byte, w, h, ow, oh int, cubic bool) []byte {
 			}
 			if x < 2 {
 				return (((x-5)*x+8)*x - 4) * a
+			}
+			return 0
+		}
+	case PILLanczos:
+		// Resample.c's lanczos_filter: the sinc windowed by the sinc a third
+		// as wide, over [-3, 3) -- the bounds as Pillow writes them.
+		sinc := func(x float64) float64 {
+			if x == 0 {
+				return 1
+			}
+			x *= math.Pi
+			return math.Sin(x) / x
+		}
+		support, filter = 3, func(x float64) float64 {
+			if -3 <= x && x < 3 {
+				return sinc(x) * sinc(x/3)
 			}
 			return 0
 		}

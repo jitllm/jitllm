@@ -98,7 +98,7 @@ const PictureWords = 1<<30 - 1
 // normalised.
 func decomposePicture(o graph.Op, c *Context) ([]Prim, error) {
 	a := o.Attr
-	pil := a.Chain == graph.ChainPIL && (a.Filter == graph.FilterBilinear || a.Filter == graph.FilterCubic) && a.Taps > 0
+	pil := a.Chain == graph.ChainPIL && graph.PILFilter(a.Filter) && a.Taps > 0
 	if len(o.In) != 0 || len(o.Out) != 1 || a.PicW < 1 || a.PicH < 1 ||
 		!pil && (a.Chain != graph.ChainHalfPixel || a.Filter != graph.FilterLinear) ||
 		a.Pixels < graph.PixRGBA8 || a.Pixels >= graph.PixFormats {

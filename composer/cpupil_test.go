@@ -15,8 +15,8 @@ import (
 
 // TestComposedCPUPicturePIL resizes pictures on the CPU by Pillow's
 // antialiased filters (graph.ChainPIL), their taps PILTaps', and holds every
-// byte to oracle.PILResize, itself held to Pillow's (TestPILResizeMatchesPillow):
-// bilinear and bicubic, shrunk, grown and of another aspect, RGBA and a
+// byte to oracle.PILResizeBy, itself held to Pillow's (TestPILResizeMatchesPillow):
+// bilinear, bicubic and Lanczos, shrunk, grown and of another aspect, RGBA and a
 // JPEG-shaped YCbCr picture's pixels, a form reaching further than the
 // picture needs, and the centre window of a larger resize (the shorter side
 // resized, then cropped). The other filter's taps are the violation it must
@@ -39,7 +39,11 @@ func TestComposedCPUPicturePIL(t *testing.T) {
 		{300, 200, 64, 64, 512, graph.FilterBilinear, true, 0, 0}, {300, 200, 64, 64, 300, graph.FilterCubic, false, 0, 0},
 		{97, 61, 48, 48, 128, graph.FilterCubic, false, 76, 48}, {61, 97, 32, 32, 128, graph.FilterCubic, true, 32, 50},
 		{20, 33, 48, 48, 64, graph.FilterBilinear, false, 48, 79},
+		{97, 61, 48, 48, 128, graph.FilterLanczos, false, 0, 0}, {20, 33, 48, 48, 64, graph.FilterLanczos, false, 0, 0},
+		{300, 200, 64, 64, 300, graph.FilterLanczos, true, 0, 0}, {61, 97, 32, 32, 128, graph.FilterLanczos, false, 64, 64},
 	}
+	byFilter := map[uint8]oracle.PILFilter{graph.FilterBilinear: oracle.PILBilinear, graph.FilterCubic: oracle.PILBicubic,
+		graph.FilterLanczos: oracle.PILLanczos}
 	for _, c := range cases {
 		if c.fw == 0 {
 			c.fw, c.fh = c.ow, c.oh
@@ -107,7 +111,7 @@ func TestComposedCPUPicturePIL(t *testing.T) {
 			}
 			return got
 		}
-		full := oracle.PILResize(rgb, c.w, c.h, c.fw, c.fh, c.filter == graph.FilterCubic)
+		full := oracle.PILResizeBy(rgb, c.w, c.h, c.fw, c.fh, byFilter[c.filter])
 		want := make([]uint8, 0, c.ow*c.oh*3)
 		for y := range c.oh {
 			want = append(want, full[((y0+y)*c.fw+x0)*3:((y0+y)*c.fw+x0+c.ow)*3]...)
