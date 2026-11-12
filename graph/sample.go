@@ -595,46 +595,75 @@ func (e sampleEmitter) selection(key, id, w, active, target ValueID, reach bool)
 	one := func(name string, c float64) ValueID {
 		return e.mapc(MapAdd, c, name, 1, zero)
 	}
-	notv := func(name string, w int, x ValueID) ValueID {
-		return e.mapc(MapAdd, 1, name, w, e.mapc(MapMul, -1, name+".neg", w, x))
+	in := func(i int) Arg { return Arg{Kind: ArgIn, Index: i} }
+	term := func(i int) Arg { return Arg{Kind: ArgTerm, Index: i} }
+	cst := func(c float64) Arg { return Arg{Kind: ArgConst, Const: c} }
+	expr := func(name string, w int, ins []ValueID, terms ...Term) ValueID {
+		return e.b.Emit(OpExpr, ins, []Result{{Name: name, Width: w}}, nil, Attrs{Expr: terms}, nil, nil)[0]
 	}
+	// A pass is nine ops whatever the partition: each step is one
+	// expression, its terms in the order of the maps it stands for, so the
+	// words are theirs. pref is active*cond, rest active - pref; the earlier
+	// part is kept where the target is within its mass (reach: its mass is
+	// not below the target) or nothing is left past it.
 	pass := func(cond ValueID) ValueID {
-		pref := e.mapc(MapMul, 0, "sample.sel.pref", n, active, cond)
-		mass := e.one(OpReduce, "sample.sel.mass", 1, Attrs{Fn: MapAdd}, e.mapc(MapMul, 0, "sample.sel.w", n, pref, w))
-		rest := e.mapc(MapSub, 0, "sample.sel.rest", n, active, pref)
-		left := e.one(OpReduce, "sample.sel.left", 1, Attrs{Fn: MapAdd}, rest)
-		in := e.mapc(MapLess, 0, "sample.sel.in", 1, target, mass)
+		mass := e.one(OpReduce, "sample.sel.mass", 1, Attrs{Fn: MapAdd}, expr("sample.sel.w", n, []ValueID{active, cond, w},
+			Term{Fn: MapMul, Args: [3]Arg{in(0), in(1)}}, Term{Fn: MapMul, Args: [3]Arg{term(0), in(2)}}))
+		left := e.one(OpReduce, "sample.sel.left", 1, Attrs{Fn: MapAdd}, expr("sample.sel.rest", n, []ValueID{active, cond},
+			Term{Fn: MapMul, Args: [3]Arg{in(0), in(1)}}, Term{Fn: MapSub, Args: [3]Arg{in(0), term(0)}}))
+		within := []Term{{Fn: MapLess, Args: [3]Arg{in(0), in(1)}}}
 		if reach {
-			in = notv("sample.sel.in", 1, e.mapc(MapLess, 0, "sample.sel.past", 1, mass, target))
+			within = []Term{{Fn: MapLess, Args: [3]Arg{in(1), in(0)}}, {Fn: MapMul, Args: [3]Arg{term(0), cst(-1)}},
+				{Fn: MapAdd, Args: [3]Arg{term(1), cst(1)}}}
 		}
-		choose := e.mapc(MapMax, 0, "sample.sel.choose", 1, in, e.mapc(MapLess, 0.5, "sample.sel.empty", 1, left))
-		active = e.mapc(MapAdd, 0, "sample.sel.active", n, rest,
-			e.mapc(MapMul, 0, "sample.sel.move", n, e.mapc(MapSub, 0, "sample.sel.diff", n, pref, rest), choose))
-		target = e.mapc(MapSub, 0, "sample.sel.target", 1, target,
-			e.mapc(MapMul, 0, "sample.sel.taken", 1, notv("sample.sel.not", 1, choose), mass))
+		nw := len(within)
+		choose := expr("sample.sel.choose", 1, []ValueID{target, mass, left}, append(within,
+			Term{Fn: MapLess, Args: [3]Arg{in(2), cst(0.5)}}, Term{Fn: MapMax, Args: [3]Arg{term(nw - 1), term(nw)}})...)
+		active = expr("sample.sel.active", n, []ValueID{active, cond, choose},
+			Term{Fn: MapMul, Args: [3]Arg{in(0), in(1)}}, Term{Fn: MapSub, Args: [3]Arg{in(0), term(0)}},
+			Term{Fn: MapSub, Args: [3]Arg{term(0), term(1)}}, Term{Fn: MapMul, Args: [3]Arg{term(2), in(2)}},
+			Term{Fn: MapAdd, Args: [3]Arg{term(1), term(3)}})
+		target = expr("sample.sel.target", 1, []ValueID{target, choose, mass},
+			Term{Fn: MapMul, Args: [3]Arg{in(1), cst(-1)}}, Term{Fn: MapAdd, Args: [3]Arg{term(0), cst(1)}},
+			Term{Fn: MapMul, Args: [3]Arg{term(1), in(2)}}, Term{Fn: MapSub, Args: [3]Arg{in(0), term(2)}})
 		return choose
 	}
-	atLeast := func(t ValueID) ValueID {
-		return notv("sample.sel.atleast", n, e.mapc(MapLess, 0, "sample.sel.below", n, key, t))
+	// atLeast is the candidates whose key is at least the split the terms
+	// over ins make (their last), and moved lo where the pass keeps them.
+	atLeast := func(ins []ValueID, split []Term) ValueID {
+		s := len(split) - 1
+		return expr("sample.sel.atleast", n, append([]ValueID{key}, ins...), append(shiftIns(split, 1),
+			Term{Fn: MapLess, Args: [3]Arg{in(0), term(s)}}, Term{Fn: MapMul, Args: [3]Arg{term(s + 1), cst(-1)}},
+			Term{Fn: MapAdd, Args: [3]Arg{term(s + 2), cst(1)}})...)
+	}
+	moved := func(choose ValueID, lo ValueID, ins []ValueID, split []Term) ValueID {
+		s := len(split) - 1
+		return expr("sample.sel.lo", 1, append([]ValueID{choose, lo}, ins...), append(shiftIns(split, 2),
+			Term{Fn: MapWhere, Args: [3]Arg{in(0), term(s), in(1)}})...)
 	}
 	// The binade: lo is 2^e of the exponents [e, e+2^k) still in play, the
 	// split the upper half's first, a power of two times lo.
 	lo := one("sample.sel.lo", math.Ldexp(1, -126))
 	for k := 8; k >= 1; k-- {
-		th := lo
+		var split []Term
 		for r := 1 << (k - 1); r > 0; r -= min(r, 64) {
-			th = e.mapc(MapMul, math.Ldexp(1, min(r, 64)), "sample.sel.split", 1, th)
+			x := in(0)
+			if len(split) > 0 {
+				x = term(len(split) - 1)
+			}
+			split = append(split, Term{Fn: MapMul, Args: [3]Arg{x, cst(math.Ldexp(1, min(r, 64)))}})
 		}
-		lo = e.where("sample.sel.lo", 1, pass(atLeast(th)), th, lo)
+		lo = moved(pass(atLeast([]ValueID{lo}, split)), lo, []ValueID{lo}, split)
 	}
-	// Within it by halves, from lo (0 below the first binade).
+	// Within it by halves, from lo (0 below the first binade): the j-th
+	// split is lo plus the first half-width over 2^j, a power of two halved
+	// as the halvings it stands for round it.
 	bottom := e.mapc(MapLess, math.Ldexp(1, -125), "sample.sel.bottom", 1, lo)
 	step := e.where("sample.sel.step", 1, bottom, one("sample.sel.sub", math.Ldexp(1, -126)), e.mapc(MapMul, 0.5, "sample.sel.half", 1, lo))
 	lo = e.where("sample.sel.from", 1, bottom, one("sample.sel.zero", 0), lo)
-	for range 24 {
-		th := e.mapc(MapAdd, 0, "sample.sel.mid", 1, lo, step)
-		lo = e.where("sample.sel.lo", 1, pass(atLeast(th)), th, lo)
-		step = e.mapc(MapMul, 0.5, "sample.sel.step", 1, step)
+	for j := range 24 {
+		split := []Term{{Fn: MapMul, Args: [3]Arg{in(1), cst(math.Ldexp(1, -j))}}, {Fn: MapAdd, Args: [3]Arg{in(0), term(0)}}}
+		lo = moved(pass(atLeast([]ValueID{lo, step}, split)), lo, []ValueID{lo, step}, split)
 	}
 	// Equal keys, the lower id first.
 	bits := 0
@@ -643,12 +672,27 @@ func (e sampleEmitter) selection(key, id, w, active, target ValueID, reach bool)
 	}
 	base := one("sample.sel.idlo", 0)
 	for k := bits - 1; k >= 0; k-- {
-		th := e.mapc(MapAdd, math.Ldexp(1, k), "sample.sel.idmid", 1, base)
-		choose := pass(e.mapc(MapLess, 0, "sample.sel.idbelow", n, id, th))
-		base = e.mapc(MapAdd, 0, "sample.sel.idlo", 1, base,
-			e.mapc(MapMul, math.Ldexp(1, k), "sample.sel.idstep", 1, notv("sample.sel.idnot", 1, choose)))
+		choose := pass(expr("sample.sel.idbelow", n, []ValueID{id, base},
+			Term{Fn: MapAdd, Args: [3]Arg{in(1), cst(math.Ldexp(1, k))}}, Term{Fn: MapLess, Args: [3]Arg{in(0), term(0)}}))
+		base = expr("sample.sel.idlo", 1, []ValueID{base, choose},
+			Term{Fn: MapMul, Args: [3]Arg{in(1), cst(-1)}}, Term{Fn: MapAdd, Args: [3]Arg{term(0), cst(1)}},
+			Term{Fn: MapMul, Args: [3]Arg{term(1), cst(math.Ldexp(1, k))}}, Term{Fn: MapAdd, Args: [3]Arg{in(0), term(2)}})
 	}
 	return active
+}
+
+// shiftIns is terms with every operand In[j] made In[j+by]: terms written
+// over their own inputs, placed after by others.
+func shiftIns(terms []Term, by int) []Term {
+	out := append([]Term(nil), terms...)
+	for i := range out {
+		for a := range out[i].Args {
+			if out[i].Args[a].Kind == ArgIn {
+				out[i].Args[a].Index += by
+			}
+		}
+	}
+	return out
 }
 
 // token is the id of the largest of score.
