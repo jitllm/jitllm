@@ -228,8 +228,9 @@ func (s *gpuSession) PipelineDepth() int { return s.g.PipelineDepth() }
 // ChunkRows forwards the GPU's answer (nn.ChunkLimiter).
 func (s *gpuSession) ChunkRows() int { return s.g.ChunkRows() }
 
-// HoldsBlock forwards the tier's answer (nn.BlockHolder).
-func (s *gpuSession) HoldsBlock(li int) bool { return s.g.HoldsBlock(li) }
+// HoldsBlock is the tier's answer on the device this session runs block li
+// on (nn.BlockHolder).
+func (s *gpuSession) HoldsBlock(li int) bool { return s.g.holdsBlock(s.sid, li) }
 
 func (s *gpuSession) MigrateRec(li int, conv, state []float32, toDevice bool) bool {
 	defer s.leave(s.enter())
@@ -269,6 +270,7 @@ func (s *gpuSession) Detach() {
 	for _, d := range ds {
 		d.dropSession(s.sid)
 	}
+	s.g.dropRoutes(s.sid)
 }
 
 // SetKeyRuns records the runs for this session's calls that follow; see
@@ -363,15 +365,15 @@ func (s *gpuSession) MoveBlock(li int, to string, p *nn.LayerPlan, w *nn.LayerWe
 	return s.g.moveBlock(s.sid, li, to, p, w, pos)
 }
 
-func (s *gpuSession) DeviceOf(li int) (string, bool) { return s.g.DeviceOf(li) }
+func (s *gpuSession) DeviceOf(li int) (string, bool) { return s.g.deviceOf(s.sid, li) }
 func (s *gpuSession) HeadDeviceName() (string, bool) { return s.g.HeadDeviceName() }
-func (s *gpuSession) Pin(li int, on bool) bool       { return s.g.Pin(li, on) }
+func (s *gpuSession) Pin(li int, on bool) bool       { return s.g.pin(s.sid, li, on) }
 func (s *gpuSession) Stream(li int, on bool) bool    { return s.g.Stream(li, on) }
 
 // HoldsExperts forwards to the tier (nn.ExpertHolder), ReleasesHostPage
 // (nn.HostPageReleaser) and FramesOf (nn.FramesHolder) likewise.
-func (s *gpuSession) HoldsExperts(li int) bool                 { return s.g.HoldsExperts(li) }
-func (s *gpuSession) ReleasesHostPage(li int) bool             { return s.g.ReleasesHostPage(li) }
+func (s *gpuSession) HoldsExperts(li int) bool                 { return s.g.holdsExperts(s.sid, li) }
+func (s *gpuSession) ReleasesHostPage(li int) bool             { return s.g.releasesHostPage(s.sid, li) }
 func (s *gpuSession) SetFrameBudget(f *jlm.File, bytes uint64) { s.g.SetFrameBudget(f, bytes) }
 
 func (s *gpuSession) FramesOf(dev string, f *jlm.File) *jlm.Frames {

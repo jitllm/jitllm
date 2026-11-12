@@ -274,10 +274,11 @@ func (g *GPU) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeights)
 	// duplicates onto the tail card until it filled.
 	g.mu.Lock()
 	start, end := g.cur, len(g.devs)
-	if o := g.own[li]; o != nil {
-		// Only there: the route is shared, and another session's history for
-		// this block is on o. A second copy elsewhere would take the route from
-		// under it. A session o has no room for runs the block on the host.
+	o := g.at(sid, li)
+	if o != nil {
+		// Only there: the session's history for this block goes where its
+		// route says. A session o has no room for runs the block on the host;
+		// a copy on another card is a placement that names it (prepLayerOn).
 		start = slices.Index(g.devs, o)
 		end = start + 1
 	}
@@ -294,7 +295,7 @@ func (g *GPU) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeights)
 		old = nil
 		g.spillFrom = nil
 	}
-	if g.own[li] == nil && old == nil && li < len(g.share) && g.share[li] > start {
+	if o == nil && old == nil && li < len(g.share) && g.share[li] > start {
 		start = g.share[li]
 	}
 	// Priced on the second block, not the first: the first block admitted to a
@@ -336,7 +337,8 @@ func (g *GPU) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeights)
 				continue
 			}
 			g.mu.Lock()
-			g.own[li], g.cur = d, i
+			g.routeTo(sid, li, o, d, old != nil)
+			g.cur = i
 			g.geo[li] = geoOf(p)
 			g.split = g.split || p.MixedGeom
 			if old != nil {
@@ -365,11 +367,120 @@ func (g *GPU) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeights)
 	return false
 }
 
+// at is the device session sid runs block li on: its own route's, where it
+// moved its copy to another card than the block's (route), else the block's.
+// Callers hold g.mu.
+func (g *GPU) at(sid uint64, li int) *devTier {
+	if d := g.route[sid][li]; d != nil {
+		return d
+	}
+	return g.own[li]
+}
+
+// routeTo makes d the device session sid runs block li on, src the one it
+// ran it on before (nil for none). Where src's copy went with the move
+// (moved) and was the block's own, the block moves; otherwise the session
+// takes a route of its own, the block's copy staying for the sessions on it.
+// Callers hold g.mu.
+func (g *GPU) routeTo(sid uint64, li int, src, d *devTier, moved bool) {
+	if o := g.own[li]; o == nil || o == d || moved && o == src {
+		g.own[li] = d
+		delete(g.route[sid], li)
+		return
+	}
+	if g.route == nil {
+		g.route = map[uint64]map[int]*devTier{}
+	}
+	r := g.route[sid]
+	if r == nil {
+		r = map[int]*devTier{}
+		g.route[sid] = r
+	}
+	r[li] = d
+}
+
+// dropCopy forgets block li on d, which no longer holds it: a session's
+// route there goes, and where it was the block's own copy, a copy another
+// session runs on is the block's now. Callers hold g.mu.
+func (g *GPU) dropCopy(li int, d *devTier) {
+	var next *devTier
+	for sid, r := range g.route {
+		switch e := r[li]; {
+		case e == d:
+			delete(r, li)
+		case e != nil && next == nil:
+			next = e
+		}
+		if len(r) == 0 {
+			delete(g.route, sid)
+		}
+	}
+	if g.own[li] != d {
+		return
+	}
+	if next == nil {
+		delete(g.own, li)
+		return
+	}
+	g.own[li] = next
+	for sid, r := range g.route {
+		if r[li] == next {
+			delete(r, li)
+		}
+		if len(r) == 0 {
+			delete(g.route, sid)
+		}
+	}
+}
+
+// leaveCopy lets session sid's history on d's copy of block li go, and the
+// copy with it where no other session's history is left there.
+func (g *GPU) leaveCopy(sid uint64, li int, d *devTier) {
+	if len(d.leaveLayers(sid, li, li+1)) == 0 {
+		return
+	}
+	g.mu.Lock()
+	g.dropCopy(li, d)
+	g.mu.Unlock()
+}
+
+// dropRoutes forgets session sid's routes once Detach has taken its history:
+// a copy it alone ran on goes.
+func (g *GPU) dropRoutes(sid uint64) {
+	g.mu.Lock()
+	r := g.route[sid]
+	delete(g.route, sid)
+	var free []retiree
+	for li, d := range r {
+		if g.own[li] != d && !g.routed(li, d) {
+			free = append(free, retiree{d, li})
+		}
+	}
+	g.mu.Unlock()
+	for _, f := range free {
+		f.d.ReleaseLayers(f.li, f.li+1)
+	}
+}
+
+// routed reports whether a session's route sends block li to d. Callers
+// hold g.mu.
+func (g *GPU) routed(li int, d *devTier) bool {
+	for _, r := range g.route {
+		if r[li] == d {
+			return true
+		}
+	}
+	return false
+}
+
 // HoldsBlock reports that block li is placed on a device, where offering it
 // again shares the weights already there (nn.BlockHolder).
-func (g *GPU) HoldsBlock(li int) bool {
+func (g *GPU) HoldsBlock(li int) bool { return g.holdsBlock(0, li) }
+
+// holdsBlock is HoldsBlock on the device session sid runs block li on.
+func (g *GPU) holdsBlock(sid uint64, li int) bool {
 	g.mu.Lock()
-	d := g.own[li]
+	d := g.at(sid, li)
 	g.mu.Unlock()
 	if d == nil {
 		return false
@@ -485,7 +596,7 @@ func (g *GPU) SpillAfter(li int) bool { return g.spillAfter(li, 0) }
 func (g *GPU) spillAfter(li int, sid uint64) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	o := g.own[li]
+	o := g.at(sid, li)
 	if o == nil || slices.Index(g.devs, o) == len(g.devs)-1 {
 		return false
 	}
@@ -897,27 +1008,31 @@ func (g *GPU) prepLayerOn(sid uint64, name string, li int, p *nn.LayerPlan, w *n
 	}
 	defer done()
 	g.mu.Lock()
-	old := g.own[li]
+	old := g.at(sid, li)
 	g.mu.Unlock()
-	// Moving the block frees the old copy with every session's history on it,
-	// so a block another session is using stays where it is. (On the named
-	// device already, prepLayer only adds this session's history.)
+	// Moving the block frees the old copy with every session's history on it.
+	// A copy another session is using stays theirs: this session's route goes
+	// to the named device, a copy of the block there, and its own history on
+	// the old copy goes. (On the named device already, prepLayer only adds
+	// this session's history.)
+	shared := false
 	if old != nil && old != d {
 		old.mu.Lock()
-		shared := old.sharedBeyond(li, sid)
+		shared = old.sharedBeyond(li, sid)
 		old.mu.Unlock()
-		if shared {
-			return false, fmt.Errorf("tier: block %d is on %s and another session is using it, "+
-				"so it cannot move to %s", li, label(old.dev, old.ord), name)
-		}
 	}
 	for _, mayPage := range [2]bool{false, true} {
 		if d.prepLayer(sid, li, p, w, mayPage) {
 			g.mu.Lock()
-			g.own[li], g.geo[li] = d, geoOf(p)
+			g.routeTo(sid, li, old, d, !shared)
+			g.geo[li] = geoOf(p)
 			g.split = g.split || p.MixedGeom
 			g.mu.Unlock()
-			if old != nil && old != d {
+			switch {
+			case old == nil || old == d:
+			case shared:
+				g.leaveCopy(sid, li, old)
+			default:
 				old.ReleaseLayers(li, li+1)
 			}
 			return true, nil
@@ -975,10 +1090,13 @@ func (g *GPU) PrepHeadOn(name string, h *nn.Head) (bool, error) {
 
 // DeviceOf is the name of the device holding block li ("" when none does, or
 // the one that does has no name), and whether one holds it.
-func (g *GPU) DeviceOf(li int) (string, bool) {
+func (g *GPU) DeviceOf(li int) (string, bool) { return g.deviceOf(0, li) }
+
+// deviceOf is DeviceOf of the device session sid runs block li on.
+func (g *GPU) deviceOf(sid uint64, li int) (string, bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if d := g.own[li]; d != nil {
+	if d := g.at(sid, li); d != nil {
 		return d.name, true
 	}
 	return "", false
@@ -998,9 +1116,12 @@ func (g *GPU) HeadDeviceName() (string, bool) {
 // Pin keeps block li where it is: the pager never picks it as a victim, and a
 // budget below what the pinned blocks charge is refused. False when no device
 // holds the block.
-func (g *GPU) Pin(li int, on bool) bool {
+func (g *GPU) Pin(li int, on bool) bool { return g.pin(0, li, on) }
+
+// pin is Pin on the device session sid runs block li on.
+func (g *GPU) pin(sid uint64, li int, on bool) bool {
 	g.mu.Lock()
-	d := g.own[li]
+	d := g.at(sid, li)
 	g.mu.Unlock()
 	if d == nil {
 		return false
@@ -1050,13 +1171,13 @@ func (r run) tables(cs, csSWA []float32) ([]float32, []float32) {
 // It reports false when a block in the range is on no device at all, which the
 // caller must treat as "run the whole range on the host" -- the same answer a
 // single device gives when it has not taken a block.
-func (g *GPU) runs(lo, hi int) ([]run, bool) { return g.runsInto(nil, lo, hi) }
+func (g *GPU) runs(lo, hi int) ([]run, bool) { return g.runsInto(0, nil, lo, hi) }
 
-// runsInto is runs appending to out[:0].
-func (g *GPU) runsInto(out []run, lo, hi int) ([]run, bool) {
+// runsInto is runs of session sid's routes appending to out[:0].
+func (g *GPU) runsInto(sid uint64, out []run, lo, hi int) ([]run, bool) {
 	out = out[:0]
 	for li := lo; li < hi; li++ {
-		d := g.own[li]
+		d := g.at(sid, li)
 		if d == nil {
 			return nil, false
 		}
@@ -1107,17 +1228,11 @@ func (g *GPU) ChunkRows() int {
 	if d := g.dev(0); d != nil && d.NoBatch {
 		return 1
 	}
-	var held [8]*devTier
-	n := 0
+	var buf [8]*devTier
 	g.mu.Lock()
-	for _, d := range g.own {
-		if !slices.Contains(held[:n], d) && n < len(held) {
-			held[n] = d
-			n++
-		}
-	}
+	held := g.holders(buf[:0])
 	g.mu.Unlock()
-	for _, d := range held[:n] {
+	for _, d := range held {
 		if d.promptOneRow() {
 			return 1
 		}
@@ -1141,14 +1256,29 @@ func (g *GPU) PipelineDepth() int {
 	defer g.mu.Unlock()
 	n := 0
 	for _, d := range g.devs {
-		for _, o := range g.own {
-			if o == d {
-				n++
-				break
-			}
+		if g.holdsCopy(d) {
+			n++
 		}
 	}
 	return n
+}
+
+// holdsCopy reports whether d holds a copy of a block: one a block's own, or
+// one a session's route runs. Callers hold g.mu.
+func (g *GPU) holdsCopy(d *devTier) bool {
+	for _, o := range g.own {
+		if o == d {
+			return true
+		}
+	}
+	for _, r := range g.route {
+		for _, o := range r {
+			if o == d {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // RowsComposed reports whether a step over rows runs every block on a device,
@@ -1342,7 +1472,7 @@ func (g *GPU) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []float32,
 	// The runs slice is g.runBuf, taken for the call so a decode token
 	// allocates none; a concurrent call finds it taken and makes its own.
 	g.mu.Lock()
-	rs, ok := g.runsInto(g.runBuf, lo, hi)
+	rs, ok := g.runsInto(sid, g.runBuf, lo, hi)
 	g.runBuf = nil
 	hd := g.head
 	g.mu.Unlock()
@@ -1519,7 +1649,7 @@ func (g *GPU) embedRows(sid uint64, ids []int32, pos int, dst []float32) bool {
 	g.mu.Lock()
 	hd := g.head
 	// The device running block 0, where the chunk's first submission goes.
-	first := g.own[0]
+	first := g.at(sid, 0)
 	g.mu.Unlock()
 	if hd == nil {
 		return false
@@ -1577,7 +1707,7 @@ func (g *GPU) MigrateRec(li int, conv, state []float32, toDevice bool) bool {
 // migrateRec routes block li's recurrent summary to the device that holds it.
 func (g *GPU) migrateRec(sid uint64, li int, conv, state []float32, toDevice bool) bool {
 	g.mu.Lock()
-	d := g.own[li]
+	d := g.at(sid, li)
 	g.mu.Unlock()
 	if d == nil {
 		return false // the block is on the CPU; there is nothing to move
@@ -1605,14 +1735,14 @@ func (g *GPU) PublishKVs(lis, pages []int32, keys []string) bool {
 	return g.publishKVsBatch(0, lis, pages, keys)
 }
 
-// ownerOf is the device holding every block of lis, nil when they are
-// spread over more than one (or one is on the CPU).
-func (g *GPU) ownerOf(lis []int32) *devTier {
+// ownerOf is the device session sid runs every block of lis on, nil when
+// they are spread over more than one (or one is on the CPU).
+func (g *GPU) ownerOf(sid uint64, lis []int32) *devTier {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	var d *devTier
 	for _, li := range lis {
-		o := g.own[int(li)]
+		o := g.at(sid, int(li))
 		if o == nil || d != nil && o != d {
 			return nil
 		}
@@ -1622,7 +1752,7 @@ func (g *GPU) ownerOf(lis []int32) *devTier {
 }
 
 func (g *GPU) snapRecs(sid uint64, lis []int32, key string) bool {
-	if d := g.ownerOf(lis); d != nil {
+	if d := g.ownerOf(sid, lis); d != nil {
 		return d.snapRecs(sid, lis, key)
 	}
 	for _, li := range lis {
@@ -1634,7 +1764,7 @@ func (g *GPU) snapRecs(sid uint64, lis []int32, key string) bool {
 }
 
 func (g *GPU) publishKVsBatch(sid uint64, lis, pages []int32, keys []string) bool {
-	if d := g.ownerOf(lis); d != nil {
+	if d := g.ownerOf(sid, lis); d != nil {
 		return d.publishKVsBatch(sid, lis, pages, keys)
 	}
 	ok := true
@@ -1648,14 +1778,14 @@ func (g *GPU) publishKVsBatch(sid uint64, lis, pages []int32, keys []string) boo
 
 func (g *GPU) recShare(sid uint64, li int, key string, op int) bool {
 	g.mu.Lock()
-	d := g.own[li]
+	d := g.at(sid, li)
 	g.mu.Unlock()
 	return d != nil && d.recShareCall(sid, li, key, op)
 }
 
 func (g *GPU) publishKV(sid uint64, li, page int, key string) bool {
 	g.mu.Lock()
-	d := g.own[li]
+	d := g.at(sid, li)
 	g.mu.Unlock()
 	return d != nil && d.publishKVs(sid, li, page, key)
 }
@@ -1666,7 +1796,7 @@ func (g *GPU) SharePage(li int) int { return g.kvPageOf(0, li) }
 
 func (g *GPU) kvPageOf(sid uint64, li int) int {
 	g.mu.Lock()
-	d := g.own[li]
+	d := g.at(sid, li)
 	g.mu.Unlock()
 	if d == nil {
 		return 0
@@ -1676,7 +1806,7 @@ func (g *GPU) kvPageOf(sid uint64, li int) int {
 
 func (g *GPU) mapKV(sid uint64, li, page int, key string, end int) bool {
 	g.mu.Lock()
-	d := g.own[li]
+	d := g.at(sid, li)
 	g.mu.Unlock()
 	return d != nil && d.mapKVs(sid, li, page, key, end)
 }
@@ -1690,7 +1820,7 @@ func (g *GPU) MigrateKV(li int, k, v []float32, pos int, toDevice bool) bool {
 // the device holding that block can answer.
 func (g *GPU) migrateKV(sid uint64, li int, k, v []float32, pos int, toDevice bool) bool {
 	g.mu.Lock()
-	d := g.own[li]
+	d := g.at(sid, li)
 	g.mu.Unlock()
 	if d == nil {
 		return false // the block is on the CPU; there is nothing to move
@@ -1704,13 +1834,7 @@ func (g *GPU) PerSequenceKV() bool {
 	g.mu.Lock()
 	// On the stack for any machine's count of devices.
 	var arr [16]*devTier
-	ds := arr[:0]
-	// g.own is by block: each device once.
-	for _, d := range g.own {
-		if d != nil && !slices.Contains(ds, d) {
-			ds = append(ds, d)
-		}
-	}
+	ds := g.holders(arr[:0])
 	g.mu.Unlock()
 	for _, d := range ds {
 		if !d.PerSequenceKV() {
@@ -1728,7 +1852,7 @@ func (g *GPU) MigrateKVSeq(li, base int, k, v []float32, pos int, toDevice bool)
 // migrateKVSeq routes to the device holding block li; see devTier.MigrateKVSeq.
 func (g *GPU) migrateKVSeq(sid uint64, li, base int, k, v []float32, pos int, toDevice bool) bool {
 	g.mu.Lock()
-	d := g.own[li]
+	d := g.at(sid, li)
 	g.mu.Unlock()
 	if d == nil {
 		return false
@@ -1736,16 +1860,34 @@ func (g *GPU) migrateKVSeq(sid uint64, li, base int, k, v []float32, pos int, to
 	return d.migrateKVSeq(sid, li, base, k, v, pos, toDevice)
 }
 
-// owners appends to buf every distinct device that holds a block, in block
-// order. A decode step reserves through it every token once blocks span two
+// owners appends to buf every distinct device session sid runs a block on.
+// A decode step reserves through it every token once blocks span two
 // devices, so the caller passes a stack array and nothing reaches the heap
 // below that many devices.
-func (g *GPU) owners(buf []*devTier) []*devTier {
+func (g *GPU) owners(sid uint64, buf []*devTier) []*devTier {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	for li := range g.own {
+		if d := g.at(sid, li); d != nil && !slices.Contains(buf, d) {
+			buf = append(buf, d)
+		}
+	}
+	return buf
+}
+
+// holders appends to buf every distinct device holding a copy of a block:
+// the blocks' own and every session's routes. Callers hold g.mu.
+func (g *GPU) holders(buf []*devTier) []*devTier {
 	for _, d := range g.own {
 		if d != nil && !slices.Contains(buf, d) {
 			buf = append(buf, d)
+		}
+	}
+	for _, r := range g.route {
+		for _, d := range r {
+			if !slices.Contains(buf, d) {
+				buf = append(buf, d)
+			}
 		}
 	}
 	return buf
@@ -1764,7 +1906,7 @@ func (g *GPU) ReserveKVSeqs(bases, ends []int) bool {
 func (g *GPU) reserveKVSeqs(sid uint64, bases, ends []int) bool {
 	g.resetCause(sid, true)
 	var buf [ownersStack]*devTier
-	for _, d := range g.owners(buf[:0]) {
+	for _, d := range g.owners(sid, buf[:0]) {
 		if !d.reserveKVSeqs(sid, bases, ends) {
 			return false
 		}
@@ -1785,7 +1927,7 @@ func (g *GPU) reserveKV(sid uint64, pos int) bool {
 	g.resetCause(sid, true)
 	var buf [ownersStack]*devTier
 	var refused *devTier
-	for _, d := range g.owners(buf[:0]) {
+	for _, d := range g.owners(sid, buf[:0]) {
 		if !d.reserveKV(sid, pos) {
 			refused = d
 			break
@@ -1808,8 +1950,8 @@ func (g *GPU) TrimKV(pos int) bool {
 func (g *GPU) trimKV(sid uint64, pos int) bool {
 	g.mu.Lock()
 	ds := map[*devTier]bool{}
-	for _, d := range g.own {
-		if d != nil {
+	for li := range g.own {
+		if d := g.at(sid, li); d != nil {
 			ds[d] = true
 		}
 	}
@@ -1871,14 +2013,14 @@ func (g *GPU) releaseLayers(sid uint64, lo, hi int) {
 	}
 	touched := map[*devTier]bool{}
 	for li := lo; li < hi; li++ {
-		if d := g.own[li]; d != nil {
+		if d := g.at(sid, li); d != nil {
 			touched[d] = true
 		}
 	}
 	g.mu.Unlock()
-	var gone []int
+	gone := map[*devTier][]int{}
 	for d := range touched {
-		gone = append(gone, d.leaveLayers(sid, lo, hi)...)
+		gone[d] = d.leaveLayers(sid, lo, hi)
 		d.framesMu.Lock()
 		fs := make([]*jlm.File, 0, len(d.frames.by))
 		for f := range d.frames.by {
@@ -1890,8 +2032,16 @@ func (g *GPU) releaseLayers(sid uint64, lo, hi int) {
 		}
 	}
 	g.mu.Lock()
-	for _, li := range gone {
-		delete(g.own, li)
+	for li := lo; li < hi; li++ {
+		delete(g.route[sid], li)
+	}
+	if len(g.route[sid]) == 0 {
+		delete(g.route, sid)
+	}
+	for d, lis := range gone {
+		for _, li := range lis {
+			g.dropCopy(li, d)
+		}
 	}
 	g.cur = 0
 	if d := g.tail(); d != nil {
@@ -1938,9 +2088,13 @@ func (g *GPU) Crossings() int {
 
 // ReleasesHostPage asks whichever device took block li. A block no device owns
 // is not released.
-func (g *GPU) ReleasesHostPage(li int) bool {
+func (g *GPU) ReleasesHostPage(li int) bool { return g.releasesHostPage(0, li) }
+
+// releasesHostPage is ReleasesHostPage of the device session sid runs block
+// li on.
+func (g *GPU) releasesHostPage(sid uint64, li int) bool {
 	g.mu.Lock()
-	d := g.own[li]
+	d := g.at(sid, li)
 	g.mu.Unlock()
 	if d == nil {
 		return false
@@ -1951,9 +2105,12 @@ func (g *GPU) ReleasesHostPage(li int) bool {
 // HoldsExperts is nn.ExpertHolder: whether the device holding block li holds
 // its routed bank, so the host may give the bank's expert pages back. A
 // streamed or hybrid block holds none of it.
-func (g *GPU) HoldsExperts(li int) bool {
+func (g *GPU) HoldsExperts(li int) bool { return g.holdsExperts(0, li) }
+
+// holdsExperts is HoldsExperts of the device session sid runs block li on.
+func (g *GPU) holdsExperts(sid uint64, li int) bool {
 	g.mu.Lock()
-	d := g.own[li]
+	d := g.at(sid, li)
 	g.mu.Unlock()
 	if d == nil {
 		return false

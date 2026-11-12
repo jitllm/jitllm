@@ -1526,6 +1526,10 @@ type GPU struct {
 	// own maps a block index to the device holding it. A block with no entry is
 	// on the host.
 	own map[int]*devTier
+	// route is a session's own device for a block it runs on another card
+	// than own's: an instance moved its copy while another instance's
+	// sessions stay on own's (at, routeTo). Under mu.
+	route map[uint64]map[int]*devTier
 	// staged is a block StageBlock prepared on a device ahead of a move's
 	// commit, not yet routed there (move.go).
 	staged map[int]*devTier

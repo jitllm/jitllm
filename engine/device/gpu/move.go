@@ -77,11 +77,8 @@ func (g *GPU) stageBlock(sid uint64, li int, to string, p *nn.LayerPlan, w *nn.L
 		return false
 	}
 	g.mu.Lock()
-	src := g.own[li]
-	busy := src == d || g.staged[li] == d
-	for _, o := range g.own {
-		busy = busy || o == d
-	}
+	src := g.at(sid, li)
+	busy := src == d || g.staged[li] == d || g.holdsCopy(d)
 	g.mu.Unlock()
 	if busy {
 		return false
@@ -121,10 +118,7 @@ func (g *GPU) stageHead(to string, h *nn.Head) bool {
 		return false
 	}
 	g.mu.Lock()
-	busy := g.head == d
-	for _, o := range g.own {
-		busy = busy || o == d
-	}
+	busy := g.head == d || g.holdsCopy(d)
 	g.mu.Unlock()
 	if busy {
 		return false
@@ -162,7 +156,7 @@ func (g *GPU) Unstage(lo, hi int) {
 	for li := lo; li < hi; li++ {
 		if d := g.staged[li]; d != nil {
 			delete(g.staged, li)
-			if g.own[li] != d {
+			if g.own[li] != d && !g.routed(li, d) {
 				drop, at = append(drop, d), append(at, li)
 			}
 		}
@@ -193,7 +187,7 @@ func (g *GPU) moveBlock(sid uint64, li int, to string, p *nn.LayerPlan, w *nn.La
 		return out, err
 	}
 	g.mu.Lock()
-	src, staged := g.own[li], g.staged[li] == d
+	src, staged := g.at(sid, li), g.staged[li] == d
 	g.mu.Unlock()
 	if staged {
 		d.mu.Lock()
@@ -210,13 +204,11 @@ func (g *GPU) moveBlock(sid uint64, li int, to string, p *nn.LayerPlan, w *nn.La
 		out.Moved = true
 		return out, nil
 	}
+	// A copy another session is using stays theirs: the target takes a copy
+	// of its own, and this session's route and history go there.
 	src.mu.Lock()
 	shared := src.sharedBeyond(li, sid)
 	src.mu.Unlock()
-	if shared {
-		return out, fmt.Errorf("tier: block %d is on %s and another session is using it, "+
-			"so it cannot move to %s", li, label(src.dev, src.ord), to)
-	}
 	if !staged {
 		done, ok := g.admit(p.Model, fmt.Sprintf("block %d", li))
 		if !ok {
@@ -235,8 +227,10 @@ func (g *GPU) moveBlock(sid uint64, li int, to string, p *nn.LayerPlan, w *nn.La
 	}
 	// Both paged is what a page copy needs; a device keeping the contiguous
 	// cache is moved through the session's cache instead.
+	// A target that already held a copy for another session keeps it: only
+	// this session's part of it goes when the move does not happen.
 	if !src.paged || !d.paged {
-		d.ReleaseLayers(li, li+1)
+		g.leaveCopy(sid, li, d)
 		g.mu.Lock()
 		delete(g.staged, li)
 		g.mu.Unlock()
@@ -246,22 +240,26 @@ func (g *GPU) moveBlock(sid uint64, li int, to string, p *nn.LayerPlan, w *nn.La
 	if err != nil {
 		// The source still holds the block and its history; the target's copy
 		// goes.
-		d.ReleaseLayers(li, li+1)
+		g.leaveCopy(sid, li, d)
 		g.mu.Lock()
 		delete(g.staged, li)
 		g.mu.Unlock()
 		return out, err
 	}
 	g.mu.Lock()
-	g.own[li], g.geo[li] = d, geoOf(p)
+	g.routeTo(sid, li, src, d, !shared)
+	g.geo[li] = geoOf(p)
 	g.split = g.split || p.MixedGeom
 	delete(g.staged, li)
-	g.mu.Unlock()
 	// The source's copy is freed once the caller has moved what it is
 	// moving (RetireMoved), outside the pause.
-	g.mu.Lock()
-	g.retire = append(g.retire, retiree{src, li})
+	if !shared {
+		g.retire = append(g.retire, retiree{src, li})
+	}
 	g.mu.Unlock()
+	if shared {
+		g.leaveCopy(sid, li, src)
+	}
 	out.Moved, out.Path, out.Bytes = true, path, n
 	return out, nil
 }

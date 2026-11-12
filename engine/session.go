@@ -291,7 +291,18 @@ func (s *Instance) moveHistory(li int, dev bool) error {
 	}
 	w := s.offerWeights(li, false)
 	plan := *s.planFor(li)
-	if !s.ld.PrepLayer(li, &plan, &w) {
+	// The history goes where the instance runs the block: by name, since
+	// another instance on the tier may run its copy on another card.
+	took := false
+	if on, ok := s.ownDeviceOf(li); ok {
+		var err error
+		if took, err = s.ld.(nn.NamedDevice).PrepLayerOn(on, li, &plan, &w); err != nil {
+			return err
+		}
+	} else {
+		took = s.ld.PrepLayer(li, &plan, &w)
+	}
+	if !took {
 		return fmt.Errorf("model: the device holding block %d has no room for this session's history of it", li)
 	}
 	if !s.ld.ReserveKV(s.pos) || !s.migrateKV(li, s.pos, true) || !s.migrateRec(li, true) {
@@ -302,6 +313,22 @@ func (s *Instance) moveHistory(li int, dev bool) error {
 		s.kv.layers[li].dropResident()
 	}
 	return nil
+}
+
+// ownDeviceOf is the device the instance's own session runs block li on,
+// where the bound session is another one whose view names devices.
+func (s *Instance) ownDeviceOf(li int) (string, bool) {
+	if s.own == nil || s.own == s.Session {
+		return "", false
+	}
+	if _, ok := s.ld.(nn.NamedDevice); !ok {
+		return "", false
+	}
+	nd, ok := s.own.ld.(nn.NamedDevice)
+	if !ok {
+		return "", false
+	}
+	return nd.DeviceOf(li)
 }
 
 // devAtFn and recFns are s's methods a session's cache asks through, made
