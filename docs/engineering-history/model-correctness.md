@@ -5409,6 +5409,28 @@ parts those rows by NMSE 2.1e-4. Its violations, each a rewrite of the
 stated video: an index that skips no second, the picture's own markers, the
 video's text encoded apart from the prompt's, the frames' rows reversed.
 
+## SmolVLM's tower against llama.cpp's dump
+
+SmolVLM's tower is blocks of the one model, held to its reference --
+transformers' class, the code the weights were trained against -- through
+every video frame, each a picture through the same blocks
+(`TestSmolVLMVideoMatchesTransformers`). llama.cpp is an oracle beside it
+(RULE 7m), not the reference: it catches a gross error at once. The
+per-family vision runtime's deletion took the oracle check with it. Its
+successor (`TestSmolVLMTowerMatchesLlamaCpp`) reads
+what `llama-mtmd-debug -p encode` prints of SmolVLM-256M's projector output
+on its built-in checkerboard: three leading and three trailing values of
+rows 0, 1, 2, 61, 62 and 63, and the whole tensor's sum. The tool builds the
+picture as raw samples, 1 and 0 on every channel, and normalises nothing,
+so the gate converts the container with its normalisation restated to the
+identity (`convert.WithPictureStep`) and hands the stated tower the same
+checkerboard at its own size, where the resize is the identity.
+
+On the CPU device the 36 sampled values are 0.0232 relative RMS from the
+dump and the sum 0.48% off: the tower's int8 activations against llama.cpp's
+f32 and f16 compounding over twelve blocks. The shipping normalisation, the
+violation, reads 0.87 and 136%; a patch-order or shuffle bug reads O(1).
+
 ## Video as one statement
 
 The video record grew a field per processor -- Joined, PerSecond and
