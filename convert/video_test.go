@@ -337,6 +337,99 @@ func TestGemma4StatesItsVideo(t *testing.T) {
 	}
 }
 
+// TestSmolVLMStatesItsVideo converts synth-smolvlm2 and holds the stated
+// video to SmolVLMVideoProcessor.sample_frames at SmolVLM2's
+// video_sampling (the frames from transformers' own) and to
+// SmolVLMProcessor.replace_video_token: a frame a second, at most 64, by
+// linspace a second in from either end of a video past 66 seconds; the
+// introduction's count in num2words' words and duration as timedelta writes
+// it; each frame's "\nFrame from MM:SS:" and the frame between the global
+// image's markers, without the line the picture's open with; "\n\n" after
+// the last.
+func TestSmolVLMStatesItsVideo(t *testing.T) {
+	const name = "synth-smolvlm2"
+	src, mm := testmodels.Path(name+".gguf"), testmodels.Path("mmproj-"+name+".gguf")
+	for _, p := range []string{src, mm} {
+		if _, err := os.Stat(p); err != nil {
+			testmodels.Missing(t, "MODEL MISSING: %v (run scripts/smolvlmvideogold.py) -- this gate proved nothing", err)
+		}
+	}
+	dst := filepath.Join(t.TempDir(), name+".jlm")
+	if _, err := FromGGUFs(src, mm, dst, jlm.Fingerprint{Writer: "gate"}); err != nil {
+		t.Fatal(err)
+	}
+	f, err := jlm.Open(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	v := f.Vision()
+	if v == nil || v.Tower == nil || v.Tower.Video == nil {
+		t.Fatal("the container states no video")
+	}
+	vid := v.Tower.Video
+	if !vid.AsPictures() || len(vid.Pre) != 0 {
+		t.Fatalf("the video reads %+v, want each frame the picture's square", vid)
+	}
+	stamp := regexp.MustCompile(`\nFrame from (\d\d:\d\d):`)
+	for _, c := range []struct {
+		n           int
+		fps         float64
+		count       int
+		head, tail  []int
+		first, last string
+		intro       string
+	}{
+		{10, 1, 10, []int{0, 1, 2, 3}, []int{7, 8, 9}, "00:00", "00:09", "ten frames from a 0:00:10 "},
+		{300, 30, 10, []int{0, 33, 66, 99}, []int{232, 265, 299}, "00:00", "00:09", "ten frames from a 0:00:10 "},
+		{2400, 24, 64, []int{24, 61, 98, 136}, []int{2301, 2338, 2376}, "00:01", "01:39", "sixty-four frames from a 0:01:40 "},
+		{7, 2.5, 3, []int{0, 3, 6}, []int{0, 3, 6}, "00:00", "00:02", "three frames from a 0:00:02 "},
+		{1, 1, 1, []int{0}, []int{0}, "00:00", "00:00", "one frames from a 0:00:01 "},
+		{5, 24, 1, []int{0}, []int{0}, "00:00", "00:00", "one frames from a 0:00:00 "},
+		{70, 1, 64, []int{1, 2, 3, 4}, []int{66, 67, 69}, "00:01", "01:09", "sixty-four frames from a 0:01:10 "},
+		{4000, 24, 64, []int{24, 86, 149, 212}, []int{3850, 3913, 3976}, "00:01", "02:45", "sixty-four frames from a 0:02:46 "},
+	} {
+		s, items := sampleVideo(t, vid, c.n, c.fps)
+		fr := s.Frames
+		var times []string
+		for _, it := range items {
+			for _, m := range stamp.FindAllStringSubmatch(it.Text, -1) {
+				times = append(times, m[1])
+			}
+		}
+		if len(fr) != c.count || !slices.Equal(fr[:len(c.head)], c.head) || !slices.Equal(fr[len(fr)-len(c.tail):], c.tail) ||
+			len(times) != c.count || times[0] != c.first || times[len(times)-1] != c.last ||
+			!strings.HasPrefix(items[0].Text, "You are provided the following series of "+c.intro+"[H:MM:SS] video.\n") ||
+			items[len(items)-1].Text != "\n\n" {
+			t.Errorf("%d frames at %v: %d frames %v, times %v, opening %q; want %d, %v..%v, %s..%s, %q",
+				c.n, c.fps, len(fr), fr, times, items[0].Text, c.count, c.head, c.tail, c.first, c.last, c.intro)
+		}
+	}
+	span := v.Tower.Span
+	s, _ := sampleVideo(t, vid, 2, 1)
+	want := fmt.Sprintf("You are provided the following series of two frames from a 0:00:02 [H:MM:SS] video.\n"+
+		"\nFrame from 00:00:%s{0}%s\nFrame from 00:01:%s{1}%s\n\n", ids(span.Before[1:]), ids(span.After), ids(span.Before[1:]),
+		ids(span.After))
+	if got := layoutOf(t, vid, s); len(span.Before) != 3 || got != want {
+		t.Errorf("a video of two frames reads\n%q\nwant\n%q (the picture's markers %v ... %v)", got, want, span.Before, span.After)
+	}
+	for n, w := range map[int]string{0: "zero", 5: "five", 21: "twenty-one", 64: "sixty-four", 100: "one hundred",
+		105: "one hundred and five", 999: "nine hundred and ninety-nine"} {
+		if got := cardinal(n); got != w {
+			t.Errorf("cardinal(%d) = %q, num2words %q", n, got, w)
+		}
+	}
+}
+
+// ids is token ids written as layoutOf writes them.
+func ids(in []int32) string {
+	var b strings.Builder
+	for _, id := range in {
+		fmt.Fprintf(&b, "[%d]", id)
+	}
+	return b.String()
+}
+
 // TestEveryVideoProcessorIsStated holds every projector the converter
 // states a tower for to an entry saying whether its reference processor
 // takes a video, and every one that does to a video the converter states
@@ -352,7 +445,7 @@ func TestEveryVideoProcessorIsStated(t *testing.T) {
 		"qwen2.5vl_merger": "Qwen2VLVideoProcessor", "qwen2vl_merger": "Qwen2VLVideoProcessor",
 		"qwen3vl_merger": "Qwen3VLVideoProcessor", "resampler": "",
 	}
-	gaps := map[string]bool{"idefics3": true}
+	gaps := map[string]bool{}
 	for _, name := range Projectors() {
 		p := projectorOf()[name]
 		if !StatesTower(p) {
