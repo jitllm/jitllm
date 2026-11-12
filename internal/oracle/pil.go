@@ -26,6 +26,19 @@ func PILResize(rgb []byte, w, h, ow, oh int, cubic bool) []byte {
 // scale in float64, the weights in 22-bit fixed point, a horizontal pass to
 // bytes where the width changes, then a vertical one where the height does.
 func PILResizeBy(rgb []byte, w, h, ow, oh int, f PILFilter) []byte {
+	return resizeBy(rgb, w, h, ow, oh, f, false)
+}
+
+// TorchResizeBy is torchvision's antialiased resize of an 8-bit RGB
+// picture by Pillow's filter f (F.resize on a uint8 tensor on the CPU):
+// Pillow's windows, weights and passes, each axis's weights rounded at the
+// widest precision (to 21 bits) at which its largest holds in an int16
+// (UpSampleKernel.cpp's _compute_index_ranges_int16_weights).
+func TorchResizeBy(rgb []byte, w, h, ow, oh int, f PILFilter) []byte {
+	return resizeBy(rgb, w, h, ow, oh, f, true)
+}
+
+func resizeBy(rgb []byte, w, h, ow, oh int, f PILFilter, torch bool) []byte {
 	support, filter := 1.0, func(x float64) float64 {
 		x = math.Abs(x)
 		if x < 1 {
@@ -70,7 +83,8 @@ func PILResizeBy(rgb []byte, w, h, ow, oh int, f PILFilter) []byte {
 		sup := support * fs
 		ksize = int(math.Ceil(sup))*2 + 1
 		bounds, kk = make([]int, 2*out), make([]int, out*ksize)
-		k := make([]float64, ksize)
+		k := make([]float64, out*ksize)
+		most := 0.0
 		for xx := range out {
 			center := (float64(xx) + 0.5) * scale
 			ss := 1 / fs
@@ -85,21 +99,32 @@ func PILResizeBy(rgb []byte, w, h, ow, oh int, f PILFilter) []byte {
 			xmax -= xmin
 			ww := 0.0
 			for x := range xmax {
-				k[x] = filter((float64(x+xmin) - center + 0.5) * ss)
-				ww += k[x]
+				k[xx*ksize+x] = filter((float64(x+xmin) - center + 0.5) * ss)
+				ww += k[xx*ksize+x]
 			}
 			for x := range ksize {
 				v := 0.0
 				if x < xmax && ww != 0 {
-					v = k[x] / ww
+					v = k[xx*ksize+x] / ww
 				}
-				if v < 0 {
-					kk[xx*ksize+x] = int(-0.5 + v*(1<<bits))
-				} else {
-					kk[xx*ksize+x] = int(0.5 + v*(1<<bits))
-				}
+				k[xx*ksize+x] = v
+				most = math.Max(most, v)
 			}
 			bounds[2*xx], bounds[2*xx+1] = xmin, xmax
+		}
+		prec := bits
+		if torch {
+			prec = 0
+			for prec < 21 && int(0.5+most*float64(int(1)<<(prec+1))) < 1<<15 {
+				prec++
+			}
+		}
+		for i, v := range k {
+			if v < 0 {
+				kk[i] = int(-0.5+v*float64(int(1)<<prec)) << (bits - prec)
+			} else {
+				kk[i] = int(0.5+v*float64(int(1)<<prec)) << (bits - prec)
+			}
 		}
 		return bounds, kk, ksize
 	}

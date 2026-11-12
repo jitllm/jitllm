@@ -14,33 +14,39 @@ import (
 )
 
 // TestComposedCPUPicturePIL resizes pictures on the CPU by Pillow's
-// antialiased filters (graph.ChainPIL), their taps PILTaps', and holds every
-// byte to oracle.PILResizeBy, itself held to Pillow's (TestPILResizeMatchesPillow):
-// bilinear, bicubic and Lanczos, shrunk, grown and of another aspect, RGBA and a
-// JPEG-shaped YCbCr picture's pixels, a form reaching further than the
-// picture needs, and the centre window of a larger resize (the shorter side
-// resized, then cropped). The other filter's taps are the violation it must
-// see.
+// antialiased filters (graph.ChainPIL), their taps PILTapsAt's, and holds
+// every byte to oracle.PILResizeBy, or at torchvision's precision to
+// oracle.TorchResizeBy, each held to its library's bytes
+// (TestPILResizeMatchesPillow): bilinear, bicubic and Lanczos, shrunk, grown
+// and of another aspect, RGBA and a JPEG-shaped YCbCr picture's pixels, a
+// form reaching further than the picture needs, and the centre window of a
+// larger resize (the shorter side resized, then cropped). The other filter's
+// taps are the violation it must see, and at torchvision's precision
+// Pillow's.
 func TestComposedCPUPicturePIL(t *testing.T) {
 	const W = 48
 	r := Default().WithoutInt8(DeviceCPU)
 	dev := Device{Kind: DeviceCPU, Slots: 1, Lanes: 8, ISA: uint64(cpu.Probe().ISA()), ExactDiv: true}
 	// fw x fh is the resize the ow x oh output is the centre of; 0 for the
-	// whole of an ow x oh resize.
+	// whole of an ow x oh resize. torch takes torchvision's precision.
 	type pcase struct {
 		w, h, ow, oh, side int
 		filter             uint8
 		ycbcr              bool
 		fw, fh             int
+		torch              bool
 	}
 	cases := []pcase{
-		{97, 61, 48, 48, 128, graph.FilterBilinear, false, 0, 0}, {20, 33, 48, 48, 64, graph.FilterBilinear, false, 0, 0},
-		{97, 61, 48, 48, 128, graph.FilterCubic, false, 0, 0}, {20, 33, 48, 48, 64, graph.FilterCubic, false, 0, 0},
-		{300, 200, 64, 64, 512, graph.FilterBilinear, true, 0, 0}, {300, 200, 64, 64, 300, graph.FilterCubic, false, 0, 0},
-		{97, 61, 48, 48, 128, graph.FilterCubic, false, 76, 48}, {61, 97, 32, 32, 128, graph.FilterCubic, true, 32, 50},
-		{20, 33, 48, 48, 64, graph.FilterBilinear, false, 48, 79},
-		{97, 61, 48, 48, 128, graph.FilterLanczos, false, 0, 0}, {20, 33, 48, 48, 64, graph.FilterLanczos, false, 0, 0},
-		{300, 200, 64, 64, 300, graph.FilterLanczos, true, 0, 0}, {61, 97, 32, 32, 128, graph.FilterLanczos, false, 64, 64},
+		{97, 61, 48, 48, 128, graph.FilterBilinear, false, 0, 0, false}, {20, 33, 48, 48, 64, graph.FilterBilinear, false, 0, 0, false},
+		{97, 61, 48, 48, 128, graph.FilterCubic, false, 0, 0, false}, {20, 33, 48, 48, 64, graph.FilterCubic, false, 0, 0, false},
+		{300, 200, 64, 64, 512, graph.FilterBilinear, true, 0, 0, false}, {300, 200, 64, 64, 300, graph.FilterCubic, false, 0, 0, false},
+		{97, 61, 48, 48, 128, graph.FilterCubic, false, 76, 48, false}, {61, 97, 32, 32, 128, graph.FilterCubic, true, 32, 50, false},
+		{20, 33, 48, 48, 64, graph.FilterBilinear, false, 48, 79, false},
+		{97, 61, 48, 48, 128, graph.FilterLanczos, false, 0, 0, false}, {20, 33, 48, 48, 64, graph.FilterLanczos, false, 0, 0, false},
+		{300, 200, 64, 64, 300, graph.FilterLanczos, true, 0, 0, false}, {61, 97, 32, 32, 128, graph.FilterLanczos, false, 64, 64, false},
+		{97, 61, 48, 48, 128, graph.FilterCubic, false, 0, 0, true}, {97, 61, 48, 48, 128, graph.FilterLanczos, false, 0, 0, true},
+		{20, 33, 48, 48, 64, graph.FilterLanczos, false, 0, 0, true}, {300, 200, 64, 64, 300, graph.FilterLanczos, true, 0, 0, true},
+		{61, 97, 32, 32, 128, graph.FilterLanczos, false, 64, 64, true},
 	}
 	byFilter := map[uint8]oracle.PILFilter{graph.FilterBilinear: oracle.PILBilinear, graph.FilterCubic: oracle.PILBicubic,
 		graph.FilterLanczos: oracle.PILLanczos}
@@ -49,7 +55,7 @@ func TestComposedCPUPicturePIL(t *testing.T) {
 			c.fw, c.fh = c.ow, c.oh
 		}
 		x0, y0 := (c.fw-c.ow)/2, (c.fh-c.oh)/2
-		name := fmt.Sprintf("%dx%d to %dx%d at (%d, %d) of %dx%d filter %d ycbcr %v", c.w, c.h, c.ow, c.oh, x0, y0, c.fw, c.fh, c.filter, c.ycbcr)
+		name := fmt.Sprintf("%dx%d to %dx%d at (%d, %d) of %dx%d filter %d ycbcr %v torch %v", c.w, c.h, c.ow, c.oh, x0, y0, c.fw, c.fh, c.filter, c.ycbcr, c.torch)
 		rgb := oracle.PILPattern(c.w, c.h)
 		var words []uint32
 		var px uint8
@@ -91,12 +97,12 @@ func TestComposedCPUPicturePIL(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		run := func(filter uint8) []float32 {
+		run := func(filter uint8, torch bool) []float32 {
 			req := make([]uint32, RequestPicTaps+(c.ow+c.oh)*PILEntryWords(K))
 			req[RequestPicW], req[RequestPicH], req[RequestPicStride] = uint32(c.w), uint32(c.h), uint32(stride)
 			req[RequestPicCStride], req[RequestPicP2], req[RequestPicP3], req[RequestPicSub] = uint32(cstride), uint32(p2), uint32(p3), uint32(sub)
-			PILTaps(filter, c.w, c.fw, x0, c.ow, K, req[RequestPicTaps:])
-			PILTaps(filter, c.h, c.fh, y0, c.oh, K, req[RequestPicTaps+c.ow*PILEntryWords(K):])
+			PILTapsAt(filter, torch, c.w, c.fw, x0, c.ow, K, req[RequestPicTaps:])
+			PILTapsAt(filter, torch, c.h, c.fh, y0, c.oh, K, req[RequestPicTaps+c.ow*PILEntryWords(K):])
 			got, err := runCPUBound(hostArm(), codes, []float32{0}, rows*W, [3][]uint32{}, nil, func(o Operand) []uint32 {
 				switch o.Name {
 				case "request":
@@ -111,16 +117,20 @@ func TestComposedCPUPicturePIL(t *testing.T) {
 			}
 			return got
 		}
-		full := oracle.PILResizeBy(rgb, c.w, c.h, c.fw, c.fh, byFilter[c.filter])
+		resize := oracle.PILResizeBy
+		if c.torch {
+			resize = oracle.TorchResizeBy
+		}
+		full := resize(rgb, c.w, c.h, c.fw, c.fh, byFilter[c.filter])
 		want := make([]uint8, 0, c.ow*c.oh*3)
 		for y := range c.oh {
 			want = append(want, full[((y0+y)*c.fw+x0)*3:((y0+y)*c.fw+x0+c.ow)*3]...)
 		}
-		got := run(c.filter)
+		got := run(c.filter, c.torch)
 		for i, w := range want {
 			v := float64(got[i]) * 255
 			if math.IsNaN(v) || math.Abs(v-float64(w)) > 1e-3 {
-				t.Fatalf("%s: byte %d (pixel %d channel %d) reads %v, Pillow's %d", name, i, i/3, i%3, v, w)
+				t.Fatalf("%s: byte %d (pixel %d channel %d) reads %v, the oracle's %d", name, i, i/3, i%3, v, w)
 			}
 		}
 		for i := len(want); i < rows*W; i++ {
@@ -132,15 +142,25 @@ func TestComposedCPUPicturePIL(t *testing.T) {
 		if c.filter == graph.FilterCubic {
 			other = graph.FilterBilinear
 		}
-		bad, diff := run(other), 0
-		for i, w := range want {
-			if math.Abs(float64(bad[i])*255-float64(w)) > 0.5 {
-				diff++
+		parts := func(bad []float32) int {
+			n := 0
+			for i, w := range want {
+				if math.Abs(float64(bad[i])*255-float64(w)) > 0.5 {
+					n++
+				}
 			}
+			return n
 		}
+		diff := parts(run(other, c.torch))
 		if diff == 0 {
 			t.Fatalf("%s: the other filter's taps write the same bytes", name)
 		}
-		t.Logf("%s (%d taps reaching a side of %d): Pillow's %d bytes; the other filter's taps part on %d", name, K, c.side, len(want), diff)
+		prec := 0
+		if c.torch {
+			if prec = parts(run(c.filter, false)); prec == 0 {
+				t.Fatalf("%s: Pillow's precision writes torchvision's bytes", name)
+			}
+		}
+		t.Logf("%s (%d taps reaching a side of %d): the oracle's %d bytes; the other filter's taps part on %d, the other precision's on %d", name, K, c.side, len(want), diff, prec)
 	}
 }

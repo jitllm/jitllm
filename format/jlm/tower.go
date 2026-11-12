@@ -186,7 +186,7 @@ const (
 	FilterPILBilinear Filter = 2
 	FilterPILBicubic  Filter = 3
 	// FilterPILLanczos is Pillow's LANCZOS, the sinc windowed by the sinc a
-	// third as wide, at Pillow's precision alone.
+	// third as wide.
 	FilterPILLanczos Filter = 4
 )
 
@@ -711,10 +711,8 @@ func resizes(f Filter, p Precision) bool {
 	switch f {
 	case FilterTwoTap:
 		return p == PrecFloat
-	case FilterPILBilinear, FilterPILBicubic:
+	case FilterPILBilinear, FilterPILBicubic, FilterPILLanczos:
 		return p == PrecPIL || p == PrecTorch
-	case FilterPILLanczos:
-		return p == PrecPIL
 	}
 	return false
 }
