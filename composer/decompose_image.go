@@ -259,7 +259,7 @@ func decomposePicturePIL(o graph.Op, c *Context) ([]Prim, error) {
 	U, F, I := ir.U32, ir.F32, ir.I32
 	sh := c.rows(o.Out[0])
 	W, K := sh[1], a.Taps
-	if !a.PicBytes && W%3 != 0 || W >= 1<<15 {
+	if !a.PicBytes && (W%3 != 0 || W >= 1<<15) {
 		return nil, fmt.Errorf("a picture's rows of %d samples, not whole pixels", W)
 	}
 	E := PILEntryWords(K)

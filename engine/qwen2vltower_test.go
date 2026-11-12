@@ -68,6 +68,14 @@ func towerPixelsAt(t *testing.T, s *Instance, img image.Image, i int) ([]float32
 	}
 	pl.Request(tr.req)
 	sq, squares := squareOf(t, tg, pl.W, pl.H, i)
+	// The squares are cut from the picture's last whole-picture resize.
+	var ps model.PictureSquares
+	if _, err := ps.Of(tg, pl.W, pl.H); err != nil {
+		t.Fatal(err)
+	}
+	if words, pl, err = tr.stages(tg, &ps, words, pl); err != nil {
+		t.Fatal(err)
+	}
 	cl := tg.Classes[sq.Class]
 	a := cl.Pic
 	a.Pixels = pl.Px

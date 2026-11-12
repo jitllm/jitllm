@@ -38,10 +38,17 @@ func testGeometry() *PictureGeometry {
 // section's tail, behind a video and with none, and reads the same record
 // back; a section whose tail holds bytes past its records is refused.
 func TestGeometryRoundTrips(t *testing.T) {
-	for _, video := range []bool{false, true} {
+	for i, video := range []bool{false, true, false} {
 		v := &Vision{NLayer: 12, NEmbd: 768, NHead: 12, NFFN: 3072, ImageSize: 512, PatchSize: 16,
 			ProjDim: 576, Scale: 4, Eps: 1e-6, Projector: ProjIdefics3, Tower: sampleTower(t)}
 		v.Tower.Geometry = testGeometry()
+		if g := v.Tower.Geometry; i == 2 {
+			g.Stages = []PictureStage{{W: g.Square[SqOw], H: g.Square[SqOh], MaxPix: 2048 * 2048},
+				{W: g.Square[SqCw], H: g.Square[SqCh], MaxPix: 2048 * 2048}}
+			if err := g.Valid(); err != nil {
+				t.Fatal(err)
+			}
+		}
 		if video {
 			v.Tower.Video = testPictureVideo()
 		}

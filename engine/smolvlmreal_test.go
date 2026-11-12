@@ -18,13 +18,13 @@ import (
 // transformers' Idefics3ImageProcessor, vision model and connector in
 // float32 on the photo (scripts/smolvlmreal.py), the container converted
 // with the publisher's preprocessor_config.json: the photo cut into the
-// processor's 4 x 4 tiles and its global view, in its order; each square's
-// pixels within what one Lanczos pass where the processor makes two or three
-// moves them (docs/divergences.md: a tile's NMSE under 1e-4, the global
-// view's under 1e-3); each square's 64 rows within 3e-2 of transformers'
-// (the tower's matrices the converter's, its activations int8). The tiles
-// read in reverse order and a grey picture of the photo's size are the
-// violations.
+// processor's 4 x 4 tiles and its global view, in its order, after its two
+// whole-picture resizes (jlm.PictureGeometry.Stages); each square's pixels
+// the processor's (a resize fewer, as the engine made them before the
+// stages, parts by up to sixteen levels); each square's 64 rows within 3e-2
+// of transformers' (the tower's matrices the converter's, its activations
+// int8). The tiles read in reverse order and a grey picture of the photo's
+// size are the violations.
 func TestSmolVLMRealMatchesTransformers(t *testing.T) {
 	dir := testmodels.Path("vlmb/hf/SmolVLM-256M-Instruct")
 	gold := filepath.Join(dir, "goldens")
@@ -71,12 +71,8 @@ func TestSmolVLMRealMatchesTransformers(t *testing.T) {
 	for i := range n {
 		px, _ := towerPixelsAt(t, s, img, i)
 		pn, pw := nmseOf(px, wantPx[i*per:(i+1)*per])
-		bound := 1e-4
-		if i == n-1 {
-			bound = 1e-3
-		}
-		if math.IsNaN(pn) || pn > bound {
-			t.Errorf("square %d's pixels read NMSE %.3e (max|d| %.3f) against the processor's, bound %.0e", i, pn, pw, bound)
+		if math.IsNaN(pn) || pn > 1e-10 || pw > 1e-5 {
+			t.Errorf("square %d's pixels read NMSE %.3e (max|d| %.3e) against the processor's", i, pn, pw)
 		}
 		t.Logf("square %d: pixels NMSE %.3e, max|d| %.3f", i, pn, pw)
 	}
