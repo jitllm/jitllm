@@ -150,22 +150,90 @@ func whole(v float64) (int, bool) {
 // GeometrySquare is square i of a w x h picture as g states it, and how many
 // squares the picture becomes; its class the caller's to choose.
 func GeometrySquare(g *jlm.PictureGeometry, w, h, i int) (Square, int, error) {
-	e := geometry{g: g}
-	if err := e.bind(w, h); err != nil {
-		return Square{}, 0, err
-	}
-	n, err := e.count()
+	var ps PictureSquares
+	n, err := ps.of(nil, g, w, h)
 	if err != nil {
 		return Square{}, 0, err
 	}
-	if i < 0 || i >= n {
-		return Square{}, n, fmt.Errorf("model: square %d of a picture of %d", i, n)
+	sq, err := ps.At(i)
+	return sq, n, err
+}
+
+// PictureSquares is a picture's squares as its tower's stated geometry
+// gives them (jlm.PictureGeometry): Of binds a picture, At is each of its
+// squares. Its scratch is reused from one picture to the next, so a warm
+// encode allocates nothing; one goroutine uses it at a time.
+type PictureSquares struct {
+	tg *TowerGraphs
+	e  geometry
+	n  int
+}
+
+// Of binds a w x h picture under tg's geometry and is how many squares it
+// becomes.
+func (ps *PictureSquares) Of(tg *TowerGraphs, w, h int) (int, error) {
+	return ps.of(tg, tg.Geometry, w, h)
+}
+
+// FrameOf binds a video's w x h frame read as a picture
+// (jlm.Video.AsPictures): under the frames' own geometry where the video
+// states one, the picture's where not.
+func (ps *PictureSquares) FrameOf(tg *TowerGraphs, w, h int) (int, error) {
+	g := tg.Geometry
+	if tg.Video != nil && tg.Video.Frames != nil {
+		g = tg.Video.Frames
 	}
-	f, err := e.square(i, n)
+	return ps.of(tg, g, w, h)
+}
+
+func (ps *PictureSquares) of(tg *TowerGraphs, g *jlm.PictureGeometry, w, h int) (int, error) {
+	ps.tg, ps.e.g, ps.n = tg, g, 0
+	if g == nil {
+		return 0, fmt.Errorf("model: the tower states no picture geometry")
+	}
+	if err := ps.e.bind(w, h); err != nil {
+		return 0, err
+	}
+	n, err := ps.e.count()
 	if err != nil {
-		return Square{}, n, err
+		return 0, err
 	}
-	return Square{Ow: f[jlm.SqOw], Oh: f[jlm.SqOh], X0: f[jlm.SqX0], Y0: f[jlm.SqY0], Pw: f[jlm.SqPw], Ph: f[jlm.SqPh],
+	ps.n = n
+	return n, nil
+}
+
+// At is square i of the bound picture, in the smallest class that holds its
+// grid.
+func (ps *PictureSquares) At(i int) (Square, error) {
+	if i < 0 || i >= ps.n {
+		return Square{}, fmt.Errorf("model: square %d of a picture of %d", i, ps.n)
+	}
+	f, err := ps.e.square(i, ps.n)
+	if err != nil {
+		return Square{}, err
+	}
+	sq := Square{Ow: f[jlm.SqOw], Oh: f[jlm.SqOh], X0: f[jlm.SqX0], Y0: f[jlm.SqY0], Pw: f[jlm.SqPw], Ph: f[jlm.SqPh],
 		Gw: f[jlm.SqGw], Gh: f[jlm.SqGh], Mark: f[jlm.SqMark], MarkN: f[jlm.SqMarkN], Trail: f[jlm.SqTrail],
-		TrailN: f[jlm.SqTrailN]}, n, nil
+		TrailN: f[jlm.SqTrailN]}
+	if tg := ps.tg; tg != nil {
+		sq.Class = tg.classOf(sq.Gw*tg.Patch, sq.Gh*tg.Patch)
+	}
+	return sq, nil
+}
+
+// Last is the bound picture's last square: a tiled tower's thumbnail, or
+// its one square.
+func (ps *PictureSquares) Last() (Square, error) { return ps.At(ps.n - 1) }
+
+// Rows is the rows the bound picture becomes: its squares' every row.
+func (ps *PictureSquares) Rows() (int, error) {
+	rows := 0
+	for i := range ps.n {
+		sq, err := ps.At(i)
+		if err != nil {
+			return 0, err
+		}
+		rows += ps.tg.SquareOut(sq)
+	}
+	return rows, nil
 }

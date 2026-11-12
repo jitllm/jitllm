@@ -77,8 +77,8 @@ func TestGemma4VideoMatchesTransformers(t *testing.T) {
 	if !slices.Equal(plan.Frames, g.Video.Frames) {
 		t.Fatalf("the plan samples frames %v, the processor %v", plan.Frames, g.Video.Frames)
 	}
-	if sq := m.Tower.FrameSquare(g.Video.W, g.Video.H); [2]int{sq.Gh, sq.Gw} != g.Video.Grid {
-		t.Fatalf("a %dx%d frame is %dx%d patches, the processor's %v", g.Video.W, g.Video.H, sq.Gh, sq.Gw, g.Video.Grid)
+	if sq, err := m.Tower.FrameSquare(g.Video.W, g.Video.H); err != nil || [2]int{sq.Gh, sq.Gw} != g.Video.Grid {
+		t.Fatalf("a %dx%d frame is %dx%d patches (%v), the processor's %v", g.Video.W, g.Video.H, sq.Gh, sq.Gw, err, g.Video.Grid)
 	}
 	video, err := m.VideoSpans(frames, g.Video.Fps)
 	if err != nil {

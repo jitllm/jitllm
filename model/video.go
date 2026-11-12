@@ -119,7 +119,11 @@ func (tg *TowerGraphs) VideoPlan(n, w, h int, fps float64) (VideoPlan, error) {
 		return VideoPlan{}, err
 	}
 	if v.AsPictures() {
-		return VideoPlan{VideoSample: s, Square: tg.FrameSquare(w, h)}, nil
+		sq, err := tg.FrameSquare(w, h)
+		if err != nil {
+			return VideoPlan{}, err
+		}
+		return VideoPlan{VideoSample: s, Square: sq}, nil
 	}
 	ow, oh, err := VideoFrameSize(v, s, w, h)
 	if err != nil {

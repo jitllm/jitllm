@@ -115,7 +115,11 @@ func TestInternVLVideoMatchesTransformers(t *testing.T) {
 	}
 
 	D := int(m.Container.Vision().ProjDim)
-	n := m.Tower.SquareOut(m.Tower.LastSquare(g.W, g.H)) * D
+	frame, err := m.Tower.LastSquare(g.W, g.H)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := m.Tower.SquareOut(frame) * D
 	encode := func(s *Instance) []float32 {
 		t.Helper()
 		enc, err := s.encodePictures(slices.Clone(video), 0)

@@ -26,8 +26,15 @@ func statedTower(s *jlm.Source) (*jlm.Tower, error) {
 	if err != nil || t == nil {
 		return t, err
 	}
-	if t.Geometry, err = geometryOf(t, s.Vision); err != nil {
+	if t.Geometry, err = GeometryOf(t, s.Vision); err != nil {
 		return nil, err
+	}
+	if v := t.Video; v != nil && v.AsPictures() && len(v.Pre) > 0 {
+		frames := *t
+		frames.Pre = v.Pre
+		if v.Frames, err = GeometryOf(&frames, s.Vision); err != nil {
+			return nil, fmt.Errorf("convert: the video's frames: %w", err)
+		}
 	}
 	if err := t.Valid(); err != nil {
 		return nil, fmt.Errorf("convert: the picture's geometry: %w", err)

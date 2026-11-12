@@ -768,9 +768,13 @@ func TestLlavaTowerSeesThePicture(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	if !m.SeesPictures() || m.Tower.Out != 576 || m.Tower.Rows != 577 || len(m.Tower.Blocks) != 23 || m.Tower.Fit.Short != 336 {
-		t.Fatalf("the tower writes %d rows from %d over %d blocks, the shorter side to %d; want 576 from 577 over 23, 336",
-			m.Tower.Out, m.Tower.Rows, len(m.Tower.Blocks), m.Tower.Fit.Short)
+	if !m.SeesPictures() || m.Tower.Out != 576 || m.Tower.Rows != 577 || len(m.Tower.Blocks) != 23 {
+		t.Fatalf("the tower writes %d rows from %d over %d blocks; want 576 from 577 over 23",
+			m.Tower.Out, m.Tower.Rows, len(m.Tower.Blocks))
+	}
+	if sq, _ := squareOf(t, m.Tower, 1000, 500, 0); sq.Oh != 336 || sq.Pw != 336 || sq.Ph != 336 {
+		t.Fatalf("a 1000x500 picture is resized to %dx%d and cropped to %dx%d; want its shorter side 336 and a 336 crop",
+			sq.Ow, sq.Oh, sq.Pw, sq.Ph)
 	}
 	f, err := os.Open(filepath.Join("testdata", "quad-and-disc.png"))
 	if err != nil {
@@ -782,39 +786,6 @@ func TestLlavaTowerSeesThePicture(t *testing.T) {
 		t.Fatal(err)
 	}
 	seesThePicture(t, m, img)
-}
-
-// TestTileGridFollowsTheReference holds tileGrid to InternVL's
-// find_closest_aspect_ratio (transformers' get_optimal_tiled_canvas), each
-// grid worked by hand from the reference's rule over 448-pixel tiles, 1 to
-// 12 of them: the closest aspect, a tie to the larger grid only while the
-// picture covers more than half of it.
-func TestTileGridFollowsTheReference(t *testing.T) {
-	for _, c := range []struct{ w, h, cols, rows int }{
-		{384, 384, 1, 1},  // (2,2) ties at 0 and is more than twice the picture
-		{800, 600, 4, 3},  // 4:3 exactly, after (2,2) took the tie with (1,1)
-		{1000, 500, 2, 1}, // (4,2) ties at 0 and is more than twice the picture
-		{2000, 1000, 4, 2},
-		{448, 896, 1, 2},
-		{640, 480, 4, 3},
-		{100, 1000, 1, 10}, // 1:10 exactly, before (1,11) and (1,12)
-	} {
-		if cols, rows := model.TileGrid(c.w, c.h, 448, 1, 12); cols != c.cols || rows != c.rows {
-			t.Errorf("%dx%d: a grid of %dx%d, want %dx%d", c.w, c.h, cols, rows, c.cols, c.rows)
-		}
-	}
-	f := model.PictureFit{MinTiles: 1, MaxTiles: 12, Thumb: true}
-	for _, c := range []struct{ w, h, n int }{{384, 384, 1}, {1000, 500, 3}, {800, 600, 13}} {
-		if _, _, n := f.Tiles(c.w, c.h, 448); n != c.n {
-			t.Errorf("%dx%d: %d squares, want %d (a thumbnail after a grid of more than one)", c.w, c.h, n, c.n)
-		}
-	}
-	if ow, oh, x0, y0 := f.Window(1000, 500, 448, 448, 1); ow != 896 || oh != 448 || x0 != 448 || y0 != 0 {
-		t.Errorf("the second tile of 1000x500 is (%d, %d) of %dx%d, want (448, 0) of 896x448", x0, y0, ow, oh)
-	}
-	if ow, oh, x0, y0 := f.Window(1000, 500, 448, 448, 2); ow != 448 || oh != 448 || x0 != 0 || y0 != 0 {
-		t.Errorf("1000x500's thumbnail is (%d, %d) of %dx%d, want the whole picture at 448x448", x0, y0, ow, oh)
-	}
 }
 
 // TestInternVLTowerSeesThePicture runs InternVL3-1B's stated tower --
@@ -834,9 +805,12 @@ func TestInternVLTowerSeesThePicture(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	if !m.SeesPictures() || m.Tower.Out != 256 || m.Tower.Rows != 1025 || len(m.Tower.Blocks) != 24 || m.Tower.Fit.MaxTiles != 12 {
-		t.Fatalf("the tower writes %d rows from %d over %d blocks, %d tiles at most; want 256 from 1025 over 24, 12",
-			m.Tower.Out, m.Tower.Rows, len(m.Tower.Blocks), m.Tower.Fit.MaxTiles)
+	if !m.SeesPictures() || m.Tower.Out != 256 || m.Tower.Rows != 1025 || len(m.Tower.Blocks) != 24 {
+		t.Fatalf("the tower writes %d rows from %d over %d blocks; want 256 from 1025 over 24",
+			m.Tower.Out, m.Tower.Rows, len(m.Tower.Blocks))
+	}
+	if _, n := squareOf(t, m.Tower, 13*448, 448, 0); n != 13 {
+		t.Fatalf("a picture 13 tiles wide is %d squares; want 12 tiles at most and the thumbnail", n)
 	}
 	f, err := os.Open(filepath.Join("testdata", "quad-and-disc.png"))
 	if err != nil {

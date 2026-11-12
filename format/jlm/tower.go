@@ -686,6 +686,12 @@ func (t *Tower) Valid() error {
 		if err := t.Geometry.Valid(); err != nil {
 			return err
 		}
+		// A tower whose geometry is stated states its video's frames' too,
+		// where their steps are their own.
+		if v := t.Video; v != nil && v.AsPictures() && (v.Frames != nil) != (len(v.Pre) > 0) {
+			return fmt.Errorf("jlm: a video read as pictures of %d steps of its own, its frames' geometry stated %v",
+				len(v.Pre), v.Frames != nil)
+		}
 	}
 	if t.Video != nil {
 		if err := t.Video.Valid(); err != nil {

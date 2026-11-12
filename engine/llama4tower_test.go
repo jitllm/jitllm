@@ -95,7 +95,7 @@ func TestLlama4TowerMatchesTransformers(t *testing.T) {
 	defer s.Close()
 	img := rgbPicture(g.Image.RGB, g.Image.W, g.Image.H)
 	W, H := g.Image.W, g.Image.H
-	_, n := tg.Square(W, H, 0)
+	_, n := squareOf(t, tg, W, H, 0)
 	if n != g.Image.Tiles || len(g.Image.PX)%n != 0 {
 		t.Fatalf("%d squares, the processor's %d tiles (%d samples)", n, g.Image.Tiles, len(g.Image.PX))
 	}
@@ -142,7 +142,7 @@ func TestLlama4TowerMatchesTransformers(t *testing.T) {
 		pos++
 	}
 	for i := range n {
-		sq, _ := tg.Square(W, H, i)
+		sq, _ := squareOf(t, tg, W, H, i)
 		if sq.Mark > 0 {
 			want = append(want, int32(sq.Mark))
 			mark(sq.Mark)
@@ -208,7 +208,7 @@ func TestLlama4TowerMatchesTransformers(t *testing.T) {
 	var bgot []float32
 	pos = 0
 	for i := range n {
-		sq, _ := tg.Square(W, H, i)
+		sq, _ := squareOf(t, tg, W, H, i)
 		if sq.Mark > 0 {
 			pos++
 		}

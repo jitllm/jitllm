@@ -32,8 +32,6 @@ func goComputeAllowed() map[string]string {
 		"nn/ropeaxes.go:runFreqs":     "a multi-axis rotary's per-pair frequencies, once per configuration",
 		"model/model.go:ropeScale":    "a scaled rotary's per-pair divisors, the shipped factors times the scaling, once at open",
 		"graph/sample.go:selection":   "the draw's graph: the binade thresholds it states as constants, once when the graph is built",
-		// Geometry from a picture's sizes.
-		"model/tower.go:TileGrid": "InternVL's tile grid, the candidate counts walked against the picture's aspect",
 		// A clip's resample: libswresample's filter bank, once a pair of rates,
 		// as Pillow's taps are once a size (the sound op reads it).
 		"composer/swr.go:swrBank": "libswresample's polyphase filter bank, built once a pair of rates as resample.c builds it: a constant table the sound op reads",
@@ -41,7 +39,6 @@ func goComputeAllowed() map[string]string {
 		// A request's and a picture's geometry, and a graph's attributes.
 		"engine/decide.go:answer":        "a rating question's levels, i/(r-1) for its r answers, once a question: the readout's parameters",
 		"model/tower.go:lowerValuesWith": "a tower op's attention scale, 1/sqrt of its head width, once an op: the graph's attribute",
-		"model/tower.go:sliceGrid":       "MiniCPM-V's slice grid, the factor pairs' log aspects against the picture's (get_sliced_grid): geometry from its sizes",
 		"model/video.go:SampleVideo":     "a video's sampled frames, its stated count and indices evaluated over its frames and rate: geometry",
 		"model/video.go:evalTerms":       "a video's or a picture's stated size, count, index, stride or time, evaluated over its sides, frames and rate: geometry",
 	}

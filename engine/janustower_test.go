@@ -35,8 +35,14 @@ func TestJanusTowerMatchesTransformers(t *testing.T) {
 	}
 	defer m.Close()
 	tg := m.Tower
-	if tg == nil || tg.Fit.Box != 384 || tg.Fit.BoxMin != 14 {
-		t.Fatalf("the tower is %+v: want a 384-pixel box", tg)
+	if tg == nil {
+		t.Fatal("the model has no tower")
+	}
+	wide, _ := squareOf(t, tg, 1000, 500, 0)
+	thin, _ := squareOf(t, tg, 1000, 10, 0)
+	if wide.Ow != 384 || wide.Oh != 192 || thin.Oh != 14 {
+		t.Fatalf("1000x500 resizes to %dx%d and 1000x10 to a side of %d: want a 384-pixel box, a side at least 14",
+			wide.Ow, wide.Oh, thin.Oh)
 	}
 	s := testInstance(t, m, 64, WithKVF16(false))
 	defer s.Close()

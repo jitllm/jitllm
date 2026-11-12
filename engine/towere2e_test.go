@@ -396,14 +396,14 @@ func llama4Lay(t *testing.T, m *model.Model, g *towerE2EGolden, rows []float32, 
 	tg := m.Tower
 	D := m.Cfg.NEmbd
 	marks := markerTable(t, m, D)
-	_, n := tg.Square(g.Image.W, g.Image.H, 0)
+	_, n := squareOf(t, tg, g.Image.W, g.Image.H, 0)
 	if n == 0 || len(rows)%(n*D) != 0 {
 		t.Fatalf("%d values for %d tiles of %d-wide rows", len(rows), n, D)
 	}
 	per := len(rows) / n
 	var out []float32
 	for i := range n {
-		sq, _ := tg.Square(g.Image.W, g.Image.H, i)
+		sq, _ := squareOf(t, tg, g.Image.W, g.Image.H, i)
 		if sq.Mark > 0 {
 			out = append(out, marks[(sq.Mark-1)*D:sq.Mark*D]...)
 		}
@@ -422,7 +422,7 @@ func llama4Lay(t *testing.T, m *model.Model, g *towerE2EGolden, rows []float32, 
 // llama4Violations: the global tile first, as a processor that put the
 // overview ahead (MiniCPM-V's) would lay it out.
 func llama4Violations(x *e2eArm) {
-	_, n := x.m.Tower.Square(x.g.Image.W, x.g.Image.H, 0)
+	_, n := squareOf(x.t, x.m.Tower, x.g.Image.W, x.g.Image.H, 0)
 	order := []int{n - 1}
 	for i := range n - 1 {
 		order = append(order, i)
@@ -451,7 +451,7 @@ func gemma3nLay(t *testing.T, m *model.Model, _ *towerE2EGolden, rows []float32,
 func pixtralLay(t *testing.T, m *model.Model, g *towerE2EGolden, rows []float32, _ []int) []float32 {
 	t.Helper()
 	tg := m.Tower
-	sq, _ := tg.Square(g.Image.W, g.Image.H, 0)
+	sq, _ := squareOf(t, tg, g.Image.W, g.Image.H, 0)
 	D, W, H := len(g.Image.Break), sq.Gw/tg.Frame, sq.Gh/tg.Frame
 	if D == 0 || W*H*D != len(rows) {
 		t.Fatalf("a %dx%d merged grid of %d, the reference's %d values", W, H, D, len(rows))

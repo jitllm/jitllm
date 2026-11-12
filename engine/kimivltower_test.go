@@ -3,6 +3,8 @@ package engine
 import (
 	"math"
 	"testing"
+
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // TestKimiVLTowerMatchesTransformers holds Kimi-VL's stated tower to
@@ -17,14 +19,15 @@ func TestKimiVLTowerMatchesTransformers(t *testing.T) {
 	m, g, openOpts := openQVLTower(t, "synth-kimivl")
 	defer m.Close()
 	tg := m.Tower
-	if tg == nil || tg.GridDiv != 0 || tg.Fit.Limit == 0 || tg.Fit.Pad != 2*tg.Patch || len(tg.Classes) < 2 {
+	if tg == nil || tg.GridDiv != 0 || tg.Geometry.Bounds.Unit != int32(2*tg.Patch) || len(tg.Classes) < 2 {
 		t.Fatalf("the tower is %+v: want rows that advance as text and a picture under a patch limit, padded to 2x2 windows", tg)
 	}
 	s := testInstance(t, m, 64, openOpts...)
 	defer s.Close()
 
-	limit := tg.Fit.Limit
-	tg.Fit.Limit = g.Prep.Max
+	stated := tg.Geometry
+	limit := func(n int) func(s *jlm.PreStep) { return func(s *jlm.PreStep) { s.Ints[1] = int32(n) } }
+	restateStep(t, m, jlm.PreLimitPad, limit(g.Prep.Max))
 	px, sq := towerPixels(t, s, rgbPicture(g.Prep.RGB, g.Prep.W, g.Prep.H))
 	if sq.Gw*tg.Patch != g.Prep.OutW || sq.Gh*tg.Patch != g.Prep.OutH {
 		t.Fatalf("a %dx%d picture padded to %dx%d, the processor's %dx%d", g.Prep.W, g.Prep.H,
@@ -44,12 +47,12 @@ func TestKimiVLTowerMatchesTransformers(t *testing.T) {
 	}
 	t.Logf("a %dx%d picture resized to %dx%d and padded to %dx%d: every one of %d samples the processor's",
 		g.Prep.W, g.Prep.H, sq.Ow, sq.Oh, sq.Gw*tg.Patch, sq.Gh*tg.Patch, len(px))
-	tg.Fit.Limit = 2 * g.Prep.Max
+	restateStep(t, m, jlm.PreLimitPad, limit(2*g.Prep.Max))
 	if _, bad := towerPixels(t, s, rgbPicture(g.Prep.RGB, g.Prep.W, g.Prep.H)); bad.Gw*tg.Patch == g.Prep.OutW &&
 		bad.Gh*tg.Patch == g.Prep.OutH {
 		t.Fatal("VIOLATION: a limit doubled reaches the processor's size")
 	}
-	tg.Fit.Limit = limit
+	tg.Geometry = stated
 
 	img := rgbPicture(g.Image.RGB, g.Image.W, g.Image.H)
 	rows, err := s.EncodePicture(img)

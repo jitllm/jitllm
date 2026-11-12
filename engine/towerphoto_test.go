@@ -62,7 +62,7 @@ func TestAPhotoOfFortyEightMegapixelsEncodes(t *testing.T) {
 	if slices.Equal(got, flat) {
 		t.Fatal("the photo encodes as a flat grey one: its samples are not read")
 	}
-	sq, _ := m.Tower.Square(w, h, 0)
+	sq, _ := squareOf(t, m.Tower, w, h, 0)
 	t.Logf("a %dx%d photo of %d MiB of planes resized to %dx%d, %d values (the table holds %d words)",
 		w, h, (len(img.Y)+len(img.Cb)+len(img.Cr))>>20, sq.Ow, sq.Oh, len(got), composer.PictureWords)
 }
