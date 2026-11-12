@@ -77,7 +77,7 @@ func StatesTower(p jlm.Projector) bool { return towerStater(p) != nil }
 // reads a video (jlm.Video).
 func StatesVideo(p jlm.Projector) bool {
 	return p == jlm.ProjQwen2VL || p == jlm.ProjQwen25VL || p == jlm.ProjQwen3VL || p == jlm.ProjGLM4V || p == jlm.ProjInternVL ||
-		p == jlm.ProjGemma4V
+		p == jlm.ProjGemma4V || p == jlm.ProjIdefics3
 }
 
 // idefics3Tower is SmolVLM's tower as llama.cpp's mtmd runs it, which this
@@ -144,10 +144,88 @@ func idefics3Tower(s *jlm.Source) (*jlm.Tower, error) {
 	if t.Span.After, err = markerIDs(s, "<fake_token_around_image>"); err != nil {
 		return nil, err
 	}
+	frame, err := markerIDs(s, "<fake_token_around_image>", "<global-img>")
+	if err != nil {
+		return nil, err
+	}
+	t.Video = idefics3Video(frame, t.Span.After)
 	if err := t.Valid(); err != nil {
 		return nil, fmt.Errorf("convert: idefics3: %w", err)
 	}
 	return t, nil
+}
+
+// SmolVLM2's video_sampling, and the rate SmolVLMProcessor takes for a
+// video with none.
+const (
+	smolvlmVideoFps        = 1
+	smolvlmVideoFrames     = 64
+	smolvlmVideoDefaultFps = 24
+	smolvlmVideoSkip       = 1
+)
+
+// idefics3Video is how SmolVLM reads a video, as SmolVLMVideoProcessor at
+// SmolVLM2's video_sampling and SmolVLMProcessor.replace_video_token do:
+// max(min(round(N / R), 64), 1) frames at numpy's linspace over the frames,
+// a second in from either end of a video past 66 seconds, truncated and each
+// taken once; each frame read as the picture's square; an introduction
+// counting them in words (num2words) and giving the video's length as
+// H:MM:SS, then each frame's "\nFrame from MM:SS:" and the frame between
+// before and after -- not the picture's own markers, which open with a
+// line -- and "\n\n" after the last. The frames are resized as the picture
+// is (docs/divergences.md).
+func idefics3Video(before, after []int32) *jlm.Video {
+	var c sizes
+	c.max(c.min(c.fn(jlm.FnRoundEven, c.mul(num(smolvlmVideoFps), c.div(c.op(jlm.VideoN), c.op(jlm.VideoRate)))),
+		num(smolvlmVideoFrames)), num(1))
+	var ix sizes
+	n1 := ix.sub(ix.op(jlm.VideoN), num(1))
+	long := ix.less(num(smolvlmVideoFrames*smolvlmVideoFps),
+		ix.sub(ix.div(ix.op(jlm.VideoN), ix.op(jlm.VideoRate)), num(2*smolvlmVideoSkip)))
+	s0 := ix.max(num(0), ix.where(long, ix.fn(jlm.FnTrunc, ix.mul(num(smolvlmVideoSkip), ix.op(jlm.VideoRate))), num(0)))
+	e0 := ix.min(n1, ix.where(long, ix.fn(jlm.FnTrunc,
+		ix.sub(ix.op(jlm.VideoN), ix.mul(num(smolvlmVideoSkip), ix.op(jlm.VideoRate)))), n1))
+	ok := ix.less(s0, e0)
+	start, end := ix.where(ok, s0, num(0)), ix.where(ok, e0, n1)
+	k1 := ix.sub(ix.op(jlm.VideoK), num(1))
+	at := ix.add(ix.mul(ix.op(jlm.VideoAt), ix.div(ix.sub(end, start), k1)), start)
+	ix.where(ix.less(ix.op(jlm.VideoAt), k1), at, ix.where(ix.less(num(1), ix.op(jlm.VideoK)), end, start))
+	words := make([]string, smolvlmVideoFrames+1)
+	for i := range words {
+		words[i] = cardinal(i)
+	}
+	clock := jlm.ValueFormat{Kind: jlm.FormatClock, Clock: [3]int32{1, 2, 2}, Sep: ":", Days: [2]string{" day, ", " days, "}}
+	stamp := jlm.ValueFormat{Kind: jlm.FormatClock, Clock: [3]int32{0, 2, 2}, Sep: ":"}
+	return &jlm.Video{DefaultFps: smolvlmVideoDefaultFps, Count: c.expr(), Index: ix.expr(), Once: true,
+		MaxFrames: smolvlmVideoFrames, Group: 1, Sized: opExpr(0), Prompt: []jlm.VideoPiece{
+			textPiece("You are provided the following series of "),
+			valuePiece(opExpr(jlm.VideoK), jlm.ValueFormat{Kind: jlm.FormatTable, Strings: words}),
+			textPiece(" frames from a "),
+			valuePiece(opExpr(jlm.VideoSeconds), clock),
+			textPiece(" [H:MM:SS] video.\n"),
+			{Kind: jlm.PieceGroups, Body: []jlm.VideoPiece{textPiece("\nFrame from "), valuePiece(opExpr(jlm.VideoT0), stamp),
+				textPiece(":"), idsPiece(before), spanPiece(), idsPiece(after)}},
+			textPiece("\n\n"),
+		}}
+}
+
+// cardinal is n in English words as num2words writes a cardinal below a
+// thousand: "zero", "twenty-one", "one hundred and five".
+func cardinal(n int) string {
+	ones := [...]string{"zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+		"eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen"}
+	tens := [...]string{"", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"}
+	switch {
+	case n < 20:
+		return ones[n]
+	case n < 100 && n%10 == 0:
+		return tens[n/10]
+	case n < 100:
+		return tens[n/10] + "-" + ones[n%10]
+	case n%100 == 0:
+		return ones[n/100] + " hundred"
+	}
+	return ones[n/100] + " hundred and " + cardinal(n%100)
 }
 
 // erfGELU is the activation of a tower whose class's hidden_act is "gelu"

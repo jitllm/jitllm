@@ -5322,6 +5322,54 @@ on each card. The times written as seconds (the stated clock rewritten as a
 decimal), the frames' rows reversed and the frames' rows causal -- which
 must read as transformers' own causal run does -- are its violations.
 
+## SmolVLM's video
+
+SmolVLM was the last projector whose reference takes a video the converter
+did not state. What SmolVLMProcessor does with one, read off transformers'
+code, and how the one statement ("Video as one statement" below) says it
+(`convert.idefics3Video`):
+
+- **The sampler** (sample_frames at SmolVLM2's video_sampling, a frame a
+  second and at most 64): round(fps x duration) frames, at least one, at
+  numpy's linspace between the first and last frame, truncated and each
+  taken once; past 66 seconds the first and last second are skipped. The
+  count and the index are expressions of the frames and the rate.
+- **The prompt** (replace_video_token): "You are provided the following
+  series of {frame_count} frames from a {video_duration} [H:MM:SS] video.\n",
+  the count in num2words' English -- a table of words the converter writes
+  -- and the duration as Python's timedelta writes it, a clock with days;
+  then each frame "\nFrame from MM:SS:" and its global image --
+  `<fake_token_around_image><global-img>`, the rows,
+  `<fake_token_around_image>`, without the "\n\n" mtmd's picture opens
+  with; then "\n\n".
+- **The text at either end is tokenized with the prompt beside it.** The
+  processor expands the placeholder into a string before tokenizing it, and
+  SmolLM2's BPE splits a boundary differently from two strings: "User: You"
+  puts the space on "You", and "\n\nDescribe" is two newline tokens where
+  "\n\n" alone is one. `Model.VideoParts` hands the caller the video's
+  leading and trailing text apart from its spans; `VideoSpans` encodes them
+  alone.
+- **The frames are not padded.** SmolVLMVideoProcessor's resize keeps a
+  frame's aspect to the processor's size (2048 for SmolVLM2, since
+  video_sampling's video_size is overwritten by size) and then squares it
+  to max_image_size (512): every frame is the square, and the pixel mask is
+  whole.
+
+What is not the processor's is the resize itself: both of its passes are
+torchvision's Lanczos, and the engine resizes a frame as it resizes
+SmolVLM's picture, squashed to the square by two taps (docs/divergences.md).
+`TestSmolVLMVideoMatchesTransformers` holds synth-smolvlm2
+(scripts/smolvlmvideogold.py: transformers' SmolVLMForConditionalGeneration
+at toy size, SmolVLM2's tokenizer, seventy 40x24 frames a second apart) to
+transformers everywhere but there: the 64 frames sampled (1 to 69), the 1133
+ids the processor writes, each frame's four rows over the engine's pixels at
+the engine's arithmetic within the picture gate's 2e-3, and the logits
+within twice what a tower error of the engine's size moves them by, on the
+CPU device and with every block on each card; the processor's own resize
+parts those rows by NMSE 2.1e-4. Its violations, each a rewrite of the
+stated video: an index that skips no second, the picture's own markers, the
+video's text encoded apart from the prompt's, the frames' rows reversed.
+
 ## Video as one statement
 
 The video record grew a field per processor -- Joined, PerSecond and

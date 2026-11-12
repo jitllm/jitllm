@@ -34,7 +34,7 @@ func TestNoRefusalButInputsAndLimits(t *testing.T) {
 		"model/toolgrammar.go:states no tool-call form":              "a forced tool call asked of a model with no tool-call form: the input's check",
 		"model/toolgrammar.go:states no parameter":                   "a tool form written wrong: the container's check",
 		"model/toolsyntax.go:states no tool-call form":               "a container written before tool forms were stated: convert it again",
-		"model/video.go:reads no video":                              "a video given a model whose processor takes none, or one of the gaps convert.TestEveryVideoProcessorIsStated names (SmolVLM): work, not a limit",
+		"model/video.go:reads no video":                              "a video given a model whose reference processor takes none (convert.TestEveryVideoProcessorIsStated holds every one that does stated): the input's check",
 		"format/jlm/toolform.go:tool form":                           "a tool form the container states wrong: the container's check",
 		"format/jlm/tower.go:states no expression or no width":       "a tower record written wrong: the container's check",
 		"graph/verify.go:states no rows":                             "a graph that does not verify: the builder's check",
