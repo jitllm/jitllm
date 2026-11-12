@@ -21,7 +21,8 @@ const convTaps = 3
 // (convTaps), each map adding its taps to the one before's sums; a tap
 // that lands on the grid from no output row is no term at all. The taps
 // are the weight's rows (tap-major), decoded from its format. A line of
-// rows (no GridW) is refused: no gate holds it.
+// rows (no GridW) is a grid one column wide whose taps are a column of
+// Taps: Taps weight rows, the rows past either end zero.
 func decomposeConv(o graph.Op, c *Context) ([]Prim, error) {
 	if len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) != 1 {
 		return nil, fmt.Errorf("a convolution of %d operands", len(o.In))
@@ -29,17 +30,21 @@ func decomposeConv(o graph.Op, c *Context) ([]Prim, error) {
 	U, F := ir.U32, ir.F32
 	sh, osh := c.rows(o.In[0]), c.rows(o.Out[0])
 	R, C, T, s := sh[0], sh[1], o.Attr.Taps, max(1, o.Attr.Stride)
-	if o.Attr.GridW < 1 {
-		return nil, fmt.Errorf("a convolution over a line of rows: only a grid's is formed")
+	// A row of the square holds Tx taps: T, or one in a line's column.
+	W, Tx := o.Attr.GridW, T
+	if W < 1 {
+		W, Tx = 1, 1
 	}
-	W := o.Attr.GridW
-	H, side := R/W, T*T
+	H, side := R/W, T*Tx
 	Ho, Wo := (H+s-1)/s, (W+s-1)/s
 	h := T / 2
 	// The padding before the grid's first row and column: h at stride one.
-	padY, padX := max((Ho-1)*s+T-H, 0)/2, max((Wo-1)*s+T-W, 0)/2
+	padY, padX := max((Ho-1)*s+T-H, 0)/2, max((Wo-1)*s+Tx-W, 0)/2
 	if p := o.Attr.Offset; p > 0 {
-		padY, padX = p, p
+		padY = p
+		if Tx > 1 {
+			padX = p
+		}
 	}
 	switch {
 	case T < 1 || T%2 == 0:
@@ -73,9 +78,9 @@ func decomposeConv(o graph.Op, c *Context) ([]Prim, error) {
 	var taps []tap
 	for ky := range T {
 		dy := ky - padY
-		for kx := range T {
+		for kx := range Tx {
 			if dx := kx - padX; lands(dy, H, Ho) && lands(dx, W, Wo) {
-				taps = append(taps, tap{ky*T + kx, dy, dx})
+				taps = append(taps, tap{ky*Tx + kx, dy, dx})
 			}
 		}
 	}
@@ -189,7 +194,7 @@ func decomposeUnfold(o graph.Op, c *Context) ([]Prim, error) {
 	sh, osh := c.rows(o.In[0]), c.rows(o.Out[0])
 	R, C, T, s, W := sh[0], sh[1], o.Attr.Taps, max(1, o.Attr.Stride), o.Attr.GridW
 	if W < 1 {
-		return nil, fmt.Errorf("an unfold over a line of rows: only a grid's is formed")
+		return nil, fmt.Errorf("an unfold over no grid: graph.OpUnfold reads a grid GridW rows wide, and Verify holds it so")
 	}
 	H := R / W
 	Ho, Wo := (H+s-1)/s, (W+s-1)/s
