@@ -65,6 +65,7 @@ candidates again, in rough order of what the evidence says they are worth:
 | interleaved-emitter prefetch | "already read 94-95% of the wall" | **reopened** — untested |
 | sum-free quantizer | "the SIZE is what kills it" | **reopened**, low priority — ~0.4%, an estimate of an estimate |
 | baking scalar constants | "(0.04%)" | **reopened**, lowest priority |
+| a softcapped head's map chain on the card | never proposed | **open** — the final softcap after the head's projection forms as two map kernels (the recompute pass folds three of its five maps), so the head over rows holds a rows-by-vocabulary intermediate the fused chain would not: 64 MiB of a 64-row Gemma 4 head on a V100, and a launch. The GPU profile fuses a map into a map only at stores (`Fuse`'s AtStores pair): the elementwise fusion priced below lost on its thread count, so a fusion here keeps the maps' grid |
 
 **Tried or priced, and each came out a REGRESSION** (measured, or predicted where
 said): pack8-plus-unroll (31.7 KB against a 32 KB shared L1i), the GPU integer
