@@ -203,6 +203,23 @@ func picWordsOf(a graph.Attrs) picWords {
 	return picWords{RequestPicStride, RequestPicCStride, RequestPicP2, RequestPicP3, RequestPicSub, RequestPicWide, RequestPicInk}
 }
 
+// unpremul is a premultiplied sample made straight as color.NRGBAModel
+// makes it (U32): s and al the sample's and its alpha's 16 bits, the high
+// byte of s*0xffff/al -- the quotient from a float estimate under it by at
+// most one, corrected by its remainder, so no lane divides integers. A
+// sample past its alpha is read as the alpha; no alpha reads zero.
+func (x *exprs) unpremul(s, al int) int {
+	U, F := ir.U32, ir.F32
+	s = x.op(OpMin, U, s, al)
+	d := x.op(OpMax, U, al, x.u(1))
+	f := func(v int) int { return x.un(OpCvtF32, F, x.un(OpBitcast, ir.I32, v)) }
+	est := x.op(OpSub, F, x.op(OpDiv, F, x.op(OpMul, F, f(s), x.f(0xffff)), f(d)), x.f(0.5))
+	t := x.un(OpBitcast, U, x.un(OpCvtI32, ir.I32, est))
+	r := x.op(OpSub, U, x.op(OpMul, U, s, x.u(0xffff)), x.op(OpMul, U, t, d))
+	t = x.op(OpAdd, U, t, x.sel(U, x.op(OpLess, ir.Pred, r, d), x.u(0), x.u(1)))
+	return x.op(OpShr, U, t, x.u(8))
+}
+
 // pictureSample is channel ch of the picture's pixel (y, xx), the byte its
 // format holds or makes (U32): the picture in operand 0, the request in 1,
 // stride its rows' bytes.
@@ -230,6 +247,14 @@ func pictureSample(x *exprs, a graph.Attrs, stride, y, xx, ch int) int {
 		t := x.op(OpAdd, U, x.op(OpMul, U, v, nk), u(128))
 		inked := x.op(OpSub, U, nk, x.op(OpShr, U, x.op(OpAdd, U, x.op(OpShr, U, t, u(8)), t), u(8)))
 		return x.sel(U, x.op(OpLess, ir.Pred, u(0), x.load(1, u(pw.ink))), inked, v)
+	case graph.PixRGBAPremul:
+		row, px4 := x.op(OpMul, U, y, stride), x.op(OpMul, U, xx, u(4))
+		// sample is a channel's 16 bits, a byte's twice.
+		sample := func(c int) int {
+			off := x.op(OpAdd, U, row, wide(x.op(OpAdd, U, px4, c)))
+			return x.op(OpOr, U, x.op(OpShl, U, byteAt(off), u(8)), byteAt(x.op(OpAdd, U, off, x.load(1, u(pw.wide)))))
+		}
+		return x.unpremul(sample(ch), sample(u(3)))
 	case graph.PixGray8:
 		at = x.op(OpAdd, U, x.op(OpMul, U, y, stride), wide(xx))
 	case graph.PixPaletted8:
