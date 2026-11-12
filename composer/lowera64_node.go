@@ -866,14 +866,29 @@ func (e *a64Lowerer) take(c int) {
 	} else if it >= 0 && k.Nodes[it].Spill > 0 {
 		e.slot(a64.A64StrX, uint8(a64.XZR), k.Nodes[it].Spill)
 	}
-	order, ok := k.takeOrder(c)
+	steps, ok := k.takeOrder(c)
 	if !ok {
-		e.fail("loop %d's takes each write a register another reads", c)
+		e.fail("loop %d's takes each write a register another reads, and every spill slot the stack guard leaves is taken", c)
 		return
 	}
 	zeroed := map[int]bool{}
-	for _, i := range order {
-		cu := l.Cursors[i]
+	for _, st := range steps {
+		cu := l.Cursors[st.I]
+		if st.To == takeUnpark {
+			e.slot(a64.A64LdrX, uint8(e.ptrReg(cu.Buf, cu.Ptr)), st.Slot)
+			continue
+		}
+		if st.To == takePark {
+			if cu.Init > 0 {
+				src, ix := e.ptrReg(cu.Buf, cu.From), e.xr(cu.Init-1)
+				sh := uint8(bits.TrailingZeros(uint(ElemBytes(k.Bufs[cu.Buf]))))
+				e.a.ADDlsl(e.gp(reloadReg), src, ix, sh)
+			} else if src := e.ptrReg(cu.Buf, cu.From); src != e.gp(reloadReg) {
+				a.MOVreg(e.gp(reloadReg), src)
+			}
+			e.slot(a64.A64StrX, uint8(e.gp(reloadReg)), st.Slot)
+			continue
+		}
 		if cu.Take && cu.Ptr > 0 && k.Ptrs[cu.Ptr-1].Off > 0 {
 			if off := k.Ptrs[cu.Ptr-1].Off; !zeroed[off] {
 				a.MOVreg(e.gp(x86.Reg(off-1)), a64.XZR)

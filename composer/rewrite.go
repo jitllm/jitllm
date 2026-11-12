@@ -772,12 +772,36 @@ func (n *Kernel) evalArgs(nd *Node, memo map[int]int, made func(int) bool) []*in
 	return out
 }
 
-// takeOrder is loop c's takes, as indices into its cursors, in the order a
-// lowering emits them; false where they cannot be. The register binder reads
-// a loop's takes as one assignment -- every source (a copy's pointer, an
-// offset base, a sheet's term) read before any copy is written -- so a take
-// whose register another take still reads goes after that take.
-func (n *Kernel) takeOrder(c int) ([]int, bool) {
+// takeTo is where one step of a loop's takes puts a take's value.
+type takeTo uint8
+
+const (
+	// takeOwn writes the take's register.
+	takeOwn takeTo = iota
+	// takePark stores the value in a spill slot: a take not yet emitted
+	// still reads the take's register.
+	takePark
+	// takeUnpark loads a parked value into the take's register, once no take
+	// left reads it.
+	takeUnpark
+)
+
+// takeStep is one step of a loop's takes: take I, an index into the loop's
+// cursors, to where To says, through spill slot Slot where parked.
+type takeStep struct {
+	I, Slot int
+	To      takeTo
+}
+
+// takeOrder is loop c's takes in the steps a lowering emits them; false
+// where they cannot be. The register binder reads a loop's takes as one
+// assignment -- every source (a copy's pointer, an offset base, a sheet's
+// term) read before any copy is written -- so a take whose register another
+// take still reads goes after that take, and where takes each write what
+// another reads, one is parked in a spill slot the binding left free until
+// its register's readers have read it. Every slot taken is the stack guard's
+// limit (spillSlots), the one place it fails.
+func (n *Kernel) takeOrder(c int) ([]takeStep, bool) {
 	l := n.Loops[c]
 	var pend []int
 	for i, cu := range l.Cursors {
@@ -785,30 +809,60 @@ func (n *Kernel) takeOrder(c int) ([]int, bool) {
 			pend = append(pend, i)
 		}
 	}
-	out := make([]int, 0, len(pend))
-	for len(pend) > 0 {
-		pick := -1
-		for j, i := range pend {
-			d := n.takeWrites(l.Cursors[i])
-			free := true
-			for _, o := range pend {
-				if o != i && d > 0 && n.takeReads(l.Cursors[o], d) {
-					free = false
-					break
-				}
-			}
-			if free {
-				pick = j
-				break
+	read := func(i int) bool {
+		d := n.takeWrites(l.Cursors[i])
+		for _, o := range pend {
+			if o != i && d > 0 && n.takeReads(l.Cursors[o], d) {
+				return true
 			}
 		}
+		return false
+	}
+	out := make([]takeStep, 0, len(pend))
+	var parked []takeStep
+	slot := n.spillsUsed()
+	for len(pend) > 0 || len(parked) > 0 {
+		if j := slices.IndexFunc(parked, func(p takeStep) bool { return !read(p.I) }); j >= 0 {
+			out = append(out, takeStep{I: parked[j].I, Slot: parked[j].Slot, To: takeUnpark})
+			parked = slices.Delete(parked, j, j+1)
+			continue
+		}
+		to := takeOwn
+		pick := slices.IndexFunc(pend, func(i int) bool { return !read(i) })
 		if pick < 0 {
-			return nil, false
+			pick = slices.IndexFunc(pend, func(i int) bool { return !n.takeZeroes(l.Cursors[i]) })
+			if slot++; pick < 0 || slot > spillSlots {
+				return nil, false
+			}
+			to = takePark
 		}
-		out = append(out, pend[pick])
+		st := takeStep{I: pend[pick], To: to}
+		if to == takePark {
+			st.Slot = slot
+			parked = append(parked, st)
+		}
+		out = append(out, st)
 		pend = slices.Delete(pend, pick, pick+1)
 	}
 	return out, true
+}
+
+// takeZeroes reports whether take cu only zeroes an offset register.
+func (n *Kernel) takeZeroes(cu Cursor) bool {
+	return cu.Ptr > 0 && n.Ptrs[cu.Ptr-1].Off > 0
+}
+
+// spillsUsed is the highest spill slot the binding gave a value or a copy:
+// the slots past it are free for the whole kernel.
+func (n *Kernel) spillsUsed() int {
+	s := 0
+	for _, nd := range n.Nodes {
+		s = max(s, nd.Spill)
+	}
+	for _, p := range n.Ptrs {
+		s = max(s, p.Spill)
+	}
+	return s
 }
 
 // takeWrites is the register (1 + its number) take cu writes, 0 for a copy
