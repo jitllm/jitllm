@@ -114,6 +114,9 @@ type Instance struct {
 	// bidirAll makes a mixed prompt's every row one bidirectional run
 	// (bidirRuns): a non-causal decoder's prompt with pictures in it.
 	bidirAll bool
+	// spanKeys is the ids spanKey names a mixed prompt's rows with, one
+	// prompt's at a time: every taker copies them (kvCache.note, restoreKey).
+	spanKeys []int32
 	m        *model.Model
 	// pending is the move between devices PrepareMove started and no Commit
 	// or Cancel has ended (moveblocks.go).
