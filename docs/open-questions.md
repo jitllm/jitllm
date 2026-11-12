@@ -157,8 +157,8 @@ reference's pixels and rows at the engine's arithmetic, and run on a card
 - the real checkpoints against their reference: Qwen2.5-VL-3B, HunyuanOCR,
   Kimi-VL (Moonshot's code), Gemma 4, Gemma 3n, Phi-4, Pixtral and LFM2;
   what remains of them is the colour-naming gates over a quadrant picture;
-- the towers against llama.cpp's mtmd, teacher-forced: SmolVLM, Gemma 3,
-  InternVL;
+- SmolVLM's tower against llama.cpp's mtmd (Gemma 3's and InternVL's
+  have one, TestTowerAnswersMatchLlamaMtmd);
 - a tower's encode resumed across a relocation mid-picture.
 
 ## Smaller open items
