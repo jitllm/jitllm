@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/model"
 )
 
@@ -87,11 +88,12 @@ func TestGLM4VVideoMatchesTransformers(t *testing.T) {
 		t.Fatalf("the prompt\n  got  %v\n  want %v", got, g.IDs)
 	}
 	// The violation: each pair's time before its picture, as Qwen3-VL's
-	// processor writes it.
-	v := m.Tower.Video
-	v.StampLast = false
+	// processor writes it -- the stated prompt rewritten.
+	grp := videoGroups(t, m.Tower.Video)
+	body := grp.Body
+	grp.Body = append([]jlm.VideoPiece{body[len(body)-1]}, body[:len(body)-1]...)
 	before, err := m.VideoSpans(frames, g.Video.Fps)
-	v.StampLast = true
+	grp.Body = body
 	if err != nil {
 		t.Fatal(err)
 	}

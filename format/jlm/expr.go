@@ -8,34 +8,40 @@ import "fmt"
 type Fn uint8
 
 const (
-	FnAdd      Fn = iota + 1 // a + b
-	FnSub                    // a - b
-	FnMul                    // a * b
-	FnDiv                    // a / b
-	FnMax                    // max(a, b)
-	FnMin                    // min(a, b)
-	FnExp                    // exp(a)
-	FnSigmoid                // 1 / (1 + exp(-a))
-	FnSoftplus               // log(1 + exp(a))
-	FnSqrt                   // sqrt(a)
-	FnWhere                  // b where a > 0, else c
-	FnLess                   // 1 where a < b, else 0
-	FnFma                    // a*b + c, the product not rounded before the sum
-	FnExpm1                  // exp(a) - 1, exact near zero where the difference cancels
-	FnAbs                    // |a|
-	FnRound                  // a to the nearest integer, halves away from zero
-	FnRecip                  // 1 / a
-	FnTanh                   // tanh(a)
-	FnErf                    // erf(a)
-	FnEqual                  // 1 where a == b, else 0
-	FnLog                    // the natural logarithm of a
+	FnAdd       Fn = iota + 1 // a + b
+	FnSub                     // a - b
+	FnMul                     // a * b
+	FnDiv                     // a / b
+	FnMax                     // max(a, b)
+	FnMin                     // min(a, b)
+	FnExp                     // exp(a)
+	FnSigmoid                 // 1 / (1 + exp(-a))
+	FnSoftplus                // log(1 + exp(a))
+	FnSqrt                    // sqrt(a)
+	FnWhere                   // b where a > 0, else c
+	FnLess                    // 1 where a < b, else 0
+	FnFma                     // a*b + c, the product not rounded before the sum
+	FnExpm1                   // exp(a) - 1, exact near zero where the difference cancels
+	FnAbs                     // |a|
+	FnRound                   // a to the nearest integer, halves away from zero
+	FnRecip                   // 1 / a
+	FnTanh                    // tanh(a)
+	FnErf                     // erf(a)
+	FnEqual                   // 1 where a == b, else 0
+	FnLog                     // the natural logarithm of a
+	FnFloor                   // the greatest integer not above a
+	FnCeil                    // the least integer not below a
+	FnTrunc                   // a's integer part, toward zero
+	FnRoundEven               // a to the nearest integer, halves to the even one
+	FnF32                     // a rounded to binary32
 	numFns
 )
 
 // Arity is how many operands f takes.
 func (f Fn) Arity() int {
 	switch f {
-	case FnExp, FnSigmoid, FnSoftplus, FnSqrt, FnExpm1, FnAbs, FnRound, FnRecip, FnTanh, FnErf, FnLog:
+	case FnExp, FnSigmoid, FnSoftplus, FnSqrt, FnExpm1, FnAbs, FnRound, FnRecip, FnTanh, FnErf, FnLog,
+		FnFloor, FnCeil, FnTrunc, FnRoundEven, FnF32:
 		return 1
 	case FnWhere, FnFma:
 		return 3
@@ -92,6 +98,16 @@ func (f Fn) String() string {
 		return "equal"
 	case FnLog:
 		return "log"
+	case FnFloor:
+		return "floor"
+	case FnCeil:
+		return "ceil"
+	case FnTrunc:
+		return "trunc"
+	case FnRoundEven:
+		return "roundeven"
+	case FnF32:
+		return "f32"
 	}
 	return fmt.Sprintf("fn%d", f)
 }
@@ -162,7 +178,10 @@ func (a Arg) String() string {
 
 // Valid reports why e is not an expression this format defines, nil when it
 // is one.
-func (e *Expr) Valid() error {
+func (e *Expr) Valid() error { return e.ValidOver(MaxExprIn) }
+
+// ValidOver is Valid for an expression of in operands.
+func (e *Expr) ValidOver(in int) error {
 	if len(e.Terms) == 0 {
 		return fmt.Errorf("jlm: an expression of no terms")
 	}
@@ -187,7 +206,7 @@ func (e *Expr) Valid() error {
 			case j >= n && a.Kind != ArgNone:
 				return fmt.Errorf("jlm: term %d's %v takes %d operands, not %d", k, t.Fn, n, j+1)
 			case j >= n:
-			case a.Kind == ArgIn && a.Index >= MaxExprIn:
+			case a.Kind == ArgIn && int(a.Index) >= in:
 				return fmt.Errorf("jlm: term %d reads operand %d", k, a.Index)
 			case a.Kind == ArgTerm && int(a.Index) >= k:
 				return fmt.Errorf("jlm: term %d reads term %d, not an earlier one", k, a.Index)

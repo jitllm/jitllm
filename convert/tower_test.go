@@ -1,6 +1,7 @@
 package convert
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/model"
 	"github.com/jitllm/jitllm/tok"
 )
 
@@ -278,9 +280,17 @@ func TestInternVLStatesItsTower(t *testing.T) {
 		s.Mark != "<image>\n" || s.AfterText != "\n" {
 		t.Errorf("the picture's span is %+v, want <img> (%d) and </img> (%d) for the chat's \"<image>\"", s, img, end)
 	}
-	if vid := tw.Video; vid == nil || !vid.EveryFrame || !vid.Whole || !vid.StampIndex || vid.StampBefore != "Frame" ||
-		vid.StampAfter != ": " || vid.Between != "\n" || len(vid.Before) != 0 || len(vid.After) != 0 {
-		t.Errorf("the video reads %+v, want every frame whole, \"Frame{n}: \" before each and a line between", vid)
+	vid := tw.Video
+	if vid == nil || !vid.AsPictures() {
+		t.Fatalf("the video reads %+v, want every frame as a picture", vid)
+	}
+	s, err := model.SampleVideo(vid, 3, 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := fmt.Sprintf("Frame1: [%d]{0}[%d]\nFrame2: [%d]{1}[%d]\nFrame3: [%d]{2}[%d]", img, end, img, end, img, end)
+	if got := layoutOf(t, vid, s); !reflect.DeepEqual(s.Frames, []int{0, 1, 2}) || got != want {
+		t.Errorf("a video of three frames samples %v and reads %q, want every frame and %q", s.Frames, got, want)
 	}
 }
 

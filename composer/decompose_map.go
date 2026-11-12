@@ -138,6 +138,17 @@ func (x *exprs) mapFn(f graph.MapFn, a []int, exact bool) (int, error) {
 		return x.equal(a[0], a[1], false), nil
 	case graph.MapLog:
 		return x.log(a[0]), nil
+	case graph.MapFloor:
+		return x.floor(a[0]), nil
+	case graph.MapCeil:
+		return x.neg(x.floor(x.neg(a[0]))), nil
+	case graph.MapTrunc:
+		return x.trunc(a[0]), nil
+	case graph.MapRoundEven:
+		return x.roundEven(a[0]), nil
+	case graph.MapF32:
+		// The device's arithmetic is binary32.
+		return a[0], nil
 	}
 	return 0, fmt.Errorf("no formula for the map %v", f)
 }

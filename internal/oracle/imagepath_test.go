@@ -29,7 +29,10 @@ func imagePathAllowed() map[string]string {
 		"decide.go:answer":         "a rating question's levels, i/(r-1) for its r answers, once a question: the readout's parameters",
 		"tower.go:lowerValuesWith": "a tower op's attention scale, 1/sqrt of its head width, once an op: the graph's attribute",
 		"tower.go:sliceGrid":       "MiniCPM-V's slice grid, the factor pairs' log aspects against the picture's: geometry from its sizes",
-		"video.go:VideoPlan":       "a video's sampled frames, numpy's linspace over its count: geometry from its frames and rate",
+		"video.go:SampleVideo":     "a video's sampled frames, its stated count and indices evaluated over its frames and rate: geometry from its frames and rate",
+		"video.go:evalSize":        "a video's stated sizes, count, indices, stride and times evaluated over its frames, rate and sides: geometry",
+		"video.go:formatValue":     "a value the video's prompt writes, rounded to its stated decimals: text the prompt prints",
+		"video.go:pieces":          "the video's prompt pieces, each value evaluated and written: text the prompt prints",
 	}
 }
 

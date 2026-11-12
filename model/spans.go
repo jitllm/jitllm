@@ -39,8 +39,8 @@ type Span struct {
 	// to FrameW x FrameH (Model.VideoSpans).
 	Frame          image.Image
 	FrameW, FrameH int
-	// Whole is a video's frame read whole (jlm.Video.Whole): the tower runs
-	// only the picture's last square (TowerGraphs.LastSquare).
+	// Whole is a video's frame read as a picture (jlm.Video.AsPictures): the
+	// tower runs only the picture's last square (TowerGraphs.LastSquare).
 	Whole bool
 	// Clip is a voice clip whose rows the prefill encodes through the model's
 	// audio tower, ClipRows of them, when Embd is nil (Model.ClipSpan): the

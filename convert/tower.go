@@ -486,7 +486,13 @@ func internvlTower(s *jlm.Source) (*jlm.Tower, error) {
 	// (scripts/internvlvideogold.py); in the prompt "Frame{n}: " and the
 	// frame's span, a line between one frame and the next
 	// (InternVLProcessor.replace_video_token).
-	t.Video = &jlm.Video{EveryFrame: true, Whole: true, StampIndex: true, StampBefore: "Frame", StampAfter: ": ", Between: "\n"}
+	var num1 sizes
+	num1.add(num1.op(jlm.VideoGroup), num(1))
+	count, index := everyFrame()
+	t.Video = &jlm.Video{Count: count, Index: index, Group: 1, Sized: opExpr(0),
+		Prompt: []jlm.VideoPiece{{Kind: jlm.PieceGroups, Between: []jlm.VideoPiece{textPiece("\n")},
+			Body: append([]jlm.VideoPiece{textPiece("Frame"), valuePiece(num1.expr(), jlm.ValueFormat{Kind: jlm.FormatDecimal}),
+				textPiece(": ")}, pictureSpan(&t.Span)...)}}}
 	if err := t.Valid(); err != nil {
 		return nil, fmt.Errorf("convert: internvl: %w", err)
 	}
@@ -685,7 +691,7 @@ func qwenVLTower(s *jlm.Source, kind qwenVLKind) (*jlm.Tower, error) {
 		t.Entry.Ops = append(t.Entry.Ops, pos, jlm.TowerOp{Code: jlm.TOpAdd, In: []uint16{2, 3}})
 		t.Entry.Out = 4
 		if has[jlm.RoleVPatchEmbd2] {
-			if t.Video, err = qwen3vlVideo(s, int32(v.PatchSize), merge, bias(jlm.RoleVPatchEmbd, jlm.RoleVPatchBias), pos); err != nil {
+			if t.Video, err = qwen3vlVideo(s, &t.Span, int32(v.PatchSize), merge, bias(jlm.RoleVPatchEmbd, jlm.RoleVPatchBias), pos); err != nil {
 				return nil, err
 			}
 		}
@@ -723,8 +729,17 @@ const qwen25vlTokensPerSecond = 2
 // (Qwen2.5-VL).
 func qwen2vlVideo(s *jlm.Source, kind qwenVLKind, patch, merge int32, embd []jlm.Role) (*jlm.Video, error) {
 	v := s.Vision
+	count, index := everyFrame()
+	// The pairs a position apart on the temporal axis; Qwen2.5-VL's
+	// tokens_per_second times the whole seconds a pair takes, int(2 / R).
+	stride := constant(1)
+	if kind == qwen25VL {
+		var e sizes
+		e.mul(num(qwen25vlTokensPerSecond), e.fn(jlm.FnTrunc, e.div(num(2), e.op(jlm.VideoRate))))
+		stride = e.expr()
+	}
 	vid := &jlm.Video{
-		DefaultFps: qwen2vlVideoDefaultFps, EveryFrame: true, Joined: true,
+		DefaultFps: qwen2vlVideoDefaultFps, Count: count, Index: index, Group: 2, Sized: opExpr(0), Stride: &stride,
 		Pre: []jlm.PreStep{
 			{Kind: jlm.PreVideoResize, Ints: []int32{patch * merge, qwen2vlVideoMinPixels, qwen2vlVideoMaxPixels,
 				int32(jlm.FilterPILBicubic), int32(jlm.PrecTorch), 2, 1}},
@@ -740,16 +755,15 @@ func qwen2vlVideo(s *jlm.Source, kind qwenVLKind, patch, merge int32, embd []jlm
 			{Code: jlm.TOpAdd, In: []uint16{5, 6}},
 		}},
 	}
-	if kind == qwen25VL {
-		vid.PerSecond = qwen25vlTokensPerSecond
-	}
-	var err error
-	if vid.Before, err = markerIDs(s, "<|vision_start|>"); err != nil {
+	start, err := markerIDs(s, "<|vision_start|>")
+	if err != nil {
 		return nil, err
 	}
-	if vid.After, err = markerIDs(s, "<|vision_end|>"); err != nil {
+	end, err := markerIDs(s, "<|vision_end|>")
+	if err != nil {
 		return nil, err
 	}
+	vid.Prompt = []jlm.VideoPiece{idsPiece(start), {Kind: jlm.PieceGroups, Body: []jlm.VideoPiece{spanPiece()}}, idsPiece(end)}
 	if err := vid.Valid(); err != nil {
 		return nil, fmt.Errorf("convert: qwen2vl: %w", err)
 	}
@@ -777,11 +791,23 @@ const (
 // their sum, the frames' difference against the second plane -- with the
 // picture's position table; in the prompt "<|vision_start|>", then each
 // pair's "<t seconds>" and its picture span, then "<|vision_end|>".
-func qwen3vlVideo(s *jlm.Source, patch, merge int32, embd []jlm.Role, pos jlm.TowerOp) (*jlm.Video, error) {
+func qwen3vlVideo(s *jlm.Source, span *jlm.TowerSpan, patch, merge int32, embd []jlm.Role, pos jlm.TowerOp) (*jlm.Video, error) {
 	v := s.Vision
+	// sample_frames: min(max(int(N / R * fps), 4), 768, N) frames at
+	// torch.linspace(0, N-1, K) rounded half to even, the last at N-1.
+	var c sizes
+	k := c.fn(jlm.FnTrunc, c.mul(c.div(c.op(jlm.VideoN), c.op(jlm.VideoRate)), num(qwen3vlVideoFps)))
+	c.min(c.min(c.max(k, num(qwen3vlVideoMinFrames)), num(qwen3vlVideoMaxFrames)), c.op(jlm.VideoN))
+	var ix sizes
+	last := ix.sub(ix.op(jlm.VideoN), num(1))
+	step := ix.mul(ix.op(jlm.VideoAt), ix.div(last, ix.sub(ix.op(jlm.VideoK), num(1))))
+	ix.fn(jlm.FnRoundEven, ix.where(ix.less(ix.op(jlm.VideoAt), ix.sub(ix.op(jlm.VideoK), num(1))), step, last))
+	// A pair's time is the mean of its frames' seconds, to one place.
+	var mean sizes
+	mean.div(mean.add(mean.op(jlm.VideoT0), mean.op(jlm.VideoT1)), num(2))
 	vid := &jlm.Video{
-		Fps: qwen3vlVideoFps, DefaultFps: qwen3vlVideoDefaultFps,
-		MinFrames: qwen3vlVideoMinFrames, MaxFrames: qwen3vlVideoMaxFrames,
+		DefaultFps: qwen3vlVideoDefaultFps, Count: c.expr(), Index: ix.expr(), MaxFrames: qwen3vlVideoMaxFrames,
+		Group: 2, Sized: opExpr(0),
 		Pre: []jlm.PreStep{
 			{Kind: jlm.PreVideoResize, Ints: []int32{patch * merge, qwen3vlVideoMinPixels, qwen3vlVideoMaxPixels,
 				int32(jlm.FilterPILBicubic), int32(jlm.PrecTorch), 2}},
@@ -798,15 +824,18 @@ func qwen3vlVideo(s *jlm.Source, patch, merge int32, embd []jlm.Role, pos jlm.To
 			pos,
 			{Code: jlm.TOpAdd, In: []uint16{7, 8}},
 		}},
-		StampBefore: "<", StampAfter: " seconds>", StampDigits: 1,
 	}
-	var err error
-	if vid.Before, err = markerIDs(s, "<|vision_start|>"); err != nil {
+	start, err := markerIDs(s, "<|vision_start|>")
+	if err != nil {
 		return nil, err
 	}
-	if vid.After, err = markerIDs(s, "<|vision_end|>"); err != nil {
+	end, err := markerIDs(s, "<|vision_end|>")
+	if err != nil {
 		return nil, err
 	}
+	body := append([]jlm.VideoPiece{textPiece("<"), valuePiece(mean.expr(), jlm.ValueFormat{Kind: jlm.FormatDecimal, Digits: 1}),
+		textPiece(" seconds>")}, pictureSpan(span)...)
+	vid.Prompt = []jlm.VideoPiece{idsPiece(start), {Kind: jlm.PieceGroups, Body: body}, idsPiece(end)}
 	if err := vid.Valid(); err != nil {
 		return nil, fmt.Errorf("convert: qwen3vl: %w", err)
 	}
@@ -953,9 +982,33 @@ const (
 // whole seconds, then <|end_of_video|> (Glm4vProcessor.replace_video_token).
 func glm4vVideo(s *jlm.Source, pic *jlm.Tower, patch, merge int32, embd []jlm.Role) (*jlm.Video, error) {
 	v := s.Vision
+	// sample_frames: over d = round((N-1) / R) + 1 seconds, rounded half to
+	// even, within MaxSeconds max(floor(d * fps), 1) frames at
+	// ceil(i * R / fps); past it MaxSeconds * fps frames at ceil(t * R) for
+	// t linspace(0, d) seconds, or every frame where that is as many; each
+	// held to the last frame and taken once.
+	const most = glm4vVideoFps * glm4vVideoMaxSeconds
+	glmD := func(e *sizes) jlm.Arg {
+		return e.add(e.fn(jlm.FnRoundEven, e.div(e.sub(e.op(jlm.VideoN), num(1)), e.op(jlm.VideoRate))), num(1))
+	}
+	var c sizes
+	d := glmD(&c)
+	past := c.less(num(glm4vVideoMaxSeconds), d)
+	within := c.max(c.fn(jlm.FnFloor, c.mul(d, num(glm4vVideoFps))), num(1))
+	c.where(past, c.where(c.less(num(most), c.op(jlm.VideoN)), num(most), c.op(jlm.VideoN)), within)
+	var ix sizes
+	d = glmD(&ix)
+	lastFrame := ix.sub(ix.op(jlm.VideoN), num(1))
+	steps := ix.min(lastFrame, ix.fn(jlm.FnCeil, ix.div(ix.mul(ix.op(jlm.VideoAt), ix.op(jlm.VideoRate)), num(glm4vVideoFps))))
+	k1 := ix.sub(ix.op(jlm.VideoK), num(1))
+	secs := ix.where(ix.less(ix.op(jlm.VideoAt), k1), ix.mul(ix.op(jlm.VideoAt), ix.div(d, k1)), d)
+	spread := ix.where(ix.less(num(most), ix.op(jlm.VideoN)),
+		ix.min(lastFrame, ix.fn(jlm.FnCeil, ix.mul(secs, ix.op(jlm.VideoRate)))), ix.op(jlm.VideoAt))
+	ix.where(ix.less(num(glm4vVideoMaxSeconds), d), spread, steps)
 	vid := &jlm.Video{
-		Fps: glm4vVideoFps, DefaultFps: glm4vVideoDefaultFps, MinFrames: 1, MaxFrames: glm4vVideoFps * glm4vVideoMaxSeconds,
-		Steps: true, MaxSeconds: glm4vVideoMaxSeconds, StampFirst: true, StampLast: true,
+		DefaultFps: glm4vVideoDefaultFps, Count: c.expr(), Index: ix.expr(), Once: true, MaxFrames: most,
+		// The repeated frame is sized with the rest.
+		Group: 2, Sized: opExpr(1),
 		Pre: []jlm.PreStep{
 			{Kind: jlm.PreVideoResize, Ints: []int32{patch * merge, glm4vVideoMinPixels, glm4vVideoMaxPixels,
 				int32(jlm.FilterPILBicubic), int32(jlm.PrecTorch), 2}},
@@ -977,13 +1030,17 @@ func glm4vVideo(s *jlm.Source, pic *jlm.Tower, patch, merge int32, embd []jlm.Ro
 	if pos := vid.Entry.Ops[7]; pos.Code != jlm.TOpPosResample {
 		return nil, fmt.Errorf("convert: glm4v: the picture's entry adds no resampled table where its video's would")
 	}
-	var err error
-	if vid.Before, err = markerIDs(s, "<|begin_of_video|>"); err != nil {
+	start, err := markerIDs(s, "<|begin_of_video|>")
+	if err != nil {
 		return nil, err
 	}
-	if vid.After, err = markerIDs(s, "<|end_of_video|>"); err != nil {
+	end, err := markerIDs(s, "<|end_of_video|>")
+	if err != nil {
 		return nil, err
 	}
+	// Each pair as a picture, then its first frame's whole seconds.
+	body := append(pictureSpan(&pic.Span), valuePiece(opExpr(jlm.VideoT0), jlm.ValueFormat{Kind: jlm.FormatDecimal, Trunc: true}))
+	vid.Prompt = []jlm.VideoPiece{idsPiece(start), {Kind: jlm.PieceGroups, Body: body}, idsPiece(end)}
 	if err := vid.Valid(); err != nil {
 		return nil, fmt.Errorf("convert: glm4v: %w", err)
 	}

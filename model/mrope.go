@@ -35,10 +35,10 @@ type ImageGrid struct {
 	Line, Ends int
 	// Frame and Frames, where Frames is set, are the frames of the grid a
 	// span holds, from frame Frame: a video whose pairs are spans of their
-	// own and one grid together (jlm.Video.Joined). Zero Frames is all T.
+	// own and one grid together (jlm.Video.Stride). Zero Frames is all T.
 	Frame, Frames int
 	// Stride is the positions the temporal axis steps from one frame to the
-	// next (jlm.Video.PerSecond); a grid of one frame reads none.
+	// next, the video's stated stride; a grid of one frame reads none.
 	Stride int
 }
 

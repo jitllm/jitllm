@@ -1,6 +1,9 @@
 package jlm
 
-import "fmt"
+import (
+	"fmt"
+	"math"
+)
 
 // PreVideoResize resamples a video's frames to one size of the video's own,
 // each side a multiple of Ints[0] pixels: a frame a side shorter than Ints[0]
@@ -16,96 +19,155 @@ import "fmt"
 // video smart_resize, the picture's).
 const PreVideoResize PreKind = 16
 
-// Video is how a tower reads a video (Tower.Video): its frames sampled as
-// Fps, DefaultFps, MinFrames and MaxFrames say, sized and normalised as Pre
-// states, each two consecutive frames one picture of the tower -- Entry over
-// the first frame's pixels (value 0) and the second's (value 1), the tower's
-// blocks and head over its rows -- an odd count's last frame repeated. In
-// the prompt a video is Before, then for each pair its time and the tower's
-// span, then After; or, Joined, Before, every pair's rows, then After.
+// Video is how a tower reads a video (Tower.Video; docs/design/
+// video-statement.md): which frames it samples, how many frames one picture
+// of the tower reads, how they are sized, and what the prompt writes around
+// them -- every one stated, none a processor's kind.
 type Video struct {
-	// A video of n frames at rate r (DefaultFps where the request states
-	// none) samples int(n / r * Fps) frames, held to MinFrames and MaxFrames
-	// and then to n, at linspace(0, n-1, count) rounded half to even
-	// (numpy's).
-	Fps, DefaultFps      float32
-	MinFrames, MaxFrames int32
-	// Pre is a PreVideoResize, then a PreNormalize or a PreNormalizeBF16.
+	// DefaultFps is the rate a request that states none is read at, 0
+	// where nothing the video states reads the rate.
+	DefaultFps float32
+	// Count is how many frames are sampled, of the video's frames N and
+	// rate R (operands VideoN, VideoRate); Index is sampled frame i's index,
+	// of N, R, the count K and i (VideoK, VideoAt), truncated toward zero
+	// and held to [0, N-1]. Once drops a frame already sampled. MaxFrames
+	// is the most Count gives, 0 for no bound (the frames then sized
+	// alone).
+	Count, Index Expr
+	Once         bool
+	MaxFrames    int32
+	// Group is the frames one picture of the tower reads, an odd count's
+	// last repeated to fill the last; Sized is the count the frames' resize
+	// reads, of the sampled count K and the count filled to whole groups
+	// (operands 0 and 1).
+	Group int32
+	Sized Expr
+	// Pre and Entry are the frames' own resize and entry, a group of two
+	// frames read by the entry as the conv3d's two planes; neither stated,
+	// each frame (a group of one) is read as a picture is, at the picture's
+	// last square.
 	Pre   []PreStep
 	Entry Program
-	// A pair's time is the mean of its frames' (index / r) in seconds,
-	// written to StampDigits places between StampBefore and StampAfter.
-	StampBefore, StampAfter string
-	StampDigits             int32
-	Before, After           []int32
-	// Joined is a video one grid of its pairs by the merged rows and
-	// columns, written as Before, the pairs' rows and After with no time:
-	// the pairs a frame apart on the text model's temporal axis, or,
-	// PerSecond, PerSecond * int(2 / r) apart (transformers' get_rope_index,
-	// tokens_per_second times the seconds a pair takes, truncated).
-	Joined    bool
-	PerSecond int32
-	// EveryFrame reads each of a video's frames, none sampled
-	// (do_sample_frames false): Fps, MinFrames and MaxFrames zero, each
-	// frame resized alone.
-	EveryFrame bool
-	// Steps samples a video of n frames at rate r in whole steps of r / Fps
-	// (GLM-4V's sample_frames): over its d = round((n-1) / r) + 1 seconds,
-	// rounded half to even, max(floor(d * Fps), 1) frames at ceil(i * r /
-	// Fps); past MaxSeconds, int(MaxSeconds * Fps) frames at ceil(t * r)
-	// for t linspace(0, d), or every frame where that is as many; each
-	// clamped to the last frame and taken once, an odd count's last
-	// repeated before the frames are sized. MaxFrames is the most it
-	// samples.
-	Steps      bool
-	MaxSeconds int32
-	// StampFirst writes a pair's time as its first frame's, cut to
-	// StampDigits places rather than the mean of its frames' rounded; and
-	// StampLast writes it after the pair's span rather than before it.
-	StampFirst, StampLast bool
-	// Whole reads each frame alone as a picture of the tower's own, its last
-	// square: the whole frame at the size the picture's last square takes
-	// (a tiled tower's thumbnail), through the picture's resize, entry,
-	// blocks and head; Pre and Entry state nothing.
-	Whole bool
-	// StampIndex writes a frame's number from 1 in place of its time; and
-	// Between is the text between one frame's span and the next's.
-	StampIndex bool
-	Between    string
+	// Stride, where stated, makes the groups one grid, group j at j times
+	// its value on the text model's temporal axis, of N and R; where not,
+	// each group is a picture span of its own.
+	Stride *Expr
+	// Prompt is what the prompt writes for the video, in order.
+	Prompt []VideoPiece
+}
+
+// The operands of a video's expressions: Count reads VideoN and VideoRate,
+// Index those and VideoK, Count's value, and VideoAt; a prompt value all of
+// them but VideoAt, VideoK the frames sampled once Once has dropped its,
+// and of the group it is in its number and its first and last frames'
+// indices and seconds (0 outside a group), and the video's seconds N / R.
+const (
+	VideoN = iota
+	VideoRate
+	VideoK
+	VideoAt
+	VideoGroup
+	VideoF0
+	VideoT0
+	VideoF1
+	VideoT1
+	VideoSeconds
+	VideoOperands
+)
+
+// PieceKind is what a video's prompt piece writes.
+type PieceKind uint8
+
+const (
+	// PieceIDs is its IDs, as stated: a marker no text encodes to.
+	PieceIDs PieceKind = iota + 1
+	// PieceText is its Text, encoded with the text beside it.
+	PieceText
+	// PieceValue is Value's value as Format writes it, encoded as text.
+	PieceValue
+	// PieceGroups is Body once per group, Between before every one but the
+	// first.
+	PieceGroups
+	// PieceSpan is the group's rows.
+	PieceSpan
+)
+
+// VideoPiece is one piece of a video's prompt (Video.Prompt).
+type VideoPiece struct {
+	Kind    PieceKind
+	IDs     []int32
+	Text    string
+	Value   Expr
+	Format  ValueFormat
+	Body    []VideoPiece
+	Between []VideoPiece
+}
+
+// FormatKind is how a value is written.
+type FormatKind uint8
+
+const (
+	// FormatDecimal writes it to Digits places: correctly rounded, or,
+	// Trunc, cut to them first.
+	FormatDecimal FormatKind = iota + 1
+	// FormatClock writes it as a count of seconds: Clock's fields (hours,
+	// minutes, seconds), each of a width w > 0 written as an integer of w
+	// digits at least, Sep between them, a field of width 0 not written and
+	// its count carried into the one below; the first written field takes
+	// all of the count above it, but where Days states its words (for one
+	// day, for several) the days are written before the hours, the words
+	// after their number, a day of none not written. The seconds are the
+	// count's integer part.
+	FormatClock
+	// FormatTable writes Strings[int(value)].
+	FormatTable
+)
+
+// ValueFormat is how a prompt value is written (VideoPiece.Format).
+type ValueFormat struct {
+	Kind    FormatKind
+	Digits  int32
+	Trunc   bool
+	Clock   [3]int32
+	Days    [2]string
+	Sep     string
+	Strings []string
 }
 
 // Valid says the record is one this build can read.
 func (v *Video) Valid() error {
-	sampled := v.Fps > 0 && v.MinFrames >= 1 && v.MaxFrames >= v.MinFrames
-	if v.EveryFrame {
-		sampled = v.Fps == 0 && v.MinFrames == 0 && v.MaxFrames == 0
+	if !(v.DefaultFps >= 0) || v.MaxFrames < 0 || v.Group < 1 || v.Group > 2 {
+		return fmt.Errorf("jlm: the video is read at %v frames a second where unstated, at most %d frames, %d to a picture",
+			v.DefaultFps, v.MaxFrames, v.Group)
 	}
-	// The rate is read where frames are sampled or stamped with a time.
-	timed := !v.EveryFrame || !v.StampIndex
-	if !sampled || timed && !(v.DefaultFps > 0) || v.DefaultFps < 0 || v.StampDigits < 0 || v.StampDigits > 9 {
-		return fmt.Errorf("jlm: the video samples %v frames a second (%v unstated), %d to %d, its times to %d places",
-			v.Fps, v.DefaultFps, v.MinFrames, v.MaxFrames, v.StampDigits)
+	for _, e := range []struct {
+		name string
+		x    *Expr
+		in   int
+	}{{"count", &v.Count, VideoK}, {"index", &v.Index, VideoAt + 1}, {"sized count", &v.Sized, 2}} {
+		if err := e.x.ValidOver(e.in); err != nil {
+			return fmt.Errorf("jlm: the video's %s: %w", e.name, err)
+		}
+		if err := scalar(e.x); err != nil {
+			return fmt.Errorf("jlm: the video's %s: %w", e.name, err)
+		}
 	}
-	if v.PerSecond < 0 || v.PerSecond > 0 && !v.Joined {
-		return fmt.Errorf("jlm: a video of %d positions a second whose pairs are not one grid", v.PerSecond)
+	if v.Stride != nil {
+		if err := v.Stride.ValidOver(VideoRate + 1); err != nil {
+			return fmt.Errorf("jlm: the video's stride: %w", err)
+		}
+		if err := scalar(v.Stride); err != nil {
+			return fmt.Errorf("jlm: the video's stride: %w", err)
+		}
 	}
-	if v.Steps && (v.EveryFrame || v.MaxSeconds < 1) || !v.Steps && v.MaxSeconds != 0 {
-		return fmt.Errorf("jlm: a video sampled in steps %v up to %d seconds, every frame %v", v.Steps, v.MaxSeconds, v.EveryFrame)
+	if err := piecesValid(v.Prompt, false); err != nil {
+		return err
 	}
-	if v.Joined && (v.StampFirst || v.StampLast) {
-		return fmt.Errorf("jlm: a video of one grid writes no time to place")
-	}
-	if v.StampIndex && v.StampFirst {
-		return fmt.Errorf("jlm: a video that writes a frame's number and its first time")
-	}
-	if v.Whole {
-		if len(v.Pre) != 0 || v.Entry.NIn != 0 || len(v.Entry.Ops) != 0 || v.Joined {
-			return fmt.Errorf("jlm: a video of whole frames that states a resize, an entry or one grid of its own")
+	if len(v.Pre) == 0 && v.Entry.NIn == 0 && len(v.Entry.Ops) == 0 {
+		if v.Group != 1 || v.Stride != nil {
+			return fmt.Errorf("jlm: a video read as pictures of %d frames, one grid %v", v.Group, v.Stride != nil)
 		}
 		return nil
-	}
-	if v.StampIndex || v.Between != "" {
-		return fmt.Errorf("jlm: a video of pairs numbered or parted as whole frames are")
 	}
 	if len(v.Pre) != 2 || v.Pre[0].Kind != PreVideoResize ||
 		v.Pre[1].Kind != PreNormalize && v.Pre[1].Kind != PreNormalizeBF16 || len(v.Pre[1].Floats) != 6 {
@@ -115,21 +177,130 @@ func (v *Video) Valid() error {
 		!resizes(Filter(s[3]), Precision(s[4])) || s[5] < 1 || len(s) == 7 && s[6] != 0 && s[6] != 1 {
 		return fmt.Errorf("jlm: the video resizes with %v", s)
 	}
-	if v.EveryFrame && (len(v.Pre[0].Ints) < 7 || v.Pre[0].Ints[6] != 1) {
-		// Every frame of a resize over the count shrinks without a floor.
-		return fmt.Errorf("jlm: a video of every frame resized over their count")
+	if alone := len(v.Pre[0].Ints) == 7 && v.Pre[0].Ints[6] == 1; !alone && v.MaxFrames < 1 {
+		// The resize shares the area among the most frames a video samples.
+		return fmt.Errorf("jlm: a video whose frames are sized together, of no most frames")
 	}
-	if v.Entry.NIn != 2 || len(v.Entry.Ops) == 0 || v.Entry.Ops[0].Code != TOpPatchify {
-		return fmt.Errorf("jlm: the video's entry reads %d frames and does not start with their patches", v.Entry.NIn)
+	if v.Group != 2 || v.Entry.NIn != 2 || len(v.Entry.Ops) == 0 || v.Entry.Ops[0].Code != TOpPatchify {
+		return fmt.Errorf("jlm: the video's entry reads %d frames of a group of %d and does not start with their patches",
+			v.Entry.NIn, v.Group)
 	}
 	return v.Entry.valid("video entry")
 }
 
+// AsPictures reports a video whose frames are each read as a picture is: it
+// states no resize or entry of its own.
+func (v *Video) AsPictures() bool {
+	return len(v.Pre) == 0 && v.Entry.NIn == 0 && len(v.Entry.Ops) == 0
+}
+
+// scalar refuses an expression of sizes that reads a stored vector, the
+// row's width or a reduction: it is a number of the video, not of a row.
+func scalar(e *Expr) error {
+	for k, t := range e.Terms {
+		if t.Reduce {
+			return fmt.Errorf("jlm: term %d reduces a row", k)
+		}
+		for _, a := range t.Args {
+			if a.Kind == ArgStored || a.Kind == ArgWidth {
+				return fmt.Errorf("jlm: term %d reads a row's %d operand", k, a.Kind)
+			}
+		}
+	}
+	return nil
+}
+
+func piecesValid(ps []VideoPiece, inGroup bool) error {
+	for i, p := range ps {
+		switch p.Kind {
+		case PieceIDs:
+			if len(p.IDs) == 0 {
+				return fmt.Errorf("jlm: the video's piece %d writes no ids", i)
+			}
+		case PieceText:
+			if p.Text == "" {
+				return fmt.Errorf("jlm: the video's piece %d writes no text", i)
+			}
+		case PieceValue:
+			if err := p.Value.ValidOver(VideoOperands); err != nil {
+				return fmt.Errorf("jlm: the video's piece %d: %w", i, err)
+			}
+			if err := scalar(&p.Value); err != nil {
+				return fmt.Errorf("jlm: the video's piece %d: %w", i, err)
+			}
+			if err := p.Format.valid(); err != nil {
+				return fmt.Errorf("jlm: the video's piece %d: %w", i, err)
+			}
+		case PieceGroups:
+			if inGroup {
+				return fmt.Errorf("jlm: the video's piece %d repeats the groups within a group", i)
+			}
+			if err := piecesValid(p.Body, true); err != nil {
+				return err
+			}
+			if err := piecesValid(p.Between, true); err != nil {
+				return err
+			}
+		case PieceSpan:
+			if !inGroup {
+				return fmt.Errorf("jlm: the video's piece %d is a group's rows outside its groups", i)
+			}
+		default:
+			return fmt.Errorf("jlm: the video's piece %d is of kind %d, which this build does not read", i, p.Kind)
+		}
+	}
+	return nil
+}
+
+func (f *ValueFormat) valid() error {
+	switch f.Kind {
+	case FormatDecimal:
+		if f.Digits < 0 || f.Digits > 9 {
+			return fmt.Errorf("jlm: a value written to %d places", f.Digits)
+		}
+	case FormatClock:
+		any := false
+		for _, w := range f.Clock {
+			if w < 0 || w > 4 {
+				return fmt.Errorf("jlm: a clock of fields %v", f.Clock)
+			}
+			any = any || w > 0
+		}
+		if !any || (f.Days[0] == "") != (f.Days[1] == "") || f.Days[0] != "" && f.Clock[0] == 0 {
+			return fmt.Errorf("jlm: a clock of fields %v and days %q", f.Clock, f.Days)
+		}
+	case FormatTable:
+		if len(f.Strings) == 0 {
+			return fmt.Errorf("jlm: a value written by a table of no strings")
+		}
+	default:
+		return fmt.Errorf("jlm: a value written by format %d, which this build does not read", f.Kind)
+	}
+	return nil
+}
+
+// videoRecord is the record's revision: the word before it is a NaN where
+// the record of a build before it read the frame rate, so that build's
+// Valid refuses it rather than read it.
+const videoRecord = 2
+
 func encodeVideo(w *wbuf, v *Video) {
-	w.f32(v.Fps)
+	w.u32(math.Float32bits(float32(math.NaN())))
+	w.u32(videoRecord)
 	w.f32(v.DefaultFps)
-	w.i32(v.MinFrames)
+	encodeExpr(w, &v.Count)
+	encodeExpr(w, &v.Index)
+	var fl uint8
+	if v.Once {
+		fl |= 1
+	}
+	if v.Stride != nil {
+		fl |= 2
+	}
+	w.u8(fl)
 	w.i32(v.MaxFrames)
+	w.i32(v.Group)
+	encodeExpr(w, &v.Sized)
 	w.u32(uint32(len(v.Pre)))
 	for _, s := range v.Pre {
 		w.u16(uint16(s.Kind))
@@ -143,55 +314,67 @@ func encodeVideo(w *wbuf, v *Video) {
 		}
 	}
 	encodeProgram(w, &v.Entry)
-	w.str(v.StampBefore)
-	w.str(v.StampAfter)
-	w.i32(v.StampDigits)
-	for _, ids := range [][]int32{v.Before, v.After} {
-		w.u32(uint32(len(ids)))
-		for _, id := range ids {
-			w.i32(id)
-		}
+	if v.Stride != nil {
+		encodeExpr(w, v.Stride)
 	}
-	// The tail, written only where it states something: a video of a
-	// stamp a pair is the bytes it was.
-	var f uint32
-	for _, x := range []struct {
-		on   bool
-		flag uint32
-	}{{v.Joined, videoJoined}, {v.EveryFrame, videoEveryFrame}, {v.Steps, videoSteps},
-		{v.StampFirst, videoStampFirst}, {v.StampLast, videoStampLast}, {v.Whole, videoWhole},
-		{v.StampIndex, videoStampIndex}, {v.Between != "", videoBetween}} {
-		if x.on {
-			f |= x.flag
-		}
-	}
-	if f != 0 || v.PerSecond != 0 {
-		w.u32(f)
-		w.i32(v.PerSecond)
-		if v.Steps {
-			w.i32(v.MaxSeconds)
-		}
-		if v.Between != "" {
-			w.str(v.Between)
+	encodePieces(w, v.Prompt)
+}
+
+func encodePieces(w *wbuf, ps []VideoPiece) {
+	w.u32(uint32(len(ps)))
+	for _, p := range ps {
+		w.u8(uint8(p.Kind))
+		switch p.Kind {
+		case PieceIDs:
+			w.u32(uint32(len(p.IDs)))
+			for _, id := range p.IDs {
+				w.i32(id)
+			}
+		case PieceText:
+			w.str(p.Text)
+		case PieceValue:
+			encodeExpr(w, &p.Value)
+			f := &p.Format
+			w.u8(uint8(f.Kind))
+			w.i32(f.Digits)
+			var tr uint8
+			if f.Trunc {
+				tr = 1
+			}
+			w.u8(tr)
+			for _, x := range f.Clock {
+				w.i32(x)
+			}
+			w.str(f.Days[0])
+			w.str(f.Days[1])
+			w.str(f.Sep)
+			w.u32(uint32(len(f.Strings)))
+			for _, s := range f.Strings {
+				w.str(s)
+			}
+		case PieceGroups:
+			encodePieces(w, p.Body)
+			encodePieces(w, p.Between)
 		}
 	}
 }
 
-// The video tail's flags.
-const (
-	videoJoined = 1 << iota
-	videoEveryFrame
-	videoSteps
-	videoStampFirst
-	videoStampLast
-	videoWhole
-	videoStampIndex
-	videoBetween
-	videoKnown = videoBetween<<1 - 1
-)
-
 func decodeVideo(r *rbuf) *Video {
-	v := &Video{Fps: r.f32(), DefaultFps: r.f32(), MinFrames: r.i32(), MaxFrames: r.i32()}
+	if m := r.u32(); r.err == nil && m != math.Float32bits(float32(math.NaN())) {
+		r.err = fmt.Errorf("jlm: a video stated as a build before this one stated it: reconvert the model")
+		return nil
+	}
+	if rev := r.u32(); r.err == nil && rev != videoRecord {
+		r.err = fmt.Errorf("jlm: a video record of revision %d, where this build reads %d", rev, videoRecord)
+		return nil
+	}
+	v := &Video{DefaultFps: r.f32()}
+	decodeExpr(r, &v.Count)
+	decodeExpr(r, &v.Index)
+	fl := r.u8()
+	v.Once = fl&1 != 0
+	v.MaxFrames, v.Group = r.i32(), r.i32()
+	decodeExpr(r, &v.Sized)
 	for range r.count(10) {
 		s := PreStep{Kind: PreKind(r.u16())}
 		for range r.count(4) {
@@ -203,27 +386,52 @@ func decodeVideo(r *rbuf) *Video {
 		v.Pre = append(v.Pre, s)
 	}
 	decodeProgram(r, &v.Entry)
-	v.StampBefore, v.StampAfter, v.StampDigits = r.str(), r.str(), r.i32()
-	for _, ids := range []*[]int32{&v.Before, &v.After} {
-		for range r.count(4) {
-			*ids = append(*ids, r.i32())
-		}
+	if fl&2 != 0 {
+		v.Stride = &Expr{}
+		decodeExpr(r, v.Stride)
 	}
-	if r.err == nil && len(r.b) > 0 {
-		f := r.u32()
-		v.Joined, v.EveryFrame, v.PerSecond = f&videoJoined != 0, f&videoEveryFrame != 0, r.i32()
-		v.Steps, v.StampFirst, v.StampLast = f&videoSteps != 0, f&videoStampFirst != 0, f&videoStampLast != 0
-		v.Whole, v.StampIndex = f&videoWhole != 0, f&videoStampIndex != 0
-		if v.Steps {
-			v.MaxSeconds = r.i32()
-		}
-		if f&videoBetween != 0 {
-			v.Between = r.str()
-		}
-		// A flag a later build states is a video this one would read wrong.
-		if f&^videoKnown != 0 {
-			r.err = fmt.Errorf("jlm: a video stated with flags %#x this build does not read", f)
-		}
+	v.Prompt = decodePieces(r, 0)
+	if fl&^3 != 0 && r.err == nil {
+		r.err = fmt.Errorf("jlm: a video stated with flags %#x this build does not read", fl)
 	}
 	return v
+}
+
+func decodePieces(r *rbuf, depth int) []VideoPiece {
+	n := r.count(1)
+	if depth > 1 && n > 0 {
+		r.err = fmt.Errorf("jlm: a video's prompt nested %d deep", depth)
+		return nil
+	}
+	var ps []VideoPiece
+	for range n {
+		p := VideoPiece{Kind: PieceKind(r.u8())}
+		switch p.Kind {
+		case PieceIDs:
+			for range r.count(4) {
+				p.IDs = append(p.IDs, r.i32())
+			}
+		case PieceText:
+			p.Text = r.str()
+		case PieceValue:
+			decodeExpr(r, &p.Value)
+			f := &p.Format
+			f.Kind, f.Digits, f.Trunc = FormatKind(r.u8()), r.i32(), r.u8() != 0
+			for i := range f.Clock {
+				f.Clock[i] = r.i32()
+			}
+			f.Days[0], f.Days[1], f.Sep = r.str(), r.str(), r.str()
+			for range r.count(4) {
+				f.Strings = append(f.Strings, r.str())
+			}
+		case PieceGroups:
+			p.Body = decodePieces(r, depth+1)
+			p.Between = decodePieces(r, depth+1)
+		}
+		if r.err != nil {
+			return nil
+		}
+		ps = append(ps, p)
+	}
+	return ps
 }

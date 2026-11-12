@@ -5198,8 +5198,9 @@ text after at the start plus max(H, W) whatever T, and the decode at one
 past the prompt's highest position (`mrope_position_deltas`) -- which a
 temporal axis longer than the text after it moves.
 
-What the converter states (`jlm.Video` with an optional tail: `Joined`,
-`EveryFrame`, `PerSecond`; `PreVideoResize`'s seventh int for a frame
+What the converter states (`convert.qwen2vlVideo`, as the statement of
+"Video as one statement" below: every frame, the pairs one grid, the stride
+an expression of the rate; `PreVideoResize`'s seventh int for a frame
 sized alone) is the class's defaults, the mmproj stating none: the bounds
 of the class, not of the published checkpoint, which has no
 video_preprocessor_config.json and so takes the picture's min_pixels and
@@ -5238,12 +5239,12 @@ first frame's time, Python's int of index / r; the template's
 `<|begin_of_video|>` and `<|end_of_video|>` stay around them
 (Glm4vProcessor.replace_video_token).
 
-What the converter states (`convert.glm4vVideo`): `jlm.Video.Steps` and
-`MaxSeconds`, `StampFirst` (the first frame's time, cut to StampDigits
-places, not the mean rounded) and `StampLast` (the time after the pair, not
-before it), in the video tail's flags. The tail now refuses a flag bit its
-build does not know, so a later statement in it is refused, never read past
-as a Qwen3-VL video. A video given no rate is read at 24 frames a second,
+What the converter states (`convert.glm4vVideo`): the count and index
+above as expressions of the frames and rate, each frame taken once, and in
+the prompt each pair's picture followed by its first frame's time cut to
+whole seconds -- the time after the pair, not before it, and not the
+mean rounded ("Video as one statement" below). A video given no rate is
+read at 24 frames a second,
 the rate the processor writes its times at; its sampler refuses one
 (docs/divergences.md).
 
@@ -5271,11 +5272,11 @@ tiled picture, or its one square -- and transformers agrees to the bit:
 three frames of 640x360 through the video processor and through the image
 processor's thumbnail give the same rows (scripts/internvlvideogold.py).
 
-So the container states the video as whole frames (`jlm.Video.Whole`): no
+So the container states the video as pictures (`jlm.Video.AsPictures`): no
 resize, entry or class of its own, each frame a span of the picture's last
-square (`model.Span.Whole`, `TowerGraphs.LastSquare`), "Frame" and ": "
-around its number (`StampIndex`) and a line between (`Between`), the text
-between two spans encoded as one as the reference tokenizes it.
+square (`model.Span.Whole`, `TowerGraphs.LastSquare`), and a prompt of
+"Frame", its number from 1 and ": " before each and a line between, the
+text between two spans encoded as one as the reference tokenizes it.
 `TestInternVLVideoMatchesTransformers` holds InternVL3-1B (Q8_0) to it: the
 801 ids the processor writes, each frame's rows the frame's picture's last
 square to the bit, and within 2e-2 of transformers' f32 rows -- the CPU
@@ -5283,6 +5284,36 @@ device at 9.3e-3, CUDA at 8.6e-3 and Vulkan at 9.4e-3 with every tower
 block on the card (V100), the quadrant picture's rows at 6.2e-3. No line
 between the frames, and each frame's first square in place of its last
 (0.49), are its violations.
+
+## Video as one statement
+
+The video record grew a field per processor -- Joined, PerSecond and
+EveryFrame for Qwen2-VL, Steps, MaxSeconds, StampFirst and StampLast for
+GLM-4V, Whole, StampIndex and Between for InternVL -- and `model.VideoPlan`
+switched on them: each a family's code under the format's name. It is now
+one statement the converter writes and the engine evaluates
+(docs/design/video-statement.md): the count and each sampled frame's index
+as expressions (`jlm.Expr`) of the video's frames and rate, a frame taken
+once where it says so, the frames read in groups of one or two, the groups
+one grid at a stride that is an expression of the rate, and the prompt as
+pieces -- ids, text, a value written by a format (a decimal, a clock, a
+table of words), the groups' body, a group's rows. The expressions gained
+floor, ceil, truncation, rounding half to even and a rounding to binary32,
+which the composer lowers as the other rounding is
+(`TestComposedCPURoundings`); the sampler evaluates them on the host in
+float64, as numpy and torch compute them. The record is revision 2 behind a
+NaN where the build before read a rate: each build refuses the other's
+("reconvert").
+
+The gates moved with it. Each family's container statement is held to its
+processor's own sampling, sizes, strides and written times
+(`convert.TestQwen3VLStatesItsVideo`, `TestQwen2VLStatesItsVideo`,
+`TestGLM4VStatesItsVideo`, the last now also past 300 seconds and 600
+frames, from Glm4vVideoProcessor itself); the evaluator on a statement no
+family has (`model.TestAStatedVideoIsEvaluated`,
+`TestVideoValuesAreWrittenAsStated`); and the engine's video gates as they
+were, but for their violations, which now rewrite the stated prompt rather
+than flip a field.
 
 ## Qwen3.5's tower, and GLM-4.1V / 4.5V / 4.6V
 
@@ -9815,7 +9846,7 @@ answers with the CPU's int8 activations, 4.1e-4 with its float forms,
 1.1e-3 on a V100 with every block placed, 395 prompt rows as the
 reference counts them; the video's tokens are the reference prompt's run
 token for token (`TestVideoSpansFollowTheProcessor`), and its plan is the
-processor's over eight shapes and rates (`TestVideoPlanIsTheProcessors`).
+processor's over eight shapes and rates (`convert.TestQwen3VLStatesItsVideo`).
 
 Before the composer (`TestClefMediaMatchesReference`, laptop host, RTX 3050
 Ti under CUDA and Vulkan): a fixture like Clef's random one but with the release's 48x48

@@ -84,6 +84,37 @@ func (x *exprs) round(a int) int {
 	return x.sel(F, x.op(OpLess, ir.Pred, m, x.f(1<<23)), r, a)
 }
 
+// trunc is a's integer part: a itself at 2^23 and past, where every float is
+// an integer (and the conversion's range would not hold it).
+func (x *exprs) trunc(a int) int {
+	F := ir.F32
+	t := x.un(OpCvtF32, F, x.un(OpCvtI32, ir.I32, a))
+	t = x.un(OpBitcast, F, x.op(OpOr, ir.U32, x.un(OpBitcast, ir.U32, t), x.op(OpAnd, ir.U32, x.un(OpBitcast, ir.U32, a), x.u(0x80000000))))
+	return x.sel(F, x.op(OpLess, ir.Pred, x.abs(a), x.f(1<<23)), t, a)
+}
+
+// floor is the greatest integer not above a: its integer part, less one
+// where that is above it.
+func (x *exprs) floor(a int) int {
+	F := ir.F32
+	t := x.trunc(a)
+	return x.sel(F, x.op(OpLess, ir.Pred, a, t), x.op(OpSub, F, t, x.f(1)), t)
+}
+
+// roundEven is a to the nearest integer, a half to the even one: its integer
+// part, a step away from zero where the fraction (exact below 2^23) is past
+// a half, or a half and the integer part odd. a + 1/2 floored would round a
+// float just below a half up where the sum rounds to the integer.
+func (x *exprs) roundEven(a int) int {
+	F := ir.F32
+	t := x.trunc(a)
+	r := x.abs(x.op(OpSub, F, a, t))
+	step := x.op(OpAdd, F, t, x.sel(F, x.op(OpLess, ir.Pred, a, x.f(0)), x.f(-1), x.f(1)))
+	odd := x.equal(x.abs(x.op(OpSub, F, t, x.op(OpMul, F, x.trunc(x.op(OpMul, F, t, x.f(0.5))), x.f(2)))), x.f(1), false)
+	tie := x.op(OpLess, ir.Pred, x.f(0.5), x.op(OpMul, F, x.equal(r, x.f(0.5), false), odd))
+	return x.sel(F, x.op(OpLess, ir.Pred, x.f(0.5), r), step, x.sel(F, tie, step, t))
+}
+
 // nearestRecip is the float nearest 1/d from r within a few units of it:
 // r refined once by Newton, then the four candidates below it tested in
 // integers where every exponent allows, r where one does not; pos is d > 0.

@@ -42,7 +42,8 @@ func goComputeAllowed() map[string]string {
 		"engine/decide.go:answer":        "a rating question's levels, i/(r-1) for its r answers, once a question: the readout's parameters",
 		"model/tower.go:lowerValuesWith": "a tower op's attention scale, 1/sqrt of its head width, once an op: the graph's attribute",
 		"model/tower.go:sliceGrid":       "MiniCPM-V's slice grid, the factor pairs' log aspects against the picture's (get_sliced_grid): geometry from its sizes",
-		"model/video.go:VideoPlan":       "a video's sampled frames, numpy's linspace over its count, and their times: geometry from its frames and rate",
+		"model/video.go:SampleVideo":     "a video's sampled frames, its stated count and indices evaluated over its frames and rate: geometry",
+		"model/video.go:evalSize":        "a video's stated size, count, index, stride or time, evaluated once a frame over its frames and rate: geometry",
 	}
 }
 

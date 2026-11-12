@@ -5,11 +5,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/model"
+	"github.com/jitllm/jitllm/tok"
 )
 
 // TestQwen3VLStatesItsVideo converts Qwen3-VL's fixture and reads the video
@@ -42,11 +46,37 @@ func TestQwen3VLStatesItsVideo(t *testing.T) {
 	if err := vid.Valid(); err != nil {
 		t.Fatal(err)
 	}
-	if vid.Fps != 2 || vid.DefaultFps != 24 || vid.MinFrames != 4 || vid.MaxFrames != 768 {
-		t.Fatalf("the video samples %+v", vid)
-	}
 	if got := vid.Pre[0].Ints; got[1] != 4096 || got[2] != 25165824 || jlm.Precision(got[4]) != jlm.PrecTorch {
 		t.Fatalf("the video resizes with %v", got)
+	}
+	// Qwen3VLVideoProcessor's and Qwen3VLProcessor's own, on the bounds
+	// Qwen3-VL publishes: with and without a stated rate, an odd count's
+	// last frame repeated, sides rounded half to even, a side lifted to the
+	// factor, a long video's frames shrunk to share the area.
+	holdVideo(t, vid, []videoCase{
+		{10, 160, 120, 0, []int{0, 3, 6, 9}, 160, 128, 0, []string{"0.1", "0.3"}},
+		{2, 64, 48, 0, []int{0, 1}, 64, 64, 0, []string{"0.0"}},
+		{7, 33, 600, 0, []int{0, 2, 4, 6}, 32, 608, 0, []string{"0.0", "0.2"}},
+		{100, 640, 360, 0, []int{0, 14, 28, 42, 57, 71, 85, 99}, 640, 352, 0, []string{"0.3", "1.5", "2.7", "3.8"}},
+		{90, 1280, 720, 30, []int{0, 18, 36, 53, 71, 89}, 1280, 704, 0, []string{"0.3", "1.5", "2.7"}},
+		{37, 20, 20, 12.5, []int{0, 9, 18, 27, 36, 36}, 32, 32, 0, []string{"0.4", "1.8", "2.9"}},
+		{5, 3000, 2000, 0, []int{0, 1, 3, 4}, 3008, 1984, 0, []string{"0.0", "0.1"}},
+	}, secondsOf)
+	// 3000 frames at 25 a second: 240 sampled, the times past 25 seconds
+	// written as the processor rounds them.
+	s, items := sampleVideo(t, vid, 3000, 25)
+	switch got := secondsOf(items); {
+	case len(s.Frames) != 240 || s.Frames[1] != 13 || s.Frames[239] != 2999:
+		t.Errorf("3000 frames sample %d, the second %d, the last %d", len(s.Frames), s.Frames[1], s.Frames[239])
+	case len(got) != 120 || got[25] != "25.3" || got[26] != "26.4" || got[119] != "119.7":
+		t.Errorf("3000 frames' times: %d of them, %v", len(got), got)
+	}
+	// A video of one frame samples fewer than a pair, which the reference
+	// refuses too.
+	if s, err := model.SampleVideo(vid, 1, 0); err == nil {
+		if _, _, err := model.VideoFrameSize(vid, s, 64, 64); err == nil {
+			t.Error("a video of one frame was sized as a pair")
+		}
 	}
 	var binds []jlm.Role
 	for _, op := range vid.Entry.Ops {
@@ -86,10 +116,23 @@ func TestQwen3VLStatesItsVideo(t *testing.T) {
 // tokens_per_second apart a second for Qwen2.5-VL, the entry binding the
 // second patch plane.
 func TestQwen2VLStatesItsVideo(t *testing.T) {
+	// Qwen2VLVideoProcessor on its class defaults and get_rope_index: every
+	// frame, an odd count's last repeated, each frame sized alone by
+	// smart_resize (sizes from transformers' own), a video of no stated rate
+	// at 24 frames a second; stride is Qwen2.5-VL's, Qwen2-VL's pairs a
+	// position apart.
+	cases := []videoCase{
+		{5, 160, 120, 0, []int{0, 1, 2, 3, 4, 4}, 392, 280, 0, nil},
+		{4, 1280, 720, 30, []int{0, 1, 2, 3}, 1008, 560, 0, nil},
+		{4, 640, 360, 2, []int{0, 1, 2, 3}, 644, 364, 2, nil},
+		{3, 3000, 2000, 1, []int{0, 1, 2, 2}, 924, 616, 4, nil},
+		{1, 20, 20, 0.5, []int{0, 0}, 336, 336, 8, nil},
+		{2, 33, 600, 0, []int{0, 1}, 84, 1372, 0, nil},
+	}
 	for _, c := range []struct {
-		name      string
-		perSecond int32
-	}{{"synth-qwen2vl", 0}, {"synth-qwen25vl", 2}} {
+		name   string
+		qwen25 bool
+	}{{"synth-qwen2vl", false}, {"synth-qwen25vl", true}} {
 		t.Run(c.name, func(t *testing.T) {
 			src := testmodels.Path(c.name + ".gguf")
 			mm := testmodels.Path("mmproj-" + c.name + ".gguf")
@@ -112,12 +155,15 @@ func TestQwen2VLStatesItsVideo(t *testing.T) {
 				t.Fatal("the container states no video")
 			}
 			vid := v.Tower.Video
-			if !vid.EveryFrame || !vid.Joined || vid.PerSecond != c.perSecond || vid.DefaultFps != 24 || vid.StampDigits != 0 {
-				t.Fatalf("the video reads %+v", vid)
-			}
 			if got := vid.Pre[0].Ints; len(got) != 7 || got[1] != 100352 || got[2] != 602112 || got[6] != 1 ||
 				jlm.Precision(got[4]) != jlm.PrecTorch {
 				t.Fatalf("the video resizes with %v", got)
+			}
+			for _, vc := range cases {
+				if !c.qwen25 {
+					vc.stride = 1
+				}
+				holdVideo(t, vid, []videoCase{vc}, wholeSeconds)
 			}
 			var binds []jlm.Role
 			for _, op := range vid.Entry.Ops {
@@ -164,12 +210,44 @@ func TestGLM4VStatesItsVideo(t *testing.T) {
 				t.Fatal("the container states no video")
 			}
 			vid := v.Tower.Video
-			if !vid.Steps || vid.Fps != 2 || vid.MaxSeconds != 300 || vid.DefaultFps != 24 || !vid.StampFirst ||
-				!vid.StampLast || vid.StampDigits != 0 || vid.Joined || vid.EveryFrame {
-				t.Fatalf("the video reads %+v", vid)
-			}
 			if got := vid.Pre[0].Ints; len(got) != 6 || got[1] != 12544 || got[2] != 47040000 || got[5] != 2 {
 				t.Fatalf("the video resizes with %v", got)
+			}
+			// Glm4vVideoProcessor.sample_frames, the times Glm4vProcessor
+			// writes for its pairs and smart_resize's size over the sampled
+			// count, each from transformers' own: two frames a second in
+			// whole steps of the rate, every frame of a video past
+			// max_duration that samples no fewer, each frame taken once and
+			// an odd count's last repeated; each pair's first frame's whole
+			// seconds.
+			holdVideo(t, vid, []videoCase{
+				{5, 160, 120, 24, []int{0, 4}, 168, 112, 0, []string{"0"}},
+				{8, 1280, 720, 4, []int{0, 2, 4, 6, 7, 7}, 1288, 728, 0, []string{"0", "1", "1"}},
+				{30, 640, 360, 30, []int{0, 15, 29, 29}, 644, 364, 0, []string{"0", "0"}},
+				{7, 112, 112, 1, []int{0, 1, 2, 3, 4, 5, 6, 6}, 112, 112, 0, []string{"0", "2", "4", "6"}},
+				{13, 1000, 50, 3, []int{0, 2, 3, 5, 6, 8, 9, 11, 12, 12}, 1008, 56, 0, []string{"0", "1", "2", "3", "4"}},
+				{2, 20, 20, 24, []int{0, 1}, 84, 84, 0, []string{"0"}},
+				{40, 33, 600, 0.1, []int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+					24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39}, 28, 588, 0, []string{"0", "20", "40", "60",
+					"80", "100", "120", "140", "160", "180", "200", "220", "240", "260", "280", "300", "320", "340", "360", "380"}},
+			}, wholeSeconds)
+			// Past max_duration with more frames than it samples: 600 at
+			// linspace over the seconds, each taken once, the 599 left
+			// filled to pairs.
+			for _, c := range []struct {
+				n                     int
+				fps                   float64
+				second, third, before int
+				times                 []string
+			}{{9000, 24, 16, 31, 8994, []string{"0", "1", "2", "372", "374", "374"}},
+				{20000, 29.97, 34, 67, 19954, []string{"0", "2", "4", "662", "664", "666"}}} {
+				s, items := sampleVideo(t, vid, c.n, c.fps)
+				f, got := s.Frames, wholeSeconds(items)
+				if len(f) != 600 || f[1] != c.second || f[2] != c.third || f[597] != c.before || f[599] != c.n-1 ||
+					len(got) != 300 || !slices.Equal(append(got[:3:3], got[297:]...), c.times) {
+					t.Errorf("%d frames at %v sample %d (%v ... %v), times %v", c.n, c.fps, len(f), f[:min(3, len(f))],
+						f[max(len(f)-3, 0):], got)
+				}
 			}
 			var binds []jlm.Role
 			resampled := false
@@ -180,8 +258,25 @@ func TestGLM4VStatesItsVideo(t *testing.T) {
 			if !slices.Contains(binds, jlm.RoleVPatchEmbd2) || !slices.Contains(binds, jlm.RoleVEmbdNorm) || !resampled {
 				t.Fatalf("the video's entry binds %v, its table resampled %v", binds, resampled)
 			}
-			if len(vid.Before) != 1 || len(vid.After) != 1 || len(v.Tower.Span.Before) != 1 || len(v.Tower.Span.After) != 1 {
-				t.Fatalf("the video is %v ... %v, a pair %v ... %v", vid.Before, vid.After, v.Tower.Span.Before, v.Tower.Span.After)
+			voc, err := tok.New(f.Vocab())
+			if err != nil {
+				t.Fatal(err)
+			}
+			id := func(p string) int32 {
+				i, ok := voc.ID(p)
+				if !ok {
+					t.Fatalf("%q is no token", p)
+				}
+				return i
+			}
+			// replace_video_token: the pairs as pictures between the video's
+			// markers, each followed by its time.
+			s, _ := sampleVideo(t, vid, 8, 4)
+			want := fmt.Sprintf("[%d][%d]{0}[%d]0[%d]{1}[%d]1[%d]{2}[%d]1[%d]", id("<|begin_of_video|>"),
+				id("<|begin_of_image|>"), id("<|end_of_image|>"), id("<|begin_of_image|>"), id("<|end_of_image|>"),
+				id("<|begin_of_image|>"), id("<|end_of_image|>"), id("<|end_of_video|>"))
+			if got := layoutOf(t, vid, s); got != want {
+				t.Errorf("a video of three pairs reads %q, want %q", got, want)
 			}
 		})
 	}
@@ -246,4 +341,98 @@ func videoStatement(name, cls string, listed, states, gap bool) error {
 		return fmt.Errorf("%s: %s takes a video and the converter states none", name, cls)
 	}
 	return nil
+}
+
+// videoCase is a video and what its reference processor does with it: the
+// frames it samples, an odd count's last repeated; the size it resizes
+// them to; the positions its pairs stand apart on one grid; and the times
+// its prompt writes.
+type videoCase struct {
+	n, w, h int
+	fps     float64
+	frames  []int
+	ow, oh  int
+	stride  int
+	times   []string
+}
+
+// holdVideo holds the stated video vid to each case, the times read from
+// its prompt laid out by times.
+func holdVideo(t *testing.T, vid *jlm.Video, cases []videoCase, times func([]model.VideoItem) []string) {
+	t.Helper()
+	for _, c := range cases {
+		s, items := sampleVideo(t, vid, c.n, c.fps)
+		ow, oh, err := model.VideoFrameSize(vid, s, c.w, c.h)
+		if err != nil {
+			t.Errorf("%d frames of %dx%d at %v: %v", c.n, c.w, c.h, c.fps, err)
+			continue
+		}
+		if got := times(items); !slices.Equal(s.Frames, c.frames) || ow != c.ow || oh != c.oh || s.Stride != c.stride ||
+			!slices.Equal(got, c.times) {
+			t.Errorf("%d frames of %dx%d at %v: frames %v, %dx%d, stride %d, times %q; want %v %dx%d %d %q", c.n, c.w, c.h,
+				c.fps, s.Frames, ow, oh, s.Stride, got, c.frames, c.ow, c.oh, c.stride, c.times)
+		}
+	}
+}
+
+// sampleVideo is what vid samples of a video of n frames at fps frames a
+// second, and its prompt laid out.
+func sampleVideo(t *testing.T, vid *jlm.Video, n int, fps float64) (model.VideoSample, []model.VideoItem) {
+	t.Helper()
+	s, err := model.SampleVideo(vid, n, fps)
+	if err != nil {
+		t.Fatalf("%d frames at %v: %v", n, fps, err)
+	}
+	items, err := model.VideoLayout(vid, s)
+	if err != nil {
+		t.Fatalf("%d frames at %v: %v", n, fps, err)
+	}
+	return s, items
+}
+
+// layoutOf is vid's prompt for sample s written out: its text as it is,
+// each id in brackets, each group's rows its number in braces.
+func layoutOf(t *testing.T, vid *jlm.Video, s model.VideoSample) string {
+	t.Helper()
+	items, err := model.VideoLayout(vid, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b strings.Builder
+	for _, it := range items {
+		switch {
+		case it.Group >= 0:
+			fmt.Fprintf(&b, "{%d}", it.Group)
+		case it.IDs != nil:
+			for _, id := range it.IDs {
+				fmt.Fprintf(&b, "[%d]", id)
+			}
+		default:
+			b.WriteString(it.Text)
+		}
+	}
+	return b.String()
+}
+
+// secondsOf is the times "<t seconds>" a prompt writes.
+func secondsOf(items []model.VideoItem) []string {
+	var out []string
+	for _, it := range items {
+		for _, m := range regexp.MustCompile(`<([0-9.]+) seconds>`).FindAllStringSubmatch(it.Text, -1) {
+			out = append(out, m[1])
+		}
+	}
+	return out
+}
+
+// wholeSeconds is the text a prompt writes between its ids and rows, each
+// a time.
+func wholeSeconds(items []model.VideoItem) []string {
+	var out []string
+	for _, it := range items {
+		if it.Group < 0 && it.IDs == nil {
+			out = append(out, it.Text)
+		}
+	}
+	return out
 }
