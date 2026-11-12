@@ -61,6 +61,9 @@ type layer struct {
 	// for a KV-sharing block (nn.LayerPlan.KVShared) the source's, whose
 	// cache this block reads and never writes.
 	kvSrc int
+	// runs is the sessions that placed the block here. A block holding no
+	// history of its own -- a KV-sharing one, a tower's -- is still theirs.
+	runs map[uint64]struct{}
 	// A linear block's three matrices (its vectors are in vecs). Wq above
 	// carries the fused q|k|v for such a block (the layer kind decides the
 	// consumer, as in nn.SSMWeights), so these are the z projection, the
@@ -1716,6 +1719,11 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	// weights, norms, biases and router are the model's. Rebuilding would
 	// re-upload them and replace the layer the first session is running against.
 	if l := g.layers[li]; l != nil && l.ok {
+		defer func() {
+			if placed {
+				l.join(sid)
+			}
+		}()
 		// The new session's plan still has to reach the scratch: a longer session
 		// may need a sliding window the first did not (model.windowFor), so take
 		// the union as the fresh-block path does.
@@ -2500,6 +2508,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		g.dropLayerLocal(old)
 	}
 	g.layers[li] = l
+	l.join(sid)
 	g.layerGen++
 	g.placeGen.Add(1)
 	// The reserved widths' scratches and the composer's prompt forms of the
@@ -5383,6 +5392,7 @@ func (g *devTier) dropHistory(li int, l *layer, sid uint64) bool {
 	if l == nil {
 		return false
 	}
+	delete(l.runs, sid)
 	freed := false
 	if kvp := l.kv[sid]; kvp != nil && kvp.paged {
 		// Its pages in this layer go and the layer compacts: what the session

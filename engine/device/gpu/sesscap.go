@@ -39,13 +39,18 @@ func sameShape(a, b nn.LayerPlan) bool {
 	return reflect.DeepEqual(a, b)
 }
 
-// sharedBeyond reports that a session other than sid holds history on block
-// li: the block cannot move between devices or leave the card without taking
-// that history with it. Callers hold g.mu.
+// sharedBeyond reports that a session other than sid runs block li or holds
+// history on it: the block cannot move between devices or leave the card
+// without taking it from that session. Callers hold g.mu.
 func (g *devTier) sharedBeyond(li int, sid uint64) bool {
 	l := g.layers[li]
 	if l == nil {
 		return false
+	}
+	for s := range l.runs {
+		if s != sid {
+			return true
+		}
 	}
 	for s := range l.kv {
 		if s != sid {
@@ -58,6 +63,14 @@ func (g *devTier) sharedBeyond(li int, sid uint64) bool {
 		}
 	}
 	return false
+}
+
+// join records that session sid runs block l. Callers hold g.mu.
+func (l *layer) join(sid uint64) {
+	if l.runs == nil {
+		l.runs = map[uint64]struct{}{}
+	}
+	l.runs[sid] = struct{}{}
 }
 
 // heldBy is what session sid holds on this device: its history on every
