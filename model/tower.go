@@ -1549,13 +1549,13 @@ func picturePlanes(img image.Image, ent *[4 * 256]byte) (PictureLayout, [3][]byt
 	case *image.NRGBA:
 		l.Px, l.stride, planes[0] = graph.PixRGBA8, p.Stride, rows(p.Pix, p.Stride, 4)
 	case *image.RGBA:
-		l.Px, l.stride, planes[0] = graph.PixRGBA8, p.Stride, rows(p.Pix, p.Stride, 4)
+		l.Px, l.stride, planes[0] = graph.PixRGBAPremul, p.Stride, rows(p.Pix, p.Stride, 4)
 	case *image.Gray:
 		l.Px, l.stride, planes[0] = graph.PixGray8, p.Stride, rows(p.Pix, p.Stride, 1)
 	case *image.NRGBA64:
 		l.Px, l.stride, l.wide, planes[0] = graph.PixRGBA8, p.Stride, 1, rows(p.Pix, p.Stride, 8)
 	case *image.RGBA64:
-		l.Px, l.stride, l.wide, planes[0] = graph.PixRGBA8, p.Stride, 1, rows(p.Pix, p.Stride, 8)
+		l.Px, l.stride, l.wide, planes[0] = graph.PixRGBAPremul, p.Stride, 1, rows(p.Pix, p.Stride, 8)
 	case *image.Gray16:
 		l.Px, l.stride, l.wide, planes[0] = graph.PixGray8, p.Stride, 1, rows(p.Pix, p.Stride, 2)
 	case *image.CMYK:

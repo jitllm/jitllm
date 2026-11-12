@@ -1119,6 +1119,10 @@ const (
 	// PixPaletted8 is one byte a pixel, an index into a palette of four
 	// bytes an entry (red, green, blue, an alpha the picture drops).
 	PixPaletted8
+	// PixRGBAPremul is PixRGBA8's samples with red, green and blue
+	// premultiplied by the alpha (image.RGBA, image.RGBA64), made straight
+	// as image/color's NRGBAModel makes them.
+	PixRGBAPremul
 	// PixFormats is one past the last sample format.
 	PixFormats
 )

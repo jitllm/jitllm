@@ -488,8 +488,10 @@ func nrgbaOf(img image.Image) *image.NRGBA {
 // TestPictureFormatsEncodeAsTheirPixels encodes a picture in each sample
 // format a decoder leaves -- a JPEG's YCbCr at 4:2:0, a sub-picture of one at
 // an odd corner, YCbCr at 4:4:4, YCbCr with alpha, a paletted one, 16-bit
-// RGBA, NRGBA and gray, whose low bytes are noise the op must not read, and
-// CMYK with a key that varies, made colours as Pillow does -- and its
+// RGBA, NRGBA and gray, whose low bytes are noise the op must not read,
+// CMYK with a key that varies, made colours as Pillow does, and an alpha
+// that varies over every value under premultiplied RGBA, 8 and 16 bits,
+// made straight as color.NRGBAModel makes it, and under NRGBA -- and its
 // pixels as an NRGBA picture (nrgbaOf), and holds the two to the same rows
 // bit for bit: the planes, their offsets and the chroma's phase are laid out
 // as the picture op reads them. A warm encode of a copied layout allocates
@@ -521,6 +523,7 @@ func TestPictureFormatsEncodeAsTheirPixels(t *testing.T) {
 	draw.Draw(pal, img.Bounds(), img, image.Point{}, draw.Src)
 	b := img.Bounds()
 	rgba64, nrgba64, gray16, cmyk := image.NewRGBA64(b), image.NewNRGBA64(b), image.NewGray16(b), image.NewCMYK(b)
+	rgbaA, rgba64A, nrgbaA := image.NewRGBA(b), image.NewRGBA64(b), image.NewNRGBA(b)
 	for y := b.Min.Y; y < b.Max.Y; y++ {
 		for x := b.Min.X; x < b.Max.X; x++ {
 			c := color.NRGBAModel.Convert(img.At(x, y)).(color.NRGBA)
@@ -529,6 +532,10 @@ func TestPictureFormatsEncodeAsTheirPixels(t *testing.T) {
 			nrgba64.SetNRGBA64(x, y, color.NRGBA64{wide(c.R), wide(c.G), wide(c.B), 0xffff})
 			gray16.SetGray16(x, y, color.Gray16{wide(c.G)})
 			cmyk.SetCMYK(x, y, color.CMYK{255 - c.R, 255 - c.G, 255 - c.B, uint8(x*7+y*3) % 96})
+			a := uint8(x*37 + y*11)
+			rgbaA.Set(x, y, color.NRGBA{c.R, c.G, c.B, a})
+			nrgbaA.SetNRGBA(x, y, color.NRGBA{c.R, c.G, c.B, a})
+			rgba64A.Set(x, y, color.NRGBA64{wide(c.R), wide(c.G), wide(c.B), uint16(a)<<8 | uint16(x*5+y)})
 		}
 	}
 	for _, c := range []struct {
@@ -536,7 +543,8 @@ func TestPictureFormatsEncodeAsTheirPixels(t *testing.T) {
 		img  image.Image
 	}{{"jpeg 4:2:0", jpg(false)}, {"jpeg 4:2:0 at an odd corner", jpg(true)},
 		{"ycbcr 4:4:4", full}, {"ycbcr with alpha", withA}, {"paletted", pal},
-		{"rgba 16-bit", rgba64}, {"nrgba 16-bit", nrgba64}, {"gray 16-bit", gray16}, {"cmyk", cmyk}} {
+		{"rgba 16-bit", rgba64}, {"nrgba 16-bit", nrgba64}, {"gray 16-bit", gray16}, {"cmyk", cmyk},
+		{"premultiplied rgba with alpha", rgbaA}, {"premultiplied rgba 16-bit with alpha", rgba64A}, {"nrgba with alpha", nrgbaA}} {
 		got, err := s.EncodePicture(c.img)
 		if err != nil {
 			t.Fatalf("%s: %v", c.name, err)
