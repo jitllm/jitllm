@@ -771,3 +771,82 @@ func (n *Kernel) evalArgs(nd *Node, memo map[int]int, made func(int) bool) []*in
 	}
 	return out
 }
+
+// takeOrder is loop c's takes, as indices into its cursors, in the order a
+// lowering emits them; false where they cannot be. The register binder reads
+// a loop's takes as one assignment -- every source (a copy's pointer, an
+// offset base, a sheet's term) read before any copy is written -- so a take
+// whose register another take still reads goes after that take.
+func (n *Kernel) takeOrder(c int) ([]int, bool) {
+	l := n.Loops[c]
+	var pend []int
+	for i, cu := range l.Cursors {
+		if cu.Take {
+			pend = append(pend, i)
+		}
+	}
+	out := make([]int, 0, len(pend))
+	for len(pend) > 0 {
+		pick := -1
+		for j, i := range pend {
+			d := n.takeWrites(l.Cursors[i])
+			free := true
+			for _, o := range pend {
+				if o != i && d > 0 && n.takeReads(l.Cursors[o], d) {
+					free = false
+					break
+				}
+			}
+			if free {
+				pick = j
+				break
+			}
+		}
+		if pick < 0 {
+			return nil, false
+		}
+		out = append(out, pend[pick])
+		pend = slices.Delete(pend, pick, pick+1)
+	}
+	return out, true
+}
+
+// takeWrites is the register (1 + its number) take cu writes, 0 for a copy
+// that lives in a spill slot.
+func (n *Kernel) takeWrites(cu Cursor) int {
+	switch {
+	case cu.Ptr > 0 && n.Ptrs[cu.Ptr-1].Off > 0:
+		return n.Ptrs[cu.Ptr-1].Off
+	case cu.Ptr > 0 && n.Ptrs[cu.Ptr-1].Spill > 0:
+		return 0
+	case cu.Ptr > 0:
+		return n.Ptrs[cu.Ptr-1].Reg
+	}
+	return n.Bufs[cu.Buf].Reg
+}
+
+// takeReads reports whether take cu reads register r (1 + its number): its
+// source pointer's, an offset base's, or its term's. An offset's take only
+// zeroes it.
+func (n *Kernel) takeReads(cu Cursor, r int) bool {
+	if cu.Ptr > 0 && n.Ptrs[cu.Ptr-1].Off > 0 {
+		return false
+	}
+	if cu.Init > 0 {
+		if nd := n.Nodes[cu.Init-1]; nd.Spill == 0 && nd.Reg == r {
+			return true
+		}
+	}
+	if cu.From == 0 {
+		return n.Bufs[cu.Buf].Reg == r
+	}
+	p := n.Ptrs[cu.From-1]
+	if p.Off > 0 {
+		base := n.Bufs[p.Buf].Reg
+		if p.From > 0 {
+			base = n.Ptrs[p.From-1].Reg
+		}
+		return p.Off == r || base == r
+	}
+	return p.Spill == 0 && p.Reg == r
+}

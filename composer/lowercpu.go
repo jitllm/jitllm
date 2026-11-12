@@ -1478,8 +1478,14 @@ func (e *x86Lowerer) take(c int) {
 	} else if it >= 0 && k.Nodes[it].Spill > 0 {
 		a.MOVMemImm(spillSlot(k.Nodes[it].Spill), 0)
 	}
+	order, ok := k.takeOrder(c)
+	if !ok {
+		e.fail("loop %d's takes each write a register another reads", c)
+		return
+	}
 	zeroed := map[int]bool{}
-	for _, cu := range l.Cursors {
+	for _, i := range order {
+		cu := l.Cursors[i]
 		if cu.Take && cu.Ptr > 0 && k.Ptrs[cu.Ptr-1].Off > 0 {
 			if off := k.Ptrs[cu.Ptr-1].Off; !zeroed[off] {
 				a.XORQ(x86.Reg(off-1), x86.Reg(off-1))
