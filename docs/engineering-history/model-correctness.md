@@ -8415,6 +8415,22 @@ the host's 256-position KV page. The window now starts at a fixed offset into
 a page whatever the prompt's length, decodeAllocs' rule with the prompt in
 front of it.
 
+### The tower's rows through the text model's given rows
+
+TestRealTowersMatchTransformers later read the photo's E2B rows at NMSE 2.17
+from transformers, on the CPU and on every card. The entry was right: run
+through the tower's own forms, the patch projection read 3.4e-6 and the
+entry with its position table 3.4e-6. A block standing in as x+x returned
+rows with no relation to the entry's (cosine 0.003, row norms near sqrt(768)),
+so the rows were changed between the entry and the first block. The tower's
+instance composed its input parts from the model's front graphs, the text
+model's given rows' graph among them. E2B's text model has per-layer inputs,
+so that graph is not a copy, and with the tower's config stating no side
+input the part wrote the residual: the blocks read the text model's rows
+rather than the picture's. synth-gemma4v's text model has no per-layer
+inputs, its given rows were copied, and no synth gate could see it. A
+tower's instance now composes no given rows' graph; the photo reads 8.3e-3.
+
 ## Phi-4-reasoning-vision: SigLIP2 NaFlex at the picture's own size
 
 llama.cpp's `phi4` projector is Phi-4-reasoning-vision-15B (NOT

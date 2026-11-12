@@ -946,7 +946,10 @@ JIT and state) was llama.cpp's technical debt, not a property of the model.
   `TestQwen2VLTowerRunsOnTheCard` (their grid rotary from the card's own table,
   Qwen2.5-VL's windows and Qwen3-VL's taps, every block and a half seam),
   `TestQwen2VLMatchesTransformers`, the M-RoPE gates (`TestMRope*`, the text
-  side on transformers' own tower rows), `TestChatSpansFollowTheTemplate`,
+  side on transformers' own tower rows), the real checkpoints against
+  transformers (`TestRealTowersMatchTransformers`: Gemma 4, Gemma 3n and
+  Ministral 3's towers; `TestQwenVLRealMatchesTransformers`: the Qwen family's
+  and HunyuanOCR's whole models), `TestChatSpansFollowTheTemplate`,
   `TestPictureFormatsEncodeAsTheirPixels`, `composer.TestComposedCPUPicture*`,
   `composer.TestComposedCPURegroup`, `composer.TestComposedCPUPatchifyTiles`
   and `composer.TestComposedCPUUntile` (the windows' order, against

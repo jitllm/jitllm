@@ -76,13 +76,22 @@ func towerRunsOnTheCard(t *testing.T, m *model.Model, img image.Image, ref []flo
 			for _, blocks := range []int{nb, nb / 2} {
 				s := testInstance(t, m, 64, opts...)
 				s.SetDeviceFallback(false)
-				if err := s.tower.s.SetDeviceLayers(g, blocks); err != nil {
-					s.Close()
-					t.Fatal(err)
-				}
-				if n := s.tower.s.GPULayers(); n != blocks {
-					s.Close()
-					t.Fatalf("%d of the tower's %d blocks placed on %s, want %d: %s", n, nb, dev, blocks, g.Err())
+				if m.Tower.Chain {
+					// A chain's blocks are forms over their own grids, placed
+					// as the chain (PlaceTowerChain), not as instance blocks.
+					if err := s.PlaceTowerChain(g, blocks); err != nil {
+						s.Close()
+						t.Fatalf("%d of the chain's %d blocks on %s: %v (%s)", blocks, nb, dev, err, g.Err())
+					}
+				} else {
+					if err := s.tower.s.SetDeviceLayers(g, blocks); err != nil {
+						s.Close()
+						t.Fatal(err)
+					}
+					if n := s.tower.s.GPULayers(); n != blocks {
+						s.Close()
+						t.Fatalf("%d of the tower's %d blocks placed on %s, want %d: %s", n, nb, dev, blocks, g.Err())
+					}
 				}
 				got, err := s.EncodePicture(img)
 				s.Close()
