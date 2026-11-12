@@ -266,12 +266,12 @@ func TestStatedTowerEncodesAPicture(t *testing.T) {
 	if diff < 1e-2 {
 		t.Fatalf("a grey picture encodes to within %g of the coloured one", diff)
 	}
-	if n := testing.AllocsPerRun(3, func() {
+	if w := countAllocs(func() {
 		if _, err := s.EncodePicture(img); err != nil {
 			t.Fatal(err)
 		}
-	}); n != 0 {
-		t.Fatalf("a warm encode allocates %v times", n)
+	}); w.engine != 0 {
+		t.Fatalf("a warm encode makes %d engine allocations:\n%s", w.engine, w.where)
 	}
 	t.Logf("%d rows of %d, deterministic, %g from a grey picture's, no allocation warm", n, d, diff)
 }
@@ -551,12 +551,12 @@ func TestPictureFormatsEncodeAsTheirPixels(t *testing.T) {
 				t.Fatalf("%s: value %d is %v, and %v from its pixels as NRGBA", c.name, i, got[i], want[i])
 			}
 		}
-		if n := testing.AllocsPerRun(2, func() {
+		if w := countAllocs(func() {
 			if _, err := s.EncodePicture(c.img); err != nil {
 				t.Fatal(err)
 			}
-		}); n != 0 {
-			t.Fatalf("%s: a warm encode allocates %v times", c.name, n)
+		}); w.engine != 0 {
+			t.Fatalf("%s: a warm encode makes %d engine allocations:\n%s", c.name, w.engine, w.where)
 		}
 		t.Logf("%s (%T): %d values as its pixels' NRGBA, no allocation warm", c.name, c.img, len(want))
 	}
