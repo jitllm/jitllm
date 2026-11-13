@@ -219,6 +219,10 @@ func (e *a64Lowerer) node(i int) {
 		}
 		e.release(t)
 	case OpSar:
+		if x.gpr(i) {
+			e.integer(i)
+			return
+		}
 		r, s := e.reg(i), e.reg(nd.A)
 		switch {
 		case k.Nodes[nd.B].Op == OpConst:
@@ -660,10 +664,18 @@ func (e *a64Lowerer) integer(i int) {
 			e.divConst(nd.Op, dst, src, uint32(c.Imm))
 			return
 		}
+		if nd.Op == OpDiv || nd.Op == OpRem {
+			a.MOVconst(a64Imm, uint64(uint32(c.Imm)))
+			e.divide(nd, dst, src, a64Imm)
+			return
+		}
 		switch nd.Op {
 		case OpMul:
 			a.MOVconst(a64Imm, sext(c.Imm))
 			a.MUL(dst, src, a64Imm)
+		case OpSar:
+			a.SXTW(dst, src)
+			a.ASRimm(dst, dst, uint8(c.Imm&63))
 		case OpShr:
 			a.LSRimm(dst, src, uint32(c.Imm&63))
 		case OpShl:
@@ -712,19 +724,11 @@ func (e *a64Lowerer) integer(i int) {
 			a.ADDreg(dst, p, q)
 		case OpMul:
 			a.MUL(dst, p, q)
+		case OpSar:
+			a.SXTW(a64Q, p)
+			a.ASRV(dst, a64Q, q)
 		case OpDiv, OpRem:
-			if nd.Type != ir.U32 {
-				e.fail("node %d: no general-register form of a signed %s", i, nd.Op)
-				return
-			}
-			// u32 words held zero-extended: the 64-bit quotient is theirs.
-			a.UDIV(a64Q, p, q)
-			if nd.Op == OpDiv {
-				a.MOVreg(dst, a64Q)
-				break
-			}
-			a.MUL(a64Q, a64Q, q)
-			a.SUBreg(dst, p, a64Q)
+			e.divide(nd, dst, p, q)
 		case OpAnd:
 			a.ANDreg(dst, p, q)
 		case OpOr:
@@ -737,9 +741,34 @@ func (e *a64Lowerer) integer(i int) {
 		}
 	}
 	switch nd.Op {
-	case OpAdd, OpSub, OpMul, OpShl, OpXor, OpOr, OpMin, OpMax:
+	case OpAdd, OpSub, OpMul, OpShl, OpSar, OpXor, OpOr, OpMin, OpMax:
 		a.MOVw(dst, dst)
 	}
+}
+
+// divide is dst = p / q, or p % q, of nd's 32-bit type, as x86's divReg and
+// idivReg make it: a zero divisor's quotient all ones and remainder p; a
+// signed one of the values sign-extended to 64 bits, so the least value by
+// -1 is itself and its remainder 0. u32 words are held zero-extended, so an
+// unsigned 64-bit quotient is theirs. p and q stay as they were.
+func (e *a64Lowerer) divide(nd Node, dst, p, q a64.XReg) {
+	a := e.a
+	if nd.Type != ir.U32 {
+		a.SXTW(a64T, p)
+		a.SXTW(a64Imm, q)
+		p, q = a64T, a64Imm
+		a.SDIV(a64Q, p, q)
+	} else {
+		a.UDIV(a64Q, p, q)
+	}
+	if nd.Op == OpDiv {
+		a.CMPw(q, a64.XZR)
+		a.CSINV(dst, a64Q, a64.XZR, a64.CondNE)
+	} else {
+		a.MUL(a64Q, a64Q, q)
+		a.SUBreg(dst, p, a64Q)
+	}
+	a.MOVw(dst, dst)
 }
 
 // divConst is dst = src / c, or src % c, for a 32-bit unsigned src and a
