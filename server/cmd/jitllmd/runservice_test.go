@@ -13,6 +13,7 @@ import (
 	"github.com/jitllm/jitllm/internal/localserver"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels/fresh"
 	"github.com/jitllm/jitllm/server"
 )
 
@@ -21,6 +22,7 @@ import (
 // model on demand and streams the answer, and jitllm says it used the
 // service and starts no engine of its own.
 func TestJitllmRunGoesThroughTheService(t *testing.T) {
+	fresh.Must(t, testmodels.Path("stories260K.jlm"))
 	b, err := os.ReadFile(testmodels.Path("stories260K.jlm"))
 	if err != nil {
 		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS) -- this gate proved nothing", err)

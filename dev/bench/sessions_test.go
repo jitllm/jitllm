@@ -15,6 +15,7 @@ import (
 	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels/fresh"
 	"github.com/jitllm/jitllm/model"
 )
 
@@ -156,6 +157,7 @@ func queuesRatio(t *testing.T, d backend.Device, qd backend.Queued) (med, q1, q3
 // two streams fill.
 func TestSessionsOverlapOnCUDA(t *testing.T) {
 	path := testmodels.Path("stories15M-q8_0.jlm")
+	fresh.Must(t, path)
 	if _, err := os.Stat(path); err != nil {
 		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS) -- this floor proved nothing", err)
 	}

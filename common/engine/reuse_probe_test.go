@@ -10,6 +10,7 @@ import (
 
 	"github.com/jitllm/jitllm/common/session"
 	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels/fresh"
 )
 
 // A probe, not a gate: it prints what a multi-turn conversation actually
@@ -24,6 +25,7 @@ func TestReuseProbe(t *testing.T) {
 	e := New(sh, sh.state())
 	defer e.Close()
 	instruct := testmodels.Path("SmolLM2-360M-Instruct-Q8_0.jlm")
+	fresh.Must(t, instruct)
 	if _, err := os.Stat(instruct); err != nil {
 		t.Skipf("no instruct model: %v", err)
 	}

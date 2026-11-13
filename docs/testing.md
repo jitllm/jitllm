@@ -124,9 +124,12 @@ Committed rather than fetched: `testdata/models/stories260K.gguf` (1.1 MB), so
 copies it into the model directory, where other tests look for it.
 
 The script fetches no `.jlm`. A test that names a container reads the one
-converted from the GGUF of the same stem: the `engine` gates write it
-beside the GGUF on first use, or convert it yourself with
-`go run ./cmd/jitllm convert <dir>/<name>.gguf`.
+converted from the GGUF of the same stem: it passes the path through
+`fresh.Must` (in `engine`, `jlmOf`) before reading it, which writes the
+container beside the GGUF on first use and reconverts one an earlier build
+left there, so a stale container is never a gate's "converted by an older
+jitllm"; or convert it yourself with `go run ./cmd/jitllm convert
+<dir>/<name>.gguf`.
 
 Made rather than fetched -- the script's header has the commands:
 
