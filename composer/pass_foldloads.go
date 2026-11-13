@@ -20,10 +20,11 @@ func (p FoldLoads) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 	return eachKernel(p.Name(), ks, func(k *Kernel) ([]*Kernel, bool, error) {
 		var m *Kernel
 		hs := k.Homes()
+		uc := k.useCounts()
 		for i, nd := range k.Nodes {
 			var b int
 			if nd.Op == OpBroadcast {
-				if ld := k.Nodes[nd.A]; ld.Op == OpLoad && !ld.Mem && !k.Bufs[ld.Buf].Half && k.Bufs[ld.Buf].Operand.Copy == 0 && k.uses(nd.A) == 1 {
+				if ld := k.Nodes[nd.A]; ld.Op == OpLoad && !ld.Mem && !k.Bufs[ld.Buf].Half && k.Bufs[ld.Buf].Operand.Copy == 0 && uc[nd.A] == 1 {
 					if m == nil {
 						m = k.clone()
 					}
@@ -44,7 +45,7 @@ func (p FoldLoads) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			}
 			foldable := func(x int) bool {
 				ld := k.Nodes[x]
-				return ld.Op == OpLoad && !ld.Mem && !k.Bufs[ld.Buf].Half && k.Bufs[ld.Buf].Operand.Copy == 0 && k.uses(x) == 1
+				return ld.Op == OpLoad && !ld.Mem && !k.Bufs[ld.Buf].Half && k.Bufs[ld.Buf].Operand.Copy == 0 && uc[x] == 1
 			}
 			if !foldable(b) {
 				if nd.Op != OpFma || !foldable(nd.A) || k.Nodes[nd.B].Op != OpLoad {
@@ -70,6 +71,30 @@ func (p FoldLoads) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		}
 		return []*Kernel{m}, true, nil
 	})
+}
+
+// useCounts is how many nodes and stores read each node: uses, for every
+// node in one walk.
+func (k *Kernel) useCounts() []int {
+	n := make([]int, len(k.Nodes))
+	var buf [3]int
+	for x := range k.Nodes {
+		for _, a := range k.args(x, &buf) {
+			if a >= 0 && a < len(n) {
+				n[a]++
+			}
+		}
+	}
+	for _, s := range k.Stores {
+		if !s.Barrier && !s.Run {
+			for _, a := range k.storeArgs(&s) {
+				if *a >= 0 && *a < len(n) {
+					n[*a]++
+				}
+			}
+		}
+	}
+	return n
 }
 
 // uses is how many nodes and stores read node i.

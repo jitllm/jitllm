@@ -30,6 +30,7 @@ func (p Consts) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		floats := false
 		seen := map[int]bool{}
 		memo := map[int]int{}
+		uc := k.useCounts()
 		var walk func(i int)
 		walk = func(i int) {
 			if seen[i] {
@@ -47,7 +48,7 @@ func (p Consts) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 				floats = floats || nd.Op == OpLanes
 				return
 			}
-			for _, a := range k.evalArgs(&nd, memo, nil) {
+			for _, a := range k.evalArgs(&nd, memo, nil, uc) {
 				walk(*a)
 			}
 		}

@@ -20,16 +20,14 @@ func (p ShiftChain) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 	return eachKernel(p.Name(), ks, func(k *Kernel) ([]*Kernel, bool, error) {
 		var m *Kernel
 		vw := k.VectorWords()
+		shiftsOf := map[int][]int{}
+		for i, nd := range k.Nodes {
+			if nd.Op == OpShr && vw[nd.A] && nd.Type == ir.U32 && k.Nodes[nd.B].Op == OpConst {
+				shiftsOf[nd.A] = append(shiftsOf[nd.A], i)
+			}
+		}
 		for x := range k.Nodes {
-			if !vw[x] {
-				continue
-			}
-			var shifts []int
-			for i, nd := range k.Nodes {
-				if nd.Op == OpShr && nd.A == x && nd.Type == ir.U32 && k.Nodes[nd.B].Op == OpConst {
-					shifts = append(shifts, i)
-				}
-			}
+			shifts := shiftsOf[x]
 			if len(shifts) < 2 {
 				continue
 			}
