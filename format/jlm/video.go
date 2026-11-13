@@ -173,6 +173,10 @@ func (v *Video) Valid() error {
 	if err := v.Frames.Valid(); err != nil {
 		return fmt.Errorf("jlm: the video's frames: %w", err)
 	}
+	// Its classes are the squares its frames' resize reaches, in its unit.
+	if v.Frames.Bounds.Unit < 1 {
+		return fmt.Errorf("jlm: a video of an entry of its own sizes its frames in a unit of %d", v.Frames.Bounds.Unit)
+	}
 	if len(v.Pre) != 2 || v.Pre[0].Kind != PreResizeLive || len(v.Pre[0].Ints) != 2 ||
 		!resizes(Filter(v.Pre[0].Ints[0]), Precision(v.Pre[0].Ints[1])) ||
 		v.Pre[1].Kind != PreNormalize && v.Pre[1].Kind != PreNormalizeBF16 || len(v.Pre[1].Floats) != 6 {

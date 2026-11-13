@@ -552,8 +552,28 @@ func (t *Tower) Valid() error {
 			return err
 		}
 	}
-	if t.Video != nil {
-		return t.Video.Valid()
+	if v := t.Video; v != nil {
+		if err := t.videoReadable(); err != nil {
+			return err
+		}
+		return v.Valid()
+	}
+	return nil
+}
+
+// videoReadable is why the tower's pictures cannot read its video: a
+// chain's pictures are not each of a size of their own, and frames read as
+// pictures go through the pictures' classes, so their resize reaches no
+// more than the pictures' does. A pair's classes are its frames' own.
+func (t *Tower) videoReadable() error {
+	v, g := t.Video, t.Geometry
+	switch {
+	case len(t.Chain) > 0:
+		return fmt.Errorf("jlm: the tower's video is read by a chain's pictures, which are not each of a size of their own")
+	case g == nil || !v.AsPictures() || v.Frames == nil:
+	case v.Frames.Bounds.MaxPix > g.Bounds.MaxPix || v.Frames.Bounds.MaxPatches > g.Bounds.MaxPatches:
+		return fmt.Errorf("jlm: the tower's video frames reach %d pixels and %d patches, past its pictures' %d and %d",
+			v.Frames.Bounds.MaxPix, v.Frames.Bounds.MaxPatches, g.Bounds.MaxPix, g.Bounds.MaxPatches)
 	}
 	return nil
 }
