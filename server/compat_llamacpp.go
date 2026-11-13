@@ -1004,17 +1004,6 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 			return
 		}
 	}
-	fs := samplingFields{Temperature: &set.Temperature, TopP: &set.TopP, MinP: &set.MinP,
-		RepetitionPenalty: &set.RepeatPenalty, PresencePenalty: &set.PresencePenalty,
-		FrequencyPenalty: &set.FrequencyPenalty, TopK: &set.TopK}
-	if set.TopK == 0 {
-		fs.TopK = nil // llama.cpp's 0 is "disabled"
-	}
-	if err := fs.validate(); err != nil {
-		llFailErr(w, fmt.Errorf("%w: %v", ErrInvalid, err))
-		return
-	}
-
 	// The prompts.
 	var prompts []llamaInput
 	if infill {
@@ -1174,10 +1163,17 @@ func llamaLogitBias(raw json.RawMessage) ([]TokenBias, error) {
 	return out, nil
 }
 
+// leastP is the least normal binary32: a top-p or typical-p cut at it keeps
+// one token, as llama.cpp's cut at 0 or below does (its min_keep).
+const leastP = 0x1p-126
+
 // llamaSampler is the engine's sampler for a request's settings over a
-// context of nctx tokens. Temperature 0 is greedy, as in llama.cpp; an unset
-// seed (-1) draws its own; repeat_last_n 0 turns the penalty off and -1 is
-// the context.
+// context of nctx tokens, every value read as llama.cpp reads it: a
+// temperature at or below 0 is greedy; a top-p or typical-p at or below 0
+// keeps one token (leastP); a min-p past 1 keeps the best, as 1 does; a
+// top-k below 0 is off; the penalties apply as given. An unset seed (-1)
+// draws its own; repeat_last_n 0 turns the penalty off and -1 is the
+// context.
 func llamaSampler(s llamaSettings, nctx int) *engine.Sampler {
 	sm := &engine.Sampler{Temp: s.Temperature, TopP: s.TopP, MinP: s.MinP, TypicalP: s.TypicalP,
 		XTCProbability: s.XTCProbability, XTCThreshold: s.XTCThreshold, TopNSigma: s.TopNSigma,
@@ -1187,6 +1183,13 @@ func llamaSampler(s llamaSettings, nctx int) *engine.Sampler {
 		FreqPen: s.FrequencyPenalty, Seed: s.Seed, Infill: slices.Contains(s.Samplers, "infill"),
 		Adaptive: slices.Contains(s.Samplers, "adaptive_p"), AdaptiveTarget: s.AdaptiveTarget, AdaptiveDecay: s.AdaptiveDecay,
 		Stages: llamaStages(s.Samplers)}
+	sm.Temp, sm.MinP = max(sm.Temp, 0), min(max(sm.MinP, 0), 1)
+	if sm.TopP <= 0 {
+		sm.TopP = leastP
+	}
+	if sm.TypicalP <= 0 {
+		sm.TypicalP = leastP
+	}
 	switch s.RepeatLastN {
 	case 0:
 		sm.RepeatPen, sm.PresencePen, sm.FreqPen = 1, 0, 0

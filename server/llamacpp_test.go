@@ -682,12 +682,42 @@ func TestLlamaSamplingDefaultsAndMapping(t *testing.T) {
 
 // TestLlamaRefusals: every parameter the engine cannot honour is refused
 // naming itself, and its neutral value is accepted.
+// TestLlamaReadsEveryValueAsLlamaCppDoes: /completion takes the values
+// llama-server takes, each as llama.cpp's sampler reads it.
+func TestLlamaReadsEveryValueAsLlamaCppDoes(t *testing.T) {
+	f := &llamaFake{fakeBackend: &fakeBackend{tokens: []string{"a"}, reason: FinishEOS}}
+	s := llamaServe(t, f)
+	body := `{"prompt":"x","temperature":-1,"top_p":0,"typical_p":-0.5,"min_p":1.5,"top_k":-7,` +
+		`"presence_penalty":3,"frequency_penalty":-3,"repeat_penalty":0.5}`
+	if code, out := llamaPost(t, s, "/completion", body); code != 200 {
+		t.Fatalf("%d %v", code, out)
+	}
+	sm := f.opts().Sampling
+	for _, c := range []struct {
+		name      string
+		got, want float64
+	}{
+		{"temperature", sm.Temp, 0}, {"top_p", sm.TopP, leastP}, {"typical_p", sm.TypicalP, leastP},
+		{"min_p", sm.MinP, 1}, {"top_k", float64(sm.TopK), 0}, {"presence_penalty", sm.PresencePen, 3},
+		{"frequency_penalty", sm.FreqPen, -3}, {"repeat_penalty", sm.RepeatPen, 0.5},
+	} {
+		if c.got != c.want {
+			t.Errorf("%s reached the sampler as %v, want %v", c.name, c.got, c.want)
+		}
+	}
+	if code, out := llamaPost(t, s, "/completion", `{"prompt":"x","top_p":0.9,"min_p":0.05,"repeat_penalty":0}`); code != 200 {
+		t.Fatalf("%d %v", code, out)
+	}
+	if sm := f.opts().Sampling; sm.TopP != 0.9 || sm.MinP != 0.05 || sm.RepeatPen != 0 {
+		t.Errorf("top_p 0.9, min_p 0.05 and repeat_penalty 0 reached the sampler as %v, %v and %v", sm.TopP, sm.MinP, sm.RepeatPen)
+	}
+}
+
 func TestLlamaRefusals(t *testing.T) {
 	f := &llamaFake{fakeBackend: &fakeBackend{tokens: []string{"a"}, reason: FinishEOS}}
 	s := llamaServe(t, f)
 	refuse := map[string]string{
 		"mirostat": `3`, "dry_multiplier": `0.8`,
-		"presence_penalty": `3`, "frequency_penalty": `-3`,
 		"logit_bias": `[[15]]`, "samplers": `["top_k","dryer"]`, "n_cmpl": `0`, "id_slot": `-2`,
 		"lora":    `[{"id":0,"scale":1}]`,
 		"n_probs": `99`, "repeat_last_n": `-2`,
