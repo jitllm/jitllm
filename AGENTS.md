@@ -828,11 +828,10 @@ into a call site.
 
 **What is missing is the PLURAL**: several devices at once rather than one,
 layer migration across devices rather than only to and from the host, and
-device-side paging. Two instances put one block on different cards of one
-tier, each session routed to its own copy (`TestTwoInstancesRunABlockOnTwoCards`).
-Not done, named rather than implied: the projection is one per tier (an
-instance moving its head moves every instance's), and the sessions-per-device
-budget.
+device-side paging. Two instances put one block, and the projection, on
+different cards of one tier, each session routed to its own copy
+(`TestTwoInstancesRunABlockOnTwoCards`). Not done, named rather than implied:
+the sessions-per-device budget.
 
 - **The libraries read no environment.** Every knob is a `With...()` option;
   `cmd/jitllm` reads the `JITLLM_*` names and passes them through. The one file

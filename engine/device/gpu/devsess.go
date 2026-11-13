@@ -781,6 +781,9 @@ func (g *devTier) forgetSess(sid uint64) {
 			ds.last = nil
 		}
 	}
+	// The lanes it took bound the tables a device with no block or head
+	// otherwise gives back.
+	g.dropIfEmpty()
 }
 
 // eachLane calls f with lane0 and every clone. Callers hold g.mu.

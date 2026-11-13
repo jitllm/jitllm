@@ -1555,6 +1555,12 @@ type GPU struct {
 	// head is the device holding the output projection, normally the one that
 	// holds the last block, so the projection rides that submission.
 	head *devTier
+	// headRoute is a session's own device for the projection, where it moved
+	// its head while another session's stayed on head's (headOf). Under mu.
+	headRoute map[uint64]*devTier
+	// headUsers are the sessions the projection serves: each that placed it or
+	// ran a call through it, until it detaches. Under mu.
+	headUsers map[uint64]bool
 	// runBuf is layersCall's runs slice between calls; see layersCall.
 	runBuf []run
 	// rows is the zero session's rows call (rowsCall); a session's is its

@@ -4746,10 +4746,21 @@ until its last session goes (leaveCopy, dropCopy). A copy is a placement
 like any other: its weights page as the block's do, and KV stays held once
 per device, a session's history on the one copy it runs.
 
-What is still one per tier is the projection: an instance moving its head
-moves every instance's on that tier (AGENTS.md, Scope). The gate,
-engine.TestTwoInstancesRunABlockOnTwoCards, moves the upper half of the
-second instance's blocks and leaves its head beside the lower half.
+The projection was still one per tier: an instance moving its head moved
+every instance's on that tier. It is routed as a block is now. A session
+carries a head route of its own (GPU.headRoute, headOf) where it moved its
+projection while another session's stayed on the tier's; every call it makes
+-- a token's layers, the rows of a step it leads, the head alone, the rows'
+gather -- asks its own. Which sessions the tier's projection serves is
+recorded as they place it or run a call through it (headUsers), since a
+projection holds no history to tell them by: a move by the last of them moves
+the tier's, a move beside another takes a copy (routeHead). A session leaving
+gives its copy back where no other runs it, and the last session leaving the
+tier's hands the tier a routed copy in its place (leaveHead), as a block's
+copy is promoted (dropCopy). The gate, engine.TestTwoInstancesRunABlockOnTwoCards,
+moves the upper half of the second instance's blocks, then its lower half,
+which takes its projection with it; the first instance's stays on the first
+card, and both decode their controls' tokens.
 
 ## Every geometry set narrows with the reserved width
 

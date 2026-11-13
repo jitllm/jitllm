@@ -315,7 +315,7 @@ func (g *devTier) rowsWeight(f *jlm.File, w nn.Weight) (*resident, error) {
 		return nil, fmt.Errorf("format %v", w.T)
 	}
 	key := adhocKey(w.Entry, data, q, w.Rows, w.K)
-	if r, ok := rs.w[key]; ok {
+	if r, ok := rs.w[key]; ok && r.ok {
 		return r, nil
 	}
 	if _, ok := jlmType(q); !ok {

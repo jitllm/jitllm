@@ -315,7 +315,7 @@ func (s *gpuSession) EmbedRows(ids []int32, pos int, dst []float32) bool {
 
 func (s *gpuSession) PrepHead(h *nn.Head) bool {
 	defer s.leave(s.enter())
-	return s.g.PrepHead(h)
+	return s.g.prepHead(s.sid, h)
 }
 
 // SetActWindow forwards the activation window (nn.ActWindower): a JIT that
@@ -341,7 +341,7 @@ func (s *gpuSession) PrepLayerOn(name string, li int, p *nn.LayerPlan, w *nn.Lay
 
 func (s *gpuSession) PrepHeadOn(name string, h *nn.Head) (bool, error) {
 	defer s.leave(s.enter())
-	return s.g.PrepHeadOn(name, h)
+	return s.g.prepHeadOn(s.sid, name, h)
 }
 
 // StageBlock is nn.BlockMover's: deliberately not under enter, since it runs
@@ -366,7 +366,7 @@ func (s *gpuSession) MoveBlock(li int, to string, p *nn.LayerPlan, w *nn.LayerWe
 }
 
 func (s *gpuSession) DeviceOf(li int) (string, bool) { return s.g.deviceOf(s.sid, li) }
-func (s *gpuSession) HeadDeviceName() (string, bool) { return s.g.HeadDeviceName() }
+func (s *gpuSession) HeadDeviceName() (string, bool) { return s.g.headDeviceName(s.sid) }
 func (s *gpuSession) Pin(li int, on bool) bool       { return s.g.pin(s.sid, li, on) }
 func (s *gpuSession) Stream(li int, on bool) bool    { return s.g.Stream(li, on) }
 
