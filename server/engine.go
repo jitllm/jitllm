@@ -1678,11 +1678,18 @@ type ChatInput struct {
 // chat with pictures, laid out as PromptSpans, keeps its Chat beside the
 // spans for its tools.
 type Prompt struct {
-	Kind  PromptKind
-	Text  string
-	IDs   []int32
-	Chat  *ChatInput
-	Spans []model.Span
+	Kind PromptKind
+	Text string
+	// Images is a PromptText's pictures, each standing where Text holds
+	// Marker, in order (llama-server's multimodal prompt): the model's
+	// leading specials come first, then the text with its special tokens
+	// parsed and the pictures wrapped in the markers the container states
+	// (textPictureSpans).
+	Images []image.Image
+	Marker string
+	IDs    []int32
+	Chat   *ChatInput
+	Spans  []model.Span
 }
 
 // GenerateOptions is the one request shape: the Connect InferenceService and
@@ -2042,6 +2049,13 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 		return fmt.Errorf("server: model %q has no tokenizer: %v", lm.called(o.ModelName), lm.m.TokErr)
 	}
 
+	if o.Prompt.Kind == PromptText && len(o.Prompt.Images) > 0 {
+		sp, err := textPictureSpans(s, o)
+		if err != nil {
+			return err
+		}
+		o.Prompt = Prompt{Kind: PromptSpans, Spans: sp}
+	}
 	if o.Prompt.Kind == PromptChat && o.Prompt.Chat.carriesMedia() {
 		sp, err := pictureSpans(s, o)
 		if err != nil {
@@ -2708,6 +2722,33 @@ func pictureSpans(s *Session, o GenerateOptions) ([]model.Span, error) {
 	sp, err := m.ChatSpansMedia(msgs, pics, videos, ch.Tools, ch.ToolChoice, ch.AddGenerationPrompt)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
+	}
+	return sp, nil
+}
+
+// textPictureSpans is a text prompt's pictures laid out where its text holds
+// the marker (Prompt.Images): the model's leading specials, then the text and
+// the pictures as Model.PromptSpans lays them out.
+func textPictureSpans(s *Session, o GenerateOptions) ([]model.Span, error) {
+	m := s.lm.m
+	if !m.SeesPictures() {
+		return nil, fmt.Errorf("%w: model %q does not accept images: it carries no vision tower", ErrInvalid,
+			s.lm.called(o.ModelName))
+	}
+	pics := make([]model.Span, len(o.Prompt.Images))
+	for i, img := range o.Prompt.Images {
+		sp, err := m.PictureSpan(img)
+		if err != nil {
+			return nil, fmt.Errorf("%w: picture %d: %v", ErrInvalid, i, err)
+		}
+		pics[i] = sp
+	}
+	sp, err := m.PromptSpans(o.Prompt.Text, o.Prompt.Marker, pics)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
+	}
+	if lead := m.Vocab.EncodeSpecial("", true); len(lead) > 0 {
+		sp = append([]model.Span{{Tokens: lead}}, sp...)
 	}
 	return sp, nil
 }

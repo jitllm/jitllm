@@ -3,7 +3,9 @@ package server
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"image/color"
 	"io"
 	"math"
 	"net/http"
@@ -171,7 +173,7 @@ func TestLlamaPromptForms(t *testing.T) {
 		}
 	}
 	for _, bad := range []string{`{"prompt":[["a"],["b"]]}`, `{"prompt":[[5,["x"]]]}`, `{"prompt":[]}`,
-		`{"prompt":{"prompt_string":"x","multimodal_data":["AAA"]}}`, `{}`} {
+		`{"prompt":{"prompt_string":"x","multimodal_data":["AAA"]}}`, `{"prompt":{"prompt_string":"<__media__>","multimodal_data":["AAA"]}}`, `{}`} {
 		if code, _ := llamaPost(t, s, "/completion", bad); code != 400 {
 			t.Errorf("%s answered %d", bad, code)
 		}
@@ -400,6 +402,37 @@ func TestLlamaAnySlot(t *testing.T) {
 		if code != 200 || out["id_slot"] != float64(0) {
 			t.Errorf("id_slot %s: %d, reported %v", slot, code, out["id_slot"])
 		}
+	}
+}
+
+// TestLlamaPicturesReachTheGenerate: a prompt's multimodal_data reaches the
+// generate as its text and pictures, each where the text holds <__media__>,
+// in order; a list of such prompts gives each its own.
+func TestLlamaPicturesReachTheGenerate(t *testing.T) {
+	f := &llamaFake{fakeBackend: &fakeBackend{tokens: []string{"a"}, reason: FinishEOS}}
+	s := llamaServe(t, f)
+	red := base64.StdEncoding.EncodeToString(testPNG(t, 4, 3, color.NRGBA{R: 200, A: 255}))
+	blue := base64.StdEncoding.EncodeToString(testPNG(t, 2, 5, color.NRGBA{B: 200, A: 255}))
+	one := `{"prompt_string":"a <__media__> b <__media__>","multimodal_data":["` + red + `","` + blue + `"]}`
+	if code, out := llamaPost(t, s, "/completion", `{"prompt":`+one+`}`); code != 200 {
+		t.Fatalf("%d %v", code, out)
+	}
+	p := f.opts().Prompt
+	if p.Kind != PromptText || p.Text != "a <__media__> b <__media__>" || p.Marker != "<__media__>" || len(p.Images) != 2 ||
+		p.Images[0].Bounds().Dx() != 4 || p.Images[1].Bounds().Dx() != 2 {
+		t.Fatalf("the generate's prompt: kind %v text %q marker %q, %d pictures", p.Kind, p.Text, p.Marker, len(p.Images))
+	}
+	f.took()
+	two := `{"prompt_string":"<__media__>c","multimodal_data":["` + blue + `"]}`
+	if code, out := llamaPost(t, s, "/completion", `{"prompt":[`+one+`,`+two+`,"plain"]}`); code != 200 {
+		t.Fatalf("a list: %d", code)
+	} else if _, many := out["raw"]; !many {
+		t.Fatalf("three prompts answered one object: %v", out)
+	}
+	all := f.took()
+	if len(all) != 3 || len(all[0].Prompt.Images) != 2 || len(all[1].Prompt.Images) != 1 || all[1].Prompt.Images[0].Bounds().Dx() != 2 ||
+		all[2].Prompt.Kind != PromptIDs {
+		t.Fatalf("a list of prompts with pictures reached %d generates", len(all))
 	}
 }
 
