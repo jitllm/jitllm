@@ -1280,8 +1280,9 @@ type blockScratch struct {
 	embCast        backend.Buf
 	embPLE         backend.Buf
 	castViews      map[int][]backend.Buf
-	// embOuts is the buffers a step's input rows write (embedOuts).
-	embOuts [partIO]backend.Buf
+	// embOuts is the buffers a step's input rows write (embedOuts), room
+	// for every stream and the per-layer inputs.
+	embOuts []backend.Buf
 	// embSW and embSV are the tensors the input rows bind past the token
 	// embedding and the position table (nn.Head.Streams), by role.
 	embSW map[jlm.Role]*resident
