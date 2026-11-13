@@ -8,7 +8,10 @@ import "github.com/jitllm/jitllm/composer/ir"
 // beside each lane's), and an index, a length or an argument word a vector
 // word reads, is read by its vector readers through a broadcast of it, so
 // the word stays where an address needs it and the lanes get it in every
-// lane.
+// lane. A word or a mask a vector register holds that a scalar loop around
+// a vector loop makes from a load of one word is in its first lane alone:
+// the vector loop reads it through a broadcast too, as broadcastInto has it
+// read a float.
 type Splats struct{}
 
 func (Splats) Name() string { return "splats" }
@@ -53,11 +56,53 @@ func (p Splats) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			t := m.Nodes[a].Type
 			return vw[i] && t != ir.F32 && t != ir.Pred && m.counter(a) || (m.Nodes[i].Type == ir.F32 || vw[i]) && m.gprMask(a, vw)
 		})
+		hs := m.Homes()
+		firstLane := m.firstLaneWords(hs)
+		splats(func(i, a int, vw, cone map[int]bool) bool {
+			nd, x, hi, ha := m.Nodes[i], m.Nodes[a], hs[i], hs[a]
+			if x.Type == ir.F32 || !vw[a] || cone[i] || nd.Op == OpFold || x.Op == OpBroadcast || hi < 0 || ha < 0 {
+				return false
+			}
+			// A fold of a loop the reader is in is the loop's own, each lane's.
+			if x.Op == OpFold && m.within(hi, x.At) {
+				return false
+			}
+			return hi != ha && m.Loops[hi].Lanes > 0 && m.Loops[ha].Lanes == 0 && m.Loops[ha].Wide == 0 && m.within(hi, ha) && firstLane(a)
+		})
 		if len(splat) == 0 {
 			return nil, false, nil
 		}
 		return []*Kernel{m}, true, nil
 	})
+}
+
+// firstLaneWords reports, for a node, whether it is made from a load of one
+// word in a scalar loop (hs its homes): a value in its first lane alone. A
+// load outside every loop is every lane's, a constant's block too.
+func (k *Kernel) firstLaneWords(hs []int) func(i int) bool {
+	memo := map[int]bool{}
+	var lone func(i int) bool
+	lone = func(i int) bool {
+		if v, ok := memo[i]; ok {
+			return v
+		}
+		memo[i] = false
+		nd := k.Nodes[i]
+		v := false
+		switch {
+		case nd.Op == OpBroadcast:
+		case nd.Op == OpLoad:
+			h := hs[i]
+			v = k.Bufs[nd.Buf].Operand.Kind != OperandConsts && h >= 0 && k.Loops[h].Lanes == 0 && k.Loops[h].Wide == 0
+		default:
+			for _, a := range k.Operands(&nd) {
+				v = v || lone(*a)
+			}
+		}
+		memo[i] = v
+		return v
+	}
+	return lone
 }
 
 // gprMask reports whether node i is a compare of words general registers

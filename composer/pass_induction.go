@@ -85,12 +85,14 @@ func (p Induction) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 					m.Stores[r.at].Val = over(m.Stores[r.at].Val)
 					continue
 				}
-				nd := &m.Nodes[r.at]
-				for _, a := range m.Operands(nd) {
+				// over adds nodes: a pointer into them goes stale.
+				nd := m.Nodes[r.at]
+				for _, a := range m.Operands(&nd) {
 					if *a != it && addr[*a] && k.readsNode(*a, it) {
 						*a = over(*a)
 					}
 				}
+				m.Nodes[r.at] = nd
 			}
 			st := m.add(Node{Op: OpConst, Type: ir.I32, Imm: step})
 			if from != it {
