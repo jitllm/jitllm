@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jitllm/jitllm/engine"
 	"github.com/jitllm/jitllm/model"
 )
 
@@ -584,7 +585,28 @@ func TestLlamaSamplersChooseTheStages(t *testing.T) {
 	if sm := f.opts().Sampling; sm.TopK != 5 || sm.MinP != 0.2 || sm.Temp != 0.3 || sm.RepeatPen != 1.3 {
 		t.Errorf("the default chain ran %+v, want every stage", sm)
 	}
-	for _, bad := range []string{`["top_p","top_k"]`, `["top_k","foo"]`, `["top_k","infill","top_p"]`, `"kq"`, `7`} {
+	// Any order runs as listed, the stages one by one; llamaChain's own runs
+	// fused.
+	for _, c := range []struct {
+		list   string
+		stages []engine.Stage
+		infill bool
+	}{
+		{`["top_p","top_k"]`, []engine.Stage{engine.StageTopP, engine.StageTopK}, false},
+		{`"tkp"`, []engine.Stage{engine.StageTemperature, engine.StageTopK, engine.StageTopP}, false},
+		{`["top_k","infill","top_p"]`, nil, true},
+		{`["top_p","infill","top_k"]`, []engine.Stage{engine.StageTopP, engine.StageTopK}, true},
+		{`["min_p","min-p","xtc"]`, []engine.Stage{engine.StageMinP, engine.StageMinP, engine.StageXTC}, false},
+		{`["top_k","top_p","temperature"]`, nil, false},
+	} {
+		if code, out := llamaPost(t, s, "/completion", `{"prompt":"x","samplers":`+c.list+`}`); code != 200 {
+			t.Fatalf("samplers %s: %d %v", c.list, code, out)
+		}
+		if sm := f.opts().Sampling; !slices.Equal(sm.Stages, c.stages) || sm.Infill != c.infill {
+			t.Errorf("samplers %s: stages %v, infill %v; want %v, %v", c.list, sm.Stages, sm.Infill, c.stages, c.infill)
+		}
+	}
+	for _, bad := range []string{`["top_k","foo"]`, `"kq"`, `7`} {
 		code, out := llamaPost(t, s, "/completion", `{"prompt":"x","samplers":`+bad+`}`)
 		if b, _ := json.Marshal(out); code != 400 || !strings.Contains(string(b), "samplers") {
 			t.Errorf("samplers %s: %d %s", bad, code, b)
@@ -666,7 +688,7 @@ func TestLlamaRefusals(t *testing.T) {
 	refuse := map[string]string{
 		"mirostat": `3`, "dry_multiplier": `0.8`,
 		"presence_penalty": `3`, "frequency_penalty": `-3`,
-		"logit_bias": `[[15]]`, "samplers": `["top_k","dry"]`, "n_cmpl": `0`, "id_slot": `-2`,
+		"logit_bias": `[[15]]`, "samplers": `["top_k","dryer"]`, "n_cmpl": `0`, "id_slot": `-2`,
 		"lora":    `[{"id":0,"scale":1}]`,
 		"n_probs": `99`, "repeat_last_n": `-2`,
 		"response_fields": `"content"`, "mystery_field": `1`,

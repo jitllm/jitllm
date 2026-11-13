@@ -120,10 +120,9 @@ func llamaChain() []string {
 
 // llamaSamplers reads samplers as llama-server reads it: an array of names,
 // each canonical, kebab-case, without its underscore or one of nucleus, temp
-// and typ, in any case; or a string of their letters. The draw runs its
-// stages in llamaChain's order, then infill, so a list in another order is
-// refused, as is a name it does not run; adaptive_p, which llama.cpp runs
-// in place of the last draw wherever the list names it, may come anywhere.
+// and typ, in any case; or a string of their letters; in any order and any
+// number of times, as llama-server chains them (llamaStages). A name it does
+// not know is refused.
 func llamaSamplers(raw json.RawMessage) ([]string, error) {
 	var names []string
 	if json.Unmarshal(raw, &names) != nil {
@@ -147,27 +146,45 @@ func llamaSamplers(raw json.RawMessage) ([]string, error) {
 		alias[strings.ReplaceAll(n, "_", "-")] = n
 		alias[strings.ReplaceAll(n, "_", "")] = n
 	}
-	chain := append(llamaChain(), "infill")
 	out := make([]string, 0, len(names))
-	at := 0
 	for _, n := range names {
 		c, ok := alias[strings.ToLower(n)]
 		if !ok {
 			return nil, fmt.Errorf("%w: samplers: %q is not a sampler", ErrInvalid, n)
 		}
-		if c == "adaptive_p" {
-			out = append(out, c)
-			continue
-		}
-		i := slices.Index(chain[at:], c)
-		if i < 0 {
-			return nil, fmt.Errorf("%w: samplers: %q is not built; the draw runs %s, in that order", ErrInvalid, n,
-				strings.Join(chain, ", "))
-		}
-		at += i + 1
 		out = append(out, c)
 	}
 	return out, nil
+}
+
+// llamaStages is samplers as the draw's stages where their order is not
+// llamaChain's (engine.Sampler.Stages): nil where the fused draw runs them as
+// listed. dry, at the neutral multiplier llamaFields holds it to, is no
+// stage; infill and adaptive_p draw in place of the last draw, as llama.cpp
+// runs adaptive_p.
+func llamaStages(samplers []string) []engine.Stage {
+	kinds := map[string]engine.Stage{"penalties": engine.StagePenalties, "top_n_sigma": engine.StageTopNSigma,
+		"top_k": engine.StageTopK, "typ_p": engine.StageTypical, "top_p": engine.StageTopP, "min_p": engine.StageMinP,
+		"xtc": engine.StageXTC, "temperature": engine.StageTemperature}
+	chain := llamaChain()
+	var out []engine.Stage
+	at, fused := 0, true
+	for _, n := range samplers {
+		k, ok := kinds[n]
+		if !ok {
+			continue
+		}
+		out = append(out, k)
+		if i := slices.Index(chain[at:], n); i < 0 {
+			fused = false
+		} else {
+			at += i + 1
+		}
+	}
+	if fused {
+		return nil
+	}
+	return out
 }
 
 // stages is s as its draw runs: each stage samplers leaves out off, as
@@ -1168,7 +1185,8 @@ func llamaSampler(s llamaSettings, nctx int) *engine.Sampler {
 		MirostatTau: s.MirostatTau, MirostatEta: s.MirostatEta, TopK: max(s.TopK, 0),
 		RepeatPen: s.RepeatPenalty, RepeatLastN: s.RepeatLastN, PresencePen: s.PresencePenalty,
 		FreqPen: s.FrequencyPenalty, Seed: s.Seed, Infill: slices.Contains(s.Samplers, "infill"),
-		Adaptive: slices.Contains(s.Samplers, "adaptive_p"), AdaptiveTarget: s.AdaptiveTarget, AdaptiveDecay: s.AdaptiveDecay}
+		Adaptive: slices.Contains(s.Samplers, "adaptive_p"), AdaptiveTarget: s.AdaptiveTarget, AdaptiveDecay: s.AdaptiveDecay,
+		Stages: llamaStages(s.Samplers)}
 	switch s.RepeatLastN {
 	case 0:
 		sm.RepeatPen, sm.PresencePen, sm.FreqPen = 1, 0, 0
