@@ -59,6 +59,9 @@ type devSess struct {
 	// is set while a step that keeps them forms and binds a linear block.
 	kept    *recKeep
 	keeping bool
+	// marked is the session's copy of its linear blocks' state at its mark,
+	// taken in the shared form (recpool.go).
+	marked *recMarkCopies
 	// sessCause is the refusal kind the session's last call met here, noted by
 	// its view (devTier.noteCause).
 	sessCause atomic.Uint32
