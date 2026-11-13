@@ -47,22 +47,27 @@ func (p Forward) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 // loadsFrom is the loads of operand o node root reads.
 func (k *Kernel) loadsFrom(root int, o Operand) []int {
 	var out []int
-	seen := map[int]bool{}
-	var walk func(i int)
-	walk = func(i int) {
+	seen := make([]bool, len(k.Nodes))
+	stack := []int{root}
+	var buf [3]int
+	for len(stack) > 0 {
+		i := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
 		if seen[i] {
-			return
+			continue
 		}
 		seen[i] = true
-		nd := k.Nodes[i]
+		nd := &k.Nodes[i]
 		if nd.Op == OpLoad && k.Bufs[nd.Buf].Operand == o {
 			out = append(out, i)
 		}
-		for _, a := range k.Operands(&nd) {
-			walk(*a)
+		// Pushed last first, so the walk visits them in order: the loads
+		// come out as a recursive walk found them.
+		ops := k.args(i, &buf)
+		for j := len(ops) - 1; j >= 0; j-- {
+			stack = append(stack, ops[j])
 		}
 	}
-	walk(root)
 	return out
 }
 
