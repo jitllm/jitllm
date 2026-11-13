@@ -4,6 +4,7 @@ package engine
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"slices"
 	"strings"
@@ -373,6 +374,85 @@ func TestSpecRewindsASharedPool(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestRecurrentRewindAfterTwoSteps marks a hybrid's recurrent state on a
+// card, decodes two tokens and rewinds: the doubled pool's second step since
+// the mark writes the marked half, so the rewind restores the copy taken
+// before it. The first token decoded again after the rewind reads, bit for
+// bit, the logits it read right after the mark.
+func TestRecurrentRewindAfterTwoSteps(t *testing.T) {
+	specs := testdevices.Specs("cuda:0", "vulkan:0", "metal")
+	for _, name := range []string{"synth-qwen35-hybrid-mtp.gguf", "synth-mamba2.gguf"} {
+		t.Run(strings.TrimSuffix(name, ".gguf"), func(t *testing.T) {
+			m, openOpts := openLookupModel(t, name, WithKVF16(false))
+			defer m.Close()
+			if !m.Cfg.Hybrid() {
+				t.Fatalf("%s keeps no recurrent state to rewind", name)
+			}
+			ran := 0
+			for _, spec := range specs {
+				t.Run(spec, func(t *testing.T) {
+					g, err := openGPU(t, append([]gpu.Option{gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff)},
+						testTierOpts(t)...)...)
+					if err != nil || g == nil {
+						noDevice(t, spec, err)
+					}
+					defer g.Close()
+					ran++
+					prompt := m.Vocab.Encode("The old lighthouse keeper climbed the spiral stairs", true)
+					st := testInstance(t, m, len(prompt)+16, openOpts...)
+					defer st.Close()
+					if err := st.SetDevice(g); err != nil {
+						t.Fatal(err)
+					}
+					if st.GPULayers() != m.Cfg.NLayer {
+						t.Fatalf("%d of %d blocks on %s: this would gate the host", st.GPULayers(), m.Cfg.NLayer, spec)
+					}
+					lg, err := st.Prefill(prompt)
+					if err != nil {
+						t.Fatal(err)
+					}
+					y := Greedy(lg)
+					st.recMarkAll()
+					first, err := st.Forward(y)
+					if err != nil {
+						t.Fatal(err)
+					}
+					want := slices.Clone(first)
+					if _, err := st.Forward(Greedy(want)); err != nil {
+						t.Fatal(err)
+					}
+					if !st.recRewindAll() {
+						t.Fatalf("%s did not rewind two steps: %s", spec, devErr(st))
+					}
+					st.rewind(len(prompt))
+					got, err := st.Forward(y)
+					if err != nil {
+						t.Fatal(err)
+					}
+					worst := 0.0
+					for i := range want {
+						worst = max(worst, math.Abs(float64(got[i]-want[i])))
+					}
+					if worst != 0 {
+						t.Fatalf("%s: the token after the rewind is %g from the one after the mark", spec, worst)
+					}
+				})
+			}
+			if ran == 0 {
+				t.Skip("no device on this host -- this gate proved nothing")
+			}
+		})
+	}
+}
+
+// devErr is the device's last error, where it reports one.
+func devErr(st *Instance) string {
+	if e, ok := st.ld.(nn.ErrReporter); ok {
+		return e.Err()
+	}
+	return "no reason given"
 }
 
 // TestLookupSearch pins the search: the longest n first, the latest
