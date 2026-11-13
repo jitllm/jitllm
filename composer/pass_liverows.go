@@ -57,7 +57,7 @@ func (p CallRows) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		if m.Work && len(m.Space) > 1 || !m.Work && combines(m) {
 			if m.boundsSurplusHistory() {
 				o, _ := m.history()
-				return nil, false, fmt.Errorf("jit: %s combines across threads and binds %s, which a row past the call's would address",
+				return nil, false, fmt.Errorf("jit: %s is refused: it combines across threads and binds %s, which a row past the call's would address",
 					m.Name, o.Name)
 			}
 			return []*Kernel{m}, true, nil

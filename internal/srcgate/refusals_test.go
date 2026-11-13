@@ -64,6 +64,7 @@ func TestNoRefusalButInputsAndLimits(t *testing.T) {
 		"engine/device/cpu/baseline.go:cannot run here":               "a tier asked of a host whose instructions lack it (cpu:sse and its kin): the host's instructions",
 		"engine/device/cpudev/tower.go:has no form for class":         "the tower forms an entry for every class its geometry states and every sample format at placement: an index past them is the caller's check",
 		"engine/device/gpu/served.go:a pass cannot run again over":    "RULE 13: a kernel reading what it writes in one phase is the composer's contract broken, refused before it runs wrong",
+		"composer/pass_liverows.go:is refused: it combines across":    "a kernel held to a call's rows by its launch alone whose surplus row would read the history: the composer's contract broken, refused before it runs wrong (no pass that joins kernels makes one: Fuse and Epilogue ask it first; the census on CUDA and Vulkan forms none)",
 		"engine/device/gpu/open.go:cannot be listed beside":           "a device list naming a set and a member of it: the input's check",
 		"engine/device/gpu/layer.go:which has no device kernel":       "a weight type no container carries (off quant.Dequantable, or TQ1_0, which the converter repacks): the container's check",
 		"nn/device.go:cannot move between the devices directly":       "a mover's answer for a move it does not make itself: the caller carries the history through the host",
