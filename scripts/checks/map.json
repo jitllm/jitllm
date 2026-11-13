@@ -29,8 +29,8 @@
       "note": "the CLI: flags, environment, doctor, capabilities"
     },
     "jit-cpu": {
-      "module": ".", "packages": ["./engine/device/cpu/..."], "cap": "8G",
-      "note": "every host emitter against the oracle at ragged widths (RULE 8), and no assembly but the trampolines"
+      "module": ".", "packages": ["./engine/device/cpu/...", "./engine/device/cpudev/..."], "cap": "8G",
+      "note": "every host emitter against the oracle at ragged widths (RULE 8), the CPU device's runtime, and no pregenerated kernel but the trampolines"
     },
     "nn": {
       "module": ".", "packages": ["./nn/...", "./grammar/..."], "cap": "8G"
@@ -54,7 +54,7 @@
       "note": "tokenizers against their references"
     },
     "model-correctness": {
-      "module": ".", "packages": ["./engine"], "run": "TestGreedyMatchesLlamaCpp|TestBatchMatchesForward|TestPrefillMatchesForward|TestEveryModelRunsGenerated|TestSafetensorsMatchTransformers|TestTowerEncodes", "cap": "16G",
+      "module": ".", "packages": ["./engine"], "run": "TestGreedyMatchesLlamaCpp|TestBatchMatchesForward|TestPrefillMatchesForward|TestEveryModelRunsGenerated|TestSafetensorsMatchTransformers|TestStatedTowerEncodesAPicture", "cap": "16G",
       "needs": {"models": true},
       "note": "the engine against llama.cpp, transformers and its own batched path (RULE 7, RULE 11d); run the same on the arm64 host"
     },
@@ -69,7 +69,7 @@
       "note": "relocation, host <-> device and between devices"
     },
     "device-model": {
-      "module": ".", "packages": ["./engine"], "run": "OnEveryDevice|TestDeviceMatchesHost|TestTowerOnDeviceMatchesHost", "cap": "16G",
+      "module": ".", "packages": ["./engine"], "run": "OnEveryDevice|TestDeviceMatchesHost|TestStatedTowerRunsOnTheCard", "cap": "16G",
       "needs": {"models": true, "device": true},
       "note": "every graph feature on the device, every block placed against the host (RULE 11c)"
     },
@@ -87,7 +87,7 @@
       "note": "the composer: the graph, its lowering and passes, the one keyed cache, the estimator and the hardware probes"
     },
     "composed": {
-      "module": ".", "packages": ["./engine"], "run": "TestFrontStatesTheModelAsOps|TestComposedBlocksServe|TestComposedHead|TestComposedShadowHoldsEveryBlock|TestC6ServesComposed|TestPrefillFoldsALayerNormHead|TestPlacedPromptsCompileNothing|TestDeviceMemoryHoldsSteadyAcrossMoves|TestSessionsStepAtOnceComposed|TestSessionsRelocateAtOnceComposed|TestABatchLeavesAnotherSessionAlone|TestLayerRelocatesToAnotherDevice|TestBlocksMoveBetweenDevices", "cap": "16G",
+      "module": ".", "packages": ["./engine"], "run": "TestFrontStatesTheModelAsOps|TestComposedBlocksServe|TestComposedHead|TestC6ServesComposed|TestPrefillFoldsALayerNormHead|TestPlacedPromptsCompileNothing|TestDeviceMemoryHoldsSteadyAcrossMoves|TestSessionsStepAtOnce|TestSessionsRelocateAtOnce|TestABatchLeavesAnotherSessionAlone|TestLayerRelocatesToAnotherDevice|TestBlocksMoveBetweenDevices", "cap": "16G",
       "needs": {"models": true, "device": true},
       "note": "the composer serving the tier's blocks and heads: every block served, none formed at a step, forms charged and freed, sessions side by side, moves; every device gate runs composed (docs/testing.md)"
     },
@@ -142,6 +142,8 @@
     {"prefix": "backend/hip/", "evidence": "docs/design/amd-hip.md", "checks": ["gpu-backend", "vet"]},
     {"prefix": "backend/ffi/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-backend", "vet"]},
     {"prefix": "engine/device/gpu/", "evidence": "docs/engineering-history/placement.md", "checks": ["gpu-tier", "relocation", "device-model", "five-principles", "composed", "vet"]},
+    {"prefix": "engine/device/cpudev/", "evidence": "docs/engineering-history/cpu-kernels.md", "checks": ["jit-cpu", "model-correctness", "five-principles", "relocation", "composed", "vet"]},
+    {"prefix": "engine/testdata/", "evidence": "docs/testing.md", "checks": ["model-correctness", "five-principles", "composed", "vet"]},
     {"prefix": "composer/x86/", "evidence": "docs/engineering-history/cpu-kernels.md", "checks": ["composer", "vet"]},
     {"prefix": "composer/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["composer", "composed", "vet"]},
     {"prefix": "graph/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["composer", "composed", "vet"]},
@@ -149,6 +151,7 @@
     {"prefix": "engine/probe/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["composer", "vet"]},
     {"prefix": "format/jlm/", "evidence": "docs/engineering-history/placement.md", "checks": ["format", "five-principles", "model-correctness", "capabilities", "vet"]},
     {"prefix": "format/quant/", "evidence": "docs/engineering-history/cpu-kernels.md", "checks": ["format", "jit-cpu", "capabilities", "srcgate", "vet"]},
+    {"prefix": "format/layout/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["format", "gpu-tier", "composer", "five-principles", "vet"]},
     {"prefix": "convert/", "evidence": "docs/engineering-history/model-correctness.md", "checks": ["convert", "srcgate", "capabilities", "model-correctness", "vet"]},
     {"prefix": "tok/", "evidence": "docs/engineering-history/model-correctness.md", "checks": ["tok", "model-correctness", "vet"]},
     {"prefix": "internal/capabilities/", "evidence": "docs/capabilities.md", "checks": ["capabilities", "capabilities-api", "vet"]},
