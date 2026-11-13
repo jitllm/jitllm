@@ -53,6 +53,9 @@ func TestOnlyTheCommandReadsTheEnvironment(t *testing.T) {
 		// _test.go files and internal/testlock import it
 		// (internal/testdevices' guard).
 		"internal/testdevices/testdevices.go": true,
+		// JITLLM_TEST_BINDIR, where a shipped test binary finds the
+		// commands built beside it. Only _test.go files import it.
+		"internal/testbin/testbin.go": true,
 	}
 
 	var bad []string
