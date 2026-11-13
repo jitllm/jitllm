@@ -1241,7 +1241,9 @@ func (g *devTier) addSessionRec(sid uint64, l *layer, p *nn.LayerPlan) bool {
 	if l.pool == nil {
 		cost += uint64(slots) * slot
 	}
-	if cost > 0 && !g.roomSeat(cost, len(l.rec), need) {
+	// A card its pages fill makes room for the state as for a history
+	// growing (stateFits): a page goes home before a session is refused.
+	if cost > 0 && !g.roomSeat(cost, len(l.rec), need) && !g.stateFits(cost, nil) {
 		g.LastErr = "a session's recurrent state does not fit in this device's budget"
 		g.SessionDeclines++
 		return false
@@ -1349,7 +1351,7 @@ func (g *devTier) addSessionKV(sid uint64, l *layer, p *nn.LayerPlan) bool {
 	cp := g.capped(p)
 	cache, vcache := g.kvCacheBytes(p, cp.MaxSeq)
 	need := uint64(cache + vcache)
-	if !g.roomSeat(need, len(l.kv), need) {
+	if !g.roomSeat(need, len(l.kv), need) && !g.stateFits(need, nil) {
 		g.LastErr = "a second session's KV cache does not fit in this device's budget"
 		g.SessionDeclines++
 		return false
