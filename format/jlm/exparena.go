@@ -18,13 +18,18 @@ import (
 // page-ins and the evictions are the pager's own; only where a frame lives
 // changes. Without a reservation (no anonymous mmap, or a page size the
 // O_DIRECT alignment does not divide) expert pages take frames as block pages
-// do.
+// do -- and so do frames in a device's own memory (WithFrameMemory: a card's
+// page-locked staging), which no bank is read as a view of, so that an expert
+// read into them is sent to the card from where it lies.
 
 // expFrame is expert page li's frame of size bytes in the reservation, made
 // at the first expert page-in, or nil where there is none. The reservation is
 // made with the frames on the heap too (OnHeap): it is address space, and a
 // bank is one view of its experts only there. Callers hold f.mu.
 func (f *Frames) expFrame(li int, size uint64) ([]byte, error) {
+	if f.mem != nil {
+		return nil, nil
+	}
 	if f.exp == nil && !f.expNone {
 		n := uint64(f.file.H.NExpPages) * f.file.H.ExpPageSize
 		if n == 0 || f.file.H.ExpPageSize%Align != 0 {

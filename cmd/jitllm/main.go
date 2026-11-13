@@ -980,10 +980,10 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 					ds.StreamFills, ds.StreamOverlaps)
 				fmt.Fprintf(os.Stderr,
 					"stream upload: sheet lookup %.2f s, gather %.2f s, host-to-device %.2f s for %.2f GiB (%.2f GiB/s); "+
-						"%d plane(s) direct (%d page-locked), %d gathered; groups %d\n",
+						"%d plane(s) direct (%d from page-locked frames, %d through page-locked halves), %d gathered; groups %d\n",
 					sec(ds.TStreamSheet), sec(ds.TStreamCopy), sec(ds.TStreamH2D),
 					float64(ds.StreamBytes)/(1<<30), float64(ds.StreamBytes)/(1<<30)/max(sec(ds.TStreamH2D), 1e-9),
-					ds.StreamDirect, ds.StreamPinned, ds.StreamGathered, ds.StreamGroupsTuned)
+					ds.StreamDirect, ds.StreamFromFrame, ds.StreamPinned, ds.StreamGathered, ds.StreamGroupsTuned)
 			}
 			if ds.StreamCacheHits+ds.StreamCacheMisses > 0 || ds.StreamCacheShort > 0 {
 				fmt.Fprintf(os.Stderr, "expert cache: %d sheet(s) a block, %d hit(s), %d miss(es) (%.1f%% hit), %d block(s) without room for one (mean base %d B)\n",

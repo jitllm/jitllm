@@ -94,6 +94,7 @@ func TestStreamedExpertBankMatchesTheResidentOne(t *testing.T) {
 			c.StreamDirectBytes = 1
 			c.StreamGroups = 1
 			c.StreamPinHalf = 1
+			c.StreamPageableFrames = true
 			c.StreamCacheSlots = -1
 		}, true, false},
 		{"expert cache", func(c *gpu.Config) { c.StreamCacheSlots = 13; c.StreamGroups = 1 }, true, false},
@@ -120,12 +121,24 @@ func streamedMatches(t *testing.T, run func(func(*gpu.Config)) ([][]float32, gpu
 			ss.StreamGathered, ss.StreamDirect)
 	}
 	// A direct arm on a device with page-locked memory goes through it unless
-	// told not to; the pageable arm must not.
-	if pinned := direct && !noPin(cfg) && ss.StreamPinned == 0 && ss.StreamDirect > 0; pinned && pinsHost(t) {
+	// told not to: from the card's frames, which are page-locked, or through
+	// the halves where the frames are kept pageable. The pageable arm must not.
+	var pc gpu.Config
+	cfg(&pc)
+	locked := ss.StreamPinned + ss.StreamFromFrame
+	if direct && !pc.StreamNoPin && locked == 0 && ss.StreamDirect > 0 && pinsHost(t) {
 		t.Fatalf("%d planes sent direct and none through page-locked memory", ss.StreamDirect)
 	}
-	if noPin(cfg) && ss.StreamPinned != 0 {
-		t.Fatalf("the pageable arm sent %d planes through page-locked memory", ss.StreamPinned)
+	if pc.StreamNoPin && locked != 0 {
+		t.Fatalf("the pageable arm sent %d planes through page-locked memory", locked)
+	}
+	if direct && !pc.StreamNoPin && ss.StreamDirect > 0 && pinsHost(t) {
+		switch {
+		case pc.StreamPageableFrames && (ss.StreamPinned == 0 || ss.StreamFromFrame != 0):
+			t.Fatalf("pageable frames: %d planes through the halves, %d from their frames", ss.StreamPinned, ss.StreamFromFrame)
+		case !pc.StreamPageableFrames && (ss.StreamFromFrame == 0 || ss.StreamPinned != 0):
+			t.Fatalf("page-locked frames: %d planes from their frames, %d copied through the halves", ss.StreamFromFrame, ss.StreamPinned)
+		}
 	}
 	// A cache of 13 sheets for a selection of 10 out of 512 both hits and
 	// evicts over eight tokens; a cache arm that did neither tested the plain

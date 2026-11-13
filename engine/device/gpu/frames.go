@@ -1,7 +1,10 @@
 package gpu
 
 import (
+	"cmp"
 	"fmt"
+	"slices"
+	"sync"
 	"unsafe"
 
 	"github.com/jitllm/jitllm/backend"
@@ -42,8 +45,8 @@ func (g *devTier) framesOf(f *jlm.File) (*jlm.Frames, error) {
 		return fr, nil
 	}
 	opts := []jlm.FramesOption{jlm.DenseOnDemand()}
-	if hp, ok := g.dev.(backend.HostPinner); ok {
-		opts = append(opts, jlm.WithFrameMemory(pinnedFrames{hp}))
+	if hp, ok := g.dev.(backend.HostPinner); ok && !g.StreamNoPin && !g.StreamPageableFrames {
+		opts = append(opts, jlm.WithFrameMemory(pinnedFrames{hp, &g.pinnedFr}))
 	}
 	fr, err := jlm.NewFrames(f, opts...)
 	if err != nil {
@@ -219,8 +222,67 @@ func (g *devTier) closeFrames() {
 
 // pinnedFrames is a card's page-locked host memory as a frames' memory
 // (jlm.FrameMemory): a transfer out of it needs no bounce through a staging
-// copy.
-type pinnedFrames struct{ hp backend.HostPinner }
+// copy. set records each buffer, so a sheet's bytes can be told to be in one.
+type pinnedFrames struct {
+	hp  backend.HostPinner
+	set *pinnedSet
+}
 
-func (p pinnedFrames) Map(n int) ([]byte, error) { return p.hp.PinHost(n) }
-func (p pinnedFrames) Unmap(b []byte)            { p.hp.UnpinHost(b) }
+func (p pinnedFrames) Map(n int) ([]byte, error) {
+	b, err := p.hp.PinHost(n)
+	if err == nil {
+		p.set.add(b)
+	}
+	return b, err
+}
+
+func (p pinnedFrames) Unmap(b []byte) {
+	p.set.drop(b)
+	p.hp.UnpinHost(b)
+}
+
+// pinnedSet is the page-locked buffers a card's frames hold, by address, in
+// order. The frames map and give back buffers on whichever goroutine paged,
+// so it has a lock of its own.
+type pinnedSet struct {
+	mu  sync.Mutex
+	buf [][2]uintptr
+}
+
+func (s *pinnedSet) add(b []byte) {
+	if len(b) == 0 {
+		return
+	}
+	lo := uintptr(unsafe.Pointer(unsafe.SliceData(b)))
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	i, _ := slices.BinarySearchFunc(s.buf, lo, func(r [2]uintptr, p uintptr) int { return cmp.Compare(r[0], p) })
+	s.buf = slices.Insert(s.buf, i, [2]uintptr{lo, lo + uintptr(len(b))})
+}
+
+func (s *pinnedSet) drop(b []byte) {
+	if len(b) == 0 {
+		return
+	}
+	lo := uintptr(unsafe.Pointer(unsafe.SliceData(b)))
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if i, ok := slices.BinarySearchFunc(s.buf, lo, func(r [2]uintptr, p uintptr) int { return cmp.Compare(r[0], p) }); ok {
+		s.buf = slices.Delete(s.buf, i, i+1)
+	}
+}
+
+// holds reports whether p lies wholly inside one of the buffers.
+func (s *pinnedSet) holds(p []byte) bool {
+	if len(p) == 0 {
+		return false
+	}
+	lo := uintptr(unsafe.Pointer(unsafe.SliceData(p)))
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	i, ok := slices.BinarySearchFunc(s.buf, lo, func(r [2]uintptr, p uintptr) int { return cmp.Compare(r[0], p) })
+	if !ok {
+		i--
+	}
+	return i >= 0 && lo+uintptr(len(p)) <= s.buf[i][1]
+}

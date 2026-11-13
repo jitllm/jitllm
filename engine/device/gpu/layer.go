@@ -670,7 +670,8 @@ func (st *streamBank) put(g *devTier, s backend.Session, l *layer, nExpert int, 
 				g.TStreamSheet += tc.Sub(ts)
 				if direct {
 					// The frame stays held until sendPieces has copied it out.
-					g.pieces = append(g.pieces, sheetPiece{dst: dst, off: i * n, src: src, release: release})
+					g.pieces = append(g.pieces, sheetPiece{dst: dst, off: i * n, src: src, release: release,
+						locked: g.pinnedFr.holds(src)})
 					continue
 				}
 				copy(buf[(i-lo)*n:(i-lo+1)*n], src)
@@ -699,6 +700,8 @@ type sheetPiece struct {
 	off     int
 	src     []byte
 	release func()
+	// locked is that src lies in a page-locked frame (pinnedSet).
+	locked bool
 }
 
 // pinHalf is the size of each page-locked half: two of Kimi-K3's 5.6 MiB
@@ -712,14 +715,32 @@ const pinHalf = 12 << 20
 // one core ran under the link, so a half is copied by several.
 const copyChunk = 1 << 20
 
-// sendPieces puts direct sheets on the card. With page-locked memory it is a
-// two-stage pipeline: the pieces are copied into one half (concurrently, one
-// goroutine a piece, since a single memcpy from a remote node runs well under
-// the link) while the other half is transferred, and a transfer out of
-// page-locked memory runs at the link's rate where a pageable one went
-// through the driver's bounce buffer at 5.76 GiB/s (placement.md 16c).
-// Without it each piece is a pageable transfer from its frame.
+// sendPieces puts direct sheets on the card. A sheet in a page-locked frame
+// -- a card's frames are, where its backend pins host memory -- is sent from
+// it. The rest, in pageable memory, go through a two-stage pipeline where
+// the device has page-locked memory: the pieces are copied into one half
+// (concurrently, one goroutine a piece, since a single memcpy from a remote
+// node runs well under the link) while the other half is transferred, and a
+// transfer out of page-locked memory runs at the link's rate where a
+// pageable one went through the driver's bounce buffer at 5.76 GiB/s
+// (placement.md 16c). Without it each is a pageable transfer from its frame.
 func (g *devTier) sendPieces(s backend.Session, ps []sheetPiece) error {
+	g.staged = g.staged[:0]
+	for i := range ps {
+		if !ps[i].locked {
+			g.staged = append(g.staged, ps[i])
+			continue
+		}
+		th := time.Now()
+		if err := s.WriteAt(ps[i].dst, ps[i].off, ps[i].src); err != nil {
+			return err
+		}
+		g.TStreamH2D += time.Since(th)
+		g.StreamBytes += int64(len(ps[i].src))
+		g.StreamDirect++
+		g.StreamFromFrame++
+	}
+	ps = g.staged
 	if len(ps) == 0 {
 		return nil
 	}

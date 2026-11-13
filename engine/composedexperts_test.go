@@ -768,6 +768,11 @@ func streamSelected(t *testing.T, st gpu.Stats, a streamArm) {
 			st.Declined, st.DeclineWhy, st.PageIns, st.PageOuts)
 	case a == streamCache && st.StreamRowFills == 0:
 		t.Fatalf("no call of several rows filled its pages (%d fills)", st.StreamFills)
+	case st.StreamPinned > 0 && st.StreamFromFrame == 0:
+		// The card page-locks host memory (the halves are), and its frames
+		// are that memory: a direct sheet staged through the halves was
+		// read somewhere else.
+		t.Fatalf("%d planes sent through the page-locked halves and none from the card's page-locked frames", st.StreamPinned)
 	}
 }
 
