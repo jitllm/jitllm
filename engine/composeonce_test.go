@@ -60,6 +60,7 @@ func TestPlacementComposesOnce(t *testing.T) {
 		t.Cleanup(g.Close)
 		return g
 	}
+	ahead := 0
 	for _, name := range composeOnceModels() {
 		t.Run(name, func(t *testing.T) {
 			p := testmodels.Path(name)
@@ -75,7 +76,7 @@ func TestPlacementComposesOnce(t *testing.T) {
 					t.Fatal(err)
 				}
 				defer m.Close()
-				composesOnce(t, m, open(t, testdevices.Take(t, 1, "cuda:0")[0]), width, "")
+				composesOnce(t, m, open(t, testdevices.Take(t, 1, "cuda:0")[0]), width, "", &ahead)
 			})
 			t.Run("two-cards", func(t *testing.T) {
 				a, b := moveDevices(t)
@@ -97,9 +98,12 @@ func TestPlacementComposesOnce(t *testing.T) {
 					t.Fatal(err)
 				}
 				defer m.Close()
-				composesOnce(t, m, g, width, b, instOpts...)
+				composesOnce(t, m, g, width, b, &ahead, instOpts...)
 			})
 		})
+	}
+	if ahead == 0 && !t.Failed() {
+		t.Fatal("no placement's prompt walk formed a form ahead: the walk ahead never ran")
 	}
 }
 
@@ -118,7 +122,7 @@ func composeOnceModels() []string {
 // composesOnce is TestPlacementComposesOnce's census of m on g. With to set,
 // the relocation moves the blocks on the first one's device to it; without,
 // the upper half goes to the CPU and back.
-func composesOnce(t *testing.T, m *model.Model, g *gpu.GPU, width int, to string, io ...Option) {
+func composesOnce(t *testing.T, m *model.Model, g *gpu.GPU, width int, to string, ahead *int, io ...Option) {
 	lengths := []int{1, 5, 33, 100, 511, 512, 513, 2000}
 	const decode = 2
 	total := 0
@@ -155,6 +159,12 @@ func composesOnce(t *testing.T, m *model.Model, g *gpu.GPU, width int, to string
 	if st0.PartsFormed == 0 {
 		t.Fatalf("the placement composed nothing: %s", g.Err())
 	}
+	// The prompt walk asks for its forms side by side first, and walking
+	// finds each made.
+	if st0.FormedInWalk != 0 {
+		t.Fatalf("the placement's prompt walk formed %d forms itself and %d ahead, side by side: want every one ahead", st0.FormedInWalk, st0.FormedAhead)
+	}
+	*ahead += st0.FormedAhead
 	if st0.ReservedRows < 2 || st0.ReservedRows > width {
 		t.Fatalf("the devices reserved %d rows, asked for %d: %s", st0.ReservedRows, width, g.Err())
 	}

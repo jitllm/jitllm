@@ -498,6 +498,10 @@ type Stats struct {
 	// composer whatever the caller marked the form as: a step, a prompt or
 	// a session that moves it composed.
 	ComposerRuns int
+	// FormedAhead is the composer's forms a placement's prompt walk asked
+	// for side by side before it walked (formAhead), and FormedInWalk those
+	// the walk then formed itself: none where every part was asked ahead.
+	FormedAhead, FormedInWalk int
 	// ReservedRows is the rows of the reserved width a device holds the
 	// composer's prompt and ragged forms at, its buffers in the budget
 	// (fitReserved): its capacity, a call of more rows running in chunks of
@@ -828,6 +832,8 @@ func (s *Stats) add(o Stats) {
 		s.FormErr = o.FormErr
 	}
 	s.ComposerRuns += o.ComposerRuns
+	s.FormedAhead += o.FormedAhead
+	s.FormedInWalk += o.FormedInWalk
 	s.PartKernels += o.PartKernels
 	s.ScratchBuilds += o.ScratchBuilds
 	s.LaneBuilds += o.LaneBuilds
@@ -1344,6 +1350,9 @@ type devShared struct {
 	// or PrepHead is forming them (Stats.UnformedAtStep).
 	servedForms map[composer.Key]*partForm
 	prewarming  bool
+	// ahead, where set, is a walk asking the composer for its parts' forms
+	// side by side and holding nothing (formAhead).
+	ahead *formsAhead
 	// copyGraphs are the copies over x by row width (servedCopy), each one
 	// graph so its part keys alike every step.
 	copyGraphs map[int]*graph.Graph
