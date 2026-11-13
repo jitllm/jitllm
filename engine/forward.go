@@ -145,8 +145,10 @@ type Instance struct {
 	// a session in another format is carried through (recode).
 	kvConv  nn.KVConvDevice
 	kvConvs [nn.KVFormats]nn.KVConvDevice
-	// heads is the device running the head and the samplers.
+	// heads is the device running the head and the samplers; post is the
+	// distribution a draw drew from, as SampledProbs reads it.
 	heads nn.HeadDevice
+	post  specDist
 	// entry is the device writing a prediction block's entry rows, nil on an
 	// instance that starts at no prediction block.
 	entry nn.EntryDevice

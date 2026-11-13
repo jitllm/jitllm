@@ -204,55 +204,8 @@ func DynTemp(p []float64, invT float64, dyn [2]float64) float64 {
 // tau. It returns the token, the next mu and how far the draw is from
 // flipping.
 func SampleMirostat(logits []float32, v1 bool, invT float32, tau, eta, mu, u float64) (tok uint32, mu2, margin float64) {
-	n := len(logits)
-	m := math.Inf(-1)
-	for _, x := range logits {
-		m = max(m, float64(x*invT))
-	}
-	q := make([]float64, n)
-	sum := 0.0
-	for i, x := range logits {
-		q[i] = math.Exp(float64(x*invT) - m)
-		sum += q[i]
-	}
-	for i := range q {
-		q[i] /= sum
-	}
-	order := make([]int, n)
-	for i := range order {
-		order[i] = i
-	}
-	sort.SliceStable(order, func(a, b int) bool { return q[order[a]] > q[order[b]] })
-	margin = math.Inf(1)
-	keep := 0
-	if v1 {
-		mm := min(100, n)
-		num, den := 0.0, 0.0
-		for i := 0; i < mm-1; i++ {
-			t := math.Log(float64(i+2) / float64(i+1))
-			num += t * math.Log(q[order[i]]/q[order[i+1]])
-			den += t * t
-		}
-		s := num / den
-		eps := s - 1
-		k := math.Pow(eps*math.Pow(2, mu)/(1-math.Pow(float64(n), -eps)), 1/s)
-		if k >= 1 {
-			margin = min(margin, (k-math.Floor(k))/k, (math.Floor(k)+1-k)/k)
-			keep = min(int(k), n)
-		} else {
-			keep = 1
-		}
-	} else {
-		floor := math.Pow(2, -mu)
-		for _, i := range order {
-			margin = min(margin, math.Abs(q[i]-floor)/floor)
-			if q[i] < floor {
-				break
-			}
-			keep++
-		}
-		keep = max(keep, 1)
-	}
+	q, order := mirostatRow(logits, invT)
+	keep, margin := mirostatKeep(q, order, v1, mu)
 	surv := order[:keep]
 	mass := 0.0
 	for _, i := range surv {
@@ -270,6 +223,74 @@ func SampleMirostat(logits []float32, v1 bool, invT float32, tau, eta, mu, u flo
 	}
 	bits := -math.Log2(q[tok] / mass)
 	return tok, mu - eta*(bits-tau), margin
+}
+
+// MirostatKeep is how many of the row's likeliest tokens SampleMirostat's
+// draw keeps at mu, and how far that count is from moving.
+func MirostatKeep(logits []float32, v1 bool, invT float32, mu float64) (keep int, margin float64) {
+	q, order := mirostatRow(logits, invT)
+	return mirostatKeep(q, order, v1, mu)
+}
+
+// mirostatRow is the row's softmax at 1/T (each logit times 1/T in float32)
+// and its order, the larger first, the lower id of two equal.
+func mirostatRow(logits []float32, invT float32) (q []float64, order []int) {
+	n := len(logits)
+	m := math.Inf(-1)
+	for _, x := range logits {
+		m = max(m, float64(x*invT))
+	}
+	q = make([]float64, n)
+	sum := 0.0
+	for i, x := range logits {
+		q[i] = math.Exp(float64(x*invT) - m)
+		sum += q[i]
+	}
+	for i := range q {
+		q[i] /= sum
+	}
+	order = make([]int, n)
+	for i := range order {
+		order[i] = i
+	}
+	sort.SliceStable(order, func(a, b int) bool { return q[order[a]] > q[order[b]] })
+	return q, order
+}
+
+// mirostatKeep is how many of the row's softmax q, in its order, a Mirostat
+// draw keeps: version 1 the Zipf estimate's k, version 2 the tokens of at
+// most mu bits, one at least; and how far that count is from moving.
+func mirostatKeep(q []float64, order []int, v1 bool, mu float64) (keep int, margin float64) {
+	n := len(q)
+	margin = math.Inf(1)
+	if v1 {
+		mm := min(100, n)
+		num, den := 0.0, 0.0
+		for i := 0; i < mm-1; i++ {
+			t := math.Log(float64(i+2) / float64(i+1))
+			num += t * math.Log(q[order[i]]/q[order[i+1]])
+			den += t * t
+		}
+		s := num / den
+		eps := s - 1
+		k := math.Pow(eps*math.Pow(2, mu)/(1-math.Pow(float64(n), -eps)), 1/s)
+		if k >= 1 {
+			margin = min(margin, (k-math.Floor(k))/k, (math.Floor(k)+1-k)/k)
+			keep = min(int(k), n)
+		} else {
+			keep = 1
+		}
+		return keep, margin
+	}
+	floor := math.Pow(2, -mu)
+	for _, i := range order {
+		margin = min(margin, math.Abs(q[i]-floor)/floor)
+		if q[i] < floor {
+			break
+		}
+		keep++
+	}
+	return max(keep, 1), margin
 }
 
 // xtcCut is llama.cpp's XTC over the survivors surv (in their order, largest
@@ -422,6 +443,44 @@ func walkAt(ids []uint32, w []float64, in []bool, u float64) (tok uint32, margin
 // sampler made, or of u's point, from turning.
 func SampleInfill(logits []float32, K, k int, invT, topp, minp, typ, xtc, sigma float64, dyn [2]float64, u float64,
 	piece func(int) string, eog func(int) bool, eot int) (tok uint32, branch int, margin float64) {
+	ids, et, in, branch, margin := infillSurvivors(logits, K, k, invT, topp, minp, typ, xtc, sigma, dyn, piece, eog)
+	if branch == 2 {
+		return uint32(eot), 2, margin
+	}
+	tok, wm := walkAt(ids, et, in, u)
+	return tok, branch, min(margin, wm)
+}
+
+// InfillProbs is the distribution SampleInfill's draw draws from: each
+// candidate's share of what survives by its weight, over ids in their order,
+// or the end-of-turn token eot alone where the draw is forced to it (branch
+// 2); and how far a comparison the sampler made is from turning.
+func InfillProbs(logits []float32, K, k int, invT, topp, minp, typ, xtc, sigma float64, dyn [2]float64,
+	piece func(int) string, eog func(int) bool, eot int) (ids []uint32, p []float64, branch int, margin float64) {
+	ids, et, in, branch, margin := infillSurvivors(logits, K, k, invT, topp, minp, typ, xtc, sigma, dyn, piece, eog)
+	if branch == 2 {
+		return []uint32{uint32(eot)}, []float64{1}, 2, margin
+	}
+	p = make([]float64, len(ids))
+	mass := 0.0
+	for j, x := range et {
+		if in[j] {
+			mass += x
+		}
+	}
+	for j, x := range et {
+		if in[j] {
+			p[j] = x / mass
+		}
+	}
+	return ids, p, branch, margin
+}
+
+// infillSurvivors is SampleInfill's candidates, their weights at the
+// temperature and those that survive the infill sampler, which way it went
+// and its margin, before the walk.
+func infillSurvivors(logits []float32, K, k int, invT, topp, minp, typ, xtc, sigma float64, dyn [2]float64,
+	piece func(int) string, eog func(int) bool) (ids []uint32, et []float64, in []bool, branch int, margin float64) {
 	margin = math.Inf(1)
 	if sigma > 0 {
 		logits, margin = TopNSigma(logits, sigma)
@@ -444,13 +503,12 @@ func SampleInfill(logits []float32, K, k int, invT, topp, minp, typ, xtc, sigma 
 		}
 	}
 	margin = min(margin, math.Abs(3*pe*float64(n)-pt))
-	in := make([]bool, n)
+	in = make([]bool, n)
 	if 3*pe*float64(n) > pt {
 		for j := range ids {
 			in[j] = eog(int(ids[j]))
 		}
-		tok, wm = walkAt(ids, et, in, u)
-		return tok, 1, min(margin, wm)
+		return ids, et, in, 1, margin
 	}
 	dead := make([]bool, n)
 	for i0 := range n {
@@ -490,7 +548,7 @@ func SampleInfill(logits []float32, K, k int, invT, topp, minp, typ, xtc, sigma 
 		}
 	}
 	if txt == 0 {
-		return uint32(eot), 2, margin
+		return ids, et, nil, 2, margin
 	}
 	thold := 1 / float64(txt+1)
 	for j := range ids {
@@ -506,8 +564,7 @@ func SampleInfill(logits []float32, K, k int, invT, topp, minp, typ, xtc, sigma 
 		}
 		in[j] = !dead[j]
 	}
-	tok, wm = walkAt(ids, et, in, u)
-	return tok, 0, min(margin, wm)
+	return ids, et, in, 0, margin
 }
 
 // SampleCut is the draw with no top-k and a cut: the repeat penalty once a

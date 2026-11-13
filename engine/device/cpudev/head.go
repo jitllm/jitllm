@@ -57,9 +57,10 @@ type Head struct {
 	// variant's (then k, then the same three).
 	walkArgs [10]float32
 	// miroArgs is a Mirostat draw's words (1/T, tau, eta, mu, u), miroMu the
-	// next mu it writes.
+	// next mu it writes and miroKept how many tokens it keeps.
 	miroArgs [5]float32
 	miroMu   [1]float32
+	miroKept [1]float32
 	rowArgs  [2]float32
 	cutArgs  [10]float32
 	cutKArgs [11]float32
@@ -69,6 +70,14 @@ type Head struct {
 	infill  nn.InfillTables
 	infArgs [11]float32
 	infEOT  [1]uint32
+	// infP, infIDs and infForced are what an infill draw writes beside its
+	// token: the distribution it draws from over its candidates, their ids,
+	// and 1 where it is forced to the end-of-turn token, whose probability
+	// one is then.
+	infP      []float32
+	infIDs    []uint32
+	infForced [1]float32
+	one       [1]float32
 	// ids is the row's ids, 0 to the vocabulary's last, which the draws with
 	// no top-k read.
 	ids []uint32
@@ -116,6 +125,10 @@ func NewHead(dev *Device, steps *nn.Steps, p HeadParts, norm bool, w Weights, d,
 	if q.WalkProb.F != nil {
 		h.probVals, h.probIDs = make([]float32, nn.SampleMaxK), make([]uint32, nn.SampleMaxK)
 	}
+	if q.WalkInfill.F != nil {
+		h.infP, h.infIDs = make([]float32, nn.InfillMaxK), make([]uint32, nn.InfillMaxK)
+	}
+	h.one[0] = 1
 	if q.Logprobs.F != nil {
 		h.lpRow, h.lpIDs = make([]float32, nv), make([]uint32, min(topLog, nv))
 	}
@@ -380,7 +393,7 @@ func (h *Head) mirostat(logits []float32, a *nn.DrawArgs, u float32) (int32, boo
 	h.pen = nn.NoPenalties()
 	h.miroArgs = [5]float32{a.InvTemp, a.MiroTau, a.MiroEta, a.MiroMu, u}
 	h.run(f, nil, 1, unsafe.Pointer(&logits[0]), unsafe.Pointer(&h.noWin[0]), unsafe.Pointer(&h.pen[0]), unsafe.Pointer(&h.ids[0]),
-		unsafe.Pointer(&h.miroArgs[0]), unsafe.Pointer(&h.token[0]), unsafe.Pointer(&h.miroMu[0]))
+		unsafe.Pointer(&h.miroArgs[0]), unsafe.Pointer(&h.token[0]), unsafe.Pointer(&h.miroMu[0]), unsafe.Pointer(&h.miroKept[0]))
 	if a.Mu != nil {
 		*a.Mu = h.miroMu[0]
 	}
@@ -429,19 +442,43 @@ func (h *Head) walkInfill(logits []float32, a *nn.DrawArgs, u float32) (int32, b
 	h.infArgs = [11]float32{float32(k), a.InvTemp, a.TopP, a.MinP, u, typ, xtc, 1, a.DynRange, a.DynExp, a.Sigma}
 	h.run(f, nil, 1, unsafe.Pointer(&logits[0]), win, unsafe.Pointer(&h.pen[0]), unsafe.Pointer(&h.infArgs[0]),
 		unsafe.Pointer(&h.infill.Class[0]), unsafe.Pointer(&h.infill.Parent[0]), unsafe.Pointer(&h.infill.EOG[0]),
-		unsafe.Pointer(&h.infEOT[0]), unsafe.Pointer(&h.token[0]))
+		unsafe.Pointer(&h.infEOT[0]), unsafe.Pointer(&h.token[0]), unsafe.Pointer(&h.infP[0]), unsafe.Pointer(&h.infIDs[0]),
+		unsafe.Pointer(&h.infForced[0]))
 	h.steps.Serve(nn.PartSample)
 	return int32(h.token[0]), true
 }
 
 // Dist is the distribution a draws from over logits: a top-k draw's
 // candidates and their share of the survivors (ids and vals, dense false),
-// else every token's probability written into pall (dense true). False where
-// the forms decline.
+// else every token's probability written into pall (dense true). A Mirostat
+// draw's is the top-k draw's over the tokens it keeps at a.MiroMu (a.Mu left
+// as it is); an infill draw's its candidates' share of what survives the
+// infill sampler, or its end-of-turn token alone where the draw is forced to
+// it. False where the forms decline.
 func (h *Head) Dist(logits []float32, a nn.DrawArgs, pall []float32) (dense bool, ids []uint32, vals []float32, ok bool) {
 	n := len(logits)
 	if n != h.nv {
 		return false, nil, nil, false
+	}
+	if a.Mirostat != 0 {
+		a.Mu = nil
+		if _, ok := h.mirostat(logits, &a, 0); !ok {
+			return false, nil, nil, false
+		}
+		k := int(h.miroKept[0])
+		if k >= n {
+			k = 0
+		}
+		a = nn.DrawArgs{TopK: k, InvTemp: a.InvTemp, TopP: float32(math.Inf(1)), DynExp: 1, Penalty: nn.NoPenalties()}
+	}
+	if a.Infill {
+		if _, ok := h.walkInfill(logits, &a, 0); !ok {
+			return false, nil, nil, false
+		}
+		if h.infForced[0] > 0 {
+			return false, h.infEOT[:], h.one[:], true
+		}
+		return false, h.infIDs, h.infP, true
 	}
 	topK := a.TopK > 0 && a.TopK < n
 	bounded := topK && a.TopK <= nn.SampleMaxK && a.Sigma <= 0
