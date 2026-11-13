@@ -26,6 +26,7 @@ type HeadParts struct {
 	WalkInfill                               Part
 	Adaptive                                 Part
 	Stage                                    Part
+	LogprobsRow                              Part
 }
 
 // Head is the head and the samplers on the CPU device, composed once at the
@@ -41,9 +42,11 @@ type Head struct {
 	// onPad is the output norm's rows where a call is shorter than its unit,
 	// in then out.
 	onPad []float32
-	// lpRow and lpIDs are what the log-softmax writes.
+	// lpRow and lpIDs are what the log-softmax writes, lpAll the whole
+	// row's order where its part writes it.
 	lpRow []float32
 	lpIDs []uint32
+	lpAll []uint32
 	// probVals and probIDs are the walk's distribution.
 	probVals []float32
 	probIDs  []uint32
@@ -136,8 +139,14 @@ func NewHead(dev *Device, steps *nn.Steps, p HeadParts, norm bool, w Weights, d,
 		h.infP, h.infIDs = make([]float32, nn.InfillMaxK), make([]uint32, nn.InfillMaxK)
 	}
 	h.one[0] = 1
+	if q.Logprobs.F != nil || q.LogprobsRow.F != nil {
+		h.lpRow = make([]float32, nv)
+	}
 	if q.Logprobs.F != nil {
-		h.lpRow, h.lpIDs = make([]float32, nv), make([]uint32, min(topLog, nv))
+		h.lpIDs = make([]uint32, min(topLog, nv))
+	}
+	if q.LogprobsRow.F != nil {
+		h.lpAll = make([]uint32, nv)
 	}
 	if cuts {
 		h.ids = make([]uint32, nv)
@@ -576,18 +585,23 @@ func (h *Head) Mask(dst, logits, mask []float32) bool {
 	return true
 }
 
-// Logprobs is the log-softmax of logits and its most likely tokens, the
-// larger logit first and the lower id on a tie, or false where the form
-// declines; both are the head's until its next call.
-func (h *Head) Logprobs(logits []float32) (row []float32, ids []uint32, ok bool) {
-	f, _, why := h.form(&h.p.Logprobs, false)
+// Logprobs is the log-softmax of logits and at least its n most likely
+// tokens, the larger logit first and the lower id on a tie -- the selection's
+// where n is within it, else the whole row in order -- or false where the
+// form declines; both are the head's until its next call.
+func (h *Head) Logprobs(logits []float32, n int) (row []float32, ids []uint32, ok bool) {
+	p, out := &h.p.Logprobs, h.lpIDs
+	if n > len(h.lpIDs) {
+		p, out = &h.p.LogprobsRow, h.lpAll
+	}
+	f, _, why := h.form(p, false)
 	if why != nn.DeclineServes {
 		h.steps.Decline(nn.PartSample, why)
 		return nil, nil, false
 	}
-	h.run(f, nil, 1, unsafe.Pointer(&logits[0]), unsafe.Pointer(&h.lpRow[0]), unsafe.Pointer(&h.lpIDs[0]))
+	h.run(f, nil, 1, unsafe.Pointer(&logits[0]), unsafe.Pointer(&h.lpRow[0]), unsafe.Pointer(&out[0]))
 	h.steps.Serve(nn.PartSample)
-	return h.lpRow, h.lpIDs, true
+	return h.lpRow, out, true
 }
 
 // Decide is a label readout over vals, the picked logits of a question's

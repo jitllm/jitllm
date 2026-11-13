@@ -289,7 +289,7 @@ type HeadDevice interface {
 	Draw(logits []float32, a DrawArgs, u float32) (int32, bool)
 	Dist(logits []float32, a DrawArgs, pall []float32) (dense bool, ids []uint32, vals []float32, ok bool)
 	Mask(dst, logits, mask []float32) bool
-	Logprobs(logits []float32) (row []float32, ids []uint32, ok bool)
+	Logprobs(logits []float32, n int) (row []float32, ids []uint32, ok bool)
 	Decide(vals, keep, params, prior, probs, stats []float32) bool
 	Adaptive(p []float32, ids []uint32, cand []float32, w [6]float32, logits, q, pd []float32) (sum, weight float32, ok bool)
 	Stage(logits, p []float32, ids []uint32, cand []float32, a DrawArgs, w [4]float32, out []float32) bool

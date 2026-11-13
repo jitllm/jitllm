@@ -149,6 +149,9 @@ type frontSet struct {
 	// cpuLogprobs is the logits' log-softmax and their MaxTopLogprobs most
 	// likely tokens, cpuMask a constrained draw's masked logits.
 	CpuLogprobs, CpuMask *graph.Graph
+	// CpuLogprobsRow is the log-softmax with the whole row in order, the
+	// likeliest first: the alternatives past MaxTopLogprobs.
+	CpuLogprobsRow *graph.Graph
 	// CpuDecide is a decision readout's distribution and answers
 	// (graph.DecisionScores): over a label readout's picked logits, or a
 	// marker head's scores, for a container that states either.
@@ -424,6 +427,8 @@ func (m *Model) FrontGraphs() *frontSet {
 		s.CpuStage = st.Build()
 		lp := graph.Logprobs{NVocab: m.Cfg.NVocab, K: MaxTopLogprobs}
 		s.CpuLogprobs = lp.Build()
+		la := graph.Logprobs{NVocab: m.Cfg.NVocab, K: m.Cfg.NVocab}
+		s.CpuLogprobsRow = la.Build()
 		mk := graph.MaskRow{NVocab: m.Cfg.NVocab}
 		s.CpuMask = mk.Build()
 	}
@@ -2097,8 +2102,9 @@ func (m *Model) givenGraph() (*graph.Graph, error) {
 	return b.G, nil
 }
 
-// MaxTopLogprobs is the most alternatives a Logprobs reports per token, the
-// OpenAI API's bound on top_logprobs.
+// MaxTopLogprobs is the alternatives the log-softmax's own selection orders
+// per token (CpuLogprobs), the OpenAI API's bound on top_logprobs; past it a
+// Logprobs reads the whole row in order (CpuLogprobsRow).
 const MaxTopLogprobs = 20
 
 // indexed is a selecting block's indexer: its key as the row caches it, its

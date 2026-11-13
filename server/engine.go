@@ -1761,7 +1761,7 @@ type GenerateOptions struct {
 	// one does.
 	LogitBias []TokenBias
 	// Logprobs puts each sampled token's log-probability on its Token event,
-	// with the TopLogprobs (0..model.MaxTopLogprobs) most likely alternatives.
+	// with the TopLogprobs (0 to the vocabulary) most likely alternatives.
 	// They are the model's raw distribution, before temperature and penalties
 	// (engine.Logprobs).
 	Logprobs    bool
