@@ -89,7 +89,8 @@ byte-level BPE vocabulary `/tokenize` with `parse_special: false` is refused
 when the text contains a control token, because the tokenizer matches it either
 way.
 
-Not served: `/reranking`, `/embeddings`, `/lora-adapters`, `/models`, slot
+`/embeddings` is `/embedding` and `/models` is `/v1/models`, as llama-server
+serves them. Not served: `/reranking`, `/lora-adapters`, slot
 save/restore/erase, and llama-server's own `/metrics` names (`/metrics` stays
 jitllm's).
 

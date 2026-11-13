@@ -2,6 +2,7 @@ package server
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -964,7 +965,45 @@ func TestLlamaPropsSlotsHealthEmbedding(t *testing.T) {
 
 func TestLlamaEmbeddingShape(t *testing.T) {
 	s := serve(t, &llamaEmbedFake{llamaFake: &llamaFake{fakeBackend: &fakeBackend{}}})
-	resp := post(t, s, "/embedding", `{"content":["a","b"]}`)
+	for _, path := range []string{"/embedding", "/embeddings"} {
+		t.Run(path, func(t *testing.T) { llamaEmbeddingShape(t, s, path) })
+	}
+}
+
+// TestLlamaModelsIsV1Models: llama-server's /models is its /v1/models.
+func TestLlamaModelsIsV1Models(t *testing.T) {
+	s := serve(t, &fakeBackend{})
+	read := func(path string) []byte {
+		resp, err := http.Get(s.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != 200 {
+			t.Fatalf("%s: %d", path, resp.StatusCode)
+		}
+		b, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	var m struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	b := read("/models")
+	if err := json.Unmarshal(b, &m); err != nil || len(m.Data) == 0 || m.Data[0].ID == "" {
+		t.Fatalf("/models: %s (%v)", b, err)
+	}
+	if v := read("/v1/models"); !bytes.Equal(b, v) {
+		t.Fatalf("/models %s, /v1/models %s", b, v)
+	}
+}
+
+func llamaEmbeddingShape(t *testing.T, s *httptest.Server, path string) {
+	resp := post(t, s, path, `{"content":["a","b"]}`)
 	defer resp.Body.Close()
 	var out []struct {
 		Index     int         `json:"index"`
