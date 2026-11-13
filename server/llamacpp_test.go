@@ -584,7 +584,7 @@ func TestLlamaSamplersChooseTheStages(t *testing.T) {
 	if sm := f.opts().Sampling; sm.TopK != 5 || sm.MinP != 0.2 || sm.Temp != 0.3 || sm.RepeatPen != 1.3 {
 		t.Errorf("the default chain ran %+v, want every stage", sm)
 	}
-	for _, bad := range []string{`["top_p","top_k"]`, `["top_k","foo"]`, `["top_k","infill","top_p"]`, `["top_k","adaptive_p"]`, `"kq"`, `7`} {
+	for _, bad := range []string{`["top_p","top_k"]`, `["top_k","foo"]`, `["top_k","infill","top_p"]`, `"kq"`, `7`} {
 		code, out := llamaPost(t, s, "/completion", `{"prompt":"x","samplers":`+bad+`}`)
 		if b, _ := json.Marshal(out); code != 400 || !strings.Contains(string(b), "samplers") {
 			t.Errorf("samplers %s: %d %s", bad, code, b)
@@ -637,6 +637,16 @@ func TestLlamaSamplingDefaultsAndMapping(t *testing.T) {
 	}
 	if gs := out["generation_settings"].(map[string]any); gs["post_sampling_probs"] != true {
 		t.Fatalf("generation_settings: %v", gs)
+	}
+	// adaptive-p, named anywhere in samplers, as llama.cpp runs it last.
+	if code, out := llamaPost(t, s, "/completion", `{"prompt":"x","samplers":["adaptive_p","top_k","temperature"],"adaptive_target":0.3,"adaptive_decay":0.8}`); code != 200 {
+		t.Fatalf("adaptive-p: %d %v", code, out)
+	}
+	if sm := f.opts().Sampling; !sm.Adaptive || sm.AdaptiveTarget != 0.3 || sm.AdaptiveDecay != 0.8 || sm.TopK != 40 {
+		t.Fatalf("adaptive-p reached the sampler as %v at %v, decay %v, top-k %d", sm.Adaptive, sm.AdaptiveTarget, sm.AdaptiveDecay, sm.TopK)
+	}
+	if code, _ := llamaPost(t, s, "/completion", `{"prompt":"x","adaptive_target":0.3}`); code != 200 || f.opts().Sampling.Adaptive {
+		t.Fatalf("adaptive_target without adaptive_p in samplers: %d, adaptive %v", code, f.opts().Sampling.Adaptive)
 	}
 	llamaPost(t, s, "/completion", `{"prompt":"x","json_schema":{"type":"object"}}`)
 	if f.opts().Grammar == "" {
