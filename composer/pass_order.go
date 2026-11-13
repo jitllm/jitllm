@@ -61,6 +61,8 @@ type orderer struct {
 	// and homes they come from are fixed while the orderer runs.
 	readers  *readerIndex
 	countsOf map[int]map[int]bool
+	// uc is each node's readers (useCounts), made at the first args.
+	uc []int
 }
 
 // readerIndex is, for each node, the nodes and the stores reading it.
@@ -80,7 +82,10 @@ func (o *orderer) args(nd *Node) []*int {
 		o.memo = map[int]int{}
 	}
 	clear(o.memo)
-	return o.k.evalArgs(nd, o.memo, o.made)
+	if o.uc == nil {
+		o.uc = o.k.useCounts()
+	}
+	return o.k.evalArgs(nd, o.memo, o.made, o.uc)
 }
 
 // twinsOf is the nodes with nd's operation and operands, in node order.
@@ -876,7 +881,7 @@ func (o *orderer) byFirstRead(d int, keep func(int) bool) []int {
 		return out
 	}
 	dry := orderer{k: k, done: maps.Clone(o.done), loopDone: maps.Clone(o.loopDone), home: o.home, depths: map[int]int{}, words: o.words,
-		after: map[int][]int{}, scopeOf: o.scopeOf, twins: o.twins, readers: o.readers, countsOf: o.countsOf}
+		after: map[int][]int{}, scopeOf: o.scopeOf, twins: o.twins, readers: o.readers, countsOf: o.countsOf, uc: o.uc}
 	for _, i := range out {
 		dry.done[i] = true
 	}
