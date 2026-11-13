@@ -452,6 +452,48 @@ func (s *SampleMirostat) Build() *Graph {
 	return b.G
 }
 
+// SampleAdaptive is llama.cpp's adaptive-p sampler (llama_sampler_adaptive_p)
+// over a draw's distribution: sample.p, every token's probability, 0 off the
+// survivors, with sample.cand.p's put in place at sample.cand.ids (u32; an id
+// at or past the vocabulary names none), so a top-k draw's candidates arrive
+// as a whole row. sample.adaptive's words are the target, the decay, the
+// moving average's sum and weight, the last drawn token's probability and 1
+// where there was a last draw: that draw goes into the average first, sum =
+// p + decay*sum and weight = 1 + decay*weight. The adapted target is
+// 2*target - sum/weight within [0, 1], the target held to 1 at most, and each
+// survivor's logit becomes 5 - 10*d*d/(1+d), d = |p - adapted|/0.3, the rest
+// -Inf. Its outputs are those logits, which the row's draw walks at
+// temperature 1 (SampleRow), their softmax, the distribution that draw draws
+// from, the whole row's distribution, and the average's sum and weight.
+type SampleAdaptive struct{ NVocab, K int }
+
+func (s *SampleAdaptive) Build() *Graph {
+	b := New()
+	n := s.NVocab
+	row := b.In("sample.p", n)
+	ids := b.In("sample.cand.ids", s.K)
+	b.G.Values[ids].Elem = ElemU32
+	cand := b.In("sample.cand.p", s.K)
+	w := b.In("sample.adaptive", 6)
+	e := sampleEmitter{b}
+	p := e.one(OpPut, "adapt.p", n, Attrs{}, row, ids, cand)
+	tgt, decay := e.word(w, 0, "adapt.target"), e.word(w, 1, "adapt.decay")
+	sum, weight := e.word(w, 2, "adapt.sum"), e.word(w, 3, "adapt.weight")
+	last, had := e.word(w, 4, "adapt.last"), e.word(w, 5, "adapt.had")
+	sum = e.where("adapt.sum.next", 1, had, e.mapc(MapAdd, 0, "adapt.sum.in", 1, last, e.mapc(MapMul, 0, "adapt.sum.decay", 1, decay, sum)), sum)
+	weight = e.where("adapt.weight.next", 1, had, e.mapc(MapAdd, 1, "adapt.weight.in", 1, e.mapc(MapMul, 0, "adapt.weight.decay", 1, decay, weight)), weight)
+	adj := e.mapc(MapSub, 0, "adapt.adj", 1, e.mapc(MapMul, 2, "adapt.twice", 1, e.mapc(MapMin, 1, "adapt.target.held", 1, tgt)),
+		e.mapc(MapDiv, 0, "adapt.avg", 1, sum, weight))
+	at := e.mapc(MapMin, 1, "adapt.at.hi", 1, e.mapc(MapMax, 0, "adapt.at", 1, adj))
+	d := e.mapc(MapMul, float64(float32(1)/float32(0.3)), "adapt.d", n, e.mapc(MapAbs, 0, "adapt.dist", n, e.mapc(MapSub, 0, "adapt.diff", n, p, at)))
+	frac := e.mapc(MapDiv, 0, "adapt.frac", n, e.mapc(MapMul, 0, "adapt.dd", n, d, d), e.mapc(MapAdd, 1, "adapt.d1", n, d))
+	l := e.mapc(MapAdd, 5, "adapt.l", n, e.mapc(MapMul, -10, "adapt.l10", n, frac))
+	surv := e.mapc(MapLess, 0, "adapt.surv", n, e.mapc(MapMul, -1, "adapt.pneg", n, p))
+	logits := e.mapc(MapWhere, math.Inf(-1), "adapt.logits", n, surv, l)
+	b.Out(logits, e.softmax(logits, "adapt.q"), p, sum, weight)
+	return b.G
+}
+
 // sampleEmitter is the ops SampleWalk, SampleRow and SampleCut share on b.
 type sampleEmitter struct{ b *Builder }
 

@@ -24,6 +24,7 @@ type HeadParts struct {
 	CutTyp, CutTypProb, CutKTyp, CutKTypProb Part
 	Miro, MiroV1                             Part
 	WalkInfill                               Part
+	Adaptive                                 Part
 }
 
 // Head is the head and the samplers on the CPU device, composed once at the
@@ -78,6 +79,9 @@ type Head struct {
 	infIDs    []uint32
 	infForced [1]float32
 	one       [1]float32
+	// adWords and adOut are adaptive-p's words and the average it writes.
+	adWords [6]float32
+	adOut   [2]float32
 	// ids is the row's ids, 0 to the vocabulary's last, which the draws with
 	// no top-k read.
 	ids []uint32
@@ -519,6 +523,24 @@ func (h *Head) Dist(logits []float32, a nn.DrawArgs, pall []float32) (dense bool
 		return false, h.probIDs, h.probVals, true
 	}
 	return true, nil, nil, true
+}
+
+// Adaptive is adaptive-p's transform of a draw's distribution p, a top-k
+// draw's candidates cand put in place at ids, at its words w
+// (graph.SampleAdaptive): the logits the row's draw walks into logits, their
+// softmax into q, the whole distribution into pd, and the moving average's
+// sum and weight; false where the form declines.
+func (h *Head) Adaptive(p []float32, ids []uint32, cand []float32, w [6]float32, logits, q, pd []float32) (sum, weight float32, ok bool) {
+	f, _, why := h.form(&h.p.Adaptive, false)
+	if why != nn.DeclineServes {
+		h.steps.Decline(nn.PartSample, why)
+		return 0, 0, false
+	}
+	h.adWords = w
+	h.run(f, nil, 1, unsafe.Pointer(&p[0]), unsafe.Pointer(&ids[0]), unsafe.Pointer(&cand[0]), unsafe.Pointer(&h.adWords[0]),
+		unsafe.Pointer(&logits[0]), unsafe.Pointer(&q[0]), unsafe.Pointer(&pd[0]), unsafe.Pointer(&h.adOut[0]), unsafe.Pointer(&h.adOut[1]))
+	h.steps.Serve(nn.PartSample)
+	return h.adOut[0], h.adOut[1], true
 }
 
 // Mask writes logits plus mask into dst, or false where the form declines.

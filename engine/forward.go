@@ -149,6 +149,9 @@ type Instance struct {
 	// distribution a draw drew from, as SampledProbs reads it.
 	heads nn.HeadDevice
 	post  specDist
+	// ad is adaptive-p's rows: the chain's distribution, a top-k draw's
+	// candidates, the transformed logits and their softmax.
+	ad adaptiveRows
 	// entry is the device writing a prediction block's entry rows, nil on an
 	// instance that starts at no prediction block.
 	entry nn.EntryDevice
