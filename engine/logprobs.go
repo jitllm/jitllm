@@ -53,7 +53,16 @@ func (s *Instance) SampledProbs(l *Logprobs, smp *Sampler, logits []float32, cho
 		return 0, s.sampleDeclined("the sampled distribution")
 	}
 	s.post.pall = grow32(s.post.pall, n)
-	dense, ids, vals, ok := s.heads.Dist(logits, smp.drew, s.post.pall)
+	dense, ids, vals, ok := false, []uint32(nil), []float32(nil), false
+	if smp.adaptive() {
+		// adaptive-p's transform at the words its draw read, a whole row.
+		if ok = s.adaptive(logits, smp.drew, smp.adDrew); ok {
+			dense = true
+			copy(s.post.pall, s.ad.q)
+		}
+	} else {
+		dense, ids, vals, ok = s.heads.Dist(logits, smp.drew, s.post.pall)
+	}
 	if !ok {
 		return 0, s.sampleDeclined("the sampled distribution")
 	}

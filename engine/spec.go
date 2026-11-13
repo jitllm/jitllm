@@ -634,7 +634,7 @@ func (sp *Speculator) Next(sm *Sampler) ([]int32, error) {
 	}
 	// A Mirostat draw's mu moves with every token it draws: a round drafts
 	// nothing and draws its one token, plain decode.
-	if !greedy && sm.Mirostat != 0 {
+	if !greedy && (sm.Mirostat != 0 || sm.adaptive()) {
 		k = 0
 	}
 	if k < 0 {

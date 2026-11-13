@@ -276,7 +276,8 @@ func (p Penalties) Off() bool { return p == NoPenalties() }
 // draw's, Mirostat's and the infill sampler's among them), a constrained
 // draw's mask, the log-softmax with its most likely tokens and a
 // label readout's distribution over a question's options (Decide:
-// graph.DecisionScores' inputs and outputs, in their order).
+// graph.DecisionScores' inputs and outputs, in their order) and adaptive-p's
+// transform of a draw's distribution (Adaptive: graph.SampleAdaptive's).
 type HeadDevice interface {
 	Head(x, logits, hidden []float32) Decline
 	HeadRows(x, logits, hidden []float32, n int) Decline
@@ -288,6 +289,7 @@ type HeadDevice interface {
 	Mask(dst, logits, mask []float32) bool
 	Logprobs(logits []float32) (row []float32, ids []uint32, ok bool)
 	Decide(vals, keep, params, prior, probs, stats []float32) bool
+	Adaptive(p []float32, ids []uint32, cand []float32, w [6]float32, logits, q, pd []float32) (sum, weight float32, ok bool)
 }
 
 // EntryDevice is a device writing a prediction block's entry: `rows` rows

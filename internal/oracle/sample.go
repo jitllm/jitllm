@@ -767,3 +767,27 @@ func SampleProb(logits []float32, hist []int, pen, invT float32, k int, topp, mi
 	cut, xm := xtcCut(surv, func(i int) float64 { return q[i] }, xtc)
 	return pc + (share(cut)-pc)*mix, min(margin, xm)
 }
+
+// AdaptiveP is llama.cpp's adaptive-p transform (llama_sampler_adaptive_p_apply)
+// of a draw's distribution p, 0 off its survivors, with the moving average at
+// sum over weight: the adapted target 2*target - sum/weight within [0, 1]
+// (target held to [0, 1]), each survivor's logit 5 - 10*d*d/(1+d) at
+// d = |p - adapted|/0.3, in float32 as llama.cpp computes it, the rest -Inf.
+// It returns the logits and how near a survivor is to the adapted target's
+// kink, which a float32 rounding could move.
+func AdaptiveP(p []float64, target, sum, weight float64) (logits []float32, margin float64) {
+	t := min(max(target, 0), 1)
+	at := float32(min(max(2*t-sum/weight, 0), 1))
+	logits = make([]float32, len(p))
+	margin = math.Inf(1)
+	for i, x := range p {
+		if x <= 0 {
+			logits[i] = float32(math.Inf(-1))
+			continue
+		}
+		margin = min(margin, math.Abs(x-float64(at)))
+		d := float32(math.Abs(float64(float32(x)-at))) * (float32(1) / float32(0.3))
+		logits[i] = 5 - 10*d*d/(1+d)
+	}
+	return logits, margin
+}

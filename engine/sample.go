@@ -52,6 +52,18 @@ type Sampler struct {
 	// nn.InfillMaxK: a draw with no top-k, or one past it, draws as though
 	// its top-k were that.
 	Infill bool
+	// Adaptive draws through llama.cpp's adaptive-p sampler in place of the
+	// plain walk (graph.SampleAdaptive): tokens near AdaptiveTarget's
+	// probability, the target moved by a moving average of the drawn
+	// tokens' probabilities decaying at AdaptiveDecay (held to [0, 0.99]).
+	// A target below 0 is the plain walk, as llama.cpp's is, and Mirostat
+	// replaces it, as its chain does.
+	Adaptive                      bool
+	AdaptiveTarget, AdaptiveDecay float64
+	// ad is adaptive-p's words for the next draw (graph.SampleAdaptive's
+	// sample.adaptive), adSet once they are; adDrew the last draw's.
+	ad, adDrew [6]float32
+	adSet      bool
 
 	rng  *rand.Rand
 	hist []int32
@@ -127,7 +139,23 @@ func (s *Sampler) penalties() nn.Penalties {
 // top-n-sigma, which reads the whole row, and no infill sampler.
 func (s *Sampler) Bounded(n int) bool {
 	return s != nil && s.Temp > 0 && s.TopK > 0 && s.TopK < n && s.TopK <= MaxTopK && s.TopNSigma <= 0 && s.Mirostat == 0 &&
-		!s.Infill
+		!s.Infill && !s.adaptive()
+}
+
+// adaptive reports whether a draw runs adaptive-p.
+func (s *Sampler) adaptive() bool {
+	return s != nil && s.Adaptive && s.AdaptiveTarget >= 0 && s.Temp > 0 && s.Mirostat == 0
+}
+
+// adaptiveWords is adaptive-p's words for the next draw: its average starts
+// at target/(1-decay) over a weight of 1/(1-decay), as llama.cpp starts it.
+func (s *Sampler) adaptiveWords() [6]float32 {
+	if !s.adSet {
+		d := float32(min(max(s.AdaptiveDecay, 0), 0.99))
+		t := float32(s.AdaptiveTarget)
+		s.ad, s.adSet = [6]float32{t, d, t / (1 - d), 1 / (1 - d), 0, 0}, true
+	}
+	return s.ad
 }
 
 // MaxTopK is above every vocabulary a container states, so a top-k past it is

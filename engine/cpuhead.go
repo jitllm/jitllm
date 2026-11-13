@@ -2,6 +2,7 @@ package engine
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/jitllm/jitllm/model"
 
@@ -196,7 +197,69 @@ func (s *Instance) draw(logits []float32, smp *Sampler, u, xtc float32) (int32, 
 	if xtc > 0 {
 		smp.drew.XTCMix = 1
 	}
+	if smp.adaptive() {
+		return s.adaptiveDraw(logits, smp, u)
+	}
 	return s.heads.Draw(logits, a, u)
+}
+
+// adaptiveRows is adaptive-p's rows on an instance (Instance.adaptive).
+type adaptiveRows struct {
+	// p is the chain's distribution where it is the whole row's; zero a
+	// row of zeros a top-k draw's candidates are put into; ids and cand the
+	// candidates, none the ids of none for a whole row's.
+	p, zero, cand []float32
+	ids, none     []uint32
+	// logits, q and pd are the transform's: the logits the row's draw
+	// walks, their softmax and the chain's whole distribution.
+	logits, q, pd []float32
+	sum, weight   float32
+}
+
+// adaptive runs adaptive-p's transform over the distribution the draw a
+// reads over logits (nn.HeadDevice.Dist, its candidates put in place) at
+// words w, into s.ad, or false where a form declines.
+func (s *Instance) adaptive(logits []float32, a nn.DrawArgs, w [6]float32) bool {
+	n, r := len(logits), &s.ad
+	if len(r.p) != n {
+		r.p, r.zero, r.logits, r.q, r.pd = make([]float32, n), make([]float32, n), make([]float32, n), make([]float32, n), make([]float32, n)
+		r.cand, r.ids, r.none = make([]float32, nn.SampleMaxK), make([]uint32, nn.SampleMaxK), make([]uint32, nn.SampleMaxK)
+		for i := range r.none {
+			r.none[i] = uint32(n)
+		}
+	}
+	dense, ids, vals, ok := s.heads.Dist(logits, a, r.p)
+	if !ok {
+		return false
+	}
+	src, cids := r.p, r.none
+	if !dense {
+		src, cids = r.zero, r.ids
+		copy(r.ids, r.none)
+		copy(r.ids, ids)
+		clear(r.cand)
+		copy(r.cand, vals)
+	}
+	r.sum, r.weight, ok = s.heads.Adaptive(src, cids, r.cand, w, r.logits, r.q, r.pd)
+	return ok
+}
+
+// adaptiveDraw is smp's draw through adaptive-p at the uniform u: the
+// transform of the distribution its draw reads (smp.drew), then the row's
+// draw over the transformed logits at temperature 1. The drawn token's
+// probability under the chain's distribution goes into the average at the
+// next draw, as llama.cpp's accept takes it in.
+func (s *Instance) adaptiveDraw(logits []float32, smp *Sampler, u float32) (int32, bool) {
+	smp.adDrew = smp.adaptiveWords()
+	if !s.adaptive(logits, smp.drew, smp.adDrew) {
+		return 0, false
+	}
+	t, ok := s.heads.Draw(s.ad.logits, nn.DrawArgs{InvTemp: 1, TopP: float32(math.Inf(1)), DynExp: 1, Penalty: nn.NoPenalties()}, u)
+	if !ok {
+		return 0, false
+	}
+	smp.ad[2], smp.ad[3], smp.ad[4], smp.ad[5] = s.ad.sum, s.ad.weight, s.ad.pd[t], 1
+	return t, true
 }
 
 // distOf fills d with the distribution smp draws from over logits: a top-k
