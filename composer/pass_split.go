@@ -47,6 +47,15 @@ type Split struct {
 
 func (Split) Name() string { return "split" }
 
+// unstatedSlots is the resident threads a split takes on a device that
+// states none (Device.Slots 0, the backend's "use the caller's default"):
+// the profile's own target where an entry states one.
+const unstatedSlots = 30720
+
+// slots is the resident threads the split sizes its segments against: its
+// own, else the device's, else unstatedSlots.
+func (s Split) slots(d Device) int { return cmp.Or(s.Slots, d.Slots, unstatedSlots) }
+
 func (s Split) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 	widths := s.siblingWidths(ks, d)
 	return eachKernel(s.Name(), ks, func(k *Kernel) ([]*Kernel, bool, error) { return s.apply(k, d, widths[k]) })
@@ -56,11 +65,7 @@ func (s Split) groupThreads(d Device) int {
 	if s.Fill > 0 && d.Slots > 0 {
 		return int(s.Fill * float64(d.Slots))
 	}
-	slots := s.Slots
-	if slots == 0 {
-		slots = d.Slots
-	}
-	return 4 * slots
+	return 4 * s.slots(d)
 }
 
 func (s Split) groupSegments(n *Kernel, d Device) (S, G int, ok bool) {
@@ -172,7 +177,7 @@ func (s Split) apply(n *Kernel, d Device, width int) ([]*Kernel, bool, error) {
 		S, G, ok := s.groupSegments(n, d)
 		switch {
 		case !ok:
-			T, E, slots := n.Loops[c].Trip, n.cutElements(), cmp.Or(s.Slots, d.Slots)
+			T, E, slots := n.Loops[c].Trip, n.cutElements(), s.slots(d)
 			for S = 1; S < s.Max && E*S < 2*slots && T%(s.Block*S*2) == 0; S *= 2 {
 			}
 			G = groupWidth(S)
@@ -193,10 +198,7 @@ func (s Split) apply(n *Kernel, d Device, width int) ([]*Kernel, bool, error) {
 		return nil, false, nil
 	}
 	T, E := n.Loops[c].Trip, n.cutElements()
-	slots := s.Slots
-	if slots == 0 {
-		slots = d.Slots
-	}
+	slots := s.slots(d)
 	S := 1
 	if s.Parts > 0 {
 		S = s.Parts
@@ -497,10 +499,7 @@ func (s Split) groupSplitRows(n *Kernel, d Device) ([]*Kernel, bool) {
 	if !ok {
 		return nil, false
 	}
-	slots := s.Slots
-	if slots == 0 {
-		slots = d.Slots
-	}
+	slots := s.slots(d)
 	K, U := n.Loops[c].Trip, n.Space[0]
 	E := n.Elements() / U
 	S := 1
