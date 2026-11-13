@@ -60,6 +60,13 @@ type Sampler struct {
 	// replaces it, as its chain does.
 	Adaptive                      bool
 	AdaptiveTarget, AdaptiveDecay float64
+	// Stages runs llama.cpp's samplers in an order of their own (llama-server's
+	// samplers list) where it is set: each over the row the one before it
+	// leaves (graph.SampleStage), then the row's walk at temperature 1, or
+	// adaptive-p or the infill sampler in its place. Nil is the fused draw,
+	// llama.cpp's own order. A stage the list does not name does not run;
+	// at temperature 0 the draw is the greedy one, as with every order.
+	Stages []Stage
 	// ad is adaptive-p's words for the next draw (graph.SampleAdaptive's
 	// sample.adaptive), adSet once they are; adDrew the last draw's.
 	ad, adDrew [6]float32
@@ -139,7 +146,26 @@ func (s *Sampler) penalties() nn.Penalties {
 // top-n-sigma, which reads the whole row, and no infill sampler.
 func (s *Sampler) Bounded(n int) bool {
 	return s != nil && s.Temp > 0 && s.TopK > 0 && s.TopK < n && s.TopK <= MaxTopK && s.TopNSigma <= 0 && s.Mirostat == 0 &&
-		!s.Infill && !s.adaptive()
+		!s.Infill && !s.adaptive() && !s.staged()
+}
+
+// Stage is one of llama.cpp's samplers a chain runs (Sampler.Stages).
+type Stage uint8
+
+const (
+	StagePenalties Stage = iota
+	StageTopNSigma
+	StageTopK
+	StageTypical
+	StageTopP
+	StageMinP
+	StageXTC
+	StageTemperature
+)
+
+// staged reports whether a draw runs its stages in an order of their own.
+func (s *Sampler) staged() bool {
+	return s != nil && s.Stages != nil && s.Temp > 0 && s.Mirostat == 0
 }
 
 // adaptive reports whether a draw runs adaptive-p.

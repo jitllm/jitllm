@@ -62,7 +62,7 @@ type PartPlan struct {
 // row's and a call's; KV is the history's conversions, nil for a history of
 // floats.
 type PartsPlan struct {
-	Head     [24]PartPlan
+	Head     [25]PartPlan
 	HeadNorm bool
 	HeadW    PartWeights
 	// Infill is the vocabulary's tables an infill draw reads (InfillTables).

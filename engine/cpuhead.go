@@ -197,10 +197,118 @@ func (s *Instance) draw(logits []float32, smp *Sampler, u, xtc float32) (int32, 
 	if xtc > 0 {
 		smp.drew.XTCMix = 1
 	}
+	if smp.staged() {
+		row, ok := s.staged(logits, smp, a)
+		if !ok {
+			return 0, false
+		}
+		logits, a = row, plainArgs(a.Infill)
+	}
 	if smp.adaptive() {
-		return s.adaptiveDraw(logits, smp, u)
+		return s.adaptiveDraw(logits, a, smp, u)
 	}
 	return s.heads.Draw(logits, a, u)
+}
+
+// plainArgs is the row's draw at temperature 1 with no cut and no penalty,
+// infill's where infill is set.
+func plainArgs(infill bool) nn.DrawArgs {
+	return nn.DrawArgs{InvTemp: 1, TopP: float32(math.Inf(1)), DynExp: 1, Penalty: nn.NoPenalties(), Infill: infill}
+}
+
+// stagedRows is a chain run in an order of its own on an instance
+// (Instance.staged): the row each stage leaves and the next, the
+// distribution a cut reads its survivors from, a row of zeros a top-k
+// draw's candidates are put into, those candidates and their ids, and the
+// ids of none for a whole row's.
+type stagedRows struct {
+	cur, next, p, zero, cand []float32
+	ids, none                []uint32
+}
+
+// staged runs smp's stages in their order over logits (graph.SampleStage),
+// each over the row the one before it leaves: a cut keeps the survivors the
+// head's composed draw with that cut alone leaves at temperature 1
+// (nn.HeadDevice.Dist), its candidates put in place; the penalties and the
+// temperature keep every finite logit. a is the draw's arguments, XTC's at
+// its chance as it fell. A stage that is off does not run. It returns the
+// last row, the instance's until the next draw, or false where a form
+// declines.
+func (s *Instance) staged(logits []float32, smp *Sampler, a nn.DrawArgs) ([]float32, bool) {
+	n, r := len(logits), &s.st
+	if len(r.cur) != n {
+		r.cur, r.next, r.p, r.zero = make([]float32, n), make([]float32, n), make([]float32, n), make([]float32, n)
+		r.cand, r.ids, r.none = make([]float32, nn.SampleMaxK), make([]uint32, nn.SampleMaxK), make([]uint32, nn.SampleMaxK)
+		for i := range r.none {
+			r.none[i] = uint32(n)
+		}
+	}
+	copy(r.cur, logits)
+	for _, st := range smp.Stages {
+		c, w, cut := plainArgs(false), [4]float32{1, 0, 0, 1}, true
+		switch st {
+		case StagePenalties:
+			if a.Penalty.Off() {
+				continue
+			}
+			c.Penalty, c.Window, w[1], cut = a.Penalty, a.Window, 1, false
+		case StageTopNSigma:
+			if a.Sigma <= 0 {
+				continue
+			}
+			c.Sigma = a.Sigma
+		case StageTopK:
+			if a.TopK <= 0 || a.TopK >= n {
+				continue
+			}
+			c.TopK = a.TopK
+		case StageTypical:
+			if a.Typical <= 0 || a.Typical >= 1 {
+				continue
+			}
+			c.Typical = a.Typical
+		case StageTopP:
+			if a.TopP >= 1 {
+				continue
+			}
+			c.TopP = a.TopP
+		case StageMinP:
+			if a.MinP <= 0 {
+				continue
+			}
+			c.MinP = a.MinP
+		case StageXTC:
+			if a.XTC <= 0 {
+				continue
+			}
+			c.XTC, c.XTCMix = a.XTC, 1
+		case StageTemperature:
+			if a.InvTemp == 1 && a.DynRange <= 0 {
+				continue
+			}
+			w, cut = [4]float32{a.InvTemp, 1, a.DynRange, a.DynExp}, false
+		}
+		src, cids := r.zero, r.none
+		if cut {
+			dense, ids, vals, ok := s.heads.Dist(r.cur, c, r.p)
+			if !ok {
+				return nil, false
+			}
+			src = r.p
+			if !dense {
+				src, cids = r.zero, r.ids
+				copy(r.ids, r.none)
+				copy(r.ids, ids)
+				clear(r.cand)
+				copy(r.cand, vals)
+			}
+		}
+		if !s.heads.Stage(r.cur, src, cids, r.cand, c, w, r.next) {
+			return nil, false
+		}
+		r.cur, r.next = r.next, r.cur
+	}
+	return r.cur, true
 }
 
 // adaptiveRows is adaptive-p's rows on an instance (Instance.adaptive).
@@ -245,16 +353,16 @@ func (s *Instance) adaptive(logits []float32, a nn.DrawArgs, w [6]float32) bool 
 }
 
 // adaptiveDraw is smp's draw through adaptive-p at the uniform u: the
-// transform of the distribution its draw reads (smp.drew), then the row's
-// draw over the transformed logits at temperature 1. The drawn token's
+// transform of the distribution the draw a reads over logits, then the
+// row's draw over the transformed logits at temperature 1. The drawn token's
 // probability under the chain's distribution goes into the average at the
 // next draw, as llama.cpp's accept takes it in.
-func (s *Instance) adaptiveDraw(logits []float32, smp *Sampler, u float32) (int32, bool) {
+func (s *Instance) adaptiveDraw(logits []float32, a nn.DrawArgs, smp *Sampler, u float32) (int32, bool) {
 	smp.adDrew = smp.adaptiveWords()
-	if !s.adaptive(logits, smp.drew, smp.adDrew) {
+	if !s.adaptive(logits, a, smp.adDrew) {
 		return 0, false
 	}
-	t, ok := s.heads.Draw(s.ad.logits, nn.DrawArgs{InvTemp: 1, TopP: float32(math.Inf(1)), DynExp: 1, Penalty: nn.NoPenalties()}, u)
+	t, ok := s.heads.Draw(s.ad.logits, plainArgs(false), u)
 	if !ok {
 		return 0, false
 	}

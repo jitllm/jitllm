@@ -152,6 +152,7 @@ type Instance struct {
 	// ad is adaptive-p's rows: the chain's distribution, a top-k draw's
 	// candidates, the transformed logits and their softmax.
 	ad adaptiveRows
+	st stagedRows
 	// entry is the device writing a prediction block's entry rows, nil on an
 	// instance that starts at no prediction block.
 	entry nn.EntryDevice
