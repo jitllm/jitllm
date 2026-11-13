@@ -39,45 +39,75 @@ func reachable(dev string) (bool, string) {
 }
 
 // requireDevice skips a device gate, by name, on a host where dev is not
-// reachable. Where it is, the gate runs and a failure is a failure.
+// reachable. Where it is, the gate runs and a failure is a failure; where the
+// run listed it (JITLLM_TEST_DEVICES) and it does not open, the card or its
+// driver is broken, not absent, and the gate fails.
 func requireDevice(t testing.TB, dev string) {
 	t.Helper()
-	requireDeviceWith(t, dev, reachable)
+	requireDeviceWith(t, dev, reachable, listed(dev))
 }
 
-func requireDeviceWith(t testing.TB, dev string, probe func(string) (bool, string)) {
+func requireDeviceWith(t testing.TB, dev string, probe func(string) (bool, string), listed bool) {
 	t.Helper()
-	if ok, why := probe(dev); !ok {
+	ok, why := probe(dev)
+	switch {
+	case ok:
+	case listed:
+		t.Fatalf("NO DEVICE: %s is listed (%s=%s) and does not open: %s", dev, testdevices.Var,
+			strings.Join(testdevices.Selection(), ","), why)
+	default:
 		t.Skipf("NO DEVICE: %s is not reachable on this host: %s -- this gate proved nothing", dev, why)
 	}
 }
 
+// listed reports whether the run's device selection names a device dev may
+// open: one of its API, or any for gpu, auto and all.
+func listed(dev string) bool {
+	api, _, _ := strings.Cut(dev, ":")
+	for _, s := range testdevices.Selection() {
+		if sa, _, _ := strings.Cut(s, ":"); sa == api || api == "gpu" || api == "auto" || api == "all" {
+			return true
+		}
+	}
+	return false
+}
+
 // TestRequireDeviceSkipsOnlyWithoutADevice: an absent device skips with its
-// reason; a present one does not skip, so a gate after it can fail.
+// reason; a present one does not skip, so a gate after it can fail; a listed
+// one that does not open fails rather than skips.
 func TestRequireDeviceSkipsOnlyWithoutADevice(t *testing.T) {
 	absent := func(string) (bool, string) { return false, "none here" }
 	present := func(string) (bool, string) { return true, "" }
 	t.Run("absent", func(t *testing.T) {
 		r := &skipRecorder{TB: t}
-		requireDeviceWith(r, "cuda:0", absent)
-		if !strings.Contains(r.skipped, "none here") {
-			t.Fatalf("an absent device did not skip with its reason: %q", r.skipped)
+		requireDeviceWith(r, "cuda:0", absent, false)
+		if !strings.Contains(r.skipped, "none here") || r.failed != "" {
+			t.Fatalf("an absent device did not skip with its reason: skipped %q, failed %q", r.skipped, r.failed)
+		}
+	})
+	t.Run("listed", func(t *testing.T) {
+		r := &skipRecorder{TB: t}
+		requireDeviceWith(r, "cuda:0", absent, true)
+		if !strings.Contains(r.failed, "none here") || r.skipped != "" {
+			t.Fatalf("a listed device that does not open did not fail with its reason: failed %q, skipped %q", r.failed, r.skipped)
 		}
 	})
 	t.Run("present", func(t *testing.T) {
-		requireDeviceWith(t, "cuda:0", present)
+		requireDeviceWith(t, "cuda:0", present, true)
 		if t.Skipped() {
 			t.Fatal("a present device skipped")
 		}
 	})
 }
 
-// skipRecorder records a Skipf instead of ending the test.
+// skipRecorder records a Skipf or a Fatalf instead of ending the test.
 type skipRecorder struct {
 	testing.TB
-	skipped string
+	skipped, failed string
 }
 
 func (r *skipRecorder) Helper() {}
 
 func (r *skipRecorder) Skipf(format string, args ...any) { r.skipped = fmt.Sprintf(format, args...) }
+
+func (r *skipRecorder) Fatalf(format string, args ...any) { r.failed = fmt.Sprintf(format, args...) }
