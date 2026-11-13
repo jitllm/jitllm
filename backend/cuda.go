@@ -788,7 +788,9 @@ func (c *cudaDev) do(f func()) {
 }
 
 // inline runs f on the calling thread with the device's context made current
-// there, under run, and reports false only when the device is closed.
+// there, under run, and reports false only when the device is closed. The
+// thread's own context is current again after: a call into this device from
+// another's work leaves that work its context.
 //
 // Posting to the owner costs two goroutine wakeups per Session, a measurable
 // share of a device decode token. A context can be current on any number of
@@ -809,9 +811,11 @@ func (c *cudaDev) inline(f func()) bool {
 	tid := threadID()
 	c.in.Store(tid)
 	defer c.in.Store(-1)
-	if err := c.d.Bind(); err != nil {
+	prev, err := c.d.Swap()
+	if err != nil {
 		return false
 	}
+	defer c.d.Restore(prev)
 	f()
 	return true
 }
@@ -1506,9 +1510,11 @@ func (c *cudaDev) SessionOn(q Queue, f func(Session)) {
 	tid := threadID()
 	c.enterQueue(tid, cq)
 	defer c.leaveQueue(tid)
-	if err := c.d.Bind(); err != nil {
+	prev, err := c.d.Swap()
+	if err != nil {
 		return
 	}
+	defer c.d.Restore(prev)
 	cq.s = cudaSession{c: c, q: cq}
 	f(&cq.s)
 }

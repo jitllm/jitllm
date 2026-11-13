@@ -39,6 +39,7 @@ type Driver struct {
 	cuDeviceGetName    func(*byte, int32, CUdevice) CUresult
 	cuCtxCreate        func(*CUctx, uint32, CUdevice) CUresult
 	cuCtxSetCurrent    func(CUctx) CUresult
+	cuCtxGetCurrent    func(*CUctx) CUresult
 	// cuCtxGetDevice answers which card is current on this thread. Only the
 	// ordinal gate uses it, to check that Mem left its own context current.
 	cuCtxGetDevice       func(*CUdevice) CUresult
@@ -267,6 +268,7 @@ func Load() (*Driver, error) {
 	drv.cuDeviceGetName = ffi.Fn3[CUresult, *byte, int32, CUdevice](lib, "cuDeviceGetName")
 	drv.cuCtxCreate = ffi.Fn3[CUresult, *CUctx, uint32, CUdevice](lib, "cuCtxCreate_v2")
 	drv.cuCtxSetCurrent = ffi.Fn1[CUresult, CUctx](lib, "cuCtxSetCurrent")
+	drv.cuCtxGetCurrent = ffi.Fn1[CUresult, *CUctx](lib, "cuCtxGetCurrent")
 	drv.cuCtxGetDevice = ffi.Fn1[CUresult, *CUdevice](lib, "cuCtxGetDevice")
 	drv.cuCtxSynchronize = ffi.Fn0[CUresult](lib, "cuCtxSynchronize")
 	drv.cuCtxDestroy = ffi.Fn1[CUresult, CUctx](lib, "cuCtxDestroy_v2")
