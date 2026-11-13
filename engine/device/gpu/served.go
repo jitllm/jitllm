@@ -1474,8 +1474,8 @@ func (sv *servedPart) pagedRun(g *devTier, lc *launcher, s backend.Session, inst
 		}
 		one := st.sel
 		st.rsel = growU32(st.rsel, live)
-		st.sel, st.slotSel = st.rsel, growU32(st.slotSel, live)
-		defer func() { st.sel, st.slotSel = one, st.slotSel[:k] }()
+		st.sel = st.rsel
+		defer func() { st.sel = one }()
 	}
 	copy(sv.in[:sv.n], in)
 	copy(sv.out[:sv.m], out)

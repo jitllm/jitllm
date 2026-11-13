@@ -31,12 +31,6 @@ func pagedExpertModels() []string {
 		"synth-deepseek-lite" + q8Suffix, "synth-gptoss.gguf", "synth-llama4-q8.gguf"}
 }
 
-// plainBankModels are the mixtures whose streamed banks the tier keeps plain
-// whatever cache is stated (cacheSlotsFor): gpt-oss's experts carry biases,
-// which the tier's own kernels index by the selection a cache rewrites as
-// slots. Their pages are the compact bank's, re-read every token.
-func plainBankModels() []string { return []string{"synth-gptoss.gguf"} }
-
 // TestComposedExpertPagesServe serves each mixture's blocks composed with
 // its routed banks in pages on the card (gpu.Config.StreamExperts): every
 // token's selection read back, its experts sent to the block's pages from
@@ -127,9 +121,6 @@ func TestComposedExpertPagesServe(t *testing.T) {
 						slots  int
 						budget bool
 					}{{"compact", -1, false}, {"compact under one page", -1, true}, {"cache", slots, false}, {"cache under one page", slots, true}} {
-						if arm.slots > 0 && slices.Contains(plainBankModels(), file) {
-							continue
-						}
 						t.Run(arm.name, func(t *testing.T) {
 							got, st, pageIns := decode(t, arm.budget, stream(arm.slots))
 							served, declined := st.ServedPart(nn.ComposedBlock)
