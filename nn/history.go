@@ -53,6 +53,10 @@ type History interface {
 	Rows(li, nseq int) (HistoryBinding, error)
 	// KeyStart is where block li's keys the row at pos reads start.
 	KeyStart(li, pos int) int
+	// Spent says block li's call over a prompt chunk's rows is done. A
+	// history no later call reads (a tower's: each block's keys are its own
+	// call's) lets the block's pages go.
+	Spent(li int)
 }
 
 // HistoryOf is what a session's calls read their history from: the

@@ -131,6 +131,9 @@ func (in *Instance) newTowerRun(tg *model.TowerGraphs, base int, t *jlm.Tower) (
 		ts.Close()
 		return nil, err
 	}
+	// A tower block's keys are read by its own call alone: the run holds
+	// one block's history at a time.
+	ts.kv.spent = true
 	// A video class's entry is class len(tg.Classes)+i of the parts', and a
 	// picture stage's past them.
 	classes := append(append(tg.Classes[:len(tg.Classes):len(tg.Classes)], tg.Videos...), tg.Stages...)
@@ -632,6 +635,9 @@ func (ts *Instance) towerBlocks(tr *towerRun, gw int, wins []nn.KeyRun) error {
 	}
 	tr.given[0] = givenRun{rows: tr.rows[:n*ts.c.NEmbd], n: n}
 	_, err := ts.prefillSrc(0, rowSrc{tok: tr.tok, given: tr.given[:]})
+	// No call reads the run's history past it: the instance holds none, so
+	// a move of its blocks between pictures carries nothing.
+	ts.Reset()
 	return err
 }
 

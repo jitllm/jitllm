@@ -480,6 +480,11 @@ type kvCache struct {
 	// share is the store this session's sealed pages are held once in
 	// (Instance.ShareKV), nil when it shares nothing.
 	share *SharedStore
+	// spent says no call reads a block's history past its own (a tower's
+	// run): each block's pages go when its call is done (Spent). peak is
+	// the most it held as a block's call ended.
+	spent bool
+	peak  uint64
 }
 
 // View is the session's view of the CPU device's history (cpudev.History).
@@ -2987,3 +2992,16 @@ func (kv *kvCache) Rows(li, nseq int) (cpudev.HistoryBinding, error) {
 // KeyStart is cpudev.History's: where block li's keys the row at pos reads
 // start.
 func (kv *kvCache) KeyStart(li, pos int) int { return kv.layers[kv.src[li]].keyStart(pos) }
+
+// Spent is cpudev.History's: a history that is its run's alone (spent) lets
+// block li's pages go once its call is done, so a run holds one block's
+// keys at a time.
+func (kv *kvCache) Spent(li int) {
+	kv.peak = max(kv.peak, kv.Bytes())
+	if !kv.spent || kv.src[li] != li {
+		return
+	}
+	pg := &kv.layers[li]
+	pg.dropResident()
+	pg.written = 0
+}

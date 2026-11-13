@@ -2880,7 +2880,7 @@ func (s *Instance) setKVFmt(f nn.KVFmt) {
 	old := s.kv
 	s.kv = newKVCacheRange(s.c, old.id, 1, s.kvl, old.store, s.opt.kvPage, s.lo, s.hi, old.view, s.storage().PagePool(), s.entPlanes())
 	s.kv.reserve(s.maxSeq)
-	s.kv.ns, s.kv.budget = old.ns, old.budget
+	s.kv.ns, s.kv.budget, s.kv.spent = old.ns, old.budget, old.spent
 	// The CPU's blocks read the new cache: its arenas, and forms for f32.
 	if err := s.kv.useArenas(s.maxSeq, s.kvArenaFor); err != nil {
 		s.notePrep(err)
