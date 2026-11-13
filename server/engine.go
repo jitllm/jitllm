@@ -1983,6 +1983,9 @@ type Finished struct {
 	Position         int
 	// Restored is how many of PromptTokens came from the memory cache or a prompt store.
 	Restored int
+	// Truncated says the reply stopped at the end of the session's context
+	// (llama-server's truncated).
+	Truncated bool
 }
 
 // Event is one message of a generate's stream: Kind says which of Started,
@@ -2626,6 +2629,7 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 		BytesPerToken: lm.m.BytesPerToken(),
 		Position:      s.ms.Pos(),
 		Restored:      restored,
+		Truncated:     reason == FinishMaxTokens && s.ms.Pos() >= s.ms.Limit(),
 	}})
 }
 

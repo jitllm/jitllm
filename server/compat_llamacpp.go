@@ -210,12 +210,19 @@ func llamaFields() map[string]llamaField {
 		"adaptive_target":       {numLE(-1), "adaptive-p sampling is not built"},
 		"adaptive_decay":        {anyValue, ""},
 		"min_keep":              {numIs(0), "min_keep is not built"},
-		"n_keep":                {numIs(0), "there is no context shift, so n_keep has nothing to keep"},
-		"n_discard":             {numIs(0), "there is no context shift"},
-		"n_cache_reuse":         {numIs(0), "KV shifting reuse is not built; the prefix cache is automatic"},
-		"lora":                  {emptyJSON, "LoRA adapters are not built"},
-		"multimodal_data":       {emptyJSON, "pictures go in prompt.multimodal_data"},
-		"image_data":            {emptyJSON, "pictures go in prompt.multimodal_data"},
+		// n_keep and n_discard act only in a context shift, which
+		// llama-server runs only under --context-shift, off by default:
+		// without one a reply stops at the context's end (stop_type limit,
+		// truncated), as here. n_cache_reuse asks llama-server to shift a
+		// cached chunk into a new prompt's place where its cache can shift
+		// and is ignored where it cannot; here the prefix cache restores a
+		// shared prefix and the rest is computed.
+		"n_keep":          {anyValue, ""},
+		"n_discard":       {anyValue, ""},
+		"n_cache_reuse":   {anyValue, ""},
+		"lora":            {emptyJSON, "LoRA adapters are not built"},
+		"multimodal_data": {emptyJSON, "pictures go in prompt.multimodal_data"},
+		"image_data":      {emptyJSON, "pictures go in prompt.multimodal_data"},
 	}
 }
 
@@ -1327,7 +1334,7 @@ func (g *llamaRun) final(res *llamaResult, content string, ids []int32, probs []
 		"model": g.info.Name, "tokens_predicted": f.CompletionTokens, "tokens_evaluated": f.PromptTokens,
 		"generation_settings": g.settings(),
 		"prompt":              res.promptText, "has_new_line": strings.Contains(res.text.String(), "\n"),
-		"truncated": false, "stop_type": llamaStopType(f.Reason), "stopping_word": f.StopMatched,
+		"truncated": f.Truncated, "stop_type": llamaStopType(f.Reason), "stopping_word": f.StopMatched,
 		"tokens_cached": f.Restored,
 		"timings":       llamaTimings(f.PromptTokens, f.Restored, f.Prefill, f.CompletionTokens, f.Decode),
 	}

@@ -657,7 +657,7 @@ func TestLlamaRefusals(t *testing.T) {
 		"mirostat": `3`, "dry_multiplier": `0.8`,
 		"presence_penalty": `3`, "frequency_penalty": `-3`,
 		"logit_bias": `[[15]]`, "samplers": `["top_k","dry"]`, "n_cmpl": `0`, "id_slot": `-2`,
-		"n_keep": `5`, "lora": `[{"id":0,"scale":1}]`,
+		"lora":    `[{"id":0,"scale":1}]`,
 		"n_probs": `99`, "repeat_last_n": `-2`,
 		"response_fields": `"content"`, "mystery_field": `1`,
 	}
@@ -670,7 +670,7 @@ func TestLlamaRefusals(t *testing.T) {
 	}
 	accept := `{"prompt":"x","mirostat":0,"dry_multiplier":0,"xtc_probability":0,"typical_p":1,"presence_penalty":0,
 		"logit_bias":[],"samplers":["top_k","top_p","min_p","temperature"],"n_cmpl":1,"id_slot":-1,"cache_prompt":true,
-		"n_keep":0,"timings_per_token":false,"top_n_sigma":-1,"repeat_last_n":64}`
+		"n_keep":5,"n_discard":2,"n_cache_reuse":256,"timings_per_token":false,"top_n_sigma":-1,"repeat_last_n":64}`
 	if code, out := llamaPost(t, s, "/completion", accept); code != 200 {
 		t.Fatalf("neutral values refused: %d %v", code, out)
 	}

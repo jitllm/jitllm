@@ -1468,6 +1468,7 @@ func (e *Engine) generateBatched(ctx context.Context, lp *stepLoop, s *Session, 
 		BytesPerToken:    lm.m.BytesPerToken(),
 		Position:         s.ms.Pos(),
 		Restored:         r.restored,
+		Truncated:        res.reason == FinishMaxTokens && s.ms.Pos() >= s.ms.Limit(),
 	}})
 }
 
