@@ -14,6 +14,7 @@ import (
 
 	"github.com/jitllm/jitllm/internal/localserver"
 	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels/fresh"
 )
 
 // fakeService answers as a jitllmd: the capability manifest, and a streamed
@@ -106,6 +107,7 @@ func TestRunRefusesAnIncompatibleService(t *testing.T) {
 // is found in the models folder and run in this process; a path and an
 // engine flag run in this process even with a service answering.
 func TestRunFallsBackToTheModelsFolder(t *testing.T) {
+	fresh.Must(t, testmodels.Path("stories260K.jlm"))
 	b, err := os.ReadFile(testmodels.Path("stories260K.jlm"))
 	if err != nil {
 		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS) -- this gate proved nothing", err)

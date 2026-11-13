@@ -11,12 +11,14 @@ import (
 
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels/fresh"
 	"github.com/jitllm/jitllm/server"
 )
 
 // TestModelsSetsAliasesAndDisables: `jitllmd models -alias/-disable/-enable`
 // reach the server's models folder and `jitllmd models` shows them.
 func TestModelsSetsAliasesAndDisables(t *testing.T) {
+	fresh.Must(t, testmodels.Path("stories260K.jlm"))
 	b, err := os.ReadFile(testmodels.Path("stories260K.jlm"))
 	if err != nil {
 		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS) -- this gate proved nothing", err)
