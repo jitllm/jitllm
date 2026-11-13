@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
 	"maps"
 	"math"
 	"math/rand/v2"
@@ -148,8 +149,8 @@ func llamaFields() map[string]llamaField {
 		"return_progress":       {boolIs(false), "prompt progress is not built"},
 		"post_sampling_probs":   {boolIs(false), "probabilities after sampling are not built; n_probs reports the raw distribution"},
 		"lora":                  {emptyJSON, "LoRA adapters are not built"},
-		"multimodal_data":       {emptyJSON, "send pictures through /v1/chat/completions"},
-		"image_data":            {emptyJSON, "send pictures through /v1/chat/completions"},
+		"multimodal_data":       {emptyJSON, "pictures go in prompt.multimodal_data"},
+		"image_data":            {emptyJSON, "pictures go in prompt.multimodal_data"},
 	}
 }
 
@@ -585,11 +586,16 @@ func decodeField[T any](body map[string]json.RawMessage, name string, dst *T) er
 }
 
 // llamaInput is one prompt of a request: its ids and the text they were read
-// from.
+// from, or its text and the pictures that stand where it holds llamaMarker.
 type llamaInput struct {
 	ids  []int32
 	text string
+	imgs []image.Image
 }
+
+// llamaMarker is where a prompt's picture stands in its text, llama-server's
+// (mtmd's default marker).
+const llamaMarker = "<__media__>"
 
 func isTokenID(raw json.RawMessage) bool {
 	var n int32
@@ -598,58 +604,61 @@ func isTokenID(raw json.RawMessage) bool {
 
 // llamaPrompts reads `prompt` as llama-server does: an array holding no token
 // id is a list of prompts, each answered on its own; anything else is one.
-func llamaPrompts(lb LlamaBackend, modelID string, raw json.RawMessage) ([]llamaInput, error) {
+func llamaPrompts(lb LlamaBackend, modelID string, raw json.RawMessage, pics *pictures) ([]llamaInput, error) {
 	var parts []json.RawMessage
 	if json.Unmarshal(raw, &parts) != nil || slices.ContainsFunc(parts, isTokenID) {
-		ids, text, err := llamaPrompt(lb, modelID, raw)
+		in, err := llamaPrompt(lb, modelID, raw, pics)
 		if err != nil {
 			return nil, err
 		}
-		return []llamaInput{{ids, text}}, nil
+		return []llamaInput{in}, nil
 	}
 	if len(parts) == 0 {
 		return nil, fmt.Errorf("%w: prompt is empty", ErrInvalid)
 	}
 	ins := make([]llamaInput, len(parts))
 	for i, p := range parts {
-		ids, text, err := llamaPrompt(lb, modelID, p)
+		in, err := llamaPrompt(lb, modelID, p, pics)
 		if err != nil {
 			return nil, err
 		}
-		ins[i] = llamaInput{ids, text}
+		ins[i] = in
 	}
 	return ins, nil
 }
 
 // llamaPrompt reads one prompt: a string, token ids, strings and ids mixed,
-// or {"prompt_string": ...}, as one token sequence. Strings are tokenized with
+// or {"prompt_string": ..., "multimodal_data": [...]}, as one token sequence
+// or, with pictures, as the text and the pictures. Strings are tokenized with
 // special tokens parsed, and only a leading string gets the BOS, as
 // llama-server does. Strings alone in an array are a list of prompts, which
 // does not nest.
-func llamaPrompt(lb LlamaBackend, modelID string, raw json.RawMessage) (ids []int32, text string, err error) {
+func llamaPrompt(lb LlamaBackend, modelID string, raw json.RawMessage, pics *pictures) (llamaInput, error) {
 	var s string
 	if json.Unmarshal(raw, &s) == nil {
-		ids, err = lb.Tokenize(modelID, s, true, true)
-		return ids, s, err
+		ids, err := lb.Tokenize(modelID, s, true, true)
+		return llamaInput{ids: ids, text: s}, err
 	}
 	var parts []json.RawMessage
 	if json.Unmarshal(raw, &parts) != nil {
 		var obj struct {
-			PromptString string          `json:"prompt_string"`
-			Multimodal   json.RawMessage `json:"multimodal_data"`
+			PromptString string   `json:"prompt_string"`
+			Multimodal   []string `json:"multimodal_data"`
 		}
-		if json.Unmarshal(raw, &obj) == nil && obj.PromptString != "" {
-			if !emptyJSON(obj.Multimodal) && len(obj.Multimodal) > 0 {
-				return nil, "", fmt.Errorf("%w: prompt.multimodal_data is not supported: send pictures through /v1/chat/completions", ErrInvalid)
-			}
-			ids, err = lb.Tokenize(modelID, obj.PromptString, true, true)
-			return ids, obj.PromptString, err
+		if json.Unmarshal(raw, &obj) != nil || obj.PromptString == "" {
+			return llamaInput{}, fmt.Errorf("%w: prompt must be a string, token ids, strings and ids mixed, or {\"prompt_string\": ..., \"multimodal_data\": [...]}", ErrInvalid)
 		}
-		return nil, "", fmt.Errorf("%w: prompt must be a string, token ids, or strings and ids mixed", ErrInvalid)
+		if len(obj.Multimodal) == 0 {
+			ids, err := lb.Tokenize(modelID, obj.PromptString, true, true)
+			return llamaInput{ids: ids, text: obj.PromptString}, err
+		}
+		return llamaPictures(obj.PromptString, obj.Multimodal, pics)
 	}
 	if !slices.ContainsFunc(parts, isTokenID) {
-		return nil, "", fmt.Errorf("%w: a prompt in a list is a string, token ids, strings and ids mixed, or {\"prompt_string\": ...}", ErrInvalid)
+		return llamaInput{}, fmt.Errorf("%w: a prompt in a list is a string, token ids, strings and ids mixed, or {\"prompt_string\": ...}", ErrInvalid)
 	}
+	var ids []int32
+	var text string
 	for i, p := range parts {
 		var n int32
 		var str string
@@ -659,18 +668,37 @@ func llamaPrompt(lb LlamaBackend, modelID string, raw json.RawMessage) (ids []in
 		case json.Unmarshal(p, &str) == nil:
 			t, err := lb.Tokenize(modelID, str, i == 0, true)
 			if err != nil {
-				return nil, "", err
+				return llamaInput{}, err
 			}
 			ids = append(ids, t...)
 			text += str
 		default:
-			return nil, "", fmt.Errorf("%w: prompt[%d] is neither a token id nor a string", ErrInvalid, i)
+			return llamaInput{}, fmt.Errorf("%w: prompt[%d] is neither a token id nor a string", ErrInvalid, i)
 		}
 	}
 	if len(ids) == 0 {
-		return nil, "", fmt.Errorf("%w: prompt is empty", ErrInvalid)
+		return llamaInput{}, fmt.Errorf("%w: prompt is empty", ErrInvalid)
 	}
-	return ids, text, nil
+	return llamaInput{ids: ids, text: text}, nil
+}
+
+// llamaPictures is a prompt of text whose llamaMarker each stand for one of
+// files, base64 pictures, in order; their counts differ, it is refused as
+// mtmd refuses it.
+func llamaPictures(text string, files []string, pics *pictures) (llamaInput, error) {
+	if n := strings.Count(text, llamaMarker); n != len(files) {
+		return llamaInput{}, fmt.Errorf("%w: number of media markers %s in prompt_string (%d) does not match number of multimodal_data entries (%d)",
+			ErrInvalid, llamaMarker, n, len(files))
+	}
+	at := len(pics.imgs)
+	for i, data := range files {
+		if err := pics.add(fmt.Sprintf("prompt.multimodal_data[%d]", i), func() (image.Image, error) {
+			return pics.p.decodeBase64Image(data, "")
+		}); err != nil {
+			return llamaInput{}, fmt.Errorf("%w: %v", ErrInvalid, err)
+		}
+	}
+	return llamaInput{text: text, imgs: slices.Clip(pics.imgs[at:])}, nil
 }
 
 func (c *compat) llamaCompletion(w http.ResponseWriter, r *http.Request) {
@@ -872,13 +900,13 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 			llFailErr(w, err)
 			return
 		}
-		prompts = []llamaInput{{ids, text}}
+		prompts = []llamaInput{{ids: ids, text: text}}
 	} else {
 		if _, has := body["prompt"]; !has {
 			llFail(w, http.StatusBadRequest, "prompt is required", "invalid_request_error")
 			return
 		}
-		if prompts, err = llamaPrompts(lb, info.ID, body["prompt"]); err != nil {
+		if prompts, err = llamaPrompts(lb, info.ID, body["prompt"], newPictures(c.img)); err != nil {
 			llFailErr(w, err)
 			return
 		}
@@ -1277,6 +1305,9 @@ func (g *llamaRun) settings() map[string]any {
 func (g *llamaRun) options(in llamaInput) GenerateOptions {
 	o := g.o
 	o.Prompt = Prompt{Kind: PromptIDs, IDs: in.ids}
+	if len(in.imgs) > 0 {
+		o.Prompt = Prompt{Kind: PromptText, Text: in.text, Images: in.imgs, Marker: llamaMarker}
+	}
 	return o
 }
 
