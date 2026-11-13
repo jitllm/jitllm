@@ -254,11 +254,9 @@ func lfm2Lay(t *testing.T, m *model.Model, g *towerE2EGolden, rows []float32, _ 
 	D, tg, marks := m.Cfg.NEmbd, m.Tower, tileMarks(t, m)
 	var out []float32
 	at := 0
-	for i := 0; ; i++ {
-		sq, n := squareOf(t, tg, g.Image.W, g.Image.H, i)
-		if i >= n {
-			break
-		}
+	_, n := squareOf(t, tg, g.Image.W, g.Image.H, 0)
+	for i := range n {
+		sq, _ := squareOf(t, tg, g.Image.W, g.Image.H, i)
 		k := tg.SquareOut(sq) - 1
 		if (at+k)*D > len(rows) {
 			t.Fatalf("piece %d's %d rows overrun the reference's %d", i, k, len(rows)/D)
