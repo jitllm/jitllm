@@ -390,6 +390,19 @@ func TestLlamaSSEPings(t *testing.T) {
 	}
 }
 
+// TestLlamaAnySlot: any id_slot is taken, as llama-server takes it, and
+// reported wrapped by the slot count (the fake's one).
+func TestLlamaAnySlot(t *testing.T) {
+	f := &llamaFake{fakeBackend: &fakeBackend{tokens: []string{"a"}, reason: FinishEOS}}
+	s := llamaServe(t, f)
+	for _, slot := range []string{"-1", "0", "3"} {
+		code, out := llamaPost(t, s, "/completion", `{"prompt":"x","id_slot":`+slot+`}`)
+		if code != 200 || out["id_slot"] != float64(0) {
+			t.Errorf("id_slot %s: %d, reported %v", slot, code, out["id_slot"])
+		}
+	}
+}
+
 func TestLlamaSamplingDefaultsAndMapping(t *testing.T) {
 	f := &llamaFake{fakeBackend: &fakeBackend{tokens: []string{"a"}, reason: FinishEOS}}
 	s := llamaServe(t, f)
@@ -421,7 +434,7 @@ func TestLlamaRefusals(t *testing.T) {
 	refuse := map[string]string{
 		"mirostat": `3`, "dry_multiplier": `0.8`,
 		"presence_penalty": `3`, "frequency_penalty": `-3`,
-		"logit_bias": `[[15]]`, "samplers": `["dry","top_k"]`, "n_cmpl": `0`, "id_slot": `3`,
+		"logit_bias": `[[15]]`, "samplers": `["dry","top_k"]`, "n_cmpl": `0`, "id_slot": `-2`,
 		"n_keep": `5`, "lora": `[{"id":0,"scale":1}]`, "post_sampling_probs": `true`,
 		"n_probs": `99`, "repeat_last_n": `-2`,
 		"response_fields": `"content"`, "mystery_field": `1`,
