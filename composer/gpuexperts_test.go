@@ -102,6 +102,10 @@ func TestComposedGPUExperts(t *testing.T) {
 					y := b.Emit(graph.OpExpertMatVec, []graph.ValueID{in, sel}, []graph.Result{{Name: "y", Width: P * rows}},
 						[]graph.Binding{{Role: jlm.RoleExpGateBank, K: K, Rows: rows, Sheets: E}}, graph.Attrs{}, nil, nil)
 					b.Out(y[0])
+					// The matrix pass cuts k where its cost says the cut pays
+					// (Matrix.cost), which a device of few units may not at
+					// every tile: some tile cuts.
+					cut := false
 					for _, tile := range gpuMatrixTiles() {
 						td := dev
 						td.Tile = tile
@@ -142,8 +146,9 @@ func TestComposedGPUExperts(t *testing.T) {
 							t.Fatalf("%s: the tiled input's halves are not its %d rows'", what, capacity)
 						}
 						if K > 256 && cuts == 0 {
-							t.Fatalf("%s: k of %d over %d experts' blocks: the model cut no projection", what, K, E)
+							t.Logf("%s: k of %d runs uncut: one segment costs least here", what, K)
 						}
+						cut = cut || cuts > 0
 						op, err := compileLone(d, formed)
 						if err != nil {
 							t.Fatalf("%s: %v", what, err)
@@ -235,6 +240,9 @@ func TestComposedGPUExperts(t *testing.T) {
 						}
 						op.close()
 						ran++
+					}
+					if K > 256 && !cut {
+						t.Fatalf("%v: k of %d over %d experts' blocks: the model cut no projection at any tile", typ, K, E)
 					}
 				}
 				t.Logf("%s: %d expert matvecs (grouped onto the matrix unit: %v) held to the oracle at calls of %v rows", name, ran,
