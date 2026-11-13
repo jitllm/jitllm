@@ -368,8 +368,11 @@ func (e *Exec) AccountOn(dev string) (nn.Account, bool) {
 }
 
 // BeginPrefill starts a prompt as a phase of the device's workers, on its
-// efficiency cores where e asks and it has them (nn.PrefillPhases).
+// efficiency cores where e asks and it has them (nn.PrefillPhases). A fused
+// run still open closes first: it holds the turn the prompt's pool takes
+// turns on.
 func (e *Exec) BeginPrefill(onE bool) bool {
+	e.Unfuse()
 	if onE && e.workers.BeginPrefillE() {
 		e.onE, e.low = true, e.workers.LowerToE()
 		return true
@@ -379,8 +382,10 @@ func (e *Exec) BeginPrefill(onE bool) bool {
 	return false
 }
 
-// EndPrefill ends the prompt's phase (nn.PrefillPhases).
+// EndPrefill ends the prompt's phase (nn.PrefillPhases), closing a fused
+// run the prompt opened as BeginPrefill does.
 func (e *Exec) EndPrefill() {
+	e.Unfuse()
 	if e.onE {
 		e.low.Raise()
 		e.workers.EndPrefillE()
