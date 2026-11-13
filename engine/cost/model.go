@@ -767,6 +767,9 @@ type estimator struct {
 	// folding is the folds whose interval is being taken: a fold's step
 	// that reads the fold adds nothing to it.
 	folding map[int]bool
+	// held is, by axis, the coordinates the guard loops around the index
+	// being taken admit (guards).
+	held map[int]span
 }
 
 // runs is how many times node i's instruction runs in a launch: its
@@ -1153,7 +1156,11 @@ func (e *estimator) ival(i, depth int) span {
 	case composer.OpConst, composer.OpLength:
 		return span{float64(nd.Imm), float64(nd.Imm)}
 	case composer.OpCoord:
-		return span{0, float64(max(1, k.Space[nd.A]) - 1)}
+		v := span{0, float64(max(1, k.Space[nd.A]) - 1)}
+		if h, ok := e.held[nd.A]; ok {
+			v = span{max(v.lo, h.lo), min(v.hi, h.hi)}
+		}
+		return v
 	case composer.OpThread, composer.OpLocal:
 		return span{0, float64(max(1, k.Group) - 1)}
 	case composer.OpFlat:
@@ -1391,7 +1398,9 @@ func (e *estimator) reach(i, ix int, ax []int, b int, w float64) span {
 	if e.k.Nodes[i].Ptr > 0 || e.walked(e.homes[i], b) {
 		return anywhere()
 	}
+	e.held = e.guards(e.homes[i])
 	h := e.hull([]int{ix}, ax, b)
+	e.held = nil
 	eb := float64(composer.ElemBytes(e.k.Bufs[b]))
 	return span{h.lo * eb, h.hi*eb + w}
 }
@@ -1400,9 +1409,65 @@ func (e *estimator) storeReach(s composer.Store, w float64) span {
 	if s.Ptr > 0 || e.walked(s.At, s.Buf) {
 		return anywhere()
 	}
+	e.held = e.guards(s.At)
 	h := e.hull([]int{s.Ix}, s.Ax, s.Buf)
+	e.held = nil
 	eb := float64(composer.ElemBytes(e.k.Bufs[s.Buf]))
 	return span{h.lo * eb, h.hi*eb + w}
+}
+
+// guards is, by axis, the coordinates loop l and the loops around it admit
+// where one is a guard: a kept loop of one trip whose count is
+// select(c < hi, select(c < lo, 0, 1), 0) over a coordinate c and constants
+// lo and hi, so its body runs only at c in [lo, hi) (Siblings' share of a
+// launch).
+func (e *estimator) guards(l int) map[int]span {
+	k := e.k
+	var held map[int]span
+	for ; l >= 0; l = k.Loops[l].Parent {
+		lp := k.Loops[l]
+		if lp.Trip != 1 || !lp.Kept || lp.Count <= 0 {
+			continue
+		}
+		outer := k.Nodes[lp.Count-1]
+		if outer.Op != composer.OpSelect || !e.zero(outer.C) {
+			continue
+		}
+		inner := k.Nodes[outer.B]
+		if inner.Op != composer.OpSelect || !e.zero(inner.B) {
+			continue
+		}
+		ax, hi, ok := e.below(outer.A)
+		ax2, lo, ok2 := e.below(inner.A)
+		if !ok || !ok2 || ax != ax2 || lo >= hi {
+			continue
+		}
+		if held == nil {
+			held = map[int]span{}
+		}
+		v := span{lo, hi - 1}
+		if h, ok := held[ax]; ok {
+			v = span{max(v.lo, h.lo), min(v.hi, h.hi)}
+		}
+		held[ax] = v
+	}
+	return held
+}
+
+// below reads node i as c < n, a coordinate's axis and a constant.
+func (e *estimator) below(i int) (int, float64, bool) {
+	nd := e.k.Nodes[i]
+	if nd.Op != composer.OpLess || e.k.Nodes[nd.A].Op != composer.OpCoord || !e.constant(nd.B) {
+		return 0, 0, false
+	}
+	n, ok := e.eval(nd.B, 0)
+	return e.k.Nodes[nd.A].A, n, ok
+}
+
+// zero says node i is the constant 0.
+func (e *estimator) zero(i int) bool {
+	v, ok := e.eval(i, 0)
+	return ok && e.constant(i) && v == 0
 }
 
 // width is the bytes one run of load i reads: a vector's lanes of the
