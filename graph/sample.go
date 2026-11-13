@@ -103,7 +103,10 @@ func penalizedRow(b *Builder, l, win, pen ValueID) ValueID {
 // sample.infill.parent (the vocabulary's prefix tables, tok.Infill, u32
 // over the vocabulary), sample.eog (the EOG end-of-generation ids) and
 // sample.eot (the end-of-turn id, u32) follow it; Depth is the prefix
-// tables' depth. Infill is never Prob.
+// tables' depth. Infill is never Prob: its outputs are the token, the
+// distribution the draw draws from (each candidate's share of what survives
+// by its weight), the candidates' ids, and 1 where the draw is forced to the
+// end-of-turn token, else 0.
 type SampleWalk struct {
 	SampleTopK
 	Prob       bool
@@ -164,7 +167,8 @@ func (s *SampleWalk) Build() *Graph {
 		all := b.Emit(OpConcat, []ValueID{ids, eot}, []Result{{Name: "sample.inf.ids", Width: K + 1, Elem: ElemU32}}, nil, Attrs{}, nil, nil)[0]
 		es := e.mapc(MapAdd, -1, "sample.inf.eotscore", 1, e.mapc(MapMul, float64(4*K+1), "sample.inf.eotup", 1, forced))
 		score = b.Emit(OpConcat, []ValueID{score, es}, []Result{{Name: "sample.inf.scores", Width: K + 1}}, nil, Attrs{}, nil, nil)[0]
-		ids = all
+		b.Out(e.token(all, score), e.mapc(MapDiv, 0, "sample.inf.dist", K, et, mass), ids, forced)
+		return b.G
 	}
 	b.Out(e.token(ids, score))
 	return b.G
@@ -377,8 +381,10 @@ func (s *SampleCut) Build() *Graph {
 // draws, as SampleRow walks the row. Its inputs are the logits,
 // sample.window and sample.penalty (read as SampleTopK reads them; a
 // Mirostat draw passes them off), sample.ids and sample.miro (1/T, tau, eta,
-// mu, then u); its outputs the token and mu less eta times the token's
-// surprise past tau.
+// mu, then u); its outputs the token, mu less eta times the token's
+// surprise past tau, and how many tokens survive. The survivors are the
+// row's first in its order, so the draw's distribution is a top-k draw's at
+// the temperature, k that count.
 type SampleMirostat struct {
 	NVocab int
 	V1     bool
@@ -400,7 +406,7 @@ func (s *SampleMirostat) Build() *Graph {
 	id := e.mapc(MapMul, 1, "miro.idf", n, ids)
 	q := e.softmax(e.mapc(MapMul, 0, "miro.scaled", n, v, invT), "miro.q")
 	all := e.mapc(MapLess, 2, "miro.all", n, q)
-	var keep ValueID
+	var keep, kept ValueID
 	if s.V1 {
 		m := min(100, n)
 		top := b.Emit(OpTopK, []ValueID{q}, []Result{{Name: "miro.top.ids", Width: m, Elem: ElemU32}, {Name: "miro.top", Width: m}}, nil,
@@ -422,7 +428,7 @@ func (s *SampleMirostat) Build() *Graph {
 		kk := e.mapc(MapMin, float64(n), "miro.kk", 1, e.mapc(MapRound, 0, "miro.kfloor", 1, e.mapc(MapAdd, -0.5, "miro.kh", 1,
 			e.mapc(MapWhere, 1, "miro.kok", 1, e.mapc(MapLess, -1, "miro.kgt", 1, e.mapc(MapMul, -1, "miro.kneg", 1, k)), k))))
 		kth := e.selection(q, id, all, all, e.mapc(MapAdd, -1, "miro.k.target", 1, kk), false)
-		keep = e.upTo(q, id, kth, "miro.topk")
+		keep, kept = e.upTo(q, id, kth, "miro.topk"), kk
 	} else {
 		// At most mu bits: p at least 2^-mu, the best always.
 		floor := e.mapc(MapExp, 0, "miro.floor", 1, e.mapc(MapMul, -math.Ln2, "miro.mubits", 1, mu))
@@ -432,6 +438,7 @@ func (s *SampleMirostat) Build() *Graph {
 		bestID := e.one(OpReduce, "miro.bestid", 1, Attrs{Fn: MapMin}, e.mapc(MapWhere, math.Inf(1), "miro.bestids", n, atBest, id))
 		best := e.mapc(MapMul, 0, "miro.best", n, atBest, e.mapc(MapEqual, 0, "miro.isbest", n, id, bestID))
 		keep = e.mapc(MapMax, 0, "miro.keep", n, in, best)
+		kept = e.one(OpReduce, "miro.kept", 1, Attrs{Fn: MapAdd}, keep)
 	}
 	kq := e.mapc(MapMul, 0, "miro.kq", n, q, keep)
 	pt := e.mapc(MapDiv, 0, "miro.pt", n, kq, e.one(OpReduce, "miro.ksum", 1, Attrs{Fn: MapAdd}, kq))
@@ -441,7 +448,7 @@ func (s *SampleMirostat) Build() *Graph {
 	// Its surprise in bits, and mu less eta times its excess over tau.
 	bits := e.mapc(MapMul, -1/math.Ln2, "miro.bits", 1, e.mapc(MapLog, 0, "miro.ln", 1, ptok))
 	mu2 := e.mapc(MapSub, 0, "miro.mu.next", 1, mu, e.mapc(MapMul, 0, "miro.step", 1, eta, e.mapc(MapSub, 0, "miro.err", 1, bits, tau)))
-	b.Out(e.argmax(chosen), mu2)
+	b.Out(e.argmax(chosen), mu2, kept)
 	return b.G
 }
 

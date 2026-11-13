@@ -184,12 +184,19 @@ func (s *Instance) drawArgs(smp *Sampler, xtc, mix float32) nn.DrawArgs {
 }
 
 // draw is smp's sampled token over logits at the uniform u smp drew for the
-// call (nn.HeadDevice.Draw), or false where none serves it.
+// call (nn.HeadDevice.Draw), or false where none serves it. The draw's
+// arguments stay in smp for its distribution (Sampler.drew).
 func (s *Instance) draw(logits []float32, smp *Sampler, u, xtc float32) (int32, bool) {
 	if s.heads == nil {
 		return 0, false
 	}
-	return s.heads.Draw(logits, s.drawArgs(smp, xtc, 0), u)
+	a := s.drawArgs(smp, xtc, 0)
+	smp.drew = a
+	smp.drew.Mu = nil
+	if xtc > 0 {
+		smp.drew.XTCMix = 1
+	}
+	return s.heads.Draw(logits, a, u)
 }
 
 // distOf fills d with the distribution smp draws from over logits: a top-k

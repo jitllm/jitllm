@@ -26,6 +26,70 @@ type Logprobs struct {
 	Top []TopLogprob // the last call's alternatives, most likely first
 }
 
+// SampledProbs is Logprobs after every sampler, as llama.cpp's
+// post_sampling_probs reports it: chosen's probability under the
+// distribution smp's last draw over logits drew from (Sample), and in l.Top
+// the l.N likeliest tokens of what survived, the likeliest first, each
+// Logprob a probability. It reads the draw as Sample left it in smp, so it
+// follows Sample over the same logits, before the token is observed. A
+// greedy smp's distribution is its token alone.
+func (s *Instance) SampledProbs(l *Logprobs, smp *Sampler, logits []float32, chosen int32) (float32, error) {
+	n := len(logits)
+	if n != s.c.NVocab {
+		return 0, fmt.Errorf("model: sampled probabilities over %d logits, and the vocabulary is %d", n, s.c.NVocab)
+	}
+	if cap(l.Top) < model.MaxTopLogprobs {
+		l.Top = make([]TopLogprob, 0, model.MaxTopLogprobs)
+	}
+	l.Top = l.Top[:0]
+	k := min(max(l.N, 0), model.MaxTopLogprobs)
+	if smp == nil || smp.Temp <= 0 {
+		if k > 0 {
+			l.Top = append(l.Top, TopLogprob{ID: chosen, Logprob: 1})
+		}
+		return 1, nil
+	}
+	if s.heads == nil {
+		return 0, s.sampleDeclined("the sampled distribution")
+	}
+	s.post.pall = grow32(s.post.pall, n)
+	dense, ids, vals, ok := s.heads.Dist(logits, smp.drew, s.post.pall)
+	if !ok {
+		return 0, s.sampleDeclined("the sampled distribution")
+	}
+	if dense {
+		// The likeliest first, by the composed selection the log-softmax's
+		// alternatives are read by.
+		_, top, ok := s.heads.Logprobs(s.post.pall)
+		if !ok {
+			return 0, s.sampleDeclined("the sampled distribution")
+		}
+		for _, id := range top {
+			if p := s.post.pall[id]; p > 0 && len(l.Top) < k {
+				l.Top = append(l.Top, TopLogprob{ID: int32(id), Logprob: p})
+			}
+		}
+		if chosen < 0 || int(chosen) >= n {
+			return 0, nil
+		}
+		return s.post.pall[chosen], nil
+	}
+	// A draw's candidates are in their logits' order, and its survivors'
+	// shares fall with it: the survivors in that order are the likeliest
+	// first.
+	var pc float32
+	for i, id := range ids {
+		p := vals[i]
+		if int32(id) == chosen {
+			pc = p
+		}
+		if p > 0 && len(l.Top) < k {
+			l.Top = append(l.Top, TopLogprob{ID: int32(id), Logprob: p})
+		}
+	}
+	return pc, nil
+}
+
 // MaskRow writes logits plus mask into dst, rows of this instance's
 // vocabulary -- mask 0 where a constraint allows a token and -inf where it
 // does not -- through the CPU's composed form (graph.MaskRow).

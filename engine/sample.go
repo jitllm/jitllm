@@ -59,6 +59,10 @@ type Sampler struct {
 	// window (graph.SampleTopK's sample.window): the penalty falls once on a
 	// token whose count is above zero.
 	win []float32
+	// drew is the last draw's arguments as its distribution reads them
+	// (Instance.SampledProbs): XTC's cut at its whole weight where the draw
+	// took it, Mirostat at the mu the draw read.
+	drew nn.DrawArgs
 }
 
 // Observe records a token so the penalties can see it. Harmless when they

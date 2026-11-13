@@ -272,8 +272,9 @@ func (p Penalties) Off() bool { return p == NoPenalties() }
 
 // HeadDevice is a device running the head and the samplers: the head over a
 // row (Head) or a call's rows (HeadRows), the output norm alone, a label
-// pick, the greedy token, a draw at a uniform, a draw's distribution, a
-// constrained draw's mask, the log-softmax with its most likely tokens and a
+// pick, the greedy token, a draw at a uniform, a draw's distribution (every
+// draw's, Mirostat's and the infill sampler's among them), a constrained
+// draw's mask, the log-softmax with its most likely tokens and a
 // label readout's distribution over a question's options (Decide:
 // graph.DecisionScores' inputs and outputs, in their order).
 type HeadDevice interface {
