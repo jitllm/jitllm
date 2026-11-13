@@ -506,8 +506,11 @@ of the device, *"the naive fallback is still jitted on the chosen device"*.
   all refuses too (`nn.Available`).
 - **No pregenerated assembly.** The only `.s` files in the project are the
   Go-to-generated-code call boundary, `engine/device/cpu/trampoline_{amd64,arm64}.s`
-  (stated by the user). Every kernel is emitted at run time for the
-  host in front of it. `cpu.TestNoAssemblyBesidesTheTrampolines` enforces it.
+  (stated by the user), and there is no kernel in any other language either
+  (PTX, CUDA, OpenCL, Metal, the shader languages, C); the C under `scripts/`
+  drives llama.cpp, the reference, and the gate names each file. Every kernel
+  is emitted at run time for the device in front of it.
+  `cpu.TestNoAssemblyBesidesTheTrampolines` enforces it.
 - **Gate the tail.** Every kernel gate sweeps ragged widths (1 through a few
   vectors) with a guard after the output, and is run against a violation --
   a tail kernel that is right at whole vectors and wrong at 7 is the shape
