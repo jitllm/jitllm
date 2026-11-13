@@ -67,27 +67,18 @@ func TestAFailedWriteLeavesNoContainer(t *testing.T) {
 		big := bigSource(t)
 
 		stop := make(chan struct{})
-		seen := make(chan string, 2)
+		seen := make(chan bool, 1)
 		go func() {
-			var sawPart, sawDst bool
+			var sawPart bool
 			for {
 				select {
 				case <-stop:
-					if sawPart {
-						seen <- "part"
-					}
-					if sawDst {
-						seen <- "dst"
-					}
-					close(seen)
+					seen <- sawPart
 					return
 				default:
 				}
 				if _, err := os.Stat(dst + ".part"); err == nil {
 					sawPart = true
-				}
-				if _, err := os.Stat(dst); err == nil {
-					sawDst = true
 				}
 			}
 		}()
@@ -96,21 +87,11 @@ func TestAFailedWriteLeavesNoContainer(t *testing.T) {
 			t.Fatal(err)
 		}
 		close(stop)
-		var part, during bool
-		for s := range seen {
-			switch s {
-			case "part":
-				part = true
-			case "dst":
-				during = true
-			}
-		}
-		if !part {
+		if !<-seen {
 			t.Errorf("no %s.part was ever visible: the container is being written "+
 				"in place, so an interrupted conversion leaves a file with a valid "+
 				"header and holes where the weights are", dst)
 		}
-		_ = during // dst legitimately exists once the rename lands
 	})
 
 	t.Run("a good write publishes exactly one file", func(t *testing.T) {

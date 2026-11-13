@@ -75,7 +75,6 @@ func TestKVPrecisionCost(t *testing.T) {
 				}
 			}
 			a, b := run(false), run(true)
-			_ = b
 			var d float64
 			for i := range a {
 				d = math.Max(d, math.Abs(float64(a[i]-b[i])))

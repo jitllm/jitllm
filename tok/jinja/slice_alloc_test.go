@@ -28,15 +28,15 @@ func measure(t *testing.T, withExpr, withoutExpr string, items int) (delta float
 	without := mk(withoutExpr)
 
 	for range 5 {
-		_, _ = with.Render(data)
-		_, _ = without.Render(data)
+		with.Render(data)
+		without.Render(data)
 	}
 
 	a := testing.AllocsPerRun(2000, func() {
-		_, _ = with.Render(data)
+		with.Render(data)
 	})
 	b := testing.AllocsPerRun(2000, func() {
-		_, _ = without.Render(data)
+		without.Render(data)
 	})
 	t.Logf("with=%.2f without=%.2f delta=%.2f", a, b, a-b)
 	return a - b

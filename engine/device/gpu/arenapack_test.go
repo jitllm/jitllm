@@ -222,11 +222,10 @@ func TestArenaRetainsNothingByDefault(t *testing.T) {
 	}
 	// And the budget is a real ceiling, not advice: one entry fits, the second
 	// does not, and the arena says so rather than growing.
-	nq, nd, nsc, err := layout.PackedWords(layout.Q4_0, 64, 4096)
+	nq, nd, _, err := layout.PackedWords(layout.Q4_0, 64, 4096)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = nsc
 	b := gpu.NewArena(uint64(nq+nd)*4 + 2*offheap.HostAlign())
 	defer b.Close()
 	src2 := make([]byte, len(src))
