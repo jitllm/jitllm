@@ -308,11 +308,16 @@ func readRate(k *cpu.Code, set int64, threads int) float64 {
 }
 
 // issueRate is the instructions a second threads issue together, each trip
-// perTrip of them; the block is wide enough for a kernel's loads to read.
+// perTrip of them. Each thread's block is a cache line of its own: a load
+// that crosses a line is a cost of its own, and the mix's loads from a block
+// 40 bytes into a line issued at a third of the core's rate.
 func issueRate(k *cpu.Code, perTrip float64, threads int) float64 {
 	const trips = 1 << 22
-	run := func(int) {
-		block := [8]uint64{trips}
+	words := make([]uint64, 8*(threads+1))
+	first := (64 - int(uintptr(unsafe.Pointer(&words[0]))%64)) % 64 / 8
+	run := func(t int) {
+		block := words[first+8*t : first+8*t+8]
+		block[0] = trips
 		k.Call((*cpu.Args)(unsafe.Pointer(&block[0])))
 	}
 	return perTrip * trips * float64(threads) / parallel(threads, run)
