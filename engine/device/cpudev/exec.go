@@ -222,23 +222,31 @@ func (e *Exec) PrepLayers(lis []int, ps []*nn.LayerPlan) {
 	}
 	blocks := make([]*Block, len(lis))
 	errs := make([][2]error, len(lis))
-	var next atomic.Int64
-	var wg sync.WaitGroup
-	for range min(runtime.GOMAXPROCS(0), len(lis)) {
-		wg.Go(func() {
-			for i := int(next.Add(1)) - 1; i < len(lis); i = int(next.Add(1)) - 1 {
-				if held[i] {
-					blocks[i], errs[i] = e.formBlock(specs[i])
-				}
-			}
-		})
-	}
-	wg.Wait()
+	sideBySide(len(lis), func(i int) {
+		if held[i] {
+			blocks[i], errs[i] = e.formBlock(specs[i])
+		}
+	})
 	for i, li := range lis {
 		if held[i] {
 			e.keep(li, specs[i], blocks[i], errs[i])
 		}
 	}
+}
+
+// sideBySide runs f for each of 0 to n-1 on as many goroutines as the
+// process runs, each taking the next.
+func sideBySide(n int, f func(int)) {
+	var next atomic.Int64
+	var wg sync.WaitGroup
+	for range min(runtime.GOMAXPROCS(0), n) {
+		wg.Go(func() {
+			for i := int(next.Add(1)) - 1; i < n; i = int(next.Add(1)) - 1 {
+				f(i)
+			}
+		})
+	}
+	wg.Wait()
 }
 
 // specOf is what block li is composed from by plan p, its rows' table

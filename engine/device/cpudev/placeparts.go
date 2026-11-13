@@ -19,6 +19,41 @@ type Parts struct {
 	KVConv  [nn.KVFormats]*KVConv
 }
 
+// formAhead forms every part p names side by side, ahead of the walk that
+// makes them the parts the instance runs: the walk finds each in the forms'
+// cache, its error among them. The parts are independent of one another.
+func (e *Exec) formAhead(p *PartsPlan) {
+	if !e.comp.Lowers() {
+		return
+	}
+	plans := append([]PartPlan(nil), p.Head[:]...)
+	if p.Streams {
+		plans = append(plans, p.StreamParts[:]...)
+	}
+	if p.Pool {
+		plans = append(plans, p.PoolPart)
+	}
+	if p.Entry {
+		plans = append(plans, p.EntryParts[:]...)
+	}
+	plans = append(plans, p.Inputs[:]...)
+	for _, t := range p.Tables {
+		plans = append(plans, t.One, t.Many)
+	}
+	for _, kv := range p.KV {
+		for _, k := range kv {
+			plans = append(plans, k.Narrow, k.Widen)
+		}
+	}
+	// The target is probed once, before the forms read it side by side.
+	e.comp.Device()
+	sideBySide(len(plans), func(i int) {
+		if q := plans[i]; !q.Skip && q.Graph != nil {
+			e.FormGraph(q)
+		}
+	})
+}
+
 // PlaceParts composes every part of p and makes it the part the instance
 // runs, each counted served or declined in the execution's steps. Nothing
 // before the execution's first placement.
@@ -27,6 +62,7 @@ func (e *Exec) placeParts(p *PartsPlan) Parts {
 	if e.dev == nil {
 		return out
 	}
+	e.formAhead(p)
 	var h [22]Part
 	for i := range p.Head {
 		h[i] = e.FormPart(p.Head[i])
