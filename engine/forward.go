@@ -440,8 +440,11 @@ type Instance struct {
 	rowsHeads int
 	rowsTok   []int32
 	// prepLater holds a lane binding's block preparation for the caller to
-	// run once the blocks' routes are settled (SetDeviceLayers).
+	// run once the blocks' routes are settled (SetDeviceLayers). unprepped
+	// is each block a placement on an unlisted CPU left unprepared there
+	// (placeLanes), until it moves or the offers leave it (prepLeft).
 	prepLater bool
+	unprepped []bool
 	// rowsPos is a stream model's speculation step's positions and slots
 	// (stepRowsStreams).
 	rowsPos []int
@@ -842,6 +845,12 @@ func (s *Instance) SetDeviceLayers(d nn.LayerDevice, max int) error {
 		d = mt.ForModel(s.m.Id)
 	}
 	defer s.settleHist()
+	// Blocks a placement on an unlisted CPU left unprepared are prepared
+	// there once the offers below have taken what they will.
+	later := slices.Contains(s.unprepped, true)
+	if later {
+		defer s.prepLeft()
+	}
 	// The tower's blocks go where the text's do, every one offered (tower.go);
 	// a chain's run as parts of the device that serves picture rows, every
 	// one of them, and come home with a detach.
@@ -890,7 +899,9 @@ func (s *Instance) SetDeviceLayers(d nn.LayerDevice, max int) error {
 		s.prepLater = true
 		s.stepDownKVToF32()
 		s.prepLater = false
-		defer s.prepFrames()
+		if !later {
+			defer s.prepFrames()
+		}
 	}
 	// A borrowed JIT is the text instance's, attached to its device by it.
 	if !s.borrowsJIT() {
@@ -3568,6 +3579,9 @@ func (s *Instance) holdFrame(li, r, d int) {
 func (s *Instance) handOver(li, from, to int) {
 	if s.spilling == li+1 {
 		return
+	}
+	if li < len(s.unprepped) {
+		s.unprepped[li] = false
 	}
 	if s.fromFrames[from] {
 		s.places[from].ReleaseLayers(li, li+1)
