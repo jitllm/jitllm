@@ -111,7 +111,7 @@
       "module": "tui", "packages": ["./..."], "cap": "8G"
     },
     "dev-tools": {
-      "module": ".", "packages": ["./dev/tools/...", "./dev/probe/...", "./dev/httpbench/...", "./dev/decisionbench/..."], "cap": "8G",
+      "module": ".", "packages": ["./dev/tools/...", "./dev/httpbench/...", "./dev/decisionbench/..."], "cap": "8G",
       "note": "the harnesses' own tests; dev/bench's perf floors are measured serially by the main session (RULE 2, RULE 4) and are not run here"
     },
     "scripts": {

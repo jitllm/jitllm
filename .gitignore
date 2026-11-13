@@ -9,10 +9,6 @@ __pycache__/
 /models/
 
 # compiled probe binaries (sources are tracked)
-dev/probe/cuda/overlap2
-dev/probe/cuda/pcie
-dev/probe/cuda/prefill
-dev/probe/gpu/probe
 /jitllm
 
 # Workflow worktrees: separate checkouts, never part of a commit here.
@@ -46,7 +42,6 @@ testdata/testdata
 # each lives in dev/tools/<name>/ rather than next to its own output.
 /jit/gpu/jpt-gpu
 /jit/gpu/jitllm-gpu
-/dev/probe/gpu/jitllmprobe
 /ui/shots
 
 # Local tool and editor configuration. The project's rules for people and

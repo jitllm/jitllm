@@ -2633,7 +2633,8 @@ whole-block submission (RULE 12), so it describes kernels, not tokens.
 The claim was made about DECODE, where one hand-written `__dp4a` kernel already read 169.7 GB/s (96%
 of the RTX 3050 Ti's theoretical) against 17.5 GB/s for the "obvious" f32-dequantize-then-FMA kernel
 -- a memory-bound matvec leaves a generator nothing to win. Prefill is compute-bound.
-`dev/probe/gpu` generates an int8 GEMM as PTX at run time with K, the register tile and the output
+A probe (`dev/probe/gpu`, since removed with the other early probes: its CUDA bindings were never
+in this history, so it no longer built) generated an int8 GEMM as PTX at run time with K, the register tile and the output
 stride baked as immediates, and swept the tile on the 3050 Ti, every entry bit-exact against an int32
 CPU reference:
 

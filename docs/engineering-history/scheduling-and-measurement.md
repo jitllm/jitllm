@@ -155,8 +155,8 @@ which is exactly why it felt safe. It is not the test that is heavy, it is `go t
 gets compiled first, at whatever parallelism the toolchain feels like.
 
 `scripts/require-cap.sh` is a `PreToolUse` hook (wired in `.claude/settings.json`) that refuses any
-`go test|build|run|vet|generate`, `gcc`/`clang`/`g++`/`nvcc`, `make`, or direct run of a `.test` or
-`dev/probe/` binary unless the command contains `scripts/cap` or an explicit `JITLLM_NO_CAP=1`. It fails
+`go test|build|run|vet|generate`, `gcc`/`clang`/`g++`/`nvcc`, `make`, or direct run of a `.test`
+binary unless the command contains `scripts/cap` or an explicit `JITLLM_NO_CAP=1`. It fails
 open on malformed input — a broken hook must never wedge a session — and it ships with a block/allow
 test matrix.
 
