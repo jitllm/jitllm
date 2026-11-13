@@ -3,6 +3,7 @@ package composer
 import (
 	"testing"
 
+	"github.com/jitllm/jitllm/composer/a64"
 	"github.com/jitllm/jitllm/engine/device/cpu"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
@@ -73,6 +74,37 @@ func TestA64LoweringStatesTheDevicesDot(t *testing.T) {
 		case !dp && (sd != 0 || wide == 0):
 			t.Errorf("without dotprod: %d SDOT and %d widening words", sd, wide)
 		}
+	}
+}
+
+// TestA64FarLoadKeepsAConstant: a general register loaded from a spill slot
+// or an address past the unscaled offset's reach makes the address in
+// itself, so a constant made in a64Imm before the load is still there after
+// it. A compare of a spilled value with a constant once read the slot's
+// address as the constant: on the M4 a picture's channels 1 and 2 took
+// channel 0's arithmetic. The violation is the address made in a64Imm.
+func TestA64FarLoadKeepsAConstant(t *testing.T) {
+	e := &a64Lowerer{a: &a64.A64{}}
+	e.a.MOVconst(a64Imm, 2)
+	e.slot(a64.A64LdrX, uint8(a64.X4), 19)
+	e.access(a64.A64LdrX, uint8(a64.X5), a64Mem{a64.X2, 1 << 20})
+	e.access(a64.A64LdrW, uint8(a64.X6), a64Mem{a64.X6, 1 << 20})
+	code, err := e.a.Bytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for i := 4; i+4 <= len(code); i += 4 {
+		w := uint32(code[i]) | uint32(code[i+1])<<8 | uint32(code[i+2])<<16 | uint32(code[i+3])<<24
+		if w&31 == uint32(a64Imm) {
+			n++
+		}
+	}
+	t.Logf("%d words after the constant, %d writing a64Imm", len(code)/4-1, n)
+	// The last load's base is its own destination: it is the one that may
+	// make its address in a64Imm, in two words.
+	if n != 2 {
+		t.Fatalf("%d words after the constant write a64Imm, want the 2 of the load whose base is its destination", n)
 	}
 }
 

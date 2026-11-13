@@ -143,16 +143,29 @@ func hi(r x86.Reg) a64.VReg { return a64.VReg(2*r + 1) }
 
 // slot is op of register rt at spill slot s, 1-based, below SP
 // (spillOffset): one past the unscaled offset's reach is addressed from
-// a64Imm.
+// the register far names.
 func (e *a64Lowerer) slot(op a64.A64Access, rt uint8, s int) {
 	off := spillOffset(s)
 	if e.a.Access(op, rt, a64.SP, off) {
 		return
 	}
-	e.addConstTo(a64Imm, a64.SP, int64(off))
-	if !e.a.Access(op, rt, a64Imm, 0) {
+	base := e.far(op, rt, a64.SP)
+	e.addConstTo(base, a64.SP, int64(off))
+	if !e.a.Access(op, rt, base, 0) {
 		e.fail("spill slot %d is out of reach", s)
 	}
+}
+
+// far is the register an access of rt past every addressing mode's reach
+// from base makes its address in: a general register's load its own
+// destination, which it writes anyway, so a constant the lowering made in
+// a64Imm before the load -- an operand it reloads read after it -- is still
+// there; a64Imm for the rest.
+func (e *a64Lowerer) far(op a64.A64Access, rt uint8, base a64.XReg) a64.XReg {
+	if (op == a64.A64LdrX || op == a64.A64LdrW) && a64.XReg(rt) != base {
+		return a64.XReg(rt)
+	}
+	return a64Imm
 }
 
 // reg is node i's register, a spilled value loaded into a reload register.
@@ -186,15 +199,16 @@ type a64Mem struct {
 
 func (m a64Mem) plus(n int32) a64Mem { return a64Mem{m.base, m.off + n} }
 
-// access is op of register rt at m, the address made in a64Imm where no
-// addressing mode reaches it.
+// access is op of register rt at m, the address made in the register far
+// names where no addressing mode reaches it.
 func (e *a64Lowerer) access(op a64.A64Access, rt uint8, m a64Mem) {
 	if e.a.Access(op, rt, m.base, m.off) {
 		return
 	}
-	e.a.MOVconst(a64Imm, uint64(int64(m.off)))
-	e.a.ADDreg(a64Imm, m.base, a64Imm)
-	e.a.Access(op, rt, a64Imm, 0)
+	base := e.far(op, rt, m.base)
+	e.a.MOVconst(base, uint64(int64(m.off)))
+	e.a.ADDreg(base, m.base, base)
+	e.a.Access(op, rt, base, 0)
 }
 
 // bare is m's address in a register, for the forms that take no offset.
