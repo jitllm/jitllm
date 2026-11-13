@@ -144,7 +144,6 @@ func llamaFields() map[string]llamaField {
 		"n_keep":                {numIs(0), "there is no context shift, so n_keep has nothing to keep"},
 		"n_discard":             {numIs(0), "there is no context shift"},
 		"n_cache_reuse":         {numIs(0), "KV shifting reuse is not built; the prefix cache is automatic"},
-		"t_max_predict_ms":      {numIs(0), "a prediction time limit is not built; use n_predict"},
 		"t_max_prompt_ms":       {numIs(0), "a prompt time limit is not built"},
 		"return_progress":       {boolIs(false), "prompt progress is not built"},
 		"post_sampling_probs":   {boolIs(false), "probabilities after sampling are not built; n_probs reports the raw distribution"},
@@ -166,7 +165,7 @@ func llamaRead() map[string]bool {
 		"logit_bias": true, "typical_p": true, "xtc_probability": true, "xtc_threshold": true,
 		"top_n_sigma": true, "dynatemp_range": true, "dynatemp_exponent": true,
 		"mirostat": true, "mirostat_tau": true, "mirostat_eta": true, "response_fields": true,
-		"n_cmpl": true, "n": true, "timings_per_token": true,
+		"n_cmpl": true, "n": true, "timings_per_token": true, "t_max_predict_ms": true,
 		// /infill's own.
 		"input_prefix": true, "input_suffix": true, "input_extra": true,
 	}
@@ -699,7 +698,7 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 	set := llamaDefaults()
 	var temp, topP, minP, typP, xtcP, xtcT, nSigma, dynR, dynE, mTau, mEta, repeat, presence, frequency *float64
 	var miro *int
-	var topK, lastN, nPredict, maxTokens, nProbs, slot, nCmpl, nAlias *int
+	var topK, lastN, nPredict, maxTokens, nProbs, slot, nCmpl, nAlias, predictMS *int
 	var seed *int64
 	var stop json.RawMessage
 	var grammarSrc, schema json.RawMessage
@@ -734,6 +733,7 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 	rd(decodeField(body, "id_slot", &slot))
 	rd(decodeField(body, "n_cmpl", &nCmpl))
 	rd(decodeField(body, "n", &nAlias))
+	rd(decodeField(body, "t_max_predict_ms", &predictMS))
 	rd(decodeField(body, "seed", &seed))
 	rd(decodeField(body, "ignore_eos", &ignore))
 	rd(decodeField(body, "stream", &stream))
@@ -892,6 +892,9 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 		Logprobs:  set.NProbs > 0,
 	}
 	o.TopLogprobs = set.NProbs
+	if predictMS != nil && *predictMS > 0 {
+		o.PredictTime = time.Duration(*predictMS) * time.Millisecond
+	}
 	// n_predict 0 answers one token, stop_type limit: llama-server samples
 	// one before it checks the budget, though its README says none.
 	if set.NPredict >= 0 {

@@ -279,12 +279,14 @@ type row struct {
 	logprobs  *engine.Logprobs // nil unless the request asked for logprobs
 	maxTokens int
 	ignoreEOS bool
-	// stops says the row has stop strings: a token's text then decides
-	// whether it is fed, so it is produced before the step, not beside it.
-	stops    bool
-	stream   *streamText
-	enqueued time.Time
-	depth    int32
+	// stops says the row has stop strings or a prediction time: a token's
+	// text then decides whether it is fed, so it is produced before the
+	// step, not beside it.
+	stops       bool
+	predictTime time.Duration
+	stream      *streamText
+	enqueued    time.Time
+	depth       int32
 	// restored is the prompt positions the memory cache gave the row before
 	// it was queued (Instance.RestorePrefix); its prompt is fed from there. seal
 	// has the row's prompt offered to the store once it has run.
@@ -872,6 +874,11 @@ func (lp *stepLoop) nextToken(r *row) bool {
 			lp.finish(r, FinishStop, match, nil)
 			return false
 		}
+		if pastPredictTime(r.predictTime, r.decodeStart, chunk) {
+			r.n++
+			lp.finish(r, FinishMaxTokens, "", nil)
+			return false
+		}
 	}
 	r.next[0] = next
 	return true
@@ -1306,30 +1313,31 @@ func (e *Engine) generateBatched(ctx context.Context, lp *stepLoop, s *Session, 
 	}
 	now := time.Now()
 	r := &row{
-		tools:     tools,
-		s:         s,
-		ids:       ids,
-		restored:  restored,
-		fed:       restored,
-		seal:      store,
-		reset:     !o.Continue && restored == 0,
-		fresh:     !o.Continue,
-		echo:      o.Echo,
-		ephemeral: ephemeral,
-		sampler:   sampler,
-		logprobs:  newLogprobs(o),
-		maxTokens: maxTokens,
-		ignoreEOS: o.IgnoreEOS,
-		stops:     hasStop(o.Stop),
-		stream:    newStreamText(lm.m.Vocab.NewChatStream().Next, o.Stop),
-		enqueued:  now,
-		since:     now,
-		prio:      rowPriority(o.Priority),
-		groups:    o.DecodeGroups,
-		admitted:  make(chan struct{}),
-		done:      make(chan struct{}),
-		notify:    make(chan struct{}, 1),
-		out:       make([]int32, 0, maxTokens),
+		tools:       tools,
+		s:           s,
+		ids:         ids,
+		restored:    restored,
+		fed:         restored,
+		seal:        store,
+		reset:       !o.Continue && restored == 0,
+		fresh:       !o.Continue,
+		echo:        o.Echo,
+		ephemeral:   ephemeral,
+		sampler:     sampler,
+		logprobs:    newLogprobs(o),
+		maxTokens:   maxTokens,
+		ignoreEOS:   o.IgnoreEOS,
+		stops:       hasStop(o.Stop) || o.PredictTime > 0,
+		predictTime: o.PredictTime,
+		stream:      newStreamText(lm.m.Vocab.NewChatStream().Next, o.Stop),
+		enqueued:    now,
+		since:       now,
+		prio:        rowPriority(o.Priority),
+		groups:      o.DecodeGroups,
+		admitted:    make(chan struct{}),
+		done:        make(chan struct{}),
+		notify:      make(chan struct{}, 1),
+		out:         make([]int32, 0, maxTokens),
 	}
 	if err := lp.submit(r); err != nil {
 		return err

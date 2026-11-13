@@ -1695,8 +1695,12 @@ type GenerateOptions struct {
 	// act on an id it never saw. Empty names the model by ModelID.
 	ModelName string
 
-	Prompt       Prompt
-	MaxTokens    int
+	Prompt    Prompt
+	MaxTokens int
+	// PredictTime, when set, ends the reply at its first token whose text
+	// holds a newline once this long has passed since decoding began, as
+	// FinishMaxTokens: llama-server's t_max_predict_ms.
+	PredictTime  time.Duration
 	Sampling     *engine.Sampler
 	Stop         []string
 	Continue     bool
@@ -1937,6 +1941,13 @@ type Event struct {
 	Started  *Started
 	Token    *Token
 	Finished *Finished
+}
+
+// pastPredictTime says a reply whose decode began at start ends on a token
+// of text chunk: it holds a newline and limit (GenerateOptions.PredictTime)
+// has passed.
+func pastPredictTime(limit time.Duration, start time.Time, chunk string) bool {
+	return limit > 0 && strings.Contains(chunk, "\n") && time.Since(start) > limit
 }
 
 // tokenLimit is a request's completion length: what it asked for, never more
@@ -2391,6 +2402,10 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 		}
 		if hit {
 			reason, stopMatched = FinishStop, match
+			n++
+			break
+		}
+		if pastPredictTime(o.PredictTime, decodeStart, chunk) {
 			n++
 			break
 		}
