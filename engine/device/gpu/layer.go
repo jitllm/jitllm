@@ -455,217 +455,12 @@ func (st *streamBank) count(uses []uint32) {
 	}
 }
 
-// slotInFlight marks an expert whose sheet is on its way to a slot: a miss
-// until the sheet has landed (finishAdmits), and not admitted again.
-const slotInFlight = -2
-
-// admJob is one block's admissions waiting to be sent: g.admItems[lo:hi].
-type admJob struct {
-	st      *streamBank
-	l       *layer
-	nExpert int
-	lo, hi  int
-}
-
-// flushAdmits sends the admissions admit queued. It runs where the host waits
-// on the card anyway -- before a block's router readback, and at the call's
-// end -- so a sheet's page read and host copy are off the token's path. On a
-// session with a copy queue (backend.Uploader) the sheets are copied into a
-// page-locked ring and sent beside the launches, and the slots are taken
-// into use at the call's end (finishAdmits), once the copies have landed;
-// otherwise they are sent in order with the launches (put) and in use at once.
-func (g *devTier) flushAdmits(s backend.Session) error {
-	if len(g.adm) == 0 {
-		return nil
-	}
-	defer func(t0 time.Time) { g.TAdmit += time.Since(t0) }(time.Now())
-	up, _ := s.(backend.Uploader)
-	if up != nil && !g.upRingReady() {
-		up = nil
-	}
-	var err error
-	for _, j := range g.adm {
-		st := j.st
-		items := g.admItems[j.lo:j.hi]
-		st.want = st.want[:0]
-		for _, it := range items {
-			st.want = append(st.want, it.e)
-		}
-		switch {
-		case st.pre != nil:
-			err = st.pre(st.want, st.fr)
-		case st.ensure != nil:
-			err = st.ensure(&st.w, st.fr)
-		}
-		if err == nil && st.sel2 != nil {
-			err = st.sel2(&st.w, st.want, st.fr)
-		}
-		if err == nil && up != nil {
-			err = st.upload(g, up, j.l, j.nExpert, items)
-			if err == nil {
-				g.admPub = append(g.admPub, j)
-				g.SplitQueued += len(items)
-			}
-		} else if err == nil {
-			st.items = append(st.items[:0], items...)
-			if err = st.put(g, s, j.l, j.nExpert, [2]int{0, len(items)}); err == nil {
-				st.publish(items)
-			}
-		}
-		if err != nil {
-			// A sheet half sent is not the expert the map names.
-			st.forget()
-			break
-		}
-		g.SplitAdmits += len(items)
-	}
-	g.adm = g.adm[:0]
-	return err
-}
-
-// finishAdmits sends what is queued, waits for the copy queue and takes the
-// landed slots into use. It runs at the end of every call that admitted,
-// so no sheet is in flight between calls (dropCaches frees banks there).
-func (g *devTier) finishAdmits(s backend.Session) error {
-	err := g.flushAdmits(s)
-	if len(g.admPub) > 0 {
-		t0 := time.Now()
-		if up, ok := s.(backend.Uploader); ok {
-			if werr := up.UploadWait(); err == nil {
-				err = werr
-			}
-		}
-		for _, j := range g.admPub {
-			if err != nil {
-				j.st.forget()
-				continue
-			}
-			j.st.publish(g.admItems[j.lo:j.hi])
-		}
-		g.admPub = g.admPub[:0]
-		g.TAdmit += time.Since(t0)
-	}
-	if len(g.adm) == 0 {
-		g.admItems = g.admItems[:0]
-	}
-	g.ringUsed = 0
-	return err
-}
-
-// publish takes landed sheets into use: an expert whose slot is still its own
-// (no forget or later eviction moved it) is a hit from the next token.
-func (st *streamBank) publish(items []streamItem) {
-	for _, it := range items {
-		if st.owner != nil && it.slot < len(st.owner) && st.owner[it.slot] == int32(it.e) &&
-			int(it.e) < len(st.slotOf) && st.slotOf[it.e] == slotInFlight {
-			st.slotOf[it.e] = int32(it.slot)
-		}
-	}
-}
-
-// upRingBytes is the page-locked ring flushAdmits copies sheets through.
-const upRingBytes = 64 << 20
-
-// upRingReady allocates the ring on first use, and reports false where the
-// device has no page-locked memory.
-func (g *devTier) upRingReady() bool {
-	if g.upRing != nil {
-		return true
-	}
-	hp, ok := g.dev.(backend.HostPinner)
-	if !ok || g.noPin || g.StreamNoPin {
-		return false
-	}
-	b, err := hp.PinHost(upRingBytes)
-	if err != nil {
-		return false
-	}
-	g.upRing = b
-	return true
-}
-
 // rawStride is an expert's bytes in raw bank q of rows k elements wide, its
 // sheet n bytes: a float bank's sheet is its rows, a verbatim bank's rounds
 // its blocks up to a word.
 func rawStride(q layout.Quant, n, k int) int {
 	row := layout.RawRowBytes(q, k)
 	return n / row * row
-}
-
-// upload copies items' sheets through the ring onto the copy queue, at their
-// slots. A sheet plane larger than the ring goes the ordered way.
-func (st *streamBank) upload(g *devTier, up backend.Uploader, l *layer, nExpert int, items []streamItem) error {
-	for m, pair := range [3]struct {
-		r *resident
-		w nn.Weight
-	}{{l.gate, st.w.Gate}, {l.up, st.w.Up}, {l.down, st.w.Down}} {
-		if m == 0 && pair.r == nil && pair.w.Packed == nil && pair.w.Data == nil {
-			continue
-		}
-		pk := pair.w.Packed
-		raw := pk == nil && layout.IsRaw(pair.r.t) && len(pair.w.Data) > 0
-		if pair.r == nil || !pair.r.ok || pk == nil && !raw {
-			return fmt.Errorf("tier: streamed bank %d has no host side", m)
-		}
-		for pl := 0; pl < 3; pl++ {
-			n := st.sh[m][pl]
-			if n == 0 {
-				continue
-			}
-			if n > len(g.upRing) {
-				return fmt.Errorf("tier: a %d-byte sheet plane is wider than the upload ring", n)
-			}
-			dst := [3]backend.Buf{pair.r.qs, pair.r.d, pair.r.sc}[pl]
-			for _, it := range items {
-				if int(it.e) >= nExpert {
-					return fmt.Errorf("tier: the router selected expert %d of %d", it.e, nExpert)
-				}
-				if g.ringUsed+n > len(g.upRing) {
-					// Every copy from the ring has landed before it is reused.
-					if err := up.UploadWait(); err != nil {
-						return err
-					}
-					g.ringUsed = 0
-				}
-				buf := g.upRing[g.ringUsed : g.ringUsed+n : g.ringUsed+n]
-				if !raw && pk.Sheet != nil {
-					sp, rel, err := pk.Sheet(int(it.e))
-					if err != nil {
-						rel()
-						return err
-					}
-					src := [3][]byte{sp.QS, sp.D, sp.SC}[pl]
-					if len(src) != n {
-						rel()
-						return fmt.Errorf("tier: expert %d plane %d is %d bytes, want %d", it.e, pl, len(src), n)
-					}
-					copy(buf, src)
-					rel()
-				} else {
-					// A raw bank's rows are its one plane, an expert's
-					// stride bytes of it.
-					whole, stride := pair.w.Data, n
-					if raw {
-						stride = rawStride(pair.r.t, n, pair.r.k)
-					} else {
-						whole = [3][]byte{pk.QS, pk.D, pk.SC}[pl]
-					}
-					off := int(it.e) * stride
-					if off+stride > len(whole) {
-						return fmt.Errorf("tier: expert %d plane %d wants bytes %d..%d of %d",
-							it.e, pl, off, off+stride, len(whole))
-					}
-					copy(buf, whole[off:off+stride])
-				}
-				g.ringUsed += n
-				if err := up.Upload(dst, it.slot*n, buf); err != nil {
-					return err
-				}
-				g.StreamBytes += int64(n)
-			}
-		}
-	}
-	return nil
 }
 
 // forget empties the cache, for when the bank's bytes can no longer be
@@ -1597,11 +1392,6 @@ func (g *devTier) prepLayerFor(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerW
 // the device, unlike the host's routed scale (model.Config.routedScale): the
 // scaled add covers the routed sum and the shared expert at once.
 func residScaled(p *nn.LayerPlan) bool { return p.ResidualScale != 0 && p.ResidualScale != 1 }
-
-// lnBlock reports whether the block's norms are LayerNorms: a vision tower's,
-// or a classic text block's (C6, nn.LayerPlan.LayerNorm). Every other block
-// is RMSNorm, whose fused norm+quantize kernels a LayerNorm cannot use.
-func lnBlock(p *nn.LayerPlan) bool { return p.LayerNorm }
 
 // ungatedFFN reports whether the block's FFN has no gate matrix: up, the
 // activation alone, down -- a vision tower's MLP, or a classic text block's
@@ -4434,14 +4224,6 @@ func (g *devTier) layersSession(s backend.Session) {
 	var err error
 	direct := false
 	defer func() { a.err, a.direct = err, direct }()
-	// Runs first: no admitted sheet is in flight when the call returns.
-	defer func() {
-		if len(g.adm) > 0 || len(g.admPub) > 0 {
-			if aerr := g.finishAdmits(s); err == nil {
-				err = aerr
-			}
-		}
-	}()
 	w := func(b backend.Buf, p []byte) {
 		if err == nil {
 			t := time.Now()

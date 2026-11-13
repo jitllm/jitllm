@@ -592,13 +592,6 @@ type Stats struct {
 	// and CacheBytes is what the caches sized after placement hold now.
 	CachesDropped int
 	CacheBytes    uint64
-	// SplitAdmits counts the experts the caches took in.
-	SplitAdmits int
-	// SplitQueued counts admitted sheets sent on the copy queue beside the
-	// launches (backend.Uploader) rather than in their order.
-	SplitQueued int
-	// TAdmit is the wall of taking experts into the caches.
-	TAdmit time.Duration
 	// StreamCacheSize is the largest expert cache a block was given, in
 	// sheets: the check that an auto-sized cache is the size intended.
 	StreamCacheSize int
@@ -913,9 +906,6 @@ func (s *Stats) add(o Stats) {
 	s.StreamCacheShort += o.StreamCacheShort
 	s.CachesDropped += o.CachesDropped
 	s.CacheBytes += o.CacheBytes
-	s.SplitAdmits += o.SplitAdmits
-	s.SplitQueued += o.SplitQueued
-	s.TAdmit += o.TAdmit
 	s.StreamCacheSize = max(s.StreamCacheSize, o.StreamCacheSize)
 	s.StreamCacheBytes += o.StreamCacheBytes
 	s.StreamGroupsTuned = max(s.StreamGroupsTuned, o.StreamGroupsTuned)
@@ -1174,20 +1164,12 @@ type devShared struct {
 	// direct sheet or on a device with no page-locked memory; pieces is
 	// put's list of direct sheets, kept so a token allocates none. See
 	// sendPieces.
-	pin    [2][]byte
-	noPin  bool
-	pieces []sheetPiece
-	// adm is admissions queued for flushAdmits (their items in admItems),
-	// admPub those sent on the copy queue and not yet taken into use, upRing
-	// the page-locked ring they go through and ringUsed its fill.
-	adm      []admJob
-	admPub   []admJob
-	admItems []streamItem
-	upRing   []byte
-	ringUsed int
-	packWG   sync.WaitGroup
-	copyWG   sync.WaitGroup
-	packEnd  int
+	pin     [2][]byte
+	noPin   bool
+	pieces  []sheetPiece
+	packWG  sync.WaitGroup
+	copyWG  sync.WaitGroup
+	packEnd int
 	*Config
 	mu sync.Mutex
 	// tot is the device's counters (Stats). A view names them through its
@@ -2052,10 +2034,6 @@ func (g *devTier) Close() {
 				hp.UnpinHost(b)
 				g.pin[i] = nil
 			}
-		}
-		if g.upRing != nil {
-			hp.UnpinHost(g.upRing)
-			g.upRing = nil
 		}
 	}
 	for _, r := range g.res {

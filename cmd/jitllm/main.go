@@ -999,9 +999,6 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 				fmt.Fprintf(os.Stderr, "cache coverage: the hottest experts a cache holds carry %s of a block's selections (min/median/max over %d blocks); twice the slots %s\n",
 					q(at), len(at), q(tw))
 			}
-			if ds.SplitAdmits > 0 {
-				fmt.Fprintf(os.Stderr, "expert caches: %d expert(s) taken in, in %.2f s\n", ds.SplitAdmits, sec(ds.TAdmit))
-			}
 		}
 	}
 	// Say whether blocks paged, even when they did not: the slot count and
