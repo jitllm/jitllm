@@ -389,8 +389,8 @@ func hardware() []Profile {
 					},
 				},
 				Issue: Rate{
-					Thread: 4.781e+09,
-					Total:  3.657e+10,
+					Thread: 8.178e+09,
+					Total:  5.711e+10,
 				},
 				Delay: [NumClasses]float64{
 					ClassFloat:   2.089e-09,
