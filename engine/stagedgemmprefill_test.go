@@ -3,6 +3,7 @@ package engine
 import (
 	"math"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -33,15 +34,14 @@ func TestStagedGemmPrefillMatchesTheHost(t *testing.T) {
 	ran := 0
 	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen3-0.6B-Q8_0.gguf",
 		"tinyllama-1.1b-q3_K_M.gguf", "Qwen2-1.5B-Instruct-Q4_K_M.gguf", "gemma-2b.gguf",
-		"Qwen3.5-0.8B-Q4_K_M.gguf", "Qwen3-MOE-4x0.6B-Q4_K_M.gguf"} {
+		"qwen35/Qwen3.5-0.8B-Q4_K_M.gguf", "Qwen3-MOE-4x0.6B-Q4_K_M.gguf"} {
 		p := testmodels.Path(name)
 		if _, err := os.Stat(p); err != nil {
 			if _, err := os.Stat(strings.TrimSuffix(p, ".gguf") + ".jlm"); err != nil {
-				t.Logf("MODEL MISSING: %s", name)
-				continue
+				testmodels.Missing(t, "MODEL MISSING: %s (set JITLLM_MODELS to the model directory)", name)
 			}
 		}
-		t.Run(name, func(t *testing.T) {
+		t.Run(filepath.Base(name), func(t *testing.T) {
 			instOpts := []Option{WithKVF16(false)}
 			m, err := model.Open(jlmOf(t, p))
 			if err != nil {
