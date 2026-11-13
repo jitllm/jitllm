@@ -122,8 +122,54 @@ func TestLogprobsMatchTheOracle(t *testing.T) {
 	}
 }
 
+// TestLogprobsPastTheSelection holds a Logprobs of more alternatives than
+// the log-softmax's own selection orders to the oracle as
+// TestLogprobsMatchTheOracle does, past it and over the whole vocabulary:
+// those come from the whole row in order (model.CpuLogprobsRow). Run
+// through the selection alone they would be its twenty.
+func TestLogprobsPastTheSelection(t *testing.T) {
+	mp, ok := existingModel(models()["stories15M"])
+	if !ok {
+		testmodels.Missing(t, "MODEL MISSING: %s (set JITLLM_MODELS to the model directory) -- this gate proved nothing",
+			models()["stories15M"])
+	}
+	m, err := model.Open(jlmOf(t, mp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	ids := m.Vocab.Encode("Once upon a time, there was a little dog", true)
+	const gen = 4
+	st := testInstance(t, m, len(ids)+gen+1)
+	defer st.Close()
+	logits, err := st.Prefill(ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sm := &Sampler{Temp: 0.8, Seed: 7}
+	for i := range gen {
+		next, err := st.Sample(sm, logits)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, n := range []int{model.MaxTopLogprobs + 1, 500, m.Cfg.NVocab} {
+			lp := &Logprobs{N: n}
+			got, err := st.Logprobs(lp, logits, next)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := lpCheck(logits, next, got, lp.Top, n); err != nil {
+				t.Fatalf("step %d, %d alternatives: %v", i, n, err)
+			}
+		}
+		if logits, err = st.Forward(next); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 // TestLogprobsAllocateNothingWarm: a warm Logprobs, top-20 over stories15M's
-// vocabulary, makes no heap allocation.
+// vocabulary and the whole of it, makes no heap allocation.
 func TestLogprobsAllocateNothingWarm(t *testing.T) {
 	mp, ok := existingModel(models()["stories15M"])
 	if !ok {
@@ -138,12 +184,14 @@ func TestLogprobsAllocateNothingWarm(t *testing.T) {
 	st := testInstance(t, m, 8)
 	defer st.Close()
 	logits := allocProbeLogits(m.Cfg.NVocab)
-	lp := &Logprobs{N: model.MaxTopLogprobs}
-	if _, err := st.Logprobs(lp, logits, 5); err != nil {
-		t.Fatal(err)
-	}
-	if a := testing.AllocsPerRun(20, func() { st.Logprobs(lp, logits, 5) }); a != 0 {
-		t.Fatalf("%v allocations per warm Logprobs, want none", a)
+	for _, n := range []int{model.MaxTopLogprobs, m.Cfg.NVocab} {
+		lp := &Logprobs{N: n}
+		if _, err := st.Logprobs(lp, logits, 5); err != nil {
+			t.Fatal(err)
+		}
+		if a := testing.AllocsPerRun(20, func() { st.Logprobs(lp, logits, 5) }); a != 0 {
+			t.Fatalf("%v allocations per warm Logprobs of %d, want none", a, n)
+		}
 	}
 }
 

@@ -719,8 +719,8 @@ func TestLlamaRefusals(t *testing.T) {
 	refuse := map[string]string{
 		"mirostat": `3`, "dry_multiplier": `0.8`,
 		"logit_bias": `[[15]]`, "samplers": `["top_k","dryer"]`, "n_cmpl": `0`, "id_slot": `-2`,
-		"lora":    `[{"id":0,"scale":1}]`,
-		"n_probs": `99`, "repeat_last_n": `-2`,
+		"lora":            `[{"id":0,"scale":1}]`,
+		"repeat_last_n":   `-2`,
 		"response_fields": `"content"`, "mystery_field": `1`,
 	}
 	for k, v := range refuse {
@@ -743,6 +743,16 @@ func TestLlamaRefusals(t *testing.T) {
 		}
 		if got := f.opts().Sampling.RepeatLastN; got != want {
 			t.Errorf("repeat_last_n=%s reached the sampler as %d, want %d", v, got, want)
+		}
+	}
+	// n_probs past the twenty the OpenAI API takes reaches the generate
+	// whole, as llama-server takes it; below 0 it asks for none.
+	for v, want := range map[string]int{`99`: 99, `100000`: 100000, `-3`: 0} {
+		if code, out := llamaPost(t, s, "/completion", `{"prompt":"x","n_probs":`+v+`}`); code != 200 {
+			t.Fatalf("n_probs=%s: %d %v", v, code, out)
+		}
+		if o := f.opts(); o.Logprobs != (want > 0) || want > 0 && o.TopLogprobs != want {
+			t.Errorf("n_probs=%s reached the generate as logprobs %v with %d alternatives", v, o.Logprobs, o.TopLogprobs)
 		}
 	}
 	// presence_penalty and frequency_penalty reach the sampler.

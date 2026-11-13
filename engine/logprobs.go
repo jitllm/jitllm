@@ -22,7 +22,7 @@ type TopLogprob struct {
 // (logprobs_mode "raw_logprobs") and what the OpenAI API reports: a
 // log-probability that does not move with the request's temperature.
 type Logprobs struct {
-	N   int          // alternatives per token, 0..MaxTopLogprobs
+	N   int          // alternatives per token, 0 to the vocabulary
 	Top []TopLogprob // the last call's alternatives, most likely first
 }
 
@@ -38,11 +38,8 @@ func (s *Instance) SampledProbs(l *Logprobs, smp *Sampler, logits []float32, cho
 	if n != s.c.NVocab {
 		return 0, fmt.Errorf("model: sampled probabilities over %d logits, and the vocabulary is %d", n, s.c.NVocab)
 	}
-	if cap(l.Top) < model.MaxTopLogprobs {
-		l.Top = make([]TopLogprob, 0, model.MaxTopLogprobs)
-	}
-	l.Top = l.Top[:0]
-	k := min(max(l.N, 0), model.MaxTopLogprobs)
+	k := min(max(l.N, 0), n)
+	l.Top = topOf(l.Top, k)
 	if smp == nil || smp.Temp <= 0 {
 		if k > 0 {
 			l.Top = append(l.Top, TopLogprob{ID: chosen, Logprob: 1})
@@ -78,7 +75,7 @@ func (s *Instance) SampledProbs(l *Logprobs, smp *Sampler, logits []float32, cho
 	if dense {
 		// The likeliest first, by the composed selection the log-softmax's
 		// alternatives are read by.
-		_, top, ok := s.heads.Logprobs(s.post.pall)
+		_, top, ok := s.heads.Logprobs(s.post.pall, k)
 		if !ok {
 			return 0, s.sampleDeclined("the sampled distribution")
 		}
@@ -135,15 +132,12 @@ func (s *Instance) Logprobs(l *Logprobs, logits []float32, chosen int32) (float3
 	if s.heads == nil {
 		return 0, s.sampleDeclined("the logprobs")
 	}
-	row, ids, ok := s.heads.Logprobs(logits)
+	row, ids, ok := s.heads.Logprobs(logits, l.N)
 	if !ok {
 		return 0, s.sampleDeclined("the logprobs")
 	}
 	k := min(max(l.N, 0), len(ids))
-	if cap(l.Top) < model.MaxTopLogprobs {
-		l.Top = make([]TopLogprob, 0, model.MaxTopLogprobs)
-	}
-	l.Top = l.Top[:0]
+	l.Top = topOf(l.Top, k)
 	for _, id := range ids[:k] {
 		l.Top = append(l.Top, TopLogprob{ID: int32(id), Logprob: row[id]})
 	}
@@ -151,4 +145,13 @@ func (s *Instance) Logprobs(l *Logprobs, logits []float32, chosen int32) (float3
 		return 0, nil
 	}
 	return row[chosen], nil
+}
+
+// topOf is top emptied, holding k alternatives and MaxTopLogprobs at least
+// without growing: a warm call allocates nothing.
+func topOf(top []TopLogprob, k int) []TopLogprob {
+	if c := max(k, model.MaxTopLogprobs); cap(top) < c {
+		return make([]TopLogprob, 0, c)
+	}
+	return top[:0]
 }

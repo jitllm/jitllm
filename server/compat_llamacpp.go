@@ -983,10 +983,6 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 		llFailErr(w, fmt.Errorf("%w: n_cmpl: %v", ErrInvalid, err))
 		return
 	}
-	if set.NProbs < 0 || set.NProbs > model.MaxTopLogprobs {
-		llFailErr(w, fmt.Errorf("%w: n_probs=%d is outside [0, %d]", ErrInvalid, set.NProbs, model.MaxTopLogprobs))
-		return
-	}
 	if set.RepeatLastN < -1 {
 		llFailErr(w, fmt.Errorf("%w: repeat_last_n=%d is below -1 (the context)", ErrInvalid, set.RepeatLastN))
 		return
