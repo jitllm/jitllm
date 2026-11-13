@@ -581,3 +581,76 @@ func TestOnlyAStreamedBlockIsAStreamedVictim(t *testing.T) {
 			"block is evicted for a streamed one", got)
 	}
 }
+
+// TestASecondSessionsStateTakesAPageOnAFullCard: a card its paged blocks fill
+// gives a second session's recurrent state the room of a page it sends home,
+// as it gives a growing history room (stateFits): a session is not refused
+// for a state the pager can make room for. Qwen3.6-35B-A3B on a 16 GB V100
+// was, when a second session stepped beside the first. The violation is the
+// state charged with no page sent home.
+func TestASecondSessionsStateTakesAPageOnAFullCard(t *testing.T) {
+	seat := func(t *testing.T, reclaim bool) (bool, string, Stats, Stats) {
+		const n, fit = 10, 4
+		g, p := pageTier(t, n, fit, true)
+		if got := placedTotal(g); got != n {
+			t.Fatalf("%d of %d blocks placed under a %d-block budget: %s", got, n, fit, g.Err())
+		}
+		if !token(t, g, p, n, 0) {
+			t.Fatalf("token: %s", g.Err())
+		}
+		before := g.Stats()
+		rp := *p
+		dt := g.devs[0]
+		dt.mu.Lock()
+		// A state past the room the full card has left, and at most what
+		// one page sent home frees: the most that costs the card one slot.
+		free := uint64(0)
+		if dt.limit > dt.used {
+			free = dt.limit - dt.used
+		}
+		slots, state := dt.slots(), uint64(0)
+		for n := free + 8; dt.slotsIfPerm(n+dt.reserved()) >= slots-1; n += 8 {
+			state = n
+		}
+		if state <= free {
+			dt.mu.Unlock()
+			t.Fatalf("no state past the %d bytes the card has left costs only one of its %d slots", free, slots)
+		}
+		const conv = 3 * 96
+		rp.Recurrent = nn.RecurrentPlan{Conv: 4, Chans: 96, KHeads: 2, VHeads: 4, KDim: 8, VDim: 8,
+			StateLen: int(state/8) - conv, ConvState: conv}
+		l := &layer{linear: true, ok: true}
+		dt.layers[n] = l
+		var ok bool
+		if reclaim {
+			ok = dt.addSessionRec(1, l, &rp)
+		} else {
+			need := 2 * uint64(rp.Recurrent.StateLen*4+rp.Recurrent.ConvState*4)
+			ok = dt.roomSeat(need, 0, need)
+		}
+		why := dt.LastErr
+		dt.Slots = dt.slots()
+		dt.mu.Unlock()
+		return ok, why, before, g.Stats()
+	}
+	ok, why, before, after := seat(t, true)
+	if !ok {
+		t.Fatalf("a second session's recurrent state on a card its pages fill: %s (slots %d, %d page-ins)",
+			why, before.Slots, before.PageIns)
+	}
+	if after.PageOuts == before.PageOuts {
+		t.Fatalf("the state was seated with no page sent home (%d page-outs): it fit already, and this "+
+			"test proved nothing", after.PageOuts)
+	}
+	if after.Slots < minSlots {
+		t.Fatalf("the state left %d slots, below the %d a swap needs", after.Slots, minSlots)
+	}
+	t.Logf("seated with %d page(s) sent home; slots %d -> %d", after.PageOuts-before.PageOuts, before.Slots, after.Slots)
+	t.Run("violation/noPageOut", func(t *testing.T) {
+		ok, _, _, _ := seat(t, false)
+		if ok {
+			t.Fatal("THE GATE IS NOT A GATE: the state fits the full card without a page going home")
+		}
+		t.Log("violation seen to fail as required: the state does not fit beside the pages")
+	})
+}
