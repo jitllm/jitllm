@@ -129,10 +129,15 @@ type frontSet struct {
 	// with typical-p (graph.SampleCut's Typical), apart so a draw without it
 	// pays for none of it.
 	CpuSample, CpuWalk, CpuRow, CpuCut *graph.Graph
-	CpuWalkProb, CpuCutProb            *graph.Graph
-	CpuCutK, CpuCutKProb               *graph.Graph
-	CpuCutTyp, CpuCutTypProb           *graph.Graph
-	CpuCutKTyp, CpuCutKTypProb         *graph.Graph
+	// CpuWalkInfill is a top-k draw's walk through llama.cpp's infill
+	// sampler (graph.SampleWalk's Infill) at nn.InfillMaxK candidates, and
+	// Infill the vocabulary's tables it reads.
+	CpuWalkInfill              *graph.Graph
+	Infill                     nn.InfillTables
+	CpuWalkProb, CpuCutProb    *graph.Graph
+	CpuCutK, CpuCutKProb       *graph.Graph
+	CpuCutTyp, CpuCutTypProb   *graph.Graph
+	CpuCutKTyp, CpuCutKTypProb *graph.Graph
 	// CpuMiro and CpuMiroV1 are Mirostat's draws, version 2 and 1.
 	CpuMiro, CpuMiroV1 *graph.Graph
 	// cpuLogprobs is the logits' log-softmax and their MaxTopLogprobs most
@@ -382,6 +387,12 @@ func (m *Model) FrontGraphs() *frontSet {
 		tk := graph.SampleTopK{NVocab: m.Cfg.NVocab, K: nn.SampleMaxK}
 		wk := graph.SampleWalk{SampleTopK: tk}
 		s.CpuWalk = wk.Build()
+		if m.Vocab != nil {
+			s.Infill = m.infillTables()
+			wi := graph.SampleWalk{SampleTopK: graph.SampleTopK{NVocab: m.Cfg.NVocab, K: nn.InfillMaxK}, Infill: true,
+				Depth: s.Infill.Depth, EOG: len(s.Infill.EOG)}
+			s.CpuWalkInfill = wi.Build()
+		}
 		rw := graph.SampleRow{NVocab: m.Cfg.NVocab}
 		s.CpuRow = rw.Build()
 		ct := graph.SampleCut{NVocab: m.Cfg.NVocab}

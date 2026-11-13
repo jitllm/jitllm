@@ -63,13 +63,13 @@ func (e *Exec) placeParts(p *PartsPlan) Parts {
 		return out
 	}
 	e.formAhead(p)
-	var h [22]Part
+	var h [23]Part
 	for i := range p.Head {
 		h[i] = e.FormPart(p.Head[i])
 	}
 	out.Head = NewHead(e.dev, &e.steps, HeadParts{Head: h[0], Hidden: h[1], Rows: h[2], Pick: h[3], Sample: h[4], Walk: h[5],
 		Row: h[6], Cut: h[7], WalkProb: h[8], CutProb: h[9], CutK: h[10], CutKProb: h[11], OutNorm: h[12], Logprobs: h[13],
-		Mask: h[14], Decide: h[15], CutTyp: h[16], CutTypProb: h[17], CutKTyp: h[18], CutKTypProb: h[19], Miro: h[20], MiroV1: h[21]}, p.HeadNorm, boundWeights{e.b, p.HeadW}, p.D, p.NVocab, p.TopLog)
+		Mask: h[14], Decide: h[15], CutTyp: h[16], CutTypProb: h[17], CutKTyp: h[18], CutKTypProb: h[19], Miro: h[20], MiroV1: h[21], WalkInfill: h[22]}, p.HeadNorm, boundWeights{e.b, p.HeadW}, p.D, p.NVocab, p.TopLog, p.Infill)
 	if p.Streams {
 		var sp [4]Part
 		for i := range sp {

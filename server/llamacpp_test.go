@@ -583,10 +583,36 @@ func TestLlamaSamplersChooseTheStages(t *testing.T) {
 	if sm := f.opts().Sampling; sm.TopK != 5 || sm.MinP != 0.2 || sm.Temp != 0.3 || sm.RepeatPen != 1.3 {
 		t.Errorf("the default chain ran %+v, want every stage", sm)
 	}
-	for _, bad := range []string{`["top_p","top_k"]`, `["top_k","foo"]`, `["top_k","top_p","infill"]`, `"kq"`, `7`} {
+	for _, bad := range []string{`["top_p","top_k"]`, `["top_k","foo"]`, `["top_k","infill","top_p"]`, `["top_k","adaptive_p"]`, `"kq"`, `7`} {
 		code, out := llamaPost(t, s, "/completion", `{"prompt":"x","samplers":`+bad+`}`)
 		if b, _ := json.Marshal(out); code != 400 || !strings.Contains(string(b), "samplers") {
 			t.Errorf("samplers %s: %d %s", bad, code, b)
+		}
+	}
+}
+
+// TestLlamaInfillSamplerReachesTheDraw: infill as samplers' last stage, by
+// name or letter, asks the generate for the infill sampler, which
+// generation_settings lists; no samplers, or a list without it, does not.
+func TestLlamaInfillSamplerReachesTheDraw(t *testing.T) {
+	f := &llamaFake{fakeBackend: &fakeBackend{tokens: []string{"a"}, reason: FinishEOS}}
+	s := llamaServe(t, f)
+	for _, samplers := range []string{`["top_k","top_p","infill"]`, `"kpi"`, `["Infill"]`} {
+		code, out := llamaPost(t, s, "/completion", `{"prompt":"x","top_k":40,"samplers":`+samplers+`}`)
+		if code != 200 {
+			t.Fatalf("%s: %d %v", samplers, code, out)
+		}
+		if sm := f.opts().Sampling; sm == nil || !sm.Infill {
+			t.Fatalf("%s: the draw has no infill sampler", samplers)
+		}
+		gs := out["generation_settings"].(map[string]any)
+		if got, _ := json.Marshal(gs["samplers"]); !strings.HasSuffix(string(got), `"infill"]`) {
+			t.Errorf("%s: generation_settings samplers %s", samplers, got)
+		}
+	}
+	for _, body := range []string{`{"prompt":"x"}`, `{"prompt":"x","samplers":["top_k","top_p"]}`} {
+		if code, _ := llamaPost(t, s, "/completion", body); code != 200 || f.opts().Sampling.Infill {
+			t.Fatalf("%s: %d, infill %v", body, code, f.opts().Sampling.Infill)
 		}
 	}
 }

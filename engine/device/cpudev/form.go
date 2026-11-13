@@ -226,8 +226,9 @@ func (f *Form) Close() {
 }
 
 // IO is the most inputs and outputs a graph apart from its residual
-// binds: Mirostat's draw reads five and writes two.
-const IO = 8
+// binds: the infill walk reads eight and writes one. It sizes an array in
+// every call block, nothing the generated code reads by offset.
+const IO = 16
 
 // DeclineError is a form the CPU device refuses by a named reason.
 type DeclineError struct {
