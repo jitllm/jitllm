@@ -49,10 +49,6 @@ type cudaDev struct {
 	// is capturing, and that session runs on the owner goroutine.
 	cap   *cuda.Stream
 	noCap bool // stream creation failed; do not keep asking
-	// up is the copy queue (backend.Uploader), a non-blocking stream created
-	// on first use; noUp records that it could not be.
-	up   *cuda.Stream
-	noUp bool
 	// tev is a ring of (before, after) event pairs around the last three
 	// replays, and ti counts replays timed; see timeReplay.
 	tev [3][2]*cuda.Event
@@ -921,7 +917,6 @@ func (c *cudaDev) Close() {
 	c.reqs <- func() {
 		// The streams go before the context that owns them.
 		c.cap.Destroy()
-		c.up.Destroy()
 		c.qmu.Lock()
 		for q := range c.queues {
 			q.st.Destroy()
@@ -1582,33 +1577,4 @@ func (c *cudaDev) hasQueues() bool {
 	c.qmu.Lock()
 	defer c.qmu.Unlock()
 	return len(c.queues) > 0
-}
-
-// Upload copies p into b at off on the device's copy queue (backend.Uploader).
-// A session runs on a thread with the context current, as the copy needs.
-func (s *cudaSession) Upload(b Buf, off int, p []byte) error {
-	if len(p) == 0 {
-		return nil
-	}
-	c := s.c
-	if c.up == nil {
-		if c.noUp {
-			return s.WriteAt(b, off, p)
-		}
-		st, err := c.d.NewQueue()
-		if err != nil {
-			c.noUp = true
-			return s.WriteAt(b, off, p)
-		}
-		c.up = st
-	}
-	return b.(*cudaBuf).b.WriteAtOn(c.up, off, unsafe.Pointer(&p[0]), len(p))
-}
-
-// UploadWait waits for the copy queue (backend.Uploader).
-func (s *cudaSession) UploadWait() error {
-	if s.c.up == nil {
-		return nil
-	}
-	return s.c.up.Sync()
 }
