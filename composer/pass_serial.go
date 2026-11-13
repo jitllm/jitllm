@@ -5,8 +5,11 @@ import "github.com/jitllm/jitllm/composer/ir"
 // Serial binds a kernel's elements to loops, for a device whose code runs a
 // call at a time: where the kernel carries heads its leading axes over rows
 // and query heads stay the calls' space, and every other axis is a loop,
-// the outermost first, the kernel's own loops inside the innermost.
-type Serial struct{}
+// the outermost first, the kernel's own loops inside the innermost. Coords,
+// where set, is the axes the device passes a coordinate for
+// (ArgFields.Coords): the calls' space keeps no more, an axis beyond them a
+// loop like the others.
+type Serial struct{ Coords int }
 
 func (Serial) Name() string { return "serial" }
 
@@ -21,6 +24,9 @@ func (p Serial) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		}
 		if k.Calls > 0 {
 			calls = k.Calls
+		}
+		if p.Coords > 0 && calls > p.Coords {
+			calls = p.Coords
 		}
 		if calls == len(k.Space) {
 			return nil, false, nil

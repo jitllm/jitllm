@@ -5288,6 +5288,30 @@ themselves vector values, and constants read by hoisted general-register
 code. The same model converted by the current converter binds, so no model
 the census runs is refused; an old container is.
 
+### The CPU call block's words, run out
+
+The CPU's argument block carries the integers a call fixes in its integer
+words: two count words on the block profile (Rows and K), one on the
+sample and table parts, and two coordinate words (Cols and OutStr). A
+pointer field cannot take an integer the collector would read as an
+address, so the block held no more. A kernel fixing a third loop count was
+refused ("more loop counts than the device's count words"), and so was a
+calls' space of three axes. Both were limits of this code, not of the
+host, and the refusal gate's phrases did not read either. No block the
+converter writes reached them.
+
+Neither is refused now. A loop count past the count words is a length
+whose call word would carry its model's value (CallArg.Extent, the length
+node's Imm, which is what the CPU device writes), so the kernel takes that
+value as its constant. A calls' space with more axes than the device's
+coordinate words runs the axes past them as loops (Serial's Coords), the
+way it runs every axis that is not a call. That also keeps cpudev's
+per-call address moves within the two axes its call words hold.
+composer.TestCPUCallWordsRunOut forms the matvec one count word and one
+coordinate word short and holds both forms to the oracle;
+TestCountsBeyondTheWordsAreTheKernelsConstants forms a Llama block one count
+word short.
+
 ## Design notes moved out of source comments
 
 Each entry below is a comment that stood in the named source file,

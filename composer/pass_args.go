@@ -78,8 +78,8 @@ func (p Args) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 }
 
 // bindCoords makes each coordinate of the calls' space the kernel still
-// reads a word the caller passes: a kernel whose space has more axes than
-// the device has words for is refused.
+// reads a word the caller passes. Serial left the space no more axes than
+// the device has words for.
 func (k *Kernel) bindCoords(f ArgFields) error {
 	if f.Coords == nil {
 		return nil
@@ -91,7 +91,7 @@ func (k *Kernel) bindCoords(f ArgFields) error {
 			continue
 		}
 		if nd.A >= len(k.Space) || nd.A >= len(f.Coords) {
-			return fmt.Errorf("%s reads coordinate %d of a calls' space of %d axes, where the device passes %d", k.Name, nd.A, len(k.Space), len(f.Coords))
+			return fmt.Errorf("jit: %s: coordinate %d of a calls' space of %d axes has no word of the device's %d, which Serial binds to loops", k.Name, nd.A, len(k.Space), len(f.Coords))
 		}
 		if k.Space[nd.A] == 1 {
 			k.Nodes[i] = Node{Op: OpConst, Type: ir.U32}
@@ -136,7 +136,9 @@ func (k *Kernel) fixed(i int) bool {
 // bindCounts makes each loop count the call fixes an argument word, the
 // loops taken outermost first: the length a count was split from, whole,
 // the count derived from it in the kernel. The call states lengths, never
-// what a kernel makes of them.
+// what a kernel makes of them. A length the device's count words do not
+// reach is the kernel's constant: the word would carry the model's value
+// (CallArg.Extent), which is the node's.
 func (k *Kernel) bindCounts(f ArgFields) error {
 	next := 0
 	field := func(c int) int {
@@ -185,7 +187,11 @@ func (k *Kernel) bindCounts(f ArgFields) error {
 			fl = field(c)
 		}
 		if fl < 0 {
-			return fmt.Errorf("jit: %s: more loop counts than the device's %d count words", k.Name, len(f.Counts))
+			if nd := k.Nodes[n]; nd.Op == OpLength && nd.A >= 0 {
+				k.Nodes[n] = Node{Op: OpConst, Type: nd.Type, Imm: nd.Imm}
+				continue
+			}
+			return fmt.Errorf("jit: %s: loop count node %d is neither a length nor a constant, and no count word is left for it", k.Name, n)
 		}
 		if slices.ContainsFunc(k.Args, func(a Arg) bool { return a.Field == fl && a.Buf < 0 }) {
 			return fmt.Errorf("jit: %s: argument field %d holds two loop counts", k.Name, fl)

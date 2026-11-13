@@ -2,7 +2,6 @@ package composer_test
 
 import (
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/jitllm/jitllm/composer"
@@ -11,10 +10,12 @@ import (
 	"github.com/jitllm/jitllm/format/quant"
 )
 
-// TestCountsBeyondTheWordsAreRefused forms a Llama-shaped block on the CPU
-// with one count word fewer than its kernels' loops need: the form is
-// refused by name, never a kernel whose two loop counts share a word.
-func TestCountsBeyondTheWordsAreRefused(t *testing.T) {
+// TestCountsBeyondTheWordsAreTheKernelsConstants forms a Llama-shaped block
+// on the CPU with one count word fewer than its kernels' loops pass: it
+// forms, no word holds two loop counts, and the block passes fewer lengths
+// than with every word, the ones past the word its kernels' constants.
+// TestCPUCallWordsRunOut runs such a form against the oracle.
+func TestCountsBeyondTheWordsAreTheKernelsConstants(t *testing.T) {
 	q4k, _ := jlm.TypeOf(quant.Q4_K)
 	formats := map[jlm.Role]jlm.Type{}
 	for _, r := range []jlm.Role{jlm.RoleAttnQ, jlm.RoleAttnK, jlm.RoleAttnV, jlm.RoleAttnOut, jlm.RoleFFNGate, jlm.RoleFFNUp, jlm.RoleFFNDown} {
@@ -43,25 +44,49 @@ func TestCountsBeyondTheWordsAreRefused(t *testing.T) {
 	if !needsTwoCounts(codes) {
 		t.Fatal("no kernel of the block passes two loop counts: the gate exercises nothing")
 	}
-	codes, err = form(1)
-	if err == nil {
-		for _, c := range codes {
-			seen := map[int]bool{}
-			for _, a := range c.Args {
-				if !a.Length {
-					continue
-				}
-				if seen[a.Field] {
-					t.Fatalf("%s passes two loop counts in field %d", c.Name, a.Field)
-				}
-				seen[a.Field] = true
+	for _, c := range codes {
+		n := 0
+		for _, a := range c.Args {
+			if a.Length {
+				n++
 			}
 		}
-		t.Fatal("a block whose kernels need two count words formed with one")
+		if n >= 2 {
+			t.Logf("%s passes %d lengths over calls %v", c.Name, n, c.Calls)
+		}
 	}
-	if !strings.Contains(err.Error(), "count words") {
-		t.Fatalf("refused for another reason: %v", err)
+	cut, err := form(1)
+	if err != nil {
+		t.Fatalf("the block does not form with one count word: %v", err)
 	}
+	for _, c := range cut {
+		seen := map[int]bool{}
+		for _, a := range c.Args {
+			if !a.Length {
+				continue
+			}
+			if seen[a.Field] {
+				t.Fatalf("%s passes two loop counts in field %d", c.Name, a.Field)
+			}
+			seen[a.Field] = true
+		}
+	}
+	if passed(cut) >= passed(codes) {
+		t.Fatalf("with one count word the block passes %d lengths, with two %d: no length became its kernel's constant", passed(cut), passed(codes))
+	}
+}
+
+// passed is the lengths codes pass in call words.
+func passed(codes []composer.Code) int {
+	n := 0
+	for _, c := range codes {
+		for _, a := range c.Args {
+			if a.Length {
+				n++
+			}
+		}
+	}
+	return n
 }
 
 func needsTwoCounts(codes []composer.Code) bool {

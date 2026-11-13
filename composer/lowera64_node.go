@@ -832,8 +832,10 @@ func (e *a64Lowerer) enter(c int) {
 	runtime := true
 	if l.Count > 0 {
 		if n := k.Nodes[l.Count-1]; n.Op == OpConst {
+			// A constant count of no trips still skips the loop: a tail
+			// whose length is a constant multiple of the lanes has none.
 			a.MOVconst(ctr, uint64(n.Imm))
-			runtime = false
+			runtime = n.Imm == 0
 		} else if src := e.xr(l.Count - 1); src != ctr && !e.preset[c] {
 			a.MOVreg(ctr, src)
 		}
