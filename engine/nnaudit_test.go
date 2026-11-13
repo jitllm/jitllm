@@ -794,6 +794,14 @@ func auditShard(t *testing.T) (int, int) {
 // is.
 func auditModels(t *testing.T) []auditModel {
 	t.Helper()
+	return auditList(t, false)
+}
+
+// auditList is auditModels' list. With towers set a file the box does not
+// hold fails only where it is a catalog model with a projector: the tower
+// gates read no text model and no safetensors fixture.
+func auditList(t *testing.T, towers bool) []auditModel {
+	t.Helper()
 	var out []auditModel
 	add := func(name, p string, hf bool) {
 		var size int64
@@ -822,7 +830,9 @@ func auditModels(t *testing.T) []auditModel {
 	for _, lm := range library.Models() {
 		p, copies := libraryPath(lm.File)
 		if p == "" {
-			missing("%s: MODEL MISSING: %s is not in %s (https://huggingface.co/%s)", lm.Name, lm.File, testmodels.Dir(), lm.Repo)
+			if !towers || lm.MMProj != "" {
+				missing("%s: MODEL MISSING: %s is not in %s (https://huggingface.co/%s)", lm.Name, lm.File, testmodels.Dir(), lm.Repo)
+			}
 			continue
 		}
 		for _, c := range copies {
@@ -870,7 +880,7 @@ func auditModels(t *testing.T) []auditModel {
 		dir := testmodels.Path(name)
 		if fileExists(filepath.Join(dir, "config.json")) {
 			add(name+" (safetensors)", dir, true)
-		} else {
+		} else if !towers {
 			missing("%s: MODEL MISSING: its safetensors fixture %s is not on this box", name, dir)
 		}
 	}
@@ -884,7 +894,7 @@ func auditModels(t *testing.T) []auditModel {
 	for _, rel := range auditHFDirs() {
 		if dir := testmodels.Path(rel); fileExists(filepath.Join(dir, "config.json")) {
 			add(rel+" (safetensors)", dir, true)
-		} else {
+		} else if !towers {
 			missing("%s: MODEL MISSING: its safetensors fixture %s is not on this box", rel, dir)
 		}
 	}
