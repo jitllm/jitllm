@@ -118,7 +118,7 @@ func (g *GPU) stageHead(to string, h *nn.Head) bool {
 		return false
 	}
 	g.mu.Lock()
-	busy := g.head == d || g.holdsCopy(d)
+	busy := g.head == d || g.headRouted(d) || g.holdsCopy(d)
 	g.mu.Unlock()
 	if busy {
 		return false
@@ -148,7 +148,7 @@ func (g *GPU) Unstage(lo, hi int) {
 	g.mu.Lock()
 	head := g.stagedHead
 	g.stagedHead = nil
-	if head == g.head {
+	if head == g.head || g.headRouted(head) {
 		head = nil
 	}
 	var drop []*devTier

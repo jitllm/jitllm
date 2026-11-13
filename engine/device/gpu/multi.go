@@ -377,6 +377,68 @@ func (g *GPU) at(sid uint64, li int) *devTier {
 	return g.own[li]
 }
 
+// headOf is the device holding the projection session sid runs: its own
+// route's, where it moved its head while another session's stayed, else the
+// tier's. Callers hold g.mu.
+func (g *GPU) headOf(sid uint64) *devTier {
+	if d := g.headRoute[sid]; d != nil {
+		return d
+	}
+	return g.head
+}
+
+// headShared reports whether a session other than sid runs the projection on
+// d. Callers hold g.mu.
+func (g *GPU) headShared(sid uint64, d *devTier) bool {
+	for o := range g.headUsers {
+		if o != sid && g.headOf(o) == d {
+			return true
+		}
+	}
+	return false
+}
+
+// headRouted reports whether a session's own route runs the projection on d.
+// Callers hold g.mu.
+func (g *GPU) headRouted(d *devTier) bool {
+	for _, r := range g.headRoute {
+		if r == d {
+			return true
+		}
+	}
+	return false
+}
+
+// useHead records session sid as one the projection serves. Callers hold
+// g.mu.
+func (g *GPU) useHead(sid uint64) {
+	if g.headUsers == nil {
+		g.headUsers = map[uint64]bool{}
+	}
+	g.headUsers[sid] = true
+}
+
+// routeHead makes d the device session sid runs the projection on, src the
+// one it ran it on. Where no other session runs src's, the tier's projection
+// moves; otherwise the session takes a route of its own, src's staying for
+// the sessions on it. Callers hold g.mu.
+func (g *GPU) routeHead(sid uint64, src, d *devTier) {
+	g.useHead(sid)
+	if g.head == nil || g.head == d || src == g.head && !g.headShared(sid, src) {
+		g.head = d
+		for o, r := range g.headRoute {
+			if r == d || o == sid {
+				delete(g.headRoute, o)
+			}
+		}
+		return
+	}
+	if g.headRoute == nil {
+		g.headRoute = map[uint64]*devTier{}
+	}
+	g.headRoute[sid] = d
+}
+
 // routeTo makes d the device session sid runs block li on, src the one it
 // ran it on before (nil for none). Where src's copy went with the move
 // (moved) and was the block's own, the block moves; otherwise the session
@@ -456,10 +518,48 @@ func (g *GPU) dropRoutes(sid uint64) {
 			free = append(free, retiree{d, li})
 		}
 	}
+	heads := g.leaveHead(sid)
 	g.mu.Unlock()
 	for _, f := range free {
 		f.d.ReleaseLayers(f.li, f.li+1)
 	}
+	for _, d := range heads {
+		d.dropHead()
+	}
+}
+
+// leaveHead forgets session sid's use of the projection: its own route's
+// copy goes where no other session runs it, and where no session is left on
+// the tier's projection while a route runs another, that route's is the
+// tier's and the tier's goes. The copies to free are returned; a device
+// keeps one while it holds a block (devTier.dropHead). Callers hold g.mu.
+func (g *GPU) leaveHead(sid uint64) []*devTier {
+	var heads []*devTier
+	own := g.headRoute[sid]
+	delete(g.headRoute, sid)
+	delete(g.headUsers, sid)
+	if own != nil && own != g.head && !g.headRouted(own) {
+		heads = append(heads, own)
+	}
+	if g.head == nil || g.headShared(sid, g.head) {
+		return heads
+	}
+	var next *devTier
+	for _, r := range g.headRoute {
+		next = r
+		break
+	}
+	if next == nil {
+		return heads
+	}
+	heads = append(heads, g.head)
+	g.head = next
+	for o, r := range g.headRoute {
+		if r == next {
+			delete(g.headRoute, o)
+		}
+	}
+	return heads
 }
 
 // routed reports whether a session's route sends block li to d. Callers
@@ -1038,8 +1138,15 @@ func (g *GPU) prepLayerOn(sid uint64, name string, li int, p *nn.LayerPlan, w *n
 	return false, nil
 }
 
-// PrepHeadOn places the output projection on the named device.
+// PrepHeadOn is prepHeadOn for the zero session.
 func (g *GPU) PrepHeadOn(name string, h *nn.Head) (bool, error) {
+	return g.prepHeadOn(0, name, h)
+}
+
+// prepHeadOn places the output projection session sid runs on the named
+// device. Another session running the projection where sid's was keeps it
+// there: sid takes a copy of its own (routeHead).
+func (g *GPU) prepHeadOn(sid uint64, name string, h *nn.Head) (bool, error) {
 	g.settle()
 	d, err := g.device(name)
 	if err != nil {
@@ -1069,15 +1176,15 @@ func (g *GPU) PrepHeadOn(name string, h *nn.Head) (bool, error) {
 		return false, nil
 	}
 	g.mu.Lock()
-	prev := g.head
-	g.head = d
+	prev := g.headOf(sid)
+	g.routeHead(sid, prev, d)
 	if g.stagedHead == d {
 		g.stagedHead = nil
 	}
-	// The copy the head moved from is freed when no block is left on that
-	// device to share its scratch (devTier.dropHead), with a move's other
-	// leftovers (RetireMoved).
-	if prev != nil && prev != d {
+	// The copy the head moved from is freed when no session runs it and no
+	// block is left on that device to share its scratch (devTier.dropHead),
+	// with a move's other leftovers (RetireMoved).
+	if prev != nil && prev != d && prev != g.head && !g.headRouted(prev) {
 		g.retire = append(g.retire, retiree{prev, -1})
 	}
 	g.mu.Unlock()
@@ -1101,11 +1208,14 @@ func (g *GPU) deviceOf(sid uint64, li int) (string, bool) {
 
 // HeadDeviceName is the name of the device holding the projection, and whether
 // one does.
-func (g *GPU) HeadDeviceName() (string, bool) {
+func (g *GPU) HeadDeviceName() (string, bool) { return g.headDeviceName(0) }
+
+// headDeviceName is HeadDeviceName of the projection session sid runs.
+func (g *GPU) headDeviceName(sid uint64) (string, bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if g.head != nil {
-		return g.head.name, true
+	if d := g.headOf(sid); d != nil {
+		return d.name, true
 	}
 	return "", false
 }
@@ -1208,7 +1318,7 @@ func (g *GPU) layersFor(sid uint64, lo, hi, pos, n int, x, cs, csSWA []float32, 
 	// A refusal before any device ran leaves the head device's promise
 	// unconsumed; it lives for one call (devTier.layersCall).
 	g.mu.Lock()
-	hd := g.head
+	hd := g.headOf(sid)
 	g.mu.Unlock()
 	if hd != nil {
 		hd.dropEmbedOf(sid)
@@ -1347,14 +1457,25 @@ func (g *GPU) rowsComposedWalk() bool {
 		}
 	}
 	g.mu.Lock()
-	hd := g.head
+	hds := []*devTier{g.head}
+	for _, r := range g.headRoute {
+		if !slices.Contains(hds, r) {
+			hds = append(hds, r)
+		}
+	}
 	g.mu.Unlock()
-	if !placed || hd == nil {
+	if !placed || hds[0] == nil {
 		return false
 	}
-	hd.mu.Lock()
-	defer hd.mu.Unlock()
-	return hd.headReserved()
+	for _, hd := range hds {
+		hd.mu.Lock()
+		ok := hd.headReserved()
+		hd.mu.Unlock()
+		if !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // nonCausalAt reports whether block li is a non-causal block, whose rows --
@@ -1471,7 +1592,10 @@ func (g *GPU) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []float32,
 	g.mu.Lock()
 	rs, ok := g.runsInto(sid, g.runBuf, lo, hi)
 	g.runBuf = nil
-	hd := g.head
+	hd := g.headOf(sid)
+	if head != nil && hd != nil && !g.headUsers[sid] {
+		g.useHead(sid)
+	}
 	g.mu.Unlock()
 	defer g.putRuns(rs)
 	if !ok {
@@ -1574,7 +1698,10 @@ func (g *GPU) putRuns(rs []run) {
 // whichever device holds it, one more crossing against a vocab x NEmbd matvec
 // on the CPU. Later devices are asked before earlier ones, since the head runs
 // after the last block.
-func (g *GPU) PrepHead(h *nn.Head) bool {
+func (g *GPU) PrepHead(h *nn.Head) bool { return g.prepHead(0, h) }
+
+// prepHead is PrepHead for session sid.
+func (g *GPU) prepHead(sid uint64, h *nn.Head) bool {
 	if h == nil {
 		return false
 	}
@@ -1586,10 +1713,16 @@ func (g *GPU) PrepHead(h *nn.Head) bool {
 	// Placed already, by another instance of this model: one head serves them all,
 	// and placing a second on another card would orphan the first.
 	g.mu.Lock()
-	hd := g.head
+	hd := g.headOf(sid)
 	g.mu.Unlock()
 	if hd != nil && hd.HeadResident() {
-		return hd.joinHead(h)
+		if !hd.joinHead(h) {
+			return false
+		}
+		g.mu.Lock()
+		g.useHead(sid)
+		g.mu.Unlock()
+		return true
 	}
 	g.mu.Lock()
 	t := g.tail()
@@ -1622,6 +1755,8 @@ func (g *GPU) PrepHead(h *nn.Head) bool {
 		if d.PrepHead(h) {
 			g.mu.Lock()
 			g.head = d
+			delete(g.headRoute, sid)
+			g.useHead(sid)
 			g.mu.Unlock()
 			return true
 		}
@@ -1644,7 +1779,7 @@ func (g *GPU) EmbedRows(ids []int32, pos int, dst []float32) bool {
 // only its next submission gathers it.
 func (g *GPU) embedRows(sid uint64, ids []int32, pos int, dst []float32) bool {
 	g.mu.Lock()
-	hd := g.head
+	hd := g.headOf(sid)
 	// The device running block 0, where the chunk's first submission goes.
 	first := g.at(sid, 0)
 	g.mu.Unlock()
@@ -2046,6 +2181,11 @@ func (g *GPU) releaseLayers(sid uint64, lo, hi int) {
 	}
 	if g.head != nil && touched[g.head] && !g.head.HeadResident() {
 		g.head = nil
+	}
+	for o, r := range g.headRoute {
+		if touched[r] && !r.HeadResident() {
+			delete(g.headRoute, o)
+		}
 	}
 	g.mu.Unlock()
 }

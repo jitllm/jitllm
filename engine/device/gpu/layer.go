@@ -5078,6 +5078,23 @@ func (g *devTier) dropIfEmpty() {
 	if !g.marks.marksPlaced() {
 		g.freeMarks()
 	}
+	// What it held at no block's slot -- an input table, a picture's rows --
+	// served its blocks and its head, and neither is left: a session that
+	// brings its blocks back loads them again. The rows' cache of them goes
+	// with them.
+	g.releaseRows()
+	for k, r := range g.res {
+		if k.block >= 0 || r.shared {
+			continue
+		}
+		delete(g.res, k)
+		if r.ok {
+			if n := r.bytes(); n > 0 {
+				g.refund(n)
+			}
+			g.freeResident(r)
+		}
+	}
 }
 
 // afterRelease is what every release ends with. Callers hold g.mu.

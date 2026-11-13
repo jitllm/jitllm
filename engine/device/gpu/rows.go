@@ -544,15 +544,19 @@ func (g *GPU) layersRows(c *rowsCall, self uint64, lo, hi int, pos, slot []int, 
 	g.mu.Lock()
 	rs, ok := g.runsInto(self, c.runs, lo, hi)
 	c.runs = nil
+	hd := g.headOf(self)
+	if head != nil && hd != nil && !g.headUsers[self] {
+		g.useHead(self)
+	}
 	why := ""
 	switch {
-	case lo == hi && head != nil && g.head != nil:
+	case lo == hi && head != nil && hd != nil:
 		// The head alone (a hyper-connected model's, after the host's
 		// collapse): a step of its own on the head's device.
-		rs = append(rs[:0], run{dev: g.head, lo: hi, hi: hi, split: g.split})
+		rs = append(rs[:0], run{dev: hd, lo: hi, hi: hi, split: g.split})
 	case !ok || len(rs) == 0:
 		why = fmt.Sprintf("rows: blocks [%d,%d) are not all on devices", lo, hi)
-	case head != nil && g.head == nil:
+	case head != nil && hd == nil:
 		why = "rows: no device holds the head"
 	}
 	// A head on another device than the last block's -- placed where the
@@ -561,8 +565,8 @@ func (g *GPU) layersRows(c *rowsCall, self uint64, lo, hi int, pos, slot []int, 
 	// own on the head's device, the residual crossing through x, as Layers
 	// does.
 	if why == "" && head != nil {
-		if r := rs[len(rs)-1]; r.dev != g.head || r.geo != (geoKey{}) {
-			rs = append(rs, run{dev: g.head, lo: hi, hi: hi, split: g.split})
+		if r := rs[len(rs)-1]; r.dev != hd || r.geo != (geoKey{}) {
+			rs = append(rs, run{dev: hd, lo: hi, hi: hi, split: g.split})
 		}
 	}
 	c.err = why
@@ -754,7 +758,7 @@ func (g *GPU) rowsRoom(sid uint64, rows, seqs int, head *nn.Head) (bool, error) 
 		return false, nil
 	}
 	g.mu.Lock()
-	hd := g.head
+	hd := g.headOf(sid)
 	g.mu.Unlock()
 	for _, d := range g.devs {
 		v := d.as(sid)

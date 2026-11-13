@@ -121,6 +121,7 @@ func (g *devTier) dropHead() {
 	}
 	g.giveBackHead(bs)
 	g.dropAllScratch()
+	g.dropIfEmpty()
 }
 
 // giveBackHead frees the head PrepHead placed: the scratch around it and,

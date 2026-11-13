@@ -20,10 +20,14 @@ import (
 // holds the weights twice, and each decodes its own control's tokens,
 // teacher-forced -- the unmoved first bit for bit, the second bit for bit
 // between two cards running the same kernels and in the reduction-order band
-// between two backends. The second's copy goes when it closes, the second
-// card back to what it held before the move, and the first decodes on. The
-// violation is the tier's one route a block: before it ran per session, this
-// move was refused ("another session is using it").
+// between two backends. Two tokens later the second moves its lower half
+// too, and its projection follows its blocks to the other card while the
+// first's stays where the first's blocks are: the tier holds the projection
+// twice, one an instance. The second's copies go when it closes, the second
+// card back to what it held before the moves, and the first decodes on. The
+// violations are the tier's one route a block, before which the first move
+// was refused ("another session is using it"), and its one projection, which
+// moved the first instance's head with the second's.
 func TestTwoInstancesRunABlockOnTwoCards(t *testing.T) {
 	for _, name := range append([]string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf"}, relocModels()...) {
 		path := jlmOf(t, testmodels.Path(name))
@@ -45,7 +49,7 @@ func twoInstancesRunABlockOnTwoCards(t *testing.T, path string) {
 	}
 	defer m.Close()
 	opts := []Option{WithPlacement(Placement{Rest: &Place{On: a}, Head: &Place{On: a}})}
-	const ntok, moveAt = 10, 3
+	const ntok, moveAt, headAt = 10, 3, 5
 	prompts := [2][]int32{
 		m.Vocab.Encode("The capital of France is a city that", true),
 		m.Vocab.Encode("Once upon a time, in a small village by the sea", true),
@@ -96,8 +100,20 @@ func twoInstancesRunABlockOnTwoCards(t *testing.T, path string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	headOn := func(s *Instance) string {
+		t.Helper()
+		nd, ok := s.named()
+		if !ok {
+			t.Fatal("the instance names no device")
+		}
+		at, _ := nd.HeadDeviceName()
+		return at
+	}
+	if hx, hy := headOn(x), headOn(y); hx != a || hy != a {
+		t.Fatalf("the projections are on %q and %q, not %s as placed", hx, hy, a)
+	}
 	// The upper half: the projection stays with the lower one, on a for
-	// both instances (the tier holds one projection).
+	// both instances.
 	placed := y.placedOn(a)
 	if len(placed) < 2 {
 		t.Skipf("%s took %d block(s); the upper half of one is all of it", a, len(placed))
@@ -134,6 +150,36 @@ func twoInstancesRunABlockOnTwoCards(t *testing.T, path string) {
 			}
 			t.Logf("%d block(s) moved to %s, %d KV bytes by %q; weights %d -> %d bytes", len(mv.Moved), b,
 				mv.KVBytes, mv.Path, one, g.Bytes())
+		}
+		if j == headAt {
+			rest := y.placedOn(a)
+			if len(rest) == 0 {
+				t.Fatalf("the second instance holds no block on %s after its upper half moved", a)
+			}
+			lo, hi := rest[0], rest[len(rest)-1]+1
+			for _, li := range rest {
+				glo, ghi := y.kvSpan(li)
+				lo, hi = min(lo, glo), max(hi, ghi)
+			}
+			mv, err := y.MoveBlocks(lo, hi, b)
+			if err != nil {
+				t.Fatalf("blocks %d..%d of the second instance to %s: %v", lo, hi-1, b, err)
+			}
+			if !mv.Head {
+				t.Fatalf("the second instance's projection did not follow its blocks to %s: %+v", b, mv)
+			}
+			if at := headOn(y); at != b {
+				t.Fatalf("the second instance's projection is on %q after its move to %s", at, b)
+			}
+			if at := headOn(x); at != a {
+				t.Fatalf("the first instance's projection is on %q: the second's move took it from %s", at, a)
+			}
+			for _, li := range rest {
+				if at, _ := x.DeviceOf(li); at != a {
+					t.Fatalf("the first instance's block %d is on %q: the second's move took it from %s", li, at, a)
+				}
+			}
+			t.Logf("the second's lower %d block(s) and its projection moved to %s; weights %d bytes", len(mv.Moved), b, g.Bytes())
 		}
 		if lx, err = x.Forward(ctl[0][j]); err != nil {
 			t.Fatal(err)
