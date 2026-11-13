@@ -1880,3 +1880,62 @@ its kernels would have waited for are taken beside another's, and some the
 kind-at-a-time order never reached are. It is a codegen change, and its
 speed is unmeasured; it is open (open-questions.md).
 
+## The start: a placement composed one form at a time
+
+A CPU profile of `jitllm run -devices cuda:0` on Gemma 4 E2B (a V100,
+296 s to the device's placement line) put the start almost wholly in
+composition, and every form one after another on one core:
+
+    placeLanes -> prepFrames: the 35 blocks composed for the CPU    125 s
+    SetDeviceLayers -> prepLayer -> promptForms: the card's prompt  123 s
+    placeParts: the CPU's head, inputs, tables                       22 s
+    the collector, marking a heap the composer's garbage churned    ~1/3 of the CPU
+
+None of it was a limit of the hardware or the composer. The composer's
+form cache formed every request holding its one lock; the CPU's forms
+built and mapped each form holding theirs; the instance prepared one
+block per call; and the card walked each placed block's prompt parts
+one after another. A form is a pure function of its request, and the
+forms of a placement are independent of one another.
+
+What changed, each a commit of its own:
+
+    an instance on cards alone composes no block for the CPU it does not run
+    common subexpressions keyed by a struct, not a formatted string
+    compact and loadsFrom walk with a slice and a stack
+    one formation per Key, formed outside the cache's lock; a placement's
+      CPU blocks formed side by side
+    the CPU's parts formed side by side
+    a block's one-row and many-row forms formed at once
+    a placed block's prompt forms asked for side by side on the card
+    the read-only operand walks read in place
+    ShiftChain, FoldLoads and the order's depths walk the kernel once
+
+The CPU-only start (jitllm run -devices cpu, box 50's first socket), the
+three side-by-side commits in turn:
+
+                           before   blocks   + parts   + both forms
+    Llama-3.2-1B Q4_K_M    38.0 s   31.0 s   15.4 s    11.4 s
+    Gemma 4 E2B Q4_K_M     135.5 s  57.7 s   43.1 s    24.4 s
+
+The composer's own walks, measured on one core's composition (before the
+side-by-side commits), each against the one before:
+
+                           before   + compact  + operands  + one walk
+    Gemma 4 E2B Q4_K_M     135.9 s  124.2 s    113.2 s     105.9 s
+    Llama-3.2-1B Q4_K_M    37.0 s   34.7 s     31.5 s      30.1 s
+
+A model whose blocks share one structure forms two Keys however many
+blocks it has, so side-by-side blocks gain it nothing until its two
+forms are formed at once; a model of many structures gains from both.
+With every change the Gemma start is 21.4 s and 161 s of CPU, spread
+thin: the collector a quarter, map traffic a fifth, no walk of a kernel
+per node left in the top of the profile.
+
+The card start (jitllm run -devices cuda:0, a V100, to the placement
+line), before against every change, twice each:
+
+    Llama-3.2-1B Q4_K_M    48.6, 48.8 s  ->  11.2, 10.1 s
+    Gemma 4 E2B Q4_K_M     259.1, 259.7 s ->  67.8, 68.8 s
+
+
