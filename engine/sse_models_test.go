@@ -40,6 +40,12 @@ const ssemMargin = 1.25
 // observed tier difference 1.4x headroom.
 const ssemCap = 6.0
 
+// ssemEmbedFloor is the floor of the distance between the SSE and AVX2 tiers'
+// vectors of an embedding model, relative to the AVX2 vector's length: their
+// reduction orders differ, while a wrong kernel moves a vector by the order of
+// its own length.
+const ssemEmbedFloor = 1e-3
+
 // sseDevice is the device list of a CPU at the SSE tier.
 func sseDevice() Option { return WithDevices("cpu:sse") }
 
@@ -221,6 +227,82 @@ func ssemMaxAbs(a, b []float32) float64 {
 	return d
 }
 
+// ssemEmbeds holds an embedding model to its own output, its pooled vector,
+// since it has no head to decode with, and reports whether path is one. On the
+// SSE tier alone (no AVX2 kernel mapped, an SSE one mapped) the vector of ids
+// is finite, and where this host runs AVX2 it lies within the band of the AVX2
+// tier's vector, relative to that vector's length: the larger of
+// ssemEmbedFloor and ssemMargin times the AVX2 tier's own f16-against-f32 KV
+// control.
+func ssemEmbeds(t *testing.T, path string, ids []int32) bool {
+	t.Helper()
+	m, err := model.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	if !m.IsEmbedding() {
+		return false
+	}
+	embed := func(opts ...Option) ([]float32, map[cpu.Tier]int64) {
+		opts = append(opts, sharedCPU(t, opts...))
+		e, err := NewEmbedder(m, opts...)
+		if err != nil {
+			t.Fatalf("embedder: %v", err)
+		}
+		defer e.Close()
+		v, err := e.Embed(ids)
+		if err != nil {
+			t.Fatalf("Embed on tier %v: %v", cpuOf(e.st).Target.Tier(), err)
+		}
+		return append([]float32(nil), v...), cpuOf(e.st).Target.MappedByTier()
+	}
+	got, mapped := embed(WithKVF16(false), sseDevice())
+	if d := mapped[cpu.TierAVX2]; d != 0 {
+		t.Fatalf("%d AVX2 kernels were mapped during the SSE arm -- it did not run the SSE tier", d)
+	}
+	if mapped[cpu.TierSSE] == 0 {
+		t.Fatal("the SSE arm mapped no SSE-tier kernel -- it ran nothing it claims to")
+	}
+	for i, v := range got {
+		if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
+			t.Fatalf("component %d of the SSE tier's vector is not finite", i)
+		}
+	}
+	if cpu.New().Tier() != cpu.TierAVX2 {
+		t.Logf("no AVX2 arm on this host; the SSE tier's vector of %d components is finite", len(got))
+		return true
+	}
+	ref, _ := embed(WithKVF16(false))
+	ctl, _ := embed(WithKVF16(true))
+	rel := func(a, b []float32) float64 {
+		var d, n float64
+		for i := range a {
+			x := float64(a[i]) - float64(b[i])
+			d += x * x
+			n += float64(b[i]) * float64(b[i])
+		}
+		return math.Sqrt(d / n)
+	}
+	c := rel(ctl, ref)
+	band := math.Max(ssemEmbedFloor, ssemMargin*c)
+	d := rel(got, ref)
+	length := func(v []float32) float64 {
+		var n float64
+		for _, x := range v {
+			n += float64(x) * float64(x)
+		}
+		return math.Sqrt(n)
+	}
+	if !(d <= band) {
+		t.Fatalf("the SSE tier's vector (length %.4g) is %.3g from the AVX2 tier's (length %.4g), relative to its length (band %.3g)",
+			length(got), d, length(ref), band)
+	}
+	t.Logf("the SSE tier's vector of %d components is %.3g from the AVX2 tier's, relative to its length; "+
+		"the f16 KV control %.3g, band %.3g", len(got), d, c, band)
+	return true
+}
+
 // TestEveryModelRunsSSE decodes, prefills and batches every model under 2 GiB
 // on the forced SSE tier, and holds it to the AVX2 tier's transcription of the
 // same model in the same process. The bar is the reduction band, not token
@@ -247,6 +329,10 @@ func TestEveryModelRunsSSE(t *testing.T) {
 	for _, src := range models {
 		t.Run(filepath.Base(src), func(t *testing.T) {
 			path := jlmOf(t, src)
+			if ssemEmbeds(t, path, ids) {
+				ran++
+				return
+			}
 			var ref *ssemArm
 			band := ssemBand
 			if cpu.New().Tier() == cpu.TierAVX2 {
