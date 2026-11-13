@@ -24,7 +24,8 @@ type Pair struct {
 
 // Fuse inlines a consumer into its producer where their pair is allowed, the
 // consumer reads the producer's value at its own element and is that value's
-// one reader, and nothing between them touches what either does.
+// one reader, and nothing between them touches what either does. A fused
+// kernel CallRows would refuse is not made.
 type Fuse struct {
 	Pairs []Pair
 }
@@ -54,12 +55,16 @@ func (f Fuse) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			} else if v, ok := f.joinsAtStores(p, c, out); ok {
 				m = mergeAtStores(p, c, v)
 			} else if v, ok := f.joinsUnrolled(p, c, out); ok {
-				u := unrolled(p, c, v)
-				u.Passes = append(append([]string(nil), c.Passes...), f.Name())
-				out[ci] = u
-				out = append(out[:pi], out[pi+1:]...)
-				ci--
-				break
+				if u := unrolled(p, c, v); !u.callRowsRefuses() {
+					u.Passes = append(append([]string(nil), c.Passes...), f.Name())
+					out[ci] = u
+					out = append(out[:pi], out[pi+1:]...)
+					ci--
+					break
+				}
+			}
+			if m != nil && m.callRowsRefuses() {
+				m = nil
 			}
 			if m != nil {
 				m.Passes = append(append([]string(nil), p.Passes...), f.Name())

@@ -83,6 +83,12 @@ func (k *Kernel) boundsSurplusHistory() bool {
 	return ok && !(k.Work && k.Space[0] == k.Capacity)
 }
 
+// callRowsRefuses reports whether CallRows refuses k: held to a call's rows
+// by its launch alone, a surplus row of it would reach the history.
+func (k *Kernel) callRowsRefuses() bool {
+	return k.Capacity != 0 && !k.RowsHeld && len(k.Space) > 0 && k.Space[0] != 0 && k.boundsSurplusHistory()
+}
+
 // combines reports whether k's threads combine their values: through
 // workgroup memory, an exchange or a barrier (shares), a shuffle, or a
 // combine over the workgroup.

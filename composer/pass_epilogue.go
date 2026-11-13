@@ -7,7 +7,9 @@ import "slices"
 // kernel's own, after every barrier, at the element's coordinates -- and the
 // map reads that output only at its own element: the map's value computed
 // from the stored value where the store is, its stores the kernel's, and
-// the kernel's own store kept only where a later kernel reads it.
+// the kernel's own store kept only where a later kernel reads it. A kernel
+// CallRows would refuse is not made: a map binding the history runs on its
+// own rather than in a workgroup kernel that combines across threads.
 type Epilogue struct{}
 
 func (Epilogue) Name() string { return "epilogue" }
@@ -57,6 +59,9 @@ func (p Epilogue) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		f.Name = w.Name + "+" + m.Name
 		f.Passes = append(append([]string(nil), w.Passes...), p.Name())
 		f.compact()
+		if f.callRowsRefuses() {
+			continue
+		}
 		out[i] = f
 		out = append(out[:i+1], out[i+2:]...)
 	}
