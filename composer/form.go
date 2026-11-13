@@ -45,6 +45,8 @@ type Request struct {
 // (Kernels, Lower), once per Key. What it cannot form is an error naming the
 // op and the slice's shape, remembered as the kernels are. The codes are
 // shared by every request of the Key and are not the caller's to change.
+// Requests of different Keys form side by side; one whose Key another call
+// is forming waits for that call.
 func (r *Registry) Form(req Request) (Key, []Code, error) {
 	if req.Graph == nil {
 		return 0, nil, fmt.Errorf("jit: a request with no graph")
@@ -59,17 +61,21 @@ func (r *Registry) Form(req Request) (Key, []Code, error) {
 		return key, codes, err
 	}
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if f, ok := c.m[key]; ok {
+		c.mu.Unlock()
 		if !slices.Equal(f.words, words) {
 			return 0, nil, fmt.Errorf("jit: two requests share the key %#x", key)
 		}
+		<-f.done
 		return key, f.codes, f.err
 	}
-	codes, err := r.form(req)
-	c.m[key] = formed{words: words, codes: codes, err: err}
+	f := &formed{words: words, done: make(chan struct{})}
+	c.m[key] = f
 	c.n++
-	return key, codes, err
+	c.mu.Unlock()
+	defer close(f.done)
+	f.codes, f.err = r.form(req)
+	return key, f.codes, f.err
 }
 
 // Formed is the requests r and the registries sharing its cache formed

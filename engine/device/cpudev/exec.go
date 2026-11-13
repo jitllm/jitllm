@@ -2,6 +2,8 @@ package cpudev
 
 import (
 	"cmp"
+	"runtime"
+	"sync"
 	"sync/atomic"
 	"unsafe"
 
@@ -120,36 +122,63 @@ func (e *Exec) Place(n int, ex Lease, planes [2][]float32, nExpert int, prof boo
 // Compose composes block li from p: the form of one row and the rows'
 // form, through the model's keyed cache, counted (Composed).
 func (e *Exec) Compose(li int, p nn.BlockSpec) {
+	cb, errs := e.formBlock(p)
+	e.keep(li, p, cb, errs)
+}
+
+// formBlock is block p's forms, of one row and of its rows, and the errors
+// that declined them. It changes nothing the execution holds, so blocks
+// form side by side (PrepLayers); keep records what it made.
+func (e *Exec) formBlock(p nn.BlockSpec) (*Block, [2]error) {
+	var errs [2]error
 	cb := &Block{Why: p.Why, Err: p.Err}
-	e.blocks[li] = cb
 	if !e.comp.Lowers() {
 		cb.Why = nn.DeclineISA
 	}
 	if cb.Why != nn.DeclineServes {
-		return
+		return cb, errs
 	}
 	cb.Graph, cb.SideOff, cb.Bidir, cb.Whole, cb.Rec, cb.Cut = p.Source, p.SideOff, p.Bidir, p.Whole, p.Rec, p.Cut
 	f, err := e.form(p, 1)
 	if err != nil {
-		cb.Why = e.comp.Decline(err)
-		return
+		cb.Why, errs[0] = declineOf(err), err
+		return cb, errs
 	}
 	cb.F = f
-	rows := RowsCap
+	if cb.Rows, err = e.form(p, rowsOf(p)); err != nil {
+		cb.RowsWhy, errs[1] = declineOf(err), err
+	}
+	return cb, errs
+}
+
+// keep records block li's forms cb, made from p, and the errors that
+// declined them, counted (Composed).
+func (e *Exec) keep(li int, p nn.BlockSpec, cb *Block, errs [2]error) {
+	e.blocks[li] = cb
+	for _, err := range errs {
+		if err != nil {
+			e.comp.Note(err)
+		}
+	}
+	if cb.F == nil {
+		return
+	}
+	e.composed[li]++
+	if cb.Rows != nil {
+		e.rows.Reserve(rowsOf(p))
+	}
+}
+
+// rowsOf is the rows block p's form of several rows is composed for.
+func rowsOf(p nn.BlockSpec) int {
 	if p.Rec && p.Bidir {
 		// A recurrent block attending both ways reads its neighbours across
 		// the run's rows (a centred convolution), which a call of fewer rows
 		// than the run cuts: its rows run in one call, as many as a run
 		// holds.
-		rows = max(rows, p.Run)
+		return max(RowsCap, p.Run)
 	}
-	if cb.Rows, err = e.form(p, rows); err != nil {
-		cb.RowsWhy = e.comp.Decline(err)
-	}
-	e.composed[li]++
-	if cb.Rows != nil {
-		e.rows.Reserve(rows)
-	}
+	return RowsCap
 }
 
 // form is p's form for a step of rows.
@@ -170,8 +199,54 @@ func (e *Exec) form(p nn.BlockSpec, rows int) (*Form, error) {
 // composed here.
 func (e *Exec) PrepLayer(li int, p *nn.LayerPlan, _ *nn.LayerWeights) bool {
 	defer e.comp.Place()()
-	if p.Spec == nil || !e.Holds(li) {
+	s, ok := e.specOf(li, p)
+	if !ok {
 		return false
+	}
+	e.Compose(li, s)
+	cb := e.blocks[li]
+	return cb != nil && cb.Why == nn.DeclineServes
+}
+
+// PrepLayers prepares blocks lis as PrepLayer does each, block lis[i] from
+// plan ps[i], their forms composed side by side and recorded in block order
+// (nn.BlockSetPlacer).
+func (e *Exec) PrepLayers(lis []int, ps []*nn.LayerPlan) {
+	defer e.comp.Place()()
+	// The target is probed once, before the forms read it side by side.
+	e.comp.Device()
+	specs := make([]nn.BlockSpec, len(lis))
+	held := make([]bool, len(lis))
+	for i, li := range lis {
+		specs[i], held[i] = e.specOf(li, ps[i])
+	}
+	blocks := make([]*Block, len(lis))
+	errs := make([][2]error, len(lis))
+	var next atomic.Int64
+	var wg sync.WaitGroup
+	for range min(runtime.GOMAXPROCS(0), len(lis)) {
+		wg.Go(func() {
+			for i := int(next.Add(1)) - 1; i < len(lis); i = int(next.Add(1)) - 1 {
+				if held[i] {
+					blocks[i], errs[i] = e.formBlock(specs[i])
+				}
+			}
+		})
+	}
+	wg.Wait()
+	for i, li := range lis {
+		if held[i] {
+			e.keep(li, specs[i], blocks[i], errs[i])
+		}
+	}
+}
+
+// specOf is what block li is composed from by plan p, its rows' table
+// opened where its rows read one; false where the block is not composed
+// here.
+func (e *Exec) specOf(li int, p *nn.LayerPlan) (nn.BlockSpec, bool) {
+	if p.Spec == nil || !e.Holds(li) {
+		return nn.BlockSpec{}, false
 	}
 	s := *p.Spec
 	if s.Why == nn.DeclineServes && s.Table != nil && TableRowsOf(s.Graph) >= 0 {
@@ -179,9 +254,7 @@ func (e *Exec) PrepLayer(li int, p *nn.LayerPlan, _ *nn.LayerWeights) bool {
 			s.Why = e.comp.Decline(err)
 		}
 	}
-	e.Compose(li, s)
-	cb := e.blocks[li]
-	return cb != nil && cb.Why == nn.DeclineServes
+	return s, true
 }
 
 // Lanes is the execution's run of blocks for the session it is bound to,

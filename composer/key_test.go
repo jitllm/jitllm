@@ -1,7 +1,9 @@
 package composer
 
 import (
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/jitllm/jitllm/format/jlm"
@@ -14,6 +16,63 @@ func keyRequest() Request {
 		Formats: map[jlm.Role]jlm.Type{jlm.RoleOutput: jlm.TypeQ4},
 		Step:    Step{Rows: 1, Page: 64, Keys: 1, ActWindow: 32},
 		Device:  Device{Kind: DeviceGPU, Slots: 32, Lanes: 32},
+	}
+}
+
+// TestRequestsFormSideBySide holds the cache to one formation per Key when
+// requests are asked from many goroutines at once: each Key is formed once,
+// every asker of it gets that formation, and its codes are those a registry
+// asked one request at a time forms.
+func TestRequestsFormSideBySide(t *testing.T) {
+	var reqs []Request
+	for _, w := range []int{64, 128, 192, 256} {
+		for _, rows := range []int{1, 4} {
+			req := keyRequest()
+			req.Graph = graph.MatVec(jlm.RoleOutput, w, 256)
+			req.Step.Rows = rows
+			reqs = append(reqs, req)
+		}
+	}
+	alone := Default()
+	want := make([][]Code, len(reqs))
+	for i, req := range reqs {
+		_, codes, err := alone.Form(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want[i] = codes
+	}
+	r := Default()
+	const askers = 8
+	got := make([][][]Code, askers)
+	var wg sync.WaitGroup
+	for a := range askers {
+		got[a] = make([][]Code, len(reqs))
+		wg.Go(func() {
+			for j := range reqs {
+				i := (j + a) % len(reqs)
+				_, codes, err := r.Form(reqs[i])
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				got[a][i] = codes
+			}
+		})
+	}
+	wg.Wait()
+	if n := r.Formed(); n != int64(len(reqs)) {
+		t.Fatalf("%d askers of %d requests formed %d times, want each Key once", askers, len(reqs), n)
+	}
+	for a := range askers {
+		for i := range reqs {
+			if len(got[a][i]) == 0 || &got[a][i][0] != &got[0][i][0] {
+				t.Fatalf("asker %d of request %d holds codes of its own, not the one formation", a, i)
+			}
+			if !reflect.DeepEqual(got[a][i], want[i]) {
+				t.Fatalf("request %d formed side by side differs from the request formed alone", i)
+			}
+		}
 	}
 }
 
