@@ -436,6 +436,43 @@ func TestLlamaPicturesReachTheGenerate(t *testing.T) {
 	}
 }
 
+// TestLlamaSamplersChooseTheStages: samplers is the stages that run, in
+// order, as llama-server reads it: a stage it leaves out is off whatever its
+// field says (no temperature draws at 1), its names take llama.cpp's
+// aliases and letters, and an order the draw does not run, an unknown name or
+// a stage not built is refused naming samplers.
+func TestLlamaSamplersChooseTheStages(t *testing.T) {
+	f := &llamaFake{fakeBackend: &fakeBackend{tokens: []string{"a"}, reason: FinishEOS}}
+	s := llamaServe(t, f)
+	const fields = `"top_k":5,"top_p":0.5,"min_p":0.2,"temperature":0.3,"repeat_penalty":1.3,"typical_p":0.7`
+	for _, samplers := range []string{`["top_k","top_p"]`, `"kp"`, `["Top-K","nucleus"]`, `["topk","TOP_P"]`} {
+		code, out := llamaPost(t, s, "/completion", `{"prompt":"x",`+fields+`,"samplers":`+samplers+`}`)
+		if code != 200 {
+			t.Fatalf("%s: %d %v", samplers, code, out)
+		}
+		sm := f.opts().Sampling
+		if sm.TopK != 5 || sm.TopP != 0.5 || sm.MinP != 0 || sm.Temp != 1 || sm.RepeatPen != 1 || sm.TypicalP != 1 {
+			t.Errorf("%s ran %+v, want top-k 5 and top-p 0.5 alone at temperature 1", samplers, sm)
+		}
+		gs := out["generation_settings"].(map[string]any)
+		if got, _ := json.Marshal(gs["samplers"]); string(got) != `["top_k","top_p"]` || gs["temperature"] != 0.3 {
+			t.Errorf("%s: generation_settings samplers %s, temperature %v", samplers, got, gs["temperature"])
+		}
+	}
+	if code, _ := llamaPost(t, s, "/completion", `{"prompt":"x",`+fields+`}`); code != 200 {
+		t.Fatalf("no samplers: %d", code)
+	}
+	if sm := f.opts().Sampling; sm.TopK != 5 || sm.MinP != 0.2 || sm.Temp != 0.3 || sm.RepeatPen != 1.3 {
+		t.Errorf("the default chain ran %+v, want every stage", sm)
+	}
+	for _, bad := range []string{`["top_p","top_k"]`, `["top_k","foo"]`, `["top_k","top_p","infill"]`, `"kq"`, `7`} {
+		code, out := llamaPost(t, s, "/completion", `{"prompt":"x","samplers":`+bad+`}`)
+		if b, _ := json.Marshal(out); code != 400 || !strings.Contains(string(b), "samplers") {
+			t.Errorf("samplers %s: %d %s", bad, code, b)
+		}
+	}
+}
+
 func TestLlamaSamplingDefaultsAndMapping(t *testing.T) {
 	f := &llamaFake{fakeBackend: &fakeBackend{tokens: []string{"a"}, reason: FinishEOS}}
 	s := llamaServe(t, f)
@@ -467,7 +504,7 @@ func TestLlamaRefusals(t *testing.T) {
 	refuse := map[string]string{
 		"mirostat": `3`, "dry_multiplier": `0.8`,
 		"presence_penalty": `3`, "frequency_penalty": `-3`,
-		"logit_bias": `[[15]]`, "samplers": `["dry","top_k"]`, "n_cmpl": `0`, "id_slot": `-2`,
+		"logit_bias": `[[15]]`, "samplers": `["top_k","dry"]`, "n_cmpl": `0`, "id_slot": `-2`,
 		"n_keep": `5`, "lora": `[{"id":0,"scale":1}]`, "post_sampling_probs": `true`,
 		"n_probs": `99`, "repeat_last_n": `-2`,
 		"response_fields": `"content"`, "mystery_field": `1`,
