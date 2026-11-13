@@ -169,9 +169,116 @@ func TestLlamaPromptForms(t *testing.T) {
 			}
 		}
 	}
-	for _, bad := range []string{`{"prompt":[["a"],["b"]]}`, `{"prompt":{"prompt_string":"x","multimodal_data":["AAA"]}}`, `{}`} {
+	for _, bad := range []string{`{"prompt":[["a"],["b"]]}`, `{"prompt":[[5,["x"]]]}`, `{"prompt":[]}`,
+		`{"prompt":{"prompt_string":"x","multimodal_data":["AAA"]}}`, `{}`} {
 		if code, _ := llamaPost(t, s, "/completion", bad); code != 400 {
 			t.Errorf("%s answered %d", bad, code)
+		}
+	}
+}
+
+func llamaPostAll(t *testing.T, s *httptest.Server, body string) []map[string]any {
+	t.Helper()
+	resp := post(t, s, "/completion", body)
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	var out []map[string]any
+	if resp.StatusCode != 200 || json.Unmarshal(b, &out) != nil {
+		t.Fatalf("%s: %d %s", body, resp.StatusCode, b)
+	}
+	return out
+}
+
+// TestLlamaPromptsAndCompletions: a prompt array holding no token id is a list
+// of prompts, each answered with n_cmpl completions (n its alias), the results
+// in llama-server's order -- each prompt, then its completions -- one result
+// alone the object itself; a seed gives completion i seed+i, whole or
+// streamed.
+func TestLlamaPromptsAndCompletions(t *testing.T) {
+	f := &llamaFake{fakeBackend: &fakeBackend{tokens: []string{"Hel", "lo"}, reason: FinishMaxTokens}}
+	s := llamaServe(t, f)
+	out := llamaPostAll(t, s, `{"prompt":["Hi",[5,6],{"prompt_string":"Yo"}],"n_predict":2}`)
+	all := f.took()
+	wantPrompts := []string{"Hi", "", "Yo"}
+	if len(out) != 3 || len(all) != 3 {
+		t.Fatalf("%d results from %d generates, want 3 of 3: %v", len(out), len(all), out)
+	}
+	for i, r := range out {
+		if r["index"] != float64(i) || r["prompt"] != wantPrompts[i] || r["content"] != "Hello" || r["stop"] != true {
+			t.Errorf("result %d: %v", i, r)
+		}
+	}
+	wantIDs := [][]int32{{1, 256 + 'H', 256 + 'i'}, {5, 6}, {1, 256 + 'Y', 256 + 'o'}}
+	for i, o := range all {
+		if !slices.Equal(o.Prompt.IDs, wantIDs[i]) || len(o.Seeds) != 0 {
+			t.Errorf("generate %d: ids %v seeds %v, want %v and none", i, o.Prompt.IDs, o.Seeds, wantIDs[i])
+		}
+	}
+
+	out = llamaPostAll(t, s, `{"prompt":["Hi","Yo"],"n_cmpl":2,"seed":42}`)
+	all = f.took()
+	if len(out) != 4 || len(all) != 2 {
+		t.Fatalf("%d results from %d generates, want 4 of 2", len(out), len(all))
+	}
+	for i, r := range out {
+		if r["index"] != float64(i) || r["prompt"] != []string{"Hi", "Hi", "Yo", "Yo"}[i] {
+			t.Errorf("result %d: index %v prompt %v", i, r["index"], r["prompt"])
+		}
+	}
+	for i, o := range all {
+		if !slices.Equal(o.Seeds, []int64{42, 43}) {
+			t.Errorf("generate %d seeds %v, want [42 43]", i, o.Seeds)
+		}
+	}
+
+	// n is n_cmpl's alias; with no seed the completions still differ.
+	out = llamaPostAll(t, s, `{"prompt":"Hi","n":3}`)
+	all = f.took()
+	if len(out) != 3 || len(all) != 1 {
+		t.Fatalf("n=3: %d results from %d generates, want 3 of 1", len(out), len(all))
+	}
+	if sd := all[0].Seeds; len(out) != 3 || len(sd) != 3 || sd[1] != sd[0]+1 || sd[2] != sd[0]+2 {
+		t.Fatalf("n=3: %d results, seeds %v", len(out), sd)
+	}
+
+	// One prompt in a list is one result, answered as the object.
+	if code, one := llamaPost(t, s, "/completion", `{"prompt":["Hi"]}`); code != 200 || one["content"] != "Hello" {
+		t.Fatalf("one prompt in a list: %d %v", code, one)
+	}
+	for _, bad := range []string{`{"prompt":"Hi","n_cmpl":0}`, `{"prompt":"Hi","n_cmpl":129}`} {
+		code, msg := llamaPost(t, s, "/completion", bad)
+		if b, _ := json.Marshal(msg); code != 400 || !strings.Contains(string(b), "n_cmpl") {
+			t.Errorf("%s: %d %s", bad, code, b)
+		}
+	}
+
+	resp := post(t, s, "/completion", `{"prompt":["Hi","Yo"],"n_cmpl":2,"stream":true}`)
+	defer resp.Body.Close()
+	var finals []float64
+	tokens := map[float64]int{}
+	sc := bufio.NewScanner(resp.Body)
+	for sc.Scan() {
+		line, ok := strings.CutPrefix(sc.Text(), "data: ")
+		if !ok {
+			continue
+		}
+		var fr map[string]any
+		if err := json.Unmarshal([]byte(line), &fr); err != nil {
+			t.Fatalf("frame %q: %v", line, err)
+		}
+		ix, _ := fr["index"].(float64)
+		if fr["stop"] == true {
+			finals = append(finals, ix)
+		} else {
+			tokens[ix]++
+		}
+	}
+	if !slices.Equal(finals, []float64{0, 1, 2, 3}) {
+		t.Fatalf("streamed results ended %v, want each of 0..3 once in order", finals)
+	}
+	for ix := range 4 {
+		if tokens[float64(ix)] != 2 {
+			t.Errorf("result %d streamed %d token frames, want 2", ix, tokens[float64(ix)])
 		}
 	}
 }
@@ -207,7 +314,7 @@ func TestLlamaRefusals(t *testing.T) {
 	refuse := map[string]string{
 		"mirostat": `3`, "dry_multiplier": `0.8`,
 		"presence_penalty": `3`, "frequency_penalty": `-3`,
-		"logit_bias": `[[15]]`, "samplers": `["dry","top_k"]`, "n_cmpl": `2`, "id_slot": `3`,
+		"logit_bias": `[[15]]`, "samplers": `["dry","top_k"]`, "n_cmpl": `0`, "id_slot": `3`,
 		"n_predict": `0`, "n_keep": `5`, "lora": `[{"id":0,"scale":1}]`, "post_sampling_probs": `true`,
 		"timings_per_token": `true`, "t_max_predict_ms": `100`, "n_probs": `99`, "repeat_last_n": `-2`,
 		"response_fields": `"content"`, "mystery_field": `1`,
