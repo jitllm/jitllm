@@ -39,7 +39,7 @@ func matrixDevices(t *testing.T) (map[string]backend.Device, func()) {
 			t.Logf("%s: no binary16 tile: %s", d.API(), why)
 		}
 	}
-	if d, err := backend.OpenCUDAWith(0, backend.Opts{Admit: testdevices.Admit(), CUDATarget: "sm_70"}); err == nil {
+	if d, ok := sm70(t); ok {
 		all = append(all, d)
 		if ok, _ := backend.LowersTile(d, matrixTile()); ok {
 			out["ptx-sm_70"] = d
@@ -50,6 +50,16 @@ func matrixDevices(t *testing.T) (map[string]backend.Device, func()) {
 			d.Close()
 		}
 	}
+}
+
+// sm70 is cuda:0 opened at an sm_70 target where the selection holds it: a
+// card named outside it would end the binary (testdevices.Admit).
+func sm70(t *testing.T) (backend.Device, bool) {
+	if !testdevices.Has(t, "cuda", 0) {
+		return nil, false
+	}
+	d, err := backend.OpenCUDAWith(0, backend.Opts{Admit: testdevices.Admit(), CUDATarget: "sm_70"})
+	return d, err == nil
 }
 
 // matrixWeights is rows of k of t, random, with finite scales near one; a

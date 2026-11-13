@@ -14,7 +14,6 @@ import (
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/internal/oracle"
-	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testlock"
 )
 
@@ -170,7 +169,7 @@ func TestComposedGPUHead(t *testing.T) {
 		devs[d.API()] = d
 		defer d.Close()
 	}
-	if d, err := backend.OpenCUDAWith(0, backend.Opts{Admit: testdevices.Admit(), CUDATarget: "sm_70"}); err == nil {
+	if d, ok := sm70(t); ok {
 		devs["ptx-sm_70"] = d
 		defer d.Close()
 	}
