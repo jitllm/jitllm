@@ -122,7 +122,8 @@ func llamaChain() []string {
 // each canonical, kebab-case, without its underscore or one of nucleus, temp
 // and typ, in any case; or a string of their letters. The draw runs its
 // stages in llamaChain's order, then infill, so a list in another order is
-// refused, as is a name it does not run.
+// refused, as is a name it does not run; adaptive_p, which llama.cpp runs
+// in place of the last draw wherever the list names it, may come anywhere.
 func llamaSamplers(raw json.RawMessage) ([]string, error) {
 	var names []string
 	if json.Unmarshal(raw, &names) != nil {
@@ -153,6 +154,10 @@ func llamaSamplers(raw json.RawMessage) ([]string, error) {
 		c, ok := alias[strings.ToLower(n)]
 		if !ok {
 			return nil, fmt.Errorf("%w: samplers: %q is not a sampler", ErrInvalid, n)
+		}
+		if c == "adaptive_p" {
+			out = append(out, c)
+			continue
 		}
 		i := slices.Index(chain[at:], c)
 		if i < 0 {
@@ -207,8 +212,6 @@ func llamaFields() map[string]llamaField {
 		"dry_allowed_length":    {anyValue, ""},
 		"dry_penalty_last_n":    {anyValue, ""},
 		"dry_sequence_breakers": {anyValue, ""},
-		"adaptive_target":       {numLE(-1), "adaptive-p sampling is not built"},
-		"adaptive_decay":        {anyValue, ""},
 		"min_keep":              {numIs(0), "min_keep is not built"},
 		// n_keep and n_discard act only in a context shift, which
 		// llama-server runs only under --context-shift, off by default:
@@ -239,6 +242,7 @@ func llamaRead() map[string]bool {
 		"mirostat": true, "mirostat_tau": true, "mirostat_eta": true, "response_fields": true, "samplers": true,
 		"n_cmpl": true, "n": true, "timings_per_token": true, "sse_ping_interval": true, "t_max_predict_ms": true,
 		"n_indent": true, "return_progress": true, "post_sampling_probs": true,
+		"adaptive_target": true, "adaptive_decay": true,
 		// llama-server leaves t_max_prompt_ms unimplemented and takes it to
 		// no effect; so does this server.
 		"t_max_prompt_ms": true,
@@ -623,6 +627,7 @@ type llamaSettings struct {
 	TopNSigma, DynatempRange, DynatempExponent float64
 	Mirostat                                   int
 	MirostatTau, MirostatEta                   float64
+	AdaptiveTarget, AdaptiveDecay              float64
 	PresencePenalty, FrequencyPenalty          float64
 	TopK, RepeatLastN, NPredict, NProbs        int
 	Seed                                       int64
@@ -638,7 +643,7 @@ type llamaSettings struct {
 
 // llamaDefaults are llama-server's defaults for an absent field.
 func llamaDefaults() llamaSettings {
-	return llamaSettings{Temperature: 0.8, TopP: 0.95, MinP: 0.05, TopK: 40, RepeatPenalty: 1, TypicalP: 1, XTCThreshold: 0.1, TopNSigma: -1, DynatempExponent: 1, MirostatTau: 5, MirostatEta: 0.1,
+	return llamaSettings{Temperature: 0.8, TopP: 0.95, MinP: 0.05, TopK: 40, RepeatPenalty: 1, TypicalP: 1, XTCThreshold: 0.1, TopNSigma: -1, DynatempExponent: 1, MirostatTau: 5, MirostatEta: 0.1, AdaptiveTarget: -1, AdaptiveDecay: 0.9,
 		RepeatLastN: 64, NPredict: -1, Seed: -1, Stop: []string{}, Samplers: llamaChain()}
 }
 
@@ -649,6 +654,7 @@ func llamaParams(s llamaSettings, _ int, _ []int32, _ int) map[string]any {
 		"xtc_probability": s.XTCProbability, "xtc_threshold": s.XTCThreshold, "top_n_sigma": s.TopNSigma,
 		"dynatemp_range": s.DynatempRange, "dynatemp_exponent": s.DynatempExponent,
 		"mirostat": s.Mirostat, "mirostat_tau": s.MirostatTau, "mirostat_eta": s.MirostatEta,
+		"adaptive_target": s.AdaptiveTarget, "adaptive_decay": s.AdaptiveDecay,
 		"repeat_penalty": s.RepeatPenalty, "presence_penalty": s.PresencePenalty, "frequency_penalty": s.FrequencyPenalty,
 		"stop": s.Stop, "ignore_eos": s.IgnoreEOS, "stream": s.Stream, "timings_per_token": s.TimingsPerToken,
 		"n_probs": s.NProbs, "post_sampling_probs": s.PostSamplingProbs, "grammar": s.Grammar, "json_schema": s.JSONSchema,
@@ -805,7 +811,7 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 		return
 	}
 	set := llamaDefaults()
-	var temp, topP, minP, typP, xtcP, xtcT, nSigma, dynR, dynE, mTau, mEta, repeat, presence, frequency *float64
+	var temp, topP, minP, typP, xtcP, xtcT, nSigma, dynR, dynE, mTau, mEta, repeat, presence, frequency, adT, adD *float64
 	var miro *int
 	var topK, lastN, nPredict, maxTokens, nProbs, slot, nCmpl, nAlias, predictMS, ping, indent *int
 	var seed *int64
@@ -831,6 +837,8 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 	rd(decodeField(body, "mirostat", &miro))
 	rd(decodeField(body, "mirostat_tau", &mTau))
 	rd(decodeField(body, "mirostat_eta", &mEta))
+	rd(decodeField(body, "adaptive_target", &adT))
+	rd(decodeField(body, "adaptive_decay", &adD))
 	rd(decodeField(body, "repeat_penalty", &repeat))
 	rd(decodeField(body, "presence_penalty", &presence))
 	rd(decodeField(body, "frequency_penalty", &frequency))
@@ -904,6 +912,12 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 	}
 	if mEta != nil {
 		set.MirostatEta = *mEta
+	}
+	if adT != nil {
+		set.AdaptiveTarget = *adT
+	}
+	if adD != nil {
+		set.AdaptiveDecay = *adD
 	}
 	if repeat != nil {
 		set.RepeatPenalty = *repeat
@@ -1153,7 +1167,8 @@ func llamaSampler(s llamaSettings, nctx int) *engine.Sampler {
 		DynatempRange: s.DynatempRange, DynatempExponent: s.DynatempExponent, Mirostat: s.Mirostat,
 		MirostatTau: s.MirostatTau, MirostatEta: s.MirostatEta, TopK: max(s.TopK, 0),
 		RepeatPen: s.RepeatPenalty, RepeatLastN: s.RepeatLastN, PresencePen: s.PresencePenalty,
-		FreqPen: s.FrequencyPenalty, Seed: s.Seed, Infill: slices.Contains(s.Samplers, "infill")}
+		FreqPen: s.FrequencyPenalty, Seed: s.Seed, Infill: slices.Contains(s.Samplers, "infill"),
+		Adaptive: slices.Contains(s.Samplers, "adaptive_p"), AdaptiveTarget: s.AdaptiveTarget, AdaptiveDecay: s.AdaptiveDecay}
 	switch s.RepeatLastN {
 	case 0:
 		sm.RepeatPen, sm.PresencePen, sm.FreqPen = 1, 0, 0
