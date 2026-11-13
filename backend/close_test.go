@@ -27,19 +27,16 @@ func TestCloseThenSpawnThreads(t *testing.T) {
 
 	// Every one of these locks its thread, so the runtime must create real
 	// threads rather than reuse one.
-	var wg sync.WaitGroup
+	var wg, locked sync.WaitGroup
+	locked.Add(64)
 	for i := 0; i < 64; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			runtime.LockOSThread()
 			defer runtime.UnlockOSThread()
-			s := 0
-			for j := 0; j < 1<<16; j++ {
-				s += j
-			}
-			runtime.Gosched()
-			_ = s
+			locked.Done()
+			locked.Wait()
 		}()
 	}
 	wg.Wait()

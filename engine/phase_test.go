@@ -26,7 +26,7 @@ func TestPhaseMeterAccountsForEveryByte(t *testing.T) {
 	ph.Mark("load")
 
 	ids := []int32{1, 2, 3, 4}
-	logits, err := st.Prefill(ids)
+	_, err := st.Prefill(ids)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,11 +34,10 @@ func TestPhaseMeterAccountsForEveryByte(t *testing.T) {
 
 	const nTok = 4
 	for i := 0; i < nTok; i++ {
-		if logits, err = st.Forward(int32(5 + i)); err != nil {
+		if _, err = st.Forward(int32(5 + i)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	_ = logits
 	dec := ph.Mark("decode")
 
 	var sum uint64
