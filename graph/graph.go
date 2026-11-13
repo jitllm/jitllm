@@ -898,6 +898,12 @@ type Attrs struct {
 	Firsts bool
 	// Inverse turns OpRope's elements back: by the negated angle.
 	Inverse bool
+	// Keeps makes OpDeltaRule, OpStateConv and OpNGramWindow store the
+	// state after each of a step's rows besides each run's after its last:
+	// the row at entry e of the run order to slot e of the state's keep
+	// table, so a sequence can be returned to any row of a call with no row
+	// run again (a speculation's rollback).
+	Keeps bool
 	// Fn, Order, Span and Const are the primitives' (OpMap, OpReduce,
 	// OpTopK, OpRank, OpTile): the function, the order a reduction runs in, the
 	// group a reduction, top-k or rank runs over (0: the row), a constant

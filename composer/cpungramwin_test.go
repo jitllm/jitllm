@@ -40,13 +40,13 @@ func ngramWindowOracle(toks []uint32, runs [][]int, held [][]uint32, n int, img 
 func TestComposedCPUNGramWindow(t *testing.T) {
 	const n, off, span, slots = 4, 5, 12, 4
 	const img = 999
-	form := func(R int) (*graph.Graph, graph.ValueID, graph.ValueID, []Code) {
+	form := func(R int, keeps bool) (*graph.Graph, graph.ValueID, graph.ValueID, []Code) {
 		b := graph.New()
 		tok := b.In("tok", 1)
 		b.G.Values[tok].Elem = graph.ElemU32
 		at := b.G.StateVersion(graph.StateRecState)
 		win := b.Emit(graph.OpNGramWindow, []graph.ValueID{tok}, []graph.Result{{Name: "win", Width: n, Elem: graph.ElemU32}}, nil,
-			graph.Attrs{Taps: n, Offset: off, Span: span, Words: []uint64{img}},
+			graph.Attrs{Taps: n, Offset: off, Span: span, Words: []uint64{img}, Keeps: keeps},
 			[]graph.StateRef{{State: graph.StateRecState, Version: at}}, []graph.StateRef{{State: graph.StateRecState, Version: at + 1}})[0]
 		b.Out(win)
 		if err := graph.Verify(b.G, graph.Facts{}); err != nil {
@@ -73,11 +73,16 @@ func TestComposedCPUNGramWindow(t *testing.T) {
 		}
 		return out
 	}
-	run := func(R int, toks []uint32, desc []uint32, in, out []float32) []uint32 {
-		g, tok, win, codes := form(R)
+	// run steps the window; with keep set it is formed keeping its rows, the
+	// keep table keep.
+	run := func(R int, toks []uint32, desc []uint32, in, out, keep []float32) []uint32 {
+		g, tok, win, codes := form(R, keep != nil)
 		got := make([]uint32, R*n)
 		bufs := map[string][]uint32{g.Values[tok].Name: append([]uint32(nil), toks...), g.Values[win].Name: got,
 			"rec.state": f32Words(in), "rec.state.out": f32Words(out), "rec.rows": desc}
+		if keep != nil {
+			bufs["rec.state.keep"] = f32Words(keep)
+		}
 		if err := runCPUCalls(hostArm(), codes, g, bufs); err != nil {
 			t.Fatal(err)
 		}
@@ -110,7 +115,7 @@ func TestComposedCPUNGramWindow(t *testing.T) {
 		before := append([]float32(nil), outPool...)
 		toks := []uint32{41}
 		wins, after := ngramWindowOracle(toks, [][]int{{0}}, [][]uint32{slotPreds(in, 2)}, n, img)
-		got := run(1, toks, []uint32{1, 2, 1}, in, outPool)
+		got := run(1, toks, []uint32{1, 2, 1}, in, outPool, nil)
 		check("decode", got, wins, outPool, before, map[int][]uint32{1: after[0]})
 	})
 
@@ -123,12 +128,62 @@ func TestComposedCPUNGramWindow(t *testing.T) {
 	before := append([]float32(nil), outPool...)
 	held := [][]uint32{slotPreds(in, rin[0]), slotPreds(in, rin[1]), slotPreds(in, rin[2])}
 	wins, after := ngramWindowOracle(toks, runs, held, n, img)
-	got := run(R, toks, scanDesc(runs, R, rin, rout), in, outPool)
+	got := run(R, toks, scanDesc(runs, R, rin, rout), in, outPool, nil)
 	written := map[int][]uint32{}
 	for j := range runs {
 		written[rout[j]] = after[j]
 	}
 	check("runs", got, wins, outPool, before, written)
+
+	// Formed keeping its rows, each entry's slot of the keep table holds its
+	// run's predecessors after the entry's row; a decode row's is entry 0's.
+	t.Run("keeps", func(t *testing.T) {
+		nan := float32(math.NaN())
+		keepOf := func(R int) []float32 {
+			k := make([]float32, R*span)
+			for i := range k {
+				k[i] = nan
+			}
+			return k
+		}
+		holds := func(name string, keep []float32, entries [][]uint32) {
+			for e, pred := range entries {
+				for k := range n - 1 {
+					if have := math.Float32bits(keep[e*span+off+k]); have != pred[k] {
+						t.Fatalf("%s: entry %d predecessor %d is %#x, want %#x", name, e, k, have, pred[k])
+					}
+				}
+			}
+			for i := len(entries) * span; i < len(keep); i++ {
+				if !math.IsNaN(float64(keep[i])) {
+					t.Fatalf("%s: the form kept %#x at word %d, past the step's %d entries", name, math.Float32bits(keep[i]), i, len(entries))
+				}
+			}
+		}
+		din, dout := pool(0x3f800000), pool(0x40000000)
+		dbefore := append([]float32(nil), dout...)
+		dtoks := []uint32{41}
+		dwins, dafter := ngramWindowOracle(dtoks, [][]int{{0}}, [][]uint32{slotPreds(din, 2)}, n, img)
+		dkeep := keepOf(1)
+		// Formed keeping, the one row takes the runs' form, which reads the
+		// whole run descriptor.
+		check("decode keeps", run(1, dtoks, scanDesc([][]int{{0}}, 1, []int{2}, []int{1}), din, dout, dkeep), dwins, dout, dbefore,
+			map[int][]uint32{1: dafter[0]})
+		holds("decode keeps", dkeep, dafter)
+
+		kin, kout := pool(0x3f000000), pool(0x41000000)
+		kbefore := append([]float32(nil), kout...)
+		keep := keepOf(R)
+		check("runs keep", run(R, toks, scanDesc(runs, R, rin, rout), kin, kout, keep), wins, kout, kbefore, written)
+		var entries [][]uint32
+		for j, rr := range runs {
+			for r := range rr {
+				_, a := ngramWindowOracle(toks, [][]int{rr[:r+1]}, [][]uint32{held[j]}, n, img)
+				entries = append(entries, a[0])
+			}
+		}
+		holds("runs keep", keep, entries)
+	})
 
 	// The same rows as runs of their own read only their slots.
 	alone := [][]int{{1}, {3}, {0}, {2}, {5}, {4}}

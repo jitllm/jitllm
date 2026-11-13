@@ -13,6 +13,104 @@ import (
 	"github.com/jitllm/jitllm/internal/oracle"
 )
 
+// TestComposedCPUDeltaRuleKeepsRows forms the delta rule keeping its rows
+// (graph.Attrs.Keeps) at a step of three runs over fewer live rows than the
+// form holds, in the scan's loops form: every entry's slot of the keep table
+// holds the oracle's state after that entry's row, the entries past the live
+// rows untouched, and every row's output and each run's state after are the
+// oracle's as in the plain form.
+func TestComposedCPUDeltaRuleKeepsRows(t *testing.T) {
+	rng := rand.New(rand.NewSource(12))
+	const R, live = 8, 6
+	runs := [][]int{{1, 3, 0, 4}, {2}, {5}}
+	in, out := []int{1, 3, 5}, []int{2, 4, 6}
+	kept := 0
+	for _, s := range []deltaShape{
+		{h: 4, kh: 2, dk: 7, dv: 5},
+		{h: 8, kh: 2, dk: 9, dv: 8, chans: true},
+		{h: 4, kh: 2, dk: 7, dv: 5, additive: true},
+		{h: 2, kh: 1, dk: 128, dv: 4},
+	} {
+		g := deltaGraph(s)
+		for i := range g.Ops {
+			g.Ops[i].Attr.Keeps = true
+		}
+		_, codes, err := Default().Form(Request{Graph: g, Formats: map[jlm.Role]jlm.Type{}, Step: Step{Rows: R, Page: 64, Keys: 1}, Device: cpuDevice(hostArm())})
+		if err != nil {
+			t.Fatalf("%+v: %v", s, err)
+		}
+		N := s.h * s.dv * s.dk
+		nan := math.Float32bits(float32(math.NaN()))
+		pool, keep := make([]uint32, 7*N), make([]uint32, R*N)
+		for i := range pool {
+			pool[i] = nan
+		}
+		for i := range keep {
+			keep[i] = nan
+		}
+		refs := make([][]float64, len(runs))
+		for j := range runs {
+			refs[j] = make([]float64, N)
+			for i := range N {
+				x := float32(rng.NormFloat64() * 0.3)
+				pool[in[j]*N+i], refs[j][i] = math.Float32bits(x), float64(x)
+			}
+		}
+		rnd := func(n int, lo, hi float64) []float32 {
+			x := make([]float32, n)
+			for i := range x {
+				x[i] = float32(lo + (hi-lo)*rng.Float64())
+			}
+			return x
+		}
+		nd := s.h
+		if s.chans {
+			nd = s.h * s.dk
+		}
+		qk, vv := s.kh*s.dk, s.h*s.dv
+		q, k, v := rnd(R*qk, -1, 1), rnd(R*qk, -1, 1), rnd(R*vv, -1, 1)
+		d, beta := rnd(R*nd, 0.5, 0.99), rnd(R*s.h, 0.1, 0.9)
+		words := func(x []float32) []uint32 { return unsafe.Slice((*uint32)(unsafe.Pointer(&x[0])), len(x)) }
+		vals := map[graph.ValueID][]uint32{g.In[0]: words(q), g.In[1]: words(k), g.In[2]: words(v), g.In[3]: words(d), g.In[4]: words(beta)}
+		tables := map[string][]uint32{"rec.state": pool, "rec.state.out": pool, "rec.rows": scanDesc(runs, live, in, out), "rec.state.keep": keep}
+		gr := *g
+		gr.Values = slices.Clone(g.Values)
+		for i := range gr.Values {
+			gr.Values[i].Width *= R
+		}
+		if err := runCPUTables(hostArm(), codes, &gr, vals, [3][]uint32{}, tables); err != nil {
+			t.Fatalf("%+v: %v", s, err)
+		}
+		got := wordsF32(vals[g.Out[0]])
+		worst, e := 0.0, 0
+		for j, r := range runs {
+			for _, x := range r {
+				want := deltaOracle(s, refs[j], q[x*qk:][:qk], k[x*qk:][:qk], v[x*vv:][:vv], d[x*nd:][:nd], beta[x*s.h:][:s.h])
+				for i, w := range want {
+					worst = max(worst, math.Abs(float64(got[x*vv+i])-w))
+				}
+				for i := range N {
+					worst = max(worst, math.Abs(float64(math.Float32frombits(keep[e*N+i]))-refs[j][i]))
+				}
+				e++
+			}
+			for i := range N {
+				worst = max(worst, math.Abs(float64(math.Float32frombits(pool[out[j]*N+i]))-refs[j][i]))
+			}
+		}
+		for i := e * N; i < len(keep); i++ {
+			if w := keep[i]; w != nan {
+				t.Fatalf("%+v: the form kept %v at word %d, past the step's %d entries", s, math.Float32frombits(w), i, e)
+			}
+		}
+		if !(worst <= 2e-5) {
+			t.Fatalf("%+v: the kept scan is %g from the oracle", s, worst)
+		}
+		kept += e
+	}
+	t.Logf("%d entries' states kept and held to the oracle", kept)
+}
+
 // scanDesc is the run descriptor (kernels.RunDescWords' layout) of runs,
 // each a sequence's rows of the step in order, over n live rows: run j
 // reads slot in[j] and writes slot out[j], the entries past the runs

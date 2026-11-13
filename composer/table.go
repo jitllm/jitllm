@@ -70,6 +70,11 @@ const (
 	// TablePicHAccOut the same buffer written.
 	TablePicHAcc
 	TablePicHAccOut
+	// TableRecKeep and TableRecConvKeep are a recurrent block's state and
+	// short convolution's tail after each row of a step that keeps them
+	// (graph.Attrs.Keeps), a slot a row's entry of the run order.
+	TableRecKeep
+	TableRecConvKeep
 	numTables
 )
 
@@ -139,12 +144,18 @@ func (t Table) String() string {
 		return "picture.hacc"
 	case TablePicHAccOut:
 		return "picture.hacc.out"
+	case TableRecKeep:
+		return "rec.state.keep"
+	case TableRecConvKeep:
+		return "rec.conv.keep"
 	}
 	return fmt.Sprintf("table%d", t)
 }
 
 // recurrent says t is a recurrent block's own table.
-func (t Table) recurrent() bool { return t >= TableRecState && t <= TableRecRows }
+func (t Table) recurrent() bool {
+	return t >= TableRecState && t <= TableRecRows || t == TableRecKeep || t == TableRecConvKeep
+}
 
 // storage is the operand naming the buffer o is bound to where a call site
 // binds two operands to one: a recurrent block's written state is its read
@@ -196,7 +207,7 @@ func (t Table) elem() ir.Type {
 // perPart says t is a part's own state (Operand.PerPart).
 func (t Table) perPart() bool {
 	switch t {
-	case TableKeys, TableValues, TableRecState, TableRecStateOut, TableRecConv, TableRecConvOut:
+	case TableKeys, TableValues, TableRecState, TableRecStateOut, TableRecConv, TableRecConvOut, TableRecKeep, TableRecConvKeep:
 		return true
 	}
 	return false
