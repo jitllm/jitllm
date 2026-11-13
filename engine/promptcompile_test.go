@@ -40,8 +40,7 @@ func TestPlacedPromptsCompileNothing(t *testing.T) {
 		p := testmodels.Path(name)
 		if _, err := os.Stat(p); err != nil {
 			if _, err := os.Stat(strings.TrimSuffix(p, ".gguf") + ".jlm"); err != nil {
-				t.Logf("MODEL MISSING: %s", name)
-				continue
+				testmodels.Missing(t, "MODEL MISSING: %s (set JITLLM_MODELS to the model directory)", name)
 			}
 		}
 		for _, tune := range []gpu.TuneMode{gpu.TuneOff, gpu.TuneAuto} {
