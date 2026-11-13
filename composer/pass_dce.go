@@ -55,9 +55,9 @@ func (k *Kernel) Live() map[int]bool {
 			return
 		}
 		seen[i] = true
-		nd := k.Nodes[i]
-		for _, a := range k.Operands(&nd) {
-			walk(*a)
+		var buf [3]int
+		for _, a := range k.args(i, &buf) {
+			walk(a)
 		}
 	}
 	for _, s := range k.Stores {

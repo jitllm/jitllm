@@ -173,7 +173,14 @@ func (k *Kernel) redirectMany(same map[int]int) {
 			*x = j + 1
 		}
 	}
+	var buf [3]int
 	for i := range k.Nodes {
+		if !slices.ContainsFunc(k.args(i, &buf), func(x int) bool {
+			_, ok := same[x]
+			return ok
+		}) {
+			continue
+		}
 		for _, p := range k.Operands(&k.Nodes[i]) {
 			node(p)
 		}
