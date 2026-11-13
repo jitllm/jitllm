@@ -157,6 +157,12 @@ type PlacedParts struct {
 	KVConv  [KVFormats]KVConvDevice
 }
 
+// BlockSetPlacer is a device that prepares several blocks in one call,
+// composing them side by side: PrepLayer of each lis[i] with plan ps[i].
+type BlockSetPlacer interface {
+	PrepLayers(lis []int, ps []*LayerPlan)
+}
+
 // LanePlacer readies a device for a placement of n blocks read through l,
 // none composed yet: the experts and weights it pages in, the rotaries'
 // planes, the experts' count and whether its calls are profiled.

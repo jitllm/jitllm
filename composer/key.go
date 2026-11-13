@@ -25,11 +25,11 @@ type Key uint64
 // the requests formed afresh.
 type formCache struct {
 	mu sync.Mutex
-	m  map[Key]formed
+	m  map[Key]*formed
 	n  int64
 	// took is the time each pass took over the kernels it was given, by
-	// its name, and the lowerings' as "lower", under tmu: a form runs its
-	// passes holding mu.
+	// its name, and the lowerings' as "lower", under tmu: forms run their
+	// passes side by side.
 	tmu  sync.Mutex
 	took map[string]time.Duration
 }
@@ -45,14 +45,17 @@ func (c *formCache) clock(name string, d time.Duration) {
 	c.tmu.Unlock()
 }
 
+// formed is one Key's formation: its codes and error are the former's to
+// write until done is closed.
 type formed struct {
 	words []uint64
 	codes []Code
 	err   error
+	done  chan struct{}
 }
 
 func newFormCache() *formCache {
-	return &formCache{m: map[Key]formed{}, took: map[string]time.Duration{}}
+	return &formCache{m: map[Key]*formed{}, took: map[string]time.Duration{}}
 }
 
 // PassTimes is the time each pass took over every form r and its copies

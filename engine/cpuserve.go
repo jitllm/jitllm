@@ -113,14 +113,18 @@ func (s *Instance) markUnprepped() {
 // prepLeft prepares, on its route's device, each block markUnprepped left
 // that is still there.
 func (s *Instance) prepLeft() {
+	var lis [len(s.places)][]int
 	for li, u := range s.unprepped {
 		if !u {
 			continue
 		}
 		s.unprepped[li] = false
 		if r := s.slotAt(li); r != slotNone && s.fromFrames[r] {
-			s.places[r].PrepLayer(li, s.planFor(li), nil)
+			lis[r] = append(lis[r], li)
 		}
+	}
+	for r := range lis {
+		s.prepOn(r, lis[r])
 	}
 }
 
@@ -128,11 +132,36 @@ func (s *Instance) prepLeft() {
 // it from the frames; one with a copy of its own took it at its offer.
 func (s *Instance) prepFrames() {
 	n := max(s.c.NLayer, s.hi)
+	var lis [len(s.places)][]int
 	for li := s.lo; li < min(s.hi, n); li++ {
 		if r := s.slotAt(li); r != slotNone && s.fromFrames[r] {
-			s.places[r].PrepLayer(li, s.planFor(li), nil)
+			lis[r] = append(lis[r], li)
 		}
 	}
+	for r := range lis {
+		s.prepOn(r, lis[r])
+	}
+}
+
+// prepOn prepares blocks lis on route r's device: in one call where the
+// device composes several blocks at once (nn.BlockSetPlacer), one by one
+// where it does not.
+func (s *Instance) prepOn(r int, lis []int) {
+	if len(lis) == 0 {
+		return
+	}
+	d, ok := s.places[r].(nn.BlockSetPlacer)
+	if !ok {
+		for _, li := range lis {
+			s.places[r].PrepLayer(li, s.planFor(li), nil)
+		}
+		return
+	}
+	ps := make([]*nn.LayerPlan, len(lis))
+	for i, li := range lis {
+		ps[i] = s.planFor(li)
+	}
+	d.PrepLayers(lis, ps)
 }
 
 // sideAtBinding moves the offset of every slice of gr's side input (its

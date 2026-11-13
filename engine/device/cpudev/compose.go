@@ -3,6 +3,7 @@ package cpudev
 import (
 	"errors"
 	"runtime"
+	"sync"
 	"sync/atomic"
 
 	"github.com/jitllm/jitllm/composer"
@@ -24,6 +25,7 @@ type Composer struct {
 	float   bool
 	launch  int
 	probed  bool
+	mu      sync.Mutex
 	err     error
 	// placing counts the placement calls open (Place): a form is made
 	// inside one and nowhere else.
@@ -82,6 +84,11 @@ func (c *Composer) Form(req composer.Request, gr *graph.Graph, rows int, apart, 
 // Decline is the reason err declines its form by, the first error kept.
 func (c *Composer) Decline(err error) nn.Decline {
 	c.Note(err)
+	return declineOf(err)
+}
+
+// declineOf is the reason err declines its form by.
+func declineOf(err error) nn.Decline {
 	var d DeclineError
 	if errors.As(err, &d) {
 		return d.Why
@@ -91,13 +98,19 @@ func (c *Composer) Decline(err error) nn.Decline {
 
 // Note keeps err where no error is kept yet.
 func (c *Composer) Note(err error) {
+	c.mu.Lock()
 	if c.err == nil {
 		c.err = err
 	}
+	c.mu.Unlock()
 }
 
 // Err is the first error a form met, nil for none.
-func (c *Composer) Err() error { return c.err }
+func (c *Composer) Err() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.err
+}
 
 // Block is a block's composed forms on the CPU device: its graph, the form
 // of one row and the rows' form, or why each is not served.

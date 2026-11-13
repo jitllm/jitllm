@@ -20,11 +20,18 @@ type Forms struct {
 	reg    *composer.Registry
 	// reg32 is reg with histories kept at f32 (composer.Registry.WithoutHalves).
 	reg32 *composer.Registry
-	m     map[composer.Key]*Form
-	err   map[composer.Key]error
+	m     map[composer.Key]*built
 	// asks counts Of's calls, a cached form's among them, and took their
-	// time in nanoseconds.
+	// time in nanoseconds, summed over calls made side by side.
 	asks, took atomic.Int64
+}
+
+// built is one Key's form or why it was refused, the builder's to write
+// until done is closed.
+type built struct {
+	f    *Form
+	err  error
+	done chan struct{}
 }
 
 // Asks is how many times a form was asked of c, a cached one among them.
@@ -48,21 +55,23 @@ func (c *Forms) PassTimes() map[string]time.Duration {
 
 // Of is request req's form, its graph gr at rows rows (BuildForm's apart
 // and whole): asked of the registry keeping histories at f32 where f32 is
-// set, and forming no int8 or split kernels where float is.
+// set, and forming no int8 or split kernels where float is. Calls for
+// different forms compose side by side; one for a form another call is
+// building waits for it.
 func (c *Forms) Of(req composer.Request, gr *graph.Graph, rows int, apart, whole, f32, float bool) (*Form, error) {
 	c.asks.Add(1)
 	t0 := time.Now()
 	defer func() { c.took.Add(int64(time.Since(t0))) }()
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if c.reg == nil {
 		c.reg = composer.Default()
 		c.reg32 = c.reg.WithoutHalves(composer.DeviceCPU)
 	}
 	if c.m == nil {
-		c.m, c.err = map[composer.Key]*Form{}, map[composer.Key]error{}
+		c.m = map[composer.Key]*built{}
 	}
 	reg := c.reg
+	c.mu.Unlock()
 	if f32 {
 		reg = c.reg32
 	}
@@ -73,20 +82,20 @@ func (c *Forms) Of(req composer.Request, gr *graph.Graph, rows int, apart, whole
 	if err != nil {
 		return nil, err
 	}
-	if f, ok := c.m[key]; ok {
-		return f, nil
+	c.mu.Lock()
+	if b, ok := c.m[key]; ok {
+		c.mu.Unlock()
+		<-b.done
+		return b.f, b.err
 	}
-	if err, ok := c.err[key]; ok {
-		return nil, err
+	b := &built{done: make(chan struct{})}
+	c.m[key] = b
+	c.mu.Unlock()
+	defer close(b.done)
+	if b.f, b.err = BuildForm(c.Target, gr, codes, rows, apart, whole); b.err == nil {
+		b.f.Keys = req.Step.Keys
 	}
-	f, err := BuildForm(c.Target, gr, codes, rows, apart, whole)
-	if err != nil {
-		c.err[key] = err
-		return nil, err
-	}
-	f.Keys = req.Step.Keys
-	c.m[key] = f
-	return f, nil
+	return b.f, b.err
 }
 
 // All is every form c holds.
@@ -94,8 +103,11 @@ func (c *Forms) All() []*Form {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	out := make([]*Form, 0, len(c.m))
-	for _, f := range c.m {
-		out = append(out, f)
+	for _, b := range c.m {
+		<-b.done
+		if b.f != nil {
+			out = append(out, b.f)
+		}
 	}
 	return out
 }
@@ -104,15 +116,18 @@ func (c *Forms) All() []*Form {
 func (c *Forms) Count() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return len(c.m) + len(c.err)
+	return len(c.m)
 }
 
 // Close unmaps every form c holds.
 func (c *Forms) Close() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for _, f := range c.m {
-		f.Close()
+	for _, b := range c.m {
+		<-b.done
+		if b.f != nil {
+			b.f.Close()
+		}
 	}
 	c.m = nil
 }
