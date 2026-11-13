@@ -2320,11 +2320,13 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	if !p.NonCausal {
 		was := g.prewarming
 		g.prewarming = true
-		for _, w := range []int{g.promptW, g.stepW} {
-			if w > 0 {
-				g.prepBatch(w)
+		g.formAhead(func() {
+			for _, w := range []int{g.promptW, g.stepW} {
+				if w > 0 {
+					g.prepBatch(w)
+				}
 			}
-		}
+		})
 		g.prewarming = was
 	}
 	// Admitting a block charges its KV cache forever, so the slot count just
@@ -5631,7 +5633,9 @@ func (g *devTier) prepBatch(width int) bool {
 	// The composer's prompt forms at this width and their instances
 	// (nn.ComposedPrompt).
 	g.promptForms(bb)
-	bb.walked = g.layerGen + 1
+	if g.ahead == nil {
+		bb.walked = g.layerGen + 1
+	}
 	return true
 }
 

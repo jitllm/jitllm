@@ -238,9 +238,22 @@ func threadRegs(d backend.Device) int {
 // askPart asks r for sl at a step of rows: the request's Key, and what it
 // forms.
 func (g *devTier) askPart(r *composer.Registry, sl *composedPart, rows int) (composer.Key, []composer.Code, error) {
-	lanes, err := g.composedLanes()
+	req, err := g.partRequest(r, sl, rows)
 	if err != nil {
 		return 0, nil, err
+	}
+	if req.Device.Tile.Rows > 0 {
+		g.Stats.MatrixTiled++
+	}
+	return r.Form(req)
+}
+
+// partRequest is what the composer is asked for part sl at rows rows on the
+// device.
+func (g *devTier) partRequest(r *composer.Registry, sl *composedPart, rows int) (composer.Request, error) {
+	lanes, err := g.composedLanes()
+	if err != nil {
+		return composer.Request{}, err
 	}
 	g.Stats.ComposedLanes = lanes
 	dev := composer.Device{Kind: composer.DeviceGPU, Slots: g.dev.Slots(), Lanes: lanes, Units: units(g.dev),
@@ -253,10 +266,7 @@ func (g *devTier) askPart(r *composer.Registry, sl *composedPart, rows int) (com
 		dev.ScaleRows = g.composedScale()
 	}
 	dev.Tile = g.matrixTile(r, dev, rows)
-	if dev.Tile.Rows > 0 {
-		g.Stats.MatrixTiled++
-	}
-	return r.Form(composer.Request{
+	return composer.Request{
 		Graph:    sl.graph,
 		Part:     sl.part,
 		Formats:  sl.formats,
@@ -267,7 +277,7 @@ func (g *devTier) askPart(r *composer.Registry, sl *composedPart, rows int) (com
 		Device:   dev,
 		History:  sl.history,
 		More:     sl.more,
-	})
+	}, nil
 }
 
 // composedMatrix is the binary16 tile the composer forms a step of rows on
@@ -1270,6 +1280,54 @@ const errServedCold tierError = "tier: a served part forms outside a capture"
 // (servedFor), its error stated once.
 const errFormedEarlier tierError = "did not form earlier"
 
+// errFormedAhead marks a part a walk ahead asked the composer for and holds
+// nothing of (formAhead).
+const errFormedAhead tierError = "asked for ahead"
+
+// formsAhead is a walk asking the composer for its parts' forms ahead of the
+// walk that holds them: each on a goroutine of its own, as many at once as
+// the process runs.
+type formsAhead struct {
+	wg   sync.WaitGroup
+	slot chan struct{}
+}
+
+// form asks r for req's form on a goroutine of its own, once a slot frees.
+// What it forms is r's cache's: the walk after finds it there, or its error.
+func (a *formsAhead) form(r *composer.Registry, req composer.Request) {
+	a.slot <- struct{}{}
+	a.wg.Go(func() {
+		defer func() { <-a.slot }()
+		r.Form(req)
+	})
+}
+
+// formAhead runs walk twice: first asking the composer for every part it
+// meets side by side and holding nothing, then as itself, each form found
+// made. A placement's parts form independently of one another, and forming
+// them one at a time inside the walk was most of a card's start. Callers
+// hold g.mu.
+func (g *devTier) formAhead(walk func()) {
+	n0 := g.composerRuns()
+	a := &formsAhead{slot: make(chan struct{}, runtime.GOMAXPROCS(0))}
+	g.ahead = a
+	walk()
+	g.ahead = nil
+	a.wg.Wait()
+	n1 := g.composerRuns()
+	walk()
+	g.FormedAhead += n1 - n0
+	g.FormedInWalk += g.composerRuns() - n1
+}
+
+// composerRuns is the forms the device's composer made rather than found.
+func (g *devTier) composerRuns() int {
+	if g.composer == nil {
+		return 0
+	}
+	return int(g.composer.Formed())
+}
+
 // servedFor is the lane's served part of key sk, built by build on its
 // first step and formed through the composer's one keyed cache, its form the
 // device's and its instance the lane's. A submission beside other sessions'
@@ -1346,6 +1404,10 @@ func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*
 	}
 	sl, err := build()
 	if err != nil {
+		if g.ahead != nil {
+			delete(g.served, sk)
+			return nil, errFormedAhead
+		}
 		return nil, fail(err)
 	}
 	// A pass's attention leaves its maximum, sum and weighted values for the
@@ -1359,6 +1421,13 @@ func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*
 			}
 			r = g.composerPasses
 		}
+	}
+	if g.ahead != nil {
+		delete(g.served, sk)
+		if req, err := g.partRequest(r, &sl, sk.rows); err == nil {
+			g.ahead.form(r, req)
+		}
+		return nil, errFormedAhead
 	}
 	// A form of several rows reads the rows it runs from the call's word: a
 	// part whose call states none runs its form's every row.
@@ -1837,7 +1906,7 @@ func (g *devTier) formTables(bs *blockScratch) {
 		return
 	}
 	if bs.p.NonCausal && bs.gridGraph != nil {
-		if _, err := g.servedGridTable(bs, bs.rows); err != nil {
+		if _, err := g.servedGridTable(bs, bs.rows); err != nil && !errors.Is(err, errFormedAhead) {
 			g.LastErr = "the composed grid table: " + err.Error()
 		}
 		return
@@ -1851,7 +1920,7 @@ func (g *devTier) formTables(bs *blockScratch) {
 		if gr == nil || cs == nil || planes == nil || at == nil {
 			continue
 		}
-		if _, err := g.servedTable(gr, bs.rows, bs.p.RopeMarks, cs, planes, at); err != nil {
+		if _, err := g.servedTable(gr, bs.rows, bs.p.RopeMarks, cs, planes, at); err != nil && !errors.Is(err, errFormedAhead) {
 			g.LastErr = "the composed table: " + err.Error()
 		}
 	}
@@ -2657,6 +2726,9 @@ func (g *devTier) promptServed(l *layer, li int, bb *blockScratch) bool {
 		}
 		sv, err := g.servedBlock(l, li, rcs, g.kvp.layers[l.kvSrc], bb.pkv.pRow, g.windowDesc(bb.pkv, l), bb.roff, bb.calls, bb.dRows,
 			bb.p.MaxSeq, g.kvp.p, bb.rows, seqs, bb)
+		if errors.Is(err, errFormedAhead) {
+			continue
+		}
 		if err != nil {
 			// A form that failed earlier was named then (servedFor).
 			if !errors.Is(err, errFormedEarlier) {
@@ -2706,6 +2778,9 @@ func (g *devTier) streamServed(l *layer, li int, bb *blockScratch) bool {
 		}
 		sv, err := g.servedBlockAs(l, li, rcs, g.kvp.layers[l.kvSrc], bb.pkv.pRow, g.windowDesc(bb.pkv, l), qOff, bb.calls, bb.dRows,
 			g.passKeys(bb, bb.p.MaxSeq), g.kvp.p, bb.rows, seqs, run, bb)
+		if errors.Is(err, errFormedAhead) {
+			continue
+		}
 		if err != nil {
 			if !errors.Is(err, errFormedEarlier) {
 				g.LastErr = err.Error()
@@ -2762,7 +2837,7 @@ func (g *devTier) promptForms(bb *blockScratch) {
 	g.formTables(bb)
 	// The input rows at bb's rows, where the composer gathers a chunk's.
 	if bs := g.bs; bs != nil && bs.embedServes() == nil && g.embedBufs(bs) {
-		if _, err := g.servedEmbed(bs, bb.rows); err != nil {
+		if _, err := g.servedEmbed(bs, bb.rows); err != nil && !errors.Is(err, errFormedAhead) {
 			g.LastErr = "the composed input rows: " + err.Error()
 		}
 	}
