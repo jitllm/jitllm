@@ -445,7 +445,7 @@ func TestComposedGPUDivision(t *testing.T) {
 			for _, exact := range []bool{dev.ExactDiv, false} {
 				dv := dev
 				dv.ExactDiv = exact
-				bad, ran := divisionMisses(t, d, dv, xs, ds)
+				bad, ran := divisionMisses(t, d, dv, xs, ds, false)
 				if bad > 0 {
 					t.Fatalf("exact %v: %d of %d quotients off", exact, bad, ran)
 				}
@@ -455,10 +455,13 @@ func TestComposedGPUDivision(t *testing.T) {
 	}
 }
 
-// TestComposedGPUDivisionViolation is the gate's violation: a device that
-// is not exact told it is, so the map takes the device's own division. On
-// Vulkan that is allowed 2.5 ulp and some quotient must be off; where the
-// device's division is exact there is nothing to violate.
+// TestComposedGPUDivisionViolation is the gate's violation, two ways. A
+// quotient taken as the product by its divisor's rounded reciprocal is off
+// by a rounding on some operand on every device. A device that is not exact
+// told it is takes its own division: Vulkan's is allowed 2.5 ulp and some
+// quotient must be off; Metal's, compiled without fast math, may round
+// toward zero by its specification and measured the IEEE quotient at every
+// operand on the M4, so there its count is logged.
 func TestComposedGPUDivisionViolation(t *testing.T) {
 	testlock.GPU(t)
 	devs := openDevices()
@@ -466,23 +469,23 @@ func TestComposedGPUDivisionViolation(t *testing.T) {
 		t.Fatal("no GPU backend on this host: the gate runs on one")
 	}
 	xs, ds := divisionOperands()
-	ran := 0
 	for _, d := range devs {
 		defer d.Close()
 		dev := gpuDevice(d)
+		if bad, n := divisionMisses(t, d, dev, xs, ds, true); bad == 0 {
+			t.Errorf("%s: the product by the rounded reciprocal matched the IEEE quotient at all %d: the gate sees no rounding", d.API(), n)
+		} else {
+			t.Logf("%s: the product by the rounded reciprocal is off at %d of %d", d.API(), bad, n)
+		}
 		if dev.ExactDiv {
 			continue
 		}
-		ran++
 		dev.ExactDiv = true
-		if bad, n := divisionMisses(t, d, dev, xs, ds); bad == 0 {
+		bad, n := divisionMisses(t, d, dev, xs, ds, false)
+		if bad == 0 && d.API() == "spirv" {
 			t.Errorf("%s: the device's own division matched the IEEE quotient at all %d: the violation is invisible", d.API(), n)
-		} else {
-			t.Logf("%s: the device's own division is off at %d of %d", d.API(), bad, n)
 		}
-	}
-	if ran == 0 {
-		t.Fatal("no device without an exact division here: the violation ran on none")
+		t.Logf("%s: the device's own division is off at %d of %d", d.API(), bad, n)
 	}
 }
 
@@ -508,16 +511,24 @@ func divisionOperands() (xs, ds []float32) {
 	return xs, ds
 }
 
-// divisionMisses forms x / ds on d under dv and counts the quotients that
-// are not Go's, of those in the normal range.
-func divisionMisses(t *testing.T, d backend.Device, dv composer.Device, xs, ds []float32) (bad, ran int) {
+// divisionMisses forms x / ds on d under dv, or with recip x times ds's
+// rounded reciprocals, and counts the quotients that are not Go's x / ds, of
+// those in the normal range.
+func divisionMisses(t *testing.T, d backend.Device, dv composer.Device, xs, ds []float32, recip bool) (bad, ran int) {
 	t.Helper()
 	const guard = 64
 	n := len(xs)
 	b := graph.New()
 	x := b.In("x", n)
+	fn, by := graph.MapDiv, ds
+	if recip {
+		fn, by = graph.MapMul, make([]float32, n)
+		for i, v := range ds {
+			by[i] = 1 / v
+		}
+	}
 	b.Out(b.Emit(graph.OpMap, []graph.ValueID{x}, []graph.Result{{Name: "y", Width: n}},
-		[]graph.Binding{{Role: jlm.RoleOutputNorm, K: n, Rows: 1}}, graph.Attrs{Fn: graph.MapDiv, Exact: true}, nil, nil)[0])
+		[]graph.Binding{{Role: jlm.RoleOutputNorm, K: n, Rows: 1}}, graph.Attrs{Fn: fn, Exact: true}, nil, nil)[0])
 	_, codes, err := composer.Default().Form(composer.Request{Graph: b.G, Formats: map[jlm.Role]jlm.Type{},
 		Step: composer.Step{Rows: 1, Page: 64, Keys: 1}, Device: dv})
 	if err != nil {
@@ -527,7 +538,7 @@ func divisionMisses(t *testing.T, d backend.Device, dv composer.Device, xs, ds [
 	if err != nil {
 		t.Fatalf("exact %v: %v", dv.ExactDiv, err)
 	}
-	res, tail, err := op.run(xs, n, guard, map[jlm.Role][]float32{jlm.RoleOutputNorm: ds})
+	res, tail, err := op.run(xs, n, guard, map[jlm.Role][]float32{jlm.RoleOutputNorm: by})
 	op.close()
 	if err != nil {
 		t.Fatalf("exact %v: %v", dv.ExactDiv, err)
@@ -545,7 +556,7 @@ func divisionMisses(t *testing.T, d backend.Device, dv composer.Device, xs, ds [
 		ran++
 		if math.Float32bits(res[i]) != math.Float32bits(w) {
 			bad++
-			if bad < 5 && !dv.ExactDiv {
+			if bad < 5 && !dv.ExactDiv && !recip {
 				t.Errorf("%g/%g = %g (%#x), want %g (%#x)", v, ds[i], res[i], math.Float32bits(res[i]), w, math.Float32bits(w))
 			}
 		}
