@@ -438,6 +438,22 @@
       "note": "an embedding model only; llama.cpp's reply shape, normalised as embd_normalize asks (L2 by default)"
     },
     {
+      "path": "/embeddings",
+      "methods": [
+        "POST"
+      ],
+      "surface": "llamacpp",
+      "note": "/embedding's handler, as llama-server serves both"
+    },
+    {
+      "path": "/models",
+      "methods": [
+        "GET"
+      ],
+      "surface": "llamacpp",
+      "note": "/v1/models' list, as llama-server serves both"
+    },
+    {
       "path": "/props",
       "methods": [
         "GET",
