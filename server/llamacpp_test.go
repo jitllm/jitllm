@@ -210,7 +210,7 @@ func TestLlamaRefusals(t *testing.T) {
 		"logit_bias": `[[15]]`, "samplers": `["dry","top_k"]`, "n_cmpl": `2`, "id_slot": `3`,
 		"n_predict": `0`, "n_keep": `5`, "lora": `[{"id":0,"scale":1}]`, "post_sampling_probs": `true`,
 		"timings_per_token": `true`, "t_max_predict_ms": `100`, "n_probs": `99`, "repeat_last_n": `-2`,
-		"response_fields": `["content"]`, "mystery_field": `1`,
+		"response_fields": `"content"`, "mystery_field": `1`,
 	}
 	for k, v := range refuse {
 		code, out := llamaPost(t, s, "/completion", `{"prompt":"x","`+k+`":`+v+`}`)
@@ -289,6 +289,58 @@ func TestLlamaRefusals(t *testing.T) {
 	e := out["error"].(map[string]any)
 	if e["code"] != float64(400) || e["type"] != "invalid_request_error" || e["message"] == "" {
 		t.Fatalf("error shape: %v", out)
+	}
+}
+
+// TestLlamaResponseFields: response_fields keeps the paths asked for, a
+// nested one lifted to the root under its path, and leaves out a path that
+// names nothing; the stream's last frame is picked the same way, its token
+// frames whole.
+func TestLlamaResponseFields(t *testing.T) {
+	f := &llamaFake{fakeBackend: &fakeBackend{tokens: []string{"Hel", "lo"}, reason: FinishMaxTokens}}
+	s := llamaServe(t, f)
+	code, out := llamaPost(t, s, "/completion", `{"prompt":"Hi","n_predict":2,
+		"response_fields":["content","generation_settings/n_predict","timings/predicted_n","nowhere/at/all","content/deeper"]}`)
+	if code != 200 {
+		t.Fatalf("%d %v", code, out)
+	}
+	want := map[string]any{"content": "Hello", "generation_settings/n_predict": float64(2), "timings/predicted_n": float64(2)}
+	if len(out) != len(want) {
+		t.Fatalf("kept %v, want exactly %v", out, want)
+	}
+	for k, v := range want {
+		if out[k] != v {
+			t.Errorf("%s = %v, want %v", k, out[k], v)
+		}
+	}
+	// An empty list keeps the whole object.
+	if _, out := llamaPost(t, s, "/completion", `{"prompt":"Hi","response_fields":[]}`); out["timings"] == nil || out["tokens_predicted"] == nil {
+		t.Fatalf("an empty response_fields dropped fields: %v", out)
+	}
+	resp := post(t, s, "/completion", `{"prompt":"Hi","stream":true,"response_fields":["stop","tokens_predicted"]}`)
+	defer resp.Body.Close()
+	var frames []map[string]any
+	sc := bufio.NewScanner(resp.Body)
+	for sc.Scan() {
+		line, ok := strings.CutPrefix(sc.Text(), "data: ")
+		if !ok {
+			continue
+		}
+		var fr map[string]any
+		if err := json.Unmarshal([]byte(line), &fr); err != nil {
+			t.Fatalf("frame %q: %v", line, err)
+		}
+		frames = append(frames, fr)
+	}
+	if len(frames) < 2 {
+		t.Fatalf("%d frames", len(frames))
+	}
+	last := frames[len(frames)-1]
+	if len(last) != 2 || last["stop"] != true || last["tokens_predicted"] != float64(2) {
+		t.Fatalf("the last frame: %v", last)
+	}
+	if frames[0]["content"] != "Hel" {
+		t.Fatalf("a token frame was picked too: %v", frames[0])
 	}
 }
 

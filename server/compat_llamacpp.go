@@ -149,7 +149,6 @@ func llamaFields() map[string]llamaField {
 		"timings_per_token":     {boolIs(false), "per-token timings are not built; the final object carries timings"},
 		"return_progress":       {boolIs(false), "prompt progress is not built"},
 		"post_sampling_probs":   {boolIs(false), "probabilities after sampling are not built; n_probs reports the raw distribution"},
-		"response_fields":       {emptyJSON, "response_fields is not built"},
 		"lora":                  {emptyJSON, "LoRA adapters are not built"},
 		"sse_ping_interval":     {numIs(0), "SSE pings are not built"},
 		"multimodal_data":       {emptyJSON, "send pictures through /v1/chat/completions"},
@@ -167,7 +166,7 @@ func llamaRead() map[string]bool {
 		"repeat_last_n": true, "presence_penalty": true, "frequency_penalty": true, "model": true,
 		"logit_bias": true, "typical_p": true, "xtc_probability": true, "xtc_threshold": true,
 		"top_n_sigma": true, "dynatemp_range": true, "dynatemp_exponent": true,
-		"mirostat": true, "mirostat_tau": true, "mirostat_eta": true,
+		"mirostat": true, "mirostat_tau": true, "mirostat_eta": true, "response_fields": true,
 		// /infill's own.
 		"input_prefix": true, "input_suffix": true, "input_extra": true,
 	}
@@ -666,6 +665,7 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 	var stop json.RawMessage
 	var grammarSrc, schema json.RawMessage
 	var ignore, stream, returnTokens bool
+	var fields []string
 	var firstErr error
 	rd := func(err error) {
 		if firstErr == nil {
@@ -697,6 +697,7 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 	rd(decodeField(body, "ignore_eos", &ignore))
 	rd(decodeField(body, "stream", &stream))
 	rd(decodeField(body, "return_tokens", &returnTokens))
+	rd(decodeField(body, "response_fields", &fields))
 	stop, grammarSrc, schema = body["stop"], body["grammar"], body["json_schema"]
 	if firstErr != nil {
 		llFailErr(w, firstErr)
@@ -867,7 +868,7 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 		return
 	}
 	run := &llamaRun{c: c, w: w, r: r, o: o, info: info, set: set, promptText: promptText,
-		promptIDs: ids, returnTokens: returnTokens}
+		promptIDs: ids, returnTokens: returnTokens, fields: fields}
 	if stream {
 		run.stream()
 		return
@@ -1055,6 +1056,9 @@ type llamaRun struct {
 	promptText   string
 	promptIDs    []int32
 	returnTokens bool
+	// fields is response_fields: the paths the finished object keeps, none
+	// for all of it.
+	fields []string
 
 	started *Started
 	fin     *Finished
@@ -1138,6 +1142,34 @@ func (g *llamaRun) final(content string, ids []int32, probs []any) map[string]an
 	return out
 }
 
+// picked is out as response_fields asks: each path's value, a path's keys
+// read down through nested objects, under the path itself; a path that names
+// nothing is left out, as llama-server leaves it. No fields keeps out whole.
+func (g *llamaRun) picked(out map[string]any) map[string]any {
+	if len(g.fields) == 0 {
+		return out
+	}
+	kept := map[string]any{}
+	for _, path := range g.fields {
+		var v any = out
+		found := true
+		for _, k := range strings.Split(path, "/") {
+			m, ok := v.(map[string]any)
+			if !ok {
+				found = false
+				break
+			}
+			if v, found = m[k]; !found {
+				break
+			}
+		}
+		if found {
+			kept[path] = v
+		}
+	}
+	return kept
+}
+
 func (g *llamaRun) settings() map[string]any {
 	p := llamaParams(g.set, 0, nil, g.info.NCtx)
 	p["n_ctx"], p["model"] = g.info.NCtx, g.info.Name
@@ -1175,7 +1207,7 @@ func (g *llamaRun) whole() {
 	if g.returnTokens {
 		ids = g.ids
 	}
-	writeJSON(g.w, http.StatusOK, g.final(g.text.String(), ids, g.probs))
+	writeJSON(g.w, http.StatusOK, g.picked(g.final(g.text.String(), ids, g.probs)))
 }
 
 // stream sends the text as `data: {json}` frames with no terminator, as
@@ -1218,7 +1250,7 @@ func (g *llamaRun) stream() {
 			pendIDs, pendProbs = nil, nil
 			return sse.send(frame)
 		case EventFinished:
-			return sse.send(g.final("", append([]int32{}, pendIDs...), pendProbs))
+			return sse.send(g.picked(g.final("", append([]int32{}, pendIDs...), pendProbs)))
 		}
 		return nil
 	})
