@@ -811,8 +811,8 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 	case maxTokens != nil:
 		set.NPredict = *maxTokens
 	}
-	if slot != nil && *slot != -1 && *slot != 0 {
-		llFailErr(w, fmt.Errorf("%w: id_slot=%d is not supported: there is one slot, 0", ErrInvalid, *slot))
+	if slot != nil && *slot < -1 {
+		llFailErr(w, fmt.Errorf("%w: id_slot=%d is below -1 (any slot)", ErrInvalid, *slot))
 		return
 	}
 	if nProbs != nil {
@@ -930,6 +930,11 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 		returnTokens: returnTokens, fields: fields, pingEvery: 30 * time.Second}
 	if ping != nil {
 		run.pingEvery = time.Duration(*ping) * time.Second
+	}
+	// Every slot reads the one prefix cache, so the slot asked for changes no
+	// answer; it is reported, wrapped as llama-server wraps it.
+	if slot != nil && *slot >= 0 {
+		run.slot = *slot % max(len(lb.Slots(info.ID)), 1)
 	}
 	for _, in := range prompts {
 		for range max(len(seeds), 1) {
@@ -1130,7 +1135,9 @@ type llamaRun struct {
 	// pingEvery is sse_ping_interval: a stream silent this long is pinged,
 	// none when it is not positive.
 	pingEvery time.Duration
-	res       []*llamaResult
+	// slot is the id_slot reported.
+	slot int
+	res  []*llamaResult
 }
 
 // llamaResult is one completion being built.
@@ -1191,7 +1198,7 @@ func llamaStopType(r FinishReason) string {
 func (g *llamaRun) final(res *llamaResult, content string, ids []int32, probs []any) map[string]any {
 	f := res.fin
 	out := map[string]any{
-		"index": res.index, "content": content, "tokens": ids, "id_slot": 0, "stop": true,
+		"index": res.index, "content": content, "tokens": ids, "id_slot": g.slot, "stop": true,
 		"model": g.info.Name, "tokens_predicted": f.CompletionTokens, "tokens_evaluated": f.PromptTokens,
 		"generation_settings": g.settings(),
 		"prompt":              res.promptText, "has_new_line": strings.Contains(res.text.String(), "\n"),
