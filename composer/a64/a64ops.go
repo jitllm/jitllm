@@ -143,6 +143,20 @@ func (a *A64) MUL(rd, rn, rm XReg) { a.x3(0x9B007C00, rd, rn, rm) }
 // UDIV is udiv xd, xn, xm: zero where xm is zero.
 func (a *A64) UDIV(rd, rn, rm XReg) { a.x3(0x9AC00800, rd, rn, rm) }
 
+// SDIV is sdiv xd, xn, xm: zero where xm is zero.
+func (a *A64) SDIV(rd, rn, rm XReg) { a.x3(0x9AC00C00, rd, rn, rm) }
+
+// ASRV is asr xd, xn, xm: by xm's low six bits.
+func (a *A64) ASRV(rd, rn, rm XReg) { a.x3(0x9AC02800, rd, rn, rm) }
+
+// ASRimm is asr xd, xn, #sh.
+func (a *A64) ASRimm(rd, rn XReg, sh uint8) {
+	a.w(0x9340FC00 | uint32(sh&63)<<16 | uint32(rn)<<5 | uint32(rd))
+}
+
+// SXTW is sxtw xd, wn: the low 32 bits sign-extended.
+func (a *A64) SXTW(rd, rn XReg) { a.w(0x93407C00 | uint32(rn)<<5 | uint32(rd)) }
+
 // MVN is mvn xd, xm.
 func (a *A64) MVN(rd, rm XReg) { a.x3(0xAA2003E0, rd, 0, rm) }
 
@@ -176,6 +190,12 @@ const (
 	CondGT A64Cond = 12
 	CondLE A64Cond = 13
 )
+
+// CSINV is csinv xd, xn, xm, cond: xn where cond holds, else xm's bits
+// inverted.
+func (a *A64) CSINV(rd, rn, rm XReg, c A64Cond) {
+	a.w(0xDA800000 | uint32(rm)<<16 | uint32(c)<<12 | uint32(rn)<<5 | uint32(rd))
+}
 
 // CSEL is csel xd, xn, xm, cond.
 func (a *A64) CSEL(rd, rn, rm XReg, c A64Cond) {
