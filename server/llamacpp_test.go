@@ -283,6 +283,59 @@ func TestLlamaPromptsAndCompletions(t *testing.T) {
 	}
 }
 
+// TestLlamaNPredictZeroAndTimingsPerToken: n_predict 0 asks for the one token
+// llama-server answers it with, and reports 0; timings_per_token puts the
+// timings so far on every token frame, and without it a token frame carries
+// none.
+func TestLlamaNPredictZeroAndTimingsPerToken(t *testing.T) {
+	f := &llamaFake{fakeBackend: &fakeBackend{tokens: []string{"Hel", "lo", "!"}, reason: FinishMaxTokens}}
+	s := llamaServe(t, f)
+	code, out := llamaPost(t, s, "/completion", `{"prompt":"Hi","n_predict":0}`)
+	if code != 200 {
+		t.Fatalf("n_predict 0: %d %v", code, out)
+	}
+	if f.opts().MaxTokens != 1 {
+		t.Fatalf("n_predict 0 asked for %d tokens, want 1", f.opts().MaxTokens)
+	}
+	if gs := out["generation_settings"].(map[string]any); gs["n_predict"] != float64(0) {
+		t.Fatalf("generation_settings.n_predict %v, want 0", gs["n_predict"])
+	}
+	for _, perToken := range []bool{true, false} {
+		body := `{"prompt":"Hi","stream":true,"timings_per_token":false}`
+		if perToken {
+			body = `{"prompt":"Hi","stream":true,"timings_per_token":true}`
+		}
+		resp := post(t, s, "/completion", body)
+		sc := bufio.NewScanner(resp.Body)
+		n := 0
+		for sc.Scan() {
+			line, ok := strings.CutPrefix(sc.Text(), "data: ")
+			if !ok {
+				continue
+			}
+			var fr map[string]any
+			if err := json.Unmarshal([]byte(line), &fr); err != nil {
+				t.Fatalf("frame %q: %v", line, err)
+			}
+			if fr["stop"] == true {
+				continue
+			}
+			n++
+			tm, has := fr["timings"].(map[string]any)
+			if has != perToken {
+				t.Fatalf("timings_per_token=%v: token frame %d timings %v", perToken, n, fr["timings"])
+			}
+			if perToken && (tm["predicted_n"] != fr["tokens_predicted"] || tm["prompt_n"] != float64(7) || tm["prompt_ms"] != float64(40)) {
+				t.Fatalf("token frame %d timings %v, tokens_predicted %v", n, tm, fr["tokens_predicted"])
+			}
+		}
+		resp.Body.Close()
+		if n != 3 {
+			t.Fatalf("timings_per_token=%v: %d token frames, want 3", perToken, n)
+		}
+	}
+}
+
 func TestLlamaSamplingDefaultsAndMapping(t *testing.T) {
 	f := &llamaFake{fakeBackend: &fakeBackend{tokens: []string{"a"}, reason: FinishEOS}}
 	s := llamaServe(t, f)
@@ -315,8 +368,8 @@ func TestLlamaRefusals(t *testing.T) {
 		"mirostat": `3`, "dry_multiplier": `0.8`,
 		"presence_penalty": `3`, "frequency_penalty": `-3`,
 		"logit_bias": `[[15]]`, "samplers": `["dry","top_k"]`, "n_cmpl": `0`, "id_slot": `3`,
-		"n_predict": `0`, "n_keep": `5`, "lora": `[{"id":0,"scale":1}]`, "post_sampling_probs": `true`,
-		"timings_per_token": `true`, "t_max_predict_ms": `100`, "n_probs": `99`, "repeat_last_n": `-2`,
+		"n_keep": `5`, "lora": `[{"id":0,"scale":1}]`, "post_sampling_probs": `true`,
+		"t_max_predict_ms": `100`, "n_probs": `99`, "repeat_last_n": `-2`,
 		"response_fields": `"content"`, "mystery_field": `1`,
 	}
 	for k, v := range refuse {
