@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestRoleNamesAreDisjoint holds the role tables apart. roleOf asks the core
@@ -18,6 +19,7 @@ import (
 // are switches, which refuse a repeated name inside one of them but not
 // across them.
 func TestRoleNamesAreDisjoint(t *testing.T) {
+	testmodels.SourceTree(t)
 	fset := token.NewFileSet()
 	pkgs, err := parser.ParseDir(fset, ".", func(fi fs.FileInfo) bool {
 		return !strings.HasSuffix(fi.Name(), "_test.go")

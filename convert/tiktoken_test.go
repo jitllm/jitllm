@@ -81,6 +81,7 @@ func TestTiktokenVocabMatchesLlamaCpp(t *testing.T) {
 // Han against other scripts, digit groups, contractions, the long-s and Kelvin
 // case-fold, and specials written literally in the text.
 func TestTiktokenVocabEncodesLikeMoonshot(t *testing.T) {
+	testmodels.SourceTree(t)
 	dir := testmodels.Path("Kimi-Linear-48B-A3B-Instruct")
 	if !fileExists(filepath.Join(dir, "tiktoken.model")) {
 		testmodels.Missing(t, "MODEL MISSING: %s/tiktoken.model (set JITLLM_MODELS to the model directory) -- this gate proved nothing", dir)
