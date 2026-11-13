@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jitllm/jitllm/model"
 )
@@ -336,6 +337,25 @@ func TestLlamaNPredictZeroAndTimingsPerToken(t *testing.T) {
 	}
 }
 
+// TestLlamaPredictTimeReachesTheEngine: t_max_predict_ms is the generate's
+// PredictTime, and 0 sets none.
+func TestLlamaPredictTimeReachesTheEngine(t *testing.T) {
+	f := &llamaFake{fakeBackend: &fakeBackend{tokens: []string{"a"}, reason: FinishEOS}}
+	s := llamaServe(t, f)
+	for body, want := range map[string]time.Duration{
+		`{"prompt":"x","t_max_predict_ms":250}`: 250 * time.Millisecond,
+		`{"prompt":"x","t_max_predict_ms":0}`:   0,
+		`{"prompt":"x"}`:                        0,
+	} {
+		if code, out := llamaPost(t, s, "/completion", body); code != 200 {
+			t.Fatalf("%s: %d %v", body, code, out)
+		}
+		if got := f.opts().PredictTime; got != want {
+			t.Errorf("%s: PredictTime %v, want %v", body, got, want)
+		}
+	}
+}
+
 func TestLlamaSamplingDefaultsAndMapping(t *testing.T) {
 	f := &llamaFake{fakeBackend: &fakeBackend{tokens: []string{"a"}, reason: FinishEOS}}
 	s := llamaServe(t, f)
@@ -369,7 +389,7 @@ func TestLlamaRefusals(t *testing.T) {
 		"presence_penalty": `3`, "frequency_penalty": `-3`,
 		"logit_bias": `[[15]]`, "samplers": `["dry","top_k"]`, "n_cmpl": `0`, "id_slot": `3`,
 		"n_keep": `5`, "lora": `[{"id":0,"scale":1}]`, "post_sampling_probs": `true`,
-		"t_max_predict_ms": `100`, "n_probs": `99`, "repeat_last_n": `-2`,
+		"n_probs": `99`, "repeat_last_n": `-2`,
 		"response_fields": `"content"`, "mystery_field": `1`,
 	}
 	for k, v := range refuse {
