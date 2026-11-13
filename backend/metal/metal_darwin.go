@@ -815,20 +815,17 @@ func (q *sub) wait() error {
 	c := q.c
 	q.mu.Lock()
 	cbs := q.pending
+	q.c.stats.statWait.Add(1)
+	if len(cbs) == 0 {
+		q.mu.Unlock()
+		return nil
+	}
+	q.c.stats.statBlock.Add(1)
 	// The other list takes the commits that arrive meanwhile, and this one
 	// becomes the spare once it is read: two lists that swap, where a fresh
 	// one per Wait was a heap object per decode token.
 	q.pending, q.spare = q.spare[:0], nil
-	q.c.stats.statWait.Add(1)
-	if len(cbs) > 0 {
-		q.c.stats.statBlock.Add(1)
-	} else {
-		q.spare = cbs[:0]
-	}
 	q.mu.Unlock()
-	if len(cbs) == 0 {
-		return nil
-	}
 	// In order on one queue: the last to complete is the last committed.
 	tw := time.Now()
 	c.await(cbs[len(cbs)-1])
@@ -874,6 +871,12 @@ func (q *sub) wait() error {
 	}
 	q.mu.Lock()
 	if q.spare == nil {
+		// Commits go on in the longer list: two each grown on the tokens it
+		// took grew one again on a warm token committing as many as any
+		// before it.
+		if cap(cbs) > cap(q.pending) {
+			cbs, q.pending = q.pending, append(cbs[:0], q.pending...)
+		}
 		q.spare = cbs[:0]
 	}
 	q.mu.Unlock()
