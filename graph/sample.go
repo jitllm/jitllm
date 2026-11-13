@@ -494,6 +494,43 @@ func (s *SampleAdaptive) Build() *Graph {
 	return b.G
 }
 
+// SampleStage is one stage of a sampler chain run in an order of its own
+// (llama-server's samplers list) over logits, a row whose removed tokens
+// are -Inf: the survivors the stage leaves -- those sample.p gives a
+// probability above 0 (sample.cand.p put in place at sample.cand.ids, u32;
+// an id at or past the vocabulary names none), or every finite one where
+// sample.stage's word 1 is 1 -- penalized as SampleRow penalizes them
+// (sample.window and sample.penalty) and scaled by the reciprocal
+// temperature, word 0, or where word 2, the dynamic range, is above 0 by
+// llama.cpp's dynamic temperature over the survivors' softmax at its
+// exponent, word 3 (sampleEmitter.dynTemp). The rest are -Inf. Its output
+// is the stage's row.
+type SampleStage struct{ NVocab, K int }
+
+func (s *SampleStage) Build() *Graph {
+	b := New()
+	n := s.NVocab
+	l := b.In("logits", n)
+	row := b.In("sample.p", n)
+	ids := b.In("sample.cand.ids", s.K)
+	b.G.Values[ids].Elem = ElemU32
+	cand := b.In("sample.cand.p", s.K)
+	win := b.In("sample.window", n)
+	pen := b.In("sample.penalty", 3)
+	w := b.In("sample.stage", 4)
+	e := sampleEmitter{b}
+	p := e.one(OpPut, "stage.p", n, Attrs{}, row, ids, cand)
+	fin := e.not("stage.fin", n, e.mapc(MapLess, -math.MaxFloat32, "stage.inf", n, l))
+	named := e.mapc(MapLess, 0, "stage.named", n, e.mapc(MapMul, -1, "stage.pneg", n, p))
+	keep := e.mapc(MapMul, 0, "stage.keep", n, e.mapc(MapMax, 0, "stage.in", n, named, e.word(w, 1, "stage.all")), fin)
+	v := penalizedRow(b, l, win, pen)
+	top := e.one(OpReduce, "stage.top", 1, Attrs{Fn: MapMax}, e.mapc(MapWhere, math.Inf(-1), "stage.kept", n, keep, v))
+	wts := e.mapc(MapWhere, 0, "stage.w", n, keep, e.mapc(MapExp, 0, "stage.we", n, e.mapc(MapSub, 0, "stage.wd", n, v, top)))
+	it := e.dynTemp(wts, keep, e.word(w, 0, "stage.invtemp"), e.word(w, 2, "stage.dyn.range"), e.word(w, 3, "stage.dyn.exp"), "stage.dyn")
+	b.Out(e.mapc(MapWhere, math.Inf(-1), "stage.out", n, keep, e.mapc(MapMul, 0, "stage.scaled", n, v, it)))
+	return b.G
+}
+
 // sampleEmitter is the ops SampleWalk, SampleRow and SampleCut share on b.
 type sampleEmitter struct{ b *Builder }
 
