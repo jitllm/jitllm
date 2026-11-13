@@ -12,6 +12,7 @@ import (
 	"github.com/jitllm/jitllm/common/discover/hubtest"
 	"github.com/jitllm/jitllm/convert/hf"
 	"github.com/jitllm/jitllm/convert/library"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // fallbackModel is a model the Hub at h holds only if b is not nil.
@@ -46,6 +47,7 @@ func TestTheFallbackKeepsTheHubsRefusal(t *testing.T) {
 
 // The download-first path ends as a container with its download removed.
 func TestTheFallbackEndsAsAContainer(t *testing.T) {
+	testmodels.SourceTree(t)
 	b, err := os.ReadFile("../../testdata/models/stories260K.gguf")
 	if err != nil {
 		t.Fatal(err)
