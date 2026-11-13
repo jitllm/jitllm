@@ -148,7 +148,6 @@ func llamaFields() map[string]llamaField {
 		"return_progress":       {boolIs(false), "prompt progress is not built"},
 		"post_sampling_probs":   {boolIs(false), "probabilities after sampling are not built; n_probs reports the raw distribution"},
 		"lora":                  {emptyJSON, "LoRA adapters are not built"},
-		"sse_ping_interval":     {numIs(0), "SSE pings are not built"},
 		"multimodal_data":       {emptyJSON, "send pictures through /v1/chat/completions"},
 		"image_data":            {emptyJSON, "send pictures through /v1/chat/completions"},
 	}
@@ -165,7 +164,7 @@ func llamaRead() map[string]bool {
 		"logit_bias": true, "typical_p": true, "xtc_probability": true, "xtc_threshold": true,
 		"top_n_sigma": true, "dynatemp_range": true, "dynatemp_exponent": true,
 		"mirostat": true, "mirostat_tau": true, "mirostat_eta": true, "response_fields": true,
-		"n_cmpl": true, "n": true, "timings_per_token": true, "t_max_predict_ms": true,
+		"n_cmpl": true, "n": true, "timings_per_token": true, "sse_ping_interval": true, "t_max_predict_ms": true,
 		// /infill's own.
 		"input_prefix": true, "input_suffix": true, "input_extra": true,
 	}
@@ -698,7 +697,7 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 	set := llamaDefaults()
 	var temp, topP, minP, typP, xtcP, xtcT, nSigma, dynR, dynE, mTau, mEta, repeat, presence, frequency *float64
 	var miro *int
-	var topK, lastN, nPredict, maxTokens, nProbs, slot, nCmpl, nAlias, predictMS *int
+	var topK, lastN, nPredict, maxTokens, nProbs, slot, nCmpl, nAlias, predictMS, ping *int
 	var seed *int64
 	var stop json.RawMessage
 	var grammarSrc, schema json.RawMessage
@@ -733,6 +732,7 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 	rd(decodeField(body, "id_slot", &slot))
 	rd(decodeField(body, "n_cmpl", &nCmpl))
 	rd(decodeField(body, "n", &nAlias))
+	rd(decodeField(body, "sse_ping_interval", &ping))
 	rd(decodeField(body, "t_max_predict_ms", &predictMS))
 	rd(decodeField(body, "seed", &seed))
 	rd(decodeField(body, "ignore_eos", &ignore))
@@ -927,7 +927,10 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 		return
 	}
 	run := &llamaRun{c: c, w: w, r: r, o: o, info: info, set: set, prompts: prompts,
-		returnTokens: returnTokens, fields: fields}
+		returnTokens: returnTokens, fields: fields, pingEvery: 30 * time.Second}
+	if ping != nil {
+		run.pingEvery = time.Duration(*ping) * time.Second
+	}
 	for _, in := range prompts {
 		for range max(len(seeds), 1) {
 			run.res = append(run.res, &llamaResult{index: len(run.res), promptText: in.text})
@@ -1124,7 +1127,10 @@ type llamaRun struct {
 	// fields is response_fields: the paths the finished object keeps, none
 	// for all of it.
 	fields []string
-	res    []*llamaResult
+	// pingEvery is sse_ping_interval: a stream silent this long is pinged,
+	// none when it is not positive.
+	pingEvery time.Duration
+	res       []*llamaResult
 }
 
 // llamaResult is one completion being built.
@@ -1336,6 +1342,9 @@ func (g *llamaRun) stream() {
 		llFail(g.w, http.StatusInternalServerError, err.Error(), "server_error")
 		return
 	}
+	if g.pingEvery > 0 {
+		defer sse.pings(g.pingEvery)()
+	}
 	gerr := g.events(func(res *llamaResult, ev Event) error {
 		switch ev.Kind {
 		case EventToken:
@@ -1376,7 +1385,6 @@ func (g *llamaRun) stream() {
 			status, typ = http.StatusBadRequest, "invalid_request_error"
 		}
 		b, _ := json.Marshal(map[string]any{"error": map[string]any{"code": status, "message": gerr.Error(), "type": typ}})
-		sse.w.Write(append(append([]byte("error: "), b...), '\n', '\n'))
-		sse.rc.Flush()
+		sse.raw(append(append([]byte("error: "), b...), '\n', '\n'))
 	}
 }
