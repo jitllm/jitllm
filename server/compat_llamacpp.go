@@ -507,12 +507,13 @@ func (c *compat) llamaEmbedding(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	var norm *int
 	for k, raw := range body {
 		switch k {
 		case "content", "model":
 		case "embd_normalize":
-			if !numIs(2)(raw) {
-				llFailErr(w, fmt.Errorf("%w: embd_normalize=%s is not supported: vectors are L2-normalised (2)", ErrInvalid, raw))
+			if err := json.Unmarshal(raw, &norm); err != nil || norm == nil {
+				llFailErr(w, fmt.Errorf("%w: embd_normalize=%s is not an integer", ErrInvalid, raw))
 				return
 			}
 		default:
@@ -525,7 +526,7 @@ func (c *compat) llamaEmbedding(w http.ResponseWriter, r *http.Request) {
 		llFail(w, http.StatusBadRequest, "content: "+err.Error(), "invalid_request_error")
 		return
 	}
-	res, err := c.b.Embed(r.Context(), EmbedOptions{Model: info.ID, Inputs: inputs})
+	res, err := c.b.Embed(r.Context(), EmbedOptions{Model: info.ID, Inputs: inputs, Normalize: norm})
 	if err != nil {
 		llFailErr(w, err)
 		return

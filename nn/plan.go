@@ -79,19 +79,22 @@ type PartsPlan struct {
 	PoolPart            PartPlan
 	PoolW               PartWeights
 	PoolRows, PoolWidth int
-	PoolRaw             bool
-	Entry               bool
-	EntryParts          [2]PartPlan
-	EntryW              PartWeights
-	EntryWidth          int
-	Inputs              [4]PartPlan
-	Given, WritesX      bool
-	InputsW             PartWeights
-	PleW                int
-	Tables              []TablePlan
-	TablePlanes         [2][]float32
-	TableWidths         [2]int
-	TablesW             PartWeights
+	// PoolRaw says the readout writes the row before the dense heads too,
+	// PoolNorm that it reads the normalisation it is asked
+	// (embed.norm).
+	PoolRaw, PoolNorm bool
+	Entry             bool
+	EntryParts        [2]PartPlan
+	EntryW            PartWeights
+	EntryWidth        int
+	Inputs            [4]PartPlan
+	Given, WritesX    bool
+	InputsW           PartWeights
+	PleW              int
+	Tables            []TablePlan
+	TablePlanes       [2][]float32
+	TableWidths       [2]int
+	TablesW           PartWeights
 	// KV is each history format's conversions, by KVFmt (KVF32's are
 	// none): the instance's own, KVFmt, and every one a session may bring.
 	KV    [KVFormats][]KVConvPlan

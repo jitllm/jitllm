@@ -70,7 +70,7 @@ func compatRoutes() []compatRoute {
 		{path: "/apply-template", methods: []string{http.MethodPost}, surface: "llamacpp", handle: (*compat).llamaApplyTemplate,
 			note: "messages through the model's chat template, to a prompt string"},
 		{path: "/embedding", methods: []string{http.MethodPost}, surface: "llamacpp", handle: (*compat).llamaEmbedding,
-			note: "an embedding model only; llama.cpp's reply shape, L2-normalised"},
+			note: "an embedding model only; llama.cpp's reply shape, normalised as embd_normalize asks (L2 by default)"},
 		{path: "/props", methods: []string{http.MethodGet, http.MethodPost}, surface: "llamacpp", handle: (*compat).llamaProps,
 			note: "read only; POST answers 501 as llama-server does without --props"},
 		{path: "/slots", methods: []string{http.MethodGet}, surface: "llamacpp", handle: (*compat).llamaSlots,

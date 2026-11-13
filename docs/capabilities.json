@@ -1111,7 +1111,7 @@
           "POST"
         ],
         "surface": "llamacpp",
-        "note": "an embedding model only; llama.cpp's reply shape, L2-normalised"
+        "note": "an embedding model only; llama.cpp's reply shape, normalised as embd_normalize asks (L2 by default)"
       },
       {
         "path": "/props",

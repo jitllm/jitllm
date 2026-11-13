@@ -29,6 +29,10 @@ type EmbedOptions struct {
 	Inputs []Prompt
 	// Dimensions is the vector width asked for. Zero means the model's own.
 	Dimensions int
+	// Normalize is llama.cpp's embd_normalize: nil is unit length (2), below
+	// 0 the pooled row as it is, 0 scaled into int16's range by its largest
+	// magnitude, any other k its k-norm (engine.Embedder.EmbedNorm).
+	Normalize *int
 }
 
 // EmbedResult is one vector per input, in input order.
@@ -130,7 +134,11 @@ func (e *Engine) Embed(ctx context.Context, o EmbedOptions) (*EmbedResult, error
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		v, err := emb.embed(ctx, ids)
+		norm := engine.NormUnit
+		if o.Normalize != nil {
+			norm = *o.Normalize
+		}
+		v, err := emb.embed(ctx, ids, norm)
 		if err != nil {
 			return nil, err
 		}
@@ -153,14 +161,15 @@ type embedder struct {
 
 func (x *embedder) close() { x.ms.Close() }
 
-// embed is ids' vector, embedded on a lease of x's session: x's own slice,
-// which its next call overwrites.
-func (x *embedder) embed(ctx context.Context, ids []int32) ([]float32, error) {
+// embed is ids' vector, normalised as llama.cpp's embd_normalize norm asks,
+// embedded on a lease of x's session: x's own slice, which its next call
+// overwrites.
+func (x *embedder) embed(ctx context.Context, ids []int32, norm int) ([]float32, error) {
 	var v []float32
 	var embedded error
 	err := x.ms.Run(ctx, engine.PhasePrefill, func(in *engine.Instance) error {
 		x.e.Use(in)
-		v, embedded = x.e.Embed(ids)
+		v, embedded = x.e.EmbedNorm(ids, norm)
 		return embedded
 	})
 	if embedded != nil {
