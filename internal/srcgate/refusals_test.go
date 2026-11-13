@@ -127,13 +127,33 @@ func TestNoRefusalButInputsAndLimits(t *testing.T) {
 		"format/jlm/read.go:past the %d-byte file":                            "a container span past its file: the container's check",
 		"format/jlm/read.go:run past the %d pages":                            "an expert page's sheets past the container's pages: the container's check",
 		"format/jlm/codec.go:is past the":                                     "a container span past its file: the container's check",
+
+		"engine/embedrun.go:this model embeds at most":                      "an embedding's input past the positions the model reaches (its context): the input's check, as llama-server refuses one past its batch",
+		"engine/towerrun.go:past what the tower's largest class holds":      "a resized picture past the classes the tower forms from its stated geometry, which the resize is held to: an invariant",
+		"engine/towerrun.go:on a canvas of":                                 "a picture's canvas past its class, which the same resize holds it to: an invariant",
+		"engine/devfail.go:has no room for the call's history now":          "a device's memory: a call's history past the card's free pages after the instance moved blocks to the CPU until it fit (reserveMoving), so only where nothing can move; the server parks the row while other rows hold pages (parkForRoom)",
+		"engine/session.go:has no room for this session's history":          "a device's memory: a session's history of a block coming back to a full card, which roomFor meets by moving blocks to the CPU until it settles; it reaches a caller only where the instance may not relocate (SetRelocate) or nothing can move",
+		"engine/device/gpu/served.go:have no room on the card":              "a device's memory at placement: the head's input-row tables stay on the host with the head, the one decline a placement makes (RULE 8)",
+		"engine/device/gpu/layer.go:have no room beside the head":           "a device's memory at placement: the head and its input-row tables stay on the host, the one decline a placement makes (RULE 8)",
+		"engine/device/gpu/recpool.go:no room for the kept zeros":           "fault injection's own refusal (roomFaulted, under the jitllmfault tag): never in a release build",
+		"engine/device/gpu/recpool.go:no room for a copy of a marked state": "a device's memory: the mark keeps no copy, and a rewind that needs it says it cannot rewind (rewindable)",
+		"engine/device/gpu/kvpool.go:no room for another page":              "a device's memory: a layer's attention pool past the card's budget, the backend's buffer limit or the index width, after eviction and streaming (docs/design/device-kv-paging.md)",
+		"model/model.go:wide over at most":                                  "a per-layer embedding table written wrong: the container's check",
+		"composer/a64/a64.go:at most %d":                                    "an offset past what its instruction encodes: the ISA's limit",
+		"graph/verify.go:at most a bias":                                    "a graph that does not verify: the builder's check",
+		"graph/verify.go:a picture of at most":                              "a graph that does not verify: the builder's check",
+		"format/jlm/video.go:at most %d frames":                             "a video record written wrong: the container's check",
+		"backend/vulkan/run.go:so a launch holds at most":                   "a dispatch past vkCmdDispatch's 32-bit workgroup count: the API's limit",
+		"backend/metal/groups.go:so a dispatch holds at most":               "a dispatch past the 32-bit threadgroup count: the API's limit",
+		"backend/cuda.go:launches at most":                                  "a block past the threads its registers allow (CU_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK): the device's limit",
+		"backend/cuda/api.go:takes at most %d along x":                      "a grid past the device's x dimension (CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_X): the device's limit",
 	}
 	// phrase is a string literal that says the code refuses: something
 	// refused, not implemented, not supported, not built or not available,
 	// a model, a container or a device that reads or states no such thing,
 	// cannot or has no form or lowering of it, or has too many of it, or
-	// more than, or past, a count it holds.
-	phrase := regexp.MustCompile(`"[^"\n]*(?i:not implemented|is not supported|are not supported|not built|unsupported|is refused|refuses|\b(?:reads|states) no\b|cannot|can not|too many|too wide|no device kernel|no lowering|does not support|not pre-packed|has no form|no form of|not available|past the|past its|more than the)[^"\n]*"`)
+	// more than, past or at most a count it holds, or has no room for it.
+	phrase := regexp.MustCompile(`"[^"\n]*(?i:not implemented|is not supported|are not supported|not built|unsupported|is refused|refuses|\b(?:reads|states) no\b|cannot|can not|too many|too wide|no device kernel|no lowering|does not support|not pre-packed|has no form|no form of|not available|past the|past its|more than the|at most|no room)[^"\n]*"`)
 	root := filepath.Join("..", "..")
 	found := map[string]bool{}
 	var files int
@@ -182,7 +202,8 @@ func TestNoRefusalButInputsAndLimits(t *testing.T) {
 	t.Logf("%d files, %d refusals, each an input check or a limit", files, len(found))
 	for _, v := range []string{`"model: a sliding window is not supported"`, `"model: the block reads no window"`, `"model: the tower states no grid"`,
 		`"tier: block 3 cannot move to cuda:1"`, `"tier: 70 kernel arguments is too many"`, `"tier: its bank is not pre-packed"`,
-		`"a graph of 9 inputs and 1 outputs, past the 8 places the CPU's call site binds"`} {
+		`"a graph of 9 inputs and 1 outputs, past the 8 places the CPU's call site binds"`,
+		`"model: a call of 9 experts, and a block binds at most 8"`, `"tier: no room for block 3's prompt scratch"`} {
 		if _, ok := allowedKey(allowed, "engine/forward.go", v); ok || !phrase.MatchString(v) {
 			t.Errorf("the violation %s, a refusal the list does not hold, was not seen", v)
 		}
