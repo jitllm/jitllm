@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -23,6 +24,8 @@ import (
 type llamaFake struct {
 	*fakeBackend
 	fim bool
+	// slots is how many slots Slots lists, one when 0.
+	slots int
 }
 
 func (f *llamaFake) LlamaModel(name string) (LlamaModelInfo, error) {
@@ -65,7 +68,13 @@ func (f *llamaFake) ApplyTemplate(_ string, msgs []model.ChatMessage, _ []byte) 
 	return sb.String() + "<assistant>", nil
 }
 
-func (f *llamaFake) Slots(string) []LlamaSlot { return []LlamaSlot{{ID: "s1", NCtx: 2048}} }
+func (f *llamaFake) Slots(string) []LlamaSlot {
+	out := make([]LlamaSlot, max(f.slots, 1))
+	for i := range out {
+		out[i] = LlamaSlot{ID: "s" + strconv.Itoa(i+1), NCtx: 2048}
+	}
+	return out
+}
 
 func llamaServe(t *testing.T, f *llamaFake) *httptest.Server {
 	t.Helper()
@@ -422,12 +431,34 @@ func TestLlamaSSEPings(t *testing.T) {
 // TestLlamaAnySlot: any id_slot is taken, as llama-server takes it, and
 // reported wrapped by the slot count (the fake's one).
 func TestLlamaAnySlot(t *testing.T) {
-	f := &llamaFake{fakeBackend: &fakeBackend{tokens: []string{"a"}, reason: FinishEOS}}
+	f := &llamaFake{fakeBackend: &fakeBackend{tokens: []string{"a", "b"}, reason: FinishEOS}, slots: 4}
 	s := llamaServe(t, f)
-	for _, slot := range []string{"-1", "0", "3"} {
+	for slot, want := range map[string]float64{"-1": 0, "0": 0, "3": 3, "6": 2} {
 		code, out := llamaPost(t, s, "/completion", `{"prompt":"x","id_slot":`+slot+`}`)
-		if code != 200 || out["id_slot"] != float64(0) {
-			t.Errorf("id_slot %s: %d, reported %v", slot, code, out["id_slot"])
+		if code != 200 || out["id_slot"] != want {
+			t.Errorf("id_slot %s: %d, reported %v, want %v", slot, code, out["id_slot"], want)
+		}
+		// A stream reports it on every frame, its replies' and its last.
+		resp := post(t, s, "/completion", `{"prompt":"x","stream":true,"id_slot":`+slot+`}`)
+		sc := bufio.NewScanner(resp.Body)
+		frames := 0
+		for sc.Scan() {
+			line, ok := strings.CutPrefix(sc.Text(), "data: ")
+			if !ok {
+				continue
+			}
+			var fr map[string]any
+			if err := json.Unmarshal([]byte(line), &fr); err != nil {
+				t.Fatalf("frame %q: %v", line, err)
+			}
+			frames++
+			if fr["id_slot"] != want {
+				t.Errorf("id_slot %s: frame %d reported %v, want %v", slot, frames, fr["id_slot"], want)
+			}
+		}
+		resp.Body.Close()
+		if frames != 3 {
+			t.Errorf("id_slot %s: %d frames, want two of text and the last", slot, frames)
 		}
 	}
 }
