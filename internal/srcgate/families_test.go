@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"unicode"
@@ -45,10 +46,11 @@ func familyGeneric(s string) bool {
 // named for one), and no file, type, function, method, field, variable or
 // constant under familyDirs is named for a family. The names are the
 // architecture constants' own (ArchQwen4Exp is qwen4exp, its stem qwen) and
-// familyShort. Comments and strings are not read. The violations -- the
-// converter imported in a model, an architecture read and asked there, an
-// architecture declared in format/jlm, a family's field, a family's file --
-// are seen.
+// familyShort. A string is read where it is branched on: compared, a switch
+// case, or matched by the strings package. The violations -- the converter
+// imported in a model, an architecture read and asked there, an architecture
+// declared in format/jlm, a family's field, a family's file, a branch on a
+// family's name -- are seen.
 func TestNoFamilyCode(t *testing.T) {
 	testmodels.SourceTree(t)
 	root, err := filepath.Abs(filepath.Join("..", ".."))
@@ -128,11 +130,21 @@ func isQwen3Block() {}
 func opPhi() {}
 
 func rope(c *convert.Config) bool { return c.Arch.XDRope() || c.Arch.Valid() }
+
+func local(name string) bool { return name == "gemma3" || strings.HasPrefix(name, "qwen") }
+
+func norm(name string) int {
+	switch name {
+	case "llama4":
+		return 1
+	}
+	return 0
+}
 `
 	got := fam.inSource("model/viol.go", []byte(viol))
-	if len(got) != 6 {
-		t.Errorf("the violations gave %d findings, want 6 (the converter imported, a field, the architecture type, "+
-			"an architecture, a function, an architecture asked): %v", len(got), got)
+	if len(got) != 9 {
+		t.Errorf("the violations gave %d findings, want 9 (the converter imported, a field, the architecture type, "+
+			"an architecture, a function, an architecture asked, three branches on a family's name): %v", len(got), got)
 	}
 	jviol := `package jlm
 
@@ -354,6 +366,26 @@ func (f families) fileNamed(name string) bool {
 	return false
 }
 
+// familyLit is e's text when e is a string literal one of whose words
+// names a family (wordNamed), the words split at anything not a letter or
+// digit: "gemma3", "Qwen2-VL".
+func (f families) familyLit(e ast.Expr) (string, bool) {
+	b, ok := e.(*ast.BasicLit)
+	if !ok || b.Kind != token.STRING {
+		return "", false
+	}
+	v, err := strconv.Unquote(b.Value)
+	if err != nil {
+		return "", false
+	}
+	for _, w := range strings.FieldsFunc(strings.ToLower(v), func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) }) {
+		if f.wordNamed(w) {
+			return b.Value, true
+		}
+	}
+	return "", false
+}
+
 // inSource is every declaration in src named for a family and every
 // architecture constant it reads.
 func (f families) inSource(rel string, src []byte) []string {
@@ -378,6 +410,32 @@ func (f families) inSource(rel string, src []byte) []string {
 			if m, ok := x.Fun.(*ast.SelectorExpr); ok && m.Sel.Name != "String" && m.Sel.Name != "Valid" {
 				if a, ok := m.X.(*ast.SelectorExpr); ok && a.Sel.Name == "Arch" {
 					out = append(out, at(x.Pos())+": asks the architecture "+m.Sel.Name+": the container states what the architecture means")
+				}
+			}
+			if m, ok := x.Fun.(*ast.SelectorExpr); ok {
+				if p, ok := m.X.(*ast.Ident); ok && p.Name == "strings" {
+					switch m.Sel.Name {
+					case "Contains", "HasPrefix", "HasSuffix", "EqualFold":
+						for _, a := range x.Args {
+							if lit, ok := f.familyLit(a); ok {
+								out = append(out, at(a.Pos())+": branches on a family's name, "+lit)
+							}
+						}
+					}
+				}
+			}
+		case *ast.BinaryExpr:
+			if x.Op == token.EQL || x.Op == token.NEQ {
+				for _, e := range []ast.Expr{x.X, x.Y} {
+					if lit, ok := f.familyLit(e); ok {
+						out = append(out, at(e.Pos())+": branches on a family's name, "+lit)
+					}
+				}
+			}
+		case *ast.CaseClause:
+			for _, e := range x.List {
+				if lit, ok := f.familyLit(e); ok {
+					out = append(out, at(e.Pos())+": branches on a family's name, "+lit)
 				}
 			}
 		case *ast.FuncDecl:
