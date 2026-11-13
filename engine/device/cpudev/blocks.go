@@ -43,6 +43,8 @@ type Blocks struct {
 	dev   *Device
 	run   *Runner
 	bound Bound
+	// places is the calls' IO, held from one to the next.
+	places places
 	// rows is a row's history descriptor: its live count's word, where its
 	// keys start, one past its position, its position.
 	rows [4]uint32
@@ -83,7 +85,7 @@ func (bl *Blocks) Row(li int, cb *Block, r *Row) error {
 	b := &bl.bound
 	*b = Bound{Li: li, Own: bl.dev.Own(cb.F), CS: r.CS, CSSWA: r.CSSWA, X: r.X, Stride: r.Stride, Rows: bl.rows[:], N: 1,
 		Pages: r.Pages, Keys: r.Keys, Values: r.Values, RecLi: r.RecLi, RecState: r.RecState, RecConv: r.RecConv,
-		Weights: r.Weights, Entries: r.Entries, EntryPages: r.EntryPages, Req: bl.req(r.Req, 1)}
+		Weights: r.Weights, Entries: r.Entries, EntryPages: r.EntryPages, Req: bl.req(r.Req, 1), IO: bl.places.of(cb.F.Places)}
 	if r.Side != nil {
 		b.Side = r.Side[cb.SideOff:]
 	}
@@ -251,7 +253,7 @@ func (bl *Blocks) calls(li int, f *Form, in *Rows, lo, hi int, stash uint8) erro
 		}
 		*b = Bound{Li: li, Own: bl.dev.Own(f), CS: in.CS[r0*in.NRot:], X: bx, Stride: bstride, Rows: bl.rowsTab, N: k,
 			Pages: bl.faultPages(in.Pages, in.PagePos, end), Side: bside, Weights: in.Weights, Keys: in.Keys, Values: in.Values,
-			Entries: in.Entries, EntryPages: in.EntryPages, Req: bl.req(in.Req, f.Rows)}
+			Entries: in.Entries, EntryPages: in.EntryPages, Req: bl.req(in.Req, f.Rows), IO: bl.places.of(f.Places)}
 		if in.CSSWA != nil {
 			b.CSSWA = in.CSSWA[r0*in.NSWA:]
 		}

@@ -46,6 +46,8 @@ type Pool struct {
 	norm    []float32
 	d       int
 	bind    Call
+	// places is the calls' IO, held from one to the next.
+	places places
 }
 
 // NewPool is the readout part of rows rows of width d on dev, counted in
@@ -90,7 +92,7 @@ func (p *Pool) Pool(x []float32, n int, req []uint32, out []float32, raw bool, n
 	p.pos[0] = uint32(n)
 	p.call[0] = uint32(n)
 	c := &p.bind
-	*c = Call{Own: p.dev.Own(f), N: n, Weights: p.weights}
+	*c = Call{Own: p.dev.Own(f), N: n, Weights: p.weights, IO: p.places.of(f.Places)}
 	o := 1
 	if p.norm != nil {
 		p.norm[0] = norm

@@ -27,6 +27,8 @@ type KVConv struct {
 	zero    []uint32
 	recRows [3]uint32
 	bind    Call
+	// places is the calls' IO, held from one to the next.
+	places places
 	// Ran counts the conversions served.
 	Ran int
 }
@@ -75,7 +77,7 @@ func (k *KVConv) convert(c *KVConvForms, narrow bool, f []float32, h []byte) boo
 	}
 	run := func(fp, hp unsafe.Pointer, n int) {
 		b := &k.bind
-		*b = Call{Own: k.dev.Own(form), N: n}
+		*b = Call{Own: k.dev.Own(form), N: n, IO: k.places.of(form.Places)}
 		b.IO[0], b.IO[1] = hp, fp
 		if narrow {
 			b.IO[0], b.IO[1] = fp, hp

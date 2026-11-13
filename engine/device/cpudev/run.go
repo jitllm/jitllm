@@ -41,6 +41,20 @@ func NewDevice(workers *cpu.Pool) *Device {
 
 // Call is what a launch of a form's kernels binds, by address: the rows'
 // residual streams (X, a stream Stride apart) and their count N, the form's
+// places is a caller's IO across its calls, grown to the most places a
+// form of its binds, so a warm call allocates nothing.
+type places []unsafe.Pointer
+
+// of is n places, cleared.
+func (p *places) of(n int) []unsafe.Pointer {
+	if cap(*p) < n {
+		*p = make([]unsafe.Pointer, n)
+	}
+	s := (*p)[:n]
+	clear(s)
+	return s
+}
+
 // own buffers, the places of a graph apart from its residual (IO), its
 // weights in the form's order (Form.Weights), its rotary tables and planes
 // by instance, and each other source's address (At, by Src).
@@ -49,7 +63,7 @@ type Call struct {
 	X       []float32
 	Stride  int
 	N       int
-	IO      [IO]unsafe.Pointer
+	IO      []unsafe.Pointer
 	Weights []unsafe.Pointer
 	Rope    [2]unsafe.Pointer
 	Planes  [2]unsafe.Pointer

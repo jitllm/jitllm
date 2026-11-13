@@ -88,7 +88,8 @@ func chainPixels(t *testing.T, s *Instance, img image.Image) []float32 {
 	tr.size(cl.Rows, 0)
 	out := make([]float32, cl.Rows*3)
 	bd := new(cpudev.Bound)
-	*bd = cpudev.Bound{Li: -1, Own: execOf(ts).Device().Own(f), N: cl.Rows, Req: tr.req, Pos: tr.posTab, Pic: words}
+	*bd = cpudev.Bound{Li: -1, Own: execOf(ts).Device().Own(f), N: cl.Rows, Req: tr.req, Pos: tr.posTab, Pic: words,
+		IO: make([]unsafe.Pointer, f.Places)}
 	bd.Weights, _ = execOf(ts).Bindings().Bind(f, -1, &ts.dense.TowerDense)
 	bd.IO[0] = unsafe.Pointer(&out[0])
 	execOf(ts).Runner().Run(bd, f)
