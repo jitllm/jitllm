@@ -921,7 +921,7 @@ func (e *Engine) promptIDs(r session.ChatRequest) ([]int32, error) {
 		return nil, fmt.Errorf("this container has no tokenizer: %v", e.m.TokErr)
 	}
 	if !r.Chat {
-		return e.m.Vocab.Encode(r.Prompt, true), nil
+		return e.m.Vocab.EncodeSpecial(r.Prompt, true), nil
 	}
 	return e.m.ChatIDs(chatMessages(r), true)
 }

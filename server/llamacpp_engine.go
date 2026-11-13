@@ -68,20 +68,7 @@ func (e *Engine) Tokenize(name, text string, addSpecial, parseSpecial bool) ([]i
 	if parseSpecial {
 		return v.EncodeSpecial(text, addSpecial), nil
 	}
-	ids := v.Encode(text, addSpecial)
-	// A byte-level BPE vocabulary matches its control tokens in the text
-	// whatever the flag says (tok.Vocab.Encode), so plain text cannot be
-	// honoured when one is there: refuse rather than answer with the token.
-	for i, id := range ids {
-		if i == 0 && addSpecial && v.AddBOS {
-			continue
-		}
-		if _, ok := v.Piece(id); !ok && v.Literal(id) != "" && strings.Contains(text, v.Literal(id)) {
-			return nil, fmt.Errorf("%w: parse_special=false cannot be honoured: this tokenizer matches %q in the text "+
-				"as a special token", ErrInvalid, v.Literal(id))
-		}
-	}
-	return ids, nil
+	return v.Encode(text, addSpecial), nil
 }
 
 func (e *Engine) Piece(name string, id int32) ([]byte, error) {

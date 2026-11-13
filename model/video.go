@@ -557,13 +557,14 @@ func videoSpan(v *jlm.Video, p VideoPlan, frames []image.Image, j, rows int, gri
 	return Span{Picture: f0, Frame: f1, FrameW: p.Square.Ow, FrameH: p.Square.Oh, PicRows: rows, Grid: grid, Key: k}, nil
 }
 
-// encodeText is text's tokens with no specials, none for no text (a
-// tokenizer's dummy prefix would otherwise make one of nothing).
+// encodeText is text's tokens with no specials added and its specials
+// parsed, as mtmd tokenizes its text chunks; none for no text (a tokenizer's
+// dummy prefix would otherwise make one of nothing).
 func (m *Model) encodeText(text string) []int32 {
 	if text == "" {
 		return nil
 	}
-	return m.Vocab.Encode(text, false)
+	return m.Vocab.EncodeSpecial(text, false)
 }
 
 // videoKey names a video's picture -- a pair, or a frame read whole -- by

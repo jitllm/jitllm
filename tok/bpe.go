@@ -110,7 +110,7 @@ func newBPE(vc *jlm.Vocab, v *Vocab, override []pretok.Op) error {
 }
 
 // encodeBPE is Vocab.Encode for a byte-level BPE vocabulary.
-func (v *Vocab) encodeBPE(text string, addSpecial bool) []int32 {
+func (v *Vocab) encodeBPE(text string, addSpecial, control bool) []int32 {
 	// Sized for 3 bytes a token: English prose and code run 3.3-3.5 here, so
 	// their ids are written once rather than copied through every doubling on
 	// the way up; denser text (CJK, symbols, 2-2.7) grows once.
@@ -121,7 +121,7 @@ func (v *Vocab) encodeBPE(text string, addSpecial bool) []int32 {
 	if addSpecial && v.AddBOS && v.BOS >= 0 {
 		out = append(out, v.BOS)
 	}
-	for _, run := range v.partitionSpecial(text, true) {
+	for _, run := range v.partitionSpecial(text, control) {
 		if run.id >= 0 {
 			out = append(out, run.id)
 			continue

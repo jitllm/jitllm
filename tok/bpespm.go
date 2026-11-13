@@ -134,12 +134,12 @@ func (v *Vocab) encodeSPMBPERun(text string, out []int32) []int32 {
 // encodeSPMBPE is Vocab.Encode for a VocabBPESPM vocabulary. Every control
 // and user-defined token is matched literally first, as HF tokenizers matches
 // added tokens before the normalizer.
-func (v *Vocab) encodeSPMBPE(text string, addSpecial bool) []int32 {
+func (v *Vocab) encodeSPMBPE(text string, addSpecial, control bool) []int32 {
 	out := make([]int32, 0, len(text)/3+2)
 	if addSpecial && v.AddBOS && v.BOS >= 0 {
 		out = append(out, v.BOS)
 	}
-	for _, run := range v.partitionSpecial(text, true) {
+	for _, run := range v.partitionSpecial(text, control) {
 		if run.id >= 0 {
 			out = append(out, run.id)
 			continue

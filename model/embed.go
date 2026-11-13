@@ -35,7 +35,7 @@ func (m *Model) IsEmbedding() bool { return m.Cfg.Pooling != jlm.PoolNone }
 // that acts on the flag.
 func (m *Model) EmbedIDs(text string) []int32 {
 	v := m.Vocab
-	ids := v.Encode(text, true)
+	ids := v.EncodeSpecial(text, true)
 	if v.AddEOS && v.EOS >= 0 && (len(ids) == 0 || ids[len(ids)-1] != v.EOS) {
 		ids = append(ids, v.EOS)
 	}
