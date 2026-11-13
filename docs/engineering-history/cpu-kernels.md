@@ -5244,6 +5244,26 @@ register, no reload register for a copy over a spilled value's read, never a
 count its loop counts down in -- it binds correctly (282 composer CPU gates)
 and spills more: 104/185/310 -> 241/193/256. Not landed.
 
+**A late worker's rows, tried.** A Share kernel's rows were cut into one
+call a worker, and the pool claims calls one at a time, so a worker that
+started late held the phase for its share. Cut into four calls a worker
+(`ShareRows(part*4)`), box 49's second socket (twelve cores, tg64 after
+pp128, 20 ABBA rounds a process a sample, each after its A/A self-control),
+twice:
+
+| model | A/A | A/B | tok/s |
+|---|---|---|---|
+| olmoe-1b-7b Q4_K_M, pass 1 | 0.9986 | 1.0270 | 14.69 -> 15.07 |
+| olmoe-1b-7b Q4_K_M, pass 2 | 1.0007 | 1.0291 | 14.96 -> 15.40 |
+| Qwen3-30B-A3B Q4_K_M, pass 1 | 1.0000 | 1.0000 | 5.29 -> 5.29 |
+| Qwen3-30B-A3B Q4_K_M, pass 2 | 1.0000 | 1.0019 | 5.29 -> 5.30 |
+| Llama-3.2-1B Q4_K_M (dense), pass 2 | 0.9989 | 0.7996 | 59.99 -> 48.07 |
+
+Every row gated (IQR/median at most 0.025). The dense model lost a fifth
+of its decode for the mixtures' three points: refused (RULE 6). A finer
+cut only where it pays -- a mixture's expert kernels, the dense matvecs
+left one call a worker -- is untried.
+
 ### A scalar map past the vector registers
 
 A SmolVLM-256M container an earlier converter wrote, before the picture
