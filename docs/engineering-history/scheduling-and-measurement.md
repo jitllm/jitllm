@@ -1847,3 +1847,36 @@ read 1.33 times c=1 on main (19.9 against 15.0 tok/s) and 1.08 times after
 - The 64-request memory gate (`TestAServerUnderLoadStaysUnderItsBound`) took
   a cache that held 33 MB of each prompt; now 6 MB, so it reaches its bound with
   a host reporting 512 MiB available.
+
+## A refusal's remedies taken a kind at a time: the formations it repeats
+
+A run of kernels the register pass refuses is formed again with a remedy
+(`exprSplit.splitRefused`), and the ladder takes one kind of remedy a
+formation -- unrolls, copies at an initializer, crowded and streamed walks,
+split dots, jams, pairs, wide jams, cursors, then a term or the fusion --
+for every refused kernel that has that kind, and no other kind until it is
+spent. Every formation forms the whole graph again. Counted over
+`TestComposesOnlyWithAnInstance`'s models on box 51's CPU, a formation each
+retry:
+
+| model | formations again | refused kernels |
+|---|---|---|
+| stories260K | 4 | 12 |
+| SmolLM2-360M Q8_0 | 0 | 0 |
+| Qwen3-MOE-4x0.6B Q4_K_M | 30 | 184 (cursored 152, crowded 119, paired 60, inited 42, wide 35) |
+| Qwen3.5-0.8B Q4_K_M | 15 | 50 |
+
+The infill walk at 64 candidates formed 65 times over (3 min 59 s) while
+one merge step was an 18-term set: a term set is taken apart one term a
+formation. Stated as small term sets it forms once, in 3.2 s.
+
+Each refused kernel taking its own next remedy, all in one formation, cuts
+the formations to 3, 0, 18 and 12, and the test's subtests from 35.3 to
+28.8 s (Qwen3-MOE) and 18.6 to 17.7 s (Qwen3.5) -- but the codes it forms
+are different bytes for stories260K and Qwen3-MOE (a sum of FNV hashes
+over every form's CPU code; SmolLM2, refused nothing, agrees): a part's
+remedies are the part's (jams, pairs, cursors, fusion), so remedies one of
+its kernels would have waited for are taken beside another's, and some the
+kind-at-a-time order never reached are. It is a codegen change, and its
+speed is unmeasured; it is open (open-questions.md).
+
