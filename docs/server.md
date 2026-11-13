@@ -45,16 +45,16 @@ its completions, indexed so, and a single result is the object itself. With a
 carries its result's `index`, and with `timings_per_token` the timings so
 far. `n_predict` 0 answers one token, `stop_type` `limit`, as llama-server
 does (its README says none; the server samples one before it checks).
-`t_max_predict_ms` ends the reply at its first token holding a newline once
+A stream silent for `sse_ping_interval` seconds (30 unless set; -1 or 0 none)
+is sent an SSE comment, as llama-server sends one. `t_max_predict_ms` ends the reply at its first token holding a newline once
 that long has passed since decoding began, `stop_type` `limit`.
 
 A field the engine cannot honour is refused by name with a 400, at any value
 but its neutral one: `dry_multiplier`, `adaptive_target`, `min_keep`,
 `samplers` beyond penalties/top_n_sigma/top_k/typ_p/top_p/min_p/xtc/temperature,
 `n_indent`, `n_keep`, `n_discard`, `n_cache_reuse`, `t_max_prompt_ms`,
-`return_progress`, `post_sampling_probs`, `lora`,
-`sse_ping_interval`, `id_slot` other than -1 and 0, `embd_normalize` other
-than 2, and multimodal prompts
+`return_progress`, `post_sampling_probs`, `lora`, `id_slot` other than -1
+and 0, `embd_normalize` other than 2, and multimodal prompts
 (`multimodal_data`, `image_data`). A field llama.cpp does not define is
 refused as unknown. On a
 byte-level BPE vocabulary `/tokenize` with `parse_special: false` is refused

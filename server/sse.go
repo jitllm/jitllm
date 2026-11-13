@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync"
+	"time"
 )
 
 // sseWriter is Server-Sent Events for the two compatibility shims.
@@ -15,6 +17,10 @@ import (
 type sseWriter struct {
 	w  http.ResponseWriter
 	rc *http.ResponseController
+	// mu orders the frames against a ping (pings); last is when the stream
+	// last wrote.
+	mu   sync.Mutex
+	last time.Time
 }
 
 func newSSE(w http.ResponseWriter) (*sseWriter, error) {
@@ -26,7 +32,7 @@ func newSSE(w http.ResponseWriter) (*sseWriter, error) {
 	// own writer does.
 	h.Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
-	s := &sseWriter{w: w, rc: http.NewResponseController(w)}
+	s := &sseWriter{w: w, rc: http.NewResponseController(w), last: time.Now()}
 	if err := s.rc.Flush(); err != nil && !errors.Is(err, http.ErrNotSupported) {
 		return nil, err
 	}
@@ -39,10 +45,13 @@ func (s *sseWriter) send(v any) error {
 	if err != nil {
 		return err
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if _, err := fmt.Fprintf(s.w, "data: %s\n\n", b); err != nil {
 		return err
 	}
 	s.rc.Flush()
+	s.last = time.Now()
 	return nil
 }
 
@@ -54,18 +63,61 @@ func (s *sseWriter) sendNamed(name string, v any) error {
 	if err != nil {
 		return err
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if _, err := fmt.Fprintf(s.w, "event: %s\ndata: %s\n\n", name, b); err != nil {
 		return err
 	}
 	s.rc.Flush()
+	s.last = time.Now()
 	return nil
 }
 
 // done writes OpenAI's terminator. It is not part of SSE; clients written
 // against the OpenAI spec block waiting for it.
 func (s *sseWriter) done() {
-	fmt.Fprint(s.w, "data: [DONE]\n\n")
+	s.raw([]byte("data: [DONE]\n\n"))
+}
+
+// raw writes b as it is.
+func (s *sseWriter) raw(b []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.w.Write(b)
 	s.rc.Flush()
+	s.last = time.Now()
+}
+
+// pings writes an SSE comment (":") whenever the stream has been silent for
+// every, as llama-server does, so a client that times out on silence keeps
+// the connection. stop ends them and returns once no ping can be written.
+func (s *sseWriter) pings(every time.Duration) (stop func()) {
+	quit, exited := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(exited)
+		t := time.NewTimer(every)
+		defer t.Stop()
+		for {
+			select {
+			case <-quit:
+				return
+			case <-t.C:
+			}
+			s.mu.Lock()
+			idle := time.Since(s.last)
+			if idle >= every {
+				fmt.Fprint(s.w, ":\n\n")
+				s.rc.Flush()
+				s.last, idle = time.Now(), 0
+			}
+			s.mu.Unlock()
+			t.Reset(every - idle)
+		}
+	}()
+	return func() {
+		close(quit)
+		<-exited
+	}
 }
 
 // sendError is the only way to report a failure once the status line is

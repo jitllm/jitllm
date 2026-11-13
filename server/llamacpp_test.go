@@ -356,6 +356,40 @@ func TestLlamaPredictTimeReachesTheEngine(t *testing.T) {
 	}
 }
 
+// TestLlamaSSEPings: a stream silent for sse_ping_interval seconds is sent an
+// SSE comment, once for each such silence; -1 sends none, and the 30 second
+// default none in a stream that never falls silent that long.
+func TestLlamaSSEPings(t *testing.T) {
+	f := &llamaFake{fakeBackend: &fakeBackend{tokens: []string{"a", "b"}, reason: FinishEOS, beforeToken: func(i int) {
+		if i == 1 {
+			time.Sleep(1500 * time.Millisecond)
+		}
+	}}}
+	s := llamaServe(t, f)
+	pings := func(body string) (n, frames int) {
+		resp := post(t, s, "/completion", body)
+		defer resp.Body.Close()
+		sc := bufio.NewScanner(resp.Body)
+		for sc.Scan() {
+			switch l := sc.Text(); {
+			case l == ":":
+				n++
+			case strings.HasPrefix(l, "data: "):
+				frames++
+			}
+		}
+		return n, frames
+	}
+	if n, fr := pings(`{"prompt":"x","stream":true,"sse_ping_interval":1}`); n != 1 || fr != 3 {
+		t.Fatalf("a 1.5 s silence under a 1 s interval: %d pings and %d frames, want 1 and 3", n, fr)
+	}
+	for _, body := range []string{`{"prompt":"x","stream":true,"sse_ping_interval":-1}`, `{"prompt":"x","stream":true}`} {
+		if n, fr := pings(body); n != 0 || fr != 3 {
+			t.Errorf("%s: %d pings and %d frames, want none and 3", body, n, fr)
+		}
+	}
+}
+
 func TestLlamaSamplingDefaultsAndMapping(t *testing.T) {
 	f := &llamaFake{fakeBackend: &fakeBackend{tokens: []string{"a"}, reason: FinishEOS}}
 	s := llamaServe(t, f)
