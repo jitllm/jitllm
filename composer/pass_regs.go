@@ -3070,14 +3070,15 @@ func (k *Kernel) dotZeros() []bool {
 		return nd.Op == OpConst && nd.Imm == 0 && nd.Type != ir.F32
 	}
 	read, other := make([]bool, n), make([]bool, n)
+	var buf [3]int
 	for j := range k.Nodes {
 		nd := &k.Nodes[j]
-		for _, a := range k.Operands(nd) {
-			i := *a
+		for at, i := range k.args(j, &buf) {
 			if i < 0 || i >= n || i == j || !zero(i) || nd.Op == OpFold && nd.B == i && nd.A != i {
 				continue
 			}
-			if !nd.Op.byteDot() || a != &nd.C || nd.A == i || nd.B == i {
+			// A byte dot's third operand is its C.
+			if !nd.Op.byteDot() || at != 2 || nd.A == i || nd.B == i {
 				other[i] = true
 			} else {
 				read[i] = true

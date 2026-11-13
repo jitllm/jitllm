@@ -8,8 +8,9 @@ import (
 
 // redirect points every reader of node from, but node keep, at node to.
 func (n *Kernel) redirect(from, to, keep int) {
+	var buf [3]int
 	for i := range n.Nodes {
-		if i == keep {
+		if i == keep || !slices.Contains(n.args(i, &buf), from) {
 			continue
 		}
 		nd := &n.Nodes[i]
@@ -195,8 +196,9 @@ func (n *Kernel) Varies(i, c int) bool {
 		if nd.Op == OpFold {
 			return false
 		}
-		for _, a := range n.Operands(&nd) {
-			if walk(*a) {
+		var buf [3]int
+		for _, a := range n.args(i, &buf) {
+			if walk(a) {
 				return true
 			}
 		}
@@ -740,12 +742,13 @@ func (n *Kernel) depth(i int, memo map[int]int, made func(int) bool) int {
 		return 0
 	}
 	d := 0
-	for _, a := range n.Operands(&nd) {
+	var buf [3]int
+	for _, a := range n.args(i, &buf) {
 		step := 1
-		if nd.Op == OpFma && n.Nodes[*a].Op == OpFma && n.uses(*a) == 1 && *a != nd.C {
+		if nd.Op == OpFma && n.Nodes[a].Op == OpFma && n.uses(a) == 1 && a != nd.C {
 			step = 0
 		}
-		d = max(d, n.depth(*a, memo, made)+step)
+		d = max(d, n.depth(a, memo, made)+step)
 	}
 	memo[i] = d
 	return d
