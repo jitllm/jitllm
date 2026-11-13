@@ -631,6 +631,13 @@ func TestLlamaSamplingDefaultsAndMapping(t *testing.T) {
 	if sm.Temp != 0 || sm.TopK != 5 || sm.TopP != 0.5 || sm.MinP != 0.2 || sm.Seed != 42 || sm.RepeatPen != 1.3 {
 		t.Fatalf("fields not mapped: %+v", sm)
 	}
+	_, out := llamaPost(t, s, "/completion", `{"prompt":"x","n_probs":3,"post_sampling_probs":true}`)
+	if o := f.opts(); !o.Logprobs || o.TopLogprobs != 3 || !o.PostSampling {
+		t.Fatalf("post_sampling_probs reached the generate as logprobs %v, %d alternatives, after sampling %v", o.Logprobs, o.TopLogprobs, o.PostSampling)
+	}
+	if gs := out["generation_settings"].(map[string]any); gs["post_sampling_probs"] != true {
+		t.Fatalf("generation_settings: %v", gs)
+	}
 	llamaPost(t, s, "/completion", `{"prompt":"x","json_schema":{"type":"object"}}`)
 	if f.opts().Grammar == "" {
 		t.Fatal("json_schema produced no grammar")
@@ -650,7 +657,7 @@ func TestLlamaRefusals(t *testing.T) {
 		"mirostat": `3`, "dry_multiplier": `0.8`,
 		"presence_penalty": `3`, "frequency_penalty": `-3`,
 		"logit_bias": `[[15]]`, "samplers": `["top_k","dry"]`, "n_cmpl": `0`, "id_slot": `-2`,
-		"n_keep": `5`, "lora": `[{"id":0,"scale":1}]`, "post_sampling_probs": `true`,
+		"n_keep": `5`, "lora": `[{"id":0,"scale":1}]`,
 		"n_probs": `99`, "repeat_last_n": `-2`,
 		"response_fields": `"content"`, "mystery_field": `1`,
 	}
