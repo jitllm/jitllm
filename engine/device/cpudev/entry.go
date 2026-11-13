@@ -26,6 +26,8 @@ type Entry struct {
 	zero     []uint32
 	recRows  [3]uint32
 	bind     Call
+	// places is the calls' IO, held from one to the next.
+	places places
 }
 
 // NewEntry is the entry part of rows width wide on dev, counted in steps:
@@ -69,7 +71,7 @@ func (e *Entry) Entry(z, x []float32, toks []int32, rows int) nn.Decline {
 		if !padded {
 			k -= k % u
 		}
-		*c = Call{Own: e.dev.Own(f), N: k, Weights: weights}
+		*c = Call{Own: e.dev.Own(f), N: k, Weights: weights, IO: e.places.of(f.Places)}
 		e.pos[0] = uint32(k)
 		for i := range k {
 			e.tok[i] = uint32(toks[r0+i])

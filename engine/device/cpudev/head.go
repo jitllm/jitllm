@@ -81,6 +81,8 @@ type Head struct {
 	zero                  []uint32
 	recRows               [3]uint32
 	bind                  Call
+	// places is the calls' IO, held from one to the next.
+	places places
 	// Wrong is the row a violated head reads in place of the caller's (a
 	// gate's violation), nil for none.
 	Wrong []float32
@@ -140,8 +142,8 @@ func (h *Head) form(p *Part, weighted bool) (*Form, []unsafe.Pointer, nn.Decline
 // run calls form f, its weights at weights, over n rows, its buffers io.
 func (h *Head) run(f *Form, weights []unsafe.Pointer, n int, io ...unsafe.Pointer) {
 	c := &h.bind
-	*c = Call{Own: h.dev.Own(f), N: n, Weights: weights}
-	copy(c.IO[:], io)
+	*c = Call{Own: h.dev.Own(f), N: n, Weights: weights, IO: h.places.of(f.Places)}
+	copy(c.IO, io)
 	h.call[0] = uint32(n)
 	h.recRows = [3]uint32{1, 0, 0}
 	c.At[SrcCall], c.At[SrcZero] = unsafe.Pointer(&h.call[0]), unsafe.Pointer(&h.zero[0])

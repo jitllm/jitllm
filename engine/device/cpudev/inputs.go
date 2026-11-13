@@ -33,6 +33,8 @@ type Inputs struct {
 	zero     []uint32
 	recRows  [3]uint32
 	bind     Call
+	// places is the calls' IO, held from one to the next.
+	places places
 }
 
 // NewInputs is the input rows' part of rows of width d and per-layer inputs
@@ -108,7 +110,7 @@ func (in *Inputs) run(one, many *Part, src []float32, writesX bool, x, ple []flo
 		if !padded {
 			k -= k % u
 		}
-		*c = Call{Own: in.dev.Own(f), N: k, Weights: weights}
+		*c = Call{Own: in.dev.Own(f), N: k, Weights: weights, IO: in.places.of(f.Places)}
 		in.pos[0] = uint32(k)
 		for i := range k {
 			in.tok[i] = uint32(toks[r0+i])

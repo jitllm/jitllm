@@ -47,7 +47,7 @@ type Bound struct {
 	Side []float32
 	// IO is the buffers of a graph apart from its residual, its inputs' then
 	// its outputs'.
-	IO [IO]unsafe.Pointer
+	IO []unsafe.Pointer
 	// Req is the step's request words, Pos its live rows then a row's
 	// position, Tok its tokens.
 	Req, Pos, Tok []uint32

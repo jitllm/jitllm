@@ -181,6 +181,9 @@ type Form struct {
 	// Rows is the rows the form holds: 1 for decode's, else its capacity;
 	// Keys the positions of a sequence's history it attends at most.
 	Rows, Keys int
+	// Places is the graph's inputs and outputs, a call's IO apart from its
+	// residual.
+	Places int
 	// Unit is the most rows a unit of a kernel's leading axis holds
 	// (composer.RowJam): a call's rows past a whole number of them are run
 	// from a copy of the residual, so a unit's rows past the call's write
@@ -225,11 +228,6 @@ func (f *Form) Close() {
 	}
 }
 
-// IO is the most inputs and outputs a graph apart from its residual
-// binds: the infill walk reads eight and writes one. It sizes an array in
-// every call block, nothing the generated code reads by offset.
-const IO = 16
-
 // DeclineError is a form the CPU device refuses by a named reason.
 type DeclineError struct {
 	Why nn.Decline
@@ -257,10 +255,8 @@ func stepsState(gr *graph.Graph) bool {
 // its own. A whole form is run at its rows and no fewer (a convolutional
 // block's, over its grid), so its kernels need not be held to a call's rows.
 func BuildForm(h *cpu.Target, gr *graph.Graph, codes []composer.Code, rows int, apart, whole bool) (*Form, error) {
-	if apart && len(gr.In)+len(gr.Out) > IO {
-		return nil, fmt.Errorf("a graph of %d inputs and %d outputs, past the %d places the CPU's call site binds", len(gr.In), len(gr.Out), IO)
-	}
-	f := &Form{Consts: map[int][]uint32{}, Rows: rows, Sel: -1, WSel: -1, RowSel: -1, Rec: stepsState(gr)}
+	f := &Form{Consts: map[int][]uint32{}, Rows: rows, Sel: -1, WSel: -1, RowSel: -1, Rec: stepsState(gr),
+		Places: len(gr.In) + len(gr.Out)}
 	selV, wsV, rowV := selOf(gr), weightsOf(gr), TableRowsOf(gr)
 	wOwn := map[graph.ValueID]int{}
 	var wrote, read []ownUse

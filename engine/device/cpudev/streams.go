@@ -32,6 +32,8 @@ type Streams struct {
 	zero     []uint32
 	recRows  [3]uint32
 	bind     Call
+	// places is the calls' IO, held from one to the next.
+	places places
 	// Fault swaps two of the expansion's outputs and repeats one of the
 	// collapse's inputs: a gate's violation.
 	Fault bool
@@ -115,7 +117,7 @@ func (st *Streams) run(one, many *Part, w Weights, x []float32, rows int, apart 
 		if !padded {
 			k -= k % u
 		}
-		*c = Call{Own: st.dev.Own(f), N: k, Weights: weights}
+		*c = Call{Own: st.dev.Own(f), N: k, Weights: weights, IO: st.places.of(f.Places)}
 		for i, sk := range st.in {
 			if padded {
 				p := st.pad[i*u*d : (i*u+k)*d]

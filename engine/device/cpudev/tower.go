@@ -31,6 +31,8 @@ type Tower struct {
 	dense    Tensors
 	tapsW    []Tensors
 	bound    Bound
+	// places is the calls' IO, held from one to the next.
+	places places
 	// chain is a chained tower's blocks' forms (nn.TowerChain), chainN the
 	// rows each runs over, headN the rows of the head's first input, and
 	// io a chained head's call's buffers.
@@ -108,7 +110,8 @@ func (t *Tower) run(f *Form, li int, w Tensors, n int, req, pos, pic []uint32, i
 		return fmt.Errorf("its weights: %w", t.x.Bindings().Err())
 	}
 	b := &t.bound
-	*b = Bound{Li: li, Own: t.x.Device().Own(f), N: n, Req: req, Pos: pos, Pic: pic, Acc: t.acc[0], Acc1: t.acc[1], HAcc: t.hacc[0], HAcc1: t.hacc[1], Weights: ws}
+	*b = Bound{Li: li, Own: t.x.Device().Own(f), N: n, Req: req, Pos: pos, Pic: pic, Acc: t.acc[0], Acc1: t.acc[1], HAcc: t.hacc[0], HAcc1: t.hacc[1], Weights: ws,
+		IO: t.places.of(f.Places)}
 	for i, x := range io {
 		b.IO[i] = unsafe.Pointer(&x[0])
 	}
