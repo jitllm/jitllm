@@ -941,7 +941,9 @@ JIT and state) was llama.cpp's technical debt, not a property of the model.
   `TestStatedTowerComposesOnTheCPU`, `TestStatedTowerBlocksArePagedBlocks`,
   `TestStatedTowerEncodesAPicture`, `TestWarmImageEncodeDoesNotAllocate`,
   `TestStatedTowerSeesThePicture` and each family's `Test*TowerSeesThePicture`
-  (a blank picture is the violation), `TestStatedTowerRunsOnTheCard` (every
+  (a blank picture is the violation), `TestTowerBlocksMoveBetweenDevices` (to the
+  CPU and back between pictures, each picture its placement's rows),
+  `TestTowerHoldsOneBlocksHistory`, `TestStatedTowerRunsOnTheCard` (every
   block and a partial seam, against the CPU), `TestQwen2VLTowerMatchesTransformers`
   (Qwen2-VL's, Qwen2.5-VL's, Qwen3.5-VL's and Qwen3-VL's: the processor's
   samples, every one, the tower's rows and Qwen3-VL's taps'),

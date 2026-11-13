@@ -153,8 +153,7 @@ reference's pixels and rows at the engine's arithmetic, and run on a card
 - the colour-naming gates over a quadrant picture (every real checkpoint
   has its reference's gate: TestQwenVLRealMatchesTransformers,
   TestRealTowersMatchTransformers, TestLFM2VLRealMatchesTransformers,
-  TestKimiVLRealMatchesMoonshot and TestPhi4RealMatchesTransformers);
-- a tower's encode resumed across a relocation mid-picture.
+  TestKimiVLRealMatchesMoonshot and TestPhi4RealMatchesTransformers).
 
 ## Smaller open items
 

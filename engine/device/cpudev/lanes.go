@@ -481,6 +481,9 @@ func (l *Lanes) blocks(lo, hi int, x, cs, csSWA []float32, seq, pos []int, own [
 			return false
 		}
 		l.e.steps.Serve(nn.PartBlock)
+		if l.h != nil {
+			l.h.Spent(li)
+		}
 	}
 	return true
 }
