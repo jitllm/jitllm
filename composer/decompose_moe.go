@@ -129,6 +129,9 @@ func decomposeTopKRanked(o graph.Op, c *Context) ([]Prim, error) {
 	if G == 1 && S > selectMin && K < S {
 		return decomposeTopKSelect(c, c.value(o.In[0]), sel, c.value(o.Out[1]), S, K), nil
 	}
+	if G == 1 && K == S && sortPays(S) {
+		return sortedPlaces(c, c.value(o.In[0]), nil, sel, c.value(o.Out[1]), S, S), nil
+	}
 	return rankedPlaces(c, c.value(o.In[0]), nil, sel, c.value(o.Out[1]), G, S, K, G*S), nil
 }
 
