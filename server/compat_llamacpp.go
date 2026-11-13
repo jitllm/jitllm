@@ -213,7 +213,6 @@ func llamaFields() map[string]llamaField {
 		"n_keep":                {numIs(0), "there is no context shift, so n_keep has nothing to keep"},
 		"n_discard":             {numIs(0), "there is no context shift"},
 		"n_cache_reuse":         {numIs(0), "KV shifting reuse is not built; the prefix cache is automatic"},
-		"post_sampling_probs":   {boolIs(false), "probabilities after sampling are not built; n_probs reports the raw distribution"},
 		"lora":                  {emptyJSON, "LoRA adapters are not built"},
 		"multimodal_data":       {emptyJSON, "pictures go in prompt.multimodal_data"},
 		"image_data":            {emptyJSON, "pictures go in prompt.multimodal_data"},
@@ -232,7 +231,7 @@ func llamaRead() map[string]bool {
 		"top_n_sigma": true, "dynatemp_range": true, "dynatemp_exponent": true,
 		"mirostat": true, "mirostat_tau": true, "mirostat_eta": true, "response_fields": true, "samplers": true,
 		"n_cmpl": true, "n": true, "timings_per_token": true, "sse_ping_interval": true, "t_max_predict_ms": true,
-		"n_indent": true, "return_progress": true,
+		"n_indent": true, "return_progress": true, "post_sampling_probs": true,
 		// llama-server leaves t_max_prompt_ms unimplemented and takes it to
 		// no effect; so does this server.
 		"t_max_prompt_ms": true,
@@ -622,7 +621,10 @@ type llamaSettings struct {
 	Seed                                       int64
 	Stop                                       []string
 	IgnoreEOS, Stream, TimingsPerToken         bool
-	Grammar, JSONSchema                        string
+	// PostSamplingProbs reports n_probs after every sampler: each token's
+	// probability under the distribution its draw drew from.
+	PostSamplingProbs   bool
+	Grammar, JSONSchema string
 	// Samplers is the chain's stages in order (llamaSamplers).
 	Samplers []string
 }
@@ -642,7 +644,7 @@ func llamaParams(s llamaSettings, _ int, _ []int32, _ int) map[string]any {
 		"mirostat": s.Mirostat, "mirostat_tau": s.MirostatTau, "mirostat_eta": s.MirostatEta,
 		"repeat_penalty": s.RepeatPenalty, "presence_penalty": s.PresencePenalty, "frequency_penalty": s.FrequencyPenalty,
 		"stop": s.Stop, "ignore_eos": s.IgnoreEOS, "stream": s.Stream, "timings_per_token": s.TimingsPerToken,
-		"n_probs": s.NProbs, "grammar": s.Grammar, "json_schema": s.JSONSchema,
+		"n_probs": s.NProbs, "post_sampling_probs": s.PostSamplingProbs, "grammar": s.Grammar, "json_schema": s.JSONSchema,
 		"samplers": s.Samplers,
 	}
 }
@@ -802,7 +804,7 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 	var seed *int64
 	var stop json.RawMessage
 	var grammarSrc, schema json.RawMessage
-	var ignore, stream, returnTokens, perToken, progress bool
+	var ignore, stream, returnTokens, perToken, progress, postProbs bool
 	var fields []string
 	var firstErr error
 	rd := func(err error) {
@@ -842,6 +844,7 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 	rd(decodeField(body, "return_tokens", &returnTokens))
 	rd(decodeField(body, "timings_per_token", &perToken))
 	rd(decodeField(body, "return_progress", &progress))
+	rd(decodeField(body, "post_sampling_probs", &postProbs))
 	rd(decodeField(body, "response_fields", &fields))
 	stop, grammarSrc, schema = body["stop"], body["grammar"], body["json_schema"]
 	if firstErr != nil {
@@ -913,7 +916,7 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 	if seed != nil {
 		set.Seed = *seed
 	}
-	set.IgnoreEOS, set.Stream, set.TimingsPerToken = ignore, stream, perToken
+	set.IgnoreEOS, set.Stream, set.TimingsPerToken, set.PostSamplingProbs = ignore, stream, perToken, postProbs
 	// n_predict wins over the max_tokens alias; -1 and -2 are "until done".
 	switch {
 	case nPredict != nil:
@@ -1001,7 +1004,7 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 		Sampling:  llamaSampler(set.stages(), info.NCtx),
 		Logprobs:  set.NProbs > 0,
 	}
-	o.TopLogprobs = set.NProbs
+	o.TopLogprobs, o.PostSampling = set.NProbs, set.PostSamplingProbs
 	// return_progress streams the prompt's progress; llama-server sends it on
 	// a stream alone.
 	o.Progress = stream && progress
@@ -1287,14 +1290,20 @@ func (res *llamaResult) take(t *Token) {
 	res.text.WriteString(t.Text)
 }
 
+// llamaProb is a token's completion_probabilities entry: its log-probability
+// and the likeliest alternatives', or with post_sampling_probs their
+// probabilities after every sampler, under llama-server's names for each.
 func llamaProb(t *Token) map[string]any {
 	lp := t.Logprob
+	key, topKey := "logprob", "top_logprobs"
+	if lp.Sampled {
+		key, topKey = "prob", "top_probs"
+	}
 	top := make([]any, len(lp.Top))
 	for i, a := range lp.Top {
-		top[i] = map[string]any{"id": a.ID, "token": a.Text, "logprob": a.Logprob, "bytes": oaBytes(a.Text)}
+		top[i] = map[string]any{"id": a.ID, "token": a.Text, key: a.Logprob, "bytes": oaBytes(a.Text)}
 	}
-	return map[string]any{"id": t.ID, "token": lp.Text, "logprob": lp.Logprob, "bytes": oaBytes(lp.Text),
-		"top_logprobs": top}
+	return map[string]any{"id": t.ID, "token": lp.Text, key: lp.Logprob, "bytes": oaBytes(lp.Text), topKey: top}
 }
 
 func llamaStopType(r FinishReason) string {

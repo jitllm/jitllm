@@ -1766,6 +1766,12 @@ type GenerateOptions struct {
 	// (engine.Logprobs).
 	Logprobs    bool
 	TopLogprobs int
+	// PostSampling reads them after every sampler instead (llama.cpp's
+	// post_sampling_probs): each a probability under the distribution the
+	// token's draw drew from, the alternatives its survivors alone
+	// (engine.Instance.SampledProbs). A speculative round draws a span before
+	// its tokens are read, so a generate asking for them does not speculate.
+	PostSampling bool
 	// Seeds, when it holds more than one, asks for that many continuations
 	// of one prompt (OpenAI's n): choice i samples with Seeds[i] and its
 	// events carry Event.Choice = i. The prompt is prefilled once; every
@@ -1852,6 +1858,9 @@ type TokenLogprob struct {
 	// Null is an echoed prompt's first token, which nothing before it
 	// predicts: OpenAI's null.
 	Null bool
+	// Sampled says Logprob and Top's hold probabilities after every sampler
+	// (GenerateOptions.PostSampling), not log-probabilities.
+	Sampled bool
 }
 
 // TopToken is one alternative at a step.
@@ -1885,12 +1894,31 @@ func takeLogprob(in *engine.Instance, l *engine.Logprobs, v tokenDecoder, logits
 	if err != nil {
 		return nil, err
 	}
-	out := &TokenLogprob{Text: v.Decode([]int32{next}), Logprob: lp}
+	return logprobEvent(v, l, next, lp, false), nil
+}
+
+// takeSampled is takeLogprob after every sampler (GenerateOptions.PostSampling):
+// next's probability and its survivors' likeliest under the distribution
+// smp's draw over logits drew from, read before next is observed.
+func takeSampled(in *engine.Instance, l *engine.Logprobs, v tokenDecoder, smp *engine.Sampler, logits []float32, next int32) (*TokenLogprob, error) {
+	if l == nil {
+		return nil, nil
+	}
+	p, err := in.SampledProbs(l, smp, logits, next)
+	if err != nil {
+		return nil, err
+	}
+	return logprobEvent(v, l, next, p, true), nil
+}
+
+// logprobEvent is the event's copy of next's value and l's alternatives.
+func logprobEvent(v tokenDecoder, l *engine.Logprobs, next int32, lp float32, sampled bool) *TokenLogprob {
+	out := &TokenLogprob{Text: v.Decode([]int32{next}), Logprob: lp, Sampled: sampled}
 	out.Top = make([]TopToken, len(l.Top))
 	for i, t := range l.Top {
 		out.Top[i] = TopToken{ID: t.ID, Text: v.Decode([]int32{t.ID}), Logprob: t.Logprob}
 	}
-	return out, nil
+	return out
 }
 
 // promptLogprobs prefills ids on st a chunk of rows at a time with every
@@ -2208,7 +2236,8 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 	if o.Speculation != nil {
 		spec = *o.Speculation
 	}
-	speculate := spec.Enabled && !spans && !o.Continue && !(o.Echo && o.Logprobs) && !(o.Sampling != nil && o.Sampling.Infill)
+	speculate := spec.Enabled && !spans && !o.Continue && !(o.Echo && o.Logprobs) && !(o.Sampling != nil && o.Sampling.Infill) &&
+		!o.PostSampling
 	var con *constraint
 	if tc, err := lm.toolConstraint(o, tail); err != nil {
 		return err
@@ -2467,7 +2496,12 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 			if err == nil {
 				next, err = in.Sample(&sampler, lg)
 			}
-			if err == nil {
+			switch {
+			case err == nil && o.PostSampling:
+				// The distribution the draw drew from, the grammar's mask in
+				// it.
+				tlp, err = takeSampled(in, lpw, lm.m.Vocab, &sampler, lg, next)
+			case err == nil:
 				// The model's raw distribution, before the grammar's mask, as
 				// before temperature and penalties: vLLM's default
 				// (raw_logprobs).

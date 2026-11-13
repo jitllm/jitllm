@@ -274,9 +274,11 @@ type row struct {
 	echo      bool
 	ephemeral bool
 	// tools reads the row's tool calls (Started.Tools).
-	tools     *model.ToolStream
-	sampler   engine.Sampler
-	logprobs  *engine.Logprobs // nil unless the request asked for logprobs
+	tools    *model.ToolStream
+	sampler  engine.Sampler
+	logprobs *engine.Logprobs // nil unless the request asked for logprobs
+	// sampled reads them after every sampler (GenerateOptions.PostSampling).
+	sampled   bool
 	maxTokens int
 	ignoreEOS bool
 	// stops says the row has stop strings, a prediction time or an
@@ -858,7 +860,10 @@ func (lp *stepLoop) nextToken(r *row) bool {
 	}
 	next, err := in.Sample(&r.sampler, r.logits)
 	var tlp *TokenLogprob
-	if err == nil {
+	switch {
+	case err == nil && r.sampled:
+		tlp, err = takeSampled(in, r.logprobs, vocab, &r.sampler, r.logits, next)
+	case err == nil:
 		tlp, err = takeLogprob(in, r.logprobs, vocab, r.logits, next)
 	}
 	r.s.ms.Unhold(in)
@@ -1341,6 +1346,7 @@ func (e *Engine) generateBatched(ctx context.Context, lp *stepLoop, s *Session, 
 		ephemeral:   ephemeral,
 		sampler:     sampler,
 		logprobs:    newLogprobs(o),
+		sampled:     o.PostSampling,
 		maxTokens:   maxTokens,
 		ignoreEOS:   o.IgnoreEOS,
 		stops:       hasStop(o.Stop) || o.PredictTime > 0 || o.MinIndent > 0,
