@@ -114,13 +114,13 @@ func (bs *blockScratch) embStreams() int {
 // plan has them.
 func (bs *blockScratch) embedOuts(s, R int) ([]backend.Buf, error) {
 	n := 1
-	bs.embOuts[0] = bs.x
+	bs.outsFor(s)[0] = bs.x
 	if s > 1 {
 		_, out, err := bs.servedStreams(R, bs.p.Streams())
 		if err != nil {
 			return nil, err
 		}
-		n = copy(bs.embOuts[:], out[:s])
+		n = copy(bs.embOuts, out[:s])
 	}
 	return bs.withPLE(n), nil
 }
@@ -144,7 +144,15 @@ func (bs *blockScratch) castStreams(s, R int) ([]backend.Buf, error) {
 		}
 		bs.castViews[R] = v
 	}
-	return bs.withPLE(copy(bs.embOuts[:], v)), nil
+	return bs.withPLE(copy(bs.outsFor(s), v)), nil
+}
+
+// outsFor is embOuts with room for s streams and the per-layer inputs.
+func (bs *blockScratch) outsFor(s int) []backend.Buf {
+	if len(bs.embOuts) < s+1 {
+		bs.embOuts = make([]backend.Buf, s+1)
+	}
+	return bs.embOuts
 }
 
 // withPLE is the first n of embOuts, then the per-layer inputs where the
@@ -500,7 +508,7 @@ func (g *devTier) composedSession(s backend.Session) {
 		rd.err = err
 		return
 	}
-	outs := bs.embOuts[:1]
+	outs := bs.outsFor(1)[:1]
 	outs[0] = bs.embCast
 	if bs.p.PLEDim != 0 {
 		outs = append(outs, bs.embPLE)

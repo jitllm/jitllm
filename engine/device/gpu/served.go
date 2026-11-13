@@ -1130,7 +1130,8 @@ func (g *devTier) spreadParts(src, nl *lane, gr *graph.Graph) error {
 		if nl.served == nil {
 			nl.served = map[servedKey]*servedPart{}
 		}
-		nl.served[sk] = &servedPart{sl: sv.formed.clone(), formed: sv.formed, f: sv.f, inst: in, args: sv.f.launchArgs(), n: sv.n, m: sv.m}
+		nl.served[sk] = &servedPart{sl: sv.formed.clone(), formed: sv.formed, f: sv.f, inst: in, args: sv.f.launchArgs(),
+			in: make([]backend.Buf, sv.n), out: make([]backend.Buf, sv.m), n: sv.n, m: sv.m}
 	}
 	return nil
 }
@@ -1242,10 +1243,6 @@ type servedKey struct {
 	stream bool
 }
 
-// partIO is the most inputs, and the most outputs, a served part binds: a
-// block of four residual streams reads them and the rows' per-layer inputs.
-const partIO = 8
-
 // servedPart is a served part and its form, with the arguments its launch
 // binds, reused every step: its own instance, or for a prompt part none,
 // its instance its scratch's (promptInst).
@@ -1258,7 +1255,7 @@ type servedPart struct {
 	f       *partForm
 	inst    *partInst
 	args    [][]backend.Buf
-	in, out [partIO]backend.Buf
+	in, out []backend.Buf
 	n, m    int
 	// rows, where set, is the call's rows, the word its table states: a
 	// launch runs their groups, not its form's every row's.
@@ -1412,11 +1409,9 @@ func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*
 			return nil, fail(err)
 		}
 	}
-	if len(sl.graph.In) > partIO || len(sl.graph.Out) > partIO {
-		return nil, fail(fmt.Errorf("a part of %d inputs and %d outputs, past the %d a served part binds", len(sl.graph.In), len(sl.graph.Out), partIO))
-	}
 	f.refs++
-	sv := &servedPart{sl: sl, formed: sl.clone(), f: f, inst: in, args: f.launchArgs(), n: len(sl.graph.In), m: len(sl.graph.Out)}
+	n, m := len(sl.graph.In), len(sl.graph.Out)
+	sv := &servedPart{sl: sl, formed: sl.clone(), f: f, inst: in, args: f.launchArgs(), in: make([]backend.Buf, n), out: make([]backend.Buf, m), n: n, m: m}
 	g.served[sk] = sv
 	if sk.kind == nn.PartBlock && !sk.stream && sk.graph.Block >= 0 {
 		if b := sk.graph.Block; b >= len(g.blockForms) {
