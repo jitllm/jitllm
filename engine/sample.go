@@ -41,7 +41,7 @@ type Sampler struct {
 	// mu is Mirostat's running estimate, 2*tau before its first draw.
 	mu          float32
 	muSet       bool
-	RepeatPen   float64 // 1 = disabled
+	RepeatPen   float64 // 1 or 0 (unset) = disabled; any other value applies, below 1 too
 	RepeatLastN int     // how far back the penalties look; 0 = 64
 	// PresencePen and FreqPen are llama.cpp's presence and frequency
 	// penalties over the same window: 0 = disabled.
@@ -134,7 +134,7 @@ func (s *Sampler) penalties() nn.Penalties {
 	if len(s.hist) == 0 {
 		return p
 	}
-	if s.RepeatPen > 1 {
+	if s.RepeatPen != 0 {
 		p[0] = float32(s.RepeatPen)
 	}
 	p[1], p[2] = float32(s.PresencePen), float32(s.FreqPen)

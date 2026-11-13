@@ -105,6 +105,8 @@ func TestStateSampleIsComposed(t *testing.T) {
 		{"top-p and min-p", Sampler{Temp: 1, TopP: 0.7, MinP: 0.02, RepeatPen: 1.5, RepeatLastN: 16, Seed: 17}},
 		{"top-k", Sampler{Temp: 1.1, TopK: 40, TopP: 0.95, RepeatPen: 1.3, Seed: 19}},
 		{"top-k past the walk", Sampler{Temp: 0.9, TopK: 1000, TopP: 0.97, RepeatPen: 1.2, Seed: 23}},
+		{"repeat penalty below 1", Sampler{Temp: 1, TopP: 0.95, RepeatPen: 0.6, RepeatLastN: 32, Seed: 79}},
+		{"negative repeat penalty", Sampler{Temp: 1.1, TopK: 40, MinP: 0.01, RepeatPen: -1.5, RepeatLastN: 32, Seed: 83}},
 		{"typical-p", Sampler{Temp: 1, TypicalP: 0.8, Seed: 29}},
 		{"top-k and typical-p", Sampler{Temp: 1.1, TopK: 40, TypicalP: 0.7, TopP: 0.95, RepeatPen: 1.3, Seed: 31}},
 		{"top-k past the walk and typical-p", Sampler{Temp: 0.9, TopK: 1000, TypicalP: 0.9, MinP: 0.01, Seed: 37}},
@@ -178,7 +180,7 @@ func TestStateSampleIsComposed(t *testing.T) {
 // row's where no cut fires; and how far the draw is from flipping.
 func sampleRef(m *model.Model, logits []float32, hist []int, s Sampler, u, xtc float64) (int32, float64) {
 	pen := float32(1)
-	if s.RepeatPen > 1 && len(hist) > 0 {
+	if s.RepeatPen != 0 && len(hist) > 0 {
 		pen = float32(s.RepeatPen)
 	}
 	invT := float32(1 / s.Temp)
