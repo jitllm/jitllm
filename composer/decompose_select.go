@@ -50,8 +50,9 @@ func (x *exprs) countsAt(k, t int) int {
 // or above fifteen candidates and keeps the largest that K reach), the keys
 // above it and the first of those equal to it -- K in all -- written in
 // index order by their prefix counts (counted a block at a time), then the
-// K ranked as decomposeTopKRanked ranks a group. Its work is a few passes
-// over the row and K squared compares, whatever K is.
+// K ranked as decomposeTopKRanked ranks a group, or sorted where K is wide
+// enough that the sort costs less (sortPays). Its work is a few passes over
+// the row and K squared compares, or the sort's.
 func decomposeTopKSelect(c *Context, in, sel, val Operand, S, K int) []Prim {
 	U, I, F := ir.U32, ir.I32, ir.F32
 	R := c.Step.Rows
@@ -200,5 +201,8 @@ func decomposeTopKSelect(c *Context, in, sel, val Operand, S, K int) []Prim {
 			{Out: vals, Index: dest, Value: v, Extent: R * (K + 1)},
 		}})
 
+	if sortPays(K) {
+		return append(prims, sortedPlaces(c, vals, &ids, sel, val, K, K+1)...)
+	}
 	return append(prims, rankedPlaces(c, vals, &ids, sel, val, 1, K, K, K+1)...)
 }
