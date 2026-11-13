@@ -148,7 +148,10 @@ type PressureError struct {
 	// sub-block at a time (Streams), Crowded those of them whose walk held
 	// every plane in one rows loop.
 	Streamed, Crowded []KernelAt
-	Err               error
+	// Unrolled is the refused kernels whose vector loops ran several
+	// vectors a trip (Unroll).
+	Unrolled []KernelAt
+	Err      error
 }
 
 func (e *PressureError) Error() string { return e.Err.Error() }
@@ -188,6 +191,9 @@ func (p Regs) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			}
 			if k.inited() {
 				refused.Inited = append(refused.Inited, k.at())
+			}
+			if k.unrolled() {
+				refused.Unrolled = append(refused.Unrolled, k.at())
 			}
 			return nil, false, nil
 		}

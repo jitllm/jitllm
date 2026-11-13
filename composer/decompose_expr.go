@@ -142,15 +142,19 @@ type exprSplit struct {
 	copied   map[KernelAt]bool
 	untailed map[KernelAt]bool
 	unjammed map[int]int
+	// unrolls is the times a kernel's form with its vector loops run
+	// several vectors a trip was refused, each halving them (Unroll).
+	unrolls map[KernelAt]int
 }
 
 func newExprSplit() *exprSplit {
-	return &exprSplit{terms: map[exprAt]bool{}, whole: map[int][]exprSize{}, unfused: map[int]bool{}, unjammed: map[int]int{}, unpaired: map[int]bool{}, unwide: map[KernelAt]bool{}, uninit: map[KernelAt]bool{}, copied: map[KernelAt]bool{}, untailed: map[KernelAt]bool{}, uncursored: map[int]bool{}, unsplit: map[int]bool{}, unvector: map[int]bool{}, unstreamed: map[KernelAt]bool{}, crowded: map[KernelAt]bool{}}
+	return &exprSplit{terms: map[exprAt]bool{}, whole: map[int][]exprSize{}, unfused: map[int]bool{}, unjammed: map[int]int{}, unpaired: map[int]bool{}, unwide: map[KernelAt]bool{}, uninit: map[KernelAt]bool{}, copied: map[KernelAt]bool{}, untailed: map[KernelAt]bool{}, uncursored: map[int]bool{}, unsplit: map[int]bool{}, unvector: map[int]bool{}, unstreamed: map[KernelAt]bool{}, crowded: map[KernelAt]bool{}, unrolls: map[KernelAt]int{}}
 }
 
-// splitRefused forms a part whose refused kernel took copies at a bank's
-// sheet (Cursor.Init) with its bases copied, then uncrowded, then with no
-// such takes; else one whose refused kernel walked a weight's planes
+// splitRefused forms a part whose refused kernel ran several vectors a trip
+// (Unroll) with half as many; else one whose refused kernel took copies at
+// a bank's sheet (Cursor.Init) with its bases copied, then uncrowded, then
+// with no such takes; else one whose refused kernel walked a weight's planes
 // along the rows (Streams) without that walk; else one whose refused kernel
 // ran several rows a call with half the rows a call, and nothing else; else
 // one whose refused kernel ran two heads a call with a head a call; else one
@@ -168,6 +172,13 @@ func (sp *exprSplit) splitRefused(err error) bool {
 		return false
 	}
 	more := false
+	for _, at := range pe.Unrolled {
+		sp.unrolls[at]++
+		more = true
+	}
+	if more {
+		return true
+	}
 	crowded := map[KernelAt]bool{}
 	for _, at := range pe.Crowded {
 		crowded[at] = true
