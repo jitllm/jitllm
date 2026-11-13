@@ -87,14 +87,17 @@ func (l lin) constant() (int64, bool) {
 	return 0, false
 }
 
-// single is l's one atom where l is that atom alone.
+// single is l's one atom where l is that atom alone. A constant is none.
 func (l lin) single() (int, bool) {
 	if len(l) != 1 {
 		return 0, false
 	}
 	for m, v := range l {
 		ids := monoIDs(m)
-		return ids[0], v == 1 && len(ids) == 1
+		if len(ids) != 1 {
+			return 0, false
+		}
+		return ids[0], v == 1
 	}
 	return 0, false
 }
