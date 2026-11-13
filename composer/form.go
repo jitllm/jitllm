@@ -69,7 +69,7 @@ func (r *Registry) Form(req Request) (Key, []Code, error) {
 		<-f.done
 		return key, f.codes, f.err
 	}
-	f := &formed{words: words, done: make(chan struct{})}
+	f := &formed{words: words, done: make(chan struct{}), err: fmt.Errorf("jit: the formation of key %#x did not finish", key)}
 	c.m[key] = f
 	c.n++
 	c.mu.Unlock()

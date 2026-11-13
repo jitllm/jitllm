@@ -1,6 +1,7 @@
 package cpudev
 
 import (
+	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -88,7 +89,7 @@ func (c *Forms) Of(req composer.Request, gr *graph.Graph, rows int, apart, whole
 		<-b.done
 		return b.f, b.err
 	}
-	b := &built{done: make(chan struct{})}
+	b := &built{done: make(chan struct{}), err: errors.New("the form's building did not finish")}
 	c.m[key] = b
 	c.mu.Unlock()
 	defer close(b.done)
