@@ -75,7 +75,8 @@ type Kernel struct {
 	Unpaired, Unwide, Uncursored bool
 	// Unvector is a kernel of a part whose vector form the registers refused
 	// with nothing else left to take apart: formed with no loop across lanes.
-	// BitsGPR is one whose float bits a bitcast takes go to the general
+	// BitsGPR is one whose float bits a bitcast takes, the words a float
+	// converts to and the words of a constants table go to the general
 	// registers, which spill: an Unvector kernel on an x86 device (Regs).
 	Unvector, BitsGPR bool
 	// Split is a kernel whose byte dots' runs HalfSplit cut, Unsplit one of

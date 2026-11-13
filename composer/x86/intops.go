@@ -224,6 +224,21 @@ func (a *Buf) VMOVDFromX(gp, src Reg) {
 	a.modrmReg(src, gp)
 }
 
+// VCVTTSS2SIL is gp = src's low float truncated to a signed 32-bit integer,
+// zero-extended, as VCVTTPS2DQ does each lane.
+func (a *Buf) VCVTTSS2SIL(gp, src Reg) {
+	a.vex(gp, Y0, src, noIndex, false, pF3, m0F, 0)
+	a.u8(0x2C)
+	a.modrmReg(gp, src)
+}
+
+// VCVTSS2SIL is VCVTTSS2SIL rounded as MXCSR rounds, as VCVTPS2DQ does.
+func (a *Buf) VCVTSS2SIL(gp, src Reg) {
+	a.vex(gp, Y0, src, noIndex, false, pF3, m0F, 0)
+	a.u8(0x2D)
+	a.modrmReg(gp, src)
+}
+
 // VCVTSI2SS is dst = src1 with its low float gp's signed 64-bit value.
 func (a *Buf) VCVTSI2SS(dst, src1, gp Reg) {
 	a.vex(dst, src1, gp, noIndex, false, pF3, m0F, 1)

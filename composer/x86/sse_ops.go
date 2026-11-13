@@ -292,6 +292,17 @@ func (a *Buf) CVTSS2SI(gp, src Reg) {
 	a.sseOp(0x2D, pF3, m0F, 1, gp, src)
 }
 
+// CVTTSS2SIL and CVTSS2SIL are CVTTSS2SI and CVTSS2SI to a signed 32-bit
+// integer, zero-extended: what CVTTPS2DQ and CVTPS2DQ make of each lane.
+func (a *Buf) CVTTSS2SIL(gp, src Reg) {
+	a.useISA(ISASSE2, "cvttss2si")
+	a.sseOp(0x2C, pF3, m0F, 0, gp, src)
+}
+func (a *Buf) CVTSS2SIL(gp, src Reg) {
+	a.useISA(ISASSE2, "cvtss2si")
+	a.sseOp(0x2D, pF3, m0F, 0, gp, src)
+}
+
 func iPADDB() sseIns      { return sseIns{"paddb", 0xFC, p66, m0F, ISASSE2} }
 func iPADDW() sseIns      { return sseIns{"paddw", 0xFD, p66, m0F, ISASSE2} }
 func iPADDD() sseIns      { return sseIns{"paddd", 0xFE, p66, m0F, ISASSE2} }

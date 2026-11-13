@@ -422,8 +422,16 @@ func (e *x86Lowerer) nodeSSE(i int) {
 			e.bin(a.UNPCKHPS, false, e.reg(i), e.reg(nd.A), e.reg(nd.B))
 		}
 	case OpRoundI32:
+		if e.gpr(i) {
+			a.CVTSS2SIL(e.reg(i), e.reg(nd.A))
+			return
+		}
 		a.CVTPS2DQ(e.reg(i), e.reg(nd.A))
 	case OpCvtI32:
+		if e.gpr(i) {
+			a.CVTTSS2SIL(e.reg(i), e.reg(nd.A))
+			return
+		}
 		a.CVTTPS2DQ(e.reg(i), e.reg(nd.A))
 	case OpCvtF32:
 		if src := e.reg(nd.A); e.gpr(nd.A) {

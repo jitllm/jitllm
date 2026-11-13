@@ -1733,7 +1733,7 @@ func (k *Kernel) VectorWords() map[int]bool {
 	for i := range k.Nodes {
 		nd := &k.Nodes[i]
 		switch {
-		case nd.Op == OpLanes || nd.Op == OpBroadcast && nd.Type != ir.F32 || nd.Op == OpLoad && k.Bufs[nd.Buf].Operand.Kind == OperandConsts && nd.Type != ir.F32:
+		case nd.Op == OpLanes || nd.Op == OpBroadcast && nd.Type != ir.F32 || nd.Op == OpLoad && k.Bufs[nd.Buf].Operand.Kind == OperandConsts && nd.Type != ir.F32 && !k.BitsGPR:
 			set(i)
 		case vec && nd.Op == OpLoad && nd.Type != ir.F32 && !k.Bufs[nd.Buf].Half && i < len(hs) && hs[i] >= 0 && (k.Loops[hs[i]].Lanes > 0 || k.Loops[hs[i]].Wide > 0 && !addr[i]):
 			// A word a vector loop loads is a lane's each.
@@ -1742,7 +1742,7 @@ func (k *Kernel) VectorWords() map[int]bool {
 			if data(nd.A) && k.Nodes[nd.A].Op != OpConst {
 				set(nd.A)
 			}
-		case nd.Op == OpBitcast && !k.BitsGPR || nd.Op == OpCvtI32:
+		case (nd.Op == OpBitcast || nd.Op == OpCvtI32 || nd.Op == OpRoundI32) && !k.BitsGPR:
 			if k.Nodes[nd.A].Type == ir.F32 {
 				set(i)
 			}
@@ -1784,7 +1784,7 @@ func (k *Kernel) VectorWords() map[int]bool {
 				if in[i] || nd.Type == ir.F32 {
 					continue
 				}
-				v := nd.Op == OpHalf || nd.Op == OpRoundI32 || (nd.Op == OpLess || nd.Op == OpEq) && (k.Nodes[nd.A].Type == ir.F32 || in[nd.A] || in[nd.B])
+				v := nd.Op == OpHalf || nd.Op == OpRoundI32 && !k.BitsGPR || (nd.Op == OpLess || nd.Op == OpEq) && (k.Nodes[nd.A].Type == ir.F32 || in[nd.A] || in[nd.B])
 				if !v && (nd.Op == OpAnd || nd.Op == OpGtW || nd.Op == OpAndNot || nd.Op == OpXor || nd.Op == OpShr || nd.Op == OpShl || nd.Op == OpSar || (nd.Type == ir.I32 || nd.Type == ir.U32) && nd.Op != OpConst && nd.Op != OpLoad) {
 					for _, a := range k.args(i, &buf) {
 						v = v || in[a]
