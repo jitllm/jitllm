@@ -111,20 +111,22 @@ type KVConvPlan struct {
 type TowerPlans struct {
 	Entry []map[uint8]PartPlan
 	// Band is each class's band forms, nil where its resize runs whole
-	// (graph.Attrs.PicPass); Acc the words each of the bands' accumulators
-	// holds and BandOut the words a band form's own value takes.
+	// (graph.Attrs.PicPass), and Scratch each class's words they need.
 	Band    []map[uint8]PartPlan
-	Acc     int
-	BandOut int
-	// HAcc is the words each horizontal accumulator a picture's column
-	// bands add into holds (graph.PicCols).
-	HAcc int
-	Head PartPlan
-	Taps []PartPlan
+	Scratch []BandScratch
+	Head    PartPlan
+	Taps    []PartPlan
 	// Chain is a chained tower's blocks' plans in order (jlm.Tower.Chain),
 	// each over its block's own grid, its weights the block's tensors.
 	Chain []PartPlan
 }
+
+// BandScratch is the words a class's bands run in: each of the bands'
+// accumulators, each horizontal accumulator a picture's column bands add
+// into (graph.PicCols), and a band form's own value. A device holds them
+// from the first run of a class that needs them, not from placement: a
+// video's frames are a class far past any picture's.
+type BandScratch struct{ Acc, HAcc, BandOut int }
 
 // TowerChain is a chained tower's blocks on a device: block i over the rows
 // in into out, its weights block li's tensors w as the instance's pager

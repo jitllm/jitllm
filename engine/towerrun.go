@@ -170,12 +170,7 @@ func (in *Instance) newTowerRun(tg *model.TowerGraphs, base int, t *jlm.Tower) (
 			}
 			band[px] = ts.partPlan(g, cl.Rows, nil)
 		}
-		if band != nil {
-			plans.Acc = max(plans.Acc, cl.Pic.Area()*3)
-			plans.BandOut = max(plans.BandOut, cl.Rows*3)
-			plans.HAcc = max(plans.HAcc, composer.PicHCap(model.ColumnPic(cl.Pic))*3)
-		}
-		plans.Band = append(plans.Band, band)
+		plans.Band, plans.Scratch = append(plans.Band, band), append(plans.Scratch, bandScratch(cl.Pic, cl.Rows, band != nil))
 	}
 	tapsW := make([]nn.Tensors, len(tg.Taps))
 	for j, g := range tg.Taps {
@@ -202,6 +197,15 @@ func (in *Instance) newTowerRun(tg *model.TowerGraphs, base int, t *jlm.Tower) (
 		}
 	}
 	return tr, nil
+}
+
+// bandScratch is the words a picture class of resize a and rows rows runs
+// its bands in (nn.BandScratch), none where its resize runs whole.
+func bandScratch(a graph.Attrs, rows int, banded bool) nn.BandScratch {
+	if !banded {
+		return nn.BandScratch{}
+	}
+	return nn.BandScratch{Acc: a.Area() * 3, HAcc: composer.PicHCap(model.ColumnPic(a)) * 3, BandOut: rows * 3}
 }
 
 // squareRequest writes square sq's words of a picture of squares squares

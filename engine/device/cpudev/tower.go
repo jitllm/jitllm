@@ -15,19 +15,22 @@ import (
 type Tower struct {
 	x     *Exec
 	entry []map[uint8]*Form
-	// band is each class's band forms (graph.Attrs.PicPass), acc the bands'
-	// accumulators (a video pair's second frame the second) and bandOut a
-	// band form's own value; Bands counts the band runs.
-	band    []map[uint8]*Form
-	acc     [2][]uint32
-	hacc    [2][]uint32
-	bandOut []float32
-	Bands   int
-	head    *Form
-	taps    []*Form
-	dense   Tensors
-	tapsW   []Tensors
-	bound   Bound
+	// band is each class's band forms (graph.Attrs.PicPass), need each
+	// class's scratch, acc the bands' accumulators (a video pair's second
+	// frame the second) and bandOut a band form's own value, held from the
+	// first run of a class that needs them (fit); Bands counts the band runs.
+	band     []map[uint8]*Form
+	need     []nn.BandScratch
+	acc      [2][]uint32
+	hacc     [2][]uint32
+	bandOut  []float32
+	outWords []uint32
+	Bands    int
+	head     *Form
+	taps     []*Form
+	dense    Tensors
+	tapsW    []Tensors
+	bound    Bound
 	// chain is a chained tower's blocks' forms (nn.TowerChain), chainN the
 	// rows each runs over, headN the rows of the head's first input, and
 	// io a chained head's call's buffers.
@@ -66,9 +69,10 @@ func NewTower(x *Exec, p TowerPlans, dense Tensors, taps []Tensors) (*Tower, err
 		}
 		t.band = append(t.band, forms)
 	}
-	t.acc = [2][]uint32{make([]uint32, p.Acc), make([]uint32, p.Acc)}
-	t.hacc = [2][]uint32{make([]uint32, p.HAcc), make([]uint32, p.HAcc)}
-	t.bandOut = make([]float32, p.BandOut)
+	if len(p.Scratch) != len(t.band) {
+		return nil, fmt.Errorf("the tower's %d classes state %d classes' band scratch", len(t.band), len(p.Scratch))
+	}
+	t.need = p.Scratch
 	f, err := x.FormGraph(p.Head)
 	if err != nil {
 		return nil, fmt.Errorf("the tower's head: %w", err)
@@ -112,12 +116,41 @@ func (t *Tower) run(f *Form, li int, w Tensors, n int, req, pos, pic []uint32, i
 	return nil
 }
 
+// fit holds class's band scratch: the device's own words, replacing smaller
+// ones at the first run of a class that needs more.
+func (t *Tower) fit(class int) {
+	n, d := t.need[class], t.x.Device()
+	if len(t.acc[0]) < n.Acc {
+		for i := range t.acc {
+			d.dropWords(t.acc[i])
+			t.acc[i] = d.ownWords(n.Acc)
+		}
+	}
+	if len(t.hacc[0]) < n.HAcc {
+		for i := range t.hacc {
+			d.dropWords(t.hacc[i])
+			t.hacc[i] = d.ownWords(n.HAcc)
+		}
+	}
+	if len(t.bandOut) < n.BandOut {
+		d.dropWords(t.outWords)
+		t.outWords = d.ownWords(n.BandOut)
+		t.bandOut = unsafe.Slice((*float32)(unsafe.Pointer(&t.outWords[0])), n.BandOut)
+	}
+}
+
+// ScratchWords is the words of band scratch t holds.
+func (t *Tower) ScratchWords() int {
+	return len(t.acc[0]) + len(t.acc[1]) + len(t.hacc[0]) + len(t.hacc[1]) + len(t.bandOut)
+}
+
 // Entry runs picture class class's entry of sample format px over the
 // picture's words pic into a square's n patch rows (nn.TowerParts).
 func (t *Tower) Entry(class int, px uint8, pic, req, pos []uint32, n int, rows []float32) error {
 	if class < 0 || class >= len(t.entry) || t.entry[class][px] == nil {
 		return fmt.Errorf("the tower's entry has no form for class %d's samples of format %d", class, px)
 	}
+	t.fit(class)
 	if err := t.run(t.entry[class][px], -1, t.dense, n, req, pos, pic, rows); err != nil {
 		return fmt.Errorf("the tower's entry: %w", err)
 	}
@@ -130,6 +163,7 @@ func (t *Tower) Band(class int, key uint8, pic, req, pos []uint32, n int) error 
 	if class < 0 || class >= len(t.band) || t.band[class][key] == nil {
 		return fmt.Errorf("the tower's entry has no band form %d for class %d", key, class)
 	}
+	t.fit(class)
 	if err := t.run(t.band[class][key], -1, t.dense, n, req, pos, pic, t.bandOut); err != nil {
 		return fmt.Errorf("the tower's entry band: %w", err)
 	}
