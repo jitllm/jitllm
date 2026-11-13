@@ -197,7 +197,7 @@ func cpuWideProfile() Profile {
 // mainBlock is main's host constant block, its words 0 to 10.
 func mainBlock() []uint32 {
 	var out []uint32
-	for _, v := range []float32{float32(math.Log2E), -0.693359375, 2.12194440e-4, 1.0 / 120, 1.0 / 24, 1.0 / 6, 0.5, 1, -87.3} {
+	for _, v := range []float32{float32(math.Log2E), -0.693359375, 2.12194440e-4, 1.0 / 120, 1.0 / 24, 1.0 / 6, 0.5, 1, -88} {
 		out = append(out, math.Float32bits(v))
 	}
 	return append(out, 127, math.Float32bits(88))

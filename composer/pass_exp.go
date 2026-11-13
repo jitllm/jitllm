@@ -7,9 +7,11 @@ import (
 )
 
 // Exp writes exp out for a device with no instruction for it: x clamped to
-// [-87.3, 88], n = round(x*log2e), r = x - n*ln2 with ln2 in two parts so
+// [-88, 88], n = round(x*log2e), r = x - n*ln2 with ln2 in two parts so
 // n*hi is exact, exp(r) by Horner on ((((c5 r + c4) r + c3) r + c2) r + 1) r
-// + 1, and 2^n made in the exponent field as (n + 127) << 23. Where
+// + 1, and 2^n made in the exponent field as (n + 127) << 23. At -88 n is
+// -127, whose exponent field is 0, so exp of anything at or below it, -Inf
+// among them, is 0 exactly, as a token a cut sends to -Inf must be. Where
 // Scratch is set, the value is worked in Scratch[0], the register of the
 // value it is made from, and the result returned there, and the
 // reduction's and the polynomial's values take Scratch[1], the exponent's
@@ -60,7 +62,7 @@ func (k *Kernel) expand(i int, scratch [3]int) {
 			}
 		}
 	}
-	lo, hi := k.add(Node{Op: OpConst, Type: F, Imm: int64(math.Float32bits(-87.3))}), k.add(Node{Op: OpConst, Type: F, Imm: int64(math.Float32bits(88))})
+	lo, hi := k.add(Node{Op: OpConst, Type: F, Imm: int64(math.Float32bits(-88))}), k.add(Node{Op: OpConst, Type: F, Imm: int64(math.Float32bits(88))})
 	hint(lo, 0)
 	hint(hi, 0)
 	x = k.bin(OpMin, F, k.bin(OpMax, F, x, lo), hi)
