@@ -1,6 +1,7 @@
 package cpudev
 
 import (
+	"slices"
 	"unsafe"
 
 	"github.com/jitllm/jitllm/internal/offheap"
@@ -39,6 +40,22 @@ func (d *Device) ownWords(n int) []uint32 {
 		}
 	}
 	return make([]uint32, n)
+}
+
+// dropWords gives back w, words ownWords made, before d closes: a buffer a
+// larger one replaced.
+func (d *Device) dropWords(w []uint32) {
+	if len(w) == 0 {
+		return
+	}
+	p := unsafe.Pointer(&w[0])
+	for i, m := range d.mapped {
+		if unsafe.Pointer(&m[0]) == p {
+			offheap.UnmapOffHeap(m)
+			d.mapped = slices.Delete(d.mapped, i, i+1)
+			return
+		}
+	}
 }
 
 // Close returns the own buffers d holds off the heap.

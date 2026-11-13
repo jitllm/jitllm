@@ -27,6 +27,56 @@ func TestATallPictureRunsInBands(t *testing.T) {
 	}
 }
 
+// TestBandScratchFollowsTheClassThatRan encodes pictures of two classes
+// through synth-qwen2vl's tower on the CPU device and reads the band scratch
+// it holds: none once the instance is made, then after each picture the
+// most any class run so far needs. Held from placement, every instance would
+// carry the scratch of its largest class -- a video's frames, far past any
+// picture's -- whether or not one ever runs.
+func TestBandScratchFollowsTheClassThatRan(t *testing.T) {
+	m, _, opts := openQVLTower(t, "synth-qwen2vl")
+	defer m.Close()
+	s := testInstance(t, m, 64, opts...)
+	defer s.Close()
+	tw, ok := s.tower.parts.(*cpudev.Tower)
+	if !ok {
+		t.Fatalf("the tower's parts are %T, not the CPU device's", s.tower.parts)
+	}
+	if n := tw.ScratchWords(); n != 0 {
+		t.Fatalf("the instance holds %d words of band scratch before a picture runs", n)
+	}
+	tg := s.m.Tower
+	words := func(cl int) int {
+		c := append(slices.Clone(tg.Classes), tg.Videos...)[cl]
+		b := bandScratch(c.Pic, c.Rows, len(c.Band) > 0)
+		return 2*b.Acc + 2*b.HAcc + b.BandOut
+	}
+	most := 0
+	for cl := range len(tg.Classes) + len(tg.Videos) {
+		most = max(most, words(cl))
+	}
+	held, below := 0, false
+	for _, sz := range [][2]int{{320, 9000}, {8300, 8300}} {
+		sq, _ := squareOf(t, tg, sz[0], sz[1], 0)
+		img := image.NewNRGBA(image.Rect(0, 0, sz[0], sz[1]))
+		for i := range img.Pix {
+			img.Pix[i] = uint8(i * 7)
+		}
+		if _, err := s.EncodePicture(img); err != nil {
+			t.Fatalf("a %dx%d picture: %v", sz[0], sz[1], err)
+		}
+		held = max(held, words(sq.Class))
+		if got := tw.ScratchWords(); got != held {
+			t.Fatalf("after a %dx%d picture (class %d) the tower holds %d words of band scratch, want %d", sz[0], sz[1], sq.Class, got, held)
+		}
+		below = below || (held > 0 && held < most)
+		t.Logf("a %dx%d picture, class %d: %d words held of the largest class's %d", sz[0], sz[1], sq.Class, held, most)
+	}
+	if !below {
+		t.Fatalf("no picture ran a banded class below the largest (%d words): the gate cannot tell a scratch held from placement", most)
+	}
+}
+
 // tallPicture encodes a w x h picture through instance s's tower: not
 // refused, every band its class's resize holds at the picture's width run,
 // its rows finite and a black picture's other.
