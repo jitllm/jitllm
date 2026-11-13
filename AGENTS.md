@@ -830,8 +830,10 @@ into a call site.
 layer migration across devices rather than only to and from the host, and
 device-side paging. Two instances put one block, and the projection, on
 different cards of one tier, each session routed to its own copy
-(`TestTwoInstancesRunABlockOnTwoCards`). Not done, named rather than implied:
-the sessions-per-device budget.
+(`TestTwoInstancesRunABlockOnTwoCards`). How many sessions' history a card
+holds at a context is its room past the instance, measured
+(`TestACardHoldsTheSessionsItsRoomStates`); past it history goes home and is
+streamed back, and a session's state takes a streamed block's page.
 
 - **The libraries read no environment.** Every knob is a `With...()` option;
   `cmd/jitllm` reads the `JITLLM_*` names and passes them through. The one file
