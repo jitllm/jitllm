@@ -1707,7 +1707,11 @@ type GenerateOptions struct {
 	// PredictTime, when set, ends the reply at its first token whose text
 	// holds a newline once this long has passed since decoding began, as
 	// FinishMaxTokens: llama-server's t_max_predict_ms.
-	PredictTime  time.Duration
+	PredictTime time.Duration
+	// MinIndent, when set, ends the reply at a line past its first newline
+	// that starts with fewer than MinIndent spaces or tabs before its first
+	// other character, as FinishMaxTokens: llama-server's n_indent.
+	MinIndent    int
 	Sampling     *engine.Sampler
 	Stop         []string
 	Continue     bool
@@ -1948,6 +1952,38 @@ type Event struct {
 	Started  *Started
 	Token    *Token
 	Finished *Finished
+}
+
+// indentRule is GenerateOptions.MinIndent read over a reply's text as it
+// comes: once the reply holds a newline, each line must start with at least
+// min spaces or tabs before its first other character.
+type indentRule struct {
+	min           int
+	newline, text bool
+	indent        int
+}
+
+// short says chunk, the reply's next text, starts a line short of its
+// indentation: the reply ends on it.
+func (r *indentRule) short(chunk string) bool {
+	if r.min <= 0 {
+		return false
+	}
+	for i := 0; i < len(chunk); i++ {
+		switch c := chunk[i]; {
+		case c == '\n':
+			r.newline, r.text, r.indent = true, false, 0
+		case r.text:
+		case c == ' ' || c == '\t':
+			r.indent++
+		default:
+			r.text = true
+			if r.newline && r.indent < r.min {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // pastPredictTime says a reply whose decode began at start ends on a token
@@ -2321,6 +2357,7 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 	stopMatched := ""
 	out := make([]int32, 0, min(maxTokens, 4096))
 	decodeStart := time.Now()
+	ind := indentRule{min: o.MinIndent}
 	n := 0
 	// pend is what a speculative round decided and the reply has not taken
 	// yet; the first is Start's.
@@ -2419,7 +2456,7 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 			n++
 			break
 		}
-		if pastPredictTime(o.PredictTime, decodeStart, chunk) {
+		if ind.short(chunk) || pastPredictTime(o.PredictTime, decodeStart, chunk) {
 			n++
 			break
 		}

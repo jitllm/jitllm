@@ -58,13 +58,18 @@ stages it leaves out off, so a list without `temperature` draws at 1. A prompt
 `{"prompt_string": ..., "multimodal_data": [...]}` carries base64 pictures,
 each standing where the text holds `<__media__>`, in order, wrapped in the
 markers the model's container states, after the model's leading specials, as
-llama-server's mtmd places them; the counts must agree.
+llama-server's mtmd places them; the counts must agree. `n_indent` ends the
+reply at a line, past its first newline, that starts with fewer spaces or tabs
+than asked before its first other character, `stop_type` `limit`, that
+character and what follows it cut from the answer as llama-server cuts them.
+`t_max_prompt_ms` is taken to no effect, as llama-server takes it (its server
+leaves it unimplemented).
 
 A field the engine cannot honour is refused by name with a 400, at any value
 but its neutral one: `dry_multiplier`, `adaptive_target`, `min_keep`,
 a `samplers` list out of the draw's order or naming `infill` or `adaptive_p`,
-`n_indent`, `n_keep`, `n_discard`, `n_cache_reuse`, `t_max_prompt_ms`,
-`return_progress`, `post_sampling_probs`, `lora`, `embd_normalize` other
+`n_keep`, `n_discard`, `n_cache_reuse`, `return_progress`,
+`post_sampling_probs`, `lora`, `embd_normalize` other
 than 2, and an audio file in `multimodal_data`. The top-level
 `multimodal_data` and `image_data` older llama-servers read are refused,
 naming `prompt.multimodal_data`. A field llama.cpp does not define is

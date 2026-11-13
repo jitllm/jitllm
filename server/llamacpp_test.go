@@ -361,6 +361,33 @@ func TestLlamaPredictTimeReachesTheEngine(t *testing.T) {
 // TestLlamaSSEPings: a stream silent for sse_ping_interval seconds is sent an
 // SSE comment, once for each such silence; -1 sends none, and the 30 second
 // default none in a stream that never falls silent that long.
+// TestLlamaIndentAndPromptTime: n_indent reaches the generate as MinIndent
+// and the answer is cut at the line the indentation ended it on, its leading
+// spaces kept; t_max_prompt_ms is taken, to no effect, as llama-server takes
+// it.
+func TestLlamaIndentAndPromptTime(t *testing.T) {
+	f := &llamaFake{fakeBackend: &fakeBackend{tokens: []string{"a", "\n", "  b", "\n c", "d"}, reason: FinishMaxTokens}}
+	s := llamaServe(t, f)
+	code, out := llamaPost(t, s, "/completion", `{"prompt":"x","n_indent":2,"t_max_prompt_ms":500}`)
+	if code != 200 {
+		t.Fatalf("%d %v", code, out)
+	}
+	if f.opts().MinIndent != 2 {
+		t.Fatalf("n_indent reached the generate as %d", f.opts().MinIndent)
+	}
+	if out["content"] != "a\n  b\n " {
+		t.Fatalf("content %q, want the short line cut at its first character", out["content"])
+	}
+	for in, want := range map[string]string{"a\n  b": "a\n  b", "a\n b": "a\n ", "a\n  ": "a\n  ", "ab": "ab", "a\n\tb": "a\n\t"} {
+		if got := cutShortLine(in, 2); got != want {
+			t.Errorf("cutShortLine(%q, 2) = %q, want %q", in, got, want)
+		}
+	}
+	if code, _ := llamaPost(t, s, "/completion", `{"prompt":"x"}`); code != 200 || f.opts().MinIndent != 0 {
+		t.Fatalf("no n_indent: %d, MinIndent %d", code, f.opts().MinIndent)
+	}
+}
+
 func TestLlamaSSEPings(t *testing.T) {
 	f := &llamaFake{fakeBackend: &fakeBackend{tokens: []string{"a", "b"}, reason: FinishEOS, beforeToken: func(i int) {
 		if i == 1 {
