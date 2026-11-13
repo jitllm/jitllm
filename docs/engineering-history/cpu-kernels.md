@@ -3409,7 +3409,9 @@ Q5_K 176, both +0.0% over their GGUF; Llama-3.1-8B's container went
 emit-time constants (`engine/device/cpu/scstream.go`: `scField`, `scStep`). The SC cursor
 steps three plane strides a super-block, and a straddling field reads the next
 word -- on amd64 by stepping the cursor there and back around the load, because
-no general-purpose register is free (R14 is g); arm64 uses a spare X register.
+no general-purpose register was free (R14 was held back as g; inside the ABI0
+trampoline it is scratch, and the composer's binder takes it since); arm64 uses
+a spare X register.
 Converted: amd64 fused, tile, tiled, wide, prefill GEMM, SSE tile and fused, and
 both row kernels; arm64 matvec (all three forms), tiled, GEMM and row. Device:
 matvec, MMA, Volta MMA and GEMM, Metal GEMM, get-rows, the GPU unpack writer, and
