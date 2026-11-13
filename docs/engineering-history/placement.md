@@ -4780,3 +4780,30 @@ read after placement (gpu.Stats): the composed parts 3194511284 bytes ->
 35, the forwards paging 89 blocks in -> 78. Both pass every check of the
 arm: the card's answer against the CPU's, two sessions stepped together,
 nothing formed at a step.
+
+## Sessions per device, measured
+
+How many sessions a card holds at a given context stood here and in
+open-questions.md as bounded by pages and unmeasured. It is the card's room
+past the instance divided by a session's history at that context, and
+engine.TestACardHoldsTheSessionsItsRoomStates holds the card to it: an
+instance placed wholly on the card, sessions leasing it prefilled to the
+same context one by one, the card's budget set after the first to what it
+holds plus room for two more and half of one, each session's prompt its own
+so no page is shared. The two hold their history on the card -- its history
+grows by a whole session's (Stats.KVBytes), no page is sent home
+(Stats.KVEvictions), no block pages out -- and the one past them holds only
+part of its history there and runs; with room for half of one, the second
+holds part of its.
+
+Llama-3.2-1B-Instruct Q4_K_M on a 16 GB V100, sessions at 512 positions:
+33554432 bytes of history a session, on CUDA and on Vulkan alike. With
+room for two and a half, three sessions held their history whole and the
+fourth sent 3 pages home; with room for half of one, the second held
+8388608 bytes of its own on CUDA and 14680064 on Vulkan.
+
+Past the room nothing is refused: a sequence's history goes home and is
+streamed back for its attention (kvevict.go), a session's first recurrent
+state or KV cache takes a streamed block's page (stateFits, as a growing
+history does), and sessions stepping at once that find no lane free take
+turns ("Sessions at once", device-sessions.md).
