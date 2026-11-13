@@ -347,12 +347,18 @@ func (g *devTier) compilePart(sl *composedPart, codes []composer.Code, rows int)
 	}
 	// A scratch binding no kernel reads or writes -- a sum a pass carried in
 	// registers, still a parameter -- is bound to a word: at a prompt's rows
-	// the sub-block dots alone are gigabytes.
+	// the sub-block dots alone are gigabytes. So is a value no kernel reads or
+	// writes: one a pass recomputes where it is read (a softcapped head's
+	// doubled sigmoid, a row of logits wide at every row).
 	live := map[composer.Operand]bool{}
+	liveVal := map[graph.ValueID]bool{}
 	for _, c := range codes {
 		for _, bd := range c.Binds {
 			if bd.Read || bd.Writes {
 				live[bd.Operand] = true
+				if bd.Operand.Kind == composer.OperandValue {
+					liveVal[bd.Operand.Value] = true
+				}
 			}
 		}
 	}
@@ -384,10 +390,16 @@ func (g *devTier) compilePart(sl *composedPart, codes []composer.Code, rows int)
 				// may reach past the rows' width (the CPU sizes it so too).
 				i, ok := vals[o.Value]
 				if !ok {
-					i = buf(4*rows*gr.Values[o.Value].Width, nil)
+					n := 4 * rows * gr.Values[o.Value].Width
+					if !liveVal[o.Value] {
+						n = 4
+					}
+					i = buf(n, nil)
 					vals[o.Value] = i
 				}
-				f.own[i].n = max(f.own[i].n, int(bd.Bytes))
+				if liveVal[o.Value] {
+					f.own[i].n = max(f.own[i].n, int(bd.Bytes))
+				}
 				args = append(args, partArg{kind: partOwn, i: i})
 			case o.Kind == composer.OperandWeight && o.Region >= 0 && o.Region < 3:
 				args = append(args, partArg{kind: partWeight, role: o.Role, region: o.Region, from: o.Instance})
