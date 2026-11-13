@@ -435,9 +435,9 @@ func (b *Builder) emit(o Op) Value {
 
 // Shared declares a workgroup-local array of n elements and returns a buffer
 // value usable with Load and Store. The size is a compile-time constant on all
-// three targets.
+// three targets. The name is the reader's: the lowerers name the array by
+// its value index (each backend's emit).
 func (b *Builder) Shared(name string, elem Type, n int) Value {
-	_ = name // the lowerers name it by value index; see each backend's emit
 	return b.emit(Op{Kind: OpShared, Type: elem, Imm: int64(n)})
 }
 
@@ -761,12 +761,9 @@ func (k *Kernel) Validate() error {
 				return fmt.Errorf("ir: op %d: an MMA kernel needs a workgroup of 32n x 1 x 1 "+
 					"so that lane == tid mod 32; this one is %v", i, k.Group)
 			}
-			if depth > 0 {
-				// An MMA is warp-synchronous like a shuffle: every lane must
-				// execute it. Loops here are uniform-trip by construction, so
-				// this is allowed, unlike Shared.
-				_ = depth
-			}
+			// An MMA is warp-synchronous like a shuffle: every lane must
+			// execute it. Loops here are uniform-trip by construction, so one
+			// inside a loop is allowed, unlike Shared.
 		case OpLoadV, OpStoreV:
 			if _, n := VecOf(o); n != 2 && n != 4 || (o.Kind == OpStoreV && len(o.Vargs) != n) {
 				return fmt.Errorf("ir: op %d: a %s of %d elements", i, o.Kind, n)

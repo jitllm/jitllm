@@ -462,7 +462,6 @@ func (l *lowerer) matchEnd(i int) int {
 // hoisted to the header and their back-edge operands patched in once the body
 // has been walked.
 func (l *lowerer) block(lo, hi int) error {
-	m := &l.m
 	for i := lo; i < hi; i++ {
 		o := l.k.Ops[i]
 		v := ir.Value(i + 1)
@@ -530,7 +529,6 @@ func (l *lowerer) block(lo, hi int) error {
 			}
 			l.val[v] = id
 		}
-		_ = m
 	}
 	return nil
 }
@@ -579,7 +577,6 @@ func (l *lowerer) arith(o ir.Op) (uint32, error) {
 		}
 		return iop
 	}
-	_ = pick
 	switch o.Kind {
 	case ir.OpAdd:
 		inst(&l.m.funcs, pick(opIAdd, opFAdd), t, id, a, b)

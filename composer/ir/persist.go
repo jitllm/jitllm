@@ -254,7 +254,6 @@ func Persist(name string, parts []Part, w, grid int) (*Persisted, error) {
 	if err := k.Validate(); err != nil {
 		return nil, fmt.Errorf("ir: Persist %s: %w", name, err)
 	}
-	_ = sync
 	return &Persisted{K: k, Bufs: bufs, Phases: phase[len(phase)-1] + 1, Grid: grid}, nil
 }
 
