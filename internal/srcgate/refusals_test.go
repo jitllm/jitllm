@@ -103,12 +103,37 @@ func TestNoRefusalButInputsAndLimits(t *testing.T) {
 		"backend/vulkan/subgroup.go:lanes and cannot be":              "a device whose subgroup width varies: the device's limit",
 		"backend/vulkan/subgroup.go:cannot be promised":               "a device whose subgroup width varies: the device's limit",
 		"backend/vulkan/subgroup.go:cannot be pinned":                 "a device whose subgroup width varies: the device's limit",
+
+		"engine/audiorun.go:past the sound op's":                              "a clip whose resampler runs past the taps the sound op is formed for (a rate past 10 MHz, or 64 channels past 1.5 MHz): the input's check",
+		"model/tower.go:past the sound op's":                                  "a clip whose resampler runs past the taps the sound op is formed for (a rate past 10 MHz, or 64 channels past 1.5 MHz): the input's check",
+		"engine/device/cpudev/form.go:past the argument block":                "a code's word past its own argument block: the lowering broken, an invariant",
+		"engine/device/gpu/picrows.go:live rows past the":                     "a picture's live rows past its form's, which the tower forms for every class at placement: an invariant",
+		"engine/device/gpu/served.go:more than the block's":                   "a call's experts past the block's slots, which pagedCall holds the call to: an invariant",
+		"engine/device/gpu/layer.go:wanted rows past the":                     "rows past the logits the step's staging was built for: an invariant",
+		"engine/device/gpu/rows.go:more than the batch width":                 "a step's rows past the batch width, which the router chunks it to: an invariant",
+		"engine/device/gpu/rows.go:more than the reserved width":              "a step's rows past the reserved width, which its caller chunks it to: an invariant",
+		"model/ngram.go:reads past the table's":                               "an n-gram head past its table's rows: the container's check",
+		"model/picture.go:past its %d pixels":                                 "a resize stage past the pixels its processor states: the input's check",
+		"model/tower.go:its samples' U32 offsets reach":                       "a picture past 4 GiB, the reach of its samples' 32-bit offsets: the index width",
+		"model/video.go:past its table of":                                    "a video value past its stated table: the container's check",
+		"model/video.go:past the %d the picture table holds":                  "a video pair past 4 GiB, the reach of the picture table's 32-bit offsets: the index width",
+		"composer/generate_scan.go:row store reads its state past its update": "a scan read out of order: the lowering broken, an invariant",
+		"composer/generate_scan.go:sum reads its state past its update":       "a scan read out of order: the lowering broken, an invariant",
+		"composer/lowergpu.go:past the device's":                              "a kernel's workgroup memory past the device's: the device's limit",
+		"format/jlm/format.go:runs past the":                                  "a container span past its file: the container's check",
+		"format/jlm/format.go:run past the":                                   "a container's pages past its file: the container's check",
+		"format/jlm/tower.go:past its pictures'":                              "a tower whose video frames outgrow its pictures: the container's check",
+		"format/jlm/tower.go:past its last":                                   "a tower step's value past its last: the container's check",
+		"format/jlm/read.go:past the %d-byte file":                            "a container span past its file: the container's check",
+		"format/jlm/read.go:run past the %d pages":                            "an expert page's sheets past the container's pages: the container's check",
+		"format/jlm/codec.go:is past the":                                     "a container span past its file: the container's check",
 	}
 	// phrase is a string literal that says the code refuses: something
 	// refused, not implemented, not supported, not built or not available,
 	// a model, a container or a device that reads or states no such thing,
-	// cannot or has no form or lowering of it, or has too many of it.
-	phrase := regexp.MustCompile(`"[^"\n]*(?i:not implemented|is not supported|are not supported|not built|unsupported|is refused|refuses|\b(?:reads|states) no\b|cannot|can not|too many|too wide|no device kernel|no lowering|does not support|not pre-packed|has no form|no form of|not available)[^"\n]*"`)
+	// cannot or has no form or lowering of it, or has too many of it, or
+	// more than, or past, a count it holds.
+	phrase := regexp.MustCompile(`"[^"\n]*(?i:not implemented|is not supported|are not supported|not built|unsupported|is refused|refuses|\b(?:reads|states) no\b|cannot|can not|too many|too wide|no device kernel|no lowering|does not support|not pre-packed|has no form|no form of|not available|past the|past its|more than the)[^"\n]*"`)
 	root := filepath.Join("..", "..")
 	found := map[string]bool{}
 	var files int
@@ -156,7 +181,8 @@ func TestNoRefusalButInputsAndLimits(t *testing.T) {
 	}
 	t.Logf("%d files, %d refusals, each an input check or a limit", files, len(found))
 	for _, v := range []string{`"model: a sliding window is not supported"`, `"model: the block reads no window"`, `"model: the tower states no grid"`,
-		`"tier: block 3 cannot move to cuda:1"`, `"tier: 70 kernel arguments is too many"`, `"tier: its bank is not pre-packed"`} {
+		`"tier: block 3 cannot move to cuda:1"`, `"tier: 70 kernel arguments is too many"`, `"tier: its bank is not pre-packed"`,
+		`"a graph of 9 inputs and 1 outputs, past the 8 places the CPU's call site binds"`} {
 		if _, ok := allowedKey(allowed, "engine/forward.go", v); ok || !phrase.MatchString(v) {
 			t.Errorf("the violation %s, a refusal the list does not hold, was not seen", v)
 		}
