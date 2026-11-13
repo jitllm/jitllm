@@ -42,15 +42,13 @@ func residentKB() int {
 // of four made no error and held 322 MB. What the rounds hold is the growth
 // of the resident set over them: what earlier tests left resident is not
 // the compiles'. On an RTX 3050 Ti, 125 rounds grew it 26 MB, and the same
-// loop keeping every kernel it compiled grew it 1012 MB in 55.
+// loop keeping every kernel it compiled grew it 1012 MB in 55. It runs on
+// every device the selection opens, SPIR-V's among them where one is.
 func TestComposedGPUCompilesSideBySide(t *testing.T) {
 	testlock.GPU(t)
 	ran := 0
 	for _, d := range openDevices() {
 		defer d.Close()
-		if d.API() != "spirv" {
-			continue
-		}
 		ran++
 		s := graph.SampleTopK{NVocab: 37000, K: 256}
 		_, codes, err := composer.Default().Form(composer.Request{Graph: s.Build(), Part: composer.PartSample, Formats: map[jlm.Role]jlm.Type{},
@@ -108,6 +106,6 @@ func TestComposedGPUCompilesSideBySide(t *testing.T) {
 			d.Name(), rounds, len(codes), failed, (residentKB()-base)>>10, base>>10)
 	}
 	if ran == 0 {
-		t.Fatal("no SPIR-V device on this host: the gate runs on one")
+		t.Fatal("no GPU device opened: the gate runs on one")
 	}
 }
