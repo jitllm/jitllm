@@ -209,14 +209,12 @@ type streamBank struct {
 	want  []uint32
 	// The expert cache (initCache), nil without one: slotOf maps an expert
 	// to the slot holding it or -1, owner a slot to its expert or -1, used a
-	// slot to the tick it was last selected; slotSel is this token's
-	// selection in slots.
-	slotOf  []int32
-	owner   []int32
-	used    []uint64
-	tick    uint64
-	slotSel []uint32
-	bank    *resident
+	// slot to the tick it was last selected.
+	slotOf []int32
+	owner  []int32
+	used   []uint64
+	tick   uint64
+	bank   *resident
 	// plain is the bank a cache sized after placement replaced (cacheBlock),
 	// kept so dropCaches can give the cache back.
 	plain [3]*resident
@@ -376,12 +374,11 @@ func (st *streamBank) initCache(n, nExpert int) {
 		st.owner[i] = -1
 	}
 	st.used = make([]uint64, n)
-	st.slotSel = make([]uint32, len(st.sel))
 }
 
 // uncache returns a block to its plain bank: no cache, nothing held.
 func (st *streamBank) uncache() {
-	st.slotOf, st.owner, st.used, st.slotSel = nil, nil, nil, nil
+	st.slotOf, st.owner, st.used = nil, nil, nil
 	st.heat, st.own, st.hit, st.bank = nil, nil, nil, nil
 }
 
@@ -390,8 +387,7 @@ func (st *streamBank) cached() bool { return st.owner != nil }
 
 // lookup maps this token's selection onto cache slots: a hit keeps its slot,
 // a miss takes the least recently used slot this token does not need, and
-// only the misses become items. slotSel is the selection in slots, which the
-// kernels index by.
+// only the misses become items.
 func (st *streamBank) lookup(g *devTier) {
 	st.tick++
 	for _, e := range st.sel {
@@ -399,9 +395,8 @@ func (st *streamBank) lookup(g *devTier) {
 			st.used[s] = st.tick
 		}
 	}
-	for i, e := range st.sel {
-		if s := st.slotOf[e]; s >= 0 {
-			st.slotSel[i] = uint32(s)
+	for _, e := range st.sel {
+		if st.slotOf[e] >= 0 {
 			g.StreamCacheHits++
 			continue
 		}
@@ -417,7 +412,6 @@ func (st *streamBank) lookup(g *devTier) {
 			st.slotOf[o] = -1
 		}
 		st.owner[v], st.slotOf[e], st.used[v] = int32(e), int32(v), st.tick
-		st.slotSel[i] = uint32(v)
 		st.items = append(st.items, streamItem{e: e, slot: v})
 		g.StreamCacheMisses++
 	}
@@ -503,15 +497,11 @@ func (g *devTier) compactNeed(ws []nn.Weight, slots, cslots int) uint64 {
 
 // cacheSlotsFor is a streamed block's bank size in sheets: the selection, or
 // want (Config.StreamCacheSlots) when that is bigger and the device has room for
-// the block's own bank of that many beside what it already holds. A block
-// whose expert kernels read a per-expert vector by the selection itself
-// (biased: the experts' biases, or a scale of each expert's output) keeps the
-// plain bank: the cache rewrites the selection as slots. The composer's form
-// reads only the banks in pages through the page table.
-func (g *devTier) cacheSlotsFor(p *nn.LayerPlan, ws []nn.Weight, want, slots, bank int, biased bool) int {
-	if biased {
-		return slots
-	}
+// the block's own bank of that many beside what it already holds. The
+// composed form reads the banks in pages through the page table and every
+// per-expert vector (the experts' biases, a scale of each expert's output) by
+// the selection the card routed, so a cache serves a biased bank as any other.
+func (g *devTier) cacheSlotsFor(p *nn.LayerPlan, ws []nn.Weight, want, slots, bank int) int {
 	var sheet uint64
 	for i := 4; i <= 6; i++ {
 		x := ws[i]
@@ -1690,7 +1680,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	// Priced apart from the block, the room the block was admitted for went
 	// to the bank and its own tensors no longer fit.
 	if stream {
-		cslots = g.cacheSlotsFor(p, ws, g.StreamCacheSlots, slots, bank, w.Vector(jlm.RoleExpScale) != nil)
+		cslots = g.cacheSlotsFor(p, ws, g.StreamCacheSlots, slots, bank)
 		bankNeed := g.compactNeed(ws, slots, cslots)
 		if cslots > slots && !g.room(need+bankNeed) {
 			cslots = slots
@@ -1944,8 +1934,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 				if cslots < 0 {
 					// An auto-streamed block is placed on the plain bank;
 					// its cache comes after placement (sizeAutoCaches).
-					cslots = g.cacheSlotsFor(p, ws, g.StreamCacheSlots, slots, bank,
-						w.Vector(jlm.RoleExpScale) != nil)
+					cslots = g.cacheSlotsFor(p, ws, g.StreamCacheSlots, slots, bank)
 				}
 				e = cslots
 			}

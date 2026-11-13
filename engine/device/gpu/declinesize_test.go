@@ -3,8 +3,6 @@ package gpu
 import (
 	"strings"
 	"testing"
-
-	"github.com/jitllm/jitllm/nn"
 )
 
 // TestDeclineSizeRefusesOnlyWhatNoDeviceHolds is the size check placement asks
@@ -87,16 +85,5 @@ func TestAutoStreamMarksOnlyWhatABaseFits(t *testing.T) {
 	g.NoAutoStream = true
 	if g.AutoStream(8, 16*gib, 15*gib, 896, 16, 93, 0) {
 		t.Fatal("NoAutoStream streamed a block")
-	}
-}
-
-// TestBiasedExpertsKeepThePlainBank: a mixture whose experts carry biases
-// (gpt-oss) gets no expert cache, because the bias kernels index the true ids
-// the cache would overwrite with slots; on gpt-oss-20b that parted from the
-// host at the thirteenth token.
-func TestBiasedExpertsKeepThePlainBank(t *testing.T) {
-	g := newDevice(&devShared{Config: &Config{}, limit: 1 << 40})
-	if n := g.cacheSlotsFor(&nn.LayerPlan{}, nil, 64, 4, 32, true); n != 4 {
-		t.Fatalf("a biased bank got a %d-sheet cache", n)
 	}
 }

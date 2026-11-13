@@ -812,10 +812,10 @@ func (g *GPU) SetExpertMode(where string) int {
 // no cache). Measured rather than estimated -- the scratch,
 // the head and the shared bank are whatever they came to -- and sized per
 // card, so a card that took the head gives smaller caches than one that did
-// not. The kernels need nothing new: an indexed matvec addresses a sheet by
-// slot times its stride whatever the bank's size, so the slot ids the cache
-// writes over the selection index the bigger bank as they did the compact
-// one. A cache the card cannot allocate leaves the block on its plain bank.
+// not. The composed form needs nothing new: it reads each expert's sheet
+// through the page table whatever the bank's size (servedPart.pagedRun), and
+// every per-expert vector by the selection the card routed. A cache the card
+// cannot allocate leaves the block on its plain bank.
 func (g *GPU) sizeAutoCaches() {
 	if g.StreamCacheSlots != 0 {
 		return
@@ -896,10 +896,7 @@ func (g *devTier) sizeAutoCaches() {
 	var sheet uint64
 	k := 0
 	for _, l := range g.layers {
-		// A block whose experts carry biases keeps its plain bank: see
-		// cacheSlotsFor.
-		if l == nil || l.stream == nil || l.stream.cached() || l.down == nil ||
-			l.roleVector(jlm.RoleExpGateBias) != nil || l.roleVector(jlm.RoleExpUpBias) != nil || l.roleVector(jlm.RoleExpDownBias) != nil {
+		if l == nil || l.stream == nil || l.stream.cached() || l.down == nil {
 			continue
 		}
 		var s uint64

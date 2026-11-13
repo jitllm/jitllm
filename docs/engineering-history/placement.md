@@ -2988,7 +2988,13 @@ What "auto" restricted, read at the source and measured:
   are indexed by it.** A real bug, found by the sheets run parting from the host
   at the thirteenth token: biased banks now keep the plain bank
   (`TestBiasedExpertsKeepThePlainBank`); a second buffer of true ids would
-  lift it.
+  lift it. The kernels that read the slots went with the tier's own, and the
+  composed form never did: it reads each expert's sheet through the page
+  table (`servedPart.pagedRun`) and the biases by the selection the card
+  routed, so the exclusion guarded nothing and is gone -- and with it the
+  slots written over the selection, which nothing read. gpt-oss's banks are
+  cached like any other's, held to the whole banks' logits by
+  `TestComposedExpertPagesServe`'s cache arms.
 - **Hybrid refused Gemma 4's dense-MLP mixture and ungated experts.** Real: the
   host's expert path reads one vector and has no ungated fused path; ungated is
   now refused at offer rather than failing mid-token.
