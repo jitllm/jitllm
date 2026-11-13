@@ -42,15 +42,17 @@ reads it, and `n_cmpl` (or its alias `n`) asks for that many completions of
 each: the answer is the results in llama-server's order, each prompt and then
 its completions, indexed so, and a single result is the object itself. With a
 `seed`, completion i of a prompt samples with seed+i. Streamed, every frame
-carries its result's `index`.
+carries its result's `index`, and with `timings_per_token` the timings so
+far. `n_predict` 0 answers one token, `stop_type` `limit`, as llama-server
+does (its README says none; the server samples one before it checks).
 
 A field the engine cannot honour is refused by name with a 400, at any value
 but its neutral one: `dry_multiplier`, `adaptive_target`, `min_keep`,
 `samplers` beyond penalties/top_n_sigma/top_k/typ_p/top_p/min_p/xtc/temperature,
 `n_indent`, `n_keep`, `n_discard`, `n_cache_reuse`, `t_max_predict_ms`,
-`t_max_prompt_ms`, `timings_per_token`, `return_progress`,
-`post_sampling_probs`, `lora`, `sse_ping_interval`, `id_slot` other than -1
-and 0, `n_predict` 0, `embd_normalize` other than 2, and multimodal prompts
+`t_max_prompt_ms`, `return_progress`, `post_sampling_probs`, `lora`,
+`sse_ping_interval`, `id_slot` other than -1 and 0, `embd_normalize` other
+than 2, and multimodal prompts
 (`multimodal_data`, `image_data`). A field llama.cpp does not define is
 refused as unknown. On a
 byte-level BPE vocabulary `/tokenize` with `parse_special: false` is refused

@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/jitllm/jitllm/engine"
@@ -145,7 +146,6 @@ func llamaFields() map[string]llamaField {
 		"n_cache_reuse":         {numIs(0), "KV shifting reuse is not built; the prefix cache is automatic"},
 		"t_max_predict_ms":      {numIs(0), "a prediction time limit is not built; use n_predict"},
 		"t_max_prompt_ms":       {numIs(0), "a prompt time limit is not built"},
-		"timings_per_token":     {boolIs(false), "per-token timings are not built; the final object carries timings"},
 		"return_progress":       {boolIs(false), "prompt progress is not built"},
 		"post_sampling_probs":   {boolIs(false), "probabilities after sampling are not built; n_probs reports the raw distribution"},
 		"lora":                  {emptyJSON, "LoRA adapters are not built"},
@@ -166,7 +166,7 @@ func llamaRead() map[string]bool {
 		"logit_bias": true, "typical_p": true, "xtc_probability": true, "xtc_threshold": true,
 		"top_n_sigma": true, "dynatemp_range": true, "dynatemp_exponent": true,
 		"mirostat": true, "mirostat_tau": true, "mirostat_eta": true, "response_fields": true,
-		"n_cmpl": true, "n": true,
+		"n_cmpl": true, "n": true, "timings_per_token": true,
 		// /infill's own.
 		"input_prefix": true, "input_suffix": true, "input_extra": true,
 	}
@@ -551,7 +551,7 @@ type llamaSettings struct {
 	TopK, RepeatLastN, NPredict, NProbs        int
 	Seed                                       int64
 	Stop                                       []string
-	IgnoreEOS, Stream                          bool
+	IgnoreEOS, Stream, TimingsPerToken         bool
 	Grammar, JSONSchema                        string
 }
 
@@ -569,7 +569,7 @@ func llamaParams(s llamaSettings, _ int, _ []int32, _ int) map[string]any {
 		"dynatemp_range": s.DynatempRange, "dynatemp_exponent": s.DynatempExponent,
 		"mirostat": s.Mirostat, "mirostat_tau": s.MirostatTau, "mirostat_eta": s.MirostatEta,
 		"repeat_penalty": s.RepeatPenalty, "presence_penalty": s.PresencePenalty, "frequency_penalty": s.FrequencyPenalty,
-		"stop": s.Stop, "ignore_eos": s.IgnoreEOS, "stream": s.Stream,
+		"stop": s.Stop, "ignore_eos": s.IgnoreEOS, "stream": s.Stream, "timings_per_token": s.TimingsPerToken,
 		"n_probs": s.NProbs, "grammar": s.Grammar, "json_schema": s.JSONSchema,
 		"samplers": []string{"penalties", "top_n_sigma", "top_k", "typ_p", "top_p", "min_p", "xtc", "temperature"},
 	}
@@ -703,7 +703,7 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 	var seed *int64
 	var stop json.RawMessage
 	var grammarSrc, schema json.RawMessage
-	var ignore, stream, returnTokens bool
+	var ignore, stream, returnTokens, perToken bool
 	var fields []string
 	var firstErr error
 	rd := func(err error) {
@@ -738,6 +738,7 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 	rd(decodeField(body, "ignore_eos", &ignore))
 	rd(decodeField(body, "stream", &stream))
 	rd(decodeField(body, "return_tokens", &returnTokens))
+	rd(decodeField(body, "timings_per_token", &perToken))
 	rd(decodeField(body, "response_fields", &fields))
 	stop, grammarSrc, schema = body["stop"], body["grammar"], body["json_schema"]
 	if firstErr != nil {
@@ -802,17 +803,13 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 	if seed != nil {
 		set.Seed = *seed
 	}
-	set.IgnoreEOS, set.Stream = ignore, stream
+	set.IgnoreEOS, set.Stream, set.TimingsPerToken = ignore, stream, perToken
 	// n_predict wins over the max_tokens alias; -1 and -2 are "until done".
 	switch {
 	case nPredict != nil:
 		set.NPredict = *nPredict
 	case maxTokens != nil:
 		set.NPredict = *maxTokens
-	}
-	if set.NPredict == 0 {
-		llFailErr(w, fmt.Errorf("%w: n_predict=0 is not supported: it asks for no tokens", ErrInvalid))
-		return
 	}
 	if slot != nil && *slot != -1 && *slot != 0 {
 		llFailErr(w, fmt.Errorf("%w: id_slot=%d is not supported: there is one slot, 0", ErrInvalid, *slot))
@@ -895,8 +892,10 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 		Logprobs:  set.NProbs > 0,
 	}
 	o.TopLogprobs = set.NProbs
-	if set.NPredict > 0 {
-		o.MaxTokens = set.NPredict
+	// n_predict 0 answers one token, stop_type limit: llama-server samples
+	// one before it checks the budget, though its README says none.
+	if set.NPredict >= 0 {
+		o.MaxTokens = max(set.NPredict, 1)
 	}
 	if len(grammarSrc) > 0 && !emptyJSON(grammarSrc) {
 		if err := json.Unmarshal(grammarSrc, &set.Grammar); err != nil {
@@ -1135,6 +1134,8 @@ type llamaResult struct {
 	ids        []int32
 	probs      []any
 	n          int
+	// first is when the first token came, the start of predicted_ms.
+	first time.Time
 	// What a stream has not sent yet.
 	pendIDs   []int32
 	pendProbs []any
@@ -1142,6 +1143,9 @@ type llamaResult struct {
 
 func (res *llamaResult) take(t *Token) {
 	if t.ID >= 0 {
+		if res.n == 0 {
+			res.first = time.Now()
+		}
 		res.n++
 		res.ids = append(res.ids, t.ID)
 		if t.Logprob != nil {
@@ -1177,10 +1181,27 @@ func llamaStopType(r FinishReason) string {
 // stream frame (whose content and tokens are only what has not been sent).
 func (g *llamaRun) final(res *llamaResult, content string, ids []int32, probs []any) map[string]any {
 	f := res.fin
-	cache := f.Restored
-	var pms, dms float64
-	pms = float64(f.Prefill.Microseconds()) / 1000
-	dms = float64(f.Decode.Microseconds()) / 1000
+	out := map[string]any{
+		"index": res.index, "content": content, "tokens": ids, "id_slot": 0, "stop": true,
+		"model": g.info.Name, "tokens_predicted": f.CompletionTokens, "tokens_evaluated": f.PromptTokens,
+		"generation_settings": g.settings(),
+		"prompt":              res.promptText, "has_new_line": strings.Contains(res.text.String(), "\n"),
+		"truncated": false, "stop_type": llamaStopType(f.Reason), "stopping_word": f.StopMatched,
+		"tokens_cached": f.Restored,
+		"timings":       llamaTimings(f.PromptTokens, f.Restored, f.Prefill, f.CompletionTokens, f.Decode),
+	}
+	if len(probs) > 0 {
+		out["completion_probabilities"] = probs
+	}
+	return out
+}
+
+// llamaTimings is llama-server's timings object: a prompt of prompt
+// positions, cached of them restored and the rest prefilled in pre, and
+// predicted tokens decoded in dec.
+func llamaTimings(prompt, cached int, pre time.Duration, predicted int, dec time.Duration) map[string]any {
+	pms := float64(pre.Microseconds()) / 1000
+	dms := float64(dec.Microseconds()) / 1000
 	perTok := func(ms float64, n int) float64 {
 		if n == 0 {
 			return 0
@@ -1193,25 +1214,13 @@ func (g *llamaRun) final(res *llamaResult, content string, ids []int32, probs []
 		}
 		return float64(n) / ms * 1000
 	}
-	promptN := max(f.PromptTokens-cache, 0)
-	out := map[string]any{
-		"index": res.index, "content": content, "tokens": ids, "id_slot": 0, "stop": true,
-		"model": g.info.Name, "tokens_predicted": f.CompletionTokens, "tokens_evaluated": f.PromptTokens,
-		"generation_settings": g.settings(),
-		"prompt":              res.promptText, "has_new_line": strings.Contains(res.text.String(), "\n"),
-		"truncated": false, "stop_type": llamaStopType(f.Reason), "stopping_word": f.StopMatched,
-		"tokens_cached": f.Restored,
-		"timings": map[string]any{
-			"cache_n": cache, "prompt_n": promptN, "prompt_ms": pms,
-			"prompt_per_token_ms": perTok(pms, promptN), "prompt_per_second": perSec(pms, promptN),
-			"predicted_n": f.CompletionTokens, "predicted_ms": dms,
-			"predicted_per_token_ms": perTok(dms, f.CompletionTokens), "predicted_per_second": perSec(dms, f.CompletionTokens),
-		},
+	promptN := max(prompt-cached, 0)
+	return map[string]any{
+		"cache_n": cached, "prompt_n": promptN, "prompt_ms": pms,
+		"prompt_per_token_ms": perTok(pms, promptN), "prompt_per_second": perSec(pms, promptN),
+		"predicted_n": predicted, "predicted_ms": dms,
+		"predicted_per_token_ms": perTok(dms, predicted), "predicted_per_second": perSec(dms, predicted),
 	}
-	if len(probs) > 0 {
-		out["completion_probabilities"] = probs
-	}
-	return out
 }
 
 // picked is out as response_fields asks: each path's value, a path's keys
@@ -1340,8 +1349,13 @@ func (g *llamaRun) stream() {
 			}
 			frame := map[string]any{"index": res.index, "content": ev.Token.Text, "tokens": res.pendIDs, "stop": false,
 				"id_slot": 0, "tokens_predicted": res.n}
-			if res.started != nil {
-				frame["tokens_evaluated"] = res.started.PromptTokens
+			if st := res.started; st != nil {
+				frame["tokens_evaluated"] = st.PromptTokens
+				// timings_per_token: the timings so far, the decode
+				// measured from the first token as llama-server measures it.
+				if g.set.TimingsPerToken {
+					frame["timings"] = llamaTimings(st.PromptTokens, st.Restored, st.Prefill, res.n, time.Since(res.first))
+				}
 			}
 			if len(res.pendProbs) > 0 {
 				frame["completion_probabilities"] = res.pendProbs
