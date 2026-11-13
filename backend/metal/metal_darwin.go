@@ -10,6 +10,7 @@ package metal
 import (
 	"fmt"
 	"os"
+	"runtime"
 	"sync"
 	"time"
 	"unsafe"
@@ -184,10 +185,11 @@ func (rt *objc) class(s string) ID {
 
 // nsstr wraps a Go string as an NSString. The byte slice is returned so the
 // caller can keep it alive across the call that consumes it.
-func (rt *objc) nsstr(s string) (ID, []byte) {
+func (rt *objc) nsstr(s string) ID {
 	b := append([]byte(s), 0)
 	id := rt.send1ptr(rt.class("NSString"), rt.sel("stringWithUTF8String:"), unsafe.Pointer(&b[0]))
-	return id, b
+	runtime.KeepAlive(b)
+	return id
 }
 
 func (rt *objc) gostr(id ID) string {
@@ -484,13 +486,13 @@ func (k *Kernel) SetWrites(m uint64) { k.writes = m }
 // Compile builds a pipeline state from MSL source. Metal compiles at runtime,
 // the way the CUDA driver JITs PTX.
 func (c *Ctx) Compile(src, entry string) (*Kernel, error) {
-	nsSrc, keepSrc := c.rt.nsstr(src)
+	nsSrc := c.rt.nsstr(src)
 	var e ID
 	lib := c.rt.sendErr2(c.dev, c.rt.sel("newLibraryWithSource:options:error:"), nsSrc, c.opts, &e)
 	if lib == 0 {
 		return nil, c.rt.nserr(e, "newLibraryWithSource")
 	}
-	nsName, keepName := c.rt.nsstr(entry)
+	nsName := c.rt.nsstr(entry)
 	fn := c.rt.send1id(lib, c.rt.sel("newFunctionWithName:"), nsName)
 	if fn == 0 {
 		c.rt.send0(lib, c.rt.sel("release"))
@@ -502,7 +504,6 @@ func (c *Ctx) Compile(src, entry string) (*Kernel, error) {
 		c.rt.send0(lib, c.rt.sel("release"))
 		return nil, c.rt.nserr(e, "newComputePipelineStateWithFunction")
 	}
-	_, _ = keepSrc, keepName
 	return &Kernel{c: c, lib: lib, fn: fn, pso: pso, name: entry}, nil
 }
 
