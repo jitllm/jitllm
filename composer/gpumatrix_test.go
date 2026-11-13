@@ -72,8 +72,9 @@ func matrixWeights(t quant.Type, q layout.Quant, rows, k int, rng *rand.Rand) []
 // workgroups' blocks, and runs the one form at calls of 1 to the capacity's
 // rows: the projection must be formed on the matrix unit (its kernel the
 // matrix pass's, its tiles multiplied), each row held to the oracle within
-// binary16's rounding of both factors, and every word past the call's rows
-// and the guard after them untouched. Two violations must fail: the
+// binary16's rounding of both factors, rows whose magnitudes reach past
+// binary16's range among them (every fifth times 2^20), and every word past
+// the call's rows and the guard after them untouched. Two violations must fail: the
 // weight's words moved by one, and the reference over the next row's input.
 func TestComposedGPUMatrix(t *testing.T) {
 	testlock.GPU(t)
@@ -161,7 +162,7 @@ func TestComposedGPUMatrix(t *testing.T) {
 								t.Fatal(err)
 							}
 						}
-						run := func(L int, planes [3][]uint32) []float32 {
+						runX := func(x []float32, L int, planes [3][]uint32) []float32 {
 							xs := make([]float32, capacity*k)
 							copy(xs, x[:L*k])
 							for i := L * k; i < len(xs); i++ {
@@ -183,7 +184,25 @@ func TestComposedGPUMatrix(t *testing.T) {
 							}
 							return res[:L*n]
 						}
+						run := func(L int, planes [3][]uint32) []float32 { return runX(x, L, planes) }
 						planes := [3][]uint32{qs, dw, sc}
+						// Rows past binary16's range, every fifth times 2^20:
+						// scaled into it and their sums back, as exactly as the rest.
+						big := slices.Clone(x)
+						for r := 2; r < capacity; r += 5 {
+							for i := r * k; i < (r+1)*k; i++ {
+								big[i] *= 1 << 20
+							}
+						}
+						wantBig := make([]float32, capacity*n)
+						for r := range capacity {
+							if err := oracle.MatVec(wantBig[r*n:(r+1)*n], typ, w, big[r*k:(r+1)*k], n, k); err != nil {
+								t.Fatal(err)
+							}
+						}
+						if e := gpuNMSE(runX(big, capacity, planes), wantBig); math.IsNaN(e) || !(e < 2e-6) {
+							t.Fatalf("%s: rows past binary16's range read NMSE %.3e against the oracle", what, e)
+						}
 						worst := 0.0
 						for _, L := range calls {
 							e := gpuNMSE(run(L, planes), want[:L*n])

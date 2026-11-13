@@ -168,7 +168,8 @@ func (p Matrix) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		if !ok {
 			continue
 		}
-		h, _ := halves(k, f)
+		_, sb := rowScale(k, f)
+		h, _ := halves(k, f, sb)
 		sig := h.computes()
 		c := costs[sig]
 		if c == nil {
@@ -519,11 +520,76 @@ func (k *Kernel) rowIndex(x int) (int, int) {
 	return 0, 0
 }
 
+// The factor of the row reaches the matrix unit as binary16, whose largest
+// value is 65504: a row whose largest magnitude reaches 2^15 is scaled by a
+// power of two below it, and its sums by the inverse, both exact. A row
+// below it is scaled by one, so every row the format holds computes as it
+// did. A row's scale is its largest magnitude's biased exponent, held at
+// least scaleFloor (2^14's), and rowScale is the kernel writing it.
+const scaleFloor = 127 + 14
+
+// rowScale is a kernel writing each row's scale exponent of k's factor of
+// the row, over the rows halves writes, and its buffer.
+func rowScale(k *Kernel, f bilinear) (*Kernel, Buf) {
+	U, F := ir.U32, ir.F32
+	R := k.Space[0]
+	if f.index > 0 {
+		R = f.rows
+	}
+	out := k.Bufs[k.Stores[0].Buf].Operand
+	b := Buf{Kind: BufOut, Elem: U, Shape: []int{R},
+		Operand: Operand{Kind: OperandScratch, Name: out.Name + ".rowscale", Elem: U, Temp: true, Of: out.Of}}
+	h := &Kernel{Name: k.Name + ".rowscale", Kind: PrimReduce, Space: []int{R}, Part: k.Part, Apart: k.Apart, Of: k.Of, Capacity: k.Capacity}
+	if k.Rows > 0 && f.index == 0 {
+		h.Rows = copyInto(h, k, k.Rows-1, func(int, Node) (int, bool) { return 0, false }) + 1
+	}
+	l := h.loop(k.Loops[0].Trip, -1)
+	r := h.add(Node{Op: OpCoord, A: 0, Type: U})
+	at := h.add(Node{Op: OpIter, At: l, Type: U})
+	x := copyInto(h, k, f.row, func(i int, nd Node) (int, bool) {
+		switch {
+		case f.index > 0 && i == f.index:
+			return r, true
+		case nd.Op == OpCoord && nd.A == 0:
+			return r, true
+		case nd.Op == OpIter && nd.At == 0:
+			return at, true
+		}
+		return 0, false
+	})
+	fold := h.add(Node{Op: OpFold, Type: F, At: l, B: h.f32(0)})
+	h.Nodes[fold].A = h.bin(OpMax, F, fold, h.bin(OpMax, F, x, h.bin(OpSub, F, h.f32(0), x)))
+	e := h.bin(OpAnd, U, h.bin(OpShr, U, h.add(Node{Op: OpBitcast, Type: U, A: fold}), h.u32(23)), h.u32(255))
+	h.Stores = append(h.Stores, Store{Buf: h.buf(b), Val: h.bin(OpMax, U, e, h.u32(scaleFloor)), At: -1, Ax: []int{r}})
+	return h, b
+}
+
+// scaleOf is the factor a row of scale exponent e is multiplied by before
+// binary16, and unscale the one its sums are multiplied by after:
+// 2^(14-E) and 2^(E-14) for E above 14, 1 below.
+func (m *Kernel) scaleOf(e int) int {
+	U := ir.U32
+	return m.add(Node{Op: OpBitcast, Type: ir.F32, A: m.bin(OpShl, U, m.bin(OpSub, U, m.u32(2*scaleFloor-14), e), m.u32(23))})
+}
+
+func (m *Kernel) unscale(e int) int {
+	U := ir.U32
+	return m.add(Node{Op: OpBitcast, Type: ir.F32, A: m.bin(OpShl, U, m.bin(OpSub, U, e, m.u32(14)), m.u32(23))})
+}
+
+// scaleIn is rowScale's buffer as a kernel reading it takes it: a word a
+// row, loaded by its row.
+func scaleIn(b Buf) Buf {
+	b.Kind, b.Extent, b.Shape = BufIn, b.Shape[0], nil
+	return b
+}
+
 // halves is a kernel writing the factor of the row of k as binary16 pairs,
 // a word of a row a thread, into a buffer of R rows of K/2 words, and that
 // buffer: the factor is rounded once, not once a workgroup of outputs, and a
-// trip stages it as words.
-func halves(k *Kernel, f bilinear) (*Kernel, Buf) {
+// trip stages it as words. Each row is scaled first by its exponent in
+// scale (rowScale).
+func halves(k *Kernel, f bilinear, scale Buf) (*Kernel, Buf) {
 	U := ir.U32
 	R, W := k.Space[0], k.Loops[0].Trip/2
 	if f.index > 0 {
@@ -540,8 +606,9 @@ func halves(k *Kernel, f bilinear) (*Kernel, Buf) {
 	}
 	r := h.add(Node{Op: OpCoord, A: 0, Type: U})
 	w := h.add(Node{Op: OpCoord, A: 1, Type: U})
+	s := h.scaleOf(h.add(Node{Op: OpLoad, Type: U, Buf: h.buf(scaleIn(scale)), A: r}))
 	elem := func(at int) int {
-		return h.un(OpHalf, U, copyInto(h, k, f.row, func(i int, nd Node) (int, bool) {
+		return h.un(OpHalf, U, h.bin(OpMul, ir.F32, copyInto(h, k, f.row, func(i int, nd Node) (int, bool) {
 			switch {
 			case f.index > 0 && i == f.index:
 				return r, true
@@ -551,7 +618,7 @@ func halves(k *Kernel, f bilinear) (*Kernel, Buf) {
 				return at, true
 			}
 			return 0, false
-		}))
+		}), s))
 	}
 	e := h.bin(OpMul, U, w, h.u32(2))
 	val := h.bin(OpOr, U, elem(e), h.bin(OpShl, U, elem(h.bin(OpAdd, U, e, h.u32(1))), h.u32(16)))
@@ -640,11 +707,35 @@ func (p Matrix) form(k *Kernel, d Device, f bilinear, made map[string]Buf) []*Ke
 	// are its own, not a loop's, so what a trip's shares load is a value of
 	// the trip a later pass can load a trip ahead.
 	W := k.Loops[0].Trip / 2
+	sk, sb := rowScale(k, f)
+	if b, ok := made[sk.computes()]; ok {
+		sk, sb = nil, b
+	} else {
+		made[sk.computes()] = sb
+	}
+	sw := m.buf(scaleIn(sb))
+	// expOf is the scale exponent of the row the factor reads at row
+	// coordinate r and element at.
+	expOf := func(r, at int) int {
+		ri := r
+		if f.index > 0 {
+			ri = copyInto(m, k, f.index, func(i int, nd Node) (int, bool) {
+				switch {
+				case nd.Op == OpCoord && nd.A == 0:
+					return r, true
+				case nd.Op == OpIter && nd.At == 0:
+					return at, true
+				}
+				return 0, false
+			})
+		}
+		return m.add(Node{Op: OpLoad, Type: U, Buf: sw, A: ri})
+	}
 	var h *Kernel
 	hw := -1
 	if p.Convert < 0 {
 		var hb Buf
-		h, hb = halves(k, f)
+		h, hb = halves(k, f, sb)
 		sig := h.computes()
 		if b, ok := made[sig]; ok {
 			h, hb = nil, b
@@ -693,6 +784,10 @@ func (p Matrix) form(k *Kernel, d Device, f bilinear, made map[string]Buf) []*Ke
 				})
 			}
 			elem := func(at int) int { return m.un(OpHalf, U, copyAt(factor, at)) }
+			if axis == 0 && hw < 0 {
+				s := m.scaleOf(expOf(c, kg))
+				elem = func(at int) int { return m.un(OpHalf, U, m.bin(OpMul, F, copyAt(factor, at), s)) }
+			}
 			if axis == 0 && hw >= 0 {
 				ri := c
 				if f.index > 0 {
@@ -745,16 +840,21 @@ func (p Matrix) form(k *Kernel, d Device, f bilinear, made map[string]Buf) []*Ke
 		pb = m.buf(Buf{Kind: BufOut, Elem: F, Operand: planes, Shape: []int{S, R, N}})
 	}
 	emit := func(r, n, sum, at int) {
+		sum = m.bin(OpMul, F, sum, m.unscale(expOf(r, m.u32(0))))
 		if pb >= 0 {
 			m.Stores = append(m.Stores, Store{Buf: pb, Val: sum, At: at, Ax: []int{m.bin(OpDiv, U, c1, m.u32(NB)), r, n}})
 			return
 		}
 		k.storesOf(m, f.fold, r, n, sum, at)
 	}
-	formed := []*Kernel{m}
-	if h != nil {
-		formed = []*Kernel{h, m}
+	var formed []*Kernel
+	if sk != nil {
+		formed = append(formed, sk)
 	}
+	if h != nil {
+		formed = append(formed, h)
+	}
+	formed = append(formed, m)
 	if S > 1 {
 		formed = append(formed, combine(k, planes, S))
 	}
