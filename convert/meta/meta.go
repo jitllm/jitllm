@@ -63,7 +63,9 @@ func (f *File) Close() error {
 	if f.CloseFn == nil {
 		return nil
 	}
-	return f.CloseFn()
+	err := f.CloseFn()
+	f.Data, f.CloseFn = nil, nil
+	return err
 }
 
 // Size is the mapped file size.
