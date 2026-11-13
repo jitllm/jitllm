@@ -59,9 +59,9 @@ type Session struct {
 	// forwardPrompts counts the prompts run a token at a time through the
 	// decode path (WithPrefillForwardRows).
 	forwardPrompts int
-	// interrupt, when set, is asked before every prefill chunk
-	// (SetPrefillInterrupt).
-	interrupt func() bool
+	// interrupt, when set, is asked before every prefill chunk, told the
+	// sequence's position (SetPrefillInterrupt).
+	interrupt func(pos int) bool
 	// bpos is the sequence's position as a row of a step, one entry. pos
 	// stays the high-water mark: the maxSeq bound and Pos() read it.
 	bpos []int

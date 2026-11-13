@@ -63,12 +63,17 @@ reply at a line, past its first newline, that starts with fewer spaces or tabs
 than asked before its first other character, `stop_type` `limit`, that
 character and what follows it cut from the answer as llama-server cuts them.
 `t_max_prompt_ms` is taken to no effect, as llama-server takes it (its server
-leaves it unimplemented).
+leaves it unimplemented). `return_progress` on a stream sends the prompt's
+progress as llama-server does: a frame when the prompt begins, what the prompt
+cache restored counted processed, and one after each chunk it runs, each with
+no text and `prompt_progress` (`total`, `cache`, `processed`, `time_ms`); its
+`tokens` is empty where llama-server's carries a 0 no step sampled. Without a
+stream it is taken to no effect, as llama-server takes it.
 
 A field the engine cannot honour is refused by name with a 400, at any value
 but its neutral one: `dry_multiplier`, `adaptive_target`, `min_keep`,
 a `samplers` list out of the draw's order or naming `infill` or `adaptive_p`,
-`n_keep`, `n_discard`, `n_cache_reuse`, `return_progress`,
+`n_keep`, `n_discard`, `n_cache_reuse`,
 `post_sampling_probs`, `lora`, `embd_normalize` other
 than 2, and an audio file in `multimodal_data`. The top-level
 `multimodal_data` and `image_data` older llama-servers read are refused,

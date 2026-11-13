@@ -1711,7 +1711,11 @@ type GenerateOptions struct {
 	// MinIndent, when set, ends the reply at a line past its first newline
 	// that starts with fewer than MinIndent spaces or tabs before its first
 	// other character, as FinishMaxTokens: llama-server's n_indent.
-	MinIndent    int
+	MinIndent int
+	// Progress asks for an EventProgress when the prompt begins, at each
+	// chunk's start after it and when the prompt is in: llama-server's
+	// return_progress.
+	Progress     bool
 	Sampling     *engine.Sampler
 	Stop         []string
 	Continue     bool
@@ -1780,15 +1784,26 @@ type TokenBias struct {
 // EventKind discriminates Event.
 type EventKind int
 
-// The event kinds, in the order a generate emits them: one Started, a Token
-// per sampled token, one Finished.
+// The event kinds, in the order a generate emits them: a Progress per prompt
+// chunk when GenerateOptions.Progress asks, one Started, a Token per sampled
+// token, one Finished.
 const (
 	EventStarted EventKind = iota
 	EventToken
 	EventFinished
+	EventProgress
 )
 
-// Started is a generate's first event, sent once the prompt is prefilled:
+// Progress is how far a generate's prompt has run, llama-server's
+// prompt_progress: of Total positions, Cached the memory cache restored and
+// Done restored or run so far, Elapsed since the prompt began.
+type Progress struct {
+	Total, Cached, Done int
+	Elapsed             time.Duration
+}
+
+// Started is a generate's first event past its prompt's progress, sent once
+// the prompt is prefilled:
 // how long the request queued and behind how many, where the model's blocks
 // ran, and how long the prefill took.
 type Started struct {
@@ -1943,7 +1958,7 @@ type Finished struct {
 }
 
 // Event is one message of a generate's stream: Kind says which of Started,
-// Token and Finished is set.
+// Token, Finished and Progress is set.
 type Event struct {
 	// Choice is the continuation an event belongs to, 0 unless the request
 	// asked for several (GenerateOptions.Seeds).
@@ -1952,6 +1967,50 @@ type Event struct {
 	Started  *Started
 	Token    *Token
 	Finished *Finished
+	Progress *Progress
+}
+
+// promptProgress is a generate's EventProgress while its prompt runs alone
+// (GenerateOptions.Progress): the first when the prompt begins, what the
+// memory cache restored counted done, one at each chunk's start after it, and
+// the last when the prompt is in. base is the sequence's position before the
+// prompt, which a continued session's history holds.
+type promptProgress struct {
+	on                bool
+	emit              func(Event) error
+	total, base, done int
+	cached            int
+	sent              bool
+	start             time.Time
+	err               error
+}
+
+// at is the prompt's progress at the sequence's position pos.
+func (p *promptProgress) at(pos int) {
+	if !p.on || p.err != nil {
+		return
+	}
+	done := pos - p.base
+	if !p.sent {
+		p.cached, p.sent = done, true
+	} else if done == p.done {
+		return
+	}
+	p.done = done
+	p.err = p.emit(Event{Kind: EventProgress, Progress: &Progress{Total: p.total, Cached: p.cached, Done: done,
+		Elapsed: time.Since(p.start)}})
+}
+
+// end is the prompt in, restored of it from the memory cache: its first
+// event when no chunk sent one, and its last. Nothing after it is the
+// prompt's.
+func (p *promptProgress) end(restored int) error {
+	if !p.sent {
+		p.at(p.base + restored)
+	}
+	p.at(p.base + p.total)
+	p.on = false
+	return p.err
 }
 
 // indentRule is GenerateOptions.MinIndent read over a reply's text as it
@@ -2222,20 +2281,30 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 
 	// ---- prefill. A sequence that starts here stops between chunks when its
 	// client goes; one that continues keeps its history whole, so it does not.
-	if !o.Continue {
-		s.ms.SetPrefillInterrupt(func() bool { return ctx.Err() != nil })
+	// Each chunk's start is the prompt's progress, when the request asks.
+	prefillStart := time.Now()
+	prompted := len(ids)
+	if spans {
+		prompted = model.SpanPositions(o.Prompt.Spans, lm.m.Cfg.NEmbd)
+	}
+	prog := promptProgress{on: o.Progress, emit: emit, total: prompted, base: s.ms.Pos(), start: prefillStart}
+	if !o.Continue || o.Progress {
+		s.ms.SetPrefillInterrupt(func(pos int) bool {
+			prog.at(pos)
+			return !o.Continue && ctx.Err() != nil
+		})
 		defer s.ms.SetPrefillInterrupt(nil)
+	}
+	if !o.Continue {
 		s.specRan = false
 	}
 	sampler := s.sampling
 	if o.Sampling != nil {
 		sampler = *o.Sampling
 	}
-	prefillStart := time.Now()
 	var logits []float32
 	var sp *engine.Speculator
 	var first int32
-	prompted := len(ids)
 	restored := 0
 	var promptLP []*TokenLogprob
 	// firstLP and pendLP are a speculative generate's first token's and its
@@ -2269,7 +2338,6 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 			firstLP, err = takeLogprob(st, newLogprobs(o), lm.m.Vocab, sp.Logits(0), first)
 		}
 	case spans:
-		prompted = model.SpanPositions(o.Prompt.Spans, lm.m.Cfg.NEmbd)
 		if o.Continue {
 			// A continued session's history holds its earlier pictures as
 			// rows already; the new spans follow them.
@@ -2296,6 +2364,9 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 	devBlocks := st.GPULayers()
 	s.ms.Unhold(st)
 	if err != nil {
+		return err
+	}
+	if err := prog.end(restored); err != nil {
 		return err
 	}
 	lm.ttft.restored.Add(int64(restored))
