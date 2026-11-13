@@ -405,16 +405,6 @@ func (s *Instance) KVSharedBytes() uint64 {
 // isShared says page n aliases a SharedStore's page.
 func (s *kvPages) isShared(n int) bool { return n < len(s.shared) && s.shared[n] }
 
-// anyShared says some page of this layer is shared.
-func (s *kvPages) anyShared() bool {
-	for _, x := range s.shared {
-		if x {
-			return true
-		}
-	}
-	return false
-}
-
 // markShared records that page n aliases the store's.
 func (s *kvPages) markShared(n int, on bool) {
 	for len(s.shared) <= n {
