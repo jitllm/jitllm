@@ -406,16 +406,21 @@ func (k *Kernel) bufLike(b Buf) int {
 // compact drops the nodes nothing reaches: neither a store, nor a loop's
 // count, live span or element, nor a fact.
 func (k *Kernel) compact() {
-	live := map[int]bool{}
-	var walk func(i int)
-	walk = func(i int) {
-		if i < 0 || i >= len(k.Nodes) || live[i] {
-			return
-		}
-		live[i] = true
-		nd := k.Nodes[i]
-		for _, a := range k.Operands(&nd) {
-			walk(*a)
+	live := make([]bool, len(k.Nodes))
+	reached := 0
+	var stack []int
+	var buf [3]int
+	walk := func(i int) {
+		stack = append(stack[:0], i)
+		for len(stack) > 0 {
+			i := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			if i < 0 || i >= len(k.Nodes) || live[i] {
+				continue
+			}
+			live[i] = true
+			reached++
+			stack = append(stack, k.args(i, &buf)...)
 		}
 	}
 	for i := range k.Stores {
@@ -465,7 +470,7 @@ func (k *Kernel) compact() {
 			}
 		}
 	}
-	if len(live) == len(k.Nodes) {
+	if reached == len(k.Nodes) {
 		return
 	}
 	at := make([]int, len(k.Nodes))
