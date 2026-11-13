@@ -414,7 +414,9 @@ func (g *devTier) prepRowsHead(bs *blockScratch, rowsHead *nn.Head, n int) bool 
 		return true
 	}
 	head := g.bs.head
-	if need := g.rowsHeadNeed(bs, head.nrows, rowsHead.Softcap); need > 0 && !g.room(need) {
+	// On a card its paged blocks fill a streamed block goes home for them,
+	// as for the projection itself: the step that needs them forms nothing.
+	if need := g.rowsHeadNeed(bs, head.nrows, rowsHead.Softcap); need > 0 && !g.roomOrReclaim(need) {
 		return fail(fmt.Errorf("the logits of %d rows need %d bytes, %d of %d used", g.headRows(bs, head.nrows), need, g.used, g.limit))
 	}
 	H := g.headRows(bs, head.nrows)
