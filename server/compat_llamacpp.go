@@ -210,11 +210,9 @@ func llamaFields() map[string]llamaField {
 		"adaptive_target":       {numLE(-1), "adaptive-p sampling is not built"},
 		"adaptive_decay":        {anyValue, ""},
 		"min_keep":              {numIs(0), "min_keep is not built"},
-		"n_indent":              {numIs(0), "n_indent is not built"},
 		"n_keep":                {numIs(0), "there is no context shift, so n_keep has nothing to keep"},
 		"n_discard":             {numIs(0), "there is no context shift"},
 		"n_cache_reuse":         {numIs(0), "KV shifting reuse is not built; the prefix cache is automatic"},
-		"t_max_prompt_ms":       {numIs(0), "a prompt time limit is not built"},
 		"return_progress":       {boolIs(false), "prompt progress is not built"},
 		"post_sampling_probs":   {boolIs(false), "probabilities after sampling are not built; n_probs reports the raw distribution"},
 		"lora":                  {emptyJSON, "LoRA adapters are not built"},
@@ -235,6 +233,10 @@ func llamaRead() map[string]bool {
 		"top_n_sigma": true, "dynatemp_range": true, "dynatemp_exponent": true,
 		"mirostat": true, "mirostat_tau": true, "mirostat_eta": true, "response_fields": true, "samplers": true,
 		"n_cmpl": true, "n": true, "timings_per_token": true, "sse_ping_interval": true, "t_max_predict_ms": true,
+		"n_indent": true,
+		// llama-server leaves t_max_prompt_ms unimplemented and takes it to
+		// no effect; so does this server.
+		"t_max_prompt_ms": true,
 		// /infill's own.
 		"input_prefix": true, "input_suffix": true, "input_extra": true,
 	}
@@ -796,7 +798,7 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 	set := llamaDefaults()
 	var temp, topP, minP, typP, xtcP, xtcT, nSigma, dynR, dynE, mTau, mEta, repeat, presence, frequency *float64
 	var miro *int
-	var topK, lastN, nPredict, maxTokens, nProbs, slot, nCmpl, nAlias, predictMS, ping *int
+	var topK, lastN, nPredict, maxTokens, nProbs, slot, nCmpl, nAlias, predictMS, ping, indent *int
 	var seed *int64
 	var stop json.RawMessage
 	var grammarSrc, schema json.RawMessage
@@ -833,6 +835,7 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 	rd(decodeField(body, "n", &nAlias))
 	rd(decodeField(body, "sse_ping_interval", &ping))
 	rd(decodeField(body, "t_max_predict_ms", &predictMS))
+	rd(decodeField(body, "n_indent", &indent))
 	rd(decodeField(body, "seed", &seed))
 	rd(decodeField(body, "ignore_eos", &ignore))
 	rd(decodeField(body, "stream", &stream))
@@ -1000,6 +1003,9 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 	o.TopLogprobs = set.NProbs
 	if predictMS != nil && *predictMS > 0 {
 		o.PredictTime = time.Duration(*predictMS) * time.Millisecond
+	}
+	if indent != nil && *indent > 0 {
+		o.MinIndent = *indent
 	}
 	// n_predict 0 answers one token, stop_type limit: llama-server samples
 	// one before it checks the budget, though its README says none.
@@ -1318,6 +1324,25 @@ func (g *llamaRun) final(res *llamaResult, content string, ids []int32, probs []
 	return out
 }
 
+// cutShortLine is text as n_indent leaves it: when its last line, past a
+// newline, starts with fewer than min spaces or tabs before a character, that
+// character and what follows it are cut, as llama-server cuts the line its
+// indentation ended the reply on.
+func cutShortLine(text string, min int) string {
+	nl := strings.LastIndexByte(text, '\n')
+	if min <= 0 || nl < 0 {
+		return text
+	}
+	i := nl + 1
+	for i < len(text) && (text[i] == ' ' || text[i] == '\t') {
+		i++
+	}
+	if i < len(text) && i-nl-1 < min {
+		return text[:i]
+	}
+	return text
+}
+
 // llamaTimings is llama-server's timings object: a prompt of prompt
 // positions, cached of them restored and the rest prefilled in pre, and
 // predicted tokens decoded in dec.
@@ -1434,7 +1459,7 @@ func (g *llamaRun) whole() {
 		if g.returnTokens {
 			ids = res.ids
 		}
-		outs[i] = g.picked(g.final(res, res.text.String(), ids, res.probs))
+		outs[i] = g.picked(g.final(res, cutShortLine(res.text.String(), g.o.MinIndent), ids, res.probs))
 	}
 	if len(outs) == 1 {
 		writeJSON(g.w, http.StatusOK, outs[0])

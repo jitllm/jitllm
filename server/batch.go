@@ -279,11 +279,12 @@ type row struct {
 	logprobs  *engine.Logprobs // nil unless the request asked for logprobs
 	maxTokens int
 	ignoreEOS bool
-	// stops says the row has stop strings or a prediction time: a token's
-	// text then decides whether it is fed, so it is produced before the
-	// step, not beside it.
+	// stops says the row has stop strings, a prediction time or an
+	// indentation: a token's text then decides whether it is fed, so it is
+	// produced before the step, not beside it.
 	stops       bool
 	predictTime time.Duration
+	indent      indentRule
 	stream      *streamText
 	enqueued    time.Time
 	depth       int32
@@ -874,7 +875,7 @@ func (lp *stepLoop) nextToken(r *row) bool {
 			lp.finish(r, FinishStop, match, nil)
 			return false
 		}
-		if pastPredictTime(r.predictTime, r.decodeStart, chunk) {
+		if r.indent.short(chunk) || pastPredictTime(r.predictTime, r.decodeStart, chunk) {
 			r.n++
 			lp.finish(r, FinishMaxTokens, "", nil)
 			return false
@@ -1327,8 +1328,9 @@ func (e *Engine) generateBatched(ctx context.Context, lp *stepLoop, s *Session, 
 		logprobs:    newLogprobs(o),
 		maxTokens:   maxTokens,
 		ignoreEOS:   o.IgnoreEOS,
-		stops:       hasStop(o.Stop) || o.PredictTime > 0,
+		stops:       hasStop(o.Stop) || o.PredictTime > 0 || o.MinIndent > 0,
 		predictTime: o.PredictTime,
+		indent:      indentRule{min: o.MinIndent},
 		stream:      newStreamText(lm.m.Vocab.NewChatStream().Next, o.Stop),
 		enqueued:    now,
 		since:       now,
