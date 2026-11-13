@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestBogusROCmIsNoDevices: a named ROCm directory that holds nothing is zero
@@ -115,6 +117,7 @@ func TestArchFromPropsRefusesALayoutItDoesNotKnow(t *testing.T) {
 // engine's libraries (jit, backend, engine, format, tok, convert) imports os/exec; the
 // commands under cmd/, ui/ and scripts/ are programs, not the engine.
 func TestNoExternalCommands(t *testing.T) {
+	testmodels.SourceTree(t)
 	root, err := filepath.Abs("../..")
 	if err != nil {
 		t.Fatal(err)

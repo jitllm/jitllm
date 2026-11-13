@@ -135,6 +135,7 @@ func TestGetStreamsTheGGUF(t *testing.T) {
 	if !gguf.Streamable() {
 		t.Skip("this platform cannot stream a GGUF -- run this gate on Linux or macOS")
 	}
+	testmodels.SourceTree(t)
 	src := "../../testdata/models/stories260K.gguf"
 	m, hub := served(t, src)
 	want := reference(t, src)
