@@ -162,6 +162,7 @@ func TestVideoRefusesWhatItCannotRead(t *testing.T) {
 		"unread value":               func(v *Video) { v.Entry.Ops[2].In = []uint16{3, 9} },
 		"frames of no geometry":      func(v *Video) { v.Frames = nil },
 		"frames below a unit":        func(v *Video) { v.Frames.Bounds.Unit = -1 },
+		"frames in no unit":          func(v *Video) { v.Frames.Bounds.Unit = 0 },
 		"digits":                     func(v *Video) { v.Prompt[1].Body[1].Format.Digits = 12 },
 		"an unknown format":          func(v *Video) { v.Prompt[1].Body[1].Format.Kind = 9 },
 		"an unknown piece":           func(v *Video) { v.Prompt[0].Kind = 9 },
@@ -198,7 +199,9 @@ func TestVideoRefusesWhatItCannotRead(t *testing.T) {
 
 // TestPictureVideoStatesNoStepsOfItsOwn holds a video read as pictures to
 // the picture's steps: a resize of its frames' own is their geometry
-// (Frames), held to the geometry's check, and a step of its own is refused.
+// (Frames), held to the geometry's check and to the pictures' classes,
+// which it may not reach past, and a step of its own is refused; a chain's
+// pictures read no video.
 func TestPictureVideoStatesNoStepsOfItsOwn(t *testing.T) {
 	for name, c := range map[string]struct {
 		edit func(v *Video, tw *Tower)
@@ -213,6 +216,18 @@ func TestPictureVideoStatesNoStepsOfItsOwn(t *testing.T) {
 			v.Frames = testGeometry()
 			v.Frames.Bounds.Unit = -1
 		}, false},
+		"frames within the pictures' classes": {func(v *Video, tw *Tower) {
+			tw.Geometry, v.Frames = testGeometry(), testGeometry()
+		}, true},
+		"frames past the pictures' pixels": {func(v *Video, tw *Tower) {
+			tw.Geometry, v.Frames = testGeometry(), testGeometry()
+			v.Frames.Bounds.MaxPix = tw.Geometry.Bounds.MaxPix + 1
+		}, false},
+		"frames past the pictures' patches": {func(v *Video, tw *Tower) {
+			tw.Geometry, v.Frames = testGeometry(), testGeometry()
+			v.Frames.Bounds.MaxPatches = tw.Geometry.Bounds.MaxPatches + 1
+		}, false},
+		"a chain's pictures": {func(v *Video, tw *Tower) { tw.Chain = []ChainBlock{{}} }, false},
 	} {
 		tw := sampleTower(t)
 		v := testPictureVideo()

@@ -552,22 +552,16 @@ func (m *Model) BuildTowerGraphs() (*TowerGraphs, error) {
 		}
 		tg.Stages = append(tg.Stages, cl)
 	}
-	if t.Video != nil {
-		if len(t.Chain) > 0 || !t.Video.AsPictures() && bounds.Unit == 0 {
-			return nil, fmt.Errorf("model: a video read by a tower whose pictures are not each of a size of its own")
-		}
-		tg.Video = t.Video
-		if f := t.Video.Frames; f != nil && t.Video.AsPictures() && (f.Bounds.MaxPix > bounds.MaxPix || f.Bounds.MaxPatches > bounds.MaxPatches) {
-			// The frames go through the picture's classes: their resize
-			// reaches no more than the picture's does.
-			return nil, fmt.Errorf("model: the container's video frames reach %d pixels, past its pictures' %d",
-				f.Bounds.MaxPix, bounds.MaxPix)
-		}
-	}
+	// What of a video its pictures cannot read the container refuses
+	// (jlm.Tower.Valid).
+	tg.Video = t.Video
 	if t.Video != nil && !t.Video.AsPictures() {
-		// A whole frame is a picture: its classes are the picture's.
-		for i, sd := range sides {
-			cl := towerClass{Entry: map[uint8]*graph.Graph{}, Rows: tg.Classes[i].Rows}
+		// A pair's classes are its frames' own: the squares their resize
+		// reaches, which may be past the picture's, and the rows they hold.
+		fb := t.Video.Frames.Bounds
+		for _, sd := range classSides(fb) {
+			cl := towerClass{Entry: map[uint8]*graph.Graph{}, Rows: min((sd/P)*(sd/P), int(fb.MaxPatches)) + tg.Lead + tg.Tail}
+			tg.Rows = max(tg.Rows, cl.Rows)
 			for px0 := graph.PixRGBA8; px0 < graph.PixFormats; px0++ {
 				for px1 := graph.PixRGBA8; px1 < graph.PixFormats; px1++ {
 					g, err := videoEntry(t, px0, px1, cl.Rows-tg.Lead-tg.Tail, tg.Lead+tg.Tail, sd, dense)
