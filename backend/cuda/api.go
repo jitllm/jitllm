@@ -362,19 +362,21 @@ func (d *Device) Bind() error {
 	return d.drv.call(d.drv.cuCtxSetCurrent(d.ctx), "cuCtxSetCurrent")
 }
 
-// Swap makes this device's context current on the calling thread and is the
-// context that was current there (0 for none), for Restore: a thread running
-// one device's work that calls into another hands the first its context back,
-// since a context stays current on a thread until another is made current.
-func (d *Device) Swap() (CUctx, error) {
-	var prev CUctx
-	if err := d.drv.call(d.drv.cuCtxGetCurrent(&prev), "cuCtxGetCurrent"); err != nil {
-		return 0, err
+// Swap makes this device's context current on the calling thread and writes
+// the context that was current there (0 for none) to prev, for Restore: a
+// thread running one device's work that calls into another hands the first
+// its context back, since a context stays current on a thread until another
+// is made current. prev is the caller's to hold where the driver's write
+// costs nothing, a field of what the call already holds: a local whose
+// address the driver takes is moved to the heap, once a call.
+func (d *Device) Swap(prev *CUctx) error {
+	if err := d.drv.call(d.drv.cuCtxGetCurrent(prev), "cuCtxGetCurrent"); err != nil {
+		return err
 	}
-	if prev == d.ctx {
-		return prev, nil
+	if *prev == d.ctx {
+		return nil
 	}
-	return prev, d.Bind()
+	return d.Bind()
 }
 
 // Restore makes ctx, what Swap found current, current on the calling thread

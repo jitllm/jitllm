@@ -57,9 +57,10 @@ type cudaDev struct {
 	lastMarks []kernMark
 	// run serialises inline calls (see do); in is the thread holding it, so a
 	// call made from inside one runs straight through instead of waiting on
-	// itself.
-	run sync.Mutex
-	in  atomic.Int64
+	// itself. prev is the context the inline call found current (Swap).
+	run  sync.Mutex
+	in   atomic.Int64
+	prev cuda.CUctx
 	// life is read-held by every Session on a queue and write-held by Close,
 	// so the context is never destroyed under one. queued is the threads
 	// running such a Session (nQueued of them), so a call made from inside
@@ -811,11 +812,10 @@ func (c *cudaDev) inline(f func()) bool {
 	tid := threadID()
 	c.in.Store(tid)
 	defer c.in.Store(-1)
-	prev, err := c.d.Swap()
-	if err != nil {
+	if err := c.d.Swap(&c.prev); err != nil {
 		return false
 	}
-	defer c.d.Restore(prev)
+	defer c.d.Restore(c.prev)
 	f()
 	return true
 }
@@ -1368,6 +1368,8 @@ type cudaQueue struct {
 	mu   sync.Mutex
 	args []unsafe.Pointer
 	s    cudaSession
+	// prev is the context a Session on the queue found current (Swap).
+	prev cuda.CUctx
 	// stage is page-locked host memory every copy of this queue goes through,
 	// used from the front and reset once the stream has drained. A copy from
 	// pageable memory is staged by the driver synchronously, which stalls the
@@ -1510,11 +1512,10 @@ func (c *cudaDev) SessionOn(q Queue, f func(Session)) {
 	tid := threadID()
 	c.enterQueue(tid, cq)
 	defer c.leaveQueue(tid)
-	prev, err := c.d.Swap()
-	if err != nil {
+	if err := c.d.Swap(&cq.prev); err != nil {
 		return
 	}
-	defer c.d.Restore(prev)
+	defer c.d.Restore(cq.prev)
 	cq.s = cudaSession{c: c, q: cq}
 	f(&cq.s)
 }
