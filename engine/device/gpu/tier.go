@@ -277,6 +277,10 @@ type Config struct {
 	// sets it to one byte so every piece takes its own half and the
 	// pipeline's second stage runs on a fixture's small sheets.
 	StreamPinHalf int
+	// StreamPageableFrames keeps a card's frames in pageable memory, so a
+	// direct sheet goes through the page-locked halves: the halves' arm,
+	// which page-locked frames otherwise leave unused.
+	StreamPageableFrames bool
 	// StreamCacheSlots makes each streamed block's bank an expert cache of
 	// this many sheets, kept across tokens: a selected expert already there
 	// is neither read nor sent. 0 sizes the cache from the room each card has
@@ -582,8 +586,9 @@ type Stats struct {
 	// StreamDirect counts sheet planes sent straight from a host frame, and
 	// StreamGathered the gathered transfers: the selection check for put.
 	// StreamPinned counts the direct planes that went through the page-locked
-	// halves (sendPieces).
-	StreamDirect, StreamGathered, StreamPinned int
+	// halves (sendPieces), and StreamFromFrame those sent from a frame that is
+	// page-locked itself.
+	StreamDirect, StreamGathered, StreamPinned, StreamFromFrame int
 	// StreamCacheHits and StreamCacheMisses count selected experts found in
 	// and missing from a block's expert cache; StreamCacheShort counts blocks
 	// given the plain bank for want of room.
@@ -901,6 +906,7 @@ func (s *Stats) add(o Stats) {
 	s.StreamDirect += o.StreamDirect
 	s.StreamGathered += o.StreamGathered
 	s.StreamPinned += o.StreamPinned
+	s.StreamFromFrame += o.StreamFromFrame
 	s.StreamCacheHits += o.StreamCacheHits
 	s.StreamCacheMisses += o.StreamCacheMisses
 	s.StreamCacheShort += o.StreamCacheShort
@@ -1161,15 +1167,18 @@ type devShared struct {
 	// see streamStage.
 	sheetStage [9][]byte
 	// pin is the streamed fill's two page-locked halves, nil until the first
-	// direct sheet or on a device with no page-locked memory; pieces is
-	// put's list of direct sheets, kept so a token allocates none. See
-	// sendPieces.
-	pin     [2][]byte
-	noPin   bool
-	pieces  []sheetPiece
-	packWG  sync.WaitGroup
-	copyWG  sync.WaitGroup
-	packEnd int
+	// direct sheet from pageable memory or on a device with no page-locked
+	// memory; pieces is put's list of direct sheets and staged those of them
+	// the halves carry, kept so a token allocates none; pinnedFr the
+	// page-locked buffers this card's frames hold. See sendPieces.
+	pin      [2][]byte
+	noPin    bool
+	pieces   []sheetPiece
+	staged   []sheetPiece
+	pinnedFr pinnedSet
+	packWG   sync.WaitGroup
+	copyWG   sync.WaitGroup
+	packEnd  int
 	*Config
 	mu sync.Mutex
 	// tot is the device's counters (Stats). A view names them through its
