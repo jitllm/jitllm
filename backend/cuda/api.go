@@ -362,6 +362,30 @@ func (d *Device) Bind() error {
 	return d.drv.call(d.drv.cuCtxSetCurrent(d.ctx), "cuCtxSetCurrent")
 }
 
+// Swap makes this device's context current on the calling thread and is the
+// context that was current there (0 for none), for Restore: a thread running
+// one device's work that calls into another hands the first its context back,
+// since a context stays current on a thread until another is made current.
+func (d *Device) Swap() (CUctx, error) {
+	var prev CUctx
+	if err := d.drv.call(d.drv.cuCtxGetCurrent(&prev), "cuCtxGetCurrent"); err != nil {
+		return 0, err
+	}
+	if prev == d.ctx {
+		return prev, nil
+	}
+	return prev, d.Bind()
+}
+
+// Restore makes ctx, what Swap found current, current on the calling thread
+// again.
+func (d *Device) Restore(ctx CUctx) error {
+	if ctx == d.ctx {
+		return nil
+	}
+	return d.drv.call(d.drv.cuCtxSetCurrent(ctx), "cuCtxSetCurrent")
+}
+
 // Buffer is device memory, or host memory the device addresses (Import).
 type Buffer struct {
 	drv *Driver
