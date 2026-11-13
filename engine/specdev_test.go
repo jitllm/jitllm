@@ -48,7 +48,14 @@ func TestSpecGreedyOnDevice(t *testing.T) {
 						opts []SpecOption
 					}{{"k3", []SpecOption{WithSpecDraft(3)}}, {"adaptive", nil},
 						{"schedule", []SpecOption{withSpecSchedule(specSchedule())}}}
-					var drafted, accepted int64
+					if m.Cfg.Hybrid() {
+						// The card keeps a verification's rows (nn.RecRowKeeper).
+						arms = append(arms, struct {
+							name string
+							opts []SpecOption
+						}{"k3-rows", []SpecOption{WithSpecDraft(3), WithSpecRollback(SpecRollbackRows)}})
+					}
+					var drafted, accepted, restored int64
 					for _, text := range specPrompts() {
 						prompt := m.Vocab.Encode(text, true)
 						want := plainGreedy(t, m, prompt, n, g, openOpts...)
@@ -60,6 +67,12 @@ func TestSpecGreedyOnDevice(t *testing.T) {
 							}
 							drafted += st.Drafted
 							accepted += st.Accepted
+							if arm.name == "k3-rows" {
+								if st.Rollback != SpecRollbackRows {
+									t.Fatalf("%q: the rows rollback asked of %s ran %v", text, spec, st.Rollback)
+								}
+								restored += st.Restored
+							}
 							if i := firstDiff(got, want); i >= 0 {
 								gap, pert := devFlip(t, m, g, prompt, want[:i], want[i], got[i], openOpts...)
 								if gap > pert {
@@ -77,6 +90,9 @@ func TestSpecGreedyOnDevice(t *testing.T) {
 					}
 					if drafted == 0 || accepted == 0 {
 						t.Fatalf("%d drafted and %d accepted on %s: the speculation never ran", drafted, accepted, spec)
+					}
+					if m.Cfg.Hybrid() && restored == 0 {
+						t.Fatalf("no verification on %s returned to a kept row: the card's rows rollback never ran", spec)
 					}
 					// The breaks, on the device: each must part from plain
 					// decode somewhere past a tie.

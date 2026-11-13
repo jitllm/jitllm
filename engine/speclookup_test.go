@@ -136,6 +136,15 @@ func lookupArms(m *model.Model) []struct {
 	return arms
 }
 
+// deviceRollbacks are the rollbacks a device gate runs m under: the default,
+// and on a hybrid the rows rollback, a card keeping a call's rows.
+func deviceRollbacks(m *model.Model) []SpecRollback {
+	if m.Cfg.Hybrid() {
+		return []SpecRollback{SpecRollbackAuto, SpecRollbackRows}
+	}
+	return []SpecRollback{SpecRollbackAuto}
+}
+
 // TestSpecLookupMatchesDecode is the contract on the host, exact arithmetic,
 // and the acceptance report: drafted, accepted and tokens a pass on a copying
 // prompt against plain ones.
@@ -227,7 +236,9 @@ func TestSpecLookupGateDiscriminates(t *testing.T) {
 }
 
 // TestSpecLookupOnDevice is the contract with the trunk on a device, judged as
-// TestSpecGreedyOnDevice judges a flip: inside the band it is a tie.
+// TestSpecGreedyOnDevice judges a flip: inside the band it is a tie. A hybrid
+// runs the rows rollback too, its card keeping each verified row's state
+// (nn.RecRowKeeper), and some verification returns to a kept row.
 func TestSpecLookupOnDevice(t *testing.T) {
 	n := specTokens()
 	specs := testdevices.Specs("cuda:0", "vulkan:0", "metal")
@@ -245,7 +256,7 @@ func TestSpecLookupOnDevice(t *testing.T) {
 					}
 					defer g.Close()
 					ran++
-					var accepted int64
+					var accepted, restored int64
 					heads := 0
 					for _, text := range lookupPrompts()[:2] {
 						prompt := m.Vocab.Encode(text, true)
@@ -262,24 +273,35 @@ func TestSpecLookupOnDevice(t *testing.T) {
 						// A random-weight fixture repeats nothing: its drafts are forced
 						// (plain decode's tokens, every fifth wrong), so the device's
 						// rollback both keeps and rejects rows.
-						got, ss := lookupGreedy(t, m, openOpts, prompt, n, g, specFaultNone, oracleFor(name, want))
-						accepted += ss.Accepted
-						heads += ss.DeviceHeads
-						if i := firstDiff(got, want); i >= 0 {
-							gap, pert := devFlip(t, m, g, prompt, want[:i], want[i], got[i], openOpts...)
-							if gap > pert {
-								t.Fatalf("%q: token %d is %d, plain greedy on %s says %d, %.4f apart against a "+
-									"%.4f reach of the band -- not a tie", text, i, got[i], spec, want[i], gap, pert)
+						for _, rb := range deviceRollbacks(m) {
+							got, ss := lookupGreedy(t, m, openOpts, prompt, n, g, specFaultNone, oracleFor(name, want), WithSpecRollback(rb))
+							if rb == SpecRollbackRows {
+								if ss.Rollback != SpecRollbackRows {
+									t.Fatalf("%q: the rows rollback asked of %s ran %v", text, spec, ss.Rollback)
+								}
+								restored += ss.Restored
 							}
-							t.Logf("%q: a tie at token %d (%.4f apart, band %.4f); equal before it",
-								text[:min(len(text), 24)], i, gap, pert)
+							accepted += ss.Accepted
+							heads += ss.DeviceHeads
+							if i := firstDiff(got, want); i >= 0 {
+								gap, pert := devFlip(t, m, g, prompt, want[:i], want[i], got[i], openOpts...)
+								if gap > pert {
+									t.Fatalf("%q: token %d is %d, plain greedy on %s says %d, %.4f apart against a "+
+										"%.4f reach of the band -- not a tie", text, i, got[i], spec, want[i], gap, pert)
+								}
+								t.Logf("%q: a tie at token %d (%.4f apart, band %.4f); equal before it",
+									text[:min(len(text), 24)], i, gap, pert)
+							}
+							t.Logf("%s %-24q: %d rounds, %d drafted, %d accepted, %.2f tokens a pass, rollback %v",
+								spec, text[:min(len(text), 24)], ss.Rounds, ss.Drafted, ss.Accepted, ss.TokensPerRound(),
+								ss.Rollback)
 						}
-						t.Logf("%s %-24q: %d rounds, %d drafted, %d accepted, %.2f tokens a pass, rollback %v",
-							spec, text[:min(len(text), 24)], ss.Rounds, ss.Drafted, ss.Accepted, ss.TokensPerRound(),
-							ss.Rollback)
 					}
 					if accepted == 0 {
 						t.Fatalf("nothing accepted on %s: the speculation never ran", spec)
+					}
+					if m.Cfg.Hybrid() && restored == 0 {
+						t.Fatalf("no verification on %s returned to a kept row: the card's rows rollback never ran", spec)
 					}
 					// A hyper-connected model's verifications project on the
 					// device after the host's collapse (rowsHead).

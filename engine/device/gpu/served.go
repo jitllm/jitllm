@@ -2512,6 +2512,13 @@ func (g *devTier) bindRec(sv *servedPart, bs *blockScratch, sid uint64, l *layer
 		return false
 	}
 	t := sv.sl.tables
+	if g.keeping {
+		k := g.kept
+		if k == nil || k.s[l] == nil {
+			return false
+		}
+		t[tableKey(composer.TableRecKeep)], t[tableKey(composer.TableRecConvKeep)] = k.s[l], k.c[l]
+	}
 	t[tableKey(composer.TableRecConv)], t[tableKey(composer.TableRecConvOut)] = l.pool.c[par], l.pool.c[1-par]
 	if g.recShared {
 		if bs.cRows == nil {
@@ -3031,13 +3038,18 @@ func (g *devTier) servedBlockAs(l *layer, li int, cs backend.Buf, pl *kvLayerPoo
 			more = []composer.History{{ValuesInKeys: true, Period: pe.geom.period}}
 		}
 	}
-	sk := servedKey{kind: kind, graph: l.graph, rows: R, keys: keys, page: page, half: geom.f16, latent: geom.mla, seqs: seqs, stream: run != nil,
+	// A step that keeps its rows runs a linear block's keep form.
+	bg := l.graph
+	if k := g.kept; g.keeping && l.linear && k != nil && k.graphs[l] != nil {
+		bg = k.graphs[l]
+	}
+	sk := servedKey{kind: kind, graph: bg, rows: R, keys: keys, page: page, half: geom.f16, latent: geom.mla, seqs: seqs, stream: run != nil,
 		held: l.pagedHeld()}
 	sv, err := g.servedFor(sk, func() (composedPart, error) {
 		// The request names no block: blocks of one structure and formats
 		// share a form, each launched on its own bindings, one after
 		// another on the device's queue.
-		gr := *l.graph
+		gr := *bg
 		gr.Block = 0
 		sl := composedPart{kind: kind, graph: &gr, formats: map[jlm.Role]jlm.Type{},
 			weights: map[jlm.Role]*resident{}, vectors: map[jlm.Role]backend.Buf{},
@@ -3067,6 +3079,9 @@ func (g *devTier) servedBlockAs(l *layer, li int, cs backend.Buf, pl *kvLayerPoo
 			}
 			t[tableKey(composer.TableRecState)], t[tableKey(composer.TableRecStateOut)], t[tableKey(composer.TableRecConv)], t[tableKey(composer.TableRecConvOut)] = l.pool.s[0], out, l.pool.c[0], l.pool.c[1]
 			t[tableKey(composer.TableRecRows)] = rec
+		}
+		if k := g.kept; g.keeping && l.linear && k != nil {
+			sl.tables[tableKey(composer.TableRecKeep)], sl.tables[tableKey(composer.TableRecConvKeep)] = k.s[l], k.c[l]
 		}
 		for _, o := range l.graph.Ops {
 			for _, w := range o.Weight {

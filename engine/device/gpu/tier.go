@@ -1282,9 +1282,12 @@ type devShared struct {
 	flushFn      func(backend.Session)
 	flushErr     error
 	recSnapOrder []recSnapKey
-	recSlots     int
-	recShared    bool
-	recS, recC   int
+	// keepGraphs are the linear blocks' graphs that keep a call's rows, by
+	// the block's (reckeep.go).
+	keepGraphs map[*graph.Graph]*graph.Graph
+	recSlots   int
+	recShared  bool
+	recS, recC int
 	// recNext is the one "next state" buffer the shared form writes, sized
 	// for the widest step that needed it.
 	recNext      backend.Buf
@@ -2050,6 +2053,7 @@ func (g *devTier) Close() {
 	g.partsClose()
 	g.freeMarks()
 	for _, ds := range g.sess {
+		g.freeKept(ds)
 		ds.closeQueue()
 	}
 	if hp, ok := g.dev.(backend.HostPinner); ok {

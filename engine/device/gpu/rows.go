@@ -118,6 +118,11 @@ func (g *devTier) layersRows(lo, hi int, rs *ragStep, x, cs, csSWA []float32, he
 	}
 	g.mu.Unlock()
 	if grp < n {
+		if k := g.kept; k != nil && k.armed > 0 {
+			// Each group's rows are its own entries: no row of the call is
+			// kept at its slot.
+			k.split = true
+		}
 		return g.rowsInGroups(lo, hi, grp, rs, x, cs, csSWA, head)
 	}
 	if g.NoBatch {
@@ -1014,6 +1019,21 @@ func (s *gpuSession) RecMark() {
 func (s *gpuSession) RecRewind() bool {
 	defer s.leave(s.enter())
 	return s.g.recRewind(s.sid)
+}
+
+func (s *gpuSession) RecKeepPrep(rows int) error {
+	defer s.leave(s.enter())
+	return s.g.recKeepPrep(s.sid, rows)
+}
+
+func (s *gpuSession) RecKeepRows(rows int) {
+	defer s.leave(s.enter())
+	s.g.recKeepRows(s.sid, rows)
+}
+
+func (s *gpuSession) RecRestoreRow(row int) bool {
+	defer s.leave(s.enter())
+	return s.g.recRestoreRow(s.sid, row)
 }
 
 // ResetRecRows is resetRecRows for the zero session: a caller that never attached.
