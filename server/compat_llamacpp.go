@@ -1501,7 +1501,7 @@ func (g *llamaRun) stream() {
 				return nil
 			}
 			frame := map[string]any{"index": res.index, "content": ev.Token.Text, "tokens": res.pendIDs, "stop": false,
-				"id_slot": 0, "tokens_predicted": res.n}
+				"id_slot": g.slot, "tokens_predicted": res.n}
 			if st := res.started; st != nil {
 				frame["tokens_evaluated"] = st.PromptTokens
 				// timings_per_token: the timings so far, the decode
