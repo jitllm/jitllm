@@ -78,9 +78,9 @@ type Args struct {
 //
 // amd64: the kernel must obey the System V callee-saved contract for RBX, RBP
 // and R12-R15, EXCEPT that RBX, R12, R13 and R15 are saved by the trampoline
-// itself so kernels may use them freely. R14 is not offered on any terms: Go's
-// register ABI pins it to the current goroutine, and handing the runtime a
-// corrupted g is not a bug that reproduces near its cause. An AVX2-tier kernel
+// itself so kernels may use them freely. R14 needs no saving: the trampoline
+// is ABI0, and the Go caller reloads g into R14 from TLS after the call
+// (trampoline_amd64.s). An AVX2-tier kernel
 // must also VZEROUPPER before returning, or every later SSE instruction in the
 // process is taxed — a symptom that appears in code which never called a
 // kernel. An SSE-tier kernel must NOT: VZEROUPPER is itself VEX-encoded and

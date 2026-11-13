@@ -172,11 +172,12 @@ func cpuWideProfile() Profile {
 			56: {int(x86.RBX)}, 112: {int(x86.RSI)}, 120: {int(x86.R8), int(x86.R10)}, 128: {int(x86.R9)}, 136: {int(x86.R12)}},
 			// The registers a value takes once its role's are taken: main's six,
 			// then every general register no role holds -- not RSP, RDI (the
-			// argument block), RBP, R14, the counters R10 and RAX, which are
-			// bound after the values, nor R15, which a reloaded address takes
-			// (reloadReg).
+			// argument block), RBP, the counters R10 and RAX, which are bound
+			// after the values, nor R15, which a reloaded address takes
+			// (reloadReg). R14 is last: the trampoline's caller reloads g into
+			// it after every call (trampoline_amd64.s).
 			Spare: []int{int(x86.RSI), int(x86.R11), int(x86.R8), int(x86.R9), int(x86.R12), int(x86.R13),
-				int(x86.RBX), int(x86.RCX), int(x86.RDX)},
+				int(x86.RBX), int(x86.RCX), int(x86.RDX), int(x86.R14)},
 			Counters: [2]int{int(x86.R10), int(x86.R11)}, Outer: int(x86.RAX),
 			Kept: []int{int(x86.R9), int(x86.RDX), int(x86.R12), int(x86.R13)}, Vectors: 16, Scratch: int(x86.RAX),
 			Reloads:  [2]int{int(x86.R13), int(x86.RBX)},
