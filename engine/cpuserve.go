@@ -84,10 +84,44 @@ func (s *Instance) placeLanes() {
 		lo: s.lo, trace: &s.opt.tracer, cut: &s.cutPlans}
 	s.places[routeLanes].(nn.LanePlacer).PlaceLanes(n, &s.lease, planes, s.c.NExpert, s.prof)
 	s.bindLanes(s.Session)
-	if !s.prepLater {
+	switch {
+	case s.prepLater:
+	case !s.listed(routeLanes):
+		// A CPU the caller did not list runs only what no device takes:
+		// that is prepared once the devices have made their offers.
+		s.markUnprepped()
+	default:
 		s.prepFrames()
 	}
 	s.placeParts()
+}
+
+// markUnprepped records every block prepFrames would have prepared as not
+// prepared yet (prepLeft).
+func (s *Instance) markUnprepped() {
+	n := max(s.c.NLayer, s.hi)
+	if len(s.unprepped) < n {
+		s.unprepped = make([]bool, n)
+	}
+	for li := s.lo; li < min(s.hi, n); li++ {
+		if r := s.slotAt(li); r != slotNone && s.fromFrames[r] {
+			s.unprepped[li] = true
+		}
+	}
+}
+
+// prepLeft prepares, on its route's device, each block markUnprepped left
+// that is still there.
+func (s *Instance) prepLeft() {
+	for li, u := range s.unprepped {
+		if !u {
+			continue
+		}
+		s.unprepped[li] = false
+		if r := s.slotAt(li); r != slotNone && s.fromFrames[r] {
+			s.places[r].PrepLayer(li, s.planFor(li), nil)
+		}
+	}
 }
 
 // prepFrames prepares each block on its route's device where that device runs
