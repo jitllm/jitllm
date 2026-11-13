@@ -27,12 +27,15 @@ type fakeBackend struct {
 
 	mu   sync.Mutex
 	last GenerateOptions
-	ids  int
+	// all is every generate's options, in the order they came.
+	all []GenerateOptions
+	ids int
 }
 
 func (f *fakeBackend) Generate(ctx context.Context, o GenerateOptions, emit func(Event) error) error {
 	f.mu.Lock()
 	f.last = o
+	f.all = append(f.all, o)
 	f.mu.Unlock()
 
 	if f.failWith != nil {
@@ -128,6 +131,15 @@ func (f *fakeBackend) Embed(ctx context.Context, o EmbedOptions) (*EmbedResult, 
 
 func (f *fakeBackend) Decide(ctx context.Context, o DecideOptions) (*DecideResult, error) {
 	return nil, fmt.Errorf("%w: the scripted backend decides nothing", ErrInvalid)
+}
+
+// took is every generate's options since the last call, in order.
+func (f *fakeBackend) took() []GenerateOptions {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	all := f.all
+	f.all = nil
+	return all
 }
 
 func (f *fakeBackend) opts() GenerateOptions {

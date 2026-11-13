@@ -37,15 +37,22 @@ constrain the output; `n_probs` reports the raw distribution (at most 20).
 accepted either way: the prefix cache is automatic and never changes the
 output. `POST /props` answers 501, as llama-server does without `--props`.
 
+A `prompt` array holding no token id is a list of prompts, as llama-server
+reads it, and `n_cmpl` (or its alias `n`) asks for that many completions of
+each: the answer is the results in llama-server's order, each prompt and then
+its completions, indexed so, and a single result is the object itself. With a
+`seed`, completion i of a prompt samples with seed+i. Streamed, every frame
+carries its result's `index`.
+
 A field the engine cannot honour is refused by name with a 400, at any value
-but its neutral one: `mirostat`, `dry_multiplier`, `xtc_probability`,
-`typical_p`, `dynatemp_range`, `presence_penalty`, `frequency_penalty`,
-`logit_bias`, `samplers` beyond penalties/top_k/top_p/min_p/temperature,
-`n_cmpl` above 1, `id_slot` other than -1 and 0, `n_predict` 0, `n_keep`,
-`n_cache_reuse`, `t_max_predict_ms`, `timings_per_token`, `return_progress`,
-`post_sampling_probs`, `response_fields`, `lora`, `repeat_last_n` other than
-64 or 0, `embd_normalize` other than 2, a list of prompts, and multimodal
-prompts. A field llama.cpp does not define is refused as unknown. On a
+but its neutral one: `dry_multiplier`, `adaptive_target`, `min_keep`,
+`samplers` beyond penalties/top_n_sigma/top_k/typ_p/top_p/min_p/xtc/temperature,
+`n_indent`, `n_keep`, `n_discard`, `n_cache_reuse`, `t_max_predict_ms`,
+`t_max_prompt_ms`, `timings_per_token`, `return_progress`,
+`post_sampling_probs`, `lora`, `sse_ping_interval`, `id_slot` other than -1
+and 0, `n_predict` 0, `embd_normalize` other than 2, and multimodal prompts
+(`multimodal_data`, `image_data`). A field llama.cpp does not define is
+refused as unknown. On a
 byte-level BPE vocabulary `/tokenize` with `parse_special: false` is refused
 when the text contains a control token, because the tokenizer matches it either
 way.
