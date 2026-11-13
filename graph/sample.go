@@ -31,21 +31,22 @@ type SampleTopK struct {
 
 func (s *SampleTopK) Build() *Graph {
 	b := New()
-	vals, ids := s.emit(b)
+	_, vals, ids := s.emit(b)
 	b.Out(vals, ids)
 	return b.G
 }
 
-// emit is SampleTopK on b: its inputs, then the K values and their ids.
-func (s *SampleTopK) emit(b *Builder) (vals, ids ValueID) {
+// emit is SampleTopK on b: its inputs, then the penalized row, the K values
+// and their ids.
+func (s *SampleTopK) emit(b *Builder) (v, vals, ids ValueID) {
 	K := min(s.K, s.NVocab)
 	l := b.In("logits", s.NVocab)
 	win := b.In("sample.window", s.NVocab)
 	pen := b.In("sample.penalty", 3)
-	v := penalizedRow(b, l, win, pen)
+	v = penalizedRow(b, l, win, pen)
 	cand := b.Emit(OpTopK, []ValueID{v}, []Result{{Name: "sample.ids", Width: K, Elem: ElemU32}, {Name: "sample.vals", Width: K}}, nil,
 		Attrs{TopK: K}, nil, nil)
-	return cand[1], cand[0]
+	return v, cand[1], cand[0]
 }
 
 // penalizedRow is llama.cpp's penalties over logits l, on each token the
@@ -92,23 +93,48 @@ func penalizedRow(b *Builder, l, win, pen ValueID) ValueID {
 // as top-p's. With Prob the outputs are the distribution the draw draws
 // from (u unread): each candidate's share of the survivors' softmax at the
 // temperature (0 where it is cut), then the candidates' ids.
+//
+// With Infill the survivors go through llama.cpp's infill sampler at the
+// temperature before the walk (sampleEmitter.infill), and the draw may be
+// its end-of-turn token in place of any candidate. sample.walk has an
+// eleventh word, top-n-sigma's n (on above 0): a candidate under the
+// largest logit less n standard deviations of the penalized row's finite
+// logits is out before the cuts. sample.infill.class and
+// sample.infill.parent (the vocabulary's prefix tables, tok.Infill, u32
+// over the vocabulary), sample.eog (the EOG end-of-generation ids) and
+// sample.eot (the end-of-turn id, u32) follow it; Depth is the prefix
+// tables' depth. Infill is never Prob.
 type SampleWalk struct {
 	SampleTopK
-	Prob bool
+	Prob       bool
+	Infill     bool
+	Depth, EOG int
 }
 
 func (s *SampleWalk) Build() *Graph {
 	b := New()
-	vals, ids := s.emit(b)
-	walk := b.In("sample.walk", 10)
+	v, vals, ids := s.emit(b)
+	words := 10
+	if s.Infill {
+		words = 11
+	}
+	walk := b.In("sample.walk", words)
 	K := b.G.Values[vals].Width
 	e := sampleEmitter{b}
+	if s.Infill {
+		thr := e.sigma(v, e.word(walk, 10, "sample.sigma"))
+		vals = e.mapc(MapWhere, math.Inf(-1), "sample.sig.vals", K, e.not("sample.sig.keep", K, e.mapc(MapLess, 0, "sample.sig.under", K, vals, thr)), vals)
+	}
 	place, d, cut := e.cuts(vals, walk)
 	keep := e.xtc(e.mapc(MapExp, 0, "sample.xtc.ed", K, d), cut, place, e.word(walk, 6, "sample.xtc"))
 	invT, u := e.word(walk, 1, "sample.invtemp"), e.word(walk, 4, "sample.u")
 	rng, ex := e.word(walk, 8, "sample.dyn.range"), e.word(walk, 9, "sample.dyn.exp")
 	ed := e.mapc(MapExp, 0, "sample.dyn.ed", K, d)
 	edt := e.mapc(MapExp, 0, "sample.etd", K, e.mapc(MapMul, 0, "sample.dt", K, d, e.dynTemp(ed, keep, invT, rng, ex, "sample.dyn")))
+	var forced, eot ValueID
+	if s.Infill {
+		keep, forced, eot = e.infill(s, ids, place, edt, keep)
+	}
 	et := e.mapc(MapMul, 0, "sample.et", K, edt, keep)
 	mass := e.one(OpReduce, "sample.mass", 1, Attrs{Fn: MapAdd}, et)
 	if s.Prob {
@@ -132,6 +158,14 @@ func (s *SampleWalk) Build() *Graph {
 	notLand := e.mapc(MapAdd, 1, "sample.notland", K, e.mapc(MapMul, -1, "sample.land.neg", K, land))
 	score := e.mapc(MapAdd, 0, "sample.walkscore", K, e.mapc(MapMul, 0, "sample.landscore", K, land, hi),
 		e.mapc(MapMul, 0, "sample.fallscore", K, notLand, fall))
+	if s.Infill {
+		// The end-of-turn token beside the candidates: past every score
+		// (2K at most) where the draw is forced to it, under every one else.
+		all := b.Emit(OpConcat, []ValueID{ids, eot}, []Result{{Name: "sample.inf.ids", Width: K + 1, Elem: ElemU32}}, nil, Attrs{}, nil, nil)[0]
+		es := e.mapc(MapAdd, -1, "sample.inf.eotscore", 1, e.mapc(MapMul, float64(4*K+1), "sample.inf.eotup", 1, forced))
+		score = b.Emit(OpConcat, []ValueID{score, es}, []Result{{Name: "sample.inf.scores", Width: K + 1}}, nil, Attrs{}, nil, nil)[0]
+		ids = all
+	}
 	b.Out(e.token(ids, score))
 	return b.G
 }
@@ -228,20 +262,7 @@ func (s *SampleCut) Build() *Graph {
 		return e.mapc(MapAdd, 1, name, w, e.mapc(MapMul, -1, name+".neg", w, x))
 	}
 	if s.Typical {
-		// Top-n-sigma: the finite logits' mean and deviation, the threshold
-		// the largest less n of them (-Inf where n is not above 0).
-		ns := e.word(cut, x, "sample.sigma")
-		fin := notv("sample.sig.fin", n, e.mapc(MapLess, -math.MaxFloat32, "sample.sig.inf", n, v))
-		cnt := e.one(OpReduce, "sample.sig.count", 1, Attrs{Fn: MapAdd}, fin)
-		mean := e.mapc(MapDiv, 0, "sample.sig.mean", 1, e.one(OpReduce, "sample.sig.sum", 1, Attrs{Fn: MapAdd},
-			e.mapc(MapWhere, 0, "sample.sig.fv", n, fin, v)), cnt)
-		dv := e.mapc(MapWhere, 0, "sample.sig.dv", n, fin, e.mapc(MapSub, 0, "sample.sig.d", n, v, mean))
-		dev := e.mapc(MapSqrt, 0, "sample.sig.dev", 1, e.mapc(MapDiv, 0, "sample.sig.var", 1,
-			e.one(OpReduce, "sample.sig.ss", 1, Attrs{Fn: MapAdd}, e.mapc(MapMul, 0, "sample.sig.d2", n, dv, dv)), cnt))
-		vmax := e.one(OpReduce, "sample.sig.max", 1, Attrs{Fn: MapMax}, v)
-		on := notv("sample.sig.on", 1, e.mapc(MapLess, math.SmallestNonzeroFloat32, "sample.sig.off", 1, ns))
-		thr := e.mapc(MapWhere, math.Inf(-1), "sample.sig.thr", 1, on,
-			e.mapc(MapSub, 0, "sample.sig.edge", 1, vmax, e.mapc(MapMul, 0, "sample.sig.ndev", 1, ns, dev)))
+		thr := e.sigma(v, e.word(cut, x, "sample.sigma"))
 		v = e.mapc(MapWhere, math.Inf(-1), "sample.sig.v", n, notv("sample.sig.keep", n, e.mapc(MapLess, 0, "sample.sig.under", n, v, thr)), v)
 	}
 	order := e.softmax(v, "sample.q1")
@@ -544,6 +565,177 @@ func (e sampleEmitter) cuts(vals, params ValueID) (place, d, keep ValueID) {
 	first := e.mapc(MapEqual, 0, "sample.first", K, place, fp)
 	keep = e.mapc(MapMax, 0, "sample.keep", K, e.mapc(MapMul, 0, "sample.keep.pmk", K, e.mapc(MapMul, 0, "sample.keep.pm", K, keepP, keepM), keepT), first)
 	return place, d, keep
+}
+
+// not is 1 - x.
+func (e sampleEmitter) not(name string, w int, x ValueID) ValueID {
+	return e.mapc(MapAdd, 1, name, w, e.mapc(MapMul, -1, name+".neg", w, x))
+}
+
+// sigma is top-n-sigma's threshold over the row v at n (ns): the largest of
+// its finite values less n of their standard deviations, -Inf where n is not
+// above 0.
+func (e sampleEmitter) sigma(v, ns ValueID) ValueID {
+	n := e.b.G.Values[v].Width
+	fin := e.not("sample.sig.fin", n, e.mapc(MapLess, -math.MaxFloat32, "sample.sig.inf", n, v))
+	cnt := e.one(OpReduce, "sample.sig.count", 1, Attrs{Fn: MapAdd}, fin)
+	mean := e.mapc(MapDiv, 0, "sample.sig.mean", 1, e.one(OpReduce, "sample.sig.sum", 1, Attrs{Fn: MapAdd},
+		e.mapc(MapWhere, 0, "sample.sig.fv", n, fin, v)), cnt)
+	dv := e.mapc(MapWhere, 0, "sample.sig.dv", n, fin, e.mapc(MapSub, 0, "sample.sig.d", n, v, mean))
+	dev := e.mapc(MapSqrt, 0, "sample.sig.dev", 1, e.mapc(MapDiv, 0, "sample.sig.var", 1,
+		e.one(OpReduce, "sample.sig.ss", 1, Attrs{Fn: MapAdd}, e.mapc(MapMul, 0, "sample.sig.d2", n, dv, dv)), cnt))
+	vmax := e.one(OpReduce, "sample.sig.max", 1, Attrs{Fn: MapMax}, v)
+	on := e.not("sample.sig.on", 1, e.mapc(MapLess, math.SmallestNonzeroFloat32, "sample.sig.off", 1, ns))
+	return e.mapc(MapWhere, math.Inf(-1), "sample.sig.thr", 1, on,
+		e.mapc(MapSub, 0, "sample.sig.edge", 1, vmax, e.mapc(MapMul, 0, "sample.sig.ndev", 1, ns, dev)))
+}
+
+// infill is llama.cpp's infill sampler (llama_sampler_infill_apply) over the
+// K candidates keep leaves, in place order, w their weights at the draw's
+// temperature: what survives it, whether the draw is forced to the
+// end-of-turn token in place of any of them, and the input holding that
+// token. Its inputs, after the walk's words, are the vocabulary's prefix
+// tables, its end-of-generation ids and the end-of-turn id (SampleWalk).
+//
+// Over the survivors' probabilities p: where three times the
+// end-of-generation tokens' mass times the survivors' count passes the
+// rest's mass, the end-of-generation survivors alone survive. Else each
+// survivor in place order, while it is in, takes in place order the others
+// still in whose piece its piece prefixes, its mass growing with each, until
+// one of them holds more than it: that one takes it, and what it took. Then
+// a survivor under 0.2 that does not end a generation is out; with none of
+// those left the draw is the end-of-turn token, else, the rest renormalized,
+// those under 1/(n+1) are out, n the ones that do not end a generation. The
+// draw walks what survives by its weight, as every walk does.
+//
+// A survivor's takes are one step: in the order the others are in, the
+// first whose mass passes the survivor's and the mass of those before it
+// takes them all, and with none the survivor takes them all.
+func (e sampleEmitter) infill(s *SampleWalk, ids, place, w, keep ValueID) (out, forced, eot ValueID) {
+	b := e.b
+	K, n, E := b.G.Values[ids].Width, s.NVocab, max(s.EOG, 1)
+	u32 := func(name string, width int) ValueID {
+		v := b.In(name, width)
+		b.G.Values[v].Elem = ElemU32
+		return v
+	}
+	class, parent := u32("sample.infill.class", n), u32("sample.infill.parent", n)
+	eogs := b.In("sample.eog", E)
+	eot = u32("sample.eot", 1)
+	take := func(name string, table, at ValueID) ValueID {
+		return b.Emit(OpTake, []ValueID{table, at}, []Result{{Name: name, Width: K, Elem: ElemU32}}, nil, Attrs{}, nil, nil)[0]
+	}
+	sum := func(name string, x ValueID) ValueID { return e.one(OpReduce, name, 1, Attrs{Fn: MapAdd}, x) }
+	tile := func(name string, x ValueID) ValueID { return e.one(OpTile, name, K*K, Attrs{Span: K}, x) }
+	in := func(i int) Arg { return Arg{Kind: ArgIn, Index: i} }
+	term := func(i int) Arg { return Arg{Kind: ArgTerm, Index: i} }
+	cst := func(c float64) Arg { return Arg{Kind: ArgConst, Const: c} }
+	expr := func(name string, width int, ins []ValueID, terms ...Term) ValueID {
+		return b.Emit(OpExpr, ins, []Result{{Name: name, Width: width}}, nil, Attrs{Expr: terms}, nil, nil)[0]
+	}
+
+	idf := e.mapc(MapMul, 1, "sample.inf.idf", K, ids)
+	eog := e.one(OpReduce, "sample.inf.eog", K, Attrs{Fn: MapMax, Span: E},
+		e.mapc(MapEqual, 0, "sample.inf.eogeq", K*E, idf, e.one(OpTile, "sample.inf.eogs", K*E, Attrs{Span: E}, eogs)))
+	txt := e.not("sample.inf.txt", K, eog)
+	wk := e.mapc(MapMul, 0, "sample.inf.w", K, w, keep)
+	p := e.mapc(MapDiv, 0, "sample.inf.p", K, wk, sum("sample.inf.wsum", wk))
+	pe := sum("sample.inf.pe", e.mapc(MapMul, 0, "sample.inf.pes", K, p, eog))
+	pt := sum("sample.inf.pt", e.mapc(MapMul, 0, "sample.inf.pts", K, p, txt))
+	pen := e.mapc(MapMul, 3, "sample.inf.pe3n", 1, e.mapc(MapMul, 0, "sample.inf.pen", 1, pe, sum("sample.inf.n", keep)))
+	eogOnly := e.mapc(MapLess, 0, "sample.inf.eogonly", 1, pt, pen)
+
+	// pm[r*K+c] is 1 where candidate r's piece prefixes candidate c's: r's
+	// class is c's or one of the Depth parents up from c's. Each candidate's
+	// chain -- its class, then its parents -- lies candidate by candidate
+	// (chain[c*L+d], L links), every row r against every chain at once.
+	cls := take("sample.inf.cls", class, ids)
+	clsf := e.mapc(MapMul, 1, "sample.inf.clsf", K, cls)
+	L := s.Depth + 1
+	links := []ValueID{cls}
+	for range s.Depth {
+		links = append(links, take("sample.inf.up", parent, links[len(links)-1]))
+	}
+	chain := b.Emit(OpConcat, links, []Result{{Name: "sample.inf.chain", Width: K * L, Elem: ElemU32}}, nil, Attrs{NHead: K}, nil, nil)[0]
+	chainf := e.mapc(MapMul, 1, "sample.inf.chainf", K*L, chain)
+	anc := e.mapc(MapEqual, 0, "sample.inf.anc", K*K*L, clsf, e.one(OpTile, "sample.inf.chains", K*K*L, Attrs{Span: K * L}, chainf))
+	pm := e.one(OpReduce, "sample.inf.pm", K*K, Attrs{Fn: MapMax, Span: L}, anc)
+	pm = e.mapc(MapMul, 0, "sample.inf.pmx", K*K, pm,
+		e.not("sample.inf.offdiag", K*K, e.mapc(MapEqual, 0, "sample.inf.diag", K*K, place, tile("sample.inf.placet", place))))
+	// lt[r*K+c] is 1 where c's place is before r's.
+	lt := e.mapc(MapLess, 0, "sample.inf.lt", K*K, tile("sample.inf.ltp", place), place)
+
+	alive := keep
+	for t := range K {
+		row := e.one(OpSlice, "sample.inf.row", K, Attrs{Offset: t * K, Width: K}, pm)
+		a0, p0 := e.word(alive, t, "sample.inf.a0"), e.word(p, t, "sample.inf.p0")
+		sv := e.mapc(MapMul, 0, "sample.inf.s", K, row, alive)
+		sp := e.mapc(MapMul, 0, "sample.inf.sp", K, sv, p)
+		before := e.one(OpReduce, "sample.inf.before", K, Attrs{Fn: MapAdd, Span: K}, e.mapc(MapMul, 0, "sample.inf.lower", K*K, tile("sample.inf.spt", sp), lt))
+		// The first place whose mass passes t's and the mass before it,
+		// +Inf where none does.
+		first := e.one(OpReduce, "sample.inf.first", 1, Attrs{Fn: MapMin}, expr("sample.inf.firsts", K, []ValueID{sv, p, p0, before, place},
+			Term{Fn: MapAdd, Args: [3]Arg{in(2), in(3)}},
+			Term{Fn: MapLess, Args: [3]Arg{term(0), in(1)}},
+			Term{Fn: MapMul, Args: [3]Arg{in(0), term(1)}},
+			Term{Fn: MapWhere, Args: [3]Arg{term(2), in(4), cst(math.Inf(1))}}))
+		// t's mass with what it takes before that one.
+		tk := expr("sample.inf.tk", K, []ValueID{sv, place, first},
+			Term{Fn: MapLess, Args: [3]Arg{in(1), in(2)}},
+			Term{Fn: MapMul, Args: [3]Arg{in(0), term(0)}})
+		r := e.mapc(MapAdd, 0, "sample.inf.r", 1, p0, sum("sample.inf.taken", e.mapc(MapMul, 0, "sample.inf.takes", K, tk, p)))
+		// Out where t takes it, or t itself where one takes t; that one's
+		// mass grows by r, or t's becomes r where none does. Each term set is
+		// small: a wider one runs out of registers and is taken apart a term
+		// a formation at a time.
+		me := expr("sample.inf.me", K, []ValueID{place, first},
+			Term{Fn: MapEqual, Args: [3]Arg{in(0), cst(float64(t))}},
+			Term{Fn: MapLess, Args: [3]Arg{in(1), cst(float64(K))}},
+			Term{Fn: MapMul, Args: [3]Arg{term(0), term(1)}})
+		gone := expr("sample.inf.gone", K, []ValueID{tk, me, a0},
+			Term{Fn: MapAdd, Args: [3]Arg{in(0), in(1)}},
+			Term{Fn: MapMul, Args: [3]Arg{in(2), term(0)}})
+		less := func(name string, x ValueID) ValueID {
+			return expr(name, K, []ValueID{x, gone},
+				Term{Fn: MapMul, Args: [3]Arg{in(0), in(1)}},
+				Term{Fn: MapSub, Args: [3]Arg{in(0), term(0)}})
+		}
+		gain := expr("sample.inf.gain", K, []ValueID{place, first, a0, r},
+			Term{Fn: MapEqual, Args: [3]Arg{in(0), in(1)}},
+			Term{Fn: MapMul, Args: [3]Arg{term(0), in(2)}},
+			Term{Fn: MapMul, Args: [3]Arg{term(1), in(3)}})
+		self := expr("sample.inf.self", K, []ValueID{place, me, a0, r, p0},
+			Term{Fn: MapEqual, Args: [3]Arg{in(0), cst(float64(t))}},
+			Term{Fn: MapSub, Args: [3]Arg{term(0), in(1)}},
+			Term{Fn: MapMul, Args: [3]Arg{term(1), in(2)}},
+			Term{Fn: MapSub, Args: [3]Arg{in(3), in(4)}},
+			Term{Fn: MapMul, Args: [3]Arg{term(2), term(3)}})
+		p = expr("sample.inf.pn", K, []ValueID{less("sample.inf.kept", p), gain, self},
+			Term{Fn: MapAdd, Args: [3]Arg{in(0), in(1)}},
+			Term{Fn: MapAdd, Args: [3]Arg{term(0), in(2)}})
+		alive = less("sample.inf.alive", alive)
+	}
+
+	// The thresholds: 0.2, then 1/(n+1) over the rest renormalized; an
+	// end-of-generation survivor stays whatever its mass.
+	keep1 := expr("sample.inf.keep1", K, []ValueID{alive, p, txt},
+		Term{Fn: MapLess, Args: [3]Arg{in(1), cst(0.2)}},
+		Term{Fn: MapMul, Args: [3]Arg{term(0), in(2)}},
+		Term{Fn: MapMul, Args: [3]Arg{in(0), term(1)}},
+		Term{Fn: MapSub, Args: [3]Arg{in(0), term(2)}})
+	nTxt := sum("sample.inf.ntxt", e.mapc(MapMul, 0, "sample.inf.txtkept", K, keep1, txt))
+	pk := e.mapc(MapMul, 0, "sample.inf.pk", K, p, keep1)
+	p2 := e.mapc(MapDiv, 0, "sample.inf.p2", K, pk, sum("sample.inf.pksum", pk))
+	thold := e.mapc(MapRecip, 0, "sample.inf.thold", 1, e.mapc(MapAdd, 1, "sample.inf.n1", 1, nTxt))
+	keep2 := expr("sample.inf.keep2", K, []ValueID{keep1, p2, thold, txt},
+		Term{Fn: MapLess, Args: [3]Arg{in(1), in(2)}},
+		Term{Fn: MapMul, Args: [3]Arg{term(0), in(3)}},
+		Term{Fn: MapMul, Args: [3]Arg{in(0), term(1)}},
+		Term{Fn: MapSub, Args: [3]Arg{in(0), term(2)}})
+	out = e.where("sample.inf.out", K, eogOnly, e.mapc(MapMul, 0, "sample.inf.eogkeep", K, keep, eog), keep2)
+	forced = e.mapc(MapMul, 0, "sample.inf.forced", 1, e.mapc(MapLess, 0.5, "sample.inf.none", 1, nTxt), e.not("sample.inf.merged", 1, eogOnly))
+	// A forced draw walks the survivors it had, so the walk reads a mass.
+	return e.where("sample.inf.kept", K, forced, keep, out), forced, eot
 }
 
 // where is the term where(c, a, b): a where c > 0, else b.

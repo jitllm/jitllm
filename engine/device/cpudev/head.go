@@ -13,7 +13,8 @@ import (
 // a top-k draw's walk, a draw's row and cut with no top-k and its top-k
 // variant, their distributions, the output norm alone, the log-softmax's
 // and a constrained draw's mask; the Typ forms are the cuts with typical-p,
-// Miro and MiroV1 Mirostat's draws.
+// Miro and MiroV1 Mirostat's draws, WalkInfill a top-k draw's walk through
+// the infill sampler.
 type HeadParts struct {
 	Head, Hidden, Rows, Pick                 Part
 	Sample, Walk, Row, Cut                   Part
@@ -22,6 +23,7 @@ type HeadParts struct {
 	Decide                                   Part
 	CutTyp, CutTypProb, CutKTyp, CutKTypProb Part
 	Miro, MiroV1                             Part
+	WalkInfill                               Part
 }
 
 // Head is the head and the samplers on the CPU device, composed once at the
@@ -61,6 +63,12 @@ type Head struct {
 	rowArgs  [2]float32
 	cutArgs  [10]float32
 	cutKArgs [11]float32
+	// infill is the vocabulary's tables an infill draw reads, infArgs its
+	// walk's words (walkArgs' and top-n-sigma's n) and infEOT its end-of-turn
+	// token.
+	infill  nn.InfillTables
+	infArgs [11]float32
+	infEOT  [1]uint32
 	// ids is the row's ids, 0 to the vocabulary's last, which the draws with
 	// no top-k read.
 	ids []uint32
@@ -81,9 +89,10 @@ type Head struct {
 // NewHead is the head part over rows of width d and a vocabulary of nv on
 // dev, counted in steps: its forms p, norm where the model has an output
 // norm, their weights bound by w; topLog is the most alternatives the
-// log-softmax selects.
-func NewHead(dev *Device, steps *nn.Steps, p HeadParts, norm bool, w Weights, d, nv, topLog int) *Head {
-	h := &Head{p: p, norm: norm, w: w, dev: dev, steps: steps, d: d, nv: nv}
+// log-softmax selects; inf is the vocabulary's tables an infill draw reads.
+func NewHead(dev *Device, steps *nn.Steps, p HeadParts, norm bool, w Weights, d, nv, topLog int, inf nn.InfillTables) *Head {
+	h := &Head{p: p, norm: norm, w: w, dev: dev, steps: steps, d: d, nv: nv, infill: inf}
+	h.infEOT[0] = inf.EOT
 	if f := h.p.OutNorm.F; f != nil {
 		h.onPad = make([]float32, 2*max(f.Unit, 1)*d)
 	}
@@ -99,7 +108,7 @@ func NewHead(dev *Device, steps *nn.Steps, p HeadParts, norm bool, w Weights, d,
 	q := &h.p
 	cuts := q.Row.F != nil || q.Cut.F != nil || q.CutProb.F != nil || q.CutK.F != nil || q.CutKProb.F != nil ||
 		q.CutTyp.F != nil || q.CutTypProb.F != nil || q.CutKTyp.F != nil || q.CutKTypProb.F != nil || q.Miro.F != nil || q.MiroV1.F != nil
-	if cuts || q.Walk.F != nil || q.WalkProb.F != nil {
+	if cuts || q.Walk.F != nil || q.WalkProb.F != nil || q.WalkInfill.F != nil {
 		h.noWin = make([]float32, nv)
 	}
 	if q.WalkProb.F != nil {
@@ -319,6 +328,9 @@ func (h *Head) Draw(logits []float32, a nn.DrawArgs, u float32) (int32, bool) {
 	if a.Mirostat != 0 {
 		return h.mirostat(logits, &a, u)
 	}
+	if a.Infill {
+		return h.walkInfill(logits, &a, u)
+	}
 	if a.TopK > 0 && a.TopK < n && a.TopK <= nn.SampleMaxK && a.Sigma <= 0 {
 		return h.walk(logits, &a, u)
 	}
@@ -390,6 +402,32 @@ func (h *Head) walk(logits []float32, a *nn.DrawArgs, u float32) (int32, bool) {
 	h.walkArgs = [10]float32{float32(a.TopK), a.InvTemp, a.TopP, a.MinP, u, typ, xtc, 1, a.DynRange, a.DynExp}
 	h.run(f, nil, 1, unsafe.Pointer(&logits[0]), win, unsafe.Pointer(&h.pen[0]), unsafe.Pointer(&h.walkArgs[0]),
 		unsafe.Pointer(&h.token[0]))
+	h.steps.Serve(nn.PartSample)
+	return int32(h.token[0]), true
+}
+
+// walkInfill is a's draw through the infill sampler over logits at the
+// uniform u, or false where its form declines: a top-k past InfillMaxK, or
+// none, reads InfillMaxK candidates.
+func (h *Head) walkInfill(logits []float32, a *nn.DrawArgs, u float32) (int32, bool) {
+	f, _, why := h.form(&h.p.WalkInfill, false)
+	if why != nn.DeclineServes || len(h.infill.Class) != len(logits) {
+		if why == nn.DeclineServes {
+			why = nn.DeclineCaller
+		}
+		h.steps.Decline(nn.PartSample, why)
+		return 0, false
+	}
+	k := a.TopK
+	if k <= 0 || k > nn.InfillMaxK {
+		k = nn.InfillMaxK
+	}
+	win := h.window(a)
+	typ, xtc, _ := ext(a)
+	h.infArgs = [11]float32{float32(k), a.InvTemp, a.TopP, a.MinP, u, typ, xtc, 1, a.DynRange, a.DynExp, a.Sigma}
+	h.run(f, nil, 1, unsafe.Pointer(&logits[0]), win, unsafe.Pointer(&h.pen[0]), unsafe.Pointer(&h.infArgs[0]),
+		unsafe.Pointer(&h.infill.Class[0]), unsafe.Pointer(&h.infill.Parent[0]), unsafe.Pointer(&h.infill.EOG[0]),
+		unsafe.Pointer(&h.infEOT[0]), unsafe.Pointer(&h.token[0]))
 	h.steps.Serve(nn.PartSample)
 	return int32(h.token[0]), true
 }

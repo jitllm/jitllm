@@ -248,6 +248,22 @@ const (
 // form is made for it once, and a larger k reads the logits back.
 const SampleMaxK = 256
 
+// InfillMaxK is the most candidates an infill draw reads (graph.SampleWalk's
+// Infill), whose sampler runs a step a candidate: a draw with no top-k, or
+// one past this, draws as though its top-k were this.
+const InfillMaxK = 64
+
+// InfillTables are what an infill draw reads of the vocabulary (tok.Infill),
+// over the logits' row: each token's class and each class's parent, the
+// depth of their chains, the end-of-generation ids and the end-of-turn
+// token.
+type InfillTables struct {
+	Class, Parent []uint32
+	Depth         int
+	EOG           []float32
+	EOT           uint32
+}
+
 // DecisionOptions is the most options a label readout weighs, and
 // DecisionGroup the most token ids one option is read at (a label, its spaced
 // form and a case's forms): the readout's form (graph.DecisionScores) is made

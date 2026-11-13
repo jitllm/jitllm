@@ -253,6 +253,9 @@ type DrawArgs struct {
 	Mu               *float32
 	Penalty          Penalties
 	Window           []float32
+	// Infill runs llama.cpp's infill sampler over the survivors before the
+	// draw, at a top-k of at most InfillMaxK.
+	Infill bool
 }
 
 // Penalties are a draw's penalties over the tokens its window holds, as

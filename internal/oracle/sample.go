@@ -307,6 +307,18 @@ func xtcCut(surv []int, p func(i int) float64, thr float64) ([]int, float64) {
 // passes u times their mass, the last where none does. It returns the token
 // and how far u's point is from the nearest edge, as a share of the mass.
 func SampleWalk(logits []float32, K, k int, invT, topp, minp, typ, xtc float64, dyn [2]float64, u float64) (tok uint32, margin float64) {
+	ids, et, margin := walkSurvivors(logits, K, k, invT, topp, minp, typ, xtc, dyn)
+	in := make([]bool, len(ids))
+	for j := range in {
+		in[j] = true
+	}
+	tok, wm := walkAt(ids, et, in, u)
+	return tok, min(margin, wm)
+}
+
+// walkSurvivors is SampleWalk's survivors in their order, their ids and
+// their weights at the temperature, and how far the cuts are from turning.
+func walkSurvivors(logits []float32, K, k int, invT, topp, minp, typ, xtc float64, dyn [2]float64) (ids []uint32, et []float64, margin float64) {
 	order := make([]int, len(logits))
 	for i := range order {
 		order[i] = i
@@ -359,24 +371,143 @@ func SampleWalk(logits []float32, K, k int, invT, topp, minp, typ, xtc float64, 
 		ps[j] = p[i]
 	}
 	invT = DynTemp(ps, invT, dyn)
-	et := make([]float64, len(kept))
-	mass := 0.0
+	ids, et = make([]uint32, len(kept)), make([]float64, len(kept))
 	for j, i := range kept {
+		ids[j] = uint32(order[i])
 		et[j] = math.Exp((float64(logits[order[i]]) - v0) * invT)
-		mass += et[j]
+	}
+	return ids, et, min(tm, xm)
+}
+
+// walkAt is the walk at u over the candidates in marks, ids in their order
+// by weights w: the first whose weight up to and including it passes u times
+// their sum, the last of them where none does; and how far u's point is from
+// the nearest edge, as a share of the sum.
+func walkAt(ids []uint32, w []float64, in []bool, u float64) (tok uint32, margin float64) {
+	mass := 0.0
+	for j, x := range w {
+		if in[j] {
+			mass += x
+			tok = ids[j]
+		}
 	}
 	target, upto := u*mass, 0.0
-	margin = min(tm, xm)
-	tok = uint32(order[kept[len(kept)-1]])
+	margin = math.Inf(1)
 	landed := false
-	for j, i := range kept {
-		upto += et[j]
+	for j, x := range w {
+		if !in[j] {
+			continue
+		}
+		upto += x
 		margin = min(margin, math.Abs(upto-target)/mass)
 		if !landed && upto > target {
-			tok, landed = uint32(order[i]), true
+			tok, landed = ids[j], true
 		}
 	}
 	return tok, margin
+}
+
+// SampleInfill is SampleWalk's draw through llama.cpp's infill sampler
+// (llama_sampler_infill_apply), read as written: top-n-sigma at sigma (on
+// above 0) over the row first, SampleWalk's survivors, then over their
+// softmax at the temperature, with each token's piece and whether it ends a
+// generation (piece, eog), either the end-of-generation survivors alone
+// (where three times their mass times the survivors' count passes the
+// rest's) or the merge of every survivor into the more likely of it and a
+// survivor its piece prefixes, in their order, then the thresholds 0.2 and
+// 1/(n+1), with the draw the end-of-turn token eot where no survivor not
+// ending a generation is left. What survives is walked at u by its weight.
+// Branch is which way it went: 0 the merge, 1 the end-of-generation
+// survivors, 2 eot. The margin is the least distance of a comparison the
+// sampler made, or of u's point, from turning.
+func SampleInfill(logits []float32, K, k int, invT, topp, minp, typ, xtc, sigma float64, dyn [2]float64, u float64,
+	piece func(int) string, eog func(int) bool, eot int) (tok uint32, branch int, margin float64) {
+	margin = math.Inf(1)
+	if sigma > 0 {
+		logits, margin = TopNSigma(logits, sigma)
+	}
+	ids, et, wm := walkSurvivors(logits, K, k, invT, topp, minp, typ, xtc, dyn)
+	margin = min(margin, wm)
+	n := len(ids)
+	p := make([]float64, n)
+	mass := 0.0
+	for _, x := range et {
+		mass += x
+	}
+	pe, pt := 0.0, 0.0
+	for j := range ids {
+		p[j] = et[j] / mass
+		if eog(int(ids[j])) {
+			pe += p[j]
+		} else {
+			pt += p[j]
+		}
+	}
+	margin = min(margin, math.Abs(3*pe*float64(n)-pt))
+	in := make([]bool, n)
+	if 3*pe*float64(n) > pt {
+		for j := range ids {
+			in[j] = eog(int(ids[j]))
+		}
+		tok, wm = walkAt(ids, et, in, u)
+		return tok, 1, min(margin, wm)
+	}
+	dead := make([]bool, n)
+	for i0 := range n {
+		for i1 := range n {
+			if dead[i0] {
+				break
+			}
+			if i0 == i1 || dead[i1] {
+				continue
+			}
+			p0, p1 := piece(int(ids[i0])), piece(int(ids[i1]))
+			if len(p0) > 0 && len(p0) <= len(p1) && p1[:len(p0)] == p0 {
+				margin = min(margin, math.Abs(p[i1]-p[i0]))
+				dst, src := i0, i1
+				if p[i1] > p[i0] {
+					dst, src = i1, i0
+				}
+				p[dst] += p[src]
+				p[src], dead[src] = 0, true
+			}
+		}
+	}
+	keep := make([]bool, n)
+	txt, sum := 0, 0.0
+	for j := range ids {
+		e := eog(int(ids[j]))
+		if !e && !dead[j] {
+			margin = min(margin, math.Abs(p[j]-0.2))
+		}
+		if p[j] < 0.2 && !e {
+			continue
+		}
+		keep[j] = true
+		sum += p[j]
+		if !e {
+			txt++
+		}
+	}
+	if txt == 0 {
+		return uint32(eot), 2, margin
+	}
+	thold := 1 / float64(txt+1)
+	for j := range ids {
+		if !keep[j] {
+			continue
+		}
+		e := eog(int(ids[j]))
+		if !e {
+			margin = min(margin, math.Abs(p[j]/sum-thold))
+		}
+		if p[j]/sum < thold && !e {
+			continue
+		}
+		in[j] = !dead[j]
+	}
+	tok, wm = walkAt(ids, et, in, u)
+	return tok, 0, min(margin, wm)
 }
 
 // SampleCut is the draw with no top-k and a cut: the repeat penalty once a

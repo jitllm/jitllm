@@ -50,6 +50,7 @@ func (s *Instance) partsPlan() *nn.PartsPlan {
 		p.Head[16+i] = part(g, 1)
 	}
 	p.Head[20], p.Head[21] = part(fg.CpuMiro, 1), part(fg.CpuMiroV1, 1)
+	p.Head[22], p.Infill = part(fg.CpuWalkInfill, 1), fg.Infill
 
 	if s.c.StatesStreams() {
 		p.Streams, p.NStreams = true, s.c.Streams()

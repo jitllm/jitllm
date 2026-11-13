@@ -121,8 +121,8 @@ func llamaChain() []string {
 // llamaSamplers reads samplers as llama-server reads it: an array of names,
 // each canonical, kebab-case, without its underscore or one of nucleus, temp
 // and typ, in any case; or a string of their letters. The draw runs its
-// stages in llamaChain's order, so a list in another order is refused, as is
-// a name it does not run.
+// stages in llamaChain's order, then infill, so a list in another order is
+// refused, as is a name it does not run.
 func llamaSamplers(raw json.RawMessage) ([]string, error) {
 	var names []string
 	if json.Unmarshal(raw, &names) != nil {
@@ -146,7 +146,7 @@ func llamaSamplers(raw json.RawMessage) ([]string, error) {
 		alias[strings.ReplaceAll(n, "_", "-")] = n
 		alias[strings.ReplaceAll(n, "_", "")] = n
 	}
-	chain := llamaChain()
+	chain := append(llamaChain(), "infill")
 	out := make([]string, 0, len(names))
 	at := 0
 	for _, n := range names {
@@ -1142,7 +1142,7 @@ func llamaSampler(s llamaSettings, nctx int) *engine.Sampler {
 		DynatempRange: s.DynatempRange, DynatempExponent: s.DynatempExponent, Mirostat: s.Mirostat,
 		MirostatTau: s.MirostatTau, MirostatEta: s.MirostatEta, TopK: max(s.TopK, 0),
 		RepeatPen: s.RepeatPenalty, RepeatLastN: s.RepeatLastN, PresencePen: s.PresencePenalty,
-		FreqPen: s.FrequencyPenalty, Seed: s.Seed}
+		FreqPen: s.FrequencyPenalty, Seed: s.Seed, Infill: slices.Contains(s.Samplers, "infill")}
 	switch s.RepeatLastN {
 	case 0:
 		sm.RepeatPen, sm.PresencePen, sm.FreqPen = 1, 0, 0

@@ -47,6 +47,11 @@ type Sampler struct {
 	// penalties over the same window: 0 = disabled.
 	PresencePen, FreqPen float64
 	Seed                 int64
+	// Infill runs llama.cpp's infill sampler over the survivors before the
+	// draw (graph.SampleWalk's Infill), at a top-k of at most
+	// nn.InfillMaxK: a draw with no top-k, or one past it, draws as though
+	// its top-k were that.
+	Infill bool
 
 	rng  *rand.Rand
 	hist []int32
@@ -114,10 +119,11 @@ func (s *Sampler) penalties() nn.Penalties {
 }
 
 // Bounded reports whether a draw over n logits is a top-k draw, the one a
-// device can select for (nn.Head.SampleK): sampled, with 0 < TopK < n and no
-// top-n-sigma, which reads the whole row.
+// device can select for (nn.Head.SampleK): sampled, with 0 < TopK < n, no
+// top-n-sigma, which reads the whole row, and no infill sampler.
 func (s *Sampler) Bounded(n int) bool {
-	return s != nil && s.Temp > 0 && s.TopK > 0 && s.TopK < n && s.TopK <= MaxTopK && s.TopNSigma <= 0 && s.Mirostat == 0
+	return s != nil && s.Temp > 0 && s.TopK > 0 && s.TopK < n && s.TopK <= MaxTopK && s.TopNSigma <= 0 && s.Mirostat == 0 &&
+		!s.Infill
 }
 
 // MaxTopK is above every vocabulary a container states, so a top-k past it is

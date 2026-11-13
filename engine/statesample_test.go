@@ -114,6 +114,9 @@ func TestStateSampleIsComposed(t *testing.T) {
 		{"top-k and top-n-sigma", Sampler{Temp: 1.2, TopK: 40, TopNSigma: 1, TopP: 0.9, Seed: 53}},
 		{"dynamic temperature", Sampler{Temp: 0.8, DynatempRange: 0.5, DynatempExponent: 1.5, Seed: 59}},
 		{"top-k and dynamic temperature", Sampler{Temp: 1, TopK: 40, DynatempRange: 0.7, MinP: 0.02, Seed: 61}},
+		{"infill", Sampler{Temp: 1, TopK: 40, TopP: 0.99, Infill: true, Seed: 67}},
+		{"infill past its candidates", Sampler{Temp: 0.9, TopP: 0.95, RepeatPen: 1.2, Infill: true, Seed: 71}},
+		{"infill and top-n-sigma", Sampler{Temp: 1.1, TopK: 50, TopNSigma: 1, MinP: 0.02, Infill: true, Seed: 73}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			st := testInstance(t, m, 96)
@@ -140,7 +143,7 @@ func TestStateSampleIsComposed(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if ref, mg := sampleRef(lg, hist, c.smp, u, xtc); got != ref {
+				if ref, mg := sampleRef(m, lg, hist, c.smp, u, xtc); got != ref {
 					if mg >= 1e-6 {
 						t.Fatalf("draw %d: the composed draw is %d, its definition's %d (u %.9f, margin %.3g)", i, got, ref, u, mg)
 					}
@@ -170,9 +173,10 @@ func TestStateSampleIsComposed(t *testing.T) {
 }
 
 // sampleRef is the draw s makes over logits at u by its definition
-// (internal/oracle): the walk over a top-k's candidates, else the cut, which
-// is the row's where no cut fires; and how far the draw is from flipping.
-func sampleRef(logits []float32, hist []int, s Sampler, u, xtc float64) (int32, float64) {
+// (internal/oracle): the walk over a top-k's candidates, through the infill
+// sampler over m's pieces where s asks for it, else the cut, which is the
+// row's where no cut fires; and how far the draw is from flipping.
+func sampleRef(m *model.Model, logits []float32, hist []int, s Sampler, u, xtc float64) (int32, float64) {
 	pen := float32(1)
 	if s.RepeatPen > 1 && len(hist) > 0 {
 		pen = float32(s.RepeatPen)
@@ -187,6 +191,22 @@ func sampleRef(logits []float32, hist []int, s Sampler, u, xtc float64) (int32, 
 		oracle.PenalizeOnce(v, hist, pen)
 		logits, sig = oracle.TopNSigma(v, s.TopNSigma)
 		hist, pen = nil, 1
+	}
+	if s.Infill {
+		k := s.TopK
+		if k <= 0 || k > nn.InfillMaxK {
+			k = nn.InfillMaxK
+		}
+		v := append([]float32(nil), logits...)
+		oracle.PenalizeOnce(v, hist, pen)
+		piece := func(id int) string {
+			p, _ := m.Vocab.Piece(int32(id))
+			return p
+		}
+		eog := func(id int) bool { return m.Vocab.IsEOG(int32(id)) }
+		tok, _, mg := oracle.SampleInfill(v, nn.InfillMaxK, k, float64(invT), float64(topp), float64(minp), float64(s.typical()), xtc, 0, dyn, u,
+			piece, eog, int(m.Vocab.Infill().EOT))
+		return int32(tok), min(mg, sig)
 	}
 	if s.TopK > 0 && s.TopK < len(logits) {
 		v := append([]float32(nil), logits...)

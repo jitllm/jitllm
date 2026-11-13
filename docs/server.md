@@ -54,7 +54,11 @@ that long has passed since decoding began, `stop_type` `limit`. `samplers`
 (names with llama.cpp's aliases, or a string of their letters) is the stages
 that run, as llama-server runs them: a list in the draw's order (penalties,
 dry, top_n_sigma, top_k, typ_p, top_p, min_p, xtc, temperature) runs with the
-stages it leaves out off, so a list without `temperature` draws at 1. A prompt
+stages it leaves out off, so a list without `temperature` draws at 1; `infill`
+comes last, and runs llama.cpp's infill sampler over the survivors (the merge
+of tokens whose pieces prefix one another, its thresholds, and the end-of-turn
+token where nothing else is left) over at most the 64 most likely candidates,
+a draw with no `top_k` or a larger one reading those 64. A prompt
 `{"prompt_string": ..., "multimodal_data": [...]}` carries base64 pictures,
 each standing where the text holds `<__media__>`, in order, wrapped in the
 markers the model's container states, after the model's leading specials, as
@@ -72,7 +76,7 @@ stream it is taken to no effect, as llama-server takes it.
 
 A field the engine cannot honour is refused by name with a 400, at any value
 but its neutral one: `dry_multiplier`, `adaptive_target`, `min_keep`,
-a `samplers` list out of the draw's order or naming `infill` or `adaptive_p`,
+a `samplers` list out of the draw's order or naming `adaptive_p`,
 `n_keep`, `n_discard`, `n_cache_reuse`,
 `post_sampling_probs`, `lora`, `embd_normalize` other
 than 2, and an audio file in `multimodal_data`. The top-level

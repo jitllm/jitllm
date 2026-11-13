@@ -2208,7 +2208,7 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 	if o.Speculation != nil {
 		spec = *o.Speculation
 	}
-	speculate := spec.Enabled && !spans && !o.Continue && !(o.Echo && o.Logprobs)
+	speculate := spec.Enabled && !spans && !o.Continue && !(o.Echo && o.Logprobs) && !(o.Sampling != nil && o.Sampling.Infill)
 	var con *constraint
 	if tc, err := lm.toolConstraint(o, tail); err != nil {
 		return err
