@@ -3,6 +3,8 @@ package composer
 import (
 	"fmt"
 	"time"
+
+	"github.com/jitllm/jitllm/composer/x86"
 )
 
 // Pass is one optimization: IR in, rewritten IR out. It decides from the
@@ -77,6 +79,12 @@ func (p Profile) counted(ks []*Kernel, d Device, c *formCache) ([]*Kernel, error
 		for _, k := range ks {
 			k.Unvector = true
 		}
+	}
+	// Every pass reads which words a vector register holds (VectorWords),
+	// so an unvectored kernel's general-register words are its from the
+	// first pass, not only the binding's.
+	for _, k := range ks {
+		k.BitsGPR = k.Unvector && d.ISA&uint64(x86.ISASSE2) != 0
 	}
 	for _, ps := range p.Passes {
 		if p.Off[ps.Name()] {

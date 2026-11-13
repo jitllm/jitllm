@@ -191,6 +191,9 @@ func TestSSEOpsMatchObjdump(t *testing.T) {
 	add("cvttss2si rax,xmm1", func(a *Buf) { a.CVTTSS2SI(RAX, XMM1) })
 	add("cvttss2si r11,xmm13", func(a *Buf) { a.CVTTSS2SI(R11, XMM13) })
 	add("cvtss2si rdx,xmm2", func(a *Buf) { a.CVTSS2SI(RDX, XMM2) })
+	add("cvttss2si eax,xmm1", func(a *Buf) { a.CVTTSS2SIL(RAX, XMM1) })
+	add("cvttss2si r11d,xmm13", func(a *Buf) { a.CVTTSS2SIL(R11, XMM13) })
+	add("cvtss2si edx,xmm2", func(a *Buf) { a.CVTSS2SIL(RDX, XMM2) })
 
 	// ---- integer, SSE2 ----
 	for _, c := range []struct {

@@ -750,8 +750,16 @@ func (e *x86Lowerer) node(i int) {
 	case OpUpper:
 		a.VEXTRACTF128(e.reg(i), e.reg(nd.A), 1)
 	case OpRoundI32:
+		if e.gpr(i) {
+			a.VCVTSS2SIL(e.reg(i), e.reg(nd.A))
+			return
+		}
 		a.VCVTPS2DQ(e.reg(i), e.reg(nd.A))
 	case OpCvtI32:
+		if e.gpr(i) {
+			a.VCVTTSS2SIL(e.reg(i), e.reg(nd.A))
+			return
+		}
 		a.VCVTTPS2DQ(e.reg(i), e.reg(nd.A))
 	case OpXor:
 		if e.gpr(i) {

@@ -5312,6 +5312,19 @@ coordinate word short and holds both forms to the oracle;
 TestCountsBeyondTheWordsAreTheKernelsConstants forms a Llama block one count
 word short.
 
+What landed is not a binding step: the words leave the vector registers.
+VectorWords seeded a word in a vector register at a constants-table load and
+at a float's conversion (cvti32, roundi32) and spread the class through every
+integer chain those words touch, and a vector register does not spill. An
+unvectored kernel on x86 (Kernel.BitsGPR, set where the profile counts the
+kernels' vector loops, so every pass reads the classes the binding does)
+leaves those seeds to the general registers, which spill: a constants word
+is a MOVL load, and a float converts with a scalar VCVTTSS2SI/VCVTSS2SI
+(CVTTSS2SI/CVTSS2SI at the SSE tier). The old container's entry composes and
+its picture runs; `composer.TestComposedCPUScalarPictureKeepsItsWordsInGeneralRegisters`
+composes that entry's map -- premultiplied RGBA, 512 a side, into rows of
+768 -- and holds it to the oracle, and HEAD refuses it at node 38.
+
 ## Design notes moved out of source comments
 
 Each entry below is a comment that stood in the named source file,
