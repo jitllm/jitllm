@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"slices"
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
@@ -226,7 +227,10 @@ func recSteps() []struct {
 // its state from its slot read, held to the oracle at every row's output
 // and at the state its slot written holds after; every other slot stays
 // untouched. With each row made its own run -- the state not carried from
-// row to row -- the forms must part.
+// row to row -- the forms must part. Each is formed keeping its rows too
+// (graph.Attrs.Keeps): every entry's slot of the keep table holds the
+// oracle's state after that entry's row, the entries past the live rows
+// untouched.
 func TestComposedGPURecurrentRuns(t *testing.T) {
 	testlock.GPU(t)
 	devs := openDevices()
@@ -253,7 +257,16 @@ func TestComposedGPURecurrentRuns(t *testing.T) {
 func recurrentRuns(t *testing.T, d backend.Device, dev composer.Device) {
 	const R = 8
 	rng := rand.New(rand.NewSource(23))
-	ran, parted := 0, 0
+	ran, parted, kept := 0, 0, 0
+	// The keeping forms draw from a stream of their own, so the plain forms'
+	// inputs are what they were.
+	krng := rand.New(rand.NewSource(29))
+	pick := func(keeps bool) *rand.Rand {
+		if keeps {
+			return krng
+		}
+		return rng
+	}
 	for _, s := range []deltaShape{
 		{h: 4, kh: 2, dk: 16, dv: 8},
 		{h: 4, kh: 2, dk: 7, dv: 5, tiled: true},
@@ -266,76 +279,92 @@ func recurrentRuns(t *testing.T, d backend.Device, dev composer.Device) {
 		{h: 5120, kh: 1, dk: 16, dv: 1, chans: true, additive: true},
 		{h: 32, kh: 8, dk: 128, dv: 8, additive: true},
 	} {
-		g := deltaGraphOf(s)
-		fr, err := formRec(d, dev, g, R, map[jlm.Role]jlm.Type{})
-		if err != nil {
-			t.Fatalf("%+v: %v", s, err)
-		}
-		for _, st := range recSteps() {
-			for _, chained := range []bool{true, false} {
-				worst, err := runDelta(fr, g, s, st.n, st.runs, chained, rng)
-				if err != nil {
-					fr.close()
-					t.Fatalf("%+v %s: %v", s, st.name, err)
-				}
-				longest := 0
-				for _, run := range st.runs {
-					longest = max(longest, len(run))
-				}
-				switch {
-				case !chained && longest > 1 && worst > 1e-3:
-					parted++
-				case chained && worst > 2e-5:
-					fr.close()
-					t.Fatalf("%+v %s: the composed delta rule is %g from the oracle", s, st.name, worst)
-				}
-				if chained {
-					ran++
+		for _, keeps := range []bool{false, true} {
+			s.keeps = keeps
+			g := deltaGraphOf(s)
+			fr, err := formRec(d, dev, g, R, map[jlm.Role]jlm.Type{})
+			if err != nil {
+				t.Fatalf("%+v: %v", s, err)
+			}
+			for _, st := range recSteps() {
+				for _, chained := range []bool{true, false} {
+					worst, err := runDelta(fr, g, s, st.n, st.runs, chained, pick(keeps))
+					if err != nil {
+						fr.close()
+						t.Fatalf("%+v %s: %v", s, st.name, err)
+					}
+					longest := 0
+					for _, run := range st.runs {
+						longest = max(longest, len(run))
+					}
+					switch {
+					case !chained && longest > 1 && worst > 1e-3:
+						parted++
+					// A row's output sums dk products: its f32 error grows with
+					// dk, held relative to its size (relErr).
+					case chained && worst > 2e-5*max(1, float64(s.dk)/32):
+						fr.close()
+						t.Fatalf("%+v %s: the composed delta rule is %g from the oracle", s, st.name, worst)
+					}
+					if chained {
+						ran++
+						if keeps {
+							kept++
+						}
+					}
 				}
 			}
+			fr.close()
 		}
-		fr.close()
 	}
 	for _, sh := range [][2]int{{2, 3}, {4, 7}, {4, 33}, {3, 64}, {5, 9}, {4, 1536}, {4, 6144}} {
-		T, C := sh[0], sh[1]
-		b := graph.New()
-		x := b.In("x", C)
-		b.Out(b.Emit(graph.OpStateConv, []graph.ValueID{x}, []graph.Result{{Name: "conv", Width: C}},
-			[]graph.Binding{{Role: jlm.RoleSSMConv1d, K: T, Rows: C}}, graph.Attrs{Taps: T},
-			[]graph.StateRef{{State: graph.StateRecConv}}, []graph.StateRef{{State: graph.StateRecConv, Version: 1}})[0])
-		fr, err := formRec(d, dev, b.G, R, map[jlm.Role]jlm.Type{jlm.RoleSSMConv1d: jlm.TypeF32})
-		if err != nil {
-			t.Fatalf("%d taps over %d: %v", T, C, err)
-		}
-		for _, st := range recSteps() {
-			for _, chained := range []bool{true, false} {
-				worst, err := runConv(fr, b.G, T, C, st.n, st.runs, chained, rng)
-				if err != nil {
-					fr.close()
-					t.Fatalf("%d taps over %d %s: %v", T, C, st.name, err)
-				}
-				longest := 0
-				for _, run := range st.runs {
-					longest = max(longest, len(run))
-				}
-				switch {
-				case !chained && longest > 1 && worst > 1e-3:
-					parted++
-				case chained && worst > 1e-5:
-					fr.close()
-					t.Fatalf("%d taps over %d %s: the composed convolution is %g from the oracle", T, C, st.name, worst)
-				}
-				if chained {
-					ran++
+		for _, keeps := range []bool{false, true} {
+			T, C := sh[0], sh[1]
+			b := graph.New()
+			x := b.In("x", C)
+			b.Out(b.Emit(graph.OpStateConv, []graph.ValueID{x}, []graph.Result{{Name: "conv", Width: C}},
+				[]graph.Binding{{Role: jlm.RoleSSMConv1d, K: T, Rows: C}}, graph.Attrs{Taps: T, Keeps: keeps},
+				[]graph.StateRef{{State: graph.StateRecConv}}, []graph.StateRef{{State: graph.StateRecConv, Version: 1}})[0])
+			fr, err := formRec(d, dev, b.G, R, map[jlm.Role]jlm.Type{jlm.RoleSSMConv1d: jlm.TypeF32})
+			if err != nil {
+				t.Fatalf("%d taps over %d: %v", T, C, err)
+			}
+			for _, st := range recSteps() {
+				for _, chained := range []bool{true, false} {
+					worst, err := runConv(fr, b.G, T, C, st.n, st.runs, chained, keeps, pick(keeps))
+					if err != nil {
+						fr.close()
+						t.Fatalf("%d taps over %d %s: %v", T, C, st.name, err)
+					}
+					longest := 0
+					for _, run := range st.runs {
+						longest = max(longest, len(run))
+					}
+					switch {
+					case !chained && longest > 1 && worst > 1e-3:
+						parted++
+					case chained && worst > 1e-5:
+						fr.close()
+						t.Fatalf("%d taps over %d %s: the composed convolution is %g from the oracle", T, C, st.name, worst)
+					}
+					if chained {
+						ran++
+						if keeps {
+							kept++
+						}
+					}
 				}
 			}
+			fr.close()
 		}
-		fr.close()
 	}
 	if parted == 0 {
 		t.Fatal("a state not carried from row to row never parts from the oracle: the gate cannot see it")
 	}
-	t.Logf("%d steps held to the oracle; unchained runs parted %d times", ran, parted)
+	if kept == 0 {
+		t.Fatal("no step kept its rows' states: the keep arm never ran")
+	}
+	t.Logf("%d steps held to the oracle, %d of them keeping their rows; unchained runs parted %d times", ran, kept, parted)
 }
 
 // deltaShape is a delta rule's geometry: value heads, key heads, the key's
@@ -343,6 +372,8 @@ func recurrentRuns(t *testing.T, d backend.Device, dev composer.Device) {
 type deltaShape struct {
 	h, kh, dk, dv          int
 	tiled, chans, additive bool
+	// keeps forms the rule keeping its rows (graph.Attrs.Keeps).
+	keeps bool
 }
 
 func deltaGraphOf(s deltaShape) *graph.Graph {
@@ -354,9 +385,34 @@ func deltaGraphOf(s deltaShape) *graph.Graph {
 	q, k := b.In("q", s.kh*s.dk), b.In("k", s.kh*s.dk)
 	v, d, beta := b.In("v", s.h*s.dv), b.In("decay", nd), b.In("beta", s.h)
 	b.Out(b.Emit(graph.OpDeltaRule, []graph.ValueID{q, k, v, d, beta}, []graph.Result{{Name: "o", Width: s.h * s.dv}}, nil,
-		graph.Attrs{NHead: s.h, NKVHead: s.kh, HeadDim: s.dk, Tiled: s.tiled, Additive: s.additive},
+		graph.Attrs{NHead: s.h, NKVHead: s.kh, HeadDim: s.dk, Tiled: s.tiled, Additive: s.additive, Keeps: s.keeps},
 		[]graph.StateRef{{State: graph.StateRecState}}, []graph.StateRef{{State: graph.StateRecState, Version: 1}})[0])
 	return b.G
+}
+
+// relErr is got's distance from want, relative to want's size past 1: an
+// f32 sum's error grows with the sum.
+func relErr(got, want float64) float64 { return math.Abs(got-want) / max(1, math.Abs(want)) }
+
+// keptState holds a keep table of R slots of n floats to the oracle's states
+// after each entry's row (want, entry by entry) and the slots past them
+// untouched, and returns the worst distance (relErr).
+func keptState(keep []uint32, want [][]float64, n int) (float64, error) {
+	worst := 0.0
+	for e, st := range want {
+		for i, w := range st {
+			worst = max(worst, relErr(float64(math.Float32frombits(keep[e*n+i])), w))
+		}
+	}
+	for i := len(want) * n; i < len(keep); i++ {
+		if v := math.Float32frombits(keep[i]); !math.IsNaN(float64(v)) {
+			return 0, fmt.Errorf("the form kept %v at word %d, past the step's %d entries", v, i, len(want))
+		}
+	}
+	if math.IsNaN(worst) {
+		worst = math.Inf(1)
+	}
+	return worst, nil
 }
 
 // slots is a pool of runs+2 slots of n floats, NaN but where set.
@@ -408,6 +464,9 @@ func runDelta(fr *recRun, g *graph.Graph, s deltaShape, n int, runs recRuns, cha
 		}
 	}
 	tables := map[string][]uint32{"rec.state": in, "rec.state.out": out, "rec.rows": steps.desc(n, 1, 1)}
+	if s.keeps {
+		tables["rec.state.keep"] = slotsNaN(R-2, N)
+	}
 	if !chained {
 		// Each row its own run, each reading its sequence's state.
 		w := tables["rec.rows"]
@@ -431,17 +490,19 @@ func runDelta(fr *recRun, g *graph.Graph, s deltaShape, n int, runs recRuns, cha
 	}
 	got := wf32(fr.vals[g.Out[0]])
 	worst := 0.0
+	var after [][]float64
 	for j, run := range runs {
 		for _, r := range run {
 			at := func(x []float32, per int) []float32 { return x[r*per : (r+1)*per] }
 			want := deltaOracleOf(s, ref[j], at(q, s.kh*s.dk), at(k, s.kh*s.dk), at(v, s.h*s.dv), at(dc, nd), at(beta, s.h))
 			for i, w := range want {
-				worst = max(worst, math.Abs(float64(got[r*s.h*s.dv+i])-w))
+				worst = max(worst, relErr(float64(got[r*s.h*s.dv+i]), w))
 			}
+			after = append(after, slices.Clone(ref[j]))
 		}
 		if chained {
 			for i := range N {
-				worst = max(worst, math.Abs(float64(math.Float32frombits(out[(1+j)*N+i]))-ref[j][i]))
+				worst = max(worst, relErr(float64(math.Float32frombits(out[(1+j)*N+i])), ref[j][i]))
 			}
 		}
 	}
@@ -452,6 +513,13 @@ func runDelta(fr *recRun, g *graph.Graph, s deltaShape, n int, runs recRuns, cha
 		if (i < N || i >= (1+len(runs))*N) && !math.IsNaN(float64(math.Float32frombits(w))) {
 			return 0, fmt.Errorf("the form wrote %v at %d of the pool, outside the step's slots", math.Float32frombits(w), i)
 		}
+	}
+	if s.keeps && chained {
+		k, err := keptState(tables["rec.state.keep"], after, N)
+		if err != nil {
+			return 0, err
+		}
+		worst = max(worst, k)
 	}
 	return worst, nil
 }
@@ -509,7 +577,7 @@ func deltaOracleOf(s deltaShape, st []float64, q, k, v, d, beta []float32) []flo
 
 // runConv is runDelta's step for the state convolution of T taps over C
 // channels.
-func runConv(fr *recRun, g *graph.Graph, T, C, n int, runs recRuns, chained bool, rng *rand.Rand) (float64, error) {
+func runConv(fr *recRun, g *graph.Graph, T, C, n int, runs recRuns, chained, keeps bool, rng *rand.Rand) (float64, error) {
 	const R = 8
 	W := (T - 1) * C
 	taps, planes := make([]float32, C*T), make([]float64, C*T)
@@ -560,6 +628,9 @@ func runConv(fr *recRun, g *graph.Graph, T, C, n int, runs recRuns, chained bool
 	}
 	fr.vals = map[graph.ValueID][]uint32{g.In[0]: f32w(x), g.Out[0]: poisoned(R * C)}
 	fr.tables = map[string][]uint32{"rec.conv": in, "rec.conv.out": out, "rec.rows": desc}
+	if keeps {
+		fr.tables["rec.conv.keep"] = slotsNaN(R-2, W)
+	}
 	fr.wts = map[jlm.Role][]uint32{jlm.RoleSSMConv1d: f32w(taps)}
 	clear(fr.bufs)
 	if err := fr.launch(); err != nil {
@@ -567,6 +638,7 @@ func runConv(fr *recRun, g *graph.Graph, T, C, n int, runs recRuns, chained bool
 	}
 	got := wf32(fr.vals[g.Out[0]])
 	worst := 0.0
+	var after [][]float64
 	for j, run := range runs {
 		for _, r := range run {
 			want := make([]float64, C)
@@ -578,6 +650,7 @@ func runConv(fr *recRun, g *graph.Graph, T, C, n int, runs recRuns, chained bool
 			for i, w := range want {
 				worst = max(worst, math.Abs(float64(got[r*C+i])-w))
 			}
+			after = append(after, slices.Clone(ref[j]))
 		}
 		if chained {
 			for i := range W {
@@ -592,6 +665,13 @@ func runConv(fr *recRun, g *graph.Graph, T, C, n int, runs recRuns, chained bool
 		if (i < W || i >= (1+len(runs))*W) && !math.IsNaN(float64(math.Float32frombits(w))) {
 			return 0, fmt.Errorf("the form wrote %v at %d of the pool, outside the step's slots", math.Float32frombits(w), i)
 		}
+	}
+	if keeps && chained {
+		k, err := keptState(fr.tables["rec.conv.keep"], after, W)
+		if err != nil {
+			return 0, err
+		}
+		worst = max(worst, k)
 	}
 	return worst, nil
 }

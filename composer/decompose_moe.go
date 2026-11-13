@@ -832,7 +832,10 @@ func decomposeClamp(o graph.Op, c *Context) ([]Prim, error) {
 // Offset floats into a slot of "rec.state" of Span floats (a recurrent
 // block's tail past its rule's state).
 type convWindow struct {
-	in, out     Operand
+	in, out Operand
+	// keep is the table a step that keeps its rows' windows stores them to
+	// (graph.Attrs.Keeps), a slot a row's entry.
+	keep        Operand
 	stride, off int
 	extent      int
 }
@@ -844,9 +847,10 @@ func stateConvWindow(o graph.Op, w int) (convWindow, error) {
 		if a.Offset < 0 || a.Span < a.Offset+w {
 			return convWindow{}, fmt.Errorf("a state convolution's window of %d at %d of a state slot of %d", w, a.Offset, a.Span)
 		}
-		return convWindow{in: TableRecState.op(), out: TableRecStateOut.op(), stride: a.Span, off: a.Offset, extent: a.Offset + w}, nil
+		return convWindow{in: TableRecState.op(), out: TableRecStateOut.op(), keep: TableRecKeep.op(), stride: a.Span, off: a.Offset,
+			extent: a.Offset + w}, nil
 	}
-	return convWindow{in: TableRecConv.op(), out: TableRecConvOut.op(), stride: w, extent: w}, nil
+	return convWindow{in: TableRecConv.op(), out: TableRecConvOut.op(), keep: TableRecConvKeep.op(), stride: w, extent: w}, nil
 }
 
 // slot is the window's first element in the slot the step's descriptor
@@ -865,7 +869,7 @@ func decomposeStateConv(o graph.Op, c *Context) ([]Prim, error) {
 	if len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) != 1 || c.Step.Rows < 1 {
 		return nil, fmt.Errorf("a state convolution of %d operands over %d rows", len(o.In), c.Step.Rows)
 	}
-	if c.Step.Rows > 1 {
+	if c.Step.Rows > 1 || o.Attr.Keeps {
 		return stateConvRuns(o, c)
 	}
 	U, F := ir.U32, ir.F32
@@ -1022,6 +1026,25 @@ func stateConvRuns(o graph.Op, c *Context) ([]Prim, error) {
 	wv := value(&w, wa, w.op(OpAdd, U, wa.count, wr), wc)
 	to := w.op(OpAdd, U, slot(&w, wa, 2), w.op(OpAdd, U, w.op(OpMul, U, wr, w.u(uint32(C))), wc))
 	ps := []Prim{{Kind: PrimMap, Shape: []int{R, C}, In: tapIn, Out: c.value(o.Out[0]), Expr: x.e, Facts: facts}}
+	if o.Attr.Keeps {
+		// Each entry's window after its row -- place local+1+qr of its run's
+		// sequence -- to the entry's slot of the keep table, read before any
+		// slot written is (the state's own storage, in the shared pool).
+		var q exprs
+		e, qr, qc := q.coord(0), q.coord(1), q.coord(2)
+		qn := q.load(desc, q.u(0))
+		ee := q.op(OpMin, U, e, q.op(OpSub, U, q.op(OpMax, U, qn, q.u(1)), q.u(1)))
+		qword := func(a, b, j int) int {
+			return q.load(desc, q.op(OpAdd, U, q.op(OpAdd, U, q.u(uint32(a)), q.op(OpMul, U, qn, q.u(uint32(b)))), j))
+		}
+		qa := runOf(&q, qword(1, 6, qword(1, 4, ee)))
+		local := q.op(OpSub, U, ee, qa.start)
+		qv := value(&q, qa, q.op(OpAdd, U, q.op(OpAdd, U, local, q.u(1)), qr), qc)
+		qto := q.op(OpAdd, U, q.op(OpAdd, U, q.op(OpMul, U, ee, q.u(uint32(cw.stride))), q.u(uint32(cw.off))),
+			q.op(OpAdd, U, q.op(OpMul, U, qr, q.u(uint32(C))), qc))
+		ps = append(ps, Prim{Kind: PrimMap, Shape: []int{R, H, C}, In: []Operand{src, cw.in, TableRecRows.op()}, Expr: q.e,
+			Facts: Facts{Extents: maps.Clone(ext)}, Stores: []PrimStore{{Out: cw.keep, Index: qto, Value: qv, Extent: R * cw.stride}}})
+	}
 	if cw.in != TableRecState.op() {
 		return append(ps, Prim{Kind: PrimMap, Shape: []int{R, H, C}, In: []Operand{src, cw.in, TableRecRows.op()}, Expr: w.e,
 			Facts: Facts{Extents: maps.Clone(ext)}, Stores: []PrimStore{{Out: cw.out, Index: to, Value: wv, Extent: cw.extent}}}), nil

@@ -37,7 +37,7 @@ func decomposeNGramWindow(o graph.Op, c *Context) ([]Prim, error) {
 		return x.un(OpBitcast, U, x.load(1, x.op(OpAdd, U, slot, x.op(OpAdd, U, x.u(uint32(a.Offset)), i))))
 	}
 	next := Operand{Kind: OperandScratch, Name: win.Name + ".next", Elem: U}
-	if R == 1 {
+	if R == 1 && !a.Keeps {
 		var x exprs
 		k := x.coord(1)
 		st := held(&x, x.recSlot(2, 1, a.Span), x.op(OpSub, U, x.op(OpMax, U, k, x.u(1)), x.u(1)))
@@ -111,6 +111,18 @@ func decomposeNGramWindow(o graph.Op, c *Context) ([]Prim, error) {
 		st := PrimStore{Out: win, Ax: []int{x.coord(0), x.u(uint32(k))}, Ext: []int{R, n}, Value: v}
 		prims = append(prims, Prim{Kind: PrimMap, Shape: []int{R, 1}, In: in, Expr: x.e, Facts: Facts{Extents: maps.Clone(ext)},
 			Stores: []PrimStore{st}})
+	}
+	// With Keeps, each entry's predecessors after its row -- place local+1
+	// of its run's sequence -- to the entry's slot of the keep table, read
+	// before the slot written is.
+	for k := 0; a.Keeps && k < n-1; k++ {
+		var q exprs
+		e := last(&q, q.coord(0))
+		qr := runAt(&q, word(&q, 1, 6, word(&q, 1, 4, e)))
+		v := q.un(OpBitcast, F, pred(&q, qr, q.op(OpAdd, U, q.op(OpSub, U, e, qr.start), q.u(1)), uint32(k+1)))
+		at := q.op(OpAdd, U, q.op(OpMul, U, e, q.u(uint32(a.Span))), q.u(uint32(a.Offset+k)))
+		prims = append(prims, Prim{Kind: PrimMap, Shape: []int{R, 1}, In: in, Expr: q.e, Facts: Facts{Extents: maps.Clone(ext)},
+			Stores: []PrimStore{{Out: TableRecKeep.op(), Index: at, Value: v, Extent: R * a.Span}}})
 	}
 	// Each run's predecessors after it, place count of its sequence's, into
 	// a scratch; then from it to the run's slot written.

@@ -154,12 +154,17 @@ type Prim struct {
 // Init is the node of a component at its run's start, Next the node of it
 // after a row; the state after a run's last row is stored to Final at the
 // node Index (a component's place, of Extent elements), every component of
-// the state row.
+// the state row. Where Keep is set the state after every row is stored to
+// it too, at slot e of Stride elements for the row at entry e of the order
+// list, the component at the node KeepIx of its slot (graph.Attrs.Keeps).
 type Scan struct {
 	Desc          int
 	Init, Next    int
 	Final         Operand
 	Index, Extent int
+	Keep          Operand
+	KeepIx        int
+	Stride        int
 	// Loops is the device's form of it (Profile.ScanLoops): the state read
 	// where it is written, a run's start at the node From of that table.
 	Loops bool

@@ -46,7 +46,9 @@ func generateScan(p Prim) (*Kernel, error) {
 	count := word(add(add(k.u32(2), mul(n, k.u32(2))), twoRun))
 	inner := k.loop(0, outer)
 	k.Loops[inner].Count, k.Loops[inner].Uniform = count+1, true
-	row := word(add(add(k.u32(1), mul(n, k.u32(4))), add(start, k.add(Node{Op: OpIter, At: inner, Type: U}))))
+	order := add(k.u32(1), mul(n, k.u32(4)))
+	entry := add(start, k.add(Node{Op: OpIter, At: inner, Type: U}))
+	row := word(add(order, entry))
 
 	lane := k.add(Node{Op: OpThread, Type: U})
 	comp, live := make([]int, m), make([]int, m)
@@ -72,6 +74,16 @@ func generateScan(p Prim) (*Kernel, error) {
 			return nil, err
 		}
 		k.Nodes[fold[c]].A = next
+	}
+	if sc.Keep.Kind != 0 {
+		kb := k.buf(Buf{Kind: BufOut, Elem: elemOf(sc.Keep.Elem), Operand: sc.Keep, Extent: sc.Extent})
+		for c := range m {
+			ix, err := ev.at(sc.KeepIx, c)
+			if err != nil {
+				return nil, err
+			}
+			k.Stores = append(k.Stores, Store{Buf: kb, Ix: add(mul(entry, k.u32(sc.Stride)), ix), Val: k.Nodes[fold[c]].A, At: inner})
+		}
 	}
 	for _, s := range p.Stores {
 		v, err := ev.at(s.Value, 0)
@@ -299,6 +311,15 @@ func generateScanLoops(p Prim) (*Kernel, error) {
 		return nil, err
 	}
 	k.Stores = append(k.Stores, Store{Buf: fb, Ix: ix, Val: next, At: ev.loops[M]})
+	if sc.Keep.Kind != 0 {
+		kix, err := ev.at(sc.KeepIx, ev.inst(M))
+		if err != nil {
+			return nil, err
+		}
+		kb := k.buf(Buf{Kind: BufOut, Elem: elemOf(sc.Keep.Elem), Operand: sc.Keep, Extent: sc.Extent})
+		at := k.bin(OpAdd, U, k.bin(OpMul, U, e, k.u32(sc.Stride)), kix)
+		k.Stores = append(k.Stores, Store{Buf: kb, Ix: at, Val: next, At: ev.loops[M]})
+	}
 	for _, s := range p.Stores {
 		if ev.reads(s.Value) {
 			return nil, fmt.Errorf("jit: a scan's row store reads its state past its update")

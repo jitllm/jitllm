@@ -64,7 +64,7 @@ func decomposeDeltaRule(o graph.Op, c *Context) ([]Prim, error) {
 	Dv := c.width(o.In[2]) / H
 	chanDecay := c.width(o.In[3]) == H*Dk
 	N := H * Dv * Dk
-	if c.Step.Rows > 1 {
+	if c.Step.Rows > 1 || a.Keeps {
 		return deltaScan(o, c, H, KH, Dk, Dv, chanDecay)
 	}
 	sh := []int{1, H, Dv, Dk}
@@ -185,9 +185,13 @@ func deltaScan(o graph.Op, c *Context, H, KH, Dk, Dv int, chanDecay bool) ([]Pri
 	d := x.op(OpMul, F, vj, x.at(4, []int{R, H}, r, h))
 	next := x.op(OpAdd, F, sb, x.op(OpMul, F, kk, d))
 	y := x.un(OpGroupSum, F, x.op(OpMul, F, next, x.at(0, []int{R, KH, Dk}, r, kh, i)))
+	sc := &Scan{Desc: desc, Init: init, Next: next, Final: TableRecStateOut.op(), Index: final, Extent: N, Loops: c.scanLoops, From: from}
+	if o.Attr.Keeps {
+		sc.Keep, sc.KeepIx, sc.Stride = TableRecKeep.op(), place, slotLen(o, N)
+	}
 	return []Prim{{Kind: PrimScan, Shape: []int{H, Dv, Dk}, In: in, Expr: x.e,
 		Stores: []PrimStore{{Out: c.value(o.Out[0]), Ax: []int{r, h, j}, Ext: []int{R, H, Dv}, Value: y}},
-		Scan:   &Scan{Desc: desc, Init: init, Next: next, Final: TableRecStateOut.op(), Index: final, Extent: N, Loops: c.scanLoops, From: from},
+		Scan:   sc,
 		Facts:  Facts{Extents: map[int]int{5: N, desc: RunDescWords(R)}}}}, nil
 }
 
