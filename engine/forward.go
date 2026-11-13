@@ -687,10 +687,13 @@ func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOp
 	s.placeLanes()
 	// A text instance of a model with a tower runs its pictures through a
 	// tower run of its own, composed with it (tower.go); one that does not
-	// compose keeps its error for the picture that asks.
-	if c == m.Cfg && m.Tower != nil && s.prepErr() == nil {
-		if s.tower, s.towerErr = s.newTowerRun(m.Tower, m.TowerBase, m.Container.Vision().Tower); s.towerErr != nil {
-			s.tower = nil
+	// compose, or whose instance did not prepare, keeps its error for the
+	// picture that asks.
+	if c == m.Cfg && m.Tower != nil {
+		if s.towerErr = s.prepErr(); s.towerErr == nil {
+			if s.tower, s.towerErr = s.newTowerRun(m.Tower, m.TowerBase, m.Container.Vision().Tower); s.towerErr != nil {
+				s.tower = nil
+			}
 		}
 	}
 	if c == m.Cfg && m.Audio != nil && s.prepErr() == nil {
