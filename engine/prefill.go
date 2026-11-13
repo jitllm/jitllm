@@ -235,12 +235,14 @@ func (s *Instance) prefillInto(slot int, tokens []int32) ([]float32, error) {
 // ran and nothing after them; the caller resets it before reusing the Instance.
 const ErrPrefillInterrupted modelError = "model: prefill interrupted"
 
-// SetPrefillInterrupt has every chunked prefill ask f before each chunk and
-// stop with ErrPrefillInterrupted when it answers true: a server stops a long
-// prompt whose client has gone without waiting out the whole prefill. nil
+// SetPrefillInterrupt has every chunked prefill ask f before each chunk,
+// telling it the sequence's position there -- the rows before the chunk, a
+// restored prefix's among them -- and stop with ErrPrefillInterrupted when it
+// answers true: a server stops a long prompt whose client has gone without
+// waiting out the whole prefill, and reports how far a prompt has run. nil
 // removes it. f runs on the prefill's goroutine, between chunks, never
 // inside one.
-func (s *Session) SetPrefillInterrupt(f func() bool) { s.interrupt = f }
+func (s *Session) SetPrefillInterrupt(f func(pos int) bool) { s.interrupt = f }
 
 // promptCalls tells the device whether the calls that follow are a prompt's
 // (nn.PromptDevice).
@@ -362,7 +364,7 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 	ps := s.newPrefillStreamer(chunks, bidir || len(s.bidir) > 0)
 	defer func() { ps.finish(s.seqPos(slot)) }()
 	for base := 0; base < total; {
-		if s.interrupt != nil && s.interrupt() {
+		if s.interrupt != nil && s.interrupt(s.seqPos(slot)) {
 			return nil, ErrPrefillInterrupted
 		}
 		ps.before(s.seqPos(slot))

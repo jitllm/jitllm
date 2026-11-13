@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"image/color"
 	"io"
+	"maps"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -370,6 +371,65 @@ func TestLlamaPredictTimeReachesTheEngine(t *testing.T) {
 // TestLlamaSSEPings: a stream silent for sse_ping_interval seconds is sent an
 // SSE comment, once for each such silence; -1 sends none, and the 30 second
 // default none in a stream that never falls silent that long.
+// TestLlamaStreamsPromptProgress: return_progress on a stream asks the
+// generate for its prompt's progress and sends each as a frame of its own
+// before the reply's, as llama-server does: no text, no token, stop false,
+// and prompt_progress's total, cache, processed and time_ms. Without a stream,
+// or without the field, the generate is not asked.
+func TestLlamaStreamsPromptProgress(t *testing.T) {
+	f := &llamaFake{fakeBackend: &fakeBackend{tokens: []string{"Hel", "lo"}, reason: FinishMaxTokens}}
+	s := llamaServe(t, f)
+	frames := func(body string) []map[string]any {
+		resp := post(t, s, "/completion", body)
+		defer resp.Body.Close()
+		var out []map[string]any
+		sc := bufio.NewScanner(resp.Body)
+		for sc.Scan() {
+			line, ok := strings.CutPrefix(sc.Text(), "data: ")
+			if !ok {
+				continue
+			}
+			var fr map[string]any
+			if err := json.Unmarshal([]byte(line), &fr); err != nil {
+				t.Fatalf("frame %q: %v", line, err)
+			}
+			out = append(out, fr)
+		}
+		return out
+	}
+	got := frames(`{"prompt":"Hi","stream":true,"return_progress":true}`)
+	if !f.opts().Progress {
+		t.Fatal("return_progress on a stream did not ask the generate for the prompt's progress")
+	}
+	if len(got) != 6 {
+		t.Fatalf("%d frames, want three of progress, two of text and the last: %v", len(got), got)
+	}
+	for i, done := range []float64{2, 5, 7} {
+		fr := got[i]
+		pp, _ := fr["prompt_progress"].(map[string]any)
+		want := map[string]any{"total": float64(7), "cache": float64(2), "processed": done, "time_ms": done}
+		if pp == nil || !maps.Equal(pp, want) {
+			t.Fatalf("frame %d: prompt_progress %v, want %v", i, fr["prompt_progress"], want)
+		}
+		toks, _ := fr["tokens"].([]any)
+		if fr["content"] != "" || toks == nil || len(toks) != 0 || fr["stop"] != false || fr["index"] != float64(0) ||
+			fr["tokens_predicted"] != float64(0) || fr["tokens_evaluated"] != float64(7) {
+			t.Fatalf("frame %d is not a progress frame: %v", i, fr)
+		}
+	}
+	if _, ok := got[3]["prompt_progress"]; ok || got[3]["content"] != "Hel" {
+		t.Fatalf("the reply's first frame: %v", got[3])
+	}
+	if code, out := llamaPost(t, s, "/completion", `{"prompt":"Hi","return_progress":true}`); code != 200 || f.opts().Progress {
+		t.Fatalf("return_progress without a stream: %d, progress asked %v: %v", code, f.opts().Progress, out)
+	}
+	for _, fr := range frames(`{"prompt":"Hi","stream":true}`) {
+		if _, ok := fr["prompt_progress"]; ok || f.opts().Progress {
+			t.Fatalf("a stream without return_progress: %v", fr)
+		}
+	}
+}
+
 // TestLlamaIndentAndPromptTime: n_indent reaches the generate as MinIndent
 // and the answer is cut at the line the indentation ended it on, its leading
 // spaces kept; t_max_prompt_ms is taken, to no effect, as llama-server takes

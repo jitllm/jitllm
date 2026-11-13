@@ -285,9 +285,12 @@ type row struct {
 	stops       bool
 	predictTime time.Duration
 	indent      indentRule
-	stream      *streamText
-	enqueued    time.Time
-	depth       int32
+	// progress has the row's prompt send its EventProgress
+	// (GenerateOptions.Progress).
+	progress bool
+	stream   *streamText
+	enqueued time.Time
+	depth    int32
 	// restored is the prompt positions the memory cache gave the row before
 	// it was queued (Instance.RestorePrefix); its prompt is fed from there. seal
 	// has the row's prompt offered to the store once it has run.
@@ -349,6 +352,16 @@ type rowResult struct {
 }
 
 func (r *row) prompting() bool { return r.fed < len(r.ids) }
+
+// progressed sends the row's prompt progress when it asked
+// (GenerateOptions.Progress): what it has fed of its prompt, what the memory
+// cache restored counted fed.
+func (r *row) progressed() {
+	if r.progress {
+		r.push(Event{Kind: EventProgress, Progress: &Progress{Total: len(r.ids), Cached: r.restored, Done: r.fed,
+			Elapsed: time.Since(r.promptStart)}})
+	}
+}
 
 func (r *row) push(ev Event) {
 	r.omu.Lock()
@@ -951,6 +964,7 @@ func (lp *stepLoop) promptUnits(units []unit, budget int) []unit {
 				r.s.reset(lp.ctx)
 			}
 			r.begun, r.promptStart = true, time.Now()
+			r.progressed()
 		}
 		units = append(units, unit{r: r, tokens: r.ids[r.fed : r.fed+k], logits: r.fed+k == len(r.ids),
 			prompt: true, alone: pipelined})
@@ -1223,6 +1237,7 @@ func (lp *stepLoop) ran(u unit, logits []float32) {
 		return
 	}
 	r.fed += len(u.tokens)
+	r.progressed()
 	lp.stats.promptChunks.Add(1)
 	if r.prompting() {
 		return
@@ -1331,6 +1346,7 @@ func (e *Engine) generateBatched(ctx context.Context, lp *stepLoop, s *Session, 
 		stops:       hasStop(o.Stop) || o.PredictTime > 0 || o.MinIndent > 0,
 		predictTime: o.PredictTime,
 		indent:      indentRule{min: o.MinIndent},
+		progress:    o.Progress,
 		stream:      newStreamText(lm.m.Vocab.NewChatStream().Next, o.Stop),
 		enqueued:    now,
 		since:       now,

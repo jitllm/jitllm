@@ -53,7 +53,17 @@ func (f *fakeBackend) Generate(ctx context.Context, o GenerateOptions, emit func
 	return nil
 }
 
-func (f *fakeBackend) choice(ctx context.Context, o GenerateOptions, _ int, emit func(Event) error) error {
+func (f *fakeBackend) choice(ctx context.Context, o GenerateOptions, ch int, emit func(Event) error) error {
+	// A prompt asked for its progress runs once, before its first choice: two
+	// of its seven positions restored, then a chunk of three, then the rest.
+	if o.Progress && ch == 0 {
+		for _, done := range []int{2, 5, 7} {
+			if err := emit(Event{Kind: EventProgress, Progress: &Progress{Total: 7, Cached: 2, Done: done,
+				Elapsed: time.Duration(done) * time.Millisecond}}); err != nil {
+				return err
+			}
+		}
+	}
 	if err := emit(Event{Kind: EventStarted, Started: &Started{
 		SessionID:    "sess-fake",
 		ModelID:      o.ModelID,

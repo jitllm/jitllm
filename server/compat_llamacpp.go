@@ -213,7 +213,6 @@ func llamaFields() map[string]llamaField {
 		"n_keep":                {numIs(0), "there is no context shift, so n_keep has nothing to keep"},
 		"n_discard":             {numIs(0), "there is no context shift"},
 		"n_cache_reuse":         {numIs(0), "KV shifting reuse is not built; the prefix cache is automatic"},
-		"return_progress":       {boolIs(false), "prompt progress is not built"},
 		"post_sampling_probs":   {boolIs(false), "probabilities after sampling are not built; n_probs reports the raw distribution"},
 		"lora":                  {emptyJSON, "LoRA adapters are not built"},
 		"multimodal_data":       {emptyJSON, "pictures go in prompt.multimodal_data"},
@@ -233,7 +232,7 @@ func llamaRead() map[string]bool {
 		"top_n_sigma": true, "dynatemp_range": true, "dynatemp_exponent": true,
 		"mirostat": true, "mirostat_tau": true, "mirostat_eta": true, "response_fields": true, "samplers": true,
 		"n_cmpl": true, "n": true, "timings_per_token": true, "sse_ping_interval": true, "t_max_predict_ms": true,
-		"n_indent": true,
+		"n_indent": true, "return_progress": true,
 		// llama-server leaves t_max_prompt_ms unimplemented and takes it to
 		// no effect; so does this server.
 		"t_max_prompt_ms": true,
@@ -802,7 +801,7 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 	var seed *int64
 	var stop json.RawMessage
 	var grammarSrc, schema json.RawMessage
-	var ignore, stream, returnTokens, perToken bool
+	var ignore, stream, returnTokens, perToken, progress bool
 	var fields []string
 	var firstErr error
 	rd := func(err error) {
@@ -841,6 +840,7 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 	rd(decodeField(body, "stream", &stream))
 	rd(decodeField(body, "return_tokens", &returnTokens))
 	rd(decodeField(body, "timings_per_token", &perToken))
+	rd(decodeField(body, "return_progress", &progress))
 	rd(decodeField(body, "response_fields", &fields))
 	stop, grammarSrc, schema = body["stop"], body["grammar"], body["json_schema"]
 	if firstErr != nil {
@@ -1001,6 +1001,9 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 		Logprobs:  set.NProbs > 0,
 	}
 	o.TopLogprobs = set.NProbs
+	// return_progress streams the prompt's progress; llama-server sends it on
+	// a stream alone.
+	o.Progress = stream && progress
 	if predictMS != nil && *predictMS > 0 {
 		o.PredictTime = time.Duration(*predictMS) * time.Millisecond
 	}
@@ -1514,6 +1517,18 @@ func (g *llamaRun) stream() {
 				frame["completion_probabilities"] = res.pendProbs
 			}
 			res.pendIDs, res.pendProbs = nil, nil
+			return sse.send(frame)
+		case EventProgress:
+			// A frame of its own, as llama-server sends it: no text, and no
+			// token where llama-server's carries a 0 no step sampled.
+			pr := ev.Progress
+			frame := map[string]any{"index": res.index, "content": "", "tokens": []int32{}, "stop": false,
+				"id_slot": g.slot, "tokens_predicted": 0, "tokens_evaluated": pr.Total,
+				"prompt_progress": map[string]any{"total": pr.Total, "cache": pr.Cached, "processed": pr.Done,
+					"time_ms": pr.Elapsed.Milliseconds()}}
+			if g.set.TimingsPerToken {
+				frame["timings"] = llamaTimings(pr.Done, pr.Cached, pr.Elapsed, 0, 0)
+			}
 			return sse.send(frame)
 		case EventFinished:
 			return sse.send(g.picked(g.final(res, "", append([]int32{}, res.pendIDs...), res.pendProbs)))

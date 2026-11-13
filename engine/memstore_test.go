@@ -149,7 +149,8 @@ func TestABoundedStoreChangesNoToken(t *testing.T) {
 
 // TestAnInterruptedPrefillStopsBetweenChunks: an interrupt that answers true
 // after the first chunk stops the prefill there with ErrPrefillInterrupted,
-// and the instance, reset, answers as a fresh one does.
+// each ask told the position its chunk starts at, and the instance, reset,
+// answers as a fresh one does.
 func TestAnInterruptedPrefillStopsBetweenChunks(t *testing.T) {
 	path := jlmOf(t, testmodels.Path("tinyllama-1.1b-q3_K_M.gguf"))
 	m, err := model.Open(path)
@@ -170,16 +171,21 @@ func TestAnInterruptedPrefillStopsBetweenChunks(t *testing.T) {
 	want = append([]float32(nil), want...)
 	s.Reset()
 
-	asked := 0
-	s.SetPrefillInterrupt(func() bool { asked++; return asked > 1 })
+	var at []int
+	s.SetPrefillInterrupt(func(pos int) bool { at = append(at, pos); return len(at) > 1 })
 	if _, err := s.Prefill(prompt); !errors.Is(err, ErrPrefillInterrupted) {
 		t.Fatalf("an interrupted prefill returned %v", err)
 	}
-	if asked != 2 {
-		t.Fatalf("the interrupt was asked %d times; want once per chunk until it said stop (2)", asked)
+	if len(at) != 2 {
+		t.Fatalf("the interrupt was asked %d times; want once per chunk until it said stop (2)", len(at))
 	}
 	if p := s.Pos(); p == 0 || p >= len(prompt) {
 		t.Fatalf("the interrupted prefill stopped at position %d of %d: not between chunks", p, len(prompt))
+	}
+	// The prompt's start, then where the first chunk left the sequence,
+	// which is where the prefill stopped.
+	if at[0] != 0 || at[1] != s.Pos() {
+		t.Fatalf("the interrupt was told positions %v; want [0 %d]", at, s.Pos())
 	}
 	s.SetPrefillInterrupt(nil)
 	s.Reset()
