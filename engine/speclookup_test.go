@@ -317,6 +317,64 @@ func TestSpecLookupOnDevice(t *testing.T) {
 	}
 }
 
+// TestSpecRewindsASharedPool is the replay rollback on a card whose recurrent
+// pools step the state in place (gpu.Config.SharedRec), the form a card falls
+// to when two halves do not fit: no half holds the state from before a
+// verification, so a rewind restores the copy the mark took. It is held to
+// plain decode as TestSpecLookupOnDevice holds it; some round replays, and
+// the shared form is the one that ran.
+func TestSpecRewindsASharedPool(t *testing.T) {
+	n := specTokens()
+	specs := testdevices.Specs("cuda:0", "vulkan:0", "metal")
+	for _, name := range []string{"synth-qwen35-hybrid-mtp.gguf", "synth-mamba2.gguf"} {
+		t.Run(strings.TrimSuffix(name, ".gguf"), func(t *testing.T) {
+			m, openOpts := openLookupModel(t, name, WithKVF16(false))
+			defer m.Close()
+			if !m.Cfg.Hybrid() {
+				t.Fatalf("%s keeps no recurrent state to rewind", name)
+			}
+			ran := 0
+			for _, spec := range specs {
+				t.Run(spec, func(t *testing.T) {
+					g, err := openGPU(t, append([]gpu.Option{gpu.WithDevices(spec), gpu.WithDeviceTune(gpu.TuneOff),
+						gpu.WithConfig(func(c *gpu.Config) { c.SharedRec = true })}, testTierOpts(t)...)...)
+					if err != nil || g == nil {
+						noDevice(t, spec, err)
+					}
+					defer g.Close()
+					ran++
+					var replayed int64
+					for _, text := range lookupPrompts()[:2] {
+						prompt := m.Vocab.Encode(text, true)
+						n := lookupTokens(m, prompt, n)
+						want := plainGreedy(t, m, prompt, n, g, openOpts...)
+						got, ss := lookupGreedy(t, m, openOpts, prompt, n, g, specFaultNone, oracleFor(name, want),
+							WithSpecRollback(SpecRollbackReplay))
+						replayed += ss.Replayed
+						if i := firstDiff(got, want); i >= 0 {
+							gap, pert := devFlip(t, m, g, prompt, want[:i], want[i], got[i], openOpts...)
+							if gap > pert {
+								t.Fatalf("%q: token %d is %d, plain greedy on %s says %d, %.4f apart against a "+
+									"%.4f reach of the band -- not a tie", text, i, got[i], spec, want[i], gap, pert)
+							}
+						}
+					}
+					if replayed == 0 {
+						t.Fatalf("no round on %s replayed a row: the rewind never ran", spec)
+					}
+					if g.Stats().RecShared == 0 {
+						t.Fatalf("no recurrent pool on %s took the shared form: the gate ran the doubled one", spec)
+					}
+					t.Logf("%s: %d rows replayed over a shared pool", spec, replayed)
+				})
+			}
+			if ran == 0 {
+				t.Skip("no device on this host -- this gate proved nothing")
+			}
+		})
+	}
+}
+
 // TestLookupSearch pins the search: the longest n first, the latest
 // occurrence, the continuation cut at k and at the history's end, and no
 // allocation once the destination has room.

@@ -190,11 +190,22 @@ func (g *devTier) freeKeptBufs(k *recKeep) {
 	k.slots, k.bytes, k.ran = 0, 0, 0
 }
 
-// freeKept frees session ds's kept rows. Callers hold g.mu.
+// freeKept frees session ds's kept rows and its mark's copies. Callers hold
+// g.mu.
 func (g *devTier) freeKept(ds *devSess) {
 	if ds.kept != nil {
 		g.freeKeptBufs(ds.kept)
 		ds.kept = nil
+	}
+	if m := ds.marked; m != nil {
+		for _, b := range m.s {
+			b.Free()
+		}
+		for _, b := range m.c {
+			b.Free()
+		}
+		g.refund(m.bytes)
+		ds.marked = nil
 	}
 }
 

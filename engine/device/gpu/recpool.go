@@ -693,6 +693,116 @@ func (g *devTier) recMark(sid uint64) {
 			rp.mark, rp.markSteps, rp.marked = rp.cur, rp.steps, true
 		}
 	}
+	if m := g.marked; m != nil {
+		m.taken = false
+	}
+	if g.recShared {
+		g.copyMark(sid)
+	}
+}
+
+// recMarkCopies is a session's copy of each linear block's state (s) and
+// window (c) at its mark, taken in the shared form, which steps the state
+// in place and keeps no half to flip back to; taken says they are this
+// mark's.
+type recMarkCopies struct {
+	s, c  map[*layer]backend.Buf
+	bytes uint64
+	taken bool
+	// list is a copy's ranges, kept for the next.
+	list []backend.CopyRange
+}
+
+// copyMark copies session sid's every linear block's seat state and window
+// here into the session's mark copies, made at the first. Callers hold g.mu,
+// outside any submission.
+func (g *devTier) copyMark(sid uint64) {
+	m := g.marked
+	if m == nil {
+		m = &recMarkCopies{s: map[*layer]backend.Buf{}, c: map[*layer]backend.Buf{}}
+		g.marked = m
+	}
+	st := g.recSeats[sid]
+	sB, cB := max(g.recS, 1)*4, max(g.recC, 1)*4
+	list := m.list[:0]
+	defer func() { m.list = list[:0] }()
+	for _, l := range g.layers {
+		rp := l.recOf(sid)
+		if l == nil || !l.linear || rp == nil || l.pool == nil {
+			continue
+		}
+		if m.s[l] == nil {
+			if !g.stateFits(uint64(sB+cB), nil) {
+				g.LastErr = "recurrent mark: no room for a copy of a shared state"
+				return
+			}
+			s, err := g.dev.Alloc(sB)
+			if err != nil {
+				g.LastErr = "recurrent mark: " + err.Error()
+				return
+			}
+			c, err := g.dev.Alloc(cB)
+			if err != nil {
+				s.Free()
+				g.LastErr = "recurrent mark: " + err.Error()
+				return
+			}
+			m.s[l], m.c[l] = s, c
+			m.bytes += uint64(sB + cB)
+			g.charge(uint64(sB + cB))
+		}
+		if g.recS > 0 {
+			list = append(list, backend.CopyRange{Dst: m.s[l], Src: l.pool.s[0], SrcOff: st.base * g.recS * 4, N: g.recS * 4})
+		}
+		if g.recC > 0 {
+			list = append(list, backend.CopyRange{Dst: m.c[l], Src: l.pool.c[rp.cur], SrcOff: st.base * g.recC * 4, N: g.recC * 4})
+		}
+	}
+	if err := backend.CopyAll(g.dev, list); err != nil {
+		g.LastErr = "recurrent mark: " + err.Error()
+		return
+	}
+	m.taken = true
+}
+
+// markCopied says block l's state at session sid's mark is in its mark
+// copy: the session's, whichever view asks (GPU.recRewind checks each
+// device's).
+func (g *devTier) markCopied(sid uint64, l *layer) bool {
+	ds := g.sess[sid]
+	if ds == nil {
+		ds = g.devSess
+	}
+	m := ds.marked
+	return m != nil && m.taken && m.s[l] != nil
+}
+
+// restoreMark copies session sid's mark copies over its seat: the state's
+// one half, the window's both. Callers hold g.mu, outside any submission.
+func (g *devTier) restoreMark(sid uint64) bool {
+	m := g.marked
+	st := g.recSeats[sid]
+	list := m.list[:0]
+	defer func() { m.list = list[:0] }()
+	for _, l := range g.layers {
+		if l == nil || !l.linear || l.recOf(sid) == nil || l.pool == nil || m.s[l] == nil {
+			continue
+		}
+		for h := range 2 {
+			if g.recS > 0 && l.pool.s[h] != nil {
+				list = append(list, backend.CopyRange{Dst: l.pool.s[h], DstOff: st.base * g.recS * 4, Src: m.s[l], N: g.recS * 4})
+			}
+			if g.recC > 0 {
+				list = append(list, backend.CopyRange{Dst: l.pool.c[h], DstOff: st.base * g.recC * 4, Src: m.c[l], N: g.recC * 4})
+			}
+		}
+	}
+	if err := backend.CopyAll(g.dev, list); err != nil {
+		g.LastErr = "recurrent rewind: " + err.Error()
+		return false
+	}
+	m.taken = false
+	return true
 }
 
 // RecRewind is recRewind for the zero session: a caller that never attached.
@@ -703,9 +813,11 @@ func (g *devTier) RecRewind() bool {
 // recRewind takes session sid's linear blocks back to the state
 // RecMark saw. A step reads one half of the pool and writes the other, so
 // after exactly one step the marked state is still there, untouched, and the
-// rewind is a flip back. After more than one, or in the shared form (one copy
-// of the delta state, written in place through recNext), it is gone: false,
-// with nothing changed. Every block is checked before any is flipped.
+// rewind is a flip back. The shared form (one copy of the delta state,
+// written in place through recNext) keeps no such half: its mark copied the
+// state aside (copyMark), and the rewind restores the copy. After more than
+// one step in the doubled form it is gone: false, with nothing changed.
+// Every block is checked before any is flipped.
 func (g *devTier) recRewind(sid uint64) bool {
 	v := g.as(sid)
 	if v == nil {
@@ -719,6 +831,9 @@ func (g *devTier) recRewind(sid uint64) bool {
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	if m := g.marked; m != nil && m.taken && !g.restoreMark(sid) {
+		return false
+	}
 	for _, rp := range back {
 		rp.cur, rp.marked = rp.mark, false
 		rp.steps++
@@ -744,6 +859,8 @@ func (g *devTier) rewindable(sid uint64) ([]*recPair, bool) {
 			return nil, false
 		case rp.steps == rp.markSteps:
 			continue // not stepped since the mark: already there
+		case g.markCopied(sid, l):
+			// The shared form's state, restored from the mark's copy.
 		case g.recShared || rp.steps != rp.markSteps+1:
 			g.LastErr = fmt.Sprintf("recurrent rewind: %d step(s) since the mark, shared form %v",
 				rp.steps-rp.markSteps, g.recShared)
