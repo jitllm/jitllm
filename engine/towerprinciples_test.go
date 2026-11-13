@@ -16,10 +16,11 @@ import (
 )
 
 // towerSources are the audit models a picture tower converts with, the
-// geometry sweep's: a GGUF beside its projector, at most 3 GiB.
+// geometry sweep's: a GGUF beside its projector, at most 3 GiB. A text model
+// the box does not hold fails none of them.
 func towerSources(t *testing.T) []auditModel {
 	var out []auditModel
-	for _, src := range auditModels(t) {
+	for _, src := range auditList(t, true) {
 		if !src.hf && src.mmproj != "" && src.size <= 3<<30 {
 			out = append(out, src)
 		}
