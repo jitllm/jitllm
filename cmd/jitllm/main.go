@@ -455,7 +455,7 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 
 	// -chat is opt-in. The default stays raw completion because every board
 	// row and the llama.cpp comparisons are completions of a bare prompt.
-	ids := m.Vocab.Encode(prompt, true)
+	ids := m.Vocab.EncodeSpecial(prompt, true)
 	replying := chat != nil && chat.repl
 	if replying {
 		if media.any() || specOpts != nil || depth > 0 {
@@ -521,7 +521,7 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	// prompt's; the session is sized for the longer of the two.
 	var wids []int32
 	if wp := os.Getenv("JITLLM_WARMUP_PROMPT"); wp != "" {
-		wids = m.Vocab.Encode(wp, true)
+		wids = m.Vocab.EncodeSpecial(wp, true)
 	}
 	st, err := engine.NewInstance(m, max(len(ids)+extra, len(wids))+n+1, opts...)
 	if err != nil {
@@ -1184,7 +1184,7 @@ func tokenize(path, text string, topts []tok.Option) error {
 	if err != nil {
 		return err
 	}
-	ids := v.Encode(text, true)
+	ids := v.EncodeSpecial(text, true)
 	fmt.Printf("%d tokens: %v\n", len(ids), ids)
 	for _, id := range ids {
 		fmt.Printf("  %6d -> %q\n", id, strings.ReplaceAll(v.Text(id), "\u2581", " "))

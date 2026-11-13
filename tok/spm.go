@@ -400,29 +400,31 @@ func (v *Vocab) IsEOG(id int32) bool { return slices.Contains(v.eog, id) }
 // Encode tokenizes text. addSpecial controls the leading BOS, matching
 // llama.cpp's add_special argument.
 //
-// On a SentencePiece vocabulary it is llama.cpp's tokenize with parse_special
-// OFF, which is what its tokenizer goldens record: "<s>" in the text is three
-// characters. EncodeSpecial is the same with it on.
+// It is llama.cpp's tokenize with parse_special OFF, which is what its
+// tokenizer goldens record: a control token's text, "<s>" or "<|im_start|>",
+// is characters, and a user-defined token is still matched
+// (tokenizer_st_partition). EncodeSpecial is the same with it on.
 func (v *Vocab) Encode(text string, addSpecial bool) []int32 {
 	return v.encode(text, addSpecial, false)
 }
 
 // EncodeSpecial is Encode with the vocabulary's control tokens matched in the
 // text as themselves (llama.cpp's parse_special), which a rendered chat
-// template needs. A byte-level BPE vocabulary matches them either way.
+// template needs, and which llama.cpp's tools and llama-server read a prompt
+// with.
 func (v *Vocab) EncodeSpecial(text string, addSpecial bool) []int32 {
 	return v.encode(text, addSpecial, true)
 }
 
 func (v *Vocab) encode(text string, addSpecial, control bool) []int32 {
 	if v.bpe != nil {
-		return v.encodeBPE(text, addSpecial)
+		return v.encodeBPE(text, addSpecial, control)
 	}
 	if v.spmBPE != nil {
-		return v.encodeSPMBPE(text, addSpecial)
+		return v.encodeSPMBPE(text, addSpecial, control)
 	}
 	if v.wpm != nil {
-		return v.encodeWPM(text, addSpecial)
+		return v.encodeWPM(text, addSpecial, control)
 	}
 	out := make([]int32, 0, len(text)/3+2) // see encodeBPE
 	if addSpecial && v.AddBOS {

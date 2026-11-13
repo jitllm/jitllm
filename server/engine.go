@@ -2805,7 +2805,7 @@ func (e *Engine) encode(lm *LoadedModel, p Prompt, name string) ([]int32, error)
 	case PromptIDs:
 		return p.IDs, nil
 	case PromptText:
-		return lm.m.Vocab.Encode(p.Text, true), nil
+		return lm.m.Vocab.EncodeSpecial(p.Text, true), nil
 	case PromptChat:
 		if p.Chat == nil {
 			return nil, fmt.Errorf("%w: chat prompt with no messages", ErrInvalid)

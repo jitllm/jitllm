@@ -25,8 +25,8 @@ type wpmState struct {
 	lower, strip bool
 	maxLen       int // the longest token, in BYTES: the match window
 	// special is every control token, longest first, so a literal "[SEP]" in
-	// the text is that token and not five characters -- llama.cpp's
-	// parse_special, which llama-embedding turns on.
+	// the text is that token and not five characters where the caller parses
+	// specials -- llama.cpp's parse_special, which llama-embedding turns on.
 	special []int32
 }
 
@@ -52,15 +52,19 @@ func newWPM(vc *jlm.Vocab, v *Vocab) error {
 
 // encodeWPM is [CLS] words [SEP], the BertProcessing template llama.cpp applies
 // to every WPM vocabulary (add_bos and add_sep).
-func (v *Vocab) encodeWPM(text string, addSpecial bool) []int32 {
+func (v *Vocab) encodeWPM(text string, addSpecial, control bool) []int32 {
 	out := make([]int32, 0, len(text)/4+2)
+	special := v.wpm.special
+	if !control {
+		special = nil
+	}
 	if addSpecial && v.AddBOS && v.BOS >= 0 {
 		out = append(out, v.BOS)
 	}
 	last := 0
 	for i := 0; i < len(text); {
 		hit := int32(-1)
-		for _, id := range v.wpm.special {
+		for _, id := range special {
 			if strings.HasPrefix(text[i:], v.text[id]) {
 				hit = id
 				break

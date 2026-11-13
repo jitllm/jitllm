@@ -50,9 +50,14 @@ func TestWordPieceNormalizesAndSplits(t *testing.T) {
 		// control characters vanish; a literal special is that token
 		{"hello\x07 [SEP]", []int32{2, 4, 3, 3}},
 	} {
-		if got := v.Encode(c.text, true); !slices.Equal(got, c.want) {
+		if got := v.EncodeSpecial(c.text, true); !slices.Equal(got, c.want) {
 			t.Errorf("%q: %v, want %v", c.text, got, c.want)
 		}
+	}
+	// With parse_special off a control token's text is characters, as
+	// llama.cpp's partition skips it.
+	if got, want := v.Encode("hello [SEP]", true), []int32{2, 4, 1, 1, 1, 3}; !slices.Equal(got, want) {
+		t.Errorf("parse_special off: %v, want %v", got, want)
 	}
 	// The violations: a cased vocabulary keeps "HELLO" whole (so it is
 	// unknown here) and keeps the accent (so "café" is its own piece).
