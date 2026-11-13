@@ -50,7 +50,11 @@ no answer, and the slot asked for is reported, wrapped by the slot count as
 llama-server wraps it. A stream silent for `sse_ping_interval` seconds (30
 unless set; -1 or 0 none) is sent an SSE comment, as llama-server sends one.
 `t_max_predict_ms` ends the reply at its first token holding a newline once
-that long has passed since decoding began, `stop_type` `limit`. A prompt
+that long has passed since decoding began, `stop_type` `limit`. `samplers`
+(names with llama.cpp's aliases, or a string of their letters) is the stages
+that run, as llama-server runs them: a list in the draw's order (penalties,
+dry, top_n_sigma, top_k, typ_p, top_p, min_p, xtc, temperature) runs with the
+stages it leaves out off, so a list without `temperature` draws at 1. A prompt
 `{"prompt_string": ..., "multimodal_data": [...]}` carries base64 pictures,
 each standing where the text holds `<__media__>`, in order, wrapped in the
 markers the model's container states, after the model's leading specials, as
@@ -58,7 +62,7 @@ llama-server's mtmd places them; the counts must agree.
 
 A field the engine cannot honour is refused by name with a 400, at any value
 but its neutral one: `dry_multiplier`, `adaptive_target`, `min_keep`,
-`samplers` beyond penalties/top_n_sigma/top_k/typ_p/top_p/min_p/xtc/temperature,
+a `samplers` list out of the draw's order or naming `infill` or `adaptive_p`,
 `n_indent`, `n_keep`, `n_discard`, `n_cache_reuse`, `t_max_prompt_ms`,
 `return_progress`, `post_sampling_probs`, `lora`, `embd_normalize` other
 than 2, and an audio file in `multimodal_data`. The top-level

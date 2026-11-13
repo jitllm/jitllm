@@ -112,19 +112,89 @@ func emptyJSON(r json.RawMessage) bool {
 func anyValue(json.RawMessage) bool { return true }
 
 // samplerSubset is the samplers this engine's sampler chain has.
-func samplerSubset(r json.RawMessage) bool {
+// llamaChain is llama-server's default sampler chain, which is the order the
+// draw runs its stages in.
+func llamaChain() []string {
+	return []string{"penalties", "dry", "top_n_sigma", "top_k", "typ_p", "top_p", "min_p", "xtc", "temperature"}
+}
+
+// llamaSamplers reads samplers as llama-server reads it: an array of names,
+// each canonical, kebab-case, without its underscore or one of nucleus, temp
+// and typ, in any case; or a string of their letters. The draw runs its
+// stages in llamaChain's order, so a list in another order is refused, as is
+// a name it does not run.
+func llamaSamplers(raw json.RawMessage) ([]string, error) {
 	var names []string
-	if json.Unmarshal(r, &names) != nil {
-		return false
-	}
-	for _, n := range names {
-		switch n {
-		case "penalties", "top_n_sigma", "top_k", "typ_p", "top_p", "min_p", "xtc", "temperature":
-		default:
-			return false
+	if json.Unmarshal(raw, &names) != nil {
+		var chars string
+		if json.Unmarshal(raw, &chars) != nil {
+			return nil, fmt.Errorf("%w: samplers must be an array of names or a string of their letters", ErrInvalid)
+		}
+		letters := map[rune]string{'e': "penalties", 'd': "dry", 's': "top_n_sigma", 'k': "top_k", 'y': "typ_p",
+			'p': "top_p", 'm': "min_p", 'x': "xtc", 't': "temperature", 'i': "infill", 'a': "adaptive_p"}
+		for _, c := range chars {
+			n, ok := letters[c]
+			if !ok {
+				return nil, fmt.Errorf("%w: samplers: %q is no sampler's letter", ErrInvalid, c)
+			}
+			names = append(names, n)
 		}
 	}
-	return true
+	alias := map[string]string{"nucleus": "top_p", "temp": "temperature", "typ": "typ_p"}
+	for _, n := range append(llamaChain(), "infill", "adaptive_p") {
+		alias[n] = n
+		alias[strings.ReplaceAll(n, "_", "-")] = n
+		alias[strings.ReplaceAll(n, "_", "")] = n
+	}
+	chain := llamaChain()
+	out := make([]string, 0, len(names))
+	at := 0
+	for _, n := range names {
+		c, ok := alias[strings.ToLower(n)]
+		if !ok {
+			return nil, fmt.Errorf("%w: samplers: %q is not a sampler", ErrInvalid, n)
+		}
+		i := slices.Index(chain[at:], c)
+		if i < 0 {
+			return nil, fmt.Errorf("%w: samplers: %q is not built; the draw runs %s, in that order", ErrInvalid, n,
+				strings.Join(chain, ", "))
+		}
+		at += i + 1
+		out = append(out, c)
+	}
+	return out, nil
+}
+
+// stages is s as its draw runs: each stage samplers leaves out off, as
+// llama-server's chain leaves it out -- with no temperature the draw is the
+// softmax at 1.
+func (s llamaSettings) stages() llamaSettings {
+	on := func(n string) bool { return slices.Contains(s.Samplers, n) }
+	if !on("penalties") {
+		s.RepeatPenalty, s.PresencePenalty, s.FrequencyPenalty = 1, 0, 0
+	}
+	if !on("top_n_sigma") {
+		s.TopNSigma = -1
+	}
+	if !on("top_k") {
+		s.TopK = 0
+	}
+	if !on("typ_p") {
+		s.TypicalP = 1
+	}
+	if !on("top_p") {
+		s.TopP = 1
+	}
+	if !on("min_p") {
+		s.MinP = 0
+	}
+	if !on("xtc") {
+		s.XTCProbability = 0
+	}
+	if !on("temperature") {
+		s.Temperature, s.DynatempRange = 1, 0
+	}
+	return s
 }
 
 // llamaFields is every /completion field (llama.cpp's server README) that is
@@ -140,7 +210,6 @@ func llamaFields() map[string]llamaField {
 		"adaptive_target":       {numLE(-1), "adaptive-p sampling is not built"},
 		"adaptive_decay":        {anyValue, ""},
 		"min_keep":              {numIs(0), "min_keep is not built"},
-		"samplers":              {samplerSubset, "only the samplers penalties, top_n_sigma, top_k, typ_p, top_p, min_p, xtc and temperature exist"},
 		"n_indent":              {numIs(0), "n_indent is not built"},
 		"n_keep":                {numIs(0), "there is no context shift, so n_keep has nothing to keep"},
 		"n_discard":             {numIs(0), "there is no context shift"},
@@ -164,7 +233,7 @@ func llamaRead() map[string]bool {
 		"repeat_last_n": true, "presence_penalty": true, "frequency_penalty": true, "model": true,
 		"logit_bias": true, "typical_p": true, "xtc_probability": true, "xtc_threshold": true,
 		"top_n_sigma": true, "dynatemp_range": true, "dynatemp_exponent": true,
-		"mirostat": true, "mirostat_tau": true, "mirostat_eta": true, "response_fields": true,
+		"mirostat": true, "mirostat_tau": true, "mirostat_eta": true, "response_fields": true, "samplers": true,
 		"n_cmpl": true, "n": true, "timings_per_token": true, "sse_ping_interval": true, "t_max_predict_ms": true,
 		// /infill's own.
 		"input_prefix": true, "input_suffix": true, "input_extra": true,
@@ -552,12 +621,14 @@ type llamaSettings struct {
 	Stop                                       []string
 	IgnoreEOS, Stream, TimingsPerToken         bool
 	Grammar, JSONSchema                        string
+	// Samplers is the chain's stages in order (llamaSamplers).
+	Samplers []string
 }
 
 // llamaDefaults are llama-server's defaults for an absent field.
 func llamaDefaults() llamaSettings {
 	return llamaSettings{Temperature: 0.8, TopP: 0.95, MinP: 0.05, TopK: 40, RepeatPenalty: 1, TypicalP: 1, XTCThreshold: 0.1, TopNSigma: -1, DynatempExponent: 1, MirostatTau: 5, MirostatEta: 0.1,
-		RepeatLastN: 64, NPredict: -1, Seed: -1, Stop: []string{}}
+		RepeatLastN: 64, NPredict: -1, Seed: -1, Stop: []string{}, Samplers: llamaChain()}
 }
 
 func llamaParams(s llamaSettings, _ int, _ []int32, _ int) map[string]any {
@@ -570,7 +641,7 @@ func llamaParams(s llamaSettings, _ int, _ []int32, _ int) map[string]any {
 		"repeat_penalty": s.RepeatPenalty, "presence_penalty": s.PresencePenalty, "frequency_penalty": s.FrequencyPenalty,
 		"stop": s.Stop, "ignore_eos": s.IgnoreEOS, "stream": s.Stream, "timings_per_token": s.TimingsPerToken,
 		"n_probs": s.NProbs, "grammar": s.Grammar, "json_schema": s.JSONSchema,
-		"samplers": []string{"penalties", "top_n_sigma", "top_k", "typ_p", "top_p", "min_p", "xtc", "temperature"},
+		"samplers": s.Samplers,
 	}
 }
 
@@ -773,6 +844,13 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 		llFailErr(w, firstErr)
 		return
 	}
+	if raw := body["samplers"]; len(raw) > 0 && string(raw) != "null" {
+		var err error
+		if set.Samplers, err = llamaSamplers(raw); err != nil {
+			llFailErr(w, err)
+			return
+		}
+	}
 	if temp != nil {
 		set.Temperature = *temp
 	}
@@ -916,7 +994,7 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 		Seeds:     seeds,
 		Stop:      set.Stop,
 		IgnoreEOS: set.IgnoreEOS,
-		Sampling:  llamaSampler(set, info.NCtx),
+		Sampling:  llamaSampler(set.stages(), info.NCtx),
 		Logprobs:  set.NProbs > 0,
 	}
 	o.TopLogprobs = set.NProbs
