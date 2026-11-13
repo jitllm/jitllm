@@ -1801,9 +1801,10 @@ func (m *Model) markGraph() (*graph.Graph, error) {
 // rows through the output norm where the model stores one (a decoder's),
 // the live rows pooled as the container says (graph.OpPool: the first row,
 // the last, or their mean), projected by the dense heads where it stores
-// them, then scaled to unit length -- an RMS norm of no weight over the row
-// and 1/sqrt(width), sentence-transformers' 1e-12 floor on the norm taken
-// per element as main's (Embedder.normalize).
+// them, then normalised as the input embed.norm asks (norm): at 2 scaled to
+// unit length -- an RMS norm of no weight over the row and 1/sqrt(width),
+// sentence-transformers' 1e-12 floor on the norm taken per element as
+// main's (Embedder.normalize).
 func (m *Model) poolGraph() (*graph.Graph, Uncovered, error) {
 	c := m.Cfg
 	if c.Joint {
@@ -1864,6 +1865,32 @@ func (m *Model) poolGraph() (*graph.Graph, Uncovered, error) {
 			graph.Attrs{Eps: 1e-24 / float64(w), HeadDim: w}, nil, nil)[0]
 		return mapRow(b, name, graph.Attrs{Fn: graph.MapMul, Const: 1 / math.Sqrt(float64(w))}, nil, w, n)
 	}
+	// norm is v normalised as llama.cpp's embd_normalize k asks
+	// (common_embd_normalize): unit at 2, v as it is below 0, scaled into
+	// int16's range by its largest magnitude at 0, else divided by its k-norm,
+	// |v|^k as exp(k log|v|) and the sum's k-th root as exp(log(sum)/k). A
+	// divisor of 0 leaves zeros.
+	k := b.In("embed.norm", 1)
+	norm := func(v graph.ValueID, w int, name string) graph.ValueID {
+		m := func(n string, fn graph.MapFn, c float64, width int, in ...graph.ValueID) graph.ValueID {
+			return mapRow(b, name+"."+n, graph.Attrs{Fn: fn, Const: c}, nil, width, in...)
+		}
+		over := func(n string, fn graph.MapFn, x graph.ValueID) graph.ValueID {
+			return b.Emit(graph.OpReduce, []graph.ValueID{x}, []graph.Result{{Name: name + "." + n, Width: 1}}, nil,
+				graph.Attrs{Fn: fn}, nil, nil)[0]
+		}
+		where := func(n string, width int, c, x, y graph.ValueID) graph.ValueID {
+			return b.Expr(name+"."+n, width, []graph.Term{{Fn: graph.MapWhere, Args: [3]graph.Arg{{Kind: graph.ArgIn, Index: 0},
+				{Kind: graph.ArgIn, Index: 1}, {Kind: graph.ArgIn, Index: 2}}}}, nil, c, x, y)
+		}
+		a := m("abs", graph.MapAbs, 0, w, v)
+		pk := m("pow", graph.MapExp, 0, w, m("klog", graph.MapMul, 0, w, m("log", graph.MapLog, 0, w, a), k))
+		root := m("root", graph.MapExp, 0, 1, m("lroot", graph.MapDiv, 0, 1, m("lsum", graph.MapLog, 0, 1, over("sum", graph.MapAdd, pk)), k))
+		big := m("big", graph.MapMul, 1.0/32760, 1, over("max", graph.MapMax, a))
+		div := where("div", 1, k, root, m("div0", graph.MapWhere, 1, 1, m("k0", graph.MapEqual, 0, 1, k), big))
+		scale := m("scale", graph.MapWhere, 0, 1, div, m("recip", graph.MapRecip, 0, 1, div))
+		return where("out", w, m("k2", graph.MapEqual, 2, 1, k), unit(v, w, name), m("scaled", graph.MapMul, 0, w, v, scale))
+	}
 	raw, w := p, d
 	for _, r := range [...]jlm.Role{jlm.RoleEmbdDense1, jlm.RoleEmbdDense2} {
 		if has(r) {
@@ -1872,9 +1899,9 @@ func (m *Model) poolGraph() (*graph.Graph, Uncovered, error) {
 		}
 	}
 	if p == raw {
-		b.Out(unit(p, w, "unit"))
+		b.Out(norm(p, w, "unit"))
 	} else {
-		b.Out(unit(p, w, "unit"), unit(raw, d, "unit.raw"))
+		b.Out(norm(p, w, "unit"), norm(raw, d, "unit.raw"))
 	}
 	return verified(b, graph.Facts{Inventory: inv})
 }

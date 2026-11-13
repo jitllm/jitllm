@@ -26,10 +26,12 @@ type embedMode struct {
 	whole bool
 	pool  jlm.Pooling
 	total int // positions in the sequence
-	// out is the readout (Instance.readout): through the dense heads and at unit
-	// length, or with raw (Embedder.skipDense) at unit length before them.
-	out []float32
-	raw bool
+	// out is the readout (Instance.readout): through the dense heads, or with
+	// raw (Embedder.skipDense) before them, normalised as norm asks
+	// (llama.cpp's embd_normalize; 2 is unit length).
+	out  []float32
+	raw  bool
+	norm float32
 	// req is the request words a marker head's readout reads (Instance.req).
 	req  []uint32
 	wins []nn.KeyRun
@@ -101,7 +103,7 @@ func (e *embedMode) collect(s *Instance, base, n int) error {
 			return fmt.Errorf("model: a mean over %d of %d rows, and a mean-pooled run is one chunk", n, e.total)
 		}
 	}
-	if s.readout == nil || !s.readout.Pool(s.bx[:n*s.c.NEmbd], n, e.req, e.out, e.raw) {
+	if s.readout == nil || !s.readout.Pool(s.bx[:n*s.c.NEmbd], n, e.req, e.out, e.raw, e.norm) {
 		if _, err := s.m.UncoveredAt(-3); err != nil {
 			return fmt.Errorf("model: the readout's graph: %w", err)
 		}
@@ -147,17 +149,17 @@ func (s *Instance) embedWins(n int) []nn.KeyRun {
 	return wins
 }
 
-// embedPrefill runs ids from position zero and leaves the pooled, normed (but
-// not yet L2-normalised) vector in out, or, unit, the composer's readout
-// through the dense heads at unit length.
-func (s *Instance) embedPrefill(ids []int32, out []float32, raw bool) error {
+// embedPrefill runs ids from position zero and leaves the composer's readout
+// in out: through the dense heads, or with raw before them, normalised as
+// llama.cpp's embd_normalize norm asks.
+func (s *Instance) embedPrefill(ids []int32, out []float32, raw bool, norm int) error {
 	c := s.c
 	if len(ids) > s.maxSeq {
 		return fmt.Errorf("model: %d tokens, and this session holds %d", len(ids), s.maxSeq)
 	}
 	s.Reset()
 	clear(out)
-	s.emb = &embedMode{bidir: c.NonCausal, pool: c.Pooling, total: len(ids), out: out, raw: raw}
+	s.emb = &embedMode{bidir: c.NonCausal, pool: c.Pooling, total: len(ids), out: out, raw: raw, norm: float32(norm)}
 	defer func() { s.emb = nil }()
 	_, err := s.Prefill(ids)
 	return err

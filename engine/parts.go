@@ -69,6 +69,7 @@ func (s *Instance) partsPlan() *nn.PartsPlan {
 	if g := fg.Pool; g != nil {
 		p.Pool, p.PoolPart, p.PoolW = true, part(g, s.maxSeq), nn.PartWeights{Block: -1, Of: s.ws.tensors(-1, nil)}
 		p.PoolRows, p.PoolWidth, p.PoolRaw = s.maxSeq, s.poolWidth(), len(g.Out) > 1
+		p.PoolNorm = slices.ContainsFunc(g.In, func(v graph.ValueID) bool { return g.Values[v].Name == "embed.norm" })
 	}
 
 	if i := s.lo - s.c.NLayer; i >= 0 && i < len(fg.MtpEntry) {

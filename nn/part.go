@@ -324,12 +324,13 @@ type StreamsDevice interface {
 	Collapse(x []float32, rows int) Decline
 }
 
-// PoolDevice is a device reading an embedding model's readout: the pooled,
-// unit-length row of a call's n rows of x into out -- with raw, the row
-// before the dense heads -- reporting whether it served it; or a marker
-// head's, the scores of the rows the request words req name.
+// PoolDevice is a device reading an embedding model's readout: the pooled
+// row of a call's n rows of x into out, normalised as llama.cpp's
+// embd_normalize norm asks (2 is unit length) -- with raw, the row before
+// the dense heads -- reporting whether it served it; or a marker head's, the
+// scores of the rows the request words req name.
 type PoolDevice interface {
-	Pool(x []float32, n int, req []uint32, out []float32, raw bool) bool
+	Pool(x []float32, n int, req []uint32, out []float32, raw bool, norm float32) bool
 }
 
 // RequestDevice is a device whose blocks read the step's request words

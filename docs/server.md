@@ -78,8 +78,10 @@ A field the engine cannot honour is refused by name with a 400, at any value
 but its neutral one: `dry_multiplier`, `adaptive_target`, `min_keep`,
 a `samplers` list out of the draw's order or naming `adaptive_p`,
 `n_keep`, `n_discard`, `n_cache_reuse`,
-`post_sampling_probs`, `lora`, `embd_normalize` other
-than 2, and an audio file in `multimodal_data`. The top-level
+`post_sampling_probs`, `lora`, and an audio file in `multimodal_data`.
+`/embedding` reads `embd_normalize` as llama-server does (2, unit length, by
+default; below 0 the pooled row as it is; 0 scaled into int16's range by its
+largest magnitude; any other k its k-norm), each kind the composed readout's. The top-level
 `multimodal_data` and `image_data` older llama-servers read are refused,
 naming `prompt.multimodal_data`. A field llama.cpp does not define is
 refused as unknown. On a

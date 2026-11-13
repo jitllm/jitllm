@@ -89,7 +89,7 @@ func (e *Exec) placeParts(p *PartsPlan) Parts {
 			}
 			weights = ws
 		}
-		out.Pool = NewPool(e.dev, &e.steps, part, weights, p.PoolRows, p.D, p.PoolWidth, p.PoolRaw)
+		out.Pool = NewPool(e.dev, &e.steps, part, weights, p.PoolRows, p.D, p.PoolWidth, p.PoolRaw, p.PoolNorm)
 	}
 	if p.Entry {
 		out.Entry = NewEntry(e.dev, &e.steps, e.FormPart(p.EntryParts[0]), e.FormPart(p.EntryParts[1]), boundWeights{e.b, p.EntryW}, p.EntryWidth)

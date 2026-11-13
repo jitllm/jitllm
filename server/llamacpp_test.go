@@ -957,8 +957,8 @@ func TestLlamaPropsSlotsHealthEmbedding(t *testing.T) {
 	if code != 400 || out["error"] == nil {
 		t.Fatalf("embedding: %d %v", code, out)
 	}
-	if code, _ := llamaPost(t, s, "/embedding", `{"content":"hi","embd_normalize":0}`); code != 400 {
-		t.Fatalf("embd_normalize 0 accepted: %d", code)
+	if code, _ := llamaPost(t, s, "/embedding", `{"content":"hi","embd_normalize":"x"}`); code != 400 {
+		t.Fatalf("embd_normalize \"x\" accepted: %d", code)
 	}
 }
 
@@ -978,9 +978,37 @@ func TestLlamaEmbeddingShape(t *testing.T) {
 	}
 }
 
-type llamaEmbedFake struct{ *llamaFake }
+// TestLlamaEmbeddingNormalize: embd_normalize reaches the embedder as asked,
+// every kind llama-server reads, and none where the request names none.
+func TestLlamaEmbeddingNormalize(t *testing.T) {
+	f := &llamaEmbedFake{llamaFake: &llamaFake{fakeBackend: &fakeBackend{}}}
+	s := serve(t, f)
+	for _, c := range []struct {
+		body string
+		want *int
+	}{
+		{`{"content":"a"}`, nil}, {`{"content":"a","embd_normalize":-1}`, ptr(-1)}, {`{"content":"a","embd_normalize":0}`, ptr(0)},
+		{`{"content":"a","embd_normalize":2}`, ptr(2)}, {`{"content":"a","embd_normalize":5}`, ptr(5)},
+	} {
+		resp := post(t, s, "/embedding", c.body)
+		resp.Body.Close()
+		if resp.StatusCode != 200 {
+			t.Fatalf("%s: %d", c.body, resp.StatusCode)
+		}
+		if got := f.norm; (got == nil) != (c.want == nil) || got != nil && *got != *c.want {
+			t.Fatalf("%s: the embedder was asked %v", c.body, got)
+		}
+	}
+}
+
+type llamaEmbedFake struct {
+	*llamaFake
+	// norm is the normalisation the last request asked.
+	norm *int
+}
 
 func (f *llamaEmbedFake) Embed(_ context.Context, o EmbedOptions) (*EmbedResult, error) {
+	f.norm = o.Normalize
 	r := &EmbedResult{}
 	for range o.Inputs {
 		r.Vectors = append(r.Vectors, []float32{1, 0, 0})
