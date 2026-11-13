@@ -31,13 +31,14 @@ import (
 type SpecRollback int
 
 const (
-	// SpecRollbackAuto keeps a copy per verified row where every linear block
-	// runs on the host, and replays where any runs on a device, which can
-	// rewind its state by one step and no further.
+	// SpecRollbackAuto keeps a copy per verified row where every device
+	// running a linear block keeps them as it steps, and replays where one
+	// prepares to (nn.RecKeepPreparer: a card's keep forms and slots).
 	SpecRollbackAuto SpecRollback = iota
 	// SpecRollbackRows copies every linear block's state after each verified
 	// row and restores the last accepted row's: k copies a round, no extra
-	// rows. Host linear blocks only.
+	// rows. A device that prepares to keep them does when the speculation
+	// starts.
 	SpecRollbackRows
 	// SpecRollbackReplay keeps the state from before the verification and,
 	// after a rejection, returns to it and runs the accepted rows again as the
@@ -384,14 +385,15 @@ func (s *Instance) Speculate(opts ...SpecOption) (*Speculator, error) {
 	sp.mode = sp.opt.rollback
 	if sp.mode == SpecRollbackAuto {
 		sp.mode = SpecRollbackRows
-		if !s.recRowsKept() {
+		if !s.recRowsKept() || s.recKeepPrepares() {
 			sp.mode = SpecRollbackReplay
 		}
 	}
-	if sp.mode == SpecRollbackRows && !s.recRowsKept() {
-		sp.Close()
-		return nil, fmt.Errorf("model: per-row recurrent snapshots need every linear block on a device that keeps a call's rows " +
-			"(nn.RecRowKeeper); a card rewinds its own state one step (SpecRollbackReplay)")
+	if sp.mode == SpecRollbackRows && s.recurrent() {
+		if err := s.recKeepPrep(specKeptRows(o)); err != nil {
+			sp.Close()
+			return nil, err
+		}
 	}
 	sp.stats.Rollback = sp.mode
 	sp.h = make([]float32, c.SpecHidW())
@@ -1221,6 +1223,16 @@ const retireAfter = 3
 // tried a few rounds before the search trusts its prices. Three drafts won
 // where speculation paid; one more is explored past it. WithSpecDraft fixes any depth.
 const specMaxDraft = 4
+
+// specKeptRows is the most rows a verification of o's runs: the next token
+// and the most drafts a round asks.
+func specKeptRows(o specOpts) int {
+	k := max(o.draft, specMaxDraft, specLookupDraft)
+	for _, d := range o.sched {
+		k = max(k, d)
+	}
+	return 1 + k
+}
 
 // specSettle is how many rounds in a row of one count come before the first
 // that prices it: the switch from another count costs the two after it

@@ -4331,14 +4331,18 @@ func (g *devTier) layersSession(s backend.Session) {
 			var inst *partInst
 			if why == partServes {
 				var serr error
+				g.keeping = l.linear && g.keepStep(rag, l)
 				sv, inst, cp, serr = g.servedStep(bs, l, li, p, R, rag == nil || rag.oneSequence())
 				if serr != nil {
+					g.keeping = false
 					if err == nil {
 						err = serr
 					}
 					continue
 				}
-				if l.linear && !g.bindRec(sv, bs, sid, l) {
+				bound := !l.linear || g.bindRec(sv, bs, sid, l)
+				g.keeping = false
+				if !bound {
 					if err == nil {
 						err = fmt.Errorf("tier: block %d at %d rows: its recurrent state is not bound to the step's slots", li, R)
 					}
@@ -4568,7 +4572,8 @@ func (g *devTier) layersSession(s backend.Session) {
 		// - History streamed from host memory: its uploads and waits are per call.
 		// - A failure injected at a block (jitllmfault): it lands between
 		//   blocks only when they are issued one by one.
-		if (R > 1 && rag == nil) || !parOK || g.NoGraph || g.graphOff || g.PerLayerSubmit ||
+		// - A step keeping its rows: its keep slots are its session's.
+		if (R > 1 && rag == nil) || !parOK || g.NoGraph || g.graphOff || g.PerLayerSubmit || g.keepArmed(rag) ||
 			a.paging || streamed || bs.pkv != nil && bs.pkv.st != nil || g.blockFaultArmed() {
 			te := time.Now()
 			emit()

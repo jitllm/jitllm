@@ -1619,6 +1619,13 @@ type RecRowKeeper interface {
 	RecRestoreRow(row int) bool
 }
 
+// RecKeepPreparer is a RecRowKeeper that prepares before its calls keep
+// their rows: the forms that store them and room for calls of up to rows
+// rows (RecKeepPrep), when a speculation starts -- never at a step.
+type RecKeepPreparer interface {
+	RecKeepPrep(rows int) error
+}
+
 // SizeDecliner is an optional LayerDevice that can answer from a block's
 // size alone that no device could hold it, before the caller reads it. total
 // is every byte the block keeps resident; bank is the routed expert banks'

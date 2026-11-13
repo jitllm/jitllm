@@ -55,6 +55,10 @@ type devSess struct {
 	// history sent home, so a caller that relocates can; only a call's own
 	// pages stream blocks (streamForRoom).
 	asking bool
+	// kept is the session's kept rows of a call (reckeep.go), and keeping
+	// is set while a step that keeps them forms and binds a linear block.
+	kept    *recKeep
+	keeping bool
 	// sessCause is the refusal kind the session's last call met here, noted by
 	// its view (devTier.noteCause).
 	sessCause atomic.Uint32
@@ -758,6 +762,7 @@ func (g *devTier) forgetSess(sid uint64) {
 		freeStaleOf(l)
 	})
 	if ds := g.sess[sid]; ds != nil {
+		g.freeKept(ds)
 		ds.closeQueue()
 	}
 	if sid != 0 {

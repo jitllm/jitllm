@@ -1,5 +1,7 @@
 package engine
 
+import "github.com/jitllm/jitllm/nn"
+
 // A recurrent block's state is its device's: the CPU device keeps a
 // session's in the session's view (history.View) as a card keeps it on the
 // card, and the instance reads or writes it only through the device the
@@ -88,6 +90,27 @@ func (s *Instance) recKeepRows(rows int) {
 		}
 		return true
 	})
+}
+
+// recKeepPrepares says a device running a linear block prepares before it
+// keeps a call's rows (nn.RecKeepPreparer).
+func (s *Instance) recKeepPrepares() bool {
+	return !s.recRoutes(func(r *route) bool {
+		_, ok := r.rowk.(nn.RecKeepPreparer)
+		return !ok
+	})
+}
+
+// recKeepPrep prepares every such device for calls of up to rows rows.
+func (s *Instance) recKeepPrep(rows int) error {
+	var err error
+	s.recRoutes(func(r *route) bool {
+		if p, ok := r.rowk.(nn.RecKeepPreparer); ok && err == nil {
+			err = p.RecKeepPrep(rows)
+		}
+		return true
+	})
+	return err
 }
 
 func (s *Instance) recRestoreRow(row int) bool {
