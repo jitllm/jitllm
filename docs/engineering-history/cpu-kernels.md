@@ -5233,6 +5233,30 @@ decode runs on a fresh instance, whose expert pages are read at their first
 routing (O_DIRECT, cold in every process, where llama.cpp's mmap reads a
 warm page cache).
 
+A census lane ran on the same socket through every count above:
+instructions are each process's own, but a neighbour's traffic can raise a
+process's last-level misses -- llama.cpp's counts were taken beside it too,
+in the same pass, and a factor of 7.4 is past what it explains.
+
+**Where the misses were, and the retry that removed them.** Each kernel
+named apart in the perf map (`F<form>.k<kernel>`, a probe), the misses of
+olmoe's decode sit in three kernels of the one-row block form: the expert
+gate, up and down banks', a third each; the dense matvecs (attention
+projections) are not among them. The passes each kernel took tell them
+apart: every dense matvec walks its weight's planes along the rows a
+sub-block at a time (`streams, vectorize, streamwords`), a walk the
+hardware prefetcher follows, and the gate and up banks ended jammed across
+lanes (`jam, periods`), which it cannot. The banks' streamed form was
+refused for its floats in each form the refusal tried -- cursor copies,
+uncrowded, no initializer takes -- and then the walk itself was given up.
+What set the banks apart from the dense form is Unroll: an expert's rows
+are a fixed count, so its rows loop ran four vectors a trip, four copies'
+products and sums beside the sub-block's broadcast words, past sixteen
+vector registers; a dense rows loop is counted and runs one. A kernel
+refused with its vector loops run several vectors a trip is now formed
+again with half as many before anything else of its form is given up, and
+the gate and up banks bind streamed. UNR_DOC_NUMBERS
+
 **The cold spill, tried.** The expert kernels' bindings spill copies a
 loop walks every trip (gate Q4_K 104 stack references, down Q6_K 185, down
 Q4_K 310 at olmoe's shapes). A value held across a copy's span and read in

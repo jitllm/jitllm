@@ -9,7 +9,9 @@ import "github.com/jitllm/jitllm/composer/ir"
 // set, a vector loop that carries sums alone and stores nothing, or that runs a
 // fixed count of at least Vectors trips, runs Vectors vectors a trip, the
 // vectors left in a loop of one a trip after it; a vector loop of fewer
-// fixed trips that carries sums alone or only stores runs them all in one.
+// fixed trips that carries sums alone or only stores runs them all in one;
+// a kernel the registers refused that way (Kernel.Unrolls) runs half the
+// vectors a trip in its loops that carry no sums, for each refusal.
 type Unroll struct {
 	Full    int
 	Factor  int
@@ -18,6 +20,17 @@ type Unroll struct {
 }
 
 func (Unroll) Name() string { return "unroll" }
+
+// unrolled reports whether a vector loop of k that carries no sums runs
+// several vectors a trip: the loops a refusal halves (Kernel.Unrolls).
+func (k *Kernel) unrolled() bool {
+	for c, l := range k.Loops {
+		if l.Lanes > 0 && l.Copies > 1 && len(k.foldsOf(c)) == 0 {
+			return true
+		}
+	}
+	return false
+}
 
 func (p Unroll) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 	return eachKernel(p.Name(), ks, func(k *Kernel) ([]*Kernel, bool, error) {
@@ -30,15 +43,22 @@ func (p Unroll) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 				for _, f := range m.foldsOf(c) {
 					sum = sum && m.sumFold(f)
 				}
-				fixed := l.Count == 0 && l.Trip >= p.Vectors && len(m.foldsOf(c)) == 0
+				// A sum keeps its vectors, and with them its order of
+				// additions; a loop with no sums runs half as many for
+				// each refusal.
+				v := p.Vectors
+				if !sum {
+					v >>= k.Unrolls
+				}
+				fixed := l.Count == 0 && l.Trip >= v && len(m.foldsOf(c)) == 0
 				stores := len(m.foldsOf(c)) == 0 && m.storesAt(c)
-				if l.Lanes > 0 && l.Copies == 0 && !m.hasInner(c) && (sum || stores) && l.Count == 0 && l.Trip > 1 && l.Trip < p.Vectors {
+				if l.Lanes > 0 && l.Copies == 0 && !m.hasInner(c) && (sum || stores) && l.Count == 0 && l.Trip > 1 && l.Trip < v {
 					m.unrollShort(c)
 					changed = true
 					continue
 				}
-				if l.Lanes > 0 && l.Copies == 0 && !m.hasInner(c) && (sum || fixed) {
-					m.unrollVectors(c, p.Vectors)
+				if l.Lanes > 0 && l.Copies == 0 && !m.hasInner(c) && (sum || fixed) && v > 1 {
+					m.unrollVectors(c, v)
 					changed = true
 					c++
 				}

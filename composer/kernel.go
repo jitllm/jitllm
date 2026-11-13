@@ -88,6 +88,10 @@ type Kernel struct {
 	// planes apart (Streams.Apart) however short its rows. Aparted is a
 	// walk Streams took apart.
 	Unstreamed, Crowded, Aparted bool
+	// Unrolls is how many times the registers refused a part's form with
+	// its vector loops run several vectors a trip (Unroll), each halving
+	// the vectors a trip.
+	Unrolls int
 	// Rows is 1 + the node of how many of the leading axis's rows are live;
 	// Clamp, where a pass set it, 1 + the node of the elements a launch
 	// holds its threads to.
