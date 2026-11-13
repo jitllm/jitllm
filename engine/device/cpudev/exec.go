@@ -139,13 +139,24 @@ func (e *Exec) formBlock(p nn.BlockSpec) (*Block, [2]error) {
 		return cb, errs
 	}
 	cb.Graph, cb.SideOff, cb.Bidir, cb.Whole, cb.Rec, cb.Cut = p.Source, p.SideOff, p.Bidir, p.Whole, p.Rec, p.Cut
+	// The two forms are independent: the rows' forms beside the row's. The
+	// target is probed first, before both read it.
+	e.comp.Device()
+	var rows *Form
+	var rowsErr error
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		rows, rowsErr = e.form(p, rowsOf(p))
+	}()
 	f, err := e.form(p, 1)
+	<-done
 	if err != nil {
 		cb.Why, errs[0] = declineOf(err), err
 		return cb, errs
 	}
 	cb.F = f
-	if cb.Rows, err = e.form(p, rowsOf(p)); err != nil {
+	if cb.Rows, err = rows, rowsErr; err != nil {
 		cb.RowsWhy, errs[1] = declineOf(err), err
 	}
 	return cb, errs
