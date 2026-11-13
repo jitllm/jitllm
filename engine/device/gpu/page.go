@@ -681,6 +681,10 @@ func (g *devTier) submit(sid uint64, bs *blockScratch, lo, hi, pos int, x, cs, c
 	if w := bs.p.ResidW(); w > 0 && len(x) > w {
 		rows = len(x) / w
 	}
+	// A marked block's second step writes its marked half: copied first.
+	g.mu.Lock()
+	g.keepMarkHalves(sid, lo, hi)
+	g.mu.Unlock()
 	for li := lo; li < hi; {
 		if !g.pageInHold(li, lo, hi) {
 			return false
