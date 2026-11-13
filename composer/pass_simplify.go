@@ -1,9 +1,9 @@
 package composer
 
 import (
-	"fmt"
 	"math"
 	"slices"
+	"strconv"
 
 	"github.com/jitllm/jitllm/composer/ir"
 )
@@ -85,10 +85,12 @@ func (k *Kernel) cse(weights bool) bool {
 			stored[k.Bufs[s.Buf].Operand] = true
 		}
 	}
-	seen := map[string]int{}
+	seen := map[cseKey]int{}
 	same := map[int]int{}
+	var buf [3]int
+	var axes []byte
 	for i := range k.Nodes {
-		nd := k.Nodes[i]
+		nd := &k.Nodes[i]
 		switch nd.Op {
 		case OpFold, OpExchange, OpShuffle, OpGroupSum, OpGroupMax:
 			continue
@@ -97,25 +99,36 @@ func (k *Kernel) cse(weights bool) bool {
 				continue
 			}
 		}
-		// The operands as the merges so far leave them, which are swept
-		// into the kernel once, at the end.
-		var ops []int
-		for _, a := range k.Operands(&nd) {
-			o := *a
-			if j, ok := same[o]; ok {
-				o = j
+		key := cseKey{op: nd.Op}
+		switch nd.Op {
+		case OpConst, OpCoord, OpParam, OpLength, OpSpan:
+			key.typ, key.ops[0], key.imm = nd.Type, nd.A, nd.Imm
+		case OpIter:
+			key.at = nd.At
+		default:
+			key.typ, key.at, key.buf, key.imm = nd.Type, nd.At, nd.Buf, nd.Imm
+			if nd.Tile != nil {
+				key.tile, key.tiled = *nd.Tile, true
 			}
-			ops = append(ops, o)
-		}
-		key := fmt.Sprint(nd.Op, nd.Type, ops, nd.At, nd.Buf, nd.Imm)
-		if nd.Tile != nil {
-			key += fmt.Sprint(*nd.Tile)
-		}
-		if nd.Op == OpConst || nd.Op == OpCoord || nd.Op == OpParam || nd.Op == OpLength || nd.Op == OpSpan {
-			key = fmt.Sprint(nd.Op, nd.Type, nd.A, nd.Imm)
-		}
-		if nd.Op == OpIter {
-			key = fmt.Sprint(nd.Op, nd.At)
+			// The operands as the merges so far leave them, which are swept
+			// into the kernel once, at the end.
+			ops := k.args(i, &buf)
+			key.n = len(ops)
+			axes = axes[:0]
+			for j, o := range ops {
+				if m, ok := same[o]; ok {
+					o = m
+				}
+				if j < len(key.ops) {
+					key.ops[j] = o
+				}
+				if len(ops) > len(key.ops) {
+					axes = append(strconv.AppendInt(axes, int64(o), 10), ',')
+				}
+			}
+			if len(ops) > len(key.ops) {
+				key.ops, key.axes = [3]int{}, string(axes)
+			}
 		}
 		if j, ok := seen[key]; ok {
 			same[i] = j
@@ -125,6 +138,21 @@ func (k *Kernel) cse(weights bool) bool {
 	}
 	k.redirectMany(same)
 	return len(same) > 0
+}
+
+// cseKey is a node as cse compares it: its op, type, operands as the merges
+// so far leave them, loop, buffer, immediate and tile; a node of more than
+// three operands (a load's axes, a matrix op's) carries them encoded in axes.
+type cseKey struct {
+	op      Op
+	typ     ir.Type
+	n       int
+	ops     [3]int
+	axes    string
+	at, buf int
+	imm     int64
+	tile    ir.TileType
+	tiled   bool
 }
 
 // redirectMany is redirectAll for each node of same, to the node it maps to,
