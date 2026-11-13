@@ -1571,6 +1571,39 @@ out, which priced every block at nothing and made a PLACEMENT think the whole
 model was free. A gate that has been red since a refactor is not noise; it is
 that refactor's unfinished half.
 
+## A listed card that does not open, and driver states that read as code bugs
+
+**A card host whose driver logged Xid 154** ("GPU recovery action changed
+from None to Node Reboot Required", for every card at once) kept the
+contexts it had and broke new work. On the two hosts carrying that flag, and
+on no other, a gate aborted with glibc's "double free detected in tcache 2"
+inside `cuStreamCreate`, as a session made its queue; later every new
+process's `cuInit` returned 999 while the processes already running kept
+their cards. Neither was the engine: read the kernel log for Xid 154 before
+debugging an abort inside the driver, and reboot the host.
+
+**Under that state a card gate skipped**, and a skip reads as green. With the
+run's device selection set, three tower and embedding card gates read 3
+passed and 6 skipped on the host whose `cuInit` returned 999 -- each parent
+passing because its arms skipped -- and 9 failed once a listed device that
+does not open fails the gate (engine's `noDevice`, the server's
+`requireDevice`). The server suite had shown it first: a streaming gate's
+violation arm faulted the card, the gate after it skipped on the dead
+context, and the suite reported PASS.
+
+**An Xid 31 is a kernel loading an address nothing maps.** The ones logged in
+that sweep were a gate's launcher sizing a shared scratch by the first code
+binding it (the card gates' launchers size it at its widest binding now)
+and that violation arm; none was a served kernel.
+
+**compute-sanitizer's memcheck runs the test binaries as they are**, as their
+launcher (NVIDIA's redistributable `cuda_sanitizer_api`, no toolkit needed):
+it reports an out-of-bounds load in a goffi-driven process by kernel and by
+allocation, and named a probe loading 64 MiB past a 256-byte buffer with
+its distance. Its blind spot is the slot allocator: a small buffer is a slot
+of a shared 64 KiB piece, and an overrun inside the piece reads memory that
+is mapped and allocated.
+
 ## Fused runs: a decode token's resident host blocks as one pool region
 
 `TestFusionCeiling` priced whole-layer fusion as regions removed times a round

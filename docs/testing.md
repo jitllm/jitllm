@@ -230,6 +230,10 @@ How it holds (`internal/testdevices`, `backend.Restriction`):
   cards, four-device splits) skips naming the selection; one whose devices are
   part of what it asserts skips unless they are selected
   (`testdevices.Require`). `cuda:2,vulkan:2` is the pair for the move gates.
+- A selected device that does not open fails the gate that needed it rather
+  than skipping it: engine's `noDevice` and the server's `requireDevice` tell
+  a host with no card (a skip) from a listed card or driver gone bad (a
+  failure).
 
 One thing a selection cannot do: with a Vulkan device selected, the loader's
 enumeration makes the NVIDIA driver attach a graphics context to card 0 for

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
@@ -22,7 +23,20 @@ func noDevice(t *testing.T, what string, err error) {
 	if errors.Is(err, vulkan.ErrDevicesVanished) {
 		t.Fatalf("%s was there earlier in this process and is gone: %v", what, err)
 	}
+	if testdevices.Selected() && !anyListedOpens() {
+		t.Fatalf("no %s here: %v; %s=%s lists devices and none opens: a broken card or driver, not a host without one",
+			what, err, testdevices.Var, strings.Join(testdevices.Selection(), ","))
+	}
 	t.Skipf("no %s here: %v", what, err)
+}
+
+// anyListedOpens reports whether a device the run's selection lists opens.
+func anyListedOpens() bool {
+	ds := backend.OpenWith(backend.Opts{Admit: testdevices.Admit()})
+	for _, d := range ds {
+		d.Close()
+	}
+	return len(ds) > 0
 }
 
 // TestMain holds a Vulkan driver for the binary's life, which keeps the ICDs
