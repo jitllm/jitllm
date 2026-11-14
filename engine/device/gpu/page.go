@@ -464,8 +464,9 @@ func (g *devTier) streamForRoom(n uint64) bool {
 }
 
 // swapRoom reports that n more bytes held for good leave the streamed blocks
-// a slot to swap through: everything held but their paged-in pages, n and the
-// widest of them inside the budget. slots() divides the budget by the widest
+// a slot to swap through: everything held but their paged-in pages, n, the
+// slack every page-in leaves free (room) and the widest of them inside the
+// budget. slots() divides the budget by the widest
 // block of all and counts every paged-in block as swap space, which a block
 // resident and unstreamed is not. Callers hold g.mu.
 func (g *devTier) swapRoom(n uint64) bool {
@@ -485,7 +486,7 @@ func (g *devTier) swapRoom(n uint64) bool {
 	if widest == 0 {
 		return true
 	}
-	held := g.used - min(g.used, in) + g.reserved()
+	held := g.used - min(g.used, in) + g.reserved() + g.slack()
 	return held+n+widest <= g.limit
 }
 
