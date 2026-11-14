@@ -58,10 +58,11 @@ func newEvictGate(t *testing.T) *evictGate { return newEvictGateOf(t, evictModel
 
 // evictModels are the checkpoints the eviction gate runs: a dense model, a
 // mixture, whose blocks fold their history in passes through forms of their
-// own, and a selecting model, whose lightning indexer ranks its whole
-// history's positions in a sweep of passes before its attention's.
+// own, a selecting model, whose lightning indexer ranks its whole history's
+// positions in a sweep of passes before its attention's, and one selecting
+// by pooled block keys (MiniMax-M3's), whose sweep sums each block's keys.
 func evictModels() []string {
-	return []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen3-MOE-4x0.6B-Q4_K_M.gguf", "synth-deepseek32.gguf"}
+	return []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen3-MOE-4x0.6B-Q4_K_M.gguf", "synth-deepseek32.gguf", "synth-minimaxm3.gguf"}
 }
 
 func newEvictGateOf(t *testing.T, name string) *evictGate {

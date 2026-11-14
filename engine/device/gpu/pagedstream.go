@@ -211,12 +211,10 @@ func (g *devTier) pagedStreamPrep(sid uint64, bs *blockScratch, rows []pagedRow)
 const devStagedPlane = 64 << 20
 
 // stagedPassKeys is the most keys bs's staged plan is built for, in whole
-// pages, or 0 for no bound: a pooled block selection (MiniMax-M3's), which
-// reads the whole history through the table at once, does not go in passes.
-// Callers hold g.mu.
+// pages, or 0 for no bound. Callers hold g.mu.
 func (g *devTier) stagedPassKeys(bs *blockScratch) int {
 	pg := bs.pkv
-	if pg == nil || pooledSelects(bs.p.Graph) {
+	if pg == nil {
 		return 0
 	}
 	kp := g.kvPages()
@@ -292,14 +290,19 @@ func (g *devTier) runBufs(bs *blockScratch, l *layer, li int) ([]backend.Buf, er
 }
 
 // selBufs grows bs's running block scores to block l's selections over its
-// whole history (composer.TableSelIn, TableSelOut): sel[0] the least floats
-// the first pass folds into, sel[1] and sel[2] the folds' two sides. Callers
+// whole history (composer.TableSelIn, TableSelOut) -- a group's score a
+// block, or pooled the block's summed keys: sel[0] the least floats the
+// first pass folds into, sel[1] and sel[2] the folds' two sides. Callers
 // hold g.mu, outside any submission.
 func (g *devTier) selBufs(bs *blockScratch, l *layer) error {
 	pg, n, whole := bs.pkv, 0, keyBound(bs.p.MaxSeq)
 	for _, o := range l.graph.Ops {
-		if o.Kind == graph.OpSelect && !o.Attr.Pooled && o.Attr.Span > 0 {
-			n = max(n, bs.rows*o.Attr.NKVHead*((whole+o.Attr.Span-1)/o.Attr.Span))
+		if o.Kind == graph.OpSelect && o.Attr.Span > 0 {
+			per := o.Attr.NKVHead
+			if o.Attr.Pooled {
+				per = o.Attr.HeadDim
+			}
+			n = max(n, bs.rows*per*((whole+o.Attr.Span-1)/o.Attr.Span))
 		}
 	}
 	if n == 0 || pg.selN >= n {

@@ -2784,14 +2784,8 @@ func (g *devTier) promptServed(l *layer, li int, bb *blockScratch) bool {
 // over a history read in passes: its forms over passes (servedStep's where
 // the call's history streams) formed, one a sequences form the rows take,
 // and the scratch's instance of each held, made here where they are not.
-// A block whose pool never evicts (kvLayerPool.noEvict: a pooled selection,
-// not yet formed over passes) is never read in passes, and has no form over
-// them to make.
 // Callers hold g.mu, outside any submission.
 func (g *devTier) streamServed(l *layer, li int, bb *blockScratch) bool {
-	if pl := g.kvp.layers[l.kvSrc]; pl != nil && pl.noEvict {
-		return true
-	}
 	run, err := g.runBufs(bb, l, li)
 	if err != nil {
 		g.LastErr = err.Error()
@@ -3048,7 +3042,7 @@ func (g *devTier) servedBlockAs(l *layer, li int, cs backend.Buf, pl *kvLayerPoo
 	// blocks: its form is told the positions the history holds, bounded as
 	// its keys are.
 	context := 0
-	if run != nil && bs != nil && plainSelects(l.graph) {
+	if run != nil && bs != nil && selectsBlocks(l.graph) {
 		context = keyBound(bs.p.MaxSeq)
 	}
 	// A linear block holds no history, unless it attends too: its state is
