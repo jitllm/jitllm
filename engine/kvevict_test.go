@@ -121,10 +121,11 @@ func (eg *evictGate) second(t *testing.T, st *Instance) [][]float32 {
 	return out
 }
 
-// open is an arm's device and instance, the model wholly placed and the prompt
-// in; squeeze then holds the budget at a few pages of slack. cfg, where set,
-// changes the arm's device configuration.
-func (eg *evictGate) open(t *testing.T, squeeze bool, cfg func(*gpu.Config), extra ...gpu.Option) (*gpu.GPU, *Instance, int) {
+// open is an arm's device and instance, the model wholly placed, the prompt in
+// and the first decode step taken (its logits first); squeeze then holds the
+// budget at a few pages past the card's slack. cfg, where set, changes the
+// arm's device configuration.
+func (eg *evictGate) open(t *testing.T, squeeze bool, cfg func(*gpu.Config), extra ...gpu.Option) (*gpu.GPU, *Instance, int, []float32) {
 	g, err := openGPU(t, append([]gpu.Option{gpu.WithDevices(testdevices.Like(t, "cuda:0")), gpu.WithDeviceTune(gpu.TuneOff),
 		gpu.WithConfig(func(c *gpu.Config) {
 			c.KVPage = 64 // the smallest page: several over a short history
@@ -149,6 +150,13 @@ func (eg *evictGate) open(t *testing.T, squeeze bool, cfg func(*gpu.Config), ext
 	if _, err := st.Prefill(eg.prompt); err != nil {
 		t.Fatal(err)
 	}
+	// The first step before the budget is cut, so the decode's own scratch
+	// is built and charged first.
+	lg, err := st.Forward(eg.ids[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := append([]float32(nil), lg...)
 	if squeeze {
 		// A few pages of slack: the pool fills them, and past them the
 		// history can grow only by sending pages home. Evicting needs room to
@@ -156,29 +164,25 @@ func (eg *evictGate) open(t *testing.T, squeeze bool, cfg func(*gpu.Config), ext
 		// The prompt is under a page, so each layer holds one: two more a
 		// layer.
 		// A budget of what the card holds gives the pool's free pages back
-		// first (SetBudget), so the slack is counted from what is left. A
-		// budget past it by less than the card's own slack grows nothing
-		// (Stats.Slack): a small model's two pages a layer go past that.
+		// first (SetBudget), so the slack is counted from what is left. The
+		// card keeps its slack free beside every allocation (Stats.Slack):
+		// the two pages a layer are past it.
 		st := g.Stats()
 		if _, err := g.SetBudget(st.BudgetUsed); err != nil {
 			t.Fatal(err)
 		}
 		st = g.Stats()
-		pages := 2 * st.KVBytes
-		if pages <= st.Slack {
-			pages += st.Slack
-		}
-		if _, err := g.SetBudget(st.BudgetUsed + pages); err != nil {
+		if _, err := g.SetBudget(st.BudgetUsed + st.Slack + 2*st.KVBytes); err != nil {
 			t.Fatal(err)
 		}
 	}
-	return g, st, resident
+	return g, st, resident, first
 }
 
 func (eg *evictGate) run(t *testing.T, squeeze bool, cfg func(*gpu.Config), extra ...gpu.Option) evictRun {
-	g, st, resident := eg.open(t, squeeze, cfg, extra...)
-	r := evictRun{resident: resident}
-	for _, id := range eg.ids {
+	g, st, resident, first := eg.open(t, squeeze, cfg, extra...)
+	r := evictRun{resident: resident, logits: [][]float32{first}}
+	for _, id := range eg.ids[1:] {
 		lg, err := st.Forward(id)
 		if err != nil {
 			t.Fatalf("step %d: %v (%s)", len(r.logits), err, g.Err())
@@ -308,12 +312,12 @@ func evictionRunsPastTheBudget(t *testing.T, eg *evictGate) {
 // TestDecodeDoesNotAllocate's short, unconstrained window never reaches.
 func TestKVEvictionStreamsWithoutAllocating(t *testing.T) {
 	eg := newEvictGate(t)
-	g, st, _ := eg.open(t, true, nil)
+	g, st, _, _ := eg.open(t, true, nil)
 	// The window inside one 64-position page: sending a page home is paid
 	// once a page of growth, as committing one is, not once a token.
 	const n = 16
 	cut := len(eg.ids) - n
-	for _, id := range eg.ids[:cut] {
+	for _, id := range eg.ids[1:cut] {
 		if _, err := st.Forward(id); err != nil {
 			t.Fatal(err)
 		}
@@ -353,8 +357,8 @@ func TestKVEvictionStreamsWithoutAllocating(t *testing.T) {
 // home copy back reads 0.20.
 func TestKVEvictionRewindsIntoAnEvictedPage(t *testing.T) {
 	eg := newEvictGate(t)
-	g, st, _ := eg.open(t, true, nil)
-	for _, id := range eg.ids {
+	g, st, _, _ := eg.open(t, true, nil)
+	for _, id := range eg.ids[1:] {
 		if _, err := st.Forward(id); err != nil {
 			t.Fatalf("%v (%s)", err, g.Err())
 		}
