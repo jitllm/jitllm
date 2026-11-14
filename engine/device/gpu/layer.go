@@ -1097,6 +1097,8 @@ func (g *devTier) ensureRecNext(rows int) bool {
 		return true // a short convolution keeps no state beside its window
 	}
 	if bytes := uint64(rows * g.recS * 4); g.recNextBytes < bytes {
+		// A linear submission in flight writes the old one.
+		g.quiesce()
 		b, err := g.dev.Alloc(int(bytes))
 		if err != nil {
 			return fail(err)
@@ -4088,15 +4090,16 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 		return refuse("a submission that must run alone was prepared to run beside others")
 	}
 	g.prologueHeld = false
-	if excl && g.quiet == 0 && g.rowsAlone(lo, hi, rag, bs, sid) {
+	if excl && g.quiet == 0 && g.aloneUnlocked(lo, hi, rag, bs, sid) {
 		// Alone, but with g.mu let go for the run: a step over several
-		// sessions' rows writes the device's batched scratch and nothing else
-		// of the device's, so no other submission starts (alone) while every
-		// other session's bookkeeping goes on -- the next step's room and
-		// inputs on this device, which would otherwise wait out this stage
-		// and keep a second card's stage from starting beside it. What
-		// changes what a submission reads quiesces, which waits for this one
-		// as for any in flight (its ticket).
+		// sessions' rows, or over linear blocks, writes nothing of the
+		// device's that another session changes without quiescing, so no
+		// other submission starts (alone) while every other session's
+		// bookkeeping goes on -- the next step's room and inputs on this
+		// device, which would otherwise wait out this stage and keep a second
+		// card's stage from starting beside it. What changes what a
+		// submission reads quiesces, which waits for this one as for any in
+		// flight (its ticket).
 		g.alone++
 		t := g.beginSub()
 		g.inSub, g.Stats = true, &g.acc

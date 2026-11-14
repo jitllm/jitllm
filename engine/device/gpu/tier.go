@@ -1243,8 +1243,8 @@ type devShared struct {
 	clk     subClock
 	tickets []uint64
 	quiet   int
-	// alone is a submission running alone with g.mu let go (rowsAlone): none
-	// other starts until it ends.
+	// alone is a submission running alone with g.mu let go (aloneUnlocked):
+	// none other starts until it ends.
 	alone int
 	idle  sync.Cond
 	// subCost is the per-block run time of a submission by its row count's

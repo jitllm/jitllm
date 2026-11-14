@@ -18,9 +18,11 @@ import (
 // starts until it is done. A submission whose range writes what is the
 // device's rather than the session's (a vision tower's set and k/v pair, a
 // streamed block's expert cache, a recurrent pool, the rows of several
-// sessions) runs alone: it quiesces and keeps g.mu across its Session, which
-// is the whole device as it was before sessions ran at once
-// (exclusiveRange).
+// sessions) runs alone (exclusiveRange): it quiesces, and keeps g.mu across
+// its Session, which is the whole device as it was before sessions ran at
+// once, unless what it writes of the device's is changed elsewhere only
+// after a quiesce or by a session's exclusive call, which no step runs
+// beside (aloneUnlocked).
 //
 // A KV page released while submissions are in flight is fenced with the
 // ticket the next submission will take (subClock.seq), and is reused only
@@ -81,41 +83,43 @@ func (g *devTier) runUnlocked(f func(backend.Session)) {
 // exclusiveRange reports that a submission of blocks [lo, hi) in scratch bs
 // writes what is the device's rather than its session's, and so runs alone:
 // a vision tower's block (the set and the k/v pair are one per device), a
-// linear block (the recurrent pools, their "next state" buffer and every
-// session's half flips), a streamed block (the expert cache and its staging),
-// a DeepSeek V4 block (its compressed history's staging), a step over several
+// linear block, one attending beside its recurrence among them (the recurrent
+// pools, their "next state" buffer and every session's half flips), a
+// streamed block (the expert cache and its staging), a step over several
 // sessions' rows, or a call streaming evicted history through free pages
 // another session's prologue could take. A composed part runs beside the
 // others: its form is the device's, its buffers and launch arguments the
 // lane's (served.go). Callers hold g.mu.
 func (g *devTier) exclusiveRange(lo, hi int, rag *ragStep, bs *blockScratch) bool {
-	if rag != nil && rag.sid != nil {
-		return true
-	}
+	return rag != nil && rag.sid != nil || g.linearIn(lo, hi) || g.heldRange(lo, hi, bs)
+}
+
+// heldRange reports that a submission of blocks [lo, hi) in scratch bs
+// writes what is the device's and is changed by what does not quiesce for
+// it: a vision tower's block, a streamed block, or a call streaming evicted
+// history. Callers hold g.mu.
+func (g *devTier) heldRange(lo, hi int, bs *blockScratch) bool {
 	if bs != nil && bs.pkv != nil && bs.pkv.st != nil && bs.pkv.st.evicted > 0 {
 		return true
 	}
 	for li := lo; li < hi; li++ {
-		l := g.layers[li]
-		if l == nil {
-			continue
-		}
-		if l.nonCausal || l.linear || l.withAttn || l.stream != nil {
+		if l := g.layers[li]; l != nil && (l.nonCausal || l.stream != nil) {
 			return true
 		}
 	}
 	return false
 }
 
-// rowsAlone reports that a submission of blocks [lo, hi) runs alone only
-// for being a step over several sessions' rows: none of its blocks is one
-// exclusiveRange names for what it writes, and no row reads history in host
-// memory. Callers hold g.mu.
-func (g *devTier) rowsAlone(lo, hi int, rag *ragStep, bs *blockScratch, sid uint64) bool {
-	if rag == nil || rag.sid == nil || g.evictedFor(sid, rag) {
-		return false
-	}
-	return !g.exclusiveRange(lo, hi, nil, bs)
+// aloneUnlocked reports that a submission of blocks [lo, hi) runs alone only
+// for being a step over several sessions' rows or for its linear blocks, and
+// no row reads history in host memory: what it writes of the device's is the
+// batched scratch, and the recurrent pools, their next-state buffer and its
+// sessions' halves, which change outside a submission only after a quiesce
+// (growSeat, recResize, alignRec, ensureRecNext) or in a session's exclusive
+// call (enter: a seat taken or given back, a state migrated, kept or reset).
+// Callers hold g.mu.
+func (g *devTier) aloneUnlocked(lo, hi int, rag *ragStep, bs *blockScratch, sid uint64) bool {
+	return !g.evictedFor(sid, rag) && !g.heldRange(lo, hi, bs)
 }
 
 // evictedFor reports that a call of session sid -- or, in a step over several
