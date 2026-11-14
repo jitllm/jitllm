@@ -593,10 +593,28 @@ func (g *devTier) narrowReserved(beside string) bool {
 	was := g.prewarming
 	g.prewarming = true
 	defer func() { g.prewarming = was }()
-	g.dropBatch(g.promptW)
-	if !g.prepBatch(w) || !g.reserveRowsHead(g.bbs[w], &g.bs.p) {
+	// Halved on past a width that does not build: the per-row logits are
+	// capped (headRows), so a width's half may need as many bytes as it did.
+	held, step, floor := g.promptW, g.stepW == g.promptW, max(batchGrain, g.StepRows)
+	g.dropBatch(held)
+	for ; w >= floor; w = w / 2 / batchGrain * batchGrain {
+		if g.prepBatch(w) && g.reserveRowsHead(g.bbs[w], &g.bs.p) {
+			break
+		}
 		g.dropBatch(w)
-		g.LastErr = fmt.Sprintf("no reserved width of %d rows builds beside the blocks placed", w)
+	}
+	if w < floor {
+		// The width held is built again in the room it gave: no narrower
+		// one building leaves the card the width it had, not none.
+		if g.prepBatch(held) {
+			g.promptW = held
+			if step {
+				g.stepW = held
+			}
+			g.placeGen.Add(1)
+			g.promptForms(g.bbs[held])
+		}
+		g.LastErr = fmt.Sprintf("no reserved width below %d rows builds beside the blocks placed", held)
 		return false
 	}
 	g.promptW = w
