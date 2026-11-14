@@ -334,7 +334,6 @@ bug	composer/decompose_attend.go	"an attention of %d heads over a selection that
 bug	composer/decompose_attend.go	"an attention of %d heads, window %d, over a selection that is not its own history's"
 bug	composer/decompose_attend.go	"an attention over an entry each %d positions of a history of one each %d"
 bug	composer/decompose_attend.go	"an attention over block %d's history outside a block"
-refusal	composer/decompose_attend.go	"an attention over two histories read in passes"	two histories in one softmax over a history streamed in passes
 bug	composer/decompose_conv.go	"a convolution of %d operands"
 bug	composer/decompose_conv.go	"a convolution of %d taps padded by %d: the output grid would grow"
 bug	composer/decompose_conv.go	"a convolution of %d taps: a centred one is odd"

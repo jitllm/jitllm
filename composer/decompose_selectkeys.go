@@ -69,7 +69,7 @@ func decomposeSelect(o graph.Op, c *Context) ([]Prim, error) {
 	dots, scores, best, rank, keep := tmp("dots", F), tmp("scores", F), tmp("best", F), tmp("rank", U), tmp("keep", U)
 	mask := maskOf(c, o.Out[0])
 	minus := math.Float32frombits(0xff7fffff)
-	hs := history{a: a, pageSize: c.Step.Page, period: period}
+	hs := history{a: a, pageSize: c.Step.Page, period: period, passes: c.History.Passes}
 	tables := func(ops ...Operand) []Operand { return append([]Operand{ops[0], desc, pages}, ops[1:]...) }
 	ext := func() map[int]int { return map[int]int{1: R * rowWords, 2: c.pages()} }
 	rng := Facts{Range: hs.span(2), Extents: ext()}
@@ -189,7 +189,7 @@ func selectBest(o graph.Op, c *Context, fn Op, pool Pool, keys Operand, tables f
 	if c.History.Passes {
 		NB = C/B + 1
 	}
-	hs := history{a: a, pageSize: c.Step.Page, period: period}
+	hs := history{a: a, pageSize: c.Step.Page, period: period, passes: c.History.Passes}
 	var dx exprs
 	h, d := dx.coord(1), dx.coord(3)
 	pos, first := hs.position(&dx)
@@ -254,15 +254,19 @@ func foldSelection(c *Context, a graph.Attrs, best Operand, nbp, nb int, hs hist
 // selWhole is the positions a selection ranks and its keep mask spans: the
 // step's keys, or over a history read in passes the whole history's
 // (Step.Context), each over entries the entries they close.
-func (c *Context) selWhole() (int, error) {
-	period, w := c.selPositions()
-	if !c.History.Passes {
-		return w, nil
+func (c *Context) selWhole() (int, error) { return c.wholeKeys(c.History.Period) }
+
+// wholeKeys is the positions of a history of an entry each period, the
+// step's keys or over passes the whole history's (Step.Context).
+func (c *Context) wholeKeys(period int) (int, error) {
+	w := c.Step.Keys
+	if c.History.Passes {
+		if c.Step.Context < c.Step.Keys {
+			return 0, fmt.Errorf("a selection over a history read in passes of %d positions, %d a pass", c.Step.Context, c.Step.Keys)
+		}
+		w = c.Step.Context
 	}
-	if c.Step.Context < c.Step.Keys {
-		return 0, fmt.Errorf("a selection over a history read in passes of %d positions, %d a pass", c.Step.Context, c.Step.Keys)
-	}
-	return max(1, c.Step.Context/period), nil
+	return max(1, w/max(1, period)), nil
 }
 
 // selPositions is the period of the history a selection reads (1 for one
