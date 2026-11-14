@@ -962,6 +962,7 @@ fault	engine/device/gpu/layer.go	"a %d-row step's scratch passes the budget (roo
 bug	engine/device/gpu/layer.go	"a LayerNorm head with a %d-wide bias for a %d-wide norm"
 bug	engine/device/gpu/layer.go	"a batched submission of %d rows %d wide with a head %d wide"
 limit	engine/device/gpu/layer.go	"a bidirectional chunk this device has no batched scratch for"	the batched scratch does not fit
+limit	engine/device/gpu/layer.go	"a chunk of a centred convolution this device has no batched scratch for"	the batched scratch does not fit
 bug	engine/device/gpu/layer.go	"a chunked attention of a different shape from the one this tier was built for"	a model's config changed under its placement: a model states one window (Config.SWAWindow, SWAChunked) and offers every causal block it or none (Instance.plan, windowFor), on a tier of one model's blocks
 bug	engine/device/gpu/layer.go	"a head folded into %d blocks of %d streams"
 limit	engine/device/gpu/layer.go	"a second session's KV cache does not fit in this device's budget"
@@ -1041,7 +1042,7 @@ bug	engine/device/gpu/layer.go	"tier: the router selected expert %d of %d"
 bug	engine/device/gpu/move.go	"tier: block %d has no pages on %s"
 bug	engine/device/gpu/move.go	"tier: block %d is on no device"
 bug	engine/device/gpu/move.go	"tier: no lane for block %d's history on one of the devices"
-refusal	engine/device/gpu/multi.go	"block %d convolves its rows centred across a bidirectional run of %d rows, wider than one %d-row submission"	a non-causal model's recurrent block over a run wider than a card's submission: its centred convolution reads across the pieces
+limit	engine/device/gpu/multi.go	"block %d's centred convolution reads %d rows past each side of a row, more than a %d-row submission holds beside one row of its own"	the card's submission width (its reserved width, set by its budget) holds no piece of a centred convolution with its halo
 limit	engine/device/gpu/multi.go	"the block is above every device's whole budget (the largest %.2f GiB), so it runs on the host"
 limit	engine/device/gpu/multi.go	"the block with its routed experts is above every device's whole budget (the largest %.2f GiB), so it runs on the host unread by the device (a placement that streams it -- JITLLM_GPU_STREAM, -placement N=DEV~ -- puts it on a card)"
 input	engine/device/gpu/multi.go	"tier: %s holds %.2f GiB of pinned blocks, and a %.2f GiB budget would evict them; unpin them or ask for more"

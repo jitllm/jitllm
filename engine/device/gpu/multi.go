@@ -1587,13 +1587,13 @@ func (g *GPU) pieces(sid uint64, rs []run, pos, n int, x, cs, csSWA []float32, t
 	return true
 }
 
-// piecesCutRun reports whether a batchWidth piece of rows [pos, pos+n) of
+// piecesCutRun reports whether a piece w rows wide of rows [pos, pos+n) of
 // session sid would end inside one of its bidirectional runs.
-func (d *devTier) piecesCutRun(sid uint64, pos, n int) bool {
+func (d *devTier) piecesCutRun(sid uint64, pos, n, w int) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	for _, r := range d.sessOf(sid).bidir {
-		for b := pos + batchWidth; b < pos+n; b += batchWidth {
+		for b := pos + w; b < pos+n; b += w {
 			if r.Lo < b && r.Hi > b {
 				return true
 			}
@@ -1609,25 +1609,59 @@ func (d *devTier) attendsAt(li int) bool {
 	return d.attendsIn(li, li+1)
 }
 
-// centredIn is the first block of [lo, hi) whose graph convolves its rows
-// centred (graph.OpRowConv, a non-causal model's recurrent block): it reads
-// the rows after its own across the call's rows, which a piece of a run
-// would cut.
-func (d *devTier) centredIn(lo, hi int) (int, bool) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+// centredIn reports whether a block of [lo, hi) convolves its rows centred
+// (haloAt).
+func (d *devTier) centredIn(lo, hi int) bool {
 	for li := lo; li < hi; li++ {
-		l := d.layers[li]
-		if l == nil || l.graph == nil {
-			continue
-		}
-		for _, o := range l.graph.Ops {
-			if o.Kind == graph.OpRowConv {
-				return li, true
-			}
+		if d.haloAt(li) > 0 {
+			return true
 		}
 	}
-	return 0, false
+	return false
+}
+
+// haloAt is the rows block li's graph reads past a row on each side: Taps/2
+// for each centred convolution (graph.OpRowConv, a non-causal model's short
+// convolution), across the call's rows; 0 for a block with none.
+func (d *devTier) haloAt(li int) int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	l := d.layers[li]
+	if l == nil || l.graph == nil {
+		return 0
+	}
+	h := 0
+	for _, o := range l.graph.Ops {
+		if o.Kind == graph.OpRowConv {
+			h += o.Attr.Taps / 2
+		}
+	}
+	return h
+}
+
+// wholeRows is the most rows of a call of session sid over blocks [lo, hi)
+// the device runs in one submission (devTier.layersCall), in the lane the
+// session's calls run in: the reserved width, cut to what a streamed
+// block's pages hold, where the composer serves the call, and the batch
+// width where it does not.
+func (d *devTier) wholeRows(sid uint64, lo, hi int) int {
+	v := d.as(sid)
+	if v == nil {
+		return batchWidth
+	}
+	defer v.done()
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.geoUsed {
+		defer v.useGeom(v.geoCur)
+		v.useGeom(v.geomFor(lo, hi))
+	}
+	e := v.LastErr
+	defer func() { v.LastErr = e }()
+	if w := v.pagedCall(lo, hi, v.promptW); w > 0 && v.promptComposed(lo, hi) {
+		return min(w, batchWidth)
+	}
+	return batchWidth
 }
 
 // setRunPhase is the phase session sid's next calls run (devSess.runPhase).
@@ -1640,13 +1674,29 @@ func (d *devTier) setRunPhase(sid uint64, ph int) {
 	}
 }
 
+// haloRan counts a piece run with its halo (Stats.HaloPieces).
+func (d *devTier) haloRan() {
+	d.mu.Lock()
+	d.Stats.HaloPieces++
+	d.mu.Unlock()
+}
+
 // phased runs rows wider than one submission whose pieces would cut a
-// bidirectional run: no row of a run has its scores until every row's key
-// is written, and a submission holds batchWidth rows. So the blocks go one
-// at a time, every batchWidth piece's first phase -- its k and v written at
-// its rows, its residual left as it was -- before any piece's second, which
-// reads every key of its rows' runs and writes their residual. The forms
-// are the pieces' own: nothing is composed for the run.
+// bidirectional run or a centred convolution: no row of a run has its
+// scores until every row's key is written. So the blocks go one at a time,
+// every piece's first phase -- its k and v written at its rows, its
+// residual left as it was -- before any piece's second, which reads every
+// key of its rows' runs and writes their residual. A block's pieces are as
+// wide as its device submits whole (wholeRows). The forms are the pieces'
+// own: nothing is composed for the run.
+//
+// A block that convolves its rows centred reads the rows either side of
+// its own (haloAt), so its pieces overlap by that halo: each runs its own
+// rows and the halo either side, read from the block's input, and writes
+// back its own rows alone. The halo's rows are a pure function of the
+// block's input there -- a centred convolution keeps no state, and a
+// block's history is projected from its normed input, before its mixer --
+// so a piece writes them as the piece that owns them does.
 func (g *GPU) phased(sid uint64, rs []run, pos, n int, x, cs, csSWA []float32) bool {
 	ns := rs[0].dev.streams()
 	e, r := len(x)/n/ns, len(cs)/n
@@ -1654,25 +1704,31 @@ func (g *GPU) phased(sid uint64, rs []run, pos, n int, x, cs, csSWA []float32) b
 	if len(csSWA) > 0 {
 		rw = len(csSWA) / n
 	}
-	for _, rn := range rs {
-		if li, ok := rn.dev.centredIn(rn.lo, rn.hi); ok {
-			rn.dev.mu.Lock()
-			rn.dev.LastErr = fmt.Sprintf("block %d convolves its rows centred across a bidirectional run of %d rows, "+
-				"wider than one %d-row submission", li, n, batchWidth)
-			rn.dev.mu.Unlock()
-			return false
-		}
-	}
 	keep := make([]float32, ns*min(batchWidth, n)*e)
+	var stash []float32
 	for _, rn := range rs {
-		side := rn.dev.side()
-		if !rn.dev.realEmbed() {
+		side := rn.dev.sideOf(sid)
+		if !rn.dev.realEmbedOf(sid) {
 			return false
 		}
 		ok := func() bool {
 			defer rn.dev.setRunPhase(sid, 0)
-			defer rn.dev.sideAt(side, 0, n)
+			defer rn.dev.sideAtOf(sid, side, 0, n)
 			for li := rn.lo; li < rn.hi; li++ {
+				w, h := rn.dev.wholeRows(sid, li, li+1), rn.dev.haloAt(li)
+				if rn.dev.rowsFaulted("nohalo") {
+					h = 0
+				}
+				if 2*h >= w {
+					rn.dev.mu.Lock()
+					rn.dev.LastErr = fmt.Sprintf("block %d's centred convolution reads %d rows past each side of a row, "+
+						"more than a %d-row submission holds beside one row of its own", li, h, w)
+					rn.dev.mu.Unlock()
+					return false
+				}
+				if len(stash) < ns*h*e {
+					stash = make([]float32, ns*h*e)
+				}
 				// A block that does not attend reads no key: it runs once,
 				// its pieces in order, a recurrent state stepped once.
 				first := 1
@@ -1681,22 +1737,35 @@ func (g *GPU) phased(sid uint64, rs []run, pos, n int, x, cs, csSWA []float32) b
 				}
 				for ph := first; ph <= 2; ph++ {
 					rn.dev.setRunPhase(sid, ph)
-					for lo := 0; lo < n; lo += batchWidth {
-						cnt := min(batchWidth, n-lo)
+					for lo := 0; lo < n; lo += w - 2*h {
+						cnt := min(w-2*h, n-lo)
+						a, b := max(0, lo-h), min(n, lo+cnt+h)
 						var sw []float32
 						if rw > 0 {
-							sw = csSWA[lo*rw : (lo+cnt)*rw]
+							sw = csSWA[a*rw : b*rw]
 						}
-						c0, c1 := rn.tables(cs[lo*r:(lo+cnt)*r], sw)
-						xs := rn.dev.streamCut(x, ns, e, lo, cnt, n)
-						if ph == 1 {
-							xs = keep[:copy(keep, xs)]
+						c0, c1 := rn.tables(cs[a*r:b*r], sw)
+						var xs []float32
+						switch {
+						case h > 0:
+							xs = haloCut(keep, x, stash, ns, e, h, a, lo, b, n)
+						case ph == 1:
+							xs = keep[:copy(keep, rn.dev.streamCut(x, ns, e, lo, cnt, n))]
+						default:
+							xs = rn.dev.streamCut(x, ns, e, lo, cnt, n)
 						}
-						rn.dev.sideAt(side, lo, n)
-						if !rn.dev.layersFor(sid, li, li+1, pos+lo, cnt, xs, c0, c1, nil) {
+						rn.dev.sideAtOf(sid, side, a, n)
+						if !rn.dev.layersFor(sid, li, li+1, pos+a, b-a, xs, c0, c1, nil) {
 							return false
 						}
-						if ph == 2 {
+						if h > 0 {
+							rn.dev.haloRan()
+							haloKeep(stash, x, ns, e, h, lo, cnt, n)
+						}
+						switch {
+						case ph == 2 && h > 0:
+							haloPut(x, xs, ns, e, lo-a, lo, cnt, b-a, n)
+						case ph == 2:
 							streamPut(x, xs, ns, e, lo, cnt, n)
 						}
 					}
@@ -1709,6 +1778,42 @@ func (g *GPU) phased(sid uint64, rs []run, pos, n int, x, cs, csSWA []float32) b
 		}
 	}
 	return true
+}
+
+// haloCut is rows [a, b) of every stream of x, a stream-major residual of n
+// rows e wide, as a residual of b-a rows in buf: the rows before lo -- a
+// piece's halo, which the piece before it has written -- from the block's
+// input rows stash kept (haloKeep), h a stream.
+func haloCut(buf, x, stash []float32, ns, e, h, a, lo, b, n int) []float32 {
+	m, pre := b-a, lo-a
+	buf = buf[:ns*m*e]
+	for k := range ns {
+		d := buf[k*m*e : (k+1)*m*e]
+		copy(d[:pre*e], stash[(k*h+h-pre)*e:(k+1)*h*e])
+		copy(d[pre*e:], x[(k*n+lo)*e:(k*n+b)*e])
+	}
+	return buf
+}
+
+// haloKeep keeps in stash, h rows a stream, the last h rows of every
+// stream of x before row lo+cnt, as they are before rows [lo, lo+cnt) are
+// written: the next piece's halo before its own rows. stash's rows before
+// lo are the ones it kept for this piece.
+func haloKeep(stash, x []float32, ns, e, h, lo, cnt, n int) {
+	take := min(cnt, h)
+	for k := range ns {
+		s := stash[k*h*e : (k+1)*h*e]
+		copy(s, s[take*e:])
+		copy(s[(h-take)*e:], x[(k*n+lo+cnt-take)*e:(k*n+lo+cnt)*e])
+	}
+}
+
+// haloPut writes rows [lo, lo+cnt) of every stream of x from a piece of m
+// rows whose own rows start at its row off.
+func haloPut(x, buf []float32, ns, e, off, lo, cnt, m, n int) {
+	for k := range ns {
+		copy(x[(k*n+lo)*e:(k*n+lo+cnt)*e], buf[(k*m+off)*e:(k*m+off+cnt)*e])
+	}
 }
 
 func (g *GPU) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []float32, head *nn.Head) bool {
@@ -1746,7 +1851,7 @@ func (g *GPU) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []float32,
 		// gets its own submission.
 		tail = nil
 	}
-	if n > batchWidth && !rs[0].dev.nonCausalAt(lo) && rs[0].dev.piecesCutRun(sid, pos, n) {
+	if n > 1 && !rs[0].dev.nonCausalAt(lo) && g.cutsRun(sid, rs, pos, n) {
 		if !g.phased(sid, rs, pos, n, x, cs, csSWA) {
 			return false
 		}
@@ -1799,6 +1904,28 @@ func (g *GPU) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []float32,
 		return hd.layersFor(sid, hi, hi, pos, n, x, cs, csSWA, head)
 	}
 	return true
+}
+
+// cutsRun reports whether rows [pos, pos+n) of session sid over runs rs are
+// wider than a device submits whole and its pieces would cut one of its
+// bidirectional runs or a block's centred convolution (GPU.phased).
+func (g *GPU) cutsRun(sid uint64, rs []run, pos, n int) bool {
+	w := batchWidth
+	for _, rn := range rs {
+		w = min(w, rn.dev.wholeRows(sid, rn.lo, rn.hi))
+	}
+	if n <= w {
+		return false
+	}
+	if rs[0].dev.piecesCutRun(sid, pos, n, w) {
+		return true
+	}
+	for _, rn := range rs {
+		if rn.dev.centredIn(rn.lo, rn.hi) {
+			return true
+		}
+	}
+	return false
 }
 
 // headOfLast is the head's own submission after a call of n rows cut into

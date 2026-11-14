@@ -662,6 +662,9 @@ type Stats struct {
 	// RunPhases counts the phase calls of bidirectional runs wider than a
 	// submission this device ran (GPU.phased).
 	RunPhases int
+	// HaloPieces counts the pieces of a centred convolution's block this
+	// device ran with the rows past their edges (GPU.phased).
+	HaloPieces int
 	// StageOverlaps counts rows stages that began on this device while
 	// another device ran a stage of another step (GPU.layersRows): the
 	// selection check that steps led by different sessions -- the server's
@@ -957,6 +960,7 @@ func (s *Stats) add(o Stats) {
 	s.ComposedStreamPasses += o.ComposedStreamPasses
 	s.PipelinePieces += o.PipelinePieces
 	s.RunPhases += o.RunPhases
+	s.HaloPieces += o.HaloPieces
 	s.StageOverlaps += o.StageOverlaps
 	s.SubsBeside += o.SubsBeside
 	s.RanBeside += o.RanBeside

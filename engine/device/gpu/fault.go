@@ -378,6 +378,8 @@ func (c *Config) recFaulted(f string) bool { return c.fault != nil && c.fault.re
 //	           row's descriptor ends at itself (picDesc)
 //	"runcut"   a bidirectional run wider than a submission reads, in its
 //	           second phase, only the keys of the call's own rows (runEnd)
+//	"nohalo"   a centred convolution's pieces read no rows past their
+//	           edges (GPU.phased): each piece's convolution cut at them
 //
 // SetRowsFault arms one violation for the calls after it; "" disarms.
 func (f *Faults) SetRowsFault(v string) { f.rows = v }

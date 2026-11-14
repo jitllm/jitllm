@@ -3242,6 +3242,13 @@ func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []floa
 			}
 			return true
 		}
+		if (!ok || bbs == nil) && n > 1 && g.centredIn(lo, hi) {
+			// Narrower submissions or a row at a time cut what a centred
+			// convolution reads across the chunk's rows: refused before any
+			// block runs, so the chunk restarts on the host whole.
+			g.LastErr = "a chunk of a centred convolution this device has no batched scratch for"
+			return false
+		}
 		if (!ok || bbs == nil) && n > sub && dbs != nil {
 			// A device that cannot hold the wide scratch takes the chunk in narrower
 			// submissions -- the width it reserved, when it reserved one --
