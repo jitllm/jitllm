@@ -79,7 +79,9 @@ func TestTiktokenVocabMatchesLlamaCpp(t *testing.T) {
 // Moonshot's own TikTokenTokenizer (scripts/tiktokgold.py). The corpus reaches
 // camelCase (where llama.cpp's kimi-k2 splitter departs from the pat_str),
 // Han against other scripts, digit groups, contractions, the long-s and Kelvin
-// case-fold, and specials written literally in the text.
+// case-fold, and specials written literally in the text: EncodeSpecial against
+// the reference's default encode, which matches them, and Encode against its
+// allow_special_tokens=False, which reads them as characters.
 func TestTiktokenVocabEncodesLikeMoonshot(t *testing.T) {
 	testmodels.SourceTree(t)
 	dir := testmodels.Path("Kimi-Linear-48B-A3B-Instruct")
@@ -92,8 +94,9 @@ func TestTiktokenVocabEncodesLikeMoonshot(t *testing.T) {
 	}
 	var gold struct {
 		Cases []struct {
-			Text string  `json:"text"`
-			IDs  []int32 `json:"ids"`
+			Text  string  `json:"text"`
+			IDs   []int32 `json:"ids"`
+			Plain []int32 `json:"plain"`
 		} `json:"cases"`
 	}
 	if err := json.Unmarshal(b, &gold); err != nil || len(gold.Cases) == 0 {
@@ -107,10 +110,22 @@ func TestTiktokenVocabEncodesLikeMoonshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The golden parses specials (allowed_special="all"): EncodeSpecial.
+	differ := 0
 	for _, c := range gold.Cases {
-		if got := v.EncodeSpecial(c.Text, true); !slices.Equal(got, c.IDs) {
-			t.Errorf("Encode(%q)\n  ours      %v\n  Moonshot  %v", c.Text, got, c.IDs)
+		if len(c.Plain) == 0 {
+			t.Fatalf("golden case %q has no plain ids: regenerate it with scripts/tiktokgold.py", c.Text)
 		}
+		if !slices.Equal(c.IDs, c.Plain) {
+			differ++
+		}
+		if got := v.EncodeSpecial(c.Text, true); !slices.Equal(got, c.IDs) {
+			t.Errorf("EncodeSpecial(%q)\n  ours      %v\n  Moonshot  %v", c.Text, got, c.IDs)
+		}
+		if got := v.Encode(c.Text, true); !slices.Equal(got, c.Plain) {
+			t.Errorf("Encode(%q)\n  ours      %v\n  Moonshot  %v (allow_special_tokens=False)", c.Text, got, c.Plain)
+		}
+	}
+	if differ == 0 {
+		t.Fatal("no case tells the two arms apart: the corpus writes no special")
 	}
 }
