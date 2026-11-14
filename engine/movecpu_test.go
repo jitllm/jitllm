@@ -187,15 +187,11 @@ func blocksMoveToTheCPUAndBack(t *testing.T, path string, composed bool) {
 	// CUDA and 0.17 on Vulkan, to four places whichever card the blocks move
 	// to next. A token is held to the band, or to twice what the card reads
 	// there never moved: a dropped state reads in tenths where the unmoved
-	// card agrees with the CPU. A mixture's routed bank is
-	// computed on the card in arithmetic of the card's own, within its band,
-	// and that can carry the next block's router across a near-tie: one
-	// token takes another expert and parts in tenths, the next agrees again
-	// (synth-qwen35moe-hybrid-mtp-q8_0's tokens 2 and 4, 0.117 and 0.089,
-	// the rest 1e-3). A mixture is held at the median of its tokens, and
-	// every token below 1.
-	const moveBand, mixtureWorst = 5e-2, 1.0
-	mixture := m.Cfg.NExpert > 1
+	// card agrees with the CPU. A mixture's router reads the card's own
+	// arithmetic too and can cross a near-tie at a token
+	// (synth-qwen35moe-hybrid-mtp-q8_0 reads 0.117 at one); the unmoved card
+	// crosses it at the same token, so a mixture is held the same way.
+	const moveBand = 5e-2
 	var worstAll, nmseAll, stillAll float64
 	var es []float64
 	for i := range ctl {
@@ -210,15 +206,10 @@ func blocksMoveToTheCPUAndBack(t *testing.T, path string, composed bool) {
 		switch {
 		case math.IsNaN(worst) || math.IsNaN(e):
 			t.Fatalf("token %d: a non-finite logit", i)
-		case !mixture && !(e < band):
+		case !(e < band):
 			t.Fatalf("token %d: %.3e NMSE from the CPU control (worst logit %.4g), outside the band %.3g (the unmoved card %.3e)", i, e, worst, band, s)
-		case mixture && !(e < mixtureWorst):
-			t.Fatalf("token %d: the mixture's %.3e NMSE from the CPU control (worst logit %.4g), past %.0g at any token", i, e, worst, mixtureWorst)
 		}
 		worstAll, nmseAll, stillAll = max(worstAll, worst), max(nmseAll, e), max(stillAll, s)
-	}
-	if med := median(es); mixture && !(med < moveBand) {
-		t.Fatalf("the mixture's tokens are %.3e NMSE from the CPU control at the median, outside the band %.0e", med, moveBand)
 	}
 	t.Logf("%d tokens, %d blocks moved %s -> cpu -> %s -> half cpu -> %s; worst %.3e NMSE (logit %.4g), median %.3e, from the CPU control; unmoved %.3e",
 		ntok, n, a, b, a, nmseAll, worstAll, median(es), stillAll)
