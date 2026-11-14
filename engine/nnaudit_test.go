@@ -971,7 +971,9 @@ func auditPicture(t *testing.T) image.Image {
 // auditHFDirs are safetensors inputs held to their reference outside
 // testdata/golden/hf, relative to the model directory: a class whose
 // fixtures carry their own goldens appends them (kimik3_test.go).
-func auditHFDirs() []string { return []string{"hf/synth-kimik3", "kimik3/Kimi-K3-0.40B-MXFP4-hf"} }
+func auditHFDirs() []string {
+	return []string{"hf/synth-kimik3", "kimik3/Kimi-K3-0.40B-MXFP4-hf", "realck/Phi-tiny-MoE-instruct-hf"}
+}
 
 // auditDecision is the decision models' GGUFs two directories down; d1's and
 // lev's one directory down are found by the glob.
