@@ -69,7 +69,11 @@ func jlmOf(t testing.TB, path string) string {
 	}
 	tmp.Close()
 	os.Remove(tmp.Name())
-	if _, err := convert.FromGGUF(path, tmp.Name(), jlm.Fingerprint{Host: "test", Writer: engine.BuildIDForTest()}); err != nil {
+	var opts []convert.Option
+	if c := engine.ModelConfigForTest(path); c != "" {
+		opts = append(opts, convert.WithModelConfig(c))
+	}
+	if _, err := convert.FromGGUF(path, tmp.Name(), jlm.Fingerprint{Host: "test", Writer: engine.BuildIDForTest()}, opts...); err != nil {
 		os.Remove(tmp.Name())
 		if errors.Is(err, convert.ErrPart) {
 			t.Skipf("PART OF A MODEL: %s -- %v", filepath.Base(path), err)

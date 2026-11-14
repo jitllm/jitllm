@@ -153,6 +153,14 @@ func greedyMatchesLlamaCpp(t *testing.T, extra ...engine.Option) {
 		if strings.HasPrefix(name, "synth-") && strings.HasSuffix(name, "-af.gguf") {
 			continue
 		}
+		// A GGUF that converts only with its publisher's config.json states
+		// what llama.cpp's converter dropped -- synth-minicpmv's LongRoPE
+		// factors, which llama.cpp runs without: a different model
+		// (docs/divergences.md, "MiniCPM-V's text rotary"). Its oracle is
+		// transformers (TestStatedTowerMatchesTransformersEndToEnd).
+		if engine.ModelConfigForTest(path) != "" {
+			continue
+		}
 		if testing.Short() && !strings.Contains(name, "Qwen") {
 			continue
 		}
