@@ -1082,7 +1082,7 @@ input	engine/device/gpu/open.go	"tier: -devices %q: entry %d is empty; want %s"
 input	engine/device/gpu/open.go	"tier: -devices %q: metal opens the system default device and takes no selector, got %q; want %s"
 input	engine/device/gpu/open.go	"tier: WithSlots and WithDevices(%q) both name the devices; pass one of them"
 input	engine/device/gpu/open.go	"tier: no GPU backend on this host"
-refusal	engine/device/gpu/owner.go	"this tier holds model %d's blocks, and a tier serves one model: model %d's %s stays on the CPU until model %d releases them (its Close)"	a second model's blocks on a tier that holds another's: they stay on the CPU until it closes
+bug	engine/device/gpu/owner.go	"this tier holds model %d's blocks, and a tier serves one model: model %d's %s stays on the CPU until model %d releases them (its Close)"	every model is placed on a tier of its own over the devices (ForModel, which SetDevice resolves; TestTwoModelsShareACardThroughTheRegistry)
 bug	engine/device/gpu/page.go	"%s (%s %dx%d): %v"
 input	engine/device/gpu/page.go	"%s is %s, which the device layout does not hold"
 limit	engine/device/gpu/page.go	"block %d needs %d bytes and nothing can be paged out (%d of %d used, %d slot(s))"
@@ -1325,7 +1325,7 @@ input	engine/kvpage.go	"model: PrefillCached wants a fresh sequence, this one is
 input	engine/kvpage.go	"model: PrefillCachedMixed wants a fresh sequence, this one is at position %d"
 input	engine/kvpage.go	"model: RestorePrefix wants a fresh sequence, this one is at position %d"
 input	engine/kvpage.go	"model: SetCacheKey wants a fresh sequence, this one is at position %d -- the tokens before it were never recorded and the pages after it would be named by a shifted window"
-refusal	engine/kvpage.go	"model: a KV budget needs a store to evict into -- call SetKVStore first, or the cap would drop history rather than spill it"	a budget with no store refuses rather than spilling to memory
+input	engine/kvpage.go	"model: a KV budget needs a store to evict into -- call SetKVStore first, or the cap would drop history rather than spill it"	the caller names where a capped history spills (SetKVStore): a cap spilling to memory would hold every sealed page twice, written through and resident
 bug	engine/kvpage.go	"model: block %d's history page %d is not in its arena after its read"
 bug	engine/kvpage.go	"model: block %d's pages are not its session's view's"
 input	engine/kvpage.go	"model: no such kv page"	a page the store does not hold: the caller's lookup
