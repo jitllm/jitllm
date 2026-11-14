@@ -2439,6 +2439,11 @@ func (s *Instance) relocateUntil(pos int, fits func() bool) {
 func (s *Instance) relocateOff(li int) {
 	s.ld.ReleaseLayers(li, li+1)
 	s.unmarkOnDev(li)
+	// A session bound away keeps where its history is in held, not in the
+	// instance's routes: its history of li came home above.
+	if sess := s.Session; sess != nil && sess.away && li < len(sess.held) {
+		sess.held[li] = routeLanes
+	}
 	// -gpu-grow would adopt the block straight back next token.
 	s.gpuTarget = min(s.gpuTarget, s.gpuLayers)
 	if s.moved == nil {
