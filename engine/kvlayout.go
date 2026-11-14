@@ -29,7 +29,7 @@ func (l kvLayout) quantized() bool { return l.fmt.Quantized() }
 // the quantization unit and has no element-sized slot.
 func (l kvLayout) slots(n int) int {
 	switch l.fmt {
-	case nn.KVF16:
+	case nn.KVF16, nn.KVBF16:
 		return n * 2 / 4
 	}
 	if l.quantized() {
@@ -40,12 +40,12 @@ func (l kvLayout) slots(n int) int {
 
 // elemTag is the format as the prefix cache's geometry digest spells it: the
 // element bytes it always printed for f32 and f16, so their stored pages keep
-// their keys, and the format's name for a quantized cache.
+// their keys, and the format's name for a quantized or bfloat16 cache.
 func (l kvLayout) elemTag() string {
 	if l.fmt == nn.KVF16 {
 		return "2"
 	}
-	if l.quantized() {
+	if l.quantized() || l.fmt == nn.KVBF16 {
 		return l.fmt.String()
 	}
 	return "4"

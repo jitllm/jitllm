@@ -113,7 +113,7 @@ func (e *Exec) placeParts(p *PartsPlan) Parts {
 		for i, k := range plans {
 			conv[i] = KVConvForms{FW: k.FW, HW: k.HW, Narrow: e.FormPart(k.Narrow), Widen: e.FormPart(k.Widen)}
 		}
-		kc := NewKVConv(e.dev, conv, nn.KVFmt(f) == nn.KVF16)
+		kc := NewKVConv(e.dev, conv, nn.KVFmt(f).Halves())
 		out.KVConv[f] = kc
 		if nn.KVFmt(f) == p.KVFmt {
 			e.kvconv = kc

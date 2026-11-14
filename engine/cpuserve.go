@@ -254,6 +254,7 @@ func (s *Instance) specOf(li int, g *graph.Graph) nn.BlockSpec {
 	if s.kvl.fmt.Quantized() {
 		p.KVRow, p.KVBlock = s.kvlAt(li).headDim, s.kvl.fmt.Block()
 	}
+	p.KVBF16 = s.kvl.fmt == nn.KVBF16
 	// A non-causal model's recurrent block reads both ways too: its
 	// convolution is centred over the whole run.
 	k := s.c.LayerKind(li)

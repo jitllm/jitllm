@@ -122,7 +122,7 @@ func (s *Instance) partsPlan() *nn.PartsPlan {
 	for f := nn.KVF16; int(f) < nn.KVFormats; f++ {
 		narrow, widen := graph.OpHalves, graph.OpWidenHalves
 		widths := []int{kvHalfRow}
-		at := graph.Attrs{Block: f.Block()}
+		at := graph.Attrs{Block: f.Block(), BF16: f == nn.KVBF16}
 		if f.Quantized() {
 			narrow, widen, widths = graph.OpQ8Rows, graph.OpWidenQ8Rows, nil
 			if at.Block != 0 {

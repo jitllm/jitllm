@@ -12,11 +12,12 @@ import (
 // [page][width]; Half stores binary16, two halves to a 32-bit word, the
 // lower element in the low half; Row, past 0, stores a position's row as
 // its heads' rows of Row elements each: q8 rows as OpQ8Rows writes them, or
-// llama.cpp's blocks of format Block as OpBlockRows writes them.
+// llama.cpp's blocks of format Block as OpBlockRows writes them. BF16 with
+// Half stores bfloat16 halves, as OpHalves writes them under Attrs.BF16.
 type Pool struct {
-	ByDim, Half bool
-	Row         int
-	Block       graph.BlockFmt
+	ByDim, Half, BF16 bool
+	Row               int
+	Block             graph.BlockFmt
 }
 
 // rowWords is the words one head's row of a quantized pool occupies.
@@ -116,6 +117,8 @@ func (l Pool) check(width int) error {
 		return fmt.Errorf("a quantized pool laid out by dimension or in halves: its rows are whole")
 	case l.Row > 0 && width%l.Row != 0:
 		return fmt.Errorf("a quantized pool of rows of %d holding a width of %d", l.Row, width)
+	case l.BF16 && !l.Half:
+		return fmt.Errorf("a bfloat16 pool not in halves")
 	case l.Block != 0 && (l.Row == 0 || l.Block.Bytes() == 0):
 		return fmt.Errorf("a pool of %v blocks in rows of %d", l.Block, l.Row)
 	}
@@ -162,6 +165,9 @@ func (c *Context) poolReadIn(x *exprs, j int, l Pool, pg, w, pid, off, d int) in
 	case l.Half:
 		word := x.at(j, []int{c.pages(), pg, w / 2}, pid, off, x.op(OpShr, U, d, x.u(1)))
 		shift := x.op(OpShl, U, x.op(OpAnd, U, d, x.u(1)), x.u(4))
+		if l.BF16 {
+			return x.bf16Widen(x.op(OpShr, U, word, shift))
+		}
 		return x.un(OpWidenHalf, ir.F32, x.op(OpShr, U, word, shift))
 	case l.ByDim:
 		return x.at(j, []int{c.pages(), w, pg}, pid, d, off)

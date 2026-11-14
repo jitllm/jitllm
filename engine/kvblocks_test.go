@@ -15,9 +15,9 @@ import (
 	"github.com/jitllm/jitllm/nn"
 )
 
-// blockKVTypes is every KV type held in llama.cpp's blocks.
+// blockKVTypes is every KV type held in llama.cpp's blocks, and bfloat16.
 func blockKVTypes() []model.KVType {
-	return []model.KVType{model.KVQ4_0, model.KVQ4_1, model.KVQ5_0, model.KVQ5_1, model.KVIQ4_NL}
+	return []model.KVType{model.KVQ4_0, model.KVQ4_1, model.KVQ5_0, model.KVQ5_1, model.KVIQ4_NL, model.KVBF16}
 }
 
 // TestCPUAttendsABlockHistory is TestCPUAttendsAQ8History for each block
@@ -101,10 +101,13 @@ func TestCPUAttendsABlockHistory(t *testing.T) {
 					for _, x := range [][2][]float32{{f.k, q.k}, {f.v, q.v}} {
 						for r := 0; r < len(x[0])/f.hd; r++ {
 							clear(pad[copy(pad, x[0][r*f.hd:(r+1)*f.hd]):])
-							if err := oracle.QuantizeBlocks(b, pad, bf); err != nil {
+							if kt == model.KVBF16 {
+								for i, v := range pad {
+									deq[i] = math.Float32frombits(uint32(oracle.BF16(v)) << 16)
+								}
+							} else if err := oracle.QuantizeBlocks(b, pad, bf); err != nil {
 								t.Fatal(err)
-							}
-							if err := oracle.DequantBlocks(deq, b, bf); err != nil {
+							} else if err := oracle.DequantBlocks(deq, b, bf); err != nil {
 								t.Fatal(err)
 							}
 							for i := range f.hd {
@@ -260,7 +263,7 @@ func TestBlockHistoryFollowsLlamaCpp(t *testing.T) {
 		ratio float64
 		picks int
 	}{
-		{model.KVQ8_0, 1.067, 6}, {model.KVQ4_0, 1.351, 27}, {model.KVQ4_1, 1.508, 34}, {model.KVQ5_0, 1.283, 17}, {model.KVQ5_1, 1.166, 18}, {model.KVIQ4_NL, 1.341, 28},
+		{model.KVQ8_0, 1.067, 6}, {model.KVQ4_0, 1.351, 27}, {model.KVQ4_1, 1.508, 34}, {model.KVQ5_0, 1.283, 17}, {model.KVQ5_1, 1.166, 18}, {model.KVIQ4_NL, 1.341, 28}, {model.KVBF16, 0.973, 5},
 	} {
 		t.Run(c.kt.String(), func(t *testing.T) {
 			_, lcT := lcppLogProbs(t, dir, gguf, doc, nctx, 0, "-ctk", c.kt.String(), "-ctv", c.kt.String(), "-fa", "on")

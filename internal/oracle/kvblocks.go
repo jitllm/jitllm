@@ -241,3 +241,13 @@ func BlockRow(b []byte, f BlockFormat, w int) []uint32 {
 	}
 	return out
 }
+
+// BF16 is x as ggml_compute_fp32_to_bf16 rounds it: to nearest even, a NaN
+// its top half with the quiet bit set.
+func BF16(x float32) uint16 {
+	u := math.Float32bits(x)
+	if u&0x7fffffff > 0x7f800000 {
+		return uint16(u>>16 | 64)
+	}
+	return uint16((u + 0x7fff + (u >> 16 & 1)) >> 16)
+}
