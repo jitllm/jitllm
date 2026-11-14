@@ -2279,9 +2279,7 @@ func (l *layer) namedWeight(r jlm.Role) *resident {
 			return &l.ssmTaps
 		}
 	case jlm.RoleRouter:
-		if l.router != nil {
-			return &l.routerW
-		}
+		return l.router
 	case jlm.RoleExpGateBank, jlm.RoleExpUpBank, jlm.RoleExpDownBank:
 		// The banks whole on the card, or a streamed block's in pages: the
 		// sheets its cache or its compact bank holds (heldSheets).

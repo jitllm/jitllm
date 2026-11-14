@@ -16,7 +16,6 @@ import (
 	"github.com/jitllm/jitllm/composer/ir"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/layout"
-	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/nn"
 )
@@ -144,15 +143,10 @@ type layer struct {
 	geo      geoKey
 	vFromK   bool
 	outScale backend.Buf
-	// MoE only: the F32 router matrix and its matvec. gate/up/down above hold
-	// the banks in that case, and their mv carries slots > 0.
-	router backend.Buf
-	// routerF16 is whether l.router holds binary16 (Mixtral) rather than f32;
-	// the batched mixture picks its router kernel by it.
-	routerF16 bool
-	// routerW is l.router as the composer binds a matrix: its buffer, not a
-	// second copy of it.
-	routerW  resident
+	// router is a mixture block's router, in its device layout and the type
+	// the file stores it in; nil on a block that does not route. gate/up/down
+	// above hold the banks in that case, and their mv carries slots > 0.
+	router   *resident
 	kvBytes  uint64 // this block's KV cache, so ReleaseLayers can refund it
 	recBytes uint64 // and its recurrent state, refunded on the same walks
 	recHist  uint64 // one session's recurrent pair; see devTier.reserved
@@ -963,6 +957,14 @@ func (g *devTier) permBytes(p *nn.LayerPlan, w *nn.LayerWeights) uint64 {
 	var n uint64
 	for _, v := range w.Vectors {
 		n += uint64(4 * len(v.V))
+	}
+	// The router stays while the block is placed, paged or not.
+	if r := w.Router; len(r.Data) != 0 {
+		if q, ok := quantOf(r.T); ok {
+			if f, err := g.planesFootprint(q, r.Rows, r.K); err == nil {
+				n += f
+			}
+		}
 	}
 	if r := p.Recurrent; r.Conv > 0 {
 		return n + g.sessions()*recHist(p)
@@ -2030,46 +2032,20 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		}
 	}
 	if moe {
-		// The router is unquantized, so it does not go through resident() at
-		// all -- it is uploaded as the row-major floats it arrives as.
+		// Resident in the device layout of the type the file stores, as every
+		// other matrix, and permanent while the block is placed: a page-out
+		// leaves it (permBytes charged it), and dropLayerLocal frees it.
 		if w.Router.Rows != p.NExpert || w.Router.K != p.NEmbd {
 			return false
 		}
-		// F32 or F16, with the bytes counted against the type (Mixtral's router
-		// is F16; reading it as F32 runs past the buffer). Any other type is
-		// refused by name. Data may run past the matrix, so it is sliced to it.
-		es := 0
-		switch w.Router.T {
-		case quant.F32:
-			es = 4
-		case quant.F16:
-			es = 2
-		}
-		n := p.NExpert * p.NEmbd
-		if es == 0 || len(w.Router.Data) < es*n {
-			g.LastErr = fmt.Sprintf("block %d: the router is %v in %d bytes, and the "+
-				"device reads an F32 or F16 router of %dx%d", li, w.Router.T,
-				len(w.Router.Data), p.NExpert, p.NEmbd)
+		r := mkw(slotRouter, w.Router)
+		if r == nil || !r.ok {
+			if g.LastErr == "" {
+				g.LastErr = fmt.Sprintf("block %d: %s (%s %dx%d) not resident", li, jlm.RoleRouter, w.Router.T, w.Router.Rows, w.Router.K)
+			}
 			return false
 		}
-		// Padded to a whole word: the f16 kernel loads the word an element
-		// sits in, and an odd element count's last word runs past the matrix.
-		rb := w.Router.Data[:es*n]
-		if len(rb)%4 != 0 {
-			rb = append(append([]byte(nil), rb...), make([]byte, 4-len(rb)%4)...)
-		}
-		b, e := g.dev.Alloc(len(rb))
-		if e != nil {
-			return false
-		}
-		if e = b.Write(rb); e != nil {
-			return false
-		}
-		l.router, l.routerF16 = b, es == 2
-		l.routerW = resident{qs: b, nrows: p.NExpert, k: p.NEmbd, t: layout.Float32, ok: true}
-		if es == 2 {
-			l.routerW.t = layout.Float16
-		}
+		l.router = r
 	}
 	var err error
 	// Norms and biases arrive as f32, which is what the device reads.
@@ -4919,9 +4895,8 @@ func (l *layer) auxBufs() []backend.Buf {
 		l.nAttn, l.nFFN, l.nAttnB, l.nFFNB, l.nQ, l.nK,
 		l.clampB,     // Gemma 4's tower: its clipped linears' bounds
 		l.ssmTaps.qs, // a linear block's convolution
-		l.router,
-		l.outScale, // Gemma 4's output scalar
-		l.pleOff,   // Gemma 4's per-layer embedding
+		l.outScale,   // Gemma 4's output scalar
+		l.pleOff,     // Gemma 4's per-layer embedding
 	)
 }
 
@@ -4931,6 +4906,21 @@ func (l *layer) auxBufs() []backend.Buf {
 // be referenced elsewhere. Callers hold g.mu.
 func (g *devTier) dropLayerLocal(l *layer) {
 	g.closeNGram(l)
+	if r := l.router; r != nil {
+		for k, v := range g.res {
+			if v == r {
+				delete(g.res, k)
+				break
+			}
+		}
+		if n := r.bytes(); n > 0 {
+			g.refund(n)
+		}
+		if r.ok {
+			g.freeResident(r)
+		}
+		l.router = nil
+	}
 	for _, b := range l.auxBufs() {
 		if b != nil {
 			b.Free()
@@ -5442,6 +5432,10 @@ func weightList(w *nn.LayerWeights) []nn.Weight {
 
 // nNamed is how many matrices weightList names; a block's extra follow.
 const nNamed = 22
+
+// slotRouter is a block's router in g.res: no page slot, since it is not
+// paged with the block.
+const slotRouter = -1
 
 // roleRes is one of a block's extra matrices and its role.
 type roleRes struct {
