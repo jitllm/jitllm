@@ -355,8 +355,9 @@ func (g *devTier) dropEmbedOf(sid uint64) {
 // takeEmbed settles the promise against a submission of x: it returns it when
 // x IS the promised destination (the caller then gathers into the scratch),
 // and otherwise makes the rows real on the host first, so a path that uploads
-// x -- a row at a time, a narrower chunk -- uploads the embedding.
-func (g *devTier) takeEmbed(x []float32) *embPend {
+// x -- a row at a time, a narrower chunk -- uploads the embedding. ok is false
+// when they could not be made real: nothing wrote them.
+func (g *devTier) takeEmbed(x []float32) (pe *embPend, ok bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return g.takeEmbedLocked(x)
@@ -364,31 +365,32 @@ func (g *devTier) takeEmbed(x []float32) *embPend {
 
 // takeEmbedLocked is takeEmbed for a caller holding mu -- layersOnce runs
 // under it, Session included.
-func (g *devTier) takeEmbedLocked(x []float32) *embPend {
+func (g *devTier) takeEmbedLocked(x []float32) (*embPend, bool) {
 	pe := g.embPend
 	g.embPend = nil
 	if pe == nil {
-		return nil
+		return nil, true
 	}
 	if pe.same(x) {
-		return pe
+		return pe, true
 	}
-	g.materializeLocked(pe)
-	return nil
+	return nil, g.materializeLocked(pe)
 }
 
 // materializeLocked runs a promised gather on its own and reads the rows back
-// into the promised slice. Callers hold mu.
-func (g *devTier) materializeLocked(pe *embPend) {
-	g.materializeComposed(pe)
+// into the promised slice, false when it could not (LastErr says why).
+// Callers hold mu.
+func (g *devTier) materializeLocked(pe *embPend) bool {
+	return g.materializeComposed(pe)
 }
 
 // materializeComposed is materializeLocked for the composer's promise: its
 // form of the input rows run in a submission of its own, into embCast, and
 // the rows read back -- where the call that takes them is not this card's
 // (a head on another card than block 0's), whose upload then moves them as
-// the residual crosses between cards. Callers hold mu.
-func (g *devTier) materializeComposed(pe *embPend) {
+// the residual crosses between cards. A card with no room for the rows
+// declines them. Callers hold mu.
+func (g *devTier) materializeComposed(pe *embPend) bool {
 	if cur := g.geoCur; pe.geo != cur {
 		g.useGeom(pe.geo)
 		defer g.useGeom(cur)
@@ -397,7 +399,7 @@ func (g *devTier) materializeComposed(pe *embPend) {
 	bs := g.bs
 	if bs == nil || !bs.embedServed() || !g.embedBufs(bs) {
 		g.LastErr = "the composer's input rows were promised and are no longer held"
-		return
+		return false
 	}
 	R := g.embedRowsAt(bs, len(pe.ids))
 	for _, b := range [...]struct {
@@ -409,19 +411,20 @@ func (g *devTier) materializeComposed(pe *embPend) {
 		}
 		if need := g.footprint(b.words * 4); !g.room(need) {
 			g.LastErr = fmt.Sprintf("the composer's input rows need %d bytes, %d of %d used", need, g.used, g.limit)
-			return
+			g.Steps.Decline(pe.kind, partNoRoom)
+			return false
 		}
 		nb, err := g.dev.Alloc(b.words * 4)
 		if err != nil {
 			g.LastErr = err.Error()
-			return
+			return false
 		}
 		*b.buf = nb
 	}
 	sv, err := g.servedEmbed(bs, R)
 	if err != nil {
 		g.LastErr = "the composed input rows: " + err.Error()
-		return
+		return false
 	}
 	rd := &g.embRd
 	rd.tok, rd.pos = g.embedWords(pe, R)
@@ -429,7 +432,7 @@ func (g *devTier) materializeComposed(pe *embPend) {
 	if rd.composedFn == nil {
 		rd.composedFn = rd.composed
 	}
-	g.readBack(pe, sv, rd.composedFn)
+	return g.readBack(pe, sv, rd.composedFn)
 }
 
 // embRead is a promised gather made real in a submission of its own: what

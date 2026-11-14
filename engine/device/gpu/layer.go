@@ -3167,8 +3167,8 @@ func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []floa
 			g.mu.Unlock()
 			side := g.side()
 			defer g.sideAt(side, 0, n)
-			if ns > 1 {
-				g.realEmbed()
+			if ns > 1 && !g.realEmbed() {
+				return false
 			}
 			for off := 0; off < n; off += sub {
 				m := min(sub, n-off)
@@ -3200,8 +3200,8 @@ func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []floa
 		}
 		side := g.side()
 		defer g.sideAt(side, 0, n)
-		if ns > 1 && (head != nil && noFold || !ok || bbs == nil) {
-			g.realEmbed()
+		if ns > 1 && (head != nil && noFold || !ok || bbs == nil) && !g.realEmbed() {
+			return false
 		}
 		// A head rides only the one-submission path. Every fallback splits the
 		// chunk, so there the head runs on the last row as its own submission;
@@ -3635,7 +3635,10 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	// EmbedRows); the gather writes all R rows of bs.x, padding as zeros. Its
 	// last workgroup must not run past R rows; otherwise the promise is made real
 	// on the host.
-	pe := g.takeEmbedLocked(x)
+	pe, made := g.takeEmbedLocked(x)
+	if !made {
+		return false
+	}
 	embedSrv := false
 	// toks is the rows' tokens where the card does not gather the rows
 	// itself: a block reading them (a mixture routed by them) still does.
@@ -3651,7 +3654,9 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 			if g.bs.embTok != nil {
 				toks, _ = g.embedWords(pe, R)
 			}
-			g.materializeLocked(pe)
+			if !g.materializeLocked(pe) {
+				return false
+			}
 			pe = nil
 		}
 	}

@@ -81,14 +81,16 @@ func (d *devTier) sideAt(s sideRows, off, n int) {
 }
 
 // realEmbed makes a promised gather real now: a cut copies its rows out of
-// the promised slice, which the gather would otherwise fill only after.
-func (d *devTier) realEmbed() {
+// the promised slice, which the gather would otherwise fill only after. False
+// when it could not: nothing wrote them.
+func (d *devTier) realEmbed() bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if pe := d.embPend; pe != nil {
 		d.embPend = nil
-		d.materializeLocked(pe)
+		return d.materializeLocked(pe)
 	}
+	return true
 }
 
 // streams is how many residual streams this device's blocks carry.
