@@ -498,18 +498,6 @@ func (g *devTier) pagedLayer(sid uint64, l *layer, li int, p *nn.LayerPlan) erro
 	}
 	// The window paged attention applies to this block (pagedStage's descW).
 	kp.layers[li].win, kp.layers[li].chunked = l.win, l.chunked
-	// A pooled block selection (MiniMax-M3's and QSA's) is not yet formed
-	// over a streamed pass, so its pages cannot go to host memory; a plain
-	// one (the lightning indexer) reads them in passes as an attention does.
-	kp.layers[li].noEvict = pooledSelects(p.Graph)
-	// A history that cannot leave the card is held at the context asked for,
-	// charged here with the block, so the budget declines the block at
-	// placement rather than a call failing for want of a page mid-prompt. It
-	// is the layer's floor (pagedSeat), so a compaction for another layer's
-	// room does not give it back.
-	if kp.layers[li].noEvict {
-		kp.layers[li].ctx = (g.capped(p).MaxSeq + kp.p - 1) / kp.p
-	}
 	if l.kv == nil {
 		l.kv = map[uint64]*kvPair{}
 	}
@@ -525,7 +513,7 @@ func (g *devTier) pagedLayer(sid uint64, l *layer, li int, p *nn.LayerPlan) erro
 			}
 			return err
 		}
-		kp.layers[entKey(li)].noEvict, kp.layers[entKey(li)].ctx = true, kp.layers[li].ctx
+		kp.layers[entKey(li)].noEvict = true
 	}
 	for _, key := range []int{li, entKey(li)} {
 		if _, ok := kp.layers[key]; ok {
@@ -540,29 +528,16 @@ func (g *devTier) pagedLayer(sid uint64, l *layer, li int, p *nn.LayerPlan) erro
 	return nil
 }
 
-// selectsHistory reports a block whose attention selects from its whole
-// history: the lightning indexer, MiniMax-M3's and QSA's block selections.
-func pooledSelects(g *graph.Graph) bool {
+// selectsBlocks says g selects its history's blocks (graph.OpSelect) -- by
+// their positions' keys (the lightning indexer) or their pooled keys
+// (MiniMax-M3's, QSA's): a form of it over passes ranks the whole history's
+// blocks.
+func selectsBlocks(g *graph.Graph) bool {
 	if g == nil {
 		return false
 	}
 	for _, o := range g.Ops {
-		if o.Kind == graph.OpSelect && o.Attr.Pooled {
-			return true
-		}
-	}
-	return false
-}
-
-// plainSelects says g selects its history's blocks by their positions' keys
-// (graph.OpSelect, not pooled): a form of it over passes ranks the whole
-// history's blocks.
-func plainSelects(g *graph.Graph) bool {
-	if g == nil {
-		return false
-	}
-	for _, o := range g.Ops {
-		if o.Kind == graph.OpSelect && !o.Attr.Pooled {
+		if o.Kind == graph.OpSelect {
 			return true
 		}
 	}
@@ -602,10 +577,6 @@ func (g *devTier) pagedLayerBytes(p *nn.LayerPlan) uint64 {
 		words = g.kvp.tabWords
 	}
 	pages := uint64(1 + g.sessions())
-	if pooledSelects(p.Graph) && g.kvp != nil {
-		// Held at the context asked for (pagedLayer).
-		pages = uint64(contextPages(g.kvp, g.capped(p).MaxSeq, int(g.sessions())))
-	}
 	n := uint64(geom.kWords(g.kvPage())+geom.vWords(g.kvPage()))*4*pages + uint64(words)*4 +
 		kvStageBytes(geom, g.kvPage())
 	return n
