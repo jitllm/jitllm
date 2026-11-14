@@ -74,6 +74,22 @@ func bidirCount(runs []nn.KeyRun, at int) int {
 	return 0
 }
 
+// runEnd is the key count of row at, in a call whose rows end at end, under
+// the session's runs: its run's end, 0 where it reads to itself -- in no
+// run, or in a run's first phase, which reads only keys written (GPU.phased).
+// The "runcut" fault ends a second phase's runs at the call's rows: the run
+// cut at the submission.
+func (g *devTier) runEnd(at, end int) int {
+	if g.runPhase == 1 {
+		return 0
+	}
+	e := bidirCount(g.bidir, at)
+	if g.runPhase == 2 && e > end && g.rowsFaulted("runcut") {
+		e = end
+	}
+	return e
+}
+
 // bidirCheck refuses a call whose rows [pos, pos+nrow) cut a run: the engine
 // never cuts one (a prefill chunk ends at a run's end), so a cut is a caller's
 // contract broken. A windowed layer's row descriptor carries the window's

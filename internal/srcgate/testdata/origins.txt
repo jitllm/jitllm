@@ -1037,6 +1037,7 @@ bug	engine/device/gpu/layer.go	"tier: the router selected expert %d of %d"
 bug	engine/device/gpu/move.go	"tier: block %d has no pages on %s"
 bug	engine/device/gpu/move.go	"tier: block %d is on no device"
 bug	engine/device/gpu/move.go	"tier: no lane for block %d's history on one of the devices"
+refusal	engine/device/gpu/multi.go	"block %d convolves its rows centred across a bidirectional run of %d rows, wider than one %d-row submission"	a non-causal model's recurrent block over a run wider than a card's submission: its centred convolution reads across the pieces
 limit	engine/device/gpu/multi.go	"the block is above every device's whole budget (the largest %.2f GiB), so it runs on the host"
 limit	engine/device/gpu/multi.go	"the block with its routed experts is above every device's whole budget (the largest %.2f GiB), so it runs on the host unread by the device (a placement that streams it -- JITLLM_GPU_STREAM, -placement N=DEV~ -- puts it on a card)"
 input	engine/device/gpu/multi.go	"tier: %s holds %.2f GiB of pinned blocks, and a %.2f GiB budget would evict them; unpin them or ask for more"
@@ -1374,8 +1375,6 @@ fault	engine/placeset.go	"model: block %d's history would not come home"
 fault	engine/placeset.go	"model: block %d's history would not move to the device"
 input	engine/placeset.go	"model: no device attached (SetDevice first)"
 input	engine/prefill.go	"model: Prefill called with no tokens"
-refusal	engine/prefill.go	"model: PrefillMixed: a bidirectional prompt of %d rows is longer than one %d-row chunk"	a bidirectional run past one 512-row chunk
-refusal	engine/prefill.go	"model: PrefillMixed: a bidirectional span of %d rows is longer than one %d-row chunk"	a bidirectional run past one 512-row chunk
 input	engine/prefill.go	"model: PrefillMixed: span %d is %d floats, not a multiple of n_embd %d"
 input	engine/prefill.go	"model: PrefillMixed: span %d names %d token ids for %d rows"
 input	engine/prefill.go	"model: prefill interrupted"	the caller's cancel

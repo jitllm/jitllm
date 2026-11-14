@@ -376,6 +376,8 @@ func (c *Config) recFaulted(f string) bool { return c.fault != nil && c.fault.re
 //	"nowin"    a ragged step's windowed or chunked layers attend every key
 //	"piccausal" a composed non-causal block's rows attend causally: each
 //	           row's descriptor ends at itself (picDesc)
+//	"runcut"   a bidirectional run wider than a submission reads, in its
+//	           second phase, only the keys of the call's own rows (runEnd)
 //
 // SetRowsFault arms one violation for the calls after it; "" disarms.
 func (f *Faults) SetRowsFault(v string) { f.rows = v }
