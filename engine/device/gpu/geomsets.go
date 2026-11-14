@@ -18,7 +18,9 @@ import (
 // A feed-forward width of a block's own (nn.LayerPlan.FFNWide) is a second
 // axis, since the FFN kernels bake their width too, so a set is keyed by both
 // (geoKey); a non-causal segment, a decision head and a cache row carrying an
-// index key are the others.
+// index key are the others. A non-causal set is keyed by its blocks'
+// attention geometry whatever the model's: its rows' offsets, its transient
+// pair and its rotary table are built for one (initScratch, towerStep).
 //
 // The set in use is swapped in place (useGeom): every path below reads g.bs and
 // g.bbs as it always did. The home set is the blocks' at the model's own
@@ -28,11 +30,14 @@ import (
 // geoKey names a scratch set: the zero key is the home set. nkv, hd, nrot and
 // local are a block's own attention geometry and rotary (nn.LayerPlan.OwnGeom),
 // zero for a block at the model's; nffn is a feed-forward width of its own.
+// A non-causal block's key carries its geometry always: nh and embd its query
+// heads and residual width, nrot its rotary table's width.
 type geoKey struct {
 	flags         geoFlag
 	nkv, hd, nrot int32
 	local         bool
 	nffn          int32
+	nh, embd      int32
 }
 
 // geoFlag is a set's kind beyond its shape.
@@ -60,13 +65,15 @@ const (
 // kinds over one residual, a segment takes a set of its own.
 func geoOf(p *nn.LayerPlan) geoKey {
 	if p.NonCausal {
+		k := geoKey{flags: geoNonCausal, nh: int32(p.NHead), nkv: int32(p.NKVHead), hd: int32(p.HeadDim),
+			nrot: int32(p.RopeW()), embd: int32(p.NEmbd)}
 		switch {
 		case p.HeadSet:
-			return geoKey{flags: geoNonCausal | geoNCHead}
+			k.flags |= geoNCHead
 		case p.Tower:
-			return geoKey{flags: geoNonCausal | geoTower}
+			k.flags |= geoTower
 		}
-		return geoKey{flags: geoNonCausal}
+		return k
 	}
 	var k geoKey
 	if p.MixedGeom && p.OwnGeom {

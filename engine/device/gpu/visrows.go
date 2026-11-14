@@ -336,8 +336,10 @@ func (bs *blockScratch) partBytes() int64 {
 // (nn.RowsReserver): it grows to n, or shrinks to it when it has been twice
 // what the calls needed for visShrinkCalls calls in a row, and false -- with
 // the set as it was -- is a budget that cannot hold it. A device not holding
-// block li as a non-causal block has nothing to size. Callers must NOT hold
-// g.mu: a resize drops the captured graph and compiles.
+// block li as a non-causal block has nothing to size. A segment whose blocks
+// attend at more than one geometry runs a set of each in one call, so every
+// one of them is sized. Callers must NOT hold g.mu: a resize drops the
+// captured graph and compiles.
 func (g *devTier) ReserveRows(li, n int) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -346,8 +348,39 @@ func (g *devTier) ReserveRows(li, n int) bool {
 		return true
 	}
 	home := g.geoCur
-	g.useGeom(l.geo)
 	defer g.useGeom(home)
+	// Block li's set, then every other set of its segment on this device --
+	// a tower's, or a non-causal text model's, one per geometry its blocks
+	// attend at.
+	var ks [4]geoKey
+	sets := append(ks[:0], l.geo)
+	for _, o := range g.layers {
+		if o != nil && o.geo.flags == l.geo.flags && !slices.Contains(sets, o.geo) {
+			sets = append(sets, o.geo)
+		}
+	}
+	for _, k := range sets {
+		g.useGeom(k)
+		if !g.reserveSetRows(n) {
+			return false
+		}
+	}
+	return true
+}
+
+// segmentSplit says set k's segment runs in more than one set on this
+// device: its blocks attend at more than one geometry. Callers hold g.mu.
+func (g *devTier) segmentSplit(k geoKey) bool {
+	for _, l := range g.layers {
+		if l != nil && l.geo.flags == k.flags && l.geo != k {
+			return true
+		}
+	}
+	return false
+}
+
+// reserveSetRows is ReserveRows for the set in use. Callers hold g.mu.
+func (g *devTier) reserveSetRows(n int) bool {
 	if n > g.vs().max {
 		g.LastErr = fmt.Sprintf("a call of %d rows on a tower whose largest grid is %d", n, g.vs().max)
 		return false
@@ -420,10 +453,12 @@ func (g *devTier) towerWindowed() bool {
 // of the scratch for a chunk of rows, the widest chunk that fits, halving
 // down to visGrain. The tower then runs a picture block by block in two
 // phases a chunk at a time (LayersPhase). Refused for windowed towers, an
-// encoder with a decision head's set, and where even the narrowest chunk does
-// not fit. Callers hold g.mu with the set in use.
+// encoder with a decision head's set, a segment of more than one geometry
+// (each set would have to take the one chunk TowerChunk reports), and where
+// even the narrowest chunk does not fit. Callers hold g.mu with the set in use.
 func (g *devTier) chunkTower(n, want int) bool {
-	if g.NoTowerChunks || g.towerWindowed() || g.geoCur.flags&geoTower == 0 && g.hasHeadSet() {
+	if g.NoTowerChunks || g.towerWindowed() || g.geoCur.flags&geoTower == 0 && g.hasHeadSet() ||
+		g.segmentSplit(g.geoCur) {
 		return false
 	}
 	old := g.bs
@@ -672,7 +707,7 @@ func (g *devTier) dropIdleTower() {
 // (geoNCHead). Callers hold g.mu.
 func (g *devTier) hasHeadSet() bool {
 	for _, l := range g.layers {
-		if l != nil && l.geo == (geoKey{flags: geoNonCausal | geoNCHead}) {
+		if l != nil && l.geo.flags&geoNCHead != 0 {
 			return true
 		}
 	}
@@ -688,16 +723,26 @@ func (g *devTier) headSetAt(rows int) bool {
 		return true
 	}
 	home := g.geoCur
-	g.useGeom(geoKey{flags: geoNonCausal | geoNCHead})
 	defer g.useGeom(home)
-	if g.bs == nil {
-		return true
+	// One set per geometry the head's blocks attend at.
+	var ks [4]geoKey
+	sets := ks[:0]
+	for _, l := range g.layers {
+		if l != nil && l.geo.flags&geoNCHead != 0 && !slices.Contains(sets, l.geo) {
+			sets = append(sets, l.geo)
+		}
 	}
-	plan := g.bs.p
-	plan.MaxSeq = g.vs().max
-	if !g.towerAt(&plan, rows) {
-		g.LastErr = fmt.Sprintf("the decision head's set at %d rows: %s", rows, g.LastErr)
-		return false
+	for _, k := range sets {
+		g.useGeom(k)
+		if g.bs == nil {
+			continue
+		}
+		plan := g.bs.p
+		plan.MaxSeq = g.vs().max
+		if !g.towerAt(&plan, rows) {
+			g.LastErr = fmt.Sprintf("the decision head's set at %d rows: %s", rows, g.LastErr)
+			return false
+		}
 	}
 	return true
 }

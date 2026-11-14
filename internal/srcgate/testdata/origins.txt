@@ -960,12 +960,6 @@ bug	engine/device/gpu/layer.go	"a batched submission of %d rows %d wide with a h
 limit	engine/device/gpu/layer.go	"a bidirectional chunk this device has no batched scratch for"	the batched scratch does not fit
 bug	engine/device/gpu/layer.go	"a chunked attention of a different shape from the one this tier was built for"	a model's config changed under its placement: a model states one window (Config.SWAWindow, SWAChunked) and offers every causal block it or none (Instance.plan, windowFor), on a tier of one model's blocks
 bug	engine/device/gpu/layer.go	"a head folded into %d blocks of %d streams"
-refusal	engine/device/gpu/layer.go	"a non-causal block of %d heads of %d (%d kv) over %d on a set built for %d of %d (%d kv) over %d"	a non-causal block unlike the set's first: the set is built from one plan
-refusal	engine/device/gpu/layer.go	"a non-causal block rotating %d (NEOX %v) on a set built for %d (NEOX %v)"	a non-causal block unlike the set's first: the set is built from one plan
-refusal	engine/device/gpu/layer.go	"a non-causal block rotating %d of each head on a set built to rotate none"	a non-causal block unlike the set's first: the set is built from one plan
-refusal	engine/device/gpu/layer.go	"a non-causal block with LayerNorm %v on a set built with %v"	a non-causal block unlike the set's first: the set is built from one plan
-refusal	engine/device/gpu/layer.go	"a non-causal block with no pre-norm on a set built for blocks that have one"	a non-causal block unlike the set's first: the set is built from one plan
-refusal	engine/device/gpu/layer.go	"a non-causal block's MLP (%s, %d wide) on a set built for (%s, %d wide)"	a non-causal block unlike the set's first: the set is built from one plan
 limit	engine/device/gpu/layer.go	"a second session's KV cache does not fit in this device's budget"
 limit	engine/device/gpu/layer.go	"a session's recurrent state does not fit in this device's budget"
 bug	engine/device/gpu/layer.go	"a sliding window of %d keys on a tier built for %d"	a model's config changed under its placement: a model states one window (Config.SWAWindow, SWAChunked) and offers every causal block it or none (Instance.plan, windowFor), on a tier of one model's blocks
