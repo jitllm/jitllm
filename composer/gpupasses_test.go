@@ -11,6 +11,7 @@ import (
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/composer/ir"
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/internal/testlock"
@@ -540,6 +541,8 @@ type passRunner struct {
 	d     backend.Device
 	bufs  map[string]backend.Buf
 	calls int
+	// vecs is the vectors the codes read by role (an attention's sinks).
+	vecs map[jlm.Role][]uint32
 }
 
 func newPassRunner(d backend.Device) *passRunner {
@@ -611,6 +614,8 @@ func (r *passRunner) run(codes []composer.Code, lo, hi int, vals map[graph.Value
 				key, w = fmt.Sprintf("t%s#%d", o.Name, r.calls), over[o.Name]
 			case o.Kind == composer.OperandTable && base[o.Name] != nil:
 				key, w = "t"+o.Name, base[o.Name]
+			case o.Kind == composer.OperandVector && r.vecs[o.Role] != nil:
+				key, w = fmt.Sprintf("r%d", o.Role), r.vecs[o.Role]
 			case o.Kind == composer.OperandValue && vals[o.Value] != nil:
 				key, w = fmt.Sprintf("v%d", o.Value), vals[o.Value]
 				if bd.Writes {

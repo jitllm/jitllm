@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"slices"
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
@@ -49,7 +50,12 @@ func historyTables(codes []composer.Code, rows, wins []uint32, pools map[int][]u
 // positions and float32 a position, those its position+1 over Span closes,
 // in one softmax with a sink a head counted once. Held to the
 // concatenation row by row, and the answer without the entries and the one
-// without the rows must each fail it.
+// without the rows must each fail it. Each shape runs again at rows further
+// on over a history read in passes of a page (History.Passes), as the
+// tier runs it: one sweep reading both histories, its running partial
+// folded pass by pass, held to the same concatenation; the passes left
+// unfolded must fail it, and a pass of rows that attend none of it reads
+// only poison there.
 func TestComposedGPUAttendBoth(t *testing.T) {
 	testlock.GPU(t)
 	devs := openDevices()
@@ -67,14 +73,19 @@ func TestComposedGPUAttendBoth(t *testing.T) {
 			sinks                   bool
 		}{{4, 8, 0, 4, true}, {4, 8, 0, 4, false}, {2, 6, 5, 3, true}, {3, 4, 6, 8, true}} {
 			t.Run(fmt.Sprintf("%s/%dq%dd/win%d/every%d/sinks%v", d.API(), sh.heads, sh.dim, sh.win, sh.period, sh.sinks), func(t *testing.T) {
-				gpuAttendBoth(t, d, sh.heads, sh.dim, sh.win, sh.period, sh.sinks)
+				gpuAttendBoth(t, d, sh.heads, sh.dim, sh.win, sh.period, sh.sinks, 2, 0)
+			})
+			t.Run(fmt.Sprintf("%s/%dq%dd/win%d/every%d/sinks%v/passes", d.API(), sh.heads, sh.dim, sh.win, sh.period, sh.sinks), func(t *testing.T) {
+				gpuAttendBoth(t, d, sh.heads, sh.dim, sh.win, sh.period, sh.sinks, 14, 8)
 			})
 		}
 	}
 }
 
-func gpuAttendBoth(t *testing.T, d backend.Device, H, D, win, P int, sinks bool) {
-	const page, p0, R, capRows = 8, 2, 9, 16
+// gpuAttendBoth runs the shape with its rows from p0 on, and where passKeys
+// is set over passes of that many positions too.
+func gpuAttendBoth(t *testing.T, d backend.Device, H, D, win, P int, sinks bool, p0, passKeys int) {
+	const page, R, capRows = 8, 9, 16
 	b := graph.New()
 	k := b.In("k", D)
 	n := b.KVAppend(k, k, 0)
@@ -206,7 +217,7 @@ func gpuAttendBoth(t *testing.T, d backend.Device, H, D, win, P int, sinks bool)
 		t.Fatal(err)
 	}
 	out := wf32(res)
-	nmse := func(w []float64) float64 {
+	nmseOf := func(out []float32, w []float64) float64 {
 		var num, den float64
 		for i := range w {
 			e := float64(out[i]) - w[i]
@@ -215,6 +226,7 @@ func gpuAttendBoth(t *testing.T, d backend.Device, H, D, win, P int, sinks bool)
 		}
 		return num / den
 	}
+	nmse := func(w []float64) float64 { return nmseOf(out, w) }
 	e := nmse(want(true, true))
 	t.Logf("%d rows over a window of %d and an entry each %d: NMSE %.3e against the concatenation", R, win, P, e)
 	if math.IsNaN(e) || e > 1e-9 {
@@ -225,6 +237,80 @@ func gpuAttendBoth(t *testing.T, d backend.Device, H, D, win, P int, sinks bool)
 	}
 	if e := nmse(want(false, true)); !(e > 1e-6) {
 		t.Errorf("without the rows the NMSE is %.3e: the gate cannot see them", e)
+	}
+	if passKeys == 0 {
+		return
+	}
+	pents := ents
+	pents.Passes = true
+	_, inPasses, err := composer.Default().ForPasses(composer.DeviceGPU).Form(composer.Request{Graph: g,
+		History: composer.History{Keys: composer.Pool{ByDim: true}, Values: composer.Pool{Half: true}, Passes: true}, More: []composer.History{pents},
+		Step: composer.Step{Rows: capRows, Page: page, Keys: passKeys, Seqs: 1, Context: 4 * page}, Device: gpuDevice(d)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sweeps := passSweeps(inPasses)
+	if len(sweeps) != 1 {
+		t.Fatalf("the form over passes runs sweeps %v: one reads both histories", sweeps)
+	}
+	lo, hi := sweeps[0][0], sweeps[0][1]
+	reads := map[int]bool{}
+	for ci := lo; ci < hi; ci++ {
+		for _, bd := range inPasses[ci].Binds {
+			if o := bd.Operand; o.Kind == composer.OperandTable && o.Table == composer.TableKeys && bd.Read {
+				reads[o.Instance] = true
+			}
+		}
+	}
+	if !reads[0] || !reads[1] {
+		t.Fatalf("the sweep reads the keys of histories %v: a pass reads both", reads)
+	}
+	base := historyTables(inPasses, desc, wdesc, map[int][]uint32{0: kpool, 1: vpool, 2: entPool}, []uint32{0, 1, 2, 3})
+	base["rows.n"], base["q.off"] = []uint32{R}, make([]uint32, capRows*4)
+	run := map[string][]uint32{"run.0": nil, "run.1": nil, "run.2": nil}
+	np := 4 * page / passKeys
+	runPasses := func(fold bool) []float32 {
+		r := newPassRunner(d)
+		r.vecs = vecs
+		defer r.close()
+		if _, err := r.run(inPasses, 0, lo, vs, base, nil, nil); err != nil {
+			t.Fatal(err)
+		}
+		for j := 0; j < np; j++ {
+			in, out := "run.0", fmt.Sprintf("run.%d", 1+j%2)
+			if j > 0 && fold {
+				in = fmt.Sprintf("run.%d", 1+(j+1)%2)
+			}
+			first, end := uint32(j*passKeys), uint32((j+1)*passKeys)
+			clip := func(src []uint32) []uint32 {
+				d := slices.Clone(src)
+				for o := 0; o < len(d); o += 4 {
+					d[o+1], d[o+2] = min(max(d[o+1], first), end), min(max(d[o+2], first), end)
+				}
+				return d
+			}
+			ov := historyTables(inPasses, clip(desc), clip(wdesc), nil, nil)
+			if _, err := r.run(inPasses, lo, hi, vs, base, ov, aliasTables(run, map[string]string{"run.in": in, "run.out": out})); err != nil {
+				t.Fatal(err)
+			}
+		}
+		last := fmt.Sprintf("run.%d", 1+(np-1)%2)
+		got, err := r.run(inPasses, hi, len(inPasses), vs, base, nil, aliasTables(run, map[string]string{"run.in": last, "run.out": last}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got == nil {
+			t.Fatal("no code after the sweep writes the attention's output")
+		}
+		return wf32(got)
+	}
+	pe := nmseOf(runPasses(true), want(true, true))
+	t.Logf("over %d passes of %d positions (codes %d to %d a pass of %d): NMSE %.3e against the concatenation", np, passKeys, lo, hi, len(inPasses), pe)
+	if math.IsNaN(pe) || pe > 1e-9 {
+		t.Fatalf("the composed attention over two histories read in passes: NMSE %.3e against the concatenation", pe)
+	}
+	if e := nmseOf(runPasses(false), want(true, true)); !(e > 1e-6) {
+		t.Errorf("every pass after the first left unfolded reads NMSE %.3e: the gate cannot see a fold", e)
 	}
 }
 

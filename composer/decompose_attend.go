@@ -108,9 +108,6 @@ func (c *Context) attendGeomOf(r graph.StateRef, period, kw int, a graph.Attrs) 
 // dropped, a sink's exp(sink - max) in the sum once.
 func attendBoth(o graph.Op, c *Context, kw int) ([]Prim, error) {
 	a := o.Attr
-	if c.History.Passes {
-		return nil, fmt.Errorf("an attention over two histories read in passes")
-	}
 	rows, err := c.attendGeomOf(o.Reads[0], 1, kw, a)
 	if err != nil {
 		return nil, err
@@ -125,8 +122,12 @@ func attendBoth(o graph.Op, c *Context, kw int) ([]Prim, error) {
 		if sel == nil || sel.Kind != graph.OpSelect || a.NHead%sel.Attr.NKVHead != 0 {
 			return nil, fmt.Errorf("an attention of %d heads over a selection that is not its entries' groups", a.NHead)
 		}
+		w, err := c.wholeKeys(a.Span)
+		if err != nil {
+			return nil, err
+		}
 		m := maskOf(c, o.In[1])
-		ents.Mask, ents.MaskGroups = &m, sel.Attr.NKVHead
+		ents.Mask, ents.MaskGroups, ents.MaskKeys = &m, sel.Attr.NKVHead, w
 	}
 	q, out := c.value(o.In[0]), c.value(o.Out[0])
 	ea := a
@@ -134,6 +135,10 @@ func attendBoth(o graph.Op, c *Context, kw int) ([]Prim, error) {
 	pr, vr, lr, mr := attendPartial(o, a, c, q, out, rows)
 	pe, ve, le, me := attendPartial(o, ea, c, q, out, ents)
 	R, H, D := c.Step.Rows, a.NHead, a.HeadDim
+	if c.History.Passes {
+		// A pass folds both its partials into the running one.
+		return append(append(pr, pe...), foldPasses(o, R, H, D, [][3]Operand{{vr, lr, mr}, {ve, le, me}}, out)...), nil
+	}
 	F := ir.F32
 	heads, dims := []int{R, H}, []int{R, H, D}
 	minus := math.Float32frombits(0xff7fffff)
@@ -193,7 +198,7 @@ func attend(o graph.Op, c *Context, q, out Operand, g attendGeom) []Prim {
 	R, H, D := c.Step.Rows, a.NHead, g.D
 	prims, values, sums, maxes := attendPartial(o, a, c, q, out, g)
 	if c.History.Passes {
-		return append(prims, foldPasses(o, R, H, D, values, sums, maxes, out)...)
+		return append(prims, foldPasses(o, R, H, D, [][3]Operand{{values, sums, maxes}}, out)...)
 	}
 	var ox exprs
 	nv := ox.at(0, []int{R, H, D}, ox.coord(0), ox.coord(1), ox.coord(2))
@@ -232,7 +237,7 @@ func attendPartial(o graph.Op, a graph.Attrs, c *Context, q, out Operand, g atte
 	minus := math.Float32frombits(0xff7fffff)
 	keys, heads := []int{R, H, C}, []int{R, H}
 
-	hs := history{a: a, pageSize: pg, period: g.Period}
+	hs := history{a: a, pageSize: pg, period: g.Period, passes: c.History.Passes}
 	position, held, page := hs.position, hs.held, hs.page
 	rng := func(axis int) Facts {
 		return Facts{Range: hs.span(axis), Heads: &Heads{Rows: R, Query: H, Key: a.NKVHead, Dim: D, Seqs: c.Step.Seqs},
@@ -342,31 +347,48 @@ func foldsAPass(p Prim) bool {
 	return p.Out.Kind == OperandTable && (p.Out.Name == TableRunOut.op().Name || p.Out.Name == TableSelOut.op().Name)
 }
 
-// foldPasses folds a pass's weighted values, sums and maxima into the
-// running partial, each side scaled by exp of its maximum less the larger,
-// and finishes the row from the fold: the values over the sum, a sink's
-// exp(sink - max) in the sum alone. A partial of sum zero has attended
-// nothing, whatever its maximum: the first pass folds into zeros.
-func foldPasses(o graph.Op, R, H, D int, values, sums, maxes, out Operand) []Prim {
+// foldPasses folds a pass's partials -- each its weighted values, sums and
+// maxima, one a history the pass read -- into the running partial, each
+// scaled by exp of its maximum less the largest, and finishes the row from
+// the fold: the values over the sum, a sink's exp(sink - max) in the sum
+// alone. A partial of sum zero has attended nothing, whatever its maximum:
+// the first pass folds into zeros.
+func foldPasses(o graph.Op, R, H, D int, parts [][3]Operand, out Operand) []Prim {
 	U, F := ir.U32, ir.F32
 	runs, heads, dims := []int{R, H, D + 2}, []int{R, H}, []int{R, H, D}
+	ri := 3 * len(parts)
 
 	var fx exprs
 	r, h, d := fx.coord(0), fx.coord(1), fx.coord(2)
-	mo, lo := fx.at(3, runs, r, h, fx.u(uint32(D))), fx.at(3, runs, r, h, fx.u(uint32(D+1)))
-	mj, lj := fx.at(2, heads, r, h), fx.at(1, heads, r, h)
+	mo, lo := fx.at(ri, runs, r, h, fx.u(uint32(D))), fx.at(ri, runs, r, h, fx.u(uint32(D+1)))
 	held := fx.op(OpLess, ir.Pred, fx.f(0), lo)
-	// A pass whose every key the row may not see has the mask's maximum,
-	// its weights exp(0) each: it attended nothing.
-	seen := fx.op(OpLess, ir.Pred, fx.f(math.Float32frombits(0xff7fffff)/2), mj)
-	mn := fx.sel(F, held, fx.sel(F, seen, fx.op(OpMax, F, mo, mj), mo), mj)
-	ea := fx.sel(F, held, fx.un(OpExp, F, fx.op(OpSub, F, mo, mn)), fx.f(0))
-	eb := fx.sel(F, seen, fx.un(OpExp, F, fx.op(OpSub, F, mj, mn)), fx.f(0))
+	minus := fx.f(math.Float32frombits(0xff7fffff))
+	mn := fx.sel(F, held, mo, minus)
+	ms, ls, seen := make([]int, len(parts)), make([]int, len(parts)), make([]int, len(parts))
+	for j := range parts {
+		ms[j], ls[j] = fx.at(3*j+2, heads, r, h), fx.at(3*j+1, heads, r, h)
+		// A pass whose every key the row may not see has the mask's
+		// maximum, its weights exp(0) each: it attended nothing.
+		seen[j] = fx.op(OpLess, ir.Pred, fx.f(math.Float32frombits(0xff7fffff)/2), ms[j])
+		mn = fx.sel(F, seen[j], fx.op(OpMax, F, mn, ms[j]), mn)
+	}
+	// A side that attended nothing adds nothing, whatever it holds: a pass
+	// the row attends none of reads a page outside the pass.
+	ea := fx.un(OpExp, F, fx.op(OpSub, F, mo, mn))
 	vd := fx.op(OpMin, U, d, fx.u(uint32(D-1)))
-	acc := fx.op(OpAdd, F, fx.op(OpMul, F, fx.at(3, runs, r, h, d), ea), fx.op(OpMul, F, fx.at(0, dims, r, h, vd), eb))
-	sum := fx.op(OpAdd, F, fx.op(OpMul, F, lo, ea), fx.op(OpMul, F, lj, eb))
+	acc := fx.sel(F, held, fx.op(OpMul, F, fx.at(ri, runs, r, h, d), ea), fx.f(0))
+	sum := fx.sel(F, held, fx.op(OpMul, F, lo, ea), fx.f(0))
+	for j := range parts {
+		e := fx.un(OpExp, F, fx.op(OpSub, F, ms[j], mn))
+		acc = fx.op(OpAdd, F, acc, fx.sel(F, seen[j], fx.op(OpMul, F, fx.at(3*j, dims, r, h, vd), e), fx.f(0)))
+		sum = fx.op(OpAdd, F, sum, fx.sel(F, seen[j], fx.op(OpMul, F, ls[j], e), fx.f(0)))
+	}
 	tail := fx.sel(F, fx.op(OpLess, ir.Pred, d, fx.u(uint32(D+1))), mn, sum)
 	fx.sel(F, fx.op(OpLess, ir.Pred, d, fx.u(uint32(D))), acc, tail)
+	var foldIn []Operand
+	for _, p := range parts {
+		foldIn = append(foldIn, p[0], p[1], p[2])
+	}
 
 	var ex exprs
 	er, eh := ex.coord(0), ex.coord(1)
@@ -379,7 +401,7 @@ func foldPasses(o graph.Op, R, H, D int, values, sums, maxes, out Operand) []Pri
 	}
 	ex.op(OpMul, F, ex.at(0, runs, er, eh, ex.coord(2)), ex.op(OpDiv, F, ex.f(1), ex.op(OpMax, F, l, ex.f(1e-30))))
 	return []Prim{
-		{Kind: PrimMap, Shape: runs, In: []Operand{values, sums, maxes, TableRunIn.op()}, Out: TableRunOut.op(), Expr: fx.e, Sweep: true},
+		{Kind: PrimMap, Shape: runs, In: append(foldIn, TableRunIn.op()), Out: TableRunOut.op(), Expr: fx.e, Sweep: true},
 		{Kind: PrimMap, Shape: dims, In: in, Out: out, Expr: ex.e},
 	}
 }
@@ -397,6 +419,9 @@ type history struct {
 	// the position closing it, clamped to the row's own position so an entry
 	// the row cannot see yet is read where it holds a page.
 	period int
+	// passes is a history read in passes (History.Passes): a row's entries
+	// start where its pass does.
+	passes bool
 }
 
 // row is word w of the row's descriptor.
@@ -408,10 +433,16 @@ func (hs history) row(x *exprs, w int) int {
 // start is the first position the row attends: its first, or past it a
 // bidirectional window's. A causal window's first is its descriptor's: a
 // start computed here as well would hide a descriptor that lost the window.
+// Over entries it is the first of a whole history's, or over passes the
+// first its pass's first position closes (the descriptor is clipped to the
+// pass), so a pass counts each entry once.
 func (hs history) start(x *exprs) int {
 	U, a := ir.U32, hs.a
-	if hs.period > 1 {
+	if hs.period > 1 && !hs.passes {
 		return x.u(0)
+	}
+	if hs.period > 1 {
+		return x.op(OpDiv, U, hs.row(x, rowStart), x.u(uint32(hs.period)))
 	}
 	first := hs.row(x, rowStart)
 	if a.Window == 0 || !a.Bidir {
