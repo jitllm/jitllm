@@ -114,10 +114,10 @@ func blocksMoveToTheCPUAndBack(t *testing.T, path string, composed bool) {
 		return mv
 	}
 	half := n / 2
-	run := func(ids []int32, devices bool) [][]float32 {
+	run := func(ids []int32, devices, moves bool) [][]float32 {
 		st := testInstance(t, m, len(prompt)+ntok+1, instOpts...)
 		defer st.Close()
-		if composed {
+		if composed && devices == moves {
 			defer func() { composedMoves(t, st, n, half, devices, ntok, toCPU, toB, halfCPU, toA) }()
 		}
 		if devices {
@@ -139,7 +139,7 @@ func blocksMoveToTheCPUAndBack(t *testing.T, path string, composed bool) {
 			if ids != nil {
 				next = ids[i]
 			}
-			if devices {
+			if moves {
 				switch i {
 				case toCPU:
 					if mv := move(st, 0, n, nn.CPU); len(mv.Moved) != n || st.devCount() != 0 {
@@ -171,17 +171,23 @@ func blocksMoveToTheCPUAndBack(t *testing.T, path string, composed bool) {
 		}
 		return lg
 	}
-	ctl := run(nil, false)
+	ctl := run(nil, false, false)
 	var ids []int32
 	for _, l := range ctl {
 		ids = append(ids, Greedy(l))
 	}
-	moved := run(ids, true)
+	moved, still := run(ids, true, true), run(ids, true, false)
 	// The card parts from the CPU in the reduction-order band, which an
 	// absolute logit difference cannot state: it grows with the logits'
 	// scale (mamba-130m's reach 43, and a coherent prefill reads 3.18 apart).
 	// The band is the card census's; a history a move dropped or misplaced
-	// reads in tenths at every token after it. A mixture's routed bank is
+	// reads in tenths at every token after it. A recurrent state carries the
+	// prefill card's arithmetic forward and a token can amplify it:
+	// mamba-130m's sixth token reads 5.6e-2 from the CPU with its prompt on
+	// CUDA and 0.17 on Vulkan, to four places whichever card the blocks move
+	// to next. A token is held to the band, or to twice what the card reads
+	// there never moved: a dropped state reads in tenths where the unmoved
+	// card agrees with the CPU. A mixture's routed bank is
 	// computed on the card in arithmetic of the card's own, within its band,
 	// and that can carry the next block's router across a near-tie: one
 	// token takes another expert and parts in tenths, the next agrees again
@@ -190,7 +196,7 @@ func blocksMoveToTheCPUAndBack(t *testing.T, path string, composed bool) {
 	// every token below 1.
 	const moveBand, mixtureWorst = 5e-2, 1.0
 	mixture := m.Cfg.NExpert > 1
-	var worstAll, nmseAll float64
+	var worstAll, nmseAll, stillAll float64
 	var es []float64
 	for i := range ctl {
 		var worst float64
@@ -198,20 +204,22 @@ func blocksMoveToTheCPUAndBack(t *testing.T, path string, composed bool) {
 			worst = max(worst, math.Abs(float64(v-moved[i][j])))
 		}
 		e, _ := nmseOf(moved[i], ctl[i])
+		s, _ := nmseOf(still[i], ctl[i])
+		band := max(moveBand, 2*s)
 		es = append(es, e)
 		switch {
 		case math.IsNaN(worst) || math.IsNaN(e):
 			t.Fatalf("token %d: a non-finite logit", i)
-		case !mixture && !(e < moveBand):
-			t.Fatalf("token %d: %.3e NMSE from the CPU control (worst logit %.4g), outside the band %.0e", i, e, worst, moveBand)
+		case !mixture && !(e < band):
+			t.Fatalf("token %d: %.3e NMSE from the CPU control (worst logit %.4g), outside the band %.3g (the unmoved card %.3e)", i, e, worst, band, s)
 		case mixture && !(e < mixtureWorst):
 			t.Fatalf("token %d: the mixture's %.3e NMSE from the CPU control (worst logit %.4g), past %.0g at any token", i, e, worst, mixtureWorst)
 		}
-		worstAll, nmseAll = max(worstAll, worst), max(nmseAll, e)
+		worstAll, nmseAll, stillAll = max(worstAll, worst), max(nmseAll, e), max(stillAll, s)
 	}
 	if med := median(es); mixture && !(med < moveBand) {
 		t.Fatalf("the mixture's tokens are %.3e NMSE from the CPU control at the median, outside the band %.0e", med, moveBand)
 	}
-	t.Logf("%d tokens, %d blocks moved %s -> cpu -> %s -> half cpu -> %s; worst %.3e NMSE (logit %.4g), median %.3e, from the CPU control",
-		ntok, n, a, b, a, nmseAll, worstAll, median(es))
+	t.Logf("%d tokens, %d blocks moved %s -> cpu -> %s -> half cpu -> %s; worst %.3e NMSE (logit %.4g), median %.3e, from the CPU control; unmoved %.3e",
+		ntok, n, a, b, a, nmseAll, worstAll, median(es), stillAll)
 }
