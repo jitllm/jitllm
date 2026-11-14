@@ -126,10 +126,8 @@ func decomposeSelect(o graph.Op, c *Context) ([]Prim, error) {
 	var scoring []Prim
 	ranked := best
 	switch {
-	case a.Pooled && c.History.Passes:
-		return nil, fmt.Errorf("a pooled selection over a history read in passes")
 	case a.Pooled:
-		if scoring, err = selectPooled(o, c, pool, keys, tables, flat, best); err != nil {
+		if scoring, err = selectPooled(o, c, pool, keys, tables, flat, best, NB); err != nil {
 			return nil, err
 		}
 	case c.History.Passes:
