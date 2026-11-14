@@ -1,6 +1,10 @@
 package nn
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/jitllm/jitllm/graph"
+)
 
 // KVFmt is the element format of a KV cache, which every attention kernel
 // bakes: it decides how a kernel widens what it reads and how far apart two
@@ -21,7 +25,12 @@ import "fmt"
 // llama.cpp's block_q8_0 costs 34. A store kernel writing the scale alone (36)
 // or as binary16 (34) is the upgrade.
 //
-// A q8 row is the quantization unit, so a q8 cache is addressed in whole rows:
+//	KVQ4_0, KVQ4_1, KVQ5_0, KVQ5_1  llama.cpp's blocks per head row
+//	       (graph.BlockFmt): a row of hd elements is ceil(hd/32) blocks in
+//	       ggml's layout, the last zero-padded, quantized as ggml's
+//	       reference quantizer does and rounded up to a float32 slot
+//
+// A q8 or block row is the quantization unit, so such a cache is addressed in whole rows:
 // kvStride must be a multiple of hd, and a kernel's hd is the row's width (an
 // MLA value that is a prefix of a wider row is not expressible, and its cache
 // is refused at the model).
@@ -31,10 +40,32 @@ const (
 	KVF32 KVFmt = iota
 	KVF16
 	KVQ8
+	KVQ4_0
+	KVQ4_1
+	KVQ5_0
+	KVQ5_1
 )
 
 // KVFormats is how many KV formats there are, what a table by format holds.
-const KVFormats = int(KVQ8) + 1
+const KVFormats = int(KVQ5_1) + 1
+
+// Block is f's llama.cpp block format, 0 for one that is not blocks.
+func (f KVFmt) Block() graph.BlockFmt {
+	switch f {
+	case KVQ4_0:
+		return graph.BlockQ4_0
+	case KVQ4_1:
+		return graph.BlockQ4_1
+	case KVQ5_0:
+		return graph.BlockQ5_0
+	case KVQ5_1:
+		return graph.BlockQ5_1
+	}
+	return 0
+}
+
+// Quantized is whether f holds head rows quantized whole: q8 rows or blocks.
+func (f KVFmt) Quantized() bool { return f == KVQ8 || f.Block() != 0 }
 
 // KVQ8Block is the elements one q8 scale covers.
 const KVQ8Block = 32
@@ -47,6 +78,9 @@ func (f KVFmt) String() string {
 		return "f16"
 	case KVQ8:
 		return "q8_0"
+	}
+	if b := f.Block(); b != 0 {
+		return b.String()
 	}
 	return fmt.Sprintf("KVFmt(%d)", uint8(f))
 }
@@ -61,6 +95,9 @@ func KVRowBytes(f KVFmt, hd int) int {
 	case KVQ8:
 		nb := (hd + KVQ8Block - 1) / KVQ8Block
 		return nb * (KVQ8Block + 8)
+	}
+	if b := f.Block(); b != 0 {
+		return 4 * graph.BlockRowWords(b, hd)
 	}
 	return 4 * hd
 }

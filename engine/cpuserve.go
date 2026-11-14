@@ -251,8 +251,8 @@ func (s *Instance) specOf(li int, g *graph.Graph) nn.BlockSpec {
 	// instance's (rotaries): each its own table, bound by instance.
 	p.Rotaries = s.rotaries()
 	p.F32 = s.kvl.fmt != nn.KVF16
-	if s.kvl.fmt == nn.KVQ8 {
-		p.KVQ8 = s.kvlAt(li).headDim
+	if s.kvl.fmt.Quantized() {
+		p.KVRow, p.KVBlock = s.kvlAt(li).headDim, s.kvl.fmt.Block()
 	}
 	// A non-causal model's recurrent block reads both ways too: its
 	// convolution is centred over the whole run.

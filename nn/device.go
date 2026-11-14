@@ -556,9 +556,11 @@ type BlockSpec struct {
 	Table        *jlm.Entry
 	TableRow     int
 	F32          bool
-	// KVQ8, past 0, is the head width of a q8 history's rows (F32 is then
-	// true: no store narrows to halves).
-	KVQ8         int
+	// KVRow, past 0, is the head width of a quantized history's rows (F32
+	// is then true: no store narrows to halves): q8 rows, or KVBlock's
+	// blocks where it is set.
+	KVRow        int
+	KVBlock      graph.BlockFmt
 	Bidir, Whole bool
 	Rec          bool
 	Run          int

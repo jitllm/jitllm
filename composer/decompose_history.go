@@ -189,12 +189,17 @@ func decomposeKVAppend(o graph.Op, c *Context) ([]Prim, error) {
 		src := c.value(v)
 		var val int
 		switch {
-		case l.Q8 > 0:
+		case l.Row > 0:
 			// The rows quantized whole, a head's row at a time, then a
 			// word a thread into the position's slot.
 			q := Operand{Kind: OperandScratch, Name: src.Name + ".q8", Elem: U, Temp: true}
 			rw := l.words(w)
-			prims = append(prims, q8Rows(c, src, []int{sh[0] * (w / l.Q8), l.Q8}, q)...)
+			heads := []int{sh[0] * (w / l.Row), l.Row}
+			if l.Block != 0 {
+				prims = append(prims, blockRows(c, src, heads, q, l.Block)...)
+			} else {
+				prims = append(prims, q8Rows(c, src, heads, q)...)
+			}
 			src = q
 			val = x.at(0, []int{sh[0], rw}, x.coord(0), d)
 			if open >= 0 {

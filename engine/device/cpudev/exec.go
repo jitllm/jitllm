@@ -198,7 +198,7 @@ func (e *Exec) form(p nn.BlockSpec, rows int) (*Form, error) {
 	req := composer.Request{Formats: p.Formats, Strides: p.Strides,
 		Step: composer.Step{Page: p.Page, Keys: p.Keys, ActWindow: p.ActWindow, Seqs: p.Seqs},
 		History: composer.History{ValuesInKeys: p.ValuesInKeys,
-			Keys: composer.Pool{Q8: p.KVQ8}, Values: composer.Pool{Q8: p.KVQ8}},
+			Keys: composer.Pool{Row: p.KVRow, Block: p.KVBlock}, Values: composer.Pool{Row: p.KVRow, Block: p.KVBlock}},
 		Rotaries: p.Rotaries, More: composer.MoreOf(&gr)}
 	req.Graph, req.Step.Rows, req.Device = &gr, rows, e.comp.Device()
 	return e.comp.Form(req, &gr, rows, p.Cut > 0, false, p.F32)

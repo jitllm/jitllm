@@ -33,6 +33,7 @@ func TestComposedCPUGatesOnSSE(t *testing.T) {
 		{"Equal", gateComposedCPUEqual},
 		{"Halves", gateComposedCPUHalves},
 		{"Q8Rows", gateComposedCPUQ8Rows},
+		{"BlockRows", gateComposedCPUBlockRows},
 		{"SelectBroadcastsAGeneralMask", gateCPUSelectBroadcastsAGeneralMask},
 		{"IndexTakesARemainder", gateCPUIndexTakesARemainder},
 		{"Attend", gateComposedCPUAttend},

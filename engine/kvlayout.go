@@ -20,6 +20,10 @@ type kvLayout struct {
 	fmt nn.KVFmt
 }
 
+// quantized is whether the layout's rows are quantized whole (q8 rows or
+// llama.cpp's blocks).
+func (l kvLayout) quantized() bool { return l.fmt.Quantized() }
+
 // slots is how many float32 slots a run of n elements occupies. n is always a
 // whole number of head rows (positions times heads times headDim): a q8 row is
 // the quantization unit and has no element-sized slot.
@@ -27,20 +31,21 @@ func (l kvLayout) slots(n int) int {
 	switch l.fmt {
 	case nn.KVF16:
 		return n * 2 / 4
-	case nn.KVQ8:
-		return n / l.headDim * nn.KVRowBytes(nn.KVQ8, l.headDim) / 4
+	}
+	if l.quantized() {
+		return n / l.headDim * nn.KVRowBytes(l.fmt, l.headDim) / 4
 	}
 	return n
 }
 
 // elemTag is the format as the prefix cache's geometry digest spells it: the
 // element bytes it always printed for f32 and f16, so their stored pages keep
-// their keys, and the format's name for a q8 cache.
+// their keys, and the format's name for a quantized cache.
 func (l kvLayout) elemTag() string {
-	switch l.fmt {
-	case nn.KVF16:
+	if l.fmt == nn.KVF16 {
 		return "2"
-	case nn.KVQ8:
+	}
+	if l.quantized() {
 		return l.fmt.String()
 	}
 	return "4"
