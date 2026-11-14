@@ -445,7 +445,10 @@ func TestSessionsPageAtOnce(t *testing.T) {
 // to the wrong sequence. KVEvictions and KVStreamPasses during the run at once
 // are the selection check. The greedy ids that differ are logged, not held:
 // a streamed pass's order flips a near tie (one in two hundred on CUDA, where
-// one session evicting alone already reads 8e-3).
+// one session evicting alone already reads 8e-3). The two sessions stepped in
+// one call (StepRuns), both histories at home, are held to the same band
+// against the two stepped in one call with no budget, and no such step may
+// be refused: Stats.KVStreamJoint counts the calls that streamed both.
 func TestSessionsEvictAtOnce(t *testing.T) {
 	m, err := model.Open(jlmOf(t, testmodels.Path("stories15M-q8_0.gguf")))
 	if err != nil {
@@ -454,8 +457,15 @@ func TestSessionsEvictAtOnce(t *testing.T) {
 	defer m.Close()
 	for _, spec := range testdevices.Specs("cuda:0", "vulkan:0", "metal") {
 		t.Run(spec, func(t *testing.T) {
-			turns := evictAtOnce(t, m, spec, false)
-			both := evictAtOnce(t, m, spec, true)
+			turns := evictAtOnce(t, m, spec, false, false)
+			both := evictAtOnce(t, m, spec, true, false)
+			joint := evictAtOnce(t, m, spec, true, true)
+			t.Logf("%s: in one call %d page(s) home, %d streamed passes, %d call(s) streaming both, worst NMSE %.3e, %d id(s) different",
+				spec, joint.ev, joint.passes, joint.joint, joint.worst, joint.flips)
+			if joint.ev == 0 || joint.passes == 0 || joint.joint == 0 {
+				t.Fatalf("in one call %d evictions, %d streamed passes, %d calls streaming both: the joint step never streamed two histories",
+					joint.ev, joint.passes, joint.joint)
+			}
 			t.Logf("%s: taking turns %d page(s) home, %d streamed passes, worst NMSE %.3e, %d id(s) "+
 				"different; at once %d, %d, %.3e, %d (against each alone with no budget)", spec,
 				turns.ev, turns.passes, turns.worst, turns.flips, both.ev, both.passes, both.worst, both.flips)
@@ -468,9 +478,9 @@ func TestSessionsEvictAtOnce(t *testing.T) {
 			// taking turns and at once each send different pages home at
 			// different steps. A page lost or read as another sequence's is
 			// tenths, not thousandths.
-			for _, a := range []evictArm{turns, both} {
+			for _, a := range []evictArm{turns, both, joint} {
 				if !(a.worst < evictNMSE) {
-					t.Fatalf("worst logit NMSE %.3e against the runs alone, bound %.0e: a page was lost or "+
+					t.Fatalf("worst logit NMSE %.3e against the runs with no budget, bound %.0e: a page was lost or "+
 						"read as another's", a.worst, evictNMSE)
 				}
 			}
@@ -482,15 +492,15 @@ func TestSessionsEvictAtOnce(t *testing.T) {
 // streamed passes, and the logits' worst NMSE and greedy ids against the runs
 // alone with no budget.
 type evictArm struct {
-	ev, passes, flips int
-	worst             float64
+	ev, passes, flips, joint int
+	worst                    float64
 }
 
 // evictAtOnce runs two sessions of m on a fresh tier over spec: each alone
 // with no budget, then both teacher-forced through those runs' ids under a
-// budget that makes their histories evict -- at once, or taking turns a step
-// at a time.
-func evictAtOnce(t *testing.T, m *model.Model, spec string, together bool, io ...Option) evictArm {
+// budget that makes their histories evict -- at once, in one call (joint), or
+// taking turns a step at a time.
+func evictAtOnce(t *testing.T, m *model.Model, spec string, together, joint bool, io ...Option) evictArm {
 	t.Helper()
 	prompts := atOncePrompts(m)
 	const seq, gen = 128, 100
@@ -506,6 +516,41 @@ func evictAtOnce(t *testing.T, m *model.Model, spec string, together bool, io ..
 			t.Fatal(err)
 		}
 		st.Close()
+	}
+	// jointSteps forces insts through steps from to to in one call a step
+	// (StepRuns), each step's logits appended to out.
+	jointSteps := func(insts []*Instance, from, to int, out [][][]float32) {
+		for i := from; i < to; i++ {
+			runs := make([]Run, len(insts))
+			for k := range insts {
+				in := first[k]
+				if i > 0 {
+					in = alone[k].ids[i-1]
+				}
+				runs[k] = Run{Instance: insts[k], Tokens: []int32{in}, Logits: true}
+			}
+			lg, err := StepRuns(runs)
+			if err != nil {
+				t.Fatalf("joint step %d: %v (%s)", i, err, g.Err())
+			}
+			for k := range insts {
+				out[k] = append(out[k], slices.Clone(lg[k]))
+			}
+		}
+	}
+	// In one call the reference is the same two stepped in one call with no
+	// budget: a step of two rows sums in another order than one of one.
+	var ref [][][]float32
+	if joint {
+		rs := make([]*Instance, len(prompts))
+		for k := range prompts {
+			rs[k], _ = atOnceState(t, m, g, seq, prompts[k], io...)
+		}
+		ref = make([][][]float32, len(rs))
+		jointSteps(rs, 0, gen, ref)
+		for _, st := range rs {
+			st.Close()
+		}
 	}
 	sts := make([]*Instance, len(prompts))
 	for k := range prompts {
@@ -530,6 +575,10 @@ func evictAtOnce(t *testing.T, m *model.Model, spec string, together bool, io ..
 		got[k] = append(got[k], slices.Clone(lg))
 	}
 	forced := func(from, to int) {
+		if joint {
+			jointSteps(sts, from, to, got)
+			return
+		}
 		if together {
 			var wg sync.WaitGroup
 			for k := range sts {
@@ -573,10 +622,15 @@ func evictAtOnce(t *testing.T, m *model.Model, spec string, together bool, io ..
 				after.UnformedAtStep-before.UnformedAtStep, after.UnformedAtStepParts)
 		}
 	}
-	r := evictArm{ev: after.KVEvictions - before.KVEvictions, passes: after.ComposedStreamPasses - before.ComposedStreamPasses}
+	r := evictArm{ev: after.KVEvictions - before.KVEvictions, passes: after.ComposedStreamPasses - before.ComposedStreamPasses,
+		joint: after.KVStreamJoint - before.KVStreamJoint}
 	for k := range got {
 		for i, lg := range got[k] {
-			if e := logitNMSE(lg, alone[k].logits[i]); !(e <= r.worst) {
+			want := alone[k].logits[i]
+			if joint {
+				want = ref[k][i]
+			}
+			if e := logitNMSE(lg, want); !(e <= r.worst) {
 				r.worst = e
 			}
 			if Greedy(lg) != alone[k].ids[i] {

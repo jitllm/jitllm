@@ -1090,7 +1090,6 @@ context	engine/device/gpu/pagedstream.go	"%w: no free page to stream %d evicted 
 bug	engine/device/gpu/pagedstream.go	"block %d has no graph to read its history in passes"
 bug	engine/device/gpu/pagedstream.go	"block %d holds %d page(s) of sequence %v at home and the pool counts %d"
 bug	engine/device/gpu/pagedstream.go	"block %d reads a history it attends none of"
-refusal	engine/device/gpu/pagedstream.go	"two sequences with pages in host memory in one call: %v and %v"	two sessions streaming their history in one call
 bug	engine/device/gpu/persist.go	"%s binds one buffer as an input and an output"
 limit	engine/device/gpu/persist.go	"%s states no co-residency guarantee (only a CUDA cooperative launch does)"	only a CUDA cooperative launch guarantees co-residency (RULE 13)
 bug	engine/device/gpu/persist.go	"no IR"

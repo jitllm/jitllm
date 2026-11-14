@@ -34,19 +34,32 @@ import (
 // upgrade if long contexts past the card need to be fast rather than
 // possible.
 
-// pagedStream is one call's streaming: the sequence, its evicted page count,
-// and a descriptor set per pass for the full and the windowed history.
+// pagedStream is one call's streaming: the sequences with pages in host
+// memory, the most pages any has there, each pass's upload, and a descriptor
+// set per pass for the full and the windowed history.
 type pagedStream struct {
 	g       *devTier
-	s       seqID
+	seqs    []streamSeq
 	evicted int
-	// passes is how many, each over w pages.
+	// passes is how many: first a pass a run of at most w of one sequence's
+	// evicted pages (up), then the resident history w pages at a time.
 	passes, w int
+	up        []streamUp
 	desc      [2][]backend.Buf
 	// words is each set's descriptors, pass after pass, for desc.
 	words [2][]uint32
 	ids   []uint32
 }
+
+// streamSeq is a sequence of a streamed call and its pages in host memory.
+type streamSeq struct {
+	s       seqID
+	evicted int
+}
+
+// streamUp is a pass's upload: sequence seqs[k]'s evicted pages p0 to p1, or
+// for k < 0 none -- a pass over the resident history from position p0.
+type streamUp struct{ k, p0, p1 int }
 
 // writes stages every pass's descriptors with the call's other writes.
 func (st *pagedStream) writes(w func(backend.Buf, []byte)) {
@@ -62,33 +75,42 @@ func (st *pagedStream) writes(w func(backend.Buf, []byte)) {
 }
 
 // pagedStreamPrep readies the call's streaming, or leaves pg.st nil when no
-// row reads an evicted page. The passes reach the furthest live row, so every
-// row's keys are covered whichever sequence it belongs to; only one sequence
-// has pages in host memory (evictVictim). Callers hold g.mu, outside any
-// submission; it allocates.
+// row reads an evicted page. Each sequence with pages in host memory streams
+// them in passes of its own -- its rows' keys clipped to the pass, every
+// other row attending nothing in it -- through the same free ids, one pass
+// after another; then the resident history goes in passes reaching the
+// furthest live row, each row's keys clipped past its sequence's evicted
+// prefix. Callers hold g.mu, outside any submission; it allocates.
 func (g *devTier) pagedStreamPrep(sid uint64, bs *blockScratch, rows []pagedRow) error {
 	defer g.scratchWin().close() // the scratch's own buffers (scratch.go)
 	pg := bs.pkv
 	pg.st = nil
 	kp := g.kvPages()
-	var s seqID
-	far, over := 0, false
+	st := &pg.stream
+	seqs := st.seqs[:0]
+	far, e := 0, 0
 	for _, r := range rows {
 		if r.pad {
 			continue
 		}
 		far = max(far, r.pos)
-		if kp.evicted[r.s] > 0 {
-			if over && r.s != s {
-				return fmt.Errorf("two sequences with pages in host memory in one call: %v and %v", s, r.s)
-			}
-			s, over = r.s, true
+		n := kp.evicted[r.s]
+		if n == 0 {
+			continue
+		}
+		known := false
+		for _, q := range seqs {
+			known = known || q.s == r.s
+		}
+		if !known {
+			seqs, e = append(seqs, streamSeq{s: r.s, evicted: n}), max(e, n)
 		}
 	}
-	if !over {
+	st.seqs = seqs
+	if len(seqs) == 0 {
 		return nil
 	}
-	e, w := kp.evicted[s], g.stagedPassKeys(bs)/kp.p
+	w := g.stagedPassKeys(bs) / kp.p
 	// No pass wider than the pass width: the composer's form over passes
 	// is formed for that many keys (passKeys).
 	if w == 0 || e < w {
@@ -98,9 +120,11 @@ func (g *devTier) pagedStreamPrep(sid uint64, bs *blockScratch, rows []pagedRow)
 		w = min(w, g.streamWidth(l, e))
 		// Every layer holding s holds the same prefix in host memory (kvevict.go);
 		// one that does not would have the passes read past its copies.
-		if len(l.owned[s]) > 0 && len(l.home[s]) != e {
-			return fmt.Errorf("block %d holds %d page(s) of sequence %v at home and the pool counts %d",
-				li, len(l.home[s]), s, e)
+		for _, q := range seqs {
+			if len(l.owned[q.s]) > 0 && len(l.home[q.s]) != q.evicted {
+				return fmt.Errorf("block %d holds %d page(s) of sequence %v at home and the pool counts %d",
+					li, len(l.home[q.s]), q.s, q.evicted)
+			}
 		}
 		return nil
 	}); err != nil {
@@ -109,11 +133,30 @@ func (g *devTier) pagedStreamPrep(sid uint64, bs *blockScratch, rows []pagedRow)
 	if w < 1 {
 		return fmt.Errorf("%w: no free page to stream %d evicted page(s) through", ErrKVCapacity, e)
 	}
-	st := &pg.stream
-	*st = pagedStream{g: g, s: s, evicted: e, w: w, ids: st.ids[:0]}
 	keys := w * kp.p
-	st.passes = (far + keys) / keys
+	up := st.up[:0]
+	for k, q := range seqs {
+		for p0 := 0; p0 < q.evicted; p0 += w {
+			up = append(up, streamUp{k: k, p0: p0, p1: min(p0+w, q.evicted)})
+		}
+	}
+	// The resident passes start at the lowest position a row reads past its
+	// sequence's evicted prefix.
+	lo0 := far + 1
+	for _, r := range rows {
+		if !r.pad {
+			lo0 = min(lo0, kp.evicted[r.s]*kp.p)
+		}
+	}
+	for lo := lo0 / keys * keys; lo <= far; lo += keys {
+		up = append(up, streamUp{k: -1, p0: lo})
+	}
+	st.g, st.evicted, st.w, st.up, st.passes, st.ids = g, e, w, up, len(up), st.ids[:0]
+	if len(seqs) > 1 {
+		g.KVStreamJoint++
+	}
 	for i, src := range [2][]uint32{pg.desc, pg.descW} {
+		st.desc[i], st.words[i] = nil, nil
 		if len(src) == 0 {
 			continue
 		}
@@ -126,13 +169,32 @@ func (g *devTier) pagedStreamPrep(sid uint64, bs *blockScratch, rows []pagedRow)
 		}
 		all := slices.Grow(pg.streamD[i][:0], st.passes*len(src))[:st.passes*len(src)]
 		pg.streamD[i] = all
-		for j := 0; j < st.passes; j++ {
-			lo, hi := uint32(j*keys), uint32((j+1)*keys)
+		for j, u := range up {
 			d := all[j*len(src) : (j+1)*len(src)]
 			copy(d, src)
-			for o := 0; o < len(d); o += composer.RowWords {
-				d[o+composer.RowStart] = min(max(d[o+composer.RowStart], lo), hi)
-				d[o+composer.RowEnd] = min(max(d[o+composer.RowEnd], lo), hi)
+			for o, ri := 0, 0; o < len(d); o, ri = o+composer.RowWords, ri+1 {
+				var lo, hi uint32
+				switch {
+				case u.k >= 0:
+					lo, hi = uint32(u.p0*kp.p), uint32(u.p1*kp.p)
+					if ri >= len(rows) || rows[ri].pad || rows[ri].s != seqs[u.k].s {
+						hi = lo // another sequence's row attends nothing here
+					}
+				default:
+					lo, hi = uint32(u.p0), uint32(u.p0+keys)
+					if ri < len(rows) && !rows[ri].pad {
+						lo = min(max(lo, uint32(kp.evicted[rows[ri].s]*kp.p)), hi)
+					}
+				}
+				s0 := d[o+composer.RowStart]
+				s, e := min(max(s0, lo), hi), min(max(d[o+composer.RowEnd], lo), hi)
+				if e <= s {
+					// Nothing of the row in the pass: an empty range at its
+					// own first position, so what a form reads for it,
+					// clamped, is of its own pages.
+					s, e = s0, s0
+				}
+				d[o+composer.RowStart], d[o+composer.RowEnd] = s, e
 			}
 		}
 		st.desc[i], st.words[i] = pg.streamDesc[i][:st.passes], all
@@ -299,8 +361,6 @@ func (sv *servedPart) streamRun(g *devTier, lc *launcher, s backend.Session, ins
 	}
 	kp := g.kvPages()
 	kw, vw := pl.geom.kWords(kp.p), pl.geom.vWords(kp.p)
-	off := kp.ranges[st.s].off
-	home := pl.home[st.s]
 	at := 0
 	for si, sw := range f.sweeps {
 		if si > 0 {
@@ -316,7 +376,9 @@ func (sv *servedPart) streamRun(g *devTier, lc *launcher, s backend.Session, ins
 			side, inKey, outKey = pg.sel, tableKey(composer.TableSelIn), tableKey(composer.TableSelOut)
 		}
 		for j := 0; j < st.passes; j++ {
-			if p0, p1 := j*st.w, min((j+1)*st.w, st.evicted); p0 < p1 {
+			if u := st.up[j]; u.k >= 0 {
+				q, p0, p1 := st.seqs[u.k], u.p0, u.p1
+				home := pl.home[q.s]
 				// The ids the pass before read -- this sweep's, or the sweep
 				// before's last -- are this pass's: wait for it.
 				if j > 0 || si > 0 {
@@ -342,7 +404,7 @@ func (sv *servedPart) streamRun(g *devTier, lc *launcher, s backend.Session, ins
 						}
 					}
 				}
-				if err := s.WriteAt(pl.tab, (off+p0)*4, u32view(st.ids)); err != nil {
+				if err := s.WriteAt(pl.tab, (kp.ranges[q.s].off+p0)*4, u32view(st.ids)); err != nil {
 					return err
 				}
 				g.KVStreamPasses++
