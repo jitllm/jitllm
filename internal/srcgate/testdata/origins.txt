@@ -1360,8 +1360,6 @@ input	engine/marks.go	"model: the container reads out at no marker rows"
 input	engine/memstore.go	"model: SetFills length %d is outside the %d bytes offered"
 input	engine/memstore.go	"model: SetFills was given %d keys and %d lengths"
 input	engine/moveblocks.go	"model: a move of blocks %d..%d to %s is pending"
-refusal	engine/moveblocks.go	"model: a move to the CPU is not prepared ahead; MoveBlocks makes it"	a prepared move to the CPU: MoveBlocks makes it, PrepareMove refuses it
-refusal	engine/moveblocks.go	"model: block %d is on the CPU; a move prepared ahead moves placed blocks, and MoveBlocks places one"	a prepared move from the CPU to a card
 input	engine/moveblocks.go	"model: block %d is pinned where it is by the placement"
 fault	engine/moveblocks.go	"model: block %d reached %s but its history did not; it runs on the host"
 fault	engine/moveblocks.go	"model: block %d reached %s but its recurrent summary did not; it runs on the host"

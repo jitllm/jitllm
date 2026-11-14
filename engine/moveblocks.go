@@ -57,6 +57,10 @@ type PendingMove struct {
 	closed bool
 	// headStaged is the projection prepared on the target as well.
 	headStaged bool
+	// cpu is the blocks of the range on the CPU, placed on the target at the
+	// commit; toCPU is a move to the CPU, made whole there.
+	cpu   []int
+	toCPU bool
 }
 
 // MoveBlocks moves blocks [lo, hi) to the device named to, the CPU (nn.CPU)
@@ -122,7 +126,7 @@ func (s *Instance) MoveBlocks(lo, hi int, to string) (BlockMove, error) {
 		}
 	}
 	placing := time.Since(t0)
-	p, err := s.prepareMove(lo, hi, to, true)
+	p, err := s.prepareMove(lo, hi, to, false)
 	if err != nil {
 		return mv, err
 	}
@@ -169,23 +173,35 @@ func (s *Instance) movable(li int) error {
 	return nil
 }
 
-// PrepareMove starts a move of placed blocks [lo, hi) to the card named to
-// (see MoveBlocks) and returns at once: the target prepares the blocks while
-// the instance keeps generating on the source, and nothing the instance runs
-// changes until Commit. Call it, Commit and Cancel between tokens; an instance
-// holds one pending move at a time. A block on the CPU is refused: there is
-// nothing on a card to keep generating from, and MoveBlocks places it.
+// PrepareMove starts a move of blocks [lo, hi) to the device named to (see
+// MoveBlocks) and returns at once: a card prepares the placed blocks while the
+// instance keeps generating on the source, and nothing the instance runs
+// changes until Commit. What has nothing to prepare ahead moves at the commit,
+// as MoveBlocks moves it: a block on the CPU is placed on the card there, and a
+// move to the CPU, which holds every block's composed form and pages their
+// weights as it runs them, is made there whole. Call it, Commit and Cancel
+// between tokens; an instance holds one pending move at a time.
 func (s *Instance) PrepareMove(lo, hi int, to string) (*PendingMove, error) {
-	if onCPU(to) {
-		return nil, fmt.Errorf("model: a move to the CPU is not prepared ahead; MoveBlocks makes it")
+	if !onCPU(to) {
+		return s.prepareMove(lo, hi, to, true)
 	}
-	return s.prepareMove(lo, hi, to, false)
+	if lo < s.lo || hi > s.hi || lo >= hi {
+		return nil, fmt.Errorf("model: blocks %d..%d are outside this instance's %d..%d", lo, hi-1, s.lo, s.hi-1)
+	}
+	if s.pending != nil {
+		return nil, fmt.Errorf("model: a move of blocks %d..%d to %s is pending",
+			s.pending.lo, s.pending.hi-1, s.pending.to)
+	}
+	p := &PendingMove{s: s, lo: lo, hi: hi, to: to, toCPU: true, done: make(chan struct{})}
+	close(p.done)
+	s.pending = p
+	return p, nil
 }
 
-// prepareMove is PrepareMove; with skipCPU the blocks of the range on the
-// CPU, the ones the target refused when MoveBlocks offered them, are left out
-// rather than refused.
-func (s *Instance) prepareMove(lo, hi int, to string, skipCPU bool) (*PendingMove, error) {
+// prepareMove is PrepareMove to a card. With place the blocks of the range on
+// the CPU are placed on it at the commit; without, they are the ones the card
+// declined when MoveBlocks offered them, and are left out.
+func (s *Instance) prepareMove(lo, hi int, to string, place bool) (*PendingMove, error) {
 	nd, ok := s.ld.(nn.NamedDevice)
 	if !ok {
 		return nil, fmt.Errorf("model: no device that places blocks by name is attached, " +
@@ -199,13 +215,13 @@ func (s *Instance) prepareMove(lo, hi int, to string, skipCPU bool) (*PendingMov
 		return nil, fmt.Errorf("model: blocks %d..%d are outside this instance's %d..%d", lo, hi-1, s.lo, s.hi-1)
 	}
 	lo, hi = s.groupWhole(lo, hi)
+	var cpu []int
 	for li := lo; li < hi; li++ {
 		if !s.devAt(li) {
-			if skipCPU {
-				continue
+			if place {
+				cpu = append(cpu, li)
 			}
-			return nil, fmt.Errorf("model: block %d is on the CPU; a move prepared ahead "+
-				"moves placed blocks, and MoveBlocks places one", li)
+			continue
 		}
 		if err := s.movable(li); err != nil {
 			return nil, err
@@ -214,7 +230,7 @@ func (s *Instance) prepareMove(lo, hi int, to string, skipCPU bool) (*PendingMov
 	if err := s.vacate(lo, hi); err != nil {
 		return nil, err
 	}
-	p := &PendingMove{s: s, lo: lo, hi: hi, to: to, done: make(chan struct{})}
+	p := &PendingMove{s: s, lo: lo, hi: hi, to: to, cpu: cpu, done: make(chan struct{})}
 	for li := lo; li < hi; li++ {
 		if !s.devAt(li) {
 			continue
@@ -319,6 +335,28 @@ func (p *PendingMove) Commit() (mv BlockMove, err error) {
 		}
 	}
 	defer func() { mv.Pause = time.Since(t0) }()
+	if p.toCPU {
+		return s.moveOffCards(p.lo, p.hi)
+	}
+	if len(p.cpu) > 0 {
+		placed, err := s.placeOnto(p.lo, p.hi, p.to)
+		for _, li := range placed {
+			mv.KVBytes += s.blockHistoryAt(li, s.pos)
+			mv.RecBytes += s.recBytesOf(li)
+		}
+		mv.Moved = placed
+		if err != nil {
+			if mover, ok := s.ld.(nn.BlockMover); ok {
+				mover.Unstage(p.lo, p.hi)
+			}
+			return mv, err
+		}
+		for _, li := range p.cpu {
+			if !s.devAt(li) {
+				mv.Declined = append(mv.Declined, li)
+			}
+		}
+	}
 	nd := s.ld.(nn.NamedDevice)
 	headWas, headOn := nd.HeadDeviceName()
 	headOn = headOn && s.head != nil
@@ -359,6 +397,8 @@ func (p *PendingMove) Commit() (mv BlockMove, err error) {
 		mover.Unstage(p.lo, p.hi)
 		defer mover.RetireMoved()
 	}
+	slices.Sort(mv.Moved)
+	slices.Sort(mv.Declined)
 	// The projection follows once nothing of this instance is left beside it: a
 	// head alone on a card costs a crossing a token and holds the card.
 	if headOn && headWas != nn.DeviceName(p.to) && len(mv.Moved) > 0 && !s.anyBlockOn(nd, headWas) {

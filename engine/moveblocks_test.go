@@ -38,7 +38,8 @@ func moveDevices(t *testing.T) (string, string) {
 // cache. The upper arm moves only the upper half, so the output projection
 // stays behind on a device that no longer holds the last block: the
 // projection's own submission, which no placement reached before a block
-// could be moved.
+// could be moved. The CPU arm prepares a move to the CPU and one back from it
+// (PrepareMove at both ends), each made at its commit.
 func TestBlocksMoveBetweenDevices(t *testing.T) {
 	names := append([]string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf"}, relocModels()...)
 	for _, name := range names {
@@ -51,6 +52,7 @@ func TestBlocksMoveBetweenDevices(t *testing.T) {
 		})
 		t.Run(name+"/upper", func(t *testing.T) { blocksMoveBetweenDevices(t, path, moveUpper, composedParts) })
 		t.Run(name+"/split", func(t *testing.T) { blocksMoveBetweenDevices(t, path, moveSplit, composedParts) })
+		t.Run(name+"/cpu", func(t *testing.T) { blocksMoveBetweenDevices(t, path, moveCPU, composedParts) })
 	}
 	// With the composed CPU on: a block the instance composed for the CPU at
 	// its placement there releases its composition as it goes to a card,
@@ -71,6 +73,8 @@ const (
 	// moveSplit names the upper half as placed, a KV-sharing group it reaches
 	// left for the move to take whole.
 	moveSplit
+	// moveCPU prepares the move to the CPU and the one back to the card.
+	moveCPU
 )
 
 func blocksMoveBetweenDevices(t *testing.T, path string, arm int, parts nn.Parts, opts ...Option) {
@@ -150,8 +154,11 @@ func blocksMoveBetweenDevicesWith(t *testing.T, path string, arm int, parts nn.P
 			out = append(out, next)
 			if move && (i == moveAt || i == backAt) {
 				to, from = b, a
+				if arm == moveCPU {
+					to = nn.CPU
+				}
 				if i == backAt {
-					to, from = a, b
+					to, from = a, to
 				}
 				if pm, err = st.PrepareMove(lo, hi, to); err != nil {
 					t.Fatalf("%s -> %s, blocks %d..%d: %v", from, to, lo, hi-1, err)
@@ -170,8 +177,12 @@ func blocksMoveBetweenDevicesWith(t *testing.T, path string, arm int, parts nn.P
 				if got := st.PrefillRows() - rows; got != 0 {
 					t.Fatalf("the move %s -> %s computed %d prompt rows again", from, to, got)
 				}
+				want := to
+				if want == nn.CPU {
+					want = ""
+				}
 				for li := wlo; li < whi; li++ {
-					if at, _ := st.DeviceOf(li); at != to {
+					if at, _ := st.DeviceOf(li); at != want {
 						t.Fatalf("block %d is on %q after a move of %d..%d to %s (declined %v)", li, at, lo, hi-1, to, mv.Declined)
 					}
 				}
@@ -203,7 +214,7 @@ func blocksMoveBetweenDevicesWith(t *testing.T, path string, arm int, parts nn.P
 	case arm == moveWhole && mover && !m.Cfg.MoE() && moves[0].Staged != len(moves[0].Moved):
 		t.Fatalf("%d of %d blocks were prepared ahead of the move", moves[0].Staged, len(moves[0].Moved))
 	}
-	same := strings.SplitN(a, ":", 2)[0] == strings.SplitN(b, ":", 2)[0]
+	same := arm != moveCPU && strings.SplitN(a, ":", 2)[0] == strings.SplitN(b, ":", 2)[0]
 	var band float64
 	defer func() { t.Logf("largest logit difference after a move: %g", band) }()
 	for i := range ctlLogits {
