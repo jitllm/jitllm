@@ -2,18 +2,25 @@ package gpu
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 )
 
 // Eviction: a pool that cannot grow sends pages to host memory rather than refusing
 // (docs/design/device-kv-paging.md, "Errors and eviction").
 //
-// A sequence's pages leave oldest first, the same page in every layer that
-// holds the sequence, so its evicted prefix is one count (kvPool.evicted) and
-// one set of descriptors still serves every layer. An evicted page's id in the
-// sequence's run is 0 -- the dummy -- and its bytes are the layer's host copy.
-// Attention over a history with an evicted prefix streams (pagedstream.go):
-// a pass uploads as many evicted pages as the layer has free ids into them,
-// runs over them, and the passes' partials fold into one. A pass costs a Sync,
+// A sequence's pages leave each layer oldest first, each pool its own: a
+// layer's evicted prefix is its host copies (len(home[s])), and
+// kvPool.evicted is the deepest of them, so one set of descriptors still
+// serves every layer -- the streamed passes cover the deepest prefix, each
+// layer uploading the pages it holds at home and reading its resident ones
+// where they are, and the resident passes start past it. A page one layer can
+// spare goes while another layer's tail still reads the same page index. An
+// evicted page's id in the sequence's run is 0 -- the dummy -- and its bytes
+// are the layer's host copy. Attention over a history with an evicted prefix
+// streams (pagedstream.go): a pass uploads as many evicted pages as the layer
+// has free ids into them, runs over them, and the passes' partials fold into
+// one. A pass costs a Sync,
 // so its width is every page nobody holds at that moment -- memory that would
 // otherwise sit idle -- rather than a fixed count, and Config.KVStreamPages
 // forces it (SetKVStreamPages at run time). Eviction keeps one id free beyond
@@ -41,38 +48,24 @@ func (kp *kvPool) wrote(rows []pagedRow) {
 }
 
 // evictable is how many more of s's pages can leave in layer l: those wholly
-// below what s has written. A full page is never written again, and the page a
-// call writes into is not full, so no write lands on a page in host memory.
+// below what s has written, less the tail the block reads outside a pass. A
+// full page is never written again, and the page a call writes into is not
+// full, so no write lands on a page in host memory.
 func (kp *kvPool) evictable(l *kvLayerPool, s seqID) int {
-	if l.noEvict {
-		return 0
-	}
-	return min(len(l.owned[s]), kp.written[s]/kp.p) - kp.evicted[s]
+	return min(len(l.owned[s]), max(0, kp.written[s]-l.tail)/kp.p) - len(l.home[s])
 }
 
-// evictVictim is the sequence whose oldest resident page goes next: another
-// session's first -- its history is cold for this call -- then the current
-// session's, and only one with a page to spare in every layer that holds it.
-// A session stepping on the device keeps its pages (stepping). A session of
+// evictVictim is the sequence whose oldest resident page of layer l goes
+// next: another session's first -- its history is cold for this call -- then
+// the current session's, and only one with a page to spare in l. A session of
 // several sequences gives pages up as one of one does: a call streams each of
 // its sequences' pages at home in passes of its own (pagedStreamPrep). ok is
 // false when nothing can leave.
-func (g *devTier) evictVictim(sid uint64, kp *kvPool) (seqID, bool) {
+func (g *devTier) evictVictim(sid uint64, kp *kvPool, l *kvLayerPool) (seqID, bool) {
 	var best seqID
 	found, bestCur := false, true
 	for s := range kp.ranges {
-		spare, held := true, false
-		for _, l := range kp.layers {
-			if len(l.owned[s]) == 0 {
-				continue
-			}
-			held = true
-			if kp.evictable(l, s) < 1 {
-				spare = false
-				break
-			}
-		}
-		if !held || !spare {
+		if len(l.owned[s]) == 0 || kp.evictable(l, s) < 1 {
 			continue
 		}
 		cur := s.sid == sid
@@ -86,8 +79,7 @@ func (g *devTier) evictVictim(sid uint64, kp *kvPool) (seqID, bool) {
 }
 
 // evictableIn is how many pages eviction could free in layer l: every page
-// of every sequence evictVictim may choose, counted where it is spare in
-// every layer that holds it.
+// of every sequence evictVictim may choose there.
 func (g *devTier) evictableIn(sid uint64, kp *kvPool, l *kvLayerPool) int {
 	n := 0
 	for s := range kp.ranges {
@@ -95,14 +87,9 @@ func (g *devTier) evictableIn(sid uint64, kp *kvPool, l *kvLayerPool) int {
 			continue
 		}
 		spare := kp.evictable(l, s)
-		for _, x := range kp.layers {
-			if len(x.owned[s]) > 0 {
-				spare = min(spare, kp.evictable(x, s))
-			}
-		}
 		// Only a page with an id frees one here: a windowed layer's pages
 		// released behind its window go to host memory as nothing.
-		e := kp.evicted[s]
+		e := len(l.home[s])
 		for j := e; j < e+spare; j++ {
 			if l.owned[s][j] != 0 {
 				n++
@@ -112,64 +99,75 @@ func (g *devTier) evictableIn(sid uint64, kp *kvPool, l *kvLayerPool) int {
 	return n
 }
 
-// evictPage sends s's oldest resident page to host memory in every layer that holds s,
-// freeing one id in each. Callers hold g.mu, between submissions: it waits for
-// every submission in flight first (s may be another session's, stepping),
-// so nothing reads the page and its id is free at once.
-func (g *devTier) evictPage(kp *kvPool, s seqID) error {
+// evictPage sends s's oldest resident page of layer l to host memory, freeing
+// its id. Callers hold g.mu, between submissions: it waits for every
+// submission in flight first (s may be another session's, stepping), so
+// nothing reads the page and its id is free at once.
+func (g *devTier) evictPage(kp *kvPool, l *kvLayerPool, s seqID) error {
 	g.quiesce()
 	if err := g.flushTabs(); err != nil {
 		return err
 	}
-	j := kp.evicted[s]
-	off := kp.ranges[s].off
-	for li, l := range kp.layers {
-		if len(l.owned[s]) <= j {
-			continue
-		}
-		id := l.owned[s][j]
-		if l.home == nil {
-			l.home = map[seqID][][]float32{}
-		}
-		if id == 0 {
-			// Released behind a windowed layer's window: there is nothing to
-			// send, and nothing to read back.
-			l.home[s] = append(l.home[s], nil)
-			continue
-		}
-		kw, vw := l.geom.kWords(kp.p), l.geom.vWords(kp.p)
-		page, err := g.readPages(l, l.k, []uint32{id}, kw)
-		if err != nil {
-			return fmt.Errorf("evicting block %d's page %d: %w", li, j, err)
-		}
-		if vw > 0 {
-			vp, err := g.readPages(l, l.v, []uint32{id}, vw)
-			if err != nil {
-				return fmt.Errorf("evicting block %d's page %d: %w", li, j, err)
-			}
-			page = append(page, vp...)
-		}
-		l.home[s] = append(l.home[s], page)
-		l.owned[s][j] = 0
-		if l.isNamed(id) {
-			l.releaseID(id) // others may hold it: this sequence's view went to host memory
-		} else {
-			l.free = append(l.free, id)
-		}
-		if err := l.tab.WriteAt((off+j)*4, u32view([]uint32{0})); err != nil {
-			return err
-		}
+	j := len(l.home[s])
+	if l.home == nil {
+		l.home = map[seqID][][]float32{}
 	}
 	if kp.evicted == nil {
 		kp.evicted = map[seqID]int{}
 	}
-	kp.evicted[s]++
+	kp.evicted[s] = max(kp.evicted[s], j+1)
+	id := l.owned[s][j]
+	if id == 0 {
+		// Released behind a windowed layer's window: there is nothing to
+		// send, and nothing to read back.
+		l.home[s] = append(l.home[s], nil)
+		return nil
+	}
+	kw, vw := l.geom.kWords(kp.p), l.geom.vWords(kp.p)
+	page, err := g.readPages(l, l.k, []uint32{id}, kw)
+	if err != nil {
+		return fmt.Errorf("evicting block %d's page %d: %w", kp.blockOf(l), j, err)
+	}
+	if vw > 0 {
+		vp, err := g.readPages(l, l.v, []uint32{id}, vw)
+		if err != nil {
+			return fmt.Errorf("evicting block %d's page %d: %w", kp.blockOf(l), j, err)
+		}
+		page = append(page, vp...)
+	}
+	l.home[s] = append(l.home[s], page)
+	l.owned[s][j] = 0
+	if l.isNamed(id) {
+		l.releaseID(id) // others may hold it: this sequence's view went to host memory
+	} else {
+		l.free = append(l.free, id)
+	}
 	g.KVEvictions++
-	return nil
+	return l.tab.WriteAt((kp.ranges[s].off+j)*4, u32view([]uint32{0}))
+}
+
+// blockOf is the block pool l is of.
+func (kp *kvPool) blockOf(l *kvLayerPool) int {
+	for key, x := range kp.layers {
+		if x == l {
+			return keyBlock(key)
+		}
+	}
+	return -1
+}
+
+// deepest is the most of s's leading pages any layer holds in host memory.
+func (kp *kvPool) deepest(s seqID) int {
+	n := 0
+	for _, l := range kp.layers {
+		n = max(n, len(l.home[s]))
+	}
+	return n
 }
 
 // evictForRoom sends pages to host memory until layer l has want free ids and one more
-// to stream through, and reports whether it did. All or nothing: a shortfall
+// to stream through where it reads what went home (kvPool.readsHome), and reports
+// whether it did. All or nothing: a shortfall
 // sends nothing to host memory, since pages in host memory with no room left to stream them
 // back would refuse every later call rather than this one.
 // Callers hold g.mu, between submissions.
@@ -177,19 +175,75 @@ func (g *devTier) evictForRoom(sid uint64, kp *kvPool, l *kvLayerPool, want int)
 	// Pages released since the last submission (a rewind's) are room once
 	// nothing in flight reads them.
 	l.fence()
-	short := want + 1 - len(l.free)
+	through := func() int {
+		if kp.readsHome(l, 1) {
+			return 1
+		}
+		return 0
+	}
+	short := want + through() - len(l.free)
 	if short <= 0 {
 		return true
 	}
 	if g.evictableIn(sid, kp, l) < short {
 		return false
 	}
-	for len(l.free) < want+1 {
-		s, ok := g.evictVictim(sid, kp)
+	for len(l.free) < want+through() {
+		s, ok := g.evictVictim(sid, kp, l)
 		if !ok {
 			return false
 		}
-		if err := g.evictPage(kp, s); err != nil {
+		if err := g.evictPage(kp, l, s); err != nil {
+			g.LastErr = err.Error()
+			return false
+		}
+	}
+	return true
+}
+
+// evictForBytes sends other layers' spare pages to host memory until layer l
+// can grow by the ids it is short -- count, and one to stream through where
+// it reads what went home -- from the room their pools give back (stateFits'
+// kvCompact): a layer none of whose own pages can leave, its tail holding its
+// oldest resident one, grows into what the rest of the history leaves. The
+// largest pages go first. All or nothing, as evictForRoom: nothing goes home
+// where what the others can spare would not cover the growth. Callers hold
+// g.mu, between submissions.
+func (g *devTier) evictForBytes(sid uint64, kp *kvPool, l *kvLayerPool, count int) bool {
+	through := 0
+	if kp.readsHome(l, 0) {
+		through = 1
+	}
+	short := count + through - len(l.free)
+	if short <= 0 {
+		return true
+	}
+	keys := slices.Sorted(maps.Keys(kp.layers))
+	var spare uint64
+	for _, key := range keys {
+		if x := kp.layers[key]; x != l {
+			spare += kp.pageBytes(x) * uint64(g.evictableIn(sid, kp, x))
+		}
+	}
+	if spare < kp.pageBytes(l)*uint64(short) {
+		return false
+	}
+	for g.growKVLayer(kp, l, l.n+short) != nil {
+		var from *kvLayerPool
+		var s seqID
+		for _, key := range keys {
+			x := kp.layers[key]
+			if x == l || from != nil && kp.pageBytes(x) <= kp.pageBytes(from) {
+				continue
+			}
+			if v, ok := g.evictVictim(sid, kp, x); ok && g.evictableIn(sid, kp, x) > 0 {
+				from, s = x, v
+			}
+		}
+		if from == nil {
+			return false
+		}
+		if err := g.evictPage(kp, from, s); err != nil {
 			g.LastErr = err.Error()
 			return false
 		}
@@ -207,7 +261,8 @@ func (g *devTier) streamRoom(sid uint64) error {
 		return nil
 	}
 	return g.heldLayers(sid, func(li int, l *kvLayerPool) error {
-		if len(l.free) == 0 && g.growKVLayer(kp, l, l.n+1) != nil && !g.evictForRoom(sid, kp, l, 0) {
+		if len(l.free) == 0 && kp.readsHome(l, 0) && g.growKVLayer(kp, l, l.n+1) != nil && !g.evictForRoom(sid, kp, l, 0) &&
+			!g.evictForBytes(sid, kp, l, 0) {
 			return fmt.Errorf("%w: block %d has no free page to stream evicted history through", ErrKVCapacity, li)
 		}
 		return nil
@@ -264,8 +319,9 @@ func (g *devTier) rewind(sid uint64, kp *kvPool, s seqID, pos int) error {
 		var took []*kvLayerPool
 		for li, l := range kp.layers {
 			// A windowed layer's page released behind its window has no copy;
-			// the call's windowPages gives the page it writes a fresh id.
-			if len(l.owned[s]) <= keep || l.home[s][keep] == nil {
+			// the call's windowPages gives the page it writes a fresh id. A
+			// layer whose prefix stops short of it holds it on the card.
+			if len(l.owned[s]) <= keep || len(l.home[s]) <= keep || l.home[s][keep] == nil {
 				continue
 			}
 			if err := g.allocAt(sid, kp, l, s, keep); err != nil {
@@ -306,7 +362,7 @@ func (g *devTier) rewind(sid uint64, kp *kvPool, s seqID, pos int) error {
 			l.rel[s] = n
 		}
 	}
-	kp.evicted[s] = keep
+	kp.evicted[s] = kp.deepest(s)
 	g.roomGen.Add(1) // released pages are room (kvCompact), as trimKV's are
 	return g.flushTabs()
 }

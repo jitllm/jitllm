@@ -55,6 +55,9 @@ type pagedStream struct {
 type streamSeq struct {
 	s       seqID
 	evicted int
+	// first is the sequence's first row in the call: a windowed layer reads
+	// from its window's start there.
+	first int
 }
 
 // streamUp is a pass's upload: sequence seqs[k]'s evicted pages p0 to p1, or
@@ -99,11 +102,13 @@ func (g *devTier) pagedStreamPrep(sid uint64, bs *blockScratch, rows []pagedRow)
 			continue
 		}
 		known := false
-		for _, q := range seqs {
-			known = known || q.s == r.s
+		for i := range seqs {
+			if seqs[i].s == r.s {
+				known, seqs[i].first = true, min(seqs[i].first, r.pos)
+			}
 		}
 		if !known {
-			seqs, e = append(seqs, streamSeq{s: r.s, evicted: n}), max(e, n)
+			seqs, e = append(seqs, streamSeq{s: r.s, evicted: n, first: r.pos}), max(e, n)
 		}
 	}
 	st.seqs = seqs
@@ -117,11 +122,17 @@ func (g *devTier) pagedStreamPrep(sid uint64, bs *blockScratch, rows []pagedRow)
 		w = e
 	}
 	if err := g.heldLayers(sid, func(li int, l *kvLayerPool) error {
-		w = min(w, g.streamWidth(l, e))
-		// Every layer holding s holds the same prefix in host memory (kvevict.go);
-		// one that does not would have the passes read past its copies.
+		// A layer reading none of its pages at home takes no id for them.
 		for _, q := range seqs {
-			if len(l.owned[q.s]) > 0 && len(l.home[q.s]) != q.evicted {
+			if h := len(l.home[q.s]); len(l.owned[q.s]) > 0 && h > 0 && l.keyStart(q.first) < h*kp.p {
+				w = min(w, g.streamWidth(l, e))
+				break
+			}
+		}
+		// A layer's prefix is at most the deepest (kvevict.go); one past it
+		// would have the passes read past the descriptors.
+		for _, q := range seqs {
+			if len(l.home[q.s]) > q.evicted {
 				return fmt.Errorf("block %d holds %d page(s) of sequence %v at home and the pool counts %d",
 					li, len(l.home[q.s]), q.s, q.evicted)
 			}
@@ -341,10 +352,11 @@ func (g *devTier) selBufs(bs *blockScratch, l *layer) error {
 // streamDecode stages them, the rows' descriptors clipped to the pass and
 // the sweep's running partial folded from one side into the other -- and
 // between two sweeps, and after the last, the codes that read the folds once
-// over the whole history. pl is the pool the form reads. Callers hold g.mu,
-// inside the submission's session.
+// over the whole history. pl is the pool the form reads, pe its entries'
+// (nil for a block keeping none), whose evicted pages a pass uploads beside
+// pl's. Callers hold g.mu, inside the submission's session.
 func (sv *servedPart) streamRun(g *devTier, lc *launcher, s backend.Session, inst *partInst, kind nn.Part, bs *blockScratch,
-	pl *kvLayerPool, in, out []backend.Buf) error {
+	pl, pe *kvLayerPool, in, out []backend.Buf) error {
 	f, pg := sv.f, bs.pkv
 	st, t := pg.st, sv.sl.tables
 	copy(sv.in[:sv.n], in)
@@ -363,7 +375,46 @@ func (sv *servedPart) streamRun(g *devTier, lc *launcher, s backend.Session, ins
 		return err
 	}
 	kp := g.kvPages()
-	kw, vw := pl.geom.kWords(kp.p), pl.geom.vWords(kp.p)
+	// upload sends sequence q's evicted pages p0 to p1 of pool l into its
+	// first free ids and points the sequence's table at them -- at the dummy
+	// page where they lie behind the window every row of the call starts
+	// past, which the window masks. A page past the pool's own prefix is on
+	// the card: the table keeps its id.
+	upload := func(l *kvLayerPool, q streamSeq, p0, p1 int) error {
+		kw, vw := l.geom.kWords(kp.p), l.geom.vWords(kp.p)
+		home := l.home[q.s]
+		at := min(max(len(home), p0), p1)
+		if l.keyStart(q.first) >= p1*kp.p {
+			st.ids = st.ids[:0]
+			for range at - p0 {
+				st.ids = append(st.ids, 0)
+			}
+			st.ids = append(st.ids, l.owned[q.s][at:p1]...)
+			return s.WriteAt(l.tab, (kp.ranges[q.s].off+p0)*4, u32view(st.ids))
+		}
+		if len(l.free) < at-p0 {
+			return fmt.Errorf("block %d has %d free page(s) to stream %d of its own through", kp.blockOf(l), len(l.free), at-p0)
+		}
+		st.ids = append(append(st.ids[:0], l.free[:at-p0]...), l.owned[q.s][at:p1]...)
+		for i, id := range st.ids[:at-p0] {
+			if g.pagedFaulted("stream") {
+				break // the violation: the pass reads whatever the ids held
+			}
+			page := home[p0+i]
+			if page == nil {
+				continue // released behind a window every row starts past
+			}
+			if err := s.WriteAt(l.k, int(id)*kw*4, f32b(page[:kw])); err != nil {
+				return err
+			}
+			if vw > 0 {
+				if err := s.WriteAt(l.v, int(id)*vw*4, f32b(page[kw:])); err != nil {
+					return err
+				}
+			}
+		}
+		return s.WriteAt(l.tab, (kp.ranges[q.s].off+p0)*4, u32view(st.ids))
+	}
 	at := 0
 	for si, sw := range f.sweeps {
 		if si > 0 {
@@ -380,8 +431,7 @@ func (sv *servedPart) streamRun(g *devTier, lc *launcher, s backend.Session, ins
 		}
 		for j := 0; j < st.passes; j++ {
 			if u := st.up[j]; u.k >= 0 {
-				q, p0, p1 := st.seqs[u.k], u.p0, u.p1
-				home := pl.home[q.s]
+				q := st.seqs[u.k]
 				// The ids the pass before read -- this sweep's, or the sweep
 				// before's last -- are this pass's: wait for it.
 				if j > 0 || si > 0 {
@@ -389,26 +439,13 @@ func (sv *servedPart) streamRun(g *devTier, lc *launcher, s backend.Session, ins
 						return err
 					}
 				}
-				st.ids = append(st.ids[:0], pl.free[:p1-p0]...)
-				for i, id := range st.ids {
-					if g.pagedFaulted("stream") {
-						break // the violation: the pass reads whatever the ids held
-					}
-					page := home[p0+i]
-					if page == nil {
-						continue // released behind a window every row starts past
-					}
-					if err := s.WriteAt(pl.k, int(id)*kw*4, f32b(page[:kw])); err != nil {
+				if err := upload(pl, q, u.p0, u.p1); err != nil {
+					return err
+				}
+				if pe != nil {
+					if err := upload(pe, q, u.p0, u.p1); err != nil {
 						return err
 					}
-					if vw > 0 {
-						if err := s.WriteAt(pl.v, int(id)*vw*4, f32b(page[kw:])); err != nil {
-							return err
-						}
-					}
-				}
-				if err := s.WriteAt(pl.tab, (kp.ranges[q.s].off+p0)*4, u32view(st.ids)); err != nil {
-					return err
 				}
 				g.KVStreamPasses++
 			}

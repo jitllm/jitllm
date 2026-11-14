@@ -3086,6 +3086,9 @@ func (g *devTier) servedBlockAs(l *layer, li int, cs backend.Buf, pl *kvLayerPoo
 		}
 		if run != nil {
 			sl.history.Passes = true
+			for i := range sl.more {
+				sl.more[i].Passes = true
+			}
 			sl.tables[tableKey(composer.TableRunIn)], sl.tables[tableKey(composer.TableRunOut)] = run[0], run[1]
 			if context > 0 {
 				sl.tables[tableKey(composer.TableSelIn)], sl.tables[tableKey(composer.TableSelOut)] = bs.pkv.sel[0], bs.pkv.sel[1]

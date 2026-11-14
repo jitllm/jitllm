@@ -77,10 +77,12 @@ func newEvictGate(t *testing.T) *evictGate { return newEvictGateOf(t, evictModel
 // and two whose blocks alternate a window and the whole history (cohere2,
 // exaone4): the squeeze binds on the whole-history layers while the windowed
 // ones hold their window and the positions behind it a rewind may come back
-// to.
+// to; and DeepSeek V4's, whose blocks keep entries beside their rows --
+// compressed and selected among (synth-deepseek4) or heavily compressed
+// (-hca) -- both sent home and read in each pass.
 func evictModels() []string {
 	return []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen3-MOE-4x0.6B-Q4_K_M.gguf", "synth-deepseek32.gguf", "synth-minimaxm3.gguf",
-		"synth-cohere2.gguf", "synth-exaone4.gguf"}
+		"synth-cohere2.gguf", "synth-exaone4.gguf", "synth-deepseek4.gguf", "synth-deepseek4-hca.gguf"}
 }
 
 func newEvictGateOf(t *testing.T, name string) *evictGate {
@@ -227,6 +229,9 @@ func (eg *evictGate) run(t *testing.T, sq *evictSqueeze, cfg func(*gpu.Config), 
 	before := g.Stats().KVStreamPasses
 	r.logits = append(r.logits, eg.second(t, st)...)
 	r.st, r.turnAfter = g.Stats(), st.devCount()
+	if sq == nil {
+		r.squeeze.rest = max(r.squeeze.rest, evictRest(r.st)-min(evictRest(r.st), evictRest(s0)))
+	}
 	r.turnPasses = r.st.KVStreamPasses - before
 	return r
 }
@@ -297,7 +302,7 @@ func evictionRunsPastTheBudget(t *testing.T, eg *evictGate) {
 	host, hat := worstStep(got.logits, all)
 	ctl, _ := worstStep(free.logits, all)
 	t.Logf("%d tokens past a %d-token prompt, squeezed at step %d to %.3f MiB of history (%.3f MiB at the end "+
-		"unconstrained) and %.3f MiB besides it, pool %.2f MiB: %d page(s) of every layer sent home, %d streamed passes; "+
+		"unconstrained) and %.3f MiB besides it, pool %.2f MiB: %d layer page(s) sent home, %d streamed passes; "+
 		"worst logit NMSE %.3e against the unconstrained card (step %d), %.3e against the host (step %d; "+
 		"the unconstrained card reads %.3e)", evictDecode, len(eg.prompt), eg.mid(), float64(free.squeeze.mid)/(1<<20),
 		float64(free.squeeze.end)/(1<<20), float64(free.squeeze.rest)/(1<<20), float64(got.st.KVPoolBytes)/(1<<20),

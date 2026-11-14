@@ -254,7 +254,7 @@ func (g *devTier) pagedAppend(sid uint64, seqs []seqEnd) error {
 func (g *devTier) windowPages(sid uint64, kp *kvPool, li int, l *kvLayerPool, se seqEnd) error {
 	s, P := se.s, kp.p
 	need := (se.end + P - 1) / P
-	ev := kp.evicted[s]
+	ev := len(l.home[s])
 	for j := se.start / P; j < need; j++ {
 		if l.owned[s][j] == 0 && j >= ev {
 			if err := g.allocAt(sid, kp, l, s, j); err != nil {
@@ -498,13 +498,14 @@ func (g *devTier) pagedLayer(sid uint64, l *layer, li int, p *nn.LayerPlan) erro
 	}
 	// The window paged attention applies to this block (pagedStage's descW).
 	kp.layers[li].win, kp.layers[li].chunked = l.win, l.chunked
+	kp.layers[li].tail = historyTail(p.Graph)
 	if l.kv == nil {
 		l.kv = map[uint64]*kvPair{}
 	}
 	fresh := l.kv[sid] == nil
 	l.kv[sid] = &kvPair{paged: true}
-	// A block keeping entries holds them beside its rows, on the card, at
-	// its rows' seats and context.
+	// A block keeping entries holds them beside its rows at its rows' seats,
+	// and sends them home with its rows.
 	if period, w := entriesOf(p.Graph); period > 1 {
 		eg := kvGeom{kvRow: w, mla: true, period: period}
 		if err := g.addKVLayer(kp, entKey(li), eg, 1+seats); err != nil {
@@ -513,7 +514,6 @@ func (g *devTier) pagedLayer(sid uint64, l *layer, li int, p *nn.LayerPlan) erro
 			}
 			return err
 		}
-		kp.layers[entKey(li)].noEvict = true
 	}
 	for _, key := range []int{li, entKey(li)} {
 		if _, ok := kp.layers[key]; ok {
@@ -714,7 +714,7 @@ func (g *devTier) pagedMigrate(sid uint64, li, base int, k, v []float32, pos int
 			return err
 		}
 	}
-	e := min(kp.evicted[s], npages)
+	e := min(len(pl.home[s]), npages)
 	if toDevice && e > 0 && len(pl.owned[s]) == 0 {
 		if err := g.ensureRange(kp, s, e); err != nil {
 			return err

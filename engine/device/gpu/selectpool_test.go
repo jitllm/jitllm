@@ -60,22 +60,24 @@ func TestSelectingHistoryPages(t *testing.T) {
 		if err := d.shrinkKVLayer(kp, l); err != nil {
 			t.Fatal(err)
 		}
-		if l.n != 2 || l.noEvict || l.ctx != 0 {
-			t.Fatalf("%s: placed at %d pages, %d after a compaction (noEvict %v, context %d pages), want the working set of 2",
-				c.name, held, l.n, l.noEvict, l.ctx)
+		if l.n != 2 || l.ctx != 0 {
+			t.Fatalf("%s: placed at %d pages, %d after a compaction (context %d pages), want the working set of 2",
+				c.name, held, l.n, l.ctx)
 		}
 		t.Logf("%s: %d pages placed, %d after a compaction", c.name, held, l.n)
 	}
 
-	// The pool's own side: a noEvict layer offers no page, a plain one does.
+	// The pool's own side: every page wholly below what was written is
+	// offered, less the ones already at home.
 	kp := newKVPool(64, 0)
 	s := seqID{1, 0}
 	kp.written = map[seqID]int{s: 640}
-	for _, noEvict := range []bool{false, true} {
-		l := &kvLayerPool{owned: map[seqID][]uint32{s: make([]uint32, 10)}, noEvict: noEvict}
-		got, want := kp.evictable(l, s), map[bool]int{false: 10, true: 0}[noEvict]
-		if got != want {
-			t.Fatalf("noEvict %v: %d page(s) evictable, want %d", noEvict, got, want)
-		}
+	l := &kvLayerPool{owned: map[seqID][]uint32{s: make([]uint32, 10)}}
+	if got := kp.evictable(l, s); got != 10 {
+		t.Fatalf("%d page(s) evictable, want 10", got)
+	}
+	l.home = map[seqID][][]float32{s: make([][]float32, 3)}
+	if got := kp.evictable(l, s); got != 7 {
+		t.Fatalf("with 3 at home, %d page(s) evictable, want 7", got)
 	}
 }

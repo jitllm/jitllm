@@ -320,7 +320,7 @@ func copyHistory(sid uint64, li int, src, dst *devTier, pos int) (string, uint64
 		}
 		P := skp.p
 		npages := (n + P - 1) / P
-		raw := skp.p == dkp.p && spl.geom == dpl.geom && skp.evicted[s] == 0 &&
+		raw := skp.p == dkp.p && spl.geom == dpl.geom &&
 			len(spl.home[s]) == 0 && len(spl.owned[s]) >= npages && !slices.Contains(spl.owned[s][:npages], 0)
 		if raw {
 			if err := dv.rewind(sid, dkp, s, n); err != nil {
@@ -334,7 +334,7 @@ func copyHistory(sid uint64, li int, src, dst *devTier, pos int) (string, uint64
 			if err := dv.flushTabs(); err != nil {
 				return "", 0, err
 			}
-			raw = dkp.evicted[s] == 0 && len(dpl.owned[s]) >= npages && !slices.Contains(dpl.owned[s][:npages], 0)
+			raw = len(dpl.home[s]) == 0 && len(dpl.owned[s]) >= npages && !slices.Contains(dpl.owned[s][:npages], 0)
 		}
 		if !raw {
 			kv := dpl.geom.kvRow

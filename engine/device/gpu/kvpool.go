@@ -136,8 +136,42 @@ type kvLayerPool struct {
 	// rel is where windowPages' walk starts for sequence s: every page below
 	// it was released.
 	rel map[seqID]int
-	// noEvict keeps the pool's pages on the card.
-	noEvict bool
+	// tail is how many positions behind a sequence's newest the block reads
+	// outside a pass over its history (historyTail): eviction leaves them.
+	tail int
+}
+
+// historyTail is how many positions behind its newest block graph g reads
+// outside a pass over its history: a history pool's windows (OpHistoryPool),
+// the windows before the row's its segments reach and its own.
+func historyTail(g *graph.Graph) int {
+	if g == nil {
+		return 0
+	}
+	n := 0
+	for _, o := range g.Ops {
+		if o.Kind != graph.OpHistoryPool {
+			continue
+		}
+		back := uint64(0)
+		for i := 0; i+3 < len(o.Attr.Words); i += 4 {
+			back = max(back, o.Attr.Words[i])
+		}
+		n = max(n, (int(back)+1)*o.Attr.Span)
+	}
+	return n
+}
+
+// readsHome reports whether a call at a sequence's next position reads any of
+// its pages at home on layer l, were more of them sent there: a windowed
+// layer's rows start past the pages behind their window.
+func (kp *kvPool) readsHome(l *kvLayerPool, more int) bool {
+	for s, ids := range l.owned {
+		if e := len(l.home[s]) + more; len(ids) > 0 && e > 0 && l.keyStart(kp.written[s]) < e*kp.p {
+			return true
+		}
+	}
+	return false
 }
 
 // keyStart is the first key position pos attends on this layer: pagedStage's
@@ -176,8 +210,8 @@ type kvPool struct {
 	// (word 0 is the dummy entry); tabFree runs given back, reused first-fit.
 	tabWords, tabTop int
 	tabFree          []tabRange
-	// evicted is how many of sequence s's leading pages are in host memory, the same
-	// count in every layer that holds s (kvevict.go).
+	// evicted is the most of sequence s's leading pages any layer holds in host
+	// memory: each layer's own count is its host copies (kvevict.go).
 	evicted map[seqID]int
 	// written is the positions of sequence s a completed submission wrote:
 	// only pages wholly below it may leave, so a page a call is about to write
@@ -342,7 +376,7 @@ func (g *devTier) allocPages(sid uint64, kp *kvPool, l *kvLayerPool, s seqID, co
 		if err != nil {
 			g.LastErr = "KV growth: " + err.Error()
 		}
-		if err != nil && !g.evictForRoom(sid, kp, l, count) {
+		if err != nil && !g.evictForRoom(sid, kp, l, count) && !(errors.Is(err, ErrKVCapacity) && g.evictForBytes(sid, kp, l, count)) {
 			if !errors.Is(err, ErrKVCapacity) || g.asking || !g.streamForRoom(kp.pageBytes(l)*uint64(want-l.n)) {
 				return err
 			}

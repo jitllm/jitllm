@@ -29,7 +29,7 @@ func (g *devTier) entriesMigrate(sid uint64, li int, e []float32, pos int, toDev
 	}
 	npages := (pos + P - 1) / P
 	kw := composer.History{Period: per}.Slots(P) * w
-	ev := min(kp.evicted[s], npages)
+	ev := min(len(pl.home[s]), npages)
 	if toDevice {
 		if ev > 0 && len(pl.owned[s]) == 0 {
 			if err := g.ensureRange(kp, s, ev); err != nil {

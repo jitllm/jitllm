@@ -4440,7 +4440,7 @@ func (g *devTier) layersSession(s backend.Session) {
 				case sv.f.split > 0:
 					serr = sv.pagedRun(g, lc, s, inst, kind, l, p.NExpert, g.hostFns[sid][li].uses, in, outs)
 				case len(sv.f.sweeps) > 0:
-					serr = sv.streamRun(g, lc, s, inst, kind, bs, g.kvp.layers[l.kvSrc], in, outs)
+					serr = sv.streamRun(g, lc, s, inst, kind, bs, g.kvp.layers[l.kvSrc], g.kvp.layers[entKey(l.kvSrc)], in, outs)
 				default:
 					serr = sv.runAs(g, lc, inst, kind, in, outs)
 				}
