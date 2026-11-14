@@ -56,7 +56,7 @@ func TestEveryModelRunsOnACard(t *testing.T) {
 	defer g.Close()
 	slow, only := os.Getenv("JITLLM_SLOW") != "", os.Getenv("JITLLM_SLOW") == "only"
 	pick := os.Getenv("JITLLM_AUDIT_MODEL")
-	ran, last, held := 0, "", [2]uint64{}
+	ran, executed, last, held := 0, 0, "", [2]uint64{}
 	// seen says a relocation has moved an instance's account: the count
 	// composedNothing reads can see a composition.
 	seen := false
@@ -73,6 +73,7 @@ func TestEveryModelRunsOnACard(t *testing.T) {
 		heldAfter(t, g, last, &held)
 		last = src.name
 		t.Run(src.name, func(t *testing.T) {
+			executed++
 			path := src.path
 			if src.hf {
 				path = jlmOfSafetensors(t, src.path)
@@ -203,7 +204,14 @@ func TestEveryModelRunsOnACard(t *testing.T) {
 	if ran == 0 {
 		t.Fatalf("no model ran on the card (JITLLM_AUDIT_MODEL %q) -- this gate proved nothing", pick)
 	}
-	if !seen {
+	// Over a slice of the list (-run), the slices together hold the models
+	// that move a block to the CPU: each says whether it saw one.
+	switch {
+	case seen:
+		t.Logf("a model moved a block to the CPU: composedNothing saw a composition")
+	case executed < ran:
+		t.Logf("no model of these %d of %d moved a block to the CPU", executed, ran)
+	default:
 		t.Fatal("no model moved a block to the CPU: composedNothing was never shown to see a composition")
 	}
 }
