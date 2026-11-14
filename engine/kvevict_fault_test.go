@@ -13,10 +13,10 @@ import (
 // held, and demands the comparison fail.
 func TestKVEvictionGateDiscriminates(t *testing.T) {
 	eg := newEvictGate(t)
-	free := eg.run(t, false, nil)
+	free := eg.run(t, nil, nil)
 	var f gpu.Faults
 	f.SetPagedFault("stream")
-	got := eg.run(t, true, nil, gpu.WithFaults(&f))
+	got := eg.run(t, &free.squeeze, nil, gpu.WithFaults(&f))
 	if got.st.KVStreamPasses == 0 {
 		t.Fatal("no streamed pass ran: the violation was never exercised")
 	}
@@ -34,10 +34,10 @@ func TestKVEvictionGateDiscriminates(t *testing.T) {
 // indexer to the unconstrained card.
 func TestComposedSelectionFoldDiscriminates(t *testing.T) {
 	eg := newEvictGateOf(t, "synth-deepseek32.gguf")
-	free := eg.run(t, false, nil)
+	free := eg.run(t, nil, nil)
 	var f gpu.Faults
 	f.SetPagedFault("selfold")
-	got := eg.run(t, true, nil, gpu.WithFaults(&f))
+	got := eg.run(t, &free.squeeze, nil, gpu.WithFaults(&f))
 	if got.st.ComposedStreamPasses == 0 {
 		t.Fatal("no composed pass ran: the violation was never exercised")
 	}
@@ -53,10 +53,10 @@ func TestComposedSelectionFoldDiscriminates(t *testing.T) {
 // pass's keys count, and demands the comparison fail.
 func TestComposedPassFoldDiscriminates(t *testing.T) {
 	eg := newEvictGate(t)
-	free := eg.run(t, false, nil)
+	free := eg.run(t, nil, nil)
 	var f gpu.Faults
 	f.SetPagedFault("passfold")
-	got := eg.run(t, true, nil, gpu.WithFaults(&f))
+	got := eg.run(t, &free.squeeze, nil, gpu.WithFaults(&f))
 	if got.st.ComposedStreamPasses == 0 {
 		t.Fatal("no composed pass ran: the violation was never exercised")
 	}

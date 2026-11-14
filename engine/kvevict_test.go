@@ -15,9 +15,10 @@ import (
 )
 
 // evictRun is one arm of the eviction gate: the model placed whole on the
-// card, a short prompt, then -- squeezed -- the budget held at what the card
-// already spends plus a few pages, so the history can only grow by sending its oldest pages
-// home, and a teacher-forced decode far past what the pool holds.
+// card, a short prompt and half the decode, then -- squeezed -- the budget held
+// at what the card spends there, so the history can only grow by sending its
+// oldest pages home, and the rest of a teacher-forced decode far past what the
+// pool holds.
 type evictRun struct {
 	logits   [][]float32
 	st       gpu.Stats
@@ -26,6 +27,18 @@ type evictRun struct {
 	// turnPasses is how many streamed passes the second prompt took, and
 	// turnAfter the blocks on the card after it.
 	turnPasses, turnAfter int
+	// squeeze is what an unconstrained arm measured for the squeezed arms of
+	// its configuration.
+	squeeze evictSqueeze
+}
+
+// evictSqueeze is what an unconstrained arm measures from the decode's middle
+// step on: rest, the most it allocated besides its history -- scratch and
+// tables a longer history grows -- which a squeezed arm's budget leaves room
+// for, so it binds on history alone; and the history it held there and at the
+// end of the decode, which shows how far the history outgrew the squeeze.
+type evictSqueeze struct {
+	rest, mid, end uint64
 }
 
 // evictGate is the shared setup: the model, the prompt and the host's token
@@ -59,10 +72,15 @@ func newEvictGate(t *testing.T) *evictGate { return newEvictGateOf(t, evictModel
 // evictModels are the checkpoints the eviction gate runs: a dense model, a
 // mixture, whose blocks fold their history in passes through forms of their
 // own, a selecting model, whose lightning indexer ranks its whole history's
-// positions in a sweep of passes before its attention's, and one selecting
-// by pooled block keys (MiniMax-M3's), whose sweep sums each block's keys.
+// positions in a sweep of passes before its attention's, one selecting
+// by pooled block keys (MiniMax-M3's), whose sweep sums each block's keys,
+// and two whose blocks alternate a window and the whole history (cohere2,
+// exaone4): the squeeze binds on the whole-history layers while the windowed
+// ones hold their window and the positions behind it a rewind may come back
+// to.
 func evictModels() []string {
-	return []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen3-MOE-4x0.6B-Q4_K_M.gguf", "synth-deepseek32.gguf", "synth-minimaxm3.gguf"}
+	return []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen3-MOE-4x0.6B-Q4_K_M.gguf", "synth-deepseek32.gguf", "synth-minimaxm3.gguf",
+		"synth-cohere2.gguf", "synth-exaone4.gguf"}
 }
 
 func newEvictGateOf(t *testing.T, name string) *evictGate {
@@ -70,10 +88,6 @@ func newEvictGateOf(t *testing.T, name string) *evictGate {
 	if _, err := os.Stat(p); err != nil {
 		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
-	// No KV prewarm: the pool grows ahead of the history into the room placement
-	// left (112 pages on a 3050 Ti, covering the gate's 449 positions whole),
-	// and a budget squeezed after the prompt then never binds.
-	instOpts := []Option{WithKVPrewarm(false)}
 	m, err := model.Open(jlmOf(t, p))
 	if err != nil {
 		t.Fatal(err)
@@ -82,7 +96,7 @@ func newEvictGateOf(t *testing.T, name string) *evictGate {
 	eg := &evictGate{m: m}
 	eg.prompt = m.Vocab.Encode(strings.Repeat("The clerk counted barrels of salt on the upper floor. ", 3), true)[:24]
 	eg.turn = m.Vocab.Encode(strings.Repeat("The river rose every spring until the bridges were islands. ", 10), false)[:100]
-	st := testInstance(t, m, eg.seq(), instOpts...)
+	st := testInstance(t, m, eg.seq())
 	defer st.Close()
 	lg, err := st.Prefill(eg.prompt)
 	if err != nil {
@@ -122,11 +136,14 @@ func (eg *evictGate) second(t *testing.T, st *Instance) [][]float32 {
 	return out
 }
 
+// mid is the decode step the squeezed arms are squeezed at.
+func (eg *evictGate) mid() int { return len(eg.ids) / 2 }
+
 // open is an arm's device and instance, the model wholly placed, the prompt in
-// and the first decode step taken (its logits first); squeeze then holds the
-// budget at a few pages past the card's slack. cfg, where set, changes the
-// arm's device configuration.
-func (eg *evictGate) open(t *testing.T, squeeze bool, cfg func(*gpu.Config), extra ...gpu.Option) (*gpu.GPU, *Instance, int, []float32) {
+// and the decode taken to its middle step (each step's logits); sq, where set,
+// then holds the budget at what the card spends there and what sq measured.
+// cfg, where set, changes the arm's device configuration.
+func (eg *evictGate) open(t *testing.T, sq *evictSqueeze, cfg func(*gpu.Config), extra ...gpu.Option) (*gpu.GPU, *Instance, int, [][]float32) {
 	g, err := openGPU(t, append([]gpu.Option{gpu.WithDevices(testdevices.Like(t, "cuda:0")), gpu.WithDeviceTune(gpu.TuneOff),
 		gpu.WithConfig(func(c *gpu.Config) {
 			c.KVPage = 64 // the smallest page: several over a short history
@@ -151,45 +168,61 @@ func (eg *evictGate) open(t *testing.T, squeeze bool, cfg func(*gpu.Config), ext
 	if _, err := st.Prefill(eg.prompt); err != nil {
 		t.Fatal(err)
 	}
-	// The first step before the budget is cut, so the decode's own scratch
-	// is built and charged first.
-	lg, err := st.Forward(eg.ids[0])
-	if err != nil {
-		t.Fatal(err)
+	// Half the decode before the budget is cut, so the decode's own scratch
+	// is built and charged first, and every layer holding its whole history
+	// holds pages enough to send home: the page a growth takes and the one it
+	// streams through.
+	var logits [][]float32
+	for _, id := range eg.ids[:eg.mid()] {
+		lg, err := st.Forward(id)
+		if err != nil {
+			t.Fatalf("step %d: %v (%s)", len(logits), err, g.Err())
+		}
+		logits = append(logits, append([]float32(nil), lg...))
 	}
-	first := append([]float32(nil), lg...)
-	if squeeze {
-		// A few pages of slack: the pool fills them, and past them the
-		// history can grow only by sending pages home. Evicting needs room to
-		// stream through; a pool of the dummy and one page refuses instead.
-		// The prompt is under a page, so each layer holds one: two more a
-		// layer.
-		// A budget of what the card holds gives the pool's free pages back
-		// first (SetBudget), so the slack is counted from what is left. The
-		// card keeps its slack free beside every allocation (Stats.Slack):
-		// the two pages a layer are past it.
-		st := g.Stats()
-		if _, err := g.SetBudget(st.BudgetUsed); err != nil {
+	if sq != nil {
+		// The pages the history holds and what the unconstrained arm
+		// allocated besides it: past them the history can grow only by
+		// sending pages home. No room for growth: a layer's growth is
+		// charged its buffers' rounding too, which would take the room before
+		// the pages did. A budget of what the card holds gives the pool's
+		// free pages back first (SetBudget), so the room is counted from what
+		// is left, past the slack the card keeps free beside every
+		// allocation (Stats.Slack).
+		s := g.Stats()
+		if _, err := g.SetBudget(s.BudgetUsed); err != nil {
 			t.Fatal(err)
 		}
-		st = g.Stats()
-		if _, err := g.SetBudget(st.BudgetUsed + st.Slack + 2*st.KVBytes); err != nil {
+		s = g.Stats()
+		if _, err := g.SetBudget(s.BudgetUsed + s.Slack + sq.rest); err != nil {
 			t.Fatal(err)
 		}
 	}
-	return g, st, resident, first
+	return g, st, resident, logits
 }
 
-func (eg *evictGate) run(t *testing.T, squeeze bool, cfg func(*gpu.Config), extra ...gpu.Option) evictRun {
-	g, st, resident, first := eg.open(t, squeeze, cfg, extra...)
-	r := evictRun{resident: resident, logits: [][]float32{first}}
-	for _, id := range eg.ids[1:] {
+// evictRest is what the card's budget holds besides the history's pool.
+func evictRest(s gpu.Stats) uint64 { return s.BudgetUsed - min(s.BudgetUsed, s.KVPoolBytes) }
+
+// run is one arm through the decode and the second prompt: squeezed by sq, or
+// unconstrained where sq is nil, measuring the squeeze for its configuration.
+func (eg *evictGate) run(t *testing.T, sq *evictSqueeze, cfg func(*gpu.Config), extra ...gpu.Option) evictRun {
+	g, st, resident, logits := eg.open(t, sq, cfg, extra...)
+	r := evictRun{resident: resident, logits: logits}
+	s0 := g.Stats()
+	r.squeeze.mid = s0.KVBytes
+	for _, id := range eg.ids[eg.mid():] {
 		lg, err := st.Forward(id)
 		if err != nil {
 			t.Fatalf("step %d: %v (%s)", len(r.logits), err, g.Err())
 		}
 		r.logits = append(r.logits, append([]float32(nil), lg...))
+		if sq == nil {
+			s := g.Stats()
+			r.squeeze.rest = max(r.squeeze.rest, evictRest(s)-min(evictRest(s), evictRest(s0)))
+		}
 	}
+	r.squeeze.end = g.Stats().KVBytes
 	r.after = st.devCount()
 	before := g.Stats().KVStreamPasses
 	r.logits = append(r.logits, eg.second(t, st)...)
@@ -227,11 +260,11 @@ func TestKVEvictionRunsPastTheBudget(t *testing.T) {
 }
 
 func evictionRunsPastTheBudget(t *testing.T, eg *evictGate) {
-	free := eg.run(t, false, nil)
-	got := eg.run(t, true, nil)
+	free := eg.run(t, nil, nil)
+	got := eg.run(t, &free.squeeze, nil)
 	float := func(c *gpu.Config) { c.ComposedFloat = true }
-	ref := eg.run(t, true, float)
-	freeRef := eg.run(t, false, float)
+	freeRef := eg.run(t, nil, float)
+	ref := eg.run(t, &freeRef.squeeze, float)
 	for name, r := range map[string]evictRun{"composed": got, "float reference": ref} {
 		for i, n := range r.st.BlockDeclines() {
 			if n > 0 {
@@ -263,12 +296,14 @@ func evictionRunsPastTheBudget(t *testing.T, eg *evictGate) {
 	all := append(append([][]float32(nil), eg.host...), eg.hostTurn...)
 	host, hat := worstStep(got.logits, all)
 	ctl, _ := worstStep(free.logits, all)
-	t.Logf("%d tokens past a %d-token prompt, pool %.2f MiB: %d page(s) of every layer sent home, %d streamed passes; "+
+	t.Logf("%d tokens past a %d-token prompt, squeezed at step %d to %.3f MiB of history (%.3f MiB at the end "+
+		"unconstrained) and %.3f MiB besides it, pool %.2f MiB: %d page(s) of every layer sent home, %d streamed passes; "+
 		"worst logit NMSE %.3e against the unconstrained card (step %d), %.3e against the host (step %d; "+
-		"the unconstrained card reads %.3e)", evictDecode, len(eg.prompt), float64(got.st.KVPoolBytes)/(1<<20),
+		"the unconstrained card reads %.3e)", evictDecode, len(eg.prompt), eg.mid(), float64(free.squeeze.mid)/(1<<20),
+		float64(free.squeeze.end)/(1<<20), float64(free.squeeze.rest)/(1<<20), float64(got.st.KVPoolBytes)/(1<<20),
 		got.st.KVEvictions, got.st.KVStreamPasses, dev, at, host, hat, ctl)
 	// The chunk's attention scratch is far wider than a decode row's, and on a
-	// card squeezed to a few pages of slack the tier may make room for it by
+	// card squeezed to its history's pages the tier may make room for it by
 	// moving a block home: reported, not refused, since the host block still
 	// computes and the logits are held to the same bound.
 	t.Logf("the %d-token second prompt over the evicted history: %d streamed passes, %d of %d blocks on the card after it",
@@ -313,12 +348,13 @@ func evictionRunsPastTheBudget(t *testing.T, eg *evictGate) {
 // TestDecodeDoesNotAllocate's short, unconstrained window never reaches.
 func TestKVEvictionStreamsWithoutAllocating(t *testing.T) {
 	eg := newEvictGate(t)
-	g, st, _, _ := eg.open(t, true, nil)
+	free := eg.run(t, nil, nil)
+	g, st, _, _ := eg.open(t, &free.squeeze, nil)
 	// The window inside one 64-position page: sending a page home is paid
 	// once a page of growth, as committing one is, not once a token.
 	const n = 16
 	cut := len(eg.ids) - n
-	for _, id := range eg.ids[1:cut] {
+	for _, id := range eg.ids[eg.mid():cut] {
 		if _, err := st.Forward(id); err != nil {
 			t.Fatal(err)
 		}
@@ -358,8 +394,9 @@ func TestKVEvictionStreamsWithoutAllocating(t *testing.T) {
 // home copy back reads 0.20.
 func TestKVEvictionRewindsIntoAnEvictedPage(t *testing.T) {
 	eg := newEvictGate(t)
-	g, st, _, _ := eg.open(t, true, nil)
-	for _, id := range eg.ids[1:] {
+	free := eg.run(t, nil, nil)
+	g, st, _, _ := eg.open(t, &free.squeeze, nil)
+	for _, id := range eg.ids[eg.mid():] {
 		if _, err := st.Forward(id); err != nil {
 			t.Fatalf("%v (%s)", err, g.Err())
 		}
