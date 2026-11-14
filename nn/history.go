@@ -32,6 +32,11 @@ type History interface {
 	// and v (in), or gives it into them, its rows converted from or to the
 	// history's own format through conv where they are not floats.
 	MigrateKV(li int, k, v []float32, pos int, in bool, conv KVConvDevice) bool
+	// MigrateEntries takes block li's entries plane -- an entry each period
+	// positions beside its rows -- from e (in), or gives it into e: the
+	// entries pos positions closed, in order, converted from or to the
+	// plane's own format through conv where it is not floats.
+	MigrateEntries(li int, e []float32, pos int, in bool, conv KVConvDevice) bool
 	// Own makes the page block li writes pos into resident and its own,
 	// where its history is paged: a row of a step across sessions writes
 	// its own session's page before any session's rows read.

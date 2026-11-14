@@ -1078,13 +1078,14 @@ func TestSealDoesNotClaimPagesItCouldNotStore(t *testing.T) {
 type mirrorDevice struct {
 	kv       map[int][]float32
 	rec      map[int][]float32
+	ent      map[int][]float32
 	refuse   bool // MigrateKV(toDevice=false) fails, as the f16 V cache does
 	corrupt  bool // hand back a history that is not what was given
 	migrated int
 }
 
 func newMirrorDevice() *mirrorDevice {
-	return &mirrorDevice{kv: map[int][]float32{}, rec: map[int][]float32{}}
+	return &mirrorDevice{kv: map[int][]float32{}, rec: map[int][]float32{}, ent: map[int][]float32{}}
 }
 
 func (d *mirrorDevice) MatVec([]float32, quant.Type, []byte, []float32, int, int) bool {
@@ -1123,6 +1124,25 @@ func (d *mirrorDevice) MigrateKV(li int, k, v []float32, pos int, toDevice bool)
 		// again, so a history can cross twice before the gate reads it.
 		for i := range v {
 			v[i] *= -1.5
+		}
+	}
+	return true
+}
+
+// MigrateEntries keeps a block's entries on the way up and hands them back on
+// the way down, corrupted as the history is.
+func (d *mirrorDevice) MigrateEntries(li int, e []float32, pos int, toDevice bool) bool {
+	if toDevice {
+		d.ent[li] = append([]float32(nil), e...)
+		return true
+	}
+	if d.refuse {
+		return false
+	}
+	copy(e, d.ent[li])
+	if d.corrupt {
+		for i := range e {
+			e[i] *= -1.5
 		}
 	}
 	return true
@@ -1425,8 +1445,12 @@ func kvPagesRelocateWithTheLayer(t *testing.T, path string, kt model.KVType, w *
 	}
 
 	const maxSeq, page, gen = 128, 8, 12
+	// At least 40 positions, and as many more as it takes some layer to hold
+	// three pages: a model every layer of which keeps a window (DeepSeek
+	// V4's, a window of 8 and entries every few positions) holds two at 40.
+	// Every run stops at the same position: the history grows the same way.
 	warm := 40
-	prompt := make([]int32, warm)
+	prompt := make([]int32, maxSeq-gen-1)
 	for i := range prompt {
 		prompt[i] = int32(300 + i)
 	}
@@ -1447,19 +1471,27 @@ func kvPagesRelocateWithTheLayer(t *testing.T, path string, kt model.KVType, w *
 		if s.KVType() != kt {
 			t.Fatalf("asked for a %v cache and got %v", kt, s.KVType())
 		}
+		// The longest history of any layer: a sliding layer (synth-exaone4's
+		// window of 4) keeps a ring of pages, and a global one carries the rest.
+		longest := func() int {
+			most := 0
+			for i := range s.kv.layers {
+				most = max(most, s.kv.layers[i].mem.Len())
+			}
+			return most
+		}
 		var lg []float32
+		warm = 0
 		for _, id := range prompt {
+			if warm >= 40 && longest() >= 3 {
+				break
+			}
 			if lg, err = s.Forward(id); err != nil {
 				t.Fatal(err)
 			}
+			warm++
 		}
-		// The longest history of any layer: a sliding layer (synth-exaone4's
-		// window of 4) keeps a ring of pages, and a global one carries the rest.
-		most := 0
-		for i := range s.kv.layers {
-			most = max(most, s.kv.layers[i].mem.Len())
-		}
-		if most < 3 {
+		if most := longest(); most < 3 {
 			t.Fatalf("only %d page(s) after %d tokens: a single-page history cannot show "+
 				"that relocation carries the pages", most, warm)
 		}

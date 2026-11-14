@@ -792,6 +792,16 @@ func (s *SessionLanes) MigrateKV(li int, k, v []float32, pos int, toDevice bool)
 	return s.of.History().MigrateKV(li, k, v, pos, toDevice, conv)
 }
 
+// MigrateEntries is the CPU's half of moving block li's entries plane
+// (nn.EntriesMigrator), through the device's conversions.
+func (s *SessionLanes) MigrateEntries(li int, e []float32, pos int, toDevice bool) bool {
+	var conv nn.KVConvDevice
+	if c := s.l.e.kvconv; c != nil {
+		conv = c
+	}
+	return s.of.History().MigrateEntries(li, e, pos, toDevice, conv)
+}
+
 // MigrateRec is the CPU's half of moving block li's recurrent state
 // (nn.RecMigrator): out of the session's view into conv and state, or into
 // it.

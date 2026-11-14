@@ -203,6 +203,11 @@ func (s *gpuSession) MigrateKV(li int, k, v []float32, pos int, toDevice bool) b
 	return s.g.migrateKV(s.sid, li, k, v, pos, toDevice)
 }
 
+func (s *gpuSession) MigrateEntries(li int, e []float32, pos int, toDevice bool) bool {
+	defer s.leave(s.enter())
+	return s.g.migrateEntries(s.sid, li, e, pos, toDevice)
+}
+
 // PerSequenceKV forwards the tier's answer (nn.SeqKVDevice); it carries no
 // per-sequence state.
 func (s *gpuSession) PerSequenceKV() bool { return s.g.PerSequenceKV() }

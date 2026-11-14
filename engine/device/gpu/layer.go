@@ -5437,6 +5437,29 @@ func (g *devTier) migrateKV(sid uint64, li int, k, v []float32, pos int, toDevic
 	return true
 }
 
+// MigrateEntries is migrateEntries for the zero session.
+func (g *devTier) MigrateEntries(li int, e []float32, pos int, toDevice bool) bool {
+	return g.migrateEntries(0, li, e, pos, toDevice)
+}
+
+// migrateEntries moves block li's entries plane between host and device
+// (entriesMigrate), as migrateKV moves its rows.
+func (g *devTier) migrateEntries(sid uint64, li int, e []float32, pos int, toDevice bool) bool {
+	sv := g.as(sid)
+	if sv == nil {
+		return false
+	}
+	defer sv.done()
+	g = sv
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if err := g.entriesMigrate(sid, li, e, pos, toDevice); err != nil {
+		g.LastErr = fmt.Sprintf("MigrateEntries: block %d: %v", li, err)
+		return false
+	}
+	return true
+}
+
 // PrewarmLayer packs a whole block off the main loop. See GPU.Prewarm.
 func (g *devTier) PrewarmLayer(li int, p *nn.LayerPlan, w *nn.LayerWeights) bool {
 	// A lazy weight is not prewarmable: this must be safe beside a running

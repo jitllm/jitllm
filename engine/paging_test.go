@@ -49,7 +49,9 @@ func principleMixtures() []string {
 }
 
 // relocModels is principleModels and every principle mixture.
-func relocModels() []string { return append(principleModels(), principleMixtures()...) }
+func relocModels() []string {
+	return append(append(principleModels(), principleMixtures()...), "synth-deepseek4.gguf")
+}
 
 // TestPagingDoesNotChangeTheAnswer compares token ids across page budgets, from
 // fully resident down to one frame. After an eviction a frame holds another

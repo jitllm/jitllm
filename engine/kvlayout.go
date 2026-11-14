@@ -83,5 +83,10 @@ func (l kvLayout) atLayer(c *model.Config, li int) kvLayout {
 	case c.MixedGeom() && !c.MLA():
 		l.nKV, l.headDim = c.NKVHeadAt(li), c.HeadDimAt(li)
 	}
+	// A row wider than its heads -- a compressor block's, its values and
+	// gates past the key -- is one row of KVRowAt, as its pages are sized.
+	if w := c.KVRowAt(li); w > l.nKV*l.headDim {
+		l.nKV, l.headDim = 1, w
+	}
 	return l
 }

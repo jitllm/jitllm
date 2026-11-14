@@ -178,8 +178,10 @@ type kvPages struct {
 	chunked bool
 	// period, past 1, makes the layer a block's entries plane: one entry
 	// each period positions, entry j in the page of position (j+1)*period-1
-	// (composer.History.Period).
-	period int
+	// (composer.History.Period); ew is an entry's width and efmt the plane's
+	// format.
+	period, ew int
+	efmt       nn.KVFmt
 	// gone is where release's walk starts: every page below it was released
 	// or never written. A page grown below it (a row restarting in a batch)
 	// lowers it again.
@@ -589,12 +591,15 @@ func newKVCacheRange(c *model.Config, id string, nseq int, l kvLayout, store KVS
 			continue
 		}
 		s.p, s.latent, s.period = b.p, true, e.period
-		// An entries plane is held at f32 under a quantized history: its
-		// rows are no head's.
+		// An entries plane is held at f32 under a quantized history, its
+		// rows no head's, and under a bfloat16 one, whose halves only the
+		// block's own pools take (composer.MoreOf states the entries' none):
+		// as the CPU device composes them.
 		el := l.atLayer(c, e.block)
-		if el.quantized() {
+		if el.quantized() || el.fmt == nn.KVBF16 {
 			el.fmt = nn.KVF32
 		}
+		s.ew, s.efmt = e.width, el.fmt
 		s.pp = el.slots(nseq * composer.History{Period: e.period}.Slots(b.p) * e.width)
 	}
 	for li := range kc.layers {
@@ -746,6 +751,15 @@ func (s *Instance) migrateKV(li, pos int, toDevice bool) bool {
 	_, _, fk, fv := kvMigBufs(s.kvlAt(li), pos)
 	if !s.moveKV(li, pos, fk, fv, from, to) {
 		return false
+	}
+	// A block keeping entries beside its rows moves them too: a device
+	// that cannot take them keeps the block where it is.
+	if e := s.kv.entOf(li); e > 0 {
+		ep := &s.kv.layers[e]
+		eb := make([]float32, pos/ep.period*ep.ew)
+		if from.entmig == nil || to.entmig == nil || !from.entmig.MigrateEntries(li, eb, pos, false) || !to.entmig.MigrateEntries(li, eb, pos, true) {
+			return false
+		}
 	}
 	if toDevice && s.kv.share != nil {
 		s.kv.nameMoved(li, pos)
@@ -3002,4 +3016,59 @@ func (kv *kvCache) Spent(li int) {
 	pg := &kv.layers[li]
 	pg.dropResident()
 	pg.written = 0
+}
+
+// MigrateEntries is cpudev.History's: block li's entries plane, entry j of
+// the pos positions' at slot ((j+1)*period-1)%p/period of the page of
+// position (j+1)*period-1 (composer.History.Period), into or out of e. A
+// binary16 plane's rows are narrowed and widened through conv.
+func (kv *kvCache) MigrateEntries(li int, e []float32, pos int, in bool, conv nn.KVConvDevice) bool {
+	sl := kv.entOf(li)
+	if sl == 0 {
+		return false
+	}
+	s := &kv.layers[sl]
+	w, n := s.ew, pos/s.period
+	if n == 0 {
+		return true
+	}
+	if len(e) < n*w {
+		return false
+	}
+	el := kvLayout{fmt: s.efmt, nKV: 1, headDim: w}
+	rw := el.slots(w)
+	var h []float32
+	if s.efmt != nn.KVF32 {
+		if conv == nil {
+			return false
+		}
+		h = make([]float32, n*rw)
+	}
+	hb := func() []byte { return unsafe.Slice((*byte)(unsafe.Pointer(&h[0])), len(h)*4) }
+	if in && h != nil && !conv.Convert(true, w, e[:n*w], hb()) {
+		return false
+	}
+	for j := 0; j < n; j++ {
+		q := (j+1)*s.period - 1
+		pg, at := q/s.p, el.slots(q%s.p/s.period*w)
+		row := e[j*w : (j+1)*w]
+		if h != nil {
+			row = h[j*rw : (j+1)*rw]
+		}
+		if in {
+			s.grow(pg)
+			s.cow(pg)
+			copy(s.mem.K(pg)[at:at+rw], row)
+			continue
+		}
+		if !s.resident(pg) {
+			return false
+		}
+		copy(row, s.mem.K(pg)[at:at+rw])
+	}
+	if !in {
+		return h == nil || conv.Convert(false, w, e[:n*w], hb())
+	}
+	s.written = max(s.written, pos)
+	return true
 }
