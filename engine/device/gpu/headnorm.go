@@ -72,7 +72,7 @@ func (g *devTier) adoptHead(h *nn.Head) bool {
 func (g *devTier) joinHead(h *nn.Head) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if g.bs == nil || g.bs.head == nil || !g.bs.head.ok {
+	if !g.headPlaced(g.bs) {
 		return false
 	}
 	g.headGraphs(h)

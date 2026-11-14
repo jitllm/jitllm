@@ -2676,7 +2676,7 @@ func (bs *blockScratch) ragOut() backend.Buf { return bs.ragLogits }
 func (g *devTier) HeadResident() bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return g.bs != nil && g.bs.head != nil && g.bs.head.ok
+	return g.headPlaced(g.bs)
 }
 
 // headScratch gives a device that holds no block the scratch the output
@@ -2699,6 +2699,7 @@ func (g *devTier) headScratch(p *nn.LayerPlan) bool {
 // projection's resident to whoever holds it. Callers hold g.mu.
 func (g *devTier) dropHeadScratch(bs *blockScratch) {
 	g.shapeChanged()
+	g.unstreamHead(bs)
 	// So does a PrepHead after a seam gave its blocks back and grew again: the
 	// norm, its bias and the logits are allocated there, and overwriting them
 	// leaked all three (and their charge) on every round trip. bs.head is set
@@ -2759,7 +2760,7 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	// The head is the model's: a second instance on this tier finds it placed.
 	// Building it again allocated a second norm and logits buffer over the
 	// first ones, leaking both and charging the budget twice.
-	if bs.head != nil && bs.head.ok && bs.mvHead.rows == h.W.Rows {
+	if g.headPlaced(bs) && bs.mvHead.rows == h.W.Rows {
 		return g.adoptHead(h)
 	}
 	g.dropHeadScratch(bs)
@@ -2782,6 +2783,10 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	if ferr != nil {
 		foot = uint64(len(h.W.Data))
 	}
+	// A streamed projection is a page (headPage), unless the input rows read
+	// it here and hold its bytes for every token.
+	planes := foot
+	stream := h.Stream && !(h.Embed != nil && h.Embeds)
 	// The norm's bias and the output bias are the vectors the head's graph
 	// names, held with the projection and admitted with it.
 	spec, _ := headShape(h.Graph)
@@ -2809,7 +2814,24 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	// A caller that did not list the CPU has no other device for it: the
 	// projection is taken while a swap still has its slots, the streamed
 	// blocks paging out to make the room.
-	if want := foot + rows; len(g.stream) > 0 && h.NoCPU {
+	if stream {
+		// What it holds for good is its bias and per-row logits; a slot holds
+		// the projection as it passes, beside the block a run reads with it.
+		was := g.widest
+		g.widest = max(was, planes)
+		n := g.slotsIfPerm(foot - planes + rows)
+		g.widest = was
+		if g.holdsPages() && n < minSlots+1 {
+			g.LastErr = fmt.Sprintf("the output projection needs %d bytes and taking them "+
+				"would leave %d block slot(s), below the %d a swap needs", foot+rows, n, minSlots+1)
+			return false
+		}
+		if !g.room(foot+rows) && (len(g.stream) == 0 || !g.reclaim(foot+rows, -1, 0, 0)) {
+			g.LastErr = fmt.Sprintf("the output projection needs %d bytes and no streamed block "+
+				"can be paged out for it", foot+rows)
+			return false
+		}
+	} else if want := foot + rows; len(g.stream) > 0 && h.NoCPU {
 		after := g.slotsIfPerm(want)
 		for after < minSlots && g.promptW > 0 && g.narrowReserved("the output projection and a block slot") {
 			after = g.slotsIfPerm(want)
@@ -2891,6 +2913,14 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	g.headEntry, g.headSrc, g.headNormHost = h.W.Entry, &h.W.Data[0], slices.Clone(h.Norm)
 	g.charge(uint64(len(h.Norm)*4 + h.W.Rows*4))
 	g.prepEmbed(bs, h)
+	// The input rows' tables are no slot's: a streamed projection with no
+	// room beside them leaves the rows to the CPU's form of them, where the
+	// caller listed it, rather than going home itself.
+	if stream && !h.NoCPU && errors.Is(bs.embErr, errEmbedRoom) {
+		h.Embed, h.GatherRow = nil, false
+		g.headGraphs(h)
+		bs.embW, bs.posW, bs.embErr = nil, nil, nil
+	}
 	// The input rows' tables are the head's: a head whose tables have no room
 	// is given back, so placement buys the room as it does for the head
 	// (placeHead), rather than met by its first step.
@@ -2942,6 +2972,9 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 		g.Declined++
 		g.LastErr = "the composed head: " + err.Error()
 		return false
+	}
+	if stream {
+		g.streamHead(bs, h, q, planes)
 	}
 	g.prepRowsReserved()
 	return true

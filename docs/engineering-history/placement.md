@@ -4807,3 +4807,32 @@ streamed back for its attention (kvevict.go), a session's first recurrent
 state or KV cache takes a streamed block's page (stateFits, as a growing
 history does), and sessions stepping at once that find no lane free take
 turns ("Sessions at once", device-sessions.md).
+
+## The head streams
+
+A placement could not stream the output projection: ParsePlacement refused
+`head=DEV~` ("the head is read every token and does not stream"), a choice
+of the parser's, not a limit of a card. The projection is now a page when a
+placement streams it (gpu/headpage.go): its planes are charged as page bytes,
+the widest slot is at least it, and it pages as a streamed block does -- in
+for the call that reads it (submit), a victim when a block's page-in wants
+the room. It runs after the scan's last block, so inside a scan its next use
+is the distance to the scan's end, and between scans it goes first. One
+resident stays behind the head's readers (bs.head, a lane's shared head) and
+a page-in fills it again, read afresh into the card's frames; a run that
+finds no room for it beside its blocks goes alone and the head after it, so
+no submission waits holding a page another waits for. Where the input rows
+read the projection on the card (a tied embedding) its bytes are held for
+them, and it is placed as it is without; an untied model's input-row table
+with no room beside a streamed projection leaves the rows to the CPU's form
+where the caller listed the CPU.
+
+engine.TestTheHeadStreams, tinyllama-1.1b q3_K_M on a 16 GB V100 at half its
+weights (325046272 bytes), every block and the projection streamed: 4 slots,
+9 head page-ins and 9 page-outs, 180 block page-ins over 10 tokens; the
+logits are the resident projection's to the bit (NMSE 0) and 1.744e-03
+against the CPU, as the resident head's. With the page-in reading the planes
+its page-out freed (a stale slot), the card faults (illegal memory access)
+and hands its blocks back. On a card with room the projection is a page no
+page-in wants: TestDecodeDoesNotAllocate's streamed-head arm, olmoe-1b-7b,
+0 engine allocations over 64 warm tokens.

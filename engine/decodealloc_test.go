@@ -169,6 +169,25 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 					t.Run("step-chunk", func(t *testing.T) { stepAllocs(t, m, g, stepChunk, instOpts2...) })
 					t.Run("step-solo", func(t *testing.T) { stepAllocs(t, m, g, stepSolo, instOpts2...) })
 				})
+				// The head streamed (head=DEV~) on a card with room: a page no
+				// page-in wants, so a warm token pages nothing and allocates
+				// nothing. A card of its own: a head another arm placed there
+				// resident would be adopted.
+				t.Run(spec+"/decode-streamed-head", func(t *testing.T) {
+					gs, err := openGPU(t, append([]gpu.Option{gpu.WithDevices(spec)}, testTierOpts(t)...)...)
+					if err != nil || gs == nil {
+						noDevice(t, spec, err)
+					}
+					defer gs.Close()
+					io := append(append([]Option(nil), instOpts2...),
+						WithPlacement(Placement{Rest: &Place{On: spec}, Head: &Place{On: spec, Stream: true}}))
+					decodeAllocs(t, m, gs, io...)
+					n := gs.Stats().HeadsStreamed
+					if !m.Cfg.TiedEmbd && n == 0 {
+						t.Fatalf("an untied head placed streamed on %s was not a page: this arm measured a resident head", spec)
+					}
+					t.Logf("%d streamed projection(s) placed", n)
+				})
 				// Every block served whole by the composer, and the head
 				// on a tier of its own, with the prompt's
 				// row forms placed beside them (ComposedPrompt): its warm token

@@ -920,6 +920,8 @@ bug	engine/device/gpu/headnorm.go	"a %d-wide head norm for a %d-wide head"
 bug	engine/device/gpu/headnorm.go	"a second norm for a LayerNorm head"
 bug	engine/device/gpu/headnorm.go	"the head resident on this device is another projection of the same shape"
 context	engine/device/gpu/headnorm.go	"the head's second norm: %v"
+limit	engine/device/gpu/headpage.go	"the output projection needs %d bytes and no streamed block can be paged out for it"
+context	engine/device/gpu/headpage.go	"the output projection: %v"
 bug	engine/device/gpu/inflight.go	"tier: a submission began while a quiesce waited"
 bug	engine/device/gpu/inflight.go	"tier: quiesce from inside a submission"
 bug	engine/device/gpu/inflight.go	"tier: quiesce inside a submission's prologue"
@@ -1378,7 +1380,6 @@ input	engine/options.go	"model: placement %q: %q is not a block, a range N-M or 
 input	engine/options.go	"model: placement %q: %q places a block's experts beside a block that is on the CPU already"
 input	engine/options.go	"model: placement %q: %q places the experts on %q; the choices are %%cpu and %%card"
 input	engine/options.go	"model: placement %q: %q streams a block through the CPU, which has no slots to stream through"	the CPU pages its blocks through its frames; a slot to stream through is a card's
-refusal	engine/options.go	"model: placement %q: the head is read every token and does not stream"	a placement streaming the head
 context	engine/park.go	"model: park: %w"
 context	engine/park.go	"model: resume: layer %d page %d: %w"
 input	engine/placeset.go	"model: block %d is pinned to its device"

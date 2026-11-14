@@ -232,9 +232,12 @@ func TestParsePlacementStreams(t *testing.T) {
 	if q, err := ParsePlacement("0=cuda:0,1=host", false); err != nil || q.Streams() {
 		t.Errorf("a placement that streams nothing reports it does (%v)", err)
 	}
-	for _, bad := range []string{"0=host~", "head=cuda:0~", "*=cuda:0,*=host"} {
+	for _, bad := range []string{"0=host~", "head=host~", "*=cuda:0,*=host"} {
 		if _, err := ParsePlacement(bad, false); err == nil {
-			t.Errorf("%q parsed; it streams through the host, streams the head, or names * twice", bad)
+			t.Errorf("%q parsed; it streams through the host or names * twice", bad)
 		}
+	}
+	if q, err := ParsePlacement("head=cuda:0~", false); err != nil || q.Head == nil || *q.Head != (Place{On: "cuda:0", Stream: true}) {
+		t.Errorf("head=cuda:0~ reads %+v (%v), want the head streamed on cuda:0", q.Head, err)
 	}
 }

@@ -782,6 +782,12 @@ type Stats struct {
 	PageOuts int
 	// PageBytes is the device-resident bytes those page-ins brought back.
 	PageBytes uint64
+	// HeadPageIns and HeadPageOuts are a streamed projection
+	// (nn.Head.Stream) uploaded again for a call and freed for a page-in's
+	// room.
+	HeadPageIns, HeadPageOuts int
+	// HeadsStreamed is the projections placed streamed.
+	HeadsStreamed int
 	// Imports is packed tensors this device wrapped instead of copying (a
 	// unified heap). ImportBytes is what those wrappers would have cost had
 	// they been uploaded; it must not be added to KVBytes or a pool, because
@@ -980,6 +986,9 @@ func (s *Stats) add(o Stats) {
 	s.Submits += o.Submits
 	s.PageIns += o.PageIns
 	s.PageOuts += o.PageOuts
+	s.HeadPageIns += o.HeadPageIns
+	s.HeadPageOuts += o.HeadPageOuts
+	s.HeadsStreamed += o.HeadsStreamed
 	s.PageBytes += o.PageBytes
 	s.Imports += o.Imports
 	s.ImportBytes += o.ImportBytes
@@ -1453,6 +1462,9 @@ type devShared struct {
 	impAlign  uint64
 	pageBytes uint64 // pageable bytes charged right now, their rounding included: the slots in use
 	pagesIn   int    // blocks whose weights are resident right now
+	// headPg is the output projection where the caller streams it
+	// (nn.Head.Stream), nil where it is resident or on another device.
+	headPg *headPage
 	// The device unpack's staging: one buffer holding the widest covered
 	// tensor's raw GGUF bytes while the kernel reads them, charged like any
 	// other non-pageable allocation.
