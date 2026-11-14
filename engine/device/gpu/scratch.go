@@ -84,7 +84,9 @@ func (g *devTier) settleRounding() {
 	if c == nil {
 		return
 	}
-	d := int64(c.Footprint()) - int64(c.Allocated()) - int64(g.rounding)
+	// A piece's free slots are idle room the next small buffer takes, not
+	// rounding: a block paged out gives its slots back to the card's room.
+	d := int64(c.Footprint()) - int64(c.Idle()) - int64(c.Allocated()) - int64(g.rounding)
 	switch {
 	case d > 0:
 		g.rounding += uint64(d)

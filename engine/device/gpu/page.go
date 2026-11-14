@@ -133,9 +133,11 @@ func (g *devTier) slots() int {
 	// victim(), not here: the arena having a budget does not mean it has room,
 	// so this counts what the budget buys if the bytes have to be held.
 	// The permanent parts are everything charged that the slots do not hold.
-	perm := uint64(0)
+	// The slack is held back as room() holds it beside a page-in's bytes:
+	// a slot it would refuse is no slot.
+	perm := g.slack()
 	if g.used > g.pageBytes {
-		perm = g.used - g.pageBytes
+		perm += g.used - g.pageBytes
 	}
 	perm += g.reserved()
 	avail := uint64(0)
@@ -176,7 +178,7 @@ func (g *devTier) slotsIfPerm(n uint64) int {
 	}
 	g.settleRounding() // see room
 
-	perm := n
+	perm := n + g.slack()
 	if g.used > g.pageBytes {
 		perm += g.used - g.pageBytes
 	}
