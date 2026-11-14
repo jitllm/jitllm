@@ -50,6 +50,7 @@ func TestBlocksMoveBetweenDevices(t *testing.T) {
 			blocksMoveBetweenDevices(t, path, moveHost, composedParts, WithDirectMoves(false))
 		})
 		t.Run(name+"/upper", func(t *testing.T) { blocksMoveBetweenDevices(t, path, moveUpper, composedParts) })
+		t.Run(name+"/split", func(t *testing.T) { blocksMoveBetweenDevices(t, path, moveSplit, composedParts) })
 	}
 	// With the composed CPU on: a block the instance composed for the CPU at
 	// its placement there releases its composition as it goes to a card,
@@ -67,6 +68,9 @@ const (
 	moveWhole = iota
 	moveHost
 	moveUpper
+	// moveSplit names the upper half as placed, a KV-sharing group it reaches
+	// left for the move to take whole.
+	moveSplit
 )
 
 func blocksMoveBetweenDevices(t *testing.T, path string, arm int, parts nn.Parts, opts ...Option) {
@@ -89,6 +93,9 @@ func blocksMoveBetweenDevicesWith(t *testing.T, path string, arm int, parts nn.P
 		t.Fatal(err)
 	}
 	defer m.Close()
+	if arm == moveSplit && m.Cfg.NKVShared == 0 {
+		t.Skip("no KV-sharing group: the split arm is the upper arm")
+	}
 
 	const ntok, moveAt, backAt = 12, 4, 8
 	prompt := m.Vocab.Encode("The capital of France is a city that", true)
@@ -106,7 +113,7 @@ func blocksMoveBetweenDevicesWith(t *testing.T, path string, arm int, parts nn.P
 		if len(placed) == 0 {
 			t.Skipf("%s took no block of this model: %s", a, g.Err())
 		}
-		if arm == moveUpper {
+		if arm == moveUpper || arm == moveSplit {
 			if len(placed) < 2 {
 				t.Skipf("%s took %d block(s); the upper half of one is all of it", a, len(placed))
 			}
@@ -119,9 +126,15 @@ func blocksMoveBetweenDevicesWith(t *testing.T, path string, arm int, parts nn.P
 		// The range the moves name: the placed blocks and every KV-sharing
 		// group they reach, whole.
 		lo, hi := placed[0], placed[len(placed)-1]+1
+		wlo, whi := lo, hi
 		for _, li := range placed {
 			glo, ghi := st.kvSpan(li)
-			lo, hi = min(lo, glo), max(hi, ghi)
+			wlo, whi = min(wlo, glo), max(whi, ghi)
+		}
+		if arm != moveSplit {
+			lo, hi = wlo, whi
+		} else if wlo == lo && whi == hi {
+			t.Skipf("blocks %d..%d hold every KV-sharing group they reach: nothing to split", lo, hi-1)
 		}
 		var out []int32
 		var lg [][]float32
@@ -157,9 +170,9 @@ func blocksMoveBetweenDevicesWith(t *testing.T, path string, arm int, parts nn.P
 				if got := st.PrefillRows() - rows; got != 0 {
 					t.Fatalf("the move %s -> %s computed %d prompt rows again", from, to, got)
 				}
-				for _, li := range placed {
+				for li := wlo; li < whi; li++ {
 					if at, _ := st.DeviceOf(li); at != to {
-						t.Fatalf("block %d is on %q after a move to %s (declined %v)", li, at, to, mv.Declined)
+						t.Fatalf("block %d is on %q after a move of %d..%d to %s (declined %v)", li, at, lo, hi-1, to, mv.Declined)
 					}
 				}
 				moves = append(moves, mv)
