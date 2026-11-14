@@ -8,7 +8,8 @@
 // "(bad)". It decodes rather than byte-scans (C5 can be a ModRM byte, C4 is
 // PINSRW's opcode), so the VEX test is exact. It also checks the trampoline's
 // rules: no push, pop or call (RSP must be identical on every path), and no
-// write to R14 (Go's g), RBP (callee-saved and not saved by callKernel) or RSP.
+// write to RBP (callee-saved and not saved by callKernel) or RSP. R14 is a
+// kernel's: callKernel is ABI0, and its callers reload g from TLS after it.
 package ssegate
 
 import (
@@ -134,8 +135,8 @@ func Problems(t testing.TB, name string, code []byte) []string {
 		}
 		if dst := strings.SplitN(ops, ",", 2)[0]; WritesFirstOperand(mn) && !strings.Contains(dst, "[") {
 			switch dst {
-			case "r14", "r14d", "r14w", "r14b", "rbp", "ebp", "bp", "bpl", "rsp", "esp", "sp", "spl":
-				add("%s: writes %s (R14 is Go's g; RBP is not saved by callKernel; RSP must not move)", where, dst)
+			case "rbp", "ebp", "bp", "bpl", "rsp", "esp", "sp", "spl":
+				add("%s: writes %s (RBP is not saved by callKernel; RSP must not move)", where, dst)
 			}
 		}
 	}
