@@ -17,6 +17,7 @@ import (
 // run every graph rather than one.
 func principleFixtures() []string {
 	names := []string{"synth-bitnet-f16.gguf", "synth-bitnet-i2s.gguf", "synth-deepseek32.gguf",
+		"synth-deepseek4.gguf", "synth-deepseek4-hca.gguf",
 		"synth-falconh1.gguf", "synth-gemma3n.gguf", "synth-gemma4.gguf", "synth-gemma4-kv.gguf", "synth-gemma4-moe.gguf",
 		"synth-gemma4-e.gguf", "synth-gemma4-wide.gguf", "synth-glm4.gguf", "synth-granitehybrid.gguf",
 		"synth-hunyuan.gguf", "synth-kimik3.gguf", "synth-lfm2.gguf", "synth-mamba2.gguf", "synth-minimaxm3.gguf",
@@ -50,7 +51,7 @@ func principleMixtures() []string {
 
 // relocModels is principleModels and every principle mixture.
 func relocModels() []string {
-	return append(append(principleModels(), principleMixtures()...), "synth-deepseek4.gguf")
+	return append(principleModels(), principleMixtures()...)
 }
 
 // TestPagingDoesNotChangeTheAnswer compares token ids across page budgets, from

@@ -3054,11 +3054,10 @@ func (g *devTier) servedBlockAs(l *layer, li int, cs backend.Buf, pl *kvLayerPoo
 	}
 	// A block keeping entries reads them as its history 1.
 	var ek, etab backend.Buf
-	var more []composer.History
+	period := 0
 	if g.kvp != nil {
 		if pe := g.kvp.layers[entKey(l.kvSrc)]; pe != nil {
-			ek, etab = pe.k, pe.tab
-			more = []composer.History{{ValuesInKeys: true, Period: pe.geom.period}}
+			ek, etab, period = pe.k, pe.tab, pe.geom.period
 		}
 	}
 	// A step that keeps its rows runs a linear block's keep form.
@@ -3078,9 +3077,10 @@ func (g *devTier) servedBlockAs(l *layer, li int, cs backend.Buf, pl *kvLayerPoo
 			weights: map[jlm.Role]*resident{}, vectors: map[jlm.Role]backend.Buf{},
 			tables: map[composer.TableKey]backend.Buf{tableKey(composer.TableAngles): cs, tableKey(composer.TableKeys): kk, tableKey(composer.TableValues): kv, tableKey(composer.TablePages): tab, tableKey(composer.TableRows): rows,
 				tableKey(composer.TableWindows): rowsW, tableKey(composer.TableQOff): qOff, tableKey(composer.TableCall): calls},
-			history: poolHistory(geom), more: more,
-			keys: keys, page: page, seqs: seqs, paged: l.paged(), context: context}
+			history: poolHistory(geom),
+			keys:    keys, page: page, seqs: seqs, paged: l.paged(), context: context}
 		if ek != nil {
+			sl.more = []composer.History{{ValuesInKeys: true, Period: period}}
 			sl.tables[composer.TableKey{Table: composer.TableKeys, Instance: 1}] = ek
 			sl.tables[composer.TableKey{Table: composer.TablePages, Instance: 1}] = etab
 		}
