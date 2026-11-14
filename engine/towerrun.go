@@ -190,7 +190,12 @@ func (in *Instance) newTowerRun(tg *model.TowerGraphs, base int, t *jlm.Tower) (
 		}
 	}
 	tr.tapRows, tr.tapBuf = make([][]float32, len(tg.Taps)), make([][]float32, len(tg.Taps))
+	// A block an unlisted CPU left for after the offers is prepared there
+	// only if no device takes it (prepLeft).
 	for li := ts.lo; li < ts.hi; li++ {
+		if li < len(ts.unprepped) && ts.unprepped[li] {
+			continue
+		}
 		if why := ts.places[routeLanes].(nn.BlockRows).RowsServed(li); why != nn.DeclineServes {
 			ts.Close()
 			return nil, fmt.Errorf("model: the tower's block %d does not run on the CPU: %v", li-in.m.TowerBase, why)
