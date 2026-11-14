@@ -261,9 +261,9 @@ func greedyMatchesLlamaCpp(t *testing.T, extra ...engine.Option) {
 				// MSA model forces it on and a log that still reports it off
 				// is refused.
 				msa := m.Cfg.Selection() != nil && m.Cfg.Selection().Block > 1 && !m.Cfg.MLA()
-				llama := func(sess string) []byte {
-					for _, g := range []string{ngl, "0"} {
-						args := []string{"-m", path, "-p", prompt, "-n", itoa(n),
+				run := func(sess, text string, n int, gs ...string) []byte {
+					for _, g := range gs {
+						args := []string{"-m", path, "-p", text, "-n", itoa(n),
 							"--temp", "0", "-no-cnv", "--no-warmup", "-ngl", g, "-c", "512"}
 						if msa {
 							args = append(args, "-fa", "on")
@@ -284,8 +284,14 @@ func greedyMatchesLlamaCpp(t *testing.T, extra ...engine.Option) {
 							return out
 						}
 					}
-					t.Skip("llama-completion would not run this model")
 					return nil
+				}
+				llama := func(sess string) []byte {
+					out := run(sess, prompt, n, ngl, "0")
+					if out == nil {
+						t.Skip("llama-completion would not run this model")
+					}
+					return out
 				}
 				// Its stdout is the prompt plus the completion, wrapped over any
 				// number of lines, and it appends "[end of text]" on EOS -- jitllm
@@ -319,6 +325,28 @@ func greedyMatchesLlamaCpp(t *testing.T, extra ...engine.Option) {
 					return
 				}
 				want := lids[len(ids):]
+				// The offloaded run's backend can part from llama.cpp's own CPU
+				// run: on the M4, ERNIE-4.5-0.3B's "Once upon a time" chain from
+				// llama.cpp on Metal reads "}." at position 16, where llama.cpp on
+				// the CPU reads "," from the same ids, on the M4 and on an x86 host
+				// alike, as jitllm does by 0.833. cpuSays is llama.cpp's CPU run's
+				// next token after want[:at], or -1 where the prefix does not
+				// tokenize back to the same ids.
+				cpuSays := func(at int) int32 {
+					if ngl == "0" {
+						return -1
+					}
+					sess := filepath.Join(t.TempDir(), "cpu.bin")
+					if run(sess, prompt+m.Vocab.Decode(want[:at]), 1, "0") == nil {
+						return -1
+					}
+					got, err := sessionTokens(sess)
+					fed := append(slices.Clone(ids), want[:at]...)
+					if err != nil || len(got) != len(fed)+1 || !slices.Equal(got[:len(fed)], fed) {
+						return -1
+					}
+					return got[len(fed)]
+				}
 
 				// Teacher-forced: feed llama.cpp's own ids and compare at every
 				// position. The greedy prefix below stops at the first near-tie,
@@ -349,6 +377,10 @@ func greedyMatchesLlamaCpp(t *testing.T, extra ...engine.Option) {
 						case recorded && pos == i:
 							t.Logf("teacher-forced position %d: jitllm %q (margin %.3f), llama.cpp %q -- a "+
 								"recorded near-tie (recordedNearTies)", i, m.Vocab.Text(bi), best-second, m.Vocab.Text(want[i]))
+						case best-second > tieMargin && cpuSays(i) == bi:
+							t.Logf("teacher-forced position %d: jitllm %q (margin %.3f), llama.cpp offloaded %q and on "+
+								"the CPU %q from the same ids: llama.cpp disagrees with itself here",
+								i, m.Vocab.Text(bi), best-second, m.Vocab.Text(want[i]), m.Vocab.Text(bi))
 						case best-second > tieMargin:
 							t.Errorf("teacher-forced position %d: jitllm %q (margin %.3f), "+
 								"llama.cpp %q -- fed llama.cpp's own ids, so both engines saw "+
