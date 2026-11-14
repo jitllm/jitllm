@@ -650,6 +650,9 @@ type Stats struct {
 	RecPointsKept, RecPointsLoaded int
 	// KVStreamPasses counts attention passes over evicted history.
 	KVStreamPasses int
+	// KVStreamJoint counts calls streaming the evicted history of more
+	// than one sequence (pagedStreamPrep).
+	KVStreamJoint int
 	// ComposedStreamPasses counts the passes of composed blocks over
 	// evicted history (streamRun).
 	ComposedStreamPasses int
@@ -947,6 +950,7 @@ func (s *Stats) add(o Stats) {
 	s.RecPointsKept += o.RecPointsKept
 	s.RecPointsLoaded += o.RecPointsLoaded
 	s.KVStreamPasses += o.KVStreamPasses
+	s.KVStreamJoint += o.KVStreamJoint
 	s.ComposedStreamPasses += o.ComposedStreamPasses
 	s.PipelinePieces += o.PipelinePieces
 	s.StageOverlaps += o.StageOverlaps

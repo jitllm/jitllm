@@ -54,9 +54,10 @@ func (kp *kvPool) evictable(l *kvLayerPool, s seqID) int {
 // session's first -- its history is cold for this call -- then the current
 // session's, and only one with a page to spare in every layer that holds it.
 // A session stepping on the device keeps its pages (stepping). Only a session
-// of one sequence gives pages up: a batch's rows run together
-// and one row cannot stream while the others read their pages in place.
-// ok is false when nothing can leave.
+// of one sequence gives pages up. A call streams each of its sequences'
+// evicted pages in passes of its own (pagedStreamPrep), so a batch's rows
+// can stream; taking a batch's pages too sent blocks home on Vulkan in
+// TestSessionsEvictAtOnce, and is open. ok is false when nothing can leave.
 func (g *devTier) evictVictim(sid uint64, kp *kvPool) (seqID, bool) {
 	perSess := map[uint64]int{}
 	for s := range kp.ranges {
