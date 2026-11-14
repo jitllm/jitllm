@@ -16,9 +16,15 @@ import "sync/atomic"
 //
 // FootprintOf is what one n-byte buffer would cost the card, so a caller can
 // price a buffer before asking for it.
+//
+// Idle is the part of Footprint that is free slots of the pieces small
+// buffers are carved from: no buffer holds them, and the next buffer of
+// their size takes one before a piece is made. A buffer freed into a piece
+// another still holds gives its slot to Idle, not the card's free memory.
 type AllocCounter interface {
 	Allocated() uint64
 	Footprint() uint64
+	Idle() uint64
 	FootprintOf(n int) uint64
 	// Slack is the most buffers not yet made can spend beyond the sum of
 	// their FootprintOf: the pieces small buffers are carved from cost more
@@ -27,13 +33,16 @@ type AllocCounter interface {
 }
 
 // allocCount is the counter every backend embeds.
-type allocCount struct{ n, foot atomic.Int64 }
+type allocCount struct{ n, foot, idle atomic.Int64 }
 
 // Allocated implements AllocCounter.
 func (a *allocCount) Allocated() uint64 { return nonNeg(a.n.Load()) }
 
 // Footprint implements AllocCounter.
 func (a *allocCount) Footprint() uint64 { return nonNeg(a.foot.Load()) }
+
+// Idle implements AllocCounter.
+func (a *allocCount) Idle() uint64 { return nonNeg(a.idle.Load()) }
 
 func nonNeg(v int64) uint64 {
 	if v > 0 {

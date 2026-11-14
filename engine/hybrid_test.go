@@ -1458,8 +1458,9 @@ func devicePagingUnderHostPager(t *testing.T, o hyOpt) {
 	// dense fixture are most of the card: its eight blocks are 33 KB beside a
 	// 3.3 MB scratch on Metal, so no flat fraction of the card leaves one slot
 	// and not none. Search for the tightest budget that still leaves one: the
-	// slot count only falls as the budget does.
-	full := g.Bytes()
+	// slot count only falls as the budget does. It starts from what the
+	// placement charged and the slack every room check keeps beside it.
+	full := g.Bytes() + g.Stats().Slack
 	g.SetBudget(full)
 	if g.Stats().Slots < 1 {
 		t.Fatalf("the budget the placement charged (%d bytes) leaves no slot: %s", full, g.Err())

@@ -34,11 +34,13 @@ type smallPool[B viewer[B]] struct {
 	open [smallClasses][]*smallPiece[B]
 }
 
-// smallPiece is one piece: its buffer and count, its class, the slots it
-// has handed out and the offsets of those it has not.
+// smallPiece is one piece: its buffer and count, the device count its free
+// slots are idle in, its class, the slots it has handed out and the offsets
+// of those it has not.
 type smallPiece[B any] struct {
 	b     B
 	acc   *counted
+	cnt   *allocCount
 	class int
 	used  int
 	free  []int
@@ -71,10 +73,11 @@ func (p *smallPool[B]) take(n int, cnt *allocCount, newPiece func() (B, error)) 
 		if err != nil {
 			return nil, none, 0, err
 		}
-		pc := &smallPiece[B]{b: b, acc: cnt.take(0, smallPage), class: k}
+		pc := &smallPiece[B]{b: b, acc: cnt.take(0, smallPage), cnt: cnt, class: k}
 		for off := smallPage - smallMin<<k; off >= 0; off -= smallMin << k {
 			pc.free = append(pc.free, off)
 		}
+		cnt.idle.Add(smallPage)
 		p.open[k] = append(p.open[k], pc)
 	}
 	open := p.open[k]
@@ -86,6 +89,7 @@ func (p *smallPool[B]) take(n int, cnt *allocCount, newPiece func() (B, error)) 
 	}
 	pc.free = pc.free[:len(pc.free)-1]
 	pc.used++
+	pc.cnt.idle.Add(-int64(smallMin << k))
 	if len(pc.free) == 0 {
 		p.open[k] = open[:len(open)-1]
 	}
@@ -99,6 +103,7 @@ func (p *smallPool[B]) give(pc *smallPiece[B], off int) bool {
 	defer p.mu.Unlock()
 	pc.free = append(pc.free, off)
 	pc.used--
+	pc.cnt.idle.Add(int64(smallMin << pc.class))
 	open := p.open[pc.class]
 	if len(pc.free) == 1 {
 		open = append(open, pc)
@@ -106,6 +111,7 @@ func (p *smallPool[B]) give(pc *smallPiece[B], off int) bool {
 	last := pc.used == 0
 	if last {
 		open = slices.DeleteFunc(open, func(q *smallPiece[B]) bool { return q == pc })
+		pc.cnt.idle.Add(-smallPage)
 	}
 	p.open[pc.class] = open
 	return last

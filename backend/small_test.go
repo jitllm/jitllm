@@ -69,3 +69,65 @@ func TestSmallBuffersShareAPiece(t *testing.T) {
 	}
 	t.Logf("ran on %v", ran)
 }
+
+// TestAFreedSlotIsIdle: the free slots of the pieces a device holds are its
+// Idle bytes, so Footprint less Idle is the slots its live buffers take.
+// Half the buffers freed into pieces the other half still hold give their
+// slots to Idle and leave Footprint where it was; all freed, Idle and the
+// pieces go together. The violation is a freed slot left out of Idle: the
+// card's rounding would grow by every buffer a paged-out block gives back.
+func TestAFreedSlotIsIdle(t *testing.T) {
+	gpuLock(t)
+	ran, devs := map[string]int{}, everyDevice(t)
+	for _, d := range devs {
+		ac, ok := d.(backend.AllocCounter)
+		if d.API() != "ptx" && d.API() != "spirv" || !ok {
+			continue
+		}
+		ran[d.API()]++
+		t.Run(d.API()+"/"+d.Name(), func(t *testing.T) {
+			sizes := []int{4, 100, 1000, 4096, 9000, 16384, 256, 3}
+			f0, i0 := ac.Footprint(), ac.Idle()
+			var bufs []backend.Buf
+			var slots []uint64
+			for i := range 40 {
+				n := sizes[i%len(sizes)]
+				b, err := d.Alloc(n)
+				if err != nil {
+					t.Fatal(err)
+				}
+				bufs, slots = append(bufs, b), append(slots, ac.FootprintOf(n))
+			}
+			live := func(from int) uint64 {
+				var s uint64
+				for _, n := range slots[from:] {
+					s += n
+				}
+				return s
+			}
+			if got, want := (ac.Footprint()-f0)-(ac.Idle()-i0), live(0); got != want {
+				t.Fatalf("forty live buffers: footprint less idle grew %d, their slots are %d", got, want)
+			}
+			f1 := ac.Footprint()
+			for _, b := range bufs[:20] {
+				b.Free()
+			}
+			if got, want := (ac.Footprint()-f0)-(ac.Idle()-i0), live(20); got != want {
+				t.Errorf("twenty freed: footprint less idle is %d past the start, the live slots %d", got, want)
+			}
+			if f := ac.Footprint(); f > f1 {
+				t.Errorf("twenty freed, the footprint grew from %d to %d", f1, f)
+			}
+			for _, b := range bufs[20:] {
+				b.Free()
+			}
+			if f, i := ac.Footprint(), ac.Idle(); f != f0 || i != i0 {
+				t.Errorf("every buffer freed: footprint %d idle %d, %d and %d before", f, i, f0, i0)
+			}
+		})
+	}
+	if len(ran) == 0 {
+		t.Fatalf("no CUDA or Vulkan device in %d devices: the gate ran nothing", len(devs))
+	}
+	t.Logf("ran on %v", ran)
+}
