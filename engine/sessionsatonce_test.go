@@ -556,11 +556,11 @@ func evictAtOnce(t *testing.T, m *model.Model, spec string, together bool, io ..
 		}
 	}
 	// One step before the budget is cut, so a lane the second session runs
-	// in at once is built and charged first; then a little slack past what
-	// the histories hold: they can grow only by sending their oldest pages
-	// home.
+	// in at once is built and charged first; then a little room past what
+	// the histories hold and the slack the card keeps beside every
+	// allocation: they can grow only by sending their oldest pages home.
 	forced(0, 1)
-	if _, err := g.SetBudget(g.Stats().BudgetUsed + 256<<10); err != nil {
+	if _, err := g.SetBudget(g.Stats().BudgetUsed + g.Stats().Slack + 256<<10); err != nil {
 		t.Fatal(err)
 	}
 	before := g.Stats()
