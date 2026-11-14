@@ -1098,6 +1098,7 @@ bug	engine/device/gpu/pagedattn.go	"block %d: sequence %v holds %d page(s) and w
 bug	engine/device/gpu/pagedattn.go	"block %d: sequence %v reads position %d's window from page %d, released behind it"
 bug	engine/device/gpu/pagedattn.go	"the sequence holds %d page(s) and %d positions need %d"
 context	engine/device/gpu/pagedstream.go	"%w: no free page to stream %d evicted page(s) through"
+bug	engine/device/gpu/pagedstream.go	"block %d has %d free page(s) to stream %d of its own through"
 bug	engine/device/gpu/pagedstream.go	"block %d has no graph to read its history in passes"
 bug	engine/device/gpu/pagedstream.go	"block %d holds %d page(s) of sequence %v at home and the pool counts %d"
 bug	engine/device/gpu/pagedstream.go	"block %d reads a history it attends none of"
