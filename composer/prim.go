@@ -233,6 +233,9 @@ type Quarter struct {
 type Range struct {
 	Axis       int
 	First, End []Expr
+	// Period, past 1, counts the range in entries of that many positions
+	// each (History.Period).
+	Period int
 }
 
 // Heads is attention's geometry: rows, query heads, key heads, head width.

@@ -463,7 +463,11 @@ func (hs history) span(axis int) *Range {
 		}
 		return x.e
 	}
-	return &Range{Axis: axis, First: bound(rowStart), End: bound(rowEnd)}
+	r := &Range{Axis: axis, First: bound(rowStart), End: bound(rowEnd)}
+	if hs.period > 1 {
+		r.Period = hs.period
+	}
+	return r
 }
 
 // end is one past the last position the row attends: its end, or within

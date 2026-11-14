@@ -43,7 +43,7 @@ func generate(p Prim) (*Kernel, error) {
 	}
 	g := &generator{k: k, p: &p, flat: map[Operand]int{}, shaped: map[Operand]int{}}
 	if r := p.Facts.Range; r != nil {
-		pos := &Positions{Axis: r.Axis, Loop: -1, Align: 1}
+		pos := &Positions{Axis: r.Axis, Loop: -1, Align: 1, Period: r.Period}
 		if p.Kind != PrimMap && r.Axis == len(p.Shape)-1 {
 			pos.Axis, pos.Loop = -1, c
 		}

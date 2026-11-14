@@ -189,6 +189,8 @@ type Positions struct {
 	Axis, Loop, Align int
 	First, End        int
 	Live, Pos         []int
+	// Period is the range's (Range.Period): Align counts its entries.
+	Period int
 	// Span and Part, where a split set them, are 1 + the nodes of the live
 	// positions in the partition and of the partition's coordinate.
 	Span, Part int

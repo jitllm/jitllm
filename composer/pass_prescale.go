@@ -153,7 +153,7 @@ func scaleMap(k, m *Kernel, w Buf, g int) (*Kernel, Operand) {
 	ob := n.buf(Buf{Kind: BufOut, Elem: w.Elem, Operand: scaled, Shape: append([]int(nil), space...)})
 	n.Stores = append(n.Stores, Store{Buf: ob, Val: val, At: -1, Ax: append([]int(nil), coords...)})
 	if pos := k.Positions; pos != nil {
-		n.Positions = &Positions{Axis: 2, Loop: -1, Align: 1, First: copyInto(n, k, pos.First, leaf), End: copyInto(n, k, pos.End, leaf)}
+		n.Positions = &Positions{Axis: 2, Loop: -1, Align: 1, Period: pos.Period, First: copyInto(n, k, pos.First, leaf), End: copyInto(n, k, pos.End, leaf)}
 	}
 	n.Own = n.ownWrites()
 	return n, scaled

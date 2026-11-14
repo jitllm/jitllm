@@ -5,9 +5,13 @@ import "github.com/jitllm/jitllm/composer/ir"
 // RunLengths makes a range of positions a static class and its length a run
 // time one: the range's extent padded up to a multiple of Grain, so one
 // kernel serves every step of the class, its positions counted from the
-// first rounded down to Align. What the range attends stays the live
-// length's, a run-time value. A Grain of 0 is the exact length: a range on a
-// loop counts its live positions, the end less the first, at run time.
+// first rounded down to Align -- a range of entries (Positions.Period) to
+// Align/Period of them, or not at all where the period does not divide it,
+// since a pass's first entry is a multiple of that and the kernels reading
+// what the range wrote count from its first. What the range attends stays
+// the live length's, a run-time value. A Grain of 0 is the exact length: a
+// range on a loop counts its live positions, the end less the first, at run
+// time.
 //
 // Where Widths is set, a kernel that consumes none of its reductions itself
 // takes the width it runs over at run time too, so one kernel serves every
@@ -55,11 +59,18 @@ func (p RunLengths) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			C := m.Loops[mp.Loop].Trip
 			m.Loops[mp.Loop].Trip = (C + p.Grain - 1) / p.Grain * p.Grain
 		}
+		align := p.Align
+		if mp.Period > 1 {
+			align = 1
+			if p.Align%mp.Period == 0 {
+				align = p.Align / mp.Period
+			}
+		}
 		for _, n := range mp.Pos {
 			first := m.Nodes[n].A
-			m.Nodes[n].A = m.bin(OpMul, ir.U32, m.bin(OpDiv, ir.U32, first, m.u32(p.Align)), m.u32(p.Align))
+			m.Nodes[n].A = m.bin(OpMul, ir.U32, m.bin(OpDiv, ir.U32, first, m.u32(align)), m.u32(align))
 		}
-		mp.Align = p.Align
+		mp.Align = align
 		m.Passes = append(m.Passes, p.Name())
 		out[i] = m
 	}
