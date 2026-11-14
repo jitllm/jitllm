@@ -54,16 +54,18 @@ func decomposeAttend(o graph.Op, c *Context) ([]Prim, error) {
 		return nil, err
 	}
 	if len(o.In) == 2 {
-		// A block selection: the positions each kv group's mask keeps.
+		// A block selection: the positions each kv group's mask keeps, over
+		// the whole history where it is read in passes.
 		sel := c.producer(o.In[1])
-		if c.History.Passes {
-			return nil, fmt.Errorf("a block selection over a history read in passes")
-		}
 		if sel == nil || sel.Kind != graph.OpSelect || a.NHead%sel.Attr.NKVHead != 0 || a.Window != 0 || a.Bidir {
 			return nil, fmt.Errorf("an attention of %d heads, window %d, over a selection that is not its own history's", a.NHead, a.Window)
 		}
+		w, err := c.selWhole()
+		if err != nil {
+			return nil, err
+		}
 		m := maskOf(c, o.In[1])
-		g.Mask, g.MaskGroups = &m, sel.Attr.NKVHead
+		g.Mask, g.MaskGroups, g.MaskKeys = &m, sel.Attr.NKVHead, w
 	}
 	return attend(o, c, c.value(o.In[0]), c.value(o.Out[0]), g), nil
 }
@@ -168,6 +170,9 @@ type attendGeom struct {
 	// position it does not keep scores as the least float.
 	Mask       *Operand
 	MaskGroups int
+	// MaskKeys is the positions a row of the mask spans: the whole history,
+	// which a form over passes reads at each key's own position.
+	MaskKeys int
 	// ValuePool is how the values' pool lays out a page, KeyPool the keys',
 	// Slots a page's slots in either (History.slots) and Pages the page
 	// table they are read through.
@@ -255,7 +260,13 @@ func attendPartial(o graph.Op, a graph.Attrs, c *Context, q, out Operand, g atte
 	if g.Mask != nil {
 		G := max(1, g.MaskGroups)
 		grp := sx.op(OpDiv, U, sx.coord(1), sx.u(uint32(H/G)))
-		keep := sx.at(3, []int{R, G, C}, sx.coord(0), grp, sx.coord(2))
+		// The mask's first read shapes its buffer: one read, the form's.
+		var keep int
+		if c.History.Passes {
+			keep = sx.at(3, []int{R, G, g.MaskKeys}, sx.coord(0), grp, sx.op(OpMin, U, spos, sx.u(uint32(g.MaskKeys-1))))
+		} else {
+			keep = sx.at(3, []int{R, G, C}, sx.coord(0), grp, sx.coord(2))
+		}
 		score = sx.sel(F, sx.op(OpLess, ir.Pred, sx.f(0.5), keep), score, sx.f(minus))
 	}
 	sx.sel(F, valid, score, sx.f(minus))
@@ -320,11 +331,12 @@ func attendPartial(o graph.Op, a graph.Attrs, c *Context, q, out Operand, g atte
 // The running partial of an attention read in passes: a row's heads, each
 // its weighted values, then their maximum, then their sum.
 
-// foldsAPass reports whether p folds a pass into the running partial: a
-// pass ends at its kernel (Kernel.Folds), and what reads the partial runs
-// once, after the last pass.
+// foldsAPass reports whether p folds a pass into a running partial, an
+// attention's or a selection's block scores: a sweep of passes ends at its
+// kernel (Kernel.Folds), and what reads the partial runs once, after the
+// sweep's last pass.
 func foldsAPass(p Prim) bool {
-	return p.Out.Kind == TableRunOut.op().Kind && p.Out.Name == TableRunOut.op().Name
+	return p.Out.Kind == OperandTable && (p.Out.Name == TableRunOut.op().Name || p.Out.Name == TableSelOut.op().Name)
 }
 
 // foldPasses folds a pass's weighted values, sums and maxima into the

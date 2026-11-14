@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"strings"
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
@@ -274,6 +275,235 @@ func attendInPasses(t *testing.T, d backend.Device, c passCase) {
 	}
 }
 
+// TestComposedGPUSelectInPasses forms a block selection and the attention
+// reading it over a paged history read in passes and runs them as the tier
+// does: the codes before once; the selection's sweep, each pass scoring the
+// blocks it holds and folding them into the running scores (sel.in ->
+// sel.out); the ranking and keep mask once over the whole history; the
+// attention's sweep, folding its partial pass by pass; the codes after.
+// Every row must read what the form over the whole history reads, with the
+// rows at different positions and the kept blocks spread over the passes,
+// so a sweep that drops its fold must not.
+func TestComposedGPUSelectInPasses(t *testing.T) {
+	testlock.GPU(t)
+	devs := openDevices()
+	defer func() {
+		for _, d := range devs {
+			d.Close()
+		}
+	}()
+	if len(devs) == 0 {
+		t.Skip("no GPU")
+	}
+	for _, d := range devs {
+		for _, c := range []passCase{
+			{name: "rows", pos: []int{40, 70, 100, 127}},
+			{name: "chunk", pos: []int{92, 93, 94, 95, 96, 97, 98, 99}, seqs: 1},
+		} {
+			t.Run(d.API()+"/"+c.name, func(t *testing.T) { selectInPasses(t, d, c) })
+		}
+	}
+}
+
+func selectInPasses(t *testing.T, d backend.Device, c passCase) {
+	pos, seqs := c.pos, c.seqs
+	const page, heads, kvh, dim, ih, span, topk = 16, 4, 2, 64, 2, 16, 2
+	R := len(pos)
+	capRows := max(8, R)
+	keys, passKeys := 8*page, 2*page
+	b := graph.New()
+	w, qw, iw := kvh*dim, heads*dim, ih*dim
+	kIn, vIn, qIn, iqIn := b.In("k", w), b.In("v", w), b.In("q", qw), b.In("iq", iw)
+	n := b.KVAppend(kIn, vIn, 0)
+	hist := graph.StateRef{State: graph.StateKV, Version: n}
+	sel := b.Select(iqIn, hist, graph.Attrs{NHead: ih, NKVHead: 1, HeadDim: dim, Width: w, Span: span, TopK: topk, Local: 1})
+	b.Out(b.AttendSelected(qIn, hist, sel, graph.Attrs{NHead: heads, NKVHead: kvh, HeadDim: dim, Scale: 1 / math.Sqrt(float64(dim))}))
+	g := b.G
+	form := func(passes bool) []composer.Code {
+		reg, step := composer.Default(), composer.Step{Rows: capRows, Page: page, Keys: keys, Seqs: seqs}
+		if passes {
+			reg, step.Keys, step.Context = reg.ForPasses(composer.DeviceGPU), passKeys, keys
+		}
+		_, codes, err := reg.Form(composer.Request{Graph: g, Step: step, Device: gpuDevice(d),
+			History: composer.History{Keys: composer.Pool{ByDim: true}, Values: composer.Pool{Half: true}, Passes: passes}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return codes
+	}
+	whole, inPasses := form(false), form(true)
+
+	rng := rand.New(rand.NewSource(7))
+	rnd := func(n int) []float32 {
+		x := make([]float32, n)
+		for i := range x {
+			x[i] = float32(rng.NormFloat64())
+		}
+		return x
+	}
+	kpool, vpool := poisoned(keys*w), poisoned(keys*w/2)
+	hist0, hvals := rnd(keys*w), rnd(keys*w)
+	for p := 0; p < keys; p++ {
+		pg, off := p/page, p%page
+		for e := range w {
+			kpool[(pg*w+e)*page+off] = math.Float32bits(hist0[p*w+e])
+			hv := uint32(quant.EncodeHalf(hvals[p*w+e]))
+			i := (pg*page+off)*w + e
+			if e%2 == 0 {
+				vpool[i/2] = vpool[i/2]&0xFFFF0000 | hv
+			} else {
+				vpool[i/2] = vpool[i/2]&0xFFFF | hv<<16
+			}
+		}
+	}
+	k, v := make([]float32, capRows*w), make([]float32, capRows*w)
+	for r := range R {
+		copy(k[r*w:], hist0[pos[r]*w:(pos[r]+1)*w])
+		copy(v[r*w:], hvals[pos[r]*w:(pos[r]+1)*w])
+	}
+	pages := make([]uint32, keys/page)
+	for i := range pages {
+		pages[i] = uint32(i)
+	}
+	rowsDesc := func(lo, hi int) []uint32 {
+		rows := make([]uint32, capRows*4)
+		for r := range R {
+			p := uint32(pos[r])
+			s, e := uint32(min(max(0, lo), hi)), uint32(min(max(int(p)+1, lo), hi))
+			copy(rows[r*4:], []uint32{0, s, e, p})
+		}
+		return rows
+	}
+	vals := map[graph.ValueID][]uint32{kIn: f32w(k), vIn: f32w(v), qIn: f32w(rnd(capRows * qw)), iqIn: f32w(rnd(capRows * iw)),
+		g.Out[0]: poisoned(capRows * qw)}
+	base := map[string][]uint32{"rows.n": {uint32(R)}, "pages": pages, "kv.k": kpool, "kv.v": vpool, "q.off": make([]uint32, capRows*4)}
+	full := map[string][]uint32{"rows": rowsDesc(0, keys), "rows.win": rowsDesc(0, keys)}
+	runner := newPassRunner(d)
+	defer runner.close()
+	want, err := runner.run(whole, 0, len(whole), vals, base, full, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantF := wf32(want)
+
+	sweeps := passSweeps(inPasses)
+	if len(sweeps) != 2 {
+		t.Fatalf("%d sweeps of passes, want the selection's and the attention's: %v", len(sweeps), sweeps)
+	}
+	t.Logf("%d codes, sweeps %v", len(inPasses), sweeps)
+	// run runs the form in its sweeps; dropSel and dropAttend leave each
+	// pass after the first unfolded, the gate's violations.
+	run := func(dropSel, dropAttend bool) []float32 {
+		r := newPassRunner(d)
+		defer r.close()
+		np := (keys + passKeys - 1) / passKeys
+		tabs := map[string][]uint32{"run.0": nil, "run.1": nil, "run.2": nil, "sel.0": nil, "sel.1": nil, "sel.2": nil}
+		alias := map[string]string{"run.in": "run.0", "run.out": "run.0", "sel.in": "sel.0", "sel.out": "sel.0"}
+		at := 0
+		for i, sw := range sweeps {
+			if _, err := r.run(inPasses, at, sw[0], vals, base, full, aliasTables(tabs, alias)); err != nil {
+				t.Fatal(err)
+			}
+			pre, drop := "sel", dropSel
+			if i == 1 {
+				pre, drop = "run", dropAttend
+			}
+			for j := 0; j < np; j++ {
+				in, out := pre+".0", fmt.Sprintf("%s.%d", pre, 1+j%2)
+				if j > 0 && !drop {
+					in = fmt.Sprintf("%s.%d", pre, 1+(j+1)%2)
+				}
+				alias[pre+".in"], alias[pre+".out"] = in, out
+				desc := rowsDesc(j*passKeys, (j+1)*passKeys)
+				if _, err := r.run(inPasses, sw[0], sw[1], vals, base, map[string][]uint32{"rows": desc, "rows.win": desc}, aliasTables(tabs, alias)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			last := fmt.Sprintf("%s.%d", pre, 1+(np-1)%2)
+			alias[pre+".in"], alias[pre+".out"] = last, last
+			at = sw[1]
+		}
+		got, err := r.run(inPasses, at, len(inPasses), vals, base, full, aliasTables(tabs, alias))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return wf32(got)
+	}
+	nmse := func(got []float32, r int) float64 {
+		var num, den float64
+		for i := r * qw; i < (r+1)*qw; i++ {
+			e := float64(got[i]) - float64(wantF[i])
+			num, den = num+e*e, den+float64(wantF[i])*float64(wantF[i])
+		}
+		return num / den
+	}
+	got := run(false, false)
+	worst := 0.0
+	for r := range R {
+		worst = max(worst, nmse(got, r))
+		t.Logf("row %d at %d: NMSE %.3e against the whole history", r, pos[r], nmse(got, r))
+	}
+	if !(worst < 1e-6) {
+		t.Fatalf("read in passes the rows reach NMSE %.3e from the whole history's form", worst)
+	}
+	for _, v := range []struct {
+		name          string
+		sel, attended bool
+	}{{"the selection's", true, false}, {"the attention's", false, true}} {
+		bad, seen := run(v.sel, v.attended), 0.0
+		for r := range R {
+			seen = max(seen, nmse(bad, r))
+		}
+		if seen < 1e-3 {
+			t.Fatalf("%s passes left unfolded read NMSE %.3e: the gate cannot see that fold", v.name, seen)
+		}
+		t.Logf("%s passes left unfolded: NMSE %.3e", v.name, seen)
+	}
+}
+
+// runBytes is the widest binding over codes of the running table name and
+// its other side (run.in with run.out, sel.in with sel.out), which share
+// buffers across the passes.
+func runBytes(codes []composer.Code, name string) int64 {
+	pre, _, _ := strings.Cut(name, ".")
+	n := int64(4)
+	for _, c := range codes {
+		for _, bd := range c.Binds {
+			if bd.Operand.Kind == composer.OperandTable && (bd.Operand.Name == pre+".in" || bd.Operand.Name == pre+".out") {
+				n = max(n, bd.Bytes)
+			}
+		}
+	}
+	return n
+}
+
+// passSweeps is the sweeps of passes a form runs, as the tier finds them:
+// each from the first code reading the history (its keys or values) after
+// the sweep before, to the code folding its running partial (run.out or
+// sel.out).
+func passSweeps(codes []composer.Code) [][2]int {
+	var out [][2]int
+	lo := -1
+	for ci, c := range codes {
+		for _, bd := range c.Binds {
+			if bd.Operand.Kind != composer.OperandTable {
+				continue
+			}
+			switch bd.Operand.Name {
+			case "kv.k", "kv.v":
+				if bd.Read && lo < 0 {
+					lo = ci
+				}
+			case "run.out", "sel.out":
+				if bd.Writes && lo >= 0 {
+					out, lo = append(out, [2]int{lo, ci + 1}), -1
+				}
+			}
+		}
+	}
+	return out
+}
+
 // passSpan is the codes a pass runs, as the tier finds them: from the first
 // that reads the history (its keys or values) to the last that writes the
 // running partial.
@@ -373,8 +603,15 @@ func (r *passRunner) run(codes []composer.Code, lo, hi int, vals map[graph.Value
 			switch {
 			case o.Kind == composer.OperandTable && runs[o.Name] != "":
 				key = "run:" + runs[o.Name]
-				w = make([]uint32, int(max(bd.Bytes, 4)/4))
-				if runs[o.Name] != "run.0" {
+				w = make([]uint32, int(runBytes(codes, o.Name)/4))
+				switch runs[o.Name] {
+				case "run.0":
+				case "sel.0":
+					// A selection's first pass folds into the least floats.
+					for i := range w {
+						w[i] = 0xff7fffff
+					}
+				default:
 					w = poisoned(len(w))
 				}
 			case o.Kind == composer.OperandTable && over[o.Name] != nil:

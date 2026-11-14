@@ -75,6 +75,11 @@ const (
 	// (graph.Attrs.Keeps), a slot a row's entry of the run order.
 	TableRecKeep
 	TableRecConvKeep
+	// TableSelIn and TableSelOut are a selection's running block scores over
+	// a history read in passes: each block's best in the passes before, and
+	// with this pass's.
+	TableSelIn
+	TableSelOut
 	numTables
 )
 
@@ -148,6 +153,10 @@ func (t Table) String() string {
 		return "rec.state.keep"
 	case TableRecConvKeep:
 		return "rec.conv.keep"
+	case TableSelIn:
+		return "sel.in"
+	case TableSelOut:
+		return "sel.out"
 	}
 	return fmt.Sprintf("table%d", t)
 }
@@ -198,7 +207,7 @@ func (t Table) elem() ir.Type {
 	switch {
 	case t.perPart():
 		return ir.Void
-	case t == TableAngles, t == TablePlanes, t == TableRunIn, t == TableRunOut:
+	case t == TableAngles, t == TablePlanes, t == TableRunIn, t == TableRunOut, t == TableSelIn, t == TableSelOut:
 		return ir.Void
 	}
 	return ir.U32

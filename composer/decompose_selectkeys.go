@@ -55,7 +55,11 @@ func decomposeSelect(o graph.Op, c *Context) ([]Prim, error) {
 		keys.Of = c.blockPart(n)
 	}
 	U, F := ir.U32, ir.F32
-	period, C := c.selPositions()
+	period, _ := c.selPositions()
+	C, err := c.selWhole()
+	if err != nil {
+		return nil, err
+	}
 	R, H, D, G, B := c.Step.Rows, a.NHead, a.HeadDim, a.NKVHead, a.Span
 	NB := (C + a.Span - 1) / a.Span
 	out := c.value(o.Out[0])
@@ -120,13 +124,23 @@ func decomposeSelect(o graph.Op, c *Context) ([]Prim, error) {
 
 	flat := Facts{Extents: ext()}
 	var scoring []Prim
-	if a.Pooled {
-		var err error
+	ranked := best
+	switch {
+	case a.Pooled && c.History.Passes:
+		return nil, fmt.Errorf("a pooled selection over a history read in passes")
+	case a.Pooled:
 		if scoring, err = selectPooled(o, c, pool, keys, tables, flat, best); err != nil {
 			return nil, err
 		}
-	} else {
-		scoring = selectBest(o, c, fn, pool, keys, tables, rng, flat, dots, scores, best, minus, boundsOf)
+	case c.History.Passes:
+		// A pass scores the blocks it holds, which the sweep folds into the
+		// whole history's: the ranking reads the fold after the last.
+		var nbp int
+		scoring, nbp = selectBest(o, c, fn, pool, keys, tables, rng, flat, dots, scores, best, minus, boundsOf)
+		scoring = append(scoring, foldSelection(c, a, best, nbp, NB, hs, tables, flat))
+		ranked = TableSelOut.op()
+	default:
+		scoring, _ = selectBest(o, c, fn, pool, keys, tables, rng, flat, dots, scores, best, minus, boundsOf)
 	}
 
 	var rx exprs
@@ -152,7 +166,7 @@ func decomposeSelect(o graph.Op, c *Context) ([]Prim, error) {
 	cx.at(0, []int{R, G, C}, cx.coord(0), cx.coord(1), cx.coord(2))
 
 	return append(scoring,
-		Prim{Kind: PrimReduce, Shape: []int{R, G, NB, NB}, In: tables(best), Out: rank, Combine: OpAdd, Type: U, Expr: rx.e, Facts: flat},
+		Prim{Kind: PrimReduce, Shape: []int{R, G, NB, NB}, In: tables(ranked), Out: rank, Combine: OpAdd, Type: U, Expr: rx.e, Facts: flat},
 		Prim{Kind: PrimMap, Shape: []int{R, G, NB}, In: tables(rank), Out: keep, Expr: kx.e, Facts: flat},
 		Prim{Kind: PrimMap, Shape: []int{R, G, C}, In: tables(keep), Out: mask, Expr: mx.e, Facts: flat},
 		Prim{Kind: PrimReduce, Shape: []int{R, G, C}, In: []Operand{mask}, Out: out, Combine: OpAdd, Expr: cx.e},
@@ -162,14 +176,19 @@ func decomposeSelect(o graph.Op, c *Context) ([]Prim, error) {
 // selectBest is a selection's block scores from its positions': each query
 // head's dot with every attended position's key, each group's sum of its
 // heads' scores through fn and the weights, each block's best (minus where
-// no position of it is attended).
+// no position of it is attended), and how many blocks it scores. Over a
+// history read in passes they are the blocks a pass of C positions reaches
+// from its first, its first position's block on.
 func selectBest(o graph.Op, c *Context, fn Op, pool Pool, keys Operand, tables func(...Operand) []Operand, rng, flat Facts,
-	dots, scores, best Operand, minus float32, boundsOf func(*exprs) selectBounds) []Prim {
+	dots, scores, best Operand, minus float32, boundsOf func(*exprs) selectBounds) ([]Prim, int) {
 	a := o.Attr
 	U, F := ir.U32, ir.F32
 	period, C := c.selPositions()
 	R, H, D, G, B := c.Step.Rows, a.NHead, a.HeadDim, a.NKVHead, a.Span
 	J, NB := H/G, (C+a.Span-1)/a.Span
+	if c.History.Passes {
+		NB = C/B + 1
+	}
 	hs := history{a: a, pageSize: c.Step.Page, period: period}
 	var dx exprs
 	h, d := dx.coord(1), dx.coord(3)
@@ -192,11 +211,15 @@ func selectBest(o graph.Op, c *Context, fn Op, pool Pool, keys Operand, tables f
 
 	var bx exprs
 	bbd := boundsOf(&bx)
-	t := bx.op(OpAdd, U, bx.op(OpMul, U, bx.coord(2), bx.u(uint32(B))), bx.coord(3))
+	blk := bx.coord(2)
+	if c.History.Passes {
+		blk = bx.op(OpAdd, U, bx.op(OpDiv, U, bbd.first, bx.u(uint32(B))), blk)
+	}
+	t := bx.op(OpAdd, U, bx.op(OpMul, U, blk, bx.u(uint32(B))), bx.coord(3))
 	in := bx.sel(U, bx.op(OpLess, ir.Pred, t, bbd.first), bx.u(0), bx.sel(U, bx.op(OpLess, ir.Pred, t, bbd.end), bx.u(1), bx.u(0)))
 	if a.Firsts {
 		// Only the block's first attended position scores it.
-		lead := bx.op(OpMax, U, bx.op(OpMul, U, bx.coord(2), bx.u(uint32(B))), bbd.first)
+		lead := bx.op(OpMax, U, bx.op(OpMul, U, blk, bx.u(uint32(B))), bbd.first)
 		in = bx.sel(U, bx.op(OpLess, ir.Pred, lead, t), bx.u(0), in)
 	}
 	rel := bx.op(OpMin, U, bx.op(OpSub, U, bx.op(OpMax, U, t, bbd.first), bbd.first), bx.u(uint32(C-1)))
@@ -208,7 +231,37 @@ func selectBest(o graph.Op, c *Context, fn Op, pool Pool, keys Operand, tables f
 		{Kind: PrimReduce, Shape: []int{R, G, C, J}, In: sumIn, Out: scores, Combine: OpAdd, Expr: gx.e},
 		{Kind: PrimReduce, Shape: []int{R, G, NB, B}, In: tables(scores), Out: best, Combine: OpMax,
 			Init: int64(math.Float32bits(minus)), Expr: bx.e, Facts: flat},
+	}, NB
+}
+
+// foldSelection folds a pass's scores best, of the nbp blocks from its
+// first position's, into the running scores of the whole history's nb
+// blocks (sel.in -> sel.out): each block the larger, a block outside the
+// pass keeping what it had. The first pass folds into the least floats.
+func foldSelection(c *Context, a graph.Attrs, best Operand, nbp, nb int, hs history, tables func(...Operand) []Operand, flat Facts) Prim {
+	U, F := ir.U32, ir.F32
+	R, G := c.Step.Rows, a.NKVHead
+	var x exprs
+	r, g, b := x.coord(0), x.coord(1), x.coord(2)
+	lb := x.op(OpSub, U, b, x.op(OpDiv, U, hs.start(&x), x.u(uint32(a.Span))))
+	in := x.op(OpLess, ir.Pred, lb, x.u(uint32(nbp)))
+	v := x.sel(F, in, x.at(0, []int{R, G, nbp}, r, g, x.op(OpMin, U, lb, x.u(uint32(nbp-1)))), x.f(math.Float32frombits(0xff7fffff)))
+	x.op(OpMax, F, x.at(3, []int{R, G, nb}, r, g, b), v)
+	return Prim{Kind: PrimMap, Shape: []int{R, G, nb}, In: tables(best, TableSelIn.op()), Out: TableSelOut.op(), Expr: x.e, Facts: flat}
+}
+
+// selWhole is the positions a selection ranks and its keep mask spans: the
+// step's keys, or over a history read in passes the whole history's
+// (Step.Context), each over entries the entries they close.
+func (c *Context) selWhole() (int, error) {
+	period, w := c.selPositions()
+	if !c.History.Passes {
+		return w, nil
 	}
+	if c.Step.Context < c.Step.Keys {
+		return 0, fmt.Errorf("a selection over a history read in passes of %d positions, %d a pass", c.Step.Context, c.Step.Keys)
+	}
+	return max(1, c.Step.Context/period), nil
 }
 
 // selPositions is the period of the history a selection reads (1 for one
