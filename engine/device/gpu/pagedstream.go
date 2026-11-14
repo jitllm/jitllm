@@ -1,6 +1,7 @@
 package gpu
 
 import (
+	"encoding/binary"
 	"fmt"
 	"slices"
 
@@ -148,13 +149,12 @@ func (g *devTier) pagedStreamPrep(sid uint64, bs *blockScratch, rows []pagedRow)
 const devStagedPlane = 64 << 20
 
 // stagedPassKeys is the most keys bs's staged plan is built for, in whole
-// pages, or 0 for no bound: a block whose attention reads the whole history
-// through the table at once (the lightning indexer, MiniMax-M3's block
-// selection) does not go in passes.
+// pages, or 0 for no bound: a pooled block selection (MiniMax-M3's), which
+// reads the whole history through the table at once, does not go in passes.
 // Callers hold g.mu.
 func (g *devTier) stagedPassKeys(bs *blockScratch) int {
 	pg := bs.pkv
-	if pg == nil || selectsHistory(&bs.p) {
+	if pg == nil || pooledSelects(bs.p.Graph) {
 		return 0
 	}
 	kp := g.kvPages()
@@ -193,6 +193,9 @@ func (g *devTier) runBufs(bs *blockScratch, l *layer, li int) ([]backend.Buf, er
 	if l.graph == nil {
 		return nil, fmt.Errorf("block %d has no graph to read its history in passes", li)
 	}
+	if err := g.selBufs(bs, l); err != nil {
+		return nil, err
+	}
 	for _, o := range l.graph.Ops {
 		if o.Kind == graph.OpAttend {
 			n = max(n, bs.rows*o.Attr.NHead*(o.Attr.HeadDim+2))
@@ -226,13 +229,55 @@ func (g *devTier) runBufs(bs *blockScratch, l *layer, li int) ([]backend.Buf, er
 	return pg.run[:2], nil
 }
 
+// selBufs grows bs's running block scores to block l's selections over its
+// whole history (composer.TableSelIn, TableSelOut): sel[0] the least floats
+// the first pass folds into, sel[1] and sel[2] the folds' two sides. Callers
+// hold g.mu, outside any submission.
+func (g *devTier) selBufs(bs *blockScratch, l *layer) error {
+	pg, n, whole := bs.pkv, 0, keyBound(bs.p.MaxSeq)
+	for _, o := range l.graph.Ops {
+		if o.Kind == graph.OpSelect && !o.Attr.Pooled && o.Attr.Span > 0 {
+			n = max(n, bs.rows*o.Attr.NKVHead*((whole+o.Attr.Span-1)/o.Attr.Span))
+		}
+	}
+	if n == 0 || pg.selN >= n {
+		return nil
+	}
+	defer g.scratchWin().close() // the scratch's own buffers (scratch.go)
+	for i, b := range pg.sel {
+		if b != nil {
+			b.Free()
+		}
+		pg.sel[i] = nil
+	}
+	pg.selN = 0
+	for i := range pg.sel {
+		b, err := g.dev.Alloc(n * 4)
+		if err != nil {
+			return err
+		}
+		pg.sel[i] = b
+	}
+	least := make([]byte, n*4)
+	for i := 0; i < n; i++ {
+		binary.LittleEndian.PutUint32(least[4*i:], 0xff7fffff)
+	}
+	if err := pg.sel[0].Write(least); err != nil {
+		return err
+	}
+	pg.selN = n
+	return nil
+}
+
 // streamRun launches a form over a history read in passes: its codes before
-// the passes, then each pass's codes over the keys the pass holds -- the
-// evicted pages it covers first uploaded into the layer's free ids and the
-// table pointed at them, as streamDecode stages them, the rows' descriptors
-// clipped to the pass and the running partial folded from one side into the
-// other -- then the codes after, which finish from the last fold. pl is the
-// pool the form reads. Callers hold g.mu, inside the submission's session.
+// the passes, then each sweep's (a selection's, then its attention's): each
+// pass's codes over the keys the pass holds -- the evicted pages it covers
+// first uploaded into the layer's free ids and the table pointed at them, as
+// streamDecode stages them, the rows' descriptors clipped to the pass and
+// the sweep's running partial folded from one side into the other -- and
+// between two sweeps, and after the last, the codes that read the folds once
+// over the whole history. pl is the pool the form reads. Callers hold g.mu,
+// inside the submission's session.
 func (sv *servedPart) streamRun(g *devTier, lc *launcher, s backend.Session, inst *partInst, kind nn.Part, bs *blockScratch,
 	pl *kvLayerPool, in, out []backend.Buf) error {
 	f, pg := sv.f, bs.pkv
@@ -241,10 +286,14 @@ func (sv *servedPart) streamRun(g *devTier, lc *launcher, s backend.Session, ins
 	copy(sv.out[:sv.m], out)
 	in, out = sv.in[:sv.n], sv.out[:sv.m]
 	rows, rowsW := t[tableKey(composer.TableRows)], t[tableKey(composer.TableWindows)]
+	_, selects := t[tableKey(composer.TableSelIn)]
 	defer func() {
 		t[tableKey(composer.TableRows)], t[tableKey(composer.TableWindows)], t[tableKey(composer.TableRunIn)], t[tableKey(composer.TableRunOut)] = rows, rowsW, pg.run[0], pg.run[1]
+		if selects {
+			t[tableKey(composer.TableSelIn)], t[tableKey(composer.TableSelOut)] = pg.sel[0], pg.sel[1]
+		}
 	}()
-	m0, err := sv.launchCodes(lc, inst, in, out, 0, f.passLo)
+	m0, err := sv.launchCodes(lc, inst, in, out, 0, f.sweeps[0].lo)
 	if err != nil {
 		return err
 	}
@@ -252,55 +301,75 @@ func (sv *servedPart) streamRun(g *devTier, lc *launcher, s backend.Session, ins
 	kw, vw := pl.geom.kWords(kp.p), pl.geom.vWords(kp.p)
 	off := kp.ranges[st.s].off
 	home := pl.home[st.s]
-	for j := 0; j < st.passes; j++ {
-		if p0, p1 := j*st.w, min((j+1)*st.w, st.evicted); p0 < p1 {
-			// The ids the pass before read are this pass's: wait for it.
-			if j > 0 {
-				if err := s.Sync(); err != nil {
-					return err
-				}
+	at := 0
+	for si, sw := range f.sweeps {
+		if si > 0 {
+			t[tableKey(composer.TableRows)], t[tableKey(composer.TableWindows)] = rows, rowsW
+			m, err := sv.launchCodes(lc, inst, in, out, at, sw.lo)
+			if err != nil {
+				return err
 			}
-			st.ids = append(st.ids[:0], pl.free[:p1-p0]...)
-			for i, id := range st.ids {
-				if g.pagedFaulted("stream") {
-					break // the violation: the pass reads whatever the ids held
-				}
-				page := home[p0+i]
-				if page == nil {
-					continue // released behind a window every row starts past
-				}
-				if err := s.WriteAt(pl.k, int(id)*kw*4, f32b(page[:kw])); err != nil {
-					return err
-				}
-				if vw > 0 {
-					if err := s.WriteAt(pl.v, int(id)*vw*4, f32b(page[kw:])); err != nil {
+			m0.matrix, m0.attend = m0.matrix+m.matrix, m0.attend+m.attend
+		}
+		side, inKey, outKey := pg.run, tableKey(composer.TableRunIn), tableKey(composer.TableRunOut)
+		if sw.folds == composer.TableSelOut {
+			side, inKey, outKey = pg.sel, tableKey(composer.TableSelIn), tableKey(composer.TableSelOut)
+		}
+		for j := 0; j < st.passes; j++ {
+			if p0, p1 := j*st.w, min((j+1)*st.w, st.evicted); p0 < p1 {
+				// The ids the pass before read -- this sweep's, or the sweep
+				// before's last -- are this pass's: wait for it.
+				if j > 0 || si > 0 {
+					if err := s.Sync(); err != nil {
 						return err
 					}
 				}
+				st.ids = append(st.ids[:0], pl.free[:p1-p0]...)
+				for i, id := range st.ids {
+					if g.pagedFaulted("stream") {
+						break // the violation: the pass reads whatever the ids held
+					}
+					page := home[p0+i]
+					if page == nil {
+						continue // released behind a window every row starts past
+					}
+					if err := s.WriteAt(pl.k, int(id)*kw*4, f32b(page[:kw])); err != nil {
+						return err
+					}
+					if vw > 0 {
+						if err := s.WriteAt(pl.v, int(id)*vw*4, f32b(page[kw:])); err != nil {
+							return err
+						}
+					}
+				}
+				if err := s.WriteAt(pl.tab, (off+p0)*4, u32view(st.ids)); err != nil {
+					return err
+				}
+				g.KVStreamPasses++
 			}
-			if err := s.WriteAt(pl.tab, (off+p0)*4, u32view(st.ids)); err != nil {
+			t[tableKey(composer.TableRows)] = st.desc[0][j]
+			t[tableKey(composer.TableWindows)] = t[tableKey(composer.TableRows)]
+			if rowsW == pg.pRowW && len(st.desc[1]) > 0 {
+				t[tableKey(composer.TableWindows)] = st.desc[1][j]
+			}
+			t[inKey], t[outKey] = side[0], side[1+j%2]
+			if j > 0 && !g.pagedFaulted("passfold") && !(sw.folds == composer.TableSelOut && g.pagedFaulted("selfold")) {
+				t[inKey] = side[1+(j+1)%2]
+			}
+			m, err := sv.launchCodes(lc, inst, in, out, sw.lo, sw.hi)
+			if err != nil {
 				return err
 			}
-			g.KVStreamPasses++
+			m0.matrix, m0.attend = m0.matrix+m.matrix, m0.attend+m.attend
+			g.ComposedStreamPasses++
 		}
-		t[tableKey(composer.TableRows)] = st.desc[0][j]
-		t[tableKey(composer.TableWindows)] = t[tableKey(composer.TableRows)]
-		if rowsW == pg.pRowW && len(st.desc[1]) > 0 {
-			t[tableKey(composer.TableWindows)] = st.desc[1][j]
-		}
-		t[tableKey(composer.TableRunIn)], t[tableKey(composer.TableRunOut)] = pg.run[0], pg.run[1+j%2]
-		if j > 0 && !g.pagedFaulted("passfold") {
-			t[tableKey(composer.TableRunIn)] = pg.run[1+(j+1)%2]
-		}
-		m, err := sv.launchCodes(lc, inst, in, out, f.passLo, f.passHi)
-		if err != nil {
-			return err
-		}
-		m0.matrix, m0.attend = m0.matrix+m.matrix, m0.attend+m.attend
-		g.ComposedStreamPasses++
+		// What reads the sweep's fold reads its last.
+		last := side[1+(st.passes-1)%2]
+		t[inKey], t[outKey] = last, last
+		at = sw.hi
 	}
 	t[tableKey(composer.TableRows)], t[tableKey(composer.TableWindows)] = rows, rowsW
-	m, err := sv.launchCodes(lc, inst, in, out, f.passHi, len(f.codes))
+	m, err := sv.launchCodes(lc, inst, in, out, at, len(f.codes))
 	if err != nil {
 		return err
 	}

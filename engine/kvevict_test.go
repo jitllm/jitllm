@@ -56,11 +56,12 @@ const evictFloatNMSE = 1e-4
 
 func newEvictGate(t *testing.T) *evictGate { return newEvictGateOf(t, evictModels()[0]) }
 
-// evictModels are the checkpoints the eviction gate runs: a dense model and
-// a mixture, whose blocks fold their history in passes through forms of
-// their own.
+// evictModels are the checkpoints the eviction gate runs: a dense model, a
+// mixture, whose blocks fold their history in passes through forms of their
+// own, and a selecting model, whose lightning indexer ranks its whole
+// history's positions in a sweep of passes before its attention's.
 func evictModels() []string {
-	return []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen3-MOE-4x0.6B-Q4_K_M.gguf"}
+	return []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen3-MOE-4x0.6B-Q4_K_M.gguf", "synth-deepseek32.gguf"}
 }
 
 func newEvictGateOf(t *testing.T, name string) *evictGate {
@@ -155,13 +156,19 @@ func (eg *evictGate) open(t *testing.T, squeeze bool, cfg func(*gpu.Config), ext
 		// The prompt is under a page, so each layer holds one: two more a
 		// layer.
 		// A budget of what the card holds gives the pool's free pages back
-		// first (SetBudget), so the slack is counted from what is left.
+		// first (SetBudget), so the slack is counted from what is left. A
+		// budget past it by less than the card's own slack grows nothing
+		// (Stats.Slack): a small model's two pages a layer go past that.
 		st := g.Stats()
 		if _, err := g.SetBudget(st.BudgetUsed); err != nil {
 			t.Fatal(err)
 		}
 		st = g.Stats()
-		if _, err := g.SetBudget(st.BudgetUsed + 2*st.KVBytes); err != nil {
+		pages := 2 * st.KVBytes
+		if pages <= st.Slack {
+			pages += st.Slack
+		}
+		if _, err := g.SetBudget(st.BudgetUsed + pages); err != nil {
 			t.Fatal(err)
 		}
 	}

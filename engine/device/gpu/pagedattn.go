@@ -6,6 +6,7 @@ import (
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/composer"
+	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/nn"
 )
 
@@ -62,6 +63,12 @@ type pagedScratch struct {
 	// and run[2] the folds' two sides, each runN floats.
 	run  [3]backend.Buf
 	runN int
+	// sel is a selection's running block scores over the passes
+	// (composer.TableSelIn, TableSelOut): sel[0] the least floats the first
+	// pass folds into, sel[1] and sel[2] the folds' two sides, each selN
+	// floats.
+	sel  [3]backend.Buf
+	selN int
 }
 
 // kvPage is the pool's page size, decided when the pool is made and fixed for
@@ -134,7 +141,7 @@ func freePaged(pg *pagedScratch) {
 			b.Free()
 		}
 	}
-	for _, b := range pg.run {
+	for _, b := range append(pg.run[:], pg.sel[:]...) {
 		if b != nil {
 			b.Free()
 		}
@@ -480,16 +487,16 @@ func (g *devTier) pagedLayer(sid uint64, l *layer, li int, p *nn.LayerPlan) erro
 	}
 	// The window paged attention applies to this block (pagedStage's descW).
 	kp.layers[li].win, kp.layers[li].chunked = l.win, l.chunked
-	// A selection over the whole history (the lightning indexer, MiniMax-M3's
-	// and QSA's block selections) is not served by a streamed pass, so its
-	// pages cannot go to host memory.
-	kp.layers[li].noEvict = selectsHistory(p)
+	// A pooled block selection (MiniMax-M3's and QSA's) is not yet formed
+	// over a streamed pass, so its pages cannot go to host memory; a plain
+	// one (the lightning indexer) reads them in passes as an attention does.
+	kp.layers[li].noEvict = pooledSelects(p.Graph)
 	// A history that cannot leave the card is held at the context asked for,
 	// charged here with the block, so the budget declines the block at
 	// placement rather than a call failing for want of a page mid-prompt. It
 	// is the layer's floor (pagedSeat), so a compaction for another layer's
 	// room does not give it back.
-	if selectsHistory(p) {
+	if kp.layers[li].noEvict {
 		kp.layers[li].ctx = (g.capped(p).MaxSeq + kp.p - 1) / kp.p
 	}
 	if l.kv == nil {
@@ -524,7 +531,32 @@ func (g *devTier) pagedLayer(sid uint64, l *layer, li int, p *nn.LayerPlan) erro
 
 // selectsHistory reports a block whose attention selects from its whole
 // history: the lightning indexer, MiniMax-M3's and QSA's block selections.
-func selectsHistory(p *nn.LayerPlan) bool { return p.Select != nil }
+func pooledSelects(g *graph.Graph) bool {
+	if g == nil {
+		return false
+	}
+	for _, o := range g.Ops {
+		if o.Kind == graph.OpSelect && o.Attr.Pooled {
+			return true
+		}
+	}
+	return false
+}
+
+// plainSelects says g selects its history's blocks by their positions' keys
+// (graph.OpSelect, not pooled): a form of it over passes ranks the whole
+// history's blocks.
+func plainSelects(g *graph.Graph) bool {
+	if g == nil {
+		return false
+	}
+	for _, o := range g.Ops {
+		if o.Kind == graph.OpSelect && !o.Attr.Pooled {
+			return true
+		}
+	}
+	return false
+}
 
 // contextPages is the pages a block that holds its context needs for seats
 // sequences of the plan's longest context, and the dummy.
@@ -559,7 +591,7 @@ func (g *devTier) pagedLayerBytes(p *nn.LayerPlan) uint64 {
 		words = g.kvp.tabWords
 	}
 	pages := uint64(1 + g.sessions())
-	if selectsHistory(p) && g.kvp != nil {
+	if pooledSelects(p.Graph) && g.kvp != nil {
 		// Held at the context asked for (pagedLayer).
 		pages = uint64(contextPages(g.kvp, g.capped(p).MaxSeq, int(g.sessions())))
 	}

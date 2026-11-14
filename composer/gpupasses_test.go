@@ -478,28 +478,37 @@ func runBytes(codes []composer.Code, name string) int64 {
 }
 
 // passSweeps is the sweeps of passes a form runs, as the tier finds them:
-// each from the first code reading the history (its keys or values) after
-// the sweep before, to the code folding its running partial (run.out or
-// sel.out).
+// each from its first code reading the history (its keys or values) to its
+// last folding a running partial (run.out or sel.out), closing where a later
+// code reads the history again.
 func passSweeps(codes []composer.Code) [][2]int {
 	var out [][2]int
-	lo := -1
+	lo, hi := -1, -1
 	for ci, c := range codes {
+		reads, folds := false, false
 		for _, bd := range c.Binds {
 			if bd.Operand.Kind != composer.OperandTable {
 				continue
 			}
 			switch bd.Operand.Name {
 			case "kv.k", "kv.v":
-				if bd.Read && lo < 0 {
-					lo = ci
-				}
+				reads = reads || bd.Read
 			case "run.out", "sel.out":
-				if bd.Writes && lo >= 0 {
-					out, lo = append(out, [2]int{lo, ci + 1}), -1
-				}
+				folds = folds || bd.Writes
 			}
 		}
+		if reads && hi >= 0 {
+			out, lo, hi = append(out, [2]int{lo, hi}), -1, -1
+		}
+		if reads && lo < 0 {
+			lo = ci
+		}
+		if folds && lo >= 0 {
+			hi = ci + 1
+		}
+	}
+	if lo >= 0 && hi >= 0 {
+		out = append(out, [2]int{lo, hi})
 	}
 	return out
 }
