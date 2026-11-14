@@ -1250,9 +1250,7 @@ func (s *Instance) PrefillCachedMixed(spans ...model.Span) ([]float32, error) {
 	for _, sp := range spans {
 		rows += sp.N(s.c.NEmbd)
 	}
-	if err := s.bidirRuns(0, spans); err != nil {
-		return nil, err
-	}
+	s.bidirRuns(0, spans)
 	defer func() {
 		if len(s.bidir) > 0 {
 			if kd, ok := s.ld.(nn.KeyRunDevice); ok {

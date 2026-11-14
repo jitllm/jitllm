@@ -3675,6 +3675,13 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 		// phase wrote, whatever chunk its queries are.
 		n = uint32(g.ncKeys)
 	}
+	if g.runPhase == 2 && !p.NonCausal {
+		// A run's second phase reads every key of its rows' runs, past the
+		// call's rows (GPU.phased).
+		for r := range nrow {
+			n = max(n, uint32(g.runEnd(pos+r, pos+nrow)))
+		}
+	}
 	if int(n) > p.MaxSeq {
 		// The score row is MaxSeq wide, so the uniform width cannot exceed it.
 		// Clamping is safe: a real row needs at most pos+nrow of it.
@@ -3685,6 +3692,9 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	pn := append(g.subBytes.pn[:0], u32one(n)...)
 	if R == 1 {
 		n = uint32(pos + 1)
+		if e := g.runEnd(pos, pos+1); g.runPhase == 2 && e > 0 && !p.NonCausal && !p.BidirOff {
+			n = uint32(e)
+		}
 		pn = binary.LittleEndian.AppendUint32(pn[:0], n)
 	}
 	// Only a backend that can record pays the rounding; elsewhere it would be
@@ -3696,7 +3706,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	// A call with no attention block in it (the head alone, or a hybrid's
 	// linear blocks, which scan their rows in order) cuts no run: a run is
 	// a key count, and only attention reads one.
-	if len(g.bidir) > 0 && !p.NonCausal && g.attendsIn(lo, hi) {
+	if len(g.bidir) > 0 && !p.NonCausal && g.runPhase == 0 && g.attendsIn(lo, hi) {
 		if why := bidirCheck(g.bidir, pos, nrow); why != "" {
 			return refuse("rows [%d,%d): %s", pos, pos+nrow, why)
 		}
@@ -3728,7 +3738,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 			} else if r < nrow {
 				// A row of a bidirectional run counts keys to the run's end
 				// (bidir.go); bidirCheck has kept the run inside these rows.
-				if e := bidirCount(g.bidir, pos+r); e > 0 && !p.BidirOff {
+				if e := g.runEnd(pos+r, pos+nrow); e > 0 && !p.BidirOff {
 					n = e
 				}
 			}

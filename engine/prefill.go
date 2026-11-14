@@ -75,9 +75,7 @@ func (s *Instance) prefillSpans(slot int, spans ...model.Span) ([]float32, error
 	if err != nil {
 		return nil, err
 	}
-	if err := s.bidirRuns(slot, spans); err != nil {
-		return nil, err
-	}
+	s.bidirRuns(slot, spans)
 	// The device forgets the runs with the prompt: a later call at those
 	// positions (a decode, another session's step) is causal.
 	defer func() {
@@ -109,9 +107,10 @@ func (s *Instance) prefillSpans(slot int, spans ...model.Span) ([]float32, error
 }
 
 // bidirRuns records the bidirectional runs of a mixed prompt, at the positions
-// they will occupy. Single sequence only: a batch slot's rows go through the
-// device as a causal prefill (nn.RowsDevice), which has no run to widen.
-func (s *Instance) bidirRuns(slot int, spans []model.Span) error {
+// they will occupy, each of any length: the chunk a run starts in ends where
+// it does (bidirChunk). Single sequence only: a batch slot's rows go through
+// the device as a causal prefill (nn.RowsDevice), which has no run to widen.
+func (s *Instance) bidirRuns(slot int, spans []model.Span) {
 	c := s.c
 	p := s.seqPos(slot)
 	if s.bidirAll {
@@ -121,25 +120,16 @@ func (s *Instance) bidirRuns(slot int, spans []model.Span) error {
 		for _, sp := range spans {
 			n += sp.N(c.NEmbd)
 		}
-		if n > nn.MaxDevicePrefillChunk {
-			return fmt.Errorf("model: PrefillMixed: a bidirectional prompt of %d rows is longer "+
-				"than one %d-row chunk", n, nn.MaxDevicePrefillChunk)
-		}
 		s.bidir = append(s.bidir, nn.KeyRun{Lo: p, Hi: p + n})
-		return nil
+		return
 	}
 	for _, sp := range spans {
 		n := sp.N(c.NEmbd)
 		if sp.Bidir && n > 0 {
-			if n > nn.MaxDevicePrefillChunk {
-				return fmt.Errorf("model: PrefillMixed: a bidirectional span of %d rows is longer "+
-					"than one %d-row chunk", n, nn.MaxDevicePrefillChunk)
-			}
 			s.bidir = append(s.bidir, nn.KeyRun{Lo: p, Hi: p + n})
 		}
 		p += n
 	}
-	return nil
 }
 
 // tokensOf sets spanTok to every row's token of a mixed prompt -- a token

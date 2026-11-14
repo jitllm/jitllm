@@ -354,7 +354,17 @@ func (g *devTier) pagedPrep(sid uint64, bs *blockScratch, rows []pagedRow) error
 	}
 	// The key count rounded to the recording grain, so a captured graph
 	// serves every token of a grain (graphKey.keys).
-	pg.keys = selectKeys(&bs.p, (pagedKeys(rows)+scoreGrain-1)/scoreGrain*scoreGrain)
+	keys := pagedKeys(rows)
+	if g.runPhase == 2 {
+		// A second phase's rows read their runs' keys past the call's rows.
+		end := keys
+		for _, r := range rows {
+			if !r.pad {
+				keys = max(keys, g.runEnd(r.pos, end))
+			}
+		}
+	}
+	pg.keys = selectKeys(&bs.p, (keys+scoreGrain-1)/scoreGrain*scoreGrain)
 	return nil
 }
 
@@ -372,6 +382,7 @@ type pagedRow struct {
 func (g *devTier) pagedStage(pg *pagedScratch, p *nn.LayerPlan, rows []pagedRow) {
 	kp := g.kvPages()
 	pg.desc, pg.descW = pg.desc[:0], pg.descW[:0]
+	callEnd := pagedKeys(rows)
 	for _, r := range rows {
 		if r.pad {
 			pg.desc = append(pg.desc, 0, 0, 0, 0)
@@ -386,7 +397,7 @@ func (g *devTier) pagedStage(pg *pagedScratch, p *nn.LayerPlan, rows []pagedRow)
 		// its window still starts from its own position, as the reference's
 		// does, which the start word here carries apart from the end.
 		last := end
-		if e := bidirCount(g.bidir, r.pos); e > 0 && !p.BidirOff {
+		if e := g.runEnd(r.pos, callEnd); e > 0 && !p.BidirOff {
 			last = uint32(e)
 		}
 		pg.desc = append(pg.desc, o, 0, last, uint32(r.pos))

@@ -659,6 +659,9 @@ type Stats struct {
 	// PipelinePieces counts the pieces of pipelined prompt chunks this device
 	// ran (GPU.pipeline).
 	PipelinePieces int
+	// RunPhases counts the phase calls of bidirectional runs wider than a
+	// submission this device ran (GPU.phased).
+	RunPhases int
 	// StageOverlaps counts rows stages that began on this device while
 	// another device ran a stage of another step (GPU.layersRows): the
 	// selection check that steps led by different sessions -- the server's
@@ -953,6 +956,7 @@ func (s *Stats) add(o Stats) {
 	s.KVStreamJoint += o.KVStreamJoint
 	s.ComposedStreamPasses += o.ComposedStreamPasses
 	s.PipelinePieces += o.PipelinePieces
+	s.RunPhases += o.RunPhases
 	s.StageOverlaps += o.StageOverlaps
 	s.SubsBeside += o.SubsBeside
 	s.RanBeside += o.RanBeside

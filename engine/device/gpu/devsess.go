@@ -50,6 +50,12 @@ type devSess struct {
 	// nothing after them, 2 runs the chunk's queries over the ncKeys keys
 	// phase 1 wrote and the rest of the block. 0 is a whole call.
 	ncPhase, ncKeys int
+	// runPhase runs the session's causal call as one phase of a
+	// bidirectional run wider than a submission (GPU.phased): 1 writes the
+	// rows' k and v, each row reading keys to itself, 2 reads every key of
+	// the row's run, which the first phases of every piece wrote. 0 is a
+	// whole call, whose rows hold their runs whole.
+	runPhase int
 	// asking is set while a reservation of the session's asks for history
 	// room (reserveKV, reserveKVSeqs): an ask is answered by growth and
 	// history sent home, so a caller that relocates can; only a call's own

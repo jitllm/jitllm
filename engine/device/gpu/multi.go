@@ -9,6 +9,7 @@ import (
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/nn"
 )
 
@@ -1586,6 +1587,128 @@ func (g *GPU) pieces(sid uint64, rs []run, pos, n int, x, cs, csSWA []float32, t
 	return true
 }
 
+// piecesCutRun reports whether a batchWidth piece of rows [pos, pos+n) of
+// session sid would end inside one of its bidirectional runs.
+func (d *devTier) piecesCutRun(sid uint64, pos, n int) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, r := range d.sessOf(sid).bidir {
+		for b := pos + batchWidth; b < pos+n; b += batchWidth {
+			if r.Lo < b && r.Hi > b {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// attendsAt reports whether block li attends (attendsIn).
+func (d *devTier) attendsAt(li int) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.attendsIn(li, li+1)
+}
+
+// centredIn is the first block of [lo, hi) whose graph convolves its rows
+// centred (graph.OpRowConv, a non-causal model's recurrent block): it reads
+// the rows after its own across the call's rows, which a piece of a run
+// would cut.
+func (d *devTier) centredIn(lo, hi int) (int, bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for li := lo; li < hi; li++ {
+		l := d.layers[li]
+		if l == nil || l.graph == nil {
+			continue
+		}
+		for _, o := range l.graph.Ops {
+			if o.Kind == graph.OpRowConv {
+				return li, true
+			}
+		}
+	}
+	return 0, false
+}
+
+// setRunPhase is the phase session sid's next calls run (devSess.runPhase).
+func (d *devTier) setRunPhase(sid uint64, ph int) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.sessOf(sid).runPhase = ph
+	if ph != 0 {
+		d.Stats.RunPhases++
+	}
+}
+
+// phased runs rows wider than one submission whose pieces would cut a
+// bidirectional run: no row of a run has its scores until every row's key
+// is written, and a submission holds batchWidth rows. So the blocks go one
+// at a time, every batchWidth piece's first phase -- its k and v written at
+// its rows, its residual left as it was -- before any piece's second, which
+// reads every key of its rows' runs and writes their residual. The forms
+// are the pieces' own: nothing is composed for the run.
+func (g *GPU) phased(sid uint64, rs []run, pos, n int, x, cs, csSWA []float32) bool {
+	ns := rs[0].dev.streams()
+	e, r := len(x)/n/ns, len(cs)/n
+	rw := 0
+	if len(csSWA) > 0 {
+		rw = len(csSWA) / n
+	}
+	for _, rn := range rs {
+		if li, ok := rn.dev.centredIn(rn.lo, rn.hi); ok {
+			rn.dev.mu.Lock()
+			rn.dev.LastErr = fmt.Sprintf("block %d convolves its rows centred across a bidirectional run of %d rows, "+
+				"wider than one %d-row submission", li, n, batchWidth)
+			rn.dev.mu.Unlock()
+			return false
+		}
+	}
+	keep := make([]float32, ns*min(batchWidth, n)*e)
+	for _, rn := range rs {
+		side := rn.dev.side()
+		rn.dev.realEmbed()
+		ok := func() bool {
+			defer rn.dev.setRunPhase(sid, 0)
+			defer rn.dev.sideAt(side, 0, n)
+			for li := rn.lo; li < rn.hi; li++ {
+				// A block that does not attend reads no key: it runs once,
+				// its pieces in order, a recurrent state stepped once.
+				first := 1
+				if !rn.dev.attendsAt(li) {
+					first = 2
+				}
+				for ph := first; ph <= 2; ph++ {
+					rn.dev.setRunPhase(sid, ph)
+					for lo := 0; lo < n; lo += batchWidth {
+						cnt := min(batchWidth, n-lo)
+						var sw []float32
+						if rw > 0 {
+							sw = csSWA[lo*rw : (lo+cnt)*rw]
+						}
+						c0, c1 := rn.tables(cs[lo*r:(lo+cnt)*r], sw)
+						xs := rn.dev.streamCut(x, ns, e, lo, cnt, n)
+						if ph == 1 {
+							xs = keep[:copy(keep, xs)]
+						}
+						rn.dev.sideAt(side, lo, n)
+						if !rn.dev.layersFor(sid, li, li+1, pos+lo, cnt, xs, c0, c1, nil) {
+							return false
+						}
+						if ph == 2 {
+							streamPut(x, xs, ns, e, lo, cnt, n)
+						}
+					}
+				}
+			}
+			return true
+		}()
+		if !ok {
+			return false
+		}
+	}
+	return true
+}
+
 func (g *GPU) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []float32, head *nn.Head) bool {
 	// The runs slice is g.runBuf, taken for the call so a decode token
 	// allocates none; a concurrent call finds it taken and makes its own.
@@ -1620,6 +1743,18 @@ func (g *GPU) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []float32,
 		// sliding layers' scratch set, not the one holding the head -- and
 		// gets its own submission.
 		tail = nil
+	}
+	if n > batchWidth && !rs[0].dev.nonCausalAt(lo) && rs[0].dev.piecesCutRun(sid, pos, n) {
+		if !g.phased(sid, rs, pos, n, x, cs, csSWA) {
+			return false
+		}
+		if head != nil {
+			if g.split {
+				csSWA = nil
+			}
+			return headOfLast(hd, sid, hi, pos, n, x, cs, csSWA, head)
+		}
+		return true
 	}
 	if n > batchWidth && !rs[0].dev.nonCausalAt(lo) && g.split {
 		// The pieces go one after another: two runs of one device at two
