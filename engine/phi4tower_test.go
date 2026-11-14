@@ -90,7 +90,18 @@ func TestPhi4TowerMatchesTransformers(t *testing.T) {
 	}
 	// The violations: BICUBIC in place of BILINEAR, and the table not
 	// resized.
-	filter := &rec.Pre[0].Ints[3]
+	var filter *int32
+	for i := 0; i < len(rec.Pre) && filter == nil; i++ {
+		switch st := &rec.Pre[i]; st.Kind {
+		case jlm.PreResize:
+			filter = &st.Ints[2]
+		case jlm.PreResizeLive:
+			filter = &st.Ints[0]
+		}
+	}
+	if filter == nil {
+		t.Fatal("the stated tower resizes in no step: the filter violation has nothing to change")
+	}
 	was := *filter
 	bs := rebuilt(func() {
 		if *filter == was {
