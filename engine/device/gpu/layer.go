@@ -128,15 +128,6 @@ type layer struct {
 	// picPool is the device's transient pair as the pool a composed
 	// non-causal block reads it through (towerStep).
 	picPool kvLayerPool
-	// A non-causal block's own MLP and rotary, which may differ from the
-	// first block's the set was built from: an encoder's decision head
-	// (Laya's) is an ungated ReLU MLP wider than the encoder's gated GELU,
-	// and rotates nothing where the encoder rotates every head. nffn is its
-	// width, ungated whether it has no gate, act its activation, noRope
-	// that it rotates nothing. Read on the non-causal path only.
-	nffn    int
-	ungated bool
-	noRope  bool
 	// swa says the block attends at the sliding layers' geometry, so it runs
 	// in that geometry's scratch set (geomsets.go). outScale is its output
 	// scalar, one float, nil where it has none.
@@ -1515,10 +1506,6 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		g.LastErr = fmt.Sprintf("block %d: %s", li, r)
 		return false
 	}
-	if r := nonCausalConflict(g.bs, sp); r != "" {
-		g.LastErr = fmt.Sprintf("block %d: %s", li, r)
-		return false
-	}
 
 	// A block already on this device is shared and only the history is new: the
 	// weights, norms, biases and router are the model's. Rebuilding would
@@ -1607,7 +1594,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		sp.QKNorm && !want.QKNorm) {
 		// A non-causal block with a wider MLP than the set was built for (a
 		// decision head after its encoder): the set grows to it, and every
-		// block runs its own width inside it (layer.nffn). An LFM2 encoder's
+		// block runs its own composed part inside it. An LFM2 encoder's
 		// convolution blocks and attention blocks share a set too: it carries
 		// the convolution's kernels and the q/k norm's, whichever came first.
 		want.NFFN, want.MaxSeq = max(want.NFFN, sp.NFFN), g.vs().max
@@ -1632,10 +1619,6 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	}
 	l := &layer{nonCausal: p.NonCausal, windowed: p.Windowed, geo: geoOf(p), vFromK: p.VFromK, graph: p.Graph, cut: p.Cut}
 	l.win, l.chunked = attendWindow(p.Graph)
-	if p.NonCausal {
-		l.nffn, l.ungated = p.NFFN, ungatedFFN(p)
-		l.noRope = p.NRot == 0 || p.NoPosEnc
-	}
 	mkw := func(slot int, x nn.Weight) *resident {
 		q, ok := quantOf(x.T)
 		if !ok || x.Rows <= 0 || len(x.Data) == 0 {
@@ -5902,45 +5885,6 @@ func planConflict(bs *blockScratch, p *nn.LayerPlan) string {
 	// A chunk is a window staged another way (pagedStage).
 	if bs.p.SWAChunked != p.SWAChunked {
 		return "a chunked attention of a different shape from the one this tier was built for"
-	}
-	return ""
-}
-
-// nonCausalConflict names a non-causal block the non-causal set, built from
-// the first such block's plan, cannot run, or "". planConflict passes every
-// non-causal plan, since a tower's blocks are one shape; an encoder with a
-// decision head after it (Laya) is two. A block's own MLP width, gating and
-// activation, and whether it rotates, are its own (layer.nffn, the set grown
-// to the widest MLP); what the set's kernels bake for every block is the
-// heads and their width, the norm kind, the rotary's width and pairing, a
-// gate buffer and the copy where a norm is missing, so a block differing in
-// one of those would run on the first one's kernels and is declined by name.
-func nonCausalConflict(bs *blockScratch, p *nn.LayerPlan) string {
-	if bs == nil || !p.NonCausal {
-		return ""
-	}
-	a := &bs.p
-	gated := map[bool]string{true: "ungated", false: "gated"}
-	switch {
-	case a.NEmbd != p.NEmbd || a.NHead != p.NHead || a.NKVHead != p.NKVHead || a.HeadDim != p.HeadDim:
-		return fmt.Sprintf("a non-causal block of %d heads of %d (%d kv) over %d on a set built for %d of %d (%d kv) over %d",
-			p.NHead, p.HeadDim, p.NKVHead, p.NEmbd, a.NHead, a.HeadDim, a.NKVHead, a.NEmbd)
-	case !ungatedFFN(p) && ungatedFFN(a):
-		// The set of an ungated MLP has no gate buffer; a block's own width,
-		// gating and activation are otherwise its own (layer.nffn).
-		return fmt.Sprintf("a non-causal block's MLP (%s, %d wide) on a set built for (%s, %d wide)",
-			gated[ungatedFFN(p)], p.NFFN, gated[ungatedFFN(a)], a.NFFN)
-	case p.LayerNorm != a.LayerNorm:
-		return fmt.Sprintf("a non-causal block with LayerNorm %v on a set built with %v", p.LayerNorm, a.LayerNorm)
-	case p.NRot > 0 && !p.NoPosEnc && (a.NRot == 0 || a.NoPosEnc):
-		// A set that rotates nothing builds no rotary kernels; a block that
-		// rotates nothing runs on one that does (layer.noRope).
-		return fmt.Sprintf("a non-causal block rotating %d of each head on a set built to rotate none", p.NRot)
-	case p.NRot > 0 && a.NRot > 0 && (p.NRot != a.NRot || p.RopeNeox != a.RopeNeox):
-		return fmt.Sprintf("a non-causal block rotating %d (NEOX %v) on a set built for %d (NEOX %v)",
-			p.NRot, p.RopeNeox, a.NRot, a.RopeNeox)
-	case p.NoPreNorm && !a.NoPreNorm:
-		return "a non-causal block with no pre-norm on a set built for blocks that have one"
 	}
 	return ""
 }

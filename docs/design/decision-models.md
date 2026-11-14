@@ -418,12 +418,13 @@ its sessions go, `jitllm decide` and `jitllm embed` take `-devices`).
   the card against the host 0.0197 (CUDA) and 0.0060 (Vulkan); the
   violation, the device's copy of the head with its joint score gated off,
   moves the answers 0.60. A seam leaves the head home with the projection.
-- **Declined by name**: a non-causal block whose heads or width differ from
-  the set it would join (`tier.nonCausalConflict`), which before ran on the
-  first block's kernels unasked. Laya's random fixture is the one case (its
-  head: 2 heads of 64 beside an encoder's 4 of 32); its head runs on the
-  host. EmbeddingGemma's bidirectional decoder blocks stay home too (the
-  decoder path plans them causal on a device).
+- **A set per geometry**: a non-causal block whose heads or width differ
+  from another's runs in the scratch set of its own geometry (`geoOf` keys a
+  non-causal set by it), where it once ran on the first block's kernels
+  unasked and was then declined by name. Laya's random fixture is the case
+  (its head: 2 heads of 64 beside an encoder's 4 of 32), its head in a set of
+  its own (`geoNCHead`). EmbeddingGemma's bidirectional decoder blocks stay
+  home too (the decoder path plans them causal on a device).
 - **The readout**: with the head on the device the label logits come from
   the device's projection; the gather of a question's label ids, a group's
   max (the generated argmax) and the answer arithmetic run on the host's
