@@ -232,6 +232,9 @@ func (g *devTier) victim(cur, lo, hi int, streamed bool) int {
 			best, bestD = li, d
 		}
 	}
+	if g.headVictim(cur, lo, hi, best, bestD) {
+		return headSlot
+	}
 	return best
 }
 
@@ -329,6 +332,9 @@ func (g *devTier) dropImported(li int) {
 // pageOut frees block li's weights, leaving the block owned by this device and
 // its history untouched. Callers hold g.mu.
 func (g *devTier) pageOut(li int) uint64 {
+	if li == headSlot {
+		return g.pageOutHead()
+	}
 	l := g.layers[li]
 	if l == nil || l.pg == nil || !l.pg.in {
 		return 0
@@ -680,8 +686,19 @@ func (g *devTier) pageInHold(li, lo, hi int) bool {
 func (g *devTier) submit(sid uint64, bs *blockScratch, lo, hi, pos int, x, cs, csSWA []float32, head *nn.Head) bool {
 	if lo >= hi {
 		// An empty range, with or without a head: layersOnce owns that rule.
-		return g.layersOnce(sid, bs, lo, hi, pos, x, cs, csSWA, head)
+		if head != nil && !g.headHold(hi, lo, hi, true) {
+			return false
+		}
+		ok := g.layersOnce(sid, bs, lo, hi, pos, x, cs, csSWA, head)
+		if head != nil {
+			g.headLetGo()
+		}
+		return ok
 	}
+	// apart is a streamed projection that found no room beside the run
+	// carrying it: that run goes alone and the head after it, a call of its
+	// own holding nothing else.
+	apart := false
 	rows := 1
 	if w := bs.p.ResidW(); w > 0 && len(x) > w {
 		rows = len(x) / w
@@ -713,11 +730,17 @@ func (g *devTier) submit(sid uint64, bs *blockScratch, lo, hi, pos int, x, cs, c
 		if end >= hi {
 			h = head
 		}
+		if h != nil && !g.headHold(li, lo, hi, false) {
+			h, apart = nil, true
+		}
 		// Look-ahead belongs here and is not built: the next blocks' host reads
 		// should be in flight during layersOnce, as an early EnsurePage into
 		// the frame pool (jlm reads, it does not map).
 		t0 := time.Now()
 		ok := g.layersOnce(sid, bs, li, end, pos, x, cs, csSWA, h)
+		if h != nil {
+			g.headLetGo()
+		}
 		g.mu.Lock()
 		g.dropPages(li, end)
 		if ok {
@@ -728,6 +751,9 @@ func (g *devTier) submit(sid uint64, bs *blockScratch, lo, hi, pos int, x, cs, c
 			return false
 		}
 		li = end
+	}
+	if apart {
+		return g.submit(sid, bs, hi, hi, pos, x, cs, csSWA, head)
 	}
 	return true
 }

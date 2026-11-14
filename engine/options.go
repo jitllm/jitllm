@@ -505,7 +505,8 @@ func WithSeamTuneSchedule(warmup, perRun, rounds int, verbose bool) Option {
 // SEL is a block, an inclusive range of blocks, "head", or "*" for every block
 // no other entry names. WHERE is "cpu" (or "host") or a device as -devices names it; a
 // trailing "!" pins that entry (Place.Pin) and a trailing "~" streams it
-// through the device (Place.Stream), in either order.
+// through the device (Place.Stream), in either order: a block's weights, or
+// the head's projection.
 func ParsePlacement(spec string, strict bool) (Placement, error) {
 	p := Placement{Blocks: map[int]Place{}, Strict: strict}
 	for _, raw := range strings.Split(spec, ",") {
@@ -554,10 +555,6 @@ func ParsePlacement(spec string, strict bool) (Placement, error) {
 		}
 		sel = strings.TrimSpace(sel)
 		if sel == "head" {
-			if pl.Stream {
-				return Placement{}, fmt.Errorf("model: placement %q: the head is read every token "+
-					"and does not stream", spec)
-			}
 			h := pl
 			p.Head = &h
 			continue

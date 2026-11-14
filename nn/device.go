@@ -332,7 +332,14 @@ type Head struct {
 	// (engine.WithCPU): a device that pages blocks takes the projection while
 	// the slots a swap needs are left, rather than only when it costs none.
 	NoCPU bool
-	Norm  []float32 // output_norm.weight
+	// Stream says the caller's placement streams the projection
+	// (engine.Place.Stream on the head): a device that takes it pages it
+	// through its slots as a streamed block's weights, in for the call that
+	// reads it and a victim when a page-in wants the room. Where the input
+	// rows read the projection on the device (Embeds, with Embed), its bytes
+	// are held for them and it is placed as it is without.
+	Stream bool
+	Norm   []float32 // output_norm.weight
 	// NormB is the output LayerNorm's bias (C6), non-nil exactly when the
 	// model's norms are LayerNorms (LayerPlan.LayerNorm) -- zeros where the
 	// file carries none.
