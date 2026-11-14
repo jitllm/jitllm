@@ -214,6 +214,11 @@ func (s *Instance) prefillInto(slot int, tokens []int32) ([]float32, error) {
 			return nil, errToken{id, c.NVocab}
 		}
 	}
+	if c.NonCausal && s.emb == nil && slot == 0 {
+		// A non-causal model's prompt is one run, whatever chunks a device
+		// takes: every row reads every other.
+		return s.prefillSpans(slot, model.Span{Tokens: tokens, Bidir: true})
+	}
 	if slot == 0 {
 		s.kv.note(s.seqPos(0), tokens...)
 	}
