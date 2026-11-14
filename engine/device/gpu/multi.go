@@ -1556,8 +1556,8 @@ func (g *GPU) pieces(sid uint64, rs []run, pos, n int, x, cs, csSWA []float32, t
 	for i, rn := range rs {
 		sides[i] = rn.dev.side()
 		defer rn.dev.sideAt(sides[i], 0, n)
-		if ns > 1 {
-			rn.dev.realEmbed()
+		if ns > 1 && !rn.dev.realEmbed() {
+			return false
 		}
 	}
 	rw := 0
@@ -1666,7 +1666,9 @@ func (g *GPU) phased(sid uint64, rs []run, pos, n int, x, cs, csSWA []float32) b
 	keep := make([]float32, ns*min(batchWidth, n)*e)
 	for _, rn := range rs {
 		side := rn.dev.side()
-		rn.dev.realEmbed()
+		if !rn.dev.realEmbed() {
+			return false
+		}
 		ok := func() bool {
 			defer rn.dev.setRunPhase(sid, 0)
 			defer rn.dev.sideAt(side, 0, n)
@@ -1930,7 +1932,10 @@ func (g *GPU) embedRows(sid uint64, ids []int32, pos int, dst []float32) bool {
 		return false
 	}
 	if first != hd {
-		v.takeEmbed(nil) // nil is no submission's x: this materializes
+		// nil is no submission's x: this materializes.
+		if _, ok := v.takeEmbed(nil); !ok {
+			return false
+		}
 	}
 	return true
 }

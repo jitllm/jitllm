@@ -257,7 +257,10 @@ func (g *devTier) rowsInGroups(lo, hi, grp int, rs *ragStep, x, cs, csSWA []floa
 	// The rows are gathered from x, so a promised gather is made real first.
 	if pe := g.embPend; pe != nil {
 		g.embPend = nil
-		g.materializeLocked(pe)
+		if !g.materializeLocked(pe) {
+			g.mu.Unlock()
+			return false
+		}
 	}
 	ple, cut, toks := g.pleHost, g.cutHost, g.stepToks
 	g.mu.Unlock()
