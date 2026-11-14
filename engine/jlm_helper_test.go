@@ -38,6 +38,17 @@ const q8Suffix = "@q8"
 // fixtureSource is the file or directory a model name reads from.
 func fixtureSource(path string) string { return strings.TrimSuffix(path, q8Suffix) }
 
+// ModelConfigForTest is the publisher's config.json the GGUF at path
+// converts with (modelConfigs), "" for none. It is exported for the external
+// test package's jlmOf.
+func ModelConfigForTest(path string) string {
+	rel, err := filepath.Rel(testmodels.Dir(), path)
+	if err != nil || modelConfigs()[rel] == "" {
+		return ""
+	}
+	return testmodels.Path(modelConfigs()[rel])
+}
+
 // BuildIDForTest identifies this test binary by its bytes; it is what
 // jlm.Fingerprint.Writer carries for a test-converted file. The mtime is not an
 // identity (`go test` relinks every run), the content is. An unreadable
@@ -199,8 +210,8 @@ func convertPair(path, mmproj string) (string, error) {
 	}
 	sweepServedCopies(dst)
 	var opts []convert.Option
-	if rel, err := filepath.Rel(testmodels.Dir(), path); err == nil && modelConfigs()[rel] != "" {
-		opts = append(opts, convert.WithModelConfig(testmodels.Path(modelConfigs()[rel])))
+	if c := ModelConfigForTest(path); c != "" {
+		opts = append(opts, convert.WithModelConfig(c))
 	}
 	if _, err := convert.FromGGUFs(path, mmproj, tmp, jlm.Fingerprint{Host: "test", Writer: BuildIDForTest()}, opts...); err != nil {
 		os.Remove(tmp)
