@@ -29,6 +29,10 @@ type Step struct {
 	// Marks is the most rotary marks a sequence holds (graph.OpRopePos), 0
 	// for a model whose rows all turn at their cache positions.
 	Marks int
+	// Context, for a form over a history read in passes (History.Passes),
+	// is the positions the whole history holds, Keys a pass's: what a
+	// selection ranks over and its keep mask spans.
+	Context int
 }
 
 // stepOf is the step a part of segment seg is composed for: a vision

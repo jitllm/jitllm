@@ -328,7 +328,6 @@ context	composer/decompose.go	"a matvec over %s weights: %w"
 bug	composer/decompose.go	"a norm of %d weights"
 bug	composer/decompose.go	"an add of %d operands"
 bug	composer/decompose.go	"no format for %s"
-refusal	composer/decompose_attend.go	"a block selection over a history read in passes"	a selection over a history streamed in passes
 bug	composer/decompose_attend.go	"an attention of %d heads of %d over history rows of %d"
 bug	composer/decompose_attend.go	"an attention of %d heads over %d, window %d, softcap %v"
 bug	composer/decompose_attend.go	"an attention of %d heads over a selection that is not its entries' groups"
@@ -470,7 +469,9 @@ bug	composer/decompose_ropetable.go	"a rotary value of %d for %d pairs"
 input	composer/decompose_ropetable.go	"interleaved rotary sections %v: a fourth axis is not interleaved"
 bug	composer/decompose_ropetable.go	"rotary sections %v over %d pairs: contiguous sections cover every pair"
 bug	composer/decompose_ropetable.go	"rotary sections %v"
+refusal	composer/decompose_selectkeys.go	"a pooled selection over a history read in passes"	a pooled selection over a history streamed in passes
 bug	composer/decompose_selectkeys.go	"a selection of %d heads in %d groups, keys of %d at %d of %d, blocks of %d, window %d"
+bug	composer/decompose_selectkeys.go	"a selection over a history read in passes of %d positions, %d a pass"	the call site states the whole history a form over passes reads (Step.Context)
 bug	composer/decompose_selectkeys.go	"a selection over block %d's history outside a block"
 bug	composer/decompose_selectkeys.go	"a selection's score through %v"
 bug	composer/decompose_selectpool.go	"a pooled selection turned by a rotary of %d of %d, layout %d"
