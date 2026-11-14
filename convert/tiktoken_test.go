@@ -107,8 +107,9 @@ func TestTiktokenVocabEncodesLikeMoonshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The golden parses specials (allowed_special="all"): EncodeSpecial.
 	for _, c := range gold.Cases {
-		if got := v.Encode(c.Text, true); !slices.Equal(got, c.IDs) {
+		if got := v.EncodeSpecial(c.Text, true); !slices.Equal(got, c.IDs) {
 			t.Errorf("Encode(%q)\n  ours      %v\n  Moonshot  %v", c.Text, got, c.IDs)
 		}
 	}
