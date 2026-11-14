@@ -47,6 +47,9 @@ func TestStepAcrossSessionsEveryArchitecture(t *testing.T) {
 						t.Fatalf("%s's step across sessions disagrees with each session alone: NMSE %.3e at row %d",
 							filepath.Base(name), r.worst, r.at)
 					}
+					if fixture(name) {
+						fixtureMatrixArm(t, m, name, dev, instOpts...)
+					}
 				})
 			}
 		})
@@ -95,12 +98,46 @@ func fixture(name string) bool { return strings.HasPrefix(filepath.Base(name), "
 // bound, so a fixture's card forms nothing on its matrix unit (fixtureTier).
 const fixtureStepNMSE = 1e-9
 
+// fixtureMatrixNMSE is a fixture's step bound with the matrix unit on: a step
+// of rows rounds each block's row factors to binary16, unit roundoff u =
+// 2^-11 (u squared 2.4e-07), where each session alone reads them as floats,
+// and a fixture's few blocks compound it. 64 u squared holds
+// synth-bitnet-i2s's 5.4e-08 well inside and a missing Llama 4 temperature's
+// 6.4e-04 well outside. A mixture's router turns a rounding near a tie into
+// another expert and takes mixtureStepNMSE, as a published mixture does.
+const fixtureMatrixNMSE = 64.0 / (1 << 22)
+
+// fixtureMatrixArm runs fixture name's step gate again on a card whose matrix
+// unit is on, held to fixtureMatrixNMSE (a mixture to mixtureStepNMSE). A
+// fixture whose weights stay float32 forms nothing on the unit (binary16
+// would round them), and says so: that arm repeats the float one.
+func fixtureMatrixArm(t *testing.T, m *model.Model, name, dev string, io ...Option) {
+	g := stepTier(t, m, dev, false)
+	defer g.Close()
+	r := stepGate(t, m, g, false, io...)
+	units := 0
+	for _, n := range g.Stats().MatrixLaunches {
+		units += n
+	}
+	bound := fixtureMatrixNMSE
+	if m.Cfg.MoE() {
+		bound = mixtureStepNMSE
+	}
+	t.Logf("STEP %s %s, matrix unit on: worst logit NMSE %.3e (bound %.3e), %d launch(es) on the unit",
+		filepath.Base(name), g.Name(), r.worst, bound, units)
+	if !(r.worst < bound) {
+		t.Fatalf("%s's step across sessions on the matrix unit disagrees with each session alone: NMSE %.3e at row %d",
+			filepath.Base(name), r.worst, r.at)
+	}
+}
+
 // fixtureTier is the card options a fixture's step gate runs under: no
 // kernel on the matrix unit (NoMMA), where a step of rows rounds its row
 // factors to binary16 and each session alone reads them as floats --
 // synth-bitnet-i2s's step read 5.4e-08 and synth-gptoss's 8.6e-04 (a router
 // tie moved) on a V100. The published models run the matrix unit, held to
-// their band.
+// their band, and each fixture runs it in an arm of its own
+// (fixtureMatrixArm).
 func fixtureTier(name string) []gpu.Option {
 	if !fixture(name) {
 		return nil
