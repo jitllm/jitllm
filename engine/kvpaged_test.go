@@ -1396,7 +1396,7 @@ func TestKVPagesRelocateWithTheLayer(t *testing.T) {
 			name string
 			kt   model.KVType
 		}{{"f32", model.KVF32}, {"f16", model.KVF16}, {"q8_0", model.KVQ8_0}, {"q4_0", model.KVQ4_0}, {"q4_1", model.KVQ4_1},
-			{"q5_0", model.KVQ5_0}, {"q5_1", model.KVQ5_1}, {"iq4_nl", model.KVIQ4_NL}} {
+			{"q5_0", model.KVQ5_0}, {"q5_1", model.KVQ5_1}, {"iq4_nl", model.KVIQ4_NL}, {"bf16", model.KVBF16}} {
 			t.Run(name+"/"+c.name, func(t *testing.T) { kvPagesRelocateWithTheLayer(t, jlmOf(t, testmodels.Path(name)), c.kt, w) })
 		}
 	}

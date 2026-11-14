@@ -1702,8 +1702,8 @@ func modelOptions() []engine.Option {
 	if v := os.Getenv("JITLLM_KV_F16"); v != "" {
 		o = append(o, engine.WithKVF16(v == "1"))
 	}
-	// The cache's format by name (f32, f16, q8_0, q4_0, q4_1, iq4_nl, q5_0,
-	// q5_1); it overrides JITLLM_KV_F16.
+	// The cache's format by name (f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl,
+	// q5_0, q5_1); it overrides JITLLM_KV_F16.
 	if v := os.Getenv("JITLLM_KV_TYPE"); v != "" {
 		t, err := model.ParseKVType(v)
 		if err != nil {

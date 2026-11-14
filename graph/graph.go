@@ -329,10 +329,13 @@ const (
 	OpNGramWindow
 	// OpHalves is In[0]'s floats as binary16, two a word (Out[0], u32, half
 	// In[0]'s width), the lower element in the low half, rounded to nearest
-	// even as a binary16 history's pages store them. A primitive.
+	// even as a binary16 history's pages store them; as bfloat16 where
+	// Attr.BF16 says, a NaN quieted, as ggml_compute_fp32_to_bf16 rounds. A
+	// primitive.
 	OpHalves
 	// OpWidenHalves is In[0]'s binary16 halves, two a word (u32), as floats
-	// (Out[0], twice In[0]'s width), the low half first. A primitive.
+	// (Out[0], twice In[0]'s width), the low half first; bfloat16 halves
+	// where Attr.BF16 says. A primitive.
 	OpWidenHalves
 	// OpQ8Rows is each row of In[0]'s floats as a q8 history's row holds it
 	// (Out[0], u32): the row's nb = ceil(W/32) blocks' codes, four to a word
@@ -962,6 +965,8 @@ type Attrs struct {
 	Pooling uint8
 	// Block is OpBlockRows' and OpWidenBlockRows' format.
 	Block BlockFmt
+	// BF16 makes OpHalves' and OpWidenHalves' halves bfloat16.
+	BF16 bool
 	// Rotary is OpRopeTable's: which of the model's rotaries the table is
 	// (RopeTable.Index), the step's table it writes.
 	Rotary int

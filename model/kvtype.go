@@ -10,6 +10,7 @@ import (
 //
 //	KVF32   4 bytes an element
 //	KVF16   binary16, 2 bytes an element
+//	KVBF16  bfloat16, 2 bytes an element, rounded as ggml rounds it
 //	KVQ8_0  q8_0 per head row (32-element blocks, llama.cpp's rounding):
 //	        1.25 bytes an element as the cache lays it out
 //	KVQ4_0, KVQ4_1, KVQ5_0, KVQ5_1, KVIQ4_NL  llama.cpp's blocks of those
@@ -34,6 +35,7 @@ const (
 	KVQ5_0
 	KVQ5_1
 	KVIQ4_NL
+	KVBF16
 )
 
 func (t KVType) String() string {
@@ -52,16 +54,18 @@ func (t KVType) String() string {
 		return "q5_1"
 	case KVIQ4_NL:
 		return "iq4_nl"
+	case KVBF16:
+		return "bf16"
 	}
 	return "f32"
 }
 
 // ParseKVType reads a format's name as KVType.String spells it.
 func ParseKVType(s string) (KVType, error) {
-	for _, t := range []KVType{KVF32, KVF16, KVQ8_0, KVQ4_0, KVQ4_1, KVIQ4_NL, KVQ5_0, KVQ5_1} {
+	for _, t := range []KVType{KVF32, KVF16, KVBF16, KVQ8_0, KVQ4_0, KVQ4_1, KVIQ4_NL, KVQ5_0, KVQ5_1} {
 		if t.String() == s {
 			return t, nil
 		}
 	}
-	return 0, fmt.Errorf("model: KV type %q is not one of f32, f16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1", s)
+	return 0, fmt.Errorf("model: KV type %q is not one of f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1", s)
 }

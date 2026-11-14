@@ -559,8 +559,10 @@ type BlockSpec struct {
 	// KVRow, past 0, is the head width of a quantized history's rows (F32
 	// is then true: no store narrows to halves): q8 rows, or KVBlock's
 	// blocks where it is set.
-	KVRow        int
-	KVBlock      graph.BlockFmt
+	KVRow   int
+	KVBlock graph.BlockFmt
+	// KVBF16 is a bfloat16 history's: its pools hold bfloat16 halves.
+	KVBF16       bool
 	Bidir, Whole bool
 	Rec          bool
 	Run          int

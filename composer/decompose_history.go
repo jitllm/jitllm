@@ -212,7 +212,11 @@ func decomposeKVAppend(o graph.Op, c *Context) ([]Prim, error) {
 			U := ir.U32
 			lo := x.at(0, sh, x.coord(0), x.op(OpMul, U, d, x.u(2)))
 			hi := x.at(0, sh, x.coord(0), x.op(OpAdd, U, x.op(OpMul, U, d, x.u(2)), x.u(1)))
-			val = x.op(OpOr, U, x.un(OpHalf, U, lo), x.op(OpShl, U, x.un(OpHalf, U, hi), x.u(16)))
+			if l.BF16 {
+				val = x.op(OpOr, U, x.bf16Bits(lo), x.op(OpShl, U, x.bf16Bits(hi), x.u(16)))
+			} else {
+				val = x.op(OpOr, U, x.un(OpHalf, U, lo), x.op(OpShl, U, x.un(OpHalf, U, hi), x.u(16)))
+			}
 			if open >= 0 {
 				val = x.sel(U, open, x.u(0), val)
 			}

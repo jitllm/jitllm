@@ -12,6 +12,7 @@ import (
 //
 //	KVF32  four bytes an element
 //	KVF16  binary16, two bytes an element
+//	KVBF16 bfloat16, two bytes an element
 //	KVQ8   q8_0 per head row: a row of hd elements is nb = ceil(hd/32) blocks,
 //	       stored as nb*32 int8 (the last block zero-padded) followed by nb
 //	       pairs {d, s} of float32; element e is d[e/32] * q[e]
@@ -45,10 +46,15 @@ const (
 	KVQ5_0
 	KVQ5_1
 	KVIQ4NL
+	KVBF16
 )
 
 // KVFormats is how many KV formats there are, what a table by format holds.
-const KVFormats = int(KVIQ4NL) + 1
+const KVFormats = int(KVBF16) + 1
+
+// Halves is whether f holds each element in half a word: binary16 or
+// bfloat16, converted in rows of any width.
+func (f KVFmt) Halves() bool { return f == KVF16 || f == KVBF16 }
 
 // Block is f's llama.cpp block format, 0 for one that is not blocks.
 func (f KVFmt) Block() graph.BlockFmt {
@@ -81,6 +87,8 @@ func (f KVFmt) String() string {
 		return "f16"
 	case KVQ8:
 		return "q8_0"
+	case KVBF16:
+		return "bf16"
 	}
 	if b := f.Block(); b != 0 {
 		return b.String()
@@ -93,7 +101,7 @@ func (f KVFmt) String() string {
 // (f16 needs hd even), so a row starts on a float32 slot.
 func KVRowBytes(f KVFmt, hd int) int {
 	switch f {
-	case KVF16:
+	case KVF16, KVBF16:
 		return 2 * hd
 	case KVQ8:
 		nb := (hd + KVQ8Block - 1) / KVQ8Block
