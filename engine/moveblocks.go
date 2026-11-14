@@ -77,10 +77,11 @@ type PendingMove struct {
 // Instance is left on the device holding the output projection, the projection
 // follows them; a move to the CPU brings it to the CPU with them.
 //
-// A pinned block refuses the call before anything moves. Between two cards a
-// range that does not hold a KV-sharing group whole is refused, since the
-// group's readers attend to its source's history wherever it is; a group the
-// move to or from the CPU splits ends where its source is (fixKVGroups).
+// A pinned block refuses the call before anything moves. A KV-sharing group
+// the range reaches moves whole, since the group's readers attend to its
+// source's history wherever it is: between two cards the range is widened to
+// it (groupWhole), and a group the move to or from the CPU splits ends where
+// its source is (fixKVGroups).
 func (s *Instance) MoveBlocks(lo, hi int, to string) (BlockMove, error) {
 	defer s.settleHist()
 	if lo < s.lo || hi > s.hi || lo >= hi {
@@ -93,6 +94,7 @@ func (s *Instance) MoveBlocks(lo, hi int, to string) (BlockMove, error) {
 	if onCPU(to) {
 		return s.moveOffCards(lo, hi)
 	}
+	lo, hi = s.groupWhole(lo, hi)
 	if err := s.vacate(lo, hi); err != nil {
 		return BlockMove{}, err
 	}
@@ -102,7 +104,7 @@ func (s *Instance) MoveBlocks(lo, hi int, to string) (BlockMove, error) {
 			cpu = append(cpu, li)
 			continue
 		}
-		if err := s.movable(li, lo, hi); err != nil {
+		if err := s.movable(li); err != nil {
 			return BlockMove{}, err
 		}
 	}
@@ -142,13 +144,25 @@ func (s *Instance) MoveBlocks(lo, hi int, to string) (BlockMove, error) {
 	return mv, err
 }
 
-// movable refuses a move of placed block li inside [lo, hi): a block sharing
-// its history beyond the range, or one the placement pins where it is.
-func (s *Instance) movable(li, lo, hi int) error {
-	if glo, ghi := s.kvSpan(li); glo < lo || ghi > hi {
-		return fmt.Errorf("model: block %d shares its history with blocks %d..%d, "+
-			"which move together", li, glo, ghi-1)
+// groupWhole is [lo, hi) widened to every KV-sharing group a block of it
+// holds, and every group those reach (kvSpan).
+func (s *Instance) groupWhole(lo, hi int) (int, int) {
+	for {
+		l, h := lo, hi
+		for li := lo; li < hi; li++ {
+			glo, ghi := s.kvSpan(li)
+			l, h = min(l, glo), max(h, ghi)
+		}
+		if l == lo && h == hi {
+			return lo, hi
+		}
+		lo, hi = l, h
 	}
+}
+
+// movable refuses a move of placed block li: one the placement pins where it
+// is.
+func (s *Instance) movable(li int) error {
 	if s.pinnedOnDev(li) {
 		return fmt.Errorf("model: block %d is pinned where it is by the placement", li)
 	}
@@ -184,6 +198,7 @@ func (s *Instance) prepareMove(lo, hi int, to string, skipCPU bool) (*PendingMov
 	if lo < s.lo || hi > s.hi || lo >= hi {
 		return nil, fmt.Errorf("model: blocks %d..%d are outside this instance's %d..%d", lo, hi-1, s.lo, s.hi-1)
 	}
+	lo, hi = s.groupWhole(lo, hi)
 	for li := lo; li < hi; li++ {
 		if !s.devAt(li) {
 			if skipCPU {
@@ -192,7 +207,7 @@ func (s *Instance) prepareMove(lo, hi int, to string, skipCPU bool) (*PendingMov
 			return nil, fmt.Errorf("model: block %d is on the CPU; a move prepared ahead "+
 				"moves placed blocks, and MoveBlocks places one", li)
 		}
-		if err := s.movable(li, lo, hi); err != nil {
+		if err := s.movable(li); err != nil {
 			return nil, err
 		}
 	}
