@@ -1,223 +1,495 @@
 package srcgate
 
 import (
+	"bufio"
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"maps"
 	"os"
 	"path/filepath"
-	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
-// TestNoRefusalButInputsAndLimits holds the inference packages -- engine,
-// model, nn, composer, graph, format, sched, backend -- to the refusals
-// below, each an input check, a limit of a device's instructions, or a
-// reference's own refusal matched: a model the engine runs is composed and
-// run, never refused for a feature (the goal's second check). A refusal
-// added fails the gate; one gone leaves the list with it. The violation, a
-// refusal the list does not hold, is seen.
+// TestNoRefusalButInputsAndLimits holds every error the inference packages
+// -- engine, model, nn, composer, graph, format, sched, backend -- make to
+// the classes testdata/origins.txt gives them, whatever its wording: an
+// error's literal is found by what makes it one (fmt.Errorf, errors.New, a
+// panic, an error type's value or conversion, a helper that makes an error
+// of its argument, a reason a function returns beside its bool or names an
+// Err, a string assigned to a name ending in Err), not by a phrase. A new
+// error is unclassified until a line says what it is; one gone leaves the
+// table with it. The classes:
+//
+//   - input: the caller's request or the file's contents fail a check
+//   - limit: a device, driver or OS states a bound (memory, a width, an
+//     instruction set, co-residency: RULE 13)
+//   - fault: an outside call failed and reports it
+//   - bug: the engine's own contract broken; reaching it is a defect
+//   - context: names where; the cause is the error or reason it carries
+//   - skip: an arm not taken, the same answer through another
+//   - refusal: a feature the engine does not do, with why: the work list,
+//     which the goal's second check drives to empty
+//
+// The violation -- an error of each kind of origin the table does not
+// hold, worded with no phrase a list of phrases would catch -- is seen.
 func TestNoRefusalButInputsAndLimits(t *testing.T) {
 	testmodels.SourceTree(t)
-	allowed := map[string]string{
-		"backend/view.go:views are not implemented on its backend": "a buffer type no backend makes: CUDA, Vulkan and Metal bind views",
-		"composer/amdgpu/lower.go:are not built":                   "the AMD lowering states what its instructions express; the composer forms no tile op it refuses",
-		"composer/msl/tile.go:a half accumulator is refused":       "Metal's lowering states its limit; the composer forms no half accumulator there",
-		"composer/ptx/tile.go:is not built":                        "sm's instructions: a tile form a device does not lower is not formed for it",
-		"composer/swrmix.go:ffmpeg's rematrix refuses it":          "the reference's refusal, matched (the user's decision: the resampler is ffmpeg's)",
-		"format/quant/dequant.go:not implemented yet":              "a type off quant.Dequantable, which the converter refuses",
-		"model/model.go:which the converter refuses":               "a container the converter does not write",
-
-		"engine/joint.go:states no joint head":                       "a joint readout asked of a container that has none: the input's check",
-		"engine/decide.go:states no prompt":                          "a container written before marker prompts were stated: convert it again",
-		"engine/decide.go:states no label readout":                   "a decision asked of a container with no label readout: the input's check",
-		"model/toolgrammar.go:states no tool-call form":              "a forced tool call asked of a model with no tool-call form: the input's check",
-		"model/toolgrammar.go:states no parameter":                   "a tool form written wrong: the container's check",
-		"model/toolsyntax.go:states no tool-call form":               "a container written before tool forms were stated: convert it again",
-		"model/video.go:reads no video":                              "a video given a model whose reference processor takes none (convert.TestEveryVideoProcessorIsStated holds every one that does stated): the input's check",
-		"model/tower.go:states no picture geometry":                  "a container written before a picture's geometry was stated: convert it again",
-		"model/picture.go:states no picture geometry":                "a picture's squares asked of a tower that states no geometry, which Open refuses first: the input's check",
-		"model/video.go:states no geometry of its frames":            "a video's frames sized from a record that states none, which the container's check refuses first: the input's check",
-		"model/video.go:which the video's resize refuses":            "the reference processor's own refusal (frames past an aspect of 200, fewer than its temporal patch), stated as frames of no square: the input's check",
-		"format/jlm/video.go:states no geometry of its frames":       "a video record written wrong: the container's check",
-		"format/jlm/toolform.go:tool form":                           "a tool form the container states wrong: the container's check",
-		"format/jlm/tower.go:states no expression or no width":       "a tower record written wrong: the container's check",
-		"graph/verify.go:states no rows":                             "a graph that does not verify: the builder's check",
-		"model/front.go:the front end states no graph":               "a block of a container the converter did not write: the census runs every one it writes",
-		"engine/cpuserve.go:the front end states no graph":           "a block of a container the converter did not write: the census runs every one it writes",
-		"composer/front.go:the model states no head or input rows":   "a model the front end states nothing of: the census runs every one the converter writes",
-		"composer/decompose_history.go:the model states no table of": "a rotary no stated rotary holds: the front end states each one its blocks read",
-		"engine/device/gpu/served.go:the plan states no graph":       "the plan states a graph for each rotary the model states (nn.PartsPlan)",
-		"engine/device/gpu/rows.go:the composer states no sample":    "the composer states a sample for each vocabulary head it forms (composer.Front)",
-		"engine/device/gpu/persist.go:states no co-residency":        "a device's limit: only a CUDA cooperative launch guarantees co-residency (RULE 13)",
-		"backend/grid.go:states no co-residency limit":               "a device's limit: no grid barrier without one (RULE 13)",
-		"backend/metal.go:states no gpu-core-count":                  "a device's limit: no core count, no co-residency (RULE 13)",
-		"backend/vulkan.go:states no compute-unit count":             "a device's limit: no compute-unit count, no co-residency (RULE 13)",
-
-		"engine/decide.go:too many options":                           "a question past its label set's own bound (the converter states each set's MaxOptions): the input's check",
-		"engine/forward.go:cannot place it by name":                   "a placement naming a card on an instance whose device names none (the card tier names every device it holds): the caller's check",
-		"engine/forward.go:cannot place a block by name":              "a placement or a move naming a card on an instance whose device names none: the caller's check",
-		"engine/forward.go:cannot be continued on the CPU":            "a device that failed mid-sequence took the history it held: a hardware fault, reported by name",
-		"engine/seamtune.go:too wide to decide":                       "the tuner's measurement gate (RULE 2): a split too noisy to decide keeps the placement it has",
-		"engine/listed.go:this device cannot page a block":            "cards listed without the CPU on a device that names none (the card tier pages on itself, TestBlocksPageOnTheListedCard): the caller's check",
-		"engine/device/cpu/baseline_amd64.go:cannot run the engine":   "the amd64 floor, SSE4.1 and SSSE3 (RULE 8, nn.HostRefusal): the host's instructions",
-		"engine/device/cpu/baseline.go:cannot run here":               "a tier asked of a host whose instructions lack it (cpu:sse and its kin): the host's instructions",
-		"engine/device/cpudev/tower.go:has no form for class":         "the tower forms an entry for every class its geometry states and every sample format at placement: an index past them is the caller's check",
-		"engine/device/gpu/served.go:a pass cannot run again over":    "RULE 13: a kernel reading what it writes in one phase is the composer's contract broken, refused before it runs wrong",
-		"composer/pass_liverows.go:is refused: it combines across":    "a kernel held to a call's rows by its launch alone whose surplus row would read the history: the composer's contract broken, refused before it runs wrong (no pass that joins kernels makes one: Fuse and Epilogue ask it first; the census on CUDA and Vulkan forms none)",
-		"engine/device/gpu/open.go:cannot be listed beside":           "a device list naming a set and a member of it: the input's check",
-		"engine/device/gpu/layer.go:which has no device kernel":       "a weight type no container carries (off quant.Dequantable, or TQ1_0, which the converter repacks): the container's check",
-		"nn/device.go:cannot move between the devices directly":       "a mover's answer for a move it does not make itself: the caller carries the history through the host",
-		"composer/form.go:cannot form":                                "names the part whose composition failed; the failure is the wrapped error's, under its own phrase",
-		"composer/compose.go:jit: no lowering for":                    "a device kind the registry holds no lowering for: every device the backends open has one",
-		"composer/msl/msl.go:an ldmatrix load":                        "NVIDIA's ldmatrix lane contract, formed only where the profile lowers it",
-		"composer/msl/msl.go:float only":                              "Metal's simdgroup_matrix types are half, bfloat and float: the composer forms no integer matrix op for Metal",
-		"composer/msl/msl.go:no lowering for %s":                      "an op past the lowering's switch: every op the composer forms for Metal is lowered (the census on the M4)",
-		"composer/spirv/lower.go:an ldmatrix load":                    "NVIDIA's ldmatrix lane contract, formed only where the profile lowers it",
-		"composer/spirv/lower.go:no lowering for %s":                  "an op past the lowering's switch: every op the composer forms for Vulkan is lowered (the census on Vulkan)",
-		"composer/ptx/lower.go:no lowering for %s":                    "an op past the lowering's switch: every op the composer forms for CUDA is lowered (the census on CUDA)",
-		"composer/amdgpu/lower.go:an ldmatrix load":                   "NVIDIA's ldmatrix lane contract, formed only where the profile lowers it",
-		"composer/amdgpu/lower.go:32-lane mma.sync":                   "NVIDIA's mma.sync fragment layout, which neither MFMA nor WMMA has: formed only for sm_70 and up",
-		"composer/amdgpu/lower.go:yet: the matrix units":              "the AMD lowering states what its instructions express; the composer forms no tile op it refuses",
-		"composer/amdgpu/lower.go:amdgpu: no lowering for %s":         "an op past the lowering's switch: the AMD profile forms only what it lowers",
-		"composer/lowera64_node.go:has no form of without i8mm":       "the composer forms an unsigned byte dot only under Int8Form.UnsignedDot's instruction sets, which no arm64 profile states",
-		"format/layout/pack.go:cannot hold as a normal scale":         "an MXFP4 scale below f32's normal range on nonzero codes, which a device flushes to zero: the container's check",
-		"format/jlm/write.go:cannot state":                            "a container version with no field for it: the writer's check",
-		"format/jlm/migrate.go:which v31 cannot recover":              "a container older than the migration reads: convert it again",
-		"backend/backend.go:cannot be assumed":                        "a device that promises no subgroup width: its own statement, and the kernel asked has a scalar twin",
-		"backend/cuda/api.go:cannot map host memory":                  "a device without host mapping (CU_DEVICE_ATTRIBUTE_CAN_MAP_HOST_MEMORY): the device's limit",
-		"backend/cuda.go:cannot be asked for":                         "a CUDA warp is 32 lanes: the hardware's width",
-		"backend/hip.go:cannot be asked for":                          "amdgcn's wave: the hardware's width",
-		"backend/metal.go:cannot be asked for":                        "Metal's SIMD-group width: the hardware's",
-		"backend/vulkan.go:seam tuner cannot place blocks":            "a default, not a refusal: a software Vulkan device runs on the host's own cores, and naming it takes it",
-		"backend/metal/metal_darwin.go:is not available (macOS 15+)":  "an OS API before macOS 15: the platform's",
-		"backend/metal/metal_other.go:not available on this platform": "Metal outside Apple's platforms",
-		"backend/vulkan/device.go:does not support":                   "a driver without VK_EXT_memory_budget: free memory unknown and reported, nothing refused",
-		"backend/cuda/cuda.go:cannot record an event node":            "a driver without cuEventRecordWithFlags: the driver's",
-		"backend/grid.go:cannot bound its residency":                  "a device's limit: no grid barrier without a co-residency bound (RULE 13)",
-		"backend/cuda/funcattr.go:cannot ask for":                     "a driver without cuFuncSetAttribute: no dynamic shared memory past the static 48 KB (the driver's)",
-		"backend/vulkan/run.go:cannot guarantee a":                    "a device that cannot pin a subgroup width (VK_EXT_subgroup_size_control): the device's limit",
-		"backend/vulkan/run.go:host memory cannot be imported":        "a driver without VK_EXT_external_memory_host: the driver's",
-		"backend/vulkan/run.go:cannot import %d bytes":                "the driver's answer to a host import",
-		"backend/vulkan/subgroup.go:subgroup shuffles":                "a device without subgroup shuffles: the device's limit",
-		"backend/vulkan/subgroup.go:lanes and cannot be":              "a device whose subgroup width varies: the device's limit",
-		"backend/vulkan/subgroup.go:cannot be promised":               "a device whose subgroup width varies: the device's limit",
-		"backend/vulkan/subgroup.go:cannot be pinned":                 "a device whose subgroup width varies: the device's limit",
-
-		"engine/audiorun.go:past the sound op's":                              "a clip whose resampler runs past the taps the sound op is formed for (a rate past 10 MHz, or 64 channels past 1.5 MHz): the input's check",
-		"model/tower.go:past the sound op's":                                  "a clip whose resampler runs past the taps the sound op is formed for (a rate past 10 MHz, or 64 channels past 1.5 MHz): the input's check",
-		"engine/device/cpudev/form.go:past the argument block":                "a code's word past its own argument block: the lowering broken, an invariant",
-		"engine/device/gpu/picrows.go:live rows past the":                     "a picture's live rows past its form's, which the tower forms for every class at placement: an invariant",
-		"engine/device/gpu/served.go:more than the block's":                   "a call's experts past the block's slots, which pagedCall holds the call to: an invariant",
-		"engine/device/gpu/layer.go:wanted rows past the":                     "rows past the logits the step's staging was built for: an invariant",
-		"engine/device/gpu/rows.go:more than the batch width":                 "a step's rows past the batch width, which the router chunks it to: an invariant",
-		"engine/device/gpu/rows.go:more than the reserved width":              "a step's rows past the reserved width, which its caller chunks it to: an invariant",
-		"model/ngram.go:reads past the table's":                               "an n-gram head past its table's rows: the container's check",
-		"model/picture.go:past its %d pixels":                                 "a resize stage past the pixels its processor states: the input's check",
-		"model/tower.go:its samples' U32 offsets reach":                       "a picture past 4 GiB, the reach of its samples' 32-bit offsets: the index width",
-		"model/video.go:past its table of":                                    "a video value past its stated table: the container's check",
-		"model/video.go:past the %d the picture table holds":                  "a video pair past 4 GiB, the reach of the picture table's 32-bit offsets: the index width",
-		"composer/generate_scan.go:row store reads its state past its update": "a scan read out of order: the lowering broken, an invariant",
-		"composer/generate_scan.go:sum reads its state past its update":       "a scan read out of order: the lowering broken, an invariant",
-		"composer/lowergpu.go:past the device's":                              "a kernel's workgroup memory past the device's: the device's limit",
-		"format/jlm/format.go:runs past the":                                  "a container span past its file: the container's check",
-		"format/jlm/format.go:run past the":                                   "a container's pages past its file: the container's check",
-		"format/jlm/tower.go:past its pictures'":                              "a tower whose video frames outgrow its pictures: the container's check",
-		"format/jlm/tower.go:past its last":                                   "a tower step's value past its last: the container's check",
-		"format/jlm/read.go:past the %d-byte file":                            "a container span past its file: the container's check",
-		"format/jlm/read.go:run past the %d pages":                            "an expert page's sheets past the container's pages: the container's check",
-		"format/jlm/codec.go:is past the":                                     "a container span past its file: the container's check",
-
-		"engine/embedrun.go:this model embeds at most":                      "an embedding's input past the positions the model reaches (its context): the input's check, as llama-server refuses one past its batch",
-		"engine/towerrun.go:past what the tower's largest class holds":      "a resized picture past the classes the tower forms from its stated geometry, which the resize is held to: an invariant",
-		"engine/towerrun.go:on a canvas of":                                 "a picture's canvas past its class, which the same resize holds it to: an invariant",
-		"engine/devfail.go:has no room for the call's history now":          "a device's memory: a call's history past the card's free pages after the instance moved blocks to the CPU until it fit (reserveMoving), so only where nothing can move; the server parks the row while other rows hold pages (parkForRoom)",
-		"engine/session.go:has no room for this session's history":          "a device's memory: a session's history of a block coming back to a full card, which roomFor meets by moving blocks to the CPU until it settles; it reaches a caller only where the instance may not relocate (SetRelocate) or nothing can move",
-		"engine/device/gpu/served.go:have no room on the card":              "a device's memory at placement: the head's input-row tables stay on the host with the head, the one decline a placement makes (RULE 8)",
-		"engine/device/gpu/layer.go:have no room beside the head":           "a device's memory at placement: the head and its input-row tables stay on the host, the one decline a placement makes (RULE 8)",
-		"engine/device/gpu/recpool.go:no room for the kept zeros":           "fault injection's own refusal (roomFaulted, under the jitllmfault tag): never in a release build",
-		"engine/device/gpu/recpool.go:no room for a copy of a marked state": "a device's memory: the mark keeps no copy, and a rewind that needs it says it cannot rewind (rewindable)",
-		"engine/device/gpu/kvpool.go:no room for another page":              "a device's memory: a layer's attention pool past the card's budget, the backend's buffer limit or the index width, after eviction and streaming (docs/design/device-kv-paging.md)",
-		"model/model.go:wide over at most":                                  "a per-layer embedding table written wrong: the container's check",
-		"composer/a64/a64.go:at most %d":                                    "an offset past what its instruction encodes: the ISA's limit",
-		"graph/verify.go:at most a bias":                                    "a graph that does not verify: the builder's check",
-		"graph/verify.go:a picture of at most":                              "a graph that does not verify: the builder's check",
-		"format/jlm/video.go:at most %d frames":                             "a video record written wrong: the container's check",
-		"backend/vulkan/run.go:so a launch holds at most":                   "a dispatch past vkCmdDispatch's 32-bit workgroup count: the API's limit",
-		"backend/metal/groups.go:so a dispatch holds at most":               "a dispatch past the 32-bit threadgroup count: the API's limit",
-		"backend/cuda.go:launches at most":                                  "a block past the threads its registers allow (CU_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK): the device's limit",
-		"backend/cuda/api.go:takes at most %d along x":                      "a grid past the device's x dimension (CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_X): the device's limit",
+	table, err := readOrigins(filepath.Join("testdata", "origins.txt"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	// phrase is a string literal that says the code refuses: something
-	// refused, not implemented, not supported, not built or not available,
-	// a model, a container or a device that reads or states no such thing,
-	// cannot or has no form or lowering of it, or has too many of it, or
-	// more than, past or at most a count it holds, or has no room for it.
-	phrase := regexp.MustCompile(`"[^"\n]*(?i:not implemented|is not supported|are not supported|not built|unsupported|is refused|refuses|\b(?:reads|states) no\b|cannot|can not|too many|too wide|no device kernel|no lowering|does not support|not pre-packed|has no form|no form of|not available|past the|past its|more than the|at most|no room)[^"\n]*"`)
 	root := filepath.Join("..", "..")
-	found := map[string]bool{}
-	var files int
-	for _, dir := range []string{"engine", "model", "nn", "composer", "graph", "format", "sched", "backend"} {
-		err := filepath.WalkDir(filepath.Join(root, dir), func(p string, d os.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			if d.IsDir() || !strings.HasSuffix(p, ".go") || strings.HasSuffix(p, "_test.go") {
-				return nil
-			}
-			b, err := os.ReadFile(p)
-			if err != nil {
-				return err
-			}
-			files++
-			rel, _ := filepath.Rel(root, p)
-			rel = filepath.ToSlash(rel)
-			for _, line := range strings.Split(string(b), "\n") {
-				if strings.HasPrefix(strings.TrimSpace(line), "//") {
-					continue
-				}
-				for _, m := range phrase.FindAllString(line, -1) {
-					key, ok := allowedKey(allowed, rel, m)
-					if !ok {
-						t.Errorf("%s refuses: %s -- implement it, or name the input check or device limit it is", rel, m)
-						continue
-					}
-					found[key] = true
-				}
-			}
-			return nil
-		})
+	found, files, err := errorOrigins(root, []string{"engine", "model", "nn", "composer", "graph", "format", "sched", "backend"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if files < 100 || len(found) < 1000 {
+		t.Fatalf("read %d files and %d origins: the gate read nothing", files, len(found))
+	}
+	var missing, stale []string
+	for k := range found {
+		if _, ok := table[k]; !ok {
+			missing = append(missing, fmt.Sprintf("%s\t%s", k.file, strconv.Quote(k.text)))
+		}
+	}
+	for k := range table {
+		if !found[k] {
+			stale = append(stale, fmt.Sprintf("%s\t%s", k.file, strconv.Quote(k.text)))
+		}
+	}
+	slices.Sort(missing)
+	slices.Sort(stale)
+	for _, m := range missing {
+		t.Errorf("an error testdata/origins.txt does not classify: %s -- say what it is (input, limit, fault, bug, context, skip, or a refusal with why)", m)
+	}
+	for _, s := range stale {
+		t.Errorf("testdata/origins.txt classifies an error the code no longer makes: %s", s)
+	}
+	counts, open := map[string]int{}, map[string]int{}
+	for _, c := range table {
+		counts[c.class]++
+		if c.class == "refusal" {
+			open[c.why]++
+		}
+	}
+	for _, why := range slices.Sorted(maps.Keys(open)) {
+		t.Logf("open refusal (%d): %s", open[why], why)
+	}
+	t.Logf("%d files, %d errors: %v", files, len(found), counts)
+
+	for _, v := range []string{
+		`package p; import "fmt"; func f() error { return fmt.Errorf("the tower takes pictures this wide alone") }`,
+		`package p; import "errors"; var errWide = errors.New("a window this long goes to the host")`,
+		`package p; type tierError string; func (e tierError) Error() string { return string(e) }; const errX tierError = "the head stays home"`,
+		`package p; import "fmt"; func fail(f string, a ...any) error { return fmt.Errorf("tier: "+f, a...) }; func g() error { return fail("block %d keeps to the host", 3) }`,
+		`package p; import "fmt"; func fits(n int) (bool, string) { return false, fmt.Sprintf("%d rows go one at a time", n) }`,
+		`package p; type tier struct{ LastErr string }; func (g *tier) f() { g.LastErr = "the chunk restarts on the host" }`,
+	} {
+		f, err := parser.ParseFile(token.NewFileSet(), "v.go", v, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
-	}
-	if files < 100 {
-		t.Fatalf("read %d files: the gate read nothing", files)
-	}
-	for k := range allowed {
-		if !found[k] {
-			t.Errorf("%s no longer refuses: take it off the list", k)
+		got := fileOrigins(f, errorHelpers([]*ast.File{f}))
+		if len(got) == 0 {
+			t.Errorf("the violation %s, an error the table does not hold, was not seen", v)
 		}
-	}
-	t.Logf("%d files, %d refusals, each an input check or a limit", files, len(found))
-	for _, v := range []string{`"model: a sliding window is not supported"`, `"model: the block reads no window"`, `"model: the tower states no grid"`,
-		`"tier: block 3 cannot move to cuda:1"`, `"tier: 70 kernel arguments is too many"`, `"tier: its bank is not pre-packed"`,
-		`"a graph of 9 inputs and 1 outputs, past the 8 places the CPU's call site binds"`,
-		`"model: a call of 9 experts, and a block binds at most 8"`, `"tier: no room for block 3's prompt scratch"`} {
-		if _, ok := allowedKey(allowed, "engine/forward.go", v); ok || !phrase.MatchString(v) {
-			t.Errorf("the violation %s, a refusal the list does not hold, was not seen", v)
+		for _, s := range got {
+			if _, ok := table[originKey{"engine/forward.go", s}]; ok {
+				t.Errorf("the violation %q is classified", s)
+			}
 		}
 	}
 }
 
-// allowedKey is the list's entry for refusal m in file rel: its file and a
-// fragment the literal holds.
-func allowedKey(allowed map[string]string, rel, m string) (string, bool) {
-	for k := range allowed {
-		f, frag, _ := strings.Cut(k, ":")
-		if f == rel && strings.Contains(m, frag) {
-			return k, true
+type originKey struct{ file, text string }
+
+type originClass struct{ class, why string }
+
+// readOrigins reads the table: class, file, the literal Go-quoted and, for a
+// refusal, why, a line each, tab-separated; a line starting # is a comment.
+func readOrigins(path string) (map[originKey]originClass, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	classes := []string{"input", "limit", "fault", "bug", "context", "skip", "refusal"}
+	out := map[originKey]originClass{}
+	sc := bufio.NewScanner(f)
+	sc.Buffer(nil, 1<<20)
+	for n := 1; sc.Scan(); n++ {
+		line := sc.Text()
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
 		}
+		cols := strings.Split(line, "\t")
+		if len(cols) < 3 || len(cols) > 4 {
+			return nil, fmt.Errorf("%s:%d: %d columns", path, n, len(cols))
+		}
+		if !slices.Contains(classes, cols[0]) {
+			return nil, fmt.Errorf("%s:%d: class %q is not one of %v", path, n, cols[0], classes)
+		}
+		text, err := strconv.Unquote(cols[2])
+		if err != nil {
+			return nil, fmt.Errorf("%s:%d: %v", path, n, err)
+		}
+		c := originClass{class: cols[0]}
+		if len(cols) == 4 {
+			c.why = cols[3]
+		}
+		if c.class == "refusal" && c.why == "" {
+			return nil, fmt.Errorf("%s:%d: a refusal says why", path, n)
+		}
+		k := originKey{cols[1], text}
+		if _, ok := out[k]; ok {
+			return nil, fmt.Errorf("%s:%d: %s %q twice", path, n, k.file, k.text)
+		}
+		out[k] = c
+	}
+	return out, sc.Err()
+}
+
+// errorOrigins is every error literal of the production files under dirs of
+// root, keyed by file (slash-separated, from root) and text, and how many
+// files it read.
+func errorOrigins(root string, dirs []string) (map[originKey]bool, int, error) {
+	pkgs := map[string][]*ast.File{}
+	names := map[*ast.File]string{}
+	fset := token.NewFileSet()
+	for _, dir := range dirs {
+		err := filepath.WalkDir(filepath.Join(root, dir), func(p string, d os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() && d.Name() == "testdata" {
+				return filepath.SkipDir
+			}
+			if d.IsDir() || !strings.HasSuffix(p, ".go") || strings.HasSuffix(p, "_test.go") {
+				return nil
+			}
+			f, err := parser.ParseFile(fset, p, nil, 0)
+			if err != nil {
+				return err
+			}
+			rel, _ := filepath.Rel(root, p)
+			rel = filepath.ToSlash(rel)
+			pkgs[filepath.Dir(p)] = append(pkgs[filepath.Dir(p)], f)
+			names[f] = rel
+			return nil
+		})
+		if err != nil {
+			return nil, 0, err
+		}
+	}
+	out := map[originKey]bool{}
+	for _, files := range pkgs {
+		helpers := errorHelpers(files)
+		for _, f := range files {
+			for _, s := range fileOrigins(f, helpers) {
+				out[originKey{names[f], s}] = true
+			}
+		}
+	}
+	return out, len(names), nil
+}
+
+// errorHelpers names what makes an error of a string argument in one
+// package's files, with the arguments it reads: a function, method or
+// closure whose string parameter reaches fmt.Errorf, errors.New, a
+// fmt.Sprintf into a name ending in Err, or such a name; and a type with an
+// Error method, whose conversion makes one.
+func errorHelpers(files []*ast.File) map[string][]int {
+	out := map[string][]int{}
+	check := func(name string, ft *ast.FuncType, body *ast.BlockStmt) {
+		if body == nil || ft.Params == nil {
+			return
+		}
+		i := 0
+		for _, p := range ft.Params.List {
+			n := max(1, len(p.Names))
+			id, ok := p.Type.(*ast.Ident)
+			for j := range n {
+				if ok && id.Name == "string" && len(p.Names) > 0 && reachesError(body, p.Names[j].Name) {
+					out[name] = append(out[name], i)
+				}
+				i++
+			}
+		}
+	}
+	for _, f := range files {
+		ast.Inspect(f, func(n ast.Node) bool {
+			switch v := n.(type) {
+			case *ast.FuncDecl:
+				check(v.Name.Name, v.Type, v.Body)
+				if v.Name.Name == "Error" && v.Recv != nil && len(v.Recv.List) == 1 {
+					t := v.Recv.List[0].Type
+					if st, ok := t.(*ast.StarExpr); ok {
+						t = st.X
+					}
+					if id, ok := t.(*ast.Ident); ok {
+						out[id.Name] = []int{0}
+					}
+				}
+			case *ast.AssignStmt:
+				for i, r := range v.Rhs {
+					if fl, ok := r.(*ast.FuncLit); ok && i < len(v.Lhs) {
+						if id, ok := v.Lhs[i].(*ast.Ident); ok {
+							check(id.Name, fl.Type, fl.Body)
+						}
+					}
+				}
+			}
+			return true
+		})
+	}
+	return out
+}
+
+// reachesError says body makes an error of the parameter named param.
+func reachesError(body *ast.BlockStmt, param string) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		switch v := n.(type) {
+		case *ast.CallExpr:
+			if k := errorCall(v); k == "errorf" || k == "new" {
+				for _, a := range v.Args {
+					found = found || mentions(a, param)
+				}
+			}
+		case *ast.AssignStmt:
+			for i, r := range v.Rhs {
+				if i < len(v.Lhs) && errName(v.Lhs[i]) && mentions(r, param) {
+					found = true
+				}
+			}
+		}
+		return !found
+	})
+	return found
+}
+
+// fileOrigins is every error literal of f, helpers the package's
+// (errorHelpers).
+func fileOrigins(f *ast.File, helpers map[string][]int) []string {
+	var out []string
+	add := func(e ast.Expr) {
+		if c, ok := e.(*ast.CallExpr); ok && errorCall(c) == "sprintf" && len(c.Args) > 0 {
+			e = c.Args[0]
+		}
+		if s, ok := spelled(e); ok {
+			out = append(out, s)
+		}
+	}
+	errType := func(e ast.Expr) bool {
+		id, ok := e.(*ast.Ident)
+		return ok && slices.Equal(helpers[id.Name], []int{0}) && id.Name != "string"
+	}
+	ast.Inspect(f, func(n ast.Node) bool {
+		switch v := n.(type) {
+		case *ast.FuncDecl:
+			if v.Body != nil && reasonFunc(v.Name.Name, v.Type) {
+				out = append(out, returned(v.Body)...)
+			}
+		case *ast.FuncLit:
+			if reasonFunc("", v.Type) {
+				out = append(out, returned(v.Body)...)
+			}
+		case *ast.ValueSpec:
+			if errType(v.Type) {
+				for _, val := range v.Values {
+					add(val)
+				}
+			}
+		case *ast.CompositeLit:
+			if errType(v.Type) {
+				for _, e := range v.Elts {
+					if kv, ok := e.(*ast.KeyValueExpr); ok {
+						e = kv.Value
+					}
+					add(e)
+				}
+			}
+		case *ast.AssignStmt:
+			for i, r := range v.Rhs {
+				if i < len(v.Lhs) && errName(v.Lhs[i]) {
+					add(r)
+				}
+			}
+		case *ast.CallExpr:
+			if len(v.Args) == 0 {
+				return true
+			}
+			switch errorCall(v) {
+			case "errorf", "new", "panic":
+				add(v.Args[0])
+				return true
+			case "sprintf":
+				return true
+			}
+			name := ""
+			switch fn := v.Fun.(type) {
+			case *ast.Ident:
+				name = fn.Name
+			case *ast.SelectorExpr:
+				name = fn.Sel.Name
+			}
+			for _, i := range helpers[name] {
+				if i < len(v.Args) {
+					add(v.Args[i])
+				}
+			}
+		}
+		return true
+	})
+	return out
+}
+
+// reasonFunc says a function's string result is a reason: it returns a bool
+// beside it, it is an error's Error method, or its name says it answers why.
+func reasonFunc(name string, ft *ast.FuncType) bool {
+	if ft.Results == nil {
+		return false
+	}
+	var str, boolean bool
+	for _, r := range ft.Results.List {
+		if id, ok := r.Type.(*ast.Ident); ok {
+			str = str || id.Name == "string"
+			boolean = boolean || id.Name == "bool"
+		}
+	}
+	n := strings.ToLower(name)
+	return str && (boolean || name == "Error" || strings.Contains(n, "conflict") || strings.Contains(n, "declin") ||
+		strings.Contains(n, "refus") || strings.Contains(n, "why") || strings.Contains(n, "reason") || strings.Contains(n, "unserved"))
+}
+
+// returned is every prose literal, or fmt.Sprintf of one, body returns, a
+// nested function left to its own turn: a word naming a role or a table is
+// not a reason.
+func returned(body *ast.BlockStmt) []string {
+	var out []string
+	ast.Inspect(body, func(n ast.Node) bool {
+		switch v := n.(type) {
+		case *ast.FuncLit:
+			return false
+		case *ast.ReturnStmt:
+			for _, r := range v.Results {
+				if c, ok := r.(*ast.CallExpr); ok && errorCall(c) == "sprintf" && len(c.Args) > 0 {
+					r = c.Args[0]
+				}
+				if s, ok := literal(r); ok && strings.Contains(s, " ") {
+					out = append(out, s)
+				}
+			}
+		}
+		return true
+	})
+	return out
+}
+
+// errName says e names an error's text: a name ending in Err.
+func errName(e ast.Expr) bool {
+	switch v := e.(type) {
+	case *ast.Ident:
+		return strings.HasSuffix(v.Name, "Err")
+	case *ast.SelectorExpr:
+		return strings.HasSuffix(v.Sel.Name, "Err")
+	}
+	return false
+}
+
+// mentions says e reads the name.
+func mentions(e ast.Expr, name string) bool {
+	found := false
+	ast.Inspect(e, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok && id.Name == name {
+			found = true
+		}
+		return !found
+	})
+	return found
+}
+
+// errorCall names c when it is fmt.Errorf, errors.New, fmt.Sprintf or panic.
+func errorCall(c *ast.CallExpr) string {
+	switch f := c.Fun.(type) {
+	case *ast.Ident:
+		if f.Name == "panic" {
+			return "panic"
+		}
+	case *ast.SelectorExpr:
+		if x, ok := f.X.(*ast.Ident); ok {
+			switch x.Name + "." + f.Sel.Name {
+			case "fmt.Errorf":
+				return "errorf"
+			case "errors.New":
+				return "new"
+			case "fmt.Sprintf":
+				return "sprintf"
+			}
+		}
+	}
+	return ""
+}
+
+// spelled is what an error's text says: a literal, or a sum of strings with
+// %v for each that is not one, prose in some literal of it.
+func spelled(e ast.Expr) (string, bool) {
+	if s, ok := literal(e); ok {
+		return s, s != ""
+	}
+	var parts []string
+	prose := false
+	var walk func(ast.Expr) bool
+	walk = func(e ast.Expr) bool {
+		if b, ok := e.(*ast.BinaryExpr); ok && b.Op == token.ADD {
+			return walk(b.X) && walk(b.Y)
+		}
+		if s, ok := literal(e); ok {
+			prose = prose || strings.Contains(s, " ")
+			parts = append(parts, s)
+			return true
+		}
+		switch e.(type) {
+		case *ast.Ident, *ast.SelectorExpr, *ast.CallExpr, *ast.IndexExpr:
+			parts = append(parts, "%v")
+			return true
+		}
+		return false
+	}
+	if b, ok := e.(*ast.BinaryExpr); !ok || b.Op != token.ADD || !walk(e) || !prose {
+		return "", false
+	}
+	return strings.Join(parts, ""), true
+}
+
+// literal is the string a constant expression of string literals spells.
+func literal(e ast.Expr) (string, bool) {
+	switch v := e.(type) {
+	case *ast.BasicLit:
+		if v.Kind != token.STRING {
+			return "", false
+		}
+		s, err := strconv.Unquote(v.Value)
+		return s, err == nil
+	case *ast.BinaryExpr:
+		if v.Op != token.ADD {
+			return "", false
+		}
+		a, ok := literal(v.X)
+		if !ok {
+			return "", false
+		}
+		b, ok := literal(v.Y)
+		return a + b, ok
+	case *ast.ParenExpr:
+		return literal(v.X)
 	}
 	return "", false
 }
