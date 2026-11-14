@@ -578,6 +578,11 @@ func (g *devTier) pageInHold(li, lo, hi int) bool {
 	// page-in proceeds without it and packs on the host. Passing the bytes this
 	// block still owes keeps the staging from taking the page-in's room.
 	if need := l.pg.bytes + l.pg.round; !g.kvCompact(need, nil) && !g.reclaim(need, li, lo, hi) {
+		// reclaim's wait for a held victim lets g.mu go: another session may
+		// have paged this block in meanwhile, into the very room asked for.
+		if l.pg.in {
+			return g.holdPages(li, li+1)
+		}
 		g.LastErr = fmt.Sprintf("block %d needs %d bytes and nothing can be paged out (%d of %d used, %d slot(s))",
 			li, l.pg.bytes+l.pg.round, g.used, g.limit, g.slots())
 		g.noteCause(nn.FailRoom)
