@@ -257,10 +257,16 @@ func batchSeamMovesWith(t *testing.T, p string, bound float64, relocate bool, mo
 					// scratch, synth-kimik3 its recurrent rows), and an MLA's
 					// latent rows fill a page slowly enough that a page held
 					// for them holds them all. The relocation then happens
-					// during a step.
+					// during a step. The floor is a budget the attach forms
+					// again: the slack the card keeps beside every allocation,
+					// and a piece for the small buffers its room prices at
+					// their slot where the probe carved them from pieces it
+					// held (synth-kimik3's per-row head missed the floor by
+					// two such slots and the slack, formed nothing, and the
+					// rows grew into the room it would hold).
 					st := pg.Stats()
 					squeezed = pg.Bytes() - (st.KVPoolBytes - min(st.KVBytes, st.KVPoolBytes))
-					floorKept, paged = pg.Bytes()-st.KVFreeBytes, true
+					floorKept, paged = pg.Bytes()-st.KVFreeBytes+st.Slack+64<<10, true
 				}
 				ps.Close()
 				pg.Close()
