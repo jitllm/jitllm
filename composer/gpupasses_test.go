@@ -79,6 +79,8 @@ type passCase struct {
 	around          bool
 	one             bool
 	heads, kvh, dim int
+	// pooled selects by pooled block keys (selectInPasses).
+	pooled bool
 }
 
 func attendInPasses(t *testing.T, d backend.Device, c passCase) {
@@ -287,7 +289,9 @@ func attendInPasses(t *testing.T, d backend.Device, c passCase) {
 // attention's sweep, folding its partial pass by pass; the codes after.
 // Every row must read what the form over the whole history reads, with the
 // rows at different positions and the kept blocks spread over the passes,
-// so a sweep that drops its fold must not.
+// so a sweep that drops its fold must not. A pooled selection (MiniMax-M3's)
+// sums each pass's blocks' keys into the whole history's in its sweep and
+// norms and scores them once after it.
 func TestComposedGPUSelectInPasses(t *testing.T) {
 	testlock.GPU(t)
 	devs := openDevices()
@@ -303,6 +307,8 @@ func TestComposedGPUSelectInPasses(t *testing.T) {
 		for _, c := range []passCase{
 			{name: "rows", pos: []int{40, 70, 100, 127}},
 			{name: "chunk", pos: []int{92, 93, 94, 95, 96, 97, 98, 99}, seqs: 1},
+			{name: "rows/pooled", pos: []int{40, 70, 100, 127}, pooled: true},
+			{name: "chunk/pooled", pos: []int{92, 93, 94, 95, 96, 97, 98, 99}, seqs: 1, pooled: true},
 		} {
 			t.Run(d.API()+"/"+c.name, func(t *testing.T) { selectInPasses(t, d, c) })
 		}
@@ -320,7 +326,14 @@ func selectInPasses(t *testing.T, d backend.Device, c passCase) {
 	kIn, vIn, qIn, iqIn := b.In("k", w), b.In("v", w), b.In("q", qw), b.In("iq", iw)
 	n := b.KVAppend(kIn, vIn, 0)
 	hist := graph.StateRef{State: graph.StateKV, Version: n}
-	sel := b.Select(iqIn, hist, graph.Attrs{NHead: ih, NKVHead: 1, HeadDim: dim, Width: w, Span: span, TopK: topk, Local: 1})
+	sa := graph.Attrs{NHead: ih, NKVHead: 1, HeadDim: dim, Width: w, Span: span, TopK: topk, Local: 1}
+	var sel graph.ValueID
+	if c.pooled {
+		sa.Local, sa.Fn, sa.Eps = 0, graph.MapMax, 1e-6
+		sel = b.SelectPooled(iqIn, hist, sa, jlm.RoleIdxKNorm)
+	} else {
+		sel = b.Select(iqIn, hist, sa)
+	}
 	b.Out(b.AttendSelected(qIn, hist, sel, graph.Attrs{NHead: heads, NKVHead: kvh, HeadDim: dim, Scale: 1 / math.Sqrt(float64(dim))}))
 	g := b.G
 	form := func(passes bool) []composer.Code {
@@ -382,7 +395,9 @@ func selectInPasses(t *testing.T, d backend.Device, c passCase) {
 		g.Out[0]: poisoned(capRows * qw)}
 	base := map[string][]uint32{"rows.n": {uint32(R)}, "pages": pages, "kv.k": kpool, "kv.v": vpool, "q.off": make([]uint32, capRows*4)}
 	full := map[string][]uint32{"rows": rowsDesc(0, keys), "rows.win": rowsDesc(0, keys)}
+	vecs := map[jlm.Role][]uint32{jlm.RoleIdxKNorm: f32w(rnd(dim))}
 	runner := newPassRunner(d)
+	runner.vecs = vecs
 	defer runner.close()
 	want, err := runner.run(whole, 0, len(whole), vals, base, full, nil)
 	if err != nil {
@@ -399,6 +414,7 @@ func selectInPasses(t *testing.T, d backend.Device, c passCase) {
 	// pass after the first unfolded, the gate's violations.
 	run := func(dropSel, dropAttend bool) []float32 {
 		r := newPassRunner(d)
+		r.vecs = vecs
 		defer r.close()
 		np := (keys + passKeys - 1) / passKeys
 		tabs := map[string][]uint32{"run.0": nil, "run.1": nil, "run.2": nil, "sel.0": nil, "sel.1": nil, "sel.2": nil}

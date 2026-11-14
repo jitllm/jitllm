@@ -2,6 +2,7 @@ package composer
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/jitllm/jitllm/composer/ir"
 	"github.com/jitllm/jitllm/graph"
@@ -15,9 +16,13 @@ type selectBounds struct{ first, end, own, lo int }
 // each block's keys summed, the mean's sum of squares, the rotary's table at
 // each block's first position, the mean normed by Weight[0] and turned by
 // it, each query head's dot with it, and each group's sum of its heads'
-// scores through Fn and the weights, into best. A block a row does not hold
-// whole scores from its clamped reads; the ranking never counts it.
-func selectPooled(o graph.Op, c *Context, pool Pool, keys Operand, tables func(...Operand) []Operand, flat Facts, best Operand) ([]Prim, error) {
+// scores through Fn and the weights, into best, NB blocks of it. A block a
+// row does not hold whole scores from its clamped reads; the ranking never
+// counts it. Over a history read in passes a pass sums the keys of the
+// blocks it reaches from its first position's, and the sweep folds them into
+// the whole history's sums (sel.in -> sel.out); what follows reads the fold
+// once, after the last pass.
+func selectPooled(o graph.Op, c *Context, pool Pool, keys Operand, tables func(...Operand) []Operand, flat Facts, best Operand, NB int) ([]Prim, error) {
 	a := o.Attr
 	if a.NRot < 0 || a.NRot%2 != 0 || a.NRot > a.HeadDim || a.NRot > 0 && a.Layout != graph.RopeNorm && a.Layout != graph.RopeNeox {
 		return nil, fmt.Errorf("a pooled selection turned by a rotary of %d of %d, layout %d", a.NRot, a.HeadDim, a.Layout)
@@ -34,13 +39,20 @@ func selectPooled(o graph.Op, c *Context, pool Pool, keys Operand, tables func(.
 	}
 	U, F := ir.U32, ir.F32
 	R, H, D, G, B, C := c.Step.Rows, a.NHead, a.HeadDim, a.NKVHead, a.Span, c.Step.Keys
-	J, NB := H/G, (c.Step.Keys+a.Span-1)/a.Span
+	J, NBP := H/G, NB
+	if c.History.Passes {
+		NBP = C/B + 1
+	}
 	hs := history{a: a, pageSize: c.Step.Page}
 	name := c.value(o.Out[0]).Name
 	tmp := func(n string) Operand {
 		return Operand{Kind: OperandScratch, Name: name + "." + n, Elem: F, Temp: true}
 	}
 	sums, sumsq, pooled, dots := tmp("pool"), tmp("poolsq"), tmp("pooled"), tmp("pooldots")
+	part := sums
+	if c.History.Passes {
+		part, sums = tmp("poolpass"), TableSelOut.op()
+	}
 	wt := Operand{Kind: OperandVector, Role: o.Weight[0].Role, Name: o.Weight[0].Role.String()}
 
 	// Each block's mean key: every attended position's key weighted by
@@ -48,8 +60,12 @@ func selectPooled(o graph.Op, c *Context, pool Pool, keys Operand, tables func(.
 	var px exprs
 	pos, first := hs.position(&px)
 	pid, off := hs.page(&px, hs.held(&px, pos, first))
-	in := px.sel(F, px.op(OpLess, ir.Pred, px.op(OpDiv, U, pos, px.u(uint32(B))), px.op(OpAdd, U, px.coord(1), px.u(1))),
-		px.sel(F, px.op(OpLess, ir.Pred, px.op(OpDiv, U, pos, px.u(uint32(B))), px.coord(1)), px.f(0), px.f(1/float32(B))), px.f(0))
+	blk := px.coord(1)
+	if c.History.Passes {
+		blk = px.op(OpAdd, U, px.op(OpDiv, U, first, px.u(uint32(B))), blk)
+	}
+	in := px.sel(F, px.op(OpLess, ir.Pred, px.op(OpDiv, U, pos, px.u(uint32(B))), px.op(OpAdd, U, blk, px.u(1))),
+		px.sel(F, px.op(OpLess, ir.Pred, px.op(OpDiv, U, pos, px.u(uint32(B))), blk), px.f(0), px.f(1/float32(B))), px.f(0))
 	px.op(OpMul, F, in, c.poolRead(&px, 0, pool, a.Width, pid, off, px.op(OpAdd, U, px.coord(2), px.u(uint32(a.Offset)))))
 
 	var sx exprs
@@ -57,11 +73,25 @@ func selectPooled(o graph.Op, c *Context, pool Pool, keys Operand, tables func(.
 	sx.op(OpMul, F, mean, mean)
 
 	rng := Facts{Range: hs.span(3), Extents: map[int]int{1: R * rowWords, 2: c.pages()}}
-	prims := []Prim{
-		{Kind: PrimContract, Shape: []int{R, NB, D, C}, In: tables(keys),
-			Out: sums, Expr: px.e, Facts: rng},
-		{Kind: PrimReduce, Shape: []int{R, NB, D}, In: []Operand{sums}, Out: sumsq, Combine: OpAdd, Expr: sx.e},
+	prims := []Prim{{Kind: PrimContract, Shape: []int{R, NBP, D, C}, In: tables(keys), Out: part, Expr: px.e, Facts: rng,
+		Sweep: c.History.Passes}}
+	if c.History.Passes {
+		// The pass's blocks, from its first position's, added to the running
+		// sums: a block past the row's end in the pass holds no position of
+		// it, and no sum. The least float is a block no pass has reached.
+		var fx exprs
+		r, b, d := fx.coord(0), fx.coord(1), fx.coord(2)
+		lb := fx.op(OpSub, U, b, fx.op(OpDiv, U, hs.start(&fx), fx.u(uint32(B))))
+		held := fx.op(OpLess, ir.Pred, fx.op(OpMul, U, b, fx.u(uint32(B))), hs.end(&fx))
+		v := fx.sel(F, fx.op(OpLess, ir.Pred, lb, fx.u(uint32(NBP))),
+			fx.sel(F, held, fx.at(0, []int{R, NBP, D}, r, fx.op(OpMin, U, lb, fx.u(uint32(NBP-1))), d), fx.f(0)), fx.f(0))
+		was := fx.at(3, []int{R, NB, D}, r, b, d)
+		was = fx.sel(F, fx.op(OpLess, ir.Pred, fx.f(math.Float32frombits(0xff7fffff)/2), was), was, fx.f(0))
+		fx.op(OpAdd, F, was, v)
+		prims = append(prims, Prim{Kind: PrimMap, Shape: []int{R, NB, D}, In: tables(part, TableSelIn.op()), Out: TableSelOut.op(),
+			Expr: fx.e, Facts: flat, Sweep: true})
 	}
+	prims = append(prims, Prim{Kind: PrimReduce, Shape: []int{R, NB, D}, In: []Operand{sums}, Out: sumsq, Combine: OpAdd, Expr: sx.e})
 
 	// The mean normed, then turned at the block's first position: a pair an
 	// element of the map, as OpRope turns a head, the rest of the key the
