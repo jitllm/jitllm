@@ -12,6 +12,14 @@ func (s *Instance) KVType() model.KVType {
 		return model.KVF16
 	case nn.KVQ8:
 		return model.KVQ8_0
+	case nn.KVQ4_0:
+		return model.KVQ4_0
+	case nn.KVQ4_1:
+		return model.KVQ4_1
+	case nn.KVQ5_0:
+		return model.KVQ5_0
+	case nn.KVQ5_1:
+		return model.KVQ5_1
 	}
 	return model.KVF32
 }

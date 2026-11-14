@@ -458,6 +458,16 @@ const (
 	// rematrix and resample (composer.SWR, composer.MonoMix), at most Taps
 	// taps times channels. A primitive.
 	OpSound
+	// OpBlockRows is each row of In[0]'s floats in llama.cpp's blocks of
+	// Attr.Block's format (Out[0], u32, BlockRowWords): the row's
+	// ceil(W/32) blocks, the last zero past W, each quantized as ggml's
+	// reference quantizer does, their fields in BlockRegions' order. A
+	// primitive.
+	OpBlockRows
+	// OpWidenBlockRows is OpBlockRows' rows (In[0], u32) as floats (Out[0],
+	// the rows' W elements), each element as ggml's dequantizer reads it.
+	// A primitive.
+	OpWidenBlockRows
 	numOps
 )
 
@@ -519,6 +529,10 @@ func (k OpKind) String() string {
 		return "frames"
 	case OpSound:
 		return "sound"
+	case OpBlockRows:
+		return "block_rows"
+	case OpWidenBlockRows:
+		return "widen_block_rows"
 	case OpFeatureNorm:
 		return "feature_norm"
 	case OpClipMask:
@@ -606,6 +620,88 @@ func (k OpKind) String() string {
 // Q8RowWords is the words OpQ8Rows writes for a row of w floats: the codes
 // of ceil(w/32) blocks four to a word, then a pair a block.
 func Q8RowWords(w int) int { return (w + 31) / 32 * 10 }
+
+// BlockFmt is a llama.cpp block format a row of floats is held in
+// (OpBlockRows): 32 elements a block, each block's fields ggml's.
+//
+//	BlockQ4_0  binary16 d, 16 bytes of nibbles: (q-8)*d
+//	BlockQ4_1  binary16 d and m, 16 bytes of nibbles: q*d+m
+//	BlockQ5_0  binary16 d, 4 bytes of fifth bits, 16 of nibbles: (q-16)*d
+//	BlockQ5_1  binary16 d and m, 4 bytes of fifth bits, 16 of nibbles: q*d+m
+//
+// Element j < 16 of a block is nibble byte j's low half and element j+16
+// its high half; element j's fifth bit is bit j of the block's word. A row
+// holds its blocks' fields by kind rather than block by block, so that no
+// field crosses a word (BlockRegions): the same bytes as ggml's row of
+// blocks rounded up to a word.
+type BlockFmt uint8
+
+const (
+	BlockQ4_0 BlockFmt = iota + 1
+	BlockQ4_1
+	BlockQ5_0
+	BlockQ5_1
+)
+
+func (f BlockFmt) String() string {
+	switch f {
+	case BlockQ4_0:
+		return "q4_0"
+	case BlockQ4_1:
+		return "q4_1"
+	case BlockQ5_0:
+		return "q5_0"
+	case BlockQ5_1:
+		return "q5_1"
+	}
+	return fmt.Sprintf("BlockFmt(%d)", uint8(f))
+}
+
+// Bytes is one block's bytes in format f, 0 for no format.
+func (f BlockFmt) Bytes() int {
+	switch f {
+	case BlockQ4_0:
+		return 18
+	case BlockQ4_1:
+		return 20
+	case BlockQ5_0:
+		return 22
+	case BlockQ5_1:
+		return 24
+	}
+	return 0
+}
+
+// Mins is whether f's block holds a minimum after its scale (q*d+m).
+func (f BlockFmt) Mins() bool { return f == BlockQ4_1 || f == BlockQ5_1 }
+
+// Fifths is whether f's block holds a fifth bit an element.
+func (f BlockFmt) Fifths() bool { return f == BlockQ5_0 || f == BlockQ5_1 }
+
+// BlockRegions is where the regions of a row of w floats in format f start,
+// in words: the scales (a word a block, d low and m high, where the format
+// has a minimum, else a word two blocks, the even block's d low), the
+// fifth bits (a word a block) and the nibbles (four words a block, its 16
+// bytes in order, the lower byte low).
+func BlockRegions(f BlockFmt, w int) (scales, fifths, nibbles int) {
+	nb := (w + 31) / 32
+	fifths = (nb + 1) / 2
+	if f.Mins() {
+		fifths = nb
+	}
+	nibbles = fifths
+	if f.Fifths() {
+		nibbles += nb
+	}
+	return 0, fifths, nibbles
+}
+
+// BlockRowWords is the words OpBlockRows writes for a row of w floats in
+// format f: ceil(w/32) blocks' bytes, rounded up to a word.
+func BlockRowWords(f BlockFmt, w int) int {
+	_, _, nibbles := BlockRegions(f, w)
+	return nibbles + (w+31)/32*4
+}
 
 // RopeLayout is how a rotary pairs a head's elements.
 type RopeLayout uint8
@@ -854,6 +950,8 @@ type Attrs struct {
 	Positional, Request bool
 	// Pooling is OpPool's: a jlm.Pooling.
 	Pooling uint8
+	// Block is OpBlockRows' and OpWidenBlockRows' format.
+	Block BlockFmt
 	// Rotary is OpRopeTable's: which of the model's rotaries the table is
 	// (RopeTable.Index), the step's table it writes.
 	Rotary int

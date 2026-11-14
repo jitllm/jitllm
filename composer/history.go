@@ -10,18 +10,28 @@ import (
 // Pool is how one history pool lays out a page: ByDim keeps a dimension's
 // positions together, [width][page], rather than a position's row,
 // [page][width]; Half stores binary16, two halves to a 32-bit word, the
-// lower element in the low half; Q8, past 0, stores a position's row as
-// its heads' q8 rows of Q8 elements each, as OpQ8Rows writes them.
+// lower element in the low half; Row, past 0, stores a position's row as
+// its heads' rows of Row elements each: q8 rows as OpQ8Rows writes them, or
+// llama.cpp's blocks of format Block as OpBlockRows writes them.
 type Pool struct {
 	ByDim, Half bool
-	Q8          int
+	Row         int
+	Block       graph.BlockFmt
+}
+
+// rowWords is the words one head's row of a quantized pool occupies.
+func (l Pool) rowWords() int {
+	if l.Block != 0 {
+		return graph.BlockRowWords(l.Block, l.Row)
+	}
+	return graph.Q8RowWords(l.Row)
 }
 
 // words is the 32-bit words a position's row of width elements occupies.
 func (l Pool) words(width int) int {
 	switch {
-	case l.Q8 > 0:
-		return width / l.Q8 * graph.Q8RowWords(l.Q8)
+	case l.Row > 0:
+		return width / l.Row * l.rowWords()
 	case l.Half:
 		return width / 2
 	}
@@ -102,17 +112,19 @@ func (l Pool) check(width int) error {
 		return fmt.Errorf("a binary16 pool laid out by dimension: a word would hold two positions")
 	case l.Half && width%2 != 0:
 		return fmt.Errorf("a binary16 pool of odd width %d: a word would cross a position", width)
-	case l.Q8 > 0 && (l.Half || l.ByDim):
-		return fmt.Errorf("a q8 pool laid out by dimension or in halves: its rows are whole")
-	case l.Q8 > 0 && width%l.Q8 != 0:
-		return fmt.Errorf("a q8 pool of rows of %d holding a width of %d", l.Q8, width)
+	case l.Row > 0 && (l.Half || l.ByDim):
+		return fmt.Errorf("a quantized pool laid out by dimension or in halves: its rows are whole")
+	case l.Row > 0 && width%l.Row != 0:
+		return fmt.Errorf("a quantized pool of rows of %d holding a width of %d", l.Row, width)
+	case l.Block != 0 && (l.Row == 0 || l.Block.Bytes() == 0):
+		return fmt.Errorf("a pool of %v blocks in rows of %d", l.Block, l.Row)
 	}
 	return nil
 }
 
-// operand is pool o as l lays it out: a binary16 or q8 pool is words.
+// operand is pool o as l lays it out: a binary16 or quantized pool is words.
 func (l Pool) operand(o Operand) Operand {
-	if l.Half || l.Q8 > 0 {
+	if l.Half || l.Row > 0 {
 		o.Elem = ir.U32
 	}
 	return o
@@ -128,10 +140,16 @@ func (c *Context) poolRead(x *exprs, j int, l Pool, w, pid, off, d int) int {
 func (c *Context) poolReadIn(x *exprs, j int, l Pool, pg, w, pid, off, d int) int {
 	U := ir.U32
 	switch {
-	case l.Q8 > 0:
+	case l.Block != 0:
+		// The element in its head's row of blocks (OpWidenBlockRows).
+		hd := l.Row
+		ext := []int{c.pages(), pg, l.words(w)}
+		base := x.op(OpMul, U, x.op(OpDiv, U, d, x.u(uint32(hd))), x.u(uint32(l.rowWords())))
+		return blockElem(x, l.Block, hd, func(i int) int { return x.at(j, ext, pid, off, x.op(OpAdd, U, base, i)) }, x.op(OpRem, U, d, x.u(uint32(hd))))
+	case l.Row > 0:
 		// The element's code in its head's row, sign-extended, times its
 		// block's scale (OpWidenQ8Rows).
-		hd, F := l.Q8, ir.F32
+		hd, F := l.Row, ir.F32
 		ext := []int{c.pages(), pg, l.words(w)}
 		e := x.op(OpRem, U, d, x.u(uint32(hd)))
 		base := x.op(OpMul, U, x.op(OpDiv, U, d, x.u(uint32(hd))), x.u(uint32(graph.Q8RowWords(hd))))

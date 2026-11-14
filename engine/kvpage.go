@@ -589,10 +589,10 @@ func newKVCacheRange(c *model.Config, id string, nseq int, l kvLayout, store KVS
 			continue
 		}
 		s.p, s.latent, s.period = b.p, true, e.period
-		// An entries plane is held at f32 under a q8 history: its rows are
-		// no head's.
+		// An entries plane is held at f32 under a quantized history: its
+		// rows are no head's.
 		el := l.atLayer(c, e.block)
-		if el.fmt == nn.KVQ8 {
+		if el.quantized() {
 			el.fmt = nn.KVF32
 		}
 		s.pp = el.slots(nseq * composer.History{Period: e.period}.Slots(b.p) * e.width)

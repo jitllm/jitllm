@@ -20,9 +20,9 @@ const kvHalfRow = 256
 // embedding model's readout at the segment's rows, the entry of the prediction
 // block a draft instance starts at, the input rows' (the token rows' and an
 // embedding span's given rows'), each rotary's table (a tower's grid table
-// turns a picture's rows in one call) and a binary16 or q8 history's
+// turns a picture's rows in one call) and a binary16 or quantized history's
 // conversions (a binary16 history's halves in rows of kvHalfRow floats, a q8
-// history's rows one a head width its layers hold).
+// or block history's rows one a head width its layers hold).
 func (s *Instance) partsPlan() *nn.PartsPlan {
 	fg := s.m.FrontGraphs()
 	p := &nn.PartsPlan{D: s.c.NEmbd, NVocab: s.c.NVocab, TopLog: model.MaxTopLogprobs,
@@ -119,11 +119,15 @@ func (s *Instance) partsPlan() *nn.PartsPlan {
 	p.TablePlanes = [2][]float32{s.tablePlanes(0), s.tablePlanes(1)}
 	p.TablesW = nn.PartWeights{Block: cpuTablesBlock, Of: s.ws.tensors(cpuTablesBlock, nil)}
 
-	for _, f := range []nn.KVFmt{nn.KVF16, nn.KVQ8} {
+	for f := nn.KVF16; int(f) < nn.KVFormats; f++ {
 		narrow, widen := graph.OpHalves, graph.OpWidenHalves
 		widths := []int{kvHalfRow}
-		if f == nn.KVQ8 {
+		at := graph.Attrs{Block: f.Block()}
+		if f.Quantized() {
 			narrow, widen, widths = graph.OpQ8Rows, graph.OpWidenQ8Rows, nil
+			if at.Block != 0 {
+				narrow, widen = graph.OpBlockRows, graph.OpWidenBlockRows
+			}
 			for li := s.lo; li < s.hi; li++ {
 				if hd := s.kvlAt(li).headDim; !slices.Contains(widths, hd) {
 					widths = append(widths, hd)
@@ -132,17 +136,20 @@ func (s *Instance) partsPlan() *nn.PartsPlan {
 		}
 		for _, fw := range widths {
 			c := nn.KVConvPlan{FW: fw, HW: fw / 2}
-			if f == nn.KVQ8 {
+			switch {
+			case at.Block != 0:
+				c.HW = graph.BlockRowWords(at.Block, fw)
+			case f == nn.KVQ8:
 				c.HW = graph.Q8RowWords(fw)
 			}
 			nb := graph.New()
 			nb.Out(nb.Emit(narrow, []graph.ValueID{nb.In("kv.f", c.FW)},
-				[]graph.Result{{Name: "kv.h", Width: c.HW, Elem: graph.ElemU32}}, nil, graph.Attrs{}, nil, nil)...)
+				[]graph.Result{{Name: "kv.h", Width: c.HW, Elem: graph.ElemU32}}, nil, at, nil, nil)...)
 			c.Narrow = part(nb.G, cpuRowsCap)
 			wb := graph.New()
 			h := wb.In("kv.h", c.HW)
 			wb.G.Values[h].Elem = graph.ElemU32
-			wb.Out(wb.Emit(widen, []graph.ValueID{h}, []graph.Result{{Name: "kv.f", Width: c.FW}}, nil, graph.Attrs{}, nil, nil)...)
+			wb.Out(wb.Emit(widen, []graph.ValueID{h}, []graph.Result{{Name: "kv.f", Width: c.FW}}, nil, at, nil, nil)...)
 			c.Widen = part(wb.G, cpuRowsCap)
 			p.KV[f] = append(p.KV[f], c)
 		}

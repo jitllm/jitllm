@@ -44,6 +44,7 @@ func (g *Graph) Structure() uint64 {
 		a := &o.Attr
 		put(uint64(a.Layout))
 		put(uint64(a.Pooling))
+		put(uint64(a.Block))
 		put(uint64(a.Chain))
 		put(uint64(a.Filter))
 		put(uint64(a.Fn))
