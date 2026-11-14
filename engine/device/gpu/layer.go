@@ -5887,7 +5887,11 @@ func planUnion(a *nn.LayerPlan, b *nn.LayerPlan) bool {
 // its own plan's (kvGeomOf). The scratch holds only what a call binds for
 // every block of its set (initScratch), and of a plan's attention it bakes
 // one thing: the window its rows' windowed descriptors are staged for
-// (pagedStage), so two different windows are the case.
+// (pagedStage). A model states one window (Config.SWAWindow, SWAChunked), the
+// one its host history keeps too, and offers every causal block it or none
+// (windowFor: a session inside the window needs none), and the tier holds one
+// model's blocks (owner.go); so two different windows on one tier are a model
+// whose config changed under its placement.
 func planConflict(bs *blockScratch, p *nn.LayerPlan) string {
 	if bs == nil || p.NonCausal {
 		return ""
