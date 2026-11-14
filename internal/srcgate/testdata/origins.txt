@@ -959,26 +959,19 @@ bug	engine/device/gpu/layer.go	"a LayerNorm head with a %d-wide bias for a %d-wi
 bug	engine/device/gpu/layer.go	"a batched submission of %d rows %d wide with a head %d wide"
 limit	engine/device/gpu/layer.go	"a bidirectional chunk this device has no batched scratch for"	the batched scratch does not fit
 refusal	engine/device/gpu/layer.go	"a chunked attention of a different shape from the one this tier was built for"	a block unlike the tier's first: the card's scratch is built from one plan
-refusal	engine/device/gpu/layer.go	"a classic block (LayerNorm %v, parallel %v, ungated %v) on a tier built for (%v, %v, %v)"	a block unlike the tier's first: the card's scratch is built from one plan
-refusal	engine/device/gpu/layer.go	"a delta rule with key heads tiled=%v on a tier built for tiled=%v"	a block unlike the tier's first: the card's scratch is built from one plan
 bug	engine/device/gpu/layer.go	"a head folded into %d blocks of %d streams"
-refusal	engine/device/gpu/layer.go	"a latent attention geometry of (%d, %d, %d) on a tier built for (%d, %d, %d)"	a block unlike the tier's first: the card's scratch is built from one plan
 refusal	engine/device/gpu/layer.go	"a non-causal block of %d heads of %d (%d kv) over %d on a set built for %d of %d (%d kv) over %d"	a non-causal block unlike the set's first: the set is built from one plan
 refusal	engine/device/gpu/layer.go	"a non-causal block rotating %d (NEOX %v) on a set built for %d (NEOX %v)"	a non-causal block unlike the set's first: the set is built from one plan
 refusal	engine/device/gpu/layer.go	"a non-causal block rotating %d of each head on a set built to rotate none"	a non-causal block unlike the set's first: the set is built from one plan
 refusal	engine/device/gpu/layer.go	"a non-causal block with LayerNorm %v on a set built with %v"	a non-causal block unlike the set's first: the set is built from one plan
 refusal	engine/device/gpu/layer.go	"a non-causal block with no pre-norm on a set built for blocks that have one"	a non-causal block unlike the set's first: the set is built from one plan
 refusal	engine/device/gpu/layer.go	"a non-causal block's MLP (%s, %d wide) on a set built for (%s, %d wide)"	a non-causal block unlike the set's first: the set is built from one plan
-refusal	engine/device/gpu/layer.go	"a q/k norm (%v, after the rotary %v) on a tier built for (%v, %v)"	a block unlike the tier's first: the card's scratch is built from one plan
-refusal	engine/device/gpu/layer.go	"a residual scale of %g on a tier built for %g"	a block unlike the tier's first: the card's scratch is built from one plan
 limit	engine/device/gpu/layer.go	"a second session's KV cache does not fit in this device's budget"
 limit	engine/device/gpu/layer.go	"a session's recurrent state does not fit in this device's budget"
 refusal	engine/device/gpu/layer.go	"a sliding window of %d keys on a tier built for %d"	a block unlike the tier's first: the card's scratch is built from one plan
 bug	engine/device/gpu/layer.go	"a submission that must run alone was prepared to run beside others"
-refusal	engine/device/gpu/layer.go	"an attention score scale of %g on a tier built for %g"	a block unlike the tier's first: the card's scratch is built from one plan
 bug	engine/device/gpu/layer.go	"an empty block range [%d,%d) with no head"
 bug	engine/device/gpu/layer.go	"an output bias of %d for a %d-row projection"
-refusal	engine/device/gpu/layer.go	"an ungated FFN beside a gated one on one tier"	a block unlike the tier's first: the card's scratch is built from one plan
 bug	engine/device/gpu/layer.go	"batch n=%d width=%d head=%v"
 bug	engine/device/gpu/layer.go	"block %d attends to block %d's history, which is not on this device"
 bug	engine/device/gpu/layer.go	"block %d is not on this device"
@@ -996,6 +989,7 @@ bug	engine/device/gpu/layer.go	"block %d: a call of %d rows reached a streamed b
 bug	engine/device/gpu/layer.go	"block %d: a ragged step over a latent block needs the paged cache"
 bug	engine/device/gpu/layer.go	"block %d: clipped-linear bounds are %d floats, want 28"
 bug	engine/device/gpu/layer.go	"block %d: conv1d is %d floats, want %d x %d"
+bug	engine/device/gpu/layer.go	"block %d: offered with a graph other than the one this device holds for it"	a model's block changed under its placement: a loaded model's graphs are fixed (model.FrontGraphs), so only a model edited in place reaches it
 bug	engine/device/gpu/layer.go	"block %d: the plan has a shared expert (NFFNShExp=%d) and %s is empty"
 bug	engine/device/gpu/layer.go	"block %d: the plan is a channel-decay delta block and %s is empty"
 bug	engine/device/gpu/layer.go	"block %d: the plan is a latent attention block (KVLoraRank=%d) and %s is empty"

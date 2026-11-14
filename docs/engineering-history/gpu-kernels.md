@@ -3440,8 +3440,10 @@ chunk and a step across sessions alike (`Stats.ResidScaled` counts it). A
 mixture's routed weights carry none of it on the device: the scaled add covers
 the routed sum and the shared expert at once, where the host folds the scale
 into the routed weights (`Config.routedScale`). Two scratches of different
-scales on one tier are refused by name (`planConflict`), as two score scales
-now are.
+scales on one tier were refused by name (`planConflict`), as two score scales
+were; since every block runs as its composed part, formed from its own graph,
+a scale is the block's and a block of another scale is placed beside the
+first (`engine.TestABlockUnlikeItsSetRunsOnTheCard`).
 
 The arithmetic is exact. On f32 fixtures with Granite's own scales set
 (`engine.TestGraniteScalesOnEveryDevice`: synth-qwen2 and synth-mixtral, every
