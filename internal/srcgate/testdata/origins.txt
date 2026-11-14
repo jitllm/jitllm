@@ -999,7 +999,6 @@ bug	engine/device/gpu/layer.go	"block %d: the plan is a channel-decay delta bloc
 bug	engine/device/gpu/layer.go	"block %d: the plan is a latent attention block (KVLoraRank=%d) and %s is empty"
 bug	engine/device/gpu/layer.go	"block %d: the plan is a linear block and %s is empty"
 bug	engine/device/gpu/layer.go	"block %d: the plan's q/k norm is %v and the block offers %d norm weights"
-refusal	engine/device/gpu/layer.go	"block %d: the router is %v in %d bytes, and the device reads an F32 or F16 router of %dx%d"	a router in a type past F32 and F16 on a card
 bug	engine/device/gpu/layer.go	"block %d: v is k's projection and the block offers a v matrix"
 context	engine/device/gpu/layer.go	"conv"
 context	engine/device/gpu/layer.go	"graphs disabled: %v"

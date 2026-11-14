@@ -209,8 +209,9 @@ func decomposeMatVec(o graph.Op, c *Context) ([]Prim, error) {
 	case jlm.TypeF32:
 	case jlm.TypeQ8:
 		// The int8 form is the layout's whole blocks; a K padded to them (a
-		// tower 144 wide) is decoded.
-		if c.Int8 != nil && !codes && w.K%q8Block == 0 {
+		// tower 144 wide), or a form of other windows (a router stored Q8_0
+		// in a block whose other matrices are K-quants), is decoded.
+		if q := c.Int8; q != nil && q.Window == q8Block && q.Word == 4 && !codes && w.K%q8Block == 0 {
 			return decomposeMatVecQ8(o, c, wo)
 		}
 		fallthrough
