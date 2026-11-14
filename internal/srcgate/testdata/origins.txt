@@ -795,7 +795,7 @@ bug	engine/cut.go	"engine: the CPU device does not compose block %d's routed exp
 input	engine/decide.go	"%d options and the prompt holds %d of their markers in %d tokens"
 input	engine/decide.go	"decision label %q is not a single token"
 input	engine/decide.go	"model: %v states no label readout"	a decision asked of a container with no label readout: the input's check
-refusal	engine/decide.go	"model: a marker head's prompt states pictures and voice clips, not videos"	a video to a marker head
+input	engine/decide.go	"model: a marker head's prompt states pictures and voice clips, not videos"	a video given a marker head, whose references take none (Laya's build_sequence and Kev's template are text, d1-omni's prompt.encode pictures and audio): the input's check
 input	engine/decide.go	"model: its marker head states no prompt; convert the model again"	a container written before marker prompts were stated: convert it again
 input	engine/decide.go	"model: the container carries no systemone template, the joint head's prompt"
 input	engine/decide.go	"model: the container carries no systemone template, the readout's prompt"
@@ -1925,7 +1925,7 @@ input	model/embed.go	"model: %v is %v in %d dimensions"
 input	model/embed.go	"model: dense heads %dx%d then %dx%d do not map %d back to itself"
 input	model/embed.go	"model: the container carries one of two dense heads"
 input	model/front.go	"%d experts in %d groups, %d kept"
-refusal	model/front.go	"a latent attention with a gated query (%v), a q/k norm (%v) or int8 activations (%v), which this statement does not write"	a latent attention with a gated query, q/k norm or int8 activations
+input	model/front.go	"a latent attention with a gated query (%v), a q/k norm (%v) or int8 activations (%v), which this statement does not write"	a container the converter does not write: no architecture it reads states a latent attention with an output gate, a q/k norm or int8 activations, and the census runs every graph it writes
 input	model/front.go	"a latent of %d under heads of %d, %d rotated, values of %d"
 input	model/front.go	"a mixture choosing %d of %d experts over a bank of %d sheets"
 input	model/front.go	"block %d gathers %d-grams %d wide over %d heads' ranges"
