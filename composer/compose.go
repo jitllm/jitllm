@@ -62,6 +62,9 @@ type Placement func(Part) Device
 type Code struct {
 	Name   string
 	Passes []string
+	// Sweep is a code a form over a history read in passes runs once a pass
+	// (Kernel.Sweep): its consecutive sweep codes are one sweep.
+	Sweep bool
 	Lowered
 	Binds  []Binding
 	Groups int
@@ -280,6 +283,7 @@ func (r *Registry) generated(f Model, run []PartPlan, first int, s Step, sp *exp
 			}
 			k.Part, k.Of, k.Unfused, k.Unjam, k.Unpaired, k.Uncursored, k.Unsplit = pp.Part.Kind, first+i, sp.unfused[first+i], sp.unjammed[first+i], sp.unpaired[first+i], sp.uncursored[first+i], sp.unsplit[first+i]
 			k.Unwide, k.Unstreamed, k.Crowded, k.Folds, k.Unvector = sp.unwide[k.at()], sp.unstreamed[k.at()], sp.crowded[k.at()], foldsAPass(p), sp.unvector[first+i]
+			k.Sweep = p.Sweep
 			k.Uninit, k.Copied, k.Unrolls = sp.uninit[k.at()], sp.copied[k.at()], sp.unrolls[k.at()]
 			ks = append(ks, k)
 		}
@@ -359,7 +363,8 @@ func (r *Registry) Lower(ks []*Kernel, d Device) ([]PartCode, error) {
 			errs = append(errs, fmt.Errorf("jit: lowering %s: %w", k.Name, err))
 			continue
 		}
-		c := Code{Name: k.Name, Passes: k.Passes, Lowered: l, Groups: k.groups(), Work: k.Work, Few: k.Few, Many: k.Many, Scan: k.Kind == PrimScan, Matrix: k.Matrix}
+		c := Code{Name: k.Name, Passes: k.Passes, Lowered: l, Groups: k.groups(), Work: k.Work, Few: k.Few, Many: k.Many, Scan: k.Kind == PrimScan, Matrix: k.Matrix,
+			Sweep: k.Sweep}
 		if l.CPU != nil && !k.Work && k.Group <= 0 {
 			c.Calls = append([]int(nil), k.Space...)
 			c.Share, c.ShareUnit = k.Share, k.ShareUnit

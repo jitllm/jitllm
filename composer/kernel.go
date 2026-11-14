@@ -63,6 +63,9 @@ type Kernel struct {
 	// (foldsAPass): a pass ends at it, so Fuse joins nothing after it into
 	// it and no launch it begins or joins runs past it.
 	Folds bool
+	// Sweep is a kernel of a pass (Prim.Sweep): Fuse joins none to a kernel
+	// that is not, and no launch holds both.
+	Sweep bool
 	// Jam is the rows a call of the kernel runs where RowJam set it;
 	// Unjam is the times a part's jammed form the registers refused, each
 	// halving the rows a call RowJam runs.

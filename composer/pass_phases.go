@@ -32,7 +32,7 @@ func (p Phases) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		bound := map[Operand]bool{}
 		reads, writes := false, false
 		for j < len(ks) && phaseable(ks[j]) && ks[j].Group == ks[i].Group && ks[j].Part == ks[i].Part &&
-			ks[j].Of == ks[i].Of && ks[j].Apart == ks[i].Apart && !(j > i && ks[j-1].Folds) {
+			ks[j].Of == ks[i].Of && ks[j].Apart == ks[i].Apart && ks[j].Sweep == ks[i].Sweep && !(j > i && ks[j-1].Folds) {
 			r, w := atTheEdge(ks[j], made)
 			if (reads || r) && (writes || w) {
 				break

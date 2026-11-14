@@ -226,11 +226,12 @@ func selectBest(o graph.Op, c *Context, fn Op, pool Pool, keys Operand, tables f
 	v := bx.at(0, []int{R, G, C}, bx.coord(0), bx.coord(1), rel)
 	bx.sel(F, bx.op(OpLess, ir.Pred, bx.u(0), in), v, bx.f(minus))
 
+	sw := c.History.Passes
 	return []Prim{
-		{Kind: PrimContract, Shape: []int{R, H, C, D}, In: tables(c.value(o.In[0]), keys), Out: dots, Expr: dx.e, Facts: rng},
-		{Kind: PrimReduce, Shape: []int{R, G, C, J}, In: sumIn, Out: scores, Combine: OpAdd, Expr: gx.e},
+		{Kind: PrimContract, Shape: []int{R, H, C, D}, In: tables(c.value(o.In[0]), keys), Out: dots, Expr: dx.e, Facts: rng, Sweep: sw},
+		{Kind: PrimReduce, Shape: []int{R, G, C, J}, In: sumIn, Out: scores, Combine: OpAdd, Expr: gx.e, Sweep: sw},
 		{Kind: PrimReduce, Shape: []int{R, G, NB, B}, In: tables(scores), Out: best, Combine: OpMax,
-			Init: int64(math.Float32bits(minus)), Expr: bx.e, Facts: flat},
+			Init: int64(math.Float32bits(minus)), Expr: bx.e, Facts: flat, Sweep: sw},
 	}, NB
 }
 
@@ -247,7 +248,7 @@ func foldSelection(c *Context, a graph.Attrs, best Operand, nbp, nb int, hs hist
 	in := x.op(OpLess, ir.Pred, lb, x.u(uint32(nbp)))
 	v := x.sel(F, in, x.at(0, []int{R, G, nbp}, r, g, x.op(OpMin, U, lb, x.u(uint32(nbp-1)))), x.f(math.Float32frombits(0xff7fffff)))
 	x.op(OpMax, F, x.at(3, []int{R, G, nb}, r, g, b), v)
-	return Prim{Kind: PrimMap, Shape: []int{R, G, nb}, In: tables(best, TableSelIn.op()), Out: TableSelOut.op(), Expr: x.e, Facts: flat}
+	return Prim{Kind: PrimMap, Shape: []int{R, G, nb}, In: tables(best, TableSelIn.op()), Out: TableSelOut.op(), Expr: x.e, Facts: flat, Sweep: true}
 }
 
 // selWhole is the positions a selection ranks and its keep mask spans: the

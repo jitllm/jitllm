@@ -145,6 +145,10 @@ type Prim struct {
 	Facts    Facts
 	// Scan is a scan's state, where Kind is PrimScan.
 	Scan *Scan
+	// Sweep is a primitive a form over a history read in passes runs once a
+	// pass (History.Passes): what reads a pass's keys and what folds it into
+	// a running partial.
+	Sweep bool
 }
 
 // Scan is a scan's descriptor and state. The descriptor is input Desc, in
