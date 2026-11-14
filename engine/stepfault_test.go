@@ -276,7 +276,7 @@ func TestStepAcrossSessionsLlama4GateDiscriminates(t *testing.T) {
 					t.Run(dev+"/"+fault, func(t *testing.T) {
 						var f gpu.Faults
 						set(&f, fault)
-						g := stepTier(t, m, dev, false, gpu.WithFaults(&f))
+						g := stepTier(t, m, dev, false, append(fixtureTier(c.name), gpu.WithFaults(&f))...)
 						defer g.Close()
 						r := stepGate(t, m, g, false, instOpts...)
 						t.Logf("%s: worst logit NMSE %.3e (row %d)", fault, r.worst, r.at)

@@ -397,7 +397,7 @@ func TestGraniteScalesOnEveryDevice(t *testing.T) {
 					}
 					// Three sessions stepping as rows, against each alone.
 					g, err := openGPU(t, slices.Concat([]gpu.Option{gpu.WithDevices(dev),
-						gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t))...)
+						gpu.WithDeviceTune(gpu.TuneOff)}, testTierOpts(t), fixtureTier(name))...)
 					if err != nil || g == nil {
 						noDevice(t, dev, err)
 					}
