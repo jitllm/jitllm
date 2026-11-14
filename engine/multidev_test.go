@@ -363,7 +363,26 @@ func TestAWidePromptPipelinesAcrossTwoDevices(t *testing.T) {
 	want := run(host)
 	host.Close()
 
-	cap3 := m.PageSize()*uint64(m.Cfg.NLayer)/2 + 2*m.PageSize()
+	// Each card is capped at what the whole model takes on one card, less a
+	// little under half its blocks: measured, since the scratch and history
+	// beside the blocks are no flat number of pages. Two cards then hold every
+	// block between them, and neither holds them all.
+	probe, err := openGPU(t, gpu.WithDevices("all"), gpu.WithDeviceTune(gpu.TuneOff),
+		gpu.WithConfig(func(c *gpu.Config) { c.FillFirst = true }))
+	if err != nil || probe == nil {
+		noDevice(t, "devices", err)
+	}
+	pst := testInstance(t, m, len(ids)+8, instOpts...)
+	pst.SetDevice(probe)
+	if pst.GPULayers() != m.Cfg.NLayer {
+		pst.Close()
+		probe.Close()
+		t.Skipf("one card holds %d of %d blocks: the cap is measured from a card holding them all", pst.GPULayers(), m.Cfg.NLayer)
+	}
+	whole := probe.Budgets()[0].Used
+	pst.Close()
+	probe.Close()
+	cap3 := whole - uint64(m.Cfg.NLayer/2-2)*m.PageSize()
 	g, err := openGPU(t, gpu.WithDevices("all"), gpu.WithDeviceTune(gpu.TuneOff), gpu.WithBudget(cap3))
 	if err != nil || g == nil {
 		noDevice(t, "devices", err)
