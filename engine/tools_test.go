@@ -131,12 +131,13 @@ func TestToolPromptMatchesTransformers(t *testing.T) {
 			continue
 		}
 		if src, _ := m.ChatTemplate(""); !strings.Contains(src, "tools") && !strings.Contains(src, "tool_calls") {
-			// A template trained without tools must refuse them, not render the
-			// conversation as if none had been declared.
-			_, err := m.ChatPromptTools(toolFixtureMessages(), []byte(toolFixtureTools), true)
+			// A template trained without tools is served the generic form: the
+			// conversation carries the sentence that tells the model how to
+			// answer, and does not render as if no tools had been declared.
+			got, err := m.ChatPromptTools(toolFixtureMessages(), []byte(toolFixtureTools), true)
 			m.Close()
-			if err == nil || !strings.Contains(err.Error(), "never reads `tools`") {
-				t.Errorf("%s: a template without tools rendered a tool request (err %v)", name, err)
+			if err != nil || !strings.Contains(got, "Respond in JSON format, either with `tool_call`") {
+				t.Errorf("%s: a template without tools was not served the generic form (err %v):\n%s", name, err, got)
 			}
 			ran++
 			continue

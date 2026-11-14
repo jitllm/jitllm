@@ -1,0 +1,85 @@
+{
+ "model": "m",
+ "messages": [
+  {
+   "role": "user",
+   "content": "What is the last price of the stock AAPL?"
+  }
+ ],
+ "tools": [
+  {
+   "type": "function",
+   "function": {
+    "name": "get_weather",
+    "description": "Get the current weather for a city",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "location": {
+       "type": "string",
+       "enum": [
+        "Paris",
+        "Berlin",
+        "London",
+        "Tokyo"
+       ],
+       "description": "City name"
+      }
+     },
+     "required": [
+      "location"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "get_time",
+    "description": "Get the time in a time zone",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "zone": {
+       "type": "string",
+       "enum": [
+        "Tokyo",
+        "Paris",
+        "New York"
+       ]
+      }
+     },
+     "required": [
+      "zone"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "get_stock_price",
+    "description": "Get a stock's last price",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "symbol": {
+       "type": "string",
+       "enum": [
+        "AAPL",
+        "MSFT",
+        "GOOG"
+       ]
+      }
+     },
+     "required": [
+      "symbol"
+     ]
+    }
+   }
+  }
+ ],
+ "parallel_tool_calls": false,
+ "temperature": 0,
+ "max_tokens": 200
+}

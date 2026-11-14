@@ -250,8 +250,15 @@ func (lm *LoadedModel) logitBias(bs []TokenBias) ([]float32, error) {
 // structured output. nil when the choice forces nothing.
 func (lm *LoadedModel) toolConstraint(o GenerateOptions, ids []int32) (*constraint, error) {
 	ch := o.Prompt.Chat
-	if o.Prompt.Kind != PromptChat && o.Prompt.Kind != PromptSpans || ch == nil || len(ch.Tools) == 0 || !ch.ToolChoice.Forces() {
+	if o.Prompt.Kind != PromptChat && o.Prompt.Kind != PromptSpans || ch == nil || len(ch.Tools) == 0 {
 		return nil, nil
+	}
+	if !ch.ToolChoice.Forces() {
+		// A model whose template reads no tools has every reply held to
+		// the generic form's object; a caller's own grammar replaces it.
+		if syn, err := lm.m.ToolSyntax(); err != nil || o.Grammar != "" || !syn.ConstrainsReply(ch.ToolChoice) {
+			return nil, nil
+		}
 	}
 	if o.Grammar != "" {
 		return nil, fmt.Errorf("%w: a forced tool call and response_format are one constraint each; give one",

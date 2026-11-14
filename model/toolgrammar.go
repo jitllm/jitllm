@@ -136,6 +136,9 @@ func ToolGrammarOf(syn ToolSyntax, reason Reasoning, tools ToolSet, choice ToolC
 	if len(names) == 0 {
 		return "", fmt.Errorf("tool_choice %q with no tools declared", choice.Mode)
 	}
+	if syn.envelope {
+		return genericGrammar(tools, choice, names)
+	}
 	g := &toolGrammar{b: grammar.NewBuilder(), tools: tools, w: syn.f.Write, f: syn.f}
 	many := !choice.Single && choice.Mode != ToolChoiceFunction && syn.f.Several
 	calls, err := g.calls(names, many)

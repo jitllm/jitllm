@@ -779,6 +779,8 @@ func (e *compat) runOpenAI(w http.ResponseWriter, r *http.Request, o GenerateOpt
 			if _, _, content := c.tt.finish(c.fin.StopMatched); len(c.tt.calls) > 0 {
 				reason = "tool_calls"
 				msg.Content, msg.ToolCalls = content, e.oaCalls(c.tt.calls, false, 0)
+			} else if c.tt.generic() {
+				msg.Content = content
 			}
 			resp.Choices = append(resp.Choices, oaChatChoice{Index: i, Message: msg,
 				FinishReason: &reason, Logprobs: c.chatLogprobs(lp)})
