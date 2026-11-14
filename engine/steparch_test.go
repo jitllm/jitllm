@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/internal/testmodels"
@@ -36,7 +37,7 @@ func TestStepAcrossSessionsEveryArchitecture(t *testing.T) {
 			for _, dev := range stepDevices() {
 				t.Run(dev, func(t *testing.T) {
 					ctl := stepControl(t, m, name, dev, instOpts...)
-					g := stepTier(t, m, dev, false)
+					g := stepTier(t, m, dev, false, fixtureTier(name)...)
 					defer g.Close()
 					r := stepGate(t, m, g, false, instOpts...)
 					bound := stepBound(m, name, r, ctl)
@@ -90,10 +91,22 @@ func fixture(name string) bool { return strings.HasPrefix(filepath.Base(name), "
 // session alone read 0 to 2.9e-12 on CUDA, SPIR-V and Metal -- where a
 // published model's band is set by its quantized activations near a tie. A
 // bound of the published models' width would pass a missing Llama 4
-// temperature, which reads 6.4e-04 on the fixture. A mixture whose experts
-// ran in binary16 is not held to it: synth-gptoss's MXFP4 banks on Metal's
-// tiles read 8.6e-04.
+// temperature, which reads 6.4e-04 on the fixture. It is float arithmetic's
+// bound, so a fixture's card forms nothing on its matrix unit (fixtureTier).
 const fixtureStepNMSE = 1e-9
+
+// fixtureTier is the card options a fixture's step gate runs under: no
+// kernel on the matrix unit (NoMMA), where a step of rows rounds its row
+// factors to binary16 and each session alone reads them as floats --
+// synth-bitnet-i2s's step read 5.4e-08 and synth-gptoss's 8.6e-04 (a router
+// tie moved) on a V100. The published models run the matrix unit, held to
+// their band.
+func fixtureTier(name string) []gpu.Option {
+	if !fixture(name) {
+		return nil
+	}
+	return []gpu.Option{gpu.WithConfig(func(c *gpu.Config) { c.NoMMA = true })}
+}
 
 // stepArchModels is the models TestStepAcrossSessionsEveryArchitecture runs.
 func stepArchModels() []string {
