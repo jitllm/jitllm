@@ -325,6 +325,9 @@ func attendPartial(o graph.Op, a graph.Attrs, c *Context, q, out Operand, g atte
 		{Kind: PrimReduce, Shape: keys, In: tables(weights), Out: sums, Combine: OpAdd, Expr: lx.e, Facts: sum},
 		{Kind: PrimContract, Shape: []int{R, H, D, C}, In: tables(weights, g.Values), Out: values, Expr: vx.e, Facts: rng(3)},
 	}
+	for i := range prims {
+		prims[i].Sweep = c.History.Passes
+	}
 	return prims, values, sums, maxes
 }
 
@@ -376,7 +379,7 @@ func foldPasses(o graph.Op, R, H, D int, values, sums, maxes, out Operand) []Pri
 	}
 	ex.op(OpMul, F, ex.at(0, runs, er, eh, ex.coord(2)), ex.op(OpDiv, F, ex.f(1), ex.op(OpMax, F, l, ex.f(1e-30))))
 	return []Prim{
-		{Kind: PrimMap, Shape: runs, In: []Operand{values, sums, maxes, TableRunIn.op()}, Out: TableRunOut.op(), Expr: fx.e},
+		{Kind: PrimMap, Shape: runs, In: []Operand{values, sums, maxes, TableRunIn.op()}, Out: TableRunOut.op(), Expr: fx.e, Sweep: true},
 		{Kind: PrimMap, Shape: dims, In: in, Out: out, Expr: ex.e},
 	}
 }

@@ -134,6 +134,8 @@ type partCode struct {
 	// matrix pass formed whose tiles it multiplies, not the kernel that
 	// writes its rows' factor for it. attend is an attention formed there.
 	matrix, attend bool
+	// sweep is a code a form over passes runs once a pass (composer.Code.Sweep).
+	sweep bool
 }
 
 // partInst is one lane's instance of a form: the form's own buffers and
@@ -398,7 +400,7 @@ func (g *devTier) compilePart(sl *composedPart, codes []composer.Code, rows int)
 			LiveGroup: c.LiveGroup, Work: c.Work, Few: c.Few, Many: c.Many}
 		f.codes = append(f.codes, partCode{k: kerns[ci], groups: c.Groups, width: c.GPU.Group[0], geom: geom,
 			matrix: slices.Contains(c.Passes, "matrix") && slices.ContainsFunc(c.GPU.Ops, func(o ir.Op) bool { return o.Kind == ir.OpTileMMA || o.Kind == ir.OpMMA }),
-			attend: slices.Contains(c.Passes, "flash")})
+			attend: slices.Contains(c.Passes, "flash"), sweep: c.Sweep})
 		var args []partArg
 		for _, bd := range c.Binds {
 			o := bd.Operand
@@ -487,48 +489,35 @@ func (g *devTier) compilePart(sl *composedPart, codes []composer.Code, rows int)
 }
 
 // passSweeps finds the sweeps a form over a history read in passes runs,
-// each its codes once a pass: from its first code reading the history (its
-// keys or values) to its last folding a running partial, an attention's or
-// a selection's block scores, the sweep closing where a later code reads the
-// history again. A code before a sweep -- a front fused with the row's own
-// append, which addresses the pages but reads no history, or a selection's
-// ranking -- runs once. A pass writes none of the call's buffers, no table
-// but the pools and the partial it folds, and no buffer a code of the pass
-// reads before.
+// each its codes once a pass: a run of codes the composer marks a pass's
+// (composer.Code.Sweep), reading the pass's keys and folding a running
+// partial, an attention's or a selection's block scores. A code outside --
+// a front fused with the row's own append, an entry pooled from the newest
+// rows, a selection's ranking -- runs once. A pass writes none of the call's
+// buffers, no table but the pools and the partial it folds, and no buffer a
+// code of the pass reads before.
 func (f *partForm) passSweeps() error {
 	f.sweeps = f.sweeps[:0]
-	lo, hi := -1, -1
-	var folds composer.Table
-	for ci, args := range f.args {
-		reads, fold := false, composer.TableNone
-		for _, a := range args {
-			if a.kind != partTable {
-				continue
-			}
-			switch a.table.Table {
-			case composer.TableKeys, composer.TableValues:
-				reads = reads || a.read
-			case composer.TableRunOut, composer.TableSelOut:
-				if a.writes {
-					fold = a.table.Table
+	for ci := 0; ci < len(f.codes); ci++ {
+		if !f.codes[ci].sweep {
+			continue
+		}
+		sw := passSweep{lo: ci}
+		for ; ci < len(f.codes) && f.codes[ci].sweep; ci++ {
+			for _, a := range f.args[ci] {
+				if a.kind == partTable && a.writes && (a.table.Table == composer.TableRunOut || a.table.Table == composer.TableSelOut) {
+					sw.folds = a.table.Table
 				}
 			}
 		}
-		if reads && hi >= 0 {
-			f.sweeps, lo, hi = append(f.sweeps, passSweep{lo: lo, hi: hi, folds: folds}), -1, -1
+		sw.hi = ci
+		if sw.folds == composer.TableNone {
+			return fmt.Errorf("a form over a history read in passes with no pass between codes %d and %d", sw.lo, sw.hi)
 		}
-		if reads && lo < 0 {
-			lo = ci
-		}
-		if fold != composer.TableNone && lo >= 0 {
-			hi, folds = ci+1, fold
-		}
-	}
-	if lo >= 0 && hi >= 0 {
-		f.sweeps = append(f.sweeps, passSweep{lo: lo, hi: hi, folds: folds})
+		f.sweeps = append(f.sweeps, sw)
 	}
 	if len(f.sweeps) == 0 {
-		return fmt.Errorf("a form over a history read in passes with no pass between codes %d and %d", lo, hi)
+		return fmt.Errorf("a form over a history read in passes with no pass between codes %d and %d", -1, -1)
 	}
 	for _, sw := range f.sweeps {
 		read := map[int]bool{}

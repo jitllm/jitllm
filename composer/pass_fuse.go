@@ -39,7 +39,7 @@ func (f Fuse) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		for pi := ci - 1; pi >= 0; pi-- {
 			p := out[pi]
 			var m *Kernel
-			if p.Unfused || c.Unfused || p.Folds {
+			if p.Unfused || c.Unfused || p.Folds || p.Sweep != c.Sweep {
 				if conflicts(p, c) {
 					break
 				}

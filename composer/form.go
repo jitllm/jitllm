@@ -190,6 +190,7 @@ func (r *Registry) formWith(req Request, prof Profile, untailed map[KernelAt]boo
 			// in (Request.Paged), so nothing is fused into it.
 			k.Unfused = k.Unfused || k.readsTable(TableExperts)
 			k.Crowded, k.Folds, k.Unvector, k.Uninit = sp.crowded[k.at()], foldsAPass(p), sp.unvector[k.Of], sp.uninit[k.at()]
+			k.Sweep = p.Sweep
 			k.Unrolls = sp.unrolls[k.at()]
 			k.Copied, k.Untailed = sp.copied[k.at()], sp.untailed[k.at()]
 			k.Apart = req.Apart
