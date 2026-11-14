@@ -2017,8 +2017,9 @@ func (s *Instance) planFor(li int) *nn.LayerPlan {
 	plan.HeadDim, plan.NKVHead, plan.NRot = c.HeadDimAt(li), c.NKVHeadAt(li), c.NRotAt(li)
 	plan.NHead = c.NHeadAt(li)
 	// The block as ops, from the container: what a device serving it whole
-	// forms (front.go), nil where the front end states none.
-	plan.Graph = s.m.Composing().BlockGraph(li)
+	// forms (front.go), nil where the front end states none; its history
+	// written as the instance's type (deviceGraph).
+	plan.Graph = s.deviceGraph(li)
 	// A marker head's blocks run in a set of their own at their geometry;
 	// the trunk's are of mixed geometry only where its blocks state their
 	// own.

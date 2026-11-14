@@ -29,6 +29,13 @@ func (s *Instance) cutBlock(li int) (first nn.LayerPlan, rest nn.BlockSpec, ok b
 	w := pre.Values[pre.Out[0]].Width
 	first = *s.planFor(li)
 	first.Graph, first.Cut = pre, w
+	// The card's half writes the history as the instance's type
+	// (deviceGraph); the CPU device's statement of it reads the block's own.
+	if dg := s.deviceGraph(li); dg != g {
+		if first.Graph, _, err = graph.Cut(dg, dg.Routed); err != nil {
+			return first, rest, false, fmt.Errorf("engine: block %d's routed experts: %w", li, err)
+		}
+	}
 	first.NExpert, first.NExpertUsed, first.MoEBias = 0, 0, false
 	if first.Spec != nil {
 		sp := s.specOf(li, pre)

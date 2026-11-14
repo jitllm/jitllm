@@ -120,14 +120,10 @@ func (s *Instance) partsPlan() *nn.PartsPlan {
 	p.TablesW = nn.PartWeights{Block: cpuTablesBlock, Of: s.ws.tensors(cpuTablesBlock, nil)}
 
 	for f := nn.KVF16; int(f) < nn.KVFormats; f++ {
-		narrow, widen := graph.OpHalves, graph.OpWidenHalves
+		narrow, widen, at := kvConvOps(f)
 		widths := []int{kvHalfRow}
-		at := graph.Attrs{Block: f.Block(), BF16: f == nn.KVBF16}
 		if f.Quantized() {
-			narrow, widen, widths = graph.OpQ8Rows, graph.OpWidenQ8Rows, nil
-			if at.Block != 0 {
-				narrow, widen = graph.OpBlockRows, graph.OpWidenBlockRows
-			}
+			widths = nil
 			for li := s.lo; li < s.hi; li++ {
 				if hd := s.kvlAt(li).headDim; !slices.Contains(widths, hd) {
 					widths = append(widths, hd)
@@ -135,13 +131,7 @@ func (s *Instance) partsPlan() *nn.PartsPlan {
 			}
 		}
 		for _, fw := range widths {
-			c := nn.KVConvPlan{FW: fw, HW: fw / 2}
-			switch {
-			case at.Block != 0:
-				c.HW = graph.BlockRowWords(at.Block, fw)
-			case f == nn.KVQ8:
-				c.HW = graph.Q8RowWords(fw)
-			}
+			c := nn.KVConvPlan{FW: fw, HW: kvRowWords(f, fw)}
 			nb := graph.New()
 			nb.Out(nb.Emit(narrow, []graph.ValueID{nb.In("kv.f", c.FW)},
 				[]graph.Result{{Name: "kv.h", Width: c.HW, Elem: graph.ElemU32}}, nil, at, nil, nil)...)

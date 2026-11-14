@@ -44,6 +44,7 @@ and the code has moved since (RULE 12). Paths below are under
 | a refusal's remedies a kernel at a time | a run the registers refuse takes one remedy kind a formation and forms the whole graph again per kind (Qwen3-MOE-4x0.6B's CPU instance 30 times, Qwen3.5-0.8B 15); each kernel taking its own next remedy in one formation cuts that to 18 and 12 but forms different bytes, so it needs a speed A/B before it is taken | scheduling-and-measurement.md "A refusal's remedies taken a kind at a time" |
 | the shelved levers | small levers re-opened under RULE 6 | below |
 | the smaller items | SPIR-V Tok-invariance, the M4 MoE rows, `centerMinTok`, the amd64 f16 KV rate, the arm64 integer fold for Q4_K/Q5_K, `emitA64KScales`' mask immediates | below |
+| a typed history's bytes on a card | a card holds a quantized or bfloat16 history as floats with the type's values (engine/kvtyperun.go deviceGraph: each append takes the type's narrowing and widening first), so a block there answers as the type does and holds what an f32 history holds; block pools on the card (composer.Pool's Block, which the composer's reads already take) would hold the type's bytes. A quantized history whose head rows are not whole blocks of 32 is still written as floats on a card, and a second instance of another history type offering a block a card holds is declined there (one graph a block) | engine TestBlockHistoryFollowsItsReference |
 
 ## Levers shelved for being small, not for a regression
 

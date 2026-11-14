@@ -81,6 +81,14 @@ type frontState struct {
 	// container's, nil otherwise; restated counts its changes.
 	Restate  func(block int32, inv map[jlm.Role]graph.Shape)
 	Restated int
+	// derived is each block graph made over (DerivedBlockGraph), by the
+	// graph it was made from and the caller's key.
+	derived map[derivedKey]*graph.Graph
+}
+
+type derivedKey struct {
+	from *graph.Graph
+	key  int
 }
 
 // frontSet is the graphs one statement of the model builds, and the
@@ -235,6 +243,30 @@ func (c Composing) BlockGraph(li int) *graph.Graph {
 }
 
 func (c Composing) Blocks() int { return c.m.Cfg.NLayer }
+
+// DerivedBlockGraph is block li's graph made over by derive, once for the
+// graph the block states and key: every caller asking with one key is handed
+// one graph, as a device shares a block only among the sessions that offer
+// it the same graph. Nil where the block states none.
+func (m *Model) DerivedBlockGraph(li, key int, derive func(*graph.Graph) *graph.Graph) *graph.Graph {
+	g := (Composing{m.Container, m}).BlockGraph(li)
+	if g == nil {
+		return nil
+	}
+	f := &m.Front
+	f.Mu.Lock()
+	defer f.Mu.Unlock()
+	k := derivedKey{g, key}
+	if d, ok := f.derived[k]; ok {
+		return d
+	}
+	if f.derived == nil {
+		f.derived = map[derivedKey]*graph.Graph{}
+	}
+	d := derive(g)
+	f.derived[k] = d
+	return d
+}
 
 func (c Composing) SeamGraph(int) *graph.Graph { return nil }
 
