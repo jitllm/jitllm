@@ -1973,7 +1973,7 @@ context	model/frontstreams.go	"the streams' collapse does not verify: %w"
 context	model/frontstreams.go	"the streams' expansion does not verify: %w"
 context	model/frontstreams.go	"the streams' stated head read: %w"
 context	model/frontstreams.go	"what the writes share: %w"
-refusal	model/kvtype.go	"model: KV type %q is not one of f32, f16, q8_0, q4_0, q4_1, q5_0, q5_1"	llama.cpp's iq4_nl and bf16 KV types
+refusal	model/kvtype.go	"model: KV type %q is not one of f32, f16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1"	llama.cpp's bf16 KV type
 input	model/model.go	"activation quantization"
 input	model/model.go	"activations"
 input	model/model.go	"jitllm: %s is not a %s container, and inference reads nothing else.\n  Convert it once:  jitllm convert %s %s"

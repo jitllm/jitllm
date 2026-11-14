@@ -25,7 +25,7 @@ import (
 // llama.cpp's block_q8_0 costs 34. A store kernel writing the scale alone (36)
 // or as binary16 (34) is the upgrade.
 //
-//	KVQ4_0, KVQ4_1, KVQ5_0, KVQ5_1  llama.cpp's blocks per head row
+//	KVQ4_0, KVQ4_1, KVQ5_0, KVQ5_1, KVIQ4NL  llama.cpp's blocks per head row
 //	       (graph.BlockFmt): a row of hd elements is ceil(hd/32) blocks in
 //	       ggml's layout, the last zero-padded, quantized as ggml's
 //	       reference quantizer does and rounded up to a float32 slot
@@ -44,10 +44,11 @@ const (
 	KVQ4_1
 	KVQ5_0
 	KVQ5_1
+	KVIQ4NL
 )
 
 // KVFormats is how many KV formats there are, what a table by format holds.
-const KVFormats = int(KVQ5_1) + 1
+const KVFormats = int(KVIQ4NL) + 1
 
 // Block is f's llama.cpp block format, 0 for one that is not blocks.
 func (f KVFmt) Block() graph.BlockFmt {
@@ -60,6 +61,8 @@ func (f KVFmt) Block() graph.BlockFmt {
 		return graph.BlockQ5_0
 	case KVQ5_1:
 		return graph.BlockQ5_1
+	case KVIQ4NL:
+		return graph.BlockIQ4NL
 	}
 	return 0
 }

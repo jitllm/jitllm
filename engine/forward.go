@@ -521,6 +521,8 @@ func kvFmtOf(t model.KVType) nn.KVFmt {
 		return nn.KVQ5_0
 	case model.KVQ5_1:
 		return nn.KVQ5_1
+	case model.KVIQ4_NL:
+		return nn.KVIQ4NL
 	}
 	return nn.KVF32
 }
