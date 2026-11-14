@@ -1405,7 +1405,6 @@ func (g *devTier) prepLayerFor(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerW
 // bs.addS adds s times it. A mixture's routed weights carry no part of it on
 // the device, unlike the host's routed scale (model.Config.routedScale): the
 // scaled add covers the routed sum and the shared expert at once.
-func residScaled(p *nn.LayerPlan) bool { return p.ResidualScale != 0 && p.ResidualScale != 1 }
 
 // ungatedFFN reports whether the block's FFN has no gate matrix: up, the
 // activation alone, down -- a vision tower's MLP, or a classic text block's
@@ -1525,6 +1524,13 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	// weights, norms, biases and router are the model's. Rebuilding would
 	// re-upload them and replace the layer the first session is running against.
 	if l := g.layers[li]; l != nil && l.ok {
+		// Sharing is of one block: a model's block is the graph it was
+		// placed with, and a session offering another at this index offers
+		// another model's.
+		if p.Graph != l.graph {
+			g.LastErr = fmt.Sprintf("block %d: offered with a graph other than the one this device holds for it", li)
+			return false
+		}
 		defer func() {
 			if placed {
 				l.join(sid)
@@ -5875,8 +5881,13 @@ func planUnion(a *nn.LayerPlan, b *nn.LayerPlan) bool {
 }
 
 // planConflict names a plan this tier's scratch cannot serve alongside the one
-// it holds, or "". Two different windows are the case: the scratch bakes one,
-// and taking either would run the other session's local layers wrong.
+// it holds, or "". What a block computes is its composed part's, formed from
+// its own graph (servedBlockAs over layer.graph): its norms, gating, scales,
+// latent geometry and delta rule are the graph's, and its history's geometry
+// its own plan's (kvGeomOf). The scratch holds only what a call binds for
+// every block of its set (initScratch), and of a plan's attention it bakes
+// one thing: the window its rows' windowed descriptors are staged for
+// (pagedStage), so two different windows are the case.
 func planConflict(bs *blockScratch, p *nn.LayerPlan) string {
 	if bs == nil || p.NonCausal {
 		return ""
@@ -5884,58 +5895,9 @@ func planConflict(bs *blockScratch, p *nn.LayerPlan) string {
 	if a, b := bs.p.SWAWindow, p.SWAWindow; a > 0 && b > 0 && a != b {
 		return fmt.Sprintf("a sliding window of %d keys on a tier built for %d", b, a)
 	}
-	// A chunked attention is baked the same way (chunk, temperature table,
-	// norm, input weighting), and planUnion widens none of it.
-	if a, b := bs.p, *p; a.SWAChunked != b.SWAChunked || a.NoPEGlobal != b.NoPEGlobal ||
-		a.QKL2Norm != b.QKL2Norm || a.ExpertWeightIn != b.ExpertWeightIn ||
-		a.AttnTempScale != b.AttnTempScale || a.AttnTempFloor != b.AttnTempFloor ||
-		a.AttnTempOffset != b.AttnTempOffset {
+	// A chunk is a window staged another way (pagedStage).
+	if bs.p.SWAChunked != p.SWAChunked {
 		return "a chunked attention of a different shape from the one this tier was built for"
-	}
-	// The activation kernels bake whether the FFN has a gate.
-	if a, b := bs.p, *p; !a.NoFFN && !b.NoFFN && ungatedFFN(&a) != ungatedFFN(&b) {
-		return "an ungated FFN beside a gated one on one tier"
-	}
-	// Where q's norm runs is baked into the scratch's launch sequence.
-	if a, b := bs.p, *p; a.QKNorm != b.QKNorm || a.QKNormPost != b.QKNormPost {
-		return fmt.Sprintf("a q/k norm (%v, after the rotary %v) on a tier built for (%v, %v)",
-			b.QKNorm, b.QKNormPost, a.QKNorm, a.QKNormPost)
-	}
-	// The latent geometry is baked into every kernel of the scratch. No
-	// architecture mixes them, which is why it is named rather than assumed.
-	if a, b := bs.p, *p; a.KVLoraRank != b.KVLoraRank || a.QLoraRank != b.QLoraRank ||
-		a.HeadDimV != b.HeadDimV {
-		if a.MLA() || b.MLA() {
-			return fmt.Sprintf("a latent attention geometry of (%d, %d, %d) on a tier "+
-				"built for (%d, %d, %d)", b.KVLoraRank, b.QLoraRank, b.HeadDimV,
-				a.KVLoraRank, a.QLoraRank, a.HeadDimV)
-		}
-	}
-	// The classic block's switches (C6) are baked too: norm kernels, gating,
-	// and the parallel residual read from the scratch's plan.
-	if a, b := bs.p, *p; a.LayerNorm != b.LayerNorm || a.Parallel != b.Parallel ||
-		a.UngatedFFN != b.UngatedFFN {
-		return fmt.Sprintf("a classic block (LayerNorm %v, parallel %v, ungated %v) on a tier "+
-			"built for (%v, %v, %v)", b.LayerNorm, b.Parallel, b.UngatedFFN,
-			a.LayerNorm, a.Parallel, a.UngatedFFN)
-	}
-	// The score scale is baked into the attention kernels and the residual
-	// scale into the scratch's one-element buffer: a model of another scale on
-	// this scratch would run with this one's.
-	if a, b := bs.p.Scale(), p.Scale(); a != b {
-		return fmt.Sprintf("an attention score scale of %g on a tier built for %g", b, a)
-	}
-	if a, b := bs.p.ResidualScale, p.ResidualScale; residScaled(&bs.p) || residScaled(p) {
-		if a != b {
-			return fmt.Sprintf("a residual scale of %g on a tier built for %g", b, a)
-		}
-	}
-	// The delta-rule kernel bakes one key-head pairing; a scratch built for
-	// grouped heads runs a tiled block's value heads against the wrong keys,
-	// and every shape still matches.
-	if a, b := bs.p.Recurrent, p.Recurrent; a.Conv > 0 && b.Conv > 0 && a.KeyTiled != b.KeyTiled {
-		return fmt.Sprintf("a delta rule with key heads tiled=%v on a tier built for tiled=%v",
-			b.KeyTiled, a.KeyTiled)
 	}
 	return ""
 }
