@@ -1,0 +1,11 @@
+{
+ "content": "",
+ "tool_calls": [
+  {
+   "name": "get_weather",
+   "arguments": {
+    "location": "Paris"
+   }
+  }
+ ]
+}

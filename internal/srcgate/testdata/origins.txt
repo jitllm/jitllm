@@ -1916,7 +1916,6 @@ input	model/chat.go	"model: the template writes %q for an image and %q for a vid
 input	model/chat.go	"model: the template wrote %d image placeholder(s) %q and %d video placeholder(s) %q for %d image(s) and %d video(s)"
 input	model/chat.go	"model: this container carries no chat template; it is a base model, not an instruct one"
 input	model/chat.go	"model: this container carries several chat templates (%s) and none named default"
-refusal	model/chat.go	"model: this model's chat template never reads `tools`, so it was not trained to call them; send the request without tools"	tools to a template that reads none (llama.cpp's generic tool format)
 context	model/chat.go	"model: tools: %w"
 input	model/embed.go	"model: %v is %v in %d dimensions"
 input	model/embed.go	"model: dense heads %dx%d then %dx%d do not map %d back to itself"

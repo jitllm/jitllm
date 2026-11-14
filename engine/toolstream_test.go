@@ -31,12 +31,12 @@ func TestToolStreamReadsControlTokens(t *testing.T) {
 			"<|channel|>analysis<|message|>The user wants Paris.<|end|><|start|>assistant<|channel|>commentary " +
 				"to=functions.get_weather <|constrain|>json<|message|>{\"location\":\"Paris\"}",
 			"<|channel|>", "<think>The user wants Paris.</think>", "harmony"},
-		// Mistral v0.3's [TOOL_CALLS] is a control token. (This GGUF's
-		// template declares no tools, so the model's syntax is the
-		// default, which reads the opener spelled out.)
+		// This GGUF's template declares no tools, so the model's syntax is
+		// the generic form: the reply is one JSON object, read as the
+		// ids' text.
 		{"Mistral-7B-Instruct-v0.3-Q4_K_M.jlm",
-			"[TOOL_CALLS] [{\"name\": \"get_weather\", \"arguments\": {\"location\": \"Paris\"}}]",
-			"[TOOL_CALLS]", "", "hermes"},
+			"{\"tool_call\": {\"name\": \"get_weather\", \"arguments\": {\"location\": \"Paris\"}}}",
+			"", "", "generic"},
 	} {
 		t.Run(c.file, func(t *testing.T) {
 			// The suite converts what ships: the source beside the container,

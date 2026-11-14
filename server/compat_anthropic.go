@@ -319,7 +319,9 @@ func (e *compat) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		reason := anStopReason(fin.Reason)
 		txt := text.String()
 		blocks := []anOutBlock{{Type: "text", Text: &txt}}
-		if _, _, content := tt.finish(fin.StopMatched); len(tt.calls) > 0 {
+		if _, _, content := tt.finish(fin.StopMatched); len(tt.calls) == 0 && tt.generic() {
+			txt = content
+		} else if len(tt.calls) > 0 {
 			reason, blocks = "tool_use", nil
 			if content != "" {
 				blocks = append(blocks, anOutBlock{Type: "text", Text: &content})

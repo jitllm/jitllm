@@ -52,7 +52,7 @@ func TestARequestPicksItsTemplateAsTransformersDoes(t *testing.T) {
 // synth-commandr was written by llama.cpp's converter from Command-R's named
 // list -- default, rag and tool_use -- and a request with tools renders with
 // tool_use, one without with default. Command-R's default template never reads
-// `tools`, so rendering a tools request with it is refused outright.
+// `tools`, so a tools request is never rendered with it.
 func TestAToolsRequestRendersWithToolUse(t *testing.T) {
 	m, err := model.Open(jlmOf(t, testmodels.Path("synth-commandr.gguf")))
 	if err != nil {

@@ -33,6 +33,9 @@ type ToolStream struct {
 	shown, next int
 	// sent is how many calls have been returned.
 	sent int
+	// gen reads the generic form, which has no markup to cut out: nil
+	// for every other syntax.
+	gen *genericRead
 }
 
 // toolPiece is one token's (or one text push's) share of the reply: its raw
@@ -50,13 +53,20 @@ func (m *Model) NewToolStream(tools ToolSet) (*ToolStream, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &ToolStream{syn: syn, tools: tools, v: m.Vocab, cs: m.Vocab.NewChatStream()}, nil
+	return newToolStream(&ToolStream{syn: syn, tools: tools, v: m.Vocab, cs: m.Vocab.NewChatStream()}), nil
 }
 
 // NewTextToolStream reads text pushes, with no vocabulary to spell control
 // tokens: a source that has only text.
 func NewTextToolStream(syn ToolSyntax, tools ToolSet) *ToolStream {
-	return &ToolStream{syn: syn, tools: tools}
+	return newToolStream(&ToolStream{syn: syn, tools: tools})
+}
+
+func newToolStream(t *ToolStream) *ToolStream {
+	if t.syn.envelope {
+		t.gen = &genericRead{}
+	}
+	return t
 }
 
 // Syntax is the syntax the stream reads.
@@ -73,6 +83,10 @@ func (t *ToolStream) Push(id int32) (string, []ToolCall) {
 func (t *ToolStream) PushText(s string) (string, []ToolCall) { return t.add(s, s) }
 
 func (t *ToolStream) add(raw, chat string) (string, []ToolCall) {
+	if t.gen != nil {
+		t.raw.WriteString(raw)
+		return t.gen.add(t.raw.String(), t.tools, chat)
+	}
 	st := t.raw.Len()
 	t.raw.WriteString(raw)
 	t.pieces = append(t.pieces, toolPiece{start: st, end: t.raw.Len(), chat: chat, plain: raw == chat})
@@ -88,6 +102,9 @@ func (t *ToolStream) add(raw, chat string) (string, []ToolCall) {
 // Finish ends the reply: the text still owed, the calls not yet returned,
 // and the whole reply's text with every call cut out.
 func (t *ToolStream) Finish() (tail string, calls []ToolCall, content string) {
+	if t.gen != nil {
+		return t.gen.finish(t.raw.String(), t.tools)
+	}
 	text := t.raw.String()
 	spans := t.syn.find(text, t.tools)
 	// At the end every call is whatever it is: one whose closing marker never

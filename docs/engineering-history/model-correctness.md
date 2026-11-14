@@ -3291,8 +3291,8 @@ Qwen3 and Llama-3.2 match exactly. Getting there found two engine bugs:
   `json.loads` keeps them.
 
 A template that never reads `tools` (this box's Mistral-7B-v0.3 GGUF carries
-the pre-tools one) refuses the request by name rather than rendering the
-conversation as if no tools were declared.
+the pre-tools one) is served the generic tool form ("The generic tool form",
+below), not rendered as if no tools were declared.
 
 Live, `jitllmd` on six P-cores, greedy: Qwen2.5-1.5B calls
 `get_weather({"city":"Paris","unit":"celsius"})`, and given the result answers
@@ -10669,3 +10669,65 @@ over every buffer is a gigabyte or more held by an instance that may never
 see a large picture. The buffers grow to the largest square seen, and a
 warm encode of a size already seen allocates nothing
 (`TestWarmImageEncodeDoesNotAllocate`).
+
+## The generic tool form
+
+A request with tools to a model whose chat template never names `tools` or
+`tool_calls` was refused ("send the request without tools"): the model was not
+trained to call them. llama.cpp served such a request through
+`COMMON_CHAT_FORMAT_GENERIC` until a rewrite of its chat parsing removed the
+format (b10825, b11609 and b11669 read the template as plain content and send
+back no call; b4689, commit 90e4dba4, is the last build with it, and the one
+`scripts/genericgold.py` records). The refusal is gone and the format is the
+engine's, because the first answer to "this model cannot call tools" is a
+prompt that tells it how.
+
+What b4689 does, and `model/toolgeneric.go` does after it:
+
+- **The prompt** is minja's tool polyfill plus the generic format's own
+  sentence. The system message (made, or added to) reads: the sentence "Respond
+  in JSON format, either with `tool_call` ... or with `response` ...", the tools
+  as the request wrote them indented two spaces, and "Example tool call
+  syntax:" with the call the template itself writes. minja derives that example
+  by rendering the template twice -- a user turn and a user turn answered by a
+  call -- and keeping what the second adds after the text they share, so the
+  example carries the template's own turn markup (Gemma's `<end_of_turn>` is in
+  its system message). `genericExample` does the same through the engine's own
+  renderer. A template with no system role folds the system message into the
+  first turn as before (`FoldSystem`). A call an assistant turn made is written
+  into the turn's content as `{"tool_calls": [{"name", "arguments", "id"}]}`
+  and a tool's result becomes a user turn holding `{"tool_response": {...}}`,
+  whether or not the request carries tools, since the template renders neither.
+- **The reply** is one JSON object, held to a grammar from llama.cpp's schema
+  for it through the converter `response_format` uses (`genericGrammar`): `{"tool_call":
+  {"name": <a declared tool>, "arguments": <its schema>}}` or `{"response":
+  text}`, and only the first under `tool_choice` "required". Several calls are
+  not allowed: llama.cpp turns `parallel_tool_calls` off where the template
+  cannot render several calls in one turn, and no such template can.
+- **The reader** (`readGeneric`) takes the object as it streams: the text of a
+  `response` as it is written, a call when its object closes, a reply that does
+  not open with `{` as plain text, an object with neither as the text it was.
+  The shims answer with that content, not with the JSON.
+
+A model whose template reads tools keeps its own form. Whether a template
+reads them is `readsTools`, the check the refusal was made on.
+
+Gated by `server.TestGenericToolsMatchLlamaCpp`: three models whose templates
+read none (Gemma 2 2B, which has no system role; Qwen2 1.5B, ChatML;
+Mistral-7B v0.3, which raises on a system turn), six requests each -- a weather
+question, a time, a stock quote, a required call, a system turn, a
+conversation after a tool result -- every tool argument an enum, so the reply a
+prompt calls for is the one the logits favour by a margin. The rendered prompt
+is equal to llama.cpp's `/apply-template` byte for byte and the answer equal
+to its chat completion, through the server's own endpoint on the CPU and on a
+card. `model.TestGeneric*` hold the reader, the grammar and the prompt without
+a model; the violations are the system message left out of the prompt and the
+reply left unconstrained.
+
+Phi-3.5 mini is not a gate model, for a divergence that is not this form's to
+choose: its template renders no BOS and its vocabulary adds one, so llama.cpp
+starts the prompt with it and the chat path (`TestChatTemplateIsAppliedAndSpecialsAreNotDoubled`)
+does not. Its prompts matched byte for byte and its answers parted from
+llama.cpp's on every request of an earlier set of six, on both arms; the models above write their own
+BOS or add none.
+

@@ -1,0 +1,114 @@
+<start_of_turn>user
+Respond in JSON format, either with `tool_call` (a request to call tools) or with `response` reply to the user's request
+
+You can call any of the following tools to satisfy the user's requests: [
+  {
+    "type": "function",
+    "function": {
+      "name": "get_weather",
+      "description": "Get the current weather for a city",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "location": {
+            "type": "string",
+            "enum": [
+              "Paris",
+              "Berlin",
+              "London",
+              "Tokyo"
+            ],
+            "description": "City name"
+          }
+        },
+        "required": [
+          "location"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "get_time",
+      "description": "Get the time in a time zone",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "zone": {
+            "type": "string",
+            "enum": [
+              "Tokyo",
+              "Paris",
+              "New York"
+            ]
+          }
+        },
+        "required": [
+          "zone"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "get_stock_price",
+      "description": "Get a stock's last price",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "enum": [
+              "AAPL",
+              "MSFT",
+              "GOOG"
+            ]
+          }
+        },
+        "required": [
+          "symbol"
+        ]
+      }
+    }
+  }
+]
+
+Example tool call syntax:
+
+{
+  "tool_calls": [
+    {
+      "name": "tool_name",
+      "arguments": {
+        "arg1": "some_value"
+      },
+      "id": "call_1___"
+    }
+  ]
+}<end_of_turn>
+
+
+
+What is the weather in Paris right now?<end_of_turn>
+<start_of_turn>model
+{
+  "tool_calls": [
+    {
+      "name": "get_weather",
+      "arguments": {
+        "location": "Paris"
+      },
+      "id": "call_1"
+    }
+  ]
+}<end_of_turn>
+<start_of_turn>user
+{
+  "tool_response": {
+    "content": "21 C and sunny",
+    "tool_call_id": "call_1"
+  }
+}<end_of_turn>
+<start_of_turn>model

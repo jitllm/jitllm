@@ -19,7 +19,12 @@ import (
 // A form is read from the reply's RAW text: the control tokens it is written
 // in spelled out as their literal text, since the text a person reads drops
 // them (ToolStream builds that text from the ids).
-type ToolSyntax struct{ f *jlm.ToolForm }
+type ToolSyntax struct {
+	f *jlm.ToolForm
+	// envelope is the generic form: the reply is one JSON object holding the
+	// calls or the answer (toolgeneric.go), read by its own scanner.
+	envelope bool
+}
 
 // ToolSyntaxFor is the syntax of a stated form.
 func ToolSyntaxFor(f jlm.ToolForm) ToolSyntax { return ToolSyntax{f: &f} }
@@ -33,9 +38,10 @@ func (s ToolSyntax) String() string {
 }
 
 // ToolSyntax is the syntax this model calls tools in: the form its container
-// states. A container with a chat template and no form was written before
-// forms were stated, and is refused rather than read in a form it never
-// stated; one with no template states no calls.
+// states, or the generic form where its template reads no tools. A container
+// with a chat template and no form was written before forms were stated, and is
+// refused rather than read in a form it never stated; one with no template
+// states no calls.
 func (m *Model) ToolSyntax() (ToolSyntax, error) {
 	var v *jlm.Vocab
 	if m != nil && m.Container != nil {
@@ -43,6 +49,9 @@ func (m *Model) ToolSyntax() (ToolSyntax, error) {
 	}
 	if v == nil || len(v.Templates) == 0 {
 		return ToolSyntax{}, nil
+	}
+	if src, err := m.ChatTemplateFor(true, false); err == nil && !readsTools(src) {
+		return genericSyntax(), nil
 	}
 	if len(v.Tools.Calls) == 0 {
 		return ToolSyntax{}, fmt.Errorf("model: this container states no tool-call form (it was written before forms were stated): convert it again")
@@ -139,6 +148,12 @@ type ToolCallSpan struct {
 // Find reads every tool call in text. Markup that is not a well-formed call
 // to a declared tool is not a call and stays text.
 func (s ToolSyntax) Find(text string, tools ToolSet) []ToolCallSpan {
+	if s.envelope {
+		if r := readGeneric(text, tools, true); len(r.calls) > 0 {
+			return []ToolCallSpan{{Start: r.start, End: len(text), Closed: true, Calls: r.calls}}
+		}
+		return nil
+	}
 	var out []ToolCallSpan
 	for _, sp := range s.find(text, tools) {
 		if sp.ok {
@@ -150,6 +165,10 @@ func (s ToolSyntax) Find(text string, tools ToolSet) []ToolCallSpan {
 
 // Parse is the reply's text with the calls' markup cut out, and the calls.
 func (s ToolSyntax) Parse(text string, tools ToolSet) (string, []ToolCall) {
+	if s.envelope {
+		r := readGeneric(text, tools, true)
+		return r.text(text), r.calls
+	}
 	spans := s.Find(text, tools)
 	if len(spans) == 0 {
 		return text, nil

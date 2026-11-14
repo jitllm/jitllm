@@ -30,7 +30,7 @@ func chatGold() string { return filepath.Join("..", "tok", "jinja", "testdata") 
 // Two of this package's choices part from transformers on purpose and are
 // counted rather than compared: a system turn folded into the next turn where
 // the template has no system role (foldSystem, llama.cpp's choice), and tools
-// refused for a template that never reads them. The image case is ChatSpans'
+// to a template that never reads them, served the generic tool form. The image case is ChatSpans'
 // and the documents case has no field in a request, so neither runs here.
 func TestChatPromptMatchesTransformers(t *testing.T) {
 	read := func(name string, v any) {
@@ -66,7 +66,7 @@ func TestChatPromptMatchesTransformers(t *testing.T) {
 	read("conversations.json", &conv)
 	clock := func() time.Time { return time.Date(2024, 7, 26, 0, 0, 0, 0, time.UTC) }
 
-	compared, raised, folded, refused, stringArgs := 0, 0, 0, 0, 0
+	compared, raised, folded, generic, stringArgs := 0, 0, 0, 0, 0
 	for _, e := range manifest {
 		srcB, err := os.ReadFile(filepath.Join(chatGold(), "templates", e.File))
 		if err != nil {
@@ -118,9 +118,9 @@ func TestChatPromptMatchesTransformers(t *testing.T) {
 			fold := msgs[0].Role == "system" && !model.SystemRendered(tpl, probe, parts)
 			switch {
 			case tools != nil && !strings.Contains(src, "tools") && !strings.Contains(src, "tool_calls"):
-				refused++
-				if err == nil || !strings.Contains(err.Error(), "never reads `tools`") {
-					t.Errorf("%s: a template that never reads tools rendered (%v)", name, err)
+				generic++
+				if err != nil || !strings.Contains(got, "Respond in JSON format, either with `tool_call`") {
+					t.Errorf("%s: a template that never reads tools was not served the generic form (%v):\n%s", name, err, got)
 				}
 			case want.Raise != "" && err != nil:
 				raised++
@@ -151,12 +151,12 @@ func TestChatPromptMatchesTransformers(t *testing.T) {
 		}
 	}
 	// The DeepSeek-V3.2 row is what proves the string fallback ran.
-	if compared < 250 || folded == 0 || refused == 0 || stringArgs == 0 {
-		t.Fatalf("%d renderings matched, %d folded, %d refused, %d with string arguments: the gate is not reaching what it covers",
-			compared, folded, refused, stringArgs)
+	if compared < 250 || folded == 0 || generic == 0 || stringArgs == 0 {
+		t.Fatalf("%d renderings matched, %d folded, %d generic, %d with string arguments: the gate is not reaching what it covers",
+			compared, folded, generic, stringArgs)
 	}
 	t.Logf("%d renderings byte-identical to transformers, %d raising in both, %d with the system folded, "+
-		"%d with tools refused, %d with string arguments", compared, raised, folded, refused, stringArgs)
+		"%d with tools served the generic form, %d with string arguments", compared, raised, folded, generic, stringArgs)
 }
 
 // chatMessagesOf reads OpenAI-shaped messages into ChatMessages, a tool

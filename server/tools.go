@@ -64,6 +64,11 @@ func (t *toolText) push(tok *Token) (string, []model.ToolCall) {
 	return s, calls
 }
 
+// generic is whether the stream reads the generic form, whose reply is a JSON
+// object: what the client is sent as content is the answer in it, and the
+// reply's own text is not.
+func (t *toolText) generic() bool { return t.ts != nil && t.ts.Syntax().Generic() }
+
 // finish returns the text a stream still owes, the calls not yet returned,
 // and the whole reply's text without its calls. stop is the stop string that
 // ended the reply, if one did: the ids carry it and the reply does not.

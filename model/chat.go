@@ -188,6 +188,22 @@ func RenderChatTemplate(src, bos, eos string, clock func() time.Time, msgs []Cha
 // tower states one (jlm.TowerSpan.Mark).
 func RenderCompiled(tpl *jinja.Template, src, bos, eos string, clock func() time.Time, msgs []ChatMessage,
 	tools []byte, choice ToolChoice, addGenerationPrompt, pics bool, mark string) (string, error) {
+	if !readsTools(src) && (len(tools) > 0 && choice.Mode != ToolChoiceNone || carriesToolTurns(msgs)) {
+		// A template that reads no tools is served the generic form
+		// (toolgeneric.go): the tools and how to answer in the system
+		// message, a call and its result as the text of their turns. A
+		// request that forbids calls is told nothing of its tools.
+		render := func(ms []ChatMessage, gen bool) (string, error) {
+			return RenderCompiled(tpl, src, bos, eos, clock, ms, nil, ToolChoice{}, gen, pics, mark)
+		}
+		var example string
+		if choice.Mode == ToolChoiceNone {
+			tools = nil
+		} else if len(tools) > 0 {
+			example = genericExample(render, eos)
+		}
+		return render(genericMessages(msgs, tools, example), addGenerationPrompt)
+	}
 	ctx := map[string]any{
 		"tools":                 nil,
 		"documents":             nil,
@@ -199,15 +215,10 @@ func RenderCompiled(tpl *jinja.Template, src, bos, eos string, clock func() time
 		ctx["strftime_now"] = jinja.StrftimeNow(clock)
 	}
 	if len(tools) > 0 {
-		// A template that reads neither the tools nor a tool call was not
-		// trained to call them. One that renders tool calls was, even when
-		// its definitions travel outside the template -- DeepSeek-V3's and
-		// V3.2's write calls and results and leave the tool list to the
+		// A template that renders tool calls was trained to call them, even
+		// when its definitions travel outside the template -- DeepSeek-V3's
+		// and V3.2's write calls and results and leave the tool list to the
 		// system prompt -- and transformers renders it with tools passed.
-		if !strings.Contains(src, "tools") && !strings.Contains(src, "tool_calls") {
-			return "", fmt.Errorf("model: this model's chat template never reads `tools`, so it was " +
-				"not trained to call them; send the request without tools")
-		}
 		tv, err := jinja.FromJSON(tools)
 		if err != nil {
 			return "", fmt.Errorf("model: tools: %w", err)
