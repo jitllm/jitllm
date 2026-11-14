@@ -397,6 +397,10 @@ type Stats struct {
 	// BudgetUsed is what the device's budget has spent: weights, scratch and
 	// the pool. SetBudget below it pages something out; at it, nothing grows.
 	BudgetUsed uint64
+	// Slack is what the device's room keeps free beside every allocation
+	// (backend.AllocCounter.Slack): a budget past BudgetUsed by less grows
+	// nothing.
+	Slack uint64
 	// ScratchBytes is the part of BudgetUsed the device's own buffers hold:
 	// the block scratches and the staging (scratch.go).
 	ScratchBytes uint64
@@ -857,6 +861,7 @@ func (s *Stats) add(o Stats) {
 	s.KVPoolBytes += o.KVPoolBytes
 	s.KVFreeBytes += o.KVFreeBytes
 	s.BudgetUsed += o.BudgetUsed
+	s.Slack = max(s.Slack, o.Slack)
 	s.ScratchBytes += o.ScratchBytes
 	s.ComposedBytes += o.ComposedBytes
 	s.ComposedArena += o.ComposedArena
@@ -1874,7 +1879,7 @@ func (d *devTier) stats() Stats {
 			}
 		}
 	}
-	s.BudgetUsed = d.used
+	s.BudgetUsed, s.Slack = d.used, d.slack()
 	s.ComposedBytes, s.ComposedArena = d.instBytes, d.arenaBytes
 	for _, r := range d.res {
 		if r.shared && r.ok {
