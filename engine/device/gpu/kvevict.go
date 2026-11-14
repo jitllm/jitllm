@@ -53,22 +53,14 @@ func (kp *kvPool) evictable(l *kvLayerPool, s seqID) int {
 // evictVictim is the sequence whose oldest resident page goes next: another
 // session's first -- its history is cold for this call -- then the current
 // session's, and only one with a page to spare in every layer that holds it.
-// A session stepping on the device keeps its pages (stepping). Only a session
-// of one sequence gives pages up. A call streams each of its sequences'
-// evicted pages in passes of its own (pagedStreamPrep), so a batch's rows
-// can stream; taking a batch's pages too sent blocks home on Vulkan in
-// TestSessionsEvictAtOnce, and is open. ok is false when nothing can leave.
+// A session stepping on the device keeps its pages (stepping). A session of
+// several sequences gives pages up as one of one does: a call streams each of
+// its sequences' pages at home in passes of its own (pagedStreamPrep). ok is
+// false when nothing can leave.
 func (g *devTier) evictVictim(sid uint64, kp *kvPool) (seqID, bool) {
-	perSess := map[uint64]int{}
-	for s := range kp.ranges {
-		perSess[s.sid]++
-	}
 	var best seqID
 	found, bestCur := false, true
 	for s := range kp.ranges {
-		if perSess[s.sid] != 1 {
-			continue
-		}
 		spare, held := true, false
 		for _, l := range kp.layers {
 			if len(l.owned[s]) == 0 {
@@ -97,13 +89,9 @@ func (g *devTier) evictVictim(sid uint64, kp *kvPool) (seqID, bool) {
 // of every sequence evictVictim may choose, counted where it is spare in
 // every layer that holds it.
 func (g *devTier) evictableIn(sid uint64, kp *kvPool, l *kvLayerPool) int {
-	perSess := map[uint64]int{}
-	for s := range kp.ranges {
-		perSess[s.sid]++
-	}
 	n := 0
 	for s := range kp.ranges {
-		if perSess[s.sid] != 1 || len(l.owned[s]) == 0 {
+		if len(l.owned[s]) == 0 {
 			continue
 		}
 		spare := kp.evictable(l, s)
@@ -211,13 +199,15 @@ func (g *devTier) evictForRoom(sid uint64, kp *kvPool, l *kvLayerPool, want int)
 
 // streamRoom makes sure every layer the session holds keeps a free id once a
 // call's pages are taken, when anything is in host memory: streaming needs one.
+// Growth first -- the room other layers' idle ids give back (kvCompact) --
+// then cold history home, as allocPages makes room.
 func (g *devTier) streamRoom(sid uint64) error {
 	kp := g.kvPages()
 	if len(kp.evicted) == 0 {
 		return nil
 	}
 	return g.heldLayers(sid, func(li int, l *kvLayerPool) error {
-		if len(l.free) == 0 && !g.evictForRoom(sid, kp, l, 0) {
+		if len(l.free) == 0 && g.growKVLayer(kp, l, l.n+1) != nil && !g.evictForRoom(sid, kp, l, 0) {
 			return fmt.Errorf("%w: block %d has no free page to stream evicted history through", ErrKVCapacity, li)
 		}
 		return nil
