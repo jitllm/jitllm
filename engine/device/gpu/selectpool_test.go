@@ -3,27 +3,35 @@ package gpu
 import (
 	"testing"
 
+	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/nn"
 )
 
-// TestSelectionHistoryStaysOnTheCard: a block whose attention selects from
-// its whole history (QSA's and MiniMax-M3's block selections, the lightning
-// indexer) cannot read pages at home through a streamed pass. On a card
-// holding five of Qwen3.8-Flash-Next's blocks the tier sent pages home anyway
-// and the next call was refused, failing the device mid-prompt. Such a block's
-// pool is now never evictable and the context it was asked for is part of
-// what admitting it costs. The plain block is the control: its pages may go.
-func TestSelectionHistoryStaysOnTheCard(t *testing.T) {
+// selectingGraph is a block graph selecting its history's blocks, by their
+// pooled keys or by their positions'.
+func selectingGraph(pooled bool) *graph.Graph {
+	return &graph.Graph{Ops: []graph.Op{{Kind: graph.OpSelect, Attr: graph.Attrs{Pooled: pooled, Span: 4, NKVHead: 1}}}}
+}
+
+// TestPooledSelectionHistoryStaysOnTheCard: a block selecting by its
+// history's pooled keys (QSA's and MiniMax-M3's block selections) has no
+// form over a streamed pass yet, so its pool is never evictable and the
+// context it was asked for is part of what admitting it costs -- on a card
+// holding five of Qwen3.8-Flash-Next's blocks the tier once sent such pages
+// home and the next call was refused mid-prompt. The lightning indexer's
+// selection is formed over passes (its scores folded sweep by sweep), so its
+// history pages as a plain block's does, the plain block the control.
+func TestPooledSelectionHistoryStaysOnTheCard(t *testing.T) {
 	plain := &nn.LayerPlan{MaxSeq: 4096}
-	qsa := &nn.LayerPlan{MaxSeq: 4096, KeyW: 16, Select: &nn.SelectPlan{Block: 4, Keep: 2}}
-	msa := &nn.LayerPlan{MaxSeq: 4096, KeyW: 16, Select: &nn.SelectPlan{Block: 8, Keep: 4}}
-	idx := &nn.LayerPlan{MaxSeq: 4096, Select: &nn.SelectPlan{Block: 1, Keep: 4}}
+	qsa := &nn.LayerPlan{MaxSeq: 4096, KeyW: 16, Select: &nn.SelectPlan{Block: 4, Keep: 2}, Graph: selectingGraph(true)}
+	msa := &nn.LayerPlan{MaxSeq: 4096, KeyW: 16, Select: &nn.SelectPlan{Block: 8, Keep: 4}, Graph: selectingGraph(true)}
+	idx := &nn.LayerPlan{MaxSeq: 4096, Select: &nn.SelectPlan{Block: 1, Keep: 4}, Graph: selectingGraph(false)}
 	for name, c := range map[string]struct {
 		p    *nn.LayerPlan
 		want bool
-	}{"plain": {plain, false}, "qsa": {qsa, true}, "msa": {msa, true}, "indexer": {idx, true}} {
-		if got := selectsHistory(c.p); got != c.want {
-			t.Fatalf("%s: selectsHistory = %v, want %v", name, got, c.want)
+	}{"plain": {plain, false}, "qsa": {qsa, true}, "msa": {msa, true}, "indexer": {idx, false}} {
+		if got := pooledSelects(c.p.Graph); got != c.want {
+			t.Fatalf("%s: pooledSelects = %v, want %v", name, got, c.want)
 		}
 	}
 
@@ -52,8 +60,8 @@ func TestSelectionHistoryStaysOnTheCard(t *testing.T) {
 		ctx  bool
 	}{
 		{"plain", nn.LayerPlan{MaxSeq: 4096, NKVHead: 1, HeadDim: 16}, false},
-		{"qsa", nn.LayerPlan{MaxSeq: 4096, NKVHead: 1, HeadDim: 16, KeyW: 16, Select: &nn.SelectPlan{Block: 4, Keep: 2}}, true},
-		{"indexer", nn.LayerPlan{MaxSeq: 4096, NKVHead: 1, HeadDim: 16, Select: &nn.SelectPlan{Block: 1, Keep: 4}}, true},
+		{"qsa", nn.LayerPlan{MaxSeq: 4096, NKVHead: 1, HeadDim: 16, KeyW: 16, Select: &nn.SelectPlan{Block: 4, Keep: 2}, Graph: selectingGraph(true)}, true},
+		{"indexer", nn.LayerPlan{MaxSeq: 4096, NKVHead: 1, HeadDim: 16, Select: &nn.SelectPlan{Block: 1, Keep: 4}, Graph: selectingGraph(false)}, false},
 	} {
 		if err := d.pagedLayer(1, &layer{}, li, &c.p); err != nil {
 			t.Fatal(err)

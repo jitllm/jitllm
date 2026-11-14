@@ -53,6 +53,9 @@ type composedPart struct {
 	history    composer.History
 	more       []composer.History
 	keys, page int
+	// context is the positions the whole history holds, for a selecting form
+	// over passes (composer.Step.Context), 0 elsewhere.
+	context int
 	// seqs is the sequences a step's rows are of (composer.Step.Seqs): 1 for a
 	// form of one sequence's rows in position order, 0 for a row each.
 	seqs int
@@ -100,9 +103,18 @@ type partForm struct {
 	// gathers. rowSel is the own buffer of the hash's rows, rowN of them a
 	// row, rowIDs at the form's rows.
 	rowSplit, rowSel, rowN, rowIDs int
-	// A form over a history read in passes (composer.History.Passes) runs its
-	// codes [passLo, passHi) once a pass (streamRun).
-	passLo, passHi int
+	// A form over a history read in passes (composer.History.Passes) runs
+	// each sweep's codes once a pass (streamRun): a selection's, then its
+	// attention's.
+	sweeps []passSweep
+}
+
+// passSweep is the codes [lo, hi) a form over passes runs once a pass, and
+// the running table the last of them folds into (composer.TableRunOut, an
+// attention's partial, or TableSelOut, a selection's block scores).
+type passSweep struct {
+	lo, hi int
+	folds  composer.Table
 }
 
 // partBuf is one of a form's own buffers: n bytes, holding words where it
@@ -272,7 +284,7 @@ func (g *devTier) partRequest(r *composer.Registry, sl *composedPart, rows int) 
 		Formats:  sl.formats,
 		Paged:    sl.paged,
 		Apart:    sl.apart,
-		Step:     composer.Step{Rows: rows, Page: max(sl.page, composedPageMin), Keys: max(sl.keys, 1), ActWindow: int(g.actWin.Load()), Seqs: sl.seqs, Marks: sl.marks},
+		Step:     composer.Step{Rows: rows, Page: max(sl.page, composedPageMin), Keys: max(sl.keys, 1), ActWindow: int(g.actWin.Load()), Seqs: sl.seqs, Marks: sl.marks, Context: sl.context},
 		Rotaries: sl.rotaries,
 		Device:   dev,
 		History:  sl.history,
@@ -465,7 +477,7 @@ func (g *devTier) compilePart(sl *composedPart, codes []composer.Code, rows int)
 		return nil, err
 	}
 	if sl.history.Passes {
-		if err := f.passHalves(); err != nil {
+		if err := f.passSweeps(); err != nil {
 			f.close()
 			return nil, err
 		}
@@ -474,48 +486,66 @@ func (g *devTier) compilePart(sl *composedPart, codes []composer.Code, rows int)
 	return f, nil
 }
 
-// passHalves finds the codes a form over a history read in passes runs once
-// a pass: from its first code reading the history (its keys or values) to
-// its last folding the running partial. A code before it -- a front fused
-// with the row's own append, which addresses the pages but reads no history
-// -- runs once. A pass writes none of the call's buffers, no table but the
-// pools and the partial, and no buffer a code of the pass reads before.
-func (f *partForm) passHalves() error {
-	f.passLo, f.passHi = -1, -1
+// passSweeps finds the sweeps a form over a history read in passes runs,
+// each its codes once a pass: from its first code reading the history (its
+// keys or values) to its last folding a running partial, an attention's or
+// a selection's block scores, the sweep closing where a later code reads the
+// history again. A code before a sweep -- a front fused with the row's own
+// append, which addresses the pages but reads no history, or a selection's
+// ranking -- runs once. A pass writes none of the call's buffers, no table
+// but the pools and the partial it folds, and no buffer a code of the pass
+// reads before.
+func (f *partForm) passSweeps() error {
+	f.sweeps = f.sweeps[:0]
+	lo, hi := -1, -1
+	var folds composer.Table
 	for ci, args := range f.args {
+		reads, fold := false, composer.TableNone
 		for _, a := range args {
 			if a.kind != partTable {
 				continue
 			}
 			switch a.table.Table {
 			case composer.TableKeys, composer.TableValues:
-				if a.read && f.passLo < 0 {
-					f.passLo = ci
-				}
-			case composer.TableRunOut:
+				reads = reads || a.read
+			case composer.TableRunOut, composer.TableSelOut:
 				if a.writes {
-					f.passHi = ci + 1
+					fold = a.table.Table
 				}
 			}
 		}
-	}
-	if f.passLo < 0 || f.passHi <= f.passLo {
-		return fmt.Errorf("a form over a history read in passes with no pass between codes %d and %d", f.passLo, f.passHi)
-	}
-	read := map[int]bool{}
-	for ci := f.passLo; ci < f.passHi; ci++ {
-		for _, a := range f.args[ci] {
-			if a.kind == partOwn && a.read {
-				read[a.i] = true
-			}
+		if reads && hi >= 0 {
+			f.sweeps, lo, hi = append(f.sweeps, passSweep{lo: lo, hi: hi, folds: folds}), -1, -1
 		}
-		for _, a := range f.args[ci] {
-			switch {
-			case !a.writes:
-			case a.kind == partIn || a.kind == partOut,
-				a.kind == partTable && a.table.Table != composer.TableRunOut && a.table.Table != composer.TableKeys && a.table.Table != composer.TableValues,
-				a.kind == partOwn && read[a.i]:
-				return fmt.Errorf("the composer's kernel %d of a pass writes what a pass cannot run again over", ci)
+		if reads && lo < 0 {
+			lo = ci
+		}
+		if fold != composer.TableNone && lo >= 0 {
+			hi, folds = ci+1, fold
+		}
+	}
+	if lo >= 0 && hi >= 0 {
+		f.sweeps = append(f.sweeps, passSweep{lo: lo, hi: hi, folds: folds})
+	}
+	if len(f.sweeps) == 0 {
+		return fmt.Errorf("a form over a history read in passes with no pass between codes %d and %d", lo, hi)
+	}
+	for _, sw := range f.sweeps {
+		read := map[int]bool{}
+		for ci := sw.lo; ci < sw.hi; ci++ {
+			for _, a := range f.args[ci] {
+				if a.kind == partOwn && a.read {
+					read[a.i] = true
+				}
+			}
+			for _, a := range f.args[ci] {
+				switch {
+				case !a.writes:
+				case a.kind == partIn || a.kind == partOut,
+					a.kind == partTable && a.table.Table != sw.folds && a.table.Table != composer.TableKeys && a.table.Table != composer.TableValues,
+					a.kind == partOwn && read[a.i]:
+					return fmt.Errorf("the composer's kernel %d of a pass writes what a pass cannot run again over", ci)
+				}
 			}
 		}
 	}
@@ -556,8 +586,10 @@ func (f *partForm) share(paged bool) {
 	}
 	// A pass runs again over what was written before it.
 	for i := range last {
-		if f.passHi > 0 && first[i] >= 0 && first[i] < f.passLo && last[i] >= f.passLo {
-			last[i] = max(last[i], f.passHi-1)
+		for _, sw := range f.sweeps {
+			if first[i] >= 0 && first[i] < sw.lo && last[i] >= sw.lo {
+				last[i] = max(last[i], sw.hi-1)
+			}
 		}
 	}
 	f.slot = make([]int, n)
@@ -1030,7 +1062,7 @@ func (g *devTier) promptInst(bs *blockScratch, f *partForm) *partInst {
 	if err != nil {
 		g.LastErr = fmt.Sprintf("the composed prompt block: %v (an instance at %d rows, over passes %v, at a placement %v; "+
 			"the lane's decode scratch %v, %d instance(s) held there, clone lane %v)",
-			err, bs.rows, f.passHi > 0, g.prewarming, bs == g.bs, len(bs.prompt), g.lane.clone)
+			err, bs.rows, len(f.sweeps) > 0, g.prewarming, bs == g.bs, len(bs.prompt), g.lane.clone)
 		if _, room := err.(partRoomError); room {
 			bs.instNoRoom = true
 		}
@@ -1251,6 +1283,8 @@ type servedKey struct {
 	held   int
 	seqs   int
 	stream bool
+	// context is the whole history a selecting form over passes ranks.
+	context int
 }
 
 // servedPart is a served part and its form, with the arguments its launch
@@ -2763,8 +2797,9 @@ func (g *devTier) promptServed(l *layer, li int, bb *blockScratch) bool {
 // over a history read in passes: its forms over passes (servedStep's where
 // the call's history streams) formed, one a sequences form the rows take,
 // and the scratch's instance of each held, made here where they are not.
-// A block whose pool never evicts (kvLayerPool.noEvict: a selection reads its
-// whole history) is never read in passes, and has no form over them to make.
+// A block whose pool never evicts (kvLayerPool.noEvict: a pooled selection,
+// not yet formed over passes) is never read in passes, and has no form over
+// them to make.
 // Callers hold g.mu, outside any submission.
 func (g *devTier) streamServed(l *layer, li int, bb *blockScratch) bool {
 	if pl := g.kvp.layers[l.kvSrc]; pl != nil && pl.noEvict {
@@ -3022,6 +3057,13 @@ func (g *devTier) servedBlockAs(l *layer, li int, cs backend.Buf, pl *kvLayerPoo
 	if R > 1 {
 		kind = nn.PartPrompt
 	}
+	// A selection over a history read in passes ranks the whole history's
+	// blocks: its form is told the positions the history holds, bounded as
+	// its keys are.
+	context := 0
+	if run != nil && bs != nil && plainSelects(l.graph) {
+		context = keyBound(bs.p.MaxSeq)
+	}
 	// A linear block holds no history, unless it attends too: its state is
 	// its pool's (bindRec).
 	var kk, kv, tab backend.Buf
@@ -3044,7 +3086,7 @@ func (g *devTier) servedBlockAs(l *layer, li int, cs backend.Buf, pl *kvLayerPoo
 		bg = k.graphs[l]
 	}
 	sk := servedKey{kind: kind, graph: bg, rows: R, keys: keys, page: page, half: geom.f16, latent: geom.mla, seqs: seqs, stream: run != nil,
-		held: l.pagedHeld()}
+		held: l.pagedHeld(), context: context}
 	sv, err := g.servedFor(sk, func() (composedPart, error) {
 		// The request names no block: blocks of one structure and formats
 		// share a form, each launched on its own bindings, one after
@@ -3056,7 +3098,7 @@ func (g *devTier) servedBlockAs(l *layer, li int, cs backend.Buf, pl *kvLayerPoo
 			tables: map[composer.TableKey]backend.Buf{tableKey(composer.TableAngles): cs, tableKey(composer.TableKeys): kk, tableKey(composer.TableValues): kv, tableKey(composer.TablePages): tab, tableKey(composer.TableRows): rows,
 				tableKey(composer.TableWindows): rowsW, tableKey(composer.TableQOff): qOff, tableKey(composer.TableCall): calls},
 			history: poolHistory(geom), more: more,
-			keys: keys, page: page, seqs: seqs, paged: l.paged()}
+			keys: keys, page: page, seqs: seqs, paged: l.paged(), context: context}
 		if ek != nil {
 			sl.tables[composer.TableKey{Table: composer.TableKeys, Instance: 1}] = ek
 			sl.tables[composer.TableKey{Table: composer.TablePages, Instance: 1}] = etab
@@ -3064,6 +3106,9 @@ func (g *devTier) servedBlockAs(l *layer, li int, cs backend.Buf, pl *kvLayerPoo
 		if run != nil {
 			sl.history.Passes = true
 			sl.tables[tableKey(composer.TableRunIn)], sl.tables[tableKey(composer.TableRunOut)] = run[0], run[1]
+			if context > 0 {
+				sl.tables[tableKey(composer.TableSelIn)], sl.tables[tableKey(composer.TableSelOut)] = bs.pkv.sel[0], bs.pkv.sel[1]
+			}
 		}
 		g.bindRowTables(sl.tables, bs)
 		if bs != nil {
@@ -3145,6 +3190,9 @@ func (g *devTier) servedBlockAs(l *layer, li int, cs backend.Buf, pl *kvLayerPoo
 	}
 	if run != nil {
 		t[tableKey(composer.TableRunIn)], t[tableKey(composer.TableRunOut)] = run[0], run[1]
+		if context > 0 {
+			t[tableKey(composer.TableSelIn)], t[tableKey(composer.TableSelOut)] = bs.pkv.sel[0], bs.pkv.sel[1]
+		}
 	}
 	if l.linear {
 		t[tableKey(composer.TableRecRows)] = rec

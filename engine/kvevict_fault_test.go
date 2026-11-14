@@ -27,6 +27,27 @@ func TestKVEvictionGateDiscriminates(t *testing.T) {
 	}
 }
 
+// TestComposedSelectionFoldDiscriminates runs the eviction gate's squeezed
+// arm on the selecting model with each pass of its selection's sweep folding
+// into the least scores, so only the last pass's blocks rank, and demands the
+// comparison fail: the attention's folds alone cannot hold a lightning
+// indexer to the unconstrained card.
+func TestComposedSelectionFoldDiscriminates(t *testing.T) {
+	eg := newEvictGateOf(t, "synth-deepseek32.gguf")
+	free := eg.run(t, false, nil)
+	var f gpu.Faults
+	f.SetPagedFault("selfold")
+	got := eg.run(t, true, nil, gpu.WithFaults(&f))
+	if got.st.ComposedStreamPasses == 0 {
+		t.Fatal("no composed pass ran: the violation was never exercised")
+	}
+	dev, at := worstStep(got.logits, free.logits)
+	t.Logf("violation: worst logit NMSE %.3e at step %d", dev, at)
+	if dev < evictNMSE {
+		t.Fatalf("the gate passed a selection whose passes were never folded (NMSE %.3e)", dev)
+	}
+}
+
 // TestComposedPassFoldDiscriminates runs the eviction gate's squeezed arm
 // with each composed pass folding into the empty partial, so only the last
 // pass's keys count, and demands the comparison fail.
