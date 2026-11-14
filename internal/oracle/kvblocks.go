@@ -25,6 +25,8 @@ func blockOf(f BlockFormat) (bytes int, mins, fifths bool) {
 		return 22, false, true
 	case "q5_1":
 		return 24, true, true
+	case "iq4_nl":
+		return 18, false, false
 	}
 	return 0, false, false
 }
@@ -38,6 +40,12 @@ func QuantizeBlocks(dst []byte, x []float32, f BlockFormat) error {
 	bb, mins, fifths := blockOf(f)
 	if bb == 0 || len(x)%32 != 0 || len(dst) < len(x)/32*bb {
 		return fmt.Errorf("oracle: %d floats into %d bytes of %v blocks", len(x), len(dst), f)
+	}
+	if f.String() == "iq4_nl" {
+		for b := 0; b < len(x)/32; b++ {
+			quantizeIQ4NL(dst[18*b:18*b+18], x[32*b:32*b+32])
+		}
+		return nil
 	}
 	for b := 0; b < len(x)/32; b++ {
 		xb, y := x[32*b:32*b+32], dst[bb*b:bb*b+bb]
@@ -99,6 +107,66 @@ func QuantizeBlocks(dst []byte, x []float32, f BlockFormat) error {
 	return nil
 }
 
+// quantizeIQ4NL is quantize_row_iq4_nl_impl at ntry -1 with no importance
+// weights (quantize_row_iq4_nl_ref): the indices from max/kvalues[0], the
+// scale the weighted least squares over them, each weight the element's
+// square, the sums in order. A block whose magnitude is below 1e-15 scales
+// by zero; the reference leaves its indices as its last block's, and this
+// writes the index of the value nearest zero, as the composed quantizer does.
+func quantizeIQ4NL(y []byte, x []float32) {
+	kv := [16]int8{-127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113}
+	best := func(v float32) int {
+		if v <= float32(kv[0]) {
+			return 0
+		}
+		if v >= float32(kv[15]) {
+			return 15
+		}
+		ml, mu := 0, 15
+		for mu-ml > 1 {
+			mav := (ml + mu) / 2
+			if v < float32(kv[mav]) {
+				mu = mav
+			} else {
+				ml = mav
+			}
+		}
+		if v-float32(kv[mu-1]) < float32(kv[mu])-v {
+			return mu - 1
+		}
+		return mu
+	}
+	var amax, mx float32
+	for _, v := range x {
+		if a := float32(math.Abs(float64(v))); a > amax {
+			amax, mx = a, v
+		}
+	}
+	var l [32]int
+	var d float32
+	if amax < 1e-15 {
+		for j := range l {
+			l[j] = 8
+		}
+	} else {
+		d0 := mx / float32(kv[0])
+		id := 1 / d0
+		var sqx, sq2 float32
+		for j, v := range x {
+			l[j] = best(float32(id * v))
+			q := float32(kv[l[j]])
+			wq := float32(float32(v*v) * q)
+			sqx += float32(wq * v)
+			sq2 += float32(wq * q)
+		}
+		d = sqx / sq2
+	}
+	binary.LittleEndian.PutUint16(y, quant.EncodeHalf(d))
+	for j := 0; j < 16; j++ {
+		y[2+j] = byte(l[j] | l[j+16]<<4)
+	}
+}
+
 func b2i(b bool) int {
 	if b {
 		return 1
@@ -117,6 +185,8 @@ func DequantBlocks(dst []float32, b []byte, f BlockFormat) error {
 		return quant.Dequant32(quant.Q5_0, b, dst)
 	case "q5_1":
 		return quant.Dequant32(quant.Q5_1, b, dst)
+	case "iq4_nl":
+		return quant.Dequant32(quant.IQ4_NL, b, dst)
 	case "q4_1":
 		if len(b)%20 != 0 || len(dst) < len(b)/20*32 {
 			return fmt.Errorf("oracle: %d bytes of q4_1 into %d floats", len(b), len(dst))

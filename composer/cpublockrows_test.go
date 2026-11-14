@@ -12,7 +12,7 @@ import (
 
 // blockFmts is every llama.cpp block format a history row is held in.
 func blockFmts() []graph.BlockFmt {
-	return []graph.BlockFmt{graph.BlockQ4_0, graph.BlockQ4_1, graph.BlockQ5_0, graph.BlockQ5_1}
+	return []graph.BlockFmt{graph.BlockQ4_0, graph.BlockQ4_1, graph.BlockQ5_0, graph.BlockQ5_1, graph.BlockIQ4NL}
 }
 
 // TestComposedCPUBlockRows executes OpBlockRows and OpWidenBlockRows on the
@@ -70,7 +70,7 @@ func gateComposedCPUBlockRows(t *testing.T, cpuOn cpuArm) {
 					t.Fatal(err)
 				}
 				for j, w := range oracle.BlockRow(ggml[r], f, W) {
-					if got := rows[r*rw+j]; got != w {
+					if got := rows[r*rw+j]; got != w && !(f == graph.BlockIQ4NL && j < (nb+1)/2 && halvesWithinAnUlp(got, w)) {
 						t.Fatalf("%v width %d: row %d word %d is %#x, want %#x", f, W, r, j, got, w)
 					}
 				}
@@ -89,6 +89,20 @@ func gateComposedCPUBlockRows(t *testing.T, cpuOn cpuArm) {
 			}
 		}
 	}
+}
+
+// halvesWithinAnUlp is whether two words of two binary16 scales each differ
+// by at most one unit in the last place in each: iq4_nl's scale is a
+// quotient of two sums, which the composed reduction adds in another order
+// than the reference's loop.
+func halvesWithinAnUlp(a, b uint32) bool {
+	for _, s := range []uint32{0, 16} {
+		x, y := int32(a>>s&0xffff), int32(b>>s&0xffff)
+		if x-y > 1 || y-x > 1 {
+			return false
+		}
+	}
+	return true
 }
 
 // TestComposedCPUAttendBlocks is TestComposedCPUAttendQ8 over pools of each

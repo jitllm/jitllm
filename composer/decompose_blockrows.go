@@ -33,8 +33,6 @@ func blockRows(c *Context, src Operand, sh []int, out Operand, f graph.BlockFmt)
 	U, F, I := ir.U32, ir.F32, ir.I32
 	R, W := sh[0], sh[1]
 	nb := (W + blockElems - 1) / blockElems
-	rw := graph.BlockRowWords(f, W)
-	scales, fifths, nibbles := graph.BlockRegions(f, W)
 	temp := func(name string, t ir.Type) Operand {
 		return Operand{Kind: OperandScratch, Name: out.Name + "." + name, Elem: t, Temp: true}
 	}
@@ -121,6 +119,18 @@ func blockRows(c *Context, src Operand, sh []int, out Operand, f graph.BlockFmt)
 		neg := s.op(OpAnd, U, s.un(OpBitcast, U, s.un(OpCvtI32, I, s.at(1, blocks, s.coord(0), s.coord(1)))), s.u(1))
 		m := s.at(0, blocks, s.coord(0), s.coord(1))
 		mx := s.sel(F, s.op(OpLess, ir.Pred, s.u(0), neg), s.neg(m), m)
+		if f == graph.BlockIQ4NL {
+			prims = append(prims,
+				Prim{Kind: PrimReduce, Shape: []int{R, nb, blockElems}, In: []Operand{src}, Out: amax, Combine: OpMax, Expr: a.e},
+				Prim{Kind: PrimReduce, Shape: []int{R, nb, blockElems}, In: []Operand{src, amax}, Out: first, Combine: OpMax, Expr: fi.e})
+			// The extreme in a map of its own, its quotient in the next.
+			ext, d0 := temp("max", F), temp("d0", F)
+			var q exprs
+			quot(&q, q.at(0, blocks, q.coord(0), q.coord(1)), q.f(-127))
+			prims = append(prims, Prim{Kind: PrimMap, Shape: blocks, In: []Operand{amax, first}, Out: ext, Expr: s.e},
+				Prim{Kind: PrimMap, Shape: blocks, In: []Operand{ext}, Out: d0, Expr: q.e})
+			return append(prims, iq4nlRows(c, src, sh, out, amax, d0, quot, recip)...)
+		}
 		s.op(OpMul, F, mx, s.f(-1/bias))
 		var k exprs
 		r, i := k.coord(0), k.coord(1)
@@ -134,6 +144,26 @@ func blockRows(c *Context, src Operand, sh []int, out Operand, f graph.BlockFmt)
 			Prim{Kind: PrimMap, Shape: blocks, In: []Operand{d}, Out: inv, Expr: inverse()},
 			Prim{Kind: PrimMap, Shape: padded, In: []Operand{src, inv}, Out: codes, Expr: k.e})
 	}
+	return append(prims, blockRegions(c, sh, out, f, d, lo, codes)...)
+}
+
+// blockRegions is the stores of each of sh's rows in format f into out's
+// words from its blocks' scales d (and minimums lo) and codes: the scales,
+// the fifth bits, the nibbles (graph.BlockRegions).
+func blockRegions(c *Context, sh []int, out Operand, f graph.BlockFmt, d, lo, codes Operand) []Prim {
+	U, I := ir.U32, ir.I32
+	R, W := sh[0], sh[1]
+	nb := (W + blockElems - 1) / blockElems
+	rw := graph.BlockRowWords(f, W)
+	scales, fifths, nibbles := graph.BlockRegions(f, W)
+	temp := func(name string, t ir.Type) Operand {
+		return Operand{Kind: OperandScratch, Name: out.Name + "." + name, Elem: t, Temp: true}
+	}
+	blocks, padded := []int{R, nb}, []int{R, nb * blockElems}
+	block := func(e *exprs) int {
+		return e.op(OpAdd, U, e.op(OpMul, U, e.coord(1), e.u(blockElems)), e.coord(2))
+	}
+	var prims []Prim
 	ext := R * rw
 	at := func(e *exprs, region, w int) int {
 		return e.op(OpAdd, U, e.op(OpMul, U, e.coord(0), e.u(uint32(rw))), e.op(OpAdd, U, e.u(uint32(region)), w))
@@ -209,6 +239,110 @@ func blockRows(c *Context, src Operand, sh []int, out Operand, f graph.BlockFmt)
 			Stores: []PrimStore{{Out: out, Index: ix, Value: word, Extent: ext}}})
 }
 
+// iq4nlRows is each of src's sh rows in iq4_nl's blocks, as ggml's
+// reference quantizer (quantize_row_iq4_nl_ref, quantize_row_iq4_nl_impl
+// at ntry -1) quantizes a row zero-padded to whole blocks: from the signed
+// extreme's quotient by kvalues_iq4nl's first (d0), each element's
+// index the value nearest it times 1/d0 (best_index_int8), and the scale
+// the weighted least squares of the values against the elements, each
+// weighted by its square; a block whose magnitude is below 1e-15 scales by
+// zero.
+func iq4nlRows(c *Context, src Operand, sh []int, out, amax, d0 Operand,
+	quot func(*exprs, int, int) int, recip func(*exprs, int) int) []Prim {
+	U, F := ir.U32, ir.F32
+	R, W := sh[0], sh[1]
+	nb := (W + blockElems - 1) / blockElems
+	temp := func(name string, t ir.Type) Operand {
+		return Operand{Kind: OperandScratch, Name: out.Name + "." + name, Elem: t, Temp: true}
+	}
+	blocks, padded := []int{R, nb}, []int{R, nb * blockElems}
+	elem := func(e *exprs, r, i int) int {
+		if W%blockElems == 0 {
+			return e.at(0, sh, r, i)
+		}
+		return e.sel(F, e.op(OpLess, ir.Pred, i, e.u(uint32(W))), e.at(0, sh, r, e.op(OpMin, U, i, e.u(uint32(W-1)))), e.f(0))
+	}
+	block := func(e *exprs) int {
+		return e.op(OpAdd, U, e.op(OpMul, U, e.coord(1), e.u(blockElems)), e.coord(2))
+	}
+	tiny := func(e *exprs) int {
+		return e.op(OpLess, ir.Pred, e.at(0, blocks, e.coord(0), e.coord(1)), e.f(1e-15))
+	}
+	inv, codes, sqx, sq2, d := temp("inv", F), temp("q", U), temp("sqx", F), temp("sq2", F), temp("d", F)
+	var n exprs
+	n.sel(F, tiny(&n), n.f(0), recip(&n, n.at(1, blocks, n.coord(0), n.coord(1))))
+	// The codes by block and element, so the reductions reading them meet
+	// them at their own coordinates.
+	var k exprs
+	k.iq4Index(k.op(OpMul, F, elem(&k, k.coord(0), block(&k)), k.at(1, blocks, k.coord(0), k.coord(1))))
+	// term is the reference's two sums' terms, w*q*x and w*q*q with w =
+	// x*x, each in a map of its own: reduced straight from the row, beside
+	// the extreme's reductions over it, the form read the extreme's sign
+	// back wrong (a block of one element -100 among small ones scaled as
+	// +100), a defect of the composer's not yet found.
+	term := func(last bool) []Expr {
+		var x exprs
+		v := elem(&x, x.coord(0), block(&x))
+		q := x.iq4Value(x.at(1, padded, x.coord(0), block(&x)))
+		wq := x.op(OpMul, F, x.op(OpMul, F, v, v), q)
+		if last {
+			x.op(OpMul, F, wq, q)
+		} else {
+			x.op(OpMul, F, wq, v)
+		}
+		return x.e
+	}
+	sum := func() []Expr {
+		var x exprs
+		x.at(0, padded, x.coord(0), block(&x))
+		return x.e
+	}
+	tx, t2 := temp("tqx", F), temp("tq2", F)
+	var s exprs
+	s.sel(F, tiny(&s), s.f(0), quot(&s, s.at(1, blocks, s.coord(0), s.coord(1)), s.at(2, blocks, s.coord(0), s.coord(1))))
+	prims := []Prim{
+		{Kind: PrimMap, Shape: blocks, In: []Operand{amax, d0}, Out: inv, Expr: n.e},
+		{Kind: PrimMap, Shape: []int{R, nb, blockElems}, In: []Operand{src, inv}, Out: codes, Expr: k.e},
+		{Kind: PrimMap, Shape: []int{R, nb, blockElems}, In: []Operand{src, codes}, Out: tx, Expr: term(false)},
+		{Kind: PrimMap, Shape: []int{R, nb, blockElems}, In: []Operand{src, codes}, Out: t2, Expr: term(true)},
+		{Kind: PrimReduce, Shape: []int{R, nb, blockElems}, In: []Operand{tx}, Out: sqx, Combine: OpAdd, Expr: sum()},
+		{Kind: PrimReduce, Shape: []int{R, nb, blockElems}, In: []Operand{t2}, Out: sq2, Combine: OpAdd, Expr: sum()},
+		{Kind: PrimMap, Shape: blocks, In: []Operand{amax, sqx, sq2}, Out: d, Expr: s.e},
+	}
+	return append(prims, blockRegions(c, sh, out, graph.BlockIQ4NL, d, Operand{}, codes)...)
+}
+
+// iq4Value is kvalues_iq4nl[q] as a float: the values packed four to a
+// word, the word picked by q's top bits and the byte by its low two.
+func (x *exprs) iq4Value(q int) int {
+	U := ir.U32
+	kv := graph.IQ4NLValues()
+	var w [4]uint32
+	for i, v := range kv {
+		w[i/4] |= uint32(uint8(v)) << (8 * (i % 4))
+	}
+	lt := func(c uint32) int { return x.op(OpLess, ir.Pred, q, x.u(c)) }
+	word := x.sel(U, lt(8), x.sel(U, lt(4), x.u(w[0]), x.u(w[1])), x.sel(U, lt(12), x.u(w[2]), x.u(w[3])))
+	b := x.op(OpAnd, U, x.op(OpShr, U, word, x.op(OpShl, U, x.op(OpAnd, U, q, x.u(3)), x.u(3))), x.u(255))
+	return x.un(OpCvtF32, ir.F32, x.un(OpBitcast, ir.I32, x.op(OpSub, U, x.op(OpXor, U, b, x.u(128)), x.u(128))))
+}
+
+// iq4Index is best_index_int8 over kvalues_iq4nl: the greatest index whose
+// value is not above al, found in four halvings, then that index or the
+// next, whichever value is nearer, the next on a tie.
+func (x *exprs) iq4Index(al int) int {
+	U, F := ir.U32, ir.F32
+	idx := x.u(0)
+	for _, step := range []uint32{8, 4, 2, 1} {
+		cand := x.op(OpAdd, U, idx, x.u(step))
+		idx = x.sel(U, x.op(OpLess, ir.Pred, al, x.iq4Value(cand)), idx, cand)
+	}
+	ml := x.op(OpMin, U, idx, x.u(14))
+	mu := x.op(OpAdd, U, ml, x.u(1))
+	near := x.op(OpLess, ir.Pred, x.op(OpSub, F, al, x.iq4Value(ml)), x.op(OpSub, F, x.iq4Value(mu), al))
+	return x.sel(U, near, ml, mu)
+}
+
 // halfBits is a's binary16 in the low half of a word, rounded to nearest
 // even, a NaN its sign and 0x7E00, in integer arithmetic: the word a
 // block's scale is stored in, whatever lanes the device keeps halves in.
@@ -255,6 +389,9 @@ func blockElem(x *exprs, f graph.BlockFmt, w int, word func(i int) int, e int) i
 	if f.Fifths() {
 		hw := word(x.op(OpAdd, U, x.u(uint32(fifths)), b))
 		q = x.op(OpOr, U, q, x.op(OpShl, U, x.op(OpAnd, U, x.op(OpShr, U, hw, j), x.u(1)), x.u(4)))
+	}
+	if f == graph.BlockIQ4NL {
+		return x.op(OpMul, F, d, x.iq4Value(q))
 	}
 	if f.Mins() {
 		m := x.un(OpWidenHalf, F, x.op(OpShr, U, dw, x.u(16)))

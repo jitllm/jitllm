@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/internal/oracle"
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/model"
@@ -16,7 +17,7 @@ import (
 
 // blockKVTypes is every KV type held in llama.cpp's blocks.
 func blockKVTypes() []model.KVType {
-	return []model.KVType{model.KVQ4_0, model.KVQ4_1, model.KVQ5_0, model.KVQ5_1}
+	return []model.KVType{model.KVQ4_0, model.KVQ4_1, model.KVQ5_0, model.KVQ5_1, model.KVIQ4_NL}
 }
 
 // TestCPUAttendsABlockHistory is TestCPUAttendsAQ8History for each block
@@ -107,7 +108,14 @@ func TestCPUAttendsABlockHistory(t *testing.T) {
 								t.Fatal(err)
 							}
 							for i := range f.hd {
-								if got := x[1][r*f.hd+i]; math.Float32bits(got) != math.Float32bits(deq[i]) {
+								// iq4_nl's scale is a quotient of two sums the composed
+								// reduction adds in another order: its binary16 may
+								// differ by a unit in the last place, 2^-10 of it.
+								got := x[1][r*f.hd+i]
+								if bf == graph.BlockIQ4NL && math.Abs(float64(got-deq[i])) <= math.Abs(float64(deq[i]))/1000 {
+									continue
+								}
+								if math.Float32bits(got) != math.Float32bits(deq[i]) {
 									t.Fatalf("block %d's history row %d element %d is %v, the f32 row quantized is %v", li, r, i, got, deq[i])
 								}
 							}
@@ -252,7 +260,7 @@ func TestBlockHistoryFollowsLlamaCpp(t *testing.T) {
 		ratio float64
 		picks int
 	}{
-		{model.KVQ8_0, 1.067, 6}, {model.KVQ4_0, 1.351, 27}, {model.KVQ4_1, 1.508, 34}, {model.KVQ5_0, 1.283, 17}, {model.KVQ5_1, 1.166, 18},
+		{model.KVQ8_0, 1.067, 6}, {model.KVQ4_0, 1.351, 27}, {model.KVQ4_1, 1.508, 34}, {model.KVQ5_0, 1.283, 17}, {model.KVQ5_1, 1.166, 18}, {model.KVIQ4_NL, 1.341, 28},
 	} {
 		t.Run(c.kt.String(), func(t *testing.T) {
 			_, lcT := lcppLogProbs(t, dir, gguf, doc, nctx, 0, "-ctk", c.kt.String(), "-ctv", c.kt.String(), "-fa", "on")

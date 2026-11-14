@@ -628,6 +628,8 @@ func Q8RowWords(w int) int { return (w + 31) / 32 * 10 }
 //	BlockQ4_1  binary16 d and m, 16 bytes of nibbles: q*d+m
 //	BlockQ5_0  binary16 d, 4 bytes of fifth bits, 16 of nibbles: (q-16)*d
 //	BlockQ5_1  binary16 d and m, 4 bytes of fifth bits, 16 of nibbles: q*d+m
+//	BlockIQ4NL binary16 d, 16 bytes of nibbles indexing ggml's
+//	           kvalues_iq4nl: kv[q]*d
 //
 // Element j < 16 of a block is nibble byte j's low half and element j+16
 // its high half; element j's fifth bit is bit j of the block's word. A row
@@ -641,7 +643,13 @@ const (
 	BlockQ4_1
 	BlockQ5_0
 	BlockQ5_1
+	BlockIQ4NL
 )
+
+// IQ4NLValues is ggml's kvalues_iq4nl, the values an iq4_nl code indexes.
+func IQ4NLValues() [16]int8 {
+	return [16]int8{-127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113}
+}
 
 func (f BlockFmt) String() string {
 	switch f {
@@ -653,6 +661,8 @@ func (f BlockFmt) String() string {
 		return "q5_0"
 	case BlockQ5_1:
 		return "q5_1"
+	case BlockIQ4NL:
+		return "iq4_nl"
 	}
 	return fmt.Sprintf("BlockFmt(%d)", uint8(f))
 }
@@ -660,7 +670,7 @@ func (f BlockFmt) String() string {
 // Bytes is one block's bytes in format f, 0 for no format.
 func (f BlockFmt) Bytes() int {
 	switch f {
-	case BlockQ4_0:
+	case BlockQ4_0, BlockIQ4NL:
 		return 18
 	case BlockQ4_1:
 		return 20
