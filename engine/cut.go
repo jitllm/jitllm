@@ -9,6 +9,10 @@ import (
 	"github.com/jitllm/jitllm/nn"
 )
 
+// cutHalf is the model.Model.DerivedBlockGraph key of a cut block's card
+// half, past every history format's (deviceGraph's keys).
+const cutHalf = 1 << 8
+
 // expertsOnCPU says a placement's word for where a block's routed experts
 // run names the CPU device.
 func expertsOnCPU(where string) bool { return onCPU(where) || where == "host" }
@@ -28,14 +32,19 @@ func (s *Instance) cutBlock(li int) (first nn.LayerPlan, rest nn.BlockSpec, ok b
 	}
 	w := pre.Values[pre.Out[0]].Width
 	first = *s.planFor(li)
-	first.Graph, first.Cut = pre, w
 	// The card's half writes the history as the instance's type
-	// (deviceGraph); the CPU device's statement of it reads the block's own.
+	// (deviceGraph), and is one graph a model and type: a card shares a block
+	// only among the sessions that offer it the same graph. The CPU device's
+	// statement of it reads the block's own.
+	half, key := pre, cutHalf
 	if dg := s.deviceGraph(li); dg != g {
-		if first.Graph, _, err = graph.Cut(dg, dg.Routed); err != nil {
+		if half, _, err = graph.Cut(dg, dg.Routed); err != nil {
 			return first, rest, false, fmt.Errorf("engine: block %d's routed experts: %w", li, err)
 		}
+		key += int(s.kvFmt)
 	}
+	first.Graph = s.m.DerivedBlockGraph(li, key, func(*graph.Graph) *graph.Graph { return half })
+	first.Cut = w
 	first.NExpert, first.NExpertUsed, first.MoEBias = 0, 0, false
 	if first.Spec != nil {
 		sp := s.specOf(li, pre)

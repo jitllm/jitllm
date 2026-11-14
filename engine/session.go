@@ -289,8 +289,18 @@ func (s *Instance) moveHistory(li int, dev bool) error {
 		s.ld.ReleaseLayers(li, li+1)
 		return nil
 	}
-	w := s.offerWeights(li, false)
-	plan := *s.planFor(li)
+	w, plan := s.offerWeights(li, false), *s.planFor(li)
+	// A cut block's history goes with its half's plan: the card holds that
+	// half, and shares a block only with a session offering its graph.
+	if s.cutAt(li) {
+		first, _, ok, err := s.cutBlock(li)
+		if err != nil {
+			return err
+		}
+		if ok {
+			w, plan = s.halfWeights(li), first
+		}
+	}
 	// The history goes where the instance runs the block: by name, since
 	// another instance on the tier may run its copy on another card.
 	took := false
