@@ -1453,9 +1453,6 @@ skip	engine/step.go	"model: the head is not on a device"	the instance runs alone
 skip	engine/step.go	"model: the instance runs part of the model (a prediction block)"	the instance runs alone: the same answer, a pass over the weights per session
 skip	engine/step.go	"model: the instance's device does not step rows of different sessions (no nn.SessionStepper)"	the instance runs alone: the same answer, a pass over the weights per session
 skip	engine/step.go	"model: the instance's device runs no ragged rows (no nn.RowsDevice)"	the instance runs alone: the same answer, a pass over the weights per session
-context	engine/streams.go	"collapse"
-context	engine/streams.go	"expansion"
-bug	engine/streams.go	"model: the streams' %s has no composed form on this instance (%s): %v %v"	a step composes nothing: placement forms every shape (check 3)
 bug	engine/towerrun.go	"model: %d of a tower's %d chained blocks (chained %v)"
 bug	engine/towerrun.go	"model: %d values and %d for its taps' for a picture's %d rows of %d"
 input	engine/towerrun.go	"model: %d values for a video pair's %d"
@@ -1991,6 +1988,7 @@ context	model/front.go	"the experts' stated activation: %w"
 context	model/front.go	"the given rows' graph does not verify: %w"
 context	model/front.go	"the head"
 context	model/front.go	"the head's graph does not verify: %w"
+context	model/front.go	"the head's graph over the streams does not verify: %w"
 context	model/front.go	"the head's pick graph does not verify: %w"
 context	model/front.go	"the input rows"
 context	model/front.go	"the input rows' graph does not verify: %w"
@@ -2010,7 +2008,6 @@ input	model/frontssm.go	"a short convolution of %d channels over a window of %d"
 input	model/frontssm.go	"a state update of %d value heads of %d over %d key heads of %d, a window of %d"
 context	model/frontstreams.go	"stream %d's expansion: %w"
 context	model/frontstreams.go	"the streams' collapse does not verify: %w"
-context	model/frontstreams.go	"the streams' expansion does not verify: %w"
 context	model/frontstreams.go	"the streams' stated head read: %w"
 input	model/kvtype.go	"model: KV type %q is not one of f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1"
 input	model/model.go	"activation quantization"

@@ -104,13 +104,11 @@ type frontSet struct {
 	mtpWhy  []Uncovered
 	mtpErrs []error
 	// mtpEntry and mtpEntryWhy are each prediction block's entry
-	// (mtpEntryGraph), mtpCollapse its own head mix over the streams where
-	// it stores one (streamCollapseGraphAt), the card's; MtpHead and
-	// MtpHidden the head over that mix (mtpHeadGraph), nil where it stores
-	// none.
+	// (mtpEntryGraph); MtpHead and MtpHidden the head over its own mix of
+	// the streams where it stores one (mtpHeadGraph), nil where it does
+	// not.
 	MtpEntry           []*graph.Graph
 	mtpEntryWhy        []Uncovered
-	MtpCollapse        []*graph.Graph
 	MtpHead, MtpHidden []*graph.Graph
 	Head, Embed        *graph.Graph
 	// cpuEmbed is embed as the CPU composes it, every stream the input
@@ -377,15 +375,12 @@ func (m *Model) FrontGraphs() *frontSet {
 	}
 	if np := m.Cfg.NMTP; np > 0 {
 		s.mtp, s.mtpWhy, s.mtpErrs = make([]*graph.Graph, np), make([]Uncovered, np), make([]error, np)
-		s.MtpEntry, s.mtpEntryWhy, s.MtpCollapse = make([]*graph.Graph, np), make([]Uncovered, np), make([]*graph.Graph, np)
+		s.MtpEntry, s.mtpEntryWhy = make([]*graph.Graph, np), make([]Uncovered, np)
 		s.MtpHead, s.MtpHidden = make([]*graph.Graph, np), make([]*graph.Graph, np)
 		for i := range np {
 			s.mtp[i], s.mtpWhy[i], s.mtpErrs[i] = m.blockGraph(n + i)
 			s.MtpEntry[i], s.mtpEntryWhy[i], _ = m.mtpEntryGraph(n + i)
-			if m.Stores(n+i, jlm.RoleHCHeadDown) {
-				s.MtpCollapse[i], _ = m.streamCollapseGraphAt(n + i)
-				s.MtpHead[i], s.MtpHidden[i] = m.mtpHeadGraph(false, n+i), m.mtpHeadGraph(true, n+i)
-			}
+			s.MtpHead[i], s.MtpHidden[i] = m.mtpHeadGraph(false, n+i), m.mtpHeadGraph(true, n+i)
 		}
 	}
 	s.Head, s.HeadWhy, s.headErr = m.headGraph(false)
@@ -1041,8 +1036,8 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 }
 
 // blockFacts is what the container stores for block li, as its graph binds
-// it: a prediction block's own head mix is its collapse graph's
-// (streamCollapseGraphAt), not its body's.
+// it: a prediction block's own head mix is its head's graph's
+// (mtpHeadGraph), not its body's.
 func (m *Model) blockFacts(li int) (graph.Facts, Uncovered) {
 	f, perExpert := m.Inventory(int32(li))
 	if perExpert {
@@ -1645,7 +1640,6 @@ func (m *Model) headGraphOver(hidden, collapsed, mixes bool) (*graph.Graph, Unco
 // converter states as the head's read: one input a stream, block li's head
 // roles where li is a prediction block's (its own mix), the model's for -1.
 func (m *Model) streamHeadGraph(h *graph.Head, li int) (*graph.Graph, error) {
-	c := m.Cfg
 	f, _ := m.Inventory(jlm.DenseBlock)
 	if li >= 0 {
 		fb, _ := m.Inventory(int32(li))
@@ -1653,16 +1647,10 @@ func (m *Model) streamHeadGraph(h *graph.Head, li int) (*graph.Graph, error) {
 		maps.Copy(inv, fb.Inventory)
 		f.Inventory = inv
 	}
-	s, d := c.Streams(), c.NEmbd
 	b := graph.NewBlock(li)
-	xs := make([]graph.ValueID, s)
-	xs[0] = b.In("x", d)
-	for k := 1; k < s; k++ {
-		xs[k] = b.In(fmt.Sprintf("x.%d", k), d)
-	}
-	y, _, err := m.streamRead(b, f, &c.stated.Head, xs, xs[0], xs[0], 0, nil)
+	y, err := m.streamMix(b, f)
 	if err != nil {
-		return nil, fmt.Errorf("the streams' stated head read: %w", err)
+		return nil, err
 	}
 	h.Over(b, y)
 	if err := graph.Verify(b.G, f); err != nil {

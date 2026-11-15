@@ -147,22 +147,28 @@ func (m *Model) streamExpand(b *graph.Builder, f graph.Facts, x graph.ValueID) (
 // streamCollapseGraph is the row the head reads from every stream: an
 // input a stream, one output, the converter's stated head read; nil where
 // the front end states no streams.
-func (m *Model) streamCollapseGraph() (*graph.Graph, error) { return m.streamCollapseGraphAt(-1) }
-
-// streamCollapseGraphAt is streamCollapseGraph over block li's head roles:
-// a prediction block's own head mix, which its draft's logits read; -1 is
-// the model's head.
-func (m *Model) streamCollapseGraphAt(li int) (*graph.Graph, error) {
-	c := m.Cfg
-	if !c.StatesStreams() {
+func (m *Model) streamCollapseGraph() (*graph.Graph, error) {
+	if !m.Cfg.StatesStreams() {
 		return nil, nil
 	}
 	f, _ := m.Inventory(jlm.DenseBlock)
-	if li >= 0 {
-		f, _ = m.Inventory(int32(li))
+	b := graph.NewBlock(-1)
+	y, err := m.streamMix(b, f)
+	if err != nil {
+		return nil, err
 	}
+	b.Out(y)
+	if err := graph.Verify(b.G, f); err != nil {
+		return nil, fmt.Errorf("the streams' collapse does not verify: %w", err)
+	}
+	return b.G, nil
+}
+
+// streamMix is the head's read of every stream in b, an input of b a
+// stream: the converter's stated head read over facts f.
+func (m *Model) streamMix(b *graph.Builder, f graph.Facts) (graph.ValueID, error) {
+	c := m.Cfg
 	s, d := c.Streams(), c.NEmbd
-	b := graph.NewBlock(li)
 	xs := make([]graph.ValueID, s)
 	xs[0] = b.In("x", d)
 	for k := 1; k < s; k++ {
@@ -170,13 +176,9 @@ func (m *Model) streamCollapseGraphAt(li int) (*graph.Graph, error) {
 	}
 	y, _, err := m.streamRead(b, f, &c.stated.Head, xs, xs[0], xs[0], 0, nil)
 	if err != nil {
-		return nil, fmt.Errorf("the streams' stated head read: %w", err)
+		return 0, fmt.Errorf("the streams' stated head read: %w", err)
 	}
-	b.Out(y)
-	if err := graph.Verify(b.G, f); err != nil {
-		return nil, fmt.Errorf("the streams' collapse does not verify: %w", err)
-	}
-	return b.G, nil
+	return y, nil
 }
 
 // plainActAt is block li's stated activation without the sparsity the

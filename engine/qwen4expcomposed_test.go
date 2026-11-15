@@ -164,13 +164,13 @@ func partCPULogits(t *testing.T, m *model.Model, toks []int32, f cpuFault, compo
 	if heads != len(toks) {
 		t.Fatalf("%d head steps served, want %d", heads, len(toks))
 	}
-	// The input rows' graph writes every stream and the head's mixes them:
-	// the steps served above are those graphs'.
+	// The input rows' graph writes every stream it expands into and the
+	// head's mixes them: the steps served above are those graphs'.
 	fg := m.FrontGraphs()
 	if got := len(fg.CpuHead.In); got != m.Cfg.Streams() {
 		t.Fatalf("the head's graph reads %d planes, want %d", got, m.Cfg.Streams())
 	}
-	if got := s.inPlanes(fg.CpuEmbed); got != m.Cfg.Streams() {
+	if got := s.inPlanes(fg.CpuEmbed); m.ExpandsStreams() && got != m.Cfg.Streams() {
 		t.Fatalf("the input rows' graph writes %d planes, want %d", got, m.Cfg.Streams())
 	}
 	return out
