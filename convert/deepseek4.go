@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"slices"
 
 	"github.com/jitllm/jitllm/convert/meta"
 	"github.com/jitllm/jitllm/format/jlm"
@@ -63,9 +64,9 @@ func deepseek4RoleOf(name string) (jlm.Role, bool) {
 	return 0, false
 }
 
-// ds4SwiGLULimit is DeepSeek V4's SwiGLU clamp: transformers' default
-// swiglu_limit, the published config's, and the value llama.cpp's converter
-// writes per layer from it. jlm.Flag2SwiGLUClamp bakes it.
+// ds4SwiGLULimit is transformers' default swiglu_limit, the published
+// config's: the clamp of a file that states none, and of a container
+// written when no other clamp converted, restated from its flag.
 const ds4SwiGLULimit = 10
 
 // deepseek4Config is llama.cpp's deepseek4.cpp and transformers'
@@ -75,10 +76,10 @@ const ds4SwiGLULimit = 10
 // compressed blocks), a window and sinks on every block, compressed blocks
 // (CompKinds, CompRateCSA, CompRateHCA) with the indexer, a grouped low-rank
 // output, the sqrt(softplus) mixture with hash-routed lead blocks, and a
-// SwiGLU clamped at ds4SwiGLULimit.
+// SwiGLU clamped at each block's stated limit (ds4Clamp).
 //
-// Refused: any gate but sqrt-softplus, the renormalisation off, another
-// clamp, and a window that does not cover the HCA rate and two CSA windows
+// Refused: any gate but sqrt-softplus, the renormalisation off, a block
+// whose routed and shared clamps differ, and a window that does not cover the HCA rate and two CSA windows
 // (the pending compressor inputs live in the window's cached rows).
 //
 // The reference-to-container table and the reasons in full:
@@ -135,7 +136,7 @@ func deepseek4Config(f *meta.File, c *Config) error {
 	if c.NHashLayers > c.NLayer {
 		return fmt.Errorf("%d hash-routed blocks of %d", c.NHashLayers, c.NLayer)
 	}
-	if err := ds4Clamp(f); err != nil {
+	if err := ds4Clamp(f, c); err != nil {
 		return err
 	}
 	if kv, ok := f.Key("expert_gating_func"); ok {
@@ -158,30 +159,61 @@ func deepseek4Config(f *meta.File, c *Config) error {
 	return ds4Kinds(f, c)
 }
 
-// ds4Clamp refuses a clamp other than the architecture's: every block's
-// routed and shared limit (llama.cpp's converter writes both arrays from
-// swiglu_limit).
-func ds4Clamp(f *meta.File) error {
-	for _, key := range []string{"swiglu_clamp_exp", "swiglu_clamp_shexp"} {
+// ds4Clamp reads each block's SwiGLU clamp: llama.cpp's converter writes the
+// routed and the shared limit per block from swiglu_limit (one value stands
+// for every block), and a file stating neither has transformers' default. A
+// block states one activation, so one whose routed and shared limits differ
+// is refused.
+func ds4Clamp(f *meta.File, c *Config) error {
+	n := int(c.NLayer)
+	read := func(key string) ([]float32, error) {
 		kv, ok := f.Key(key)
 		if !ok {
-			continue
+			return nil, nil
 		}
 		vs, err := kv.Float32s()
 		if err != nil {
 			v, ok := kv.Float()
 			if !ok {
-				return fmt.Errorf("%s: %w", key, err)
+				return nil, fmt.Errorf("%s: %w", key, err)
 			}
 			vs = []float32{float32(v)}
 		}
+		if len(vs) == 1 {
+			vs = slices.Repeat(vs, n)
+		}
+		if len(vs) != n {
+			return nil, fmt.Errorf("%s: %d limits for %d blocks", key, len(vs), n)
+		}
 		for i, v := range vs {
-			if v != ds4SwiGLULimit {
-				return fmt.Errorf("%s[%d] is %g, and DeepSeek V4's clamp is %d: %w", key, i, v,
-					ds4SwiGLULimit, ErrNotImplemented)
+			if !(v > 0) || math.IsInf(float64(v), 0) {
+				return nil, fmt.Errorf("%s[%d] is %g, and a clamp is positive and finite", key, i, v)
+			}
+		}
+		return vs, nil
+	}
+	routed, err := read("swiglu_clamp_exp")
+	if err != nil {
+		return err
+	}
+	shared, err := read("swiglu_clamp_shexp")
+	if err != nil {
+		return err
+	}
+	switch {
+	case routed == nil && shared == nil:
+		routed = slices.Repeat([]float32{ds4SwiGLULimit}, n)
+	case routed == nil:
+		routed = shared
+	case shared != nil:
+		for i := range routed {
+			if routed[i] != shared[i] {
+				return fmt.Errorf("block %d clamps its routed experts at %g and its shared expert at %g, "+
+					"and a block states one activation: %w", i, routed[i], shared[i], ErrNotImplemented)
 			}
 		}
 	}
+	c.SwiGLULimits = routed
 	return nil
 }
 

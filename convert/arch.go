@@ -9,6 +9,9 @@ import "github.com/jitllm/jitllm/format/jlm"
 type Config struct {
 	*jlm.Config
 	Arch Arch
+	// SwiGLULimits is each block's SwiGLU clamp under Flag2SwiGLUClamp, the
+	// file's; nil for a container restated from its flag (Activation).
+	SwiGLULimits []float32
 }
 
 // The architectures the converter reads, its names for the graphs source files declare.

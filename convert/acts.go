@@ -84,8 +84,12 @@ func Activation(c *Config, li int, gated, xielu bool) (jlm.Expr, error) {
 		// A marker head's block (statedLayers).
 		unary = e.relu
 	case c.Flags2.Has(jlm.Flag2SwiGLUClamp):
-		// DeepSeek V4: silu(min(gate, 10)) * clamp(up, -10, 10).
-		e.Fn(jlm.FnMul, e.SiLU(e.Fn(jlm.FnMin, g, num(10))), e.clamp(u, 10))
+		// DeepSeek V4: silu(min(gate, l)) * clamp(up, -l, l) at the block's l.
+		lim := float32(ds4SwiGLULimit)
+		if li < len(c.SwiGLULimits) {
+			lim = c.SwiGLULimits[li]
+		}
+		e.Fn(jlm.FnMul, e.SiLU(e.Fn(jlm.FnMin, g, num(lim))), e.clamp(u, lim))
 	case c.Flags.Has(jlm.FlagSwiGLUOAI):
 		// gpt-oss: quickGELU(min(gate, 7)) * (clamp(up, -7, 7) + 1).
 		e.Fn(jlm.FnMul, e.QuickGELU(e.Fn(jlm.FnMin, g, num(7))), e.Fn(jlm.FnAdd, e.clamp(u, 7), num(1)))
