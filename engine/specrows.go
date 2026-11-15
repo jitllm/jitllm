@@ -224,8 +224,8 @@ func (s *Instance) stepRowsDevice(src rowSrc, out *rowsOut) error {
 		s.growBPLE(n)
 		ple = s.bple[:n*pw]
 	}
-	if c.DeepTaps > 0 && c.PLEDim == 0 {
-		// The speculated rows are tokens: their tap rows are zeros.
+	if pw > 0 && !s.inputsSide() {
+		// The speculated rows are tokens: their given side rows are zeros.
 		ple = s.tokenSide(n)
 		pw = 0
 	}

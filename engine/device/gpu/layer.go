@@ -51,10 +51,7 @@ type layer struct {
 	shGate, shUp, shDown *resident
 	// extra is every other matrix the block stores and its graph binds, by
 	// role (nn.LayerWeights.Extra), uploaded as the file stores it.
-	extra []roleRes
-	// pleOff is the block's li*PLEDim, the offset of its slice in a row's
-	// per-layer inputs.
-	pleOff backend.Buf
+	extra  []roleRes
 	sparse bool
 	// kvSrc is the block whose history this one attends to: its own index, or
 	// for a KV-sharing block (nn.LayerPlan.KVShared) the source's, whose
@@ -1347,9 +1344,9 @@ type blockScratch struct {
 	// (ropeRowsWords): two words a row past the count. rowPos is their
 	// positions as a block reads them (rowPosWords).
 	ropeRows, rowPos backend.Buf
-	// Gemma 4's per-layer embedding (nn.LayerPlan.PLEDim): the rows' inputs,
-	// staged per submission, a block's gate, its slice of the inputs, their
-	// product and the projection back. nil elsewhere.
+	// pleIn is the rows' side inputs (nn.LayerPlan.SideW), staged per
+	// submission; each block reads its slice through its graph. nil where
+	// the blocks read none.
 	pleIn backend.Buf
 	// cut is a call's rows of a cut block's crossing values (layer.cut),
 	// cutBytes its size, grown to the widest call.
@@ -2068,15 +2065,6 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		}
 		up(&l.clampB, w.Clamp)
 	}
-	// Gemma 4's per-layer embedding: the block's slice offset.
-	if p.PLEDim != 0 {
-		if err == nil {
-			if l.pleOff, err = g.dev.Alloc(4); err == nil {
-				err = l.pleOff.Write(g.u32b(uint32(li * p.PLEDim)))
-			}
-		}
-		l.auxBytes += 4
-	}
 	l.wide = p.NStreams > 1 || p.ExpLatent != 0
 	// Gemma 4's output scalar, one float, charged with the norms.
 	if p.OutScale != 0 {
@@ -2519,9 +2507,9 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 	al(&bs.roff, rows*4)
 	al(&bs.zero, 4)
 	al(&bs.req, (composer.RequestRows+rows)*4)
-	// The per-layer inputs.
-	if p.PLEWidth != 0 {
-		al(&bs.pleIn, rows*p.PLEWidth*4)
+	// The side inputs.
+	if p.SideW != 0 {
+		al(&bs.pleIn, rows*p.SideW*4)
 	}
 	if err != nil {
 		g.LastErr = err.Error()
@@ -4714,10 +4702,9 @@ func (g *devTier) layersSession(s backend.Session) {
 	if bs.rowPos != nil {
 		w(bs.rowPos, g.rowPosWords(pos, nrow, R, rag))
 	}
-	// A tower's tap rows are the caller's always: input rows served here
-	// write per-layer embeddings alone.
-	if bs.pleIn != nil && (!embedSrv || p.PLEDim == 0) {
-		w(bs.pleIn, f32b(g.pleRows(R*p.PLEWidth)))
+	// Side rows the input rows served here do not write are the caller's.
+	if bs.pleIn != nil && (!embedSrv || !bs.embWritesSide()) {
+		w(bs.pleIn, f32b(g.pleRows(R*p.SideW)))
 	}
 	if bs.req != nil && len(g.reqHost) > 0 {
 		w(bs.req, u32b(g.reqWords(composer.RequestRows+R)))
@@ -4884,7 +4871,7 @@ func (g *devTier) layersSession(s backend.Session) {
 	// Input rows gathered here wrote the per-layer inputs on this device
 	// alone; blocks after the call's, on another device, upload them from
 	// the session's own (pleRows), as from a gather of its own (readPLE).
-	if w := nrow * p.PLEWidth; err == nil && embedSrv && head == nil && p.PLEDim != 0 && w > 0 && len(g.pleHost) >= w {
+	if w := nrow * p.SideW; err == nil && embedSrv && head == nil && bs.embWritesSide() && w > 0 && len(g.pleHost) >= w {
 		err = s.Read(bs.pleIn, f32b(g.pleHost[:w]))
 	}
 }
@@ -4942,7 +4929,6 @@ func (l *layer) auxBufs() []backend.Buf {
 		l.clampB,     // Gemma 4's tower: its clipped linears' bounds
 		l.ssmTaps.qs, // a linear block's convolution
 		l.outScale,   // Gemma 4's output scalar
-		l.pleOff,     // Gemma 4's per-layer embedding
 	)
 }
 

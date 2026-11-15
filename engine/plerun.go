@@ -1,7 +1,14 @@
 package engine
 
-// growPLE sizes the per-layer embedding scratch. A model without them gets
-// none.
+// inputsSide says the input rows write each row's side inputs (their graph's
+// output past the residual streams), which the blocks read their slices of.
+func (s *Instance) inputsSide() bool { return s.c.InputSideWidth() != 0 }
+
+// givenSide says given rows carry the head of each row's side inputs (a
+// tower's tap rows), written over the input rows' zeros (fillGivenSide).
+func (s *Instance) givenSide() bool { return s.c.TapsWidth() != 0 }
+
+// growPLE sizes a decode row's side inputs. A model without them gets none.
 func (s *Instance) growPLE() {
 	c := s.c
 	if c.SideWidth() == 0 || s.ple != nil {
@@ -91,9 +98,9 @@ func (s *Instance) growBPLE(n int) {
 	}
 }
 
-// tokenSide is n token rows' side inputs, zero where they are tap rows (a
-// token's have none); a model of per-layer inputs computes its own over
-// them.
+// tokenSide is n token rows' side inputs, zeros where the input rows write
+// none (a token carries no given side rows); input rows that write them
+// write over these.
 func (s *Instance) tokenSide(n int) []float32 {
 	w := s.c.SideWidth()
 	if w == 0 {
@@ -101,17 +108,27 @@ func (s *Instance) tokenSide(n int) []float32 {
 	}
 	s.growBPLE(n)
 	side := s.bple[:n*w]
-	if s.c.DeepTaps > 0 && s.c.PLEDim == 0 {
+	if !s.inputsSide() {
 		clear(side)
 	}
 	return side
 }
 
-// fillDeep writes rows base..base+n-1 of src's tap rows into side
-// (sideWidth a row): a given run's taps where its span carries them, zeros
+// inputSide is n token rows' side inputs as their input rows write them, nil
+// where they write none (tokenSide's zeros then stand).
+func (s *Instance) inputSide(n int) []float32 {
+	side := s.tokenSide(n)
+	if !s.inputsSide() {
+		return nil
+	}
+	return side
+}
+
+// fillGivenSide writes rows base..base+n-1 of src's given side rows into
+// side (SideWidth a row): a given run's where its span carries them, zeros
 // for every other row.
-func (s *Instance) fillDeep(src rowSrc, base, n int, side []float32) {
-	if s.c.DeepTaps == 0 {
+func (s *Instance) fillGivenSide(src rowSrc, base, n int, side []float32) {
+	if !s.givenSide() {
 		return
 	}
 	E, W, T := s.c.NEmbd, s.c.SideWidth(), s.c.TapsWidth()
@@ -125,7 +142,7 @@ func (s *Instance) fillDeep(src rowSrc, base, n int, side []float32) {
 		lo, hi := max(g.at, base), min(g.at+len(g.rows)/E, base+n)
 		for i := lo; i < hi; i++ {
 			at := g.n0 + i - g.at
-			for k := range s.c.DeepTaps {
+			for k := range T / E {
 				copy(side[(i-base)*W+k*E:(i-base)*W+(k+1)*E], g.deep[(k*g.n+at)*E:])
 			}
 		}

@@ -668,19 +668,19 @@ type LayerPlan struct {
 	MixedGeom, OwnGeom, LocalRope bool
 	VFromK                        bool
 	OutScale                      float32
-	// Gemma 4's E2B/E4B: PLEDim is each block's per-layer embedding width
-	// (zero for none), KVShared says the block attends to KVSource's history
-	// and computes no k or v, and NFFN is then this block's own width.
-	// PLEWidth is a row's whole side input to the blocks: its per-layer
-	// inputs, NLayer*PLEDim, or a tower's tap rows the first blocks add.
-	PLEDim, PLEWidth int
+	// SideW is a row's whole side input to the blocks, the input their
+	// graphs read past the residual streams, each block its own slice of it
+	// (zero for none).
+	SideW int
 	// KeyW is the width an indexer's key takes in the block's cached row
 	// after the attention's own (KVRow): a latent row's whatever the block,
 	// one more kv head where the block selects; 0 for none.
 	KeyW int
 	// Select is the block's selection of the history it reads (the
 	// container's jlm.Selection), nil where it reads every position.
-	Select   *SelectPlan
+	Select *SelectPlan
+	// KVShared says the block attends to KVSource's history and computes no
+	// k or v, and NFFN is then this block's own width.
 	KVShared bool
 	KVSource int
 	// FFNWide says this block's NFFN is not the model's (its own geometry's),
@@ -718,9 +718,9 @@ type LayerPlan struct {
 	// are this; their MLP and rotary are the text kit's fields (UngatedFFN,
 	// NRot over Layers' cs).
 	NonCausal bool
-	// Windowed says a NonCausal block attends inside the windowed key runs
-	// the call was handed (KeyRunDevice) rather than over every row
-	// (Qwen2.5-VL's tower, every block but each n'th).
+	// Windowed says a NonCausal block attends inside the windows the call
+	// was handed (KeyRunDevice, RowWindowDevice) rather than over every row:
+	// its attention states RowWindows.
 	Windowed bool
 	// HeadSet says a NonCausal block is a decision head's that attends and
 	// norms otherwise than the encoder before it (d1-omni: LayerNorm and 16
@@ -1070,8 +1070,9 @@ type KeyRunDevice interface {
 // wins[r] on its Windowed blocks (an attention stating RowWindows); the rows'
 // windows may overlap, so they are not a partition KeyRunDevice can state. A
 // window an attention states with Bidir is not this: the block's form clips
-// each row's keys to it. It replaces whatever runs SetKeyRuns gave, and
-// false is a device that cannot take them.
+// each row's keys to it. No windows (nil) is every row over its call. It
+// replaces whatever runs SetKeyRuns gave, and false is a device that cannot
+// take them.
 type RowWindowDevice interface {
 	SetRowWindows(wins []KeyRun)
 }
@@ -1111,10 +1112,9 @@ type RowChunker interface {
 	LayersPhase(lo, hi, pos, n, keys, phase int, x, cs, csSWA []float32) bool
 }
 
-// LayerInputDevice is an optional LayerDevice that takes a per-layer input
-// for every row beside the residual: Gemma 4's per-layer embeddings
-// (LayerPlan.PLEDim), NLayer*PLEDim floats a row, row-major, which block li
-// reads its PLEDim slice of. The caller sets them before every Layers or
+// LayerInputDevice is an optional LayerDevice that takes a side input for
+// every row beside the residual (LayerPlan.SideW floats a row, row-major),
+// which each block reads its slice of. The caller sets them before every Layers or
 // LayersRows call whose rows they belong to; the device reads them during
 // that call only.
 type LayerInputDevice interface {
