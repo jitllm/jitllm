@@ -54,7 +54,7 @@ func denseFixtures() []struct {
 			c, l := m.Cfg, &m.Layers[0]
 			return c.RopeNeox && c.QKNorm && c.QKNormWide &&
 				len(l.QNorm) == c.NHead*c.HeadDim && l.AttnNorm == nil && l.FfnNorm == nil &&
-				l.Vector(jlm.RolePostAttnNorm) != nil && l.Vector(jlm.RolePostFFNNorm) != nil && m.HasNoPreNorm() && !c.TiedEmbd
+				l.Vector(jlm.RolePostAttnNorm) != nil && l.Vector(jlm.RolePostFFNNorm) != nil && !c.TiedEmbd
 		}},
 		{"synth-exaone4", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
@@ -73,14 +73,14 @@ func denseFixtures() []struct {
 		{"synth-olmo2-gqa", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
 			return c.QKNormWide && c.NKVHead < c.NHead &&
-				len(l.QNorm) == c.NHead*c.HeadDim && len(l.KNorm) == c.NKVHead*c.HeadDim && m.HasNoPreNorm()
+				len(l.QNorm) == c.NHead*c.HeadDim && len(l.KNorm) == c.NKVHead*c.HeadDim && l.AttnNorm == nil && l.Vector(jlm.RolePostAttnNorm) != nil
 		}},
 		{"synth-olmo3", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
 			return c.QKNormWide && c.NKVHead < c.NHead && len(l.KNorm) == c.NKVHead*c.HeadDim &&
 				c.SWAWindow == 4 && c.SWAPeriod == 4 && c.SWA(0) && !c.SWA(3) && c.YarnFactor == 8 &&
 				m.Rope.Scale > 1.2 && m.Rope.Scale < 1.22 && m.Rope.Freqs != nil &&
-				m.RopeSWA != nil && m.RopeSWA.Scale == 1 && m.RopeSWA.Freqs == nil && m.HasNoPreNorm()
+				m.RopeSWA != nil && m.RopeSWA.Scale == 1 && m.RopeSWA.Freqs == nil && l.AttnNorm == nil && l.Vector(jlm.RolePostAttnNorm) != nil
 		}},
 	}
 }

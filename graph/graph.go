@@ -1152,6 +1152,20 @@ func (g *Graph) StateVersion(s State) int {
 	return v
 }
 
+// AttendNoRuns reports that g's attention stays causal inside a call's
+// bidirectional key runs (Attrs.NoRuns); false for a nil graph or one that
+// does not attend.
+func (g *Graph) AttendNoRuns() bool {
+	if g != nil {
+		for _, o := range g.Ops {
+			if o.Kind == OpAttend {
+				return o.Attr.NoRuns
+			}
+		}
+	}
+	return false
+}
+
 // op appends o, an output stating no rows over its first input's grid.
 func (g *Graph) op(o Op) {
 	if len(o.In) > 0 {

@@ -1542,12 +1542,13 @@ func (sv *servedPart) runAs(g *devTier, lc *launcher, inst *partInst, kind nn.Pa
 // cache's least recently used slot evicted for it -- the page table
 // written, each expert's slot, then the codes that read the banks. uses is
 // the session's counts of the block's experts (streamBank.count).
-func (sv *servedPart) pagedRun(g *devTier, lc *launcher, s backend.Session, inst *partInst, kind nn.Part, l *layer, nExpert int,
+func (sv *servedPart) pagedRun(g *devTier, lc *launcher, s backend.Session, inst *partInst, kind nn.Part, l *layer,
 	uses []uint32, in, out []backend.Buf) error {
 	f, st := sv.f, l.stream
 	if st == nil || len(st.sel) == 0 || f.selN%len(st.sel) != 0 {
 		return fmt.Errorf("a form over banks in pages selects %d experts where the block's pages are filled for its selection", f.selN)
 	}
+	nExpert := st.nExpert
 	// A call of several rows reads every live row's selection, each expert
 	// filled once into the cache: pagedCall holds the call to the rows its
 	// slots hold.
@@ -2170,19 +2171,6 @@ func expertsOwnWidth(gr *graph.Graph, embd int) bool {
 				if b.Role == jlm.RoleExpDownBank && b.Rows != embd {
 					return true
 				}
-			}
-		}
-	}
-	return false
-}
-
-// attendNoRuns reports that gr's attention stays causal inside a call's
-// bidirectional key runs (graph.Attrs.NoRuns).
-func attendNoRuns(gr *graph.Graph) bool {
-	if gr != nil {
-		for _, o := range gr.Ops {
-			if o.Kind == graph.OpAttend {
-				return o.Attr.NoRuns
 			}
 		}
 	}

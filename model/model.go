@@ -3664,18 +3664,6 @@ func containerShape(e *jlm.Entry) (Tensor, bool) {
 	return Tensor{E: e, Typ: typ, Rows: rows, K: int(e.Dims[0])}, true
 }
 
-// hasPostNorm reports whether this model's blocks carry gemma2/gemma3's two
-// extra RMSNorms. It asks the weights rather than the architecture, so a fourth
-// architecture that ships them needs no entry anywhere.
-func (m *Model) HasNoPreNorm() bool {
-	for i := range m.Layers {
-		if m.Layers[i].AttnNorm == nil && m.Layers[i].Vector(jlm.RolePostAttnNorm) != nil {
-			return true
-		}
-	}
-	return false
-}
-
 // actWindowOf is the model's activation window (composer.ActWindow) over the
 // types of its matrices: for a model quantizing each row per token
 // (Config.TokenAct), one window over its widest row.
