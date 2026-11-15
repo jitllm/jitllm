@@ -112,7 +112,7 @@ func (bs *blockScratch) embStreams() int {
 // embWritesSide says the input rows' graph writes the rows' side inputs: an
 // output past the residual streams, its last.
 func (bs *blockScratch) embWritesSide() bool {
-	return bs.embedGraph != nil && bs.p.SideW != 0 && len(bs.embedGraph.Out) > bs.p.Streams()
+	return bs.p.SideW != 0 && nn.InputsWriteSide(bs.embedGraph, bs.p.Streams())
 }
 
 // embSideWords is the side rows a batch's input rows write, 0 where they

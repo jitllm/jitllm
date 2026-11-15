@@ -221,6 +221,8 @@ type Instance struct {
 	streamedOn   []bool
 	// ShOverlaps counts mixture layers whose shared expert ran behind the
 	// routed read: the selection check for WithSharedOverlap.
+	// sideIn says the input rows write each row's side inputs (readSide).
+	sideIn bool
 	// ple is this token's side inputs (Config.SideWidth) and bple a batched
 	// chunk's, one row each (plerun.go).
 	ple, bple []float32
@@ -645,6 +647,9 @@ func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOp
 		}
 	}
 	s.ws = newWeightSource(m, &s.dense, s.outW, s.outNorm)
+	if err := s.readSide(); err != nil {
+		return nil, err
+	}
 	s.kvl = kvLayout{maxSeq: maxSeq, nKV: c.NKVHead,
 		headDim: c.HeadDim}
 	// MLA caches one row per position for the whole layer: the compressed

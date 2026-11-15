@@ -63,12 +63,12 @@ type rowSrc struct {
 }
 
 // givenRun is the caller's rows from row at on, n_embd each, and where its
-// span carries them its tap rows: deep is the span's [taps][n][n_embd], the
-// run's first row the span's row n0.
+// span carries them the head of its rows' side inputs: side is the span's
+// [k][n][n_embd], the run's first row the span's row n0.
 type givenRun struct {
 	at    int
 	rows  []float32
-	deep  []float32
+	side  []float32
 	n, n0 int
 }
 
@@ -86,7 +86,7 @@ func (r rowSrc) from(n int, d int) rowSrc {
 			continue
 		}
 		lo := max(g.at, n)
-		out.given = append(out.given, givenRun{at: lo - n, rows: g.rows[(lo-g.at)*d:], deep: g.deep, n: g.n, n0: g.n0 + lo - g.at})
+		out.given = append(out.given, givenRun{at: lo - n, rows: g.rows[(lo-g.at)*d:], side: g.side, n: g.n, n0: g.n0 + lo - g.at})
 	}
 	return out
 }
@@ -107,7 +107,7 @@ func (r rowSrc) givenAt(i, d int) []float32 {
 // rows through the composed input rows (cpuEmbed), a given run through the
 // composed given rows (cpuGiven).
 func (s *Instance) fillRows(src rowSrc, base, n int, x, ple []float32, pos []int, plane int) error {
-	d, pw := s.c.NEmbd, s.c.InputSideWidth()
+	d, pw := s.c.NEmbd, s.inputSideW()
 	st := &s.inScr
 	if len(st.toks) < n {
 		st.toks = make([]int32, n)

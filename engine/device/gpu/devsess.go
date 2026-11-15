@@ -111,8 +111,8 @@ type devSess struct {
 	// gave this session, staged into the tower's set at each of its calls
 	// over a tower whose set holds a grid table (gridtable.go).
 	gridCells, gridReq []byte
-	// winPerRow says winRuns is one window a row (SetRowWindows: a symmetric
-	// sliding window, whose rows' windows overlap) rather than runs
+	// winPerRow says winRuns is one window a row (SetRowWindows, whose rows'
+	// windows may overlap; none is every row over its call) rather than runs
 	// partitioning the rows.
 	winPerRow bool
 	// embPend is the prompt chunk EmbedRows promised and the next submission
