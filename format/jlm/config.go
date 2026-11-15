@@ -1028,8 +1028,17 @@ func (c *Config) GLU() GLU {
 // container written at an older one is upgraded (jitllm upgrade) where the
 // later statements matter to it. Revision 4 states a marker head's block
 // activations after the trunk's, revision 5 a period whose global layer is
-// its first.
-const StatementRevision = 5
+// its first, revision 6 a marker head's blocks' graphs (HeadGraphsRevision).
+const StatementRevision = HeadGraphsRevision
+
+// SourceRevision is the latest revision that states what only a source's
+// architecture says: an upgrade cannot state it from the container.
+const SourceRevision = 5
+
+// HeadGraphsRevision is the first revision whose stated graphs include a
+// marker head's blocks (Config.HeadBlocks); one written before it states
+// the other blocks' alone.
+const HeadGraphsRevision = 6
 
 // ActQuant is a model's activation quantization.
 type ActQuant uint8

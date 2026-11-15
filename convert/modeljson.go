@@ -327,7 +327,39 @@ func libraryFiles() ([]*modelJSON, error) {
 		}
 		out = append(out, mj)
 	}
+	if err := libraryUses(out); err != nil {
+		return nil, err
+	}
 	return out, nil
+}
+
+// libraryUses refuses a use naming no graph of files, or one that uses
+// others in turn, and a graph of no class and no GGUF architecture that no
+// file's use names: it would state no model's blocks.
+func libraryUses(files []*modelJSON) error {
+	used := map[string]bool{}
+	for _, mj := range files {
+		if mj.Graph == nil {
+			continue
+		}
+		for _, u := range mj.Graph.Use {
+			n := "convert/models/" + u.Graph + ".json"
+			i := slices.IndexFunc(files, func(f *modelJSON) bool { return f.name == n })
+			switch {
+			case i < 0 || files[i].Graph == nil:
+				return fmt.Errorf("convert: %s uses %q, which no library file states", mj.name, u.Graph)
+			case len(files[i].Graph.Use) != 0:
+				return fmt.Errorf("convert: %s uses %q, which uses others in turn", mj.name, u.Graph)
+			}
+			used[n] = true
+		}
+	}
+	for _, mj := range files {
+		if len(mj.Classes) == 0 && len(mj.GGUF) == 0 && !used[mj.name] {
+			return fmt.Errorf("convert: %s names no class and no GGUF architecture, and no file uses its graph", mj.name)
+		}
+	}
+	return nil
 }
 
 // modelLibrary is the embedded library by class.

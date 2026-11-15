@@ -70,7 +70,7 @@ func reconvert(path string) error {
 		marker := cfg.MarkerPrompt != nil || cfg.Flags2&(jlm.Flag2HeadBlocks|jlm.Flag2MarkerPointer) == 0 &&
 			cfg.Decision != jlm.DecisionKev
 		heads := len(cfg.Blocks.Of) == 0 || len(cfg.Blocks.Of) == int(cfg.NLayer+cfg.HeadBlocks()+cfg.NMTP)
-		rev := cfg.Revision >= jlm.StatementRevision || (cfg.SWAWindow == 0 || cfg.YarnFactor <= 1 && v == nil) &&
+		rev := (cfg.Revision >= 1 || cfg.SWAWindow == 0 || cfg.YarnFactor <= 1 && v == nil) &&
 			(cfg.Revision >= 2 || !storesAny(c, jlm.RoleAttnSubNorm, jlm.RoleFFNSubNorm)) &&
 			(cfg.Revision >= 3 || cfg.RopeSections == [4]uint32{}) &&
 			(cfg.Revision >= 5 || cfg.DecisionBlocks == 0)

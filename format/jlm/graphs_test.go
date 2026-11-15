@@ -50,8 +50,8 @@ func TestBlockGraphsRoundTrip(t *testing.T) {
 }
 
 // TestBlockGraphsStateTheHeadBlocks: a marker head's blocks follow the
-// trunk's in the statement; one written before they were stated leaves them
-// out, and any other count is refused.
+// trunk's in the statement; one written before HeadGraphsRevision may leave
+// them out, one written at it may not, and any other count is refused.
 func TestBlockGraphsStateTheHeadBlocks(t *testing.T) {
 	c := &Config{NLayer: 3, NEmbd: 8, NHead: 1, NKVHead: 1, HeadDim: 8, NRot: 8, NFFN: 16, NVocab: 32, NCtx: 64,
 		Flags2: Flag2HeadBlocks, DecisionBlocks: 2}
@@ -59,18 +59,21 @@ func TestBlockGraphsStateTheHeadBlocks(t *testing.T) {
 		t.Fatalf("%d head blocks, want 2", c.HeadBlocks())
 	}
 	for _, b := range []struct {
-		n  int
-		ok bool
-	}{{5, true}, {3, true}, {4, false}, {6, false}} {
+		rev uint8
+		n   int
+		ok  bool
+	}{{0, 5, true}, {0, 3, true}, {0, 4, false}, {0, 6, false},
+		{HeadGraphsRevision - 1, 3, true}, {HeadGraphsRevision, 5, true}, {HeadGraphsRevision, 3, false}, {StatementRevision, 3, false}} {
+		c.Revision = b.rev
 		c.Blocks = BlockGraphs{Graphs: []string{"a"}, Of: make([]uint16, b.n)}
 		got, err := decodeConfig(encodeConfig(c))
 		switch {
 		case b.ok && err != nil:
-			t.Errorf("%d blocks' graphs: %v", b.n, err)
+			t.Errorf("%d blocks' graphs at revision %d: %v", b.n, b.rev, err)
 		case b.ok && len(got.Blocks.Of) != b.n:
 			t.Errorf("%d blocks' graphs came back as %d", b.n, len(got.Blocks.Of))
 		case !b.ok && (err == nil || !strings.Contains(err.Error(), "blocks of 5")):
-			t.Errorf("%d blocks' graphs: %v, want a refusal", b.n, err)
+			t.Errorf("%d blocks' graphs at revision %d: %v, want a refusal", b.n, b.rev, err)
 		}
 	}
 	c.Flags2 = 0

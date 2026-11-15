@@ -496,11 +496,8 @@ func usedGraphs(g *mjGraph) ([]*mjGraph, error) {
 	var out []*mjGraph
 	for _, u := range g.Use {
 		i := slices.IndexFunc(files, func(mj *modelJSON) bool { return mj.name == "convert/models/"+u.Graph+".json" })
-		switch {
-		case i < 0 || files[i].Graph == nil:
-			return nil, fmt.Errorf("convert: a graph uses %q, which no library file states", u.Graph)
-		case len(files[i].Graph.Use) != 0:
-			return nil, fmt.Errorf("convert: a graph uses %q, which uses others in turn", u.Graph)
+		if i < 0 || files[i].Graph == nil || len(files[i].Graph.Use) != 0 {
+			return nil, fmt.Errorf("convert: a graph uses %q, which states no graph of the library's own", u.Graph)
 		}
 		out = append(out, files[i].Graph)
 	}

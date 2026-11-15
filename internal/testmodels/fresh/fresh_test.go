@@ -117,7 +117,7 @@ func TestACausalPictureBesideBidirectionalLayersIsReconverted(t *testing.T) {
 
 // TestUnstatedHeadBlocksAreReconverted: a marker head's container whose
 // statement leaves its head blocks out, as the converter wrote one before it
-// stated them, is reconverted from its source.
+// stated them (below HeadGraphsRevision), is reconverted from its source.
 func TestUnstatedHeadBlocksAreReconverted(t *testing.T) {
 	dir := t.TempDir()
 	src := testmodels.Path("laya/fixture/laya-fixture.gguf")
@@ -156,7 +156,7 @@ func TestUnstatedHeadBlocksAreReconverted(t *testing.T) {
 			}
 			short.Of = append(short.Of, j)
 		}
-		c.Blocks = short
+		c.Blocks, c.Revision = short, jlm.HeadGraphsRevision-1
 		return true, nil
 	}); err != nil || !changed {
 		t.Fatalf("leaving the head blocks out: changed %v, %v", changed, err)

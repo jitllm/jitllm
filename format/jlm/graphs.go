@@ -39,10 +39,20 @@ func decodeBlockGraphs(r *rbuf) BlockGraphs {
 	return g
 }
 
+// statedBlocks is how many blocks' graphs c states, and the count a
+// container written before HeadGraphsRevision may state instead, its head
+// blocks left to the config.
+func (c *Config) statedBlocks() (blocks, short int) {
+	blocks = int(c.NLayer + c.HeadBlocks() + c.NMTP)
+	if c.Revision < HeadGraphsRevision {
+		return blocks, int(c.NLayer + c.NMTP)
+	}
+	return blocks, blocks
+}
+
 // valid refuses a statement that names a graph it does not hold, leaves a
-// block out, or states a graph no block reads. A container written before
-// the head blocks were stated states the other blocks alone (short), and
-// its head blocks are built from the config.
+// block out, or states a graph no block reads; short is the count an older
+// container may state (Config.statedBlocks).
 func (g *BlockGraphs) valid(blocks, short int) error {
 	if len(g.Graphs) == 0 && len(g.Of) == 0 {
 		return nil
