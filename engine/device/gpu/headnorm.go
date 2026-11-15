@@ -115,11 +115,14 @@ func (g *devTier) joinHead(h *nn.Head) bool {
 }
 
 // headVecsFor is the vectors a call's head reads and their index for the
-// graph key: 0 for the set the head was built with -- the same slices, or the
-// same values -- and i+1 for altVecs[i]. false when h brings vectors this
+// graph key: 0 for the set the head was built with -- the same slices, read
+// without a pass over them, or the same values -- and i+1 for altVecs[i]. false when h brings vectors this
 // device was never given (its PrepHead was not asked). Callers hold g.mu.
 func (g *devTier) headVecsFor(h *nn.Head) ([]roleBuf, int, bool) {
 	if h == nil {
+		return g.bs.hVecs, 0, true
+	}
+	if sameSrc(g.headVecSrc, h) {
 		return g.bs.hVecs, 0, true
 	}
 	same := true
@@ -199,5 +202,5 @@ func (g *devTier) giveBackHead(bs *blockScratch) {
 		}
 		g.freeResident(r)
 	}
-	g.headEntry, g.headSrc, g.headVecHost = nil, nil, nil
+	g.headEntry, g.headSrc, g.headVecSrc, g.headVecHost = nil, nil, nil, nil
 }

@@ -1964,7 +1964,7 @@ func (s *Instance) planFor(li int) *nn.LayerPlan {
 	plan.LocalRope = c.OwnGeoms() && c.SWA(li)
 	plan.OwnGeom = plan.LocalRope || plan.HeadDim != c.HeadDim || plan.NKVHead != c.NKVHead || plan.NRot != c.NRot
 	plan.BidirOff = !c.BidirAt(li)
-	plan.VFromK, plan.OutScale = l.VFromK, l.OutScale
+	plan.VFromK = l.VFromK
 	plan.PLEDim, plan.PLEWidth = c.PLEDim, c.SideWidth()
 	if c.MLA() {
 		plan.KeyW = c.KVDim() - c.KVLoraRank - c.NRot
@@ -3195,7 +3195,6 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 		if fold != nil {
 			// The device ran the output norm and the projection too, so the
 			// token is finished and the residual never came home.
-			//
 			s.advance(0, 1)
 			// The token is complete, so it steps what every token steps:
 			// a head on the device is no reason for the seam tuner or the
@@ -3262,8 +3261,6 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 		}
 	}
 	s.closeRuns(nil)
-	if done {
-	}
 	// Through advance, not s.pos++: Prefill reads bpos, so a Prefill after a
 	// Forward must see this token.
 	s.advance(0, 1)

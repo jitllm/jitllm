@@ -111,7 +111,8 @@ func ssdSwapBC(t *testing.T) func(m *model.Model) func() {
 				t.Fatal(err)
 			}
 		}
-		return eachLayer(m, func(l *model.Layer) {
+		var undo []func()
+		undoL := eachLayer(m, func(l *model.Layer) {
 			if l.Vector(jlm.RoleSSMD) == nil {
 				return
 			}
@@ -127,14 +128,11 @@ func ssdSwapBC(t *testing.T) func(m *model.Model) func() {
 			copy(d[:n*rb], w.Data[n*rb:2*n*rb])
 			copy(d[n*rb:2*n*rb], w.Data[:n*rb])
 			w.Data = d
-			cw := slices.Clone(l.SsmConv1d)
-			for tap := 0; tap < g.Conv; tap++ {
-				p := cw[tap*g.Chans:]
-				o := l.SsmConv1d[tap*g.Chans:]
-				copy(p[:n], o[n:2*n])
-				copy(p[n:2*n], o[:n])
-			}
-			l.SsmConv1d = cw
+			undo = append(undo, setConvTaps(l, func(v []float32, _, taps int) {
+				o := slices.Clone(v)
+				copy(v[:n*taps], o[n*taps:2*n*taps])
+				copy(v[n*taps:2*n*taps], o[:n*taps])
+			}))
 			setVec(l, jlm.RoleSSMConvBias, func(v []float32) []float32 {
 				cb := slices.Clone(v)
 				copy(cb[:n], v[n:2*n])
@@ -142,6 +140,12 @@ func ssdSwapBC(t *testing.T) func(m *model.Model) func() {
 				return cb
 			})
 		})
+		return func() {
+			for _, u := range undo {
+				u()
+			}
+			undoL()
+		}
 	}
 }
 

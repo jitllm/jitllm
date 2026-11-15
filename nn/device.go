@@ -551,8 +551,8 @@ type LayerPlan struct {
 
 	// NoPreNorm says some block has no pre-norms (OLMo 2, EXAONE 4): attention
 	// and the FFN read the residual as it is and only their outputs are
-	// normalised (LayerWeights.AttnNorm and FFNNorm are nil). A tier copies the
-	// row where the norm would have written it.
+	// normalised (the block binds no RoleAttnNorm or RoleFFNNorm vector). A
+	// tier copies the row where the norm would have written it.
 	NoPreNorm bool
 	// AttnSoftcap is x = c*tanh(x/c) on the attention scores, gemma2's 50.0 and
 	// zero everywhere else.
@@ -564,12 +564,10 @@ type LayerPlan struct {
 	// NKVHead, HeadDim and NRot are then THIS block's (planFor sets them per
 	// block). OwnGeom says they, or the rotary table it reads, are not the
 	// model's, and LocalRope that it rotates by the second table (RopeTabSWA).
-	// VFromK says the block has no v projection and v is k's
-	// (LayerWeights.Wv is empty); OutScale multiplies the block's output row
-	// after its last residual add (zero means none).
+	// VFromK says the block has no v projection and v is k's (it binds no
+	// RoleAttnV matrix).
 	MixedGeom, OwnGeom, LocalRope bool
 	VFromK                        bool
-	OutScale                      float32
 	// Gemma 4's E2B/E4B: PLEDim is each block's per-layer embedding width
 	// (zero for none), KVShared says the block attends to KVSource's history
 	// and computes no k or v, and NFFN is then this block's own width.

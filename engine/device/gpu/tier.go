@@ -1334,11 +1334,12 @@ type devShared struct {
 	recLs []*layer
 	// headEntry is the container entry of the projection the resident head
 	// is, headSrc the first byte it was uploaded from where it is no entry,
-	// and headVecHost the vectors it was built with: what a second instance's
-	// PrepHead is compared against (adoptHead). altVecs are the other sets
-	// that head serves (headnorm.go).
+	// headVecSrc the vectors it was built with and headVecHost their values:
+	// what a second instance's PrepHead is compared against (adoptHead).
+	// altVecs are the other sets that head serves (headnorm.go).
 	headEntry   *jlm.Entry
 	headSrc     *byte
+	headVecSrc  []nn.RoleVector
 	headVecHost []nn.RoleVector
 	altVecs     []altVecs
 	// busy is the device's call lock: a session's step takes it shared, so

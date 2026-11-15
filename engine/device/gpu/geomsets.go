@@ -183,7 +183,7 @@ func scratchPlanOf(p *nn.LayerPlan) *nn.LayerPlan {
 	if p.LocalRope {
 		q.RopeTab = p.RopeTabSWA
 	}
-	q.VFromK, q.OutScale, q.KVShared, q.KVSource = false, 0, false, 0
+	q.VFromK, q.KVShared, q.KVSource = false, false, 0
 	return &q
 }
 

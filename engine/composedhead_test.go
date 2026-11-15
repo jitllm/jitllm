@@ -212,7 +212,9 @@ func TestComposedHeadOps(t *testing.T) {
 			outNormB, outB := slices.Clone(ref.Vector(jlm.RoleOutputNormBias)), slices.Clone(ref.Vector(jlm.RoleOutputBias))
 			lnb := outNormB
 			if c.LayerNorm {
-				lnb = slices.Clone(ref.LnBias(outNormB))
+				if lnb == nil {
+					lnb = make([]float32, c.NEmbd)
+				}
 			} else {
 				lnb = nil
 			}
