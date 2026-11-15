@@ -14,7 +14,7 @@ import (
 
 // Version is the op language this package writes and the verifier reads. A
 // graph of another version is refused, never guessed at.
-const Version = 3
+const Version = 2
 
 // OpKind is an operation. Each kind's semantics are fixed per Version: a
 // change of meaning is a new kind or a new Version, not a reinterpretation.
