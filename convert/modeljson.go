@@ -841,6 +841,15 @@ func (mj *modelJSON) configIn(env exprEnv, c *hfConfig, names []string) (*Config
 	if err != nil {
 		return nil, err
 	}
+	// A stated shared-expert width holds the checkpoint to it: a graph that
+	// takes the width off the tensor would run whatever ships, where the class
+	// builds the width its config states.
+	if v, ok := kvs[ns+"expert_shared_feed_forward_length"]; ok {
+		if w, _ := v.Uint(); uint64(cfg.NFFNShExp) != w {
+			return nil, fmt.Errorf("convert: %s: the shared experts are %d wide in the checkpoint, and the config states %d",
+				c.path, cfg.NFFNShExp, w)
+		}
+	}
 	// The statements configOf does not read decide after it.
 	if window != 0 && uint64(cfg.SWAWindow) != window {
 		return nil, fmt.Errorf("convert: %s: a sliding window of %d is not one graph %s runs: %w",

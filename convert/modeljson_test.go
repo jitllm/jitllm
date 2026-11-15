@@ -355,6 +355,7 @@ func TestDots1ThroughTheLibrary(t *testing.T) {
 		names = append(names, p+"gate.weight", p+"experts.0.gate_proj.weight")
 	}
 	noQK := append([]string{names[0]}, names[3:]...)
+	noSh := append(append([]string{}, names[:3]...), names[4:]...)
 	c := hfConfigOf(t, js)
 	c.shapes = map[string][]uint64{sh: {64, 64}}
 	cfg, err := mj.config(c, names)
@@ -378,6 +379,8 @@ func TestDots1ThroughTheLibrary(t *testing.T) {
 		{"uneven groups", `"n_group": 1`, `"n_group": 3`, names, "8 experts in 3 groups"},
 		{"no q/k norm", `"n_group": 1`, `"n_group": 1`, noQK, "attn_q_norm"},
 		{"no expert count", `"n_routed_experts": 8,`, ``, names, "n_routed_experts"},
+		{"shared experts wider than shipped", `"n_shared_experts": 2`, `"n_shared_experts": 3`, names, "shared experts are 64 wide"},
+		{"shared experts that do not ship", `"n_shared_experts": 2`, `"n_shared_experts": 2`, noSh, "shared experts are 0 wide"},
 		{"a window in use", `"sliding_window": null, "layer_types": ["full_attention"`,
 			`"sliding_window": 16, "layer_types": ["sliding_attention"`, names, "window"},
 		{"layers past max_window_layers slide", `"sliding_window": null, "layer_types": ["full_attention", "full_attention", "full_attention"]`,

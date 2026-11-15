@@ -19,6 +19,7 @@
       "expert_used_count":                {"uint": "num_experts_per_tok"},
       "expert_feed_forward_length":       {"uint": "moe_intermediate_size ?? 1408"},
       "expert_shared_count":              {"uint": "n_shared_experts"},
+      "expert_shared_feed_forward_length": {"uint": "(moe_intermediate_size ?? 1408) * (n_shared_experts)"},
       "leading_dense_block_count":        {"uint": "first_k_dense_replace ?? 0"},
       "expert_weights_norm":              {"bool": "norm_topk_prob ?? false"},
       "expert_weights_scale":             {"float": "routed_scaling_factor ?? 1"},
