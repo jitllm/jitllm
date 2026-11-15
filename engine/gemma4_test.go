@@ -195,17 +195,19 @@ func noLayerScalar(m *model.Model) func() {
 // globalRopeIsLocal gives the global layers the sliding layers' base with no
 // factors: one rotary for every layer, at each layer's own width.
 func globalRopeIsLocal(m *model.Model) func() {
+	undo := builtGraphs(m)
 	was := m.Rope
 	m.Rope.Base, m.Rope.Freqs = m.RopeSWA.Base, nil
-	return func() { m.Rope = was }
+	return func() { m.Rope = was; undo() }
 }
 
 // noRopeFreqs turns every pair of the global head (the plain rotary over 32
 // dimensions), where the proportional rotary turns the first quarter.
 func noRopeFreqs(m *model.Model) func() {
+	undo := builtGraphs(m)
 	was := m.Rope.Freqs
 	m.Rope.Freqs = nil
-	return func() { m.Rope.Freqs = was }
+	return func() { m.Rope.Freqs = was; undo() }
 }
 
 // TestGemma4MatchesTransformers holds each fixture to transformers' own class

@@ -35,6 +35,7 @@ func TestMixedGeometriesTakeTheirOwnScale(t *testing.T) {
 			t.Fatalf("%s states one geometry", name)
 		}
 		if derived {
+			defer builtGraphs(m)()
 			m.Container.Config().AttnScale = 0
 			c.AttnScale = 0
 			m.Front.Set = nil

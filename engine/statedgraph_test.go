@@ -95,6 +95,12 @@ func statedGraphModels() []string {
 		"library/all-MiniLM-L6-v2-ggml-model-f16.gguf", "embed/MiniLM-L6-v2.Q8_0.gguf", "embed/snowflake-arctic-embed-22m.gguf",
 		"library/mxbai-embed-large-v1_fp16.gguf", "library/nomic-embed-text-v1.5.f16.gguf", "embed/nomic-embed-text.gguf",
 		"laya/fixture/laya-fixture.gguf", "d1-omni/d1-omni-600M-F16.gguf",
+		// Each block's own geometry, v's norm, a block reading an earlier
+		// one's history, the per-layer inputs, and a mixture beside the MLP.
+		"synth-gemma4.gguf", "synth-gemma4-e.gguf", "synth-gemma4-e-ragged.gguf", "synth-gemma4-kv.gguf",
+		"synth-gemma4-moe.gguf", "synth-gemma4-wide.gguf", "synth-gemma4v.gguf",
+		"synth-gemma4v.gguf+mmproj-synth-gemma4v.gguf", "gemma4/google_gemma-4-E2B-it-Q4_K_M.gguf",
+		"vlmb/gemma-4-E2B-it-Q4_K_M.gguf+vlmb/mmproj-gemma-4-E2B-it-BF16.gguf",
 	}
 }
 

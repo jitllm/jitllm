@@ -30,8 +30,8 @@ type mjGraph struct {
 const blockExprSteps = 1 << 12
 
 // mjBlockOp is one op of a block. Op names the step: in, norm, layer_norm,
-// head_norm, matvec, add, rope, kv_append, attend, act, stated, emit,
-// split_sum, mark, routed or out.
+// head_norm, matvec, add, rope, kv_append, kv_from, attend, act, stated,
+// emit, split_sum, mark, routed or out.
 type mjBlockOp struct {
 	Op string `json:"op"`
 	// If, where set, is an expression: the op is the block's where it holds.
@@ -51,7 +51,7 @@ type mjBlockOp struct {
 	Rows  string `json:"rows"`
 	Width string `json:"width"`
 	Alpha string `json:"alpha"`
-	// Hist is the history an attend reads, a kv_append's Out.
+	// Hist is the history an attend reads, a kv_append's or a kv_from's Out.
 	Hist string `json:"hist"`
 	// Kind is an emit's op, by the graph language's name of it; Outs its
 	// results, Attr its attributes by graph.Attrs field name, each an
@@ -83,8 +83,9 @@ type mjBlockOp struct {
 	// Streams names a list of residual streams a stream step reads (a
 	// streams_in's or a stream_writes' Out), Ex the list of values a
 	// stream_read exported to the writes, At a stream_at's index (an
-	// expression). A stream step's Of is the sublayer whose stated
-	// statement it lowers: pre, attn or ffn.
+	// expression), or a kv_from's block: an earlier block whose history
+	// this block reads and appends nothing to. A stream step's Of is the
+	// sublayer whose stated statement it lowers: pre, attn or ffn.
 	Streams string `json:"streams"`
 	Ex      string `json:"ex"`
 	At      string `json:"at"`
@@ -160,6 +161,7 @@ func graphSteps() map[string][4]int {
 		"add":           {2, 2, 0, 0},
 		"rope":          {1, 1, 0, 0},
 		"kv_append":     {2, 2, 0, 0},
+		"kv_from":       {0, 0, 0, 0},
 		"attend":        {1, 2, 0, -1},
 		"indexer":       {2, 2, 0, 0},
 		"select":        {1, 2, 0, 0},
@@ -329,6 +331,8 @@ func (g *mjGraph) check() error {
 			continue
 		case o.Out == "":
 			return fmt.Errorf("op %d (%s) names no output", i, o.Op)
+		case o.Op == "kv_from" && o.At == "":
+			return fmt.Errorf("op %d's kv_from names no block", i)
 		case o.Op == "in" && o.Width == "", o.Op == "matvec" && o.Rows == "", o.Op == "act" && o.Width == "",
 			o.Op == "stated" && (o.Of == "router_score" || o.Of == "router_weight") && o.Width == "":
 			return fmt.Errorf("op %d (%s) states no width", i, o.Op)
@@ -578,6 +582,16 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, src jinja.Va
 			y = b.Emit(graph.OpRope, in, []graph.Result{{Name: name, Width: b.G.Values[in[0]].Width}}, nil, a, nil, nil)[0]
 		case "kv_append":
 			hists[o.Out] = graph.StateRef{State: graph.StateKV, Version: b.KVAppend(in[0], in[1], 0)}
+			continue
+		case "kv_from":
+			at, err := num(o.At)
+			if err != nil {
+				return nil, err
+			}
+			if at != math.Trunc(at) || at < 0 || int(at) >= li {
+				return nil, fmt.Errorf("op %d reads block %v's history, which is not an earlier block's", i, at)
+			}
+			hists[o.Out] = graph.SharedHistory(int(at))
 			continue
 		case "attend":
 			h, ok := hists[o.Hist]
@@ -1384,6 +1398,8 @@ func (bf *blockFacts) vars() map[string]jinja.Value {
 		"attn_join":          jinja.NewBool(bf.streamsAt().Attn.Join != nil),
 		"ffn_writes":         jinja.NewBool(len(bf.streamsAt().FFN.Writes) != 0),
 		"ple_dim":            i(c.PLEDim),
+		"kv_shared":          jinja.NewBool(bf.kvShared()),
+		"kv_source":          jinja.NewInt(int64(c.KVSource(li))),
 		"row_windowed":       jinja.NewBool(c.Flags2.Has(jlm.Flag2MediaPrefix)),
 		"nope_global":        jinja.NewBool(c.Flags.Has(jlm.FlagNoPEGlobal)),
 		"temp_scale":         jinja.NewFloat(float64(c.AttnTempScale)),
@@ -1430,6 +1446,12 @@ func (bf *blockFacts) sliding() bool {
 		return w > 0 && p > 1 && li%p != 0
 	}
 	return w > 0 && p > 0 && li%p < p-1
+}
+
+// kvShared says the block attends the history of an earlier block
+// (jlm.Config.KVSource) and appends none of its own.
+func (bf *blockFacts) kvShared() bool {
+	return bf.c.KVShared(bf.li) && (bf.li >= len(bf.c.LayerKinds) || bf.c.LayerKinds[bf.li].Attends())
 }
 
 // kind is the block's kind as the container states it (jlm.LayerKind's
