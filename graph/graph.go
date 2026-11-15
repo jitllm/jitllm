@@ -116,7 +116,9 @@ const (
 	OpMap
 	// OpReduce combines each group of Span elements of In[0] (the whole row
 	// where Span is 0) by Fn (MapAdd, MapMax or MapMin) in Order: Out[0] one
-	// element a group. A primitive.
+	// element a group. Where HeadDim is set the row is rows of HeadDim and a
+	// group is a column of Span of them: Out[0]'s element b*HeadDim+j
+	// combines In[0]'s elements (b*Span+i)*HeadDim+j. A primitive.
 	OpReduce
 	// OpTopK is the TopK largest elements of each group of Span of In[0]
 	// (the whole row where Span is 0), largest first, equal values to the
@@ -367,17 +369,13 @@ const (
 	// first word over Width wide (a picture's patches over its merge
 	// windows) and its live rows over Width*Width over that tall.
 	OpUntile
-	// OpHistoryPool is, for each row, the window of Span positions holding
-	// its position, read from the history it reads (rows of Width), pooled
-	// per channel of Out[0]: the segments of Words, four words each -- 1
-	// for the window before the row's and 0 for its own, then the offsets
-	// in a row of the segment's values and gates, and in a row of the bias
-	// Weight[0] (Span rows, one an offset in the window) of its biases --
-	// each channel the sum over every segment's positions of the value
-	// weighted by the softmax of gate plus bias. A position before the
-	// history's first, or past the row's own, is no term. Only a row
-	// closing its window pools all of it.
-	OpHistoryPool
+	// OpHistoryRows is, for each row, the Span positions of the window of
+	// Span holding its position, or of the window Local windows before it,
+	// read from the history it reads (rows of Width): Out[0] position by
+	// position, each its row's elements from Offset, Out[0]'s width over
+	// Span of them. A position before the first, or past the row's own,
+	// reads Const. A primitive over the history: its rows as a value.
+	OpHistoryRows
 	// OpRowBreak is In[0]'s rows -- a grid's raster, its width the step's
 	// patch grid's (the request's) over Span -- with Weight[0]'s one row
 	// after each of the grid's rows, or after each but the last where
@@ -550,8 +548,8 @@ func (k OpKind) String() string {
 		return "picture"
 	case OpUntile:
 		return "untile"
-	case OpHistoryPool:
-		return "history_pool"
+	case OpHistoryRows:
+		return "history_rows"
 	case OpPatchify:
 		return "patchify"
 	case OpRegroup:
@@ -997,7 +995,8 @@ type Attrs struct {
 	// Origin is OpRopeTable's position of a grid's first cell on each axis
 	// (graph.Rotary.Origin).
 	Origin int
-	// Local is OpSelect's blocks kept ending at the row's own.
+	// Local is OpSelect's blocks kept ending at the row's own, and the
+	// windows before the row's own OpHistoryRows reads.
 	Local int
 	// Pooled scores OpSelect's blocks by their pooled keys: a complete
 	// block's keys averaged, RMS-normed (Eps, Weight[0]) and turned at the

@@ -15,7 +15,7 @@ import (
 )
 
 // TestComposedGPUHistoryPool is TestComposedCPUHistoryPool on every GPU:
-// OpHistoryPool (DeepSeek V4's compressed history) over a chunk of rows
+// a history pool (OpHistoryRows, then maps and column reduces) over a chunk of rows
 // appended to the paged history a card holds -- keys float32 by dimension,
 // values binary16 or float32 by position -- each row's window of Span
 // positions, and for a two-segment pool the window before it, pooled per

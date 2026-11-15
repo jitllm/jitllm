@@ -320,16 +320,28 @@ func decomposeSlice(o graph.Op, c *Context) ([]Prim, error) {
 	var x exprs
 	r, e := x.coord(0), x.coord(1)
 	if len(o.In) == 0 {
+		w := o.Weight[0]
+		n := w.K * max(1, w.Rows)
+		if a.HeadDim > 0 {
+			// Each head of HeadDim of the table.
+			if n%a.HeadDim != 0 || a.Offset < 0 || a.Offset+a.Width > a.HeadDim || sh[1] != n/a.HeadDim*a.Width {
+				return nil, fmt.Errorf("a slice of %d from %d of each head of %d of a table of %d into %d", a.Width, a.Offset, a.HeadDim, n, sh[1])
+			}
+			var hx exprs
+			h, e := hx.coord(1), hx.coord(2)
+			hx.load(0, hx.op(OpAdd, U, hx.op(OpMul, U, h, hx.u(uint32(a.HeadDim))), hx.op(OpAdd, U, hx.u(uint32(a.Offset)), e)))
+			return []Prim{{Kind: PrimMap, Shape: []int{sh[0], n / a.HeadDim, a.Width}, In: []Operand{{Kind: OperandVector, Role: w.Role, Name: w.Role.String()}},
+				Out: c.value(o.Out[0]), Expr: hx.e, Facts: Facts{Extents: map[int]int{0: n}}}}, nil
+		}
 		if sh[1] != a.Width {
 			return nil, fmt.Errorf("a slice of %d from a table into %d", a.Width, sh[1])
 		}
-		w := o.Weight[0]
-		if a.Offset+a.Width > w.K*max(1, w.Rows) {
-			return nil, fmt.Errorf("a slice of %d from %d of a table of %d", a.Width, a.Offset, w.K*max(1, w.Rows))
+		if a.Offset+a.Width > n {
+			return nil, fmt.Errorf("a slice of %d from %d of a table of %d", a.Width, a.Offset, n)
 		}
 		x.load(0, x.op(OpAdd, U, x.u(uint32(a.Offset)), e))
 		return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{{Kind: OperandVector, Role: w.Role, Name: w.Role.String()}},
-			Out: c.value(o.Out[0]), Expr: x.e, Facts: Facts{Extents: map[int]int{0: w.K * max(1, w.Rows)}}}}, nil
+			Out: c.value(o.Out[0]), Expr: x.e, Facts: Facts{Extents: map[int]int{0: n}}}}, nil
 	}
 	if a.HeadDim > 0 {
 		return decomposeHeadSlice(o, c)

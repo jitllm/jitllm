@@ -410,20 +410,13 @@ func Verify(g *Graph, f Facts) error {
 				o.Reads[0].Hist == o.Reads[1].Hist) || len(o.Reads) > 2 {
 				bad("%s: %d histories, the second an entry each %d positions of %d words", at, len(o.Reads), a.Span, len(a.Words))
 			}
-		case OpHistoryPool:
+		case OpHistoryRows:
 			a := o.Attr
 			switch {
-			case len(o.In) != 0 || len(o.Out) != 1 || len(o.Reads) != 1 || len(o.Weight) != 1:
-				bad("%s: %d inputs, %d outputs, %d histories and %d biases", at, len(o.In), len(o.Out), len(o.Reads), len(o.Weight))
-			case a.Span < 1 || len(a.Words) < 4 || len(a.Words)%4 != 0 || o.Weight[0].Rows != a.Span:
-				bad("%s: windows of %d, %d segment words, a bias of %d rows", at, a.Span, len(a.Words), o.Weight[0].Rows)
-			default:
-				w := width(o.Out[0])
-				for i := 0; i < len(a.Words); i += 4 {
-					if a.Words[i] > 1 || int(a.Words[i+1])+w > a.Width || int(a.Words[i+2])+w > a.Width || int(a.Words[i+3])+w > o.Weight[0].K {
-						bad("%s: segment %d of %d channels past a row of %d or a bias of %d", at, i/4, w, a.Width, o.Weight[0].K)
-					}
-				}
+			case len(o.In) != 0 || len(o.Out) != 1 || len(o.Reads) != 1 || len(o.Weight) != 0:
+				bad("%s: %d inputs, %d outputs, %d histories and %d weights", at, len(o.In), len(o.Out), len(o.Reads), len(o.Weight))
+			case a.Span < 1 || a.Local < 0 || width(o.Out[0])%a.Span != 0 || a.Offset < 0 || a.Offset+width(o.Out[0])/a.Span > a.Width:
+				bad("%s: %d positions %d windows back, %d wide from %d of a row of %d", at, a.Span, a.Local, width(o.Out[0]), a.Offset, a.Width)
 			}
 		case OpDeltaRule:
 			a := o.Attr
