@@ -250,64 +250,6 @@ func olmo3Rope(c *hfConfig) (global, local float64, full json.RawMessage, err er
 	return tf, ts, full, nil
 }
 
-// exaone4: the post-norm block with a per-head q/k norm, NEOX rotary
-// unpermuted, and with a window: three sliding layers in four by class default,
-// the global ones rotating not at all (Exaone4Attention rotates when
-// sliding_window is None or the layer slides).
-func exaone4HF() *hfArch {
-	return &hfArch{
-		arch:        ArchExaone4,
-		blockPrefix: llamaHF().blockPrefix,
-		model:       llamaHF().model,
-		block:       hfPostNormBlock(),
-		ignore:      llamaHF().ignore,
-		config: func(c *hfConfig, names []string) (*Config, error) {
-			hfClassDefaults{kvHeads: 32, ropeTheta: 1e4, rmsEps: 1e-5, nCtx: 2048}.apply(c)
-			win := uint32(0)
-			switch {
-			case c.absent("sliding_window"):
-				win = 4096
-			case c.SlidingWindow != nil:
-				win = *c.SlidingWindow
-			}
-			c.SlidingWindow = nil
-			cfg, err := hfConfigWith(ArchExaone4, jlm.FlagRopeNeox|jlm.FlagQKNorm, "silu")(c, names)
-			if err != nil {
-				return nil, err
-			}
-			if win == 0 {
-				return cfg, nil
-			}
-			kinds := c.LayerTypes
-			if kinds == nil {
-				// Exaone4Config derives the kinds from an integer pattern; a string
-				// one ("LLLG") it cannot read without layer_types.
-				every := uint32(4)
-				if len(c.SlidingWindowPattern) > 0 && string(c.SlidingWindowPattern) != "null" {
-					if err := json.Unmarshal(c.SlidingWindowPattern, &every); err != nil || every == 0 {
-						return nil, fmt.Errorf("convert: %s: sliding_window_pattern %s with no layer_types: %w",
-							c.path, c.SlidingWindowPattern, ErrNotImplemented)
-					}
-				}
-				kinds = periodicKinds(cfg.NLayer, every)
-			}
-			period, err := hfWindowPeriod(c, kinds, cfg.NLayer)
-			if err != nil {
-				return nil, err
-			}
-			if period == 0 {
-				// A window and no sliding layer: every layer is global, and so
-				// every layer skips the rotary.
-				return nil, fmt.Errorf("convert: %s: sliding_window %d with no sliding layer leaves "+
-					"no layer rotating: %w", c.path, win, ErrNotImplemented)
-			}
-			cfg.SWAWindow, cfg.SWAPeriod = win, period
-			cfg.Flags |= jlm.FlagNoPEGlobal
-			return cfg, nil
-		},
-	}
-}
-
 // periodicKinds is the layer_types a config class derives from a pattern:
 // sliding except every every-th layer.
 func periodicKinds(n, every uint32) []string {

@@ -302,7 +302,7 @@ func TestDenseHFRefusals(t *testing.T) {
 			"rotary scaling on its full_attention"},
 		{"SmolLM3ForCausalLM", `, "no_rope_layers": [1, 0, 1, 1], "tie_word_embeddings": false`, "not every"},
 		{"Exaone4ForCausalLM", `, "num_key_value_heads": 2, "layer_types": ["sliding_attention",
-			"full_attention", "full_attention", "sliding_attention"]`, "not periodic"},
+			"full_attention", "full_attention", "sliding_attention"]`, "no period"},
 		{"Ministral3ForCausalLM", `, "num_key_value_heads": 2, "rope_parameters": {"rope_type": "default"}`,
 			"llama_4_scaling_beta"},
 		{"ArceeForCausalLM", `, "hidden_act": "gelu"`, "activation gelu"},

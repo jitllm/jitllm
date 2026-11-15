@@ -1152,7 +1152,6 @@ func hfArchTable() map[string]*hfArch {
 		// mistral3's text model; Mistral3ForConditionalGeneration, which nests it
 		// under a vision tower, is not here.
 		"Olmo3ForCausalLM":      olmo3HF(),
-		"Exaone4ForCausalLM":    exaone4HF(),
 		"Ministral3ForCausalLM": ministral3HF(),
 	}
 }

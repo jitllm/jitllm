@@ -931,8 +931,8 @@ func (mj *modelJSON) configIn(env exprEnv, c *hfConfig, names []string) (*Config
 			if window, err = exprUint("window size", size); err != nil {
 				return nil, err
 			}
-			kvs[ns+"attention.sliding_window"] = meta.MakeUint(window)
 		}
+		kvs[ns+"attention.sliding_window"] = meta.MakeUint(window)
 	}
 	cfg, err := configOf(meta.New(c.path, kvs, ts))
 	if err != nil {
@@ -966,6 +966,10 @@ func (mj *modelJSON) configIn(env exprEnv, c *hfConfig, names []string) (*Config
 			p, first, err := windowPeriod(slides)
 			if err != nil {
 				return nil, fmt.Errorf("convert: %s: %w", c.path, err)
+			}
+			if p == 0 && cfg.Flags.Has(jlm.FlagNoPEGlobal) {
+				return nil, fmt.Errorf("convert: %s: a window of %d slides no layer, and the global layers skip "+
+					"the rotary: no layer rotates: %w", c.path, window, ErrNotImplemented)
 			}
 			if p != 0 {
 				cfg.SWAWindow, cfg.SWAPeriod = uint32(window), p
