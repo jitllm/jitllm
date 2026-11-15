@@ -1860,14 +1860,28 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	var cache, vcache int
 	var kvp *kvPair
 	l.kvSrc = li
-	if n := p.Graph.ReadsHistoryOf(); n >= 0 {
-		// No history of its own: it reads block n's, which must be on this
-		// device already (blocks are offered in order).
-		if n >= li || g.layers[n] == nil || !g.layers[n].ok {
-			g.LastErr = fmt.Sprintf("block %d attends to block %d's history, which is not on this device", li, n)
+	hsrc, herr := p.Graph.ReadsHistoryOf()
+	if herr != nil {
+		g.LastErr = herr.Error()
+		return false
+	}
+	// A history past the rows' is held keys only, and the served and
+	// streamed forms bind one (histKey(li, 1)): a block keeping another is
+	// declined by name.
+	for _, k := range p.Graph.KeptHistories() {
+		if !k.ValuesInKeys || k.Hist > 1 {
+			g.LastErr = fmt.Sprintf("block %d keeps history %d (values in its keys: %v): the card holds one history past a block's rows, its values its keys", li, k.Hist, k.ValuesInKeys)
 			return false
 		}
-		l.kvSrc = n
+	}
+	if hsrc >= 0 {
+		// No history of its own: it reads block n's, which must be on this
+		// device already (blocks are offered in order).
+		if hsrc >= li || g.layers[hsrc] == nil || !g.layers[hsrc].ok {
+			g.LastErr = fmt.Sprintf("block %d attends to block %d's history, which is not on this device", li, hsrc)
+			return false
+		}
+		l.kvSrc = hsrc
 	}
 	if l.kvSrc != li {
 		// Nothing to allocate.

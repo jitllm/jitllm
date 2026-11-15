@@ -199,19 +199,15 @@ func (c *Context) tab(t Table) Operand { return t.of(int(c.hist)) }
 func (h History) Slots(page int) int { return h.slots(page) }
 
 // MoreOf is the layouts of graph g's histories past the block's own, as
-// its appends state them (Request.More): history h at [h-1], an entry each
-// append's Span positions, its values its keys where the append's are.
+// its appends state them (graph.Graph.KeptHistories, Request.More):
+// history h at [h-1].
 func MoreOf(g *graph.Graph) []History {
 	var more []History
-	for _, o := range g.Ops {
-		if o.Kind != graph.OpKVAppend || len(o.Writes) != 1 || o.Writes[0].Hist == 0 {
-			continue
-		}
-		h := int(o.Writes[0].Hist)
-		for len(more) < h {
+	for _, k := range g.KeptHistories() {
+		for len(more) < k.Hist {
 			more = append(more, History{})
 		}
-		more[h-1] = History{ValuesInKeys: o.In[0] == o.In[1], Period: max(1, o.Attr.Span)}
+		more[k.Hist-1] = History{ValuesInKeys: k.ValuesInKeys, Period: k.Period}
 	}
 	return more
 }

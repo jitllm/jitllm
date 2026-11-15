@@ -55,20 +55,6 @@ func histKey(li, h int) int { return li | h<<histShift }
 
 func keyBlock(key int) int { return key & (1<<histShift - 1) }
 
-// appendsOf is history h past its rows that block graph g appends to: the
-// period and the entry's width, 0 and 0 for none.
-func appendsOf(g *graph.Graph, h int) (period, width int) {
-	if g == nil || h < 1 {
-		return 0, 0
-	}
-	for _, o := range g.Ops {
-		if o.Kind == graph.OpKVAppend && len(o.Writes) == 1 && int(o.Writes[0].Hist) == h && o.Writes[0].From == 0 {
-			return max(1, o.Attr.Span), g.Values[o.In[0]].Width
-		}
-	}
-	return 0, 0
-}
-
 // blockHists is how many histories key li's block keeps in kp: its rows'
 // and each past them its graph appends to, numbered from 0 without a gap.
 func (kp *kvPool) blockHists(li int) int {

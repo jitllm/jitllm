@@ -1,6 +1,10 @@
 package engine
 
-import "github.com/jitllm/jitllm/model"
+import (
+	"fmt"
+
+	"github.com/jitllm/jitllm/model"
+)
 
 // inputsSide says the input rows write each row's side inputs (their graph's
 // output past the residual streams), which the blocks read their slices of.
@@ -22,16 +26,28 @@ func (s *Instance) growPLE() {
 
 // historySources is, for each block below hi, the block whose history it
 // attends to as its graph reads it: its own, or the block its attention
-// names (graph.Graph.ReadsHistoryOf).
-func historySources(m *model.Model, hi int) []int {
+// names (graph.Graph.ReadsHistoryOf). A history past a block's rows' is
+// held keys only, its values its keys: one whose append states values of
+// their own is refused by name.
+func historySources(m *model.Model, hi int) ([]int, error) {
 	src := make([]int, max(hi, 0))
 	for li := range src {
+		g := m.Composing().BlockGraph(li)
+		n, err := g.ReadsHistoryOf()
+		if err != nil {
+			return nil, err
+		}
 		src[li] = li
-		if n := m.Composing().BlockGraph(li).ReadsHistoryOf(); n >= 0 {
+		if n >= 0 {
 			src[li] = n
 		}
+		for _, k := range g.KeptHistories() {
+			if !k.ValuesInKeys {
+				return nil, fmt.Errorf("block %d's history %d appends values of their own: a history past a block's rows' holds its keys only", li, k.Hist)
+			}
+		}
 	}
-	return src
+	return src, nil
 }
 
 // histSrc is the block whose history block li attends to.

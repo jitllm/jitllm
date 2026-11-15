@@ -582,7 +582,9 @@ func newKVCacheRange(c *model.Config, id string, nseq int, l kvLayout, store KVS
 		p := kvPagePositions(c, li, pin)
 		kc.layers[li].p = p
 		kc.layers[li].latent = c.MLA()
-		if p > 0 {
+		// A block reading another's history (kc.src) holds none of its own:
+		// its positions are its source's, and it sizes no page.
+		if p > 0 && kc.src[li] == li {
 			kc.layers[li].pp = l.atLayer(c, li).slots(nseq * p * c.KVRowAt(li))
 			// The window Config.AttnWindow applies, whatever sized the page.
 			if c.SWA(li) && c.SWAWindow > 0 {
