@@ -31,7 +31,27 @@ type mjStates struct {
 	FinalSoftcap string          `json:"final_softcap"`
 	// LogitDiv divides the logits (0 for none).
 	LogitDiv string `json:"logit_div"`
-	exprs    map[string]*jinja.Expr
+	// Latent is latent attention's two ranks, and Indexer the indexer that
+	// selects the positions attention reads.
+	Latent  *mjStatesLatent  `json:"latent"`
+	Indexer *mjStatesIndexer `json:"indexer"`
+	exprs   map[string]*jinja.Expr
+}
+
+// mjStatesLatent is latent attention's ranks: KV the key-value latent's, Q
+// the query latent's (0 where the query is projected in one step), each a
+// count.
+type mjStatesLatent struct {
+	KV string `json:"kv"`
+	Q  string `json:"q"`
+}
+
+// mjStatesIndexer is an indexer of Heads query heads scoring one cached key
+// of KeyWidth per position, the TopK best read, each a count.
+type mjStatesIndexer struct {
+	Heads    string `json:"heads"`
+	KeyWidth string `json:"key_width"`
+	TopK     string `json:"top_k"`
 }
 
 // mjStatesWindow is a sliding window: Size positions (0 for none, and then
@@ -60,6 +80,18 @@ func (mj *modelJSON) checkStates() error {
 				return fmt.Errorf("convert: %s: %s: a window states its size, and a period or a pattern, not both", mj.name, arch)
 			}
 			srcs = append(srcs, w.Size, w.Period, w.Pattern, w.RopeBase)
+		}
+		if l := st.Latent; l != nil {
+			if l.KV == "" || l.Q == "" {
+				return fmt.Errorf("convert: %s: %s: a latent states both ranks, kv and q", mj.name, arch)
+			}
+			srcs = append(srcs, l.KV, l.Q)
+		}
+		if x := st.Indexer; x != nil {
+			if x.Heads == "" || x.KeyWidth == "" || x.TopK == "" {
+				return fmt.Errorf("convert: %s: %s: an indexer states its heads, key_width and top_k", mj.name, arch)
+			}
+			srcs = append(srcs, x.Heads, x.KeyWidth, x.TopK)
 		}
 		for _, k := range slices.Sorted(maps.Keys(st.Flags)) {
 			_, ok := mjFlags()[k]
@@ -201,16 +233,40 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 			return fmt.Errorf("convert: %s: %s: %s is %g", by, arch, s.what, x)
 		}
 	}
-	w := st.Window
-	if w == nil {
-		return nil
-	}
 	whole := func(what, src string) (uint32, error) {
 		x, err := number(what, src)
 		if err == nil && (x < 0 || x != float32(uint32(x))) {
 			err = fmt.Errorf("convert: %s: %s: %s is %g, not a count", by, arch, what, x)
 		}
 		return uint32(x), err
+	}
+	counts := func(set map[string]*uint32, srcs map[string]string) error {
+		for _, what := range slices.Sorted(maps.Keys(set)) {
+			if *set[what], err = whole(what, srcs[what]); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if l := st.Latent; l != nil {
+		if err := counts(map[string]*uint32{"latent.kv": &c.KVLoraRank, "latent.q": &c.QLoraRank},
+			map[string]string{"latent.kv": l.KV, "latent.q": l.Q}); err != nil {
+			return err
+		}
+	}
+	if x := st.Indexer; x != nil {
+		if err := counts(map[string]*uint32{"indexer.heads": &c.IdxHeads, "indexer.key_width": &c.IdxHeadDim,
+			"indexer.top_k": &c.IdxTopK}, map[string]string{"indexer.heads": x.Heads,
+			"indexer.key_width": x.KeyWidth, "indexer.top_k": x.TopK}); err != nil {
+			return err
+		}
+		if err := indexerFits(c); err != nil {
+			return fmt.Errorf("convert: %s: %s: %w", by, arch, err)
+		}
+	}
+	w := st.Window
+	if w == nil {
+		return nil
 	}
 	size, err := whole("window.size", w.Size)
 	if err != nil {
@@ -241,6 +297,22 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 		if c.RopeBaseSWA, err = number("window.rope_base", w.RopeBase); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// indexerFits refuses an indexer missing a count, a key that is not whole
+// groups of eight or does not hold the rotary, and one over latent attention
+// with no query latent to project its query from.
+func indexerFits(c *Config) error {
+	switch {
+	case c.IdxHeads == 0 || c.IdxHeadDim == 0 || c.IdxTopK == 0:
+		return fmt.Errorf("an indexer of %d heads of %d, top %d", c.IdxHeads, c.IdxHeadDim, c.IdxTopK)
+	case c.KVLoraRank != 0 && c.QLoraRank == 0:
+		return fmt.Errorf("an indexer with no query latent (q_lora_rank %d, kv_lora_rank %d)",
+			c.QLoraRank, c.KVLoraRank)
+	case c.IdxHeadDim%8 != 0 || c.NRot > c.IdxHeadDim:
+		return fmt.Errorf("indexer heads of %d with a %d-wide rotary", c.IdxHeadDim, c.NRot)
 	}
 	return nil
 }
