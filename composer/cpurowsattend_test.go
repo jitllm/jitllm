@@ -10,7 +10,7 @@ import (
 	"github.com/jitllm/jitllm/graph"
 )
 
-// TestComposedCPURowsAttend runs a learned table's rows (graph.OpTableRows)
+// TestComposedCPURowsAttend runs a learned table's rows (graph.TableRows)
 // attending over the step's live rows (graph.OpRowsAttend) on the CPU: three
 // query rows, two heads of four, over seven live rows of ten, each output
 // held to the softmax-weighted sum the formula names. Attending all ten rows
@@ -30,8 +30,8 @@ func TestComposedCPURowsAttend(t *testing.T) {
 	}
 	b := graph.NewBlock(-1)
 	in := b.In("x", D)
-	q := b.Emit(graph.OpTableRows, nil, []graph.Result{{Name: "q", Width: D, Rows: Q}},
-		[]graph.Binding{{Role: jlm.RoleVRsQuery, K: D, Rows: Q}}, graph.Attrs{}, nil, nil)[0]
+	q := b.Emit(graph.OpGatherRows, nil, []graph.Result{{Name: "q", Width: D, Rows: Q}},
+		[]graph.Binding{{Role: jlm.RoleVRsQuery, K: D, Rows: Q}}, graph.TableRows(), nil, nil)[0]
 	b.Out(b.Emit(graph.OpRowsAttend, []graph.ValueID{q, in, in}, []graph.Result{{Name: "o", Width: D, Rows: Q}}, nil,
 		graph.Attrs{NHead: H, HeadDim: hd, Scale: scale}, nil, nil)[0])
 	_, codes, err := r.Form(Request{Graph: b.G, Formats: map[jlm.Role]jlm.Type{jlm.RoleVRsQuery: jlm.TypeF32},

@@ -6,7 +6,7 @@ import (
 	"github.com/jitllm/jitllm/graph"
 )
 
-// TestComposedCPUClipMask holds graph.OpClipMask to its definition on the
+// TestComposedCPUClipMask holds graph.ClipRows to its definition on the
 // CPU: a clip of 205 samples every 10 is 20 valid frames, 10, 5 and 3 after
 // one, two and three halvings; a grid 4 wide of 12 grid rows keeps the
 // rows of the grid rows below that length and zeroes the rest, at two
@@ -31,8 +31,8 @@ func clipMaskCase(t *testing.T, x []float32, w int, req []uint32, n, hop, gw, gr
 	for span, keep := range []int{20, 10, 5, 3} {
 		b := graph.NewBlock(-1)
 		in := b.In("x", w)
-		b.Out(b.Emit(graph.OpClipMask, []graph.ValueID{in}, []graph.Result{{Name: "masked", Width: w}}, nil,
-			graph.Attrs{Stride: hop, Span: span, GridW: gw}, nil, nil)[0])
+		b.Out(b.Emit(graph.OpGatherRows, []graph.ValueID{in}, []graph.Result{{Name: "masked", Width: w}}, nil,
+			graph.ClipRows(gw, hop, span), nil, nil)[0])
 		got, err := runCPUBound(hostArm(), slotForm(t, b.G, gw*gr), x, len(x), [3][]uint32{}, nil, func(o Operand) []uint32 {
 			if o.Name == "request" {
 				return req

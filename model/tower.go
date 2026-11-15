@@ -447,7 +447,7 @@ func (m *Model) BuildAudioGraphs() (*TowerGraphs, error) {
 			return nil, fmt.Errorf("model: the audio tower's entry: %w", err)
 		}
 		for i := at; i < len(b.G.Ops); i++ {
-			if b.G.Ops[i].Kind == graph.OpFrames {
+			if b.G.Ops[i].Kind == graph.OpGatherElems && len(b.G.Ops[i].In) == 0 {
 				b.G.Ops[i].In = []graph.ValueID{snd}
 			}
 		}

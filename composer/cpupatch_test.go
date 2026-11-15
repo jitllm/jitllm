@@ -103,8 +103,8 @@ func TestComposedCPULeadRow(t *testing.T) {
 		rows, e := shape[0], shape[1]
 		b := graph.NewBlock(-1)
 		x := b.In("x", e)
-		b.Out(b.Emit(graph.OpLeadRow, []graph.ValueID{x}, []graph.Result{{Name: "class", Width: e}},
-			[]graph.Binding{{Role: jlm.RoleVClassEmbd, K: e}}, graph.Attrs{Offset: 1}, nil, nil)[0])
+		b.Out(b.Emit(graph.OpGatherRows, []graph.ValueID{x}, []graph.Result{{Name: "class", Width: e}},
+			[]graph.Binding{{Role: jlm.RoleVClassEmbd, K: e}}, graph.LeadRows(1), nil, nil)[0])
 		_, codes, err := r.Form(Request{Graph: b.G, Formats: map[jlm.Role]jlm.Type{jlm.RoleVClassEmbd: jlm.TypeF32},
 			Step: Step{Rows: rows, Page: 64, Keys: 1, ActWindow: 32}, Device: dev, Apart: true})
 		if err != nil {
@@ -145,8 +145,8 @@ func TestComposedCPUTailRow(t *testing.T) {
 		rows, e := shape[0], shape[1]
 		b := graph.NewBlock(-1)
 		x := b.In("x", e)
-		b.Out(b.Emit(graph.OpTailRow, []graph.ValueID{x}, []graph.Result{{Name: "class", Width: e}},
-			[]graph.Binding{{Role: jlm.RoleVClassEmbd, K: e}}, graph.Attrs{}, nil, nil)[0])
+		b.Out(b.Emit(graph.OpGatherRows, []graph.ValueID{x}, []graph.Result{{Name: "class", Width: e}},
+			[]graph.Binding{{Role: jlm.RoleVClassEmbd, K: e}}, graph.TailRow(), nil, nil)[0])
 		_, codes, err := r.Form(Request{Graph: b.G, Formats: map[jlm.Role]jlm.Type{jlm.RoleVClassEmbd: jlm.TypeF32},
 			Step: Step{Rows: rows, Page: 64, Keys: 1, ActWindow: 32}, Device: dev, Apart: true})
 		if err != nil {
@@ -209,8 +209,10 @@ func TestComposedCPUPosAxes(t *testing.T) {
 		rows := gh*gw + lead
 		b := graph.NewBlock(-1)
 		b.In("x", e)
-		b.Out(b.Emit(graph.OpPosAxes, nil, []graph.Result{{Name: "pos", Width: e}},
-			[]graph.Binding{{Role: jlm.RoleVPosEmbd, K: e, Rows: 2 * S}}, graph.Attrs{Span: S, Offset: lead}, nil, nil)[0])
+		bind := []graph.Binding{{Role: jlm.RoleVPosEmbd, K: e, Rows: 2 * S}}
+		cols := b.Emit(graph.OpGatherRows, nil, []graph.Result{{Name: "cols", Width: e}}, bind, graph.PosAxis(S, lead, 0), nil, nil)[0]
+		rws := b.Emit(graph.OpGatherRows, nil, []graph.Result{{Name: "rows", Width: e}}, bind, graph.PosAxis(S, lead, 1), nil, nil)[0]
+		b.Out(b.Add(cols, rws))
 		_, codes, err := r.Form(Request{Graph: b.G, Formats: map[jlm.Role]jlm.Type{jlm.RoleVPosEmbd: jlm.TypeF32},
 			Step: Step{Rows: rows, Page: 64, Keys: 1, ActWindow: 32}, Device: dev, Apart: true})
 		if err != nil {
@@ -228,19 +230,27 @@ func TestComposedCPUPosAxes(t *testing.T) {
 			req := make([]uint32, RequestRows+rows)
 			req[RequestGrid] = uint32(width)
 			words := unsafe.Slice((*uint32)(unsafe.Pointer(&tab[0])), len(tab))
-			got, err := runCPUBound(hostArm(), codes, make([]float32, rows*e), rows*e, [3][]uint32{words}, nil, func(o Operand) []uint32 {
-				switch o.Name {
-				case "request":
+			// The column rows are value 1, which the harness binds as its
+			// output; the row rows and their sum, values 2 and 3, are the
+			// test's own buffers.
+			axis, sum := make([]float32, rows*e), make([]float32, rows*e)
+			_, err := runCPUBound(hostArm(), codes, make([]float32, rows*e), rows*e, [3][]uint32{words}, nil, func(o Operand) []uint32 {
+				switch {
+				case o.Name == "request":
 					return req
-				case "rope.pos":
+				case o.Name == "rope.pos":
 					return pos
+				case o.Kind == OperandValue && o.Value == 2:
+					return unsafe.Slice((*uint32)(unsafe.Pointer(&axis[0])), len(axis))
+				case o.Kind == OperandValue && o.Value == 3:
+					return unsafe.Slice((*uint32)(unsafe.Pointer(&sum[0])), len(sum))
 				}
 				return nil
 			})
 			if err != nil {
 				t.Fatalf("%dx%d: %v", gh, gw, err)
 			}
-			return got
+			return sum
 		}
 		got := run(gw)
 		for i := range rows {

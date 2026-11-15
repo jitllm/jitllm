@@ -10,7 +10,7 @@ import (
 )
 
 // TestComposedCPUAppendRow runs five rows six wide with a table's row after
-// them (graph.OpAppendRow) on the CPU: the input's rows as they were, then
+// them (graph.AppendRow) on the CPU: the input's rows as they were, then
 // the table's row 1 exactly. Reading the table's row 0 is the violation.
 func TestComposedCPUAppendRow(t *testing.T) {
 	const R, E, rows, at = 5, 6, 3, 1
@@ -18,8 +18,8 @@ func TestComposedCPUAppendRow(t *testing.T) {
 	dev := Device{Kind: DeviceCPU, Slots: 1, Lanes: 8, ISA: uint64(cpu.Probe().ISA()), ExactDiv: true}
 	b := graph.NewBlock(-1)
 	x := b.In("rows", E)
-	b.Out(b.Emit(graph.OpAppendRow, []graph.ValueID{x}, []graph.Result{{Name: "marked", Width: E, Rows: R + 1}},
-		[]graph.Binding{{Role: jlm.RoleVMNHardEmbd, K: E, Rows: rows}}, graph.Attrs{Offset: at}, nil, nil)[0])
+	b.Out(b.Emit(graph.OpGatherRows, []graph.ValueID{x}, []graph.Result{{Name: "marked", Width: E, Rows: R + 1}},
+		[]graph.Binding{{Role: jlm.RoleVMNHardEmbd, K: E, Rows: rows}}, graph.AppendRow(at), nil, nil)[0])
 	if err := graph.Verify(b.G, graph.Facts{Inventory: map[jlm.Role]graph.Shape{jlm.RoleVMNHardEmbd: {K: E, Rows: rows}}}); err != nil {
 		t.Fatal(err)
 	}

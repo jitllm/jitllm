@@ -7,7 +7,7 @@ import (
 	"github.com/jitllm/jitllm/graph"
 )
 
-// TestComposedCPUFeatureNorm holds graph.OpFeatureNorm to its definition on
+// TestComposedCPUFeatureNorm holds graph.FeatureNorm to its definition on
 // the CPU: nine live rows of twelve, three columns, each column over its
 // first eight rows (Offset one) -- (x - mean) / (std + 1e-5), std over n-1
 // -- and the rows from the eighth on zero. Statistics over every live row
@@ -20,16 +20,20 @@ func TestComposedCPUFeatureNorm(t *testing.T) {
 	}
 	b := graph.NewBlock(-1)
 	in := b.In("x", W)
-	b.Out(b.Emit(graph.OpFeatureNorm, []graph.ValueID{in}, []graph.Result{{Name: "norm", Width: W}}, nil,
-		graph.Attrs{Offset: drop, Eps: eps}, nil, nil)[0])
+	b.G.Values[in].Rows = R
+	b.Out(graph.FeatureNorm(b, "norm", in, drop, eps))
+	if err := graph.Verify(b.G, graph.Facts{}); err != nil {
+		t.Fatal(err)
+	}
 	codes := slotForm(t, b.G, R)
 	pos := make([]uint32, R+1)
 	pos[0] = live
-	got, err := runCPUBound(hostArm(), codes, x, R*W, [3][]uint32{}, nil, func(o Operand) []uint32 {
+	vals, got := valueWords(b.G, R)
+	_, err := runCPUBound(hostArm(), codes, x, R*W, [3][]uint32{}, nil, func(o Operand) []uint32 {
 		if o.Name == "rope.pos" {
 			return pos
 		}
-		return nil
+		return vals(o)
 	})
 	if err != nil {
 		t.Fatal(err)

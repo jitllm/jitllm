@@ -243,17 +243,18 @@ func TestVerifierHoldsASelection(t *testing.T) {
 	}
 }
 
-// TestVerifierHoldsAGridsRows verifies a regroup and a row drop that state
-// their output's rows, over an input of the step's rows and of its own, and
-// refuses one that states none over the step's rows and one whose rows are
-// not its input's arithmetic -- a drop stating none takes its input's.
+// TestVerifierHoldsAGridsRows verifies a regroup and a row drop (a row
+// gather) that state their output's rows, over an input of the step's rows
+// and of its own, and refuses a regroup that states none over the step's rows
+// or whose rows are not its input's arithmetic -- a gather stating none
+// takes its input's.
 func TestVerifierHoldsAGridsRows(t *testing.T) {
 	build := func(inRows, groupRows, dropRows int) error {
 		b := NewBlock(-1)
 		x := b.In("x", 4)
 		b.G.Values[x].Rows = inRows
 		g := b.Emit(OpRegroup, []ValueID{x}, []Result{{Name: "g", Width: 16, Rows: groupRows}}, nil, Attrs{Span: 2}, nil, nil)[0]
-		b.Out(b.Emit(OpDropRows, []ValueID{g}, []Result{{Name: "d", Width: 16, Rows: dropRows}}, nil, Attrs{Offset: 1}, nil, nil)[0])
+		b.Out(b.Emit(OpGatherRows, []ValueID{g}, []Result{{Name: "d", Width: 16, Rows: dropRows}}, nil, DropRows(1), nil, nil)[0])
 		return Verify(b.G, Facts{})
 	}
 	for _, c := range []struct{ in, group, drop int }{{0, 16, 15}, {64, 16, 15}, {0, 9, 8}} {
@@ -264,7 +265,7 @@ func TestVerifierHoldsAGridsRows(t *testing.T) {
 	for _, c := range []struct {
 		in, group, drop int
 		want            string
-	}{{0, 0, 15, "states no rows"}, {0, 16, 0, "writes 16, not 15"}, {64, 15, 14, "writes 15, not 16"}, {64, 16, 16, "writes 16, not 15"}} {
+	}{{0, 0, 15, "states no rows"}, {64, 15, 14, "writes 15, not 16"}} {
 		if err := build(c.in, c.group, c.drop); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%+v: Verify said %v, want an error naming %q", c, err, c.want)
 		}

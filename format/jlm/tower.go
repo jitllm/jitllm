@@ -170,7 +170,7 @@ const (
 	TOpFold OpCode = 12
 	// TOpUntile is In[0]'s rows, the picture's merge windows in the order
 	// of the blocks' windows (TowerBlock.Window), in the merge windows'
-	// raster order (graph.OpUntile).
+	// raster order (a graph.OpGatherRows).
 	TOpUntile OpCode = 13
 	// TOpPosResample is each row's row of the position table Bind[0], a
 	// Span x Span grid, resampled to the picture's patch grid at the row's
@@ -214,7 +214,7 @@ const (
 	TOpWrapRows OpCode = 25
 	// TOpPosAxes is each row's rows of two position tables of Span rows an
 	// axis, back to back in Bind[0]: the first's at the patch's column plus
-	// the second's at its row (graph.OpPosAxes), from row Offset on.
+	// the second's at its row (a graph.OpGatherRows), from row Offset on.
 	TOpPosAxes OpCode = 26
 	// TOpMarkRow is In[0]'s rows -- a piece's merged grid, its width the
 	// patch grid's over Width, or where Width is 0 all of In[0]'s rows --
@@ -230,9 +230,9 @@ const (
 	// x Span grid, at the patch's cell bucketed onto it: of a gh x gw grid,
 	// row floor(Span*y/gh) and column floor(Span*x/gw) -- NaViT's bucketing
 	// of the cell's fractional coordinates, at the rational -- from row
-	// Offset on (graph.OpPosBuckets).
+	// Offset on (a graph.OpGatherRows).
 	TOpPosBuckets OpCode = 29
-	// TOpTableRows is Bind[0]'s rows as a value of their own (graph.OpTableRows).
+	// TOpTableRows is Bind[0]'s rows as a value of their own (a graph.OpGatherRows).
 	TOpTableRows OpCode = 30
 	// TOpRowsAttend is each row of In[0] attending over the live rows of
 	// In[1] (keys) and In[2] (values), every row and both ways, Span heads
@@ -254,13 +254,13 @@ const (
 	// (graph.OpConv).
 	TOpConv OpCode = 33
 	// TOpUpsample is a grid GridW rows wide Span times as large each way,
-	// each row its nearest (graph.OpUpsample).
+	// each row its nearest (a graph.OpGatherRows).
 	TOpUpsample OpCode = 34
 	// TOpAppendRow is In[0]'s rows, then row Offset of Bind[0]
-	// (graph.OpAppendRow): a marker the reference embeds through a table of
+	// (a graph.OpGatherRows): a marker the reference embeds through a table of
 	// the tower's.
 	TOpAppendRow OpCode = 35
-	// TOpFrames is the call's clip as frames (graph.OpFrames): the samples
+	// TOpFrames is the call's clip as frames (graph.OpGatherElems): the samples
 	// the step's picture table holds, as many as the request's picture
 	// width, Width of them a frame every Stride, centred, each less Eps
 	// times the one before it (a preemphasis), zero past the clip. It reads
@@ -268,7 +268,7 @@ const (
 	TOpFrames OpCode = 36
 	// TOpFeatureNorm is each column of In[0] normalised over the step's
 	// first live-Offset rows by their mean and their std over n-1, plus Eps,
-	// the rows after zero (graph.OpFeatureNorm).
+	// the rows after zero (graph.OpMeanRows).
 	TOpFeatureNorm OpCode = 37
 	// TOpSplitRows is each row of In[0] as rows of Width of its elements
 	// (graph.OpSplitRows).
@@ -276,7 +276,7 @@ const (
 	// TOpClipMask is In[0] with the rows of a grid GridW wide (0: one row a
 	// grid row) zero from the clip's valid length on: its samples over
 	// Stride, halved Span times as a stride-two convolution of three taps
-	// padded by one halves it (graph.OpClipMask).
+	// padded by one halves it (a graph.OpGatherRows).
 	TOpClipMask OpCode = 39
 	// TOpRowConv is a centred depthwise convolution of In[0] across the
 	// step's live rows by Bind[0]'s Span taps a channel, channel-major, zero

@@ -10,7 +10,7 @@ import (
 )
 
 // TestComposedCPUPosBuckets reads a 7x7 table, each row its own index,
-// through graph.OpPosBuckets on the CPU at grids smaller, larger and uneven
+// through graph.PosBuckets on the CPU at grids smaller, larger and uneven
 // against it, and holds every row to the bucket NaViT's rational names:
 // table row floor(7*y/gh)*7 + floor(7*x/gw). The cell's own index, unbucketed,
 // is the violation.
@@ -27,8 +27,8 @@ func TestComposedCPUPosBuckets(t *testing.T) {
 		n := gh * gw
 		b := graph.NewBlock(-1)
 		b.In("x", e)
-		b.Out(b.Emit(graph.OpPosBuckets, nil, []graph.Result{{Name: "pos", Width: e}},
-			[]graph.Binding{{Role: jlm.RoleVPosEmbd, K: e, Rows: S * S}}, graph.Attrs{Span: S}, nil, nil)[0])
+		b.Out(b.Emit(graph.OpGatherRows, nil, []graph.Result{{Name: "pos", Width: e}},
+			[]graph.Binding{{Role: jlm.RoleVPosEmbd, K: e, Rows: S * S}}, graph.PosBuckets(S, 0), nil, nil)[0])
 		_, codes, err := r.Form(Request{Graph: b.G, Formats: map[jlm.Role]jlm.Type{jlm.RoleVPosEmbd: jlm.TypeF32},
 			Step: Step{Rows: n, Page: 64, Keys: 1, ActWindow: 32}, Device: dev, Apart: true})
 		if err != nil {

@@ -11,7 +11,7 @@ import (
 )
 
 // TestComposedCPUUpsample runs a 3x4 grid of rows five wide upsampled two
-// times each way (graph.OpUpsample) on the CPU: every output row its nearest
+// times each way (graph.UpsampleRows) on the CPU: every output row its nearest
 // input row's, exactly. The grid read transposed is the violation.
 func TestComposedCPUUpsample(t *testing.T) {
 	const H, W, C, S = 3, 4, 5, 2
@@ -23,8 +23,8 @@ func TestComposedCPUUpsample(t *testing.T) {
 	}
 	b := graph.NewBlock(-1)
 	in := b.In("x", C)
-	b.Out(b.Emit(graph.OpUpsample, []graph.ValueID{in}, []graph.Result{{Name: "up", Width: C, Rows: H * W * S * S}}, nil,
-		graph.Attrs{Span: S, GridW: W}, nil, nil)[0])
+	b.Out(b.Emit(graph.OpGatherRows, []graph.ValueID{in}, []graph.Result{{Name: "up", Width: C, Rows: H * W * S * S}}, nil,
+		graph.UpsampleRows(S, W), nil, nil)[0])
 	_, codes, err := r.Form(Request{Graph: b.G, Step: Step{Rows: H * W, Page: 64, Keys: 1, ActWindow: 32}, Device: dev, Apart: true})
 	if err != nil {
 		t.Fatal(err)
@@ -86,8 +86,8 @@ func TestComposedCPURowsAttendGrouped(t *testing.T) {
 	}
 	b := graph.NewBlock(-1)
 	in := b.In("x", KV)
-	q := b.Emit(graph.OpTableRows, nil, []graph.Result{{Name: "q", Width: D, Rows: Q}},
-		[]graph.Binding{{Role: jlm.RoleVRsQuery, K: D, Rows: Q}}, graph.Attrs{}, nil, nil)[0]
+	q := b.Emit(graph.OpGatherRows, nil, []graph.Result{{Name: "q", Width: D, Rows: Q}},
+		[]graph.Binding{{Role: jlm.RoleVRsQuery, K: D, Rows: Q}}, graph.TableRows(), nil, nil)[0]
 	b.Out(b.Emit(graph.OpRowsAttend, []graph.ValueID{q, in, in}, []graph.Result{{Name: "o", Width: D, Rows: Q}}, nil,
 		graph.Attrs{NHead: H, NKVHead: G, HeadDim: hd, Scale: scale}, nil, nil)[0])
 	_, codes, err := r.Form(Request{Graph: b.G, Formats: map[jlm.Role]jlm.Type{jlm.RoleVRsQuery: jlm.TypeF32},

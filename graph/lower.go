@@ -167,9 +167,12 @@ func LowerValues(b *Builder, t *jlm.Tower, p *jlm.Program, in []ValueID, rows in
 			if s.Rows != int(2*op.Span) {
 				return nil, fmt.Errorf("reads two tables of %d rows from %d rows", op.Span, s.Rows)
 			}
-			out = b.Emit(OpPosAxes, nil, []Result{{Name: "pos", Width: s.K}},
-				[]Binding{{Role: op.Bind[0], K: s.K, Rows: s.Rows}},
-				Attrs{Span: int(op.Span), Offset: int(op.Offset)}, nil, nil)[0]
+			tab := []Binding{{Role: op.Bind[0], K: s.K, Rows: s.Rows}}
+			cols := b.Emit(OpGatherRows, nil, []Result{{Name: name + ".cols", Width: s.K}}, tab,
+				PosAxis(int(op.Span), int(op.Offset), 0), nil, nil)[0]
+			rows := b.Emit(OpGatherRows, nil, []Result{{Name: name + ".rows", Width: s.K}}, tab,
+				PosAxis(int(op.Span), int(op.Offset), 1), nil, nil)[0]
+			out = b.Add(cols, rows)
 		case jlm.TOpAdd:
 			out = b.Add(ins[0], ins[1])
 		case jlm.TOpSub:
@@ -261,11 +264,14 @@ func LowerValues(b *Builder, t *jlm.Tower, p *jlm.Program, in []ValueID, rows in
 			out = b.Emit(OpFold, ins, []Result{{Name: "folded", Width: S * width(ins[0]),
 				Rows: rowsOf(ins[0]) / S}}, nil, Attrs{Span: S}, nil, nil)[0]
 		case jlm.TOpUntile:
-			out = b.Emit(OpUntile, ins, []Result{{Name: "raster", Width: width(ins[0]), Rows: rowsOf(ins[0])}}, nil,
-				Attrs{Width: merge, Window: window}, nil, nil)[0]
+			if window < 1 {
+				return nil, fmt.Errorf("untiles a grid of no windows")
+			}
+			out = b.Emit(OpGatherRows, ins, []Result{{Name: "raster", Width: width(ins[0]), Rows: rowsOf(ins[0])}}, nil,
+				UntileRows(merge, window), nil, nil)[0]
 		case jlm.TOpLeadRow:
-			out = b.Emit(OpLeadRow, ins, []Result{{Name: "class", Width: width(ins[0])}},
-				[]Binding{{Role: op.Bind[0], K: width(ins[0])}}, Attrs{Offset: int(op.Offset)}, nil, nil)[0]
+			out = b.Emit(OpGatherRows, ins, []Result{{Name: "class", Width: width(ins[0])}},
+				[]Binding{{Role: op.Bind[0], K: width(ins[0])}}, LeadRows(int(op.Offset)), nil, nil)[0]
 		case jlm.TOpMarkRow:
 			s, err := shape(op.Bind[0])
 			if err != nil {
@@ -277,10 +283,10 @@ func LowerValues(b *Builder, t *jlm.Tower, p *jlm.Program, in []ValueID, rows in
 			if op.Span < 1 || op.Offset < 0 {
 				return nil, fmt.Errorf("marks rows with runs of %d before and %d after", op.Span, op.Offset)
 			}
-			out = b.Emit(OpMarkRow, ins, []Result{{Name: "marked", Width: width(ins[0]),
+			out = b.Emit(OpGatherRows, ins, []Result{{Name: "marked", Width: width(ins[0]),
 				Rows: rowsOf(ins[0]) + int(op.Span+op.Offset)}},
 				[]Binding{{Role: op.Bind[0], K: s.K, Rows: s.Rows}},
-				Attrs{Width: int(op.Width), Span: int(op.Span), Offset: int(op.Offset)}, nil, nil)[0]
+				MarkRows(int(op.Width), int(op.Span), int(op.Offset), s.Rows), nil, nil)[0]
 		case jlm.TOpPosBuckets:
 			s, err := shape(op.Bind[0])
 			if err != nil {
@@ -289,16 +295,16 @@ func LowerValues(b *Builder, t *jlm.Tower, p *jlm.Program, in []ValueID, rows in
 			if s.Rows != int(op.Span*op.Span) {
 				return nil, fmt.Errorf("buckets onto a table %d a side from %d rows", op.Span, s.Rows)
 			}
-			out = b.Emit(OpPosBuckets, nil, []Result{{Name: "pos", Width: s.K}},
+			out = b.Emit(OpGatherRows, nil, []Result{{Name: "pos", Width: s.K}},
 				[]Binding{{Role: op.Bind[0], K: s.K, Rows: s.Rows}},
-				Attrs{Span: int(op.Span), Offset: int(op.Offset)}, nil, nil)[0]
+				PosBuckets(int(op.Span), int(op.Offset)), nil, nil)[0]
 		case jlm.TOpTableRows:
 			s, err := shape(op.Bind[0])
 			if err != nil {
 				return nil, err
 			}
-			out = b.Emit(OpTableRows, nil, []Result{{Name: "table", Width: s.K, Rows: s.Rows}},
-				[]Binding{{Role: op.Bind[0], K: s.K, Rows: s.Rows}}, Attrs{}, nil, nil)[0]
+			out = b.Emit(OpGatherRows, nil, []Result{{Name: "table", Width: s.K, Rows: s.Rows}},
+				[]Binding{{Role: op.Bind[0], K: s.K, Rows: s.Rows}}, TableRows(), nil, nil)[0]
 		case jlm.TOpRowsAttend:
 			w, h, g := width(ins[0]), int(op.Span), int(op.Width)
 			if g == 0 {
@@ -307,23 +313,27 @@ func LowerValues(b *Builder, t *jlm.Tower, p *jlm.Program, in []ValueID, rows in
 			if w%h != 0 || width(ins[1]) != g*(w/h) || width(ins[2]) != g*(w/h) || len(ins) == 4 && width(ins[3]) != w {
 				return nil, fmt.Errorf("attends rows %d, %d and %d wide in %d heads over %d", w, width(ins[1]), width(ins[2]), h, g)
 			}
-			// The relative form reads its positions' table.
-			var bind []Binding
+			// A relative-position attention's scores add the fourth input's
+			// dots with its positions' table, shifted to each key's offset:
+			// row q's over key j its dots' with the table's row for q-j.
 			if len(ins) == 4 {
 				s, err := shape(op.Bind[0])
 				if err != nil {
 					return nil, err
 				}
-				bind = []Binding{{Role: op.Bind[0], K: s.K, Rows: s.Rows}}
+				keys := rowsOf(ins[1])
+				if g != h || s.K != w || keys < 1 || rowsOf(ins[0]) > keys || s.Rows < 2*keys-1 || s.Rows%2 == 0 {
+					return nil, fmt.Errorf("a relative attention over %d keys by a %dx%d table over %d", keys, s.Rows, s.K, w)
+				}
+				ins[3] = RelativeBias(b, name, ins[3], Binding{Role: op.Bind[0], K: s.K, Rows: s.Rows}, h, keys, rowsOf(ins[0]))
 			}
-			out = b.Emit(OpRowsAttend, ins, []Result{{Name: "attended", Width: w, Rows: rowsOf(ins[0])}}, bind,
+			out = b.Emit(OpRowsAttend, ins, []Result{{Name: "attended", Width: w, Rows: rowsOf(ins[0])}}, nil,
 				Attrs{NHead: h, NKVHead: g, HeadDim: w / h, Scale: 1 / math.Sqrt(float64(w/h))}, nil, nil)[0]
 		case jlm.TOpFrames:
-			out = b.Emit(OpFrames, nil, []Result{{Name: "frames", Width: int(op.Width), Rows: rows}}, nil,
-				Attrs{Width: int(op.Width), Stride: int(op.Stride), Const: float64(op.Eps)}, nil, nil)[0]
+			// The clip's samples are the sound op's the caller wires in.
+			out = Frames(b, nil, int(op.Width), int(op.Stride), rows, float64(op.Eps))
 		case jlm.TOpFeatureNorm:
-			out = b.Emit(OpFeatureNorm, ins, []Result{{Name: name, Width: width(ins[0])}}, nil,
-				Attrs{Offset: int(op.Offset), Eps: float64(op.Eps)}, nil, nil)[0]
+			out = FeatureNorm(b, name, ins[0], int(op.Offset), float64(op.Eps))
 		case jlm.TOpSplitRows:
 			w := int(op.Width)
 			if width(ins[0])%w != 0 {
@@ -332,8 +342,11 @@ func LowerValues(b *Builder, t *jlm.Tower, p *jlm.Program, in []ValueID, rows in
 			out = b.Emit(OpSplitRows, ins, []Result{{Name: name, Width: w, Rows: rowsOf(ins[0]) * (width(ins[0]) / w)}}, nil,
 				Attrs{Width: w}, nil, nil)[0]
 		case jlm.TOpClipMask:
-			out = b.Emit(OpClipMask, ins, []Result{{Name: name, Width: width(ins[0])}}, nil,
-				Attrs{Stride: int(op.Stride), Span: int(op.Span), GridW: int(op.GridW)}, nil, nil)[0]
+			if op.Stride < 1 || op.Span < 0 {
+				return nil, fmt.Errorf("masks a clip every %d samples halved %d times", op.Stride, op.Span)
+			}
+			out = b.Emit(OpGatherRows, ins, []Result{{Name: name, Width: width(ins[0])}}, nil,
+				ClipRows(int(op.GridW), int(op.Stride), int(op.Span)), nil, nil)[0]
 		case jlm.TOpRowConv:
 			s, err := shape(op.Bind[0])
 			if err != nil {
@@ -364,8 +377,11 @@ func LowerValues(b *Builder, t *jlm.Tower, p *jlm.Program, in []ValueID, rows in
 			out = b.Emit(kind, ins, []Result{res}, bind, Attrs{Taps: T, Stride: st, GridW: W, Offset: int(op.Offset)}, nil, nil)[0]
 		case jlm.TOpUpsample:
 			S := int(op.Span)
-			out = b.Emit(OpUpsample, ins, []Result{{Name: name, Width: width(ins[0]), Rows: rowsOf(ins[0]) * S * S}}, nil,
-				Attrs{Span: S, GridW: int(op.GridW)}, nil, nil)[0]
+			if S < 2 || op.GridW < 1 || rowsOf(ins[0])%int(op.GridW) != 0 {
+				return nil, fmt.Errorf("upsamples %d rows %d wide by %d", rowsOf(ins[0]), op.GridW, S)
+			}
+			out = b.Emit(OpGatherRows, ins, []Result{{Name: name, Width: width(ins[0]), Rows: rowsOf(ins[0]) * S * S}}, nil,
+				UpsampleRows(S, int(op.GridW)), nil, nil)[0]
 		case jlm.TOpAppendRow:
 			s, err := shape(op.Bind[0])
 			if err != nil {
@@ -374,22 +390,31 @@ func LowerValues(b *Builder, t *jlm.Tower, p *jlm.Program, in []ValueID, rows in
 			if s.K != width(ins[0]) || int(op.Offset) >= max(s.Rows, 1) {
 				return nil, fmt.Errorf("appends row %d of a %dx%d table to rows %d wide", op.Offset, s.Rows, s.K, width(ins[0]))
 			}
-			out = b.Emit(OpAppendRow, ins, []Result{{Name: name, Width: width(ins[0]), Rows: rowsOf(ins[0]) + 1}},
-				[]Binding{{Role: op.Bind[0], K: s.K, Rows: s.Rows}}, Attrs{Offset: int(op.Offset)}, nil, nil)[0]
+			out = b.Emit(OpGatherRows, ins, []Result{{Name: name, Width: width(ins[0]), Rows: rowsOf(ins[0]) + 1}},
+				[]Binding{{Role: op.Bind[0], K: s.K, Rows: s.Rows}}, AppendRow(int(op.Offset)), nil, nil)[0]
 		case jlm.TOpTailRow:
-			out = b.Emit(OpTailRow, ins, []Result{{Name: "class", Width: width(ins[0])}},
-				[]Binding{{Role: op.Bind[0], K: width(ins[0])}}, Attrs{}, nil, nil)[0]
+			out = b.Emit(OpGatherRows, ins, []Result{{Name: "class", Width: width(ins[0])}},
+				[]Binding{{Role: op.Bind[0], K: width(ins[0])}}, TailRow(), nil, nil)[0]
 		case jlm.TOpRowBreak:
-			out = b.Emit(OpRowBreak, ins, []Result{{Name: "lines", Width: width(ins[0]), Rows: 2 * rowsOf(ins[0])}},
-				[]Binding{{Role: op.Bind[0], K: width(ins[0])}}, Attrs{Span: int(op.Span), Offset: int(op.Offset)}, nil, nil)[0]
+			if op.Span < 1 {
+				return nil, fmt.Errorf("breaks rows of a grid over %d", op.Span)
+			}
+			out = b.Emit(OpGatherRows, ins, []Result{{Name: "lines", Width: width(ins[0]), Rows: 2 * rowsOf(ins[0])}},
+				[]Binding{{Role: op.Bind[0], K: width(ins[0])}}, RowBreakRows(int(op.Span), int(op.Offset)), nil, nil)[0]
 		case jlm.TOpWrapRows:
 			line, _, _ := ProgramFrame(p)
-			out = b.Emit(OpWrapRows, ins, []Result{{Name: "framed", Width: width(ins[0]), Rows: rowsOf(ins[0]) + 2}},
+			if op.Span < 1 {
+				return nil, fmt.Errorf("wraps rows of a grid over %d", op.Span)
+			}
+			out = b.Emit(OpGatherRows, ins, []Result{{Name: "framed", Width: width(ins[0]), Rows: rowsOf(ins[0]) + 2}},
 				[]Binding{{Role: op.Bind[0], K: width(ins[0])}, {Role: op.Bind[1], K: width(ins[0])}},
-				Attrs{Span: int(op.Span), Offset: int(t.Entry.Ops[0].Offset), Width: line}, nil, nil)[0]
+				WrapRows(int(op.Span), line), nil, nil)[0]
 		case jlm.TOpDropRows:
-			out = b.Emit(OpDropRows, ins, []Result{{Name: "rows", Width: width(ins[0]),
-				Rows: rowsOf(ins[0]) - int(op.Offset)}}, nil, Attrs{Offset: int(op.Offset)}, nil, nil)[0]
+			if op.Offset < 1 {
+				return nil, fmt.Errorf("drops %d rows", op.Offset)
+			}
+			out = b.Emit(OpGatherRows, ins, []Result{{Name: "rows", Width: width(ins[0]),
+				Rows: rowsOf(ins[0]) - int(op.Offset)}}, nil, DropRows(int(op.Offset)), nil, nil)[0]
 		case jlm.TOpStated:
 			w := int(op.Width)
 			if w == 0 {
@@ -418,4 +443,58 @@ func ProgramFrame(p *jlm.Program) (line, merge, trim int) {
 		}
 	}
 	return 0, 0, 0
+}
+
+// Frames is rows frames of a clip's samples (in, one value, or none for the
+// caller to wire in), width samples centred every stride, each sample less
+// pre times the one before it (a preemphasis), zero past either end.
+func Frames(b *Builder, in []ValueID, width, stride, rows int, pre float64) ValueID {
+	cur := b.Emit(OpGatherElems, in, []Result{{Name: "frames.cur", Width: width, Rows: rows}}, nil, FrameSamples(width, stride, 0), nil, nil)[0]
+	prev := b.Emit(OpGatherElems, in, []Result{{Name: "frames.prev", Width: width, Rows: rows}}, nil, FrameSamples(width, stride, 1), nil, nil)[0]
+	var x Index
+	x.Sub(Arg{Kind: ArgIn, Index: 0}, x.Mul(Arg{Kind: ArgIn, Index: 1}, Arg{Kind: ArgConst, Const: pre}))
+	return b.Emit(OpExpr, []ValueID{cur, prev}, []Result{{Name: "frames", Width: width, Rows: rows}}, nil, Attrs{Expr: x.Terms}, nil, nil)[0]
+}
+
+// FeatureNorm is each column of x normalised over the step's first live-drop
+// rows (at least one): (x - mean) / (std + eps), the variance over n-1, the
+// rows after zero.
+func FeatureNorm(b *Builder, name string, x ValueID, drop int, eps float64) ValueID {
+	w, rows := b.G.Values[x].Width, b.G.Values[x].Rows
+	in := func(i int) Arg { return Arg{Kind: ArgIn, Index: i} }
+	expr := func(n string, f func(x *Index), vs ...ValueID) ValueID {
+		var e Index
+		f(&e)
+		return b.Emit(OpExpr, vs, []Result{{Name: name + "." + n, Width: w, Rows: rows}}, nil, Attrs{Expr: e.Terms}, nil, nil)[0]
+	}
+	each := func(n string, v ValueID) ValueID {
+		return b.Emit(OpGatherRows, []ValueID{v}, []Result{{Name: name + "." + n, Width: w, Rows: rows}}, nil, FirstRow(), nil, nil)[0]
+	}
+	live := func(n string, v ValueID) ValueID {
+		return b.Emit(OpGatherRows, []ValueID{v}, []Result{{Name: name + "." + n, Width: w, Rows: rows}}, nil, KeepLiveRows(drop), nil, nil)[0]
+	}
+	mean := func(n string, v ValueID, short int) ValueID {
+		a := LiveRows(drop)
+		a.Const = float64(short)
+		return b.Emit(OpMeanRows, []ValueID{v}, []Result{{Name: name + "." + n, Width: w, Rows: 1}}, nil, a, nil, nil)[0]
+	}
+	m := each("means", mean("mean", x, 0))
+	d := expr("dev", func(e *Index) { e.Sub(in(0), in(1)) }, x, m)
+	v := mean("var", expr("sq", func(e *Index) { e.Mul(in(0), in(0)) }, live("live", d)), 1)
+	std := expr("std", func(e *Index) { e.term(MapSqrt, in(0)) }, each("vars", v))
+	return live("norm", expr("normed", func(e *Index) {
+		e.Div(in(0), e.Add(in(1), Arg{Kind: ArgConst, Const: eps}))
+	}, d, std))
+}
+
+// RelativeBias is a relative-position attention's score bias over keys keys
+// for rows rows: x's dots, head by head, with the positions' table t, each
+// row q's over key j its dots with the table's row for the position q-j (row
+// k the position (t.Rows+1)/2-1-k).
+func RelativeBias(b *Builder, name string, x ValueID, t Binding, heads, keys, rows int) ValueID {
+	w := b.G.Values[x].Width
+	dots := b.Emit(OpHeadDots, []ValueID{x}, []Result{{Name: name + ".pos", Width: heads * t.Rows, Rows: b.G.Values[x].Rows}},
+		[]Binding{t}, Attrs{NHead: heads, HeadDim: w / heads}, nil, nil)[0]
+	return b.Emit(OpGatherElems, []ValueID{dots}, []Result{{Name: name + ".bias", Width: heads * keys, Rows: rows}}, nil,
+		RelShift(heads, keys, t.Rows, (t.Rows+1)/2), nil, nil)[0]
 }

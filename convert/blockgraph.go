@@ -911,7 +911,9 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, used []*mjGr
 				return nil, err
 			}
 			bias, _ := blockRole(strings.TrimSuffix(o.Bind[0].W, "?"))
-			y = b.HistoryPool(reads[0], a, bias, int(width))
+			if y, err = historyPool(b, reads[0], a, bias, int(width)); err != nil {
+				return nil, fmt.Errorf("op %d (history_pool): %w", i, err)
+			}
 		case "split_sum":
 			parts, err := num(o.Parts)
 			if err != nil {
@@ -1060,6 +1062,40 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, used []*mjGr
 		return nil, fmt.Errorf("the block stores %v, which its graph does not bind", u)
 	}
 	return b.G, nil
+}
+
+// historyPool pools the history h (rows of a.Width) into width channels over
+// windows of a.Span positions, the segments a.Words states four words each
+// (windows back, then the offsets of its values and gates in a history row
+// and of its biases in a row of the bias table): each channel the sum over
+// every segment's positions of the value weighted by the softmax of gate
+// plus bias, a position before the first or past the row's own no term.
+func historyPool(b *graph.Builder, h graph.StateRef, a graph.Attrs, bias jlm.Role, width int) (graph.ValueID, error) {
+	if len(a.Words) == 0 || len(a.Words)%4 != 0 || a.Span < 1 || width < 1 {
+		return 0, fmt.Errorf("a pool of %d words over windows of %d into %d", len(a.Words), a.Span, width)
+	}
+	span := a.Span
+	bw := 0
+	for i := 0; i < len(a.Words); i += 4 {
+		bw = max(bw, int(a.Words[i+3])+width)
+	}
+	var scores, values []graph.ValueID
+	for i := 0; i < len(a.Words); i += 4 {
+		back, vo, gate, bo := int(a.Words[i]), int(a.Words[i+1]), int(a.Words[i+2]), int(a.Words[i+3])
+		g := b.HistoryRows(h, graph.Attrs{Span: span, Width: a.Width, Offset: gate, Local: back, Const: -math.MaxFloat32}, width)
+		t := b.Emit(graph.OpSlice, nil, []graph.Result{{Name: "pool.bias", Width: span * width}}, []graph.Binding{{Role: bias, K: bw, Rows: span}},
+			graph.Attrs{HeadDim: bw, Offset: bo, Width: width}, nil, nil)[0]
+		scores = append(scores, b.Emit(graph.OpMap, []graph.ValueID{g, t}, []graph.Result{{Name: "pool.score", Width: span * width}}, nil,
+			graph.Attrs{Fn: graph.MapAdd}, nil, nil)[0])
+		values = append(values, b.HistoryRows(h, graph.Attrs{Span: span, Width: a.Width, Offset: vo, Local: back}, width))
+	}
+	n := len(scores) * span
+	sc, v := scores[0], values[0]
+	if len(scores) > 1 {
+		sc = b.Emit(graph.OpConcat, scores, []graph.Result{{Name: "pool.scores", Width: n * width}}, nil, graph.Attrs{}, nil, nil)[0]
+		v = b.Emit(graph.OpConcat, values, []graph.Result{{Name: "pool.values", Width: n * width}}, nil, graph.Attrs{}, nil, nil)[0]
+	}
+	return b.ColumnSoftmaxSum(sc, v, n, width), nil
 }
 
 // emitted is an emit's op on b over in, reading the histories hist: its

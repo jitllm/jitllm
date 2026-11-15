@@ -12,7 +12,7 @@ import (
 	"github.com/jitllm/jitllm/graph"
 )
 
-// TestComposedCPUFramesReadNothingBeforeTheClip: OpFrames over a clip that
+// TestComposedCPUFramesReadNothingBeforeTheClip: graph.Frames over a clip that
 // starts a page whose page before is unreadable reads no sample before the
 // clip's first -- the pre-emphasis of the first sample is zero -- and frames it
 // as TestComposedCPUFrames does. A read of the word before the clip faults
@@ -34,8 +34,12 @@ func TestComposedCPUFramesReadNothingBeforeTheClip(t *testing.T) {
 		clip[i] = float32(math.Sin(0.01*float64(i)) + 0.5)
 	}
 	b := graph.NewBlock(-1)
-	b.Out(b.Emit(graph.OpFrames, nil, []graph.Result{{Name: "frames", Width: N}}, nil,
-		graph.Attrs{Width: N, Stride: hop, Const: pre}, nil, nil)[0])
+	in := b.In("clip", n)
+	b.G.Values[in].Rows = 1
+	b.Out(graph.Frames(b, []graph.ValueID{in}, N, hop, R, pre))
+	if err := graph.Verify(b.G, graph.Facts{}); err != nil {
+		t.Fatal(err)
+	}
 	dev := Device{Kind: DeviceCPU, Slots: 1, Lanes: 8, ISA: uint64(cpu.Probe().ISA()), ExactDiv: true}
 	_, codes, err := Default().WithoutInt8(DeviceCPU).Form(Request{Graph: b.G, Step: Step{Rows: R, Page: 64, Keys: 1, ActWindow: 32},
 		Device: dev, Apart: true})
@@ -46,21 +50,15 @@ func TestComposedCPUFramesReadNothingBeforeTheClip(t *testing.T) {
 	req[RequestPicW] = n
 	pos := make([]uint32, R+1)
 	pos[0] = R
-	got := make([]float32, R*N)
-	_, err = runCPUBound(hostArm(), codes, nil, R*N, [3][]uint32{}, nil, func(o Operand) []uint32 {
-		if o.Kind == OperandValue && o.Value == 0 {
-			return f32Words(got)
-		}
+	vals, got := valueWords(b.G, R)
+	_, err = runCPUBound(hostArm(), codes, clip, R*N, [3][]uint32{}, nil, func(o Operand) []uint32 {
 		switch o.Name {
 		case "request":
 			return req
 		case "rope.pos":
 			return pos
 		}
-		if o.Name == TablePicture.op().Name {
-			return f32Words(clip)
-		}
-		return nil
+		return vals(o)
 	})
 	if err != nil {
 		t.Fatal(err)

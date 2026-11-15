@@ -33,8 +33,8 @@ func TestComposedGPUUpsample(t *testing.T) {
 				name := fmt.Sprintf("%dx%d/%d channels/by %d", h, w, c, s)
 				b := graph.New()
 				x0 := b.In("x", c)
-				b.Out(b.Emit(graph.OpUpsample, []graph.ValueID{x0}, []graph.Result{{Name: "up", Width: c, Rows: h * w * s * s}}, nil,
-					graph.Attrs{Span: s, GridW: w}, nil, nil)[0])
+				b.Out(b.Emit(graph.OpGatherRows, []graph.ValueID{x0}, []graph.Result{{Name: "up", Width: c, Rows: h * w * s * s}}, nil,
+					graph.UpsampleRows(s, w), nil, nil)[0])
 				_, codes, err := r.Form(composer.Request{Graph: b.G, Step: composer.Step{Rows: h * w, Page: 64, Keys: 1}, Device: dev})
 				if err != nil {
 					t.Errorf("%s: %v", name, err)
