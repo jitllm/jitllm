@@ -439,9 +439,12 @@ func (h *Head) WantedRows(n int) int {
 // that last ran it: the model's Stages less what it Applied.
 func (h *Head) Left() HeadStage { return h.Stages &^ h.Applied }
 
-// MaxRopeTables is the most rotary tables a call carries. An array keeps a
-// call's tables in its frame rather than on the heap (RULE 2f); a model
-// stating more rotaries is refused at placement, naming the count.
+// MaxRopeTables is the most rotary tables a call carries, a bound this code
+// chose: an array keeps a call's tables in its frame rather than on the heap
+// (RULE 2f), and the container states two rotaries at most (RopeBase,
+// RopeBaseSWA), so four leave room. A front end stating more is refused when
+// an instance is made (Instance.initTables), naming the count; the bound
+// grows with the array.
 const MaxRopeTables = 4
 
 // RopeTables is a call's rotary tables, the model's i-th rotary's at [i]

@@ -377,9 +377,19 @@ func TestFrontStatesTheQwen35FixturesAttention(t *testing.T) {
 	if !m.Cfg.AttnOutGate || m.Cfg.RopeSections == [4]int{} {
 		t.Fatal("the fixture lost its output gate or its rotary sections: this gate is about both")
 	}
-	var axes []uint8
-	for _, p := range m.Container.Config().RopePairs() {
-		axes = append(axes, uint8(p.Axis))
+	if !m.Container.Config().Flags.Has(jlm.FlagRopeInterleaved) {
+		t.Fatal("the fixture's rotary is not interleaved: this gate is about an interleaved one")
+	}
+	// The pair map transcribed from transformers' apply_interleaved_mrope,
+	// not read off the container's.
+	sec := m.Cfg.RopeSections
+	axes := make([]uint8, m.Cfg.NRot/2)
+	for p := range axes {
+		for ax := 1; ax < 3; ax++ {
+			if p%3 == ax && p < 3*sec[ax] {
+				axes[p] = uint8(ax)
+			}
+		}
 	}
 	rots := m.Composing().Rotaries()
 	if len(axes) == 0 || len(rots) == 0 || !slices.Equal(rots[0].Axes, axes) {

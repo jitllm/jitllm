@@ -1,5 +1,7 @@
 package jlm
 
+import "fmt"
+
 // The container's model description: typed fields, not a key-value bag. The
 // source format's keys are namespaced by architecture, so reading one needs
 // the architecture and another project's vocabulary, and a key nobody wrote
@@ -1076,13 +1078,29 @@ type RopePair struct{ Axis, Freq int }
 // over the elements of cat(freq, freq) (FlagRopeXD: a table of NRot pairs, one
 // an element of a head's rotated half pairs, section i 2*sections[i] of them,
 // element e at frequency e mod NRot/2). A pair's frequency is its index
-// otherwise.
-func (c *Config) RopePairs() []RopePair {
+// otherwise. Contiguous sections that do not cover the NRot/2 pairs, an interleaved
+// fourth section and both layouts at once are refused.
+func (c *Config) RopePairs() ([]RopePair, error) {
 	if c.RopeSections == [4]uint32{} {
-		return nil
+		return nil, nil
 	}
 	half := int(c.NRot) / 2
 	sec := func(i int) int { return int(c.RopeSections[i]) }
+	sum := 0
+	for i := range c.RopeSections {
+		sum += sec(i)
+	}
+	xd, il := c.Flags.Has(FlagRopeXD), c.Flags.Has(FlagRopeInterleaved)
+	switch {
+	case c.NRot == 0 || c.NRot%2 != 0:
+		return nil, fmt.Errorf("jlm: rotary sections %v over a rotary of %d", c.RopeSections, c.NRot)
+	case !il && sum != half:
+		return nil, fmt.Errorf("jlm: rotary sections %v cover %d of %d pairs", c.RopeSections, sum, half)
+	case xd && il:
+		return nil, fmt.Errorf("jlm: rotary sections %v stated interleaved and over the elements at once", c.RopeSections)
+	case il && c.RopeSections[3] != 0:
+		return nil, fmt.Errorf("jlm: interleaved rotary sections %v: a fourth axis is not interleaved", c.RopeSections)
+	}
 	switch {
 	case c.Flags.Has(FlagRopeXD):
 		out := make([]RopePair, 2*half)
@@ -1095,7 +1113,7 @@ func (c *Config) RopePairs() []RopePair {
 				}
 			}
 		}
-		return out
+		return out, nil
 	case c.Flags.Has(FlagRopeInterleaved):
 		out := make([]RopePair, half)
 		for p := range out {
@@ -1107,7 +1125,7 @@ func (c *Config) RopePairs() []RopePair {
 				out[p].Axis = 2
 			}
 		}
-		return out
+		return out, nil
 	}
 	out := make([]RopePair, 0, half)
 	for ax := range c.RopeSections {
@@ -1115,5 +1133,5 @@ func (c *Config) RopePairs() []RopePair {
 			out = append(out, RopePair{Axis: ax, Freq: len(out)})
 		}
 	}
-	return out
+	return out, nil
 }

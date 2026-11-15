@@ -2703,8 +2703,12 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 		return nil, fmt.Errorf("model: a norm bias on an RMSNorm model")
 	}
 	// The table's pairs are the container's: each pair's axis and frequency.
+	pairs, err := c.Config().RopePairs()
+	if err != nil {
+		return nil, fmt.Errorf("model: %w", err)
+	}
 	m.Rope = nn.Rope{NRot: cfg.NRot, Base: cfg.RopeBase, Neox: cfg.RopeNeox,
-		Scale: cfg.AttnFactor, Runs: nn.PairRuns(c.Config().RopePairs())}
+		Scale: cfg.AttnFactor, Runs: nn.PairRuns(pairs)}
 	cfg.RopeXD = c.Config().Flags.Has(jlm.FlagRopeXD)
 	if len(m.Rope.Runs) > 0 {
 		cfg.RopePairs = m.Rope.TablePairs()
