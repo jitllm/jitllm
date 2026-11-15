@@ -202,12 +202,6 @@ const (
 	// output is the Span x Span block of rows at g's place, each Span*Span
 	// slot in raster order a run of the input's width.
 	OpRegroup
-	// OpLeadRow is In[0] with its first Offset rows each Weight[0]'s one row
-	// (a tower's class row).
-	OpLeadRow
-	// OpDropRows is In[0] from row Offset on: output row r is input row
-	// r+Offset.
-	OpDropRows
 	// OpFold is each Span consecutive rows of In[0] as one row.
 	OpFold
 	// OpSplitRows is each row of In[0] as rows of Width of its elements, in
@@ -260,15 +254,6 @@ const (
 	// Out[0] (one a group) is the positions each group keeps. A primitive
 	// over the history, as OpAttend is.
 	OpSelect
-	// OpTailRow is In[0] with its last live row (the step's positions'
-	// first word less one) Weight[0]'s one row: a tower's class row after
-	// its patches.
-	OpTailRow
-	// OpPosAxes is each row's position rows of a table of two axes: of
-	// Weight[0], the row at the cell's column plus the row at Span plus its
-	// row, the cell the row's position less Offset on a grid the request's
-	// first word wide.
-	OpPosAxes
 	// OpNGramHash is each row's n-gram table rows from its window In[0]
 	// (u32, n words: the row's token, then its n-1 predecessors nearest
 	// first, each its id plus one, zero for none). A predecessor that is
@@ -359,14 +344,6 @@ const (
 	// past the output's pixels -- where PicCanvas, past its canvas, the
 	// canvas's cells outside the picture its fill normalised. A primitive.
 	OpPicture
-	// OpUntile is In[0]'s rows -- the cells of a grid in its nested order,
-	// Window x Window windows of cells, each window's cells in raster order
-	// and consecutive, the windows in raster order and those at the grid's
-	// right and lower edges cut to it -- in the cells' raster order: output
-	// row r is the input row of cell r. The grid of cells is the request's
-	// first word over Width wide (a picture's patches over its merge
-	// windows) and its live rows over Width*Width over that tall.
-	OpUntile
 	// OpHistoryPool is, for each row, the window of Span positions holding
 	// its position, read from the history it reads (rows of Width), pooled
 	// per channel of Out[0]: the segments of Words, four words each -- 1
@@ -378,74 +355,17 @@ const (
 	// history's first, or past the row's own, is no term. Only a row
 	// closing its window pools all of it.
 	OpHistoryPool
-	// OpRowBreak is In[0]'s rows -- a grid's raster, its width the step's
-	// patch grid's (the request's) over Span -- with Weight[0]'s one row
-	// after each of the grid's rows, or after each but the last where
-	// Offset is 1: output row r of a grid W wide is input row
-	// (r/(W+1))*W + r%(W+1), or the weight's where r%(W+1) is W. Rows past
-	// the last are not written.
-	OpRowBreak
-	// OpWrapRows is Weight[0]'s one row, In[0]'s rows and Weight[1]'s one
-	// row: the input a grid of the step's patches -- the step's rows less
-	// Offset lead rows, its width the request's -- over Span, each of its
-	// rows Width rows longer (an OpRowBreak's), the second weight's row after
-	// its last.
-	OpWrapRows
-	// OpMarkRow is In[0]'s rows -- a piece's merged grid, its width the
-	// step's patch grid's over Width -- after a run of Weight[0]'s
-	// consecutive rows the request names for the piece (composer.RequestMark,
-	// its first row plus one, 0 for none; RequestMarkN its length, at most
-	// Span) and before the run it names after them (RequestTrail and
-	// RequestTrailN, at most Offset); rows past them are not written.
-	OpMarkRow
-	// OpPosBuckets is each row's row of a Span x Span position table
-	// (Weight[0]) at its cell of the step's grid -- the request's grid,
-	// RequestGrid wide and RequestGridH tall, the cell the row's position
-	// less Offset -- bucketed onto the table: row floor(Span*y/gh), column
-	// floor(Span*x/gw).
-	OpPosBuckets
-	// OpTableRows is Weight[0]'s rows, each a row of Out[0]: a learned
-	// table the reader copies out, read whole (a resampler's queries).
-	OpTableRows
 	// OpRowsAttend is each row of In[0] (the queries) attending over the
 	// step's live rows of In[1] (the keys) and In[2] (the values), every row
 	// and both ways: NHead heads of HeadDim, the scores scaled by Scale, a
 	// softmax over the live rows. The keys and values are NKVHead heads (0:
 	// NHead), each read by NHead/NKVHead consecutive query heads. Out[0] has
 	// In[0]'s rows. Offset, past 0, holds query row q to the keys from the
-	// request's slot Offset to its slot Offset+1 (their row q). With a fourth
-	// operand and a weight it is a relative-position attention
-	// (Transformer-XL's, a FastConformer's): row q's score over key j adds
-	// In[3]'s row q dotted with Weight[0]'s row for the position q-j -- its
-	// row k the position (rows+1)/2-1-k, the projected positions stated at
-	// conversion.
+	// request's slot Offset to its slot Offset+1 (their row q). A fourth
+	// operand, a row of NHead runs of the keys' rows a query row, is added to
+	// the scores before they are scaled: element h*keys+j to head h's score
+	// over key j (a score bias).
 	OpRowsAttend
-	// OpUpsample is In[0], a grid of rows GridW wide, Span times as large
-	// each way: row (y, x) of Out[0] is In[0]'s row (y/Span, x/Span), the
-	// nearest.
-	OpUpsample
-	// OpAppendRow is In[0]'s rows, then row Offset of Weight[0]: a marker
-	// after a picture's rows that the reference embeds through a table.
-	OpAppendRow
-	// OpFrames is the step's sound as frames: In[0]'s samples where it has
-	// one (a sound op's), the step's picture table holding a clip's samples
-	// as f32 words where not, as many as the request's
-	// picture width (composer.RequestPicW); row t of Out[0] is the Width
-	// samples from t*Stride - Width/2 (a centred frame), each sample
-	// y[k] = x[k] - Const*x[k-1] (a preemphasis, x[-1] zero), zero past the
-	// clip.
-	OpFrames
-	// OpFeatureNorm is each column of In[0] normalised over the step's
-	// first live-Offset rows: (x - mean) / (std + Eps), std over n-1, a
-	// row from live-Offset on zero (a clip's features over its valid
-	// frames, NeMo's normalize_batch per_feature).
-	OpFeatureNorm
-	// OpClipMask is In[0] with the rows past a clip's valid length zero: the
-	// rows a grid GridW wide (GridW 0: one row a grid row), a grid row kept
-	// below L, L the request's sample count (composer.RequestPicW) over
-	// Stride halved Span times as a stride-two convolution of three taps
-	// padded by one halves it (L = (L-1)/2+1).
-	OpClipMask
 	// OpSpanPool is each row r of Out[0] the mean of In[0]'s rows from the
 	// request's slot Offset to its slot Offset+1 (their row r), zero for an
 	// empty span: a question's or an option's span of a prompt.
@@ -471,6 +391,27 @@ const (
 	// the rows' W elements), each element as ggml's dequantizer reads it.
 	// A primitive.
 	OpWidenBlockRows
+	// OpGatherRows is each row of Out[0] a row of its sources -- In[0]'s rows
+	// where it has one, then each of Weight's rows, end to end -- the one an
+	// integer expression of the row names (Expr, its last term; Index builds
+	// one, over the operands GatherRow to GatherTrailN), zero for one past
+	// them all. Where Span is set, term Span-1 is the last row written: a row
+	// past it is that row, recomputed and written again, and no row after
+	// it is touched. A primitive.
+	OpGatherRows
+	// OpGatherElems is each element of Out[0] an element of In[0], its rows
+	// read end to end, the one an integer expression of the element names
+	// (Expr, its last term, over the operands GatherRow to GatherCol), zero
+	// for one past them. A primitive.
+	OpGatherElems
+	// OpMeanRows is Out[0], one row, each element the sum of its column over
+	// In[0]'s first n rows, over max(n - Const, 1): n an integer expression
+	// (Expr, its last term, over GatherLive to GatherSamples). A primitive.
+	OpMeanRows
+	// OpHeadDots is each row of Out[0] In[0]'s row dotted, head by head, with
+	// each row of Weight[0]: element h*Rows+t the dot of head h of the row
+	// (NHead heads of HeadDim) with head h of the table's row t. A primitive.
+	OpHeadDots
 	numOps
 )
 
@@ -528,18 +469,12 @@ func (k OpKind) String() string {
 		return "state_conv"
 	case OpPool:
 		return "pool"
-	case OpFrames:
-		return "frames"
 	case OpSound:
 		return "sound"
 	case OpBlockRows:
 		return "block_rows"
 	case OpWidenBlockRows:
 		return "widen_block_rows"
-	case OpFeatureNorm:
-		return "feature_norm"
-	case OpClipMask:
-		return "clip_mask"
 	case OpSpanPool:
 		return "span_pool"
 	case OpTakeRows:
@@ -548,18 +483,12 @@ func (k OpKind) String() string {
 		return "row_conv"
 	case OpPicture:
 		return "picture"
-	case OpUntile:
-		return "untile"
 	case OpHistoryPool:
 		return "history_pool"
 	case OpPatchify:
 		return "patchify"
 	case OpRegroup:
 		return "regroup"
-	case OpLeadRow:
-		return "lead_row"
-	case OpDropRows:
-		return "drop_rows"
 	case OpFold:
 		return "fold"
 	case OpSplitRows:
@@ -574,30 +503,20 @@ func (k OpKind) String() string {
 		return "position"
 	case OpSelect:
 		return "select"
-	case OpTailRow:
-		return "tail_row"
-	case OpRowBreak:
-		return "row_break"
-	case OpWrapRows:
-		return "wrap_rows"
-	case OpMarkRow:
-		return "mark_row"
-	case OpPosBuckets:
-		return "pos_buckets"
-	case OpTableRows:
-		return "table_rows"
-	case OpUpsample:
-		return "upsample"
-	case OpAppendRow:
-		return "append_row"
 	case OpRowsAttend:
 		return "rows_attend"
-	case OpPosAxes:
-		return "pos_axes"
 	case OpNGramHash:
 		return "ngram_hash"
 	case OpUnfold:
 		return "unfold"
+	case OpGatherRows:
+		return "gather_rows"
+	case OpGatherElems:
+		return "gather_elems"
+	case OpMeanRows:
+		return "mean_rows"
+	case OpHeadDots:
+		return "head_dots"
 	case OpUniform:
 		return "uniform"
 	case OpPut:
@@ -944,7 +863,8 @@ type Attrs struct {
 	// keys within Window/2 of it either side.
 	Bidir   bool
 	Softcap float64
-	// Expr is OpExpr's terms.
+	// Expr is OpExpr's terms, and OpGatherRows', OpGatherElems' and
+	// OpMeanRows' integer expression.
 	Expr []Term
 	// Experts and TopK are a bank's experts and how many pairs a selection
 	// holds (OpExpertMatVec, OpTopK).
@@ -988,7 +908,7 @@ type Attrs struct {
 	// Bound is OpClamp's.
 	Bound float64
 	// Offset and Width are OpSlice's; Offset is the leading rows of
-	// OpPatchify, OpLeadRow and OpDropRows too, and both are the window of
+	// OpPatchify too, and both are the window of
 	// OpMap's bound vector. Width is an OpAttend's history row where it is
 	// wider than the heads it reads (its first), and OpSelect's, Offset
 	// where OpSelect's key starts in it, and OpRope's where each head's turned
@@ -1020,7 +940,8 @@ type Attrs struct {
 	// Fn, Order, Span and Const are the primitives' (OpMap, OpReduce,
 	// OpTopK, OpRank, OpTile): the function, the order a reduction runs in, the
 	// group a reduction, top-k or rank runs over (0: the row), a constant
-	// operand.
+	// operand. Span is OpGatherRows' bound too, Const the count OpMeanRows'
+	// divisor is short of its rows.
 	Fn    MapFn
 	Order Order
 	Span  int

@@ -8,7 +8,7 @@ import (
 	"github.com/jitllm/jitllm/graph"
 )
 
-// TestComposedCPUFrames holds graph.OpFrames to its definition on the CPU:
+// TestComposedCPUFrames holds graph.Frames to its definition on the CPU:
 // a clip of 50 samples framed 16 wide every 5 (eleven centred frames), each
 // sample less 0.97 of the one before, zero past either end -- the first
 // frames reach before the clip and the last past it. Framing without the
@@ -21,8 +21,12 @@ func TestComposedCPUFrames(t *testing.T) {
 		clip[i] = float32(math.Sin(0.3*float64(i)) + 0.1*float64(i%7))
 	}
 	b := graph.NewBlock(-1)
-	b.Out(b.Emit(graph.OpFrames, nil, []graph.Result{{Name: "frames", Width: N}}, nil,
-		graph.Attrs{Width: N, Stride: hop, Const: pre}, nil, nil)[0])
+	in := b.In("clip", n)
+	b.G.Values[in].Rows = 1
+	b.Out(graph.Frames(b, []graph.ValueID{in}, N, hop, R, pre))
+	if err := graph.Verify(b.G, graph.Facts{}); err != nil {
+		t.Fatal(err)
+	}
 	r := Default().WithoutInt8(DeviceCPU)
 	dev := Device{Kind: DeviceCPU, Slots: 1, Lanes: 8, ISA: uint64(cpu.Probe().ISA()), ExactDiv: true}
 	_, codes, err := r.Form(Request{Graph: b.G, Step: Step{Rows: R, Page: 64, Keys: 1, ActWindow: 32}, Device: dev, Apart: true})
@@ -33,23 +37,17 @@ func TestComposedCPUFrames(t *testing.T) {
 	req[RequestPicW] = n
 	pos := make([]uint32, R+1)
 	pos[0] = R
-	// The frames are value 0, which the harness binds as its input: they are
-	// read from a buffer of the test's own.
-	got := make([]float32, R*N)
-	_, err = runCPUBound(hostArm(), codes, nil, R*N, [3][]uint32{}, nil, func(o Operand) []uint32 {
-		if o.Kind == OperandValue && o.Value == 0 {
-			return f32Words(got)
-		}
+	// The clip is value 0, which the harness binds as its input; the frames
+	// and the samples they read are buffers of the test's own.
+	vals, got := valueWords(b.G, R)
+	_, err = runCPUBound(hostArm(), codes, clip, R*N, [3][]uint32{}, nil, func(o Operand) []uint32 {
 		switch o.Name {
 		case "request":
 			return req
 		case "rope.pos":
 			return pos
 		}
-		if o.Name == TablePicture.op().Name {
-			return f32Words(clip)
-		}
-		return nil
+		return vals(o)
 	})
 	if err != nil {
 		t.Fatal(err)

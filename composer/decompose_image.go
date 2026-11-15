@@ -64,7 +64,7 @@ const (
 	// horizontal accumulator, any other adds into it.
 	RequestPicCol
 	// RequestMark is a square's marker row in the head's table plus one, 0
-	// for a square with none (graph.OpMarkRow), and RequestTrail the one
+	// for a square with none (graph.GatherMark), and RequestTrail the one
 	// after its rows.
 	RequestMark
 	RequestTrail
@@ -605,40 +605,6 @@ func decomposePatchify(o graph.Op, c *Context) ([]Prim, error) {
 		Facts: Facts{Extents: map[int]int{1: RequestRows + R, 2: R + 1}}}}, nil
 }
 
-// decomposeUntile is each output row the input row of the cell at its
-// raster index, of the grid of cells the request's patch grid over Width
-// is, taken from the input's nested order (tileIndex).
-func decomposeUntile(o graph.Op, c *Context) ([]Prim, error) {
-	if len(o.In) != 1 || len(o.Out) != 1 || c.width(o.In[0]) != c.width(o.Out[0]) || o.Attr.Window < 1 {
-		return nil, fmt.Errorf("an untile of %d operands over windows of %d", len(o.In), o.Attr.Window)
-	}
-	U := ir.U32
-	sh, ish := c.rows(o.Out[0]), c.rows(o.In[0])
-	m := max(o.Attr.Width, 1)
-	var x exprs
-	r := x.coord(0)
-	u := func(v int) int { return x.u(uint32(v)) }
-	gw := x.op(OpMax, U, x.op(OpDiv, U, x.load(1, x.u(RequestGrid)), u(m)), u(1))
-	gh := x.op(OpMax, U, x.op(OpDiv, U, x.op(OpDiv, U, x.load(2, x.u(0)), u(m*m)), gw), u(1))
-	at := tileIndex(&x, x.op(OpDiv, U, r, gw), x.op(OpRem, U, r, gw), gw, gh, o.Attr.Window)
-	x.at(0, ish, x.op(OpMin, U, at, u(ish[0]-1)), x.coord(1))
-	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0]), TableRequest.op(), TablePos.op()}, Out: c.value(o.Out[0]), Expr: x.e,
-		Facts: Facts{Extents: map[int]int{1: RequestRows + sh[0], 2: c.Step.Rows + 1}}}}, nil
-}
-
-// tileIndex is the index of cell (cy, cx) of a grid gw cells wide and gh tall
-// in its nested order of win x win windows: tileCell's inverse at one level.
-func tileIndex(x *exprs, cy, cx, gw, gh, win int) int {
-	U := ir.U32
-	u := func(v int) int { return x.u(uint32(v)) }
-	wy, wx := x.op(OpDiv, U, cy, u(win)), x.op(OpDiv, U, cx, u(win))
-	top, left := x.op(OpMul, U, wy, u(win)), x.op(OpMul, U, wx, u(win))
-	wh := x.op(OpMax, U, x.op(OpMin, U, u(win), x.op(OpSub, U, x.op(OpMax, U, gh, top), top)), u(1))
-	ww := x.op(OpMax, U, x.op(OpMin, U, u(win), x.op(OpSub, U, x.op(OpMax, U, gw, left), left)), u(1))
-	at := x.op(OpAdd, U, x.op(OpMul, U, top, gw), x.op(OpMul, U, left, wh))
-	return x.op(OpAdd, U, at, x.op(OpAdd, U, x.op(OpMul, U, x.op(OpSub, U, cy, top), ww), x.op(OpSub, U, cx, left)))
-}
-
 // tileCell is the row and column of the patch at index r of a grid gw
 // patches wide and gh tall in nested order (graph.OpPatchify): merge x merge
 // merge windows of patches (merge 0 or 1: none), the patches of one in
@@ -737,53 +703,6 @@ func decomposeRegroup(o graph.Op, c *Context) ([]Prim, error) {
 	}
 	return []Prim{{Kind: PrimMap, Shape: sh, In: in, Out: c.value(o.Out[0]), Expr: x.e,
 		Facts: Facts{Extents: map[int]int{1: RequestRows + sh[0]}}}}, nil
-}
-
-// decomposeLeadRow is the input with its first Offset rows each the
-// weight's row.
-func decomposeLeadRow(o graph.Op, c *Context) ([]Prim, error) {
-	if len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) != 1 || o.Attr.Offset < 1 || o.Weight[0].K != c.width(o.In[0]) {
-		return nil, fmt.Errorf("a lead row of %d operands, %d weights", len(o.In), len(o.Weight))
-	}
-	sh := c.rows(o.Out[0])
-	w := o.Weight[0]
-	var x exprs
-	r, i := x.coord(0), x.coord(1)
-	in, lead := x.at(0, sh, r, i), x.at(1, []int{sh[1]}, i)
-	x.sel(ir.F32, rowBefore(&x, r, o.Attr.Offset), lead, in)
-	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0]), {Kind: OperandVector, Role: w.Role, Name: w.Role.String()}},
-		Out: c.value(o.Out[0]), Expr: x.e}}, nil
-}
-
-// decomposeTailRow is the input with its last live row the weight's row:
-// row r takes it where r+1 is not below the step's live rows.
-func decomposeTailRow(o graph.Op, c *Context) ([]Prim, error) {
-	if len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) != 1 || o.Weight[0].K != c.width(o.In[0]) {
-		return nil, fmt.Errorf("a tail row of %d operands, %d weights", len(o.In), len(o.Weight))
-	}
-	U := ir.U32
-	sh := c.rows(o.Out[0])
-	w := o.Weight[0]
-	var x exprs
-	r, i := x.coord(0), x.coord(1)
-	in, tail := x.at(0, sh, r, i), x.at(1, []int{sh[1]}, i)
-	live := x.load(2, x.u(0))
-	x.sel(ir.F32, x.op(OpLess, ir.Pred, x.op(OpAdd, U, r, x.u(1)), live), in, tail)
-	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0]), {Kind: OperandVector, Role: w.Role, Name: w.Role.String()}, TablePos.op()},
-		Out: c.value(o.Out[0]), Expr: x.e, Facts: Facts{Extents: map[int]int{2: sh[0] + 1}}}}, nil
-}
-
-// decomposeDropRows is the input from row Offset on.
-func decomposeDropRows(o graph.Op, c *Context) ([]Prim, error) {
-	if len(o.In) != 1 || len(o.Out) != 1 || o.Attr.Offset < 1 || c.width(o.In[0]) != c.width(o.Out[0]) {
-		return nil, fmt.Errorf("a row drop of %d operands", len(o.In))
-	}
-	U := ir.U32
-	sh, ish := c.rows(o.Out[0]), c.rows(o.In[0])
-	var x exprs
-	at := x.op(OpMin, U, x.op(OpAdd, U, x.coord(0), x.u(uint32(o.Attr.Offset))), x.u(uint32(ish[0]-1)))
-	x.at(0, ish, at, x.coord(1))
-	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0])}, Out: c.value(o.Out[0]), Expr: x.e}}, nil
 }
 
 // decomposePosResample is each row's position-table row resampled to the
@@ -995,41 +914,6 @@ func decomposePosAntialias(o graph.Op, c *Context, wo Operand) ([]Prim, error) {
 		Combine: OpAdd, Expr: x.e, Facts: facts}), nil
 }
 
-// decomposePosAxes is each row's position rows of a table of two axes: the
-// row at the cell's column plus the row at Span plus the cell's row.
-func decomposePosAxes(o graph.Op, c *Context) ([]Prim, error) {
-	a := o.Attr
-	if len(o.In) != 0 || len(o.Out) != 1 || len(o.Weight) != 1 || a.Span < 1 || o.Weight[0].Rows != 2*a.Span {
-		return nil, fmt.Errorf("a two-axis position table of %d weights over %d rows an axis", len(o.Weight), a.Span)
-	}
-	wo, err := c.weight(o.Weight[0])
-	if err != nil {
-		return nil, err
-	}
-	U := ir.U32
-	sh := c.rows(o.Out[0])
-	R, E, A := sh[0], sh[1], uint32(a.Span)
-	var x exprs
-	r, e := x.coord(0), x.coord(1)
-	in := []Operand{TablePos.op(), TableRequest.op()}
-	facts := Facts{Extents: map[int]int{0: R + 1, 1: RequestRows + R}}
-	lead := uint32(a.Offset)
-	gw := x.op(OpMax, U, x.load(1, x.u(RequestGrid)), x.u(1))
-	q := x.op(OpSub, U, x.op(OpMax, U, x.load(0, x.op(OpAdd, U, r, x.u(1))), x.u(lead)), x.u(lead))
-	col := x.op(OpMin, U, x.op(OpRem, U, q, gw), x.u(A-1))
-	row := x.op(OpAdd, U, x.op(OpMin, U, x.op(OpDiv, U, q, gw), x.u(A-1)), x.u(A))
-	cv, err := weightElement(&x, wo, 2*a.Span, E, &in, &facts, col, e)
-	if err != nil {
-		return nil, fmt.Errorf("a position table of %s: %w", wo.Format, err)
-	}
-	rv, err := weightElement(&x, wo, 2*a.Span, E, &in, &facts, row, e)
-	if err != nil {
-		return nil, fmt.Errorf("a position table of %s: %w", wo.Format, err)
-	}
-	x.op(OpAdd, ir.F32, cv, rv)
-	return []Prim{{Kind: PrimMap, Shape: sh, In: in, Out: c.value(o.Out[0]), Expr: x.e, Facts: facts}}, nil
-}
-
 // SpliceNone is a step row's request word naming no picture row.
 const SpliceNone = ^uint32(0)
 
@@ -1053,150 +937,6 @@ func decomposeSplice(o graph.Op, c *Context) ([]Prim, error) {
 	x.sel(F, none, x.at(0, sh, r, e), pic)
 	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0]), c.value(o.In[1]), TableRequest.op()}, Out: c.value(o.Out[0]),
 		Expr: x.e, Facts: Facts{Extents: map[int]int{1: P * Wp, 2: RequestRows + R}}}}, nil
-}
-
-// decomposeRowBreak is the input's rows, a grid W wide (the request's
-// patch grid over Span), with the weight's row after each of the grid's
-// rows: output row r is input row (r/(W+1))*W + r%(W+1), or the weight's
-// where r%(W+1) is W.
-func decomposeRowBreak(o graph.Op, c *Context) ([]Prim, error) {
-	S := o.Attr.Span
-	if len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) != 1 || S < 1 || o.Weight[0].K != c.width(o.In[0]) ||
-		c.width(o.Out[0]) != c.width(o.In[0]) {
-		return nil, fmt.Errorf("a row break of %d operands, %d weights, by %d", len(o.In), len(o.Weight), S)
-	}
-	U := ir.U32
-	sh, ish := c.rows(o.Out[0]), c.rows(o.In[0])
-	w := o.Weight[0]
-	var x exprs
-	r, i := x.coord(0), x.coord(1)
-	u := func(v int) int { return x.u(uint32(v)) }
-	W := x.op(OpDiv, U, x.op(OpMax, U, x.load(2, u(RequestGrid)), u(S)), u(S))
-	H := x.op(OpDiv, U, x.op(OpMax, U, x.load(2, u(RequestGridH)), u(S)), u(S))
-	line := x.op(OpAdd, U, W, u(1))
-	// A row past the frame's last is clamped to it, recomputing it: the
-	// break may be the head's last op, and no row past the picture's is
-	// written.
-	last := x.op(OpSub, U, x.op(OpMul, U, H, line), u(1+o.Attr.Offset))
-	rr := x.op(OpMin, U, r, x.op(OpMin, U, last, u(sh[0]-1)))
-	k := x.op(OpRem, U, rr, line)
-	src := x.op(OpAdd, U, x.op(OpMul, U, x.op(OpDiv, U, rr, line), W), k)
-	in := x.at(0, ish, x.op(OpMin, U, src, u(ish[0]-1)), i)
-	nl := x.at(1, []int{sh[1]}, i)
-	v := x.sel(ir.F32, x.op(OpLess, ir.Pred, k, W), in, nl)
-	out := c.value(o.Out[0])
-	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0]), {Kind: OperandVector, Role: w.Role, Name: w.Role.String()},
-		TableRequest.op()}, Out: out, Expr: x.e, Facts: Facts{Extents: map[int]int{2: RequestRows + sh[0]}},
-		Stores: []PrimStore{{Out: out, Ax: []int{rr, i}, Ext: sh, Value: v}}}}, nil
-}
-
-// decomposeWrapRows is the first weight's row, the input's rows and the
-// second weight's row: the input a grid of the step's patches (its rows
-// less Offset lead rows, the request's width) over Span, each of its rows
-// Width rows longer, so its rows are H*(W+Width) and the second weight's
-// row output row H*(W+Width)+1.
-func decomposeWrapRows(o graph.Op, c *Context) ([]Prim, error) {
-	a := o.Attr
-	S := a.Span
-	if len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) != 2 || S < 1 || a.Width < 0 ||
-		o.Weight[0].K != c.width(o.In[0]) || o.Weight[1].K != c.width(o.In[0]) || c.width(o.Out[0]) != c.width(o.In[0]) {
-		return nil, fmt.Errorf("a row wrap of %d operands, %d weights, by %d", len(o.In), len(o.Weight), S)
-	}
-	U := ir.U32
-	sh, ish := c.rows(o.Out[0]), c.rows(o.In[0])
-	var x exprs
-	r, i := x.coord(0), x.coord(1)
-	u := func(v int) int { return x.u(uint32(v)) }
-	// The framed rows: H rows of W windows and Width more, H and W the
-	// grid's height and width over S, then the end row.
-	framed := func(x *exprs) int {
-		u := func(v int) int { return x.u(uint32(v)) }
-		gw := x.op(OpMax, U, x.load(3, u(RequestGrid)), u(S))
-		gh := x.op(OpMax, U, x.load(3, u(RequestGridH)), u(S))
-		w := x.op(OpAdd, U, x.op(OpDiv, U, gw, u(S)), u(a.Width))
-		return x.op(OpAdd, U, x.op(OpMul, U, x.op(OpDiv, U, gh, u(S)), w), u(1))
-	}
-	// A row past the end row is clamped to it, recomputing it: no row
-	// past the picture's is written (the rows after it are the prompt's).
-	end := framed(&x)
-	rr := x.op(OpMin, U, r, x.op(OpMin, U, end, u(sh[0]-1)))
-	src := x.op(OpMin, U, x.op(OpSub, U, x.op(OpMax, U, rr, u(1)), u(1)), u(ish[0]-1))
-	in := x.at(0, ish, src, i)
-	bv, ev := x.at(1, []int{sh[1]}, i), x.at(2, []int{sh[1]}, i)
-	v := x.sel(ir.F32, x.op(OpLess, ir.Pred, rr, u(1)), bv, x.sel(ir.F32, x.op(OpLess, ir.Pred, rr, end), in, ev))
-	vec := func(w graph.Binding) Operand {
-		return Operand{Kind: OperandVector, Role: w.Role, Name: w.Role.String()}
-	}
-	out := c.value(o.Out[0])
-	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0]), vec(o.Weight[0]), vec(o.Weight[1]),
-		TableRequest.op()}, Out: out, Expr: x.e,
-		Facts:  Facts{Extents: map[int]int{3: RequestRows + sh[0]}},
-		Stores: []PrimStore{{Out: out, Ax: []int{rr, i}, Ext: sh, Value: v}}}}, nil
-}
-
-// decomposeMarkRow is the input's rows -- a square's merged grid, the
-// request's grid over Width, or where Width is 0 all of them -- after the run of the weight's rows the
-// request names (RequestMark, its first row plus one, none where it is 0;
-// RequestMarkN long, at most Span) and before the run it names after them
-// (RequestTrail and RequestTrailN, at most Offset). A row past the square's
-// last is clamped to it, recomputing it: no row past the square's is
-// written, the next square's or the prompt's.
-func decomposeMarkRow(o graph.Op, c *Context) ([]Prim, error) {
-	a := o.Attr
-	S := a.Width
-	if len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) != 1 || S < 0 || o.Weight[0].Rows < 1 || a.Span < 1 || a.Offset < 0 ||
-		o.Weight[0].K != c.width(o.In[0]) || c.width(o.Out[0]) != c.width(o.In[0]) {
-		return nil, fmt.Errorf("a marker row of %d operands, %d weights, by %d", len(o.In), len(o.Weight), S)
-	}
-	wo, err := c.weight(o.Weight[0])
-	if err != nil {
-		return nil, err
-	}
-	U := ir.U32
-	sh, ish := c.rows(o.Out[0]), c.rows(o.In[0])
-	T := o.Weight[0].Rows
-	var x exprs
-	r, i := x.coord(0), x.coord(1)
-	u := func(v int) int { return x.u(uint32(v)) }
-	// body is the rows between the runs: the merged grid's, or where Width
-	// is 0 every row of the input's.
-	body := u(ish[0])
-	if S > 0 {
-		W := x.op(OpDiv, U, x.op(OpMax, U, x.load(1, u(RequestGrid)), u(S)), u(S))
-		H := x.op(OpDiv, U, x.op(OpMax, U, x.load(1, u(RequestGridH)), u(S)), u(S))
-		body = x.op(OpMul, U, H, W)
-	}
-	// run is a mark's first row and length: none where its word is 0, the
-	// length at most the op's.
-	run := func(at, n, most int) (first, length int) {
-		m := x.load(1, u(at))
-		first = x.op(OpSub, U, x.op(OpMax, U, m, u(1)), u(1))
-		length = x.op(OpMin, U, x.op(OpMul, U, x.op(OpMin, U, m, u(1)), x.load(1, u(n))), u(most))
-		return first, length
-	}
-	mark, lead := run(RequestMark, RequestMarkN, a.Span)
-	trail, tail := u(0), u(0)
-	if a.Offset > 0 {
-		trail, tail = run(RequestTrail, RequestTrailN, a.Offset)
-	}
-	end := x.op(OpAdd, U, body, lead)
-	last := x.op(OpSub, U, x.op(OpAdd, U, end, tail), u(1))
-	rr := x.op(OpMin, U, r, x.op(OpMin, U, last, u(sh[0]-1)))
-	src := x.op(OpMin, U, x.op(OpSub, U, x.op(OpMax, U, rr, lead), lead), u(ish[0]-1))
-	in := []Operand{c.value(o.In[0]), TableRequest.op()}
-	facts := Facts{Extents: map[int]int{1: RequestRows + sh[0]}}
-	before := x.op(OpLess, ir.Pred, rr, lead)
-	after := x.op(OpLess, ir.Pred, x.op(OpSub, U, end, u(1)), rr)
-	named := x.sel(U, before, x.op(OpAdd, U, mark, rr), x.op(OpAdd, U, trail, x.op(OpSub, U, x.op(OpMax, U, rr, end), end)))
-	row := x.op(OpMin, U, named, u(T-1))
-	mv, err := weightElement(&x, wo, T, sh[1], &in, &facts, row, i)
-	if err != nil {
-		return nil, fmt.Errorf("a marker table of %s: %w", wo.Format, err)
-	}
-	v := x.sel(ir.F32, before, mv, x.sel(ir.F32, after, mv, x.at(0, ish, src, i)))
-	out := c.value(o.Out[0])
-	return []Prim{{Kind: PrimMap, Shape: sh, In: in, Out: out, Expr: x.e, Facts: facts,
-		Stores: []PrimStore{{Out: out, Ax: []int{rr, i}, Ext: sh, Value: v}}}}, nil
 }
 
 // normalized is sample v (an F32 of the byte) of channel ch (a U32) read as
@@ -1236,53 +976,6 @@ func bf16Of(v float32) float32 {
 	return math.Float32frombits(b &^ 0xffff)
 }
 
-// decomposePosBuckets is each row's row of a Span x Span position table at
-// its cell of the request's grid bucketed onto it: row (Span*y)/gh, column
-// (Span*x)/gw, in integers.
-func decomposePosBuckets(o graph.Op, c *Context) ([]Prim, error) {
-	a := o.Attr
-	if len(o.In) != 0 || len(o.Out) != 1 || len(o.Weight) != 1 || a.Span < 1 || o.Weight[0].Rows != a.Span*a.Span {
-		return nil, fmt.Errorf("a bucketed position table of %d weights over %d a side", len(o.Weight), a.Span)
-	}
-	wo, err := c.weight(o.Weight[0])
-	if err != nil {
-		return nil, err
-	}
-	U := ir.U32
-	sh := c.rows(o.Out[0])
-	R, E, S := sh[0], sh[1], uint32(a.Span)
-	var x exprs
-	r, e := x.coord(0), x.coord(1)
-	in := []Operand{TablePos.op(), TableRequest.op()}
-	facts := Facts{Extents: map[int]int{0: R + 1, 1: RequestRows + R}}
-	lead := uint32(a.Offset)
-	gw := x.op(OpMax, U, x.load(1, x.u(RequestGrid)), x.u(1))
-	gh := x.op(OpMax, U, x.load(1, x.u(RequestGridH)), x.u(1))
-	q := x.op(OpSub, U, x.op(OpMax, U, x.load(0, x.op(OpAdd, U, r, x.u(1))), x.u(lead)), x.u(lead))
-	col := x.op(OpDiv, U, x.op(OpMul, U, x.op(OpRem, U, q, gw), x.u(S)), gw)
-	row := x.op(OpDiv, U, x.op(OpMul, U, x.op(OpDiv, U, q, gw), x.u(S)), gh)
-	at := x.op(OpAdd, U, x.op(OpMul, U, x.op(OpMin, U, row, x.u(S-1)), x.u(S)), x.op(OpMin, U, col, x.u(S-1)))
-	if _, err := weightElement(&x, wo, a.Span*a.Span, E, &in, &facts, at, e); err != nil {
-		return nil, fmt.Errorf("a position table of %s: %w", wo.Format, err)
-	}
-	return []Prim{{Kind: PrimMap, Shape: sh, In: in, Out: c.value(o.Out[0]), Expr: x.e, Facts: facts}}, nil
-}
-
-// decomposeTableRows is the weight's rows, each a row of the output: a
-// table the reader copies out, read as the block's vector.
-func decomposeTableRows(o graph.Op, c *Context) ([]Prim, error) {
-	if len(o.In) != 0 || len(o.Out) != 1 || len(o.Weight) != 1 || c.width(o.Out[0]) != o.Weight[0].K ||
-		c.rows(o.Out[0])[0] != o.Weight[0].Rows {
-		return nil, fmt.Errorf("a table's rows of %d weights", len(o.Weight))
-	}
-	sh := c.rows(o.Out[0])
-	w := o.Weight[0]
-	var x exprs
-	x.at(0, []int{sh[0] * sh[1]}, x.op(OpAdd, ir.U32, x.op(OpMul, ir.U32, x.coord(0), x.u(uint32(sh[1]))), x.coord(1)))
-	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{{Kind: OperandVector, Role: w.Role, Name: w.Role.String()}},
-		Out: c.value(o.Out[0]), Expr: x.e}}, nil
-}
-
 // decomposeRowsAttend is each query row (operand 0) attending over the
 // step's live rows of the keys and values (1 and 2): per head, the scores
 // q.k times the scale -- none past the live rows -- their maximum, the
@@ -1294,10 +987,9 @@ func decomposeRowsAttend(o graph.Op, c *Context) ([]Prim, error) {
 	if G == 0 {
 		G = H
 	}
-	rel := len(o.In) == 4 && len(o.Weight) == 1
-	if !rel && len(o.In) != 3 || len(o.Out) != 1 || H < 1 || hd < 1 || G < 1 || H%G != 0 || c.width(o.In[0]) != H*hd ||
-		c.width(o.In[1]) != G*hd || c.width(o.In[2]) != G*hd || c.width(o.Out[0]) != H*hd ||
-		rel && (G != H || c.width(o.In[3]) != H*hd) {
+	bias := len(o.In) == 4
+	if len(o.In) != 3 && !bias || len(o.Weight) != 0 || len(o.Out) != 1 || H < 1 || hd < 1 || G < 1 || H%G != 0 || c.width(o.In[0]) != H*hd ||
+		c.width(o.In[1]) != G*hd || c.width(o.In[2]) != G*hd || c.width(o.Out[0]) != H*hd {
 		return nil, fmt.Errorf("a rows attention of %d operands, %d heads of %d over %d", len(o.In), H, hd, G)
 	}
 	F, U := ir.F32, ir.U32
@@ -1305,6 +997,11 @@ func decomposeRowsAttend(o graph.Op, c *Context) ([]Prim, error) {
 	Q, R, D := qs[0], ks[0], H*hd
 	if vs[0] != R {
 		return nil, fmt.Errorf("a rows attention over %d keys and %d values", R, vs[0])
+	}
+	if bias {
+		if bs := c.rows(o.In[3]); bs[0] != Q || bs[1] != H*R {
+			return nil, fmt.Errorf("a rows attention of %d queries over %d keys biased by %d rows of %d", Q, R, bs[0], bs[1])
+		}
 	}
 	// kvAt is element e of query head h's key or value head: the one its
 	// group of H/G heads reads.
@@ -1328,36 +1025,6 @@ func decomposeRowsAttend(o graph.Op, c *Context) ([]Prim, error) {
 		}
 		dx.op(OpMul, F, dx.at(0, qs, q, el), dx.at(1, ks, j, kel))
 	}
-	var relPrims []Prim
-	var rels Operand
-	if rel {
-		// Each query row's dots with the positions its keys' offsets name:
-		// position q-j, the table's row top-1-q+j.
-		tb := o.Weight[0]
-		to, err := c.weight(tb)
-		if err != nil {
-			return nil, err
-		}
-		if tb.K != D || tb.Rows < 2*R-1 || tb.Rows%2 == 0 {
-			return nil, fmt.Errorf("a relative-position attention over %d rows by a %dx%d table over %d", R, tb.Rows, tb.K, D)
-		}
-		top := (tb.Rows + 1) / 2
-		rels = tmp("rel")
-		var rx exprs
-		rin := []Operand{c.value(o.In[3])}
-		rf := Facts{Extents: map[int]int{}}
-		{
-			q, h, j, e := rx.coord(0), rx.coord(1), rx.coord(2), rx.coord(3)
-			el := rx.op(OpAdd, U, rx.op(OpMul, U, h, rx.u(uint32(hd))), e)
-			row := rx.op(OpSub, U, rx.op(OpAdd, U, rx.u(uint32(top-1)), j), q)
-			pv, err := weightElement(&rx, to, tb.Rows, D, &rin, &rf, row, el)
-			if err != nil {
-				return nil, err
-			}
-			rx.op(OpMul, F, rx.at(0, c.rows(o.In[3]), q, el), pv)
-		}
-		relPrims = []Prim{{Kind: PrimReduce, Shape: []int{Q, H, R, hd}, In: rin, Out: rels, Combine: OpAdd, Expr: rx.e, Facts: rf}}
-	}
 	var sx exprs
 	scoreIn := []Operand{dots, TablePos.op()}
 	scoreFacts := Facts{Extents: map[int]int{1: R + 1}}
@@ -1365,8 +1032,8 @@ func decomposeRowsAttend(o graph.Op, c *Context) ([]Prim, error) {
 		j := sx.coord(2)
 		live := sx.load(1, sx.u(0))
 		d := sx.at(0, sh, sx.coord(0), sx.coord(1), j)
-		if rel {
-			scoreIn = append(scoreIn, rels)
+		if bias {
+			scoreIn = append(scoreIn, c.value(o.In[3]))
 			d = sx.op(OpAdd, F, d, sx.at(len(scoreIn)-1, sh, sx.coord(0), sx.coord(1), j))
 		}
 		keep := sx.op(OpMul, F, d, sx.f(float32(a.Scale)))
@@ -1400,7 +1067,7 @@ func decomposeRowsAttend(o graph.Op, c *Context) ([]Prim, error) {
 		q, e := ox.coord(0), ox.coord(1)
 		ox.op(OpDiv, F, ox.at(0, []int{Q, D}, q, e), ox.at(1, qh, q, ox.op(OpDiv, U, e, ox.u(uint32(hd)))))
 	}
-	return append(relPrims, []Prim{
+	return []Prim{
 		{Kind: PrimReduce, Shape: []int{Q, H, R, hd}, In: []Operand{c.value(o.In[0]), c.value(o.In[1])}, Out: dots, Combine: OpAdd, Expr: dx.e},
 		{Kind: PrimMap, Shape: sh, In: scoreIn, Out: scores, Expr: sx.e, Facts: scoreFacts},
 		{Kind: PrimReduce, Shape: sh, In: []Operand{scores}, Out: maxes, Combine: OpMax, Init: int64(math.Float32bits(minus)), Expr: mx.e},
@@ -1408,105 +1075,39 @@ func decomposeRowsAttend(o graph.Op, c *Context) ([]Prim, error) {
 		{Kind: PrimReduce, Shape: sh, In: []Operand{weights}, Out: sums, Combine: OpAdd, Expr: lx.e},
 		{Kind: PrimReduce, Shape: []int{Q, D, R}, In: []Operand{weights, c.value(o.In[2])}, Out: num, Combine: OpAdd, Expr: vx.e},
 		{Kind: PrimMap, Shape: []int{Q, D}, In: []Operand{num, sums}, Out: c.value(o.Out[0]), Expr: ox.e},
-	}...), nil
-}
-
-// decomposeFrames is each frame's samples of the step's sound
-// (graph.OpFrames): sample k = t*Stride + i - Width/2 of the clip, less
-// Const times the one before it, zero past either end.
-func decomposeFrames(o graph.Op, c *Context) ([]Prim, error) {
-	a := o.Attr
-	sh := c.rows(o.Out[0])
-	R, N := sh[0], sh[1]
-	if N != a.Width || a.Stride < 1 {
-		return nil, fmt.Errorf("frames of %d samples every %d into rows of %d", a.Width, a.Stride, N)
-	}
-	U, F := ir.U32, ir.F32
-	var x exprs
-	t, i := x.coord(0), x.coord(1)
-	n := x.load(1, x.u(RequestPicW))
-	// k+Width/2, the frame's sample on the clip, unsigned: below Width/2 is
-	// before the clip.
-	k := x.op(OpAdd, U, x.op(OpMul, U, t, x.u(uint32(a.Stride))), i)
-	half := x.u(uint32(N / 2))
-	at := x.op(OpSub, U, k, half)
-	in := x.op(OpLess, ir.Pred, x.op(OpSub, U, k, half), n)
-	inside := x.sel(ir.U32, x.op(OpLess, ir.Pred, k, half), x.u(0), x.sel(ir.U32, in, x.u(1), x.u(0)))
-	safe := x.op(OpMin, U, at, x.op(OpMax, U, x.op(OpSub, U, n, x.u(1)), x.u(0)))
-	// The samples are a sound op's where the frames read one (f32), the
-	// step's picture table's words where not.
-	src, words := TablePicture.op(), PictureWords
-	if len(o.In) == 1 {
-		src, words = c.value(o.In[0]), c.width(o.In[0])
-	}
-	sample := func(i int) int {
-		if len(o.In) == 1 {
-			return x.load(0, i)
-		}
-		return x.un(OpBitcast, F, x.load(0, i))
-	}
-	cur := sample(safe)
-	// The sample before the clip's first is zero: its index is the first's,
-	// so no word before the samples is read.
-	prev := sample(x.op(OpSub, U, x.op(OpMax, U, safe, x.u(1)), x.u(1)))
-	prev = x.sel(F, x.op(OpLess, ir.Pred, safe, x.u(1)), x.f(0), prev)
-	v := x.op(OpSub, F, cur, x.op(OpMul, F, prev, x.f(float32(a.Const))))
-	x.sel(F, x.op(OpLess, ir.Pred, x.u(0), inside), v, x.f(0))
-	return []Prim{{Kind: PrimMap, Shape: []int{R, N}, In: []Operand{src, TableRequest.op()}, Out: c.value(o.Out[0]),
-		Expr: x.e, Facts: Facts{Extents: map[int]int{0: words, 1: RequestPicW + 1}}}}, nil
-}
-
-// decomposeFeatureNorm is each column normalised over the step's first
-// live-Offset rows (graph.OpFeatureNorm): their sum, the squares of their
-// distances from its mean, then each row's value over the std, the rows
-// after zero.
-func decomposeFeatureNorm(o graph.Op, c *Context) ([]Prim, error) {
-	if len(o.In) != 1 || len(o.Out) != 1 || c.width(o.In[0]) != c.width(o.Out[0]) {
-		return nil, fmt.Errorf("a feature norm of %d operands", len(o.In))
-	}
-	U, F := ir.U32, ir.F32
-	sh := c.rows(o.In[0])
-	R, W := sh[0], sh[1]
-	drop := uint32(o.Attr.Offset)
-	tmp := func(name string) Operand {
-		return Operand{Kind: OperandScratch, Name: c.value(o.Out[0]).Name + "." + name, Temp: true}
-	}
-	sum, sq := tmp("sum"), tmp("sq")
-	facts := Facts{Extents: map[int]int{1: R + 1}}
-	// n is the rows the statistics read, at least one.
-	n := func(x *exprs, pos int) int {
-		live := x.load(pos, x.u(0))
-		return x.op(OpMax, U, x.sel(U, x.op(OpLess, ir.Pred, live, x.u(drop+1)), x.u(0), x.op(OpSub, U, live, x.u(drop))), x.u(1))
-	}
-	flt := func(x *exprs, v int) int { return x.un(OpCvtF32, F, x.un(OpBitcast, ir.I32, v)) }
-	var sx exprs
-	{
-		col, r := sx.coord(0), sx.coord(1)
-		v := sx.at(0, sh, r, col)
-		sx.sel(F, sx.op(OpLess, ir.Pred, r, n(&sx, 1)), v, sx.f(0))
-	}
-	var qx exprs
-	{
-		col, r := qx.coord(0), qx.coord(1)
-		mean := qx.op(OpDiv, F, qx.at(2, []int{W}, col), flt(&qx, n(&qx, 1)))
-		d := qx.op(OpSub, F, qx.at(0, sh, r, col), mean)
-		qx.sel(F, qx.op(OpLess, ir.Pred, r, n(&qx, 1)), qx.op(OpMul, F, d, d), qx.f(0))
-	}
-	var ox exprs
-	{
-		r, col := ox.coord(0), ox.coord(1)
-		cnt := n(&ox, 1)
-		mean := ox.op(OpDiv, F, ox.at(2, []int{W}, col), flt(&ox, cnt))
-		den := flt(&ox, ox.op(OpMax, U, ox.op(OpSub, U, cnt, ox.u(1)), ox.u(1)))
-		std := ox.un(OpSqrt, F, ox.op(OpDiv, F, ox.at(3, []int{W}, col), den))
-		v := ox.op(OpDiv, F, ox.op(OpSub, F, ox.at(0, sh, r, col), mean), ox.op(OpAdd, F, std, ox.f(float32(o.Attr.Eps))))
-		ox.sel(F, ox.op(OpLess, ir.Pred, r, cnt), v, ox.f(0))
-	}
-	return []Prim{
-		{Kind: PrimReduce, Shape: []int{W, R}, In: []Operand{c.value(o.In[0]), TablePos.op()}, Out: sum, Combine: OpAdd, Expr: sx.e, Facts: facts},
-		{Kind: PrimReduce, Shape: []int{W, R}, In: []Operand{c.value(o.In[0]), TablePos.op(), sum}, Out: sq, Combine: OpAdd, Expr: qx.e, Facts: facts},
-		{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0]), TablePos.op(), sum, sq}, Out: c.value(o.Out[0]), Expr: ox.e, Facts: facts},
 	}, nil
+}
+
+// decomposeHeadDots is each input row's dot, head by head, with each of the
+// table's rows (graph.OpHeadDots): one reduction over the heads' elements.
+func decomposeHeadDots(o graph.Op, c *Context) ([]Prim, error) {
+	a := o.Attr
+	H, hd := a.NHead, a.HeadDim
+	if len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) != 1 || H < 1 || hd < 1 || c.width(o.In[0]) != H*hd || o.Weight[0].K != H*hd {
+		return nil, fmt.Errorf("head dots of %d operands, %d weights, %d heads of %d", len(o.In), len(o.Weight), H, hd)
+	}
+	tb := o.Weight[0]
+	T, D := max(tb.Rows, 1), H*hd
+	if c.width(o.Out[0]) != H*T {
+		return nil, fmt.Errorf("head dots of %d heads against %d rows into rows of %d", H, T, c.width(o.Out[0]))
+	}
+	to, err := c.weight(tb)
+	if err != nil {
+		return nil, err
+	}
+	U, F := ir.U32, ir.F32
+	qs := c.rows(o.In[0])
+	var x exprs
+	in := []Operand{c.value(o.In[0])}
+	facts := Facts{Extents: map[int]int{}}
+	q, h, t, e := x.coord(0), x.coord(1), x.coord(2), x.coord(3)
+	el := x.op(OpAdd, U, x.op(OpMul, U, h, x.u(uint32(hd))), e)
+	tv, err := weightElement(&x, to, T, D, &in, &facts, t, el)
+	if err != nil {
+		return nil, err
+	}
+	x.op(OpMul, F, x.at(0, qs, q, el), tv)
+	return []Prim{{Kind: PrimReduce, Shape: []int{qs[0], H, T, hd}, In: in, Out: c.value(o.Out[0]), Combine: OpAdd, Expr: x.e, Facts: facts}}, nil
 }
 
 // decomposeSplitRows is each input row's runs of Width elements as rows
@@ -1528,73 +1129,4 @@ func decomposeSplitRows(o graph.Op, c *Context) ([]Prim, error) {
 	at := x.op(OpAdd, U, x.op(OpMul, U, x.op(OpRem, U, r, x.u(k)), x.u(uint32(W))), e)
 	x.at(0, ish, src, at)
 	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0])}, Out: c.value(o.Out[0]), Expr: x.e}}, nil
-}
-
-// decomposeClipMask is each row kept where its grid row is below the
-// clip's valid length (graph.OpClipMask), zero after.
-func decomposeClipMask(o graph.Op, c *Context) ([]Prim, error) {
-	a := o.Attr
-	if len(o.In) != 1 || len(o.Out) != 1 || a.Stride < 1 || c.width(o.In[0]) != c.width(o.Out[0]) {
-		return nil, fmt.Errorf("a clip mask of %d operands every %d samples", len(o.In), a.Stride)
-	}
-	U, F := ir.U32, ir.F32
-	sh := c.rows(o.In[0])
-	var x exprs
-	r := x.coord(0)
-	row := r
-	if a.GridW > 0 {
-		row = x.op(OpDiv, U, r, x.u(uint32(a.GridW)))
-	}
-	// Each halving is L-1 halved, plus one, so row < L after Span of them
-	// is row*2^Span < L0 = n/Stride, that is (row*2^Span + 1)*Stride <= n:
-	// no division of the sample count, which a vector of lanes has none of.
-	end := x.op(OpMul, U, x.op(OpAdd, U, x.op(OpMul, U, row, x.u(uint32(1)<<a.Span)), x.u(1)), x.u(uint32(a.Stride)))
-	x.sel(F, x.op(OpLess, ir.Pred, x.load(1, x.u(RequestPicW)), end), x.f(0), x.at(0, sh, r, x.coord(1)))
-	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0]), TableRequest.op()}, Out: c.value(o.Out[0]), Expr: x.e,
-		Facts: Facts{Extents: map[int]int{1: RequestPicW + 1}}}}, nil
-}
-
-// decomposeUpsample is a grid of rows GridW wide Span times as large each
-// way (graph.OpUpsample), one map over the output's rows and width: row r
-// of the grid Span*GridW wide reads the input row at (y/Span, x/Span).
-func decomposeUpsample(o graph.Op, c *Context) ([]Prim, error) {
-	S, W := o.Attr.Span, o.Attr.GridW
-	if len(o.In) != 1 || len(o.Out) != 1 || S < 2 || W < 1 || c.width(o.Out[0]) != c.width(o.In[0]) {
-		return nil, fmt.Errorf("an upsample of %d operands by %d over a grid %d wide", len(o.In), S, W)
-	}
-	U := ir.U32
-	sh, ish := c.rows(o.Out[0]), c.rows(o.In[0])
-	if ish[0]%W != 0 || sh[0] != ish[0]*S*S {
-		return nil, fmt.Errorf("an upsample of %d rows %d wide into %d", ish[0], W, sh[0])
-	}
-	var x exprs
-	r, j := x.coord(0), x.coord(1)
-	u := func(v int) int { return x.u(uint32(v)) }
-	y, col := x.op(OpDiv, U, r, u(W*S)), x.op(OpRem, U, r, u(W*S))
-	p := x.op(OpAdd, U, x.op(OpMul, U, x.op(OpDiv, U, y, u(S)), u(W)), x.op(OpDiv, U, col, u(S)))
-	x.at(0, ish, p, j)
-	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0])}, Out: c.value(o.Out[0]), Expr: x.e}}, nil
-}
-
-// decomposeAppendRow is the input's rows, then row Offset of the weight
-// (graph.OpAppendRow): one map over the output's rows.
-func decomposeAppendRow(o graph.Op, c *Context) ([]Prim, error) {
-	if len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) != 1 || o.Weight[0].K != c.width(o.In[0]) ||
-		o.Attr.Offset < 0 || o.Attr.Offset >= max(o.Weight[0].Rows, 1) {
-		return nil, fmt.Errorf("an appended row of %d operands and %d weights", len(o.In), len(o.Weight))
-	}
-	U := ir.U32
-	sh, ish := c.rows(o.Out[0]), c.rows(o.In[0])
-	w := o.Weight[0]
-	R := ish[0]
-	if sh[0] != R+1 {
-		return nil, fmt.Errorf("an appended row after %d rows writes %d", R, sh[0])
-	}
-	var x exprs
-	r, i := x.coord(0), x.coord(1)
-	in := x.at(0, ish, x.op(OpMin, U, r, x.u(uint32(R-1))), i)
-	row := x.at(1, []int{max(w.Rows, 1), sh[1]}, x.u(uint32(o.Attr.Offset)), i)
-	x.sel(ir.F32, x.op(OpLess, ir.Pred, r, x.u(uint32(R))), in, row)
-	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0]), {Kind: OperandVector, Role: w.Role, Name: w.Role.String()}},
-		Out: c.value(o.Out[0]), Expr: x.e}}, nil
 }

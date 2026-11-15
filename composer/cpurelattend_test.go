@@ -9,8 +9,8 @@ import (
 	"github.com/jitllm/jitllm/graph"
 )
 
-// TestComposedCPURelativeAttention holds graph.OpRowsAttend's relative form
-// to its definition on the CPU: each live row's scores over the live keys
+// TestComposedCPURelativeAttention holds graph.OpRowsAttend biased by
+// graph.RelativeBias to its definition on the CPU: each live row's scores over the live keys
 // are q.k plus its second query's dot with the table's row for the
 // position q-j (row k the position top-1-k), scaled and softmaxed, the
 // values' weighted sum. Two heads of four, six live rows of eight, a table
@@ -29,11 +29,15 @@ func TestComposedCPURelativeAttention(t *testing.T) {
 	}
 	b := graph.NewBlock(-1)
 	in := b.In("x", D)
+	b.G.Values[in].Rows = R
 	qv := b.Emit(graph.OpMap, []graph.ValueID{in}, []graph.Result{{Name: "qv", Width: D}}, nil,
 		graph.Attrs{Fn: graph.MapMul, Const: 0.5}, nil, nil)[0]
-	b.Out(b.Emit(graph.OpRowsAttend, []graph.ValueID{in, in, in, qv}, []graph.Result{{Name: "o", Width: D}},
-		[]graph.Binding{{Role: jlm.RoleAPos, K: D, Rows: PT}},
+	bias := graph.RelativeBias(b, "rel", qv, graph.Binding{Role: jlm.RoleAPos, K: D, Rows: PT}, H, R, R)
+	b.Out(b.Emit(graph.OpRowsAttend, []graph.ValueID{in, in, in, bias}, []graph.Result{{Name: "o", Width: D}}, nil,
 		graph.Attrs{NHead: H, NKVHead: H, HeadDim: hd, Scale: scale}, nil, nil)[0])
+	if err := graph.Verify(b.G, graph.Facts{Inventory: map[jlm.Role]graph.Shape{jlm.RoleAPos: {K: D, Rows: PT}}}); err != nil {
+		t.Fatal(err)
+	}
 	r := Default().WithoutInt8(DeviceCPU)
 	dev := Device{Kind: DeviceCPU, Slots: 1, Lanes: 8, ISA: uint64(cpu.Probe().ISA()), ExactDiv: true}
 	_, codes, err := r.Form(Request{Graph: b.G, Formats: map[jlm.Role]jlm.Type{jlm.RoleAPos: jlm.TypeF32},
@@ -46,20 +50,17 @@ func TestComposedCPURelativeAttention(t *testing.T) {
 	for i := range R {
 		pos[1+i] = uint32(i)
 	}
-	// qv is value 1, the harness's output; the attention's, value 2, is read
-	// from a buffer of the test's own.
-	got := make([]float32, R*D)
+	// The values past the input are buffers of the test's own.
+	vals, got := valueWords(b.G, R)
 	_, err = runCPUBound(hostArm(), codes, x, R*D, [3][]uint32{}, map[jlm.Role][]float32{jlm.RoleAPos: pe},
 		func(o Operand) []uint32 {
 			switch {
 			case o.Name == "rope.pos":
 				return pos
-			case o.Kind == OperandValue && o.Value == 2:
-				return f32Words(got)
 			case o.Kind == OperandWeight && o.Role == jlm.RoleAPos:
 				return f32Words(pe)
 			}
-			return nil
+			return vals(o)
 		})
 	if err != nil {
 		t.Fatal(err)

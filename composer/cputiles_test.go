@@ -120,7 +120,7 @@ func TestComposedCPUPatchifyTiles(t *testing.T) {
 
 // TestComposedCPUUntile puts a picture's merge windows, laid out in
 // Qwen2.5-VL's window order (get_window_index), back in raster order on the
-// CPU (graph.OpUntile): each output row the input row of the cell at its
+// CPU (graph.UntileRows): each output row the input row of the cell at its
 // raster index, the windows at the edges cut. Windows stated one narrower,
 // which order the rows otherwise, are the violation it must see.
 func TestComposedCPUUntile(t *testing.T) {
@@ -133,8 +133,8 @@ func TestComposedCPUUntile(t *testing.T) {
 			b := graph.NewBlock(-1)
 			x := b.In("cells", E)
 			b.G.Values[x].Rows = n
-			b.Out(b.Emit(graph.OpUntile, []graph.ValueID{x}, []graph.Result{{Name: "raster", Width: E, Rows: n}}, nil,
-				graph.Attrs{Width: M, Window: win}, nil, nil)[0])
+			b.Out(b.Emit(graph.OpGatherRows, []graph.ValueID{x}, []graph.Result{{Name: "raster", Width: E, Rows: n}}, nil,
+				graph.UntileRows(M, win), nil, nil)[0])
 			if err := graph.Verify(b.G, graph.Facts{}); err != nil {
 				t.Fatal(err)
 			}

@@ -11,8 +11,8 @@ import (
 
 // TestComposedCPURowFrame frames a merged grid's rows on the CPU as
 // HunyuanVL's merger does: a newline row after each of the grid's rows
-// (graph.OpRowBreak), then a begin row before them and an end row after
-// (graph.OpWrapRows) -- the grid's width the request's patch grid over the
+// (graph.RowBreakRows), then a begin row before them and an end row after
+// (graph.WrapRows) -- the grid's width the request's patch grid over the
 // merge and its height the request's, each output row the input row or
 // stored row its place names, and no row past the framed ones written. A
 // grid stated a window wider is the row break's violation, a row of
@@ -39,16 +39,16 @@ func TestComposedCPURowFrame(t *testing.T) {
 		vecs := map[jlm.Role][]float32{jlm.RoleVImgNewline: nl, jlm.RoleVImgBegin: begin, jlm.RoleVImgEnd: end}
 		// form composes op over an input of in rows into out rows; run runs
 		// it at a request grid gw x gh.
-		form := func(op graph.OpKind, ws []graph.Binding, a graph.Attrs, in, out int) func(x []float32, gw, gh int) []float32 {
+		form := func(ws []graph.Binding, a graph.Attrs, in, out int) func(x []float32, gw, gh int) []float32 {
 			b := graph.NewBlock(-1)
 			x := b.In("rows", c.E)
-			b.Out(b.Emit(op, []graph.ValueID{x}, []graph.Result{{Name: "framed", Width: c.E, Rows: out}}, ws, a, nil, nil)[0])
+			b.Out(b.Emit(graph.OpGatherRows, []graph.ValueID{x}, []graph.Result{{Name: "framed", Width: c.E, Rows: out}}, ws, a, nil, nil)[0])
 			if err := graph.Verify(b.G, graph.Facts{Inventory: inv}); err != nil {
 				t.Fatal(err)
 			}
 			_, codes, err := r.Form(Request{Graph: b.G, Formats: f32, Step: Step{Rows: in, Page: 64, Keys: 1, ActWindow: 32}, Device: dev, Apart: true})
 			if err != nil {
-				t.Fatalf("%+v %s: %v", c, op, err)
+				t.Fatalf("%+v: %v", c, err)
 			}
 			return func(x []float32, gw, gh int) []float32 {
 				req := make([]uint32, RequestRows+out)
@@ -65,7 +65,7 @@ func TestComposedCPURowFrame(t *testing.T) {
 					return nil
 				})
 				if err != nil {
-					t.Fatalf("%+v %s: %v", c, op, err)
+					t.Fatalf("%+v: %v", c, err)
 				}
 				return got
 			}
@@ -92,7 +92,7 @@ func TestComposedCPURowFrame(t *testing.T) {
 		for i := range in {
 			in[i] = float32(i) + 0.25
 		}
-		brk := form(graph.OpRowBreak, []graph.Binding{{Role: jlm.RoleVImgNewline, K: c.E}}, graph.Attrs{Span: c.S}, M, 2*M)
+		brk := form([]graph.Binding{{Role: jlm.RoleVImgNewline, K: c.E}}, graph.RowBreakRows(c.S, 0), M, 2*M)
 		lines := brk(in, c.gw, c.gh)
 		check("row break", lines, func(r int) []float32 {
 			if k := r % (W + 1); k < W {
@@ -105,7 +105,7 @@ func TestComposedCPURowFrame(t *testing.T) {
 			t.Fatalf("%+v: a row break over a grid a window wider writes the same rows", c)
 		}
 
-		trim := form(graph.OpRowBreak, []graph.Binding{{Role: jlm.RoleVImgNewline, K: c.E}}, graph.Attrs{Span: c.S, Offset: 1}, M, 2*M)
+		trim := form([]graph.Binding{{Role: jlm.RoleVImgNewline, K: c.E}}, graph.RowBreakRows(c.S, 1), M, 2*M)
 		trimmed := trim(in, c.gw, c.gh)
 		if !same(trimmed, lines, (L-1)*c.E) {
 			t.Fatalf("%+v: a break after each row but the last does not write the break's rows", c)
@@ -116,8 +116,8 @@ func TestComposedCPURowFrame(t *testing.T) {
 			}
 		}
 
-		wrap := form(graph.OpWrapRows, []graph.Binding{{Role: jlm.RoleVImgBegin, K: c.E}, {Role: jlm.RoleVImgEnd, K: c.E}},
-			graph.Attrs{Span: c.S, Width: 1}, 2*M, 2*M+2)
+		wrap := form([]graph.Binding{{Role: jlm.RoleVImgBegin, K: c.E}, {Role: jlm.RoleVImgEnd, K: c.E}},
+			graph.WrapRows(c.S, 1), 2*M, 2*M+2)
 		framed := wrap(lines, c.gw, c.gh)
 		check("row wrap", framed, func(r int) []float32 {
 			switch r {

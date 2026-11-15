@@ -12,7 +12,7 @@ import (
 // row on the CPU (graph.OpRegroup), the output stating its own rows, and
 // holds every value to the gather's definition. The guard past the output
 // stays as it was, and a grid stated a patch wider is the violation it must
-// see. A row drop over an input of rows of its own (graph.OpDropRows) is held
+// see. A row drop over an input of rows of its own (graph.DropRows) is held
 // to its rows after the dropped ones, the guard untouched.
 func TestComposedCPURegroup(t *testing.T) {
 	r := Default().WithoutInt8(DeviceCPU)
@@ -79,8 +79,8 @@ func TestComposedCPURegroup(t *testing.T) {
 		b := graph.NewBlock(-1)
 		x := b.In("rows", c.E)
 		b.G.Values[x].Rows = c.rows
-		b.Out(b.Emit(graph.OpDropRows, []graph.ValueID{x}, []graph.Result{{Name: "kept", Width: c.E, Rows: out}}, nil,
-			graph.Attrs{Offset: c.drop}, nil, nil)[0])
+		b.Out(b.Emit(graph.OpGatherRows, []graph.ValueID{x}, []graph.Result{{Name: "kept", Width: c.E, Rows: out}}, nil,
+			graph.DropRows(c.drop), nil, nil)[0])
 		if err := graph.Verify(b.G, graph.Facts{}); err != nil {
 			t.Fatal(err)
 		}

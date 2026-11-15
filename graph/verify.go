@@ -94,8 +94,11 @@ func Verify(g *Graph, f Facts) error {
 			return 0
 		}
 		strided := (o.Kind == OpConv || o.Kind == OpUnfold) && o.Attr.Stride > 1
-		grid := strided || o.Kind == OpRegroup || o.Kind == OpFold || o.Kind == OpSplitRows || o.Kind == OpDropRows ||
-			o.Kind == OpRowBreak || o.Kind == OpWrapRows || o.Kind == OpMarkRow || o.Kind == OpTableRows || o.Kind == OpRowsAttend || o.Kind == OpUpsample || o.Kind == OpAppendRow || o.Kind == OpFrames
+		grid := strided || o.Kind == OpRegroup || o.Kind == OpFold || o.Kind == OpSplitRows ||
+			o.Kind == OpRowsAttend || o.Kind == OpMeanRows
+		// A gather reads its input's rows by index and writes its own, the
+		// step's where it states none.
+		gather := o.Kind == OpGatherRows || o.Kind == OpGatherElems
 		// Attention over the call's own rows takes the call's rows.
 		if o.Kind == OpRowsAttend && len(o.In) > 0 && rows(o.In[0]) == 0 {
 			grid = false
@@ -116,27 +119,15 @@ func Verify(g *Graph, f Facts) error {
 				if w := o.Attr.Width; w > 0 && len(o.In) > 0 {
 					want = in * (g.Values[o.In[0]].Width / w)
 				}
-			case OpDropRows:
-				want = in - o.Attr.Offset
-			case OpRowBreak:
-				want = 2 * in
-			case OpWrapRows:
-				want = in + 2
 			case OpRowsAttend:
 				want = in
-			case OpUpsample:
-				want = in * o.Attr.Span * o.Attr.Span
-			case OpAppendRow:
-				want = in + 1
-			case OpMarkRow:
-				want = in + o.Attr.Span + o.Attr.Offset
 			}
 			if want >= 0 && out != want {
 				bad("%s: a %s of %d rows writes %d, not %d", at, o.Kind, in, out, want)
 			}
 		}
 		for _, id := range append(slices.Clone(o.In), o.Out...) {
-			if !grid && len(o.In) > 0 && rows(id) != rows(o.In[0]) {
+			if !grid && !gather && len(o.In) > 0 && rows(id) != rows(o.In[0]) {
 				bad("%s: %%%s is of %d rows, %%%s of %d", at, g.Values[id].Name, rows(id), g.Values[o.In[0]].Name, rows(o.In[0]))
 			}
 		}
@@ -241,17 +232,49 @@ func Verify(g *Graph, f Facts) error {
 					}
 				}
 			}
+		case OpHeadDots:
+			a := o.Attr
+			if len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) != 1 || a.NHead < 1 || a.HeadDim < 1 ||
+				width(o.In[0]) != a.NHead*a.HeadDim || o.Weight[0].K != width(o.In[0]) || width(o.Out[0]) != a.NHead*max(o.Weight[0].Rows, 1) {
+				bad("%s: head dots of %d heads of %d against %d weights into %d", at, a.NHead, a.HeadDim, len(o.Weight), width(o.Out[0]))
+			}
+		case OpGatherElems:
+			if len(o.In) > 1 || len(o.Out) != 1 || len(o.Weight) != 0 || len(o.Attr.Expr) == 0 {
+				bad("%s: an element gather of %d inputs and %d terms", at, len(o.In), len(o.Attr.Expr))
+				break
+			}
+			indexTerms(o.Attr.Expr, GatherOperands, func(k, j int) { bad("%s: term %d's operand %d does not name one an index has", at, k, j) },
+				func(k int) { bad("%s: term %d's function is not an index's", at, k) })
+		case OpGatherRows:
+			a := o.Attr
+			if len(o.In) > 1 || len(o.Out) != 1 || len(a.Expr) == 0 || a.Span < 0 || a.Span > len(a.Expr) {
+				bad("%s: a row gather of %d inputs and %d terms bounded at %d", at, len(o.In), len(a.Expr), a.Span)
+				break
+			}
+			for _, w := range o.Weight {
+				if w.K != width(o.Out[0]) {
+					bad("%s: gathers rows %d wide from a table %d wide", at, width(o.Out[0]), w.K)
+				}
+			}
+			if len(o.In) == 1 && width(o.In[0]) != width(o.Out[0]) {
+				bad("%s: gathers rows %d wide from rows %d wide", at, width(o.Out[0]), width(o.In[0]))
+			}
+			indexTerms(a.Expr, GatherCol, func(k, j int) { bad("%s: term %d's operand %d does not name one a row index has", at, k, j) },
+				func(k int) { bad("%s: term %d's function is not an index's", at, k) })
 		case OpSound:
 			a := o.Attr
 			if len(o.In) != 0 || len(o.Out) != 1 || len(o.Weight) != 0 || a.Sound < SoundU8 || a.Sound >= SoundFormats ||
 				a.Taps < 1 || g.Values[o.Out[0]].Width < 1 {
 				bad("%s: a sound of sample format %d and %d taps into %%%s", at, a.Sound, a.Taps, g.Values[o.Out[0]].Name)
 			}
-		case OpFrames:
-			if len(o.In) > 1 || len(o.Out) != 1 || o.Attr.Width < 1 || o.Attr.Stride < 1 ||
-				g.Values[o.Out[0]].Width != o.Attr.Width {
-				bad("%s: frames of %d samples every %d into %%%s", at, o.Attr.Width, o.Attr.Stride, g.Values[o.Out[0]].Name)
+		case OpMeanRows:
+			if len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) != 0 || len(o.Attr.Expr) == 0 || rows(o.Out[0]) != 1 ||
+				width(o.In[0]) != width(o.Out[0]) {
+				bad("%s: a mean over rows of %d operands and %d terms into %d rows", at, len(o.In), len(o.Attr.Expr), rows(o.Out[0]))
+				break
 			}
+			indexTerms(o.Attr.Expr, GatherCol, func(k, j int) { bad("%s: term %d's operand %d does not name one a count has", at, k, j) },
+				func(k int) { bad("%s: term %d's function is not an index's", at, k) })
 		case OpPicture:
 			a := o.Attr
 			switch {
@@ -491,4 +514,33 @@ func Unbound(g *Graph, f Facts) []jlm.Role {
 	}
 	slices.Sort(out)
 	return out
+}
+
+// indexTerms checks an integer expression's terms: each an index's function
+// over operands below n, earlier terms and constants a u32 holds, naming each
+// one that is not.
+func indexTerms(terms []Term, n int, badArg func(k, j int), badFn func(k int)) {
+	for k, t := range terms {
+		switch t.Fn {
+		case MapAdd, MapSub, MapMul, MapDiv, MapMax, MapMin, MapLess, MapWhere:
+		default:
+			badFn(k)
+		}
+		for j, x := range t.Args {
+			ok := true
+			switch {
+			case j >= t.Fn.Arity():
+				ok = x.Kind == ArgNone
+			case x.Kind == ArgIn:
+				ok = x.Index >= 0 && x.Index < n
+			case x.Kind == ArgTerm:
+				ok = x.Index >= 0 && x.Index < k
+			default:
+				ok = x.Kind == ArgConst && x.Const >= 0 && x.Const == float64(uint32(x.Const))
+			}
+			if !ok {
+				badArg(k, j)
+			}
+		}
+	}
 }
