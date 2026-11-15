@@ -328,9 +328,9 @@ func decomposeSlice(o graph.Op, c *Context) ([]Prim, error) {
 				return nil, fmt.Errorf("a slice of %d from %d of each head of %d of a table of %d into %d", a.Width, a.Offset, a.HeadDim, n, sh[1])
 			}
 			var hx exprs
-			h, e := hx.coord(1), hx.coord(2)
+			h, e := hx.op(OpDiv, U, hx.coord(1), hx.u(uint32(a.Width))), hx.op(OpRem, U, hx.coord(1), hx.u(uint32(a.Width)))
 			hx.load(0, hx.op(OpAdd, U, hx.op(OpMul, U, h, hx.u(uint32(a.HeadDim))), hx.op(OpAdd, U, hx.u(uint32(a.Offset)), e)))
-			return []Prim{{Kind: PrimMap, Shape: []int{sh[0], n / a.HeadDim, a.Width}, In: []Operand{{Kind: OperandVector, Role: w.Role, Name: w.Role.String()}},
+			return []Prim{{Kind: PrimMap, Shape: []int{sh[0], n / a.HeadDim * a.Width}, In: []Operand{{Kind: OperandVector, Role: w.Role, Name: w.Role.String()}},
 				Out: c.value(o.Out[0]), Expr: hx.e, Facts: Facts{Extents: map[int]int{0: n}}}}, nil
 		}
 		if sh[1] != a.Width {

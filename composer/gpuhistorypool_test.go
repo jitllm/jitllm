@@ -55,16 +55,11 @@ func TestComposedGPUHistoryPool(t *testing.T) {
 
 func gpuHistoryPool(t *testing.T, d backend.Device, P, W int, segs [][4]uint64, RW int, f32v bool) {
 	const page, p0, R, capRows = 8, 13, 7, 8
-	var words []uint64
 	bw := 0
 	for _, s := range segs {
-		words = append(words, s[:]...)
 		bw = max(bw, int(s[3])+W)
 	}
-	b := graph.New()
-	n := b.KVAppend(b.In("k", RW), b.In("v", RW), 0)
-	b.Out(b.HistoryPool(graph.StateRef{State: graph.StateKV, Version: n}, graph.Attrs{Span: P, Width: RW, Words: words}, jlm.RoleCompAPE, W))
-	g := b.G
+	g := composer.HistoryPoolGraph(P, W, RW, segs, jlm.RoleCompAPE)
 	_, codes, err := composer.Default().Form(composer.Request{Graph: g,
 		History: composer.History{Keys: composer.Pool{ByDim: true}, Values: composer.Pool{Half: !f32v}},
 		Step:    composer.Step{Rows: capRows, Page: page, Keys: 4 * page, Seqs: 1}, Device: gpuDevice(d)})

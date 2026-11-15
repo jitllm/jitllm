@@ -37,15 +37,15 @@ func decomposeHistoryRows(o graph.Op, c *Context) ([]Prim, error) {
 
 	var x exprs
 	t := hs.row(&x, rowWrite)
-	j := x.coord(1)
+	j, e := x.op(OpDiv, U, x.coord(1), x.u(uint32(W))), x.op(OpRem, U, x.coord(1), x.u(uint32(W)))
 	back := x.u(uint32(a.Local * P))
 	ws := x.op(OpMul, U, x.op(OpDiv, U, t, x.u(uint32(P))), x.u(uint32(P)))
 	p := x.op(OpAdd, U, x.op(OpSub, U, ws, back), j)
 	one := x.sel(U, x.op(OpLess, ir.Pred, ws, back), x.u(0), x.sel(U, x.op(OpLess, ir.Pred, t, p), x.u(0), x.u(1)))
 	ok := x.op(OpLess, ir.Pred, x.u(0), one)
 	pid, off := hs.page(&x, x.sel(U, ok, p, t))
-	v := c.poolRead(&x, 0, c.History.Keys, a.Width, pid, off, x.op(OpAdd, U, x.u(uint32(a.Offset)), x.coord(2)))
+	v := c.poolRead(&x, 0, c.History.Keys, a.Width, pid, off, x.op(OpAdd, U, x.u(uint32(a.Offset)), e))
 	x.sel(F, ok, v, x.f(float32(a.Const)))
-	return []Prim{{Kind: PrimMap, Shape: []int{R, P, W}, In: []Operand{pool, TableRows.op(), c.tab(TablePages)}, Out: c.value(o.Out[0]),
+	return []Prim{{Kind: PrimMap, Shape: []int{R, P * W}, In: []Operand{pool, TableRows.op(), c.tab(TablePages)}, Out: c.value(o.Out[0]),
 		Expr: x.e, Facts: Facts{Extents: map[int]int{1: R * rowWords, 2: c.pages()}}}}, nil
 }
