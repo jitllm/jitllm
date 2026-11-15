@@ -5,6 +5,7 @@ import (
 
 	"github.com/jitllm/jitllm/model"
 
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
@@ -54,11 +55,18 @@ func TestNoTensorIsInGGUFLayout(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				for _, p := range []struct {
+				ts := []struct {
 					n string
 					t *model.Tensor
 				}{{"attn_q", &l.Wq}, {"attn_k", &l.Wk}, {"attn_v", &l.Wv}, {"attn_output", &l.Wo},
-					{"ffn_gate", &l.Gate}, {"ffn_up", &l.Up}, {"ffn_down", &l.Down}, {"ffn_gate_inp", &l.Router}} {
+					{"ffn_gate", &l.Gate}, {"ffn_up", &l.Up}, {"ffn_down", &l.Down}}
+				if r := l.Matrix(jlm.RoleRouter); r != nil {
+					ts = append(ts, struct {
+						n string
+						t *model.Tensor
+					}{"ffn_gate_inp", r})
+				}
+				for _, p := range ts {
 					check("blk."+model.Itoa(i)+"."+p.n, p.t)
 				}
 				for e := range l.Experts {

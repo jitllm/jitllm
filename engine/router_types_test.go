@@ -46,15 +46,15 @@ func TestRouterTypesOnTheDevice(t *testing.T) {
 		routers := 0
 		fr := testFrames(t, m)
 		for li := range m.Layers {
-			l := &m.Layers[li]
-			if l.Router.Rows == 0 {
+			r := m.Layers[li].Matrix(jlm.RoleRouter)
+			if r == nil || r.Rows == 0 {
 				continue
 			}
 			if err := m.PageIn(fr, li, &m.Layers[li]); err != nil {
 				t.Fatal(err)
 			}
-			if l.Router.Typ != quant.F32 {
-				t.Fatalf("block %d's router is %v; the control arm needs F32", li, l.Router.Typ)
+			if r.Typ != quant.F32 {
+				t.Fatalf("block %d's router is %v; the control arm needs F32", li, r.Typ)
 			}
 			routers++
 			if typ == quant.F32 {
@@ -62,7 +62,7 @@ func TestRouterTypesOnTheDevice(t *testing.T) {
 			}
 			// No entry: bindOne re-resolves a tensor from its entry on every
 			// page-in, which would put the file's F32 bytes back.
-			l.Router = reencodeRouter(t, l.Router, typ)
+			*r = reencodeRouter(t, *r, typ)
 		}
 		if routers == 0 {
 			t.Fatal("no block carries a router -- this gate proved nothing")

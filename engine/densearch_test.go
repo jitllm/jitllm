@@ -29,7 +29,7 @@ func denseFixtures() []struct {
 		{"synth-apertus", func(m *model.Model) bool {
 			c, l, l1 := m.Cfg, &m.Layers[0], &m.Layers[1]
 			return !c.LayerNorm && c.RopeNeox && c.QKNorm && !c.QKNormWide &&
-				len(l.QNorm) == c.HeadDim && l.Gate.E == nil && l.Vector(jlm.RoleFFNUpBias) == nil &&
+				len(l.Vector(jlm.RoleAttnQNorm)) == c.HeadDim && l.Gate.E == nil && l.Vector(jlm.RoleFFNUpBias) == nil &&
 				len(l.Vector(jlm.RoleXIELU)) == 4 && len(l1.Vector(jlm.RoleXIELU)) == 4 && l.Vector(jlm.RoleXIELU)[0] != l1.Vector(jlm.RoleXIELU)[0] &&
 				l.Vector(jlm.RoleXIELU)[2] != l1.Vector(jlm.RoleXIELU)[2] && l.Vector(jlm.RoleXIELU)[3] < -0.01 && len(m.Rope.Freqs) == c.NRot/2 && c.NKVHead < c.NHead && !c.TiedEmbd
 		}},
@@ -42,24 +42,24 @@ func denseFixtures() []struct {
 		{"synth-arcee", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
 			return !c.LayerNorm && m.Container.Config().Flags.Has(jlm.FlagReLU2) && l.Gate.E == nil &&
-				l.FfnNorm != nil && l.Vector(jlm.RoleFFNUpBias) == nil && c.NKVHead < c.NHead && !c.TiedEmbd
+				l.Vector(jlm.RoleFFNNorm) != nil && l.Vector(jlm.RoleFFNUpBias) == nil && c.NKVHead < c.NHead && !c.TiedEmbd
 		}},
 		{"synth-seedoss", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
 			return c.RopeNeox && c.HeadDim*c.NHead != c.NEmbd &&
-				l.Vector(jlm.RoleAttnQBias) != nil && l.Vector(jlm.RoleAttnKBias) != nil && l.Vector(jlm.RoleAttnVBias) != nil && l.Vector(jlm.RoleAttnOutBias) == nil && l.FfnNorm != nil &&
+				l.Vector(jlm.RoleAttnQBias) != nil && l.Vector(jlm.RoleAttnKBias) != nil && l.Vector(jlm.RoleAttnVBias) != nil && l.Vector(jlm.RoleAttnOutBias) == nil && l.Vector(jlm.RoleFFNNorm) != nil &&
 				l.Vector(jlm.RolePostAttnNorm) == nil && c.NKVHead < c.NHead && !c.TiedEmbd
 		}},
 		{"synth-olmo2", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
 			return c.RopeNeox && c.QKNorm && c.QKNormWide &&
-				len(l.QNorm) == c.NHead*c.HeadDim && l.AttnNorm == nil && l.FfnNorm == nil &&
+				len(l.Vector(jlm.RoleAttnQNorm)) == c.NHead*c.HeadDim && l.Vector(jlm.RoleAttnNorm) == nil && l.Vector(jlm.RoleFFNNorm) == nil &&
 				l.Vector(jlm.RolePostAttnNorm) != nil && l.Vector(jlm.RolePostFFNNorm) != nil && !c.TiedEmbd
 		}},
 		{"synth-exaone4", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
 			return c.RopeNeox && c.QKNorm && !c.QKNormWide &&
-				len(l.QNorm) == c.HeadDim && l.AttnNorm == nil && l.FfnNorm == nil &&
+				len(l.Vector(jlm.RoleAttnQNorm)) == c.HeadDim && l.Vector(jlm.RoleAttnNorm) == nil && l.Vector(jlm.RoleFFNNorm) == nil &&
 				l.Vector(jlm.RolePostAttnNorm) != nil && l.Vector(jlm.RolePostFFNNorm) != nil && c.NoPEGlobal &&
 				c.SWAWindow == 4 && c.SWAPeriod == 4 && c.SWA(0) && !c.SWA(3) && c.RopeAt(2) && !c.RopeAt(3) &&
 				c.NKVHead < c.NHead
@@ -73,14 +73,14 @@ func denseFixtures() []struct {
 		{"synth-olmo2-gqa", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
 			return c.QKNormWide && c.NKVHead < c.NHead &&
-				len(l.QNorm) == c.NHead*c.HeadDim && len(l.KNorm) == c.NKVHead*c.HeadDim && l.AttnNorm == nil && l.Vector(jlm.RolePostAttnNorm) != nil
+				len(l.Vector(jlm.RoleAttnQNorm)) == c.NHead*c.HeadDim && len(l.Vector(jlm.RoleAttnKNorm)) == c.NKVHead*c.HeadDim && l.Vector(jlm.RoleAttnNorm) == nil && l.Vector(jlm.RolePostAttnNorm) != nil
 		}},
 		{"synth-olmo3", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
-			return c.QKNormWide && c.NKVHead < c.NHead && len(l.KNorm) == c.NKVHead*c.HeadDim &&
+			return c.QKNormWide && c.NKVHead < c.NHead && len(l.Vector(jlm.RoleAttnKNorm)) == c.NKVHead*c.HeadDim &&
 				c.SWAWindow == 4 && c.SWAPeriod == 4 && c.SWA(0) && !c.SWA(3) && c.YarnFactor == 8 &&
 				m.Rope.Scale > 1.2 && m.Rope.Scale < 1.22 && m.Rope.Freqs != nil &&
-				m.RopeSWA != nil && m.RopeSWA.Scale == 1 && m.RopeSWA.Freqs == nil && l.AttnNorm == nil && l.Vector(jlm.RolePostAttnNorm) != nil
+				m.RopeSWA != nil && m.RopeSWA.Scale == 1 && m.RopeSWA.Freqs == nil && l.Vector(jlm.RoleAttnNorm) == nil && l.Vector(jlm.RolePostAttnNorm) != nil
 		}},
 	}
 }
@@ -102,7 +102,9 @@ func unitRopeScale(m *model.Model) func() {
 // two whole-projection norms read as one, which is what an engine that sized
 // k's norm from q's would compute.
 func kFromQ(m *model.Model) func() {
-	return eachLayer(m, func(l *model.Layer) { l.KNorm = l.QNorm[:len(l.KNorm)] })
+	return eachLayer(m, func(l *model.Layer) {
+		addVec(l, jlm.RoleAttnKNorm, l.Vector(jlm.RoleAttnQNorm)[:len(l.Vector(jlm.RoleAttnKNorm))])
+	})
 }
 
 // localYarn gives OLMo 3's sliding layers the global rotary -- YaRN's
@@ -152,7 +154,7 @@ func denseViolations() map[string][]c6Violation {
 			{"no q/k/v biases", noQKVBias},
 			{"NORM rotary for NEOX", neoxOff},
 			{"the attention's norm before the FFN", func(m *model.Model) func() {
-				return eachLayer(m, func(l *model.Layer) { l.FfnNorm = l.AttnNorm })
+				return eachLayer(m, func(l *model.Layer) { addVec(l, jlm.RoleFFNNorm, l.Vector(jlm.RoleAttnNorm)) })
 			}},
 		},
 		"synth-olmo2": {
@@ -232,7 +234,10 @@ func xieluMut(f func(p []float32, li int)) func(m *model.Model) func() {
 func perHeadQK(m *model.Model) func() {
 	undoC := cfgMut(m, func(c *model.Config) { c.QKNormWide = false })
 	hd := m.Cfg.HeadDim
-	undoL := eachLayer(m, func(l *model.Layer) { l.QNorm, l.KNorm = l.QNorm[:hd], l.KNorm[:hd] })
+	undoL := eachLayer(m, func(l *model.Layer) {
+		setVec(l, jlm.RoleAttnQNorm, func(v []float32) []float32 { return v[:hd] })
+		setVec(l, jlm.RoleAttnKNorm, func(v []float32) []float32 { return v[:hd] })
+	})
 	undoR := restate(m, func(inv map[jlm.Role]graph.Shape) {
 		for _, r := range []jlm.Role{jlm.RoleAttnQNorm, jlm.RoleAttnKNorm} {
 			if _, ok := inv[r]; ok {
@@ -247,7 +252,8 @@ func perHeadQK(m *model.Model) func() {
 // llama's block with OLMo 2's weights.
 func postAsPre(m *model.Model) func() {
 	undoL := eachLayer(m, func(l *model.Layer) {
-		l.AttnNorm, l.FfnNorm = l.Vector(jlm.RolePostAttnNorm), l.Vector(jlm.RolePostFFNNorm)
+		addVec(l, jlm.RoleAttnNorm, l.Vector(jlm.RolePostAttnNorm))
+		addVec(l, jlm.RoleFFNNorm, l.Vector(jlm.RolePostFFNNorm))
 		setVec(l, jlm.RolePostAttnNorm, func([]float32) []float32 { return nil })
 		setVec(l, jlm.RolePostFFNNorm, func([]float32) []float32 { return nil })
 	})

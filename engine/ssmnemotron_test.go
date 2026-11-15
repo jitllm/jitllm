@@ -28,7 +28,7 @@ func nemotronhFixtures() []struct {
 			}{{true, false}, {true, true}, {false, false}, {true, true}, {true, false}} {
 				l := &m.Layers[i]
 				ok = ok && c.LayerKind(i).Recurrent() == want.rec && l.NoFFN == want.noFFN &&
-					(l.NoFFN || (l.Gate.E == nil && l.Up.E != nil && l.FfnNorm != nil))
+					(l.NoFFN || (l.Gate.E == nil && l.Up.E != nil && l.Vector(jlm.RoleFFNNorm) != nil))
 			}
 			return ok
 		}},
@@ -82,8 +82,8 @@ func nemotronhViolations(device bool) []c6Violation {
 		}},
 		{"the MLP reading its mixer's norm", func(m *model.Model) func() {
 			return eachLayer(m, func(l *model.Layer) {
-				if l.FfnNorm != nil {
-					l.FfnNorm = l.AttnNorm
+				if l.Vector(jlm.RoleFFNNorm) != nil {
+					addVec(l, jlm.RoleFFNNorm, l.Vector(jlm.RoleAttnNorm))
 				}
 			})
 		}},

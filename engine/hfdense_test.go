@@ -24,31 +24,31 @@ func hfDenseSelected() map[string]func(m *model.Model) bool {
 		},
 		"synth-hf-arcee": func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
-			return m.Container.Config().Flags.Has(jlm.FlagReLU2) && l.Gate.E == nil && l.FfnNorm != nil && !c.TiedEmbd
+			return m.Container.Config().Flags.Has(jlm.FlagReLU2) && l.Gate.E == nil && l.Vector(jlm.RoleFFNNorm) != nil && !c.TiedEmbd
 		},
 		"synth-hf-seedoss": func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
 			return c.RopeNeox && c.HeadDim*c.NHead != c.NEmbd &&
-				l.Vector(jlm.RoleAttnQBias) != nil && l.Vector(jlm.RoleAttnKBias) != nil && l.Vector(jlm.RoleAttnVBias) != nil && l.Vector(jlm.RoleAttnOutBias) == nil && l.FfnNorm != nil && l.Vector(jlm.RolePostAttnNorm) == nil
+				l.Vector(jlm.RoleAttnQBias) != nil && l.Vector(jlm.RoleAttnKBias) != nil && l.Vector(jlm.RoleAttnVBias) != nil && l.Vector(jlm.RoleAttnOutBias) == nil && l.Vector(jlm.RoleFFNNorm) != nil && l.Vector(jlm.RolePostAttnNorm) == nil
 		},
 		"synth-hf-olmo2": func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
 			return c.RopeNeox && c.QKNorm && c.QKNormWide &&
-				len(l.QNorm) == c.NHead*c.HeadDim && l.AttnNorm == nil && l.FfnNorm == nil &&
+				len(l.Vector(jlm.RoleAttnQNorm)) == c.NHead*c.HeadDim && l.Vector(jlm.RoleAttnNorm) == nil && l.Vector(jlm.RoleFFNNorm) == nil &&
 				l.Vector(jlm.RolePostAttnNorm) != nil && l.Vector(jlm.RolePostFFNNorm) != nil && c.SWAWindow == 0
 		},
 		// OLMo 3: OLMo 2's block with a window on three layers in four, every
 		// layer rotating, the sliding ones on a plain rotary of their own.
 		"synth-hf-olmo3": func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
-			return c.QKNormWide && l.AttnNorm == nil && l.Vector(jlm.RolePostFFNNorm) != nil &&
+			return c.QKNormWide && l.Vector(jlm.RoleAttnNorm) == nil && l.Vector(jlm.RolePostFFNNorm) != nil &&
 				c.SWAWindow == 4 && c.SWAPeriod == 4 && c.SWA(0) && c.SWA(2) && !c.SWA(3) &&
 				!c.NoPEGlobal && c.RopeAt(3) && c.RopeScaleSWA == 1 && m.RopeSWA != nil
 		},
 		"synth-hf-exaone4": func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
-			return c.RopeNeox && c.QKNorm && !c.QKNormWide && len(l.QNorm) == c.HeadDim &&
-				l.AttnNorm == nil && l.Vector(jlm.RolePostAttnNorm) != nil && c.NoPEGlobal && c.SWAWindow == 4 &&
+			return c.RopeNeox && c.QKNorm && !c.QKNormWide && len(l.Vector(jlm.RoleAttnQNorm)) == c.HeadDim &&
+				l.Vector(jlm.RoleAttnNorm) == nil && l.Vector(jlm.RolePostAttnNorm) != nil && c.NoPEGlobal && c.SWAWindow == 4 &&
 				c.SWAPeriod == 4 && c.SWA(0) && !c.SWA(3) && c.RopeAt(2) && !c.RopeAt(3) && c.NKVHead < c.NHead
 		},
 		"synth-hf-ministral3": func(m *model.Model) bool {

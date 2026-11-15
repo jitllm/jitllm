@@ -45,9 +45,9 @@ func moeBaseFixtures() []struct {
 				c.ExpertSigmoid && !c.NoExpertNorm && c.ExpertScale == 2.5 && c.NExpert == 8 &&
 				c.NExpertUsed == 2 && c.NFFNShExp == c.NFFNExp && c.NDenseLead == 1 &&
 				c.NLayer == 3 && c.NMTP == 1 && !c.TiedEmbd &&
-				dense.Router.E == nil && dense.Gate.E != nil && dense.FfnNorm != nil &&
-				moe.Router.E != nil && moe.Vector(jlm.RoleExpProbsB) != nil && moe.ShGate.E != nil && moe.Vector(jlm.RoleShRouter) == nil &&
-				moe.FfnNorm != nil && moe.Vector(jlm.RolePostAttnNorm) == nil && moe.QNorm != nil &&
+				dense.Matrix(jlm.RoleRouter) == nil && dense.Gate.E != nil && dense.Vector(jlm.RoleFFNNorm) != nil &&
+				moe.Matrix(jlm.RoleRouter) != nil && moe.Vector(jlm.RoleExpProbsB) != nil && moe.ShGate.E != nil && moe.Vector(jlm.RoleShRouter) == nil &&
+				moe.Vector(jlm.RoleFFNNorm) != nil && moe.Vector(jlm.RolePostAttnNorm) == nil && moe.Vector(jlm.RoleAttnQNorm) != nil &&
 				moe.Vector(jlm.RoleAttnQBias) != nil && moe.Vector(jlm.RoleAttnKBias) != nil && moe.Vector(jlm.RoleAttnVBias) != nil && moe.Vector(jlm.RoleAttnOutBias) == nil &&
 				m.Layers[3].Mtp != nil
 		}},
@@ -56,9 +56,9 @@ func moeBaseFixtures() []struct {
 			return c.RopeNeox && c.NRot == c.HeadDim && !c.QKNorm &&
 				!c.ExpertSigmoid && c.NoExpertNorm && c.ExpertScale == 1 && c.NExpert == 8 &&
 				c.NExpertUsed == 2 && c.NFFNShExp == 2*c.NFFNExp && c.NDenseLead == 0 && c.NMTP == 0 &&
-				c.NKVHead < c.NHead && l.Router.E != nil && l.Vector(jlm.RoleExpProbsB) == nil && l.ShGate.E != nil &&
+				c.NKVHead < c.NHead && l.Matrix(jlm.RoleRouter) != nil && l.Vector(jlm.RoleExpProbsB) == nil && l.ShGate.E != nil &&
 				len(l.Vector(jlm.RoleShRouter)) == c.NEmbd && l.Vector(jlm.RoleAttnQBias) != nil && l.Vector(jlm.RoleAttnKBias) != nil && l.Vector(jlm.RoleAttnVBias) != nil && l.Vector(jlm.RoleAttnOutBias) == nil &&
-				l.FfnNorm != nil && !c.TiedEmbd
+				l.Vector(jlm.RoleFFNNorm) != nil && !c.TiedEmbd
 		}},
 		{"synth-ernie45moe", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[1]
@@ -66,8 +66,8 @@ func moeBaseFixtures() []struct {
 				!c.ExpertSigmoid && !c.NoExpertNorm && c.ExpertScale == 1 && c.NExpert == 8 &&
 				c.NExpertUsed == 2 && c.NFFNShExp == 2*c.NFFNExp && c.NDenseLead == 1 && c.MoEStep == 2 &&
 				!c.MoEAt(0) && c.MoEAt(1) && !c.MoEAt(2) && c.MoEAt(3) && c.NMTP == 0 &&
-				m.Layers[0].Gate.E != nil && m.Layers[2].Gate.E != nil && m.Layers[2].Router.E == nil &&
-				l.Router.E != nil && len(l.Vector(jlm.RoleExpProbsB)) == c.NExpert && l.ShGate.E != nil && l.Vector(jlm.RoleShRouter) == nil &&
+				m.Layers[0].Gate.E != nil && m.Layers[2].Gate.E != nil && m.Layers[2].Matrix(jlm.RoleRouter) == nil &&
+				l.Matrix(jlm.RoleRouter) != nil && len(l.Vector(jlm.RoleExpProbsB)) == c.NExpert && l.ShGate.E != nil && l.Vector(jlm.RoleShRouter) == nil &&
 				l.Vector(jlm.RoleAttnQBias) == nil && l.Vector(jlm.RoleAttnOutBias) == nil && c.TiedEmbd
 		}},
 		{"synth-ernie45", func(m *model.Model) bool {
@@ -83,7 +83,7 @@ func moeBaseFixtures() []struct {
 				c.NDenseLead == 0 && c.NKVHead < c.NHead && c.TiedEmbd
 			for i := range m.Layers {
 				l := &m.Layers[i]
-				ok = ok && l.Router.E != nil && l.ShGate.E != nil && l.Vector(jlm.RoleShRouter) == nil &&
+				ok = ok && l.Matrix(jlm.RoleRouter) != nil && l.ShGate.E != nil && l.Vector(jlm.RoleShRouter) == nil &&
 					l.Vector(jlm.RoleExpProbsB) == nil && l.Vector(jlm.RoleAttnQBias) == nil && foldedQK(l)
 			}
 			return ok
@@ -96,9 +96,9 @@ func moeBaseFixtures() []struct {
 				c.NKVHead < c.NHead && !c.TiedEmbd
 			for i := range m.Layers {
 				l := &m.Layers[i]
-				ok = ok && l.Router.E != nil && len(l.Vector(jlm.RoleExpProbsB)) == c.NExpert && l.ShGate.E == nil &&
-					len(l.QNorm) == c.NHead*c.HeadDim && len(l.KNorm) == c.NKVHead*c.HeadDim &&
-					l.Vector(jlm.RoleAttnQBias) == nil && l.FfnNorm != nil
+				ok = ok && l.Matrix(jlm.RoleRouter) != nil && len(l.Vector(jlm.RoleExpProbsB)) == c.NExpert && l.ShGate.E == nil &&
+					len(l.Vector(jlm.RoleAttnQNorm)) == c.NHead*c.HeadDim && len(l.Vector(jlm.RoleAttnKNorm)) == c.NKVHead*c.HeadDim &&
+					l.Vector(jlm.RoleAttnQBias) == nil && l.Vector(jlm.RoleFFNNorm) != nil
 			}
 			return ok
 		}},
@@ -114,16 +114,16 @@ func moeBaseFixtures() []struct {
 // foldedQK reports a block whose after-rotary q/k norm was folded at
 // conversion: k's weight is ones and q's is not (jlm.FlagQKNormPostRope).
 func foldedQK(l *model.Layer) bool {
-	if l.QNorm == nil || len(l.KNorm) != len(l.QNorm) {
+	if l.Vector(jlm.RoleAttnQNorm) == nil || len(l.Vector(jlm.RoleAttnKNorm)) != len(l.Vector(jlm.RoleAttnQNorm)) {
 		return false
 	}
 	ones := 0
-	for i := range l.KNorm {
-		if l.KNorm[i] == 1 {
+	for i := range l.Vector(jlm.RoleAttnKNorm) {
+		if l.Vector(jlm.RoleAttnKNorm)[i] == 1 {
 			ones++
 		}
 	}
-	return ones == len(l.KNorm) && !slices.Equal(l.QNorm, l.KNorm)
+	return ones == len(l.Vector(jlm.RoleAttnKNorm)) && !slices.Equal(l.Vector(jlm.RoleAttnQNorm), l.Vector(jlm.RoleAttnKNorm))
 }
 
 // hunyuanNormBeforeRope runs the folded q norm before the rotary, where every
@@ -135,14 +135,14 @@ func hunyuanNormBeforeRope(m *model.Model) func() {
 // unweightedQKNorm drops the q/k norm's weights and keeps the normalisation.
 func unweightedQKNorm(m *model.Model) func() {
 	return eachLayer(m, func(l *model.Layer) {
-		if l.QNorm == nil {
+		if l.Vector(jlm.RoleAttnQNorm) == nil {
 			return
 		}
-		ones := make([]float32, len(l.QNorm))
+		ones := make([]float32, len(l.Vector(jlm.RoleAttnQNorm)))
 		for i := range ones {
 			ones[i] = 1
 		}
-		l.QNorm = ones
+		addVec(l, jlm.RoleAttnQNorm, ones)
 	})
 }
 
