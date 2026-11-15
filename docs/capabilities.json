@@ -455,6 +455,10 @@
       "graph": "qwen3moe"
     },
     {
+      "name": "Qwen3_5ForConditionalGeneration",
+      "graph": "qwen3next"
+    },
+    {
       "name": "SeedOssForCausalLM",
       "graph": "seed_oss"
     },

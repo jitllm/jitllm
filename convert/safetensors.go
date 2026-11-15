@@ -87,13 +87,13 @@ func IndexShards(b []byte, name string) ([]string, error) {
 // safetensors.OpenAt, anything else that can read a byte range; meta may be
 // a directory (os.DirFS) or the files in memory (fstest.MapFS).
 func FromShards(meta fs.FS, name string, open []*safetensors.File, dst string, fp jlm.Fingerprint, opts ...Option) (*jlm.Header, error) {
-	s, err := hfSourceOf(hfDir{meta, name}, open)
-	if err != nil {
-		return nil, err
-	}
 	var o options
 	for _, fn := range opts {
 		fn(&o)
+	}
+	s, err := hfSourceWith(hfDir{meta, name}, open, o.modelJSON)
+	if err != nil {
+		return nil, err
 	}
 	if o.head != "" {
 		return nil, fmt.Errorf("convert: WithHead joins a GGUF head to a GGUF; %s is safetensors", name)
@@ -138,6 +138,7 @@ type options struct {
 	modelConfig  string             // WithModelConfig, GGUF only
 	pictureStep  func(*jlm.PreStep) // WithPictureStep, GGUF only
 	longestEdge  int32              // the processor config's size.longest_edge, 0 for none
+	modelJSON    string             // WithModelJSON, safetensors only
 }
 
 // WithPictureStep edits each picture step the tower's stater writes, before
@@ -298,11 +299,16 @@ func (d hfDir) String() string                { return d.name }
 
 // hfSourceOf translates a HuggingFace directory into the container's own terms.
 func hfSourceOf(dir hfDir, shards []*safetensors.File) (*jlm.Source, error) {
+	return hfSourceWith(dir, shards, "")
+}
+
+// hfSourceWith is hfSourceOf by the caller's model.json, where there is one.
+func hfSourceWith(dir hfDir, shards []*safetensors.File, modelJSON string) (*jlm.Source, error) {
 	hc, err := readHFConfig(dir)
 	if err != nil {
 		return nil, err
 	}
-	ha, err := hfArchOf(hc)
+	ha, err := hfArchFor(dir, hc, modelJSON)
 	if err != nil {
 		return nil, err
 	}
@@ -1227,11 +1233,18 @@ func hfArchOf(c *hfConfig) (*hfArch, error) {
 }
 
 // HFClasses is every Hugging Face class (config.json's architectures) the
-// safetensors path converts -- hfArchTable, which is the list -- sorted.
+// safetensors path converts -- the model.json library's and hfArchTable's,
+// which are the list -- sorted. A library that does not parse adds nothing
+// here and refuses every conversion; TestModelLibraryParses holds it.
 func HFClasses() []string {
 	names := make([]string, 0, len(hfArchTable()))
 	for n := range hfArchTable() {
 		names = append(names, n)
+	}
+	if lib, err := modelLibrary(); err == nil {
+		for n := range lib {
+			names = append(names, n)
+		}
 	}
 	sort.Strings(names)
 	return names
@@ -1241,11 +1254,15 @@ func HFClasses() []string {
 // class is in the list. As on the GGUF side, the config can refine it (OLMo 3
 // with a window is ArchOLMo3); this is the class's own entry.
 func HFClassGraph(class string) (Arch, bool) {
-	a, ok := hfArchTable()[class]
-	if !ok {
-		return ArchNone, false
+	if a, ok := hfArchTable()[class]; ok {
+		return a.arch, true
 	}
-	return a.arch, true
+	if lib, err := modelLibrary(); err == nil {
+		if mj, ok := lib[class]; ok {
+			return archOf()[mj.Config.Arch], true
+		}
+	}
+	return ArchNone, false
 }
 
 // identify turns a HuggingFace tensor name into the triple a container stores.
@@ -1380,6 +1397,10 @@ func hfCheckShape(e *jlm.Tensor, c *Config) error {
 	case jlm.RoleOutputNorm, jlm.RoleAttnNorm, jlm.RoleFFNNorm, jlm.RolePostAttnNorm, jlm.RolePostFFNNorm:
 		return want(embd)
 	case jlm.RoleAttnQ:
+		// An output gate rides in the query projection, each head's gate after its query.
+		if c.Flags.Has(jlm.FlagAttnOutGate) {
+			return want(embd, 2*qrows)
+		}
 		return want(embd, qrows)
 	case jlm.RoleAttnK, jlm.RoleAttnV:
 		return want(embd, kvrows)
@@ -2393,10 +2414,14 @@ func llamaHFFixup(e *jlm.Tensor, data []byte, c *Config) error {
 func gemmaHFFixup(e *jlm.Tensor, data []byte, c *Config) error {
 	switch e.Role {
 	case jlm.RoleAttnNorm, jlm.RoleFFNNorm, jlm.RoleOutputNorm:
-	default:
-		e.Data = data
-		return nil
+		return plusOneNorm(e, data)
 	}
+	e.Data = data
+	return nil
+}
+
+// plusOneNorm stores 1 + weight in float32.
+func plusOneNorm(e *jlm.Tensor, data []byte) error {
 	out := make([]byte, 0, len(data)*2)
 	switch e.Type {
 	case jlm.TypeF32:

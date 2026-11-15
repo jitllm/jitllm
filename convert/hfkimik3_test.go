@@ -433,10 +433,10 @@ func TestK3ConfigRefusals(t *testing.T) {
 // TestPlanIsTheWrite holds the dry run to the conversion: PlanSafetensors,
 // which reads headers only, states the header and the size FromSafetensors
 // then writes, byte for byte, on Kimi-K3's two inputs (F32, and the release's
-// compressed-tensors MXFP4).
+// compressed-tensors MXFP4) and on a class the model.json library converts.
 func TestPlanIsTheWrite(t *testing.T) {
 	for _, dir := range []string{filepath.Join(c6HFDir(), "synth-kimik3"),
-		testmodels.Path("kimik3/Kimi-K3-0.40B-MXFP4-hf")} {
+		testmodels.Path("kimik3/Kimi-K3-0.40B-MXFP4-hf"), testmodels.Path("synth-hf-qwen35")} {
 		t.Run(filepath.Base(dir), func(t *testing.T) {
 			if _, err := os.Stat(filepath.Join(dir, "config.json")); err != nil {
 				testmodels.Missing(t, "MODEL MISSING: %v -- this gate proved nothing", err)

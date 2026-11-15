@@ -1,0 +1,71 @@
+{
+  "classes": ["Qwen3_5ForConditionalGeneration"],
+  "config": {
+    "root": "text_config",
+    "arch": "qwen3next",
+    "keys": {
+      "block_count":                      {"uint": "num_hidden_layers"},
+      "context_length":                   {"uint": "max_position_embeddings ?? 32768"},
+      "embedding_length":                 {"uint": "hidden_size"},
+      "feed_forward_length":              {"uint": "intermediate_size"},
+      "attention.head_count":             {"uint": "num_attention_heads"},
+      "attention.head_count_kv":          {"uint": "num_key_value_heads"},
+      "attention.key_length":             {"uint": "head_dim"},
+      "attention.value_length":           {"uint": "head_dim"},
+      "attention.layer_norm_rms_epsilon": {"float": "rms_norm_eps ?? 1e-6"},
+      "rope.freq_base":                   {"float": "rope_parameters.rope_theta ?? rope_theta"},
+      "rope.dimension_count":             {"uint": "head_dim * (rope_parameters.partial_rotary_factor ?? partial_rotary_factor ?? 0.25)"},
+      "rope.dimension_sections":          {"int32s": "rope_parameters.mrope_section ?? [11, 11, 10]"},
+      "ssm.conv_kernel":                  {"uint": "linear_conv_kernel_dim"},
+      "ssm.state_size":                   {"uint": "linear_key_head_dim"},
+      "ssm.group_count":                  {"uint": "linear_num_key_heads"},
+      "ssm.time_step_rank":               {"uint": "linear_num_value_heads"},
+      "ssm.inner_size":                   {"uint": "linear_value_head_dim * linear_num_value_heads"}
+    },
+    "vocab": "vocab_size",
+    "head": {"tensor": "lm_head.weight", "tied": "tie_word_embeddings ?? $.tie_word_embeddings ?? false"},
+    "layers": {"key": "layer_types", "kinds": {"linear_attention": "recurrent", "full_attention": "attention"}},
+    "refuse": [
+      {"if": "(hidden_act ?? 'silu') != 'silu'", "why": "hidden_act is not silu, and this graph's feed-forward is silu-gated"},
+      {"if": "(attn_output_gate ?? true) == false", "why": "attn_output_gate is false, and the full blocks gate their output"},
+      {"if": "!((rope_parameters.rope_type ?? 'default') in ['default'])", "why": "a rope_type other than default is not implemented"},
+      {"if": "rope_theta != null && rope_parameters.rope_theta != null && rope_theta != rope_parameters.rope_theta",
+       "why": "rope_theta and rope_parameters.rope_theta disagree"},
+      {"if": "partial_rotary_factor != null && rope_parameters.partial_rotary_factor != null && partial_rotary_factor != rope_parameters.partial_rotary_factor",
+       "why": "partial_rotary_factor and rope_parameters.partial_rotary_factor disagree"}
+    ]
+  },
+  "tensors": {
+    "block_prefix": "model.language_model.layers.",
+    "model": {
+      "model.language_model.embed_tokens.weight": "token_embd.weight",
+      "model.language_model.norm.weight":         {"role": "output_norm.weight", "do": ["plus_one"]},
+      "lm_head.weight":                           "output.weight"
+    },
+    "block": {
+      "input_layernorm.weight":          {"role": "attn_norm.weight", "do": ["plus_one"]},
+      "post_attention_layernorm.weight": {"role": "ffn_norm.weight", "do": ["plus_one"]},
+      "self_attn.q_proj.weight":         "attn_q.weight",
+      "self_attn.k_proj.weight":         "attn_k.weight",
+      "self_attn.v_proj.weight":         "attn_v.weight",
+      "self_attn.o_proj.weight":         "attn_output.weight",
+      "self_attn.q_norm.weight":         {"role": "attn_q_norm.weight", "do": ["plus_one"]},
+      "self_attn.k_norm.weight":         {"role": "attn_k_norm.weight", "do": ["plus_one"]},
+      "linear_attn.in_proj_qkv.weight":  "attn_qkv.weight",
+      "linear_attn.in_proj_z.weight":    "attn_gate.weight",
+      "linear_attn.conv1d.weight":       {"role": "ssm_conv1d.weight", "do": ["squeeze"]},
+      "linear_attn.A_log":               {"role": "ssm_a", "do": ["neg_exp"]},
+      "linear_attn.dt_bias":             "ssm_dt.bias",
+      "linear_attn.norm.weight":         "ssm_norm.weight",
+      "linear_attn.out_proj.weight":     "ssm_out.weight",
+      "mlp.gate_proj.weight":            "ffn_gate.weight",
+      "mlp.up_proj.weight":              "ffn_up.weight",
+      "mlp.down_proj.weight":            "ffn_down.weight"
+    },
+    "gather": [
+      {"role": "ssm_ba.weight", "do": "interleave_groups",
+       "from": ["linear_attn.in_proj_b.weight", "linear_attn.in_proj_a.weight"]}
+    ],
+    "ignore_prefix": ["model.visual.", "mtp."]
+  }
+}

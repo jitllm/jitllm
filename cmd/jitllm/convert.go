@@ -39,6 +39,8 @@ func convertCmd(args []string) error {
 		"from the preprocessor_config.json beside it")
 	head := fs.String("head", "", "a GGUF of the model's multi-token-prediction head, published "+
 		"apart from it (unsloth's MTP/mtp-*.gguf): converted as the model's prediction block")
+	modelJSON := fs.String("model-json", "", "safetensors only: convert by this model.json, ahead of "+
+		"the model's own and the built-in library's")
 	plan := fs.Bool("plan", false, "safetensors only: read the shards' headers (by range, for a "+
 		"repository) and print the container the conversion would write -- its size, tensor count "+
 		"and anything it would refuse -- without converting")
@@ -132,6 +134,9 @@ func convertCmd(args []string) error {
 		if *q8 {
 			opts = append(opts, convert.WithQ8())
 		}
+		if *modelJSON != "" {
+			opts = append(opts, convert.WithModelJSON(*modelJSON))
+		}
 		if *plan {
 			return planConvert(sm, src, dst, *q8, opts)
 		}
@@ -151,6 +156,9 @@ func convertCmd(args []string) error {
 		if *q8 {
 			return fmt.Errorf("jitllm convert: -q8 quantizes a safetensors model; %s is a "+
 				"GGUF, whose weights are already quantized", src)
+		}
+		if *modelJSON != "" {
+			return fmt.Errorf("jitllm convert: -model-json reads a safetensors model; %s is a GGUF", src)
 		}
 		h, err = convert.FromGGUFs(src, mmproj, dst, fp, opts...)
 	}

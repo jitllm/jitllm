@@ -53,6 +53,8 @@ DIRS = [
     "synth-dots1-hf", "synth-phimoe-hf", "synth-apertus-hf",
     # YaRN's stated and derived magnitudes, as scripts/c6gold.py saves them.
     "synth-olmo3-af-hf", "synth-mistral3-af-hf", "synth-deepseek-yarn-hf", "synth-deepseek-yarn-af-hf",
+    # A class with a tower, read by a model.json (convert/models).
+    "synth-hf-qwen35",
 ]
 NPOS, NLOGIT = 8, 256
 # Texts for the tokenizer half: a leading space, a double space (sentencepiece
@@ -317,6 +319,62 @@ def synth(name):
     print("made", dst)
 
 
+# Qwen3.5 as Qwen3_5ForConditionalGeneration, the class convert/models/qwen3_5.json
+# reads: the text model under model.language_model., hyperparameters under
+# text_config, and a one-block tower under model.visual. that the converter
+# skips. Four value heads over two key heads, so transformers' grouped head
+# order and the beta/alpha interleave bite; a full block between recurrent
+# ones; the (1 + w) norms random around 0 and the gated norm, a plain weight,
+# around 1. Its own builder: AutoModelForCausalLM would make the flat text class.
+QWEN35_TEXT = dict(
+    hidden_size=64, intermediate_size=96, num_hidden_layers=4, num_attention_heads=4,
+    num_key_value_heads=2, head_dim=32, hidden_act="silu", attn_output_gate=True,
+    linear_conv_kernel_dim=4, linear_key_head_dim=32, linear_value_head_dim=32,
+    linear_num_key_heads=2, linear_num_value_heads=4,
+    layer_types=["linear_attention", "linear_attention", "full_attention", "linear_attention"],
+    max_position_embeddings=512, rms_norm_eps=1e-6, initializer_range=0.1,
+    rope_parameters={"rope_type": "default", "rope_theta": 10000.0, "partial_rotary_factor": 0.25,
+                     "mrope_section": [2, 1, 1], "mrope_interleaved": True},
+    pad_token_id=0, bos_token_id=1, eos_token_id=2, tie_word_embeddings=False)
+
+
+def synth_qwen35(name):
+    import shutil
+    from transformers import Qwen3_5Config, Qwen3_5ForConditionalGeneration
+    donor = "qwen2.5-tiny-random"
+    dst = os.path.realpath(os.path.join(MODELS, name))
+    src = os.path.realpath(os.path.join(MODELS, donor))
+    vocab = Tokenizer.from_file(os.path.join(src, "tokenizer.json")).get_vocab_size()
+    vision = dict(depth=1, hidden_size=32, intermediate_size=64, num_heads=2, out_hidden_size=64,
+                  patch_size=16, spatial_merge_size=2, temporal_patch_size=2, in_channels=3,
+                  deepstack_visual_indexes=[])
+    cfg = Qwen3_5Config(text_config=dict(QWEN35_TEXT, vocab_size=vocab), vision_config=vision,
+                        tie_word_embeddings=False)
+    torch.manual_seed(1234)
+    m = Qwen3_5ForConditionalGeneration(cfg).to(torch.float32)
+    with torch.no_grad():
+        for n, p in m.named_parameters():
+            if p.dim() == 1:
+                p.copy_(torch.randn_like(p) * 0.5 + (1 if n.endswith("linear_attn.norm.weight") else 0))
+    m.save_pretrained(dst)
+    for f in TOKFILES:
+        if os.path.exists(os.path.join(src, f)):
+            shutil.copy(os.path.join(src, f), dst)
+    print("made", dst)
+
+
+def qwen35Stale(name):
+    """True when name has no fixture, or one whose text_config disagrees with QWEN35_TEXT."""
+    p = os.path.join(MODELS, name, "config.json")
+    if not os.path.exists(p):
+        return True
+    have = json.load(open(p)).get("text_config", {})
+    return any(k in have and have[k] != v for k, v in QWEN35_TEXT.items() if k != "rope_parameters")
+
+
+BUILT = {"synth-hf-qwen35": (synth_qwen35, qwen35Stale)}
+
+
 # A windowed fixture runs long enough to cross KV page boundaries: a window
 # SHORTER than a page (32 positions) is read out of one page until it is not,
 # and 8 positions never leave the first.
@@ -355,8 +413,16 @@ def main(dirs):
         # getting a byte-identical argmax list is what caught it.
         if d in SYNTH and synthStale(d):
             synth(d)
+        if d in BUILT and BUILT[d][1](d):
+            BUILT[d][0](d)
         path = os.path.realpath(os.path.join(MODELS, d))
         cfg = AutoConfig.from_pretrained(path)
+        # A class with a tower is loaded as itself, its vocabulary its text model's.
+        cls = AutoModelForCausalLM
+        if d in BUILT:
+            import transformers
+            cls = getattr(transformers, cfg.architectures[0])
+        vocab = getattr(cfg, "vocab_size", None) or cfg.get_text_config().vocab_size
         note = None
         # transformers 5 reads hidden_act ONLY; hidden_activation is the key 4.x
         # added so gemma's mislabelled "gelu" (trained as the tanh approximation)
@@ -366,9 +432,9 @@ def main(dirs):
         if ha and ha != cfg.hidden_act:
             note = "hidden_act %s -> %s (hidden_activation)" % (cfg.hidden_act, ha)
             cfg.hidden_act = ha
-        m = AutoModelForCausalLM.from_pretrained(path, config=cfg, dtype=torch.float32)
+        m = cls.from_pretrained(path, config=cfg, dtype=torch.float32)
         m.eval()
-        ids = ids_for(cfg.vocab_size, LONG.get(d, NPOS))
+        ids = ids_for(vocab, LONG.get(d, NPOS))
         with torch.no_grad():
             lg = m(torch.tensor([ids])).logits[0]
         rows = []
@@ -396,7 +462,7 @@ def main(dirs):
                 r["sp_ids"] = lead + sp.encode(x)
                 r["sp_dec"] = tk.decode(r["sp_ids"], skip_special_tokens=True)
             toks.append(r)
-        rec = {"dir": d, "ids": ids, "vocab": cfg.vocab_size, "pos": rows, "tok": toks}
+        rec = {"dir": d, "ids": ids, "vocab": vocab, "pos": rows, "tok": toks}
         if note:
             rec["note"] = note
         with open(os.path.join(OUT, d + ".json"), "w") as f:

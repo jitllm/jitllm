@@ -60,14 +60,14 @@ func PlanShards(meta fs.FS, name string, shards []*safetensors.File, opts ...Opt
 	for i, f := range shards {
 		hs[i] = f.Headers()
 	}
-	dir := hfDir{meta, name}
-	s, err := hfSourceOf(dir, hs)
-	if err != nil {
-		return nil, err
-	}
 	var o options
 	for _, fn := range opts {
 		fn(&o)
+	}
+	dir := hfDir{meta, name}
+	s, err := hfSourceWith(dir, hs, o.modelJSON)
+	if err != nil {
+		return nil, err
 	}
 	if o.head != "" {
 		return nil, fmt.Errorf("convert: WithHead joins a GGUF head to a GGUF; %s is safetensors", name)
@@ -75,6 +75,12 @@ func PlanShards(meta fs.FS, name string, shards []*safetensors.File, opts ...Opt
 	if o.q8 {
 		quantizeMatrices(s.Tensors)
 	}
+	// FromShards' steps before the write, each of which the header carries.
+	if err := o.applyChatTemplate(s); err != nil {
+		return nil, err
+	}
+	s.Origin = originOf(name, shards)
+	stateToolForm(s)
 	h, size, err := jlm.Plan(s, jlm.Fingerprint{Writer: jlm.WriterID()})
 	if err != nil {
 		return nil, err
@@ -95,7 +101,7 @@ func PlanShards(meta fs.FS, name string, shards []*safetensors.File, opts ...Opt
 	if err != nil {
 		return nil, err
 	}
-	ha, err := hfArchOf(hc)
+	ha, err := hfArchFor(dir, hc, o.modelJSON)
 	if err != nil {
 		return nil, err
 	}

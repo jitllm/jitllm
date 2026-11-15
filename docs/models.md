@@ -8,7 +8,7 @@ by name. `internal/srcgate.TestModelsDocIsGenerated` fails when the page and the
 `go run ./scripts/genmodels docs/models.md`.
 
 - **69** GGUF text architecture names (`general.architecture`, `convert.Architectures`) on **60** graphs
-- **31** Hugging Face safetensors classes (`architectures` in `config.json`, `convert.HFClasses`) on **24** graphs, **1** of them reached only from safetensors
+- **32** Hugging Face safetensors classes (`architectures` in `config.json`, `convert.HFClasses`) on **25** graphs, **1** of them reached only from safetensors
 - **61** graphs in all (`convert.Arch`)
 - **19** vision projectors (`clip.projector_type`, `convert.Projectors`)
 - **1** audio projectors (`clip.audio.projector_type`, `convert.AudioProjectors`)
@@ -75,7 +75,7 @@ further at conversion (a stated sliding window, M-RoPE sections); the Models col
 | `qwen2vl` | `qwen2vl` | -- | the text model of Qwen2-VL and Qwen2.5-VL |
 | `qwen3` | `qwen3` | `Qwen3ForCausalLM` | Qwen3 dense; Qwen3-Embedding (pooled) |
 | `qwen3moe` | `qwen3moe` | `Qwen3MoeForCausalLM` | Qwen3 30B-A3B, 235B-A22B |
-| `qwen3next` | `clef`, `qwen35`, `qwen35moe`, `qwen3next` | -- | `clef`: Clef-Flash (decision model, /v1/systemone); `qwen35`: Qwen3.5 dense; `qwen35moe`: Qwen3.5 and Qwen3.6 mixtures; `qwen3next`: Qwen3-Next 80B-A3B |
+| `qwen3next` | `clef`, `qwen35`, `qwen35moe`, `qwen3next` | `Qwen3_5ForConditionalGeneration` | `clef`: Clef-Flash (decision model, /v1/systemone); `qwen35`: Qwen3.5 dense; `qwen35moe`: Qwen3.5 and Qwen3.6 mixtures; `qwen3next`: Qwen3-Next 80B-A3B |
 | `qwen3vl` | `qwen3vl` | -- | Qwen3-VL dense text models |
 | `qwen3vlmoe` | `qwen3vlmoe` | -- | Qwen3-VL mixtures |
 | `qwen4exp` | `qwen4exp` | -- | Qwen3.8-Flash-Next (text) |
@@ -121,6 +121,7 @@ classes; any other is refused, and `model_type` is not a fallback.
 | `Qwen2MoeForCausalLM` | `qwen2moe` | Qwen1.5-MoE, Qwen2-57B-A14B |
 | `Qwen3ForCausalLM` | `qwen3` | Qwen3 dense |
 | `Qwen3MoeForCausalLM` | `qwen3moe` | Qwen3 mixtures |
+| `Qwen3_5ForConditionalGeneration` | `qwen3next` | Qwen3.5 dense and Qwen3.8's text model, by convert/models/qwen3_5.json |
 | `SeedOssForCausalLM` | `seed_oss` | Seed-OSS |
 | `SmolLM3ForCausalLM` | `smollm3` | SmolLM3 |
 
