@@ -1861,6 +1861,7 @@ type hfYarn struct {
 	MScale       *float64 `json:"mscale"`
 	MScaleAllDim *float64 `json:"mscale_all_dim"`
 	AttnFactor   *float64 `json:"attention_factor"`
+	Truncate     *bool    `json:"truncate"`
 }
 
 // hfYarnConsume reads a YaRN rope_scaling and removes it from the config, so
@@ -1911,16 +1912,21 @@ func hfYarnApply(y *hfYarn, cfg *Config) {
 	if cfg.YarnOrigCtx == 0 {
 		cfg.YarnOrigCtx = cfg.NCtx
 	}
+	// Python's truthiness: an absent key and a zero are both false, so
+	// `get("beta_fast") or 32` reads a zero as the default too.
+	set := func(p *float64) bool { return p != nil && *p != 0 }
 	cfg.YarnBetaFast, cfg.YarnBetaSlow = 32, 1
-	if y.BetaFast != nil {
+	if set(y.BetaFast) {
 		cfg.YarnBetaFast = float32(*y.BetaFast)
 	}
-	if y.BetaSlow != nil {
+	if set(y.BetaSlow) {
 		cfg.YarnBetaSlow = float32(*y.BetaSlow)
 	}
+	// truncate false takes the correction range as computed, unrounded.
+	if y.Truncate != nil && !*y.Truncate {
+		cfg.Flags |= jlm.FlagYarnExact
+	}
 	ms := func(k float64) float64 { return 0.1*k*math.Log(y.Factor) + 1 }
-	// Python's truthiness: an absent key and a zero are both false.
-	set := func(p *float64) bool { return p != nil && *p != 0 }
 	switch {
 	case y.AttnFactor != nil:
 		cfg.AttnFactor *= float32(*y.AttnFactor)
