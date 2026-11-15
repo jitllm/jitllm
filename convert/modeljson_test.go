@@ -715,8 +715,10 @@ func TestModelJSONStatements(t *testing.T) {
 	}
 	mj := lib["Qwen3_5ForConditionalGeneration"]
 	names := []string{"lm_head.weight"}
+	// Qwen3.5's class gates the attention output whatever a config says (it
+	// has no attn_output_gate): q_proj always carries the gate.
 	c, err := mj.config(qwen35TestConfig(t, `"attn_output_gate": true`, `"attn_output_gate": false`), names)
-	if err != nil || c.Flags.Has(jlm.FlagAttnOutGate) {
+	if err != nil || !c.Flags.Has(jlm.FlagAttnOutGate) {
 		t.Errorf("attn_output_gate false: %v, gate flag %v", err, err == nil && c.Flags.Has(jlm.FlagAttnOutGate))
 	}
 	// A mixture some block of which carries no experts is refused; every block

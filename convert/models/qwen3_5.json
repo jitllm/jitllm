@@ -27,7 +27,7 @@
     "layers": {"key": "layer_types", "kinds": {"linear_attention": "recurrent", "full_attention": "attention"}},
     "activation": "hidden_act ?? 'silu'",
     "rope_scaling": "rope_parameters ?? rope_scaling",
-    "flags": {"attention_output_gate": "attn_output_gate ?? true"}
+    "flags": {"attention_output_gate": "true"}
   },
   "tensors": {
     "block_prefix": "model.language_model.layers.",
