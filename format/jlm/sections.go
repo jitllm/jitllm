@@ -217,8 +217,12 @@ func encodeConfigAt(c *Config, v uint32) []byte {
 	// backbone it is. The twenty-sixth, a marker head's prompt, implies the
 	// first twenty-five, an empty label statement standing for none.
 	// The twenty-seventh, a joint head's statement, implies the first
-	// twenty-six, an empty marker prompt standing for none.
-	joint := c.JointHead != nil
+	// twenty-six, an empty marker prompt standing for none. The
+	// twenty-eighth, the blocks' graphs, implies the first twenty-seven, a
+	// joint head of zeros standing for none (an older reader builds a
+	// decision graph no request reaches).
+	graphs := len(c.Blocks.Graphs) != 0 || len(c.Blocks.Of) != 0
+	joint := graphs || c.JointHead != nil
 	marker := joint || c.MarkerPrompt != nil
 	labels := marker || c.DecisionLabels != nil
 	delta := labels || c.DeltaDecay != nil || c.DeltaGate != nil
@@ -399,7 +403,14 @@ func encodeConfigAt(c *Config, v uint32) []byte {
 		encodeMarkerPrompt(w, p)
 	}
 	if joint {
-		encodeJointHead(w, c.JointHead)
+		j := c.JointHead
+		if j == nil {
+			j = &JointHead{}
+		}
+		encodeJointHead(w, j)
+	}
+	if graphs {
+		encodeBlockGraphs(w, &c.Blocks)
 	}
 	return w.b
 }
@@ -610,7 +621,12 @@ func decodeConfigAt(b []byte, v uint32) (*Config, error) {
 		}
 	}
 	if r.err == nil && len(r.b) > 0 {
-		c.JointHead = decodeJointHead(r)
+		if j := decodeJointHead(r); *j != (JointHead{}) {
+			c.JointHead = j
+		}
+	}
+	if r.err == nil && len(r.b) > 0 {
+		c.Blocks = decodeBlockGraphs(r)
 	}
 	if r.err != nil {
 		return nil, r.err
@@ -640,6 +656,9 @@ func decodeConfigAt(b []byte, v uint32) (*Config, error) {
 		return nil, fmt.Errorf("jlm: %d layers' bidirectional statement for %d layers", n, c.NLayer)
 	}
 	if err := ngramValid(c); err != nil {
+		return nil, err
+	}
+	if err := c.Blocks.valid(int(c.NLayer + c.NMTP)); err != nil {
 		return nil, err
 	}
 	if err := c.olderStatements(); err != nil {

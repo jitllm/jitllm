@@ -584,6 +584,11 @@ func hfSourceWith(dir hfDir, shards []*safetensors.File, modelJSON string) (*jlm
 	}
 	StateDelta(cfg.Config, sourceStores(s))
 	StateRevision(cfg)
+	if ha.graph != nil {
+		if err := StateBlockGraphs(cfg, s, ha.graph); err != nil {
+			return nil, err
+		}
+	}
 	return s, nil
 }
 
@@ -1020,6 +1025,9 @@ type hfArch struct {
 	// template is the class's chat template where its release states none:
 	// one that renders its chat in code ships no Jinja.
 	template string
+	// graph is the blocks' graph the class's model.json states, nil where
+	// the engine builds it.
+	graph *mjGraph
 	// model holds whole-name, model-level tensors.
 	model map[string]jlm.Role
 	// block holds the suffix after "model.layers.N.".

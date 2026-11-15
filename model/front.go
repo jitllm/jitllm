@@ -626,20 +626,16 @@ func (m *Model) shortVector(li int, g *graph.Graph) error {
 }
 
 func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
+	if s := m.Container.Config().Blocks.Graph(li); s != "" {
+		return m.statedBlockGraph(li, s)
+	}
 	if why := m.uncovered(li); why != Covered {
 		return nil, why, nil
 	}
 	c := m.Cfg.at(li)
-	f, perExpert := m.Inventory(int32(li))
-	if perExpert {
-		return nil, UncoveredExperts, nil
-	}
-	// A prediction block's own head mix is its collapse graph's
-	// (streamCollapseGraphAt), not its body's.
-	if li >= c.NLayer {
-		for _, r := range []jlm.Role{jlm.RoleHCHeadNorm, jlm.RoleHCHeadDown, jlm.RoleHCHeadUp} {
-			delete(f.Inventory, r)
-		}
+	f, why := m.blockFacts(li)
+	if why != Covered {
+		return nil, why, nil
 	}
 	has := func(r jlm.Role) bool {
 		_, ok := f.Inventory[r]
@@ -1041,6 +1037,40 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 		att = sigmoidMul(b, "gated", gate, att)
 	}
 	return m.blockRest(b, f, li, x, n, att, jlm.RoleAttnOut, preNorm, norm, resid, matvec, stored, has, st, side...)
+}
+
+// blockFacts is what the container stores for block li, as its graph binds
+// it: a prediction block's own head mix is its collapse graph's
+// (streamCollapseGraphAt), not its body's.
+func (m *Model) blockFacts(li int) (graph.Facts, Uncovered) {
+	f, perExpert := m.Inventory(int32(li))
+	if perExpert {
+		return f, UncoveredExperts
+	}
+	if li >= m.Cfg.NLayer {
+		for _, r := range []jlm.Role{jlm.RoleHCHeadNorm, jlm.RoleHCHeadDown, jlm.RoleHCHeadUp} {
+			delete(f.Inventory, r)
+		}
+	}
+	return f, Covered
+}
+
+// statedBlockGraph is block li's graph as the converter states it (s,
+// graph.Encode's), held to what the container stores for the block as a
+// graph built here is.
+func (m *Model) statedBlockGraph(li int, s string) (*graph.Graph, Uncovered, error) {
+	f, why := m.blockFacts(li)
+	if why != Covered {
+		return nil, why, nil
+	}
+	g, err := graph.Decode([]byte(s), li, f)
+	if err != nil {
+		return nil, UncoveredUnverified, err
+	}
+	if u := graph.Unbound(g, f); len(u) != 0 {
+		return nil, UncoveredUnbound, fmt.Errorf("the container stores %v for block %d, which its stated graph does not bind", u, li)
+	}
+	return g, Covered, nil
 }
 
 // blockRest is block li's graph after its mixer's output att: the norm

@@ -38,7 +38,10 @@ type modelJSON struct {
 	Template string    `json:"template"`
 	Config   mjConfig  `json:"config"`
 	Tensors  mjTensors `json:"tensors"`
-	name     string    // for messages
+	// Graph states the blocks' graph (blockgraph.go); absent, the engine
+	// builds it from the config.
+	Graph *mjGraph `json:"graph"`
+	name  string   // for messages
 }
 
 type mjConfig struct {
@@ -281,6 +284,11 @@ func parseModelJSON(b []byte, name string) (*modelJSON, error) {
 			return nil, fmt.Errorf("convert: %s: gating %q is not a router gate the container states", name, g)
 		}
 	}
+	if g := mj.Graph; g != nil {
+		if err := g.check(); err != nil {
+			return nil, fmt.Errorf("convert: %s: %w", name, err)
+		}
+	}
 	return mj, nil
 }
 
@@ -367,6 +375,7 @@ func (mj *modelJSON) hfArch() (*hfArch, error) {
 	a := &hfArch{
 		arch:         archOf()[mj.Config.Arch],
 		template:     mj.Template,
+		graph:        mj.Graph,
 		blockPrefix:  mj.Tensors.BlockPrefix,
 		model:        map[string]jlm.Role{},
 		block:        map[string]jlm.Role{},

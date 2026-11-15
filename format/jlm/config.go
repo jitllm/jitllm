@@ -416,6 +416,8 @@ type Config struct {
 	// JointHead is a joint head's statement (Clef's JointSchemaHead), nil
 	// for a readout of another mechanism. The twenty-seventh optional tail.
 	JointHead *JointHead
+	// Blocks are the blocks' graphs where the converter states them.
+	Blocks BlockGraphs
 
 	// Acts are the FFN activations the blocks apply, each stated in the op
 	// language (Expr), and ActLayers each layer's index into them (none:
