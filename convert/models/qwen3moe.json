@@ -12,6 +12,7 @@
       "attention.key_length":             {"uint": "head_dim ?? (hidden_size ?? 2048) / (num_attention_heads ?? 32)"},
       "attention.value_length":           {"uint": "head_dim ?? (hidden_size ?? 2048) / (num_attention_heads ?? 32)"},
       "attention.layer_norm_rms_epsilon": {"float": "rms_norm_eps ?? 1e-6"},
+      "rope.dimension_count":             {"uint": "(head_dim ?? (hidden_size ?? 2048) / (num_attention_heads ?? 32)) * (rope_parameters.partial_rotary_factor ?? partial_rotary_factor ?? 1)"},
       "rope.freq_base":                   {"float": "rope_parameters.rope_theta ?? rope_theta ?? 10000"},
       "expert_count":                     {"uint": "num_experts ?? 128"},
       "expert_used_count":                {"uint": "num_experts_per_tok ?? 8"},
@@ -20,17 +21,9 @@
     },
     "vocab": "vocab_size ?? 151936",
     "head": {"tensor": "lm_head.weight", "tied": "tie_word_embeddings ?? false"},
-    "refuse": [
-      {"if": "!((hidden_act ?? 'silu') in ['silu', 'swish'])", "why": "hidden_act is not silu, and this graph's feed-forward is silu-gated"},
-      {"if": "mlp_bias ?? false", "why": "mlp_bias is true, and this container has no feed-forward bias role"},
-      {"if": "!((rope_parameters.rope_type ?? rope_scaling.rope_type ?? rope_scaling.type ?? 'default') in ['default'])",
-       "why": "a rope scaling other than none is not implemented"},
-      {"if": "(rope_parameters.partial_rotary_factor ?? partial_rotary_factor ?? 1) != 1", "why": "a partial rotary is not implemented here"},
-      {"if": "(use_sliding_window ?? false) && (sliding_window ?? 0) != 0", "why": "a sliding window in use is not implemented from safetensors"},
-      {"if": "(decoder_sparse_step ?? 1) > 1 || (mlp_only_layers ?? []) != []",
-       "why": "dense and sparse layers in one model is not implemented"},
-      {"if": "(shared_expert_intermediate_size ?? 0) != 0", "why": "a shared expert is not implemented from safetensors"}
-    ]
+    "activation": "hidden_act ?? 'silu'",
+    "rope_scaling": "rope_parameters ?? rope_scaling",
+    "window": {"size": "sliding_window", "used": "use_sliding_window ?? false"}
   },
   "tensors": {
     "block_prefix": "model.layers.",

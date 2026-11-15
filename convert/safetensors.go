@@ -464,6 +464,11 @@ func hfSourceWith(dir hfDir, shards []*safetensors.File, modelJSON string) (*jlm
 		for i, d := range shape {
 			e.Dims[len(shape)-1-i] = d
 		}
+		if ha.shape != nil && rt == nil && !loc.mx() {
+			if err := ha.shape(&e); err != nil {
+				return nil, err
+			}
+		}
 		parts := []jlm.Tensor{e}
 		roles, isFused := ha.fused[role]
 		sp := ha.split[ha.blockRest(name)]
@@ -1110,6 +1115,10 @@ type hfArch struct {
 	// whose weights are already in the container's layout leaves it nil and
 	// setData carries the bytes through.
 	fixup func(*jlm.Tensor, []byte, *Config) error
+	// shape states the type and shape fixup gives a tensor, before the tensor
+	// is laid out, so a transform that changes them still reads its source
+	// when the writer reaches it. Optional.
+	shape func(*jlm.Tensor) error
 	// retype gives a tensor a container type its source dtype does not map
 	// to, before anything is laid out: the type, the [rows, cols] shape and
 	// the read that produces its bytes (BitNet's ternary projections, from

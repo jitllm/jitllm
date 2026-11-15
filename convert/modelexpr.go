@@ -9,11 +9,18 @@ import (
 // A model.json expression reads a config.json: numbers, strings, booleans,
 // lists, null, paths into the config (a.b.c from the file's root, $.a.b from
 // its top), arithmetic (+ - * /), comparisons (== != < <= > >=, in), logic
-// (&& || !) and a ?? b, which is b where a is absent. There are no loops and
-// no calls, so an expression sizes nothing (RULE 9), and its depth is bounded.
+// (&& || !) and a ?? b, which is b where a is absent. There are no loops, and
+// calls (exp, log, sqrt, tanh) are a tensor map's alone, so an expression sizes
+// nothing (RULE 9), and its depth is bounded.
 //
 // An absent key is null; null in arithmetic or an ordering is an error that
 // names the key, so a default is written, never assumed.
+//
+// a ?? b with both sides bare config paths says they are one key spelled two
+// ways: both present and disagreeing is an error, as there is no knowing which
+// the weights were trained under. A parenthesised side states precedence
+// instead -- a ?? (b) is a, and b only where a is absent -- which is how a
+// default read from another key is written.
 
 const exprMaxDepth = 64
 
@@ -23,6 +30,9 @@ type exprNode struct {
 	str  string
 	b    bool
 	args []*exprNode
+	// paren marks a parenthesised node: a ?? (b) states precedence, not a
+	// second spelling.
+	paren bool
 }
 
 type exprParser struct {
@@ -214,6 +224,7 @@ func (p *exprParser) atom() (*exprNode, error) {
 			return nil, fmt.Errorf("expression %q: a parenthesis is not closed", p.src)
 		}
 		p.i++
+		x.paren = true
 		return x, nil
 	case t == "[":
 		n := &exprNode{op: "list"}
@@ -250,6 +261,32 @@ func (p *exprParser) atom() (*exprNode, error) {
 		if strings.HasPrefix(t, ".") || strings.HasSuffix(t, ".") || strings.Contains(t, "..") {
 			return nil, fmt.Errorf("expression %q: %q is not a path", p.src, t)
 		}
+		if p.peek() == "(" && !strings.ContainsAny(t, ".$") {
+			p.i++
+			if err := p.enter(); err != nil {
+				return nil, err
+			}
+			defer func() { p.depth-- }()
+			n := &exprNode{op: "call", str: t}
+			for p.peek() != ")" {
+				if p.peek() == "" {
+					return nil, fmt.Errorf("expression %q: a call is not closed", p.src)
+				}
+				if len(n.args) > 0 {
+					if p.peek() != "," {
+						return nil, fmt.Errorf("expression %q: a call wants a comma, not %q", p.src, p.peek())
+					}
+					p.i++
+				}
+				x, err := p.coalesce()
+				if err != nil {
+					return nil, err
+				}
+				n.args = append(n.args, x)
+			}
+			p.i++
+			return n, nil
+		}
 		return &exprNode{op: "path", str: t}, nil
 	}
 }
@@ -282,10 +319,23 @@ func evalMJ(n *exprNode, env exprEnv) (any, error) {
 		return out, nil
 	case "??":
 		l, err := evalMJ(n.args[0], env)
-		if err != nil || l != nil {
-			return l, err
+		if err != nil {
+			return nil, err
 		}
-		return evalMJ(n.args[1], env)
+		if l == nil {
+			return evalMJ(n.args[1], env)
+		}
+		if a, b := n.args[0], n.args[1]; a.op == "path" && b.op == "path" && !a.paren && !b.paren {
+			if r := env(b.str); r != nil {
+				if eq, err := exprEqual(l, r); err != nil || !eq {
+					return nil, fmt.Errorf("%s and %s are one key spelled two ways, and they disagree (%v and %v)",
+						a.str, b.str, l, r)
+				}
+			}
+		}
+		return l, nil
+	case "call":
+		return nil, fmt.Errorf("%s(): calls are a tensor map's, not a config's", n.str)
 	case "&&", "||":
 		l, err := evalBool(n.args[0], env)
 		if err != nil || l == (n.op == "||") {
@@ -405,6 +455,17 @@ func exprEqual(a, b any) (bool, error) {
 			}
 		}
 		return true, nil
+	case map[string]any:
+		bv, ok := b.(map[string]any)
+		if !ok || len(bv) != len(av) {
+			return false, nil
+		}
+		for k, x := range av {
+			if eq, err := exprEqual(x, bv[k]); err != nil || !eq {
+				return eq, err
+			}
+		}
+		return true, nil
 	}
 	return false, fmt.Errorf("%s compared with ==", exprKind(a))
 }
@@ -421,6 +482,8 @@ func exprKind(v any) string {
 		return "a boolean"
 	case []any:
 		return "a list"
+	case map[string]any:
+		return "an object"
 	}
 	return fmt.Sprintf("%T", v)
 }

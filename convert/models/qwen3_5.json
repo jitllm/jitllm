@@ -25,36 +25,31 @@
     "vocab": "vocab_size",
     "head": {"tensor": "lm_head.weight", "tied": "tie_word_embeddings ?? $.tie_word_embeddings ?? false"},
     "layers": {"key": "layer_types", "kinds": {"linear_attention": "recurrent", "full_attention": "attention"}},
-    "refuse": [
-      {"if": "(hidden_act ?? 'silu') != 'silu'", "why": "hidden_act is not silu, and this graph's feed-forward is silu-gated"},
-      {"if": "(attn_output_gate ?? true) == false", "why": "attn_output_gate is false, and the full blocks gate their output"},
-      {"if": "!((rope_parameters.rope_type ?? 'default') in ['default'])", "why": "a rope_type other than default is not implemented"},
-      {"if": "rope_theta != null && rope_parameters.rope_theta != null && rope_theta != rope_parameters.rope_theta",
-       "why": "rope_theta and rope_parameters.rope_theta disagree"},
-      {"if": "partial_rotary_factor != null && rope_parameters.partial_rotary_factor != null && partial_rotary_factor != rope_parameters.partial_rotary_factor",
-       "why": "partial_rotary_factor and rope_parameters.partial_rotary_factor disagree"}
-    ]
+    "activation": "hidden_act ?? 'silu'",
+    "rope_scaling": "rope_parameters ?? rope_scaling",
+    "flags": {"attention_output_gate": "attn_output_gate ?? true"}
   },
   "tensors": {
     "block_prefix": "model.language_model.layers.",
     "model": {
       "model.language_model.embed_tokens.weight": "token_embd.weight",
-      "model.language_model.norm.weight":         {"role": "output_norm.weight", "do": ["plus_one"]},
+      "model.language_model.norm.weight":         {"role": "output_norm.weight", "do": [{"map": "x + 1"}]},
       "lm_head.weight":                           "output.weight"
     },
     "block": {
-      "input_layernorm.weight":          {"role": "attn_norm.weight", "do": ["plus_one"]},
-      "post_attention_layernorm.weight": {"role": "ffn_norm.weight", "do": ["plus_one"]},
+      "input_layernorm.weight":          {"role": "attn_norm.weight", "do": [{"map": "x + 1"}]},
+      "post_attention_layernorm.weight": {"role": "ffn_norm.weight", "do": [{"map": "x + 1"}]},
       "self_attn.q_proj.weight":         "attn_q.weight",
       "self_attn.k_proj.weight":         "attn_k.weight",
       "self_attn.v_proj.weight":         "attn_v.weight",
       "self_attn.o_proj.weight":         "attn_output.weight",
-      "self_attn.q_norm.weight":         {"role": "attn_q_norm.weight", "do": ["plus_one"]},
-      "self_attn.k_norm.weight":         {"role": "attn_k_norm.weight", "do": ["plus_one"]},
+      "self_attn.q_norm.weight":         {"role": "attn_q_norm.weight", "do": [{"map": "x + 1"}]},
+      "self_attn.k_norm.weight":         {"role": "attn_k_norm.weight", "do": [{"map": "x + 1"}]},
       "linear_attn.in_proj_qkv.weight":  "attn_qkv.weight",
       "linear_attn.in_proj_z.weight":    "attn_gate.weight",
-      "linear_attn.conv1d.weight":       {"role": "ssm_conv1d.weight", "do": ["squeeze"]},
-      "linear_attn.A_log":               {"role": "ssm_a", "do": ["neg_exp"]},
+      "linear_attn.conv1d.weight":       {"role": "ssm_conv1d.weight",
+                                          "do": [{"reshape": [-1, "linear_conv_kernel_dim"]}]},
+      "linear_attn.A_log":               {"role": "ssm_a", "do": [{"map": "-exp(x)"}]},
       "linear_attn.dt_bias":             "ssm_dt.bias",
       "linear_attn.norm.weight":         "ssm_norm.weight",
       "linear_attn.out_proj.weight":     "ssm_out.weight",
@@ -63,8 +58,9 @@
       "mlp.down_proj.weight":            "ffn_down.weight"
     },
     "gather": [
-      {"role": "ssm_ba.weight", "do": "interleave_groups",
-       "from": ["linear_attn.in_proj_b.weight", "linear_attn.in_proj_a.weight"]}
+      {"role": "ssm_ba.weight", "from": ["linear_attn.in_proj_b.weight", "linear_attn.in_proj_a.weight"],
+       "do": [{"stack": 0}, {"reshape": [2, "linear_num_key_heads", -1]}, {"transpose": [1, 0, 2]},
+              {"reshape": ["2 * linear_num_value_heads", -1]}]}
     ],
     "ignore_prefix": ["model.visual.", "mtp."]
   }

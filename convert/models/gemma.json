@@ -12,31 +12,26 @@
       "attention.key_length":             {"uint": "head_dim ?? 256"},
       "attention.value_length":           {"uint": "head_dim ?? 256"},
       "attention.layer_norm_rms_epsilon": {"float": "rms_norm_eps ?? 1e-6"},
+      "rope.dimension_count":             {"uint": "(head_dim ?? 256) * (rope_parameters.partial_rotary_factor ?? partial_rotary_factor ?? 1)"},
       "rope.freq_base":                   {"float": "rope_parameters.rope_theta ?? rope_theta ?? 10000"}
     },
     "vocab": "vocab_size ?? 256000",
     "head": {"tensor": "lm_head.weight", "tied": "tie_word_embeddings ?? true"},
-    "refuse": [
-      {"if": "(hidden_activation ?? hidden_act ?? 'gelu_pytorch_tanh') != 'gelu_pytorch_tanh'",
-       "why": "the activation is not gelu_pytorch_tanh, and this graph's feed-forward is tanh-GELU-gated"},
-      {"if": "mlp_bias ?? false", "why": "mlp_bias is true, and this container has no feed-forward bias role"},
-      {"if": "!((rope_parameters.rope_type ?? rope_scaling.rope_type ?? rope_scaling.type ?? 'default') in ['default'])",
-       "why": "a rope scaling other than none is not implemented"},
-      {"if": "(rope_parameters.partial_rotary_factor ?? partial_rotary_factor ?? 1) != 1", "why": "a partial rotary is not implemented here"},
-      {"if": "(use_sliding_window ?? true) && (sliding_window ?? 0) != 0", "why": "a sliding window in use is not implemented from safetensors"},
-      {"if": "use_bidirectional_attention ?? false", "why": "use_bidirectional_attention changes the mask, and this graph is causal"}
-    ]
+    "activation": "hidden_activation ?? (hidden_act ?? 'gelu_pytorch_tanh')",
+    "rope_scaling": "rope_parameters ?? rope_scaling",
+    "window": {"size": "sliding_window", "used": "use_sliding_window ?? true"},
+    "flags": {"non_causal": "use_bidirectional_attention ?? false"}
   },
   "tensors": {
     "block_prefix": "model.layers.",
     "model": {
       "model.embed_tokens.weight": "token_embd.weight",
-      "model.norm.weight":         {"role": "output_norm.weight", "do": ["plus_one"]},
+      "model.norm.weight":         {"role": "output_norm.weight", "do": [{"map": "x + 1"}]},
       "lm_head.weight":            "output.weight"
     },
     "block": {
-      "input_layernorm.weight":          {"role": "attn_norm.weight", "do": ["plus_one"]},
-      "post_attention_layernorm.weight": {"role": "ffn_norm.weight", "do": ["plus_one"]},
+      "input_layernorm.weight":          {"role": "attn_norm.weight", "do": [{"map": "x + 1"}]},
+      "post_attention_layernorm.weight": {"role": "ffn_norm.weight", "do": [{"map": "x + 1"}]},
       "self_attn.q_proj.weight":         "attn_q.weight",
       "self_attn.k_proj.weight":         "attn_k.weight",
       "self_attn.v_proj.weight":         "attn_v.weight",

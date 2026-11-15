@@ -17,10 +17,12 @@ import (
 )
 
 // A model.json states what the converter reads from a model's files: which
-// config keys mean what, which tensor names hold which roles, and the
-// transforms from the converter's closed vocabulary that reshape a tensor on
-// the way in. It is data; the transforms are Go. docs/design/model-json.md
-// is the design.
+// config keys mean what, which tensor names hold which roles, and how a tensor
+// is reshaped on the way in, as a composition of the tensor primitives
+// (mjtransforms.go). It is data: the Go is the primitives and the generic
+// readers of its statements, and knows no model. What the converter cannot
+// express it refuses in code, by name, one rule for every file.
+// docs/design/model-json.md is the design.
 //
 // One is found, in order of authority: the caller's (WithModelJSON), the
 // model directory's own model.json, the library embedded here
@@ -47,9 +49,46 @@ type mjConfig struct {
 	Arch   string           `json:"arch"`
 	Keys   map[string]mjKey `json:"keys"`
 	Vocab  string           `json:"vocab"`
-	Refuse []mjRefusal      `json:"refuse"`
 	Layers *mjLayers        `json:"layers"`
 	Head   mjHead           `json:"head"`
+	// Activation is the feed-forward's activation by its transformers name
+	// (mjActivations).
+	Activation string `json:"activation"`
+	// RopeScaling is the rope scaling object (rope_parameters or
+	// rope_scaling), null for none.
+	RopeScaling string `json:"rope_scaling"`
+	// Window is a sliding window: its size, and whether it is in use.
+	Window *mjWindow `json:"window"`
+	// Flags states named graph features (mjFlags), each a boolean.
+	Flags map[string]string `json:"flags"`
+}
+
+type mjWindow struct {
+	Size string `json:"size"`
+	Used string `json:"used"`
+}
+
+// mjActivations is each feed-forward activation the container states, by its
+// transformers name, as the activation flags it sets; another name is refused.
+func mjActivations() map[string]jlm.Flags {
+	return map[string]jlm.Flags{
+		"silu":              0,
+		"swish":             0,
+		"gelu_pytorch_tanh": jlm.FlagGELU,
+		"relu2":             jlm.FlagReLU2,
+	}
+}
+
+// mjActivationFlags are the flags mjActivations decides between.
+const mjActivationFlags = jlm.FlagGELU | jlm.FlagReLU2
+
+// mjFlags is each graph feature a file may state by name, as the container
+// flag the engine runs it by.
+func mjFlags() map[string]jlm.Flags {
+	return map[string]jlm.Flags{
+		"attention_output_gate": jlm.FlagAttnOutGate,
+		"non_causal":            jlm.FlagNonCausal,
+	}
 }
 
 // mjKey is one GGUF key's value, an expression with the key's type.
@@ -58,11 +97,6 @@ type mjKey struct {
 	Float  string `json:"float"`
 	Int32s string `json:"int32s"`
 	Bool   string `json:"bool"`
-}
-
-type mjRefusal struct {
-	If  string `json:"if"`
-	Why string `json:"why"`
 }
 
 // mjLayers reads each block's kind from a list in the config.
@@ -97,10 +131,10 @@ type mjExperts struct {
 }
 
 // mjTensor is a source tensor's role, by the role's GGUF tensor name (roleOf),
-// and the transforms it takes in order. A bare string is the role alone.
+// and the primitives it takes in order. A bare string is the role alone.
 type mjTensor struct {
-	Role string   `json:"role"`
-	Do   []string `json:"do"`
+	Role string `json:"role"`
+	Do   mjPipe `json:"do"`
 }
 
 func (t *mjTensor) UnmarshalJSON(b []byte) error {
@@ -115,11 +149,12 @@ func (t *mjTensor) UnmarshalJSON(b []byte) error {
 	return d.Decode((*plain)(t))
 }
 
-// mjGather builds one tensor a block from several sources by a transform.
+// mjGather builds one tensor a block from several sources, each entering as
+// the vector of its values, by primitives that leave one tensor.
 type mjGather struct {
 	Role string   `json:"role"`
-	Do   string   `json:"do"`
 	From []string `json:"from"`
+	Do   mjPipe   `json:"do"`
 }
 
 func parseModelJSON(b []byte, name string) (*modelJSON, error) {
@@ -137,6 +172,17 @@ func parseModelJSON(b []byte, name string) (*modelJSON, error) {
 	}
 	if mj.Config.Vocab == "" || mj.Config.Head.Tensor == "" {
 		return nil, fmt.Errorf("convert: %s states no vocab or no head tensor", name)
+	}
+	if mj.Config.Activation == "" {
+		return nil, fmt.Errorf("convert: %s states no activation", name)
+	}
+	for f := range mj.Config.Flags {
+		if _, ok := mjFlags()[f]; !ok {
+			return nil, fmt.Errorf("convert: %s: flag %q is not a graph feature the container states", name, f)
+		}
+	}
+	if w := mj.Config.Window; w != nil && (w.Size == "" || w.Used == "") {
+		return nil, fmt.Errorf("convert: %s: a window states its size and whether it is used", name)
 	}
 	return mj, nil
 }
@@ -244,31 +290,19 @@ func (mj *modelJSON) hfArch() (*hfArch, error) {
 			a.expert[n] = role
 		}
 	}
-	elem := map[string][]mjElem{}
+	st := &mjState{src: map[string]mjVal{}}
+	pipes := map[string]mjPipe{}
 	add := func(dst map[string]jlm.Role, name string, t mjTensor) error {
 		r, ok := roleOf(t.Role)
 		if !ok {
 			return fmt.Errorf("convert: %s: %s's role %q is not a tensor name the container knows", mj.name, name, t.Role)
 		}
 		dst[name] = retarget(a.arch, r)
-		var shape []hfSplit
-		for _, d := range t.Do {
-			if f, ok := mjElems()[d]; ok {
-				elem[name] = append(elem[name], f)
-				continue
+		if len(t.Do) > 0 {
+			if err := t.Do.check(); err != nil {
+				return fmt.Errorf("convert: %s: %s: %w", mj.name, name, err)
 			}
-			if f, ok := mjShapes()[d]; ok {
-				shape = append(shape, f)
-				continue
-			}
-			return fmt.Errorf("convert: %s: %s: transform %q is not in the vocabulary", mj.name, name, d)
-		}
-		switch len(shape) {
-		case 0:
-		case 1:
-			a.split[name] = shape[0]
-		default:
-			return fmt.Errorf("convert: %s: %s takes %d shape transforms; one is the limit", mj.name, name, len(shape))
+			pipes[name] = t.Do
 		}
 		return nil
 	}
@@ -282,15 +316,49 @@ func (mj *modelJSON) hfArch() (*hfArch, error) {
 			return nil, err
 		}
 	}
-	if len(elem) > 0 {
-		a.fixup = func(e *jlm.Tensor, data []byte, c *Config) error {
-			for _, f := range elem[a.blockRest(e.Name)] {
-				var err error
-				if data, err = f(e, data); err != nil {
-					return err
-				}
+	if len(pipes) > 0 {
+		// The result's shape and type are stated before the tensor is laid out,
+		// from its source's; the bytes follow when it is read.
+		a.shape = func(e *jlm.Tensor) error {
+			p, ok := pipes[a.blockRest(e.Name)]
+			if !ok {
+				return nil
 			}
-			e.Data = data
+			in := mjVal{shape: mjTorch(e), typ: e.Type}
+			st.mu.Lock()
+			env := st.env
+			st.src[e.Name] = in
+			st.mu.Unlock()
+			v, err := p.run(env, []mjVal{in})
+			if err != nil {
+				return fmt.Errorf("convert: %s: %w", e.Name, err)
+			}
+			return mjSetShape(e, v)
+		}
+		a.fixup = func(e *jlm.Tensor, data []byte, c *Config) error {
+			p, ok := pipes[a.blockRest(e.Name)]
+			if !ok {
+				e.Data = data
+				return nil
+			}
+			st.mu.Lock()
+			env, in, ok := st.env, st.src[e.Name], len(st.src[e.Name].shape) > 0
+			st.mu.Unlock()
+			if !ok {
+				return fmt.Errorf("convert: %s: transformed without its shape stated", e.Name)
+			}
+			if len(data) == 0 {
+				return fmt.Errorf("convert: %s: no bytes to transform", e.Name)
+			}
+			in.data = data
+			v, err := p.run(env, []mjVal{in})
+			if err != nil {
+				return fmt.Errorf("convert: %s: %w", e.Name, err)
+			}
+			if err := mjSetShape(e, v); err != nil {
+				return err
+			}
+			e.Data = v.data
 			return nil
 		}
 	}
@@ -301,23 +369,47 @@ func (mj *modelJSON) hfArch() (*hfArch, error) {
 			if !ok {
 				return nil, fmt.Errorf("convert: %s: gathered role %q is not a tensor name the container knows", mj.name, g.Role)
 			}
-			f, ok := mjGathers()[g.Do]
-			if !ok {
-				return nil, fmt.Errorf("convert: %s: gather %q is not in the vocabulary", mj.name, g.Do)
+			if len(g.From) == 0 {
+				return nil, fmt.Errorf("convert: %s: the gather of %s has no sources", mj.name, g.Role)
 			}
-			gs[i] = hfGatherStep{role: retarget(a.arch, r), from: g.From, f: f}
+			if err := g.Do.check(); err != nil {
+				return nil, fmt.Errorf("convert: %s: the gather of %s: %w", mj.name, g.Role, err)
+			}
+			gs[i] = hfGatherStep{role: retarget(a.arch, r), from: g.From, do: g.Do}
 		}
 		a.gather = func(c *Config, names []string, read func(string) ([]float32, error)) ([]jlm.Tensor, map[string]bool, error) {
-			return gatherBlocks(c, a.blockPrefix, gs, names, read)
+			st.mu.Lock()
+			env := st.env
+			st.mu.Unlock()
+			return gatherBlocks(env, a.blockPrefix, gs, names, read)
 		}
 	}
-	a.config = mj.config
+	a.config = func(c *hfConfig, names []string) (*Config, error) {
+		env, err := mj.env(c)
+		if err != nil {
+			return nil, err
+		}
+		st.mu.Lock()
+		st.env = env
+		st.mu.Unlock()
+		return mj.configIn(env, c, names)
+	}
 	return a, nil
 }
 
 // config reads config.json through the model.json into the GGUF keys and
 // hands them to configOf, so one reader decides what each key means.
 func (mj *modelJSON) config(c *hfConfig, names []string) (*Config, error) {
+	env, err := mj.env(c)
+	if err != nil {
+		return nil, err
+	}
+	return mj.configIn(env, c, names)
+}
+
+// env resolves the file's paths in config.json: from the root it names, or
+// the file's top for $.key.
+func (mj *modelJSON) env(c *hfConfig) (exprEnv, error) {
 	top := map[string]any{}
 	for k, raw := range c.keys {
 		var v any
@@ -350,29 +442,37 @@ func (mj *modelJSON) config(c *hfConfig, names []string) (*Config, error) {
 		}
 		return cur
 	}
+	return env, nil
+}
+
+// mjGraphKeys are config keys that change the graph, each with the value that
+// leaves it unchanged. One a file does not read, present with another value,
+// is refused: the file does not state that graph.
+func mjGraphKeys() map[string]any {
+	return map[string]any{
+		"partial_rotary_factor":                 1.0,
+		"rope_parameters.partial_rotary_factor": 1.0,
+		"sliding_window":                        nil,
+	}
+}
+
+func (mj *modelJSON) configIn(env exprEnv, c *hfConfig, names []string) (*Config, error) {
+	read := map[string]bool{}
+	renv := func(p string) any {
+		read[p] = true
+		return env(p)
+	}
 	eval := func(what, src string) (any, error) {
 		n, err := parseExpr(src)
 		if err != nil {
 			return nil, fmt.Errorf("convert: %s: %s: %w", mj.name, what, err)
 		}
-		v, err := evalMJ(n, env)
+		v, err := evalMJ(n, renv)
 		if err != nil {
 			return nil, fmt.Errorf("convert: %s: %s: %s: %w", c.path, mj.name, what, err)
 		}
 		return v, nil
 	}
-	for _, r := range mj.Config.Refuse {
-		v, err := eval("refuse "+r.If, r.If)
-		if err != nil {
-			return nil, err
-		}
-		if b, ok := v.(bool); !ok {
-			return nil, fmt.Errorf("convert: %s: refuse %q is %s, not a boolean", mj.name, r.If, exprKind(v))
-		} else if b {
-			return nil, fmt.Errorf("convert: %s: %s: %w", c.path, r.Why, ErrNotImplemented)
-		}
-	}
-
 	ns := mj.Config.Arch + "."
 	kvs := map[string]meta.Value{"general.architecture": meta.MakeString(mj.Config.Arch)}
 	keys := make([]string, 0, len(mj.Config.Keys))
@@ -498,7 +598,141 @@ func (mj *modelJSON) config(c *hfConfig, names []string) (*Config, error) {
 			}
 		}
 	}
-	return configOf(meta.New(c.path, kvs, ts))
+	window := uint64(0)
+	if w := mj.Config.Window; w != nil {
+		used, err := eval("window used", w.Used)
+		if err != nil {
+			return nil, err
+		}
+		if used != true && used != false {
+			return nil, fmt.Errorf("convert: %s: window used is %s, not a boolean", c.path, exprKind(used))
+		}
+		size, err := eval("window size", w.Size)
+		if err != nil {
+			return nil, err
+		}
+		if used == true && size != nil {
+			if window, err = exprUint("window size", size); err != nil {
+				return nil, err
+			}
+			kvs[ns+"attention.sliding_window"] = meta.MakeUint(window)
+		}
+	}
+	cfg, err := configOf(meta.New(c.path, kvs, ts))
+	if err != nil {
+		return nil, err
+	}
+	// The statements configOf does not read decide after it.
+	if window != 0 && uint64(cfg.SWAWindow) != window {
+		return nil, fmt.Errorf("convert: %s: a sliding window of %d is not one graph %s runs: %w",
+			c.path, window, mj.Config.Arch, ErrNotImplemented)
+	}
+	av, err := eval("activation", mj.Config.Activation)
+	if err != nil {
+		return nil, err
+	}
+	act, _ := av.(string)
+	af, ok := mjActivations()[act]
+	if !ok {
+		return nil, fmt.Errorf("convert: %s: activation %v is not implemented: %w", c.path, av, ErrNotImplemented)
+	}
+	cfg.Flags = cfg.Flags&^mjActivationFlags | af
+	fnames := make([]string, 0, len(mj.Config.Flags))
+	for f := range mj.Config.Flags {
+		fnames = append(fnames, f)
+	}
+	sort.Strings(fnames)
+	for _, f := range fnames {
+		v, err := eval("flag "+f, mj.Config.Flags[f])
+		if err != nil {
+			return nil, err
+		}
+		b, ok := v.(bool)
+		if !ok {
+			return nil, fmt.Errorf("convert: %s: flag %s is %s, not a boolean", c.path, f, exprKind(v))
+		}
+		if b {
+			cfg.Flags |= mjFlags()[f]
+		} else {
+			cfg.Flags &^= mjFlags()[f]
+		}
+	}
+	if mj.Config.RopeScaling != "" {
+		v, err := eval("rope_scaling", mj.Config.RopeScaling)
+		if err != nil {
+			return nil, err
+		}
+		if err := mjRopeScaling(cfg, v); err != nil {
+			return nil, fmt.Errorf("convert: %s: %w", c.path, err)
+		}
+	}
+	if err := mj.mixtureCovers(cfg, names); err != nil {
+		return nil, fmt.Errorf("convert: %s: %w", c.path, err)
+	}
+	gk := make([]string, 0, len(mjGraphKeys()))
+	for k := range mjGraphKeys() {
+		gk = append(gk, k)
+	}
+	sort.Strings(gk)
+	for _, k := range gk {
+		if v := env(k); !read[k] && v != nil {
+			if eq, _ := exprEqual(v, mjGraphKeys()[k]); !eq {
+				return nil, fmt.Errorf("convert: %s: %s is %v, and %s does not read it: %w", c.path, k, v, mj.name, ErrNotImplemented)
+			}
+		}
+	}
+	return cfg, nil
+}
+
+// mixtureCovers refuses a mixture whose experts some block does not carry:
+// dense and mixture blocks in one model are not a pattern a file states yet.
+func (mj *modelJSON) mixtureCovers(cfg *Config, names []string) error {
+	e := mj.Tensors.Experts
+	if e == nil {
+		return nil
+	}
+	has := map[uint32]bool{}
+	for _, n := range names {
+		rest, ok := strings.CutPrefix(n, mj.Tensors.BlockPrefix)
+		if !ok {
+			continue
+		}
+		if b, tail, err := leadingIndex(n, rest); err == nil && strings.HasPrefix(tail, e.Prefix) {
+			has[uint32(b)] = true
+		}
+	}
+	if len(has) == 0 {
+		return nil
+	}
+	for b := uint32(0); b < cfg.NLayer; b++ {
+		if !has[b] {
+			return fmt.Errorf("block %d carries no experts in a mixture of %d blocks: dense and mixture blocks "+
+				"in one model are not implemented: %w", b, cfg.NLayer, ErrNotImplemented)
+		}
+	}
+	return nil
+}
+
+// mjRopeScaling states a rope scaling object, transformers' rope_parameters
+// or rope_scaling, by its published method: none and default state nothing,
+// and a method not implemented is refused by name.
+func mjRopeScaling(cfg *Config, v any) error {
+	if v == nil {
+		return nil
+	}
+	obj, ok := v.(map[string]any)
+	if !ok {
+		return fmt.Errorf("the rope scaling is %s, not an object", exprKind(v))
+	}
+	t := obj["rope_type"]
+	if t == nil {
+		t = obj["type"]
+	}
+	switch t {
+	case nil, "default":
+		return nil
+	}
+	return fmt.Errorf("rope scaling %v is not implemented: %w", t, ErrNotImplemented)
 }
 
 func exprUint(what string, v any) (uint64, error) {
