@@ -95,6 +95,10 @@ func statedGraphModels() []string {
 		"library/all-MiniLM-L6-v2-ggml-model-f16.gguf", "embed/MiniLM-L6-v2.Q8_0.gguf", "embed/snowflake-arctic-embed-22m.gguf",
 		"library/mxbai-embed-large-v1_fp16.gguf", "library/nomic-embed-text-v1.5.f16.gguf", "embed/nomic-embed-text.gguf",
 		"laya/fixture/laya-fixture.gguf", "d1-omni/d1-omni-600M-F16.gguf",
+		// Residual streams the container states, a per-layer side input, the
+		// last blocks reading an earlier block's history.
+		"synth-gemma3n.gguf", "synth-gemma3nv.gguf+mmproj-synth-gemma3nv.gguf", "gemma3n/gemma-3n-E2B-it-Q4_K_M.gguf",
+		"gemma3n/gemma-3n-E2B-it-Q4_K_M.gguf+gemma3n/mmproj-gemma-3n-E2B-it-f16.gguf",
 	}
 }
 

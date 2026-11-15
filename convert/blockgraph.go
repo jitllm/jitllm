@@ -30,7 +30,7 @@ type mjGraph struct {
 const blockExprSteps = 1 << 12
 
 // mjBlockOp is one op of a block. Op names the step: in, norm, layer_norm,
-// head_norm, matvec, add, rope, kv_append, attend, act, stated, emit,
+// head_norm, matvec, add, rope, kv_append, history, attend, act, stated, emit,
 // split_sum, mark, routed or out.
 type mjBlockOp struct {
 	Op string `json:"op"`
@@ -51,7 +51,8 @@ type mjBlockOp struct {
 	Rows  string `json:"rows"`
 	Width string `json:"width"`
 	Alpha string `json:"alpha"`
-	// Hist is the history an attend reads, a kv_append's Out.
+	// Hist is the history an attend reads, a kv_append's or a history's
+	// Out: a history reads the one block At (an expression) appends.
 	Hist string `json:"hist"`
 	// Kind is an emit's op, by the graph language's name of it; Outs its
 	// results, Attr its attributes by graph.Attrs field name, each an
@@ -160,6 +161,7 @@ func graphSteps() map[string][4]int {
 		"add":           {2, 2, 0, 0},
 		"rope":          {1, 1, 0, 0},
 		"kv_append":     {2, 2, 0, 0},
+		"history":       {0, 0, 0, 0},
 		"attend":        {1, 2, 0, -1},
 		"indexer":       {2, 2, 0, 0},
 		"select":        {1, 2, 0, 0},
@@ -308,7 +310,7 @@ func (g *mjGraph) check() error {
 			}
 			continue
 		case strings.HasPrefix(o.Op, "stream") || o.Op == "out_streams":
-			if o.Op != "streams_in" && !named[o.Streams] {
+			if o.Op != "streams_in" && o.Op != "stream_join" && !named[o.Streams] {
 				return fmt.Errorf("op %d (%s) reads streams %q before an op names them", i, o.Op, o.Streams)
 			}
 			if o.Op == "stream_writes" && o.Ex != "" && !named[o.Ex] {
@@ -578,6 +580,16 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, src jinja.Va
 			y = b.Emit(graph.OpRope, in, []graph.Result{{Name: name, Width: b.G.Values[in[0]].Width}}, nil, a, nil, nil)[0]
 		case "kv_append":
 			hists[o.Out] = graph.StateRef{State: graph.StateKV, Version: b.KVAppend(in[0], in[1], 0)}
+			continue
+		case "history":
+			k, err := num(o.At)
+			if err != nil {
+				return nil, err
+			}
+			if int(k) < 0 || int(k) >= li {
+				return nil, fmt.Errorf("op %d reads block %v's history, which no block before block %d appends", i, k, li)
+			}
+			hists[o.Out] = graph.SharedHistory(int(k))
 			continue
 		case "attend":
 			h, ok := hists[o.Hist]
@@ -1384,6 +1396,8 @@ func (bf *blockFacts) vars() map[string]jinja.Value {
 		"attn_join":          jinja.NewBool(bf.streamsAt().Attn.Join != nil),
 		"ffn_writes":         jinja.NewBool(len(bf.streamsAt().FFN.Writes) != 0),
 		"ple_dim":            i(c.PLEDim),
+		"kv_shared":          jinja.NewBool(bf.kvSource() != li),
+		"kv_source":          jinja.NewInt(int64(bf.kvSource())),
 		"row_windowed":       jinja.NewBool(c.Flags2.Has(jlm.Flag2MediaPrefix)),
 		"nope_global":        jinja.NewBool(c.Flags.Has(jlm.FlagNoPEGlobal)),
 		"temp_scale":         jinja.NewFloat(float64(c.AttnTempScale)),
@@ -1430,6 +1444,28 @@ func (bf *blockFacts) sliding() bool {
 		return w > 0 && p > 1 && li%p != 0
 	}
 	return w > 0 && p > 0 && li%p < p-1
+}
+
+// attends says block li's kind attends.
+func (bf *blockFacts) attends(li int) bool {
+	return li >= len(bf.c.LayerKinds) || bf.c.LayerKinds[li].Attends()
+}
+
+// kvSource is the block whose history the block attends: its own, or for
+// one of the last NKVShared that attend, the last block before them of its
+// own kind (sliding or not) that attends; -1 where there is none.
+func (bf *blockFacts) kvSource() int {
+	c, li := bf.c, bf.li
+	n, shared := int(c.NLayer), int(c.NKVShared)
+	if shared == 0 || li < n-shared || li >= n || !bf.attends(li) {
+		return li
+	}
+	for j := n - shared - 1; j >= 0; j-- {
+		if (&blockFacts{c: c, li: j}).sliding() == bf.sliding() && bf.attends(j) {
+			return j
+		}
+	}
+	return -1
 }
 
 // kind is the block's kind as the container states it (jlm.LayerKind's
