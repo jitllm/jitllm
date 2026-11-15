@@ -112,12 +112,14 @@ type mjWindow struct {
 }
 
 // mjWindowLayers is which layers slide, as a class states it: List, a list
-// of each layer's type, a layer sliding where its type is Slides; where the
-// list is null, Period (every layer but each Period'th, (i+1) % Period != 0)
+// of each layer's type, a layer sliding where its type is Slides; with Full
+// stated, a type that is neither is refused, as no layer of the class has it;
+// where the list is null, Period (every layer but each Period'th, (i+1) % Period != 0)
 // or From (each layer from From on); with none of the three, every layer.
 type mjWindowLayers struct {
 	List   string `json:"list"`
 	Slides string `json:"slides"`
+	Full   string `json:"full"`
 	Period string `json:"period"`
 	From   string `json:"from"`
 }
@@ -743,6 +745,9 @@ func mjWindowSlides(l *mjWindowLayers, eval func(what, src string) (any, error),
 				if !ok {
 					return nil, fmt.Errorf("layer %d's type is %v, not a name", i, t)
 				}
+				if l.Full != "" && s != l.Slides && s != l.Full {
+					return nil, fmt.Errorf("layer %d's type is %q, not %q or %q: %w", i, s, l.Slides, l.Full, ErrNotImplemented)
+				}
 				slides[i] = s == l.Slides
 			}
 			return slides, nil
@@ -824,7 +829,12 @@ func mjGraphKeys() map[string]any {
 	return map[string]any{
 		"partial_rotary_factor":                 1.0,
 		"rope_parameters.partial_rotary_factor": 1.0,
-		"sliding_window":                        nil,
+		// A rope dict carries it too, and the default and YaRN rotaries read
+		// it from there: one per layer type, or the legacy rope_scaling.
+		"rope_scaling.partial_rotary_factor":                      1.0,
+		"rope_parameters.full_attention.partial_rotary_factor":    1.0,
+		"rope_parameters.sliding_attention.partial_rotary_factor": 1.0,
+		"sliding_window": nil,
 		// clip_qkv clamps q, k and v; where the clamp falls against a q/k norm
 		// is the graph's, and no file states one yet.
 		"clip_qkv": nil,

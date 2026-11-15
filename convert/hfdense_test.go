@@ -199,6 +199,17 @@ func TestDenseHFClassDefaults(t *testing.T) {
 				c.YarnOrigCtx == 16384 && c.AttnTempScale == float32(0.1) && c.AttnTempFloor == 16384 &&
 				c.AttnFactor == 1 && c.YarnLogMul == 0 && c.NCtx == 262144)
 		}},
+		{"Ministral3ForCausalLM", `, "num_key_value_heads": 2, "rope_theta": 7.0, "rope_parameters": {"rope_type": "default",
+			"llama_4_scaling_beta": 0.1, "original_max_position_embeddings": 16384}`, head, func(c *Config) string {
+			// A rope_parameters object that states no base leaves the
+			// top-level rope_theta, which the class's own default dict never
+			// reaches.
+			return denseOK(c.RopeBase == 7 && c.YarnFactor == 0)
+		}},
+		{"Ministral3ForCausalLM", `, "num_key_value_heads": 2, "rope_parameters": {"rope_type": "default",
+			"llama_4_scaling_beta": 0.1, "original_max_position_embeddings": 16384}`, head, func(c *Config) string {
+			return denseOK(c.RopeBase == 1e4 && c.YarnFactor == 0)
+		}},
 	} {
 		t.Run(tc.class, func(t *testing.T) {
 			c := hfConfigOf(t, fmt.Sprintf(`{"architectures": [%q], %s%s}`, tc.class, base, tc.extra))
@@ -305,6 +316,25 @@ func TestDenseHFRefusals(t *testing.T) {
 			"original_max_position_embeddings": 8192, "rope_theta": 5e5}}`, "rotary scaling on its sliding_attention"},
 		{"Olmo3ForCausalLM", `, "num_key_value_heads": 4, "rope_scaling": {"rope_type": "linear", "factor": 8.0}`,
 			"rotary scaling on its full_attention"},
+		{"Olmo3ForCausalLM", `, "num_key_value_heads": 4, "rope_parameters": {"full_attention":
+			{"rope_type": "default", "rope_theta": 5e5, "partial_rotary_factor": 0.5},
+			"sliding_attention": {"rope_type": "default", "rope_theta": 5e5}}`, "partial_rotary_factor is 0.5"},
+		{"Olmo3ForCausalLM", `, "num_key_value_heads": 4, "rope_parameters": {"full_attention":
+			{"rope_type": "default", "rope_theta": 5e5},
+			"sliding_attention": {"rope_type": "default", "rope_theta": 5e5, "partial_rotary_factor": 0.5}}`,
+			"partial_rotary_factor is 0.5"},
+		{"Olmo3ForCausalLM", `, "num_key_value_heads": 4, "rope_scaling": {"rope_type": "yarn", "factor": 8.0,
+			"original_max_position_embeddings": 8192, "partial_rotary_factor": 0.5}`, "partial_rotary_factor is 0.5"},
+		{"Olmo3ForCausalLM", `, "num_key_value_heads": 4, "layer_types": ["sliding_attention", "chunked_attention",
+			"sliding_attention", "full_attention"]`, "chunked_attention"},
+		{"Exaone4ForCausalLM", `, "num_key_value_heads": 2, "layer_types": ["sliding_attention", "chunked_attention",
+			"sliding_attention", "full_attention"]`, "chunked_attention"},
+		{"Ministral3ForCausalLM", `, "num_key_value_heads": 2, "rope_parameters": {"rope_type": "default",
+			"llama_4_scaling_beta": 0.1, "original_max_position_embeddings": 16384, "partial_rotary_factor": 0.5}`,
+			"partial_rotary_factor is 0.5"},
+		{"Ministral3ForCausalLM", `, "num_key_value_heads": 2, "rope_scaling": {"rope_type": "default",
+			"llama_4_scaling_beta": 0.1, "original_max_position_embeddings": 16384, "partial_rotary_factor": 0.5}`,
+			"partial_rotary_factor is 0.5"},
 		{"SmolLM3ForCausalLM", `, "no_rope_layers": [1, 0, 1, 1], "tie_word_embeddings": false`, "not every"},
 		{"Exaone4ForCausalLM", `, "num_key_value_heads": 2, "layer_types": ["sliding_attention",
 			"full_attention", "full_attention", "sliding_attention"]`, "no period"},

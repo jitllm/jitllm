@@ -1148,18 +1148,12 @@ func hfArchTable() map[string]*hfArch {
 		// Kimi-K3's text model, its experts compressed-tensors MXFP4 in the
 		// release (convert/hfkimik3.go, convert/hfmxfp4.go).
 		"KimiK3ForConditionalGeneration": kimiK3HF(),
-		// The mixture families, each to the container its GGUF converts to. See
-		// convert/hfmoefamily.go.
 		// BitNet b1.58 (convert/hfbitnet.go).
 		"BitNetForCausalLM": bitnetHF(),
 		// Phi-3.5-MoE and its smaller siblings name the class as their remote
 		// code did; transformers saves its own spelling (convert/hfphimoe.go).
 		"PhiMoEForCausalLM": phimoeHF(),
 		"PhimoeForCausalLM": phimoeHF(),
-		// The dense llama family (convert/safetensors_dense.go). OLMo 3 is
-		// ArchOLMo2 with a window, as on the GGUF side. Ministral3ForCausalLM is
-		// mistral3's text model; Mistral3ForConditionalGeneration, which nests it
-		// under a vision tower, is not here.
 	}
 }
 

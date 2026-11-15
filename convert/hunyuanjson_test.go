@@ -77,6 +77,7 @@ func TestHunyuanThroughTheLibrary(t *testing.T) {
 		{dense, `, "use_cla": true`, "use_cla"},
 		{dense, `, "rope_parameters": {"type": "dynamic", "factor": 2.0}`, "dynamic"},
 		{dense, `, "rope_parameters": {"type": "linear", "factor": 2.0}`, "linear"},
+		{dense, `, "rope_scaling": "dynamic"`, "is not an object"},
 		{moe, alpha + `, "num_experts": 8, "moe_topk": [2, 3, 2]`, "entries differ"},
 		{moe, alpha + `, "num_experts": 8, "moe_topk": 2, "moe_intermediate_size": 64`, "moe_intermediate_size"},
 		{moe, alpha + `, "num_experts": 8, "moe_topk": 2, "num_shared_expert": 2`, "num_shared_expert"},

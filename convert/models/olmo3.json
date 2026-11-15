@@ -22,7 +22,7 @@
     "activation": "hidden_act ?? 'silu'",
     "rope_scaling": "rope_scaling ?? rope_parameters.full_attention",
     "window": {"size": "sliding_window", "used": "layer_types == null || 'sliding_attention' in layer_types",
-               "layers": {"list": "layer_types", "slides": "sliding_attention", "period": "4"}},
+               "layers": {"list": "layer_types", "slides": "sliding_attention", "full": "full_attention", "period": "4"}},
     "asserts": [
       {"that": "rope_parameters.rope_type == null && rope_parameters.type == null && rope_parameters.rope_theta == null",
        "else": "rope_parameters is a flat dict, and a dict per layer type is what the class reads"},

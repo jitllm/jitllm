@@ -118,6 +118,9 @@ func TestModelExprEvaluates(t *testing.T) {
 		{"0 ** -1", "is not a number"},
 		{"(-8) ** 0.5", "is not a number"},
 		{"act ? 1 : 2", "act is a string"},
+		{"(act).x", "is not an object"},
+		{"(rope.theta ?? 1).x", "is not an object"},
+		{"(rope).theta.x", "is not an object"},
 	} {
 		n, err := parseExpr(c.src)
 		if err != nil {

@@ -418,9 +418,12 @@ func evalMJ(n *exprNode, env exprEnv) (any, error) {
 			return nil, err
 		}
 		for _, k := range strings.Split(n.str, ".") {
+			if v == nil {
+				return nil, nil
+			}
 			m, ok := v.(map[string]any)
 			if !ok {
-				return nil, nil
+				return nil, fmt.Errorf("%v has no key %q: it is not an object", v, k)
 			}
 			v = m[k]
 		}
