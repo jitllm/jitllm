@@ -326,7 +326,12 @@ func TestComposedHeadOps(t *testing.T) {
 							})
 						}},
 						{name: "norm bias dropped", skip: !c.LayerNorm || outNormB == nil, cfg: full, mut: func(m *model.Model) func() {
-							return setDenseVec(m, jlm.RoleOutputNormBias, func([]float32) []float32 { return nil })
+							// Out of the head's graph as well as its vectors: a
+							// graph naming a vector the model does not hold is
+							// declined by name, never run on zeros.
+							undoV := setDenseVec(m, jlm.RoleOutputNormBias, func([]float32) []float32 { return nil })
+							undoR := dropStoredDense(m, jlm.RoleOutputNormBias)
+							return func() { undoR(); undoV() }
 						}},
 					}
 					for _, v := range violations {

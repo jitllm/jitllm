@@ -27,7 +27,9 @@ func c6BaseDevViolations() map[string][]c6Violation {
 			{"serial residual", serialFromShared},
 			{"NORM rotary for NEOX", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.RopeNeox = false }) }},
 			{"no output norm bias", func(m *model.Model) func() {
-				return setDenseVec(m, jlm.RoleOutputNormBias, func([]float32) []float32 { return nil })
+				undoV := setDenseVec(m, jlm.RoleOutputNormBias, func([]float32) []float32 { return nil })
+				undoR := dropStoredDense(m, jlm.RoleOutputNormBias)
+				return func() { undoR(); undoV() }
 			}},
 		},
 		"synth-starcoder": {
