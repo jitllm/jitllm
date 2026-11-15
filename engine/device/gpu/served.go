@@ -1892,10 +1892,11 @@ func (bs *blockScratch) tableCount() int {
 // scratchTable is the graph of bs's table i (cs, then csAt's) among the
 // plan's tables, nil where the plan states none for it. A scratch set of one
 // geometry of a model of mixed geometry (scratchPlanOf) holds its own layers'
-// table in cs: the plan's table its blocks rotate by (LayerPlan.Rotary).
+// table in cs: the plan's table its blocks rotate by (LayerPlan.Rotary),
+// where the plan carries several; a set of a model of one rotary forms none.
 func scratchTable(bs *blockScratch, p *nn.LayerPlan, i int) *graph.Graph {
 	if bs.p.MixedGeom {
-		if i > 0 || bs.p.Rotary >= len(p.Tables) {
+		if i > 0 || len(p.Tables) < 2 || bs.p.Rotary >= len(p.Tables) {
 			return nil
 		}
 		return p.Tables[bs.p.Rotary]

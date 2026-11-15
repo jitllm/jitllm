@@ -93,16 +93,30 @@ func composedRopeAxes(t *testing.T, run ropeRunner, rows int) {
 				if tc.interleaved {
 					c.Flags |= jlm.FlagRopeInterleaved
 				}
-				rope.Runs = nn.PairRuns(c.RopePairs())
-				p := 0
-				for _, u := range rope.Runs {
-					for range u.Pairs {
-						axis[p] = u.Axis
-						p++
-					}
+				pairs, err := c.RopePairs()
+				if err != nil {
+					t.Fatal(err)
 				}
-				if p != tc.pairs {
-					t.Fatalf("main's runs cover %d of %d pairs", p, tc.pairs)
+				rope.Runs = nn.PairRuns(pairs)
+				// The oracle's pair map is transcribed here from the
+				// references (transformers' mrope_section split and
+				// Qwen3-VL's apply_interleaved_mrope), not read off the
+				// container's.
+				for p := range axis {
+					if tc.interleaved {
+						for ax := 1; ax < 3; ax++ {
+							if p%3 == ax && p < 3*tc.sections[ax] {
+								axis[p] = ax
+							}
+						}
+						continue
+					}
+					for ax, end := 0, 0; ax < 4; ax++ {
+						if end += tc.sections[ax]; p < end {
+							axis[p] = ax
+							break
+						}
+					}
 				}
 			}
 			got := run(t, rope, at)

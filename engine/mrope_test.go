@@ -767,7 +767,11 @@ func composedAfterPicture(t *testing.T, m *model.Model, g *qvlGolden, spec strin
 		jc.RopeSections[1] += uint32(d)
 		undo := builtGraphs(m)
 		m.Cfg = &c
-		m.Rope.Runs = nn.PairRuns(jc.RopePairs())
+		pairs, err := jc.RopePairs()
+		if err != nil {
+			t.Fatal(err)
+		}
+		m.Rope.Runs = nn.PairRuns(pairs)
 		bad, _ := run(0)
 		m.Cfg, m.Rope.Runs = was, a
 		undo()
