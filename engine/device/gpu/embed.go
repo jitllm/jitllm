@@ -125,9 +125,10 @@ func (bs *blockScratch) embSideWords() int {
 }
 
 // embedOuts is the buffers input rows writing s streams write at R rows of
-// bs: x, or every stream's view of it, then the per-layer inputs where the
-// plan has them.
-func (bs *blockScratch) embedOuts(s, R int) ([]backend.Buf, error) {
+// bs: x, or every stream's view of it, then the side inputs where side says
+// the form that runs writes them -- its own scratch's graph, which a step's
+// scratch need not carry.
+func (bs *blockScratch) embedOuts(s, R int, side bool) ([]backend.Buf, error) {
 	n := 1
 	bs.outsFor(s)[0] = bs.x
 	if s > 1 {
@@ -137,7 +138,7 @@ func (bs *blockScratch) embedOuts(s, R int) ([]backend.Buf, error) {
 		}
 		n = copy(bs.embOuts, out[:s])
 	}
-	return bs.withPLE(n), nil
+	return bs.withSide(n, side), nil
 }
 
 // castStreams is what a promise made real writes at R rows of s streams:
@@ -172,8 +173,11 @@ func (bs *blockScratch) outsFor(s int) []backend.Buf {
 
 // withPLE is the first n of embOuts, then the side inputs where the input
 // rows' graph writes them, last.
-func (bs *blockScratch) withPLE(n int) []backend.Buf {
-	if bs.embWritesSide() {
+func (bs *blockScratch) withPLE(n int) []backend.Buf { return bs.withSide(n, bs.embWritesSide()) }
+
+// withSide is the first n of embOuts, then the side inputs where side.
+func (bs *blockScratch) withSide(n int, side bool) []backend.Buf {
+	if side {
 		bs.embOuts[n] = bs.pleIn
 		n++
 	}

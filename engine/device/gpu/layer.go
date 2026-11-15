@@ -4342,7 +4342,7 @@ func (g *devTier) layersSession(s backend.Session) {
 		sv, serr := g.servedEmbed(g.bs, R)
 		var outs []backend.Buf
 		if serr == nil {
-			outs, serr = bs.embedOuts(g.bs.embStreams(), R)
+			outs, serr = bs.embedOuts(g.bs.embStreams(), R, g.bs.embWritesSide())
 		}
 		if serr == nil && err == nil {
 			serr = sv.runAs(g, lc, sv.inst, pe.kind, nil, outs)
@@ -4358,7 +4358,7 @@ func (g *devTier) layersSession(s backend.Session) {
 		w(bs.rowPos, g.rowPosWords(pos, nrow, R, rag))
 	}
 	// Side rows the input rows served here do not write are the caller's.
-	if bs.pleIn != nil && (!embedSrv || !bs.embWritesSide()) {
+	if bs.pleIn != nil && (!embedSrv || !g.bs.embWritesSide()) {
 		w(bs.pleIn, f32b(g.pleRows(R*p.SideW)))
 	}
 	if bs.req != nil && len(g.reqHost) > 0 {
@@ -4528,7 +4528,7 @@ func (g *devTier) layersSession(s backend.Session) {
 	// Input rows gathered here wrote the per-layer inputs on this device
 	// alone; blocks after the call's, on another device, upload them from
 	// the session's own (pleRows), as from a gather of its own (readPLE).
-	if w := nrow * p.SideW; err == nil && embedSrv && head == nil && bs.embWritesSide() && w > 0 && len(g.pleHost) >= w {
+	if w := nrow * p.SideW; err == nil && embedSrv && head == nil && g.bs.embWritesSide() && w > 0 && len(g.pleHost) >= w {
 		err = s.Read(bs.pleIn, f32b(g.pleHost[:w]))
 	}
 }
