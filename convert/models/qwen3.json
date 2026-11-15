@@ -1,6 +1,10 @@
 {
   "classes": ["Qwen3ForCausalLM"],
   "gguf": ["qwen3", "qwen3vl"],
+  "container": {
+    "qwen3": {"flags": {"rope_neox": "true", "qk_norm": "true"}},
+    "qwen3vl": {"flags": {"rope_neox": "true", "qk_norm": "true"}}
+  },
   "config": {
     "arch": "qwen3",
     "keys": {

@@ -36,7 +36,7 @@ import (
 //
 // The graph's other facts -- squared ReLU on the gate, NEOX rotary on the
 // rows as shipped, the two inner norms, per-token int8 activations -- are the
-// arch's (bitnetConfig, ArchBitNet).
+// arch's (mixtral.json's container statement, ArchBitNet).
 
 // bitnetProjections are the roles a BitNet block runs as BitLinear.
 func bitnetProjections(r jlm.Role) bool {
@@ -45,15 +45,6 @@ func bitnetProjections(r jlm.Role) bool {
 		return true
 	}
 	return false
-}
-
-// bitnetConfig is the arch's graph on the GGUF side. bitnet.cpp's
-// "bitnet-b1.58" states no activation; the class it converts,
-// BitNetForCausalLM, declares relu2 (transformers' BitNetConfig.hidden_act)
-// and rotates with rotate_half over the rows as shipped, which its converter
-// does not permute. bitnet.cpp's graph runs SiLU here (RULE 7m).
-func bitnetConfig(c *Config) {
-	c.Flags |= jlm.FlagRopeNeox | jlm.FlagReLU2
 }
 
 // exactHalf is v as an f16, and false when no f16 is exactly v.

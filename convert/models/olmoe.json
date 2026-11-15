@@ -1,6 +1,9 @@
 {
   "classes": ["OlmoeForCausalLM"],
   "gguf": ["olmoe"],
+  "container": {
+    "olmoe": {"flags": {"rope_neox": "true", "qk_norm": "true", "qk_norm_wide": "true", "no_expert_norm": "true"}}
+  },
   "config": {
     "arch": "olmoe",
     "keys": {

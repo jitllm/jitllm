@@ -1,6 +1,10 @@
 {
   "classes": ["Qwen2ForCausalLM"],
   "gguf": ["qwen2", "qwen2vl"],
+  "container": {
+    "qwen2": {"flags": {"rope_neox": "true"}},
+    "qwen2vl": {"flags": {"rope_neox": "true"}}
+  },
   "config": {
     "arch": "qwen2",
     "keys": {

@@ -48,7 +48,10 @@ type modelJSON struct {
 	// containers the graph states where no GGUF architecture converts as
 	// one: a Go table class's.
 	Archs []string `json:"archs"`
-	name  string   // for messages
+	// Container is what the container states for each GGUF architecture
+	// the file names (mjStates).
+	Container map[string]*mjStates `json:"container"`
+	name      string               // for messages
 }
 
 type mjConfig struct {
@@ -167,6 +170,11 @@ func mjFlags() map[string]jlm.Flags {
 		"attention_output_gate": jlm.FlagAttnOutGate,
 		"non_causal":            jlm.FlagNonCausal,
 		"qk_norm":               jlm.FlagQKNorm,
+		"qk_norm_wide":          jlm.FlagQKNormWide,
+		"rope_neox":             jlm.FlagRopeNeox,
+		"no_expert_norm":        jlm.FlagNoExpertNorm,
+		"layer_norm":            jlm.FlagLayerNorm,
+		"parallel":              jlm.FlagParallel,
 	}
 }
 
@@ -318,6 +326,9 @@ func parseModelJSON(b []byte, name string) (*modelJSON, error) {
 	mj := &modelJSON{name: name}
 	if err := d.Decode(mj); err != nil {
 		return nil, fmt.Errorf("convert: %s: %w", name, err)
+	}
+	if err := mj.checkStates(); err != nil {
+		return nil, err
 	}
 	for _, n := range mj.Archs {
 		if !slices.ContainsFunc(slices.Collect(maps.Values(hfArchTable())), func(a *hfArch) bool { return a.arch.String() == n }) {

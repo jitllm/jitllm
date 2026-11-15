@@ -1,6 +1,9 @@
 {
   "classes": ["GemmaForCausalLM"],
   "gguf": ["gemma"],
+  "container": {
+    "gemma": {"flags": {"rope_neox": "true"}, "activation": "gelu_pytorch_tanh", "embd_scale": "src['embedding_length'] ** 0.5"}
+  },
   "config": {
     "arch": "gemma",
     "keys": {

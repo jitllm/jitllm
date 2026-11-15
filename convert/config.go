@@ -318,6 +318,11 @@ func configOfFile(f *meta.File) (*Config, error) {
 		return nil, fmt.Errorf("convert: %s: %w", name, err)
 	}
 
+	// What the library's file states for the architecture's container, over
+	// the keys (mjStates).
+	if err := stateContainer(f, c); err != nil {
+		return nil, err
+	}
 	switch arch {
 	case ArchDeepseek2, ArchDeepseek32:
 		// The two latent ranks. The explicit key is the authority; value_length is
@@ -334,28 +339,6 @@ func configOfFile(f *meta.File) (*Config, error) {
 				return nil, fmt.Errorf("convert: %s: %w", name, err)
 			}
 		}
-	case ArchLlama:
-		// llama3 is this arch too: it differs only in values the header carries
-		// (rope base, GQA, vocabulary size) and in its BPE tokenizer.
-	case ArchBitNet:
-		bitnetConfig(c)
-	case ArchQwen2:
-		// llama's graph with biases on q, k and v, which are tensors.
-		c.Flags |= jlm.FlagRopeNeox
-	case ArchQwen3:
-		// Each head of q and k is RMSNormed with a shared head_dim-wide weight,
-		// after the projection and before RoPE (after RoPE also runs, and is wrong).
-		c.Flags |= jlm.FlagRopeNeox | jlm.FlagQKNorm
-	case ArchQwen3MoE:
-		// qwen3's attention with a mixture FFN; being a mixture is read from the
-		// file below, not from the architecture.
-		c.Flags |= jlm.FlagRopeNeox | jlm.FlagQKNorm
-	case ArchOLMoE:
-		// qwen3moe's shape with two differences, read off the reference source:
-		//  1. the q/k RMSNorm spans the whole projection ({n_embd}, before the
-		//     reshape into heads), where qwen3's is {head_dim} and per head;
-		//  2. the mixture weights are not renormalised.
-		c.Flags |= jlm.FlagRopeNeox | jlm.FlagQKNorm | jlm.FlagQKNormWide | jlm.FlagNoExpertNorm
 	case ArchPhi3:
 		// phi3, and phi4 which uses this arch string too. No fusion flags: the
 		// converter unfuses phi3's attn_qkv and fused ffn_up (see unfuse), because
@@ -389,13 +372,6 @@ func configOfFile(f *meta.File) (*Config, error) {
 		if win > 0 {
 			c.SWAWindow, c.SWAPeriod = win, allLocal(c.NLayer)
 		}
-	case ArchGemma:
-		// The embedding is scaled by sqrt(n_embd) and the FFN activation is GELU.
-		// The RMSNorm +1 is already baked into the weights by the HF converter, so
-		// it is not applied again. Gemma's rotary is NEOX, not NORM: NORM runs
-		// fluently and is wrong, and every tier agrees with itself either way.
-		c.EmbdScale = float32(math.Sqrt(float64(c.NEmbd)))
-		c.Flags |= jlm.FlagGELU | jlm.FlagRopeNeox
 	case ArchGemma2:
 		// gemma1's block plus three load-bearing differences.
 		c.EmbdScale = float32(math.Sqrt(float64(c.NEmbd)))
@@ -462,18 +438,12 @@ func configOfFile(f *meta.File) (*Config, error) {
 				return nil, fmt.Errorf("convert: %s: %w", name, err)
 			}
 		}
-	case ArchQwen2VL:
-		// qwen2's graph with multimodal rope: the sections split each head's rotary
-		// pairs between the (t, h, w) components of a position (Qwen2-VL-2B is
-		// [16, 24, 24, 0], summing to NRot/2 = 64). See mropeSectionsOf.
-		c.Flags |= jlm.FlagRopeNeox
-		if err := mropeSectionsOf(f, name, c); err != nil {
-			return nil, err
-		}
-	case ArchQwen3VL, ArchQwen3VLMoE:
-		// qwen3's and qwen3moe's blocks under an INTERLEAVED M-RoPE (Qwen3-VL-2B
-		// is [24, 20, 20, 0] of 64 pairs). See ArchQwen3VL.
-		c.Flags |= jlm.FlagRopeNeox | jlm.FlagQKNorm
+	case ArchQwen2VL, ArchQwen3VL, ArchQwen3VLMoE:
+		// qwen2's, qwen3's and qwen3moe's blocks under a multimodal rope: the
+		// sections split each head's rotary pairs between the (t, h, w)
+		// components of a position (Qwen2-VL-2B is [16, 24, 24, 0], summing to
+		// NRot/2 = 64; Qwen3-VL-2B's INTERLEAVED [24, 20, 20, 0] of 64 pairs).
+		// See mropeSectionsOf.
 		if err := mropeSectionsOf(f, name, c); err != nil {
 			return nil, err
 		}
@@ -512,22 +482,10 @@ func configOfFile(f *meta.File) (*Config, error) {
 		if err := commandRConfig(f, c, name == "cohere2"); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
-	case ArchStarcoder2:
-		// llama.cpp's starcoder2.cpp: the classic sequential block, every
-		// matrix biased, NEOX rotary over the whole head.
-		layerNormEps(f, c)
-		c.Flags |= jlm.FlagLayerNorm | jlm.FlagRopeNeox | jlm.FlagGELU
 	case ArchStableLM:
 		if err := stableLMConfig(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
-	case ArchFalcon:
-		// llama.cpp's falcon.cpp: the parallel block, NEOX rotary over the
-		// whole head, an ungated GELU FFN, LayerNorm with biases and no
-		// matrix biases. The two-norm form is resolved at the tensor names
-		// (rolemaps.json).
-		layerNormEps(f, c)
-		c.Flags |= jlm.FlagLayerNorm | jlm.FlagParallel | jlm.FlagRopeNeox | jlm.FlagGELU
 	case ArchNemotron:
 		// llama.cpp's nemotron.cpp: the sequential block, NEOX rotary on
 		// rope.dimension_count of head_dim, up -> relu^2 -> down.

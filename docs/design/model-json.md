@@ -132,6 +132,17 @@ schema; `convert/modeljson.go` reads it. Its sections:
   changes the graph (`mjGraphKeys`: a partial rotary, a window, `clip_qkv`,
   `use_bidirectional_attention`) present with
   another value than its neutral one and not read by the file.
+- `container`: what the container states for each GGUF architecture the
+  file names (`gguf`), read by `configOfFile` for a GGUF and for a
+  config.json the file has mapped onto the keys alike (`mjStates`,
+  `convert/mjstates.go`). Each statement is a Jinja expression over the
+  GGUF's keys, as a recipe reads them (`src['attention.layer_norm_epsilon']
+  | default(1e-5)`): `flags` (the `mjFlags` names, each true or false),
+  `activation` (an `mjActivations` name), `norm_eps` and `embd_scale`
+  (numbers; `src['embedding_length'] ** 0.5` is the square root exactly).
+  It replaces `configOfFile`'s case for the architecture; one statement
+  per architecture, and an expression reading anything but `src` is
+  refused.
 - `tensors.model`, `tensors.block_prefix`, `tensors.block`: each source name
   onto a role by the role's GGUF tensor name (`roleOf`, one vocabulary for
   both formats), with `do`, the primitives it takes in order. A transform
