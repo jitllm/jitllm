@@ -87,11 +87,16 @@ type mjBlockOp struct {
 	// Streams names a list of residual streams a stream step reads (a
 	// streams_in's or a stream_writes' Out), Ex the list of values a
 	// stream_read exported to the writes, At a stream_at's index or a
-	// kv_append's history (the block's first where unset), an expression. A stream step's Of is the sublayer whose stated
-	// statement it lowers: pre, attn or ffn.
+	// kv_append's history (the block's first where unset), an expression.
+	// A stream step's Of is the sublayer whose stated statement it lowers:
+	// pre, attn or ffn.
 	Streams string `json:"streams"`
 	Ex      string `json:"ex"`
 	At      string `json:"at"`
+	// Global, an expression, says a rotary op (rope, rope_table, an
+	// indexer's or a pooled select's) turns by the model's rotary where the
+	// block would turn by the sliding layers' own.
+	Global string `json:"global"`
 }
 
 // mjTerm is one term of an expr: a function by name and up to three
@@ -239,7 +244,7 @@ func (g *mjGraph) check() error {
 		if o.Op == "routed" && !named[o.From] {
 			return fmt.Errorf("op %d's routed region starts at %q, which no op marks before it", i, o.From)
 		}
-		xs := append([]string{o.If, o.Rows, o.Width, o.Alpha, o.Parts, o.Int8, o.Eps, o.At}, o.Words...)
+		xs := append([]string{o.If, o.Rows, o.Width, o.Alpha, o.Parts, o.Int8, o.Eps, o.At, o.Global}, o.Words...)
 		for k, tm := range o.Terms {
 			if fnNamed(tm.Fn) == 0 || len(tm.Args) == 0 || len(tm.Args) > 3 {
 				return fmt.Errorf("op %d (%s): term %d is %q of %d arguments", i, o.Op, k, tm.Fn, len(tm.Args))
@@ -582,7 +587,7 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, src jinja.Va
 				y = b.Add(in[0], in[1])
 			}
 		case "rope":
-			a, err := bf.rope()
+			a, err := bf.ropeOf(g, o, vars)
 			if err != nil {
 				return nil, err
 			}
@@ -595,7 +600,7 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, src jinja.Va
 			}
 			y = b.Emit(graph.OpRope, in, []graph.Result{{Name: name, Width: b.G.Values[in[0]].Width}}, nil, a, nil, nil)[0]
 		case "rope_table":
-			a, err := bf.rope()
+			a, err := bf.ropeOf(g, o, vars)
 			if err != nil {
 				return nil, err
 			}
@@ -615,8 +620,8 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, src jinja.Va
 			if err != nil {
 				return nil, fmt.Errorf("op %d (kv_append): %w", i, err)
 			}
-			if at < 0 || at > math.MaxUint8 {
-				return nil, fmt.Errorf("op %d appends to history %v", i, at)
+			if at < 0 || at != math.Trunc(at) || at > math.MaxUint8 {
+				return nil, fmt.Errorf("op %d appends to history %v, not a history's index", i, at)
 			}
 			h := uint8(at)
 			hists[o.Out] = graph.StateRef{State: graph.StateKV, Hist: h, Version: b.KVAppendEvery(h, in[0], in[1], 0, a.Span)}
@@ -632,9 +637,12 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, src jinja.Va
 				y = b.AttendOf(in[0], reads[0], a, w...)
 			}
 			at := &b.G.Ops[len(b.G.Ops)-1]
+			if at.Kind != graph.OpAttend || len(at.Out) != 1 || at.Out[0] != y {
+				return nil, fmt.Errorf("op %d (attend): the attention is not the builder's last op", i)
+			}
 			at.Reads = append(at.Reads, reads[1:]...)
 		case "indexer":
-			ix, err := bf.indexer(b, in[0], in[1])
+			ix, err := bf.indexer(b, g, o, vars, in[0], in[1])
 			if err != nil {
 				return nil, fmt.Errorf("op %d (indexer): %w", i, err)
 			}
@@ -760,7 +768,7 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, src jinja.Va
 				side = bf.pleOf(b, in[2])
 			}
 			var ex []graph.ValueID
-			if y, ex, err = graph.StreamRead(b, bf.facts, u, lists[o.Streams], in[0], in[1], side, bf.ops(b)); err != nil {
+			if y, ex, err = graph.StreamRead(b, bf.facts, u, lists[o.Streams], in[0], in[1], side, bf.ops(b, g, o, vars)); err != nil {
 				return nil, fmt.Errorf("op %d (stream_read): %w", i, err)
 			}
 			lists[o.Out+".ex"] = ex
@@ -886,12 +894,12 @@ func routerWeight(b *graph.Builder, rw *jlm.Expr, logits, choose, sel graph.Valu
 // input n and the attention's query input qIn: its key padded with zeros to
 // the width the row caches, its query, and its heads' weight, each where the
 // container states it.
-func (bf *blockFacts) indexer(b *graph.Builder, n, qIn graph.ValueID) (map[string]graph.ValueID, error) {
+func (bf *blockFacts) indexer(b *graph.Builder, g *mjGraph, o mjBlockOp, vars map[string]jinja.Value, n, qIn graph.ValueID) (map[string]graph.ValueID, error) {
 	s := bf.c.Selection
 	if !s.At(bf.li) {
 		return nil, fmt.Errorf("block %d states no selection", bf.li)
 	}
-	turn := bf.ops(b)
+	turn := bf.ops(b, g, o, vars)
 	ix := map[string]graph.ValueID{}
 	if s.Key != nil {
 		key, err := graph.LowerValues(b, nil, s.Key, []graph.ValueID{n}, 1, bf.facts, turn)
@@ -938,7 +946,7 @@ func (bf *blockFacts) selected(b *graph.Builder, g *mjGraph, o mjBlockOp, vars m
 	if s.Rank == jlm.RankPooled {
 		a.Fn, a.Eps = graph.MapMax, float64(s.Eps)
 		if bf.ropeAt() {
-			r, err := bf.rope()
+			r, err := bf.ropeOf(g, o, vars)
 			if err != nil {
 				return 0, err
 			}
@@ -954,9 +962,10 @@ func (bf *blockFacts) selected(b *graph.Builder, g *mjGraph, o mjBlockOp, vars m
 }
 
 // ops lowers the stated ops only a block has: its rotary at the row's
-// position in the stated layout from the element the op states, nothing on
-// a block that turns none.
-func (bf *blockFacts) ops(b *graph.Builder) func([]graph.ValueID, *jlm.TowerOp) (graph.ValueID, error) {
+// position in the stated layout from the element the op states, with the
+// attributes the recipe's op o overrides, nothing on a block that turns
+// none.
+func (bf *blockFacts) ops(b *graph.Builder, g *mjGraph, o mjBlockOp, vars map[string]jinja.Value) func([]graph.ValueID, *jlm.TowerOp) (graph.ValueID, error) {
 	return func(ins []graph.ValueID, op *jlm.TowerOp) (graph.ValueID, error) {
 		if op.Code != jlm.TOpRope {
 			return 0, fmt.Errorf("a stated graph's block op %d: %w", op.Code, ErrNotImplemented)
@@ -965,7 +974,7 @@ func (bf *blockFacts) ops(b *graph.Builder) func([]graph.ValueID, *jlm.TowerOp) 
 		if !bf.ropeAt() {
 			return v, nil
 		}
-		a, err := bf.rope()
+		a, err := bf.ropeOf(g, o, vars)
 		if err != nil {
 			return 0, err
 		}
@@ -976,6 +985,9 @@ func (bf *blockFacts) ops(b *graph.Builder) func([]graph.ValueID, *jlm.TowerOp) 
 			a.Layout = graph.RopeNeox
 		}
 		a.HeadDim, a.Offset = int(op.Span), int(op.Offset)
+		if a, err = overridden(a, g, o, vars); err != nil {
+			return 0, err
+		}
 		return b.Emit(graph.OpRope, []graph.ValueID{v}, []graph.Result{{Name: "rope", Width: b.G.Values[v].Width}}, nil, a, nil, nil)[0], nil
 	}
 }
@@ -1571,17 +1583,28 @@ func (bf *blockFacts) attend() graph.Attrs {
 	return a
 }
 
-// ropeLocal says the block turns by the sliding layers' rotary where the
-// model trains them one: a sliding block that keeps no entries, since a
-// compressing block's rows turn by the model's rotary, as its entries do.
-func (bf *blockFacts) ropeLocal() bool {
-	return bf.sliding() && !(bf.li < len(bf.c.CompKinds) && bf.c.CompKinds[bf.li] != jlm.CompNone)
+// ropeOf is the rotary the recipe's op o turns by: the block's, or the
+// model's where o's Global holds.
+func (bf *blockFacts) ropeOf(g *mjGraph, o mjBlockOp, vars map[string]jinja.Value) (graph.Attrs, error) {
+	global := false
+	if o.Global != "" {
+		v, err := g.value(o.Global, vars)
+		if err != nil {
+			return graph.Attrs{}, err
+		}
+		if !v.IsBool() {
+			return graph.Attrs{}, fmt.Errorf("global is %v, not a flag", v)
+		}
+		global = v.AsBool()
+	}
+	return bf.rope(global)
 }
 
 // rope is the rotary the block turns by: the sliding layers' where the
-// model trains them their own base or width, the model's otherwise, with
-// its per-pair factors where it stores them or scales its rotary.
-func (bf *blockFacts) rope() (graph.Attrs, error) {
+// model trains them their own base or width and global does not ask for
+// the model's, the model's otherwise, with its per-pair factors where it
+// stores them or scales its rotary.
+func (bf *blockFacts) rope(global bool) (graph.Attrs, error) {
 	c := bf.c
 	nrot, base, scale := int(c.NRot), float64(c.RopeBase), float64(c.AttnFactor)
 	if scale == 0 {
@@ -1597,7 +1620,7 @@ func (bf *blockFacts) rope() (graph.Attrs, error) {
 	if local == 0 {
 		local = nrot
 	}
-	if (c.RopeBaseSWA != 0 || local != nrot) && bf.ropeLocal() {
+	if (c.RopeBaseSWA != 0 || local != nrot) && bf.sliding() && !global {
 		if c.RopeBaseSWA != 0 {
 			base = float64(c.RopeBaseSWA)
 		}

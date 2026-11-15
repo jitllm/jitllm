@@ -62,15 +62,12 @@ func StateSelection(c *jlm.Config, stores func(r jlm.Role, li int32) bool) error
 		// DeepSeek V4's compressed sparse attention: the indexer's key is
 		// the block's entries' own (its compressor pooled beside the
 		// attention's), so no key program; the query on the query latent
-		// turned as the block turns (each head's last NRot), a weight a
-		// head, every visible entry ranked by the relu'd heads' weighted
-		// sum, IdxTopK read.
+		// turned as the block turns, a weight a head, every visible entry
+		// ranked by the relu'd heads' weighted sum, IdxTopK read.
 		for li := range n {
 			s.Blocks[li] = int(li) < len(c.CompKinds) && c.CompKinds[li] == jlm.CompCSA
 		}
-		tail := rope(jlm.RopeAsBlock)
-		tail.Offset = id - int32(c.NRot)
-		s.Query = prog(2, jlm.TowerOp{Code: jlm.TOpLinear, In: on(1), Bind: []jlm.Role{jlm.RoleIdxQB}}, tail)
+		s.Query = prog(2, jlm.TowerOp{Code: jlm.TOpLinear, In: on(1), Bind: []jlm.Role{jlm.RoleIdxQB}}, rope(jlm.RopeAsBlock))
 		s.Weight, s.Relu = weight(), true
 	case c.QSARatio != 0:
 		for li := range n {
