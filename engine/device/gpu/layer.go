@@ -104,12 +104,8 @@ type layer struct {
 	picPool kvLayerPool
 	// swa says the block attends at the sliding layers' geometry, so it runs
 	// in that geometry's scratch set (geomsets.go).
-	geo    geoKey
-	vFromK bool
-	// router is a mixture block's router (jlm.RoleRouter), in its device
-	// layout and the type the file stores it in, held while the block is
-	// placed rather than paged with it; nil on a block that does not route.
-	router   *resident
+	geo      geoKey
+	vFromK   bool
 	kvBytes  uint64 // this block's KV cache, so ReleaseLayers can refund it
 	recBytes uint64 // and its recurrent state, refunded on the same walks
 	recHist  uint64 // one session's recurrent pair; see devTier.reserved
@@ -919,14 +915,6 @@ func (g *devTier) permBytes(p *nn.LayerPlan, w *nn.LayerWeights) uint64 {
 	for _, v := range w.Vectors {
 		if !heldAsMatrix(w, v) {
 			n += uint64(4 * len(v.V))
-		}
-	}
-	// The router stays while the block is placed, paged or not.
-	if r := w.Mat(jlm.RoleRouter); len(r.Data) != 0 {
-		if q, ok := quantOf(r.T); ok {
-			if f, err := g.planesFootprint(q, r.Rows, r.K); err == nil {
-				n += f
-			}
 		}
 	}
 	if r := p.Recurrent; r.Conv > 0 {
@@ -1800,22 +1788,6 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		if !stream && e > 1 && x.Rows%e != 0 {
 			return false
 		}
-	}
-	if moe {
-		// Resident in the device layout of the type the file stores, as every
-		// other matrix, and permanent while the block is placed: a page-out
-		// leaves it (permBytes charged it), and dropLayerLocal frees it.
-		if rw.Rows != p.NExpert || rw.K != p.NEmbd {
-			return false
-		}
-		r := mkw(slotRouter, rw)
-		if r == nil || !r.ok {
-			if g.LastErr == "" {
-				g.LastErr = fmt.Sprintf("block %d: %s (%s %dx%d) not resident", li, jlm.RoleRouter, rw.T, rw.Rows, rw.K)
-			}
-			return false
-		}
-		l.router = r
 	}
 	var err error
 	// Norms and biases arrive as f32, which is what the device reads.
@@ -3918,7 +3890,7 @@ func (g *devTier) layersSession(s backend.Session) {
 	streamed := false
 	for li := lo; li < hi && !streamed; li++ {
 		// A batched mixture reads its selection back too.
-		if l := g.layers[li]; l != nil && (l.stream != nil || (R > 1 && l.router != nil)) {
+		if l := g.layers[li]; l != nil && (l.stream != nil || (R > 1 && l.holds(jlm.RoleRouter))) {
 			streamed = true
 		}
 	}
@@ -4585,26 +4557,11 @@ func (l *layer) auxBufs() []backend.Buf {
 }
 
 // dropLayerLocal frees the buffers PrepLayer allocates fresh for one block and
-// shares with nothing: the KV cache, the norms, the biases and the router. It
+// shares with nothing: the KV cache, the norms and the biases. It
 // does not touch the weights, which live in g.res keyed by their bytes and may
 // be referenced elsewhere. Callers hold g.mu.
 func (g *devTier) dropLayerLocal(l *layer) {
 	g.closeRowTable(l)
-	if r := l.router; r != nil {
-		for k, v := range g.res {
-			if v == r {
-				delete(g.res, k)
-				break
-			}
-		}
-		if n := r.bytes(); n > 0 {
-			g.refund(n)
-		}
-		if r.ok {
-			g.freeResident(r)
-		}
-		l.router = nil
-	}
 	for _, b := range l.auxBufs() {
 		if b != nil {
 			b.Free()
@@ -5119,7 +5076,7 @@ func (g *devTier) PrewarmLayer(li int, p *nn.LayerPlan, w *nn.LayerWeights) bool
 	for _, m := range w.Mats {
 		x := m.W
 		q, ok := quantOf(x.T)
-		if !ok || x.Rows <= 0 || x.K <= 0 || len(x.Data) == 0 || m.Role == jlm.RoleRouter || !bindsRole(p.Graph, m.Role) {
+		if !ok || x.Rows <= 0 || x.K <= 0 || len(x.Data) == 0 || !bindsRole(p.Graph, m.Role) {
 			continue
 		}
 		if g.prewarm(li, q, x.Data, x.Rows, x.K) {
@@ -5129,10 +5086,6 @@ func (g *devTier) PrewarmLayer(li int, p *nn.LayerPlan, w *nn.LayerWeights) bool
 	return any
 }
 
-// slotRouter is a block's router in g.res: no page slot, since it is not
-// paged with the block.
-const slotRouter = -1
-
 // roleRes is one of a block's matrices on the card and its role.
 type roleRes struct {
 	role jlm.Role
@@ -5141,9 +5094,19 @@ type roleRes struct {
 
 // heldMat says the card holds w, a matrix of a block whose graph is gr, in
 // the block's page: one with bytes the graph binds (every one, for a block
-// with no graph), the router aside (layer.router).
+// with no graph).
 func heldMat(gr *graph.Graph, m nn.RoleWeight) bool {
-	return m.Role != jlm.RoleRouter && (len(m.W.Data) != 0 || m.W.Packed != nil) && bindsRole(gr, m.Role)
+	return (len(m.W.Data) != 0 || m.W.Packed != nil) && bindsRole(gr, m.Role)
+}
+
+// holds says the card holds block l's matrix of role r in its page.
+func (l *layer) holds(r jlm.Role) bool {
+	for _, x := range l.mats {
+		if x.role == r {
+			return true
+		}
+	}
+	return false
 }
 
 // takeMats makes l.mats the matrices of w the card holds of the block
