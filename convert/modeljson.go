@@ -77,6 +77,14 @@ type mjConfig struct {
 	Gating string `json:"gating"`
 	// RotaryLayers states which layers rotate.
 	RotaryLayers *mjRotaryLayers `json:"rotary_layers"`
+	// Require states what the config must satisfy: each That is a boolean
+	// expression, and a config it is false for is refused with Else.
+	Require []mjRequire `json:"require"`
+}
+
+type mjRequire struct {
+	That string `json:"that"`
+	Else string `json:"else"`
 }
 
 // mjRotaryLayers is which layers rotate, as transformers states it for the
@@ -180,6 +188,14 @@ type mjTensors struct {
 	Ignore       []string             `json:"ignore"`
 	IgnorePrefix []string             `json:"ignore_prefix"`
 	Experts      *mjExperts           `json:"experts"`
+	// Present states a block tensor the config says every trunk block has or
+	// lacks: Tensor, relative to the block, is shipped exactly where If holds.
+	Present []mjPresent `json:"present"`
+}
+
+type mjPresent struct {
+	Tensor string `json:"tensor"`
+	If     string `json:"if"`
 }
 
 // mjExperts names a mixture's per-expert matrices: the block-relative prefix
@@ -280,6 +296,16 @@ func parseModelJSON(b []byte, name string) (*modelJSON, error) {
 		var v any
 		if strings.ContainsAny(k, ".$") || json.Unmarshal(raw, &v) != nil {
 			return nil, fmt.Errorf("convert: %s: default %q is not a key of the root and a value", name, k)
+		}
+	}
+	for _, r := range mj.Config.Require {
+		if _, err := parseExpr(r.That); err != nil || r.Else == "" {
+			return nil, fmt.Errorf("convert: %s: a requirement states a boolean expression and what refuses it", name)
+		}
+	}
+	for _, p := range mj.Tensors.Present {
+		if _, err := parseExpr(p.If); err != nil || p.Tensor == "" {
+			return nil, fmt.Errorf("convert: %s: a presence states a block tensor and the expression that ships it", name)
 		}
 	}
 	if r := mj.Config.RotaryLayers; r != nil && (r.Each == "" || r.Every == "") {
@@ -900,6 +926,16 @@ func (mj *modelJSON) configIn(env exprEnv, c *hfConfig, names []string) (*Config
 		}
 	}
 
+	for _, r := range mj.Config.Require {
+		v, err := eval("requirement", r.That)
+		if err != nil {
+			return nil, err
+		}
+		if v != true {
+			return nil, fmt.Errorf("convert: %s: %s", c.path, r.Else)
+		}
+	}
+
 	// configOf reads the vocabulary's size, whether the head is tied and
 	// which blocks are recurrent off the tensor table; these stand in for the
 	// checkpoint's.
@@ -1118,6 +1154,9 @@ func (mj *modelJSON) configIn(env exprEnv, c *hfConfig, names []string) (*Config
 	if err := mj.mixtureCovers(cfg, names); err != nil {
 		return nil, fmt.Errorf("convert: %s: %w", c.path, err)
 	}
+	if err := mj.presence(cfg, names, eval); err != nil {
+		return nil, fmt.Errorf("convert: %s: %w", c.path, err)
+	}
 	gk := make([]string, 0, len(mjGraphKeys()))
 	for k := range mjGraphKeys() {
 		gk = append(gk, k)
@@ -1131,6 +1170,33 @@ func (mj *modelJSON) configIn(env exprEnv, c *hfConfig, names []string) (*Config
 		}
 	}
 	return cfg, nil
+}
+
+// presence holds each trunk block to the tensors the config says it has: a
+// tensor a presence states is shipped by every block where its expression is
+// true and by none where it is false, so a config and weights that disagree
+// are refused rather than read as one the graph can state.
+func (mj *modelJSON) presence(cfg *Config, names []string, eval func(what, src string) (any, error)) error {
+	for _, p := range mj.Tensors.Present {
+		v, err := eval("presence of "+p.Tensor, p.If)
+		if err != nil {
+			return err
+		}
+		want, ok := v.(bool)
+		if !ok {
+			return fmt.Errorf("presence of %s is %s, not a boolean", p.Tensor, exprKind(v))
+		}
+		for b := range int(cfg.NLayer) {
+			has := slices.Contains(names, mj.Tensors.BlockPrefix+itoa(b)+"."+p.Tensor)
+			switch {
+			case has && !want:
+				return fmt.Errorf("block %d carries %s, and %q is false: nothing would read it: %w", b, p.Tensor, p.If, ErrNotImplemented)
+			case !has && want:
+				return fmt.Errorf("block %d carries no %s, and %q is true: %w", b, p.Tensor, p.If, ErrNotImplemented)
+			}
+		}
+	}
+	return nil
 }
 
 // mixtureCovers holds a mixture's blocks to its dense lead and step: a block

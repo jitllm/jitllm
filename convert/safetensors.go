@@ -893,9 +893,6 @@ type hfConfig struct {
 	TopkGroup           uint32  `json:"topk_group"`
 	RoutedScalingFactor float64 `json:"routed_scaling_factor"`
 	ScoringFunc         string  `json:"scoring_func"`
-	// NumNextnPredictLayers is how many multi-token-prediction blocks follow
-	// the trunk (DeepSeek-V3, GLM-4.7-Flash): model.layers.{NLayer+i}.
-	NumNextnPredictLayers uint32 `json:"num_nextn_predict_layers"`
 
 	// Kimi-Linear: the recurrence's geometry and the per-layer kind maps.
 	// It re-spells mixture keys that already have other spellings
@@ -943,10 +940,6 @@ type hfConfig struct {
 	NoRopeLayers         []int           `json:"no_rope_layers"`
 	NoRopeLayerInterval  *uint32         `json:"no_rope_layer_interval"`
 	SlidingWindowPattern json.RawMessage `json:"sliding_window_pattern"`
-
-	// nextn is NumNextnPredictLayers where the architecture keeps them, set
-	// by its config function before the shared one reads it.
-	nextn uint32
 
 	// keys is every top-level key config.json carries. An absent key takes
 	// its CLASS's default, which differs per class (SeedOssConfig's head_dim
@@ -1137,18 +1130,7 @@ func (a *hfArch) setData(e *jlm.Tensor, data []byte, c *Config) error {
 // entry. See hfArch.
 func hfArchTable() map[string]*hfArch {
 	return map[string]*hfArch{
-		// One graph, two class names: V2 and V3 differ in the router, and every
-		// difference is a key config.json states. See deepseek2HF.
-		"DeepseekV2ForCausalLM": deepseek2HF(),
-		"DeepseekV3ForCausalLM": deepseek2HF(),
-		// Glm4MoeLiteForCausalLM (GLM-4.7-Flash) carries exactly the names this
-		// entry maps, over kv_lora_rank 512 and q_lora_rank 768. Matching names are
-		// not a matching graph, so it is gated by scripts/hfgold.py's
-		// synth-glm4moelite in model.TestSafetensorsMatchTransformers. Its sibling
-		// Glm4MoeForCausalLM (GLM-4.5-Air) has no kv_lora_rank and is not MLA, so
-		// it is deliberately absent.
-		"Glm4MoeLiteForCausalLM": deepseek2HF(),
-		"KimiLinearForCausalLM":  kimiLinearHF(),
+		"KimiLinearForCausalLM": kimiLinearHF(),
 		// Kimi-K3's text model, its experts compressed-tensors MXFP4 in the
 		// release (convert/hfkimik3.go, convert/hfmxfp4.go).
 		"KimiK3ForConditionalGeneration": kimiK3HF(),
@@ -1480,97 +1462,9 @@ func hfExperts() map[string]jlm.Role {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// deepseek2 -- DeepSeek-V2/V3/R1, and the models that do not carry the name
-//
-// One entry for two class names: V2 and V3 differ only in the router, and
-// every difference is a key config.json states (scoring_func,
-// e_score_correction_bias, n_group). Kimi-K2 declares DeepseekV3ForCausalLM.
-//
-// Dense and mixture blocks spell their feed-forward with disjoint names, so one
-// flat table identifies both; deepseekLayerSets checks each name lands on a
-// block first_k_dense_replace agrees with.
-func deepseek2HF() *hfArch {
-	return &hfArch{
-		arch:        ArchDeepseek2,
-		blockPrefix: llamaHF().blockPrefix,
-		model:       llamaHF().model,
-		block: map[string]jlm.Role{
-			"input_layernorm.weight":          jlm.RoleAttnNorm,
-			"post_attention_layernorm.weight": jlm.RoleFFNNorm,
-
-			// MLA. q_a_proj/q_a_layernorm/q_b_proj are the two-step query, absent
-			// when q_lora_rank is null; q_proj is the one-step form. deepseekQueryForm
-			// checks they are exclusive.
-			"self_attn.q_a_proj.weight":           jlm.RoleAttnQA,
-			"self_attn.q_a_layernorm.weight":      jlm.RoleAttnQANorm,
-			"self_attn.q_b_proj.weight":           jlm.RoleAttnQB,
-			"self_attn.q_proj.weight":             jlm.RoleAttnQ,
-			"self_attn.kv_a_proj_with_mqa.weight": jlm.RoleAttnKVA,
-			"self_attn.kv_a_layernorm.weight":     jlm.RoleAttnKVANorm,
-			"self_attn.o_proj.weight":             jlm.RoleAttnOut,
-			// The un-absorbed pair, cut by deepseekSplitKVB. A checkpoint that
-			// ships the halves already separate names them k_b_proj / v_b_proj and
-			// takes neither branch.
-			"self_attn.kv_b_proj.weight": jlm.RoleAttnKB,
-			"self_attn.k_b_proj.weight":  jlm.RoleAttnKB,
-			"self_attn.v_b_proj.weight":  jlm.RoleAttnVB,
-
-			// The dense leading block.
-			"mlp.gate_proj.weight": jlm.RoleFFNGate,
-			"mlp.up_proj.weight":   jlm.RoleFFNUp,
-			"mlp.down_proj.weight": jlm.RoleFFNDown,
-
-			// The mixture blocks. e_score_correction_bias is added to the router's
-			// scores for selection only, not to the weight, hence a separate role.
-			"mlp.gate.weight":                     jlm.RoleRouter,
-			"mlp.gate.e_score_correction_bias":    jlm.RoleExpProbsB,
-			"mlp.shared_experts.gate_proj.weight": jlm.RoleShExpGate,
-			"mlp.shared_experts.up_proj.weight":   jlm.RoleShExpUp,
-			"mlp.shared_experts.down_proj.weight": jlm.RoleShExpDown,
-
-			// A multi-token-prediction block's own tensors (blocks past
-			// num_hidden_layers; jlm.Config.NMTP). Its head and embedding are
-			// copies of the trunk's in every published checkpoint, which
-			// nextnTensors drops.
-			"eh_proj.weight":          jlm.RoleNextnEHProj,
-			"enorm.weight":            jlm.RoleNextnENorm,
-			"hnorm.weight":            jlm.RoleNextnHNorm,
-			"shared_head.norm.weight": jlm.RoleNextnHeadNorm,
-			"shared_head.head.weight": jlm.RoleNextnHead,
-			"embed_tokens.weight":     jlm.RoleNextnEmbd,
-		},
-		expertPrefix: "mlp.experts.",
-		expert:       hfExperts(),
-		ignore:       llamaHF().ignore,
-		split: map[string]hfSplit{
-			"self_attn.kv_b_proj.weight": deepseekSplitKVB,
-		},
-		config: deepseekHFConfig,
-	}
-}
-
-func deepseekHFConfig(c *hfConfig, names []string) (*Config, error) {
-	// The prediction blocks are this spelling's: Kimi-Linear, the other caller
-	// of deepseekHFConfigFFN, ships none. DeepseekV3Config defaults the count
-	// to 1, and transformers drops the block's tensors on load and so on save:
-	// a checkpoint that declares a block and carries none of it has none.
-	if c.NumNextnPredictLayers > 0 {
-		first := fmt.Sprintf("model.layers.%d.", c.NumHiddenLayers)
-		for _, n := range names {
-			if strings.HasPrefix(n, first) {
-				c.nextn = c.NumNextnPredictLayers
-				break
-			}
-		}
-	}
-	return deepseekHFConfigFFN(c, names, "mlp.")
-}
-
-// deepseekHFConfigFFN is deepseekHFConfig with the feed-forward's name prefix
-// as a parameter. Kimi-Linear carries the same MLA geometry and the same V3
-// router under "block_sparse_moe." instead of "mlp.", and the layer-set check
-// below is the one place that spelling reaches.
+// deepseekHFConfigFFN reads Kimi-Linear's MLA geometry and V3 router under the
+// feed-forward's name prefix "block_sparse_moe.", the one place that spelling
+// reaches being the layer-set check below.
 func deepseekHFConfigFFN(c *hfConfig, names []string, ffn string) (*Config, error) {
 	bad := func(f string, a ...any) error {
 		return fmt.Errorf("convert: "+c.path+": "+f, a...)
@@ -1609,7 +1503,6 @@ func deepseekHFConfigFFN(c *hfConfig, names []string, ffn string) (*Config, erro
 	if err := deepseekQueryForm(c, cfg, names); err != nil {
 		return nil, err
 	}
-	cfg.NMTP = c.nextn
 	if err := deepseekMoE(c, cfg, names, ffn); err != nil {
 		return nil, err
 	}
@@ -2248,7 +2141,7 @@ func permuteHeadPairs(src []byte, heads, headDim, rowBytes int) []byte {
 func hardcodesSigmoid(archs []string) bool {
 	for _, a := range archs {
 		switch a {
-		case "DeepseekV3ForCausalLM", "Glm4MoeLiteForCausalLM", "KimiLinearForCausalLM":
+		case "KimiLinearForCausalLM":
 			return true
 		}
 	}
