@@ -70,6 +70,8 @@ func TestTheLibraryStatesTheContainer(t *testing.T) {
 		{arch: "gemma3", keys: with(with(gemma, "attention.sliding_window", meta.MakeUint(512)),
 			"attention.sliding_window_pattern", meta.MakeUint(4)),
 			flags: qk | jlm.FlagGELU, scale: float32(math.Sqrt(2048)), win: 512, period: 4, ropeSWA: 10000},
+		{arch: "deepseek4", keys: map[string]meta.Value{"attention.sliding_window": meta.MakeUint(128), "block_count": meta.MakeUint(4)},
+			win: 128, period: 5, ropeSWA: 10000},
 		{arch: "gpt-oss", keys: map[string]meta.Value{"attention.sliding_window": meta.MakeUint(128)},
 			flags: neox | jlm.FlagSwiGLUOAI | jlm.FlagYarnExact, win: 128, period: 2},
 	} {
@@ -104,6 +106,11 @@ func TestTheLibraryStatesTheContainer(t *testing.T) {
 		{arch: "deepseek2", keys: map[string]meta.Value{"attention.value_length": u(512)}, kv: 512},
 		{arch: "deepseek2", keys: map[string]meta.Value{"attention.kv_lora_rank": u(64), "attention.value_length": u(80),
 			"attention.q_lora_rank": u(96)}, kv: 64, q: 96},
+		{arch: "deepseek32", keys: map[string]meta.Value{"attention.kv_lora_rank": u(64)}, kv: 64},
+		{arch: "kimi-k3", keys: map[string]meta.Value{"attention.kv_lora_rank": u(64)}, kv: 64},
+		{arch: "deepseek4", keys: map[string]meta.Value{"attention.q_lora_rank": u(96), "attention.sliding_window": u(128), "block_count": u(4)}, q: 96},
+		{arch: "deepseek4", keys: map[string]meta.Value{"attention.q_lora_rank": u(96), "attention.sliding_window": u(128), "block_count": u(4), "attention.indexer.head_count": u(4),
+			"attention.indexer.key_length": u(32), "attention.indexer.top_k": u(8)}, q: 96, heads: 4, w: 32, k: 8},
 		{arch: "deepseek32", keys: map[string]meta.Value{"attention.kv_lora_rank": u(64), "attention.q_lora_rank": u(96),
 			"attention.indexer.head_count": u(4), "attention.indexer.key_length": u(32), "attention.indexer.top_k": u(8)},
 			kv: 64, q: 96, heads: 4, w: 32, k: 8},
@@ -122,7 +129,9 @@ func TestTheLibraryStatesTheContainer(t *testing.T) {
 		}
 	}
 	for want, keys := range map[string]map[string]meta.Value{
-		"an indexer of 0 heads": {"attention.kv_lora_rank": u(64), "attention.q_lora_rank": u(96)},
+		"an indexer of 0 heads": {"attention.kv_lora_rank": u(64), "attention.q_lora_rank": u(96),
+			"attention.indexer.key_length": u(32), "attention.indexer.top_k": u(8)},
+		"no key-value rank": {"attention.q_lora_rank": u(96)},
 		"no query latent": {"attention.kv_lora_rank": u(64), "attention.indexer.head_count": u(4),
 			"attention.indexer.key_length": u(32), "attention.indexer.top_k": u(8)},
 		"with a 64-wide rotary": {"attention.kv_lora_rank": u(64), "attention.q_lora_rank": u(96),
@@ -174,7 +183,7 @@ func TestContainerStatementsAreChecked(t *testing.T) {
 		{`"x": {"norm_eps": "src[["}`, "jinja expression"},
 		{`"x": {"window": {"period": "2"}}`, "states its size"},
 		{`"x": {"window": {"size": "8", "period": "2", "pattern": "2"}}`, "not both"},
-		{`"x": {"latent": {"kv": "64"}}`, "states both ranks"},
+		{`"x": {"latent": {"kv": "64"}}`, "states its query rank"},
 		{`"x": {"indexer": {"heads": "4", "top_k": "8"}}`, "states its heads, key_width and top_k"},
 		{`"x": {"indexer": {"heads": "n", "key_width": "32", "top_k": "8"}}`, "is not the keys"},
 	} {

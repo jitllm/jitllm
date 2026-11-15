@@ -76,7 +76,8 @@ const ds4SwiGLULimit = 10
 // compressed blocks), a window and sinks on every block, compressed blocks
 // (CompKinds, CompRateCSA, CompRateHCA) with the indexer, a grouped low-rank
 // output, the sqrt(softplus) mixture with hash-routed lead blocks, and a
-// SwiGLU clamped at each block's stated limit (ds4Clamp).
+// SwiGLU clamped at each block's stated limit (ds4Clamp). The q LoRA's rank
+// and the indexer are compressed.json's container statement.
 //
 // Refused: any gate but sqrt-softplus, the renormalisation off, a block
 // whose routed and shared clamps differ, and a window that does not cover the HCA rate and two CSA windows
@@ -99,15 +100,13 @@ func deepseek4Config(f *meta.File, c *Config) error {
 	if err := partialRotary(c); err != nil {
 		return err
 	}
-	c.QLoraRank = uint32(f.UintKey("attention.q_lora_rank", 0))
-	c.SWAWindow = uint32(f.UintKey("attention.sliding_window", 0))
 	if c.QLoraRank == 0 || c.SWAWindow == 0 {
 		return fmt.Errorf("q_lora_rank %d, sliding_window %d: DeepSeek V4 has both", c.QLoraRank, c.SWAWindow)
 	}
-	c.SWAPeriod = allLocal(c.NLayer)
 	// The two rotaries: the plain one at rope.freq_base on the sliding
-	// blocks, the compressed blocks' at their own base, where the YaRN keys
-	// read below apply (Config's global rotary carries them).
+	// blocks (the window compressed.json states), the compressed blocks' at
+	// their own base, where the YaRN keys read below apply (Config's global
+	// rotary carries them).
 	comp, ok := f.Key("attention.compress_rope_freq_base")
 	if !ok {
 		return fmt.Errorf("no attention.compress_rope_freq_base")
@@ -116,7 +115,7 @@ func deepseek4Config(f *meta.File, c *Config) error {
 	if !(cb > 0) {
 		return fmt.Errorf("attention.compress_rope_freq_base %g", cb)
 	}
-	c.RopeBaseSWA, c.RopeBase = c.RopeBase, float32(cb)
+	c.RopeBase = float32(cb)
 
 	c.HCMult = uint32(f.UintKey("hyper_connection.count", 0))
 	c.HCIters = uint32(f.UintKey("hyper_connection.sinkhorn_iterations", 0))
@@ -129,9 +128,6 @@ func deepseek4Config(f *meta.File, c *Config) error {
 	if c.OGroups == 0 || c.OLoraRank == 0 || c.NHead%c.OGroups != 0 {
 		return fmt.Errorf("%d output groups of rank %d over %d heads", c.OGroups, c.OLoraRank, c.NHead)
 	}
-	c.IdxHeads = uint32(f.UintKey("attention.indexer.head_count", 0))
-	c.IdxHeadDim = uint32(f.UintKey("attention.indexer.key_length", 0))
-	c.IdxTopK = uint32(f.UintKey("attention.indexer.top_k", 0))
 	c.NHashLayers = uint32(f.UintKey("hash_layer_count", 0))
 	if c.NHashLayers > c.NLayer {
 		return fmt.Errorf("%d hash-routed blocks of %d", c.NHashLayers, c.NLayer)
@@ -266,14 +262,8 @@ func ds4Kinds(f *meta.File, c *Config) error {
 				"indexer %v, which is neither CSA, HCA nor a sliding block", i, r, cmp, rows, c.HeadDim, idx)
 		}
 	}
-	if c.CompRateCSA != 0 {
-		switch {
-		case c.IdxHeads == 0 || c.IdxHeadDim == 0 || c.IdxTopK == 0:
-			return fmt.Errorf("CSA blocks with an indexer of %d heads of %d, top %d", c.IdxHeads, c.IdxHeadDim,
-				c.IdxTopK)
-		case c.NRot > c.IdxHeadDim:
-			return fmt.Errorf("indexer heads of %d with a %d-wide rotary", c.IdxHeadDim, c.NRot)
-		}
+	if c.CompRateCSA != 0 && c.IdxHeads == 0 {
+		return fmt.Errorf("CSA blocks with no indexer")
 	}
 	if w := c.SWAWindow; w < c.CompRateHCA || w < 2*c.CompRateCSA {
 		return fmt.Errorf("a window of %d under HCA every %d and CSA every %d: the engine keeps the "+

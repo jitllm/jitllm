@@ -40,14 +40,15 @@ type mjStates struct {
 
 // mjStatesLatent is latent attention's ranks: KV the key-value latent's, Q
 // the query latent's (0 where the query is projected in one step), each a
-// count.
+// count; a file whose keys and values are not a latent states Q alone.
 type mjStatesLatent struct {
 	KV string `json:"kv"`
 	Q  string `json:"q"`
 }
 
 // mjStatesIndexer is an indexer of Heads query heads scoring one cached key
-// of KeyWidth per position, the TopK best read, each a count.
+// of KeyWidth per position, the TopK best read, each a count; all three 0
+// state none.
 type mjStatesIndexer struct {
 	Heads    string `json:"heads"`
 	KeyWidth string `json:"key_width"`
@@ -82,8 +83,8 @@ func (mj *modelJSON) checkStates() error {
 			srcs = append(srcs, w.Size, w.Period, w.Pattern, w.RopeBase)
 		}
 		if l := st.Latent; l != nil {
-			if l.KV == "" || l.Q == "" {
-				return fmt.Errorf("convert: %s: %s: a latent states both ranks, kv and q", mj.name, arch)
+			if l.Q == "" {
+				return fmt.Errorf("convert: %s: %s: a latent states its query rank, q", mj.name, arch)
 			}
 			srcs = append(srcs, l.KV, l.Q)
 		}
@@ -249,9 +250,16 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 		return nil
 	}
 	if l := st.Latent; l != nil {
-		if err := counts(map[string]*uint32{"latent.kv": &c.KVLoraRank, "latent.q": &c.QLoraRank},
-			map[string]string{"latent.kv": l.KV, "latent.q": l.Q}); err != nil {
+		if c.QLoraRank, err = whole("latent.q", l.Q); err != nil {
 			return err
+		}
+		if l.KV != "" {
+			if c.KVLoraRank, err = whole("latent.kv", l.KV); err != nil {
+				return err
+			}
+			if c.KVLoraRank == 0 {
+				return fmt.Errorf("convert: %s: %s: latent attention with no key-value rank", by, arch)
+			}
 		}
 	}
 	if x := st.Indexer; x != nil {
@@ -303,9 +311,11 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 
 // indexerFits refuses an indexer missing a count, a key that is not whole
 // groups of eight or does not hold the rotary, and one over latent attention
-// with no query latent to project its query from.
+// with no query latent to project its query from; no counts state none.
 func indexerFits(c *Config) error {
 	switch {
+	case c.IdxHeads|c.IdxHeadDim|c.IdxTopK == 0:
+		return nil
 	case c.IdxHeads == 0 || c.IdxHeadDim == 0 || c.IdxTopK == 0:
 		return fmt.Errorf("an indexer of %d heads of %d, top %d", c.IdxHeads, c.IdxHeadDim, c.IdxTopK)
 	case c.KVLoraRank != 0 && c.QLoraRank == 0:

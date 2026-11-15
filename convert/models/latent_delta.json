@@ -1,5 +1,8 @@
 {
   "gguf": ["kimi-k3"],
+  "container": {
+    "kimi-k3": {"latent": {"kv": "src['attention.kv_lora_rank'] | default(0)", "q": "src['attention.q_lora_rank'] | default(0)"}}
+  },
   "archs": ["kimilinear"],
   "graph": {
     "block": [
