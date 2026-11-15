@@ -306,7 +306,10 @@ func (s *ModelService) Convert(ctx context.Context, req *connect.Request[v1.Conv
 }
 
 // Tokenize encodes text with the model's tokenizer and returns the ids with
-// each one's piece.
+// each one's piece. A control token written in the text is matched as
+// itself (EncodeSpecial, llama.cpp's parse_special), as llama-server's
+// /tokenize reads its content: a rendered chat template tokenizes as the
+// ids ApplyChatTemplate returns.
 func (s *ModelService) Tokenize(ctx context.Context, req *connect.Request[v1.TokenizeRequest]) (*connect.Response[v1.TokenizeResponse], error) {
 	lm, err := s.E.Model(req.Msg.ModelId)
 	if err != nil {
@@ -315,7 +318,7 @@ func (s *ModelService) Tokenize(ctx context.Context, req *connect.Request[v1.Tok
 	if lm.m.Vocab == nil {
 		return nil, connectErr(fmt.Errorf("server: model %q has no tokenizer: %v", lm.id, lm.m.TokErr))
 	}
-	ids := lm.m.Vocab.Encode(req.Msg.Text, req.Msg.AddSpecial)
+	ids := lm.m.Vocab.EncodeSpecial(req.Msg.Text, req.Msg.AddSpecial)
 	pieces := make([]string, len(ids))
 	for i, id := range ids {
 		pieces[i] = lm.m.Vocab.Text(id)
