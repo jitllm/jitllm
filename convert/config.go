@@ -918,10 +918,8 @@ func configOfFile(f *meta.File) (*Config, error) {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
 	}
-	if arch == ArchErnie45MoE || arch == ArchHunyuan || arch == ArchBailingMoE2 || arch == ArchDots1 {
-		if err := ernieSharedWidth(f, c); err != nil {
-			return nil, fmt.Errorf("convert: %s: %w", name, err)
-		}
+	if err := sharedExpertWidth(f, c); err != nil {
+		return nil, fmt.Errorf("convert: %s: %w", name, err)
 	}
 	if arch == ArchGemma4 {
 		if err := gemma4MoEConfig(f, c); err != nil {

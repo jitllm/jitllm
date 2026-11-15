@@ -248,9 +248,11 @@ func TestModelJSONHandsConfigOfTheTensorTable(t *testing.T) {
 	  "num_experts": 8, "num_experts_per_tok": 2, "moe_intermediate_size": 32,
 	  "shared_expert_intermediate_size": 48}`
 	c := hfConfigOf(t, js)
+	sh := "model.layers.0.mlp.shared_expert.gate_proj.weight"
+	c.shapes = map[string][]uint64{sh: {48, 64}}
 	names := []string{"lm_head.weight", "model.layers.0.mlp.experts.3.gate_proj.weight",
 		"model.layers.1.mlp.experts.0.gate_proj.weight", "model.layers.0.mlp.gate.weight",
-		"model.layers.1.mlp.gate.weight"}
+		"model.layers.1.mlp.gate.weight", sh}
 	cfg, err := mj.config(c, names)
 	if err != nil {
 		t.Fatal(err)
@@ -523,7 +525,9 @@ func TestGlm4MoeThroughTheLibrary(t *testing.T) {
 		{"shared experts in the dense lead", append(slices.Clone(whole), "model.layers.0.mlp.shared_experts.gate_proj.weight"),
 			"block 0 carries shared experts"},
 	} {
-		if _, err := mj.config(hfConfigOf(t, js), r.names); err == nil || !strings.Contains(err.Error(), r.err) {
+		hc := hfConfigOf(t, js)
+		hc.shapes = map[string][]uint64{"model.layers.0.mlp.shared_experts.gate_proj.weight": {32, 64}}
+		if _, err := mj.config(hc, r.names); err == nil || !strings.Contains(err.Error(), r.err) {
 			t.Errorf("%s: %v, want an error saying %q", r.name, err, r.err)
 		}
 	}

@@ -28,7 +28,7 @@ import (
 // computes torch.sigmoid(logits) and reads no gating key, so a file that
 // states softmax describes weights the class never ran and is refused.
 //
-// The shared expert's width is read off its tensor (ernieSharedWidth): the
+// The shared expert's width is read off its tensor (sharedExpertWidth): the
 // class builds one MLP of moe_intermediate_size * num_shared_experts, the
 // converter writes moe_shared_expert_intermediate_size when the config has it,
 // and llama.cpp's loader multiplies whatever it reads by the count again. The

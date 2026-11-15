@@ -942,9 +942,17 @@ func (mj *modelJSON) configIn(env exprEnv, c *hfConfig, names []string) (*Config
 	// takes the width off the tensor would run whatever ships, where the class
 	// builds the width its config states.
 	if v, ok := kvs[ns+"expert_shared_feed_forward_length"]; ok {
-		if w, _ := v.Uint(); uint64(cfg.NFFNShExp) != w {
+		ships := false
+		for n := range have {
+			ships = ships || strings.HasSuffix(n, ".ffn_gate_shexp.weight") || strings.HasSuffix(n, ".ffn_up_shexp.weight")
+		}
+		got := uint64(cfg.NFFNShExp)
+		if !ships {
+			got = 0
+		}
+		if w, _ := v.Uint(); got != w {
 			return nil, fmt.Errorf("convert: %s: the shared experts are %d wide in the checkpoint, and the config states %d",
-				c.path, cfg.NFFNShExp, w)
+				c.path, got, w)
 		}
 	}
 	// The statements configOf does not read decide after it.

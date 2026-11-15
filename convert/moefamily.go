@@ -132,11 +132,13 @@ func ernie45moeConfig(f *meta.File, c *Config) error {
 	return nil
 }
 
-// ernieSharedWidth takes the shared expert's width off its tensor. llama.cpp's
-// converter writes intermediate_size // num_key_value_heads, where the class
-// builds moe_intermediate_size * moe_num_shared_experts; the two agree on
-// every published ERNIE and nothing ties them, and the tensor is the fact.
-func ernieSharedWidth(f *meta.File, c *Config) error {
+// sharedExpertWidth takes the shared expert's width off its tensor wherever
+// one ships, for every graph: a key or a count can disagree with the
+// weights (llama.cpp's ERNIE converter writes intermediate_size //
+// num_key_value_heads where the class builds moe_intermediate_size *
+// moe_num_shared_experts; Hunyuan builds it at intermediate_size), and the
+// tensor is the fact. A file shipping none keeps the key's or the count's.
+func sharedExpertWidth(f *meta.File, c *Config) error {
 	for i := 0; i < int(c.NLayer); i++ {
 		t, ok := f.Get("blk." + itoa(i) + ".ffn_gate_shexp.weight")
 		if !ok {
@@ -148,6 +150,5 @@ func ernieSharedWidth(f *meta.File, c *Config) error {
 		c.NFFNShExp = uint32(t.Dims[1])
 		return nil
 	}
-	c.NFFNShExp = 0
 	return nil
 }
