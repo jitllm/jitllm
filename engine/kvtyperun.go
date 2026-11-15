@@ -190,17 +190,3 @@ func historyRow(m composer.Model, g *graph.Graph) int {
 	}
 	return 0
 }
-
-// attendsCausally reports that g's attention stays causal inside a call's
-// bidirectional key runs (graph.Attrs.NoRuns).
-func attendsCausally(g *graph.Graph) bool {
-	if g == nil {
-		return false
-	}
-	for _, o := range g.Ops {
-		if o.Kind == graph.OpAttend {
-			return o.Attr.NoRuns
-		}
-	}
-	return false
-}

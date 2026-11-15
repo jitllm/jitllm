@@ -40,7 +40,7 @@ func TestPagedStagingAllocatesNothing(t *testing.T) {
 			d.mu.Unlock()
 			t.Fatal(err)
 		}
-		d.pagedStage(bs.pkv, &bs.p, bs.pkv.rows)
+		d.pagedStage(bs.pkv, &bs.p, bs.pkv.rows, false)
 		d.mu.Unlock()
 	}
 	token() // warm: the first page, the table run, the variant

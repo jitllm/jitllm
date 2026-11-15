@@ -63,6 +63,10 @@ type layer struct {
 	// appends to a history, graphAttends): it keeps a KV history and a
 	// recurrent state both.
 	withAttn bool
+	// noRuns is a block whose attention stays causal inside a call's
+	// bidirectional key runs (graph.Attrs.NoRuns). A call carries one set of
+	// key counts, so submit cuts a range where it changes.
+	noRuns bool
 	// noFFN is a block that is its mixer alone (nn.LayerPlan.NoFFN): the
 	// emit ends it at the first residual.
 	noFFN bool
@@ -1848,6 +1852,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	linear := p.Recurrent.Conv > 0
 	l.linear = linear
 	l.withAttn = linear && graphAttends(p.Graph)
+	l.noRuns = p.Graph.AttendNoRuns()
 	l.noFFN = p.NoFFN
 	if linear {
 		if !g.addSessionRec(sid, l, p) {
@@ -3352,7 +3357,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x []
 	pn := append(g.subBytes.pn[:0], u32one(n)...)
 	if R == 1 {
 		n = uint32(pos + 1)
-		if e := g.runEnd(pos, pos+1); g.runPhase == 2 && e > 0 && !p.NonCausal && !attendNoRuns(p.Graph) {
+		if e := g.runEnd(pos, pos+1); g.runPhase == 2 && e > 0 && !p.NonCausal && !g.rangeNoRuns(lo, hi) {
 			n = uint32(e)
 		}
 		pn = binary.LittleEndian.AppendUint32(pn[:0], n)
@@ -3376,7 +3381,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x []
 		// above would otherwise invalidate -- so a batched call does not round.
 		pn = pn[:4]
 		binary.LittleEndian.PutUint32(pn, uint32(nCap))
-		noRuns := attendNoRuns(p.Graph)
+		noRuns := g.rangeNoRuns(lo, hi)
 		for r := 0; r < R; r++ {
 			// A padded row takes the last real row's count. It must be clamped,
 			// because AttnAcc walks each row's own count and an unclamped one runs
@@ -3443,7 +3448,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x []
 		}
 		pk.st = nil
 		if pk.held {
-			g.pagedStage(pk, p, pk.rows)
+			g.pagedStage(pk, p, pk.rows, g.rangeNoRuns(lo, hi))
 			// A call over evicted history streams (pagedstream.go).
 			if e := g.pagedStreamPrep(sid, bs, pk.rows); e != nil {
 				g.noteRoom(e)
@@ -4067,7 +4072,7 @@ func (g *devTier) layersSession(s backend.Session) {
 				case sv.f.rowSplit > 0:
 					serr = sv.rowsRun(g, lc, s, inst, kind, l, in, outs)
 				case sv.f.split > 0:
-					serr = sv.pagedRun(g, lc, s, inst, kind, l, l.stream.nExpert, g.hostFns[sid][li].uses, in, outs)
+					serr = sv.pagedRun(g, lc, s, inst, kind, l, g.hostFns[sid][li].uses, in, outs)
 				case len(sv.f.sweeps) > 0:
 					serr = sv.streamRun(g, lc, s, inst, kind, bs, g.kvp.layers[l.kvSrc], g.kvp.layers[histKey(l.kvSrc, 1)], in, outs)
 				default:
@@ -5384,6 +5389,37 @@ func (g *devTier) attendsIn(lo, hi int) bool {
 	for li := lo; li < hi; li++ {
 		if l := g.layers[li]; l != nil && !l.linear {
 			return true
+		}
+	}
+	return false
+}
+
+// rangeNoRuns is the key-run rule of [lo, hi)'s attention: whether it stays
+// causal inside the call's bidirectional runs. submit keeps a range to one
+// rule (cutsRuns), so the first attending block states it. Callers hold g.mu.
+func (g *devTier) rangeNoRuns(lo, hi int) bool {
+	for li := lo; li < hi; li++ {
+		if l := g.layers[li]; l != nil && (!l.linear || l.withAttn) {
+			return l.noRuns
+		}
+	}
+	return false
+}
+
+// cutsRuns reports that block end, joining [li, end), would put two key-run
+// rules in one call while the session has runs to honour: a call stages one
+// set of key counts for every block in it. Callers hold g.mu.
+func (g *devTier) cutsRuns(li, end int) bool {
+	if len(g.bidir) == 0 {
+		return false
+	}
+	l := g.layers[end]
+	if l == nil || l.linear && !l.withAttn {
+		return false
+	}
+	for k := li; k < end; k++ {
+		if m := g.layers[k]; m != nil && (!m.linear || m.withAttn) {
+			return m.noRuns != l.noRuns
 		}
 	}
 	return false

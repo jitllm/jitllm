@@ -1066,6 +1066,15 @@ func (m *Model) statedBlockGraph(li int, s string) (*graph.Graph, Uncovered, err
 	if u := graph.Unbound(g, f); len(u) != 0 {
 		return nil, UncoveredUnbound, fmt.Errorf("the container stores %v for block %d, which its stated graph does not bind", u, li)
 	}
+	// A graph stated before its attention carried the key-run rule decodes
+	// it as false, which on a layer the container keeps causal over a
+	// picture would run it bidirectional.
+	for _, o := range g.Ops {
+		if o.Kind == graph.OpAttend && o.Attr.NoRuns == m.Cfg.BidirAt(li) {
+			return nil, UncoveredUnverified, fmt.Errorf("block %d's stated graph honours a picture's key runs %v where the container's layers say %v: "+
+				"convert the model again", li, !o.Attr.NoRuns, m.Cfg.BidirAt(li))
+		}
+	}
 	return g, Covered, nil
 }
 

@@ -693,8 +693,8 @@ type LayerPlan struct {
 
 // RecurrentPlan is the sizes of a recurrent block's state, which a device
 // keeps a slot of per sequence. Every field is zero for a block that keeps
-// none. Whether the block is recurrent, and whether it attends beside its
-// recurrence, is its graph's (the states its ops read and write).
+// none. A block is recurrent when Conv is set; whether it attends beside its
+// recurrence is its graph's (an op appending to a history).
 type RecurrentPlan struct {
 	Conv      int // causal convolution width, in positions
 	Chans     int // convolved channels
@@ -711,9 +711,9 @@ type RecurrentPlan struct {
 	// a convolution's history), the same on every recurrent block so a device
 	// keeps one slot width. A sequence's slot is [recurrence | tail].
 	TailLen int
-	// Scan is the per-element selective scan (jlm.LayerScan): VHeads channels
-	// of one row each over a KDim-wide state, B and C shared, the decay a
-	// vector exp(dt*A) per channel.
+	// Scan is the per-element selective scan (jlm.LayerScan): each channel's
+	// own state row, B and C shared, the decay a vector exp(dt*A) per
+	// channel.
 	Scan bool
 }
 

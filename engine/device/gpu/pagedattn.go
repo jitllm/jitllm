@@ -378,12 +378,12 @@ type pagedRow struct {
 
 // pagedStage fills pg's descriptor slabs for a call's rows, full and
 // windowed: each row's sequence run, the same offset in every layer's arena.
+// noRuns is the call's blocks' key-run rule (rangeNoRuns).
 // Callers hold g.mu and have run pagedPrep for the same rows.
-func (g *devTier) pagedStage(pg *pagedScratch, p *nn.LayerPlan, rows []pagedRow) {
+func (g *devTier) pagedStage(pg *pagedScratch, p *nn.LayerPlan, rows []pagedRow, noRuns bool) {
 	kp := g.kvPages()
 	pg.desc, pg.descW = pg.desc[:0], pg.descW[:0]
 	callEnd := pagedKeys(rows)
-	noRuns := attendNoRuns(p.Graph)
 	for _, r := range rows {
 		if r.pad {
 			pg.desc = append(pg.desc, 0, 0, 0, 0)

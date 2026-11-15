@@ -982,7 +982,8 @@ func (s *Instance) SetDeviceLayers(d nn.LayerDevice, max int) error {
 		// Zero for a dense model, which is what makes every existing plan
 		// unchanged.
 		NExpert: c.NExpert, NExpertUsed: c.NExpertUsed, NFFNExp: c.NFFNExp,
-		// The shared expert's width, which sizes the scratch.
+		// The shared expert's width, which the tier checks the shared
+		// expert's weights against.
 		NFFNShExp: c.NFFNShExp,
 		// The block's own geometry is planFor's.
 		MixedGeom: c.MixedGeom(),

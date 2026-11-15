@@ -700,13 +700,14 @@ func (g *devTier) submit(sid uint64, bs *blockScratch, lo, hi, pos int, x []floa
 		// PerLayerSubmit is the other arm of the submission comparison and it
 		// asks for one block per Session, so it must not be coalesced away.
 		// Otherwise a range is cut where the next block is not resident, and
-		// where the run-time budget ends (subbudget.go). pageIn holds li; the
+		// where the run-time budget ends (subbudget.go), and where the blocks'
+		// key-run rule changes over a picture (cutsRuns). pageIn holds li; the
 		// blocks the range takes on are held as they are taken, so no other
 		// session's page-in sends one away before the submission reads it.
 		if !g.PerLayerSubmit {
 			g.mu.Lock()
 			most := g.submitSpan(rows)
-			for end < hi && end-li < most && g.holdPages(end, end+1) {
+			for end < hi && end-li < most && !g.cutsRuns(li, end) && g.holdPages(end, end+1) {
 				end++
 			}
 			g.mu.Unlock()
