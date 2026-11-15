@@ -18,8 +18,6 @@ func (l *Layer) CloneTo(dst *Layer) {
 		dst.Mtp = w
 	}
 	dst.Experts = slices.Clone(l.Experts)
-	dst.kbHead = slices.Clone(l.kbHead)
-	dst.vbHead = slices.Clone(l.vbHead)
 	// A matrix is recorded by the field that holds it, and the field moves
 	// with the copy; one held by no field (a tower matrix with no slot of its
 	// own) is the copy's own tensor.
@@ -65,12 +63,6 @@ func (l *Layer) CloneTo(dst *Layer) {
 		own(&dst.Experts[i].Gate)
 		own(&dst.Experts[i].Up)
 		own(&dst.Experts[i].Down)
-	}
-	for i := range dst.kbHead {
-		own(&dst.kbHead[i])
-	}
-	for i := range dst.vbHead {
-		own(&dst.vbHead[i])
 	}
 	if w != nil {
 		own(&w.EhProj)

@@ -12,9 +12,8 @@ import (
 
 // TestMLARunsUnderAPageBudget runs Multi-head Latent Attention under the pager,
 // where every block is re-bound on each visit. The small fixtures otherwise
-// stay resident, so a missing rebind of the MLA matrices, or of the per-head
-// views l.kbHead/l.vbHead (slices of wkb/wvb), would go unseen: a stale view
-// reads another block's weights of the right shape.
+// stay resident, so a missing rebind of the MLA matrices would go unseen: a
+// stale matrix reads another block's weights of the right shape.
 func TestMLARunsUnderAPageBudget(t *testing.T) {
 	for _, name := range []string{"synth-deepseek", "synth-deepseek-lite"} {
 		t.Run(name, func(t *testing.T) {

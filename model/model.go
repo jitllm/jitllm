@@ -577,7 +577,7 @@ func (c *Config) GQAAt(li int) int { return c.NHeadAt(li) / c.NKVHeadAt(li) }
 // QDimAt is the query (and the attention output) width at layer li.
 func (c *Config) QDimAt(li int) int { return c.NHeadAt(li) * c.HeadDimAt(li) }
 
-// MaxHeadDim, MaxKVDim, MaxQDim and MaxNRot are the widest of the blocks'
+// MaxHeadDim, MaxQDim and MaxNRot are the widest of the blocks'
 // geometries: what a buffer that serves every layer is sized by.
 func (c *Config) MaxHeadDim() int {
 	m := c.HeadDim
@@ -639,28 +639,6 @@ func (c *Config) MaxNFFN() int {
 	}
 	if c.Head != nil {
 		m = max(m, c.Head.NFFN)
-	}
-	return m
-}
-
-// MaxKVDim is the widest row any layer caches: MLA's latent row, an MSA
-// block's k with the indexer's key after it, DeepSeek V4's widest KVRowAt, or
-// else the widest of the blocks' KV widths.
-func (c *Config) MaxKVDim() int {
-	if c.KVLoraRank != 0 {
-		return c.KVDim()
-	}
-	if c.sel != nil {
-		// The row a selecting block writes: its k with the indexer's key
-		// after it.
-		return (c.NKVHead + 1) * c.HeadDim
-	}
-	m := c.KVDim()
-	for li := range c.geoms {
-		m = max(m, c.NKVHeadAt(li)*c.HeadDimAt(li))
-	}
-	if c.Head != nil {
-		m = max(m, c.Head.KVDim())
 	}
 	return m
 }
@@ -1122,14 +1100,9 @@ type Layer struct {
 	// wkb and wvb are banks, one sheet per head, read through bankExpert as an
 	// expert bank is, so the absorb runs as a single gather.
 	Wqa, Wqb, Wkva, Wkb, Wvb Tensor
-	// kbHead and vbHead are wkb and wvb cut into one view per head, built once
-	// at load as l.experts is.
-	kbHead, vbHead []Tensor
-	// headsFrom is what wkb and wvb spanned when the heads were last cut, and
-	// banksFrom the same for the expert bank views: bindPacked re-cuts only
-	// when a bank moved, since a cut is a fresh nn.Packed per view and a
-	// resident block is rebound every token.
-	headsFrom      [2]bankSpans
+	// banksFrom is what the expert banks spanned when their views were last
+	// cut: bindPacked re-cuts only when a bank moved, since a cut is a fresh
+	// nn.Packed per view and a resident block is rebound every token.
 	banksFrom      [3]bankSpans
 	Gate, Up, Down Tensor
 	// router is nil unless this layer's FFN is a mixture of experts, in which
@@ -1224,10 +1197,8 @@ type Model struct {
 	// rotary, as every other q/k-normed model does. The rotation does not
 	// keep a head's RMS, so HunyuanVL's post-rotary norm is load-bearing.
 	xdKNormFirst bool
-	// mnNoResidual is a gate's violation: Gemma 3n's MobileNet blocks with
-	// their residual adds dropped from the graphs the front end states.
-	Cfg   *Config
-	Vocab *tok.Vocab
+	Cfg          *Config
+	Vocab        *tok.Vocab
 
 	// chatTemplates are the chat templates compiled, by source: a request
 	// renders its model's template, not compiles it (chat.go).
@@ -1291,10 +1262,7 @@ type Model struct {
 	RopeLong *nn.Rope
 	LongCtx  int
 	// Ngram is the n-gram block's table.
-	Ngram *ngramTable
-	// onesHD is a HeadDim-wide vector of ones: the weight Llama 4's weightless
-	// q/k RMSNorm runs the generated norm against. nil unless QKL2Norm.
-	onesHD  []float32
+	Ngram   *ngramTable
 	OutNorm []float32
 	// outNormB and outB are the output LayerNorm's bias and the head's bias
 	// (phi-2), nil everywhere else.
@@ -2044,16 +2012,6 @@ func SameSpan(a, b []byte) bool {
 	return len(a) == len(b) && (len(a) == 0 || &a[0] == &b[0])
 }
 
-// sameView is sameSpan for a whole weight: its payload and, if packed, its
-// three planes and its shape.
-func sameView(a, b Tensor) bool {
-	if a.Rows != b.Rows || a.K != b.K || !SameSpan(a.Data, b.Data) || (a.Packed == nil) != (b.Packed == nil) {
-		return false
-	}
-	return a.Packed == nil || (SameSpan(a.Packed.QS, b.Packed.QS) && SameSpan(a.Packed.D, b.Packed.D) &&
-		SameSpan(a.Packed.SC, b.Packed.SC))
-}
-
 // ensureBlock reads the parts of block li that every token needs: its
 // attention or recurrent weights, its router, its shared expert -- everything
 // but the routed expert banks.
@@ -2430,16 +2388,6 @@ func ReleaseLayer(c *jlm.Frames, li int, l *Layer, keepExperts bool) {
 			}
 		}
 	}
-	// MLA's per-head views are slices of wkb and wvb, as the expert views
-	// below are of the banks.
-	for i := range l.kbHead {
-		for _, t := range []*Tensor{&l.kbHead[i], &l.vbHead[i]} {
-			t.Data = nil
-			if t.Packed != nil {
-				t.Packed.QS, t.Packed.D, t.Packed.SC = nil, nil, nil
-			}
-		}
-	}
 	for i := range l.Experts {
 		for _, t := range []*Tensor{&l.Experts[i].Gate, &l.Experts[i].Up, &l.Experts[i].Down} {
 			t.Data = nil
@@ -2450,7 +2398,7 @@ func ReleaseLayer(c *jlm.Frames, li int, l *Layer, keepExperts bool) {
 	}
 	// The views are gone, so the next bind cuts them again even if the banks
 	// land where they were.
-	l.headsFrom, l.banksFrom = [2]bankSpans{}, [3]bankSpans{}
+	l.banksFrom = [3]bankSpans{}
 	// Another instance runs the block from host memory: its page and its
 	// experts' stay for it.
 	if c.Kept(li) {
@@ -2488,29 +2436,6 @@ func bindPacked(c *jlm.Frames, cfg *Config, l *Layer) error {
 		for _, t := range []*Tensor{&w.EhProj, &w.Head, &w.Embd} {
 			bindOne(c, t)
 		}
-	}
-	// The per-head views are re-cut, as l.experts is below: they are slices of
-	// wkb and wvb, so a rebind that moves those would leave them stale.
-	if from := [2]bankSpans{spansOf(l.Wkb), spansOf(l.Wvb)}; len(l.kbHead) != 0 && from != l.headsFrom {
-		nope := cfg.HeadDim - cfg.NRot
-		for h := range l.kbHead {
-			kb, err := bankExpert(l.Wkb, jlm.RoleAttnKB, cfg.NHead, cfg.KVLoraRank, nope, h)
-			if err != nil {
-				return err
-			}
-			vb, err := bankExpert(l.Wvb, jlm.RoleAttnVB, cfg.NHead, cfg.HeadDimV, cfg.KVLoraRank, h)
-			if err != nil {
-				return err
-			}
-			// Written only when the head moved, for bindOne's reason above.
-			if !sameView(l.kbHead[h], kb) {
-				l.kbHead[h] = kb
-			}
-			if !sameView(l.vbHead[h], vb) {
-				l.vbHead[h] = vb
-			}
-		}
-		l.headsFrom = from
 	}
 	// A bank in expert pages has no bank to cut views from, and its views are
 	// left alone: ensureExperts binds the ones a token selects. Emptying them
@@ -2801,12 +2726,6 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 		// The converter states XD-RoPE over the whole head with NEOX pairs, as
 		// transformers turns it (convert.hunyuanVLConfig).
 		m.Rope.Runs, _ = nn.XDRopeRuns(cfg.RopeSections[:], cfg.NRot/2)
-	}
-	if cfg.QKL2Norm || cfg.VNorm {
-		m.onesHD = make([]float32, cfg.MaxHeadDim())
-		for i := range m.onesHD {
-			m.onesHD[i] = 1
-		}
 	}
 	// A second rotary for architectures trained with two bases (gemma3's
 	// sliding layers), built only when RopeBaseSWA is set.
@@ -3351,21 +3270,6 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 					return nil, fmt.Errorf("model: block %d %s is %d wide, want %d",
 						bi, v.name, v.have, v.want)
 				}
-			}
-			// Cut per head once, at load: wkb and wvb are banks of NHead
-			// sheets, and the absorb is nn.MatVecPackedGather over them with
-			// the head as the "expert".
-			nope := cfg.HeadDim - cfg.NRot
-			for h := 0; h < cfg.NHead; h++ {
-				t, err := bankExpert(l.Wkb, jlm.RoleAttnKB, cfg.NHead, cfg.KVLoraRank, nope, h)
-				if err != nil {
-					return nil, err
-				}
-				l.kbHead = append(l.kbHead, t)
-				if t, err = bankExpert(l.Wvb, jlm.RoleAttnVB, cfg.NHead, cfg.HeadDimV, cfg.KVLoraRank, h); err != nil {
-					return nil, err
-				}
-				l.vbHead = append(l.vbHead, t)
 			}
 		}
 		// Every other matrix the block stores is loaded under its role, a
