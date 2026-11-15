@@ -959,10 +959,9 @@ func (s *Instance) SetDeviceLayers(d nn.LayerDevice, max int) error {
 		// Whose blocks these are: a device holds one model's at a time.
 		Model: s.m.Id, File: s.m.Container, FrameBudget: s.pageQuota.Load(),
 		NEmbd: c.NEmbd, NHead: c.NHead, NKVHead: c.NKVHead, HeadDim: c.HeadDim,
-		NRot: c.NRot, NFFN: c.NFFN, MaxSeq: s.maxSeq, Vocab: c.NVocab, FinalSoftcap: c.FinalSoftcap,
+		NRot: c.NRot, NFFN: c.NFFN, MaxSeq: s.maxSeq, Vocab: c.NVocab,
 		RMSEps: c.RMSEps, RopeBase: c.RopeBase, RopeNeox: c.RopeNeox,
-		NoPosEnc: c.NoPosEnc,
-		QKNorm:   c.QKNorm, QKNormWide: c.QKNormWide, QKNormPost: c.QKNormPost, NoExpertNorm: c.NoExpertNorm,
+		QKNorm: c.QKNorm, NoExpertNorm: c.NoExpertNorm,
 		// The tier picks the local or global rotary table per block from
 		// this; zero means one kind of layer.
 		SWAPeriod: swaPeriodFor(c),
@@ -980,31 +979,18 @@ func (s *Instance) SetDeviceLayers(d nn.LayerDevice, max int) error {
 		RopeSplit:   c.RopeXD,
 		// The sliding window itself (TestSlidingWindowRunsOnTheDevice).
 		SWAWindow: windowFor(c, s.maxSeq),
-		// Read off the loaded weights, not the architecture name: the
-		// post-norms are optional per-layer roles.
-		PostNorm:  s.m.HasPostNorm(),
-		NoPreNorm: s.m.HasNoPreNorm(),
-		// BitNet's inner norms, read off the weights as the post-norms are.
-		SubNorm:     s.m.HasSubNorm(),
+		// Read off the loaded weights, not the architecture name.
+		NoPreNorm:   s.m.HasNoPreNorm(),
 		AttnSoftcap: c.AttnSoftcap,
-		ActWin:      s.m.ActWindow,
 		// Zero for a dense model, which is what makes every existing plan
 		// unchanged.
 		NExpert: c.NExpert, NExpertUsed: c.NExpertUsed, NFFNExp: c.NFFNExp,
 		// The hybrid's shared expert and output gate, which a device must see
 		// to run or decline.
 		NFFNShExp: c.NFFNShExp, AttnOutGate: c.AttnOutGate,
-		// Llama 4's, each of which a device either runs or declines by name.
-		SWAChunked: c.SWAChunked, NoPEGlobal: c.NoPEGlobal, QKL2Norm: c.QKL2Norm,
-		AttnTempScale: float32(c.AttnTempScale), AttnTempFloor: float32(c.AttnTempFloor),
-		AttnTempOffset: float32(c.AttnTempOffs), ExpertWeightIn: c.ExpertWeightIn,
-		// Granite's: a device scales each block output at its residual add.
-		ResidualScale: c.ResidualScale,
-		// The classic block's (C6); UngatedFFN is per block, in planFor.
-		LayerNorm: c.LayerNorm, Parallel: c.Parallel,
+		SWAChunked: c.SWAChunked,
 		// The block's own geometry is planFor's.
-		MixedGeom: c.MixedGeom(), VNorm: c.VNorm,
-		NoAttention: !c.Attends(),
+		MixedGeom: c.MixedGeom(),
 	}
 	s.plan, s.ldCand = p, ld
 	hi := s.hi
@@ -2028,8 +2014,8 @@ func (s *Instance) planFor(li int) *nn.LayerPlan {
 	plan.HeadSet = c.Head != nil && li >= c.Trunk
 	if plan.HeadSet {
 		h := c.Head
-		plan.NoPosEnc, plan.SWAPeriod, plan.SWAWindow, plan.LayerNorm, plan.RMSEps = true, 0, 0, true, h.RMSEps
-		plan.QKNorm, plan.QKNormWide, plan.QKNormPost = false, false, false
+		plan.SWAPeriod, plan.SWAWindow, plan.RMSEps = 0, 0, h.RMSEps
+		plan.QKNorm = false
 	}
 	plan.MixedGeom = c.OwnGeoms() || plan.HeadSet && c.MixedGeom()
 	plan.LocalRope = c.OwnGeoms() && c.SWA(li)
@@ -2067,22 +2053,16 @@ func (s *Instance) planFor(li int) *nn.LayerPlan {
 			Conv: g.Conv, Chans: g.Chans, KHeads: g.KHeads, VHeads: g.VHeads,
 			KDim: g.KDim, VDim: g.VDim,
 			StateLen: g.StateStride(), ConvState: g.ConvStateLen(),
-			ChanDecay: c.ChanDecay(), KeyTiled: g.Tiled,
-		}
-		if g.Ssd {
-			plan.Recurrent.SSD, plan.Recurrent.NormGroups = true, c.SSMNormGroups
-			plan.Recurrent.NoNorm = l.Vector(jlm.RoleSSMNorm) == nil
+			ChanDecay: c.ChanDecay(),
 		}
 		// A linear block has no attention, so no out-gate.
 		plan.AttnOutGate = false
 		plan.Recurrent.WithAttn = c.LayerKind(li).Attends()
-		plan.Recurrent.ShortConv = c.ShortConv()
 		if g.Scan {
 			// No gated norm: the block's output is y*silu(z) straight to ssm_out.
-			plan.Recurrent.Scan, plan.Recurrent.Rank, plan.Recurrent.NoNorm = true, g.Rank, true
+			plan.Recurrent.Scan, plan.Recurrent.Rank = true, g.Rank
 		}
 	}
-	plan.LatentNormEps = c.LatentNormEps
 	if c.LayerKind(li).Recurrent() {
 		plan.Recurrent.TailLen = c.RecTailLen()
 	}

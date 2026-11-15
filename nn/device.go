@@ -626,9 +626,6 @@ type LayerPlan struct {
 	// step's per-row logits at placement sizes them from it, because the
 	// head is offered after the blocks; 0 leaves them to the first step.
 	Vocab int
-	// FinalSoftcap is the head's final logit softcap (Head.Softcap), which a
-	// device reserving those per-row logits reserves their capped twin for.
-	FinalSoftcap float32
 	// SWAPeriod is the repeating local/global layer pattern, 0 when the
 	// architecture has one kind of layer: a model of two rotary bases
 	// (gemma3) whose blocks' rope ops each state theirs (Rotaries).
@@ -650,13 +647,6 @@ type LayerPlan struct {
 	// slide each block's graph states (its attention's Window).
 	SWAWindow int
 
-	// PostNorm says the block RMSNorms the attention output and the FFN output
-	// before each residual add -- gemma2 and gemma3's two extra norms.
-	PostNorm bool
-	// SubNorm says the block RMSNorms the attention output before wo and the
-	// gated FFN's product before down (LayerWeights.AttnSubNorm/FFNSubNorm) --
-	// BitNet's two inner norms. A tier runs both or declines the block.
-	SubNorm bool
 	// NoPreNorm says some block has no pre-norms (OLMo 2, EXAONE 4): attention
 	// and the FFN read the residual as it is and only their outputs are
 	// normalised (LayerWeights.AttnNorm and FFNNorm are nil). A tier copies the
@@ -665,34 +655,18 @@ type LayerPlan struct {
 	// AttnSoftcap is x = c*tanh(x/c) on the attention scores, gemma2's 50.0 and
 	// zero everywhere else.
 	AttnSoftcap float32
-	// ActWin is how many activation elements share one quantization scale. It
-	// must match what the CPU tier uses, because the gate between them is
-	// identical token ids.
-	ActWin   int
-	RopeNeox bool // rotate (i, i+nRot/2), not (2i, 2i+1)
-	// NoPosEnc: the attention blocks apply no positional encoding at all. On
-	// MLA the rotary launches are replaced by a copy rather than skipped,
-	// because those kernels write the KV cache row's tail and the rotary half
-	// of the absorbed query.
-	NoPosEnc bool
+	RopeNeox    bool // rotate (i, i+nRot/2), not (2i, 2i+1)
 	// QKNorm says each head of q and k is RMSNormed before RoPE (qwen3).
 	QKNorm bool
-	// QKNormWide makes that one norm over the whole q (and k) projection rather
-	// than one per head -- olmoe's shape.
-	QKNormWide bool
-	// QKNormPost runs q's norm after the rotary and k's before it, k's weight
-	// folded into q's at conversion (Hunyuan; jlm.FlagQKNormPostRope).
-	QKNormPost bool
 	// MixedGeom says the model's blocks do not all attend at one geometry;
 	// NKVHead, HeadDim and NRot are then THIS block's (planFor sets them per
 	// block). OwnGeom says they, or the rotary table it reads, are not the
 	// model's, and LocalRope that it rotates by the second table (RopeTabSWA).
-	// VNorm RMSNorms each head of v with no weight before it is cached; VFromK
-	// says the block has no v projection and v is k's (LayerWeights.Wv is
-	// empty); OutScale multiplies the block's output row after its last
-	// residual add (zero means none).
+	// VFromK says the block has no v projection and v is k's
+	// (LayerWeights.Wv is empty); OutScale multiplies the block's output row
+	// after its last residual add (zero means none).
 	MixedGeom, OwnGeom, LocalRope bool
-	VNorm, VFromK                 bool
+	VFromK                        bool
 	OutScale                      float32
 	// Gemma 4's E2B/E4B: PLEDim is each block's per-layer embedding width
 	// (zero for none), KVShared says the block attends to KVSource's history
@@ -741,8 +715,8 @@ type LayerPlan struct {
 	// block. Its keys live one call deep -- written, read by the block's own
 	// attention, dead before the next block -- so it keeps no history, and a
 	// call is one whole run, never a chunk of one. A vision segment's blocks
-	// are this; their norms, MLP and rotary are the text kit's fields
-	// (LayerNorm, UngatedFFN, NRot over Layers' cs or NoPosEnc).
+	// are this; their MLP and rotary are the text kit's fields (UngatedFFN,
+	// NRot over Layers' cs).
 	NonCausal bool
 	// Windowed says a NonCausal block attends inside the windowed key runs
 	// the call was handed (KeyRunDevice) rather than over every row
@@ -783,38 +757,16 @@ type LayerPlan struct {
 	// the score (DeepSeek), and because MLA takes its scores over the
 	// KVRow-wide absorbed query, where 1/sqrt(KVRow) is not the model's scale.
 	AttnScale float64
-	// Llama 4's attention.
-	//
 	// SWAChunked makes a windowed layer attend within an aligned chunk of
 	// SWAWindow keys -- floor(pos/W)*W through pos -- rather than the last W.
-	// NoPEGlobal takes the rotary off the global layers (their graphs turn
-	// nothing).
-	// QKL2Norm RMSNorms each head of q and k with no weight on the layers that
-	// rotate. AttnTemp* scale the query of an unrotated layer by
-	// 1 + s*ln(1 + floor((pos+o)/f)).
-	SWAChunked, NoPEGlobal, QKL2Norm             bool
-	AttnTempScale, AttnTempFloor, AttnTempOffset float32
-	// ResidualScale multiplies each block's attention and FFN output before its
-	// residual add (Granite's residual_scale); 0 and 1 both mean none. On a
-	// mixture block it multiplies the whole FFN output, the routed sum and the
-	// shared expert together, where the host folds it into the routed weights:
-	// ExpertScale does not carry it.
-	ResidualScale float64
-	// The classic block (C6). LayerNorm makes the block's norms mean-centred,
-	// with LayerWeights.AttnNormB/FFNNormB as their biases when non-nil.
-	// Parallel feeds attention and the FFN the same block input (the FFN norm
-	// when FFNNorm is non-nil, the attention's normed row otherwise) and adds
-	// both into the residual. UngatedFFN is up, its bias BUp, the activation
-	// alone, down and BDown -- Gate is empty.
-	LayerNorm, Parallel, UngatedFFN bool
+	SWAChunked bool
+	// UngatedFFN is up, its bias BUp, the activation alone, down and BDown --
+	// Gate is empty.
+	UngatedFFN bool
 	// BidirOff says this block's attention ignores the bidirectional runs
 	// (KeyRunDevice's full runs) and stays causal: Gemma 4's global layers,
 	// on a model whose image rows see each other on the sliding layers only.
 	BidirOff bool
-	// ExpertWeightIn applies a mixture's routed weight to the expert's input
-	// (Llama 4), which with a SiLU expert is a different function from the
-	// output-weighted sum every other mixture runs.
-	ExpertWeightIn bool
 	// NStreams is how many residual streams the block's x carries,
 	// stream-major, the model's (0 or 1 for one); ExpLatent is the routed
 	// experts' input and output width where it is not NEmbd: they read
@@ -822,9 +774,6 @@ type LayerPlan struct {
 	// RoutedUp takes it back, beside the shared experts at NEmbd.
 	NStreams  int
 	ExpLatent int
-	// LatentNormEps is the MLA latent norms' epsilon (Kimi-K3 and
-	// Kimi-Linear's 1e-6); zero means RMSEps.
-	LatentNormEps float64
 	// Recurrent describes a linear-attention block, and it is non-zero only for
 	// one. Such a block has no q, k, v, o or KV cache at all -- see
 	// LayerWeights.SSM. It is offered to the device like any other block so the
@@ -834,9 +783,6 @@ type LayerPlan struct {
 	// mixer layer): it ends at the first residual add, and its FFN weights,
 	// norm and kernels are absent.
 	NoFFN bool
-	// NoAttention says no block of the model attends (plain Mamba): its
-	// attention geometry is a placeholder, and a device builds no attention.
-	NoAttention bool
 }
 
 // RecurrentPlan is a linear-attention block's geometry. Every field is zero for
@@ -856,31 +802,12 @@ type RecurrentPlan struct {
 	// sigmoid where qwen3next's is a SiLU. The geometry above is identical for
 	// both, so no shape field can say it.
 	ChanDecay bool
-	// KeyTiled pairs value head vh with key head vh % KHeads instead of
-	// vh / (VHeads/KHeads): the order llama.cpp's qwen35 converter writes
-	// the value heads in (jlm.FlagDeltaKeyTiled). Like ChanDecay, no shape
-	// field can say it -- both orders have identical geometry.
-	KeyTiled bool
-	// SSD is Mamba-2's selective update in place of the delta rule
-	// (jlm.LayerSSD): the convolved channels are C | B | x (as q | k | v), the
-	// convolution has a bias (SSMWeights.ConvBias), the update writes x*dt
-	// along B with no key dot, D*x is added to the output, and the gated norm
-	// is RMSNorm(y*silu(z)) over NormGroups groups of the whole VHeads*VDim
-	// with a weight that wide -- or y*silu(z) alone where NoNorm.
-	SSD bool
 	// WithAttn: the block runs softmax attention beside the recurrence, on
 	// the same normed input, and the two outputs are summed before the
 	// residual (Falcon-H1, jlm.LayerSSDAttn). The plan's attention shape is
 	// the attention's, and the weights carry the mixer's projection in
 	// SSMWeights.In.
 	WithAttn bool
-	// ShortConv is LFM2's gated short convolution (jlm.LayerShortConv): no
-	// heads and no state beside the convolution's window over Chans channels.
-	// Wq is x, SSMWeights.Gate is B and SSMWeights.BA is C, and the block is
-	// out_proj(C * conv(B * x)).
-	ShortConv  bool
-	NormGroups int
-	NoNorm     bool
 	// TailLen is what the block's state carries per sequence after the delta
 	// rule's, inside StateLen: room for Qwen3.8-Flash-Next's n-gram
 	// predecessors and convolution history (model's recTailLen), the same on

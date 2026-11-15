@@ -3676,28 +3676,6 @@ func (m *Model) HasNoPreNorm() bool {
 	return false
 }
 
-// hasSubNorm reports whether some block carries BitNet's inner norms.
-func (m *Model) HasSubNorm() bool {
-	for i := range m.Layers {
-		if l := &m.Layers[i]; l.Vector(jlm.RoleAttnSubNorm) != nil || l.Vector(jlm.RoleFFNSubNorm) != nil {
-			return true
-		}
-	}
-	return false
-}
-
-// hasPostNorm reports whether some block carries gemma2's post-norms.
-func (m *Model) HasPostNorm() bool {
-	// By index: a copy of each layer would read its bindings, which another
-	// instance's placement may be writing.
-	for i := range m.Layers {
-		if l := &m.Layers[i]; l.Vector(jlm.RolePostAttnNorm) != nil || l.Vector(jlm.RolePostFFNNorm) != nil {
-			return true
-		}
-	}
-	return false
-}
-
 // actWindowOf is the model's activation window (composer.ActWindow) over the
 // types of its matrices: for a model quantizing each row per token
 // (Config.TokenAct), one window over its widest row.
