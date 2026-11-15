@@ -23,7 +23,7 @@ func selectingGraph(pooled bool) *graph.Graph {
 // with no form over a streamed pass.
 func TestSelectingHistoryPages(t *testing.T) {
 	plain := &nn.LayerPlan{MaxSeq: 4096}
-	qsa := &nn.LayerPlan{MaxSeq: 4096, KeyW: 16, Select: &nn.SelectPlan{Block: 4, Keep: 2}, Graph: selectingGraph(true)}
+	qsa := &nn.LayerPlan{MaxSeq: 4096, Select: &nn.SelectPlan{Block: 4, Keep: 2}, Graph: selectingGraph(true)}
 	idx := &nn.LayerPlan{MaxSeq: 4096, Select: &nn.SelectPlan{Block: 1, Keep: 4}, Graph: selectingGraph(false)}
 	for name, c := range map[string]struct {
 		p    *nn.LayerPlan
@@ -48,7 +48,7 @@ func TestSelectingHistoryPages(t *testing.T) {
 		p    nn.LayerPlan
 	}{
 		{"plain", nn.LayerPlan{MaxSeq: 4096, NKVHead: 1, HeadDim: 16}},
-		{"qsa", nn.LayerPlan{MaxSeq: 4096, NKVHead: 1, HeadDim: 16, KeyW: 16, Select: &nn.SelectPlan{Block: 4, Keep: 2}, Graph: selectingGraph(true)}},
+		{"qsa", nn.LayerPlan{MaxSeq: 4096, NKVHead: 1, HeadDim: 16, Select: &nn.SelectPlan{Block: 4, Keep: 2}, Graph: selectingGraph(true)}},
 		{"indexer", nn.LayerPlan{MaxSeq: 4096, NKVHead: 1, HeadDim: 16, Select: &nn.SelectPlan{Block: 1, Keep: 4}, Graph: selectingGraph(false)}},
 	} {
 		if err := d.pagedLayer(1, &layer{}, li, &c.p); err != nil {

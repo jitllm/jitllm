@@ -12,6 +12,7 @@ import (
 	"github.com/jitllm/jitllm/convert"
 	"github.com/jitllm/jitllm/engine/device/gpu"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/model"
 )
@@ -447,12 +448,40 @@ func restatedEveryLayerBidir(t *testing.T, src string) *model.Model {
 	if err := os.WriteFile(path, b, 0o644); err != nil {
 		t.Fatal(err)
 	}
+	clean, err := model.Open(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clean.Close()
 	if changed, err := jlm.Restate(path, func(_ *jlm.File, c *jlm.Config) (bool, error) {
 		if !slices.Contains(c.BidirLayers, false) {
 			t.Fatalf("the container states the rows bidirectional on every layer already (%v): the violation is the clean arm", c.BidirLayers)
 		}
 		for i := range c.BidirLayers {
 			c.BidirLayers[i] = true
+		}
+		// A stated block graph carries its attention's mask (graph.Attrs.NoRuns),
+		// which the runtime reads: each is restated with the rows seeing each
+		// other too.
+		opened := 0
+		for i := range c.Blocks.Graphs {
+			li := slices.Index(c.Blocks.Of, uint16(i))
+			g := *clean.Composing().BlockGraph(li)
+			g.Ops = slices.Clone(g.Ops)
+			for k := range g.Ops {
+				if g.Ops[k].Kind == graph.OpAttend && g.Ops[k].Attr.NoRuns {
+					g.Ops[k].Attr.NoRuns = false
+					opened++
+				}
+			}
+			b, err := graph.Encode(&g)
+			if err != nil {
+				return false, err
+			}
+			c.Blocks.Graphs[i] = string(b)
+		}
+		if len(c.Blocks.Graphs) != 0 && opened == 0 {
+			t.Fatal("no stated attention keeps the picture's rows causal: the violation is the clean arm")
 		}
 		return true, nil
 	}); err != nil || !changed {

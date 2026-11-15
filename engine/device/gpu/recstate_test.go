@@ -23,7 +23,7 @@ func TestRecurrentStateIsChargedAndReturned(t *testing.T) {
 
 	p := pagePlan()
 	p.Recurrent = nn.RecurrentPlan{
-		Conv: 4, Chans: 96, KHeads: 2, VHeads: 4, KDim: 8, VDim: 8,
+		Conv: 4, Chans: 96,
 		StateLen: 4 * 8 * 8, ConvState: 3 * 96,
 	}
 	want := uint64(2 * (p.Recurrent.StateLen + p.Recurrent.ConvState) * 4)

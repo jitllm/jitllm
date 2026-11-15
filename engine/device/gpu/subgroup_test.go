@@ -2,12 +2,15 @@ package gpu
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/backend/vulkan"
 	"github.com/jitllm/jitllm/composer/ir"
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/nn"
 )
@@ -60,10 +63,25 @@ func unpinned() backend.Opts {
 }
 
 // qkPlan is a block with the per-head q/k norm, the second kernel in the
-// subgroup-width class.
+// subgroup-width class: its graph normalises each head of q and k before the
+// rotary.
 func qkPlan() *nn.LayerPlan {
 	p := fakePlan()
-	p.QKNorm = true
+	b := graph.NewBlock(0)
+	qd, kv := p.NHead*p.HeadDim, p.NKVHead*p.HeadDim
+	x := b.In("x", p.NEmbd)
+	n := b.Norm(x, jlm.RoleAttnNorm, p.RMSEps)
+	q, k, v := b.MatVec(n, jlm.RoleAttnQ, qd), b.MatVec(n, jlm.RoleAttnK, kv), b.MatVec(n, jlm.RoleAttnV, kv)
+	q, k = b.HeadNorm(q, jlm.RoleAttnQNorm, p.HeadDim, p.RMSEps), b.HeadNorm(k, jlm.RoleAttnKNorm, p.HeadDim, p.RMSEps)
+	ra := graph.Attrs{HeadDim: p.HeadDim, NRot: p.NRot, Base: p.RopeBase, Layout: graph.RopeNorm}
+	q = b.Emit(graph.OpRope, []graph.ValueID{q}, []graph.Result{{Name: "q.rope", Width: qd}}, nil, ra, nil, nil)[0]
+	k = b.Emit(graph.OpRope, []graph.ValueID{k}, []graph.Result{{Name: "k.rope", Width: kv}}, nil, ra, nil, nil)[0]
+	hist := graph.StateRef{State: graph.StateKV, Version: b.KVAppend(k, v, 0)}
+	att := b.AttendOf(q, hist, graph.Attrs{NHead: p.NHead, NKVHead: p.NKVHead, HeadDim: p.HeadDim,
+		Scale: 1 / math.Sqrt(float64(p.HeadDim))})
+	x = b.Add(x, b.MatVec(att, jlm.RoleAttnOut, p.NEmbd))
+	b.Out(swiGLU(b, p, x))
+	p.Graph = b.G
 	return p
 }
 

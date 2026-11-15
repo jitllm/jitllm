@@ -681,14 +681,13 @@ func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOp
 	if d, ok := s.places[routeLanes].(nn.KVDefaulter); ok && !opt.kvTypeSet {
 		want = d.DefaultKV()
 	}
-	// A selection caches its indexer's key in the row, and the selection over
-	// it is discrete: a key rounded to binary16 moves a block's best score by
-	// ~1e-3, which flips a near tie, and a flipped block is a different
-	// attention, not a nearby one. The references keep the key at f32
-	// (llama.cpp's converter and cache force F32 for an indexer), and so
-	// does every device here (the paged K pool is f32), so the CPU's
-	// default is f32 too; WithKVF16(true) still forces binary16.
-	if c.Selection() != nil && !opt.kvTypeSet {
+	// A history a selection reads (graph.OpSelect) is ranked discretely: a
+	// key rounded to binary16 moves a block's best score by ~1e-3, which
+	// flips a near tie, and a flipped block is a different attention, not a
+	// nearby one. Such a history is held at f32 by default, as the
+	// references hold an indexer's key and every device's paged K pool holds
+	// it; WithKVF16(true) still forces binary16.
+	if historySelected(m.Composing(), lo, hi) && !opt.kvTypeSet {
 		want = nn.KVF32
 	}
 	s.kvFmt, s.kvl.fmt = want, want
@@ -957,7 +956,6 @@ func (s *Instance) SetDeviceLayers(d nn.LayerDevice, max int) error {
 		NEmbd: c.NEmbd, NHead: c.NHead, NKVHead: c.NKVHead, HeadDim: c.HeadDim,
 		NRot: c.NRot, NFFN: c.NFFN, MaxSeq: s.maxSeq, Vocab: c.NVocab,
 		RMSEps: c.RMSEps, RopeBase: c.RopeBase, RopeNeox: c.RopeNeox,
-		QKNorm: c.QKNorm, NoExpertNorm: c.NoExpertNorm,
 		// The folded constants the host's rotary kernel reads, each table's,
 		// so the device builds its own and the two tiers agree by
 		// construction.
@@ -972,16 +970,11 @@ func (s *Instance) SetDeviceLayers(d nn.LayerDevice, max int) error {
 		RopePairs:   c.RopePairs,
 		// The sliding window itself (TestSlidingWindowRunsOnTheDevice).
 		SWAWindow: windowFor(c, s.maxSeq),
-		// Read off the loaded weights, not the architecture name.
-		NoPreNorm:   s.m.HasNoPreNorm(),
-		AttnSoftcap: c.AttnSoftcap,
 		// Zero for a dense model, which is what makes every existing plan
 		// unchanged.
 		NExpert: c.NExpert, NExpertUsed: c.NExpertUsed, NFFNExp: c.NFFNExp,
-		// The hybrid's shared expert and output gate, which a device must see
-		// to run or decline.
-		NFFNShExp: c.NFFNShExp, AttnOutGate: c.AttnOutGate,
-		SWAChunked: c.SWAChunked,
+		// The shared expert's width, which sizes the scratch.
+		NFFNShExp: c.NFFNShExp,
 		// The block's own geometry is planFor's.
 		MixedGeom: c.MixedGeom(),
 	}
@@ -1980,11 +1973,7 @@ func (s *Instance) planExtra(hi int) uint64 {
 func (s *Instance) planFor(li int) *nn.LayerPlan {
 	c := s.c
 	plan := s.plan
-	// The sinks and the mixture biases are resident vectors read at build(),
-	// not page bytes, so asking about them here still needs no page-in.
 	l := &s.m.Layers[li]
-	plan.AttnSinks = l.Vector(jlm.RoleAttnSinks) != nil
-	plan.MoEBias = l.Vector(jlm.RoleRouterBias) != nil || l.Vector(jlm.RoleExpGateBias) != nil || l.Vector(jlm.RoleExpUpBias) != nil || l.Vector(jlm.RoleExpDownBias) != nil
 	// An ungated FFN has no gate tensor, which build() recorded without a
 	// page-in: the entry is bound at load whether or not the block is resident.
 	plan.UngatedFFN = l.Gate.E == nil && (l.Router.E == nil || l.UngatedExp)
@@ -2010,60 +1999,39 @@ func (s *Instance) planFor(li int) *nn.LayerPlan {
 		h := c.Head
 		plan.SWAWindow, plan.RMSEps = 0, h.RMSEps
 		plan.RopeTabs = plan.RopeTabs[:min(len(plan.RopeTabs), 1)]
-		plan.QKNorm = false
 	}
 	plan.MixedGeom = c.OwnGeoms() || plan.HeadSet && c.MixedGeom()
 	plan.Rotary = s.blockRotary(plan.Graph)
 	plan.OwnGeom = c.OwnGeoms() && plan.Rotary != 0 || plan.HeadDim != c.HeadDim || plan.NKVHead != c.NKVHead || plan.NRot != c.NRot
-	plan.BidirOff = !c.BidirAt(li)
 	plan.VFromK, plan.OutScale = l.VFromK, l.OutScale
 	plan.SideW = c.SideWidth()
-	if c.MLA() {
-		plan.KeyW = c.KVDim() - c.KVLoraRank - c.NRot
-	} else {
-		plan.KeyW = c.KVRowAt(li) - c.KVDimAt(li)
-	}
+	plan.HistRow = historyRow(s.m.Composing(), plan.Graph)
 	if c.SelectAt(li) {
 		s := c.Selection()
 		plan.Select = &nn.SelectPlan{Block: int(s.Block), Keep: int(s.Keep)}
 	}
 	plan.NFFN, plan.FFNWide = c.NFFNAt(li), c.NFFNAt(li) != c.NFFN
 	if c.MLA() {
-		plan.KVLoraRank, plan.QLoraRank, plan.HeadDimV = c.KVLoraRank, c.QLoraRank, c.HeadDimV
+		plan.KVLoraRank, plan.QLoraRank = c.KVLoraRank, c.QLoraRank
 	}
 	// The mixture is a property of the block: DeepSeek's dense lead blocks
 	// (Config.MoEAt) must not carry the model-wide expert counts.
 	if !c.MoEAt(li) {
 		plan.NExpert, plan.NExpertUsed, plan.NFFNExp, plan.NFFNShExp = 0, 0, 0, 0
 	}
-	// The router's gating shape (V3's sigmoid scoring, selection bias, expert
-	// groups and routed scale), which a device must see to run or refuse.
-	plan.ExpertSigmoid, plan.ExpertScale = c.ExpertSigmoid, c.ExpertScale
-	plan.ExpertGroups, plan.ExpertGroupsUsed = c.NExpertGroup, c.NExpertGroupUsed
-	plan.ExpertSelBias = s.m.ExpSelBias() != nil
 	if c.LayerKind(li).Recurrent() {
 		g := c.Delta()
 		plan.Recurrent = nn.RecurrentPlan{
-			Conv: g.Conv, Chans: g.Chans, KHeads: g.KHeads, VHeads: g.VHeads,
-			KDim: g.KDim, VDim: g.VDim,
+			Conv: g.Conv, Chans: g.Chans,
 			StateLen: g.StateStride(), ConvState: g.ConvStateLen(),
 			ChanDecay: c.ChanDecay(),
 		}
-		// A linear block has no attention, so no out-gate.
-		plan.AttnOutGate = false
-		plan.Recurrent.WithAttn = c.LayerKind(li).Attends()
-		if g.Scan {
-			// No gated norm: the block's output is y*silu(z) straight to ssm_out.
-			plan.Recurrent.Scan, plan.Recurrent.Rank = true, g.Rank
-		}
+		plan.Recurrent.Scan = g.Scan
 	}
 	if c.LayerKind(li).Recurrent() {
 		plan.Recurrent.TailLen = c.RecTailLen()
 	}
 	plan.NStreams = c.Streams()
-	if w := c.ExpWidth(); c.MoEAt(li) && w != c.NEmbd {
-		plan.ExpLatent = w
-	}
 	if c.NonCausal && (s.m.IsEmbedding() || c.Head != nil || s.m.Tower != nil && li >= s.m.TowerBase) {
 		// A bidirectional decoder and a tower: their blocks are non-causal
 		// blocks, as an encoder's are -- the sequence (a picture's rows) one

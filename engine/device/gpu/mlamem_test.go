@@ -11,13 +11,16 @@ import (
 	"github.com/jitllm/jitllm/nn"
 )
 
+// mlaValueHead is the latent block's value head width (mlaPlan).
+const mlaValueHead = 128
+
 // mlaPlan is a latent-attention block's geometry. The widths are all different
 // and none a multiple of another (key head 96 = 64 nope + 32 rotary, value head
 // 128, latent 160), so confusing one for another cannot go unnoticed.
 func mlaPlan() *nn.LayerPlan {
 	p := &nn.LayerPlan{
 		NEmbd: 256, NHead: 4, NKVHead: 4, HeadDim: 96, NRot: 32, NFFN: 512,
-		KVLoraRank: 160, QLoraRank: 192, HeadDimV: 128,
+		KVLoraRank: 160, QLoraRank: 192,
 		MaxSeq: 64, RMSEps: 1e-5, AttnScale: 0.1, RopeBase: 10000,
 	}
 	p.Graph = latentBlockGraph(p)
@@ -32,7 +35,7 @@ func mlaPlan() *nn.LayerPlan {
 // the value half, then the output projection and the FFN.
 func latentBlockGraph(p *nn.LayerPlan) *graph.Graph {
 	b := graph.NewBlock(0)
-	nh, hd, lat, rot, hdv := p.NHead, p.HeadDim, p.KVLoraRank, p.NRot, p.HeadDimV
+	nh, hd, lat, rot, hdv := p.NHead, p.HeadDim, p.KVLoraRank, p.NRot, mlaValueHead
 	nope, row := hd-rot, lat+rot
 	slice := func(v graph.ValueID, name string, headDim, off, width, out int) graph.ValueID {
 		return b.Emit(graph.OpSlice, []graph.ValueID{v}, []graph.Result{{Name: name, Width: out}}, nil,
@@ -83,12 +86,12 @@ func mlaBlocks(p *nn.LayerPlan, n int) []*nn.LayerWeights {
 			AttnNorm: f(p.NEmbd), FFNNorm: f(p.NEmbd),
 			// No Wq, Wk or Wv: the query is two-step (Wqa/Wqb) and kv_a
 			// serves both key and value.
-			Wo:  q4(p.NEmbd, p.NHead*p.HeadDimV),
+			Wo:  q4(p.NEmbd, p.NHead*mlaValueHead),
 			Wqa: q4(p.QLoraRank, p.NEmbd), Wqb: q4(p.NHead*p.HeadDim, p.QLoraRank),
 			Wkva: q4(p.KVRow(), p.NEmbd),
 			// The two absorb banks: one sheet per HEAD.
 			Wkb: q4(p.NHead*p.KVLoraRank, nope),
-			Wvb: q4(p.NHead*p.HeadDimV, p.KVLoraRank),
+			Wvb: q4(p.NHead*mlaValueHead, p.KVLoraRank),
 			// The two latent norms, which each free walk must reach.
 			Vectors: []nn.RoleVector{{Role: jlm.RoleAttnQANorm, V: f(p.QLoraRank)}, {Role: jlm.RoleAttnKVANorm, V: f(p.KVLoraRank)}},
 			Gate:    q4(p.NFFN, p.NEmbd), Up: q4(p.NFFN, p.NEmbd), Down: q4(p.NEmbd, p.NFFN),

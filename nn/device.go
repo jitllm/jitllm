@@ -519,19 +519,26 @@ func (p *LayerPlan) ResidW() int { return p.NEmbd * p.Streams() }
 // streams the converter states, one elsewhere.
 func (p *LayerPlan) Streams() int { return max(p.NStreams, 1) }
 
-// KVRow is one position's width in the attention cache: the latent plus the
-// shared rotary key under MLA, and NKVHead heads of HeadDim otherwise. Every
-// cache allocation, stride and migration must go through it.
+// KVRow is one position's width in the attention cache: the row the block's
+// graph appends to its history (HistRow), else the latent plus the shared
+// rotary key under MLA and NKVHead heads of HeadDim otherwise. Every cache
+// allocation, stride and migration must go through it.
 func (p *LayerPlan) KVRow() int {
-	if p.MLA() {
-		return p.KVLoraRank + p.NRot + p.KeyW
+	switch {
+	case p.HistRow > 0:
+		return p.HistRow
+	case p.MLA():
+		return p.KVLoraRank + p.NRot
 	}
-	return p.NKVHead*p.HeadDim + p.KeyW
+	return p.NKVHead * p.HeadDim
 }
 
-// KeyHead reports that the block's cached row carries an indexer's key as
-// one more kv head after the attention's own.
-func (p *LayerPlan) KeyHead() bool { return p.KeyW != 0 && !p.MLA() }
+// KeyHead reports that the block's cached row carries more than its kv
+// heads' keys (an indexer's key, a compressor's rows) after the attention's
+// own.
+func (p *LayerPlan) KeyHead() bool {
+	return !p.MLA() && p.HistRow != 0 && p.HistRow != p.NKVHead*p.HeadDim
+}
 
 // SelectPlan is a block's selection: at most Keep blocks of Block positions
 // are read.
@@ -555,15 +562,6 @@ func (p *LayerPlan) Scale() float64 {
 // host trusts history the device returns only from the window start of
 // (its last position - 1 - KVWindowSlack), which this margin guarantees.
 const KVWindowSlack = 64
-
-// ExpWidth is the routed experts' input and output width: ExpLatent where
-// they have one of their own, NEmbd everywhere else.
-func (p *LayerPlan) ExpWidth() int {
-	if p.ExpLatent != 0 {
-		return p.ExpLatent
-	}
-	return p.NEmbd
-}
 
 // LayerPlan is everything about a block that is not in its weights.
 //
@@ -700,17 +698,7 @@ type LayerPlan struct {
 	// slide each block's graph states (its attention's Window).
 	SWAWindow int
 
-	// NoPreNorm says some block has no pre-norms (OLMo 2, EXAONE 4): attention
-	// and the FFN read the residual as it is and only their outputs are
-	// normalised (LayerWeights.AttnNorm and FFNNorm are nil). A tier copies the
-	// row where the norm would have written it.
-	NoPreNorm bool
-	// AttnSoftcap is x = c*tanh(x/c) on the attention scores, gemma2's 50.0 and
-	// zero everywhere else.
-	AttnSoftcap float32
-	RopeNeox    bool // rotate (i, i+nRot/2), not (2i, 2i+1)
-	// QKNorm says each head of q and k is RMSNormed before RoPE (qwen3).
-	QKNorm bool
+	RopeNeox bool // rotate (i, i+nRot/2), not (2i, 2i+1)
 	// MixedGeom says the model's blocks do not all attend at one geometry;
 	// NKVHead, HeadDim and NRot are then THIS block's (planFor sets them per
 	// block). OwnGeom says they, or the rotary table it reads, are not the
@@ -727,35 +715,20 @@ type LayerPlan struct {
 	// graphs read past the residual streams, each block its own slice of it
 	// (zero for none).
 	SideW int
-	// KeyW is the width an indexer's key takes in the block's cached row
-	// after the attention's own (KVRow): a latent row's whatever the block,
-	// one more kv head where the block selects; 0 for none.
-	KeyW int
+	// HistRow is a position's row in the history the block reads: the key
+	// row its graph appends (graph.OpKVAppend's In[0]), or its source's where
+	// it reads another block's; 0 where it reads none.
+	HistRow int
 	// Select is the block's selection of the history it reads (the
 	// container's jlm.Selection), nil where it reads every position.
 	Select *SelectPlan
 	// FFNWide says this block's NFFN is not the model's (its own geometry's),
 	// which a tier that bakes the FFN width into its scratch keeps apart.
 	FFNWide bool
-	// NoExpertNorm skips the division of the top-k mixture weights by their sum
-	// (olmoe). Negated so the zero value renormalises, which is what every other
-	// mixture here wants; see model.Config.
-	NoExpertNorm bool
 	// NExpert is 0 for a dense block. NExpertUsed is the top-k, and NFFNExp is
 	// one expert's hidden width -- not NFFN, which for a MoE file is the dense
 	// width the architecture would have used and is read by nothing here.
 	NExpert, NExpertUsed, NFFNExp int
-	// The router's gating shape; every zero value is the plain softmax top-k.
-	//
-	// ExpertSigmoid gates with sigma() instead of softmax. ExpertSelBias says a
-	// per-expert correction bias moves the selection and not the weights (a
-	// different tensor from MoEBias's router bias). ExpertGroups and
-	// ExpertGroupsUsed are the grouped top-k, 0 or 1 group being ungrouped.
-	// ExpertScale is routed_scaling_factor, where 0 and 1 both mean none.
-	ExpertSigmoid                  bool
-	ExpertSelBias                  bool
-	ExpertGroups, ExpertGroupsUsed int
-	ExpertScale                    float64
 	// NFFNShExp is the shared expert's hidden width, 0 when the model has none.
 	// It runs for every token beside the routed ones and its gate is a vector
 	// rather than a router.
@@ -782,15 +755,6 @@ type LayerPlan struct {
 	// segment), which a device runs in a scratch set apart from a non-causal
 	// text model's: d1-omni's encoder beside its vision tower.
 	Tower bool
-	// AttnOutGate says the q projection is double width and its second half,
-	// interleaved per head, gates the attention output through a sigmoid.
-	AttnOutGate bool
-	// AttnSinks says each head carries a learned sink logit that joins its
-	// softmax denominator (gpt-oss).
-	AttnSinks bool
-	// MoEBias says the router and the experts' gate, up and down carry biases
-	// (gpt-oss).
-	MoEBias bool
 	// KVLoraRank enables multi-head latent attention; 0 is every other
 	// architecture, and a tier without MLA declines on this field alone.
 	//
@@ -799,32 +763,19 @@ type LayerPlan struct {
 	// that width. The value is the row's leading KVLoraRank floats, so a tier
 	// must not store K and V apart.
 	//
-	// HeadDimV is the value head's width, which is not HeadDim (192 and 128 on
-	// DeepSeek-V3). QLoraRank is the query latent, 0 where the query is one
-	// step.
-	KVLoraRank, QLoraRank, HeadDimV int
+	// QLoraRank is the query latent, 0 where the query is one step.
+	KVLoraRank, QLoraRank int
 	// AttnScale is the score multiplier, and 0 means the ordinary
 	// 1/sqrt(HeadDim). It is carried because YaRN's magnitude correction reaches
 	// the score (DeepSeek), and because MLA takes its scores over the
 	// KVRow-wide absorbed query, where 1/sqrt(KVRow) is not the model's scale.
 	AttnScale float64
-	// SWAChunked makes a windowed layer attend within an aligned chunk of
-	// SWAWindow keys -- floor(pos/W)*W through pos -- rather than the last W.
-	SWAChunked bool
 	// UngatedFFN is up, its bias BUp, the activation alone, down and BDown --
 	// Gate is empty.
 	UngatedFFN bool
-	// BidirOff says this block's attention ignores the bidirectional runs
-	// (KeyRunDevice's full runs) and stays causal: Gemma 4's global layers,
-	// on a model whose image rows see each other on the sliding layers only.
-	BidirOff bool
 	// NStreams is how many residual streams the block's x carries,
-	// stream-major, the model's (0 or 1 for one); ExpLatent is the routed
-	// experts' input and output width where it is not NEmbd: they read
-	// RoutedDown of the FFN input, their sum is normed by RoutedNorm and
-	// RoutedUp takes it back, beside the shared experts at NEmbd.
-	NStreams  int
-	ExpLatent int
+	// stream-major, the model's (0 or 1 for one).
+	NStreams int
 	// Recurrent describes a linear-attention block, and it is non-zero only for
 	// one. Such a block has no q, k, v, o or KV cache at all -- see
 	// LayerWeights.SSM. It is offered to the device like any other block so the
@@ -836,16 +787,14 @@ type LayerPlan struct {
 	NoFFN bool
 }
 
-// RecurrentPlan is a linear-attention block's geometry. Every field is zero for
-// an ordinary attention block, and Conv == 0 IS the test for one.
+// RecurrentPlan is the sizes of a recurrent block's state, which a device
+// keeps a slot of per sequence. Every field is zero for a block that keeps
+// none. Whether the block is recurrent, and whether it attends beside its
+// recurrence, is its graph's (the states its ops read and write).
 type RecurrentPlan struct {
 	Conv      int // causal convolution width, in positions
-	Chans     int // convolved channels: q + k + v
-	KHeads    int // key/query heads
-	VHeads    int // value heads, and the number of decay rates
-	KDim      int // key/query head width, and the state's key extent
-	VDim      int // value head width, and the state's value extent
-	StateLen  int // VHeads*VDim*KDim floats and TailLen more, per sequence, CONSTANT in context
+	Chans     int // convolved channels
+	StateLen  int // the recurrence's state and TailLen more, floats per sequence, CONSTANT in context
 	ConvState int // (Conv-1)*Chans floats, per sequence
 	// ChanDecay is Kimi Delta Attention rather than qwen3next's gated delta
 	// rule: the state decays at a rate per channel instead of one per head,
@@ -853,24 +802,15 @@ type RecurrentPlan struct {
 	// sigmoid where qwen3next's is a SiLU. The geometry above is identical for
 	// both, so no shape field can say it.
 	ChanDecay bool
-	// WithAttn: the block runs softmax attention beside the recurrence, on
-	// the same normed input, and the two outputs are summed before the
-	// residual (Falcon-H1, jlm.LayerSSDAttn). The plan's attention shape is
-	// the attention's, and the weights carry the mixer's projection in
-	// SSMWeights.In.
-	WithAttn bool
-	// TailLen is what the block's state carries per sequence after the delta
-	// rule's, inside StateLen: room for Qwen3.8-Flash-Next's n-gram
-	// predecessors and convolution history (model's recTailLen), the same on
-	// every linear block so a device keeps one slot width. A sequence's slot
-	// is [delta rule | tail]; the delta rule's kernels step its head.
+	// TailLen is what the block's state carries per sequence after the
+	// recurrence's, inside StateLen: a tail its graph states (a token window,
+	// a convolution's history), the same on every recurrent block so a device
+	// keeps one slot width. A sequence's slot is [recurrence | tail].
 	TailLen int
 	// Scan is the per-element selective scan (jlm.LayerScan): VHeads channels
 	// of one row each over a KDim-wide state, B and C shared, the decay a
-	// vector exp(dt*A) per channel, dt off a rank-Rank bottleneck of the
-	// convolved x. Wq is x, SSMWeights.Gate is z.
+	// vector exp(dt*A) per channel. Wq is x, SSMWeights.Gate is z.
 	Scan bool
-	Rank int
 }
 
 // LayerDevice runs a whole transformer block without returning the residual

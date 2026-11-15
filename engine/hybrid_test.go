@@ -17,7 +17,6 @@ import (
 	"github.com/jitllm/jitllm/format/jlm"
 
 	"github.com/jitllm/jitllm/graph"
-	"github.com/jitllm/jitllm/nn"
 )
 
 func init() {
@@ -532,53 +531,6 @@ func TestEveryLayerTensorIsBound(t *testing.T) {
 		t.Fatal("no tensor fields were examined; this gate proves nothing")
 	}
 	t.Logf("%d bound tensors across %d layers", checked, len(m.Layers))
-}
-
-// TestLinearBlockIsDeclinedForItsOwnReason: a linear block must reach the device
-// as a linear block. One plan built from model-wide config carries AttnOutGate
-// onto linear blocks too, and declineReason would refuse block 0 for a gate it
-// does not have. Asserts the plan, since the defect is in what the model offers.
-func TestLinearBlockIsDeclinedForItsOwnReason(t *testing.T) {
-	m, openOpts := hybridModel(t)
-	defer m.Close()
-	c := m.Cfg
-	if !c.AttnOutGate {
-		t.Fatal("the fixture has no attention out-gate, so this gate is about nothing")
-	}
-	if c.LayerKind(0) != jlm.LayerLinearAttn {
-		t.Fatalf("block 0 is %v; this gate needs a linear block first, which is also the "+
-			"arrangement that makes offerRange stop at it", c.LayerKind(0))
-	}
-	s := testInstance(t, m, 8, openOpts...)
-	defer s.Close()
-
-	// The plan the linear arm of offerRange builds, reproduced from the same
-	// fields it reshapes.
-	plan := s.plan
-	g := c.Delta()
-	plan.Recurrent = nn.RecurrentPlan{Conv: g.Conv, Chans: g.Chans, KHeads: g.KHeads,
-		VHeads: g.VHeads, KDim: g.KDim, VDim: g.VDim,
-		StateLen: g.DeltaStateLen(), ConvState: g.ConvStateLen()}
-	plan.AttnOutGate = false
-
-	if plan.Recurrent.Conv == 0 {
-		t.Fatal("the linear plan carries no Recurrent.Conv, so declineReason would not " +
-			"reach the recurrent case at all")
-	}
-	if plan.AttnOutGate {
-		t.Fatal("a linear block's plan still carries AttnOutGate: a device that learns the " +
-			"delta rule would still decline block 0 for a gate the block does not have")
-	}
-	// A full block of the same model keeps it.
-	if c.LayerKind(3) == jlm.LayerLinearAttn {
-		t.Fatal("block 3 is linear; this fixture cannot show the gate is kept where it belongs")
-	}
-	// The model-wide flag is untouched, so a full-attention block still carries
-	// the gate. (s.plan is only populated by SetDeviceLayers, which is why this
-	// asserts the source it is built from.)
-	if !c.AttnOutGate {
-		t.Fatal("Config.AttnOutGate was cleared: a full-attention block would lose its gate")
-	}
 }
 
 // TestHybridAttentionBlockOnDevice is the fast end-to-end gate for a

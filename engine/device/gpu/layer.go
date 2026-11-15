@@ -73,10 +73,10 @@ type layer struct {
 	// ssmTaps is the convolution's taps a channel's contiguous, which the
 	// composer's convolutions read; the file stores them tap-major.
 	ssmTaps resident
-	// withAttn is a block that runs attention beside its mixer
-	// (nn.RecurrentPlan.WithAttn): it keeps a KV history and a recurrent
-	// state both, and its mixer's projection is one of extra, wq being the
-	// attention's query.
+	// withAttn is a block that runs attention beside its mixer (its graph
+	// appends to a history, graphAttends): it keeps a KV history and a
+	// recurrent state both, and its mixer's projection is one of extra, wq
+	// being the attention's query.
 	withAttn bool
 	// noFFN is a block that is its mixer alone (nn.LayerPlan.NoFFN): the
 	// emit ends it at the first residual.
@@ -1505,7 +1505,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	if !p.NonCausal && g.kvCap != 0 && p.MaxSeq > g.maxSeqAsked {
 		g.maxSeqAsked = p.MaxSeq
 	}
-	if r := planConflict(g.bs, sp); r != "" {
+	if r := g.planConflict(sp); r != "" {
 		g.LastErr = fmt.Sprintf("block %d: %s", li, r)
 		return false
 	}
@@ -1555,15 +1555,13 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		}
 		return true
 	}
-	// The q/k norm is launched when the block carries its weights; the plan's
-	// flag builds the kernels. The model offers the weights by the same
-	// derivation that sets the flag (jlm.QKNormOn), so a block where the two
-	// disagree is a contract violation, refused rather than run without its
-	// norm. A block another session placed is offered without them, held
-	// above.
-	if attn := !p.NonCausal && (p.Recurrent.Conv == 0 || p.Recurrent.WithAttn); attn && p.QKNorm != (w.QNorm != nil) {
-		g.LastErr = fmt.Sprintf("block %d: the plan's q/k norm is %v and the block offers %d norm "+
-			"weights", li, p.QKNorm, len(w.QNorm))
+	// The q/k norm is the graph's: a block whose graph binds the norm and
+	// offers no weights for it, or offers weights its graph never reads, is a
+	// contract violation, refused rather than run without its norm. A block
+	// another session placed is offered without them, held above.
+	if binds := bindsRole(p.Graph, jlm.RoleAttnQNorm); !p.NonCausal && p.Graph != nil && binds != (w.QNorm != nil) {
+		g.LastErr = fmt.Sprintf("block %d: the graph's q/k norm is %v and the block offers %d norm "+
+			"weights", li, binds, len(w.QNorm))
 		return false
 	}
 	g.dropGraph()
@@ -1593,18 +1591,11 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		if g.bs = g.initScratch(sp, 1); g.bs == nil {
 			return false
 		}
-	} else if want := g.bs.p; p.NonCausal && (sp.NFFN > want.NFFN || sp.Recurrent.Conv > 0 && want.Recurrent.Conv == 0 ||
-		sp.QKNorm && !want.QKNorm) {
-		// A non-causal block with a wider MLP than the set was built for (a
-		// decision head after its encoder): the set grows to it, and every
-		// block runs its own composed part inside it. An LFM2 encoder's
-		// convolution blocks and attention blocks share a set too: it carries
-		// the convolution's kernels and the q/k norm's, whichever came first.
-		want.NFFN, want.MaxSeq = max(want.NFFN, sp.NFFN), g.vs().max
-		if want.Recurrent.Conv == 0 {
-			want.Recurrent = sp.Recurrent
-		}
-		want.QKNorm = want.QKNorm || sp.QKNorm
+	} else if want := g.bs.p; p.NonCausal && sp.Recurrent.Conv > 0 && want.Recurrent.Conv == 0 {
+		// An encoder's convolution blocks and attention blocks share a set:
+		// it carries the convolution's descriptors, whichever came first, and
+		// every block runs its own composed part inside it.
+		want.MaxSeq, want.Recurrent = g.vs().max, sp.Recurrent
 		if !g.towerAt(&want, g.vs().cap) {
 			return false
 		}
@@ -1890,7 +1881,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		}
 		// A linear block has no k, v or o matrix: its one projection is slot 0
 		// (Wq carries the fused q|k|v|gate), and offerRange clears the other three.
-		if p.Recurrent.Conv > 0 && !p.Recurrent.WithAttn && i >= 1 && i <= 3 {
+		if p.Recurrent.Conv > 0 && !graphAttends(p.Graph) && i >= 1 && i <= 3 {
 			continue
 		}
 		if i >= 10 && i < 13 {
@@ -2070,7 +2061,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		}
 		up(&l.clampB, w.Clamp)
 	}
-	l.wide = p.NStreams > 1 || p.ExpLatent != 0
+	l.wide = p.NStreams > 1 || expertsOwnWidth(p.Graph, p.NEmbd)
 	// Gemma 4's output scalar, one float, charged with the norms.
 	if p.OutScale != 0 {
 		up(&l.outScale, []float32{p.OutScale})
@@ -2131,7 +2122,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	// the plan's NKVHead/HeadDim are the model-wide attention shape.
 	linear := p.Recurrent.Conv > 0
 	l.linear = linear
-	l.withAttn = p.Recurrent.WithAttn
+	l.withAttn = linear && graphAttends(p.Graph)
 	l.noFFN = p.NoFFN
 	if linear {
 		if !g.addSessionRec(sid, l, p) {
@@ -3671,7 +3662,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x []
 	pn := append(g.subBytes.pn[:0], u32one(n)...)
 	if R == 1 {
 		n = uint32(pos + 1)
-		if e := g.runEnd(pos, pos+1); g.runPhase == 2 && e > 0 && !p.NonCausal && !p.BidirOff {
+		if e := g.runEnd(pos, pos+1); g.runPhase == 2 && e > 0 && !p.NonCausal && !attendNoRuns(p.Graph) {
 			n = uint32(e)
 		}
 		pn = binary.LittleEndian.AppendUint32(pn[:0], n)
@@ -3695,6 +3686,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x []
 		// above would otherwise invalidate -- so a batched call does not round.
 		pn = pn[:4]
 		binary.LittleEndian.PutUint32(pn, uint32(nCap))
+		noRuns := attendNoRuns(p.Graph)
 		for r := 0; r < R; r++ {
 			// A padded row takes the last real row's count. It must be clamped,
 			// because AttnAcc walks each row's own count and an unclamped one runs
@@ -3717,7 +3709,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x []
 			} else if r < nrow {
 				// A row of a bidirectional run counts keys to the run's end
 				// (bidir.go); bidirCheck has kept the run inside these rows.
-				if e := g.runEnd(pos+r, pos+nrow); e > 0 && !p.BidirOff {
+				if e := g.runEnd(pos+r, pos+nrow); e > 0 && !noRuns {
 					n = e
 				}
 			}
@@ -4397,7 +4389,7 @@ func (g *devTier) layersSession(s backend.Session) {
 				case sv.f.rowSplit > 0:
 					serr = sv.rowsRun(g, lc, s, inst, kind, l, in, outs)
 				case sv.f.split > 0:
-					serr = sv.pagedRun(g, lc, s, inst, kind, l, p.NExpert, g.hostFns[sid][li].uses, in, outs)
+					serr = sv.pagedRun(g, lc, s, inst, kind, l, l.stream.nExpert, g.hostFns[sid][li].uses, in, outs)
 				case len(sv.f.sweeps) > 0:
 					serr = sv.streamRun(g, lc, s, inst, kind, bs, g.kvp.layers[l.kvSrc], g.kvp.layers[histKey(l.kvSrc, 1)], in, outs)
 				default:
@@ -5813,28 +5805,14 @@ func (g *devTier) rebuildScratch(plan *nn.LayerPlan) bool {
 
 // planUnion widens a to cover b, and reports whether it had to.
 //
-// Sessions and block kinds can offer one tier different plans that one scratch
-// must serve: a hybrid's linear blocks (Recurrent set, AttnOutGate cleared by
-// model.offerRange), a session needing a sliding window, a dense lead block
-// before mixtures. Each widened field only adds kernels and buffers that the
-// narrower blocks never launch.
+// Sessions and block kinds can offer one tier different plans that one
+// scratch must serve. The scratch binds only what a call carries for every
+// block of its set (initScratch): the residual of every stream, the recurrent
+// blocks' run descriptors and the windowed rows' descriptors. Every block's
+// intermediate values, its FFN and its experts' among them, are its composed
+// part's own, so a plan's FFN, mixture and expert widths widen nothing.
 func planUnion(a *nn.LayerPlan, b *nn.LayerPlan) bool {
 	grew := false
-	// Sinks and mixture biases only add work a block without them skips (a
-	// sinkless block passes a -inf sink; an unbiased one skips the adds), so a
-	// scratch built for them serves every block.
-	if b.AttnSinks && !a.AttnSinks {
-		a.AttnSinks, grew = true, true
-	}
-	if b.MoEBias && !a.MoEBias {
-		a.MoEBias, grew = true, true
-	}
-	if b.AttnOutGate && !a.AttnOutGate {
-		a.AttnOutGate, grew = true, true
-	}
-	if b.NoPreNorm && !a.NoPreNorm {
-		a.NoPreNorm, grew = true, true
-	}
 	if b.Recurrent.Conv > 0 && a.Recurrent.Conv == 0 {
 		a.Recurrent, grew = b.Recurrent, true
 	}
@@ -5843,38 +5821,8 @@ func planUnion(a *nn.LayerPlan, b *nn.LayerPlan) bool {
 	if b.SWAWindow > 0 && a.SWAWindow == 0 {
 		a.SWAWindow, grew = b.SWAWindow, true
 	}
-	// The mixture: DeepSeek's first blocks are dense, so the first block this
-	// tier sees may allocate no MoE buffers. A mixture scratch serves a dense
-	// block too, since the two use different buffers; the one non-additive
-	// kernel is the activation (baked element count), hence bs.actMulE.
-	if b.NExpert > 0 && a.NExpert == 0 {
-		a.NExpert, a.NExpertUsed, a.NFFNExp = b.NExpert, b.NExpertUsed, b.NFFNExp
-		a.ExpertSigmoid, a.ExpertSelBias = b.ExpertSigmoid, b.ExpertSelBias
-		a.ExpertGroups, a.ExpertGroupsUsed = b.ExpertGroups, b.ExpertGroupsUsed
-		a.ExpertScale, a.NoExpertNorm = b.ExpertScale, b.NoExpertNorm
-		grew = true
-	}
-	// The shared expert and the dense FFN are widths, so the union is the max:
-	// a DeepSeek mixture block carries no dense FFN at all and the dense lead
-	// carries no experts, so neither alone sizes the scratch.
-	if b.NFFNShExp > a.NFFNShExp {
-		a.NFFNShExp, grew = b.NFFNShExp, true
-	}
-	if b.NFFN > a.NFFN {
-		a.NFFN, grew = b.NFFN, true
-	}
-	// The streams are the model's; the experts' width is the mixture
-	// blocks', which a dense lead does not carry.
 	if b.NStreams > a.NStreams {
 		a.NStreams, grew = b.NStreams, true
-	}
-	if b.ExpLatent > a.ExpLatent {
-		a.ExpLatent, grew = b.ExpLatent, true
-	}
-	// A block that is its mixer alone says nothing about the FFN the others
-	// run, gated or not.
-	if a.NoFFN && !b.NoFFN {
-		a.NoFFN, a.UngatedFFN, grew = false, b.UngatedFFN, true
 	}
 	return grew
 }
@@ -5886,12 +5834,13 @@ func planUnion(a *nn.LayerPlan, b *nn.LayerPlan) bool {
 // its own plan's (kvGeomOf). The scratch holds only what a call binds for
 // every block of its set (initScratch), and of a plan's attention it bakes
 // one thing: the window its rows' windowed descriptors are staged for
-// (pagedStage). A model states one window (Config.SWAWindow, SWAChunked), the
-// one its host history keeps too, and offers every causal block it or none
-// (windowFor: a session inside the window needs none), and the tier holds one
-// model's blocks (owner.go); so two different windows on one tier are a model
-// whose config changed under its placement.
-func planConflict(bs *blockScratch, p *nn.LayerPlan) string {
+// (pagedStage), its shape the windowed blocks' graphs' (kvPool.chunked). A
+// model states one window, the one its host history keeps too, and offers
+// every causal block it or none (windowFor: a session inside the window needs
+// none), and the tier holds one model's blocks (owner.go); so two different
+// windows on one tier are a model whose config changed under its placement.
+func (g *devTier) planConflict(p *nn.LayerPlan) string {
+	bs := g.bs
 	if bs == nil || p.NonCausal {
 		return ""
 	}
@@ -5899,8 +5848,12 @@ func planConflict(bs *blockScratch, p *nn.LayerPlan) string {
 		return fmt.Sprintf("a sliding window of %d keys on a tier built for %d", b, a)
 	}
 	// A chunk is a window staged another way (pagedStage).
-	if bs.p.SWAChunked != p.SWAChunked {
-		return "a chunked attention of a different shape from the one this tier was built for"
+	if w, chunked := attendWindow(p.Graph); w > 0 {
+		for _, l := range g.layers {
+			if l != nil && l.win > 0 && l.chunked != chunked {
+				return "a chunked attention of a different shape from the one this tier was built for"
+			}
+		}
 	}
 	return ""
 }

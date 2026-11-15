@@ -45,7 +45,7 @@ func (s *Instance) cutBlock(li int) (first nn.LayerPlan, rest nn.BlockSpec, ok b
 	}
 	first.Graph = s.m.DerivedBlockGraph(li, key, func(*graph.Graph) *graph.Graph { return half })
 	first.Cut = w
-	first.NExpert, first.NExpertUsed, first.MoEBias = 0, 0, false
+	first.NExpert, first.NExpertUsed = 0, 0
 	if first.Spec != nil {
 		sp := s.specOf(li, pre)
 		first.Spec = &sp
