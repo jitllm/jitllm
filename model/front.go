@@ -2292,18 +2292,12 @@ func (m *Model) blockOps(b *graph.Builder, li int) func(ins []graph.ValueID, op 
 			}
 			rowW := int(op.Width) / heads
 			tok := b.Emit(graph.OpToken, nil, []graph.Result{{Name: "ng.tok", Width: 1, Elem: graph.ElemU32}}, nil, graph.Attrs{}, nil, nil)[0]
-			win := b.Emit(graph.OpNGramWindow, []graph.ValueID{tok}, []graph.Result{{Name: "ng.win", Width: n, Elem: graph.ElemU32}}, nil,
+			win := b.Emit(graph.OpTokenWindow, []graph.ValueID{tok}, []graph.Result{{Name: "ng.win", Width: n, Elem: graph.ElemU32}}, nil,
 				graph.Attrs{Taps: n, Offset: off, Span: stateSpan(c, base), Words: []uint64{uint64(hs.Image)}}, in, out)[0]
-			words := append([]uint64{uint64(hs.EOS)}, hs.Mul...)
-			for h := range heads {
-				words = append(words, hs.Off[h], hs.Voc[h])
-			}
-			hashed := b.Emit(graph.OpNGramHash, []graph.ValueID{win}, []graph.Result{
-				{Name: "ng.rows", Width: heads, Elem: graph.ElemU32}, {Name: "ng.next", Width: n - 1, Elem: graph.ElemU32}}, nil,
-				graph.Attrs{Span: int(hs.HeadsPer), Words: words, Reset: true}, nil, nil)
+			hashed := ngramHashRows(b, win, n, hs)
 			rows := make([]graph.ValueID, heads)
 			for h := range heads {
-				col := b.Emit(graph.OpSlice, []graph.ValueID{hashed[0]}, []graph.Result{{Name: "ng.row", Width: 1, Elem: graph.ElemU32}}, nil,
+				col := b.Emit(graph.OpSlice, []graph.ValueID{hashed}, []graph.Result{{Name: "ng.row", Width: 1, Elem: graph.ElemU32}}, nil,
 					graph.Attrs{Offset: h, Width: 1}, nil, nil)[0]
 				rows[h] = b.Emit(graph.OpEmbed, []graph.ValueID{col}, []graph.Result{{Name: "ng.emb", Width: rowW}},
 					[]graph.Binding{{Role: op.Bind[0], K: rowW, Rows: int(hs.Voc[h]), From: int(hs.Off[h])}},

@@ -212,7 +212,7 @@ type Form struct {
 	WReads                 []int
 	// Toks says a code reads the rows' tokens (SrcTokens).
 	Toks bool
-	// A form gathering the n-gram table's rows likewise runs to RowSplit,
+	// A form gathering a row table's rows likewise runs to RowSplit,
 	// its first code that reads the table, then reads in the rows the own
 	// buffer RowSel names, RowN a call's row, before the rest.
 	RowSplit, RowSel, RowN int
@@ -257,7 +257,7 @@ func stepsState(gr *graph.Graph) bool {
 func BuildForm(h *cpu.Target, gr *graph.Graph, codes []composer.Code, rows int, apart, whole bool) (*Form, error) {
 	f := &Form{Consts: map[int][]uint32{}, Rows: rows, Sel: -1, WSel: -1, RowSel: -1, Rec: stepsState(gr),
 		Places: len(gr.In) + len(gr.Out)}
-	selV, wsV, rowV := selOf(gr), weightsOf(gr), TableRowsOf(gr)
+	selV, wsV, rowV := selOf(gr), weightsOf(gr), gr.TableRows()
 	wOwn := map[graph.ValueID]int{}
 	var wrote, read []ownUse
 	// A kernel's constant block is its own: two kernels' blocks may share a
@@ -1000,34 +1000,17 @@ func (f *Form) bankHalves(gr *graph.Graph, rows int) error {
 	return nil
 }
 
-// TableRowsOf is the rows the n-gram table's gathers read, the hash's, -1
-// for a graph that gathers none.
-func TableRowsOf(gr *graph.Graph) graph.ValueID {
-	if !slices.ContainsFunc(gr.Ops, func(o graph.Op) bool {
-		return o.Kind == graph.OpEmbed && len(o.Weight) == 1 && o.Weight[0].Role == jlm.RoleNGramTable
-	}) {
-		return -1
-	}
-	for _, o := range gr.Ops {
-		if o.Kind == graph.OpNGramHash {
-			return o.Out[0]
-		}
-	}
-	return -1
-}
-
-// rowHalves finds where a form gathering the n-gram table's rows is cut:
-// at its first code that reads the table, the rows written by a code
-// before it.
+// rowHalves finds where a form gathering a row table's rows is cut: at its
+// first code that reads the table, the rows written by a code before it.
 func (f *Form) rowHalves(gr *graph.Graph) error {
-	rv := TableRowsOf(gr)
+	rv := gr.TableRows()
 	if rv < 0 {
 		return nil
 	}
 	f.RowSplit = -1
 	for ci, c := range f.Codes {
 		for _, a := range c.args {
-			if a.src == SrcWeight && a.role == jlm.RoleNGramTable && f.RowSplit < 0 {
+			if a.src == SrcWeight && jlm.RowTableRole(a.role) && f.RowSplit < 0 {
 				f.RowSplit = ci
 			}
 		}

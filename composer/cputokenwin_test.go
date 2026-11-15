@@ -8,11 +8,11 @@ import (
 	"github.com/jitllm/jitllm/graph"
 )
 
-// ngramWindowOracle is the windows of a step's rows and each run's
+// tokenWindowOracle is the windows of a step's rows and each run's
 // predecessors after it, as the definition steps a sequence: a row's
 // window is its token (img where it names none), then its predecessors
 // nearest first, a row's id plus one; a run starts from its slot's.
-func ngramWindowOracle(toks []uint32, runs [][]int, held [][]uint32, n int, img uint32) (wins [][]uint32, after [][]uint32) {
+func tokenWindowOracle(toks []uint32, runs [][]int, held [][]uint32, n int, img uint32) (wins [][]uint32, after [][]uint32) {
 	id := func(t uint32) uint32 {
 		if t == ^uint32(0) {
 			return img
@@ -31,13 +31,13 @@ func ngramWindowOracle(toks []uint32, runs [][]int, held [][]uint32, n int, img 
 	return wins, after
 }
 
-// TestComposedCPUNGramWindow executes OpNGramWindow on the CPU: a decode
+// TestComposedCPUTokenWindow executes OpTokenWindow on the CPU: a decode
 // row's window from its slot, and a step of three sequences' interleaved
 // rows, a picture's row among them, each run reading its predecessors from
 // one pool's slot and writing them to another's. Every window and every
 // run's predecessors after it are held to the definition, the slots no run
 // names untouched; read as each row its own run, the windows part.
-func TestComposedCPUNGramWindow(t *testing.T) {
+func TestComposedCPUTokenWindow(t *testing.T) {
 	const n, off, span, slots = 4, 5, 12, 4
 	const img = 999
 	form := func(R int, keeps bool) (*graph.Graph, graph.ValueID, graph.ValueID, []Code) {
@@ -45,7 +45,7 @@ func TestComposedCPUNGramWindow(t *testing.T) {
 		tok := b.In("tok", 1)
 		b.G.Values[tok].Elem = graph.ElemU32
 		at := b.G.StateVersion(graph.StateRecState)
-		win := b.Emit(graph.OpNGramWindow, []graph.ValueID{tok}, []graph.Result{{Name: "win", Width: n, Elem: graph.ElemU32}}, nil,
+		win := b.Emit(graph.OpTokenWindow, []graph.ValueID{tok}, []graph.Result{{Name: "win", Width: n, Elem: graph.ElemU32}}, nil,
 			graph.Attrs{Taps: n, Offset: off, Span: span, Words: []uint64{img}, Keeps: keeps},
 			[]graph.StateRef{{State: graph.StateRecState, Version: at}}, []graph.StateRef{{State: graph.StateRecState, Version: at + 1}})[0]
 		b.Out(win)
@@ -114,7 +114,7 @@ func TestComposedCPUNGramWindow(t *testing.T) {
 		in, outPool := pool(0x3f800000), pool(0x40000000)
 		before := append([]float32(nil), outPool...)
 		toks := []uint32{41}
-		wins, after := ngramWindowOracle(toks, [][]int{{0}}, [][]uint32{slotPreds(in, 2)}, n, img)
+		wins, after := tokenWindowOracle(toks, [][]int{{0}}, [][]uint32{slotPreds(in, 2)}, n, img)
 		got := run(1, toks, []uint32{1, 2, 1}, in, outPool, nil)
 		check("decode", got, wins, outPool, before, map[int][]uint32{1: after[0]})
 	})
@@ -127,7 +127,7 @@ func TestComposedCPUNGramWindow(t *testing.T) {
 	in, outPool := pool(0x3f000000), pool(0x41000000)
 	before := append([]float32(nil), outPool...)
 	held := [][]uint32{slotPreds(in, rin[0]), slotPreds(in, rin[1]), slotPreds(in, rin[2])}
-	wins, after := ngramWindowOracle(toks, runs, held, n, img)
+	wins, after := tokenWindowOracle(toks, runs, held, n, img)
 	got := run(R, toks, scanDesc(runs, R, rin, rout), in, outPool, nil)
 	written := map[int][]uint32{}
 	for j := range runs {
@@ -163,7 +163,7 @@ func TestComposedCPUNGramWindow(t *testing.T) {
 		din, dout := pool(0x3f800000), pool(0x40000000)
 		dbefore := append([]float32(nil), dout...)
 		dtoks := []uint32{41}
-		dwins, dafter := ngramWindowOracle(dtoks, [][]int{{0}}, [][]uint32{slotPreds(din, 2)}, n, img)
+		dwins, dafter := tokenWindowOracle(dtoks, [][]int{{0}}, [][]uint32{slotPreds(din, 2)}, n, img)
 		dkeep := keepOf(1)
 		// Formed keeping, the one row takes the runs' form, which reads the
 		// whole run descriptor.
@@ -178,7 +178,7 @@ func TestComposedCPUNGramWindow(t *testing.T) {
 		var entries [][]uint32
 		for j, rr := range runs {
 			for r := range rr {
-				_, a := ngramWindowOracle(toks, [][]int{rr[:r+1]}, [][]uint32{held[j]}, n, img)
+				_, a := tokenWindowOracle(toks, [][]int{rr[:r+1]}, [][]uint32{held[j]}, n, img)
 				entries = append(entries, a[0])
 			}
 		}
@@ -188,7 +188,7 @@ func TestComposedCPUNGramWindow(t *testing.T) {
 	// The same rows as runs of their own read only their slots.
 	alone := [][]int{{1}, {3}, {0}, {2}, {5}, {4}}
 	aheld := [][]uint32{held[0], held[0], held[0], held[1], held[1], held[2]}
-	lone, _ := ngramWindowOracle(toks, alone, aheld, n, img)
+	lone, _ := tokenWindowOracle(toks, alone, aheld, n, img)
 	same := true
 	for r := range R {
 		for k := range n {

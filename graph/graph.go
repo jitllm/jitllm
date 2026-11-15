@@ -269,19 +269,6 @@ const (
 	// row, the cell the row's position less Offset on a grid the request's
 	// first word wide.
 	OpPosAxes
-	// OpNGramHash is each row's n-gram table rows from its window In[0]
-	// (u32, n words: the row's token, then its n-1 predecessors nearest
-	// first, each its id plus one, zero for none). A predecessor that is
-	// none, or where Reset at or past one whose id is the end of sequence
-	// (Words[0]), reads as that id; the token itself is read as it is. With
-	// c the window's ids and m the n multipliers (Words[1:1+n]), head
-	// h = (g-2)*Span+k of the g-grams (g from 2 to n, k below Span) reads
-	// row (c0*m0 ^ c1*m1 ^ ... ^ c(g-1)*m(g-1)) mod voc[h] + off[h],
-	// unsigned 64-bit wrapping, off[h] and voc[h] Words[1+n+2h] and
-	// Words[2+n+2h]: Out[0] (u32, (n-1)*Span) the rows, Out[1] (u32, n-1)
-	// the next position's predecessors, the token's id plus one then the
-	// window's first n-2. A primitive.
-	OpNGramHash
 	// OpUnfold is each output row of In[0]'s grid (GridW rows a grid row)
 	// as the Taps x Taps window of rows around it at SAME padding -- or, where
 	// Offset is set, Offset rows and columns before the grid (PyTorch's) --
@@ -317,16 +304,16 @@ const (
 	// OpToken is each row's token, the step's own: Out[0] one index (u32) a
 	// row. A primitive.
 	OpToken
-	// OpNGramWindow is each row's window for OpNGramHash (Out[0], u32, Taps
+	// OpTokenWindow is each row's token window (Out[0], u32, Taps
 	// words): the row's token In[0] (u32, one word; a row naming none, all
-	// ones, reads as Words[0], the model's image id), then its Taps-1
+	// ones, reads as Words[0], a stated fill), then its Taps-1
 	// predecessors nearest first, each its id plus one -- the earlier rows
 	// of its run, then those the run's slot holds at Offset of the
 	// recurrent state (Span floats a sequence, an id's word as a float's
 	// bits). The run's predecessors after its last row are written to the
 	// slot: its rows' ids plus one newest first, then the slot's. It reads
 	// state version n and writes n+1. A primitive with a state of its own.
-	OpNGramWindow
+	OpTokenWindow
 	// OpHalves is In[0]'s floats as binary16, two a word (Out[0], u32, half
 	// In[0]'s width), the lower element in the low half, rounded to nearest
 	// even as a binary16 history's pages store them; as bfloat16 where
@@ -594,8 +581,6 @@ func (k OpKind) String() string {
 		return "rows_attend"
 	case OpPosAxes:
 		return "pos_axes"
-	case OpNGramHash:
-		return "ngram_hash"
 	case OpUnfold:
 		return "unfold"
 	case OpUniform:
@@ -606,8 +591,8 @@ func (k OpKind) String() string {
 		return "rope_pos"
 	case OpToken:
 		return "token"
-	case OpNGramWindow:
-		return "ngram_window"
+	case OpTokenWindow:
+		return "token_window"
 	case OpHalves:
 		return "halves"
 	case OpWidenHalves:
@@ -828,6 +813,12 @@ const (
 	MapTrunc     = jlm.FnTrunc     // a's integer part, toward zero
 	MapRoundEven = jlm.FnRoundEven // a to the nearest integer, halves to the even one
 	MapF32       = jlm.FnF32       // a rounded to binary32
+	MapRem       = jlm.FnRem       // a modulo b, over words
+	MapAnd       = jlm.FnAnd       // a & b, over words
+	MapOr        = jlm.FnOr        // a | b, over words
+	MapXor       = jlm.FnXor       // a ^ b, over words
+	MapShl       = jlm.FnShl       // a << b, over words
+	MapShr       = jlm.FnShr       // a >> b, over words
 )
 
 // Order is an OpReduce's: the order its additions run in is part of its
@@ -1011,7 +1002,7 @@ type Attrs struct {
 	Firsts bool
 	// Inverse turns OpRope's elements back: by the negated angle.
 	Inverse bool
-	// Keeps makes OpDeltaRule, OpStateConv and OpNGramWindow store the
+	// Keeps makes OpDeltaRule, OpStateConv and OpTokenWindow store the
 	// state after each of a step's rows besides each run's after its last:
 	// the row at entry e of the run order to slot e of the state's keep
 	// table, so a sequence can be returned to any row of a call with no row
@@ -1025,9 +1016,11 @@ type Attrs struct {
 	Order Order
 	Span  int
 	Const float64
-	// Words are OpNGramHash's constants, Reset its cut at an end of
-	// sequence.
+	// Words are an op's constant words.
 	Words []uint64
+	// Reset is read by no op: the n-gram hash that read it is expressions
+	// into words now, and a stored graph naming that op is refused by name.
+	// It stays so a stored graph's fields only grow.
 	Reset bool
 	// Exact asks a MapDiv, an OpMap's or an OpExpr term's, for the IEEE
 	// quotient where the device's own division is not correctly rounded;

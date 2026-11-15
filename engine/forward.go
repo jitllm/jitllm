@@ -2063,9 +2063,6 @@ func (s *Instance) planFor(li int) *nn.LayerPlan {
 			plan.Recurrent.Scan, plan.Recurrent.Rank = true, g.Rank
 		}
 	}
-	if c.LayerKind(li).Recurrent() {
-		plan.Recurrent.TailLen = c.RecTailLen()
-	}
 	plan.NStreams = c.Streams()
 	if w := c.ExpWidth(); c.MoEAt(li) && w != c.NEmbd {
 		plan.ExpLatent = w

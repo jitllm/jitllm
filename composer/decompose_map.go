@@ -153,6 +153,46 @@ func (x *exprs) mapFn(f graph.MapFn, a []int, exact bool) (int, error) {
 	return 0, fmt.Errorf("no formula for the map %v", f)
 }
 
+// wordFn is f over words a, as an expression into words states it: sums,
+// differences and products modulo 2^32, a comparison 1 or 0, a choice by a
+// nonzero word. No integer compare: equality is a difference's bits, a
+// choice a product by it.
+func (x *exprs) wordFn(f graph.MapFn, a []int) (int, error) {
+	U := ir.U32
+	switch f {
+	case graph.MapAdd:
+		return x.op(OpAdd, U, a[0], a[1]), nil
+	case graph.MapSub:
+		return x.op(OpSub, U, a[0], a[1]), nil
+	case graph.MapMul:
+		return x.op(OpMul, U, a[0], a[1]), nil
+	case graph.MapMax:
+		return x.op(OpMax, U, a[0], a[1]), nil
+	case graph.MapMin:
+		return x.op(OpMin, U, a[0], a[1]), nil
+	case graph.MapRem:
+		return x.op(OpRem, U, a[0], a[1]), nil
+	case graph.MapAnd:
+		return x.op(OpAnd, U, a[0], a[1]), nil
+	case graph.MapOr:
+		return x.op(OpOr, U, a[0], a[1]), nil
+	case graph.MapXor:
+		return x.op(OpXor, U, a[0], a[1]), nil
+	case graph.MapShl:
+		return x.op(OpShl, U, a[0], a[1]), nil
+	case graph.MapShr:
+		return x.op(OpShr, U, a[0], a[1]), nil
+	case graph.MapEqual:
+		return x.op(OpSub, U, x.u(1), x.op(OpMin, U, x.op(OpXor, U, a[0], a[1]), x.u(1))), nil
+	case graph.MapLess:
+		return x.sel(U, x.op(OpLess, ir.Pred, a[0], a[1]), x.u(1), x.u(0)), nil
+	case graph.MapWhere:
+		p := x.op(OpMin, U, a[0], x.u(1))
+		return x.op(OpAdd, U, a[2], x.op(OpMul, U, p, x.op(OpSub, U, a[1], a[2]))), nil
+	}
+	return 0, fmt.Errorf("no formula for the map %v over words", f)
+}
+
 // decomposeMap is an elementwise function of its operands -- its inputs,
 // then its bound vector, then its constant -- an operand narrower than the
 // output read at element i/(w/n), an index row read as its float. The bound

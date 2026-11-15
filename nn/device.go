@@ -794,7 +794,7 @@ type RecurrentPlan struct {
 	VHeads    int // value heads, and the number of decay rates
 	KDim      int // key/query head width, and the state's key extent
 	VDim      int // value head width, and the state's value extent
-	StateLen  int // VHeads*VDim*KDim floats and TailLen more, per sequence, CONSTANT in context
+	StateLen  int // VHeads*VDim*KDim floats and whatever the block's graph keeps after them, per sequence, CONSTANT in context
 	ConvState int // (Conv-1)*Chans floats, per sequence
 	// ChanDecay is Kimi Delta Attention rather than qwen3next's gated delta
 	// rule: the state decays at a rate per channel instead of one per head,
@@ -808,12 +808,6 @@ type RecurrentPlan struct {
 	// the attention's, and the weights carry the mixer's projection in
 	// SSMWeights.In.
 	WithAttn bool
-	// TailLen is what the block's state carries per sequence after the delta
-	// rule's, inside StateLen: room for Qwen3.8-Flash-Next's n-gram
-	// predecessors and convolution history (model's recTailLen), the same on
-	// every linear block so a device keeps one slot width. A sequence's slot
-	// is [delta rule | tail]; the delta rule's kernels step its head.
-	TailLen int
 	// Scan is the per-element selective scan (jlm.LayerScan): VHeads channels
 	// of one row each over a KDim-wide state, B and C shared, the decay a
 	// vector exp(dt*A) per channel, dt off a rank-Rank bottleneck of the

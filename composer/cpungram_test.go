@@ -105,48 +105,75 @@ func NGramCases() []NGramCase {
 	return cs
 }
 
-// NGramGraph is OpNGramHash over c's windows, R a step's rows.
-func NGramGraph(c NGramCase) (g *graph.Graph, win, rows, next graph.ValueID) {
+// NGramGraph is the hash over c's windows written in expressions into
+// words (graph.Builder.Words, MulXor, ModAdd): the window's ids, each g-gram's
+// product and each head's row.
+func NGramGraph(c NGramCase) (g *graph.Graph, win, rows graph.ValueID) {
 	b := graph.New()
 	win = b.In("win", c.N)
 	b.G.Values[win].Elem = graph.ElemU32
-	out := b.Emit(graph.OpNGramHash, []graph.ValueID{win}, []graph.Result{
-		{Name: "rows", Width: (c.N - 1) * c.Per, Elem: graph.ElemU32}, {Name: "next", Width: c.N - 1, Elem: graph.ElemU32}},
-		nil, graph.Attrs{Span: c.Per, Words: c.Words, Reset: c.Reset}, nil, nil)
-	b.Out(out...)
-	return b.G, win, out[0], out[1]
+	at := func(s int) graph.ValueID {
+		return b.Emit(graph.OpSlice, []graph.ValueID{win}, []graph.Result{{Name: "w", Width: 1, Elem: graph.ElemU32}}, nil,
+			graph.Attrs{Offset: s, Width: 1}, nil, nil)[0]
+	}
+	eos := graph.Word(uint32(c.Words[0]))
+	ids := []graph.ValueID{at(0)}
+	for s := 1; s < c.N; s++ {
+		var e graph.WordTerms
+		none := e.Fn(graph.MapEqual, graph.WordIn(0), graph.Word(0))
+		in := []graph.ValueID{at(s)}
+		if c.Reset && s > 1 {
+			none = e.Fn(graph.MapAdd, none, e.Fn(graph.MapEqual, graph.WordIn(1), eos))
+			in = append(in, ids[s-1])
+		}
+		e.Fn(graph.MapWhere, none, eos, e.Fn(graph.MapSub, graph.WordIn(0), graph.Word(1)))
+		ids = append(ids, b.Words("id", 1, &e, in...))
+	}
+	gram := b.MulXor("g", nil, ids[0], c.Words[1])
+	var hs []graph.ValueID
+	for n := 2; n <= c.N; n++ {
+		gram = b.MulXor("g", &gram, ids[n-1], c.Words[n])
+		for k := range c.Per {
+			h := (n-2)*c.Per + k
+			hs = append(hs, b.ModAdd("h", gram, c.Words[2+c.N+2*h], c.Words[1+c.N+2*h]))
+		}
+	}
+	rows = b.Emit(graph.OpConcat, hs, []graph.Result{{Name: "rows", Width: len(hs), Elem: graph.ElemU32}}, nil, graph.Attrs{}, nil, nil)[0]
+	b.Out(rows)
+	return b.G, win, rows
 }
 
-// TestComposedCPUNGramHash forms OpNGramHash on the CPU at each of
+// TestComposedCPUNGramHash forms NGramGraph -- expressions into words, wide
+// products and remainders over 16-bit limbs -- on the CPU at each of
 // NGramCases' shapes, a decode step's one row at a time and a prompt's step
 // of every window at once, held word for word to NGramRef: the rows each
-// head reads and the next predecessors, guard words past both. The reset ignored, and a head reading the row of the
-// head before it, must part from the form.
+// head reads, guard words past them. The reset ignored, and a head reading
+// the row of the head before it, must part from the form.
 func TestComposedCPUNGramHash(t *testing.T) {
 	ran, reset, dropped := 0, 0, 0
 	for _, c := range NGramCases() {
-		g, win, rows, next := NGramGraph(c)
+		g, win, rows := NGramGraph(c)
 		if err := graph.Verify(g, graph.Facts{}); err != nil {
 			t.Fatal(err)
 		}
 		heads := (c.N - 1) * c.Per
-		run := func(wins [][]uint32) ([]uint32, []uint32) {
+		run := func(wins [][]uint32) []uint32 {
 			R := len(wins)
 			_, codes, err := Default().Form(Request{Graph: g, Formats: map[jlm.Role]jlm.Type{}, Step: Step{Rows: R, Page: 64, Keys: 1},
 				Device: cpuDevice(hostArm()), Apart: true})
 			if err != nil {
 				t.Fatalf("%d-grams x%d at %d rows: %v", c.N, c.Per, R, err)
 			}
-			vals := map[graph.ValueID][]uint32{win: slices.Concat(wins...), rows: make([]uint32, R*heads), next: make([]uint32, R*(c.N-1))}
+			vals := map[graph.ValueID][]uint32{win: slices.Concat(wins...), rows: make([]uint32, R*heads)}
 			if err := runCPUGridValues(hostArm(), codes, g, vals, [3][]uint32{}, nil, func(graph.ValueID) int { return R }, nil); err != nil {
 				t.Fatalf("%d-grams x%d at %d rows: %v", c.N, c.Per, R, err)
 			}
-			return vals[rows], vals[next]
+			return vals[rows]
 		}
-		check := func(i int, w, gotRows, gotNext []uint32) {
-			wantRows, wantNext := NGramRef(w, c.Words, c.Per, c.Reset, -1)
-			if !slices.Equal(gotRows, wantRows) || !slices.Equal(gotNext, wantNext) {
-				t.Fatalf("%d-grams x%d reset %v, window %d %v: rows %v next %v, want %v %v", c.N, c.Per, c.Reset, i, w, gotRows, gotNext, wantRows, wantNext)
+		check := func(i int, w, gotRows []uint32) {
+			wantRows, _ := NGramRef(w, c.Words, c.Per, c.Reset, -1)
+			if !slices.Equal(gotRows, wantRows) {
+				t.Fatalf("%d-grams x%d reset %v, window %d %v: rows %v, want %v", c.N, c.Per, c.Reset, i, w, gotRows, wantRows)
 			}
 			if r, _ := NGramRef(w, c.Words, c.Per, !c.Reset, -1); !slices.Equal(r, gotRows) {
 				reset++
@@ -156,12 +183,11 @@ func TestComposedCPUNGramHash(t *testing.T) {
 			}
 		}
 		for i, w := range c.Wins {
-			gr, gn := run([][]uint32{w})
-			check(i, w, gr, gn)
+			check(i, w, run([][]uint32{w}))
 		}
-		gr, gn := run(c.Wins)
+		gr := run(c.Wins)
 		for i, w := range c.Wins {
-			check(i, w, gr[i*heads:(i+1)*heads], gn[i*(c.N-1):(i+1)*(c.N-1)])
+			check(i, w, gr[i*heads:(i+1)*heads])
 		}
 		ran++
 	}

@@ -269,7 +269,7 @@ func (e *Exec) specOf(li int, p *nn.LayerPlan) (nn.BlockSpec, bool) {
 		return nn.BlockSpec{}, false
 	}
 	s := *p.Spec
-	if s.Why == nn.DeclineServes && s.Table != nil && TableRowsOf(s.Graph) >= 0 {
+	if s.Why == nn.DeclineServes && s.Table != nil && s.Graph.TableRows() >= 0 {
 		if err := e.b.OpenTable(s.Table, s.TableRow); err != nil {
 			s.Why = e.comp.Decline(err)
 		}
