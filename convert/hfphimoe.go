@@ -110,6 +110,7 @@ type hfLongRope struct {
 	Short      []float64 `json:"short_factor"`
 	Long       []float64 `json:"long_factor"`
 	ShortScale *float64  `json:"short_mscale"`
+	LongScale  *float64  `json:"long_mscale"`
 	AttnFactor *float64  `json:"attention_factor"`
 	OrigCtx    uint32    `json:"original_max_position_embeddings"`
 }
@@ -178,6 +179,12 @@ func (lr *hfLongRope) state(path string, cfg *Config) ([]jlm.Tensor, error) {
 	case cfg.NCtx > lr.OrigCtx:
 		s := float64(cfg.NCtx) / float64(lr.OrigCtx)
 		cfg.AttnFactor = float32(math.Sqrt(1 + math.Log(s)/math.Log(float64(lr.OrigCtx))))
+	}
+	// PhimoeRotaryEmbedding takes long_mscale past the original context; the
+	// container states one magnitude for every position.
+	if lr.LongScale != nil && float32(*lr.LongScale) != cfg.AttnFactor {
+		return nil, fmt.Errorf("convert: %s: long_mscale %g past the original context against %g before it: %w",
+			path, *lr.LongScale, cfg.AttnFactor, ErrNotImplemented)
 	}
 	vec := func(role jlm.Role, name string, f []float64) jlm.Tensor {
 		b := make([]byte, 4*len(f))
