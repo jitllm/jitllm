@@ -1097,13 +1097,12 @@ func (g *devTier) ensureRecNext(rows int) bool {
 		return true // a short convolution keeps no state beside its window
 	}
 	if bytes := uint64(rows * g.recS * 4); g.recNextBytes < bytes {
-		// A linear submission in flight writes the old one.
-		g.quiesce()
 		b, err := g.dev.Alloc(int(bytes))
 		if err != nil {
 			return fail(err)
 		}
-		// Every recording, and every submission in flight, names the old one.
+		// Every recording names the old one, and a linear submission in
+		// flight writes it: dropGraph waits for those before it goes.
 		g.dropGraph()
 		if g.recNext != nil {
 			g.recNext.Free()
