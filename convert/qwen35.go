@@ -126,6 +126,17 @@ func splitBetaAlpha(name string) bool {
 	return strings.HasSuffix(name, ".ssm_beta.weight") || strings.HasSuffix(name, ".ssm_alpha.weight")
 }
 
+// pairedBetaAlpha says the file stores the other half of name's beta|alpha
+// pair beside it.
+func pairedBetaAlpha(f *meta.File, name string) bool {
+	other := strings.Replace(name, ".ssm_alpha.", ".ssm_beta.", 1)
+	if other == name {
+		other = strings.Replace(name, ".ssm_beta.", ".ssm_alpha.", 1)
+	}
+	_, ok := f.Get(other)
+	return ok
+}
+
 // textBlock is the block index of a "blk.N." tensor name.
 func textBlock(name string) (int32, bool) {
 	rest, ok := strings.CutPrefix(name, "blk.")

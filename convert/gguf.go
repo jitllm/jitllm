@@ -225,26 +225,25 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 		if len(t.Dims) == 0 || len(t.Dims) > 4 {
 			return nil, fmt.Errorf("convert: %s has %d dimensions", t.Name, len(t.Dims))
 		}
-		// Qwen3.5's re-cut of qwen3next's file is undone before the name table
-		// sees it: beta and alpha are fused back into ssm_ba (fuseBetaAlpha).
-		if !tower && (c.Arch == ArchQwen3Next || c.Arch == ArchQwen4Exp) {
-			if splitBetaAlpha(t.Name) && strings.HasSuffix(t.Name, ".ssm_alpha.weight") {
+		// A block storing beta and alpha apart (Qwen3.5's re-cut of qwen3next's
+		// file) has them fused back into ssm_ba before the name table sees
+		// them (fuseBetaAlpha); a block storing beta alone keeps it.
+		if !tower && splitBetaAlpha(t.Name) && pairedBetaAlpha(f, t.Name) {
+			if strings.HasSuffix(t.Name, ".ssm_alpha.weight") {
 				alphas++
 				continue // fused into its layer's ssm_beta below
 			}
-			if splitBetaAlpha(t.Name) {
-				b, ok := textBlock(t.Name)
-				if !ok {
-					return nil, fmt.Errorf("convert: %q: no block index", t.Name)
-				}
-				e, err := fuseBetaAlpha(f, t, c, b)
-				if err != nil {
-					return nil, err
-				}
-				fused++
-				s.Tensors = append(s.Tensors, e)
-				continue
+			b, ok := textBlock(t.Name)
+			if !ok {
+				return nil, fmt.Errorf("convert: %q: no block index", t.Name)
 			}
+			e, err := fuseBetaAlpha(f, t, c, b)
+			if err != nil {
+				return nil, err
+			}
+			fused++
+			s.Tensors = append(s.Tensors, e)
+			continue
 		}
 		if tower && names.unreadName(t.Name) {
 			continue
@@ -291,7 +290,7 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 		}
 		// DeepSeek V4's token-id tables are I32, which is not a weight type
 		// here: carried as F32 ids (ds4HashTable).
-		if !tower && c.Arch == ArchDeepseek4 && strings.HasSuffix(t.Name, ".ffn_gate_tid2eid.weight") {
+		if !tower && strings.HasSuffix(t.Name, ".ffn_gate_tid2eid.weight") {
 			_, block, _, err := identify(t.Name)
 			if err != nil {
 				return nil, err

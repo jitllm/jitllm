@@ -45,7 +45,7 @@ func TestEveryTensorHasARole(t *testing.T) {
 			continue
 		}
 		files++
-		cfg, cfgErr := configOf(f)
+		_, cfgErr := configOf(f)
 		// configOf cannot read a bare mmproj (no text config), and the clip
 		// override must not swallow a real refusal: an unimplemented projector
 		// is a scope decision (ErrNotImplemented), not a missing role.
@@ -72,9 +72,9 @@ func TestEveryTensorHasARole(t *testing.T) {
 			}
 			tensors++
 			// A split beta and alpha never reach the name table: sourceOf
-			// fuses them into ssm_ba first, by the config's architecture
+			// fuses them into ssm_ba first wherever the block stores the pair
 			// (fuseBetaAlpha, gated by its own test).
-			if cfgErr == nil && (cfg.Arch == ArchQwen3Next || cfg.Arch == ArchQwen4Exp) && splitBetaAlpha(n) {
+			if splitBetaAlpha(n) && pairedBetaAlpha(f, n) {
 				continue
 			}
 			// A tower's tensors are named as conversion names them
