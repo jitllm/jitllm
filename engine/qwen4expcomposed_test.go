@@ -173,6 +173,15 @@ func partCPULogits(t *testing.T, m *model.Model, toks []int32, f cpuFault, compo
 	if got := s.inPlanes(fg.CpuEmbed); m.ExpandsStreams() && got != m.Cfg.Streams() {
 		t.Fatalf("the input rows' graph writes %d planes, want %d", got, m.Cfg.Streams())
 	}
+	rows, edecl := s.Account(nn.CPU).Steps.Of(nn.ComposedEmbed)
+	for i, n := range edecl {
+		if n > 0 {
+			t.Errorf("%d input rows declined: %s (%v)", n, nn.DeclineName(i), s.Account(nn.CPU).FormErr)
+		}
+	}
+	if rows != len(toks) {
+		t.Fatalf("the input rows' graph served %d rows, want %d", rows, len(toks))
+	}
 	return out
 }
 

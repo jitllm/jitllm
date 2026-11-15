@@ -292,6 +292,7 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 					}
 					s.trace(-1, "embd", s.x)
 				}
+				s.layDraft(s.resid(), 1, i)
 				// The tap rows over the input rows' zeros.
 				if c.DeepTaps > 0 {
 					s.fillDeep(src, i, 1, s.ple)
