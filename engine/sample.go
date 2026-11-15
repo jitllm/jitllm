@@ -214,9 +214,10 @@ const (
 	StageDRY
 )
 
-// llamaStage is the i-th of llama.cpp's own order (common_sampler's default
-// samplers), the one a draw with DRY runs where it names none.
-func llamaStage(i int) Stage {
+// defaultStage is the i-th of the default chain, llama.cpp's own order
+// (common_sampler's default samplers), the one a draw with DRY runs where it
+// names none.
+func defaultStage(i int) Stage {
 	return [...]Stage{StagePenalties, StageDRY, StageTopNSigma, StageTopK, StageTypical, StageTopP, StageMinP, StageXTC,
 		StageTemperature}[i]
 }
@@ -227,7 +228,7 @@ func (s *Sampler) chain() (int, func(int) Stage) {
 	if s.Stages != nil {
 		return len(s.Stages), func(i int) Stage { return s.Stages[i] }
 	}
-	return 9, llamaStage
+	return 9, defaultStage
 }
 
 // dryOn reports whether a draw runs DRY.
