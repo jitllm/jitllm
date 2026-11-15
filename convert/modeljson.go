@@ -113,13 +113,13 @@ type mjHead struct {
 }
 
 type mjTensors struct {
-	BlockPrefix  string              `json:"block_prefix"`
-	Model        map[string]mjTensor `json:"model"`
-	Block        map[string]mjTensor `json:"block"`
-	Gather       []mjGather          `json:"gather"`
-	Ignore       []string            `json:"ignore"`
-	IgnorePrefix []string            `json:"ignore_prefix"`
-	Experts      *mjExperts          `json:"experts"`
+	BlockPrefix  string               `json:"block_prefix"`
+	Model        map[string]mjTargets `json:"model"`
+	Block        map[string]mjTargets `json:"block"`
+	Gather       []mjGather           `json:"gather"`
+	Ignore       []string             `json:"ignore"`
+	IgnorePrefix []string             `json:"ignore_prefix"`
+	Experts      *mjExperts           `json:"experts"`
 }
 
 // mjExperts names a mixture's per-expert matrices: the block-relative prefix
@@ -147,6 +147,31 @@ func (t *mjTensor) UnmarshalJSON(b []byte) error {
 	d := json.NewDecoder(bytes.NewReader(b))
 	d.DisallowUnknownFields()
 	return d.Decode((*plain)(t))
+}
+
+// mjTargets is what one source tensor becomes: a role, or a list of two or
+// more, each cut from the source by its own primitives (a fused projection's
+// row ranges), in the order they are laid out.
+type mjTargets []mjTensor
+
+func (ts *mjTargets) UnmarshalJSON(b []byte) error {
+	if b = bytes.TrimSpace(b); len(b) == 0 || b[0] != '[' {
+		var t mjTensor
+		if err := json.Unmarshal(b, &t); err != nil {
+			return err
+		}
+		*ts = mjTargets{t}
+		return nil
+	}
+	var list []mjTensor
+	if err := json.Unmarshal(b, &list); err != nil {
+		return err
+	}
+	if len(list) < 2 {
+		return fmt.Errorf("a list of targets names two or more, not %d", len(list))
+	}
+	*ts = list
+	return nil
 }
 
 // mjGather builds one tensor a block from several sources, each entering as
@@ -306,13 +331,57 @@ func (mj *modelJSON) hfArch() (*hfArch, error) {
 		}
 		return nil
 	}
-	for n, t := range mj.Tensors.Model {
-		if err := add(a.model, n, t); err != nil {
+	// A source of several targets is cut into each, read whole when it is
+	// reached, the parts laid out in the file's order in its place.
+	addAll := func(dst map[string]jlm.Role, name string, ts mjTargets) error {
+		if len(ts) == 1 {
+			return add(dst, name, ts[0])
+		}
+		roles := make([]jlm.Role, len(ts))
+		for i, t := range ts {
+			r, ok := roleOf(t.Role)
+			if !ok {
+				return fmt.Errorf("convert: %s: %s's role %q is not a tensor name the container knows", mj.name, name, t.Role)
+			}
+			if len(t.Do) == 0 {
+				return fmt.Errorf("convert: %s: %s feeds %d roles, and %s takes no primitives to cut it by", mj.name, name, len(ts), t.Role)
+			}
+			if err := t.Do.check(); err != nil {
+				return fmt.Errorf("convert: %s: %s: %s: %w", mj.name, name, t.Role, err)
+			}
+			roles[i] = retarget(a.arch, r)
+		}
+		dst[name] = roles[0]
+		a.split[name] = func(e jlm.Tensor, data []byte, c *Config) ([]jlm.Tensor, error) {
+			st.mu.Lock()
+			env := st.env
+			st.mu.Unlock()
+			in := mjVal{shape: mjTorch(&e), typ: e.Type, data: data}
+			out := make([]jlm.Tensor, len(ts))
+			for i, t := range ts {
+				v, err := t.Do.run(env, []mjVal{in})
+				if err != nil {
+					return nil, fmt.Errorf("convert: %s: %v: %w", e.Name, roles[i], err)
+				}
+				p := e
+				p.Role, p.Name = roles[i], fmt.Sprintf("%s[%v]", e.Name, roles[i])
+				if err := mjSetShape(&p, v); err != nil {
+					return nil, err
+				}
+				p.Data = v.data
+				out[i] = p
+			}
+			return out, nil
+		}
+		return nil
+	}
+	for n, ts := range mj.Tensors.Model {
+		if err := addAll(a.model, n, ts); err != nil {
 			return nil, err
 		}
 	}
-	for n, t := range mj.Tensors.Block {
-		if err := add(a.block, n, t); err != nil {
+	for n, ts := range mj.Tensors.Block {
+		if err := addAll(a.block, n, ts); err != nil {
 			return nil, err
 		}
 	}

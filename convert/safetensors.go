@@ -470,19 +470,17 @@ func hfSourceWith(dir hfDir, shards []*safetensors.File, modelJSON string) (*jlm
 			}
 		}
 		parts := []jlm.Tensor{e}
-		roles, isFused := ha.fused[role]
 		sp := ha.split[ha.blockRest(name)]
-		// A split or a fused cut reads elements, which a block of MXFP4 is
-		// not; only a plain matrix, a bank member or a row concatenation may
-		// arrive packed.
-		if loc.mx() && (sp != nil || isFused) {
+		// A split reads elements, which a block of MXFP4 is not; only a plain
+		// matrix, a bank member or a row concatenation may arrive packed.
+		if loc.mx() && sp != nil {
 			return nil, fmt.Errorf("convert: %s is MXFP4 and is cut at conversion: %w", name, ErrNotImplemented)
 		}
 		// A plain matrix is read when the writer reaches it; everything else is
-		// read immediately, because a split or row cut sizes its parts from the data and a
+		// read immediately, because a split sizes its parts from the data and a
 		// fixup may change a vector's type. Those are small; the matrices are
 		// what make a model tens of GB.
-		lazy := sp == nil && !isFused && e.NDim >= 2
+		lazy := sp == nil && e.NDim >= 2
 		var data []byte
 		if !lazy {
 			if data, err = read(); err != nil {
@@ -492,10 +490,6 @@ func hfSourceWith(dir hfDir, shards []*safetensors.File, modelJSON string) (*jlm
 		switch {
 		case sp != nil:
 			if parts, err = sp(e, data, cfg); err != nil {
-				return nil, err
-			}
-		case isFused:
-			if parts, err = splitRows(e, data, roles, cfg); err != nil {
 				return nil, err
 			}
 		default:
@@ -767,38 +761,6 @@ func stackBanks(banks map[bankKey][]*jlm.Tensor, c *Config) ([]jlm.Tensor, error
 	return out, nil
 }
 
-// splitRows cuts a fused projection into the tensors the container stores.
-// The source is row-major [out, in], so a row range is a byte range. The row
-// counts come from the config and must sum to the tensor's: parts sized by a
-// wrong geometry are plausible wrong tensors.
-func splitRows(e jlm.Tensor, data []byte, roles []jlm.Role, c *Config) ([]jlm.Tensor, error) {
-	if e.NDim != 2 {
-		return nil, fmt.Errorf("convert: %s is fused and %d-dimensional", e.Name, e.NDim)
-	}
-	var want uint64
-	rows := make([]uint64, len(roles))
-	for i, r := range roles {
-		rows[i] = hfRows(r, c)
-		want += rows[i]
-	}
-	if e.Dims[1] != want || want == 0 || uint64(len(data))%want != 0 {
-		return nil, fmt.Errorf("convert: %s has %d rows, and its parts %v want %d",
-			e.Name, e.Dims[1], roles, want)
-	}
-	rowBytes := uint64(len(data)) / want
-	out := make([]jlm.Tensor, len(roles))
-	var at uint64
-	for i, r := range roles {
-		p := e
-		p.Role, p.Dims[1] = r, rows[i]
-		p.Name = fmt.Sprintf("%s[%v]", e.Name, r)
-		p.Data = data[at*rowBytes : (at+rows[i])*rowBytes]
-		at += rows[i]
-		out[i] = p
-	}
-	return out, nil
-}
-
 // hfHeadDimV is the value head's width. jlm.Config stores zero where it equals
 // HeadDim, so every reader has to ask rather than read the field.
 func hfHeadDimV(c *Config) uint32 {
@@ -806,19 +768,6 @@ func hfHeadDimV(c *Config) uint32 {
 		return c.HeadDimV
 	}
 	return c.HeadDim
-}
-
-// hfRows is a projection's output width, from the config alone.
-func hfRows(r jlm.Role, c *Config) uint64 {
-	switch r {
-	case jlm.RoleAttnQ:
-		return uint64(c.NHead) * uint64(c.HeadDim)
-	case jlm.RoleAttnK, jlm.RoleAttnV:
-		return uint64(c.NKVHead) * uint64(c.HeadDim)
-	case jlm.RoleFFNGate, jlm.RoleFFNUp:
-		return uint64(c.NFFN)
-	}
-	return 0
 }
 
 func all2names[T any](m map[string]T) []string {
@@ -1087,9 +1036,6 @@ type hfArch struct {
 	// matrix per expert, the container one bank per role (stackBanks).
 	expertPrefix string
 	expert       map[string]jlm.Role
-	// fused names a role whose tensor is several projections' rows back to
-	// back, and the roles they split into, in order (splitRows).
-	fused map[jlm.Role][]jlm.Role
 	// split cuts one source tensor into several container tensors where the cut
 	// is not a plain row range. It is keyed by the block-relative name, not the
 	// role: MLA's up-projections arrive either as one kv_b_proj to cut or
@@ -1169,7 +1115,6 @@ func (a *hfArch) setData(e *jlm.Tensor, data []byte, c *Config) error {
 func hfArchTable() map[string]*hfArch {
 	return map[string]*hfArch{
 		"LlamaForCausalLM": llamaHF(),
-		"Phi3ForCausalLM":  phi3HF(),
 		// One graph, two class names: V2 and V3 differ in the router, and every
 		// difference is a key config.json states. See deepseek2HF.
 		"DeepseekV2ForCausalLM": deepseek2HF(),
@@ -1522,46 +1467,6 @@ func hfExperts() map[string]jlm.Role {
 		"gate_proj.weight": jlm.RoleExpGateBank,
 		"up_proj.weight":   jlm.RoleExpUpBank,
 		"down_proj.weight": jlm.RoleExpDownBank,
-	}
-}
-
-// phi3 fuses q/k/v into qkv_proj and gate/up into gate_up_proj; both are the
-// file's packing and are split here, as convert.unfuse does on the GGUF side.
-// Gate comes first: Phi3MLP multiplies the activation of the first half into
-// the second. RoleFFNUp is the fused tensor's role, as the schema says.
-func phi3HF() *hfArch {
-	return &hfArch{
-		arch:        ArchPhi3,
-		blockPrefix: llamaHF().blockPrefix,
-		model:       llamaHF().model,
-		block: map[string]jlm.Role{
-			"input_layernorm.weight":          jlm.RoleAttnNorm,
-			"post_attention_layernorm.weight": jlm.RoleFFNNorm,
-			"self_attn.qkv_proj.weight":       jlm.RoleAttnQKV,
-			"self_attn.o_proj.weight":         jlm.RoleAttnOut,
-			"mlp.gate_up_proj.weight":         jlm.RoleFFNUp,
-			"mlp.down_proj.weight":            jlm.RoleFFNDown,
-		},
-		fused: map[jlm.Role][]jlm.Role{
-			jlm.RoleAttnQKV: {jlm.RoleAttnQ, jlm.RoleAttnK, jlm.RoleAttnV},
-			jlm.RoleFFNUp:   {jlm.RoleFFNGate, jlm.RoleFFNUp},
-		},
-		ignore: llamaHF().ignore,
-		config: func(c *hfConfig, names []string) (*Config, error) {
-			// phi3 slides every layer (allLocal), as the GGUF path does.
-			win := uint32(0)
-			if c.SlidingWindow != nil && (c.UseSlidingWindow == nil || *c.UseSlidingWindow) {
-				win, c.SlidingWindow = *c.SlidingWindow, nil
-			}
-			cfg, err := hfConfigWith(ArchPhi3, jlm.FlagRopeNeox, "silu")(c, names)
-			if err != nil {
-				return nil, err
-			}
-			if win > 0 {
-				cfg.SWAWindow, cfg.SWAPeriod = win, allLocal(cfg.NLayer)
-			}
-			return cfg, nil
-		},
 	}
 }
 

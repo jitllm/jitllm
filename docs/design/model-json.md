@@ -92,7 +92,10 @@ schema; `convert/modeljson.go` reads it. Its sections:
   both formats), with `do`, the primitives it takes in order. A transform
   that changes a tensor's shape or type states its result before the tensor
   is laid out (a dry run of the same primitives), so a matrix is still read
-  when the writer reaches it.
+  when the writer reaches it. A source may name a list of two or more
+  targets instead, each a role and the primitives that cut it from the
+  source (Phi-3's fused qkv_proj, `reshape`d to its fused shape and
+  `slice`d); the parts are laid out in its place, in the list's order.
 - `tensors.gather`: a role built a block from several sources (`from`), each
   entering as the vector of its values, by primitives (`do`) that leave one
   tensor: `stack` or `concat` them, or `map` over them, then shape the result.

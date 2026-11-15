@@ -23,7 +23,7 @@ func TestMixtralThroughTheLibrary(t *testing.T) {
 	}{{"self_attn.q_proj.weight", 4}, {"self_attn.k_proj.weight", 2}} {
 		rows := tc.heads * 8
 		v := iota32(rows * 3)
-		got, err := mj.Tensors.Block[tc.name].Do.run(env, []mjVal{mjF32([]uint64{uint64(rows), 3}, v...)})
+		got, err := mj.Tensors.Block[tc.name][0].Do.run(env, []mjVal{mjF32([]uint64{uint64(rows), 3}, v...)})
 		if err != nil {
 			t.Fatalf("%s: %v", tc.name, err)
 		}
