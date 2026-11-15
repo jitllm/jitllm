@@ -39,7 +39,7 @@ func (s *Instance) KVType() model.KVType {
 func (s *Instance) KVBytesPerToken() int {
 	n := 0
 	for li := s.lo; li < s.hi && li < len(s.kv.layers); li++ {
-		if s.kv.layers[li].p == 0 || s.c.KVShared(li) {
+		if s.kv.layers[li].p == 0 || s.readsOther(li) {
 			continue
 		}
 		l := s.kvlAt(li)

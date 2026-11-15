@@ -67,7 +67,9 @@ type Call struct {
 	Weights []unsafe.Pointer
 	Rope    [2]unsafe.Pointer
 	Planes  [2]unsafe.Pointer
-	At      [NumSrc]unsafe.Pointer
+	// Hists are the block's histories past its rows' (Bound.Hists).
+	Hists []HistTable
+	At    [NumSrc]unsafe.Pointer
 }
 
 // phase is the kernel a pool region calls, its calls the region's range.
@@ -358,6 +360,14 @@ func (d *Device) words(a *cpu.Args, b *Call, k *Code, at int) {
 			p = b.Rope[ar.inst]
 		case SrcPlanes:
 			p = b.Planes[ar.inst]
+		case SrcHistKeys, SrcHistPages:
+			p = nil
+			if ar.inst < len(b.Hists) {
+				p = b.Hists[ar.inst].Keys
+				if ar.src == SrcHistPages {
+					p = ptr(b.Hists[ar.inst].Pages)
+				}
+			}
 		default:
 			p = b.At[ar.src]
 		}

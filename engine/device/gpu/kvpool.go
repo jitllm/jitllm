@@ -45,26 +45,39 @@ func (k kvGeom) kWords(p int) int {
 	return p * k.kvRow
 }
 
-// entBit marks a pool key as a block's entries plane: entKey(li) is block
-// li's, keyBlock the block a key is of.
-const entBit = 1 << 24
+// histShift places a history's index above its block's in a pool key:
+// histKey(li, h) is block li's history h, histKey(li, 0) == li its rows',
+// keyBlock the block a key is of.
+const histShift = 24
 
-func entKey(li int) int { return li | entBit }
+func histKey(li, h int) int { return li | h<<histShift }
 
-func keyBlock(key int) int { return key &^ entBit }
+func keyBlock(key int) int { return key & (1<<histShift - 1) }
 
-// entriesOf is the entries plane block graph g appends to its history 1:
-// the period and the entry's width, 0 and 0 for none.
-func entriesOf(g *graph.Graph) (period, width int) {
-	if g == nil {
+// appendsOf is history h past its rows that block graph g appends to: the
+// period and the entry's width, 0 and 0 for none.
+func appendsOf(g *graph.Graph, h int) (period, width int) {
+	if g == nil || h < 1 {
 		return 0, 0
 	}
 	for _, o := range g.Ops {
-		if o.Kind == graph.OpKVAppend && len(o.Writes) == 1 && o.Writes[0].Hist == 1 {
+		if o.Kind == graph.OpKVAppend && len(o.Writes) == 1 && int(o.Writes[0].Hist) == h && o.Writes[0].From == 0 {
 			return max(1, o.Attr.Span), g.Values[o.In[0]].Width
 		}
 	}
 	return 0, 0
+}
+
+// blockHists is how many histories key li's block keeps in kp: its rows'
+// and each past them its graph appends to, numbered from 0 without a gap.
+func (kp *kvPool) blockHists(li int) int {
+	n := 1
+	for {
+		if _, ok := kp.layers[histKey(li, n)]; !ok {
+			return n
+		}
+		n++
+	}
 }
 func (k kvGeom) vWords(p int) int {
 	switch {

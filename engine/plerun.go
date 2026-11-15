@@ -1,5 +1,7 @@
 package engine
 
+import "github.com/jitllm/jitllm/model"
+
 // growPLE sizes the per-layer embedding scratch. A model without them gets
 // none.
 func (s *Instance) growPLE() {
@@ -11,66 +13,79 @@ func (s *Instance) growPLE() {
 	s.ple = make([]float32, c.SideWidth())
 }
 
+// historySources is, for each block below hi, the block whose history it
+// attends to as its graph reads it: its own, or the block its attention
+// names (graph.Graph.ReadsHistoryOf).
+func historySources(m *model.Model, hi int) []int {
+	src := make([]int, max(hi, 0))
+	for li := range src {
+		src[li] = li
+		if n := m.Composing().BlockGraph(li).ReadsHistoryOf(); n >= 0 {
+			src[li] = n
+		}
+	}
+	return src
+}
+
+// histSrc is the block whose history block li attends to.
+func (s *Instance) histSrc(li int) int {
+	if li < 0 || li >= len(s.histOf) {
+		return li
+	}
+	return s.histOf[li]
+}
+
+// readsOther reports that block li keeps no history of its own and attends
+// to another block's.
+func (s *Instance) readsOther(li int) bool { return s.histSrc(li) != li }
+
+// historyGroup reports whether block b reads, or is, src's history.
+func (s *Instance) historyGroup(b, src int) bool { return b == src || s.histSrc(b) == src }
+
 // kvGroupOffered reports whether block li may be offered by offerRange(lo,
-// hi): any block outside a KV-sharing group, or one whose every group member
+// hi): every block that reads its history's block's history, and that block,
 // is on a device already or offered by the same call.
 func (s *Instance) kvGroupOffered(li, lo, hi int) bool {
-	c := s.c
-	if c.NKVShared == 0 {
-		return true
-	}
-	src := c.KVSource(li)
-	for b := 0; b < c.NLayer; b++ {
-		if b != src && c.KVSource(b) != src {
-			continue
-		}
-		if !s.devAt(b) && (b < lo || b >= hi) {
+	src := s.histSrc(li)
+	for b := range s.histOf {
+		if s.historyGroup(b, src) && !s.devAt(b) && (b < lo || b >= hi) {
 			return false
 		}
 	}
 	return true
 }
 
-// kvSpan is the blocks that must be offered with block li: li alone, or the
-// span of its KV-sharing group, source to last reader.
+// kvSpan is the blocks that must be offered with block li: the span of
+// every block reading the history li reads, and that history's block.
 func (s *Instance) kvSpan(li int) (lo, hi int) {
-	c := s.c
 	lo, hi = li, li+1
-	if c.NKVShared == 0 {
-		return lo, hi
-	}
-	src := c.KVSource(li)
-	for b := 0; b < c.NLayer; b++ {
-		if b == src || c.KVSource(b) == src {
+	src := s.histSrc(li)
+	for b := range s.histOf {
+		if s.historyGroup(b, src) {
 			lo, hi = min(lo, b), max(hi, b+1)
 		}
 	}
 	return lo, hi
 }
 
-// fixKVGroups keeps every KV-sharing group whole (Gemma 4's E2B/E4B): a block
-// attends to its source's history, which lives on exactly one side, so the
-// source and every block reading it must be placed together. A group split by
-// the placement -- a device that took the source and declined a reader, or a
-// relocation that took one member to the CPU -- moves to the CPU whole, with the source's
-// history. The device declines a reader whose source it does not hold (tier)
-// and offerRange offers a group only whole, so this is the third half.
+// fixKVGroups keeps every block that attends to another block's history on
+// that block's device: the history lives on exactly one side, so its block
+// and every block reading it must be placed together. A group split by the
+// placement -- a device that took the source and declined a reader, or a
+// relocation that took one member to the CPU -- moves to the CPU whole,
+// with the source's history. The device declines a reader whose source it
+// does not hold (tier) and offerRange offers a group only whole, so this is
+// the third half.
 func (s *Instance) fixKVGroups() {
-	c := s.c
-	if c.NKVShared == 0 || s.ld == nil {
+	if s.ld == nil {
 		return
 	}
-	for li := c.NLayer - c.NKVShared; li < c.NLayer; li++ {
-		src := c.KVSource(li)
-		if s.devAt(li) == s.devAt(src) {
+	for li, src := range s.histOf {
+		if src == li || s.devAt(li) == s.devAt(src) {
 			continue
 		}
-		// Every block of src's group moves to the CPU.
-		for b := 0; b < c.NLayer; b++ {
-			if b != src && c.KVSource(b) != src {
-				continue
-			}
-			if !s.devAt(b) {
+		for b := range s.histOf {
+			if !s.historyGroup(b, src) || !s.devAt(b) {
 				continue
 			}
 			if b == src && !s.migrateKV(b, s.pos, false) {

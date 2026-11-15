@@ -24,10 +24,9 @@ type Bound struct {
 	// page table.
 	Keys, Values unsafe.Pointer
 	Pages        []uint32
-	// Entries and EntryPages are its entries plane and that plane's page
-	// table (the composer's history-1 tables), where the block keeps one.
-	Entries    unsafe.Pointer
-	EntryPages []uint32
+	// Hists are its histories past its rows' (the composer's tables of
+	// history h at Hists[h-1]), where the block keeps any.
+	Hists []HistTable
 	// CSSWA is the call's second rotary's table where the model trains one,
 	// RopeRows and RopeMarks a rotary table's call's rows and its session's
 	// marks.
@@ -126,7 +125,7 @@ func (r *Runner) ConvOut(n int) []float32 {
 // CallOf is form f's codes' binding of b.
 func (r *Runner) CallOf(b *Bound, f *Form) *Call {
 	c := &r.bind
-	c.Own, c.X, c.Stride, c.N, c.IO = b.Own, b.X, b.Stride, b.N, b.IO
+	c.Own, c.X, c.Stride, c.N, c.IO, c.Hists = b.Own, b.X, b.Stride, b.N, b.IO, b.Hists
 	c.Rope = [2]unsafe.Pointer{ptr(b.CS), ptr(b.CSSWA)}
 	c.Planes = [2]unsafe.Pointer{ptr(r.planes[0]), ptr(r.planes[1])}
 	if b.Planes != nil {
@@ -140,7 +139,6 @@ func (r *Runner) CallOf(b *Bound, f *Form) *Call {
 	a[SrcRopeRows], a[SrcRopeMarks] = ptr(b.RopeRows), ptr(b.RopeMarks)
 	a[SrcKeys], a[SrcValues] = b.Keys, b.Values
 	a[SrcPages], a[SrcRows], a[SrcCall] = ptr(b.Pages), ptr(b.Rows), unsafe.Pointer(&r.call[0])
-	a[SrcEntries], a[SrcEntryPages] = b.Entries, ptr(b.EntryPages)
 	if b.RecState != nil {
 		a[SrcRecState], a[SrcRecConv] = b.RecState, b.RecConv
 		a[SrcRecConvOut] = a[SrcRecConv]

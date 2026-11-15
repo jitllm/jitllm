@@ -302,7 +302,7 @@ func (s *Instance) blockErr(li int) (nn.Decline, error) {
 	c := s.c
 	g := s.m.Composing().BlockGraph(li)
 	// A block sharing another's history reads its source's pages.
-	pg := &s.kv.layers[c.KVSource(li)]
+	pg := &s.kv.layers[s.histSrc(li)]
 	l := &s.m.Layers[li]
 	switch {
 	case g == nil:

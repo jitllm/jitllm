@@ -1129,17 +1129,17 @@ func (d *mirrorDevice) MigrateKV(li int, k, v []float32, pos int, toDevice bool)
 	return true
 }
 
-// MigrateEntries keeps a block's entries on the way up and hands them back on
-// the way down, corrupted as the history is.
-func (d *mirrorDevice) MigrateEntries(li int, e []float32, pos int, toDevice bool) bool {
+// MigrateHistory keeps a block's history past its rows on the way up and
+// hands it back on the way down, corrupted as the rows are.
+func (d *mirrorDevice) MigrateHistory(li, h int, e []float32, pos int, toDevice bool) bool {
 	if toDevice {
-		d.ent[li] = append([]float32(nil), e...)
+		d.ent[li<<8|h] = append([]float32(nil), e...)
 		return true
 	}
 	if d.refuse {
 		return false
 	}
-	copy(e, d.ent[li])
+	copy(e, d.ent[li<<8|h])
 	if d.corrupt {
 		for i := range e {
 			e[i] *= -1.5

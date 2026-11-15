@@ -6,17 +6,17 @@ import (
 	"github.com/jitllm/jitllm/composer"
 )
 
-// entriesMigrate moves block li's entries plane of session sid between host
-// and device: e is the entries pos positions closed, in order, an entry
-// kvRow wide, entry j at slot ((j+1)*period-1)%P/period of the page of
-// position (j+1)*period-1 (composer.History.Period). The rows' move
+// historyMigrate moves block li's history h past its rows, of session sid,
+// between host and device: e is the entries pos positions closed, in order,
+// an entry kvRow wide, entry j at slot ((j+1)*period-1)%P/period of the page
+// of position (j+1)*period-1 (composer.History.Period). The rows' move
 // (pagedMigrate) ranged the sequence first; pages at home are written and
 // read there. Callers hold g.mu.
-func (g *devTier) entriesMigrate(sid uint64, li int, e []float32, pos int, toDevice bool) error {
+func (g *devTier) historyMigrate(sid uint64, li, h int, e []float32, pos int, toDevice bool) error {
 	kp := g.kvPages()
-	pl, ok := kp.layers[entKey(li)]
-	if !ok {
-		return fmt.Errorf("block %d keeps no entries on this device", li)
+	pl, ok := kp.layers[histKey(li, h)]
+	if h < 1 || !ok {
+		return fmt.Errorf("block %d keeps no history %d on this device", li, h)
 	}
 	s := seqID{sid, 0}
 	P, per, w := kp.p, pl.geom.period, pl.geom.kvRow

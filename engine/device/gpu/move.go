@@ -300,7 +300,8 @@ func copyHistory(sid uint64, li int, src, dst *devTier, pos int) (string, uint64
 	}
 	skp, dkp := sv.kvPages(), dv.kvPages()
 	s := seqID{sid, 0}
-	for _, key := range []int{li, entKey(li)} {
+	for h := range skp.blockHists(li) {
+		key := histKey(li, h)
 		spl := skp.layers[key]
 		if spl == nil || len(spl.owned[s]) == 0 {
 			continue

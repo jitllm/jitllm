@@ -668,9 +668,7 @@ type LayerPlan struct {
 	MixedGeom, OwnGeom, LocalRope bool
 	VFromK                        bool
 	OutScale                      float32
-	// Gemma 4's E2B/E4B: PLEDim is each block's per-layer embedding width
-	// (zero for none), KVShared says the block attends to KVSource's history
-	// and computes no k or v, and NFFN is then this block's own width.
+	// PLEDim is each block's per-layer embedding width (zero for none).
 	// PLEWidth is a row's whole side input to the blocks: its per-layer
 	// inputs, NLayer*PLEDim, or a tower's tap rows the first blocks add.
 	PLEDim, PLEWidth int
@@ -680,9 +678,7 @@ type LayerPlan struct {
 	KeyW int
 	// Select is the block's selection of the history it reads (the
 	// container's jlm.Selection), nil where it reads every position.
-	Select   *SelectPlan
-	KVShared bool
-	KVSource int
+	Select *SelectPlan
 	// FFNWide says this block's NFFN is not the model's (its own geometry's),
 	// which a tier that bakes the FFN width into its scratch keeps apart.
 	FFNWide bool
@@ -1402,11 +1398,13 @@ type KVMigrator interface {
 	MigrateKV(li int, k, v []float32, pos int, toDevice bool) bool
 }
 
-// EntriesMigrator is a device's half of moving block li's entries plane with
-// its history: e holds the entries pos positions closed, in order; toDevice
-// takes them into the device's plane, else gives its plane into e.
-type EntriesMigrator interface {
-	MigrateEntries(li int, e []float32, pos int, toDevice bool) bool
+// HistoryMigrator is a device's half of moving block li's history h past
+// its rows' (history 0, KVMigrator's) with them: e holds the entries pos
+// positions closed, in order, one each period positions the block's graph
+// appends at; toDevice takes them into the device's history h, else gives
+// it into e.
+type HistoryMigrator interface {
+	MigrateHistory(li, h int, e []float32, pos int, toDevice bool) bool
 }
 
 // RecMigrator is a device's half of moving block li's recurrent state

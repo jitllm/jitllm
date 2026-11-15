@@ -75,10 +75,11 @@ const (
 	// (composer.TablePicHAcc), SrcPicHAcc1 a video pair's second frame's.
 	SrcPicHAcc
 	SrcPicHAcc1
-	// SrcEntries and SrcEntryPages are the block's entries plane and its
-	// page table: the composer's history-1 keys and pages.
-	SrcEntries
-	SrcEntryPages
+	// SrcHistKeys and SrcHistPages are a history of the block past its
+	// rows' and its page table: the composer's keys and pages of history
+	// inst+1.
+	SrcHistKeys
+	SrcHistPages
 	// NumSrc is the sources' count.
 	NumSrc
 )
@@ -101,7 +102,8 @@ type Arg struct {
 	// coordinate (composer.CallArg.Per), moves whether any does.
 	per   [2]int
 	moves bool
-	// inst is a rotary table's instance (SrcRope, SrcPlanes).
+	// inst is a rotary table's instance (SrcRope, SrcPlanes), or the index
+	// of a history past the rows' (SrcHistKeys, SrcHistPages).
 	inst int
 	// from is the first stored row a weight binds (graph.Binding.From).
 	from int
@@ -436,10 +438,10 @@ func BuildForm(h *cpu.Target, gr *graph.Graph, codes []composer.Code, rows int, 
 					ar.src = SrcRopeRows
 				case t == composer.TableRopeMarks:
 					ar.src = SrcRopeMarks
-				case t == composer.TableKeys && o.Instance == 1:
-					ar.src = SrcEntries
-				case t == composer.TablePages && o.Instance == 1:
-					ar.src = SrcEntryPages
+				case t == composer.TableKeys && o.Instance >= 1:
+					ar.src, ar.inst = SrcHistKeys, o.Instance-1
+				case t == composer.TablePages && o.Instance >= 1:
+					ar.src, ar.inst = SrcHistPages, o.Instance-1
 				case t == composer.TableKeys:
 					ar.src = SrcKeys
 				case t == composer.TableValues:

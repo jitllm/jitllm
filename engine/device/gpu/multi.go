@@ -2227,18 +2227,18 @@ func (g *GPU) migrateKV(sid uint64, li int, k, v []float32, pos int, toDevice bo
 	return d.migrateKV(sid, li, k, v, pos, toDevice)
 }
 
-// MigrateEntries is migrateEntries for the zero session.
-func (g *GPU) MigrateEntries(li int, e []float32, pos int, toDevice bool) bool {
-	return g.migrateEntries(0, li, e, pos, toDevice)
+// MigrateHistory is migrateHistory for the zero session.
+func (g *GPU) MigrateHistory(li, h int, e []float32, pos int, toDevice bool) bool {
+	return g.migrateHistory(0, li, h, e, pos, toDevice)
 }
 
-// migrateEntries moves block li's entries plane between host and device, on
-// the device holding the block.
-func (g *GPU) migrateEntries(sid uint64, li int, e []float32, pos int, toDevice bool) bool {
+// migrateHistory moves block li's history h past its rows between host and
+// device, on the device holding the block.
+func (g *GPU) migrateHistory(sid uint64, li, h int, e []float32, pos int, toDevice bool) bool {
 	g.mu.Lock()
 	d := g.at(sid, li)
 	g.mu.Unlock()
-	return d != nil && d.migrateEntries(sid, li, e, pos, toDevice)
+	return d != nil && d.migrateHistory(sid, li, h, e, pos, toDevice)
 }
 
 // PerSequenceKV reports that every device holding a block pages its history

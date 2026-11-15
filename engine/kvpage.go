@@ -176,10 +176,10 @@ type kvPages struct {
 	// the context.
 	win     int
 	chunked bool
-	// period, past 1, makes the layer a block's entries plane: one entry
-	// each period positions, entry j in the page of position (j+1)*period-1
-	// (composer.History.Period); ew is an entry's width and efmt the plane's
-	// format.
+	// period, past 1, makes the layer a history of a block past its rows':
+	// one entry each period positions, entry j in the page of position
+	// (j+1)*period-1 (composer.History.Period); ew is an entry's width and
+	// efmt the history's format.
 	period, ew int
 	efmt       nn.KVFmt
 	// gone is where release's walk starts: every page below it was released
@@ -394,9 +394,13 @@ type kvCache struct {
 	cfg    *model.Config
 	id     string
 	layers []kvPages
-	// ent is each block's entries plane's slot in layers, past the blocks;
-	// 0 where the block keeps none.
-	ent   []int
+	// hs is each block's histories past its rows' (history 0): hs[li][h-1]
+	// is history h's slot in layers, past the blocks; 0 where the block
+	// keeps none.
+	hs [][]int
+	// hb is each block's histories past its rows' as a call binds them,
+	// hb[li][h-1] history h's, made once with hs.
+	hb    [][]nn.HistTable
 	store KVStore
 	// budget caps the resident bytes. Zero never evicts.
 	budget uint64
@@ -423,7 +427,7 @@ type kvCache struct {
 	recurrent bool
 	// view is the session's view of the CPU device's history: the table each
 	// block reads its pages through. src is each block's history block
-	// (Config.KVSource), noTable the page table of a block that keeps no
+	// (Instance.histOf), noTable the page table of a block that keeps no
 	// history, and err the first page fault of the current step that could
 	// not be recovered: set inside a pool closure, which has no error path,
 	// and drained by Instance.kvCheck at the entry point.
@@ -538,7 +542,7 @@ func (kv *kvCache) MigrateKV(li int, k, v []float32, pos int, in bool, conv nn.K
 }
 
 func newKVCache(c *model.Config, id string, nseq int, l kvLayout, store KVStore, pin int) *kvCache {
-	return newKVCacheRange(c, id, nseq, l, store, pin, 0, c.NLayer, history.NewView(c.NLayer), nil, nil)
+	return newKVCacheRange(c, id, nseq, l, store, pin, 0, c.NLayer, history.NewView(c.NLayer), nil, nil, nil)
 }
 
 // newKVCacheRange is newKVCache for an instance that runs blocks [lo, hi) of its
@@ -546,22 +550,23 @@ func newKVCache(c *model.Config, id string, nseq int, l kvLayout, store KVStore,
 // have none. Each block's pages are its memory in view (history.Pages), grown
 // from pool where its arena has no slot.
 //
-// A block with an entries plane (ents) keeps it in a slot past the blocks,
-// hi+i for ents[i], its pages the block's positions (kvCache.ent).
-func newKVCacheRange(c *model.Config, id string, nseq int, l kvLayout, store KVStore, pin, lo, hi int, view *history.View, pool *history.PagePool, ents []entPlane) *kvCache {
+// A block keeping a history past its rows' (planes) keeps it in a slot past
+// the blocks, hi+i for planes[i], its pages the block's positions
+// (kvCache.hs).
+func newKVCacheRange(c *model.Config, id string, nseq int, l kvLayout, store KVStore, pin, lo, hi int, view *history.View, pool *history.PagePool, hsrc []int, planes []histPlane) *kvCache {
 	if store == nil {
 		store = NoStore{}
 	}
-	n := hi + len(ents)
+	n := hi + len(planes)
 	if view == nil {
 		view = history.NewView(n)
 	}
 	kc := &kvCache{id: id, store: store, layers: make([]kvPages, n), lo: lo, kvl: l, cfg: c,
-		bh: map[int][]string{}, geom: geomDigest(c, nseq, l), view: view, pool: pool, src: make([]int, n), ent: make([]int, hi)}
+		bh: map[int][]string{}, geom: geomDigest(c, nseq, l), view: view, pool: pool, src: make([]int, n), hs: make([][]int, hi), hb: make([][]nn.HistTable, hi)}
 	for li := range kc.src {
 		kc.src[li] = li
-		if li < hi {
-			kc.src[li] = max(c.KVSource(li), 0)
+		if li < hi && li < len(hsrc) {
+			kc.src[li] = hsrc[li]
 		}
 	}
 	// A model with a layer that keeps no pages keeps its history somewhere
@@ -584,23 +589,31 @@ func newKVCacheRange(c *model.Config, id string, nseq int, l kvLayout, store KVS
 			}
 		}
 	}
-	for i, e := range ents {
+	for i, e := range planes {
 		b, s := &kc.layers[e.block], &kc.layers[hi+i]
-		kc.ent[e.block] = hi + i
+		for len(kc.hs[e.block]) < e.hist {
+			kc.hs[e.block] = append(kc.hs[e.block], 0)
+		}
+		kc.hs[e.block][e.hist-1] = hi + i
 		if b.p == 0 {
 			continue
 		}
 		s.p, s.latent, s.period = b.p, true, e.period
-		// An entries plane is held at f32 under a quantized history, its
-		// rows no head's, and under a bfloat16 one, whose halves only the
-		// block's own pools take (composer.MoreOf states the entries' none):
-		// as the CPU device composes them.
+		// A history past the rows' is held at f32 under a quantized
+		// history, its rows no head's, and under a bfloat16 one, whose
+		// halves only the block's own pools take (composer.MoreOf states
+		// the entries' none): as the CPU device composes them.
 		el := l.atLayer(c, e.block)
 		if el.quantized() || el.fmt == nn.KVBF16 {
 			el.fmt = nn.KVF32
 		}
 		s.ew, s.efmt = e.width, el.fmt
 		s.pp = el.slots(nseq * composer.History{Period: e.period}.Slots(b.p) * e.width)
+	}
+	for li := range kc.hs {
+		if len(kc.hs[li]) > 0 {
+			kc.hb[li] = make([]nn.HistTable, len(kc.hs[li]))
+		}
 	}
 	for li := range kc.layers {
 		kc.layers[li].mem = view.Pages(li, kc.layers[li].pp, kc.layers[li].latent, pool)
@@ -736,9 +749,9 @@ func (s *Instance) nextCacheID() string {
 // It gathers the pages into one contiguous run on the way out and scatters
 // them back on the way in (see gather).
 func (s *Instance) migrateKV(li, pos int, toDevice bool) bool {
-	// A KV-sharing block has no history of its own: it reads its source's,
-	// which moves with the source (fixKVGroups keeps them together).
-	if s.ld == nil || s.c.KVShared(li) {
+	// A block reading another's history has none of its own: it moves with
+	// its source (fixKVGroups keeps them together).
+	if s.ld == nil || s.readsOther(li) {
 		return true
 	}
 	pg := &s.kv.layers[li]
@@ -752,12 +765,16 @@ func (s *Instance) migrateKV(li, pos int, toDevice bool) bool {
 	if !s.moveKV(li, pos, fk, fv, from, to) {
 		return false
 	}
-	// A block keeping entries beside its rows moves them too: a device
-	// that cannot take them keeps the block where it is.
-	if e := s.kv.entOf(li); e > 0 {
+	// Every history of the block past its rows' moves with them: a device
+	// that cannot take one keeps the block where it is.
+	for h := 1; h <= s.kv.nHist(li); h++ {
+		e := s.kv.histSlot(li, h)
+		if e == 0 {
+			continue
+		}
 		ep := &s.kv.layers[e]
 		eb := make([]float32, pos/ep.period*ep.ew)
-		if from.entmig == nil || to.entmig == nil || !from.entmig.MigrateEntries(li, eb, pos, false) || !to.entmig.MigrateEntries(li, eb, pos, true) {
+		if from.histmig == nil || to.histmig == nil || !from.histmig.MigrateHistory(li, h, eb, pos, false) || !to.histmig.MigrateHistory(li, h, eb, pos, true) {
 			return false
 		}
 	}
@@ -2909,15 +2926,18 @@ func (kv *kvCache) Prepare(li, pos, nseq int) (cpudev.HistoryBinding, nn.Decline
 	}
 	b := cpudev.HistoryBinding{Pages: pages, KeyStart: pg.keyStart(pos), PagePos: pg.p}
 	b.Keys, b.Values = kvAddrs(pg)
-	if e := kv.entOf(hl); e > 0 {
+	for h := 1; h <= kv.nHist(hl); h++ {
+		e := kv.histSlot(hl, h)
+		if e == 0 {
+			continue
+		}
 		kv.owned(e, pos)
 		if err := kv.readable(e, 0, pos); err != nil {
 			return cpudev.HistoryBinding{}, nn.DeclineServes, err
 		}
-		if b.EntryPages, err = kv.table(e, nseq); err != nil {
+		if err := kv.bindHist(&b, hl, h, e, nseq); err != nil {
 			return cpudev.HistoryBinding{}, nn.DeclineServes, err
 		}
-		b.Entries, _ = kvAddrs(&kv.layers[e])
 	}
 	return b, nn.DeclineServes, nil
 }
@@ -2933,13 +2953,37 @@ func (kv *kvCache) pageErr(li, p int) error {
 	return fmt.Errorf("model: block %d's history page %d is not in its arena after its read", li, p)
 }
 
-// entOf is block li's entries plane's slot, 0 where it keeps none or its
-// rows keep no pages.
-func (kv *kvCache) entOf(li int) int {
-	if li >= len(kv.ent) || kv.ent[li] == 0 || kv.layers[kv.ent[li]].p == 0 {
+// nHist is how many histories block li keeps past its rows'.
+func (kv *kvCache) nHist(li int) int {
+	if li < 0 || li >= len(kv.hs) {
 		return 0
 	}
-	return kv.ent[li]
+	return len(kv.hs[li])
+}
+
+// histSlot is block li's history h's slot in layers, 0 where it keeps none
+// or its rows keep no pages.
+func (kv *kvCache) histSlot(li, h int) int {
+	if h < 1 || h > kv.nHist(li) {
+		return 0
+	}
+	if e := kv.hs[li][h-1]; e != 0 && kv.layers[e].p != 0 {
+		return e
+	}
+	return 0
+}
+
+// bindHist binds block li's history h, at slot e, into b
+// (cpudev.HistoryBinding.Hists).
+func (kv *kvCache) bindHist(b *cpudev.HistoryBinding, li, h, e, nseq int) error {
+	t := &kv.hb[li][h-1]
+	var err error
+	if t.Pages, err = kv.table(e, nseq); err != nil {
+		return err
+	}
+	t.Keys, _ = kvAddrs(&kv.layers[e])
+	b.Hists = kv.hb[li]
+	return nil
 }
 
 // Commit is cpudev.History's: block li's history holds the row at pos.
@@ -2947,8 +2991,11 @@ func (kv *kvCache) Commit(li, pos int) {
 	if pg := &kv.layers[kv.src[li]]; pg.p > 0 && pos+1 > pg.written {
 		pg.written = pos + 1
 	}
-	if e := kv.entOf(kv.src[li]); e > 0 && pos+1 > kv.layers[e].written {
-		kv.layers[e].written = pos + 1
+	hl := kv.src[li]
+	for h := 1; h <= kv.nHist(hl); h++ {
+		if e := kv.histSlot(hl, h); e > 0 && pos+1 > kv.layers[e].written {
+			kv.layers[e].written = pos + 1
+		}
 	}
 }
 
@@ -2962,11 +3009,12 @@ func (kv *kvCache) PrepareRows(li int, pos []int, keys int) (nn.Decline, error) 
 		return nn.DeclineServes, nil
 	}
 	start, end := pos[0], 0
-	e := kv.entOf(hl)
 	for _, p := range pos {
 		kv.owned(hl, p)
-		if e > 0 {
-			kv.owned(e, p)
+		for h := 1; h <= kv.nHist(hl); h++ {
+			if e := kv.histSlot(hl, h); e > 0 {
+				kv.owned(e, p)
+			}
 		}
 		start, end = min(start, pg.keyStart(p)), max(end, p+1)
 	}
@@ -2974,9 +3022,11 @@ func (kv *kvCache) PrepareRows(li int, pos []int, keys int) (nn.Decline, error) 
 	if end > keys {
 		return nn.DeclineNotFormed, nil
 	}
-	if e > 0 {
-		if err := kv.readable(e, 0, end-1); err != nil {
-			return nn.DeclineServes, err
+	for h := 1; h <= kv.nHist(hl); h++ {
+		if e := kv.histSlot(hl, h); e > 0 {
+			if err := kv.readable(e, 0, end-1); err != nil {
+				return nn.DeclineServes, err
+			}
 		}
 	}
 	return nn.DeclineServes, kv.readable(hl, start, end-1)
@@ -2992,11 +3042,12 @@ func (kv *kvCache) Rows(li, nseq int) (cpudev.HistoryBinding, error) {
 	}
 	b := cpudev.HistoryBinding{Pages: pages, PagePos: pg.p, Slots: max(pg.arenaSlots(), 1)}
 	b.Keys, b.Values = kvAddrs(pg)
-	if e := kv.entOf(kv.src[li]); e > 0 {
-		if b.EntryPages, err = kv.table(e, nseq); err != nil {
-			return cpudev.HistoryBinding{}, err
+	for h := 1; h <= kv.nHist(kv.src[li]); h++ {
+		if e := kv.histSlot(kv.src[li], h); e > 0 {
+			if err := kv.bindHist(&b, kv.src[li], h, e, nseq); err != nil {
+				return cpudev.HistoryBinding{}, err
+			}
 		}
-		b.Entries, _ = kvAddrs(&kv.layers[e])
 	}
 	return b, nil
 }
@@ -3018,12 +3069,12 @@ func (kv *kvCache) Spent(li int) {
 	pg.written = 0
 }
 
-// MigrateEntries is cpudev.History's: block li's entries plane, entry j of
-// the pos positions' at slot ((j+1)*period-1)%p/period of the page of
-// position (j+1)*period-1 (composer.History.Period), into or out of e. A
-// binary16 plane's rows are narrowed and widened through conv.
-func (kv *kvCache) MigrateEntries(li int, e []float32, pos int, in bool, conv nn.KVConvDevice) bool {
-	sl := kv.entOf(li)
+// MigrateHistory is cpudev.History's: block li's history hist past its rows,
+// entry j of the pos positions' at slot ((j+1)*period-1)%p/period of the
+// page of position (j+1)*period-1 (composer.History.Period), into or out of
+// e. A binary16 history's rows are narrowed and widened through conv.
+func (kv *kvCache) MigrateHistory(li, hist int, e []float32, pos int, in bool, conv nn.KVConvDevice) bool {
+	sl := kv.histSlot(li, hist)
 	if sl == 0 {
 		return false
 	}

@@ -916,10 +916,10 @@ bug	engine/device/gpu/embed.go	"the input rows' %v: %v"
 context	engine/device/gpu/embed.go	"the input rows' table: %v"
 context	engine/device/gpu/embed.go	"tier: stream %d of %d rows gathered alone: %w"
 bug	engine/device/gpu/embed.go	"tier: the input rows' per-layer inputs of %d rows, where the caller holds %d floats"
-bug	engine/device/gpu/entmove.go	"%d entries of %d floats do not fit the host's %d"
-bug	engine/device/gpu/entmove.go	"block %d keeps no entries on this device"
-bug	engine/device/gpu/entmove.go	"entry page %d is at home and holds nothing"
-bug	engine/device/gpu/entmove.go	"the sequence holds %d entry page(s) and %d positions need %d"
+bug	engine/device/gpu/histmove.go	"%d entries of %d floats do not fit the host's %d"
+bug	engine/device/gpu/histmove.go	"block %d keeps no history %d on this device"
+bug	engine/device/gpu/histmove.go	"entry page %d is at home and holds nothing"
+bug	engine/device/gpu/histmove.go	"the sequence holds %d entry page(s) and %d positions need %d"
 fault	engine/device/gpu/fault.go	"injected block failure (SetBlockFault)"	fault injection, under the jitllmfault tag
 fault	engine/device/gpu/fault.go	"injected device failure (JITLLM_DEVICE_FAIL_AT)"	fault injection, under the jitllmfault tag
 fault	engine/device/gpu/fault.go	"injected form failure (SetFormFault)"	fault injection, under the jitllmfault tag
@@ -954,7 +954,7 @@ bug	engine/device/gpu/layer.go	"%d ragged rows for %d rows of x"
 bug	engine/device/gpu/layer.go	"%d rows at position %d on a scratch of %d rows and capacity %d"
 fault	engine/device/gpu/layer.go	"%d rows on a device holding only 64-row scratch (roomFault)"	fault injection, under the jitllmfault tag
 context	engine/device/gpu/layer.go	"%w (%s)"
-bug	engine/device/gpu/layer.go	"MigrateEntries: block %d: %v"
+bug	engine/device/gpu/layer.go	"MigrateHistory: block %d history %d: %v"
 bug	engine/device/gpu/layer.go	"MigrateKV: block %d: %v"
 bug	engine/device/gpu/layer.go	"MigrateRec: block %d %s: %v"
 bug	engine/device/gpu/layer.go	"MigrateRec: block %d conv half %d: %v"
