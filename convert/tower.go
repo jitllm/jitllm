@@ -597,6 +597,8 @@ func llavaTower(s *jlm.Source) (*jlm.Tower, error) {
 // (nn.LayerNorm's epsilon) and its two matrices with GELU between. A
 // picture is "<img>", its tiles' rows, "</img>" in place of the "<image>"
 // the chat writes before the question, whose newline is the text after.
+// The tile count is between the file's vision.preproc_min_tiles and
+// vision.preproc_max_tiles.
 func internvlTower(s *jlm.Source) (*jlm.Tower, error) {
 	v := s.Vision
 	has := towerRoles(s)
@@ -631,7 +633,7 @@ func internvlTower(s *jlm.Source) (*jlm.Tower, error) {
 	t := &jlm.Tower{
 		Version: jlm.TowerVersion,
 		Pre: []jlm.PreStep{
-			{Kind: PreTile, Ints: []int32{1, 12, 1}},
+			{Kind: PreTile, Ints: []int32{int32(v.MinTiles), int32(v.MaxTiles), 1}},
 			{Kind: jlm.PreResize, Ints: []int32{side, side, int32(jlm.FilterPILBicubic), int32(jlm.PrecPIL)}},
 			{Kind: jlm.PreNormalize, Floats: []float32{v.Mean[0], v.Mean[1], v.Mean[2], v.Std[0], v.Std[1], v.Std[2]}},
 		},

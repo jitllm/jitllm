@@ -287,6 +287,41 @@ func TestLlavaStatesItsTower(t *testing.T) {
 	}
 }
 
+// TestInternVLTilesAreTheFiles holds InternVL's tiling step to the bounds
+// the file states rather than the reference's defaults: the same two files,
+// their bounds moved to 2..6, cut into between 2 and 6 tiles.
+func TestInternVLTilesAreTheFiles(t *testing.T) {
+	src := testmodels.Path("vlm/InternVL3-1B-Instruct-Q8_0.gguf")
+	mm := testmodels.Path("vlm/mmproj-InternVL3-1B-Instruct-Q8_0.gguf")
+	for _, p := range []string{src, mm} {
+		if _, err := os.Stat(p); err != nil {
+			testmodels.Missing(t, "MODEL MISSING: %v (see docs/testing.md) -- this gate proved nothing", err)
+		}
+	}
+	gf, err := gguf.Open(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gf.Close()
+	vf, err := gguf.Open(mm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer vf.Close()
+	s, err := buildGGUF(gf, vf, src, mm, options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Vision.MinTiles, s.Vision.MaxTiles = 2, 6
+	tw, err := internvlTower(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tw.Pre) == 0 || tw.Pre[0].Kind != PreTile || !reflect.DeepEqual(tw.Pre[0].Ints, []int32{2, 6, 1}) {
+		t.Errorf("the tiling step is %+v, want 2 to 6 tiles and a thumbnail", tw.Pre)
+	}
+}
+
 // TestInternVLStatesItsTower converts InternVL3-1B's two files and holds the
 // stated tower to the reference's load_image and InternVLChatModel: between
 // 1 and 12 tiles and a thumbnail, Pillow's bicubic to the tower's square;
