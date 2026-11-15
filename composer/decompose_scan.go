@@ -38,19 +38,52 @@ func (x *exprs) groupHead(h, H, KH int) int {
 	return x.op(OpDiv, U, h, x.u(uint32(H/KH)))
 }
 
+// cycleHead is head h's place in a cycle of KH: h mod KH.
+func (x *exprs) cycleHead(h, KH int) int {
+	U := ir.U32
+	if KH == 1 {
+		return x.u(0)
+	}
+	if KH&(KH-1) == 0 {
+		return x.op(OpAnd, U, h, x.u(uint32(KH-1)))
+	}
+	return x.op(OpRem, U, h, x.u(uint32(KH)))
+}
+
+// heads is a scan's head h's group and cycle, each formed when first read.
+type heads struct {
+	x               *exprs
+	h, H, KH        int
+	group, cycle    int
+	grouped, cycled bool
+}
+
+func (k *heads) of(m graph.ScanAxis) int {
+	if m&graph.ScanCycle != 0 {
+		if !k.cycled {
+			k.cycle, k.cycled = k.x.cycleHead(k.h, k.KH), true
+		}
+		return k.cycle
+	}
+	if !k.grouped {
+		k.group, k.grouped = k.x.groupHead(k.h, k.H, k.KH), true
+	}
+	return k.group
+}
+
 // scanShape is a scan's state: H heads in KH groups, each Dv rows by Dk
 // columns, N floats.
 type scanShape struct{ H, KH, Dv, Dk, N int }
 
 // operand is input j, along axes m, at row r of rows and state element
-// (h, v, i), the group head kh gives.
-func (s scanShape) operand(x *exprs, j int, m graph.ScanAxis, rows, r, h, v, i int, kh func() int) int {
+// (h, v, i), h's group or cycle as kh gives it.
+func (s scanShape) operand(x *exprs, j int, m graph.ScanAxis, rows, r, h, v, i int, kh *heads) int {
 	ext, ax := []int{rows}, []int{r}
 	if m&graph.ScanHead != 0 {
 		ext, ax = append(ext, s.H), append(ax, h)
 	}
-	if m&graph.ScanGroup != 0 {
-		ext, ax = append(ext, s.KH), append(ax, kh())
+	if m&(graph.ScanGroup|graph.ScanCycle) != 0 {
+		ext, ax = append(ext, s.KH), append(ax, kh.of(m))
 	}
 	if m&graph.ScanRow != 0 {
 		ext, ax = append(ext, s.Dv), append(ax, v)
@@ -167,13 +200,7 @@ func scanRow(o graph.Op, c *Context, s scanShape) ([]Prim, error) {
 			return len(in) - 1
 		}
 		r, h, j, i := x.coord(0), x.coord(1), x.coord(2), x.coord(3)
-		kh := -1
-		group := func() int {
-			if kh < 0 {
-				kh = x.groupHead(h, s.H, s.KH)
-			}
-			return kh
-		}
+		group := &heads{x: &x, h: h, H: s.H, KH: s.KH}
 		var f Facts
 		st := -1
 		e := &scanTerms{x: &x, o: o, vals: map[int]int{}}
@@ -275,13 +302,7 @@ func scanRows(o graph.Op, c *Context, s scanShape) ([]Prim, error) {
 	}
 	var x exprs
 	h, j, i, r, run := x.coord(0), x.coord(1), x.coord(2), x.coord(3), x.coord(4)
-	kh := -1
-	group := func() int {
-		if kh < 0 {
-			kh = x.groupHead(h, s.H, s.KH)
-		}
-		return kh
-	}
+	group := &heads{x: &x, h: h, H: s.H, KH: s.KH}
 	start := x.op(OpMul, U, x.op(OpAdd, U, x.op(OpMul, U, h, x.u(uint32(s.Dv))), j), x.u(uint32(s.Dk)))
 	place := x.op(OpAdd, U, start, i)
 	slot := func(w int) int {
