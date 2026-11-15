@@ -16,7 +16,7 @@ func (s *Instance) kvArenaFor(li, pp int, latent bool, minSlots int) (*history.A
 // maxSeq positions (history.Pages.UseArena). A layer with no history keeps
 // none, and a layer whose pages are already held keeps them where they are.
 func (s *kvPages) useArena(li, maxSeq int, arenaFor func(li, pp int, latent bool, minSlots int) (*history.Arena, error)) error {
-	if s.p == 0 || maxSeq <= 0 || s.mem.Table() != nil {
+	if s.p == 0 || s.pp == 0 || maxSeq <= 0 || s.mem.Table() != nil {
 		return nil
 	}
 	for n := range s.mem.Len() {

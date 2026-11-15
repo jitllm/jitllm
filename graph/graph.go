@@ -901,20 +901,74 @@ func (r StateRef) String() string {
 	return s
 }
 
-// ReadsHistoryOf is the block whose history g reads in place of one of its
-// own (a StateKV naming another block), -1 where it reads none but its own.
-func (g *Graph) ReadsHistoryOf() int {
+// ReadsHistoryOf is the block whose history g reads in place of its own (a
+// StateKV naming another block), -1 where it reads only its own. A block
+// either keeps its rows' history or reads one other block's: an error names
+// a graph reading another block's history past its rows', reading two
+// blocks', or reading another's beside any history of its own.
+func (g *Graph) ReadsHistoryOf() (int, error) {
 	if g == nil {
-		return -1
+		return -1, nil
 	}
+	n, own := -1, -1
 	for _, o := range g.Ops {
+		if o.Kind == OpKVAppend && own < 0 {
+			for _, w := range o.Writes {
+				if w.State == StateKV && w.From == 0 {
+					own = int(w.Hist)
+				}
+			}
+		}
 		for _, r := range o.Reads {
-			if r.State == StateKV && r.From > 0 {
-				return r.From - 1
+			if r.State != StateKV || r.From == 0 {
+				continue
+			}
+			switch b := int(r.From) - 1; {
+			case r.Hist != 0:
+				return -1, fmt.Errorf("block %d reads history %d of block %d: a block reads only another's rows' history", g.Block, r.Hist, b)
+			case n >= 0 && n != b:
+				return -1, fmt.Errorf("block %d reads the histories of blocks %d and %d: a block reads one other block's", g.Block, n, b)
+			default:
+				n = b
 			}
 		}
 	}
-	return -1
+	if n >= 0 && own >= 0 {
+		return -1, fmt.Errorf("block %d appends history %d of its own and reads block %d's", g.Block, own, n)
+	}
+	return n, nil
+}
+
+// KeptHistory is a history a block keeps past its rows' (history 0), as
+// its graph's append to it states it: an entry each Period positions,
+// Width floats wide, its values its keys where the append's are.
+type KeptHistory struct {
+	Hist, Period, Width int
+	ValuesInKeys        bool
+}
+
+// KeptHistories is every history past its rows' that g appends to, in the
+// order of their indices; an index g appends to twice is listed once.
+func (g *Graph) KeptHistories() []KeptHistory {
+	if g == nil {
+		return nil
+	}
+	var out []KeptHistory
+	for _, o := range g.Ops {
+		if o.Kind != OpKVAppend || len(o.Writes) != 1 || o.Writes[0].Hist == 0 || o.Writes[0].From != 0 {
+			continue
+		}
+		k := KeptHistory{Hist: int(o.Writes[0].Hist), Period: max(1, o.Attr.Span), Width: g.Values[o.In[0]].Width, ValuesInKeys: o.In[0] == o.In[1]}
+		i := 0
+		for i < len(out) && out[i].Hist < k.Hist {
+			i++
+		}
+		if i < len(out) && out[i].Hist == k.Hist {
+			continue
+		}
+		out = append(out[:i], append([]KeptHistory{k}, out[i:]...)...)
+	}
+	return out
 }
 
 // key is the state r names, whatever its version.

@@ -627,7 +627,11 @@ func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOp
 		residFold: opt.residFold, opt: opt, eng: g}
 	s.own = s.Session
 	s.own.on = s
-	s.histOf = historySources(m, hi)
+	hist, err := historySources(m, hi)
+	if err != nil {
+		return nil, err
+	}
+	s.histOf = hist
 	if err := m.BindDense(fr, &s.dense); err != nil {
 		return nil, err
 	}

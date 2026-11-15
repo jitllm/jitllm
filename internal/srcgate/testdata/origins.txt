@@ -979,6 +979,7 @@ bug	engine/device/gpu/layer.go	"a submission that must run alone was prepared to
 bug	engine/device/gpu/layer.go	"an empty block range [%d,%d) with no head"
 bug	engine/device/gpu/layer.go	"an output bias of %d for a %d-row projection"
 bug	engine/device/gpu/layer.go	"batch n=%d width=%d head=%v"
+refusal	engine/device/gpu/layer.go	"block %d keeps history %d (values in its keys: %v): the card holds one history past a block's rows, its values its keys"	the served and streamed forms bind history 1 alone, keys only; a second, or one with values, is declined by name until they bind N
 bug	engine/device/gpu/layer.go	"block %d attends to block %d's history, which is not on this device"
 bug	engine/device/gpu/layer.go	"block %d is not on this device"
 bug	engine/device/gpu/layer.go	"block %d is paged out"
@@ -1387,6 +1388,7 @@ input	engine/placeset.go	"model: block %d is pinned to its device"
 fault	engine/placeset.go	"model: block %d's history would not come home"
 fault	engine/placeset.go	"model: block %d's history would not move to the device"
 input	engine/placeset.go	"model: no device attached (SetDevice first)"
+refusal	engine/plerun.go	"block %d's history %d appends values of their own: a history past a block's rows' holds its keys only"	a history past the rows' binds a key table alone (nn.HistTable); one with values of their own needs a value table on both tiers
 input	engine/prefill.go	"model: Prefill called with no tokens"
 input	engine/prefill.go	"model: PrefillMixed: span %d is %d floats, not a multiple of n_embd %d"
 input	engine/prefill.go	"model: PrefillMixed: span %d names %d token ids for %d rows"
@@ -1838,6 +1840,9 @@ input	graph/stated.go	"the expression reads %v, which the block does not store"
 input	graph/streams.go	"a read of the per-layer inputs in a block that has none"
 context	graph/streams.go	"stream %d's write: %w"
 context	graph/streams.go	"what the writes share: %w"
+refusal	graph/graph.go	"block %d reads history %d of block %d: a block reads only another's rows' history"	a block reads its own rows' history or one other block's in its place; both tiers bind that shape alone
+refusal	graph/graph.go	"block %d reads the histories of blocks %d and %d: a block reads one other block's"	a block reads its own rows' history or one other block's in its place; both tiers bind that shape alone
+refusal	graph/graph.go	"block %d appends history %d of its own and reads block %d's"	a block reads its own rows' history or one other block's in its place; both tiers bind that shape alone
 input	graph/verify.go	"%s: %%%s is of %d rows, %%%s of %d"
 input	graph/verify.go	"%s: %d heads in %d groups of %d, blocks of %d, %d kept, %d local"
 input	graph/verify.go	"%s: %d histories, the second an entry each %d positions of %d words"

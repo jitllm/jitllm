@@ -242,7 +242,7 @@ func (s *Instance) specOf(li int, g *graph.Graph) nn.BlockSpec {
 			}
 		}
 	}
-	pg := &s.kv.layers[li]
+	pg := &s.kv.layers[s.histSrc(li)]
 	page := max(pg.p, 1)
 	p.Formats, p.Strides = formats, s.m.CpuStrides(s.fr, li, g)
 	p.Page, p.Keys, p.ActWindow, p.Seqs = page, max(pg.arenaSlots(), 1)*page, s.m.ActWindow, 1
