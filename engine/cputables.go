@@ -31,8 +31,9 @@ func (s *Instance) tableGraphs() []*graph.Graph {
 }
 
 // axesPlanes is the planes of the instance's rotary over several position
-// axes, for a device (nn.LayerPlan.RopeTabAxes): the model's, none on a
-// tower's, whose rotary is a grid table (gridPlanes).
+// axes, its first table's (nn.LayerPlan.RopeTabs): the model's, none on a
+// tower's, whose rotary is a grid table (gridPlanes), nor on a rotary of
+// one position.
 func (s *Instance) axesPlanes() []float32 {
 	if s.towered() {
 		return nil

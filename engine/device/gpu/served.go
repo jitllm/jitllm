@@ -1893,17 +1893,6 @@ func ropeIndex(gr *graph.Graph) (int, bool) {
 	return 0, false
 }
 
-// tableAxes says gr is a table over several position axes, which reads each
-// row's positions on them (rope.pos.axes) rather than one (rope.pos).
-func tableAxes(gr *graph.Graph) bool {
-	for _, o := range gr.Ops {
-		if o.Kind == graph.OpRopeTable && len(o.Attr.Axes) != 0 {
-			return true
-		}
-	}
-	return false
-}
-
 // servedTable is a call's rotary table gr served at R rows: writing cs, its
 // planes those the tier folded for it and its positions pos, the live row
 // count and then each row's (four a row over several axes).
@@ -1989,14 +1978,11 @@ func scratchTable(bs *blockScratch, p *nn.LayerPlan, i int) *graph.Graph {
 }
 
 // tableBinds is what table i of bs writes and reads: the first table cs or
-// a further one, its planes, and its positions (rope.pos, or over several
-// axes rope.pos.axes).
+// a further one, its planes (folded over its axes where it has several),
+// and its rows.
 func (g *devTier) tableBinds(bs *blockScratch, i int) (cs, planes, rows backend.Buf) {
 	if i > 0 {
 		return bs.csAt[i], bs.ropeTabAt[i], bs.ropeRows
-	}
-	if gr := scratchTable(bs, &bs.p, 0); gr != nil && tableAxes(gr) {
-		return bs.cs, bs.ropeTabAxes, bs.ropeRows
 	}
 	return bs.cs, bs.ropeTab, bs.ropeRows
 }

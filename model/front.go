@@ -181,10 +181,11 @@ type frontSet struct {
 
 // frontKey is what a set's graphs were built from beside the container.
 type frontKey struct {
-	cfg           *Config
-	head          headKey
-	rope, ropeSWA ropeKey
-	restated      int
+	cfg      *Config
+	head     headKey
+	rope     ropeKey
+	ropes    [nn.MaxRopeTables - 1]ropeKey
+	restated int
 }
 
 // headKey is what the head's graph reads of the config: a test that sets one
@@ -270,12 +271,12 @@ func (c Composing) HeadGraph() *graph.Graph { return c.m.FrontGraphs().Head }
 
 func (c Composing) EmbedGraph() *graph.Graph { return c.m.FrontGraphs().Embed }
 
-// Rotaries is the model's rotary, then its sliding layers' where it trains
-// two: the tables the blocks' rotaries turn by.
+// Rotaries is the model's rotary, then each further one (Model.Ropes): the
+// tables the blocks' rotaries turn by.
 func (c Composing) Rotaries() []graph.Rotary {
 	out := []graph.Rotary{c.m.rotaryOf(c.m.Rope)}
-	if c.m.RopeSWA != nil {
-		out = append(out, c.m.rotaryOf(*c.m.RopeSWA))
+	for _, r := range c.m.Ropes {
+		out = append(out, c.m.rotaryOf(r))
 	}
 	return out
 }
@@ -356,7 +357,10 @@ func (m *Model) FrontGraphs() *frontSet {
 	f := &m.Front
 	f.Mu.Lock()
 	defer f.Mu.Unlock()
-	k := frontKey{cfg: m.Cfg, head: headKeyOf(m.Cfg), rope: ropeKeyOf(&m.Rope), ropeSWA: ropeKeyOf(m.RopeSWA), restated: f.Restated}
+	k := frontKey{cfg: m.Cfg, head: headKeyOf(m.Cfg), rope: ropeKeyOf(&m.Rope), restated: f.Restated}
+	for i := range min(len(m.Ropes), len(k.ropes)) {
+		k.ropes[i] = ropeKeyOf(&m.Ropes[i])
+	}
 	if f.Set != nil && f.Set.key == k {
 		return f.Set
 	}
@@ -549,8 +553,8 @@ func (m *Model) Stores(li int, role jlm.Role) bool {
 // ropeAt is the rotary layer li turns by: the sliding layers' where the
 // model trains two and li slides, the model's own otherwise.
 func (m *Model) ropeAt(li int) nn.Rope {
-	if m.RopeSWA != nil && m.Cfg.ropeLocal(li) {
-		return *m.RopeSWA
+	if len(m.Ropes) > 0 && m.Cfg.ropeLocal(li) {
+		return m.Ropes[0]
 	}
 	return m.Rope
 }

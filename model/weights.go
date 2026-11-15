@@ -228,21 +228,18 @@ func (m *Model) RopeMarksCap(maxSeq int) int {
 
 // cpuTablePlanes is rotary table i's planes as its composed form reads them
 // (composer.TablePlanes) for an instance of context ctx: its rotary's
-// (RopeFor) for the first, the sliding blocks' (RopeSWA) for the second,
-// folded over its axes where it has several; nil where the model has no such
+// (RopeFor) for the first, each further one's (Model.Ropes) past it, folded
+// over its axes where it has several; nil where the model has no such
 // rotary.
 func (m *Model) CpuTablePlanes(i, ctx int) []float32 {
 	r := m.RopeFor(ctx)
+	nrot := m.Cfg.NRot
 	if i > 0 {
-		// The container states two rotaries at most (RopeBaseSWA).
-		if i > 1 || m.RopeSWA == nil {
+		if i > len(m.Ropes) {
 			return nil
 		}
-		r = m.RopeSWA
-	}
-	nrot := m.Cfg.NRot
-	if i == 1 {
-		nrot = m.Cfg.LocalNRot()
+		r = &m.Ropes[i-1]
+		nrot = r.NRot
 	}
 	if len(r.Runs) > 0 {
 		return RopeAxesPlanes(r)

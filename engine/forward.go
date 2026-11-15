@@ -969,14 +969,13 @@ func (s *Instance) SetDeviceLayers(d nn.LayerDevice, max int) error {
 		// so the device builds its own and the two tiers agree by
 		// construction.
 		RopeTabs: s.ropeTabs(),
-		// The tables as the front end states them, and a multi-axis
-		// rotary's planes, for a device that serves them (front.go).
-		Tables:      s.tableGraphs(),
-		RopeTabAxes: s.axesPlanes(),
-		GridPlanes:  s.gridPlanes(),
-		RopeMarks:   s.marksCap(),
-		Rotaries:    s.rotaries(),
-		RopePairs:   c.RopePairs,
+		// The tables as the front end states them, for a device that
+		// serves them (front.go).
+		Tables:     s.tableGraphs(),
+		GridPlanes: s.gridPlanes(),
+		RopeMarks:  s.marksCap(),
+		Rotaries:   s.rotaries(),
+		RopePairs:  c.RopePairs,
 		// The sliding window itself (TestSlidingWindowRunsOnTheDevice).
 		SWAWindow: windowFor(c, s.maxSeq),
 		// Zero for a dense model, which is what makes every existing plan
@@ -3303,7 +3302,11 @@ func (s *Instance) batchTables(n int) nn.RopeTables {
 // (nn.LayerPlan.RopeTabs): the model's rotary at the instance's context
 // first, then each further rotary's.
 func (s *Instance) ropeTabs() [][]float32 {
-	out := [][]float32{model.RopeTabPlanes(s.m.RopeFor(s.maxSeq), s.c.NRot)}
+	first := s.axesPlanes()
+	if first == nil {
+		first = model.RopeTabPlanes(s.m.RopeFor(s.maxSeq), s.c.NRot)
+	}
+	out := [][]float32{first}
 	for i := 1; i < nn.MaxRopeTables && s.tabW[i] > 0; i++ {
 		out = append(out, s.m.CpuTablePlanes(i, s.maxSeq))
 	}

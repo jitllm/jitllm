@@ -37,8 +37,8 @@ func gemma4Fixtures() []struct {
 			ok := c.MixedGeom() && c.HeadDim == 32 && c.HeadDimAt(0) == 16 &&
 				c.NKVHead == 1 && c.NKVHeadAt(0) == 2 && c.NRot == 32 && c.NRotAt(0) == 16 &&
 				c.VNorm && c.AttnScale == 1 && c.RopeNeox && c.QKNorm && c.SWAWindow == 4 &&
-				c.SWAPeriod == 3 && c.FinalSoftcap == 30 && c.TiedEmbd && m.RopeSWA != nil &&
-				len(m.Rope.Freqs) == c.HeadDim/2 && m.RopeSWA.Freqs == nil
+				c.SWAPeriod == 3 && c.FinalSoftcap == 30 && c.TiedEmbd && len(m.Ropes) == 1 &&
+				len(m.Rope.Freqs) == c.HeadDim/2 && m.Ropes[0].Freqs == nil
 			for i := range m.Layers {
 				l := &m.Layers[i]
 				ok = ok && l.VFromK == !c.SWA(i) && len(l.OutScaleRow) == 1 && l.OutScaleRow[0] != 0 && l.OutScaleRow[0] != 1 &&
@@ -195,7 +195,7 @@ func noLayerScalar(m *model.Model) func() {
 func globalRopeIsLocal(m *model.Model) func() {
 	undo := builtGraphs(m)
 	was := m.Rope
-	m.Rope.Base, m.Rope.Freqs = m.RopeSWA.Base, nil
+	m.Rope.Base, m.Rope.Freqs = m.Ropes[0].Base, nil
 	return func() { m.Rope = was; undo() }
 }
 

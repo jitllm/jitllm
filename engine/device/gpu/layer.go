@@ -1315,10 +1315,6 @@ type blockScratch struct {
 	// uploaded once (initRopePlanes).
 	ropeTab   backend.Buf
 	ropeTabAt [nn.MaxRopeTables]backend.Buf
-	// ropeTabAxes and rposAxes are what the composer's table over several
-	// position axes reads (nn.LayerPlan.RopeTabAxes): its planes, and the
-	// live row count then each row's four positions.
-	ropeTabAxes, rposAxes backend.Buf
 	// ropeRows is the call's rows as the composed rotary tables read them
 	// (ropeRowsWords): two words a row past the count. rowPos is their
 	// positions as a block reads them (rowPosWords).
@@ -2086,30 +2082,6 @@ func (g *devTier) initRopePlanes(bs *blockScratch, p *nn.LayerPlan, rows int) er
 	return nil
 }
 
-// initRopeAxes holds what the composer's table over several position axes
-// reads where the plan has one (RopeTabAxes): its planes, uploaded once, and
-// the rows' positions, staged every call.
-func (g *devTier) initRopeAxes(bs *blockScratch, p *nn.LayerPlan, rows int) error {
-	if len(p.RopeTabAxes) == 0 || gridded(p) || p.NRot <= 0 || bs.cs == nil {
-		return nil
-	}
-	b, err := g.dev.Alloc(len(p.RopeTabAxes) * 4)
-	if err != nil {
-		return err
-	}
-	if err := b.Write(f32b(p.RopeTabAxes)); err != nil {
-		b.Free()
-		return err
-	}
-	a, err := g.dev.Alloc((1 + 4*rows) * 4)
-	if err != nil {
-		b.Free()
-		return err
-	}
-	bs.ropeTabAxes, bs.rposAxes = b, a
-	return nil
-}
-
 // initRopeRows holds the rows the composed rotary tables read (ropeRowsWords),
 // staged every call, and makes the device's marks arena (markArena).
 func (g *devTier) initRopeRows(bs *blockScratch, p *nn.LayerPlan, rows int) error {
@@ -2213,9 +2185,6 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 	}
 	if err == nil {
 		err = g.initRopePlanes(bs, p, rows)
-	}
-	if err == nil {
-		err = g.initRopeAxes(bs, p, rows)
 	}
 	if err == nil {
 		err = g.initRopeRows(bs, p, rows)
