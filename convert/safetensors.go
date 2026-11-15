@@ -1344,8 +1344,10 @@ func hfCheckShape(e *jlm.Tensor, c *Config) error {
 			return want(embd, 2*qrows)
 		}
 		return want(embd, qrows)
-	case jlm.RoleAttnK, jlm.RoleAttnV:
+	case jlm.RoleAttnK:
 		return want(embd, kvrows)
+	case jlm.RoleAttnV:
+		return want(embd, uint64(c.NKVHead)*uint64(hfHeadDimV(c)))
 	case jlm.RoleAttnOut:
 		return want(vrows, embd)
 
