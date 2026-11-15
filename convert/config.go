@@ -969,9 +969,9 @@ func llama4Config(f *meta.File, c *Config) error {
 	}
 	// The router: top-1 sigmoid, not renormalised, weighting the expert's input
 	// (literals in llama.cpp's build_moe_ffn call for this arch).
-	c.Flags |= jlm.FlagExpertSigmoid | jlm.FlagNoExpertNorm | jlm.FlagExpertWeightIn
+	c.Flags |= jlm.FlagExpertSigmoid | jlm.FlagExpertWeightIn
 	c.MoEStep = uint32(f.UintKey("interleave_moe_layer_step", 1))
-	return nil
+	return neverRenormalises(f, c, "Llama 4's router")
 }
 
 // ropeScalingOf reads the rotary scaling keys into c.

@@ -93,7 +93,10 @@ func requireQKNorm(f *meta.File, who string) error {
 // inputs therefore differ by that number on the real model; the safetensors
 // path reads the class's.
 func phimoeConfig(f *meta.File, c *Config) error {
-	c.Flags |= jlm.FlagLayerNorm | jlm.FlagRopeNeox | jlm.FlagNoExpertNorm
+	c.Flags |= jlm.FlagLayerNorm | jlm.FlagRopeNeox
+	if err := neverRenormalises(f, c, "PhiMoE's sparsemixer"); err != nil {
+		return err
+	}
 	// A head narrower than embedding/heads (Phi-tiny-MoE's 128 against
 	// 4096/16) is stated only by head_dim in config.json, and llama.cpp's
 	// phimoe converter writes no attention.key_length: such a file says 256

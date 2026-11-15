@@ -44,16 +44,23 @@ func mamba1Config(f *meta.File, c *Config) error {
 	c.Flags |= jlm.FlagNoPosEnc
 	if c.Arch == ArchJamba {
 		// JambaSparseMoeBlock takes the top-k of the softmax and never
-		// renormalises; llama.cpp's builder passes false as a literal. A file
-		// stating otherwise describes a model neither runs.
-		if kv, ok := f.Key("expert_weights_norm"); ok {
-			if v, _ := kv.Uint(); v != 0 {
-				return fmt.Errorf("expert_weights_norm true, and Jamba's router does not "+
-					"renormalise: %w", ErrNotImplemented)
-			}
-		}
-		c.Flags |= jlm.FlagNoExpertNorm
+		// renormalises.
+		return neverRenormalises(f, c, "Jamba's router")
 	}
+	return nil
+}
+
+// neverRenormalises states a router that never renormalises its weights
+// (llama.cpp's builder passes false as a literal), refusing a file whose
+// expert_weights_norm says otherwise: it describes a model neither
+// reference runs, and the generic reading would obey it.
+func neverRenormalises(f *meta.File, c *Config, router string) error {
+	if kv, ok := f.Key("expert_weights_norm"); ok {
+		if v, _ := kv.Uint(); v != 0 {
+			return fmt.Errorf("expert_weights_norm true, and %s does not renormalise: %w", router, ErrNotImplemented)
+		}
+	}
+	c.Flags |= jlm.FlagNoExpertNorm
 	return nil
 }
 
