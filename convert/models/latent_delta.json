@@ -61,7 +61,7 @@
       {"op": "matvec", "if": "(not linear) and (stored('attn_gate'))", "in": "n", "w": "attn_gate", "rows": "heads * v_head_dim", "out": "ag"},
       {"op": "sigmoid_mul", "if": "(not linear) and (stored('attn_gate'))", "name": "att.gated", "in": ["ag", "o"], "out": "o"},
       {"op": "matvec", "in": "o", "w": ["attn_output", "attn_output.bias?"], "rows": "embd", "out": "o", "if": "not linear"},
-      {"op": "add", "in": ["x", "o"], "alpha": "residual_scale", "out": "h"},
+      {"op": "add", "if": "not (streams > 1 and attn_join)", "in": ["x", "o"], "alpha": "residual_scale", "out": "h"},
       {"op": "stream_join", "if": "streams > 1 and attn_join", "of": "attn", "streams": "xs", "in": ["x", "o"], "out": "h"},
       {"op": "let", "in": "h", "out": "fi"},
       {"op": "stream_read", "if": "streams > 1", "of": "ffn", "streams": "xs", "in": ["x", "h"], "out": "fi"},

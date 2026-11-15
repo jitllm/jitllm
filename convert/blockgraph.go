@@ -41,8 +41,9 @@ type mjUse struct {
 const blockExprSteps = 1 << 12
 
 // mjBlockOp is one op of a block. Op names the step: in, norm, layer_norm,
-// head_norm, matvec, add, rope, rope_table, kv_append, kv_from, attend, act,
-// stated, emit, split_sum, mark, routed, each, concat or out (graphSteps).
+// head_norm, matvec, add, rope, rope_table, kv_append, kv_from, history_pool,
+// attend, act, stated, emit, split_sum, mark, routed, each, concat or out
+// (graphSteps).
 type mjBlockOp struct {
 	Op string `json:"op"`
 	// If, where set, is an expression: the op is the block's where it holds.
@@ -210,6 +211,7 @@ func graphSteps() map[string][4]int {
 		"add":           {2, 2, 0, 0},
 		"rope":          {1, 2, 0, 0},
 		"rope_table":    {0, 0, 0, 0},
+		"history_pool":  {0, 0, 0, 0},
 		"kv_append":     {2, 2, 0, 0},
 		"kv_from":       {0, 0, 0, 0},
 		"attend":        {1, 2, 0, -1},
@@ -302,7 +304,7 @@ func (g *mjGraph) checkOps(ops []mjBlockOp, named map[string]bool, runs []string
 				return fmt.Errorf("op %d (%s) reads %q before an op names it", i, o.Op, v)
 			}
 		}
-		if (o.Op == "attend" || o.Op == "select") && len(o.Hist) == 0 {
+		if (o.Op == "attend" || o.Op == "select" || o.Op == "history_pool") && len(o.Hist) == 0 {
 			return fmt.Errorf("op %d (%s) names no history", i, o.Op)
 		}
 		for _, h := range o.Hist {
@@ -895,6 +897,21 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, used []*mjGr
 				vals[o.Out] = outs[0]
 			}
 			continue
+		case "history_pool":
+			if len(reads) != 1 || len(o.Bind) != 1 || len(o.Outs) != 1 {
+				return nil, fmt.Errorf("op %d's history pool reads %d histories through %d bias tables into %d results, not one of each",
+					i, len(reads), len(o.Bind), len(o.Outs))
+			}
+			a, err := overridden(graph.Attrs{}, g, o, vars)
+			if err != nil {
+				return nil, fmt.Errorf("op %d (history_pool): %w", i, err)
+			}
+			width, err := num(o.Outs[0].Width)
+			if err != nil {
+				return nil, err
+			}
+			bias, _ := blockRole(strings.TrimSuffix(o.Bind[0].W, "?"))
+			y = b.HistoryPool(reads[0], a, bias, int(width))
 		case "split_sum":
 			parts, err := num(o.Parts)
 			if err != nil {
