@@ -2071,16 +2071,16 @@ func (s *Instance) planFor(li int) *nn.LayerPlan {
 		plan.ExpLatent = w
 	}
 	if c.NonCausal && (s.m.IsEmbedding() || c.Head != nil || s.m.Tower != nil && li >= s.m.TowerBase) {
-		// A bidirectional decoder (EmbeddingGemma) and a tower: their blocks
-		// are non-causal blocks, as an encoder's are -- the sequence (a
-		// picture's rows) one call, every row over the call's rows, a sliding
-		// layer inside each row's symmetric window (nn.RowWindowDevice;
-		// embedstate.go's embedTell). The row windows
-		// are the window, so the causal one (SWAWindow) is off: with both, a
-		// 600-row sequence read NaN past the causal window's 512 rows.
+		// A bidirectional decoder and a tower: their blocks are non-causal
+		// blocks, as an encoder's are -- the sequence (a picture's rows) one
+		// call, every row over the call's rows. A window the attention
+		// states with Bidir is the form's own (symmetric about each row); a
+		// block whose attention reads row windows reads the call's
+		// (nn.RowWindowDevice). The causal window (SWAWindow) is off: with
+		// both, a 600-row sequence read NaN past the causal window's 512 rows.
 		plan.NonCausal = true
 		plan.Tower = s.m.Tower != nil && li >= s.m.TowerBase
-		plan.Windowed = c.SWA(li)
+		plan.Windowed = readsRowWindows(plan.Graph)
 		plan.SWAWindow = 0
 	}
 	// What the block is composed from, for a device that composes it so.

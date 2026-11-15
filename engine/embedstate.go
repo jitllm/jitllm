@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/nn"
 )
 
@@ -33,10 +34,9 @@ type embedMode struct {
 	raw  bool
 	norm float32
 	// req is the request words a marker head's readout reads (Instance.req).
-	req  []uint32
-	wins []nn.KeyRun
+	req []uint32
 	// rowWins is each row's window where the run states them (a windowed
-	// tower's, TowerBlock.Window), nil where the sliding window says them.
+	// tower's, TowerBlock.Window); nil where the blocks read none.
 	rowWins []nn.KeyRun
 	// rows keeps every row of the last block's, unnormed, in out (a tower's
 	// run: its head reads them), in place of a pooled readout.
@@ -115,38 +115,18 @@ func (e *embedMode) collect(s *Instance, base, n int) error {
 	return nil
 }
 
-// symmetricWindow is a bidirectional sliding window: the keys within window/2
-// of pos on either side, clipped to the sequence. It is llama.cpp's
-// LLAMA_SWA_TYPE_SYMMETRIC and transformers' |q - kv| < sliding_window for
-// EmbeddingGemma, whose GGUF carries 512 where its config.json carries 257 --
-// both are "256 either side".
-func symmetricWindow(pos, total, window int) (w0, an int) {
-	half := window / 2
-	w0 = max(0, pos-half)
-	end := min(total, pos+half+1)
-	return w0, end - w0
-}
-
-// embedWins is each of a bidirectional embedding run's n rows' windows: its
-// symmetric window on the sliding layers, every row's keys the call's on the
-// others, the run's own where it states them.
-func (s *Instance) embedWins(n int) []nn.KeyRun {
-	if s.emb.rowWins != nil {
-		return s.emb.rowWins
+// readsRowWindows says gr's attention reads each row's window from the call
+// (graph.Attrs.RowWindows).
+func readsRowWindows(gr *graph.Graph) bool {
+	if gr == nil {
+		return false
 	}
-	c := s.c
-	if cap(s.emb.wins) < n {
-		s.emb.wins = make([]nn.KeyRun, n)
-	}
-	wins := s.emb.wins[:n]
-	for i := range wins {
-		lo, an := 0, n
-		if c.SWAWindow > 0 {
-			lo, an = symmetricWindow(i, n, int(c.SWAWindow))
+	for _, o := range gr.Ops {
+		if o.Kind == graph.OpAttend && o.Attr.RowWindows {
+			return true
 		}
-		wins[i] = nn.KeyRun{Lo: lo, Hi: lo + an}
 	}
-	return wins
+	return false
 }
 
 // embedPrefill runs ids from position zero and leaves the composer's readout

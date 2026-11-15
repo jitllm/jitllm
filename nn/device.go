@@ -1067,9 +1067,10 @@ type KeyRunDevice interface {
 
 // RowWindowDevice is an optional LayerDevice that takes one window a row for
 // the NonCausal calls that follow, until replaced: row r attends inside
-// wins[r] on its Windowed blocks. A symmetric sliding window (ModernBERT's
-// local layers) is this; its rows' windows overlap, so it is not a partition
-// KeyRunDevice can state. It replaces whatever runs SetKeyRuns gave, and
+// wins[r] on its Windowed blocks (an attention stating RowWindows); the rows'
+// windows may overlap, so they are not a partition KeyRunDevice can state. A
+// window an attention states with Bidir is not this: the block's form clips
+// each row's keys to it. It replaces whatever runs SetKeyRuns gave, and
 // false is a device that cannot take them.
 type RowWindowDevice interface {
 	SetRowWindows(wins []KeyRun)

@@ -41,9 +41,8 @@ func (g *GPU) setKeyRuns(sid uint64, full, windowed []nn.KeyRun) {
 
 // SetRowWindows records one window a row for the NonCausal calls that follow
 // on every device (nn.RowWindowDevice): row r of a call attends inside
-// wins[r] on its Windowed blocks. A symmetric sliding window is this
-// (ModernBERT's local layers: the keys within half the window either side),
-// and its rows' windows overlap, which SetKeyRuns' partition cannot say.
+// wins[r] on its Windowed blocks; the rows' windows may overlap, which
+// SetKeyRuns' partition cannot say.
 func (g *GPU) SetRowWindows(wins []nn.KeyRun) {
 	g.setRowWindows(0, wins)
 }
