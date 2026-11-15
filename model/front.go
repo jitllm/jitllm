@@ -284,6 +284,10 @@ func (c Composing) Rotaries() []graph.Rotary {
 	return out
 }
 
+// splitRope says r's table holds more pairs than a head's rotated pairs: an
+// entry for each element of a pair (graph.RopeSplit).
+func splitRope(r nn.Rope) bool { return 2*r.TablePairs() > r.NRot }
+
 func (m *Model) rotaryOf(r nn.Rope) graph.Rotary {
 	return graph.Rotary{NRot: 2 * r.TablePairs(), Base: r.Base, Freqs: len(r.Freqs) > 0, Axes: r.TableAxes()}
 }
@@ -810,10 +814,10 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	}
 	// A q norm after the rotary keeps k's before it: the converter folded k's
 	// weight into q's, and an unweighted norm commutes with the rotation.
-	// Under XD-RoPE k's norm follows the rotary too: a pair's elements
+	// Under a split rotary k's norm follows it too: a pair's elements
 	// turned apart do not keep a head's RMS.
 	postQ := c.QKNormAt(li) && c.QKNormPost
-	postK := postQ && c.RopeXD && c.RopeAt(li) && !shared && !m.xdKNormFirst
+	postK := postQ && c.RopeAt(li) && splitRope(m.ropeAt(li)) && !shared && !m.xdKNormFirst
 	// A key norm stored beside no key latent is the key's own.
 	if !shared && has(jlm.RoleAttnKVANorm) && !has(jlm.RoleAttnKVA) {
 		k = b.Norm(k, jlm.RoleAttnKVANorm, c.RMSEps)
@@ -843,7 +847,7 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 		r := m.ropeAt(li)
 		layout := graph.RopeNorm
 		switch {
-		case c.RopeXD && len(r.Runs) != 0:
+		case splitRope(r):
 			layout = graph.RopeSplit
 		case c.RopeNeox:
 			layout = graph.RopeNeox

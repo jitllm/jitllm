@@ -158,10 +158,7 @@ func (r *RopeMarks) TextAt(i, p int) int {
 		if int(m[graph.MarkAt]) > p {
 			continue
 		}
-		if m[graph.MarkKind] == graph.MarkText {
-			return p - int(m[graph.MarkAt]) + int(m[graph.MarkBase])
-		}
-		return p
+		return int(graph.MarkPosition(m, 0, uint32(p)))
 	}
 	return p
 }

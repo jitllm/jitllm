@@ -49,8 +49,48 @@ func (s *Instance) markRope(slot, at, delta int) {
 	if s.ropeOf(slot, at) == at+delta {
 		return
 	}
-	s.rmarks.Add(slot, [graph.MarkWords]uint32{graph.MarkAt: uint32(at), graph.MarkBase: uint32(at + delta), graph.MarkKind: graph.MarkText})
+	s.rmarks.Add(slot, textMark(at, at+delta))
 	s.sendMarks()
+}
+
+// textMark is a mark whose rows from cache position at turn at base onwards,
+// one a row, on every axis.
+func textMark(at, base int) (m [graph.MarkWords]uint32) {
+	m[graph.MarkAt] = uint32(at)
+	for a := range 4 {
+		m[graph.MarkAxis(a, graph.MarkBase)], m[graph.MarkAxis(a, graph.MarkMul)] = uint32(base), 1
+	}
+	return m
+}
+
+// gridMark is a mark whose rows from cache position at are a grid of t
+// frames of h rows of w cells from rotary position base: a row's frame
+// stride positions apart on the first and fourth axes, its row and column on
+// the second and third.
+func gridMark(at, base, h, w, stride int) (m [graph.MarkWords]uint32) {
+	m[graph.MarkAt] = uint32(at)
+	set := func(a, mul, div, mod int) {
+		m[graph.MarkAxis(a, graph.MarkBase)] = uint32(base)
+		m[graph.MarkAxis(a, graph.MarkMul)], m[graph.MarkAxis(a, graph.MarkDiv)], m[graph.MarkAxis(a, graph.MarkMod)] = uint32(mul), uint32(div), uint32(mod)
+	}
+	set(0, stride, h*w, 0)
+	set(1, 1, w, h)
+	set(2, 1, 1, w)
+	set(3, stride, h*w, 0)
+	return m
+}
+
+// xdMark is a mark whose rows from cache position at+ends are a picture's
+// h rows of w cells: a row's position, its column, its row and the
+// picture's ordinal idx on the four axes; the rows before and after them
+// turn at their positions.
+func xdMark(at, ends, h, w, idx int) (m [graph.MarkWords]uint32) {
+	m[graph.MarkAt], m[graph.MarkSkip], m[graph.MarkCount] = uint32(at), uint32(ends), uint32(h*w)
+	m[graph.MarkAxis(0, graph.MarkPos)] = 1
+	m[graph.MarkAxis(1, graph.MarkMul)], m[graph.MarkAxis(1, graph.MarkMod)] = 1, uint32(w)
+	m[graph.MarkAxis(2, graph.MarkMul)], m[graph.MarkAxis(2, graph.MarkDiv)] = 1, uint32(w)
+	m[graph.MarkAxis(3, graph.MarkBase)] = uint32(idx)
+	return m
 }
 
 // rewindRope forgets slot's marks past cache position p.
@@ -64,14 +104,14 @@ func (s *Instance) rewindRope(slot, p int) {
 // image is shifted, and a picture's grid rows -- the newline column included
 // -- take (position, column, row, picture) on the four axes, the picture's
 // ordinal in the sequence; its begin and end rows are text-like. A picture
-// is a mark where it starts (graph.MarkGridXD), its ordinal the slot's
-// pictures before it.
+// is a mark where it starts (xdMark), its ordinal the slot's pictures
+// before it, each a mark of a bounded span.
 func (s *Instance) xdRope(slot, p0 int, spans []model.Span) (next int, err error) {
 	c := s.c
 	s.rewindRope(slot, p0-1)
 	pics := 0
 	for k := range s.rmarks.Count(slot) {
-		if s.rmarks.Mark(slot, k)[graph.MarkKind] == graph.MarkGridXD {
+		if s.rmarks.Mark(slot, k)[graph.MarkCount] != 0 {
 			pics++
 		}
 	}
@@ -87,8 +127,7 @@ func (s *Instance) xdRope(slot, p0 int, spans []model.Span) (next int, err error
 			return 0, fmt.Errorf("model: span %d is %d embedding rows and its grid %dx%dx%d (+%d, %d ends) is %d",
 				i, n, g.T, g.H, g.W, g.Line, g.Ends, g.Rows())
 		}
-		s.rmarks.Add(slot, [graph.MarkWords]uint32{graph.MarkAt: uint32(r), graph.MarkKind: graph.MarkGridXD, graph.MarkT: 1,
-			graph.MarkH: uint32(g.H), graph.MarkW: uint32(g.W + g.Line), graph.MarkEnds: uint32(g.Ends), graph.MarkIndex: uint32(pics)})
+		s.rmarks.Add(slot, xdMark(r, g.Ends, g.H, g.W+g.Line, pics))
 		pics++
 		r += n
 	}
@@ -99,7 +138,7 @@ func (s *Instance) xdRope(slot, p0 int, spans []model.Span) (next int, err error
 // spanRope lays a mixed prompt's rows out on the rotary axes as slot's
 // marks, from cache position p0 where the slot's next text row would turn,
 // and says the rotary position the row after the prompt takes: an image's
-// rows a grid from the position its span starts at (graph.MarkGrid), the
+// rows a grid from the position its span starts at (gridMark), the
 // text after it at that position plus max(H, W) (transformers'
 // get_rope_index: current_pos += max(h, w), whatever T). A video whose
 // pairs are spans of their own is one grid over them, its frames Stride
@@ -153,15 +192,14 @@ func (s *Instance) spanRope(slot, p0 int, spans []model.Span) (next int, err err
 		case open.T == 0 && g.Frame != 0:
 			return 0, fmt.Errorf("model: span %d starts a grid at frame %d", i, g.Frame)
 		case open.T == 0:
-			s.rmarks.Add(slot, [graph.MarkWords]uint32{graph.MarkAt: uint32(p), graph.MarkBase: uint32(r), graph.MarkKind: graph.MarkGrid,
-				graph.MarkT: uint32(g.T), graph.MarkH: uint32(g.H), graph.MarkW: uint32(g.W), graph.MarkStride: uint32(g.Stride)})
+			s.rmarks.Add(slot, gridMark(p, r, g.H, g.W, g.Stride))
 			hi = max(hi, r+(g.T-1)*g.Stride, r+max(g.H, g.W)-1)
 		}
 		p += n
 		if g.Last() {
 			open, frame = model.ImageGrid{}, 0
 			r += max(g.H, g.W)
-			s.rmarks.Add(slot, [graph.MarkWords]uint32{graph.MarkAt: uint32(p), graph.MarkBase: uint32(r), graph.MarkKind: graph.MarkText})
+			s.rmarks.Add(slot, textMark(p, r))
 			continue
 		}
 		open, frame = g, g.Frame+g.Frames
@@ -171,7 +209,7 @@ func (s *Instance) spanRope(slot, p0 int, spans []model.Span) (next int, err err
 	}
 	if hi+1 > r {
 		r = hi + 1
-		s.rmarks.Add(slot, [graph.MarkWords]uint32{graph.MarkAt: uint32(p), graph.MarkBase: uint32(r), graph.MarkKind: graph.MarkText})
+		s.rmarks.Add(slot, textMark(p, r))
 	}
 	s.sendMarks()
 	return r, nil

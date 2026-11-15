@@ -93,6 +93,12 @@ type Config struct {
 	// differently; see mrope.go. Zero everywhere else.
 	RopeSections [4]int
 
+	// RopeTable is the pairs a row's rotary table holds where the container's
+	// pair map states them (jlm.Config.RopePairs), 0 for a rotary of one
+	// position: more than NRot/2 where each element of a pair turns by an
+	// entry of its own (graph.RopeSplit).
+	RopeTable int
+
 	// RopeXD is HunyuanVL's XD-RoPE (jlm.FlagRopeXD): four axes assigned per
 	// element, so a row's table is two pair tables, A for each NEOX pair's
 	// first half and B for its second (RopeW floats), the rotation
@@ -640,11 +646,11 @@ func (c *Config) MaxNRot() int {
 	return m
 }
 
-// RopeW is how many floats one row's rotary table holds: NRot, or two tables
-// of it under XD-RoPE (RopeXD).
+// RopeW is how many floats one row's rotary table holds: two a pair of its
+// table (RopeTable), NRot for a table of a head's rotated pairs.
 func (c *Config) RopeW() int {
-	if c.RopeXD {
-		return 2 * c.NRot
+	if c.RopeTable > 0 {
+		return 2 * c.RopeTable
 	}
 	return c.NRot
 }
@@ -2700,6 +2706,9 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 	m.Rope = nn.Rope{NRot: cfg.NRot, Base: cfg.RopeBase, Neox: cfg.RopeNeox,
 		Scale: cfg.AttnFactor, Runs: nn.PairRuns(c.Config().RopePairs())}
 	cfg.RopeXD = c.Config().Flags.Has(jlm.FlagRopeXD)
+	if len(m.Rope.Runs) > 0 {
+		cfg.RopeTable = m.Rope.TablePairs()
+	}
 	// A second rotary for architectures trained with two bases (gemma3's
 	// sliding layers), built only when RopeBaseSWA is set.
 	if cfg.RopeBaseSWA != 0 || cfg.LocalNRot() != cfg.NRot {

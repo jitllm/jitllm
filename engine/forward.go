@@ -976,7 +976,7 @@ func (s *Instance) SetDeviceLayers(d nn.LayerDevice, max int) error {
 		GridPlanes:  s.gridPlanes(),
 		RopeMarks:   s.marksCap(),
 		Rotaries:    s.rotaries(),
-		RopeSplit:   c.RopeXD,
+		RopeTable:   c.RopeTable,
 		// The sliding window itself (TestSlidingWindowRunsOnTheDevice).
 		SWAWindow: windowFor(c, s.maxSeq),
 		// Read off the loaded weights, not the architecture name.

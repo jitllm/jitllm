@@ -12,10 +12,10 @@ import (
 type ropeMark [graph.MarkWords]uint32
 
 // ropePosOracle is a row's four rotary positions at cache position p under
-// a sequence's marks, as the engine lays a prompt's spans out: text after a
-// mark at its base plus the distance, a grid's cell after its base, an
-// XD-RoPE picture's (position, column, row, ordinal) inside its grid and
-// its position outside.
+// a sequence's marks, as OpRopePos states them: the last mark at or before
+// p, each axis its base, plus its position times p, plus its row's index
+// past the mark's skip divided and wrapped times its step, inside the
+// mark's span, and p outside it and before every mark.
 func ropePosOracle(p uint32, marks []ropeMark) [4]uint32 {
 	k := -1
 	for i, m := range marks {
@@ -28,21 +28,53 @@ func ropePosOracle(p uint32, marks []ropeMark) [4]uint32 {
 	}
 	m := marks[k]
 	j := p - m[graph.MarkAt]
-	base := m[graph.MarkBase]
-	switch m[graph.MarkKind] {
-	case graph.MarkText:
-		return [4]uint32{j + base, j + base, j + base, j + base}
-	case graph.MarkGrid:
-		h, w := m[graph.MarkH], m[graph.MarkW]
-		t := base + j/(h*w)*m[graph.MarkStride]
-		return [4]uint32{t, base + (j/w)%h, base + j%w, t}
-	}
-	ends, h, w := m[graph.MarkEnds], m[graph.MarkH], m[graph.MarkW]
-	if j < ends || j-ends >= h*w {
+	if j < m[graph.MarkSkip] || m[graph.MarkCount] != 0 && j-m[graph.MarkSkip] >= m[graph.MarkCount] {
 		return [4]uint32{p, p, p, p}
 	}
-	jj := j - ends
-	return [4]uint32{p, jj % w, jj / w, m[graph.MarkIndex]}
+	j -= m[graph.MarkSkip]
+	var out [4]uint32
+	for a := range out {
+		w := func(i int) uint32 { return m[graph.MarkAxis(a, i)] }
+		q := j
+		if w(graph.MarkDiv) > 1 {
+			q /= w(graph.MarkDiv)
+		}
+		if w(graph.MarkMod) > 0 {
+			q %= w(graph.MarkMod)
+		}
+		out[a] = w(graph.MarkBase) + w(graph.MarkPos)*p + w(graph.MarkMul)*q
+	}
+	return out
+}
+
+// textMark, gridMark and xdMark are the marks of the prompts the engine lays
+// out: text from at at base onwards; a grid of h rows of w cells from base,
+// its frames stride apart; a picture's h rows of w cells after ends rows at
+// their positions, its rows (position, column, row, ordinal idx).
+func textMark(at, base uint32) (m ropeMark) {
+	m[graph.MarkAt] = at
+	for a := range 4 {
+		m[graph.MarkAxis(a, graph.MarkBase)], m[graph.MarkAxis(a, graph.MarkMul)] = base, 1
+	}
+	return m
+}
+
+func gridMark(at, base, h, w, stride uint32) (m ropeMark) {
+	m[graph.MarkAt] = at
+	for a, s := range [4][3]uint32{{stride, h * w, 0}, {1, w, h}, {1, 1, w}, {stride, h * w, 0}} {
+		m[graph.MarkAxis(a, graph.MarkBase)] = base
+		m[graph.MarkAxis(a, graph.MarkMul)], m[graph.MarkAxis(a, graph.MarkDiv)], m[graph.MarkAxis(a, graph.MarkMod)] = s[0], s[1], s[2]
+	}
+	return m
+}
+
+func xdMark(at, ends, h, w, idx uint32) (m ropeMark) {
+	m[graph.MarkAt], m[graph.MarkSkip], m[graph.MarkCount] = at, ends, h*w
+	m[graph.MarkAxis(0, graph.MarkPos)] = 1
+	m[graph.MarkAxis(1, graph.MarkMul)], m[graph.MarkAxis(1, graph.MarkMod)] = 1, w
+	m[graph.MarkAxis(2, graph.MarkMul)], m[graph.MarkAxis(2, graph.MarkDiv)] = 1, w
+	m[graph.MarkAxis(3, graph.MarkBase)] = idx
+	return m
 }
 
 // TestComposedCPURopePos forms OpRopePos on the CPU and holds every row's
@@ -58,8 +90,8 @@ func TestComposedCPURopePos(t *testing.T) {
 	const M = 4
 	seqs := [][]ropeMark{
 		nil,
-		{{5, 9, graph.MarkText}, {10, 12, graph.MarkGrid, 2, 2, 3, 0, 0, 3}, {22, 15, graph.MarkText}},
-		{{4, 0, graph.MarkGridXD, 1, 2, 3, 1, 0}, {12, 0, graph.MarkGridXD, 1, 1, 2, 0, 1}},
+		{textMark(5, 9), gridMark(10, 12, 2, 3, 3), textMark(22, 15)},
+		{xdMark(4, 1, 2, 3, 0), xdMark(12, 0, 1, 2, 1)},
 	}
 	rows := [][2]uint32{{3, 0}, {7, 1}, {11, 1}, {19, 1}, {25, 1}, {4, 2}, {7, 2}, {13, 2}}
 	marks := make([]uint32, len(seqs)*(1+M*graph.MarkWords))
@@ -86,7 +118,7 @@ func TestComposedCPURopePos(t *testing.T) {
 	t.Run("a far row of a wide picture", func(t *testing.T) {
 		const w, h, p = 1 << 11, 1 << 11, 1<<27 + 5
 		jj := uint32(37*w + 1000)
-		one := [][]ropeMark{{{p - jj, 0, graph.MarkGridXD, 1, h, w, 0, 70003}}}
+		one := [][]ropeMark{{xdMark(p-jj, 0, h, w, 70003)}}
 		buf := append([]uint32{1}, one[0][0][:]...)
 		cpuRopePosAt(t, hostArm(), one, [][2]uint32{{p, 0}}, buf, []uint32{0}, 1, false)
 		// And at a rotary table's step on one slot, as an instance asks.

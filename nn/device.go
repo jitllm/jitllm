@@ -445,11 +445,11 @@ func (h *Head) Left() HeadStage { return h.Stages &^ h.Applied }
 // MLA reports whether this block runs multi-head latent attention.
 func (p *LayerPlan) MLA() bool { return p.KVLoraRank > 0 }
 
-// RopeW is how many floats one row's rotary table holds: NRot, or two tables
-// of NRot under RopeSplit.
+// RopeW is how many floats one row's rotary table holds: two a pair of its
+// table (RopeTable), NRot for a table of the block's rotated pairs.
 func (p *LayerPlan) RopeW() int {
-	if p.RopeSplit {
-		return 2 * p.NRot
+	if p.RopeTable > 0 {
+		return 2 * p.RopeTable
 	}
 	return p.NRot
 }
@@ -637,11 +637,10 @@ type LayerPlan struct {
 	// is zero. A tier may ignore them and upload the finished cs/csSWA tables
 	// instead.
 	RopeTab, RopeTabSWA []float32
-	// RopeSplit is XD-RoPE (HunyuanVL): each NEOX pair's two elements turn by
-	// tables of their own, so a row's table is two of NRot floats (A then B;
-	// RopeW) and the rotation does not keep a head's RMS -- k's norm follows
-	// it, as q's does.
-	RopeSplit bool
+	// RopeTable is the pairs a row's rotary table holds where the model
+	// states its table's pairs (RopeW), 0 for NRot/2: more than NRot/2 where
+	// each element of a pair turns by an entry of its own (graph.RopeSplit).
+	RopeTable int
 	// SWAWindow is how many keys a sliding-window layer attends to, zero for
 	// an architecture whose every layer sees its whole history; which blocks
 	// slide each block's graph states (its attention's Window).

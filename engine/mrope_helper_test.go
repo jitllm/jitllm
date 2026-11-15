@@ -19,19 +19,8 @@ func marksLayout(r *model.RopeMarks, slot, p0, n int) [][4]int {
 			if at > p {
 				continue
 			}
-			j, base := p-at, int(m[graph.MarkBase])
-			h, w := int(m[graph.MarkH]), int(m[graph.MarkW])
-			switch m[graph.MarkKind] {
-			case graph.MarkText:
-				rows[i] = [4]int{j + base, j + base, j + base, j + base}
-			case graph.MarkGrid:
-				t := base + j/(h*w)*int(m[graph.MarkStride])
-				rows[i] = [4]int{t, base + (j/w)%h, base + j%w, t}
-			default:
-				ends := int(m[graph.MarkEnds])
-				if jj := j - ends; j >= ends && jj < h*w {
-					rows[i] = [4]int{p, jj % w, jj / w, int(m[graph.MarkIndex])}
-				}
+			for ax := range rows[i] {
+				rows[i][ax] = int(graph.MarkPosition(m, ax, uint32(p)))
 			}
 			break
 		}

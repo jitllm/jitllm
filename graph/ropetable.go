@@ -60,30 +60,45 @@ func (r *RopeTable) Build() *Graph {
 }
 
 // A rotary mark's words (OpRopePos), MarkWords a mark; a sequence's marks
-// follow its count.
+// follow its count. A mark covers the cache positions from MarkAt to the
+// next mark's. Its row at position p, j = p - MarkAt - MarkSkip, turns on
+// each axis a at Base + Pos*p + Mul*(j/Div % Mod) (axis a's words, MarkAxis;
+// Div 0 is one, Mod 0 no modulus) where 0 <= j < MarkCount (MarkCount 0:
+// every row the mark covers past MarkSkip), and at p on every axis
+// otherwise.
 const (
-	// MarkAt is the first cache position the mark covers, MarkBase the
-	// rotary position there, MarkKind how its rows turn.
 	MarkAt = iota
-	MarkBase
-	MarkKind
-	// MarkT, MarkH and MarkW are a grid's frames, rows and columns (under
-	// XD-RoPE the columns hold a row's line ends), MarkEnds an XD-RoPE
-	// picture's text-like rows before and after its grid, MarkIndex its
-	// ordinal in the sequence, MarkStride the positions a grid's temporal
-	// axis steps from one frame to the next.
-	MarkT
-	MarkH
-	MarkW
-	MarkEnds
-	MarkIndex
-	MarkStride
-	MarkWords
+	MarkSkip
+	MarkCount
+	markAxes
+	MarkWords = markAxes + 4*MarkAxisWords
 )
 
-// How a mark's rows turn (MarkKind).
+// An axis's words of a mark (MarkAxis).
 const (
-	MarkText = iota
-	MarkGrid
-	MarkGridXD
+	MarkBase = iota
+	MarkPos
+	MarkMul
+	MarkDiv
+	MarkMod
+	MarkAxisWords
 )
+
+// MarkAxis is the mark word w (MarkBase .. MarkMod) of axis a.
+func MarkAxis(a, w int) int { return markAxes + a*MarkAxisWords + w }
+
+// MarkPosition is axis a's position of a row at cache position p that mark m
+// covers, as OpRopePos computes it.
+func MarkPosition(m []uint32, a int, p uint32) uint32 {
+	j := p - m[MarkAt]
+	if p < m[MarkAt] || j < m[MarkSkip] || m[MarkCount] != 0 && j-m[MarkSkip] >= m[MarkCount] {
+		return p
+	}
+	j -= m[MarkSkip]
+	w := func(k int) uint32 { return m[MarkAxis(a, k)] }
+	q := j / max(w(MarkDiv), 1)
+	if w(MarkMod) != 0 {
+		q %= w(MarkMod)
+	}
+	return w(MarkBase) + w(MarkPos)*p + w(MarkMul)*q
+}

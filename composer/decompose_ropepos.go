@@ -14,9 +14,9 @@ import (
 
 // decomposeRopePos is each row's position on the rotary axes: how many of
 // its sequence's marks start at or before its cache position (a scan over
-// the sequence's live marks), then from the last of them the row's
-// coordinates as text, a picture grid's cell or an XD-RoPE picture's, and
-// the position itself before every mark.
+// the sequence's live marks), then from the last of them each axis's
+// coordinate as the mark states it (graph.MarkPosition), and the position
+// itself before every mark.
 func decomposeRopePos(o graph.Op, c *Context) ([]Prim, error) {
 	if len(o.In) != 0 || len(o.Out) != 1 || c.width(o.Out[0]) != ropeAxes {
 		return nil, fmt.Errorf("rotary positions of %d inputs into %d outputs of %d", len(o.In), len(o.Out), c.width(o.Out[0]))
@@ -57,25 +57,23 @@ func decomposeRopePos(o graph.Op, c *Context) ([]Prim, error) {
 	k := x.load(2, r)
 	m := x.op(OpSub, U, x.op(OpMax, U, k, x.u(1)), x.u(1))
 	f := func(w int) int { return word(&x, m, w) }
-	at, base, kind := f(graph.MarkAt), f(graph.MarkBase), f(graph.MarkKind)
-	h, w, ends, idx := f(graph.MarkH), f(graph.MarkW), f(graph.MarkEnds), f(graph.MarkIndex)
-	stride := f(graph.MarkStride)
-	below := func(v, n int) int { return x.op(OpLess, P, v, x.u(uint32(n))) }
-	j := x.op(OpSub, U, p, at)
-	text := x.op(OpAdd, U, j, base)
-	w1 := x.op(OpMax, U, w, x.u(1))
-	hw := x.op(OpMax, U, x.op(OpMul, U, h, w), x.u(1))
-	t := x.op(OpAdd, U, base, x.op(OpMul, U, x.op(OpDiv, U, j, hw), stride))
-	grid := [ropeAxes]int{t, x.op(OpAdd, U, base, x.op(OpRem, U, x.op(OpDiv, U, j, w1), x.op(OpMax, U, h, x.u(1)))),
-		x.op(OpAdd, U, base, x.op(OpRem, U, j, w1)), t}
-	jj := x.op(OpSub, U, j, ends)
-	inGrid := x.op(OpLess, P, x.u(0), x.sel(U, x.op(OpLess, P, j, ends), x.u(0),
-		x.sel(U, x.op(OpLess, P, jj, x.op(OpMul, U, h, w)), x.u(1), x.u(0))))
-	xd := [ropeAxes]int{p, x.op(OpRem, U, jj, w1), x.op(OpDiv, U, jj, w1), idx}
+	at, skip, count := f(graph.MarkAt), f(graph.MarkSkip), f(graph.MarkCount)
+	j0 := x.op(OpSub, U, p, at)
+	j := x.op(OpSub, U, j0, skip)
+	// The mark's span: past its skip and short of its count, where it has
+	// one.
+	before := x.op(OpLess, P, j0, skip)
+	past := x.sel(U, x.op(OpLess, P, x.u(0), count), x.sel(U, x.op(OpLess, P, j, count), x.u(0), x.u(1)), x.u(0))
+	inside := x.op(OpLess, P, x.op(OpAdd, U, x.sel(U, before, x.u(1), x.u(0)), past), x.u(1))
 	marked := x.op(OpLess, P, x.u(0), k)
 	var stores []PrimStore
 	for a := range ropeAxes {
-		v := x.sel(U, below(kind, graph.MarkText+1), text, x.sel(U, below(kind, graph.MarkGrid+1), grid[a], x.sel(U, inGrid, xd[a], p)))
+		w := func(i int) int { return f(graph.MarkAxis(a, i)) }
+		q := x.op(OpDiv, U, j, x.op(OpMax, U, w(graph.MarkDiv), x.u(1)))
+		mod := w(graph.MarkMod)
+		q = x.sel(U, x.op(OpLess, P, x.u(0), mod), x.op(OpRem, U, q, x.op(OpMax, U, mod, x.u(1))), q)
+		v := x.op(OpAdd, U, w(graph.MarkBase), x.op(OpAdd, U, x.op(OpMul, U, w(graph.MarkPos), p), x.op(OpMul, U, w(graph.MarkMul), q)))
+		v = x.sel(U, inside, v, p)
 		v = x.sel(U, marked, v, p)
 		stores = append(stores, PrimStore{Out: out, Index: x.op(OpAdd, U, x.op(OpMul, U, r, x.u(uint32(ropeAxes))), x.u(uint32(a))), Value: v, Extent: R * ropeAxes})
 	}

@@ -21,8 +21,8 @@ func TestComposedGPURopePos(t *testing.T) {
 	const R, M = 8, 4
 	seqs := [][]composer.RopeMark{
 		nil,
-		{{5, 9, graph.MarkText}, {10, 12, graph.MarkGrid, 2, 2, 3, 0, 0, 3}, {22, 15, graph.MarkText}},
-		{{4, 0, graph.MarkGridXD, 1, 2, 3, 1, 0}, {12, 0, graph.MarkGridXD, 1, 1, 2, 0, 1}},
+		{composer.TextMark(5, 9), composer.GridMark(10, 12, 2, 3, 3), composer.TextMark(22, 15)},
+		{composer.XDMark(4, 1, 2, 3, 0), composer.XDMark(12, 0, 1, 2, 1)},
 	}
 	rows := [][2]uint32{{3, 0}, {7, 1}, {11, 1}, {19, 1}, {25, 1}, {4, 2}, {7, 2}, {13, 2}}
 	marks := make([]uint32, len(seqs)*(1+M*graph.MarkWords))

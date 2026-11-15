@@ -305,14 +305,11 @@ const (
 	// OpRopePos is each row's position on each of four rotary axes, from
 	// its cache position and its sequence's rotary marks (the step's rows'
 	// positions and the sequences' marks, as the engine keeps them): the
-	// last mark at or before the position says how the row turns -- as
-	// text (MarkText), at the position plus the mark's base less its first
-	// position on every axis; as a cell of a picture's grid (MarkGrid), its
-	// frame times the mark's stride, row and column after the mark's base;
-	// as an XD-RoPE picture's
-	// (MarkGridXD), its position, column, row and the picture's ordinal --
-	// and a row before every mark turns at its position. Out[0] is four
-	// indices a row. A primitive.
+	// last mark at or before the position says how the row turns, each
+	// axis an affine function of the position and of the row's index in the
+	// mark, divided and wrapped (MarkPosition) -- and a row before every
+	// mark turns at its position. Out[0] is four indices a row. A
+	// primitive.
 	OpRopePos
 	// OpToken is each row's token, the step's own: Out[0] one index (u32) a
 	// row. A primitive.

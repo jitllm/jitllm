@@ -219,8 +219,11 @@ func ropeRowTables(t *testing.T, at [][composer.RopeAxes]uint32) (rows, marksBuf
 			t.Fatalf("row %d's positions %v are not one XD-RoPE mark's", r, a)
 		}
 		var m [graph.MarkWords]uint32
-		m[graph.MarkAt], m[graph.MarkKind] = a[0]-jj, graph.MarkGridXD
-		m[graph.MarkH], m[graph.MarkW], m[graph.MarkIndex] = h, w, a[3]
+		m[graph.MarkAt], m[graph.MarkCount] = a[0]-jj, h*w
+		m[graph.MarkAxis(0, graph.MarkPos)] = 1
+		m[graph.MarkAxis(1, graph.MarkMul)], m[graph.MarkAxis(1, graph.MarkMod)] = 1, w
+		m[graph.MarkAxis(2, graph.MarkMul)], m[graph.MarkAxis(2, graph.MarkDiv)] = 1, w
+		m[graph.MarkAxis(3, graph.MarkBase)] = a[3]
 		marksBuf = append(marksBuf, 1)
 		marksBuf = append(marksBuf, m[:]...)
 	}

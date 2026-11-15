@@ -3814,8 +3814,8 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	}
 	hcs := cs
 	if R > 1 && len(bs.hcs) < R*p.RopeW() {
-		return refuse("the scratch stages %d rotary floats for %d rows of %d (its plan's %d rows of %d, rotary %d split %v; this plan's rotary %d split %v)",
-			len(bs.hcs), R, p.RopeW(), bs.rows, bs.p.RopeW(), bs.p.NRot, bs.p.RopeSplit, p.NRot, p.RopeSplit)
+		return refuse("the scratch stages %d rotary floats for %d rows of %d (its plan's %d rows of %d, rotary %d of a table of %d; this plan's rotary %d of %d)",
+			len(bs.hcs), R, p.RopeW(), bs.rows, bs.p.RopeW(), bs.p.NRot, bs.p.RopeTable, p.NRot, p.RopeTable)
 	}
 	if R > 1 {
 		hcs = bs.hcs[:R*p.RopeW()]
