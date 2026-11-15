@@ -2,10 +2,11 @@ package engine
 
 import (
 	"fmt"
-	"github.com/jitllm/jitllm/nn/history"
 	"runtime"
 	"slices"
 	"unsafe"
+
+	"github.com/jitllm/jitllm/nn/history"
 
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/engine/device/cpu"

@@ -133,9 +133,9 @@ func TestAStepAtMaxRowsFitsAFullCard(t *testing.T) {
 		// The head goes where the last block is, and on a full card it needs
 		// the room of the blocks after the seam: the model's placeHead.
 		h := &nn.Head{
-			Norm:   make([]float32, p.NEmbd),
-			W:      nn.Weight{T: quant.Q4_0, Data: make([]byte, vocab*(p.NEmbd/32)*18), Rows: vocab, K: p.NEmbd},
-			Logits: make([]float32, vocab),
+			Vectors: []nn.RoleVector{{Role: jlm.RoleOutputNorm, V: make([]float32, p.NEmbd)}},
+			W:       nn.Weight{T: quant.Q4_0, Data: make([]byte, vocab*(p.NEmbd/32)*18), Rows: vocab, K: p.NEmbd},
+			Logits:  make([]float32, vocab),
 		}
 		headGraphs(h, p, jlm.RoleOutput)
 		for !g.PrepHead(h) {

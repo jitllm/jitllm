@@ -32,17 +32,11 @@ func TestATierRefusesASecondModel(t *testing.T) {
 		return nn.Weight{T: quant.Q4_0, Data: make([]byte, rows*(k/32)*18), Rows: rows, K: k}
 	}
 	block := func(p *nn.LayerPlan) *nn.LayerWeights {
-		kv := p.NKVHead * p.HeadDim
-		return &nn.LayerWeights{
-			AttnNorm: make([]float32, p.NEmbd), FFNNorm: make([]float32, p.NEmbd),
-			Wq: q4(p.NHead*p.HeadDim, p.NEmbd), Wk: q4(kv, p.NEmbd), Wv: q4(kv, p.NEmbd),
-			Wo: q4(p.NEmbd, p.NHead*p.HeadDim), Gate: q4(p.NFFN, p.NEmbd),
-			Up: q4(p.NFFN, p.NEmbd), Down: q4(p.NEmbd, p.NFFN),
-		}
+		return denseWeights(p, q4)
 	}
 	head := func(model uint64) *nn.Head {
 		p := fakePlan()
-		return headGraphs(&nn.Head{Model: model, Norm: make([]float32, p.NEmbd), W: q4(512, p.NEmbd),
+		return headGraphs(&nn.Head{Model: model, Vectors: []nn.RoleVector{{Role: jlm.RoleOutputNorm, V: make([]float32, p.NEmbd)}}, W: q4(512, p.NEmbd),
 			Logits: make([]float32, 512)}, p, jlm.RoleOutput)
 	}
 	live0 := len(d.liveBufs)

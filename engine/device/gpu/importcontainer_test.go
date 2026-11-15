@@ -43,10 +43,11 @@ func TestAContainerWeightIsNotRepackedOnAUnifiedDevice(t *testing.T) {
 	dt.mu.Lock()
 	defer dt.mu.Unlock()
 	l := dt.layers[0]
-	for i, pair := range []struct {
-		r *resident
-		x nn.Weight
-	}{{l.wq, w.Wq}, {l.wk, w.Wk}, {l.wv, w.Wv}, {l.wo, w.Wo}, {l.gate, w.Gate}, {l.up, w.Up}, {l.down, w.Down}} {
+	for i, m := range w.Mats {
+		pair := struct {
+			r *resident
+			x nn.Weight
+		}{l.roleWeight(m.Role), m.W}
 		if pair.r == nil || !pair.r.ok {
 			t.Fatalf("tensor %d is not resident", i)
 		}
@@ -75,7 +76,8 @@ func containerBlock(t *testing.T, p *nn.LayerPlan) (*nn.LayerWeights, uint64) {
 	w := blockWeights(p)
 	fill(w, 20261002)
 	var n uint64
-	for _, x := range []*nn.Weight{&w.Wq, &w.Wk, &w.Wv, &w.Wo, &w.Gate, &w.Up, &w.Down} {
+	for i := range w.Mats {
+		x := &w.Mats[i].W
 		q, ok := quantOf(x.T)
 		if !ok {
 			t.Fatalf("%v has no device format", x.T)
@@ -109,7 +111,11 @@ func TestAContainerBlockIsPricedInFullOnAUnifiedDevice(t *testing.T) {
 	g.SetArena(1 << 30)
 	dt := g.devs[0]
 	dt.mu.Lock()
-	need, _ := dt.blockBytes([]nn.Weight{w.Wq, w.Wk, w.Wv, w.Wo, w.Gate, w.Up, w.Down})
+	var ws []nn.Weight
+	for _, m := range w.Mats {
+		ws = append(ws, m.W)
+	}
+	need, _ := dt.blockBytes(ws)
 	dt.mu.Unlock()
 	if need != weights {
 		t.Fatalf("a container block is priced at %d bytes on a unified device with an arena; "+

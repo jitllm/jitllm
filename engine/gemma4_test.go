@@ -68,7 +68,7 @@ func gemma4Fixtures() []struct {
 			ok := c.MixedGeom() && c.PLEDim == 32 && c.NKVShared == 2 &&
 				c.NFFNAt(4) == 2*c.NFFN && c.NFFNAt(3) == c.NFFN &&
 				c.KVSource(4) == 3 && c.KVSource(5) == 2 && c.KVSource(1) == 1 &&
-				m.PleTok.K == 6*32 && m.PleProj.Rows == 6*32 && len(m.PleNorm) == 32
+				m.DenseMatrix(jlm.RolePLETokEmbd).K == 6*32 && m.DenseMatrix(jlm.RolePLEModelProj).Rows == 6*32 && len(m.Vector(jlm.RolePLEProjNorm)) == 32
 			for i := range m.Layers {
 				l := &m.Layers[i]
 				ok = ok && matRows(l, jlm.RolePLEGate) == 32 && matK(l, jlm.RolePLEProj) == 32 && len(l.Vector(jlm.RolePLEPostNorm)) == c.NEmbd &&
@@ -81,7 +81,7 @@ func gemma4Fixtures() []struct {
 		// ragged tail (nn's on the host, kernels.QuantizePadded on a device).
 		{"synth-gemma4-e-ragged", func(m *model.Model) bool {
 			c := m.Cfg
-			ok := c.PLEDim == 40 && c.NKVShared == 2 && m.PleProj.Rows == 6*40
+			ok := c.PLEDim == 40 && c.NKVShared == 2 && m.DenseMatrix(jlm.RolePLEModelProj).Rows == 6*40
 			for i := range m.Layers {
 				ok = ok && matRows(&m.Layers[i], jlm.RolePLEGate) == 40 && matK(&m.Layers[i], jlm.RolePLEProj) == 40
 			}

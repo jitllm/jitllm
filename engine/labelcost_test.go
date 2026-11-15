@@ -3,12 +3,13 @@
 package engine
 
 import (
-	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"os"
 	"runtime"
 	"slices"
 	"testing"
 	"time"
+
+	"github.com/jitllm/jitllm/engine/device/cpudev"
 
 	"github.com/jitllm/jitllm/model"
 

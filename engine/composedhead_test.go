@@ -125,19 +125,17 @@ func headTokens(m *model.Model) []int32 {
 // under the config cfg states and the changes mut makes to the model, held to
 // the oracle over the host's final residuals xs under the config want states.
 type headArm struct {
-	fx         headFixture
-	dev        string
-	parts      nn.Parts
-	xs         [][]float32
-	lnb, outB  []float32
-	head       model.Tensor
-	want, cfg  func(c *model.Config)
-	mut        func(m *model.Model) func()
-	worst      float64
-	stats      gpu.Stats
-	applied    []nn.HeadStage
-	steps      int
-	stagesWant nn.HeadStage
+	fx        headFixture
+	dev       string
+	parts     nn.Parts
+	xs        [][]float32
+	lnb, outB []float32
+	head      model.Tensor
+	want, cfg func(c *model.Config)
+	mut       func(m *model.Model) func()
+	worst     float64
+	stats     gpu.Stats
+	steps     int
 	// refused says the tier is to leave the head on the host, and the host
 	// runs it in the model's order: a softcap with a bias.
 	refused bool
@@ -164,7 +162,6 @@ func (a *headArm) run(t *testing.T) {
 	if a.mut != nil {
 		defer a.mut(m)()
 	}
-	a.stagesWant = m.HeadStages()
 	st := testInstance(t, m, len(ids)+1, openOpts...)
 	defer st.Close()
 	st.SetDeviceFallback(false)
@@ -180,16 +177,13 @@ func (a *headArm) run(t *testing.T) {
 	case st.GPULayers() != m.Cfg.NLayer || !st.HeadOnDevice():
 		t.Fatalf("wanted every block and the head on %s, got %d of %d blocks and the head %v: %s", a.dev, st.GPULayers(), m.Cfg.NLayer, st.HeadOnDevice(), g.Err())
 	}
-	a.worst, a.steps, a.applied = 0, len(ids), nil
+	a.worst, a.steps = 0, len(ids)
 	for p, id := range ids {
 		lg, err := st.Forward(id)
 		if err != nil {
 			t.Fatal(err)
 		}
 		a.worst = math.Max(a.worst, headNMSE(lg, wants[p]))
-		if st.head != nil {
-			a.applied = append(a.applied, st.head.Applied)
-		}
 	}
 	a.stats = g.Stats()
 }
@@ -202,7 +196,7 @@ func (a *headArm) run(t *testing.T) {
 // differ from by the f32 reduction order alone. The head
 // runs as the composer's graph (nn.ComposedHead), and then as the tier's own
 // kernels beside the host's finishing of the logits: the same logits either
-// way, and nothing applied twice (nn.Head.Applied). Each op taken out of the
+// way. Each op taken out of the
 // composed head -- the softcap dropped, the scale inverted, the bias negated,
 // the norm's bias dropped -- must part from the oracle by far more than any
 // arm does.
@@ -215,7 +209,7 @@ func TestComposedHeadOps(t *testing.T) {
 			defer ref.Close()
 			c := ref.Cfg
 			ids := headTokens(ref)
-			outNormB, outB := slices.Clone(ref.OutNormB), slices.Clone(ref.OutB)
+			outNormB, outB := slices.Clone(ref.Vector(jlm.RoleOutputNormBias)), slices.Clone(ref.Vector(jlm.RoleOutputBias))
 			lnb := outNormB
 			if c.LayerNorm {
 				lnb = slices.Clone(ref.LnBias(outNormB))
@@ -294,22 +288,10 @@ func TestComposedHeadOps(t *testing.T) {
 									ran++
 									continue
 								}
-								want := a.stagesWant
-								if parts == 0 {
-									want &= nn.HeadCap
-									if n != 0 {
-										t.Fatalf("the composer served %d head steps when it was not asked", n)
-									}
-								} else if n != a.steps || d != 0 {
+								if n != a.steps || d != 0 {
 									t.Fatalf("the composed head served %d of %d steps and was declined %d: %s", n, a.steps, d, declinesOf(a.stats))
 								}
-								for p, got := range a.applied {
-									if got != want {
-										t.Fatalf("pos %d: the head applied stages %03b, want %03b (stages of the model %03b)", p, got, want, a.stagesWant)
-									}
-								}
-								t.Logf("parts %d: worst NMSE %.3e from the oracle over %d steps, the device applied stages %03b of %03b",
-									parts, a.worst, a.steps, want, a.stagesWant)
+								t.Logf("parts %d: worst NMSE %.3e from the oracle over %d steps", parts, a.worst, a.steps)
 								if !(a.worst < bound) {
 									t.Fatalf("parts %d: %.3e from the oracle, bound %.0e", parts, a.worst, bound)
 								}
@@ -335,17 +317,21 @@ func TestComposedHeadOps(t *testing.T) {
 						{name: "softcap dropped", skip: outB != nil, cfg: func(c *model.Config) { c.FinalSoftcap, c.LogitScale = 0, 8 }},
 						{name: "scale inverted", cfg: func(c *model.Config) { capped(c); c.LogitScale = 1.0 / 8 }},
 						{name: "bias negated", skip: outB == nil, cfg: full, mut: func(m *model.Model) func() {
-							was := m.OutB
-							m.OutB = slices.Clone(was)
-							for i := range m.OutB {
-								m.OutB[i] = -m.OutB[i]
-							}
-							return func() { m.OutB = was }
+							return setDenseVec(m, jlm.RoleOutputBias, func(was []float32) []float32 {
+								b := slices.Clone(was)
+								for i := range b {
+									b[i] = -b[i]
+								}
+								return b
+							})
 						}},
 						{name: "norm bias dropped", skip: !c.LayerNorm || outNormB == nil, cfg: full, mut: func(m *model.Model) func() {
-							was := m.OutNormB
-							m.OutNormB = nil
-							return func() { m.OutNormB = was }
+							// Out of the head's graph as well as its vectors: a
+							// graph naming a vector the model does not hold is
+							// declined by name, never run on zeros.
+							undoV := setDenseVec(m, jlm.RoleOutputNormBias, func([]float32) []float32 { return nil })
+							undoR := dropStoredDense(m, jlm.RoleOutputNormBias)
+							return func() { undoR(); undoV() }
 						}},
 					}
 					for _, v := range violations {

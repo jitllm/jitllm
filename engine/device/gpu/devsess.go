@@ -689,7 +689,7 @@ func (g *devTier) cloneLane() (*lane, bool) {
 func (g *devTier) shareHead(dst, src *blockScratch) bool {
 	dst.head, dst.mvHead, dst.headGraph, dst.sampleGraph = src.head, src.mvHead, src.headGraph, src.sampleGraph
 	dst.headHidden, dst.sampleWalk, dst.pickGraph, dst.pickHead = src.headHidden, src.sampleWalk, src.pickGraph, src.pickHead
-	dst.hNorm, dst.hNormB, dst.hBias = src.hNorm, src.hNormB, src.hBias
+	dst.hVecs, dst.hVecBytes = src.hVecs, src.hVecBytes
 	dst.embedGraph = src.embedGraph
 	dst.headMix = src.headMix
 	dst.embSW, dst.embSV = src.embSW, src.embSV
@@ -714,7 +714,7 @@ func unshareHead(dst *blockScratch) {
 	}
 	dst.head, dst.mvHead, dst.headGraph, dst.headHidden, dst.sampleGraph, dst.sampleWalk = nil, mv{}, nil, nil, nil, nil
 	dst.pickGraph, dst.pickHead = nil, nil
-	dst.hNorm, dst.hNormB, dst.hBias = nil, nil, nil
+	dst.hVecs, dst.hVecBytes = nil, 0
 	dst.headShared = false
 }
 

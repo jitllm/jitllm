@@ -73,14 +73,6 @@ func (t *modelTensors) held(r jlm.Role) *model.Tensor {
 		return &m.PosEmbd
 	case r == jlm.RoleOutput || r == jlm.RoleTokenEmbd:
 		return t.outW
-	case r == jlm.RolePLETokEmbd && m.PleTok.E != nil:
-		return &m.PleTok
-	case r == jlm.RolePLEModelProj && m.PleProj.E != nil:
-		return &m.PleProj
-	case r == jlm.RoleEmbdDense1:
-		return &m.Dense1
-	case r == jlm.RoleEmbdDense2:
-		return &m.Dense2
 	}
 	for _, v := range t.m.VecMats {
 		if v.Role == r {
@@ -95,15 +87,8 @@ func (t *modelTensors) Bytes(r jlm.Role) ([]byte, *nn.Packed, int) { return t.he
 
 // Floats is nn.Tensors': the model's vector of role r, nil for none.
 func (t *modelTensors) Floats(r jlm.Role) []float32 {
-	switch r {
-	case jlm.RoleOutputNorm:
+	if r == jlm.RoleOutputNorm {
 		return t.outNorm
-	case jlm.RoleOutputNormBias:
-		return t.m.OutNormB
-	case jlm.RoleOutputBias:
-		return t.m.OutB
-	case jlm.RolePLEProjNorm:
-		return t.m.PleNorm
 	}
-	return nn.VectorOf(t.m.Vecs, r)
+	return t.m.Vector(r)
 }

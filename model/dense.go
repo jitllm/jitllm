@@ -2,6 +2,7 @@ package model
 
 import (
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // Dense is a model's tensors outside its blocks -- the embedding, the
@@ -12,8 +13,6 @@ import (
 // shapes and entries, no bytes.
 type Dense struct {
 	Embd, PosEmbd, Output Tensor
-	Dense1, Dense2        Tensor
-	PleTok, PleProj       Tensor
 	TowerDense            Layer
 	// Mats is the model's other dense matrices, by role (Model.DenseMats).
 	Mats      []roleTensor
@@ -25,9 +24,7 @@ type Dense struct {
 // no other.
 func (m *Model) BindDense(fr *jlm.Frames, d *Dense) error {
 	d.Embd, d.PosEmbd, d.Output = m.Embd, m.PosEmbd, m.Output
-	d.Dense1, d.Dense2 = m.Dense1, m.Dense2
-	d.PleTok, d.PleProj = m.PleTok, m.PleProj
-	ts := []*Tensor{&d.Embd, &d.PosEmbd, &d.Output, &d.Dense1, &d.Dense2, &d.PleTok, &d.PleProj}
+	ts := []*Tensor{&d.Embd, &d.PosEmbd, &d.Output}
 	d.Mats = make([]roleTensor, len(m.DenseMats))
 	for i, x := range m.DenseMats {
 		t := *x.T
@@ -58,8 +55,7 @@ func (m *Model) BindDense(fr *jlm.Frames, d *Dense) error {
 // denseNamed reports that a field of Dense names role r's matrix.
 func denseNamed(r jlm.Role) bool {
 	switch r {
-	case jlm.RoleTokenEmbd, jlm.RolePosEmbd, jlm.RoleOutput, jlm.RoleEmbdDense1, jlm.RoleEmbdDense2,
-		jlm.RolePLETokEmbd, jlm.RolePLEModelProj:
+	case jlm.RoleTokenEmbd, jlm.RolePosEmbd, jlm.RoleOutput:
 		return true
 	}
 	return false
@@ -75,3 +71,18 @@ func (d *Dense) Matrix(r jlm.Role) *Tensor {
 	}
 	return nil
 }
+
+// DenseMatrix is the model's dense matrix of role r a field of Dense does
+// not name (Model.DenseMats), nil for none.
+func (m *Model) DenseMatrix(r jlm.Role) *Tensor {
+	for _, x := range m.DenseMats {
+		if x.Role == r {
+			return x.T
+		}
+	}
+	return nil
+}
+
+// Vector is the model's vector of role r outside its blocks (Model.Vecs),
+// nil for none.
+func (m *Model) Vector(r jlm.Role) []float32 { return nn.VectorOf(m.Vecs, r) }

@@ -42,7 +42,7 @@ const minSlots = 1
 // frees, and nothing else. ws is the shape, not a copy of the bytes; ensure
 // refreshes where the host holds them.
 type page struct {
-	ws    []nn.Weight // the seven matrices, in layer.tensors() order
+	ws    []nn.Weight // the block's matrices, in layer.tensors() order
 	bytes uint64      // what the set costs on the device while it is resident
 	// round is the driver's page rounding of those buffers beyond bytes, which
 	// a page-in also has to find room for (scratch.go).
@@ -59,24 +59,21 @@ type page struct {
 	fr     *jlm.Frames
 }
 
-// tensors is the block's pageable weights in one fixed order, so that
-// PrepLayer, ReleaseLayers and the pager cannot disagree about what a block is:
-// a tensor missing from this list leaks on release and is never priced.
+// tensors is the block's pageable weights in one fixed order (layer.mats),
+// so that PrepLayer, ReleaseLayers and the pager cannot disagree about what a
+// block is: a tensor missing from this list leaks on release and is never
+// priced.
 func (l *layer) tensors() []**resident {
-	// The order matches weightList and prepLayer's ws/ms/bias order: the dense
-	// seven, then the shared expert, the linear block, MLA and KDA's gates.
-	ts := []**resident{&l.wq, &l.wk, &l.wv, &l.wo, &l.gate, &l.up, &l.down,
-		&l.shGate, &l.shUp, &l.shDown, &l.ssmGate, &l.ssmBA, &l.ssmOut,
-		&l.wqa, &l.wqb, &l.wkva, &l.wkb, &l.wvb,
-		&l.ssmFA, &l.ssmFB, &l.ssmGA, &l.ssmGB}
-	for j := range l.extra {
-		ts = append(ts, &l.extra[j].r)
+	ts := make([]**resident, len(l.mats))
+	for j := range l.mats {
+		ts[j] = &l.mats[j].r
 	}
 	return ts
 }
 
-// pageSizeWhy is pageSize with the reason, naming the tensor and its format.
-func (g *devTier) pageSizeWhy(ws []nn.Weight) (uint64, string, bool) {
+// pageSizeWhy is pageSize with the reason, naming the tensor and its format:
+// ws is block l's matrices in l.mats' order.
+func (g *devTier) pageSizeWhy(l *layer, ws []nn.Weight) (uint64, string, bool) {
 	var total uint64
 	for i, x := range ws {
 		if len(x.Data) == 0 {
@@ -84,32 +81,17 @@ func (g *devTier) pageSizeWhy(ws []nn.Weight) (uint64, string, bool) {
 		}
 		q, ok := quantOf(x.T)
 		if !ok {
-			return 0, fmt.Sprintf("%s is %s, which the device layout does not hold", weightRole(i), x.T), false
+			return 0, fmt.Sprintf("%s is %s, which the device layout does not hold", l.mats[i].role, x.T), false
 		}
 		// At the buffers' footprint, as a page-in asks for them (pageIn): a
 		// slot priced at the bytes alone counts slots the card does not have.
 		f, err := g.planesFootprint(q, x.Rows, x.K)
 		if err != nil {
-			return 0, fmt.Sprintf("%s (%s %dx%d): %v", weightRole(i), x.T, x.Rows, x.K, err), false
+			return 0, fmt.Sprintf("%s (%s %dx%d): %v", l.mats[i].role, x.T, x.Rows, x.K, err), false
 		}
 		total += f
 	}
 	return total, "", true
-}
-
-// weightRole names the slot a weight occupies in the fixed order PrepLayer
-// builds, so a decline reads as a tensor rather than as an index.
-func weightRole(i int) string {
-	names := [...]string{"attn_q", "attn_k", "attn_v", "attn_output",
-		"ffn_gate", "ffn_up", "ffn_down",
-		"sh_exp_gate", "sh_exp_up", "sh_exp_down",
-		"ssm_gate", "ssm_ba", "ssm_out",
-		"attn_q_a", "attn_q_b", "attn_kv_a", "attn_k_b", "attn_v_b",
-		"ssm_f_a", "ssm_f_b", "ssm_g_a", "ssm_g_b"}
-	if i < len(names) {
-		return names[i]
-	}
-	return fmt.Sprintf("weight %d", i)
 }
 
 // slots is how many blocks' weights this device can hold at once: the budget
@@ -608,7 +590,7 @@ func (g *devTier) pageInHold(li, lo, hi int) bool {
 	// The host bytes are asked for again before any is read: l.pg.ws holds
 	// slices into a host page captured at admission, and the host pager may
 	// since have reused that frame for another block, which would upload the
-	// wrong weights. This is the one place that re-reads, in weightList order
+	// wrong weights. This is the one place that re-reads, in layer.mats order
 	// so the refreshed set matches what tensors() frees.
 	if l.pg.ensure != nil && !g.pagedFaulted("stale") {
 		// Pinned across the upload below: the frame is the source, and a read
@@ -850,7 +832,8 @@ func (g *devTier) ReleasesHostPage(li int) bool {
 		// Sheet), so the host's copy of its block page is dead weight -- 1.2
 		// GiB a block on Kimi-K3. A bank kept in the block page (a float bank)
 		// is read from there, and that page stays.
-		return l.stream.w.Down.Packed != nil && l.stream.w.Down.Packed.Sheet != nil
+		d := l.stream.w.Mat(jlm.RoleExpDownBank)
+		return d.Packed != nil && d.Packed.Sheet != nil
 	}
 	any := false
 	for _, pp := range l.tensors() {

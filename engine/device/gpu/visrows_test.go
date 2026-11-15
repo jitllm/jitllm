@@ -134,7 +134,11 @@ func TestATowerIsBuiltForItsPicture(t *testing.T) {
 	need := int(one.Stats().BudgetUsed)
 	one.Close()
 	w := ws[0]
-	half := (len(w.Wq.Data) + len(w.Wk.Data) + len(w.Wv.Data) + len(w.Wo.Data) + len(w.Up.Data) + len(w.Down.Data)) / 2
+	half := 0
+	for _, m := range w.Mats {
+		half += len(m.W.Data)
+	}
+	half /= 2
 	g2, d2 := open(need-half, budget)
 	defer g2.Close()
 	if g2.PrepLayer(0, p, ws[0]) {

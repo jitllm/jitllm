@@ -3,6 +3,7 @@ package gpu
 import (
 	"testing"
 
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
 
 	"github.com/jitllm/jitllm/nn"
@@ -13,17 +14,34 @@ func blockWeights(p *nn.LayerPlan) *nn.LayerWeights {
 	q4 := func(rows, k int) nn.Weight {
 		return nn.Weight{T: quant.Q4_0, Data: make([]byte, rows*(k/32)*18), Rows: rows, K: k}
 	}
+	return denseWeights(p, q4)
+}
+
+// denseWeights is a dense block of p's shape by role: its two norms and its
+// seven matrices, each made by mk.
+func denseWeights(p *nn.LayerPlan, mk func(rows, k int) nn.Weight) *nn.LayerWeights {
 	kv := p.NKVHead * p.HeadDim
 	return &nn.LayerWeights{
-		AttnNorm: make([]float32, p.NEmbd), FFNNorm: make([]float32, p.NEmbd),
-		Wq:   q4(p.NHead*p.HeadDim, p.NEmbd),
-		Wk:   q4(kv, p.NEmbd),
-		Wv:   q4(kv, p.NEmbd),
-		Wo:   q4(p.NEmbd, p.NHead*p.HeadDim),
-		Gate: q4(p.NFFN, p.NEmbd),
-		Up:   q4(p.NFFN, p.NEmbd),
-		Down: q4(p.NEmbd, p.NFFN),
+		Vectors: []nn.RoleVector{{Role: jlm.RoleAttnNorm, V: make([]float32, p.NEmbd)}, {Role: jlm.RoleFFNNorm, V: make([]float32, p.NEmbd)}},
+		Mats: []nn.RoleWeight{
+			{Role: jlm.RoleAttnQ, W: mk(p.NHead*p.HeadDim, p.NEmbd)},
+			{Role: jlm.RoleAttnK, W: mk(kv, p.NEmbd)},
+			{Role: jlm.RoleAttnV, W: mk(kv, p.NEmbd)},
+			{Role: jlm.RoleAttnOut, W: mk(p.NEmbd, p.NHead*p.HeadDim)},
+			{Role: jlm.RoleFFNGate, W: mk(p.NFFN, p.NEmbd)},
+			{Role: jlm.RoleFFNUp, W: mk(p.NFFN, p.NEmbd)},
+			{Role: jlm.RoleFFNDown, W: mk(p.NEmbd, p.NFFN)},
+		},
 	}
+}
+
+// held is every matrix block l holds on the card, in its page's order.
+func (l *layer) held() []*resident {
+	rs := make([]*resident, len(l.mats))
+	for i, m := range l.mats {
+		rs[i] = m.r
+	}
+	return rs
 }
 
 // TestReleaseReturnsTheBudget is the leak gate on runtime migration: take

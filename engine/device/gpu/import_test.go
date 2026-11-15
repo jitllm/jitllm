@@ -94,7 +94,7 @@ func importedBufs(t *testing.T, g *devTier, li int) (wrapped, copied int, wrote 
 	if l == nil {
 		t.Fatalf("block %d is not resident", li)
 	}
-	for _, r := range []*resident{l.wq, l.wk, l.wv, l.wo, l.gate, l.up, l.down} {
+	for _, r := range l.held() {
 		if r == nil || !r.ok {
 			t.Fatalf("block %d has a tensor that is not resident", li)
 		}

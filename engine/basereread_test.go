@@ -5,6 +5,7 @@ package engine
 import (
 	"testing"
 
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/nn"
 )
 
@@ -67,11 +68,12 @@ func TestTheDeviceCallbackDoesNotRereadTheBase(t *testing.T) {
 	}
 	// The sheets it wants come from their own pages, the selected ones and no
 	// others.
-	if w.Gate.Packed == nil || w.Gate.Packed.Sheet == nil {
+	gb := w.Mat(jlm.RoleExpGateBank)
+	if gb.Packed == nil || gb.Packed.Sheet == nil {
 		t.Fatal("the callback handed the device no Sheet for the gate bank")
 	}
 	for _, x := range sel {
-		p, release, err := w.Gate.Packed.Sheet(int(x))
+		p, release, err := gb.Packed.Sheet(int(x))
 		if err != nil {
 			t.Fatal(err)
 		}

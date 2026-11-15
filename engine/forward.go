@@ -946,9 +946,9 @@ func (s *Instance) SetDeviceLayers(d nn.LayerDevice, max int) error {
 	if !ok {
 		return nil
 	}
-	// Mixture blocks are offered too: Gate/Up/Down carry the bank and
-	// LayerWeights.Router carries ffn_gate_inp; PrepLayer declines by name if
-	// it cannot run one.
+	// Mixture blocks are offered too, their banks and router among the
+	// block's matrices by role; PrepLayer declines by name if it cannot run
+	// one.
 	c := s.c
 	p := nn.LayerPlan{
 		// Whose blocks these are: a device holds one model's at a time.
@@ -1408,9 +1408,8 @@ func (s *Instance) streamedAt(li int) bool { return li < len(s.streamedOn) && s.
 func (s *Instance) newHead() *nn.Head {
 	c := s.c
 	f := s.m.FrontGraphs()
-	h := &nn.Head{Model: s.m.Id, File: s.m.Container, Graph: f.CpuHead, HiddenGraph: f.CpuHidden, Sample: f.CpuSample, SampleWalk: f.CpuWalk, PickGraph: f.Pick, PickHead: f.PickHead, Embed: f.Embed, Norm: s.outNorm, W: model.Wt(*s.outW), Logits: s.logits,
-		Softcap: c.FinalSoftcap, Embeds: c.TiedEmbd, EmbdScale: float32(c.EmbdScale),
-		Stages: s.m.HeadStages(), Bias: s.m.OutB, NoCPU: !s.listed(routeLanes)}
+	h := &nn.Head{Model: s.m.Id, File: s.m.Container, Graph: f.CpuHead, HiddenGraph: f.CpuHidden, Sample: f.CpuSample, SampleWalk: f.CpuWalk, PickGraph: f.Pick, PickHead: f.PickHead, Embed: f.Embed, Vectors: s.headVectors(), W: model.Wt(*s.outW), Logits: s.logits,
+		Embeds: c.TiedEmbd, NoCPU: !s.listed(routeLanes)}
 	if p := s.opt.place; p != nil && p.Head != nil {
 		h.Stream = p.Head.Stream
 	}
@@ -1424,17 +1423,22 @@ func (s *Instance) newHead() *nn.Head {
 	if c.Streams() > 1 {
 		h.Mix = s.streamsPart(f.CpuHead)
 	}
-	// The final softcap rides the head: a tier that takes it applies the cap on
-	// the device (nn.Head.Softcap), which is what lets a gemma2 token end in
-	// the device argmax instead of a 256,000-float readback.
-	// A LayerNorm head (C6) carries its bias, zeros where the file has none.
-	// The head's own bias (phi-2's output.bias) and the logit scale are
-	// stages of the head's graph, which the device applies with the rest
-	// (nn.Head.Applied).
-	if c.LayerNorm {
-		h.NormB = s.m.LnBias(s.m.OutNormB)
-	}
 	return h
+}
+
+// headVectors is the model's vectors outside its blocks, the norm this
+// instance projects through under the output norm's role.
+func (s *Instance) headVectors() []nn.RoleVector {
+	vs := make([]nn.RoleVector, 0, len(s.m.Vecs)+1)
+	for _, v := range s.m.Vecs {
+		if v.Role != jlm.RoleOutputNorm {
+			vs = append(vs, v)
+		}
+	}
+	if s.outNorm != nil {
+		vs = append(vs, nn.RoleVector{Role: jlm.RoleOutputNorm, V: s.outNorm})
+	}
+	return vs
 }
 
 // placeHeadOn puts the projection on the named device, as WithPlacement asks.
@@ -1457,84 +1461,27 @@ func (s *Instance) placeHeadOn(name string) bool {
 	return took
 }
 
-// layerWeightsAt gathers block li's weights as a device wants them, from l,
-// a copy of the block bound at a device's frames, and banks, its routed banks
-// over the same frames. It sets no callback -- the caller does, because they
-// call back into here. It is shared by the offer and by every device
+// layerWeightsAt gathers a block's tensors by role as a device wants them,
+// from l, a copy of the block bound at a device's frames, and banks, its
+// routed banks over the same frames (nil: the banks l binds), into vecs and
+// mats; half leaves the banks and the router out. It sets no callback -- the
+// caller does, because they call back into here. It is shared by the offer and by every device
 // page-in, which must agree.
-func (s *Instance) layerWeightsAt(li int, l *model.Layer, banks *[3]nn.Weight, extra *[]nn.RoleWeight) nn.LayerWeights {
-	qn, kn := s.qkNorms(li)
-	w := nn.LayerWeights{
-		Vectors:  l.Vecs,
-		AttnNorm: l.AttnNorm, FFNNorm: l.FfnNorm,
-		QNorm: qn, KNorm: kn,
-		Clamp: l.Clamp,
-		Wq:    model.Wt(l.Wq), Wk: model.Wt(l.Wk), Wv: model.Wt(l.Wv), Wo: model.Wt(l.Wo),
-		// For a MoE file these three are the banks -- l.gate is the 3-D
-		// ffn_gate_exps and l.experts[e] are views into it, so
-		// nothing is copied and the device indexes the same mapping.
-		Gate: banks[0], Up: banks[1], Down: banks[2],
-	}
-	// A LayerNorm always hands the device a bias -- zeros where the file has
-	// none (command-r) -- because the apply kernel takes one.
-	if s.c.LayerNormAt(li) {
-		w.AttnNormB = s.m.LnBias(l.AttnNormB)
-		if l.FfnNorm != nil {
-			w.FFNNormB = s.m.LnBias(l.FfnNormB)
-		}
-	}
-	if s.c.MoE() {
-		w.Router = model.Wt(l.Router)
-		if l.ShGate.Rows != 0 || l.ShUp.Rows != 0 {
-			w.ShGate, w.ShUp, w.ShDown = model.Wt(l.ShGate), model.Wt(l.ShUp), model.Wt(l.ShDown)
-		}
-	}
-	if s.c.LayerKind(li).Recurrent() {
-		w.SSM = nn.SSMWeights{
-			Gate: model.Wt(l.SsmGate), BA: model.Wt(l.SsmBA), Out: model.Wt(l.SsmOut), Conv1d: l.SsmConv1d,
-			FA: model.Wt(l.SsmFA), FB: model.Wt(l.SsmFB), GA: model.Wt(l.SsmGA), GB: model.Wt(l.SsmGB),
-		}
-		if s.m.Cfg.Scan() {
-			w.SSM.FA, w.SSM.FB, w.SSM.GA, w.SSM.GB = model.Wt(l.SsmXDt), model.Wt(l.SsmDtProj), model.Wt(l.SsmXB), model.Wt(l.SsmXC)
-		}
-	}
-	// MLA's five matrices. Wk and Wv stay zero-valued (MLA has no k or v
-	// projection; the tier skips a 0x0 weight). The per-head views are not
-	// carried: wkb and wvb are the banks, indexed by head on the device as an
-	// expert bank is by expert.
-	if s.c.MLA() {
-		w.Wkva, w.Wkb, w.Wvb = model.Wt(l.Wkva), model.Wt(l.Wkb), model.Wt(l.Wvb)
-	}
-	// A latent query is carried wherever the block stores one, whatever its
-	// attention.
-	w.Wqa, w.Wqb = model.Wt(l.Wqa), model.Wt(l.Wqb)
-	*extra = extraWeights(l, (*extra)[:0])
-	w.Extra = *extra
-	if k := s.c.LayerKind(li); k.Recurrent() && !k.Attends() {
-		// A linear block has none of these; leaving the attention four set
-		// would offer a device four matrices whose shapes do not match the
-		// plan it was handed. (planFor clears AttnOutGate for the same
-		// reason: s.plan sets it on every block of a qwen3next.)
-		w.Wk, w.Wv, w.Wo = nn.Weight{}, nn.Weight{}, nn.Weight{}
-		w.QNorm, w.KNorm = nil, nil
-	}
-	return w
-}
-
-// extraWeights is every matrix l stores beyond the ones a device is handed
-// by name, by role, in the order the block was read, appended to out.
-func extraWeights(l *model.Layer, out []nn.RoleWeight) []nn.RoleWeight {
-	named := [...]*model.Tensor{&l.Wq, &l.Wk, &l.Wv, &l.Wo, &l.Gate, &l.Up, &l.Down, &l.Router,
-		&l.ShGate, &l.ShUp, &l.ShDown, &l.SsmGate, &l.SsmBA, &l.SsmOut,
-		&l.SsmFA, &l.SsmFB, &l.SsmGA, &l.SsmGB, &l.SsmXDt, &l.SsmDtProj, &l.SsmXB, &l.SsmXC,
-		&l.Wqa, &l.Wqb, &l.Wkva, &l.Wkb, &l.Wvb}
+func layerWeightsAt(l *model.Layer, banks *[3]nn.Weight, half bool, vecs *[]nn.RoleVector, mats *[]nn.RoleWeight) nn.LayerWeights {
+	*vecs = l.Vectors((*vecs)[:0])
+	ms := (*mats)[:0]
 	for _, m := range l.Mats {
-		if slices.Contains(named[:], m.T) {
+		x := model.Wt(*m.T)
+		if banks != nil && jlm.ExpertBank(m.Role) {
+			x = banks[m.Role-jlm.RoleExpGateBank]
+		}
+		if half && (jlm.ExpertBank(m.Role) || m.Role == jlm.RoleRouter) {
 			continue
 		}
-		out = append(out, nn.RoleWeight{Role: m.Role, W: model.Wt(*m.T)})
+		ms = append(ms, nn.RoleWeight{Role: m.Role, W: x})
 	}
-	return out
+	*mats = ms
+	return nn.LayerWeights{Vectors: *vecs, Mats: ms}
 }
 
 // offer is block li as a card is offered it: a copy of the block of its
@@ -1554,9 +1501,10 @@ type offer struct {
 	// built at the first gather over those frames and kept.
 	banks  [3]nn.Weight
 	bankFr *jlm.Frames
-	// extra is the block's extra matrices (extraWeights), refilled in place
-	// at every gather.
-	extra []nn.RoleWeight
+	// vecs and mats are the block's tensors by role (layerWeightsAt),
+	// refilled in place at every gather.
+	vecs []nn.RoleVector
+	mats []nn.RoleWeight
 }
 
 // offerWeights is block li's weights as a card is offered them: the
@@ -1599,10 +1547,7 @@ func (o *offer) gather(dst *nn.LayerWeights, fr *jlm.Frames) {
 		o.banks = [3]nn.Weight{m.BankWeight(fr, l.Gate), m.BankWeight(fr, l.Up), m.BankWeight(fr, l.Down)}
 		o.bankFr = fr
 	}
-	w := o.s.layerWeightsAt(o.li, &o.l, &o.banks, &o.extra)
-	if o.half {
-		w.Router = nn.Weight{}
-	}
+	w := layerWeightsAt(&o.l, &o.banks, o.half, &o.vecs, &o.mats)
 	w.Bind, w.Ensure, w.EnsureExperts = dst.Bind, dst.Ensure, dst.EnsureExperts
 	w.PrefetchExperts, w.SpeculateExperts = dst.PrefetchExperts, dst.SpeculateExperts
 	w.ExpertUses = dst.ExpertUses
@@ -2589,27 +2534,6 @@ func (s *Instance) SetAttnPair(v int) { s.attnPair = v }
 // the generated softmax writes stays inside the row it belongs to.
 func attStride(maxSeq int) int { return (maxSeq + 15) &^ 15 }
 
-// devLogits says the logits the device's head handed back carry every stage
-// of the head past the projection (devApplied).
-func (s *Instance) devLogits() error {
-	var a nn.HeadStage
-	if s.head != nil {
-		a = s.head.Applied
-	}
-	return s.devApplied(a)
-}
-
-// devApplied says a device that applied the stages a of the head applied
-// all of them: the composed head's form is the whole head, its bias, cap
-// and scale in the model's order, and a device serves it whole or refuses
-// the call (nn.Head.Applied).
-func (s *Instance) devApplied(a nn.HeadStage) error {
-	if left := s.m.HeadStages() &^ a; left != 0 {
-		return fmt.Errorf("model: the device's head left the stages %03b of the head to the caller", left)
-	}
-	return nil
-}
-
 // Devices is every device the placement runs blocks on.
 func (s *Instance) Devices() []nn.BlockPlacer {
 	var ds []nn.BlockPlacer
@@ -2725,16 +2649,10 @@ func (s *Instance) PrewarmGPU(n int) <-chan struct{} {
 		defer close(done)
 		for li := lo; li < n; li++ {
 			l := s.layer(li)
-			qn, kn := s.qkNorms(li)
-			w := nn.LayerWeights{
-				Vectors:  l.Vecs,
-				AttnNorm: l.AttnNorm, FFNNorm: l.FfnNorm,
-				QNorm: qn, KNorm: kn,
-				Wq: model.Wt(l.Wq), Wk: model.Wt(l.Wk), Wv: model.Wt(l.Wv), Wo: model.Wt(l.Wo),
-				Gate: model.Wt(l.Gate), Up: model.Wt(l.Up), Down: model.Wt(l.Down),
-			}
+			var vecs []nn.RoleVector
+			var mats []nn.RoleWeight
+			w := layerWeightsAt(l, nil, false, &vecs, &mats)
 			if c.MoE() {
-				w.Router = model.Wt(l.Router)
 				// The same lazy marker offerRange sets: the routed bank is
 				// unread, and this goroutine must not do the file I/O beside a
 				// live submission, so the tier skips packing such a block and
@@ -3072,7 +2990,7 @@ func (s *Instance) ForwardSample(token int32, smp *Sampler) (int32, error) {
 		return s.Sample(smp, logits)
 	}
 	h := s.head
-	onDev := h != nil && h.Left()&(nn.HeadBias|nn.HeadScale) == 0 && smp.Bounded(s.c.NVocab) &&
+	onDev := h != nil && smp.Bounded(s.c.NVocab) &&
 		s.opt.devSample != DeviceSampleOff
 	// The call's one uniform, whichever arm draws with it: the device's
 	// walk, the device's candidates, the CPU's walk or the logits.
@@ -3231,9 +3149,6 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 			// The device ran the output norm and the projection too, so the
 			// token is finished and the residual never came home.
 			//
-			if err := s.devLogits(); err != nil {
-				return nil, err
-			}
 			s.advance(0, 1)
 			// The token is complete, so it steps what every token steps:
 			// a head on the device is no reason for the seam tuner or the
@@ -3286,9 +3201,6 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 	}
 	s.closeRuns(nil)
 	if done {
-		if err := s.devLogits(); err != nil {
-			return nil, err
-		}
 	}
 	// Through advance, not s.pos++: Prefill reads bpos, so a Prefill after a
 	// Forward must see this token.

@@ -3,10 +3,11 @@
 package nn
 
 import (
-	"github.com/jitllm/jitllm/nn/history"
 	"math"
 	"strings"
 	"sync/atomic"
+
+	"github.com/jitllm/jitllm/nn/history"
 
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
@@ -78,68 +79,17 @@ type Packed struct {
 	Sheets int
 }
 
-// LayerWeights is one transformer block.
-//
-// Many fields below are optional graph features. A device that cannot apply
-// one must decline the block rather than skip it: skipping runs and produces
-// fluent, wrong text.
+// LayerWeights is one block's tensors, by the role the file stores each
+// under: what the block's graph binds is read from here by role, and a
+// device that does not hold a tensor the graph binds declines the block.
 type LayerWeights struct {
-	// Vectors is every vector the file stores for the block, by role
-	// (jlm.Role.Expanded): what a composed block binds as a vector, as the
-	// file holds it.
+	// Vectors is every vector the block holds, by role (jlm.Role.Expanded),
+	// as the file holds it.
 	Vectors []RoleVector
-
-	AttnNorm, FFNNorm []float32 // tiny, always F32 in the file, kept expanded
-	// QNorm and KNorm are head_dim wide and nil unless the architecture
-	// RMSNorms each head of q and k before RoPE (qwen3).
-	QNorm, KNorm []float32
-	// Clamp is a block's clipped-linear bounds, 28 floats: for q, k, v, o,
-	// gate, up and down, the input's minimum and maximum and the output's;
-	// nil for a block with none.
-	Clamp []float32
-
-	// AttnNormB and FFNNormB are the LayerNorm biases (LayerPlan.LayerNorm):
-	// an RMSNorm has no bias and a LayerNorm does.
-	AttnNormB, FFNNormB []float32
-	Wq, Wk, Wv, Wo      Weight
-	// Gate, Up and Down are one expert's matrices in a dense block and the whole
-	// bank of LayerPlan.NExpert of them when Router.Data is non-nil. Rows stays
-	// one expert's row count either way; the bank is NExpert*Rows rows of the
-	// same buffer and the device does its own indexing.
-	Gate, Up, Down Weight
-	// Router is ffn_gate_inp: NExpert rows of NEmbd, F32 in every qwen3moe
-	// file. Non-nil Data is the MoE branch: the tensor's presence decides it,
-	// not the config.
-	Router Weight
-	// ShGate, ShUp and ShDown are the shared expert: an always-on FFN whose
-	// gate, in Vectors, is one weight per model dimension rather than a
-	// matrix. Zero unless LayerPlan.NFFNShExp is non-zero.
-	ShGate, ShUp, ShDown Weight
-	// SSM is a linear-attention block's weights, and every field is zero for an
-	// attention block. Wq carries the fused q|k|v projection for such a block;
-	// the layer kind decides the consumer.
-	SSM SSMWeights
-
-	// Multi-head latent attention's matrices and norms, all zero unless
-	// LayerPlan.KVLoraRank is set. MLA has no k or v projection: Wkva serves
-	// both, and the up-projections are absorbed into the operands either side
-	// of the softmax,
-	//
-	//	score_h = q_nope_h . (W_k_h . c)  =  (W_k_hᵀ . q_nope_h) . c
-	//	out_h   = Σ a_j (W_v_h . c_j)     =  W_v_h . (Σ a_j c_j)
-	//
-	// so Wk and Wv are left empty.
-	//
-	// Wkb and Wvb are banks, one sheet per head (Wkb.Rows is NHead*KVLoraRank
-	// of HeadDim-NRot, Wvb.Rows is NHead*HeadDimV of KVLoraRank), so the absorb
-	// runs as one indexed launch with the head as the index. Wkb is stored
-	// already transposed by the converter.
-	//
-	// Exactly one of Wq and (Wqa, Wqb) is populated, decided by QLoraRank.
-	Wqa, Wqb, Wkva, Wkb, Wvb Weight
-	// Extra is every other matrix the block stores, by role: what a composed
-	// block binds beyond the matrices above.
-	Extra []RoleWeight
+	// Mats is every matrix the block holds, by role. A routed bank
+	// (jlm.ExpertBank) is every expert's sheet in one Weight, Rows counting
+	// them all; the device does its own indexing.
+	Mats []RoleWeight
 
 	// Bind points w at fr, the frames of the device offered the block -- its
 	// own, in its own memory -- claimed and unread: shapes and lengths are
@@ -208,41 +158,15 @@ type RoleWeight struct {
 	W    Weight
 }
 
-// SSMWeights are the gated delta rule's tensors.
-//
-// The state is not a KV cache: it is a fixed VHeads x VDim x KDim matrix read
-// and written every token. A device kernel may not read a buffer it writes, so
-// a backend that runs this needs two state buffers and a swap.
-type SSMWeights struct {
-	Gate, BA, Out Weight    // the z projection, the beta/alpha head, the output
-	Conv1d        []float32 // {Conv, Chans}, tap-major as the file stores it
-	// FA/FB and GA/GB are Kimi Delta Attention's two low-rank gates: the
-	// forget gate whose softplus becomes the per-channel decay, and the output
-	// gate that replaces Gate. All four are zero on qwen3next, which has one
-	// matrix for the second and derives the first from BA's interleaved alpha.
-	//
-	// The selective scan (RecurrentPlan.Scan) carries its four matrices in the same
-	// four: FA is x_proj's dt rows and FB dt_proj (the same bottleneck shape
-	// as KDA's forget gate), GA x_proj's B rows and GB its C rows. The
-	// block's vectors (A, the dt bias, the norms, D, the convolution bias)
-	// are in LayerWeights.Vectors.
-	FA, FB, GA, GB Weight
+// Mat is the block's matrix under r (Mats), zero for none.
+func (w *LayerWeights) Mat(r jlm.Role) Weight {
+	for _, x := range w.Mats {
+		if x.Role == r {
+			return x.W
+		}
+	}
+	return Weight{}
 }
-
-// HeadStage is a step of the head past the output norm and the projection,
-// in the order the model applies them: the bias, the final softcap, the
-// logit scale.
-type HeadStage uint8
-
-const (
-	// HeadBias is the output projection's bias (phi-2's), added to the
-	// logits.
-	HeadBias HeadStage = 1 << iota
-	// HeadCap is the final softcap, c*tanh(x/c) (gemma2's, Head.Softcap).
-	HeadCap
-	// HeadScale is the logit scale, a divisor (Granite's).
-	HeadScale
-)
 
 // SampleMaxK bounds a device sampler's k (Head.SampleK): its candidates'
 // form is made for it once, and a larger k reads the logits back.
@@ -336,36 +260,18 @@ type Head struct {
 	// rows read the projection on the device (Embeds, with Embed), its bytes
 	// are held for them and it is placed as it is without.
 	Stream bool
-	Norm   []float32 // output_norm.weight
-	// NormB is the output LayerNorm's bias (C6), non-nil exactly when the
-	// model's norms are LayerNorms (LayerPlan.LayerNorm) -- zeros where the
-	// file carries none.
-	NormB []float32
-	W     Weight // the lm_head, which is token_embd when the model ties them
+	// Vectors is every vector the head's graphs may bind, by role: the
+	// model's, with the norm the instance projects through. A device serves
+	// Graph whole, binding each vector it names, or refuses the call.
+	Vectors []RoleVector
+	W       Weight // the lm_head, which is token_embd when the model ties them
 	// Logits is the destination, NVocab wide. Prefer ArgmaxOnly, which keeps
 	// the logits on the device and reads back one token id.
 	Logits []float32
-	// Softcap is the model's final logit softcap (gemma2), x = c*tanh(x/c)
-	// with c this value; 0 is none. A device that accepts the head applies it
-	// after the projection and before both the readback and the argmax, so
-	// Logits are read back capped and the caller must not cap them again.
-	Softcap float32
-	// Stages is what the model's head does past the projection, and Bias the
-	// output bias HeadBias adds, NVocab wide (nil without it). A device that
-	// serves Graph applies every stage the model has, in the model's order,
-	// and one that does not serve it refuses the call.
-	Stages HeadStage
-	Bias   []float32
-	// Applied is which Stages the device applied to the logits in the call
-	// that last ran this head, set by every such call: every one, where it
-	// served Graph. The caller holds it to that (Instance.devApplied).
-	Applied HeadStage
 	// Embeds says W is also the model's token embedding (a tied model), so a
 	// tier holding the head can look prompt tokens up itself -- see
-	// EmbedDevice. EmbdScale multiplies a looked-up row (gemma's sqrt(n_embd));
-	// 0 means 1.
-	Embeds    bool
-	EmbdScale float32
+	// EmbedDevice.
+	Embeds bool
 	// ArgmaxOnly asks for the next greedy token alone. A tier that can serves
 	// it on the device and sets Token, leaving Logits untouched; one that
 	// cannot fills Logits as always and leaves Token as the caller set it (-1).
@@ -393,10 +299,7 @@ type Head struct {
 	// in place of the row: a decision readout's label ids. A tier that serves
 	// it fills PickVals (as long as Pick at least), leaves Logits untouched
 	// and sets Picked; one that cannot fills Logits as always. The values are
-	// the projection's own, capped where the head caps (Softcap), and with
-	// the bias and the scale where the device served Graph (Applied). A device
-	// that leaves either to the caller declines the request, and a caller
-	// whose head has either does not ask. See model.Decider.
+	// the head's at those ids, every op of Graph applied. See model.Decider.
 	Pick     []int32
 	PickVals []float32
 	Picked   bool
@@ -435,9 +338,8 @@ func (h *Head) WantedRows(n int) int {
 	return n
 }
 
-// Left is the stages of the head the device left to the caller in the call
-// that last ran it: the model's Stages less what it Applied.
-func (h *Head) Left() HeadStage { return h.Stages &^ h.Applied }
+// Vector is the head's vector under r (Vectors), nil for none.
+func (h *Head) Vector(r jlm.Role) []float32 { return VectorOf(h.Vectors, r) }
 
 // MaxRopeTables is the most rotary tables a call carries, a bound this code
 // chose: an array keeps a call's tables in its frame rather than on the heap
@@ -777,9 +679,8 @@ type LayerPlan struct {
 	// stream-major, the model's (0 or 1 for one).
 	NStreams int
 	// Recurrent describes a linear-attention block, and it is non-zero only for
-	// one. Such a block has no q, k, v, o or KV cache at all -- see
-	// LayerWeights.SSM. It is offered to the device like any other block so the
-	// decision stays on the device's side of the seam.
+	// one. It is offered to the device like any other block so the decision
+	// stays on the device's side of the seam.
 	Recurrent RecurrentPlan
 	// NoFFN is a block that is its mixer alone (plain Mamba-2, a Nemotron-H
 	// mixer layer): it ends at the first residual add, and its FFN weights,
@@ -809,7 +710,7 @@ type RecurrentPlan struct {
 	TailLen int
 	// Scan is the per-element selective scan (jlm.LayerScan): VHeads channels
 	// of one row each over a KDim-wide state, B and C shared, the decay a
-	// vector exp(dt*A) per channel. Wq is x, SSMWeights.Gate is z.
+	// vector exp(dt*A) per channel.
 	Scan bool
 }
 

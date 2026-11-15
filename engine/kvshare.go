@@ -2,9 +2,10 @@ package engine
 
 import (
 	"fmt"
-	"github.com/jitllm/jitllm/nn/history"
 	"io"
 	"sync"
+
+	"github.com/jitllm/jitllm/nn/history"
 
 	"github.com/jitllm/jitllm/nn"
 )

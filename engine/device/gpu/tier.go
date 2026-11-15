@@ -1334,13 +1334,13 @@ type devShared struct {
 	recLs []*layer
 	// headEntry is the container entry of the projection the resident head
 	// is, headSrc the first byte it was uploaded from where it is no entry,
-	// and headNormHost the norm it was built with: what a second instance's
-	// PrepHead is compared against (adoptHead). altNorms are the other norms
+	// and headVecHost the vectors it was built with: what a second instance's
+	// PrepHead is compared against (adoptHead). altVecs are the other sets
 	// that head serves (headnorm.go).
-	headEntry    *jlm.Entry
-	headSrc      *byte
-	headNormHost []float32
-	altNorms     []altNorm
+	headEntry   *jlm.Entry
+	headSrc     *byte
+	headVecHost []nn.RoleVector
+	altVecs     []altVecs
 	// busy is the device's call lock: a session's step takes it shared, so
 	// steps of several sessions run at once, and a call that changes what
 	// every step reads (placement, a release, a migration) takes it
@@ -1873,9 +1873,9 @@ func (d *devTier) stats() Stats {
 		if l == nil || l.stream == nil || !l.stream.cached() {
 			continue
 		}
-		for m, r := range [3]*resident{l.gate, l.up, l.down} {
-			if r != nil && l.stream.plain[m] != nil {
-				s.StreamCacheBytes += r.bytes()
+		for m, b := range l.banks() {
+			if b != nil && *b != nil && l.stream.plain[m] != nil {
+				s.StreamCacheBytes += (*b).bytes()
 			}
 		}
 	}
@@ -1912,9 +1912,9 @@ func (d *devTier) stats() Stats {
 	}
 	for _, l := range d.layers {
 		if l != nil && l.stream != nil && l.stream.cached() && l.stream.plain[2] != nil {
-			for _, r := range [3]*resident{l.gate, l.up, l.down} {
-				if r != nil {
-					s.CacheBytes += r.bytes()
+			for _, b := range l.banks() {
+				if b != nil && *b != nil {
+					s.CacheBytes += (*b).bytes()
 				}
 			}
 		}
@@ -2122,7 +2122,7 @@ func (g *devTier) Close() {
 	g.lane0.freeSample()
 	g.lane0.freePick()
 	g.closeRows()
-	g.freeAltNorms()
+	g.freeAltVecs()
 	if g.recNext != nil {
 		g.recNext.Free()
 	}

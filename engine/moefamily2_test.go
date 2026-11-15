@@ -59,7 +59,7 @@ func moe2Fixtures() []struct {
 				c.NExpert == 8 && c.NExpertUsed == 2 && c.NFFNShExp == 0 && c.NDenseLead == 0 &&
 				c.NKVHead < c.NHead && !c.TiedEmbd && c.SWAWindow == 0 &&
 				math.Abs(c.AttnFactor-math.Sqrt(1+math.Log(8)/math.Log(512))) < 1e-6 &&
-				len(m.Rope.Freqs) == c.NRot/2 && m.OutB != nil && m.OutNormB != nil
+				len(m.Rope.Freqs) == c.NRot/2 && m.Vector(jlm.RoleOutputBias) != nil && m.Vector(jlm.RoleOutputNormBias) != nil
 			for i := range m.Layers {
 				l = &m.Layers[i]
 				ok = ok && l.Router.E != nil && l.Vector(jlm.RoleExpProbsB) == nil && l.ShGate.E == nil &&
@@ -129,10 +129,9 @@ func moe2Violations() map[string][]c6Violation {
 				return dropVecs(m, jlm.RoleAttnQBias, jlm.RoleAttnKBias, jlm.RoleAttnVBias, jlm.RoleAttnOutBias)
 			}},
 			{"no head bias", func(m *model.Model) func() {
-				was := m.OutB
-				m.OutB = nil
+				undoV := setDenseVec(m, jlm.RoleOutputBias, func([]float32) []float32 { return nil })
 				undoR := dropStoredDense(m, jlm.RoleOutputBias)
-				return func() { undoR(); m.OutB = was }
+				return func() { undoR(); undoV() }
 			}},
 			{"no LongRoPE short factors", func(m *model.Model) func() {
 				undo := builtGraphs(m)

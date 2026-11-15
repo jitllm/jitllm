@@ -18,17 +18,7 @@ func TestCompileFailureIsDeclined(t *testing.T) {
 	q4 := func(rows, k int) nn.Weight {
 		return nn.Weight{T: quant.Q4_0, Data: make([]byte, rows*(k/32)*18), Rows: rows, K: k}
 	}
-	kv := p.NKVHead * p.HeadDim
-	w := &nn.LayerWeights{
-		AttnNorm: make([]float32, p.NEmbd), FFNNorm: make([]float32, p.NEmbd),
-		Wq:   q4(p.NHead*p.HeadDim, p.NEmbd),
-		Wk:   q4(kv, p.NEmbd),
-		Wv:   q4(kv, p.NEmbd),
-		Wo:   q4(p.NEmbd, p.NHead*p.HeadDim),
-		Gate: q4(p.NFFN, p.NEmbd),
-		Up:   q4(p.NFFN, p.NEmbd),
-		Down: q4(p.NEmbd, p.NFFN),
-	}
+	w := denseWeights(p, q4)
 	run := func(fail bool) (bool, string, int) {
 		d := &fakeDev{}
 		g, err := New([]Slot{{Dev: d, Bytes: 1 << 40}}, WithDeviceTune(TuneOff))

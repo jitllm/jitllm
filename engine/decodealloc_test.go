@@ -2,13 +2,14 @@ package engine
 
 import (
 	"fmt"
-	"github.com/jitllm/jitllm/engine/device/cpudev"
 	"os"
 	"runtime"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/jitllm/jitllm/engine/device/cpudev"
 
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/model"

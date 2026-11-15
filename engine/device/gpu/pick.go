@@ -93,8 +93,8 @@ func (g *devTier) runPick(lc *launcher, bs *blockScratch) error {
 
 // runPickHead is the composer's head projecting the picked rows of in alone
 // into the lane's picked logits: the step's head and its pick in one form.
-func (g *devTier) runPickHead(lc *launcher, bs *blockScratch, norm, in backend.Buf) error {
-	sv, err := g.servedPickHead(bs, norm)
+func (g *devTier) runPickHead(lc *launcher, bs *blockScratch, vecs []roleBuf, in backend.Buf) error {
+	sv, err := g.servedPickHead(bs, vecs)
 	if err != nil {
 		return err
 	}

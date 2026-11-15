@@ -689,12 +689,10 @@ func stepTogether(runs []Run, rows int, ss nn.SessionStepper) ([][]float32, erro
 		return nil, fmt.Errorf("model: the device refused a step of %d rows across %d sessions: %s",
 			rows, len(runs), why)
 	}
-	headed := false
 	if nlogit > 0 && c.StreamHead() {
 		if why := s0.headRows(x, logits, nil, nlogit, s0.plane(rows)); why != nn.DeclineServes {
 			return nil, s0.headDeclined(why)
 		}
-		headed = true
 	}
 	out := s0.stepOut(len(runs))
 	at := 0
@@ -706,11 +704,6 @@ func stepTogether(runs []Run, rows int, ss nn.SessionStepper) ([][]float32, erro
 		st.kv.note(st.bpos[0], r.Tokens...)
 		if r.Logits {
 			copy(st.logits, logits[at*c.NVocab:(at+1)*c.NVocab])
-			if !headed {
-				if err := st.devApplied(h.Applied); err != nil {
-					return nil, err
-				}
-			}
 			out[i] = st.logits
 			at++
 		}

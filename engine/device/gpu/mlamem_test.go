@@ -83,18 +83,20 @@ func mlaBlocks(p *nn.LayerPlan, n int) []*nn.LayerWeights {
 		}
 		f := func(n int) []float32 { return make([]float32, n) }
 		out[i] = &nn.LayerWeights{
-			AttnNorm: f(p.NEmbd), FFNNorm: f(p.NEmbd),
-			// No Wq, Wk or Wv: the query is two-step (Wqa/Wqb) and kv_a
-			// serves both key and value.
-			Wo:  q4(p.NEmbd, p.NHead*mlaValueHead),
-			Wqa: q4(p.QLoraRank, p.NEmbd), Wqb: q4(p.NHead*p.HeadDim, p.QLoraRank),
-			Wkva: q4(p.KVRow(), p.NEmbd),
-			// The two absorb banks: one sheet per HEAD.
-			Wkb: q4(p.NHead*p.KVLoraRank, nope),
-			Wvb: q4(p.NHead*mlaValueHead, p.KVLoraRank),
-			// The two latent norms, which each free walk must reach.
-			Vectors: []nn.RoleVector{{Role: jlm.RoleAttnQANorm, V: f(p.QLoraRank)}, {Role: jlm.RoleAttnKVANorm, V: f(p.KVLoraRank)}},
-			Gate:    q4(p.NFFN, p.NEmbd), Up: q4(p.NFFN, p.NEmbd), Down: q4(p.NEmbd, p.NFFN),
+			// The norms, the two latent ones among them, which each free walk
+			// must reach.
+			Vectors: []nn.RoleVector{{Role: jlm.RoleAttnNorm, V: f(p.NEmbd)}, {Role: jlm.RoleFFNNorm, V: f(p.NEmbd)},
+				{Role: jlm.RoleAttnQANorm, V: f(p.QLoraRank)}, {Role: jlm.RoleAttnKVANorm, V: f(p.KVLoraRank)}},
+			// No q, k or v projection: the query is two-step and kv_a serves
+			// both key and value; the two absorb banks are one sheet per HEAD.
+			Mats: []nn.RoleWeight{
+				{Role: jlm.RoleAttnOut, W: q4(p.NEmbd, p.NHead*mlaValueHead)},
+				{Role: jlm.RoleAttnQA, W: q4(p.QLoraRank, p.NEmbd)}, {Role: jlm.RoleAttnQB, W: q4(p.NHead*p.HeadDim, p.QLoraRank)},
+				{Role: jlm.RoleAttnKVA, W: q4(p.KVRow(), p.NEmbd)},
+				{Role: jlm.RoleAttnKB, W: q4(p.NHead*p.KVLoraRank, nope)},
+				{Role: jlm.RoleAttnVB, W: q4(p.NHead*mlaValueHead, p.KVLoraRank)},
+				{Role: jlm.RoleFFNGate, W: q4(p.NFFN, p.NEmbd)}, {Role: jlm.RoleFFNUp, W: q4(p.NFFN, p.NEmbd)}, {Role: jlm.RoleFFNDown, W: q4(p.NEmbd, p.NFFN)},
+			},
 		}
 	}
 	return out
@@ -132,8 +134,8 @@ func TestLatentAttentionReturnsEveryDeviceBuffer(t *testing.T) {
 		for _, w := range []struct {
 			name string
 			r    *resident
-		}{{"attn_q_a", l.wqa}, {"attn_q_b", l.wqb}, {"attn_kv_a", l.wkva},
-			{"attn_k_b", l.wkb}, {"attn_v_b", l.wvb}} {
+		}{{"attn_q_a", l.roleWeight(jlm.RoleAttnQA)}, {"attn_q_b", l.roleWeight(jlm.RoleAttnQB)}, {"attn_kv_a", l.roleWeight(jlm.RoleAttnKVA)},
+			{"attn_k_b", l.roleWeight(jlm.RoleAttnKB)}, {"attn_v_b", l.roleWeight(jlm.RoleAttnVB)}} {
 			if w.r == nil || !w.r.ok {
 				t.Fatalf("block %d: %s is not resident, so this gate cannot see it leak",
 					li, w.name)
