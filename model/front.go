@@ -2294,7 +2294,10 @@ func (m *Model) blockOps(b *graph.Builder, li int) func(ins []graph.ValueID, op 
 			tok := b.Emit(graph.OpToken, nil, []graph.Result{{Name: "ng.tok", Width: 1, Elem: graph.ElemU32}}, nil, graph.Attrs{}, nil, nil)[0]
 			win := b.Emit(graph.OpTokenWindow, []graph.ValueID{tok}, []graph.Result{{Name: "ng.win", Width: n, Elem: graph.ElemU32}}, nil,
 				graph.Attrs{Taps: n, Offset: off, Span: stateSpan(c, base), Words: []uint64{uint64(hs.Image)}}, in, out)[0]
-			hashed := ngramHashRows(b, win, n, hs)
+			hashed, err := b.NGramRows(win, n, hs)
+			if err != nil {
+				return 0, fmt.Errorf("block %d: %w", li, err)
+			}
 			rows := make([]graph.ValueID, heads)
 			for h := range heads {
 				col := b.Emit(graph.OpSlice, []graph.ValueID{hashed}, []graph.Result{{Name: "ng.row", Width: 1, Elem: graph.ElemU32}}, nil,

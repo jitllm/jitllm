@@ -25,7 +25,10 @@ func TestComposedGPUNGramHash(t *testing.T) {
 		t.Run(d.API(), func(t *testing.T) {
 			ran, reset, dropped := 0, 0, 0
 			for _, c := range composer.NGramCases() {
-				g, win, rows := composer.NGramGraph(c)
+				g, win, rows, err := composer.NGramGraph(c)
+				if err != nil {
+					t.Fatal(err)
+				}
 				_, codes, err := composer.Default().Form(composer.Request{Graph: g, Formats: map[jlm.Role]jlm.Type{}, Step: composer.Step{Rows: 1, Page: 64, Keys: 1}, Device: gpuDevice(d)})
 				if err != nil {
 					t.Fatalf("%d-grams x%d: %v", c.N, c.Per, err)
@@ -42,15 +45,15 @@ func TestComposedGPUNGramHash(t *testing.T) {
 						t.Fatalf("%d-grams x%d window %d: %v", c.N, c.Per, i, err)
 					}
 					gotRows := vals[rows][:heads]
-					wantRows, _ := composer.NGramRef(w, c.Words, c.Per, c.Reset, -1)
+					wantRows, _ := composer.NGramRef(w, c.Words, c.Per, true, -1)
 					if !slices.Equal(gotRows, wantRows) {
 						op.close()
-						t.Fatalf("%d-grams x%d reset %v, window %v: rows %v, want %v", c.N, c.Per, c.Reset, w, gotRows, wantRows)
+						t.Fatalf("%d-grams x%d, window %v: rows %v, want %v", c.N, c.Per, w, gotRows, wantRows)
 					}
-					if r, _ := composer.NGramRef(w, c.Words, c.Per, !c.Reset, -1); !slices.Equal(r, gotRows) {
+					if r, _ := composer.NGramRef(w, c.Words, c.Per, false, -1); !slices.Equal(r, gotRows) {
 						reset++
 					}
-					if r, _ := composer.NGramRef(w, c.Words, c.Per, c.Reset, heads-1); heads > 1 && !slices.Equal(r, gotRows) {
+					if r, _ := composer.NGramRef(w, c.Words, c.Per, true, heads-1); heads > 1 && !slices.Equal(r, gotRows) {
 						dropped++
 					}
 				}

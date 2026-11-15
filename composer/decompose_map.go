@@ -155,8 +155,8 @@ func (x *exprs) mapFn(f graph.MapFn, a []int, exact bool) (int, error) {
 
 // wordFn is f over words a, as an expression into words states it: sums,
 // differences and products modulo 2^32, a comparison 1 or 0, a choice by a
-// nonzero word. No integer compare: equality is a difference's bits, a
-// choice a product by it.
+// nonzero word. Equality is the xor's bits, a choice a product by them;
+// less is the one compare, a predicate selecting 1 or 0.
 func (x *exprs) wordFn(f graph.MapFn, a []int) (int, error) {
 	U := ir.U32
 	switch f {

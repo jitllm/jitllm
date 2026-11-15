@@ -1145,7 +1145,7 @@ func ngramValid(c *Config) error {
 		return fmt.Errorf("jlm: an n-gram block with %d residual streams", c.HCMult)
 	}
 	for h, v := range c.NGramVoc {
-		if v == 0 || c.NGramOff[h]+v < c.NGramOff[h] {
+		if v == 0 || v > 1<<31 || c.NGramOff[h] > 1<<32-v {
 			return fmt.Errorf("jlm: n-gram head %d range [%d, +%d)", h, c.NGramOff[h], v)
 		}
 	}
