@@ -57,6 +57,7 @@ type mjKey struct {
 	Uint   string `json:"uint"`
 	Float  string `json:"float"`
 	Int32s string `json:"int32s"`
+	Bool   string `json:"bool"`
 }
 
 type mjRefusal struct {
@@ -84,6 +85,15 @@ type mjTensors struct {
 	Gather       []mjGather          `json:"gather"`
 	Ignore       []string            `json:"ignore"`
 	IgnorePrefix []string            `json:"ignore_prefix"`
+	Experts      *mjExperts          `json:"experts"`
+}
+
+// mjExperts names a mixture's per-expert matrices: the block-relative prefix
+// before an expert's index, and each matrix's bank by the bank's GGUF tensor
+// name. The converter stacks one bank per role.
+type mjExperts struct {
+	Prefix string            `json:"prefix"`
+	Names  map[string]string `json:"names"`
 }
 
 // mjTensor is a source tensor's role, by the role's GGUF tensor name (roleOf),
@@ -223,6 +233,16 @@ func (mj *modelJSON) hfArch() (*hfArch, error) {
 	}
 	for _, n := range mj.Tensors.Ignore {
 		a.ignore[n] = true
+	}
+	if e := mj.Tensors.Experts; e != nil {
+		a.expertPrefix, a.expert = e.Prefix, map[string]jlm.Role{}
+		for n, r := range e.Names {
+			role, ok := roleOf(r)
+			if !ok {
+				return nil, fmt.Errorf("convert: %s: expert matrix %s's bank %q is not a tensor name the container knows", mj.name, n, r)
+			}
+			a.expert[n] = role
+		}
 	}
 	elem := map[string][]mjElem{}
 	add := func(dst map[string]jlm.Role, name string, t mjTensor) error {
@@ -364,7 +384,7 @@ func (mj *modelJSON) config(c *hfConfig, names []string) (*Config, error) {
 		spec := mj.Config.Keys[k]
 		var src string
 		n := 0
-		for _, s := range []string{spec.Uint, spec.Float, spec.Int32s} {
+		for _, s := range []string{spec.Uint, spec.Float, spec.Int32s, spec.Bool} {
 			if s != "" {
 				src, n = s, n+1
 			}
@@ -389,6 +409,12 @@ func (mj *modelJSON) config(c *hfConfig, names []string) (*Config, error) {
 				return nil, err
 			}
 			kvs[ns+k] = meta.MakeUint(u)
+		case spec.Bool != "":
+			b, ok := v.(bool)
+			if !ok {
+				return nil, fmt.Errorf("convert: %s: %s is %s, not a boolean", c.path, k, exprKind(v))
+			}
+			kvs[ns+k] = meta.MakeBool(b)
 		case spec.Float != "":
 			f, ok := v.(float64)
 			if !ok {

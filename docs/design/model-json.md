@@ -50,7 +50,7 @@ schema; `convert/modeljson.go` reads it. Its sections:
   tower); `$.key` reads the file's top.
 - `config.arch` and `config.keys`: the graph `configOf` builds, by its GGUF
   name, and each GGUF key it reads (without the architecture's prefix) as a
-  typed expression, `{"uint": ...}`, `{"float": ...}` or `{"int32s": ...}`,
+  typed expression, `{"uint": ...}`, `{"float": ...}`, `{"int32s": ...}` or `{"bool": ...}`,
   over config.json. `configOf` stays the one reader of what a key means, as it
   is for Kimi-K3's safetensors entry.
 - `config.vocab`, `config.head` (`tensor`, `tied`) and `config.layers` (a
@@ -62,6 +62,8 @@ schema; `convert/modeljson.go` reads it. Its sections:
   onto a role by the role's GGUF tensor name (`roleOf`, one vocabulary for
   both formats), with `do`, the transforms it takes in order.
 - `tensors.gather`: a role built from several sources a block by a transform.
+- `tensors.experts`: a mixture's per-expert matrices, the prefix before an
+  expert's index and each matrix's bank by its GGUF name, stacked one bank a role.
 - `tensors.ignore`, `tensors.ignore_prefix`: what is named and not carried.
 
 The expressions are arithmetic, comparisons, `in`, `&&`, `||`, `!` and

@@ -53,6 +53,9 @@ func TestModelExprEvaluates(t *testing.T) {
 		{"secs ?? [1]", []any{11.0, 11.0, 10.0}},
 		{"missing ?? [11, 11, 10]", []any{11.0, 11.0, 10.0}},
 		{"$.head_dim", 256.0},
+		{"secs == [11, 11, 10]", true},
+		{"secs != [11, 11]", true},
+		{"(missing ?? []) != []", false},
 		{"null", nil},
 	} {
 		n, err := parseExpr(c.src)
@@ -158,6 +161,9 @@ func TestModelJSONRefuses(t *testing.T) {
 		{"unknown role", `"attn_q.weight"`, `"attn_quux.weight"`, "not a tensor name"},
 		{"unknown transform", `"attn_q.weight"`, `{"role": "attn_q.weight", "do": ["frobnicate"]}`, "not in the vocabulary"},
 		{"two shape transforms", `"attn_q.weight"`, `{"role": "attn_q.weight", "do": ["squeeze", "squeeze"]}`, "one is the limit"},
+		{"unknown expert bank", `"block": {"a.weight": "attn_q.weight"}`,
+			`"block": {"a.weight": "attn_q.weight"}, "experts": {"prefix": "e.", "names": {"w.weight": "ffn_quux_exps.weight"}}`,
+			"bank \"ffn_quux_exps.weight\""},
 	} {
 		src := strings.Replace(ok, c.from, c.to, 1)
 		if src == ok {

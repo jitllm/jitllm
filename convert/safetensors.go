@@ -1160,12 +1160,11 @@ func (a *hfArch) setData(e *jlm.Tensor, data []byte, c *Config) error {
 // entry. See hfArch.
 func hfArchTable() map[string]*hfArch {
 	return map[string]*hfArch{
-		"LlamaForCausalLM":    llamaHF(),
-		"Qwen3MoeForCausalLM": qwen3moeHF(),
-		"OlmoeForCausalLM":    olmoeHF(),
-		"MixtralForCausalLM":  mixtralHF(),
-		"GemmaForCausalLM":    gemmaHF(),
-		"Phi3ForCausalLM":     phi3HF(),
+		"LlamaForCausalLM":   llamaHF(),
+		"OlmoeForCausalLM":   olmoeHF(),
+		"MixtralForCausalLM": mixtralHF(),
+		"GemmaForCausalLM":   gemmaHF(),
+		"Phi3ForCausalLM":    phi3HF(),
 		// One graph, two class names: V2 and V3 differ in the router, and every
 		// difference is a key config.json states. See deepseek2HF.
 		"DeepseekV2ForCausalLM": deepseek2HF(),
@@ -1521,20 +1520,6 @@ func hfExperts() map[string]jlm.Role {
 	}
 }
 
-// qwen3's attention with the dense FFN replaced by a router and experts.
-func qwen3moeHF() *hfArch {
-	return &hfArch{
-		arch:         ArchQwen3MoE,
-		blockPrefix:  llamaHF().blockPrefix,
-		model:        llamaHF().model,
-		block:        blockPlus(qwen3Block(), map[string]jlm.Role{"mlp.gate.weight": jlm.RoleRouter}),
-		expertPrefix: "mlp.experts.",
-		expert:       hfExperts(),
-		ignore:       llamaHF().ignore,
-		config:       hfConfigWith(ArchQwen3MoE, jlm.FlagRopeNeox|jlm.FlagQKNorm, "silu"),
-	}
-}
-
 // olmoe is qwen3moe's names over two different graph facts: its q/k norm
 // spans the whole projection (checked by shape), and its mixture weights are
 // not renormalised (norm_topk_prob, read by hfMoEConfig).
@@ -1543,7 +1528,7 @@ func olmoeHF() *hfArch {
 		arch:         ArchOLMoE,
 		blockPrefix:  llamaHF().blockPrefix,
 		model:        llamaHF().model,
-		block:        qwen3moeHF().block,
+		block:        blockPlus(qwen3Block(), map[string]jlm.Role{"mlp.gate.weight": jlm.RoleRouter}),
 		expertPrefix: "mlp.experts.",
 		expert:       hfExperts(),
 		ignore:       llamaHF().ignore,

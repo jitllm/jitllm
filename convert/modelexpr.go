@@ -385,17 +385,28 @@ func evalBool(n *exprNode, env exprEnv) (bool, error) {
 	return b, nil
 }
 
-// exprEqual compares scalars; null equals only null.
+// exprEqual compares scalars, and lists element by element; null equals
+// only null.
 func exprEqual(a, b any) (bool, error) {
 	if a == nil || b == nil {
 		return a == nil && b == nil, nil
 	}
-	switch a.(type) {
+	switch av := a.(type) {
 	case float64, string, bool:
-	default:
-		return false, fmt.Errorf("%s compared with ==", exprKind(a))
+		return a == b, nil
+	case []any:
+		bv, ok := b.([]any)
+		if !ok || len(bv) != len(av) {
+			return false, nil
+		}
+		for i := range av {
+			if eq, err := exprEqual(av[i], bv[i]); err != nil || !eq {
+				return eq, err
+			}
+		}
+		return true, nil
 	}
-	return a == b, nil
+	return false, fmt.Errorf("%s compared with ==", exprKind(a))
 }
 
 func exprKind(v any) string {
