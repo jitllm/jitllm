@@ -98,6 +98,16 @@ SYNTH = {
     # A window of 4 so it bites inside the 8 golden positions: Phi3 masks every
     # layer to it, and the tiny-random fixtures' 2047 never reach it.
     "synth-phi3": ("phi3", dict(sliding_window=4), "tiny-random-Phi3ForCausalLM"),
+    # Phi3 under LongRoPE over an original context of 16, every factor its
+    # own: a golden of 40 positions runs past it, so transformers turns the
+    # long factors and the magnitude of a fourfold context, and an instance of
+    # 41 positions turns them too (model.RopeFor).
+    "synth-phi3-longrope": ("phi3", dict(
+        original_max_position_embeddings=16, max_position_embeddings=64,
+        rope_parameters={"rope_type": "longrope", "rope_theta": 10000.0, "original_max_position_embeddings": 16,
+                         "short_factor": [1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75],
+                         "long_factor": [3.0, 4.5, 2.5, 6.0, 3.5, 5.0, 7.5, 4.0]}),
+                            "tiny-random-Phi3ForCausalLM"),
     # MLA and the V3 router, in megabytes. Every knob here is switched ON
     # because the point of a synthetic fixture is that a wiring error shows as
     # an uncorrelated logit vector: q_lora_rank exercises the two-step query,
@@ -393,7 +403,7 @@ BUILT = {"synth-hf-qwen35": (synth_qwen35, qwen35Stale)}
 # A windowed fixture runs long enough to cross KV page boundaries: a window
 # SHORTER than a page (32 positions) is read out of one page until it is not,
 # and 8 positions never leave the first.
-LONG = {"synth-phi3": 80, "synth-hf-qwen3-yarn": 40, "synth-hf-mixtral-swa": 40, "synth-hf-olmo3": 40, "synth-hf-exaone4": 40, "synth-hf-ministral3": 24}
+LONG = {"synth-phi3": 80, "synth-phi3-longrope": 40, "synth-hf-qwen3-yarn": 40, "synth-hf-mixtral-swa": 40, "synth-hf-olmo3": 40, "synth-hf-exaone4": 40, "synth-hf-ministral3": 24}
 
 
 def ids_for(vocab, n=NPOS):

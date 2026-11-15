@@ -67,8 +67,9 @@ func TestPhiMoEThroughTheLibrary(t *testing.T) {
 
 // TestPhiMoEJitterIsTheArchs: the threshold phimoe.json holds a config to is
 // the one the arch's router runs at (PhiMoEJitter), a config that states
-// another is refused, and a router_jitter_noise that is absent or null reads
-// as the class's default, the library's reading of every null.
+// another is refused, an absent router_jitter_noise reads as the class's
+// default, and a null one is refused: PhimoeConfig keeps it None, and
+// sparsemixer's threshold 2 * None does not compute.
 func TestPhiMoEJitterIsTheArchs(t *testing.T) {
 	lib, err := modelLibrary()
 	if err != nil {
@@ -86,7 +87,7 @@ func TestPhiMoEJitterIsTheArchs(t *testing.T) {
 		{"another", fmt.Sprintf(`, "router_jitter_noise": %v`, 2*PhiMoEJitter), false},
 		{"zero", `, "router_jitter_noise": 0`, false},
 		{"absent", ``, true},
-		{"null", `, "router_jitter_noise": null`, true},
+		{"null", `, "router_jitter_noise": null`, false},
 	} {
 		_, err := mj.config(hfConfigOf(t, fmt.Sprintf(js, tc.key)), []string{"lm_head.weight"})
 		if (err == nil) != tc.ok {
