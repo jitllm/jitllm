@@ -254,8 +254,8 @@ func parseModelJSON(b []byte, name string) (*modelJSON, error) {
 		return nil, fmt.Errorf("convert: %s: %w", name, err)
 	}
 	for _, n := range mj.Archs {
-		if !archNamed(n) {
-			return nil, fmt.Errorf("convert: %s: %q is not an architecture the converter names", name, n)
+		if !slices.ContainsFunc(slices.Collect(maps.Values(hfArchTable())), func(a *hfArch) bool { return a.arch.String() == n }) {
+			return nil, fmt.Errorf("convert: %s: %q is no Go table class's architecture", name, n)
 		}
 	}
 	// A file of no class states a GGUF architecture's graph alone.
@@ -1436,14 +1436,4 @@ func exprUint(what string, v any) (uint64, error) {
 		return 0, fmt.Errorf("convert: %s is %v, not a count", what, v)
 	}
 	return uint64(f), nil
-}
-
-// archNamed says n is an architecture's name.
-func archNamed(n string) bool {
-	for a := Arch(1); a != ArchNone; a++ {
-		if a.name() == n {
-			return true
-		}
-	}
-	return false
 }

@@ -12,7 +12,6 @@ import (
 	"testing"
 	"testing/fstest"
 
-	"github.com/jitllm/jitllm/convert/gguf"
 	"github.com/jitllm/jitllm/convert/safetensors"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
@@ -37,7 +36,7 @@ func k3Sources(t *testing.T, dir, gp string) (hf, gg map[k3Key]*jlm.Tensor) {
 				"checkpoints and their GGUFs come from) -- this gate proved nothing", err)
 		}
 	}
-	a, b := hfSource(t, dir), ggufBuilt(t, gp)
+	a, b := hfSource(t, dir), ggufConverted(t, gp, true)
 	ca, cb := reflect.ValueOf(*a.Config), reflect.ValueOf(*b.Config)
 	for i := 0; i < ca.NumField(); i++ {
 		if !ca.Type().Field(i).IsExported() {
@@ -71,22 +70,6 @@ func k3Sources(t *testing.T, dir, gp string) (hf, gg map[k3Key]*jlm.Tensor) {
 		}
 	}
 	return hf, gg
-}
-
-// ggufBuilt is the source the converter builds from the GGUF at path, its
-// blocks' graphs stated.
-func ggufBuilt(t *testing.T, path string) *jlm.Source {
-	t.Helper()
-	f, err := gguf.Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { f.Close() })
-	s, err := buildGGUF(f, nil, path, "", options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return s
 }
 
 // k3Values decodes a tensor to f32.

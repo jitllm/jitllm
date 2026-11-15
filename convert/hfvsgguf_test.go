@@ -69,12 +69,24 @@ func hfSource(t testing.TB, dir string) *jlm.Source {
 
 func ggufSource(t testing.TB, path string) *jlm.Source {
 	t.Helper()
+	return ggufConverted(t, path, false)
+}
+
+// ggufConverted is the source of the GGUF at path as sourceOf reads it, or,
+// built, as the converter builds it, its blocks' graphs stated.
+func ggufConverted(t testing.TB, path string, built bool) *jlm.Source {
+	t.Helper()
 	f, err := gguf.Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { f.Close() })
-	s, err := sourceOf(f)
+	var s *jlm.Source
+	if built {
+		s, err = buildGGUF(f, nil, path, "", options{})
+	} else {
+		s, err = sourceOf(f)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
