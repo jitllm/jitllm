@@ -1168,9 +1168,8 @@ func (a *hfArch) setData(e *jlm.Tensor, data []byte, c *Config) error {
 // entry. See hfArch.
 func hfArchTable() map[string]*hfArch {
 	return map[string]*hfArch{
-		"LlamaForCausalLM":   llamaHF(),
-		"MixtralForCausalLM": mixtralHF(),
-		"Phi3ForCausalLM":    phi3HF(),
+		"LlamaForCausalLM": llamaHF(),
+		"Phi3ForCausalLM":  phi3HF(),
 		// One graph, two class names: V2 and V3 differ in the router, and every
 		// difference is a key config.json states. See deepseek2HF.
 		"DeepseekV2ForCausalLM": deepseek2HF(),
@@ -1523,42 +1522,6 @@ func hfExperts() map[string]jlm.Role {
 		"gate_proj.weight": jlm.RoleExpGateBank,
 		"up_proj.weight":   jlm.RoleExpUpBank,
 		"down_proj.weight": jlm.RoleExpDownBank,
-	}
-}
-
-// mixtral is llama with the FFN swapped, as its GGUF names it, so it keeps
-// llama's rotary permutation and Arch. Its router always renormalises the
-// top-k; the class has no norm_topk_prob.
-func mixtralHF() *hfArch {
-	return &hfArch{
-		arch:        ArchLlama,
-		blockPrefix: llamaHF().blockPrefix,
-		model:       llamaHF().model,
-		block: map[string]jlm.Role{
-			"input_layernorm.weight":          jlm.RoleAttnNorm,
-			"post_attention_layernorm.weight": jlm.RoleFFNNorm,
-			"self_attn.q_proj.weight":         jlm.RoleAttnQ,
-			"self_attn.k_proj.weight":         jlm.RoleAttnK,
-			"self_attn.v_proj.weight":         jlm.RoleAttnV,
-			"self_attn.o_proj.weight":         jlm.RoleAttnOut,
-			"block_sparse_moe.gate.weight":    jlm.RoleRouter,
-		},
-		expertPrefix: "block_sparse_moe.experts.",
-		expert: map[string]jlm.Role{
-			"w1.weight": jlm.RoleExpGateBank,
-			"w3.weight": jlm.RoleExpUpBank,
-			"w2.weight": jlm.RoleExpDownBank,
-		},
-		ignore: llamaHF().ignore,
-		config: func(c *hfConfig, names []string) (*Config, error) {
-			cfg, err := hfConfigWith(ArchLlama, 0, "silu")(c, names)
-			if err != nil {
-				return nil, err
-			}
-			cfg.Flags &^= jlm.FlagNoExpertNorm
-			return cfg, nil
-		},
-		fixup: llamaHFFixup,
 	}
 }
 

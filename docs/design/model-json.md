@@ -130,7 +130,9 @@ primitive has its definition and its violations in
 `[channels, 1, taps]` convolution `{"reshape": [-1, "linear_conv_kernel_dim"]}`;
 Qwen3.5's beta and alpha, per key head its value heads' rows from each,
 `stack` 0, `reshape` `[2, key heads, -1]`, `transpose` `[1, 0, 2]`, `reshape`
-`[2 * value heads, -1]`.
+`[2 * value heads, -1]`; llama's rotary row order on Mixtral's q and k,
+`reshape` `[heads, 2, head_dim / 2, hidden]`, `transpose` `[0, 2, 1, 3]`,
+`reshape` back.
 
 A GGUF source is to use the same schema (step 3 below): its tensor names are
 already llama.cpp's, which `roles.go` maps once for every family, so a GGUF
