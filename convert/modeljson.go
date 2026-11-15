@@ -85,7 +85,15 @@ func mjActivations() map[string]jlm.Flags {
 		"swish":             0,
 		"gelu_pytorch_tanh": jlm.FlagGELU,
 		"relu2":             jlm.FlagReLU2,
+		"xielu":             0,
 	}
+}
+
+// mjActivationParams is each activation whose parameters a block carries, by
+// the role they are carried in: the activation is the graph's when every
+// block has them (mjActivationCover).
+func mjActivationParams() map[string]jlm.Role {
+	return map[string]jlm.Role{"xielu": jlm.RoleXIELU}
 }
 
 // mjActivationFlags are the flags mjActivations decides between.
@@ -97,7 +105,14 @@ func mjFlags() map[string]jlm.Flags {
 	return map[string]jlm.Flags{
 		"attention_output_gate": jlm.FlagAttnOutGate,
 		"non_causal":            jlm.FlagNonCausal,
+		"qk_norm":               jlm.FlagQKNorm,
 	}
+}
+
+// mjFlagsNotImplemented is each graph feature a file may state by name that
+// the engine does not run, with what it is: stated true, it is refused.
+func mjFlagsNotImplemented() map[string]string {
+	return map[string]string{"post_norm": "each sublayer normed after it in place of before"}
 }
 
 // mjKey is one GGUF key's value, an expression with the key's type.
@@ -186,9 +201,9 @@ func (ts *mjTargets) UnmarshalJSON(b []byte) error {
 // mjGather builds one tensor a block from several sources, each entering as
 // the vector of its values, by primitives that leave one tensor.
 type mjGather struct {
-	Role string   `json:"role"`
-	From []string `json:"from"`
-	Do   mjPipe   `json:"do"`
+	Role string      `json:"role"`
+	From []mjOperand `json:"from"`
+	Do   mjPipe      `json:"do"`
 }
 
 func parseModelJSON(b []byte, name string) (*modelJSON, error) {
@@ -211,7 +226,7 @@ func parseModelJSON(b []byte, name string) (*modelJSON, error) {
 		return nil, fmt.Errorf("convert: %s states no activation", name)
 	}
 	for f := range mj.Config.Flags {
-		if _, ok := mjFlags()[f]; !ok {
+		if _, ok := mjFlags()[f]; !ok && mjFlagsNotImplemented()[f] == "" {
 			return nil, fmt.Errorf("convert: %s: flag %q is not a graph feature the container states", name, f)
 		}
 	}
@@ -445,6 +460,7 @@ func (mj *modelJSON) hfArch() (*hfArch, error) {
 			return nil
 		}
 	}
+	var steps []hfGatherStep
 	if len(mj.Tensors.Gather) > 0 {
 		gs := make([]hfGatherStep, len(mj.Tensors.Gather))
 		for i, g := range mj.Tensors.Gather {
@@ -458,24 +474,50 @@ func (mj *modelJSON) hfArch() (*hfArch, error) {
 			if err := g.Do.check(); err != nil {
 				return nil, fmt.Errorf("convert: %s: the gather of %s: %w", mj.name, g.Role, err)
 			}
+			for _, o := range g.From {
+				if err := o.Do.check(); err != nil {
+					return nil, fmt.Errorf("convert: %s: the gather of %s: %w", mj.name, g.Role, err)
+				}
+			}
 			gs[i] = hfGatherStep{role: retarget(a.arch, r), from: g.From, do: g.Do}
 		}
-		a.gather = func(c *Config, names []string, read func(string) ([]float32, error)) ([]jlm.Tensor, map[string]bool, error) {
-			st.mu.Lock()
-			env := st.env
-			st.mu.Unlock()
-			return gatherBlocks(env, a.blockPrefix, gs, names, read)
+		steps = gs
+	}
+	a.gather = func(c *Config, names []string, read func(string) ([]float32, error)) ([]jlm.Tensor, map[string]bool, error) {
+		st.mu.Lock()
+		env, act := st.env, st.act
+		st.mu.Unlock()
+		out, used, err := gatherBlocks(env, a.blockPrefix, steps, names, read)
+		if err != nil {
+			return nil, nil, err
 		}
+		if err := mjActivationCover(act, c, out); err != nil {
+			return nil, nil, err
+		}
+		return out, used, nil
 	}
 	a.config = func(c *hfConfig, names []string) (*Config, error) {
 		env, err := mj.env(c)
 		if err != nil {
 			return nil, err
 		}
+		cfg, err := mj.configIn(env, c, names)
+		if err != nil {
+			return nil, err
+		}
+		n, err := parseExpr(mj.Config.Activation)
+		if err != nil {
+			return nil, err
+		}
+		av, err := evalMJ(n, env)
+		if err != nil {
+			return nil, err
+		}
+		act, _ := av.(string)
 		st.mu.Lock()
-		st.env = env
+		st.env, st.act = env, act
 		st.mu.Unlock()
-		return mj.configIn(env, c, names)
+		return cfg, nil
 	}
 	return a, nil
 }
@@ -784,6 +826,13 @@ func (mj *modelJSON) configIn(env exprEnv, c *hfConfig, names []string) (*Config
 		b, ok := v.(bool)
 		if !ok {
 			return nil, fmt.Errorf("convert: %s: flag %s is %s, not a boolean", c.path, f, exprKind(v))
+		}
+		if why := mjFlagsNotImplemented()[f]; why != "" {
+			if b {
+				return nil, fmt.Errorf("convert: %s: %s is true (%s), which is not implemented: %w",
+					c.path, f, why, ErrNotImplemented)
+			}
+			continue
 		}
 		if b {
 			cfg.Flags |= mjFlags()[f]

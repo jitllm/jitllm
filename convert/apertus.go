@@ -20,14 +20,10 @@ import (
 //	                                                numbers a block (RoleXIELU)
 //
 // The activation is the arch's: a GGUF names it only through the xielu.* keys
-// apertusXIELU folds.
+// apertusXIELU folds, and refuses a file without; a safetensors checkpoint's
+// model.json gathers the same vector from the block's own four tensors.
 func apertusConfig(f *meta.File, c *Config) error {
 	c.Flags |= jlm.FlagQKNorm | jlm.FlagRopeNeox
-	for _, k := range []string{"xielu.alpha_p", "xielu.alpha_n", "xielu.beta", "xielu.eps"} {
-		if _, ok := xieluKey(f, k); !ok {
-			return fmt.Errorf("no %s: Apertus's activation is carried there", k)
-		}
-	}
 	return nil
 }
 

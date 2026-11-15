@@ -1147,8 +1147,6 @@ func hfArchTable() map[string]*hfArch {
 		// code did; transformers saves its own spelling (convert/hfphimoe.go).
 		"PhiMoEForCausalLM": phimoeHF(),
 		"PhimoeForCausalLM": phimoeHF(),
-		// Apertus (convert/hfapertus.go).
-		"ApertusForCausalLM": apertusHF(),
 		// The dense llama family (convert/safetensors_dense.go). OLMo 3 is
 		// ArchOLMo2 with a window, as on the GGUF side. Ministral3ForCausalLM is
 		// mistral3's text model; Mistral3ForConditionalGeneration, which nests it

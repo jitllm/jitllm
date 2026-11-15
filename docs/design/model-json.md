@@ -77,7 +77,12 @@ schema; `convert/modeljson.go` reads it. Its sections:
   it, so the statement decides:
   - `config.activation`: the feed-forward's activation by its transformers
     name, onto the container's activation flags (`mjActivations`: silu,
-    swish, gelu_pytorch_tanh, relu2). Required; another name is refused.
+    swish, gelu_pytorch_tanh, relu2, xielu). Required; another name is refused.
+    An activation whose parameters a block carries names their role
+    (`mjActivationParams`: xielu, `ffn_xielu`): every block then carries
+    them, and a file stating another activation is refused when a block
+    does, since the engine runs a block's stored parameters as its
+    activation (`mjActivationCover`).
   - `config.rope_scaling`: the rope scaling object (`rope_parameters ??
     rope_scaling`). Null and `default` state nothing; a published method is
     implemented in code once (`mjRopeScaling`): llama3 states its per-pair
@@ -88,8 +93,10 @@ schema; `convert/modeljson.go` reads it. Its sections:
     `attention.sliding_window`, and a graph whose config does not carry it
     is refused.
   - `config.flags`: named graph features (`mjFlags`:
-    `attention_output_gate`, `non_causal`), each a boolean onto the flag the
-    engine runs it by.
+    `attention_output_gate`, `non_causal`, `qk_norm`), each a boolean onto
+    the flag the engine runs it by; a feature the engine does not run is
+    named too (`mjFlagsNotImplemented`: `post_norm`), and stated true is
+    refused.
   - A partial rotary is `rope.dimension_count` among the keys.
 - There are no refusals in a file. A refusal is missing support, and it
   lives in converter code, one rule for every model: an activation, a rope
@@ -110,6 +117,11 @@ schema; `convert/modeljson.go` reads it. Its sections:
 - `tensors.gather`: a role built a block from several sources (`from`), each
   entering as the vector of its values, by primitives (`do`) that leave one
   tensor: `stack` or `concat` them, or `map` over them, then shape the result.
+  An operand may itself be composed, `{"from": [...], "do": [...]}`, its own
+  primitives over its own sources, so each operand is rounded once (Apertus's
+  xIELU: softplus of one number, beta plus softplus of another, then the
+  four joined). The result is named as the container names the role
+  (`blk.N.ffn_xielu`), as the GGUF path names the same tensor.
 - `tensors.experts`: a mixture's per-expert matrices, the prefix before an
   expert's index and each matrix's bank by its GGUF name, stacked one bank a role.
 - `tensors.ignore`, `tensors.ignore_prefix`: what is named and not carried.
@@ -122,7 +134,7 @@ says they are one key spelled two ways, and both present and disagreeing is
 an error; a parenthesised side states precedence instead (`a ?? (b)` is a,
 and b only where a is absent), which is how a default read from another key
 is written (`num_key_value_heads ?? (num_attention_heads ?? 32)`). There are
-no loops; calls (`exp`, `log`, `sqrt`, `tanh`) are a tensor map's alone; the
+no loops; calls (`exp`, `log`, `sqrt`, `tanh`, `softplus`) are a tensor map's alone; the
 nesting is bounded (`FuzzModelExpr`).
 
 The primitives, each a step of a `do` list with exactly one field:

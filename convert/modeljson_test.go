@@ -667,7 +667,7 @@ func TestModelJSONPrimitives(t *testing.T) {
 
 // TestLlama3RopeScalingStatesItsFactors: a llama3 rope scaling, read through a
 // library file, states rope_freqs.weight as convert_hf_to_gguf.py computes it
-// (llama3Freqs, the Apertus entry's own), the published defaults where the
+// (llama3Freqs, ropescaling.go), the published defaults where the
 // object is silent; default states no tensor.
 func TestLlama3RopeScalingStatesItsFactors(t *testing.T) {
 	lib, err := modelLibrary()

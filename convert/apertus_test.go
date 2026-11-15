@@ -52,7 +52,11 @@ func TestApertusFoldsItsActivation(t *testing.T) {
 		}
 	}
 	delete(kv, "xielu.eps")
-	if _, err := configOf(meta.New(f.Path, kv, f.Tensors)); err == nil {
+	f = meta.New(f.Path, kv, f.Tensors)
+	if c, err = configOf(f); err != nil {
+		t.Fatal(err)
+	}
+	if err := apertusXIELU(c, f, &jlm.Source{Config: c.Config}); err == nil {
 		t.Fatal("an Apertus with no xielu.eps converted")
 	}
 }

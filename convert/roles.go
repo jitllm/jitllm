@@ -54,6 +54,8 @@ func coreRoleOf(name string) (jlm.Role, bool) {
 		return jlm.RoleRopeFactorsShort, true
 	case "rope_freqs.weight":
 		return jlm.RoleRopeFreqs, true
+	case "ffn_xielu":
+		return jlm.RoleXIELU, true
 	case "token_types.weight":
 		return jlm.RoleTokenTypes, true
 	case "position_embd.weight":

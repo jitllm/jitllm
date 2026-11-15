@@ -1,6 +1,7 @@
 package convert
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -72,7 +73,7 @@ func (s *mjSize) UnmarshalJSON(b []byte) error {
 // mjOp is one primitive as a file writes it; exactly one field is set.
 type mjOp struct {
 	// Map is an elementwise expression over the tensors in hand, x the first,
-	// y the second, z the third, with exp, log, sqrt and tanh; config paths
+	// y the second, z the third, with exp, log, sqrt, tanh and softplus; config paths
 	// are constants. The result is float32.
 	Map string `json:"map"`
 	// Reshape is the new shape, slowest axis first; one size may be -1, the
@@ -489,7 +490,16 @@ func mjMapVar(name string) (int, bool) {
 
 // mjMapFuncs are the functions a map may call.
 func mjMapFuncs() map[string]func(float64) float64 {
-	return map[string]func(float64) float64{"exp": math.Exp, "log": math.Log, "sqrt": math.Sqrt, "tanh": math.Tanh}
+	return map[string]func(float64) float64{"exp": math.Exp, "log": math.Log, "sqrt": math.Sqrt, "tanh": math.Tanh,
+		"softplus": softplus}
+}
+
+// softplus is torch's: log(1 + e^x), and x itself past 20.
+func softplus(x float64) float64 {
+	if x > 20 {
+		return x
+	}
+	return math.Log1p(math.Exp(x))
 }
 
 // mjMapCheck refuses at lowering what a map cannot compute.
@@ -641,14 +651,79 @@ type mjState struct {
 	mu  sync.Mutex
 	env exprEnv
 	src map[string]mjVal
+	act string // the activation the file states
 }
 
 // hfGatherStep is one model.json gather: the role it makes, its sources by
 // block-relative name, and the primitives that make one tensor of them.
 type hfGatherStep struct {
 	role jlm.Role
-	from []string
+	from []mjOperand
 	do   mjPipe
+}
+
+// mjOperand is one of a gather's inputs: a source by its block-relative name,
+// or one tensor composed of sources by primitives of its own.
+type mjOperand struct {
+	Name string   `json:"-"`
+	From []string `json:"from"`
+	Do   mjPipe   `json:"do"`
+}
+
+func (o *mjOperand) UnmarshalJSON(b []byte) error {
+	var s string
+	if json.Unmarshal(b, &s) == nil {
+		*o = mjOperand{Name: s}
+		return nil
+	}
+	type plain mjOperand
+	d := json.NewDecoder(bytes.NewReader(b))
+	d.DisallowUnknownFields()
+	if err := d.Decode((*plain)(o)); err != nil {
+		return err
+	}
+	if len(o.From) == 0 || len(o.Do) == 0 {
+		return fmt.Errorf("an operand composed of sources names them and its primitives")
+	}
+	return nil
+}
+
+// names are the sources an operand reads, in order.
+func (o mjOperand) names() []string {
+	if o.Name != "" {
+		return []string{o.Name}
+	}
+	return o.From
+}
+
+// mjActivationCover holds the gathered tensors to the stated activation: one
+// whose parameters are a per-block role (mjActivationParams) finds them in
+// every block, and a block carrying another activation's parameters is
+// refused, since the engine runs a block's stored parameters as its activation.
+func mjActivationCover(act string, c *Config, out []jlm.Tensor) error {
+	have := map[jlm.Role]map[int32]bool{}
+	for _, r := range mjActivationParams() {
+		have[r] = map[int32]bool{}
+	}
+	for _, t := range out {
+		if h, ok := have[t.Role]; ok {
+			h[t.Block] = true
+		}
+	}
+	want := mjActivationParams()[act]
+	for a, r := range mjActivationParams() {
+		switch {
+		case r == want:
+			for b := int32(0); b < int32(c.NLayer); b++ {
+				if !have[r][b] {
+					return fmt.Errorf("convert: the activation is %s, and block %d carries no %v, its parameters", act, b, r)
+				}
+			}
+		case len(have[r]) > 0:
+			return fmt.Errorf("convert: the blocks carry %v, the parameters of activation %s, and the activation is %s", r, a, act)
+		}
+	}
+	return nil
 }
 
 // gatherBlocks runs each step on every block that carries its first source.
@@ -665,24 +740,37 @@ func gatherBlocks(env exprEnv, prefix string, steps []hfGatherStep, names []stri
 				continue
 			}
 			block, tail, err := leadingIndex(n, rest)
-			if err != nil || tail != g.from[0] {
+			if err != nil || tail != g.from[0].names()[0] {
 				continue
 			}
-			src := make([]mjVal, len(g.from))
 			bp := prefix + itoa(int(block)) + "."
-			for i, f := range g.from {
+			source := func(f string) (mjVal, error) {
 				v, err := read(bp + f)
 				if err != nil {
-					return nil, nil, err
+					return mjVal{}, err
 				}
-				src[i] = mjVal{shape: []uint64{uint64(len(v))}, typ: jlm.TypeF32, data: f32AsBytes(v)}
 				used[bp+f] = true
+				return mjVal{shape: []uint64{uint64(len(v))}, typ: jlm.TypeF32, data: f32AsBytes(v)}, nil
+			}
+			src := make([]mjVal, len(g.from))
+			for i, o := range g.from {
+				ins := make([]mjVal, len(o.names()))
+				for j, f := range o.names() {
+					if ins[j], err = source(f); err != nil {
+						return nil, nil, err
+					}
+				}
+				if o.Name != "" {
+					src[i] = ins[0]
+				} else if src[i], err = o.Do.run(env, ins); err != nil {
+					return nil, nil, fmt.Errorf("convert: %s: operand %d: %w", n, i, err)
+				}
 			}
 			v, err := g.do.run(env, src)
 			if err != nil {
 				return nil, nil, fmt.Errorf("convert: %s: %w", n, err)
 			}
-			e := jlm.Tensor{Role: g.role, Block: block, Index: -1, Name: bp + g.from[0] + "(gathered)", Data: v.data}
+			e := jlm.Tensor{Role: g.role, Block: block, Index: -1, Name: "blk." + itoa(int(block)) + "." + g.role.String(), Data: v.data}
 			if err := mjSetShape(&e, v); err != nil {
 				return nil, nil, err
 			}
