@@ -31,7 +31,7 @@ func archOf() map[string]Arch {
 		// Qwen3.5/3.6 are qwen3next's block re-cut, and every cut is in the file:
 		// beta and alpha arrive as two tensors (fused back by fuseBetaAlpha), the
 		// value heads are tiled (jlm.FlagDeltaKeyTiled), qwen35's FFN is dense, and
-		// the interleaved M-RoPE is exactly NEOX for a text prompt. See qwen35Of.
+		// the interleaved M-RoPE is exactly NEOX for a text prompt (convert/models/qwen3_5.json).
 		"qwen35":    ArchQwen3Next,
 		"qwen35moe": ArchQwen3Next,
 		// Clef-Flash: Qwen3.5-9B's text model under another name, with a joint
@@ -367,24 +367,6 @@ func configOfFile(f *meta.File) (*Config, error) {
 	case ArchGemma2, ArchGemma3:
 		gemmaAttnScale(c)
 	case ArchQwen3Next, ArchQwen4Exp:
-		// A hybrid: most layers run a gated delta rule over a recurrent state
-		// and every fourth runs ordinary attention. NEOX rope on the attention
-		// layers, per-head q/k norms, an output gate folded into the q
-		// projection, and a shared expert beside the routed ones.
-		c.Flags |= jlm.FlagRopeNeox | jlm.FlagQKNorm | jlm.FlagAttnOutGate
-		c.SSM = jlm.SSMConfig{
-			ConvKernel: uint32(f.UintKey("ssm.conv_kernel", 0)),
-			Groups:     uint32(f.UintKey("ssm.group_count", 0)),
-			Inner:      uint32(f.UintKey("ssm.inner_size", 0)),
-			StateSize:  uint32(f.UintKey("ssm.state_size", 0)),
-			NHeadV:     uint32(f.UintKey("ssm.time_step_rank", 0)),
-		}
-		if c.SSM.ConvKernel == 0 || c.SSM.Inner == 0 || c.SSM.StateSize == 0 || c.SSM.NHeadV == 0 {
-			return nil, fmt.Errorf("convert: %s: incomplete recurrent geometry %+v", name, c.SSM)
-		}
-		if err := qwen35Of(f, name, c); err != nil {
-			return nil, fmt.Errorf("convert: %s: %w", name, err)
-		}
 		// The sections select nothing for a text prompt and are stored for
 		// image rows, read as every M-RoPE's are; a text-only file states none.
 		if _, ok := f.Key("rope.dimension_sections"); ok {
@@ -486,19 +468,16 @@ func configOfFile(f *meta.File) (*Config, error) {
 		if err := gemma3nConfig(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
-	case ArchMamba2, ArchGraniteHybrid, ArchNemotronH, ArchFalconH1:
-		if err := ssdConfig(f, c); err != nil {
+	case ArchGraniteHybrid:
+		if err := graniteHybridConfig(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
-	case ArchMamba, ArchJamba:
-		if err := mamba1Config(f, c); err != nil {
+	case ArchNemotronH:
+		if err := nemotronConfig(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
-		if c.LayerKinds, err = mamba1Kinds(f, c.NLayer); err != nil {
-			return nil, fmt.Errorf("convert: %s: %w", name, err)
-		}
-	case ArchLFM2:
-		if err := lfm2Config(f, c); err != nil {
+	case ArchJamba:
+		if err := neverRenormalises(f, c, "Jamba's router"); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
 	case ArchMiniMaxM3:
@@ -624,34 +603,14 @@ func configOfFile(f *meta.File) (*Config, error) {
 	// architecture.
 	c.NFFNShExp = uint32(f.UintKey("expert_shared_feed_forward_length", 0))
 
-	// The per-layer kinds are read off the tensors (a layer with a recurrent
-	// block is linear), not off an "every fourth layer" rule keyed on the name.
-	if (c.Arch == ArchQwen3Next || c.Arch == ArchQwen4Exp || ssdArch(c.Arch) || c.Arch == ArchLFM2) && c.LayerKinds == nil {
-		rec := jlm.LayerLinearAttn
-		if ssdArch(c.Arch) {
-			rec = jlm.LayerSSD
-		}
-		kinds := make([]jlm.LayerKind, c.NLayer)
-		linear := 0
-		for i := range kinds {
-			kinds[i] = jlm.LayerFullAttn
-			if _, ok := f.Get("blk." + itoa(i) + ".shortconv.conv.weight"); ok {
-				kinds[i], linear = jlm.LayerShortConv, linear+1
-			}
-			if _, ok := f.Get("blk." + itoa(i) + ".ssm_conv1d.weight"); ok {
-				kinds[i], linear = rec, linear+1
-				// A block that also carries attention runs both (Falcon-H1).
-				if _, att := f.Get("blk." + itoa(i) + ".attn_q.weight"); att && rec == jlm.LayerSSD {
-					kinds[i] = jlm.LayerSSDAttn
-				}
-			}
-		}
-		if linear == 0 {
-			return nil, fmt.Errorf("convert: %s: no layer carries a recurrent block", name)
-		}
-		c.LayerKinds = kinds
+	// The per-layer kinds are read off the tensors each layer carries, as the
+	// library states them, not off an "every fourth layer" rule.
+	if err := stateLayers(f, c); err != nil {
+		return nil, fmt.Errorf("convert: %s: %w", name, err)
 	}
-
+	if err := selectiveNormsFit(f, c); err != nil {
+		return nil, fmt.Errorf("convert: %s: %w", name, err)
+	}
 	if err := countsHeld(c, perKV, headless); err != nil {
 		return nil, fmt.Errorf("convert: %s: %w", name, err)
 	}

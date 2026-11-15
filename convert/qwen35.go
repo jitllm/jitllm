@@ -10,24 +10,6 @@ import (
 	"github.com/jitllm/jitllm/format/quant"
 )
 
-// qwen35Of reads what a Qwen3.5 / Qwen3.6 file says beyond qwen3next's keys:
-// the value-head order and the M-RoPE sections. Its multi-token-prediction
-// blocks are nextnOf's, as every architecture's are. It is a no-op on a qwen3next file (no nextn layers, no sections).
-func qwen35Of(f *meta.File, name string, c *Config) error {
-	// The value heads are tiled in every qwen35 GGUF: llama.cpp's converter
-	// reorders them from HuggingFace's grouped order so its graph can
-	// ggml_repeat the keys. With one value head per key head the permutation is
-	// the identity, so the flag is set only where it changes the pairing.
-	if (name == "qwen35" || name == "qwen35moe" || name == "qwen4exp" || name == "clef") && c.SSM.Groups > 0 && c.SSM.NHeadV > c.SSM.Groups {
-		if c.SSM.NHeadV%c.SSM.Groups != 0 {
-			return fmt.Errorf("%d value heads over %d key heads is not a whole number per key head",
-				c.SSM.NHeadV, c.SSM.Groups)
-		}
-		c.Flags |= jlm.FlagDeltaKeyTiled
-	}
-	return nil
-}
-
 // fuseBetaAlpha folds a Qwen3.5 layer's separate beta and alpha projections
 // into the ssm_ba tensor qwen3next ships and the whole engine reads.
 //

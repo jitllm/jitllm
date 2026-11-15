@@ -25,31 +25,6 @@ import (
 // mamba1Arch reports the architectures whose recurrent layers are Mamba-1's.
 func mamba1Arch(a Arch) bool { return a == ArchMamba || a == ArchJamba }
 
-// mamba1Config reads the Mamba-1 geometry into c.
-func mamba1Config(f *meta.File, c *Config) error {
-	inner := uint32(f.UintKey("ssm.inner_size", 0))
-	c.SSM = jlm.SSMConfig{
-		ConvKernel: uint32(f.UintKey("ssm.conv_kernel", 0)),
-		Groups:     1,
-		Inner:      inner,
-		StateSize:  uint32(f.UintKey("ssm.state_size", 0)),
-		NHeadV:     inner,
-	}
-	s := c.SSM
-	if s.ConvKernel < 2 || s.Inner == 0 || s.StateSize == 0 || f.UintKey("ssm.time_step_rank", 0) == 0 {
-		return fmt.Errorf("incomplete Mamba-1 geometry %+v (time_step_rank %d)", s, f.UintKey("ssm.time_step_rank", 0))
-	}
-	// Neither family rotates: Jamba's attention carries no position at all,
-	// and a plain Mamba has no attention (configOf set a placeholder head).
-	c.Flags |= jlm.FlagNoPosEnc
-	if c.Arch == ArchJamba {
-		// JambaSparseMoeBlock takes the top-k of the softmax and never
-		// renormalises.
-		return neverRenormalises(f, c, "Jamba's router")
-	}
-	return nil
-}
-
 // neverRenormalises states a router that never renormalises its weights
 // (llama.cpp's builder passes false as a literal), refusing a file whose
 // expert_weights_norm says otherwise: it describes a model neither
@@ -62,24 +37,6 @@ func neverRenormalises(f *meta.File, c *Config, router string) error {
 	}
 	c.Flags |= jlm.FlagNoExpertNorm
 	return nil
-}
-
-// mamba1Kinds is a Mamba-1 model's layer map: a block with a convolution is a
-// Mamba-1 mixer, any other attends. llama.cpp's jamba tests a zero
-// head_count_kv instead; the tensors say the same thing.
-func mamba1Kinds(f *meta.File, n uint32) ([]jlm.LayerKind, error) {
-	kinds := make([]jlm.LayerKind, n)
-	rec := 0
-	for i := range kinds {
-		kinds[i] = jlm.LayerFullAttn
-		if _, ok := f.Get("blk." + itoa(i) + ".ssm_conv1d.weight"); ok {
-			kinds[i], rec = jlm.LayerScan, rec+1
-		}
-	}
-	if rec == 0 {
-		return nil, fmt.Errorf("no layer carries a Mamba-1 mixer")
-	}
-	return kinds, nil
 }
 
 // unfuseMamba1 splits in_proj and x_proj into their outputs (see the top of

@@ -588,7 +588,7 @@ func qwen35TestConfig(t *testing.T, edit ...string) *hfConfig {
 }
 
 // TestQwen35ConfigThroughTheLibrary: Qwen3.5's config.json, read through
-// convert/models/qwen3_5.json, states what qwen35Of and configOf state from
+// convert/models/qwen3_5.json, states what configOf states from
 // llama.cpp's GGUF of the same model, and each refusal fires.
 func TestQwen35ConfigThroughTheLibrary(t *testing.T) {
 	lib, err := modelLibrary()

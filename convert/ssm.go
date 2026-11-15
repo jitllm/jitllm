@@ -3,7 +3,6 @@ package convert
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/convert/meta"
 	"github.com/jitllm/jitllm/format/jlm"
 )
 
@@ -23,50 +22,6 @@ func ssdArch(a Arch) bool {
 		return true
 	}
 	return false
-}
-
-// ssdConfig reads the Mamba-2 geometry and each family's switches into c.
-func ssdConfig(f *meta.File, c *Config) error {
-	c.SSM = jlm.SSMConfig{
-		ConvKernel: uint32(f.UintKey("ssm.conv_kernel", 0)),
-		Groups:     uint32(f.UintKey("ssm.group_count", 1)),
-		Inner:      uint32(f.UintKey("ssm.inner_size", 0)),
-		StateSize:  uint32(f.UintKey("ssm.state_size", 0)),
-		// llama.cpp writes Mamba-2's head count as the time-step rank: one dt
-		// per head, which is the delta rule's one decay per value head.
-		NHeadV: uint32(f.UintKey("ssm.time_step_rank", 0)),
-	}
-	s := c.SSM
-	switch {
-	case s.ConvKernel < 2 || s.Inner == 0 || s.StateSize == 0 || s.NHeadV == 0 || s.Groups == 0:
-		return fmt.Errorf("incomplete Mamba-2 geometry %+v", s)
-	case s.Inner%s.NHeadV != 0:
-		return fmt.Errorf("Mamba-2 inner size %d is not %d whole heads", s.Inner, s.NHeadV)
-	case s.NHeadV%s.Groups != 0:
-		return fmt.Errorf("Mamba-2's %d heads do not divide into %d groups", s.NHeadV, s.Groups)
-	case s.Inner%s.Groups != 0:
-		return fmt.Errorf("Mamba-2 inner size %d does not divide into %d norm groups", s.Inner, s.Groups)
-	}
-	// FalconMamba's dt/B/C norms are Mamba-1's; a Mamba-2 file has none.
-	if kv, ok := f.Key("ssm.dt_b_c_rms"); ok {
-		if v, ok := kv.Uint(); ok && v != 0 {
-			return fmt.Errorf("ssm.dt_b_c_rms on a Mamba-2 model: %w", ErrNotImplemented)
-		}
-	}
-	switch c.Arch {
-	case ArchMamba2:
-		// No layer attends; the placeholder head configOf set rotates nothing.
-		c.Flags |= jlm.FlagNoPosEnc
-	case ArchGraniteHybrid:
-		return graniteHybridConfig(f, c)
-	case ArchNemotronH:
-		return nemotronConfig(f, c)
-	case ArchFalconH1:
-		// llama.cpp's rope-type table puts falcon-h1 with NEOX; every muP
-		// multiplier is already in the weights (its converter folds them).
-		c.Flags |= jlm.FlagRopeNeox
-	}
-	return nil
 }
 
 // unfuseSSD splits Mamba-2's in_proj and puts its convolved channels in the

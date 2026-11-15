@@ -178,6 +178,8 @@ func mjFlags() map[string]jlm.Flags {
 		"swiglu_oai":            jlm.FlagSwiGLUOAI,
 		"yarn_exact":            jlm.FlagYarnExact,
 		"no_pe_global":          jlm.FlagNoPEGlobal,
+		"no_pos_enc":            jlm.FlagNoPosEnc,
+		"delta_key_tiled":       jlm.FlagDeltaKeyTiled,
 	}
 }
 

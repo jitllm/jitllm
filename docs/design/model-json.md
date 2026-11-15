@@ -144,9 +144,22 @@ schema; `convert/modeljson.go` reads it. Its sections:
   window, and nothing else of it applies), a fixed `period` or a `pattern`,
   the period where the file's `attention.sliding_window_pattern` does not
   state one, and `rope_base`, the windowed layers' rotary base. A fixed
-  period over no window is refused. It replaces `configOfFile`'s case for
-  the architecture; one statement per architecture, and an expression
-  reading anything but `src` is refused.
+  period over no window is refused. `recurrent` is the recurrent layers'
+  geometry, each a count: `conv_kernel` (two or more, always stated),
+  `groups` (the key heads), `inner`, `state_size` and `heads_v`; a field
+  left out is zero, one stated is at least one, and parts that do not divide
+  (value heads into the inner width, key heads into the value heads and the
+  inner width) are refused. `layers` is each layer's kind off the tensors it
+  carries: a list of `{"tensors": [names past "blk.N."], "kind": ...}`
+  (`mjLayerKinds`: `attention`, `linear_attention`, `ssd`,
+  `ssd_attention`, `short_conv`, `scan`), a layer taking the last entry
+  whose tensors it all carries and attention where none; a statement no
+  layer meets is refused, and one a reader has already set the kinds for
+  does not apply. Besides `src`, an expression may read `layer_tensors`, the
+  set of names the layers' tensors take past their "blk.N." prefix
+  (`'attn_q_norm.weight' in layer_tensors`). It replaces `configOfFile`'s
+  case for the architecture; one statement per architecture, and an
+  expression reading anything else is refused.
 - `tensors.model`, `tensors.block_prefix`, `tensors.block`: each source name
   onto a role by the role's GGUF tensor name (`roleOf`, one vocabulary for
   both formats), with `do`, the primitives it takes in order. A transform
