@@ -153,7 +153,7 @@ func TestToolSyntaxReadsItsTemplatesCalls(t *testing.T) {
 	for _, c := range syntaxCases() {
 		t.Run(c.file, func(t *testing.T) {
 			src := readSyntaxTemplate(t, c.file)
-			form := convert.ToolFormOf(src, false)
+			form := convert.ToolFormOf(src, nil)
 			if form.Name != c.syn {
 				t.Fatalf("syntax %s, want %s", form.Name, c.syn)
 			}

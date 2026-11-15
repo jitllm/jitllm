@@ -67,8 +67,6 @@
 1 convert/safetensors.go:kimiLinearHFConfig
 4 convert/ssm.go:ssdArch
 4 convert/ssm.go:ssdConfig
-6 convert/toolform.go:toolForm
-6 convert/toolform.go:ToolFormOf
 1 convert/tower.go:hunyuanvlTower
 3 convert/vocab.go:llama3Family
 6 convert/vocab.go:VocabOf

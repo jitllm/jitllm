@@ -1,0 +1,1273 @@
+{
+ "default": "hermes",
+ "forms": [
+  {
+   "name": "harmony",
+   "when": [
+    {
+     "vocab": [
+      "<|start|>",
+      "<|channel|>",
+      "<|message|>",
+      "<|end|>",
+      "<|return|>",
+      "<|call|>"
+     ]
+    },
+    {
+     "all": [
+      "<|channel|>",
+      "to="
+     ]
+    }
+   ],
+   "form": {
+    "Name": "harmony",
+    "Calls": [
+     "<|start|>assistant to=functions.$NAME<|channel|>commentary(? json?)(? <|constrain|>json?)<|message|>$ARGS(?<|call|>?)(?<|end|>?)",
+     "<|start|>assistant<|channel|>commentary to=functions.$NAME(? <|constrain|>json?)<|message|>$ARGS(?<|call|>?)(?<|end|>?)",
+     "<|channel|>commentary to=functions.$NAME(? <|constrain|>json?)<|message|>$ARGS(?<|call|>?)(?<|end|>?)"
+    ],
+    "NameKey": "name",
+    "ArgsKey": "arguments",
+    "AltArgsKey": "parameters",
+    "Notation": {
+     "Quotes": [
+      "\""
+     ],
+     "Escapes": true,
+     "True": [
+      "true"
+     ],
+     "False": [
+      "false"
+     ],
+     "None": [
+      "null"
+     ]
+    },
+    "ThinkOpen": "<|channel|>analysis<|message|>",
+    "ThinkClose": "<|end|>",
+    "ThinkThen": "<|start|>assistant",
+    "ThinkAlways": true,
+    "Markers": [
+     "<|start|>",
+     "<|channel|>",
+     "<|message|>",
+     "<|end|>",
+     "<|constrain|>"
+    ],
+    "Write": {
+     "Call": "<|channel|>commentary to=functions.$NAME <|constrain|>json<|message|>$ARGS"
+    }
+   }
+  },
+  {
+   "name": "dsml",
+   "when": [
+    {
+     "all": [
+      "｜DSML｜"
+     ]
+    }
+   ],
+   "form": {
+    "Name": "dsml",
+    "Calls": [
+     "<｜DSML｜invoke name=\"$NAME\">$PARAMS</｜DSML｜invoke>"
+    ],
+    "Open": "<｜DSML｜tool_calls>",
+    "Close": "</｜DSML｜tool_calls>",
+    "Params": [
+     "<｜DSML｜parameter name=\"$KEY\" string=\"$TYPE\">$VALUE</｜DSML｜parameter>"
+    ],
+    "TextValues": true,
+    "Types": {
+     "false": "json",
+     "true": "string"
+    },
+    "NameKey": "name",
+    "ArgsKey": "arguments",
+    "AltArgsKey": "parameters",
+    "Notation": {
+     "Quotes": [
+      "\""
+     ],
+     "Escapes": true,
+     "True": [
+      "true"
+     ],
+     "False": [
+      "false"
+     ],
+     "None": [
+      "null"
+     ]
+    },
+    "Several": true,
+    "Markers": [
+     "<think>",
+     "</think>"
+    ],
+    "Write": {
+     "Call": "<｜DSML｜invoke name=\"$NAME\">\n$PARAMS</｜DSML｜invoke>\n",
+     "Open": "(?\n\n?)<｜DSML｜tool_calls>\n",
+     "Close": "</｜DSML｜tool_calls>",
+     "Params": [
+      "<｜DSML｜parameter name=\"$KEY\" string=\"true\">$VALUE</｜DSML｜parameter>\n",
+      "<｜DSML｜parameter name=\"$KEY\" string=\"false\">$VALUE</｜DSML｜parameter>\n"
+     ]
+    }
+   }
+  },
+  {
+   "name": "deepseek-v3",
+   "when": [
+    {
+     "all": [
+      "<｜tool▁calls▁begin｜>",
+      "```json"
+     ]
+    }
+   ],
+   "form": {
+    "Name": "deepseek-v3",
+    "Calls": [
+     "<｜tool▁call▁begin｜>function<｜tool▁sep｜>$NAME(?```json?)$ARGS(?```?)<｜tool▁call▁end｜>",
+     "<｜tool▁call▁begin｜>$NAME<｜tool▁sep｜>(?```json?)$ARGS(?```?)<｜tool▁call▁end｜>"
+    ],
+    "Open": "<｜tool▁calls▁begin｜>",
+    "Close": "<｜tool▁calls▁end｜>",
+    "NameKey": "name",
+    "ArgsKey": "arguments",
+    "AltArgsKey": "parameters",
+    "Notation": {
+     "Quotes": [
+      "\""
+     ],
+     "Escapes": true,
+     "True": [
+      "true"
+     ],
+     "False": [
+      "false"
+     ],
+     "None": [
+      "null"
+     ]
+    },
+    "Several": true,
+    "Markers": [
+     "<｜tool▁calls▁begin｜>",
+     "<｜tool▁calls▁end｜>",
+     "<｜tool▁call▁begin｜>",
+     "<｜tool▁call▁end｜>",
+     "<｜tool▁sep｜>",
+     "<think>",
+     "</think>"
+    ],
+    "Write": {
+     "Call": "<｜tool▁call▁begin｜>function<｜tool▁sep｜>$NAME\n```json\n$ARGS\n```<｜tool▁call▁end｜>",
+     "Open": "<｜tool▁calls▁begin｜>",
+     "Sep": "\n",
+     "Close": "<｜tool▁calls▁end｜>"
+    }
+   }
+  },
+  {
+   "name": "deepseek-v3.1",
+   "when": [
+    {
+     "all": [
+      "<｜tool▁calls▁begin｜>"
+     ]
+    }
+   ],
+   "form": {
+    "Name": "deepseek-v3.1",
+    "Calls": [
+     "<｜tool▁call▁begin｜>function<｜tool▁sep｜>$NAME(?```json?)$ARGS(?```?)<｜tool▁call▁end｜>",
+     "<｜tool▁call▁begin｜>$NAME<｜tool▁sep｜>(?```json?)$ARGS(?```?)<｜tool▁call▁end｜>"
+    ],
+    "Open": "<｜tool▁calls▁begin｜>",
+    "Close": "<｜tool▁calls▁end｜>",
+    "NameKey": "name",
+    "ArgsKey": "arguments",
+    "AltArgsKey": "parameters",
+    "Notation": {
+     "Quotes": [
+      "\""
+     ],
+     "Escapes": true,
+     "True": [
+      "true"
+     ],
+     "False": [
+      "false"
+     ],
+     "None": [
+      "null"
+     ]
+    },
+    "Several": true,
+    "Markers": [
+     "<｜tool▁calls▁begin｜>",
+     "<｜tool▁calls▁end｜>",
+     "<｜tool▁call▁begin｜>",
+     "<｜tool▁call▁end｜>",
+     "<｜tool▁sep｜>",
+     "<think>",
+     "</think>"
+    ],
+    "Write": {
+     "Call": "<｜tool▁call▁begin｜>$NAME<｜tool▁sep｜>$ARGS<｜tool▁call▁end｜>",
+     "Open": "<｜tool▁calls▁begin｜>",
+     "Sep": "\n",
+     "Close": "<｜tool▁calls▁end｜>"
+    }
+   }
+  },
+  {
+   "name": "kimi",
+   "when": [
+    {
+     "all": [
+      "<|tool_calls_section_begin|>"
+     ]
+    }
+   ],
+   "form": {
+    "Name": "kimi",
+    "Calls": [
+     "<|tool_call_begin|>functions.$NAME:$ID<|tool_call_argument_begin|>$ARGS<|tool_call_end|>",
+     "<|tool_call_begin|>$NAME(?:$ID?)<|tool_call_argument_begin|>$ARGS<|tool_call_end|>"
+    ],
+    "Open": "<|tool_calls_section_begin|>",
+    "Close": "<|tool_calls_section_end|>",
+    "NameKey": "name",
+    "ArgsKey": "arguments",
+    "AltArgsKey": "parameters",
+    "Notation": {
+     "Quotes": [
+      "\""
+     ],
+     "Escapes": true,
+     "True": [
+      "true"
+     ],
+     "False": [
+      "false"
+     ],
+     "None": [
+      "null"
+     ]
+    },
+    "IDDigits": 3,
+    "Several": true,
+    "Markers": [
+     "<|tool_calls_section_begin|>",
+     "<|tool_calls_section_end|>",
+     "<|tool_call_begin|>",
+     "<|tool_call_argument_begin|>",
+     "<|tool_call_end|>",
+     "<think>",
+     "</think>"
+    ],
+    "Write": {
+     "Call": "<|tool_call_begin|>functions.$NAME:$ID<|tool_call_argument_begin|>$ARGS<|tool_call_end|>",
+     "Open": "<|tool_calls_section_begin|>",
+     "Close": "<|tool_calls_section_end|>"
+    }
+   }
+  },
+  {
+   "name": "kimi-xtml",
+   "when": [
+    {
+     "all": [
+      "<|open|>",
+      "'tools'"
+     ]
+    }
+   ],
+   "form": {
+    "Name": "kimi-xtml",
+    "Calls": [
+     "<|open|>call tool=\"$XNAME\"(? index=\"$ID\"?)<|sep|><|open|>json(? type=\"object\"?)<|sep|>$ARGS<|close|>json<|sep|><|close|>call<|sep|>",
+     "<|open|>call tool=\"$XNAME\"(? index=\"$ID\"?)<|sep|>$PARAMS<|close|>call<|sep|>"
+    ],
+    "Open": "<|open|>tools<|sep|>",
+    "Close": "<|close|>tools<|sep|>",
+    "Params": [
+     "<|open|>argument key=\"$KEY\"(? type=\"$TYPE\"?)<|sep|>$VALUE<|close|>argument<|sep|>"
+    ],
+    "TextValues": true,
+    "NameKey": "name",
+    "ArgsKey": "arguments",
+    "AltArgsKey": "parameters",
+    "Notation": {
+     "Quotes": [
+      "\""
+     ],
+     "Escapes": true,
+     "True": [
+      "true"
+     ],
+     "False": [
+      "false"
+     ],
+     "None": [
+      "null"
+     ]
+    },
+    "IDDigits": 3,
+    "IDMin": 1,
+    "Several": true,
+    "ThinkOpen": "<|open|>think<|sep|>",
+    "ThinkClose": "<|close|>think<|sep|>",
+    "ThinkSeen": "'think'",
+    "Markers": [
+     "<|open|>",
+     "<|close|>",
+     "<|sep|>"
+    ],
+    "Write": {
+     "Call": "<|open|>call tool=\"$XNAME\" index=\"$ID\"<|sep|><|open|>json type=\"object\"<|sep|>$ARGS<|close|>json<|sep|><|close|>call<|sep|>",
+     "Open": "<|open|>tools<|sep|>",
+     "Close": "<|close|>tools<|sep|>"
+    }
+   }
+  },
+  {
+   "name": "mistral-args",
+   "when": [
+    {
+     "all": [
+      "[ARGS]"
+     ]
+    }
+   ],
+   "form": {
+    "Name": "mistral-args",
+    "Calls": [
+     "[TOOL_CALLS]$CALLS",
+     "[TOOL_CALLS]$NAME(?[CALL_ID]$ID?)[ARGS]$ARGS",
+     "$CALLS"
+    ],
+    "Bare": true,
+    "NameKey": "name",
+    "ArgsKey": "arguments",
+    "AltArgsKey": "parameters",
+    "Notation": {
+     "Quotes": [
+      "\""
+     ],
+     "Escapes": true,
+     "True": [
+      "true"
+     ],
+     "False": [
+      "false"
+     ],
+     "None": [
+      "null"
+     ]
+    },
+    "IDDigits": 9,
+    "IDAlnum": true,
+    "Several": true,
+    "ThinkOpen": "[THINK]",
+    "ThinkClose": "[/THINK]",
+    "Markers": [
+     "[TOOL_CALLS]",
+     "[ARGS]",
+     "[CALL_ID]",
+     "[THINK]",
+     "[/THINK]"
+    ],
+    "Write": {
+     "Call": "[TOOL_CALLS]$NAME(?[CALL_ID]$ID?)[ARGS]$ARGS"
+    }
+   }
+  },
+  {
+   "name": "mistral",
+   "when": [
+    {
+     "all": [
+      "[TOOL_CALLS]"
+     ]
+    }
+   ],
+   "form": {
+    "Name": "mistral",
+    "Calls": [
+     "[TOOL_CALLS]$CALLS",
+     "[TOOL_CALLS]$NAME(?[CALL_ID]$ID?)[ARGS]$ARGS",
+     "$CALLS"
+    ],
+    "Bare": true,
+    "NameKey": "name",
+    "ArgsKey": "arguments",
+    "AltArgsKey": "parameters",
+    "Notation": {
+     "Quotes": [
+      "\""
+     ],
+     "Escapes": true,
+     "True": [
+      "true"
+     ],
+     "False": [
+      "false"
+     ],
+     "None": [
+      "null"
+     ]
+    },
+    "IDDigits": 9,
+    "IDAlnum": true,
+    "Several": true,
+    "ThinkOpen": "[THINK]",
+    "ThinkClose": "[/THINK]",
+    "Markers": [
+     "[TOOL_CALLS]",
+     "[ARGS]",
+     "[CALL_ID]",
+     "[THINK]",
+     "[/THINK]"
+    ],
+    "Write": {
+     "Call": "{\"name\": $QNAME, \"arguments\": $ARGS}",
+     "Open": "[TOOL_CALLS][",
+     "Sep": ", ",
+     "Close": "]"
+    }
+   }
+  },
+  {
+   "name": "minimax",
+   "when": [
+    {
+     "all": [
+      "<minimax:tool_call>"
+     ]
+    }
+   ],
+   "form": {
+    "Name": "minimax",
+    "Calls": [
+     "<invoke name=\"$NAME\">\n$PARAMS</invoke>"
+    ],
+    "Open": "<minimax:tool_call>",
+    "Close": "</minimax:tool_call>",
+    "Params": [
+     "<parameter name=\"$KEY\">$VALUE</parameter>"
+    ],
+    "TextValues": true,
+    "GuessJSON": true,
+    "NameKey": "name",
+    "ArgsKey": "arguments",
+    "AltArgsKey": "parameters",
+    "Notation": {
+     "Quotes": [
+      "\""
+     ],
+     "Escapes": true,
+     "True": [
+      "true"
+     ],
+     "False": [
+      "false"
+     ],
+     "None": [
+      "null"
+     ]
+    },
+    "Several": true,
+    "Markers": [
+     "<minimax:tool_call>",
+     "</minimax:tool_call>",
+     "<think>",
+     "</think>"
+    ],
+    "Write": {
+     "Call": "<invoke name=\"$NAME\">\n$PARAMS</invoke>\n",
+     "Open": "<minimax:tool_call>\n",
+     "Close": "</minimax:tool_call>",
+     "Params": [
+      "<parameter name=\"$KEY\">$VALUE</parameter>\n"
+     ]
+    }
+   }
+  },
+  {
+   "name": "seed-xml",
+   "when": [
+    {
+     "all": [
+      "<seed:tool_call>"
+     ]
+    }
+   ],
+   "form": {
+    "Name": "seed-xml",
+    "Calls": [
+     "<seed:tool_call>\n<function=$NAME>\n$PARAMS</function>\n</seed:tool_call>"
+    ],
+    "Params": [
+     "<parameter=$KEY>\n$VALUE\n</parameter>"
+    ],
+    "TextValues": true,
+    "GuessJSON": true,
+    "NameKey": "name",
+    "ArgsKey": "arguments",
+    "AltArgsKey": "parameters",
+    "Notation": {
+     "Quotes": [
+      "\""
+     ],
+     "Escapes": true,
+     "True": [
+      "true"
+     ],
+     "False": [
+      "false"
+     ],
+     "None": [
+      "null"
+     ]
+    },
+    "Several": true,
+    "ThinkOpen": "<seed:think>",
+    "ThinkClose": "</seed:think>",
+    "Markers": [
+     "<seed:tool_call>",
+     "</seed:tool_call>",
+     "<seed:think>",
+     "</seed:think>"
+    ],
+    "Write": {
+     "Call": "<function=$NAME>\n$PARAMS</function>\n",
+     "Sep": "\n",
+     "Section": [
+      "<seed:tool_call>\n",
+      "</seed:tool_call>"
+     ],
+     "Params": [
+      "<parameter=$KEY>$VALUE</parameter>\n"
+     ]
+    }
+   }
+  },
+  {
+   "name": "qwen-xml",
+   "when": [
+    {
+     "all": [
+      "<function="
+     ]
+    }
+   ],
+   "form": {
+    "Name": "qwen-xml",
+    "Calls": [
+     "<tool_call>\n<function=$NAME>\n$PARAMS</function>\n</tool_call>"
+    ],
+    "Params": [
+     "<parameter=$KEY>\n$VALUE\n</parameter>"
+    ],
+    "TextValues": true,
+    "GuessJSON": true,
+    "NameKey": "name",
+    "ArgsKey": "arguments",
+    "AltArgsKey": "parameters",
+    "Notation": {
+     "Quotes": [
+      "\""
+     ],
+     "Escapes": true,
+     "True": [
+      "true"
+     ],
+     "False": [
+      "false"
+     ],
+     "None": [
+      "null"
+     ]
+    },
+    "Several": true,
+    "Markers": [
+     "<tool_call>",
+     "</tool_call>",
+     "<think>",
+     "</think>"
+    ],
+    "Write": {
+     "Call": "<function=$NAME>\n$PARAMS</function>\n",
+     "Sep": "\n",
+     "Section": [
+      "<tool_call>\n",
+      "</tool_call>"
+     ],
+     "Params": [
+      "<parameter=$KEY>\n$VALUE\n</parameter>\n"
+     ]
+    }
+   }
+  },
+  {
+   "name": "glm",
+   "when": [
+    {
+     "all": [
+      "<arg_key>"
+     ]
+    }
+   ],
+   "form": {
+    "Name": "glm",
+    "Calls": [
+     "<tool_call>$NAME\n$PARAMS</tool_call>"
+    ],
+    "Params": [
+     "<arg_key>$KEY</arg_key>\n<arg_value>$VALUE</arg_value>"
+    ],
+    "TextValues": true,
+    "GuessJSON": true,
+    "NameKey": "name",
+    "ArgsKey": "arguments",
+    "AltArgsKey": "parameters",
+    "Notation": {
+     "Quotes": [
+      "\""
+     ],
+     "Escapes": true,
+     "True": [
+      "true"
+     ],
+     "False": [
+      "false"
+     ],
+     "None": [
+      "null"
+     ]
+    },
+    "Several": true,
+    "Markers": [
+     "<tool_call>",
+     "</tool_call>",
+     "<think>",
+     "</think>"
+    ],
+    "Write": {
+     "Call": "<tool_call>$NAME\n$PARAMS</tool_call>",
+     "Sep": "\n",
+     "Params": [
+      "<arg_key>$KEY</arg_key>\n<arg_value>$VALUE</arg_value>\n"
+     ]
+    }
+   }
+  },
+  {
+   "name": "gemma4",
+   "when": [
+    {
+     "all": [
+      "<|tool_call>"
+     ]
+    }
+   ],
+   "form": {
+    "Name": "gemma4",
+    "Calls": [
+     "<|tool_call>call:$NAME{$PARAMS}<tool_call|>"
+    ],
+    "Params": [
+     "$KEY:$VALUE"
+    ],
+    "ParamSep": ",",
+    "NameKey": "name",
+    "ArgsKey": "arguments",
+    "AltArgsKey": "parameters",
+    "Notation": {
+     "Quotes": [
+      "<|\"|>"
+     ],
+     "BareKeys": true,
+     "True": [
+      "true"
+     ],
+     "False": [
+      "false"
+     ],
+     "None": [
+      "null"
+     ]
+    },
+    "Several": true,
+    "Markers": [
+     "<|tool_call>",
+     "<tool_call|>",
+     "<|\"|>"
+    ],
+    "Write": {
+     "Call": "<|tool_call>call:$NAME{$PARAMS}<tool_call|>",
+     "Params": [
+      "$KEY:$VALUE"
+     ],
+     "ParamSep": ",",
+     "Sorted": true
+    }
+   }
+  },
+  {
+   "name": "command-r7b",
+   "when": [
+    {
+     "all": [
+      "<|START_ACTION|>"
+     ]
+    }
+   ],
+   "form": {
+    "Name": "command-r7b",
+    "Calls": [
+     "<|START_ACTION|>$CALLS<|END_ACTION|>"
+    ],
+    "NameKey": "tool_name",
+    "ArgsKey": "parameters",
+    "Notation": {
+     "Quotes": [
+      "\""
+     ],
+     "Escapes": true,
+     "True": [
+      "true"
+     ],
+     "False": [
+      "false"
+     ],
+     "None": [
+      "null"
+     ]
+    },
+    "IDDigits": 3,
+    "Several": true,
+    "ThinkOpen": "<|START_THINKING|>",
+    "ThinkClose": "<|END_THINKING|>",
+    "Markers": [
+     "<|START_ACTION|>",
+     "<|END_ACTION|>",
+     "<|START_THINKING|>",
+     "<|END_THINKING|>"
+    ],
+    "Write": {
+     "Call": "{\"tool_call_id\": \"$ID\", \"tool_name\": $QNAME, \"parameters\": $ARGS}",
+     "Open": "<|START_ACTION|>[\n    ",
+     "Sep": ",\n    ",
+     "Close": "\n]<|END_ACTION|>"
+    }
+   }
+  },
+  {
+   "name": "command-r",
+   "when": [
+    {
+     "all": [
+      "Action:",
+      "```json",
+      "tool_name"
+     ]
+    }
+   ],
+   "form": {
+    "Name": "command-r",
+    "Calls": [
+     "Action:(?```json?)$CALLS(?```?)"
+    ],
+    "NameKey": "tool_name",
+    "ArgsKey": "parameters",
+    "Notation": {
+     "Quotes": [
+      "\""
+     ],
+     "Escapes": true,
+     "True": [
+      "true"
+     ],
+     "False": [
+      "false"
+     ],
+     "None": [
+      "null"
+     ]
+    },
+    "Several": true,
+    "Write": {
+     "Call": "{\"tool_name\": $QNAME, \"parameters\": $ARGS}",
+     "Open": "Action: ```json\n[\n    ",
+     "Sep": ",\n    ",
+     "Close": "\n]\n```"
+    }
+   }
+  },
+  {
+   "name": "nemotron",
+   "when": [
+    {
+     "all": [
+      "<TOOLCALL>"
+     ]
+    }
+   ],
+   "form": {
+    "Name": "nemotron",
+    "Calls": [
+     "<TOOLCALL>$CALLS</TOOLCALL>"
+    ],
+    "NameKey": "name",
+    "ArgsKey": "arguments",
+    "AltArgsKey": "parameters",
+    "Notation": {
+     "Quotes": [
+      "\""
+     ],
+     "Escapes": true,
+     "True": [
+      "true"
+     ],
+     "False": [
+      "false"
+     ],
+     "None": [
+      "null"
+     ]
+    },
+    "Several": true,
+    "Markers": [
+     "<TOOLCALL>",
+     "</TOOLCALL>",
+     "<think>",
+     "</think>"
+    ],
+    "Write": {
+     "Call": "{\"name\": $QNAME, \"arguments\": $ARGS}",
+     "Open": "<TOOLCALL>[",
+     "Sep": ", ",
+     "Close": "]</TOOLCALL>"
+    }
+   }
+  },
+  {
+   "name": "granite",
+   "when": [
+    {
+     "all": [
+      "<|tool_call|>"
+     ]
+    }
+   ],
+   "form": {
+    "Name": "granite",
+    "Calls": [
+     "<|tool_call|>$CALLS"
+    ],
+    "NameKey": "name",
+    "ArgsKey": "arguments",
+    "AltArgsKey": "parameters",
+    "Notation": {
+     "Quotes": [
+      "\""
+     ],
+     "Escapes": true,
+     "True": [
+      "true"
+     ],
+     "False": [
+      "false"
+     ],
+     "None": [
+      "null"
+     ]
+    },
+    "Several": true,
+    "Markers": [
+     "<|tool_call|>"
+    ],
+    "Write": {
+     "Call": "{\"name\": $QNAME, \"arguments\": $ARGS}",
+     "Open": "<|tool_call|>[",
+     "Sep": ", ",
+     "Close": "]"
+    }
+   }
+  },
+  {
+   "name": "apertus",
+   "when": [
+    {
+     "all": [
+      "<|tools_prefix|>"
+     ]
+    }
+   ],
+   "form": {
+    "Name": "apertus",
+    "Calls": [
+     "<|tools_prefix|>$CALLS<|tools_suffix|>"
+    ],
+    "Keyed": true,
+    "Notation": {
+     "Quotes": [
+      "\""
+     ],
+     "Escapes": true,
+     "True": [
+      "true"
+     ],
+     "False": [
+      "false"
+     ],
+     "None": [
+      "null"
+     ]
+    },
+    "Several": true,
+    "Markers": [
+     "<|tools_prefix|>",
+     "<|tools_suffix|>"
+    ],
+    "Write": {
+     "Call": "{$QNAME: $ARGS}",
+     "Open": "<|tools_prefix|>[",
+     "Sep": ", ",
+     "Close": "]<|tools_suffix|>"
+    }
+   }
+  },
+  {
+   "name": "lfm2",
+   "when": [
+    {
+     "all": [
+      "<|tool_list_start|>"
+     ]
+    },
+    {
+     "all": [
+      "<|tool_call_start|>"
+     ]
+    },
+    {
+     "all": [
+      "List of tools:"
+     ]
+    }
+   ],
+   "form": {
+    "Name": "lfm2",
+    "Calls": [
+     "$NAME($PARAMS)"
+    ],
+    "Open": "<|tool_call_start|>[",
+    "Sep": ",",
+    "Close": "]<|tool_call_end|>",
+    "Params": [
+     "$KEY=$VALUE"
+    ],
+    "ParamSep": ",",
+    "NameKey": "name",
+    "ArgsKey": "arguments",
+    "AltArgsKey": "parameters",
+    "Notation": {
+     "Quotes": [
+      "\"",
+      "'"
+     ],
+     "Escapes": true,
+     "True": [
+      "True",
+      "true"
+     ],
+     "False": [
+      "False",
+      "false"
+     ],
+     "None": [
+      "None",
+      "null"
+     ]
+    },
+    "Several": true,
+    "Markers": [
+     "<|tool_call_start|>",
+     "<|tool_call_end|>",
+     "<think>",
+     "</think>"
+    ],
+    "Write": {
+     "Call": "$NAME($PARAMS)",
+     "Open": "<|tool_call_start|>[",
+     "Sep": ", ",
+     "Close": "]<|tool_call_end|>",
+     "Params": [
+      "$KEY=$VALUE"
+     ],
+     "ParamSep": ", "
+    }
+   }
+  },
+  {
+   "name": "phi4-mini",
+   "when": [
+    {
+     "all": [
+      "<|tool|>",
+      "<|end|>"
+     ],
+     "none": [
+      "<tool_call>"
+     ]
+    }
+   ],
+   "form": {
+    "Name": "phi4-mini",
+    "Calls": [
+     "functools$CALLS"
+    ],
+    "NameKey": "name",
+    "ArgsKey": "arguments",
+    "AltArgsKey": "parameters",
+    "Notation": {
+     "Quotes": [
+      "\""
+     ],
+     "Escapes": true,
+     "True": [
+      "true"
+     ],
+     "False": [
+      "false"
+     ],
+     "None": [
+      "null"
+     ]
+    },
+    "Several": true,
+    "Write": {
+     "Call": "{\"name\": $QNAME, \"arguments\": $ARGS}",
+     "Open": "functools[",
+     "Sep": ", ",
+     "Close": "]"
+    }
+   }
+  },
+  {
+   "name": "hunyuan",
+   "when": [
+    {
+     "all": [
+      "<tool_calls>",
+      "```json"
+     ]
+    }
+   ],
+   "form": {
+    "Name": "hunyuan",
+    "Calls": [
+     "<tool_call>$NAME(?```json?)$ARGS(?```?)</tool_call>"
+    ],
+    "Open": "<tool_calls>",
+    "Close": "</tool_calls>",
+    "NameKey": "name",
+    "ArgsKey": "arguments",
+    "AltArgsKey": "parameters",
+    "Notation": {
+     "Quotes": [
+      "\""
+     ],
+     "Escapes": true,
+     "True": [
+      "true"
+     ],
+     "False": [
+      "false"
+     ],
+     "None": [
+      "null"
+     ]
+    },
+    "Several": true,
+    "Markers": [
+     "<tool_calls>",
+     "</tool_calls>",
+     "<tool_call>",
+     "</tool_call>",
+     "<think>",
+     "</think>"
+    ],
+    "Write": {
+     "Call": "<tool_call>$NAME\n```json\n$ARGS\n```</tool_call>",
+     "Open": "<tool_calls>",
+     "Close": "</tool_calls>"
+    }
+   }
+  },
+  {
+   "name": "hermes",
+   "when": [
+    {
+     "all": [
+      "<tool_call>"
+     ]
+    }
+   ],
+   "form": {
+    "Name": "hermes",
+    "Calls": [
+     "<tool_call>$CALL</tool_call>",
+     "[TOOL_CALLS]$CALLS",
+     "$CALLS"
+    ],
+    "Sep": ";",
+    "Bare": true,
+    "NameKey": "name",
+    "ArgsKey": "arguments",
+    "AltArgsKey": "parameters",
+    "Notation": {
+     "Quotes": [
+      "\""
+     ],
+     "Escapes": true,
+     "True": [
+      "true"
+     ],
+     "False": [
+      "false"
+     ],
+     "None": [
+      "null"
+     ]
+    },
+    "Several": true,
+    "Markers": [
+     "<tool_call>",
+     "</tool_call>",
+     "<think>",
+     "</think>"
+    ],
+    "Write": {
+     "Call": "<tool_call>\n{\"name\": $QNAME, \"arguments\": $ARGS}\n</tool_call>",
+     "Sep": "\n"
+    }
+   }
+  },
+  {
+   "name": "pythonic",
+   "when": [
+    {
+     "all": [
+      "<|header_start|>",
+      "tool_calls"
+     ]
+    }
+   ],
+   "form": {
+    "Name": "pythonic",
+    "Calls": [
+     "$NAME($PARAMS)"
+    ],
+    "Open": "(?<|python_start|>?)[",
+    "Sep": ",",
+    "Close": "](?<|python_end|>?)",
+    "Leads": true,
+    "Params": [
+     "$KEY=$VALUE"
+    ],
+    "ParamSep": ",",
+    "NameKey": "name",
+    "ArgsKey": "arguments",
+    "AltArgsKey": "parameters",
+    "Notation": {
+     "Quotes": [
+      "\"",
+      "'"
+     ],
+     "Escapes": true,
+     "True": [
+      "True",
+      "true"
+     ],
+     "False": [
+      "False",
+      "false"
+     ],
+     "None": [
+      "None",
+      "null"
+     ]
+    },
+    "Several": true,
+    "Markers": [
+     "<|python_start|>",
+     "<|python_end|>"
+    ],
+    "Write": {
+     "Call": "$NAME($PARAMS)",
+     "Open": "[",
+     "Sep": ", ",
+     "Close": "]",
+     "Params": [
+      "$KEY=$VALUE"
+     ],
+     "ParamSep": ", "
+    }
+   }
+  },
+  {
+   "name": "json",
+   "when": [
+    {
+     "all": [
+      "<|start_header_id|>",
+      "ipython"
+     ]
+    }
+   ],
+   "form": {
+    "Name": "json",
+    "Calls": [
+     "(?<|python_tag|>?)$CALLS"
+    ],
+    "Sep": ";",
+    "Bare": true,
+    "Leads": true,
+    "NameKey": "name",
+    "ArgsKey": "arguments",
+    "AltArgsKey": "parameters",
+    "Notation": {
+     "Quotes": [
+      "\""
+     ],
+     "Escapes": true,
+     "True": [
+      "true"
+     ],
+     "False": [
+      "false"
+     ],
+     "None": [
+      "null"
+     ]
+    },
+    "Several": true,
+    "Write": {
+     "Call": "{\"name\": $QNAME, \"parameters\": $ARGS}",
+     "Sep": "; "
+    }
+   }
+  }
+ ]
+}
