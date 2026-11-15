@@ -777,23 +777,11 @@ func (mj *modelJSON) configIn(env exprEnv, c *hfConfig, names []string) (*Config
 	for _, t := range ts {
 		have[t.Name] = true
 	}
-	for _, n := range names {
-		role, blk, _, ok := mj.blockRole(n)
-		if !ok {
-			continue
-		}
-		gn := "blk." + itoa(blk) + "." + role
-		if have[gn] {
-			continue
-		}
-		have[gn] = true
-		shape := c.shapes[n]
-		dims := make([]uint64, len(shape))
-		for i, d := range shape {
-			dims[len(shape)-1-i] = d
-		}
-		ts = append(ts, meta.Tensor{Name: gn, Dims: dims})
+	more, err := mj.blockStandIns(renv, c.shapes, names, have)
+	if err != nil {
+		return nil, fmt.Errorf("convert: %s: %w", c.path, err)
 	}
+	ts = append(ts, more...)
 	// A prediction block the file states and the checkpoint does not ship is
 	// not counted: a checkpoint saved without them converts as its trunk.
 	if nv, ok := kvs[ns+"nextn_predict_layers"]; ok {
@@ -995,6 +983,61 @@ func (mj *modelJSON) mixtureCovers(cfg *Config, names []string) error {
 
 // blockRole is a block tensor's role, by the GGUF name the file gives it,
 // its block, and whether it is an expert's matrix, which has its bank's.
+// blockStandIns is each block tensor configOf may read, under the GGUF name
+// its role gives it and in the container's order: a source feeding several
+// roles stands in for each, at the shape its primitives cut it to.
+func (mj *modelJSON) blockStandIns(env exprEnv, shapes map[string][]uint64, names []string, have map[string]bool) ([]meta.Tensor, error) {
+	var ts []meta.Tensor
+	for _, n := range names {
+		targets, blk, ok := mj.blockTargets(n)
+		if !ok {
+			continue
+		}
+		for _, t := range targets {
+			gn := "blk." + itoa(blk) + "." + t.Role
+			if have[gn] {
+				continue
+			}
+			have[gn] = true
+			shape := shapes[n]
+			if len(t.Do) > 0 && shape != nil {
+				v, err := t.Do.run(env, []mjVal{{shape: shape, typ: jlm.TypeF32}})
+				if err != nil {
+					return nil, fmt.Errorf("%s as %s: %w", n, t.Role, err)
+				}
+				shape = v.shape
+			}
+			dims := make([]uint64, len(shape))
+			for i, d := range shape {
+				dims[len(shape)-1-i] = d
+			}
+			ts = append(ts, meta.Tensor{Name: gn, Dims: dims})
+		}
+	}
+	return ts, nil
+}
+
+// blockTargets is the roles a block's source feeds and its block: the
+// file's targets, or an expert's one role.
+func (mj *modelJSON) blockTargets(name string) (mjTargets, int, bool) {
+	t := mj.Tensors
+	rest, ok := strings.CutPrefix(name, t.BlockPrefix)
+	if t.BlockPrefix == "" || !ok {
+		return nil, 0, false
+	}
+	b, r, err := leadingIndex(name, rest)
+	if err != nil {
+		return nil, 0, false
+	}
+	if m, ok := t.Block[r]; ok && len(m) > 0 {
+		return m, int(b), true
+	}
+	if role, blk, expert, ok := mj.blockRole(name); ok && expert {
+		return mjTargets{{Role: role}}, blk, true
+	}
+	return nil, 0, false
+}
+
 func (mj *modelJSON) blockRole(name string) (role string, blk int, expert, ok bool) {
 	t := mj.Tensors
 	rest, ok := strings.CutPrefix(name, t.BlockPrefix)
