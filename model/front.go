@@ -120,13 +120,11 @@ type frontSet struct {
 	CpuInErr                 error
 	// headHidden is head writing the norm's rows too (nn.Head.HiddenGraph).
 	headHidden *graph.Graph
-	// cpuHead and cpuHidden are head and headHidden as the CPU composes
+	// cpuHead and cpuHidden are head and headHidden as the devices compose
 	// them: over the mix of every residual stream the head reads first, one
 	// input a stream, on a model of several; the same graphs on a model of
-	// one. RowHead and RowHidden are the head over the mixed row alone, which
-	// a card runs after its collapse (Collapse), nil on a model of one.
-	CpuHead, CpuHidden, RowHead, RowHidden *graph.Graph
-	Collapse                               *graph.Graph
+	// one.
+	CpuHead, CpuHidden *graph.Graph
 	// cpuSample and cpuWalk are sample and a top-k draw's walk over
 	// cpuHead's logits; cpuRow and cpuCut the draw with no top-k, with no cut
 	// and with one; cpuWalkProb and cpuCutProb the distributions the walk and
@@ -392,10 +390,7 @@ func (m *Model) FrontGraphs() *frontSet {
 		s.CpuHead, _, _ = m.headGraphOf(false, true)
 		if s.CpuHead != nil {
 			s.CpuHidden, _, _ = m.headGraphOf(true, true)
-			s.RowHead, _, _ = m.rowHeadGraph(false)
-			s.RowHidden, _, _ = m.rowHeadGraph(true)
 		}
-		s.Collapse, _ = m.streamCollapseGraph()
 	}
 	s.Embed, s.EmbedWhy, s.embedErr = m.embedGraph(true)
 	var ce, ge, ne error
@@ -1591,17 +1586,6 @@ func (m *Model) headGraph(hidden bool) (*graph.Graph, Uncovered, error) {
 // streams collapses them to, which the head's graph does not read
 // otherwise.
 func (m *Model) headGraphOf(hidden, collapsed bool) (*graph.Graph, Uncovered, error) {
-	return m.headGraphOver(hidden, collapsed, collapsed)
-}
-
-// rowHeadGraph is the head over the row a model of several streams mixes
-// them to, the mix not among its ops.
-func (m *Model) rowHeadGraph(hidden bool) (*graph.Graph, Uncovered, error) {
-	return m.headGraphOver(hidden, true, false)
-}
-
-// headGraphOver is headGraphOf, mixing the streams first where mixes.
-func (m *Model) headGraphOver(hidden, collapsed, mixes bool) (*graph.Graph, Uncovered, error) {
 	c := m.Cfg
 	switch {
 	case c.Pooling != jlm.PoolNone || c.Head != nil:
@@ -1623,7 +1607,7 @@ func (m *Model) headGraphOver(hidden, collapsed, mixes bool) (*graph.Graph, Unco
 		h.Output = jlm.RoleTokenEmbd
 	}
 	g := h.Build()
-	if mixes && c.StatesStreams() {
+	if collapsed && c.StatesStreams() {
 		var err error
 		if g, err = m.streamHeadGraph(&h, -1); err != nil {
 			return nil, UncoveredUnverified, err

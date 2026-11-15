@@ -78,9 +78,10 @@ func (s *Instance) layDraft(x []float32, rows, base int) {
 	}
 }
 
-// devHeadReads says the device's head reads the instance's residual as it
-// is: a model of one plane, or a device that mixes the planes itself
-// (nn.Head.Collapses), the model's mix, not a prediction block's.
+// devHeadReads says the device's head is the instance's: the model's, not
+// the head of a prediction block that holds one of its own (MtpHead).
 func (s *Instance) devHeadReads() bool {
-	return s.c.Streams() == 1 || s.head != nil && s.head.Collapses && s.lo < s.c.NLayer
+	fg := s.m.FrontGraphs()
+	i := s.lo - s.c.NLayer
+	return i < 0 || i >= len(fg.MtpHead) || fg.MtpHead[i] == nil
 }

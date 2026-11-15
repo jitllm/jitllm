@@ -45,6 +45,10 @@ func (s *Instance) partPlan(g *graph.Graph, rows int, over map[jlm.Role]jlm.Type
 				p.Formats[w.Role] = e.Type
 			} else if t := s.ws.matrix(g.Block, l, w.Role); t != nil && t.E != nil {
 				p.Formats[w.Role] = t.E.Type
+			} else if t := s.ws.matrix(-1, nil, w.Role); g.Block >= 0 && t != nil && t.E != nil {
+				// A block's graph reading the model's tensors too: a
+				// prediction block's head over its own mix.
+				p.Formats[w.Role] = t.E.Type
 			}
 		}
 	}

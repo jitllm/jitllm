@@ -16,11 +16,10 @@ import (
 // input rows' graph writes every stream, each a view of the stream-major
 // residual on the card, and the per-layer inputs where the model has them
 // (nn.Head.Embed, its tensors nn.Head.Streams); a call of the head alone
-// hands the card every stream, which the composer's form of the front end's
-// collapse reduces to the row the head reads (nn.Head.Collapse). Gemma 3n's
-// blocks are served too, DeepSeek V4's are the tier's (each selects its
-// keys). Each decode step's rows and head are served, every head call's
-// collapse, the prompt's rows gathered on the card over every stream, within
+// hands the card every stream, which the head's graph mixes before its norm
+// (its tensors nn.Head.Mix). Gemma 3n's blocks are served too, DeepSeek
+// V4's are the tier's (each selects its keys). Each decode step's rows and
+// head are served, the prompt's rows gathered on the card over every stream, within
 // 1e-5 of the host's logits; each of
 // streamRowsViolations moves them past 100 times the clean worst and past
 // 1e-4.
@@ -43,9 +42,9 @@ func TestStreamRowsServeOnTheCard(t *testing.T) {
 			if m.Cfg.PLEDim != 0 {
 				outs++
 			}
-			if f.Embed == nil || len(f.Embed.Out) != outs || f.Collapse == nil {
-				t.Fatalf("the front end states the input rows over %d streams as %v (%s) and the collapse as %v",
-					m.Cfg.Streams(), f.Embed != nil, f.EmbedWhy, f.Collapse != nil)
+			if f.Embed == nil || len(f.Embed.Out) != outs || f.CpuHead == nil || len(f.CpuHead.In) != m.Cfg.Streams() {
+				t.Fatalf("the front end states the input rows over %d streams as %v (%s) and the head over them as %v",
+					m.Cfg.Streams(), f.Embed != nil, f.EmbedWhy, f.CpuHead != nil)
 			}
 			host := testInstance(t, m, len(g.IDs)+1, openOpts...)
 			var want [][]float32
@@ -66,27 +65,17 @@ func TestStreamRowsServeOnTheCard(t *testing.T) {
 			}
 			decode := func(t *testing.T, dev string, after func(*Instance)) float64 {
 				t.Helper()
-				var collapses bool
-				got, st, _ := composedDecodeWith(t, m, nil, dev, prompt, toks, parts, true, false, func(s *Instance) {
-					collapses = s.head != nil && s.head.Collapses
-					if after != nil {
-						after(s)
-					}
-				})
+				got, st, _ := composedDecodeWith(t, m, nil, dev, prompt, toks, parts, true, false, after)
 				ne, de := st.ServedPart(nn.ComposedEmbed)
-				nc, dc := st.ServedPart(nn.CollapsedHead)
 				nh, dh := st.ServedPart(nn.ComposedHead)
 				nb, db := st.ServedPart(nn.ComposedBlock)
-				t.Logf("%s: %d input rows, %d collapses, %d heads and %d block steps served; declined %d, %d, %d, %d (%s)",
-					dev, ne, nc, nh, nb, de, dc, dh, db, declinesOf(st))
+				t.Logf("%s: %d input rows, %d heads over every stream and %d block steps served; declined %d, %d, %d (%s)",
+					dev, ne, nh, nb, de, dh, db, declinesOf(st))
 				switch {
-				case !collapses:
-					t.Fatalf("the card does not take the head's collapse")
 				case ne != len(toks) || de != 0:
 					t.Fatalf("%d decode steps' input rows served and %d declined, want %d served", ne, de, len(toks))
-				case nc != len(toks)+1 || dc != 0 || nh != heads || dh != 0:
-					t.Fatalf("%d collapses and %d heads served, %d and %d declined, want %d and %d: the prompt's head collapses whether or not the prompt is asked",
-						nc, nh, dc, dh, len(toks)+1, heads)
+				case nh != heads || dh != 0:
+					t.Fatalf("%d heads served and %d declined, want %d", nh, dh, heads)
 				case tc.blocks && (nb != len(toks)*m.Cfg.NLayer || db != 0):
 					t.Fatalf("%d block steps served and %d declined, want %d", nb, db, len(toks)*m.Cfg.NLayer)
 				case st.UnformedAtStep != 0:

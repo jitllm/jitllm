@@ -322,12 +322,9 @@ type Head struct {
 	// position table, for a model of several residual streams: the
 	// expansion's and the per-layer inputs' (Graph unset).
 	Streams *RowsPart
-	// Collapse is the row Graph reads from every residual stream, for a
-	// model of several, its tensors by role; nil where the front end states
-	// none. Collapses is the device's answer at PrepHead: a call of the head
-	// alone hands it every stream, which it collapses itself.
-	Collapse  *RowsPart
-	Collapses bool
+	// Mix is the tensors Graph binds past the head's own, by role: the mix
+	// of a residual of several planes it reads first, nil for none.
+	Mix *RowsPart
 	// NoCPU says the caller did not list the CPU among the devices
 	// (engine.WithCPU): a device that pages blocks takes the projection while
 	// the slots a swap needs are left, rather than only when it costs none.

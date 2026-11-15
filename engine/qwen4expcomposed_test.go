@@ -319,14 +319,8 @@ func rewriteCollapse(m *model.Model, t *testing.T, rewrite func(*graph.Graph) *g
 	}
 	set := *s
 	set.CpuHead, set.CpuHidden = rewrite(s.CpuHead), rewrite(s.CpuHidden)
-	gs := []*graph.Graph{set.CpuHead, set.CpuHidden}
-	// The card mixes the streams in a call of its own.
-	if s.Collapse != nil {
-		set.Collapse = rewrite(s.Collapse)
-		gs = append(gs, set.Collapse)
-	}
 	f, _ := m.Inventory(jlm.DenseBlock)
-	for _, g := range gs {
+	for _, g := range []*graph.Graph{set.CpuHead, set.CpuHidden} {
 		if err := graph.Verify(g, f); err != nil {
 			t.Fatalf("the rewritten collapse does not verify: %v", err)
 		}

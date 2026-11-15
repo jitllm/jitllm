@@ -406,7 +406,8 @@ func (g *devTier) allocRagOut(bs *blockScratch, vocab, nembd int) error {
 		return err
 	}
 	if n < bs.rows {
-		if bs.headIn, err = g.dev.Alloc(n * nembd * 4); err != nil {
+		bs.headInPlanes = nil
+		if bs.headIn, err = g.dev.Alloc(n * nembd * bs.p.Streams() * 4); err != nil {
 			return err
 		}
 		bs.headReq, err = g.dev.Alloc(4 * (composer.RequestRows + n))
@@ -426,6 +427,7 @@ func (g *devTier) ragOutBytes(bs *blockScratch, vocab, nembd int) uint64 {
 
 // freeRagOut frees a ragged step's per-row logits and tokens.
 func freeRagOut(bs *blockScratch) {
+	bs.headInPlanes = nil
 	for _, b := range []*backend.Buf{&bs.ragLogits, &bs.ragTok, &bs.headIn, &bs.headReq} {
 		if *b != nil {
 			(*b).Free()

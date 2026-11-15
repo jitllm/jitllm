@@ -35,9 +35,6 @@ const (
 	// PartRows is a picture's rows apart from its blocks: a tower's entry
 	// or projector (the card's picrows.go).
 	PartRows
-	// PartCollapse is the row a head reads from every residual stream
-	// (the card's collapse.go).
-	PartCollapse
 	// PartConv is a convolutional tower's block whole, at its input grid's
 	// rows.
 	PartConv
@@ -74,8 +71,6 @@ func (k Part) String() string {
 		return "tower block"
 	case PartRows:
 		return "picture rows"
-	case PartCollapse:
-		return "streams' collapse"
 	case PartConv:
 		return "convolutional block"
 	case PartHalves:
@@ -123,9 +118,6 @@ const (
 	// ComposedRows serves a picture's rows apart from its blocks from their
 	// graphs: a tower's entry and projector (RowsPart, picrows.go).
 	ComposedRows Parts = 1 << PartRows
-	// CollapsedHead counts the collapse of every stream a head reads, which
-	// the composer serves where it serves the head (ComposedHead).
-	CollapsedHead Parts = 1 << PartCollapse
 	// ComposedConv serves a convolutional tower's blocks whole from their
 	// graphs.
 	ComposedConv Parts = 1 << PartConv

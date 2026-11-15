@@ -1431,11 +1431,9 @@ func (s *Instance) newHead() *nn.Head {
 	if s.dense.PosEmbd.E != nil {
 		h.PosEmbd = model.Wt(s.dense.PosEmbd)
 	}
-	h.Streams, h.Collapse = s.streamsPart(f.Embed), s.streamsPart(f.Collapse)
-	// A card mixes the streams in a call of its own (nn.Head.Collapse) and
-	// runs the head over the mixed row.
-	if f.RowHead != nil {
-		h.Graph, h.HiddenGraph = f.RowHead, f.RowHidden
+	h.Streams = s.streamsPart(f.Embed)
+	if c.Streams() > 1 {
+		h.Mix = s.streamsPart(f.CpuHead)
 	}
 	// The final softcap rides the head: a tier that takes it applies the cap on
 	// the device (nn.Head.Softcap), which is what lets a gemma2 token end in

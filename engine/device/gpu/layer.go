@@ -1269,7 +1269,10 @@ type blockScratch struct {
 	// where ragRows is short of the scratch's rows (headChunk).
 	ragRows         int
 	headIn, headReq backend.Buf
-	sstride         int // the score row stride; padded at rows > 1
+	// headInPlanes is headIn as the head's inputs, a plane each
+	// (stagedIns).
+	headInPlanes []backend.Buf
+	sstride      int // the score row stride; padded at rows > 1
 	// arows is how many query rows one pass of the attention kernels takes:
 	// rows, except for a vision block whose score planes would be too large,
 	// which runs its attention in query chunks (visionattn.go). qc and xc are a
@@ -1302,9 +1305,9 @@ type blockScratch struct {
 	// embedding and the position table (nn.Head.Streams), by role.
 	embSW map[jlm.Role]*resident
 	embSV map[jlm.Role]backend.Buf
-	// collapse is the streams' collapse a call of the head alone runs
-	// first (collapse.go), nil where the head reads one row.
-	collapse *nn.RowsPart
+	// headMix is the tensors the head's graph binds past its own, the mix
+	// of a residual of several planes (headplanes.go), nil for none.
+	headMix *nn.RowsPart
 	// foldReq is the request of the composer's row take that moves a batched
 	// chunk's last residual row into this (decode) scratch's x, so the output
 	// projection rides the chunk's own submission (layersOnce's folded head):
@@ -2746,7 +2749,7 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	}
 	g.headGraphs(h)
 	h.GatherRow = h.Embed != nil
-	g.prepCollapse(bs, h)
+	bs.headMix = h.Mix
 	// The head is the model's: a second instance on this tier finds it placed.
 	// Building it again allocated a second norm and logits buffer over the
 	// first ones, leaking both and charging the budget twice.
@@ -2779,7 +2782,7 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	stream := h.Stream && !(h.Embed != nil && h.Embeds)
 	// The norm's bias and the output bias are the vectors the head's graph
 	// names, held with the projection and admitted with it.
-	spec, _ := headShape(h.Graph)
+	spec, _ := headShape(h.Graph, h.Mix)
 	if spec.hasNormBias && len(h.NormB) != len(h.Norm) {
 		g.LastErr = fmt.Sprintf("a LayerNorm head with a %d-wide bias for a %d-wide norm", len(h.NormB), len(h.Norm))
 		return false
@@ -3533,8 +3536,8 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 		return refuse("position %d is past this device's capacity of %d (asked for %d)",
 			pos, bs.p.MaxSeq, g.maxSeqAsked)
 	case head != nil && lo < hi && bs.p.Streams() > 1:
-		// AltUp's head reads the streams' mean and DeepSeek V4's their
-		// collapse, a part of its own: the blocks and the head go as two
+		// A folded head takes the chunk's last row of one plane alone
+		// (servedRowTake): over several the blocks and the head go as two
 		// calls.
 		return refuse("a head folded into %d blocks of %d streams", hi-lo, bs.p.Streams())
 	}
@@ -3861,8 +3864,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	}
 	// The call's tables the composer serves (nn.ComposedTable) at its rows,
 	// which write cs and csSWA where the tier's own table would. A call of
-	// the head alone (a model whose host collapses its streams between the
-	// blocks and the head) turns nothing and is not asked for them, nor is a
+	// the head alone turns nothing and is not asked for them, nor is a
 	// non-causal segment's that turns by its picture's grid (servedGridTable).
 	gridSrv := p.NonCausal && lo < hi && g.gridServes(bs)
 	tableSrv := false
@@ -3989,9 +3991,6 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 		}
 		return refuse("the composer does not serve the head: %s", reason)
 	}
-	// A head alone over every stream collapses them into the first before it
-	// (collapse.go): the caller handed them uncollapsed.
-	collapse := head != nil && lo == hi && hb.collapse != nil && p.Streams() > 1
 	ragN, ragRuns, ragHead := 0, 0, 0
 	if rag != nil {
 		ragN, ragRuns = len(rag.pos), len(rag.runs)
@@ -4072,7 +4071,6 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 		fold: fold, argmax: argmax, sampleK: sampleK, pick: pick, ragHead: ragHead, parOK: parOK,
 		allRows: allRows, hNorm: hNorm, headWhy: headWhy, pickOnly: pickOnly,
 		pickHeadSrv: pickHeadSrv, pickSrv: pickSrv,
-		collapse: collapse,
 	}
 	if g.subFn == nil {
 		g.subFn = g.layersSession
@@ -4211,8 +4209,6 @@ type submitArgs struct {
 	// picked labels alone.
 	headWhy  partDecline
 	pickOnly bool
-	// collapse says the head reads the collapse of every stream (collapse.go).
-	collapse bool
 	// pickHeadSrv and pickSrv say the composer picks the labels: its head
 	// over the picked rows alone, or its gather over the logits.
 	pickHeadSrv, pickSrv bool
@@ -4250,7 +4246,6 @@ func (g *devTier) layersSession(s backend.Session) {
 	ragHead, parOK, allRows, hNorm := a.ragHead, a.parOK, a.allRows, a.hNorm
 	pickOnly := a.pickOnly
 	pickHeadSrv := a.pickHeadSrv
-	collapse := a.collapse
 	// A call whose last block is a first half reads the cut back, not x.
 	cutW := 0
 	if hi > lo && hi <= len(g.layers) && g.layers[hi-1] != nil {
@@ -4466,9 +4461,6 @@ func (g *devTier) layersSession(s backend.Session) {
 				continue
 			}
 		}
-		if collapse && err == nil {
-			err = g.runCollapse(lc, hb.collapse, bs, R)
-		}
 		// The head the composer serves: the step fails if it does not
 		// form, every stage its graph states applied.
 		if head != nil && (rag != nil || allRows) {
@@ -4483,9 +4475,13 @@ func (g *devTier) layersSession(s backend.Session) {
 			// The head of the logits' capacity, its rows the wanted ones: one
 			// form whatever the count.
 			sv, serr := g.servedHead(hb, hNorm, bs.ragRows)
+			var ins []backend.Buf
+			if serr == nil {
+				ins, serr = g.headIns(bs, R)
+			}
 			if serr == nil {
 				sv.rows, sv.sl.tables[tableKey(composer.TableCall)] = rows, bs.headCalls
-				serr = sv.runHead(g, lc, bs.x, out, bs.h)
+				serr = sv.runHead(g, lc, ins, out, bs.h)
 			}
 			if err == nil {
 				err = serr
@@ -4514,7 +4510,8 @@ func (g *devTier) layersSession(s backend.Session) {
 			} else {
 				sv, serr := g.servedHead(hb, hNorm, 1)
 				if serr == nil {
-					serr = sv.runHead(g, lc, in, out, hb.h)
+					g.rows.headX[0] = in
+					serr = sv.runHead(g, lc, g.rows.headX[:], out, hb.h)
 				}
 				if err == nil {
 					err = serr
@@ -4534,8 +4531,12 @@ func (g *devTier) layersSession(s backend.Session) {
 			} else {
 				out := bs.logits
 				sv, serr := g.servedHead(bs, hNorm, 1)
+				var ins []backend.Buf
 				if serr == nil {
-					serr = sv.runHead(g, lc, bs.x, out, bs.h)
+					ins, serr = g.headIns(bs, R)
+				}
+				if serr == nil {
+					serr = sv.runHead(g, lc, ins, out, bs.h)
 				}
 				if err == nil {
 					err = serr
@@ -6020,16 +6021,26 @@ func (g *devTier) headChunk(s backend.Session, lc *launcher, bs, hb *blockScratc
 	if err != nil {
 		return err
 	}
-	g.rows.takeIn[0], g.rows.takeOut[0] = bs.x, bs.headIn
-	if err := tk.run(g, lc, tk.inst, g.rows.takeIn[:], g.rows.takeOut[:]); err != nil {
+	staged, err := bs.stagedIns()
+	if err != nil {
 		return err
+	}
+	xs, err := g.headIns(bs, bs.rows)
+	if err != nil {
+		return err
+	}
+	for k := range staged {
+		g.rows.takeIn[0], g.rows.takeOut[0] = xs[k], staged[k]
+		if err := tk.run(g, lc, tk.inst, g.rows.takeIn[:], g.rows.takeOut[:]); err != nil {
+			return err
+		}
 	}
 	sv, err := g.servedHead(hb, hNorm, bs.ragRows)
 	if err != nil {
 		return err
 	}
 	sv.rows, sv.sl.tables[tableKey(composer.TableCall)] = n, bs.headCalls
-	if err := sv.runHead(g, lc, bs.headIn, bs.ragLogits, bs.h); err != nil {
+	if err := sv.runHead(g, lc, staged, bs.ragLogits, bs.h); err != nil {
 		return err
 	}
 	if err := g.ragTokens(lc, bs, hb, n, sampleSrv); err != nil {

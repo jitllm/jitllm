@@ -144,26 +144,6 @@ func (m *Model) streamExpand(b *graph.Builder, f graph.Facts, x graph.ValueID) (
 	return out, nil
 }
 
-// streamCollapseGraph is the row the head reads from every stream: an
-// input a stream, one output, the converter's stated head read; nil where
-// the front end states no streams.
-func (m *Model) streamCollapseGraph() (*graph.Graph, error) {
-	if !m.Cfg.StatesStreams() {
-		return nil, nil
-	}
-	f, _ := m.Inventory(jlm.DenseBlock)
-	b := graph.NewBlock(-1)
-	y, err := m.streamMix(b, f)
-	if err != nil {
-		return nil, err
-	}
-	b.Out(y)
-	if err := graph.Verify(b.G, f); err != nil {
-		return nil, fmt.Errorf("the streams' collapse does not verify: %w", err)
-	}
-	return b.G, nil
-}
-
 // streamMix is the head's read of every stream in b, an input of b a
 // stream: the converter's stated head read over facts f.
 func (m *Model) streamMix(b *graph.Builder, f graph.Facts) (graph.ValueID, error) {

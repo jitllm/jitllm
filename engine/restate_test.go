@@ -29,9 +29,10 @@ func restated(m *model.Model, rewrite func(g *graph.Graph) *graph.Graph) func() 
 			changed = changed || set.Blocks[li] != g
 		}
 	}
-	if s.Collapse != nil {
-		set.Collapse = rewrite(s.Collapse)
-		changed = changed || set.Collapse != s.Collapse
+	// A head over several streams mixes them in its graph.
+	if s.CpuHead != nil && len(s.CpuHead.In) > 1 {
+		set.CpuHead, set.CpuHidden = rewrite(s.CpuHead), rewrite(s.CpuHidden)
+		changed = changed || set.CpuHead != s.CpuHead
 	}
 	if !changed {
 		panic("restated: the rewrite matched no op of any block, so the violation states the model unchanged")
