@@ -954,7 +954,8 @@ func (bf *blockFacts) selected(b *graph.Builder, g *mjGraph, o mjBlockOp, vars m
 }
 
 // ops lowers the stated ops only a block has: its rotary at the row's
-// position in the stated layout, nothing on a block that turns none.
+// position in the stated layout from the element the op states, nothing on
+// a block that turns none.
 func (bf *blockFacts) ops(b *graph.Builder) func([]graph.ValueID, *jlm.TowerOp) (graph.ValueID, error) {
 	return func(ins []graph.ValueID, op *jlm.TowerOp) (graph.ValueID, error) {
 		if op.Code != jlm.TOpRope {
@@ -974,10 +975,7 @@ func (bf *blockFacts) ops(b *graph.Builder) func([]graph.ValueID, *jlm.TowerOp) 
 		case jlm.RopeNeox:
 			a.Layout = graph.RopeNeox
 		}
-		a.HeadDim, a.Offset = int(op.Span), 0
-		if bf.c.Flags2.Has(jlm.Flag2RopeTail) {
-			a.Offset = int(op.Span) - a.NRot
-		}
+		a.HeadDim, a.Offset = int(op.Span), int(op.Offset)
 		return b.Emit(graph.OpRope, []graph.ValueID{v}, []graph.Result{{Name: "rope", Width: b.G.Values[v].Width}}, nil, a, nil, nil)[0], nil
 	}
 }
@@ -1613,9 +1611,6 @@ func (bf *blockFacts) rope() (graph.Attrs, error) {
 		layout = graph.RopeNeox
 	}
 	a := graph.Attrs{HeadDim: bf.headDim, NRot: nrot, Base: base, Layout: layout, Freqs: freqs, Mscale: scale}
-	if c.Flags2.Has(jlm.Flag2RopeTail) {
-		a.Offset = bf.headDim - nrot
-	}
 	if sec := c.RopeSections; sec != [4]uint32{} {
 		if nrot != int(c.NRot) || base != float64(c.RopeBase) {
 			return graph.Attrs{}, fmt.Errorf("rotary sections on the sliding layers' own rotary")

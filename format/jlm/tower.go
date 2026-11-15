@@ -190,8 +190,9 @@ const (
 	// TOpSlice is In[0]'s Width elements from Offset.
 	TOpSlice OpCode = 19
 	// TOpRope is In[0]'s Span-wide heads turned by the block's attention
-	// rotary at the row's position, laid out as Chain says (RopeAsBlock,
-	// RopeNormal, RopeNeox); a block with no rotary leaves them as they are.
+	// rotary at the row's position from each head's element Offset, laid
+	// out as Chain says (RopeAsBlock, RopeNormal, RopeNeox); a block with no
+	// rotary leaves them as they are.
 	TOpRope OpCode = 20
 	// TOpNGramRows is the row's n-gram table rows, Width wide: its token and
 	// the Span-1 before it, held in the block's recurrent tail, hashed per
