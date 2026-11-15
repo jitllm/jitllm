@@ -130,7 +130,7 @@ func c6BaseFixtures() []struct {
 			return c.LayerNorm && c.Parallel && c.RopeNeox &&
 				c.NRot < c.HeadDim && l.FfnNorm == nil && l.Gate.E == nil &&
 				l.AttnNormB != nil && l.Vector(jlm.RoleFFNUpBias) != nil && l.Vector(jlm.RoleFFNDownBias) != nil && l.Vector(jlm.RoleAttnQBias) != nil &&
-				l.Vector(jlm.RoleAttnOutBias) != nil && m.OutB != nil && m.OutNormB != nil
+				l.Vector(jlm.RoleAttnOutBias) != nil && m.Vector(jlm.RoleOutputBias) != nil && m.Vector(jlm.RoleOutputNormBias) != nil
 		}},
 		{"synth-starcoder", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
@@ -138,13 +138,13 @@ func c6BaseFixtures() []struct {
 				c.NKVHead == 1 && c.NHead > 1 && m.PosEmbd.E != nil && l.FfnNorm != nil &&
 				l.Gate.E == nil && l.AttnNormB != nil && l.FfnNormB != nil && l.Vector(jlm.RoleFFNUpBias) != nil &&
 				l.Vector(jlm.RoleFFNDownBias) != nil && l.Vector(jlm.RoleAttnQBias) != nil && l.Vector(jlm.RoleAttnKBias) != nil && l.Vector(jlm.RoleAttnVBias) != nil && l.Vector(jlm.RoleAttnOutBias) != nil &&
-				m.OutNormB != nil && c.TiedEmbd
+				m.Vector(jlm.RoleOutputNormBias) != nil && c.TiedEmbd
 		}},
 		{"synth-stablelm", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
 			return c.LayerNorm && !c.Parallel && c.RopeNeox &&
 				c.NRot*4 == c.HeadDim && l.FfnNorm != nil && l.Gate.E != nil && l.Vector(jlm.RoleAttnQBias) != nil &&
-				l.Vector(jlm.RoleAttnOutBias) == nil && l.AttnNormB != nil && m.OutNormB != nil && !c.TiedEmbd
+				l.Vector(jlm.RoleAttnOutBias) == nil && l.AttnNormB != nil && m.Vector(jlm.RoleOutputNormBias) != nil && !c.TiedEmbd
 		}},
 		{"synth-stablelm-par", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
@@ -155,7 +155,7 @@ func c6BaseFixtures() []struct {
 			return c.LayerNorm && !c.Parallel && c.RopeNeox &&
 				c.NRot == c.HeadDim && c.NKVHead < c.NHead && l.Gate.E == nil && l.FfnNorm != nil &&
 				l.AttnNormB != nil && l.FfnNormB != nil && l.Vector(jlm.RoleFFNUpBias) != nil && l.Vector(jlm.RoleFFNDownBias) != nil &&
-				l.Vector(jlm.RoleAttnQBias) != nil && l.Vector(jlm.RoleAttnOutBias) != nil && m.OutNormB != nil
+				l.Vector(jlm.RoleAttnQBias) != nil && l.Vector(jlm.RoleAttnOutBias) != nil && m.Vector(jlm.RoleOutputNormBias) != nil
 		}},
 		{"synth-falcon", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
@@ -172,20 +172,20 @@ func c6BaseFixtures() []struct {
 			return c.LayerNorm && !c.Parallel && c.RopeNeox &&
 				2*c.NRot == c.HeadDim && m.Container.Config().Flags.Has(jlm.FlagReLU2) && l.Gate.E == nil &&
 				l.FfnNorm != nil && l.AttnNormB != nil && l.Vector(jlm.RoleFFNUpBias) != nil && l.Vector(jlm.RoleFFNDownBias) != nil &&
-				m.OutNormB != nil && !c.TiedEmbd
+				m.Vector(jlm.RoleOutputNormBias) != nil && !c.TiedEmbd
 		}},
 		{"synth-commandr", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
 			return c.LayerNorm && c.Parallel && !c.RopeNeox &&
 				c.LogitScale == 16 && c.TiedEmbd && l.FfnNorm == nil && l.Gate.E != nil &&
-				l.AttnNormB == nil && m.OutNormB == nil && c.NKVHead < c.NHead && c.SWAWindow == 0
+				l.AttnNormB == nil && m.Vector(jlm.RoleOutputNormBias) == nil && c.NKVHead < c.NHead && c.SWAWindow == 0
 		}},
 		{"synth-dbrx", func(m *model.Model) bool {
 			c, l := m.Cfg, &m.Layers[0]
 			return c.LayerNorm && !c.Parallel && c.RopeNeox && c.NRot == c.HeadDim &&
 				m.Container.Config().ClampKQV == 1.5 && c.QKVAct != nil && c.NExpert == 4 && c.NExpertUsed == 2 && !c.NoExpertNorm &&
 				c.NKVHead < c.NHead && l.Router.E != nil && l.FfnNorm != nil && l.AttnNormB == nil &&
-				l.FfnNormB == nil && l.Vector(jlm.RoleAttnQBias) == nil && m.OutNormB == nil && !c.TiedEmbd
+				l.FfnNormB == nil && l.Vector(jlm.RoleAttnQBias) == nil && m.Vector(jlm.RoleOutputNormBias) == nil && !c.TiedEmbd
 		}},
 		{"synth-cohere2", func(m *model.Model) bool {
 			c := m.Cfg
@@ -253,9 +253,8 @@ func rmsForLayerNorm(m *model.Model) func() {
 	undoC := cfgMut(m, func(c *model.Config) { c.LayerNorm = false })
 	undoR := dropStored(m, jlm.RoleAttnNormBias, jlm.RoleFFNNormBias)
 	undoD := dropStoredDense(m, jlm.RoleOutputNormBias)
-	was := m.OutNormB
-	m.OutNormB = nil
-	return func() { m.OutNormB = was; undoD(); undoR(); undoC() }
+	undoV := setDenseVec(m, jlm.RoleOutputNormBias, func([]float32) []float32 { return nil })
+	return func() { undoV(); undoD(); undoR(); undoC() }
 }
 
 // noFFNBiases takes an ungated FFN's two biases away, in the layers and as
@@ -412,6 +411,33 @@ func dropStored(m *model.Model, roles ...jlm.Role) func() {
 	})
 }
 
+// setDenseVec has the model's vector of role r outside its blocks read as f
+// makes it from what it was, until the returned undo; nil drops it.
+func setDenseVec(m *model.Model, r jlm.Role, f func([]float32) []float32) func() {
+	for i := range m.Vecs {
+		if m.Vecs[i].Role == r {
+			was := m.Vecs[i].V
+			m.Vecs[i].V = f(was)
+			return func() { m.Vecs[i].V = was }
+		}
+	}
+	return func() {}
+}
+
+// dropDenseMats takes the model's dense matrices of roles out until the
+// returned undo.
+func dropDenseMats(m *model.Model, roles ...jlm.Role) func() {
+	was := m.DenseMats
+	keep := m.DenseMats[:0:0]
+	for _, x := range was {
+		if !slices.Contains(roles, x.Role) {
+			keep = append(keep, x)
+		}
+	}
+	m.DenseMats = keep
+	return func() { m.DenseMats = was }
+}
+
 // dropStoredDense is dropStored for the model-wide tensors (the head's),
 // over whatever the front end already reads in place of the container's.
 func dropStoredDense(m *model.Model, roles ...jlm.Role) func() {
@@ -476,16 +502,14 @@ func c6BaseViolations() map[string][]c6Violation {
 			{"no FFN biases", noFFNBiases},
 			{"no q/k/v biases", noQKVBias},
 			{"no head bias", func(m *model.Model) func() {
-				was := m.OutB
-				m.OutB = nil
+				undoV := setDenseVec(m, jlm.RoleOutputBias, func([]float32) []float32 { return nil })
 				undoR := dropStoredDense(m, jlm.RoleOutputBias)
-				return func() { undoR(); m.OutB = was }
+				return func() { undoR(); undoV() }
 			}},
 			{"no output norm bias", func(m *model.Model) func() {
-				was := m.OutNormB
-				m.OutNormB = nil
+				undoV := setDenseVec(m, jlm.RoleOutputNormBias, func([]float32) []float32 { return nil })
 				undoR := dropStoredDense(m, jlm.RoleOutputNormBias)
-				return func() { undoR(); m.OutNormB = was }
+				return func() { undoR(); undoV() }
 			}},
 			{"serial residual", func(m *model.Model) func() {
 				undo := cfgMut(m, func(c *model.Config) { c.Parallel = false })

@@ -1634,19 +1634,71 @@ func (sv *servedPart) pagedRun(g *devTier, lc *launcher, s backend.Session, inst
 }
 
 // headSpec is what a head graph binds, whatever its ops compute: its one
-// matrix, the projection to the vocabulary, and the vectors the tier holds
-// for a head -- the norm's scale and bias, the projection's bias. Its input
-// is the rows, its outputs the logits and, where it writes them too, the
-// rows it read them from (graph.Head.Hidden).
+// matrix, the projection to the vocabulary, and its vectors by role, each
+// read as wide as its binding (K). Its input is the rows, its outputs the
+// logits and, where it writes them too, the rows it read them from
+// (graph.Head.Hidden). It reads the graph's ops in place: reading it
+// allocates nothing.
 type headSpec struct {
-	out                           jlm.Role
-	hasNorm, hasNormBias, hasBias bool
+	out jlm.Role
+	ops []graph.Op
+}
+
+// eachVec calls f with each vector the head binds, once a role, and whether
+// the op reading it reads the projection too (an f32 operand beside it).
+func (hs headSpec) eachVec(f func(b graph.Binding, beside bool)) {
+	for i, o := range hs.ops {
+		beside := false
+		for _, w := range o.Weight {
+			beside = beside || w.Rows > 0
+		}
+		for j, w := range o.Weight {
+			if w.Rows == 0 && !hs.seen(i, j, w.Role) {
+				f(w, beside)
+			}
+		}
+	}
+}
+
+// seen says a vector binding of role r comes before op i's binding j.
+func (hs headSpec) seen(i, j int, r jlm.Role) bool {
+	for k := 0; k <= i; k++ {
+		ws := hs.ops[k].Weight
+		if k == i {
+			ws = ws[:j]
+		}
+		for _, w := range ws {
+			if w.Rows == 0 && w.Role == r {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// hasVec says the head binds a vector of b's role at b's width.
+func (hs headSpec) hasVec(b graph.Binding) bool {
+	for _, o := range hs.ops {
+		for _, w := range o.Weight {
+			if w.Rows == 0 && w.Role == b.Role && w.K == b.K {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// same says two heads bind alike: one projection, the same vectors.
+func (hs headSpec) same(o headSpec) bool {
+	eq := hs.out == o.out
+	hs.eachVec(func(b graph.Binding, _ bool) { eq = eq && o.hasVec(b) })
+	o.eachVec(func(b graph.Binding, _ bool) { eq = eq && hs.hasVec(b) })
+	return eq
 }
 
 // headShape is what gr binds, false for a graph the tier holds no buffers
 // for: other than one input and one or two outputs, an output that is its
-// input, a matrix other than one projection, or a vector other than the
-// head's.
+// input, or a matrix other than one projection.
 func headShape(gr *graph.Graph) (headSpec, bool) {
 	var hs headSpec
 	if gr == nil || len(gr.In) != 1 || len(gr.Out) < 1 || len(gr.Out) > 2 || len(gr.Ops) < 1 {
@@ -1657,43 +1709,59 @@ func headShape(gr *graph.Graph) (headSpec, bool) {
 			return hs, false
 		}
 	}
+	return headBinds(gr.Ops)
+}
+
+// headBinds is what ops bind (headSpec), false for none or more than one
+// matrix.
+func headBinds(ops []graph.Op) (headSpec, bool) {
+	hs := headSpec{ops: ops}
 	matrix := false
-	for _, o := range gr.Ops {
+	for _, o := range ops {
 		for _, w := range o.Weight {
-			switch {
-			case w.Rows > 0:
+			if w.Rows > 0 {
 				if matrix && w.Role != hs.out {
 					return hs, false
 				}
 				hs.out, matrix = w.Role, true
-			case w.Role == jlm.RoleOutputNorm:
-				hs.hasNorm = true
-			case w.Role == jlm.RoleOutputNormBias:
-				hs.hasNormBias = true
-			case w.Role == jlm.RoleOutputBias:
-				hs.hasBias = true
-			default:
-				return hs, false
 			}
 		}
 	}
 	return hs, matrix
 }
 
+// vecOf is the buffer vecs holds under r, nil for none.
+func vecOf(vecs []roleBuf, r jlm.Role) backend.Buf {
+	for _, v := range vecs {
+		if v.role == r {
+			return v.buf
+		}
+	}
+	return nil
+}
+
 // headServes is nil where the composer serves a step's head as the model's
 // head graph states it -- the graph read as what it binds (headShape), the
-// hidden rows' graph binding the same, and every vector it names held
-// (PrepHead uploads each) -- and why not where it does not.
-func (bs *blockScratch) headServes(norm backend.Buf) error {
+// hidden rows' graph binding the same, and every vector it names held in
+// vecs -- and why not where it does not.
+func (bs *blockScratch) headServes(vecs []roleBuf) error {
 	hs, ok := headShape(bs.headGraph)
 	hh, hok := headShape(bs.headHidden)
 	switch {
 	case !ok || !hok:
-		return errors.New("the head's graph binds a matrix other than its one projection, or a vector the tier holds no head buffer for")
-	case hh != hs || len(bs.headHidden.Out) != 2:
+		return errors.New("the head's graph binds a matrix other than its one projection")
+	case !hh.same(hs) || len(bs.headHidden.Out) != 2:
 		return errors.New("the head's hidden rows graph binds other than its head, or writes no rows")
-	case hs.hasNorm && norm == nil, hs.hasNormBias && bs.hNormB == nil, hs.hasBias && bs.hBias == nil:
-		return errors.New("the head's graph names a vector the tier did not upload")
+	}
+	var missing jlm.Role
+	lacks := false
+	hs.eachVec(func(b graph.Binding, _ bool) {
+		if vecOf(vecs, b.Role) == nil {
+			missing, lacks = b.Role, true
+		}
+	})
+	if lacks {
+		return fmt.Errorf("the head's graph names %v, which the tier did not upload", missing)
 	}
 	return nil
 }
@@ -1704,22 +1772,22 @@ func (sv *servedPart) runHead(g *devTier, lc *launcher, in, out, h backend.Buf) 
 	return sv.run(g, lc, sv.inst, []backend.Buf{in}, []backend.Buf{out, h}[:sv.m])
 }
 
-// servedHead is the model's head graph served at a step of rows: its norm
-// bound to the tier's norm (and its bias, for a LayerNorm head), its
-// projection to the head's weight and its bias to the tier's, under the roles
-// the graph names (the embedding's where the model ties them). A form a row
-// count: a decode step's one row, a ragged step's or a chunk's wanted rows.
-// The graph is the one that writes the norm's rows too (nn.Head.HiddenGraph),
-// into the scratch's normed rows as the tier's own head does (runHead): what
-// a call's hidden readback reads (nn.Head.Hidden).
-func (g *devTier) servedHead(bs *blockScratch, norm backend.Buf, rows int) (*servedPart, error) {
+// servedHead is the model's head graph served at a step of rows: its
+// projection bound to the head's weight and each vector it names to the
+// tier's under that role (vecs), under the roles the graph names (the
+// embedding's where the model ties them). A form a row count: a decode
+// step's one row, a ragged step's or a chunk's wanted rows. The graph is the
+// one that writes the norm's rows too (nn.Head.HiddenGraph), into the
+// scratch's normed rows as the tier's own head does (runHead): what a call's
+// hidden readback reads (nn.Head.Hidden).
+func (g *devTier) servedHead(bs *blockScratch, vecs []roleBuf, rows int) (*servedPart, error) {
 	gr, w := bs.headHidden, bs.head
 	if g.rowsFaulted("nohidden") {
 		gr = bs.headGraph
 	}
 	hs, ok := headShape(gr)
 	if !ok {
-		return nil, errors.New("the composed head: a graph binding a matrix other than its one projection, or a vector the tier holds no head buffer for")
+		return nil, errors.New("the composed head: a graph binding a matrix other than its one projection")
 	}
 	t, ok := jlmType(w.t)
 	if !ok {
@@ -1727,23 +1795,17 @@ func (g *devTier) servedHead(bs *blockScratch, norm backend.Buf, rows int) (*ser
 	}
 	bind := func(sl *composedPart) {
 		sl.weights[hs.out] = w
-		if hs.hasNorm {
-			sl.vectors[jlm.RoleOutputNorm] = norm
-		}
-		if hs.hasNormBias {
-			sl.vectors[jlm.RoleOutputNormBias] = bs.hNormB
-		}
-		if hs.hasBias {
-			sl.vectors[jlm.RoleOutputBias] = bs.hBias
-		}
+		hs.eachVec(func(b graph.Binding, _ bool) { sl.vectors[b.Role] = vecOf(vecs, b.Role) })
 	}
 	sk := servedKey{kind: nn.PartHead, graph: gr, rows: rows, t: t}
 	sv, err := g.servedFor(sk, func() (composedPart, error) {
 		sl := composedPart{kind: nn.PartHead, graph: gr, formats: map[jlm.Role]jlm.Type{hs.out: t},
 			weights: map[jlm.Role]*resident{}, vectors: map[jlm.Role]backend.Buf{}}
-		if hs.hasBias {
-			sl.formats[jlm.RoleOutputBias] = jlm.TypeF32
-		}
+		hs.eachVec(func(b graph.Binding, beside bool) {
+			if beside {
+				sl.formats[b.Role] = jlm.TypeF32
+			}
+		})
 		bind(&sl)
 		return sl, nil
 	})
@@ -1758,7 +1820,7 @@ func (g *devTier) servedHead(bs *blockScratch, norm backend.Buf, rows int) (*ser
 // (nn.Head.PickHead): the head's norm, its weight and its bias bound as
 // servedHead binds them, the ids its second input. One form for the head's
 // label bound, the labels a run-time input.
-func (g *devTier) servedPickHead(bs *blockScratch, norm backend.Buf) (*servedPart, error) {
+func (g *devTier) servedPickHead(bs *blockScratch, vecs []roleBuf) (*servedPart, error) {
 	gr, w := bs.pickHead, bs.head
 	if gr == nil || len(gr.In) != 2 || len(gr.Out) != 1 || len(gr.Ops) < 2 || len(gr.Ops[0].Weight) < 1 ||
 		gr.Ops[1].Kind != graph.OpMatVec || len(gr.Ops[1].In) != 2 || len(gr.Ops[1].Weight) < 1 || len(gr.Ops[1].Weight) > 2 {
@@ -1768,27 +1830,32 @@ func (g *devTier) servedPickHead(bs *blockScratch, norm backend.Buf) (*servedPar
 	if !ok {
 		return nil, fmt.Errorf("the composed pick head: format %d has no container type", w.t)
 	}
-	n, mv := gr.Ops[0].Weight, gr.Ops[1].Weight
+	mv := gr.Ops[1].Weight
 	out := mv[0].Role
-	if len(mv) == 2 && bs.hBias == nil {
-		return nil, fmt.Errorf("the composed pick head: its graph adds %v, which the tier does not hold", mv[1].Role)
+	hs, _ := headBinds(gr.Ops)
+	var missing jlm.Role
+	lacks := false
+	hs.eachVec(func(b graph.Binding, _ bool) {
+		if vecOf(vecs, b.Role) == nil {
+			missing, lacks = b.Role, true
+		}
+	})
+	if lacks {
+		return nil, fmt.Errorf("the composed pick head: its graph names %v, which the tier does not hold", missing)
 	}
 	bind := func(sl *composedPart) {
-		sl.weights[out], sl.vectors[n[0].Role] = w, norm
-		if len(n) == 2 {
-			sl.vectors[n[1].Role] = bs.hNormB
-		}
-		if len(mv) == 2 {
-			sl.vectors[mv[1].Role] = bs.hBias
-		}
+		sl.weights[out] = w
+		hs.eachVec(func(b graph.Binding, _ bool) { sl.vectors[b.Role] = vecOf(vecs, b.Role) })
 	}
 	sk := servedKey{kind: nn.PartHead, graph: gr, rows: 1, t: t}
 	sv, err := g.servedFor(sk, func() (composedPart, error) {
 		sl := composedPart{kind: nn.PartHead, graph: gr, formats: map[jlm.Role]jlm.Type{out: t},
 			weights: map[jlm.Role]*resident{}, vectors: map[jlm.Role]backend.Buf{}}
-		if len(mv) == 2 {
-			sl.formats[mv[1].Role] = jlm.TypeF32
-		}
+		hs.eachVec(func(b graph.Binding, beside bool) {
+			if beside {
+				sl.formats[b.Role] = jlm.TypeF32
+			}
+		})
 		bind(&sl)
 		return sl, nil
 	})
@@ -2199,100 +2266,13 @@ func (l *layer) roleWeight(r jlm.Role) *resident {
 	if r == jlm.RoleNGramTable && l.ngram != nil && len(l.ngram.ranges) > 0 {
 		return &l.ngram.ranges[0].rows
 	}
-	if w := l.namedWeight(r); w != nil {
-		return w
+	if r == jlm.RoleRouter {
+		return l.router
 	}
-	for _, x := range l.extra {
+	for _, x := range l.mats {
 		if x.role == r {
 			return x.r
 		}
-	}
-	return nil
-}
-
-// namedWeight is the weight of role r the block holds by name, nil for one
-// it holds none of or holds only among its extras.
-func (l *layer) namedWeight(r jlm.Role) *resident {
-	switch r {
-	case jlm.RoleAttnQ, jlm.RoleVAttnQ:
-		return l.wq
-	case jlm.RoleAttnK, jlm.RoleVAttnK:
-		return l.wk
-	case jlm.RoleAttnV, jlm.RoleVAttnV:
-		return l.wv
-	case jlm.RoleAttnOut, jlm.RoleVAttnOut:
-		return l.wo
-	case jlm.RoleFFNGate, jlm.RoleVFFNGate:
-		return l.gate
-	case jlm.RoleFFNUp, jlm.RoleVFC1:
-		return l.up
-	case jlm.RoleFFNDown, jlm.RoleVFC2:
-		return l.down
-	case jlm.RoleAttnQA:
-		return l.wqa
-	case jlm.RoleAttnQB:
-		return l.wqb
-	case jlm.RoleAttnKVA:
-		return l.wkva
-	case jlm.RoleAttnKB:
-		return l.wkb
-	case jlm.RoleAttnVB:
-		return l.wvb
-	case jlm.RoleAttnGate:
-		// A linear block of a model of latent attention gates its output
-		// by its own.
-		if l.linear {
-			return l.ssmGate
-		}
-	case jlm.RoleAttnQKV:
-		if l.linear && !l.withAttn {
-			return l.wq
-		}
-	case jlm.RoleSCX:
-		if l.linear {
-			return l.wq
-		}
-	case jlm.RoleSCB:
-		return l.ssmGate
-	case jlm.RoleSCC, jlm.RoleSSMBA:
-		return l.ssmBA
-	case jlm.RoleSSMXDt:
-		return l.ssmFA
-	case jlm.RoleSSMDtProj:
-		return l.ssmFB
-	case jlm.RoleSSMXB:
-		return l.ssmGA
-	case jlm.RoleSSMXC:
-		return l.ssmGB
-	case jlm.RoleSSMOut:
-		return l.ssmOut
-	case jlm.RoleSSMFA:
-		return l.ssmFA
-	case jlm.RoleSSMFB:
-		return l.ssmFB
-	case jlm.RoleSSMGA:
-		return l.ssmGA
-	case jlm.RoleSSMGB:
-		return l.ssmGB
-	case jlm.RoleSSMConv1d:
-		if l.ssmTaps.qs != nil {
-			return &l.ssmTaps
-		}
-	case jlm.RoleRouter:
-		return l.router
-	case jlm.RoleExpGateBank, jlm.RoleExpUpBank, jlm.RoleExpDownBank:
-		// The banks whole on the card, or a streamed block's in pages: the
-		// sheets its cache or its compact bank holds (heldSheets).
-		if l.router == nil {
-			return nil
-		}
-		return [...]*resident{l.gate, l.up, l.down}[r-jlm.RoleExpGateBank]
-	case jlm.RoleShExpGate:
-		return l.shGate
-	case jlm.RoleShExpUp:
-		return l.shUp
-	case jlm.RoleShExpDown:
-		return l.shDown
 	}
 	return nil
 }
@@ -2403,41 +2383,12 @@ type roleBuf struct {
 // roleVector is the block's vector its graph binds under role, nil for one
 // the tier does not hold.
 func (l *layer) roleVector(r jlm.Role) backend.Buf {
-	if b, ok := l.namedVector(r); ok {
-		return b
-	}
 	for _, v := range l.vecs {
 		if v.role == r {
 			return v.buf
 		}
 	}
 	return nil
-}
-
-// namedVector is the vector a field of the block holds under r, and whether
-// a field holds r at all: a role a field holds is read from it, nil or not,
-// as the host's is (model's layer.namedVector), and every other role from
-// vecs.
-func (l *layer) namedVector(r jlm.Role) (backend.Buf, bool) {
-	switch r {
-	case jlm.RoleAttnNorm:
-		return l.nAttn, true
-	case jlm.RoleFFNNorm:
-		return l.nFFN, true
-	case jlm.RoleAttnNormBias:
-		return l.nAttnB, true
-	case jlm.RoleFFNNormBias:
-		return l.nFFNB, true
-	case jlm.RoleAttnQNorm:
-		return l.nQ, true
-	case jlm.RoleAttnKNorm:
-		return l.nK, true
-	case jlm.RoleVClamp:
-		return l.clampB, true
-	case jlm.RoleLayerOutScale:
-		return l.outScale, true
-	}
-	return nil, false
 }
 
 // blockServes is nil where the composer serves block li of this step whole,
@@ -2971,14 +2922,14 @@ func (g *devTier) prewarmComposedHead(narrow bool) (roomless string) {
 		g.prewarming = false
 	}
 	if g.NoPromptPrewarm || bs == nil || bs.head == nil ||
-		bs.headServes(bs.hNorm) != nil {
+		bs.headServes(bs.hVecs) != nil {
 		return
 	}
 	g.prewarming = true
 	defer func() { g.prewarming = false }()
-	_, err := g.servedHead(bs, bs.hNorm, 1)
+	_, err := g.servedHead(bs, bs.hVecs, 1)
 	for narrow && err != nil && errors.As(err, new(partRoomError)) && g.narrowReserved("the composed head's buffers") {
-		_, err = g.servedHead(bs, bs.hNorm, 1)
+		_, err = g.servedHead(bs, bs.hVecs, 1)
 	}
 	if err != nil {
 		g.LastErr = "the composed head: " + err.Error()
@@ -2987,7 +2938,7 @@ func (g *devTier) prewarmComposedHead(narrow bool) (roomless string) {
 		}
 	}
 	if bs.pickHead != nil {
-		if _, err := g.servedPickHead(bs, bs.hNorm); err != nil {
+		if _, err := g.servedPickHead(bs, bs.hVecs); err != nil {
 			g.LastErr = "the composed pick head: " + err.Error()
 		}
 	}
@@ -2995,7 +2946,7 @@ func (g *devTier) prewarmComposedHead(narrow bool) (roomless string) {
 	// a call's (composer.CallRows): a step of any count of wanted rows forms
 	// nothing.
 	for w := range g.bbs {
-		if _, err := g.servedHead(bs, bs.hNorm, w); err != nil {
+		if _, err := g.servedHead(bs, bs.hVecs, w); err != nil {
 			g.LastErr = "the composed rows head: " + err.Error()
 			return
 		}

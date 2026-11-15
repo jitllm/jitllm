@@ -197,22 +197,6 @@ func (m *Model) SinkSlot() int {
 	return 0
 }
 
-// headStages is what the model's head does past the projection, in the
-// model's order.
-func (m *Model) HeadStages() nn.HeadStage {
-	var st nn.HeadStage
-	if m.OutB != nil {
-		st |= nn.HeadBias
-	}
-	if m.Cfg.FinalSoftcap != 0 {
-		st |= nn.HeadCap
-	}
-	if m.Cfg.LogitScale != 1 {
-		st |= nn.HeadScale
-	}
-	return st
-}
-
 // expSelBias is a representative selection bias, or nil when this model has
 // none: it answers the shape question a device's plan asks, not a value one.
 // A model must not mix biased and unbiased blocks (loadConfig refuses it).
@@ -360,6 +344,25 @@ func (l *Layer) Floats(r jlm.Role) []float32 {
 		return v
 	}
 	return nn.VectorOf(l.Vecs, r)
+}
+
+// Vectors is every vector block l holds, by role, appended to out: its
+// table's, each as Floats reads it, then the ones a field holds that its
+// table does not.
+func (l *Layer) Vectors(out []nn.RoleVector) []nn.RoleVector {
+	for _, v := range l.Vecs {
+		if x := l.Floats(v.Role); x != nil {
+			out = append(out, nn.RoleVector{Role: v.Role, V: x})
+		}
+	}
+	for _, r := range [...]jlm.Role{jlm.RoleNextnENorm, jlm.RoleNextnHNorm, jlm.RoleAttnNorm, jlm.RoleFFNNorm,
+		jlm.RoleAttnNormBias, jlm.RoleFFNNormBias, jlm.RoleAttnQNorm, jlm.RoleAttnKNorm,
+		jlm.RoleVClamp, jlm.RoleLayerOutScale} {
+		if v, _ := l.NamedVector(r); v != nil && nn.VectorOf(l.Vecs, r) == nil {
+			out = append(out, nn.RoleVector{Role: r, V: v})
+		}
+	}
+	return out
 }
 
 // Bytes is t's bytes, its planes where it is packed, and its rows; nil for

@@ -21,13 +21,13 @@ func moveHead(dst, src *blockScratch) {
 	dst.headHidden, src.headHidden = src.headHidden, nil
 	dst.sampleWalk, src.sampleWalk = src.sampleWalk, nil
 	dst.pickGraph, dst.pickHead, src.pickGraph, src.pickHead = src.pickGraph, src.pickHead, nil, nil
-	dst.hNorm, dst.hNormB, dst.hBias, dst.logits, dst.hRaw, dst.hOut = src.hNorm, src.hNormB, src.hBias, src.logits, src.hRaw, src.hOut
+	dst.hVecs, dst.hVecBytes, dst.logits, dst.hRaw, dst.hOut = src.hVecs, src.hVecBytes, src.logits, src.hRaw, src.hOut
 	dst.embedGraph = src.embedGraph
 	dst.collapse = src.collapse
 	dst.embSW, dst.embSV = src.embSW, src.embSV
 	dst.embW, dst.posW, dst.embErr = src.embW, src.posW, src.embErr
 	src.head, src.mvHead, src.headGraph, src.sampleGraph = nil, mv{}, nil, nil
-	src.hNorm, src.hNormB, src.hBias, src.logits, src.hRaw, src.hOut = nil, nil, nil, nil, nil, nil
+	src.hVecs, src.hVecBytes, src.logits, src.hRaw, src.hOut = nil, 0, nil, nil, nil
 }
 
 // sameShape reports that two plans differ at most in capacity, so a scratch

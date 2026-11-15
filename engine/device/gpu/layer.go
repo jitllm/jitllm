@@ -41,20 +41,13 @@ type layer struct {
 	graph   *graph.Graph
 	win     int
 	chunked bool
-	// vecs is every vector the file stores for the block that no field below
-	// holds (nn.LayerWeights.Vectors), uploaded as the file stores it.
-	vecs           []roleBuf
-	wq, wk, wv, wo *resident
-	gate, up, down *resident
-	// qwen3next's shared expert: an always-on feed-forward added to the routed
-	// sum, scaled by a sigmoid of one logit (its gate is in vecs).
-	shGate, shUp, shDown *resident
-	// extra is every other matrix the block stores and its graph binds, by
-	// role (nn.LayerWeights.Extra), uploaded as the file stores it.
-	extra []roleRes
-	// pleOff is the block's li*PLEDim, the offset of its slice in a row's
-	// per-layer inputs.
-	pleOff backend.Buf
+	// vecs is every vector the block holds, by role (nn.LayerWeights.Vectors),
+	// and mats every matrix of it the card holds, by role
+	// (nn.LayerWeights.Mats), each uploaded as the file stores it: a routed
+	// bank (jlm.ExpertBank) is every expert's sheet, or a streamed block's
+	// compact bank. mats is the block's page in order (tensors).
+	vecs   []roleBuf
+	mats   []roleRes
 	sparse bool
 	// kvSrc is the block whose history this one attends to: its own index, or
 	// for a KV-sharing block (nn.LayerPlan.KVShared) the source's, whose
@@ -63,45 +56,22 @@ type layer struct {
 	// runs is the sessions that placed the block here. A block holding no
 	// history of its own -- a KV-sharing one, a tower's -- is still theirs.
 	runs map[uint64]struct{}
-	// A linear block's three matrices (its vectors are in vecs). Wq above
-	// carries the fused q|k|v for such a block (the layer kind decides the
-	// consumer, as in nn.SSMWeights), so these are the z projection, the
-	// beta/alpha head and the output projection. linear says this block runs
-	// the gated delta rule instead of attention. It is set from the plan, not
-	// inferred from a nil weight.
-	linear                 bool
-	ssmGate, ssmBA, ssmOut *resident
-	// KDA's two low-rank gates, nil on qwen3next.
-	ssmFA, ssmFB, ssmGA, ssmGB *resident
-	// ssmTaps is the convolution's taps a channel's contiguous, which the
-	// composer's convolutions read; the file stores them tap-major.
-	ssmTaps resident
+	// linear says this block runs a recurrent mixer instead of attention. It
+	// is set from the plan, not inferred from a nil weight.
+	linear bool
 	// withAttn is a block that runs attention beside its mixer
 	// (nn.RecurrentPlan.WithAttn): it keeps a KV history and a recurrent
-	// state both, and its mixer's projection is one of extra, wq being the
-	// attention's query.
+	// state both.
 	withAttn bool
 	// noFFN is a block that is its mixer alone (nn.LayerPlan.NoFFN): the
 	// emit ends it at the first residual.
 	noFFN bool
-	// Multi-head latent attention's five matrices and two norms. wkb and wvb are
-	// banks, one sheet per head, so their matvecs carry slots like a mixture's and
-	// the "expert" indexed is the head. wq carries the one-step query where the
-	// architecture has one and is empty where wqa/wqb do; wk and wv are always
-	// empty. mla is set from the plan, like linear.
-	mla                      bool
-	wqa, wqb, wkva, wkb, wvb *resident
+	// mla is a model of multi-head latent attention, set from the plan.
+	mla bool
 	// wide marks a block of several residual streams or of experts at a
 	// width of their own.
 	wide bool
 
-	nAttn, nFFN backend.Buf // norm weights, f32
-	// clampB is a vision block's clipped-linear bounds (nn.LayerWeights.Clamp,
-	// Gemma 4), 28 floats the clamp kernels read; nil elsewhere.
-	clampB backend.Buf
-	// LayerNorm biases, nil for every block that RMSNorms.
-	nAttnB, nFFNB backend.Buf
-	nQ, nK        backend.Buf // per-head q/k RMSNorm weights (qwen3), nil otherwise
 	// The KV cache is per sequence, not per block: nn.LayerDevice.Layers carries a
 	// position and no state identity, so two model.instances sharing one pair would
 	// silently corrupt each other. See docs/design/device-sessions.md.
@@ -129,14 +99,12 @@ type layer struct {
 	// non-causal block reads it through (towerStep).
 	picPool kvLayerPool
 	// swa says the block attends at the sliding layers' geometry, so it runs
-	// in that geometry's scratch set (geomsets.go). outScale is its output
-	// scalar, one float, nil where it has none.
-	geo      geoKey
-	vFromK   bool
-	outScale backend.Buf
-	// router is a mixture block's router, in its device layout and the type
-	// the file stores it in; nil on a block that does not route. gate/up/down
-	// above hold the banks in that case, and their mv carries slots > 0.
+	// in that geometry's scratch set (geomsets.go).
+	geo    geoKey
+	vFromK bool
+	// router is a mixture block's router (jlm.RoleRouter), in its device
+	// layout and the type the file stores it in, held while the block is
+	// placed rather than paged with it; nil on a block that does not route.
 	router   *resident
 	kvBytes  uint64 // this block's KV cache, so ReleaseLayers can refund it
 	recBytes uint64 // and its recurrent state, refunded on the same walks
@@ -259,9 +227,9 @@ func (st *streamBank) fill(g *devTier, s backend.Session, l *layer, nExpert int)
 	if st.cached() {
 		// A bank paged out and back in is a new buffer with nothing in it, so
 		// the map is only good for the buffer it was built over.
-		if l.down != st.bank {
+		if d := l.bank(2); d != st.bank {
 			st.forget()
-			st.bank = l.down
+			st.bank = d
 		}
 		st.lookup(g)
 	} else {
@@ -456,10 +424,9 @@ func (st *streamBank) forget() {
 // compactNeed is what a streamed block's banks spend on the card when it is
 // placed: its own bank of cslots sheets (an expert cache), or the device's
 // shared bank of slots sheets where none of that shape is held yet.
-func (g *devTier) compactNeed(ws []nn.Weight, slots, cslots int) uint64 {
+func (g *devTier) compactNeed(bk [3]nn.Weight, slots, cslots int) uint64 {
 	var n uint64
-	for i := 4; i <= 6; i++ {
-		x := ws[i]
+	for i, x := range bk {
 		q, ok := quantOf(x.T)
 		if !ok || x.Rows == 0 {
 			continue
@@ -486,10 +453,9 @@ func (g *devTier) compactNeed(ws []nn.Weight, slots, cslots int) uint64 {
 // composed form reads the banks in pages through the page table and every
 // per-expert vector (the experts' biases, a scale of each expert's output) by
 // the selection the card routed, so a cache serves a biased bank as any other.
-func (g *devTier) cacheSlotsFor(p *nn.LayerPlan, ws []nn.Weight, want, slots, bank int) int {
+func (g *devTier) cacheSlotsFor(p *nn.LayerPlan, bk [3]nn.Weight, want, slots, bank int) int {
 	var sheet uint64
-	for i := 4; i <= 6; i++ {
-		x := ws[i]
+	for _, x := range bk {
 		if len(x.Data) == 0 && x.Packed == nil {
 			continue
 		}
@@ -585,7 +551,7 @@ func (st *streamBank) put(g *devTier, s backend.Session, l *layer, nExpert int, 
 	for m, pair := range [3]struct {
 		r *resident
 		w nn.Weight
-	}{{l.gate, st.w.Gate}, {l.up, st.w.Up}, {l.down, st.w.Down}} {
+	}{{l.bank(0), st.w.Mat(jlm.RoleExpGateBank)}, {l.bank(1), st.w.Mat(jlm.RoleExpUpBank)}, {l.bank(2), st.w.Mat(jlm.RoleExpDownBank)}} {
 		// Ungated experts (Nemotron 3) have no gate bank to send.
 		if m == 0 && pair.r == nil && pair.w.Packed == nil && pair.w.Data == nil {
 			continue
@@ -950,7 +916,7 @@ func (g *devTier) permBytes(p *nn.LayerPlan, w *nn.LayerWeights) uint64 {
 		n += uint64(4 * len(v.V))
 	}
 	// The router stays while the block is placed, paged or not.
-	if r := w.Router; len(r.Data) != 0 {
+	if r := w.Mat(jlm.RoleRouter); len(r.Data) != 0 {
 		if q, ok := quantOf(r.T); ok {
 			if f, err := g.planesFootprint(q, r.Rows, r.K); err == nil {
 				n += f
@@ -1224,7 +1190,7 @@ type blockScratch struct {
 	// pickGraph and pickHead the label pick over the logits and the head
 	// projecting the picked rows alone (nn.Head.PickGraph, PickHead).
 	sampleGraph, sampleWalk, pickGraph, pickHead *graph.Graph
-	// headShared says head, mvHead, hNorm, hNormB, hBias and headCap are another
+	// headShared says head, mvHead, hVecs and the logits are another
 	// scratch's -- lane0's, borrowed by a clone (shareHead) -- and are not
 	// freed or refunded with this one.
 	headShared bool
@@ -1275,11 +1241,11 @@ type blockScratch struct {
 	// which runs its attention in query chunks (visionattn.go). qc and xc are a
 	// chunk's queries and output, gathered from and scattered to q and xb at
 	// qoffs[c], by qGather and xScatter.
-	arows         int
-	qoffs         []backend.Buf
-	x, h          backend.Buf
-	roff          backend.Buf // RoPE-q destination offsets, one per row
-	hNorm, logits backend.Buf
+	arows  int
+	qoffs  []backend.Buf
+	x, h   backend.Buf
+	roff   backend.Buf // RoPE-q destination offsets, one per row
+	logits backend.Buf
 	// embedGraph is the input rows as ops (nn.Head.Embed); embW and posW the
 	// tables they read, the token embedding (the head where it is the
 	// embedding) and a learned position table, resident for the model, and
@@ -1310,10 +1276,10 @@ type blockScratch struct {
 	// projection rides the chunk's own submission (layersOnce's folded head):
 	// composer.RequestRows words and the row (servedRowTake).
 	foldReq backend.Buf
-	hNormB  backend.Buf // a LayerNorm head's bias (C6)
-	// hBias is the output projection's bias (nn.Head.Bias), held where the
-	// composer serves a head graph that binds it.
-	hBias       backend.Buf
+	// hVecs is every vector the head's graph binds, by role (nn.Head.Vectors),
+	// and hVecBytes what they charged.
+	hVecs       []roleBuf
+	hVecBytes   uint64
 	head        *resident
 	mvHead      mv
 	hRaw        []byte
@@ -1389,19 +1355,6 @@ func (g *devTier) PrepLayer(li int, p *nn.LayerPlan, w *nn.LayerWeights) bool {
 func (g *devTier) prepLayerFor(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeights) bool {
 	return g.prepLayer(sid, li, p, w, false)
 }
-
-// residScaled reports a plan whose block outputs are scaled before their
-// residual adds (Granite's residual_scale). Such a block takes neither the
-// projection's fused residual (mvres: the bias slot has no scale) nor the
-// add-and-norm launches: the output lands in bs.mvOut as for a post-norm, and
-// bs.addS adds s times it. A mixture's routed weights carry no part of it on
-// the device, unlike the host's routed scale (model.Config.routedScale): the
-// scaled add covers the routed sum and the shared expert at once.
-
-// ungatedFFN reports whether the block's FFN has no gate matrix: up, the
-// activation alone, down -- a vision tower's MLP, or a classic text block's
-// (C6: phi-2, starcoder, falcon, nemotron).
-func ungatedFFN(p *nn.LayerPlan) bool { return p.UngatedFFN }
 
 // prepLayer is PrepLayer with the pager allowed. mayPage lets a block that does
 // not fit evict another one rather than be declined. It is a second pass, not a
@@ -1553,17 +1506,6 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		}
 		return true
 	}
-	// The q/k norm is launched when the block carries its weights; the plan's
-	// flag builds the kernels. The model offers the weights by the same
-	// derivation that sets the flag (jlm.QKNormOn), so a block where the two
-	// disagree is a contract violation, refused rather than run without its
-	// norm. A block another session placed is offered without them, held
-	// above.
-	if attn := !p.NonCausal && (p.Recurrent.Conv == 0 || p.Recurrent.WithAttn); attn && p.QKNorm != (w.QNorm != nil) {
-		g.LastErr = fmt.Sprintf("block %d: the plan's q/k norm is %v and the block offers %d norm "+
-			"weights", li, p.QKNorm, len(w.QNorm))
-		return false
-	}
 	g.dropGraph()
 	// The KV capacity is decided before the scratch is built: bs.p is the capped
 	// plan, and the scratch's score buffers and MigrateKV's staging are sized
@@ -1630,7 +1572,8 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	// An expert bank is one matrix of NExpert*Rows rows: a GGUF 3-D expert tensor
 	// is expert-major and contiguous, so it packs, uploads and indexes as one
 	// tall matrix, and the kernel does the row offset from Experts and Slots.
-	moe := w.Router.Data != nil
+	rw := w.Mat(jlm.RoleRouter)
+	moe := rw.Data != nil
 	bank := 1
 	slots := 0
 	if moe {
@@ -1641,11 +1584,9 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	}
 	// One list: layer.tensors() derives the free walk and pageSizeWhy the price
 	// from this order, so a matrix uploaded outside it would be neither freed
-	// nor charged. A linear block leaves 1..3 empty (Wq carries its fused q|k|v),
-	// an attention block leaves 10..12 empty, and pageSizeWhy skips zero-length
-	// weights.
-	ws := append(weightList(w), l.takeExtra(w)...)
-	// A streamed bank is priced at its compact size by scaling the three bank
+	// nor charged.
+	ws := l.takeMats(w)
+	// A streamed bank is priced at its compact size by scaling the bank
 	// rows from NExpert sheets to NExpertUsed; every size derives from
 	// Weight.Rows, so the charge and the refund cannot disagree.
 	_, auto := g.autoStream[li]
@@ -1653,28 +1594,33 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	// cslots is the streamed bank's size in sheets, decided at the first bank
 	// matrix (cacheSlotsFor): slots without an expert cache, more with one.
 	cslots := -1
-	// price is ws with the three banks removed for a streamed block: the
-	// compact bank is one buffer for the whole device (sharedCompact), so a
-	// block costs its base and nothing else.
+	// price is ws with the banks removed for a streamed block: the compact
+	// bank is one buffer for the whole device (sharedCompact), so a block
+	// costs its base and nothing else.
 	price := ws
 	if stream {
-		for i := 4; i <= 6; i++ {
+		for i := range ws {
+			if !jlm.ExpertBank(l.mats[i].role) {
+				continue
+			}
 			if ws[i].Rows%bank != 0 {
 				g.LastErr = fmt.Sprintf("block %d: %s has %d rows, not a multiple of %d experts",
-					li, weightRole(i), ws[i].Rows, bank)
+					li, l.mats[i].role, ws[i].Rows, bank)
 				return false
 			}
 			ws[i].Rows = ws[i].Rows / bank * slots
 		}
 		price = append([]nn.Weight(nil), ws...)
-		for i := 4; i <= 6; i++ {
-			price[i].Data, price[i].Packed = nil, nil
+		for i := range price {
+			if jlm.ExpertBank(l.mats[i].role) {
+				price[i].Data, price[i].Packed = nil, nil
+			}
 		}
 	}
 	// Decide on the whole block before uploading any of it: declining halfway
 	// leaves earlier tensors resident, counted and unreachable. Every decline
 	// sets LastErr.
-	full, why, ok := g.pageSizeWhy(price)
+	full, why, ok := g.pageSizeWhy(l, price)
 	if !ok {
 		g.LastErr = fmt.Sprintf("block %d: %s", li, why)
 		return false
@@ -1694,11 +1640,12 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	// Priced apart from the block, the room the block was admitted for went
 	// to the bank and its own tensors no longer fit.
 	if stream {
-		cslots = g.cacheSlotsFor(p, ws, g.StreamCacheSlots, slots, bank)
-		bankNeed := g.compactNeed(ws, slots, cslots)
+		bk := l.bankWeights(ws)
+		cslots = g.cacheSlotsFor(p, bk, g.StreamCacheSlots, slots, bank)
+		bankNeed := g.compactNeed(bk, slots, cslots)
 		if cslots > slots && !g.room(need+bankNeed) {
 			cslots = slots
-			bankNeed = g.compactNeed(ws, slots, cslots)
+			bankNeed = g.compactNeed(bk, slots, cslots)
 		}
 		need += bankNeed
 	}
@@ -1771,174 +1718,12 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		}
 	}
 	rs := l.tensors()
-	// The latent block's own slots: 0 (q) is the one-step query and is empty
-	// where 13/14 are populated; 1 and 2 are always empty (MLA has no k or v
-	// projection); 15..17 are always there. Each is an absent weight, not a
-	// failed upload.
 	l.mla = p.MLA()
-	mlaSkip := func(i int) bool {
-		if !l.mla {
-			// No latent block, no latent matrices -- except Mamba-1's four,
-			// which ride KDA's slots 18..21 (nn.SSMWeights), and a latent
-			// query the container stores for a block of any attention: slot
-			// 0 is then empty and 13/14 are the query.
-			latentQ := len(ws) > 14 && len(ws[13].Data) != 0
-			switch i {
-			case 0:
-				return latentQ && len(ws[0].Data) == 0
-			case 13, 14:
-				return !latentQ
-			}
-			return i >= 13 && !(i >= 18 && p.Recurrent.Scan)
-		}
-		// A linear block of an MLA model (Kimi-Linear) has none of them either:
-		// l.mla is a property of the model, not the block.
-		if p.Recurrent.Conv > 0 && i >= 13 && i < 18 {
-			return true
-		}
-		switch i {
-		case 0:
-			// A linear block's q is its fused q|k|v whatever the model's
-			// query rank (Kimi-K3 compresses its MLA query; Kimi-Linear
-			// does not).
-			return p.QLoraRank != 0 && p.Recurrent.Conv == 0
-		case 1, 2:
-			return true
-		case 13, 14:
-			return p.QLoraRank == 0
-		}
-		return false
-	}
 	for i, x := range ws {
-		// A matrix past the shared structure's is uploaded as the file
-		// stores it, by role.
-		if i >= nNamed {
-			r := mkw(i, x)
-			if r == nil || !r.ok {
-				if g.LastErr == "" {
-					g.LastErr = fmt.Sprintf("block %d: %s (%s %dx%d) not resident", li, l.extra[i-nNamed].role, x.T, x.Rows, x.K)
-				}
-				return false
-			}
-			*rs[i] = r
-			continue
-		}
-		// KDA's four low-rank gate matrices, checked before mlaSkip because they
-		// sit past MLA's range and are not MLA's.
-		if i >= 18 {
-			switch {
-			case !p.Recurrent.ChanDecay && !p.Recurrent.Scan, p.Recurrent.Conv == 0:
-				// Not a KDA model, or an attention block of one: absent by
-				// construction rather than by a missing tensor.
-				continue
-			case (i == 20 || i == 21) && p.Recurrent.ChanDecay && len(w.SSM.Gate.Data) != 0:
-				// A full-rank output gate is slot 10's, and there is no
-				// low-rank pair.
-				continue
-			case len(x.Data) == 0:
-				g.LastErr = fmt.Sprintf("block %d: the plan is a channel-decay delta "+
-					"block and %s is empty", li, weightRole(i))
-				return false
-			}
-			// A present weight falls through to the upload; a continue here would
-			// leave l.ssmGA nil and crash inside the recorded session.
-		}
-		if mlaSkip(i) {
-			continue
-		}
-		if i >= 13 {
-			if len(x.Data) == 0 {
-				g.LastErr = fmt.Sprintf("block %d: the plan is a latent attention block "+
-					"(KVLoraRank=%d) and %s is empty", li, p.KVLoraRank, weightRole(i))
-				return false
-			}
-		}
-		// An ungated block has no gate matrix: slot 4 is empty by construction.
-		if ungatedFFN(p) && i == 4 {
-			continue
-		}
-		// A half of a block cut in two holds what it was offered: its banks
-		// and router are another device's, and a weight its graph binds and
-		// the offer left out fails its composition by name.
-		if p.Cut > 0 && len(x.Data) == 0 {
-			continue
-		}
-		// A KV-sharing block has no k or v matrix (slots 1, 2): it attends to
-		// its source's history.
-		if p.KVShared && (i == 1 || i == 2) {
-			continue
-		}
-		// Nor has a block whose v is k's projection (Gemma 4's global layers)
-		// a v matrix: slot 2. The emit reads k's projection for v.
-		if p.VFromK && i == 2 {
-			if len(x.Data) != 0 {
-				g.LastErr = fmt.Sprintf("block %d: v is k's projection and the block offers a v matrix", li)
-				return false
-			}
-			continue
-		}
-		// Nor has a block whose graph reads no v matrix (its values are its
-		// keys): slot 2 is empty by construction.
-		if i == 2 && len(x.Data) == 0 && !bindsRole(p.Graph, jlm.RoleAttnV) {
-			continue
-		}
-		// A block that is its mixer alone has no FFN at all.
-		if p.NoFFN && i >= 4 && i <= 6 {
-			continue
-		}
-		// A linear block has no k, v or o matrix: its one projection is slot 0
-		// (Wq carries the fused q|k|v|gate), and offerRange clears the other three.
-		if p.Recurrent.Conv > 0 && !p.Recurrent.WithAttn && i >= 1 && i <= 3 {
-			continue
-		}
-		if i >= 10 && i < 13 {
-			// A linear block's three; an attention block leaves them empty.
-			if p.Recurrent.Conv == 0 {
-				continue
-			}
-			// Kimi-Linear's KDA has no ssm_gate: its output gate is the
-			// low-rank ssm_g_a/ssm_g_b pair. Kimi-K3's is one full-rank matrix,
-			// here.
-			if i == 10 && p.Recurrent.ChanDecay && len(w.SSM.GA.Data) != 0 {
-				continue
-			}
-			// Mamba-1 has no ssm_ba: dt comes off its x_proj (slot 18).
-			if i == 11 && p.Recurrent.Scan {
-				continue
-			}
-			if len(x.Data) == 0 {
-				g.LastErr = fmt.Sprintf("block %d: the plan is a linear block and %s is empty",
-					li, weightRole(i))
-				return false
-			}
-		}
-		if i >= 7 && i < 10 {
-			if p.NFFNShExp == 0 {
-				continue // no shared expert in this architecture at all
-			}
-			// An ungated shared expert (Nemotron 3) has no gate matrix.
-			if i == 7 && ungatedFFN(p) {
-				continue
-			}
-			// A plan with a shared expert and an empty weight is a decline: a
-			// skip would run the FFN on an unwritten buffer.
-			if len(x.Data) == 0 {
-				g.LastErr = fmt.Sprintf("block %d: the plan has a shared expert "+
-					"(NFFNShExp=%d) and %s is empty", li, p.NFFNShExp,
-					[...]string{"ShGate", "ShUp", "ShDown"}[i-7])
-				return false
-			}
-		}
+		role := l.mats[i].role
+		inBank := moe && jlm.ExpertBank(role)
 		e := 1
-		// MLA's two absorb banks are one sheet per head, and the "expert" indexed
-		// is the head: every head is selected on every token, so the selection is
-		// the identity 0..NHead-1 and one indexed matvec replaces NHead, each slot
-		// reading its own activation like the mixture's down projection.
-		if l.mla && (i == 16 || i == 17) {
-			e = p.NHead
-		}
-		// 4..6 only: the shared expert's matrices at 7..9 are dense.
-		if moe && i >= 4 && i <= 6 { // gate, up and down are the banks
+		if inBank {
 			e = bank
 			if stream {
 				// The kernel is told the bank is k experts and indexes it with
@@ -1948,20 +1733,20 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 				if cslots < 0 {
 					// An auto-streamed block is placed on the plain bank;
 					// its cache comes after placement (sizeAutoCaches).
-					cslots = g.cacheSlotsFor(p, ws, g.StreamCacheSlots, slots, bank)
+					cslots = g.cacheSlotsFor(p, l.bankWeights(ws), g.StreamCacheSlots, slots, bank)
 				}
 				e = cslots
 			}
 		}
-		// Weight.Rows already counts the whole bank (model.get multiplies every
-		// trailing dimension), which PackWeights and the upload want; the kernel is
-		// built for one expert's rows and does the offset, so it is divided below.
+		// Weight.Rows counts the whole bank (model.get multiplies every
+		// trailing dimension), which PackWeights and the upload want; the
+		// kernel is built for one expert's rows and does the offset.
 		var r *resident
-		if stream && i >= 4 && i <= 6 {
+		if stream && inBank {
 			q, qok := quantOf(x.T)
 			if !qok {
 				g.LastErr = fmt.Sprintf("block %d: %s is %s, which has no device kernel",
-					li, weightRole(i), x.T)
+					li, role, x.T)
 				return false
 			}
 			if x.Packed == nil && (!layout.IsRaw(q) || len(x.Data) == 0) {
@@ -1969,9 +1754,10 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 				// planes, or a raw bank's own rows (its one plane,
 				// expert-major) -- a float or a verbatim format's.
 				g.LastErr = fmt.Sprintf("block %d: %s holds neither its packed planes nor its rows",
-					li, weightRole(i))
+					li, role)
 				return false
 			}
+			j := int(role - jlm.RoleExpGateBank)
 			var sh [3]int
 			var ok bool
 			if cslots > slots {
@@ -1980,7 +1766,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 				// shared compact bank. Its charge is the block's.
 				r, sh, ok = g.residentCompact(q, x.Rows/slots, x.K, cslots)
 			} else {
-				r, sh, ok = g.sharedCompact(i, q, x.Rows/slots, x.K, slots)
+				r, sh, ok = g.sharedCompact(j, q, x.Rows/slots, x.K, slots)
 			}
 			if !ok {
 				return false
@@ -1996,42 +1782,32 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 				l.stream.initCache(cslots, bank)
 				g.StreamBlocks++
 			}
-			l.stream.sh[i-4] = sh
+			l.stream.sh[j] = sh
 		} else {
 			r = mkw(i, x)
 		}
 		if r == nil || !r.ok {
 			if g.LastErr == "" {
-				g.LastErr = fmt.Sprintf("block %d tensor %d (%s %dx%d) not resident",
-					li, i, x.T, x.Rows, x.K)
+				g.LastErr = fmt.Sprintf("block %d: %s (%s %dx%d) not resident", li, role, x.T, x.Rows, x.K)
 			}
 			return false
 		}
 		*rs[i] = r
-		if stream && i >= 4 && i <= 6 {
-			// A streamed bank's rows were scaled to the selection (slots
-			// sheets) above, whatever size its cache is.
-			x.Rows /= slots
-		} else if e > 1 {
-			// e, not bank: they differ for a streamed bank, whose kernel is built for
-			// k experts. This is rows per expert either way.
-			if x.Rows%e != 0 {
-				return false
-			}
-			x.Rows /= e
+		if !stream && e > 1 && x.Rows%e != 0 {
+			return false
 		}
 	}
 	if moe {
 		// Resident in the device layout of the type the file stores, as every
 		// other matrix, and permanent while the block is placed: a page-out
 		// leaves it (permBytes charged it), and dropLayerLocal frees it.
-		if w.Router.Rows != p.NExpert || w.Router.K != p.NEmbd {
+		if rw.Rows != p.NExpert || rw.K != p.NEmbd {
 			return false
 		}
-		r := mkw(slotRouter, w.Router)
+		r := mkw(slotRouter, rw)
 		if r == nil || !r.ok {
 			if g.LastErr == "" {
-				g.LastErr = fmt.Sprintf("block %d: %s (%s %dx%d) not resident", li, jlm.RoleRouter, w.Router.T, w.Router.Rows, w.Router.K)
+				g.LastErr = fmt.Sprintf("block %d: %s (%s %dx%d) not resident", li, jlm.RoleRouter, rw.T, rw.Rows, rw.K)
 			}
 			return false
 		}
@@ -2052,73 +1828,8 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		err = b.Write(f32b(f))
 		*dst = b
 	}
-	// A block's pre-norms are the ones its file stores (none on a post-norm
-	// block or an encoder's, no FFN norm on a parallel block sharing one);
-	// the composed graph binds what is stored.
-	if w.AttnNorm != nil {
-		up(&l.nAttn, w.AttnNorm)
-	}
-	if w.FFNNorm != nil {
-		up(&l.nFFN, w.FFNNorm)
-	}
-	if w.Clamp != nil {
-		if len(w.Clamp) != 28 {
-			g.LastErr = fmt.Sprintf("block %d: clipped-linear bounds are %d floats, want 28", li, len(w.Clamp))
-			return false
-		}
-		up(&l.clampB, w.Clamp)
-	}
-	// Gemma 4's per-layer embedding: the block's slice offset.
-	if p.PLEDim != 0 {
-		if err == nil {
-			if l.pleOff, err = g.dev.Alloc(4); err == nil {
-				err = l.pleOff.Write(g.u32b(uint32(li * p.PLEDim)))
-			}
-		}
-		l.auxBytes += 4
-	}
 	l.wide = p.NStreams > 1 || p.ExpLatent != 0
-	// Gemma 4's output scalar, one float, charged with the norms.
-	if p.OutScale != 0 {
-		up(&l.outScale, []float32{p.OutScale})
-		l.auxBytes += 4
-	}
-	if w.AttnNormB != nil {
-		up(&l.nAttnB, w.AttnNormB)
-	}
-	if w.FFNNormB != nil {
-		up(&l.nFFNB, w.FFNNormB)
-	}
-	if w.QNorm != nil {
-		up(&l.nQ, w.QNorm)
-		up(&l.nK, w.KNorm)
-	}
-	if r := p.Recurrent; r.Conv > 0 {
-		if len(w.SSM.Conv1d) != r.Conv*r.Chans {
-			g.LastErr = fmt.Sprintf("block %d: conv1d is %d floats, want %d x %d",
-				li, len(w.SSM.Conv1d), r.Conv, r.Chans)
-			return false
-		}
-		// The composed convolution reads its taps channel-major, the causal
-		// one's and the centred one's (graph.OpRowConv) alike.
-		taps := make([]float32, len(w.SSM.Conv1d))
-		for u := range r.Conv {
-			for c := range r.Chans {
-				taps[c*r.Conv+u] = w.SSM.Conv1d[u*r.Chans+c]
-			}
-		}
-		up(&l.ssmTaps.qs, taps)
-		l.ssmTaps = resident{qs: l.ssmTaps.qs, nrows: r.Chans, k: r.Conv, t: layout.Float32, ok: true}
-		l.auxBytes += uint64(len(taps) * 4)
-	}
 	for _, v := range w.Vectors {
-		// A vector the block holds as a matrix too (a 2-D one) is a vector
-		// still, to a graph that reads it as one -- but not one a field holds,
-		// as a vector or as a weight laid out for it (a linear block's taps):
-		// a block binds a role as a vector wherever the card holds one.
-		if _, named := l.namedVector(v.Role); named || l.namedWeight(v.Role) != nil {
-			continue
-		}
 		var b backend.Buf
 		up(&b, v.V)
 		if b != nil {
@@ -2234,9 +1945,6 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	if kvp != nil && !kvp.shared {
 		kvp.bytes = l.kvBytes
 	}
-	// += because a linear block already charged its five vectors above, and
-	// auxBytes is what ReleaseLayers refunds.
-	l.auxBytes += uint64((2*len(w.AttnNorm) + len(w.Clamp)) * 4)
 	g.charge(l.auxBytes + l.kvBytes)
 	g.KVBytes += l.kvBytes
 	l.ok = true
@@ -2695,24 +2403,19 @@ func (g *devTier) dropHeadScratch(bs *blockScratch) {
 	// leaked all three (and their charge) on every round trip. bs.head is set
 	// only where those charges were made.
 	if bs.head != nil {
-		n := uint64(bs.p.NEmbd*4 + bs.mvHead.rows*4)
-		if bs.hNormB != nil {
-			n += uint64(bs.p.NEmbd * 4)
-		}
-		if bs.hBias != nil {
-			n += uint64(bs.mvHead.rows * 4)
-		}
-		g.refund(n)
+		g.refund(bs.hVecBytes + uint64(bs.mvHead.rows*4))
 	}
-	for _, b := range []*backend.Buf{&bs.hNorm, &bs.hNormB, &bs.hBias, &bs.logits} {
-		if *b != nil {
-			(*b).Free()
-			*b = nil
-		}
+	for _, v := range bs.hVecs {
+		v.buf.Free()
+	}
+	bs.hVecs, bs.hVecBytes = nil, 0
+	if bs.logits != nil {
+		bs.logits.Free()
+		bs.logits = nil
 	}
 	bs.head = nil
 	g.placeGen.Add(1)
-	g.freeAltNorms()
+	g.freeAltVecs()
 }
 
 // headGraphs records the head as ops from the model's front end, what the
@@ -2764,7 +2467,7 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	// not build them.
 	rowsNeed := func() uint64 {
 		if bb := g.reservedFor(nn.ComposedBlock); bb != nil && g.rowsHeld() {
-			return g.rowsHeadNeed(bb, h.W.Rows, h.Softcap)
+			return g.rowsHeadNeed(bb, h.W.Rows)
 		}
 		return 0
 	}
@@ -2777,20 +2480,10 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	// it here and hold its bytes for every token.
 	planes := foot
 	stream := h.Stream && !(h.Embed != nil && h.Embeds)
-	// The norm's bias and the output bias are the vectors the head's graph
-	// names, held with the projection and admitted with it.
+	// The vectors the head's graph names are held with the projection and
+	// admitted with it.
 	spec, _ := headShape(h.Graph)
-	if spec.hasNormBias && len(h.NormB) != len(h.Norm) {
-		g.LastErr = fmt.Sprintf("a LayerNorm head with a %d-wide bias for a %d-wide norm", len(h.NormB), len(h.Norm))
-		return false
-	}
-	if spec.hasBias {
-		if len(h.Bias) != h.W.Rows {
-			g.LastErr = fmt.Sprintf("an output bias of %d for a %d-row projection", len(h.Bias), h.W.Rows)
-			return false
-		}
-		foot += uint64(h.W.Rows * 4)
-	}
+	spec.eachVec(func(b graph.Binding, _ bool) { foot += uint64(b.K * 4) })
 	// They shrink with the reserved width. A caller that did not list the CPU
 	// has no other device for the head, so the width gives way first; with
 	// the CPU listed the head goes home and the reservation holds.
@@ -2869,29 +2562,9 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 		return false
 	}
 	var err error
-	// A head with no norm (Qwen3.8-Flash-Next's reads its mix as it is)
-	// leaves hNorm nil, and the emit copies the row where the norm would
-	// have written.
-	if len(h.Norm) > 0 {
-		f := make([]float32, len(h.Norm))
-		for i, v := range h.Norm {
-			f[i] = float32(v)
-		}
-		if bs.hNorm, err = g.dev.Alloc(len(f) * 4); err != nil {
-			return false
-		}
-		if bs.hNorm.Write(f32b(f)) != nil {
-			return false
-		}
-	}
-	if spec.hasNormBias {
-		if bs.hNormB, err = g.dev.Alloc(len(h.NormB) * 4); err != nil {
-			return false
-		}
-		if bs.hNormB.Write(f32b(h.NormB)) != nil {
-			return false
-		}
-		g.charge(uint64(len(h.NormB) * 4))
+	if bs.hVecs, bs.hVecBytes, err = g.upHeadVecs(h, spec); err != nil {
+		g.LastErr = "the head's vectors: " + err.Error()
+		return false
 	}
 	if bs.logits, err = g.dev.Alloc(h.W.Rows * 4); err != nil {
 		return false
@@ -2900,8 +2573,11 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	bs.hOut = unsafe.Slice((*float32)(unsafe.Pointer(&bs.hRaw[0])), h.W.Rows)
 	bs.head, bs.mvHead = r, mv{rows: h.W.Rows, q: q, k: h.W.K}
 	g.shapeChanged()
-	g.headEntry, g.headSrc, g.headNormHost = h.W.Entry, &h.W.Data[0], slices.Clone(h.Norm)
-	g.charge(uint64(len(h.Norm)*4 + h.W.Rows*4))
+	g.headEntry, g.headSrc, g.headVecHost = h.W.Entry, &h.W.Data[0], headSrc(h, spec)
+	for i := range g.headVecHost {
+		g.headVecHost[i].V = slices.Clone(g.headVecHost[i].V)
+	}
+	g.charge(uint64(h.W.Rows * 4))
 	g.prepEmbed(bs, h)
 	// The input rows' tables are no slot's: a streamed projection with no
 	// room beside them leaves the rows to the CPU's form of them, where the
@@ -2919,21 +2595,6 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 		g.Declined++
 		g.LastErr = "the input rows' tables have no room beside the head and the blocks placed: " + g.LastErr
 		return false
-	}
-	if spec.hasBias {
-		b, e := g.dev.Alloc(h.W.Rows * 4)
-		if e == nil {
-			if e = b.Write(f32b(h.Bias)); e != nil {
-				b.Free()
-			}
-		}
-		if e != nil {
-			g.giveBackHead(bs)
-			g.LastErr = "the output bias: " + e.Error()
-			return false
-		}
-		bs.hBias = b
-		g.charge(uint64(h.W.Rows * 4))
 	}
 	// The greedy token on the device (nn.Head.ArgmaxOnly): the word the
 	// composed sample writes. Without it the head still runs and every
@@ -2957,7 +2618,7 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	}
 	// A head graph binding what the tier holds no buffer for is the model's
 	// error, named; it is never left to the tier's own kernels.
-	if err := bs.headServes(bs.hNorm); err != nil {
+	if err := bs.headServes(bs.hVecs); err != nil {
 		g.giveBackHead(bs)
 		g.Declined++
 		g.LastErr = "the composed head: " + err.Error()
@@ -3444,8 +3105,8 @@ type graphKey struct {
 	// (nn.Head.LogitRows), and a step of the same rows wanting fewer logits
 	// differs only here.
 	ragHead int
-	// hnorm is which norm the head reads (headNormFor): a recording names its
-	// buffer by address.
+	// hnorm is which set of vectors the head reads (headVecsFor): a recording
+	// names their buffers by address.
 	hnorm int
 	// persist says the recording holds composed persistent kernels
 	// (Config.Persist); persistDeps that they are ordered by dependency
@@ -3563,15 +3224,15 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	// The per-row head caps where decode's does: a step's rows end in an
 	// argmax and a readback of their own, and uncapped they would be a
 	// different function from the session's decode.
-	// The head's norm: the one it was built with, or a prediction block's own
-	// (headnorm.go). A norm the device was never given is a refusal, never the
-	// resident one in its place.
-	var hNorm backend.Buf
-	hNormID := 0
+	// The head's vectors: the ones it was built with, or a prediction block's
+	// own (headnorm.go). Vectors the device was never given are a refusal,
+	// never the resident ones in their place.
+	var hVecs []roleBuf
+	hVecsID := 0
 	if head != nil && g.bs != nil {
 		var ok bool
-		if hNorm, hNormID, ok = g.headNormFor(head); !ok {
-			return refuse("the head brings a norm this device was not given (PrepHead)")
+		if hVecs, hVecsID, ok = g.headVecsFor(head); !ok {
+			return refuse("the head brings vectors this device was not given (PrepHead)")
 		}
 	}
 	if fold {
@@ -3899,13 +3560,8 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	// The persistent path: decode only, and not over history streamed from
 	// back, whose uploads sit between launches.
 	persistOn := R == 1 && rag == nil && !(bs.pkv != nil && bs.pkv.st != nil) && g.ensurePersist()
-	// The head the composer serves in this call, and so what the call leaves
-	// to the caller after the logits (nn.Head.Applied): a call that serves the
-	// head's graph applies all of its stages, any other the final softcap
-	// alone. The token, the candidates and the picked labels are read before
-	// the caller finishes the logits, so a request for them is declined while
-	// a stage that bears on them is the caller's.
-	var applied, left nn.HeadStage
+	// The head the composer serves in this call: its graph whole, or the call
+	// is refused.
 	headWhy := partServes
 	// Every head is the head scratch's graph at the rows it projects: a
 	// decode step's or a prompt's one row, a chunk's folded last row, a
@@ -3919,27 +3575,23 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 		if head.Graph != hb.headGraph || head.HiddenGraph != hb.headHidden {
 			return refuse("the head offered is not the one its model placed on the tier")
 		}
-		if err := hb.headServes(hNorm); err != nil {
+		if err := hb.headServes(hVecs); err != nil {
 			return refuse("the composed head: %v", err)
 		}
-		applied |= head.Stages
 	}
-	if head != nil {
-		left = head.Stages &^ applied
-	}
-	argmax := head != nil && head.ArgmaxOnly && g.argmaxOut != nil && R == 1 && left&nn.HeadBias == 0 &&
+	argmax := head != nil && head.ArgmaxOnly && g.argmaxOut != nil && R == 1 &&
 		rag == nil && !g.prompt && !fold && bs.sampleGraph != nil && head.Sample == bs.sampleGraph
 	// A top-k draw's token (nn.Head.SampleK), the composer's walk written
 	// where the argmax's is, where the front end states it.
 	sampleK := 0
 	walk := head != nil && !g.prompt && g.argmaxOut != nil && bs.sampleWalk != nil && head.SampleWalk == bs.sampleWalk
 	if head != nil && !argmax && head.SampleK > 0 && R == 1 && rag == nil && !allRows && !fold &&
-		left&(nn.HeadBias|nn.HeadScale) == 0 && walk && g.prepSample(head) {
+		walk && g.prepSample(head) {
 		sampleK = head.SampleK
 	}
 	// The label pick: one row's logits, a decode's or a folded chunk's last.
 	pickWant := head != nil && !argmax && sampleK == 0 && len(head.Pick) > 0 && rag == nil && !allRows &&
-		(R == 1 || fold) && left&(nn.HeadBias|nn.HeadScale) == 0
+		(R == 1 || fold)
 	// The composer's pick, asked where the step's token is and a prompt's
 	// where the prompt is: the head projecting the picked rows alone, where
 	// it serves the head, no stage is left after the projection and the
@@ -3947,7 +3599,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	// over the logits. The projection's bias is the pick head's own.
 	pickAsked := pickWant
 	pickHeadSrv := pickAsked && composedHead && headWhy == partServes && hb.pickHead != nil && head.PickHead == hb.pickHead &&
-		head.Stages&(nn.HeadScale|nn.HeadCap) == 0 && hb.pickRowsExact()
+		hb.pickRowsExact()
 	pickSrv := pickAsked && !pickHeadSrv && hb.pickGraph != nil && head.PickGraph == hb.pickGraph
 	pick := pickWant && g.prepPick(head, pickHeadSrv || pickSrv)
 	pickHeadSrv, pickSrv = pickHeadSrv && pick, pickSrv && pick
@@ -4014,7 +3666,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 		keys = bs.pkv.keys
 	}
 	key := graphKey{lo: lo, hi: hi, scoreN: nCap, rows: R, head: head != nil, argmax: argmax, sampleK: sampleK, pick: pick,
-		rag: ragN, ragRuns: ragRuns, recParity: par, keys: keys, ragHead: ragHead, hnorm: hNormID,
+		rag: ragN, ragRuns: ragRuns, recParity: par, keys: keys, ragHead: ragHead, hnorm: hVecsID,
 		persist: persistOn, persistDeps: persistOn && g.PersistDeps, kvF16: g.KVF16, sid: sid,
 		headSrv: headSrv, tableSrv: tableSrv, gridSrv: gridSrv, sampleSrv: sampleSrv, embedSrv: embedSrv, pickHeadSrv: pickHeadSrv, pickSrv: pickSrv}
 	if lo == hi {
@@ -4070,7 +3722,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 		nCap: nCap, rrows: rrows,
 		tableSrv: tableSrv, gridSrv: gridSrv, sampleSrv: sampleSrv, embedSrv: embedSrv, raxes: raxes,
 		fold: fold, argmax: argmax, sampleK: sampleK, pick: pick, ragHead: ragHead, parOK: parOK,
-		allRows: allRows, hNorm: hNorm, headWhy: headWhy, pickOnly: pickOnly,
+		allRows: allRows, hVecs: hVecs, headWhy: headWhy, pickOnly: pickOnly,
 		pickHeadSrv: pickHeadSrv, pickSrv: pickSrv,
 		collapse: collapse,
 	}
@@ -4140,9 +3792,6 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 		}
 		return false
 	}
-	if head != nil {
-		head.Applied = applied
-	}
 	if head != nil && !direct {
 		for i := range head.Logits {
 			head.Logits[i] = hb.hOut[i]
@@ -4205,7 +3854,7 @@ type submitArgs struct {
 	sampleK        int
 	pick           bool
 	parOK, allRows bool
-	hNorm          backend.Buf
+	hVecs          []roleBuf
 	// headWhy is why the composer is not asked for the head at this one-row
 	// step, partServes where it is; pickOnly says the head projects the
 	// picked labels alone.
@@ -4247,7 +3896,7 @@ func (g *devTier) layersSession(s backend.Session) {
 	fold, argmax, sampleK, pick := a.fold, a.argmax, a.sampleK, a.pick
 	tableSrv, sampleSrv, embedSrv, raxes := a.tableSrv, a.sampleSrv, a.embedSrv, a.raxes
 	gridSrv := a.gridSrv
-	ragHead, parOK, allRows, hNorm := a.ragHead, a.parOK, a.allRows, a.hNorm
+	ragHead, parOK, allRows, hVecs := a.ragHead, a.parOK, a.allRows, a.hVecs
 	pickOnly := a.pickOnly
 	pickHeadSrv := a.pickHeadSrv
 	collapse := a.collapse
@@ -4482,7 +4131,7 @@ func (g *devTier) layersSession(s backend.Session) {
 			}
 			// The head of the logits' capacity, its rows the wanted ones: one
 			// form whatever the count.
-			sv, serr := g.servedHead(hb, hNorm, bs.ragRows)
+			sv, serr := g.servedHead(hb, hVecs, bs.ragRows)
 			if serr == nil {
 				sv.rows, sv.sl.tables[tableKey(composer.TableCall)] = rows, bs.headCalls
 				serr = sv.runHead(g, lc, bs.x, out, bs.h)
@@ -4509,10 +4158,10 @@ func (g *devTier) layersSession(s backend.Session) {
 			}
 			if pickHeadSrv {
 				if err == nil {
-					err = g.runPickHead(lc, hb, hNorm, in)
+					err = g.runPickHead(lc, hb, hVecs, in)
 				}
 			} else {
-				sv, serr := g.servedHead(hb, hNorm, 1)
+				sv, serr := g.servedHead(hb, hVecs, 1)
 				if serr == nil {
 					serr = sv.runHead(g, lc, in, out, hb.h)
 				}
@@ -4529,11 +4178,11 @@ func (g *devTier) layersSession(s backend.Session) {
 			// submission: the residual stream is never read back.
 			if pickHeadSrv {
 				if err == nil {
-					err = g.runPickHead(lc, bs, hNorm, bs.x)
+					err = g.runPickHead(lc, bs, hVecs, bs.x)
 				}
 			} else {
 				out := bs.logits
-				sv, serr := g.servedHead(bs, hNorm, 1)
+				sv, serr := g.servedHead(bs, hVecs, 1)
 				if serr == nil {
 					serr = sv.runHead(g, lc, bs.x, out, bs.h)
 				}
@@ -4838,7 +4487,7 @@ func (g *devTier) layersSession(s backend.Session) {
 			err = fmt.Errorf("rows: %d logits for %d rows of %d", len(head.Logits), ragHead, g.bs.head.nrows)
 		}
 		for k := n; err == nil && k < ragHead; k += bs.ragRows {
-			err = g.headChunk(s, lc, bs, hb, hNorm, head, k, min(bs.ragRows, ragHead-k), p.NEmbd, sampleSrv)
+			err = g.headChunk(s, lc, bs, hb, hVecs, head, k, min(bs.ragRows, ragHead-k), p.NEmbd, sampleSrv)
 		}
 		direct = true
 	case sampleK > 0:
@@ -4937,13 +4586,7 @@ func (l *layer) auxBufs() []backend.Buf {
 	for i, v := range l.vecs {
 		vs[i] = v.buf
 	}
-	return append(vs,
-		l.nAttn, l.nFFN, l.nAttnB, l.nFFNB, l.nQ, l.nK,
-		l.clampB,     // Gemma 4's tower: its clipped linears' bounds
-		l.ssmTaps.qs, // a linear block's convolution
-		l.outScale,   // Gemma 4's output scalar
-		l.pleOff,     // Gemma 4's per-layer embedding
-	)
+	return vs
 }
 
 // dropLayerLocal frees the buffers PrepLayer allocates fresh for one block and
@@ -5472,11 +5115,10 @@ func (g *devTier) PrewarmLayer(li int, p *nn.LayerPlan, w *nn.LayerWeights) bool
 		return false
 	}
 	any := false
-	// weightList, not a second copy of it: a matrix left off would silently
-	// never prewarm.
-	for _, x := range weightList(w) {
+	for _, m := range w.Mats {
+		x := m.W
 		q, ok := quantOf(x.T)
-		if !ok || x.Rows <= 0 || x.K <= 0 || len(x.Data) == 0 {
+		if !ok || x.Rows <= 0 || x.K <= 0 || len(x.Data) == 0 || m.Role == jlm.RoleRouter || !bindsRole(p.Graph, m.Role) {
 			continue
 		}
 		if g.prewarm(li, q, x.Data, x.Rows, x.K) {
@@ -5486,68 +5128,78 @@ func (g *devTier) PrewarmLayer(li int, p *nn.LayerPlan, w *nn.LayerWeights) bool
 	return any
 }
 
-// weightList is a block's pageable matrices in layer.tensors() order.
-//
-// One list, for tensors()' reason: prepLayer builds it to decide and upload,
-// and pageIn rebuilds it after Ensure re-points the slices. Two copies of the
-// order could upload one matrix into another's slot with every size right.
-func weightList(w *nn.LayerWeights) []nn.Weight {
-	return []nn.Weight{w.Wq, w.Wk, w.Wv, w.Wo, w.Gate, w.Up, w.Down,
-		w.ShGate, w.ShUp, w.ShDown,
-		w.SSM.Gate, w.SSM.BA, w.SSM.Out,
-		w.Wqa, w.Wqb, w.Wkva, w.Wkb, w.Wvb,
-		w.SSM.FA, w.SSM.FB, w.SSM.GA, w.SSM.GB}
-}
-
-// nNamed is how many matrices weightList names; a block's extra follow.
-const nNamed = 22
-
 // slotRouter is a block's router in g.res: no page slot, since it is not
 // paged with the block.
 const slotRouter = -1
 
-// roleRes is one of a block's extra matrices and its role.
+// roleRes is one of a block's matrices on the card and its role.
 type roleRes struct {
 	role jlm.Role
 	r    *resident
 }
 
-// takeExtra makes l.extra the matrices of w.Extra that l's graph binds, and
-// is their weights in that order.
-func (l *layer) takeExtra(w *nn.LayerWeights) []nn.Weight {
-	binds := map[jlm.Role]bool{}
-	if l.graph != nil {
-		for _, o := range l.graph.Ops {
-			for _, b := range o.Weight {
-				binds[b.Role] = true
-			}
-		}
-	}
-	l.extra = l.extra[:0]
+// heldMat says the card holds w, a matrix of a block whose graph is gr, in
+// the block's page: one with bytes the graph binds (every one, for a block
+// with no graph), the router aside (layer.router).
+func heldMat(gr *graph.Graph, m nn.RoleWeight) bool {
+	return m.Role != jlm.RoleRouter && (len(m.W.Data) != 0 || m.W.Packed != nil) && bindsRole(gr, m.Role)
+}
+
+// takeMats makes l.mats the matrices of w the card holds of the block
+// (heldMat), and is their weights in that order.
+func (l *layer) takeMats(w *nn.LayerWeights) []nn.Weight {
+	l.mats = l.mats[:0]
 	var ws []nn.Weight
-	for _, x := range w.Extra {
-		if binds[x.Role] && len(x.W.Data) != 0 {
-			l.extra = append(l.extra, roleRes{role: x.Role})
-			ws = append(ws, x.W)
+	for _, m := range w.Mats {
+		if heldMat(l.graph, m) {
+			l.mats = append(l.mats, roleRes{role: m.Role})
+			ws = append(ws, m.W)
 		}
 	}
 	return ws
 }
 
-// pageList is weightList and l's extra, as a page-in reads them again.
+// pageList is the weights of l.mats' roles in w, as a page-in reads them
+// again: the order tensors() frees and prepLayer uploaded.
 func (l *layer) pageList(w *nn.LayerWeights) []nn.Weight {
-	ws := weightList(w)
-	for _, e := range l.extra {
-		var x nn.Weight
-		for _, y := range w.Extra {
-			if y.Role == e.role {
-				x = y.W
-				break
-			}
-		}
-		ws = append(ws, x)
+	ws := make([]nn.Weight, len(l.mats))
+	for i, e := range l.mats {
+		ws[i] = w.Mat(e.role)
 	}
 	return ws
+}
+
+// banks is where l.mats holds block l's routed banks, by their role's place
+// among them (jlm.RoleExpGateBank on), nil for one it holds none of (an
+// ungated mixture's gate).
+func (l *layer) banks() [3]**resident {
+	var bs [3]**resident
+	for j := range l.mats {
+		if r := l.mats[j].role; jlm.ExpertBank(r) {
+			bs[r-jlm.RoleExpGateBank] = &l.mats[j].r
+		}
+	}
+	return bs
+}
+
+// bank is block l's routed bank j (banks), nil for none.
+func (l *layer) bank(j int) *resident {
+	if b := l.banks()[j]; b != nil {
+		return *b
+	}
+	return nil
+}
+
+// bankWeights is ws, the weights of l.mats in order, at the routed banks:
+// each at its role's place among them (banks), zero for one it lacks.
+func (l *layer) bankWeights(ws []nn.Weight) [3]nn.Weight {
+	var bk [3]nn.Weight
+	for i, x := range ws {
+		if r := l.mats[i].role; jlm.ExpertBank(r) {
+			bk[r-jlm.RoleExpGateBank] = x
+		}
+	}
+	return bk
 }
 
 // BatchTok is how many token columns one thread of a batched matvec carries.
@@ -5816,7 +5468,7 @@ func (g *devTier) ensureKVCap(pos int) bool {
 // output projection across.
 //
 // The head is what a rebuild would otherwise lose: its matvec and its
-// hNorm/logits buffers do not depend on the KV capacity or the block shape, but
+// hVecs/logits buffers do not depend on the KV capacity or the block shape, but
 // freeScratch frees them and a fresh scratch forgets the resident head, leaving
 // the model believing the head is placed.
 func (g *devTier) rebuildScratch(plan *nn.LayerPlan) bool {
@@ -5997,7 +5649,7 @@ func (g *devTier) initKVCap(p *nn.LayerPlan) {
 // out of the residual into the staging set (headIn), headed and sampled there
 // as the submission heads its first, and their tokens, logits and normed rows
 // read into the call's at k.
-func (g *devTier) headChunk(s backend.Session, lc *launcher, bs, hb *blockScratch, hNorm backend.Buf, head *nn.Head, k, n, nembd int, sampleSrv bool) error {
+func (g *devTier) headChunk(s backend.Session, lc *launcher, bs, hb *blockScratch, hVecs []roleBuf, head *nn.Head, k, n, nembd int, sampleSrv bool) error {
 	if bs.headIn == nil || bs.headReq == nil {
 		return fmt.Errorf("rows: %d wanted rows past the %d the logits hold, with no staging built", k+n, bs.ragRows)
 	}
@@ -6024,7 +5676,7 @@ func (g *devTier) headChunk(s backend.Session, lc *launcher, bs, hb *blockScratc
 	if err := tk.run(g, lc, tk.inst, g.rows.takeIn[:], g.rows.takeOut[:]); err != nil {
 		return err
 	}
-	sv, err := g.servedHead(hb, hNorm, bs.ragRows)
+	sv, err := g.servedHead(hb, hVecs, bs.ragRows)
 	if err != nil {
 		return err
 	}

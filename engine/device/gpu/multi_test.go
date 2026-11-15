@@ -153,9 +153,9 @@ func TestHeadOnlySubmissionReachesItsDevice(t *testing.T) {
 	}
 	const nvocab = 64
 	h := &nn.Head{
-		Norm:   make([]float32, p.NEmbd),
-		W:      nn.Weight{T: quant.Q4_0, Data: make([]byte, nvocab*(p.NEmbd/32)*18), Rows: nvocab, K: p.NEmbd},
-		Logits: make([]float32, nvocab),
+		Vectors: []nn.RoleVector{{Role: jlm.RoleOutputNorm, V: make([]float32, p.NEmbd)}},
+		W:       nn.Weight{T: quant.Q4_0, Data: make([]byte, nvocab*(p.NEmbd/32)*18), Rows: nvocab, K: p.NEmbd},
+		Logits:  make([]float32, nvocab),
 	}
 	headGraphs(h, p, jlm.RoleOutput)
 	if !g.PrepHead(h) {
@@ -204,9 +204,9 @@ func TestAWideChunkReachesAHeadOffTheLastDevice(t *testing.T) {
 	}
 	const nvocab = 64
 	h := &nn.Head{
-		Norm:   make([]float32, p.NEmbd),
-		W:      nn.Weight{T: quant.Q4_0, Data: make([]byte, nvocab*(p.NEmbd/32)*18), Rows: nvocab, K: p.NEmbd},
-		Logits: make([]float32, nvocab),
+		Vectors: []nn.RoleVector{{Role: jlm.RoleOutputNorm, V: make([]float32, p.NEmbd)}},
+		W:       nn.Weight{T: quant.Q4_0, Data: make([]byte, nvocab*(p.NEmbd/32)*18), Rows: nvocab, K: p.NEmbd},
+		Logits:  make([]float32, nvocab),
 	}
 	headGraphs(h, p, jlm.RoleOutput)
 	if ok, err := g.PrepHeadOn("fake:0", h); !ok || err != nil {
@@ -608,8 +608,8 @@ func fill(w *nn.LayerWeights, seed uint32) {
 	}
 	const q40Block = 18          // 2 bytes of binary16 scale + 16 bytes of nibbles
 	const scale = uint16(0x2C00) // 0.0625, so a weight lands in [-0.5, 0.44]
-	for _, t := range [][]byte{w.Wq.Data, w.Wk.Data, w.Wv.Data, w.Wo.Data,
-		w.Gate.Data, w.Up.Data, w.Down.Data} {
+	for _, m := range w.Mats {
+		t := m.W.Data
 		for i := range t {
 			t[i] = next()
 		}
@@ -617,7 +617,8 @@ func fill(w *nn.LayerWeights, seed uint32) {
 			t[b], t[b+1] = byte(scale&0xff), byte(scale>>8)
 		}
 	}
-	for _, f := range [][]float32{w.AttnNorm, w.FFNNorm} {
+	for _, v := range w.Vectors {
+		f := v.V
 		for i := range f {
 			f[i] = 1 + float32(i%5)*0.01
 		}
@@ -784,9 +785,9 @@ func TestAFullTailSendsTheHeadToACardWithRoom(t *testing.T) {
 	}
 	const nvocab = 64
 	h := &nn.Head{
-		Norm:   make([]float32, p.NEmbd),
-		W:      nn.Weight{T: quant.Q4_0, Data: make([]byte, nvocab*(p.NEmbd/32)*18), Rows: nvocab, K: p.NEmbd},
-		Logits: make([]float32, nvocab),
+		Vectors: []nn.RoleVector{{Role: jlm.RoleOutputNorm, V: make([]float32, p.NEmbd)}},
+		W:       nn.Weight{T: quant.Q4_0, Data: make([]byte, nvocab*(p.NEmbd/32)*18), Rows: nvocab, K: p.NEmbd},
+		Logits:  make([]float32, nvocab),
 	}
 	headGraphs(h, p, jlm.RoleOutput)
 	if !g.PrepHead(h) {

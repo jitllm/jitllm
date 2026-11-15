@@ -1248,19 +1248,10 @@ type Model struct {
 	// Ngram is the n-gram block's table.
 	Ngram   *ngramTable
 	OutNorm []float32
-	// outNormB and outB are the output LayerNorm's bias and the head's bias
-	// (phi-2), nil everywhere else.
-	OutNormB, OutB []float32
 	// posEmbd is a learned absolute position table (starcoder), one row per
 	// position, added to the token's embedding before block 0. Empty on every
 	// model that encodes position with a rotary; its presence is the fact.
 	PosEmbd Tensor
-	// pleTok and pleProj are Gemma 4's per-layer embedding table and the
-	// projection of the scaled embedding to the same NLayer*PLEDim width, and
-	// pleNorm the RMSNorm each layer's PLEDim slice of the projection takes
-	// (Config.PLEDim). Empty everywhere else.
-	PleTok, PleProj Tensor
-	PleNorm         []float32
 	// lnZeros is the zero bias a device's LayerNorm is handed where the file
 	// has none; see lnBias.
 	lnZeros     []float32
@@ -1276,9 +1267,6 @@ type Model struct {
 	// chatClock is the clock a chat template's strftime_now reads; nil is the
 	// wall clock (WithChatClock).
 	chatClock func() time.Time
-	// dense1 and dense2 are an embedding model's projection heads after
-	// pooling (EmbeddingGemma's), empty for every other model.
-	Dense1, Dense2 Tensor
 
 	// id names this model to a device (nn.LayerPlan.Model), which holds one
 	// model's blocks at a time.
@@ -2650,30 +2638,34 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 		return nil, err
 	}
 	if p := cfg.PLEDim; p != 0 {
-		if m.PleTok, err = get(jlm.RolePLETokEmbd, jlm.DenseBlock, -1); err != nil {
+		tok, err := get(jlm.RolePLETokEmbd, jlm.DenseBlock, -1)
+		if err != nil {
 			return nil, err
 		}
-		if m.PleProj, err = get(jlm.RolePLEModelProj, jlm.DenseBlock, -1); err != nil {
+		proj, err := get(jlm.RolePLEModelProj, jlm.DenseBlock, -1)
+		if err != nil {
 			return nil, err
 		}
-		if m.PleNorm, err = vec(jlm.RolePLEProjNorm, jlm.DenseBlock); err != nil {
+		norm, err := vec(jlm.RolePLEProjNorm, jlm.DenseBlock)
+		if err != nil {
 			return nil, err
 		}
 		// The table may stop short of the vocabulary: Gemma 3n's ids past
 		// it (its vision and audio tokens) read row 0 (pleInputs).
 		w := cfg.NLayer * p
-		if m.PleTok.K != w || m.PleTok.Rows == 0 || m.PleTok.Rows > cfg.NVocab || m.PleProj.K != cfg.NEmbd ||
-			m.PleProj.Rows != w || len(m.PleNorm) != p {
+		if tok.K != w || tok.Rows == 0 || tok.Rows > cfg.NVocab || proj.K != cfg.NEmbd ||
+			proj.Rows != w || len(norm) != p {
 			return nil, fmt.Errorf("model: per-layer embeddings: a table %dx%d, a projection %dx%d and "+
 				"a norm of %d, want %d wide over at most %d tokens from %d, and a norm of %d",
-				m.PleTok.Rows, m.PleTok.K, m.PleProj.K, m.PleProj.Rows, len(m.PleNorm), w, cfg.NVocab,
+				tok.Rows, tok.K, proj.K, proj.Rows, len(norm), w, cfg.NVocab,
 				cfg.NEmbd, p)
 		}
 	}
 	if err := loadNGramTable(m, cfg, c); err != nil {
 		return nil, err
 	}
-	if m.OutNormB, err = optVec(jlm.RoleOutputNormBias, jlm.DenseBlock); err != nil {
+	outNormB, err := optVec(jlm.RoleOutputNormBias, jlm.DenseBlock)
+	if err != nil {
 		return nil, err
 	}
 	if c.Has(jlm.RolePosEmbd, jlm.DenseBlock, -1) {
@@ -2689,15 +2681,16 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 			cfg.NCtx = m.PosEmbd.Rows
 		}
 	}
-	if m.OutB, err = optVec(jlm.RoleOutputBias, jlm.DenseBlock); err != nil {
+	outB, err := optVec(jlm.RoleOutputBias, jlm.DenseBlock)
+	if err != nil {
 		return nil, err
 	}
-	if m.OutB != nil && len(m.OutB) != cfg.NVocab {
-		return nil, fmt.Errorf("model: the head's bias has %d values, want %d", len(m.OutB), cfg.NVocab)
+	if outB != nil && len(outB) != cfg.NVocab {
+		return nil, fmt.Errorf("model: the head's bias has %d values, want %d", len(outB), cfg.NVocab)
 	}
 	// An RMSNorm has no bias, so a norm bias without FlagLayerNorm is a
 	// container that disagrees with itself.
-	if m.OutNormB != nil && !cfg.LayerNorm {
+	if outNormB != nil && !cfg.LayerNorm {
 		return nil, fmt.Errorf("model: a norm bias on an RMSNorm model")
 	}
 	cfg.RopeInterleaved = c.Config().Flags.Has(jlm.FlagRopeInterleaved)
@@ -3274,8 +3267,7 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 		// convolution's taps a stated graph binds as one.
 		for _, rv := range l.Vecs {
 			e, ok := c.Find(rv.Role, bi, -1)
-			if !ok || e.NDim != 2 || len(rv.V) == 0 || l.Matrix(rv.Role) != nil ||
-				len(l.SsmConvTaps.Data) > 0 && &l.SsmConvTaps.Data[0] == (*byte)(unsafe.Pointer(&rv.V[0])) {
+			if !ok || e.NDim != 2 || len(rv.V) == 0 || l.Matrix(rv.Role) != nil {
 				continue
 			}
 			t := F32Tensor(rv.V, int(e.Dims[1]), int(e.Dims[0]))
@@ -3589,7 +3581,6 @@ func (m *Model) MaxMatVec() (rows, k int) {
 	}
 	see(&m.Output)
 	see(&m.Embd)
-	see(&m.PleProj)
 	for _, d := range m.DenseMats {
 		see(d.T)
 	}

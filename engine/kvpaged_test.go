@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"github.com/jitllm/jitllm/nn/history"
 	"io"
 	"os"
 	"os/exec"
@@ -12,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/jitllm/jitllm/nn/history"
 
 	"github.com/jitllm/jitllm/model"
 

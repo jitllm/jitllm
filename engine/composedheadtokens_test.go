@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
@@ -60,14 +61,13 @@ func TestComposedHeadTokens(t *testing.T) {
 						defer m.Close()
 						// A head with a bias takes no softcap: the tier leaves the
 						// pair to the host.
-						biased := m.OutB != nil
+						biased := m.Vector(jlm.RoleOutputBias) != nil
 						defer cfgMut(m, func(c *model.Config) {
 							if !biased {
 								c.FinalSoftcap = 1.5
 							}
 							c.LogitScale = 8
 						})()
-						stages := m.HeadStages()
 						ids := headTokens(m)
 						newStateOn := func(g *gpu.GPU) *Instance {
 							st := testInstance(t, m, len(ids)+gen+4, append(append([]Option(nil), openOpts...), WithDeviceSample(DeviceSampleOn))...)
@@ -105,12 +105,8 @@ func TestComposedHeadTokens(t *testing.T) {
 								served++
 							}
 						}
-						wantServed := len(ids)
-						if parts == 0 && stages&nn.HeadBias != 0 {
-							wantServed = 0
-						}
-						if served != wantServed {
-							t.Fatalf("the device selected %d of %d greedy tokens, want %d (stages %03b, parts %d)", served, len(ids), wantServed, stages, parts)
+						if served != len(ids) {
+							t.Fatalf("the device selected %d of %d greedy tokens (parts %d)", served, len(ids), parts)
 						}
 						if parts&nn.ComposedSample != 0 {
 							ns, ds := g.Stats().ServedPart(nn.ComposedSample)
@@ -177,21 +173,16 @@ func TestComposedHeadTokens(t *testing.T) {
 						// draws is gen seeded draws made two ways, from the device's
 						// candidates (ForwardSample) and from the logits it returned
 						// (Sample over Forward's): how many parted, how many the
-						// device selected, and the second's tokens. hide clears the
-						// head's stages from the first, so that nothing tells the
-						// device a stage is the host's to apply. With ref the second
-						// is ref replayed: a violation that changes every instance's
-						// draw is held to the clean draws.
-						drawsOn := func(g *gpu.GPU, hide bool, ref []int32) (parted int, onDev int64, refs []int32) {
+						// device selected, and the second's tokens. With ref the
+						// second is ref replayed: a violation that changes every
+						// instance's draw is held to the clean draws.
+						drawsOn := func(g *gpu.GPU, ref []int32) (parted int, onDev int64, refs []int32) {
 							c := newStateOn(g)
 							defer c.Close()
 							var d *Instance
 							if ref == nil {
 								d = newStateOn(g)
 								defer d.Close()
-							}
-							if hide {
-								c.head.Stages = 0
 							}
 							sc, sd := newSampler(), newSampler()
 							next := func(i int, lg []float32) int32 {
@@ -240,12 +231,8 @@ func TestComposedHeadTokens(t *testing.T) {
 							}
 							return parted, c.SampledOnDevice, refs
 						}
-						draws := func(hide bool) (int, int64) {
-							p, n, _ := drawsOn(g, hide, nil)
-							return p, n
-						}
 						before := composedSamples(g.Stats())
-						parted, onDev, clean := drawsOn(g, false, nil)
+						parted, onDev, clean := drawsOn(g, nil)
 						if parted != 0 {
 							t.Fatalf("%d of %d draws from the device's candidates parted from the draws over its logits", parted, gen)
 						}
@@ -253,9 +240,9 @@ func TestComposedHeadTokens(t *testing.T) {
 						// prompt's head too, its bias and its scale with it.
 						wantSampled := int64(gen)
 						if onDev != wantSampled {
-							t.Fatalf("the device selected %d of %d sampled tokens, want %d (stages %03b, parts %d)", onDev, gen, wantSampled, stages, parts)
+							t.Fatalf("the device selected %d of %d sampled tokens, want %d (parts %d)", onDev, gen, wantSampled, parts)
 						}
-						t.Logf("%d greedy tokens (%d on the device) and %d sampled tokens (%d on the device), stages %03b", len(ids), served, gen, onDev, stages)
+						t.Logf("%d greedy tokens (%d on the device) and %d sampled tokens (%d on the device)", len(ids), served, gen, onDev)
 						if parts&nn.ComposedSample != 0 {
 							// The composer selects every candidate set the device
 							// does: one form, whatever k and the history.
@@ -281,7 +268,7 @@ func TestComposedHeadTokens(t *testing.T) {
 								if err != nil || vg == nil {
 									t.Fatalf("%s did not open for the violation: %v", dev, err)
 								}
-								vp, vd, _ := drawsOn(vg, false, clean)
+								vp, vd, _ := drawsOn(vg, clean)
 								vn := composedSamples(vg.Stats())
 								vg.Close()
 								m.Front.Mu.Lock()
@@ -291,16 +278,6 @@ func TestComposedHeadTokens(t *testing.T) {
 								if vd == 0 || vn < int(vd) || vp == 0 {
 									t.Fatalf("violation, %s: %d of %d draws parted, %d on the device, %d by the composer: the gate cannot see it", v.name, vp, gen, vd, vn)
 								}
-							}
-						}
-						// The violation: the tier's own head, which leaves the bias
-						// and the scale to the host, asked to select as though it
-						// had applied them. It does, before them, and the draws part.
-						if parts == 0 && stages&(nn.HeadBias|nn.HeadScale) != 0 {
-							parted, onDev := draws(true)
-							t.Logf("violation, the stages hidden from the device: %d of %d draws parted, %d selected on the device", parted, gen, onDev)
-							if onDev != int64(gen) || parted == 0 {
-								t.Fatalf("the gate cannot see a device that selects before the host's stages: %d of %d draws parted, %d selected on the device", parted, gen, onDev)
 							}
 						}
 						ran++

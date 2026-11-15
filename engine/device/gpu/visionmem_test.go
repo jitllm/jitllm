@@ -25,13 +25,15 @@ func visionBlocks(p *nn.LayerPlan, n int) []*nn.LayerWeights {
 		f := func(n int) []float32 { return make([]float32, n) }
 		qd := p.NHead * p.HeadDim
 		out[i] = &nn.LayerWeights{
-			AttnNorm: f(p.NEmbd), AttnNormB: f(p.NEmbd),
-			FFNNorm: f(p.NEmbd), FFNNormB: f(p.NEmbd),
-			Wq: q4(qd, p.NEmbd), Wk: q4(qd, p.NEmbd), Wv: q4(qd, p.NEmbd),
-			Wo: q4(p.NEmbd, qd),
-			// No Gate: a ViT's MLP is ungated.
-			Up: q4(p.NFFN, p.NEmbd), Down: q4(p.NEmbd, p.NFFN),
+			// No gate: a ViT's MLP is ungated.
+			Mats: []nn.RoleWeight{
+				{Role: jlm.RoleAttnQ, W: q4(qd, p.NEmbd)}, {Role: jlm.RoleAttnK, W: q4(qd, p.NEmbd)}, {Role: jlm.RoleAttnV, W: q4(qd, p.NEmbd)},
+				{Role: jlm.RoleAttnOut, W: q4(p.NEmbd, qd)},
+				{Role: jlm.RoleFFNUp, W: q4(p.NFFN, p.NEmbd)}, {Role: jlm.RoleFFNDown, W: q4(p.NEmbd, p.NFFN)},
+			},
 			Vectors: []nn.RoleVector{
+				{Role: jlm.RoleAttnNorm, V: f(p.NEmbd)}, {Role: jlm.RoleAttnNormBias, V: f(p.NEmbd)},
+				{Role: jlm.RoleFFNNorm, V: f(p.NEmbd)}, {Role: jlm.RoleFFNNormBias, V: f(p.NEmbd)},
 				{Role: jlm.RoleAttnQBias, V: f(qd)}, {Role: jlm.RoleAttnKBias, V: f(qd)},
 				{Role: jlm.RoleAttnVBias, V: f(qd)}, {Role: jlm.RoleAttnOutBias, V: f(p.NEmbd)},
 				{Role: jlm.RoleFFNUpBias, V: f(p.NFFN)}, {Role: jlm.RoleFFNDownBias, V: f(p.NEmbd)},

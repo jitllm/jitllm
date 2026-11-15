@@ -4,6 +4,7 @@ import (
 	"math"
 	"testing"
 
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/internal/testmodels"
@@ -29,12 +30,13 @@ func cpuFeatureFixtures() map[string][]c6Violation {
 		},
 		"synth-phi2": {
 			{"the output bias doubled", func(m *model.Model) func() {
-				was := m.OutB
-				m.OutB = make([]float32, len(was))
-				for i, v := range was {
-					m.OutB[i] = 2 * v
-				}
-				return func() { m.OutB = was }
+				return setDenseVec(m, jlm.RoleOutputBias, func(was []float32) []float32 {
+					b := make([]float32, len(was))
+					for i, v := range was {
+						b[i] = 2 * v
+					}
+					return b
+				})
 			}},
 		},
 		"synth-exaone4": {

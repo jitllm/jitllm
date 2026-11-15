@@ -2,8 +2,9 @@ package gpu
 
 import (
 	"fmt"
-	"github.com/jitllm/jitllm/composer"
 	"slices"
+
+	"github.com/jitllm/jitllm/composer"
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/format/layout"
@@ -517,7 +518,7 @@ func (g *devTier) reservedFor(part nn.Parts) *blockScratch {
 // reserved width, formed there at placement (prewarmComposedHead).
 func (g *devTier) headReserved() bool {
 	return g.reservedFor(nn.ComposedHead) != nil && g.bs != nil && g.bs.head != nil &&
-		g.bs.headServes(g.bs.hNorm) == nil
+		g.bs.headServes(g.bs.hVecs) == nil
 }
 
 // rangeComposed reports whether the composer serves, as part, every block of

@@ -1,10 +1,11 @@
 package engine
 
 import (
-	"github.com/jitllm/jitllm/convert"
 	"math"
 	"slices"
 	"testing"
+
+	"github.com/jitllm/jitllm/convert"
 
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/model"

@@ -4,6 +4,7 @@ import (
 	"math"
 	"testing"
 
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
@@ -31,7 +32,7 @@ func TestPrefillFoldsALayerNormHead(t *testing.T) {
 	if len(ids) <= tailRowsMax {
 		t.Fatalf("a prompt of %d rows is a ragged step, not a chunk with a fold", len(ids))
 	}
-	if !m.Cfg.LayerNorm || m.OutNormB == nil {
+	if !m.Cfg.LayerNorm || m.Vector(jlm.RoleOutputNormBias) == nil {
 		t.Fatalf("the fixture is not a LayerNorm model with a head norm bias: %+v", m.Cfg)
 	}
 	ran := 0

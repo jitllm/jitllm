@@ -27,9 +27,7 @@ func c6BaseDevViolations() map[string][]c6Violation {
 			{"serial residual", serialFromShared},
 			{"NORM rotary for NEOX", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.RopeNeox = false }) }},
 			{"no output norm bias", func(m *model.Model) func() {
-				was := m.OutNormB
-				m.OutNormB = nil
-				return func() { m.OutNormB = was }
+				return setDenseVec(m, jlm.RoleOutputNormBias, func([]float32) []float32 { return nil })
 			}},
 		},
 		"synth-starcoder": {
@@ -95,7 +93,7 @@ func c6BaseDevViolations() map[string][]c6Violation {
 func TestC6GreedyOnDeviceHonoursTheHeadBias(t *testing.T) {
 	m, g, openOpts := openC6(t, "synth-phi2")
 	defer m.Close()
-	if m.OutB == nil {
+	if m.Vector(jlm.RoleOutputBias) == nil {
 		t.Fatal("the fixture lost its head bias")
 	}
 	want := make([]int32, len(g.IDs))

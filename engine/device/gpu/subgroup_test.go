@@ -8,6 +8,7 @@ import (
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/backend/vulkan"
 	"github.com/jitllm/jitllm/composer/ir"
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/nn"
 )
@@ -69,11 +70,11 @@ func qkPlan() *nn.LayerPlan {
 
 func qkWeights(p *nn.LayerPlan) *nn.LayerWeights {
 	w := blockWeights(p)
-	w.QNorm = make([]float32, p.HeadDim)
-	w.KNorm = make([]float32, p.HeadDim)
-	for i := range w.QNorm {
-		w.QNorm[i], w.KNorm[i] = 1, 1
+	qn, kn := make([]float32, p.HeadDim), make([]float32, p.HeadDim)
+	for i := range qn {
+		qn[i], kn[i] = 1, 1
 	}
+	w.Vectors = append(w.Vectors, nn.RoleVector{Role: jlm.RoleAttnQNorm, V: qn}, nn.RoleVector{Role: jlm.RoleAttnKNorm, V: kn})
 	return w
 }
 

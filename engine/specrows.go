@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/nn"
 )
 
@@ -101,8 +102,8 @@ func (s *Instance) stepRows(src rowSrc, out *rowsOut) error {
 		return fmt.Errorf("model: a speculation step's destinations hold fewer than its %d rows", src.len()-out.from)
 	}
 	// A final softcap needs nothing here: every head a step's rows reach caps
-	// them -- the device's per-row head and its folded one as decode's does
-	// (nn.Head.Softcap), the host's in finishRows -- which
+	// them -- the device's per-row head and its folded one, each its graph
+	// whole as decode's, the host's in finishRows -- which
 	// TestSpecOverAFinalSoftcap holds to plain decode on every tier.
 	// On a device that runs ragged rows, a step of several rows goes as rows
 	// of this one sequence: decode's matvec over every row, recorded like
@@ -201,7 +202,7 @@ func (s *Instance) stepRowsDevice(src rowSrc, out *rowsOut) error {
 	// Greedy rows read back their tokens alone, where nothing the host
 	// applies to the logits could move an argmax: a head bias could, and a
 	// logit scale (a positive divisor) cannot.
-	toks := out.argmax && !out.noHead && s.m.OutB == nil
+	toks := out.argmax && !out.noHead && s.m.Vector(jlm.RoleOutputBias) == nil
 	if tail {
 		s.rowsHid = grow32(s.rowsHid, n*c.NEmbd)
 		hidden = s.rowsHid
@@ -279,9 +280,6 @@ func (s *Instance) stepRowsDevice(src rowSrc, out *rowsOut) error {
 		copy(s.rowsTok, h.Tokens[from:want])
 		out.tokens = s.rowsTok[:want-from]
 	case h != nil:
-		if err := s.devLogits(); err != nil {
-			return err
-		}
 		if tail {
 			copy(out.logits[:(n-from)*c.NVocab], logits[from*c.NVocab:n*c.NVocab])
 		}
@@ -305,9 +303,6 @@ func (s *Instance) finishRows(headDone bool, lastBase, total int) error {
 	if headDone {
 		if cnt == 1 {
 			copy(r.logits, s.logits[:c.NVocab])
-		}
-		if err := s.devLogits(); err != nil {
-			return err
 		}
 		return s.kvCheck()
 	}
@@ -414,9 +409,6 @@ func (s *Instance) stepRowsStreams(src rowSrc, out *rowsOut) error {
 	s.advance(0, n)
 	if !out.noHead {
 		from := out.from
-		if err := s.devLogits(); err != nil {
-			return err
-		}
 		copy(out.logits[:(n-from)*c.NVocab], logits[from*c.NVocab:])
 	}
 	return s.kvCheck()

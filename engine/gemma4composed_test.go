@@ -4,6 +4,7 @@ import (
 	"math"
 	"testing"
 
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
@@ -117,13 +118,13 @@ func gemma4ComposedViolations(name string) []c6Violation {
 			v = c6Violation{"a final softcap of 1", func(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.FinalSoftcap = 1 }) }}
 		case "no per-layer embeddings":
 			v = c6Violation{"the per-layer inputs' norm unweighted", func(m *model.Model) func() {
-				was := m.PleNorm
-				ones := make([]float32, len(was))
-				for i := range ones {
-					ones[i] = 1
-				}
-				m.PleNorm = ones
-				return func() { m.PleNorm = was }
+				return setDenseVec(m, jlm.RolePLEProjNorm, func(was []float32) []float32 {
+					ones := make([]float32, len(was))
+					for i := range ones {
+						ones[i] = 1
+					}
+					return ones
+				})
 			}}
 		}
 		vs = append(vs, v)

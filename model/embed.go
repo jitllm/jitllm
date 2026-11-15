@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/nn"
 )
 
 // Embeddings: a sequence in, one L2-normalised vector out. An embedding
@@ -54,23 +53,19 @@ func loadDenseHeads(c *jlm.File, m *Model) error {
 	if has1 != has2 {
 		return fmt.Errorf("model: the container carries one of two dense heads")
 	}
-	for _, h := range []struct {
-		role jlm.Role
-		dst  *Tensor
-	}{{jlm.RoleEmbdDense1, &m.Dense1}, {jlm.RoleEmbdDense2, &m.Dense2}} {
-		e, _ := c.Find(h.role, jlm.DenseBlock, -1)
-		typ, ok := jlm.SourceType(e.Type)
-		if !ok || e.NDim != 2 {
-			return fmt.Errorf("model: %v is %v in %d dimensions", h.role, e.Type, e.NDim)
+	var d [2]*Tensor
+	for i, r := range [...]jlm.Role{jlm.RoleEmbdDense1, jlm.RoleEmbdDense2} {
+		e, _ := c.Find(r, jlm.DenseBlock, -1)
+		if _, ok := jlm.SourceType(e.Type); !ok || e.NDim != 2 {
+			return fmt.Errorf("model: %v is %v in %d dimensions", r, e.Type, e.NDim)
 		}
-		*h.dst = Tensor{E: e, Typ: typ, Rows: int(e.Dims[1]), K: int(e.Dims[0])}
-		if jlm.Packed(e.Type) {
-			h.dst.Packed = &nn.Packed{}
+		if d[i] = m.DenseMatrix(r); d[i] == nil {
+			return fmt.Errorf("model: %v is not among the model's dense matrices", r)
 		}
 	}
-	if m.Dense1.K != m.Cfg.NEmbd || m.Dense2.K != m.Dense1.Rows || m.Dense2.Rows != m.Cfg.NEmbd {
+	if d[0].K != m.Cfg.NEmbd || d[1].K != d[0].Rows || d[1].Rows != m.Cfg.NEmbd {
 		return fmt.Errorf("model: dense heads %dx%d then %dx%d do not map %d back to itself",
-			m.Dense1.Rows, m.Dense1.K, m.Dense2.Rows, m.Dense2.K, m.Cfg.NEmbd)
+			d[0].Rows, d[0].K, d[1].Rows, d[1].K, m.Cfg.NEmbd)
 	}
 	return nil
 }

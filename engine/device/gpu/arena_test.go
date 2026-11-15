@@ -6,6 +6,7 @@ import (
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/composer/ir"
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/layout"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/nn"
@@ -132,7 +133,7 @@ func snapWeights(t *testing.T, g *devTier, li int) snapshot {
 		t.Fatalf("block %d is not resident, so there is nothing to compare", li)
 	}
 	var s snapshot
-	for _, r := range []*resident{l.wq, l.wk, l.wv, l.wo, l.gate, l.up, l.down} {
+	for _, r := range l.held() {
 		if r == nil || !r.ok {
 			t.Fatalf("block %d has a tensor that is not resident", li)
 		}
@@ -306,15 +307,16 @@ func TestArenaPagesInOnRealHardware(t *testing.T) {
 		if l == nil {
 			t.Fatalf("block 0 is not resident")
 		}
-		if l.wq == nil || !l.wq.ok {
+		wq := l.roleWeight(jlm.RoleAttnQ)
+		if wq == nil || !wq.ok {
 			t.Fatalf("block 0's q projection is not resident")
 		}
-		nq, _, _, err := layout.PackedWords(l.wq.t, l.wq.nrows, l.wq.k)
+		nq, _, _, err := layout.PackedWords(wq.t, wq.nrows, wq.k)
 		if err != nil {
 			t.Fatal(err)
 		}
 		out := make([]byte, nq*4)
-		if err := l.wq.qs.Read(out); err != nil {
+		if err := wq.qs.Read(out); err != nil {
 			t.Fatalf("read back: %v", err)
 		}
 		return out

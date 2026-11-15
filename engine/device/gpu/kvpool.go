@@ -3,10 +3,11 @@ package gpu
 import (
 	"errors"
 	"fmt"
-	"github.com/jitllm/jitllm/composer"
-	"github.com/jitllm/jitllm/graph"
 	"slices"
 	"unsafe"
+
+	"github.com/jitllm/jitllm/composer"
+	"github.com/jitllm/jitllm/graph"
 
 	"github.com/jitllm/jitllm/backend"
 )

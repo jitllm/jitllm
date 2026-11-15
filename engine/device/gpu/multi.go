@@ -932,10 +932,11 @@ func (g *GPU) sizeAutoCaches() {
 // it on its plain bank. Callers hold g.mu.
 func (g *devTier) cacheBlock(l *layer, n, k int) bool {
 	var got [3]*resident
-	for m, r := range [3]*resident{l.gate, l.up, l.down} {
-		if r == nil {
+	for m, b := range l.banks() {
+		if b == nil || *b == nil {
 			continue // an ungated bank has no gate
 		}
+		r := *b
 		nr, _, ok := g.residentCompact(r.t, r.nrows/k, r.k, n)
 		if !ok {
 			for _, r := range got {
@@ -948,7 +949,7 @@ func (g *devTier) cacheBlock(l *layer, n, k int) bool {
 		}
 		got[m] = nr
 	}
-	for m, dst := range [3]**resident{&l.gate, &l.up, &l.down} {
+	for m, dst := range l.banks() {
 		if got[m] != nil {
 			l.stream.plain[m] = *dst
 			*dst = got[m]
@@ -976,8 +977,8 @@ func (g *devTier) dropCaches(n uint64) bool {
 			continue
 		}
 		g.quiesce()
-		for m, dst := range [3]**resident{&l.gate, &l.up, &l.down} {
-			if l.stream.plain[m] == nil {
+		for m, dst := range l.banks() {
+			if dst == nil || l.stream.plain[m] == nil {
 				continue
 			}
 			g.refund((*dst).bytes())
@@ -997,7 +998,7 @@ func (g *devTier) sizeAutoCaches() {
 	var sheet uint64
 	k := 0
 	for _, l := range g.layers {
-		if l == nil || l.stream == nil || l.stream.cached() || l.down == nil {
+		if l == nil || l.stream == nil || l.stream.cached() || l.bank(2) == nil {
 			continue
 		}
 		var s uint64

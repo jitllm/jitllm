@@ -361,7 +361,6 @@ func (g *devTier) rowsInGroups(lo, hi, grp int, rs *ragStep, x, cs, csSWA []floa
 		if h == nil {
 			continue
 		}
-		head.Applied = h.Applied
 		for i, r := range gi[:k] {
 			head.Tokens[r] = q.tok[i]
 			if h.Logits != nil && len(head.Logits) >= (r+1)*vocab {
@@ -419,17 +418,17 @@ func (g *devTier) prepRowsHead(bs *blockScratch, rowsHead *nn.Head, n int) bool 
 	head := g.bs.head
 	// On a card its paged blocks fill a streamed block goes home for them,
 	// as for the projection itself: the step that needs them forms nothing.
-	if need := g.rowsHeadNeed(bs, head.nrows, rowsHead.Softcap); need > 0 && !g.roomOrReclaim(need) {
+	if need := g.rowsHeadNeed(bs, head.nrows); need > 0 && !g.roomOrReclaim(need) {
 		return fail(fmt.Errorf("the logits of %d rows need %d bytes, %d of %d used", g.headRows(bs, head.nrows), need, g.used, g.limit))
 	}
 	H := g.headRows(bs, head.nrows)
 	// The composer's head over rows serves any count of them at bs's width
 	// (servedHead), formed here, outside any step; a head it does not serve
 	// is refused at the step, so the tier builds no projection of its own.
-	if err := g.bs.headServes(g.bs.hNorm); err != nil {
+	if err := g.bs.headServes(g.bs.hVecs); err != nil {
 		return fail(fmt.Errorf("the head over rows: %w", err))
 	}
-	_, err := g.servedHead(g.bs, g.bs.hNorm, H)
+	_, err := g.servedHead(g.bs, g.bs.hVecs, H)
 	if err != nil {
 		return fail(fmt.Errorf("the composed head over %d rows: %w", H, err))
 	}
@@ -473,7 +472,7 @@ func (g *devTier) prepRowsHead(bs *blockScratch, rowsHead *nn.Head, n int) bool 
 // rowsHeadNeed is what prepRowsHead allocates for bs's per-row logits at a
 // head of nrows rows, the final softcap's twin included: nothing where they
 // are held at that width.
-func (g *devTier) rowsHeadNeed(bs *blockScratch, nrows int, softcap float32) uint64 {
+func (g *devTier) rowsHeadNeed(bs *blockScratch, nrows int) uint64 {
 	if bs == nil {
 		return 0
 	}

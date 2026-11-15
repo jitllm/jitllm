@@ -659,9 +659,6 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 		return nil, s.kvCheck()
 	}
 	if headDone {
-		if err := s.devLogits(); err != nil {
-			return nil, err
-		}
 		if err := s.kvCheck(); err != nil {
 			return nil, err
 		}
@@ -670,9 +667,6 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 	devCollapse := s.devCollapses()
 	if s.head != nil && s.devCount() > 0 {
 		if s.ld.Layers(s.gpuLayers, s.gpuLayers, s.seqPos(slot)-1, 1, s.resid(), s.cs[:c.RopeW()], s.swaTable(c.LocalNRot()), s.head) {
-			if err := s.devLogits(); err != nil {
-				return nil, err
-			}
 			// A page the store could not return fails the request. See kvCache.faultIn.
 			if err := s.kvCheck(); err != nil {
 				return nil, err

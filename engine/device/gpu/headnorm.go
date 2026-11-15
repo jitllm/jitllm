@@ -5,25 +5,29 @@ import (
 	"slices"
 
 	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/nn"
 )
 
 // The resident head is the model's: one projection per device, and a second
 // Instance on this tier finds it placed. A multi-token-prediction block projects
-// through the same matrix with its own head norm, so the head carries more
-// than one norm: the one it was built with, and one more per norm another
-// Instance brings. The projection is never duplicated -- it is the large part.
+// through the same matrix with a norm of its own, so the head carries more
+// than one set of vectors: the one it was built with, and one more per set
+// another Instance brings. The projection is never duplicated -- it is the
+// large part.
 
-// altNorm is a head norm other than the one the head was built with.
-type altNorm struct {
-	src []float32 // the host slice it was uploaded from, by identity
-	buf backend.Buf
+// altVecs is a set of the head's vectors other than the one it was built
+// with: the host vectors it was uploaded from, by identity, and their buffers.
+type altVecs struct {
+	src  []nn.RoleVector
+	bufs []roleBuf
+	n    uint64
 }
 
 // adoptHead answers PrepHead for a head already resident: the same projection
-// is accepted, with its norm uploaded beside the resident one when it differs,
-// and a different projection of the same shape is refused -- reusing the
-// resident one would project through another tensor's weights. The same
+// is accepted, with its vectors uploaded beside the resident ones when they
+// differ, and a different projection of the same shape is refused -- reusing
+// the resident one would project through another tensor's weights. The same
 // projection is the same container entry, wherever the instance offering it
 // holds its bytes; one that is no entry is known by its address. Callers hold
 // g.mu.
@@ -36,33 +40,63 @@ func (g *devTier) adoptHead(h *nn.Head) bool {
 		g.LastErr = "the head resident on this device is another projection of the same shape"
 		return false
 	}
-	if _, _, ok := g.headNormFor(h); ok {
+	if _, _, ok := g.headVecsFor(h); ok {
 		return true
 	}
-	// A LayerNorm head carries a bias the alternate does not; no model with a
-	// prediction block has one.
-	if g.bs.hNormB != nil {
-		g.LastErr = "a second norm for a LayerNorm head"
-		return false
-	}
-	if len(h.Norm) != g.bs.p.NEmbd {
-		g.LastErr = fmt.Sprintf("a %d-wide head norm for a %d-wide head", len(h.Norm), g.bs.p.NEmbd)
-		return false
-	}
-	b, err := g.dev.Alloc(len(h.Norm) * 4)
+	spec, _ := headShape(g.bs.headGraph)
+	bufs, n, err := g.upHeadVecs(h, spec)
 	if err != nil {
-		g.LastErr = "the head's second norm: " + err.Error()
+		g.LastErr = "the head's second vectors: " + err.Error()
 		return false
 	}
-	if err := b.Write(f32b(h.Norm)); err != nil {
-		b.Free()
-		g.LastErr = "the head's second norm: " + err.Error()
-		return false
-	}
-	g.charge(uint64(len(h.Norm) * 4))
-	g.altNorms = append(g.altNorms, altNorm{src: h.Norm, buf: b})
+	g.altVecs = append(g.altVecs, altVecs{src: headSrc(h, spec), bufs: bufs, n: n})
 	g.dropGraph()
 	return true
+}
+
+// headSrc is the vectors of h the head's graph binds (spec), the host slices
+// themselves.
+func headSrc(h *nn.Head, spec headSpec) []nn.RoleVector {
+	var vs []nn.RoleVector
+	spec.eachVec(func(b graph.Binding, _ bool) { vs = append(vs, nn.RoleVector{Role: b.Role, V: h.Vector(b.Role)}) })
+	return vs
+}
+
+// upHeadVecs uploads every vector of h the head's graph binds (spec), each as
+// wide as the graph reads it, and charges them: their buffers and their
+// bytes.
+func (g *devTier) upHeadVecs(h *nn.Head, spec headSpec) ([]roleBuf, uint64, error) {
+	var bufs []roleBuf
+	var n uint64
+	var err error
+	spec.eachVec(func(b graph.Binding, _ bool) {
+		if err != nil {
+			return
+		}
+		v := h.Vector(b.Role)
+		if len(v) != b.K {
+			err = fmt.Errorf("the head's %v is %d wide, and its graph reads %d", b.Role, len(v), b.K)
+			return
+		}
+		var buf backend.Buf
+		if buf, err = g.dev.Alloc(len(v) * 4); err != nil {
+			return
+		}
+		if err = buf.Write(f32b(v)); err != nil {
+			buf.Free()
+			return
+		}
+		bufs = append(bufs, roleBuf{role: b.Role, buf: buf})
+		n += uint64(len(v) * 4)
+	})
+	if err != nil {
+		for _, b := range bufs {
+			b.buf.Free()
+		}
+		return nil, 0, err
+	}
+	g.charge(n)
+	return bufs, n, nil
 }
 
 // joinHead is PrepHead for a head another instance placed: adoptHead under the
@@ -80,30 +114,53 @@ func (g *devTier) joinHead(h *nn.Head) bool {
 	return g.adoptHead(h)
 }
 
-// headNormFor is the norm buffer a call's head reads and its index for the
-// graph key: 0 for the norm the head was built with -- the same slice, or the
-// same values -- and i+1 for altNorms[i]. false when h brings a norm this
+// headVecsFor is the vectors a call's head reads and their index for the
+// graph key: 0 for the set the head was built with -- the same slices, or the
+// same values -- and i+1 for altVecs[i]. false when h brings vectors this
 // device was never given (its PrepHead was not asked). Callers hold g.mu.
-func (g *devTier) headNormFor(h *nn.Head) (backend.Buf, int, bool) {
-	if h == nil || len(h.Norm) == 0 || slices.Equal(h.Norm, g.headNormHost) {
-		return g.bs.hNorm, 0, true
+func (g *devTier) headVecsFor(h *nn.Head) ([]roleBuf, int, bool) {
+	if h == nil {
+		return g.bs.hVecs, 0, true
 	}
-	for i, a := range g.altNorms {
-		if len(a.src) > 0 && &a.src[0] == &h.Norm[0] {
-			return a.buf, i + 1, true
+	same := true
+	for _, hv := range g.headVecHost {
+		if !slices.Equal(h.Vector(hv.Role), hv.V) {
+			same = false
+			break
+		}
+	}
+	if same {
+		return g.bs.hVecs, 0, true
+	}
+	for i, a := range g.altVecs {
+		if sameSrc(a.src, h) {
+			return a.bufs, i + 1, true
 		}
 	}
 	return nil, 0, false
 }
 
-// freeAltNorms gives every second norm back, with the head that served them.
-// Callers hold g.mu.
-func (g *devTier) freeAltNorms() {
-	for _, a := range g.altNorms {
-		a.buf.Free()
-		g.refund(uint64(len(a.src) * 4))
+// sameSrc says h's vectors are the host slices src was uploaded from.
+func sameSrc(src []nn.RoleVector, h *nn.Head) bool {
+	for _, s := range src {
+		v := h.Vector(s.Role)
+		if len(v) != len(s.V) || len(v) > 0 && &v[0] != &s.V[0] {
+			return false
+		}
 	}
-	g.altNorms = nil
+	return true
+}
+
+// freeAltVecs gives every second set of vectors back, with the head that
+// served them. Callers hold g.mu.
+func (g *devTier) freeAltVecs() {
+	for _, a := range g.altVecs {
+		for _, b := range a.bufs {
+			b.buf.Free()
+		}
+		g.refund(a.n)
+	}
+	g.altVecs = nil
 }
 
 // dropHead gives back the output projection a device holds once it holds no
@@ -142,5 +199,5 @@ func (g *devTier) giveBackHead(bs *blockScratch) {
 		}
 		g.freeResident(r)
 	}
-	g.headEntry, g.headSrc, g.headNormHost = nil, nil, nil
+	g.headEntry, g.headSrc, g.headVecHost = nil, nil, nil
 }

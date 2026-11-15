@@ -7,8 +7,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/jitllm/jitllm/composer"
-	"github.com/jitllm/jitllm/nn/history"
 	"hash"
 	"io"
 	"math"
@@ -16,6 +14,9 @@ import (
 	"strconv"
 	"sync/atomic"
 	"unsafe"
+
+	"github.com/jitllm/jitllm/composer"
+	"github.com/jitllm/jitllm/nn/history"
 
 	"github.com/jitllm/jitllm/model"
 
