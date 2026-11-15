@@ -71,8 +71,18 @@ func TestPhi3ThroughTheLibrary(t *testing.T) {
 	if c, err := a.config(hfConfigOf(t, strings.Replace(js, `"sliding_window": 4`, `"sliding_window": null`, 1)), names); err != nil || c.SWAWindow != 0 {
 		t.Errorf("a null window: %v, %v", c, err)
 	}
-	if _, err := a.config(hfConfigOf(t, strings.Replace(js, `"rope_scaling": null`, `"rope_scaling": {"type": "longrope"}`, 1)), names); !errors.Is(err, ErrNotImplemented) {
-		t.Errorf("longrope: %v, want ErrNotImplemented", err)
+	scaled := func(scaling string) string {
+		return strings.Replace(js, `"rope_scaling": null`, `"rope_scaling": `+scaling, 1)
+	}
+	if _, err := a.config(hfConfigOf(t, scaled(`{"type": "longrope"}`)), names); err == nil || !strings.Contains(err.Error(), "LongRoPE factors") {
+		t.Errorf("longrope with no factors: %v, want a refusal naming them", err)
+	}
+	if _, err := a.config(hfConfigOf(t, scaled(`{"type": "su2"}`)), names); !errors.Is(err, ErrNotImplemented) {
+		t.Errorf("a scaling no file reads: %v, want ErrNotImplemented", err)
+	}
+	hc := hfConfigOf(t, scaled(`{"type": "longrope", "short_factor": [1.5], "long_factor": [2.5], "original_max_position_embeddings": 8}`))
+	if c, err := a.config(hc, names); err != nil || c.YarnOrigCtx != 8 || len(hc.extra) != 2 {
+		t.Errorf("longrope with its factors: %v, %v, %d tensors", c, err, len(hc.extra))
 	}
 }
 

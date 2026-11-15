@@ -29,6 +29,7 @@ func statedGraphModels() []string {
 		"synth-hf-arcee", "synth-apertus-hf", "synth-hf-olmo2", "synth-hf-exaone4",
 		"tiny-qwen3moe-hf", "synth-qwen2moe-hf", "synth-mixtral", "synth-hf-mixtral-swa", "tiny-random-OlmoeForCausalLM",
 		"synth-dots1-hf", "synth-ernie45moe-hf", "synth-glm4moe-hf",
+		"synth-phimoe-hf", "synth-bitnet-hf", "synth-bitnet-online-hf",
 		// GGUFs of the architectures the library's graphs state.
 		"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "tinyllama-1.1b-q3_K_M.gguf", "SmolLM2-360M-Instruct-Q8_0.gguf",
 		"Qwen3-0.6B-Q8_0.gguf", "Qwen2-1.5B-Instruct-Q4_K_M.gguf", "Qwen3-MOE-4x0.6B-Q4_K_M.gguf", "tiny-qwen3moe-f32.gguf",

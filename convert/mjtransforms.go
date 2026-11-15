@@ -666,6 +666,8 @@ type mjState struct {
 	env exprEnv
 	src map[string]mjVal
 	act string // the activation the file states
+
+	ternary ternaryForm // how the config says the ternary projections are stored
 }
 
 // hfGatherStep is one model.json gather: the role it makes, its sources by
