@@ -44,7 +44,7 @@ func deltaRewrites() []deltaRewrite {
 	return []deltaRewrite{
 		{"decay", func(g *graph.Graph) bool {
 			for i, o := range g.Ops {
-				if o.Kind == graph.OpDeltaRule && g.Values[o.In[3]].Width == g.Values[o.In[4]].Width {
+				if o.Kind == graph.OpStateScan && g.Values[o.In[3]].Width == g.Values[o.In[4]].Width {
 					rewireIn(g, i, 3, o.In[4])
 					return true
 				}
@@ -64,10 +64,13 @@ func deltaRewrites() []deltaRewrite {
 		}},
 		{"key norm", func(g *graph.Graph) bool {
 			for _, o := range g.Ops {
-				if o.Kind != graph.OpDeltaRule {
+				if o.Kind != graph.OpStateScan {
 					continue
 				}
 				sc := producer(g, o.In[1])
+				if sc >= 0 && g.Ops[sc].Kind == graph.OpTile {
+					sc = producer(g, g.Ops[sc].In[0])
+				}
 				if sc < 0 {
 					return false
 				}

@@ -425,23 +425,46 @@ func Verify(g *Graph, f Facts) error {
 					}
 				}
 			}
-		case OpDeltaRule:
+		case OpStateScan:
 			a := o.Attr
-			switch {
-			case len(o.In) != 5 || len(o.Out) != 1:
-				bad("%s: %d inputs and %d outputs", at, len(o.In), len(o.Out))
-			case a.NHead < 1 || a.NKVHead < 1 || a.HeadDim < 1 || a.NHead%a.NKVHead != 0:
-				bad("%s: %d value heads over %d key heads of %d", at, a.NHead, a.NKVHead, a.HeadDim)
-			case width(o.In[0]) != a.NKVHead*a.HeadDim || width(o.In[1]) != width(o.In[0]):
-				bad("%s: q and k of %d and %d over %d heads of %d", at, width(o.In[0]), width(o.In[1]), a.NKVHead, a.HeadDim)
-			case width(o.In[2]) < a.NHead || width(o.In[2])%a.NHead != 0 || width(o.Out[0]) != width(o.In[2]):
-				bad("%s: v of %d into %d over %d heads", at, width(o.In[2]), width(o.Out[0]), a.NHead)
-			case width(o.In[3]) != a.NHead && width(o.In[3]) != a.NHead*a.HeadDim:
-				bad("%s: a decay of %d over %d heads of %d", at, width(o.In[3]), a.NHead, a.HeadDim)
-			case width(o.In[4]) != a.NHead:
-				bad("%s: a beta of %d over %d heads", at, width(o.In[4]), a.NHead)
-			case a.Span != 0 && a.Span < width(o.In[2])*a.HeadDim:
-				bad("%s: a state of %d floats a sequence, under its %d", at, a.Span, width(o.In[2])*a.HeadDim)
+			if len(o.Out) != 1 || len(o.In) == 0 || len(a.Words) != len(o.In) || len(a.Expr) < 2 ||
+				a.Update < 0 || a.Update >= len(a.Expr)-1 || len(o.Reads) != 1 || o.Reads[0].State != StateRecState {
+				bad("%s: %d inputs of %d axes into %d outputs, %d terms the state term %d", at, len(o.In), len(a.Words), len(o.Out), len(a.Expr), a.Update)
+				break
+			}
+			if a.NHead < 1 || a.NKVHead < 1 || a.HeadDim < 1 || a.NHead%a.NKVHead != 0 || width(o.Out[0])%a.NHead != 0 {
+				bad("%s: %d heads over %d groups of %d into %d", at, a.NHead, a.NKVHead, a.HeadDim, width(o.Out[0]))
+				break
+			}
+			if n := width(o.Out[0]) * a.HeadDim; a.Span != 0 && a.Span < n {
+				bad("%s: a state of %d floats a sequence, under its %d", at, a.Span, n)
+			}
+			for k, m := range a.Words {
+				if w, ok := ScanWidth(ScanAxis(m), a.NHead, a.NKVHead, width(o.Out[0])/a.NHead, a.HeadDim); !ok || w != width(o.In[k]) {
+					bad("%s: operand %d of %d along axes %#x", at, k, width(o.In[k]), m)
+				}
+			}
+			for k, t := range a.Expr {
+				n := t.Fn.Arity()
+				if n == 0 {
+					bad("%s: term %d has no function", at, k)
+				}
+				for j, g := range t.Args {
+					ok := true
+					switch {
+					case j >= n:
+						ok = g.Kind == ArgNone
+					case g.Kind == ArgIn:
+						ok = g.Index >= 0 && g.Index < len(o.In)
+					case g.Kind == ArgTerm || g.Kind == ArgSum:
+						ok = g.Index >= 0 && g.Index < k
+					default:
+						ok = g.Kind == ArgConst || g.Kind == ArgState
+					}
+					if !ok {
+						bad("%s: term %d's operand %d does not name one the op has", at, k, j)
+					}
+				}
 			}
 		case OpMap:
 			if a := o.Attr; a.Width != 0 {

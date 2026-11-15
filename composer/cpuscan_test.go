@@ -260,7 +260,7 @@ func TestComposedCPUStateConvRows(t *testing.T) {
 	t.Logf("%d shapes held to the oracle over a step of %d live rows in %d runs", shapes, live, len(runs))
 }
 
-// TestComposedCPUDeltaRuleRows forms OpDeltaRule on the CPU device for a
+// TestComposedCPUDeltaRuleRows forms the delta rule's OpStateScan on the CPU device for a
 // step of several rows -- the scan, its state row in memory and its
 // components loops -- over the geometries TestComposedCPUDeltaRule runs and
 // a key wider than four vectors, and runs a step of three sequences (a

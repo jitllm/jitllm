@@ -220,7 +220,7 @@ func recSteps() []struct {
 	}
 }
 
-// TestComposedGPURecurrentRuns forms OpDeltaRule and OpStateConv at a step
+// TestComposedGPURecurrentRuns forms the delta rule's OpStateScan and OpStateConv at a step
 // of 8 rows on every GPU and runs them over a prompt chunk's rows (one run)
 // and ragged steps (a run a sequence, rows interleaved, as the run
 // descriptor lists them), padding rows NaN: each run's rows chain through
@@ -384,9 +384,7 @@ func deltaGraphOf(s deltaShape) *graph.Graph {
 	}
 	q, k := b.In("q", s.kh*s.dk), b.In("k", s.kh*s.dk)
 	v, d, beta := b.In("v", s.h*s.dv), b.In("decay", nd), b.In("beta", s.h)
-	b.Out(b.Emit(graph.OpDeltaRule, []graph.ValueID{q, k, v, d, beta}, []graph.Result{{Name: "o", Width: s.h * s.dv}}, nil,
-		graph.Attrs{NHead: s.h, NKVHead: s.kh, HeadDim: s.dk, Tiled: s.tiled, Additive: s.additive, Keeps: s.keeps},
-		[]graph.StateRef{{State: graph.StateRecState}}, []graph.StateRef{{State: graph.StateRecState, Version: 1}})[0])
+	b.Out(composer.DeltaScan(b, q, k, v, d, beta, s.h, s.kh, s.dk, s.dv, s.tiled, s.chans, s.additive, s.keeps))
 	return b.G
 }
 
@@ -483,6 +481,12 @@ func runDelta(fr *recRun, g *graph.Graph, s deltaShape, n int, runs recRuns, cha
 	}
 	fr.vals = map[graph.ValueID][]uint32{g.In[0]: f32w(q), g.In[1]: f32w(k), g.In[2]: f32w(v), g.In[3]: f32w(dc), g.In[4]: f32w(beta),
 		g.Out[0]: poisoned(R * s.h * s.dv)}
+	for id, v := range g.Values {
+		if _, ok := fr.vals[graph.ValueID(id)]; !ok {
+			// A value between the graph's ops (a tiled pairing's q and k).
+			fr.vals[graph.ValueID(id)] = poisoned(R * v.Width)
+		}
+	}
 	fr.tables = tables
 	clear(fr.bufs)
 	if err := fr.launch(); err != nil {

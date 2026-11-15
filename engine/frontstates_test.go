@@ -162,8 +162,9 @@ func TestFrontStatesTheDeltaRules(t *testing.T) {
 				t.Fatal("the model states no delta rule: the gate selects nothing")
 			}
 			if m.Cfg.ChanDecay() {
-				rule := opsOf(m.Composing().BlockGraph(stated[0]), graph.OpDeltaRule)[0]
-				if w := m.Composing().BlockGraph(stated[0]).Values[rule.In[3]].Width; w != rule.Attr.NHead*rule.Attr.HeadDim {
+				rule := opsOf(m.Composing().BlockGraph(stated[0]), graph.OpStateScan)[0]
+				if w := m.Composing().BlockGraph(stated[0]).Values[rule.In[3]].Width; w != rule.Attr.NHead*rule.Attr.HeadDim ||
+					graph.ScanAxis(rule.Attr.Words[3]) != graph.ScanHead|graph.ScanCol {
 					t.Fatalf("a decay of %d, where a channel's decay is %d", w, rule.Attr.NHead*rule.Attr.HeadDim)
 				}
 			}
@@ -183,7 +184,7 @@ func checkDeltaMixer(t *testing.T, m *model.Model, li int) {
 	}
 	g := m.Composing().BlockGraph(li)
 	dg := m.Cfg.Delta()
-	convs, rules := opsOf(g, graph.OpStateConv), opsOf(g, graph.OpDeltaRule)
+	convs, rules := opsOf(g, graph.OpStateConv), opsOf(g, graph.OpStateScan)
 	if len(convs) != 1 || len(rules) != 1 {
 		t.Fatalf("block %d states %d state convolutions and %d delta rules, want one each", li, len(convs), len(rules))
 	}
@@ -192,11 +193,30 @@ func checkDeltaMixer(t *testing.T, m *model.Model, li int) {
 		t.Fatalf("block %d: the convolution %+v is not the mixed projection's over its own window of %d", li, c, dg.Conv)
 	}
 	a := rules[0].Attr
-	if a.NHead != dg.VHeads || a.NKVHead != dg.KHeads || a.HeadDim != dg.KDim || a.Tiled != dg.Tiled ||
+	// A tiled file's value head vh reads key head vh mod the key heads: q
+	// and k repeated a value head each, one key head a value head.
+	groups, tiled := dg.KHeads, producerOf(t, g, rules[0].In[1]).Kind == graph.OpTile
+	if dg.Tiled {
+		groups = dg.VHeads
+	}
+	if a.NHead != dg.VHeads || a.NKVHead != groups || a.HeadDim != dg.KDim || tiled != dg.Tiled || !scanSums(a) ||
 		len(rules[0].Writes) != 1 || rules[0].Writes[0].State != graph.StateRecState {
 		t.Fatalf("block %d: a delta rule of %+v over %+v, want the container's geometry", li, a, dg)
 	}
 	readerOf(t, g, jlm.RoleSSMOut)
+}
+
+// scanSums says a scan's update sums a term over the state's row: the
+// delta rule's key dot, which the selective update has none of.
+func scanSums(a graph.Attrs) bool {
+	for _, t := range a.Expr {
+		for _, g := range t.Args {
+			if g.Kind == graph.ArgSum {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // checkOutputGate holds block li's graph to the gate's statement.

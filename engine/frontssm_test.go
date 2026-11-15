@@ -36,7 +36,7 @@ func TestFrontStatesTheStateSpaceMixers(t *testing.T) {
 					continue
 				}
 				g := m.Composing().BlockGraph(li)
-				convs, rules := opsOf(g, graph.OpStateConv), opsOf(g, graph.OpDeltaRule)
+				convs, rules := opsOf(g, graph.OpStateConv), opsOf(g, graph.OpStateScan)
 				if len(convs) != 1 || convs[0].Attr.Taps != dg.Conv || convs[0].Writes[0].State != graph.StateRecConv {
 					t.Fatalf("block %d states %d state convolutions, want one of %d taps", li, len(convs), dg.Conv)
 				}
@@ -58,7 +58,7 @@ func TestFrontStatesTheStateSpaceMixers(t *testing.T) {
 				if k == jlm.LayerScan {
 					kHeads, decay = 1, dg.VHeads*dg.KDim
 				}
-				if !a.Additive || a.Tiled || a.NHead != heads || a.NKVHead != kHeads || a.HeadDim != dg.KDim ||
+				if scanSums(a) || a.NHead != heads || a.NKVHead != kHeads || a.HeadDim != dg.KDim ||
 					g.Values[rules[0].In[3]].Width != decay || rules[0].Writes[0].State != graph.StateRecState {
 					t.Fatalf("block %d: a delta rule of %+v, a decay of %d, want an additive one of %d heads over %d of %d, a decay of %d",
 						li, a, g.Values[rules[0].In[3]].Width, heads, kHeads, dg.KDim, decay)

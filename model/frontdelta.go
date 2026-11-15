@@ -16,7 +16,8 @@ import (
 // one; the decay's logits -- one a value head, deinterleaved from the beta
 // projection's groups, or one a key channel of each, through the stored
 // low-rank pair -- through the decay the container states (Config.DeltaDecay);
-// beta the sigmoid of its logits; the delta rule; each value head normed
+// beta the sigmoid of its logits; the delta rule as a scan (gatedDeltaTerms),
+// q and k repeated a value head each where the file tiles its value heads; each value head normed
 // against the stored norm, gated by its gate as the container states it
 // (Config.DeltaGate).
 func (m *Model) deltaMixer(b *graph.Builder, f graph.Facts, n graph.ValueID, has func(jlm.Role) bool,
@@ -95,10 +96,24 @@ func (m *Model) deltaMixer(b *graph.Builder, f graph.Facts, n graph.ValueID, has
 	}
 	beta := mapc("beta", graph.MapSigmoid, 0, vh, nil, braw)
 
-	at := b.G.StateVersion(graph.StateRecState)
-	o := b.Emit(graph.OpDeltaRule, []graph.ValueID{q, k, v, decay, beta}, []graph.Result{{Name: "delta", Width: vh * dv}}, nil,
-		graph.Attrs{NHead: vh, NKVHead: kh, HeadDim: dk, Tiled: g.Tiled, Span: stateSpan(c, vh*dv*dk)},
-		[]graph.StateRef{{State: graph.StateRecState, Version: at}}, []graph.StateRef{{State: graph.StateRecState, Version: at + 1}})[0]
+	keys, groups := graph.ScanGroup|graph.ScanCol, kh
+	if g.Tiled {
+		// Value head vh reads key head vh mod kh: q and k repeated a
+		// value head each.
+		tile := func(name string, x graph.ValueID) graph.ValueID {
+			return b.Emit(graph.OpTile, []graph.ValueID{x}, []graph.Result{{Name: name, Width: vh * dk}}, nil, graph.Attrs{}, nil, nil)[0]
+		}
+		q, k = tile("q.tiled", q), tile("k.tiled", k)
+		keys, groups = graph.ScanHead|graph.ScanCol, vh
+	}
+	decays := graph.ScanHead
+	if g.chanDecay {
+		decays |= graph.ScanCol
+	}
+	terms, update := gatedDeltaTerms()
+	o := stateScan(b, "delta", vh*dv, []graph.ValueID{q, k, v, decay, beta},
+		[]graph.ScanAxis{keys, keys, graph.ScanHead | graph.ScanRow, decays, graph.ScanHead}, terms, update,
+		graph.Attrs{NHead: vh, NKVHead: groups, HeadDim: dk, Span: stateSpan(c, vh*dv*dk)})
 	o = b.HeadNorm(o, jlm.RoleSSMNorm, dv, c.RMSEps)
 	gated, err := graph.LowerStated(b, c.DeltaGate, []graph.ValueID{z, o}, f)
 	if err != nil {

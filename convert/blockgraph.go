@@ -71,6 +71,10 @@ type mjBlockOp struct {
 	// the operands, constants, the bound vectors' elements and earlier
 	// terms (graph.Term).
 	Terms []mjTerm `json:"terms"`
+	// Axes are a scan's operands' axes, one an operand, each an
+	// expression naming them ("head", "group", "row", "col", space
+	// separated; graph.ScanAxis).
+	Axes []string `json:"axes"`
 	// Parts is how many equal slices a split_sum adds, an expression.
 	Parts string `json:"parts"`
 	// From is the mark a routed op's region starts at.
@@ -119,13 +123,17 @@ type mjTerm struct {
 }
 
 // mjArg is an expr term's argument: operand In, earlier term Term, element
-// Elem of bound vector W, or the constant Const (an expression); exactly one.
+// Elem of bound vector W, the constant Const (an expression), and in a
+// scan's terms the state before the row (State) or earlier term Sum summed
+// over the state's row; exactly one.
 type mjArg struct {
 	In    *int   `json:"in"`
 	Term  *int   `json:"term"`
 	W     *int   `json:"w"`
 	Elem  int    `json:"elem"`
 	Const string `json:"const"`
+	State bool   `json:"state"`
+	Sum   *int   `json:"sum"`
 }
 
 // mjResult is one of an emit's results: its name in the graph, its width (an
@@ -276,17 +284,18 @@ func (g *mjGraph) checkOps(ops []mjBlockOp, named map[string]bool, runs []string
 			}
 			for _, a := range tm.Args {
 				set := 0
-				for _, p := range []bool{a.In != nil, a.Term != nil, a.W != nil, a.Const != ""} {
+				for _, p := range []bool{a.In != nil, a.Term != nil, a.W != nil, a.Const != "", a.State, a.Sum != nil} {
 					if p {
 						set++
 					}
 				}
-				if set != 1 || a.Term != nil && *a.Term >= k {
-					return fmt.Errorf("op %d (%s): term %d's argument is not one operand, earlier term, vector or constant", i, o.Op, k)
+				if set != 1 || a.Term != nil && *a.Term >= k || a.Sum != nil && *a.Sum >= k {
+					return fmt.Errorf("op %d (%s): term %d's argument is not one operand, earlier term, vector, constant, state or sum", i, o.Op, k)
 				}
 				xs = append(xs, a.Const)
 			}
 		}
+		xs = append(xs, o.Axes...)
 		if o.Op == "expr" && (len(o.Terms) == 0 || o.Width == "") {
 			return fmt.Errorf("op %d's expr states no terms or no width", i)
 		}
@@ -939,6 +948,22 @@ func emitted(b *graph.Builder, g *mjGraph, o mjBlockOp, in []graph.ValueID, bf *
 			return nil, err
 		}
 	}
+	if len(o.Terms) > 0 {
+		if a.Expr, err = termsOf(o, in, ws, num); err != nil {
+			return nil, err
+		}
+	}
+	for _, x := range o.Axes {
+		v, err := g.value(x, vars)
+		if err != nil {
+			return nil, fmt.Errorf("axes: %w", err)
+		}
+		m, err := scanAxes(v)
+		if err != nil {
+			return nil, err
+		}
+		a.Words = append(a.Words, uint64(m))
+	}
 	var reads, writes []graph.StateRef
 	for _, name := range o.Advances {
 		st := states()[name]
@@ -1171,6 +1196,19 @@ func exprOp(b *graph.Builder, g *mjGraph, o mjBlockOp, in []graph.ValueID, bf *b
 	if err != nil {
 		return 0, err
 	}
+	terms, err := termsOf(o, in, ws, num)
+	if err != nil {
+		return 0, err
+	}
+	name := o.Name
+	if name == "" {
+		name = "expr"
+	}
+	return b.Expr(name, int(width), terms, ws, in...), nil
+}
+
+// termsOf is o's stated terms over operands in and bound vectors ws.
+func termsOf(o mjBlockOp, in []graph.ValueID, ws []graph.Binding, num func(string) (float64, error)) ([]graph.Term, error) {
 	var terms []graph.Term
 	for _, tm := range o.Terms {
 		t := graph.Term{Fn: fnNamed(tm.Fn)}
@@ -1178,31 +1216,47 @@ func exprOp(b *graph.Builder, g *mjGraph, o mjBlockOp, in []graph.ValueID, bf *b
 			switch {
 			case a.In != nil:
 				if *a.In >= len(in) {
-					return 0, fmt.Errorf("a term reads operand %d of %d", *a.In, len(in))
+					return nil, fmt.Errorf("a term reads operand %d of %d", *a.In, len(in))
 				}
 				t.Args[k] = graph.Arg{Kind: graph.ArgIn, Index: *a.In}
 			case a.Term != nil:
 				t.Args[k] = graph.Arg{Kind: graph.ArgTerm, Index: *a.Term}
 			case a.W != nil:
 				if *a.W >= len(ws) {
-					return 0, fmt.Errorf("a term reads vector %d of %d bound", *a.W, len(ws))
+					return nil, fmt.Errorf("a term reads vector %d of %d bound", *a.W, len(ws))
 				}
 				t.Args[k] = graph.Arg{Kind: graph.ArgWeight, Index: *a.W, Elem: a.Elem}
+			case a.State:
+				t.Args[k] = graph.Arg{Kind: graph.ArgState}
+			case a.Sum != nil:
+				t.Args[k] = graph.Arg{Kind: graph.ArgSum, Index: *a.Sum}
 			default:
 				c, err := num(a.Const)
 				if err != nil {
-					return 0, err
+					return nil, err
 				}
 				t.Args[k] = graph.Arg{Kind: graph.ArgConst, Const: c}
 			}
 		}
 		terms = append(terms, t)
 	}
-	name := o.Name
-	if name == "" {
-		name = "expr"
+	return terms, nil
+}
+
+// scanAxes is the axes v names, space separated (graph.ScanAxis).
+func scanAxes(v jinja.Value) (graph.ScanAxis, error) {
+	if !v.IsString() {
+		return 0, fmt.Errorf("axes %v are not names", v)
 	}
-	return b.Expr(name, int(width), terms, ws, in...), nil
+	var m graph.ScanAxis
+	for _, n := range strings.Fields(v.AsString()) {
+		ax, ok := map[string]graph.ScanAxis{"head": graph.ScanHead, "group": graph.ScanGroup, "row": graph.ScanRow, "col": graph.ScanCol}[n]
+		if !ok || m&ax != 0 {
+			return 0, fmt.Errorf("axes %q: %q is not an axis or names one twice", v.AsString(), n)
+		}
+		m |= ax
+	}
+	return m, nil
 }
 
 // bindings are an op's stated weights: each tensor at the shape stated, or

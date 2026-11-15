@@ -116,10 +116,10 @@ func attrsAtEncoding() []string {
 		"Eps", "HeadDim", "NRot", "Base", "Layout", "Freqs", "Sections", "Interleaved", "Cycle", "CycleAxes",
 		"Mscale", "NHead", "NKVHead", "Scale", "Window", "Chunked", "Bidir", "Softcap", "Expr", "Experts", "TopK",
 		"Alpha", "Taps", "Dil", "GridW", "Stride", "Positional", "Request", "Pooling", "Block", "BF16", "Rotary",
-		"Grid", "Chain", "Filter", "Tiled", "Additive", "RowWindows", "Bound", "Offset", "Width", "Origin", "Local",
+		"Grid", "Chain", "Filter", "RowWindows", "Bound", "Offset", "Width", "Origin", "Local",
 		"Pooled", "Firsts", "Inverse", "Keeps", "Fn", "Order", "Span", "Const", "Words", "Reset", "Exact", "Sound",
 		"Pixels", "PicW", "PicH", "PicArea", "PicSide", "PicLive", "PicCanvas", "PicFill", "PicTorch", "PicBytes",
-		"PicFrame", "PicPass", "PicColumns", "PicBF16", "Mean", "Std",
+		"PicFrame", "PicPass", "PicColumns", "PicBF16", "Mean", "Std", "Update",
 	}
 }
 
