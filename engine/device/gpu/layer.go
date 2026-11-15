@@ -917,7 +917,9 @@ func (l *layer) recOf(sid uint64) *recPair {
 func (g *devTier) permBytes(p *nn.LayerPlan, w *nn.LayerWeights) uint64 {
 	var n uint64
 	for _, v := range w.Vectors {
-		n += uint64(4 * len(v.V))
+		if !heldAsMatrix(w, v) {
+			n += uint64(4 * len(v.V))
+		}
 	}
 	// The router stays while the block is placed, paged or not.
 	if r := w.Mat(jlm.RoleRouter); len(r.Data) != 0 {
@@ -1832,6 +1834,9 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	}
 	l.wide = p.NStreams > 1 || expertsOwnWidth(p.Graph, p.NEmbd)
 	for _, v := range w.Vectors {
+		if heldAsMatrix(w, v) {
+			continue
+		}
 		var b backend.Buf
 		up(&b, v.V)
 		if b != nil {

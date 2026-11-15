@@ -2442,7 +2442,20 @@ func (l *layer) roleVector(r jlm.Role) backend.Buf {
 			return v.buf
 		}
 	}
+	// A vector the block holds as a float matrix too (a convolution's taps)
+	// is the matrix's plane, its rows as the file stores them (heldAsMatrix).
+	if m := l.roleWeight(r); m != nil && m.ok && m.t == layout.Float32 {
+		return m.qs
+	}
 	return nil
+}
+
+// heldAsMatrix says w holds vector v as a float matrix too, the same floats
+// row by row, which the card uploads and charges once, as the matrix.
+func heldAsMatrix(w *nn.LayerWeights, v nn.RoleVector) bool {
+	m := w.Mat(v.Role)
+	q, ok := quantOf(m.T)
+	return ok && q == layout.Float32 && len(m.Data) != 0 && m.Rows*m.K == len(v.V)
 }
 
 // blockServes is nil where the composer serves block li of this step whole,
