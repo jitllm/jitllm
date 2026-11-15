@@ -1,0 +1,29 @@
+{
+  "graph": {
+    "block": [
+      {"op": "in", "out": "x", "width": "embd"},
+      {"op": "emit", "if": "stored('token_types')", "kind": "embed", "attr": {"Request": "true"}, "bind": [{"w": "token_types"}], "outs": [{"name": "qtype", "width": "embd"}], "out": "qt"},
+      {"op": "add", "if": "stored('token_types')", "in": ["x", "qt"], "out": "x"},
+      {"op": "layer_norm", "if": "stored('attn_norm')", "in": "x", "w": ["attn_norm", "attn_norm.bias?"], "eps": "decision_eps", "out": "n"},
+      {"op": "let", "if": "not stored('attn_norm')", "in": "x", "out": "n"},
+      {"op": "matvec", "in": "n", "w": ["attn_q", "attn_q.bias?"], "rows": "embd", "out": "q"},
+      {"op": "matvec", "in": "n", "w": ["attn_k", "attn_k.bias?"], "rows": "embd", "out": "k"},
+      {"op": "matvec", "in": "n", "w": ["attn_v", "attn_v.bias?"], "rows": "embd", "out": "v"},
+      {"op": "kv_append", "in": ["k", "v"], "out": "kv"},
+      {"op": "attend", "in": "q", "hist": "kv", "w": "attn_sinks?", "attr": {"NHead": "decision_heads", "NKVHead": "decision_heads", "HeadDim": "embd // decision_heads", "Scale": "1 / ((embd // decision_heads) ** 0.5)", "Softcap": "0", "Bidir": "true", "RowWindows": "false", "Window": "0", "Chunked": "false"}, "out": "att"},
+      {"op": "matvec", "in": "att", "w": ["attn_output", "attn_output.bias?"], "rows": "embd", "out": "o"},
+      {"op": "add", "in": ["x", "o"], "out": "h"},
+      {"op": "layer_norm", "if": "stored('attn_out_norm')", "in": "h", "w": ["attn_out_norm", "attn_out_norm.bias?"], "eps": "decision_eps", "out": "h"},
+      {"op": "layer_norm", "if": "stored('ffn_norm')", "in": "h", "w": ["ffn_norm", "ffn_norm.bias?"], "eps": "decision_eps", "out": "m"},
+      {"op": "let", "if": "not stored('ffn_norm')", "in": "h", "out": "m"},
+      {"op": "matvec", "if": "stored('ffn_gate')", "in": "m", "w": "ffn_gate", "rows": "rows('ffn_up')", "out": "g"},
+      {"op": "matvec", "in": "m", "w": ["ffn_up", "ffn_up.bias?"], "rows": "rows('ffn_up')", "out": "u"},
+      {"op": "act", "if": "stored('ffn_gate')", "in": ["g", "u"], "width": "rows('ffn_up')", "out": "a"},
+      {"op": "act", "if": "not stored('ffn_gate')", "in": "u", "width": "rows('ffn_up')", "out": "a"},
+      {"op": "matvec", "in": "a", "w": ["ffn_down", "ffn_down.bias?"], "rows": "embd", "out": "d"},
+      {"op": "add", "in": ["h", "d"], "out": "y"},
+      {"op": "layer_norm", "if": "stored('layer_out_norm')", "in": "y", "w": ["layer_out_norm", "layer_out_norm.bias?"], "eps": "decision_eps", "out": "y"},
+      {"op": "out", "in": "y"}
+    ]
+  }
+}

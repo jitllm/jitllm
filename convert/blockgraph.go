@@ -21,9 +21,19 @@ import (
 // carries each block's graph (jlm.BlockGraphs), which the engine decodes
 // rather than builds.
 type mjGraph struct {
+	// Use are the blocks another file's graph states: a block takes the
+	// first whose If holds, Block where none does.
+	Use   []mjUse     `json:"use"`
 	Block []mjBlockOp `json:"block"`
 	// exprs are its expressions compiled, by their text (check).
 	exprs map[string]*jinja.Expr
+}
+
+// mjUse is a block taking another library file's graph: If an expression
+// over the block's facts, Graph the file by its name without .json.
+type mjUse struct {
+	If    string `json:"if"`
+	Graph string `json:"graph"`
 }
 
 // blockExprSteps is the most steps one of a graph's expressions takes.
@@ -208,6 +218,14 @@ func states() map[string]graph.State {
 func (g *mjGraph) check() error {
 	if len(g.Block) == 0 {
 		return fmt.Errorf("a graph states no block")
+	}
+	for i, u := range g.Use {
+		if u.If == "" || u.Graph == "" {
+			return fmt.Errorf("use %d names no condition or no graph", i)
+		}
+		if err := g.compile(u.If); err != nil {
+			return fmt.Errorf("use %d: %w", i, err)
+		}
 	}
 	named := map[string]bool{}
 	for i, o := range g.Block {
@@ -429,13 +447,21 @@ func blockRole(name string) (jlm.Role, bool) {
 }
 
 // StateBlockGraphs states every block's graph in c from g, held to the
-// tensors s stores for it.
+// tensors s stores for it: the trunk's, the head blocks' and the
+// prediction blocks'.
 func StateBlockGraphs(c *Config, s *jlm.Source, g *mjGraph, src jinja.Value) error {
-	n := int(c.NLayer + c.NMTP)
+	if c.HeadBlocks() != 0 && c.NMTP != 0 {
+		return fmt.Errorf("convert: %d head blocks beside %d prediction blocks, which both follow the trunk", c.HeadBlocks(), c.NMTP)
+	}
+	used, err := usedGraphs(g)
+	if err != nil {
+		return err
+	}
+	n := int(c.NLayer + c.HeadBlocks() + c.NMTP)
 	var out jlm.BlockGraphs
 	at := map[string]uint16{}
 	for li := range n {
-		bg, err := blockGraphOf(c.Config, s, li, g, src)
+		bg, err := blockGraphOf(c.Config, s, li, g, used, src)
 		if err != nil {
 			return fmt.Errorf("convert: block %d's stated graph: %w", li, err)
 		}
@@ -458,10 +484,44 @@ func StateBlockGraphs(c *Config, s *jlm.Source, g *mjGraph, src jinja.Value) err
 	return nil
 }
 
-// blockGraphOf is block li's graph as g states it.
-func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, src jinja.Value) (*graph.Graph, error) {
+// usedGraphs are the library's graphs g's uses name, in their order.
+func usedGraphs(g *mjGraph) ([]*mjGraph, error) {
+	if len(g.Use) == 0 {
+		return nil, nil
+	}
+	files, err := libraryFiles()
+	if err != nil {
+		return nil, err
+	}
+	var out []*mjGraph
+	for _, u := range g.Use {
+		i := slices.IndexFunc(files, func(mj *modelJSON) bool { return mj.name == "convert/models/"+u.Graph+".json" })
+		switch {
+		case i < 0 || files[i].Graph == nil:
+			return nil, fmt.Errorf("convert: a graph uses %q, which no library file states", u.Graph)
+		case len(files[i].Graph.Use) != 0:
+			return nil, fmt.Errorf("convert: a graph uses %q, which uses others in turn", u.Graph)
+		}
+		out = append(out, files[i].Graph)
+	}
+	return out, nil
+}
+
+// blockGraphOf is block li's graph as g states it, or as the first of used
+// (g.Use's graphs) whose condition holds for it.
+func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, used []*mjGraph, src jinja.Value) (*graph.Graph, error) {
 	bf := blockFactsOf(c, s, li)
 	bf.src = src
+	for i, u := range g.Use {
+		on, err := g.flag(u.If, bf.vars())
+		if err != nil {
+			return nil, fmt.Errorf("use %d: %w", i, err)
+		}
+		if on {
+			g = used[i]
+			break
+		}
+	}
 	b := graph.NewBlock(li)
 	vals := map[string]graph.ValueID{}
 	hists := map[string]graph.StateRef{}
@@ -514,7 +574,14 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, src jinja.Va
 			}
 			y = b.Norm(in[0], w[0], eps)
 		case "layer_norm":
-			y = b.LayerNorm(in[0], w[0], bf.eps, w[1:]...)
+			eps := bf.eps
+			if o.Eps != "" {
+				var err error
+				if eps, err = num(o.Eps); err != nil {
+					return nil, err
+				}
+			}
+			y = b.LayerNorm(in[0], w[0], eps, w[1:]...)
 		case "head_norm":
 			hd := bf.headDim
 			if o.Width != "" {
@@ -1342,6 +1409,10 @@ func (bf *blockFacts) vars() map[string]jinja.Value {
 	}
 	return map[string]jinja.Value{
 		"layer":              jinja.NewInt(int64(li)),
+		"trunk":              i(c.NLayer),
+		"head_blocks":        i(c.HeadBlocks()),
+		"decision_heads":     i(c.DecisionHeads),
+		"decision_eps":       jinja.NewFloat(float64(c.DecisionEps)),
 		"src":                bf.srcKeys(),
 		"embd":               i(c.NEmbd),
 		"heads":              i(c.NHead),

@@ -26,7 +26,7 @@ func statedGraphModels() []string {
 		"synth-hf-smollm3", "synth-hf-seedoss", "synth-ernie45-hf",
 		"synth-gemma", "tiny-random-GemmaForCausalLM",
 		"synth-phi3", "tiny-random-Phi3ForCausalLM", "tiny-random-phi3",
-		"synth-hf-arcee", "synth-apertus-hf", "synth-hf-olmo2", "synth-hf-exaone4",
+		"synth-hf-arcee", "synth-apertus-hf", "synth-hf-olmo2", "synth-hf-olmo3", "synth-olmo3-af-hf", "synth-hf-exaone4",
 		"tiny-qwen3moe-hf", "synth-qwen2moe-hf", "synth-mixtral", "synth-hf-mixtral-swa", "tiny-random-OlmoeForCausalLM",
 		"synth-dots1-hf", "synth-ernie45moe-hf", "synth-glm4moe-hf",
 		// GGUFs of the architectures the library's graphs state.
@@ -118,7 +118,7 @@ func TestStatedBlockGraphsAreTheBuiltOnes(t *testing.T) {
 			}
 			defer m.Close()
 			c := m.Container.Config()
-			if n := int(c.NLayer + c.NMTP); len(c.Blocks.Of) != n || n == 0 {
+			if n := m.Cfg.NLayer + m.Cfg.NMTP; len(c.Blocks.Of) != n || n == 0 {
 				t.Fatalf("the container states graphs for %d blocks of %d", len(c.Blocks.Of), n)
 			}
 			requireStatedIsBuilt(t, m)

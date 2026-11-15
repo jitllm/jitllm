@@ -249,8 +249,9 @@ func parseModelJSON(b []byte, name string) (*modelJSON, error) {
 	if err := d.Decode(mj); err != nil {
 		return nil, fmt.Errorf("convert: %s: %w", name, err)
 	}
-	// A file of no class states a GGUF architecture's graph alone.
-	if len(mj.Classes) == 0 && len(mj.GGUF) != 0 && mj.Graph != nil {
+	// A file of no class states a GGUF architecture's graph alone, or a
+	// graph other files' blocks use (mjUse).
+	if len(mj.Classes) == 0 && mj.Graph != nil {
 		if mj.Config.Arch != "" || len(mj.Tensors.Block) != 0 || len(mj.Tensors.Model) != 0 {
 			return nil, fmt.Errorf("convert: %s names no class and states one's config or tensors", name)
 		}
@@ -393,6 +394,17 @@ func archGraph(a Arch) (*mjGraph, error) {
 		g, by = mj.Graph, mj.name
 	}
 	return g, nil
+}
+
+// classGraph is the graph the library states for a Go-table class: its
+// config's architecture's (a), else the one the class declares, as a GGUF
+// is read by the name it declares before its config refines it.
+func classGraph(ha *hfArch, a Arch) (*mjGraph, error) {
+	g, err := archGraph(a)
+	if g != nil || err != nil {
+		return g, err
+	}
+	return archGraph(ha.arch)
 }
 
 // WithModelJSON converts a safetensors model by the model.json at path,

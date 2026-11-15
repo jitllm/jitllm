@@ -1060,3 +1060,34 @@ func TestModelJSONRotaryLayers(t *testing.T) {
 		}
 	}
 }
+
+// TestGoTableClassesStateTheirGraphs: every class of the Go table states its
+// blocks' graph through the library, but those of the architectures listed,
+// which no file states yet. A listed architecture that gains a file leaves
+// the list.
+func TestGoTableClassesStateTheirGraphs(t *testing.T) {
+	unstated := map[Arch]bool{ArchKimiLinear: true, ArchKimiK3: true}
+	var missing []string
+	n := 0
+	for c, ha := range hfArchTable() {
+		g, err := classGraph(ha, ha.arch)
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch {
+		case g == nil && !unstated[ha.arch]:
+			missing = append(missing, c+" ("+ha.arch.String()+")")
+		case g != nil && unstated[ha.arch]:
+			t.Errorf("%s states its graph: take %v off the list", c, ha.arch)
+		case g != nil:
+			n++
+		}
+	}
+	slices.Sort(missing)
+	if len(missing) != 0 {
+		t.Errorf("classes of the Go table that state no graph: %v", missing)
+	}
+	if n == 0 {
+		t.Fatal("no class of the Go table states its graph -- this gate proved nothing")
+	}
+}

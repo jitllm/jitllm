@@ -658,7 +658,7 @@ func decodeConfigAt(b []byte, v uint32) (*Config, error) {
 	if err := ngramValid(c); err != nil {
 		return nil, err
 	}
-	if err := c.Blocks.valid(int(c.NLayer + c.NMTP)); err != nil {
+	if err := c.Blocks.valid(int(c.NLayer+c.HeadBlocks()+c.NMTP), int(c.NLayer+c.NMTP)); err != nil {
 		return nil, err
 	}
 	if err := c.olderStatements(); err != nil {

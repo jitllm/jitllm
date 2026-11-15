@@ -48,3 +48,33 @@ func TestBlockGraphsRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+// TestBlockGraphsStateTheHeadBlocks: a marker head's blocks follow the
+// trunk's in the statement; one written before they were stated leaves them
+// out, and any other count is refused.
+func TestBlockGraphsStateTheHeadBlocks(t *testing.T) {
+	c := &Config{NLayer: 3, NEmbd: 8, NHead: 1, NKVHead: 1, HeadDim: 8, NRot: 8, NFFN: 16, NVocab: 32, NCtx: 64,
+		Flags2: Flag2HeadBlocks, DecisionBlocks: 2}
+	if c.HeadBlocks() != 2 {
+		t.Fatalf("%d head blocks, want 2", c.HeadBlocks())
+	}
+	for _, b := range []struct {
+		n  int
+		ok bool
+	}{{5, true}, {3, true}, {4, false}, {6, false}} {
+		c.Blocks = BlockGraphs{Graphs: []string{"a"}, Of: make([]uint16, b.n)}
+		got, err := decodeConfig(encodeConfig(c))
+		switch {
+		case b.ok && err != nil:
+			t.Errorf("%d blocks' graphs: %v", b.n, err)
+		case b.ok && len(got.Blocks.Of) != b.n:
+			t.Errorf("%d blocks' graphs came back as %d", b.n, len(got.Blocks.Of))
+		case !b.ok && (err == nil || !strings.Contains(err.Error(), "blocks of 5")):
+			t.Errorf("%d blocks' graphs: %v, want a refusal", b.n, err)
+		}
+	}
+	c.Flags2 = 0
+	if c.HeadBlocks() != 0 {
+		t.Fatalf("%d head blocks without Flag2HeadBlocks", c.HeadBlocks())
+	}
+}
