@@ -115,6 +115,17 @@ func (e *embedMode) collect(s *Instance, base, n int) error {
 	return nil
 }
 
+// blocksReadRowWindows says any of the instance's text blocks reads its
+// rows' windows from the call (readsRowWindows).
+func (s *Instance) blocksReadRowWindows() bool {
+	for li := s.lo; li < min(s.hi, s.c.NLayer); li++ {
+		if readsRowWindows(s.m.Composing().BlockGraph(li)) {
+			return true
+		}
+	}
+	return false
+}
+
 // readsRowWindows says gr's attention reads each row's window from the call
 // (graph.Attrs.RowWindows).
 func readsRowWindows(gr *graph.Graph) bool {

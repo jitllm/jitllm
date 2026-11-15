@@ -49,9 +49,9 @@ func (s *Instance) MarkScores(ids []int32, qtype int, marks []int, out []float32
 }
 
 // MarkScoresAfter is MarkScores with prefix's spans -- a request's pictures
-// -- before ids, its markers at rows of ids. Where the model's media prefix
-// reads itself alone (Model.Config.RowWindowed), the prefix's rows are
-// windowed to the prefix and the text's to every row.
+// -- before ids, its markers at rows of ids. Where the blocks read their rows'
+// windows (graph.Attrs.RowWindows), the prefix's rows are windowed to the
+// prefix and the text's to every row.
 func (s *Instance) MarkScoresAfter(prefix []model.Span, ids []int32, qtype int, marks []int, out []float32) error {
 	p := 0
 	for i := range prefix {
@@ -81,7 +81,7 @@ func (s *Instance) MarkScoresAfter(prefix []model.Span, ids []int32, qtype int, 
 		req[composer.RequestRows+r] = uint32(p + m)
 	}
 	var wins []nn.KeyRun
-	if s.c.RowWindowed {
+	if s.blocksReadRowWindows() {
 		wins = make([]nn.KeyRun, n)
 		for r := range wins {
 			wins[r] = nn.KeyRun{Lo: 0, Hi: n}
