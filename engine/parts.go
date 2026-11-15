@@ -173,15 +173,19 @@ func (s *Instance) placeParts() {
 	s.kvConv = pp.KVConv[s.kvl.fmt]
 }
 
-// inPlanes is the residual planes input rows' graph g writes: every output
-// but the per-layer inputs, which come last.
+// inPlanes is the residual planes input rows' graph g writes: its leading
+// outputs a residual row wide, before any side rows, at most the residual's
+// planes.
 func (s *Instance) inPlanes(g *graph.Graph) int {
 	if g == nil {
 		return 1
 	}
-	n := len(g.Out)
-	if s.m.Cfg.PLEDim != 0 {
-		n--
+	n := 0
+	for _, o := range g.Out[:min(len(g.Out), s.c.Streams())] {
+		if g.Values[o].Width != s.c.NEmbd {
+			break
+		}
+		n++
 	}
 	return max(n, 1)
 }

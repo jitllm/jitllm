@@ -1988,6 +1988,7 @@ context	model/front.go	"model: the front end states no graph for %s: %s: %w"	a b
 context	model/front.go	"model: the scorer's activation: %w"
 input	model/front.go	"no block %d"
 input	model/front.go	"op code %d is no block's"
+context	model/front.go	"prediction block %d's own head: %w"
 context	model/front.go	"the block's graph does not verify: %w"
 context	model/front.go	"the block's stated activation: %w"
 input	model/front.go	"the container stores %v for block %d, which its stated graph does not bind"

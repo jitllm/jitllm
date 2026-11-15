@@ -63,16 +63,19 @@ func TestMTPMatchesReference(t *testing.T) {
 			}
 			m, openOpts := openSpecModel(t, tc.model, WithKVF16(false))
 			defer m.Close()
-			clean := mtpLogits(t, m, g.IDS, 0, openOpts...)
+			clean := mtpLogits(t, m, g.IDS, 0, false, openOpts...)
 			worst, agree := judgeMTP(t, m, g, clean, tc.exact, "clean")
 			t.Logf("%s: worst NMSE %.3e, top-1 %d of %d", tc.golden, worst, agree, len(g.IDS))
+			// A chained draft's step is one row: the decode path, not a chunk's.
+			worst, agree = judgeMTP(t, m, g, mtpLogits(t, m, g.IDS, 0, true, openOpts...), tc.exact, "one row a step")
+			t.Logf("%s one row a step: worst NMSE %.3e, top-1 %d of %d", tc.golden, worst, agree, len(g.IDS))
 			// The violations: the hidden state one row late (the pairing), and
 			// each row's own token's embedding replaced by the next one's.
 			for _, v := range []struct {
 				name  string
 				shift int
 			}{{"hidden-one-row-late", 1}, {"next-token-embedding", 2}} {
-				bad := mtpLogits(t, m, g.IDS, v.shift, openOpts...)
+				bad := mtpLogits(t, m, g.IDS, v.shift, false, openOpts...)
 				w, _ := nmseRows(m, g, bad)
 				if w < 1e-3 {
 					t.Errorf("violation %s reads worst NMSE %.3e: the gate cannot see it", v.name, w)
@@ -85,8 +88,9 @@ func TestMTPMatchesReference(t *testing.T) {
 
 // mtpLogits runs the trunk over ids and the draft over the rows the block
 // reads, returning every row's logits. fault 1 pairs row q with h_{q-2} (the
-// hidden state a row late); fault 2 embeds x_{q+1} in row q.
-func mtpLogits(t *testing.T, m *model.Model, ids []int32, fault int, io ...Option) [][]float32 {
+// hidden state a row late); fault 2 embeds x_{q+1} in row q. oneRow runs the
+// draft a row a call, as a chained draft steps.
+func mtpLogits(t *testing.T, m *model.Model, ids []int32, fault int, oneRow bool, io ...Option) [][]float32 {
 	t.Helper()
 	c := m.Cfg
 	st := testInstance(t, m, len(ids)+8, io...)
@@ -115,7 +119,14 @@ func mtpLogits(t *testing.T, m *model.Model, ids []int32, fault int, io ...Optio
 		copy(toks, ids[1:])
 	}
 	out := &rowsOut{from: 0, logits: make([]float32, n*c.NVocab), hidden: make([]float32, n*hw)}
-	if err := sp.draftRows(toks, hs, out); err != nil {
+	if oneRow {
+		for q := range n {
+			o := &rowsOut{from: 0, logits: out.logits[q*c.NVocab : (q+1)*c.NVocab], hidden: out.hidden[q*hw : (q+1)*hw]}
+			if err := sp.draftRows(toks[q:q+1], hs[q*hw:(q+1)*hw], o); err != nil {
+				t.Fatal(err)
+			}
+		}
+	} else if err := sp.draftRows(toks, hs, out); err != nil {
 		t.Fatal(err)
 	}
 	rows := make([][]float32, n)

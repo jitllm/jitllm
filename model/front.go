@@ -375,7 +375,12 @@ func (m *Model) FrontGraphs() *frontSet {
 		for i := range np {
 			s.mtp[i], s.mtpWhy[i], s.mtpErrs[i] = m.blockGraph(n + i)
 			s.MtpEntry[i], s.mtpEntryWhy[i], _ = m.mtpEntryGraph(n + i)
-			s.MtpHead[i], s.MtpHidden[i] = m.mtpHeadGraph(false, n+i), m.mtpHeadGraph(true, n+i)
+			var he, hhe error
+			s.MtpHead[i], he = m.mtpHeadGraph(false, n+i)
+			s.MtpHidden[i], hhe = m.mtpHeadGraph(true, n+i)
+			if err := errors.Join(he, hhe); err != nil {
+				s.mtpWhy[i], s.mtpErrs[i] = UncoveredUnverified, errors.Join(s.mtpErrs[i], err)
+			}
 		}
 	}
 	s.Head, s.HeadWhy, s.headErr = m.headGraph(false)
@@ -1008,11 +1013,42 @@ func (m *Model) blockFacts(li int) (graph.Facts, Uncovered) {
 		return f, UncoveredExperts
 	}
 	if li >= m.Cfg.NLayer {
-		for _, r := range []jlm.Role{jlm.RoleHCHeadNorm, jlm.RoleHCHeadDown, jlm.RoleHCHeadUp} {
+		for r := range m.headMixRoles() {
 			delete(f.Inventory, r)
 		}
 	}
 	return f, Covered
+}
+
+// headMixRoles is the tensors the head's stated read of the streams binds
+// (streamMix), nil on a model that states none.
+func (m *Model) headMixRoles() map[jlm.Role]bool {
+	if !m.Cfg.StatesStreams() {
+		return nil
+	}
+	f, _ := m.Inventory(jlm.DenseBlock)
+	b := graph.NewBlock(-1)
+	if _, err := m.streamMix(b, f); err != nil {
+		return nil
+	}
+	rs := map[jlm.Role]bool{}
+	for _, o := range b.G.Ops {
+		for _, w := range o.Weight {
+			rs[w.Role] = true
+		}
+	}
+	return rs
+}
+
+// storesHeadMix says block li stores a tensor of the head's read of the
+// streams: a mix of its own.
+func (m *Model) storesHeadMix(li int) bool {
+	for r := range m.headMixRoles() {
+		if m.Stores(li, r) {
+			return true
+		}
+	}
+	return false
 }
 
 // statedBlockGraph is block li's graph as the converter states it (s,
@@ -1615,10 +1651,10 @@ func (m *Model) streamHeadGraph(h *graph.Head, li int) (*graph.Graph, error) {
 
 // mtpHeadGraph is the head (hidden, the norm's rows too) over prediction
 // block li's own mix of the streams, nil where it stores none.
-func (m *Model) mtpHeadGraph(hidden bool, li int) *graph.Graph {
+func (m *Model) mtpHeadGraph(hidden bool, li int) (*graph.Graph, error) {
 	c := m.Cfg
-	if !c.StatesStreams() || !m.Stores(li, jlm.RoleHCHeadDown) {
-		return nil
+	if !c.StatesStreams() || !m.storesHeadMix(li) {
+		return nil, nil
 	}
 	f, _ := m.Inventory(jlm.DenseBlock)
 	stored := func(r jlm.Role) bool {
@@ -1633,9 +1669,9 @@ func (m *Model) mtpHeadGraph(hidden bool, li int) *graph.Graph {
 	}
 	g, err := m.streamHeadGraph(&h, li)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("prediction block %d's own head: %w", li, err)
 	}
-	return g
+	return g, nil
 }
 
 // markGraph is a marker head's readout as ops (jlm.Flag2HeadBlocks): each
