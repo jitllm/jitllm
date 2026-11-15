@@ -65,6 +65,6 @@
         "down_proj.weight": "ffn_down_exps.weight"
       }
     },
-    "ignore": ["model.rotary_emb.inv_freq"]
+    "ignore": ["model.rotary_emb.inv_freq", "self_attn.rotary_emb.inv_freq"]
   }
 }

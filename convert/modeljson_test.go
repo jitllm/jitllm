@@ -179,6 +179,32 @@ func TestModelJSONRefuses(t *testing.T) {
 	}
 }
 
+// TestLibraryIgnoresTheRotaryBuffers: the files that replaced llama-named Go
+// entries ignore the rotary inverse frequencies a checkpoint may carry, the
+// model's and each layer's (older transformers saved them), as those entries
+// did: a derived buffer is named and not carried, never refused.
+func TestLibraryIgnoresTheRotaryBuffers(t *testing.T) {
+	lib, err := modelLibrary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []string{"Qwen2ForCausalLM", "Qwen3ForCausalLM", "Qwen3MoeForCausalLM", "GemmaForCausalLM"} {
+		mj := lib[c]
+		if mj == nil {
+			t.Fatalf("no %s in the library", c)
+		}
+		a, err := mj.hfArch()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, n := range []string{"model.rotary_emb.inv_freq", "model.layers.3.self_attn.rotary_emb.inv_freq"} {
+			if _, _, _, ignored, err := a.identify(n, nil); err != nil || !ignored {
+				t.Errorf("%s: %s is not ignored (%v)", c, n, err)
+			}
+		}
+	}
+}
+
 // qwen35TestConfig is a Qwen3_5ForConditionalGeneration config.json with a
 // head of 32, a quarter of it rotated in sections [2, 1, 1], and four value
 // heads over two key heads; edit replaces text in it.

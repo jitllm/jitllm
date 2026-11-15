@@ -49,6 +49,6 @@
       "mlp.up_proj.weight":              "ffn_up.weight",
       "mlp.down_proj.weight":            "ffn_down.weight"
     },
-    "ignore": ["model.rotary_emb.inv_freq"]
+    "ignore": ["model.rotary_emb.inv_freq", "self_attn.rotary_emb.inv_freq"]
   }
 }
