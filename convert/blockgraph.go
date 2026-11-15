@@ -80,6 +80,14 @@ type mjBlockOp struct {
 	// int8 codes per row, the product scaled by the row's scale and the
 	// biases added after; an input is quantized once for every matvec.
 	Int8 string `json:"int8"`
+	// Streams names a list of residual streams a stream step reads (a
+	// streams_in's or a stream_writes' Out), Ex the list of values a
+	// stream_read exported to the writes, At a stream_at's index (an
+	// expression). A stream step's Of is the sublayer whose stated
+	// statement it lowers: pre, attn or ffn.
+	Streams string `json:"streams"`
+	Ex      string `json:"ex"`
+	At      string `json:"at"`
 }
 
 // mjTerm is one term of an expr: a function by name and up to three
@@ -144,30 +152,42 @@ func (n *mjNames) UnmarshalJSON(b []byte) error {
 // most (-1 for any).
 func graphSteps() map[string][4]int {
 	return map[string][4]int{
-		"in":          {0, 0, 0, 0},
-		"norm":        {1, 1, 1, 1},
-		"layer_norm":  {1, 1, 1, -1},
-		"head_norm":   {1, 1, 1, 1},
-		"matvec":      {1, 1, 1, -1},
-		"add":         {2, 2, 0, 0},
-		"rope":        {1, 1, 0, 0},
-		"kv_append":   {2, 2, 0, 0},
-		"attend":      {1, 2, 0, -1},
-		"indexer":     {2, 2, 0, 0},
-		"select":      {1, 2, 0, 0},
-		"act":         {1, -1, 0, 0},
-		"stated":      {1, -1, 0, 0},
-		"emit":        {0, -1, 0, 0},
-		"split_sum":   {1, 1, 0, 0},
-		"mark":        {0, 0, 0, 0},
-		"routed":      {0, 0, 0, 0},
-		"let":         {1, 1, 0, 0},
-		"sigmoid_mul": {2, 2, 0, 0},
-		"silu":        {1, 1, 0, 0},
-		"silu_gated":  {2, 2, 0, 0},
-		"expr":        {0, -1, 0, 0},
-		"out":         {1, -1, 0, 0},
+		"in":            {0, 0, 0, 0},
+		"norm":          {1, 1, 1, 1},
+		"layer_norm":    {1, 1, 1, -1},
+		"head_norm":     {1, 1, 1, 1},
+		"matvec":        {1, 1, 1, -1},
+		"add":           {2, 2, 0, 0},
+		"rope":          {1, 1, 0, 0},
+		"kv_append":     {2, 2, 0, 0},
+		"attend":        {1, 2, 0, -1},
+		"indexer":       {2, 2, 0, 0},
+		"select":        {1, 2, 0, 0},
+		"act":           {1, -1, 0, 0},
+		"stated":        {1, -1, 0, 0},
+		"emit":          {0, -1, 0, 0},
+		"split_sum":     {1, 1, 0, 0},
+		"mark":          {0, 0, 0, 0},
+		"routed":        {0, 0, 0, 0},
+		"let":           {1, 1, 0, 0},
+		"sigmoid_mul":   {2, 2, 0, 0},
+		"silu":          {1, 1, 0, 0},
+		"silu_gated":    {2, 2, 0, 0},
+		"expr":          {0, -1, 0, 0},
+		"out":           {1, -1, 0, 0},
+		"streams_in":    {1, 1, 0, 0},
+		"stream_read":   {2, 3, 0, 0},
+		"stream_writes": {1, 1, 0, 0},
+		"stream_join":   {2, 2, 0, 0},
+		"stream_at":     {0, 0, 0, 0},
+		"out_streams":   {0, 1, 0, 0},
 	}
+}
+
+// subStreams are the sublayers whose stated statements a stream step
+// lowers, by name.
+func subStreams() map[string]bool {
+	return map[string]bool{"pre": true, "attn": true, "ffn": true}
 }
 
 // statements are what a stated op may run: the router's score of each
@@ -209,7 +229,7 @@ func (g *mjGraph) check() error {
 		if o.Op == "routed" && !named[o.From] {
 			return fmt.Errorf("op %d's routed region starts at %q, which no op marks before it", i, o.From)
 		}
-		xs := []string{o.If, o.Rows, o.Width, o.Alpha, o.Parts, o.Int8, o.Eps}
+		xs := []string{o.If, o.Rows, o.Width, o.Alpha, o.Parts, o.Int8, o.Eps, o.At}
 		for k, tm := range o.Terms {
 			if fnNamed(tm.Fn) == 0 || len(tm.Args) == 0 || len(tm.Args) > 3 {
 				return fmt.Errorf("op %d (%s): term %d is %q of %d arguments", i, o.Op, k, tm.Fn, len(tm.Args))
@@ -287,6 +307,26 @@ func (g *mjGraph) check() error {
 				named[o.Out+part] = true
 			}
 			continue
+		case strings.HasPrefix(o.Op, "stream") || o.Op == "out_streams":
+			if o.Op != "streams_in" && !named[o.Streams] {
+				return fmt.Errorf("op %d (%s) reads streams %q before an op names them", i, o.Op, o.Streams)
+			}
+			if o.Op == "stream_writes" && o.Ex != "" && !named[o.Ex] {
+				return fmt.Errorf("op %d (stream_writes) reads exports %q before an op names them", i, o.Ex)
+			}
+			if (o.Op == "stream_read" || o.Op == "stream_writes" || o.Op == "stream_join") && !subStreams()[o.Of] {
+				return fmt.Errorf("op %d (%s) lowers %q, which is not a sublayer's streams (pre, attn, ffn)", i, o.Op, o.Of)
+			}
+			if o.Op == "out_streams" {
+				continue
+			}
+			if o.Out == "" {
+				return fmt.Errorf("op %d (%s) names no output", i, o.Op)
+			}
+			named[o.Out] = true
+			named[o.Out+".ex"] = o.Op == "stream_read"
+			named[o.Out+".bank"] = o.Op == "streams_in"
+			continue
 		case o.Out == "":
 			return fmt.Errorf("op %d (%s) names no output", i, o.Op)
 		case o.Op == "in" && o.Width == "", o.Op == "matvec" && o.Rows == "", o.Op == "act" && o.Width == "",
@@ -299,7 +339,7 @@ func (g *mjGraph) check() error {
 		}
 		named[o.Out] = true
 	}
-	if g.Block[len(g.Block)-1].Op != "out" {
+	if last := g.Block[len(g.Block)-1].Op; last != "out" && last != "out_streams" {
 		return fmt.Errorf("a block's graph ends in an out")
 	}
 	return nil
@@ -425,6 +465,7 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph) (*graph.Grap
 	vals := map[string]graph.ValueID{}
 	hists := map[string]graph.StateRef{}
 	marks := map[string]int{}
+	lists := map[string][]graph.ValueID{}
 	codes := map[graph.ValueID][2]graph.ValueID{}
 	vars := bf.vars()
 	num := func(x string) (float64, error) { return g.num(x, vars) }
@@ -662,6 +703,73 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph) (*graph.Grap
 		case "out":
 			b.Out(in...)
 			continue
+		case "streams_in":
+			xs, bank, err := bf.streamsIn(b, in[0])
+			if err != nil {
+				return nil, fmt.Errorf("op %d (streams_in): %w", i, err)
+			}
+			lists[o.Out] = xs
+			if bank != 0 {
+				vals[o.Out+".bank"] = bank
+			}
+			continue
+		case "stream_read":
+			u, err := bf.sub(o.Of)
+			if err != nil {
+				return nil, fmt.Errorf("op %d (stream_read): %w", i, err)
+			}
+			side := graph.ValueID(0)
+			if len(in) == 3 {
+				side = bf.pleOf(b, in[2])
+			}
+			var ex []graph.ValueID
+			if y, ex, err = graph.StreamRead(b, bf.facts, u, lists[o.Streams], in[0], in[1], side, bf.ops(b)); err != nil {
+				return nil, fmt.Errorf("op %d (stream_read): %w", i, err)
+			}
+			lists[o.Out+".ex"] = ex
+		case "stream_writes":
+			u, err := bf.sub(o.Of)
+			if err != nil {
+				return nil, fmt.Errorf("op %d (stream_writes): %w", i, err)
+			}
+			out, err := graph.StreamWrites(b, bf.facts, u, lists[o.Streams], in[0], lists[o.Ex])
+			if err != nil {
+				return nil, fmt.Errorf("op %d (stream_writes): %w", i, err)
+			}
+			lists[o.Out] = out
+			continue
+		case "stream_join":
+			u, err := bf.sub(o.Of)
+			if err != nil {
+				return nil, fmt.Errorf("op %d (stream_join): %w", i, err)
+			}
+			if y, err = graph.StreamJoin(b, bf.facts, u, in[0], in[1], bf.resid(b)); err != nil {
+				return nil, fmt.Errorf("op %d (stream_join): %w", i, err)
+			}
+		case "stream_at":
+			k, err := num(o.At)
+			if err != nil {
+				return nil, err
+			}
+			xs := lists[o.Streams]
+			if int(k) < 0 || int(k) >= len(xs) {
+				return nil, fmt.Errorf("op %d reads stream %v of %d", i, k, len(xs))
+			}
+			y = xs[int(k)]
+		case "out_streams":
+			out := slices.Clone(lists[o.Streams])
+			if len(in) == 1 {
+				out[0] = in[0]
+			}
+			if k := bf.streamsAt().Bank; k != 0 {
+				bank, ok := vals[o.Streams+".bank"]
+				if !ok || int(k) >= len(out) {
+					return nil, fmt.Errorf("op %d banks into stream %d of %d with no bank copy of %q", i, k, len(out), o.Streams)
+				}
+				out[k] = bank
+			}
+			b.Out(out...)
+			continue
 		}
 		vals[o.Out] = y
 	}
@@ -838,6 +946,86 @@ func (bf *blockFacts) ops(b *graph.Builder) func([]graph.ValueID, *jlm.TowerOp) 
 			a.Offset = int(op.Span) - a.NRot
 		}
 		return b.Emit(graph.OpRope, []graph.ValueID{v}, []graph.Result{{Name: "rope", Width: b.G.Values[v].Width}}, nil, a, nil, nil)[0], nil
+	}
+}
+
+// statedStreams is the residual streams the container states, where they
+// are the model's every stream (no hyper-connection multiple beyond them);
+// 0 for a model of one.
+func statedStreams(c *jlm.Config) int {
+	n := int(c.Streams.N)
+	if n < 2 || int(c.HCMult) > n {
+		return 0
+	}
+	return n
+}
+
+// streamsAt is the block's stated streams (jlm.Streams), zero where the
+// container states none for it.
+func (bf *blockFacts) streamsAt() jlm.BlockStreams {
+	if bf.li < len(bf.c.Streams.Blocks) {
+		return bf.c.Streams.Blocks[bf.li]
+	}
+	return jlm.BlockStreams{}
+}
+
+// streamsIn is the block's residual streams as its graph reads them: x as
+// stream 0, an input a stream past it, and, where the block banks its input
+// into a stream, a copy of x for it.
+func (bf *blockFacts) streamsIn(b *graph.Builder, x graph.ValueID) ([]graph.ValueID, graph.ValueID, error) {
+	n := int(bf.c.Streams.N)
+	if n < 2 || bf.li >= len(bf.c.Streams.Blocks) {
+		return nil, 0, fmt.Errorf("block %d: the container states %d streams for %d blocks", bf.li, n, len(bf.c.Streams.Blocks))
+	}
+	w := b.G.Values[x].Width
+	xs := []graph.ValueID{x}
+	for k := 1; k < n; k++ {
+		xs = append(xs, b.In(fmt.Sprintf("x.%d", k), w))
+	}
+	var bank graph.ValueID
+	if bf.streamsAt().Bank != 0 {
+		bank = b.Emit(graph.OpSlice, []graph.ValueID{x}, []graph.Result{{Name: "stream", Width: w}}, nil, graph.Attrs{Width: w}, nil, nil)[0]
+	}
+	return xs, bank, nil
+}
+
+// sub is the block's stated statement for sublayer name (pre, attn, ffn).
+func (bf *blockFacts) sub(name string) (*jlm.SubStreams, error) {
+	if bf.li >= len(bf.c.Streams.Blocks) {
+		return nil, fmt.Errorf("block %d: the container states no streams for it", bf.li)
+	}
+	s := &bf.c.Streams.Blocks[bf.li]
+	switch name {
+	case "pre":
+		return &s.Pre, nil
+	case "attn":
+		return &s.Attn, nil
+	case "ffn":
+		return &s.FFN, nil
+	}
+	return nil, fmt.Errorf("%q is not a sublayer's streams", name)
+}
+
+// pleOf is the part of the side input a stream read takes: its per-layer
+// inputs, past the taps' rows where the side carries both.
+func (bf *blockFacts) pleOf(b *graph.Builder, side graph.ValueID) graph.ValueID {
+	c := bf.c
+	taps, ple := bf.taps*int(c.NEmbd), int(c.NLayer)*int(c.PLEDim)
+	if taps == 0 || ple == 0 {
+		return side
+	}
+	return b.Emit(graph.OpSlice, []graph.ValueID{side}, []graph.Result{{Name: "side.ple", Width: ple}}, nil,
+		graph.Attrs{Offset: taps, Width: ple}, nil, nil)[0]
+}
+
+// resid is the block's residual sum: scaled where the model scales it.
+func (bf *blockFacts) resid(b *graph.Builder) func(x, y graph.ValueID) graph.ValueID {
+	return func(x, y graph.ValueID) graph.ValueID {
+		if s := float64(bf.c.ResidualScale); s != 0 && s != 1 {
+			return b.Emit(graph.OpAdd, []graph.ValueID{x, y}, []graph.Result{{Name: "sum", Width: b.G.Values[x].Width}}, nil,
+				graph.Attrs{Alpha: s}, nil, nil)[0]
+		}
+		return b.Add(x, y)
 	}
 }
 
@@ -1176,6 +1364,12 @@ func (bf *blockFacts) vars() map[string]jinja.Value {
 		"qk_norm_post":       jinja.NewBool(c.Flags.Has(jlm.FlagQKNormPostRope)),
 		"rope_xd":            jinja.NewBool(c.Flags.Has(jlm.FlagRopeXD)),
 		"non_causal":         jinja.NewBool(c.Flags.Has(jlm.FlagNonCausal)),
+		"streams":            jinja.NewInt(int64(statedStreams(c))),
+		"stream_pre":         jinja.NewBool(bf.streamsAt().Pre.Read != nil),
+		"attn_writes":        jinja.NewBool(len(bf.streamsAt().Attn.Writes) != 0),
+		"attn_join":          jinja.NewBool(bf.streamsAt().Attn.Join != nil),
+		"ffn_writes":         jinja.NewBool(len(bf.streamsAt().FFN.Writes) != 0),
+		"ple_dim":            i(c.PLEDim),
 		"row_windowed":       jinja.NewBool(c.Flags2.Has(jlm.Flag2MediaPrefix)),
 		"nope_global":        jinja.NewBool(c.Flags.Has(jlm.FlagNoPEGlobal)),
 		"temp_scale":         jinja.NewFloat(float64(c.AttnTempScale)),
