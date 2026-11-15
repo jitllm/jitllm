@@ -11,46 +11,6 @@ import (
 // projector's gated MLP have names of their own, and the convolution is a
 // 4-D kernel the container stores as the matrix it is.
 
-// glm4vRole is GLM-4.xV's own tower vocabulary.
-func glm4vRole(name string) (jlm.Role, bool) {
-	switch name {
-	case "v.norm_embd.weight":
-		return jlm.RoleVEmbdNorm, true
-	case "mm.patch_merger.weight":
-		return jlm.RoleVMergeConv, true
-	case "mm.patch_merger.bias":
-		return jlm.RoleVMergeConvBias, true
-	case "mm.post_norm.weight":
-		return jlm.RoleVProjNorm, true
-	case "mm.post_norm.bias":
-		return jlm.RoleVProjNormBias, true
-	case "mm.gate.weight":
-		return jlm.RoleVProjGate, true
-	case "mm.gate.bias":
-		return jlm.RoleVProjGateBias, true
-	case "mm.up.weight":
-		return jlm.RoleVProjUp, true
-	case "mm.up.bias":
-		return jlm.RoleVProjUpBias, true
-	case "mm.down.weight":
-		return jlm.RoleVProjDown, true
-	case "mm.down.bias":
-		return jlm.RoleVProjDownBias, true
-	}
-	return 0, false
-}
-
-// kimivlRole is Kimi-VL's: the projector's LayerNorm over each patch.
-func kimivlRole(name string) (jlm.Role, bool) {
-	switch name {
-	case "mm.input_norm.weight":
-		return jlm.RoleVProjInNorm, true
-	case "mm.input_norm.bias":
-		return jlm.RoleVProjInNormBias, true
-	}
-	return 0, false
-}
-
 // reshapeMergeConv lays the merging convolution out as the matrix the
 // projector multiplies the shuffled row by. The GGUF kernel is
 // [kx, ky, channel, out] (ggml order: kx fastest), and the shuffled row the

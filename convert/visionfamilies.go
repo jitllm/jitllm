@@ -13,57 +13,6 @@ import (
 // that the shared name table and the shared transforms do not cover. Every
 // transform here is exact, or states the one rounding it adds.
 
-// projectorRole is a projector's own tensor vocabulary, consulted before the
-// shared table because one position means different things in different
-// projectors: InternVL's mm.model.mlp.0 is a LayerNorm over the shuffled row,
-// where llava's mm.0 is a matrix.
-func projectorRole(p jlm.Projector, name string) (jlm.Role, bool) {
-	if p == jlm.ProjPixtral {
-		// Pixtral's MLP is mm.1 and mm.2, the positions llava's are mm.0 and
-		// mm.2. Mistral 3's input norm is an RMSNorm over each patch at the
-		// tower's width before the merge, which is what a tower's post-norm is.
-		r, ok := map[string]jlm.Role{
-			"mm.1.weight":            jlm.RoleVProj,
-			"mm.1.bias":              jlm.RoleVProjBias,
-			"mm.input_norm.weight":   jlm.RoleVPostNorm,
-			"mm.patch_merger.weight": jlm.RoleVMerge,
-			"v.token_embd.img_break": jlm.RoleVImgBreak,
-		}[name]
-		return r, ok
-	}
-	if p == jlm.ProjLlama4 {
-		// The adapter's two matrices and the projector's: mlp.1 and mlp.2 are
-		// the positions llava's mm.0 and mm.2 hold, and fc is the third.
-		r, ok := map[string]jlm.Role{
-			"mm.model.mlp.1.weight": jlm.RoleVProj,
-			"mm.model.mlp.2.weight": jlm.RoleVProj2,
-			"mm.model.fc.weight":    jlm.RoleVProj3,
-		}[name]
-		return r, ok
-	}
-	if p == jlm.ProjLFM2 {
-		// LFM2-VL's optional LayerNorm over the unshuffled row: InternVL's
-		// norm, in the position InternVL's has.
-		r, ok := map[string]jlm.Role{
-			"mm.input_norm.weight": jlm.RoleVProjNorm,
-			"mm.input_norm.bias":   jlm.RoleVProjNormBias,
-		}[name]
-		return r, ok
-	}
-	if p != jlm.ProjInternVL {
-		return 0, false
-	}
-	r, ok := map[string]jlm.Role{
-		"mm.model.mlp.0.weight": jlm.RoleVProjNorm,
-		"mm.model.mlp.0.bias":   jlm.RoleVProjNormBias,
-		"mm.model.mlp.1.weight": jlm.RoleVProj,
-		"mm.model.mlp.1.bias":   jlm.RoleVProjBias,
-		"mm.model.mlp.3.weight": jlm.RoleVProj2,
-		"mm.model.mlp.3.bias":   jlm.RoleVProj2Bias,
-	}[name]
-	return r, ok
-}
-
 // layerScaleOf parses InternViT's per-block layer scale, "v.blk.N.ls1.weight"
 // (after attention) or "...ls2.weight" (after the MLP). It has no role: the
 // converter folds it into the matrix whose output it scales (foldLayerScales).
@@ -391,34 +340,6 @@ func padFFN(s *jlm.Source) error {
 	}
 	v.NFFN = wide
 	return nil
-}
-
-// towerRoleOf is the role a tower file's tensor takes: a projector's own
-// names first, then the name table after towerName's renames. sourceOf and
-// the role gate both read it, so the gate sees the names conversion sees.
-func towerRoleOf(v *jlm.Vision, name string) (jlm.Role, int32, int32, error) {
-	if r, ok := projectorRole(v.Projector, name); ok {
-		return r, jlm.DenseBlock, -1, nil
-	}
-	return identify(towerName(v, name))
-}
-
-// towerUnread reports a tower file's tensor that no graph here reads: the
-// unreadTower list, and Gemma 4's E-models' audio encoder, which ships in the
-// same mmproj (a.*, and its projection mm.a.*) -- a second modality nothing
-// of the vision or text path reads.
-func towerUnread(v *jlm.Vision, name string) bool {
-	if _, ok := unreadTower(name); ok {
-		return true
-	}
-	switch v.Projector {
-	case jlm.ProjGemma4V:
-		return strings.HasPrefix(name, "a.") || strings.HasPrefix(name, "mm.a.")
-	case jlm.ProjGemma3nV:
-		// Gemma 3n's mmproj carries its audio encoder too.
-		return strings.HasPrefix(name, "a.") || strings.HasPrefix(name, "mm.a.")
-	}
-	return false
 }
 
 // towerGathered reports a tower file's tensor that has no role of its own

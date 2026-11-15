@@ -166,10 +166,14 @@ func buildGGUF(f, vf *meta.File, src, mmproj string, o options) (*jlm.Source, er
 func sourceOf(f *meta.File) (*jlm.Source, error) {
 	s := &jlm.Source{}
 	var c *Config
+	var names *towerVocab
 	tower := f.Arch() == "clip"
 	if tower {
 		v, err := visionOf(f)
 		if err != nil {
+			return nil, err
+		}
+		if names, err = towerVocabOf(v); err != nil {
 			return nil, err
 		}
 		// A tower still needs a Config, because a container always has one; its
@@ -238,7 +242,7 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 				continue
 			}
 		}
-		if tower && towerUnread(s.Vision, t.Name) {
+		if tower && names.unreadName(t.Name) {
 			continue
 		}
 		// InternViT's layer scales have no role: they are folded into the
@@ -331,10 +335,7 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 			}
 		}
 		if tower {
-			role, block, index, err = towerRoleOf(s.Vision, t.Name)
-			if r, ok := familyProjectorRole(s.Vision.Projector, t.Name); ok {
-				role, block, index, err = r, jlm.DenseBlock, -1, nil
-			}
+			role, block, index, err = names.roleOf(t.Name)
 		} else {
 			role, block, index, err = identify(t.Name)
 		}

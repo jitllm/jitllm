@@ -354,40 +354,6 @@ func coreRoleOf(name string) (jlm.Role, bool) {
 	return 0, false
 }
 
-// towerName is a tower tensor's name in the vocabulary identify reads, where
-// a projector spells one differently: Janus-Pro's second aligner matrix is
-// mm.1, the graph position llava's mm.2 holds. v is nil for a text file.
-func towerName(v *jlm.Vision, name string) string {
-	if v != nil && v.Projector == jlm.ProjJanus && strings.HasPrefix(name, "mm.1.") {
-		return "mm.2." + strings.TrimPrefix(name, "mm.1.")
-	}
-	// Llama 4's post_attention_layernorm is its pre-MLP norm (ln2), and
-	// llama.cpp's tensor map names it attn_post_norm for a transformers 5
-	// checkpoint (vision_model.model.layers.N.post_attention_layernorm,
-	// which it lists for Gemma 4's genuine post-attention norm).
-	if v != nil && v.Projector == jlm.ProjLlama4 && strings.Contains(name, ".attn_post_norm.") {
-		return strings.Replace(name, ".attn_post_norm.", ".ln2.", 1)
-	}
-	// Kimi-VL's and LFM2-VL's are mm.1 and mm.2: llava's mm.0 and mm.2
-	// positions.
-	if v != nil && (v.Projector == jlm.ProjKimiVL || v.Projector == jlm.ProjLFM2) && strings.HasPrefix(name, "mm.1.") {
-		return "mm.0." + strings.TrimPrefix(name, "mm.1.")
-	}
-	return name
-}
-
-// unreadTower names the tower tensors a file carries and no graph reads, each
-// with the reason. Every other unknown name is refused (identify): a tensor
-// dropped at conversion is a model that loads and is wrong, so the exceptions
-// are a list, never a pattern.
-func unreadTower(name string) (string, bool) {
-	switch name {
-	case "resampler.pos_embed_k":
-		return "the resampler's position is computed per grid", true
-	}
-	return "", false
-}
-
 // indexedRole is the per-expert form: "ffn_gate.3.weight" is expert 3's gate.
 func indexedRole(name string) (jlm.Role, bool) {
 	switch name {

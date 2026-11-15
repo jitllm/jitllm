@@ -22,9 +22,6 @@ func familyTowerTensors(f *meta.File, v *jlm.Vision, t *meta.Tensor) (out []jlm.
 	if v == nil {
 		return nil, false, nil
 	}
-	if v.Projector == jlm.ProjHunyuanVL && t.Name == hunyuanvlUnread {
-		return nil, true, nil
-	}
 	if b, part, found := deepstackName(t.Name); found {
 		role, known := map[string]jlm.Role{
 			"norm.weight": jlm.RoleVDsNorm, "norm.bias": jlm.RoleVDsNormBias,
@@ -59,15 +56,6 @@ func familyTowerTensors(f *meta.File, v *jlm.Vision, t *meta.Tensor) (out []jlm.
 // familyTowerTensors resolves rather than the shared name table.
 func familyTowerName(name string) bool {
 	if _, _, ok := deepstackName(name); ok {
-		return true
-	}
-	if _, ok := glm4vRole(name); ok {
-		return true
-	}
-	if _, ok := kimivlRole(name); ok {
-		return true
-	}
-	if _, ok := hunyuanvlRole(name); ok || name == hunyuanvlUnread {
 		return true
 	}
 	_, part, ok := blockPart(name)
@@ -206,22 +194,4 @@ func checkDeepstack(f *meta.File, s *jlm.Source) error {
 		}
 	}
 	return nil
-}
-
-// familyProjectorRole is the role of a projector tensor these families name
-// in their own way (glm4vRole, kimivlRole), where towerRoleOf's reading of the name would
-// be wrong or absent.
-func familyProjectorRole(p jlm.Projector, name string) (jlm.Role, bool) {
-	switch p {
-	case jlm.ProjGLM4V:
-		r, ok := glm4vRole(name)
-		return r, ok
-	case jlm.ProjKimiVL:
-		r, ok := kimivlRole(name)
-		return r, ok
-	case jlm.ProjHunyuanVL:
-		r, ok := hunyuanvlRole(name)
-		return r, ok
-	}
-	return 0, false
 }

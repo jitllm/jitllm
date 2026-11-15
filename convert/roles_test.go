@@ -58,6 +58,12 @@ func TestEveryTensorHasARole(t *testing.T) {
 			vis, visErr = visionOf(f)
 			supported = !errors.Is(visErr, ErrNotImplemented)
 		}
+		var names *towerVocab
+		if vis != nil {
+			if names, err = towerVocabOf(vis); err != nil {
+				t.Fatalf("%s: %v", filepath.Base(p), err)
+			}
+		}
 		renames := towerNames(f, vis)
 		for i := range f.Tensors {
 			n := f.Tensors[i].Name
@@ -79,10 +85,10 @@ func TestEveryTensorHasARole(t *testing.T) {
 			var role jlm.Role
 			var err error
 			switch {
-			case vis != nil && (towerUnread(vis, n) || towerGathered(n) || familyTowerName(n)):
+			case vis != nil && (names.unreadName(n) || towerGathered(n) || familyTowerName(n)):
 				continue
 			case vis != nil:
-				role, _, _, err = towerRoleOf(vis, n)
+				role, _, _, err = names.roleOf(n)
 			default:
 				role, _, _, err = identify(n)
 			}
