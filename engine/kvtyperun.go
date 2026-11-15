@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"fmt"
 	"slices"
 
 	"github.com/jitllm/jitllm/graph"
@@ -79,15 +80,29 @@ func kvRowWords(f nn.KVFmt, w int) int {
 
 // typedAppends is g with each append to the block's own history taking its
 // key and value through f's narrowing and widening first, g itself where it
-// appends to none. A row is narrowed whole, so its blocks are its heads'
-// where a head is whole blocks.
-func typedAppends(g *graph.Graph, f nn.KVFmt) *graph.Graph {
+// appends to none. A row is narrowed a head of hd at a time, as the CPU
+// device's pages hold it, each head's last block zero past it: whole where a
+// head is whole blocks of 32, which narrows alike.
+func typedAppends(g *graph.Graph, f nn.KVFmt, hd int) *graph.Graph {
 	narrow, widen, at := kvConvOps(f)
 	b := &graph.Builder{G: &graph.Graph{Version: g.Version, Block: g.Block, Values: slices.Clone(g.Values), In: g.In, Out: g.Out, Routed: g.Routed}}
+	one := func(v graph.ValueID, name string) graph.ValueID {
+		w := b.G.Values[v].Width
+		h := b.Emit(narrow, []graph.ValueID{v}, []graph.Result{{Name: name + ".typed", Width: kvRowWords(f, w), Elem: graph.ElemU32}}, nil, at, nil, nil)[0]
+		return b.Emit(widen, []graph.ValueID{h}, []graph.Result{{Name: name + ".widened", Width: w}}, nil, at, nil, nil)[0]
+	}
 	typed := func(v graph.ValueID) graph.ValueID {
 		x := b.G.Values[v]
-		h := b.Emit(narrow, []graph.ValueID{v}, []graph.Result{{Name: x.Name + ".typed", Width: kvRowWords(f, x.Width), Elem: graph.ElemU32}}, nil, at, nil, nil)[0]
-		return b.Emit(widen, []graph.ValueID{h}, []graph.Result{{Name: x.Name + ".widened", Width: x.Width}}, nil, at, nil, nil)[0]
+		if !f.Quantized() || hd <= 0 || hd%32 == 0 || x.Width%hd != 0 || x.Width == hd {
+			return one(v, x.Name)
+		}
+		heads := make([]graph.ValueID, x.Width/hd)
+		for i := range heads {
+			name := fmt.Sprintf("%s.h%d", x.Name, i)
+			heads[i] = one(b.Emit(graph.OpSlice, []graph.ValueID{v}, []graph.Result{{Name: name, Width: hd}}, nil,
+				graph.Attrs{Offset: i * hd, Width: hd}, nil, nil)[0], name)
+		}
+		return b.Emit(graph.OpConcat, heads, []graph.Result{{Name: x.Name + ".widened", Width: x.Width}}, nil, graph.Attrs{}, nil, nil)[0]
 	}
 	n := 0
 	for _, o := range g.Ops {
@@ -124,12 +139,13 @@ func typedAppends(g *graph.Graph, f nn.KVFmt) *graph.Graph {
 // the type's narrowing and widening first (typedAppends), so the pages hold
 // the type's values from the moment a row is written and a step's own
 // attention reads its newest row as the type holds it: the CPU device's
-// answer. The type's bytes on a card are owed; a quantized history whose
-// head rows are not whole blocks of 32 is still written as floats there.
+// answer, a head at a time where heads are not whole blocks of 32. The
+// type's bytes on a card are owed.
 func (s *Instance) deviceGraph(li int) *graph.Graph {
 	f := s.kvFmt
-	if !(f.Quantized() || f == nn.KVBF16) || f.Quantized() && s.kvlAt(li).headDim%32 != 0 {
+	if !(f.Quantized() || f == nn.KVBF16) {
 		return s.m.Composing().BlockGraph(li)
 	}
-	return s.m.DerivedBlockGraph(li, int(f), func(g *graph.Graph) *graph.Graph { return typedAppends(g, f) })
+	hd := s.kvlAt(li).headDim
+	return s.m.DerivedBlockGraph(li, int(f), func(g *graph.Graph) *graph.Graph { return typedAppends(g, f, hd) })
 }

@@ -584,7 +584,7 @@ func historyReference(t *testing.T, m *model.Model, kt model.KVType) {
 		if g == nil {
 			continue
 		}
-		if r := typedAppends(g, f); r != g {
+		if r := typedAppends(g, f, m.Cfg.HeadDimAt(li)); r != g {
 			fs.Blocks[li], n = r, n+1
 		}
 	}
