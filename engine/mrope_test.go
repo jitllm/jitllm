@@ -241,6 +241,20 @@ func mRopeLaysTheImageOutAsTransformersDoes(t *testing.T, name string) {
 	if text := marksLayout(&st.rmarks, 0, 0, spanRows(m, sp)); slices.Equal(text, rows) {
 		t.Fatal("VIOLATION: the picture laid out as text lays out as its grid does")
 	}
+	// The violation: the text after the picture resumed as the other layout
+	// the container could state.
+	pr := &m.Container.Config().PictureRope
+	was := *pr
+	pr.Side = !pr.Side
+	_, err = st.spanRope(0, 0, sp)
+	moved := marksLayout(&st.rmarks, 0, 0, spanRows(m, sp))
+	*pr = was
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.Equal(moved, rows) {
+		t.Fatal("VIOLATION: the text after the picture resumes alike whichever layout the container states")
+	}
 	t.Logf("%d prompt rows, image grid %v, rope delta %d", len(rows), g.Image.Grid, g.Delta)
 }
 
