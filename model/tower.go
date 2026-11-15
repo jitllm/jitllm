@@ -436,20 +436,18 @@ func (m *Model) BuildAudioGraphs() (*TowerGraphs, error) {
 	// by the sound op from its PCM as it lies, are what the stated entry's
 	// frames read.
 	tg := &TowerGraphs{Classes: []towerClass{{Entry: map[uint8]*graph.Graph{}, Rows: frames}}, Rows: frames}
+	entry, err := clipInput(t.Entry)
+	if err != nil {
+		return nil, fmt.Errorf("model: the audio tower's entry: %w", err)
+	}
 	var first *graph.Graph
 	for f := graph.SoundU8; f < graph.SoundFormats; f++ {
 		b := graph.NewBlock(-1)
 		snd := b.Emit(graph.OpSound, nil, []graph.Result{{Name: "sound", Width: int(a.MaxSamples), Rows: 1}}, nil,
 			graph.Attrs{Sound: f, Taps: composer.SoundTapsMax}, nil, nil)[0]
-		at := len(b.G.Ops)
-		out, err := graph.LowerProgram(b, t, &t.Entry, nil, frames, dense)
+		out, err := graph.LowerProgram(b, t, &entry, []graph.ValueID{snd}, frames, dense)
 		if err != nil {
 			return nil, fmt.Errorf("model: the audio tower's entry: %w", err)
-		}
-		for i := at; i < len(b.G.Ops); i++ {
-			if b.G.Ops[i].Kind == graph.OpGatherElems && len(b.G.Ops[i].In) == 0 {
-				b.G.Ops[i].In = []graph.ValueID{snd}
-			}
 		}
 		b.Out(out)
 		if err := graph.Verify(b.G, dense); err != nil {
@@ -1412,4 +1410,25 @@ func (m *Model) chainGraphs(tg *TowerGraphs, t *jlm.Tower, n, base int, e *graph
 	hn := b.G.Values[out].Rows
 	tg.Head, tg.Out, tg.Fixed, tg.Chain = b.G, hn, hn, true
 	return nil
+}
+
+// clipInput is p over one more input, first, the clip: each frames op that
+// names no input reads it, every other value one index on.
+func clipInput(p jlm.Program) (jlm.Program, error) {
+	q := jlm.Program{NIn: p.NIn + 1, Out: p.Out + 1, Ops: make([]jlm.TowerOp, len(p.Ops))}
+	read := false
+	for i, op := range p.Ops {
+		op.In = slices.Clone(op.In)
+		for j := range op.In {
+			op.In[j]++
+		}
+		if op.Code == jlm.TOpFrames && len(op.In) == 0 {
+			op.In, read = []uint16{0}, true
+		}
+		q.Ops[i] = op
+	}
+	if !read {
+		return q, fmt.Errorf("no frames op reads the clip")
+	}
+	return q, nil
 }

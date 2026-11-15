@@ -390,8 +390,11 @@ const (
 	// (Expr, its last term, over GatherLive to GatherSamples). A primitive.
 	OpMeanRows
 	// OpHeadDots is each row of Out[0] In[0]'s row dotted, head by head, with
-	// each row of Weight[0]: element h*Rows+t the dot of head h of the row
-	// (NHead heads of HeadDim) with head h of the table's row t. A primitive.
+	// rows of Weight[0]: element h*Rows+t the dot of head h of the row (NHead
+	// heads of HeadDim) with head h of the table's row t; where it states an
+	// index (Expr, over the row and GatherCol), Span dots a head, element
+	// h*Span+j the dot with the table's row the index names at column j, zero
+	// where it names none. A primitive.
 	OpHeadDots
 	numOps
 )

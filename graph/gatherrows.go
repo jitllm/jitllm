@@ -1,5 +1,7 @@
 package graph
 
+import "fmt"
+
 // The operands an OpGatherRows index expression reads (an ArgIn's Index).
 const (
 	GatherRow     = iota // the output row: past the op's bound, the last row written
@@ -110,7 +112,7 @@ func TailRow() Attrs {
 // DropRows is the input from row n on.
 func DropRows(n int) Attrs {
 	var x Index
-	return x.Attrs(x.Min(x.Add(x.In(GatherRow), x.K(n)), x.inLast()))
+	return x.Attrs(x.Add(x.In(GatherRow), x.K(n)))
 }
 
 // UpsampleRows is the input, a grid of rows w wide, s times as large each
@@ -253,7 +255,7 @@ func ClipRows(w, stride, halvings int) Attrs {
 		row = x.Div(r, x.K(w))
 	}
 	end := x.Mul(x.Add(x.Mul(row, x.K(1<<halvings)), x.K(1)), x.K(stride))
-	return x.Attrs(x.Where(x.Less(x.In(GatherSamples), end), x.In(GatherInRows), r))
+	return x.Attrs(x.Where(x.Less(x.In(GatherSamples), end), x.K(GatherNone), r))
 }
 
 // liveRows is the step's live rows less drop, at least one.
@@ -275,7 +277,7 @@ func KeepLiveRows(drop int) Attrs {
 	var x Index
 	n := x.liveRows(drop)
 	r := x.In(GatherRow)
-	return x.Attrs(x.Where(x.Less(r, n), r, x.In(GatherInRows)))
+	return x.Attrs(x.Where(x.Less(r, n), r, x.K(GatherNone)))
 }
 
 // FirstRow is every row the input's first.
@@ -299,15 +301,105 @@ func FrameSamples(width, stride, back int) Attrs {
 	return x.Attrs(x.Where(x.Less(k, x.K(width/2+back)), x.K(past), inside))
 }
 
-// RelShift is a score bias of heads runs of keys a row from a table's dots
-// of heads runs of rows a row (OpHeadDots): row q's element h*keys+j the
-// dots' element h*rows + top-1-q+j, the table's row for the position q-j,
-// its row k the position top-1-k.
-func RelShift(heads, keys, rows, top int) Attrs {
+// RelRows is row q's table row at key j for a table whose row k is the
+// position top-1-k: top-1-q+j, the position q-j.
+func RelRows(top int) Attrs {
 	var x Index
-	q, col := x.In(GatherRow), x.In(GatherCol)
-	h := x.Div(col, x.K(keys))
-	j := x.Rem(col, x.K(keys), h)
-	at := x.Add(x.Mul(q, x.K(heads*rows)), x.Mul(h, x.K(rows)))
-	return x.Attrs(x.Add(at, x.Sub(x.Add(x.K(top-1), j), q)))
+	return x.Attrs(x.Sub(x.Add(x.K(top-1), x.In(GatherCol)), x.In(GatherRow)))
+}
+
+// GatherNone is the source index of a row or element no source holds: a
+// gather writes zero there.
+const GatherNone = past
+
+// staticIndex is term upto-1 of terms with the operands known holds, false
+// where it reads one it does not.
+func staticIndex(terms []Term, upto int, ops *[GatherOperands]uint32, known *[GatherOperands]bool, vals []uint32, ok []bool) (uint32, bool) {
+	for k := range upto {
+		t := terms[k]
+		var a [4]uint32
+		ok[k] = true
+		for j := range t.Fn.Arity() {
+			switch x := t.Args[j]; x.Kind {
+			case ArgIn:
+				if x.Index < 0 || x.Index >= GatherOperands {
+					return 0, false
+				}
+				a[j], ok[k] = ops[x.Index], ok[k] && known[x.Index]
+			case ArgTerm:
+				if x.Index < 0 || x.Index >= k {
+					return 0, false
+				}
+				a[j], ok[k] = vals[x.Index], ok[k] && ok[x.Index]
+			default:
+				a[j] = uint32(x.Const)
+			}
+		}
+		switch t.Fn {
+		case MapAdd:
+			vals[k] = a[0] + a[1]
+		case MapSub:
+			vals[k] = a[0] - a[1]
+		case MapMul:
+			vals[k] = a[0] * a[1]
+		case MapDiv:
+			if a[1] == 0 {
+				ok[k] = false
+			} else {
+				vals[k] = a[0] / a[1]
+			}
+		case MapMax:
+			vals[k] = max(a[0], a[1])
+		case MapMin:
+			vals[k] = min(a[0], a[1])
+		case MapLess:
+			vals[k] = 0
+			if a[0] < a[1] {
+				vals[k] = 1
+			}
+		case MapWhere:
+			vals[k] = a[2]
+			if a[0] > 0 {
+				vals[k] = a[1]
+			}
+		}
+	}
+	return vals[upto-1], ok[upto-1]
+}
+
+// GatherReads checks a row gather's reads where its index reads only the
+// row and the counts: of out rows from in rows and tables rows of tables,
+// its bound writes every row and each row written reads a row of its sources
+// or GatherNone. A row past the sources is otherwise a clamped read of the
+// last, which no gather means.
+func GatherReads(a Attrs, out, in, tables int) error {
+	if out < 1 || len(a.Expr) == 0 || a.Span < 0 || a.Span > len(a.Expr) {
+		return nil
+	}
+	var ops [GatherOperands]uint32
+	var known [GatherOperands]bool
+	ops[GatherOutRows], ops[GatherInRows] = uint32(out), uint32(in)
+	known[GatherRow], known[GatherOutRows], known[GatherInRows] = true, true, true
+	vals, ok := make([]uint32, len(a.Expr)), make([]bool, len(a.Expr))
+	written := out
+	if a.Span > 0 {
+		b, static := staticIndex(a.Expr, a.Span, &ops, &known, vals, ok)
+		if !static {
+			return nil
+		}
+		if int64(b)+1 < int64(out) {
+			return fmt.Errorf("writes %d of its %d rows", b+1, out)
+		}
+	}
+	for r := range written {
+		ops[GatherRow] = uint32(r)
+		s, static := staticIndex(a.Expr, len(a.Expr), &ops, &known, vals, ok)
+		if !static {
+			return nil
+		}
+		if s != GatherNone && int64(s) >= int64(in+tables) {
+			return fmt.Errorf("row %d reads row %d of %d", r, s, in+tables)
+		}
+	}
+	return nil
 }
