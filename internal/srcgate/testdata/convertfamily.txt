@@ -33,7 +33,6 @@
 4 convert/geometryfits.go:interleavedMRope
 1 convert/geometryfits.go:xdRope
 2 convert/gguf.go:buildGGUF
-9 convert/gguf.go:fusesQKV
 8 convert/gguf.go:sourceOf
 2 convert/granite.go:gemmaAttnScale
 1 convert/hfkimik3.go:kimiK3HF

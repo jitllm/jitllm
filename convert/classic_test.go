@@ -23,7 +23,7 @@ func TestUnfuseSplitsAFusedQKVBias(t *testing.T) {
 	e := jlm.Tensor{Role: jlm.RoleAttnQKVBias, Block: 3, Index: -1, Type: jlm.TypeF32, NDim: 1,
 		Data: data, Name: "blk.3.attn_qkv.bias"}
 	e.Dims[0] = uint64(n)
-	parts, split, err := unfuse(&e, c)
+	parts, split, err := unfuse(&e, c, func(string) bool { return false })
 	if err != nil || !split {
 		t.Fatalf("unfuse: split %v err %v", split, err)
 	}
@@ -49,7 +49,7 @@ func TestUnfuseSplitsAFusedQKVBias(t *testing.T) {
 	}
 	// A width that does not match the heads is refused rather than guessed.
 	e.Dims[0]--
-	if _, _, err := unfuse(&e, c); err == nil {
+	if _, _, err := unfuse(&e, c, func(string) bool { return false }); err == nil {
 		t.Error("a fused bias one element short was split anyway")
 	}
 }

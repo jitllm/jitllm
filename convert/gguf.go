@@ -406,7 +406,7 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 		// packing choice of the file. Once packed, a row range has no byte range
 		// and the device tier cannot slice it; here the bytes are still GGUF
 		// row-major, so a row range is a byte range and the split is three slices.
-		sub, split, uerr := unfuse(&e, c)
+		sub, split, uerr := unfuse(&e, c, func(n string) bool { _, ok := f.Get(n); return ok })
 		if uerr != nil {
 			return nil, uerr
 		}
@@ -728,16 +728,17 @@ func max32(a, b uint32) uint32 {
 // A GGUF matrix is row-major with every row a whole number of quantization
 // blocks, so a row range is a contiguous byte range -- which stops being true
 // once the container packs it.
-func unfuse(e *jlm.Tensor, c *Config) ([]jlm.Tensor, bool, error) {
+//
+// stored says whether the file holds a tensor of that name: a block that
+// stores its own attn_q or ffn_gate fuses nothing into attn_qkv or ffn_up
+// (Gemma 4's double-wide MLP is an ffn_up of twice the width beside its own
+// gate).
+func unfuse(e *jlm.Tensor, c *Config, stored func(string) bool) ([]jlm.Tensor, bool, error) {
 	if c != nil && e.Role == jlm.RoleExpUpBank && e.NDim == 3 && c.NFFNExp != 0 &&
 		e.Dims[1] == 2*uint64(c.NFFNExp) {
 		return splitGateUpBank(e, c)
 	}
-	// fusesQKV decides which archs' attn_qkv is attention's q|k|v: qwen3next's
-	// linear block uses the same name for a delta-rule projection that deltaGeom
-	// splits, and the row-count check below refuses a wrong split. nomic-bert
-	// and the C6 blocks (with a fused bias beside it) are q|k|v row ranges.
-	if c == nil || !fusesQKV(c.Arch) && !decisionHeadBlock(e, c) {
+	if c == nil {
 		return nil, false, nil
 	}
 	// A decision head's block (Laya's, d1-omni's) is nn.MultiheadAttention's
@@ -745,6 +746,15 @@ func unfuse(e *jlm.Tensor, c *Config) ([]jlm.Tensor, bool, error) {
 	// heads.
 	if decisionHeadBlock(e, c) && (e.Role == jlm.RoleAttnQKV || e.Role == jlm.RoleAttnQKVBias) {
 		return unfuseThirds(e, c)
+	}
+	// attn_qkv is attention's q|k|v on a block that attends and stores no
+	// attn_q of its own, and its rows must be the query heads and two
+	// key-value heads': a recurrent block's tensor of that name is its own
+	// projection (qwen3next's delta rule, split by its geometry).
+	q, kv := uint64(c.NHead)*uint64(c.HeadDim), uint64(c.NKVHead)*uint64(c.HeadDim)
+	if (e.Role == jlm.RoleAttnQKV || e.Role == jlm.RoleAttnQKVBias) &&
+		(!attends(c, e.Block) || stored(strings.Replace(e.Name, ".attn_qkv.", ".attn_q.", 1))) {
+		return nil, false, nil
 	}
 	if e.Role == jlm.RoleAttnQKVBias {
 		return unfuseBias(e, c)
@@ -755,7 +765,6 @@ func unfuse(e *jlm.Tensor, c *Config) ([]jlm.Tensor, bool, error) {
 	}
 	switch e.Role {
 	case jlm.RoleAttnQKV:
-		q, kv := uint64(c.NHead)*uint64(c.HeadDim), uint64(c.NKVHead)*uint64(c.HeadDim)
 		parts = []struct {
 			role jlm.Role
 			rows uint64
@@ -763,7 +772,7 @@ func unfuse(e *jlm.Tensor, c *Config) ([]jlm.Tensor, bool, error) {
 	case jlm.RoleFFNUp:
 		// Fused only when the tensor is twice the feed-forward width; every
 		// other architecture's ffn_up is exactly NFFN rows and falls through.
-		if e.NDim < 2 || e.Dims[1] != 2*uint64(c.NFFN) {
+		if e.NDim < 2 || e.Dims[1] != 2*uint64(c.NFFN) || stored(strings.Replace(e.Name, ".ffn_up.", ".ffn_gate.", 1)) {
 			return nil, false, nil
 		}
 		// swiglu takes the first half as the gate.
@@ -837,18 +846,10 @@ func falconNorms(f *meta.File, role jlm.Role) (jlm.Role, error) {
 	return role, nil
 }
 
-// fusesQKV says which architectures' attn_qkv is attention's q|k|v rather
-// than some other block's fused projection (qwen3next's delta rule).
-func fusesQKV(a Arch) bool {
-	switch a {
-	case ArchPhi3, ArchNomicBERT, ArchModernBERT, ArchPhi2, ArchStarcoder, ArchFalcon, ArchDBRX,
-		ArchBailingMoE2,
-		// glm4's q, k and v are separate tensors; its gate|up is fused, which
-		// this switch also admits.
-		ArchGLM4:
-		return true
-	}
-	return false
+// attends says block b of c attends: every block where c states no layer
+// kinds.
+func attends(c *Config, b int32) bool {
+	return len(c.LayerKinds) == 0 || b < 0 || int(b) >= len(c.LayerKinds) || c.LayerKinds[b].Attends()
 }
 
 // unfuseBias splits a fused q|k|v bias into its three parts. It is a vector,

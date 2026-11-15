@@ -16,7 +16,7 @@ import (
 // bailingmoe2Config is llama.cpp's bailingmoe2.cpp and inclusionAI's
 // BailingMoeV2ForCausalLM (the remote code Ling-mini-2.0 ships):
 //
-//	fused query_key_value, no biases          -> unfuse (fusesQKV)
+//	fused query_key_value, no biases          -> unfuse (a q|k|v of the heads' rows)
 //	per-head q/k RMSNorm before the rotary    -> FlagQKNorm
 //	NEOX rotary on rope.dimension_count       -> FlagRopeNeox, NRot (half a head)
 //	sigmoid router, expert_bias for selection -> FlagExpertSigmoid, RoleExpProbsB

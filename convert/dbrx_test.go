@@ -50,7 +50,4 @@ func TestDbrxCarriesItsClamp(t *testing.T) {
 	if r, ok := bert[jlm.RoleAttnOutNorm]; ok {
 		t.Errorf("bert's attn_output_norm became %v", r)
 	}
-	if !fusesQKV(ArchDBRX) {
-		t.Error("dbrx's attn_qkv is not split at conversion")
-	}
 }
