@@ -866,8 +866,7 @@ type RecurrentPlan struct {
 	// convolution has a bias (SSMWeights.ConvBias), the update writes x*dt
 	// along B with no key dot, D*x is added to the output, and the gated norm
 	// is RMSNorm(y*silu(z)) over NormGroups groups of the whole VHeads*VDim
-	// with a weight that wide -- or norm(y)*silu(z) where NormBeforeGate, or
-	// y*silu(z) alone where NoNorm.
+	// with a weight that wide -- or y*silu(z) alone where NoNorm.
 	SSD bool
 	// WithAttn: the block runs softmax attention beside the recurrence, on
 	// the same normed input, and the two outputs are summed before the
@@ -879,9 +878,9 @@ type RecurrentPlan struct {
 	// heads and no state beside the convolution's window over Chans channels.
 	// Wq is x, SSMWeights.Gate is B and SSMWeights.BA is C, and the block is
 	// out_proj(C * conv(B * x)).
-	ShortConv              bool
-	NormGroups             int
-	NormBeforeGate, NoNorm bool
+	ShortConv  bool
+	NormGroups int
+	NoNorm     bool
 	// TailLen is what the block's state carries per sequence after the delta
 	// rule's, inside StateLen: room for Qwen3.8-Flash-Next's n-gram
 	// predecessors and convolution history (model's recTailLen), the same on

@@ -101,9 +101,6 @@ func (m *Model) ssdMixer(b *graph.Builder, f graph.Facts, n graph.ValueID, has f
 			graph.Attrs{Eps: c.RMSEps, HeadDim: inner / groups}, nil, nil)[0]
 		return mapRow(b, "ssm.normed", graph.Attrs{Fn: graph.MapMul}, vec(jlm.RoleSSMNorm), inner, u)
 	}
-	if c.SSMNormBeforeGate {
-		return siluGated(b, "gated", z, norm(y)), nil
-	}
 	return norm(siluGated(b, "gated", z, y)), nil
 }
 

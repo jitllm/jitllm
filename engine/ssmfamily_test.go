@@ -165,9 +165,6 @@ func ssdViolations(t *testing.T) []c6Violation {
 		{"no dt bias", func(m *model.Model) func() {
 			return ssdScaled(m, jlm.RoleSSMDtBias, func(v []float32) { clear(v) })
 		}},
-		{"the norm before the gate", func(m *model.Model) func() {
-			return cfgMut(m, func(c *model.Config) { c.SSMNormBeforeGate = true })
-		}},
 		{"B and C swapped", ssdSwapBC(t)},
 	}
 }

@@ -139,10 +139,7 @@ type Config struct {
 	// SSMNormGroups is how many groups a Mamba-2 block's gated RMSNorm runs
 	// over, each of SSM.Inner/SSMNormGroups channels with its own slice of the
 	// weight: the container's SSM.Groups, as mamba_ssm and llama.cpp group it.
-	// SSMNormBeforeGate is mamba_ssm's norm_before_gate -- norm(y)*silu(z)
-	// instead of norm(y*silu(z)) -- false for every Mamba-2 that ships.
-	SSMNormGroups     int
-	SSMNormBeforeGate bool
+	SSMNormGroups int
 
 	// Sliding-window attention. SWAWindow is how many keys a local layer may
 	// attend to, counting back from the current position and including it;
@@ -366,19 +363,6 @@ func (c *Config) AttnWindow(il, pos int) (w0, an int) {
 		return an - c.SWAWindow, c.SWAWindow
 	}
 	return 0, an
-}
-
-// AttnTemp is the factor layer il's query is scaled by at position pos: one
-// everywhere but a layer with no positional encoding under Llama 4's
-// temperature tuning, where it is 1 + s*ln(1 + floor((pos+o)/f)).
-//
-// It is folded into the softmax scale rather than applied to q, which is the
-// same number since the scores are linear in q.
-func (c *Config) AttnTemp(il, pos int) float64 {
-	if c.AttnTempScale == 0 || (c.NoPEGlobal && c.RopeAt(il)) {
-		return 1
-	}
-	return 1 + c.AttnTempScale*math.Log(1+math.Floor((float64(pos)+c.AttnTempOffs)/c.AttnTempFloor))
 }
 
 // SWA reports whether layer il attends to a window rather than the whole

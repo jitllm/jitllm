@@ -2071,7 +2071,7 @@ func (s *Instance) planFor(li int) *nn.LayerPlan {
 		}
 		if g.Ssd {
 			plan.Recurrent.SSD, plan.Recurrent.NormGroups = true, c.SSMNormGroups
-			plan.Recurrent.NormBeforeGate, plan.Recurrent.NoNorm = c.SSMNormBeforeGate, l.Vector(jlm.RoleSSMNorm) == nil
+			plan.Recurrent.NoNorm = l.Vector(jlm.RoleSSMNorm) == nil
 		}
 		// A linear block has no attention, so no out-gate.
 		plan.AttnOutGate = false

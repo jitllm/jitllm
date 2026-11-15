@@ -68,7 +68,6 @@ func denseFixtures() []struct {
 			c := m.Cfg
 			return !c.RopeNeox && !c.NoPEGlobal && c.AttnTempScale == 0.5 &&
 				c.AttnTempFloor == 4 && c.AttnTempOffs == 0 && c.YarnFactor == 16 &&
-				c.AttnTemp(0, 4) != 1 && c.AttnTemp(2, 8) != 1 && c.AttnTemp(1, 3) == 1 &&
 				m.Rope.Scale > 1.1 && m.Rope.Scale < 1.13
 		}},
 		{"synth-olmo2-gqa", func(m *model.Model) bool {
