@@ -547,7 +547,7 @@ func TestDeepseekRefusals(t *testing.T) {
 				[]uint64{dsEmbd}, f32Bytes(dsEmbd, 6)}
 			m.tensors[p+"eh_proj.weight"] = &synthTensor{safetensors.F32,
 				[]uint64{dsEmbd, 2 * dsEmbd}, f32Bytes(2*dsEmbd*dsEmbd, 7)}
-		}, "is a prediction block's tensor in block 3, and the prediction blocks are 3..3"},
+		}, "is a prediction block's tensor in block 3, and the model declares no prediction block"},
 		// The two query forms, each with the other's weights.
 		{"two-step weights and a null rank", func(m *synthModel) {
 			m.cfg["q_lora_rank"] = nil
@@ -594,11 +594,12 @@ func TestDeepseekRefusals(t *testing.T) {
 			"4 experts in 2 groups, 3 used"},
 		{"no routed experts", func(m *synthModel) { delete(m.cfg, "n_routed_experts") },
 			"expert_count reads \"n_routed_experts\", which is absent"},
-		// A scaling this architecture does not implement is still refused by
-		// name: consuming yarn must not open the door to the rest.
+		// The file states the one scaling its attention is gated against, yarn,
+		// so a complete llama3 object is refused by name.
 		{"llama3 rope scaling", func(m *synthModel) {
-			m.cfg["rope_scaling"] = map[string]any{"rope_type": "llama3", "factor": 32.0}
-		}, "llama3 states no low_freq_factor"},
+			m.cfg["rope_scaling"] = map[string]any{"rope_type": "llama3", "factor": 32.0,
+				"low_freq_factor": 1.0, "high_freq_factor": 4.0, "original_max_position_embeddings": 8192.0}
+		}, "rope scaling llama3 is not implemented"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

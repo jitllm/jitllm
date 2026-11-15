@@ -68,6 +68,13 @@ type mjConfig struct {
 	// RopeScaling is the rope scaling object (rope_parameters or
 	// rope_scaling), null for none.
 	RopeScaling string `json:"rope_scaling"`
+	// YarnLogMultiplier is the coefficient of ln(factor) the attention's
+	// softmax scale takes where a yarn scaling applies, as a GGUF's
+	// rope.scaling.yarn_log_multiplier: absent for none.
+	YarnLogMultiplier string `json:"yarn_log_multiplier"`
+	// RopeMethods lists the scaling methods the class's attention is gated
+	// against; absent, every method the reader implements is accepted.
+	RopeMethods []string `json:"rope_methods"`
 	// Window is a sliding window: its size, and whether it is in use.
 	Window *mjWindow `json:"window"`
 	// Flags states named graph features (mjFlags), each a boolean.
@@ -1147,8 +1154,19 @@ func (mj *modelJSON) configIn(env exprEnv, c *hfConfig, names []string) (*Config
 		if err != nil {
 			return nil, err
 		}
-		if err := mjRopeScaling(cfg, c, v, renv); err != nil {
+		if err := mjRopeScaling(cfg, c, v, mj.Config.RopeMethods, renv); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", c.path, err)
+		}
+		if mj.Config.YarnLogMultiplier != "" && cfg.YarnFactor > 1 {
+			m, err := eval("yarn_log_multiplier", mj.Config.YarnLogMultiplier)
+			if err != nil {
+				return nil, err
+			}
+			f, ok := m.(float64)
+			if !ok {
+				return nil, fmt.Errorf("convert: %s: yarn_log_multiplier is %s, not a number", c.path, exprKind(m))
+			}
+			cfg.YarnLogMul = float32(f)
 		}
 	}
 	if err := mj.mixtureCovers(cfg, names); err != nil {
@@ -1428,7 +1446,7 @@ func mjRotaryLayersOf(cfg *Config, r *mjRotaryLayers, eval func(what, src string
 // yarn states its factor, original context, correction range and magnitude
 // as transformers computes them (hfYarnApply); a method not implemented is
 // refused by name.
-func mjRopeScaling(cfg *Config, c *hfConfig, v any, env exprEnv) error {
+func mjRopeScaling(cfg *Config, c *hfConfig, v any, methods []string, env exprEnv) error {
 	if v == nil {
 		return nil
 	}
@@ -1439,6 +1457,9 @@ func mjRopeScaling(cfg *Config, c *hfConfig, v any, env exprEnv) error {
 	t := obj["rope_type"]
 	if t == nil {
 		t = obj["type"]
+	}
+	if s, ok := t.(string); ok && s != "default" && len(methods) > 0 && !slices.Contains(methods, s) {
+		return fmt.Errorf("rope scaling %v is not implemented: %w", t, ErrNotImplemented)
 	}
 	switch t {
 	case nil, "default":

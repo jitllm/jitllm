@@ -1507,6 +1507,7 @@ func deepseekHFConfigFFN(c *hfConfig, names []string, ffn string) (*Config, erro
 		return nil, err
 	}
 	hfYarnApply(yarn, cfg)
+	hfYarnScoreScale(yarn, cfg)
 	return cfg, nil
 }
 
@@ -1808,10 +1809,9 @@ func hfYarnConsume(c *hfConfig) (*hfYarn, error) {
 // with mscale(f, k) = 0.1*k*ln(f) + 1. So a DeepSeek carrying mscale ==
 // mscale_all_dim (every shipped one) leaves cos and sin at exactly one.
 //
-// The DeepSeek family's attention classes (DeepseekV2/V3, Glm4MoeLite)
-// multiply the softmax scale by mscale(f, mscale_all_dim) squared
-// (yarn_apply_mscale) whatever the rotary did; that is YarnLogMul, set only for
-// ArchDeepseek2. No other class here scales the score.
+// A class whose attention multiplies the softmax scale by a YaRN magnitude
+// squared (DeepSeek's yarn_apply_mscale) states it as YarnLogMul: a model.json
+// by its yarn_log_multiplier, hfYarnScoreScale for the Go reader that remains.
 func hfYarnApply(y *hfYarn, cfg *Config) {
 	if y == nil || y.Factor <= 1 {
 		return
@@ -1844,7 +1844,12 @@ func hfYarnApply(y *hfYarn, cfg *Config) {
 	default:
 		cfg.AttnFactor *= float32(ms(1))
 	}
-	if cfg.Arch == ArchDeepseek2 && set(y.MScaleAllDim) {
+}
+
+// hfYarnScoreScale states the softmax scale's YaRN coefficient,
+// 0.1*mscale_all_dim, for a class whose attention applies it.
+func hfYarnScoreScale(y *hfYarn, cfg *Config) {
+	if y != nil && y.Factor > 1 && y.MScaleAllDim != nil && *y.MScaleAllDim != 0 {
 		cfg.YarnLogMul = float32(0.1 * *y.MScaleAllDim)
 	}
 }

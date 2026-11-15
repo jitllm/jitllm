@@ -1,11 +1,13 @@
 {
   "classes": ["DeepseekV2ForCausalLM"],
   "config": {
+    "defaults": {"max_position_embeddings": 2048, "q_lora_rank": 1536, "n_shared_experts": 2, "first_k_dense_replace": 0, "norm_topk_prob": false, "routed_scaling_factor": 1.0, "rms_norm_eps": 1e-6},
+    "rope_methods": ["yarn"],
     "arch": "deepseek2",
     "keys": {
       "block_count":                      {"uint": "num_hidden_layers + (num_nextn_predict_layers ?? 0)"},
       "nextn_predict_layers":             {"uint": "num_nextn_predict_layers ?? 0"},
-      "context_length":                   {"uint": "max_position_embeddings ?? 2048"},
+      "context_length":                   {"uint": "max_position_embeddings"},
       "embedding_length":                 {"uint": "hidden_size"},
       "feed_forward_length":              {"uint": "intermediate_size"},
       "attention.head_count":             {"uint": "num_attention_heads"},
@@ -16,16 +18,16 @@
       "attention.value_length_mla":       {"uint": "v_head_dim"},
       "attention.kv_lora_rank":           {"uint": "kv_lora_rank"},
       "attention.q_lora_rank":            {"uint": "q_lora_rank ?? 0"},
-      "attention.layer_norm_rms_epsilon": {"float": "rms_norm_eps ?? 1e-6"},
+      "attention.layer_norm_rms_epsilon": {"float": "rms_norm_eps"},
       "rope.dimension_count":             {"uint": "qk_rope_head_dim"},
       "rope.freq_base":                   {"float": "rope_parameters.rope_theta ?? rope_theta ?? 10000"},
       "expert_count":                     {"uint": "n_routed_experts"},
       "expert_used_count":                {"uint": "num_experts_per_tok"},
       "expert_feed_forward_length":       {"uint": "moe_intermediate_size"},
-      "expert_shared_count":              {"uint": "n_shared_experts ?? 0"},
+      "expert_shared_count":              {"uint": "n_shared_experts"},
       "leading_dense_block_count":        {"uint": "first_k_dense_replace ?? 0"},
-      "expert_weights_norm":              {"bool": "norm_topk_prob ?? true"},
-      "expert_weights_scale":             {"float": "routed_scaling_factor ?? 1"},
+      "expert_weights_norm":              {"bool": "norm_topk_prob ?? false"},
+      "expert_weights_scale":             {"float": "routed_scaling_factor"},
       "expert_group_count":               {"uint": "n_group ?? 0"},
       "expert_group_used_count":          {"uint": "topk_group ?? 0"}
     },
@@ -33,6 +35,7 @@
     "head": {"tensor": "lm_head.weight", "tied": "tie_word_embeddings ?? false"},
     "activation": "hidden_act ?? 'silu'",
     "rope_scaling": "rope_parameters ?? rope_scaling",
+    "yarn_log_multiplier": "0.1 * (rope_parameters.mscale_all_dim ?? rope_scaling.mscale_all_dim ?? 0)",
     "require": [
       {"that": "(num_key_value_heads ?? (num_attention_heads)) == num_attention_heads",
        "else": "num_key_value_heads differs from the attention heads: latent attention shares one key-value latent across every head"}

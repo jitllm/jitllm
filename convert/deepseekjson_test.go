@@ -28,8 +28,8 @@ func TestDeepseekThroughTheLibrary(t *testing.T) {
 	oneStep := []string{"lm_head.weight", blk(0, "mlp.gate_proj.weight"), blk(0, "self_attn.q_proj.weight"),
 		blk(1, "self_attn.q_proj.weight"), blk(1, "mlp.gate.weight"), blk(1, "mlp.experts.0.gate_proj.weight")}
 	v3, v2 := lib["DeepseekV3ForCausalLM"], lib["DeepseekV2ForCausalLM"]
-	if v3 == nil || v2 == nil || lib["Glm4MoeLiteForCausalLM"] != v3 {
-		t.Fatal("the library lacks the deepseek classes, or Glm4MoeLiteForCausalLM is not V3's")
+	if v3 == nil || v2 == nil || lib["Glm4MoeLiteForCausalLM"] == nil {
+		t.Fatal("the library lacks a deepseek class")
 	}
 	cfg, err := v3.config(hfConfigOf(t, js), twoStep)
 	if err != nil {
