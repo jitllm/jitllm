@@ -1372,6 +1372,7 @@ fault	engine/placeset.go	"model: block %d's history would not come home"
 fault	engine/placeset.go	"model: block %d's history would not move to the device"
 input	engine/placeset.go	"model: no device attached (SetDevice first)"
 refusal	engine/plerun.go	"block %d's history %d appends values of their own: a history past a block's rows' holds its keys only"	a history past the rows' binds a key table alone (nn.HistTable); one with values of their own needs a value table on both tiers
+bug	engine/plerun.go	"model: the input rows write side inputs on the CPU (%v) and not alike on a card"
 input	engine/prefill.go	"model: Prefill called with no tokens"
 input	engine/prefill.go	"model: PrefillMixed: span %d is %d floats, not a multiple of n_embd %d"
 input	engine/prefill.go	"model: PrefillMixed: span %d names %d token ids for %d rows"
@@ -1454,6 +1455,7 @@ input	engine/towerrun.go	"model: the model has no vision tower"
 context	engine/towerrun.go	"model: the tower did not compose: %w"
 limit	engine/towerrun.go	"model: the tower's block %d does not form on the device"	the device declines for room, its reason recorded
 bug	engine/towerrun.go	"model: the tower's block %d does not run on the CPU: %v"
+input	engine/towerrun.go	"model: the tower's block %d reads its rows' windows and the tower states none"
 context	engine/towerrun.go	"model: the tower's blocks: %w"
 fault	engine/towerrun.go	"the tower's block %d did not run on its device"
 limit	engine/towerrun.go	"the tower's blocks turn by the picture's grid on a device that holds no grid table"	the grid table does not fit the card
