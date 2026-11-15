@@ -77,6 +77,15 @@ type mjConfig struct {
 	Gating string `json:"gating"`
 	// RotaryLayers states which layers rotate.
 	RotaryLayers *mjRotaryLayers `json:"rotary_layers"`
+	// Asserts are what the class holds of its config: a condition that must
+	// be true, and the refusal where it is not.
+	Asserts []mjAssert `json:"asserts"`
+}
+
+// mjAssert is one condition a config must meet, and what its refusal says.
+type mjAssert struct {
+	That string `json:"that"`
+	Else string `json:"else"`
 }
 
 // mjRotaryLayers is which layers rotate, as transformers states it for the
@@ -280,6 +289,14 @@ func parseModelJSON(b []byte, name string) (*modelJSON, error) {
 		var v any
 		if strings.ContainsAny(k, ".$") || json.Unmarshal(raw, &v) != nil {
 			return nil, fmt.Errorf("convert: %s: default %q is not a key of the root and a value", name, k)
+		}
+	}
+	for i, a := range mj.Config.Asserts {
+		if a.Else == "" {
+			return nil, fmt.Errorf("convert: %s: assert %d states no refusal", name, i)
+		}
+		if _, err := parseExpr(a.That); err != nil {
+			return nil, fmt.Errorf("convert: %s: assert %d: %w", name, i, err)
 		}
 	}
 	if r := mj.Config.RotaryLayers; r != nil && (r.Each == "" || r.Every == "") {
@@ -897,6 +914,20 @@ func (mj *modelJSON) configIn(env exprEnv, c *hfConfig, names []string) (*Config
 				out[i] = int32(u)
 			}
 			kvs[ns+k] = meta.MakeInt32s(out)
+		}
+	}
+
+	for i, a := range mj.Config.Asserts {
+		v, err := eval(fmt.Sprintf("assert %d", i), a.That)
+		if err != nil {
+			return nil, err
+		}
+		ok, isBool := v.(bool)
+		if !isBool {
+			return nil, fmt.Errorf("convert: %s: %s: assert %d is %s, not a boolean", c.path, mj.name, i, exprKind(v))
+		}
+		if !ok {
+			return nil, fmt.Errorf("convert: %s: %s: %s: %w", c.path, mj.name, a.Else, ErrNotImplemented)
 		}
 	}
 

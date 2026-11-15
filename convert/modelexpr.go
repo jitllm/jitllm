@@ -2,6 +2,7 @@ package convert
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 )
@@ -9,9 +10,10 @@ import (
 // A model.json expression reads a config.json: numbers, strings, booleans,
 // lists, null, paths into the config (a.b.c from the file's root, $.a.b from
 // its top), arithmetic (+ - * /), comparisons (== != < <= > >=, in), logic
-// (&& || !) and a ?? b, which is b where a is absent or null. There are no loops, and
-// calls (exp, log, sqrt, tanh) are a tensor map's alone, so an expression sizes
-// nothing (RULE 9), and its depth is bounded.
+// (&& || !), a ?? b, which is b where a is absent or null, c ? a : b, a ** b,
+// and a key of a parenthesised value, (a ?? b).key. There are no loops, and
+// calls (exp, log, sqrt, tanh) are a tensor map's alone, bar uniform(x), so an
+// expression sizes nothing (RULE 9), and its depth is bounded.
 //
 // An absent key is null; null in arithmetic or an ordering is an error that
 // names the key, so a default is written, never assumed.
@@ -48,7 +50,7 @@ func parseExpr(src string) (*exprNode, error) {
 		return nil, err
 	}
 	p := &exprParser{src: src, toks: toks}
-	n, err := p.coalesce()
+	n, err := p.ternary()
 	if err != nil {
 		return nil, err
 	}
@@ -65,6 +67,17 @@ func lexExpr(src string) ([]string, error) {
 		switch {
 		case c == ' ' || c == '\t' || c == '\n':
 			i++
+		case c == '.' && len(toks) > 0 && (toks[len(toks)-1] == ")" || toks[len(toks)-1] == "]"):
+			j := i + 1
+			for j < len(src) && (src[j] == '_' || src[j] == '.' || src[j] >= 'a' && src[j] <= 'z' ||
+				src[j] >= 'A' && src[j] <= 'Z' || src[j] >= '0' && src[j] <= '9') {
+				j++
+			}
+			if j == i+1 {
+				return nil, fmt.Errorf("expression %q: a . wants a key", src)
+			}
+			toks = append(toks, src[i:j])
+			i = j
 		case c == '\'':
 			j := strings.IndexByte(src[i+1:], '\'')
 			if j < 0 {
@@ -91,13 +104,13 @@ func lexExpr(src string) ([]string, error) {
 		default:
 			if i+1 < len(src) {
 				switch two := src[i : i+2]; two {
-				case "??", "||", "&&", "==", "!=", "<=", ">=":
+				case "??", "||", "&&", "==", "!=", "<=", ">=", "**":
 					toks = append(toks, two)
 					i += 2
 					continue
 				}
 			}
-			if !strings.ContainsRune("+-*/<>!()[],", rune(c)) {
+			if !strings.ContainsRune("+-*/<>!()[],?:", rune(c)) {
 				return nil, fmt.Errorf("expression %q: %q is not in the language", src, c)
 			}
 			toks = append(toks, string(c))
@@ -153,6 +166,32 @@ func (p *exprParser) coalesce() (*exprNode, error) {
 	return p.binary(p.or, "??")
 }
 
+// ternary is c ? a : b, the loosest operator.
+func (p *exprParser) ternary() (*exprNode, error) {
+	c, err := p.coalesce()
+	if err != nil || p.peek() != "?" {
+		return c, err
+	}
+	p.i++
+	if err := p.enter(); err != nil {
+		return nil, err
+	}
+	defer func() { p.depth-- }()
+	a, err := p.ternary()
+	if err != nil {
+		return nil, err
+	}
+	if p.peek() != ":" {
+		return nil, fmt.Errorf("expression %q: a ? wants a : , not %q", p.src, p.peek())
+	}
+	p.i++
+	b, err := p.ternary()
+	if err != nil {
+		return nil, err
+	}
+	return &exprNode{op: "?:", args: []*exprNode{c, a, b}}, nil
+}
+
 func (p *exprParser) or() (*exprNode, error)  { return p.binary(p.and, "||") }
 func (p *exprParser) and() (*exprNode, error) { return p.binary(p.not, "&&") }
 
@@ -194,7 +233,7 @@ func (p *exprParser) prod() (*exprNode, error) { return p.binary(p.unary, "*", "
 
 func (p *exprParser) unary() (*exprNode, error) {
 	if p.peek() != "-" {
-		return p.atom()
+		return p.pow()
 	}
 	p.i++
 	if err := p.enter(); err != nil {
@@ -208,6 +247,33 @@ func (p *exprParser) unary() (*exprNode, error) {
 	return &exprNode{op: "neg", args: []*exprNode{x}}, nil
 }
 
+// pow is a ** b, right-associative and tighter than a unary minus on its left.
+func (p *exprParser) pow() (*exprNode, error) {
+	l, err := p.atom()
+	if err != nil || p.peek() != "**" {
+		return l, err
+	}
+	p.i++
+	if err := p.enter(); err != nil {
+		return nil, err
+	}
+	defer func() { p.depth-- }()
+	r, err := p.unary()
+	if err != nil {
+		return nil, err
+	}
+	return &exprNode{op: "**", args: []*exprNode{l, r}}, nil
+}
+
+// member follows a parenthesised value or a list with the keys it is read by.
+func (p *exprParser) member(n *exprNode) *exprNode {
+	for strings.HasPrefix(p.peek(), ".") {
+		n = &exprNode{op: "member", str: p.peek()[1:], args: []*exprNode{n}}
+		p.i++
+	}
+	return n
+}
+
 func (p *exprParser) atom() (*exprNode, error) {
 	t := p.peek()
 	if t == "" {
@@ -216,7 +282,7 @@ func (p *exprParser) atom() (*exprNode, error) {
 	p.i++
 	switch {
 	case t == "(":
-		x, err := p.coalesce()
+		x, err := p.ternary()
 		if err != nil {
 			return nil, err
 		}
@@ -225,6 +291,9 @@ func (p *exprParser) atom() (*exprNode, error) {
 		}
 		p.i++
 		x.paren = true
+		if strings.HasPrefix(p.peek(), ".") {
+			return p.member(x), nil
+		}
 		return x, nil
 	case t == "[":
 		n := &exprNode{op: "list"}
@@ -235,14 +304,14 @@ func (p *exprParser) atom() (*exprNode, error) {
 				}
 				p.i++
 			}
-			x, err := p.coalesce()
+			x, err := p.ternary()
 			if err != nil {
 				return nil, err
 			}
 			n.args = append(n.args, x)
 		}
 		p.i++
-		return n, nil
+		return p.member(n), nil
 	case t[0] == '\'':
 		return &exprNode{op: "str", str: t[1 : len(t)-1]}, nil
 	case t == "true" || t == "false":
@@ -278,7 +347,7 @@ func (p *exprParser) atom() (*exprNode, error) {
 					}
 					p.i++
 				}
-				x, err := p.coalesce()
+				x, err := p.ternary()
 				if err != nil {
 					return nil, err
 				}
@@ -334,7 +403,32 @@ func evalMJ(n *exprNode, env exprEnv) (any, error) {
 			}
 		}
 		return l, nil
+	case "?:":
+		c, err := evalBool(n.args[0], env)
+		if err != nil {
+			return nil, err
+		}
+		if c {
+			return evalMJ(n.args[1], env)
+		}
+		return evalMJ(n.args[2], env)
+	case "member":
+		v, err := evalMJ(n.args[0], env)
+		if err != nil {
+			return nil, err
+		}
+		for _, k := range strings.Split(n.str, ".") {
+			m, ok := v.(map[string]any)
+			if !ok {
+				return nil, nil
+			}
+			v = m[k]
+		}
+		return v, nil
 	case "call":
+		if n.str == "uniform" && len(n.args) == 1 {
+			return evalUniform(n.args[0], env)
+		}
 		return nil, fmt.Errorf("%s(): calls are a tensor map's, not a config's", n.str)
 	case "&&", "||":
 		l, err := evalBool(n.args[0], env)
@@ -388,6 +482,12 @@ func evalMJ(n *exprNode, env exprEnv) (any, error) {
 		return nil, err
 	}
 	switch n.op {
+	case "**":
+		v := math.Pow(l, r)
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return nil, fmt.Errorf("%s: %g ** %g is not a number", exprText(n), l, r)
+		}
+		return v, nil
 	case "+":
 		return l + r, nil
 	case "-":
@@ -409,6 +509,30 @@ func evalMJ(n *exprNode, env exprEnv) (any, error) {
 		return l >= r, nil
 	}
 	return nil, fmt.Errorf("operator %q", n.op)
+}
+
+// evalUniform is uniform(x): a value, or the one value every entry of a
+// per-layer list shares. A list whose entries differ is refused, as the
+// container carries one value for the model.
+func evalUniform(n *exprNode, env exprEnv) (any, error) {
+	v, err := evalMJ(n, env)
+	if err != nil {
+		return nil, err
+	}
+	list, ok := v.([]any)
+	if !ok {
+		return v, nil
+	}
+	if len(list) == 0 {
+		return nil, fmt.Errorf("%s: uniform of an empty list", exprText(n))
+	}
+	for _, x := range list[1:] {
+		if eq, err := exprEqual(x, list[0]); err != nil || !eq {
+			return nil, fmt.Errorf("%s: a per-layer list %v whose entries differ, and the container "+
+				"carries one value: %w", exprText(n), list, ErrNotImplemented)
+		}
+	}
+	return list[0], nil
 }
 
 func evalNum(n *exprNode, env exprEnv) (float64, error) {

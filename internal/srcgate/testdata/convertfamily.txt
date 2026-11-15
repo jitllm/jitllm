@@ -40,9 +40,6 @@
 1 convert/hfbitnet.go:bitnetHFConfig
 1 convert/hfkimik3.go:kimiK3HF
 1 convert/hfkimik3.go:kimiK3HFConfig
-1 convert/hfmoefamily.go:hardcodesSoftmax
-1 convert/hfmoefamily.go:hunyuanHF
-1 convert/hfmoefamily.go:hunyuanHFConfig
 1 convert/hfphimoe.go:phimoeHF
 1 convert/hfphimoe.go:phimoeHFConfig
 1 convert/kimik3.go:kimiK3Tensors
@@ -55,13 +52,10 @@
 4 convert/qwen35.go:qwen35Of
 4 convert/revision.go:StateRevision
 9 convert/roles.go:retarget
-2 convert/safetensors_dense.go:ministral3HF
-1 convert/safetensors_dense.go:olmo2HFConfig
-2 convert/safetensors_dense.go:olmo3HF
 1 convert/safetensors.go:deepseek2HF
 1 convert/safetensors.go:deepseekHFConfigFFN
 3 convert/safetensors.go:hardcodesSigmoid
-12 convert/safetensors.go:hfArchTable
+8 convert/safetensors.go:hfArchTable
 1 convert/safetensors.go:hfYarnApply
 1 convert/safetensors.go:kimiLinearHF
 1 convert/safetensors.go:kimiLinearHFConfig

@@ -27,6 +27,8 @@ func statedGraphModels() []string {
 		"synth-gemma", "tiny-random-GemmaForCausalLM",
 		"synth-phi3", "tiny-random-Phi3ForCausalLM", "tiny-random-phi3",
 		"synth-hf-arcee", "synth-apertus-hf", "synth-hf-olmo2", "synth-hf-exaone4",
+		"synth-hf-olmo3", "synth-olmo3-af-hf", "synth-hf-ministral3", "synth-mistral3-af-hf",
+		"synth-hunyuan-hf", "synth-hunyuanmoe-hf",
 		"tiny-qwen3moe-hf", "synth-qwen2moe-hf", "synth-mixtral", "synth-hf-mixtral-swa", "tiny-random-OlmoeForCausalLM",
 		"synth-dots1-hf", "synth-ernie45moe-hf", "synth-glm4moe-hf",
 		// GGUFs of the architectures the library's graphs state.
