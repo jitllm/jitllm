@@ -686,13 +686,13 @@ func (g *devTier) pageInHold(li, lo, hi int) bool {
 // next block is not resident, since a submission names its blocks' buffers:
 // under the MRU policy that is one submission for the pinned prefix and one
 // per streamed block, each one host/device crossing.
-func (g *devTier) submit(sid uint64, bs *blockScratch, lo, hi, pos int, x, cs, csSWA []float32, head *nn.Head) bool {
+func (g *devTier) submit(sid uint64, bs *blockScratch, lo, hi, pos int, x []float32, cs nn.RopeTables, head *nn.Head) bool {
 	if lo >= hi {
 		// An empty range, with or without a head: layersOnce owns that rule.
 		if head != nil && !g.headHold(hi, lo, hi, true) {
 			return false
 		}
-		ok := g.layersOnce(sid, bs, lo, hi, pos, x, cs, csSWA, head)
+		ok := g.layersOnce(sid, bs, lo, hi, pos, x, cs, head)
 		if head != nil {
 			g.headLetGo()
 		}
@@ -740,7 +740,7 @@ func (g *devTier) submit(sid uint64, bs *blockScratch, lo, hi, pos int, x, cs, c
 		// should be in flight during layersOnce, as an early EnsurePage into
 		// the frame pool (jlm reads, it does not map).
 		t0 := time.Now()
-		ok := g.layersOnce(sid, bs, li, end, pos, x, cs, csSWA, h)
+		ok := g.layersOnce(sid, bs, li, end, pos, x, cs, h)
 		if h != nil {
 			g.headLetGo()
 		}
@@ -756,7 +756,7 @@ func (g *devTier) submit(sid uint64, bs *blockScratch, lo, hi, pos int, x, cs, c
 		li = end
 	}
 	if apart {
-		return g.submit(sid, bs, hi, hi, pos, x, cs, csSWA, head)
+		return g.submit(sid, bs, hi, hi, pos, x, cs, head)
 	}
 	return true
 }

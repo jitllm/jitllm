@@ -2,7 +2,11 @@
 
 package gpu
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/jitllm/jitllm/nn"
+)
 
 // TestATowerIsBuiltForItsPicture places a tower whose largest grid is 65536
 // rows -- HunyuanOCR's -- on a 256 MB card and encodes pictures of three sizes
@@ -51,7 +55,7 @@ func TestATowerIsBuiltForItsPicture(t *testing.T) {
 		if !g.ReserveRows(0, n) {
 			t.Fatalf("a picture of %d rows refused: %s", n, g.Err())
 		}
-		if !g.Layers(0, blocks, 0, n, make([]float32, n*p.NEmbd), cs, nil, nil) {
+		if !g.Layers(0, blocks, 0, n, make([]float32, n*p.NEmbd), nn.RopeTables{cs}, nil) {
 			t.Fatalf("a picture of %d rows did not run: %s", n, g.Err())
 		}
 	}

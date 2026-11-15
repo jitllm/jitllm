@@ -1332,13 +1332,14 @@ type blockScratch struct {
 	// instNoRoom says a composed instance at the scratch's rows did not fit
 	// the budget (promptInst): the reserved width narrows (fitReserved).
 	instNoRoom bool
-	// csSWA is the local layers' rotary table, allocated only for an
-	// architecture that trains two bases (LayerPlan.SWAPeriod). nil elsewhere,
-	// which is what keeps ropeTable a nil check for every other model.
-	csSWA backend.Buf
-	// ropeTab and ropeTabSWA are the per-model folded planes (nn.Rope.TabPlanes)
-	// the composer's rotary tables read, uploaded once (initRopePlanes).
-	ropeTab, ropeTabSWA backend.Buf
+	// csAt is the model's rotary table i for i past the first (cs is the
+	// first), allocated for each table the plan carries (LayerPlan.RopeTabs).
+	csAt [nn.MaxRopeTables]backend.Buf
+	// ropeTab and ropeTabAt are the per-model folded planes (nn.Rope.TabPlanes)
+	// the composer's rotary tables read, the first's and each past it,
+	// uploaded once (initRopePlanes).
+	ropeTab   backend.Buf
+	ropeTabAt [nn.MaxRopeTables]backend.Buf
 	// ropeTabAxes and rposAxes are what the composer's table over several
 	// position axes reads (nn.LayerPlan.RopeTabAxes): its planes, and the
 	// live row count then each row's four positions.
@@ -1372,11 +1373,12 @@ type blockScratch struct {
 	gridPos, gridReq, gridPlanes backend.Buf
 	// req is a call's request words (nn.RequestDevice), read where a block
 	// reads composer.TableRequest.
-	req             backend.Buf
-	rec             nn.RecurrentPlan
-	hx, hcs, hcsSWA []float32
-	hraw            []byte
-	hout            []float32
+	req     backend.Buf
+	rec     nn.RecurrentPlan
+	hx, hcs []float32
+	hcsAt   [nn.MaxRopeTables][]float32
+	hraw    []byte
+	hout    []float32
 }
 
 // PrepLayer is prepLayerFor for the zero session: a caller that never attached.
@@ -2325,7 +2327,7 @@ func nanFill(n int) []byte {
 // Nothing else writes bs.cs, so this deliberately un-poisons it under
 // WithPoisonScratch.
 func (g *devTier) initRopePlanes(bs *blockScratch, p *nn.LayerPlan, rows int) error {
-	if gridded(p) || p.NRot <= 0 || len(p.RopeTab) == 0 {
+	if gridded(p) || p.NRot <= 0 || len(p.RopeTabs) == 0 || len(p.RopeTabs[0]) == 0 {
 		return nil
 	}
 	up := func(dst *backend.Buf, v []float32) error {
@@ -2336,16 +2338,18 @@ func (g *devTier) initRopePlanes(bs *blockScratch, p *nn.LayerPlan, rows int) er
 		*dst = b
 		return b.Write(f32b(v))
 	}
-	if err := up(&bs.ropeTab, p.RopeTab); err != nil {
+	if err := up(&bs.ropeTab, p.RopeTabs[0]); err != nil {
 		return err
 	}
-	if p.SWAPeriod > 0 && len(p.RopeTabSWA) > 0 {
-		if err := up(&bs.ropeTabSWA, p.RopeTabSWA); err != nil {
-			return err
+	for i := 1; i < min(len(p.RopeTabs), nn.MaxRopeTables); i++ {
+		if len(p.RopeTabs[i]) > 0 {
+			if err := up(&bs.ropeTabAt[i], p.RopeTabs[i]); err != nil {
+				return err
+			}
 		}
 	}
 	z := make([]byte, rows*p.NRot*4)
-	for _, t := range []backend.Buf{bs.cs, bs.csSWA} {
+	for _, t := range append([]backend.Buf{bs.cs}, bs.csAt[1:]...) {
 		if t == nil {
 			continue
 		}
@@ -2478,8 +2482,8 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 		bs.arows, _ = visionChunk(rows, p.NHead, bs.sstride, bs.qtile, bs.atile, g.planeBudget())
 	}
 	al(&bs.cs, rows*p.RopeW()*4)
-	if p.SWAPeriod > 0 {
-		al(&bs.csSWA, rows*p.RopeW()*4)
+	for i := 1; i < min(len(p.RopeTabs), nn.MaxRopeTables); i++ {
+		al(&bs.csAt[i], rows*p.RopeW()*4)
 	}
 	if err == nil {
 		err = g.initRopePlanes(bs, p, rows)
@@ -2556,8 +2560,8 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 	}
 	bs.hx = make([]float32, rows*p.ResidW())
 	bs.hcs = make([]float32, rows*p.RopeW())
-	if p.SWAPeriod > 0 {
-		bs.hcsSWA = make([]float32, rows*p.RopeW())
+	for i := 1; i < min(len(p.RopeTabs), nn.MaxRopeTables); i++ {
+		bs.hcsAt[i] = make([]float32, rows*p.RopeW())
 	}
 	bs.hraw = make([]byte, rows*p.ResidW()*4)
 	bs.hout = unsafe.Slice((*float32)(unsafe.Pointer(&bs.hraw[0])), rows*p.ResidW())
@@ -2971,8 +2975,8 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 }
 
 // Layers is layersFor for the zero session: a caller that never attached.
-func (g *devTier) Layers(lo, hi, pos, n int, x, cs, csSWA []float32, head *nn.Head) bool {
-	return g.layersFor(0, lo, hi, pos, n, x, cs, csSWA, head)
+func (g *devTier) Layers(lo, hi, pos, n int, x []float32, cs nn.RopeTables, head *nn.Head) bool {
+	return g.layersFor(0, lo, hi, pos, n, x, cs, head)
 }
 
 // layersFor runs blocks [lo, hi) at position pos as one submission.
@@ -2985,13 +2989,13 @@ func (g *devTier) Layers(lo, hi, pos, n int, x, cs, csSWA []float32, head *nn.He
 //
 // It runs in session sid's view of the device, holding a lane for the call
 // (devsess.go); a call reached from inside another keeps the lane it holds.
-func (g *devTier) layersFor(sid uint64, lo, hi, pos, n int, x, cs, csSWA []float32, head *nn.Head) bool {
+func (g *devTier) layersFor(sid uint64, lo, hi, pos, n int, x []float32, cs nn.RopeTables, head *nn.Head) bool {
 	v := g.as(sid)
 	if v == nil {
 		return false
 	}
 	defer v.done()
-	ok := v.layersCall(sid, lo, hi, pos, n, x, cs, csSWA, head)
+	ok := v.layersCall(sid, lo, hi, pos, n, x, cs, head)
 	v.dropEmbed()
 	return ok
 }
@@ -3000,7 +3004,7 @@ func (g *devTier) layersFor(sid uint64, lo, hi, pos, n int, x, cs, csSWA []float
 // for exactly one Layers call: a call that refuses before submitting leaves the
 // caller to fill x, and a surviving promise would be gathered into a later
 // token's x.
-func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []float32, head *nn.Head) bool {
+func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x []float32, cs nn.RopeTables, head *nn.Head) bool {
 	// Fault injection, present only in a `jitllmfault` build; see tier/fault.go.
 	// In a release build injectedFail is `return false` and inlines away.
 	if g.injectedFail() {
@@ -3012,7 +3016,7 @@ func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []floa
 	if l := g.layers[lo]; lo < hi && l != nil && l.nonCausal && g.lane != g.lane0 {
 		v0 := g.borrowLane0()
 		g.mu.Unlock()
-		ok := v0.layersCall(sid, lo, hi, pos, n, x, cs, csSWA, head)
+		ok := v0.layersCall(sid, lo, hi, pos, n, x, cs, head)
 		g.mu.Lock()
 		g.returnLane0(v0)
 		g.mu.Unlock()
@@ -3046,7 +3050,7 @@ func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []floa
 			g.LastErr = fmt.Sprintf("non-causal n=%d scratch=%v head=%v", n, bs != nil, head != nil)
 			return false
 		}
-		return g.submit(sid, bs, lo, hi, pos, x, cs, csSWA, nil)
+		return g.submit(sid, bs, lo, hi, pos, x, cs, nil)
 	}
 	if !g.ensureKVCap(pos + n) {
 		return false
@@ -3162,7 +3166,7 @@ func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []floa
 		// The head's own path below runs the blocks as a call of their own,
 		// head-less: cut here like any other.
 		if composed && n > sub && dbs != nil && !(head != nil && (head.RowLogits || noFold)) {
-			nr, e, ns := dbs.p.RopeW(), dbs.p.NEmbd, dbs.p.Streams()
+			e, ns := dbs.p.NEmbd, dbs.p.Streams()
 			g.mu.Lock()
 			g.PromptSplits++
 			g.mu.Unlock()
@@ -3173,20 +3177,13 @@ func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []floa
 			}
 			for off := 0; off < n; off += sub {
 				m := min(sub, n-off)
-				var rcs, rswa []float32
-				if nr > 0 {
-					rcs = cs[off*nr : (off+m)*nr]
-					if len(csSWA) >= (off+m)*nr {
-						rswa = csSWA[off*nr : (off+m)*nr]
-					}
-				}
 				var h *nn.Head
 				if off+m == n {
 					h = head
 				}
 				xs := g.streamCut(x, ns, e, off, m, n)
 				g.sideAt(side, off, n)
-				if !g.layersFor(sid, lo, hi, pos+off, m, xs, rcs, rswa, h) {
+				if !g.layersFor(sid, lo, hi, pos+off, m, xs, cs.Rows(off, off+m, n), h) {
 					return false
 				}
 				streamPut(x, xs, ns, e, off, m, n)
@@ -3215,17 +3212,11 @@ func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []floa
 			// sent a chunk whose blocks had all run round again a row at a
 			// time (MiniMax-M3's selecting blocks are a geometry of their own,
 			// so its float head always came here).
-			if dbs == nil || lo < hi && !g.layersFor(sid, lo, hi, pos, n, x, cs, csSWA, nil) {
+			if dbs == nil || lo < hi && !g.layersFor(sid, lo, hi, pos, n, x, cs, nil) {
 				return false
 			}
-			e, nr := dbs.p.NEmbd, dbs.p.RopeW()
-			var rcs, rswa []float32
-			if nr > 0 {
-				rcs = cs[(n-1)*nr : n*nr]
-				if len(csSWA) >= n*nr {
-					rswa = csSWA[(n-1)*nr : n*nr]
-				}
-			}
+			e := dbs.p.NEmbd
+			rcs := cs.Rows(n-1, n, n)
 			// The head's call resets recSteps (layersCall), and the chunk's
 			// blocks have advanced by then: a head that fails must still
 			// report them, or the caller restarts a hybrid from the embeddings
@@ -3235,7 +3226,7 @@ func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []floa
 			g.mu.Unlock()
 			xs := g.streamCut(x, ns, e, n-1, 1, n)
 			g.sideAt(side, n-1, n)
-			if !g.layersFor(sid, hi, hi, pos+n-1, 1, xs, rcs, rswa, head) {
+			if !g.layersFor(sid, hi, hi, pos+n-1, 1, xs, rcs, head) {
 				g.mu.Lock()
 				g.recSteps += adv
 				g.mu.Unlock()
@@ -3256,23 +3247,15 @@ func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []floa
 			// consecutive sub-chunks being what the caller's own chunk loop would
 			// have issued.
 			sw := sub
-			nr := dbs.p.RopeW()
 			g.mu.Lock()
 			g.PromptSplits++
 			g.mu.Unlock()
 			for off := 0; off < n; off += sw {
 				m := min(sw, n-off)
-				var rcs, rswa []float32
-				if nr > 0 {
-					rcs = cs[off*nr : (off+m)*nr]
-					if len(csSWA) >= (off+m)*nr {
-						rswa = csSWA[off*nr : (off+m)*nr]
-					}
-				}
 				e := dbs.p.NEmbd
 				xs := g.streamCut(x, ns, e, off, m, n)
 				g.sideAt(side, off, n)
-				if !g.layersFor(sid, lo, hi, pos+off, m, xs, rcs, rswa, nil) {
+				if !g.layersFor(sid, lo, hi, pos+off, m, xs, cs.Rows(off, off+m, n), nil) {
 					return false
 				}
 				streamPut(x, xs, ns, e, off, m, n)
@@ -3301,38 +3284,32 @@ func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []floa
 			for i := 0; i < n; i++ {
 				row := g.streamCut(x, ns, dbs.p.NEmbd, i, 1, n)
 				g.sideAt(side, i, n)
-				var rcs, rswa []float32
-				if nr := dbs.p.RopeW(); nr > 0 {
-					rcs = cs[i*nr : (i+1)*nr]
-					if len(csSWA) >= (i+1)*nr {
-						rswa = csSWA[i*nr : (i+1)*nr]
-					}
-				}
+				rcs := cs.Rows(i, i+1, n)
 				// Each row is a token of the recurrence, and each linear block's
 				// halves flip with it, so row 1's recording is keyed apart from
 				// row 0's (rangeParity).
-				if !g.submit(sid, dbs, lo, hi, pos+i, row, rcs, rswa, nil) {
+				if !g.submit(sid, dbs, lo, hi, pos+i, row, rcs, nil) {
 					return false
 				}
 				streamPut(x, row, ns, dbs.p.NEmbd, i, 1, n)
 			}
 			return true
 		}
-		return g.submit(sid, bbs, lo, hi, pos, x, cs, csSWA, head)
+		return g.submit(sid, bbs, lo, hi, pos, x, cs, head)
 	}
 	if g.PerLayerSubmit && (hi-lo > 1 || head != nil) {
 		// The other arm of the submission comparison: one Session and one Read
 		// per block. The head becomes one more (empty-range) submission. submit
 		// honours PerLayerSubmit itself, since it is also what pages a block in.
-		if !g.submit(sid, g.bs, lo, hi, pos, x, cs, csSWA, nil) {
+		if !g.submit(sid, g.bs, lo, hi, pos, x, cs, nil) {
 			return false
 		}
 		if head != nil {
-			return g.layersOnce(sid, g.bs, hi, hi, pos, x, cs, csSWA, head)
+			return g.layersOnce(sid, g.bs, hi, hi, pos, x, cs, head)
 		}
 		return true
 	}
-	return g.submit(sid, g.bs, lo, hi, pos, x, cs, csSWA, head)
+	return g.submit(sid, g.bs, lo, hi, pos, x, cs, head)
 }
 
 // parityMask is the halves a submission's linear blocks read, one bit per
@@ -3491,7 +3468,7 @@ func (g *devTier) canRecord() bool {
 // on both arms of the graph A/B so they do the same device work.
 const scoreGrain = 128
 
-func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, cs, csSWA []float32, head *nn.Head) bool {
+func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x []float32, cs nn.RopeTables, head *nn.Head) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	// Every wait comes first. The prologue below reads what other sessions
@@ -3804,35 +3781,38 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 		}
 	}
 
-	// A scratch with a local rotary table (two bases, gemma3) needs it for
-	// every row the global one has: short, the local layers would rotate by
-	// whatever the buffer last held -- a table of other positions -- and stay
-	// fluent.
-	if bs.csSWA != nil && len(csSWA) < len(cs) {
-		return refuse("the local layers' rotary table has %d floats against the global one's %d",
-			len(csSWA), len(cs))
+	// A scratch with more than one rotary table needs each for every row
+	// the first has: short, its blocks would rotate by whatever the buffer
+	// last held -- a table of other positions -- and stay fluent.
+	for i := 1; i < nn.MaxRopeTables; i++ {
+		if bs.csAt[i] != nil && len(cs[i]) < len(cs[0]) {
+			return refuse("rotary table %d has %d floats against the first one's %d", i, len(cs[i]), len(cs[0]))
+		}
 	}
-	hcs := cs
+	hcs := cs[0]
 	if R > 1 && len(bs.hcs) < R*p.RopeW() {
 		return refuse("the scratch stages %d rotary floats for %d rows of %d (its plan's %d rows of %d, rotary %d of a table of %d; this plan's rotary %d of %d)",
-			len(bs.hcs), R, p.RopeW(), bs.rows, bs.p.RopeW(), bs.p.NRot, bs.p.RopeTable, p.NRot, p.RopeTable)
+			len(bs.hcs), R, p.RopeW(), bs.rows, bs.p.RopeW(), bs.p.NRot, bs.p.RopePairs, p.NRot, p.RopePairs)
 	}
 	if R > 1 {
 		hcs = bs.hcs[:R*p.RopeW()]
 		for i := range hcs {
 			hcs[i] = 0
 		}
-		copy(hcs, cs)
+		copy(hcs, cs[0])
 	}
-	// The local table gets the identical treatment, and its own staging buffer:
-	// sharing hcs would have the second copy overwrite the first.
-	hcsSWA := csSWA
-	if R > 1 && csSWA != nil {
-		hcsSWA = bs.hcsSWA[:R*p.RopeW()]
-		for i := range hcsSWA {
-			hcsSWA[i] = 0
+	// Each further table gets the identical treatment, and its own staging
+	// buffer: sharing hcs would have the second copy overwrite the first.
+	var hcsAt [nn.MaxRopeTables][]float32
+	for i := 1; i < nn.MaxRopeTables; i++ {
+		hcsAt[i] = cs[i]
+		if R > 1 && cs[i] != nil && bs.hcsAt[i] != nil {
+			hcsAt[i] = bs.hcsAt[i][:R*p.RopeW()]
+			for j := range hcsAt[i] {
+				hcsAt[i][j] = 0
+			}
+			copy(hcsAt[i], cs[i])
 		}
-		copy(hcsSWA, csSWA)
 	}
 
 	// rrows is how many rows the caller filled. The rotary kernel is clamped to
@@ -3843,13 +3823,8 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	rrows := 0
 	if p.NRot > 0 {
 		rrows = R
-		if v := len(cs) / p.RopeW(); v < rrows {
+		if v := len(cs[0]) / p.RopeW(); v < rrows {
 			rrows = v
-		}
-		if bs.csSWA != nil {
-			if v := len(csSWA) / p.RopeW(); v < rrows {
-				rrows = v
-			}
 		}
 	}
 	top := pos + rrows
@@ -3860,7 +3835,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 		}
 	}
 	// The call's tables the composer serves (nn.ComposedTable) at its rows,
-	// which write cs and csSWA where the tier's own table would. A call of
+	// which write each table where the tier's own table would. A call of
 	// the head alone (a model whose host collapses its streams between the
 	// blocks and the head) turns nothing and is not asked for them, nor is a
 	// non-causal segment's that turns by its picture's grid (servedGridTable).
@@ -4065,7 +4040,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	t0 := time.Now()
 	g.sub = submitArgs{
 		bs: bs, hb: hb, head: head, lo: lo, hi: hi, pos: pos, x: x,
-		hx: hx, hcs: hcs, hcsSWA: hcsSWA, pn: pn,
+		hx: hx, hcs: hcs, hcsAt: hcsAt, pn: pn,
 		p: p, rag: rag, pe: pe, key: key, R: R, nrow: nrow, toks: toks,
 		nCap: nCap, rrows: rrows,
 		tableSrv: tableSrv, gridSrv: gridSrv, sampleSrv: sampleSrv, embedSrv: embedSrv, raxes: raxes,
@@ -4178,21 +4153,22 @@ type submitArgs struct {
 	// afresh.
 	paging bool
 	// persist says the submission composes its decode blocks (persist.go).
-	persist            bool
-	bs, hb             *blockScratch
-	head               *nn.Head
-	lo, hi, pos        int
-	x, hx, hcs, hcsSWA []float32
-	pn                 []byte
-	p                  *nn.LayerPlan
-	rag                *ragStep
-	pe                 *embPend
-	key                graphKey
-	R, nrow            int
-	nCap               int
-	rrows              int
-	ragHead            int
-	fold, argmax       bool
+	persist      bool
+	bs, hb       *blockScratch
+	head         *nn.Head
+	lo, hi, pos  int
+	x, hx, hcs   []float32
+	hcsAt        [nn.MaxRopeTables][]float32
+	pn           []byte
+	p            *nn.LayerPlan
+	rag          *ragStep
+	pe           *embPend
+	key          graphKey
+	R, nrow      int
+	nCap         int
+	rrows        int
+	ragHead      int
+	fold, argmax bool
 	// tableSrv and sampleSrv say the composer serves the step's tables and
 	// its token; raxes is a table over several axes' staged positions;
 	// gridSrv says the set runs its grid table from the session's cells.
@@ -4241,7 +4217,7 @@ func (g *devTier) layersSession(s backend.Session) {
 	// The session the submission runs for, carried in its recording's key.
 	sid := a.key.sid
 	bs, hb, head, lo, hi, pos, x := a.bs, a.hb, a.head, a.lo, a.hi, a.pos, a.x
-	hx, hcs, hcsSWA, pn := a.hx, a.hcs, a.hcsSWA, a.pn
+	hx, hcs, hcsAt, pn := a.hx, a.hcs, &a.hcsAt, a.pn
 	p, rag, pe, key := a.p, a.rag, a.pe, a.key
 	R, nrow := a.R, a.nrow
 	fold, argmax, sampleK, pick := a.fold, a.argmax, a.sampleK, a.pick
@@ -4734,8 +4710,10 @@ func (g *devTier) layersSession(s backend.Session) {
 			// no buffer to write into.
 			w(bs.cs, f32b(hcs))
 		}
-		if bs.csSWA != nil {
-			w(bs.csSWA, f32b(hcsSWA))
+		for i, t := range bs.csAt {
+			if t != nil {
+				w(t, f32b(hcsAt[i]))
+			}
 		}
 	}
 	w(bs.n, pn)

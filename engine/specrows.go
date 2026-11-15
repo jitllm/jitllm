@@ -179,7 +179,7 @@ func (s *Instance) stepRowsDevice(src rowSrc, out *rowsOut) error {
 		return s.stepRowsStreams(src, out)
 	}
 	c := s.c
-	n, nrot := src.len(), c.RopeW()
+	n := src.len()
 	p0 := s.bpos[0]
 	if p0+n > s.maxSeq {
 		return errFull{s.maxSeq, s.reqSeq}
@@ -261,7 +261,7 @@ func (s *Instance) stepRowsDevice(src rowSrc, out *rowsOut) error {
 		}
 		defer func() { h.RowLogits, h.Logits, h.LogitRows, h.Hidden = false, keep, 0, nil }()
 	}
-	if !rd.LayersRows(s.lo, s.hi, pos, slot, s.maxSeq, s.bx[:n*c.NEmbd], s.bcs[:n*nrot], s.bswaTable(n, c.LocalNRot()), h) {
+	if !rd.LayersRows(s.lo, s.hi, pos, slot, s.maxSeq, s.bx[:n*c.NEmbd], s.batchTables(n), h) {
 		why := "no reason given"
 		if e, ok := s.ld.(nn.ErrReporter); ok {
 			why = e.Err()
@@ -443,7 +443,7 @@ func (s *Instance) rowsHead(rd nn.RowsDevice, pos, slot []int, n int, logits []f
 	if h != nil {
 		keep := h.Logits
 		h.RowLogits, h.Logits, h.LogitRows = true, logits[:nlogit*c.NVocab], nlogit
-		ok := rd.LayersRows(s.hi, s.hi, pos, slot, s.maxSeq, x, s.bcs[:n*c.NRot], s.bswaTable(n, c.LocalNRot()), h)
+		ok := rd.LayersRows(s.hi, s.hi, pos, slot, s.maxSeq, x, s.batchTables(n), h)
 		h.RowLogits, h.Logits, h.LogitRows = false, keep, 0
 		if ok {
 			s.rowsHeads++

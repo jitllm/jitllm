@@ -116,7 +116,7 @@ func TestEveryDeviceTakesBlocksAndRunsThem(t *testing.T) {
 	for i := range x {
 		x[i] = float32(i%7) * 0.01
 	}
-	if !g.Layers(0, nblocks, 0, 1, x, cs, nil, nil) {
+	if !g.Layers(0, nblocks, 0, 1, x, nn.RopeTables{cs}, nil) {
 		t.Fatalf("Layers: %s", g.Err())
 	}
 	for i, st := range g.DevStats() {
@@ -171,7 +171,7 @@ func TestHeadOnlySubmissionReachesItsDevice(t *testing.T) {
 	a.log, b.log = nil, nil
 	x := make([]float32, p.NEmbd)
 	cs := make([]float32, p.NRot)
-	if !g.Layers(3, 3, 0, 1, x, cs, nil, h) {
+	if !g.Layers(3, 3, 0, 1, x, nn.RopeTables{cs}, h) {
 		t.Fatalf("head-only Layers: %s", g.Err())
 	}
 	if len(b.log) == 0 {
@@ -222,7 +222,7 @@ func TestAWideChunkReachesAHeadOffTheLastDevice(t *testing.T) {
 	x := make([]float32, n*p.NEmbd)
 	cs := make([]float32, n*p.NRot)
 	a.log, b.log = nil, nil
-	if !g.Layers(0, 3, 0, n, x, cs, nil, h) {
+	if !g.Layers(0, 3, 0, n, x, nn.RopeTables{cs}, h) {
 		t.Fatalf("a %d-row chunk with the head off the last device was refused: %s", n, g.Err())
 	}
 	if len(a.log) == 0 || len(b.log) == 0 {
@@ -462,7 +462,7 @@ func TestPrewarmOverlapsLayers(t *testing.T) {
 	x := make([]float32, p.NEmbd)
 	cs := make([]float32, p.NRot)
 	for pos := 0; pos < 200; pos++ {
-		if !g.Layers(0, 4, pos, 1, x, cs, nil, nil) {
+		if !g.Layers(0, 4, pos, 1, x, nn.RopeTables{cs}, nil) {
 			t.Fatalf("Layers(pos=%d): %s", pos, g.Err())
 		}
 		g.DropStage()
@@ -538,7 +538,7 @@ func TestRealDevicesBothTakeBlocks(t *testing.T) {
 		t.Fatalf("the first device took %v of %d blocks with the whole card available", b, nblocks)
 	}
 	one := append([]float32(nil), x0...)
-	if !g.Layers(0, nblocks, 0, 1, one, cs, nil, nil) {
+	if !g.Layers(0, nblocks, 0, 1, one, nn.RopeTables{cs}, nil) {
 		t.Fatalf("Layers on one device: %s", g.Err())
 	}
 
@@ -566,7 +566,7 @@ func TestRealDevicesBothTakeBlocks(t *testing.T) {
 		}
 	}
 	split := append([]float32(nil), x0...)
-	if !g.Layers(0, nblocks, 0, 1, split, cs, nil, nil) {
+	if !g.Layers(0, nblocks, 0, 1, split, nn.RopeTables{cs}, nil) {
 		t.Fatalf("Layers across two devices: %s", g.Err())
 	}
 	for i, st := range g.DevStats() {
@@ -798,7 +798,7 @@ func TestAFullTailSendsTheHeadToACardWithRoom(t *testing.T) {
 	b.log = nil
 	x := make([]float32, p.NEmbd)
 	cs := make([]float32, p.NRot)
-	if !g.Layers(0, 2, 0, 1, x, cs, nil, h) {
+	if !g.Layers(0, 2, 0, 1, x, nn.RopeTables{cs}, h) {
 		t.Fatalf("Layers with the head on another device: %s", g.Err())
 	}
 	if len(b.log) == 0 {

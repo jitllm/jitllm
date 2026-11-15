@@ -274,7 +274,7 @@ func TestIntegratedDeviceStillTakesBlocks(t *testing.T) {
 	// The blocks must also run where they were placed.
 	x := make([]float32, p.NEmbd)
 	cs := make([]float32, p.NRot)
-	if !g.Layers(0, per[0]+per[1], 0, 1, x, cs, nil, nil) {
+	if !g.Layers(0, per[0]+per[1], 0, 1, x, nn.RopeTables{cs}, nil) {
 		t.Fatalf("Layers over the placed prefix declined: %s", g.Err())
 	}
 	for i, d := range g.devs {
@@ -550,7 +550,7 @@ func TestRealThreeWayPlacement(t *testing.T) {
 	}
 	x := make([]float32, p.NEmbd)
 	cs := make([]float32, p.NRot)
-	if !g.Layers(0, per[0]+per[1], 0, 1, x, cs, nil, nil) {
+	if !g.Layers(0, per[0]+per[1], 0, 1, x, nn.RopeTables{cs}, nil) {
 		t.Fatalf("Layers across both devices: %s", g.Err())
 	}
 	for i, st := range g.DevStats() {

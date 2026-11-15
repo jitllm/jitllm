@@ -160,10 +160,10 @@ func (s *Instance) cutFor(r *route, li, n int) {
 // cutRest runs block li's second half on the CPU device over the n rows the
 // card's first half left in the cut, writing the residual x; the caller has
 // opened the CPU device's run.
-func (s *Instance) cutRest(li, pos, n int, x, cs, csSWA []float32) error {
+func (s *Instance) cutRest(li, pos, n int, x []float32, cs nn.RopeTables) error {
 	r := &s.routes[routeLanes]
 	s.cutFor(r, li, n)
-	if r.run.Layers(li, li+1, pos, n, x, cs, csSWA, nil) {
+	if r.run.Layers(li, li+1, pos, n, x, cs, nil) {
 		return nil
 	}
 	if err := s.runRefusal(r, li); err != nil {

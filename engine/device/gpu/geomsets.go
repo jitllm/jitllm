@@ -28,14 +28,14 @@ import (
 // it before it returns.
 
 // geoKey names a scratch set: the zero key is the home set. nkv, hd, nrot and
-// local are a block's own attention geometry and rotary (nn.LayerPlan.OwnGeom),
+// rotary are a block's own attention geometry and rotary table (nn.LayerPlan.OwnGeom),
 // zero for a block at the model's; nffn is a feed-forward width of its own.
 // A non-causal block's key carries its geometry always: nh and embd its query
 // heads and residual width, nrot its rotary table's width.
 type geoKey struct {
 	flags         geoFlag
 	nkv, hd, nrot int32
-	local         bool
+	rotary        int32
 	nffn          int32
 	nh, embd      int32
 }
@@ -77,7 +77,7 @@ func geoOf(p *nn.LayerPlan) geoKey {
 	}
 	var k geoKey
 	if p.MixedGeom && p.OwnGeom {
-		k.nkv, k.hd, k.nrot, k.local = int32(p.NKVHead), int32(p.HeadDim), int32(p.NRot), p.LocalRope
+		k.nkv, k.hd, k.nrot, k.rotary = int32(p.NKVHead), int32(p.HeadDim), int32(p.NRot), int32(p.Rotary)
 	}
 	if p.FFNWide {
 		k.nffn = int32(p.NFFN)
@@ -179,9 +179,9 @@ func scratchPlanOf(p *nn.LayerPlan) *nn.LayerPlan {
 		return p
 	}
 	q := *p
-	q.SWAPeriod, q.RopeTabSWA = 0, nil
-	if p.LocalRope {
-		q.RopeTab = p.RopeTabSWA
+	q.RopeTabs = nil
+	if p.Rotary < len(p.RopeTabs) {
+		q.RopeTabs = [][]float32{p.RopeTabs[p.Rotary]}
 	}
 	q.VFromK, q.OutScale, q.KVShared, q.KVSource = false, 0, false, 0
 	return &q

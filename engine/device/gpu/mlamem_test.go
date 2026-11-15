@@ -143,7 +143,7 @@ func TestLatentAttentionReturnsEveryDeviceBuffer(t *testing.T) {
 
 	x := make([]float32, p.NEmbd)
 	cs := make([]float32, p.NRot)
-	g.Layers(0, blocks, 0, 1, x, cs, nil, nil)
+	g.Layers(0, blocks, 0, 1, x, nn.RopeTables{cs}, nil)
 
 	g.Close()
 
@@ -191,7 +191,7 @@ func TestLatentAttentionReturnsItsMemoryOnRelease(t *testing.T) {
 		}
 	}
 	x := make([]float32, p.NEmbd)
-	g.Layers(0, blocks, 0, 1, x, make([]float32, p.NRot), nil, nil)
+	g.Layers(0, blocks, 0, 1, x, nn.RopeTables{make([]float32, p.NRot)}, nil)
 
 	before := d.freed
 	usedBefore := g.devs[0].used

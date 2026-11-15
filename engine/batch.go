@@ -29,10 +29,9 @@ func (s *Instance) rowsRouted(tokens []int32, seq, pos []int, nlogit, seqs int) 
 		s.blogits = make([]float32, nlogit*c.NVocab)
 	}
 
-	nrot := c.RopeW()
 	// One rotary table per row, rows being at different positions: the prompt
 	// chunk's tables, since a step may carry more rows than there are slots.
-	cs, csSWA := s.bcs[:n*nrot], s.bswaTable(n, c.LocalNRot())
+	cs := s.batchTables(n)
 
 	t0 := s.tick()
 	// The rows' input rows, scale, positions and per-layer inputs through the
@@ -80,9 +79,9 @@ func (s *Instance) rowsRouted(tokens []int32, seq, pos []int, nlogit, seqs int) 
 		s.cutFor(r, hi-1, n)
 		var err error
 		if len(s.rowOwn) > 0 {
-			err = s.sessionsOn(k, li, hi, pos, s.bx[:n*c.ResidW()], cs, csSWA, withHead, s.blogits[:nlogit*c.NVocab], nlogit)
+			err = s.sessionsOn(k, li, hi, pos, s.bx[:n*c.ResidW()], cs, withHead, s.blogits[:nlogit*c.NVocab], nlogit)
 		} else {
-			err = s.rowsOn(r, li, hi, pos, slot, s.bx[:n*c.ResidW()], cs, csSWA, withHead, s.blogits[:nlogit*c.NVocab], nlogit)
+			err = s.rowsOn(r, li, hi, pos, slot, s.bx[:n*c.ResidW()], cs, withHead, s.blogits[:nlogit*c.NVocab], nlogit)
 		}
 		// A block cut at its routed experts: their half on the CPU device, over
 		// every row the card's half left in the cut.
@@ -91,9 +90,9 @@ func (s *Instance) rowsRouted(tokens []int32, seq, pos []int, nlogit, seqs int) 
 			if err = s.openRows(cr, seq, pos, tokens); err == nil {
 				s.cutFor(cr, hi-1, n)
 				if len(s.rowOwn) > 0 {
-					err = s.sessionsOn(routeLanes, hi-1, hi, pos, s.bx[:n*c.ResidW()], cs, csSWA, false, nil, 0)
+					err = s.sessionsOn(routeLanes, hi-1, hi, pos, s.bx[:n*c.ResidW()], cs, false, nil, 0)
 				} else {
-					err = s.rowsOn(cr, hi-1, hi, pos, slot, s.bx[:n*c.ResidW()], cs, csSWA, false, nil, 0)
+					err = s.rowsOn(cr, hi-1, hi, pos, slot, s.bx[:n*c.ResidW()], cs, false, nil, 0)
 				}
 			}
 		}

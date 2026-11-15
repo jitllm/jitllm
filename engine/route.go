@@ -173,7 +173,7 @@ func (s *Instance) openRows(r *route, seq, pos []int, tokens []int32) error {
 // rowsOn runs blocks [lo, hi) of a step's rows on route r (nn.RowsDevice),
 // row i at (pos[i], slot[i]); with head the device takes the projection too
 // and reads the first nlogit rows' logits into logits.
-func (s *Instance) rowsOn(r *route, lo, hi int, pos, slot []int, x, cs, csSWA []float32, head bool, logits []float32, nlogit int) error {
+func (s *Instance) rowsOn(r *route, lo, hi int, pos, slot []int, x []float32, cs nn.RopeTables, head bool, logits []float32, nlogit int) error {
 	if r.rows == nil {
 		return errBatchDevice{}
 	}
@@ -184,7 +184,7 @@ func (s *Instance) rowsOn(r *route, lo, hi int, pos, slot []int, x, cs, csSWA []
 		h.RowLogits, h.Logits, h.LogitRows = true, logits, nlogit
 		defer func() { h.RowLogits, h.Logits, h.LogitRows = false, keep, 0 }()
 	}
-	if !r.rows.LayersRows(lo, hi, pos, slot, s.maxSeq, x, cs, csSWA, h) {
+	if !r.rows.LayersRows(lo, hi, pos, slot, s.maxSeq, x, cs, h) {
 		return s.rowsRefused(r, lo, hi, len(pos), "")
 	}
 	return nil
@@ -194,7 +194,7 @@ func (s *Instance) rowsOn(r *route, lo, hi int, pos, slot []int, x, cs, csSWA []
 // own session's view of route k's device (nn.SessionStepper), handed its
 // own instance's key runs first, so its history there is its own
 // session's.
-func (s *Instance) sessionsOn(k int, lo, hi int, pos []int, x, cs, csSWA []float32, head bool, logits []float32, nlogit int) error {
+func (s *Instance) sessionsOn(k int, lo, hi int, pos []int, x []float32, cs nn.RopeTables, head bool, logits []float32, nlogit int) error {
 	r := &s.routes[k]
 	if r.steps == nil {
 		return errBatchDevice{}
@@ -222,7 +222,7 @@ func (s *Instance) sessionsOn(k int, lo, hi int, pos []int, x, cs, csSWA []float
 		views = append(views, v.run)
 	}
 	defer func() { s.stepSess = clearDevs(views) }()
-	if !r.steps.LayersSessions(lo, hi, views, pos, x, cs, csSWA, h) {
+	if !r.steps.LayersSessions(lo, hi, views, pos, x, cs, h) {
 		return s.rowsRefused(r, lo, hi, len(pos), " across sessions")
 	}
 	return nil

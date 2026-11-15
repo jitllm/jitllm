@@ -8,6 +8,7 @@ import (
 	"unsafe"
 
 	"github.com/jitllm/jitllm/engine/device/cpu"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // Device is the CPU device's launches: its worker pool, a call block of
@@ -65,8 +66,8 @@ type Call struct {
 	N       int
 	IO      []unsafe.Pointer
 	Weights []unsafe.Pointer
-	Rope    [2]unsafe.Pointer
-	Planes  [2]unsafe.Pointer
+	Rope    [nn.MaxRopeTables]unsafe.Pointer
+	Planes  [nn.MaxRopeTables]unsafe.Pointer
 	At      [NumSrc]unsafe.Pointer
 }
 

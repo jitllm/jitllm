@@ -1092,7 +1092,7 @@ func (d *mirrorDevice) MatVec([]float32, quant.Type, []byte, []float32, int, int
 	return false
 }
 func (d *mirrorDevice) PrepLayer(int, *nn.LayerPlan, *nn.LayerWeights) bool { return true }
-func (d *mirrorDevice) Layers(int, int, int, int, []float32, []float32, []float32, *nn.Head) bool {
+func (d *mirrorDevice) Layers(int, int, int, int, []float32, nn.RopeTables, *nn.Head) bool {
 	return false // decline the block: the host computes, which is what we compare against
 }
 func (d *mirrorDevice) PrepHead(*nn.Head) bool { return false }

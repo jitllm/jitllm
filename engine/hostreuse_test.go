@@ -83,7 +83,7 @@ func reusedScratchGate(t *testing.T, path string) {
 		hs.mu.Unlock()
 		t.Fatal("no prompt scratch was handed back to the CPU device")
 	}
-	for _, b := range [][]float32{hs.spare.bx, hs.spare.bcs, hs.spare.bcsSWA} {
+	for _, b := range append([][]float32{hs.spare.bx}, hs.spare.bcs[:]...) {
 		for i := range b {
 			b[i] = float32(math.NaN())
 		}

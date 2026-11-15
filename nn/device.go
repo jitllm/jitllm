@@ -442,14 +442,72 @@ func (h *Head) WantedRows(n int) int {
 // that last ran it: the model's Stages less what it Applied.
 func (h *Head) Left() HeadStage { return h.Stages &^ h.Applied }
 
+// MaxRopeTables is the most rotary tables a call carries. An array keeps a
+// call's tables in its frame rather than on the heap (RULE 2f); a model
+// stating more rotaries is refused at placement, naming the count.
+const MaxRopeTables = 4
+
+// RopeTables is a call's rotary tables, the model's i-th rotary's at [i]
+// (graph.Attrs.Rotary): each its rows' tables back to back, nil for a table
+// the call does not carry.
+type RopeTables [MaxRopeTables][]float32
+
+// Rows is t's tables of rows [a, b) of n, each table's row width its length
+// over n.
+func (t RopeTables) Rows(a, b, n int) RopeTables {
+	var out RopeTables
+	for i, c := range t {
+		if c == nil || n <= 0 {
+			continue
+		}
+		w := len(c) / n
+		out[i] = c[a*w : b*w]
+	}
+	return out
+}
+
+// From is t's tables from row a of n on, each table's row width its length
+// over n.
+func (t RopeTables) From(a, n int) RopeTables {
+	var out RopeTables
+	for i, c := range t {
+		if c == nil || n <= 0 {
+			continue
+		}
+		out[i] = c[a*(len(c)/n):]
+	}
+	return out
+}
+
+// Widths is each of t's tables' row width over n rows.
+func (t RopeTables) Widths(n int) (w [MaxRopeTables]int) {
+	for i, c := range t {
+		if n > 0 {
+			w[i] = len(c) / n
+		}
+	}
+	return w
+}
+
+// Count is how many of t's tables are carried: one past the last non-nil.
+func (t RopeTables) Count() int {
+	n := 0
+	for i, c := range t {
+		if c != nil {
+			n = i + 1
+		}
+	}
+	return n
+}
+
 // MLA reports whether this block runs multi-head latent attention.
 func (p *LayerPlan) MLA() bool { return p.KVLoraRank > 0 }
 
 // RopeW is how many floats one row's rotary table holds: two a pair of its
-// table (RopeTable), NRot for a table of the block's rotated pairs.
+// table (RopePairs), NRot for a table of the block's rotated pairs.
 func (p *LayerPlan) RopeW() int {
-	if p.RopeTable > 0 {
-		return 2 * p.RopeTable
+	if p.RopePairs > 0 {
+		return 2 * p.RopePairs
 	}
 	return p.NRot
 }
@@ -583,10 +641,10 @@ type LayerPlan struct {
 	// (CutDevice) rather than the residual.
 	Cut int
 	// Tables are the step's rotary tables as the front end states them (the
-	// model's rotary's, then the local layers' where SWAPeriod is set; nil
-	// for none): what a device serving the tables forms, writing cs and
-	// csSWA. RopeTabAxes is the folded planes (Rope.TabPlanes) of a rotary
-	// over several position axes, which RopeTab leaves nil: its table turns
+	// model's rotaries in order, graph.Attrs.Rotary; nil for none): what a
+	// device serving the tables forms, writing a call's RopeTables.
+	// RopeTabAxes is the folded planes (Rope.TabPlanes) of a rotary over
+	// several position axes, which RopeTabs leaves nil: its table turns
 	// each row by its positions on the axes (RopeAxesDevice), never by its
 	// cache position.
 	Tables      []*graph.Graph
@@ -626,21 +684,17 @@ type LayerPlan struct {
 	// step's per-row logits at placement sizes them from it, because the
 	// head is offered after the blocks; 0 leaves them to the first step.
 	Vocab int
-	// SWAPeriod is the repeating local/global layer pattern, 0 when the
-	// architecture has one kind of layer: a model of two rotary bases
-	// (gemma3) whose blocks' rope ops each state theirs (Rotaries).
-	SWAPeriod int
-	// RopeTab and RopeTabSWA are the folded rotary constant planes a device
-	// builds its own table from (Rope.TabPlanes of the global and the local
-	// configuration), so both tiers derive the table from the same constants.
-	// nil for a block with no rotary, and RopeTabSWA is nil wherever SWAPeriod
-	// is zero. A tier may ignore them and upload the finished cs/csSWA tables
-	// instead.
-	RopeTab, RopeTabSWA []float32
-	// RopeTable is the pairs a row's rotary table holds where the model
+	// RopeTabs is each of the model's rotary tables' folded constant planes
+	// a device builds its own table from (Rope.TabPlanes), the model's i-th
+	// rotary's at [i], so both tiers derive a table from the same constants:
+	// as many as a call carries tables (RopeTables), an entry nil for a table
+	// with no such planes. A tier may ignore them and upload the call's
+	// finished tables instead.
+	RopeTabs [][]float32
+	// RopePairs is the pairs a row's rotary table holds where the model
 	// states its table's pairs (RopeW), 0 for NRot/2: more than NRot/2 where
 	// each element of a pair turns by an entry of its own (graph.RopeSplit).
-	RopeTable int
+	RopePairs int
 	// SWAWindow is how many keys a sliding-window layer attends to, zero for
 	// an architecture whose every layer sees its whole history; which blocks
 	// slide each block's graph states (its attention's Window).
@@ -660,13 +714,15 @@ type LayerPlan struct {
 	// MixedGeom says the model's blocks do not all attend at one geometry;
 	// NKVHead, HeadDim and NRot are then THIS block's (planFor sets them per
 	// block). OwnGeom says they, or the rotary table it reads, are not the
-	// model's, and LocalRope that it rotates by the second table (RopeTabSWA).
+	// model's, and Rotary which of the model's rotary tables it turns by
+	// (RopeTables, graph.Attrs.Rotary).
 	// VFromK says the block has no v projection and v is k's
 	// (LayerWeights.Wv is empty); OutScale multiplies the block's output row
 	// after its last residual add (zero means none).
-	MixedGeom, OwnGeom, LocalRope bool
-	VFromK                        bool
-	OutScale                      float32
+	MixedGeom, OwnGeom bool
+	Rotary             int
+	VFromK             bool
+	OutScale           float32
 	// Gemma 4's E2B/E4B: PLEDim is each block's per-layer embedding width
 	// (zero for none), KVShared says the block attends to KVSource's history
 	// and computes no k or v, and NFFN is then this block's own width.
@@ -954,10 +1010,10 @@ type LayerDevice interface {
 	// and the vocabulary projection, and fills head.Logits instead of reading x
 	// back. It is only offered when the device took every block, since anything
 	// left on the CPU needs the residual stream read back anyway.
-	// csSWA is the local layers' rotary table where SWAPeriod is set, and nil
-	// for every architecture with a single base. A tier that is handed nil and
-	// has a local block to run must decline rather than substitute cs.
-	Layers(lo, hi, pos, n int, x, cs, csSWA []float32, head *Head) bool
+	// cs holds every rotary table the model states (RopeTables): a block
+	// turns by its own (LayerPlan.Rotary), and a tier handed no table for a
+	// block it runs declines rather than substitute another.
+	Layers(lo, hi, pos, n int, x []float32, cs RopeTables, head *Head) bool
 
 	// PrewarmLayer packs block li's weights off the main loop, so that a later
 	// PrepLayer only has to upload them. It must not touch the device and must
@@ -1106,7 +1162,7 @@ type RowsReserver interface {
 // 2 (its queries over every key, and the rest of the block on its rows).
 type RowChunker interface {
 	TowerChunk() int
-	LayersPhase(lo, hi, pos, n, keys, phase int, x, cs, csSWA []float32) bool
+	LayersPhase(lo, hi, pos, n, keys, phase int, x []float32, cs RopeTables) bool
 }
 
 // LayerInputDevice is an optional LayerDevice that takes a per-layer input
@@ -1152,9 +1208,7 @@ type PromptDevice interface {
 // seqLen is the slots one sequence spans: row r is sequence
 // (slot[r]-pos[r])/seqLen of the session's batch, which is where a recurrent
 // block keeps its state. x is len(pos) rows of the residual stream, cs one
-// rotary table per row, and csSWA one of the local layers' per row where the
-// architecture trains two rotary bases (LayerPlan.SWAPeriod; nil where it
-// trains one). With a head, head.Tokens gets each row's greedy token,
+// rotary table per row of each table the model states (RopeTables). With a head, head.Tokens gets each row's greedy token,
 // and with head.RowLogits set head.Logits gets each row's logits. Rows may
 // belong to one sequence, as long as they are its next positions, each once
 // and in any row order: a prompt laid out as rows at positions p..p+L-1 of the
@@ -1163,7 +1217,7 @@ type PromptDevice interface {
 // rows in position order. False means nothing ran, and the device's LastErr
 // says why.
 type RowsDevice interface {
-	LayersRows(lo, hi int, pos, slot []int, seqLen int, x, cs, csSWA []float32, head *Head) bool
+	LayersRows(lo, hi int, pos, slot []int, seqLen int, x []float32, cs RopeTables, head *Head) bool
 }
 
 // RowsWidther is a RowsDevice that states how many rows one LayersRows call
@@ -1351,7 +1405,7 @@ type ErrReporter interface{ Err() string }
 // LayerRunner runs a range of blocks (LayerDevice.Layers): what a step asks
 // of every device its blocks are placed on.
 type LayerRunner interface {
-	Layers(lo, hi, pos, n int, x, cs, csSWA []float32, head *Head) bool
+	Layers(lo, hi, pos, n int, x []float32, cs RopeTables, head *Head) bool
 }
 
 // CutDevice is a device holding one half of a block cut in two
@@ -1364,7 +1418,7 @@ type CutDevice interface{ SetCut(cut []float32) }
 // blocks that read them (an n-gram block's hash).
 type TokenReader interface{ SetTokens(toks []int32) }
 
-// TableReader reads the call's rotary tables (cs, csSWA) rather than making
+// TableReader reads the call's rotary tables (RopeTables) rather than making
 // its own from the positions.
 type TableReader interface{ ReadsTables() bool }
 
@@ -1465,10 +1519,10 @@ type KVTrimmer interface{ TrimKV(pos int) bool }
 // a prompt chunk riding beside the others' decoding -- as long as they are its
 // next positions, each once, in any row order; they see each other causally,
 // as RowsDevice's rows of one sequence do. x is the rows' residual and cs and
-// csSWA their rotary rows, as RowsDevice's; the head, when set, works as for RowsDevice.LayersRows,
+// cs their rotary rows, as RowsDevice's; the head, when set, works as for RowsDevice.LayersRows,
 // LogitRows included.
 type SessionStepper interface {
-	LayersSessions(lo, hi int, sess []LayerRunner, pos []int, x, cs, csSWA []float32, head *Head) bool
+	LayersSessions(lo, hi int, sess []LayerRunner, pos []int, x []float32, cs RopeTables, head *Head) bool
 }
 
 // Pipeliner says how many devices a prompt chunk crosses. A device that

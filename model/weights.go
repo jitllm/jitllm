@@ -12,7 +12,7 @@ import (
 // where there is no such configuration -- a model with one rotary base has no
 // local one, and a vision block has no rotary at all.
 //
-// nil is a real answer: LayerPlan.RopeTab is an alternative source for a table
+// nil is a real answer: LayerPlan.RopeTabs is an alternative source for a table
 // the tier is handed anyway, so nil means "upload the host's table".
 //
 // A multi-axis rotary (M-RoPE) has no planes to offer: a device builds a table

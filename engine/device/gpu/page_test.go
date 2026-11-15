@@ -127,7 +127,7 @@ func token(t *testing.T, g *GPU, p *nn.LayerPlan, n, pos int) bool {
 	for i := range x {
 		x[i] = float32(i%7) * 0.01
 	}
-	return g.Layers(0, n, pos, 1, x, cs, nil, nil)
+	return g.Layers(0, n, pos, 1, x, nn.RopeTables{cs}, nil)
 }
 
 func placedTotal(g *GPU) int {

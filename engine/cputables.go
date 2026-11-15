@@ -4,7 +4,9 @@ import (
 	"fmt"
 
 	"github.com/jitllm/jitllm/model"
+	"github.com/jitllm/jitllm/nn"
 
+	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/graph"
 )
 
@@ -85,10 +87,9 @@ func (s *Instance) marksCap() int {
 
 // ropeTables writes the rotary tables of rows rows -- row i at cache
 // position pos[i] of slot seq[i] (slot 0 where seq is nil) of the session
-// whose marks are marks -- into cs and, where the model trains a second
-// rotary, csSWA, on the device the instance places them on
-// (nn.TablesDevice).
-func (s *Instance) ropeTables(marks *model.RopeMarks, seq, pos []int, cs, csSWA []float32) error {
+// whose marks are marks -- into each of cs's tables, on the device the
+// instance places them on (nn.TablesDevice).
+func (s *Instance) ropeTables(marks *model.RopeMarks, seq, pos []int, cs nn.RopeTables) error {
 	if s.tables == nil {
 		return fmt.Errorf("model: the rotary tables have no device on this instance")
 	}
@@ -112,10 +113,10 @@ func (s *Instance) ropeTables(marks *model.RopeMarks, seq, pos []int, cs, csSWA 
 	if marks != nil {
 		buf = marks.Buf
 	}
-	return s.tables.Tables(desc, buf, cs, csSWA)
+	return s.tables.Tables(desc, buf, cs)
 }
 
-// oneTable makes a decode row's rotary tables in s.cs and s.csSWA, which
+// oneTable makes a decode row's rotary tables in s.cs, which
 // the CPU's blocks read, once a token: at the row's cache position, from
 // its sequence's marks.
 func (s *Instance) oneTable() error {
@@ -123,14 +124,14 @@ func (s *Instance) oneTable() error {
 		return nil
 	}
 	s.onePos[0] = s.pos
-	if err := s.ropeTables(&s.rmarks, nil, s.onePos[:], s.cs, s.csSWA); err != nil {
+	if err := s.ropeTables(&s.rmarks, nil, s.onePos[:], s.cs); err != nil {
 		return err
 	}
 	s.oneFresh = true
 	return nil
 }
 
-// rowTables makes a step's rows' rotary tables in s.bcs and s.bcsSWA,
+// rowTables makes a step's rows' rotary tables in s.bcs,
 // which the CPU's blocks read, once a step: row i of slot seq[i] at cache
 // position pos[i], each run of one session's rows from its marks.
 func (s *Instance) rowTables(seq, pos []int) error {
@@ -138,7 +139,6 @@ func (s *Instance) rowTables(seq, pos []int) error {
 		return nil
 	}
 	n := len(pos)
-	w, ws := s.c.RopeW(), s.c.LocalNRot()
 	if cap(s.rowSlots) < n {
 		s.rowSlots = make([]int, n)
 	}
@@ -154,15 +154,33 @@ func (s *Instance) rowTables(seq, pos []int) error {
 			}
 			slots[j] = sj
 		}
-		var swa []float32
-		if s.bcsSWA != nil {
-			swa = s.bcsSWA[i*ws:]
+		var at nn.RopeTables
+		for t, b := range s.bcs {
+			if b != nil {
+				at[t] = b[i*s.tabW[t]:]
+			}
 		}
-		if err := s.ropeTables(&o.rmarks, slots[i:j], pos[i:j], s.bcs[i*w:], swa); err != nil {
+		if err := s.ropeTables(&o.rmarks, slots[i:j], pos[i:j], at); err != nil {
 			return err
 		}
 		i = j
 	}
 	s.rowsFresh = true
 	return nil
+}
+
+// blockRotary is which of the instance's rotary tables block graph g's
+// rotary turns by (composer.RotaryIndex), 0 for a block that turns none.
+func (s *Instance) blockRotary(g *graph.Graph) int {
+	if g == nil {
+		return 0
+	}
+	for _, o := range g.Ops {
+		if o.Kind == graph.OpRope {
+			if i, ok := composer.RotaryIndex(s.rotaries(), o.Attr); ok {
+				return i
+			}
+		}
+	}
+	return 0
 }

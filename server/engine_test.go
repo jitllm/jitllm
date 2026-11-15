@@ -1034,7 +1034,7 @@ func TestPlacementRefusesWhatAHostOnlySessionCannotDo(t *testing.T) {
 type refusingDevice struct{}
 
 func (refusingDevice) PrepLayer(int, *nn.LayerPlan, *nn.LayerWeights) bool { return false }
-func (refusingDevice) Layers(int, int, int, int, []float32, []float32, []float32, *nn.Head) bool {
+func (refusingDevice) Layers(int, int, int, int, []float32, nn.RopeTables, *nn.Head) bool {
 	return false
 }
 func (refusingDevice) PrewarmLayer(int, *nn.LayerPlan, *nn.LayerWeights) bool { return false }

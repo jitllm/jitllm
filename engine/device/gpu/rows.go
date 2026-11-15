@@ -64,30 +64,31 @@ func (r *ragStep) oneSequence() bool {
 // reads its own sequence's keys (kernels.AttnScoresRagged/AttnAccRagged),
 // softmaxes over its own count and ends in its own argmax. N sequences cost
 // one pass over the weights instead of N.
-func (g *devTier) LayersRows(lo, hi int, pos, slot []int, seqLen int, x, cs, csSWA []float32, head *nn.Head) bool {
+func (g *devTier) LayersRows(lo, hi int, pos, slot []int, seqLen int, x []float32, cs nn.RopeTables, head *nn.Head) bool {
 	v := g.as(0)
 	if v == nil {
 		return false
 	}
 	defer v.done()
 	rs := &ragStep{pos: pos, slot: slot, seqLen: seqLen}
-	return v.layersRows(lo, hi, rs, x, cs, csSWA, head)
+	return v.layersRows(lo, hi, rs, x, cs, head)
 }
 
 // rowGroups is rowsInGroups' scratch: the order a step's rows run in, a
 // group's rows in it, and the group's step, head and rows gathered.
 type rowGroups struct {
-	rs                           ragStep
-	head                         nn.Head
-	ord, gi, pos, slot           []int
-	sid                          []uint64
-	x, cs, sw, ple, cut, lg, hid []float32
-	tok, toks                    []int32
+	rs                   ragStep
+	head                 nn.Head
+	ord, gi, pos, slot   []int
+	sid                  []uint64
+	x, ple, cut, lg, hid []float32
+	cs                   nn.RopeTables
+	tok, toks            []int32
 }
 
 // layersRows is LayersRows for rs's rows, each of its own session where
 // rs.sid is set and of rs.self's otherwise.
-func (g *devTier) layersRows(lo, hi int, rs *ragStep, x, cs, csSWA []float32, head *nn.Head) bool {
+func (g *devTier) layersRows(lo, hi int, rs *ragStep, x []float32, cs nn.RopeTables, head *nn.Head) bool {
 	fail := func(f string, a ...any) bool {
 		g.mu.Lock()
 		g.LastErr = fmt.Sprintf("rows: "+f, a...)
@@ -106,7 +107,7 @@ func (g *devTier) layersRows(lo, hi int, rs *ragStep, x, cs, csSWA []float32, he
 	defer g.restoreGeom(prev)
 	switch {
 	case g.rowsFaulted("noswa"):
-		csSWA = nil
+		cs = nn.RopeTables{cs[0]}
 	}
 	if n < 1 || len(slot) != n || lo < 0 || lo > hi || (lo == hi && head == nil) {
 		return fail("%d positions, %d slots, blocks [%d,%d)", n, len(slot), lo, hi)
@@ -123,7 +124,7 @@ func (g *devTier) layersRows(lo, hi int, rs *ragStep, x, cs, csSWA []float32, he
 			// kept at its slot.
 			k.split = true
 		}
-		return g.rowsInGroups(lo, hi, grp, rs, x, cs, csSWA, head)
+		return g.rowsInGroups(lo, hi, grp, rs, x, cs, head)
 	}
 	if g.NoBatch {
 		return fail("NoBatch is set")
@@ -202,7 +203,7 @@ func (g *devTier) layersRows(lo, hi int, rs *ragStep, x, cs, csSWA []float32, he
 	if head != nil && len(head.Tokens) < n {
 		head.Tokens = make([]int32, n)
 	}
-	if !g.submit(sid, bs, lo, hi, 0, x, cs, csSWA, head) {
+	if !g.submit(sid, bs, lo, hi, 0, x, cs, head) {
 		return false
 	}
 	g.mu.Lock()
@@ -237,9 +238,9 @@ func (g *devTier) layersRows(lo, hi int, rs *ragStep, x, cs, csSWA []float32, he
 // group the rows wanting the head lead, as they lead the step. Each group's
 // rows, their side inputs among them, are gathered into the session's
 // scratch and its outputs scattered back.
-func (g *devTier) rowsInGroups(lo, hi, grp int, rs *ragStep, x, cs, csSWA []float32, head *nn.Head) bool {
+func (g *devTier) rowsInGroups(lo, hi, grp int, rs *ragStep, x []float32, cs nn.RopeTables, head *nn.Head) bool {
 	n := len(rs.pos)
-	xw, rw, sw := len(x)/n, len(cs)/n, len(csSWA)/n
+	xw := len(x) / n
 	want, vocab, embd := 0, 0, 0
 	if head != nil {
 		if len(head.Tokens) < n {
@@ -306,15 +307,22 @@ func (g *devTier) rowsInGroups(lo, hi, grp int, rs *ragStep, x, cs, csSWA []floa
 		q.gi = gi
 		m := len(gi)
 		q.pos, q.slot, q.sid = q.pos[:0], q.slot[:0], q.sid[:0]
-		q.x, q.cs, q.sw, q.ple, q.toks = q.x[:0], q.cs[:0], q.sw[:0], q.ple[:0], q.toks[:0]
+		q.x, q.ple, q.toks = q.x[:0], q.ple[:0], q.toks[:0]
+		for t := range q.cs {
+			q.cs[t] = q.cs[t][:0]
+		}
 		for _, r := range gi {
 			q.pos, q.slot = append(q.pos, rs.pos[r]), append(q.slot, rs.slot[r])
 			if rs.sid != nil {
 				q.sid = append(q.sid, rs.sid[r])
 			}
 			q.x = append(q.x, x[r*xw:(r+1)*xw]...)
-			q.cs = append(q.cs, cs[r*rw:(r+1)*rw]...)
-			q.sw = append(q.sw, csSWA[r*sw:(r+1)*sw]...)
+			for t, c := range cs {
+				if c != nil {
+					w := len(c) / n
+					q.cs[t] = append(q.cs[t], c[r*w:(r+1)*w]...)
+				}
+			}
 			q.ple = append(q.ple, ple[r*pw:(r+1)*pw]...)
 			q.toks = append(q.toks, toks[r*tw:(r+1)*tw]...)
 		}
@@ -351,7 +359,13 @@ func (g *devTier) rowsInGroups(lo, hi, grp int, rs *ragStep, x, cs, csSWA []floa
 			g.stepToks = q.toks
 		}
 		g.mu.Unlock()
-		if !g.layersRows(lo, hi, &q.rs, q.x, q.cs, q.sw, h) {
+		var qcs nn.RopeTables
+		for t, c := range cs {
+			if c != nil {
+				qcs[t] = q.cs[t]
+			}
+		}
+		if !g.layersRows(lo, hi, &q.rs, q.x, qcs, h) {
 			return false
 		}
 		for i, r := range gi {
@@ -542,13 +556,13 @@ type rowsCall struct {
 // block lives in the cache of the device that holds the block. The head rides
 // the last block's step where it is on that device, and is a step of its own
 // on the device holding it otherwise.
-func (g *GPU) LayersRows(lo, hi int, pos, slot []int, seqLen int, x, cs, csSWA []float32, head *nn.Head) bool {
-	return g.layersRows(&g.rows, 0, lo, hi, pos, slot, nil, seqLen, x, cs, csSWA, head)
+func (g *GPU) LayersRows(lo, hi int, pos, slot []int, seqLen int, x []float32, cs nn.RopeTables, head *nn.Head) bool {
+	return g.layersRows(&g.rows, 0, lo, hi, pos, slot, nil, seqLen, x, cs, head)
 }
 
 // layersRows is LayersRows for session self, with each row's session, or nil
 // for self's; c is self's rows call.
-func (g *GPU) layersRows(c *rowsCall, self uint64, lo, hi int, pos, slot []int, sid []uint64, seqLen int, x, cs, csSWA []float32, head *nn.Head) bool {
+func (g *GPU) layersRows(c *rowsCall, self uint64, lo, hi int, pos, slot []int, sid []uint64, seqLen int, x []float32, cs nn.RopeTables, head *nn.Head) bool {
 	beside := g.rowsCalls.Add(1) > 1
 	defer g.rowsCalls.Add(-1)
 	g.mu.Lock()
@@ -620,8 +634,7 @@ func (g *GPU) layersRows(c *rowsCall, self uint64, lo, hi int, pos, slot []int, 
 		st := &v.stepRS
 		st.pos, st.slot, st.sid, st.self, st.seqLen = pos, slot, sid, self, seqLen
 		st.again = slices.ContainsFunc(rs[:i], func(o run) bool { return o.dev == r.dev })
-		c0, c1 := r.tables(cs, csSWA)
-		ok := v.layersRows(r.lo, r.hi, st, x, c0, c1, h)
+		ok := v.layersRows(r.lo, r.hi, st, x, r.tables(cs), h)
 		v.done()
 		// The runs go too: a step that groups none (no linear block in its
 		// range, one session) would otherwise hand recDesc the last step's,
@@ -904,10 +917,10 @@ func (s *gpuSession) RowsRoom(rows, seqs int, head *nn.Head) (bool, error) {
 // not a session's.
 func (s *gpuSession) RowsWidth(want int) int { return s.g.RowsWidth(want) }
 
-func (s *gpuSession) LayersRows(lo, hi int, pos, slot []int, seqLen int, x, cs, csSWA []float32, head *nn.Head) bool {
+func (s *gpuSession) LayersRows(lo, hi int, pos, slot []int, seqLen int, x []float32, cs nn.RopeTables, head *nn.Head) bool {
 	defer s.leave(s.inputsTo(s.step()))
 	s.rows.in = s
-	return s.g.layersRows(&s.rows, s.sid, lo, hi, pos, slot, nil, seqLen, x, cs, csSWA, head)
+	return s.g.layersRows(&s.rows, s.sid, lo, hi, pos, slot, nil, seqLen, x, cs, head)
 }
 
 // LayersSessions runs one step for rows of different sessions on this GPU, row
@@ -918,7 +931,7 @@ func (s *gpuSession) LayersRows(lo, hi int, pos, slot []int, seqLen int, x, cs, 
 // must be its next positions, each once (devTier.groupRuns refuses a gap or a
 // repeat); every row's K and V are written before any row attends, so a
 // chunk's rows see each other causally.
-func (s *gpuSession) LayersSessions(lo, hi int, sess []nn.LayerRunner, pos []int, x, cs, csSWA []float32, head *nn.Head) bool {
+func (s *gpuSession) LayersSessions(lo, hi int, sess []nn.LayerRunner, pos []int, x []float32, cs nn.RopeTables, head *nn.Head) bool {
 	// The session's own lists, reused: a session steps from one goroutine.
 	s.sidBuf = slices.Grow(s.sidBuf[:0], len(sess))[:len(sess)]
 	s.slotBuf = slices.Grow(s.slotBuf[:0], len(sess))[:len(sess)]
@@ -938,7 +951,7 @@ func (s *gpuSession) LayersSessions(lo, hi int, sess []nn.LayerRunner, pos []int
 	s.rows.in = s
 	// A session is one sequence whose slots are its positions, so the span a
 	// sequence takes is no matter: every row's sequence is its session's 0.
-	return s.g.layersRows(&s.rows, s.sid, lo, hi, pos, slot, sid, 0, x, cs, csSWA, head)
+	return s.g.layersRows(&s.rows, s.sid, lo, hi, pos, slot, sid, 0, x, cs, head)
 }
 
 // ResetRecRows is resetRecRows for the zero session: a caller that never attached.

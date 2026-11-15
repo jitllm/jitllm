@@ -365,8 +365,8 @@ func TestComposedCPURowsDoNotAllocate(t *testing.T) {
 				if err := s.openRows(r, seq, pos, nil); err != nil {
 					t.Fatal(err)
 				}
-				err := s.rowsOn(r, 0, m.Cfg.NLayer, pos, s.flatSlots(seq, pos), s.bx[:n*s.c.ResidW()], s.bcs[:n*s.c.RopeW()],
-					s.bswaTable(n, s.c.LocalNRot()), false, nil, 0)
+				err := s.rowsOn(r, 0, m.Cfg.NLayer, pos, s.flatSlots(seq, pos), s.bx[:n*s.c.ResidW()], s.batchTables(n),
+					false, nil, 0)
 				if err != nil {
 					t.Fatalf("blocks: %v", err)
 				}

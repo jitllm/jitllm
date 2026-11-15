@@ -1879,28 +1879,26 @@ func (g *devTier) tableServes(bs *blockScratch, p *nn.LayerPlan, pos, R int, rag
 	return nil
 }
 
-// tableCount is how many tables bs holds: cs, and csSWA where the plan has
-// local layers.
+// tableCount is how many tables bs holds: cs, then each of csAt the plan
+// carries.
 func (bs *blockScratch) tableCount() int {
-	if bs.csSWA != nil {
-		return 2
+	n := 1
+	for n < nn.MaxRopeTables && bs.csAt[n] != nil {
+		n++
 	}
-	return 1
+	return n
 }
 
-// scratchTable is the graph of bs's table i (cs, then csSWA) among the
+// scratchTable is the graph of bs's table i (cs, then csAt's) among the
 // plan's tables, nil where the plan states none for it. A scratch set of one
 // geometry of a model of mixed geometry (scratchPlanOf) holds its own layers'
-// table in cs: the plan's first, or its second for blocks rotating by it.
+// table in cs: the plan's table its blocks rotate by (LayerPlan.Rotary).
 func scratchTable(bs *blockScratch, p *nn.LayerPlan, i int) *graph.Graph {
 	if bs.p.MixedGeom {
-		switch {
-		case i > 0 || len(p.Tables) != 2:
+		if i > 0 || bs.p.Rotary >= len(p.Tables) {
 			return nil
-		case bs.p.LocalRope:
-			return p.Tables[1]
 		}
-		return p.Tables[0]
+		return p.Tables[bs.p.Rotary]
 	}
 	if len(p.Tables) != bs.tableCount() || i >= len(p.Tables) {
 		return nil
@@ -1908,12 +1906,12 @@ func scratchTable(bs *blockScratch, p *nn.LayerPlan, i int) *graph.Graph {
 	return p.Tables[i]
 }
 
-// tableBinds is what table i of bs writes and reads: the global table cs or
-// the local one, its planes, and its positions (rope.pos, or over several
+// tableBinds is what table i of bs writes and reads: the first table cs or
+// a further one, its planes, and its positions (rope.pos, or over several
 // axes rope.pos.axes).
 func (g *devTier) tableBinds(bs *blockScratch, i int) (cs, planes, rows backend.Buf) {
 	if i > 0 {
-		return bs.csSWA, bs.ropeTabSWA, bs.ropeRows
+		return bs.csAt[i], bs.ropeTabAt[i], bs.ropeRows
 	}
 	if gr := scratchTable(bs, &bs.p, 0); gr != nil && tableAxes(gr) {
 		return bs.cs, bs.ropeTabAxes, bs.ropeRows
@@ -3187,15 +3185,15 @@ func (g *devTier) servedBlockAs(l *layer, li int, cs backend.Buf, pl *kvLayerPoo
 }
 
 // bindRotaries binds a block's rotary tables into t by instance, as its rope
-// ops pick them (composer.Request.Rotaries): the global table cs and, where the
-// model trains a second rotary, the sliding blocks', with their planes where
-// the block's graph reads them. Callers hold g.mu.
+// ops pick them (composer.Request.Rotaries): the first table cs and each
+// further one the model states, with their planes where the block's graph
+// reads them. Callers hold g.mu.
 func (g *devTier) bindRotaries(t map[composer.TableKey]backend.Buf, bs *blockScratch, cs backend.Buf, planes bool) {
-	// A set of blocks rotating by the second table, on a model of mixed
-	// geometry, holds that table in cs (scratchTable).
+	// A set of blocks of a model of mixed geometry holds the table they
+	// rotate by in cs (scratchTable).
 	first := 0
-	if bs != nil && bs.p.MixedGeom && bs.p.LocalRope {
-		first = 1
+	if bs != nil && bs.p.MixedGeom {
+		first = bs.p.Rotary
 	}
 	t[composer.TableKey{Table: composer.TableAngles, Instance: first}] = cs
 	if bs == nil {
