@@ -5,7 +5,7 @@ import (
 )
 
 // A selecting block on the device (nn.LayerPlan.Select): the indexer's key
-// rides the cached row after the attention's own (nn.LayerPlan.KeyW), so it
+// rides the cached row after the attention's own (nn.LayerPlan.HistRow), so it
 // pages, migrates and is stored with it, and the attention reads the
 // positions its composed selection keeps.
 

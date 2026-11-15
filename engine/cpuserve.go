@@ -258,7 +258,7 @@ func (s *Instance) specOf(li int, g *graph.Graph) nn.BlockSpec {
 	// A non-causal model's recurrent block reads both ways too: its
 	// convolution is centred over the whole run.
 	k := s.c.LayerKind(li)
-	p.Bidir = k.Attends() && s.c.BidirAt(li) || k.Recurrent() && s.c.NonCausal
+	p.Bidir = k.Attends() && !attendsCausally(s.m.Composing().BlockGraph(li)) || k.Recurrent() && s.c.NonCausal
 	if k.Recurrent() && s.c.NonCausal {
 		p.Run = s.maxSeq
 	}

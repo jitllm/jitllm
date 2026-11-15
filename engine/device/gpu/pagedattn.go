@@ -383,6 +383,7 @@ func (g *devTier) pagedStage(pg *pagedScratch, p *nn.LayerPlan, rows []pagedRow)
 	kp := g.kvPages()
 	pg.desc, pg.descW = pg.desc[:0], pg.descW[:0]
 	callEnd := pagedKeys(rows)
+	noRuns := attendNoRuns(p.Graph)
 	for _, r := range rows {
 		if r.pad {
 			pg.desc = append(pg.desc, 0, 0, 0, 0)
@@ -397,7 +398,7 @@ func (g *devTier) pagedStage(pg *pagedScratch, p *nn.LayerPlan, rows []pagedRow)
 		// its window still starts from its own position, as the reference's
 		// does, which the start word here carries apart from the end.
 		last := end
-		if e := g.runEnd(r.pos, callEnd); e > 0 && !p.BidirOff {
+		if e := g.runEnd(r.pos, callEnd); e > 0 && !noRuns {
 			last = uint32(e)
 		}
 		pg.desc = append(pg.desc, o, 0, last, uint32(r.pos))
@@ -405,7 +406,7 @@ func (g *devTier) pagedStage(pg *pagedScratch, p *nn.LayerPlan, rows []pagedRow)
 			// The window as a start: the last W keys, or a chunk of W aligned
 			// keys.
 			var lo uint32
-			if w := uint32(p.SWAWindow); p.SWAChunked {
+			if w := uint32(p.SWAWindow); kp.chunked {
 				lo = (end - 1) / w * w
 			} else {
 				lo = end - min(end, w)
@@ -498,6 +499,9 @@ func (g *devTier) pagedLayer(sid uint64, l *layer, li int, p *nn.LayerPlan) erro
 	}
 	// The window paged attention applies to this block (pagedStage's descW).
 	kp.layers[li].win, kp.layers[li].chunked = l.win, l.chunked
+	if l.win > 0 {
+		kp.chunked = l.chunked
+	}
 	kp.layers[li].tail = historyTail(p.Graph)
 	if l.kv == nil {
 		l.kv = map[uint64]*kvPair{}

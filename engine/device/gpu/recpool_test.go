@@ -31,7 +31,7 @@ func TestRecurrentPoolReturnsEveryByte(t *testing.T) {
 	dt := g.devs[0]
 	p := pagePlan()
 	p.Recurrent = nn.RecurrentPlan{
-		Conv: 4, Chans: 96, KHeads: 2, VHeads: 4, KDim: 8, VDim: 8,
+		Conv: 4, Chans: 96,
 		StateLen: 4 * 8 * 8, ConvState: 3 * 96,
 	}
 	slot := uint64(2 * (p.Recurrent.StateLen + p.Recurrent.ConvState) * 4)
@@ -211,7 +211,7 @@ func migrateRecCase(t *testing.T, dt *devTier, shared bool) {
 	dt.SharedRec = shared
 	p := pagePlan()
 	p.Recurrent = nn.RecurrentPlan{
-		Conv: 4, Chans: 97, KHeads: 1, VHeads: 3, KDim: 7, VDim: 5,
+		Conv: 4, Chans: 97,
 		StateLen: 3 * 5 * 7, ConvState: 3 * 97,
 	}
 	S, C := p.Recurrent.StateLen, p.Recurrent.ConvState

@@ -942,7 +942,11 @@ type Attrs struct {
 	// position attends to every other (an embedding model's encoder pass).
 	// With a Window it is the window's full width: a position attends the
 	// keys within Window/2 of it either side.
-	Bidir   bool
+	Bidir bool
+	// NoRuns keeps a causal attention causal inside the bidirectional key
+	// runs a call hands its rows (a picture's rows that see each other,
+	// nn.KeyRunDevice): each row counts keys to its own position.
+	NoRuns  bool
 	Softcap float64
 	// Expr is OpExpr's terms.
 	Expr []Term

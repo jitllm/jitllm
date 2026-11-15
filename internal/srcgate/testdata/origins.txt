@@ -997,10 +997,10 @@ bug	engine/device/gpu/layer.go	"block %d: clipped-linear bounds are %d floats, w
 bug	engine/device/gpu/layer.go	"block %d: conv1d is %d floats, want %d x %d"
 bug	engine/device/gpu/layer.go	"block %d: offered with a graph other than the one this device holds for it"	a model's block changed under its placement: a loaded model's graphs are fixed (model.FrontGraphs), so only a model edited in place reaches it
 bug	engine/device/gpu/layer.go	"block %d: the plan has a shared expert (NFFNShExp=%d) and %s is empty"
+bug	engine/device/gpu/layer.go	"block %d: the graph's q/k norm is %v and the block offers %d norm weights"
 bug	engine/device/gpu/layer.go	"block %d: the plan is a channel-decay delta block and %s is empty"
 bug	engine/device/gpu/layer.go	"block %d: the plan is a latent attention block (KVLoraRank=%d) and %s is empty"
 bug	engine/device/gpu/layer.go	"block %d: the plan is a linear block and %s is empty"
-bug	engine/device/gpu/layer.go	"block %d: the plan's q/k norm is %v and the block offers %d norm weights"
 bug	engine/device/gpu/layer.go	"block %d: v is k's projection and the block offers a v matrix"
 context	engine/device/gpu/layer.go	"conv"
 context	engine/device/gpu/layer.go	"graphs disabled: %v"

@@ -617,7 +617,7 @@ func TestASecondSessionsStateTakesAPageOnAFullCard(t *testing.T) {
 			t.Fatalf("no state past the %d bytes the card has left costs only one of its %d slots", free, slots)
 		}
 		const conv = 3 * 96
-		rp.Recurrent = nn.RecurrentPlan{Conv: 4, Chans: 96, KHeads: 2, VHeads: 4, KDim: 8, VDim: 8,
+		rp.Recurrent = nn.RecurrentPlan{Conv: 4, Chans: 96,
 			StateLen: int(state/8) - conv, ConvState: conv}
 		l := &layer{linear: true, ok: true}
 		dt.layers[n] = l

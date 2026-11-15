@@ -994,7 +994,7 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	if scale == 0 {
 		scale = 1 / math.Sqrt(float64(hd))
 	}
-	a := graph.Attrs{NHead: c.NHead, NKVHead: nkv, HeadDim: hd, Scale: scale, Softcap: float64(c.AttnSoftcap), Bidir: c.NonCausal,
+	a := graph.Attrs{NHead: c.NHead, NKVHead: nkv, HeadDim: hd, Scale: scale, Softcap: float64(c.AttnSoftcap), Bidir: c.NonCausal, NoRuns: !c.BidirAt(li),
 		RowWindows: c.NonCausal && c.RowWindowed}
 	if c.SWA(li) {
 		a.Window, a.Chunked = c.SWAWindow, c.SWAChunked
@@ -1549,7 +1549,7 @@ func (m *Model) latentAttention(b *graph.Builder, f graph.Facts, li int, n, qIn,
 	if scale == 0 {
 		scale = 1 / math.Sqrt(float64(hd))
 	}
-	a := graph.Attrs{NHead: nh, NKVHead: 1, HeadDim: row, Scale: scale, Softcap: float64(c.AttnSoftcap)}
+	a := graph.Attrs{NHead: nh, NKVHead: 1, HeadDim: row, Scale: scale, Softcap: float64(c.AttnSoftcap), NoRuns: !c.BidirAt(li)}
 	if c.SWA(li) {
 		a.Window, a.Chunked = c.SWAWindow, c.SWAChunked
 	}

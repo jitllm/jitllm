@@ -2161,6 +2161,60 @@ func attendWindow(gr *graph.Graph) (int, bool) {
 	return 0, false
 }
 
+// expertsOwnWidth reports that gr's routed experts write rows of a width of
+// their own, not the residual's embd: their down bank's output.
+func expertsOwnWidth(gr *graph.Graph, embd int) bool {
+	if gr != nil {
+		for _, o := range gr.Ops {
+			for _, b := range o.Weight {
+				if b.Role == jlm.RoleExpDownBank && b.Rows != embd {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// attendNoRuns reports that gr's attention stays causal inside a call's
+// bidirectional key runs (graph.Attrs.NoRuns).
+func attendNoRuns(gr *graph.Graph) bool {
+	if gr != nil {
+		for _, o := range gr.Ops {
+			if o.Kind == graph.OpAttend {
+				return o.Attr.NoRuns
+			}
+		}
+	}
+	return false
+}
+
+// attendSoftcap is the cap gr's attention puts on its scores, 0 for none.
+func attendSoftcap(gr *graph.Graph) float64 {
+	if gr != nil {
+		for _, o := range gr.Ops {
+			if o.Kind == graph.OpAttend {
+				return o.Attr.Softcap
+			}
+		}
+	}
+	return 0
+}
+
+// graphAttends reports that gr appends to a history of its own, which its
+// attention reads.
+func graphAttends(gr *graph.Graph) bool {
+	if gr == nil {
+		return false
+	}
+	for _, o := range gr.Ops {
+		if o.Kind == graph.OpKVAppend && len(o.Writes) == 1 && o.Writes[0].Hist == 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // inPlace says the form may write output out over input in: every kernel
 // that reads in launches before the first that writes out. One kernel that
 // reads in at the elements it writes out at is not enough: a launch clamps

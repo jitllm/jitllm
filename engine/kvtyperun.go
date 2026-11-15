@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/model"
 	"github.com/jitllm/jitllm/nn"
@@ -148,4 +149,58 @@ func (s *Instance) deviceGraph(li int) *graph.Graph {
 	}
 	hd := s.kvlAt(li).headDim
 	return s.m.DerivedBlockGraph(li, int(f), func(g *graph.Graph) *graph.Graph { return typedAppends(g, f, hd) })
+}
+
+// historySelected reports that some block of [lo, hi) reads its history
+// through a selection (graph.OpSelect), which ranks the history's keys
+// discretely.
+func historySelected(m composer.Model, lo, hi int) bool {
+	for li := lo; li < hi; li++ {
+		g := m.BlockGraph(li)
+		if g == nil {
+			continue
+		}
+		for _, o := range g.Ops {
+			if o.Kind == graph.OpSelect {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// historyRow is a position's row in the history graph g reads: the key row
+// g appends to its own (graph.OpKVAppend's In[0]), or the source block's
+// where g reads another's history (StateRef.From); 0 where it reads none.
+func historyRow(m composer.Model, g *graph.Graph) int {
+	if g == nil {
+		return 0
+	}
+	for _, o := range g.Ops {
+		if o.Kind == graph.OpKVAppend && len(o.Writes) == 1 && o.Writes[0].Hist == 0 && o.Writes[0].From == 0 {
+			return g.Values[o.In[0]].Width
+		}
+	}
+	for _, o := range g.Ops {
+		for _, r := range o.Reads {
+			if r.State == graph.StateKV && r.Hist == 0 && r.From > 0 {
+				return historyRow(m, m.BlockGraph(r.From-1))
+			}
+		}
+	}
+	return 0
+}
+
+// attendsCausally reports that g's attention stays causal inside a call's
+// bidirectional key runs (graph.Attrs.NoRuns).
+func attendsCausally(g *graph.Graph) bool {
+	if g == nil {
+		return false
+	}
+	for _, o := range g.Ops {
+		if o.Kind == graph.OpAttend {
+			return o.Attr.NoRuns
+		}
+	}
+	return false
 }

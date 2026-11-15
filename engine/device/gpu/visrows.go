@@ -251,7 +251,7 @@ func (g *devTier) towerPlanesAt(p *nn.LayerPlan, rows, keys int) (int, int64) {
 	ss := scoreStride(&q, rc)
 	ar, _ := visionChunk(rc, q.NHead, ss, qt, at, g.planeBudget())
 	planes := int64(2)
-	if q.AttnSoftcap != 0 {
+	if attendSoftcap(q.Graph) != 0 {
 		planes = 3
 	}
 	return rc, planes * int64(ar*q.NHead*ss*4)
@@ -260,7 +260,7 @@ func (g *devTier) towerPlanesAt(p *nn.LayerPlan, rows, keys int) (int, int64) {
 // planeBytes is what bs's score planes hold.
 func planeBytes(bs *blockScratch) int64 {
 	n := int64(2)
-	if bs.p.AttnSoftcap != 0 {
+	if attendSoftcap(bs.p.Graph) != 0 {
 		n = 3
 	}
 	return n * int64(bs.arows*bs.p.NHead*bs.sstride*4)

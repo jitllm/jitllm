@@ -217,6 +217,9 @@ type kvPool struct {
 	// only pages wholly below it may leave, so a page a call is about to write
 	// is never sent to host memory under it.
 	written map[seqID]int
+	// chunked says the windowed layers' graphs attend an aligned chunk of
+	// their window rather than its last keys (pagedStage's windowed rows).
+	chunked bool
 }
 
 // newKVPool starts a pool of p-position pages with no layers. maxBuf is the
