@@ -89,6 +89,10 @@ func statedGraphModels() []string {
 		"Moonlight-16B-A3B-Instruct-Q4_K_M.gguf", "Kimi-VL-A3B-Thinking-2506-Q4_K_M.gguf+mmproj-Kimi-VL-A3B-Instruct-f16.gguf",
 		// An indexer's key cached beside the keys, attention over the positions it selects.
 		"synth-deepseek32.gguf", "synth-minimaxm3.gguf",
+		// Hyper-connected streams over a window beside compressed entries, an
+		// indexer selecting among them, and a token table routing the first
+		// blocks.
+		"synth-deepseek4.gguf", "synth-deepseek4-hca.gguf", "synth-deepseek4-sliding.gguf",
 		// XD-RoPE: four axes over cat(freq, freq), k's norm after it.
 		"synth-hunyuanvl.gguf", "synth-hunyuanvl.gguf+mmproj-synth-hunyuanvl.gguf", "hunyuanvl/HunyuanOCR-Q8_0.gguf",
 		// The encoders: each sublayer's sum normed after the residual.
