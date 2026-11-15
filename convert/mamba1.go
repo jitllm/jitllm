@@ -22,9 +22,6 @@ import (
 // dt_proj (ssm_dt.weight, RoleSSMDtProj) takes the bottleneck back up to the
 // channels; its rank is read off that tensor, not stated in the config.
 
-// mamba1Arch reports the architectures whose recurrent layers are Mamba-1's.
-func mamba1Arch(a Arch) bool { return a == ArchMamba || a == ArchJamba }
-
 // neverRenormalises states a router that never renormalises its weights
 // (llama.cpp's builder passes false as a literal), refusing a file whose
 // expert_weights_norm says otherwise: it describes a model neither
@@ -43,7 +40,7 @@ func neverRenormalises(f *meta.File, c *Config, router string) error {
 // this file). Row ranges of a row-major matrix are byte ranges, so the bytes
 // are the source's.
 func unfuseMamba1(e *jlm.Tensor, c *Config) ([]jlm.Tensor, bool, error) {
-	if c == nil || !mamba1Arch(c.Arch) {
+	if !blockIs(c, e.Block, jlm.LayerScan) {
 		return nil, false, nil
 	}
 	inner, n := uint64(c.SSM.Inner), uint64(c.SSM.StateSize)
@@ -91,10 +88,10 @@ func unfuseMamba1(e *jlm.Tensor, c *Config) ([]jlm.Tensor, bool, error) {
 
 // mamba1UnitNorms writes FalconMamba's weightless dt, B and C RMSNorms
 // (ssm.dt_b_c_rms) as weights of ones, one set per Mamba-1 block, so the
-// engine runs them exactly as Jamba's weighted ones. rank is each block's dt
-// bottleneck, read off its x_proj.
+// engine runs them exactly as Jamba's weighted ones; a block carrying its own
+// norms keeps them. rank is each block's dt bottleneck, read off its x_proj.
 func mamba1UnitNorms(c *Config, f *meta.File, s *jlm.Source) error {
-	if c == nil || c.Arch != ArchMamba {
+	if c == nil {
 		return nil
 	}
 	if kv, ok := f.Key("ssm.dt_b_c_rms"); !ok {
@@ -111,14 +108,18 @@ func mamba1UnitNorms(c *Config, f *meta.File, s *jlm.Source) error {
 		return b
 	}
 	rank := map[int32]uint64{}
+	weighted := map[int32]bool{}
 	for i := range s.Tensors {
-		if t := &s.Tensors[i]; t.Role == jlm.RoleSSMXDt {
+		switch t := &s.Tensors[i]; t.Role {
+		case jlm.RoleSSMXDt:
 			rank[t.Block] = t.Dims[1]
+		case jlm.RoleSSMDtNorm:
+			weighted[t.Block] = true
 		}
 	}
 	n := uint64(c.SSM.StateSize)
 	for b, k := range c.LayerKinds {
-		if k != jlm.LayerScan {
+		if k != jlm.LayerScan || weighted[int32(b)] {
 			continue
 		}
 		r, ok := rank[int32(b)]

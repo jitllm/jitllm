@@ -15,11 +15,15 @@ import (
 // x | B | C, and unfuseSSD permutes their rows once here so that deltaGeom
 // slices a Mamba-2 block exactly as it slices qwen3next's.
 
-// ssdArch reports the architectures whose recurrent layers are Mamba-2's.
-func ssdArch(a Arch) bool {
-	switch a {
-	case ArchMamba2, ArchGraniteHybrid, ArchNemotronH, ArchFalconH1:
-		return true
+// blockIs reports whether block b's stated kind is one of kinds.
+func blockIs(c *Config, b int32, kinds ...jlm.LayerKind) bool {
+	if c == nil || b < 0 || int(b) >= len(c.LayerKinds) {
+		return false
+	}
+	for _, k := range kinds {
+		if c.LayerKinds[b] == k {
+			return true
+		}
 	}
 	return false
 }
@@ -34,7 +38,7 @@ func ssdArch(a Arch) bool {
 // same way, so the convolution runs over q | k | v. GGUF rows are byte ranges,
 // so all of it is copies; nothing is re-quantized.
 func unfuseSSD(e *jlm.Tensor, c *Config) ([]jlm.Tensor, bool, error) {
-	if c == nil || !ssdArch(c.Arch) {
+	if !blockIs(c, e.Block, jlm.LayerSSD, jlm.LayerSSDAttn) {
 		return nil, false, nil
 	}
 	s := c.SSM

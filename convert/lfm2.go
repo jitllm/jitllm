@@ -11,7 +11,7 @@ import (
 // then x. Row ranges of a row-major matrix are byte ranges, so the bytes are
 // the source's.
 func unfuseLFM2(e *jlm.Tensor, c *Config) ([]jlm.Tensor, bool, error) {
-	if c == nil || c.Arch != ArchLFM2 && c.Arch != ArchLFM2Enc || e.Role != jlm.RoleSSMInProj {
+	if !blockIs(c, e.Block, jlm.LayerShortConv) || e.Role != jlm.RoleSSMInProj {
 		return nil, false, nil
 	}
 	n := uint64(c.NEmbd)
