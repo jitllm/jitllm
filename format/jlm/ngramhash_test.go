@@ -30,6 +30,12 @@ func TestNGramHashRoundTrips(t *testing.T) {
 	}
 	short := hash()
 	short.Voc = short.Voc[:3]
+	none := hash()
+	none.Voc[1] = 0
+	wide := hash()
+	wide.Voc[2] = 1<<31 + 1
+	past := hash()
+	past.Off[3] = 1<<32 - 78
 	other := &Program{NIn: 1, Out: 1, Ops: []TowerOp{{Code: TOpSlice, In: []uint16{0}, Width: 4, Hash: hash()}}}
 	for _, tc := range []struct {
 		name string
@@ -38,6 +44,9 @@ func TestNGramHashRoundTrips(t *testing.T) {
 	}{
 		{"no hash", op(nil), "by a hash of"},
 		{"a range short", op(short), "by a hash of"},
+		{"a head of no rows", op(none), "by a hash of"},
+		{"a head past 2^31 rows", op(wide), "by a hash of"},
+		{"a head ending past 2^32", op(past), "by a hash of"},
 		{"a hash on a slice", other, "states a hash"},
 	} {
 		if err := tc.p.valid("n-gram"); err == nil || !strings.Contains(err.Error(), tc.want) {

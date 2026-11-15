@@ -4,13 +4,23 @@ package jlm
 func (h *NGramHash) heads(span int32) int { return int(span-1) * int(h.HeadsPer) }
 
 // fits reports a hash an n-gram op of span and width can read: a head count
-// that divides the width, a range a head, a multiplier a token.
+// that divides the width, a range a head, a multiplier a token, and each
+// head's range rows a word names: 1 to 2^31 of them, ending at most at 2^32,
+// the bounds of a remainder in words (graph.Builder.ModAdd).
 func (h *NGramHash) fits(span, width int32) bool {
 	if h == nil || h.HeadsPer == 0 {
 		return false
 	}
 	n := h.heads(span)
-	return n > 0 && int(width)%n == 0 && len(h.Off) == n && len(h.Voc) == n && len(h.Mul) >= int(span)
+	if n <= 0 || int(width)%n != 0 || len(h.Off) != n || len(h.Voc) != n || len(h.Mul) < int(span) {
+		return false
+	}
+	for i, v := range h.Voc {
+		if v < 1 || v > 1<<31 || h.Off[i] > 1<<32-v {
+			return false
+		}
+	}
+	return true
 }
 
 func encodeNGramHash(w *wbuf, h *NGramHash) {

@@ -121,7 +121,7 @@ func q4eViolations() []c6Violation {
 		}},
 		{"the n-gram window not reset at the end of a sequence", func(m *model.Model) func() {
 			// A predecessor's id past the first reads as the end of sequence
-			// where it is none or the one before it is (graph.TailOp):
+			// where it is none or the one before it is (graph.Builder.NGramRows):
 			// the second test's term dropped.
 			return restated(m, editing(namedOps("ng.id"), func(o *graph.Op) {
 				if len(o.In) == 2 {

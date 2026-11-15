@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"fmt"
 	"math/bits"
 
 	"github.com/jitllm/jitllm/format/jlm"
@@ -103,7 +104,10 @@ func (s *Builder) MulXor(name string, acc *Wide, x ValueID, m uint64) Wide {
 // ModAdd is (w modulo n) + off for the 64-bit rows w, n in [1, 2^31] and
 // off+n at most 2^32: the remainder taken from the top a few bits at a time,
 // a remainder below n shifted by those bits staying in a word.
-func (s *Builder) ModAdd(name string, w Wide, n, off uint64) ValueID {
+func (s *Builder) ModAdd(name string, w Wide, n, off uint64) (ValueID, error) {
+	if n < 1 || n > 1<<31 || off > 1<<32-n {
+		return -1, fmt.Errorf("graph: a remainder modulo %d plus %d is not a word", n, off)
+	}
 	var e WordTerms
 	limbs := [4]Arg{
 		e.Fn(MapAnd, WordIn(0), Word(limb)), e.Fn(MapShr, WordIn(0), Word(16)),
@@ -128,7 +132,51 @@ func (s *Builder) ModAdd(name string, w Wide, n, off uint64) ValueID {
 		rem = e.Fn(MapRem, e.Fn(MapAdd, e.Fn(MapShl, rem, Word(uint32(ln))), bitsOf(top, ln)), Word(uint32(n)))
 	}
 	e.Fn(MapAdd, rem, Word(uint32(off)))
-	return s.Words(name, s.width(w.Lo), &e, w.Lo, w.Hi)
+	return s.Words(name, s.width(w.Lo), &e, w.Lo, w.Hi), nil
+}
+
+// NGramRows is each row's table row a head of h over its window win (n
+// words: the row's token, then its predecessors nearest first, each its id
+// plus one, 0 for none), in words: the window's ids, a predecessor that is
+// none or past an end of sequence read as the end of sequence; each g-gram's
+// product, the (g-1)-gram's xored with its last id times that id's
+// multiplier, modulo 2^64 (the 2-gram's the first two ids'); and each head's
+// row, its gram's product modulo the head's vocabulary plus its offset.
+func (s *Builder) NGramRows(win ValueID, n int, h *jlm.NGramHash) (ValueID, error) {
+	if heads := (n - 1) * int(h.HeadsPer); n < 2 || len(h.Mul) < n || len(h.Voc) < heads || len(h.Off) < heads {
+		return -1, fmt.Errorf("graph: %d-grams over %d heads, %d multipliers, %d ranges", n, heads, len(h.Mul), len(h.Voc))
+	}
+	at := func(i int) ValueID {
+		return s.Emit(OpSlice, []ValueID{win}, []Result{{Name: fmt.Sprintf("ng.w%d", i), Width: 1, Elem: ElemU32}}, nil,
+			Attrs{Offset: i, Width: 1}, nil, nil)[0]
+	}
+	eos := Word(h.EOS)
+	ids := []ValueID{at(0)}
+	for i := 1; i < n; i++ {
+		var e WordTerms
+		none := e.Fn(MapEqual, WordIn(0), Word(0))
+		in := []ValueID{at(i)}
+		if i > 1 {
+			none = e.Fn(MapAdd, none, e.Fn(MapEqual, WordIn(1), eos))
+			in = append(in, ids[i-1])
+		}
+		e.Fn(MapWhere, none, eos, e.Fn(MapSub, WordIn(0), Word(1)))
+		ids = append(ids, s.Words(fmt.Sprintf("ng.id%d", i), 1, &e, in...))
+	}
+	gram := s.MulXor("ng.g1", nil, ids[0], h.Mul[0])
+	var rows []ValueID
+	for g := 2; g <= n; g++ {
+		gram = s.MulXor(fmt.Sprintf("ng.g%d", g), &gram, ids[g-1], h.Mul[g-1])
+		for k := range int(h.HeadsPer) {
+			i := (g-2)*int(h.HeadsPer) + k
+			r, err := s.ModAdd(fmt.Sprintf("ng.h%d", i), gram, h.Voc[i], h.Off[i])
+			if err != nil {
+				return -1, err
+			}
+			rows = append(rows, r)
+		}
+	}
+	return s.Emit(OpConcat, rows, []Result{{Name: "ng.rows", Width: len(rows), Elem: ElemU32}}, nil, Attrs{}, nil, nil)[0], nil
 }
 
 // TableRows is the row of words g's gathers of a row table (jlm.RowTable)
