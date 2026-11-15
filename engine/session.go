@@ -170,7 +170,7 @@ func (s *Instance) relayout() error {
 	l := s.kvl
 	l.maxSeq = sess.limit
 	old := sess.kv
-	kv := newKVCacheRange(s.c, old.id, 1, l, old.store, s.opt.kvPage, s.lo, s.hi, old.view, s.storage().PagePool(), s.entPlanes())
+	kv := newKVCacheRange(s.c, old.id, 1, l, old.store, s.opt.kvPage, s.lo, s.hi, old.view, s.storage().PagePool(), s.histOf, s.entPlanes())
 	kv.reserve(sess.limit)
 	kv.ns, kv.budget = old.ns, old.budget
 	if err := kv.useArenas(sess.limit, s.kvArenaFor); err != nil {
@@ -195,7 +195,7 @@ func (s *Instance) relayout() error {
 func (s *Instance) recode(old, kv *kvCache) error {
 	sess := s.Session
 	for li := s.lo; li < s.hi && li < len(old.layers) && s.pos > 0; li++ {
-		if old.layers[li].p == 0 || s.c.KVShared(li) || li < len(sess.held) && sess.held[li] == routeView {
+		if old.layers[li].p == 0 || s.readsOther(li) || li < len(sess.held) && sess.held[li] == routeView {
 			continue
 		}
 		old.window(li, 0, s.pos)

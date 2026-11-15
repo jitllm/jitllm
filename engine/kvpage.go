@@ -423,7 +423,7 @@ type kvCache struct {
 	recurrent bool
 	// view is the session's view of the CPU device's history: the table each
 	// block reads its pages through. src is each block's history block
-	// (Config.KVSource), noTable the page table of a block that keeps no
+	// (Instance.histOf), noTable the page table of a block that keeps no
 	// history, and err the first page fault of the current step that could
 	// not be recovered: set inside a pool closure, which has no error path,
 	// and drained by Instance.kvCheck at the entry point.
@@ -538,7 +538,7 @@ func (kv *kvCache) MigrateKV(li int, k, v []float32, pos int, in bool, conv nn.K
 }
 
 func newKVCache(c *model.Config, id string, nseq int, l kvLayout, store KVStore, pin int) *kvCache {
-	return newKVCacheRange(c, id, nseq, l, store, pin, 0, c.NLayer, history.NewView(c.NLayer), nil, nil)
+	return newKVCacheRange(c, id, nseq, l, store, pin, 0, c.NLayer, history.NewView(c.NLayer), nil, nil, nil)
 }
 
 // newKVCacheRange is newKVCache for an instance that runs blocks [lo, hi) of its
@@ -548,7 +548,7 @@ func newKVCache(c *model.Config, id string, nseq int, l kvLayout, store KVStore,
 //
 // A block with an entries plane (ents) keeps it in a slot past the blocks,
 // hi+i for ents[i], its pages the block's positions (kvCache.ent).
-func newKVCacheRange(c *model.Config, id string, nseq int, l kvLayout, store KVStore, pin, lo, hi int, view *history.View, pool *history.PagePool, ents []entPlane) *kvCache {
+func newKVCacheRange(c *model.Config, id string, nseq int, l kvLayout, store KVStore, pin, lo, hi int, view *history.View, pool *history.PagePool, hsrc []int, ents []entPlane) *kvCache {
 	if store == nil {
 		store = NoStore{}
 	}
@@ -560,8 +560,8 @@ func newKVCacheRange(c *model.Config, id string, nseq int, l kvLayout, store KVS
 		bh: map[int][]string{}, geom: geomDigest(c, nseq, l), view: view, pool: pool, src: make([]int, n), ent: make([]int, hi)}
 	for li := range kc.src {
 		kc.src[li] = li
-		if li < hi {
-			kc.src[li] = max(c.KVSource(li), 0)
+		if li < hi && li < len(hsrc) {
+			kc.src[li] = hsrc[li]
 		}
 	}
 	// A model with a layer that keeps no pages keeps its history somewhere
@@ -736,9 +736,9 @@ func (s *Instance) nextCacheID() string {
 // It gathers the pages into one contiguous run on the way out and scatters
 // them back on the way in (see gather).
 func (s *Instance) migrateKV(li, pos int, toDevice bool) bool {
-	// A KV-sharing block has no history of its own: it reads its source's,
-	// which moves with the source (fixKVGroups keeps them together).
-	if s.ld == nil || s.c.KVShared(li) {
+	// A block reading another's history has none of its own: it moves with
+	// its source (fixKVGroups keeps them together).
+	if s.ld == nil || s.readsOther(li) {
 		return true
 	}
 	pg := &s.kv.layers[li]

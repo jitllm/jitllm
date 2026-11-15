@@ -57,8 +57,8 @@ type layer struct {
 	pleOff backend.Buf
 	sparse bool
 	// kvSrc is the block whose history this one attends to: its own index, or
-	// for a KV-sharing block (nn.LayerPlan.KVShared) the source's, whose
-	// cache this block reads and never writes.
+	// the block its graph reads the history of (graph.Graph.ReadsHistoryOf),
+	// whose cache this block reads and never writes.
 	kvSrc int
 	// runs is the sessions that placed the block here. A block holding no
 	// history of its own -- a KV-sharing one, a tower's -- is still theirs.
@@ -1863,9 +1863,9 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		if p.Cut > 0 && len(x.Data) == 0 {
 			continue
 		}
-		// A KV-sharing block has no k or v matrix (slots 1, 2): it attends to
-		// its source's history.
-		if p.KVShared && (i == 1 || i == 2) {
+		// Nor has a block whose graph binds no k matrix (it reads another
+		// block's history) one in slot 1.
+		if i == 1 && len(x.Data) == 0 && !bindsRole(p.Graph, jlm.RoleAttnK) {
 			continue
 		}
 		// Nor has a block whose v is k's projection (Gemma 4's global layers)
@@ -2151,18 +2151,16 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	var cache, vcache int
 	var kvp *kvPair
 	l.kvSrc = li
-	if p.KVShared {
-		// No history of its own: it reads its source's, which must be on
-		// this device already (blocks are offered in order).
-		src := g.layers[p.KVSource]
-		if src == nil || !src.ok || p.KVSource >= li {
-			g.LastErr = fmt.Sprintf("block %d attends to block %d's history, which is not on this device",
-				li, p.KVSource)
+	if n := p.Graph.ReadsHistoryOf(); n >= 0 {
+		// No history of its own: it reads block n's, which must be on this
+		// device already (blocks are offered in order).
+		if n >= li || g.layers[n] == nil || !g.layers[n].ok {
+			g.LastErr = fmt.Sprintf("block %d attends to block %d's history, which is not on this device", li, n)
 			return false
 		}
-		l.kvSrc = p.KVSource
+		l.kvSrc = n
 	}
-	if p.KVShared {
+	if l.kvSrc != li {
 		// Nothing to allocate.
 	} else if attends && g.pagedPlan(p) {
 		err = g.pagedLayer(sid, l, li, p)

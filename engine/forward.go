@@ -91,6 +91,9 @@ type Instance struct {
 	// speculations share (specDraft), made for the device draftOn.
 	draft   *Instance
 	draftOn nn.LayerDevice
+	// histOf is each block's history block, as its graph reads it
+	// (historySources).
+	histOf []int
 	// mu is held by a call running on the instance: sessions leasing it run
 	// one call at a time, or together as one step's rows (StepRuns).
 	mu sync.Mutex
@@ -624,6 +627,7 @@ func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOp
 		residFold: opt.residFold, opt: opt, eng: g}
 	s.own = s.Session
 	s.own.on = s
+	s.histOf = historySources(m, hi)
 	if err := m.BindDense(fr, &s.dense); err != nil {
 		return nil, err
 	}
@@ -698,7 +702,7 @@ func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOp
 	s.kvFmt, s.kvl.fmt = want, want
 	s.Session.limit, s.Session.kvFormat, s.Session.span = maxSeq, want, [2]int{lo, hi}
 	// kvl.fmt sizes every page.
-	s.kv = newKVCacheRange(c, s.nextCacheID(), 1, s.kvl, nil, s.opt.kvPage, s.lo, s.hi, nil, s.storage().PagePool(), s.entPlanes())
+	s.kv = newKVCacheRange(c, s.nextCacheID(), 1, s.kvl, nil, s.opt.kvPage, s.lo, s.hi, nil, s.storage().PagePool(), s.histOf, s.entPlanes())
 	s.makeRec(s.kv.view, 1)
 	s.kv.reserve(s.maxSeq)
 	if err := s.kv.useArenas(s.maxSeq, s.kvArenaFor); err != nil {
@@ -2032,7 +2036,6 @@ func (s *Instance) planFor(li int) *nn.LayerPlan {
 		s := c.Selection()
 		plan.Select = &nn.SelectPlan{Block: int(s.Block), Keep: int(s.Keep)}
 	}
-	plan.KVShared, plan.KVSource = c.KVShared(li), c.KVSource(li)
 	plan.NFFN, plan.FFNWide = c.NFFNAt(li), c.NFFNAt(li) != c.NFFN
 	if c.MLA() {
 		plan.KVLoraRank, plan.QLoraRank, plan.HeadDimV = c.KVLoraRank, c.QLoraRank, c.HeadDimV
@@ -2901,7 +2904,7 @@ func (s *Instance) setKVFmt(f nn.KVFmt) {
 	// Carry every caller-visible setting into the fresh cache (namespace and
 	// budget); a forgotten one is silently lost.
 	old := s.kv
-	s.kv = newKVCacheRange(s.c, old.id, 1, s.kvl, old.store, s.opt.kvPage, s.lo, s.hi, old.view, s.storage().PagePool(), s.entPlanes())
+	s.kv = newKVCacheRange(s.c, old.id, 1, s.kvl, old.store, s.opt.kvPage, s.lo, s.hi, old.view, s.storage().PagePool(), s.histOf, s.entPlanes())
 	s.kv.reserve(s.maxSeq)
 	s.kv.ns, s.kv.budget, s.kv.spent = old.ns, old.budget, old.spent
 	// The CPU's blocks read the new cache: its arenas, and forms for f32.

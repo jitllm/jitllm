@@ -901,6 +901,22 @@ func (r StateRef) String() string {
 	return s
 }
 
+// ReadsHistoryOf is the block whose history g reads in place of one of its
+// own (a StateKV naming another block), -1 where it reads none but its own.
+func (g *Graph) ReadsHistoryOf() int {
+	if g == nil {
+		return -1
+	}
+	for _, o := range g.Ops {
+		for _, r := range o.Reads {
+			if r.State == StateKV && r.From > 0 {
+				return r.From - 1
+			}
+		}
+	}
+	return -1
+}
+
 // key is the state r names, whatever its version.
 func (r StateRef) key() StateRef { return StateRef{State: r.State, From: r.From, Hist: r.Hist} }
 
