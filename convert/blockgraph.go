@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math"
 	"reflect"
 	"slices"
@@ -31,7 +32,7 @@ const blockExprSteps = 1 << 12
 
 // mjBlockOp is one op of a block. Op names the step: in, norm, layer_norm,
 // head_norm, matvec, add, rope, kv_append, attend, act, stated, emit,
-// split_sum, mark, routed or out.
+// split_sum, mark, routed, each, concat or out (graphSteps).
 type mjBlockOp struct {
 	Op string `json:"op"`
 	// If, where set, is an expression: the op is the block's where it holds.
@@ -88,6 +89,26 @@ type mjBlockOp struct {
 	Streams string `json:"streams"`
 	Ex      string `json:"ex"`
 	At      string `json:"at"`
+	// N is how many times an each runs its Steps (an expression), As the
+	// name their expressions read the run by (0 first); Out names the runs'
+	// last values joined in order (a concat named Name).
+	N     string      `json:"n"`
+	As    string      `json:"as"`
+	Steps []mjBlockOp `json:"steps"`
+	// runs are the each runs an unrolled step is inside, by name.
+	runs map[string]int
+}
+
+// with is vars and the runs o is inside.
+func (o mjBlockOp) with(vars map[string]jinja.Value) map[string]jinja.Value {
+	if len(o.runs) == 0 {
+		return vars
+	}
+	at := maps.Clone(vars)
+	for k, j := range o.runs {
+		at[k] = jinja.NewInt(int64(j))
+	}
+	return at
 }
 
 // mjTerm is one term of an expr: a function by name and up to three
@@ -181,6 +202,8 @@ func graphSteps() map[string][4]int {
 		"stream_join":   {2, 2, 0, 0},
 		"stream_at":     {0, 0, 0, 0},
 		"out_streams":   {0, 1, 0, 0},
+		"each":          {0, 0, 0, 0},
+		"concat":        {1, -1, 0, 0},
 	}
 }
 
@@ -191,8 +214,8 @@ func subStreams() map[string]bool {
 }
 
 // statements are what a stated op may run: the router's score of each
-// expert and its picks' weights (expressions), and the delta rule's decay
-// and gate (programs).
+// expert and the row a pick's weight is read from (expressions), and the
+// delta rule's decay and gate (programs).
 func statements() map[string]bool {
 	return map[string]bool{"router_score": true, "router_weight": true, "qkv_act": true, "delta_decay": true, "delta_gate": true}
 }
@@ -209,8 +232,25 @@ func (g *mjGraph) check() error {
 	if len(g.Block) == 0 {
 		return fmt.Errorf("a graph states no block")
 	}
-	named := map[string]bool{}
-	for i, o := range g.Block {
+	if err := g.checkOps(g.Block, map[string]bool{}, nil); err != nil {
+		return err
+	}
+	if last := g.Block[len(g.Block)-1].Op; last != "out" && last != "out_streams" {
+		return fmt.Errorf("a block's graph ends in an out")
+	}
+	return nil
+}
+
+// checkOps checks ops in turn (check), named the values earlier ops name and
+// runs the each runs they are inside.
+func (g *mjGraph) checkOps(ops []mjBlockOp, named map[string]bool, runs []string) error {
+	for i, o := range ops {
+		if o.Op == "each" {
+			if err := g.checkEach(o, named, runs); err != nil {
+				return fmt.Errorf("op %d (each): %w", i, err)
+			}
+			continue
+		}
 		n, ok := graphSteps()[o.Op]
 		if !ok {
 			return fmt.Errorf("op %d: %q is not a step of the graph language", i, o.Op)
@@ -263,7 +303,7 @@ func (g *mjGraph) check() error {
 			xs = append(xs, x)
 		}
 		for _, x := range xs {
-			if err := g.compile(x); err != nil {
+			if err := g.compile(x, runs...); err != nil {
 				return fmt.Errorf("op %d (%s): %w", i, o.Op, err)
 			}
 		}
@@ -336,28 +376,103 @@ func (g *mjGraph) check() error {
 			return fmt.Errorf("op %d states %q, which is not a statement a block runs", i, o.Of)
 		case o.Op == "split_sum" && (o.Parts == "" || o.Name == ""):
 			return fmt.Errorf("op %d's split_sum states no parts or no name", i)
+		case o.Op == "concat" && o.Name == "":
+			return fmt.Errorf("op %d's concat states no name", i)
 		}
 		named[o.Out] = true
-	}
-	if last := g.Block[len(g.Block)-1].Op; last != "out" && last != "out_streams" {
-		return fmt.Errorf("a block's graph ends in an out")
 	}
 	return nil
 }
 
+// checkEach checks an each: a count, a run name no fact or enclosing run
+// has, and steps that end in an op naming the run's value.
+func (g *mjGraph) checkEach(o mjBlockOp, named map[string]bool, runs []string) error {
+	if _, fact := (&blockFacts{c: &jlm.Config{}}).vars()[o.As]; o.As == "" || fact || slices.Contains(runs, o.As) {
+		return fmt.Errorf("its runs are named %q, which is empty, a fact or an enclosing run", o.As)
+	}
+	if o.N == "" || o.Out == "" || o.Name == "" || len(o.Steps) == 0 {
+		return fmt.Errorf("an each states a count, an output, its name and its steps")
+	}
+	for _, x := range []string{o.If, o.N} {
+		if err := g.compile(x, runs...); err != nil {
+			return err
+		}
+	}
+	if last := o.Steps[len(o.Steps)-1]; last.Out == "" || last.Op == "each" {
+		return fmt.Errorf("its last step names no value")
+	}
+	if err := g.checkOps(o.Steps, named, append(slices.Clone(runs), o.As)); err != nil {
+		return err
+	}
+	named[o.Out] = true
+	return nil
+}
+
+// unrolled is ops with each each's steps in its place once a run, inside
+// the runs given: a run's last value named apart and the runs' values
+// joined in a concat after them.
+func (g *mjGraph) unrolled(ops []mjBlockOp, vars map[string]jinja.Value, runs map[string]int) ([]mjBlockOp, error) {
+	var out []mjBlockOp
+	for _, o := range ops {
+		o.runs = runs
+		if o.Op != "each" {
+			out = append(out, o)
+			continue
+		}
+		at := o.with(vars)
+		if o.If != "" {
+			on, err := g.flag(o.If, at)
+			if err != nil {
+				return nil, err
+			}
+			if !on {
+				continue
+			}
+		}
+		n, err := g.num(o.N, at)
+		if err != nil {
+			return nil, err
+		}
+		if n < 1 || n != math.Trunc(n) {
+			return nil, fmt.Errorf("an each of %v runs", n)
+		}
+		join := mjBlockOp{Op: "concat", Name: o.Name, Out: o.Out, runs: runs}
+		for j := range int(n) {
+			in := maps.Clone(runs)
+			if in == nil {
+				in = map[string]int{}
+			}
+			in[o.As] = j
+			steps, err := g.unrolled(o.Steps, vars, in)
+			if err != nil {
+				return nil, err
+			}
+			v := fmt.Sprintf("%s#%d", o.Out, j)
+			steps[len(steps)-1].Out = v
+			join.In = append(join.In, v)
+			out = append(out, steps...)
+		}
+		out = append(out, join)
+	}
+	return out, nil
+}
+
 // compile compiles one of the graph's expressions, refusing one that reads
-// a name that is not a block's fact.
-func (g *mjGraph) compile(src string) error {
-	if src == "" || g.exprs[src] != nil {
+// a name that is neither a block's fact nor one of the each runs given.
+func (g *mjGraph) compile(src string, runs ...string) error {
+	if src == "" {
 		return nil
 	}
-	x, err := jinja.CompileExpr(src)
-	if err != nil {
-		return err
+	x := g.exprs[src]
+	if x == nil {
+		var err error
+		if x, err = jinja.CompileExpr(src); err != nil {
+			return err
+		}
 	}
 	known := (&blockFacts{c: &jlm.Config{}}).vars()
 	for _, n := range x.Names() {
-		if _, ok := known[n]; !ok {
+		if _, ok := known[n]; !ok && !slices.Contains(runs, n) {
 			return fmt.Errorf("expression %q reads %q, which is not a fact of a block", src, n)
 		}
 	}
@@ -468,9 +583,15 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, src jinja.Va
 	marks := map[string]int{}
 	lists := map[string][]graph.ValueID{}
 	codes := map[graph.ValueID][2]graph.ValueID{}
-	vars := bf.vars()
+	facts := bf.vars()
+	vars := facts
 	num := func(x string) (float64, error) { return g.num(x, vars) }
-	for i, o := range g.Block {
+	ops, err := g.unrolled(g.Block, facts, nil)
+	if err != nil {
+		return nil, err
+	}
+	for i, o := range ops {
+		vars = o.with(facts)
 		if o.If != "" {
 			on, err := g.flag(o.If, vars)
 			if err != nil {
@@ -662,6 +783,15 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, src jinja.Va
 			}
 		case "let":
 			y = in[0]
+		case "concat":
+			y = in[0]
+			if len(in) > 1 {
+				w := 0
+				for _, v := range in {
+					w += b.G.Values[v].Width
+				}
+				y = b.Emit(graph.OpConcat, in, []graph.Result{{Name: o.Name, Width: w}}, nil, graph.Attrs{}, nil, nil)[0]
+			}
 		case "expr":
 			var err error
 			if y, err = exprOp(b, g, o, in, bf, vars); err != nil {
@@ -816,38 +946,6 @@ func emitted(b *graph.Builder, g *mjGraph, o mjBlockOp, in []graph.ValueID, bf *
 		reads, writes = append(reads, graph.StateRef{State: st, Version: v}), append(writes, graph.StateRef{State: st, Version: v + 1})
 	}
 	return b.Emit(graph.KindNamed(o.Kind), in, outs, ws, a, reads, writes), nil
-}
-
-// routerWeight is each of k picks' weight: the stated row rw over the logits
-// with the earlier picks removed and the pick's logit, read at the pick.
-func routerWeight(b *graph.Builder, rw *jlm.Expr, logits, choose, sel graph.ValueID, k int, f graph.Facts) (graph.ValueID, error) {
-	e := b.G.Values[logits].Width
-	take := func(name string, v graph.ValueID) graph.ValueID {
-		return b.Emit(graph.OpTake, []graph.ValueID{v, sel}, []graph.Result{{Name: name, Width: k}}, nil, graph.Attrs{}, nil, nil)[0]
-	}
-	slice1 := func(name string, v graph.ValueID, j int) graph.ValueID {
-		return b.Emit(graph.OpSlice, []graph.ValueID{v}, []graph.Result{{Name: name, Width: 1}}, nil, graph.Attrs{Offset: j, Width: 1}, nil, nil)[0]
-	}
-	rank := b.Emit(graph.OpRank, []graph.ValueID{choose}, []graph.Result{{Name: "router.rank", Width: e, Elem: graph.ElemU32}}, nil, graph.Attrs{}, nil, nil)[0]
-	picked := take("router.picked", logits)
-	var ws []graph.ValueID
-	for j := range k {
-		rest := logits
-		if j > 0 {
-			earlier := b.Map("router.earlier", graph.Attrs{Fn: graph.MapLess, Const: float64(j)}, nil, e, rank)
-			rest = b.Expr("router.rest", e, []graph.Term{{Fn: graph.MapWhere, Args: [3]graph.Arg{{Kind: graph.ArgIn, Index: 0},
-				{Kind: graph.ArgConst, Const: math.Inf(-1)}, {Kind: graph.ArgIn, Index: 1}}}}, nil, earlier, logits)
-		}
-		row, err := b.Stated("router.weight", rw, []graph.ValueID{rest, slice1("router.pick", picked, j)}, e, f)
-		if err != nil {
-			return 0, err
-		}
-		ws = append(ws, slice1("router.w", take("router.row", row), j))
-	}
-	if k == 1 {
-		return ws[0], nil
-	}
-	return b.Emit(graph.OpConcat, ws, []graph.Result{{Name: "router.w", Width: k}}, nil, graph.Attrs{}, nil, nil)[0], nil
 }
 
 // indexer is the block's stated indexer (jlm.Selection) over its normed
@@ -1151,21 +1249,16 @@ func stated(b *graph.Builder, c *jlm.Config, o mjBlockOp, in []graph.ValueID, bf
 	}
 	var p *jlm.Program
 	switch o.Of {
-	case "router_score":
+	case "router_score", "router_weight":
 		width, err := num(o.Width)
 		if err != nil {
 			return 0, err
 		}
-		return b.Stated(name, &c.RouterScore, in, int(width), bf.facts)
-	case "router_weight":
-		k, err := num(o.Width)
-		if err != nil {
-			return 0, err
+		e := &c.RouterScore
+		if o.Of == "router_weight" {
+			e = &c.RouterWeight
 		}
-		if len(in) != 3 {
-			return 0, fmt.Errorf("the router's weight reads the logits, the scores it chose by and the picks, not %d operands", len(in))
-		}
-		return routerWeight(b, &c.RouterWeight, in[0], in[1], in[2], int(k), bf.facts)
+		return b.Stated(name, e, in, int(width), bf.facts)
 	case "qkv_act":
 		return b.Stated(name, c.QKVAct(), in, b.G.Values[in[0]].Width, bf.facts)
 	case "delta_decay":
