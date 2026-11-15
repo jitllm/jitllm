@@ -908,7 +908,6 @@ type hfConfig struct {
 	DecoderSparseStep            *uint32  `json:"decoder_sparse_step"`
 	MLPOnlyLayers                []uint32 `json:"mlp_only_layers"`
 	SharedExpertIntermediateSize uint32   `json:"shared_expert_intermediate_size"`
-	ClipQKV                      *float64 `json:"clip_qkv"`
 
 	// Multi-head Latent Attention (DeepSeek-V2/V3). See jlm.Config's MLA block.
 	// q_lora_rank is a plain uint32: V2-Lite's "q_lora_rank": null means a
@@ -1170,7 +1169,6 @@ func (a *hfArch) setData(e *jlm.Tensor, data []byte, c *Config) error {
 func hfArchTable() map[string]*hfArch {
 	return map[string]*hfArch{
 		"LlamaForCausalLM":   llamaHF(),
-		"OlmoeForCausalLM":   olmoeHF(),
 		"MixtralForCausalLM": mixtralHF(),
 		"Phi3ForCausalLM":    phi3HF(),
 		// One graph, two class names: V2 and V3 differ in the router, and every
@@ -1525,38 +1523,6 @@ func hfExperts() map[string]jlm.Role {
 		"gate_proj.weight": jlm.RoleExpGateBank,
 		"up_proj.weight":   jlm.RoleExpUpBank,
 		"down_proj.weight": jlm.RoleExpDownBank,
-	}
-}
-
-// olmoe is qwen3moe's names over two different graph facts: its q/k norm
-// spans the whole projection (checked by shape), and its mixture weights are
-// not renormalised (norm_topk_prob, read by hfMoEConfig).
-func olmoeHF() *hfArch {
-	return &hfArch{
-		arch:         ArchOLMoE,
-		blockPrefix:  llamaHF().blockPrefix,
-		model:        llamaHF().model,
-		block:        blockPlus(qwen3Block(), map[string]jlm.Role{"mlp.gate.weight": jlm.RoleRouter}),
-		expertPrefix: "mlp.experts.",
-		expert:       hfExperts(),
-		ignore:       llamaHF().ignore,
-		config: func(c *hfConfig, names []string) (*Config, error) {
-			// clip_qkv clamps q, k and v to [-x, x]; nothing here does.
-			if c.ClipQKV != nil {
-				return nil, fmt.Errorf("convert: %s: clip_qkv %v is not implemented", c.path, *c.ClipQKV)
-			}
-			cfg, err := hfConfigWith(ArchOLMoE, jlm.FlagRopeNeox|jlm.FlagQKNorm|jlm.FlagQKNormWide, "silu")(c, names)
-			if err != nil {
-				return nil, err
-			}
-			// The same refusal configOf makes: a whole-projection k norm under GQA
-			// would need a width nothing states.
-			if cfg.NKVHead != cfg.NHead {
-				return nil, fmt.Errorf("convert: %s: a whole-projection q/k norm with GQA "+
-					"(%d q heads, %d kv heads) is not implemented: %w", c.path, cfg.NHead, cfg.NKVHead, ErrNotImplemented)
-			}
-			return cfg, nil
-		},
 	}
 }
 

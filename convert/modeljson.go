@@ -453,6 +453,9 @@ func mjGraphKeys() map[string]any {
 		"partial_rotary_factor":                 1.0,
 		"rope_parameters.partial_rotary_factor": 1.0,
 		"sliding_window":                        nil,
+		// clip_qkv clamps q, k and v; where the clamp falls against a q/k norm
+		// is the graph's, and no file states one yet.
+		"clip_qkv": nil,
 	}
 }
 

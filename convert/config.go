@@ -810,11 +810,17 @@ func configOfFile(f *meta.File) (*Config, error) {
 				c.ExpertScale = float32(v)
 			}
 		}
-		// meta.Value.Int decodes Bool, so Uint is the accessor for a
-		// GGUF bool and 0 is false.
+		// A stated expert_weights_norm decides over the graph's default, for
+		// every graph: olmoe's case leaves the weights as they are, and a file
+		// that says to renormalise (OLMoE's norm_topk_prob) is obeyed.
+		// meta.Value.Int decodes Bool, so Uint is the accessor for a GGUF bool
+		// and 0 is false.
 		if kv, ok := f.Key("expert_weights_norm"); ok {
-			if v, ok := kv.Uint(); ok && v == 0 {
+			switch v, ok := kv.Uint(); {
+			case ok && v == 0:
 				c.Flags |= jlm.FlagNoExpertNorm
+			case ok:
+				c.Flags &^= jlm.FlagNoExpertNorm
 			}
 		}
 		// An absent expert_weights_norm is not one answer for every arch: llama.cpp's
