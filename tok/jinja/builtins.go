@@ -1403,8 +1403,9 @@ func compareValues(a, b Value) int {
 
 func containsValue(container, item Value) bool {
 	if container.IsList() {
+		// Membership is ==, as Python's: 1.0 is in [0, 1].
 		for _, v := range container.AsList().Items {
-			if v.Equals(item) {
+			if valuesEqual(v, item) {
 				return true
 			}
 		}
