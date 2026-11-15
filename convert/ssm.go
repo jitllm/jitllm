@@ -25,38 +25,6 @@ func ssdArch(a Arch) bool {
 	return false
 }
 
-// attnLayerCount is perLayerCount for a hybrid, whose per-layer arrays carry
-// zeros on the recurrent layers (llama.cpp's is_recr test reads exactly that
-// zero): the attention layers' entries must agree, and an array of zeros --
-// a model with no attention at all -- is zero.
-func attnLayerCount(f *meta.File, key string, def uint32) (uint32, error) {
-	kv, ok := f.Key(key)
-	if !ok {
-		return def, nil
-	}
-	if v, ok := kv.Uint(); ok {
-		return uint32(v), nil
-	}
-	vs, err := kv.Int32s()
-	if err != nil {
-		return 0, fmt.Errorf("%s: %w", key, err)
-	}
-	var n int32
-	for i, v := range vs {
-		switch {
-		case v < 0:
-			return 0, fmt.Errorf("%s: %d at layer %d", key, v, i)
-		case v == 0:
-		case n == 0:
-			n = v
-		case v != n:
-			return 0, fmt.Errorf("%s differs between attention layers (%d and %d at layer %d): %w",
-				key, n, v, i, ErrNotImplemented)
-		}
-	}
-	return uint32(n), nil
-}
-
 // ssdConfig reads the Mamba-2 geometry and each family's switches into c.
 func ssdConfig(f *meta.File, c *Config) error {
 	c.SSM = jlm.SSMConfig{

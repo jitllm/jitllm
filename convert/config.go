@@ -240,15 +240,7 @@ func configOfFile(f *meta.File) (*Config, error) {
 		return nil, fmt.Errorf("convert: architecture %q is not implemented (%s): %w",
 			name, strings.Join(Architectures(), ", "), ErrNotImplemented)
 	}
-	// A state-space hybrid writes its head counts per layer with zeros on the
-	// recurrent layers, and a model with no attention at all writes zero:
-	// layerCount reads the attention layers' count and lets the all-recurrent
-	// one through (ssdConfig fills a placeholder geometry).
-	count := perLayerCount
-	if ssdArch(arch) || arch == ArchLFM2 || mamba1Arch(arch) || arch == ArchKimiK3 {
-		count = attnLayerCount
-	}
-	nhead, err := count(f, "attention.head_count", 0)
+	nhead, err := uniformCount(f, "attention.head_count", 0)
 	if err != nil {
 		return nil, fmt.Errorf("convert: %s: %w", name, err)
 	}
@@ -263,24 +255,24 @@ func configOfFile(f *meta.File) (*Config, error) {
 		EmbdScale:  1,
 		AttnFactor: float32(f.FloatKey("rope.scaling.attn_factor", 1)),
 	}}
-	if c.NHead == 0 && (ssdArch(arch) || mamba1Arch(arch)) {
-		// No layer attends (plain Mamba-2): one placeholder head as wide as
-		// the embedding keeps every attention-shaped derivation finite, and
-		// no layer reads it.
+	// A file stating no heads on any layer attends nowhere (plain Mamba): one
+	// placeholder head as wide as the embedding keeps every attention-shaped
+	// derivation finite, and no layer reads it (countsHeld refuses one that
+	// does).
+	_, headless := f.Key("attention.head_count")
+	if headless = headless && c.NHead == 0; headless {
 		c.NHead = 1
 	}
 	if c.NLayer == 0 || c.NEmbd == 0 || c.NHead == 0 {
 		return nil, fmt.Errorf("convert: %s: missing block_count/embedding_length/head_count", name)
 	}
-	// Absent head_count_kv means MHA, not zero heads. Gemma 4 writes one per
-	// layer that differs between its sliding and global layers, which
-	// gemma4Config reads against the sliding pattern.
-	if arch != ArchGemma4 {
-		if c.NKVHead, err = count(f, "attention.head_count_kv", c.NHead); err != nil {
-			return nil, fmt.Errorf("convert: %s: %w", name, err)
-		}
+	// Absent head_count_kv means MHA, not zero heads. One that differs by
+	// layer is left for the blocks' own geometries to hold (countsHeld).
+	nkv, perKV, err := layerCount(f, "attention.head_count_kv", c.NHead)
+	if err != nil {
+		return nil, fmt.Errorf("convert: %s: %w", name, err)
 	}
-	if c.NKVHead == 0 && arch != ArchGemma4 {
+	if c.NKVHead = nkv; perKV == nil && c.NKVHead == 0 {
 		c.NKVHead = c.NHead
 	}
 	// key_length when present, else embd/heads. For gemma these coincide at 256,
@@ -658,6 +650,10 @@ func configOfFile(f *meta.File) (*Config, error) {
 			return nil, fmt.Errorf("convert: %s: no layer carries a recurrent block", name)
 		}
 		c.LayerKinds = kinds
+	}
+
+	if err := countsHeld(c, perKV, headless); err != nil {
+		return nil, fmt.Errorf("convert: %s: %w", name, err)
 	}
 
 	// A whole-projection q/k norm is each projection's width: {n_embd} for q

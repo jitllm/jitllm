@@ -94,7 +94,7 @@ func nemotronConfig(f *meta.File, c *Config) error {
 	c.LayerKinds = p.kinds
 	c.Flags |= jlm.FlagNoPosEnc | jlm.FlagReLU2
 	// The MLP width is per source layer, zero on the mixers.
-	ff, err := attnLayerCount(f, "feed_forward_length", 0)
+	ff, err := uniformCount(f, "feed_forward_length", 0)
 	if err != nil {
 		return err
 	}
