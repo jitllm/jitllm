@@ -581,7 +581,7 @@ func (c *Config) KVShared(li int) bool {
 	if h := c.at(li); h != c {
 		return h.KVShared(li)
 	}
-	return c.NKVShared != 0 && li >= c.NLayer-c.NKVShared && c.LayerKind(li).Attends()
+	return c.NKVShared != 0 && li >= c.NLayer-c.NKVShared && li < c.NLayer && c.LayerKind(li).Attends()
 }
 
 // KVSource is the block whose history block li attends to: li itself, or for

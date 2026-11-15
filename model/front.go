@@ -1102,18 +1102,20 @@ func (m *Model) blockRest(b *graph.Builder, f graph.Facts, li int, x, n, att gra
 	// Streams the sublayer writes every one of take its output each as
 	// stated; x2 is then none of them.
 	var x2 graph.ValueID
+	po := norm(proj, jlm.RolePostAttnNorm)
+	joined := st != nil && c.stated.Blocks[li].Attn.Join != nil
 	switch {
 	case st != nil && len(c.stated.Blocks[li].Attn.Writes) != 0:
 		var err error
-		if st.cur, err = graph.StreamWrites(b, f, &c.stated.Blocks[li].Attn, st.in, norm(proj, jlm.RolePostAttnNorm), st.ex); err != nil {
+		if st.cur, err = graph.StreamWrites(b, f, &c.stated.Blocks[li].Attn, st.in, po, st.ex); err != nil {
 			return nil, UncoveredStreams, fmt.Errorf("block %d's stated attention writes: %w", li, err)
 		}
-	default:
-		x2 = postResid(resid(x, norm(proj, jlm.RolePostAttnNorm)), jlm.RoleAttnOutNorm, jlm.RoleAttnOutNormBias)
+	case !joined:
+		x2 = postResid(resid(x, po), jlm.RoleAttnOutNorm, jlm.RoleAttnOutNormBias)
 	}
-	if st != nil && c.stated.Blocks[li].Attn.Join != nil {
+	if joined {
 		var err error
-		if x2, err = graph.StreamJoin(b, f, &c.stated.Blocks[li].Attn, x, norm(proj, jlm.RolePostAttnNorm), resid); err != nil {
+		if x2, err = graph.StreamJoin(b, f, &c.stated.Blocks[li].Attn, x, po, resid); err != nil {
 			return nil, UncoveredStreams, fmt.Errorf("block %d's stated attention join: %w", li, err)
 		}
 		x2 = postResid(x2, jlm.RoleAttnOutNorm, jlm.RoleAttnOutNormBias)

@@ -1,0 +1,37 @@
+{
+  "gguf": ["gemma3n"],
+  "graph": {
+    "block": [
+      {"op": "in",            "out": "x", "width": "embd"},
+      {"op": "streams_in",    "in": "x", "out": "xs"},
+      {"op": "in",            "out": "ple", "width": "side_width"},
+      {"op": "stream_read",   "of": "pre", "streams": "xs", "in": ["x", "x"], "out": "p"},
+      {"op": "stream_writes", "of": "pre", "streams": "xs", "in": "p", "ex": "p.ex", "out": "xs"},
+      {"op": "stream_at",     "streams": "xs", "at": "0", "out": "x"},
+      {"op": "norm",          "in": "x", "w": "attn_norm", "out": "n"},
+      {"op": "matvec",        "in": "n", "w": ["attn_q", "attn_q.bias?"], "rows": "heads * head_dim", "out": "q"},
+      {"op": "matvec",        "if": "not kv_shared", "in": "n", "w": ["attn_k", "attn_k.bias?"], "rows": "kv_heads * head_dim", "out": "k"},
+      {"op": "matvec",        "if": "not kv_shared", "in": "n", "w": ["attn_v", "attn_v.bias?"], "rows": "kv_heads * head_dim", "out": "v"},
+      {"op": "head_norm",     "in": "q", "w": "attn_q_norm", "out": "q"},
+      {"op": "head_norm",     "if": "not kv_shared", "in": "k", "w": "attn_k_norm", "out": "k"},
+      {"op": "rope",          "if": "rope_at", "in": "q", "name": "q.rope", "out": "q"},
+      {"op": "rope",          "if": "rope_at and not kv_shared", "in": "k", "name": "k.rope", "out": "k"},
+      {"op": "emit",          "if": "not kv_shared", "kind": "head_norm", "in": "v", "attr": {"Eps": "eps", "HeadDim": "head_dim"}, "outs": [{"name": "v.norm", "width": "kv_heads * head_dim"}], "out": "v"},
+      {"op": "kv_append",     "if": "not kv_shared", "in": ["k", "v"], "out": "kv"},
+      {"op": "kv_from",       "if": "kv_shared", "at": "kv_source", "out": "kv"},
+      {"op": "attend",        "in": "q", "hist": "kv", "w": "attn_sinks?", "out": "att"},
+      {"op": "matvec",        "in": "att", "w": ["attn_output", "attn_output.bias?"], "rows": "embd", "out": "o"},
+      {"op": "norm",          "in": "o", "w": "post_attention_norm", "out": "o"},
+      {"op": "stream_join",   "of": "attn", "in": ["x", "o"], "out": "h"},
+      {"op": "stream_read",   "of": "ffn", "streams": "xs", "in": ["x", "h", "ple"], "out": "f"},
+      {"op": "norm",          "in": "f", "w": "ffn_norm", "out": "m"},
+      {"op": "matvec",        "in": "m", "w": "ffn_gate", "rows": "ffn", "out": "g"},
+      {"op": "matvec",        "in": "m", "w": ["ffn_up", "ffn_up.bias?"], "rows": "ffn", "out": "u"},
+      {"op": "act",           "in": ["g", "u"], "width": "ffn", "out": "a"},
+      {"op": "matvec",        "in": "a", "w": ["ffn_down", "ffn_down.bias?"], "rows": "embd", "out": "d"},
+      {"op": "norm",          "in": "d", "w": "post_ffw_norm", "out": "d"},
+      {"op": "stream_writes", "of": "ffn", "streams": "xs", "in": "d", "ex": "f.ex", "out": "ys"},
+      {"op": "out_streams",   "streams": "ys"}
+    ]
+  }
+}

@@ -384,7 +384,7 @@ func (g *mjGraph) checkOps(ops []mjBlockOp, named map[string]bool, runs []string
 			}
 			continue
 		case strings.HasPrefix(o.Op, "stream") || o.Op == "out_streams":
-			if o.Op != "streams_in" && !named[o.Streams] {
+			if o.Op != "streams_in" && o.Op != "stream_join" && !named[o.Streams] {
 				return fmt.Errorf("op %d (%s) reads streams %q before an op names them", i, o.Op, o.Streams)
 			}
 			if o.Op == "stream_writes" && o.Ex != "" && !named[o.Ex] {
@@ -1610,7 +1610,7 @@ func (bf *blockFacts) vars() map[string]jinja.Value {
 		"eps":                jinja.NewFloat(bf.eps),
 		"residual_scale":     jinja.NewFloat(float64(c.ResidualScale)),
 		"rope_at":            jinja.NewBool(bf.ropeAt()),
-		"sliding":            jinja.NewBool(bf.sliding()),
+		"sliding":            jinja.NewBool(bf.c.Sliding(bf.li)),
 		"inf":                jinja.NewFloat(math.Inf(1)),
 		"experts":            i(c.NExpert),
 		"experts_used":       i(c.NExpertUsed),
@@ -1643,7 +1643,7 @@ func (bf *blockFacts) vars() map[string]jinja.Value {
 		"attn_join":          jinja.NewBool(bf.streamsAt().Attn.Join != nil),
 		"ffn_writes":         jinja.NewBool(len(bf.streamsAt().FFN.Writes) != 0),
 		"ple_dim":            i(c.PLEDim),
-		"kv_shared":          jinja.NewBool(bf.kvShared()),
+		"kv_shared":          jinja.NewBool(c.KVShared(li)),
 		"kv_source":          jinja.NewInt(int64(c.KVSource(li))),
 		"row_windowed":       jinja.NewBool(c.Flags2.Has(jlm.Flag2MediaPrefix)),
 		"nope_global":        jinja.NewBool(c.Flags.Has(jlm.FlagNoPEGlobal)),
@@ -1677,24 +1677,6 @@ func (bf *blockFacts) vars() map[string]jinja.Value {
 			return jinja.NewInt(int64(sh.Rows)), err
 		}),
 	}
-}
-
-// sliding says the block attends within the window: every layer but each
-// period's last, or where the period's global layer is its first, every
-// layer but each period's first.
-func (bf *blockFacts) sliding() bool {
-	c, li := bf.c, bf.li
-	w, p := int(c.SWAWindow), int(c.SWAPeriod)
-	if c.Flags2.Has(jlm.Flag2SWAGlobalFirst) {
-		return w > 0 && p > 1 && li%p != 0
-	}
-	return w > 0 && p > 0 && li%p < p-1
-}
-
-// kvShared says the block attends the history of an earlier block
-// (jlm.Config.KVSource) and appends none of its own.
-func (bf *blockFacts) kvShared() bool {
-	return bf.c.KVShared(bf.li) && (bf.li >= len(bf.c.LayerKinds) || bf.c.LayerKinds[bf.li].Attends())
 }
 
 // kind is the block's kind as the container states it (jlm.LayerKind's
@@ -1777,7 +1759,7 @@ func (bf *blockFacts) attend() graph.Attrs {
 	bidir := c.Flags.Has(jlm.FlagNonCausal)
 	a := graph.Attrs{NHead: int(c.NHead), NKVHead: int(c.NKVHeadAt(bf.li)), HeadDim: bf.headDim, Scale: scale,
 		Softcap: float64(c.AttnSoftcap), Bidir: bidir, RowWindows: bidir && c.Flags2.Has(jlm.Flag2MediaPrefix)}
-	if bf.sliding() {
+	if bf.c.Sliding(bf.li) {
 		a.Window, a.Chunked = int(c.SWAWindow), c.Flags.Has(jlm.FlagSWAChunked)
 	}
 	return a
@@ -1813,14 +1795,14 @@ func (bf *blockFacts) rope(global bool) (graph.Attrs, error) {
 	freqs := bf.dense[jlm.RoleRopeFreqs] || bf.dense[jlm.RoleRopeFactorsShort] || c.YarnFactor > 0 || c.RopeLinear > 0
 	local := 0
 	for i := range c.Geoms {
-		if (&blockFacts{c: c, li: i}).sliding() {
+		if c.Sliding(i) {
 			local = max(local, int(c.NRotAt(i)))
 		}
 	}
 	if local == 0 {
 		local = nrot
 	}
-	if (c.RopeBaseSWA != 0 || local != nrot) && bf.sliding() && !global {
+	if (c.RopeBaseSWA != 0 || local != nrot) && bf.c.Sliding(bf.li) && !global {
 		if c.RopeBaseSWA != 0 {
 			base = float64(c.RopeBaseSWA)
 		}

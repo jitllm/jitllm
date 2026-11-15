@@ -119,6 +119,10 @@ func statedGraphModels() []string {
 		"synth-gemma4v.gguf+mmproj-synth-gemma4v.gguf", "gemma4/google_gemma-4-E2B-it-Q4_K_M.gguf",
 		"gemma4/google_gemma-4-E4B-it-Q4_K_M.gguf", "gemma4/google_gemma-4-26B-A4B-it-Q4_K_M.gguf", "gemma4/gemma-4-31B-it-Q4_K_M.gguf",
 		"vlmb/gemma-4-E2B-it-Q4_K_M.gguf+vlmb/mmproj-gemma-4-E2B-it-BF16.gguf",
+		// Residual streams the container states, a per-layer side input, the
+		// last blocks reading an earlier block's history.
+		"synth-gemma3n.gguf", "synth-gemma3nv.gguf+mmproj-synth-gemma3nv.gguf", "gemma3n/gemma-3n-E2B-it-Q4_K_M.gguf",
+		"gemma3n/gemma-3n-E2B-it-Q4_K_M.gguf+gemma3n/mmproj-gemma-3n-E2B-it-f16.gguf",
 	}
 }
 

@@ -603,22 +603,22 @@ func (c *Config) NKVHeadAt(b int) uint32 { return c.GeomAt(b).NKVHead }
 func (c *Config) NRotAt(b int) uint32 { return c.GeomAt(b).NRot }
 
 // KVShared reports that text block b computes no k and v of its own and
-// attends to KVSource(b)'s history.
+// attends to KVSource(b)'s history: an attending block of the trunk's last
+// NKVShared.
 func (c *Config) KVShared(b int) bool {
-	return c.NKVShared != 0 && uint32(b) >= c.NLayer-c.NKVShared
+	return c.NKVShared != 0 && uint32(b) >= c.NLayer-c.NKVShared && uint32(b) < c.NLayer && c.layerKind(b).Attends()
 }
 
 // KVSource is the block whose history block b attends to: b itself, or for a
-// KV-sharing block the last block before the shared run of b's own kind
-// (sliding or global), as transformers' store_full_length_kv picks it. -1
+// KV-sharing block the last attending block before the shared run of b's own
+// kind (sliding or global), as transformers' store_full_length_kv picks it. -1
 // when no such block exists, which a reader refuses.
 func (c *Config) KVSource(b int) int {
 	if !c.KVShared(b) {
 		return b
 	}
-	sliding := c.swaOr(b, 1, 0) == 1
 	for j := int(c.NLayer-c.NKVShared) - 1; j >= 0; j-- {
-		if (c.swaOr(j, 1, 0) == 1) == sliding {
+		if c.Sliding(j) == c.Sliding(b) && c.layerKind(j).Attends() {
 			return j
 		}
 	}
@@ -638,7 +638,7 @@ func (c *Config) HeadBlocks() uint32 {
 }
 
 func (c *Config) swaOr(b int, swa, global uint32) uint32 {
-	if swa != 0 && c.SWAWindow > 0 && c.SWAPeriod > 0 && uint32(b)%c.SWAPeriod < c.SWAPeriod-1 {
+	if swa != 0 && c.Sliding(b) {
 		return swa
 	}
 	return global
@@ -1053,7 +1053,12 @@ const (
 )
 
 // Sliding reports that layer li attends over a sliding window: all but the
-// last of each SWAPeriod layers.
+// last of each SWAPeriod layers, or with Flag2SWAGlobalFirst all but the
+// first.
 func (c *Config) Sliding(li int) bool {
-	return c.SWAWindow > 0 && c.SWAPeriod > 0 && li%int(c.SWAPeriod) < int(c.SWAPeriod)-1
+	w, p := c.SWAWindow, int(c.SWAPeriod)
+	if c.Flags2.Has(Flag2SWAGlobalFirst) {
+		return w > 0 && p > 1 && li%p != 0
+	}
+	return w > 0 && p > 0 && li%p < p-1
 }
