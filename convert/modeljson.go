@@ -39,8 +39,10 @@ type modelJSON struct {
 	Config   mjConfig  `json:"config"`
 	Tensors  mjTensors `json:"tensors"`
 	// Graph states the blocks' graph (blockgraph.go); absent, the engine
-	// builds it from the config.
+	// builds it from the config. GGUF names the GGUF architectures
+	// (general.architecture) whose files the graph states too.
 	Graph *mjGraph `json:"graph"`
+	GGUF  []string `json:"gguf"`
 	name  string   // for messages
 }
 
@@ -289,6 +291,9 @@ func parseModelJSON(b []byte, name string) (*modelJSON, error) {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
 	}
+	if len(mj.GGUF) != 0 && mj.Graph == nil {
+		return nil, fmt.Errorf("convert: %s names GGUF architectures and states no graph for them", name)
+	}
 	return mj, nil
 }
 
@@ -320,6 +325,27 @@ func modelLibrary() (map[string]*modelJSON, error) {
 		}
 	}
 	return lib, nil
+}
+
+// ggufGraph is the graph the library states for a GGUF of architecture
+// arch, nil where no file states one.
+func ggufGraph(arch string) (*mjGraph, error) {
+	lib, err := modelLibrary()
+	if err != nil {
+		return nil, err
+	}
+	var g *mjGraph
+	var by string
+	for _, mj := range lib {
+		if !slices.Contains(mj.GGUF, arch) || mj.name == by {
+			continue
+		}
+		if g != nil {
+			return nil, fmt.Errorf("convert: GGUF architecture %s's graph is stated by both %s and %s", arch, by, mj.name)
+		}
+		g, by = mj.Graph, mj.name
+	}
+	return g, nil
 }
 
 // WithModelJSON converts a safetensors model by the model.json at path,

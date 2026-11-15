@@ -509,6 +509,15 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 	if err := StateMarkerPrompt(s, int64(f.UintKey("decision.max_tokens", 0))); err != nil {
 		return nil, err
 	}
+	g, err := ggufGraph(f.Arch())
+	if err != nil {
+		return nil, err
+	}
+	if g != nil {
+		if err := StateBlockGraphs(c, s, g); err != nil {
+			return nil, err
+		}
+	}
 	return s, nil
 }
 

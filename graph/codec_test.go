@@ -86,8 +86,8 @@ func TestEveryOpKindHasItsOwnName(t *testing.T) {
 			t.Errorf("op kinds %d and %d share the name %q", o, k, n)
 		}
 		seen[n] = k
-		if kindNamed(n) != k {
-			t.Errorf("%q reads back as %d, want %d", n, kindNamed(n), k)
+		if KindNamed(n) != k {
+			t.Errorf("%q reads back as %d, want %d", n, KindNamed(n), k)
 		}
 	}
 }
@@ -97,26 +97,30 @@ func TestEveryOpKindHasItsOwnName(t *testing.T) {
 // name is gone reads as zero, silently; so a name here never disappears
 // without a new Version. A field added is safe (zero is what every graph
 // stored before it meant) and joins this list.
-var storedFields = map[string][]string{
-	"storedGraph": {"Version", "Values", "Ops", "In", "Out", "Routed"},
-	"storedOp":    {"Kind", "In", "Out", "Weight", "Reads", "Writes", "Attr"},
-	"Value":       {"Name", "Width", "Elem", "Rows"},
-	"Binding":     {"Role", "K", "Rows", "Sheets", "From"},
-	"StateRef":    {"State", "From", "Version", "Hist"},
-	"Region":      {"Lo", "Hi"},
-	"Term":        {"Fn", "Args"},
-	"Arg":         {"Kind", "Index", "Elem", "Const"},
+func storedFields() map[string][]string {
+	return map[string][]string{
+		"storedGraph": {"Version", "Values", "Ops", "In", "Out", "Routed"},
+		"storedOp":    {"Kind", "In", "Out", "Weight", "Reads", "Writes", "Attr"},
+		"Value":       {"Name", "Width", "Elem", "Rows"},
+		"Binding":     {"Role", "K", "Rows", "Sheets", "From"},
+		"StateRef":    {"State", "From", "Version", "Hist"},
+		"Region":      {"Lo", "Hi"},
+		"Term":        {"Fn", "Args"},
+		"Arg":         {"Kind", "Index", "Elem", "Const"},
+	}
 }
 
 // attrsAtEncoding are Attrs' fields when the encoding was set.
-var attrsAtEncoding = []string{
-	"Eps", "HeadDim", "NRot", "Base", "Layout", "Freqs", "Sections", "Interleaved", "Cycle", "CycleAxes",
-	"Mscale", "NHead", "NKVHead", "Scale", "Window", "Chunked", "Bidir", "Softcap", "Expr", "Experts", "TopK",
-	"Alpha", "Taps", "Dil", "GridW", "Stride", "Positional", "Request", "Pooling", "Block", "BF16", "Rotary",
-	"Grid", "Chain", "Filter", "Tiled", "Additive", "RowWindows", "Bound", "Offset", "Width", "Origin", "Local",
-	"Pooled", "Firsts", "Inverse", "Keeps", "Fn", "Order", "Span", "Const", "Words", "Reset", "Exact", "Sound",
-	"Pixels", "PicW", "PicH", "PicArea", "PicSide", "PicLive", "PicCanvas", "PicFill", "PicTorch", "PicBytes",
-	"PicFrame", "PicPass", "PicColumns", "PicBF16", "Mean", "Std",
+func attrsAtEncoding() []string {
+	return []string{
+		"Eps", "HeadDim", "NRot", "Base", "Layout", "Freqs", "Sections", "Interleaved", "Cycle", "CycleAxes",
+		"Mscale", "NHead", "NKVHead", "Scale", "Window", "Chunked", "Bidir", "Softcap", "Expr", "Experts", "TopK",
+		"Alpha", "Taps", "Dil", "GridW", "Stride", "Positional", "Request", "Pooling", "Block", "BF16", "Rotary",
+		"Grid", "Chain", "Filter", "Tiled", "Additive", "RowWindows", "Bound", "Offset", "Width", "Origin", "Local",
+		"Pooled", "Firsts", "Inverse", "Keeps", "Fn", "Order", "Span", "Const", "Words", "Reset", "Exact", "Sound",
+		"Pixels", "PicW", "PicH", "PicArea", "PicSide", "PicLive", "PicCanvas", "PicFill", "PicTorch", "PicBytes",
+		"PicFrame", "PicPass", "PicColumns", "PicBF16", "Mean", "Std",
+	}
 }
 
 // TestStoredFieldsOnlyGrow holds each stored type to the names it had, and
@@ -129,13 +133,13 @@ func TestStoredFieldsOnlyGrow(t *testing.T) {
 		for i := range ty.NumField() {
 			have[ty.Field(i).Name] = true
 		}
-		for _, n := range storedFields[ty.Name()] {
+		for _, n := range storedFields()[ty.Name()] {
 			if !have[n] {
 				t.Errorf("%s.%s is gone: a stored graph reads it as zero; bump Version", ty.Name(), n)
 			}
 		}
-		if len(have) != len(storedFields[ty.Name()]) {
-			t.Errorf("%s has %d fields, the list %d: add the new one to storedFields", ty.Name(), len(have), len(storedFields[ty.Name()]))
+		if len(have) != len(storedFields()[ty.Name()]) {
+			t.Errorf("%s has %d fields, the list %d: add the new one to storedFields", ty.Name(), len(have), len(storedFields()[ty.Name()]))
 		}
 	}
 	at := reflect.TypeOf(Attrs{})
@@ -144,10 +148,10 @@ func TestStoredFieldsOnlyGrow(t *testing.T) {
 			t.Errorf("Attrs.%s is unexported, so a stored graph drops it", at.Field(i).Name)
 		}
 	}
-	if at.NumField() < len(attrsAtEncoding) {
-		t.Errorf("Attrs has %d fields, fewer than the %d it had", at.NumField(), len(attrsAtEncoding))
+	if at.NumField() < len(attrsAtEncoding()) {
+		t.Errorf("Attrs has %d fields, fewer than the %d it had", at.NumField(), len(attrsAtEncoding()))
 	}
-	for _, n := range attrsAtEncoding {
+	for _, n := range attrsAtEncoding() {
 		if _, ok := at.FieldByName(n); !ok {
 			t.Errorf("Attrs.%s is gone: a stored graph reads it as zero; bump Version", n)
 		}

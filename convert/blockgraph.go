@@ -4,10 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"reflect"
+	"slices"
 	"strings"
 
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/graph"
+	"github.com/jitllm/jitllm/tok/jinja"
 )
 
 // A model.json's graph states its blocks' ops: each a step of the graph
@@ -18,10 +21,16 @@ import (
 // rather than builds.
 type mjGraph struct {
 	Block []mjBlockOp `json:"block"`
+	// exprs are its expressions compiled, by their text (check).
+	exprs map[string]*jinja.Expr
 }
 
+// blockExprSteps is the most steps one of a graph's expressions takes.
+const blockExprSteps = 1 << 12
+
 // mjBlockOp is one op of a block. Op names the step: in, norm, layer_norm,
-// head_norm, matvec, add, rope, kv_append, attend, act or out.
+// head_norm, matvec, add, rope, kv_append, attend, act, stated, emit,
+// split_sum, mark, routed or out.
 type mjBlockOp struct {
 	Op string `json:"op"`
 	// If, where set, is an expression: the op is the block's where it holds.
@@ -43,6 +52,45 @@ type mjBlockOp struct {
 	Alpha string `json:"alpha"`
 	// Hist is the history an attend reads, a kv_append's Out.
 	Hist string `json:"hist"`
+	// Kind is an emit's op, by the graph language's name of it; Outs its
+	// results, Attr its attributes by graph.Attrs field name, each an
+	// expression (a function by its name), and Bind its weights with their
+	// shapes.
+	Kind string            `json:"kind"`
+	Outs []mjResult        `json:"outs"`
+	Attr map[string]string `json:"attr"`
+	Bind []mjBinding       `json:"bind"`
+	// Of is the statement a stated op runs: router_score, the mixture's
+	// score of each expert from its router's logits.
+	Of string `json:"of"`
+	// Parts is how many equal slices a split_sum adds, an expression.
+	Parts string `json:"parts"`
+	// From is the mark a routed op's region starts at.
+	From string `json:"from"`
+}
+
+// mjResult is one of an emit's results: its name in the graph, its width (an
+// expression), its element (f32, u32 or i8) and the name later ops read it by.
+type mjResult struct {
+	Name  string `json:"name"`
+	Width string `json:"width"`
+	Elem  string `json:"elem"`
+	As    string `json:"as"`
+}
+
+// mjBinding is one of an emit's weights: a tensor name (a trailing ? binds
+// it where stored) and its shape as expressions, or the shape it is stored
+// at where K is absent.
+type mjBinding struct {
+	W      string `json:"w"`
+	K      string `json:"k"`
+	Rows   string `json:"rows"`
+	Sheets string `json:"sheets"`
+}
+
+// elems are the elements a result may hold.
+func elems() map[string]graph.Elem {
+	return map[string]graph.Elem{"": graph.ElemF32, "f32": graph.ElemF32, "u32": graph.ElemU32, "i8": graph.ElemI8}
 }
 
 // mjNames is one name or a list of them.
@@ -66,19 +114,29 @@ func (n *mjNames) UnmarshalJSON(b []byte) error {
 // most (-1 for any).
 func graphSteps() map[string][4]int {
 	return map[string][4]int{
-		"in":         {0, 0, 0, 0},
-		"norm":       {1, 1, 1, 1},
-		"layer_norm": {1, 1, 1, -1},
-		"head_norm":  {1, 1, 1, 1},
-		"matvec":     {1, 1, 1, -1},
-		"add":        {2, 2, 0, 0},
-		"rope":       {1, 1, 0, 0},
-		"kv_append":  {2, 2, 0, 0},
-		"attend":     {1, 1, 0, -1},
-		"act":        {1, -1, 0, 0},
-		"out":        {1, -1, 0, 0},
+		"in":          {0, 0, 0, 0},
+		"norm":        {1, 1, 1, 1},
+		"layer_norm":  {1, 1, 1, -1},
+		"head_norm":   {1, 1, 1, 1},
+		"matvec":      {1, 1, 1, -1},
+		"add":         {2, 2, 0, 0},
+		"rope":        {1, 1, 0, 0},
+		"kv_append":   {2, 2, 0, 0},
+		"attend":      {1, 1, 0, -1},
+		"act":         {1, -1, 0, 0},
+		"stated":      {1, -1, 0, 0},
+		"emit":        {0, -1, 0, 0},
+		"split_sum":   {1, 1, 0, 0},
+		"mark":        {0, 0, 0, 0},
+		"routed":      {0, 0, 0, 0},
+		"let":         {1, 1, 0, 0},
+		"sigmoid_mul": {2, 2, 0, 0},
+		"out":         {1, -1, 0, 0},
 	}
 }
+
+// statements are what a stated op may run.
+func statements() map[string]bool { return map[string]bool{"router_score": true} }
 
 // check refuses a graph naming a step this converter does not take, an op
 // of the wrong arity, a value read before an op names it, an expression
@@ -104,25 +162,66 @@ func (g *mjGraph) check() error {
 		if o.Op == "attend" && !named[o.Hist] {
 			return fmt.Errorf("op %d attends history %q before an op names it", i, o.Hist)
 		}
-		for _, x := range []string{o.If, o.Rows, o.Width, o.Alpha} {
-			if x == "" {
-				continue
+		if o.Op == "routed" && !named[o.From] {
+			return fmt.Errorf("op %d's routed region starts at %q, which no op marks before it", i, o.From)
+		}
+		xs := []string{o.If, o.Rows, o.Width, o.Alpha, o.Parts}
+		for _, r := range o.Outs {
+			xs = append(xs, r.Width)
+		}
+		for _, b := range o.Bind {
+			xs = append(xs, b.K, b.Rows, b.Sheets)
+		}
+		for f, x := range o.Attr {
+			if fl, ok := reflect.TypeOf(graph.Attrs{}).FieldByName(f); !ok || !attrSettable(fl.Type) {
+				return fmt.Errorf("op %d (%s): %q is not an attribute a stated op sets", i, o.Op, f)
 			}
-			if _, err := parseExpr(x); err != nil {
+			xs = append(xs, x)
+		}
+		for _, x := range xs {
+			if err := g.compile(x); err != nil {
 				return fmt.Errorf("op %d (%s): %w", i, o.Op, err)
 			}
 		}
-		for _, w := range o.W {
+		ws := slices.Clone(o.W)
+		for _, b := range o.Bind {
+			ws = append(ws, b.W)
+		}
+		for _, w := range ws {
 			if _, ok := blockRole(strings.TrimSuffix(w, "?")); !ok {
 				return fmt.Errorf("op %d (%s): %q is not a tensor name the container knows", i, o.Op, w)
 			}
 		}
 		switch {
-		case o.Op == "out":
+		case o.Op == "out", o.Op == "routed":
+		case o.Op == "emit":
+			if graph.KindNamed(o.Kind) == graph.OpInvalid {
+				return fmt.Errorf("op %d emits %q, which is not an op of the graph language", i, o.Kind)
+			}
+			if len(o.Outs) == 0 {
+				return fmt.Errorf("op %d (%s) states no result", i, o.Kind)
+			}
+			for k, r := range o.Outs {
+				if _, ok := elems()[r.Elem]; !ok || r.Width == "" || r.Name == "" {
+					return fmt.Errorf("op %d (%s): result %d is %q of %q wide, element %q", i, o.Kind, k, r.Name, r.Width, r.Elem)
+				}
+				if as := r.As; as != "" {
+					named[as] = true
+				}
+			}
+			if o.Out != "" {
+				named[o.Out] = true
+			}
+			continue
 		case o.Out == "":
 			return fmt.Errorf("op %d (%s) names no output", i, o.Op)
-		case o.Op == "in" && o.Width == "", o.Op == "matvec" && o.Rows == "", o.Op == "act" && o.Width == "":
+		case o.Op == "in" && o.Width == "", o.Op == "matvec" && o.Rows == "", o.Op == "act" && o.Width == "",
+			o.Op == "stated" && o.Width == "":
 			return fmt.Errorf("op %d (%s) states no width", i, o.Op)
+		case o.Op == "stated" && !statements()[o.Of]:
+			return fmt.Errorf("op %d states %q, which is not a statement a block runs", i, o.Of)
+		case o.Op == "split_sum" && (o.Parts == "" || o.Name == ""):
+			return fmt.Errorf("op %d's split_sum states no parts or no name", i)
 		}
 		named[o.Out] = true
 	}
@@ -130,6 +229,68 @@ func (g *mjGraph) check() error {
 		return fmt.Errorf("a block's graph ends in an out")
 	}
 	return nil
+}
+
+// compile compiles one of the graph's expressions, refusing one that reads
+// a name that is not a block's fact.
+func (g *mjGraph) compile(src string) error {
+	if src == "" || g.exprs[src] != nil {
+		return nil
+	}
+	x, err := jinja.CompileExpr(src)
+	if err != nil {
+		return err
+	}
+	known := (&blockFacts{c: &jlm.Config{}}).vars()
+	for _, n := range x.Names() {
+		if _, ok := known[n]; !ok {
+			return fmt.Errorf("expression %q reads %q, which is not a fact of a block", src, n)
+		}
+	}
+	if g.exprs == nil {
+		g.exprs = map[string]*jinja.Expr{}
+	}
+	g.exprs[src] = x
+	return nil
+}
+
+// value is expression src's value over a block's facts.
+func (g *mjGraph) value(src string, vars map[string]jinja.Value) (jinja.Value, error) {
+	x, ok := g.exprs[src]
+	if !ok {
+		return jinja.Undefined(), fmt.Errorf("expression %q was never checked", src)
+	}
+	v, err := x.Eval(vars, blockExprSteps)
+	if err == nil && v.IsUndefined() {
+		err = fmt.Errorf("expression %q is undefined", src)
+	}
+	return v, err
+}
+
+// num is expression src's value as a number.
+func (g *mjGraph) num(src string, vars map[string]jinja.Value) (float64, error) {
+	v, err := g.value(src, vars)
+	switch {
+	case err != nil:
+		return 0, err
+	case v.IsInt():
+		return float64(v.AsInt()), nil
+	case v.IsFloat():
+		return v.AsFloat(), nil
+	}
+	return 0, fmt.Errorf("expression %q is %v, not a number", src, v)
+}
+
+// flag is expression src's value as true or false.
+func (g *mjGraph) flag(src string, vars map[string]jinja.Value) (bool, error) {
+	v, err := g.value(src, vars)
+	if err != nil {
+		return false, err
+	}
+	if !v.IsBool() {
+		return false, fmt.Errorf("expression %q is %v, not true or false", src, v)
+	}
+	return v.AsBool(), nil
 }
 
 // blockRole is the role a graph's weight names, in the tensor names a
@@ -181,20 +342,12 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph) (*graph.Grap
 	b := graph.NewBlock(li)
 	vals := map[string]graph.ValueID{}
 	hists := map[string]graph.StateRef{}
-	num := func(x string) (float64, error) {
-		n, err := parseExpr(x)
-		if err != nil {
-			return 0, err
-		}
-		return evalNum(n, bf.env)
-	}
+	marks := map[string]int{}
+	vars := bf.vars()
+	num := func(x string) (float64, error) { return g.num(x, vars) }
 	for i, o := range g.Block {
 		if o.If != "" {
-			n, err := parseExpr(o.If)
-			if err != nil {
-				return nil, err
-			}
-			on, err := evalBool(n, bf.env)
+			on, err := g.flag(o.If, vars)
 			if err != nil {
 				return nil, fmt.Errorf("op %d (%s): %w", i, o.Op, err)
 			}
@@ -283,6 +436,67 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph) (*graph.Grap
 			if y, err = b.Stated(name, c.ActAt(li), in, int(width), bf.facts); err != nil {
 				return nil, fmt.Errorf("op %d's stated activation: %w", i, err)
 			}
+		case "stated":
+			width, err := num(o.Width)
+			if err != nil {
+				return nil, err
+			}
+			name := o.Name
+			if name == "" {
+				name = o.Of
+			}
+			if y, err = b.Stated(name, &c.RouterScore, in, int(width), bf.facts); err != nil {
+				return nil, fmt.Errorf("op %d's stated %s: %w", i, o.Of, err)
+			}
+		case "emit":
+			outs, err := emitted(b, g, o, in, bf, vars)
+			if err != nil {
+				return nil, fmt.Errorf("op %d (%s): %w", i, o.Kind, err)
+			}
+			for k, r := range o.Outs {
+				if r.As != "" {
+					vals[r.As] = outs[k]
+				}
+			}
+			if o.Out != "" {
+				vals[o.Out] = outs[0]
+			}
+			continue
+		case "split_sum":
+			parts, err := num(o.Parts)
+			if err != nil {
+				return nil, err
+			}
+			n, wd := int(parts), b.G.Values[in[0]].Width
+			if n < 1 || wd%n != 0 {
+				return nil, fmt.Errorf("op %d splits %d into %v parts", i, wd, parts)
+			}
+			for j := range n {
+				s := b.Emit(graph.OpSlice, in, []graph.Result{{Name: o.Name, Width: wd / n}}, nil,
+					graph.Attrs{Offset: j * wd / n, Width: wd / n}, nil, nil)[0]
+				if j == 0 {
+					y = s
+				} else {
+					y = b.Add(y, s)
+				}
+			}
+		case "let":
+			y = in[0]
+		case "sigmoid_mul":
+			name := o.Name
+			if name == "" {
+				name = "gated"
+			}
+			y = b.Expr(name, b.G.Values[in[1]].Width, []graph.Term{
+				{Fn: graph.MapSigmoid, Args: [3]graph.Arg{{Kind: graph.ArgIn, Index: 0}}},
+				{Fn: graph.MapMul, Args: [3]graph.Arg{{Kind: graph.ArgTerm, Index: 0}, {Kind: graph.ArgIn, Index: 1}}},
+			}, nil, in...)
+		case "mark":
+			marks[o.Out] = len(b.G.Ops)
+			continue
+		case "routed":
+			b.G.Routed = graph.Region{Lo: marks[o.From], Hi: len(b.G.Ops)}
+			continue
 		case "out":
 			b.Out(in...)
 			continue
@@ -296,6 +510,131 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph) (*graph.Grap
 		return nil, fmt.Errorf("the block stores %v, which its graph does not bind", u)
 	}
 	return b.G, nil
+}
+
+// emitted is an emit's op on b over in: its results, weights and
+// attributes evaluated over the block's facts.
+func emitted(b *graph.Builder, g *mjGraph, o mjBlockOp, in []graph.ValueID, bf *blockFacts, vars map[string]jinja.Value) ([]graph.ValueID, error) {
+	num := func(x string) (float64, error) { return g.num(x, vars) }
+	var outs []graph.Result
+	for _, r := range o.Outs {
+		w, err := num(r.Width)
+		if err != nil {
+			return nil, err
+		}
+		outs = append(outs, graph.Result{Name: r.Name, Width: int(w), Elem: elems()[r.Elem]})
+	}
+	var ws []graph.Binding
+	for _, bd := range o.Bind {
+		r, _ := blockRole(strings.TrimSuffix(bd.W, "?"))
+		sh, held := bf.facts.Inventory[r]
+		if !held && strings.HasSuffix(bd.W, "?") {
+			continue
+		}
+		if bd.K == "" {
+			ws = append(ws, graph.Binding{Role: r, K: sh.K, Rows: sh.Rows})
+			continue
+		}
+		bn := graph.Binding{Role: r}
+		for _, f := range []struct {
+			x  string
+			to *int
+		}{{bd.K, &bn.K}, {bd.Rows, &bn.Rows}, {bd.Sheets, &bn.Sheets}} {
+			if f.x == "" {
+				continue
+			}
+			v, err := num(f.x)
+			if err != nil {
+				return nil, err
+			}
+			*f.to = int(v)
+		}
+		ws = append(ws, bn)
+	}
+	var a graph.Attrs
+	for f, x := range o.Attr {
+		v, err := g.value(x, vars)
+		if err != nil {
+			return nil, fmt.Errorf("attribute %s: %w", f, err)
+		}
+		if err := setAttr(&a, f, v); err != nil {
+			return nil, err
+		}
+	}
+	return b.Emit(graph.KindNamed(o.Kind), in, outs, ws, a, nil, nil), nil
+}
+
+// attrSettable says a stated op may set an attribute of type t: a number, a
+// flag, or a function by its name.
+func attrSettable(t reflect.Type) bool {
+	switch t.Kind() {
+	case reflect.Int, reflect.Float64, reflect.Bool, reflect.Uint8:
+		return true
+	}
+	return false
+}
+
+// setAttr sets a's field f to v, an expression's value: an integer field
+// an integral number, a function its name.
+func setAttr(a *graph.Attrs, f string, v jinja.Value) error {
+	fv := reflect.ValueOf(a).Elem().FieldByName(f)
+	if !fv.IsValid() || !attrSettable(fv.Type()) {
+		return fmt.Errorf("%q is not an attribute a stated op sets", f)
+	}
+	if fv.Type() == reflect.TypeOf(jlm.Fn(0)) {
+		var fn jlm.Fn
+		if v.IsString() {
+			fn = fnNamed(v.AsString())
+		}
+		if fn == 0 {
+			return fmt.Errorf("attribute %s is %v, not a function's name", f, v)
+		}
+		fv.SetUint(uint64(fn))
+		return nil
+	}
+	if fv.Kind() == reflect.Bool {
+		if !v.IsBool() {
+			return fmt.Errorf("attribute %s is %v, not a flag", f, v)
+		}
+		fv.SetBool(v.AsBool())
+		return nil
+	}
+	var n float64
+	switch {
+	case v.IsInt():
+		n = float64(v.AsInt())
+	case v.IsFloat():
+		n = v.AsFloat()
+	default:
+		return fmt.Errorf("attribute %s is %v, not a number", f, v)
+	}
+	switch fv.Kind() {
+	case reflect.Float64:
+		fv.SetFloat(n)
+	case reflect.Int:
+		if n != math.Trunc(n) || math.IsInf(n, 0) {
+			return fmt.Errorf("attribute %s is %v, not an integer", f, n)
+		}
+		fv.SetInt(int64(n))
+	case reflect.Uint8:
+		if n != math.Trunc(n) || n < 0 || n > math.MaxUint8 {
+			return fmt.Errorf("attribute %s is %v, not a small integer", f, n)
+		}
+		fv.SetUint(uint64(n))
+	}
+	return nil
+}
+
+// fnNamed is the function named name, 0 for none.
+func fnNamed(name string) jlm.Fn {
+	for f := jlm.Fn(1); f < math.MaxUint8; f++ {
+		if s := f.String(); s == name {
+			return f
+		} else if strings.HasPrefix(s, "fn") {
+			return 0
+		}
+	}
+	return 0
 }
 
 // blockFacts are what a block's graph is stated over: the block's tensors
@@ -344,46 +683,55 @@ func nextnRole(r jlm.Role) bool {
 	return false
 }
 
-// env is the facts as an expression reads them: the block's index, its
-// geometry, its numbers, stored.<name> whether it stores a tensor and
-// rows.<name> a stored one's rows.
-func (bf *blockFacts) env(path string) any {
-	c := bf.c
-	switch path {
-	case "layer":
-		return float64(bf.li)
-	case "embd":
-		return float64(c.NEmbd)
-	case "heads":
-		return float64(c.NHead)
-	case "kv_heads":
-		return float64(c.NKVHeadAt(bf.li))
-	case "head_dim":
-		return float64(bf.headDim)
-	case "ffn":
-		return float64(c.NFFNAt(bf.li))
-	case "eps":
-		return bf.eps
-	case "residual_scale":
-		return float64(c.ResidualScale)
-	case "rope_at":
-		return bf.ropeAt()
-	case "sliding":
-		return bf.sliding()
-	}
-	if n, ok := strings.CutPrefix(path, "stored."); ok {
-		r, ok := blockRole(n)
-		_, held := bf.facts.Inventory[r]
-		return ok && held
-	}
-	if n, ok := strings.CutPrefix(path, "rows."); ok {
-		if r, ok := blockRole(n); ok {
-			if sh, held := bf.facts.Inventory[r]; held {
-				return float64(sh.Rows)
-			}
+// vars are the facts as a graph's expressions read them: the block's index,
+// its geometry, attention, mixture and numbers, stored(name) whether it
+// stores a tensor and rows(name) a stored one's rows.
+func (bf *blockFacts) vars() map[string]jinja.Value {
+	c, li := bf.c, bf.li
+	i := func(n uint32) jinja.Value { return jinja.NewInt(int64(n)) }
+	tensor := func(name string, args []jinja.Value) (jlm.Role, graph.Shape, bool, error) {
+		if len(args) != 1 || !args[0].IsString() {
+			return 0, graph.Shape{}, false, fmt.Errorf("%s takes one tensor name", name)
 		}
+		r, ok := blockRole(args[0].AsString())
+		if !ok {
+			return 0, graph.Shape{}, false, fmt.Errorf("%s(%q): not a tensor name the container knows", name, args[0].AsString())
+		}
+		sh, held := bf.facts.Inventory[r]
+		return r, sh, held, nil
 	}
-	return nil
+	return map[string]jinja.Value{
+		"layer":              jinja.NewInt(int64(li)),
+		"embd":               i(c.NEmbd),
+		"heads":              i(c.NHead),
+		"kv_heads":           i(c.NKVHeadAt(li)),
+		"head_dim":           jinja.NewInt(int64(bf.headDim)),
+		"ffn":                i(c.NFFNAt(li)),
+		"eps":                jinja.NewFloat(bf.eps),
+		"residual_scale":     jinja.NewFloat(float64(c.ResidualScale)),
+		"rope_at":            jinja.NewBool(bf.ropeAt()),
+		"sliding":            jinja.NewBool(bf.sliding()),
+		"inf":                jinja.NewFloat(math.Inf(1)),
+		"experts":            i(c.NExpert),
+		"experts_used":       i(c.NExpertUsed),
+		"expert_groups":      i(c.NExpertGroup),
+		"expert_groups_used": i(c.NExpertGroupUsed),
+		"expert_scale":       jinja.NewFloat(float64(c.ExpertScale)),
+		"expert_norm":        jinja.NewBool(!c.Flags.Has(jlm.FlagNoExpertNorm)),
+		"expert_weight_in":   jinja.NewBool(c.Flags.Has(jlm.FlagExpertWeightIn)),
+		"moe":                jinja.NewBool(bf.moe()),
+		"stored": jinja.NewCallable("stored", func(args []jinja.Value, _ map[string]jinja.Value) (jinja.Value, error) {
+			_, _, held, err := tensor("stored", args)
+			return jinja.NewBool(held), err
+		}),
+		"rows": jinja.NewCallable("rows", func(args []jinja.Value, _ map[string]jinja.Value) (jinja.Value, error) {
+			_, sh, held, err := tensor("rows", args)
+			if err == nil && !held {
+				err = fmt.Errorf("rows(%q): the block stores no such tensor", args[0].AsString())
+			}
+			return jinja.NewInt(int64(sh.Rows)), err
+		}),
+	}
 }
 
 // sliding says the block attends within the window: every layer but each
@@ -396,6 +744,20 @@ func (bf *blockFacts) sliding() bool {
 		return w > 0 && p > 1 && li%p != 0
 	}
 	return w > 0 && p > 0 && li%p < p-1
+}
+
+// moe says the block's feed-forward is the mixture: the model's is, the
+// block is past the leading dense run, on the mixture's step, and stores a
+// router.
+func (bf *blockFacts) moe() bool {
+	c, li := bf.c, bf.li
+	if c.NExpert == 0 || li < int(c.NDenseLead) {
+		return false
+	}
+	if _, ok := bf.facts.Inventory[jlm.RoleRouter]; !ok {
+		return false
+	}
+	return c.MoEStep <= 1 || (li+1)%int(c.MoEStep) == 0
 }
 
 // ropeAt says the block turns q and k: not where the model encodes no

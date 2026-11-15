@@ -4,19 +4,36 @@ import (
 	"bytes"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/graph"
+	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/model"
 )
 
 // statedGraphModels are fixtures of each class whose model.json states its
 // blocks' graph.
-var statedGraphModels = []string{
-	"qwen3", "synth-hf-qwen3-yarn",
-	"qwen2.5-tiny-random", "synth-qwen2",
-	"synth-hf-llama3", "tiny-random-LlamaForCausalLM",
+func statedGraphModels() []string {
+	return []string{
+		"qwen3", "synth-hf-qwen3-yarn",
+		"qwen2.5-tiny-random", "synth-qwen2",
+		"synth-hf-llama3", "tiny-random-LlamaForCausalLM",
+		"synth-hf-smollm3", "synth-hf-seedoss", "synth-ernie45-hf",
+		"synth-gemma", "tiny-random-GemmaForCausalLM",
+		"synth-phi3", "tiny-random-Phi3ForCausalLM", "tiny-random-phi3",
+		"synth-hf-arcee", "synth-apertus-hf", "synth-hf-olmo2", "synth-hf-exaone4",
+		"tiny-qwen3moe-hf", "synth-qwen2moe-hf", "synth-mixtral", "synth-hf-mixtral-swa", "tiny-random-OlmoeForCausalLM",
+		"synth-dots1-hf", "synth-ernie45moe-hf",
+		// GGUFs of the architectures the library's graphs state.
+		"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "tinyllama-1.1b-q3_K_M.gguf", "SmolLM2-360M-Instruct-Q8_0.gguf",
+		"Qwen3-0.6B-Q8_0.gguf", "Qwen2-1.5B-Instruct-Q4_K_M.gguf", "Qwen3-MOE-4x0.6B-Q4_K_M.gguf", "tiny-qwen3moe-f32.gguf",
+		"olmoe-1b-7b-0924-instruct-Q4_K_M.gguf", "gemma-2b.gguf", "synth-qwen2moe.gguf",
+		"synth-apertus.gguf", "synth-arcee.gguf", "synth-dots1.gguf", "synth-ernie45.gguf", "synth-ernie45moe.gguf",
+		"synth-exaone4.gguf", "synth-olmo2.gguf", "synth-olmo2-gqa.gguf", "synth-olmo3.gguf", "synth-seedoss.gguf",
+		"synth-smollm3.gguf",
+	}
 }
 
 // TestStatedBlockGraphsAreTheBuiltOnes converts each model whose model.json
@@ -24,9 +41,13 @@ var statedGraphModels = []string{
 // the front end builds from the config: the same ops, operands, weights,
 // states and attributes, byte for byte as a container stores them.
 func TestStatedBlockGraphsAreTheBuiltOnes(t *testing.T) {
-	for _, name := range statedGraphModels {
+	for _, name := range statedGraphModels() {
 		t.Run(name, func(t *testing.T) {
-			m, err := model.Open(hfContainer(t, name))
+			path := hfContainer
+			if strings.HasSuffix(name, ".gguf") {
+				path = func(t *testing.T, name string) string { return jlmOf(t, testmodels.Path(name)) }
+			}
+			m, err := model.Open(path(t, name))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -52,6 +73,25 @@ func TestStatedBlockGraphsAreTheBuiltOnes(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// builtGraphs has the front end build every block's graph from the config
+// until the returned undo, as it does for a container that states none: a
+// violation of the config then reaches the blocks.
+func builtGraphs(m *model.Model) func() {
+	c := m.Container.Config()
+	fr := &m.Front
+	fr.Mu.Lock()
+	kept := c.Blocks
+	c.Blocks = jlm.BlockGraphs{}
+	fr.Restated++
+	fr.Mu.Unlock()
+	return func() {
+		fr.Mu.Lock()
+		c.Blocks = kept
+		fr.Restated++
+		fr.Mu.Unlock()
 	}
 }
 

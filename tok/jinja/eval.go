@@ -82,7 +82,32 @@ type evaluator struct {
 	scope    *scope
 	builtins *scope
 	output   strings.Builder
+	// steps is what the evaluation may still spend, an expression or a
+	// loop's turn a step, shared by every evaluator it starts: a template
+	// and a model's statement are untrusted, and each is bounded (RULE 9).
+	steps *int
 }
+
+// spend takes one step of the evaluation's budget.
+func (e *evaluator) spend() error {
+	*e.steps--
+	if *e.steps < 0 {
+		return fmt.Errorf("jinja: the evaluation ran past its budget of steps")
+	}
+	return nil
+}
+
+// child is an evaluator over scope sharing e's builtins and budget.
+func (e *evaluator) child(s *scope) evaluator {
+	return evaluator{scope: s, builtins: e.builtins, steps: e.steps}
+}
+
+// MaxSteps is the most steps one render or one expression's evaluation
+// takes, and MaxItems the most a range or a repeated string holds.
+const (
+	MaxSteps = 1 << 24
+	MaxItems = 1 << 20
+)
 
 func (e *evaluator) execNodes(nodes []node) error {
 	for _, n := range nodes {
@@ -223,6 +248,9 @@ func (e *evaluator) execFor(n *forNode) error {
 	child.set("loop", loop)
 
 	for i, item := range items {
+		if err := e.spend(); err != nil {
+			return err
+		}
 		// Set loop variable(s).
 		if n.keyVar != "" {
 			// Destructuring: for key, val in items
@@ -306,10 +334,7 @@ func (e *evaluator) execSet(n *setNode) error {
 }
 
 func (e *evaluator) execSetBlock(n *setBlockNode) error {
-	bodyEval := evaluator{
-		scope:    e.scope,
-		builtins: e.builtins,
-	}
+	bodyEval := e.child(e.scope)
 	if err := bodyEval.execNodes(n.body); err != nil {
 		return err
 	}
@@ -333,7 +358,7 @@ func (e *evaluator) execMacro(n *macroNode) error {
 			} else if v, ok := kwargs[param.name]; ok {
 				child.set(param.name, v)
 			} else if param.defaultVal != nil {
-				defEval := evaluator{scope: child, builtins: e.builtins}
+				defEval := e.child(child)
 				defVal, err := defEval.evalExpr(param.defaultVal)
 				if err != nil {
 					return Undefined(), err
@@ -349,10 +374,7 @@ func (e *evaluator) execMacro(n *macroNode) error {
 			child.set("caller", caller)
 		}
 
-		macroEval := evaluator{
-			scope:    child,
-			builtins: e.builtins,
-		}
+		macroEval := e.child(child)
 
 		if err := macroEval.execNodes(body); err != nil {
 			return Undefined(), err
@@ -379,10 +401,7 @@ func (e *evaluator) execCall(n *callNode) error {
 			}
 		}
 
-		callerEval := evaluator{
-			scope:    child,
-			builtins: e.builtins,
-		}
+		callerEval := e.child(child)
 		if err := callerEval.execNodes(body); err != nil {
 			return Undefined(), err
 		}
@@ -445,10 +464,7 @@ func (e *evaluator) execCall(n *callNode) error {
 
 func (e *evaluator) execFilterBlock(n *filterBlockNode) error {
 	// Render body to string.
-	bodyEval := evaluator{
-		scope:    e.scope,
-		builtins: e.builtins,
-	}
+	bodyEval := e.child(e.scope)
 	if err := bodyEval.execNodes(n.body); err != nil {
 		return err
 	}
@@ -478,6 +494,9 @@ func (e *evaluator) execFilterBlock(n *filterBlockNode) error {
 // =============================================================================
 
 func (e *evaluator) evalExpr(ex expr) (Value, error) {
+	if err := e.spend(); err != nil {
+		return Undefined(), err
+	}
 	switch n := ex.(type) {
 	case *litExpr:
 		return n.val, nil
@@ -890,7 +909,7 @@ func (e *evaluator) evalBinary(n *binExpr) (Value, error) {
 	case "-":
 		return subValues(left, right), nil
 	case "*":
-		return mulValues(left, right), nil
+		return mulValues(left, right)
 	case "/":
 		return divValues(left, right), nil
 	case "//":
@@ -1387,14 +1406,18 @@ func subValues(a, b Value) Value {
 	return NewInt(toInt64(a) - toInt64(b))
 }
 
-func mulValues(a, b Value) Value {
+func mulValues(a, b Value) (Value, error) {
 	if a.IsString() && b.IsInt() {
-		return NewString(strings.Repeat(a.AsString(), int(b.AsInt())))
+		n := b.AsInt()
+		if n > 0 && int64(len(a.AsString())) > MaxItems/n {
+			return Undefined(), fmt.Errorf("jinja: a string repeated %d times is past %d bytes", n, MaxItems)
+		}
+		return NewString(strings.Repeat(a.AsString(), int(max(n, 0)))), nil
 	}
 	if a.IsFloat() || b.IsFloat() {
-		return NewFloat(toFloat64(a) * toFloat64(b))
+		return NewFloat(toFloat64(a) * toFloat64(b)), nil
 	}
-	return NewInt(toInt64(a) * toInt64(b))
+	return NewInt(toInt64(a) * toInt64(b)), nil
 }
 
 func divValues(a, b Value) Value {

@@ -302,8 +302,9 @@ func TestEmbeddingGateDiscriminates(t *testing.T) {
 		"qwen3-embedding-0.6b": {
 			{"mean pooling on a last-token model", func(m *model.Model) func() { return set(&m.Cfg.Pooling, jlm.PoolMean) }},
 			{"bidirectional attention on a causal model", func(m *model.Model) func() {
+				undo := builtGraphs(m)
 				m.Cfg.NonCausal = true
-				return func() { m.Cfg.NonCausal = false }
+				return func() { m.Cfg.NonCausal = false; undo() }
 			}},
 			{"no EOS appended", func(m *model.Model) func() {
 				old := m.Vocab.AddEOS

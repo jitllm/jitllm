@@ -75,6 +75,11 @@ func builtinRange(args []Value, kwargs map[string]Value) (Value, error) {
 	if step == 0 {
 		return Undefined(), fmt.Errorf("range: step must not be zero")
 	}
+	// Size nothing from the template: the count is checked before a list
+	// is made (RULE 9).
+	if n := (stop - start) / step; n > MaxItems {
+		return Undefined(), fmt.Errorf("range: %d items, past %d", n, MaxItems)
+	}
 
 	var items []Value
 	if step > 0 {

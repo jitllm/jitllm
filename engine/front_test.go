@@ -161,11 +161,24 @@ func frontModel(t *testing.T, file string) *model.Model {
 // TestFrontRefusesWhatItDropsFromABlock is the gate against a violation: a
 // front end that leaves out part of a block (Qwen3-0.6B read as if it had
 // no q/k norm) leaves stored tensors unbound, and the block is refused naming
-// them rather than given a graph that computes something else.
+// them rather than given a graph that computes something else. A stated
+// graph is held the same way: a tensor the block stores and its stated graph
+// does not bind is refused by name.
 func TestFrontRefusesWhatItDropsFromABlock(t *testing.T) {
 	m := frontModel(t, "Qwen3-0.6B-Q8_0.gguf")
-	m.Cfg.QKNorm = false
+	if len(m.Container.Config().Blocks.Of) == 0 {
+		t.Fatal("Qwen3-0.6B states no block graphs: the stated arm would not be selected")
+	}
+	undo := restate(m, func(inv map[jlm.Role]graph.Shape) { inv[jlm.RolePostAttnNorm] = graph.Shape{K: m.Cfg.NEmbd} })
 	why, err := m.Uncovered(0), m.UncoveredErr(0)
+	undo()
+	if why != model.UncoveredUnbound || err == nil || !strings.Contains(err.Error(), jlm.RolePostAttnNorm.String()) {
+		t.Fatalf("a stated graph leaving a stored tensor unbound is refused by %q (%v), want the unbound norm named", why, err)
+	}
+	t.Logf("block 0's stated graph beside a tensor it does not bind: %s: %v", why, err)
+	defer builtGraphs(m)()
+	m.Cfg.QKNorm = false
+	why, err = m.Uncovered(0), m.UncoveredErr(0)
 	if why != model.UncoveredUnbound || err == nil || !strings.Contains(err.Error(), jlm.RoleAttnQNorm.String()) {
 		t.Fatalf("a block built without its stored q norm is refused by %q (%v), want the unbound q norm named", why, err)
 	}

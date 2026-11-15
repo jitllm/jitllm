@@ -64,7 +64,7 @@ func Decode(b []byte, li int, f Facts) (*Graph, error) {
 	}
 	g := &Graph{Version: s.Version, Block: li, Values: s.Values, In: s.In, Out: s.Out, Routed: s.Routed}
 	for _, o := range s.Ops {
-		k := kindNamed(o.Kind)
+		k := KindNamed(o.Kind)
 		if k == OpInvalid {
 			return nil, fmt.Errorf("graph: block %d's stored graph holds op %q, which this build does not know", li, o.Kind)
 		}
@@ -79,8 +79,8 @@ func Decode(b []byte, li int, f Facts) (*Graph, error) {
 	return g, nil
 }
 
-// kindNamed is the op kind named name, OpInvalid for none.
-func kindNamed(name string) OpKind {
+// KindNamed is the op kind named name (OpKind.String), OpInvalid for none.
+func KindNamed(name string) OpKind {
 	for k := OpInvalid + 1; k < numOps; k++ {
 		if k.String() == name {
 			return k
