@@ -19,8 +19,7 @@
     "head": {"tensor": "lm_head.weight", "tied": "tie_word_embeddings ?? true"},
     "activation": "hidden_activation ?? (hidden_act ?? 'gelu_pytorch_tanh')",
     "rope_scaling": "rope_parameters ?? rope_scaling",
-    "window": {"size": "sliding_window", "used": "use_sliding_window ?? true"},
-    "flags": {"non_causal": "use_bidirectional_attention ?? false"}
+    "window": {"size": "sliding_window", "used": "use_sliding_window ?? true"}
   },
   "tensors": {
     "block_prefix": "model.layers.",

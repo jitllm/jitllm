@@ -103,7 +103,8 @@ schema; `convert/modeljson.go` reads it. Its sections:
   scaling method, a window or a flag the code cannot express, a tensor no
   role names (an `mlp_bias` checkpoint's biases, a shared expert), a
   mixture some block of which carries no experts, and a config key that
-  changes the graph (`mjGraphKeys`: a partial rotary, a window) present with
+  changes the graph (`mjGraphKeys`: a partial rotary, a window, `clip_qkv`,
+  `use_bidirectional_attention`) present with
   another value than its neutral one and not read by the file.
 - `tensors.model`, `tensors.block_prefix`, `tensors.block`: each source name
   onto a role by the role's GGUF tensor name (`roleOf`, one vocabulary for

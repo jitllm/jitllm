@@ -581,6 +581,10 @@ func mjGraphKeys() map[string]any {
 		// clip_qkv clamps q, k and v; where the clamp falls against a q/k norm
 		// is the graph's, and no file states one yet.
 		"clip_qkv": nil,
+		// use_bidirectional_attention drops the causal mask where a class
+		// honours it everywhere; a class whose attention paths disagree on it
+		// (Gemma: eager causal, SDPA bidirectional) leaves it unread.
+		"use_bidirectional_attention": false,
 	}
 }
 
