@@ -927,31 +927,51 @@ func (mj *modelJSON) configIn(env exprEnv, c *hfConfig, names []string) (*Config
 // mixtureCovers holds a mixture's blocks to its dense lead and step: a block
 // carries experts, and a router where the checkpoint ships routers, exactly
 // where the keys place a mixture, so a pattern the two cannot state is refused
-// rather than read as one they can.
+// rather than read as one they can. The prediction blocks the checkpoint
+// ships are held to it too, and a dense block carries its feed-forward and
+// no shared experts.
 func (mj *modelJSON) mixtureCovers(cfg *Config, names []string) error {
 	if mj.Tensors.Experts == nil || cfg.NExpert == 0 {
 		return nil
 	}
-	experts, routers := map[int]bool{}, map[int]bool{}
+	experts, routers, dense, shared := map[int]bool{}, map[int]bool{}, map[int]bool{}, map[int]bool{}
 	for _, n := range names {
 		role, blk, expert, ok := mj.blockRole(n)
 		if !ok {
 			continue
 		}
-		if expert {
+		switch r, _ := roleOf(role); {
+		case expert:
 			experts[blk] = true
-		} else if r, ok := roleOf(role); ok && r == jlm.RoleRouter {
+		case r == jlm.RoleRouter:
 			routers[blk] = true
+		case r == jlm.RoleFFNGate || r == jlm.RoleFFNUp || r == jlm.RoleFFNDown:
+			dense[blk] = true
+		case strings.HasSuffix(role, "_shexp.weight"):
+			shared[blk] = true
+		}
+	}
+	// A file that names a dense feed-forward holds every dense block to it.
+	named := false
+	for _, ms := range mj.Tensors.Block {
+		for _, m := range ms {
+			if r, _ := roleOf(m.Role); r == jlm.RoleFFNGate || r == jlm.RoleFFNUp || r == jlm.RoleFFNDown {
+				named = true
+			}
 		}
 	}
 	if len(experts) == 0 {
 		return nil
 	}
 	step := max(cfg.MoEStep, 1)
-	for b := range int(cfg.NLayer) {
+	for b := range int(cfg.NLayer + cfg.NMTP) {
 		want := uint32(b) >= cfg.NDenseLead && uint32(b+1)%step == 0
 		var what string
 		switch {
+		case !want && named && !dense[b]:
+			what = "carries no feed-forward"
+		case !want && shared[b]:
+			what = "carries shared experts"
 		case experts[b] && !want:
 			what = "carries experts"
 		case !experts[b] && want:

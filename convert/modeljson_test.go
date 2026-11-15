@@ -303,7 +303,9 @@ func TestModelJSONHoldsMixturesToTheStep(t *testing.T) {
 		p := "model.layers." + itoa(b) + ".mlp."
 		return []string{p + "gate.weight", p + "experts.0.gate_proj.weight"}
 	}
-	names := slices.Concat([]string{sh}, at(1), at(3))
+	ffn := func(b int) string { return "model.layers." + itoa(b) + ".mlp.gate_proj.weight" }
+	dense := []string{sh, ffn(0), ffn(2)}
+	names := slices.Concat(dense, at(1), at(3))
 	cfg, err := mj.config(c, names)
 	if err != nil {
 		t.Fatal(err)
@@ -320,7 +322,7 @@ func TestModelJSONHoldsMixturesToTheStep(t *testing.T) {
 	}{
 		{"a mixture off the step", slices.Concat(names, at(2)), "block 2 carries experts, where"},
 		{"a router alone", append(slices.Clone(names), "model.layers.2.mlp.gate.weight"), "block 2 carries a router, where"},
-		{"a mixture missing", slices.Concat([]string{sh}, at(1)), "block 3 carries no experts, where"},
+		{"a mixture missing", slices.Concat(dense, at(1)), "block 3 carries no experts, where"},
 	} {
 		if _, err := mj.config(c, r.names); err == nil || !strings.Contains(err.Error(), r.err) || !errors.Is(err, ErrNotImplemented) {
 			t.Errorf("%s: %v, want an error saying %q", r.name, err, r.err)
@@ -354,6 +356,7 @@ func TestDots1ThroughTheLibrary(t *testing.T) {
 		p := "model.layers." + b + ".mlp."
 		names = append(names, p+"gate.weight", p+"experts.0.gate_proj.weight")
 	}
+	names = append(names, "model.layers.0.mlp.gate_proj.weight")
 	noQK := append([]string{names[0]}, names[3:]...)
 	noSh := append(append([]string{}, names[:3]...), names[4:]...)
 	c := hfConfigOf(t, js)
@@ -440,6 +443,7 @@ func TestModelJSONDefaultsAndNulls(t *testing.T) {
 		p := "model.layers." + b + ".mlp."
 		names = append(names, p+"gate.weight", p+"experts.0.gate_proj.weight")
 	}
+	names = append(names, "model.layers.0.mlp.gate_proj.weight")
 	for _, r := range []struct{ name, from, to string }{
 		{"null kv heads, the class's window over 62 layers", ``, ``},
 		{"the expert count as num_local_experts", `"n_routed_experts": 8`, `"num_local_experts": 8`},
@@ -476,7 +480,7 @@ func TestGlm4MoeThroughTheLibrary(t *testing.T) {
 	  "n_routed_experts": 8, "num_experts_per_tok": 2, "moe_intermediate_size": 32, "n_shared_experts": 1,
 	  "first_k_dense_replace": 1, "routed_scaling_factor": 2.5, "num_nextn_predict_layers": 1,
 	  "rope_parameters": {"rope_type": "default", "rope_theta": 1000000, "partial_rotary_factor": 0.5}}`
-	trunk := []string{"lm_head.weight"}
+	trunk := []string{"lm_head.weight", "model.layers.0.mlp.gate_proj.weight"}
 	for _, b := range []string{"1", "2", "3"} {
 		p := "model.layers." + b + ".mlp."
 		trunk = append(trunk, p+"gate.weight", p+"experts.0.gate_proj.weight")
@@ -503,6 +507,24 @@ func TestGlm4MoeThroughTheLibrary(t *testing.T) {
 			cfg.ExpertScale != 2.5 || cfg.NFFNShExp != 32 || cfg.Flags.Has(jlm.FlagNoExpertNorm) {
 			t.Errorf("%s: %d blocks and %d predicting, rotary %d of %d, lead %d, scale %v, shared %d, flags %v",
 				r.name, cfg.NLayer, cfg.NMTP, cfg.NRot, cfg.HeadDim, cfg.NDenseLead, cfg.ExpertScale, cfg.NFFNShExp, cfg.Flags)
+		}
+	}
+	whole := slices.Concat(trunk, qk, mtp)
+	without := func(n string) []string {
+		return slices.DeleteFunc(slices.Clone(whole), func(s string) bool { return s == n })
+	}
+	for _, r := range []struct {
+		name  string
+		names []string
+		err   string
+	}{
+		{"a prediction block without its router", without("model.layers.3.mlp.gate.weight"), "block 3 carries no router"},
+		{"a dense block without its feed-forward", without("model.layers.0.mlp.gate_proj.weight"), "block 0 carries no feed-forward"},
+		{"shared experts in the dense lead", append(slices.Clone(whole), "model.layers.0.mlp.shared_experts.gate_proj.weight"),
+			"block 0 carries shared experts"},
+	} {
+		if _, err := mj.config(hfConfigOf(t, js), r.names); err == nil || !strings.Contains(err.Error(), r.err) {
+			t.Errorf("%s: %v, want an error saying %q", r.name, err, r.err)
 		}
 	}
 	_, err = mj.config(hfConfigOf(t, strings.Replace(js, `"n_shared_experts"`, `"scoring_func": "softmax", "n_shared_experts"`, 1)), trunk)
