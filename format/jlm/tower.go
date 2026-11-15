@@ -168,10 +168,6 @@ const (
 	// TOpFold is each Span consecutive rows of In[0] one row (graph.OpFold):
 	// a merge window's patches, which the patch order made consecutive.
 	TOpFold OpCode = 12
-	// TOpUntile is In[0]'s rows, the picture's merge windows in the order
-	// of the blocks' windows (TowerBlock.Window), in the merge windows'
-	// raster order (a graph.OpGatherRows).
-	TOpUntile OpCode = 13
 	// TOpPosResample is each row's row of the position table Bind[0], a
 	// Span x Span grid, resampled to the picture's patch grid at the row's
 	// cell (graph.OpPosResample): the source coordinate on each axis by
@@ -273,18 +269,20 @@ const (
 	// TOpSplitRows is each row of In[0] as rows of Width of its elements
 	// (graph.OpSplitRows).
 	TOpSplitRows OpCode = 38
-	// TOpClipMask is In[0] with the rows of a grid GridW wide (0: one row a
-	// grid row) zero from the clip's valid length on: its samples over
-	// Stride, halved Span times as a stride-two convolution of three taps
-	// padded by one halves it (a graph.OpGatherRows).
-	TOpClipMask OpCode = 39
 	// TOpRowConv is a centred depthwise convolution of In[0] across the
 	// step's live rows by Bind[0]'s Span taps a channel, channel-major, zero
 	// past the live rows (graph.OpRowConv).
 	TOpRowConv OpCode = 40
 	// TOpSub is In[0] less In[1].
-	TOpSub   OpCode = 41
-	topCodes OpCode = 42
+	TOpSub OpCode = 41
+	// TOpGather is rows gathered from In[0]'s rows where it reads one, then
+	// the Bind tables' rows in order (a graph.OpGatherRows): each output row
+	// the source row Expr's last term is, over the gather's operands
+	// (GatherRow...), GatherNone a row of zeros; where Span is set its term
+	// Span-1 the last row written. Its rows are In[0]'s times Width, the
+	// program's where Width is 0.
+	TOpGather OpCode = 42
+	topCodes  OpCode = 43
 )
 
 // A stated rotary's layout (TOpRope's Chain).
@@ -603,6 +601,9 @@ func (p *Program) valid(name string) error {
 		}
 		in, bind := op.arity()
 		switch {
+		case retired(op.Code) != "":
+			return fmt.Errorf("jlm: the tower's %s op %d is code %d, %s, which this build reads as a stated gather: convert the model again",
+				name, i, op.Code, retired(op.Code))
 		case op.Code == 0 || op.Code >= topCodes:
 			return fmt.Errorf("jlm: the tower's %s op %d is code %d, which this build does not know", name, i, op.Code)
 		case in >= 0 && len(op.In) != in:
@@ -623,8 +624,6 @@ func (p *Program) valid(name string) error {
 			return fmt.Errorf("jlm: the tower's %s op %d normalises features with an epsilon of %v", name, i, op.Eps)
 		case op.Code == TOpSplitRows && op.Width < 1:
 			return fmt.Errorf("jlm: the tower's %s op %d splits rows into %d elements", name, i, op.Width)
-		case op.Code == TOpClipMask && (op.Stride < 1 || op.Span < 0):
-			return fmt.Errorf("jlm: the tower's %s op %d masks a clip of a frame every %d halved %d times", name, i, op.Stride, op.Span)
 		case op.Code == TOpRowConv && (op.Span < 1 || op.Span%2 == 0):
 			return fmt.Errorf("jlm: the tower's %s op %d convolves rows by %d taps", name, i, op.Span)
 		case (op.Code == TOpLayerNorm || op.Code == TOpRMSNorm) && op.Eps <= 0:
@@ -640,6 +639,10 @@ func (p *Program) valid(name string) error {
 			return fmt.Errorf("jlm: the tower's %s op %d turns heads of %d laid out as %d", name, i, op.Span, op.Chain)
 		case op.Code == TOpSlice && op.Width <= 0:
 			return fmt.Errorf("jlm: the tower's %s op %d slices %d elements", name, i, op.Width)
+		case op.Code == TOpGather && len(op.In) == 0 && len(op.Bind) == 0:
+			return fmt.Errorf("jlm: the tower's %s op %d gathers from no source", name, i)
+		case op.Code == TOpGather && len(op.In) > 1:
+			return fmt.Errorf("jlm: the tower's %s op %d gathers from %d values", name, i, len(op.In))
 		case op.Code == TOpStated && (op.Expr == nil || op.Width < 0 || op.Width == 0 && len(op.In) == 0):
 			return fmt.Errorf("jlm: the tower's %s op %d states no expression or no width", name, i)
 		case op.Offset < 0:
@@ -659,12 +662,16 @@ func (p *Program) valid(name string) error {
 			return fmt.Errorf("jlm: the tower's %s op %d upsamples by %d a grid %d wide", name, i, op.Span, op.GridW)
 		case op.Code == TOpRowsAttend && (op.Width < 0 || op.Width > 0 && op.Span%op.Width != 0):
 			return fmt.Errorf("jlm: the tower's %s op %d attends %d heads over %d", name, i, op.Span, op.Width)
-		case op.Code != TOpUnfold && op.Code != TOpConv && op.Code != TOpUpsample && op.Code != TOpPool && op.Code != TOpClipMask && op.GridW != 0:
+		case op.Code != TOpUnfold && op.Code != TOpConv && op.Code != TOpUpsample && op.Code != TOpPool && op.GridW != 0:
 			return fmt.Errorf("jlm: the tower's %s op %d (code %d) states a grid %d wide", name, i, op.Code, op.GridW)
-		case op.Code != TOpUnfold && op.Code != TOpConv && op.Code != TOpFrames && op.Code != TOpClipMask && op.Stride != 0:
+		case op.Code != TOpUnfold && op.Code != TOpConv && op.Code != TOpFrames && op.Stride != 0:
 			return fmt.Errorf("jlm: the tower's %s op %d (code %d) states a stride of %d", name, i, op.Code, op.Stride)
 		}
-		if op.Expr != nil {
+		if op.Code == TOpGather {
+			if err := op.validGather(); err != nil {
+				return fmt.Errorf("jlm: the tower's %s op %d: %w", name, i, err)
+			}
+		} else if op.Expr != nil {
 			if err := op.Expr.Valid(); err != nil {
 				return fmt.Errorf("jlm: the tower's %s op %d: %w", name, i, err)
 			}
@@ -683,7 +690,7 @@ func (p *Program) valid(name string) error {
 // weights it binds.
 func (op *TowerOp) arity() (in int, bind [2]int) {
 	switch op.Code {
-	case TOpPatchify, TOpDropRows, TOpRegroup, TOpPool, TOpFold, TOpUntile:
+	case TOpPatchify, TOpDropRows, TOpRegroup, TOpPool, TOpFold:
 		return 1, [2]int{0, 0}
 	case TOpPosAxes, TOpPosBuckets, TOpTableRows:
 		return 0, [2]int{1, 1}
@@ -691,7 +698,7 @@ func (op *TowerOp) arity() (in int, bind [2]int) {
 		return -1, [2]int{0, 1}
 	case TOpFrames:
 		return 0, [2]int{0, 0}
-	case TOpFeatureNorm, TOpSplitRows, TOpClipMask:
+	case TOpFeatureNorm, TOpSplitRows:
 		return 1, [2]int{0, 0}
 	case TOpRowConv:
 		return 1, [2]int{1, 1}
@@ -721,6 +728,8 @@ func (op *TowerOp) arity() (in int, bind [2]int) {
 		return 2, [2]int{0, 0}
 	case TOpStated:
 		return -1, [2]int{0, 0}
+	case TOpGather:
+		return -1, [2]int{0, 2}
 	}
 	return -1, [2]int{0, 0}
 }

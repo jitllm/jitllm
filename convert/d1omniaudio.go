@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/jitllm/jitllm/convert/gather"
 	"github.com/jitllm/jitllm/convert/meta"
 	"github.com/jitllm/jitllm/format/jlm"
 )
@@ -330,7 +331,9 @@ func d1OmniAudioTower(a *jlm.Audio) *jlm.Tower {
 		return op(p, jlm.TowerOp{Code: jlm.TOpLayerNorm, In: []uint16{x}, Bind: []jlm.Role{w, b}, Eps: eps})
 	}
 	mask := func(p *program, x uint16, gw, halvings int32) uint16 {
-		return op(p, jlm.TowerOp{Code: jlm.TOpClipMask, In: []uint16{x}, GridW: gw, Stride: hop, Span: halvings})
+		m := gather.ClipMask(int(gw), int(hop), int(halvings))
+		m.In = []uint16{x}
+		return op(p, m)
 	}
 	conv := func(p *program, x uint16, w, b jlm.Role, gw int32) uint16 {
 		c := op(p, jlm.TowerOp{Code: jlm.TOpConv, In: []uint16{x}, Bind: []jlm.Role{w}, Span: 3, Stride: 2, GridW: gw, Offset: 1})

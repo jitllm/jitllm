@@ -8,6 +8,7 @@ import (
 	"testing"
 	"unsafe"
 
+	"github.com/jitllm/jitllm/convert/gather"
 	"github.com/jitllm/jitllm/convert/gguf"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
@@ -536,8 +537,10 @@ func TestQwen25VLStatesItsTower(t *testing.T) {
 	for _, op := range tw.Head.Ops {
 		head = append(head, op.Code)
 	}
-	if want := []jlm.OpCode{jlm.TOpRMSNorm, jlm.TOpFold, jlm.TOpLinear, jlm.TOpStated, jlm.TOpLinear, jlm.TOpUntile}; !reflect.DeepEqual(head, want) {
+	if want := []jlm.OpCode{jlm.TOpRMSNorm, jlm.TOpFold, jlm.TOpLinear, jlm.TOpStated, jlm.TOpLinear, jlm.TOpGather}; !reflect.DeepEqual(head, want) {
 		t.Errorf("the head is %v, want %v", head, want)
+	} else if got, want := tw.Head.Ops[5], gather.Untile(2, 4); !reflect.DeepEqual(got.Expr, want.Expr) || got.Span != want.Span || got.Width != 1 {
+		t.Errorf("the head's last op is %+v, want the 2x2 merge windows of 4x4 windows untiled", got)
 	}
 	if op := tw.Entry.Ops[0]; op.Code != jlm.TOpPatchify || op.Width != 2 {
 		t.Errorf("the patches are %+v, want 2x2 windows' order", op)

@@ -6,6 +6,7 @@ import (
 	"math"
 	"slices"
 
+	"github.com/jitllm/jitllm/convert/gather"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/tok"
 )
@@ -849,7 +850,9 @@ func qwenVLTower(s *jlm.Source, kind qwenVLKind) (*jlm.Tower, error) {
 		return nil, err
 	}
 	if windowed {
-		t.Head.Ops = append(t.Head.Ops, jlm.TowerOp{Code: jlm.TOpUntile, In: []uint16{5}})
+		untile := gather.Untile(int(merge), int(window/merge))
+		untile.In = []uint16{5}
+		t.Head.Ops = append(t.Head.Ops, untile)
 		t.Head.Out = 6
 	}
 	for _, b := range slices.Sorted(maps.Keys(taps)) {

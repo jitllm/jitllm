@@ -37,7 +37,11 @@ func sampleTower(t *testing.T) *Tower {
 			{Code: TOpLinear, In: []uint16{2}, Bind: []Role{RoleVProj}},
 			{Code: TOpPool, In: []uint16{1}, Span: 2},
 			{Code: TOpFold, In: []uint16{1}, Span: 4},
-			{Code: TOpUntile, In: []uint16{1}},
+			{Code: TOpGather, In: []uint16{1}, Width: 1, Span: 1, Expr: &Expr{Terms: []Term{
+				{Fn: FnSub, Args: [3]Arg{{Kind: ArgIn, Index: GatherInRows}, {Kind: ArgConst, Value: 1}}},
+				{Fn: FnLess, Args: [3]Arg{{Kind: ArgIn, Index: GatherSamples}, {Kind: ArgIn, Index: GatherRow}}},
+				{Fn: FnWhere, Args: [3]Arg{{Kind: ArgTerm, Index: 1}, ExactNum(GatherNone), {Kind: ArgIn, Index: GatherRow}}},
+			}}},
 		}},
 		Span: TowerSpan{Before: []int32{198, 49189, 49152}, After: []int32{49189},
 			BeforeText: "\n\n<start_of_image>", AfterText: "<end_of_image>\n\n", Bidir: true, Mark: "<image>\n", GridDiv: 2},
@@ -106,6 +110,15 @@ func TestTowerRefusesWhatItCannotRead(t *testing.T) {
 		{"a resample stated on a linear", "states a resample", func(t *Tower) { t.Entry.Ops[1].Filter = TapsLinear }},
 		{"a whole-picture block before the first", "whole-picture block -1", func(t *Tower) { t.Block.Full[0] = -1 }},
 		{"an unknown op", "does not know", func(t *Tower) { t.Head.Ops[1].Code = topCodes }},
+		{"an untile an older build stated", "convert the model again", func(t *Tower) { t.Head.Ops[5].Code = 13 }},
+		{"a clip mask an older build stated", "convert the model again", func(t *Tower) { t.Head.Ops[5].Code = 39 }},
+		{"a gather by a function no index takes", "not a function of row indices", func(t *Tower) { t.Head.Ops[5].Expr.Terms[0].Fn = FnEqual }},
+		{"a gather bound past its index", "bounds its rows at term 4", func(t *Tower) { t.Head.Ops[5].Span = 4 }},
+		{"a gather reading no operand of its own", "reads operand 13", func(t *Tower) {
+			t.Head.Ops[5].Expr.Terms[1].Args[0].Index = GatherOperands
+		}},
+		{"a gather of no index", "states no index", func(t *Tower) { t.Head.Ops[5].Expr = nil }},
+		{"a gather of no source", "gathers from no source", func(t *Tower) { t.Head.Ops[5].In = nil }},
 		{"a value read before it is made", "before it is made", func(t *Tower) { t.Entry.Ops[3].In[1] = 4 }},
 		{"a linear with no matrix", "binds 0 weights", func(t *Tower) { t.Head.Ops[2].Bind = nil }},
 		{"an add of one value", "reads 1 values", func(t *Tower) { t.Entry.Ops[3].In = []uint16{2} }},

@@ -73,7 +73,7 @@ func lowerValuesOf(b *Builder, t *jlm.Tower, p *jlm.Program, in []ValueID, rows 
 // has (the model's blockOps).
 func LowerValues(b *Builder, t *jlm.Tower, p *jlm.Program, in []ValueID, rows int, f Facts,
 	blockOps func([]ValueID, *jlm.TowerOp) (ValueID, error)) ([]ValueID, error) {
-	merge, window := TowerTiles(t)
+	_, window := TowerTiles(t)
 	if len(in) != int(p.NIn) {
 		return nil, fmt.Errorf("a program of %d inputs over %d", p.NIn, len(in))
 	}
@@ -263,12 +263,33 @@ func LowerValues(b *Builder, t *jlm.Tower, p *jlm.Program, in []ValueID, rows in
 			S := int(op.Span)
 			out = b.Emit(OpFold, ins, []Result{{Name: "folded", Width: S * width(ins[0]),
 				Rows: rowsOf(ins[0]) / S}}, nil, Attrs{Span: S}, nil, nil)[0]
-		case jlm.TOpUntile:
-			if window < 1 {
-				return nil, fmt.Errorf("untiles a grid of no windows")
+		case jlm.TOpGather:
+			var bind []Binding
+			for _, r := range op.Bind {
+				s, err := shape(r)
+				if err != nil {
+					return nil, err
+				}
+				bind = append(bind, Binding{Role: r, K: s.K, Rows: s.Rows})
 			}
-			out = b.Emit(OpGatherRows, ins, []Result{{Name: "raster", Width: width(ins[0]), Rows: rowsOf(ins[0])}}, nil,
-				UntileRows(merge, window), nil, nil)[0]
+			res := Result{Name: name}
+			switch {
+			case len(ins) > 0:
+				res.Width = width(ins[0])
+				if op.Width > 0 {
+					res.Rows = rowsOf(ins[0]) * int(op.Width)
+				}
+			case op.Width > 0:
+				return nil, fmt.Errorf("gathers %d rows a row of no input", op.Width)
+			default:
+				res.Width = bind[0].K
+			}
+			for _, t := range bind {
+				if t.K != res.Width {
+					return nil, fmt.Errorf("gathers rows %d wide with a table's %d wide", res.Width, t.K)
+				}
+			}
+			out = b.Emit(OpGatherRows, ins, []Result{res}, bind, StatedGather(op.Expr, op.Span), nil, nil)[0]
 		case jlm.TOpLeadRow:
 			out = b.Emit(OpGatherRows, ins, []Result{{Name: "class", Width: width(ins[0])}},
 				[]Binding{{Role: op.Bind[0], K: width(ins[0])}}, LeadRows(int(op.Offset)), nil, nil)[0]
@@ -343,12 +364,6 @@ func LowerValues(b *Builder, t *jlm.Tower, p *jlm.Program, in []ValueID, rows in
 			}
 			out = b.Emit(OpSplitRows, ins, []Result{{Name: name, Width: w, Rows: rowsOf(ins[0]) * (width(ins[0]) / w)}}, nil,
 				Attrs{Width: w}, nil, nil)[0]
-		case jlm.TOpClipMask:
-			if op.Stride < 1 || op.Span < 0 {
-				return nil, fmt.Errorf("masks a clip every %d samples halved %d times", op.Stride, op.Span)
-			}
-			out = b.Emit(OpGatherRows, ins, []Result{{Name: name, Width: width(ins[0])}}, nil,
-				ClipRows(int(op.GridW), int(op.Stride), int(op.Span)), nil, nil)[0]
 		case jlm.TOpRowConv:
 			s, err := shape(op.Bind[0])
 			if err != nil {

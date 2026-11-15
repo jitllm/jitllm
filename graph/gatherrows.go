@@ -1,23 +1,29 @@
 package graph
 
-import "fmt"
+import (
+	"fmt"
+	"math"
 
-// The operands an OpGatherRows index expression reads (an ArgIn's Index).
+	"github.com/jitllm/jitllm/format/jlm"
+)
+
+// The operands an OpGatherRows index expression reads (an ArgIn's Index):
+// the container's (jlm.GatherRow...), which states them in a TOpGather.
 const (
-	GatherRow     = iota // the output row: past the op's bound, the last row written
-	GatherOutRows        // Out[0]'s rows
-	GatherInRows         // In[0]'s rows, 0 with no input
-	GatherLive           // the step's live rows
-	GatherPos            // the row's position
-	GatherGridW          // the request's patch grid's width
-	GatherGridH          // the request's patch grid's height
-	GatherMark           // the request's run of table rows before: its first plus one, 0 for none
-	GatherMarkN          // that run's length
-	GatherTrail          // the request's run of table rows after: its first plus one, 0 for none
-	GatherTrailN         // that run's length
-	GatherSamples        // the request's clip's samples
-	GatherCol            // the output element's column (OpGatherElems)
-	GatherOperands
+	GatherRow      = jlm.GatherRow
+	GatherOutRows  = jlm.GatherOutRows
+	GatherInRows   = jlm.GatherInRows
+	GatherLive     = jlm.GatherLive
+	GatherPos      = jlm.GatherPos
+	GatherGridW    = jlm.GatherGridW
+	GatherGridH    = jlm.GatherGridH
+	GatherMark     = jlm.GatherMark
+	GatherMarkN    = jlm.GatherMarkN
+	GatherTrail    = jlm.GatherTrail
+	GatherTrailN   = jlm.GatherTrailN
+	GatherSamples  = jlm.GatherSamples
+	GatherCol      = jlm.GatherCol
+	GatherOperands = jlm.GatherOperands
 )
 
 // Index builds an OpGatherRows index expression, unsigned integers
@@ -70,29 +76,54 @@ func (x *Index) Attrs(r Arg) Attrs {
 	return Attrs{Expr: x.Terms, Span: x.bound}
 }
 
-func (x *Index) inLast() Arg { return x.Sub(x.In(GatherInRows), x.K(1)) }
+// InLast is In[0]'s last row.
+func (x *Index) InLast() Arg { return x.Sub(x.In(GatherInRows), x.K(1)) }
 
-// UntileRows is the input's rows -- the cells of a grid in nested order,
-// window x window windows of cells, each window's cells in raster order and
-// consecutive, the windows in raster order and those at the grid's right and
-// lower edges cut to it -- in the cells' raster order: the grid the request's
-// patch grid over merge wide, its live rows over merge*merge over that tall.
-func UntileRows(merge, window int) Attrs {
-	var x Index
-	m := max(merge, 1)
-	gw := x.Max(x.Div(x.In(GatherGridW), x.K(m)), x.K(1))
-	gh := x.Max(x.Div(x.Div(x.In(GatherLive), x.K(m*m)), gw), x.K(1))
-	r := x.In(GatherRow)
-	cy := x.Div(r, gw)
-	cx := x.Rem(r, gw, cy)
-	win := x.K(window)
-	wy, wx := x.Div(cy, win), x.Div(cx, win)
-	top, left := x.Mul(wy, win), x.Mul(wx, win)
-	wh := x.Max(x.Min(win, x.Sub(x.Max(gh, top), top)), x.K(1))
-	ww := x.Max(x.Min(win, x.Sub(x.Max(gw, left), left)), x.K(1))
-	at := x.Add(x.Mul(top, gw), x.Mul(left, wh))
-	at = x.Add(at, x.Add(x.Mul(x.Sub(cy, top), ww), x.Sub(cx, left)))
-	return x.Attrs(x.Min(at, x.inLast()))
+// StatedGather is a gather's attributes from the index e a container states
+// (TOpGather's Expr) and its bound term, 0 for none.
+func StatedGather(e *jlm.Expr, bound int32) Attrs {
+	terms := make([]Term, len(e.Terms))
+	for k, t := range e.Terms {
+		terms[k].Fn = t.Fn
+		for j, a := range t.Args {
+			switch a.Kind {
+			case jlm.ArgIn:
+				terms[k].Args[j] = Arg{Kind: ArgIn, Index: int(a.Index)}
+			case jlm.ArgTerm:
+				terms[k].Args[j] = Arg{Kind: ArgTerm, Index: int(a.Index)}
+			case jlm.ArgConst:
+				terms[k].Args[j] = Arg{Kind: ArgConst, Const: float64(a.Value)}
+			case jlm.ArgExact:
+				terms[k].Args[j] = Arg{Kind: ArgConst, Const: a.Exact}
+			}
+		}
+	}
+	return Attrs{Expr: terms, Span: int(bound)}
+}
+
+// GatherIndex is a's index as a container states it (TOpGather's Expr) and
+// its bound term: a constant a binary32 cannot hold exact.
+func GatherIndex(a Attrs) (*jlm.Expr, int32) {
+	e := &jlm.Expr{Terms: make([]jlm.Term, len(a.Expr))}
+	for k, t := range a.Expr {
+		e.Terms[k].Fn = t.Fn
+		for j, x := range t.Args {
+			var y jlm.Arg
+			switch x.Kind {
+			case ArgIn:
+				y = jlm.Arg{Kind: jlm.ArgIn, Index: uint32(x.Index)}
+			case ArgTerm:
+				y = jlm.Arg{Kind: jlm.ArgTerm, Index: uint32(x.Index)}
+			case ArgConst:
+				y = jlm.Arg{Kind: jlm.ArgConst, Value: float32(x.Const)}
+				if float64(y.Value) != x.Const || math.IsInf(x.Const, 0) {
+					y = jlm.ExactNum(x.Const)
+				}
+			}
+			e.Terms[k].Args[j] = y
+		}
+	}
+	return e, int32(a.Span)
 }
 
 // LeadRows is the input with its first n rows the table's row.
@@ -152,7 +183,7 @@ func RowBreakRows(s, trim int) Attrs {
 	r := x.In(GatherRow)
 	q := x.Div(r, line)
 	k := x.Rem(r, line, q)
-	src := x.Min(x.Add(x.Mul(q, w), k), x.inLast())
+	src := x.Min(x.Add(x.Mul(q, w), k), x.InLast())
 	return x.Attrs(x.Where(x.Less(k, w), src, x.In(GatherInRows)))
 }
 
@@ -167,7 +198,7 @@ func WrapRows(s, extra int) Attrs {
 	end := x.Add(x.Mul(x.Div(gh, S), w), x.K(1))
 	x.Bound(end)
 	r, n := x.In(GatherRow), x.In(GatherInRows)
-	src := x.Min(x.Sub(x.Max(r, x.K(1)), x.K(1)), x.inLast())
+	src := x.Min(x.Sub(x.Max(r, x.K(1)), x.K(1)), x.InLast())
 	return x.Attrs(x.Where(x.Less(r, x.K(1)), n, x.Where(x.Less(r, end), src, x.Add(n, x.K(1)))))
 }
 
@@ -203,7 +234,7 @@ func MarkRows(merge, lead, trail, rows int) Attrs {
 	isBefore := x.Less(r, before)
 	named := x.Where(isBefore, x.Add(mark, r), x.Add(tr, x.Sub(x.Max(r, end), end)))
 	row := x.Add(n, x.Min(named, x.K(rows-1)))
-	src := x.Min(x.Sub(x.Max(r, before), before), x.inLast())
+	src := x.Min(x.Sub(x.Max(r, before), before), x.InLast())
 	return x.Attrs(x.Where(isBefore, row, x.Where(x.Less(x.Sub(end, x.K(1)), r), row, src)))
 }
 
@@ -242,22 +273,6 @@ func PosAxis(n, lead, axis int) Attrs {
 	return x.Attrs(x.Add(x.Min(y, x.K(n-1)), x.K(n)))
 }
 
-// ClipRows is the input with the rows past a clip's valid length zero: the
-// rows a grid w wide (0: one row a grid row), a grid row kept below L, L the
-// request's samples over stride halved halvings times as a stride-two
-// convolution of three taps padded by one halves it (L = (L-1)/2+1): row*2^h
-// < L0 is (row*2^h + 1)*stride <= the samples, no division of the count.
-func ClipRows(w, stride, halvings int) Attrs {
-	var x Index
-	r := x.In(GatherRow)
-	row := r
-	if w > 0 {
-		row = x.Div(r, x.K(w))
-	}
-	end := x.Mul(x.Add(x.Mul(row, x.K(1<<halvings)), x.K(1)), x.K(stride))
-	return x.Attrs(x.Where(x.Less(x.In(GatherSamples), end), x.K(GatherNone), r))
-}
-
 // liveRows is the step's live rows less drop, at least one.
 func (x *Index) liveRows(drop int) Arg {
 	live := x.In(GatherLive)
@@ -287,7 +302,7 @@ func FirstRow() Attrs {
 }
 
 // past is an element index no source holds.
-const past = 1<<32 - 1
+const past = jlm.GatherNone
 
 // FrameSamples is each element of a centred frame of width samples every
 // stride of the request's clip, back samples before it: row t's element i
