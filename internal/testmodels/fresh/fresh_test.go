@@ -114,3 +114,60 @@ func TestACausalPictureBesideBidirectionalLayersIsReconverted(t *testing.T) {
 		t.Fatal("a container stating its pictures causal beside bidirectional layers was left as it is")
 	}
 }
+
+// TestUnstatedHeadBlocksAreReconverted: a marker head's container whose
+// statement leaves its head blocks out, as the converter wrote one before it
+// stated them (below HeadGraphsRevision), is reconverted from its source.
+func TestUnstatedHeadBlocksAreReconverted(t *testing.T) {
+	dir := t.TempDir()
+	src := testmodels.Path("laya/fixture/laya-fixture.gguf")
+	if _, err := os.Stat(src); err != nil {
+		testmodels.Missing(t, "MODEL MISSING: %v -- this gate proved nothing", err)
+	}
+	if err := os.Symlink(src, filepath.Join(dir, filepath.Base(src))); err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(dir, "laya-fixture"+jlm.Ext)
+	if _, err := convert.FromGGUFs(src, "", dst, jlm.Fingerprint{Host: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	stated := func() int {
+		t.Helper()
+		c, err := jlm.Open(dst)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		return len(c.Config().Blocks.Of)
+	}
+	whole := stated()
+	if changed, err := jlm.Restate(dst, func(_ *jlm.File, c *jlm.Config) (bool, error) {
+		if c.HeadBlocks() == 0 || whole != int(c.NLayer+c.HeadBlocks()) {
+			t.Fatalf("the fixture states %d graphs for %d blocks and %d head blocks: it tests nothing", whole, c.NLayer, c.HeadBlocks())
+		}
+		var short jlm.BlockGraphs
+		at := map[uint16]uint16{}
+		for _, i := range c.Blocks.Of[:c.NLayer] {
+			j, ok := at[i]
+			if !ok {
+				j = uint16(len(short.Graphs))
+				at[i] = j
+				short.Graphs = append(short.Graphs, c.Blocks.Graphs[i])
+			}
+			short.Of = append(short.Of, j)
+		}
+		c.Blocks, c.Revision = short, jlm.HeadGraphsRevision-1
+		return true, nil
+	}); err != nil || !changed {
+		t.Fatalf("leaving the head blocks out: changed %v, %v", changed, err)
+	}
+	if stated() == whole {
+		t.Fatal("the restated container states its head blocks: the gate cannot see a reconversion")
+	}
+	if err := Container(dst); err != nil {
+		t.Fatal(err)
+	}
+	if n := stated(); n != whole {
+		t.Fatalf("a container leaving its head blocks out was left as it is: %d graphs, want %d", n, whole)
+	}
+}

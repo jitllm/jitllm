@@ -307,8 +307,9 @@ func parseModelJSON(b []byte, name string) (*modelJSON, error) {
 			return nil, fmt.Errorf("convert: %s: %q is no Go table class's architecture", name, n)
 		}
 	}
-	// A file of no class states a GGUF architecture's graph alone.
-	if len(mj.Classes) == 0 && len(mj.GGUF)+len(mj.Archs) != 0 && mj.Graph != nil {
+	// A file of no class states a GGUF architecture's graph alone, or a
+	// graph other files' blocks use (mjUse).
+	if len(mj.Classes) == 0 && mj.Graph != nil {
 		if mj.Config.Arch != "" || len(mj.Tensors.Block) != 0 || len(mj.Tensors.Model) != 0 {
 			return nil, fmt.Errorf("convert: %s names no class and states one's config or tensors", name)
 		}
@@ -401,7 +402,39 @@ func libraryFiles() ([]*modelJSON, error) {
 		}
 		out = append(out, mj)
 	}
+	if err := libraryUses(out); err != nil {
+		return nil, err
+	}
 	return out, nil
+}
+
+// libraryUses refuses a use naming no graph of files, or one that uses
+// others in turn, and a graph of no class and no GGUF architecture that no
+// file's use names: it would state no model's blocks.
+func libraryUses(files []*modelJSON) error {
+	used := map[string]bool{}
+	for _, mj := range files {
+		if mj.Graph == nil {
+			continue
+		}
+		for _, u := range mj.Graph.Use {
+			n := "convert/models/" + u.Graph + ".json"
+			i := slices.IndexFunc(files, func(f *modelJSON) bool { return f.name == n })
+			switch {
+			case i < 0 || files[i].Graph == nil:
+				return fmt.Errorf("convert: %s uses %q, which no library file states", mj.name, u.Graph)
+			case len(files[i].Graph.Use) != 0:
+				return fmt.Errorf("convert: %s uses %q, which uses others in turn", mj.name, u.Graph)
+			}
+			used[n] = true
+		}
+	}
+	for _, mj := range files {
+		if len(mj.Classes) == 0 && len(mj.GGUF) == 0 && !used[mj.name] {
+			return fmt.Errorf("convert: %s names no class and no GGUF architecture, and no file uses its graph", mj.name)
+		}
+	}
+	return nil
 }
 
 // modelLibrary is the embedded library by class.
@@ -468,6 +501,17 @@ func archGraph(a Arch) (*mjGraph, error) {
 		g, by = mj.Graph, mj.name
 	}
 	return g, nil
+}
+
+// classGraph is the graph the library states for a Go-table class: its
+// config's architecture's (a), else the one the class declares, as a GGUF
+// is read by the name it declares before its config refines it.
+func classGraph(ha *hfArch, a Arch) (*mjGraph, error) {
+	g, err := archGraph(a)
+	if g != nil || err != nil {
+		return g, err
+	}
+	return archGraph(ha.arch)
 }
 
 // WithModelJSON converts a safetensors model by the model.json at path,

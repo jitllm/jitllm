@@ -69,14 +69,17 @@ func reconvert(path string) error {
 		bidir := v == nil || v.Tower == nil || len(c.Config().BidirLayers) == 0 || v.Tower.Span.Bidir
 		marker := cfg.MarkerPrompt != nil || cfg.Flags2&(jlm.Flag2HeadBlocks|jlm.Flag2MarkerPointer) == 0 &&
 			cfg.Decision != jlm.DecisionKev
-		rev := cfg.Revision >= jlm.StatementRevision || (cfg.SWAWindow == 0 || cfg.YarnFactor <= 1 && v == nil) &&
+		heads := len(cfg.Blocks.Of) == 0 || len(cfg.Blocks.Of) == int(cfg.NLayer+cfg.HeadBlocks()+cfg.NMTP)
+		rev := (cfg.Revision >= 1 || cfg.SWAWindow == 0 || cfg.YarnFactor <= 1 && v == nil) &&
 			(cfg.Revision >= 2 || !storesAny(c, jlm.RoleAttnSubNorm, jlm.RoleFFNSubNorm)) &&
 			(cfg.Revision >= 3 || cfg.RopeSections == [4]uint32{}) &&
 			(cfg.Revision >= 5 || cfg.DecisionBlocks == 0)
 		c.Close()
 		switch {
-		case stated && tower && tools && streams && rev && labels && marker && joint && media && audio && video && bidir:
+		case stated && tower && tools && streams && rev && labels && marker && joint && media && audio && video && bidir && heads:
 			return nil
+		case !heads:
+			openErr = fmt.Errorf("it states no graphs for its head blocks")
 		case !bidir:
 			openErr = fmt.Errorf("it states the layers a picture's rows see each other on, and its pictures causal")
 		case !video:

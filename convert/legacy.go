@@ -12,7 +12,7 @@ import (
 // the code is last read, and ModernBERT's erf GELU as its activations and
 // Phi-3.5-MoE's routed weight for its router, refused where unstated.
 func LegacyStated(code uint16, c *jlm.Config) error {
-	if c.Revision < jlm.StatementRevision {
+	if c.Revision < jlm.SourceRevision {
 		StateRevision(&Config{Config: c, Arch: Arch(code)})
 	}
 	switch a := Arch(code); {

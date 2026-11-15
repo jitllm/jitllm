@@ -1060,3 +1060,78 @@ func TestModelJSONRotaryLayers(t *testing.T) {
 		}
 	}
 }
+
+// TestGoTableClassesStateTheirGraphs: every class of the Go table states its
+// blocks' graph through the library, but those of the architectures listed,
+// which no file states yet. A listed architecture that gains a file leaves
+// the list.
+func TestGoTableClassesStateTheirGraphs(t *testing.T) {
+	unstated := map[Arch]bool{ArchKimiLinear: true, ArchKimiK3: true}
+	var missing []string
+	n := 0
+	for c, ha := range hfArchTable() {
+		g, err := classGraph(ha, ha.arch)
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch {
+		case g == nil && !unstated[ha.arch]:
+			missing = append(missing, c+" ("+ha.arch.String()+")")
+		case g != nil && unstated[ha.arch]:
+			t.Errorf("%s states its graph: take %v off the list", c, ha.arch)
+		case g != nil:
+			n++
+		}
+	}
+	slices.Sort(missing)
+	if len(missing) != 0 {
+		t.Errorf("classes of the Go table that state no graph: %v", missing)
+	}
+	if n == 0 {
+		t.Fatal("no class of the Go table states its graph -- this gate proved nothing")
+	}
+}
+
+// TestLibraryGraphsAreUsed: a graph of no class and no GGUF architecture is
+// one another file's use names; the library as it stands passes, a file
+// whose graph nobody uses is refused, and so is a use naming no file.
+func TestLibraryGraphsAreUsed(t *testing.T) {
+	files, err := libraryFiles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := libraryUses(files); err != nil {
+		t.Fatal(err)
+	}
+	unused := 0
+	var cut []*modelJSON
+	for _, mj := range files {
+		c := *mj
+		if c.Graph != nil && len(c.Graph.Use) != 0 {
+			g := *c.Graph
+			g.Use = nil
+			c.Graph = &g
+			unused++
+		}
+		cut = append(cut, &c)
+	}
+	if unused == 0 {
+		t.Fatal("no library file uses another's graph -- this gate proved nothing")
+	}
+	if err := libraryUses(cut); err == nil || !strings.Contains(err.Error(), "no file uses its graph") {
+		t.Errorf("a graph nobody uses: %v, want a refusal", err)
+	}
+	dangling := slices.Clone(files)
+	for i, mj := range dangling {
+		if mj.Graph != nil && len(mj.Graph.Use) != 0 {
+			c, g := *mj, *mj.Graph
+			g.Use = append(slices.Clone(g.Use), mjUse{If: "true", Graph: "no_such_graph"})
+			c.Graph = &g
+			dangling[i] = &c
+			break
+		}
+	}
+	if err := libraryUses(dangling); err == nil || !strings.Contains(err.Error(), "no_such_graph") {
+		t.Errorf("a use naming no file: %v, want a refusal", err)
+	}
+}

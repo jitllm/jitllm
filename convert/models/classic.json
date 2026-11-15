@@ -1,6 +1,7 @@
 {
   "gguf": ["phi2", "starcoder", "starcoder2", "stablelm", "falcon", "nemotron", "command-r", "cohere2", "dbrx", "phimoe", "bert", "nomic-bert", "modern-bert"],
   "graph": {
+    "use": [{"if": "layer >= trunk and layer < trunk + head_blocks", "graph": "prenorm_encoder"}],
     "block": [
       {"op": "in", "out": "x", "width": "embd"},
       {"op": "layer_norm", "if": "layer_norm and stored('attn_norm')", "in": "x", "w": ["attn_norm", "attn_norm.bias?"], "out": "n"},

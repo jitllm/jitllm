@@ -1,6 +1,7 @@
 {
   "gguf": ["lfm2", "lfm2moe"],
   "graph": {
+    "use": [{"if": "layer >= trunk and layer < trunk + head_blocks", "graph": "prenorm_encoder"}],
     "block": [
       {"op": "in", "out": "x", "width": "embd"},
       {"op": "norm", "in": "x", "w": "attn_norm", "out": "n"},

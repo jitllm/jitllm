@@ -4,8 +4,8 @@ import "fmt"
 
 // BlockGraphs are the blocks' graphs where the converter states them: each
 // distinct block's graph as the graph package stores one (graph.Encode),
-// and Of each block's index into them, the trunk's blocks then the
-// prediction blocks. The engine decodes a stated block's graph rather than
+// and Of each block's index into them, the trunk's blocks, the head blocks
+// (Config.HeadBlocks) then the prediction blocks. The engine decodes a stated block's graph rather than
 // building it. Empty where the converter states none. The twenty-eighth
 // optional tail; see encodeConfig.
 type BlockGraphs struct {
@@ -39,13 +39,25 @@ func decodeBlockGraphs(r *rbuf) BlockGraphs {
 	return g
 }
 
+// statedBlocks is how many blocks' graphs c states, and the count a
+// container written before HeadGraphsRevision may state instead, its head
+// blocks left to the config.
+func (c *Config) statedBlocks() (blocks, short int) {
+	blocks = int(c.NLayer + c.HeadBlocks() + c.NMTP)
+	if c.Revision < HeadGraphsRevision {
+		return blocks, int(c.NLayer + c.NMTP)
+	}
+	return blocks, blocks
+}
+
 // valid refuses a statement that names a graph it does not hold, leaves a
-// block out, or states a graph no block reads.
-func (g *BlockGraphs) valid(blocks int) error {
+// block out, or states a graph no block reads; short is the count an older
+// container may state (Config.statedBlocks).
+func (g *BlockGraphs) valid(blocks, short int) error {
 	if len(g.Graphs) == 0 && len(g.Of) == 0 {
 		return nil
 	}
-	if len(g.Of) != blocks {
+	if len(g.Of) != blocks && len(g.Of) != short {
 		return fmt.Errorf("jlm: graphs stated for %d blocks of %d", len(g.Of), blocks)
 	}
 	read := make([]bool, len(g.Graphs))

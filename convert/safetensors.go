@@ -587,7 +587,7 @@ func hfSourceWith(dir hfDir, shards []*safetensors.File, modelJSON string) (*jlm
 	g := ha.graph
 	if g == nil {
 		var err error
-		if g, err = archGraph(cfg.Arch); err != nil {
+		if g, err = classGraph(ha, cfg.Arch); err != nil {
 			return nil, err
 		}
 	}
