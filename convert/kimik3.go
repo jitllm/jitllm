@@ -49,13 +49,6 @@ func kimiK3RoleOf(name string) (jlm.Role, bool) {
 	return 0, false
 }
 
-// The situ bounds the engine's kernels bake (kernels.ActSitu): Kimi-K3's
-// published activation_situ_beta and activation_situ_linear_beta.
-const (
-	k3SituBeta       = 4
-	k3SituLinearBeta = 25
-)
-
 // k3LatentNormEps is the epsilon of the MLA latent norms (q_a_layernorm,
 // kv_a_layernorm): Moonshot's KimiMLAAttention builds both as
 // KimiRMSNorm(rank) at its default 1e-6, and transformers' KimiLinearAttention
@@ -84,8 +77,9 @@ const k3LatentNormEps = 1e-6
 //
 // The router is a sigmoid with the selection bias (llama.cpp's converter
 // asserts it; KimiMoEGate would honour softmax, which no K3 states). The situ
-// bounds are the published 4 and 25, which the kernels bake; another pair is
-// refused by name, as DeepSeek V4's clamp is.
+// bounds are the file's, stated as numbers in the activation (Activation);
+// each is a b in b*tanh(x/b), so a bound that is not positive and finite is
+// refused.
 func kimiK3Config(f *meta.File, c *Config) error {
 	kinds, err := k3Kinds(f, c.NLayer)
 	if err != nil {
@@ -127,9 +121,10 @@ func kimiK3Config(f *meta.File, c *Config) error {
 		c.ExpertLatent = 0
 	}
 	beta, linear := f.FloatKey("activation.situ_beta", 0), f.FloatKey("activation.situ_linear_beta", 0)
-	if beta != k3SituBeta || linear != k3SituLinearBeta {
-		return fmt.Errorf("situ bounds %g and %g; the kernels bake Kimi-K3's %d and %d: %w",
-			beta, linear, k3SituBeta, k3SituLinearBeta, ErrNotImplemented)
+	for _, b := range []float64{beta, linear} {
+		if !(b > 0) || math.IsInf(b, 0) {
+			return fmt.Errorf("situ bounds %g and %g: each bounds b*tanh(x/b), so it is positive and finite", beta, linear)
+		}
 	}
 	c.SituBeta, c.SituLinearBeta = float32(beta), float32(linear)
 	c.LatentNormEps = k3LatentNormEps

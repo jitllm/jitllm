@@ -410,7 +410,7 @@ func TestK3ConfigRefusals(t *testing.T) {
 		{"the low-rank KDA gate", `"use_full_rank_gate": true`, `"use_full_rank_gate": false`, "use_full_rank_gate"},
 		{"a softmax router", `"moe_router_activation_func": "sigmoid"`, `"moe_router_activation_func": "softmax"`, "sigmoid"},
 		{"a mixture every other block", `"moe_layer_freq": 1`, `"moe_layer_freq": 2`, "moe_layer_freq"},
-		{"other situ bounds", `"activation_situ_beta": 4.0`, `"activation_situ_beta": 3.0`, "situ"},
+		{"a situ bound of zero", `"activation_situ_beta": 4.0`, `"activation_situ_beta": 0.0`, "situ"},
 		{"a layer in both lists", `"full_attn_layers": [`, `"full_attn_layers": [1, `, "twice"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -427,6 +427,56 @@ func TestK3ConfigRefusals(t *testing.T) {
 				t.Fatalf("got %v, want a refusal naming %q", err, c.want)
 			}
 		})
+	}
+}
+
+// TestK3SituBoundsAreTheFiles holds Kimi-K3's situ activation to the bounds
+// its file states, not the published 4 and 25: a file stating 3 and 20
+// converts, and every block's activation is b*tanh(x/b) at those bounds.
+func TestK3SituBoundsAreTheFiles(t *testing.T) {
+	dir := filepath.Join(c6HFDir(), "synth-kimik3")
+	raw, err := os.ReadFile(filepath.Join(dir, "config.json"))
+	if err != nil {
+		testmodels.Missing(t, "MODEL MISSING: %v -- this gate proved nothing", err)
+	}
+	b := string(raw)
+	for _, m := range [][2]string{{`"activation_situ_beta": 4.0`, `"activation_situ_beta": 3.0`},
+		{`"activation_situ_linear_beta": 25.0`, `"activation_situ_linear_beta": 20.0`}} {
+		if !strings.Contains(b, m[0]) {
+			t.Fatalf("the mutation %q matched nothing", m[0])
+		}
+		b = strings.Replace(b, m[0], m[1], 1)
+	}
+	hc := &hfConfig{path: "config.json"}
+	if err := jsonUnmarshalKeys([]byte(b), hc); err != nil {
+		t.Fatal(err)
+	}
+	c, err := kimiK3HFConfig(hc, []string{"language_model.lm_head.weight"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.SituBeta != 3 || c.SituLinearBeta != 20 {
+		t.Fatalf("situ bounds %g and %g, want the file's 3 and 20", c.SituBeta, c.SituLinearBeta)
+	}
+	want, err := Activation(&Config{Config: &jlm.Config{NLayer: 1, SituBeta: 3, SituLinearBeta: 20}}, 0, true, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	published, err := Activation(&Config{Config: &jlm.Config{NLayer: 1, SituBeta: 4, SituLinearBeta: 25}}, 0, true, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reflect.DeepEqual(want, published) {
+		t.Fatal("the activation does not depend on its bounds")
+	}
+	for li := 0; li < int(c.NLayer); li++ {
+		got, err := Activation(c, li, true, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("block %d's activation is %+v, want situ at 3 and 20", li, got)
+		}
 	}
 }
 
