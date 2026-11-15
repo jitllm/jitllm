@@ -35,6 +35,7 @@ func TestTapsBesidePerLayerInputs(t *testing.T) {
 					t.Fatalf("%s has no per-layer embeddings", name)
 				}
 				if withTaps {
+					defer builtGraphs(m)()
 					m.Cfg.DeepTaps = taps
 					m.Front.Set = nil
 					if w := m.Cfg.SideWidth(); w != taps*m.Cfg.NEmbd+m.Cfg.PleWidth() {
