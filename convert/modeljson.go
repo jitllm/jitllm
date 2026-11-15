@@ -78,9 +78,6 @@ type mjConfig struct {
 	Gating string `json:"gating"`
 	// RotaryLayers states which layers rotate.
 	RotaryLayers *mjRotaryLayers `json:"rotary_layers"`
-	// RopeMethods names the scalings beyond the ones every file reads (llama3,
-	// yarn) that this file vouches for: "longrope".
-	RopeMethods []string `json:"rope_methods"`
 	// Require holds the config to what the class's reference computes and
 	// the container does not vary.
 	Require []mjRequire `json:"require"`
@@ -200,15 +197,38 @@ type mjTensors struct {
 
 // mjTernary names the projections a checkpoint stores as ternary weights, by
 // the roles' GGUF tensor names, and how: Scale is the suffix of the tensor
-// beside a packed weight that holds its magnitude; Latent and Divides are
-// boolean expressions over the config, for weights stored as latent floats
-// the converter ternarizes, and for a scale the output is divided by where it
-// would be multiplied.
+// beside a packed weight that holds its scale; Latent and Reciprocal are
+// boolean expressions over the config, true for weights stored as latent
+// floats the converter ternarizes, and for a stored scale that is the
+// reciprocal of the weights' magnitude. They are parsed with the file.
 type mjTernary struct {
-	Roles   []string `json:"roles"`
-	Scale   string   `json:"scale"`
-	Latent  string   `json:"latent"`
-	Divides string   `json:"divides"`
+	Roles      []string `json:"roles"`
+	Scale      string   `json:"scale"`
+	Latent     string   `json:"latent"`
+	Reciprocal string   `json:"reciprocal"`
+
+	latent, reciprocal *exprNode
+}
+
+// form evaluates the statements over the config that env reads.
+func (t *mjTernary) form(file string, env exprEnv) (ternaryForm, error) {
+	var f ternaryForm
+	for _, s := range []struct {
+		what string
+		n    *exprNode
+		into *bool
+	}{{"latent", t.latent, &f.latent}, {"reciprocal", t.reciprocal, &f.reciprocal}} {
+		v, err := evalMJ(s.n, env)
+		if err != nil {
+			return f, fmt.Errorf("convert: %s: ternary %s: %w", file, s.what, err)
+		}
+		b, ok := v.(bool)
+		if !ok {
+			return f, fmt.Errorf("convert: %s: ternary %s is %s, not a boolean", file, s.what, exprKind(v))
+		}
+		*s.into = b
+	}
+	return f, nil
 }
 
 // mjExperts names a mixture's per-expert matrices: the block-relative prefix
@@ -311,8 +331,17 @@ func parseModelJSON(b []byte, name string) (*modelJSON, error) {
 			return nil, fmt.Errorf("convert: %s: default %q is not a key of the root and a value", name, k)
 		}
 	}
-	if t := mj.Tensors.Ternary; t != nil && (len(t.Roles) == 0 || t.Scale == "" || t.Latent == "" || t.Divides == "") {
-		return nil, fmt.Errorf("convert: %s: ternary states its roles, its scale's suffix, and when the weights are latent and the scale divides", name)
+	if t := mj.Tensors.Ternary; t != nil {
+		if len(t.Roles) == 0 || t.Scale == "" || t.Latent == "" || t.Reciprocal == "" {
+			return nil, fmt.Errorf("convert: %s: ternary states its roles, its scale's suffix, and when the weights are latent and the scale is a reciprocal", name)
+		}
+		var err error
+		if t.latent, err = parseExpr(t.Latent); err != nil {
+			return nil, fmt.Errorf("convert: %s: ternary latent: %w", name, err)
+		}
+		if t.reciprocal, err = parseExpr(t.Reciprocal); err != nil {
+			return nil, fmt.Errorf("convert: %s: ternary reciprocal: %w", name, err)
+		}
 	}
 	for _, r := range mj.Config.Require {
 		if r.That == "" || r.Else == "" {
@@ -683,27 +712,8 @@ func (mj *modelJSON) hfArch() (*hfArch, error) {
 				return nil, nil
 			}
 			st.mu.Lock()
-			env := st.env
+			form := st.ternary
 			st.mu.Unlock()
-			var form ternaryForm
-			for _, f := range []struct {
-				what, src string
-				into      *bool
-			}{{"latent", tern.Latent, &form.latent}, {"divides", tern.Divides, &form.divides}} {
-				n, err := parseExpr(f.src)
-				if err != nil {
-					return nil, fmt.Errorf("convert: %s: ternary %s: %w", mj.name, f.what, err)
-				}
-				v, err := evalMJ(n, env)
-				if err != nil {
-					return nil, fmt.Errorf("convert: %s: ternary %s: %w", mj.name, f.what, err)
-				}
-				b, ok := v.(bool)
-				if !ok {
-					return nil, fmt.Errorf("convert: %s: ternary %s is %s, not a boolean", mj.name, f.what, exprKind(v))
-				}
-				*f.into = b
-			}
 			return ternaryRetype(form, tern.Scale, name, t, read)
 		}
 	}
@@ -725,8 +735,14 @@ func (mj *modelJSON) hfArch() (*hfArch, error) {
 			return nil, err
 		}
 		act, _ := av.(string)
+		var form ternaryForm
+		if tern != nil {
+			if form, err = tern.form(mj.name, env); err != nil {
+				return nil, err
+			}
+		}
 		st.mu.Lock()
-		st.env, st.act = env, act
+		st.env, st.act, st.ternary = env, act, form
 		st.mu.Unlock()
 		return cfg, nil
 	}
@@ -1206,7 +1222,7 @@ func (mj *modelJSON) configIn(env exprEnv, c *hfConfig, names []string) (*Config
 		if err != nil {
 			return nil, err
 		}
-		if err := mjRopeScaling(cfg, c, v, renv, mj.Config.RopeMethods); err != nil {
+		if err := mjRopeScaling(cfg, c, v, renv); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", c.path, err)
 		}
 	}
@@ -1455,9 +1471,11 @@ func mjRotaryLayersOf(cfg *Config, r *mjRotaryLayers, eval func(what, src string
 // llama3 states its per-pair factors over the rotated width as
 // rope_freqs.weight, reading what transformers reads from env (llama3RopeOf);
 // yarn states its factor, original context, correction range and magnitude
-// as transformers computes them (hfYarnApply); a method not implemented is
-// refused by name.
-func mjRopeScaling(cfg *Config, c *hfConfig, v any, env exprEnv, methods []string) error {
+// as transformers computes them (hfYarnApply); longrope states its two factor
+// vectors and original context as rope_factors_short and rope_factors_long,
+// with the magnitude transformers computes (hfLongRope); a method not
+// implemented is refused by name.
+func mjRopeScaling(cfg *Config, c *hfConfig, v any, env exprEnv) error {
 	if v == nil {
 		return nil
 	}
@@ -1494,9 +1512,6 @@ func mjRopeScaling(cfg *Config, c *hfConfig, v any, env exprEnv, methods []strin
 		c.extra = append(c.extra, ropeFreqsTensor(freqs(rot, float64(cfg.RopeBase))))
 		return nil
 	case "longrope", "su":
-		if !slices.Contains(methods, "longrope") {
-			break
-		}
 		raw, err := json.Marshal(obj)
 		if err != nil {
 			return err

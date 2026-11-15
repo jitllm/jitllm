@@ -13,9 +13,9 @@ import (
 // ternaryForm is how a checkpoint stores its ternary projections: latent
 // floats the converter ternarizes (an absmean scale, as BitLinear's
 // WeightQuant), or packed 2-bit codes with a scale tensor beside each weight,
-// the output multiplied by the scale or divided by it.
+// which holds the weights' magnitude or its reciprocal.
 type ternaryForm struct {
-	latent, divides bool
+	latent, reciprocal bool
 }
 
 // ternaryGather consumes every projection's scale tensor, the name of its
@@ -45,8 +45,7 @@ func ternaryGather(suffix string, names []string) (map[string]bool, error) {
 // from the dtypes alone, since the type is fixed before the data is read: a
 // bf16 or f16 scale (a packed form's scale tensor, a bf16 or f16 latent
 // checkpoint's magnitude) is an f16 exactly (TypeTQ2), and an f32 one, or one
-// that is a reciprocal (a form that divides by its scale), is carried as an
-// f32 (TypeTQ2F).
+// that is a reciprocal, is carried as an f32 (TypeTQ2F).
 func ternaryRetype(form ternaryForm, suffix, name string, t *safetensors.Tensor,
 	read func(name string) ([]byte, *safetensors.Tensor, error)) (*hfRetyped, error) {
 	if len(t.Shape) != 2 {
@@ -91,7 +90,7 @@ func ternaryRetype(form ternaryForm, suffix, name string, t *safetensors.Tensor,
 		return nil, err
 	}
 	q := quant.TQ2_F32
-	if !form.divides && (st.DType == safetensors.BF16 || st.DType == safetensors.F16) {
+	if !form.reciprocal && (st.DType == safetensors.BF16 || st.DType == safetensors.F16) {
 		q = quant.TQ2_0
 	}
 	out, in := 4*t.Shape[0], t.Shape[1]
@@ -109,7 +108,7 @@ func ternaryRetype(form ternaryForm, suffix, name string, t *safetensors.Tensor,
 			return nil, 0, fmt.Errorf("%s%s: %w", name, suffix, err)
 		}
 		s := ws
-		if form.divides {
+		if form.reciprocal {
 			s = 1 / ws
 		}
 		return ternaryUnpack(b, int(out), int(in), q, s)

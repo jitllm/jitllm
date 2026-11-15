@@ -22,7 +22,6 @@
     "head": {"tensor": "lm_head.weight", "tied": "tie_word_embeddings ?? false"},
     "activation": "hidden_act ?? 'silu'",
     "rope_scaling": "rope_parameters ?? rope_scaling",
-    "rope_methods": ["longrope"],
     "window": {"size": "sliding_window ?? 0", "used": "(sliding_window ?? 0) < (max_position_embeddings ?? 131072)"},
     "require": [
       {"that": "(router_jitter_noise ?? 0.01) == 0.01", "else": "router_jitter_noise is not the threshold 0.01 that sparsemixer runs at"}

@@ -59,3 +59,45 @@ func TestTernaryScalesBelongToTheirWeights(t *testing.T) {
 		t.Errorf("a scale with no weight: %v", err)
 	}
 }
+
+// TestTernaryStatementsAreCheckedWithTheFile: the expressions that say when
+// weights are latent and a scale is a reciprocal are parsed when the file is
+// loaded, and a non-boolean one is refused where the config is read, not on
+// the first projection.
+func TestTernaryStatementsAreCheckedWithTheFile(t *testing.T) {
+	base := `{"classes": ["X"], "config": {"arch": "bitnet-b1.58", "vocab": "1", "head": {"tensor": "lm_head.weight"},
+	  "activation": "'relu2'"}, "tensors": {"block_prefix": "model.layers.", "block": {"a.weight": "attn_q.weight"},
+	  "ternary": {"roles": ["attn_q.weight"], "scale": "_scale", "latent": %s, "reciprocal": %s}}}`
+	parse := func(latent, reciprocal string) (*modelJSON, error) {
+		return parseModelJSON([]byte(strings.Replace(strings.Replace(base, "%s", latent, 1), "%s", reciprocal, 1)), "test")
+	}
+	for _, tc := range []struct{ name, latent, reciprocal, err string }{
+		{"a latent that does not parse", `"1 +"`, `"true"`, "ternary latent"},
+		{"a reciprocal that does not parse", `"true"`, `"(("`, "ternary reciprocal"},
+		{"no reciprocal", `"true"`, `""`, "reciprocal"},
+	} {
+		if _, err := parse(tc.latent, tc.reciprocal); err == nil || !strings.Contains(err.Error(), tc.err) {
+			t.Errorf("%s: %v, want an error saying %q", tc.name, err, tc.err)
+		}
+	}
+	env := func(p string) any {
+		if p == "mode" {
+			return "online"
+		}
+		return nil
+	}
+	mj, err := parse(`"mode == 'online'"`, `"1"`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mj.Tensors.Ternary.form("test", env); err == nil || !strings.Contains(err.Error(), "not a boolean") {
+		t.Errorf("a reciprocal that is a number: %v", err)
+	}
+	mj, err = parse(`"mode == 'online'"`, `"mode != 'online'"`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f, err := mj.Tensors.Ternary.form("test", env); err != nil || !f.latent || f.reciprocal {
+		t.Errorf("online: %+v, %v", f, err)
+	}
+}

@@ -1,6 +1,7 @@
 package convert
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -60,6 +61,36 @@ func TestPhiMoEThroughTheLibrary(t *testing.T) {
 		_, err := mj.config(hfConfigOf(t, strings.Replace(js, r.from, r.to, 1)), names)
 		if err == nil || !strings.Contains(err.Error(), r.err) {
 			t.Errorf("%s: %v, want an error saying %q", r.name, err, r.err)
+		}
+	}
+}
+
+// TestPhiMoEJitterIsTheArchs: the threshold phimoe.json holds a config to is
+// the one the arch's router runs at (PhiMoEJitter), a config that states
+// another is refused, and a router_jitter_noise that is absent or null reads
+// as the class's default, the library's reading of every null.
+func TestPhiMoEJitterIsTheArchs(t *testing.T) {
+	lib, err := modelLibrary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mj := lib["PhimoeForCausalLM"]
+	js := `{"architectures": ["PhiMoEForCausalLM"], "vocab_size": 100, "hidden_size": 64, "intermediate_size": 32,
+	  "num_hidden_layers": 3, "num_attention_heads": 4, "num_key_value_heads": 2, "num_local_experts": 8,
+	  "num_experts_per_tok": 2, "max_position_embeddings": 4096, "sliding_window": null %s}`
+	for _, tc := range []struct {
+		name, key string
+		ok        bool
+	}{
+		{"the arch's", fmt.Sprintf(`, "router_jitter_noise": %v`, PhiMoEJitter), true},
+		{"another", fmt.Sprintf(`, "router_jitter_noise": %v`, 2*PhiMoEJitter), false},
+		{"zero", `, "router_jitter_noise": 0`, false},
+		{"absent", ``, true},
+		{"null", `, "router_jitter_noise": null`, true},
+	} {
+		_, err := mj.config(hfConfigOf(t, fmt.Sprintf(js, tc.key)), []string{"lm_head.weight"})
+		if (err == nil) != tc.ok {
+			t.Errorf("%s: %v, accepted %v", tc.name, err, tc.ok)
 		}
 	}
 }
