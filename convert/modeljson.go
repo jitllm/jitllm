@@ -175,6 +175,8 @@ func mjFlags() map[string]jlm.Flags {
 		"no_expert_norm":        jlm.FlagNoExpertNorm,
 		"layer_norm":            jlm.FlagLayerNorm,
 		"parallel":              jlm.FlagParallel,
+		"swiglu_oai":            jlm.FlagSwiGLUOAI,
+		"yarn_exact":            jlm.FlagYarnExact,
 	}
 }
 

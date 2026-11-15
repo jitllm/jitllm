@@ -372,40 +372,7 @@ func configOfFile(f *meta.File) (*Config, error) {
 		if win > 0 {
 			c.SWAWindow, c.SWAPeriod = win, allLocal(c.NLayer)
 		}
-	case ArchGemma2:
-		// gemma1's block plus three load-bearing differences.
-		c.EmbdScale = float32(math.Sqrt(float64(c.NEmbd)))
-		c.Flags |= jlm.FlagGELU | jlm.FlagRopeNeox
-		// Alternating local and global layers: SWAPeriod=2 makes Config.SWA(il)
-		// (il%period < period-1) true on even layers. An absent window is gemma2's
-		// 4096, not none, as llama.cpp's loader defaults it, and the local layers
-		// rotate at the global base unless the file says otherwise.
-		c.SWAWindow = uint32(f.UintKey("attention.sliding_window", 4096))
-		if err := swaPatternOf(f, c, 2); err != nil {
-			return nil, fmt.Errorf("convert: %s: %w", name, err)
-		}
-		c.RopeBaseSWA = float32(f.FloatKey("rope.freq_base_swa", float64(c.RopeBase)))
-		gemmaAttnScale(c)
-		// Two softcaps with different values (50 on scores, 30 on logits), hence
-		// two fields rather than a flag.
-		c.AttnSoftcap = float32(f.FloatKey("attn_logit_softcapping", 0))
-		c.FinalSoftcap = float32(f.FloatKey("final_logit_softcapping", 0))
-	case ArchGemma3:
-		c.EmbdScale = float32(math.Sqrt(float64(c.NEmbd)))
-		c.Flags |= jlm.FlagGELU | jlm.FlagRopeNeox | jlm.FlagQKNorm
-		// Five local then one global: SWAPeriod 6. No window key means no sliding
-		// layers at all (llama.cpp's LLAMA_SWA_TYPE_NONE), not a default window;
-		// some gemma3-arch models ship every layer global.
-		if c.SWAWindow = uint32(f.UintKey("attention.sliding_window", 0)); c.SWAWindow > 0 {
-			if err := swaPatternOf(f, c, 6); err != nil {
-				return nil, fmt.Errorf("convert: %s: %w", name, err)
-			}
-			// The local base is the architecture's (10000, llama.cpp's default) unless
-			// the file says; gemma-3-1b carries a 1e6 global base and no local key.
-			c.RopeBaseSWA = float32(f.FloatKey("rope.freq_base_swa", 10000))
-		}
-		// gemma3 removed gemma2's attention softcap; its final softcap is optional.
-		c.FinalSoftcap = float32(f.FloatKey("final_logit_softcapping", 0))
+	case ArchGemma2, ArchGemma3:
 		gemmaAttnScale(c)
 	case ArchQwen3Next, ArchQwen4Exp:
 		// A hybrid: most layers run a gated delta rule over a recurrent state
@@ -447,21 +414,6 @@ func configOfFile(f *meta.File) (*Config, error) {
 		if err := mropeSectionsOf(f, name, c); err != nil {
 			return nil, err
 		}
-	case ArchGPTOSS:
-		// NEOX rope (llama.cpp's rope-type table groups it with qwen3), the
-		// clamped swiglu-oai activation, and a sliding window on alternate
-		// layers starting at layer 0 -- set_swa_pattern(2), the same rule
-		// gemma2 uses. The sinks and every bias are tensors, read off the file.
-		c.Flags |= jlm.FlagRopeNeox | jlm.FlagSwiGLUOAI
-		c.SWAWindow = uint32(f.UintKey("attention.sliding_window", 0))
-		if c.SWAWindow == 0 {
-			return nil, fmt.Errorf("convert: %s: no attention.sliding_window", name)
-		}
-		c.SWAPeriod = 2
-		// The YaRN range is not rounded: HF's gpt-oss config carries
-		// "truncate": false, where llama.cpp floors and ceils it for every model.
-		// This matches the model's own definition (RULE 7m).
-		c.Flags |= jlm.FlagYarnExact
 	case ArchLlama4:
 		if err := llama4Config(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
@@ -487,10 +439,6 @@ func configOfFile(f *meta.File) (*Config, error) {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
 	case ArchNemotron:
-		// llama.cpp's nemotron.cpp: the sequential block, NEOX rotary on
-		// rope.dimension_count of head_dim, up -> relu^2 -> down.
-		layerNormEps(f, c)
-		c.Flags |= jlm.FlagLayerNorm | jlm.FlagRopeNeox | jlm.FlagReLU2
 		if err := partialRotary(c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}

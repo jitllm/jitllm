@@ -2,6 +2,8 @@
   "classes": ["MixtralForCausalLM"],
   "gguf": ["llama", "granite", "granitemoe", "llama4", "mistral3", "minimax-m2", "hunyuan-dense", "hunyuan-moe", "gpt-oss", "bitnet-b1.58", "minimax-m3", "hunyuan_vl"],
   "container": {
+    "gpt-oss": {"flags": {"rope_neox": "true", "swiglu_oai": "true", "yarn_exact": "true"},
+                "window": {"size": "src['attention.sliding_window']", "period": "2"}},
     "bitnet-b1.58": {"flags": {"rope_neox": "true"}, "activation": "relu2"}
   },
   "config": {

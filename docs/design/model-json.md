@@ -139,10 +139,14 @@ schema; `convert/modeljson.go` reads it. Its sections:
   GGUF's keys, as a recipe reads them (`src['attention.layer_norm_epsilon']
   | default(1e-5)`): `flags` (the `mjFlags` names, each true or false),
   `activation` (an `mjActivations` name), `norm_eps` and `embd_scale`
-  (numbers; `src['embedding_length'] ** 0.5` is the square root exactly).
-  It replaces `configOfFile`'s case for the architecture; one statement
-  per architecture, and an expression reading anything but `src` is
-  refused.
+  (numbers; `src['embedding_length'] ** 0.5` is the square root exactly),
+  `attn_softcap` and `final_softcap`, and `window`: `size` (0 states no
+  window, and nothing else of it applies), a fixed `period` or a `pattern`,
+  the period where the file's `attention.sliding_window_pattern` does not
+  state one, and `rope_base`, the windowed layers' rotary base. A fixed
+  period over no window is refused. It replaces `configOfFile`'s case for
+  the architecture; one statement per architecture, and an expression
+  reading anything but `src` is refused.
 - `tensors.model`, `tensors.block_prefix`, `tensors.block`: each source name
   onto a role by the role's GGUF tensor name (`roleOf`, one vocabulary for
   both formats), with `do`, the primitives it takes in order. A transform

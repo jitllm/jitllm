@@ -1,5 +1,11 @@
 {
   "gguf": ["gemma3"],
+  "container": {
+    "gemma3": {"flags": {"rope_neox": "true", "qk_norm": "true"}, "activation": "gelu_pytorch_tanh", "embd_scale": "src['embedding_length'] ** 0.5",
+               "window": {"size": "src['attention.sliding_window'] | default(0)", "pattern": "6",
+                          "rope_base": "src['rope.freq_base_swa'] | default(10000)"},
+               "final_softcap": "src['final_logit_softcapping'] | default(0)"}
+  },
   "graph": {
     "block": [
       {"op": "in",         "out": "x", "width": "embd"},

@@ -23,7 +23,23 @@ type mjStates struct {
 	// rows are scaled by, each a number.
 	NormEps   string `json:"norm_eps"`
 	EmbdScale string `json:"embd_scale"`
-	exprs     map[string]*jinja.Expr
+	// Window is the sliding window, and AttnSoftcap and FinalSoftcap the
+	// caps on the scores and on the logits, each a number (0 for none).
+	Window       *mjStatesWindow `json:"window"`
+	AttnSoftcap  string          `json:"attn_softcap"`
+	FinalSoftcap string          `json:"final_softcap"`
+	exprs        map[string]*jinja.Expr
+}
+
+// mjStatesWindow is a sliding window: Size positions (0 for none, and then
+// nothing else of it applies); every Period'th layer attends globally, or
+// Pattern's where the file's attention.sliding_window_pattern does not say
+// (swaPatternOf); RopeBase the windowed layers' rotary base.
+type mjStatesWindow struct {
+	Size     string `json:"size"`
+	Period   string `json:"period"`
+	Pattern  string `json:"pattern"`
+	RopeBase string `json:"rope_base"`
 }
 
 // checkStates refuses a statement for a GGUF architecture the file does not
@@ -35,7 +51,13 @@ func (mj *modelJSON) checkStates() error {
 			return fmt.Errorf("convert: %s states the container of %s, which it names no GGUF architecture", mj.name, arch)
 		}
 		st := mj.Container[arch]
-		srcs := []string{st.NormEps, st.EmbdScale}
+		srcs := []string{st.NormEps, st.EmbdScale, st.AttnSoftcap, st.FinalSoftcap}
+		if w := st.Window; w != nil {
+			if w.Size == "" || w.Period != "" && w.Pattern != "" {
+				return fmt.Errorf("convert: %s: %s: a window states its size, and a period or a pattern, not both", mj.name, arch)
+			}
+			srcs = append(srcs, w.Size, w.Period, w.Pattern, w.RopeBase)
+		}
 		for _, k := range slices.Sorted(maps.Keys(st.Flags)) {
 			_, ok := mjFlags()[k]
 			if _, no := mjFlagsNotImplemented()[k]; !ok && !no {
@@ -158,6 +180,58 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 	}
 	if st.EmbdScale != "" {
 		if c.EmbdScale, err = number("embd_scale", st.EmbdScale); err != nil {
+			return err
+		}
+	}
+	for _, s := range []struct {
+		what, src string
+		to        *float32
+	}{{"attn_softcap", st.AttnSoftcap, &c.AttnSoftcap}, {"final_softcap", st.FinalSoftcap, &c.FinalSoftcap}} {
+		if s.src == "" {
+			continue
+		}
+		if *s.to, err = number(s.what, s.src); err != nil {
+			return err
+		}
+	}
+	w := st.Window
+	if w == nil {
+		return nil
+	}
+	whole := func(what, src string) (uint32, error) {
+		x, err := number(what, src)
+		if err == nil && (x < 0 || x != float32(uint32(x))) {
+			err = fmt.Errorf("convert: %s: %s: %s is %g, not a count", by, arch, what, x)
+		}
+		return uint32(x), err
+	}
+	size, err := whole("window.size", w.Size)
+	if err != nil {
+		return err
+	}
+	if size == 0 {
+		if w.Period != "" {
+			return fmt.Errorf("convert: %s: a window period over no attention.sliding_window: %w", arch, ErrNotImplemented)
+		}
+		return nil
+	}
+	c.SWAWindow = size
+	switch {
+	case w.Period != "":
+		if c.SWAPeriod, err = whole("window.period", w.Period); err != nil {
+			return err
+		}
+	case w.Pattern != "":
+		def, err := whole("window.pattern", w.Pattern)
+		if err != nil {
+			return err
+		}
+		if err := swaPatternOf(f, c, def); err != nil {
+			return fmt.Errorf("convert: %s: %w", arch, err)
+		}
+	}
+	if w.RopeBase != "" {
+		if c.RopeBaseSWA, err = number("window.rope_base", w.RopeBase); err != nil {
 			return err
 		}
 	}
