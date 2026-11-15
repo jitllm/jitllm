@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -488,6 +489,15 @@ func mjMapVar(name string) (int, bool) {
 	return i, len(name) == 1 && i >= 0
 }
 
+// mjReadsTensor reports whether n reads one of a map's tensors.
+func mjReadsTensor(n *exprNode) bool {
+	if n.op == "path" {
+		_, ok := mjMapVar(n.str)
+		return ok
+	}
+	return slices.ContainsFunc(n.args, mjReadsTensor)
+}
+
 // mjMapFuncs are the functions a map may call.
 func mjMapFuncs() map[string]func(float64) float64 {
 	return map[string]func(float64) float64{"exp": math.Exp, "log": math.Log, "sqrt": math.Sqrt, "tanh": math.Tanh,
@@ -544,6 +554,10 @@ func mjCompile(n *exprNode, env exprEnv, nsrc int) (func([]float64) float64, err
 		}
 		return func([]float64) float64 { return v }, nil
 	case "??":
+		// A ?? reads the config: a default for a tensor's element is not one.
+		if mjReadsTensor(n) {
+			return nil, fmt.Errorf("a ?? reads the config, and %q reads a tensor", exprText(n))
+		}
 		v, err := evalNum(n, env)
 		if err != nil {
 			return nil, err
