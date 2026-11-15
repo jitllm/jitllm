@@ -613,9 +613,9 @@ func (sp *Speculator) Next(sm *Sampler) ([]int32, error) {
 		return nil, fmt.Errorf("model: Next before Start")
 	}
 	t, d, c := sp.t, sp.d, sp.t.m.Cfg
-	// A greedy draw the penalties move is Sample's: it drafts nothing, as a
-	// Mirostat draw does, and the round's one token is Sample's.
-	greedy := sm == nil || sm.Temp <= 0 && sm.penalties().Off()
+	// A greedy draw the penalties or DRY move is Sample's: it drafts nothing,
+	// as a Mirostat draw does, and the round's one token is Sample's.
+	greedy := sm == nil || sm.Temp <= 0 && !sm.greedyMoved()
 	if sp.retired && len(sp.replay) == 0 {
 		return sp.decode(sm, greedy)
 	}

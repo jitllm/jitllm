@@ -253,6 +253,11 @@ type DrawArgs struct {
 	Mu               *float32
 	Penalty          Penalties
 	Window           []float32
+	// Dry is each token's DRY exponent plus one, 0 where llama.cpp's DRY
+	// sampler leaves it, nil for none: a marked token falls by DryMult times
+	// e to DryLogBase times the exponent (graph.SampleStage).
+	Dry                 []float32
+	DryMult, DryLogBase float32
 	// Infill runs llama.cpp's infill sampler over the survivors before the
 	// draw, at a top-k of at most InfillMaxK.
 	Infill bool

@@ -503,8 +503,11 @@ func (s *SampleAdaptive) Build() *Graph {
 // (sample.window and sample.penalty) and scaled by the reciprocal
 // temperature, word 0, or where word 2, the dynamic range, is above 0 by
 // llama.cpp's dynamic temperature over the survivors' softmax at its
-// exponent, word 3 (sampleEmitter.dynTemp). The rest are -Inf. Its output
-// is the stage's row.
+// exponent, word 3 (sampleEmitter.dynTemp). The rest are -Inf. Before the
+// temperature, llama.cpp's DRY penalty: each token sample.dry marks (its
+// exponent plus one, 0 for none) falls by sample.dry.words' first, the
+// multiplier, times e to its second, the base's log, times the exponent.
+// Its output is the stage's row.
 type SampleStage struct{ NVocab, K int }
 
 func (s *SampleStage) Build() *Graph {
@@ -518,12 +521,18 @@ func (s *SampleStage) Build() *Graph {
 	win := b.In("sample.window", n)
 	pen := b.In("sample.penalty", 3)
 	w := b.In("sample.stage", 4)
+	dry := b.In("sample.dry", n)
+	dw := b.In("sample.dry.words", 2)
 	e := sampleEmitter{b}
 	p := e.one(OpPut, "stage.p", n, Attrs{}, row, ids, cand)
 	fin := e.not("stage.fin", n, e.mapc(MapLess, -math.MaxFloat32, "stage.inf", n, l))
 	named := e.mapc(MapLess, 0, "stage.named", n, e.mapc(MapMul, -1, "stage.pneg", n, p))
 	keep := e.mapc(MapMul, 0, "stage.keep", n, e.mapc(MapMax, 0, "stage.in", n, named, e.word(w, 1, "stage.all")), fin)
 	v := penalizedRow(b, l, win, pen)
+	marked := e.mapc(MapLess, 0, "stage.dry.on", n, e.mapc(MapMul, -1, "stage.dry.neg", n, dry))
+	ex := e.mapc(MapMul, 0, "stage.dry.el", n, e.mapc(MapAdd, -1, "stage.dry.e", n, dry), e.word(dw, 1, "stage.dry.logbase"))
+	drop := e.mapc(MapMul, 0, "stage.dry.pen", n, e.mapc(MapExp, 0, "stage.dry.pow", n, ex), e.word(dw, 0, "stage.dry.mult"))
+	v = e.mapc(MapSub, 0, "stage.dry", n, v, e.mapc(MapWhere, 0, "stage.dry.drop", n, marked, drop))
 	top := e.one(OpReduce, "stage.top", 1, Attrs{Fn: MapMax}, e.mapc(MapWhere, math.Inf(-1), "stage.kept", n, keep, v))
 	wts := e.mapc(MapWhere, 0, "stage.w", n, keep, e.mapc(MapExp, 0, "stage.we", n, e.mapc(MapSub, 0, "stage.wd", n, v, top)))
 	it := e.dynTemp(wts, keep, e.word(w, 0, "stage.invtemp"), e.word(w, 2, "stage.dyn.range"), e.word(w, 3, "stage.dyn.exp"), "stage.dyn")

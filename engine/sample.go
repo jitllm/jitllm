@@ -47,7 +47,21 @@ type Sampler struct {
 	// PresencePen and FreqPen are llama.cpp's presence and frequency
 	// penalties over the same window: 0 = disabled.
 	PresencePen, FreqPen float64
-	Seed                 int64
+	// DryMultiplier, DryBase, DryAllowedLength and DryPenaltyLastN are
+	// llama.cpp's DRY sampler (llama_sampler_dry): a token that would extend
+	// a run the history repeats, at least DryAllowedLength long, falls by
+	// DryMultiplier times DryBase to the run's length past it, over the last
+	// DryPenaltyLastN tokens (-1 the instance's context). Off at a
+	// multiplier of 0, a base below 1 or a window of 0. DryBreakers are the
+	// sequence breakers, nil for llama.cpp's "\n", ":", "\"" and "*": a run
+	// does not reach back across one, and a token that is one alone is not
+	// penalized.
+	DryMultiplier, DryBase            float64
+	DryAllowedLength, DryPenaltyLastN int
+	DryBreakers                       []string
+	// dhist is DRY's history: the tokens its window holds.
+	dhist []int32
+	Seed  int64
 	// Infill runs llama.cpp's infill sampler over the survivors before the
 	// draw (graph.SampleWalk's Infill), at a top-k of at most
 	// nn.InfillMaxK: a draw with no top-k, or one past it, draws as though
@@ -85,20 +99,20 @@ type Sampler struct {
 	drew nn.DrawArgs
 }
 
-// Prime makes a prompt's tokens the history the penalties read, as llama.cpp
+// Prime makes a prompt's tokens the history the penalties and DRY read, as llama.cpp
 // resets its sampler and accepts every prompt token before the first draw
 // (common_sampler_accept): the window holds the prompt's tail. A negative id,
 // a picture's row, is no token. The history is the sampler's own after it,
 // never one a copy shares.
 func (s *Sampler) Prime(prompt []int32) {
-	s.hist, s.win = nil, nil
+	s.hist, s.win, s.dhist = nil, nil, nil
 	s.observeAll(prompt)
 }
 
 // PrimeSpans is Prime over a prompt of spans: their tokens, a picture's or a
 // clip's rows none.
 func (s *Sampler) PrimeSpans(spans []model.Span) {
-	s.hist, s.win = nil, nil
+	s.hist, s.win, s.dhist = nil, nil, nil
 	for _, sp := range spans {
 		if !sp.Rows() && sp.Clip == nil {
 			s.observeAll(sp.Tokens)
@@ -117,7 +131,13 @@ func (s *Sampler) observeAll(ids []int32) {
 // Observe records a token so the penalties can see it. Harmless when they
 // are disabled.
 func (s *Sampler) Observe(t int32) {
-	if s == nil || (s.RepeatPen == 1 || s.RepeatPen == 0) && s.PresencePen == 0 && s.FreqPen == 0 {
+	if s == nil {
+		return
+	}
+	if s.dryOn() {
+		s.dryObserve(t)
+	}
+	if (s.RepeatPen == 1 || s.RepeatPen == 0) && s.PresencePen == 0 && s.FreqPen == 0 {
 		return
 	}
 	n := s.RepeatLastN
@@ -191,11 +211,38 @@ const (
 	StageMinP
 	StageXTC
 	StageTemperature
+	StageDRY
 )
+
+// llamaStage is the i-th of llama.cpp's own order (common_sampler's default
+// samplers), the one a draw with DRY runs where it names none.
+func llamaStage(i int) Stage {
+	return [...]Stage{StagePenalties, StageDRY, StageTopNSigma, StageTopK, StageTypical, StageTopP, StageMinP, StageXTC,
+		StageTemperature}[i]
+}
+
+// chain is how many stages a staged draw runs and the i-th of them: its
+// own, or llama.cpp's order where it names none.
+func (s *Sampler) chain() (int, func(int) Stage) {
+	if s.Stages != nil {
+		return len(s.Stages), func(i int) Stage { return s.Stages[i] }
+	}
+	return 9, llamaStage
+}
+
+// dryOn reports whether a draw runs DRY.
+func (s *Sampler) dryOn() bool {
+	return s != nil && s.DryMultiplier != 0 && s.DryBase >= 1 && s.DryPenaltyLastN != 0
+}
+
+// greedyMoved reports whether a greedy draw's row is not the logits as they
+// are: its penalties or DRY move them, as llama.cpp's chain runs them before
+// its temperature sampler keeps the largest.
+func (s *Sampler) greedyMoved() bool { return s != nil && (!s.penalties().Off() || s.dryOn()) }
 
 // staged reports whether a draw runs its stages in an order of their own.
 func (s *Sampler) staged() bool {
-	return s != nil && s.Stages != nil && s.Temp > 0 && s.Mirostat == 0
+	return s != nil && (s.Stages != nil || s.dryOn()) && s.Temp > 0 && s.Mirostat == 0
 }
 
 // adaptive reports whether a draw runs adaptive-p.

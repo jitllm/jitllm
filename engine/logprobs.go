@@ -53,7 +53,7 @@ func (s *Instance) SampledProbs(l *Logprobs, smp *Sampler, logits []float32, cho
 	a := smp.drew
 	if smp.staged() {
 		// The chain's stages again, XTC's at its chance as the draw's fell.
-		row, ok := s.staged(logits, smp, a)
+		row, ok := s.staged(logits, smp, a, false)
 		if !ok {
 			return 0, s.sampleDeclined("the sampled distribution")
 		}

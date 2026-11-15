@@ -153,6 +153,8 @@ type Instance struct {
 	// candidates, the transformed logits and their softmax.
 	ad adaptiveRows
 	st stagedRows
+	// dry is DRY's rows and the sequence breakers it read off the vocabulary.
+	dry dryState
 	// entry is the device writing a prediction block's entry rows, nil on an
 	// instance that starts at no prediction block.
 	entry nn.EntryDevice
@@ -3115,10 +3117,10 @@ func (s *Instance) ForwardGreedy(token int32) (int32, error) {
 // candidates, and the softmax, cuts and draw are the host sampler's own.
 //
 // A greedy smp is ForwardGreedy, and Forward and Sample where its penalties
-// move the row.
+// or DRY move the row.
 func (s *Instance) ForwardSample(token int32, smp *Sampler) (int32, error) {
 	if smp == nil || smp.Temp <= 0 {
-		if smp == nil || smp.penalties().Off() {
+		if !smp.greedyMoved() {
 			return s.ForwardGreedy(token)
 		}
 		logits, err := s.Forward(token)

@@ -158,12 +158,11 @@ func llamaSamplers(raw json.RawMessage) ([]string, error) {
 }
 
 // llamaStages is samplers as the draw's stages where their order is not
-// llamaChain's (engine.Sampler.Stages): nil where the fused draw runs them as
-// listed. dry, at the neutral multiplier llamaFields holds it to, is no
-// stage; infill and adaptive_p draw in place of the last draw, as llama.cpp
-// runs adaptive_p.
+// llamaChain's (engine.Sampler.Stages): nil where the draw runs them in
+// llama.cpp's own order; infill and adaptive_p draw in place of the last
+// draw, as llama.cpp runs adaptive_p.
 func llamaStages(samplers []string) []engine.Stage {
-	kinds := map[string]engine.Stage{"penalties": engine.StagePenalties, "top_n_sigma": engine.StageTopNSigma,
+	kinds := map[string]engine.Stage{"penalties": engine.StagePenalties, "dry": engine.StageDRY, "top_n_sigma": engine.StageTopNSigma,
 		"top_k": engine.StageTopK, "typ_p": engine.StageTypical, "top_p": engine.StageTopP, "min_p": engine.StageMinP,
 		"xtc": engine.StageXTC, "temperature": engine.StageTemperature}
 	chain := llamaChain()
@@ -213,6 +212,9 @@ func (s llamaSettings) stages() llamaSettings {
 	if !on("xtc") {
 		s.XTCProbability = 0
 	}
+	if !on("dry") {
+		s.DryMultiplier = 0
+	}
 	if !on("temperature") {
 		s.Temperature, s.DynatempRange = 1, 0
 	}
@@ -224,12 +226,7 @@ func (s llamaSettings) stages() llamaSettings {
 // A field in neither this table nor llamaRead is refused as unknown.
 func llamaFields() map[string]llamaField {
 	return map[string]llamaField{
-		"dry_multiplier":        {numIs(0), "DRY sampling is not built"},
-		"dry_base":              {anyValue, ""},
-		"dry_allowed_length":    {anyValue, ""},
-		"dry_penalty_last_n":    {anyValue, ""},
-		"dry_sequence_breakers": {anyValue, ""},
-		"min_keep":              {numIs(0), "min_keep is not built"},
+		"min_keep": {numIs(0), "min_keep is not built"},
 		// n_keep and n_discard act only in a context shift, which
 		// llama-server runs only under --context-shift, off by default:
 		// without one a reply stops at the context's end (stop_type limit,
@@ -260,6 +257,8 @@ func llamaRead() map[string]bool {
 		"n_cmpl": true, "n": true, "timings_per_token": true, "sse_ping_interval": true, "t_max_predict_ms": true,
 		"n_indent": true, "return_progress": true, "post_sampling_probs": true,
 		"adaptive_target": true, "adaptive_decay": true,
+		"dry_multiplier": true, "dry_base": true, "dry_allowed_length": true, "dry_penalty_last_n": true,
+		"dry_sequence_breakers": true,
 		// llama-server leaves t_max_prompt_ms unimplemented and takes it to
 		// no effect; so does this server.
 		"t_max_prompt_ms": true,
@@ -645,6 +644,9 @@ type llamaSettings struct {
 	Mirostat                                   int
 	MirostatTau, MirostatEta                   float64
 	AdaptiveTarget, AdaptiveDecay              float64
+	DryMultiplier, DryBase                     float64
+	DryAllowedLength, DryPenaltyLastN          int
+	DrySequenceBreakers                        []string
 	PresencePenalty, FrequencyPenalty          float64
 	TopK, RepeatLastN, NPredict, NProbs        int
 	Seed                                       int64
@@ -661,6 +663,7 @@ type llamaSettings struct {
 // llamaDefaults are llama-server's defaults for an absent field.
 func llamaDefaults() llamaSettings {
 	return llamaSettings{Temperature: 0.8, TopP: 0.95, MinP: 0.05, TopK: 40, RepeatPenalty: 1, TypicalP: 1, XTCThreshold: 0.1, TopNSigma: -1, DynatempExponent: 1, MirostatTau: 5, MirostatEta: 0.1, AdaptiveTarget: -1, AdaptiveDecay: 0.9,
+		DryBase: 1.75, DryAllowedLength: 2, DryPenaltyLastN: -1, DrySequenceBreakers: []string{"\n", ":", "\"", "*"},
 		RepeatLastN: 64, NPredict: -1, Seed: -1, Stop: []string{}, Samplers: llamaChain()}
 }
 
@@ -672,6 +675,8 @@ func llamaParams(s llamaSettings, _ int, _ []int32, _ int) map[string]any {
 		"dynatemp_range": s.DynatempRange, "dynatemp_exponent": s.DynatempExponent,
 		"mirostat": s.Mirostat, "mirostat_tau": s.MirostatTau, "mirostat_eta": s.MirostatEta,
 		"adaptive_target": s.AdaptiveTarget, "adaptive_decay": s.AdaptiveDecay,
+		"dry_multiplier": s.DryMultiplier, "dry_base": s.DryBase, "dry_allowed_length": s.DryAllowedLength,
+		"dry_penalty_last_n": s.DryPenaltyLastN, "dry_sequence_breakers": s.DrySequenceBreakers,
 		"repeat_penalty": s.RepeatPenalty, "presence_penalty": s.PresencePenalty, "frequency_penalty": s.FrequencyPenalty,
 		"stop": s.Stop, "ignore_eos": s.IgnoreEOS, "stream": s.Stream, "timings_per_token": s.TimingsPerToken,
 		"n_probs": s.NProbs, "post_sampling_probs": s.PostSamplingProbs, "grammar": s.Grammar, "json_schema": s.JSONSchema,
@@ -832,6 +837,9 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 	var miro *int
 	var topK, lastN, nPredict, maxTokens, nProbs, slot, nCmpl, nAlias, predictMS, ping, indent *int
 	var seed *int64
+	var dryM, dryB *float64
+	var dryA, dryN *int
+	var dryS *[]string
 	var stop json.RawMessage
 	var grammarSrc, schema json.RawMessage
 	var ignore, stream, returnTokens, perToken, progress, postProbs bool
@@ -877,6 +885,11 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 	rd(decodeField(body, "timings_per_token", &perToken))
 	rd(decodeField(body, "return_progress", &progress))
 	rd(decodeField(body, "post_sampling_probs", &postProbs))
+	rd(decodeField(body, "dry_multiplier", &dryM))
+	rd(decodeField(body, "dry_base", &dryB))
+	rd(decodeField(body, "dry_allowed_length", &dryA))
+	rd(decodeField(body, "dry_penalty_last_n", &dryN))
+	rd(decodeField(body, "dry_sequence_breakers", &dryS))
 	rd(decodeField(body, "response_fields", &fields))
 	stop, grammarSrc, schema = body["stop"], body["grammar"], body["json_schema"]
 	if firstErr != nil {
@@ -951,6 +964,25 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 	if lastN != nil {
 		set.RepeatLastN = *lastN
 	}
+	if dryM != nil {
+		set.DryMultiplier = *dryM
+	}
+	if dryB != nil && *dryB >= 1 {
+		set.DryBase = *dryB
+	}
+	if dryA != nil {
+		set.DryAllowedLength = *dryA
+	}
+	if dryN != nil {
+		set.DryPenaltyLastN = *dryN
+	}
+	if dryS != nil {
+		if len(*dryS) == 0 {
+			llFailErr(w, fmt.Errorf("%w: dry_sequence_breakers must be a non-empty array of strings", ErrInvalid))
+			return
+		}
+		set.DrySequenceBreakers = *dryS
+	}
 	if seed != nil {
 		set.Seed = *seed
 	}
@@ -985,6 +1017,10 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 	}
 	if set.RepeatLastN < -1 {
 		llFailErr(w, fmt.Errorf("%w: repeat_last_n=%d is below -1 (the context)", ErrInvalid, set.RepeatLastN))
+		return
+	}
+	if set.DryPenaltyLastN < -1 {
+		llFailErr(w, fmt.Errorf("%w: dry_penalty_last_n=%d is below -1 (the context)", ErrInvalid, set.DryPenaltyLastN))
 		return
 	}
 	if len(stop) > 0 && string(stop) != "null" {
@@ -1169,7 +1205,7 @@ const leastP = 0x1p-126
 // keeps one token (leastP); a min-p past 1 keeps the best, as 1 does; a
 // top-k below 0 is off; the penalties apply as given. An unset seed (-1)
 // draws its own; repeat_last_n 0 turns the penalty off and -1 is the
-// context.
+// context, as dry_penalty_last_n -1 is.
 func llamaSampler(s llamaSettings, nctx int) *engine.Sampler {
 	sm := &engine.Sampler{Temp: s.Temperature, TopP: s.TopP, MinP: s.MinP, TypicalP: s.TypicalP,
 		XTCProbability: s.XTCProbability, XTCThreshold: s.XTCThreshold, TopNSigma: s.TopNSigma,
@@ -1178,7 +1214,8 @@ func llamaSampler(s llamaSettings, nctx int) *engine.Sampler {
 		RepeatPen: s.RepeatPenalty, RepeatLastN: s.RepeatLastN, PresencePen: s.PresencePenalty,
 		FreqPen: s.FrequencyPenalty, Seed: s.Seed, Infill: slices.Contains(s.Samplers, "infill"),
 		Adaptive: slices.Contains(s.Samplers, "adaptive_p"), AdaptiveTarget: s.AdaptiveTarget, AdaptiveDecay: s.AdaptiveDecay,
-		Stages: llamaStages(s.Samplers)}
+		Stages: llamaStages(s.Samplers), DryMultiplier: s.DryMultiplier, DryBase: s.DryBase,
+		DryAllowedLength: s.DryAllowedLength, DryPenaltyLastN: s.DryPenaltyLastN, DryBreakers: s.DrySequenceBreakers}
 	sm.Temp, sm.MinP = max(sm.Temp, 0), min(max(sm.MinP, 0), 1)
 	if sm.TopP <= 0 {
 		sm.TopP = leastP
@@ -1191,6 +1228,9 @@ func llamaSampler(s llamaSettings, nctx int) *engine.Sampler {
 		sm.RepeatPen, sm.PresencePen, sm.FreqPen = 1, 0, 0
 	case -1:
 		sm.RepeatLastN = nctx
+	}
+	if sm.DryPenaltyLastN == -1 {
+		sm.DryPenaltyLastN = nctx
 	}
 	if s.Seed < 0 {
 		sm.Seed = rand.Int64()

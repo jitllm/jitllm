@@ -717,7 +717,7 @@ func TestLlamaRefusals(t *testing.T) {
 	f := &llamaFake{fakeBackend: &fakeBackend{tokens: []string{"a"}, reason: FinishEOS}}
 	s := llamaServe(t, f)
 	refuse := map[string]string{
-		"mirostat": `3`, "dry_multiplier": `0.8`,
+		"mirostat": `3`, "dry_penalty_last_n": `-2`, "dry_sequence_breakers": `[]`,
 		"logit_bias": `[[15]]`, "samplers": `["top_k","dryer"]`, "n_cmpl": `0`, "id_slot": `-2`,
 		"lora":            `[{"id":0,"scale":1}]`,
 		"repeat_last_n":   `-2`,
@@ -773,6 +773,28 @@ func TestLlamaRefusals(t *testing.T) {
 		if got := f.opts().LogitBias; !slices.Equal(got, want) {
 			t.Errorf("logit_bias %s reached the generate as %v, want %v", body, got, want)
 		}
+	}
+	// DRY's fields reach the sampler, dry_penalty_last_n -1 as the context
+	// and a base below 1 as the default; "dry" in samplers is its stage.
+	if code, out := llamaPost(t, s, "/completion", `{"prompt":"x","dry_multiplier":0.8,"dry_base":1.5,"dry_allowed_length":3,`+
+		`"dry_penalty_last_n":-1,"dry_sequence_breakers":["\n","Q:"]}`); code != 200 {
+		t.Fatalf("dry: %d %v", code, out)
+	}
+	if sm := f.opts().Sampling; sm.DryMultiplier != 0.8 || sm.DryBase != 1.5 || sm.DryAllowedLength != 3 || sm.DryPenaltyLastN != 2048 ||
+		!slices.Equal(sm.DryBreakers, []string{"\n", "Q:"}) {
+		t.Errorf("dry reached the sampler as %v %v %v %v %q", sm.DryMultiplier, sm.DryBase, sm.DryAllowedLength, sm.DryPenaltyLastN, sm.DryBreakers)
+	}
+	if code, out := llamaPost(t, s, "/completion", `{"prompt":"x","dry_multiplier":0.8,"dry_base":0.5,"samplers":["dry","top_k","temperature","penalties"]}`); code != 200 {
+		t.Fatalf("dry samplers: %d %v", code, out)
+	}
+	if sm := f.opts().Sampling; sm.DryBase != 1.75 || !slices.Equal(sm.Stages, []engine.Stage{engine.StageDRY, engine.StageTopK, engine.StageTemperature, engine.StagePenalties}) {
+		t.Errorf("a base below 1 and a list starting with dry reached the sampler as %v and %v", sm.DryBase, sm.Stages)
+	}
+	if code, out := llamaPost(t, s, "/completion", `{"prompt":"x","dry_multiplier":0.8,"samplers":["top_k","temperature"]}`); code != 200 {
+		t.Fatalf("dry outside the samplers: %d %v", code, out)
+	}
+	if sm := f.opts().Sampling; sm.DryMultiplier != 0 {
+		t.Errorf("a samplers list without dry left DRY at %v", sm.DryMultiplier)
 	}
 	// typical_p reaches the sampler.
 	if code, out := llamaPost(t, s, "/completion", `{"prompt":"x","typical_p":0.7,"samplers":["typ_p","temperature"]}`); code != 200 {

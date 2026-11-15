@@ -11,14 +11,20 @@ import (
 // "temperature". P is top-p, min-p, typical-p, top-n-sigma's n, or XTC's
 // threshold where its chance fell (+Inf where it did not); InvT the
 // reciprocal temperature as the draw reads it (binary32) and Dyn the
-// dynamic temperature's range and exponent; Hist the penalties' window.
+// dynamic temperature's range and exponent; Hist the penalties' window;
+// the Dry fields DRY's (Dry): its multiplier and base, allowed length,
+// window (-1 the context, DryCtx), history and breakers.
 type ChainStage struct {
-	Name                     string
-	K                        int
-	P, InvT                  float64
-	Dyn                      [2]float64
-	Hist                     []int
-	Rep, Presence, Frequency float32
+	Name                         string
+	K                            int
+	P, InvT                      float64
+	Dyn                          [2]float64
+	Hist                         []int
+	Rep, Presence, Frequency     float32
+	DryMult, DryBase             float32
+	DryAllowed, DryLastN, DryCtx int
+	DryHist                      []int32
+	DryBreakers                  map[int32][][]int32
 }
 
 // Chain runs stages over logits in their order, as llama.cpp's chain runs
@@ -48,6 +54,8 @@ func Chain(logits []float32, stages []ChainStage) ([]float32, float64) {
 		switch st.Name {
 		case "penalties":
 			Penalize(v, st.Hist, st.Rep, st.Presence, st.Frequency)
+		case "dry":
+			Dry(v, st.DryHist, st.DryMult, st.DryBase, st.DryAllowed, st.DryLastN, st.DryCtx, st.DryBreakers)
 		case "top_n_sigma":
 			var m float64
 			v, m = TopNSigma(v, st.P)

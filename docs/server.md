@@ -75,10 +75,10 @@ no text and `prompt_progress` (`total`, `cache`, `processed`, `time_ms`); its
 stream it is taken to no effect, as llama-server takes it.
 
 A field the engine cannot honour is refused by name with a 400, at any value
-but its neutral one: `dry_multiplier`, `adaptive_target`, `min_keep`,
-a `samplers` list out of the draw's order or naming `adaptive_p`,
-`n_keep`, `n_discard`, `n_cache_reuse`,
-`post_sampling_probs`, `lora`, and an audio file in `multimodal_data`.
+but its neutral one: `min_keep`, `lora`, and `image_data` or
+`multimodal_data` beside the prompt (pictures go in
+`prompt.multimodal_data`); an audio file in `prompt.multimodal_data` is
+refused as a picture that does not decode.
 `/embedding` reads `embd_normalize` as llama-server does (2, unit length, by
 default; below 0 the pooled row as it is; 0 scaled into int16's range by its
 largest magnitude; any other k its k-norm), each kind the composed readout's. The top-level

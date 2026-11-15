@@ -86,8 +86,10 @@ type Head struct {
 	// adWords and adOut are adaptive-p's words and the average it writes.
 	adWords [6]float32
 	adOut   [2]float32
-	// stWords is a chain stage's words (graph.SampleStage's sample.stage).
-	stWords [4]float32
+	// stWords is a chain stage's words (graph.SampleStage's sample.stage),
+	// dryWords its DRY multiplier and the base's log.
+	stWords  [4]float32
+	dryWords [2]float32
 	// ids is the row's ids, 0 to the vocabulary's last, which the draws with
 	// no top-k read.
 	ids []uint32
@@ -557,19 +559,22 @@ func (h *Head) Adaptive(p []float32, ids []uint32, cand []float32, w [6]float32,
 
 // Stage is one stage of a sampler chain in an order of its own
 // (graph.SampleStage): logits with the survivors p names, cand put in place
-// at ids, or every finite one where w says so, a's penalties applied and
-// scaled at w's temperature, the rest -Inf, into out; false where the form
-// declines.
+// at ids, or every finite one where w says so, a's penalties and DRY applied
+// and scaled at w's temperature, the rest -Inf, into out; false where the
+// form declines.
 func (h *Head) Stage(logits, p []float32, ids []uint32, cand []float32, a nn.DrawArgs, w [4]float32, out []float32) bool {
 	f, _, why := h.form(&h.p.Stage, false)
 	if why != nn.DeclineServes {
 		h.steps.Decline(nn.PartSample, why)
 		return false
 	}
-	h.stWords = w
-	win := h.window(&a)
+	h.stWords, h.dryWords = w, [2]float32{a.DryMult, a.DryLogBase}
+	win, dry := h.window(&a), unsafe.Pointer(&h.noWin[0])
+	if len(a.Dry) > 0 {
+		dry = unsafe.Pointer(&a.Dry[0])
+	}
 	h.run(f, nil, 1, unsafe.Pointer(&logits[0]), unsafe.Pointer(&p[0]), unsafe.Pointer(&ids[0]), unsafe.Pointer(&cand[0]),
-		win, unsafe.Pointer(&h.pen[0]), unsafe.Pointer(&h.stWords[0]), unsafe.Pointer(&out[0]))
+		win, unsafe.Pointer(&h.pen[0]), unsafe.Pointer(&h.stWords[0]), dry, unsafe.Pointer(&h.dryWords[0]), unsafe.Pointer(&out[0]))
 	h.steps.Serve(nn.PartSample)
 	return true
 }

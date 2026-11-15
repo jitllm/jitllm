@@ -60,6 +60,21 @@ func (s *Instance) Sample(smp *Sampler, logits []float32) (int32, error) {
 		return 0, fmt.Errorf("model: a draw over %d logits, and the vocabulary is %d", len(logits), s.c.NVocab)
 	}
 	if smp == nil || smp.Temp <= 0 {
+		if smp.dryOn() {
+			// The penalties and DRY in the draw's order, then the largest.
+			a := plainArgs(false)
+			if a.Penalty = smp.penalties(); !a.Penalty.Off() {
+				a.Window = smp.window(s.c.NVocab)
+			}
+			row, ok := s.staged(logits, smp, a, true)
+			if !ok {
+				return 0, s.sampleDeclined("the greedy token over DRY")
+			}
+			if t, ok := s.greedy(row); ok {
+				return t, nil
+			}
+			return 0, s.sampleDeclined("the greedy token")
+		}
 		if smp != nil && !smp.penalties().Off() {
 			// llama.cpp's chain penalizes before its temperature sampler keeps
 			// the largest: the walk's one candidate of the penalized row.
@@ -218,7 +233,7 @@ func (s *Instance) draw(logits []float32, smp *Sampler, u, xtc float32) (int32, 
 		smp.drew.XTCMix = 1
 	}
 	if smp.staged() {
-		row, ok := s.staged(logits, smp, a)
+		row, ok := s.staged(logits, smp, a, false)
 		if !ok {
 			return 0, false
 		}
@@ -250,11 +265,12 @@ type stagedRows struct {
 // each over the row the one before it leaves: a cut keeps the survivors the
 // head's composed draw with that cut alone leaves at temperature 1
 // (nn.HeadDevice.Dist), its candidates put in place; the penalties and the
-// temperature keep every finite logit. a is the draw's arguments, XTC's at
-// its chance as it fell. A stage that is off does not run. It returns the
-// last row, the instance's until the next draw, or false where a form
-// declines.
-func (s *Instance) staged(logits []float32, smp *Sampler, a nn.DrawArgs) ([]float32, bool) {
+// temperature keep every finite logit, and so does DRY, its marked tokens
+// lowered (dryRow). a is the draw's arguments, XTC's at its chance as it
+// fell. A stage that is off does not run, and with greedy only the
+// penalties and DRY do. It returns the last row, the instance's until the
+// next draw, or false where a form declines.
+func (s *Instance) staged(logits []float32, smp *Sampler, a nn.DrawArgs, greedy bool) ([]float32, bool) {
 	n, r := len(logits), &s.st
 	if len(r.cur) != n {
 		r.cur, r.next, r.p, r.zero = make([]float32, n), make([]float32, n), make([]float32, n), make([]float32, n)
@@ -264,7 +280,12 @@ func (s *Instance) staged(logits []float32, smp *Sampler, a nn.DrawArgs) ([]floa
 		}
 	}
 	copy(r.cur, logits)
-	for _, st := range smp.Stages {
+	stages, stage := smp.chain()
+	for i := range stages {
+		st := stage(i)
+		if greedy && st != StagePenalties && st != StageDRY {
+			continue
+		}
 		c, w, cut := plainArgs(false), [4]float32{1, 0, 0, 1}, true
 		switch st {
 		case StagePenalties:
@@ -307,6 +328,12 @@ func (s *Instance) staged(logits []float32, smp *Sampler, a nn.DrawArgs) ([]floa
 				continue
 			}
 			w, cut = [4]float32{a.InvTemp, 1, a.DynRange, a.DynExp}, false
+		case StageDRY:
+			if !smp.dryOn() || !s.dryRow(smp) {
+				continue
+			}
+			c.Dry, c.DryMult, c.DryLogBase = s.dry.row, float32(smp.DryMultiplier), float32(math.Log(smp.DryBase))
+			w[1], cut = 1, false
 		}
 		src, cids := r.zero, r.none
 		if cut {
