@@ -22,10 +22,11 @@ type HistoryBinding struct {
 }
 
 // HistTable is one history of a block past its rows' as a call binds it:
-// its entries' memory and its page table.
+// its entries' keys and values (nil where its values are its keys) and its
+// page table.
 type HistTable struct {
-	Keys  unsafe.Pointer
-	Pages []uint32
+	Keys, Values unsafe.Pointer
+	Pages        []uint32
 }
 
 // History is a session's history as the CPU device asks for it: the policy

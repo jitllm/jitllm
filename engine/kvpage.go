@@ -601,13 +601,15 @@ func newKVCacheRange(c *model.Config, id string, nseq int, l kvLayout, store KVS
 		if b.p == 0 {
 			continue
 		}
-		s.p, s.latent, s.period = b.p, true, e.period
+		s.p, s.latent, s.period = b.p, e.inKeys, e.period
 		// A history past the rows' is held at f32 under a quantized
 		// history, its rows no head's, and under a bfloat16 one, whose
 		// halves only the block's own pools take (composer.MoreOf states
 		// the entries' none): as the CPU device composes them.
+		// One whose values are its own is held at f32, keys and values a
+		// position's row each, as composer.MoreOf states it.
 		el := l.atLayer(c, e.block)
-		if el.quantized() || el.fmt == nn.KVBF16 {
+		if el.quantized() || el.fmt == nn.KVBF16 || !e.inKeys {
 			el.fmt = nn.KVF32
 		}
 		s.ew, s.efmt = e.width, el.fmt
@@ -776,7 +778,7 @@ func (s *Instance) migrateKV(li, pos int, toDevice bool) bool {
 			continue
 		}
 		ep := &s.kv.layers[e]
-		eb := make([]float32, pos/ep.period*ep.ew)
+		eb := make([]float32, pos/ep.period*ep.entryWidth())
 		if from.histmig == nil || to.histmig == nil || !from.histmig.MigrateHistory(li, h, eb, pos, false) || !to.histmig.MigrateHistory(li, h, eb, pos, true) {
 			return false
 		}
@@ -2984,7 +2986,7 @@ func (kv *kvCache) bindHist(b *cpudev.HistoryBinding, li, h, e, nseq int) error 
 	if t.Pages, err = kv.table(e, nseq); err != nil {
 		return err
 	}
-	t.Keys, _ = kvAddrs(&kv.layers[e])
+	t.Keys, t.Values = kvAddrs(&kv.layers[e])
 	b.Hists = kv.hb[li]
 	return nil
 }
@@ -3072,10 +3074,21 @@ func (kv *kvCache) Spent(li int) {
 	pg.written = 0
 }
 
+// entryWidth is the floats an entry of a history past its rows' moves as:
+// its keys, and its values after them where they are not its keys.
+func (s *kvPages) entryWidth() int {
+	if s.latent {
+		return s.ew
+	}
+	return 2 * s.ew
+}
+
 // MigrateHistory is cpudev.History's: block li's history hist past its rows,
 // entry j of the pos positions' at slot ((j+1)*period-1)%p/period of the
 // page of position (j+1)*period-1 (composer.History.Period), into or out of
-// e. A binary16 history's rows are narrowed and widened through conv.
+// e, an entry its keys and, where its values are not its keys, its values
+// after them (kvPages.entryWidth). A binary16 history's rows are narrowed
+// and widened through conv.
 func (kv *kvCache) MigrateHistory(li, hist int, e []float32, pos int, in bool, conv nn.KVConvDevice) bool {
 	sl := kv.histSlot(li, hist)
 	if sl == 0 {
@@ -3086,8 +3099,11 @@ func (kv *kvCache) MigrateHistory(li, hist int, e []float32, pos int, in bool, c
 	if n == 0 {
 		return true
 	}
-	if len(e) < n*w {
+	if len(e) < n*s.entryWidth() {
 		return false
+	}
+	if !s.latent {
+		return s.migrateEntries(e, n, pos, in)
 	}
 	el := kvLayout{fmt: s.efmt, nKV: 1, headDim: w}
 	rw := el.slots(w)
@@ -3124,5 +3140,32 @@ func (kv *kvCache) MigrateHistory(li, hist int, e []float32, pos int, in bool, c
 		return h == nil || conv.Convert(false, w, e[:n*w], hb())
 	}
 	s.written = max(s.written, pos)
+	return true
+}
+
+// migrateEntries is MigrateHistory for a history whose values are its own,
+// held at f32: n entries into or out of e, each its keys then its values.
+func (s *kvPages) migrateEntries(e []float32, n, pos int, in bool) bool {
+	w := s.ew
+	for j := 0; j < n; j++ {
+		q := (j+1)*s.period - 1
+		pg, at := q/s.p, q%s.p/s.period*w
+		k, v := e[2*j*w:(2*j+1)*w], e[(2*j+1)*w:(2*j+2)*w]
+		if in {
+			s.grow(pg)
+			s.cow(pg)
+			copy(s.mem.K(pg)[at:at+w], k)
+			copy(s.mem.V(pg)[at:at+w], v)
+			continue
+		}
+		if !s.resident(pg) {
+			return false
+		}
+		copy(k, s.mem.K(pg)[at:at+w])
+		copy(v, s.mem.V(pg)[at:at+w])
+	}
+	if in {
+		s.written = max(s.written, pos)
+	}
 	return true
 }

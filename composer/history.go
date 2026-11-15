@@ -201,9 +201,13 @@ func (h History) Slots(page int) int { return h.slots(page) }
 // MoreOf is the layouts of graph g's histories past the block's own, as
 // its appends state them (graph.Graph.KeptHistories, Request.More):
 // history h at [h-1].
-func MoreOf(g *graph.Graph) []History {
+func MoreOf(g *graph.Graph) []History { return MoreOfKept(g.KeptHistories()) }
+
+// MoreOfKept is the layouts of the histories ks past a block's own:
+// history h at [h-1].
+func MoreOfKept(ks []graph.KeptHistory) []History {
 	var more []History
-	for _, k := range g.KeptHistories() {
+	for _, k := range ks {
 		for len(more) < k.Hist {
 			more = append(more, History{})
 		}

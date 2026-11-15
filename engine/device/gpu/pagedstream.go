@@ -352,11 +352,12 @@ func (g *devTier) selBufs(bs *blockScratch, l *layer) error {
 // streamDecode stages them, the rows' descriptors clipped to the pass and
 // the sweep's running partial folded from one side into the other -- and
 // between two sweeps, and after the last, the codes that read the folds once
-// over the whole history. pl is the pool the form reads, pe its entries'
-// (nil for a block keeping none), whose evicted pages a pass uploads beside
-// pl's. Callers hold g.mu, inside the submission's session.
+// over the whole history. src is the block whose pools the form reads: its
+// rows' and each history it keeps past them, whose evicted pages a pass
+// uploads beside its rows'. Callers hold g.mu, inside the submission's
+// session.
 func (sv *servedPart) streamRun(g *devTier, lc *launcher, s backend.Session, inst *partInst, kind nn.Part, bs *blockScratch,
-	pl, pe *kvLayerPool, in, out []backend.Buf) error {
+	src int, in, out []backend.Buf) error {
 	f, pg := sv.f, bs.pkv
 	st, t := pg.st, sv.sl.tables
 	copy(sv.in[:sv.n], in)
@@ -439,11 +440,12 @@ func (sv *servedPart) streamRun(g *devTier, lc *launcher, s backend.Session, ins
 						return err
 					}
 				}
-				if err := upload(pl, q, u.p0, u.p1); err != nil {
-					return err
-				}
-				if pe != nil {
-					if err := upload(pe, q, u.p0, u.p1); err != nil {
+				for h := 0; ; h++ {
+					l := kp.layers[histKey(src, h)]
+					if l == nil {
+						break
+					}
+					if err := upload(l, q, u.p0, u.p1); err != nil {
 						return err
 					}
 				}

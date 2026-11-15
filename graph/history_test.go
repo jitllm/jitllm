@@ -5,9 +5,9 @@ import (
 	"testing"
 )
 
-// TestReadsHistoryOfRefusesWhatItCannotName: a block reads its own rows'
-// history or one other block's in its place; reading another's history past
-// its rows', two blocks', or another's beside one of its own is refused.
+// TestReadsHistoryOfRefusesWhatItCannotName: a block reads its own
+// histories or one other block's, any of them, in their place; reading
+// two blocks' or another's beside one of its own is refused.
 func TestReadsHistoryOfRefusesWhatItCannotName(t *testing.T) {
 	appendTo := func(h uint8) Op {
 		return Op{Kind: OpKVAppend, In: []ValueID{0, 0}, Writes: []StateRef{{State: StateKV, Version: 1, Hist: h}}}
@@ -21,7 +21,7 @@ func TestReadsHistoryOfRefusesWhatItCannotName(t *testing.T) {
 	}{
 		{"own", []Op{appendTo(0), attend(StateRef{State: StateKV, Version: 1})}, -1, false},
 		{"another's", []Op{attend(SharedHistory(2))}, 2, false},
-		{"another's past its rows'", []Op{attend(StateRef{State: StateKV, From: 3, Hist: 1})}, -1, true},
+		{"another's past its rows'", []Op{attend(StateRef{State: StateKV, From: 3, Hist: 1})}, 2, false},
 		{"two blocks'", []Op{attend(SharedHistory(2)), attend(SharedHistory(1))}, -1, true},
 		{"another's beside its own rows'", []Op{appendTo(0), attend(SharedHistory(2))}, -1, true},
 		{"another's beside a history of its own", []Op{appendTo(1), attend(SharedHistory(2))}, -1, true},
