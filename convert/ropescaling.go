@@ -3,6 +3,7 @@ package convert
 import (
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"math"
 
 	"github.com/jitllm/jitllm/format/jlm"
@@ -33,10 +34,14 @@ type hfLlama3 struct {
 }
 
 // llama3RopeOf reads a rope scaling object, transformers' rope_parameters or
-// rope_scaling: for llama3's method, the function of the head width and the
-// base that computes its per-pair factors, the published defaults where the
-// object is silent; nil for any other method.
-func llama3RopeOf(obj json.RawMessage) (func(headDim uint32, base float64) []float32, error) {
+// rope_scaling: for llama3's method, the function of the rotated width and the
+// base that computes its per-pair factors; nil for any other method. factor,
+// low_freq_factor and high_freq_factor are required, as transformers'
+// _compute_llama3_parameters reads them. The original context is origTop, a
+// top-level original_max_position_embeddings, which standardize_rope_params
+// prefers to the object's; then the object's; then maxPos,
+// max_position_embeddings.
+func llama3RopeOf(obj json.RawMessage, origTop, maxPos *float64) (func(rotated uint32, base float64) []float32, error) {
 	var r hfLlama3
 	if err := json.Unmarshal(obj, &r); err != nil {
 		return nil, err
@@ -44,15 +49,30 @@ func llama3RopeOf(obj json.RawMessage) (func(headDim uint32, base float64) []flo
 	if r.RopeType != "llama3" && (r.RopeType != "" || r.Type != "llama3") {
 		return nil, nil
 	}
-	def := func(p *float64, v float64) float64 {
-		if p != nil {
-			return *p
+	for _, k := range []struct {
+		name string
+		v    *float64
+	}{{"factor", r.Factor}, {"low_freq_factor", r.Low}, {"high_freq_factor", r.High}} {
+		if k.v == nil {
+			return nil, fmt.Errorf("llama3 states no %s", k.name)
 		}
-		return v
 	}
-	factor, low, high, orig := def(r.Factor, 8), def(r.Low, 1), def(r.High, 4), def(r.OrigCtx, 8192)
-	return func(headDim uint32, base float64) []float32 {
-		return llama3Freqs(headDim, base, factor, low, high, orig)
+	orig := r.OrigCtx
+	if origTop != nil {
+		orig = origTop
+	}
+	if orig == nil {
+		orig = maxPos
+	}
+	if orig == nil {
+		return nil, fmt.Errorf("llama3 states no original_max_position_embeddings, and the config no max_position_embeddings")
+	}
+	factor, low, high, ctx := *r.Factor, *r.Low, *r.High, *orig
+	if !(factor > 0) || !(low > 0) || !(high > low) || !(ctx > 0) {
+		return nil, fmt.Errorf("llama3 factor %g, low_freq_factor %g, high_freq_factor %g over %g positions", factor, low, high, ctx)
+	}
+	return func(rotated uint32, base float64) []float32 {
+		return llama3Freqs(rotated, base, factor, low, high, ctx)
 	}, nil
 }
 

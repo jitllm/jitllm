@@ -668,8 +668,7 @@ func TestModelJSONPrimitives(t *testing.T) {
 
 // TestLlama3RopeScalingStatesItsFactors: a llama3 rope scaling, read through a
 // library file, states rope_freqs.weight as convert_hf_to_gguf.py computes it
-// (llama3Freqs, ropescaling.go), the published defaults where the
-// object is silent; default states no tensor.
+// (llama3Freqs, ropescaling.go); default states no tensor.
 func TestLlama3RopeScalingStatesItsFactors(t *testing.T) {
 	lib, err := modelLibrary()
 	if err != nil {
@@ -695,11 +694,6 @@ func TestLlama3RopeScalingStatesItsFactors(t *testing.T) {
 	}
 	if c.HeadDim != 16 || want[1] != 8 || want[0] == 1 {
 		t.Errorf("the factors do not bite: %v over a head of %d", want, c.HeadDim)
-	}
-	// The defaults: factor 8, low 1, high 4 over 8192 positions.
-	_, hc = llama(`{"rope_type": "llama3", "rope_theta": 10000}`)
-	if len(hc.extra) != 1 || !slices.Equal(hc.extra[0].Data, ropeFreqsTensor(llama3Freqs(16, 10000, 8, 1, 4, 8192)).Data) {
-		t.Errorf("llama3's defaults: %v", hc.extra)
 	}
 	if _, hc = llama(`{"rope_type": "default", "rope_theta": 10000}`); len(hc.extra) != 0 {
 		t.Errorf("default scaling stated %d tensors", len(hc.extra))
@@ -730,6 +724,70 @@ func TestPartialRotaryOnlyWhereTheClassReadsIt(t *testing.T) {
 		if _, err := modelLibraryFS.ReadFile("models/" + name); err != nil {
 			t.Errorf("%s: %v", name, err)
 		}
+	}
+}
+
+// TestLlama3ReadsWhatTransformersReads holds llama3 rope scaling to
+// transformers' reading of it: factor, low_freq_factor and high_freq_factor
+// required; the original context a top-level original_max_position_embeddings
+// first, then the object's, then max_position_embeddings; the factors over the
+// rotated width, so a partial rotary (Qwen3.5's quarter) has a factor a
+// rotated pair.
+func TestLlama3ReadsWhatTransformersReads(t *testing.T) {
+	lib, err := modelLibrary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mj := lib["LlamaForCausalLM"]
+	llama := func(rope, top string) (*hfConfig, error) {
+		hc := hfConfigOf(t, `{"architectures": ["LlamaForCausalLM"], "vocab_size": 100, "hidden_size": 64,
+		  "intermediate_size": 96, "num_hidden_layers": 2, "num_attention_heads": 4, "num_key_value_heads": 2,
+		  "head_dim": 16`+top+`, "rope_parameters": `+rope+`}`)
+		_, err := mj.config(hc, []string{"lm_head.weight"})
+		return hc, err
+	}
+	const factors = `"rope_type": "llama3", "rope_theta": 10000, "factor": 8, "low_freq_factor": 1, "high_freq_factor": 4`
+	for _, r := range []struct {
+		name, rope, top string
+		ctx             float64
+	}{
+		{"the object's context", `{` + factors + `, "original_max_position_embeddings": 16}`, ``, 16},
+		{"max_position_embeddings where the object states none", `{` + factors + `}`, `, "max_position_embeddings": 32`, 32},
+		{"a top-level context over the object's", `{` + factors + `, "original_max_position_embeddings": 16}`,
+			`, "original_max_position_embeddings": 24, "max_position_embeddings": 32`, 24},
+	} {
+		hc, err := llama(r.rope, r.top)
+		if err != nil {
+			t.Errorf("%s: %v", r.name, err)
+			continue
+		}
+		want := ropeFreqsTensor(llama3Freqs(16, 10000, 8, 1, 4, r.ctx)).Data
+		if len(hc.extra) != 1 || !slices.Equal(hc.extra[0].Data, want) {
+			t.Errorf("%s: the factors are not those over %g positions", r.name, r.ctx)
+		}
+	}
+	if slices.Equal(llama3Freqs(16, 10000, 8, 1, 4, 16), llama3Freqs(16, 10000, 8, 1, 4, 32)) {
+		t.Fatal("the factors do not depend on the context")
+	}
+	for _, k := range []string{"factor", "low_freq_factor", "high_freq_factor"} {
+		rope := strings.Replace(`{`+factors+`, "original_max_position_embeddings": 16}`, `"`+k+`"`, `"x_`+k+`"`, 1)
+		if _, err := llama(rope, ``); err == nil || !strings.Contains(err.Error(), "states no "+k) {
+			t.Errorf("no %s: %v", k, err)
+		}
+	}
+	if _, err := llama(`{`+factors+`}`, ``); err == nil || !strings.Contains(err.Error(), "max_position_embeddings") {
+		t.Errorf("no context anywhere: %v", err)
+	}
+	q := lib["Qwen3_5ForConditionalGeneration"]
+	hc := qwen35TestConfig(t, `"rope_type": "default"`,
+		`"rope_type": "llama3", "factor": 8, "low_freq_factor": 1, "high_freq_factor": 4, "original_max_position_embeddings": 16`)
+	c, err := q.config(hc, []string{"lm_head.weight"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := llama3Freqs(c.NRot, 10000000, 8, 1, 4, 16)
+	if c.NRot != 8 || len(want) != 4 || len(hc.extra) != 1 || !slices.Equal(hc.extra[0].Data, ropeFreqsTensor(want).Data) {
+		t.Errorf("a quarter rotary of a 32-wide head: %d rotated, %d tables, want the 4 factors over 8", c.NRot, len(hc.extra))
 	}
 }
 

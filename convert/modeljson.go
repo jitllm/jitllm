@@ -849,7 +849,7 @@ func (mj *modelJSON) configIn(env exprEnv, c *hfConfig, names []string) (*Config
 		if err != nil {
 			return nil, err
 		}
-		if err := mjRopeScaling(cfg, c, v); err != nil {
+		if err := mjRopeScaling(cfg, c, v, renv); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", c.path, err)
 		}
 	}
@@ -947,10 +947,10 @@ func (mj *modelJSON) blockRole(name string) (role string, blk int, expert, ok bo
 
 // mjRopeScaling states a rope scaling object, transformers' rope_parameters
 // or rope_scaling, by its published method: none and default state nothing;
-// llama3 states its per-pair factors as rope_freqs.weight, as
-// convert_hf_to_gguf.py writes them; a method not implemented is refused by
-// name.
-func mjRopeScaling(cfg *Config, c *hfConfig, v any) error {
+// llama3 states its per-pair factors over the rotated width as
+// rope_freqs.weight, reading what transformers reads from env (llama3RopeOf);
+// a method not implemented is refused by name.
+func mjRopeScaling(cfg *Config, c *hfConfig, v any, env exprEnv) error {
 	if v == nil {
 		return nil
 	}
@@ -970,11 +970,21 @@ func mjRopeScaling(cfg *Config, c *hfConfig, v any) error {
 		if err != nil {
 			return err
 		}
-		freqs, err := llama3RopeOf(raw)
+		num := func(k string) *float64 {
+			if f, ok := env(k).(float64); ok {
+				return &f
+			}
+			return nil
+		}
+		freqs, err := llama3RopeOf(raw, num("original_max_position_embeddings"), num("max_position_embeddings"))
 		if err != nil {
 			return fmt.Errorf("rope scaling llama3: %w", err)
 		}
-		c.extra = append(c.extra, ropeFreqsTensor(freqs(cfg.HeadDim, float64(cfg.RopeBase))))
+		rot := cfg.NRot
+		if rot == 0 {
+			rot = cfg.HeadDim
+		}
+		c.extra = append(c.extra, ropeFreqsTensor(freqs(rot, float64(cfg.RopeBase))))
 		return nil
 	}
 	return fmt.Errorf("rope scaling %v is not implemented: %w", t, ErrNotImplemented)
