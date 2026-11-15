@@ -1162,7 +1162,6 @@ func hfArchTable() map[string]*hfArch {
 	return map[string]*hfArch{
 		"LlamaForCausalLM":    llamaHF(),
 		"Qwen2ForCausalLM":    qwen2HF(),
-		"Qwen3ForCausalLM":    qwen3HF(),
 		"Qwen3MoeForCausalLM": qwen3moeHF(),
 		"OlmoeForCausalLM":    olmoeHF(),
 		"MixtralForCausalLM":  mixtralHF(),
@@ -1526,17 +1525,6 @@ func qwen3Block() map[string]jlm.Role {
 		"self_attn.q_norm.weight": jlm.RoleAttnQNorm,
 		"self_attn.k_norm.weight": jlm.RoleAttnKNorm,
 	})
-}
-
-func qwen3HF() *hfArch {
-	return &hfArch{
-		arch:        ArchQwen3,
-		blockPrefix: llamaHF().blockPrefix,
-		model:       llamaHF().model,
-		block:       qwen3Block(),
-		ignore:      llamaHF().ignore,
-		config:      hfConfigWith(ArchQwen3, jlm.FlagRopeNeox|jlm.FlagQKNorm, "silu"),
-	}
 }
 
 // The HuggingFace mixture spelling qwen3moe and olmoe share: a router at
