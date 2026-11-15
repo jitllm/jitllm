@@ -14,7 +14,7 @@ A new architecture adds one row here and its narrative in
 
 | architecture (source names) | what is special about its graph | gates | evidence |
 |---|---|---|---|
-| llama (Llama 2 and 3 declare it; ernie4_5 dense; `MixtralForCausalLM`) | the base block; ERNIE 4.5 dense is this graph exactly | `TestGreedyMatchesLlamaCpp`, `TestBatchMatchesForward`, `TestSafetensorsMatchTransformers` | MC "RULE 7: SEVEN architectures" |
+| llama (Llama 2 and 3 declare it; ernie4_5 dense; `MixtralForCausalLM`) | the base block; ERNIE 4.5 dense is this graph exactly | `TestGreedyMatchesLlamaCpp`, `TestBatchMatchesForward`, `TestSafetensorsMatchTransformers` (synth-hf-llama3: llama3 rope scaling from `convert/models/llama.json`, transformers' own LlamaForCausalLM) | MC "RULE 7: SEVEN architectures" |
 | qwen2 | biased q/k/v | `TestAttentionBiasesReachTheModel`, `TestDeviceMatchesHostOnABiasedModel`, `TestGreedyMatchesLlamaCpp` | MC "RULE 7q", "RULE 7f" |
 | qwen3 | per-head q/k norm | `TestGreedyMatchesLlamaCpp`, `TestSafetensorsMatchTransformers` | MC "RULE 7: SEVEN architectures" |
 | qwen3moe | softmax top-k mixture | `TestGreedyMatchesLlamaCpp`, `TestComposedCPUExpertPagesServe`, `TestSafetensorsMatchTransformers` | MC "RULE 14: MIXTURE OF EXPERTS" |

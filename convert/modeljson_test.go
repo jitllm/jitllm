@@ -665,6 +665,46 @@ func TestModelJSONPrimitives(t *testing.T) {
 	}
 }
 
+// TestLlama3RopeScalingStatesItsFactors: a llama3 rope scaling, read through a
+// library file, states rope_freqs.weight as convert_hf_to_gguf.py computes it
+// (llama3Freqs, the Apertus entry's own), the published defaults where the
+// object is silent; default states no tensor.
+func TestLlama3RopeScalingStatesItsFactors(t *testing.T) {
+	lib, err := modelLibrary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mj := lib["LlamaForCausalLM"]
+	llama := func(rope string) (*Config, *hfConfig) {
+		t.Helper()
+		hc := hfConfigOf(t, `{"architectures": ["LlamaForCausalLM"], "vocab_size": 100, "hidden_size": 64,
+		  "intermediate_size": 96, "num_hidden_layers": 2, "num_attention_heads": 4, "num_key_value_heads": 2,
+		  "head_dim": 16, "rope_parameters": `+rope+`}`)
+		c, err := mj.config(hc, []string{"lm_head.weight"})
+		if err != nil {
+			t.Fatalf("%s: %v", rope, err)
+		}
+		return c, hc
+	}
+	c, hc := llama(`{"rope_type": "llama3", "rope_theta": 10000, "factor": 8, "low_freq_factor": 1,
+	  "high_freq_factor": 4, "original_max_position_embeddings": 16}`)
+	want := llama3Freqs(16, 10000, 8, 1, 4, 16)
+	if len(hc.extra) != 1 || hc.extra[0].Role != jlm.RoleRopeFreqs || !slices.Equal(hc.extra[0].Data, ropeFreqsTensor(want).Data) {
+		t.Fatalf("llama3: %d extra tensors, want rope_freqs %v", len(hc.extra), want)
+	}
+	if c.HeadDim != 16 || want[1] != 8 || want[0] == 1 {
+		t.Errorf("the factors do not bite: %v over a head of %d", want, c.HeadDim)
+	}
+	// The defaults: factor 8, low 1, high 4 over 8192 positions.
+	_, hc = llama(`{"rope_type": "llama3", "rope_theta": 10000}`)
+	if len(hc.extra) != 1 || !slices.Equal(hc.extra[0].Data, ropeFreqsTensor(llama3Freqs(16, 10000, 8, 1, 4, 8192)).Data) {
+		t.Errorf("llama3's defaults: %v", hc.extra)
+	}
+	if _, hc = llama(`{"rope_type": "default", "rope_theta": 10000}`); len(hc.extra) != 0 {
+		t.Errorf("default scaling stated %d tensors", len(hc.extra))
+	}
+}
+
 // TestModelJSONStatements: activation, flags, window and rope scaling are
 // read by the generic code and decide after configOf; what it cannot express
 // it refuses by name.
@@ -710,7 +750,7 @@ func TestModelJSONStatements(t *testing.T) {
 		{"erf gelu", `, "hidden_act": "gelu"`, 0, 0, "activation gelu is not implemented"},
 		{"a window in use", `, "sliding_window": 4096`, 0, 0, "a sliding window of 4096"},
 		{"a window not in use", `, "sliding_window": 4096, "use_sliding_window": false`, jlm.FlagGELU, 0, ""},
-		{"llama3 scaling", `, "rope_scaling": {"rope_type": "llama3", "factor": 8}`, 0, 0, "rope scaling llama3 is not implemented"},
+		{"yarn scaling", `, "rope_scaling": {"rope_type": "yarn", "factor": 8}`, 0, 0, "rope scaling yarn is not implemented"},
 		{"default scaling", `, "rope_parameters": {"rope_type": "default", "rope_theta": 10000}`, jlm.FlagGELU, 0, ""},
 		{"two thetas", `, "rope_parameters": {"rope_theta": 10000}, "rope_theta": 500000`, 0, 0, "spelled two ways"},
 		{"a partial rotary", `, "partial_rotary_factor": 0.5`, jlm.FlagGELU, 0, ""},

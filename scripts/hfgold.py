@@ -263,6 +263,12 @@ SYNTH = {
     # Ministral 3: YaRN factor 16 over 4 original positions, so the temperature
     # (llama_4_scaling_beta 0.5) moves at every 4th position; mscale_all_dim 0.5
     # against mscale 1 puts the magnitude at 1.12 rather than exactly one.
+    # Llama 3's rope scaling over 16 original positions: every pair's
+    # wavelength is past 4, so all but the first are divided by the factor and
+    # the first is blended, which bites at every one of the 8 positions.
+    "synth-hf-llama3": ("llama", dict(**SPM_IDS, rope_parameters={
+        "rope_type": "llama3", "rope_theta": 10000.0, "factor": 8.0, "low_freq_factor": 1.0,
+        "high_freq_factor": 4.0, "original_max_position_embeddings": 16}), "tiny-random-LlamaForCausalLM"),
     "synth-hf-ministral3": ("ministral3", dict(**SPM_IDS, 
         num_hidden_layers=3,
         rope_parameters={"rope_type": "yarn", "rope_theta": 1000000.0, "factor": 16.0,

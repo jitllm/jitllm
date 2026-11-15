@@ -80,8 +80,10 @@ schema; `convert/modeljson.go` reads it. Its sections:
     swish, gelu_pytorch_tanh, relu2). Required; another name is refused.
   - `config.rope_scaling`: the rope scaling object (`rope_parameters ??
     rope_scaling`). Null and `default` state nothing; a published method is
-    implemented in code once (`mjRopeScaling`), and one that is not is
-    refused by name.
+    implemented in code once (`mjRopeScaling`): llama3 states its per-pair
+    factors as `rope_freqs.weight`, as convert_hf_to_gguf.py writes them
+    (gated by `synth-hf-llama3` against transformers' own class). One that is
+    not implemented is refused by name.
   - `config.window`: `{"size": expr, "used": expr}`. In use, it is stated as
     `attention.sliding_window`, and a graph whose config does not carry it
     is refused.

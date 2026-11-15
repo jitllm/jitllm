@@ -70,15 +70,20 @@ func apertusHFConfig(c *hfConfig, names []string) (*Config, error) {
 		return nil, err
 	}
 	if freqs != nil {
-		f := freqs(cfg.HeadDim, float64(cfg.RopeBase))
-		b := make([]byte, 4*len(f))
-		for i, x := range f {
-			binary.LittleEndian.PutUint32(b[4*i:], math.Float32bits(x))
-		}
-		c.extra = append(c.extra, jlm.Tensor{Role: jlm.RoleRopeFreqs, Block: jlm.DenseBlock, Index: -1,
-			Type: jlm.TypeF32, NDim: 1, Dims: [4]uint64{uint64(len(f))}, Data: b, Name: "rope_freqs.weight"})
+		c.extra = append(c.extra, ropeFreqsTensor(freqs(cfg.HeadDim, float64(cfg.RopeBase))))
 	}
 	return cfg, nil
+}
+
+// ropeFreqsTensor is per-pair rotary factors as the container carries them,
+// rope_freqs.weight beside the blocks.
+func ropeFreqsTensor(f []float32) jlm.Tensor {
+	b := make([]byte, 4*len(f))
+	for i, x := range f {
+		binary.LittleEndian.PutUint32(b[4*i:], math.Float32bits(x))
+	}
+	return jlm.Tensor{Role: jlm.RoleRopeFreqs, Block: jlm.DenseBlock, Index: -1,
+		Type: jlm.TypeF32, NDim: 1, Dims: [4]uint64{uint64(len(f))}, Data: b, Name: "rope_freqs.weight"}
 }
 
 // apertusGather folds each block's mlp.act_fn.{alpha_p, alpha_n, beta, eps}
@@ -141,14 +146,29 @@ func hfLlama3Consume(c *hfConfig) (func(headDim uint32, base float64) []float32,
 	if len(c.RopeScaling) == 0 || string(c.RopeScaling) == "null" {
 		return nil, nil
 	}
+	freqs, err := llama3RopeOf(c.RopeScaling)
+	if err != nil || freqs == nil {
+		if err != nil {
+			err = fmt.Errorf("convert: %s: rope_scaling: %w", c.path, err)
+		}
+		return nil, err
+	}
+	c.RopeScaling = nil
+	return freqs, nil
+}
+
+// llama3RopeOf reads a rope scaling object, transformers' rope_parameters or
+// rope_scaling: for llama3's method, the function of the head width and the
+// base that computes its per-pair factors, the published defaults where the
+// object is silent; nil for any other method.
+func llama3RopeOf(obj json.RawMessage) (func(headDim uint32, base float64) []float32, error) {
 	var r hfLlama3
-	if err := json.Unmarshal(c.RopeScaling, &r); err != nil {
-		return nil, fmt.Errorf("convert: %s: rope_scaling: %w", c.path, err)
+	if err := json.Unmarshal(obj, &r); err != nil {
+		return nil, err
 	}
 	if r.RopeType != "llama3" && (r.RopeType != "" || r.Type != "llama3") {
 		return nil, nil
 	}
-	c.RopeScaling = nil
 	def := func(p *float64, v float64) float64 {
 		if p != nil {
 			return *p

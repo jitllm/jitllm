@@ -253,6 +253,8 @@ func TestSafetensorsRefusals(t *testing.T) {
 		}, "has no role in this container's vocabulary"},
 		{"gelu", func(m *synthModel) { m.cfg["hidden_act"] = "gelu" },
 			"activation gelu is not implemented"},
+		// llama3 is implemented (TestLlama3RopeScalingStatesItsFactors); yarn
+		// is not, for this file.
 		{"yarn rope scaling", func(m *synthModel) {
 			m.cfg["rope_scaling"] = map[string]any{"rope_type": "yarn", "factor": 32.0}
 		}, "rope scaling yarn is not implemented"},
