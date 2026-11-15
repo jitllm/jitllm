@@ -1163,7 +1163,6 @@ func hfArchTable() map[string]*hfArch {
 		"LlamaForCausalLM":   llamaHF(),
 		"OlmoeForCausalLM":   olmoeHF(),
 		"MixtralForCausalLM": mixtralHF(),
-		"GemmaForCausalLM":   gemmaHF(),
 		"Phi3ForCausalLM":    phi3HF(),
 		// One graph, two class names: V2 and V3 differ in the router, and every
 		// difference is a key config.json states. See deepseek2HF.
@@ -1585,34 +1584,6 @@ func mixtralHF() *hfArch {
 			return cfg, nil
 		},
 		fixup: llamaHFFixup,
-	}
-}
-
-// gemma differs from llama in four silent places: NEOX rotary with rows as
-// shipped, a tanh-GELU gate, the embedding scaled by sqrt(hidden_size), and an
-// RMSNorm that multiplies by (1 + weight). The +1 is folded into the weight
-// here, as its GGUF carries it. The class defaults tie_word_embeddings to
-// true, so an absent key means tied.
-func gemmaHF() *hfArch {
-	return &hfArch{
-		arch:        ArchGemma,
-		blockPrefix: llamaHF().blockPrefix,
-		model:       llamaHF().model,
-		block:       llamaHF().block,
-		ignore:      llamaHF().ignore,
-		config: func(c *hfConfig, names []string) (*Config, error) {
-			if c.TieWordEmbeddings == nil {
-				t := true
-				c.TieWordEmbeddings = &t
-			}
-			cfg, err := hfConfigWith(ArchGemma, jlm.FlagRopeNeox|jlm.FlagGELU, "gelu_pytorch_tanh")(c, names)
-			if err != nil {
-				return nil, err
-			}
-			cfg.EmbdScale = float32(math.Sqrt(float64(cfg.NEmbd)))
-			return cfg, nil
-		},
-		fixup: gemmaHFFixup,
 	}
 }
 
@@ -2363,21 +2334,8 @@ func llamaHFFixup(e *jlm.Tensor, data []byte, c *Config) error {
 	return nil
 }
 
-// gemmaHFFixup folds gemma's (1 + weight) RMSNorm into the weight.
-//
-// Every norm, including the final one, as convert_hf_to_gguf.py does. An f16
-// norm comes out f32: adding one in half precision would round differently
-// from the reference.
-func gemmaHFFixup(e *jlm.Tensor, data []byte, c *Config) error {
-	switch e.Role {
-	case jlm.RoleAttnNorm, jlm.RoleFFNNorm, jlm.RoleOutputNorm:
-		return plusOneNorm(e, data)
-	}
-	e.Data = data
-	return nil
-}
-
-// plusOneNorm stores 1 + weight in float32.
+// plusOneNorm stores 1 + weight in float32: an f16 norm comes out f32, since
+// adding one in half precision would round differently from the reference.
 func plusOneNorm(e *jlm.Tensor, data []byte) error {
 	out := make([]byte, 0, len(data)*2)
 	switch e.Type {
