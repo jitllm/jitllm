@@ -101,22 +101,22 @@ func TestHeadShapeReadsTheHeadsGraph(t *testing.T) {
 	}
 	hidden := full
 	hidden.Hidden = true
-	bs := &blockScratch{headGraph: g, headHidden: hidden.Build()}
+	f := headForm{graph: g, hidden: hidden.Build()}
 	var vecs []roleBuf
 	for _, r := range []jlm.Role{jlm.RoleOutputNorm, jlm.RoleOutputNormBias, jlm.RoleOutputBias} {
 		vecs = append(vecs, roleBuf{role: r, buf: &fakeBuf{}})
 	}
-	if err := bs.headServes(vecs); err != nil {
+	if err := f.serves(vecs); err != nil {
 		t.Errorf("a head holding every vector its graph names: %v", err)
 	}
-	if n := testing.AllocsPerRun(100, func() { bs.headServes(vecs) }); n != 0 {
+	if n := testing.AllocsPerRun(100, func() { f.serves(vecs) }); n != 0 {
 		t.Errorf("asking whether the head serves allocates %.0f times", n)
 	}
 	other := full.Build()
 	other.Ops[2].Weight = append(other.Ops[2].Weight, graph.Binding{Role: jlm.RoleAttnNorm, K: 24})
 	otherHidden := hidden.Build()
 	otherHidden.Ops[2].Weight = append(otherHidden.Ops[2].Weight, graph.Binding{Role: jlm.RoleAttnNorm, K: 24})
-	if err := (&blockScratch{headGraph: other, headHidden: otherHidden}).headServes(vecs); err == nil {
+	if err := (headForm{graph: other, hidden: otherHidden}).serves(vecs); err == nil {
 		t.Error("a head whose graph names a vector the tier did not upload is served")
 	}
 }

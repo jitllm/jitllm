@@ -1745,17 +1745,64 @@ func vecOf(vecs []roleBuf, r jlm.Role) backend.Buf {
 	return nil
 }
 
-// headServes is nil where the composer serves a step's head as the model's
-// head graph states it -- the graph read as what it binds (headShape), the
-// hidden rows' graph binding the same, and every vector it names held in
-// vecs -- and why not where it does not.
-func (bs *blockScratch) headServes(vecs []roleBuf) error {
-	hs, ok := headShape(bs.headGraph, bs.headMix)
-	hh, hok := headShape(bs.headHidden, bs.headMix)
+// headForm is a head as the tier serves it: its graph (nn.Head.Graph), the
+// graph writing its normed rows too (nn.Head.HiddenGraph) and the tensors
+// the graph binds past its own (nn.Head.Mix), nil for none.
+type headForm struct {
+	graph, hidden *graph.Graph
+	mix           *nn.RowsPart
+}
+
+// headOf is the form h asks for, the zero form for none.
+func headOf(h *nn.Head) headForm {
+	if h == nil {
+		return headForm{}
+	}
+	return headForm{graph: h.Graph, hidden: h.HiddenGraph, mix: h.Mix}
+}
+
+// holdHead records h's form among the heads bs serves, once a graph.
+func (bs *blockScratch) holdHead(h *nn.Head) {
+	if !bs.holdsHead(h) {
+		bs.heads = append(bs.heads, headOf(h))
+	}
+}
+
+// holdsHead says a placement recorded h's form (holdHead).
+func (bs *blockScratch) holdsHead(h *nn.Head) bool {
+	for _, f := range bs.heads {
+		if f.graph == h.Graph && f.hidden == h.HiddenGraph {
+			return true
+		}
+	}
+	return false
+}
+
+// headsServe is nil where every head bs holds serves (serves), and the first
+// one's why not otherwise.
+func (bs *blockScratch) headsServe(vecs []roleBuf) error {
+	if len(bs.heads) == 0 {
+		return errors.New("no head was placed")
+	}
+	for _, f := range bs.heads {
+		if err := f.serves(vecs); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// serves is nil where the composer serves a step's head as f's graph states
+// it -- the graph read as what it binds (headShape), the hidden rows' graph
+// binding the same, and every vector it names held in vecs -- and why not
+// where it does not.
+func (f headForm) serves(vecs []roleBuf) error {
+	hs, ok := headShape(f.graph, f.mix)
+	hh, hok := headShape(f.hidden, f.mix)
 	switch {
 	case !ok || !hok:
 		return errors.New("the head's graph binds a matrix other than its one projection")
-	case !hh.same(hs) || len(bs.headHidden.Out) != 2:
+	case !hh.same(hs) || len(f.hidden.Out) != 2:
 		return errors.New("the head's hidden rows graph binds other than its head, or writes no rows")
 	}
 	var missing jlm.Role
@@ -1777,7 +1824,7 @@ func (sv *servedPart) runHead(g *devTier, lc *launcher, ins []backend.Buf, out, 
 	return sv.run(g, lc, sv.inst, ins, []backend.Buf{out, h}[:sv.m])
 }
 
-// servedHead is the model's head graph served at a step of rows: its
+// servedHead is head f's graph served at a step of rows: its
 // projection bound to the head's weight and each vector it names to the
 // tier's under that role (vecs), under the roles the graph names (the
 // embedding's where the model ties them). A form a row count: a decode
@@ -1785,12 +1832,12 @@ func (sv *servedPart) runHead(g *devTier, lc *launcher, ins []backend.Buf, out, 
 // one that writes the norm's rows too (nn.Head.HiddenGraph), into the
 // scratch's normed rows as the tier's own head does (runHead): what a call's
 // hidden readback reads (nn.Head.Hidden).
-func (g *devTier) servedHead(bs *blockScratch, vecs []roleBuf, rows int) (*servedPart, error) {
-	gr, w := bs.headHidden, bs.head
+func (g *devTier) servedHead(bs *blockScratch, f headForm, vecs []roleBuf, rows int) (*servedPart, error) {
+	gr, w := f.hidden, bs.head
 	if g.rowsFaulted("nohidden") {
-		gr = bs.headGraph
+		gr = f.graph
 	}
-	hs, ok := headShape(gr, bs.headMix)
+	hs, ok := headShape(gr, f.mix)
 	if !ok {
 		return nil, errors.New("the composed head: a graph binding a matrix other than its one projection")
 	}
@@ -1806,8 +1853,8 @@ func (g *devTier) servedHead(bs *blockScratch, vecs []roleBuf, rows int) (*serve
 	sv, err := g.servedFor(sk, func() (composedPart, error) {
 		sl := composedPart{kind: nn.PartHead, graph: gr, formats: map[jlm.Role]jlm.Type{hs.out: t},
 			weights: map[jlm.Role]*resident{}, vectors: map[jlm.Role]backend.Buf{}}
-		if bs.headMix != nil {
-			mp, err := g.mixParts(bs.headMix)
+		if f.mix != nil {
+			mp, err := g.mixParts(f.mix)
 			if err != nil {
 				return composedPart{}, err
 			}
@@ -2967,19 +3014,21 @@ func (g *devTier) prewarmComposedHead(narrow bool) (roomless string) {
 		g.prewarming = false
 	}
 	if g.NoPromptPrewarm || bs == nil || bs.head == nil ||
-		bs.headServes(bs.hVecs) != nil {
+		bs.headsServe(bs.hVecs) != nil {
 		return
 	}
 	g.prewarming = true
 	defer func() { g.prewarming = false }()
-	_, err := g.servedHead(bs, bs.hVecs, 1)
-	for narrow && err != nil && errors.As(err, new(partRoomError)) && g.narrowReserved("the composed head's buffers") {
-		_, err = g.servedHead(bs, bs.hVecs, 1)
-	}
-	if err != nil {
-		g.LastErr = "the composed head: " + err.Error()
-		if errors.As(err, new(partRoomError)) {
-			return fmt.Sprintf("the composed head does not fit beside the blocks placed (%s)", err)
+	for _, f := range bs.heads {
+		_, err := g.servedHead(bs, f, bs.hVecs, 1)
+		for narrow && err != nil && errors.As(err, new(partRoomError)) && g.narrowReserved("the composed head's buffers") {
+			_, err = g.servedHead(bs, f, bs.hVecs, 1)
+		}
+		if err != nil {
+			g.LastErr = "the composed head: " + err.Error()
+			if errors.As(err, new(partRoomError)) {
+				return fmt.Sprintf("the composed head does not fit beside the blocks placed (%s)", err)
+			}
 		}
 	}
 	if bs.pickHead != nil {
@@ -2991,9 +3040,11 @@ func (g *devTier) prewarmComposedHead(narrow bool) (roomless string) {
 	// a call's (composer.CallRows): a step of any count of wanted rows forms
 	// nothing.
 	for w := range g.bbs {
-		if _, err := g.servedHead(bs, bs.hVecs, w); err != nil {
-			g.LastErr = "the composed rows head: " + err.Error()
-			return
+		for _, f := range bs.heads {
+			if _, err := g.servedHead(bs, f, bs.hVecs, w); err != nil {
+				g.LastErr = "the composed rows head: " + err.Error()
+				return
+			}
 		}
 	}
 	return

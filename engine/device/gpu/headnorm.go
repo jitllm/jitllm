@@ -43,7 +43,7 @@ func (g *devTier) adoptHead(h *nn.Head) bool {
 	if _, _, ok := g.headVecsFor(h); ok {
 		return true
 	}
-	spec, _ := headShape(g.bs.headGraph, g.bs.headMix)
+	spec, _ := headShape(h.Graph, h.Mix)
 	bufs, n, err := g.upHeadVecs(h, spec)
 	if err != nil {
 		g.LastErr = "the head's second vectors: " + err.Error()
@@ -109,8 +109,18 @@ func (g *devTier) joinHead(h *nn.Head) bool {
 		return false
 	}
 	g.headGraphs(h)
-	g.bs.headMix = h.Mix
-	return g.adoptHead(h)
+	return g.adoptHead(h) && g.formHeads()
+}
+
+// formHeads forms every head the tier holds (prewarmComposedHead), an
+// adopted head's own among them, so its step composes nothing. Callers hold
+// g.mu.
+func (g *devTier) formHeads() bool {
+	if why := g.prewarmComposedHead(true); why != "" {
+		g.LastErr = why
+		return false
+	}
+	return true
 }
 
 // headVecsFor is the vectors a call's head reads and their index for the

@@ -417,9 +417,8 @@ func (s *Instance) stepRowsStreams(src rowSrc, out *rowsOut) error {
 }
 
 // rowsHead projects n rows of a verification over a residual of several
-// planes into logits: on the device as a head-only ragged call where its
-// head reads them (devHeadReads), or on the CPU, whose head's graph mixes
-// them, where it does not or refuses.
+// planes into logits: on the device as a head-only ragged call, or on the
+// CPU, whose head's graph mixes them, where it refuses.
 func (s *Instance) rowsHead(rd nn.RowsDevice, pos, slot []int, n int, logits []float32, nlogit int) error {
 	c := s.m.Cfg
 	x := s.bx[:n*c.ResidW()]
@@ -427,7 +426,7 @@ func (s *Instance) rowsHead(rd nn.RowsDevice, pos, slot []int, n int, logits []f
 	if c.ResidStreams() {
 		s.rows.tapStreams(s, x, n)
 	}
-	if h != nil && s.devHeadReads() {
+	if h != nil {
 		keep := h.Logits
 		h.RowLogits, h.Logits, h.LogitRows = true, logits[:nlogit*c.NVocab], nlogit
 		ok := rd.LayersRows(s.hi, s.hi, pos, slot, s.maxSeq, x, s.batchTables(n), h)

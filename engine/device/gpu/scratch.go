@@ -520,7 +520,7 @@ func (g *devTier) reservedFor(part nn.Parts) *blockScratch {
 // reserved width, formed there at placement (prewarmComposedHead).
 func (g *devTier) headReserved() bool {
 	return g.reservedFor(nn.ComposedHead) != nil && g.bs != nil && g.bs.head != nil &&
-		g.bs.headServes(g.bs.hVecs) == nil
+		g.bs.headsServe(g.bs.hVecs) == nil
 }
 
 // rangeComposed reports whether the composer serves, as part, every block of

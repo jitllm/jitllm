@@ -67,6 +67,12 @@ func TestSpecGreedyOnDevice(t *testing.T) {
 							}
 							drafted += st.Drafted
 							accepted += st.Accepted
+							// The draft projects through its own head where
+							// its prediction block states one, on the card
+							// like any other head.
+							if st.Drafted > 0 && st.DraftDeviceHeads == 0 {
+								t.Fatalf("%s: %d tokens drafted, none of the draft's projections on %s", arm.name, st.Drafted, spec)
+							}
 							if arm.name == "k3-rows" {
 								if st.Rollback != SpecRollbackRows {
 									t.Fatalf("%q: the rows rollback asked of %s ran %v", text, spec, st.Rollback)
