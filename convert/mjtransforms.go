@@ -303,15 +303,21 @@ func mjTranspose(v mjVal, perm []int64) (mjVal, error) {
 	for i := r - 1; i >= 0; i-- {
 		stride[i], s = s, s*v.shape[i]
 	}
+	// The trailing axes the permutation leaves in place move as one run.
+	k := r
+	for k > 0 && perm[k-1] == int64(k-1) {
+		k--
+	}
+	run := mjProd(v.shape[k:]) * es
 	out.data = make([]byte, len(v.data))
-	idx := make([]uint64, r)
-	for o := uint64(0); o < v.count(); o++ {
+	idx := make([]uint64, k)
+	for o := uint64(0); o < mjProd(shape[:k]); o++ {
 		src := uint64(0)
 		for i := range idx {
 			src += idx[i] * stride[perm[i]]
 		}
-		copy(out.data[o*es:(o+1)*es], v.data[src*es:(src+1)*es])
-		for i := r - 1; i >= 0; i-- {
+		copy(out.data[o*run:(o+1)*run], v.data[src*es:src*es+run])
+		for i := k - 1; i >= 0; i-- {
 			if idx[i]++; idx[i] < shape[i] {
 				break
 			}

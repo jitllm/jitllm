@@ -68,11 +68,10 @@
 1 convert/safetensors.go:deepseek2HF
 1 convert/safetensors.go:deepseekHFConfigFFN
 3 convert/safetensors.go:hardcodesSigmoid
-19 convert/safetensors.go:hfArchTable
+18 convert/safetensors.go:hfArchTable
 1 convert/safetensors.go:hfYarnApply
 1 convert/safetensors.go:kimiLinearHF
 1 convert/safetensors.go:kimiLinearHFConfig
-2 convert/safetensors.go:llamaHF
 4 convert/ssm.go:ssdArch
 4 convert/ssm.go:ssdConfig
 6 convert/toolform.go:toolForm

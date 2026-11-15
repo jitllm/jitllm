@@ -208,7 +208,7 @@ func TestLibraryIgnoresTheRotaryBuffers(t *testing.T) {
 	}
 	for _, c := range []string{"Qwen2ForCausalLM", "Qwen3ForCausalLM", "Qwen3MoeForCausalLM", "GemmaForCausalLM",
 		"Ernie4_5ForCausalLM", "Qwen2MoeForCausalLM", "Ernie4_5_MoeForCausalLM", "Dots1ForCausalLM",
-		"Glm4MoeForCausalLM"} {
+		"Glm4MoeForCausalLM", "LlamaForCausalLM"} {
 		mj := lib[c]
 		if mj == nil {
 			t.Fatalf("no %s in the library", c)

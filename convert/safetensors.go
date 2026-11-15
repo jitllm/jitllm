@@ -1122,7 +1122,6 @@ func (a *hfArch) setData(e *jlm.Tensor, data []byte, c *Config) error {
 // entry. See hfArch.
 func hfArchTable() map[string]*hfArch {
 	return map[string]*hfArch{
-		"LlamaForCausalLM": llamaHF(),
 		// One graph, two class names: V2 and V3 differ in the router, and every
 		// difference is a key config.json states. See deepseek2HF.
 		"DeepseekV2ForCausalLM": deepseek2HF(),
@@ -1411,9 +1410,10 @@ func hfCheckShape(e *jlm.Tensor, c *Config) error {
 // ---------------------------------------------------------------------------
 // llama
 
+// llamaHF is llama's names, which the dense families and the mixtures build
+// on; LlamaForCausalLM itself converts by convert/models/llama.json.
 func llamaHF() *hfArch {
 	return &hfArch{
-		arch:        ArchLlama,
 		blockPrefix: "model.layers.",
 		model: map[string]jlm.Role{
 			"model.embed_tokens.weight": jlm.RoleTokenEmbd,
@@ -1447,8 +1447,6 @@ func llamaHF() *hfArch {
 			"model.rotary_emb.inv_freq":     true,
 			"self_attn.rotary_emb.inv_freq": true,
 		},
-		config: hfConfigWith(ArchLlama, 0, "silu"),
-		fixup:  llamaHFFixup,
 	}
 }
 
