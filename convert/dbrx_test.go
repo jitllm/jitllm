@@ -36,14 +36,14 @@ func TestDbrxCarriesItsClamp(t *testing.T) {
 	if _, err := configOf(headerOnly("llama", s)); !errors.Is(err, ErrNotImplemented) {
 		t.Errorf("a llama carrying a clamp: %v, want ErrNotImplemented", err)
 	}
-	dbrx, err := retargets(ArchDBRX)
+	dbrx, err := retargets(ArchDBRX, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if r := dbrx[jlm.RoleAttnOutNorm]; r != jlm.RoleFFNNorm {
 		t.Errorf("dbrx's attn_output_norm is %v, want the FFN norm", r)
 	}
-	bert, err := retargets(ArchBERT)
+	bert, err := retargets(ArchBERT, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

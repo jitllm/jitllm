@@ -603,7 +603,7 @@ func (mj *modelJSON) hfArch() (*hfArch, error) {
 	for _, n := range mj.Tensors.Ignore {
 		a.ignore[n] = true
 	}
-	moved, err := retargets(a.arch)
+	moved, err := retargets(a.arch, nil)
 	if err != nil {
 		return nil, err
 	}

@@ -525,7 +525,7 @@ func configOfFile(f *meta.File) (*Config, error) {
 		// llama.cpp's falcon.cpp: the parallel block, NEOX rotary over the
 		// whole head, an ungated GELU FFN, LayerNorm with biases and no
 		// matrix biases. The two-norm form is resolved at the tensor names
-		// (falconNorms).
+		// (rolemaps.json).
 		layerNormEps(f, c)
 		c.Flags |= jlm.FlagLayerNorm | jlm.FlagParallel | jlm.FlagRopeNeox | jlm.FlagGELU
 	case ArchNemotron:

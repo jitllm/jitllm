@@ -376,9 +376,11 @@ var roleMapsFS embed.FS
 // retargets is the roles whose name, in arch's source, means what another
 // role does (rolemaps.json, each with its reason): gemma2/gemma3's
 // post_attention_norm is applied to the attention output, qwen3next's tensor
-// of that name is the FFN's input norm. Resolving them here keeps the
-// source's ambiguity out of the container.
-func retargets(arch Arch) (map[jlm.Role]jlm.Role, error) {
+// of that name is the FFN's input norm. An entry that holds of one layout
+// names the tensor that marks it, and applies where stored says the source
+// holds it (nil: no source to ask). Resolving them here keeps the source's
+// ambiguity out of the container.
+func retargets(arch Arch, stored func(string) bool) (map[jlm.Role]jlm.Role, error) {
 	b, err := roleMapsFS.ReadFile("rolemaps.json")
 	if err != nil {
 		return nil, err
@@ -386,6 +388,7 @@ func retargets(arch Arch) (map[jlm.Role]jlm.Role, error) {
 	var all map[string][]struct {
 		From string `json:"from"`
 		To   string `json:"to"`
+		When string `json:"when"`
 		Why  string `json:"why"`
 	}
 	if err := json.Unmarshal(b, &all); err != nil {
@@ -402,6 +405,9 @@ func retargets(arch Arch) (map[jlm.Role]jlm.Role, error) {
 		to, ok2 := named[m.To]
 		if !ok || !ok2 || m.Why == "" {
 			return nil, fmt.Errorf("convert: rolemaps.json: %s maps %q to %q, which are not both container roles with a reason", arch, m.From, m.To)
+		}
+		if m.When != "" && (stored == nil || !stored(m.When)) {
+			continue
 		}
 		out[from] = to
 	}

@@ -211,7 +211,8 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 	var alphas, fused int
 	scales := map[string]float32{}
 	renames := towerNames(f, s.Vision)
-	moved, err := retargets(c.Arch)
+	stored := func(n string) bool { _, ok := f.Get(n); return ok }
+	moved, err := retargets(c.Arch, stored)
 	if err != nil {
 		return nil, err
 	}
@@ -346,6 +347,10 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 			return nil, err
 		}
 		if !role.Vision() {
+			// A second input norm in a block is a layout every block shares.
+			if (role == jlm.RoleAttnNorm2 || role == jlm.RoleAttnNorm2Bias) && !stored("blk.0.attn_norm_2.weight") {
+				return nil, fmt.Errorf("convert: %s: attn_norm_2 in a block when block 0 has none", t.Name)
+			}
 			// The text architecture's renames; a tower's roles are not its to
 			// rewrite, and a merged container has both.
 			if r, ok := moved[role]; ok {
@@ -353,11 +358,6 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 			}
 			if nemo != nil {
 				if role, block, err = nemo.remap(role, block); err != nil {
-					return nil, fmt.Errorf("convert: %s: %w", t.Name, err)
-				}
-			}
-			if c.Arch == ArchFalcon {
-				if role, err = falconNorms(f, role); err != nil {
 					return nil, fmt.Errorf("convert: %s: %w", t.Name, err)
 				}
 			}
@@ -818,31 +818,6 @@ func unfuse(e *jlm.Tensor, c *Config, stored func(string) bool) ([]jlm.Tensor, b
 		off += n
 	}
 	return out, true, nil
-}
-
-// falconNorms resolves Falcon's two input norms onto the parallel block's
-// attention and FFN norms. The names read backwards: gguf-py maps Falcon-40B's
-// ln_MLP to attn_norm and ln_ATTN to attn_norm_2, and llama.cpp's falcon.cpp
-// feeds attention attn_norm_2 and the FFN attn_norm. With one norm (7B) the
-// parallel block shares it.
-func falconNorms(f *meta.File, role jlm.Role) (jlm.Role, error) {
-	if _, two := f.Get("blk.0.attn_norm_2.weight"); !two {
-		if role == jlm.RoleAttnNorm2 || role == jlm.RoleAttnNorm2Bias {
-			return 0, fmt.Errorf("attn_norm_2 in a block when block 0 has none")
-		}
-		return role, nil
-	}
-	switch role {
-	case jlm.RoleAttnNorm:
-		return jlm.RoleFFNNorm, nil
-	case jlm.RoleAttnNormBias:
-		return jlm.RoleFFNNormBias, nil
-	case jlm.RoleAttnNorm2:
-		return jlm.RoleAttnNorm, nil
-	case jlm.RoleAttnNorm2Bias:
-		return jlm.RoleAttnNormBias, nil
-	}
-	return role, nil
 }
 
 // attends says block b of c attends: every block where c states no layer
