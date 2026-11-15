@@ -2,7 +2,9 @@ package convert
 
 import (
 	"fmt"
+	"maps"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -92,7 +94,8 @@ func clampOf(name string) (block int32, at int, ok bool) {
 // clampTensors writes each block's gathered bounds as its RoleVClamp vector;
 // a bound the file did not carry is infinite, which clamps nothing.
 func clampTensors(s *jlm.Source, clamps map[int32]*[28]float32) error {
-	for b, v := range clamps {
+	for _, b := range slices.Sorted(maps.Keys(clamps)) {
+		v := clamps[b]
 		if b < 0 || uint32(b) >= s.Vision.NLayer {
 			return fmt.Errorf("convert: clipped-linear bounds for block %d of %d", b, s.Vision.NLayer)
 		}
