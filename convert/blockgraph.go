@@ -1020,10 +1020,23 @@ func (bf *blockFacts) selected(b *graph.Builder, g *mjGraph, o mjBlockOp, vars m
 }
 
 // ops lowers the stated ops only a block has: its rotary at the row's
-// position in the stated layout, nothing on a block that turns none.
+// position in the stated layout, nothing on a block that turns none; and
+// the ops over its recurrent state's tail, each at its place past the
+// rule's state in the order they come.
 func (bf *blockFacts) ops(b *graph.Builder) func([]graph.ValueID, *jlm.TowerOp) (graph.ValueID, error) {
+	cursor := 0
 	return func(ins []graph.ValueID, op *jlm.TowerOp) (graph.ValueID, error) {
-		if op.Code != jlm.TOpRope {
+		switch op.Code {
+		case jlm.TOpRope:
+		case jlm.TOpNGramRows, jlm.TOpTailConv:
+			if bf.li >= len(bf.c.LayerKinds) || !bf.c.LayerKinds[bf.li].Recurrent() {
+				return 0, fmt.Errorf("block %d keeps a recurrent tail and is no recurrent block", bf.li)
+			}
+			base := int(bf.c.SSM.NHeadV) * bf.vDim() * int(bf.c.SSM.StateSize)
+			v, kept, err := graph.TailOp(b, ins, op, base+cursor, bf.stateSpan())
+			cursor += kept
+			return v, err
+		default:
 			return 0, fmt.Errorf("a stated graph's block op %d: %w", op.Code, ErrNotImplemented)
 		}
 		v := ins[0]
@@ -1375,9 +1388,13 @@ func blockFactsOf(c *jlm.Config, s *jlm.Source, li int) *blockFacts {
 	if s.Vision != nil && s.Vision.Tower != nil {
 		bf.taps = len(s.Vision.Tower.Taps)
 	}
+	tables := map[jlm.Role]graph.Shape{}
 	for _, t := range s.Tensors {
 		if t.Block == jlm.DenseBlock {
 			bf.dense[t.Role] = true
+			if jlm.RowTableRole(t.Role) && t.NDim >= 2 {
+				tables[t.Role] = graph.Shape{K: int(t.Dims[0]), Rows: int(t.Dims[1])}
+			}
 			continue
 		}
 		if int(t.Block) != li || t.Role.Vision() || nextnRole(t.Role) || t.Index >= 0 {
@@ -1391,6 +1408,21 @@ func blockFactsOf(c *jlm.Config, s *jlm.Source, li int) *blockFacts {
 			sh.Sheets = int(t.Dims[2])
 		}
 		bf.facts.Inventory[t.Role] = sh
+	}
+	// A row table is the model's, read by the block whose stated streams
+	// bind it.
+	st := bf.streamsAt()
+	for _, u := range []*jlm.SubStreams{&st.Pre, &st.Attn, &st.FFN} {
+		if u.Read == nil {
+			continue
+		}
+		for _, op := range u.Read.Ops {
+			for _, r := range op.Bind {
+				if sh, ok := tables[r]; ok {
+					bf.facts.Inventory[r] = sh
+				}
+			}
+		}
 	}
 	// A prediction block's own head mix is its collapse graph's, not its
 	// body's.

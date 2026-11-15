@@ -1,6 +1,6 @@
 {
   "classes": ["Qwen3_5ForConditionalGeneration"],
-  "gguf": ["qwen35", "qwen35moe", "qwen3next", "clef"],
+  "gguf": ["qwen35", "qwen35moe", "qwen3next", "qwen4exp", "clef"],
   "config": {
     "root": "text_config",
     "arch": "qwen3next",
@@ -68,7 +68,14 @@
   "graph": {
     "block": [
       {"op": "in",         "out": "x", "width": "embd"},
-      {"op": "norm",       "in": "x", "w": "attn_norm", "out": "n"},
+      {"op": "streams_in", "if": "streams > 0", "in": "x", "out": "xs"},
+      {"op": "stream_read", "if": "stream_pre", "of": "pre", "streams": "xs", "in": ["x", "x"], "out": "pre"},
+      {"op": "stream_writes", "if": "stream_pre", "of": "pre", "streams": "xs", "in": "pre", "ex": "pre.ex", "out": "xs"},
+      {"op": "stream_at",  "if": "stream_pre", "streams": "xs", "at": "0", "out": "x"},
+      {"op": "stream_read", "if": "streams > 0", "of": "attn", "streams": "xs", "in": ["x", "x"], "out": "ain"},
+      {"op": "let",        "if": "streams == 0", "in": "x", "out": "ain"},
+      {"op": "let",        "if": "not stored('attn_norm')", "in": "ain", "out": "n"},
+      {"op": "norm",       "if": "stored('attn_norm')", "in": "ain", "w": "attn_norm", "out": "n"},
       {"op": "matvec",     "if": "linear", "in": "n", "w": "attn_qkv", "rows": "chans", "out": "mixed"},
       {"op": "emit",       "if": "linear", "kind": "state_conv", "in": "mixed", "attr": {"Taps": "conv"}, "advances": ["rec.conv"], "bind": [{"w": "ssm_conv1d", "k": "conv", "rows": "chans"}], "outs": [{"name": "conv", "width": "chans"}], "out": "conv"},
       {"op": "silu",       "if": "linear", "name": "conv.act", "in": "conv", "out": "act"},
@@ -99,12 +106,23 @@
       {"op": "head_norm",  "if": "not linear", "in": "k", "w": "attn_k_norm", "out": "k"},
       {"op": "rope",       "if": "not linear and rope_at", "in": "q", "name": "q.rope", "out": "q"},
       {"op": "rope",       "if": "not linear and rope_at", "in": "k", "name": "k.rope", "out": "k"},
+      {"op": "indexer",    "if": "not linear and selects", "in": ["n", "n"], "out": "ix"},
+      {"op": "emit",       "if": "not linear and selects", "kind": "concat", "in": ["k", "ix.key"], "outs": [{"name": "k.row", "width": "kv_heads * head_dim + key_width"}], "out": "k"},
+      {"op": "emit",       "if": "not linear and selects", "kind": "map", "in": "ix.key", "attr": {"Fn": "'mul'"}, "outs": [{"name": "v.pad", "width": "key_width"}], "out": "vpad"},
+      {"op": "emit",       "if": "not linear and selects", "kind": "concat", "in": ["v", "vpad"], "outs": [{"name": "v.row", "width": "kv_heads * head_dim + key_width"}], "out": "v"},
       {"op": "kv_append",  "if": "not linear", "in": ["k", "v"], "out": "kv"},
-      {"op": "attend",     "if": "not linear", "in": "q", "hist": "kv", "w": "attn_sinks?", "out": "att"},
+      {"op": "select",     "if": "not linear and selects and select_weighted", "in": ["ix.query", "ix.weight"], "hist": "kv", "attr": {"Offset": "kv_heads * head_dim", "Width": "kv_heads * head_dim + key_width"}, "out": "sel"},
+      {"op": "select",     "if": "not linear and selects and not select_weighted", "in": "ix.query", "hist": "kv", "attr": {"Offset": "kv_heads * head_dim", "Width": "kv_heads * head_dim + key_width"}, "out": "sel"},
+      {"op": "attend",     "if": "not linear and not selects", "in": "q", "hist": "kv", "w": "attn_sinks?", "out": "att"},
+      {"op": "attend",     "if": "not linear and selects", "in": ["q", "sel"], "hist": "kv", "w": "attn_sinks?", "attr": {"Width": "kv_heads * head_dim + key_width"}, "out": "att"},
       {"op": "sigmoid_mul", "if": "not linear", "name": "gated", "in": ["gate", "att"], "out": "att"},
       {"op": "matvec",     "if": "not linear", "in": "att", "w": ["attn_output", "attn_output.bias?"], "rows": "embd", "out": "o"},
-      {"op": "add",        "in": ["x", "o"], "alpha": "residual_scale", "out": "h"},
-      {"op": "norm",       "in": "h", "w": "ffn_norm", "out": "m"},
+      {"op": "stream_writes", "if": "attn_writes", "of": "attn", "streams": "xs", "in": "o", "ex": "ain.ex", "out": "cur"},
+      {"op": "add",        "if": "not attn_writes", "in": ["x", "o"], "alpha": "residual_scale", "out": "h"},
+      {"op": "stream_read", "if": "attn_writes", "of": "ffn", "streams": "cur", "in": ["x", "x"], "out": "fin"},
+      {"op": "let",        "if": "not attn_writes", "in": "h", "out": "fin"},
+      {"op": "let",        "if": "not stored('ffn_norm')", "in": "fin", "out": "m"},
+      {"op": "norm",       "if": "stored('ffn_norm')", "in": "fin", "w": "ffn_norm", "out": "m"},
       {"op": "matvec",     "if": "not moe", "in": "m", "w": "ffn_gate", "rows": "ffn", "out": "g"},
       {"op": "matvec",     "if": "not moe", "in": "m", "w": ["ffn_up", "ffn_up.bias?"], "rows": "ffn", "out": "u"},
       {"op": "act",        "if": "not moe", "in": ["g", "u"], "width": "ffn", "out": "a"},
@@ -135,8 +153,10 @@
       {"op": "emit",       "if": "moe", "kind": "reduce", "in": "sl", "attr": {"Fn": "'add'"}, "outs": [{"name": "shared.logit", "width": "1"}], "out": "sl"},
       {"op": "sigmoid_mul", "if": "moe", "name": "shared.gated", "in": ["sl", "so"], "out": "so"},
       {"op": "add",        "if": "moe", "in": ["d", "so"], "out": "d"},
-      {"op": "add",        "in": ["h", "d"], "alpha": "residual_scale", "out": "y"},
-      {"op": "out",        "in": "y"}
+      {"op": "stream_writes", "if": "ffn_writes", "of": "ffn", "streams": "cur", "in": "d", "ex": "fin.ex", "out": "fout"},
+      {"op": "add",        "if": "not ffn_writes", "in": ["h", "d"], "alpha": "residual_scale", "out": "y"},
+      {"op": "out",        "if": "not ffn_writes", "in": "y"},
+      {"op": "out_streams", "if": "ffn_writes", "streams": "fout"}
     ]
   }
 }

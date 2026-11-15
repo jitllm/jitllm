@@ -48,6 +48,9 @@ func statedGraphModels() []string {
 		"synth-hf-qwen35", "synth-qwen35-hybrid-mtp.gguf", "synth-qwen35moe-hybrid-mtp.gguf",
 		"synth-qwen35moe-hybrid-mtp-bf16.gguf", "qwen35/Qwen3.5-0.8B-Q4_K_M.gguf", "qwen35/Qwen3.5-0.8B-MTP-Q8_0.gguf",
 		"synth-qwen35vl.gguf+mmproj-synth-qwen35vl.gguf", "clef/fixture/clef-fixture.gguf", "clef/fixture-vl/clef-fixture-vl.gguf",
+		// The same blocks over hyper-connected streams, the pooled selection
+		// and an n-gram embedding in a linear block's recurrent tail.
+		"synth-qwen4exp.gguf", "synth-qwen4exp-ragged.gguf", "synth-qwen4exp-mtp.gguf", "synth-qwen4exp-mtp-trunk.gguf",
 		// Vision-language models whose text model is a claimed architecture's.
 		"SmolVLM-256M-Instruct-Q8_0.gguf", "minicpmv/Janus-Pro-1B-Q4_K_M.gguf", "DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M.gguf",
 		"newarch/EXAONE-4.0-1.2B-Q4_K_M.gguf", "newarch/OLMo-2-0425-1B-Instruct-Q4_K_M.gguf",
