@@ -433,12 +433,17 @@ Running out of pages, in order:
    chunk's furthest row, and the evicted prefix goes up once a layer for the
    chunk rather than once a row (100 tokens over the gate's evicted history:
    400 streamed passes where a row at a time takes at least 1,600). Gate:
-   `engine.TestKVEvictionRunsPastTheBudget` -- Llama-3.2-1B, 320 tokens past a
-   budget held a few pages above the prompt's, 4 pages of every layer sent
-   home, all 16 blocks still placed, 1.7e-3 against the unconstrained card and
-   3.700e-3 against the host (the unconstrained card's own figure); its
-   violation, a pass that uploads nothing, reads 1.37
-   (`TestKVEvictionGateDiscriminates`, jitllmfault).
+   `engine.TestKVEvictionRunsPastTheBudget` -- each arm runs half the decode,
+   then holds the budget at what its card spends there, past the slack, with
+   no room for growth, so the history grows only by sending pages home: on
+   Llama-3.2-1B 5 pages of every layer go home, all 16 blocks still placed,
+   7056 streamed passes, worst NMSE 2.365e-3 against the unconstrained card;
+   the mixture, the selecting models, DeepSeek V4's compressing blocks and
+   the models whose blocks alternate a window and the whole history
+   (cohere2, exaone4) run the same. Its
+   violation, a pass that uploads nothing, reads 1.382 on Llama-3.2-1B, 1.287
+   on cohere2 and 1.726 on exaone4 (`TestKVEvictionGateDiscriminates`,
+   jitllmfault).
 
    Why not the in-kernel fault below: every attention layer reads its whole
    history, so a fault saves no reads -- the host knows which pages are home

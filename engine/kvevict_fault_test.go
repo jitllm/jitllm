@@ -12,18 +12,22 @@ import (
 // the streamed pass's upload skipped, so each pass reads whatever the free ids
 // held, and demands the comparison fail.
 func TestKVEvictionGateDiscriminates(t *testing.T) {
-	eg := newEvictGate(t)
-	free := eg.run(t, nil, nil)
-	var f gpu.Faults
-	f.SetPagedFault("stream")
-	got := eg.run(t, &free.squeeze, nil, gpu.WithFaults(&f))
-	if got.st.KVStreamPasses == 0 {
-		t.Fatal("no streamed pass ran: the violation was never exercised")
-	}
-	dev, at := worstStep(got.logits, free.logits)
-	t.Logf("violation: worst logit NMSE %.3e at step %d", dev, at)
-	if dev < evictNMSE {
-		t.Fatalf("the gate passed a stream that uploaded nothing (NMSE %.3e)", dev)
+	for _, name := range []string{evictModels()[0], "synth-cohere2.gguf", "synth-exaone4.gguf"} {
+		t.Run(name, func(t *testing.T) {
+			eg := newEvictGateOf(t, name)
+			free := eg.run(t, nil, nil)
+			var f gpu.Faults
+			f.SetPagedFault("stream")
+			got := eg.run(t, &free.squeeze, nil, gpu.WithFaults(&f))
+			if got.st.KVStreamPasses == 0 {
+				t.Fatal("no streamed pass ran: the violation was never exercised")
+			}
+			dev, at := worstStep(got.logits, free.logits)
+			t.Logf("violation: worst logit NMSE %.3e at step %d", dev, at)
+			if dev < evictNMSE {
+				t.Fatalf("the gate passed a stream that uploaded nothing (NMSE %.3e)", dev)
+			}
+		})
 	}
 }
 

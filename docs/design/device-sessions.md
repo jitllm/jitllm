@@ -396,8 +396,8 @@ descriptors already built (it read 0.45 NMSE). A block a submission is about
 to read is held, no victim to another session's page-in (`holdPages`); a KV
 page released while submissions are in flight is fenced until they complete.
 A submission over what is the device's -- a tower, a linear block's recurrent
-pool, a streamed block, a DeepSeek V4 block, a step over several sessions'
-rows, history streamed from home -- runs alone. One alone only for its rows'
+pool, a streamed block, a step over several sessions' rows, history
+streamed from home -- runs alone. One alone only for its rows'
 sessions or its linear blocks lets g.mu go while it runs
 (`aloneUnlocked`): what it writes of the device's changes elsewhere only
 after a quiesce or under the exclusive call lock, and holding g.mu kept the
