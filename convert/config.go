@@ -444,6 +444,13 @@ func configOfFile(f *meta.File) (*Config, error) {
 		if err := qwen35Of(f, name, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
+		// The sections select nothing for a text prompt and are stored for
+		// image rows, read as every M-RoPE's are; a text-only file states none.
+		if _, ok := f.Key("rope.dimension_sections"); ok {
+			if err := mropeSectionsOf(f, name, c); err != nil {
+				return nil, err
+			}
+		}
 		if arch == ArchQwen4Exp {
 			if err := qwen4expConfig(f, c); err != nil {
 				return nil, fmt.Errorf("convert: %s: %w", name, err)

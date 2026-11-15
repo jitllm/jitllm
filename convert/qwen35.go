@@ -25,29 +25,6 @@ func qwen35Of(f *meta.File, name string, c *Config) error {
 		}
 		c.Flags |= jlm.FlagDeltaKeyTiled
 	}
-
-	// The sections are pairs and must cover the rotary width, as qwen2vl's must.
-	// For a text prompt they select nothing; they are stored for image rows.
-	if kv, ok := f.Key("rope.dimension_sections"); ok {
-		secs, err := kv.Int32s()
-		if err != nil {
-			return fmt.Errorf("rope.dimension_sections: %w", err)
-		}
-		if len(secs) > len(c.RopeSections) {
-			return fmt.Errorf("%d rope sections, this format defines %d", len(secs), len(c.RopeSections))
-		}
-		var sum uint32
-		for i, v := range secs {
-			if v < 0 {
-				return fmt.Errorf("rope section %d is %d", i, v)
-			}
-			c.RopeSections[i] = uint32(v)
-			sum += uint32(v)
-		}
-		if sum != c.NRot/2 {
-			return fmt.Errorf("rope sections %v sum to %d, and a head has %d rotary pairs", secs, sum, c.NRot/2)
-		}
-	}
 	return nil
 }
 
