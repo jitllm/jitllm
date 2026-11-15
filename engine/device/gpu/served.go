@@ -2519,14 +2519,14 @@ func (g *devTier) recHeld(l *layer, p *nn.LayerPlan, bs *blockScratch) bool {
 }
 
 // tailStated says graph g's delta rule reads its state at slots of n floats:
-// a tail past the rule's matrices that the graph states (graph.OpDeltaRule's
+// a tail past the scan's matrices that the graph states (graph.OpStateScan's
 // Span), so the composer's slot is the pool's.
 func tailStated(g *graph.Graph, n int) bool {
 	if g == nil {
 		return false
 	}
 	for _, o := range g.Ops {
-		if o.Kind == graph.OpDeltaRule {
+		if o.Kind == graph.OpStateScan {
 			return o.Attr.Span == n
 		}
 	}

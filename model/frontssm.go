@@ -40,13 +40,14 @@ func siluGated(b *graph.Builder, name string, z, y graph.ValueID) graph.ValueID 
 // selectiveUpdate is the additive state update over the block's state:
 // for value head h of heads, its rows of v's width over heads by the key's
 // width, paired with key head h over the heads a key head serves, decayed
-// and plus (v times dt) along k, then read against q; plus the stored skip
-// D times v, one a value head.
-func selectiveUpdate(b *graph.Builder, f graph.Facts, q, k, v, decay, dt graph.ValueID, heads, kHeads, kDim int) graph.ValueID {
+// and plus (v times dt) along k, then read against q (selectiveTerms), the
+// decay along decays; plus the stored skip D times v, one a value head.
+func selectiveUpdate(b *graph.Builder, f graph.Facts, q, k, v, decay, dt graph.ValueID, heads, kHeads, kDim int, decays graph.ScanAxis) graph.ValueID {
 	w := b.G.Values[v].Width
-	y := b.Emit(graph.OpDeltaRule, []graph.ValueID{q, k, v, decay, dt}, []graph.Result{{Name: "ssm.y", Width: w}}, nil,
-		graph.Attrs{NHead: heads, NKVHead: kHeads, HeadDim: kDim, Additive: true},
-		[]graph.StateRef{{State: graph.StateRecState}}, []graph.StateRef{{State: graph.StateRecState, Version: 1}})[0]
+	terms, update := selectiveTerms()
+	y := stateScan(b, "ssm.y", w, []graph.ValueID{q, k, v, decay, dt},
+		[]graph.ScanAxis{graph.ScanGroup | graph.ScanCol, graph.ScanGroup | graph.ScanCol, graph.ScanHead | graph.ScanRow, decays, graph.ScanHead},
+		terms, update, graph.Attrs{NHead: heads, NKVHead: kHeads, HeadDim: kDim})
 	s := f.Inventory[jlm.RoleSSMD]
 	skip := mapRow(b, "ssm.skip", graph.Attrs{Fn: graph.MapMul}, []graph.Binding{{Role: jlm.RoleSSMD, K: s.K, Rows: s.Rows}}, w, v)
 	return b.Add(y, skip)
@@ -88,7 +89,7 @@ func (m *Model) ssdMixer(b *graph.Builder, f graph.Facts, n graph.ValueID, has f
 		mapRow(b, "dt.biased", graph.Attrs{Fn: graph.MapAdd}, vec(jlm.RoleSSMDtBias), vh, dtRaw))
 	decay := mapRow(b, "decay", graph.Attrs{Fn: graph.MapExp}, nil, vh,
 		mapRow(b, "decay.a", graph.Attrs{Fn: graph.MapMul}, vec(jlm.RoleSSMA), vh, dt))
-	y := selectiveUpdate(b, f, cq, bk, x, decay, dt, vh, kh, dk)
+	y := selectiveUpdate(b, f, cq, bk, x, decay, dt, vh, kh, dk, graph.ScanHead)
 	if !has(jlm.RoleSSMNorm) {
 		return siluGated(b, "gated", z, y), nil
 	}
@@ -136,7 +137,7 @@ func (m *Model) scanMixer(b *graph.Builder, f graph.Facts, n graph.ValueID, has 
 		mapRow(b, "dt.biased", graph.Attrs{Fn: graph.MapAdd}, vec(jlm.RoleSSMDtBias), inner, matvec(dtl, jlm.RoleSSMDtProj, inner)))
 	decay := mapRow(b, "decay", graph.Attrs{Fn: graph.MapExp}, nil, inner*dk,
 		mapRow(b, "decay.a", graph.Attrs{Fn: graph.MapMul}, vec(jlm.RoleSSMA), inner*dk, dt))
-	return siluGated(b, "gated", z, selectiveUpdate(b, f, cq, bk, x, decay, dt, inner, 1, dk)), nil
+	return siluGated(b, "gated", z, selectiveUpdate(b, f, cq, bk, x, decay, dt, inner, 1, dk, graph.ScanHead|graph.ScanCol)), nil
 }
 
 // shortConvMixer is a gated short convolution over its normed row n: x's

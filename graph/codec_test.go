@@ -119,8 +119,15 @@ func attrsAtEncoding() []string {
 		"Grid", "Chain", "Filter", "Tiled", "Additive", "RowWindows", "Bound", "Offset", "Width", "Origin", "Local",
 		"Pooled", "Firsts", "Inverse", "Keeps", "Fn", "Order", "Span", "Const", "Words", "Reset", "Exact", "Sound",
 		"Pixels", "PicW", "PicH", "PicArea", "PicSide", "PicLive", "PicCanvas", "PicFill", "PicTorch", "PicBytes",
-		"PicFrame", "PicPass", "PicColumns", "PicBF16", "Mean", "Std",
+		"PicFrame", "PicPass", "PicColumns", "PicBF16", "Mean", "Std", "Update",
 	}
+}
+
+// retiredAttrs are Attrs' fields gone since the encoding was set, each with
+// the only op kind that set it: a stored graph holding that op is refused
+// by the op's name, so none reads the field as zero.
+func retiredAttrs() map[string]string {
+	return map[string]string{"Tiled": "delta_rule", "Additive": "delta_rule"}
 }
 
 // TestStoredFieldsOnlyGrow holds each stored type to the names it had, and
@@ -148,10 +155,16 @@ func TestStoredFieldsOnlyGrow(t *testing.T) {
 			t.Errorf("Attrs.%s is unexported, so a stored graph drops it", at.Field(i).Name)
 		}
 	}
-	if at.NumField() < len(attrsAtEncoding()) {
-		t.Errorf("Attrs has %d fields, fewer than the %d it had", at.NumField(), len(attrsAtEncoding()))
+	if at.NumField() < len(attrsAtEncoding())-len(retiredAttrs()) {
+		t.Errorf("Attrs has %d fields, fewer than the %d it had", at.NumField(), len(attrsAtEncoding())-len(retiredAttrs()))
 	}
 	for _, n := range attrsAtEncoding() {
+		if op, ok := retiredAttrs()[n]; ok {
+			if KindNamed(op) != OpInvalid {
+				t.Errorf("Attrs.%s is retired, but op %q that set it still reads: a stored one would read it as zero", n, op)
+			}
+			continue
+		}
 		if _, ok := at.FieldByName(n); !ok {
 			t.Errorf("Attrs.%s is gone: a stored graph reads it as zero; bump Version", n)
 		}

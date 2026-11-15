@@ -19,7 +19,7 @@ type deltaShape struct {
 	tiled, chans, additive bool
 }
 
-// deltaGraph is OpDeltaRule alone over q, k, v, decay and beta.
+// deltaGraph is the delta rule's scan alone over q, k, v, decay and beta.
 func deltaGraph(s deltaShape) *graph.Graph {
 	b := graph.New()
 	nd := s.h
@@ -28,10 +28,54 @@ func deltaGraph(s deltaShape) *graph.Graph {
 	}
 	q, k := b.In("q", s.kh*s.dk), b.In("k", s.kh*s.dk)
 	v, d, beta := b.In("v", s.h*s.dv), b.In("decay", nd), b.In("beta", s.h)
-	b.Out(b.Emit(graph.OpDeltaRule, []graph.ValueID{q, k, v, d, beta}, []graph.Result{{Name: "o", Width: s.h * s.dv}}, nil,
-		graph.Attrs{NHead: s.h, NKVHead: s.kh, HeadDim: s.dk, Tiled: s.tiled, Additive: s.additive},
-		[]graph.StateRef{{State: graph.StateRecState}}, []graph.StateRef{{State: graph.StateRecState, Version: 1}})[0])
+	b.Out(DeltaScan(b, q, k, v, d, beta, s.h, s.kh, s.dk, s.dv, s.tiled, s.chans, s.additive, false))
 	return b.G
+}
+
+// DeltaScan is the delta rule over q, k, v, decay and beta as an
+// OpStateScan of h value heads of dv over kh key heads of dk: value head h
+// paired with key head h mod kh where tiled (q and k repeated a value head
+// each), the decay one a key channel of each where chans, and with no key
+// dot where additive (the selective update); keeps keeps its rows' states.
+func DeltaScan(b *graph.Builder, q, k, v, d, beta graph.ValueID, h, kh, dk, dv int, tiled, chans, additive, keeps bool) graph.ValueID {
+	keys, groups := graph.ScanGroup|graph.ScanCol, kh
+	if tiled {
+		tile := func(name string, x graph.ValueID) graph.ValueID {
+			return b.Emit(graph.OpTile, []graph.ValueID{x}, []graph.Result{{Name: name, Width: h * dk}}, nil, graph.Attrs{}, nil, nil)[0]
+		}
+		q, k = tile("q.tiled", q), tile("k.tiled", k)
+		keys, groups = graph.ScanHead|graph.ScanCol, h
+	}
+	decays := graph.ScanHead
+	if chans {
+		decays |= graph.ScanCol
+	}
+	arg := func(kind graph.ArgKind, i int) graph.Arg { return graph.Arg{Kind: kind, Index: i} }
+	term := func(fn graph.MapFn, a, b graph.Arg) graph.Term { return graph.Term{Fn: fn, Args: [3]graph.Arg{a, b}} }
+	in := func(i int) graph.Arg { return arg(graph.ArgIn, i) }
+	t := func(i int) graph.Arg { return arg(graph.ArgTerm, i) }
+	terms, update := []graph.Term{
+		term(graph.MapMul, arg(graph.ArgState, 0), in(3)),
+		term(graph.MapMul, t(0), in(1)),
+		term(graph.MapSub, in(2), arg(graph.ArgSum, 1)),
+		term(graph.MapMul, t(2), in(4)),
+		term(graph.MapMul, in(1), t(3)),
+		term(graph.MapAdd, t(0), t(4)),
+		term(graph.MapMul, t(5), in(0)),
+	}, 5
+	if additive {
+		terms, update = []graph.Term{
+			term(graph.MapMul, arg(graph.ArgState, 0), in(3)),
+			term(graph.MapMul, in(2), in(4)),
+			term(graph.MapMul, in(1), t(1)),
+			term(graph.MapAdd, t(0), t(2)),
+			term(graph.MapMul, t(3), in(0)),
+		}, 3
+	}
+	a := graph.Attrs{NHead: h, NKVHead: groups, HeadDim: dk, Keeps: keeps, Expr: terms, Update: update,
+		Words: []uint64{uint64(keys), uint64(keys), uint64(graph.ScanHead | graph.ScanRow), uint64(decays), uint64(graph.ScanHead)}}
+	return b.Emit(graph.OpStateScan, []graph.ValueID{q, k, v, d, beta}, []graph.Result{{Name: "o", Width: h * dv}}, nil, a,
+		[]graph.StateRef{{State: graph.StateRecState}}, []graph.StateRef{{State: graph.StateRecState, Version: 1}})[0]
 }
 
 // deltaOracle is one row of the delta rule over every value head of the
@@ -87,7 +131,7 @@ func deltaOracle(s deltaShape, st []float64, q, k, v, d, beta []float32) []float
 	return o
 }
 
-// TestComposedCPUDeltaRule forms OpDeltaRule on the CPU device over ragged
+// TestComposedCPUDeltaRule forms the delta rule's OpStateScan on the CPU device over ragged
 // head widths, both pairings of value heads with key heads and both decay
 // widths, and runs it three rows on, the state carried in its table, held
 // to the oracle's delta rule at every row's output and at the state after,

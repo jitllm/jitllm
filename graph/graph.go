@@ -228,21 +228,19 @@ const (
 	// Window is set) mapped to a source coordinate on each axis by Chain and
 	// read through Filter's taps.
 	OpPosResample
-	// OpDeltaRule is the delta rule over the block's recurrent state: for
-	// each value head h of NHead, a matrix S of Dv rows (v's width over
-	// NHead) by HeadDim, paired with key head h/(NHead/NKVHead) of NKVHead,
-	// or h mod NKVHead where Tiled. q and k (In[0], In[1]) are NKVHead heads
-	// of HeadDim, v (In[2]) NHead heads of Dv, the decay In[3] one factor a
-	// value head or one a key channel of each (NHead or NHead*HeadDim wide)
-	// and beta In[4] one a value head. Each row, in order: S times the
-	// decay (a channel's factor on its column), then S plus the outer
-	// product of (v - S k) times beta and k (v times beta where Additive),
-	// then Out[0] = S q. It reads
-	// state version n and writes n+1. Where Span is set it is the state's
-	// floats per sequence, the matrices' and a tail past them the rule
-	// neither reads nor writes. A primitive with a state of its own: a
-	// linear-attention mixer's recurrence.
-	OpDeltaRule
+	// OpStateScan is a recurrence over the block's recurrent state, each row
+	// in order: for each head h of NHead, a matrix S of Dv rows (Out[0]'s
+	// width over NHead) by HeadDim columns. Its terms (Attr.Expr) are
+	// evaluated at each element (h, j, i) of S as OpExpr's are, an operand
+	// In[k] read at the axes Words[k] states (ScanHead, ScanGroup, ScanRow,
+	// ScanCol), ArgState the element of S before the row and ArgSum term
+	// Index summed over S's row (every column i of (h, j)). Term Update is
+	// S after the row, and Out[0] at (h, j) is the last term summed over
+	// the row. It reads state version n and writes n+1. Where Span is set it
+	// is the state's floats per sequence, the matrices' and a tail past them
+	// the scan neither reads nor writes. A primitive with a state of its
+	// own: a linear-attention or state-space mixer's recurrence.
+	OpStateScan
 	// OpPosition is each row's position in the block's history, the one its
 	// key is written at, plus Offset and in whole Spans where Span > 1 (an
 	// integer division), as a float: Out[0] one element a row. A primitive.
@@ -566,8 +564,8 @@ func (k OpKind) String() string {
 		return "splice"
 	case OpPosResample:
 		return "pos_resample"
-	case OpDeltaRule:
-		return "delta_rule"
+	case OpStateScan:
+		return "state_scan"
 	case OpPosition:
 		return "position"
 	case OpSelect:
@@ -764,7 +762,46 @@ const (
 	ArgWeight
 	ArgConst
 	ArgTerm
+	// ArgState is an OpStateScan's state element before the row.
+	ArgState
+	// ArgSum is an OpStateScan's term Index summed over the state's row.
+	ArgSum
 )
+
+// ScanAxis is an axis an OpStateScan operand varies along (Attrs.Words, a
+// mask an operand), its elements in the order the bits are listed.
+type ScanAxis uint64
+
+const (
+	// ScanHead is the state's head, one of NHead.
+	ScanHead ScanAxis = 1 << iota
+	// ScanGroup is the head's group: head h reads h/(NHead/NKVHead) of
+	// NKVHead.
+	ScanGroup
+	// ScanRow is the state's row, one of Out[0]'s width over NHead.
+	ScanRow
+	// ScanCol is the state's column, one of HeadDim.
+	ScanCol
+)
+
+// ScanWidth is the elements an operand along axes m holds, of heads heads
+// in groups groups, rows rows and cols columns; false where m is not a set
+// of axes (both a head and its group, or a bit past them).
+func ScanWidth(m ScanAxis, heads, groups, rows, cols int) (int, bool) {
+	if m&^(ScanHead|ScanGroup|ScanRow|ScanCol) != 0 || m&ScanHead != 0 && m&ScanGroup != 0 {
+		return 0, false
+	}
+	n := 1
+	for _, d := range []struct {
+		ax ScanAxis
+		n  int
+	}{{ScanHead, heads}, {ScanGroup, groups}, {ScanRow, rows}, {ScanCol, cols}} {
+		if m&d.ax != 0 {
+			n *= d.n
+		}
+	}
+	return n, true
+}
 
 // ValueID names a value in a Graph's Values.
 type ValueID int32
@@ -862,7 +899,7 @@ const (
 	StateKV State = iota
 	// StateRecConv is a recurrent block's short convolution's tail.
 	StateRecConv
-	// StateRecState is a recurrent block's delta rule's or scan's state.
+	// StateRecState is a recurrent block's scan's state (OpStateScan).
 	StateRecState
 )
 
@@ -989,12 +1026,6 @@ type Attrs struct {
 	// Chain and Filter are OpPosResample's: the coordinate's convention
 	// and the taps that read it.
 	Chain, Filter uint8
-	// Tiled pairs OpDeltaRule's value head h with key head h mod NKVHead.
-	Tiled bool
-	// Additive makes OpDeltaRule's update the decayed S plus the outer
-	// product of v times beta and k, with no dot of S against k: a
-	// selective state update.
-	Additive bool
 	// RowWindows makes OpAttend read each row's attended range from the
 	// step's window table, not its history descriptor: a vision tower's
 	// window attention, a row's keys its window's rows.
@@ -1026,7 +1057,7 @@ type Attrs struct {
 	Firsts bool
 	// Inverse turns OpRope's elements back: by the negated angle.
 	Inverse bool
-	// Keeps makes OpDeltaRule, OpStateConv and OpNGramWindow store the
+	// Keeps makes OpStateScan, OpStateConv and OpNGramWindow store the
 	// state after each of a step's rows besides each run's after its last:
 	// the row at entry e of the run order to slot e of the state's keep
 	// table, so a sequence can be returned to any row of a call with no row
@@ -1041,9 +1072,11 @@ type Attrs struct {
 	Span  int
 	Const float64
 	// Words are OpNGramHash's constants, Reset its cut at an end of
-	// sequence.
+	// sequence; OpStateScan's operands' axes (ScanAxis), one an operand.
 	Words []uint64
 	Reset bool
+	// Update is OpStateScan's term that is the state after the row.
+	Update int
 	// Exact asks a MapDiv, an OpMap's or an OpExpr term's, for the IEEE
 	// quotient where the device's own division is not correctly rounded;
 	// without it a division takes the device's, within the gates' band like

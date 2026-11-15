@@ -208,12 +208,17 @@ func requireStatedIsBuilt(t *testing.T, m *model.Model) {
 	c.Blocks = jlm.BlockGraphs{}
 	m.Front.Restated++
 	built := slices.Clone(m.FrontGraphs().Blocks)
+	builtWhy := make([]error, len(built))
+	for li := range built {
+		why, err := m.UncoveredAt(li)
+		builtWhy[li] = fmt.Errorf("%v: %w", why, err)
+	}
 	c.Blocks = kept
 	m.Front.Restated++
 	for li := range stated {
 		if stated[li] == nil || built[li] == nil {
 			why, err := m.UncoveredAt(li)
-			t.Fatalf("block %d: stated %v, built %v (%v: %v)", li, stated[li] != nil, built[li] != nil, why, err)
+			t.Fatalf("block %d: stated %v (%v: %v), built %v (%v)", li, stated[li] != nil, why, err, built[li] != nil, builtWhy[li])
 		}
 		if d := graphDiff(stated[li], built[li]); d != "" {
 			t.Errorf("block %d: the stated graph is not the built one: %s\nstated\n%s\nbuilt\n%s", li, d, stated[li], built[li])
