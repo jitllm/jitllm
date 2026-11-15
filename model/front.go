@@ -152,8 +152,9 @@ type frontSet struct {
 	// (graph.SampleAdaptive), its candidates a top-k draw's at most.
 	CpuAdaptive *graph.Graph
 	// CpuStage is one stage of a sampler chain in an order of its own
-	// (graph.SampleStage), its candidates a top-k draw's at most.
-	CpuStage *graph.Graph
+	// (graph.SampleStage), its candidates a top-k draw's at most; CpuKeep
+	// min_keep over one of its cuts (graph.SampleKeep).
+	CpuStage, CpuKeep *graph.Graph
 	// cpuLogprobs is the logits' log-softmax and their MaxTopLogprobs most
 	// likely tokens, cpuMask a constrained draw's masked logits.
 	CpuLogprobs, CpuMask *graph.Graph
@@ -457,6 +458,8 @@ func (m *Model) FrontGraphs() *frontSet {
 		s.CpuAdaptive = ad.Build()
 		st := graph.SampleStage{NVocab: m.Cfg.NVocab, K: nn.SampleMaxK}
 		s.CpuStage = st.Build()
+		kp := graph.SampleKeep{NVocab: m.Cfg.NVocab, K: nn.SampleMaxK}
+		s.CpuKeep = kp.Build()
 		lp := graph.Logprobs{NVocab: m.Cfg.NVocab, K: MaxTopLogprobs}
 		s.CpuLogprobs = lp.Build()
 		la := graph.Logprobs{NVocab: m.Cfg.NVocab, K: m.Cfg.NVocab}

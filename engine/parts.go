@@ -54,6 +54,7 @@ func (s *Instance) partsPlan() *nn.PartsPlan {
 	p.Head[23] = part(fg.CpuAdaptive, 1)
 	p.Head[24] = part(fg.CpuStage, 1)
 	p.Head[25] = part(fg.CpuLogprobsRow, 1)
+	p.Head[26] = part(fg.CpuKeep, 1)
 
 	if s.c.StatesStreams() {
 		p.Streams, p.NStreams = true, s.c.Streams()

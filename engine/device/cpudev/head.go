@@ -27,6 +27,7 @@ type HeadParts struct {
 	Adaptive                                 Part
 	Stage                                    Part
 	LogprobsRow                              Part
+	Keep                                     Part
 }
 
 // Head is the head and the samplers on the CPU device, composed once at the
@@ -90,6 +91,9 @@ type Head struct {
 	// dryWords its DRY multiplier and the base's log.
 	stWords  [4]float32
 	dryWords [2]float32
+	// keepWords is min_keep's words over a cut (graph.SampleKeep's
+	// sample.keep).
+	keepWords [2]float32
 	// ids is the row's ids, 0 to the vocabulary's last, which the draws with
 	// no top-k read.
 	ids []uint32
@@ -575,6 +579,25 @@ func (h *Head) Stage(logits, p []float32, ids []uint32, cand []float32, a nn.Dra
 	}
 	h.run(f, nil, 1, unsafe.Pointer(&logits[0]), unsafe.Pointer(&p[0]), unsafe.Pointer(&ids[0]), unsafe.Pointer(&cand[0]),
 		win, unsafe.Pointer(&h.pen[0]), unsafe.Pointer(&h.stWords[0]), dry, unsafe.Pointer(&h.dryWords[0]), unsafe.Pointer(&out[0]))
+	h.steps.Serve(nn.PartSample)
+	return true
+}
+
+// Keep is llama.cpp's min_keep over one cut of a chain in an order of its
+// own (graph.SampleKeep): over logits, the survivors p names, cand put in
+// place at ids, with the first w[0] of the cut's order besides -- the
+// softmax's, or typical-p's where w[1] is 1 -- or, where w[1] is 2 (XTC),
+// every finite one unless w[0] survive; 1 each into out, the rest 0; false
+// where the form declines.
+func (h *Head) Keep(logits, p []float32, ids []uint32, cand []float32, w [2]float32, out []float32) bool {
+	f, _, why := h.form(&h.p.Keep, false)
+	if why != nn.DeclineServes {
+		h.steps.Decline(nn.PartSample, why)
+		return false
+	}
+	h.keepWords = w
+	h.run(f, nil, 1, unsafe.Pointer(&logits[0]), unsafe.Pointer(&p[0]), unsafe.Pointer(&ids[0]), unsafe.Pointer(&cand[0]),
+		unsafe.Pointer(&h.ids[0]), unsafe.Pointer(&h.keepWords[0]), unsafe.Pointer(&out[0]))
 	h.steps.Serve(nn.PartSample)
 	return true
 }

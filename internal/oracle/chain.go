@@ -13,10 +13,12 @@ import (
 // reciprocal temperature as the draw reads it (binary32) and Dyn the
 // dynamic temperature's range and exponent; Hist the penalties' window;
 // the Dry fields DRY's (Dry): its multiplier and base, allowed length,
-// window (-1 the context, DryCtx), history and breakers.
+// window (-1 the context, DryCtx), history and breakers; MinKeep
+// llama.cpp's min_keep, at least that many of a cut's candidates left by
+// typical-p, top-p, min-p and XTC.
 type ChainStage struct {
 	Name                         string
-	K                            int
+	K, MinKeep                   int
 	P, InvT                      float64
 	Dyn                          [2]float64
 	Hist                         []int
@@ -68,7 +70,7 @@ func Chain(logits []float32, stages []ChainStage) ([]float32, float64) {
 			}
 		case "typ_p":
 			if st.P > 0 && st.P < 1 {
-				keep, m := typicalCut(p, in, st.P)
+				keep, m := typicalCut(p, in, st.P, st.MinKeep)
 				margin = min(margin, m)
 				drop(keep)
 			}
@@ -78,7 +80,7 @@ func Chain(logits []float32, stages []ChainStage) ([]float32, float64) {
 				for j, i := range order {
 					if j > 0 {
 						margin = min(margin, math.Abs(before-st.P))
-						if before >= st.P {
+						if before >= st.P && j >= st.MinKeep {
 							v[i] = out
 						}
 					}
@@ -88,16 +90,16 @@ func Chain(logits []float32, stages []ChainStage) ([]float32, float64) {
 		case "min_p":
 			if st.P > 0 {
 				thr := float64(v[order[0]]) + math.Log(st.P)
-				for _, i := range order {
+				for j, i := range order {
 					margin = min(margin, math.Abs(float64(v[i])-thr)/(1+math.Abs(thr)))
-					if float64(v[i]) < thr {
+					if float64(v[i]) < thr && j >= st.MinKeep {
 						v[i] = out
 					}
 				}
 			}
 		case "xtc":
 			if !math.IsInf(st.P, 1) {
-				kept, m := xtcCut(order, func(i int) float64 { return p[i] }, st.P)
+				kept, m := xtcCut(order, func(i int) float64 { return p[i] }, st.P, st.MinKeep)
 				margin = min(margin, m)
 				keep := make([]bool, len(v))
 				for _, i := range kept {

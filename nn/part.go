@@ -298,6 +298,7 @@ type HeadDevice interface {
 	Decide(vals, keep, params, prior, probs, stats []float32) bool
 	Adaptive(p []float32, ids []uint32, cand []float32, w [6]float32, logits, q, pd []float32) (sum, weight float32, ok bool)
 	Stage(logits, p []float32, ids []uint32, cand []float32, a DrawArgs, w [4]float32, out []float32) bool
+	Keep(logits, p []float32, ids []uint32, cand []float32, w [2]float32, out []float32) bool
 }
 
 // EntryDevice is a device writing a prediction block's entry: `rows` rows

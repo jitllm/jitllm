@@ -540,6 +540,51 @@ func (s *SampleStage) Build() *Graph {
 	return b.G
 }
 
+// SampleKeep is llama.cpp's min_keep over one cut of a chain run in an order
+// of its own (SampleStage): over logits, a row whose removed tokens are
+// -Inf, the cut's survivors -- those sample.p gives a probability above 0,
+// sample.cand.p put in place at sample.cand.ids (u32; an id at or past the
+// vocabulary names none) -- and sample.keep's words, min_keep m and the
+// cut's kind. Kind 0 (top-p, min-p) keeps besides them the first m of the
+// row's softmax in order, kind 1 (typical-p) the first m by typical-p's key
+// over it (exp(-|log q + H|), the nearer the entropy first), each read off
+// the K largest (firstOf); kind 2 (XTC) keeps every finite token where
+// fewer than m survive. sample.ids is the row's ids. Its output is the
+// survivors, 1 each, the rest 0.
+type SampleKeep struct{ NVocab, K int }
+
+func (s *SampleKeep) Build() *Graph {
+	b := New()
+	n := s.NVocab
+	l := b.In("logits", n)
+	row := b.In("sample.p", n)
+	cids := b.In("sample.cand.ids", s.K)
+	b.G.Values[cids].Elem = ElemU32
+	cand := b.In("sample.cand.p", s.K)
+	ids := b.In("sample.ids", n)
+	b.G.Values[ids].Elem = ElemU32
+	w := b.In("sample.keep", 2)
+	e := sampleEmitter{b}
+	p := e.one(OpPut, "keep.p", n, Attrs{}, row, cids, cand)
+	fin := e.not("keep.fin", n, e.mapc(MapLess, -math.MaxFloat32, "keep.inf", n, l))
+	named := e.mapc(MapMul, 0, "keep.named", n, e.mapc(MapLess, 0, "keep.pos", n, e.mapc(MapMul, -1, "keep.pneg", n, p)), fin)
+	m, kind := e.word(w, 0, "keep.m"), e.word(w, 1, "keep.kind")
+	id := e.mapc(MapMul, 1, "keep.idf", n, ids)
+	q := e.softmax(l, "keep.q")
+	lq := e.mapc(MapLog, 0, "keep.typ.log", n, q)
+	plogp := e.mapc(MapWhere, 0, "keep.typ.plogp", n, q, e.mapc(MapMul, 0, "keep.typ.pl", n, q, lq))
+	h := e.mapc(MapMul, -1, "keep.typ.h", 1, e.one(OpReduce, "keep.typ.hsum", 1, Attrs{Fn: MapAdd}, plogp))
+	tkey := e.mapc(MapExp, 0, "keep.typ.key", n, e.mapc(MapMul, -1, "keep.typ.shiftneg", n,
+		e.mapc(MapAbs, 0, "keep.typ.shift", n, e.mapc(MapAdd, 0, "keep.typ.d", n, lq, h))))
+	key := e.where("keep.key", n, e.mapc(MapEqual, 1, "keep.istyp", 1, kind), tkey, q)
+	first := e.firstOf(key, id, fin, m, s.K, "keep.first")
+	cut := e.mapc(MapMax, 0, "keep.cut", n, named, first)
+	short := e.mapc(MapLess, 0, "keep.short", 1, e.one(OpReduce, "keep.n", 1, Attrs{Fn: MapAdd}, named), m)
+	xtc := e.where("keep.xtc", n, short, fin, named)
+	b.Out(e.where("keep.out", n, e.mapc(MapEqual, 2, "keep.isxtc", 1, kind), xtc, cut))
+	return b.G
+}
+
 // sampleEmitter is the ops SampleWalk, SampleRow and SampleCut share on b.
 type sampleEmitter struct{ b *Builder }
 
@@ -863,6 +908,39 @@ func (e sampleEmitter) upTo(key, id, edge ValueID, name string) ValueID {
 // fast argmax: OpTopK of one, its index not a u32 row).
 func (e sampleEmitter) argmax(x ValueID) ValueID {
 	return e.b.Emit(OpTopK, []ValueID{x}, []Result{{Name: "sample.token", Width: 1}, {Name: "sample.token.v", Width: 1}}, nil, Attrs{TopK: 1}, nil, nil)[0]
+}
+
+// firstOf is the active candidates (a 0/1 over the row) among the first m
+// of key's order -- the larger first, the lower id of two equal; key never
+// negative -- read off the K largest active keys (OpTopK; 0 or past the row
+// the whole row): the m-th's key and id bound them, every active one where
+// fewer than m are, the first K where m is past K. m below 1 is the first.
+func (e sampleEmitter) firstOf(key, id, active, m ValueID, K int, name string) ValueID {
+	n := e.b.G.Values[key].Width
+	if K <= 0 || K > n {
+		K = n
+	}
+	kk := e.mapc(MapWhere, -1, name+".key", n, active, key)
+	top := e.b.Emit(OpTopK, []ValueID{kk}, []Result{{Name: name + ".ids", Width: K, Elem: ElemU32}, {Name: name + ".vals", Width: K}}, nil,
+		Attrs{TopK: K}, nil, nil)
+	rank := e.b.Emit(OpRank, []ValueID{top[1]}, []Result{{Name: name + ".rank", Width: K, Elem: ElemU32}}, nil, Attrs{}, nil, nil)[0]
+	at := e.mapc(MapMin, float64(K-1), name+".at", 1, e.mapc(MapMax, 0, name+".at0", 1, e.mapc(MapAdd, -1, name+".atm", 1, m)))
+	isAt := e.mapc(MapEqual, 0, name+".isat", K, e.mapc(MapMul, 1, name+".place", K, rank), at)
+	q := e.one(OpReduce, name+".q", 1, Attrs{Fn: MapMax}, e.mapc(MapWhere, -2, name+".qs", K, isAt, top[1]))
+	qid := e.one(OpReduce, name+".qid", 1, Attrs{Fn: MapMax}, e.mapc(MapWhere, -1, name+".qids", K, isAt, e.mapc(MapMul, 1, name+".idf", K, top[0])))
+	// Active, and a key above the m-th's or equal at an id not past its.
+	in := func(i int) Arg { return Arg{Kind: ArgIn, Index: i} }
+	term := func(i int) Arg { return Arg{Kind: ArgTerm, Index: i} }
+	return e.b.Emit(OpExpr, []ValueID{kk, id, q, qid, active}, []Result{{Name: name, Width: n}}, nil, Attrs{Expr: []Term{
+		{Fn: MapLess, Args: [3]Arg{in(2), in(0)}},
+		{Fn: MapEqual, Args: [3]Arg{in(0), in(2)}},
+		{Fn: MapLess, Args: [3]Arg{in(3), in(1)}},
+		{Fn: MapMul, Args: [3]Arg{term(2), {Kind: ArgConst, Const: -1}}},
+		{Fn: MapAdd, Args: [3]Arg{term(3), {Kind: ArgConst, Const: 1}}},
+		{Fn: MapMul, Args: [3]Arg{term(1), term(4)}},
+		{Fn: MapMax, Args: [3]Arg{term(0), term(5)}},
+		{Fn: MapMul, Args: [3]Arg{term(6), in(4)}},
+	}, Exact: true}, nil, nil)[0]
 }
 
 // selection is the active candidate (a 0/1 over the row) at which key's

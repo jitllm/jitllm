@@ -10597,6 +10597,21 @@ tempering first keeps several more (`TestSamplerCutsBeforeTheTemperature`
 pins the order and fails on the old one). One order on every device was the
 user's decision; the forward-sample gate passes on the V100 with it.
 
+## min_keep, a stage after each cut
+
+llama.cpp's typical-p, top-p, min-p and XTC each leave at least min_keep of
+their candidates. Two designs put it in the draw forms and both cost every
+full-row draw, at min_keep 0 too, on the Xeon E5-2680 v4 against HEAD, A B
+A B, engine TestStateSampleIsComposed's 48 draws a case (the forms are
+composed once a model, so the difference is the draws): two selections over
+the row in each full-row form, every case from 7.7 s to 10.0 s; the first
+min_keep read off a top-256 of the row instead, +11.2% over the cases. A
+draw asking min_keep above 1 now runs its stages, in llama.cpp's own order
+where it names none, and after each cut a form of its own keeps the first
+min_keep of the cut's order besides its survivors (graph.SampleKeep): the
+draw forms are as they were, and a draw asking none runs what it ran. Past
+256 it keeps 256 (docs/divergences.md).
+
 ## Clef's joint head as the model's readout
 
 The joint schema head went with the per-family readouts and came back as the

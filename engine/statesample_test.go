@@ -119,6 +119,12 @@ func TestStateSampleIsComposed(t *testing.T) {
 		{"infill", Sampler{Temp: 1, TopK: 40, TopP: 0.99, Infill: true, Seed: 67}},
 		{"infill past its candidates", Sampler{Temp: 0.9, TopP: 0.95, RepeatPen: 1.2, Infill: true, Seed: 71}},
 		{"infill and top-n-sigma", Sampler{Temp: 1.1, TopK: 50, TopNSigma: 1, MinP: 0.02, Infill: true, Seed: 73}},
+		{"min-keep and top-p", Sampler{Temp: 1, TopP: 0.3, MinKeep: 6, Seed: 79}},
+		{"top-k, min-keep and min-p", Sampler{Temp: 1.1, TopK: 40, MinP: 0.3, MinKeep: 5, Seed: 83}},
+		{"top-k past the walk, min-keep and typical-p", Sampler{Temp: 0.9, TopK: 1000, TypicalP: 0.3, MinKeep: 7, Seed: 89}},
+		{"min-keep and XTC", Sampler{Temp: 1, XTCProbability: 0.7, XTCThreshold: 0.02, MinKeep: 4, Seed: 97}},
+		{"top-k, min-keep and a sure XTC", Sampler{Temp: 1, TopK: 6, XTCProbability: 1, XTCThreshold: 0.05, MinKeep: 5, Seed: 103}},
+		{"infill, min-keep and min-p", Sampler{Temp: 1, TopK: 50, MinP: 0.3, MinKeep: 6, Infill: true, Seed: 101}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			st := testInstance(t, m, 96)
@@ -163,8 +169,13 @@ func TestStateSampleIsComposed(t *testing.T) {
 					t.Fatalf("the composed draws declined %v (before %v)", declined, declined0)
 				}
 			}
-			if served-served0 != draws {
-				t.Fatalf("the composed draws served %d of %d", served-served0, draws)
+			// A draw at min_keep runs as a chain: two forms at least, more where a
+			// stage's coin (XTC's) runs its cut.
+			switch n := served - served0; {
+			case c.smp.MinKeep > 1 && n < 2*draws:
+				t.Fatalf("the chained draws served %d forms over %d draws", n, draws)
+			case c.smp.MinKeep <= 1 && n != draws:
+				t.Fatalf("the composed draws served %d of %d", n, draws)
 			}
 			if near > draws/10 {
 				t.Fatalf("%d of %d draws within rounding of an edge: the comparison sees too little", near, draws)
@@ -206,16 +217,16 @@ func sampleRef(m *model.Model, logits []float32, hist []int, s Sampler, u, xtc f
 			return p
 		}
 		eog := func(id int) bool { return m.Vocab.IsEOG(int32(id)) }
-		tok, _, mg := oracle.SampleInfill(v, nn.InfillMaxK, k, float64(invT), float64(topp), float64(minp), float64(s.typical()), xtc, 0, dyn, u,
-			piece, eog, int(m.Vocab.Infill().EOT))
+		tok, _, mg := oracle.SampleInfillMinKeep(v, nn.InfillMaxK, k, float64(invT), float64(topp), float64(minp), float64(s.typical()), xtc, 0, dyn, u,
+			piece, eog, int(m.Vocab.Infill().EOT), s.MinKeep)
 		return int32(tok), min(mg, sig)
 	}
 	if s.TopK > 0 && s.TopK < len(logits) {
 		v := append([]float32(nil), logits...)
 		oracle.PenalizeOnce(v, hist, pen)
-		tok, mg := oracle.SampleWalk(v, s.TopK, s.TopK, float64(invT), float64(topp), float64(minp), float64(s.typical()), xtc, dyn, u)
+		tok, mg := oracle.SampleWalkMinKeep(v, s.TopK, s.TopK, float64(invT), float64(topp), float64(minp), float64(s.typical()), xtc, dyn, u, s.MinKeep)
 		return int32(tok), min(mg, sig)
 	}
-	tok, mg := oracle.SampleCut(logits, hist, pen, invT, float64(topp), float64(minp), float64(s.typical()), xtc, dyn, u)
+	tok, mg := oracle.SampleCutMinKeep(logits, hist, pen, invT, float64(topp), float64(minp), float64(s.typical()), xtc, dyn, u, s.MinKeep)
 	return int32(tok), min(mg, sig)
 }

@@ -67,6 +67,12 @@ type Sampler struct {
 	// nn.InfillMaxK: a draw with no top-k, or one past it, draws as though
 	// its top-k were that.
 	Infill bool
+	// MinKeep is llama.cpp's min_keep: typical-p, top-p, min-p and XTC each
+	// leave at least that many of their candidates, at most nn.SampleMaxK
+	// past a cut; 0 or 1 is llama.cpp's default. A draw asking more runs its
+	// stages (llama.cpp's own order where Stages names none), min_keep after
+	// each cut (graph.SampleKeep).
+	MinKeep int
 	// Adaptive draws through llama.cpp's adaptive-p sampler in place of the
 	// plain walk (graph.SampleAdaptive): tokens near AdaptiveTarget's
 	// probability, the target moved by a moving average of the drawn
@@ -243,7 +249,7 @@ func (s *Sampler) greedyMoved() bool { return s != nil && (!s.penalties().Off() 
 
 // staged reports whether a draw runs its stages in an order of their own.
 func (s *Sampler) staged() bool {
-	return s != nil && (s.Stages != nil || s.dryOn()) && s.Temp > 0 && s.Mirostat == 0
+	return s != nil && (s.Stages != nil || s.dryOn() || s.MinKeep > 1) && s.Temp > 0 && s.Mirostat == 0
 }
 
 // adaptive reports whether a draw runs adaptive-p.

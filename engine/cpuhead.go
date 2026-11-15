@@ -259,6 +259,8 @@ func plainArgs(infill bool) nn.DrawArgs {
 type stagedRows struct {
 	cur, next, p, zero, cand []float32
 	ids, none                []uint32
+	// keep is a cut's survivors at min_keep (graph.SampleKeep), 1 each.
+	keep []float32
 }
 
 // staged runs smp's stages in their order over logits (graph.SampleStage),
@@ -273,7 +275,7 @@ type stagedRows struct {
 func (s *Instance) staged(logits []float32, smp *Sampler, a nn.DrawArgs, greedy bool) ([]float32, bool) {
 	n, r := len(logits), &s.st
 	if len(r.cur) != n {
-		r.cur, r.next, r.p, r.zero = make([]float32, n), make([]float32, n), make([]float32, n), make([]float32, n)
+		r.cur, r.next, r.p, r.zero, r.keep = make([]float32, n), make([]float32, n), make([]float32, n), make([]float32, n), make([]float32, n)
 		r.cand, r.ids, r.none = make([]float32, nn.SampleMaxK), make([]uint32, nn.SampleMaxK), make([]uint32, nn.SampleMaxK)
 		for i := range r.none {
 			r.none[i] = uint32(n)
@@ -349,6 +351,14 @@ func (s *Instance) staged(logits []float32, smp *Sampler, a nn.DrawArgs, greedy 
 				clear(r.cand)
 				copy(r.cand, vals)
 			}
+			// min_keep after the cut: the first of its order besides its
+			// survivors, or XTC's cut only where enough survive it.
+			if kind, ok := keepKind(st); ok && smp.MinKeep > 1 {
+				if !s.heads.Keep(r.cur, src, cids, r.cand, [2]float32{float32(smp.MinKeep), kind}, r.keep) {
+					return nil, false
+				}
+				src, cids = r.keep, r.none
+			}
 		}
 		if !s.heads.Stage(r.cur, src, cids, r.cand, c, w, r.next) {
 			return nil, false
@@ -356,6 +366,21 @@ func (s *Instance) staged(logits []float32, smp *Sampler, a nn.DrawArgs, greedy 
 		r.cur, r.next = r.next, r.cur
 	}
 	return r.cur, true
+}
+
+// keepKind is the cut kind a stage's min_keep reads (graph.SampleKeep):
+// the softmax's order for top-p and min-p, typical-p's for typical-p, XTC's
+// own; false for a stage min_keep does not reach.
+func keepKind(st Stage) (float32, bool) {
+	switch st {
+	case StageTopP, StageMinP:
+		return 0, true
+	case StageTypical:
+		return 1, true
+	case StageXTC:
+		return 2, true
+	}
+	return 0, false
 }
 
 // adaptiveRows is adaptive-p's rows on an instance (Instance.adaptive).

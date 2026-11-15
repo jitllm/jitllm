@@ -796,6 +796,16 @@ func TestLlamaRefusals(t *testing.T) {
 	if sm := f.opts().Sampling; sm.DryMultiplier != 0 {
 		t.Errorf("a samplers list without dry left DRY at %v", sm.DryMultiplier)
 	}
+	// min_keep reaches the sampler; below 0 it is refused.
+	if code, out := llamaPost(t, s, "/completion", `{"prompt":"x","min_keep":3}`); code != 200 {
+		t.Fatalf("min_keep: %d %v", code, out)
+	}
+	if got := f.opts().Sampling.MinKeep; got != 3 {
+		t.Errorf("min_keep reached the sampler as %v", got)
+	}
+	if code, _ := llamaPost(t, s, "/completion", `{"prompt":"x","min_keep":-1}`); code != 400 {
+		t.Errorf("min_keep -1 answered %d", code)
+	}
 	// typical_p reaches the sampler.
 	if code, out := llamaPost(t, s, "/completion", `{"prompt":"x","typical_p":0.7,"samplers":["typ_p","temperature"]}`); code != 200 {
 		t.Fatalf("typical_p: %d %v", code, out)

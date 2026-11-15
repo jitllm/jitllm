@@ -44,6 +44,8 @@ func TestSamplerStagesRunInTheirOrder(t *testing.T) {
 		{"typical and top-n-sigma after a dynamic temperature", Sampler{Temp: 1.6, TypicalP: 0.7, TopNSigma: 1.1,
 			DynatempRange: 0.5, DynatempExponent: 1.3, Seed: 59,
 			Stages: []Stage{StageTemperature, StageTypical, StageTopNSigma}}},
+		{"min-keep through min-p after a dynamic temperature", Sampler{Temp: 1.5, DynatempRange: 1, DynatempExponent: 1, MinP: 0.7,
+			MinKeep: 5, Seed: 61, Stages: []Stage{StageTemperature, StageMinP}}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			st := testInstance(t, m, 96)
@@ -72,7 +74,7 @@ func TestSamplerStagesRunInTheirOrder(t *testing.T) {
 				rng, ex := smp.dyn()
 				var chain []oracle.ChainStage
 				for _, s := range smp.Stages {
-					cs := oracle.ChainStage{Name: names[s], K: smp.TopK, InvT: float64(a.InvTemp), Dyn: [2]float64{float64(rng), float64(ex)}}
+					cs := oracle.ChainStage{Name: names[s], K: smp.TopK, MinKeep: smp.MinKeep, InvT: float64(a.InvTemp), Dyn: [2]float64{float64(rng), float64(ex)}}
 					switch s {
 					case StagePenalties:
 						pen := smp.penalties()

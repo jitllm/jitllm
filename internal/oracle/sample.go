@@ -99,11 +99,11 @@ func SampleRow(logits []float32, hist []int, pen float32, invT float32, u float6
 // probabilities: of the candidates in (in), in the order of their surprise
 // -log p's distance from the entropy, the nearest first (the earlier of two
 // equal), each while the mass before it is at most typ, the nearest always;
-// every candidate where typ is +Inf. It returns the survivors and how near
-// the cut is to moving: the mass before each from typ, and 0 where two
-// candidates on either side of it are within rounding of each other's
-// distance.
-func typicalCut(p []float64, in []bool, typ float64) (keep []bool, margin float64) {
+// every candidate where typ is +Inf, and the first minKeep whatever their
+// mass. It returns the survivors and how near the cut is to moving: the mass
+// before each from typ, and 0 where two candidates on either side of it are
+// within rounding of each other's distance.
+func typicalCut(p []float64, in []bool, typ float64, minKeep int) (keep []bool, margin float64) {
 	keep = append([]bool(nil), in...)
 	margin = math.Inf(1)
 	if math.IsInf(typ, 1) {
@@ -126,7 +126,7 @@ func typicalCut(p []float64, in []bool, typ float64) (keep []bool, margin float6
 	sort.SliceStable(idx, func(a, b int) bool { return shift[idx[a]] < shift[idx[b]] })
 	before := 0.0
 	for j, i := range idx {
-		keep[i] = j == 0 || before <= typ
+		keep[i] = j == 0 || before <= typ || j < minKeep
 		if j > 0 {
 			margin = min(margin, math.Abs(before-typ))
 			if keep[i] != keep[idx[j-1]] && shift[i]-shift[idx[j-1]] < 1e-4*(1+shift[i]) {
@@ -296,9 +296,9 @@ func mirostatKeep(q []float64, order []int, v1 bool, mu float64) (keep int, marg
 // xtcCut is llama.cpp's XTC over the survivors surv (in their order, largest
 // first) with probabilities p, the share of their softmax at temperature 1:
 // those at or above thr, every one but the last of them, where two or more
-// are; +Inf cuts none. It returns what is left and how near a survivor is to
-// the threshold.
-func xtcCut(surv []int, p func(i int) float64, thr float64) ([]int, float64) {
+// are, and where at least minKeep are left; +Inf cuts none. It returns what
+// is left and how near a survivor is to the threshold.
+func xtcCut(surv []int, p func(i int) float64, thr float64, minKeep int) ([]int, float64) {
 	margin := math.Inf(1)
 	if math.IsInf(thr, 1) {
 		return surv, margin
@@ -316,6 +316,9 @@ func xtcCut(surv []int, p func(i int) float64, thr float64) ([]int, float64) {
 		}
 		last = j
 	}
+	if len(surv)-last < minKeep {
+		return surv, margin
+	}
 	return surv[last:], margin
 }
 
@@ -328,7 +331,13 @@ func xtcCut(surv []int, p func(i int) float64, thr float64) ([]int, float64) {
 // passes u times their mass, the last where none does. It returns the token
 // and how far u's point is from the nearest edge, as a share of the mass.
 func SampleWalk(logits []float32, K, k int, invT, topp, minp, typ, xtc float64, dyn [2]float64, u float64) (tok uint32, margin float64) {
-	ids, et, margin := walkSurvivors(logits, K, k, invT, topp, minp, typ, xtc, dyn)
+	return SampleWalkMinKeep(logits, K, k, invT, topp, minp, typ, xtc, dyn, u, 0)
+}
+
+// SampleWalkMinKeep is SampleWalk with llama.cpp's min_keep: typical-p,
+// top-p, min-p and XTC each leave at least minKeep of their candidates.
+func SampleWalkMinKeep(logits []float32, K, k int, invT, topp, minp, typ, xtc float64, dyn [2]float64, u float64, minKeep int) (tok uint32, margin float64) {
+	ids, et, margin := walkSurvivors(logits, K, k, invT, topp, minp, typ, xtc, dyn, minKeep)
 	in := make([]bool, len(ids))
 	for j := range in {
 		in[j] = true
@@ -338,8 +347,10 @@ func SampleWalk(logits []float32, K, k int, invT, topp, minp, typ, xtc float64, 
 }
 
 // walkSurvivors is SampleWalk's survivors in their order, their ids and
-// their weights at the temperature, and how far the cuts are from turning.
-func walkSurvivors(logits []float32, K, k int, invT, topp, minp, typ, xtc float64, dyn [2]float64) (ids []uint32, et []float64, margin float64) {
+// their weights at the temperature, and how far the cuts are from turning;
+// top-p and min-p together keep the first minKeep of typical-p's survivors
+// besides their own.
+func walkSurvivors(logits []float32, K, k int, invT, topp, minp, typ, xtc float64, dyn [2]float64, minKeep int) (ids []uint32, et []float64, margin float64) {
 	order := make([]int, len(logits))
 	for i := range order {
 		order[i] = i
@@ -358,7 +369,7 @@ func walkSurvivors(logits []float32, K, k int, invT, topp, minp, typ, xtc float6
 		p[i] /= sum
 		in[i] = i < k
 	}
-	keepT, tm := typicalCut(p, in, typ)
+	keepT, tm := typicalCut(p, in, typ, minKeep)
 	first, tsum := -1, 0.0
 	for i := range K {
 		if keepT[i] {
@@ -379,14 +390,17 @@ func walkSurvivors(logits []float32, K, k int, invT, topp, minp, typ, xtc float6
 	}
 	pmax := p[first]
 	var kept []int
-	before := 0.0
+	before, s := 0.0, 0
 	for i := range K {
-		if i == first || keepT[i] && before < topp && p[i] >= minp*pmax {
+		if i == first || keepT[i] && (before < topp && p[i] >= minp*pmax || s < minKeep) {
 			kept = append(kept, i)
+		}
+		if keepT[i] {
+			s++
 		}
 		before += p[i]
 	}
-	kept, xm := xtcCut(kept, func(i int) float64 { return p[i] }, xtc)
+	kept, xm := xtcCut(kept, func(i int) float64 { return p[i] }, xtc, minKeep)
 	ps := make([]float64, len(kept))
 	for j, i := range kept {
 		ps[j] = p[i]
@@ -443,7 +457,14 @@ func walkAt(ids []uint32, w []float64, in []bool, u float64) (tok uint32, margin
 // sampler made, or of u's point, from turning.
 func SampleInfill(logits []float32, K, k int, invT, topp, minp, typ, xtc, sigma float64, dyn [2]float64, u float64,
 	piece func(int) string, eog func(int) bool, eot int) (tok uint32, branch int, margin float64) {
-	ids, et, in, branch, margin := infillSurvivors(logits, K, k, invT, topp, minp, typ, xtc, sigma, dyn, piece, eog)
+	return SampleInfillMinKeep(logits, K, k, invT, topp, minp, typ, xtc, sigma, dyn, u, piece, eog, eot, 0)
+}
+
+// SampleInfillMinKeep is SampleInfill with llama.cpp's min_keep over the
+// walk's cuts (SampleWalkMinKeep).
+func SampleInfillMinKeep(logits []float32, K, k int, invT, topp, minp, typ, xtc, sigma float64, dyn [2]float64, u float64,
+	piece func(int) string, eog func(int) bool, eot, minKeep int) (tok uint32, branch int, margin float64) {
+	ids, et, in, branch, margin := infillSurvivors(logits, K, k, invT, topp, minp, typ, xtc, sigma, dyn, piece, eog, minKeep)
 	if branch == 2 {
 		return uint32(eot), 2, margin
 	}
@@ -457,7 +478,7 @@ func SampleInfill(logits []float32, K, k int, invT, topp, minp, typ, xtc, sigma 
 // 2); and how far a comparison the sampler made is from turning.
 func InfillProbs(logits []float32, K, k int, invT, topp, minp, typ, xtc, sigma float64, dyn [2]float64,
 	piece func(int) string, eog func(int) bool, eot int) (ids []uint32, p []float64, branch int, margin float64) {
-	ids, et, in, branch, margin := infillSurvivors(logits, K, k, invT, topp, minp, typ, xtc, sigma, dyn, piece, eog)
+	ids, et, in, branch, margin := infillSurvivors(logits, K, k, invT, topp, minp, typ, xtc, sigma, dyn, piece, eog, 0)
 	if branch == 2 {
 		return []uint32{uint32(eot)}, []float64{1}, 2, margin
 	}
@@ -480,12 +501,12 @@ func InfillProbs(logits []float32, K, k int, invT, topp, minp, typ, xtc, sigma f
 // temperature and those that survive the infill sampler, which way it went
 // and its margin, before the walk.
 func infillSurvivors(logits []float32, K, k int, invT, topp, minp, typ, xtc, sigma float64, dyn [2]float64,
-	piece func(int) string, eog func(int) bool) (ids []uint32, et []float64, in []bool, branch int, margin float64) {
+	piece func(int) string, eog func(int) bool, minKeep int) (ids []uint32, et []float64, in []bool, branch int, margin float64) {
 	margin = math.Inf(1)
 	if sigma > 0 {
 		logits, margin = TopNSigma(logits, sigma)
 	}
-	ids, et, wm := walkSurvivors(logits, K, k, invT, topp, minp, typ, xtc, dyn)
+	ids, et, wm := walkSurvivors(logits, K, k, invT, topp, minp, typ, xtc, dyn, minKeep)
 	margin = min(margin, wm)
 	n := len(ids)
 	p := make([]float64, n)
@@ -579,6 +600,12 @@ func infillSurvivors(logits []float32, K, k int, invT, topp, minp, typ, xtc, sig
 // how far the draw is from flipping: the nearest cut's distance from its
 // threshold and u's point from an edge.
 func SampleCut(logits []float32, hist []int, pen, invT float32, topp, minp, typ, xtc float64, dyn [2]float64, u float64) (tok uint32, margin float64) {
+	return SampleCutMinKeep(logits, hist, pen, invT, topp, minp, typ, xtc, dyn, u, 0)
+}
+
+// SampleCutMinKeep is SampleCut with llama.cpp's min_keep: typical-p,
+// top-p, min-p and XTC each leave at least minKeep of their candidates.
+func SampleCutMinKeep(logits []float32, hist []int, pen, invT float32, topp, minp, typ, xtc float64, dyn [2]float64, u float64, minKeep int) (tok uint32, margin float64) {
 	v := append([]float32(nil), logits...)
 	PenalizeOnce(v, hist, pen)
 	n := len(v)
@@ -604,7 +631,7 @@ func SampleCut(logits []float32, hist []int, pen, invT float32, topp, minp, typ,
 	for i := range all {
 		all[i] = true
 	}
-	order, margin = typicalOrder(q1, order, all, typ)
+	order, margin = typicalOrder(q1, order, all, typ, minKeep)
 	p0 := q1[order[0]]
 	keep, fired, acc := len(order), !math.IsInf(typ, 1) || !math.IsInf(xtc, 1) || dyn[0] > 0, 0.0
 	for k, i := range order {
@@ -628,8 +655,8 @@ func SampleCut(logits []float32, hist []int, pen, invT float32, topp, minp, typ,
 		t, mg := SampleRow(v, nil, 1, invT, u)
 		return t, min(margin, mg)
 	}
-	keep = max(keep, 1)
-	surv, xm := xtcCut(order[:keep], func(i int) float64 { return q1[i] }, xtc)
+	keep = max(keep, 1, min(minKeep, len(order)))
+	surv, xm := xtcCut(order[:keep], func(i int) float64 { return q1[i] }, xtc, minKeep)
 	margin = min(margin, xm)
 	keep = len(surv)
 	qs := make([]float64, keep)
@@ -661,8 +688,8 @@ func SampleCut(logits []float32, hist []int, pen, invT float32, topp, minp, typ,
 // typical-p's survivors over q (typicalCut, the candidates those in), q
 // renormalized over them in place where typ is not +Inf, and how near the
 // cut is to moving.
-func typicalOrder(q []float64, order []int, in []bool, typ float64) ([]int, float64) {
-	keep, margin := typicalCut(q, in, typ)
+func typicalOrder(q []float64, order []int, in []bool, typ float64, minKeep int) ([]int, float64) {
+	keep, margin := typicalCut(q, in, typ, minKeep)
 	if math.IsInf(typ, 1) {
 		return order, margin
 	}
@@ -692,6 +719,12 @@ func typicalOrder(q []float64, order []int, in []bool, typ float64) ([]int, floa
 // the row's softmax at 1/T. It returns the probability and how far the cuts
 // are from flipping.
 func SampleProb(logits []float32, hist []int, pen, invT float32, k int, topp, minp, typ, xtc, mix float64, dyn [2]float64, x int) (p, margin float64) {
+	return SampleProbMinKeep(logits, hist, pen, invT, k, topp, minp, typ, xtc, mix, dyn, x, 0)
+}
+
+// SampleProbMinKeep is SampleProb with llama.cpp's min_keep: typical-p,
+// top-p, min-p and XTC each leave at least minKeep of their candidates.
+func SampleProbMinKeep(logits []float32, hist []int, pen, invT float32, k int, topp, minp, typ, xtc, mix float64, dyn [2]float64, x, minKeep int) (p, margin float64) {
 	v := append([]float32(nil), logits...)
 	PenalizeOnce(v, hist, pen)
 	n := len(v)
@@ -716,7 +749,7 @@ func SampleProb(logits []float32, hist []int, pen, invT float32, k int, topp, mi
 	for _, i := range cand {
 		q[i] /= sum
 	}
-	cand, margin = typicalOrder(q, cand, in, typ)
+	cand, margin = typicalOrder(q, cand, in, typ, minKeep)
 	q1 := make([]float64, len(cand))
 	for j, i := range cand {
 		q1[j] = q[i]
@@ -739,7 +772,7 @@ func SampleProb(logits []float32, hist []int, pen, invT float32, k int, topp, mi
 			break
 		}
 	}
-	surv := cand[:max(keep, 1)]
+	surv := cand[:max(keep, 1, min(minKeep, len(cand)))]
 	if k == 0 && !fired {
 		surv = order
 	}
@@ -764,7 +797,7 @@ func SampleProb(logits []float32, hist []int, pen, invT float32, k int, topp, mi
 	if math.IsInf(xtc, 1) {
 		return pc, margin
 	}
-	cut, xm := xtcCut(surv, func(i int) float64 { return q[i] }, xtc)
+	cut, xm := xtcCut(surv, func(i int) float64 { return q[i] }, xtc, minKeep)
 	return pc + (share(cut)-pc)*mix, min(margin, xm)
 }
 

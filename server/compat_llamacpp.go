@@ -226,7 +226,6 @@ func (s llamaSettings) stages() llamaSettings {
 // A field in neither this table nor llamaRead is refused as unknown.
 func llamaFields() map[string]llamaField {
 	return map[string]llamaField{
-		"min_keep": {numIs(0), "min_keep is not built"},
 		// n_keep and n_discard act only in a context shift, which
 		// llama-server runs only under --context-shift, off by default:
 		// without one a reply stops at the context's end (stop_type limit,
@@ -255,7 +254,7 @@ func llamaRead() map[string]bool {
 		"top_n_sigma": true, "dynatemp_range": true, "dynatemp_exponent": true,
 		"mirostat": true, "mirostat_tau": true, "mirostat_eta": true, "response_fields": true, "samplers": true,
 		"n_cmpl": true, "n": true, "timings_per_token": true, "sse_ping_interval": true, "t_max_predict_ms": true,
-		"n_indent": true, "return_progress": true, "post_sampling_probs": true,
+		"n_indent": true, "return_progress": true, "post_sampling_probs": true, "min_keep": true,
 		"adaptive_target": true, "adaptive_decay": true,
 		"dry_multiplier": true, "dry_base": true, "dry_allowed_length": true, "dry_penalty_last_n": true,
 		"dry_sequence_breakers": true,
@@ -649,6 +648,7 @@ type llamaSettings struct {
 	DrySequenceBreakers                        []string
 	PresencePenalty, FrequencyPenalty          float64
 	TopK, RepeatLastN, NPredict, NProbs        int
+	MinKeep                                    int
 	Seed                                       int64
 	Stop                                       []string
 	IgnoreEOS, Stream, TimingsPerToken         bool
@@ -679,7 +679,7 @@ func llamaParams(s llamaSettings, _ int, _ []int32, _ int) map[string]any {
 		"dry_penalty_last_n": s.DryPenaltyLastN, "dry_sequence_breakers": s.DrySequenceBreakers,
 		"repeat_penalty": s.RepeatPenalty, "presence_penalty": s.PresencePenalty, "frequency_penalty": s.FrequencyPenalty,
 		"stop": s.Stop, "ignore_eos": s.IgnoreEOS, "stream": s.Stream, "timings_per_token": s.TimingsPerToken,
-		"n_probs": s.NProbs, "post_sampling_probs": s.PostSamplingProbs, "grammar": s.Grammar, "json_schema": s.JSONSchema,
+		"n_probs": s.NProbs, "min_keep": s.MinKeep, "post_sampling_probs": s.PostSamplingProbs, "grammar": s.Grammar, "json_schema": s.JSONSchema,
 		"samplers": s.Samplers,
 	}
 }
@@ -835,7 +835,7 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 	set := llamaDefaults()
 	var temp, topP, minP, typP, xtcP, xtcT, nSigma, dynR, dynE, mTau, mEta, repeat, presence, frequency, adT, adD *float64
 	var miro *int
-	var topK, lastN, nPredict, maxTokens, nProbs, slot, nCmpl, nAlias, predictMS, ping, indent *int
+	var topK, lastN, nPredict, maxTokens, nProbs, slot, nCmpl, nAlias, predictMS, ping, indent, minKeep *int
 	var seed *int64
 	var dryM, dryB *float64
 	var dryA, dryN *int
@@ -872,6 +872,7 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 	rd(decodeField(body, "n_predict", &nPredict))
 	rd(decodeField(body, "max_tokens", &maxTokens))
 	rd(decodeField(body, "n_probs", &nProbs))
+	rd(decodeField(body, "min_keep", &minKeep))
 	rd(decodeField(body, "id_slot", &slot))
 	rd(decodeField(body, "n_cmpl", &nCmpl))
 	rd(decodeField(body, "n", &nAlias))
@@ -997,6 +998,13 @@ func (c *compat) llamaGenerate(w http.ResponseWriter, r *http.Request, infill bo
 	if slot != nil && *slot < -1 {
 		llFailErr(w, fmt.Errorf("%w: id_slot=%d is below -1 (any slot)", ErrInvalid, *slot))
 		return
+	}
+	if minKeep != nil {
+		if *minKeep < 0 {
+			llFailErr(w, fmt.Errorf("%w: min_keep=%d is below 0", ErrInvalid, *minKeep))
+			return
+		}
+		set.MinKeep = *minKeep
 	}
 	if nProbs != nil {
 		set.NProbs = *nProbs
@@ -1215,7 +1223,8 @@ func llamaSampler(s llamaSettings, nctx int) *engine.Sampler {
 		FreqPen: s.FrequencyPenalty, Seed: s.Seed, Infill: slices.Contains(s.Samplers, "infill"),
 		Adaptive: slices.Contains(s.Samplers, "adaptive_p"), AdaptiveTarget: s.AdaptiveTarget, AdaptiveDecay: s.AdaptiveDecay,
 		Stages: llamaStages(s.Samplers), DryMultiplier: s.DryMultiplier, DryBase: s.DryBase,
-		DryAllowedLength: s.DryAllowedLength, DryPenaltyLastN: s.DryPenaltyLastN, DryBreakers: s.DrySequenceBreakers}
+		DryAllowedLength: s.DryAllowedLength, DryPenaltyLastN: s.DryPenaltyLastN, DryBreakers: s.DrySequenceBreakers,
+		MinKeep: s.MinKeep}
 	sm.Temp, sm.MinP = max(sm.Temp, 0), min(max(sm.MinP, 0), 1)
 	if sm.TopP <= 0 {
 		sm.TopP = leastP

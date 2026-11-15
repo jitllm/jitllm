@@ -75,7 +75,7 @@ no text and `prompt_progress` (`total`, `cache`, `processed`, `time_ms`); its
 stream it is taken to no effect, as llama-server takes it.
 
 A field the engine cannot honour is refused by name with a 400, at any value
-but its neutral one: `min_keep`, `lora`, and `image_data` or
+but its neutral one: `lora`, and `image_data` or
 `multimodal_data` beside the prompt (pictures go in
 `prompt.multimodal_data`); an audio file in `prompt.multimodal_data` is
 refused as a picture that does not decode.
