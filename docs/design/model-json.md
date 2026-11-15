@@ -97,7 +97,10 @@ schema; `convert/modeljson.go` reads it. Its sections:
     the flag the engine runs it by; a feature the engine does not run is
     named too (`mjFlagsNotImplemented`: `post_norm`), and stated true is
     refused.
-  - A partial rotary is `rope.dimension_count` among the keys.
+  - A partial rotary is `rope.dimension_count` among the keys, stated only
+    by a file whose class rotates part of each head (Phi-3, GLM-4-MoE,
+    Qwen3.5); every other class rotates the whole head whatever
+    `partial_rotary_factor` says, so its file leaves the key unread.
 - There are no refusals in a file. A refusal is missing support, and it
   lives in converter code, one rule for every model: an activation, a rope
   scaling method, a window or a flag the code cannot express, a tensor no

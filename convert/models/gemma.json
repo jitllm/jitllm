@@ -12,7 +12,7 @@
       "attention.key_length":             {"uint": "head_dim ?? 256"},
       "attention.value_length":           {"uint": "head_dim ?? 256"},
       "attention.layer_norm_rms_epsilon": {"float": "rms_norm_eps ?? 1e-6"},
-      "rope.dimension_count":             {"uint": "(head_dim ?? 256) * (rope_parameters.partial_rotary_factor ?? partial_rotary_factor ?? 1)"},
+      "rope.dimension_count":             {"uint": "head_dim ?? 256"},
       "rope.freq_base":                   {"float": "rope_parameters.rope_theta ?? rope_theta ?? 10000"}
     },
     "vocab": "vocab_size ?? 256000",

@@ -12,7 +12,7 @@
       "attention.key_length":             {"uint": "head_dim ?? (hidden_size ?? 2560) / (num_attention_heads ?? 20)"},
       "attention.value_length":           {"uint": "head_dim ?? (hidden_size ?? 2560) / (num_attention_heads ?? 20)"},
       "attention.layer_norm_rms_epsilon": {"float": "rms_norm_eps ?? 1e-5"},
-      "rope.dimension_count":             {"uint": "(head_dim ?? (hidden_size ?? 2560) / (num_attention_heads ?? 20)) * (rope_parameters.partial_rotary_factor ?? partial_rotary_factor ?? 1)"},
+      "rope.dimension_count":             {"uint": "head_dim ?? (hidden_size ?? 2560) / (num_attention_heads ?? 20)"},
       "rope.freq_base":                   {"float": "rope_parameters.rope_theta ?? rope_theta ?? 500000"},
       "expert_count":                     {"uint": "moe_num_experts ?? 64"},
       "expert_used_count":                {"uint": "moe_k ?? 6"},

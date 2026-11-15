@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"maps"
 	"math"
 	"slices"
@@ -705,6 +706,33 @@ func TestLlama3RopeScalingStatesItsFactors(t *testing.T) {
 	}
 }
 
+// TestPartialRotaryOnlyWhereTheClassReadsIt: partial_rotary_factor is read
+// only by the files whose transformers class rotates part of each head (its
+// apply_rotary_pos_emb slices a rotary width): Phi-3, GLM-4-MoE and Qwen3.5.
+// Every other class rotates the whole head whatever the key says, so its file
+// leaves the key unread and a factor other than 1 is refused (mjGraphKeys).
+func TestPartialRotaryOnlyWhereTheClassReadsIt(t *testing.T) {
+	reads := map[string]bool{"phi3.json": true, "glm4moe.json": true, "qwen3_5.json": true}
+	ents, err := fs.ReadDir(modelLibraryFS, "models")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range ents {
+		b, err := modelLibraryFS.ReadFile("models/" + e.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.Contains(string(b), "partial_rotary_factor"); got != reads[e.Name()] {
+			t.Errorf("%s reads partial_rotary_factor %v, want %v", e.Name(), got, reads[e.Name()])
+		}
+	}
+	for name := range reads {
+		if _, err := modelLibraryFS.ReadFile("models/" + name); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
 // TestModelJSONStatements: activation, flags, window and rope scaling are
 // read by the generic code and decide after configOf; what it cannot express
 // it refuses by name.
@@ -756,7 +784,7 @@ func TestModelJSONStatements(t *testing.T) {
 		{"yarn scaling", `, "rope_scaling": {"rope_type": "yarn", "factor": 8}`, 0, 0, "rope scaling yarn is not implemented"},
 		{"default scaling", `, "rope_parameters": {"rope_type": "default", "rope_theta": 10000}`, jlm.FlagGELU, 0, ""},
 		{"two thetas", `, "rope_parameters": {"rope_theta": 10000}, "rope_theta": 500000`, 0, 0, "spelled two ways"},
-		{"a partial rotary", `, "partial_rotary_factor": 0.5`, jlm.FlagGELU, 0, ""},
+		{"a partial rotary", `, "partial_rotary_factor": 0.5`, 0, 0, "partial_rotary_factor is 0.5, and convert/models/gemma.json does not read it"},
 	} {
 		c, err := gemma(r.extra)
 		switch {
@@ -768,8 +796,6 @@ func TestModelJSONStatements(t *testing.T) {
 			t.Errorf("%s: %v", r.name, err)
 		case c.Flags&r.flags != r.flags || c.Flags&r.not != 0:
 			t.Errorf("%s: flags %v, want %v set and %v clear", r.name, c.Flags, r.flags, r.not)
-		case r.name == "a partial rotary" && c.NRot != 8:
-			t.Errorf("a partial rotary of a half: %d rotated of 16", c.NRot)
 		}
 	}
 	for _, r := range []struct{ name, js, err string }{
