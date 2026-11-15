@@ -544,7 +544,17 @@ func (ts *Instance) towerSquare(tr *towerRun, sq model.Square, class int, px uin
 	if err := tr.entry(bandRuns(tg, class, px), class, px, words, n, tr.rows); err != nil {
 		return fmt.Errorf("model: %w", err)
 	}
-	if err := ts.towerBlocks(tr, sq.Gw, tr.windows(tg, sq.Gw, sq.Gh)); err != nil {
+	wins := tr.windows(tg, sq.Gw, sq.Gh)
+	if wins == nil {
+		// A block that reads its rows' windows is never handed none: none
+		// is every row over the whole call (nn.RowWindowDevice).
+		for i, g := range tg.Blocks {
+			if readsRowWindows(g) {
+				return fmt.Errorf("model: the tower's block %d reads its rows' windows and the tower states none", i)
+			}
+		}
+	}
+	if err := ts.towerBlocks(tr, sq.Gw, wins); err != nil {
 		return fmt.Errorf("model: the tower's blocks: %w", err)
 	}
 	if err := tr.parts.Head(n, tr.req, tr.posTab, tr.blk, dst[at*D:]); err != nil {

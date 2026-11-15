@@ -22,10 +22,11 @@ import (
 // rows, and what is missing where it does not: the scratch holds the rows'
 // descriptors and, where the block rotates, the rows' rotary table; the
 // device holds its transient pair; the block attends over the whole run or
-// the windows the call staged (SetKeyRuns, SetRowWindows) -- a symmetric
-// window its graph states is the form's own, computed from each row's place
-// in the run (composer's history.start/end); and the composer forms it at
-// the scratch's rows. The pair and the windows are each call's
+// the windows the call staged (SetKeyRuns, SetRowWindows: none staged
+// there is every row over its call, which a tower's windowed block is never
+// handed, towerSquare) -- a window its graph states with Bidir is the form's
+// own (composer's history.start/end); and the composer forms it at the
+// scratch's rows. The pair and the windows are each call's
 // (errStepCond).
 func (g *devTier) towerServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratch) error {
 	switch {

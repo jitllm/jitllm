@@ -187,7 +187,7 @@ func (s *Instance) spanSrc(spans []model.Span) (rowSrc, error) {
 	src := rowSrc{tok: s.srcTok[:0]}
 	for _, sp := range spans {
 		if sp.Embd != nil {
-			src.given = append(src.given, givenRun{at: len(src.tok), rows: sp.Embd, deep: sp.Deep, n: len(sp.Embd) / c.NEmbd})
+			src.given = append(src.given, givenRun{at: len(src.tok), rows: sp.Embd, side: sp.Deep, n: len(sp.Embd) / c.NEmbd})
 			if sp.Tokens != nil {
 				src.tok = append(src.tok, sp.Tokens...)
 				continue

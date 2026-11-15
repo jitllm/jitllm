@@ -461,6 +461,11 @@ func (p *LayerPlan) ResidW() int { return p.NEmbd * p.Streams() }
 // streams the converter states, one elsewhere.
 func (p *LayerPlan) Streams() int { return max(p.NStreams, 1) }
 
+// InputsWriteSide says input rows' graph g, writing streams residual
+// streams, writes the rows' side inputs too: an output past the streams, its
+// last. The host and every card read it here, so they agree.
+func InputsWriteSide(g *graph.Graph, streams int) bool { return g != nil && len(g.Out) > streams }
+
 // KVRow is one position's width in the attention cache: the latent plus the
 // shared rotary key under MLA, and NKVHead heads of HeadDim otherwise. Every
 // cache allocation, stride and migration must go through it.

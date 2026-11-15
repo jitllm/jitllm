@@ -1,11 +1,38 @@
 package engine
 
+import (
+	"fmt"
+
+	"github.com/jitllm/jitllm/nn"
+)
+
+// readSide reads off the input rows' graph whether they write each row's
+// side inputs (nn.InputsWriteSide), as every card reads its own: the CPU's
+// rows (one stream) and a card's (every stream) must agree.
+func (s *Instance) readSide() error {
+	f := s.m.FrontGraphs()
+	s.sideIn = s.c.SideWidth() != 0 && nn.InputsWriteSide(f.CpuEmbed, 1)
+	if f.CpuEmbed != nil && f.Embed != nil && s.c.SideWidth() != 0 && s.sideIn != nn.InputsWriteSide(f.Embed, s.c.Streams()) {
+		return fmt.Errorf("model: the input rows write side inputs on the CPU (%v) and not alike on a card", s.sideIn)
+	}
+	return nil
+}
+
 // inputsSide says the input rows write each row's side inputs (their graph's
 // output past the residual streams), which the blocks read their slices of.
-func (s *Instance) inputsSide() bool { return s.c.InputSideWidth() != 0 }
+func (s *Instance) inputsSide() bool { return s.sideIn }
 
-// givenSide says given rows carry the head of each row's side inputs (a
-// tower's tap rows), written over the input rows' zeros (fillGivenSide).
+// inputSideW is the side row the input rows write: the whole row, or none.
+func (s *Instance) inputSideW() int {
+	if !s.sideIn {
+		return 0
+	}
+	return s.c.SideWidth()
+}
+
+// givenSide says given rows carry the head of each row's side inputs: the
+// rows the tower's taps write (jlm.TowerTap), over the input rows' zeros
+// (fillGivenSide).
 func (s *Instance) givenSide() bool { return s.c.TapsWidth() != 0 }
 
 // growPLE sizes a decode row's side inputs. A model without them gets none.
@@ -136,14 +163,14 @@ func (s *Instance) fillGivenSide(src rowSrc, base, n int, side []float32) {
 		clear(side[i*W : i*W+T])
 	}
 	for _, g := range src.given {
-		if g.deep == nil {
+		if g.side == nil {
 			continue
 		}
 		lo, hi := max(g.at, base), min(g.at+len(g.rows)/E, base+n)
 		for i := lo; i < hi; i++ {
 			at := g.n0 + i - g.at
 			for k := range T / E {
-				copy(side[(i-base)*W+k*E:(i-base)*W+(k+1)*E], g.deep[(k*g.n+at)*E:])
+				copy(side[(i-base)*W+k*E:(i-base)*W+(k+1)*E], g.side[(k*g.n+at)*E:])
 			}
 		}
 	}

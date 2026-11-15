@@ -97,7 +97,7 @@ func (s *Instance) partsPlan() *nn.PartsPlan {
 		p.Inputs[2] = part(given, 1)
 		p.Inputs[3] = part(given, cpuRowsCap)
 	}
-	p.PleW = s.c.InputSideWidth()
+	p.PleW = s.inputSideW()
 	p.Given, p.WritesX = given != nil, given != nil && (len(given.Out) > 1 || p.PleW == 0)
 	p.InputsW = nn.PartWeights{Block: cpuInputRows, Of: s.ws.tensors(cpuInputRows, nil)}
 
