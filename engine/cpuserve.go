@@ -79,7 +79,10 @@ func (s *Instance) unmapOwn() {
 func (s *Instance) placeLanes() {
 	// A segment's blocks are past the text model's in the one block space.
 	n := max(s.c.NLayer, s.hi)
-	planes := [2][]float32{s.tablePlanes(0), s.tablePlanes(1)}
+	var planes [nn.MaxRopeTables][]float32
+	for i := range len(s.tableGraphs()) {
+		planes[i] = s.tablePlanes(i)
+	}
 	s.lease = blockLease{m: s.m, fr: s.fr, mu: &s.bind, hold: &s.expHold, res: s.res, hot: s.hot, layers: s.layers,
 		lo: s.lo, trace: &s.opt.tracer, cut: &s.cutPlans}
 	s.places[routeLanes].(nn.LanePlacer).PlaceLanes(n, &s.lease, planes, s.c.NExpert, s.prof)

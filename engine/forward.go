@@ -428,17 +428,14 @@ type Instance struct {
 	PickIDs  []int32
 	PickVals []float32
 	Picked   bool
-	// cs is the rotary table for the current position: NRot floats, filled once
-	// per token and read by every head and by the device blocks.
-	cs []float32
-	// csSWA is the local layers' rotary table, allocated only for an
-	// architecture with two bases. nil everywhere else, which is what keeps
-	// choosing the table a pointer compare for every other model.
-	csSWA  []float32
-	bcsSWA []float32
-	// bcs is cs for a whole prefill chunk: one nRot-wide rotary table per row,
-	// which is what the device's batched RoPE reads.
-	bcs []float32
+	// cs is each rotary table's row for the current position (the model's
+	// rotaries in order, nn.RopeTables), filled once per token and read by
+	// every head and by the device blocks; tabW is a row's floats of each.
+	cs   nn.RopeTables
+	tabW [nn.MaxRopeTables]int
+	// bcs is cs for a whole prefill chunk: each table's rows, which is what
+	// the device's batched RoPE reads.
+	bcs nn.RopeTables
 	// rowsLog and rowsHid are where a speculation step on the device that wants
 	// a tail of its rows has the head write every row (stepRowsDevice), the
 	// tail then copied out; rowsTok is where a greedy one's tokens land.
@@ -665,9 +662,8 @@ func newInstanceOver(m *model.Model, g *engineState, fr *jlm.Frames, opt modelOp
 	s.growPLE()
 	s.allocStreams()
 	s.logits = make([]float32, c.NVocab)
-	s.cs = make([]float32, c.RopeW())
-	if localTable(m, c) {
-		s.csSWA = make([]float32, c.LocalNRot())
+	if err := s.initTables(); err != nil {
+		return nil, err
 	}
 	s.bpos = make([]int, 1)
 	s.rmarks = model.RopeMarks{}
@@ -963,13 +959,10 @@ func (s *Instance) SetDeviceLayers(d nn.LayerDevice, max int) error {
 		NRot: c.NRot, NFFN: c.NFFN, MaxSeq: s.maxSeq, Vocab: c.NVocab,
 		RMSEps: c.RMSEps, RopeBase: c.RopeBase, RopeNeox: c.RopeNeox,
 		QKNorm: c.QKNorm, NoExpertNorm: c.NoExpertNorm,
-		// The tier picks the local or global rotary table per block from
-		// this; zero means one kind of layer.
-		SWAPeriod: swaPeriodFor(c),
-		// The folded constants the host's rotary kernel reads, so the device
-		// builds its own table and the two tiers agree by construction.
-		RopeTab:    model.RopeTabPlanes(s.m.RopeFor(s.maxSeq), c.NRot),
-		RopeTabSWA: model.RopeTabPlanes(s.m.RopeSWA, c.LocalNRot()),
+		// The folded constants the host's rotary kernel reads, each table's,
+		// so the device builds its own and the two tiers agree by
+		// construction.
+		RopeTabs: s.ropeTabs(),
 		// The tables as the front end states them, and a multi-axis
 		// rotary's planes, for a device that serves them (front.go).
 		Tables:      s.tableGraphs(),
@@ -977,7 +970,7 @@ func (s *Instance) SetDeviceLayers(d nn.LayerDevice, max int) error {
 		GridPlanes:  s.gridPlanes(),
 		RopeMarks:   s.marksCap(),
 		Rotaries:    s.rotaries(),
-		RopeSplit:   c.RopeXD,
+		RopePairs:   c.RopePairs,
 		// The sliding window itself (TestSlidingWindowRunsOnTheDevice).
 		SWAWindow: windowFor(c, s.maxSeq),
 		// Read off the loaded weights, not the architecture name.
@@ -2018,12 +2011,13 @@ func (s *Instance) planFor(li int) *nn.LayerPlan {
 	plan.HeadSet = c.Head != nil && li >= c.Trunk
 	if plan.HeadSet {
 		h := c.Head
-		plan.SWAPeriod, plan.SWAWindow, plan.RMSEps = 0, 0, h.RMSEps
+		plan.SWAWindow, plan.RMSEps = 0, h.RMSEps
+		plan.RopeTabs = plan.RopeTabs[:min(len(plan.RopeTabs), 1)]
 		plan.QKNorm = false
 	}
 	plan.MixedGeom = c.OwnGeoms() || plan.HeadSet && c.MixedGeom()
-	plan.LocalRope = c.OwnGeoms() && c.SWA(li)
-	plan.OwnGeom = plan.LocalRope || plan.HeadDim != c.HeadDim || plan.NKVHead != c.NKVHead || plan.NRot != c.NRot
+	plan.Rotary = s.blockRotary(plan.Graph)
+	plan.OwnGeom = c.OwnGeoms() && plan.Rotary != 0 || plan.HeadDim != c.HeadDim || plan.NKVHead != c.NKVHead || plan.NRot != c.NRot
 	plan.BidirOff = !c.BidirAt(li)
 	plan.VFromK, plan.OutScale = l.VFromK, l.OutScale
 	plan.PLEDim, plan.PLEWidth = c.PLEDim, c.SideWidth()
@@ -3227,7 +3221,7 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 			return nil, err
 		}
 		s.cutFor(r, hi-1, 1)
-		if !r.run.Layers(li, hi, s.pos, 1, s.resid(), s.cs[:c.RopeW()], s.swaTable(c.LocalNRot()), fold) {
+		if !r.run.Layers(li, hi, s.pos, 1, s.resid(), s.cs, fold) {
 			if err := s.runRefusal(r, li); err != nil {
 				return nil, err
 			}
@@ -3263,7 +3257,7 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 			if err := s.openRun(&s.routes[routeLanes]); err != nil {
 				return nil, err
 			}
-			if err := s.cutRest(hi-1, s.pos, 1, s.resid(), s.cs[:c.RopeW()], s.swaTable(c.LocalNRot())); err != nil {
+			if err := s.cutRest(hi-1, s.pos, 1, s.resid(), s.cs); err != nil {
 				return nil, err
 			}
 		}
@@ -3307,7 +3301,7 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 		if !c.ResidStreams() { // its hidden state is the residual, taken in tapStreams
 			defer s.rows.hiddenOf(s.head)()
 		}
-		if s.ld.Layers(s.gpuLayers, s.gpuLayers, s.pos, 1, s.resid(), s.cs[:c.RopeW()], s.swaTable(c.LocalNRot()), s.head) {
+		if s.ld.Layers(s.gpuLayers, s.gpuLayers, s.pos, 1, s.resid(), s.cs, s.head) {
 			done = true
 		} else if err := s.refusal(s.gpuLayers); err != nil {
 			return nil, err
@@ -3393,15 +3387,46 @@ func TopK(logits []float32, k int) []Cand {
 	return out
 }
 
-// swaTable is the local rotary table for the device, or nil where the
-// architecture has one base. The device gets a range of blocks in one
-// submission, so it needs both tables and the period to choose between them;
-// see nn.LayerPlan.SWAPeriod.
-func (s *Instance) swaTable(nrot int) []float32 {
-	if s.csSWA == nil {
-		return nil
+// initTables makes the instance's rotary tables' rows: a row of each of
+// the model's rotaries, the first its rotary width, each further one its
+// own (graph.Rotary.NRot), refusing a model of more than a call carries.
+func (s *Instance) initTables() error {
+	rs := s.rotaries()
+	if len(rs) > nn.MaxRopeTables {
+		return fmt.Errorf("model: %d rotary tables, past the %d a call carries", len(rs), nn.MaxRopeTables)
 	}
-	return s.csSWA[:nrot]
+	s.tabW[0] = s.c.RopeW()
+	for i := 1; i < len(rs); i++ {
+		s.tabW[i] = rs[i].NRot
+	}
+	for i, w := range s.tabW {
+		if w > 0 {
+			s.cs[i] = make([]float32, w)
+		}
+	}
+	return nil
+}
+
+// batchTables is the first n rows of each of the chunk's rotary tables.
+func (s *Instance) batchTables(n int) nn.RopeTables {
+	var t nn.RopeTables
+	for i, b := range s.bcs {
+		if b != nil {
+			t[i] = b[:n*s.tabW[i]]
+		}
+	}
+	return t
+}
+
+// ropeTabs is each rotary table's folded planes for a device
+// (nn.LayerPlan.RopeTabs): the model's rotary at the instance's context
+// first, then each further rotary's.
+func (s *Instance) ropeTabs() [][]float32 {
+	out := [][]float32{model.RopeTabPlanes(s.m.RopeFor(s.maxSeq), s.c.NRot)}
+	for i := 1; i < nn.MaxRopeTables && s.tabW[i] > 0; i++ {
+		out = append(out, s.m.CpuTablePlanes(i, s.maxSeq))
+	}
+	return out
 }
 
 // windowFor is the sliding window a device must apply in a session of maxSeq
@@ -3412,23 +3437,6 @@ func windowFor(c *model.Config, maxSeq int) int {
 		return 0
 	}
 	return c.SWAWindow
-}
-
-// swaPeriodFor is the plan's copy of Config.SWA's pattern, and it is zero unless
-// the architecture trains two rotary bases: a sliding window alone is honoured
-// through the per-row key count and needs no second table (gemma2).
-// localTable says an instance of config c turns its local layers by m's
-// second rotary, as the model makes it (a base or a width of its own): a
-// model's that has one, never its tower's, whose config states neither.
-func localTable(m *model.Model, c *model.Config) bool {
-	return m.RopeSWA != nil && (c.RopeBaseSWA != 0 || c.LocalNRot() != c.NRot)
-}
-
-func swaPeriodFor(c *model.Config) int {
-	if c.RopeBaseSWA == 0 {
-		return 0
-	}
-	return int(c.SWAPeriod)
 }
 
 // narrow copies one run of f32 into the f32 cache.

@@ -10,6 +10,12 @@ func RopePosOracle(p uint32, marks []ropeMark) [4]uint32 { return ropePosOracle(
 
 type RopeMark = ropeMark
 
+func TextMark(at, base uint32) RopeMark { return textMark(at, base) }
+
+func GridMark(at, base, h, w, stride uint32) RopeMark { return gridMark(at, base, h, w, stride) }
+
+func XDMark(at, ends, h, w, idx uint32) RopeMark { return xdMark(at, ends, h, w, idx) }
+
 // WeightLoads is the weight words a launch of req's form at its capacity
 // loads: each live load of a weight operand a thread makes, times the trips
 // of every loop it varies with, times the threads that make it. A form for

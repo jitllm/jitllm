@@ -56,10 +56,9 @@ func (g ImageGrid) Last() bool { return g.Frames == 0 || g.Frame+g.Frames == g.T
 
 func (g ImageGrid) Zero() bool { return g == ImageGrid{} }
 
-// mropeSections is the container's M-RoPE split: contiguous runs of pairs for
-// Qwen2-VL, Qwen2.5-VL and GLM-4.xV, an interleaved split for Qwen3-VL and
-// Qwen3.5 (jlm.FlagRopeInterleaved, Config.RopeInterleaved). A container
-// with no sections has none.
+// mropeSections is the container's M-RoPE sections; how they lie over the
+// table's pairs is the container's pair map (jlm.Config.RopePairs). A
+// container with no sections has none.
 func mropeSections(c *jlm.Config) (out [4]int) {
 	for i, v := range c.RopeSections {
 		out[i] = int(v)
@@ -159,10 +158,7 @@ func (r *RopeMarks) TextAt(i, p int) int {
 		if int(m[graph.MarkAt]) > p {
 			continue
 		}
-		if m[graph.MarkKind] == graph.MarkText {
-			return p - int(m[graph.MarkAt]) + int(m[graph.MarkBase])
-		}
-		return p
+		return int(graph.MarkPosition(m, 0, uint32(p)))
 	}
 	return p
 }

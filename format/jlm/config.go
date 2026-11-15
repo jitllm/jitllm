@@ -1062,3 +1062,58 @@ func (c *Config) Sliding(li int) bool {
 	}
 	return w > 0 && p > 0 && li%p < p-1
 }
+
+// RopePair is one pair of a rotary table: the position axis that turns it and
+// the frequency index it turns at (Base^(-2*Freq/NRot)).
+type RopePair struct{ Axis, Freq int }
+
+// RopePairs is the text rotary's table as the container states it: each pair's
+// axis and frequency, none for a rotary of one position. The container's
+// statement is RopeSections and its two layout flags: sections laid one after
+// another over the NRot/2 pairs, interleaved pair by pair
+// (FlagRopeInterleaved: pair p by axis 1 where p%3 == 1 and p < 3*sections[1],
+// by axis 2 where p%3 == 2 and p < 3*sections[2], by axis 0 otherwise), or
+// over the elements of cat(freq, freq) (FlagRopeXD: a table of NRot pairs, one
+// an element of a head's rotated half pairs, section i 2*sections[i] of them,
+// element e at frequency e mod NRot/2). A pair's frequency is its index
+// otherwise.
+func (c *Config) RopePairs() []RopePair {
+	if c.RopeSections == [4]uint32{} {
+		return nil
+	}
+	half := int(c.NRot) / 2
+	sec := func(i int) int { return int(c.RopeSections[i]) }
+	switch {
+	case c.Flags.Has(FlagRopeXD):
+		out := make([]RopePair, 2*half)
+		for e := range out {
+			out[e].Freq = e % half
+			for i, at := 0, 0; i < len(c.RopeSections); i++ {
+				if at += 2 * sec(i); e < at {
+					out[e].Axis = i
+					break
+				}
+			}
+		}
+		return out
+	case c.Flags.Has(FlagRopeInterleaved):
+		out := make([]RopePair, half)
+		for p := range out {
+			out[p].Freq = p
+			switch {
+			case p%3 == 1 && p < 3*sec(1):
+				out[p].Axis = 1
+			case p%3 == 2 && p < 3*sec(2):
+				out[p].Axis = 2
+			}
+		}
+		return out
+	}
+	out := make([]RopePair, 0, half)
+	for ax := range c.RopeSections {
+		for range sec(ax) {
+			out = append(out, RopePair{Axis: ax, Freq: len(out)})
+		}
+	}
+	return out
+}

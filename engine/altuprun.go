@@ -23,7 +23,7 @@ func (s *Instance) altRowsStep(rd nn.RowsDevice, pos, slot []int, tokens []int32
 	nlogit int) error {
 	c := s.m.Cfg
 	x := s.bx[:n*c.ResidW()]
-	if !rd.LayersRows(s.lo, s.hi, pos, slot, s.maxSeq, x, s.bcs[:n*c.NRot], s.bswaTable(n, c.LocalNRot()), nil) {
+	if !rd.LayersRows(s.lo, s.hi, pos, slot, s.maxSeq, x, s.batchTables(n), nil) {
 		why := "no reason given"
 		if e, ok := s.ld.(nn.ErrReporter); ok {
 			why = e.Err()

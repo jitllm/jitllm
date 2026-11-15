@@ -137,9 +137,9 @@ func (s *gpuSession) leave(ds []*devTier) {
 	s.g.mu.Unlock()
 }
 
-func (s *gpuSession) Layers(lo, hi, pos, n int, x, cs, csSWA []float32, head *nn.Head) bool {
+func (s *gpuSession) Layers(lo, hi, pos, n int, x []float32, cs nn.RopeTables, head *nn.Head) bool {
 	defer s.leave(s.inputsTo(s.step()))
-	return s.g.layersFor(s.sid, lo, hi, pos, n, x, cs, csSWA, head)
+	return s.g.layersFor(s.sid, lo, hi, pos, n, x, cs, head)
 }
 
 func (s *gpuSession) PrepLayer(li int, p *nn.LayerPlan, w *nn.LayerWeights) bool {

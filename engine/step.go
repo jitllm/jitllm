@@ -610,9 +610,8 @@ func stepTogether(runs []Run, rows int, ss nn.SessionStepper) ([][]float32, erro
 	s0 := runs[0].Instance
 	c := s0.m.Cfg
 	defer s0.fr.Enter()()
-	nrot := c.RopeW()
 	s0.growRows(rows)
-	x, cs, csSWA := s0.bx[:rows*c.ResidW()], s0.bcs[:rows*nrot], s0.bswaTable(rows, c.LocalNRot())
+	x, cs := s0.bx[:rows*c.ResidW()], s0.batchTables(rows)
 	// The step's lists are s0's, reused: its rows' sessions and positions, the
 	// wanted rows' logits and the slice handed back.
 	sess, pos := s0.stepSess[:0], s0.stepPos[:0]
@@ -687,7 +686,7 @@ func stepTogether(runs []Run, rows int, ss nn.SessionStepper) ([][]float32, erro
 	if tr, ok := ss.(nn.TokenReader); ok {
 		tr.SetTokens(s0.stepTok)
 	}
-	if !ss.LayersSessions(s0.lo, s0.hi, sess, pos, x, cs, csSWA, h) {
+	if !ss.LayersSessions(s0.lo, s0.hi, sess, pos, x, cs, h) {
 		why := "no reason given"
 		if e, ok := s0.ld.(nn.ErrReporter); ok {
 			why = e.Err()

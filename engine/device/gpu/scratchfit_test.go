@@ -89,7 +89,7 @@ func TestAPromptFindsItsScratchOnAFullCard(t *testing.T) {
 		g, _, n := fullCard(t, p, capBytes, func(c *Config) { c.NoScratchReserve = !reserve })
 		x := make([]float32, batchWidth*p.NEmbd)
 		cs := make([]float32, batchWidth*p.NRot)
-		ok := g.Layers(0, n, 0, batchWidth, x, cs, nil, nil)
+		ok := g.Layers(0, n, 0, batchWidth, x, nn.RopeTables{cs}, nil)
 		return g.Stats(), n, ok
 	}
 	st, n, ok := run(true)
@@ -151,7 +151,7 @@ func TestAStepAtMaxRowsFitsAFullCard(t *testing.T) {
 		}
 		x := make([]float32, batchWidth*p.NEmbd)
 		cs := make([]float32, batchWidth*p.NRot)
-		ok := g.LayersRows(0, n, pos, pos, p.MaxSeq, x, cs, nil, h)
+		ok := g.LayersRows(0, n, pos, pos, p.MaxSeq, x, nn.RopeTables{cs}, h)
 		return g.Stats(), n, ok
 	}
 	st, n, ok := run(true)
@@ -190,7 +190,7 @@ func TestTheScratchIsChargedAndReturned(t *testing.T) {
 	x := make([]float32, batchWidth*p.NEmbd)
 	cs := make([]float32, batchWidth*p.NRot)
 	widths := len(dt.bbs)
-	if !g.Layers(0, 3, 0, 64, x[:64*p.NEmbd], cs[:64*p.NRot], nil, nil) {
+	if !g.Layers(0, 3, 0, 64, x[:64*p.NEmbd], nn.RopeTables{cs[:64*p.NRot]}, nil) {
 		t.Fatalf("a 64-row chunk: %s", g.Err())
 	}
 	if dt.scratch == 0 || widths == 0 {

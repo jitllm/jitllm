@@ -1975,21 +1975,31 @@ func freeScratch(bs *blockScratch) {
 	seen := map[backend.Buf]bool{}
 	v := reflect.ValueOf(bs).Elem()
 	bufType := reflect.TypeOf((*backend.Buf)(nil)).Elem()
-	for i := 0; i < v.NumField(); i++ {
-		f := v.Field(i)
-		if f.Type() != bufType || f.IsNil() {
-			continue
+	free := func(f reflect.Value) {
+		if f.IsNil() {
+			return
 		}
 		// NewAt because the fields are unexported: reflect panics on
 		// Interface() through an unexported name. The address is real and the
-		// type is checked above, so re-deriving a value at it is sound.
+		// type is checked by the caller, so re-deriving a value at it is sound.
 		b, ok := reflect.NewAt(f.Type(), unsafe.Pointer(f.UnsafeAddr())).
 			Elem().Interface().(backend.Buf)
 		if !ok || b == nil || seen[b] {
-			continue
+			return
 		}
 		seen[b] = true
 		b.Free()
+	}
+	for i := 0; i < v.NumField(); i++ {
+		f := v.Field(i)
+		switch {
+		case f.Type() == bufType:
+			free(f)
+		case f.Kind() == reflect.Array && f.Type().Elem() == bufType:
+			for j := range f.Len() {
+				free(f.Index(j))
+			}
+		}
 	}
 	*bs = blockScratch{}
 }

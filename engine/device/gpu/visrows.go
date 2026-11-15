@@ -791,11 +791,11 @@ func (g *GPU) TowerChunk() int {
 // phase 2 runs their queries over all keys rows' k and v and the rest of
 // the blocks, writing their x. Every chunk's phase 1 runs before any
 // chunk's phase 2, block by block.
-func (g *GPU) LayersPhase(lo, hi, pos, n, keys, phase int, x, cs, csSWA []float32) bool {
-	return g.layersPhase(0, lo, hi, pos, n, keys, phase, x, cs, csSWA)
+func (g *GPU) LayersPhase(lo, hi, pos, n, keys, phase int, x []float32, cs nn.RopeTables) bool {
+	return g.layersPhase(0, lo, hi, pos, n, keys, phase, x, cs)
 }
 
-func (g *GPU) layersPhase(sid uint64, lo, hi, pos, n, keys, phase int, x, cs, csSWA []float32) bool {
+func (g *GPU) layersPhase(sid uint64, lo, hi, pos, n, keys, phase int, x []float32, cs nn.RopeTables) bool {
 	g.resetCause(sid, true)
 	if phase != 1 && phase != 2 || keys < pos+n {
 		return false
@@ -816,7 +816,7 @@ func (g *GPU) layersPhase(sid uint64, lo, hi, pos, n, keys, phase int, x, cs, cs
 	}
 	set(phase, keys)
 	defer set(0, 0)
-	return g.layersFor(sid, lo, hi, pos, n, x, cs, csSWA, nil)
+	return g.layersFor(sid, lo, hi, pos, n, x, cs, nil)
 }
 
 // TowerChunk and LayersPhase forward under the session's locks.
@@ -825,7 +825,7 @@ func (s *gpuSession) TowerChunk() int {
 	return s.g.TowerChunk()
 }
 
-func (s *gpuSession) LayersPhase(lo, hi, pos, n, keys, phase int, x, cs, csSWA []float32) bool {
+func (s *gpuSession) LayersPhase(lo, hi, pos, n, keys, phase int, x []float32, cs nn.RopeTables) bool {
 	defer s.leave(s.inputsTo(s.step()))
-	return s.g.layersPhase(s.sid, lo, hi, pos, n, keys, phase, x, cs, csSWA)
+	return s.g.layersPhase(s.sid, lo, hi, pos, n, keys, phase, x, cs)
 }

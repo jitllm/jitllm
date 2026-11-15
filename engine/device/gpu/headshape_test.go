@@ -23,7 +23,7 @@ func TestHeadShapeReadsTheHeadsGraph(t *testing.T) {
 					for _, hidden := range []bool{false, true} {
 						h := graph.Head{NEmbd: 8, NVocab: 24, Eps: 1e-5, LayerNorm: n.layer, NormBias: n.bias,
 							Output: jlm.RoleTokenEmbd, Bias: bias, Softcap: softcap, Scale: scale, Hidden: hidden, NoNorm: n.none}
-						hs, ok := headShape(h.Build())
+						hs, ok := headShape(h.Build(), nil)
 						want := headSpec{out: jlm.RoleTokenEmbd, hasNorm: !n.none, hasNormBias: n.bias, hasBias: bias}
 						if !ok || hs != want {
 							t.Errorf("%+v: read as %+v (%v), want %+v", h, hs, ok, want)
@@ -37,7 +37,7 @@ func TestHeadShapeReadsTheHeadsGraph(t *testing.T) {
 		Bias: true, Softcap: 30, Scale: 8}
 	reordered := full.Build()
 	reordered.Ops[len(reordered.Ops)-1].In[0] = reordered.Ops[1].Out[0]
-	if hs, ok := headShape(reordered); !ok || hs != (headSpec{out: jlm.RoleOutput, hasNorm: true, hasNormBias: true, hasBias: true}) {
+	if hs, ok := headShape(reordered, nil); !ok || hs != (headSpec{out: jlm.RoleOutput, hasNorm: true, hasNormBias: true, hasBias: true}) {
 		t.Errorf("a head whose last op reads the projection: read as %+v (%v)", hs, ok)
 	}
 	for _, c := range []struct {
@@ -62,12 +62,12 @@ func TestHeadShapeReadsTheHeadsGraph(t *testing.T) {
 			return g
 		}},
 	} {
-		if _, ok := headShape(c.make()); ok {
+		if _, ok := headShape(c.make(), nil); ok {
 			t.Errorf("%s: read as a head the tier serves", c.name)
 		}
 	}
 	g := full.Build()
-	if n := testing.AllocsPerRun(100, func() { headShape(g) }); n != 0 {
+	if n := testing.AllocsPerRun(100, func() { headShape(g, nil) }); n != 0 {
 		t.Errorf("reading a head's graph allocates %.0f times", n)
 	}
 }

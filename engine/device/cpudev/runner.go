@@ -3,6 +3,8 @@ package cpudev
 import (
 	"slices"
 	"unsafe"
+
+	"github.com/jitllm/jitllm/nn"
 )
 
 // Bound is a block call's record: what its form's codes bind, every one an
@@ -14,7 +16,7 @@ type Bound struct {
 	Li      int
 	Weights []unsafe.Pointer
 	Own     [][]uint32
-	CS      []float32
+	CS      nn.RopeTables
 	X       []float32
 	// Stride is the elements from one residual stream of X to the next.
 	Stride int
@@ -27,10 +29,8 @@ type Bound struct {
 	// Hists are its histories past its rows' (the composer's tables of
 	// history h at Hists[h-1]), where the block keeps any.
 	Hists []HistTable
-	// CSSWA is the call's second rotary's table where the model trains one,
-	// RopeRows and RopeMarks a rotary table's call's rows and its session's
-	// marks.
-	CSSWA               []float32
+	// RopeRows and RopeMarks are a rotary table's call's rows and its
+	// session's marks.
 	RopeRows, RopeMarks []uint32
 	// RecLi is the block whose recurrent states a linear block's step binds,
 	// RecState and RecConv where its session holds them, RecRows one row's
@@ -80,7 +80,7 @@ type Runner struct {
 	dev *Device
 	res Resources
 	// planes is each rotary's planes as its composed table reads them.
-	planes  [2][]float32
+	planes  [nn.MaxRopeTables][]float32
 	nExpert int
 	call    [4]uint32
 	recRows [3]uint32
@@ -100,12 +100,12 @@ type Runner struct {
 
 // NewRunner is a runner of forms on dev, paging through res, its rotary
 // tables' planes planes, over a mixture of nExpert experts.
-func NewRunner(dev *Device, res Resources, planes [2][]float32, nExpert int) *Runner {
+func NewRunner(dev *Device, res Resources, planes [nn.MaxRopeTables][]float32, nExpert int) *Runner {
 	return &Runner{dev: dev, res: res, planes: planes, nExpert: nExpert, zero: make([]uint32, 4)}
 }
 
 // SetPlanes makes planes the rotary tables' planes the forms read.
-func (r *Runner) SetPlanes(planes [2][]float32) { r.planes = planes }
+func (r *Runner) SetPlanes(planes [nn.MaxRopeTables][]float32) { r.planes = planes }
 
 // GrowZero gives the calls n zero words to bind.
 func (r *Runner) GrowZero(n int) {
@@ -126,10 +126,11 @@ func (r *Runner) ConvOut(n int) []float32 {
 func (r *Runner) CallOf(b *Bound, f *Form) *Call {
 	c := &r.bind
 	c.Own, c.X, c.Stride, c.N, c.IO, c.Hists = b.Own, b.X, b.Stride, b.N, b.IO, b.Hists
-	c.Rope = [2]unsafe.Pointer{ptr(b.CS), ptr(b.CSSWA)}
-	c.Planes = [2]unsafe.Pointer{ptr(r.planes[0]), ptr(r.planes[1])}
-	if b.Planes != nil {
-		c.Planes = [2]unsafe.Pointer{ptr(b.Planes), ptr(b.Planes)}
+	for i := range c.Rope {
+		c.Rope[i], c.Planes[i] = ptr(b.CS[i]), ptr(r.planes[i])
+		if b.Planes != nil {
+			c.Planes[i] = ptr(b.Planes)
+		}
 	}
 	r.call[0] = uint32(b.N)
 	r.recRows = b.RecRows

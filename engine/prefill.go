@@ -532,8 +532,7 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 				s.tailPos = pos
 				// One sequence: slot is the position (nn.RowsDevice).
 				s.layerInputs(s.bple[:n*c.SideWidth()])
-				if s.rowsOn(r, li, hi, pos, pos, s.bx[:n*c.ResidW()], s.bcs[:n*c.RopeW()],
-					s.bswaTable(n, c.LocalNRot()), false, nil, 0) == nil {
+				if s.rowsOn(r, li, hi, pos, pos, s.bx[:n*c.ResidW()], s.batchTables(n), false, nil, 0) == nil {
 					s.tailRowChunks++
 					li = hi - 1
 					continue
@@ -550,15 +549,14 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 				return nil, err
 			}
 			s.cutFor(r, hi-1, n)
-			if s.callTellOn(r, li, p0, n) && r.run.Layers(li, hi, p0, n, s.bx[:n*c.ResidW()], s.bcs[:n*c.RopeW()],
-				s.bswaTable(n, c.LocalNRot()), fh) {
+			if s.callTellOn(r, li, p0, n) && r.run.Layers(li, hi, p0, n, s.bx[:n*c.ResidW()], s.batchTables(n), fh) {
 				headDone = fh != nil
 				li = hi - 1
 				if s.cutAt(li) {
 					if err := s.openPrompt(&s.routes[routeLanes], slot, base, p0, n, chunkRows, bidir); err != nil {
 						return nil, err
 					}
-					if err := s.cutRest(li, p0, n, s.bx[:n*c.ResidW()], s.bcs[:n*c.RopeW()], s.bswaTable(n, c.LocalNRot())); err != nil {
+					if err := s.cutRest(li, p0, n, s.bx[:n*c.ResidW()], s.batchTables(n)); err != nil {
 						return nil, err
 					}
 				}
@@ -640,7 +638,7 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 		return s.logits, nil
 	}
 	if s.head != nil && s.devCount() > 0 && s.devHeadReads() {
-		if s.ld.Layers(s.gpuLayers, s.gpuLayers, s.seqPos(slot)-1, 1, s.resid(), s.cs[:c.RopeW()], s.swaTable(c.LocalNRot()), s.head) {
+		if s.ld.Layers(s.gpuLayers, s.gpuLayers, s.seqPos(slot)-1, 1, s.resid(), s.cs, s.head) {
 			if err := s.devLogits(); err != nil {
 				return nil, err
 			}
@@ -699,21 +697,32 @@ func (s *Instance) growRows(chunk int) {
 	c := s.c
 	// Every buffer the rows read, the second rotary's table too: a set
 	// whose residual rows suffice may hold a shorter table, or none.
-	if len(s.bx) >= chunk*c.ResidW() && len(s.bcs) >= chunk*c.RopeW() &&
-		(!localTable(s.m, c) || len(s.bcsSWA) >= chunk*c.LocalNRot()) {
+	if len(s.bx) >= chunk*c.ResidW() && s.holdsTables(s.bcs, chunk) {
 		return
 	}
 	b := s.takeSpare()
-	if b != nil && len(b.bx) >= chunk*c.ResidW() && len(b.bcs) >= chunk*c.RopeW() &&
-		(!localTable(s.m, c) || len(b.bcsSWA) >= chunk*c.LocalNRot()) {
-		s.bx, s.bcs, s.bcsSWA = b.bx, b.bcs, b.bcsSWA
+	if b != nil && len(b.bx) >= chunk*c.ResidW() && s.holdsTables(b.bcs, chunk) {
+		s.bx, s.bcs = b.bx, b.bcs
 		return
 	}
 	s.bx = make([]float32, chunk*c.ResidW())
-	s.bcs = make([]float32, chunk*c.RopeW())
-	if localTable(s.m, c) {
-		s.bcsSWA = make([]float32, chunk*c.LocalNRot())
+	for i, w := range s.tabW {
+		s.bcs[i] = nil
+		if w > 0 {
+			s.bcs[i] = make([]float32, chunk*w)
+		}
 	}
+}
+
+// holdsTables says t holds chunk rows of each of the instance's rotary
+// tables.
+func (s *Instance) holdsTables(t nn.RopeTables, chunk int) bool {
+	for i, w := range s.tabW {
+		if len(t[i]) < chunk*w {
+			return false
+		}
+	}
+	return true
 }
 
 // promptBuf is a session's prompt buffers -- a chunk's residual rows and its
@@ -725,7 +734,8 @@ func (s *Instance) growRows(chunk int) {
 // One spare serves serial requests; concurrent instances on one model would
 // need a free list.
 type promptBuf struct {
-	bx, bcs, bcsSWA []float32
+	bx  []float32
+	bcs nn.RopeTables
 }
 
 // takeSpare is the model's spare prompt buffers, or nil, emptying the slot.
@@ -746,9 +756,9 @@ func (s *Instance) keepSpare() {
 	s.eng.host.mu.Lock()
 	defer s.eng.host.mu.Unlock()
 	if s.eng.host.spare == nil || len(s.eng.host.spare.bx) < len(s.bx) {
-		s.eng.host.spare = &promptBuf{s.bx, s.bcs, s.bcsSWA}
+		s.eng.host.spare = &promptBuf{s.bx, s.bcs}
 	}
-	s.bx, s.bcs, s.bcsSWA = nil, nil, nil
+	s.bx, s.bcs = nil, nn.RopeTables{}
 }
 
 // allOnDevice reports whether every block of this instance runs on a device.
@@ -764,16 +774,6 @@ func (s *Instance) allOnDevice() bool {
 type errEmptyPrompt struct{}
 
 func (errEmptyPrompt) Error() string { return "model: Prefill called with no tokens" }
-
-// bswaTable and bswaTableAt are swaTable for the batched path: the prefill
-// tables are per token, so the device gets the same n-row slice of the local
-// one that it gets of the global one. nil where the architecture has one base.
-func (s *Instance) bswaTable(n, nrot int) []float32 {
-	if s.bcsSWA == nil {
-		return nil
-	}
-	return s.bcsSWA[:n*nrot]
-}
 
 // forwardRowsFor is the longest prompt run through the decode path: the
 // caller's WithPrefillForwardRows, else one.

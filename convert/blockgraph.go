@@ -1153,7 +1153,6 @@ func (bf *blockFacts) selected(b *graph.Builder, g *mjGraph, o mjBlockOp, vars m
 				return 0, err
 			}
 			a.NRot, a.Base, a.Layout, a.Freqs, a.Mscale = r.NRot, r.Base, r.Layout, r.Freqs, r.Mscale
-			a.Sections, a.Interleaved = r.Sections, r.Interleaved
 		}
 		return b.SelectPooled(in[0], h, a, s.PoolNorm), nil
 	}
@@ -1874,63 +1873,12 @@ func (bf *blockFacts) rope(global bool) (graph.Attrs, error) {
 		if nrot != int(c.NRot) || base != float64(c.RopeBase) {
 			return graph.Attrs{}, fmt.Errorf("rotary sections on the sliding layers' own rotary")
 		}
-		// Under XD-RoPE the axes are assigned per element of cat(freq, freq):
-		// each section twice as wide, its halves turned apart.
+		// The table states each pair's axis (jlm.Config.RopePairs); under
+		// XD-RoPE it holds a pair an element of cat(freq, freq), so a pair's
+		// halves turn apart.
 		if c.Flags.Has(jlm.FlagRopeXD) {
-			for i, n := range sec {
-				a.Sections[i] = 2 * int(n)
-			}
 			a.Layout = graph.RopeSplit
-			return a, nil
 		}
-		for i, n := range sec {
-			a.Sections[i] = int(n)
-		}
-		// The sections lie one after another or interleaved; where the two
-		// lay the pairs out alike, they read as interleaved.
-		a.Interleaved = c.Flags.Has(jlm.FlagRopeInterleaved) || slices.Equal(mropeRuns(sec), imropeRuns(sec, nrot/2))
 	}
 	return a, nil
-}
-
-// ropeRun is a run of a multimodal rotary's pairs turned by one coordinate
-// (axis) from frequency freq.
-type ropeRun struct{ pairs, axis, freq int }
-
-// mropeRuns is the sections one after another: each coordinate's pairs,
-// at the frequencies that follow the last's.
-func mropeRuns(sec [4]uint32) []ropeRun {
-	var runs []ropeRun
-	off := 0
-	for ax, n := range sec {
-		if n == 0 {
-			continue
-		}
-		runs = append(runs, ropeRun{int(n), ax, off})
-		off += int(n)
-	}
-	return runs
-}
-
-// imropeRuns is the sections interleaved over pairs pairs: pair i turns by
-// coordinate 1 where i%3 is 1 and i is below three times its section, by 2
-// where i%3 is 2 and below three times its, and by 0 otherwise, at
-// frequency i.
-func imropeRuns(sec [4]uint32, pairs int) []ropeRun {
-	var runs []ropeRun
-	for i := range pairs {
-		ax := 0
-		switch {
-		case i%3 == 1 && i < 3*int(sec[1]):
-			ax = 1
-		case i%3 == 2 && i < 3*int(sec[2]):
-			ax = 2
-		}
-		if n := len(runs); n > 0 && runs[n-1].axis == ax {
-			runs[n-1].pairs++
-			continue
-		}
-		runs = append(runs, ropeRun{1, ax, i})
-	}
-	return runs
 }

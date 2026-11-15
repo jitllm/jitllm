@@ -22,8 +22,8 @@ const (
 	ropeGrid      = graph.RopeGrid
 	ropeLanes     = 8
 	// ropeAxes is a row's positions in a table over several axes, one an
-	// axis the sections can name.
-	ropeAxes = len(graph.Attrs{}.Sections)
+	// axis a pair can name.
+	ropeAxes = 4
 )
 
 // The constant block's words.
@@ -73,7 +73,7 @@ func decomposeRopeTable(o graph.Op, c *Context) ([]Prim, error) {
 		if err != nil {
 			return nil, err
 		}
-		if len(o.In) != 0 || o.Attr.Sections != [ropeAxes]int{} || o.Attr.Grid {
+		if len(o.In) != 0 || len(o.Attr.Axes) != 0 || o.Attr.Grid {
 			return nil, fmt.Errorf("a rotary value at windows of %d over %d inputs", span, len(o.In))
 		}
 		out, planes = c.value(o.Out[0]), TablePlanes.of(tab.Instance)
@@ -82,16 +82,19 @@ func decomposeRopeTable(o graph.Op, c *Context) ([]Prim, error) {
 		}
 	}
 	var axes []uint32
-	if o.Attr.Cycle != 0 {
-		return nil, fmt.Errorf("a rotary table over a cycle of %d axes %v: its pairs' frequencies are its cycles' first pairs'", o.Attr.Cycle, o.Attr.CycleAxes)
-	}
-	if o.Attr.Sections != [ropeAxes]int{} {
+	if len(o.Attr.Axes) != 0 {
 		if o.Attr.Grid {
-			return nil, fmt.Errorf("a rotary table of grid cells over the axes of sections %v", o.Attr.Sections)
+			return nil, fmt.Errorf("a rotary table of grid cells over the axes %v", o.Attr.Axes)
 		}
-		var err error
-		if axes, err = ropeAxisWords(o.Attr, P); err != nil {
-			return nil, err
+		if len(o.Attr.Axes) != P {
+			return nil, fmt.Errorf("a rotary table of %d pairs over the axes of %d", P, len(o.Attr.Axes))
+		}
+		axes = make([]uint32, P)
+		for p, a := range o.Attr.Axes {
+			if int(a) >= ropeAxes {
+				return nil, fmt.Errorf("a rotary table's pair %d turns by axis %d of %d", p, a, ropeAxes)
+			}
+			axes[p] = uint32(a)
 		}
 	}
 	var x exprs
@@ -232,45 +235,6 @@ func ropeTurn(x *exprs, pos, p, planes, kon, stride int) (cvs, svs int, q *Quart
 	ms := x.load(planes, x.u(uint32(8*stride)))
 	svs = x.op(OpMul, F, sv, ms)
 	return x.op(OpMul, F, cv, ms), svs, &Quarter{Sum: s, Rest: co, Turn: n, Part: f, Bound: 1 << (ropeDigitBits + 4)}
-}
-
-// ropeAxisWords is each of a table's pairs' axis as its sections assign it
-// (graph.Attrs.Sections): contiguous runs that cover every pair, or pair by
-// pair where Interleaved, over the first three axes.
-func ropeAxisWords(a graph.Attrs, pairs int) ([]uint32, error) {
-	w := make([]uint32, pairs)
-	sum := 0
-	for _, n := range a.Sections {
-		if n < 0 {
-			return nil, fmt.Errorf("rotary sections %v", a.Sections)
-		}
-		sum += n
-	}
-	if a.Interleaved {
-		if a.Sections[3] != 0 {
-			return nil, fmt.Errorf("interleaved rotary sections %v: a fourth axis is not interleaved", a.Sections)
-		}
-		for p := range w {
-			switch {
-			case p%3 == 1 && p < 3*a.Sections[1]:
-				w[p] = 1
-			case p%3 == 2 && p < 3*a.Sections[2]:
-				w[p] = 2
-			}
-		}
-		return w, nil
-	}
-	if sum != pairs {
-		return nil, fmt.Errorf("rotary sections %v over %d pairs: contiguous sections cover every pair", a.Sections, pairs)
-	}
-	p := 0
-	for ax, n := range a.Sections {
-		for range n {
-			w[p] = uint32(ax)
-			p++
-		}
-	}
-	return w, nil
 }
 
 // oneAxis is the axis every pair of axes turns by, where they all turn by

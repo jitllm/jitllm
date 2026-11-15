@@ -15,8 +15,8 @@ import (
 // where its sequence's marks start.
 type Tables struct {
 	one, many []Part
-	planes    [2][]float32
-	widths    [2]int
+	planes    [nn.MaxRopeTables][]float32
+	widths    [nn.MaxRopeTables]int
 	w         Weights
 	dev       *Device
 	rows      []uint32
@@ -34,8 +34,10 @@ type Tables struct {
 // NewTables is the rotary tables' part on dev: rotary i's forms one[i] and
 // many[i], its planes planes[i] and its rows widths[i] wide, their weights
 // bound by w.
-func NewTables(dev *Device, one, many []Part, planes [2][]float32, widths [2]int, w Weights) *Tables {
-	t := &Tables{one: one, many: many, planes: planes, widths: widths, w: w, dev: dev}
+func NewTables(dev *Device, one, many []Part, planes [][]float32, widths []int, w Weights) *Tables {
+	t := &Tables{one: one, many: many, w: w, dev: dev}
+	copy(t.planes[:], planes)
+	copy(t.widths[:], widths)
 	u := 1
 	for i := range one {
 		for _, p := range []*Part{&t.one[i], &t.many[i]} {
@@ -53,14 +55,13 @@ func NewTables(dev *Device, one, many []Part, planes [2][]float32, widths [2]int
 // pos its rows and their positions.
 func (t *Tables) SetGrid(req, pos []uint32) { t.req, t.pos = req, pos }
 
-// Tables writes the rotary tables of a call's rows into cs and, where the
-// model trains a second rotary, csSWA: row i at the cache position desc[2i],
+// Tables writes the rotary tables of a call's rows into each of cs's: row i
+// at the cache position desc[2i],
 // its sequence's marks from desc[2i+1] in marks (none where marks is nil) --
 // each row's positions on the axes from its marks (graph.OpRopePos), then
 // its angles. A grid table reads the picture SetGrid named, desc's rows
 // counting them.
-func (t *Tables) Tables(desc, marks []uint32, cs, csSWA []float32) error {
-	outs := [2][]float32{cs, csSWA}
+func (t *Tables) Tables(desc, marks []uint32, outs nn.RopeTables) error {
 	rows := len(desc) / 2
 	for i := range t.one {
 		if i >= len(outs) || len(outs[i]) == 0 || t.widths[i] == 0 {
@@ -86,7 +87,7 @@ func (t *Tables) Tables(desc, marks []uint32, cs, csSWA []float32) error {
 			if f.Rows < rows {
 				return fmt.Errorf("model: the grid table on the CPU turns %d rows, a picture's %d", f.Rows, rows)
 			}
-			t.run(f, weights, rows, nil, t.zero[:], outs[0], outs[1])
+			t.run(f, weights, rows, nil, t.zero[:], outs)
 			continue
 		}
 		for r0 := 0; r0 < rows; {
@@ -100,13 +101,9 @@ func (t *Tables) Tables(desc, marks []uint32, cs, csSWA []float32) error {
 			if len(marks) > 0 {
 				mk = marks
 			}
-			cs, swa := outs[0], outs[1]
-			if i == 0 {
-				cs = outs[0][r0*t.widths[0]:]
-			} else {
-				swa = outs[1][r0*t.widths[1]:]
-			}
-			t.run(f, weights, k, t.rows, mk, cs, swa)
+			at := outs
+			at[i] = outs[i][r0*t.widths[i]:]
+			t.run(f, weights, k, t.rows, mk, at)
 			r0 += k
 		}
 	}
@@ -114,12 +111,13 @@ func (t *Tables) Tables(desc, marks []uint32, cs, csSWA []float32) error {
 }
 
 // run calls form f, its weights at weights, over n rows described by rows
-// (nil for a grid's), its marks mk, writing cs and csSWA.
-func (t *Tables) run(f *Form, weights []unsafe.Pointer, n int, rows, mk []uint32, cs, csSWA []float32) {
+// (nil for a grid's), its marks mk, writing cs's tables.
+func (t *Tables) run(f *Form, weights []unsafe.Pointer, n int, rows, mk []uint32, cs nn.RopeTables) {
 	c := &t.bind
 	*c = Call{Own: t.dev.Own(f), N: n, Weights: weights}
-	c.Rope = [2]unsafe.Pointer{ptr(cs), ptr(csSWA)}
-	c.Planes = [2]unsafe.Pointer{ptr(t.planes[0]), ptr(t.planes[1])}
+	for i := range c.Rope {
+		c.Rope[i], c.Planes[i] = ptr(cs[i]), ptr(t.planes[i])
+	}
 	t.call[0] = uint32(n)
 	t.recRows = [3]uint32{1, 0, 0}
 	c.At[SrcCall], c.At[SrcZero] = unsafe.Pointer(&t.call[0]), unsafe.Pointer(&t.zeros[0])

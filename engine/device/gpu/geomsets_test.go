@@ -55,7 +55,7 @@ func TestNonCausalBlocksOfTwoGeometriesRunOnOneCard(t *testing.T) {
 		t.Fatalf("a call over both geometries is %d runs (%v), want 2", len(rs), ok)
 	}
 	cs := make([]float32, a.NEmbd)
-	if !g.Layers(0, len(plans), 0, n, make([]float32, n*a.NEmbd), cs, nil, nil) {
+	if !g.Layers(0, len(plans), 0, n, make([]float32, n*a.NEmbd), nn.RopeTables{cs}, nil) {
 		t.Fatalf("a picture of %d rows did not run: %s", n, g.Err())
 	}
 	g.Close()

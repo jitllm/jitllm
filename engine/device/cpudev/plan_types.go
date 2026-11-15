@@ -37,7 +37,7 @@ func (w boundWeights) Bind(f *Form) ([]unsafe.Pointer, nn.Decline) {
 }
 
 // PlaceLanes is Place (nn.LanePlacer).
-func (e *Exec) PlaceLanes(n int, l nn.Lease, planes [2][]float32, nExpert int, prof bool) {
+func (e *Exec) PlaceLanes(n int, l nn.Lease, planes [nn.MaxRopeTables][]float32, nExpert int, prof bool) {
 	e.Place(n, l, planes, nExpert, prof)
 }
 

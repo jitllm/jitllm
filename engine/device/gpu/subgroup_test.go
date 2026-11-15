@@ -119,7 +119,7 @@ func TestSubgroupSelectionIsByGuarantee(t *testing.T) {
 			// than erroring.
 			x := make([]float32, p.NEmbd)
 			cs := make([]float32, p.NRot)
-			if !one.Layers(0, 1, 0, 1, x, cs, nil, nil) {
+			if !one.Layers(0, 1, 0, 1, x, nn.RopeTables{cs}, nil) {
 				t.Fatalf("Layers: %s", one.LastErr)
 			}
 			t.Logf("chose %d-lane kernels, block ran", one.Lanes)
@@ -171,7 +171,7 @@ func TestSelectionFollowsTheGuaranteeWhenPinningIsOff(t *testing.T) {
 			}
 			x := make([]float32, p.NEmbd)
 			cs := make([]float32, p.NRot)
-			if !one.Layers(0, 1, 0, 1, x, cs, nil, nil) {
+			if !one.Layers(0, 1, 0, 1, x, nn.RopeTables{cs}, nil) {
 				t.Fatalf("%s: Layers: %s", d.Name(), one.LastErr)
 			}
 			seen[want]++

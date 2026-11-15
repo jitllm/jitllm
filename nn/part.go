@@ -300,10 +300,10 @@ type EntryDevice interface {
 
 // TablesDevice is a device writing a call's rotary tables: row i at the
 // cache position desc[2i], its sequence's marks from desc[2i+1] in marks,
-// into cs and csSWA; SetGrid makes them a grid table's over a picture, its
+// into each of cs's tables; SetGrid makes them a grid table's over a picture, its
 // request req and its rows pos.
 type TablesDevice interface {
-	Tables(desc, marks []uint32, cs, csSWA []float32) error
+	Tables(desc, marks []uint32, cs RopeTables) error
 	SetGrid(req, pos []uint32)
 }
 

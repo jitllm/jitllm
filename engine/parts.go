@@ -96,7 +96,7 @@ func (s *Instance) partsPlan() *nn.PartsPlan {
 	p.InputsW = nn.PartWeights{Block: cpuInputRows, Of: s.ws.tensors(cpuInputRows, nil)}
 
 	tabs := s.tableGraphs()
-	p.TableWidths = [2]int{s.c.RopeW(), s.c.LocalNRot()}
+	p.TableWidths = s.tabW[:]
 	p.Tables = make([]nn.TablePlan, len(tabs))
 	for i, g := range tabs {
 		// The tables are the model's rotaries; an instance whose config has
@@ -111,7 +111,10 @@ func (s *Instance) partsPlan() *nn.PartsPlan {
 		}
 		p.Tables[i] = nn.TablePlan{One: s.tablePlan(g, 1), Many: s.tablePlan(g, rows)}
 	}
-	p.TablePlanes = [2][]float32{s.tablePlanes(0), s.tablePlanes(1)}
+	p.TablePlanes = make([][]float32, len(tabs))
+	for i := range tabs {
+		p.TablePlanes[i] = s.tablePlanes(i)
+	}
 	p.TablesW = nn.PartWeights{Block: cpuTablesBlock, Of: s.ws.tensors(cpuTablesBlock, nil)}
 
 	for f := nn.KVF16; int(f) < nn.KVFormats; f++ {

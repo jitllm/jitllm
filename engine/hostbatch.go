@@ -1,5 +1,7 @@
 package engine
 
+import "github.com/jitllm/jitllm/nn"
+
 // stepBuf is a ragged step's scratch across sessions (stepRouted): the
 // residual rows, their rotary tables and the wanted rows' logits. The model
 // holds one, and whichever instance leads a step borrows it for the step and
@@ -7,11 +9,21 @@ package engine
 // one step's per instance that ever led, which a pool of instances kept at
 // its widest.
 type stepBuf struct {
-	bx, bcs, bcsSWA, blogits []float32
+	bx, blogits []float32
+	bcs         nn.RopeTables
 }
 
 func (b *stepBuf) bytes() uint64 {
-	return 4 * uint64(cap(b.bx)+cap(b.bcs)+cap(b.bcsSWA)+cap(b.blogits))
+	return 4 * uint64(cap(b.bx)+tablesCap(b.bcs)+cap(b.blogits))
+}
+
+// tablesCap is the floats t's tables hold.
+func tablesCap(t nn.RopeTables) int {
+	n := 0
+	for _, c := range t {
+		n += cap(c)
+	}
+	return n
 }
 
 // borrowStep gives s its maker's step scratch for a step it leads. What s
@@ -28,7 +40,7 @@ func (s *Instance) borrowStep() {
 		s.stepb = &stepBuf{}
 		return
 	}
-	s.bx, s.bcs, s.bcsSWA, s.blogits = b.bx, b.bcs, b.bcsSWA, b.blogits
+	s.bx, s.bcs, s.blogits = b.bx, b.bcs, b.blogits
 	*b = stepBuf{}
 	s.stepb = b
 }
@@ -38,8 +50,8 @@ func (s *Instance) returnStep() {
 	// The holder borrowStep emptied, refilled: a step allocates nothing.
 	b := s.stepb
 	s.stepb = nil
-	*b = stepBuf{bx: s.bx, bcs: s.bcs, bcsSWA: s.bcsSWA, blogits: s.blogits}
-	s.bx, s.bcs, s.bcsSWA, s.blogits = nil, nil, nil, nil
+	*b = stepBuf{bx: s.bx, bcs: s.bcs, blogits: s.blogits}
+	s.bx, s.bcs, s.blogits = nil, nn.RopeTables{}, nil
 	s.eng.host.mu.Lock()
 	s.eng.host.step = b
 	s.eng.host.mu.Unlock()
@@ -50,7 +62,7 @@ func (s *Instance) returnStep() {
 // instance that only decodes, or that leads routed steps, holds none of it
 // between calls.
 func (s *Instance) ScratchBytes() uint64 {
-	b := stepBuf{bx: s.bx, bcs: s.bcs, bcsSWA: s.bcsSWA, blogits: s.blogits}
+	b := stepBuf{bx: s.bx, bcs: s.bcs, blogits: s.blogits}
 	return b.bytes()
 }
 
@@ -64,7 +76,7 @@ func (s *Instance) StepScratchBytes() uint64 {
 		n += s.eng.host.step.bytes()
 	}
 	if p := s.eng.host.spare; p != nil {
-		n += 4 * uint64(cap(p.bx)+cap(p.bcs)+cap(p.bcsSWA))
+		n += 4 * uint64(cap(p.bx)+tablesCap(p.bcs))
 	}
 	return n
 }

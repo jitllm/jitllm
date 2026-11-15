@@ -21,7 +21,7 @@ func (d *hostHungryDevice) MatVec([]float32, quant.Type, []byte, []float32, int,
 	return false
 }
 func (d *hostHungryDevice) PrepLayer(int, *nn.LayerPlan, *nn.LayerWeights) bool { return false }
-func (d *hostHungryDevice) Layers(int, int, int, int, []float32, []float32, []float32, *nn.Head) bool {
+func (d *hostHungryDevice) Layers(int, int, int, int, []float32, nn.RopeTables, *nn.Head) bool {
 	return false
 }
 func (d *hostHungryDevice) PrepHead(*nn.Head) bool { return false }

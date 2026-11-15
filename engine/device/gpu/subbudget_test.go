@@ -3,6 +3,8 @@ package gpu
 import (
 	"testing"
 	"time"
+
+	"github.com/jitllm/jitllm/nn"
 )
 
 // TestASubmissionIsCutAtItsRunTimeBudget: a range whose measured per-block
@@ -31,7 +33,7 @@ func TestASubmissionIsCutAtItsRunTimeBudget(t *testing.T) {
 			x[i] = float32(i%7) * 0.01
 		}
 		before := g.Stats().Submits
-		if !g.Layers(0, n, 0, 1, x, cs, nil, nil) {
+		if !g.Layers(0, n, 0, 1, x, nn.RopeTables{cs}, nil) {
 			t.Fatalf("Layers: %s", g.Err())
 		}
 		return x, g.Stats().Submits - before

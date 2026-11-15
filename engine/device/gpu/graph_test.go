@@ -364,7 +364,7 @@ func textPlan(p *nn.LayerPlan) {
 func withRotary(p *nn.LayerPlan) {
 	r := graph.Rotary{NRot: p.NRot, Base: p.RopeBase}
 	p.Tables = []*graph.Graph{composer.TableGraph(r, 0)}
-	p.RopeTab = nn.Rope{NRot: p.NRot, Base: p.RopeBase}.TabPlanes(p.NRot / 2)
+	p.RopeTabs = [][]float32{nn.Rope{NRot: p.NRot, Base: p.RopeBase}.TabPlanes(p.NRot / 2)}
 	p.Rotaries = []graph.Rotary{r}
 }
 
@@ -451,7 +451,7 @@ func step(t *testing.T, g *devTier, p *nn.LayerPlan, pos int) {
 	t.Helper()
 	x := make([]float32, p.NEmbd)
 	cs := make([]float32, p.NRot)
-	if !g.Layers(0, 1, pos, 1, x, cs, nil, nil) {
+	if !g.Layers(0, 1, pos, 1, x, nn.RopeTables{cs}, nil) {
 		t.Fatalf("Layers(pos=%d) failed: %s", pos, g.LastErr)
 	}
 }

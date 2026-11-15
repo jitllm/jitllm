@@ -430,9 +430,9 @@ func BuildForm(h *cpu.Target, gr *graph.Graph, codes []composer.Code, rows int, 
 				ar.i = f.weight(Weight{Vector: true, Role: o.Role})
 			case o.Kind == composer.OperandTable:
 				switch t := o.Table; {
-				case t == composer.TableAngles && o.Instance < 2:
+				case t == composer.TableAngles && o.Instance < nn.MaxRopeTables:
 					ar.src, ar.inst = SrcRope, o.Instance
-				case t == composer.TablePlanes && o.Instance < 2:
+				case t == composer.TablePlanes && o.Instance < nn.MaxRopeTables:
 					ar.src, ar.inst = SrcPlanes, o.Instance
 				case t == composer.TableRopeRows:
 					ar.src = SrcRopeRows

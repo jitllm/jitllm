@@ -93,9 +93,11 @@ type Config struct {
 	// differently; see mrope.go. Zero everywhere else.
 	RopeSections [4]int
 
-	// RopeInterleaved says the sections are Qwen3-VL's interleaved split
-	// (nn.IMRopeRuns), not contiguous runs (jlm.FlagRopeInterleaved).
-	RopeInterleaved bool
+	// RopePairs is the pairs a row's rotary table holds where the container's
+	// pair map states them (jlm.Config.RopePairs), 0 for a rotary of one
+	// position: more than NRot/2 where each element of a pair turns by an
+	// entry of its own (graph.RopeSplit).
+	RopePairs int
 
 	// RopeXD is HunyuanVL's XD-RoPE (jlm.FlagRopeXD): four axes assigned per
 	// element, so a row's table is two pair tables, A for each NEOX pair's
@@ -644,11 +646,11 @@ func (c *Config) MaxNRot() int {
 	return m
 }
 
-// RopeW is how many floats one row's rotary table holds: NRot, or two tables
-// of it under XD-RoPE (RopeXD).
+// RopeW is how many floats one row's rotary table holds: two a pair of its
+// table (RopePairs), NRot for a table of a head's rotated pairs.
 func (c *Config) RopeW() int {
-	if c.RopeXD {
-		return 2 * c.NRot
+	if c.RopePairs > 0 {
+		return 2 * c.RopePairs
 	}
 	return c.NRot
 }
@@ -2700,16 +2702,12 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 	if m.OutNormB != nil && !cfg.LayerNorm {
 		return nil, fmt.Errorf("model: a norm bias on an RMSNorm model")
 	}
-	cfg.RopeInterleaved = c.Config().Flags.Has(jlm.FlagRopeInterleaved)
+	// The table's pairs are the container's: each pair's axis and frequency.
 	m.Rope = nn.Rope{NRot: cfg.NRot, Base: cfg.RopeBase, Neox: cfg.RopeNeox,
-		Scale: cfg.AttnFactor, Runs: nn.MRopeRuns(cfg.RopeSections[:])}
-	if cfg.RopeInterleaved && len(m.Rope.Runs) > 0 {
-		m.Rope.Runs = nn.IMRopeRuns(cfg.RopeSections[:], cfg.NRot/2)
-	}
-	if cfg.RopeXD = c.Config().Flags.Has(jlm.FlagRopeXD); cfg.RopeXD {
-		// The converter states XD-RoPE over the whole head with NEOX pairs, as
-		// transformers turns it (convert.hunyuanVLConfig).
-		m.Rope.Runs, _ = nn.XDRopeRuns(cfg.RopeSections[:], cfg.NRot/2)
+		Scale: cfg.AttnFactor, Runs: nn.PairRuns(c.Config().RopePairs())}
+	cfg.RopeXD = c.Config().Flags.Has(jlm.FlagRopeXD)
+	if len(m.Rope.Runs) > 0 {
+		cfg.RopePairs = m.Rope.TablePairs()
 	}
 	// A second rotary for architectures trained with two bases (gemma3's
 	// sliding layers), built only when RopeBaseSWA is set.

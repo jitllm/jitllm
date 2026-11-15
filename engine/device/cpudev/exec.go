@@ -94,7 +94,7 @@ func (r resources) DropRows() { r.b.DropRows() }
 // format, keeps the forms' own buffers), the runner reading the experts ex
 // pages in and the rotaries' planes, and its lanes over the same lease the
 // first time.
-func (e *Exec) Place(n int, ex Lease, planes [2][]float32, nExpert int, prof bool) {
+func (e *Exec) Place(n int, ex Lease, planes [nn.MaxRopeTables][]float32, nExpert int, prof bool) {
 	res := resources{ExpertPager: ex, b: e.b}
 	if e.lanes == nil {
 		st := e.setup
@@ -572,7 +572,8 @@ type Step struct {
 	Stride int
 	// Cut is the call's cut row, which a block cut in two reads (Block.Cut).
 	Cut               []float32
-	CS, CSSWA, Side   []float32
+	CS                nn.RopeTables
+	Side              []float32
 	Pos               int
 	Tok               int32
 	Toks, Faults      bool
@@ -606,7 +607,7 @@ func (e *Exec) Run(li int, st *Step, b *Bindings) (nn.Decline, error) {
 	if why != nn.DeclineServes {
 		return why, nil
 	}
-	r := Row{X: st.X, Stride: st.Stride, CS: st.CS, CSSWA: st.CSSWA, Side: st.Side, Pages: hb.Pages,
+	r := Row{X: st.X, Stride: st.Stride, CS: st.CS, Side: st.Side, Pages: hb.Pages,
 		KeyStart: hb.KeyStart, Pos: st.Pos, PagePos: hb.PagePos, Tok: st.Tok, Toks: st.Toks, RecLi: st.RecLi, Weights: w,
 		Faults: st.Faults, Keys: hb.Keys, Values: hb.Values, RecState: st.RecState, RecConv: st.RecConv, Slot: st.Slot,
 		Hists: hb.Hists, Req: st.Req, Cut: st.Cut}

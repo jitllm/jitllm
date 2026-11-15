@@ -93,8 +93,8 @@ type PartsPlan struct {
 	InputsW           PartWeights
 	PleW              int
 	Tables            []TablePlan
-	TablePlanes       [2][]float32
-	TableWidths       [2]int
+	TablePlanes       [][]float32
+	TableWidths       []int
 	TablesW           PartWeights
 	// KV is each history format's conversions, by KVFmt (KVF32's are
 	// none): the instance's own, KVFmt, and every one a session may bring.
@@ -172,7 +172,7 @@ type BlockSetPlacer interface {
 // none composed yet: the experts and weights it pages in, the rotaries'
 // planes, the experts' count and whether its calls are profiled.
 type LanePlacer interface {
-	PlaceLanes(n int, l Lease, planes [2][]float32, nExpert int, prof bool)
+	PlaceLanes(n int, l Lease, planes [MaxRopeTables][]float32, nExpert int, prof bool)
 }
 
 // PartsPlacer composes every part of a plan on a device and makes them the

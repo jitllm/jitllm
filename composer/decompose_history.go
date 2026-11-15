@@ -19,18 +19,22 @@ const (
 
 // rotaryTable is the step's table a rotary op turns by: the model's one
 // where it has one, else the rotary its width and base name, its factors
-// telling two apart. A table turns its pairs by the position axes the op
-// states, or it is not the op's.
+// telling two apart. The table states the position axis each of its pairs
+// turns by (graph.Rotary.Axes); the rotation is the same whatever they are.
 func (c *Context) rotaryTable(a graph.Attrs) (Operand, error) {
-	axes := func(r graph.Rotary) bool {
-		return r.Sections == a.Sections && r.Interleaved == a.Interleaved && r.Cycle == a.Cycle && r.CycleAxes == a.CycleAxes
+	i, ok := RotaryIndex(c.Rotaries, a)
+	if !ok {
+		return Operand{}, fmt.Errorf("a rotary of %d at base %v the model states no table of", a.NRot, a.Base)
 	}
-	if len(c.Rotaries) <= 1 {
-		if len(c.Rotaries) == 1 && !axes(c.Rotaries[0]) {
-			return Operand{}, fmt.Errorf("a rotary over the axes of sections %v (interleaved %v), where the model's table turns by sections %v (interleaved %v)",
-				a.Sections, a.Interleaved, c.Rotaries[0].Sections, c.Rotaries[0].Interleaved)
-		}
-		return TableAngles.of(c.RotaryBase), nil
+	return TableAngles.of(c.RotaryBase + i), nil
+}
+
+// RotaryIndex is which of a model's rotaries rs a rotary op of attributes a
+// turns by: the only one where there is one, else the one its width and
+// base name, its factors telling two apart.
+func RotaryIndex(rs []graph.Rotary, a graph.Attrs) (int, bool) {
+	if len(rs) <= 1 {
+		return 0, true
 	}
 	// A split rotary's table holds a pair an element.
 	nrot := a.NRot
@@ -38,15 +42,12 @@ func (c *Context) rotaryTable(a graph.Attrs) (Operand, error) {
 		nrot *= 2
 	}
 	found := -1
-	for i, r := range c.Rotaries {
-		if r.NRot == nrot && r.Base == a.Base && axes(r) && (found < 0 || r.Freqs == a.Freqs) {
+	for i, r := range rs {
+		if r.NRot == nrot && r.Base == a.Base && (found < 0 || r.Freqs == a.Freqs) {
 			found = i
 		}
 	}
-	if found < 0 {
-		return Operand{}, fmt.Errorf("a rotary of %d at base %v over sections %v the model states no table of", a.NRot, a.Base, a.Sections)
-	}
-	return TableAngles.of(c.RotaryBase + found), nil
+	return found, found >= 0
 }
 
 // decomposeRope turns each head's first NRot elements in pairs by the
@@ -55,7 +56,7 @@ func decomposeRope(o graph.Op, c *Context) ([]Prim, error) {
 	a := o.Attr
 	// The angles are the step's table, built from the engine's rotary: its
 	// per-pair factors (Freqs), its cos/sin scale (Mscale) and, over several
-	// position axes (Sections), each pair's axis are in it. Each pair turns
+	// position axes, each pair's axis are in it. Each pair turns
 	// by one angle either way, so the rotation is the same.
 	if len(o.In) != 1 && len(o.In) != 2 || len(o.Out) != 1 || a.HeadDim <= 0 || c.width(o.In[0])%a.HeadDim != 0 ||
 		a.NRot <= 0 || a.NRot%2 != 0 || a.Offset < 0 || a.Offset+a.NRot > a.HeadDim ||

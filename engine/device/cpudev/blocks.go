@@ -5,6 +5,7 @@ import (
 	"unsafe"
 
 	"github.com/jitllm/jitllm/composer"
+	"github.com/jitllm/jitllm/nn"
 )
 
 // Row is one row of a block's call, as a decode step runs it: the row's
@@ -17,12 +18,13 @@ type Row struct {
 	X      []float32
 	Stride int
 	// Cut is the row a block cut in two reads in place of the residual.
-	Cut             []float32
-	CS, CSSWA, Side []float32
-	Pages           []uint32
-	Keys, Values    unsafe.Pointer
-	Hists           []HistTable
-	KeyStart, Pos   int
+	Cut           []float32
+	CS            nn.RopeTables
+	Side          []float32
+	Pages         []uint32
+	Keys, Values  unsafe.Pointer
+	Hists         []HistTable
+	KeyStart, Pos int
 	// PagePos is the positions a page of the history holds.
 	PagePos int
 	Tok     int32
@@ -82,7 +84,7 @@ func NewBlocks(dev *Device, run *Runner) *Blocks { return &Blocks{dev: dev, run:
 // Row runs row r of block li's composed forms cb.
 func (bl *Blocks) Row(li int, cb *Block, r *Row) error {
 	b := &bl.bound
-	*b = Bound{Li: li, Own: bl.dev.Own(cb.F), CS: r.CS, CSSWA: r.CSSWA, X: r.X, Stride: r.Stride, Rows: bl.rows[:], N: 1,
+	*b = Bound{Li: li, Own: bl.dev.Own(cb.F), CS: r.CS, X: r.X, Stride: r.Stride, Rows: bl.rows[:], N: 1,
 		Pages: r.Pages, Keys: r.Keys, Values: r.Values, RecLi: r.RecLi, RecState: r.RecState, RecConv: r.RecConv,
 		Weights: r.Weights, Hists: r.Hists, Req: bl.req(r.Req, 1), IO: bl.places.of(cb.F.Places)}
 	if r.Side != nil {
@@ -109,7 +111,7 @@ func (bl *Blocks) Row(li int, cb *Block, r *Row) error {
 // Rows is a call's rows of a block, as a chunk or a step runs them: their
 // residual streams (X, Stride apart, Streams of them, each Width wide), their
 // per-layer inputs (a row each, SideW wide, the block's slice SideOff into
-// it), their rotary tables (NRot and NSWA a row), their history's page table
+// it), their rotary tables (CSW a row each), their history's page table
 // (pages PagePos positions each), keys and values, the rows' spans (four
 // words a row: its slot's first key row, where its keys start, one past
 // where they end, its position), positions, tokens and sequences, a
@@ -120,10 +122,8 @@ type Rows struct {
 	Stride, Width, Streams int
 	Side                   []float32
 	SideW, SideOff         int
-	CS                     []float32
-	NRot                   int
-	CSSWA                  []float32
-	NSWA                   int
+	CS                     nn.RopeTables
+	CSW                    [nn.MaxRopeTables]int
 	Pages                  []uint32
 	PagePos                int
 	Keys, Values           unsafe.Pointer
@@ -249,12 +249,9 @@ func (bl *Blocks) calls(li int, f *Form, in *Rows, lo, hi int, stash uint8) erro
 		if bside != nil {
 			bside = bside[in.SideOff:]
 		}
-		*b = Bound{Li: li, Own: bl.dev.Own(f), CS: in.CS[r0*in.NRot:], X: bx, Stride: bstride, Rows: bl.rowsTab, N: k,
+		*b = Bound{Li: li, Own: bl.dev.Own(f), CS: tablesFrom(in.CS, in.CSW, r0), X: bx, Stride: bstride, Rows: bl.rowsTab, N: k,
 			Pages: bl.faultPages(in.Pages, in.PagePos, end), Side: bside, Weights: in.Weights, Keys: in.Keys, Values: in.Values,
 			Hists: in.Hists, Req: bl.req(in.Req, f.Rows), IO: bl.places.of(f.Places)}
-		if in.CSSWA != nil {
-			b.CSSWA = in.CSSWA[r0*in.NSWA:]
-		}
 		if bcut != nil {
 			cutIO(b, in.Graph, bcut, bside, bx)
 		}
@@ -370,4 +367,14 @@ func faultRow(t []uint32, row, write bool) {
 	case write:
 		t[3]--
 	}
+}
+
+// tablesFrom is tables t, each w[i] a row, from row r on.
+func tablesFrom(t nn.RopeTables, w [nn.MaxRopeTables]int, r int) nn.RopeTables {
+	for i, c := range t {
+		if c != nil {
+			t[i] = c[r*w[i]:]
+		}
+	}
+	return t
 }

@@ -70,7 +70,7 @@ func TestVisionTowerReturnsEveryDeviceBuffer(t *testing.T) {
 	// in one submission over every patch.
 	x := make([]float32, p.MaxSeq*p.NEmbd)
 	cs := make([]float32, p.NEmbd)
-	g.Layers(0, blocks, 0, p.MaxSeq, x, cs, nil, nil)
+	g.Layers(0, blocks, 0, p.MaxSeq, x, nn.RopeTables{cs}, nil)
 
 	g.Close()
 

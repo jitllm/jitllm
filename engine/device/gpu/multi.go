@@ -1259,19 +1259,14 @@ type run struct {
 }
 
 // tables is the rotary tables run r is handed. A run of a model of mixed
-// geometry is one geometry, built with one table (scratchPlanOf): a run of
-// blocks rotating by the second table takes it where the first goes. A
-// non-causal set is built with both (a trunk's beside a marker head's set).
-func (r run) tables(cs, csSWA []float32) ([]float32, []float32) {
-	switch {
-	case !r.split:
-		return cs, csSWA
-	case r.geo.local:
-		return csSWA, nil
-	case r.geo.flags&geoNonCausal != 0:
-		return cs, csSWA
+// geometry is one geometry, built with one table (scratchPlanOf): the run's
+// blocks' table, where the first goes. A non-causal set is built with every
+// table (a trunk's beside a marker head's set).
+func (r run) tables(cs nn.RopeTables) nn.RopeTables {
+	if !r.split || r.geo.flags&geoNonCausal != 0 {
+		return cs
 	}
-	return cs, nil
+	return nn.RopeTables{cs[r.geo.rotary]}
 }
 
 // runs cuts [lo, hi) into one submission per device. Callers hold g.mu.
@@ -1302,8 +1297,8 @@ func (g *GPU) runsInto(sid uint64, out []run, lo, hi int) ([]run, bool) {
 }
 
 // Layers is layersFor for the zero session: a caller that never attached.
-func (g *GPU) Layers(lo, hi, pos, n int, x, cs, csSWA []float32, head *nn.Head) bool {
-	return g.layersFor(0, lo, hi, pos, n, x, cs, csSWA, head)
+func (g *GPU) Layers(lo, hi, pos, n int, x []float32, cs nn.RopeTables, head *nn.Head) bool {
+	return g.layersFor(0, lo, hi, pos, n, x, cs, head)
 }
 
 // layersFor runs blocks [lo, hi) as one submission per device. The residual
@@ -1313,9 +1308,9 @@ func (g *GPU) Layers(lo, hi, pos, n int, x, cs, csSWA []float32, head *nn.Head) 
 // The projection rides the last submission when it is on that device, which
 // is the placement PrepHead makes; elsewhere it becomes its own submission, one
 // more crossing and still worth it for the densest unit of a large model.
-func (g *GPU) layersFor(sid uint64, lo, hi, pos, n int, x, cs, csSWA []float32, head *nn.Head) bool {
+func (g *GPU) layersFor(sid uint64, lo, hi, pos, n int, x []float32, cs nn.RopeTables, head *nn.Head) bool {
 	g.resetCause(sid, true)
-	ok := g.layersCall(sid, lo, hi, pos, n, x, cs, csSWA, head)
+	ok := g.layersCall(sid, lo, hi, pos, n, x, cs, head)
 	// A refusal before any device ran leaves the head device's promise
 	// unconsumed; it lives for one call (devTier.layersCall).
 	g.mu.Lock()
@@ -1497,12 +1492,8 @@ func (d *devTier) nonCausalAt(li int) bool {
 // Each piece's rows are their own slice of x, and a run takes its pieces in
 // order, so every piece finds the history of the pieces before it on its
 // device. The head rides the last piece through the last run.
-func (g *GPU) pipeline(sid uint64, rs []run, pos, n int, x, cs, csSWA []float32, tail *nn.Head) bool {
-	e, r := len(x)/n, len(cs)/n
-	rw := 0
-	if len(csSWA) > 0 {
-		rw = len(csSWA) / n
-	}
+func (g *GPU) pipeline(sid uint64, rs []run, pos, n int, x []float32, cs nn.RopeTables, tail *nn.Head) bool {
+	e := len(x) / n
 	pieces := (n + batchWidth - 1) / batchWidth
 	// next[i] is how run i hears that a piece cleared the run before it.
 	next := make([]chan bool, len(rs)+1)
@@ -1523,12 +1514,7 @@ func (g *GPU) pipeline(sid uint64, rs []run, pos, n int, x, cs, csSWA []float32,
 					if i == len(rs)-1 && k == pieces-1 {
 						h = tail
 					}
-					var sw []float32
-					if rw > 0 {
-						sw = csSWA[lo*rw : (lo+cnt)*rw]
-					}
-					c0, c1 := rn.tables(cs[lo*r:(lo+cnt)*r], sw)
-					ok = rn.dev.layersFor(sid, rn.lo, rn.hi, pos+lo, cnt, x[lo*e:(lo+cnt)*e], c0, c1, h)
+					ok = rn.dev.layersFor(sid, rn.lo, rn.hi, pos+lo, cnt, x[lo*e:(lo+cnt)*e], rn.tables(cs.Rows(lo, lo+cnt, n)), h)
 					if ok {
 						rn.dev.mu.Lock()
 						rn.dev.Stats.PipelinePieces++
@@ -1549,9 +1535,9 @@ func (g *GPU) pipeline(sid uint64, rs []run, pos, n int, x, cs, csSWA []float32,
 // pieces is pipeline in order: each batchWidth piece of the chunk through
 // every run before the next piece starts, the head on the last piece of the
 // last run.
-func (g *GPU) pieces(sid uint64, rs []run, pos, n int, x, cs, csSWA []float32, tail *nn.Head) bool {
+func (g *GPU) pieces(sid uint64, rs []run, pos, n int, x []float32, cs nn.RopeTables, tail *nn.Head) bool {
 	ns := rs[0].dev.streams()
-	e, r := len(x)/n/ns, len(cs)/n
+	e := len(x) / n / ns
 	sides := make([]sideRows, len(rs))
 	for i, rn := range rs {
 		sides[i] = rn.dev.side()
@@ -1560,25 +1546,16 @@ func (g *GPU) pieces(sid uint64, rs []run, pos, n int, x, cs, csSWA []float32, t
 			return false
 		}
 	}
-	rw := 0
-	if len(csSWA) > 0 {
-		rw = len(csSWA) / n
-	}
 	for lo := 0; lo < n; lo += batchWidth {
 		cnt := min(batchWidth, n-lo)
-		var sw []float32
-		if rw > 0 {
-			sw = csSWA[lo*rw : (lo+cnt)*rw]
-		}
 		for i, rn := range rs {
 			var h *nn.Head
 			if i == len(rs)-1 && lo+cnt == n {
 				h = tail
 			}
-			c0, c1 := rn.tables(cs[lo*r:(lo+cnt)*r], sw)
 			xs := rn.dev.streamCut(x, ns, e, lo, cnt, n)
 			rn.dev.sideAt(sides[i], lo, n)
-			if !rn.dev.layersFor(sid, rn.lo, rn.hi, pos+lo, cnt, xs, c0, c1, h) {
+			if !rn.dev.layersFor(sid, rn.lo, rn.hi, pos+lo, cnt, xs, rn.tables(cs.Rows(lo, lo+cnt, n)), h) {
 				return false
 			}
 			streamPut(x, xs, ns, e, lo, cnt, n)
@@ -1697,13 +1674,9 @@ func (d *devTier) haloRan() {
 // block's input there -- a centred convolution keeps no state, and a
 // block's history is projected from its normed input, before its mixer --
 // so a piece writes them as the piece that owns them does.
-func (g *GPU) phased(sid uint64, rs []run, pos, n int, x, cs, csSWA []float32) bool {
+func (g *GPU) phased(sid uint64, rs []run, pos, n int, x []float32, cs nn.RopeTables) bool {
 	ns := rs[0].dev.streams()
-	e, r := len(x)/n/ns, len(cs)/n
-	rw := 0
-	if len(csSWA) > 0 {
-		rw = len(csSWA) / n
-	}
+	e := len(x) / n / ns
 	keep := make([]float32, ns*min(batchWidth, n)*e)
 	var stash []float32
 	for _, rn := range rs {
@@ -1740,11 +1713,7 @@ func (g *GPU) phased(sid uint64, rs []run, pos, n int, x, cs, csSWA []float32) b
 					for lo := 0; lo < n; lo += w - 2*h {
 						cnt := min(w-2*h, n-lo)
 						a, b := max(0, lo-h), min(n, lo+cnt+h)
-						var sw []float32
-						if rw > 0 {
-							sw = csSWA[a*rw : b*rw]
-						}
-						c0, c1 := rn.tables(cs[a*r:b*r], sw)
+						c := rn.tables(cs.Rows(a, b, n))
 						var xs []float32
 						switch {
 						case h > 0:
@@ -1755,7 +1724,7 @@ func (g *GPU) phased(sid uint64, rs []run, pos, n int, x, cs, csSWA []float32) b
 							xs = rn.dev.streamCut(x, ns, e, lo, cnt, n)
 						}
 						rn.dev.sideAtOf(sid, side, a, n)
-						if !rn.dev.layersFor(sid, li, li+1, pos+a, b-a, xs, c0, c1, nil) {
+						if !rn.dev.layersFor(sid, li, li+1, pos+a, b-a, xs, c, nil) {
 							return false
 						}
 						if h > 0 {
@@ -1816,7 +1785,7 @@ func haloPut(x, buf []float32, ns, e, off, lo, cnt, m, n int) {
 	}
 }
 
-func (g *GPU) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []float32, head *nn.Head) bool {
+func (g *GPU) layersCall(sid uint64, lo, hi, pos, n int, x []float32, cs nn.RopeTables, head *nn.Head) bool {
 	// The runs slice is g.runBuf, taken for the call so a decode token
 	// allocates none; a concurrent call finds it taken and makes its own.
 	g.mu.Lock()
@@ -1842,7 +1811,7 @@ func (g *GPU) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []float32,
 		if head == nil {
 			return true
 		}
-		return hd.layersFor(sid, lo, hi, pos, n, x, cs, csSWA, head)
+		return hd.layersFor(sid, lo, hi, pos, n, x, cs, head)
 	}
 	tail := head
 	if head != nil && (rs[len(rs)-1].dev != hd || rs[len(rs)-1].geo != (geoKey{})) {
@@ -1852,14 +1821,14 @@ func (g *GPU) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []float32,
 		tail = nil
 	}
 	if n > 1 && !rs[0].dev.nonCausalAt(lo) && g.cutsRun(sid, rs, pos, n) {
-		if !g.phased(sid, rs, pos, n, x, cs, csSWA) {
+		if !g.phased(sid, rs, pos, n, x, cs) {
 			return false
 		}
 		if head != nil {
 			if g.split {
-				csSWA = nil
+				cs = nn.RopeTables{cs[0]}
 			}
-			return headOfLast(hd, sid, hi, pos, n, x, cs, csSWA, head)
+			return headOfLast(hd, sid, hi, pos, n, x, cs, head)
 		}
 		return true
 	}
@@ -1867,20 +1836,20 @@ func (g *GPU) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []float32,
 		// The pieces go one after another: two runs of one device at two
 		// geometries share that device's tier, which the pipeline would drive
 		// from two goroutines at once.
-		if !g.pieces(sid, rs, pos, n, x, cs, csSWA, tail) {
+		if !g.pieces(sid, rs, pos, n, x, cs, tail) {
 			return false
 		}
 		if head != nil && tail == nil {
-			return headOfLast(hd, sid, hi, pos, n, x, cs, nil, head)
+			return headOfLast(hd, sid, hi, pos, n, x, nn.RopeTables{cs[0]}, head)
 		}
 		return true
 	}
 	if n > batchWidth && !rs[0].dev.nonCausalAt(lo) {
-		if !g.pipeline(sid, rs, pos, n, x, cs, csSWA, tail) {
+		if !g.pipeline(sid, rs, pos, n, x, cs, tail) {
 			return false
 		}
 		if head != nil && tail == nil {
-			return headOfLast(hd, sid, hi, pos, n, x, cs, csSWA, head)
+			return headOfLast(hd, sid, hi, pos, n, x, cs, head)
 		}
 		return true
 	}
@@ -1889,8 +1858,7 @@ func (g *GPU) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []float32,
 		if i == len(rs)-1 {
 			h = tail
 		}
-		c0, c1 := r.tables(cs, csSWA)
-		if !r.dev.layersFor(sid, r.lo, r.hi, pos, n, x, c0, c1, h) {
+		if !r.dev.layersFor(sid, r.lo, r.hi, pos, n, x, r.tables(cs), h) {
 			return false
 		}
 	}
@@ -1899,9 +1867,9 @@ func (g *GPU) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []float32,
 		// and the device holding the projection takes it from there. A split
 		// model's head runs in the global layers' set, with their table.
 		if g.split {
-			csSWA = nil
+			cs = nn.RopeTables{cs[0]}
 		}
-		return hd.layersFor(sid, hi, hi, pos, n, x, cs, csSWA, head)
+		return hd.layersFor(sid, hi, hi, pos, n, x, cs, head)
 	}
 	return true
 }
@@ -1934,16 +1902,12 @@ func (g *GPU) cutsRun(sid uint64, rs []run, pos, n int) bool {
 // (devTier.layersCall). The whole call's rows would exceed the batched
 // width, be refused after every block had run, and send the call round
 // again a row at a time. A head over every row (RowLogits) keeps its rows.
-func headOfLast(hd *devTier, sid uint64, hi, pos, n int, x, cs, csSWA []float32, head *nn.Head) bool {
+func headOfLast(hd *devTier, sid uint64, hi, pos, n int, x []float32, cs nn.RopeTables, head *nn.Head) bool {
 	if head.RowLogits || n <= 1 {
-		return hd.layersFor(sid, hi, hi, pos, n, x, cs, csSWA, head)
+		return hd.layersFor(sid, hi, hi, pos, n, x, cs, head)
 	}
-	e, r := len(x)/n, len(cs)/n
-	if len(csSWA) >= n {
-		w := len(csSWA) / n
-		csSWA = csSWA[(n-1)*w : n*w]
-	}
-	return hd.layersFor(sid, hi, hi, pos+n-1, 1, x[(n-1)*e:n*e], cs[(n-1)*r:n*r], csSWA, head)
+	e := len(x) / n
+	return hd.layersFor(sid, hi, hi, pos+n-1, 1, x[(n-1)*e:n*e], cs.Rows(n-1, n, n), head)
 }
 
 // putRuns hands layersCall's runs slice back for the next call.
