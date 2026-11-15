@@ -2273,43 +2273,12 @@ func (m *Model) blockOps(b *graph.Builder, li int) func(ins []graph.ValueID, op 
 			}
 			g := c.Delta()
 			base := g.VHeads * g.VDim * g.KDim
-			at := b.G.StateVersion(graph.StateRecState)
-			in, out := []graph.StateRef{{State: graph.StateRecState, Version: at}}, []graph.StateRef{{State: graph.StateRecState, Version: at + 1}}
-			off := base + cursor
-			if op.Code == jlm.TOpTailConv {
-				w, taps, dil := int(op.Width), int(op.Span), int(op.Offset)
-				cursor += (taps - 1) * dil * w
-				return b.Emit(graph.OpStateConv, ins, []graph.Result{{Name: "tail.conv", Width: w}},
-					[]graph.Binding{{Role: op.Bind[0], K: taps, Rows: w}},
-					graph.Attrs{Taps: taps, Dil: dil, Offset: off, Span: stateSpan(c, base)}, in, out)[0], nil
+			v, kept, err := graph.TailOp(b, ins, op, base+cursor, stateSpan(c, base))
+			if err != nil {
+				return 0, fmt.Errorf("block %d: %w", li, err)
 			}
-			hs := op.Hash
-			n := int(op.Span)
-			cursor += n - 1
-			heads := (n - 1) * int(hs.HeadsPer)
-			if heads <= 0 || int(op.Width)%heads != 0 || len(hs.Off) < heads || len(hs.Voc) < heads {
-				return 0, fmt.Errorf("block %d gathers %d-grams %d wide over %d heads' ranges", li, n, op.Width, len(hs.Off))
-			}
-			rowW := int(op.Width) / heads
-			tok := b.Emit(graph.OpToken, nil, []graph.Result{{Name: "ng.tok", Width: 1, Elem: graph.ElemU32}}, nil, graph.Attrs{}, nil, nil)[0]
-			win := b.Emit(graph.OpNGramWindow, []graph.ValueID{tok}, []graph.Result{{Name: "ng.win", Width: n, Elem: graph.ElemU32}}, nil,
-				graph.Attrs{Taps: n, Offset: off, Span: stateSpan(c, base), Words: []uint64{uint64(hs.Image)}}, in, out)[0]
-			words := append([]uint64{uint64(hs.EOS)}, hs.Mul...)
-			for h := range heads {
-				words = append(words, hs.Off[h], hs.Voc[h])
-			}
-			hashed := b.Emit(graph.OpNGramHash, []graph.ValueID{win}, []graph.Result{
-				{Name: "ng.rows", Width: heads, Elem: graph.ElemU32}, {Name: "ng.next", Width: n - 1, Elem: graph.ElemU32}}, nil,
-				graph.Attrs{Span: int(hs.HeadsPer), Words: words, Reset: true}, nil, nil)
-			rows := make([]graph.ValueID, heads)
-			for h := range heads {
-				col := b.Emit(graph.OpSlice, []graph.ValueID{hashed[0]}, []graph.Result{{Name: "ng.row", Width: 1, Elem: graph.ElemU32}}, nil,
-					graph.Attrs{Offset: h, Width: 1}, nil, nil)[0]
-				rows[h] = b.Emit(graph.OpEmbed, []graph.ValueID{col}, []graph.Result{{Name: "ng.emb", Width: rowW}},
-					[]graph.Binding{{Role: op.Bind[0], K: rowW, Rows: int(hs.Voc[h]), From: int(hs.Off[h])}},
-					graph.Attrs{}, nil, nil)[0]
-			}
-			return b.Emit(graph.OpConcat, rows, []graph.Result{{Name: "ngram", Width: int(op.Width)}}, nil, graph.Attrs{}, nil, nil)[0], nil
+			cursor += kept
+			return v, nil
 		}
 		return 0, fmt.Errorf("op code %d is no block's", op.Code)
 	}
