@@ -41,8 +41,8 @@ type mjUse struct {
 const blockExprSteps = 1 << 12
 
 // mjBlockOp is one op of a block. Op names the step: in, norm, layer_norm,
-// head_norm, matvec, add, rope, kv_append, kv_from, attend, act, stated,
-// emit, split_sum, mark, routed, each, concat or out (graphSteps).
+// head_norm, matvec, add, rope, rope_table, kv_append, kv_from, attend, act,
+// stated, emit, split_sum, mark, routed, each, concat or out (graphSteps).
 type mjBlockOp struct {
 	Op string `json:"op"`
 	// If, where set, is an expression: the op is the block's where it holds.
@@ -62,8 +62,10 @@ type mjBlockOp struct {
 	Rows  string `json:"rows"`
 	Width string `json:"width"`
 	Alpha string `json:"alpha"`
-	// Hist is the history an attend reads, a kv_append's or a kv_from's Out.
-	Hist string `json:"hist"`
+	// Hist is the history an attend, a select or an emit reads, a
+	// kv_append's or a kv_from's Out; an attend reads each it names in one
+	// softmax.
+	Hist mjNames `json:"hist"`
 	// Kind is an emit's op, by the graph language's name of it; Outs its
 	// results, Attr its attributes by graph.Attrs field name, each an
 	// expression (a function by its name), and Bind its weights with their
@@ -72,6 +74,9 @@ type mjBlockOp struct {
 	Outs []mjResult        `json:"outs"`
 	Attr map[string]string `json:"attr"`
 	Bind []mjBinding       `json:"bind"`
+	// Words are the op's word attributes (graph.Attrs.Words), each an
+	// expression, where it states them.
+	Words []string `json:"words"`
 	// Of is the statement a stated op runs (statements).
 	Of string `json:"of"`
 	// Advances are the block states an emit reads at their version in force
@@ -93,13 +98,18 @@ type mjBlockOp struct {
 	Int8 string `json:"int8"`
 	// Streams names a list of residual streams a stream step reads (a
 	// streams_in's or a stream_writes' Out), Ex the list of values a
-	// stream_read exported to the writes, At a stream_at's index (an
-	// expression), or a kv_from's block: an earlier block whose history
-	// this block reads and appends nothing to. A stream step's Of is the
-	// sublayer whose stated statement it lowers: pre, attn or ffn.
+	// stream_read exported to the writes, At a stream_at's index, a
+	// kv_append's history (the block's first where unset) or a kv_from's
+	// block (an earlier block whose history this block reads and appends
+	// nothing to), an expression. A stream step's Of is the sublayer whose
+	// stated statement it lowers: pre, attn or ffn.
 	Streams string `json:"streams"`
 	Ex      string `json:"ex"`
 	At      string `json:"at"`
+	// Global, an expression, says a rotary op (rope, rope_table, an
+	// indexer's or a pooled select's) turns by the model's rotary where the
+	// block would turn by the sliding layers' own.
+	Global string `json:"global"`
 	// N is how many times an each runs its Steps (an expression), As the
 	// name their expressions read the run by (0 first); Out names the runs'
 	// last values joined in order (a concat named Name).
@@ -190,7 +200,8 @@ func graphSteps() map[string][4]int {
 		"head_norm":     {1, 1, 1, 1},
 		"matvec":        {1, 1, 1, -1},
 		"add":           {2, 2, 0, 0},
-		"rope":          {1, 1, 0, 0},
+		"rope":          {1, 2, 0, 0},
+		"rope_table":    {0, 0, 0, 0},
 		"kv_append":     {2, 2, 0, 0},
 		"kv_from":       {0, 0, 0, 0},
 		"attend":        {1, 2, 0, -1},
@@ -283,13 +294,18 @@ func (g *mjGraph) checkOps(ops []mjBlockOp, named map[string]bool, runs []string
 				return fmt.Errorf("op %d (%s) reads %q before an op names it", i, o.Op, v)
 			}
 		}
-		if (o.Op == "attend" || o.Op == "select") && !named[o.Hist] {
-			return fmt.Errorf("op %d attends history %q before an op names it", i, o.Hist)
+		if (o.Op == "attend" || o.Op == "select") && len(o.Hist) == 0 {
+			return fmt.Errorf("op %d (%s) names no history", i, o.Op)
+		}
+		for _, h := range o.Hist {
+			if !named[h] {
+				return fmt.Errorf("op %d reads history %q before an op names it", i, h)
+			}
 		}
 		if o.Op == "routed" && !named[o.From] {
 			return fmt.Errorf("op %d's routed region starts at %q, which no op marks before it", i, o.From)
 		}
-		xs := []string{o.If, o.Rows, o.Width, o.Alpha, o.Parts, o.Int8, o.Eps, o.At}
+		xs := append([]string{o.If, o.Rows, o.Width, o.Alpha, o.Parts, o.Int8, o.Eps, o.At, o.Global}, o.Words...)
 		for k, tm := range o.Terms {
 			if fnNamed(tm.Fn) == 0 || len(tm.Args) == 0 || len(tm.Args) > 3 {
 				return fmt.Errorf("op %d (%s): term %d is %q of %d arguments", i, o.Op, k, tm.Fn, len(tm.Args))
@@ -678,6 +694,14 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, used []*mjGr
 			}
 			w = append(w, r)
 		}
+		var reads []graph.StateRef
+		for _, h := range o.Hist {
+			r, ok := hists[h]
+			if !ok {
+				return nil, fmt.Errorf("op %d (%s) reads history %q, which no op this block runs appends", i, o.Op, h)
+			}
+			reads = append(reads, r)
+		}
 		var y graph.ValueID
 		switch o.Op {
 		case "in":
@@ -753,7 +777,7 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, used []*mjGr
 				y = b.Add(in[0], in[1])
 			}
 		case "rope":
-			a, err := bf.rope()
+			a, err := bf.ropeOf(g, o, vars)
 			if err != nil {
 				return nil, err
 			}
@@ -765,8 +789,32 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, used []*mjGr
 				name = "rope"
 			}
 			y = b.Emit(graph.OpRope, in, []graph.Result{{Name: name, Width: b.G.Values[in[0]].Width}}, nil, a, nil, nil)[0]
+		case "rope_table":
+			a, err := bf.ropeOf(g, o, vars)
+			if err != nil {
+				return nil, err
+			}
+			if a, err = overridden(a, g, o, vars); err != nil {
+				return nil, fmt.Errorf("op %d (rope_table): %w", i, err)
+			}
+			y = b.RopeTableAt(a, a.Span)
 		case "kv_append":
-			hists[o.Out] = graph.StateRef{State: graph.StateKV, Version: b.KVAppend(in[0], in[1], 0)}
+			at := 0.0
+			if o.At != "" {
+				var err error
+				if at, err = num(o.At); err != nil {
+					return nil, err
+				}
+			}
+			a, err := overridden(graph.Attrs{}, g, o, vars)
+			if err != nil {
+				return nil, fmt.Errorf("op %d (kv_append): %w", i, err)
+			}
+			if at < 0 || at != math.Trunc(at) || at > math.MaxUint8 {
+				return nil, fmt.Errorf("op %d appends to history %v, not a history's index", i, at)
+			}
+			h := uint8(at)
+			hists[o.Out] = graph.StateRef{State: graph.StateKV, Hist: h, Version: b.KVAppendEvery(h, in[0], in[1], 0, a.Span)}
 			continue
 		case "kv_from":
 			at, err := num(o.At)
@@ -779,21 +827,22 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, used []*mjGr
 			hists[o.Out] = graph.SharedHistory(int(at))
 			continue
 		case "attend":
-			h, ok := hists[o.Hist]
-			if !ok {
-				return nil, fmt.Errorf("op %d attends history %q, which no op this block runs appends", i, o.Hist)
-			}
 			a, err := overridden(bf.attend(), g, o, vars)
 			if err != nil {
 				return nil, fmt.Errorf("op %d (attend): %w", i, err)
 			}
 			if len(in) == 2 {
-				y = b.AttendSelected(in[0], h, in[1], a, w...)
+				y = b.AttendSelected(in[0], reads[0], in[1], a, w...)
 			} else {
-				y = b.AttendOf(in[0], h, a, w...)
+				y = b.AttendOf(in[0], reads[0], a, w...)
 			}
+			at := &b.G.Ops[len(b.G.Ops)-1]
+			if at.Kind != graph.OpAttend || len(at.Out) != 1 || at.Out[0] != y {
+				return nil, fmt.Errorf("op %d (attend): the attention is not the builder's last op", i)
+			}
+			at.Reads = append(at.Reads, reads[1:]...)
 		case "indexer":
-			ix, err := bf.indexer(b, in[0], in[1])
+			ix, err := bf.indexer(b, g, o, vars, in[0], in[1])
 			if err != nil {
 				return nil, fmt.Errorf("op %d (indexer): %w", i, err)
 			}
@@ -802,12 +851,8 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, used []*mjGr
 			}
 			continue
 		case "select":
-			h, ok := hists[o.Hist]
-			if !ok {
-				return nil, fmt.Errorf("op %d selects from history %q, which no op this block runs appends", i, o.Hist)
-			}
 			var err error
-			if y, err = bf.selected(b, g, o, vars, in, h); err != nil {
+			if y, err = bf.selected(b, g, o, vars, in, reads[0]); err != nil {
 				return nil, fmt.Errorf("op %d (select): %w", i, err)
 			}
 		case "act":
@@ -828,7 +873,7 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, used []*mjGr
 				return nil, fmt.Errorf("op %d's stated %s: %w", i, o.Of, err)
 			}
 		case "emit":
-			outs, err := emitted(b, g, o, in, bf, vars)
+			outs, err := emitted(b, g, o, in, reads, bf, vars)
 			if err != nil {
 				return nil, fmt.Errorf("op %d (%s): %w", i, o.Kind, err)
 			}
@@ -932,7 +977,7 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, used []*mjGr
 				side = bf.pleOf(b, in[2])
 			}
 			var ex []graph.ValueID
-			if y, ex, err = graph.StreamRead(b, bf.facts, u, lists[o.Streams], in[0], in[1], side, bf.ops(b)); err != nil {
+			if y, ex, err = graph.StreamRead(b, bf.facts, u, lists[o.Streams], in[0], in[1], side, bf.ops(b, g, o, vars)); err != nil {
 				return nil, fmt.Errorf("op %d (stream_read): %w", i, err)
 			}
 			lists[o.Out+".ex"] = ex
@@ -991,9 +1036,10 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, used []*mjGr
 	return b.G, nil
 }
 
-// emitted is an emit's op on b over in: its results, weights and
-// attributes evaluated over the block's facts.
-func emitted(b *graph.Builder, g *mjGraph, o mjBlockOp, in []graph.ValueID, bf *blockFacts, vars map[string]jinja.Value) ([]graph.ValueID, error) {
+// emitted is an emit's op on b over in, reading the histories hist: its
+// results, weights and attributes evaluated over the block's facts.
+func emitted(b *graph.Builder, g *mjGraph, o mjBlockOp, in []graph.ValueID, hist []graph.StateRef, bf *blockFacts,
+	vars map[string]jinja.Value) ([]graph.ValueID, error) {
 	num := func(x string) (float64, error) { return g.num(x, vars) }
 	var outs []graph.Result
 	for _, r := range o.Outs {
@@ -1007,17 +1053,12 @@ func emitted(b *graph.Builder, g *mjGraph, o mjBlockOp, in []graph.ValueID, bf *
 	if err != nil {
 		return nil, err
 	}
-	var a graph.Attrs
-	for f, x := range o.Attr {
-		v, err := g.value(x, vars)
-		if err != nil {
-			return nil, fmt.Errorf("attribute %s: %w", f, err)
-		}
-		if err := setAttr(&a, f, v); err != nil {
-			return nil, err
-		}
+	a, err := overridden(graph.Attrs{}, g, o, vars)
+	if err != nil {
+		return nil, err
 	}
-	var reads, writes []graph.StateRef
+	reads := slices.Clone(hist)
+	var writes []graph.StateRef
 	for _, name := range o.Advances {
 		st := states()[name]
 		v := b.G.StateVersion(st)
@@ -1030,12 +1071,12 @@ func emitted(b *graph.Builder, g *mjGraph, o mjBlockOp, in []graph.ValueID, bf *
 // input n and the attention's query input qIn: its key padded with zeros to
 // the width the row caches, its query, and its heads' weight, each where the
 // container states it.
-func (bf *blockFacts) indexer(b *graph.Builder, n, qIn graph.ValueID) (map[string]graph.ValueID, error) {
+func (bf *blockFacts) indexer(b *graph.Builder, g *mjGraph, o mjBlockOp, vars map[string]jinja.Value, n, qIn graph.ValueID) (map[string]graph.ValueID, error) {
 	s := bf.c.Selection
 	if !s.At(bf.li) {
 		return nil, fmt.Errorf("block %d states no selection", bf.li)
 	}
-	turn := bf.ops(b)
+	turn := bf.ops(b, g, o, vars)
 	ix := map[string]graph.ValueID{}
 	if s.Key != nil {
 		key, err := graph.LowerValues(b, nil, s.Key, []graph.ValueID{n}, 1, bf.facts, turn)
@@ -1082,7 +1123,7 @@ func (bf *blockFacts) selected(b *graph.Builder, g *mjGraph, o mjBlockOp, vars m
 	if s.Rank == jlm.RankPooled {
 		a.Fn, a.Eps = graph.MapMax, float64(s.Eps)
 		if bf.ropeAt() {
-			r, err := bf.rope()
+			r, err := bf.ropeOf(g, o, vars)
 			if err != nil {
 				return 0, err
 			}
@@ -1098,10 +1139,11 @@ func (bf *blockFacts) selected(b *graph.Builder, g *mjGraph, o mjBlockOp, vars m
 }
 
 // ops lowers the stated ops only a block has: its rotary at the row's
-// position in the stated layout, nothing on a block that turns none; and
-// the ops over its recurrent state's tail, each at its place past the
-// rule's state in the order they come.
-func (bf *blockFacts) ops(b *graph.Builder) func([]graph.ValueID, *jlm.TowerOp) (graph.ValueID, error) {
+// position in the stated layout from the element the op states, with the
+// attributes the recipe's op o overrides, nothing on a block that turns
+// none; and the ops over its recurrent state's tail, each at its place past
+// the rule's state in the order they come.
+func (bf *blockFacts) ops(b *graph.Builder, g *mjGraph, o mjBlockOp, vars map[string]jinja.Value) func([]graph.ValueID, *jlm.TowerOp) (graph.ValueID, error) {
 	cursor := 0
 	return func(ins []graph.ValueID, op *jlm.TowerOp) (graph.ValueID, error) {
 		switch op.Code {
@@ -1121,7 +1163,7 @@ func (bf *blockFacts) ops(b *graph.Builder) func([]graph.ValueID, *jlm.TowerOp) 
 		if !bf.ropeAt() {
 			return v, nil
 		}
-		a, err := bf.rope()
+		a, err := bf.ropeOf(g, o, vars)
 		if err != nil {
 			return 0, err
 		}
@@ -1131,9 +1173,9 @@ func (bf *blockFacts) ops(b *graph.Builder) func([]graph.ValueID, *jlm.TowerOp) 
 		case jlm.RopeNeox:
 			a.Layout = graph.RopeNeox
 		}
-		a.HeadDim, a.Offset = int(op.Span), 0
-		if bf.c.Flags2.Has(jlm.Flag2RopeTail) {
-			a.Offset = int(op.Span) - a.NRot
+		a.HeadDim, a.Offset = int(op.Span), int(op.Offset)
+		if a, err = overridden(a, g, o, vars); err != nil {
+			return 0, err
 		}
 		return b.Emit(graph.OpRope, []graph.ValueID{v}, []graph.Result{{Name: "rope", Width: b.G.Values[v].Width}}, nil, a, nil, nil)[0], nil
 	}
@@ -1246,6 +1288,20 @@ func overridden(a graph.Attrs, g *mjGraph, o mjBlockOp, vars map[string]jinja.Va
 		if err := setAttr(&a, f, v); err != nil {
 			return a, err
 		}
+	}
+	if len(o.Words) == 0 {
+		return a, nil
+	}
+	a.Words = make([]uint64, len(o.Words))
+	for k, x := range o.Words {
+		n, err := g.num(x, vars)
+		if err != nil {
+			return a, fmt.Errorf("word %d: %w", k, err)
+		}
+		if n < 0 || n != math.Trunc(n) || n > math.MaxUint32 {
+			return a, fmt.Errorf("word %d is %v, not a count", k, n)
+		}
+		a.Words[k] = uint64(n)
 	}
 	return a, nil
 }
@@ -1727,14 +1783,29 @@ func (bf *blockFacts) attend() graph.Attrs {
 	return a
 }
 
-// rope is the rotary the block turns by: the sliding layers' where the
-// model trains them their own base or width, the model's otherwise, with
-// its per-pair factors where it stores them or scales its rotary.
-func (bf *blockFacts) rope() (graph.Attrs, error) {
-	c := bf.c
-	if len(c.CompKinds) != 0 {
-		return graph.Attrs{}, fmt.Errorf("a stated graph's rotary in a compressing model: %w", ErrNotImplemented)
+// ropeOf is the rotary the recipe's op o turns by: the block's, or the
+// model's where o's Global holds.
+func (bf *blockFacts) ropeOf(g *mjGraph, o mjBlockOp, vars map[string]jinja.Value) (graph.Attrs, error) {
+	global := false
+	if o.Global != "" {
+		v, err := g.value(o.Global, vars)
+		if err != nil {
+			return graph.Attrs{}, err
+		}
+		if !v.IsBool() {
+			return graph.Attrs{}, fmt.Errorf("global is %v, not a flag", v)
+		}
+		global = v.AsBool()
 	}
+	return bf.rope(global)
+}
+
+// rope is the rotary the block turns by: the sliding layers' where the
+// model trains them their own base or width and global does not ask for
+// the model's, the model's otherwise, with its per-pair factors where it
+// stores them or scales its rotary.
+func (bf *blockFacts) rope(global bool) (graph.Attrs, error) {
+	c := bf.c
 	nrot, base, scale := int(c.NRot), float64(c.RopeBase), float64(c.AttnFactor)
 	if scale == 0 {
 		scale = 1
@@ -1749,7 +1820,7 @@ func (bf *blockFacts) rope() (graph.Attrs, error) {
 	if local == 0 {
 		local = nrot
 	}
-	if (c.RopeBaseSWA != 0 || local != nrot) && bf.sliding() {
+	if (c.RopeBaseSWA != 0 || local != nrot) && bf.sliding() && !global {
 		if c.RopeBaseSWA != 0 {
 			base = float64(c.RopeBaseSWA)
 		}
@@ -1763,9 +1834,6 @@ func (bf *blockFacts) rope() (graph.Attrs, error) {
 		layout = graph.RopeNeox
 	}
 	a := graph.Attrs{HeadDim: bf.headDim, NRot: nrot, Base: base, Layout: layout, Freqs: freqs, Mscale: scale}
-	if c.Flags2.Has(jlm.Flag2RopeTail) {
-		a.Offset = bf.headDim - nrot
-	}
 	if sec := c.RopeSections; sec != [4]uint32{} {
 		if nrot != int(c.NRot) || base != float64(c.RopeBase) {
 			return graph.Attrs{}, fmt.Errorf("rotary sections on the sliding layers' own rotary")

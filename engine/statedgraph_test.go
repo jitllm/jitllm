@@ -102,6 +102,10 @@ func statedGraphModels() []string {
 		// checkpoint banks and the latent mixture.
 		"synth-kimik3.gguf", "synth-kimik3-ragged.gguf", "kimik3/Kimi-K3-0.40B.Q8_0.gguf", "hf/synth-kimik3",
 		"synth-kimilinear",
+		// Hyper-connected streams over a window beside compressed entries, an
+		// indexer selecting among them, and a token table routing the first
+		// blocks.
+		"synth-deepseek4.gguf", "synth-deepseek4-hca.gguf", "synth-deepseek4-sliding.gguf",
 		// XD-RoPE: four axes over cat(freq, freq), k's norm after it.
 		"synth-hunyuanvl.gguf", "synth-hunyuanvl.gguf+mmproj-synth-hunyuanvl.gguf", "hunyuanvl/HunyuanOCR-Q8_0.gguf",
 		// The encoders: each sublayer's sum normed after the residual.
