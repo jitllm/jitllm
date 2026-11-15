@@ -311,6 +311,12 @@ func configOfFile(f *meta.File) (*Config, error) {
 	if c.HeadDimV == c.HeadDim {
 		c.HeadDimV = 0
 	}
+	// attention.scale is the score multiplier in place of 1/sqrt(head), for
+	// every graph whose file states one; a graph that fixes its own sets it
+	// below.
+	if err := attnScaleKey(f, c); err != nil {
+		return nil, fmt.Errorf("convert: %s: %w", name, err)
+	}
 
 	switch arch {
 	case ArchDeepseek2, ArchDeepseek32:

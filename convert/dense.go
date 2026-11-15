@@ -23,7 +23,7 @@ func denseConfig(f *meta.File, c *Config) error {
 		// with no window names the NoPE layers and slides none.
 		c.SWAWindow, c.SWAPeriod = 0, smolLM3NoPEStep
 		c.Flags |= jlm.FlagNoPEGlobal
-		return attnScaleKey(f, c)
+		return nil
 	case ArchArcee:
 		// arcee.cpp: llama's block, build_ffn(up, -, down, LLM_FFN_RELU_SQR,
 		// LLM_FFN_SEQ) -- no gate tensor, squared ReLU.
@@ -31,12 +31,12 @@ func denseConfig(f *meta.File, c *Config) error {
 		if _, ok := f.Get("blk.0.ffn_gate.weight"); ok {
 			return fmt.Errorf("an arcee block with a gate tensor; its FFN is ungated: %w", ErrNotImplemented)
 		}
-		return attnScaleKey(f, c)
+		return nil
 	case ArchSeedOSS:
 		// seed-oss.cpp: NEOX rotary, optional q/k/v biases (tensors), and the
 		// FFN's pre-norm stored as post_attention_norm (retarget).
 		c.Flags |= jlm.FlagRopeNeox
-		return attnScaleKey(f, c)
+		return nil
 	case ArchOLMo2:
 		// olmo2.cpp: no pre-norm; q and k RMSNormed over the whole projection
 		// ({n_embd} and {n_head_kv*head_dim}), NEOX rotary, a post-norm after
@@ -90,7 +90,7 @@ func denseConfig(f *meta.File, c *Config) error {
 			}
 			c.AttnTempScale, c.AttnTempFloor, c.AttnTempOffset = float32(s), uint32(n), 0
 		}
-		return attnScaleKey(f, c)
+		return nil
 	}
 	return fmt.Errorf("denseConfig: %v is not a dense llama-family architecture", c.Arch)
 }
@@ -119,7 +119,7 @@ func mistral3Yarn(f *meta.File, c *Config, factor float64) {
 // smolLM3NoPEStep is llama.cpp's n_no_rope_layer_step for SmolLM3.
 const smolLM3NoPEStep = 4
 
-// attnScaleKey reads attention.scale, which these builders take in place of
+// attnScaleKey reads attention.scale, which a graph takes in place of
 // 1/sqrt(head_dim) when a file states it.
 func attnScaleKey(f *meta.File, c *Config) error {
 	s := f.FloatKey("attention.scale", 0)
