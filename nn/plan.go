@@ -57,8 +57,8 @@ type PartPlan struct {
 // PartsPlan is what the CPU device places an instance's parts from: each
 // part's graphs as its plans, the weights each binds and the widths it runs
 // at. Head is the head's and the samplers' plans in HeadParts' order;
-// Streams, Pool and Entry say the instance has the residual streams' mix, a
-// readout and a prediction block's entry; Tables is each rotary's table, a
+// Pool and Entry say the instance has a readout and a prediction block's
+// entry; Tables is each rotary's table, a
 // row's and a call's; KV is the history's conversions, nil for a history of
 // floats.
 type PartsPlan struct {
@@ -70,11 +70,12 @@ type PartsPlan struct {
 	// D is a row's width, NVocab the vocabulary, TopLog the most log
 	// probabilities a draw returns.
 	D, NVocab, TopLog int
+	// Planes is the planes of D a row's residual holds, each the rows of a
+	// call apart (one for most models; a model of several residual
+	// streams holds a plane a stream): the inputs the head's graphs read.
+	// InPlanes is the planes the input rows' graphs write.
+	Planes, InPlanes int
 
-	Streams             bool
-	StreamParts         [4]PartPlan
-	StreamW, CollapseW  PartWeights
-	NStreams            int
 	Pool                bool
 	PoolPart            PartPlan
 	PoolW               PartWeights
@@ -153,13 +154,12 @@ type PartWeights struct {
 // PlacedParts is an instance's parts on a device; a part the plan states
 // none of is nil.
 type PlacedParts struct {
-	Head    HeadDevice
-	Streams StreamsDevice
-	Pool    PoolDevice
-	Entry   EntryDevice
-	Inputs  InputsDevice
-	Tables  TablesDevice
-	KVConv  [KVFormats]KVConvDevice
+	Head   HeadDevice
+	Pool   PoolDevice
+	Entry  EntryDevice
+	Inputs InputsDevice
+	Tables TablesDevice
+	KVConv [KVFormats]KVConvDevice
 }
 
 // BlockSetPlacer is a device that prepares several blocks in one call,

@@ -20,6 +20,12 @@ type (
 	TowerPlans  = nn.TowerPlans
 )
 
+// Weights is where a part's form reads its weights, resolved for the block
+// the part reads them in, or why the device cannot read one.
+type Weights interface {
+	Bind(f *Form) ([]unsafe.Pointer, nn.Decline)
+}
+
 // boundWeights is a part's weights as the execution's bindings read them.
 type boundWeights struct {
 	b *Bindings
@@ -43,9 +49,6 @@ func (e *Exec) PlaceParts(p *nn.PartsPlan) nn.PlacedParts {
 	pp := e.placeParts(p)
 	if pp.Head != nil {
 		out.Head = pp.Head
-	}
-	if pp.Streams != nil {
-		out.Streams = pp.Streams
 	}
 	if pp.Pool != nil {
 		out.Pool = pp.Pool

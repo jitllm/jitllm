@@ -111,14 +111,22 @@ type Head struct {
 	// Wrong is the row a violated head reads in place of the caller's (a
 	// gate's violation), nil for none.
 	Wrong []float32
+	// planes is the residual's planes the head's graphs read, io a call's
+	// buffers, and PlaneFault reads plane 1 in place of plane 2 (Exec.PlaneFault).
+	planes     int
+	io         []unsafe.Pointer
+	PlaneFault bool
 }
 
 // NewHead is the head part over rows of width d and a vocabulary of nv on
 // dev, counted in steps: its forms p, norm where the model has an output
 // norm, their weights bound by w; topLog is the most alternatives the
-// log-softmax selects; inf is the vocabulary's tables an infill draw reads.
-func NewHead(dev *Device, steps *nn.Steps, p HeadParts, norm bool, w Weights, d, nv, topLog int, inf nn.InfillTables) *Head {
-	h := &Head{p: p, norm: norm, w: w, dev: dev, steps: steps, d: d, nv: nv, infill: inf}
+// log-softmax selects; inf is the vocabulary's tables an infill draw reads;
+// planes is the planes of d a residual row holds, an input of the head's
+// graphs each.
+func NewHead(dev *Device, steps *nn.Steps, p HeadParts, norm bool, w Weights, d, nv, topLog int, inf nn.InfillTables, planes int) *Head {
+	h := &Head{p: p, norm: norm, w: w, dev: dev, steps: steps, d: d, nv: nv, infill: inf, planes: planes}
+	h.io = make([]unsafe.Pointer, 0, planes+2)
 	h.infEOT[0] = inf.EOT
 	if f := h.p.OutNorm.F; f != nil {
 		h.onPad = make([]float32, 2*max(f.Unit, 1)*d)
@@ -126,7 +134,7 @@ func NewHead(dev *Device, steps *nn.Steps, p HeadParts, norm bool, w Weights, d,
 	if f := h.p.Rows.F; f != nil {
 		h.hid = make([]float32, f.Rows*d)
 		if u := f.Unit; u > 1 {
-			h.xpad, h.lpad, h.hpad = make([]float32, u*d), make([]float32, u*nv), make([]float32, u*d)
+			h.xpad, h.lpad, h.hpad = make([]float32, planes*u*d), make([]float32, u*nv), make([]float32, u*d)
 		}
 	}
 	if h.p.Pick.F != nil {
@@ -196,6 +204,25 @@ func (h *Head) in(x []float32) unsafe.Pointer {
 	return unsafe.Pointer(&x[0])
 }
 
+// inputs is a call's buffers: plane k of a residual from x0 at plane floats
+// apart (plane 0 at x0 itself, wrong in its place where it is set), then
+// outs.
+func (h *Head) inputs(x0, wrong unsafe.Pointer, plane int, outs ...unsafe.Pointer) []unsafe.Pointer {
+	io := append(h.io[:0], x0)
+	if wrong != nil {
+		io[0] = wrong
+	}
+	for k := 1; k < h.planes; k++ {
+		j := k
+		if h.PlaneFault && k == 2 {
+			j = 1
+		}
+		io = append(io, unsafe.Add(x0, j*plane*4))
+	}
+	h.io = append(io, outs...)
+	return h.io
+}
+
 // Head writes the norm of the row x, its projection and what follows it into
 // logits, and the norm's rows into hidden where it is given, or says why
 // not.
@@ -213,17 +240,22 @@ func (h *Head) Head(x, logits, hidden []float32) nn.Decline {
 	if hidden != nil {
 		hd = unsafe.Pointer(&hidden[0])
 	}
-	h.run(f, weights, 1, h.in(x), unsafe.Pointer(&logits[0]), hd)
+	var wrong unsafe.Pointer
+	if h.Wrong != nil {
+		wrong = unsafe.Pointer(&h.Wrong[0])
+	}
+	h.run(f, weights, 1, h.inputs(unsafe.Pointer(&x[0]), wrong, h.d, unsafe.Pointer(&logits[0]), hd)...)
 	h.steps.Serve(nn.PartHead)
 	return nn.DeclineServes
 }
 
-// HeadRows is the head over the first n rows of x, d apart, into the rows of
-// logits, and the norm's rows into hidden where it is given (n rows of it),
-// a call of at most the rows' form's rows, or says why not. A call's rows
-// past a whole number of the form's units run from copies, so its units
-// write no row past the caller's.
-func (h *Head) HeadRows(x, logits, hidden []float32, n int) nn.Decline {
+// HeadRows is the head over the first n rows of x, d apart, each plane past
+// the first plane floats on, into the rows of logits, and the norm's rows
+// into hidden where it is given (n rows of it), a call of at most the rows'
+// form's rows, or says why not. A call's rows past a whole number of the
+// form's units run from copies, so its units write no row past the
+// caller's.
+func (h *Head) HeadRows(x, logits, hidden []float32, n, plane int) nn.Decline {
 	f, weights, why := h.form(&h.p.Rows, true)
 	if why != nn.DeclineServes {
 		h.steps.Declined[nn.PartHead][why] += n
@@ -239,10 +271,12 @@ func (h *Head) HeadRows(x, logits, hidden []float32, n int) nn.Decline {
 			if hidden != nil {
 				hd = unsafe.Pointer(&hidden[r0*d])
 			}
-			h.rowsCall(f, weights, unsafe.Pointer(&x[r0*d]), unsafe.Pointer(&logits[r0*nv]), hd, k)
+			h.rowsCall(f, weights, unsafe.Pointer(&x[r0*d]), plane, unsafe.Pointer(&logits[r0*nv]), hd, k)
 		} else {
-			copy(h.xpad, x[r0*d:(r0+k)*d])
-			h.rowsCall(f, weights, unsafe.Pointer(&h.xpad[0]), unsafe.Pointer(&h.lpad[0]), unsafe.Pointer(&h.hpad[0]), k)
+			for j := range h.planes {
+				copy(h.xpad[j*u*d:], x[j*plane+r0*d:j*plane+(r0+k)*d])
+			}
+			h.rowsCall(f, weights, unsafe.Pointer(&h.xpad[0]), u*d, unsafe.Pointer(&h.lpad[0]), unsafe.Pointer(&h.hpad[0]), k)
 			copy(logits[r0*nv:(r0+k)*nv], h.lpad)
 			if hidden != nil {
 				copy(hidden[r0*d:(r0+k)*d], h.hpad)
@@ -254,13 +288,14 @@ func (h *Head) HeadRows(x, logits, hidden []float32, n int) nn.Decline {
 	return nn.DeclineServes
 }
 
-// rowsCall runs the rows' form f over k rows of x into logits and the norm's
-// rows hidden.
-func (h *Head) rowsCall(f *Form, weights []unsafe.Pointer, x, logits, hidden unsafe.Pointer, k int) {
+// rowsCall runs the rows' form f over k rows of x, its planes plane floats
+// apart, into logits and the norm's rows hidden.
+func (h *Head) rowsCall(f *Form, weights []unsafe.Pointer, x unsafe.Pointer, plane int, logits, hidden unsafe.Pointer, k int) {
+	var wrong unsafe.Pointer
 	if h.Wrong != nil {
-		x = unsafe.Pointer(&h.hid[0])
+		wrong = unsafe.Pointer(&h.hid[0])
 	}
-	h.run(f, weights, k, x, logits, hidden)
+	h.run(f, weights, k, h.inputs(x, wrong, plane, logits, hidden)...)
 }
 
 // OutNorm writes the output norm of n rows of x into dst -- a model with no

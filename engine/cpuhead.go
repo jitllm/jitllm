@@ -45,6 +45,10 @@ func (s *Instance) partPlan(g *graph.Graph, rows int, over map[jlm.Role]jlm.Type
 				p.Formats[w.Role] = e.Type
 			} else if t := s.ws.matrix(g.Block, l, w.Role); t != nil && t.E != nil {
 				p.Formats[w.Role] = t.E.Type
+			} else if t := s.ws.matrix(-1, nil, w.Role); g.Block >= 0 && t != nil && t.E != nil {
+				// A block's graph reading the model's tensors too: a
+				// prediction block's head over its own mix.
+				p.Formats[w.Role] = t.E.Type
 			}
 		}
 	}
@@ -140,11 +144,11 @@ func (s *Instance) headRow(x, logits, hidden []float32) nn.Decline {
 // headRows is the head over the first n rows of x into the rows of logits,
 // and the norm's rows into hidden where it is given (nn.HeadDevice.HeadRows),
 // or why not.
-func (s *Instance) headRows(x, logits, hidden []float32, n int) nn.Decline {
+func (s *Instance) headRows(x, logits, hidden []float32, n, plane int) nn.Decline {
 	if s.heads == nil {
 		return nn.DeclineCaller
 	}
-	return s.heads.HeadRows(x, logits, hidden, n)
+	return s.heads.HeadRows(x, logits, hidden, n, plane)
 }
 
 // outNormRows writes the output norm of n rows of x into dst

@@ -1,8 +1,6 @@
 package engine
 
 import (
-	"fmt"
-
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/format/jlm"
@@ -10,14 +8,15 @@ import (
 	"github.com/jitllm/jitllm/nn"
 )
 
-// A model of several residual streams (Config.Streams): their expansion
-// from the input rows and their collapse before the head.
+// A residual of several planes (Config.Streams): a call of n rows holds
+// plane k's rows from k*n*NEmbd on. The input rows' graph writes the planes
+// it expands into and the head's graph reads every plane, so the runner
+// hands both the residual as it is.
 
 // streamsPart is the tensors graph g binds past the head's own and the
 // embedding, by role, as the CPU binds them with no block (weightSource.matrix,
-// weightSource.vector): a device's for the streams' expansion in the input rows
-// and their collapse before the head. nil where g is, or binds a tensor the
-// model does not hold.
+// weightSource.vector): a card's for the input rows' planes and the head's
+// mix of them. nil where g is, or binds a tensor the model does not hold.
 func (s *Instance) streamsPart(g *graph.Graph) *nn.RowsPart {
 	if g == nil {
 		return nil
@@ -47,8 +46,8 @@ func (s *Instance) streamsPart(g *graph.Graph) *nn.RowsPart {
 	return p
 }
 
-// allocStreams gives the decode token's residual every stream the model
-// carries (xa), x its stream 0.
+// allocStreams gives the decode token's residual every plane the model
+// carries (xa), x its plane 0.
 func (s *Instance) allocStreams() {
 	c := s.m.Cfg
 	if c.Streams() < 2 {
@@ -58,61 +57,17 @@ func (s *Instance) allocStreams() {
 	s.x = s.xa[:c.NEmbd]
 }
 
-// expandStreams fills the streams past the first of n rows of x, the
-// chunk's first row row base of the call, through the composed expansion of
-// the embedding in stream 0: its copies or its predictions. A bank of
-// checkpoints states none, each block writing its checkpoint before any
-// block reads it; a prediction block's draft rows arrive with every stream
-// (draftIn).
-func (s *Instance) expandStreams(x []float32, n, base int) error {
-	if s.draftIn != nil {
-		s.draftStreams(x, n, base)
-		return nil
-	}
-	if !s.m.ExpandsStreams() {
-		return nil
-	}
-	why := nn.DeclineCaller
-	if s.streams != nil {
-		why = s.streams.Expand(x, n)
-	}
-	if why != nn.DeclineServes {
-		return s.streamsDeclined("expansion", why)
-	}
-	return nil
-}
+// plane is the floats between two planes of a residual of n rows.
+func (s *Instance) plane(n int) int { return n * s.c.NEmbd }
 
-// collapseStreams writes the head's input into stream 0 of n rows of x
-// through the composed collapse.
-//
-// Over a residual of every stream the rows' residual is a speculation
-// step's hidden state (rowsOut.tapStreams): what a prediction block reads,
-// and what a draft chains to its next step.
-func (s *Instance) collapseStreams(x []float32, n int) error {
-	if s.c.ResidStreams() {
-		s.rows.tapStreams(s, x, n)
+// layDraft lays a prediction block's draft rows, which arrive with every
+// plane (s.draftIn, row-major), into a chunk of rows whose first is row base
+// of the call, over what the input rows wrote; nothing where the call is not
+// a draft's.
+func (s *Instance) layDraft(x []float32, rows, base int) {
+	if s.draftIn == nil {
+		return
 	}
-	why := nn.DeclineCaller
-	if s.streams != nil {
-		why = s.streams.Collapse(x, n)
-	}
-	if why != nn.DeclineServes {
-		return s.streamsDeclined("collapse", why)
-	}
-	return nil
-}
-
-// streamsDeclined is the error of a streams' expansion or collapse no
-// composed form serves.
-func (s *Instance) streamsDeclined(what string, why nn.Decline) error {
-	return fmt.Errorf("model: the streams' %s has no composed form on this instance (%s): %v %v",
-		what, nn.DeclineName(int(why)), s.prepErr(), s.m.FrontGraphs().StreamsErr)
-}
-
-// draftStreams lays a prediction block's draft rows, which arrive with every
-// stream (s.draftIn, row-major), into a chunk of rows whose first is row base
-// of the call.
-func (s *Instance) draftStreams(x []float32, rows, base int) {
 	c := s.m.Cfg
 	w, d := c.ResidW(), c.NEmbd
 	for r := 0; r < rows; r++ {
@@ -121,4 +76,12 @@ func (s *Instance) draftStreams(x []float32, rows, base int) {
 			copy(c.Stream(x, k, rows, r), in[k*d:(k+1)*d])
 		}
 	}
+}
+
+// devHeadReads says the device's head is the instance's: the model's, not
+// the head of a prediction block that holds one of its own (MtpHead).
+func (s *Instance) devHeadReads() bool {
+	fg := s.m.FrontGraphs()
+	i := s.lo - s.c.NLayer
+	return i < 0 || i >= len(fg.MtpHead) || fg.MtpHead[i] == nil
 }

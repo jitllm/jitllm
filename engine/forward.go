@@ -169,9 +169,6 @@ type Instance struct {
 	// side of them.
 	inputs nn.InputsDevice
 	inScr  inputScratch
-	// streams is the device running the residual streams' expansion and
-	// collapse, nil for a model of one stream.
-	streams nn.StreamsDevice
 	// lo and hi are the blocks this instance runs, [lo, hi): the trunk, [0,
 	// NLayer), for every session a caller makes, and a multi-token-prediction
 	// block for the draft instance speculation drives (newDraftState). Block
@@ -461,7 +458,7 @@ type Instance struct {
 	rowsPos []int
 	// draftIn is a prediction block's draft rows over a residual of every
 	// stream, each row every stream, which a chunk lays out stream-major
-	// (draftStreams); nil on every other Instance.
+	// (layDraft); nil on every other Instance.
 	draftIn []float32
 
 	// emb is set for the length of one Embedder.Embed on a decoder embedding
@@ -1438,7 +1435,10 @@ func (s *Instance) newHead() *nn.Head {
 	if s.dense.PosEmbd.E != nil {
 		h.PosEmbd = model.Wt(s.dense.PosEmbd)
 	}
-	h.Streams, h.Collapse = s.streamsPart(f.Embed), s.streamsPart(f.Collapse)
+	h.Streams = s.streamsPart(f.Embed)
+	if c.Streams() > 1 {
+		h.Mix = s.streamsPart(f.CpuHead)
+	}
 	// The final softcap rides the head: a tier that takes it applies the cap on
 	// the device (nn.Head.Softcap), which is what lets a gemma2 token end in
 	// the device argmax instead of a 256,000-float readback.
@@ -2266,7 +2266,7 @@ func (s *Instance) embed(token int32) error {
 	// token's critical path).
 	e := &s.inScr
 	e.tok1[0], e.pos1[0] = token, s.pos
-	if why := s.embedRows(s.x, s.ple, e.tok1[:], e.pos1[:]); why != nn.DeclineServes {
+	if why := s.embedRows(s.resid(), s.ple, e.tok1[:], e.pos1[:], s.plane(1)); why != nn.DeclineServes {
 		return s.embedDeclined(why)
 	}
 	s.trace(-1, "embd", s.x)
@@ -2998,7 +2998,7 @@ func (s *Instance) ForwardEmbd(e []float32) ([]float32, error) {
 	return s.forward(func() error {
 		st := &s.inScr
 		st.tok1[0], st.pos1[0] = 0, s.pos
-		if why := s.givenRows(s.x, s.ple, e, st.tok1[:], st.pos1[:]); why != nn.DeclineServes {
+		if why := s.givenRows(s.resid(), s.ple, e, st.tok1[:], st.pos1[:], s.plane(1)); why != nn.DeclineServes {
 			return s.embedDeclined(why)
 		}
 		s.trace(-1, "embd", s.x)
@@ -3180,17 +3180,6 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 	if s.pos >= s.maxSeq {
 		return nil, errFull{s.maxSeq, s.reqSeq}
 	}
-	// AltUp's streams ride the fill as well (altup.go): every restart begins
-	// from the embedding.
-	if c.StreamHead() {
-		inner := fill
-		fill = func() error {
-			if err := inner(); err != nil {
-				return err
-			}
-			return s.expandStreams(s.xa, 1, 0)
-		}
-	}
 	s.relocateFor(s.pos + 1)
 	if !s.embedOnDevice() {
 		if err := fill(); err != nil {
@@ -3302,19 +3291,9 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 		}
 		li = hi - 1
 	}
-	// A head over several streams reads their collapse, written into stream
-	// 0. A device that collapses the
-	// streams itself (nn.Head.Collapses) is handed them as they are, and the
-	// host collapses them only where it refuses the call.
-	devCollapse := s.head != nil && !folded && s.head.Collapses && s.lo < c.NLayer
-	if c.StreamHead() && !devCollapse {
-		if err := s.collapseStreams(s.xa, 1); err != nil {
-			return nil, err
-		}
-	}
 	// A step's row wanting its hidden state takes the residual before the
-	// device's mix, as collapseStreams takes it before the host's.
-	if devCollapse && c.ResidStreams() {
+	// head's mix of its planes.
+	if c.ResidStreams() {
 		s.rows.tapStreams(s, s.xa, 1)
 	}
 
@@ -3323,9 +3302,9 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 	// same tail the folded path uses). A refusal falls through to the host,
 	// which has the norm and the weights either way.
 	done := false
-	if s.head != nil && !folded {
+	if s.head != nil && !folded && s.devHeadReads() {
 		s.closeRuns(nil)
-		if !c.ResidStreams() { // its hidden state is the residual, taken in collapseStreams
+		if !c.ResidStreams() { // its hidden state is the residual, taken in tapStreams
 			defer s.rows.hiddenOf(s.head)()
 		}
 		if s.ld.Layers(s.gpuLayers, s.gpuLayers, s.pos, 1, s.resid(), s.cs[:c.RopeW()], s.swaTable(c.LocalNRot()), s.head) {
@@ -3336,18 +3315,13 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 			return nil, errDevice{s.gpuLayers, s.devWhy()}
 		}
 	}
-	if devCollapse && !done {
-		if err := s.collapseStreams(s.xa, 1); err != nil {
-			return nil, err
-		}
-	}
 	// The CPU's composed head applies every stage of the head's graph.
 	if !done {
 		var hidden []float32
 		if s.rows != nil && !c.ResidStreams() {
 			hidden = s.rows.hidden
 		}
-		if why := s.headRow(s.x, s.logits, hidden); why != nn.DeclineServes {
+		if why := s.headRow(s.resid(), s.logits, hidden); why != nn.DeclineServes {
 			return nil, cpuHeadRefused(why)
 		}
 	}

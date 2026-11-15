@@ -35,9 +35,6 @@ const (
 	// PartRows is a picture's rows apart from its blocks: a tower's entry
 	// or projector (the card's picrows.go).
 	PartRows
-	// PartCollapse is the row a head reads from every residual stream
-	// (the card's collapse.go).
-	PartCollapse
 	// PartConv is a convolutional tower's block whole, at its input grid's
 	// rows.
 	PartConv
@@ -45,11 +42,9 @@ const (
 	// narrowed or its halves widened, as a migration moves it (the card's
 	// kvhalves.go).
 	PartHalves
-	// PartMTP is a prediction block's entry, PartStreams the residual
-	// streams' expansion and collapse, PartPool an embedding model's
+	// PartMTP is a prediction block's entry, PartPool an embedding model's
 	// readout.
 	PartMTP
-	PartStreams
 	PartPool
 	NumParts
 )
@@ -76,16 +71,12 @@ func (k Part) String() string {
 		return "tower block"
 	case PartRows:
 		return "picture rows"
-	case PartCollapse:
-		return "streams' collapse"
 	case PartConv:
 		return "convolutional block"
 	case PartHalves:
 		return "history page's halves"
 	case PartMTP:
 		return "prediction entry"
-	case PartStreams:
-		return "streams"
 	case PartPool:
 		return "readout"
 	}
@@ -127,21 +118,16 @@ const (
 	// ComposedRows serves a picture's rows apart from its blocks from their
 	// graphs: a tower's entry and projector (RowsPart, picrows.go).
 	ComposedRows Parts = 1 << PartRows
-	// CollapsedHead counts the collapse of every stream a head reads, which
-	// the composer serves where it serves the head (ComposedHead).
-	CollapsedHead Parts = 1 << PartCollapse
 	// ComposedConv serves a convolutional tower's blocks whole from their
 	// graphs.
 	ComposedConv Parts = 1 << PartConv
 	// ConvertedHalves selects in Stats.ServedPart a binary16 history page's
 	// conversions a migration ran (the card's kvhalves.go).
 	ConvertedHalves Parts = 1 << PartHalves
-	// ComposedMTP serves a prediction block's entry, ComposedStreams the
-	// residual streams' expansion and collapse, ComposedPool an embedding
-	// model's readout.
-	ComposedMTP     Parts = 1 << PartMTP
-	ComposedStreams Parts = 1 << PartStreams
-	ComposedPool    Parts = 1 << PartPool
+	// ComposedMTP serves a prediction block's entry, ComposedPool an
+	// embedding model's readout.
+	ComposedMTP  Parts = 1 << PartMTP
+	ComposedPool Parts = 1 << PartPool
 	// EveryPart is every part the composer serves, for a count over all of
 	// them.
 	EveryPart Parts = 1<<NumParts - 2
@@ -285,9 +271,13 @@ func (p Penalties) Off() bool { return p == NoPenalties() }
 // transform of a draw's distribution (Adaptive: graph.SampleAdaptive's) and
 // one stage of a sampler chain in an order of its own (Stage:
 // graph.SampleStage's).
+//
+// A head reads a residual of the instance's planes (PartsPlan.Planes): a
+// row's at x[k*D] for Head, and n rows of plane k from x[k*plane] for
+// HeadRows.
 type HeadDevice interface {
 	Head(x, logits, hidden []float32) Decline
-	HeadRows(x, logits, hidden []float32, n int) Decline
+	HeadRows(x, logits, hidden []float32, n, plane int) Decline
 	OutNorm(dst, x []float32, n int) Decline
 	Pick(x []float32, ids []int32, vals []float32) Decline
 	Greedy(logits []float32) (int32, bool)
@@ -321,19 +311,11 @@ type TablesDevice interface {
 // of toks at positions pos into x and, where the model has them, their
 // per-layer inputs into ple (Embed), or an embedding span's given rows with
 // what the model adds to them (Given), each reporting why it did not serve
-// them.
+// them. The rows of residual plane k are written from x[k*plane]
+// (PartsPlan.InPlanes of them).
 type InputsDevice interface {
-	Embed(x, ple []float32, toks []int32, pos []int) Decline
-	Given(x, ple, rows []float32, toks []int32, pos []int) Decline
-}
-
-// StreamsDevice is a device running a model's residual streams over a
-// call's rows of the stream-major x: the expansion of stream 0 into the
-// others and the collapse of every stream into the row the head reads, each
-// reporting why it did not serve them.
-type StreamsDevice interface {
-	Expand(x []float32, rows int) Decline
-	Collapse(x []float32, rows int) Decline
+	Embed(x, ple []float32, toks []int32, pos []int, plane int) Decline
+	Given(x, ple, rows []float32, toks []int32, pos []int, plane int) Decline
 }
 
 // PoolDevice is a device reading an embedding model's readout: the pooled

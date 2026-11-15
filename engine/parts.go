@@ -3,6 +3,7 @@ package engine
 import (
 	"slices"
 
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/model"
 	"github.com/jitllm/jitllm/nn"
@@ -13,24 +14,31 @@ const kvHalfRow = 256
 
 // partsPlan is what the instance's parts are placed from (nn.PartsPlan),
 // each as the model states it: the head's and the samplers' graphs (graph.Head
-// over the row the streams collapse to, the norm, the projection and what
-// follows it; a step's rows' at cpuRowsCap; a label pick's over the picked rows
-// alone; the greedy token's and a top-k draw's), the streams' expansion and
-// collapse (a prediction block's own head mix where the instance runs one), an
-// embedding model's readout at the segment's rows, the entry of the prediction
-// block a draft instance starts at, the input rows' (the token rows' and an
-// embedding span's given rows'), each rotary's table (a tower's grid table
+// over the mix of the residual's streams where it holds several -- a
+// prediction block's own mix where the instance runs one -- the norm, the
+// projection and what follows it; a step's rows' at cpuRowsCap; a label
+// pick's over the picked rows alone; the greedy token's and a top-k draw's),
+// an embedding model's readout at the segment's rows, the entry of the
+// prediction block a draft instance starts at, the input rows' (the token
+// rows' and an embedding span's given rows', the streams they expand into
+// among them), each rotary's table (a tower's grid table
 // turns a picture's rows in one call) and a binary16 or quantized history's
 // conversions (a binary16 history's halves in rows of kvHalfRow floats, a q8
 // or block history's rows one a head width its layers hold).
 func (s *Instance) partsPlan() *nn.PartsPlan {
 	fg := s.m.FrontGraphs()
 	p := &nn.PartsPlan{D: s.c.NEmbd, NVocab: s.c.NVocab, TopLog: model.MaxTopLogprobs,
-		HeadNorm: fg.OutNorm != nil, HeadW: nn.PartWeights{Block: -1, Of: s.ws.tensors(-1, nil)}}
+		HeadNorm: fg.OutNorm != nil, HeadW: nn.PartWeights{Block: -1, Of: s.ws.tensors(-1, nil)},
+		Planes: s.c.Streams(), InPlanes: s.inPlanes(fg.CpuEmbed)}
 	part := func(g *graph.Graph, rows int) nn.PartPlan { return s.partPlan(g, rows, nil) }
-	p.Head[0] = part(fg.CpuHead, 1)
-	p.Head[1] = part(fg.CpuHidden, 1)
-	p.Head[2] = part(fg.CpuHidden, cpuRowsCap)
+	head, hidden := fg.CpuHead, fg.CpuHidden
+	if i := s.lo - s.c.NLayer; i >= 0 && i < len(fg.MtpHead) && fg.MtpHead[i] != nil {
+		head, hidden = fg.MtpHead[i], fg.MtpHidden[i]
+		p.HeadW = nn.PartWeights{Block: s.lo, Of: &blockOver{block: s.ws.tensors(s.lo, s.layer(s.lo)), rest: s.ws.tensors(-1, nil)}}
+	}
+	p.Head[0] = part(head, 1)
+	p.Head[1] = part(hidden, 1)
+	p.Head[2] = part(hidden, cpuRowsCap)
 	p.Head[3] = part(fg.PickHead, 1)
 	for i, g := range []*graph.Graph{fg.CpuSample, fg.CpuWalk, fg.CpuRow, fg.CpuCut, fg.CpuWalkProb, fg.CpuCutProb,
 		fg.CpuCutK, fg.CpuCutKProb} {
@@ -55,20 +63,6 @@ func (s *Instance) partsPlan() *nn.PartsPlan {
 	p.Head[24] = part(fg.CpuStage, 1)
 	p.Head[25] = part(fg.CpuLogprobsRow, 1)
 	p.Head[26] = part(fg.CpuKeep, 1)
-
-	if s.c.StatesStreams() {
-		p.Streams, p.NStreams = true, s.c.Streams()
-		p.StreamParts[0] = part(fg.Expand, 1)
-		p.StreamParts[1] = part(fg.Expand, cpuRowsCap)
-		collapse := fg.Collapse
-		cw := nn.PartWeights{Block: -1, Of: s.ws.tensors(-1, nil)}
-		if i := s.lo - s.c.NLayer; i >= 0 && i < len(fg.MtpCollapse) {
-			collapse, cw = fg.MtpCollapse[i], nn.PartWeights{Block: s.lo, Of: s.ws.tensors(s.lo, s.layer(s.lo))}
-		}
-		p.StreamParts[2] = part(collapse, 1)
-		p.StreamParts[3] = part(collapse, cpuRowsCap)
-		p.StreamW, p.CollapseW = nn.PartWeights{Block: -1, Of: s.ws.tensors(-1, nil)}, cw
-	}
 
 	if g := fg.Pool; g != nil {
 		p.Pool, p.PoolPart, p.PoolW = true, part(g, s.maxSeq), nn.PartWeights{Block: -1, Of: s.ws.tensors(-1, nil)}
@@ -166,9 +160,6 @@ func (s *Instance) placeParts() {
 		return
 	}
 	s.heads, s.inputs, s.tables = pp.Head, pp.Inputs, pp.Tables
-	if pp.Streams != nil {
-		s.streams = pp.Streams
-	}
 	if pp.Pool != nil {
 		s.readout = pp.Pool
 	}
@@ -177,4 +168,37 @@ func (s *Instance) placeParts() {
 	}
 	s.kvConvs = pp.KVConv
 	s.kvConv = pp.KVConv[s.kvl.fmt]
+}
+
+// inPlanes is the residual planes input rows' graph g writes: every output
+// but the per-layer inputs, which come last.
+func (s *Instance) inPlanes(g *graph.Graph) int {
+	if g == nil {
+		return 1
+	}
+	n := len(g.Out)
+	if s.m.Cfg.PLEDim != 0 {
+		n--
+	}
+	return max(n, 1)
+}
+
+// blockOver is a block's tensors over the model's: a part reading a
+// prediction block's own mix of the streams and the model's head.
+type blockOver struct {
+	block, rest nn.Tensors
+}
+
+func (t *blockOver) Bytes(r jlm.Role) ([]byte, *nn.Packed, int) {
+	if b, p, n := t.block.Bytes(r); b != nil || p != nil {
+		return b, p, n
+	}
+	return t.rest.Bytes(r)
+}
+
+func (t *blockOver) Floats(r jlm.Role) []float32 {
+	if v := t.block.Floats(r); len(v) != 0 {
+		return v
+	}
+	return t.rest.Floats(r)
 }

@@ -1647,13 +1647,13 @@ type headSpec struct {
 // for: other than one input and one or two outputs, an output that is its
 // input, a matrix other than one projection, or a vector other than the
 // head's.
-func headShape(gr *graph.Graph) (headSpec, bool) {
+func headShape(gr *graph.Graph, mix *nn.RowsPart) (headSpec, bool) {
 	var hs headSpec
-	if gr == nil || len(gr.In) != 1 || len(gr.Out) < 1 || len(gr.Out) > 2 || len(gr.Ops) < 1 {
+	if gr == nil || len(gr.In) < 1 || len(gr.Out) < 1 || len(gr.Out) > 2 || len(gr.Ops) < 1 {
 		return hs, false
 	}
 	for _, v := range gr.Out {
-		if v == gr.In[0] {
+		if slices.Contains(gr.In, v) {
 			return hs, false
 		}
 	}
@@ -1661,6 +1661,7 @@ func headShape(gr *graph.Graph) (headSpec, bool) {
 	for _, o := range gr.Ops {
 		for _, w := range o.Weight {
 			switch {
+			case mixHolds(mix, w.Role):
 			case w.Rows > 0:
 				if matrix && w.Role != hs.out {
 					return hs, false
@@ -1685,8 +1686,8 @@ func headShape(gr *graph.Graph) (headSpec, bool) {
 // hidden rows' graph binding the same, and every vector it names held
 // (PrepHead uploads each) -- and why not where it does not.
 func (bs *blockScratch) headServes(norm backend.Buf) error {
-	hs, ok := headShape(bs.headGraph)
-	hh, hok := headShape(bs.headHidden)
+	hs, ok := headShape(bs.headGraph, bs.headMix)
+	hh, hok := headShape(bs.headHidden, bs.headMix)
 	switch {
 	case !ok || !hok:
 		return errors.New("the head's graph binds a matrix other than its one projection, or a vector the tier holds no head buffer for")
@@ -1700,8 +1701,8 @@ func (bs *blockScratch) headServes(norm backend.Buf) error {
 
 // runHead launches the served head sv on in, its logits into out and its
 // normed rows into h.
-func (sv *servedPart) runHead(g *devTier, lc *launcher, in, out, h backend.Buf) error {
-	return sv.run(g, lc, sv.inst, []backend.Buf{in}, []backend.Buf{out, h}[:sv.m])
+func (sv *servedPart) runHead(g *devTier, lc *launcher, ins []backend.Buf, out, h backend.Buf) error {
+	return sv.run(g, lc, sv.inst, ins, []backend.Buf{out, h}[:sv.m])
 }
 
 // servedHead is the model's head graph served at a step of rows: its norm
@@ -1717,7 +1718,7 @@ func (g *devTier) servedHead(bs *blockScratch, norm backend.Buf, rows int) (*ser
 	if g.rowsFaulted("nohidden") {
 		gr = bs.headGraph
 	}
-	hs, ok := headShape(gr)
+	hs, ok := headShape(gr, bs.headMix)
 	if !ok {
 		return nil, errors.New("the composed head: a graph binding a matrix other than its one projection, or a vector the tier holds no head buffer for")
 	}
@@ -1741,6 +1742,15 @@ func (g *devTier) servedHead(bs *blockScratch, norm backend.Buf, rows int) (*ser
 	sv, err := g.servedFor(sk, func() (composedPart, error) {
 		sl := composedPart{kind: nn.PartHead, graph: gr, formats: map[jlm.Role]jlm.Type{hs.out: t},
 			weights: map[jlm.Role]*resident{}, vectors: map[jlm.Role]backend.Buf{}}
+		if bs.headMix != nil {
+			mp, err := g.mixParts(bs.headMix)
+			if err != nil {
+				return composedPart{}, err
+			}
+			maps.Copy(sl.formats, mp.formats)
+			maps.Copy(sl.weights, mp.weights)
+			maps.Copy(sl.vectors, mp.vectors)
+		}
 		if hs.hasBias {
 			sl.formats[jlm.RoleOutputBias] = jlm.TypeF32
 		}
@@ -2921,28 +2931,6 @@ func (g *devTier) prewarmComposedHead(narrow bool) (roomless string) {
 			if _, err := g.servedSample(gr); err != nil {
 				g.LastErr = "the composed sampler's walk or the label pick: " + err.Error()
 			}
-		}
-		g.prewarming = false
-	}
-	// The collapse of every stream a call of the head alone runs, at a
-	// decode step's row and at every width a scratch is held at: a
-	// verification's rows run it at their scratch's.
-	if !g.NoPromptPrewarm && bs != nil && bs.collapse != nil {
-		g.prewarming = true
-		form := func(rows int) {
-			if _, err := g.servedCollapse(bs.collapse, rows); err != nil {
-				g.LastErr = "the composed streams' collapse: " + err.Error()
-			}
-			if _, err := g.servedRowCopy(bs.p.NEmbd, rows); err != nil {
-				g.LastErr = "the composed copy of the streams' collapse: " + err.Error()
-			}
-		}
-		form(1)
-		for w := range g.bbs {
-			form(w)
-		}
-		if g.promptsReserved() && g.bbs[batchWidth] == nil {
-			form(batchWidth)
 		}
 		g.prewarming = false
 	}

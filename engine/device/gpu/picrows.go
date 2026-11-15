@@ -41,11 +41,9 @@ type rowsState struct {
 	// at is the view the call is the session of (see embRead.at).
 	at        *devTier
 	ins, outs [1]backend.Buf
-	// coll is the row a head reads from every stream, and collOut and
-	// collIn the collapse's output and the first stream it is copied over
-	// (collapse.go).
-	coll            backend.Buf
-	collOut, collIn [1]backend.Buf
+	// headX is a head's one input, the residual of one plane
+	// (headIns).
+	headX [1]backend.Buf
 	// takeIn and takeOut are the folded head's row take's (servedRowTake).
 	takeIn, takeOut [1]backend.Buf
 }
@@ -403,7 +401,7 @@ func (g *devTier) releaseRows() {
 // the residents' (freed with them).
 func (g *devTier) closeRows() {
 	rs := &g.rows
-	for _, b := range [...]*backend.Buf{&rs.in, &rs.out, &rs.req, &rs.pos, &rs.call, &rs.coll} {
+	for _, b := range [...]*backend.Buf{&rs.in, &rs.out, &rs.req, &rs.pos, &rs.call} {
 		if *b != nil {
 			(*b).Free()
 			*b = nil

@@ -35,7 +35,13 @@ type Head struct {
 // Build is the head's graph.
 func (h *Head) Build() *Graph {
 	b := NewBlock(-1)
-	x := b.In("x", h.NEmbd)
+	h.Over(b, b.In("x", h.NEmbd))
+	return b.G
+}
+
+// Over emits the head over the row x into b, its outputs the graph's: the
+// head of a graph whose ops before it make the row.
+func (h *Head) Over(b *Builder, x ValueID) {
 	width := h.NVocab
 	var ids ValueID
 	if h.Pick > 0 {
@@ -91,5 +97,4 @@ func (h *Head) Build() *Graph {
 		}
 		b.Out(n)
 	}
-	return b.G
 }

@@ -35,15 +35,20 @@ type Inputs struct {
 	bind     Call
 	// places is the calls' IO, held from one to the next.
 	places places
+	// planes is the residual planes the graphs write, the row's first, and
+	// PlaneFault writes planes 1 and 2 swapped (Exec.PlaneFault).
+	planes     int
+	PlaneFault bool
 }
 
 // NewInputs is the input rows' part of rows of width d and per-layer inputs
 // of width pw on dev, counted in steps: the token rows' forms of one row and
 // of a chunk's, and where given the given rows' (writesX where that graph
-// writes the row), their weights bound by w.
-func NewInputs(dev *Device, steps *nn.Steps, one, many, givenOne, givenMany Part, given, writesX bool, w Weights, d, pw int) *Inputs {
+// writes the row), their weights bound by w; the graphs write planes
+// residual planes of d.
+func NewInputs(dev *Device, steps *nn.Steps, one, many, givenOne, givenMany Part, given, writesX bool, w Weights, d, pw, planes int) *Inputs {
 	in := &Inputs{one: one, many: many, givenOne: givenOne, givenMany: givenMany, given: given, writesX: writesX,
-		w: w, dev: dev, steps: steps, d: d, pw: pw}
+		w: w, dev: dev, steps: steps, d: d, pw: pw, planes: planes}
 	u := 1
 	for _, p := range []*Part{&in.one, &in.many, &in.givenOne, &in.givenMany} {
 		if p.F != nil {
@@ -51,7 +56,7 @@ func NewInputs(dev *Device, steps *nn.Steps, one, many, givenOne, givenMany Part
 		}
 	}
 	in.tok, in.pos = make([]uint32, u), make([]uint32, u+1)
-	in.pad = make([]float32, u*(d+pw))
+	in.pad = make([]float32, u*(planes*d+pw))
 	if given {
 		in.gin = make([]float32, u*d)
 	}
@@ -59,31 +64,31 @@ func NewInputs(dev *Device, steps *nn.Steps, one, many, givenOne, givenMany Part
 	return in
 }
 
-// Embed writes the input rows of toks, at positions pos, into the rows of x
-// and, where the model has them, their per-layer inputs into the rows of
-// ple, or says why not.
-func (in *Inputs) Embed(x, ple []float32, toks []int32, pos []int) nn.Decline {
-	return in.run(&in.one, &in.many, nil, true, x, ple, toks, pos)
+// Embed writes the input rows of toks, at positions pos, into the rows of x,
+// each plane past the first plane floats on, and, where the model has them,
+// their per-layer inputs into the rows of ple, or says why not.
+func (in *Inputs) Embed(x, ple []float32, toks []int32, pos []int, plane int) nn.Decline {
+	return in.run(&in.one, &in.many, nil, true, x, ple, toks, pos, plane)
 }
 
 // Given writes rows, an embedding span's given rows, into the rows of x
 // with their position rows where the model has a position table, and their
 // per-layer inputs into the rows of ple from the tokens toks at positions
 // pos; a model that adds nothing to a given row has its rows copied.
-func (in *Inputs) Given(x, ple, rows []float32, toks []int32, pos []int) nn.Decline {
+func (in *Inputs) Given(x, ple, rows []float32, toks []int32, pos []int, plane int) nn.Decline {
 	if !in.given {
 		copy(x, rows)
 		in.steps.Served[nn.PartEmbed] += len(toks)
 		return nn.DeclineServes
 	}
-	return in.run(&in.givenOne, &in.givenMany, rows, in.writesX, x, ple, toks, pos)
+	return in.run(&in.givenOne, &in.givenMany, rows, in.writesX, x, ple, toks, pos, plane)
 }
 
 // run runs one of the input rows' forms of one row (one) or of a chunk's
 // (many) over toks at positions pos, reading src's rows where it is set (the
 // given rows' graph) and writing x and ple, a call of at most the form's
 // rows at a time.
-func (in *Inputs) run(one, many *Part, src []float32, writesX bool, x, ple []float32, toks []int32, pos []int) nn.Decline {
+func (in *Inputs) run(one, many *Part, src []float32, writesX bool, x, ple []float32, toks []int32, pos []int, plane int) nn.Decline {
 	rows := len(toks)
 	p := one
 	if rows > 1 {
@@ -121,18 +126,23 @@ func (in *Inputs) run(one, many *Part, src []float32, writesX bool, x, ple []flo
 			copy(in.gin[:k*d], src[r0*d:(r0+k)*d])
 			c.IO[0], o = unsafe.Pointer(&in.gin[0]), 1
 		}
-		if padded {
-			if writesX {
-				c.IO[o], o = unsafe.Pointer(&in.pad[0]), o+1
+		np := in.planes
+		if !writesX {
+			np = 0
+		}
+		for j := range np {
+			w := in.writtenPlane(j)
+			if padded {
+				c.IO[o+j] = unsafe.Pointer(&in.pad[w*u*d])
+			} else {
+				c.IO[o+j] = unsafe.Pointer(&x[w*plane+r0*d])
 			}
-			if pw > 0 {
-				c.IO[o] = unsafe.Pointer(&in.pad[u*d])
-			}
-		} else {
-			if writesX {
-				c.IO[o], o = unsafe.Pointer(&x[r0*d]), o+1
-			}
-			if pw > 0 {
+		}
+		o += np
+		if pw > 0 {
+			if padded {
+				c.IO[o] = unsafe.Pointer(&in.pad[in.planes*u*d])
+			} else {
 				c.IO[o] = unsafe.Pointer(&ple[r0*pw])
 			}
 		}
@@ -145,15 +155,29 @@ func (in *Inputs) run(one, many *Part, src []float32, writesX bool, x, ple []flo
 			in.dev.Call(c, &f.Codes[i])
 		}
 		if padded {
-			if writesX {
-				copy(x[r0*d:(r0+k)*d], in.pad[:k*d])
+			for j := range np {
+				copy(x[j*plane+r0*d:j*plane+(r0+k)*d], in.pad[j*u*d:j*u*d+k*d])
 			}
 			if pw > 0 {
-				copy(ple[r0*pw:(r0+k)*pw], in.pad[u*d:u*d+k*pw])
+				o := in.planes * u * d
+				copy(ple[r0*pw:(r0+k)*pw], in.pad[o:o+k*pw])
 			}
 		}
 		r0 += k
 	}
 	in.steps.Served[nn.PartEmbed] += rows
 	return nn.DeclineServes
+}
+
+// writtenPlane is the plane the graph's output j writes.
+func (in *Inputs) writtenPlane(j int) int {
+	switch {
+	case !in.PlaneFault || in.planes < 3:
+		return j
+	case j == 1:
+		return 2
+	case j == 2:
+		return 1
+	}
+	return j
 }

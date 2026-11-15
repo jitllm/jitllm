@@ -3,6 +3,7 @@ package model
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"slices"
 	"sync"
@@ -103,32 +104,27 @@ type frontSet struct {
 	mtpWhy  []Uncovered
 	mtpErrs []error
 	// mtpEntry and mtpEntryWhy are each prediction block's entry
-	// (mtpEntryGraph), mtpCollapse its own head mix over the streams where
-	// it stores one (streamCollapseGraphAt).
-	MtpEntry    []*graph.Graph
-	mtpEntryWhy []Uncovered
-	MtpCollapse []*graph.Graph
-	Head, Embed *graph.Graph
-	// cpuEmbed is embed without the streams past the first, which the CPU
-	// expands through expand or a family's own expansion;
-	// given is an embedding span's rows' input (givenGraph); outNorm the
+	// (mtpEntryGraph); MtpHead and MtpHidden the head over its own mix of
+	// the streams where it stores one (mtpHeadGraph), nil where it does
+	// not.
+	MtpEntry           []*graph.Graph
+	mtpEntryWhy        []Uncovered
+	MtpHead, MtpHidden []*graph.Graph
+	Head, Embed        *graph.Graph
+	// cpuEmbed is embed as the CPU composes it, every stream the input
+	// rows expand into among its outputs; given is an embedding span's rows'
+	// input (givenGraph); outNorm the
 	// output norm alone (outNormGraph). cpuInErr is why any of them did not
 	// verify.
 	CpuEmbed, Given, OutNorm *graph.Graph
 	CpuInErr                 error
 	// headHidden is head writing the norm's rows too (nn.Head.HiddenGraph).
 	headHidden *graph.Graph
-	// cpuHead and cpuHidden are head and headHidden over the row a model of
-	// several streams collapses them to before its head, as the host's call
-	// sites hand it to the CPU and to a card: the same graphs on a model of
+	// cpuHead and cpuHidden are head and headHidden as the devices compose
+	// them: over the mix of every residual stream the head reads first, one
+	// input a stream, on a model of several; the same graphs on a model of
 	// one.
 	CpuHead, CpuHidden *graph.Graph
-	// expand and collapse are the input rows' streams past stream 0 and the
-	// row the head reads from every stream (frontstreams.go), nil for a
-	// model of one or of streams it does not predict; streamsErr is why a
-	// graph of them did not verify.
-	Expand, Collapse *graph.Graph
-	StreamsErr       error
 	// cpuSample and cpuWalk are sample and a top-k draw's walk over
 	// cpuHead's logits; cpuRow and cpuCut the draw with no top-k, with no cut
 	// and with one; cpuWalkProb and cpuCutProb the distributions the walk and
@@ -377,13 +373,12 @@ func (m *Model) FrontGraphs() *frontSet {
 	}
 	if np := m.Cfg.NMTP; np > 0 {
 		s.mtp, s.mtpWhy, s.mtpErrs = make([]*graph.Graph, np), make([]Uncovered, np), make([]error, np)
-		s.MtpEntry, s.mtpEntryWhy, s.MtpCollapse = make([]*graph.Graph, np), make([]Uncovered, np), make([]*graph.Graph, np)
+		s.MtpEntry, s.mtpEntryWhy = make([]*graph.Graph, np), make([]Uncovered, np)
+		s.MtpHead, s.MtpHidden = make([]*graph.Graph, np), make([]*graph.Graph, np)
 		for i := range np {
 			s.mtp[i], s.mtpWhy[i], s.mtpErrs[i] = m.blockGraph(n + i)
 			s.MtpEntry[i], s.mtpEntryWhy[i], _ = m.mtpEntryGraph(n + i)
-			if m.Stores(n+i, jlm.RoleHCHeadDown) {
-				s.MtpCollapse[i], _ = m.streamCollapseGraphAt(n + i)
-			}
+			s.MtpHead[i], s.MtpHidden[i] = m.mtpHeadGraph(false, n+i), m.mtpHeadGraph(true, n+i)
 		}
 	}
 	s.Head, s.HeadWhy, s.headErr = m.headGraph(false)
@@ -397,13 +392,9 @@ func (m *Model) FrontGraphs() *frontSet {
 			s.CpuHidden, _, _ = m.headGraphOf(true, true)
 		}
 	}
-	var eerr, cerr error
-	s.Expand, eerr = m.streamExpandGraph()
-	s.Collapse, cerr = m.streamCollapseGraph()
-	s.StreamsErr = errors.Join(eerr, cerr)
 	s.Embed, s.EmbedWhy, s.embedErr = m.embedGraph(true)
 	var ce, ge, ne error
-	s.CpuEmbed, _, ce = m.embedGraph(false)
+	s.CpuEmbed, _, ce = m.embedGraph(true)
 	s.Given, ge = m.givenGraph()
 	s.OutNorm, ne = m.outNormGraph()
 	s.CpuInErr = errors.Join(ce, ge, ne)
@@ -1040,8 +1031,8 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 }
 
 // blockFacts is what the container stores for block li, as its graph binds
-// it: a prediction block's own head mix is its collapse graph's
-// (streamCollapseGraphAt), not its body's.
+// it: a prediction block's own head mix is its head's graph's
+// (mtpHeadGraph), not its body's.
 func (m *Model) blockFacts(li int) (graph.Facts, Uncovered) {
 	f, perExpert := m.Inventory(int32(li))
 	if perExpert {
@@ -1618,10 +1609,65 @@ func (m *Model) headGraphOf(hidden, collapsed bool) (*graph.Graph, Uncovered, er
 		h.Output = jlm.RoleTokenEmbd
 	}
 	g := h.Build()
+	if collapsed && c.StatesStreams() {
+		var err error
+		if g, err = m.streamHeadGraph(&h, -1); err != nil {
+			return nil, UncoveredUnverified, err
+		}
+		return g, Covered, nil
+	}
 	if err := graph.Verify(g, f); err != nil {
 		return nil, UncoveredUnverified, fmt.Errorf("the head's graph does not verify: %w", err)
 	}
 	return g, Covered, nil
+}
+
+// streamHeadGraph is head h over the mix of every residual stream the
+// converter states as the head's read: one input a stream, block li's head
+// roles where li is a prediction block's (its own mix), the model's for -1.
+func (m *Model) streamHeadGraph(h *graph.Head, li int) (*graph.Graph, error) {
+	f, _ := m.Inventory(jlm.DenseBlock)
+	if li >= 0 {
+		fb, _ := m.Inventory(int32(li))
+		inv := maps.Clone(f.Inventory)
+		maps.Copy(inv, fb.Inventory)
+		f.Inventory = inv
+	}
+	b := graph.NewBlock(li)
+	y, err := m.streamMix(b, f)
+	if err != nil {
+		return nil, err
+	}
+	h.Over(b, y)
+	if err := graph.Verify(b.G, f); err != nil {
+		return nil, fmt.Errorf("the head's graph over the streams does not verify: %w", err)
+	}
+	return b.G, nil
+}
+
+// mtpHeadGraph is the head (hidden, the norm's rows too) over prediction
+// block li's own mix of the streams, nil where it stores none.
+func (m *Model) mtpHeadGraph(hidden bool, li int) *graph.Graph {
+	c := m.Cfg
+	if !c.StatesStreams() || !m.Stores(li, jlm.RoleHCHeadDown) {
+		return nil
+	}
+	f, _ := m.Inventory(jlm.DenseBlock)
+	stored := func(r jlm.Role) bool {
+		_, ok := f.Inventory[r]
+		return ok
+	}
+	h := graph.Head{NEmbd: c.NEmbd, NVocab: c.NVocab, Eps: c.RMSEps, LayerNorm: c.LayerNorm,
+		NormBias: stored(jlm.RoleOutputNormBias), Output: jlm.RoleOutput, Bias: stored(jlm.RoleOutputBias),
+		Softcap: float64(c.FinalSoftcap), Scale: c.LogitScale, Hidden: hidden, NoNorm: !stored(jlm.RoleOutputNorm)}
+	if !stored(h.Output) {
+		h.Output = jlm.RoleTokenEmbd
+	}
+	g, err := m.streamHeadGraph(&h, li)
+	if err != nil {
+		return nil
+	}
+	return g
 }
 
 // markGraph is a marker head's readout as ops (jlm.Flag2HeadBlocks): each
@@ -2143,13 +2189,15 @@ func (m *Model) outNormGraph() (*graph.Graph, error) {
 // container stores a position table, then, for a model of per-layer
 // embeddings, each row's per-layer inputs from the row and the token it
 // names (token 0's where it names none). Its outputs are the row where a
-// position table moves it, then the per-layer inputs; nil for a model that
+// position table moves it or the input rows expand it into streams, then
+// those streams, then the per-layer inputs; nil for a model that
 // adds nothing to a given row.
 func (m *Model) givenGraph() (*graph.Graph, error) {
 	c := m.Cfg
 	f, _ := m.Inventory(jlm.DenseBlock)
 	p, pos := f.Inventory[jlm.RolePosEmbd]
-	if !pos && c.PLEDim == 0 {
+	expands := m.ExpandsStreams()
+	if !pos && c.PLEDim == 0 && !expands {
 		return nil, nil
 	}
 	b := graph.NewBlock(-1)
@@ -2159,6 +2207,18 @@ func (m *Model) givenGraph() (*graph.Graph, error) {
 			[]graph.Binding{{Role: jlm.RolePosEmbd, K: p.K, Rows: p.Rows}}, graph.Attrs{Positional: true}, nil, nil)[0]
 		x = b.Add(x, pe)
 		b.Out(x)
+	}
+	// The streams the input rows expand into follow the row, which the
+	// graph then writes too.
+	if expands {
+		if !pos {
+			b.Out(streamCopy(b, x))
+		}
+		xs, err := m.streamExpand(b, f, x)
+		if err != nil {
+			return nil, err
+		}
+		b.Out(xs...)
 	}
 	if c.PLEDim != 0 {
 		b.Out(m.perLayerInputs(b, f, x))

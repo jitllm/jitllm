@@ -663,14 +663,8 @@ func stepTogether(runs []Run, rows int, ss nn.SessionStepper) ([][]float32, erro
 		bple = s0.bple[:rows*c.SideWidth()]
 	}
 	s0.tokenSide(rows)
-	if why := s0.embedRows(x[:rows*c.NEmbd], bple, s0.stepTok, pos); why != nn.DeclineServes {
+	if why := s0.embedRows(x, bple, s0.stepTok, pos, s0.plane(rows)); why != nn.DeclineServes {
 		return nil, s0.embedDeclined(why)
-	}
-	// The streams past the first, from each row's embedding.
-	if c.StreamHead() {
-		if err := s0.expandStreams(x, rows, 0); err != nil {
-			return nil, err
-		}
 	}
 	// The head's Logits is s0's single-sequence destination; the step borrows
 	// it for the wanted rows and hands it back. A step no row wants logits
@@ -703,10 +697,7 @@ func stepTogether(runs []Run, rows int, ss nn.SessionStepper) ([][]float32, erro
 	}
 	headed := false
 	if nlogit > 0 && c.StreamHead() {
-		if err := s0.collapseStreams(x, rows); err != nil {
-			return nil, err
-		}
-		if why := s0.headRows(s0.bx, logits, nil, nlogit); why != nn.DeclineServes {
+		if why := s0.headRows(x, logits, nil, nlogit, s0.plane(rows)); why != nn.DeclineServes {
 			return nil, s0.headDeclined(why)
 		}
 		headed = true

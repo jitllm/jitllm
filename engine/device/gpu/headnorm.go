@@ -66,9 +66,8 @@ func (g *devTier) adoptHead(h *nn.Head) bool {
 }
 
 // joinHead is PrepHead for a head another instance placed: adoptHead under the
-// tier's lock, without the graph drop a fresh head's upload needs. It answers
-// h.Collapses as PrepHead does: an instance left without the answer collapses
-// its streams on the host, and the card collapses stream 0's collapse again.
+// tier's lock, without the graph drop a fresh head's upload needs. It holds
+// the head's mix (nn.Head.Mix) as PrepHead does.
 func (g *devTier) joinHead(h *nn.Head) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -76,7 +75,7 @@ func (g *devTier) joinHead(h *nn.Head) bool {
 		return false
 	}
 	g.headGraphs(h)
-	g.prepCollapse(g.bs, h)
+	g.bs.headMix = h.Mix
 	return g.adoptHead(h)
 }
 

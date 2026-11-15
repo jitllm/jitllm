@@ -541,7 +541,7 @@ func (sp *Speculator) trunkPrompt(prompt []int32) ([]float32, []float32, error) 
 	t.rowTap = func(_ int, rows []float32) { resid = append(resid, rows...) }
 	if c.ResidStreams() {
 		// A chunk's rows stream-major; the hidden state is each row's every
-		// stream together, unnormed (collapseStreams).
+		// stream together, unnormed (tapStreams).
 		t.rowTap = func(_ int, rows []float32) {
 			nc := len(rows) / c.ResidW()
 			for i := 0; i < nc; i++ {

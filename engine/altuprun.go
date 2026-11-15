@@ -14,18 +14,15 @@ func (s *Instance) resid() []float32 {
 	return s.x
 }
 
-// altRowsStep is rowsStep's device call for an AltUp model, whose rows are
-// embedded: the streams expanded, the blocks on the device without the head,
-// and the head on the host over the streams' mean, finished as the device's
-// is (the final softcap; the caller adds the rest). With no logits wanted the
-// rows' greedy tokens go to the head's Tokens, as the device's argmax would.
+// altRowsStep is rowsStep's device call for a model whose rows are
+// embedded: the blocks on the device without the head, and the head on the
+// host over the rows' residual, finished as the device's is (the final
+// softcap; the caller adds the rest). With no logits wanted the rows' greedy
+// tokens go to the head's Tokens, as the device's argmax would.
 func (s *Instance) altRowsStep(rd nn.RowsDevice, pos, slot []int, tokens []int32, n int, logits []float32,
 	nlogit int) error {
 	c := s.m.Cfg
 	x := s.bx[:n*c.ResidW()]
-	if err := s.expandStreams(x, n, 0); err != nil {
-		return err
-	}
 	if !rd.LayersRows(s.lo, s.hi, pos, slot, s.maxSeq, x, s.bcs[:n*c.NRot], s.bswaTable(n, c.LocalNRot()), nil) {
 		why := "no reason given"
 		if e, ok := s.ld.(nn.ErrReporter); ok {
@@ -44,11 +41,10 @@ func (s *Instance) altRowsStep(rd nn.RowsDevice, pos, slot []int, tokens []int32
 	if nlogit == 0 {
 		return nil
 	}
-	if err := s.collapseStreams(x, n); err != nil {
-		return err
+	if c.ResidStreams() {
+		s.rows.tapStreams(s, x, n)
 	}
-	s.growRows(n)
-	if why := s.headRows(s.bx, logits, nil, nlogit); why != nn.DeclineServes {
+	if why := s.headRows(x, logits, nil, nlogit, s.plane(n)); why != nn.DeclineServes {
 		return s.headDeclined(why)
 	}
 	if greedy {

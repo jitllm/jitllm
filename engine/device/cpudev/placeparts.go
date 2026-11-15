@@ -10,13 +10,12 @@ import (
 // Parts is an instance's parts on the CPU device; a part the plan states
 // none of is nil.
 type Parts struct {
-	Head    *Head
-	Streams *Streams
-	Pool    *Pool
-	Entry   *Entry
-	Inputs  *Inputs
-	Tables  *Tables
-	KVConv  [nn.KVFormats]*KVConv
+	Head   *Head
+	Pool   *Pool
+	Entry  *Entry
+	Inputs *Inputs
+	Tables *Tables
+	KVConv [nn.KVFormats]*KVConv
 }
 
 // formAhead forms every part p names side by side, ahead of the walk that
@@ -27,9 +26,6 @@ func (e *Exec) formAhead(p *PartsPlan) {
 		return
 	}
 	plans := append([]PartPlan(nil), p.Head[:]...)
-	if p.Streams {
-		plans = append(plans, p.StreamParts[:]...)
-	}
 	if p.Pool {
 		plans = append(plans, p.PoolPart)
 	}
@@ -69,15 +65,8 @@ func (e *Exec) placeParts(p *PartsPlan) Parts {
 	}
 	out.Head = NewHead(e.dev, &e.steps, HeadParts{Head: h[0], Hidden: h[1], Rows: h[2], Pick: h[3], Sample: h[4], Walk: h[5],
 		Row: h[6], Cut: h[7], WalkProb: h[8], CutProb: h[9], CutK: h[10], CutKProb: h[11], OutNorm: h[12], Logprobs: h[13],
-		Mask: h[14], Decide: h[15], CutTyp: h[16], CutTypProb: h[17], CutKTyp: h[18], CutKTypProb: h[19], Miro: h[20], MiroV1: h[21], WalkInfill: h[22], Adaptive: h[23], Stage: h[24], LogprobsRow: h[25], Keep: h[26]}, p.HeadNorm, boundWeights{e.b, p.HeadW}, p.D, p.NVocab, p.TopLog, p.Infill)
-	if p.Streams {
-		var sp [4]Part
-		for i := range sp {
-			sp[i] = e.FormPart(p.StreamParts[i])
-		}
-		out.Streams = NewStreams(e.dev, &e.steps, sp[0], sp[1], sp[2], sp[3], boundWeights{e.b, p.StreamW}, boundWeights{e.b, p.CollapseW}, p.NStreams, p.D)
-		out.Streams.Fault = e.StreamFault
-	}
+		Mask: h[14], Decide: h[15], CutTyp: h[16], CutTypProb: h[17], CutKTyp: h[18], CutKTypProb: h[19], Miro: h[20], MiroV1: h[21], WalkInfill: h[22], Adaptive: h[23], Stage: h[24], LogprobsRow: h[25], Keep: h[26]}, p.HeadNorm, boundWeights{e.b, p.HeadW}, p.D, p.NVocab, p.TopLog, p.Infill, max(p.Planes, 1))
+	out.Head.PlaneFault = e.PlaneFault
 	if p.Pool {
 		part := e.FormPart(p.PoolPart)
 		var weights []unsafe.Pointer
@@ -98,7 +87,8 @@ func (e *Exec) placeParts(p *PartsPlan) Parts {
 	for i := range in {
 		in[i] = e.FormPart(p.Inputs[i])
 	}
-	out.Inputs = NewInputs(e.dev, &e.steps, in[0], in[1], in[2], in[3], p.Given, p.WritesX, boundWeights{e.b, p.InputsW}, p.D, p.PleW)
+	out.Inputs = NewInputs(e.dev, &e.steps, in[0], in[1], in[2], in[3], p.Given, p.WritesX, boundWeights{e.b, p.InputsW}, p.D, p.PleW, max(p.InPlanes, 1))
+	out.Inputs.PlaneFault = e.PlaneFault
 	one, many := make([]Part, len(p.Tables)), make([]Part, len(p.Tables))
 	for i, t := range p.Tables {
 		one[i], many[i] = e.FormPart(t.One), e.FormPart(t.Many)

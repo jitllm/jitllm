@@ -23,7 +23,7 @@ func moveHead(dst, src *blockScratch) {
 	dst.pickGraph, dst.pickHead, src.pickGraph, src.pickHead = src.pickGraph, src.pickHead, nil, nil
 	dst.hNorm, dst.hNormB, dst.hBias, dst.logits, dst.hRaw, dst.hOut = src.hNorm, src.hNormB, src.hBias, src.logits, src.hRaw, src.hOut
 	dst.embedGraph = src.embedGraph
-	dst.collapse = src.collapse
+	dst.headMix = src.headMix
 	dst.embSW, dst.embSV = src.embSW, src.embSV
 	dst.embW, dst.posW, dst.embErr = src.embW, src.posW, src.embErr
 	src.head, src.mvHead, src.headGraph, src.sampleGraph = nil, mv{}, nil, nil
