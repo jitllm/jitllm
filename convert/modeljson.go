@@ -70,6 +70,17 @@ type mjConfig struct {
 	// Gating is the class's router by name (mjGatings): the gate it computes
 	// whatever config.json says.
 	Gating string `json:"gating"`
+	// RotaryLayers states which layers rotate.
+	RotaryLayers *mjRotaryLayers `json:"rotary_layers"`
+}
+
+// mjRotaryLayers is which layers rotate, as transformers states it for the
+// classes with layers that skip the rotary (no_rope_layers): Each is a list
+// a layer, 1 rotating and 0 not, and where it is absent every Every-th layer
+// skips the rotary.
+type mjRotaryLayers struct {
+	Each  string `json:"each"`
+	Every string `json:"every"`
 }
 
 // mjGatings is each router gate a file may state, as llama.cpp's
@@ -241,6 +252,9 @@ func parseModelJSON(b []byte, name string) (*modelJSON, error) {
 		if strings.ContainsAny(k, ".$") || json.Unmarshal(raw, &v) != nil {
 			return nil, fmt.Errorf("convert: %s: default %q is not a key of the root and a value", name, k)
 		}
+	}
+	if r := mj.Config.RotaryLayers; r != nil && (r.Each == "" || r.Every == "") {
+		return nil, fmt.Errorf("convert: %s: rotary_layers states each layer and the period where the list is absent", name)
 	}
 	if w := mj.Config.Window; w != nil && (w.Size == "" || w.Used == "") {
 		return nil, fmt.Errorf("convert: %s: a window states its size and whether it is used", name)
@@ -869,6 +883,11 @@ func (mj *modelJSON) configIn(env exprEnv, c *hfConfig, names []string) (*Config
 			cfg.Flags &^= mjFlags()[f]
 		}
 	}
+	if r := mj.Config.RotaryLayers; r != nil {
+		if err := mjRotaryLayersOf(cfg, r, eval); err != nil {
+			return nil, fmt.Errorf("convert: %s: %w", c.path, err)
+		}
+	}
 	if mj.Config.RopeScaling != "" {
 		v, err := eval("rope_scaling", mj.Config.RopeScaling)
 		if err != nil {
@@ -968,6 +987,79 @@ func (mj *modelJSON) blockRole(name string) (role string, blk int, expert, ok bo
 		}
 	}
 	return "", 0, false, false
+}
+
+// mjRotaryLayersOf states which layers skip the rotary. The container states
+// them as a period, every period-th layer skipping it (Config.SWA with no
+// window, FlagNoPEGlobal), so a list no period describes is refused, as is one
+// where no layer rotates or a window beside it.
+func mjRotaryLayersOf(cfg *Config, r *mjRotaryLayers, eval func(what, src string) (any, error)) error {
+	n := int(cfg.NLayer)
+	v, err := eval("rotary_layers each", r.Each)
+	if err != nil {
+		return err
+	}
+	var rope []bool
+	switch list := v.(type) {
+	case nil:
+		ev, err := eval("rotary_layers every", r.Every)
+		if err != nil {
+			return err
+		}
+		every, err := exprUint("rotary_layers every", ev)
+		if err != nil {
+			return err
+		}
+		if every == 0 {
+			return fmt.Errorf("every 0th layer skipping the rotary")
+		}
+		for i := 0; i < n; i++ {
+			rope = append(rope, uint64(i+1)%every != 0)
+		}
+	case []any:
+		if len(list) < n {
+			return fmt.Errorf("rotary_layers has %d entries for %d layers", len(list), n)
+		}
+		for i, x := range list[:n] {
+			switch x {
+			case 0.0, 1.0:
+				rope = append(rope, x == 1.0)
+			default:
+				return fmt.Errorf("rotary_layers[%d] is %v, not 1 (rotates) or 0", i, x)
+			}
+		}
+	default:
+		return fmt.Errorf("rotary_layers is %s, not a list", exprKind(v))
+	}
+	period := 0
+	for i, r := range rope {
+		if !r {
+			period = i + 1
+			break
+		}
+	}
+	cfg.Flags &^= jlm.FlagNoPEGlobal
+	if period == 0 {
+		if cfg.SWAWindow == 0 {
+			cfg.SWAPeriod = 0
+		}
+		return nil
+	}
+	if period == 1 {
+		return fmt.Errorf("no layer rotates (rotary layers %v): %w", rope, ErrNotImplemented)
+	}
+	for i, r := range rope {
+		if r != ((i+1)%period != 0) {
+			return fmt.Errorf("rotary layers %v are not every %d-th layer skipping the rotary (layer %d): %w",
+				rope, period, i, ErrNotImplemented)
+		}
+	}
+	if cfg.SWAWindow != 0 {
+		return fmt.Errorf("layers skipping the rotary beside a sliding window of %d: %w", cfg.SWAWindow, ErrNotImplemented)
+	}
+	cfg.SWAPeriod = uint32(period)
+	cfg.Flags |= jlm.FlagNoPEGlobal
+	return nil
 }
 
 // mjRopeScaling states a rope scaling object, transformers' rope_parameters

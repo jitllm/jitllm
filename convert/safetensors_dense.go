@@ -14,9 +14,9 @@ import (
 //
 // The trap these share is the class default. A key config.json does not carry
 // takes the default of ITS class, and the classes disagree: num_key_value_heads
-// is 4 for SmolLM3, 8 for SeedOss and Ministral3, 32 for Exaone4 and the
-// attention head count for the rest; head_dim is 128 for SeedOss and Ministral3
-// and hidden/heads elsewhere; rope_theta is 2e6 for SmolLM3 and 5e5 for OLMo 3.
+// is 4 for SmolLM3, 8 for Ministral3, 32 for Exaone4 and the attention head
+// count for the rest; head_dim is 128 for Ministral3 and hidden/heads
+// elsewhere; rope_theta is 2e6 for SmolLM3 and 5e5 for OLMo 3.
 // llamaHFConfig's defaults are llama's, so each entry states its class's first.
 
 // hfClassDefaults is what a class's config dataclass declares for the keys
@@ -94,154 +94,8 @@ func hfPostNormBlock() map[string]jlm.Role {
 	}
 }
 
-// smollm3: llama's block with no rotary on every no_rope_layer_interval-th
-// layer, rotate_half rotary (permuted, as convert_hf_to_gguf.py does, so the
-// container is ArchSmolLM3's adjacent-pair layout).
-func smollm3HF() *hfArch {
-	return &hfArch{
-		arch:        ArchSmolLM3,
-		blockPrefix: llamaHF().blockPrefix,
-		model:       llamaHF().model,
-		block:       llamaHF().block,
-		ignore:      llamaHF().ignore,
-		config: func(c *hfConfig, names []string) (*Config, error) {
-			hfClassDefaults{kvHeads: 4, ropeTheta: 2e6, rmsEps: 1e-6, tied: true, nCtx: 32768}.apply(c)
-			// The window is SmolLM3Attention's only when use_sliding_window, which
-			// the class defaults to false; llamaHFConfig refuses one in use.
-			if c.UseSlidingWindow == nil {
-				f := false
-				c.UseSlidingWindow = &f
-			}
-			cfg, err := hfConfigWith(ArchSmolLM3, 0, "silu")(c, names)
-			if err != nil {
-				return nil, err
-			}
-			period, err := smolLM3NoPEPeriod(c, cfg.NLayer)
-			if err != nil {
-				return nil, err
-			}
-			// The period with no window names the NoPE layers and slides none
-			// (convert/dense.go). llama.cpp hardcodes 4; config.json is read here.
-			if period > 0 {
-				cfg.SWAWindow, cfg.SWAPeriod = 0, period
-				cfg.Flags |= jlm.FlagNoPEGlobal
-			}
-			return cfg, nil
-		},
-		fixup: llamaHFFixup,
-	}
-}
-
-// smolLM3NoPEPeriod reads which layers skip the rotary: no_rope_layers (1
-// rotates, 0 does not) or, absent, SmolLM3Config's derivation from
-// no_rope_layer_interval, (i+1) % interval != 0. The container can say only a
-// period, so any other list is refused. Zero means every layer rotates.
-func smolLM3NoPEPeriod(c *hfConfig, n uint32) (uint32, error) {
-	rope := c.NoRopeLayers
-	if rope == nil {
-		every := uint32(4)
-		if c.NoRopeLayerInterval != nil {
-			every = *c.NoRopeLayerInterval
-		}
-		if every == 0 {
-			return 0, fmt.Errorf("convert: %s: no_rope_layer_interval 0", c.path)
-		}
-		for i := uint32(0); i < n; i++ {
-			rope = append(rope, boolInt((i+1)%every != 0))
-		}
-	}
-	if uint32(len(rope)) < n {
-		return 0, fmt.Errorf("convert: %s: no_rope_layers has %d entries for %d layers",
-			c.path, len(rope), n)
-	}
-	period := uint32(0)
-	for i := uint32(0); i < n; i++ {
-		if rope[i] != 0 && rope[i] != 1 {
-			return 0, fmt.Errorf("convert: %s: no_rope_layers[%d] is %d", c.path, i, rope[i])
-		}
-		if rope[i] == 0 && period == 0 {
-			period = i + 1
-		}
-	}
-	if period == 0 {
-		return 0, nil
-	}
-	if period == 1 {
-		return 0, fmt.Errorf("convert: %s: no layer rotates (no_rope_layers %v): %w",
-			c.path, rope[:n], ErrNotImplemented)
-	}
-	for i := uint32(0); i < n; i++ {
-		if want := boolInt((i+1)%period != 0); rope[i] != want {
-			return 0, fmt.Errorf("convert: %s: no_rope_layers %v is not every %d-th layer "+
-				"(layer %d): %w", c.path, rope[:n], period, i, ErrNotImplemented)
-		}
-	}
-	return period, nil
-}
-
-func boolInt(b bool) int {
-	if b {
-		return 1
-	}
-	return 0
-}
-
-// arcee: llama's block with an ungated up -> relu^2 -> down FFN (ArceeMLP has
-// no gate_proj, so a gate in the file is refused as an unknown name).
-func arceeHF() *hfArch {
-	return &hfArch{
-		arch:        ArchArcee,
-		blockPrefix: llamaHF().blockPrefix,
-		model:       llamaHF().model,
-		block: map[string]jlm.Role{
-			"input_layernorm.weight":          jlm.RoleAttnNorm,
-			"post_attention_layernorm.weight": jlm.RoleFFNNorm,
-			"self_attn.q_proj.weight":         jlm.RoleAttnQ,
-			"self_attn.k_proj.weight":         jlm.RoleAttnK,
-			"self_attn.v_proj.weight":         jlm.RoleAttnV,
-			"self_attn.o_proj.weight":         jlm.RoleAttnOut,
-			"self_attn.q_proj.bias":           jlm.RoleAttnQBias,
-			"self_attn.k_proj.bias":           jlm.RoleAttnKBias,
-			"self_attn.v_proj.bias":           jlm.RoleAttnVBias,
-			"self_attn.o_proj.bias":           jlm.RoleAttnOutBias,
-			"mlp.up_proj.weight":              jlm.RoleFFNUp,
-			"mlp.down_proj.weight":            jlm.RoleFFNDown,
-		},
-		ignore: llamaHF().ignore,
-		config: func(c *hfConfig, names []string) (*Config, error) {
-			hfClassDefaults{ropeTheta: 1e4, rmsEps: 1e-5, nCtx: 4096}.apply(c)
-			// ArceeConfig's hidden_act defaults to relu2, and ArceeMLP applies
-			// whatever it names ungated; relu2 is the one this graph computes.
-			if c.absent("hidden_act") {
-				c.HiddenAct = "relu2"
-			}
-			// The class never reads sliding_window.
-			c.SlidingWindow = nil
-			return hfConfigWith(ArchArcee, jlm.FlagReLU2, "relu2")(c, names)
-		},
-		fixup: llamaHFFixup,
-	}
-}
-
-// seed_oss: llama's names (biased q/k/v, and o when attention_out_bias), NEOX
-// rotary unpermuted, and a head wider than hidden/heads by class default.
-func seedOssHF() *hfArch {
-	return &hfArch{
-		arch:        ArchSeedOSS,
-		blockPrefix: llamaHF().blockPrefix,
-		model:       llamaHF().model,
-		block:       llamaHF().block,
-		ignore:      llamaHF().ignore,
-		config: func(c *hfConfig, names []string) (*Config, error) {
-			hfClassDefaults{kvHeads: 8, headDim: 128, ropeTheta: 1e4, rmsEps: 1e-6, nCtx: 524288}.apply(c)
-			c.SlidingWindow = nil // the class never reads it
-			return hfConfigWith(ArchSeedOSS, jlm.FlagRopeNeox, "silu")(c, names)
-		},
-	}
-}
-
-// olmo2: the post-norm block, q and k RMSNormed over the whole projection,
-// NEOX rotary unpermuted. olmo3 is the same block with a window.
+// olmo3's block is OLMo 2's: the post-norm block, q and k RMSNormed over the
+// whole projection.
 func olmo2Block() map[string]jlm.Role {
 	return blockPlus(hfPostNormBlock(), map[string]jlm.Role{
 		"self_attn.q_proj.bias": jlm.RoleAttnQBias,
@@ -249,21 +103,6 @@ func olmo2Block() map[string]jlm.Role {
 		"self_attn.v_proj.bias": jlm.RoleAttnVBias,
 		"self_attn.o_proj.bias": jlm.RoleAttnOutBias,
 	})
-}
-
-func olmo2HF() *hfArch {
-	return &hfArch{
-		arch:        ArchOLMo2,
-		blockPrefix: llamaHF().blockPrefix,
-		model:       llamaHF().model,
-		block:       olmo2Block(),
-		ignore:      llamaHF().ignore,
-		config: func(c *hfConfig, names []string) (*Config, error) {
-			hfClassDefaults{ropeTheta: 1e4, rmsEps: 1e-5, nCtx: 2048}.apply(c)
-			c.SlidingWindow = nil // Olmo2Attention has no window
-			return olmo2HFConfig(c, names)
-		},
-	}
 }
 
 // olmo2HFConfig is OLMo 2's config. The k norm spans NKVHead*HeadDim, which a

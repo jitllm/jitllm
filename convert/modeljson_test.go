@@ -209,7 +209,9 @@ func TestLibraryIgnoresTheRotaryBuffers(t *testing.T) {
 	}
 	for _, c := range []string{"Qwen2ForCausalLM", "Qwen3ForCausalLM", "Qwen3MoeForCausalLM", "GemmaForCausalLM",
 		"Ernie4_5ForCausalLM", "Qwen2MoeForCausalLM", "Ernie4_5_MoeForCausalLM", "Dots1ForCausalLM",
-		"Glm4MoeForCausalLM", "LlamaForCausalLM"} {
+		"Glm4MoeForCausalLM", "LlamaForCausalLM",
+		"SeedOssForCausalLM", "Olmo2ForCausalLM",
+		"ArceeForCausalLM", "SmolLM3ForCausalLM"} {
 		mj := lib[c]
 		if mj == nil {
 			t.Fatalf("no %s in the library", c)
@@ -946,6 +948,53 @@ func TestModelJSONStatements(t *testing.T) {
 		}
 		if _, err := parseModelJSON([]byte(src), r.name); err == nil || !strings.Contains(err.Error(), r.err) {
 			t.Errorf("%s: %v, want an error saying %q", r.name, err, r.err)
+		}
+	}
+}
+
+// TestModelJSONRotaryLayers: which layers rotate is the file's statement,
+// read after configOf, so a graph's own step (smollm3's 4) does not decide;
+// a list no period describes, one where no layer rotates and a zero period
+// are refused.
+func TestModelJSONRotaryLayers(t *testing.T) {
+	lib, err := modelLibrary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mj := lib["SmolLM3ForCausalLM"]
+	if mj == nil {
+		t.Fatal("no SmolLM3ForCausalLM in the library")
+	}
+	for _, r := range []struct {
+		name, extra string
+		period      uint32
+		err         string
+	}{
+		{"the class default", ``, 4, ""},
+		{"an interval", `, "no_rope_layer_interval": 3`, 3, ""},
+		{"a list", `, "no_rope_layers": [1, 1, 0, 1, 1, 0], "no_rope_layer_interval": 5`, 3, ""},
+		{"every layer rotates", `, "no_rope_layers": [1, 1, 1, 1, 1, 1]`, 0, ""},
+		{"a list longer than the model", `, "no_rope_layers": [1, 0, 1, 0, 1, 0, 1, 1]`, 2, ""},
+		{"not periodic", `, "no_rope_layers": [1, 0, 1, 1, 0, 1]`, 0, "not every 2-th layer"},
+		{"no layer rotates", `, "no_rope_layers": [0, 0, 0, 0, 0, 0]`, 0, "no layer rotates"},
+		{"a short list", `, "no_rope_layers": [1, 1, 0]`, 0, "3 entries for 6 layers"},
+		{"an entry of 2", `, "no_rope_layers": [1, 2, 0, 1, 1, 0]`, 0, "not 1 (rotates) or 0"},
+		{"a zero interval", `, "no_rope_layer_interval": 0`, 0, "every 0th layer"},
+		{"beside a window", `, "sliding_window": 8, "use_sliding_window": true`, 0, "sliding window of 8"},
+	} {
+		c := hfConfigOf(t, `{"architectures": ["SmolLM3ForCausalLM"], "vocab_size": 100, "hidden_size": 64,
+		  "intermediate_size": 96, "num_hidden_layers": 6, "num_attention_heads": 4, "num_key_value_heads": 2`+r.extra+`}`)
+		cfg, err := mj.config(c, nil)
+		switch {
+		case r.err != "":
+			if err == nil || !strings.Contains(err.Error(), r.err) {
+				t.Errorf("%s: %v, want an error saying %q", r.name, err, r.err)
+			}
+		case err != nil:
+			t.Errorf("%s: %v", r.name, err)
+		case cfg.SWAPeriod != r.period || cfg.Flags.Has(jlm.FlagNoPEGlobal) != (r.period != 0) || cfg.SWAWindow != 0:
+			t.Errorf("%s: period %d, NoPE %v, window %d; want period %d", r.name, cfg.SWAPeriod,
+				cfg.Flags.Has(jlm.FlagNoPEGlobal), cfg.SWAWindow, r.period)
 		}
 	}
 }

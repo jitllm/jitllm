@@ -141,6 +141,11 @@ func TestDenseHFClassDefaults(t *testing.T) {
 			return denseOK(c.NKVHead == 4 && c.HeadDim == 16 && c.Flags.Has(jlm.FlagReLU2) && c.NCtx == 4096 &&
 				c.RMSEps == 1e-5 && !c.Flags.Has(jlm.FlagTiedEmbd))
 		}},
+		{"ArceeForCausalLM", `, "hidden_act": "silu"`, head, func(c *Config) string {
+			// ArceeMLP applies whatever hidden_act names, ungated: SiLU is
+			// no activation flag, and no gate tensor makes it ungated.
+			return denseOK(!c.Flags.Has(jlm.FlagReLU2) && !c.Flags.Has(jlm.FlagGELU))
+		}},
 		{"SeedOssForCausalLM", ``, head, func(c *Config) string {
 			return denseOK(c.NKVHead == 8 && c.HeadDim == 128 && c.NRot == 128 && c.RMSEps == 1e-6 &&
 				c.NCtx == 524288 && c.Flags.Has(jlm.FlagRopeNeox))
@@ -192,7 +197,7 @@ func TestDenseHFClassDefaults(t *testing.T) {
 	} {
 		t.Run(tc.class, func(t *testing.T) {
 			c := hfConfigOf(t, fmt.Sprintf(`{"architectures": [%q], %s%s}`, tc.class, base, tc.extra))
-			ha, err := hfArchOf(c)
+			ha, err := hfArchFor(hfDir{fstest.MapFS{}, "test"}, c, "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -204,6 +209,75 @@ func TestDenseHFClassDefaults(t *testing.T) {
 				t.Errorf("%s%s: %+v", tc.class, tc.extra, *cfg)
 			}
 		})
+	}
+}
+
+// TestDenseLibraryRefusesWhatItDoesNotName: an MLP bias (mlp_bias) and a gate
+// on Arcee's ungated FFN are tensors no file names, refused by name where the
+// checkpoint carries them.
+func TestDenseLibraryRefusesWhatItDoesNotName(t *testing.T) {
+	lib, err := modelLibrary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ class, name string }{
+		{"SeedOssForCausalLM", "model.layers.0.mlp.up_proj.bias"},
+		{"Olmo2ForCausalLM", "model.layers.0.mlp.down_proj.bias"},
+		{"ArceeForCausalLM", "model.layers.0.mlp.up_proj.bias"},
+		{"ArceeForCausalLM", "model.layers.0.mlp.gate_proj.weight"},
+	} {
+		mj := lib[tc.class]
+		if mj == nil {
+			t.Fatalf("no %s in the library", tc.class)
+		}
+		a, err := mj.hfArch()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, _, ignored, err := a.identify(tc.name, nil); err == nil || ignored {
+			t.Errorf("%s: %s is not refused (ignored %v)", tc.class, tc.name, ignored)
+		}
+		// The control: the same block's names the file states are read.
+		if _, _, _, _, err := a.identify("model.layers.0.mlp.up_proj.weight", nil); err != nil {
+			t.Errorf("%s: the control is refused: %v", tc.class, err)
+		}
+	}
+}
+
+// TestDenseRotaryOrderNeedsTheWholeHead: the files that reorder q and k into
+// adjacent rotary pairs reorder the whole head, as their classes rotate all of
+// it; a partial_rotary_factor, which those classes do not read, is refused at
+// the config (mjGraphKeys), never reordered part-way.
+func TestDenseRotaryOrderNeedsTheWholeHead(t *testing.T) {
+	lib, err := modelLibrary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, class := range []string{"ArceeForCausalLM", "SmolLM3ForCausalLM"} {
+		for _, partial := range []string{"", `, "partial_rotary_factor": 0.5`} {
+			c := hfConfigOf(t, fmt.Sprintf(`{"architectures": [%q], "vocab_size": 100, "hidden_size": 64,
+			  "intermediate_size": 96, "num_hidden_layers": 4, "num_attention_heads": 4, "num_key_value_heads": 2,
+			  "head_dim": 16, "tie_word_embeddings": false%s}`, class, partial))
+			a, err := lib[class].hfArch()
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = a.config(c, []string{"lm_head.weight"})
+			if partial != "" {
+				if err == nil || !strings.Contains(err.Error(), "does not read it") {
+					t.Errorf("%s%s: %v, want the unread factor refused", class, partial, err)
+				}
+				continue
+			}
+			if err != nil {
+				t.Fatalf("%s: %v", class, err)
+			}
+			e := jlm.Tensor{Name: "model.layers.0.self_attn.q_proj.weight", NDim: 2, Type: jlm.TypeF32}
+			e.Dims[0], e.Dims[1] = 64, 64
+			if err := a.shape(&e); err != nil {
+				t.Errorf("%s: the whole head's reorder is refused: %v", class, err)
+			}
+		}
 	}
 }
 
@@ -231,11 +305,11 @@ func TestDenseHFRefusals(t *testing.T) {
 			"full_attention", "full_attention", "sliding_attention"]`, "not periodic"},
 		{"Ministral3ForCausalLM", `, "num_key_value_heads": 2, "rope_parameters": {"rope_type": "default"}`,
 			"llama_4_scaling_beta"},
-		{"ArceeForCausalLM", `, "hidden_act": "silu"`, "hidden_act"},
-		{"SeedOssForCausalLM", `, "mlp_bias": true`, "mlp_bias"},
+		{"ArceeForCausalLM", `, "hidden_act": "gelu"`, "activation gelu"},
+		{"SeedOssForCausalLM", `, "rope_parameters": {"rope_type": "yarn", "factor": 4.0}`, "yarn"},
 	} {
 		c := hfConfigOf(t, fmt.Sprintf(`{"architectures": [%q], %s%s}`, tc.class, base, tc.extra))
-		ha, err := hfArchOf(c)
+		ha, err := hfArchFor(hfDir{fstest.MapFS{}, "test"}, c, "")
 		if err != nil {
 			t.Fatal(err)
 		}

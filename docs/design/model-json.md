@@ -97,6 +97,11 @@ schema; `convert/modeljson.go` reads it. Its sections:
     the flag the engine runs it by; a feature the engine does not run is
     named too (`mjFlagsNotImplemented`: `post_norm`), and stated true is
     refused.
+  - `config.rotary_layers`: `{"each": expr, "every": expr}`, which layers
+    rotate as transformers states it (`no_rope_layers`, 1 rotating, and
+    where it is absent every `no_rope_layer_interval`-th layer skipping the
+    rotary). The container states the skipping layers as a period, so a list
+    no period describes is refused (`mjRotaryLayersOf`).
   - A partial rotary is `rope.dimension_count` among the keys, stated only
     by a file whose class rotates part of each head (Phi-3, GLM-4-MoE,
     Qwen3.5); every other class rotates the whole head whatever
