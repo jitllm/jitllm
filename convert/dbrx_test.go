@@ -36,10 +36,18 @@ func TestDbrxCarriesItsClamp(t *testing.T) {
 	if _, err := configOf(headerOnly("llama", s)); !errors.Is(err, ErrNotImplemented) {
 		t.Errorf("a llama carrying a clamp: %v, want ErrNotImplemented", err)
 	}
-	if r := retarget(ArchDBRX, jlm.RoleAttnOutNorm); r != jlm.RoleFFNNorm {
+	dbrx, err := retargets(ArchDBRX)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := dbrx[jlm.RoleAttnOutNorm]; r != jlm.RoleFFNNorm {
 		t.Errorf("dbrx's attn_output_norm is %v, want the FFN norm", r)
 	}
-	if r := retarget(ArchBERT, jlm.RoleAttnOutNorm); r != jlm.RoleAttnOutNorm {
+	bert, err := retargets(ArchBERT)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r, ok := bert[jlm.RoleAttnOutNorm]; ok {
 		t.Errorf("bert's attn_output_norm became %v", r)
 	}
 	if !fusesQKV(ArchDBRX) {

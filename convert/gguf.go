@@ -211,6 +211,10 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 	var alphas, fused int
 	scales := map[string]float32{}
 	renames := towerNames(f, s.Vision)
+	moved, err := retargets(c.Arch)
+	if err != nil {
+		return nil, err
+	}
 	for i := range f.Tensors {
 		t := &f.Tensors[i]
 		if r, ok := renames[t.Name]; ok {
@@ -343,9 +347,11 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 			return nil, err
 		}
 		if !role.Vision() {
-			// retarget is the text architecture's rename table; a tower's roles
-			// are not its to rewrite, and a merged container has both.
-			role = retarget(c.Arch, role)
+			// The text architecture's renames; a tower's roles are not its to
+			// rewrite, and a merged container has both.
+			if r, ok := moved[role]; ok {
+				role = r
+			}
 			if nemo != nil {
 				if role, block, err = nemo.remap(role, block); err != nil {
 					return nil, fmt.Errorf("convert: %s: %w", t.Name, err)

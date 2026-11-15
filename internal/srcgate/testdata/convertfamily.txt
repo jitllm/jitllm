@@ -47,7 +47,6 @@
 1 convert/mamba1.go:mamba1UnitNorms
 4 convert/qwen35.go:qwen35Of
 4 convert/revision.go:StateRevision
-9 convert/roles.go:retarget
 1 convert/safetensors.go:deepseekHFConfigFFN
 1 convert/safetensors.go:hardcodesSigmoid
 8 convert/safetensors.go:hfArchTable

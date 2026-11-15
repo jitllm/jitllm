@@ -603,6 +603,16 @@ func (mj *modelJSON) hfArch() (*hfArch, error) {
 	for _, n := range mj.Tensors.Ignore {
 		a.ignore[n] = true
 	}
+	moved, err := retargets(a.arch)
+	if err != nil {
+		return nil, err
+	}
+	retarget := func(r jlm.Role) jlm.Role {
+		if t, ok := moved[r]; ok {
+			return t
+		}
+		return r
+	}
 	if e := mj.Tensors.Experts; e != nil {
 		a.expertPrefix, a.expert = e.Prefix, map[string]jlm.Role{}
 		for n, r := range e.Names {
@@ -620,7 +630,7 @@ func (mj *modelJSON) hfArch() (*hfArch, error) {
 		if !ok {
 			return fmt.Errorf("convert: %s: %s's role %q is not a tensor name the container knows", mj.name, name, t.Role)
 		}
-		dst[name] = retarget(a.arch, r)
+		dst[name] = retarget(r)
 		if len(t.Do) > 0 {
 			if err := t.Do.check(); err != nil {
 				return fmt.Errorf("convert: %s: %s: %w", mj.name, name, err)
@@ -647,7 +657,7 @@ func (mj *modelJSON) hfArch() (*hfArch, error) {
 			if err := t.Do.check(); err != nil {
 				return fmt.Errorf("convert: %s: %s: %s: %w", mj.name, name, t.Role, err)
 			}
-			roles[i] = retarget(a.arch, r)
+			roles[i] = retarget(r)
 		}
 		dst[name] = roles[0]
 		a.split[name] = func(e jlm.Tensor, data []byte, c *Config) ([]jlm.Tensor, error) {
@@ -748,7 +758,7 @@ func (mj *modelJSON) hfArch() (*hfArch, error) {
 					return nil, fmt.Errorf("convert: %s: the gather of %s: %w", mj.name, g.Role, err)
 				}
 			}
-			gs[i] = hfGatherStep{role: retarget(a.arch, r), from: g.From, do: g.Do}
+			gs[i] = hfGatherStep{role: retarget(r), from: g.From, do: g.Do}
 		}
 		steps = gs
 	}
@@ -760,7 +770,7 @@ func (mj *modelJSON) hfArch() (*hfArch, error) {
 			if !ok {
 				return nil, fmt.Errorf("convert: %s: ternary role %q is not a tensor name the container knows", mj.name, n)
 			}
-			ternaryRoles[retarget(a.arch, r)] = true
+			ternaryRoles[retarget(r)] = true
 		}
 	}
 	a.gather = func(c *Config, names []string, read func(string) ([]float32, error)) ([]jlm.Tensor, map[string]bool, error) {

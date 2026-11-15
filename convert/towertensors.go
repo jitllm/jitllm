@@ -4,7 +4,6 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
-	"math"
 	"strings"
 
 	"github.com/jitllm/jitllm/format/jlm"
@@ -59,12 +58,7 @@ func towerVocabOf(v *jlm.Vision) (*towerVocab, error) {
 	if len(n.p.Roles) == 0 {
 		return n, nil
 	}
-	named := map[string]jlm.Role{}
-	for i := 1; i <= math.MaxUint16; i++ {
-		if r := jlm.Role(i); r.Valid() {
-			named[r.String()] = r
-		}
-	}
+	named := rolesByName()
 	for name, role := range n.p.Roles {
 		r, ok := named[role]
 		if !ok {

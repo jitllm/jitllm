@@ -1,7 +1,10 @@
 package convert
 
 import (
+	"embed"
+	"encoding/json"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 
@@ -367,35 +370,53 @@ func indexedRole(name string) (jlm.Role, bool) {
 	return 0, false
 }
 
-// retarget maps a role whose name means different things in different
-// architectures onto what the tensor does. gemma2/gemma3's post_attention_norm
-// is applied to the attention output; qwen3next's, gpt-oss's and glm4moe's tensor of that
-// name is the FFN's input norm (ffn_norm by position, which they do not ship
-// under that name). Resolving it here keeps the source's ambiguity out of the
-// container.
-func retarget(arch Arch, role jlm.Role) jlm.Role {
-	if (arch == ArchQwen3Next || arch == ArchGPTOSS || arch == ArchGLM4MoE || arch == ArchGLM4VMoE ||
-		arch == ArchSeedOSS) &&
-		role == jlm.RolePostAttnNorm {
-		return jlm.RoleFFNNorm
+//go:embed rolemaps.json
+var roleMapsFS embed.FS
+
+// retargets is the roles whose name, in arch's source, means what another
+// role does (rolemaps.json, each with its reason): gemma2/gemma3's
+// post_attention_norm is applied to the attention output, qwen3next's tensor
+// of that name is the FFN's input norm. Resolving them here keeps the
+// source's ambiguity out of the container.
+func retargets(arch Arch) (map[jlm.Role]jlm.Role, error) {
+	b, err := roleMapsFS.ReadFile("rolemaps.json")
+	if err != nil {
+		return nil, err
 	}
-	// DBRX's attn_output_norm is its FFN pre-norm (llama.cpp's dbrx.cpp),
-	// where BERT's is applied after the residual add.
-	if arch == ArchDBRX && role == jlm.RoleAttnOutNorm {
-		return jlm.RoleFFNNorm
+	var all map[string][]struct {
+		From string `json:"from"`
+		To   string `json:"to"`
+		Why  string `json:"why"`
 	}
-	// LFM2's final norm is named token_embd_norm (llama.cpp's
-	// LLM_TENSOR_OUTPUT_NORM_LFM2, "fix for wrong tensor name"); it is applied
-	// after the last block, not to the embeddings.
-	if (arch == ArchLFM2 || arch == ArchLFM2Enc) && role == jlm.RoleTokenEmbdNorm {
-		return jlm.RoleOutputNorm
+	if err := json.Unmarshal(b, &all); err != nil {
+		return nil, fmt.Errorf("convert: rolemaps.json: %w", err)
 	}
-	// Qwen3.8-Flash-Next's n-gram table carries Gemma's per-layer table name
-	// and is another object: a row table of hashed n-grams.
-	if arch == ArchQwen4Exp && role == jlm.RolePLETokEmbd {
-		return jlm.RoleNGramTable
+	ms := all[arch.String()]
+	if len(ms) == 0 {
+		return nil, nil
 	}
-	return role
+	named := rolesByName()
+	out := map[jlm.Role]jlm.Role{}
+	for _, m := range ms {
+		from, ok := named[m.From]
+		to, ok2 := named[m.To]
+		if !ok || !ok2 || m.Why == "" {
+			return nil, fmt.Errorf("convert: rolemaps.json: %s maps %q to %q, which are not both container roles with a reason", arch, m.From, m.To)
+		}
+		out[from] = to
+	}
+	return out, nil
+}
+
+// rolesByName is every container role by its name.
+func rolesByName() map[string]jlm.Role {
+	named := map[string]jlm.Role{}
+	for i := 1; i <= math.MaxUint16; i++ {
+		if r := jlm.Role(i); r.Valid() {
+			named[r.String()] = r
+		}
+	}
+	return named
 }
 
 // identify turns a source tensor name into the triple a container stores.
