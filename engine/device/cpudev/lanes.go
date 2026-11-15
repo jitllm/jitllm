@@ -182,7 +182,7 @@ func (l *Lanes) Rows(li int, f *Form, t Tensors, c *RowsCall) error {
 	*in = Rows{X: c.X, Stride: c.Stride, Width: l.width, Streams: l.streams, Side: c.Side, SideW: c.SideW,
 		SideOff: sideOff, CS: c.CS, NRot: c.NRot, CSSWA: c.CSSWA, NSWA: c.NSWA, Pages: hb.Pages, PagePos: hb.PagePos,
 		Spans: spans, Pos: c.Pos, Tok: c.Tok, Req: l.req, Seq: c.Seq, Weights: w, Keys: hb.Keys, Values: hb.Values,
-		Entries: hb.Entries, EntryPages: hb.EntryPages}
+		Hists: hb.Hists}
 	if cb != nil && cb.Cut > 0 {
 		in.Cut, in.CutW, in.Graph = l.cut, cb.Cut, cb.Graph
 	}
@@ -792,14 +792,14 @@ func (s *SessionLanes) MigrateKV(li int, k, v []float32, pos int, toDevice bool)
 	return s.of.History().MigrateKV(li, k, v, pos, toDevice, conv)
 }
 
-// MigrateEntries is the CPU's half of moving block li's entries plane
-// (nn.EntriesMigrator), through the device's conversions.
-func (s *SessionLanes) MigrateEntries(li int, e []float32, pos int, toDevice bool) bool {
+// MigrateHistory is the CPU's half of moving block li's history h past its
+// rows (nn.HistoryMigrator), through the device's conversions.
+func (s *SessionLanes) MigrateHistory(li, h int, e []float32, pos int, toDevice bool) bool {
 	var conv nn.KVConvDevice
 	if c := s.l.e.kvconv; c != nil {
 		conv = c
 	}
-	return s.of.History().MigrateEntries(li, e, pos, toDevice, conv)
+	return s.of.History().MigrateHistory(li, h, e, pos, toDevice, conv)
 }
 
 // MigrateRec is the CPU's half of moving block li's recurrent state

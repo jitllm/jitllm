@@ -3052,11 +3052,11 @@ func (g *devTier) servedBlockAs(l *layer, li int, cs backend.Buf, pl *kvLayerPoo
 	if pl != nil && (!l.linear || l.withAttn) {
 		kk, kv, tab, geom = pl.k, pl.v, pl.tab, pl.geom
 	}
-	// A block keeping entries reads them as its history 1.
+	// A block keeping a history past its rows reads it as its history 1.
 	var ek, etab backend.Buf
 	period := 0
 	if g.kvp != nil {
-		if pe := g.kvp.layers[entKey(l.kvSrc)]; pe != nil {
+		if pe := g.kvp.layers[histKey(l.kvSrc, 1)]; pe != nil {
 			ek, etab, period = pe.k, pe.tab, pe.geom.period
 		}
 	}

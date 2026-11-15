@@ -16,10 +16,16 @@ type HistoryBinding struct {
 	// Slots is the pages a sequence's arena holds, at least 1: where a row
 	// of sequence s finds its pages in the table.
 	Slots int
-	// Entries and EntryPages are the block's entries plane (its history 1)
-	// and its page table, where the block keeps one.
-	Entries    unsafe.Pointer
-	EntryPages []uint32
+	// Hists are the block's histories past its rows', history h at
+	// Hists[h-1], where it keeps any.
+	Hists []HistTable
+}
+
+// HistTable is one history of a block past its rows' as a call binds it:
+// its entries' memory and its page table.
+type HistTable struct {
+	Keys  unsafe.Pointer
+	Pages []uint32
 }
 
 // History is a session's history as the CPU device asks for it: the policy
@@ -32,11 +38,11 @@ type History interface {
 	// and v (in), or gives it into them, its rows converted from or to the
 	// history's own format through conv where they are not floats.
 	MigrateKV(li int, k, v []float32, pos int, in bool, conv KVConvDevice) bool
-	// MigrateEntries takes block li's entries plane -- an entry each period
-	// positions beside its rows -- from e (in), or gives it into e: the
-	// entries pos positions closed, in order, converted from or to the
-	// plane's own format through conv where it is not floats.
-	MigrateEntries(li int, e []float32, pos int, in bool, conv KVConvDevice) bool
+	// MigrateHistory takes block li's history h past its rows -- an entry
+	// each period positions -- from e (in), or gives it into e: the entries
+	// pos positions closed, in order, converted from or to the history's own
+	// format through conv where it is not floats.
+	MigrateHistory(li, h int, e []float32, pos int, in bool, conv KVConvDevice) bool
 	// Own makes the page block li writes pos into resident and its own,
 	// where its history is paged: a row of a step across sessions writes
 	// its own session's page before any session's rows read.

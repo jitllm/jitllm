@@ -504,18 +504,23 @@ func (g *devTier) pagedLayer(sid uint64, l *layer, li int, p *nn.LayerPlan) erro
 	}
 	fresh := l.kv[sid] == nil
 	l.kv[sid] = &kvPair{paged: true}
-	// A block keeping entries holds them beside its rows at its rows' seats,
-	// and sends them home with its rows.
-	if period, w := entriesOf(p.Graph); period > 1 {
+	// A block keeping histories past its rows' holds them beside its rows
+	// at its rows' seats, and sends them home with its rows.
+	for h := 1; ; h++ {
+		period, w := appendsOf(p.Graph, h)
+		if period == 0 {
+			break
+		}
 		eg := kvGeom{kvRow: w, mla: true, period: period}
-		if err := g.addKVLayer(kp, entKey(li), eg, 1+seats); err != nil {
+		if err := g.addKVLayer(kp, histKey(li, h), eg, 1+seats); err != nil {
 			if fresh {
 				delete(l.kv, sid)
 			}
 			return err
 		}
 	}
-	for _, key := range []int{li, entKey(li)} {
+	for h := range kp.blockHists(li) {
+		key := histKey(li, h)
 		if _, ok := kp.layers[key]; ok {
 			if err := g.pagedSeat(kp, key, l); err != nil {
 				if fresh {

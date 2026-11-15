@@ -4440,7 +4440,7 @@ func (g *devTier) layersSession(s backend.Session) {
 				case sv.f.split > 0:
 					serr = sv.pagedRun(g, lc, s, inst, kind, l, p.NExpert, g.hostFns[sid][li].uses, in, outs)
 				case len(sv.f.sweeps) > 0:
-					serr = sv.streamRun(g, lc, s, inst, kind, bs, g.kvp.layers[l.kvSrc], g.kvp.layers[entKey(l.kvSrc)], in, outs)
+					serr = sv.streamRun(g, lc, s, inst, kind, bs, g.kvp.layers[l.kvSrc], g.kvp.layers[histKey(l.kvSrc, 1)], in, outs)
 				default:
 					serr = sv.runAs(g, lc, inst, kind, in, outs)
 				}
@@ -5083,8 +5083,9 @@ func (g *devTier) releaseBlock(li int) {
 	// The block's layer leaves the pool, and with it every session's pages
 	// there.
 	if g.kvp != nil {
-		g.dropKVLayer(g.kvp, li)
-		g.dropKVLayer(g.kvp, entKey(li))
+		for h := g.kvp.blockHists(li) - 1; h >= 0; h-- {
+			g.dropKVLayer(g.kvp, histKey(li, h))
+		}
 	}
 	if n := l.recBytes; n > 0 {
 		g.refund(n)
@@ -5251,8 +5252,13 @@ func (g *devTier) dropHistory(li int, l *layer, sid uint64) bool {
 		// Its pages in this layer go and the layer compacts: what the session
 		// held here is room again, whoever keeps the block.
 		delete(l.kv, sid)
-		g.pagedLeave(li, sid, l)
-		g.pagedLeave(entKey(li), sid, l)
+		n := 1
+		if g.kvp != nil {
+			n = g.kvp.blockHists(li)
+		}
+		for h := range n {
+			g.pagedLeave(histKey(li, h), sid, l)
+		}
 		freed = true
 	} else if kvp != nil && kvp.shared {
 		delete(l.kv, sid)
@@ -5437,14 +5443,14 @@ func (g *devTier) migrateKV(sid uint64, li int, k, v []float32, pos int, toDevic
 	return true
 }
 
-// MigrateEntries is migrateEntries for the zero session.
-func (g *devTier) MigrateEntries(li int, e []float32, pos int, toDevice bool) bool {
-	return g.migrateEntries(0, li, e, pos, toDevice)
+// MigrateHistory is migrateHistory for the zero session.
+func (g *devTier) MigrateHistory(li, h int, e []float32, pos int, toDevice bool) bool {
+	return g.migrateHistory(0, li, h, e, pos, toDevice)
 }
 
-// migrateEntries moves block li's entries plane between host and device
-// (entriesMigrate), as migrateKV moves its rows.
-func (g *devTier) migrateEntries(sid uint64, li int, e []float32, pos int, toDevice bool) bool {
+// migrateHistory moves block li's history h past its rows between host and
+// device (historyMigrate), as migrateKV moves its rows.
+func (g *devTier) migrateHistory(sid uint64, li, h int, e []float32, pos int, toDevice bool) bool {
 	sv := g.as(sid)
 	if sv == nil {
 		return false
@@ -5453,8 +5459,8 @@ func (g *devTier) migrateEntries(sid uint64, li int, e []float32, pos int, toDev
 	g = sv
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if err := g.entriesMigrate(sid, li, e, pos, toDevice); err != nil {
-		g.LastErr = fmt.Sprintf("MigrateEntries: block %d: %v", li, err)
+	if err := g.historyMigrate(sid, li, h, e, pos, toDevice); err != nil {
+		g.LastErr = fmt.Sprintf("MigrateHistory: block %d history %d: %v", li, h, err)
 		return false
 	}
 	return true

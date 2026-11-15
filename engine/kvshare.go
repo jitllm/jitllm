@@ -346,15 +346,6 @@ func (m *SharedStore) forget(e *sharedPage) {
 	}
 }
 
-// ShareKV makes this session hold the sealed pages of its history once with
-// every other session sharing st: what it seals is published to st, and a
-// prefix PrefillCached finds there is aliased, not copied (SharedStore has
-// the rules). It sets st as the session's store; SetCacheKey must name the
-// namespace first, since a page is named by its tokens only inside one.
-//
-// Refused by name: a batch (its pages hold every row's slots), DeepSeek V4 (its
-// compressed entries are a second history keyed by entry), and a session with
-// blocks on a device that names no pages (nn.KVShareDevice).
 // UnshareKV ends ShareKV: the session's references go, and it keeps no store
 // and no namespace. The sequence starts over (Reset).
 func (s *Instance) UnshareKV() {
@@ -370,6 +361,14 @@ func (s *Instance) UnshareKV() {
 	s.kv.ns = ""
 }
 
+// ShareKV makes this session hold the sealed pages of its history once with
+// every other session sharing st: what it seals is published to st, and a
+// prefix PrefillCached finds there is aliased, not copied (SharedStore has
+// the rules). It sets st as the session's store; SetCacheKey must name the
+// namespace first, since a page is named by its tokens only inside one.
+//
+// Refused: no store, no namespace, a session with blocks on a device that
+// names no pages (nn.KVShareDevice), and a sequence past its start.
 func (s *Instance) ShareKV(st *SharedStore) error {
 	switch {
 	case st == nil:

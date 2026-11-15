@@ -1398,11 +1398,13 @@ type KVMigrator interface {
 	MigrateKV(li int, k, v []float32, pos int, toDevice bool) bool
 }
 
-// EntriesMigrator is a device's half of moving block li's entries plane with
-// its history: e holds the entries pos positions closed, in order; toDevice
-// takes them into the device's plane, else gives its plane into e.
-type EntriesMigrator interface {
-	MigrateEntries(li int, e []float32, pos int, toDevice bool) bool
+// HistoryMigrator is a device's half of moving block li's history h past
+// its rows' (history 0, KVMigrator's) with them: e holds the entries pos
+// positions closed, in order, one each period positions the block's graph
+// appends at; toDevice takes them into the device's history h, else gives
+// it into e.
+type HistoryMigrator interface {
+	MigrateHistory(li, h int, e []float32, pos int, toDevice bool) bool
 }
 
 // RecMigrator is a device's half of moving block li's recurrent state

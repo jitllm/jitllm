@@ -239,8 +239,8 @@ func (g *devTier) publishKVsBatch(sid uint64, lis, pages []int32, keys []string)
 	return ok
 }
 
-// sharedLayer is block li's pool when its pages can be named: paged, and not
-// a DeepSeek V4 entry layer. Callers hold g.mu.
+// sharedLayer is block li's pool when its pages can be named: paged.
+// Callers hold g.mu.
 func (g *devTier) sharedLayer(li int) (*kvPool, *kvLayerPool) {
 	kp := g.kvp
 	if kp == nil {
