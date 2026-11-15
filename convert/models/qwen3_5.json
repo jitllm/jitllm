@@ -1,6 +1,6 @@
 {
   "classes": ["Qwen3_5ForConditionalGeneration"],
-  "gguf": ["qwen35", "qwen35moe", "qwen3next"],
+  "gguf": ["qwen35", "qwen35moe", "qwen3next", "clef"],
   "config": {
     "root": "text_config",
     "arch": "qwen3next",

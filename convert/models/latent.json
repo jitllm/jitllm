@@ -1,5 +1,5 @@
 {
-  "gguf": ["deepseek2"],
+  "gguf": ["deepseek2", "deepseek32"],
   "graph": {
     "block": [
       {"op": "in", "out": "x", "width": "embd"},
@@ -18,9 +18,15 @@
       {"op": "emit", "kind": "slice", "in": "q", "attr": {"HeadDim": "head_dim", "Offset": "0", "Width": "head_dim - rot"}, "outs": [{"name": "q.nope", "width": "heads * (head_dim - rot)"}], "out": "qn"},
       {"op": "emit", "kind": "expert_matvec", "in": "qn", "bind": [{"w": "attn_k_b", "k": "head_dim - rot", "rows": "kv_lora", "sheets": "heads"}], "outs": [{"name": "q.abs", "width": "heads * kv_lora"}], "out": "qabs"},
       {"op": "emit", "kind": "concat", "in": ["qabs", "qpe"], "attr": {"NHead": "heads"}, "outs": [{"name": "q.row", "width": "heads * (kv_lora + rot)"}], "out": "qrow"},
-      {"op": "emit", "kind": "concat", "in": ["lat", "kpe"], "outs": [{"name": "kv.row", "width": "kv_lora + rot"}], "out": "krow"},
+      {"op": "let", "if": "selects and not stored('attn_q_a')", "in": "n", "out": "qa"},
+      {"op": "indexer", "if": "selects", "in": ["n", "qa"], "out": "ix"},
+      {"op": "emit", "if": "not selects", "kind": "concat", "in": ["lat", "kpe"], "outs": [{"name": "kv.row", "width": "kv_lora + rot"}], "out": "krow"},
+      {"op": "emit", "if": "selects", "kind": "concat", "in": ["lat", "kpe", "ix.key"], "outs": [{"name": "kv.row", "width": "kv_lora + rot + key_width"}], "out": "krow"},
       {"op": "kv_append", "in": ["krow", "krow"], "out": "hist"},
-      {"op": "attend", "in": "qrow", "hist": "hist", "w": "attn_sinks?", "attr": {"NKVHead": "1", "HeadDim": "kv_lora + rot"}, "out": "att"},
+      {"op": "select", "if": "selects and select_weighted", "in": ["ix.query", "ix.weight"], "hist": "hist", "attr": {"Offset": "kv_lora + rot", "Width": "kv_lora + rot + key_width"}, "out": "sel"},
+      {"op": "select", "if": "selects and not select_weighted", "in": "ix.query", "hist": "hist", "attr": {"Offset": "kv_lora + rot", "Width": "kv_lora + rot + key_width"}, "out": "sel"},
+      {"op": "attend", "if": "not selects", "in": "qrow", "hist": "hist", "w": "attn_sinks?", "attr": {"NKVHead": "1", "HeadDim": "kv_lora + rot"}, "out": "att"},
+      {"op": "attend", "if": "selects", "in": ["qrow", "sel"], "hist": "hist", "w": "attn_sinks?", "attr": {"NKVHead": "1", "HeadDim": "kv_lora + rot", "Width": "kv_lora + rot + key_width"}, "out": "att"},
       {"op": "emit", "kind": "slice", "in": "att", "attr": {"HeadDim": "kv_lora + rot", "Offset": "0", "Width": "kv_lora"}, "outs": [{"name": "att.latent", "width": "heads * kv_lora"}], "out": "al"},
       {"op": "emit", "kind": "expert_matvec", "in": "al", "bind": [{"w": "attn_v_b", "k": "kv_lora", "rows": "v_head_dim", "sheets": "heads"}], "outs": [{"name": "att.v", "width": "heads * v_head_dim"}], "out": "o"},
       {"op": "matvec", "if": "stored('attn_gate')", "in": "n", "w": "attn_gate", "rows": "heads * v_head_dim", "out": "ag"},

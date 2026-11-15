@@ -2,11 +2,14 @@ package engine
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/convert"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/internal/testmodels"
@@ -44,7 +47,7 @@ func statedGraphModels() []string {
 		// The gated delta rule beside gated attention, with prediction blocks.
 		"synth-hf-qwen35", "synth-qwen35-hybrid-mtp.gguf", "synth-qwen35moe-hybrid-mtp.gguf",
 		"synth-qwen35moe-hybrid-mtp-bf16.gguf", "qwen35/Qwen3.5-0.8B-Q4_K_M.gguf", "qwen35/Qwen3.5-0.8B-MTP-Q8_0.gguf",
-		"synth-qwen35vl.gguf+mmproj-synth-qwen35vl.gguf",
+		"synth-qwen35vl.gguf+mmproj-synth-qwen35vl.gguf", "clef/fixture/clef-fixture.gguf", "clef/fixture-vl/clef-fixture-vl.gguf",
 		// Vision-language models whose text model is a claimed architecture's.
 		"SmolVLM-256M-Instruct-Q8_0.gguf", "minicpmv/Janus-Pro-1B-Q4_K_M.gguf", "DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M.gguf",
 		"newarch/EXAONE-4.0-1.2B-Q4_K_M.gguf", "newarch/OLMo-2-0425-1B-Instruct-Q4_K_M.gguf",
@@ -84,6 +87,14 @@ func statedGraphModels() []string {
 		// Attention through a latent beside DeepSeek-V3's mixture.
 		"synth-deepseek-yarn.gguf", "synth-deepseek-yarn-af.gguf", "DeepSeek-V2-Lite.Q4_K_M.gguf",
 		"Moonlight-16B-A3B-Instruct-Q4_K_M.gguf", "Kimi-VL-A3B-Thinking-2506-Q4_K_M.gguf+mmproj-Kimi-VL-A3B-Instruct-f16.gguf",
+		// An indexer's key cached beside the keys, attention over the positions it selects.
+		"synth-deepseek32.gguf", "synth-minimaxm3.gguf",
+		// XD-RoPE: four axes over cat(freq, freq), k's norm after it.
+		"synth-hunyuanvl.gguf", "synth-hunyuanvl.gguf+mmproj-synth-hunyuanvl.gguf", "hunyuanvl/HunyuanOCR-Q8_0.gguf",
+		// The encoders: each sublayer's sum normed after the residual.
+		"library/all-MiniLM-L6-v2-ggml-model-f16.gguf", "embed/MiniLM-L6-v2.Q8_0.gguf", "embed/snowflake-arctic-embed-22m.gguf",
+		"library/mxbai-embed-large-v1_fp16.gguf", "library/nomic-embed-text-v1.5.f16.gguf", "embed/nomic-embed-text.gguf",
+		"laya/fixture/laya-fixture.gguf", "d1-omni/d1-omni-600M-F16.gguf",
 	}
 }
 
@@ -110,23 +121,75 @@ func TestStatedBlockGraphsAreTheBuiltOnes(t *testing.T) {
 			if n := int(c.NLayer + c.NMTP); len(c.Blocks.Of) != n || n == 0 {
 				t.Fatalf("the container states graphs for %d blocks of %d", len(c.Blocks.Of), n)
 			}
-			stated := slices.Clone(m.FrontGraphs().Blocks)
-			kept := c.Blocks
-			c.Blocks = jlm.BlockGraphs{}
-			m.Front.Restated++
-			built := slices.Clone(m.FrontGraphs().Blocks)
-			c.Blocks = kept
-			m.Front.Restated++
-			for li := range stated {
-				if stated[li] == nil || built[li] == nil {
-					why, err := m.UncoveredAt(li)
-					t.Fatalf("block %d: stated %v, built %v (%v: %v)", li, stated[li] != nil, built[li] != nil, why, err)
-				}
-				if d := graphDiff(stated[li], built[li]); d != "" {
-					t.Errorf("block %d: the stated graph is not the built one: %s\nstated\n%s\nbuilt\n%s", li, d, stated[li], built[li])
-				}
-			}
+			requireStatedIsBuilt(t, m)
 		})
+	}
+}
+
+// TestEveryAuditedGraphIsTheBuiltOne holds every model the census converts
+// to the same bar: where its container states its blocks' graphs, each is
+// the one the front end builds from the config. A model of a claimed
+// architecture that statedGraphModels does not list is held here.
+func TestEveryAuditedGraphIsTheBuiltOne(t *testing.T) {
+	slow := os.Getenv("JITLLM_SLOW") != ""
+	var stated, built []string
+	for _, src := range auditModels(t) {
+		if !slow && src.size > 2<<30 {
+			continue
+		}
+		t.Run(src.name, func(t *testing.T) {
+			path := src.path
+			if src.hf {
+				path = jlmOfSafetensors(t, src.path)
+			} else {
+				p, err := convertPair(src.path, src.mmproj)
+				if errors.Is(err, convert.ErrNotImplemented) || errors.Is(err, convert.ErrPart) || errors.Is(err, convert.ErrBadInput) {
+					t.Skipf("the census refuses it too: %v", err)
+				}
+				if err != nil {
+					t.Fatalf("convert: %v", err)
+				}
+				path = p
+			}
+			m, err := model.Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer m.Close()
+			if len(m.Container.Config().Blocks.Of) == 0 {
+				built = append(built, src.name)
+				return
+			}
+			stated = append(stated, src.name)
+			requireStatedIsBuilt(t, m)
+		})
+	}
+	t.Logf("%d models state their graphs; %d build them from the config: %v", len(stated), len(built), built)
+	if len(stated) == 0 {
+		t.Fatal("no audited model states its graphs")
+	}
+}
+
+// requireStatedIsBuilt fails t where a block's stated graph is not, byte for
+// byte, the one the front end builds from m's config.
+func requireStatedIsBuilt(t *testing.T, m *model.Model) {
+	t.Helper()
+	c := m.Container.Config()
+	stated := slices.Clone(m.FrontGraphs().Blocks)
+	kept := c.Blocks
+	c.Blocks = jlm.BlockGraphs{}
+	m.Front.Restated++
+	built := slices.Clone(m.FrontGraphs().Blocks)
+	c.Blocks = kept
+	m.Front.Restated++
+	for li := range stated {
+		if stated[li] == nil || built[li] == nil {
+			why, err := m.UncoveredAt(li)
+			t.Fatalf("block %d: stated %v, built %v (%v: %v)", li, stated[li] != nil, built[li] != nil, why, err)
+		}
+		if d := graphDiff(stated[li], built[li]); d != "" {
+			t.Errorf("block %d: the stated graph is not the built one: %s\nstated\n%s\nbuilt\n%s", li, d, stated[li], built[li])
+		}
 	}
 }
 

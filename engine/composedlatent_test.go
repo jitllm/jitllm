@@ -114,6 +114,7 @@ func TestComposedLatentViolations(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			m := frontModel(t, lm.file)
 			if lm.nope {
+				defer builtGraphs(m)()
 				m.Cfg.NoPosEnc = true
 				m.Front.Mu.Lock()
 				m.Front.Set = nil

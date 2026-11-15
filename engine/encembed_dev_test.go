@@ -169,8 +169,9 @@ func TestEmbeddingsOnEveryDevice(t *testing.T) {
 					// graphs stating no window (the long text is past the
 					// window), which is what the composed attention reads.
 					violation("a causal mask on the device", func() func() {
+						undo := builtGraphs(m)
 						m.Cfg.NonCausal = false
-						return func() { m.Cfg.NonCausal = true }
+						return func() { m.Cfg.NonCausal = true; undo() }
 					})
 					windowed := slices.ContainsFunc(m.FrontGraphs().Blocks, func(g *graph.Graph) bool {
 						return g != nil && slices.ContainsFunc(g.Ops, func(o graph.Op) bool {

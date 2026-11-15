@@ -1,10 +1,11 @@
 {
-  "gguf": ["phi2", "starcoder", "starcoder2", "stablelm", "falcon", "nemotron", "command-r", "cohere2", "dbrx", "phimoe"],
+  "gguf": ["phi2", "starcoder", "starcoder2", "stablelm", "falcon", "nemotron", "command-r", "cohere2", "dbrx", "phimoe", "bert", "nomic-bert", "modern-bert"],
   "graph": {
     "block": [
       {"op": "in", "out": "x", "width": "embd"},
-      {"op": "layer_norm", "if": "layer_norm", "in": "x", "w": ["attn_norm", "attn_norm.bias?"], "out": "n"},
-      {"op": "norm", "if": "not layer_norm", "in": "x", "w": "attn_norm", "out": "n"},
+      {"op": "layer_norm", "if": "layer_norm and stored('attn_norm')", "in": "x", "w": ["attn_norm", "attn_norm.bias?"], "out": "n"},
+      {"op": "norm", "if": "not layer_norm and stored('attn_norm')", "in": "x", "w": "attn_norm", "out": "n"},
+      {"op": "let", "if": "not stored('attn_norm')", "in": "x", "out": "n"},
       {"op": "matvec", "in": "n", "w": ["attn_q", "attn_q.bias?"], "rows": "heads * head_dim", "out": "q"},
       {"op": "matvec", "in": "n", "w": ["attn_k", "attn_k.bias?"], "rows": "kv_heads * head_dim", "out": "k"},
       {"op": "matvec", "in": "n", "w": ["attn_v", "attn_v.bias?"], "rows": "kv_heads * head_dim", "out": "v"},
@@ -17,8 +18,11 @@
       {"op": "attend", "in": "q", "hist": "kv", "w": "attn_sinks?", "out": "att"},
       {"op": "matvec", "in": "att", "w": ["attn_output", "attn_output.bias?"], "rows": "embd", "out": "o"},
       {"op": "add", "in": ["x", "o"], "alpha": "residual_scale", "out": "h"},
-      {"op": "layer_norm", "if": "not parallel and layer_norm", "in": "h", "w": ["ffn_norm", "ffn_norm.bias?"], "out": "m"},
-      {"op": "norm", "if": "not parallel and not layer_norm", "in": "h", "w": "ffn_norm", "out": "m"},
+      {"op": "layer_norm", "if": "layer_norm and stored('attn_out_norm')", "in": "h", "w": ["attn_out_norm", "attn_out_norm.bias?"], "out": "h"},
+      {"op": "norm", "if": "not layer_norm and stored('attn_out_norm')", "in": "h", "w": "attn_out_norm", "out": "h"},
+      {"op": "layer_norm", "if": "not parallel and layer_norm and stored('ffn_norm')", "in": "h", "w": ["ffn_norm", "ffn_norm.bias?"], "out": "m"},
+      {"op": "norm", "if": "not parallel and not layer_norm and stored('ffn_norm')", "in": "h", "w": "ffn_norm", "out": "m"},
+      {"op": "let", "if": "not parallel and not stored('ffn_norm')", "in": "h", "out": "m"},
       {"op": "layer_norm", "if": "parallel and stored('ffn_norm')", "in": "x", "w": ["ffn_norm", "ffn_norm.bias?"], "out": "m"},
       {"op": "let", "if": "parallel and not stored('ffn_norm')", "in": "n", "out": "m"},
       {"op": "matvec", "if": "not moe and stored('ffn_gate')", "in": "m", "w": "ffn_gate", "rows": "ffn", "out": "g"},
@@ -46,6 +50,8 @@
       {"op": "split_sum", "if": "moe", "in": "ed", "parts": "experts_used", "name": "experts.out", "out": "d"},
       {"op": "routed", "if": "moe", "from": "routed"},
       {"op": "add", "in": ["h", "d"], "alpha": "residual_scale", "out": "y"},
+      {"op": "layer_norm", "if": "layer_norm and stored('layer_out_norm')", "in": "y", "w": ["layer_out_norm", "layer_out_norm.bias?"], "out": "y"},
+      {"op": "norm", "if": "not layer_norm and stored('layer_out_norm')", "in": "y", "w": "layer_out_norm", "out": "y"},
       {"op": "out", "in": "y"}
     ]
   }

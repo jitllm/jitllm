@@ -7,7 +7,8 @@
       {"op": "matvec", "if": "kind == 'shortconv'", "in": "n", "w": "shortconv.in_proj.b", "rows": "chans", "out": "bb"},
       {"op": "matvec", "if": "kind == 'shortconv'", "in": "n", "w": "shortconv.in_proj.x", "rows": "chans", "out": "xx"},
       {"op": "emit", "if": "kind == 'shortconv'", "kind": "map", "in": ["bb", "xx"], "attr": {"Fn": "'mul'"}, "outs": [{"name": "bx", "width": "chans"}], "out": "bx"},
-      {"op": "emit", "if": "kind == 'shortconv'", "kind": "state_conv", "in": "bx", "attr": {"Taps": "conv"}, "advances": ["rec.conv"], "bind": [{"w": "ssm_conv1d", "k": "conv", "rows": "chans"}], "outs": [{"name": "conv", "width": "chans"}], "out": "conv"},
+      {"op": "emit", "if": "kind == 'shortconv' and not non_causal", "kind": "state_conv", "in": "bx", "attr": {"Taps": "conv"}, "advances": ["rec.conv"], "bind": [{"w": "ssm_conv1d", "k": "conv", "rows": "chans"}], "outs": [{"name": "conv", "width": "chans"}], "out": "conv"},
+      {"op": "emit", "if": "kind == 'shortconv' and non_causal", "kind": "row_conv", "in": "bx", "attr": {"Taps": "conv", "RowWindows": "row_windowed"}, "bind": [{"w": "ssm_conv1d", "k": "conv", "rows": "chans"}], "outs": [{"name": "conv", "width": "chans"}], "out": "conv"},
       {"op": "matvec", "if": "kind == 'shortconv'", "in": "n", "w": "shortconv.in_proj.c", "rows": "chans", "out": "cc"},
       {"op": "emit", "if": "kind == 'shortconv'", "kind": "map", "in": ["cc", "conv"], "attr": {"Fn": "'mul'"}, "outs": [{"name": "cy", "width": "chans"}], "out": "mix"},
       {"op": "matvec", "if": "kind == 'shortconv'", "in": "mix", "w": ["ssm_out", "attn_output.bias?"], "rows": "embd", "out": "o"},
@@ -22,6 +23,8 @@
       {"op": "attend", "if": "kind != 'shortconv'", "in": "q", "hist": "kv", "w": "attn_sinks?", "out": "att"},
       {"op": "matvec", "if": "kind != 'shortconv'", "in": "att", "w": ["attn_output", "attn_output.bias?"], "rows": "embd", "out": "o"},
       {"op": "add", "in": ["x", "o"], "alpha": "residual_scale", "out": "h"},
+      {"op": "layer_norm", "if": "layer_norm and stored('attn_out_norm')", "in": "h", "w": ["attn_out_norm", "attn_out_norm.bias?"], "out": "h"},
+      {"op": "norm", "if": "not layer_norm and stored('attn_out_norm')", "in": "h", "w": "attn_out_norm", "out": "h"},
       {"op": "norm", "in": "h", "w": "ffn_norm", "out": "m"},
       {"op": "matvec", "if": "not moe", "in": "m", "w": "ffn_gate", "rows": "ffn", "out": "g"},
       {"op": "matvec", "if": "not moe", "in": "m", "w": ["ffn_up", "ffn_up.bias?"], "rows": "ffn", "out": "u"},
@@ -53,6 +56,8 @@
       {"op": "split_sum", "if": "moe", "in": "ed", "parts": "experts_used", "name": "experts.out", "out": "d"},
       {"op": "routed", "if": "moe", "from": "routed"},
       {"op": "add", "in": ["h", "d"], "alpha": "residual_scale", "out": "y"},
+      {"op": "layer_norm", "if": "layer_norm and stored('layer_out_norm')", "in": "y", "w": ["layer_out_norm", "layer_out_norm.bias?"], "out": "y"},
+      {"op": "norm", "if": "not layer_norm and stored('layer_out_norm')", "in": "y", "w": "layer_out_norm", "out": "y"},
       {"op": "out", "in": "y"}
     ]
   }

@@ -152,7 +152,9 @@ func graphSteps() map[string][4]int {
 		"add":         {2, 2, 0, 0},
 		"rope":        {1, 1, 0, 0},
 		"kv_append":   {2, 2, 0, 0},
-		"attend":      {1, 1, 0, -1},
+		"attend":      {1, 2, 0, -1},
+		"indexer":     {2, 2, 0, 0},
+		"select":      {1, 2, 0, 0},
 		"act":         {1, -1, 0, 0},
 		"stated":      {1, -1, 0, 0},
 		"emit":        {0, -1, 0, 0},
@@ -201,7 +203,7 @@ func (g *mjGraph) check() error {
 				return fmt.Errorf("op %d (%s) reads %q before an op names it", i, o.Op, v)
 			}
 		}
-		if o.Op == "attend" && !named[o.Hist] {
+		if (o.Op == "attend" || o.Op == "select") && !named[o.Hist] {
 			return fmt.Errorf("op %d attends history %q before an op names it", i, o.Hist)
 		}
 		if o.Op == "routed" && !named[o.From] {
@@ -278,6 +280,11 @@ func (g *mjGraph) check() error {
 			}
 			if o.Out != "" {
 				named[o.Out] = true
+			}
+			continue
+		case o.Op == "indexer" && o.Out != "":
+			for _, part := range []string{".key", ".query", ".weight"} {
+				named[o.Out+part] = true
 			}
 			continue
 		case o.Out == "":
@@ -539,7 +546,29 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph) (*graph.Grap
 			if err != nil {
 				return nil, fmt.Errorf("op %d (attend): %w", i, err)
 			}
-			y = b.AttendOf(in[0], h, a, w...)
+			if len(in) == 2 {
+				y = b.AttendSelected(in[0], h, in[1], a, w...)
+			} else {
+				y = b.AttendOf(in[0], h, a, w...)
+			}
+		case "indexer":
+			ix, err := bf.indexer(b, in[0], in[1])
+			if err != nil {
+				return nil, fmt.Errorf("op %d (indexer): %w", i, err)
+			}
+			for part, v := range ix {
+				vals[o.Out+"."+part] = v
+			}
+			continue
+		case "select":
+			h, ok := hists[o.Hist]
+			if !ok {
+				return nil, fmt.Errorf("op %d selects from history %q, which no op this block runs appends", i, o.Hist)
+			}
+			var err error
+			if y, err = bf.selected(b, g, o, vars, in, h); err != nil {
+				return nil, fmt.Errorf("op %d (select): %w", i, err)
+			}
 		case "act":
 			width, err := num(o.Width)
 			if err != nil {
@@ -710,6 +739,114 @@ func routerWeight(b *graph.Builder, rw *jlm.Expr, logits, choose, sel graph.Valu
 		return ws[0], nil
 	}
 	return b.Emit(graph.OpConcat, ws, []graph.Result{{Name: "router.w", Width: k}}, nil, graph.Attrs{}, nil, nil)[0], nil
+}
+
+// indexer is the block's stated indexer (jlm.Selection) over its normed
+// input n and the attention's query input qIn: its key padded with zeros to
+// the width the row caches, its query, and its heads' weight, each where the
+// container states it.
+func (bf *blockFacts) indexer(b *graph.Builder, n, qIn graph.ValueID) (map[string]graph.ValueID, error) {
+	s := bf.c.Selection
+	if !s.At(bf.li) {
+		return nil, fmt.Errorf("block %d states no selection", bf.li)
+	}
+	turn := bf.ops(b)
+	ix := map[string]graph.ValueID{}
+	if s.Key != nil {
+		key, err := graph.LowerValues(b, nil, s.Key, []graph.ValueID{n}, 1, bf.facts, turn)
+		if err != nil {
+			return nil, fmt.Errorf("the indexer's key: %w", err)
+		}
+		k := key[s.Key.Out]
+		if w, kw := b.G.Values[k].Width, int(s.KeyWidth); w < kw {
+			cut := b.Emit(graph.OpSlice, []graph.ValueID{k}, []graph.Result{{Name: "idx.k.pad.cut", Width: kw - w}}, nil,
+				graph.Attrs{HeadDim: w, Width: kw - w}, nil, nil)[0]
+			pad := b.Map("idx.k.pad", graph.Attrs{Fn: graph.MapMul}, nil, kw-w, cut)
+			k = b.Emit(graph.OpConcat, []graph.ValueID{k, pad}, []graph.Result{{Name: "idx.k.row", Width: kw}}, nil, graph.Attrs{}, nil, nil)[0]
+		}
+		ix["key"] = k
+	}
+	q, err := graph.LowerValues(b, nil, s.Query, []graph.ValueID{n, qIn}, 1, bf.facts, turn)
+	if err != nil {
+		return nil, fmt.Errorf("the indexer's query: %w", err)
+	}
+	ix["query"] = q[s.Query.Out]
+	if s.Weight != nil {
+		w, err := graph.LowerValues(b, nil, s.Weight, []graph.ValueID{n}, 1, bf.facts, turn)
+		if err != nil {
+			return nil, fmt.Errorf("the indexer's weight: %w", err)
+		}
+		ix["weight"] = w[s.Weight.Out]
+	}
+	return ix, nil
+}
+
+// selected is the positions the block's indexer query in[0] (weighted by
+// in[1] where given) selects from h, whose rows carry its key where o's
+// attributes say (Offset, Width).
+func (bf *blockFacts) selected(b *graph.Builder, g *mjGraph, o mjBlockOp, vars map[string]jinja.Value, in []graph.ValueID, h graph.StateRef) (graph.ValueID, error) {
+	s := bf.c.Selection
+	if !s.At(bf.li) {
+		return 0, fmt.Errorf("block %d states no selection", bf.li)
+	}
+	a, err := overridden(graph.Attrs{NHead: int(s.Heads), NKVHead: int(s.Groups), HeadDim: int(s.HeadDim),
+		Span: int(s.Block), TopK: int(s.Keep), Local: int(s.Local)}, g, o, vars)
+	if err != nil {
+		return 0, err
+	}
+	if s.Rank == jlm.RankPooled {
+		a.Fn, a.Eps = graph.MapMax, float64(s.Eps)
+		if bf.ropeAt() {
+			r, err := bf.rope()
+			if err != nil {
+				return 0, err
+			}
+			a.NRot, a.Base, a.Layout, a.Freqs, a.Mscale = r.NRot, r.Base, r.Layout, r.Freqs, r.Mscale
+			a.Sections, a.Interleaved = r.Sections, r.Interleaved
+		}
+		return b.SelectPooled(in[0], h, a, s.PoolNorm), nil
+	}
+	if s.Relu {
+		a.Fn = graph.MapMax
+	}
+	return b.Select(in[0], h, a, in[1:]...), nil
+}
+
+// ops lowers the stated ops only a block has: its rotary at the row's
+// position in the stated layout, nothing on a block that turns none.
+func (bf *blockFacts) ops(b *graph.Builder) func([]graph.ValueID, *jlm.TowerOp) (graph.ValueID, error) {
+	return func(ins []graph.ValueID, op *jlm.TowerOp) (graph.ValueID, error) {
+		if op.Code != jlm.TOpRope {
+			return 0, fmt.Errorf("a stated graph's block op %d: %w", op.Code, ErrNotImplemented)
+		}
+		v := ins[0]
+		if !bf.ropeAt() {
+			return v, nil
+		}
+		a, err := bf.rope()
+		if err != nil {
+			return 0, err
+		}
+		switch op.Chain {
+		case jlm.RopeNormal:
+			a.Layout = graph.RopeNorm
+		case jlm.RopeNeox:
+			a.Layout = graph.RopeNeox
+		}
+		a.HeadDim, a.Offset = int(op.Span), 0
+		if bf.c.Flags2.Has(jlm.Flag2RopeTail) {
+			a.Offset = int(op.Span) - a.NRot
+		}
+		return b.Emit(graph.OpRope, []graph.ValueID{v}, []graph.Result{{Name: "rope", Width: b.G.Values[v].Width}}, nil, a, nil, nil)[0], nil
+	}
+}
+
+// keyWidth is the width a selection's key takes in the row, 0 for none.
+func keyWidth(s *jlm.Selection) uint32 {
+	if s == nil {
+		return 0
+	}
+	return s.KeyWidth
 }
 
 // overridden is a with each attribute o states set over it.
@@ -1028,12 +1165,18 @@ func (bf *blockFacts) vars() map[string]jinja.Value {
 		"qk_norm":            jinja.NewBool(c.QKNormAt(li)),
 		"router_weight":      jinja.NewBool(len(c.RouterWeight.Terms) != 0),
 		"token_act":          jinja.NewBool(c.ActQuant == jlm.ActQuantRowInt8),
+		"selects":            jinja.NewBool(c.Selection.At(li)),
+		"key_width":          jinja.NewInt(int64(keyWidth(c.Selection))),
+		"select_weighted":    jinja.NewBool(c.Selection.At(li) && c.Selection.Weight != nil),
 		"kv_lora":            i(c.KVLoraRank),
 		"rot":                i(c.NRot),
 		"v_head_dim":         jinja.NewInt(int64(cmp.Or(c.HeadDimV, c.HeadDim))),
 		"latent_eps":         jinja.NewFloat(cmp.Or(float64(c.LatentNormEps), bf.eps)),
 		"qk_norm_wide":       jinja.NewBool(c.Flags.Has(jlm.FlagQKNormWide)),
 		"qk_norm_post":       jinja.NewBool(c.Flags.Has(jlm.FlagQKNormPostRope)),
+		"rope_xd":            jinja.NewBool(c.Flags.Has(jlm.FlagRopeXD)),
+		"non_causal":         jinja.NewBool(c.Flags.Has(jlm.FlagNonCausal)),
+		"row_windowed":       jinja.NewBool(c.Flags2.Has(jlm.Flag2MediaPrefix)),
 		"nope_global":        jinja.NewBool(c.Flags.Has(jlm.FlagNoPEGlobal)),
 		"temp_scale":         jinja.NewFloat(float64(c.AttnTempScale)),
 		"temp_offset":        jinja.NewFloat(float64(c.AttnTempOffset)),
@@ -1181,9 +1324,6 @@ func (bf *blockFacts) attend() graph.Attrs {
 // its per-pair factors where it stores them or scales its rotary.
 func (bf *blockFacts) rope() (graph.Attrs, error) {
 	c := bf.c
-	if c.Flags.Has(jlm.FlagRopeXD) {
-		return graph.Attrs{}, fmt.Errorf("a stated graph's XD rotary: %w", ErrNotImplemented)
-	}
 	if len(c.CompKinds) != 0 {
 		return graph.Attrs{}, fmt.Errorf("a stated graph's rotary in a compressing model: %w", ErrNotImplemented)
 	}
@@ -1221,6 +1361,15 @@ func (bf *blockFacts) rope() (graph.Attrs, error) {
 	if sec := c.RopeSections; sec != [4]uint32{} {
 		if nrot != int(c.NRot) || base != float64(c.RopeBase) {
 			return graph.Attrs{}, fmt.Errorf("rotary sections on the sliding layers' own rotary")
+		}
+		// Under XD-RoPE the axes are assigned per element of cat(freq, freq):
+		// each section twice as wide, its halves turned apart.
+		if c.Flags.Has(jlm.FlagRopeXD) {
+			for i, n := range sec {
+				a.Sections[i] = 2 * int(n)
+			}
+			a.Layout = graph.RopeSplit
+			return a, nil
 		}
 		for i, n := range sec {
 			a.Sections[i] = int(n)
