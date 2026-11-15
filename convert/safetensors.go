@@ -592,7 +592,7 @@ func hfSourceWith(dir hfDir, shards []*safetensors.File, modelJSON string) (*jlm
 		}
 	}
 	if g != nil {
-		if err := StateBlockGraphs(cfg, s, g); err != nil {
+		if err := StateBlockGraphs(cfg, s, g, hfKeys(hc)); err != nil {
 			return nil, err
 		}
 	}

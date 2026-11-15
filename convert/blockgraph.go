@@ -430,12 +430,12 @@ func blockRole(name string) (jlm.Role, bool) {
 
 // StateBlockGraphs states every block's graph in c from g, held to the
 // tensors s stores for it.
-func StateBlockGraphs(c *Config, s *jlm.Source, g *mjGraph) error {
+func StateBlockGraphs(c *Config, s *jlm.Source, g *mjGraph, src jinja.Value) error {
 	n := int(c.NLayer + c.NMTP)
 	var out jlm.BlockGraphs
 	at := map[string]uint16{}
 	for li := range n {
-		bg, err := blockGraphOf(c.Config, s, li, g)
+		bg, err := blockGraphOf(c.Config, s, li, g, src)
 		if err != nil {
 			return fmt.Errorf("convert: block %d's stated graph: %w", li, err)
 		}
@@ -459,8 +459,9 @@ func StateBlockGraphs(c *Config, s *jlm.Source, g *mjGraph) error {
 }
 
 // blockGraphOf is block li's graph as g states it.
-func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph) (*graph.Graph, error) {
+func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph, src jinja.Value) (*graph.Graph, error) {
 	bf := blockFactsOf(c, s, li)
+	bf.src = src
 	b := graph.NewBlock(li)
 	vals := map[string]graph.ValueID{}
 	hists := map[string]graph.StateRef{}
@@ -949,6 +950,15 @@ func (bf *blockFacts) ops(b *graph.Builder) func([]graph.ValueID, *jlm.TowerOp) 
 	}
 }
 
+// srcKeys is the source's keys as a recipe reads them, none where the
+// conversion supplies none.
+func (bf *blockFacts) srcKeys() jinja.Value {
+	if bf.src.IsDict() {
+		return bf.src
+	}
+	return jinja.NewDict()
+}
+
 // statedStreams is the residual streams the container states, where they
 // are the model's every stream (no hyper-connection multiple beyond them);
 // 0 for a model of one.
@@ -1264,6 +1274,9 @@ type blockFacts struct {
 	// chanDecay says the model's delta rule decays per channel: it stores
 	// the forget gate's low-rank pair.
 	chanDecay bool
+	// src is the source's own keys (a GGUF's architecture keys, a
+	// config.json's), which a recipe reads where the model states a value.
+	src jinja.Value
 }
 
 func blockFactsOf(c *jlm.Config, s *jlm.Source, li int) *blockFacts {
@@ -1329,6 +1342,7 @@ func (bf *blockFacts) vars() map[string]jinja.Value {
 	}
 	return map[string]jinja.Value{
 		"layer":              jinja.NewInt(int64(li)),
+		"src":                bf.srcKeys(),
 		"embd":               i(c.NEmbd),
 		"heads":              i(c.NHead),
 		"kv_heads":           i(c.NKVHeadAt(li)),
