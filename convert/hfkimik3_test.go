@@ -26,8 +26,8 @@ type k3Key struct {
 
 // k3Sources converts one Kimi-K3 twice -- its HuggingFace directory through
 // the safetensors path, and the GGUF llama.cpp's converter wrote from the
-// same checkpoint -- and demands every Config field equal. It returns the two
-// tensor sets by identity.
+// same checkpoint -- and demands every Config field equal, the blocks' stated
+// graphs among them. It returns the two tensor sets by identity.
 func k3Sources(t *testing.T, dir, gp string) (hf, gg map[k3Key]*jlm.Tensor) {
 	t.Helper()
 	for _, p := range []string{filepath.Join(dir, "config.json"), gp} {
@@ -36,7 +36,7 @@ func k3Sources(t *testing.T, dir, gp string) (hf, gg map[k3Key]*jlm.Tensor) {
 				"checkpoints and their GGUFs come from) -- this gate proved nothing", err)
 		}
 	}
-	a, b := hfSource(t, dir), ggufSource(t, gp)
+	a, b := hfSource(t, dir), ggufConverted(t, gp, true)
 	ca, cb := reflect.ValueOf(*a.Config), reflect.ValueOf(*b.Config)
 	for i := 0; i < ca.NumField(); i++ {
 		if !ca.Type().Field(i).IsExported() {
