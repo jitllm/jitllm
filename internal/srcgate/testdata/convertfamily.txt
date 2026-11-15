@@ -17,7 +17,7 @@
 1 convert/bitnet.go:bitnetTensors
 2 convert/clef.go:clefOf
 140 convert/config.go:archOf
-89 convert/config.go:configOfFile
+85 convert/config.go:configOfFile
 19 convert/config.go:projectorOf
 4 convert/config.go:ropeScalingOf
 1 convert/config.go:visionOf
@@ -38,9 +38,6 @@
 2 convert/granite.go:gemmaAttnScale
 1 convert/hfkimik3.go:kimiK3HF
 1 convert/hfkimik3.go:kimiK3HFConfig
-1 convert/hfmoefamily.go:hardcodesSoftmax
-1 convert/hfmoefamily.go:hunyuanHF
-1 convert/hfmoefamily.go:hunyuanHFConfig
 1 convert/kimik3.go:kimiK3Tensors
 2 convert/legacy.go:LegacyStated
 2 convert/lfm2.go:unfuseLFM2
@@ -51,12 +48,9 @@
 4 convert/qwen35.go:qwen35Of
 4 convert/revision.go:StateRevision
 9 convert/roles.go:retarget
-2 convert/safetensors_dense.go:ministral3HF
-1 convert/safetensors_dense.go:olmo2HFConfig
-2 convert/safetensors_dense.go:olmo3HF
 1 convert/safetensors.go:deepseekHFConfigFFN
 1 convert/safetensors.go:hardcodesSigmoid
-9 convert/safetensors.go:hfArchTable
+8 convert/safetensors.go:hfArchTable
 1 convert/safetensors.go:kimiLinearHF
 1 convert/safetensors.go:kimiLinearHFConfig
 4 convert/ssm.go:ssdArch

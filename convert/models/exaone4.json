@@ -22,7 +22,7 @@
     "activation": "hidden_act ?? 'silu'",
     "rope_scaling": "rope_parameters ?? rope_scaling",
     "window": {"size": "sliding_window", "used": "true",
-               "layers": {"list": "layer_types", "slides": "sliding_attention", "period": "sliding_window_pattern"}}
+               "layers": {"list": "layer_types", "slides": "sliding_attention", "full": "full_attention", "period": "sliding_window_pattern"}}
   },
   "tensors": {
     "block_prefix": "model.layers.",

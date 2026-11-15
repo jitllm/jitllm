@@ -68,6 +68,23 @@ func TestModelExprEvaluates(t *testing.T) {
 		{"head_dim ?? (rope.theta)", 256.0},
 		{"missing ?? rope.theta", 1e7},
 		{"(rope ?? $.rope) == rope", true},
+		// c ? a : b, a ** b and a key of a parenthesised value.
+		{"gate ? 1 : 2", 1.0},
+		{"!gate ? 1 : head_dim > 3 ? 7 : 8", 7.0},
+		{"missing == null ? 'a' : 'b'", "a"},
+		{"gate ? null : head_dim", nil},
+		{"2 ** 3 ** 2", 512.0},
+		{"-2 ** 2", -4.0},
+		{"head_dim ** 0.5 * 2", 32.0},
+		{"1 + 2 ** 3 * 2", 17.0},
+		{"(rope ?? $.rope).theta", 1e7},
+		{"(missing ?? rope).partial * 4", 1.0},
+		{"(missing ?? missing).x", nil},
+		{"(rope).missing ?? 3", 3.0},
+		{"(gate ? rope : null).theta", 1e7},
+		{"uniform(head_dim)", 256.0},
+		{"uniform([3, 3, 3])", 3.0},
+		{"uniform(missing ?? [4])", 4.0},
 	} {
 		n, err := parseExpr(c.src)
 		if err != nil {
@@ -96,6 +113,14 @@ func TestModelExprEvaluates(t *testing.T) {
 		{"head_dim ?? rope.theta", "spelled two ways"},
 		{"rope.partial ?? head_dim ?? 1", "spelled two ways"},
 		{"exp(head_dim)", "calls are a tensor map's"},
+		{"uniform(secs)", "entries differ"},
+		{"uniform([])", "empty list"},
+		{"0 ** -1", "is not a number"},
+		{"(-8) ** 0.5", "is not a number"},
+		{"act ? 1 : 2", "act is a string"},
+		{"(act).x", "is not an object"},
+		{"(rope.theta ?? 1).x", "is not an object"},
+		{"(rope).theta.x", "is not an object"},
 	} {
 		n, err := parseExpr(c.src)
 		if err != nil {
@@ -105,7 +130,7 @@ func TestModelExprEvaluates(t *testing.T) {
 			t.Errorf("%q: error %v, want one saying %q", c.src, err, c.err)
 		}
 	}
-	for _, src := range []string{"", "1 +", "(1", "[1, 2", "'open", "a ^ b", "a..b", "1 2", "in", strings.Repeat("(", 100) + "1" + strings.Repeat(")", 100)} {
+	for _, src := range []string{"", "1 +", "(1", "[1, 2", "'open", "a ^ b", "a..b", "1 2", "in", "gate ? 1", "gate ? 1 :", "gate ?", "(1).", "1 ** ", "a ? b : c ? d", strings.Repeat("(", 100) + "1" + strings.Repeat(")", 100)} {
 		if _, err := parseExpr(src); err == nil {
 			t.Errorf("%q parsed", src)
 		}
@@ -180,6 +205,8 @@ func TestModelJSONRefuses(t *testing.T) {
 		{"a map that is no arithmetic", `"attn_q.weight"`, `{"role": "attn_q.weight", "do": [{"map": "x == 1"}]}`, "not arithmetic"},
 		{"no activation", `, "activation": "'silu'"`, ``, "states no activation"},
 		{"an unknown flag", `"activation": "'silu'"`, `"activation": "'silu'", "flags": {"gated": "true"}`, "not a graph feature"},
+		{"a requirement states no refusal", `"activation": "'silu'"`, `"activation": "'silu'", "require": [{"that": "true"}]`, "states no refusal"},
+		{"a requirement that does not parse", `"activation": "'silu'"`, `"activation": "'silu'", "require": [{"that": "1 +", "else": "x"}]`, "require 0"},
 		{"unknown expert bank", `"block": {"a.weight": "attn_q.weight"}`,
 			`"block": {"a.weight": "attn_q.weight"}, "experts": {"prefix": "e.", "names": {"w.weight": "ffn_quux_exps.weight"}}`,
 			"bank \"ffn_quux_exps.weight\""},

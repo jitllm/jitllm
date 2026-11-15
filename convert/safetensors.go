@@ -930,10 +930,6 @@ type hfConfig struct {
 	MoELayerEndIndex    *int   `json:"moe_layer_end_index"`
 	MoELayerInterval    uint32 `json:"moe_layer_interval"`
 
-	// Hunyuan's, per layer as lists (hfUint), and its two switches.
-	MoETopK         hfUint `json:"moe_topk"`
-	NumSharedExpert hfUint `json:"num_shared_expert"`
-	UseCLA          *bool  `json:"use_cla"`
 	// SmolLM3's NoPE layers, and EXAONE 4's window pattern (an int, or a
 	// string transformers cannot read without layer_types). See
 	// convert/safetensors_dense.go.
@@ -1134,16 +1130,6 @@ func hfArchTable() map[string]*hfArch {
 		// Kimi-K3's text model, its experts compressed-tensors MXFP4 in the
 		// release (convert/hfkimik3.go, convert/hfmxfp4.go).
 		"KimiK3ForConditionalGeneration": kimiK3HF(),
-		// The mixture families, each to the container its GGUF converts to. See
-		// convert/hfmoefamily.go.
-		"HunYuanDenseV1ForCausalLM": hunyuanHF(),
-		"HunYuanMoEV1ForCausalLM":   hunyuanHF(),
-		// The dense llama family (convert/safetensors_dense.go). OLMo 3 is
-		// ArchOLMo2 with a window, as on the GGUF side. Ministral3ForCausalLM is
-		// mistral3's text model; Mistral3ForConditionalGeneration, which nests it
-		// under a vision tower, is not here.
-		"Olmo3ForCausalLM":      olmo3HF(),
-		"Ministral3ForCausalLM": ministral3HF(),
 	}
 }
 
@@ -2049,67 +2035,6 @@ func hfRopeScalingOK(c *hfConfig) error {
 	}
 	return fmt.Errorf("convert: %s: rope_scaling %q is not implemented; the rotary "+
 		"table it asks for is not the one this container's RopeBase describes", c.path, kind)
-}
-
-// llamaHFFixup rewrites q and k out of HuggingFace's rotary layout.
-//
-// This is the one place safetensors bytes are not container bytes.
-// HuggingFace's Llama rotates with rotate_half, pairing dimension i with
-// i+head_dim/2; this container's llama graph (no FlagRopeNeox) pairs
-// (2i, 2i+1). convert_hf_to_gguf.py permutes q and k the same way, so a model
-// converted from either format is the same container, which is what makes the
-// cross-format gate possible and keeps one rotary layout in the engine. Getting
-// it wrong still looks fine on short prompts.
-func llamaHFFixup(e *jlm.Tensor, data []byte, c *Config) error {
-	var heads uint32
-	switch e.Role {
-	case jlm.RoleAttnQ, jlm.RoleAttnQBias:
-		heads = c.NHead
-	case jlm.RoleAttnK, jlm.RoleAttnKBias:
-		heads = c.NKVHead
-	default:
-		e.Data = data
-		return nil
-	}
-	rows := uint64(heads) * uint64(c.HeadDim)
-	// Dims[NDim-1] is the slowest axis: the row count for a matrix, the
-	// only axis for a bias.
-	if e.Dims[e.NDim-1] != rows {
-		return fmt.Errorf("convert: %s has %d rows and %d heads of %d want %d",
-			e.Name, e.Dims[e.NDim-1], heads, c.HeadDim, rows)
-	}
-	if uint64(len(data))%rows != 0 {
-		return fmt.Errorf("convert: %s is %d bytes over %d rows", e.Name, len(data), rows)
-	}
-	rowBytes := uint64(len(data)) / rows
-	if c.HeadDim%2 != 0 {
-		return fmt.Errorf("convert: head_dim %d is odd; the rotary pairs rows", c.HeadDim)
-	}
-	e.Data = permuteHeadPairs(data, int(heads), int(c.HeadDim), int(rowBytes))
-	return nil
-}
-
-// plusOneNorm stores 1 + weight in float32: an f16 norm comes out f32, since
-// adding one in half precision would round differently from the reference.
-func plusOneNorm(e *jlm.Tensor, data []byte) error {
-	out := make([]byte, 0, len(data)*2)
-	switch e.Type {
-	case jlm.TypeF32:
-		for i := 0; i+4 <= len(data); i += 4 {
-			v := math.Float32frombits(binary.LittleEndian.Uint32(data[i:])) + 1
-			out = binary.LittleEndian.AppendUint32(out, math.Float32bits(v))
-		}
-	case jlm.TypeF16:
-		for i := 0; i+2 <= len(data); i += 2 {
-			v := float32(quant.DecodeHalf(binary.LittleEndian.Uint16(data[i:]))) + 1
-			out = binary.LittleEndian.AppendUint32(out, math.Float32bits(v))
-		}
-		e.Type = jlm.TypeF32
-	default:
-		return fmt.Errorf("convert: %s: a %v norm", e.Name, e.Type)
-	}
-	e.Data = out
-	return nil
 }
 
 // permuteHeadPairs moves row (h, j*hd/2 + i) to row (h, 2i + j), per head.

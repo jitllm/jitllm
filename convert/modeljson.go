@@ -126,12 +126,14 @@ type mjWindow struct {
 }
 
 // mjWindowLayers is which layers slide, as a class states it: List, a list
-// of each layer's type, a layer sliding where its type is Slides; where the
-// list is null, Period (every layer but each Period'th, (i+1) % Period != 0)
+// of each layer's type, a layer sliding where its type is Slides; with Full
+// stated, a type that is neither is refused, as no layer of the class has it;
+// where the list is null, Period (every layer but each Period'th, (i+1) % Period != 0)
 // or From (each layer from From on); with none of the three, every layer.
 type mjWindowLayers struct {
 	List   string `json:"list"`
 	Slides string `json:"slides"`
+	Full   string `json:"full"`
 	Period string `json:"period"`
 	From   string `json:"from"`
 }
@@ -368,9 +370,12 @@ func parseModelJSON(b []byte, name string) (*modelJSON, error) {
 			return nil, fmt.Errorf("convert: %s: ternary reciprocal: %w", name, err)
 		}
 	}
-	for _, r := range mj.Config.Require {
-		if _, err := parseExpr(r.That); err != nil || r.Else == "" {
-			return nil, fmt.Errorf("convert: %s: a requirement states a boolean expression and why a config without it is refused", name)
+	for i, r := range mj.Config.Require {
+		if r.Else == "" {
+			return nil, fmt.Errorf("convert: %s: require %d states no refusal", name, i)
+		}
+		if _, err := parseExpr(r.That); err != nil {
+			return nil, fmt.Errorf("convert: %s: require %d: %w", name, i, err)
 		}
 	}
 	for _, p := range mj.Tensors.Present {
@@ -901,6 +906,9 @@ func mjWindowSlides(l *mjWindowLayers, eval func(what, src string) (any, error),
 				if !ok {
 					return nil, fmt.Errorf("layer %d's type is %v, not a name", i, t)
 				}
+				if l.Full != "" && s != l.Slides && s != l.Full {
+					return nil, fmt.Errorf("layer %d's type is %q, not %q or %q: %w", i, s, l.Slides, l.Full, ErrNotImplemented)
+				}
 				slides[i] = s == l.Slides
 			}
 			return slides, nil
@@ -982,7 +990,12 @@ func mjGraphKeys() map[string]any {
 	return map[string]any{
 		"partial_rotary_factor":                 1.0,
 		"rope_parameters.partial_rotary_factor": 1.0,
-		"sliding_window":                        nil,
+		// A rope dict carries it too, and the default and YaRN rotaries read
+		// it from there: one per layer type, or the legacy rope_scaling.
+		"rope_scaling.partial_rotary_factor":                      1.0,
+		"rope_parameters.full_attention.partial_rotary_factor":    1.0,
+		"rope_parameters.sliding_attention.partial_rotary_factor": 1.0,
+		"sliding_window": nil,
 		// clip_qkv clamps q, k and v; where the clamp falls against a q/k norm
 		// is the graph's, and no file states one yet.
 		"clip_qkv": nil,
@@ -1075,12 +1088,16 @@ func (mj *modelJSON) configIn(env exprEnv, c *hfConfig, names []string) (*Config
 		}
 	}
 
-	for _, r := range mj.Config.Require {
-		v, err := eval("require", r.That)
+	for i, r := range mj.Config.Require {
+		v, err := eval(fmt.Sprintf("require %d", i), r.That)
 		if err != nil {
 			return nil, err
 		}
-		if v != true {
+		ok, isBool := v.(bool)
+		if !isBool {
+			return nil, fmt.Errorf("convert: %s: %s: require %d is %s, not a boolean", c.path, mj.name, i, exprKind(v))
+		}
+		if !ok {
 			return nil, fmt.Errorf("convert: %s: %s: %s: %w", c.path, mj.name, r.Else, ErrNotImplemented)
 		}
 	}
