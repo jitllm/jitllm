@@ -30,7 +30,9 @@ func TestOpenRefusesAContainerThatStatesNoActivations(t *testing.T) {
 		t.Fatal(err)
 	}
 	if changed, err := jlm.Restate(old, func(_ *jlm.File, c *jlm.Config) (bool, error) {
-		c.Acts, c.ActLayers = nil, nil
+		// A container written before activations were stated predates
+		// stated block graphs too, which carry each activation as ops.
+		c.Acts, c.ActLayers, c.Blocks = nil, nil, jlm.BlockGraphs{}
 		return true, nil
 	}); err != nil || !changed {
 		t.Fatalf("writing the container without its activations: changed %v, %v", changed, err)

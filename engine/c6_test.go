@@ -375,6 +375,13 @@ func dropVecs(m *model.Model, roles ...jlm.Role) func() {
 // that states its graphs (builtGraphs).
 func restate(m *model.Model, f func(inv map[jlm.Role]graph.Shape)) func() {
 	undoB := builtGraphs(m)
+	undo := restateInventory(m, f)
+	return func() { undo(); undoB() }
+}
+
+// restateInventory has the front end read every block's stored tensors
+// through f until the returned undo, over the graphs the container states.
+func restateInventory(m *model.Model, f func(inv map[jlm.Role]graph.Shape)) func() {
 	fr := &m.Front
 	fr.Mu.Lock()
 	was := fr.Restate
@@ -393,7 +400,6 @@ func restate(m *model.Model, f func(inv map[jlm.Role]graph.Shape)) func() {
 		fr.Restate = was
 		fr.Restated++
 		fr.Mu.Unlock()
-		undoB()
 	}
 }
 

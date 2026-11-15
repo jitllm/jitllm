@@ -169,7 +169,7 @@ func TestFrontRefusesWhatItDropsFromABlock(t *testing.T) {
 	if len(m.Container.Config().Blocks.Of) == 0 {
 		t.Fatal("Qwen3-0.6B states no block graphs: the stated arm would not be selected")
 	}
-	undo := restate(m, func(inv map[jlm.Role]graph.Shape) { inv[jlm.RolePostAttnNorm] = graph.Shape{K: m.Cfg.NEmbd} })
+	undo := restateInventory(m, func(inv map[jlm.Role]graph.Shape) { inv[jlm.RolePostAttnNorm] = graph.Shape{K: m.Cfg.NEmbd} })
 	why, err := m.Uncovered(0), m.UncoveredErr(0)
 	undo()
 	if why != model.UncoveredUnbound || err == nil || !strings.Contains(err.Error(), jlm.RolePostAttnNorm.String()) {

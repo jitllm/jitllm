@@ -371,6 +371,30 @@ func ggufGraph(arch string) (*mjGraph, error) {
 	return g, nil
 }
 
+// archGraph is the graph the library states for the GGUF architectures that
+// convert as a, nil where no file claims one: a safetensors class of the Go
+// table states what a GGUF of its architecture states, its container being
+// that architecture's.
+func archGraph(a Arch) (*mjGraph, error) {
+	files, err := libraryFiles()
+	if err != nil {
+		return nil, err
+	}
+	archs := archOf()
+	var g *mjGraph
+	var by string
+	for _, mj := range files {
+		if !slices.ContainsFunc(mj.GGUF, func(n string) bool { return archs[n] == a }) {
+			continue
+		}
+		if g != nil {
+			return nil, fmt.Errorf("convert: architecture %v's graph is stated by both %s and %s", a, by, mj.name)
+		}
+		g, by = mj.Graph, mj.name
+	}
+	return g, nil
+}
+
 // WithModelJSON converts a safetensors model by the model.json at path,
 // ahead of the model's own and the library's.
 func WithModelJSON(path string) Option {

@@ -725,7 +725,7 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 		pre := &c.stated.Blocks[li].Pre
 		y, ex, err := m.streamRead(b, f, pre, st.in, x, x, pleIn, m.blockOps(b, li))
 		if err == nil {
-			st.in, err = m.streamWrites(b, f, pre, st.in, y, ex)
+			st.in, err = graph.StreamWrites(b, f, pre, st.in, y, ex)
 		}
 		if err != nil {
 			return nil, UncoveredStreams, fmt.Errorf("block %d's stated addition: %w", li, err)
@@ -1105,7 +1105,7 @@ func (m *Model) blockRest(b *graph.Builder, f graph.Facts, li int, x, n, att gra
 	switch {
 	case st != nil && len(c.stated.Blocks[li].Attn.Writes) != 0:
 		var err error
-		if st.cur, err = m.streamWrites(b, f, &c.stated.Blocks[li].Attn, st.in, norm(proj, jlm.RolePostAttnNorm), st.ex); err != nil {
+		if st.cur, err = graph.StreamWrites(b, f, &c.stated.Blocks[li].Attn, st.in, norm(proj, jlm.RolePostAttnNorm), st.ex); err != nil {
 			return nil, UncoveredStreams, fmt.Errorf("block %d's stated attention writes: %w", li, err)
 		}
 	default:
@@ -1113,7 +1113,7 @@ func (m *Model) blockRest(b *graph.Builder, f graph.Facts, li int, x, n, att gra
 	}
 	if st != nil && c.stated.Blocks[li].Attn.Join != nil {
 		var err error
-		if x2, err = m.streamJoin(b, f, &c.stated.Blocks[li].Attn, x, norm(proj, jlm.RolePostAttnNorm), resid); err != nil {
+		if x2, err = graph.StreamJoin(b, f, &c.stated.Blocks[li].Attn, x, norm(proj, jlm.RolePostAttnNorm), resid); err != nil {
 			return nil, UncoveredStreams, fmt.Errorf("block %d's stated attention join: %w", li, err)
 		}
 		x2 = postResid(x2, jlm.RoleAttnOutNorm, jlm.RoleAttnOutNormBias)
@@ -1183,7 +1183,7 @@ func (m *Model) blockRest(b *graph.Builder, f graph.Facts, li int, x, n, att gra
 		if st.cur != nil {
 			cur = st.cur
 		}
-		out, err := m.streamWrites(b, f, &c.stated.Blocks[li].FFN, cur, norm(ffn, jlm.RolePostFFNNorm), st.ex)
+		out, err := graph.StreamWrites(b, f, &c.stated.Blocks[li].FFN, cur, norm(ffn, jlm.RolePostFFNNorm), st.ex)
 		if err != nil {
 			return nil, UncoveredStreams, fmt.Errorf("block %d's stated FFN writes: %w", li, err)
 		}
@@ -1191,7 +1191,7 @@ func (m *Model) blockRest(b *graph.Builder, f graph.Facts, li int, x, n, att gra
 		return verified(b, f)
 	}
 	if st != nil {
-		y, err := m.streamJoin(b, f, &c.stated.Blocks[li].FFN, x2, norm(ffn, jlm.RolePostFFNNorm), resid)
+		y, err := graph.StreamJoin(b, f, &c.stated.Blocks[li].FFN, x2, norm(ffn, jlm.RolePostFFNNorm), resid)
 		if err != nil {
 			return nil, UncoveredStreams, fmt.Errorf("block %d's stated FFN join: %w", li, err)
 		}

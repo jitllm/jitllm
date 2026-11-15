@@ -92,9 +92,10 @@ func noTemp(m *model.Model) func() { return cfgMut(m, func(c *model.Config) { c.
 
 // unitRopeScale takes mistral3's YaRN magnitude off cos and sin.
 func unitRopeScale(m *model.Model) func() {
+	undo := builtGraphs(m)
 	was := m.Rope.Scale
 	m.Rope.Scale = 1
-	return func() { m.Rope.Scale = was }
+	return func() { m.Rope.Scale = was; undo() }
 }
 
 // kFromQ gives each block's k norm the first n_kv*head_dim of q's weight: the

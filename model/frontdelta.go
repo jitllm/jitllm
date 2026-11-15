@@ -89,7 +89,7 @@ func (m *Model) deltaMixer(b *graph.Builder, f graph.Facts, n graph.ValueID, has
 	if c.DeltaDecay == nil || c.DeltaGate == nil {
 		return 0, fmt.Errorf("a delta rule with no stated decay or gate")
 	}
-	decay, err := lowerStated(b, c.DeltaDecay, []graph.ValueID{alpha}, f)
+	decay, err := graph.LowerStated(b, c.DeltaDecay, []graph.ValueID{alpha}, f)
 	if err != nil {
 		return 0, fmt.Errorf("the delta rule's decay: %w", err)
 	}
@@ -100,7 +100,7 @@ func (m *Model) deltaMixer(b *graph.Builder, f graph.Facts, n graph.ValueID, has
 		graph.Attrs{NHead: vh, NKVHead: kh, HeadDim: dk, Tiled: g.Tiled, Span: stateSpan(c, vh*dv*dk)},
 		[]graph.StateRef{{State: graph.StateRecState, Version: at}}, []graph.StateRef{{State: graph.StateRecState, Version: at + 1}})[0]
 	o = b.HeadNorm(o, jlm.RoleSSMNorm, dv, c.RMSEps)
-	gated, err := lowerStated(b, c.DeltaGate, []graph.ValueID{z, o}, f)
+	gated, err := graph.LowerStated(b, c.DeltaGate, []graph.ValueID{z, o}, f)
 	if err != nil {
 		return 0, fmt.Errorf("the delta rule's gate: %w", err)
 	}

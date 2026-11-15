@@ -164,6 +164,7 @@ func TestSynthLlama4MatchesTransformers(t *testing.T) {
 func TestSynthLlama4FeaturesAreLoadBearing(t *testing.T) {
 	m, g, openOpts := openSynthLlama4(t)
 	defer m.Close()
+	defer builtGraphs(m)()
 	cfg := *m.Cfg
 	for _, v := range []struct {
 		name string

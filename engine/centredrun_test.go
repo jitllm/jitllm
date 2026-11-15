@@ -50,6 +50,9 @@ func centredModel(t *testing.T) *model.Model {
 			t.Fatal("LFM2 350M states itself non-causal already: the gate would restate nothing")
 		}
 		c.Flags |= jlm.FlagNonCausal
+		// The blocks build from the restated config: the stated graphs are
+		// the causal ones.
+		c.Blocks = jlm.BlockGraphs{}
 		return true, nil
 	}); err != nil || !changed {
 		t.Fatalf("restating the mask: changed %v, %v", changed, err)

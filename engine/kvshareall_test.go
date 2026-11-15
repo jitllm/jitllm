@@ -50,6 +50,7 @@ func TestKVSharingOnEveryBlockKind(t *testing.T) {
 					t.Fatalf("%s has no two blocks that attend", name)
 				}
 				if share {
+					defer builtGraphs(m)()
 					c.NKVShared = c.NLayer - last
 					// A sharing block stores no key, value or latent of its own.
 					m.Front.Restate = func(block int32, inv map[jlm.Role]graph.Shape) {

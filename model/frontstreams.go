@@ -61,95 +61,15 @@ func (c *Config) ResidStreams() bool { return c.stated != nil && len(c.stated.Ex
 //	in_f = mix(x_1..x_nb', x_0')                    with the input banked
 //	x_0'' = x_0' + ffn(in_f)
 
-// streamRead is the input u reads -- its program over the streams it names:
-// stream k as it is now (xs), stream 0 as the block received it (in), the
-// running residual (run) or the block's per-layer inputs (side) -- or run
-// where it states none, and the values its program exports.
+// streamRead is graph.StreamRead over the block's per-layer inputs alone
+// where the side row carries the taps' rows before them.
 func (m *Model) streamRead(b *graph.Builder, f graph.Facts, u *jlm.SubStreams, xs []graph.ValueID, in, run, side graph.ValueID,
 	ops func([]graph.ValueID, *jlm.TowerOp) (graph.ValueID, error)) (graph.ValueID, []graph.ValueID, error) {
 	if c := m.Cfg; side != 0 && c.TapsWidth() > 0 && c.PLEDim != 0 {
 		side = b.Emit(graph.OpSlice, []graph.ValueID{side}, []graph.Result{{Name: "side.ple", Width: c.PleWidth()}}, nil,
 			graph.Attrs{Offset: c.TapsWidth(), Width: c.PleWidth()}, nil, nil)[0]
 	}
-	if u.Read == nil {
-		return run, nil, nil
-	}
-	ins := make([]graph.ValueID, len(u.From))
-	for j, k := range u.From {
-		switch k {
-		case jlm.StreamIn:
-			ins[j] = in
-		case jlm.StreamRun:
-			ins[j] = run
-		case jlm.StreamSide:
-			if side == 0 {
-				return 0, nil, fmt.Errorf("a read of the per-layer inputs in a block that has none")
-			}
-			ins[j] = side
-		default:
-			ins[j] = xs[k]
-		}
-	}
-	if len(u.Read.Ops) == 0 {
-		ex := make([]graph.ValueID, len(u.Exports))
-		for i, e := range u.Exports {
-			ex[i] = ins[e]
-		}
-		return ins[u.Read.Out], ex, nil
-	}
-	vals, err := graph.LowerValues(b, nil, u.Read, ins, 1, f, ops)
-	if err != nil {
-		return 0, nil, err
-	}
-	ex := make([]graph.ValueID, len(u.Exports))
-	for i, e := range u.Exports {
-		ex[i] = vals[e]
-	}
-	return vals[u.Read.Out], ex, nil
-}
-
-// streamWrites is every stream after a sublayer whose output is y: u's
-// write of stream k over it as it is (xs[k]), y, the read's exports and what
-// u's writes share (Post), the stream as it is where u writes none.
-func (m *Model) streamWrites(b *graph.Builder, f graph.Facts, u *jlm.SubStreams, xs []graph.ValueID, y graph.ValueID, ex []graph.ValueID) ([]graph.ValueID, error) {
-	out := slices.Clone(xs)
-	shared := ex
-	if u.Post != nil {
-		v, err := lowerStated(b, u.Post, append([]graph.ValueID{y}, ex...), f)
-		if err != nil {
-			return nil, fmt.Errorf("what the writes share: %w", err)
-		}
-		shared = append(slices.Clone(ex), v)
-	}
-	for k, p := range u.Writes {
-		if p == nil {
-			continue
-		}
-		v, err := lowerStated(b, p, append([]graph.ValueID{xs[k], y}, shared...), f)
-		if err != nil {
-			return nil, fmt.Errorf("stream %d's write: %w", k, err)
-		}
-		out[k] = v
-	}
-	return out, nil
-}
-
-// streamJoin is the running residual after a sublayer: u's join over run
-// and the sublayer's output y, or their sum where it states none.
-func (m *Model) streamJoin(b *graph.Builder, f graph.Facts, u *jlm.SubStreams, run, y graph.ValueID, sum func(x, y graph.ValueID) graph.ValueID) (graph.ValueID, error) {
-	if u.Join == nil {
-		return sum(run, y), nil
-	}
-	return lowerStated(b, u.Join, []graph.ValueID{run, y}, f)
-}
-
-// lowerStated lowers a stated program over in; one of no op returns the
-// input it names.
-func lowerStated(b *graph.Builder, p *jlm.Program, in []graph.ValueID, f graph.Facts) (graph.ValueID, error) {
-	if len(p.Ops) == 0 {
-		return in[p.Out], nil
-	}
-	return graph.LowerProgram(b, nil, p, in, 1, f)
+	return graph.StreamRead(b, f, u, xs, in, run, side, ops)
 }
 
 // StatesStreams says the model's several residual streams are the ones the
@@ -215,7 +135,7 @@ func (m *Model) streamExpand(b *graph.Builder, f graph.Facts, x graph.ValueID) (
 			out = append(out, streamCopy(b, x))
 			continue
 		}
-		v, err := lowerStated(b, p, []graph.ValueID{x}, f)
+		v, err := graph.LowerStated(b, p, []graph.ValueID{x}, f)
 		if err != nil {
 			return nil, fmt.Errorf("stream %d's expansion: %w", k+1, err)
 		}

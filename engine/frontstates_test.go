@@ -312,6 +312,7 @@ func TestFrontStatesTheNormsInsideASublayer(t *testing.T) {
 	if !m.Cfg.TokenAct {
 		t.Fatal("the fixture does not quantize per token: this gate is about a model that does")
 	}
+	defer builtGraphs(m)()
 	m.Cfg.TokenAct = false
 	var stated []int
 	for li := range m.Cfg.NLayer {

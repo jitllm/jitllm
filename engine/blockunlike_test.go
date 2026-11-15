@@ -20,6 +20,7 @@ import (
 func TestABlockUnlikeItsSetRunsOnTheCard(t *testing.T) {
 	m, g, openOpts := openSynthLlama4(t)
 	defer m.Close()
+	defer builtGraphs(m)()
 	cfg := *m.Cfg
 	decode := func(st *Instance) [][]float32 {
 		var out [][]float32

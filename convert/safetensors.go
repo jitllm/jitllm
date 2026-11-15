@@ -584,8 +584,15 @@ func hfSourceWith(dir hfDir, shards []*safetensors.File, modelJSON string) (*jlm
 	}
 	StateDelta(cfg.Config, sourceStores(s))
 	StateRevision(cfg)
-	if ha.graph != nil {
-		if err := StateBlockGraphs(cfg, s, ha.graph); err != nil {
+	g := ha.graph
+	if g == nil {
+		var err error
+		if g, err = archGraph(cfg.Arch); err != nil {
+			return nil, err
+		}
+	}
+	if g != nil {
+		if err := StateBlockGraphs(cfg, s, g); err != nil {
 			return nil, err
 		}
 	}

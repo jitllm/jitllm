@@ -181,7 +181,9 @@ func TestLayaFeaturesAreLoadBearing(t *testing.T) {
 		{"SiLU for GELU", func(c *jlm.Config) { c.Acts, c.ActLayers = silu.Acts, silu.ActLayers }},
 	} {
 		t.Run(v.name, func(t *testing.T) {
-			rm := restatedCopy(t, path, v.restate)
+			// The copy builds its blocks from the restated config: the
+			// graphs the container states are the unviolated ones.
+			rm := restatedCopy(t, path, func(c *jlm.Config) { v.restate(c); c.Blocks = jlm.BlockGraphs{} })
 			defer rm.Close()
 			bad := markerWorst(t, rm, mc.gold, same)
 			t.Logf("%s: scores %.4f from the reference", v.name, bad)
