@@ -18,21 +18,15 @@ type RopeTable struct {
 	// first row and column. A row past the grid's cells (a class row after
 	// them) is not turned.
 	Lead, Origin int
-	// Sections, Interleaved, Cycle and CycleAxes are the rotary's position
-	// axes (Attrs.Sections, Attrs.Interleaved, Attrs.Cycle): where Sections
-	// or Cycle is set, a row has a position on each axis and each pair turns
-	// by its axis's.
-	Sections    [4]int
-	Interleaved bool
-	Cycle       int
-	CycleAxes   [4]uint8
+	// Axes is each pair's position axis (Attrs.Axes): where set, a row has a
+	// position on each axis and each pair turns by its axis's.
+	Axes []uint8
 }
 
 // Rotary is one rotary a model turns its heads by, as its rotary ops state
 // it: the width turned, the base, whether stored factors divide the
 // angles, whether its positions are grid cells (RopeTable.Grid), and the
-// position axes its pairs turn by (Attrs.Sections, Attrs.Interleaved,
-// Attrs.Cycle).
+// position axis each of its pairs turns by (Attrs.Axes).
 type Rotary struct {
 	NRot          int
 	Base          float64
@@ -42,11 +36,8 @@ type Rotary struct {
 	Lead          int
 	// Origin is a grid cell's position on each axis at the grid's first
 	// row and column (RopeTable.Origin).
-	Origin      int
-	Sections    [4]int
-	Interleaved bool
-	Cycle       int
-	CycleAxes   [4]uint8
+	Origin int
+	Axes   []uint8
 }
 
 // Build is the table's graph: each row's positions on the rotary axes from
@@ -63,8 +54,8 @@ func (r *RopeTable) Build() *Graph {
 		g.op(Op{Kind: OpRopePos, Out: []ValueID{pos}})
 		in = []ValueID{pos}
 	}
-	g.op(Op{Kind: OpRopeTable, In: in, Out: []ValueID{cs}, Attr: Attrs{NRot: r.NRot, Rotary: r.Index, Grid: r.Grid, Sections: r.Sections, Interleaved: r.Interleaved,
-		Cycle: r.Cycle, CycleAxes: r.CycleAxes, Width: r.Merge, Window: r.Window, Offset: r.Lead, Origin: r.Origin}})
+	g.op(Op{Kind: OpRopeTable, In: in, Out: []ValueID{cs}, Attr: Attrs{NRot: r.NRot, Rotary: r.Index, Grid: r.Grid, Axes: r.Axes,
+		Width: r.Merge, Window: r.Window, Offset: r.Lead, Origin: r.Origin}})
 	return g
 }
 

@@ -12,6 +12,7 @@ import (
 	"github.com/jitllm/jitllm/composer"
 	"github.com/jitllm/jitllm/composer/ir"
 	"github.com/jitllm/jitllm/engine/device/cpu"
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/nn"
 )
@@ -85,10 +86,14 @@ func composedRopeAxes(t *testing.T, run ropeRunner, rows int) {
 			rope := nn.Rope{NRot: 2 * tc.pairs, Base: 1e6, Neox: true}
 			axis := make([]int, tc.pairs)
 			if multi {
-				rope.Runs = nn.MRopeRuns(tc.sections[:])
-				if tc.interleaved {
-					rope.Runs = nn.IMRopeRuns(tc.sections[:], tc.pairs)
+				c := jlm.Config{NRot: uint32(rope.NRot)}
+				for i, n := range tc.sections {
+					c.RopeSections[i] = uint32(n)
 				}
+				if tc.interleaved {
+					c.Flags |= jlm.FlagRopeInterleaved
+				}
+				rope.Runs = nn.PairRuns(c.RopePairs())
 				p := 0
 				for _, u := range rope.Runs {
 					for range u.Pairs {
@@ -100,7 +105,7 @@ func composedRopeAxes(t *testing.T, run ropeRunner, rows int) {
 					t.Fatalf("main's runs cover %d of %d pairs", p, tc.pairs)
 				}
 			}
-			got := run(t, rope, tc.sections, tc.interleaved, at)
+			got := run(t, rope, at)
 			worst := 0.0
 			for r := range rows {
 				for p := range tc.pairs {
@@ -130,7 +135,7 @@ func composedRopeAxes(t *testing.T, run ropeRunner, rows int) {
 			for r := range rows {
 				var flat [composer.RopeAxes][]float32
 				for a, p := range at[r] {
-					flat[a] = run(t, plain, [4]int{}, false, [][composer.RopeAxes]uint32{{p, p, p, p}})
+					flat[a] = run(t, plain, [][composer.RopeAxes]uint32{{p, p, p, p}})
 				}
 				for p, a := range axis {
 					dst := r*2*tc.pairs + 2*p
@@ -185,7 +190,7 @@ func composedRopeAxes(t *testing.T, run ropeRunner, rows int) {
 // a row each of at, each row at its positions on the rotary axes, with the
 // planes the model folds (nn.Rope.TabPlanes) and the blocks the plan
 // carries, and returns the table, its guard checked.
-type ropeRunner func(t *testing.T, rope nn.Rope, sections [4]int, interleaved bool, at [][composer.RopeAxes]uint32) []float32
+type ropeRunner func(t *testing.T, rope nn.Rope, at [][composer.RopeAxes]uint32) []float32
 
 // ropeRowTables is the rows' table and the marks that put each row of at at
 // its positions (OpRopePos): a row whose axes agree is at its cache
@@ -260,9 +265,9 @@ func passedWords(codes []composer.Code, g *graph.Graph, rows int) map[string]int
 	return n
 }
 
-func composedRopeCodes(t *testing.T, d composer.Device, rope nn.Rope, sections [4]int, interleaved bool, rows, marks int) ([]composer.Code, *graph.Graph) {
+func composedRopeCodes(t *testing.T, d composer.Device, rope nn.Rope, rows, marks int) ([]composer.Code, *graph.Graph) {
 	t.Helper()
-	rt := graph.RopeTable{NRot: rope.NRot, Sections: sections, Interleaved: interleaved}
+	rt := graph.RopeTable{NRot: rope.NRot, Axes: rope.TableAxes()}
 	g := rt.Build()
 	_, codes, err := composer.Default().Form(composer.Request{Graph: g, Part: composer.PartTable,
 		Step: composer.Step{Rows: rows, Page: 64, Keys: 1, Seqs: rows, Marks: marks}, Device: d})
@@ -307,7 +312,7 @@ func planeWords(rope nn.Rope) []uint32 {
 
 // gpuRope launches the table on d.
 func gpuRope(d backend.Device) ropeRunner {
-	return func(t *testing.T, rope nn.Rope, sections [4]int, interleaved bool, at [][composer.RopeAxes]uint32) []float32 {
+	return func(t *testing.T, rope nn.Rope, at [][composer.RopeAxes]uint32) []float32 {
 		t.Helper()
 		rows := len(at)
 		rowTab, marksTab, marks := ropeRowTables(t, at)
@@ -320,7 +325,7 @@ func gpuRope(d backend.Device) ropeRunner {
 			units = m.Multiprocessors()
 		}
 		codes, g := composedRopeCodes(t, composer.Device{Kind: composer.DeviceGPU, Slots: d.Slots(), Lanes: lanes, Units: units, ExactDiv: composer.ExactDivOn(d.API())},
-			rope, sections, interleaved, rows, marks)
+			rope, rows, marks)
 		gg := newGPU(t, d)
 		defer gg.free()
 		n := rows * rope.NRot
@@ -372,12 +377,12 @@ func gpuRope(d backend.Device) ropeRunner {
 
 // cpuRope calls the table on this host's CPU, each code once a call of its
 // calls' space, each operand where its call words say.
-func cpuRope(t *testing.T, rope nn.Rope, sections [4]int, interleaved bool, at [][composer.RopeAxes]uint32) []float32 {
+func cpuRope(t *testing.T, rope nn.Rope, at [][composer.RopeAxes]uint32) []float32 {
 	t.Helper()
 	rows := len(at)
 	rowTab, marksTab, marks := ropeRowTables(t, at)
 	codes, g := composedRopeCodes(t, composer.Device{Kind: composer.DeviceCPU, Slots: 1, Lanes: 8, ISA: uint64(cpu.Probe().ISA()), ExactDiv: true},
-		rope, sections, interleaved, rows, marks)
+		rope, rows, marks)
 	n := rows * rope.NRot
 	out := guardedTable(n)
 	tables := map[string][]uint32{"rope.rows": rowTab, "rope.marks": marksTab, "rope.planes": planeWords(rope), "rope.cs": out}

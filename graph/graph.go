@@ -147,8 +147,8 @@ const (
 	// With Span set it is a value, not the step's table: each row's at its
 	// position floored to a multiple of Span (a window's first), of rotary
 	// Rotary's planes.
-	// Where Sections or Cycle states several axes, a row has a position on
-	// each, and a pair's angle is its axis's position's.
+	// Where Axes states several axes, a row has a position on each, and a
+	// pair's angle is its axis's position's.
 	OpRopeTable
 	// OpEmbed is a step's input rows: each row's token's row of Weight[0],
 	// the token a word of the step's own a row; where Positional, each
@@ -913,22 +913,18 @@ type Attrs struct {
 	Base    float64
 	Layout  RopeLayout
 	Freqs   bool // the rotary divides each pair's theta by stored factors (the container's rope_freqs)
-	// Sections splits the rotary's pairs between a row's position axes
-	// (M-RoPE: time, height, width and a fourth); all zero is one axis.
-	// Contiguous, Sections[i] consecutive pairs turn by axis i, the
-	// sections covering every pair. Interleaved assigns the axes pair by
-	// pair: pair p by axis 1 where p%3 == 1 and p < 3*Sections[1], by axis 2
-	// where p%3 == 2 and p < 3*Sections[2], by axis 0 otherwise. Pair p's
-	// frequency is p's either way. The row's positions on each axis are the
-	// row's, so OpRope is the same rotation over a table built per row
-	// (OpRopeTable's, which reads them).
+	// Axes is OpRopeTable's pair map: pair p turns by the row's position on
+	// axis Axes[p], at the frequency the rotary's planes fold for it; empty
+	// is one axis. OpRope is the same rotation over a table built per row.
+	Axes []uint8
+	// Sections, Interleaved, Cycle and CycleAxes are read by nothing: a
+	// graph stored before the table carried its pair map (Axes) stated its
+	// axes here, and the table states them now. They stay because a stored
+	// graph reads a field by its name (TestStoredFieldsOnlyGrow).
 	Sections    [4]int
 	Interleaved bool
-	// Cycle, where set (Sections all zero), assigns the axes pair by pair
-	// in a cycle of Cycle pairs: pair p turns by axis CycleAxes[p%Cycle], at
-	// the frequency of its cycle's first pair (p - p%Cycle).
-	Cycle     int
-	CycleAxes [4]uint8
+	Cycle       int
+	CycleAxes   [4]uint8
 	// Mscale multiplies the rotary's cos and sin; 0 is one.
 	Mscale  float64
 	NHead   int

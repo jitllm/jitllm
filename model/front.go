@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"slices"
 	"sync"
 
 	"github.com/jitllm/jitllm/composer"
@@ -286,13 +285,7 @@ func (c Composing) Rotaries() []graph.Rotary {
 }
 
 func (m *Model) rotaryOf(r nn.Rope) graph.Rotary {
-	g := graph.Rotary{NRot: r.NRot, Base: r.Base, Freqs: len(r.Freqs) > 0}
-	g.Sections, g.Interleaved = m.ropeAxes(r)
-	// A split rotary's table holds a pair an element (graph.RopeSplit).
-	if m.Cfg.RopeXD && len(r.Runs) != 0 {
-		g.NRot *= 2
-	}
-	return g
+	return graph.Rotary{NRot: 2 * r.TablePairs(), Base: r.Base, Freqs: len(r.Freqs) > 0, Axes: r.TableAxes()}
 }
 
 func (c Composing) Tower() bool { return false }
@@ -560,33 +553,6 @@ func (m *Model) ropeAt(li int) nn.Rope {
 		return *m.RopeSWA
 	}
 	return m.Rope
-}
-
-// ropeAxes is the position axes rotary r turns its pairs by, as the op
-// language states them (graph.Attrs.Sections, Interleaved): none for a
-// rotary of one position. Under XD-RoPE an element of a head is a pair of
-// the table (graph.RopeSplit), and section i is 2*sections[i] of them: the
-// chunks of a head's elements its coordinates turn.
-func (m *Model) ropeAxes(r nn.Rope) (sections [4]int, interleaved bool) {
-	if len(r.Runs) == 0 {
-		return sections, false
-	}
-	if m.Cfg.RopeXD {
-		for i, n := range m.Cfg.RopeSections {
-			sections[i] = 2 * n
-		}
-		return sections, false
-	}
-	// The runs say how the sections lie over the pairs: one after another
-	// (Qwen2-VL's) or interleaved (Qwen3-VL's).
-	sec, il := m.Cfg.RopeSections, m.Cfg.RopeInterleaved
-	switch {
-	case slices.Equal(r.Runs, nn.IMRopeRuns(sec[:], r.NRot/2)):
-		il = true
-	case slices.Equal(r.Runs, nn.MRopeRuns(sec[:])):
-		il = false
-	}
-	return sec, il
 }
 
 // blockGraph is block li's graph: the attention block the container states
@@ -883,7 +849,6 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 			layout = graph.RopeNeox
 		}
 		a := graph.Attrs{HeadDim: hd, NRot: r.NRot, Base: r.Base, Layout: layout, Freqs: len(r.Freqs) > 0, Mscale: r.Scale}
-		a.Sections, a.Interleaved = m.ropeAxes(r)
 		if c.RopeTail {
 			a.Offset = hd - r.NRot
 		}
@@ -1521,7 +1486,6 @@ func (m *Model) latentAttention(b *graph.Builder, f graph.Facts, li int, n, qIn,
 			layout = graph.RopeNeox
 		}
 		a := graph.Attrs{HeadDim: rot, NRot: r.NRot, Base: r.Base, Layout: layout, Freqs: len(r.Freqs) > 0, Mscale: r.Scale}
-		a.Sections, a.Interleaved = m.ropeAxes(r)
 		qpe = b.Emit(graph.OpRope, []graph.ValueID{qpe}, []graph.Result{{Name: "q.pe.rope", Width: nh * rot}}, nil, a, nil, nil)[0]
 		if !shared {
 			kpe = b.Emit(graph.OpRope, []graph.ValueID{kpe}, []graph.Result{{Name: "k.pe.rope", Width: rot}}, nil, a, nil, nil)[0]
@@ -2225,7 +2189,6 @@ func (m *Model) selected(b *graph.Builder, li int, ix indexed, hist graph.StateR
 		if c.RopeAt(li) {
 			r := m.ropeAt(li)
 			a.NRot, a.Base, a.Layout, a.Freqs, a.Mscale = r.NRot, r.Base, ropeLayout(r.Neox), len(r.Freqs) > 0, r.Scale
-			a.Sections, a.Interleaved = m.ropeAxes(r)
 		}
 		return b.SelectPooled(ix.query, hist, a, s.PoolNorm)
 	}
@@ -2262,7 +2225,6 @@ func (m *Model) blockOps(b *graph.Builder, li int) func(ins []graph.ValueID, op 
 				layout = graph.RopeNeox
 			}
 			a := graph.Attrs{HeadDim: int(op.Span), NRot: r.NRot, Base: r.Base, Layout: layout, Freqs: len(r.Freqs) > 0, Mscale: r.Scale}
-			a.Sections, a.Interleaved = m.ropeAxes(r)
 			if c.RopeTail {
 				a.Offset = int(op.Span) - r.NRot
 			}

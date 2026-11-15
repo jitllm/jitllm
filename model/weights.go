@@ -25,27 +25,15 @@ func RopeTabPlanes(r *nn.Rope, nrot int) []float32 {
 	return r.TabPlanes(nrot / 2)
 }
 
-// ropeAxesPlanes is the folded planes of a rotary over several position
+// RopeAxesPlanes is the folded planes of a rotary over several position
 // axes, nil for any other: the composer's table reads them with each row's
-// positions on the axes (nn.RopeAxesDevice). A split rotary's table (XD-RoPE)
-// holds a pair an element, element i+nrot/2 at pair i's frequency: the
-// planes of the nrot/2 pairs twice.
-func RopeAxesPlanes(r *nn.Rope, nrot int, split bool) []float32 {
-	if r == nil || nrot <= 0 || len(r.Runs) == 0 {
+// positions on the axes (nn.RopeAxesDevice), each of the table's pairs at the
+// frequency its run states.
+func RopeAxesPlanes(r *nn.Rope) []float32 {
+	if r == nil || r.NRot <= 0 || len(r.Runs) == 0 {
 		return nil
 	}
-	n := nrot / 2
-	p := r.TabPlanes(n)
-	if !split {
-		return p
-	}
-	out := make([]float32, graph.RopeBlock(2*n))
-	for k := range 2 * graph.RopeDigits {
-		src, dst := p[graph.RopePlaneOff(k, n):][:n], out[graph.RopePlaneOff(k, 2*n):]
-		copy(dst[copy(dst, src):], src)
-	}
-	out[graph.RopeScaleOff(2*n)] = p[graph.RopeScaleOff(n)]
-	return out
+	return r.TabPlanes(r.TablePairs())
 }
 
 // Model.splitBank is the Data of a bank that lives in expert pages. It is not
@@ -273,7 +261,7 @@ func (m *Model) CpuTablePlanes(i, ctx int) []float32 {
 	r := m.RopeFor(ctx)
 	switch {
 	case i == 0 && len(r.Runs) > 0:
-		return RopeAxesPlanes(r, m.Cfg.NRot, m.Cfg.RopeXD)
+		return RopeAxesPlanes(r)
 	case i == 0:
 		return RopeTabPlanes(r, m.Cfg.NRot)
 	}

@@ -1816,7 +1816,7 @@ func ropeIndex(gr *graph.Graph) (int, bool) {
 // row's positions on them (rope.pos.axes) rather than one (rope.pos).
 func tableAxes(gr *graph.Graph) bool {
 	for _, o := range gr.Ops {
-		if o.Kind == graph.OpRopeTable && o.Attr.Sections != [4]int{} {
+		if o.Kind == graph.OpRopeTable && len(o.Attr.Axes) != 0 {
 			return true
 		}
 	}

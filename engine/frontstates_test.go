@@ -350,12 +350,20 @@ func TestFrontStatesTheNormsInsideASublayer(t *testing.T) {
 // TestFrontStatesTheQwen35FixturesAttention holds a converted hybrid: its
 // recurrent mixers are refused by their kind, and its attention blocks -- an
 // output gate and a rotary over several position axes, interleaved -- are
-// stated, with the output gate's ops and every rotary carrying the sections
-// the container states, and form.
+// stated, with the output gate's ops and the rotary's table carrying the
+// pair map the container states, and form.
 func TestFrontStatesTheQwen35FixturesAttention(t *testing.T) {
 	m := frontModel(t, "synth-qwen35-hybrid-mtp.gguf")
 	if !m.Cfg.AttnOutGate || m.Cfg.RopeSections == [4]int{} {
 		t.Fatal("the fixture lost its output gate or its rotary sections: this gate is about both")
+	}
+	var axes []uint8
+	for _, p := range m.Container.Config().RopePairs() {
+		axes = append(axes, uint8(p.Axis))
+	}
+	rots := m.Composing().Rotaries()
+	if len(axes) == 0 || len(rots) == 0 || !slices.Equal(rots[0].Axes, axes) {
+		t.Fatalf("the rotary's table turns its pairs by the axes %v, where the container states %v", rots[0].Axes, axes)
 	}
 	var stated []int
 	mixers := 0
@@ -374,10 +382,6 @@ func TestFrontStatesTheQwen35FixturesAttention(t *testing.T) {
 			switch {
 			case o.Kind == graph.OpRope:
 				ropes++
-				if o.Attr.Sections != m.Cfg.RopeSections || o.Attr.Interleaved != m.Cfg.RopeInterleaved {
-					t.Fatalf("block %d: a rotary over sections %v (interleaved %v), where the container states %v (%v)",
-						li, o.Attr.Sections, o.Attr.Interleaved, m.Cfg.RopeSections, m.Cfg.RopeInterleaved)
-				}
 			case isOutGate(o):
 				gates++
 			}

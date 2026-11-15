@@ -35,7 +35,7 @@ func (s *Instance) axesPlanes() []float32 {
 	if s.towered() {
 		return nil
 	}
-	return model.RopeAxesPlanes(&s.m.Rope, s.c.NRot, s.c.RopeXD)
+	return model.RopeAxesPlanes(&s.m.Rope)
 }
 
 // gridPlanes is a tower's grid table's planes for a device

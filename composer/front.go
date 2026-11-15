@@ -110,8 +110,7 @@ type Model interface {
 // TableGraph is the step's table of rotary r, the model's i-th: its
 // PartTable part's graph.
 func TableGraph(r graph.Rotary, i int) *graph.Graph {
-	rt := graph.RopeTable{NRot: r.NRot, Index: i, Grid: r.Grid, Merge: r.Merge, Window: r.Window, Lead: r.Lead, Origin: r.Origin, Sections: r.Sections,
-		Interleaved: r.Interleaved, Cycle: r.Cycle, CycleAxes: r.CycleAxes}
+	rt := graph.RopeTable{NRot: r.NRot, Index: i, Grid: r.Grid, Merge: r.Merge, Window: r.Window, Lead: r.Lead, Origin: r.Origin, Axes: r.Axes}
 	return rt.Build()
 }
 

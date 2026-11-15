@@ -2,6 +2,8 @@ package nn
 
 import (
 	"math"
+
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // A multi-axis rotary: a position with more than one coordinate, each turning
@@ -17,7 +19,7 @@ import (
 //
 // All three are a table of {cos, sin} per pair, so the ROTATION is the one
 // every tier already runs (RoPE32JIT, the device's RoPERows): only the table
-// says which coordinate and which frequency a pair takes. A row whose
+// says which coordinate and which frequency a pair takes (jlm.RopePair). A row whose
 // coordinates are all equal and whose runs are one frequency sequence is the
 // plain table at that position, to the bit.
 
@@ -43,85 +45,45 @@ func (u RopeRun) step() int {
 	return u.Step
 }
 
-// MRopeRuns is Qwen2-VL's text M-RoPE: sections[i] consecutive pairs turned by
-// coordinate i, the frequencies one sequence across all of them (llama.cpp's
-// ggml_rope_multi, transformers' mrope_section). Empty sections are skipped; a
-// model whose sections are all zero has no runs.
-func MRopeRuns(sections []int) []RopeRun {
+// PairRuns is a rotary table's pairs (each its axis and frequency) as runs:
+// consecutive pairs of one axis whose frequencies follow one another are one
+// run. A table whose frequencies are its pairs' indices is one frequency
+// sequence, so a row whose coordinates agree is the plain table.
+func PairRuns(pairs []jlm.RopePair) []RopeRun {
 	var runs []RopeRun
-	off := 0
-	for ax, n := range sections {
-		if n <= 0 {
-			continue
-		}
-		runs = append(runs, RopeRun{Pairs: n, Axis: ax, Freq: off})
-		off += n
-	}
-	return runs
-}
-
-// IMRopeRuns is Qwen3-VL's INTERLEAVED M-RoPE over pairs pairs: pair i turns
-// by coordinate 1 (h) when i%3 == 1 and i < 3*sections[1], by 2 (w) when
-// i%3 == 2 and i < 3*sections[2], and by 0 (t) otherwise, at frequency i --
-// transformers' recomposition_frequencies. Consecutive pairs of one axis are
-// one run; the frequencies stay one sequence across all of them, so a row
-// whose coordinates agree is the plain table.
-func IMRopeRuns(sections []int, pairs int) []RopeRun {
-	sec := func(i int) int {
-		if i < len(sections) {
-			return sections[i]
-		}
-		return 0
-	}
-	var runs []RopeRun
-	for i := 0; i < pairs; i++ {
-		ax := 0
-		switch {
-		case i%3 == 1 && i < 3*sec(1):
-			ax = 1
-		case i%3 == 2 && i < 3*sec(2):
-			ax = 2
-		}
-		if n := len(runs); n > 0 && runs[n-1].Axis == ax {
+	for _, p := range pairs {
+		if n := len(runs); n > 0 && runs[n-1].Axis == p.Axis && runs[n-1].Freq+runs[n-1].Pairs == p.Freq {
 			runs[n-1].Pairs++
 			continue
 		}
-		runs = append(runs, RopeRun{Pairs: 1, Axis: ax, Freq: i})
+		runs = append(runs, RopeRun{Pairs: 1, Axis: p.Axis, Freq: p.Freq})
 	}
 	return runs
 }
 
-// XDRopeRuns is HunyuanVL's XD-RoPE over pairs NEOX pairs: transformers'
-// recomposition_frequencies takes cat(freq, freq) -- 2*pairs elements -- in
-// chunks of 2*sections[i] elements, chunk i turned by coordinate i mod
-// len(sections). Pair p's first element is element p and its second element
-// p+pairs, so the two halves fall in different chunks and take different
-// axes. a is the runs of the first halves, b of the second, the frequency
-// index p in both, so a row whose coordinates agree is the plain table twice.
-func XDRopeRuns(sections []int, pairs int) (a, b []RopeRun) {
-	// A zero section is an empty chunk that still takes its index, as
-	// torch's split hands enumerate one.
-	axis := func(e int) int {
-		for i, at := 0, 0; i < len(sections); i++ {
-			if at += 2 * sections[i]; e < at {
-				return i % len(sections)
-			}
-		}
-		return 0
+// TablePairs is how many pairs a table over r's runs holds: their pairs, or
+// NRot/2 for a rotary of one position.
+func (r *Rope) TablePairs() int {
+	if len(r.Runs) == 0 {
+		return r.NRot / 2
 	}
-	runsOf := func(off int) []RopeRun {
-		var runs []RopeRun
-		for p := 0; p < pairs; p++ {
-			ax := axis(p + off)
-			if n := len(runs); n > 0 && runs[n-1].Axis == ax {
-				runs[n-1].Pairs++
-				continue
-			}
-			runs = append(runs, RopeRun{Pairs: 1, Axis: ax, Freq: p})
-		}
-		return runs
+	n := 0
+	for _, u := range r.Runs {
+		n += u.Pairs
 	}
-	return runsOf(0), runsOf(pairs)
+	return n
+}
+
+// TableAxes is each pair's axis of a table over r's runs, none for a rotary
+// of one position.
+func (r *Rope) TableAxes() []uint8 {
+	var out []uint8
+	for _, u := range r.Runs {
+		for range u.Pairs {
+			out = append(out, uint8(u.Axis))
+		}
+	}
+	return out
 }
 
 // runRope is the single-axis rotary whose folded planes are run u's: the same
