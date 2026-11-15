@@ -108,6 +108,7 @@ func statedGraphModels() []string {
 		"synth-gemma4.gguf", "synth-gemma4-e.gguf", "synth-gemma4-e-ragged.gguf", "synth-gemma4-kv.gguf",
 		"synth-gemma4-moe.gguf", "synth-gemma4-wide.gguf", "synth-gemma4v.gguf",
 		"synth-gemma4v.gguf+mmproj-synth-gemma4v.gguf", "gemma4/google_gemma-4-E2B-it-Q4_K_M.gguf",
+		"gemma4/google_gemma-4-E4B-it-Q4_K_M.gguf", "gemma4/google_gemma-4-26B-A4B-it-Q4_K_M.gguf", "gemma4/gemma-4-31B-it-Q4_K_M.gguf",
 		"vlmb/gemma-4-E2B-it-Q4_K_M.gguf+vlmb/mmproj-gemma-4-E2B-it-BF16.gguf",
 	}
 }
