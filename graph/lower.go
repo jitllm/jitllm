@@ -330,8 +330,10 @@ func LowerValues(b *Builder, t *jlm.Tower, p *jlm.Program, in []ValueID, rows in
 			out = b.Emit(OpRowsAttend, ins, []Result{{Name: "attended", Width: w, Rows: rowsOf(ins[0])}}, nil,
 				Attrs{NHead: h, NKVHead: g, HeadDim: w / h, Scale: 1 / math.Sqrt(float64(w/h))}, nil, nil)[0]
 		case jlm.TOpFrames:
-			// The clip's samples are the sound op's the caller wires in.
-			out = Frames(b, nil, int(op.Width), int(op.Stride), rows, float64(op.Eps))
+			if len(ins) != 1 {
+				return nil, fmt.Errorf("frames of %d clips", len(ins))
+			}
+			out = Frames(b, ins[0], int(op.Width), int(op.Stride), rows, float64(op.Eps))
 		case jlm.TOpFeatureNorm:
 			out = FeatureNorm(b, name, ins[0], int(op.Offset), float64(op.Eps))
 		case jlm.TOpSplitRows:
@@ -445,10 +447,11 @@ func ProgramFrame(p *jlm.Program) (line, merge, trim int) {
 	return 0, 0, 0
 }
 
-// Frames is rows frames of a clip's samples (in, one value, or none for the
-// caller to wire in), width samples centred every stride, each sample less
-// pre times the one before it (a preemphasis), zero past either end.
-func Frames(b *Builder, in []ValueID, width, stride, rows int, pre float64) ValueID {
+// Frames is rows frames of a clip's samples, width samples centred every
+// stride, each sample less pre times the one before it (a preemphasis), zero
+// past either end.
+func Frames(b *Builder, clip ValueID, width, stride, rows int, pre float64) ValueID {
+	in := []ValueID{clip}
 	cur := b.Emit(OpGatherElems, in, []Result{{Name: "frames.cur", Width: width, Rows: rows}}, nil, FrameSamples(width, stride, 0), nil, nil)[0]
 	prev := b.Emit(OpGatherElems, in, []Result{{Name: "frames.prev", Width: width, Rows: rows}}, nil, FrameSamples(width, stride, 1), nil, nil)[0]
 	var x Index
@@ -492,9 +495,8 @@ func FeatureNorm(b *Builder, name string, x ValueID, drop int, eps float64) Valu
 // row q's over key j its dots with the table's row for the position q-j (row
 // k the position (t.Rows+1)/2-1-k).
 func RelativeBias(b *Builder, name string, x ValueID, t Binding, heads, keys, rows int) ValueID {
-	w := b.G.Values[x].Width
-	dots := b.Emit(OpHeadDots, []ValueID{x}, []Result{{Name: name + ".pos", Width: heads * t.Rows, Rows: b.G.Values[x].Rows}},
-		[]Binding{t}, Attrs{NHead: heads, HeadDim: w / heads}, nil, nil)[0]
-	return b.Emit(OpGatherElems, []ValueID{dots}, []Result{{Name: name + ".bias", Width: heads * keys, Rows: rows}}, nil,
-		RelShift(heads, keys, t.Rows, (t.Rows+1)/2), nil, nil)[0]
+	a := RelRows((t.Rows + 1) / 2)
+	a.NHead, a.HeadDim, a.Span = heads, b.G.Values[x].Width/heads, keys
+	return b.Emit(OpHeadDots, []ValueID{x}, []Result{{Name: name + ".bias", Width: heads * keys, Rows: rows}},
+		[]Binding{t}, a, nil, nil)[0]
 }

@@ -246,8 +246,8 @@ func TestVerifierHoldsASelection(t *testing.T) {
 // TestVerifierHoldsAGridsRows verifies a regroup and a row drop (a row
 // gather) that state their output's rows, over an input of the step's rows
 // and of its own, and refuses a regroup that states none over the step's rows
-// or whose rows are not its input's arithmetic -- a gather stating none
-// takes its input's.
+// or whose rows are not its input's arithmetic, and a drop that reads past
+// its input's rows.
 func TestVerifierHoldsAGridsRows(t *testing.T) {
 	build := func(inRows, groupRows, dropRows int) error {
 		b := NewBlock(-1)
@@ -265,7 +265,7 @@ func TestVerifierHoldsAGridsRows(t *testing.T) {
 	for _, c := range []struct {
 		in, group, drop int
 		want            string
-	}{{0, 0, 15, "states no rows"}, {64, 15, 14, "writes 15, not 16"}} {
+	}{{0, 0, 15, "states no rows"}, {64, 15, 14, "writes 15, not 16"}, {64, 16, 16, "reads row 16 of 16"}, {0, 16, 16, "reads row 16 of 16"}} {
 		if err := build(c.in, c.group, c.drop); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%+v: Verify said %v, want an error naming %q", c, err, c.want)
 		}
@@ -290,5 +290,26 @@ func TestVerifierHoldsAGridsRows(t *testing.T) {
 		if err := fold(c.in, c.out); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("a fold of %d rows into %d: Verify said %v, want an error naming %q", c.in, c.out, err, c.want)
 		}
+	}
+}
+
+// TestVerifierHoldsAGathersBound refuses a row gather whose bound, read off
+// its counts, leaves rows of its output unwritten, and verifies one whose
+// bound reaches them.
+func TestVerifierHoldsAGathersBound(t *testing.T) {
+	build := func(last int) error {
+		b := NewBlock(-1)
+		x := b.In("x", 16)
+		b.G.Values[x].Rows = 2
+		var ix Index
+		ix.Bound(ix.Sub(ix.In(GatherInRows), ix.K(2-last)))
+		b.Out(b.Emit(OpGatherRows, []ValueID{x}, []Result{{Name: "d", Width: 16, Rows: 2}}, nil, ix.Attrs(ix.In(GatherRow)), nil, nil)[0])
+		return Verify(b.G, Facts{})
+	}
+	if err := build(1); err != nil {
+		t.Errorf("a gather bounded at its last row is refused: %v", err)
+	}
+	if err := build(0); err == nil || !strings.Contains(err.Error(), "writes 1 of its 2 rows") {
+		t.Errorf("Verify said %v, want an error naming the unwritten row", err)
 	}
 }

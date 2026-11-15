@@ -1079,7 +1079,8 @@ func decomposeRowsAttend(o graph.Op, c *Context) ([]Prim, error) {
 }
 
 // decomposeHeadDots is each input row's dot, head by head, with each of the
-// table's rows (graph.OpHeadDots): one reduction over the heads' elements.
+// table's rows or those its index names (graph.OpHeadDots): one reduction
+// over the heads' elements.
 func decomposeHeadDots(o graph.Op, c *Context) ([]Prim, error) {
 	a := o.Attr
 	H, hd := a.NHead, a.HeadDim
@@ -1088,26 +1089,44 @@ func decomposeHeadDots(o graph.Op, c *Context) ([]Prim, error) {
 	}
 	tb := o.Weight[0]
 	T, D := max(tb.Rows, 1), H*hd
-	if c.width(o.Out[0]) != H*T {
-		return nil, fmt.Errorf("head dots of %d heads against %d rows into rows of %d", H, T, c.width(o.Out[0]))
+	K := T
+	if len(a.Expr) > 0 {
+		K = a.Span
+	}
+	if K < 1 || c.width(o.Out[0]) != H*K {
+		return nil, fmt.Errorf("head dots of %d heads against %d rows into rows of %d", H, K, c.width(o.Out[0]))
 	}
 	to, err := c.weight(tb)
 	if err != nil {
 		return nil, err
 	}
 	U, F := ir.U32, ir.F32
-	qs := c.rows(o.In[0])
+	qs, R := c.rows(o.In[0]), c.rows(o.Out[0])[0]
 	var x exprs
 	in := []Operand{c.value(o.In[0])}
 	facts := Facts{Extents: map[int]int{}}
 	q, h, t, e := x.coord(0), x.coord(1), x.coord(2), x.coord(3)
+	row, named := t, -1
+	if len(a.Expr) > 0 {
+		ix := newIndexer(&x, &in, &facts, a.Expr, max(R, qs[0], c.Step.Rows))
+		ix.outRows, ix.inRows = R, qs[0]
+		ix.row, ix.col = q, t
+		s, err := ix.last()
+		if err != nil {
+			return nil, err
+		}
+		row, named = x.op(OpMin, U, s, x.u(uint32(T-1))), x.op(OpLess, ir.Pred, s, x.u(uint32(T)))
+	}
 	el := x.op(OpAdd, U, x.op(OpMul, U, h, x.u(uint32(hd))), e)
-	tv, err := weightElement(&x, to, T, D, &in, &facts, t, el)
+	tv, err := weightElement(&x, to, T, D, &in, &facts, row, el)
 	if err != nil {
 		return nil, err
 	}
-	x.op(OpMul, F, x.at(0, qs, q, el), tv)
-	return []Prim{{Kind: PrimReduce, Shape: []int{qs[0], H, T, hd}, In: in, Out: c.value(o.Out[0]), Combine: OpAdd, Expr: x.e, Facts: facts}}, nil
+	p := x.op(OpMul, F, x.at(0, qs, x.op(OpMin, U, q, x.u(uint32(qs[0]-1))), el), tv)
+	if named >= 0 {
+		x.sel(F, named, p, x.f(0))
+	}
+	return []Prim{{Kind: PrimReduce, Shape: []int{R, H, K, hd}, In: in, Out: c.value(o.Out[0]), Combine: OpAdd, Expr: x.e, Facts: facts}}, nil
 }
 
 // decomposeSplitRows is each input row's runs of Width elements as rows

@@ -36,7 +36,7 @@ func TestComposedCPUFramesReadNothingBeforeTheClip(t *testing.T) {
 	b := graph.NewBlock(-1)
 	in := b.In("clip", n)
 	b.G.Values[in].Rows = 1
-	b.Out(graph.Frames(b, []graph.ValueID{in}, N, hop, R, pre))
+	b.Out(graph.Frames(b, in, N, hop, R, pre))
 	if err := graph.Verify(b.G, graph.Facts{}); err != nil {
 		t.Fatal(err)
 	}

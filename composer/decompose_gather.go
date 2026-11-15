@@ -196,6 +196,13 @@ func decomposeGatherRows(o graph.Op, c *Context) ([]Prim, error) {
 		nIn = c.rows(o.In[0])[0]
 		in = append(in, c.value(o.In[0]))
 	}
+	tables := 0
+	for _, w := range o.Weight {
+		tables += max(w.Rows, 1)
+	}
+	if err := graph.GatherReads(a, R, nIn, tables); err != nil {
+		return nil, fmt.Errorf("a row gather %w", err)
+	}
 	ix := newIndexer(&x, &in, &facts, a.Expr, max(R, nIn, c.Step.Rows))
 	ix.outRows, ix.inRows = R, nIn
 	r, col := x.coord(0), x.coord(1)

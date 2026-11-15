@@ -234,12 +234,21 @@ func Verify(g *Graph, f Facts) error {
 			}
 		case OpHeadDots:
 			a := o.Attr
-			if len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) != 1 || a.NHead < 1 || a.HeadDim < 1 ||
-				width(o.In[0]) != a.NHead*a.HeadDim || o.Weight[0].K != width(o.In[0]) || width(o.Out[0]) != a.NHead*max(o.Weight[0].Rows, 1) {
+			per := 0
+			if len(o.Weight) == 1 {
+				per = max(o.Weight[0].Rows, 1)
+			}
+			if len(a.Expr) > 0 {
+				per = a.Span
+				indexTerms(a.Expr, GatherOperands, func(k, j int) { bad("%s: term %d's operand %d does not name one an index has", at, k, j) },
+					func(k int) { bad("%s: term %d's function is not an index's", at, k) })
+			}
+			if len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) != 1 || a.NHead < 1 || a.HeadDim < 1 || per < 1 ||
+				width(o.In[0]) != a.NHead*a.HeadDim || o.Weight[0].K != width(o.In[0]) || width(o.Out[0]) != a.NHead*per {
 				bad("%s: head dots of %d heads of %d against %d weights into %d", at, a.NHead, a.HeadDim, len(o.Weight), width(o.Out[0]))
 			}
 		case OpGatherElems:
-			if len(o.In) > 1 || len(o.Out) != 1 || len(o.Weight) != 0 || len(o.Attr.Expr) == 0 {
+			if len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) != 0 || len(o.Attr.Expr) == 0 {
 				bad("%s: an element gather of %d inputs and %d terms", at, len(o.In), len(o.Attr.Expr))
 				break
 			}
@@ -261,6 +270,17 @@ func Verify(g *Graph, f Facts) error {
 			}
 			indexTerms(a.Expr, GatherCol, func(k, j int) { bad("%s: term %d's operand %d does not name one a row index has", at, k, j) },
 				func(k int) { bad("%s: term %d's function is not an index's", at, k) })
+			if in, tables := 0, 0; len(o.In) == 0 || rows(o.In[0]) > 0 {
+				if len(o.In) == 1 {
+					in = rows(o.In[0])
+				}
+				for _, w := range o.Weight {
+					tables += max(w.Rows, 1)
+				}
+				if err := GatherReads(a, rows(o.Out[0]), in, tables); err != nil {
+					bad("%s: a row gather %v", at, err)
+				}
+			}
 		case OpSound:
 			a := o.Attr
 			if len(o.In) != 0 || len(o.Out) != 1 || len(o.Weight) != 0 || a.Sound < SoundU8 || a.Sound >= SoundFormats ||
