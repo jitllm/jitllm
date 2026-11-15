@@ -86,22 +86,10 @@ func composedRopeAxes(t *testing.T, run ropeRunner, rows int) {
 			rope := nn.Rope{NRot: 2 * tc.pairs, Base: 1e6, Neox: true}
 			axis := make([]int, tc.pairs)
 			if multi {
-				c := jlm.Config{NRot: uint32(rope.NRot)}
-				for i, n := range tc.sections {
-					c.RopeSections[i] = uint32(n)
-				}
-				if tc.interleaved {
-					c.Flags |= jlm.FlagRopeInterleaved
-				}
-				pairs, err := c.RopePairs()
-				if err != nil {
-					t.Fatal(err)
-				}
-				rope.Runs = nn.PairRuns(pairs)
-				// The oracle's pair map is transcribed here from the
-				// references (transformers' mrope_section split and
-				// Qwen3-VL's apply_interleaved_mrope), not read off the
-				// container's.
+				// The pair map is transcribed here from the references
+				// (transformers' mrope_section split and Qwen3-VL's
+				// apply_interleaved_mrope); the converter's statement of it
+				// is held to the same in convert.TestConverterStatesTheRotaryTable.
 				for p := range axis {
 					if tc.interleaved {
 						for ax := 1; ax < 3; ax++ {
@@ -118,6 +106,13 @@ func composedRopeAxes(t *testing.T, run ropeRunner, rows int) {
 						}
 					}
 				}
+			}
+			if multi {
+				pairs := make([]jlm.RopePair, tc.pairs)
+				for p := range pairs {
+					pairs[p] = jlm.RopePair{Axis: axis[p], Freq: p}
+				}
+				rope.Runs = nn.PairRuns(pairs)
 			}
 			got := run(t, rope, at)
 			worst := 0.0

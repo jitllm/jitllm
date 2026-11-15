@@ -648,7 +648,7 @@ func mRopeKeepsTheFivePrinciples(t *testing.T, name string) {
 			// positions and moves only the other axes -- there the picture's
 			// ordinal says decode follows one.
 			switch {
-			case m.Cfg.RopeXD:
+			case !m.Container.Config().PictureRope.Side:
 				if st.rmarks.Count(0) == 0 {
 					t.Fatal("the prompt recorded no picture: this measured text decode")
 				}
@@ -753,7 +753,7 @@ func composedAfterPicture(t *testing.T, m *model.Model, g *qvlGolden, spec strin
 	// turned by the second's, in the blocks and the table the composer
 	// states and in the host's rotary alike. The rows after the picture
 	// must part from transformers.
-	if m.Cfg.RopeXD {
+	if 2*m.Cfg.RopePairs > m.Cfg.NRot {
 		was, a := m.Cfg, m.Rope.Runs
 		c := *was
 		d := c.RopeSections[0] / 2
@@ -762,15 +762,18 @@ func composedAfterPicture(t *testing.T, m *model.Model, g *qvlGolden, spec strin
 		}
 		c.RopeSections[0] -= d
 		c.RopeSections[1] += d
-		jc := *m.Container.Config()
-		jc.RopeSections[0] -= uint32(d)
-		jc.RopeSections[1] += uint32(d)
+		pairs := slices.Clone(m.Container.Config().RopeTable)
+		n0 := 0
+		for _, p := range pairs {
+			if p.Axis == 0 {
+				n0++
+			}
+		}
+		for e := n0 - 2*d; e < n0; e++ {
+			pairs[e].Axis = 1
+		}
 		undo := builtGraphs(m)
 		m.Cfg = &c
-		pairs, err := jc.RopePairs()
-		if err != nil {
-			t.Fatal(err)
-		}
 		m.Rope.Runs = nn.PairRuns(pairs)
 		bad, _ := run(0)
 		m.Cfg, m.Rope.Runs = was, a

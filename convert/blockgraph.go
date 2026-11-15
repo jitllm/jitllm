@@ -1741,7 +1741,7 @@ func (bf *blockFacts) vars() map[string]jinja.Value {
 		"latent_eps":         jinja.NewFloat(cmp.Or(float64(c.LatentNormEps), bf.eps)),
 		"qk_norm_wide":       jinja.NewBool(c.Flags.Has(jlm.FlagQKNormWide)),
 		"qk_norm_post":       jinja.NewBool(c.Flags.Has(jlm.FlagQKNormPostRope)),
-		"rope_xd":            jinja.NewBool(c.Flags.Has(jlm.FlagRopeXD)),
+		"rope_split":         jinja.NewBool(2*len(c.RopeTable) > int(c.NRot)),
 		"non_causal":         jinja.NewBool(c.Flags.Has(jlm.FlagNonCausal)),
 		"streams":            jinja.NewInt(int64(statedStreams(c))),
 		"stream_pre":         jinja.NewBool(bf.streamsAt().Pre.Read != nil),
@@ -1927,10 +1927,9 @@ func (bf *blockFacts) rope(global bool) (graph.Attrs, error) {
 		if nrot != int(c.NRot) || base != float64(c.RopeBase) {
 			return graph.Attrs{}, fmt.Errorf("rotary sections on the sliding layers' own rotary")
 		}
-		// The table states each pair's axis (jlm.Config.RopePairs); under
-		// XD-RoPE it holds a pair an element of cat(freq, freq), so a pair's
-		// halves turn apart.
-		if c.Flags.Has(jlm.FlagRopeXD) {
+		// A table of more entries than pairs holds an entry an element of a
+		// pair, so a pair's halves turn apart.
+		if 2*len(c.RopeTable) > nrot {
 			a.Layout = graph.RopeSplit
 		}
 	}

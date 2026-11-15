@@ -99,12 +99,6 @@ type Config struct {
 	// entry of its own (graph.RopeSplit).
 	RopePairs int
 
-	// RopeXD is HunyuanVL's XD-RoPE (jlm.FlagRopeXD): four axes assigned per
-	// element, so a row's table is two pair tables, A for each NEOX pair's
-	// first half and B for its second (RopeW floats), the rotation
-	// graph.RopeSplit, and k's norm after it as q's is.
-	RopeXD bool
-
 	// Mixture of experts. NExpert 0 is a dense FFN. NFFNExp is the per-expert
 	// FFN width, distinct from NFFN, which a MoE file carries for a dense width
 	// the model never uses.
@@ -2689,7 +2683,6 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 	}
 	m.Rope = nn.Rope{NRot: cfg.NRot, Base: cfg.RopeBase, Neox: cfg.RopeNeox,
 		Scale: cfg.AttnFactor, Runs: nn.PairRuns(pairs)}
-	cfg.RopeXD = c.Config().Flags.Has(jlm.FlagRopeXD)
 	if len(m.Rope.Runs) > 0 {
 		cfg.RopePairs = m.Rope.TablePairs()
 	}

@@ -16,7 +16,7 @@ import (
 
 // TestOpenRefusesARotaryLayoutItDoesNotState holds Open to refusing a
 // container with rotary sections written before revision 3, which states no
-// layout for them (jlm.FlagRopeInterleaved, jlm.FlagRopeXD) and would turn
+// table for them (jlm.Config.RopeTable) and would turn
 // Qwen3-VL's interleaved split as contiguous runs, with the upgrade command;
 // and `jitllm upgrade`'s restatement to refusing to state a layout only the
 // architecture says, which a v31 container records none of (the v30
@@ -36,10 +36,10 @@ func TestOpenRefusesARotaryLayoutItDoesNotState(t *testing.T) {
 		t.Fatal(err)
 	}
 	if changed, err := jlm.Restate(old, func(_ *jlm.File, c *jlm.Config) (bool, error) {
-		if c.RopeSections == [4]uint32{} || !c.Flags.Has(jlm.FlagRopeInterleaved) {
-			t.Fatalf("the fixture states sections %v, interleaved %v: it tests nothing", c.RopeSections, c.Flags.Has(jlm.FlagRopeInterleaved))
+		if c.RopeSections == [4]uint32{} || len(c.RopeTable) == 0 {
+			t.Fatalf("the fixture states sections %v, a table of %d: it tests nothing", c.RopeSections, len(c.RopeTable))
 		}
-		c.Flags &^= jlm.FlagRopeInterleaved | jlm.FlagRopeXD
+		c.RopeTable, c.PictureRope = nil, jlm.PictureRope{}
 		c.Revision = 2
 		return true, nil
 	}); err != nil || !changed {

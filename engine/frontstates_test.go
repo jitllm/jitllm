@@ -427,7 +427,7 @@ func TestFrontStatesTheQwen35FixturesAttention(t *testing.T) {
 	if !m.Cfg.AttnOutGate || m.Cfg.RopeSections == [4]int{} {
 		t.Fatal("the fixture lost its output gate or its rotary sections: this gate is about both")
 	}
-	if !m.Container.Config().Flags.Has(jlm.FlagRopeInterleaved) {
+	if tb := m.Container.Config().RopeTable; len(tb) < 2 || tb[1].Axis != 1 {
 		t.Fatal("the fixture's rotary is not interleaved: this gate is about an interleaved one")
 	}
 	// The pair map transcribed from transformers' apply_interleaved_mrope,

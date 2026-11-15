@@ -221,7 +221,10 @@ func encodeConfigAt(c *Config, v uint32) []byte {
 	// twenty-eighth, the blocks' graphs, implies the first twenty-seven, a
 	// joint head of zeros standing for none (an older reader builds a
 	// decision graph no request reaches).
-	graphs := len(c.Blocks.Graphs) != 0 || len(c.Blocks.Of) != 0
+	// The twenty-ninth, the rotary's table and a picture's layout on it,
+	// implies the first twenty-eight, no graphs standing for none.
+	rope := len(c.RopeTable) != 0 || c.PictureRope != (PictureRope{})
+	graphs := rope || len(c.Blocks.Graphs) != 0 || len(c.Blocks.Of) != 0
 	joint := graphs || c.JointHead != nil
 	marker := joint || c.MarkerPrompt != nil
 	labels := marker || c.DecisionLabels != nil
@@ -411,6 +414,20 @@ func encodeConfigAt(c *Config, v uint32) []byte {
 	}
 	if graphs {
 		encodeBlockGraphs(w, &c.Blocks)
+	}
+	if rope {
+		w.u32(uint32(len(c.RopeTable)))
+		for _, p := range c.RopeTable {
+			w.u8(uint8(p.Axis))
+			w.u32(uint32(p.Freq))
+		}
+		for _, x := range c.PictureRope.Axes {
+			for _, t := range [...]PicTerm{x.Base, x.Mul, x.Div, x.Mod} {
+				w.u8(uint8(t))
+			}
+			w.bool(x.Pos)
+		}
+		w.bool(c.PictureRope.Side)
 	}
 	return w.b
 }
@@ -628,10 +645,26 @@ func decodeConfigAt(b []byte, v uint32) (*Config, error) {
 	if r.err == nil && len(r.b) > 0 {
 		c.Blocks = decodeBlockGraphs(r)
 	}
+	if r.err == nil && len(r.b) > 0 {
+		for range r.count(5) {
+			c.RopeTable = append(c.RopeTable, RopePair{Axis: int(r.u8()), Freq: int(r.u32())})
+		}
+		for a := range c.PictureRope.Axes {
+			x := &c.PictureRope.Axes[a]
+			for _, t := range [...]*PicTerm{&x.Base, &x.Mul, &x.Div, &x.Mod} {
+				*t = PicTerm(r.u8())
+			}
+			x.Pos = r.bool()
+		}
+		c.PictureRope.Side = r.bool()
+	}
 	if r.err != nil {
 		return nil, r.err
 	}
 	if err := c.olderGeoms(swa); err != nil {
+		return nil, err
+	}
+	if err := c.ropeTableValid(); err != nil {
 		return nil, err
 	}
 	if err := c.geomsValid(); err != nil {

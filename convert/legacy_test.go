@@ -36,13 +36,14 @@ func TestLegacyStatedRefusesWhatV31CannotRecover(t *testing.T) {
 		arch        Arch
 		interleaved bool
 	}{{ArchQwen3VL, true}, {ArchQwen2VL, false}} {
-		cfg := &jlm.Config{Revision: 2, RopeSections: [4]uint32{8, 12, 12, 0}}
+		cfg := &jlm.Config{Revision: 2, NRot: 64, RopeSections: [4]uint32{8, 12, 12, 0}}
 		if err := LegacyStated(uint16(c.arch), cfg); err != nil {
 			t.Fatal(err)
 		}
-		if cfg.Revision != jlm.StatementRevision || cfg.Flags.Has(jlm.FlagRopeInterleaved) != c.interleaved {
-			t.Errorf("%v at revision 2: revision %d, interleaved %v, want %d and %v", c.arch, cfg.Revision,
-				cfg.Flags.Has(jlm.FlagRopeInterleaved), jlm.StatementRevision, c.interleaved)
+		il := len(cfg.RopeTable) == 32 && cfg.RopeTable[1].Axis == 1
+		if cfg.Revision != jlm.StatementRevision || len(cfg.RopeTable) != 32 || il != c.interleaved {
+			t.Errorf("%v at revision 2: revision %d, table %v, want %d and interleaved %v", c.arch, cfg.Revision,
+				cfg.RopeTable, jlm.StatementRevision, c.interleaved)
 		}
 	}
 }
