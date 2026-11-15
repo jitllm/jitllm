@@ -709,6 +709,16 @@ func (mj *modelJSON) configIn(env exprEnv, c *hfConfig, names []string) (*Config
 		}
 		ts = append(ts, meta.Tensor{Name: gn, Dims: dims})
 	}
+	// A prediction block the file states and the checkpoint does not ship is
+	// not counted: a checkpoint saved without them converts as its trunk.
+	if nv, ok := kvs[ns+"nextn_predict_layers"]; ok {
+		n, _ := nv.Uint()
+		b, _ := kvs[ns+"block_count"].Uint()
+		if n > 0 && n <= b && !have["blk."+itoa(int(b-n))+".nextn.eh_proj.weight"] {
+			kvs[ns+"nextn_predict_layers"] = meta.MakeUint(0)
+			kvs[ns+"block_count"] = meta.MakeUint(b - n)
+		}
+	}
 	if g := mj.Config.Gating; g != "" {
 		kvs[ns+"expert_gating_func"] = meta.MakeUint(mjGatings()[g])
 		// The class computes its gate whatever the file says, so a

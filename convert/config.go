@@ -877,6 +877,11 @@ func configOfFile(f *meta.File) (*Config, error) {
 			return nil, fmt.Errorf("convert: %s: expert_group_count=%d with expert_group_used_count=%d",
 				name, c.NExpertGroup, c.NExpertGroupUsed)
 		}
+		// A grouped selection picks whole groups of an even split.
+		if c.NExpertGroup > 1 && (c.NExpert%c.NExpertGroup != 0 || c.NExpertGroupUsed > c.NExpertGroup) {
+			return nil, fmt.Errorf("convert: %s: %d experts in %d groups, %d used", name, c.NExpert,
+				c.NExpertGroup, c.NExpertGroupUsed)
+		}
 	}
 
 	// The leading dense run is read for every architecture, as a property of the

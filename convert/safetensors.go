@@ -1140,11 +1140,8 @@ func hfArchTable() map[string]*hfArch {
 		"KimiK3ForConditionalGeneration": kimiK3HF(),
 		// The mixture families, each to the container its GGUF converts to. See
 		// convert/hfmoefamily.go.
-		"Glm4MoeForCausalLM":        glm4moeHF(),
 		"HunYuanDenseV1ForCausalLM": hunyuanHF(),
 		"HunYuanMoEV1ForCausalLM":   hunyuanHF(),
-		// The modern text group (convert/hfmoefamily2.go).
-		"Dots1ForCausalLM": dots1HF(),
 		// BitNet b1.58 (convert/hfbitnet.go).
 		"BitNetForCausalLM": bitnetHF(),
 		// Phi-3.5-MoE and its smaller siblings name the class as their remote
@@ -2231,12 +2228,9 @@ func permuteHeadPairs(src []byte, heads, headDim, rowBytes int) []byte {
 // references disagree (RULE 7m): DeepseekV2ForCausalLM softmaxes, the classes
 // below sigmoid unconditionally. A class not named here keeps softmax.
 func hardcodesSigmoid(archs []string) bool {
-	if moe2HardcodesSigmoid(archs) {
-		return true
-	}
 	for _, a := range archs {
 		switch a {
-		case "DeepseekV3ForCausalLM", "Glm4MoeLiteForCausalLM", "KimiLinearForCausalLM", "Glm4MoeForCausalLM":
+		case "DeepseekV3ForCausalLM", "Glm4MoeLiteForCausalLM", "KimiLinearForCausalLM":
 			return true
 		}
 	}

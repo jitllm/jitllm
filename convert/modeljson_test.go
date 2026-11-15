@@ -207,7 +207,8 @@ func TestLibraryIgnoresTheRotaryBuffers(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, c := range []string{"Qwen2ForCausalLM", "Qwen3ForCausalLM", "Qwen3MoeForCausalLM", "GemmaForCausalLM",
-		"Ernie4_5ForCausalLM", "Qwen2MoeForCausalLM", "Ernie4_5_MoeForCausalLM"} {
+		"Ernie4_5ForCausalLM", "Qwen2MoeForCausalLM", "Ernie4_5_MoeForCausalLM", "Dots1ForCausalLM",
+		"Glm4MoeForCausalLM"} {
 		mj := lib[c]
 		if mj == nil {
 			t.Fatalf("no %s in the library", c)
@@ -321,6 +322,120 @@ func TestModelJSONHoldsMixturesToTheStep(t *testing.T) {
 		if _, err := mj.config(c, r.names); err == nil || !strings.Contains(err.Error(), r.err) || !errors.Is(err, ErrNotImplemented) {
 			t.Errorf("%s: %v, want an error saying %q", r.name, err, r.err)
 		}
+	}
+}
+
+// TestDots1ThroughTheLibrary: dots.llm1's DeepSeek-V3 router through
+// convert/models/dots1.json -- a sigmoid gate, a routed scale, groups, a dense
+// lead and shared experts as wide as their tensor -- and its refusals: a
+// softmax scoring_func, groups the experts do not divide into, a block 0
+// without its q/k norm, and a router keys without a default leave absent.
+func TestDots1ThroughTheLibrary(t *testing.T) {
+	lib, err := modelLibrary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mj := lib["Dots1ForCausalLM"]
+	if mj == nil {
+		t.Fatal("no Dots1ForCausalLM in the library")
+	}
+	js := `{"architectures": ["Dots1ForCausalLM"], "vocab_size": 100, "hidden_size": 64, "intermediate_size": 128,
+	  "num_hidden_layers": 3, "num_attention_heads": 4, "num_key_value_heads": 4, "head_dim": 16,
+	  "n_routed_experts": 8, "num_experts_per_tok": 2, "moe_intermediate_size": 32, "n_shared_experts": 2,
+	  "first_k_dense_replace": 1, "norm_topk_prob": true, "routed_scaling_factor": 2.5, "n_group": 1,
+	  "topk_group": 1, "scoring_func": "sigmoid",
+	  "sliding_window": null, "layer_types": ["full_attention", "full_attention", "full_attention"]}`
+	sh := "model.layers.1.mlp.shared_experts.gate_proj.weight"
+	names := []string{"lm_head.weight", "model.layers.0.self_attn.q_norm.weight", "model.layers.0.self_attn.k_norm.weight", sh}
+	for _, b := range []string{"1", "2"} {
+		p := "model.layers." + b + ".mlp."
+		names = append(names, p+"gate.weight", p+"experts.0.gate_proj.weight")
+	}
+	noQK := append([]string{names[0]}, names[3:]...)
+	c := hfConfigOf(t, js)
+	c.shapes = map[string][]uint64{sh: {64, 64}}
+	cfg, err := mj.config(c, names)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := jlm.FlagRopeNeox | jlm.FlagQKNorm | jlm.FlagExpertSigmoid
+	if cfg.Arch != ArchDots1 || cfg.Flags&want != want || cfg.Flags.Has(jlm.FlagNoExpertNorm) || cfg.ExpertScale != 2.5 ||
+		cfg.NDenseLead != 1 || cfg.NExpert != 8 || cfg.NExpertUsed != 2 || cfg.NFFNExp != 32 || cfg.NFFNShExp != 64 ||
+		cfg.NExpertGroup != 1 || cfg.NExpertGroupUsed != 1 {
+		t.Errorf("flags %v scale %v lead %d, %d of %d experts %d wide, shared %d, groups %d/%d", cfg.Flags,
+			cfg.ExpertScale, cfg.NDenseLead, cfg.NExpertUsed, cfg.NExpert, cfg.NFFNExp, cfg.NFFNShExp,
+			cfg.NExpertGroup, cfg.NExpertGroupUsed)
+	}
+	for _, r := range []struct {
+		name, from, to string
+		names          []string
+		err            string
+	}{
+		{"softmax", `"scoring_func": "sigmoid"`, `"scoring_func": "softmax"`, names, "scoring_func softmax"},
+		{"uneven groups", `"n_group": 1`, `"n_group": 3`, names, "8 experts in 3 groups"},
+		{"no q/k norm", `"n_group": 1`, `"n_group": 1`, noQK, "attn_q_norm"},
+		{"no expert count", `"n_routed_experts": 8,`, ``, names, "n_routed_experts"},
+		{"a window in use", `"sliding_window": null, "layer_types": ["full_attention"`,
+			`"sliding_window": 16, "layer_types": ["sliding_attention"`, names, "window"},
+	} {
+		c := hfConfigOf(t, strings.Replace(js, r.from, r.to, 1))
+		c.shapes = map[string][]uint64{sh: {64, 64}}
+		if _, err := mj.config(c, r.names); err == nil || !strings.Contains(err.Error(), r.err) {
+			t.Errorf("%s: %v, want an error saying %q", r.name, err, r.err)
+		}
+	}
+}
+
+// TestGlm4MoeThroughTheLibrary: GLM-4.5 through convert/models/glm4moe.json --
+// half of each head rotated, the q/k norm present where block 0 ships it, and
+// its prediction block counted where the checkpoint ships it and not where it
+// does not -- and a softmax scoring_func refused.
+func TestGlm4MoeThroughTheLibrary(t *testing.T) {
+	lib, err := modelLibrary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mj := lib["Glm4MoeForCausalLM"]
+	if mj == nil {
+		t.Fatal("no Glm4MoeForCausalLM in the library")
+	}
+	js := `{"architectures": ["Glm4MoeForCausalLM"], "vocab_size": 100, "hidden_size": 64, "intermediate_size": 128,
+	  "num_hidden_layers": 3, "num_attention_heads": 4, "num_key_value_heads": 2, "head_dim": 16,
+	  "n_routed_experts": 8, "num_experts_per_tok": 2, "moe_intermediate_size": 32, "n_shared_experts": 1,
+	  "first_k_dense_replace": 1, "routed_scaling_factor": 2.5, "num_nextn_predict_layers": 1,
+	  "rope_parameters": {"rope_type": "default", "rope_theta": 1000000, "partial_rotary_factor": 0.5}}`
+	trunk := []string{"lm_head.weight"}
+	for _, b := range []string{"1", "2", "3"} {
+		p := "model.layers." + b + ".mlp."
+		trunk = append(trunk, p+"gate.weight", p+"experts.0.gate_proj.weight")
+	}
+	qk := []string{"model.layers.0.self_attn.q_norm.weight", "model.layers.0.self_attn.k_norm.weight"}
+	mtp := []string{"model.layers.3.eh_proj.weight", "model.layers.3.enorm.weight", "model.layers.3.hnorm.weight"}
+	for _, r := range []struct {
+		name  string
+		names []string
+		mtp   uint32
+		qk    bool
+	}{
+		{"whole", slices.Concat(trunk, qk, mtp), 1, true},
+		{"no prediction block", slices.Concat(trunk, qk), 0, true},
+		{"no q/k norm", slices.Concat(trunk, mtp), 1, false},
+	} {
+		cfg, err := mj.config(hfConfigOf(t, js), r.names)
+		if err != nil {
+			t.Fatalf("%s: %v", r.name, err)
+		}
+		want := jlm.FlagRopeNeox | jlm.FlagExpertSigmoid
+		if cfg.Arch != ArchGLM4MoE || cfg.NLayer != 3 || cfg.NMTP != r.mtp || cfg.NRot != 8 || cfg.HeadDim != 16 ||
+			cfg.Flags&want != want || cfg.Flags.Has(jlm.FlagQKNorm) != r.qk || cfg.NDenseLead != 1 ||
+			cfg.ExpertScale != 2.5 || cfg.NFFNShExp != 32 || cfg.Flags.Has(jlm.FlagNoExpertNorm) {
+			t.Errorf("%s: %d blocks and %d predicting, rotary %d of %d, lead %d, scale %v, shared %d, flags %v",
+				r.name, cfg.NLayer, cfg.NMTP, cfg.NRot, cfg.HeadDim, cfg.NDenseLead, cfg.ExpertScale, cfg.NFFNShExp, cfg.Flags)
+		}
+	}
+	_, err = mj.config(hfConfigOf(t, strings.Replace(js, `"n_shared_experts"`, `"scoring_func": "softmax", "n_shared_experts"`, 1)), trunk)
+	if err == nil || !strings.Contains(err.Error(), "scoring_func softmax") {
+		t.Errorf("a softmax scoring_func on a sigmoid router: %v", err)
 	}
 }
 

@@ -9,8 +9,7 @@ import (
 	"github.com/jitllm/jitllm/format/jlm"
 )
 
-// The mixture families from safetensors: GLM-4.5 (Glm4MoeForCausalLM) and
-// Hunyuan (HunYuanDenseV1ForCausalLM,
+// The mixture family from safetensors: Hunyuan (HunYuanDenseV1ForCausalLM,
 // HunYuanMoEV1ForCausalLM). Each converts to the container its GGUF converts
 // to -- the same arch, flags and tensors -- so the two inputs are one model;
 // convert/moefamily.go and convert/hunyuan.go are the GGUF half and say why
@@ -75,23 +74,6 @@ func hfGateAgrees(c *hfConfig) error {
 	return nil
 }
 
-// hfRotaryFraction takes partial_rotary_factor out of the config for a class
-// that rotates part of each head, returning how many dimensions turn.
-// llamaHFConfig refuses the key on every other class.
-func hfRotaryFraction(c *hfConfig, headDim uint32) (uint32, error) {
-	f := 1.0
-	if c.PartialRotaryFactor != nil {
-		f = *c.PartialRotaryFactor
-	}
-	c.PartialRotaryFactor = nil
-	n := float64(headDim) * f
-	if n <= 0 || n != math.Trunc(n) || uint32(n)%2 != 0 || uint32(n) > headDim {
-		return 0, fmt.Errorf("convert: %s: partial_rotary_factor %v of head_dim %d is not "+
-			"an even count of dimensions", c.path, f, headDim)
-	}
-	return uint32(n), nil
-}
-
 // hfQKNormPresent reports whether block 0 ships a per-head q/k norm under
 // these two names, refusing a block that ships one of the two.
 func hfQKNormPresent(c *hfConfig, names []string, q, k string) (bool, error) {
@@ -108,82 +90,6 @@ func hfQKNormPresent(c *hfConfig, names []string, q, k string) (bool, error) {
 		return false, fmt.Errorf("convert: %s: block 0 carries a q norm %v and a k norm %v", c.path, hq, hk)
 	}
 	return hq, nil
-}
-
-// --- GLM-4.5 -------------------------------------------------------------
-
-// glm4moeHF is GLM-4.5/4.6/4.5-Air: DeepSeek-V3's router and mixture keys on
-// GQA attention with biased q/k/v, an optional per-head q/k norm (use_qk_norm)
-// and NEOX rotary over partial_rotary_factor of each head, with the prediction
-// block (num_nextn_predict_layers) carried and set aside as DeepSeek's is.
-func glm4moeHF() *hfArch {
-	return &hfArch{
-		arch:        ArchGLM4MoE,
-		blockPrefix: llamaHF().blockPrefix,
-		model:       llamaHF().model,
-		block: blockPlus(qwen3Block(), map[string]jlm.Role{
-			"mlp.gate.weight":                     jlm.RoleRouter,
-			"mlp.gate.e_score_correction_bias":    jlm.RoleExpProbsB,
-			"mlp.shared_experts.gate_proj.weight": jlm.RoleShExpGate,
-			"mlp.shared_experts.up_proj.weight":   jlm.RoleShExpUp,
-			"mlp.shared_experts.down_proj.weight": jlm.RoleShExpDown,
-			"eh_proj.weight":                      jlm.RoleNextnEHProj,
-			"enorm.weight":                        jlm.RoleNextnENorm,
-			"hnorm.weight":                        jlm.RoleNextnHNorm,
-			"shared_head.norm.weight":             jlm.RoleNextnHeadNorm,
-			"shared_head.head.weight":             jlm.RoleNextnHead,
-			"embed_tokens.weight":                 jlm.RoleNextnEmbd,
-		}),
-		expertPrefix: "mlp.experts.",
-		expert:       hfExperts(),
-		ignore:       llamaHF().ignore,
-		config:       glm4moeHFConfig,
-	}
-}
-
-// glm4moeHFConfig reads GLM's keys. The gate is a sigmoid whatever the file
-// says (Glm4MoeTopkRouter hardcodes it; hardcodesSigmoid), as on the GGUF side.
-func glm4moeHFConfig(c *hfConfig, names []string) (*Config, error) {
-	if err := hfGateAgrees(c); err != nil {
-		return nil, err
-	}
-	head := c.HiddenSize / max(c.NumAttentionHeads, 1)
-	if c.HeadDim != nil && *c.HeadDim != 0 {
-		head = *c.HeadDim
-	}
-	rot, err := hfRotaryFraction(c, head)
-	if err != nil {
-		return nil, err
-	}
-	if c.NumNextnPredictLayers > 0 {
-		first := fmt.Sprintf("model.layers.%d.", c.NumHiddenLayers)
-		for _, n := range names {
-			if strings.HasPrefix(n, first) {
-				c.nextn = c.NumNextnPredictLayers
-				break
-			}
-		}
-	}
-	cfg, err := hfConfigWith(ArchGLM4MoE, jlm.FlagRopeNeox, "silu")(c, names)
-	if err != nil {
-		return nil, err
-	}
-	cfg.NRot = rot
-	qk, err := hfQKNormPresent(c, names, "self_attn.q_norm.weight", "self_attn.k_norm.weight")
-	if err != nil {
-		return nil, err
-	}
-	if qk {
-		cfg.Flags |= jlm.FlagQKNorm
-	}
-	cfg.NMTP = c.nextn
-	if err := deepseekMoE(c, cfg, names, "mlp."); err != nil {
-		return nil, err
-	}
-	if !cfg.Flags.Has(jlm.FlagExpertSigmoid) {
-		return nil, fmt.Errorf("convert: %s: a GLM-4.5 router that is not a sigmoid", c.path)
-	}
-	return cfg, nil
 }
 
 // --- Hunyuan ----------------------------------------------------------------
