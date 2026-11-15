@@ -1305,6 +1305,7 @@ func (e *Engine) generateBatched(ctx context.Context, lp *stepLoop, s *Session, 
 	if o.Sampling != nil {
 		sampler = *o.Sampling
 	}
+	sampler.Prime(ids)
 	// The row's prompt starts where the session is, or at 0 when it resets.
 	start := 0
 	if o.Continue {

@@ -2334,6 +2334,11 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 	if o.Sampling != nil {
 		sampler = *o.Sampling
 	}
+	if spans {
+		sampler.PrimeSpans(o.Prompt.Spans)
+	} else {
+		sampler.Prime(ids)
+	}
 	var logits []float32
 	var sp *engine.Speculator
 	var first int32

@@ -4,6 +4,7 @@ import (
 	"math"
 	"math/rand"
 
+	"github.com/jitllm/jitllm/model"
 	"github.com/jitllm/jitllm/nn"
 )
 
@@ -82,6 +83,35 @@ type Sampler struct {
 	// (Instance.SampledProbs): XTC's cut at its whole weight where the draw
 	// took it, Mirostat at the mu the draw read.
 	drew nn.DrawArgs
+}
+
+// Prime makes a prompt's tokens the history the penalties read, as llama.cpp
+// resets its sampler and accepts every prompt token before the first draw
+// (common_sampler_accept): the window holds the prompt's tail. A negative id,
+// a picture's row, is no token. The history is the sampler's own after it,
+// never one a copy shares.
+func (s *Sampler) Prime(prompt []int32) {
+	s.hist, s.win = nil, nil
+	s.observeAll(prompt)
+}
+
+// PrimeSpans is Prime over a prompt of spans: their tokens, a picture's or a
+// clip's rows none.
+func (s *Sampler) PrimeSpans(spans []model.Span) {
+	s.hist, s.win = nil, nil
+	for _, sp := range spans {
+		if !sp.Rows() && sp.Clip == nil {
+			s.observeAll(sp.Tokens)
+		}
+	}
+}
+
+func (s *Sampler) observeAll(ids []int32) {
+	for _, t := range ids {
+		if t >= 0 {
+			s.Observe(t)
+		}
+	}
 }
 
 // Observe records a token so the penalties can see it. Harmless when they

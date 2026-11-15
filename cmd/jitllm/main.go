@@ -732,6 +732,11 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	var logits []float32
 	restored := 0
 	specFirst := int32(-1)
+	if spans != nil {
+		sm.PrimeSpans(spans)
+	} else {
+		sm.Prime(ids)
+	}
 	switch {
 	case spans != nil && kvCacheDir != "":
 		logits, err = st.PrefillCachedMixed(spans...)

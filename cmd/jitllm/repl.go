@@ -177,6 +177,7 @@ func repl(m *model.Model, st *engine.Instance, sm *engine.Sampler, system string
 // the model ends it, n tokens, the context, or stop.
 func replyTo(m *model.Model, st *engine.Instance, sm *engine.Sampler, ids []int32, n int, stop *atomic.Bool, out io.Writer) (string, error) {
 	st.Reset()
+	sm.Prime(ids)
 	logits, err := st.PrefillCached(ids)
 	if err != nil {
 		return "", err
