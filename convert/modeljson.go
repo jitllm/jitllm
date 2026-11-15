@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path"
 	"slices"
@@ -44,6 +45,11 @@ type mjConfig struct {
 	// Root is the object the paths are read from (text_config for a model
 	// with a tower); $.key reads the file's top.
 	Root string `json:"root"`
+	// Defaults are the class's config defaults, each a key of the root a
+	// config.json that lacks it takes, as the class's dataclass does; a key
+	// present as null keeps its null, which an expression maps where the
+	// class does (a ?? b).
+	Defaults map[string]json.RawMessage `json:"defaults"`
 	// Arch is the graph configOf builds, by its GGUF name, and Keys the GGUF
 	// keys (without the architecture's prefix) it reads.
 	Arch   string           `json:"arch"`
@@ -228,6 +234,12 @@ func parseModelJSON(b []byte, name string) (*modelJSON, error) {
 	for f := range mj.Config.Flags {
 		if _, ok := mjFlags()[f]; !ok && mjFlagsNotImplemented()[f] == "" {
 			return nil, fmt.Errorf("convert: %s: flag %q is not a graph feature the container states", name, f)
+		}
+	}
+	for k, raw := range mj.Config.Defaults {
+		var v any
+		if strings.ContainsAny(k, ".$") || json.Unmarshal(raw, &v) != nil {
+			return nil, fmt.Errorf("convert: %s: default %q is not a key of the root and a value", name, k)
 		}
 	}
 	if w := mj.Config.Window; w != nil && (w.Size == "" || w.Used == "") {
@@ -551,6 +563,19 @@ func (mj *modelJSON) env(c *hfConfig) (exprEnv, error) {
 				c.path, mj.name, mj.Config.Root)
 		}
 		root = r
+	}
+	if len(mj.Config.Defaults) > 0 {
+		root = maps.Clone(root)
+		for k, raw := range mj.Config.Defaults {
+			if _, ok := root[k]; ok {
+				continue
+			}
+			var v any
+			if err := json.Unmarshal(raw, &v); err != nil {
+				return nil, fmt.Errorf("convert: %s: default %s: %w", mj.name, k, err)
+			}
+			root[k] = v
+		}
 	}
 	env := func(p string) any {
 		at, rest := root, p

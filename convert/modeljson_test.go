@@ -378,11 +378,77 @@ func TestDots1ThroughTheLibrary(t *testing.T) {
 		{"no expert count", `"n_routed_experts": 8,`, ``, names, "n_routed_experts"},
 		{"a window in use", `"sliding_window": null, "layer_types": ["full_attention"`,
 			`"sliding_window": 16, "layer_types": ["sliding_attention"`, names, "window"},
+		{"layers past max_window_layers slide", `"sliding_window": null, "layer_types": ["full_attention", "full_attention", "full_attention"]`,
+			`"sliding_window": 16, "max_window_layers": 1`, names, "window"},
+		{"the class's window past max_window_layers", `"sliding_window": null, "layer_types": ["full_attention", "full_attention", "full_attention"]`,
+			`"max_window_layers": 2`, names, "window"},
 	} {
 		c := hfConfigOf(t, strings.Replace(js, r.from, r.to, 1))
 		c.shapes = map[string][]uint64{sh: {64, 64}}
 		if _, err := mj.config(c, r.names); err == nil || !strings.Contains(err.Error(), r.err) {
 			t.Errorf("%s: %v, want an error saying %q", r.name, err, r.err)
+		}
+	}
+}
+
+// TestModelJSONDefaultsAndNulls: a key a config.json lacks takes its class's
+// default (config.defaults), and one present as null what the class maps a
+// null to -- Ernie 4.5's 2 kv heads and head of 128 against its heads and
+// hidden/heads, dots.llm1's kv heads -- and an expert count spelled the way a
+// class's attribute_map aliases it reads as the other spelling.
+func TestModelJSONDefaultsAndNulls(t *testing.T) {
+	lib, err := modelLibrary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := lib["Ernie4_5ForCausalLM"]
+	ernie := func(extra string) (*Config, error) {
+		js := `{"architectures": ["Ernie4_5ForCausalLM"], "vocab_size": 100, "hidden_size": 64,
+		  "intermediate_size": 96, "num_hidden_layers": 2, "num_attention_heads": 4` + extra + `}`
+		return e.config(hfConfigOf(t, js), nil)
+	}
+	for _, r := range []struct {
+		name, extra string
+		kv, hd      uint32
+	}{
+		{"absent", ``, 2, 128},
+		{"null", `, "num_key_value_heads": null, "head_dim": null`, 4, 16},
+		{"stated", `, "num_key_value_heads": 1, "head_dim": 32`, 1, 32},
+	} {
+		c, err := ernie(r.extra)
+		if err != nil {
+			t.Errorf("%s: %v", r.name, err)
+			continue
+		}
+		if c.NKVHead != r.kv || c.HeadDim != r.hd {
+			t.Errorf("%s: %d kv heads of %d, want %d of %d", r.name, c.NKVHead, c.HeadDim, r.kv, r.hd)
+		}
+	}
+	d := lib["Dots1ForCausalLM"]
+	js := `{"architectures": ["Dots1ForCausalLM"], "vocab_size": 100, "hidden_size": 64, "intermediate_size": 128,
+	  "num_hidden_layers": 3, "num_attention_heads": 4, "num_key_value_heads": null, "head_dim": 16,
+	  "n_routed_experts": 8, "num_experts_per_tok": 2, "moe_intermediate_size": 32, "n_shared_experts": 2,
+	  "first_k_dense_replace": 1, "scoring_func": "sigmoid"}`
+	sh := "model.layers.1.mlp.shared_experts.gate_proj.weight"
+	names := []string{"lm_head.weight", "model.layers.0.self_attn.q_norm.weight", "model.layers.0.self_attn.k_norm.weight", sh}
+	for _, b := range []string{"1", "2"} {
+		p := "model.layers." + b + ".mlp."
+		names = append(names, p+"gate.weight", p+"experts.0.gate_proj.weight")
+	}
+	for _, r := range []struct{ name, from, to string }{
+		{"null kv heads, the class's window over 62 layers", ``, ``},
+		{"the expert count as num_local_experts", `"n_routed_experts": 8`, `"num_local_experts": 8`},
+	} {
+		c := hfConfigOf(t, strings.Replace(js, r.from, r.to, 1))
+		c.shapes = map[string][]uint64{sh: {64, 64}}
+		cfg, err := d.config(c, names)
+		if err != nil {
+			t.Errorf("%s: %v", r.name, err)
+			continue
+		}
+		if cfg.NKVHead != 4 || cfg.NExpert != 8 || cfg.SWAWindow != 0 {
+			t.Errorf("%s: %d kv heads, %d experts, window %d; want the 4 heads, 8 experts, no window", r.name,
+				cfg.NKVHead, cfg.NExpert, cfg.SWAWindow)
 		}
 	}
 }

@@ -101,6 +101,11 @@ schema; `convert/modeljson.go` reads it. Its sections:
     by a file whose class rotates part of each head (Phi-3, GLM-4-MoE,
     Qwen3.5); every other class rotates the whole head whatever
     `partial_rotary_factor` says, so its file leaves the key unread.
+- `config.defaults`: the class's config defaults, each a key of the root
+  that a config.json lacking it takes, as the class's dataclass does. A key
+  present as null keeps its null, and the expression maps it where the
+  class's `__post_init__` does (`num_key_value_heads ?? (num_attention_heads)`),
+  so an explicit null and an absent key read as their class reads them.
 - There are no refusals in a file. A refusal is missing support, and it
   lives in converter code, one rule for every model: an activation, a rope
   scaling method, a window or a flag the code cannot express, a tensor no

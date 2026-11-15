@@ -1,6 +1,7 @@
 {
   "classes": ["Dots1ForCausalLM"],
   "config": {
+    "defaults": {"num_key_value_heads": 32, "sliding_window": 4096, "max_window_layers": 62},
     "arch": "dots1",
     "keys": {
       "block_count":                      {"uint": "num_hidden_layers ?? 62"},
@@ -8,13 +9,13 @@
       "embedding_length":                 {"uint": "hidden_size ?? 4608"},
       "feed_forward_length":              {"uint": "intermediate_size ?? 10944"},
       "attention.head_count":             {"uint": "num_attention_heads ?? 32"},
-      "attention.head_count_kv":          {"uint": "num_key_value_heads ?? 32"},
+      "attention.head_count_kv":          {"uint": "num_key_value_heads ?? (num_attention_heads ?? 32)"},
       "attention.key_length":             {"uint": "head_dim ?? (hidden_size ?? 4608) / (num_attention_heads ?? 32)"},
       "attention.value_length":           {"uint": "head_dim ?? (hidden_size ?? 4608) / (num_attention_heads ?? 32)"},
       "attention.layer_norm_rms_epsilon": {"float": "rms_norm_eps ?? 1e-6"},
       "rope.dimension_count":             {"uint": "head_dim ?? (hidden_size ?? 4608) / (num_attention_heads ?? 32)"},
       "rope.freq_base":                   {"float": "rope_parameters.rope_theta ?? rope_theta ?? 10000"},
-      "expert_count":                     {"uint": "n_routed_experts"},
+      "expert_count":                     {"uint": "n_routed_experts ?? num_local_experts"},
       "expert_used_count":                {"uint": "num_experts_per_tok"},
       "expert_feed_forward_length":       {"uint": "moe_intermediate_size ?? 1408"},
       "expert_shared_count":              {"uint": "n_shared_experts"},
@@ -28,7 +29,7 @@
     "head": {"tensor": "lm_head.weight", "tied": "tie_word_embeddings ?? false"},
     "activation": "hidden_act ?? 'silu'",
     "rope_scaling": "rope_parameters ?? rope_scaling",
-    "window": {"size": "sliding_window", "used": "'sliding_attention' in (layer_types ?? [])"},
+    "window": {"size": "sliding_window", "used": "'sliding_attention' in (layer_types ?? []) || (layer_types == null && sliding_window != null && max_window_layers < (num_hidden_layers ?? 62))"},
     "gating": "sigmoid"
   },
   "tensors": {

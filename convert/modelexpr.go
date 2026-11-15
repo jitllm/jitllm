@@ -9,7 +9,7 @@ import (
 // A model.json expression reads a config.json: numbers, strings, booleans,
 // lists, null, paths into the config (a.b.c from the file's root, $.a.b from
 // its top), arithmetic (+ - * /), comparisons (== != < <= > >=, in), logic
-// (&& || !) and a ?? b, which is b where a is absent. There are no loops, and
+// (&& || !) and a ?? b, which is b where a is absent or null. There are no loops, and
 // calls (exp, log, sqrt, tanh) are a tensor map's alone, so an expression sizes
 // nothing (RULE 9), and its depth is bounded.
 //

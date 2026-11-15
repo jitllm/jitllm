@@ -1,6 +1,7 @@
 {
   "classes": ["Ernie4_5ForCausalLM"],
   "config": {
+    "defaults": {"num_key_value_heads": 2, "head_dim": 128},
     "arch": "llama",
     "keys": {
       "block_count":                      {"uint": "num_hidden_layers ?? 18"},
@@ -8,11 +9,11 @@
       "embedding_length":                 {"uint": "hidden_size ?? 1024"},
       "feed_forward_length":              {"uint": "intermediate_size ?? 3072"},
       "attention.head_count":             {"uint": "num_attention_heads ?? 16"},
-      "attention.head_count_kv":          {"uint": "num_key_value_heads ?? 2"},
-      "attention.key_length":             {"uint": "head_dim ?? 128"},
-      "attention.value_length":           {"uint": "head_dim ?? 128"},
+      "attention.head_count_kv":          {"uint": "num_key_value_heads ?? (num_attention_heads ?? 16)"},
+      "attention.key_length":             {"uint": "head_dim ?? (hidden_size ?? 1024) / (num_attention_heads ?? 16)"},
+      "attention.value_length":           {"uint": "head_dim ?? (hidden_size ?? 1024) / (num_attention_heads ?? 16)"},
       "attention.layer_norm_rms_epsilon": {"float": "rms_norm_eps ?? 1e-5"},
-      "rope.dimension_count":             {"uint": "head_dim ?? 128"},
+      "rope.dimension_count":             {"uint": "head_dim ?? (hidden_size ?? 1024) / (num_attention_heads ?? 16)"},
       "rope.freq_base":                   {"float": "rope_parameters.rope_theta ?? rope_theta ?? 500000"}
     },
     "vocab": "vocab_size ?? 103424",
