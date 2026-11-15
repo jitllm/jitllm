@@ -1667,7 +1667,11 @@ func deepseekMoE(c *hfConfig, cfg *Config, names []string, ffn string) error {
 	// implements softmax and carries no key, while DeepseekV3's, Glm4MoeLite's
 	// and KimiLinear's routers hardcode sigmoid and never read it. GLM-4.7-Flash
 	// omits the key, and converted as softmax it is fluent and wrong. See
-	// hardcodesSigmoid.
+	// hardcodesSigmoid. A class that hardcodes its gate computes it whatever
+	// scoring_func says, so a file naming another is refused (RULE 7).
+	if err := hfGateAgrees(c); err != nil {
+		return err
+	}
 	sigmoid := c.ScoringFunc == "sigmoid"
 	switch c.ScoringFunc {
 	case "":

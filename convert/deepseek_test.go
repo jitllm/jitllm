@@ -583,7 +583,11 @@ func TestDeepseekRefusals(t *testing.T) {
 		}, "attn_out wants [6 8]"},
 		// The router's three knobs.
 		{"an unimplemented gate", func(m *synthModel) { m.cfg["scoring_func"] = "softmax_topk" },
-			`scoring_func "softmax_topk" is not implemented`},
+			`scoring_func "softmax_topk"`},
+		// DeepseekV3's router hardcodes its sigmoid: a file naming softmax
+		// describes weights the class never ran.
+		{"a softmax gate on a sigmoid class", func(m *synthModel) { m.cfg["scoring_func"] = "softmax" },
+			`scoring_func "softmax", and DeepseekV3ForCausalLM gates with a sigmoid`},
 		{"groups that do not divide the experts", func(m *synthModel) { m.cfg["n_group"] = 3 },
 			"4 experts do not divide into n_group 3"},
 		{"more groups used than exist", func(m *synthModel) { m.cfg["topk_group"] = 3 },
