@@ -29,22 +29,23 @@ func (st *inputScratch) positions(n int) []int {
 }
 
 // embedRows writes the input rows of toks, at positions pos, into the rows
-// of x and their per-layer inputs into the rows of ple on the device the
-// instance places them on (nn.InputsDevice.Embed), or says why not.
-func (s *Instance) embedRows(x, ple []float32, toks []int32, pos []int) nn.Decline {
+// of x, each residual plane past the first plane floats on, and their
+// per-layer inputs into the rows of ple on the device the instance places
+// them on (nn.InputsDevice.Embed), or says why not.
+func (s *Instance) embedRows(x, ple []float32, toks []int32, pos []int, plane int) nn.Decline {
 	if s.inputs == nil {
 		return nn.DeclineCaller
 	}
-	return s.inputs.Embed(x, ple, toks, pos)
+	return s.inputs.Embed(x, ple, toks, pos, plane)
 }
 
 // givenRows writes an embedding span's given rows into the rows of x
 // (nn.InputsDevice.Given), or says why not.
-func (s *Instance) givenRows(x, ple, rows []float32, toks []int32, pos []int) nn.Decline {
+func (s *Instance) givenRows(x, ple, rows []float32, toks []int32, pos []int, plane int) nn.Decline {
 	if s.inputs == nil {
 		return nn.DeclineCaller
 	}
-	return s.inputs.Given(x, ple, rows, toks, pos)
+	return s.inputs.Given(x, ple, rows, toks, pos, plane)
 }
 
 // embedDeclined is the error of input rows no composed form serves.
@@ -100,11 +101,12 @@ func (r rowSrc) givenAt(i, d int) []float32 {
 	return nil
 }
 
-// fillRows writes rows base..base+n-1 of src into x (n_embd each) and,
-// where the model has them, their per-layer inputs into ple, at positions
-// pos: a run of token rows through the composed input rows (cpuEmbed), a
-// given run through the composed given rows (cpuGiven).
-func (s *Instance) fillRows(src rowSrc, base, n int, x, ple []float32, pos []int) error {
+// fillRows writes rows base..base+n-1 of src into x (n_embd each, each
+// residual plane past the first plane floats on) and, where the model has
+// them, their per-layer inputs into ple, at positions pos: a run of token
+// rows through the composed input rows (cpuEmbed), a given run through the
+// composed given rows (cpuGiven).
+func (s *Instance) fillRows(src rowSrc, base, n int, x, ple []float32, pos []int, plane int) error {
 	d, pw := s.c.NEmbd, s.c.InputSideWidth()
 	st := &s.inScr
 	if len(st.toks) < n {
@@ -124,7 +126,7 @@ func (s *Instance) fillRows(src rowSrc, base, n int, x, ple []float32, pos []int
 		if a >= b {
 			return nil
 		}
-		if why := s.embedRows(x[a*d:b*d], pleOf(a, b), toks[a:b], pos[a:b]); why != nn.DeclineServes {
+		if why := s.embedRows(x[a*d:], pleOf(a, b), toks[a:b], pos[a:b], plane); why != nn.DeclineServes {
 			return s.embedDeclined(why)
 		}
 		return nil
@@ -139,7 +141,7 @@ func (s *Instance) fillRows(src rowSrc, base, n int, x, ple []float32, pos []int
 			return err
 		}
 		rows := g.rows[(base+lo-g.at)*d : (base+hi-g.at)*d]
-		if why := s.givenRows(x[lo*d:hi*d], pleOf(lo, hi), rows, toks[lo:hi], pos[lo:hi]); why != nn.DeclineServes {
+		if why := s.givenRows(x[lo*d:], pleOf(lo, hi), rows, toks[lo:hi], pos[lo:hi], plane); why != nn.DeclineServes {
 			return s.embedDeclined(why)
 		}
 		at = hi

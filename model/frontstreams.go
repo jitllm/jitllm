@@ -144,28 +144,6 @@ func (m *Model) streamExpand(b *graph.Builder, f graph.Facts, x graph.ValueID) (
 	return out, nil
 }
 
-// streamExpandGraph is the input rows' streams 1 and up from stream 0:
-// its one input stream 0, an output a stream past it; nil where the model
-// predicts no streams and copies none. A bank of checkpoints has none: a
-// block writes each checkpoint before any block reads it.
-func (m *Model) streamExpandGraph() (*graph.Graph, error) {
-	if !m.ExpandsStreams() {
-		return nil, nil
-	}
-	f, _ := m.Inventory(jlm.DenseBlock)
-	b := graph.NewBlock(-1)
-	x := b.In("x", m.Cfg.NEmbd)
-	xs, err := m.streamExpand(b, f, x)
-	if err != nil {
-		return nil, err
-	}
-	b.Out(xs...)
-	if err := graph.Verify(b.G, f); err != nil {
-		return nil, fmt.Errorf("the streams' expansion does not verify: %w", err)
-	}
-	return b.G, nil
-}
-
 // streamCollapseGraph is the row the head reads from every stream: an
 // input a stream, one output, the converter's stated head read; nil where
 // the front end states no streams.

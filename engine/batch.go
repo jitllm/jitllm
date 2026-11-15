@@ -43,14 +43,8 @@ func (s *Instance) rowsRouted(tokens []int32, seq, pos []int, nlogit, seqs int) 
 		bple = s.bple[:n*c.SideWidth()]
 	}
 	s.tokenSide(n)
-	if why := s.embedRows(s.bx[:n*c.NEmbd], bple, tokens[:n], pos[:n]); why != nn.DeclineServes {
+	if why := s.embedRows(s.bx[:n*c.ResidW()], bple, tokens[:n], pos[:n], s.plane(n)); why != nn.DeclineServes {
 		return nil, s.embedDeclined(why)
-	}
-
-	if c.StreamHead() {
-		if err := s.expandStreams(s.bx[:n*c.ResidW()], n, 0); err != nil {
-			return nil, err
-		}
 	}
 	s.tock(opResid, t0)
 
@@ -102,19 +96,13 @@ func (s *Instance) rowsRouted(tokens []int32, seq, pos []int, nlogit, seqs int) 
 		}
 		li = hi - 1
 	}
-	if c.StreamHead() && nlogit > 0 {
-		if err := s.collapseStreams(s.bx[:n*c.ResidW()], n); err != nil {
-			return nil, err
-		}
-	}
-
 	// Unlike Prefill, every decoding row's logits are wanted: each one is a
 	// live sequence that has to be sampled. So lm_head runs for those rows,
 	// which lead -- the widest matmul of the token, and the shape it likes.
 	// The CPU's composed head runs the wanted rows and applies every stage
 	// of the head's graph.
 	if !headOnDev && nlogit > 0 {
-		if why := s.headRows(s.bx, s.blogits, nil, nlogit); why != nn.DeclineServes {
+		if why := s.headRows(s.bx, s.blogits, nil, nlogit, s.plane(n)); why != nn.DeclineServes {
 			return nil, cpuHeadRefused(why)
 		}
 	}

@@ -236,13 +236,13 @@ func (s *Instance) stepRowsDevice(src rowSrc, out *rowsOut) error {
 		return ple[a*pw : b*pw]
 	}
 	if order[0] == n-1 && n > 1 {
-		if err := s.fillRows(src, n-1, 1, s.bx[:d], pleOf(0, 1), pos[:1]); err != nil {
+		if err := s.fillRows(src, n-1, 1, s.bx[:n*c.ResidW()], pleOf(0, 1), pos[:1], s.plane(n)); err != nil {
 			return err
 		}
-		if err := s.fillRows(src, 0, n-1, s.bx[d:n*d], pleOf(1, n), pos[1:]); err != nil {
+		if err := s.fillRows(src, 0, n-1, s.bx[d:n*c.ResidW()], pleOf(1, n), pos[1:], s.plane(n)); err != nil {
 			return err
 		}
-	} else if err := s.fillRows(src, 0, n, s.bx[:n*d], ple, pos); err != nil {
+	} else if err := s.fillRows(src, 0, n, s.bx[:n*c.ResidW()], ple, pos, s.plane(n)); err != nil {
 		return err
 	}
 	s.layerInputs(ple)
@@ -317,12 +317,15 @@ func (s *Instance) finishRows(headDone bool, lastBase, total int) error {
 	}
 	// The CPU's composed head over the wanted rows, the norm's rows its
 	// hidden state.
-	s.growRows(cnt)
+	nl := total - lastBase
 	var hidden []float32
-	if !c.ResidStreams() { // its hidden state is the residual, taken in collapseStreams
+	if c.ResidStreams() { // its hidden state is the residual
+		r.resBase = lastBase
+		r.tapStreams(s, s.bx[:nl*c.ResidW()], nl)
+	} else {
 		hidden = r.hidden[:cnt*c.NEmbd]
 	}
-	if why := s.headRows(s.bx[off*c.NEmbd:], r.logits, hidden, cnt); why != nn.DeclineServes {
+	if why := s.headRows(s.bx[off*c.NEmbd:], r.logits, hidden, cnt, s.plane(nl)); why != nn.DeclineServes {
 		return s.headDeclined(why)
 	}
 	return s.kvCheck()
@@ -331,7 +334,7 @@ func (s *Instance) finishRows(headDone bool, lastBase, total int) error {
 // tapStreams copies the residual of the wanted rows among n rows of a chunk
 // x (stream-major) into the step's hidden rows, every stream of a row
 // together: over a residual of every stream a step's hidden state is the
-// residual before the head's mix (collapseStreams), ResidW a row, not the head's input.
+// residual before the head's mix (its graph mixes them), ResidW a row, not the head's input.
 func (r *rowsOut) tapStreams(s *Instance, x []float32, n int) {
 	if r == nil || r.noHead {
 		return
@@ -374,9 +377,10 @@ func (s *Instance) stepRowsStreams(src rowSrc, out *rowsOut) error {
 		slot[i] = pos[i] // sequence 0's slots are its positions (nn.RowsDevice)
 		seq[i] = 0
 	}
-	if err := s.fillRows(src, 0, n, s.bx[:n*c.NEmbd], nil, pos); err != nil {
+	if err := s.fillRows(src, 0, n, s.bx[:n*c.ResidW()], nil, pos, s.plane(n)); err != nil {
 		return err
 	}
+	s.layDraft(s.bx[:n*c.ResidW()], n, 0)
 	s.rowsFresh = false
 	s.relocateFor(p0 + n)
 	rd, _ := s.onRowsDevice()
@@ -386,13 +390,13 @@ func (s *Instance) stepRowsStreams(src rowSrc, out *rowsOut) error {
 	}
 	s.rowsLog = grow32(s.rowsLog, n*c.NVocab)
 	logits := s.rowsLog[:n*c.NVocab]
-	// The collapse inside takes the wanted rows' residual (tapStreams), which
+	// The head's call takes the wanted rows' residual (tapStreams), which
 	// is this model's hidden state.
 	s.rows, out.resBase = out, 0
-	// The head goes to the device as its own call after the host's collapse,
-	// as decode's does (Forward): the host's projection of the rows reads the
-	// whole output matrix, about 70 ms a verification of qwen4exp on a V100's
-	// host. A refusal leaves the projection to the host.
+	// The head goes to the device as its own call, as decode's does
+	// (Forward): the host's projection of the rows reads the whole output
+	// matrix, about 70 ms a verification of qwen4exp on a V100's host. A
+	// refusal leaves the projection to the host.
 	devHead := nlogit > 0
 	hostLogits := nlogit
 	if devHead {
@@ -422,25 +426,18 @@ func (s *Instance) stepRowsStreams(src rowSrc, out *rowsOut) error {
 	return s.kvCheck()
 }
 
-// rowsHead projects n rows of a hyper-connected model's verification into
-// logits: on the device as a head-only ragged call, or on the CPU when the
-// device refuses it. A device that collapses the streams itself
-// (nn.Head.Collapses) is handed them as they are, as the decode's head is;
-// the CPU collapses them first for one that does not, and where the device
-// refuses.
+// rowsHead projects n rows of a verification over a residual of several
+// planes into logits: on the device as a head-only ragged call where its
+// head reads them (devHeadReads), or on the CPU, whose head's graph mixes
+// them, where it does not or refuses.
 func (s *Instance) rowsHead(rd nn.RowsDevice, pos, slot []int, n int, logits []float32, nlogit int) error {
 	c := s.m.Cfg
 	x := s.bx[:n*c.ResidW()]
 	h := s.head
-	devCollapse := h != nil && h.Collapses
-	if !devCollapse {
-		if err := s.collapseStreams(x, n); err != nil {
-			return err
-		}
-	} else if c.ResidStreams() {
+	if c.ResidStreams() {
 		s.rows.tapStreams(s, x, n)
 	}
-	if h != nil {
+	if h != nil && s.devHeadReads() {
 		keep := h.Logits
 		h.RowLogits, h.Logits, h.LogitRows = true, logits[:nlogit*c.NVocab], nlogit
 		ok := rd.LayersRows(s.hi, s.hi, pos, slot, s.maxSeq, x, s.bcs[:n*c.NRot], s.bswaTable(n, c.LocalNRot()), h)
@@ -450,13 +447,7 @@ func (s *Instance) rowsHead(rd nn.RowsDevice, pos, slot []int, n int, logits []f
 			return nil
 		}
 	}
-	if devCollapse {
-		if err := s.collapseStreams(x, n); err != nil {
-			return err
-		}
-	}
-	s.growRows(n)
-	if why := s.headRows(s.bx, logits, nil, nlogit); why != nn.DeclineServes {
+	if why := s.headRows(x, logits, nil, nlogit, s.plane(n)); why != nn.DeclineServes {
 		return s.headDeclined(why)
 	}
 	return nil

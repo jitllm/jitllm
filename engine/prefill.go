@@ -287,7 +287,7 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 				} else {
 					st := &s.inScr
 					st.tok1[0], st.pos1[0] = max(rowIDs[i], 0), s.pos
-					if why := s.givenRows(s.x, s.ple, g, st.tok1[:], st.pos1[:]); why != nn.DeclineServes {
+					if why := s.givenRows(s.resid(), s.ple, g, st.tok1[:], st.pos1[:], s.plane(1)); why != nn.DeclineServes {
 						return s.embedDeclined(why)
 					}
 					s.trace(-1, "embd", s.x)
@@ -418,12 +418,7 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 		// A closure, as forward.go's fill is: a device call may write part of
 		// the residual before it fails, so a restart begins from the
 		// embeddings again.
-		//
-		// gathered says the card wrote the chunk's input rows, every stream
-		// of them where the model has several, as embedOnDevice's token.
-		gathered := false
 		refill := func() error {
-			gathered = false
 			// On the card when the block run starts there and the device
 			// gathers the step's input rows (nn.Head.GatherRow), or its tier
 			// gathers the tied embedding: far faster than the host (EmbedRows).
@@ -443,7 +438,6 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 				if s.ldEmbed != nil && s.ldEmbed.EmbedRows(rowIDs[base:base+n], p0, dst) {
 					// A token chunk's tap rows are zeros.
 					s.tokenSide(n)
-					gathered = true
 					return nil
 				}
 			}
@@ -459,25 +453,16 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 			for i := range at {
 				at[i] = p0 + i
 			}
-			if err := s.fillRows(src, base, n, s.bx[:n*c.NEmbd], bple, at); err != nil {
+			if err := s.fillRows(src, base, n, s.bx[:n*c.ResidW()], bple, at, s.plane(n)); err != nil {
 				return err
 			}
+			s.layDraft(s.bx[:n*c.ResidW()], n, base)
 			// The tap rows over the input rows' zeros.
 			if c.DeepTaps > 0 {
 				s.growBPLE(n)
 				s.fillDeep(src, base, n, s.bple[:n*c.SideWidth()])
 			}
 			return nil
-		}
-		// The streams past the first, from each row's embedding.
-		if c.StreamHead() {
-			fill := refill
-			refill = func() error {
-				if err := fill(); err != nil || gathered {
-					return err
-				}
-				return s.expandStreams(s.bx[:n*c.ResidW()], n, base)
-			}
 		}
 		if err := refill(); err != nil {
 			return nil, err
@@ -630,19 +615,6 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 		for k := range c.Streams() {
 			copy(c.Stream(s.resid(), k, 1, 0), c.Stream(s.bx, k, n, n-1))
 		}
-		// A head over several streams reads their collapse: collapsed in
-		// place, the chunk's rows' stream 0 is their head input, and the last
-		// row's is s.x's. A device head that collapses them itself is handed
-		// the last row's as they are (devCollapses).
-		if c.StreamHead() && base+n == total && !s.devCollapses() {
-			if s.rows != nil {
-				s.rows.resBase = base
-			}
-			if err := s.collapseStreams(s.bx[:n*c.ResidW()], n); err != nil {
-				return nil, err
-			}
-			copy(s.x, s.bx[(n-1)*c.NEmbd:n*c.NEmbd])
-		}
 		ps.after(n, time.Since(chunkStart).Seconds(), s.seqPos(slot))
 		s.promptRows += n
 		base += n
@@ -667,8 +639,7 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 		}
 		return s.logits, nil
 	}
-	devCollapse := s.devCollapses()
-	if s.head != nil && s.devCount() > 0 {
+	if s.head != nil && s.devCount() > 0 && s.devHeadReads() {
 		if s.ld.Layers(s.gpuLayers, s.gpuLayers, s.seqPos(slot)-1, 1, s.resid(), s.cs[:c.RopeW()], s.swaTable(c.LocalNRot()), s.head) {
 			if err := s.devLogits(); err != nil {
 				return nil, err
@@ -686,16 +657,11 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 			return nil, errDevice{s.gpuLayers, s.devWhy()}
 		}
 	}
-	if devCollapse {
-		if err := s.collapseStreams(s.resid(), 1); err != nil {
-			return nil, err
-		}
-	}
 	why := nn.DeclineServes
 	if len(s.PickIDs) > 0 {
 		why = s.pickLabels(s.x)
 	} else {
-		why = s.headRow(s.x, s.logits, nil)
+		why = s.headRow(s.resid(), s.logits, nil)
 	}
 	if why != nn.DeclineServes {
 		return nil, cpuHeadRefused(why)
@@ -705,16 +671,6 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 		return nil, err
 	}
 	return s.logits, nil
-}
-
-// devCollapses says a prompt's head over several streams goes to a device
-// that collapses them itself (nn.Head.Collapses), handed the last row's
-// every stream as forward.go's tail hands a token's: the host collapsing
-// them first would have the device collapse stream 0's collapse beside
-// streams the last row never wrote.
-func (s *Instance) devCollapses() bool {
-	c := s.m.Cfg
-	return c.StreamHead() && s.head != nil && s.head.Collapses && s.rows == nil && s.devCount() > 0 && s.lo < c.NLayer
 }
 
 // chunkOn is how many prompt rows route r's device takes in one chunk: its

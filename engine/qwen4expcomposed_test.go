@@ -164,20 +164,14 @@ func partCPULogits(t *testing.T, m *model.Model, toks []int32, f cpuFault, compo
 	if heads != len(toks) {
 		t.Fatalf("%d head steps served, want %d", heads, len(toks))
 	}
-	fg, graphs := m.FrontGraphs(), 0
-	for _, g := range []*graph.Graph{fg.Expand, fg.Collapse} {
-		if g != nil {
-			graphs++
-		}
+	// The input rows' graph writes every stream and the head's mixes them:
+	// the steps served above are those graphs'.
+	fg := m.FrontGraphs()
+	if got := len(fg.CpuHead.In); got != m.Cfg.Streams() {
+		t.Fatalf("the head's graph reads %d planes, want %d", got, m.Cfg.Streams())
 	}
-	rows, sdecl := s.Account(nn.CPU).Steps.Of(nn.ComposedStreams)
-	for i, n := range sdecl {
-		if n > 0 {
-			t.Errorf("%d rows of the streams' expansion or collapse declined: %s (%v)", n, nn.DeclineName(i), s.Account(nn.CPU).FormErr)
-		}
-	}
-	if rows != graphs*len(toks) {
-		t.Fatalf("the streams' expansion and collapse served %d rows, want %d", rows, graphs*len(toks))
+	if got := s.inPlanes(fg.CpuEmbed); got != m.Cfg.Streams() {
+		t.Fatalf("the input rows' graph writes %d planes, want %d", got, m.Cfg.Streams())
 	}
 	return out
 }
@@ -290,17 +284,18 @@ func q4eComposedViolations(t *testing.T) []c6Violation {
 	}
 }
 
-// rewriteExpansion is the front end's set with the input rows' streams'
-// expansion rewritten.
+// rewriteExpansion is the front end's set with the input rows' graph, the
+// streams' expansion among its ops, rewritten.
 func rewriteExpansion(m *model.Model, t *testing.T, rewrite func(*graph.Graph) *graph.Graph) func() {
 	t.Helper()
 	s := m.FrontGraphs()
-	if s.Expand == nil {
+	if !m.ExpandsStreams() || s.CpuEmbed == nil {
 		t.Fatal("the model has no expansion to rewrite")
 	}
 	set := *s
-	set.Expand = rewrite(s.Expand)
-	if err := graph.Verify(set.Expand, graph.Facts{}); err != nil {
+	set.CpuEmbed = rewrite(s.CpuEmbed)
+	f, _ := m.Inventory(jlm.DenseBlock)
+	if err := graph.Verify(set.CpuEmbed, f); err != nil {
 		t.Fatalf("the rewritten expansion does not verify: %v", err)
 	}
 	m.Front.Mu.Lock()
@@ -319,14 +314,22 @@ func rewriteExpansion(m *model.Model, t *testing.T, rewrite func(*graph.Graph) *
 func rewriteCollapse(m *model.Model, t *testing.T, rewrite func(*graph.Graph) *graph.Graph) func() {
 	t.Helper()
 	s := m.FrontGraphs()
-	if s.Collapse == nil {
+	if s.CpuHead == nil || len(s.CpuHead.In) < 2 {
 		t.Fatal("the model has no collapse to rewrite")
 	}
 	set := *s
-	set.Collapse = rewrite(s.Collapse)
+	set.CpuHead, set.CpuHidden = rewrite(s.CpuHead), rewrite(s.CpuHidden)
+	gs := []*graph.Graph{set.CpuHead, set.CpuHidden}
+	// The card mixes the streams in a call of its own.
+	if s.Collapse != nil {
+		set.Collapse = rewrite(s.Collapse)
+		gs = append(gs, set.Collapse)
+	}
 	f, _ := m.Inventory(jlm.DenseBlock)
-	if err := graph.Verify(set.Collapse, f); err != nil {
-		t.Fatalf("the rewritten collapse does not verify: %v", err)
+	for _, g := range gs {
+		if err := graph.Verify(g, f); err != nil {
+			t.Fatalf("the rewritten collapse does not verify: %v", err)
+		}
 	}
 	m.Front.Mu.Lock()
 	was := m.Front.Set

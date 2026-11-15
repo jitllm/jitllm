@@ -140,7 +140,7 @@ func TestKimiK3ServesComposedOnCPU(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer m.Close()
-			if s := m.FrontGraphs(); s.Expand != nil || s.Collapse == nil {
+			if s := m.FrontGraphs(); m.ExpandsStreams() || s.CpuHead == nil || len(s.CpuHead.In) != m.Cfg.Streams() {
 				t.Fatal("the bank's input rows are expanded, or the head's mix over it is not stated")
 			}
 			run := func(f cpuFault) float64 {

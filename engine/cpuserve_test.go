@@ -492,24 +492,17 @@ func cpuLogits(t *testing.T, m *model.Model, toks []int32, f cpuFault, composed 
 		if heads != len(toks) {
 			t.Fatalf("%d head steps served, want %d", heads, len(toks))
 		}
-		// A model of several stated streams expands every step's row where
-		// it has an expansion and collapses it for the head on the composed
-		// CPU.
+		// A model of several stated streams writes every stream it expands
+		// into in its input rows' graph and mixes them in its head's, which
+		// read and write a plane of the residual a stream: the steps served
+		// above are those graphs'.
 		if m.Cfg.StatesStreams() {
-			fg, graphs := m.FrontGraphs(), 0
-			for _, g := range []*graph.Graph{fg.Expand, fg.Collapse} {
-				if g != nil {
-					graphs++
-				}
+			fg := m.FrontGraphs()
+			if got := len(fg.CpuHead.In); got != m.Cfg.Streams() {
+				t.Fatalf("the head's graph reads %d planes, want %d", got, m.Cfg.Streams())
 			}
-			rows, sdecl := s.Account(nn.CPU).Steps.Of(nn.ComposedStreams)
-			for i, n := range sdecl {
-				if n > 0 {
-					t.Errorf("%d rows of the streams' expansion or collapse declined: %s (%v)", n, nn.DeclineName(i), s.Account(nn.CPU).FormErr)
-				}
-			}
-			if rows != graphs*len(toks) {
-				t.Fatalf("the streams' expansion and collapse served %d rows, want %d", rows, graphs*len(toks))
+			if got := s.inPlanes(fg.CpuEmbed); m.ExpandsStreams() && got != m.Cfg.Streams() {
+				t.Fatalf("the input rows' graph writes %d planes, want %d", got, m.Cfg.Streams())
 			}
 		}
 	} else if served != 0 {
@@ -540,13 +533,13 @@ func cpuCompare(want, got [][]float32) (worst float64, agree int) {
 // setFault breaks s's CPU device the way f names, in the instance and in the
 // parts the device holds.
 func setFault(s *Instance, f cpuFault) {
-	execOf(s).StreamFault = f == cpuFaultStreams
+	execOf(s).PlaneFault = f == cpuFaultStreams
 	if ln := execOf(s).Lanes(); ln != nil {
 		ln.RecFault = f == cpuFaultRec
 		ln.ChunkFault = f == cpuFaultChunk
 	}
-	if st, ok := s.streams.(*cpudev.Streams); ok {
-		st.Fault = f == cpuFaultStreams
+	if in, ok := s.inputs.(*cpudev.Inputs); ok {
+		in.PlaneFault = f == cpuFaultStreams
 	}
 	if r := execOf(s).Blocks(); r != nil {
 		r.FaultRow, r.FaultWrite = f == cpuFaultRow, f == cpuFaultWrite
@@ -556,6 +549,7 @@ func setFault(s *Instance, f cpuFault) {
 		r.FaultPicks, r.FaultExpert, r.FaultWeight = f == cpuFaultPicks, f == cpuFaultExpert, f == cpuFaultWeight
 	}
 	if h, ok := s.heads.(*cpudev.Head); ok {
+		h.PlaneFault = f == cpuFaultStreams
 		h.Wrong = nil
 		if f == cpuFaultHead {
 			h.Wrong = s.h

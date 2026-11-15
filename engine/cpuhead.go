@@ -140,11 +140,11 @@ func (s *Instance) headRow(x, logits, hidden []float32) nn.Decline {
 // headRows is the head over the first n rows of x into the rows of logits,
 // and the norm's rows into hidden where it is given (nn.HeadDevice.HeadRows),
 // or why not.
-func (s *Instance) headRows(x, logits, hidden []float32, n int) nn.Decline {
+func (s *Instance) headRows(x, logits, hidden []float32, n, plane int) nn.Decline {
 	if s.heads == nil {
 		return nn.DeclineCaller
 	}
-	return s.heads.HeadRows(x, logits, hidden, n)
+	return s.heads.HeadRows(x, logits, hidden, n, plane)
 }
 
 // outNormRows writes the output norm of n rows of x into dst
