@@ -193,30 +193,80 @@ func checkDeltaMixer(t *testing.T, m *model.Model, li int) {
 		t.Fatalf("block %d: the convolution %+v is not the mixed projection's over its own window of %d", li, c, dg.Conv)
 	}
 	a := rules[0].Attr
-	// A tiled file's value head vh reads key head vh mod the key heads: q
-	// and k repeated a value head each, one key head a value head.
-	groups, tiled := dg.KHeads, producerOf(t, g, rules[0].In[1]).Kind == graph.OpTile
+	// A tiled file's value head vh reads key head vh mod the key heads, a
+	// grouped one key head vh over the value heads a key head serves.
+	keys, decay := graph.ScanGroup|graph.ScanCol, graph.ScanHead
 	if dg.Tiled {
-		groups = dg.VHeads
+		keys = graph.ScanCycle | graph.ScanCol
 	}
-	if a.NHead != dg.VHeads || a.NKVHead != groups || a.HeadDim != dg.KDim || tiled != dg.Tiled || !scanSums(a) ||
+	if m.Cfg.ChanDecay() {
+		decay |= graph.ScanCol
+	}
+	if a.NHead != dg.VHeads || a.NKVHead != dg.KHeads || a.HeadDim != dg.KDim ||
+		!scanIs(a, gatedDeltaWant(), 5, keys, keys, graph.ScanHead|graph.ScanRow, decay, graph.ScanHead) ||
 		len(rules[0].Writes) != 1 || rules[0].Writes[0].State != graph.StateRecState {
-		t.Fatalf("block %d: a delta rule of %+v over %+v, want the container's geometry", li, a, dg)
+		t.Fatalf("block %d: a delta rule of %+v over %+v, want the gated delta rule at the container's geometry", li, a, dg)
 	}
 	readerOf(t, g, jlm.RoleSSMOut)
 }
 
-// scanSums says a scan's update sums a term over the state's row: the
-// delta rule's key dot, which the selective update has none of.
-func scanSums(a graph.Attrs) bool {
-	for _, t := range a.Expr {
-		for _, g := range t.Args {
-			if g.Kind == graph.ArgSum {
-				return true
-			}
+// scanWant is a scan's terms over operands in, earlier terms t, the state
+// st and sums sum.
+func scanWant(f func(in, t, sum func(int) graph.Arg, st graph.Arg, term func(graph.MapFn, graph.Arg, graph.Arg) graph.Term) []graph.Term) []graph.Term {
+	arg := func(k graph.ArgKind) func(int) graph.Arg {
+		return func(i int) graph.Arg { return graph.Arg{Kind: k, Index: i} }
+	}
+	term := func(fn graph.MapFn, a, b graph.Arg) graph.Term { return graph.Term{Fn: fn, Args: [3]graph.Arg{a, b}} }
+	return f(arg(graph.ArgIn), arg(graph.ArgTerm), arg(graph.ArgSum), graph.Arg{Kind: graph.ArgState}, term)
+}
+
+// gatedDeltaWant is the gated delta rule over q, k, v, decay and beta, as
+// the reference states it: S' = decay S + beta k (v - (decay S) k), o = S' q.
+func gatedDeltaWant() []graph.Term {
+	return scanWant(func(in, t, sum func(int) graph.Arg, st graph.Arg, term func(graph.MapFn, graph.Arg, graph.Arg) graph.Term) []graph.Term {
+		return []graph.Term{
+			term(graph.MapMul, st, in(3)),
+			term(graph.MapMul, t(0), in(1)),
+			term(graph.MapSub, in(2), sum(1)),
+			term(graph.MapMul, t(2), in(4)),
+			term(graph.MapMul, in(1), t(3)),
+			term(graph.MapAdd, t(0), t(4)),
+			term(graph.MapMul, t(5), in(0)),
+		}
+	})
+}
+
+// selectiveWant is the selective state update over q, k, v, decay and dt:
+// S' = decay S + k v dt, o = S' q.
+func selectiveWant() []graph.Term {
+	return scanWant(func(in, t, _ func(int) graph.Arg, st graph.Arg, term func(graph.MapFn, graph.Arg, graph.Arg) graph.Term) []graph.Term {
+		return []graph.Term{
+			term(graph.MapMul, st, in(3)),
+			term(graph.MapMul, in(2), in(4)),
+			term(graph.MapMul, in(1), t(1)),
+			term(graph.MapAdd, t(0), t(2)),
+			term(graph.MapMul, t(3), in(0)),
+		}
+	})
+}
+
+// scanIs says a scan's terms are want, its state term update and its
+// operands' axes axes.
+func scanIs(a graph.Attrs, want []graph.Term, update int, axes ...graph.ScanAxis) bool {
+	if len(a.Expr) != len(want) || a.Update != update || len(a.Words) != len(axes) {
+		return false
+	}
+	for i, t := range want {
+		if a.Expr[i] != t {
+			return false
 		}
 	}
-	return false
+	for i, m := range axes {
+		if graph.ScanAxis(a.Words[i]) != m {
+			return false
+		}
+	}
+	return true
 }
 
 // checkOutputGate holds block li's graph to the gate's statement.

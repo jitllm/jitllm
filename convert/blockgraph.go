@@ -88,7 +88,7 @@ type mjBlockOp struct {
 	// terms (graph.Term).
 	Terms []mjTerm `json:"terms"`
 	// Axes are a scan's operands' axes, one an operand, each an
-	// expression naming them ("head", "group", "row", "col", space
+	// expression naming them ("head", "group", "cycle", "row", "col", space
 	// separated; graph.ScanAxis).
 	Axes []string `json:"axes"`
 	// Parts is how many equal slices a split_sum adds, an expression.
@@ -1449,7 +1449,7 @@ func scanAxes(v jinja.Value) (graph.ScanAxis, error) {
 	}
 	var m graph.ScanAxis
 	for _, n := range strings.Fields(v.AsString()) {
-		ax, ok := map[string]graph.ScanAxis{"head": graph.ScanHead, "group": graph.ScanGroup, "row": graph.ScanRow, "col": graph.ScanCol}[n]
+		ax, ok := map[string]graph.ScanAxis{"head": graph.ScanHead, "group": graph.ScanGroup, "cycle": graph.ScanCycle, "row": graph.ScanRow, "col": graph.ScanCol}[n]
 		if !ok || m&ax != 0 {
 			return 0, fmt.Errorf("axes %q: %q is not an axis or names one twice", v.AsString(), n)
 		}

@@ -483,7 +483,7 @@ func runDelta(fr *recRun, g *graph.Graph, s deltaShape, n int, runs recRuns, cha
 		g.Out[0]: poisoned(R * s.h * s.dv)}
 	for id, v := range g.Values {
 		if _, ok := fr.vals[graph.ValueID(id)]; !ok {
-			// A value between the graph's ops (a tiled pairing's q and k).
+			// A value between the graph's ops.
 			fr.vals[graph.ValueID(id)] = poisoned(R * v.Width)
 		}
 	}

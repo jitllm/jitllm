@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/graph"
 	"github.com/jitllm/jitllm/model"
 
 	"github.com/jitllm/jitllm/engine/device/gpu"
@@ -50,8 +51,8 @@ func TestHybridDecodeIsCaptured(t *testing.T) {
 // qwen3next's) must give DIFFERENT logits, and the tiled arm must be the
 // pairing the flag asked for. The fixture has two value heads per key head,
 // where the pairings differ (at one they coincide). Correctness against the
-// reference is Qwen3.5-4B/-9B teacher-forced against llama.cpp; this keeps a
-// later change from dropping the flag.
+// reference is Qwen3.5-4B (two value heads a key head) against llama.cpp in
+// TestGreedyMatchesLlamaCpp; this keeps a later change from dropping the flag.
 func TestDeltaKeyTiledIsTheDeltaRulesPairing(t *testing.T) {
 	grouped, openOpts := hybridModelOpt(t, hyOpt{})
 	tiled, openOpts2 := hybridModelOpt(t, hyOpt{tiled: true})
@@ -63,12 +64,33 @@ func TestDeltaKeyTiledIsTheDeltaRulesPairing(t *testing.T) {
 	if g.Rep < 2 {
 		t.Fatalf("the fixture has %d value head(s) per key head; the pairings coincide and this proves nothing", g.Rep)
 	}
-	for vh := 0; vh < g.VHeads; vh++ {
-		if want := vh % g.KHeads; g.KeyHead(vh) != want {
-			t.Fatalf("tiled: value head %d reads key head %d, want %d", vh, g.KeyHead(vh), want)
+	// The built scan states the pairing: q and k along the value head's
+	// cycle of key heads where tiled, its group where grouped.
+	pairing := func(m *model.Model) graph.ScanAxis {
+		for li := range m.Cfg.NLayer {
+			for _, o := range m.Composing().BlockGraph(li).Ops {
+				if o.Kind == graph.OpStateScan {
+					if o.Attr.NKVHead != g.KHeads || o.Attr.Words[0] != o.Attr.Words[1] {
+						t.Fatalf("block %d: a scan over %d key heads, q along %#x and k along %#x", li, o.Attr.NKVHead, o.Attr.Words[0], o.Attr.Words[1])
+					}
+					return graph.ScanAxis(o.Attr.Words[1])
+				}
+			}
 		}
-		if want := vh / g.Rep; grouped.Cfg.Delta().KeyHead(vh) != want {
-			t.Fatalf("grouped: value head %d reads key head %d, want %d", vh, grouped.Cfg.Delta().KeyHead(vh), want)
+		t.Fatal("the fixture states no scan")
+		return 0
+	}
+	if p := pairing(tiled); p != graph.ScanCycle|graph.ScanCol {
+		t.Fatalf("tiled: the keys along %#x, want the key heads' cycle", p)
+	}
+	if p := pairing(grouped); p != graph.ScanGroup|graph.ScanCol {
+		t.Fatalf("grouped: the keys along %#x, want the key heads' groups", p)
+	}
+	// The pairing is the scan's index and costs no op of its own: a tiled
+	// block states the grouped block's ops.
+	for li := range tiled.Cfg.NLayer {
+		if a, b := len(tiled.Composing().BlockGraph(li).Ops), len(grouped.Composing().BlockGraph(li).Ops); a != b {
+			t.Fatalf("block %d: %d ops tiled, %d grouped", li, a, b)
 		}
 	}
 

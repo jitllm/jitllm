@@ -34,17 +34,12 @@ func deltaGraph(s deltaShape) *graph.Graph {
 
 // DeltaScan is the delta rule over q, k, v, decay and beta as an
 // OpStateScan of h value heads of dv over kh key heads of dk: value head h
-// paired with key head h mod kh where tiled (q and k repeated a value head
-// each), the decay one a key channel of each where chans, and with no key
+// paired with key head h mod kh where tiled, the decay one a key channel of each where chans, and with no key
 // dot where additive (the selective update); keeps keeps its rows' states.
 func DeltaScan(b *graph.Builder, q, k, v, d, beta graph.ValueID, h, kh, dk, dv int, tiled, chans, additive, keeps bool) graph.ValueID {
-	keys, groups := graph.ScanGroup|graph.ScanCol, kh
+	keys := graph.ScanGroup | graph.ScanCol
 	if tiled {
-		tile := func(name string, x graph.ValueID) graph.ValueID {
-			return b.Emit(graph.OpTile, []graph.ValueID{x}, []graph.Result{{Name: name, Width: h * dk}}, nil, graph.Attrs{}, nil, nil)[0]
-		}
-		q, k = tile("q.tiled", q), tile("k.tiled", k)
-		keys, groups = graph.ScanHead|graph.ScanCol, h
+		keys = graph.ScanCycle | graph.ScanCol
 	}
 	decays := graph.ScanHead
 	if chans {
@@ -72,7 +67,7 @@ func DeltaScan(b *graph.Builder, q, k, v, d, beta graph.ValueID, h, kh, dk, dv i
 			term(graph.MapMul, t(3), in(0)),
 		}, 3
 	}
-	a := graph.Attrs{NHead: h, NKVHead: groups, HeadDim: dk, Keeps: keeps, Expr: terms, Update: update,
+	a := graph.Attrs{NHead: h, NKVHead: kh, HeadDim: dk, Keeps: keeps, Expr: terms, Update: update,
 		Words: []uint64{uint64(keys), uint64(keys), uint64(graph.ScanHead | graph.ScanRow), uint64(decays), uint64(graph.ScanHead)}}
 	return b.Emit(graph.OpStateScan, []graph.ValueID{q, k, v, d, beta}, []graph.Result{{Name: "o", Width: h * dv}}, nil, a,
 		[]graph.StateRef{{State: graph.StateRecState}}, []graph.StateRef{{State: graph.StateRecState, Version: 1}})[0]

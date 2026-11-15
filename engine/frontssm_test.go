@@ -54,13 +54,14 @@ func TestFrontStatesTheStateSpaceMixers(t *testing.T) {
 					t.Fatalf("block %d states %d delta rules, want one", li, len(rules))
 				}
 				a := rules[0].Attr
-				heads, kHeads, decay := dg.VHeads, dg.KHeads, dg.VHeads
+				heads, kHeads, decay, decays := dg.VHeads, dg.KHeads, dg.VHeads, graph.ScanHead
 				if k == jlm.LayerScan {
-					kHeads, decay = 1, dg.VHeads*dg.KDim
+					kHeads, decay, decays = 1, dg.VHeads*dg.KDim, graph.ScanHead|graph.ScanCol
 				}
-				if scanSums(a) || a.NHead != heads || a.NKVHead != kHeads || a.HeadDim != dg.KDim ||
+				keys := graph.ScanGroup | graph.ScanCol
+				if !scanIs(a, selectiveWant(), 3, keys, keys, graph.ScanHead|graph.ScanRow, decays, graph.ScanHead) || a.NHead != heads || a.NKVHead != kHeads || a.HeadDim != dg.KDim ||
 					g.Values[rules[0].In[3]].Width != decay || rules[0].Writes[0].State != graph.StateRecState {
-					t.Fatalf("block %d: a delta rule of %+v, a decay of %d, want an additive one of %d heads over %d of %d, a decay of %d",
+					t.Fatalf("block %d: a delta rule of %+v, a decay of %d, want the selective update of %d heads over %d of %d, a decay of %d",
 						li, a, g.Values[rules[0].In[3]].Width, heads, kHeads, dg.KDim, decay)
 				}
 			}

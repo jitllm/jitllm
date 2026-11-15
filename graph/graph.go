@@ -7,6 +7,7 @@ package graph
 
 import (
 	"fmt"
+	"math/bits"
 	"strings"
 
 	"github.com/jitllm/jitllm/format/jlm"
@@ -226,7 +227,7 @@ const (
 	// in order: for each head h of NHead, a matrix S of Dv rows (Out[0]'s
 	// width over NHead) by HeadDim columns. Its terms (Attr.Expr) are
 	// evaluated at each element (h, j, i) of S as OpExpr's are, an operand
-	// In[k] read at the axes Words[k] states (ScanHead, ScanGroup, ScanRow,
+	// In[k] read at the axes Words[k] states (ScanHead, ScanGroup, ScanCycle, ScanRow,
 	// ScanCol), ArgState the element of S before the row and ArgSum term
 	// Index summed over S's row (every column i of (h, j)). Term Update is
 	// S after the row, and Out[0] at (h, j) is the last term summed over
@@ -683,20 +684,26 @@ const (
 	ScanRow
 	// ScanCol is the state's column, one of HeadDim.
 	ScanCol
+	// ScanCycle is the head's place in a cycle of NKVHead: head h reads
+	// h mod NKVHead, an operand repeated whole across the heads where
+	// ScanGroup repeats each of its heads in turn. It sits where ScanGroup
+	// would in the operand's order.
+	ScanCycle
 )
 
 // ScanWidth is the elements an operand along axes m holds, of heads heads
 // in groups groups, rows rows and cols columns; false where m is not a set
-// of axes (both a head and its group, or a bit past them).
+// of axes (more than one of a head, its group and its cycle, or a bit past
+// them).
 func ScanWidth(m ScanAxis, heads, groups, rows, cols int) (int, bool) {
-	if m&^(ScanHead|ScanGroup|ScanRow|ScanCol) != 0 || m&ScanHead != 0 && m&ScanGroup != 0 {
+	if m&^(ScanHead|ScanGroup|ScanRow|ScanCol|ScanCycle) != 0 || bits.OnesCount64(uint64(m&(ScanHead|ScanGroup|ScanCycle))) > 1 {
 		return 0, false
 	}
 	n := 1
 	for _, d := range []struct {
 		ax ScanAxis
 		n  int
-	}{{ScanHead, heads}, {ScanGroup, groups}, {ScanRow, rows}, {ScanCol, cols}} {
+	}{{ScanHead, heads}, {ScanGroup, groups}, {ScanCycle, groups}, {ScanRow, rows}, {ScanCol, cols}} {
 		if m&d.ax != 0 {
 			n *= d.n
 		}

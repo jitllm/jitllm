@@ -123,19 +123,6 @@ func (c *Config) mixerAt(li int) mixer {
 	return mixNone
 }
 
-// keyHead is the key/query head value head vh reads.
-//
-// Two pairings ship, and both are fluent when wrong. qwen3next's GGUF keeps
-// HuggingFace's grouped order (value heads kh*rep .. kh*rep+rep-1 share key
-// head kh); llama.cpp's qwen35 converter reorders to tiled order (value head
-// vh shares key head vh % kHeads). They differ only when rep > 1.
-func (g DeltaGeom) KeyHead(vh int) int {
-	if g.Tiled {
-		return vh % g.KHeads
-	}
-	return vh / g.Rep
-}
-
 // convStateLen and deltaStateLen are one sequence's recurrent state for one
 // linear layer. Both are constant in the context length.
 func (g DeltaGeom) ConvStateLen() int  { return (g.Conv - 1) * g.Chans }

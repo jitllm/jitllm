@@ -96,15 +96,9 @@ func (m *Model) deltaMixer(b *graph.Builder, f graph.Facts, n graph.ValueID, has
 	}
 	beta := mapc("beta", graph.MapSigmoid, 0, vh, nil, braw)
 
-	keys, groups := graph.ScanGroup|graph.ScanCol, kh
+	keys := graph.ScanGroup | graph.ScanCol
 	if g.Tiled {
-		// Value head vh reads key head vh mod kh: q and k repeated a
-		// value head each.
-		tile := func(name string, x graph.ValueID) graph.ValueID {
-			return b.Emit(graph.OpTile, []graph.ValueID{x}, []graph.Result{{Name: name, Width: vh * dk}}, nil, graph.Attrs{}, nil, nil)[0]
-		}
-		q, k = tile("q.tiled", q), tile("k.tiled", k)
-		keys, groups = graph.ScanHead|graph.ScanCol, vh
+		keys = graph.ScanCycle | graph.ScanCol
 	}
 	decays := graph.ScanHead
 	if g.chanDecay {
@@ -113,7 +107,7 @@ func (m *Model) deltaMixer(b *graph.Builder, f graph.Facts, n graph.ValueID, has
 	terms, update := gatedDeltaTerms()
 	o := stateScan(b, "delta", vh*dv, []graph.ValueID{q, k, v, decay, beta},
 		[]graph.ScanAxis{keys, keys, graph.ScanHead | graph.ScanRow, decays, graph.ScanHead}, terms, update,
-		graph.Attrs{NHead: vh, NKVHead: groups, HeadDim: dk, Span: stateSpan(c, vh*dv*dk)})
+		graph.Attrs{NHead: vh, NKVHead: kh, HeadDim: dk, Span: stateSpan(c, vh*dv*dk)})
 	o = b.HeadNorm(o, jlm.RoleSSMNorm, dv, c.RMSEps)
 	gated, err := graph.LowerStated(b, c.DeltaGate, []graph.ValueID{z, o}, f)
 	if err != nil {
