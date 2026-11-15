@@ -1134,7 +1134,6 @@ func hfArchTable() map[string]*hfArch {
 		// convert/hfmoefamily.go.
 		"Glm4MoeForCausalLM":        glm4moeHF(),
 		"Qwen2MoeForCausalLM":       qwen2moeHF(),
-		"Ernie4_5ForCausalLM":       ernie45HF(),
 		"Ernie4_5_MoeForCausalLM":   ernie45moeHF(),
 		"HunYuanDenseV1ForCausalLM": hunyuanHF(),
 		"HunYuanMoEV1ForCausalLM":   hunyuanHF(),

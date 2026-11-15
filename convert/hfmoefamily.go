@@ -236,21 +236,6 @@ func qwen2moeHFConfig(c *hfConfig, names []string) (*Config, error) {
 
 // --- ERNIE 4.5 -------------------------------------------------------------
 
-// ernie45HF is ERNIE 4.5's dense line: llama's graph exactly, as its GGUF
-// converts. Its checkpoint rotates adjacent pairs already (the class's
-// rotate_half interleaves), which is the container's own layout, so unlike
-// llama nothing is permuted.
-func ernie45HF() *hfArch {
-	return &hfArch{
-		arch:        ArchLlama,
-		blockPrefix: llamaHF().blockPrefix,
-		model:       llamaHF().model,
-		block:       llamaHF().block,
-		ignore:      llamaHF().ignore,
-		config:      hfConfigWith(ArchLlama, 0, "silu"),
-	}
-}
-
 // ernie45moeHF is the mixture: a softmax top-k whose selection adds a
 // per-expert bias to the softmax probability (moe_statics), renormalised,
 // beside shared experts, after a dense lead and interleaved by a step.

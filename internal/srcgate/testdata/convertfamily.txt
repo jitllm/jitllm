@@ -45,7 +45,6 @@
 1 convert/hfmoefamily2.go:dots1HF
 1 convert/hfmoefamily2.go:dots1HFConfig
 1 convert/hfmoefamily2.go:moe2SigmoidClasses
-2 convert/hfmoefamily.go:ernie45HF
 1 convert/hfmoefamily.go:ernie45moeHF
 1 convert/hfmoefamily.go:ernie45moeHFConfig
 1 convert/hfmoefamily.go:glm4moeHF
@@ -78,7 +77,7 @@
 1 convert/safetensors.go:deepseek2HF
 1 convert/safetensors.go:deepseekHFConfigFFN
 4 convert/safetensors.go:hardcodesSigmoid
-24 convert/safetensors.go:hfArchTable
+23 convert/safetensors.go:hfArchTable
 1 convert/safetensors.go:hfYarnApply
 1 convert/safetensors.go:kimiLinearHF
 1 convert/safetensors.go:kimiLinearHFConfig
