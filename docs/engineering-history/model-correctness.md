@@ -4799,7 +4799,7 @@ ran -- SigLIP-L, 24 blocks of 1024, a 576-row table for one 384 square, a
 post-LayerNorm -- and llava's linear-GELU-linear aligner. Three things were
 not already there, and none of them is a graph:
 
-    the second matrix is mm.1 where llava's is mm.2   convert.towerName renames it
+    the second matrix is mm.1 where llava's is mm.2   towertensors.json renames it
     the picture is letterboxed, not squashed           the longest side to 384 at
       (JanusImageProcessorPil: round(), Pillow           the picture's aspect, centred
       BICUBIC, background int(0.5*255) = 127)          on 127 (image.go letterbox)
@@ -7333,7 +7333,7 @@ a global tile (`Tower.Llama4Pieces`), each a picture span of its own between
 the processor's separators (`Model.Llama4Spans`). The adapter is the shuffle
 every tower runs and two matrices each followed by a GELU, then the
 projector's (`RoleVProj3`). llama.cpp's tensor map names a transformers 5
-checkpoint's pre-MLP norm `attn_post_norm` (Gemma 4's name); `convert.towerName`
+checkpoint's pre-MLP norm `attn_post_norm` (Gemma 4's name); `convert/towertensors.json`
 reads it as ln2.
 
 The vision families' codes are taken from the top of the code space down
