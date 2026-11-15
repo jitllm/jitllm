@@ -183,7 +183,7 @@ func scratchPlanOf(p *nn.LayerPlan) *nn.LayerPlan {
 	if p.Rotary < len(p.RopeTabs) {
 		q.RopeTabs = [][]float32{p.RopeTabs[p.Rotary]}
 	}
-	q.VFromK, q.OutScale = false, 0
+	q.VFromK = false
 	return &q
 }
 

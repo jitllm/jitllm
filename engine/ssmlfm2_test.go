@@ -29,7 +29,7 @@ func lfm2Fixtures() []struct {
 				ok = ok && c.LayerKind(i).Recurrent() == conv && !l.NoFFN && l.Gate.E != nil
 				if conv {
 					ok = ok && c.LayerKind(i) == jlm.LayerShortConv && l.Wq.Rows == 64 && l.SsmGate.Rows == 64 &&
-						l.SsmBA.Rows == 64 && l.SsmOut.Rows == 64 && len(l.SsmConv1d) == 3*64 && l.Vector(jlm.RoleSSMA) == nil
+						l.SsmBA.Rows == 64 && l.SsmOut.Rows == 64 && convTaps(l) == 3*64 && l.Vector(jlm.RoleSSMA) == nil
 				}
 			}
 			return ok
@@ -52,42 +52,33 @@ func lfm2Violations(bool) []c6Violation {
 	return []c6Violation{
 		{"B and C exchanged", func(m *model.Model) func() {
 			return eachLayer(m, func(l *model.Layer) {
-				if l.SsmConv1d != nil {
+				if l.Matrix(jlm.RoleSSMConv1d) != nil {
 					l.SsmGate, l.SsmBA = l.SsmBA, l.SsmGate
 				}
 			})
 		}},
 		{"x and C exchanged (x gating after the convolution)", func(m *model.Model) func() {
 			return eachLayer(m, func(l *model.Layer) {
-				if l.SsmConv1d != nil {
+				if l.Matrix(jlm.RoleSSMConv1d) != nil {
 					l.Wq, l.SsmBA = l.SsmBA, l.Wq
 				}
 			})
 		}},
 		{"the window's taps reversed", func(m *model.Model) func() {
-			n := m.Cfg.NEmbd
-			return eachLayer(m, func(l *model.Layer) {
-				if l.SsmConv1d == nil {
-					return
-				}
-				w := slices.Clone(l.SsmConv1d)
-				taps := len(w) / n
-				for t := 0; t < taps; t++ {
-					copy(w[t*n:(t+1)*n], l.SsmConv1d[(taps-1-t)*n:(taps-t)*n])
-				}
-				l.SsmConv1d = w
-				// The composer reads the file's layout, each channel's taps
-				// in a row (ssmConvTaps): reversed there too.
-				if ct := l.SsmConvTaps; ct.Data != nil && ct.Rows == n && ct.K == taps {
-					rv := make([]float32, n*taps)
-					for c := range n {
-						for t := range taps {
-							rv[c*taps+t] = w[t*n+c]
-						}
+			var undo []func()
+			undoL := eachLayer(m, func(l *model.Layer) {
+				undo = append(undo, setConvTaps(l, func(v []float32, rows, taps int) {
+					for c := range rows {
+						slices.Reverse(v[c*taps : (c+1)*taps])
 					}
-					l.SsmConvTaps = model.F32Tensor(rv, n, taps)
-				}
+				}))
 			})
+			return func() {
+				for _, u := range undo {
+					u()
+				}
+				undoL()
+			}
 		}},
 		{"NORM rotary for NEOX", func(m *model.Model) func() {
 			was := m.Rope.Neox
@@ -97,4 +88,12 @@ func lfm2Violations(bool) []c6Violation {
 		}},
 		{"no q/k norm", noQKNorm},
 	}
+}
+
+// convTaps is the count of block l's convolution taps, every channel's.
+func convTaps(l *model.Layer) int {
+	if mt := l.Matrix(jlm.RoleSSMConv1d); mt != nil {
+		return mt.Rows * mt.K
+	}
+	return 0
 }

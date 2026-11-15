@@ -2585,7 +2585,8 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	bs.hOut = unsafe.Slice((*float32)(unsafe.Pointer(&bs.hRaw[0])), h.W.Rows)
 	bs.head, bs.mvHead = r, mv{rows: h.W.Rows, q: q, k: h.W.K}
 	g.shapeChanged()
-	g.headEntry, g.headSrc, g.headVecHost = h.W.Entry, &h.W.Data[0], headSrc(h, spec)
+	g.headEntry, g.headSrc, g.headVecSrc = h.W.Entry, &h.W.Data[0], headSrc(h, spec)
+	g.headVecHost = slices.Clone(g.headVecSrc)
 	for i := range g.headVecHost {
 		g.headVecHost[i].V = slices.Clone(g.headVecHost[i].V)
 	}

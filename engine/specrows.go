@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/nn"
 )
 
@@ -199,10 +198,9 @@ func (s *Instance) stepRowsDevice(src rowSrc, out *rowsOut) error {
 		want, tail = 1, false
 	}
 	logits, hidden := out.logits, out.hidden
-	// Greedy rows read back their tokens alone, where nothing the host
-	// applies to the logits could move an argmax: a head bias could, and a
-	// logit scale (a positive divisor) cannot.
-	toks := out.argmax && !out.noHead && s.m.Vector(jlm.RoleOutputBias) == nil
+	// Greedy rows read back their tokens alone: the device runs the head's
+	// whole graph before its argmax.
+	toks := out.argmax && !out.noHead
 	if tail {
 		s.rowsHid = grow32(s.rowsHid, n*c.NEmbd)
 		hidden = s.rowsHid

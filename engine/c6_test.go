@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"math"
 	"os"
@@ -328,6 +329,24 @@ func eachLayer(m *model.Model, f func(l *model.Layer)) func() {
 		f(&m.Layers[i])
 	}
 	return func() { copy(m.Layers, was) }
+}
+
+// setConvTaps replaces block l's convolution taps (its RoleSSMConv1d
+// matrix, a channel's taps a row) with what f makes of a copy of them, and
+// returns the undo; a block with no taps is left alone.
+func setConvTaps(l *model.Layer, f func(v []float32, rows, taps int)) func() {
+	mt := l.Matrix(jlm.RoleSSMConv1d)
+	if mt == nil {
+		return func() {}
+	}
+	was := *mt
+	v := make([]float32, len(mt.Data)/4)
+	for i := range v {
+		v[i] = math.Float32frombits(binary.LittleEndian.Uint32(mt.Data[4*i:]))
+	}
+	f(v, mt.Rows, mt.K)
+	*mt = model.F32Tensor(v, mt.Rows, mt.K)
+	return func() { *mt = was }
 }
 
 // setVec replaces block l's vector under r with what f makes of it, in a

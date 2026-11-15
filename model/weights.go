@@ -163,17 +163,6 @@ func Wt(t Tensor) nn.Weight {
 	return nn.Weight{T: t.Typ, Data: t.Data, Rows: t.Rows, K: k, Packed: t.Packed, Entry: t.E}
 }
 
-// lnBias is a LayerNorm's bias as a device takes it: b itself, or zeros of
-// the model's width where the file carries none (command-r). The host's
-// kernel bakes the absence instead and never asks for this.
-func (m *Model) LnBias(b []float32) []float32 {
-	if b != nil {
-		return b
-	}
-	m.lnZerosOnce.Do(func() { m.lnZeros = make([]float32, m.Cfg.NEmbd) })
-	return m.lnZeros
-}
-
 // sinkSlot is 1 when any layer carries attention sinks, and the score rows
 // need room for the one extra logit.
 func (m *Model) SinkSlot() int {
@@ -308,8 +297,7 @@ func (l *Layer) NamedVector(r jlm.Role) ([]float32, bool) {
 
 // Held is block l's matrix of role r, nil for one it does not hold: what
 // the loader bound under no role of its own -- a prediction block's
-// matrices, the convolution's taps cut from a vector -- held under the role
-// a graph reads it by.
+// matrices -- held under the role a graph reads it by.
 func (l *Layer) Held(r jlm.Role) *Tensor {
 	if t := l.Matrix(r); t != nil {
 		return t
@@ -325,8 +313,6 @@ func (l *Layer) Held(r jlm.Role) *Tensor {
 			return nil
 		}
 		return &l.Mtp.Embd
-	case jlm.RoleSSMConv1d:
-		return &l.SsmConvTaps
 	}
 	return nil
 }

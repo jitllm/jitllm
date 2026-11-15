@@ -1957,7 +1957,7 @@ func (s *Instance) planFor(li int) *nn.LayerPlan {
 	plan.MixedGeom = c.OwnGeoms() || plan.HeadSet && c.MixedGeom()
 	plan.Rotary = s.blockRotary(plan.Graph)
 	plan.OwnGeom = c.OwnGeoms() && plan.Rotary != 0 || plan.HeadDim != c.HeadDim || plan.NKVHead != c.NKVHead || plan.NRot != c.NRot
-	plan.VFromK, plan.OutScale = l.VFromK, l.OutScale
+	plan.VFromK = l.VFromK
 	plan.SideW = c.SideWidth()
 	plan.HistRow = historyRow(s.m.Composing(), plan.Graph)
 	if c.SelectAt(li) {
@@ -3154,7 +3154,6 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 		if fold != nil {
 			// The device ran the output norm and the projection too, so the
 			// token is finished and the residual never came home.
-			//
 			s.advance(0, 1)
 			// The token is complete, so it steps what every token steps:
 			// a head on the device is no reason for the seam tuner or the
@@ -3206,8 +3205,6 @@ func (s *Instance) forward(fill func() error) ([]float32, error) {
 		}
 	}
 	s.closeRuns(nil)
-	if done {
-	}
 	// Through advance, not s.pos++: Prefill reads bpos, so a Prefill after a
 	// Forward must see this token.
 	s.advance(0, 1)

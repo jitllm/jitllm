@@ -100,10 +100,7 @@ func (s *Instance) rowsRouted(tokens []int32, seq, pos []int, nlogit, seqs int) 
 			return nil, cpuHeadRefused(why)
 		}
 	}
-	// The wanted rows' logits, which is one contiguous run of nlogit*NVocab:
-	// capped already where the device ran the head.
-	if headOnDev {
-	}
+	// The wanted rows' logits, which is one contiguous run of nlogit*NVocab.
 	return s.blogits[:nlogit*c.NVocab], nil
 }
 

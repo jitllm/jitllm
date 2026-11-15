@@ -611,13 +611,11 @@ type LayerPlan struct {
 	// block). OwnGeom says they, or the rotary table it reads, are not the
 	// model's, and Rotary which of the model's rotary tables it turns by
 	// (RopeTables, graph.Attrs.Rotary).
-	// VFromK says the block has no v projection and v is k's
-	// (LayerWeights.Wv is empty); OutScale multiplies the block's output row
-	// after its last residual add (zero means none).
+	// VFromK says the block has no v projection and v is k's (it binds no
+	// RoleAttnV matrix).
 	MixedGeom, OwnGeom bool
 	Rotary             int
 	VFromK             bool
-	OutScale           float32
 	// SideW is a row's whole side input to the blocks, the input their
 	// graphs read past the residual streams, each block its own slice of it
 	// (zero for none).

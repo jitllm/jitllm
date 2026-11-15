@@ -1074,10 +1074,8 @@ type Layer struct {
 	// global layers): wv is unbound and every path copies k's projection
 	// before k's norm and rotary run.
 	VFromK bool
-	// outScale multiplies the block's output row after its last residual add
-	// (Gemma 4's layer_scalar). Zero means none. outScaleRow is it as the
-	// container stores it, the vector a composed block binds.
-	OutScale    float32
+	// outScaleRow multiplies the block's output row after its last residual
+	// add, as the container stores it: the vector a composed block binds.
 	OutScaleRow []float32
 	// Multi-head Latent Attention, all nil unless Config.KVLoraRank is set.
 	// wq is then the one-step query (DeepSeek-V2-Lite, q_lora_rank null) and
@@ -1122,13 +1120,6 @@ type Layer struct {
 	// one matrix for the second and derives the first from ssmBA's interleaved
 	// alpha stream.
 	SsmFA, SsmFB, SsmGA, SsmGB Tensor
-	// ssmConv1d is the convolution kernel tap-major, as the file stores it.
-	// The block's vectors (A, the dt bias, the norm, D, the convolution bias,
-	// Mamba-1's three norms) are in vecs.
-	SsmConv1d []float32
-	// ssmConvTaps is the convolution kernel as the file stores it, the taps
-	// of a channel contiguous: the composer's OpStateConv reads it so.
-	SsmConvTaps Tensor
 	// ssmXDt, ssmXB and ssmXC are a Mamba-1 block's x_proj (the dt
 	// bottleneck, B and C, each of the convolved x), and ssmDtProj takes the
 	// bottleneck back up to the channels.
@@ -1254,12 +1245,8 @@ type Model struct {
 	// position, added to the token's embedding before block 0. Empty on every
 	// model that encodes position with a rotary; its presence is the fact.
 	PosEmbd Tensor
-	// lnZeros is the zero bias a device's LayerNorm is handed where the file
-	// has none; see lnBias.
-	lnZeros     []float32
-	lnZerosOnce sync.Once
-	Output      Tensor
-	Layers      []Layer
+	Output  Tensor
+	Layers  []Layer
 	// actWindow is how many activation elements share one int8 scale, the
 	// same on every device (actWindowOf).
 	ActWindow int
@@ -3051,7 +3038,7 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 			if len(sc) != 1 {
 				return nil, fmt.Errorf("model: block %d's output scale has %d values, want 1", bi, len(sc))
 			}
-			l.OutScale, l.OutScaleRow = sc[0], sc
+			l.OutScaleRow = sc
 		}
 		if _, err = optVec(jlm.RolePostFFNNorm, bi); err != nil {
 			return nil, err
@@ -3106,15 +3093,15 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 					bi, b.name, len(b.v), b.want)
 			}
 		}
-		// The recurrent vectors are small and dense. ssm_conv1d is a matrix by
-		// shape and a per-channel window by use, so it is expanded here.
+		// The recurrent vectors are small and dense; the convolution's taps,
+		// a matrix by shape, are bound as one below.
 		if linear {
-			var discard []float32
+			var conv, discard []float32
 			for _, v := range []struct {
 				role jlm.Role
 				dst  *[]float32
 			}{
-				{jlm.RoleSSMConv1d, &l.SsmConv1d}, {jlm.RoleSSMA, &discard},
+				{jlm.RoleSSMConv1d, &conv}, {jlm.RoleSSMA, &discard},
 				{jlm.RoleSSMDtBias, &discard}, {jlm.RoleSSMNorm, &discard},
 			} {
 				// A short convolution has its window and nothing else.
@@ -3137,21 +3124,9 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 				}
 			}
 			g := cfg.Delta()
-			// Transposed once at load: the file stores taps contiguous per
-			// channel, and plane-major makes the convolution elementwise.
-			if n := len(l.SsmConv1d); n == g.Conv*g.Chans {
-				l.SsmConvTaps = F32Tensor(l.SsmConv1d, g.Chans, g.Conv)
-				wt := make([]float32, n)
-				for c := 0; c < g.Chans; c++ {
-					for t := 0; t < g.Conv; t++ {
-						wt[t*g.Chans+c] = l.SsmConv1d[c*g.Conv+t]
-					}
-				}
-				l.SsmConv1d = wt
-			}
-			if len(l.SsmConv1d) != g.Conv*g.Chans {
+			if len(conv) != g.Conv*g.Chans {
 				return nil, fmt.Errorf("model: block %d convolution is %d wide, want %d (%d positions x %d channels)",
-					bi, len(l.SsmConv1d), g.Conv*g.Chans, g.Conv, g.Chans)
+					bi, len(conv), g.Conv*g.Chans, g.Conv, g.Chans)
 			}
 			gateWidth, dtWidth := g.VHeads, g.VHeads
 			if cfg.ChanDecay() {
@@ -3272,7 +3247,7 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 			if !ok || e.NDim != 2 || len(rv.V) == 0 || l.Matrix(rv.Role) != nil {
 				continue
 			}
-			t := F32Tensor(rv.V, int(e.Dims[1]), int(e.Dims[0]))
+			t := F32Tensor(rv.V, e.Rows(), e.K())
 			l.Mats = append(l.Mats, roleTensor{rv.Role, &t})
 		}
 		if cfg.QKNormAt(i) {

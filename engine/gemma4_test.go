@@ -41,7 +41,7 @@ func gemma4Fixtures() []struct {
 				len(m.Rope.Freqs) == c.HeadDim/2 && m.RopeSWA.Freqs == nil
 			for i := range m.Layers {
 				l := &m.Layers[i]
-				ok = ok && l.VFromK == !c.SWA(i) && l.OutScale != 0 && l.OutScale != 1 &&
+				ok = ok && l.VFromK == !c.SWA(i) && len(l.OutScaleRow) == 1 && l.OutScaleRow[0] != 0 && l.OutScaleRow[0] != 1 &&
 					len(l.QNorm) == c.HeadDimAt(i) && l.Vector(jlm.RolePostAttnNorm) != nil && l.Vector(jlm.RolePostFFNNorm) != nil
 			}
 			return ok
@@ -187,9 +187,7 @@ func gemma4MoEViolations() []c6Violation {
 
 // noLayerScalar runs every block at scale one.
 func noLayerScalar(m *model.Model) func() {
-	undoL := eachLayer(m, func(l *model.Layer) { l.OutScale = 0 })
-	undoR := dropStored(m, jlm.RoleLayerOutScale)
-	return func() { undoR(); undoL() }
+	return dropStored(m, jlm.RoleLayerOutScale)
 }
 
 // globalRopeIsLocal gives the global layers the sliding layers' base with no
