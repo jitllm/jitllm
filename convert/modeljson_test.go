@@ -275,7 +275,7 @@ func TestModelJSONHandsConfigOfTheTensorTable(t *testing.T) {
 	mj2 := *mj
 	mj2.Config.Keys = maps.Clone(mj.Config.Keys)
 	delete(mj2.Config.Keys, "expert_feed_forward_length")
-	c.shapes = map[string][]uint64{"model.layers.0.mlp.experts.3.gate_proj.weight": {24, 64}}
+	c.shapes = map[string][]uint64{"model.layers.0.mlp.experts.3.gate_proj.weight": {24, 64}, sh: {48, 64}}
 	if cfg, err := mj2.config(c, names); err != nil || cfg.NFFNExp != 24 {
 		t.Errorf("the width off the bank: %v, %v", cfg, err)
 	}
