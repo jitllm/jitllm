@@ -101,9 +101,9 @@ func (b *Bindings) Check(f *Form, li int, t Tensors) error {
 			if li < 0 || li >= len(b.banks) || b.banks[li][x.Role-jlm.RoleExpGateBank][x.Region] == nil {
 				return fmt.Errorf("block %d: its form binds the bank %v, which has no view in the expert pages", li, x.Role)
 			}
-		case x.Role == jlm.RoleNGramTable:
+		case jlm.RowTableRole(x.Role):
 			if b.table == nil {
-				return fmt.Errorf("block %d: its form binds the n-gram table, which has no view in the frames", li)
+				return fmt.Errorf("block %d: its form binds the row table %v, which has no view in the frames", li, x.Role)
 			}
 		default:
 			data, p, _ := t.Bytes(x.Role)
@@ -126,7 +126,7 @@ func (b *Bindings) at(li int, t Tensors, x Weight) unsafe.Pointer {
 		return unsafe.Pointer(unsafe.SliceData(t.Floats(x.Role)))
 	case jlm.ExpertBank(x.Role):
 		return b.banks[li][x.Role-jlm.RoleExpGateBank][x.Region]
-	case x.Role == jlm.RoleNGramTable:
+	case jlm.RowTableRole(x.Role):
 		return unsafe.Add(b.table.Base(), x.From*b.tableRow)
 	}
 	data, p, _ := t.Bytes(x.Role)

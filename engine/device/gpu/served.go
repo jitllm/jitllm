@@ -43,9 +43,9 @@ type composedPart struct {
 	graph   *graph.Graph
 	formats map[jlm.Role]jlm.Type
 	weights map[jlm.Role]*resident
-	// ngram is the n-gram table's rows on the card, each range a gather
-	// binds the table from its own (ngramRows).
-	ngram   *ngramRows
+	// rowTab is a row table's rows on the card, each range a gather
+	// binds the table from its own (rowTable).
+	rowTab  *rowTable
 	vectors map[jlm.Role]backend.Buf
 	tables  map[composer.TableKey]backend.Buf
 	// history, keys and page are a block's history layout and its step's
@@ -98,7 +98,7 @@ type partForm struct {
 	// selection, of selN words, and table the own buffer the step's table
 	// "experts" is written to.
 	split, sel, selN, table int
-	// A form gathering the n-gram table's rows runs in two halves too
+	// A form gathering a row table's rows runs in two halves too
 	// (rowsRun): its codes before rowSplit, up to the hash, then the
 	// gathers. rowSel is the own buffer of the hash's rows, rowN of them a
 	// row, rowIDs at the form's rows.
@@ -156,7 +156,7 @@ type partArg struct {
 	role   jlm.Role
 	region int
 	table  composer.TableKey
-	// from is a weight's first row the binding names (the n-gram table's
+	// from is a weight's first row the binding names (the row table's
 	// range a gather reads).
 	from int
 	// read and writes are whether the code reads and writes it
@@ -917,8 +917,8 @@ func (sv *servedPart) launchCodes(lc *launcher, inst *partInst, in, out []backen
 				b = sl.tables[a.table]
 			case partWeight:
 				r := sl.weights[a.role]
-				if a.role == jlm.RoleNGramTable && sl.ngram != nil {
-					r = sl.ngram.at(a.from)
+				if jlm.RowTableRole(a.role) && sl.rowTab != nil {
+					r = sl.rowTab.at(a.from)
 				}
 				if r != nil {
 					b = [3]backend.Buf{r.qs, r.d, r.sc}[a.region]
@@ -2329,8 +2329,8 @@ func (f *partForm) inPlace(in, out int) bool {
 // roleWeight is the block's matrix its graph binds under role, nil for one
 // the tier does not hold.
 func (l *layer) roleWeight(r jlm.Role) *resident {
-	if r == jlm.RoleNGramTable && l.ngram != nil && len(l.ngram.ranges) > 0 {
-		return &l.ngram.ranges[0].rows
+	if jlm.RowTableRole(r) && l.rowTab != nil && len(l.rowTab.ranges) > 0 {
+		return &l.rowTab.ranges[0].rows
 	}
 	if r == jlm.RoleRouter {
 		return l.router
@@ -3109,10 +3109,10 @@ func (g *devTier) servedBlockAs(l *layer, li int, cs backend.Buf, pl *kvLayerPoo
 		}
 		for _, o := range l.graph.Ops {
 			for _, w := range o.Weight {
-				// The n-gram table is read in its stated format, a call's
-				// rows at a time (ngramRows).
-				if w.Role == jlm.RoleNGramTable && l.ngram != nil {
-					sl.formats[w.Role] = l.ngram.typ
+				// A row table is read in its stated format, a call's
+				// rows at a time (rowTable).
+				if jlm.RowTableRole(w.Role) && l.rowTab != nil {
+					sl.formats[w.Role] = l.rowTab.typ
 					continue
 				}
 				// A bank's bias is a row an expert, held as one vector.
@@ -3145,7 +3145,7 @@ func (g *devTier) servedBlockAs(l *layer, li int, cs backend.Buf, pl *kvLayerPoo
 	for r := range sv.sl.weights {
 		sv.sl.weights[r] = l.roleWeight(r)
 	}
-	sv.sl.ngram = l.ngram
+	sv.sl.rowTab = l.rowTab
 	for r := range sv.sl.vectors {
 		sv.sl.vectors[r] = l.roleVector(r)
 	}

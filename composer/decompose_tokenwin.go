@@ -9,19 +9,19 @@ import (
 	"github.com/jitllm/jitllm/graph"
 )
 
-// decomposeNGramWindow is each row's n-gram window and its run's
+// decomposeTokenWindow is each row's token window and its run's
 // predecessors carried on: the row's token (the image id for a row naming
 // none), then its predecessors, an earlier row's of its run as its id plus
 // one and past the run's first row the slot's; then each run's
 // predecessors after its last row into a scratch, and from it to the slot
 // written, so no kernel reads the slot while writing it. One row is its own
 // run, its slots the descriptor's (stateConvWindow's).
-func decomposeNGramWindow(o graph.Op, c *Context) ([]Prim, error) {
+func decomposeTokenWindow(o graph.Op, c *Context) ([]Prim, error) {
 	a := o.Attr
 	n, R := a.Taps, c.Step.Rows
 	if len(o.In) != 1 || len(o.Out) != 1 || n < 2 || len(a.Words) != 1 || a.Words[0] >= 1<<32 || R < 1 ||
 		a.Offset < 0 || a.Span < a.Offset+n-1 {
-		return nil, fmt.Errorf("an n-gram window of %d over %d rows at %d of a slot of %d", n, R, a.Offset, a.Span)
+		return nil, fmt.Errorf("a token window of %d over %d rows at %d of a slot of %d", n, R, a.Offset, a.Span)
 	}
 	U, F := ir.U32, ir.F32
 	tok, win := c.value(o.In[0]), c.value(o.Out[0])

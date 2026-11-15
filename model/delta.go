@@ -146,11 +146,12 @@ func (g DeltaGeom) DeltaStateLen() int { return g.VHeads * g.VDim * g.KDim }
 func (g DeltaGeom) StateStride() int { return g.DeltaStateLen() + g.tail }
 
 // recTailLen is what each linear block's recurrent state carries per
-// sequence after the delta rule's: room for Qwen3.8-Flash-Next's n-gram
-// predecessors and convolution history (ngram.go), which its n-gram block
-// fills and every other leaves unread, nothing on any other model. Every
-// linear block has the same row, [delta rule | tail], so a device keeps one
-// slot width for all of them (nn.RecurrentPlan.TailLen).
+// sequence after the delta rule's: the room the stated programs' tail ops
+// keep (jlm.Program.Tail), a token window's predecessors or a convolution's
+// history, which the block stating them fills and every other leaves
+// unread. Every linear block has the same row, [delta rule | tail], so a
+// device keeps one slot width for all of them, the slot each graph's delta
+// rule states (graph.OpDeltaRule's Span).
 func (c *Config) RecTailLen() int {
 	t := 0
 	if c.stated != nil {

@@ -232,6 +232,29 @@ func Verify(g *Graph, f Facts) error {
 					}
 				}
 			}
+			if words := g.Values[o.Out[0]].Elem == ElemU32; words {
+				for _, id := range o.In {
+					if g.Values[id].Elem != ElemU32 {
+						bad("%s: an expression into words over %%%s, not words", at, g.Values[id].Name)
+					}
+				}
+				for k, t := range o.Attr.Expr {
+					for j := range t.Fn.Arity() {
+						if a := t.Args[j]; a.Kind == ArgWeight || a.Kind == ArgConst && (a.Const < 0 || a.Const >= 1<<32 || a.Const != float64(uint32(a.Const))) {
+							bad("%s: term %d's operand %d is no word", at, k, j)
+						}
+					}
+					if !t.Fn.Words() && !slices.Contains([]MapFn{MapAdd, MapSub, MapMul, MapMax, MapMin, MapWhere, MapLess, MapEqual}, t.Fn) {
+						bad("%s: term %d's %v over words", at, k, t.Fn)
+					}
+				}
+			} else {
+				for k, t := range o.Attr.Expr {
+					if t.Fn.Words() {
+						bad("%s: term %d's %v over floats", at, k, t.Fn)
+					}
+				}
+			}
 		case OpHeadDots:
 			a := o.Attr
 			if len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) != 1 || a.NHead < 1 || a.HeadDim < 1 ||
@@ -331,7 +354,7 @@ func Verify(g *Graph, f Facts) error {
 			if len(o.In) != 0 || len(o.Out) != 1 || width(o.Out[0]) != 1 || o.Attr.Offset < 0 || o.Attr.Span < 0 {
 				bad("%s: %d inputs into %d outputs, offset %d and span %d", at, len(o.In), len(o.Out), o.Attr.Offset, o.Attr.Span)
 			}
-		case OpNGramWindow:
+		case OpTokenWindow:
 			a := o.Attr
 			switch {
 			case len(o.In) != 1 || len(o.Out) != 1 || width(o.In[0]) != 1 || width(o.Out[0]) != a.Taps || a.Taps < 2:
@@ -382,19 +405,6 @@ func Verify(g *Graph, f Facts) error {
 			if len(o.In) != 1 || len(o.Out) != 1 || g.Values[words].Elem != ElemU32 || g.Values[floats].Elem == ElemU32 ||
 				width(floats) < 1 || width(words) != Q8RowWords(width(floats)) {
 				bad("%s: %d inputs into %d outputs, not rows of floats and their q8 rows", at, len(o.In), len(o.Out))
-			}
-		case OpNGramHash:
-			n, per := 0, o.Attr.Span
-			if len(o.In) == 1 {
-				n = width(o.In[0])
-			}
-			switch {
-			case len(o.In) != 1 || len(o.Out) != 2 || n < 2 || per < 1 || len(o.Attr.Words) != 1+n+2*(n-1)*per:
-				bad("%s: %d inputs into %d outputs, a window of %d, %d heads a gram, %d constants", at, len(o.In), len(o.Out), n, per, len(o.Attr.Words))
-			case width(o.Out[0]) != (n-1)*per || width(o.Out[1]) != n-1:
-				bad("%s: %d rows and %d predecessors from a window of %d", at, width(o.Out[0]), width(o.Out[1]), n)
-			case g.Values[o.In[0]].Elem != ElemU32 || g.Values[o.Out[0]].Elem != ElemU32 || g.Values[o.Out[1]].Elem != ElemU32:
-				bad("%s: a window, rows and predecessors not of indices", at)
 			}
 		case OpKVAppend:
 			if o.Attr.Span < 0 {

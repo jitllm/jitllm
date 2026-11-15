@@ -556,9 +556,9 @@ type Stats struct {
 	// such a block, cumulative like Blocks and Captures. They are the selection
 	// check: a streamed and a resident block compute the same logits.
 	StreamFills int
-	// NGramRows counts the n-gram table's rows read in for the card's
-	// gathers (rowsRun): the selection check of an n-gram block on a card.
-	NGramRows int
+	// TableRowsRead counts a row table's rows read in for the card's
+	// gathers (rowsRun): the check that a card gathered a row table's rows.
+	TableRowsRead int
 	// StreamRowFills counts the fills of a composed call of several rows:
 	// every live row's selection filled at once.
 	StreamRowFills int
@@ -911,7 +911,7 @@ func (s *Stats) add(o Stats) {
 	s.MatrixTiled += o.MatrixTiled
 	s.KVPrewarmPages += o.KVPrewarmPages
 	s.StreamFills += o.StreamFills
-	s.NGramRows += o.NGramRows
+	s.TableRowsRead += o.TableRowsRead
 	s.StreamRowFills += o.StreamRowFills
 	s.StreamOverlaps += o.StreamOverlaps
 	s.StreamBlocks += o.StreamBlocks

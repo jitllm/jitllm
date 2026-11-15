@@ -1973,9 +1973,6 @@ func (s *Instance) planFor(li int) *nn.LayerPlan {
 		}
 		plan.Recurrent.Scan = g.Scan
 	}
-	if c.LayerKind(li).Recurrent() {
-		plan.Recurrent.TailLen = c.RecTailLen()
-	}
 	plan.NStreams = c.Streams()
 	if c.NonCausal && (s.m.IsEmbedding() || c.Head != nil || s.m.Tower != nil && li >= s.m.TowerBase) {
 		// A bidirectional decoder and a tower: their blocks are non-causal

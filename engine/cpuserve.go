@@ -67,7 +67,7 @@ func (s *Instance) chunkRows(slot, p0, n int) (seq, pos []int) {
 func addr[T any](x []T) unsafe.Pointer { return unsafe.Pointer(unsafe.SliceData(x)) }
 
 // unmapOwn lets the instance's execution on the CPU device go, as a card's
-// session view goes (nn.Session): its own buffers and the n-gram table's
+// session view goes (nn.Session): its own buffers and its row table's
 // view held off the heap, its workers among what it made.
 func (s *Instance) unmapOwn() {
 	if d, ok := s.places[routeLanes].(nn.Session); ok {
@@ -219,9 +219,6 @@ func (s *Instance) specOf(li int, g *graph.Graph) nn.BlockSpec {
 	gr := *g
 	gr.Block = 0
 	p.Source, p.Graph, p.SideOff = g, &gr, sideAtBinding(&gr)
-	if s.m.Ngram != nil {
-		p.Table, p.TableRow = s.m.Ngram.E, s.m.Ngram.RowBytes
-	}
 	formats := map[jlm.Role]jlm.Type{}
 	f := s.m.Composing()
 	if li >= s.m.TowerBase {
@@ -234,6 +231,11 @@ func (s *Instance) specOf(li int, g *graph.Graph) nn.BlockSpec {
 		for _, w := range o.Weight {
 			if e, ok := f.Find(w.Role, jlm.DenseBlock, -1); ok && jlm.RowTable(e) {
 				formats[w.Role] = e.Type
+				// A table with no row size has no view, which the device
+				// names when its form binds it.
+				if rb, err := jlm.RowBytes(e); err == nil {
+					p.Table, p.TableRow = e, int(rb)
+				}
 			} else if e, ok := f.Find(w.Role, int32(li), -1); ok {
 				formats[w.Role] = e.Type
 				// A table the block lays out as float32 at load is read so.

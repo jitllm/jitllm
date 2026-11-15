@@ -4,6 +4,7 @@ import (
 	"math"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/jitllm/jitllm/format/jlm"
@@ -119,13 +120,23 @@ func q4eViolations() []c6Violation {
 			})
 		}},
 		{"the n-gram window not reset at the end of a sequence", func(m *model.Model) func() {
-			return restated(m, editing(opsOfKind(graph.OpNGramHash), func(o *graph.Op) { o.Attr.Reset = false }))
+			// A predecessor's id past the first reads as the end of sequence
+			// where it is none or the one before it is (graph.TailOp):
+			// the second test's term dropped.
+			return restated(m, editing(namedOps("ng.id"), func(o *graph.Op) {
+				if len(o.In) == 2 {
+					o.Attr.Expr = slices.Clone(o.Attr.Expr)
+					o.Attr.Expr[2].Args[1] = graph.Word(0)
+				}
+			}))
 		}},
 		{"another 2-gram multiplier", func(m *model.Model) func() {
-			// The hash's words are its EOS, then a multiplier a token.
-			return restated(m, editing(opsOfKind(graph.OpNGramHash), func(o *graph.Op) {
-				o.Attr.Words = slices.Clone(o.Attr.Words)
-				o.Attr.Words[2] += 2
+			// The 2-gram's last id times its multiplier's low limb is each of
+			// its words' first product.
+			return restated(m, editing(namedOps("ng.g2."), func(o *graph.Op) {
+				o.Attr.Expr = slices.Clone(o.Attr.Expr)
+				k := slices.IndexFunc(o.Attr.Expr, func(t graph.Term) bool { return t.Fn == graph.MapMul })
+				o.Attr.Expr[k].Args[1].Const += 2
 			}))
 		}},
 		{"the QSA budget a block short", func(m *model.Model) func() {
@@ -169,5 +180,14 @@ func TestQwen4ExpFeaturesAreLoadBearing(t *testing.T) {
 				})
 			}
 		})
+	}
+}
+
+// namedOps matches the ops whose value's name starts with prefix.
+func namedOps(prefix string) func(*graph.Graph) func(int, *graph.Op) bool {
+	return func(g *graph.Graph) func(int, *graph.Op) bool {
+		return func(_ int, o *graph.Op) bool {
+			return len(o.Out) == 1 && strings.HasPrefix(g.Values[o.Out[0]].Name, prefix)
+		}
 	}
 }

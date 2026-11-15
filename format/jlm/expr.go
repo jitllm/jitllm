@@ -37,8 +37,18 @@ const (
 	FnTrunc                   // a's integer part, toward zero
 	FnRoundEven               // a to the nearest integer, halves to the even one
 	FnF32                     // a rounded to binary32
+	FnRem                     // a modulo b, over words
+	FnAnd                     // a & b, over words
+	FnOr                      // a | b, over words
+	FnXor                     // a ^ b, over words
+	FnShl                     // a << b, over words
+	FnShr                     // a >> b, over words, zeros shifted in
 	numFns
 )
+
+// Words reports f is a function of words alone: an expression over u32
+// rows (graph.OpExpr into words) applies it, a float expression refuses it.
+func (f Fn) Words() bool { return f >= FnRem && f < numFns }
 
 // Arity is how many operands f takes.
 func (f Fn) Arity() int {
@@ -48,7 +58,7 @@ func (f Fn) Arity() int {
 		return 1
 	case FnWhere, FnFma:
 		return 3
-	case FnAdd, FnSub, FnMul, FnDiv, FnMax, FnMin, FnLess, FnEqual:
+	case FnAdd, FnSub, FnMul, FnDiv, FnMax, FnMin, FnLess, FnEqual, FnRem, FnAnd, FnOr, FnXor, FnShl, FnShr:
 		return 2
 	}
 	return 0
@@ -111,6 +121,18 @@ func (f Fn) String() string {
 		return "roundeven"
 	case FnF32:
 		return "f32"
+	case FnRem:
+		return "rem"
+	case FnAnd:
+		return "and"
+	case FnOr:
+		return "or"
+	case FnXor:
+		return "xor"
+	case FnShl:
+		return "shl"
+	case FnShr:
+		return "shr"
 	}
 	return fmt.Sprintf("fn%d", f)
 }

@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 
 	"github.com/jitllm/jitllm/composer/ir"
@@ -67,8 +68,14 @@ func decomposeExpr(o graph.Op, c *Context) ([]Prim, error) {
 	if len(o.Out) != 1 || len(o.Attr.Expr) == 0 {
 		return nil, fmt.Errorf("an expression of %d outputs, %d terms", len(o.Out), len(o.Attr.Expr))
 	}
-	if e := c.Graph.Values[o.Out[0]].Elem; e != graph.ElemF32 {
+	words := c.Graph.Values[o.Out[0]].Elem == graph.ElemU32
+	if e := c.Graph.Values[o.Out[0]].Elem; e != graph.ElemF32 && !words {
 		return nil, fmt.Errorf("an expression into %s values", c.Graph.Values[o.Out[0]].Name)
+	}
+	for _, v := range o.In {
+		if words && c.Graph.Values[v].Elem != graph.ElemU32 {
+			return nil, fmt.Errorf("an expression into words over %s, not words", c.Graph.Values[v].Name)
+		}
 	}
 	for _, v := range o.In {
 		if n, w := c.width(v), c.width(o.Out[0]); n <= 0 || w%n != 0 {
@@ -97,6 +104,9 @@ func decomposeExpr(o graph.Op, c *Context) ([]Prim, error) {
 	prims := make([]Prim, len(o.Attr.Expr))
 	for k := range o.Attr.Expr {
 		rows[k] = Operand{Kind: OperandScratch, Name: fmt.Sprintf("%s.t%d", out.Name, k)}
+		if words {
+			rows[k].Elem = ir.U32
+		}
 		if prims[k], err = exprPrim(o, c, []int{k}, rows); err != nil {
 			return nil, err
 		}
@@ -279,7 +289,9 @@ func (sp *exprSplit) splitRefused(err error) bool {
 
 // exprPrim is the map of terms ks of o, the last its value: an earlier term
 // is one of ks or, where rows is given, the scratch row rows names for it.
+// An expression into words is evaluated in words (wordFn).
 func exprPrim(o graph.Op, c *Context, ks []int, rows []Operand) (Prim, error) {
+	words := c.Graph.Values[o.Out[0]].Elem == graph.ElemU32
 	sh := c.rows(o.Out[0])
 	R, W := sh[0], sh[1]
 	var x exprs
@@ -304,7 +316,7 @@ func exprPrim(o graph.Op, c *Context, ks []int, rows []Operand) (Prim, error) {
 			e = x.op(OpDiv, ir.U32, i, x.u(uint32(W/n)))
 		}
 		a := x.at(use(c.value(v)), []int{R, n}, r, e)
-		if c.Graph.Values[v].Elem == graph.ElemU32 {
+		if c.Graph.Values[v].Elem == graph.ElemU32 && !words {
 			a = x.un(OpCvtF32, ir.F32, x.un(OpBitcast, ir.I32, a))
 		}
 		return a
@@ -321,13 +333,24 @@ func exprPrim(o graph.Op, c *Context, ks []int, rows []Operand) (Prim, error) {
 				}
 				args[j] = operand(o.In[a.Index])
 			case graph.ArgWeight:
+				if words {
+					return Prim{}, fmt.Errorf("term %d reads a stored vector's float into words", k)
+				}
 				if a.Index < 0 || a.Index >= len(o.Weight) || a.Elem < 0 || a.Elem >= o.Weight[a.Index].K {
 					return Prim{}, fmt.Errorf("term %d reads element %d of bound vector %d", k, a.Elem, a.Index)
 				}
 				w := o.Weight[a.Index]
 				args[j] = x.at(use(Operand{Kind: OperandVector, Role: w.Role, Name: w.Role.String()}), []int{w.K}, x.u(uint32(a.Elem)))
 			case graph.ArgConst:
-				args[j] = x.f(float32(a.Const))
+				switch {
+				case !words:
+					args[j] = x.f(float32(a.Const))
+				case a.Const < 0 || a.Const >= 1<<32 || a.Const != math.Trunc(a.Const):
+					return Prim{}, fmt.Errorf("term %d reads %v, which is no word", k, a.Const)
+				default:
+					args[j] = x.u(uint32(a.Const))
+				}
+
 			case graph.ArgTerm:
 				v, ok := vals[a.Index]
 				switch {
@@ -343,7 +366,13 @@ func exprPrim(o graph.Op, c *Context, ks []int, rows []Operand) (Prim, error) {
 				return Prim{}, fmt.Errorf("term %d's operand %d is of kind %d", k, j, a.Kind)
 			}
 		}
-		v, err := x.mapFn(t.Fn, args, c.exactDiv || !o.Attr.Exact)
+		var v int
+		var err error
+		if words {
+			v, err = x.wordFn(t.Fn, args)
+		} else {
+			v, err = x.mapFn(t.Fn, args, c.exactDiv || !o.Attr.Exact)
+		}
 		if err != nil {
 			return Prim{}, err
 		}

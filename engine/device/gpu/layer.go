@@ -33,8 +33,8 @@ type layer struct {
 	// is the first half of a block cut in two (nn.LayerPlan.Cut), writing
 	// its rows to the scratch's cut, read back to the session's (SetCut).
 	cut int
-	// ngram is an n-gram block's table, read in a call at a time.
-	ngram *ngramRows
+	// rowTab is the row table the block gathers from, read in a call at a time.
+	rowTab *rowTable
 	// graph is the block as ops from the model's front end
 	// (nn.LayerPlan.Graph): what serving it whole forms (served.go), and
 	// win and chunked the window its attention states.
@@ -1836,7 +1836,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		}
 	}
 	if err == nil {
-		err = g.openNGram(l, p, fr)
+		err = g.openRowTable(l, p, fr)
 	}
 	// One extra KV position is a trash slot for the batched prefill: a ragged
 	// last chunk runs the full grid width with surplus rows zeroed, and those rows
@@ -4564,7 +4564,7 @@ func (l *layer) auxBufs() []backend.Buf {
 // does not touch the weights, which live in g.res keyed by their bytes and may
 // be referenced elsewhere. Callers hold g.mu.
 func (g *devTier) dropLayerLocal(l *layer) {
-	g.closeNGram(l)
+	g.closeRowTable(l)
 	if r := l.router; r != nil {
 		for k, v := range g.res {
 			if v == r {
@@ -4712,7 +4712,7 @@ func (g *devTier) releaseBlock(li int) {
 			b.Free()
 		}
 	}
-	g.closeNGram(l)
+	g.closeRowTable(l)
 	delete(g.layers, li)
 	g.layerGen++
 	g.placeGen.Add(1)
