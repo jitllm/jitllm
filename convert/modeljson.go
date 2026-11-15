@@ -43,6 +43,10 @@ type modelJSON struct {
 	// (general.architecture) whose files the graph states too.
 	Graph *mjGraph `json:"graph"`
 	GGUF  []string `json:"gguf"`
+	// Archs names the converter's architectures (Arch's names) whose
+	// containers the graph states where no GGUF architecture converts as
+	// one: a Go table class's.
+	Archs []string `json:"archs"`
 	name  string   // for messages
 }
 
@@ -249,8 +253,13 @@ func parseModelJSON(b []byte, name string) (*modelJSON, error) {
 	if err := d.Decode(mj); err != nil {
 		return nil, fmt.Errorf("convert: %s: %w", name, err)
 	}
+	for _, n := range mj.Archs {
+		if !archNamed(n) {
+			return nil, fmt.Errorf("convert: %s: %q is not an architecture the converter names", name, n)
+		}
+	}
 	// A file of no class states a GGUF architecture's graph alone.
-	if len(mj.Classes) == 0 && len(mj.GGUF) != 0 && mj.Graph != nil {
+	if len(mj.Classes) == 0 && len(mj.GGUF)+len(mj.Archs) != 0 && mj.Graph != nil {
 		if mj.Config.Arch != "" || len(mj.Tensors.Block) != 0 || len(mj.Tensors.Model) != 0 {
 			return nil, fmt.Errorf("convert: %s names no class and states one's config or tensors", name)
 		}
@@ -301,8 +310,8 @@ func parseModelJSON(b []byte, name string) (*modelJSON, error) {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
 	}
-	if len(mj.GGUF) != 0 && mj.Graph == nil {
-		return nil, fmt.Errorf("convert: %s names GGUF architectures and states no graph for them", name)
+	if len(mj.GGUF)+len(mj.Archs) != 0 && mj.Graph == nil {
+		return nil, fmt.Errorf("convert: %s names architectures and states no graph for them", name)
 	}
 	return mj, nil
 }
@@ -372,9 +381,9 @@ func ggufGraph(arch string) (*mjGraph, error) {
 }
 
 // archGraph is the graph the library states for the GGUF architectures that
-// convert as a, nil where no file claims one: a safetensors class of the Go
-// table states what a GGUF of its architecture states, its container being
-// that architecture's.
+// convert as a, or for a by its name, nil where no file claims one: a
+// safetensors class of the Go table states what a GGUF of its architecture
+// states, its container being that architecture's.
 func archGraph(a Arch) (*mjGraph, error) {
 	files, err := libraryFiles()
 	if err != nil {
@@ -384,7 +393,7 @@ func archGraph(a Arch) (*mjGraph, error) {
 	var g *mjGraph
 	var by string
 	for _, mj := range files {
-		if !slices.ContainsFunc(mj.GGUF, func(n string) bool { return archs[n] == a }) {
+		if !slices.ContainsFunc(mj.GGUF, func(n string) bool { return archs[n] == a }) && !slices.Contains(mj.Archs, a.String()) {
 			continue
 		}
 		if g != nil {
@@ -1427,4 +1436,14 @@ func exprUint(what string, v any) (uint64, error) {
 		return 0, fmt.Errorf("convert: %s is %v, not a count", what, v)
 	}
 	return uint64(f), nil
+}
+
+// archNamed says n is an architecture's name.
+func archNamed(n string) bool {
+	for a := Arch(1); a != ArchNone; a++ {
+		if a.name() == n {
+			return true
+		}
+	}
+	return false
 }

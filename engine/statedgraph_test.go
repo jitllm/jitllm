@@ -89,6 +89,10 @@ func statedGraphModels() []string {
 		"Moonlight-16B-A3B-Instruct-Q4_K_M.gguf", "Kimi-VL-A3B-Thinking-2506-Q4_K_M.gguf+mmproj-Kimi-VL-A3B-Instruct-f16.gguf",
 		// An indexer's key cached beside the keys, attention over the positions it selects.
 		"synth-deepseek32.gguf", "synth-minimaxm3.gguf",
+		// Kimi Delta Attention beside attention through a latent, the
+		// checkpoint banks and the latent mixture.
+		"synth-kimik3.gguf", "synth-kimik3-ragged.gguf", "kimik3/Kimi-K3-0.40B.Q8_0.gguf", "hf/synth-kimik3",
+		"synth-kimilinear",
 		// XD-RoPE: four axes over cat(freq, freq), k's norm after it.
 		"synth-hunyuanvl.gguf", "synth-hunyuanvl.gguf+mmproj-synth-hunyuanvl.gguf", "hunyuanvl/HunyuanOCR-Q8_0.gguf",
 		// The encoders: each sublayer's sum normed after the residual.

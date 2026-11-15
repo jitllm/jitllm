@@ -12,6 +12,7 @@ import (
 	"testing"
 	"testing/fstest"
 
+	"github.com/jitllm/jitllm/convert/gguf"
 	"github.com/jitllm/jitllm/convert/safetensors"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
@@ -26,8 +27,8 @@ type k3Key struct {
 
 // k3Sources converts one Kimi-K3 twice -- its HuggingFace directory through
 // the safetensors path, and the GGUF llama.cpp's converter wrote from the
-// same checkpoint -- and demands every Config field equal. It returns the two
-// tensor sets by identity.
+// same checkpoint -- and demands every Config field equal, the blocks' stated
+// graphs among them. It returns the two tensor sets by identity.
 func k3Sources(t *testing.T, dir, gp string) (hf, gg map[k3Key]*jlm.Tensor) {
 	t.Helper()
 	for _, p := range []string{filepath.Join(dir, "config.json"), gp} {
@@ -36,7 +37,7 @@ func k3Sources(t *testing.T, dir, gp string) (hf, gg map[k3Key]*jlm.Tensor) {
 				"checkpoints and their GGUFs come from) -- this gate proved nothing", err)
 		}
 	}
-	a, b := hfSource(t, dir), ggufSource(t, gp)
+	a, b := hfSource(t, dir), ggufBuilt(t, gp)
 	ca, cb := reflect.ValueOf(*a.Config), reflect.ValueOf(*b.Config)
 	for i := 0; i < ca.NumField(); i++ {
 		if !ca.Type().Field(i).IsExported() {
@@ -70,6 +71,22 @@ func k3Sources(t *testing.T, dir, gp string) (hf, gg map[k3Key]*jlm.Tensor) {
 		}
 	}
 	return hf, gg
+}
+
+// ggufBuilt is the source the converter builds from the GGUF at path, its
+// blocks' graphs stated.
+func ggufBuilt(t *testing.T, path string) *jlm.Source {
+	t.Helper()
+	f, err := gguf.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { f.Close() })
+	s, err := buildGGUF(f, nil, path, "", options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
 }
 
 // k3Values decodes a tensor to f32.

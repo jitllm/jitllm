@@ -1271,9 +1271,6 @@ type blockFacts struct {
 	eps     float64
 	// taps is how many blocks add a picture's tap rows: the tower's taps.
 	taps int
-	// chanDecay says the model's delta rule decays per channel: it stores
-	// the forget gate's low-rank pair.
-	chanDecay bool
 	// src is the source's own keys (a GGUF's architecture keys, a
 	// config.json's), which a recipe reads where the model states a value.
 	src jinja.Value
@@ -1286,7 +1283,6 @@ func blockFactsOf(c *jlm.Config, s *jlm.Source, li int) *blockFacts {
 		bf.taps = len(s.Vision.Tower.Taps)
 	}
 	for _, t := range s.Tensors {
-		bf.chanDecay = bf.chanDecay || t.Role == jlm.RoleSSMFB
 		if t.Block == jlm.DenseBlock {
 			bf.dense[t.Role] = true
 			continue
@@ -1398,9 +1394,7 @@ func (bf *blockFacts) vars() map[string]jinja.Value {
 		"conv":               i(c.SSM.ConvKernel),
 		"chans":              jinja.NewInt(int64(c.SSM.Inner) + 2*int64(c.SSM.Groups)*int64(c.SSM.StateSize)),
 		"delta_scale":        jinja.NewFloat(bf.deltaScale()),
-		"chan_decay":         jinja.NewBool(bf.chanDecay),
 		"tiled":              jinja.NewBool(c.Flags.Has(jlm.FlagDeltaKeyTiled)),
-		"l2_eps":             jinja.NewFloat(bf.l2Eps()),
 		"state_span":         jinja.NewInt(int64(bf.stateSpan())),
 		"norm_groups":        jinja.NewInt(int64(max(c.SSM.Groups, 1))),
 		"kind":               jinja.NewString(bf.kind()),
@@ -1455,15 +1449,6 @@ func (bf *blockFacts) deltaScale() float64 {
 		return 0
 	}
 	return float64(float32(1 / math.Sqrt(float64(bf.c.SSM.StateSize))))
-}
-
-// l2Eps is the epsilon the delta rule's unit norms of q and k take: the
-// model's, or Kimi's 1e-6 where the decay is per channel.
-func (bf *blockFacts) l2Eps() float64 {
-	if bf.chanDecay {
-		return 1e-6
-	}
-	return bf.eps
 }
 
 // stateSpan is a delta rule's state floats a sequence where the block's
