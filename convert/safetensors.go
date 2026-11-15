@@ -1161,7 +1161,6 @@ func (a *hfArch) setData(e *jlm.Tensor, data []byte, c *Config) error {
 func hfArchTable() map[string]*hfArch {
 	return map[string]*hfArch{
 		"LlamaForCausalLM":    llamaHF(),
-		"Qwen2ForCausalLM":    qwen2HF(),
 		"Qwen3MoeForCausalLM": qwen3moeHF(),
 		"OlmoeForCausalLM":    olmoeHF(),
 		"MixtralForCausalLM":  mixtralHF(),
@@ -1499,21 +1498,6 @@ func llamaHF() *hfArch {
 		},
 		config: hfConfigWith(ArchLlama, 0, "silu"),
 		fixup:  llamaHFFixup,
-	}
-}
-
-// qwen2 is llama plus the attention biases, which the block map already
-// has: the file decides whether a bias exists. It is NEOX and unpermuted,
-// as its GGUF is: convert_hf_to_gguf.py permutes only llama's rows. For
-// qwen3 permuting would also misalign the per-head q/k norm weight.
-func qwen2HF() *hfArch {
-	return &hfArch{
-		arch:        ArchQwen2,
-		blockPrefix: llamaHF().blockPrefix,
-		model:       llamaHF().model,
-		block:       llamaHF().block,
-		ignore:      llamaHF().ignore,
-		config:      hfConfigWith(ArchQwen2, jlm.FlagRopeNeox, "silu"),
 	}
 }
 
