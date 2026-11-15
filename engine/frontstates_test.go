@@ -123,6 +123,7 @@ func TestFrontStatesTheAttentionOutputGate(t *testing.T) {
 	}
 	t.Run("read as ungated", func(t *testing.T) {
 		m, _ := hybridModelOpt(t, hyOpt{})
+		defer builtGraphs(m)()
 		m.Cfg.AttnOutGate = false
 		n := 0
 		for li := range m.Cfg.NLayer {

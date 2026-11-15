@@ -1,6 +1,6 @@
 {
   "classes": ["Qwen3MoeForCausalLM"],
-  "gguf": ["qwen3moe"],
+  "gguf": ["qwen3moe", "qwen3vlmoe"],
   "config": {
     "arch": "qwen3moe",
     "keys": {
@@ -64,6 +64,7 @@
   "graph": {
     "block": [
       {"op": "in",         "out": "x", "width": "embd"},
+      {"op": "in",         "if": "layer < deep_taps", "out": "ple", "width": "side_width"},
       {"op": "norm",       "in": "x", "w": "attn_norm", "out": "n"},
       {"op": "matvec",     "in": "n", "w": ["attn_q", "attn_q.bias?"], "rows": "heads * head_dim", "out": "q"},
       {"op": "matvec",     "in": "n", "w": ["attn_k", "attn_k.bias?"], "rows": "kv_heads * head_dim", "out": "k"},
@@ -90,14 +91,17 @@
       {"op": "emit",       "if": "moe and expert_norm", "kind": "map", "in": "ws", "attr": {"Fn": "'add'", "Const": "1e-20"}, "outs": [{"name": "router.sum", "width": "1"}], "out": "ws"},
       {"op": "emit",       "if": "moe and expert_norm", "kind": "map", "in": ["w", "ws"], "attr": {"Fn": "'div'"}, "outs": [{"name": "router.wn", "width": "experts_used"}], "out": "w"},
       {"op": "emit",       "if": "moe", "kind": "tile", "in": "m", "attr": {"Span": "embd"}, "outs": [{"name": "experts.in", "width": "experts_used * embd"}], "out": "ein"},
-      {"op": "emit",       "if": "moe", "kind": "expert_matvec", "in": ["ein", "sel"], "outs": [{"name": "experts.gate", "width": "experts_used * rows('ffn_up_exps')"}], "bind": [{"w": "ffn_gate_exps", "k": "embd", "rows": "rows('ffn_up_exps')", "sheets": "experts"}, {"w": "ffn_gate_exps.bias?", "k": "rows('ffn_up_exps')", "rows": "experts"}], "out": "eg"},
+      {"op": "emit", "if": "(moe) and stored('ffn_gate_exps')", "kind": "expert_matvec", "in": ["ein", "sel"], "outs": [{"name": "experts.gate", "width": "experts_used * rows('ffn_up_exps')"}], "bind": [{"w": "ffn_gate_exps", "k": "embd", "rows": "rows('ffn_up_exps')", "sheets": "experts"}, {"w": "ffn_gate_exps.bias?", "k": "rows('ffn_up_exps')", "rows": "experts"}], "out": "eg"},
       {"op": "emit",       "if": "moe", "kind": "expert_matvec", "in": ["ein", "sel"], "outs": [{"name": "experts.up", "width": "experts_used * rows('ffn_up_exps')"}], "bind": [{"w": "ffn_up_exps", "k": "embd", "rows": "rows('ffn_up_exps')", "sheets": "experts"}, {"w": "ffn_up_exps.bias?", "k": "rows('ffn_up_exps')", "rows": "experts"}], "out": "eu"},
-      {"op": "act",        "if": "moe", "name": "experts.act", "in": ["eg", "eu"], "width": "experts_used * rows('ffn_up_exps')", "out": "ea"},
+      {"op": "act", "if": "(moe) and stored('ffn_gate_exps')", "name": "experts.act", "in": ["eg", "eu"], "width": "experts_used * rows('ffn_up_exps')", "out": "ea"},
+      {"op": "act", "if": "(moe) and not stored('ffn_gate_exps')", "name": "experts.act", "in": "eu", "width": "experts_used * rows('ffn_up_exps')", "out": "ea"},
       {"op": "emit",       "if": "moe", "kind": "expert_matvec", "in": ["ea", "sel"], "outs": [{"name": "experts.down", "width": "experts_used * embd"}], "bind": [{"w": "ffn_down_exps", "k": "rows('ffn_up_exps')", "rows": "embd", "sheets": "experts"}, {"w": "ffn_down_exps.bias?", "k": "embd", "rows": "experts"}], "out": "ed"},
       {"op": "emit",       "if": "moe", "kind": "map", "in": ["ed", "w"], "attr": {"Fn": "'mul'"}, "outs": [{"name": "experts.weighted", "width": "experts_used * embd"}], "out": "ed"},
       {"op": "split_sum",  "if": "moe", "in": "ed", "parts": "experts_used", "name": "experts.out", "out": "d"},
       {"op": "routed",     "if": "moe", "from": "routed"},
       {"op": "add",        "in": ["h", "d"], "alpha": "residual_scale", "out": "y"},
+      {"op": "emit",       "if": "layer < deep_taps", "kind": "slice", "in": "ple", "attr": {"Offset": "layer * embd", "Width": "embd"}, "outs": [{"name": "deep.in", "width": "embd"}], "out": "tap"},
+      {"op": "add",        "if": "layer < deep_taps", "in": ["y", "tap"], "out": "y"},
       {"op": "out",        "in": "y"}
     ]
   }

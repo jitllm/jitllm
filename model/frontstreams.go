@@ -97,7 +97,7 @@ func (m *Model) streamRead(b *graph.Builder, f graph.Facts, u *jlm.SubStreams, x
 		}
 		return ins[u.Read.Out], ex, nil
 	}
-	vals, err := lowerValuesWith(b, nil, u.Read, ins, 1, f, ops)
+	vals, err := graph.LowerValues(b, nil, u.Read, ins, 1, f, ops)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -149,7 +149,7 @@ func lowerStated(b *graph.Builder, p *jlm.Program, in []graph.ValueID, f graph.F
 	if len(p.Ops) == 0 {
 		return in[p.Out], nil
 	}
-	return LowerProgram(b, nil, p, in, 1, f)
+	return graph.LowerProgram(b, nil, p, in, 1, f)
 }
 
 // StatesStreams says the model's several residual streams are the ones the

@@ -148,6 +148,17 @@ func buildGGUF(f, vf *meta.File, src, mmproj string, o options) (*jlm.Source, er
 		return nil, err
 	}
 	stateToolForm(s)
+	// The blocks' graphs last: over the publisher's config where one was
+	// applied, and the tower whose taps the first blocks add.
+	g, err := ggufGraph(f.Arch())
+	if err != nil {
+		return nil, err
+	}
+	if g != nil {
+		if err := StateBlockGraphs(&Config{Config: s.Config}, s, g); err != nil {
+			return nil, err
+		}
+	}
 	return s, nil
 }
 
@@ -508,15 +519,6 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 	StateRevision(c)
 	if err := StateMarkerPrompt(s, int64(f.UintKey("decision.max_tokens", 0))); err != nil {
 		return nil, err
-	}
-	g, err := ggufGraph(f.Arch())
-	if err != nil {
-		return nil, err
-	}
-	if g != nil {
-		if err := StateBlockGraphs(c, s, g); err != nil {
-			return nil, err
-		}
 	}
 	return s, nil
 }

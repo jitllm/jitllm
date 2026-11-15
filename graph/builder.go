@@ -225,6 +225,11 @@ func (s *Builder) Emit(kind OpKind, in []ValueID, outs []Result, w []Binding, a 
 	return ids
 }
 
+// Map is one OpMap of in by a into a row of width named name, binding w.
+func (s *Builder) Map(name string, a Attrs, w []Binding, width int, in ...ValueID) ValueID {
+	return s.Emit(OpMap, in, []Result{{Name: name, Width: width}}, w, a, nil, nil)[0]
+}
+
 // Int8Codes is x quantized to int8 per row by its largest magnitude: the
 // row's amax over 127 is its scale d, and each element times 1/d (0 where d
 // is 0) rounded half away from zero and clamped to int8's range is its code.

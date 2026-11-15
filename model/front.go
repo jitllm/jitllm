@@ -1578,7 +1578,7 @@ func sigmoidMul(b *graph.Builder, name string, gate, x graph.ValueID) graph.Valu
 
 // mapRow is one OpMap of in by a into a row of width, binding w.
 func mapRow(b *graph.Builder, name string, a graph.Attrs, w []graph.Binding, width int, in ...graph.ValueID) graph.ValueID {
-	return b.Emit(graph.OpMap, in, []graph.Result{{Name: name, Width: width}}, w, a, nil, nil)[0]
+	return b.Map(name, a, w, width, in...)
 }
 
 // headGraph is the head (graph.Head) of what the container stores: a
@@ -2189,7 +2189,7 @@ func (m *Model) indexer(b *graph.Builder, f graph.Facts, li int, n, qIn graph.Va
 	// A selection with no key program selects among the block's entries,
 	// whose key the block pools itself.
 	if s.Key != nil {
-		key, err := lowerValuesWith(b, nil, s.Key, []graph.ValueID{n}, 1, f, turn)
+		key, err := graph.LowerValues(b, nil, s.Key, []graph.ValueID{n}, 1, f, turn)
 		if err != nil {
 			return ix, fmt.Errorf("block %d's indexer key: %w", li, err)
 		}
@@ -2199,13 +2199,13 @@ func (m *Model) indexer(b *graph.Builder, f graph.Facts, li int, n, qIn graph.Va
 				[]graph.Result{{Name: "idx.k.row", Width: kw}}, nil, graph.Attrs{}, nil, nil)[0]
 		}
 	}
-	q, err := lowerValuesWith(b, nil, s.Query, []graph.ValueID{n, qIn}, 1, f, turn)
+	q, err := graph.LowerValues(b, nil, s.Query, []graph.ValueID{n, qIn}, 1, f, turn)
 	if err != nil {
 		return ix, fmt.Errorf("block %d's indexer query: %w", li, err)
 	}
 	ix.query = q[s.Query.Out]
 	if s.Weight != nil {
-		w, err := lowerValuesWith(b, nil, s.Weight, []graph.ValueID{n}, 1, f, turn)
+		w, err := graph.LowerValues(b, nil, s.Weight, []graph.ValueID{n}, 1, f, turn)
 		if err != nil {
 			return ix, fmt.Errorf("block %d's indexer weight: %w", li, err)
 		}

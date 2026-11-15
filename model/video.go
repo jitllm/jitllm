@@ -338,7 +338,7 @@ func videoEntry(t *jlm.Tower, px0, px1 uint8, grid, extra, side int, f graph.Fac
 	f0 := b.Emit(graph.OpPicture, nil, []graph.Result{{Name: "frame", Width: 3 * P * P}}, nil, a, nil, nil)[0]
 	a.Pixels, a.PicFrame = px1, true
 	f1 := b.Emit(graph.OpPicture, nil, []graph.Result{{Name: "frame.next", Width: 3 * P * P}}, nil, a, nil, nil)[0]
-	out, err := LowerProgram(b, t, &v.Entry, []graph.ValueID{f0, f1}, grid+extra, f)
+	out, err := graph.LowerProgram(b, t, &v.Entry, []graph.ValueID{f0, f1}, grid+extra, f)
 	if err != nil {
 		return nil, err
 	}

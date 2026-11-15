@@ -71,7 +71,7 @@ func projectorFrom(t *testing.T, s *Instance, from, to int, rows []float32, gw, 
 	E := int(m.Container.Vision().NEmbd)
 	n := len(rows) / E
 	b := graph.NewBlock(-1)
-	out, err := model.LowerProgram(b, m.Container.Vision().Tower, &p, []graph.ValueID{b.In("rows", E)}, n, m.TowerFacts(jlm.DenseBlock))
+	out, err := graph.LowerProgram(b, m.Container.Vision().Tower, &p, []graph.ValueID{b.In("rows", E)}, n, m.TowerFacts(jlm.DenseBlock))
 	if err != nil {
 		t.Fatal(err)
 	}

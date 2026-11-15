@@ -1,6 +1,6 @@
 {
   "classes": ["Qwen2ForCausalLM"],
-  "gguf": ["qwen2"],
+  "gguf": ["qwen2", "qwen2vl"],
   "config": {
     "arch": "qwen2",
     "keys": {

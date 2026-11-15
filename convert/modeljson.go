@@ -249,6 +249,16 @@ func parseModelJSON(b []byte, name string) (*modelJSON, error) {
 	if err := d.Decode(mj); err != nil {
 		return nil, fmt.Errorf("convert: %s: %w", name, err)
 	}
+	// A file of no class states a GGUF architecture's graph alone.
+	if len(mj.Classes) == 0 && len(mj.GGUF) != 0 && mj.Graph != nil {
+		if mj.Config.Arch != "" || len(mj.Tensors.Block) != 0 || len(mj.Tensors.Model) != 0 {
+			return nil, fmt.Errorf("convert: %s names no class and states one's config or tensors", name)
+		}
+		if err := mj.Graph.check(); err != nil {
+			return nil, fmt.Errorf("convert: %s: %w", name, err)
+		}
+		return mj, nil
+	}
 	if len(mj.Classes) == 0 {
 		return nil, fmt.Errorf("convert: %s names no class", name)
 	}
@@ -297,13 +307,13 @@ func parseModelJSON(b []byte, name string) (*modelJSON, error) {
 	return mj, nil
 }
 
-// modelLibrary is the embedded library by class.
-func modelLibrary() (map[string]*modelJSON, error) {
+// libraryFiles is every file of the embedded library.
+func libraryFiles() ([]*modelJSON, error) {
 	ents, err := fs.ReadDir(modelLibraryFS, "models")
 	if err != nil {
 		return nil, err
 	}
-	lib := map[string]*modelJSON{}
+	var out []*modelJSON
 	for _, e := range ents {
 		p := path.Join("models", e.Name())
 		b, err := modelLibraryFS.ReadFile(p)
@@ -314,6 +324,19 @@ func modelLibrary() (map[string]*modelJSON, error) {
 		if err != nil {
 			return nil, err
 		}
+		out = append(out, mj)
+	}
+	return out, nil
+}
+
+// modelLibrary is the embedded library by class.
+func modelLibrary() (map[string]*modelJSON, error) {
+	files, err := libraryFiles()
+	if err != nil {
+		return nil, err
+	}
+	lib := map[string]*modelJSON{}
+	for _, mj := range files {
 		for _, c := range mj.Classes {
 			if prev, dup := lib[c]; dup {
 				return nil, fmt.Errorf("convert: class %s is in both %s and %s", c, prev.name, mj.name)
@@ -330,14 +353,14 @@ func modelLibrary() (map[string]*modelJSON, error) {
 // ggufGraph is the graph the library states for a GGUF of architecture
 // arch, nil where no file states one.
 func ggufGraph(arch string) (*mjGraph, error) {
-	lib, err := modelLibrary()
+	files, err := libraryFiles()
 	if err != nil {
 		return nil, err
 	}
 	var g *mjGraph
 	var by string
-	for _, mj := range lib {
-		if !slices.Contains(mj.GGUF, arch) || mj.name == by {
+	for _, mj := range files {
+		if !slices.Contains(mj.GGUF, arch) {
 			continue
 		}
 		if g != nil {

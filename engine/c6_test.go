@@ -370,8 +370,11 @@ func dropVecs(m *model.Model, roles ...jlm.Role) func() {
 // the returned undo: a violation that drops, renames or resizes tensors in the
 // model's layers states the same model to the composer, which reads the
 // container (frontState.restate). It applies over the restatements already
-// in place, so violations compose.
+// in place, so violations compose. The blocks are built from the config
+// meanwhile, so a violation of the config or the tensors reaches a container
+// that states its graphs (builtGraphs).
 func restate(m *model.Model, f func(inv map[jlm.Role]graph.Shape)) func() {
+	undoB := builtGraphs(m)
 	fr := &m.Front
 	fr.Mu.Lock()
 	was := fr.Restate
@@ -390,6 +393,7 @@ func restate(m *model.Model, f func(inv map[jlm.Role]graph.Shape)) func() {
 		fr.Restate = was
 		fr.Restated++
 		fr.Mu.Unlock()
+		undoB()
 	}
 }
 
@@ -443,11 +447,12 @@ func noPostFFNNorm(m *model.Model) func() {
 }
 
 func cfgMut(m *model.Model, f func(c *model.Config)) func() {
+	undo := builtGraphs(m)
 	was := m.Cfg
 	c := *was
 	f(&c)
 	m.Cfg = &c
-	return func() { m.Cfg = was }
+	return func() { m.Cfg = was; undo() }
 }
 
 // c6Violations are the violation runs for the kit, kept as a gate: each feature

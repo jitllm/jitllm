@@ -442,7 +442,7 @@ func (m *Model) BuildAudioGraphs() (*TowerGraphs, error) {
 		snd := b.Emit(graph.OpSound, nil, []graph.Result{{Name: "sound", Width: int(a.MaxSamples), Rows: 1}}, nil,
 			graph.Attrs{Sound: f, Taps: composer.SoundTapsMax}, nil, nil)[0]
 		at := len(b.G.Ops)
-		out, err := LowerProgram(b, t, &t.Entry, nil, frames, dense)
+		out, err := graph.LowerProgram(b, t, &t.Entry, nil, frames, dense)
 		if err != nil {
 			return nil, fmt.Errorf("model: the audio tower's entry: %w", err)
 		}
@@ -486,7 +486,7 @@ func (m *Model) BuildTowerGraphs() (*TowerGraphs, error) {
 		return nil, fmt.Errorf("model: the container states no picture geometry (%v): convert it again", v.Projector)
 	}
 	P := int(ops[0].Span)
-	merge, window := towerTiles(t)
+	merge, window := graph.TowerTiles(t)
 	tg := &TowerGraphs{Lead: int(ops[0].Offset), GridDiv: int(t.Span.GridDiv), Merge: merge, Window: window,
 		Side: int(v.ImageSize / v.PatchSize), Patch: P, Geometry: geom}
 	if len(t.Chain) > 0 {
@@ -633,7 +633,7 @@ func (m *Model) BuildTowerGraphs() (*TowerGraphs, error) {
 	if tg.Fixed < 0 {
 		tg.Fixed = tg.Out - tg.Marks
 	}
-	if tg.Line, tg.Frame, tg.Trim = programFrame(&t.Head); tg.Frame > 0 {
+	if tg.Line, tg.Frame, tg.Trim = graph.ProgramFrame(&t.Head); tg.Frame > 0 {
 		for _, op := range t.Head.Ops {
 			if op.Code == jlm.TOpWrapRows {
 				tg.Ends = 1
@@ -794,26 +794,12 @@ func towerEntry(t *jlm.Tower, px uint8, grid, extra, side, maxPix int, f graph.F
 	if a.PicLive && grid*P*P > a.Area() || !a.PicLive && a.PicW*a.PicH != grid*P*P {
 		return nil, nil, fmt.Errorf("a %dx%d picture is not %d patches of %d", a.PicW, a.PicH, grid, P)
 	}
-	out, err := LowerProgram(b, t, p, []graph.ValueID{pix}, grid+extra, f)
+	out, err := graph.LowerProgram(b, t, p, []graph.ValueID{pix}, grid+extra, f)
 	if err != nil {
 		return nil, nil, err
 	}
 	b.Out(out)
 	return b.G, band, graph.Verify(b.G, f)
-}
-
-// towerTiles is the nested order the tower's patch rows are in: merge x
-// merge merge windows (TOpPatchify's Width, 1 for none) in windows of window
-// x window of them (TowerBlock.Window over the merge, 0 for none).
-func towerTiles(t *jlm.Tower) (merge, window int) {
-	merge = 1
-	if t == nil {
-		return merge, 0
-	}
-	if ops := t.Entry.Ops; len(ops) > 0 && ops[0].Code == jlm.TOpPatchify && ops[0].Width > 1 {
-		merge = int(ops[0].Width)
-	}
-	return merge, int(t.Block.Window) / merge
 }
 
 // towerRotary is the blocks' rotary as the tower's table turns it: the
@@ -845,7 +831,7 @@ func TowerRotaryOf(t *jlm.Tower) graph.Rotary {
 		g.Lead = int(ops[0].Offset)
 	}
 	g.Origin = int(t.Block.Rope.Origin)
-	g.Merge, g.Window = towerTiles(t)
+	g.Merge, g.Window = graph.TowerTiles(t)
 	return g
 }
 
@@ -980,7 +966,7 @@ func classSides(b jlm.PictureBounds) []int {
 func towerProgram(t *jlm.Tower, p *jlm.Program, v *jlm.Vision, rows int, f graph.Facts) (*graph.Graph, int, error) {
 	b := graph.NewBlock(-1)
 	x := b.In("rows", int(v.NEmbd))
-	out, err := LowerProgram(b, t, p, []graph.ValueID{x}, rows, f)
+	out, err := graph.LowerProgram(b, t, p, []graph.ValueID{x}, rows, f)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -990,388 +976,6 @@ func towerProgram(t *jlm.Tower, p *jlm.Program, v *jlm.Vision, rows int, f graph
 		n = rows
 	}
 	return b.G, n, graph.Verify(b.G, f)
-}
-
-// resampleOf is a record's resample (jlm.ResampleAligned, jlm.TapsLinear) as
-// graph.OpPosResample states it.
-func resampleOf(chain, filter uint8) (uint8, uint8, error) {
-	var c, f uint8
-	switch chain {
-	case jlm.ResampleAligned:
-		c = graph.ChainAligned
-	case jlm.ResampleHalfPixel:
-		c = graph.ChainHalfPixel
-	}
-	switch filter {
-	case jlm.TapsBilinear:
-		f = graph.FilterBilinear
-	case jlm.TapsLinear:
-		f = graph.FilterLinear
-	case jlm.TapsCubic:
-		f = graph.FilterCubic
-	case jlm.TapsAntialias:
-		f = graph.FilterAntialias
-	}
-	if c == 0 || f == 0 {
-		return 0, 0, fmt.Errorf("a resample by chain %d and taps %d", chain, filter)
-	}
-	return c, f, nil
-}
-
-// lowerProgram adds p's ops to b over its inputs in, each op the graph's of
-// the same meaning, and is p's result. A value's width is its op's: a
-// matrix's rows, a regroup's input times its group, and a patch gather's the
-// width the matrix reading it takes.
-func LowerProgram(b *graph.Builder, t *jlm.Tower, p *jlm.Program, in []graph.ValueID, rows int, f graph.Facts) (graph.ValueID, error) {
-	vals, err := lowerValues(b, t, p, in, rows, f)
-	if err != nil {
-		return 0, err
-	}
-	return vals[p.Out], nil
-}
-
-// lowerValues is LowerProgram's every value: the inputs, then each op's.
-func lowerValues(b *graph.Builder, t *jlm.Tower, p *jlm.Program, in []graph.ValueID, rows int, f graph.Facts) ([]graph.ValueID, error) {
-	return lowerValuesWith(b, t, p, in, rows, f, nil)
-}
-
-// lowerValuesWith is lowerValues where blockOps lowers the ops only a block
-// has (Model.blockOps).
-func lowerValuesWith(b *graph.Builder, t *jlm.Tower, p *jlm.Program, in []graph.ValueID, rows int, f graph.Facts,
-	blockOps func([]graph.ValueID, *jlm.TowerOp) (graph.ValueID, error)) ([]graph.ValueID, error) {
-	merge, window := towerTiles(t)
-	if len(in) != int(p.NIn) {
-		return nil, fmt.Errorf("a program of %d inputs over %d", p.NIn, len(in))
-	}
-	vals := append([]graph.ValueID(nil), in...)
-	shape := func(r jlm.Role) (graph.Shape, error) {
-		s, ok := f.Inventory[r]
-		if !ok {
-			return s, fmt.Errorf("binds %v, which the container does not hold", r)
-		}
-		return s, nil
-	}
-	// The width a value is read at by the matrix that reads it.
-	readAt := map[int]int{}
-	for _, op := range p.Ops {
-		if op.Code == jlm.TOpLinear && len(op.Bind) > 0 {
-			if s, ok := f.Inventory[op.Bind[0]]; ok {
-				readAt[int(op.In[0])] = s.K
-			}
-		}
-	}
-	// An elementwise op's inputs are read at the width its result is: a
-	// video's frames' difference is read by the second plane, padded as
-	// the first is.
-	for i := len(p.Ops) - 1; i >= 0; i-- {
-		op := &p.Ops[i]
-		if k := readAt[len(in)+i]; k > 0 && (op.Code == jlm.TOpSub || op.Code == jlm.TOpAdd) {
-			for _, v := range op.In {
-				readAt[int(v)] = max(readAt[int(v)], k)
-			}
-		}
-	}
-	width := func(v graph.ValueID) int { return b.G.Values[v].Width }
-	// rowsOf is a value's rows: its own, where an op that changes the count
-	// made it, else the program's.
-	rowsOf := func(v graph.ValueID) int {
-		if r := b.G.Values[v].Rows; r > 0 {
-			return r
-		}
-		return rows
-	}
-	for i := range p.Ops {
-		op := &p.Ops[i]
-		ins := make([]graph.ValueID, len(op.In))
-		for j, v := range op.In {
-			ins[j] = vals[v]
-		}
-		at := len(in) + i
-		name := fmt.Sprintf("op%d", i)
-		var out graph.ValueID
-		switch op.Code {
-		case jlm.TOpPatchify:
-			w := 3 * int(op.Span*op.Span)
-			if k := readAt[at]; k > w {
-				w = k
-			}
-			out = b.Emit(graph.OpPatchify, ins, []graph.Result{{Name: "patches", Width: w}}, nil,
-				graph.Attrs{Span: int(op.Span), Offset: int(op.Offset), Width: int(op.Width), Window: window}, nil, nil)[0]
-		case jlm.TOpLinear:
-			s, err := shape(op.Bind[0])
-			if err != nil {
-				return nil, err
-			}
-			out = b.MatVec(ins[0], op.Bind[0], s.Rows, op.Bind[1:]...)
-		case jlm.TOpPosTable:
-			s, err := shape(op.Bind[0])
-			if err != nil {
-				return nil, err
-			}
-			out = b.Emit(graph.OpEmbed, nil, []graph.Result{{Name: "pos", Width: s.K}},
-				[]graph.Binding{{Role: op.Bind[0], K: s.K, Rows: s.Rows}}, graph.Attrs{Positional: true, Offset: int(op.Offset)}, nil, nil)[0]
-		case jlm.TOpPosResample:
-			s, err := shape(op.Bind[0])
-			if err != nil {
-				return nil, err
-			}
-			if s.Rows != int(op.Span*op.Span) {
-				return nil, fmt.Errorf("resamples a table %d a side from %d rows", op.Span, s.Rows)
-			}
-			chain, filter, err := resampleOf(op.Chain, op.Filter)
-			if err != nil {
-				return nil, err
-			}
-			out = b.Emit(graph.OpPosResample, nil, []graph.Result{{Name: "pos", Width: s.K}},
-				[]graph.Binding{{Role: op.Bind[0], K: s.K, Rows: s.Rows}},
-				graph.Attrs{Span: int(op.Span), Offset: int(op.Offset), Width: int(op.Width), Window: window, Chain: chain, Filter: filter}, nil, nil)[0]
-		case jlm.TOpPosAxes:
-			s, err := shape(op.Bind[0])
-			if err != nil {
-				return nil, err
-			}
-			if s.Rows != int(2*op.Span) {
-				return nil, fmt.Errorf("reads two tables of %d rows from %d rows", op.Span, s.Rows)
-			}
-			out = b.Emit(graph.OpPosAxes, nil, []graph.Result{{Name: "pos", Width: s.K}},
-				[]graph.Binding{{Role: op.Bind[0], K: s.K, Rows: s.Rows}},
-				graph.Attrs{Span: int(op.Span), Offset: int(op.Offset)}, nil, nil)[0]
-		case jlm.TOpAdd:
-			out = b.Add(ins[0], ins[1])
-		case jlm.TOpSub:
-			out = b.Emit(graph.OpMap, ins, []graph.Result{{Name: "diff", Width: width(ins[0])}}, nil,
-				graph.Attrs{Fn: graph.MapSub}, nil, nil)[0]
-		case jlm.TOpLayerNorm:
-			out = b.LayerNorm(ins[0], op.Bind[0], float64(op.Eps), op.Bind[1:]...)
-		case jlm.TOpRMSNorm:
-			if len(op.Bind) == 0 {
-				w, hd := width(ins[0]), width(ins[0])
-				if op.Span > 0 {
-					hd = int(op.Span)
-				}
-				out = b.Emit(graph.OpHeadNorm, ins, []graph.Result{{Name: name, Width: w}}, nil,
-					graph.Attrs{Eps: float64(op.Eps), HeadDim: hd}, nil, nil)[0]
-				break
-			}
-			if op.Span > 0 && int(op.Span) < width(ins[0]) {
-				out = b.HeadNorm(ins[0], op.Bind[0], int(op.Span), float64(op.Eps))
-				break
-			}
-			out = b.Norm(ins[0], op.Bind[0], float64(op.Eps))
-		case jlm.TOpRope, jlm.TOpNGramRows, jlm.TOpTailConv:
-			if blockOps == nil {
-				return nil, fmt.Errorf("op %d is code %d, which only a block has", i, op.Code)
-			}
-			v, err := blockOps(ins, op)
-			if err != nil {
-				return nil, err
-			}
-			out = v
-		case jlm.TOpScale, jlm.TOpShift:
-			s, err := shape(op.Bind[0])
-			if err != nil {
-				return nil, err
-			}
-			fn := graph.MapMul
-			if op.Code == jlm.TOpShift {
-				fn = graph.MapAdd
-			}
-			out = mapRow(b, name, graph.Attrs{Fn: fn}, []graph.Binding{{Role: op.Bind[0], K: s.K, Rows: s.Rows}},
-				width(ins[0]), ins[0])
-		case jlm.TOpSum, jlm.TOpMax:
-			fn := graph.MapAdd
-			if op.Code == jlm.TOpMax {
-				fn = graph.MapMax
-			}
-			w, a := 1, graph.Attrs{Fn: fn}
-			if op.Span > 0 {
-				w, a.Span = width(ins[0])/int(op.Span), int(op.Span)
-			}
-			out = b.Emit(graph.OpReduce, ins, []graph.Result{{Name: name, Width: w}}, nil, a, nil, nil)[0]
-		case jlm.TOpConcat:
-			w := 0
-			for _, v := range ins {
-				w += width(v)
-			}
-			out = b.Emit(graph.OpConcat, ins, []graph.Result{{Name: name, Width: w}}, nil, graph.Attrs{}, nil, nil)[0]
-		case jlm.TOpSlice:
-			out = b.Emit(graph.OpSlice, ins, []graph.Result{{Name: name, Width: int(op.Width)}}, nil,
-				graph.Attrs{Offset: int(op.Offset), Width: int(op.Width)}, nil, nil)[0]
-		case jlm.TOpRegroup:
-			S := int(op.Span)
-			out = b.Emit(graph.OpRegroup, ins, []graph.Result{{Name: "grouped", Width: S * S * width(ins[0]),
-				Rows: rowsOf(ins[0]) / (S * S)}}, nil, graph.Attrs{Span: S}, nil, nil)[0]
-		case jlm.TOpPool:
-			// The mean of each block's S*S rows: the block regrouped into one
-			// row, its slots summed and scaled by 1/S^2.
-			S, E := int(op.Span), width(ins[0])
-			g := b.Emit(graph.OpRegroup, ins, []graph.Result{{Name: "pool.grouped", Width: S * S * E,
-				Rows: rowsOf(ins[0]) / (S * S)}}, nil, graph.Attrs{Span: S, GridW: int(op.GridW)}, nil, nil)[0]
-			slot := func(k int) graph.ValueID {
-				return b.Emit(graph.OpSlice, []graph.ValueID{g}, []graph.Result{{Name: "pool.slot", Width: E}}, nil,
-					graph.Attrs{Offset: k * E, Width: E}, nil, nil)[0]
-			}
-			acc := slot(0)
-			for k := 1; k < S*S; k++ {
-				acc = b.Add(acc, slot(k))
-			}
-			var e jlm.ExprBuilder
-			e.Fn(jlm.FnMul, jlm.Operand(0), jlm.Num(1/float32(S*S)))
-			mean := jlm.Expr{Terms: e.T}
-			var err error
-			if out, err = b.Stated("pooled", &mean, []graph.ValueID{acc}, E, f); err != nil {
-				return nil, fmt.Errorf("the pool's mean: %w", err)
-			}
-		case jlm.TOpFold:
-			S := int(op.Span)
-			out = b.Emit(graph.OpFold, ins, []graph.Result{{Name: "folded", Width: S * width(ins[0]),
-				Rows: rowsOf(ins[0]) / S}}, nil, graph.Attrs{Span: S}, nil, nil)[0]
-		case jlm.TOpUntile:
-			out = b.Emit(graph.OpUntile, ins, []graph.Result{{Name: "raster", Width: width(ins[0]), Rows: rowsOf(ins[0])}}, nil,
-				graph.Attrs{Width: merge, Window: window}, nil, nil)[0]
-		case jlm.TOpLeadRow:
-			out = b.Emit(graph.OpLeadRow, ins, []graph.Result{{Name: "class", Width: width(ins[0])}},
-				[]graph.Binding{{Role: op.Bind[0], K: width(ins[0])}}, graph.Attrs{Offset: int(op.Offset)}, nil, nil)[0]
-		case jlm.TOpMarkRow:
-			s, err := shape(op.Bind[0])
-			if err != nil {
-				return nil, err
-			}
-			if s.K != width(ins[0]) || s.Rows < 1 {
-				return nil, fmt.Errorf("marks rows %d wide from a table of %d rows %d wide", width(ins[0]), s.Rows, s.K)
-			}
-			if op.Span < 1 || op.Offset < 0 {
-				return nil, fmt.Errorf("marks rows with runs of %d before and %d after", op.Span, op.Offset)
-			}
-			out = b.Emit(graph.OpMarkRow, ins, []graph.Result{{Name: "marked", Width: width(ins[0]),
-				Rows: rowsOf(ins[0]) + int(op.Span+op.Offset)}},
-				[]graph.Binding{{Role: op.Bind[0], K: s.K, Rows: s.Rows}},
-				graph.Attrs{Width: int(op.Width), Span: int(op.Span), Offset: int(op.Offset)}, nil, nil)[0]
-		case jlm.TOpPosBuckets:
-			s, err := shape(op.Bind[0])
-			if err != nil {
-				return nil, err
-			}
-			if s.Rows != int(op.Span*op.Span) {
-				return nil, fmt.Errorf("buckets onto a table %d a side from %d rows", op.Span, s.Rows)
-			}
-			out = b.Emit(graph.OpPosBuckets, nil, []graph.Result{{Name: "pos", Width: s.K}},
-				[]graph.Binding{{Role: op.Bind[0], K: s.K, Rows: s.Rows}},
-				graph.Attrs{Span: int(op.Span), Offset: int(op.Offset)}, nil, nil)[0]
-		case jlm.TOpTableRows:
-			s, err := shape(op.Bind[0])
-			if err != nil {
-				return nil, err
-			}
-			out = b.Emit(graph.OpTableRows, nil, []graph.Result{{Name: "table", Width: s.K, Rows: s.Rows}},
-				[]graph.Binding{{Role: op.Bind[0], K: s.K, Rows: s.Rows}}, graph.Attrs{}, nil, nil)[0]
-		case jlm.TOpRowsAttend:
-			w, h, g := width(ins[0]), int(op.Span), int(op.Width)
-			if g == 0 {
-				g = h
-			}
-			if w%h != 0 || width(ins[1]) != g*(w/h) || width(ins[2]) != g*(w/h) || len(ins) == 4 && width(ins[3]) != w {
-				return nil, fmt.Errorf("attends rows %d, %d and %d wide in %d heads over %d", w, width(ins[1]), width(ins[2]), h, g)
-			}
-			// The relative form reads its positions' table.
-			var bind []graph.Binding
-			if len(ins) == 4 {
-				s, err := shape(op.Bind[0])
-				if err != nil {
-					return nil, err
-				}
-				bind = []graph.Binding{{Role: op.Bind[0], K: s.K, Rows: s.Rows}}
-			}
-			out = b.Emit(graph.OpRowsAttend, ins, []graph.Result{{Name: "attended", Width: w, Rows: rowsOf(ins[0])}}, bind,
-				graph.Attrs{NHead: h, NKVHead: g, HeadDim: w / h, Scale: 1 / math.Sqrt(float64(w/h))}, nil, nil)[0]
-		case jlm.TOpFrames:
-			out = b.Emit(graph.OpFrames, nil, []graph.Result{{Name: "frames", Width: int(op.Width), Rows: rows}}, nil,
-				graph.Attrs{Width: int(op.Width), Stride: int(op.Stride), Const: float64(op.Eps)}, nil, nil)[0]
-		case jlm.TOpFeatureNorm:
-			out = b.Emit(graph.OpFeatureNorm, ins, []graph.Result{{Name: name, Width: width(ins[0])}}, nil,
-				graph.Attrs{Offset: int(op.Offset), Eps: float64(op.Eps)}, nil, nil)[0]
-		case jlm.TOpSplitRows:
-			w := int(op.Width)
-			if width(ins[0])%w != 0 {
-				return nil, fmt.Errorf("splits rows of %d into rows of %d", width(ins[0]), w)
-			}
-			out = b.Emit(graph.OpSplitRows, ins, []graph.Result{{Name: name, Width: w, Rows: rowsOf(ins[0]) * (width(ins[0]) / w)}}, nil,
-				graph.Attrs{Width: w}, nil, nil)[0]
-		case jlm.TOpClipMask:
-			out = b.Emit(graph.OpClipMask, ins, []graph.Result{{Name: name, Width: width(ins[0])}}, nil,
-				graph.Attrs{Stride: int(op.Stride), Span: int(op.Span), GridW: int(op.GridW)}, nil, nil)[0]
-		case jlm.TOpRowConv:
-			s, err := shape(op.Bind[0])
-			if err != nil {
-				return nil, err
-			}
-			if s.K != int(op.Span) || s.Rows != width(ins[0]) {
-				return nil, fmt.Errorf("convolves %d channels by %d taps from a %dx%d table", width(ins[0]), op.Span, s.Rows, s.K)
-			}
-			out = b.Emit(graph.OpRowConv, ins, []graph.Result{{Name: name, Width: width(ins[0])}},
-				[]graph.Binding{{Role: op.Bind[0], K: s.K, Rows: s.Rows}}, graph.Attrs{Taps: int(op.Span)}, nil, nil)[0]
-		case jlm.TOpUnfold, jlm.TOpConv:
-			T, st, W := int(op.Span), int(op.Stride), int(op.GridW)
-			R := rowsOf(ins[0])
-			if R%W != 0 {
-				return nil, fmt.Errorf("convolves %d rows as a grid %d wide", R, W)
-			}
-			res := graph.Result{Name: name, Width: width(ins[0])}
-			if st > 1 {
-				res.Rows = ((R/W + st - 1) / st) * ((W + st - 1) / st)
-			}
-			kind := graph.OpConv
-			var bind []graph.Binding
-			if op.Code == jlm.TOpUnfold {
-				kind, res.Width = graph.OpUnfold, int(op.Width)
-			} else {
-				bind = []graph.Binding{{Role: op.Bind[0], K: width(ins[0]), Rows: T * T}}
-			}
-			out = b.Emit(kind, ins, []graph.Result{res}, bind, graph.Attrs{Taps: T, Stride: st, GridW: W, Offset: int(op.Offset)}, nil, nil)[0]
-		case jlm.TOpUpsample:
-			S := int(op.Span)
-			out = b.Emit(graph.OpUpsample, ins, []graph.Result{{Name: name, Width: width(ins[0]), Rows: rowsOf(ins[0]) * S * S}}, nil,
-				graph.Attrs{Span: S, GridW: int(op.GridW)}, nil, nil)[0]
-		case jlm.TOpAppendRow:
-			s, err := shape(op.Bind[0])
-			if err != nil {
-				return nil, err
-			}
-			if s.K != width(ins[0]) || int(op.Offset) >= max(s.Rows, 1) {
-				return nil, fmt.Errorf("appends row %d of a %dx%d table to rows %d wide", op.Offset, s.Rows, s.K, width(ins[0]))
-			}
-			out = b.Emit(graph.OpAppendRow, ins, []graph.Result{{Name: name, Width: width(ins[0]), Rows: rowsOf(ins[0]) + 1}},
-				[]graph.Binding{{Role: op.Bind[0], K: s.K, Rows: s.Rows}}, graph.Attrs{Offset: int(op.Offset)}, nil, nil)[0]
-		case jlm.TOpTailRow:
-			out = b.Emit(graph.OpTailRow, ins, []graph.Result{{Name: "class", Width: width(ins[0])}},
-				[]graph.Binding{{Role: op.Bind[0], K: width(ins[0])}}, graph.Attrs{}, nil, nil)[0]
-		case jlm.TOpRowBreak:
-			out = b.Emit(graph.OpRowBreak, ins, []graph.Result{{Name: "lines", Width: width(ins[0]), Rows: 2 * rowsOf(ins[0])}},
-				[]graph.Binding{{Role: op.Bind[0], K: width(ins[0])}}, graph.Attrs{Span: int(op.Span), Offset: int(op.Offset)}, nil, nil)[0]
-		case jlm.TOpWrapRows:
-			line, _, _ := programFrame(p)
-			out = b.Emit(graph.OpWrapRows, ins, []graph.Result{{Name: "framed", Width: width(ins[0]), Rows: rowsOf(ins[0]) + 2}},
-				[]graph.Binding{{Role: op.Bind[0], K: width(ins[0])}, {Role: op.Bind[1], K: width(ins[0])}},
-				graph.Attrs{Span: int(op.Span), Offset: int(t.Entry.Ops[0].Offset), Width: line}, nil, nil)[0]
-		case jlm.TOpDropRows:
-			out = b.Emit(graph.OpDropRows, ins, []graph.Result{{Name: "rows", Width: width(ins[0]),
-				Rows: rowsOf(ins[0]) - int(op.Offset)}}, nil, graph.Attrs{Offset: int(op.Offset)}, nil, nil)[0]
-		case jlm.TOpStated:
-			w := int(op.Width)
-			if w == 0 {
-				w = width(ins[0])
-			}
-			v, err := b.Stated(name, op.Expr, ins, w, f)
-			if err != nil {
-				return nil, err
-			}
-			out = v
-		default:
-			return nil, fmt.Errorf("op %d is code %d, which this engine does not lower", i, op.Code)
-		}
-		vals = append(vals, out)
-	}
-	return vals, nil
 }
 
 // towerBlock is block li of the model's block space (the tower's block
@@ -1742,18 +1346,6 @@ func pictureKey(img image.Image) (*RowsKey, error) {
 	return &k, nil
 }
 
-// programFrame is the rows a program's TOpRowBreak adds after each row of
-// the merged grid -- 1 where it has one, 0 where not -- the merge it counts
-// that grid over, and the breaks it leaves off the last row.
-func programFrame(p *jlm.Program) (line, merge, trim int) {
-	for _, op := range p.Ops {
-		if op.Code == jlm.TOpRowBreak {
-			return 1, int(op.Span), int(op.Offset)
-		}
-	}
-	return 0, 0, 0
-}
-
 // classOf is the class a picture of side pixels is encoded in: the smallest
 // whose picture holds it, else the largest.
 func (tg *TowerGraphs) classOf(w, h int) int {
@@ -1787,7 +1379,7 @@ func (m *Model) chainGraphs(tg *TowerGraphs, t *jlm.Tower, n, base int, e *graph
 		b := graph.NewBlock(m.TowerBase + base + i)
 		x := b.In("x", width)
 		b.G.Values[x].Rows = rows
-		out, err := LowerProgram(b, t, &cb.Prog, []graph.ValueID{x}, rows, f)
+		out, err := graph.LowerProgram(b, t, &cb.Prog, []graph.ValueID{x}, rows, f)
 		if err != nil {
 			return fmt.Errorf("model: the tower's block %d: %w", i, err)
 		}
@@ -1809,7 +1401,7 @@ func (m *Model) chainGraphs(tg *TowerGraphs, t *jlm.Tower, n, base int, e *graph
 		ins = append(ins, x)
 		tg.HeadFrom = append(tg.HeadFrom, int(j))
 	}
-	out, err := LowerProgram(b, t, &t.Head, ins, rows, dense)
+	out, err := graph.LowerProgram(b, t, &t.Head, ins, rows, dense)
 	if err != nil {
 		return fmt.Errorf("model: the tower's head: %w", err)
 	}

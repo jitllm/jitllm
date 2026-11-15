@@ -1,6 +1,7 @@
 package convert
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -55,18 +56,47 @@ type mjBlockOp struct {
 	// Kind is an emit's op, by the graph language's name of it; Outs its
 	// results, Attr its attributes by graph.Attrs field name, each an
 	// expression (a function by its name), and Bind its weights with their
-	// shapes.
+	// shapes. On an attend or a rope, Attr sets attributes over the block's.
 	Kind string            `json:"kind"`
 	Outs []mjResult        `json:"outs"`
 	Attr map[string]string `json:"attr"`
 	Bind []mjBinding       `json:"bind"`
-	// Of is the statement a stated op runs: router_score, the mixture's
-	// score of each expert from its router's logits.
+	// Of is the statement a stated op runs (statements).
 	Of string `json:"of"`
+	// Advances are the block states an emit reads at their version in force
+	// and writes the next of (states).
+	Advances []string `json:"advances"`
+	// Terms are an expr's elementwise function, each term a function of
+	// the operands, constants, the bound vectors' elements and earlier
+	// terms (graph.Term).
+	Terms []mjTerm `json:"terms"`
 	// Parts is how many equal slices a split_sum adds, an expression.
 	Parts string `json:"parts"`
 	// From is the mark a routed op's region starts at.
 	From string `json:"from"`
+	// Eps is a norm's epsilon where it is not the block's, an expression.
+	Eps string `json:"eps"`
+	// Int8, where it holds (an expression), has a matvec read its input's
+	// int8 codes per row, the product scaled by the row's scale and the
+	// biases added after; an input is quantized once for every matvec.
+	Int8 string `json:"int8"`
+}
+
+// mjTerm is one term of an expr: a function by name and up to three
+// arguments.
+type mjTerm struct {
+	Fn   string  `json:"fn"`
+	Args []mjArg `json:"args"`
+}
+
+// mjArg is an expr term's argument: operand In, earlier term Term, element
+// Elem of bound vector W, or the constant Const (an expression); exactly one.
+type mjArg struct {
+	In    *int   `json:"in"`
+	Term  *int   `json:"term"`
+	W     *int   `json:"w"`
+	Elem  int    `json:"elem"`
+	Const string `json:"const"`
 }
 
 // mjResult is one of an emit's results: its name in the graph, its width (an
@@ -131,12 +161,24 @@ func graphSteps() map[string][4]int {
 		"routed":      {0, 0, 0, 0},
 		"let":         {1, 1, 0, 0},
 		"sigmoid_mul": {2, 2, 0, 0},
+		"silu":        {1, 1, 0, 0},
+		"silu_gated":  {2, 2, 0, 0},
+		"expr":        {0, -1, 0, 0},
 		"out":         {1, -1, 0, 0},
 	}
 }
 
-// statements are what a stated op may run.
-func statements() map[string]bool { return map[string]bool{"router_score": true} }
+// statements are what a stated op may run: the router's score of each
+// expert and its picks' weights (expressions), and the delta rule's decay
+// and gate (programs).
+func statements() map[string]bool {
+	return map[string]bool{"router_score": true, "router_weight": true, "qkv_act": true, "delta_decay": true, "delta_gate": true}
+}
+
+// states are the block states an emit may advance, by name.
+func states() map[string]graph.State {
+	return map[string]graph.State{"kv": graph.StateKV, "rec.conv": graph.StateRecConv, "rec.state": graph.StateRecState}
+}
 
 // check refuses a graph naming a step this converter does not take, an op
 // of the wrong arity, a value read before an op names it, an expression
@@ -165,7 +207,27 @@ func (g *mjGraph) check() error {
 		if o.Op == "routed" && !named[o.From] {
 			return fmt.Errorf("op %d's routed region starts at %q, which no op marks before it", i, o.From)
 		}
-		xs := []string{o.If, o.Rows, o.Width, o.Alpha, o.Parts}
+		xs := []string{o.If, o.Rows, o.Width, o.Alpha, o.Parts, o.Int8, o.Eps}
+		for k, tm := range o.Terms {
+			if fnNamed(tm.Fn) == 0 || len(tm.Args) == 0 || len(tm.Args) > 3 {
+				return fmt.Errorf("op %d (%s): term %d is %q of %d arguments", i, o.Op, k, tm.Fn, len(tm.Args))
+			}
+			for _, a := range tm.Args {
+				set := 0
+				for _, p := range []bool{a.In != nil, a.Term != nil, a.W != nil, a.Const != ""} {
+					if p {
+						set++
+					}
+				}
+				if set != 1 || a.Term != nil && *a.Term >= k {
+					return fmt.Errorf("op %d (%s): term %d's argument is not one operand, earlier term, vector or constant", i, o.Op, k)
+				}
+				xs = append(xs, a.Const)
+			}
+		}
+		if o.Op == "expr" && (len(o.Terms) == 0 || o.Width == "") {
+			return fmt.Errorf("op %d's expr states no terms or no width", i)
+		}
 		for _, r := range o.Outs {
 			xs = append(xs, r.Width)
 		}
@@ -192,6 +254,11 @@ func (g *mjGraph) check() error {
 				return fmt.Errorf("op %d (%s): %q is not a tensor name the container knows", i, o.Op, w)
 			}
 		}
+		for _, st := range o.Advances {
+			if _, ok := states()[st]; !ok || o.Op != "emit" {
+				return fmt.Errorf("op %d (%s) advances %q, which is not a block state an emit advances", i, o.Op, st)
+			}
+		}
 		switch {
 		case o.Op == "out", o.Op == "routed":
 		case o.Op == "emit":
@@ -216,7 +283,7 @@ func (g *mjGraph) check() error {
 		case o.Out == "":
 			return fmt.Errorf("op %d (%s) names no output", i, o.Op)
 		case o.Op == "in" && o.Width == "", o.Op == "matvec" && o.Rows == "", o.Op == "act" && o.Width == "",
-			o.Op == "stated" && o.Width == "":
+			o.Op == "stated" && (o.Of == "router_score" || o.Of == "router_weight") && o.Width == "":
 			return fmt.Errorf("op %d (%s) states no width", i, o.Op)
 		case o.Op == "stated" && !statements()[o.Of]:
 			return fmt.Errorf("op %d states %q, which is not a statement a block runs", i, o.Of)
@@ -300,16 +367,24 @@ func blockRole(name string) (jlm.Role, bool) {
 	if r, ok := roleOf(name + ".weight"); ok {
 		return r, true
 	}
-	return roleOf(name)
+	if r, ok := roleOf(name); ok {
+		return r, true
+	}
+	// A tensor the converter makes, by splitting or folding, has the
+	// container's name alone (ssm_x.dt of ssm_x); the block roles are the
+	// low codes.
+	for r := jlm.Role(1); r < 2048; r++ {
+		if r.Valid() && r.String() == name {
+			return r, true
+		}
+	}
+	return 0, false
 }
 
 // StateBlockGraphs states every block's graph in c from g, held to the
 // tensors s stores for it.
 func StateBlockGraphs(c *Config, s *jlm.Source, g *mjGraph) error {
 	n := int(c.NLayer + c.NMTP)
-	if c.NMTP != 0 {
-		return fmt.Errorf("convert: a model.json's graph for prediction blocks: %w", ErrNotImplemented)
-	}
 	var out jlm.BlockGraphs
 	at := map[string]uint16{}
 	for li := range n {
@@ -343,6 +418,7 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph) (*graph.Grap
 	vals := map[string]graph.ValueID{}
 	hists := map[string]graph.StateRef{}
 	marks := map[string]int{}
+	codes := map[graph.ValueID][2]graph.ValueID{}
 	vars := bf.vars()
 	num := func(x string) (float64, error) { return g.num(x, vars) }
 	for i, o := range g.Block {
@@ -380,17 +456,50 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph) (*graph.Grap
 			}
 			y = b.In(o.Out, int(width))
 		case "norm":
-			y = b.Norm(in[0], w[0], bf.eps)
+			eps := bf.eps
+			if o.Eps != "" {
+				var err error
+				if eps, err = num(o.Eps); err != nil {
+					return nil, err
+				}
+			}
+			y = b.Norm(in[0], w[0], eps)
 		case "layer_norm":
 			y = b.LayerNorm(in[0], w[0], bf.eps, w[1:]...)
 		case "head_norm":
-			y = b.HeadNorm(in[0], w[0], bf.headDim, bf.eps)
+			hd := bf.headDim
+			if o.Width != "" {
+				n, err := num(o.Width)
+				if err != nil {
+					return nil, err
+				}
+				hd = int(n)
+			}
+			y = b.HeadNorm(in[0], w[0], hd, bf.eps)
 		case "matvec":
 			rows, err := num(o.Rows)
 			if err != nil {
 				return nil, err
 			}
-			y = b.MatVec(in[0], w[0], int(rows), w[1:]...)
+			q8 := false
+			if o.Int8 != "" {
+				if q8, err = g.flag(o.Int8, vars); err != nil {
+					return nil, fmt.Errorf("op %d (matvec): %w", i, err)
+				}
+			}
+			if !q8 {
+				y = b.MatVec(in[0], w[0], int(rows), w[1:]...)
+				break
+			}
+			q, ok := codes[in[0]]
+			if !ok {
+				q[0], q[1] = b.Int8Codes(in[0])
+				codes[in[0]] = q
+			}
+			y = b.Map("scaled", graph.Attrs{Fn: graph.MapMul}, nil, int(rows), b.MatVec(q[0], w[0], int(rows)), q[1])
+			for _, br := range w[1:] {
+				y = b.Map("biased", graph.Attrs{Fn: graph.MapAdd}, []graph.Binding{{Role: br, K: int(rows)}}, int(rows), y)
+			}
 		case "add":
 			alpha := 0.0
 			if o.Alpha != "" {
@@ -410,6 +519,9 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph) (*graph.Grap
 			if err != nil {
 				return nil, err
 			}
+			if a, err = overridden(a, g, o, vars); err != nil {
+				return nil, fmt.Errorf("op %d (rope): %w", i, err)
+			}
 			name := o.Name
 			if name == "" {
 				name = "rope"
@@ -423,7 +535,11 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph) (*graph.Grap
 			if !ok {
 				return nil, fmt.Errorf("op %d attends history %q, which no op this block runs appends", i, o.Hist)
 			}
-			y = b.AttendOf(in[0], h, bf.attend(), w...)
+			a, err := overridden(bf.attend(), g, o, vars)
+			if err != nil {
+				return nil, fmt.Errorf("op %d (attend): %w", i, err)
+			}
+			y = b.AttendOf(in[0], h, a, w...)
 		case "act":
 			width, err := num(o.Width)
 			if err != nil {
@@ -437,15 +553,8 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph) (*graph.Grap
 				return nil, fmt.Errorf("op %d's stated activation: %w", i, err)
 			}
 		case "stated":
-			width, err := num(o.Width)
-			if err != nil {
-				return nil, err
-			}
-			name := o.Name
-			if name == "" {
-				name = o.Of
-			}
-			if y, err = b.Stated(name, &c.RouterScore, in, int(width), bf.facts); err != nil {
+			var err error
+			if y, err = stated(b, c, o, in, bf, num); err != nil {
 				return nil, fmt.Errorf("op %d's stated %s: %w", i, o.Of, err)
 			}
 		case "emit":
@@ -482,6 +591,30 @@ func blockGraphOf(c *jlm.Config, s *jlm.Source, li int, g *mjGraph) (*graph.Grap
 			}
 		case "let":
 			y = in[0]
+		case "expr":
+			var err error
+			if y, err = exprOp(b, g, o, in, bf, vars); err != nil {
+				return nil, fmt.Errorf("op %d (expr): %w", i, err)
+			}
+		case "silu_gated":
+			name := o.Name
+			if name == "" {
+				name = "gated"
+			}
+			y = b.Expr(name, b.G.Values[in[1]].Width, []graph.Term{
+				{Fn: graph.MapSigmoid, Args: [3]graph.Arg{{Kind: graph.ArgIn, Index: 0}}},
+				{Fn: graph.MapMul, Args: [3]graph.Arg{{Kind: graph.ArgIn, Index: 0}, {Kind: graph.ArgTerm, Index: 0}}},
+				{Fn: graph.MapMul, Args: [3]graph.Arg{{Kind: graph.ArgTerm, Index: 1}, {Kind: graph.ArgIn, Index: 1}}},
+			}, nil, in...)
+		case "silu":
+			name := o.Name
+			if name == "" {
+				name = "silu"
+			}
+			y = b.Expr(name, b.G.Values[in[0]].Width, []graph.Term{
+				{Fn: graph.MapSigmoid, Args: [3]graph.Arg{{Kind: graph.ArgIn, Index: 0}}},
+				{Fn: graph.MapMul, Args: [3]graph.Arg{{Kind: graph.ArgIn, Index: 0}, {Kind: graph.ArgTerm, Index: 0}}},
+			}, nil, in[0])
 		case "sigmoid_mul":
 			name := o.Name
 			if name == "" {
@@ -524,6 +657,124 @@ func emitted(b *graph.Builder, g *mjGraph, o mjBlockOp, in []graph.ValueID, bf *
 		}
 		outs = append(outs, graph.Result{Name: r.Name, Width: int(w), Elem: elems()[r.Elem]})
 	}
+	ws, err := bindings(o, bf, num)
+	if err != nil {
+		return nil, err
+	}
+	var a graph.Attrs
+	for f, x := range o.Attr {
+		v, err := g.value(x, vars)
+		if err != nil {
+			return nil, fmt.Errorf("attribute %s: %w", f, err)
+		}
+		if err := setAttr(&a, f, v); err != nil {
+			return nil, err
+		}
+	}
+	var reads, writes []graph.StateRef
+	for _, name := range o.Advances {
+		st := states()[name]
+		v := b.G.StateVersion(st)
+		reads, writes = append(reads, graph.StateRef{State: st, Version: v}), append(writes, graph.StateRef{State: st, Version: v + 1})
+	}
+	return b.Emit(graph.KindNamed(o.Kind), in, outs, ws, a, reads, writes), nil
+}
+
+// routerWeight is each of k picks' weight: the stated row rw over the logits
+// with the earlier picks removed and the pick's logit, read at the pick.
+func routerWeight(b *graph.Builder, rw *jlm.Expr, logits, choose, sel graph.ValueID, k int, f graph.Facts) (graph.ValueID, error) {
+	e := b.G.Values[logits].Width
+	take := func(name string, v graph.ValueID) graph.ValueID {
+		return b.Emit(graph.OpTake, []graph.ValueID{v, sel}, []graph.Result{{Name: name, Width: k}}, nil, graph.Attrs{}, nil, nil)[0]
+	}
+	slice1 := func(name string, v graph.ValueID, j int) graph.ValueID {
+		return b.Emit(graph.OpSlice, []graph.ValueID{v}, []graph.Result{{Name: name, Width: 1}}, nil, graph.Attrs{Offset: j, Width: 1}, nil, nil)[0]
+	}
+	rank := b.Emit(graph.OpRank, []graph.ValueID{choose}, []graph.Result{{Name: "router.rank", Width: e, Elem: graph.ElemU32}}, nil, graph.Attrs{}, nil, nil)[0]
+	picked := take("router.picked", logits)
+	var ws []graph.ValueID
+	for j := range k {
+		rest := logits
+		if j > 0 {
+			earlier := b.Map("router.earlier", graph.Attrs{Fn: graph.MapLess, Const: float64(j)}, nil, e, rank)
+			rest = b.Expr("router.rest", e, []graph.Term{{Fn: graph.MapWhere, Args: [3]graph.Arg{{Kind: graph.ArgIn, Index: 0},
+				{Kind: graph.ArgConst, Const: math.Inf(-1)}, {Kind: graph.ArgIn, Index: 1}}}}, nil, earlier, logits)
+		}
+		row, err := b.Stated("router.weight", rw, []graph.ValueID{rest, slice1("router.pick", picked, j)}, e, f)
+		if err != nil {
+			return 0, err
+		}
+		ws = append(ws, slice1("router.w", take("router.row", row), j))
+	}
+	if k == 1 {
+		return ws[0], nil
+	}
+	return b.Emit(graph.OpConcat, ws, []graph.Result{{Name: "router.w", Width: k}}, nil, graph.Attrs{}, nil, nil)[0], nil
+}
+
+// overridden is a with each attribute o states set over it.
+func overridden(a graph.Attrs, g *mjGraph, o mjBlockOp, vars map[string]jinja.Value) (graph.Attrs, error) {
+	for f, x := range o.Attr {
+		v, err := g.value(x, vars)
+		if err != nil {
+			return a, fmt.Errorf("attribute %s: %w", f, err)
+		}
+		if err := setAttr(&a, f, v); err != nil {
+			return a, err
+		}
+	}
+	return a, nil
+}
+
+// exprOp is an expr's op on b over in: its terms with their constants
+// evaluated over the block's facts, and its bound vectors.
+func exprOp(b *graph.Builder, g *mjGraph, o mjBlockOp, in []graph.ValueID, bf *blockFacts, vars map[string]jinja.Value) (graph.ValueID, error) {
+	num := func(x string) (float64, error) { return g.num(x, vars) }
+	width, err := num(o.Width)
+	if err != nil {
+		return 0, err
+	}
+	ws, err := bindings(o, bf, num)
+	if err != nil {
+		return 0, err
+	}
+	var terms []graph.Term
+	for _, tm := range o.Terms {
+		t := graph.Term{Fn: fnNamed(tm.Fn)}
+		for k, a := range tm.Args {
+			switch {
+			case a.In != nil:
+				if *a.In >= len(in) {
+					return 0, fmt.Errorf("a term reads operand %d of %d", *a.In, len(in))
+				}
+				t.Args[k] = graph.Arg{Kind: graph.ArgIn, Index: *a.In}
+			case a.Term != nil:
+				t.Args[k] = graph.Arg{Kind: graph.ArgTerm, Index: *a.Term}
+			case a.W != nil:
+				if *a.W >= len(ws) {
+					return 0, fmt.Errorf("a term reads vector %d of %d bound", *a.W, len(ws))
+				}
+				t.Args[k] = graph.Arg{Kind: graph.ArgWeight, Index: *a.W, Elem: a.Elem}
+			default:
+				c, err := num(a.Const)
+				if err != nil {
+					return 0, err
+				}
+				t.Args[k] = graph.Arg{Kind: graph.ArgConst, Const: c}
+			}
+		}
+		terms = append(terms, t)
+	}
+	name := o.Name
+	if name == "" {
+		name = "expr"
+	}
+	return b.Expr(name, int(width), terms, ws, in...), nil
+}
+
+// bindings are an op's stated weights: each tensor at the shape stated, or
+// at the shape it is stored at where none is; a ? name where stored.
+func bindings(o mjBlockOp, bf *blockFacts, num func(string) (float64, error)) ([]graph.Binding, error) {
 	var ws []graph.Binding
 	for _, bd := range o.Bind {
 		r, _ := blockRole(strings.TrimSuffix(bd.W, "?"))
@@ -551,17 +802,52 @@ func emitted(b *graph.Builder, g *mjGraph, o mjBlockOp, in []graph.ValueID, bf *
 		}
 		ws = append(ws, bn)
 	}
-	var a graph.Attrs
-	for f, x := range o.Attr {
-		v, err := g.value(x, vars)
-		if err != nil {
-			return nil, fmt.Errorf("attribute %s: %w", f, err)
-		}
-		if err := setAttr(&a, f, v); err != nil {
-			return nil, err
-		}
+	return ws, nil
+}
+
+// stated is a stated op's value: the router's score, an expression over
+// the logits, or the delta rule's decay or gate, programs lowered as the
+// graph's ops (one of no op is the input it names).
+func stated(b *graph.Builder, c *jlm.Config, o mjBlockOp, in []graph.ValueID, bf *blockFacts,
+	num func(string) (float64, error)) (graph.ValueID, error) {
+	name := o.Name
+	if name == "" {
+		name = o.Of
 	}
-	return b.Emit(graph.KindNamed(o.Kind), in, outs, ws, a, nil, nil), nil
+	var p *jlm.Program
+	switch o.Of {
+	case "router_score":
+		width, err := num(o.Width)
+		if err != nil {
+			return 0, err
+		}
+		return b.Stated(name, &c.RouterScore, in, int(width), bf.facts)
+	case "router_weight":
+		k, err := num(o.Width)
+		if err != nil {
+			return 0, err
+		}
+		if len(in) != 3 {
+			return 0, fmt.Errorf("the router's weight reads the logits, the scores it chose by and the picks, not %d operands", len(in))
+		}
+		return routerWeight(b, &c.RouterWeight, in[0], in[1], in[2], int(k), bf.facts)
+	case "qkv_act":
+		return b.Stated(name, c.QKVAct(), in, b.G.Values[in[0]].Width, bf.facts)
+	case "delta_decay":
+		p = c.DeltaDecay
+	case "delta_gate":
+		p = c.DeltaGate
+	}
+	if p == nil {
+		return 0, fmt.Errorf("the container states no %s", o.Of)
+	}
+	if len(p.Ops) == 0 {
+		if int(p.Out) >= len(in) {
+			return 0, fmt.Errorf("a program of no op naming input %d of %d", p.Out, len(in))
+		}
+		return in[p.Out], nil
+	}
+	return graph.LowerProgram(b, nil, p, in, 1, bf.facts)
 }
 
 // attrSettable says a stated op may set an attribute of type t: a number, a
@@ -648,12 +934,21 @@ type blockFacts struct {
 	dense   map[jlm.Role]bool
 	headDim int
 	eps     float64
+	// taps is how many blocks add a picture's tap rows: the tower's taps.
+	taps int
+	// chanDecay says the model's delta rule decays per channel: it stores
+	// the forget gate's low-rank pair.
+	chanDecay bool
 }
 
 func blockFactsOf(c *jlm.Config, s *jlm.Source, li int) *blockFacts {
 	bf := &blockFacts{c: c, li: li, facts: graph.Facts{Inventory: map[jlm.Role]graph.Shape{}}, dense: map[jlm.Role]bool{},
 		headDim: int(c.HeadDimAt(li)), eps: float64(c.RMSEps)}
+	if s.Vision != nil && s.Vision.Tower != nil {
+		bf.taps = len(s.Vision.Tower.Taps)
+	}
 	for _, t := range s.Tensors {
+		bf.chanDecay = bf.chanDecay || t.Role == jlm.RoleSSMFB
 		if t.Block == jlm.DenseBlock {
 			bf.dense[t.Role] = true
 			continue
@@ -669,6 +964,13 @@ func blockFactsOf(c *jlm.Config, s *jlm.Source, li int) *blockFacts {
 			sh.Sheets = int(t.Dims[2])
 		}
 		bf.facts.Inventory[t.Role] = sh
+	}
+	// A prediction block's own head mix is its collapse graph's, not its
+	// body's.
+	if li >= int(c.NLayer) {
+		for _, r := range []jlm.Role{jlm.RoleHCHeadNorm, jlm.RoleHCHeadDown, jlm.RoleHCHeadUp} {
+			delete(bf.facts.Inventory, r)
+		}
 	}
 	return bf
 }
@@ -720,6 +1022,39 @@ func (bf *blockFacts) vars() map[string]jinja.Value {
 		"expert_norm":        jinja.NewBool(!c.Flags.Has(jlm.FlagNoExpertNorm)),
 		"expert_weight_in":   jinja.NewBool(c.Flags.Has(jlm.FlagExpertWeightIn)),
 		"moe":                jinja.NewBool(bf.moe()),
+		"linear":             jinja.NewBool(li < len(c.LayerKinds) && c.LayerKinds[li] == jlm.LayerLinearAttn),
+		"parallel":           jinja.NewBool(c.Flags.Has(jlm.FlagParallel)),
+		"qk_l2":              jinja.NewBool(c.Flags.Has(jlm.FlagQKL2Norm)),
+		"qk_norm":            jinja.NewBool(c.QKNormAt(li)),
+		"router_weight":      jinja.NewBool(len(c.RouterWeight.Terms) != 0),
+		"token_act":          jinja.NewBool(c.ActQuant == jlm.ActQuantRowInt8),
+		"kv_lora":            i(c.KVLoraRank),
+		"rot":                i(c.NRot),
+		"v_head_dim":         jinja.NewInt(int64(cmp.Or(c.HeadDimV, c.HeadDim))),
+		"latent_eps":         jinja.NewFloat(cmp.Or(float64(c.LatentNormEps), bf.eps)),
+		"qk_norm_wide":       jinja.NewBool(c.Flags.Has(jlm.FlagQKNormWide)),
+		"qk_norm_post":       jinja.NewBool(c.Flags.Has(jlm.FlagQKNormPostRope)),
+		"nope_global":        jinja.NewBool(c.Flags.Has(jlm.FlagNoPEGlobal)),
+		"temp_scale":         jinja.NewFloat(float64(c.AttnTempScale)),
+		"temp_offset":        jinja.NewFloat(float64(c.AttnTempOffset)),
+		"temp_floor":         i(c.AttnTempFloor),
+		"layer_norm":         jinja.NewBool(c.Flags.Has(jlm.FlagLayerNorm)),
+		"qkv_act":            jinja.NewBool(c.QKVAct() != nil),
+		"v_heads":            i(c.SSM.NHeadV),
+		"k_heads":            i(c.SSM.Groups),
+		"k_dim":              i(c.SSM.StateSize),
+		"v_dim":              jinja.NewInt(int64(bf.vDim())),
+		"conv":               i(c.SSM.ConvKernel),
+		"chans":              jinja.NewInt(int64(c.SSM.Inner) + 2*int64(c.SSM.Groups)*int64(c.SSM.StateSize)),
+		"delta_scale":        jinja.NewFloat(bf.deltaScale()),
+		"chan_decay":         jinja.NewBool(bf.chanDecay),
+		"tiled":              jinja.NewBool(c.Flags.Has(jlm.FlagDeltaKeyTiled)),
+		"l2_eps":             jinja.NewFloat(bf.l2Eps()),
+		"state_span":         jinja.NewInt(int64(bf.stateSpan())),
+		"norm_groups":        jinja.NewInt(int64(max(c.SSM.Groups, 1))),
+		"kind":               jinja.NewString(bf.kind()),
+		"deep_taps":          jinja.NewInt(int64(bf.taps)),
+		"side_width":         jinja.NewInt(int64(bf.taps)*int64(c.NEmbd) + int64(c.NLayer)*int64(c.PLEDim)),
 		"stored": jinja.NewCallable("stored", func(args []jinja.Value, _ map[string]jinja.Value) (jinja.Value, error) {
 			_, _, held, err := tensor("stored", args)
 			return jinja.NewBool(held), err
@@ -744,6 +1079,54 @@ func (bf *blockFacts) sliding() bool {
 		return w > 0 && p > 1 && li%p != 0
 	}
 	return w > 0 && p > 0 && li%p < p-1
+}
+
+// kind is the block's kind as the container states it (jlm.LayerKind's
+// name): attention where it states none.
+func (bf *blockFacts) kind() string {
+	if bf.li < len(bf.c.LayerKinds) {
+		return bf.c.LayerKinds[bf.li].String()
+	}
+	return jlm.LayerFullAttn.String()
+}
+
+// vDim is a delta rule's value head width.
+func (bf *blockFacts) vDim() int {
+	if bf.c.SSM.NHeadV == 0 {
+		return 0
+	}
+	return int(bf.c.SSM.Inner / bf.c.SSM.NHeadV)
+}
+
+// deltaScale is the delta rule's 1/sqrt of its key width, in binary32.
+func (bf *blockFacts) deltaScale() float64 {
+	if bf.c.SSM.StateSize == 0 {
+		return 0
+	}
+	return float64(float32(1 / math.Sqrt(float64(bf.c.SSM.StateSize))))
+}
+
+// l2Eps is the epsilon the delta rule's unit norms of q and k take: the
+// model's, or Kimi's 1e-6 where the decay is per channel.
+func (bf *blockFacts) l2Eps() float64 {
+	if bf.chanDecay {
+		return 1e-6
+	}
+	return bf.eps
+}
+
+// stateSpan is a delta rule's state floats a sequence where the block's
+// state carries a stated stream's tail past the rule's, 0 where it is the
+// rule's alone.
+func (bf *blockFacts) stateSpan() int {
+	t := 0
+	for i := range bf.c.Streams.Blocks {
+		t = max(t, bf.c.Streams.Blocks[i].Pre.Read.Tail())
+	}
+	if t == 0 {
+		return 0
+	}
+	return int(bf.c.SSM.NHeadV)*bf.vDim()*int(bf.c.SSM.StateSize) + t
 }
 
 // moe says the block's feed-forward is the mixture: the model's is, the
@@ -798,8 +1181,8 @@ func (bf *blockFacts) attend() graph.Attrs {
 // its per-pair factors where it stores them or scales its rotary.
 func (bf *blockFacts) rope() (graph.Attrs, error) {
 	c := bf.c
-	if c.RopeSections != [4]uint32{} || c.Flags.Has(jlm.FlagRopeXD) {
-		return graph.Attrs{}, fmt.Errorf("a stated graph's rotary over sections: %w", ErrNotImplemented)
+	if c.Flags.Has(jlm.FlagRopeXD) {
+		return graph.Attrs{}, fmt.Errorf("a stated graph's XD rotary: %w", ErrNotImplemented)
 	}
 	if len(c.CompKinds) != 0 {
 		return graph.Attrs{}, fmt.Errorf("a stated graph's rotary in a compressing model: %w", ErrNotImplemented)
@@ -835,5 +1218,58 @@ func (bf *blockFacts) rope() (graph.Attrs, error) {
 	if c.Flags2.Has(jlm.Flag2RopeTail) {
 		a.Offset = bf.headDim - nrot
 	}
+	if sec := c.RopeSections; sec != [4]uint32{} {
+		if nrot != int(c.NRot) || base != float64(c.RopeBase) {
+			return graph.Attrs{}, fmt.Errorf("rotary sections on the sliding layers' own rotary")
+		}
+		for i, n := range sec {
+			a.Sections[i] = int(n)
+		}
+		// The sections lie one after another or interleaved; where the two
+		// lay the pairs out alike, they read as interleaved.
+		a.Interleaved = c.Flags.Has(jlm.FlagRopeInterleaved) || slices.Equal(mropeRuns(sec), imropeRuns(sec, nrot/2))
+	}
 	return a, nil
+}
+
+// ropeRun is a run of a multimodal rotary's pairs turned by one coordinate
+// (axis) from frequency freq.
+type ropeRun struct{ pairs, axis, freq int }
+
+// mropeRuns is the sections one after another: each coordinate's pairs,
+// at the frequencies that follow the last's.
+func mropeRuns(sec [4]uint32) []ropeRun {
+	var runs []ropeRun
+	off := 0
+	for ax, n := range sec {
+		if n == 0 {
+			continue
+		}
+		runs = append(runs, ropeRun{int(n), ax, off})
+		off += int(n)
+	}
+	return runs
+}
+
+// imropeRuns is the sections interleaved over pairs pairs: pair i turns by
+// coordinate 1 where i%3 is 1 and i is below three times its section, by 2
+// where i%3 is 2 and below three times its, and by 0 otherwise, at
+// frequency i.
+func imropeRuns(sec [4]uint32, pairs int) []ropeRun {
+	var runs []ropeRun
+	for i := range pairs {
+		ax := 0
+		switch {
+		case i%3 == 1 && i < 3*int(sec[1]):
+			ax = 1
+		case i%3 == 2 && i < 3*int(sec[2]):
+			ax = 2
+		}
+		if n := len(runs); n > 0 && runs[n-1].axis == ax {
+			runs[n-1].pairs++
+			continue
+		}
+		runs = append(runs, ropeRun{1, ax, i})
+	}
+	return runs
 }
