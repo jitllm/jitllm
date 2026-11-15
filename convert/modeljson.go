@@ -1273,7 +1273,9 @@ func mjRotaryLayersOf(cfg *Config, r *mjRotaryLayers, eval func(what, src string
 // or rope_scaling, by its published method: none and default state nothing;
 // llama3 states its per-pair factors over the rotated width as
 // rope_freqs.weight, reading what transformers reads from env (llama3RopeOf);
-// a method not implemented is refused by name.
+// yarn states its factor, original context, correction range and magnitude
+// as transformers computes them (hfYarnApply); a method not implemented is
+// refused by name.
 func mjRopeScaling(cfg *Config, c *hfConfig, v any, env exprEnv) error {
 	if v == nil {
 		return nil
@@ -1309,6 +1311,25 @@ func mjRopeScaling(cfg *Config, c *hfConfig, v any, env exprEnv) error {
 			rot = cfg.HeadDim
 		}
 		c.extra = append(c.extra, ropeFreqsTensor(freqs(rot, float64(cfg.RopeBase))))
+		return nil
+	case "yarn":
+		raw, err := json.Marshal(obj)
+		if err != nil {
+			return err
+		}
+		var y hfYarn
+		if err := json.Unmarshal(raw, &y); err != nil {
+			return fmt.Errorf("rope scaling yarn: %w", err)
+		}
+		if !(y.Factor >= 1) {
+			return fmt.Errorf("rope scaling yarn: a factor of %g", y.Factor)
+		}
+		// standardize_rope_params: a top-level original context first, then the
+		// object's, then max_position_embeddings (hfYarnApply's NCtx).
+		if f, ok := env("original_max_position_embeddings").(float64); ok && f > 0 {
+			y.OrigCtx = uint32(f)
+		}
+		hfYarnApply(&y, cfg)
 		return nil
 	}
 	return fmt.Errorf("rope scaling %v is not implemented: %w", t, ErrNotImplemented)

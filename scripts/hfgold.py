@@ -86,6 +86,12 @@ SYNTH = {
     "synth-mixtral": ("mixtral", dict(num_local_experts=4, num_experts_per_tok=2, hidden_act="silu"),
                       "tiny-random-MixtralForCausalLM"),
     "synth-qwen2": ("qwen2", dict(), "qwen2.5-tiny-random"),
+    # Qwen3 under YaRN, a factor of 4 over an original context of 16, so the
+    # correction range and the magnitude bite inside the golden positions.
+    "synth-hf-qwen3-yarn": ("qwen3", dict(rope_parameters={"rope_type": "yarn", "factor": 4.0,
+                                                          "original_max_position_embeddings": 16,
+                                                          "rope_theta": 10000.0}),
+                            "qwen2.5-tiny-random"),
     # Mixtral with a window of 4: MixtralModel masks every layer to it.
     "synth-hf-mixtral-swa": ("mixtral", dict(num_local_experts=4, num_experts_per_tok=2, hidden_act="silu",
                                              sliding_window=4), "tiny-random-MixtralForCausalLM"),
@@ -387,7 +393,7 @@ BUILT = {"synth-hf-qwen35": (synth_qwen35, qwen35Stale)}
 # A windowed fixture runs long enough to cross KV page boundaries: a window
 # SHORTER than a page (32 positions) is read out of one page until it is not,
 # and 8 positions never leave the first.
-LONG = {"synth-phi3": 80, "synth-hf-mixtral-swa": 40, "synth-hf-olmo3": 40, "synth-hf-exaone4": 40, "synth-hf-ministral3": 24}
+LONG = {"synth-phi3": 80, "synth-hf-qwen3-yarn": 40, "synth-hf-mixtral-swa": 40, "synth-hf-olmo3": 40, "synth-hf-exaone4": 40, "synth-hf-ministral3": 24}
 
 
 def ids_for(vocab, n=NPOS):

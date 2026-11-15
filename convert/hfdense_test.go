@@ -306,7 +306,7 @@ func TestDenseHFRefusals(t *testing.T) {
 		{"Ministral3ForCausalLM", `, "num_key_value_heads": 2, "rope_parameters": {"rope_type": "default"}`,
 			"llama_4_scaling_beta"},
 		{"ArceeForCausalLM", `, "hidden_act": "gelu"`, "activation gelu"},
-		{"SeedOssForCausalLM", `, "rope_parameters": {"rope_type": "yarn", "factor": 4.0}`, "yarn"},
+		{"SeedOssForCausalLM", `, "rope_parameters": {"rope_type": "dynamic", "factor": 4.0}`, "dynamic"},
 	} {
 		c := hfConfigOf(t, fmt.Sprintf(`{"architectures": [%q], %s%s}`, tc.class, base, tc.extra))
 		ha, err := hfArchFor(hfDir{fstest.MapFS{}, "test"}, c, "")

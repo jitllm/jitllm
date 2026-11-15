@@ -56,7 +56,7 @@ func TestMixtralThroughTheLibrary(t *testing.T) {
 	}
 	for _, r := range [][2]string{
 		{`"hidden_act": "silu"`, `"hidden_act": "gelu"`},
-		{`"hidden_act": "silu"`, `"hidden_act": "silu", "rope_scaling": {"rope_type": "yarn", "factor": 4}`},
+		{`"hidden_act": "silu"`, `"hidden_act": "silu", "rope_scaling": {"rope_type": "dynamic", "factor": 4}`},
 	} {
 		if _, err := mj.config(hfConfigOf(t, strings.Replace(js, r[0], r[1], 1)), names); !errors.Is(err, ErrNotImplemented) {
 			t.Errorf("%s: %v, want ErrNotImplemented", r[1], err)

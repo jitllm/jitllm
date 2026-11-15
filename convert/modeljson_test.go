@@ -615,7 +615,7 @@ func TestQwen35ConfigThroughTheLibrary(t *testing.T) {
 		err   string
 	}{
 		{"gelu", []string{`"hidden_act": "silu"`, `"hidden_act": "gelu"`}, names, "activation gelu is not implemented"},
-		{"yarn", []string{`"rope_type": "default"`, `"rope_type": "yarn"`}, names, "rope scaling yarn is not implemented"},
+		{"dynamic", []string{`"rope_type": "default"`, `"rope_type": "dynamic"`}, names, "rope scaling dynamic is not implemented"},
 		{"two rotary fractions", []string{`"hidden_act": "silu"`, `"hidden_act": "silu", "partial_rotary_factor": 0.5`}, names, "spelled two ways"},
 		{"a window the file does not read", []string{`"hidden_act": "silu"`, `"hidden_act": "silu", "sliding_window": 4`}, names, "does not read it"},
 		{"two thetas", []string{`"hidden_act": "silu"`, `"hidden_act": "silu", "rope_theta": 5`}, names, "disagree"},
@@ -888,6 +888,39 @@ func TestLlama3ReadsWhatTransformersReads(t *testing.T) {
 	}
 }
 
+// TestYarnThroughTheLibrary: a YaRN rope_scaling read through a library
+// file states what transformers computes -- the factor, the original context
+// (a top-level one first), the correction range and the cos/sin magnitude
+// mscale(f) = 0.1 ln f + 1 -- and a factor below one is refused.
+func TestYarnThroughTheLibrary(t *testing.T) {
+	lib, err := modelLibrary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mj := lib["Qwen3ForCausalLM"]
+	qwen := func(extra string) (*Config, error) {
+		return mj.config(hfConfigOf(t, `{"architectures": ["Qwen3ForCausalLM"], "vocab_size": 100,
+		  "hidden_size": 64, "intermediate_size": 96, "num_hidden_layers": 2, "num_attention_heads": 4,
+		  "num_key_value_heads": 2, "head_dim": 16, "max_position_embeddings": 512`+extra+`}`), []string{"lm_head.weight"})
+	}
+	c, err := qwen(`, "rope_scaling": {"rope_type": "yarn", "factor": 4.0, "original_max_position_embeddings": 64}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := float32(0.1*math.Log(4) + 1)
+	if c.YarnFactor != 4 || c.YarnOrigCtx != 64 || c.YarnBetaFast != 32 || c.YarnBetaSlow != 1 || c.AttnFactor != want {
+		t.Errorf("factor %v over %d, betas %v/%v, magnitude %v; want 4 over 64, 32/1, %v",
+			c.YarnFactor, c.YarnOrigCtx, c.YarnBetaFast, c.YarnBetaSlow, c.AttnFactor, want)
+	}
+	c, err = qwen(`, "original_max_position_embeddings": 128, "rope_scaling": {"rope_type": "yarn", "factor": 4.0, "original_max_position_embeddings": 64}`)
+	if err != nil || c.YarnOrigCtx != 128 {
+		t.Errorf("a top-level original context: %v, %d", err, c.YarnOrigCtx)
+	}
+	if _, err := qwen(`, "rope_scaling": {"rope_type": "yarn", "factor": 0.5}`); err == nil {
+		t.Error("a YaRN factor below one was accepted")
+	}
+}
+
 // TestModelJSONStatements: activation, flags, window and rope scaling are
 // read by the generic code and decide after configOf; what it cannot express
 // it refuses by name.
@@ -936,7 +969,7 @@ func TestModelJSONStatements(t *testing.T) {
 		{"erf gelu", `, "hidden_act": "gelu"`, 0, 0, "activation gelu is not implemented"},
 		{"a window in use", `, "sliding_window": 4096`, 0, 0, "a sliding window of 4096"},
 		{"a window not in use", `, "sliding_window": 4096, "use_sliding_window": false`, jlm.FlagGELU, 0, ""},
-		{"yarn scaling", `, "rope_scaling": {"rope_type": "yarn", "factor": 8}`, 0, 0, "rope scaling yarn is not implemented"},
+		{"dynamic scaling", `, "rope_scaling": {"rope_type": "dynamic", "factor": 8}`, 0, 0, "rope scaling dynamic is not implemented"},
 		{"default scaling", `, "rope_parameters": {"rope_type": "default", "rope_theta": 10000}`, jlm.FlagGELU, 0, ""},
 		{"two thetas", `, "rope_parameters": {"rope_theta": 10000}, "rope_theta": 500000`, 0, 0, "spelled two ways"},
 		{"a partial rotary", `, "partial_rotary_factor": 0.5`, 0, 0, "partial_rotary_factor is 0.5, and convert/models/gemma.json does not read it"},
