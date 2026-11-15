@@ -50,6 +50,7 @@ func TestTheLibraryStatesTheContainer(t *testing.T) {
 		{arch: "falcon", keys: map[string]meta.Value{"attention.layer_norm_epsilon": meta.MakeFloat(3e-7)},
 			flags: ln | jlm.FlagParallel, eps: 3e-7},
 		{arch: "nemotron", flags: jlm.FlagLayerNorm | neox | jlm.FlagReLU2, eps: 1e-5},
+		{arch: "phi2", flags: ln | jlm.FlagParallel, eps: 1e-5},
 		{arch: "gemma2", keys: gemma, flags: neox | jlm.FlagGELU, scale: float32(math.Sqrt(2048)),
 			win: 4096, period: 2, ropeSWA: 10000},
 		{arch: "gemma2", keys: with(with(with(gemma, "rope.freq_base", meta.MakeFloat(5e5)), "attn_logit_softcapping",

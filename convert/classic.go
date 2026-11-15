@@ -32,7 +32,8 @@ func partialRotary(c *Config) error {
 	return nil
 }
 
-// phi2Config is Microsoft's phi-2 (and phi-1.5), llama.cpp's phi2.cpp:
+// Microsoft's phi-2 (and phi-1.5), llama.cpp's phi2.cpp, whose container
+// classic.json states:
 //
 //	attn_norm (LayerNorm + bias) feeds both branches    -> Parallel, no ffn_norm
 //	q, k, v, o biased; NEOX rotary on n_rot of head_dim -> RopeNeox, NRot
@@ -42,14 +43,6 @@ func partialRotary(c *Config) error {
 // llama.cpp scales q by 1/sqrt(head_dim) before the product "to avoid
 // precision issues" and runs the softmax at scale 1; that is the same function
 // as scaling the scores, which is what this engine does.
-func phi2Config(f *meta.File, c *Config) error {
-	layerNormEps(f, c)
-	c.Flags |= jlm.FlagLayerNorm | jlm.FlagParallel | jlm.FlagRopeNeox | jlm.FlagGELU
-	if err := partialRotary(c); err != nil {
-		return err
-	}
-	return nil
-}
 
 // starcoderConfig is GPTBigCode, llama.cpp's starcoder.cpp:
 //
@@ -148,7 +141,7 @@ func stableLMConfig(f *meta.File, c *Config) error {
 	if _, ok := f.Get("blk.0.ffn_norm.weight"); !ok {
 		c.Flags |= jlm.FlagParallel
 	}
-	return partialRotary(c)
+	return nil
 }
 
 // dbrxConfig is Databricks' DBRX, llama.cpp's dbrx.cpp:

@@ -422,10 +422,6 @@ func configOfFile(f *meta.File) (*Config, error) {
 		if err := graniteConfig(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
-	case ArchPhi2:
-		if err := phi2Config(f, c); err != nil {
-			return nil, fmt.Errorf("convert: %s: %w", name, err)
-		}
 	case ArchStarcoder:
 		if err := starcoderConfig(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
@@ -436,10 +432,6 @@ func configOfFile(f *meta.File) (*Config, error) {
 		}
 	case ArchStableLM:
 		if err := stableLMConfig(f, c); err != nil {
-			return nil, fmt.Errorf("convert: %s: %w", name, err)
-		}
-	case ArchNemotron:
-		if err := partialRotary(c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
 	case ArchDBRX:
@@ -464,9 +456,6 @@ func configOfFile(f *meta.File) (*Config, error) {
 		// fused gate|up (unfuse), and a rotary on rope.dimension_count of each
 		// head: NORM pairs, or with sections the NEOX M-RoPE llama.cpp's
 		// converter permutes q and k into.
-		if err := partialRotary(c); err != nil {
-			return nil, fmt.Errorf("convert: %s: %w", name, err)
-		}
 		if _, ok := f.Key("rope.dimension_sections"); ok {
 			c.Flags |= jlm.FlagRopeNeox
 			if err := mropeSectionsOf(f, name, c); err != nil {
@@ -575,6 +564,14 @@ func configOfFile(f *meta.File) (*Config, error) {
 		}
 	case ArchModernBERT:
 		if err := modernBERTConfig(f, c); err != nil {
+			return nil, fmt.Errorf("convert: %s: %w", name, err)
+		}
+	}
+
+	// A rotary narrower than the head turns its leading pairs and passes the
+	// rest through, whatever the architecture.
+	if c.NRot != c.HeadDim {
+		if err := partialRotary(c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
 	}

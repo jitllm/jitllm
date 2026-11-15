@@ -1,6 +1,8 @@
 {
   "gguf": ["phi2", "starcoder", "starcoder2", "stablelm", "falcon", "nemotron", "command-r", "cohere2", "dbrx", "phimoe", "bert", "nomic-bert", "modern-bert"],
   "container": {
+    "phi2": {"flags": {"layer_norm": "true", "parallel": "true", "rope_neox": "true"}, "activation": "gelu_pytorch_tanh",
+             "norm_eps": "src['attention.layer_norm_epsilon'] | default(1e-5)"},
     "nemotron": {"flags": {"layer_norm": "true", "rope_neox": "true"}, "activation": "relu2",
                  "norm_eps": "src['attention.layer_norm_epsilon'] | default(1e-5)"},
     "starcoder2": {"flags": {"layer_norm": "true", "rope_neox": "true"}, "activation": "gelu_pytorch_tanh",
