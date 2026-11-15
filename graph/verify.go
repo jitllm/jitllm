@@ -410,6 +410,11 @@ func Verify(g *Graph, f Facts) error {
 				o.Reads[0].Hist == o.Reads[1].Hist) || len(o.Reads) > 2 {
 				bad("%s: %d histories, the second an entry each %d positions of %d words", at, len(o.Reads), a.Span, len(a.Words))
 			}
+		case OpReduce:
+			if a := o.Attr; a.HeadDim > 0 && (len(o.In) != 1 || len(o.Out) != 1 || a.Span < 1 ||
+				width(o.In[0])%(a.Span*a.HeadDim) != 0 || width(o.Out[0]) != width(o.In[0])/a.Span) {
+				bad("%s: columns of %d rows of %d over %d operands into %d outputs", at, a.Span, a.HeadDim, len(o.In), len(o.Out))
+			}
 		case OpHistoryRows:
 			a := o.Attr
 			switch {

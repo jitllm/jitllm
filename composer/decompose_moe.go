@@ -50,8 +50,8 @@ func decomposeReduce(o graph.Op, c *Context) ([]Prim, error) {
 	if D := o.Attr.HeadDim; D > 0 {
 		// Each column of Span rows of D, in order from the first.
 		W := c.width(o.In[0])
-		if o.Attr.Order != graph.OrderSeq || W%(S*D) != 0 {
-			return nil, fmt.Errorf("columns of %d rows of %d over a row of %d in order %d", S, D, W, o.Attr.Order)
+		if o.Attr.Order != graph.OrderSeq || W%(S*D) != 0 || c.width(o.Out[0]) != W/S {
+			return nil, fmt.Errorf("columns of %d rows of %d over a row of %d into %d in order %d", S, D, W, c.width(o.Out[0]), o.Attr.Order)
 		}
 		U := ir.U32
 		var x exprs

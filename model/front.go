@@ -964,12 +964,12 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 		// half beside this one's second, normed and turned at the window's
 		// first position.
 		pool := func(off, w int, ape, norm jlm.Role) graph.ValueID {
-			out, words := w, []uint64{0, uint64(off), uint64(off + w), 0}
+			out, segs := w, []poolSegment{{0, off, off + w, 0}}
 			if compKind == jlm.CompCSA {
 				out = w / 2
-				words = []uint64{1, uint64(off), uint64(off + w), 0, 0, uint64(off + out), uint64(off + w + out), uint64(out)}
+				segs = []poolSegment{{1, off, off + w, 0}, {0, off + out, off + w + out, out}}
 			}
-			e := b.Norm(b.HistoryPool(hist, graph.Attrs{Span: rate, Width: compRow, Words: words}, ape, out), norm, c.RMSEps)
+			e := b.Norm(windowPool(b, hist, rate, compRow, segs, ape, out), norm, c.RMSEps)
 			if c.RopeAt(li) {
 				t := turn
 				t.HeadDim = out
@@ -2364,4 +2364,37 @@ func attnTemp(b *graph.Builder, c *Config) graph.ValueID {
 		{Fn: graph.MapLog, Args: [3]graph.Arg{term(5)}},
 		{Fn: graph.MapFma, Args: [3]graph.Arg{term(6), num(s), num(1)}},
 	}, nil, pos)
+}
+
+// poolSegment is a window a windowPool reads: the windows back (0 the
+// row's own), then the offsets of its values and gates in a history row and
+// of its biases in a row of the bias table.
+type poolSegment struct{ back, values, gates, bias int }
+
+// windowPool pools the history hist (rows of row) into width channels over
+// windows of span positions: each channel the sum over every segment's
+// positions of the value weighted by the softmax of gate plus the bias
+// table's row for the position's offset in its window, a position before the
+// first or past the row's own no term.
+func windowPool(b *graph.Builder, hist graph.StateRef, span, row int, segs []poolSegment, bias jlm.Role, width int) graph.ValueID {
+	bw := 0
+	for _, s := range segs {
+		bw = max(bw, s.bias+width)
+	}
+	var scores, values []graph.ValueID
+	for _, s := range segs {
+		g := b.HistoryRows(hist, graph.Attrs{Span: span, Width: row, Offset: s.gates, Local: s.back, Const: -math.MaxFloat32}, width)
+		t := b.Emit(graph.OpSlice, nil, []graph.Result{{Name: "pool.bias", Width: span * width}}, []graph.Binding{{Role: bias, K: bw, Rows: span}},
+			graph.Attrs{HeadDim: bw, Offset: s.bias, Width: width}, nil, nil)[0]
+		scores = append(scores, b.Emit(graph.OpMap, []graph.ValueID{g, t}, []graph.Result{{Name: "pool.score", Width: span * width}}, nil,
+			graph.Attrs{Fn: graph.MapAdd}, nil, nil)[0])
+		values = append(values, b.HistoryRows(hist, graph.Attrs{Span: span, Width: row, Offset: s.values, Local: s.back}, width))
+	}
+	n := len(scores) * span
+	sc, v := scores[0], values[0]
+	if len(scores) > 1 {
+		sc = b.Emit(graph.OpConcat, scores, []graph.Result{{Name: "pool.scores", Width: n * width}}, nil, graph.Attrs{}, nil, nil)[0]
+		v = b.Emit(graph.OpConcat, values, []graph.Result{{Name: "pool.values", Width: n * width}}, nil, graph.Attrs{}, nil, nil)[0]
+	}
+	return b.ColumnSoftmaxSum(sc, v, n, width)
 }

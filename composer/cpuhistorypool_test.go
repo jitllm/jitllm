@@ -35,16 +35,11 @@ func TestComposedCPUHistoryPool(t *testing.T) {
 
 func composedCPUHistoryPool(t *testing.T, P, W int, segs [][4]uint64, RW int) {
 	const page, p0, R, capRows = 8, 13, 7, 8
-	var words []uint64
 	bw := 0
 	for _, s := range segs {
-		words = append(words, s[:]...)
 		bw = max(bw, int(s[3])+W)
 	}
-	b := graph.New()
-	n := b.KVAppend(b.In("k", RW), b.In("v", RW), 0)
-	b.Out(b.HistoryPool(graph.StateRef{State: graph.StateKV, Version: n}, graph.Attrs{Span: P, Width: RW, Words: words}, jlm.RoleCompAPE, W))
-	g := b.G
+	g := HistoryPoolGraph(P, W, RW, segs, jlm.RoleCompAPE)
 	_, codes, err := Default().Form(Request{Graph: g,
 		Step:   Step{Rows: capRows, Page: page, Keys: 4 * page, ActWindow: 32, Seqs: 1},
 		Device: Device{Kind: DeviceCPU, Slots: 6, Lanes: 8, ISA: uint64(hostArm().tg.Features().ISA()), ExactDiv: true}})
