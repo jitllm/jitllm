@@ -155,22 +155,17 @@ type kvLayerPool struct {
 }
 
 // historyTail is how many positions behind its newest block graph g reads
-// outside a pass over its history: a history pool's windows (OpHistoryPool),
-// the windows before the row's its segments reach and its own.
+// outside a pass over its history: the windows its history rows reach
+// (OpHistoryRows), the row's own and those before it.
 func historyTail(g *graph.Graph) int {
 	if g == nil {
 		return 0
 	}
 	n := 0
 	for _, o := range g.Ops {
-		if o.Kind != graph.OpHistoryPool {
-			continue
+		if o.Kind == graph.OpHistoryRows {
+			n = max(n, (o.Attr.Local+1)*o.Attr.Span)
 		}
-		back := uint64(0)
-		for i := 0; i+3 < len(o.Attr.Words); i += 4 {
-			back = max(back, o.Attr.Words[i])
-		}
-		n = max(n, (int(back)+1)*o.Attr.Span)
 	}
 	return n
 }

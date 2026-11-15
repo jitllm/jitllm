@@ -47,6 +47,19 @@ func decomposeReduce(o graph.Op, c *Context) ([]Prim, error) {
 		return nil, fmt.Errorf("a reduce by %v", o.Attr.Fn)
 	}
 	R := c.Step.Rows
+	if D := o.Attr.HeadDim; D > 0 {
+		// Each column of Span rows of D, in order from the first.
+		W := c.width(o.In[0])
+		if o.Attr.Order != graph.OrderSeq || W%(S*D) != 0 {
+			return nil, fmt.Errorf("columns of %d rows of %d over a row of %d in order %d", S, D, W, o.Attr.Order)
+		}
+		U := ir.U32
+		var x exprs
+		b, j, i := x.coord(1), x.coord(2), x.coord(3)
+		x.at(0, []int{R, W}, x.coord(0), x.op(OpAdd, U, x.op(OpMul, U, x.op(OpAdd, U, x.op(OpMul, U, b, x.u(uint32(S))), i), x.u(uint32(D))), j))
+		return []Prim{{Kind: PrimReduce, Shape: []int{R, W / (S * D), D, S}, In: []Operand{c.value(o.In[0])}, Out: c.value(o.Out[0]),
+			Combine: comb, Init: init, Expr: x.e}}, nil
+	}
 	if o.Attr.Order == graph.OrderTree {
 		return reduceTree(c, o, comb, G, S)
 	}

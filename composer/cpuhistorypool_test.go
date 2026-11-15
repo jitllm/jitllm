@@ -11,7 +11,7 @@ import (
 	"github.com/jitllm/jitllm/graph"
 )
 
-// TestComposedCPUHistoryPool executes OpHistoryPool on the CPU over a
+// TestComposedCPUHistoryPool executes a history pool (OpHistoryRows, then maps and column reduces) on the CPU over a
 // chunk of rows appended to a paged binary16 history, each row's window of
 // Span positions (and for a two-segment pool the window before it) pooled
 // per channel by the softmax of gate plus bias, held to the definition row

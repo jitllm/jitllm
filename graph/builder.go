@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"math"
 	"strconv"
 
 	"github.com/jitllm/jitllm/format/jlm"
@@ -115,13 +116,50 @@ func (s *Builder) KVAppendEvery(h uint8, k, v ValueID, n, span int) int {
 	return n + 1
 }
 
-// HistoryPool is OpHistoryPool's pooling of the history h into width
-// channels, a's Span, Width and segments (Words), the biases bias's rows.
-func (s *Builder) HistoryPool(h StateRef, a Attrs, bias jlm.Role, width int) ValueID {
-	y := s.value("pool", width)
-	s.G.op(Op{Kind: OpHistoryPool, Out: []ValueID{y}, Weight: []Binding{{Role: bias, K: a.biasWidth(width), Rows: a.Span}},
-		Reads: []StateRef{h}, Attr: a})
+// HistoryRows is OpHistoryRows: of the history h (rows of a's Width), each
+// row's window of a's Span positions, a's Local windows back, width elements
+// of each position's row from a's Offset, a's Const where it holds none.
+func (s *Builder) HistoryRows(h StateRef, a Attrs, width int) ValueID {
+	y := s.value("hist.rows", a.Span*width)
+	s.G.op(Op{Kind: OpHistoryRows, Out: []ValueID{y}, Reads: []StateRef{h}, Attr: Attrs{Span: a.Span, Width: a.Width, Offset: a.Offset,
+		Local: a.Local, Const: a.Const}})
 	return y
+}
+
+// HistoryPool pools the history h into width channels over windows of a's
+// Span positions in history rows a's Width wide: a's Words are segments of
+// four, the windows back (1 the one before the row's, 0 its own), then the
+// offsets in a row of the segment's values and gates, and in a row of the
+// bias (Span rows, one an offset in the window) of its biases. Each channel
+// is the sum over every segment's positions of the value weighted by the
+// softmax of gate plus bias, a position before the first or past the row's
+// own no term.
+func (s *Builder) HistoryPool(h StateRef, a Attrs, bias jlm.Role, width int) ValueID {
+	P, bw := a.Span, a.biasWidth(width)
+	emit := func(k OpKind, name string, w int, in []ValueID, wt []Binding, at Attrs) ValueID {
+		return s.Emit(k, in, []Result{{Name: name, Width: w}}, wt, at, nil, nil)[0]
+	}
+	var scores, values []ValueID
+	for i := 0; i+3 < len(a.Words); i += 4 {
+		back, vo, gate, bo := int(a.Words[i]), int(a.Words[i+1]), int(a.Words[i+2]), int(a.Words[i+3])
+		g := s.HistoryRows(h, Attrs{Span: P, Width: a.Width, Offset: gate, Local: back, Const: -math.MaxFloat32}, width)
+		b := emit(OpSlice, "pool.bias", P*width, nil, []Binding{{Role: bias, K: bw, Rows: P}}, Attrs{HeadDim: bw, Offset: bo, Width: width})
+		scores = append(scores, emit(OpMap, "pool.score", P*width, []ValueID{g, b}, nil, Attrs{Fn: MapAdd}))
+		values = append(values, s.HistoryRows(h, Attrs{Span: P, Width: a.Width, Offset: vo, Local: back}, width))
+	}
+	n := len(scores) * P
+	sc, v := scores[0], values[0]
+	if len(scores) > 1 {
+		sc = emit(OpConcat, "pool.scores", n*width, scores, nil, Attrs{})
+		v = emit(OpConcat, "pool.values", n*width, values, nil, Attrs{})
+	}
+	column := func(name string, fn MapFn, x ValueID) ValueID {
+		return emit(OpReduce, name, width, []ValueID{x}, nil, Attrs{Fn: fn, Span: n, HeadDim: width})
+	}
+	m := emit(OpTile, "pool.max", n*width, []ValueID{column("pool.best", MapMax, sc)}, nil, Attrs{Span: width})
+	e := emit(OpMap, "pool.exp", n*width, []ValueID{emit(OpMap, "pool.shift", n*width, []ValueID{sc, m}, nil, Attrs{Fn: MapSub})}, nil, Attrs{Fn: MapExp})
+	num := column("pool.num", MapAdd, emit(OpMap, "pool.weighted", n*width, []ValueID{e, v}, nil, Attrs{Fn: MapMul}))
+	return emit(OpMap, "pool", width, []ValueID{num, column("pool.sum", MapAdd, e)}, nil, Attrs{Fn: MapDiv})
 }
 
 // AttendBoth is AttendOf over the histories rows and entries in one softmax
@@ -252,7 +290,7 @@ func (s *Builder) Int8Codes(x ValueID) (codes, scale ValueID) {
 	return codes, scale
 }
 
-// biasWidth is the width of an OpHistoryPool's bias row, its segments'
+// biasWidth is the width of a HistoryPool's bias row, its segments'
 // biases width channels each: past the farthest.
 func (a Attrs) biasWidth(width int) int {
 	w := 0
