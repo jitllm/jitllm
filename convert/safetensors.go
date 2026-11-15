@@ -1156,12 +1156,6 @@ func hfArchTable() map[string]*hfArch {
 		// convert/hfmoefamily.go.
 		"HunYuanDenseV1ForCausalLM": hunyuanHF(),
 		"HunYuanMoEV1ForCausalLM":   hunyuanHF(),
-		// BitNet b1.58 (convert/hfbitnet.go).
-		"BitNetForCausalLM": bitnetHF(),
-		// Phi-3.5-MoE and its smaller siblings name the class as their remote
-		// code did; transformers saves its own spelling (convert/hfphimoe.go).
-		"PhiMoEForCausalLM": phimoeHF(),
-		"PhimoeForCausalLM": phimoeHF(),
 		// The dense llama family (convert/safetensors_dense.go). OLMo 3 is
 		// ArchOLMo2 with a window, as on the GGUF side. Ministral3ForCausalLM is
 		// mistral3's text model; Mistral3ForConditionalGeneration, which nests it

@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/jitllm/jitllm/convert/meta"
+	"github.com/jitllm/jitllm/convert/safetensors"
 	"github.com/jitllm/jitllm/format/jlm"
 )
 
@@ -77,6 +78,20 @@ type mjConfig struct {
 	Gating string `json:"gating"`
 	// RotaryLayers states which layers rotate.
 	RotaryLayers *mjRotaryLayers `json:"rotary_layers"`
+	// RopeMethods names the scalings beyond the ones every file reads (llama3,
+	// yarn) that this file vouches for: "longrope".
+	RopeMethods []string `json:"rope_methods"`
+	// Require holds the config to what the class's reference computes and
+	// the container does not vary.
+	Require []mjRequire `json:"require"`
+}
+
+// mjRequire is a statement about the config the file depends on: That is a
+// boolean expression, and a config it is false for is refused, with Else
+// saying why.
+type mjRequire struct {
+	That string `json:"that"`
+	Else string `json:"else"`
 }
 
 // mjRotaryLayers is which layers rotate, as transformers states it for the
@@ -180,6 +195,20 @@ type mjTensors struct {
 	Ignore       []string             `json:"ignore"`
 	IgnorePrefix []string             `json:"ignore_prefix"`
 	Experts      *mjExperts           `json:"experts"`
+	Ternary      *mjTernary           `json:"ternary"`
+}
+
+// mjTernary names the projections a checkpoint stores as ternary weights, by
+// the roles' GGUF tensor names, and how: Scale is the suffix of the tensor
+// beside a packed weight that holds its magnitude; Latent and Divides are
+// boolean expressions over the config, for weights stored as latent floats
+// the converter ternarizes, and for a scale the output is divided by where it
+// would be multiplied.
+type mjTernary struct {
+	Roles   []string `json:"roles"`
+	Scale   string   `json:"scale"`
+	Latent  string   `json:"latent"`
+	Divides string   `json:"divides"`
 }
 
 // mjExperts names a mixture's per-expert matrices: the block-relative prefix
@@ -280,6 +309,14 @@ func parseModelJSON(b []byte, name string) (*modelJSON, error) {
 		var v any
 		if strings.ContainsAny(k, ".$") || json.Unmarshal(raw, &v) != nil {
 			return nil, fmt.Errorf("convert: %s: default %q is not a key of the root and a value", name, k)
+		}
+	}
+	if t := mj.Tensors.Ternary; t != nil && (len(t.Roles) == 0 || t.Scale == "" || t.Latent == "" || t.Divides == "") {
+		return nil, fmt.Errorf("convert: %s: ternary states its roles, its scale's suffix, and when the weights are latent and the scale divides", name)
+	}
+	for _, r := range mj.Config.Require {
+		if r.That == "" || r.Else == "" {
+			return nil, fmt.Errorf("convert: %s: a requirement states what holds and why a config without it is refused", name)
 		}
 	}
 	if r := mj.Config.RotaryLayers; r != nil && (r.Each == "" || r.Every == "") {
@@ -608,6 +645,17 @@ func (mj *modelJSON) hfArch() (*hfArch, error) {
 		}
 		steps = gs
 	}
+	tern := mj.Tensors.Ternary
+	ternaryRoles := map[jlm.Role]bool{}
+	if tern != nil {
+		for _, n := range tern.Roles {
+			r, ok := roleOf(n)
+			if !ok {
+				return nil, fmt.Errorf("convert: %s: ternary role %q is not a tensor name the container knows", mj.name, n)
+			}
+			ternaryRoles[retarget(a.arch, r)] = true
+		}
+	}
 	a.gather = func(c *Config, names []string, read func(string) ([]float32, error)) ([]jlm.Tensor, map[string]bool, error) {
 		st.mu.Lock()
 		env, act := st.env, st.act
@@ -619,7 +667,45 @@ func (mj *modelJSON) hfArch() (*hfArch, error) {
 		if err := mjActivationCover(act, c, out); err != nil {
 			return nil, nil, err
 		}
+		if tern != nil {
+			scales, err := ternaryGather(tern.Scale, names)
+			if err != nil {
+				return nil, nil, err
+			}
+			maps.Copy(used, scales)
+		}
 		return out, used, nil
+	}
+	if tern != nil {
+		a.retype = func(_ *hfConfig, role jlm.Role, name string, t *safetensors.Tensor,
+			read func(string) ([]byte, *safetensors.Tensor, error)) (*hfRetyped, error) {
+			if !ternaryRoles[role] {
+				return nil, nil
+			}
+			st.mu.Lock()
+			env := st.env
+			st.mu.Unlock()
+			var form ternaryForm
+			for _, f := range []struct {
+				what, src string
+				into      *bool
+			}{{"latent", tern.Latent, &form.latent}, {"divides", tern.Divides, &form.divides}} {
+				n, err := parseExpr(f.src)
+				if err != nil {
+					return nil, fmt.Errorf("convert: %s: ternary %s: %w", mj.name, f.what, err)
+				}
+				v, err := evalMJ(n, env)
+				if err != nil {
+					return nil, fmt.Errorf("convert: %s: ternary %s: %w", mj.name, f.what, err)
+				}
+				b, ok := v.(bool)
+				if !ok {
+					return nil, fmt.Errorf("convert: %s: ternary %s is %s, not a boolean", mj.name, f.what, exprKind(v))
+				}
+				*f.into = b
+			}
+			return ternaryRetype(form, tern.Scale, name, t, read)
+		}
 	}
 	a.config = func(c *hfConfig, names []string) (*Config, error) {
 		env, err := mj.env(c)
@@ -1016,6 +1102,15 @@ func (mj *modelJSON) configIn(env exprEnv, c *hfConfig, names []string) (*Config
 		}
 		kvs[ns+"attention.sliding_window"] = meta.MakeUint(window)
 	}
+	for _, r := range mj.Config.Require {
+		v, err := eval("require", r.That)
+		if err != nil {
+			return nil, err
+		}
+		if v != true {
+			return nil, fmt.Errorf("convert: %s: %s: %s: %w", c.path, mj.name, r.Else, ErrNotImplemented)
+		}
+	}
 	cfg, err := configOf(meta.New(c.path, kvs, ts))
 	if err != nil {
 		return nil, err
@@ -1111,7 +1206,7 @@ func (mj *modelJSON) configIn(env exprEnv, c *hfConfig, names []string) (*Config
 		if err != nil {
 			return nil, err
 		}
-		if err := mjRopeScaling(cfg, c, v, renv); err != nil {
+		if err := mjRopeScaling(cfg, c, v, renv, mj.Config.RopeMethods); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", c.path, err)
 		}
 	}
@@ -1362,7 +1457,7 @@ func mjRotaryLayersOf(cfg *Config, r *mjRotaryLayers, eval func(what, src string
 // yarn states its factor, original context, correction range and magnitude
 // as transformers computes them (hfYarnApply); a method not implemented is
 // refused by name.
-func mjRopeScaling(cfg *Config, c *hfConfig, v any, env exprEnv) error {
+func mjRopeScaling(cfg *Config, c *hfConfig, v any, env exprEnv, methods []string) error {
 	if v == nil {
 		return nil
 	}
@@ -1398,6 +1493,22 @@ func mjRopeScaling(cfg *Config, c *hfConfig, v any, env exprEnv) error {
 		}
 		c.extra = append(c.extra, ropeFreqsTensor(freqs(rot, float64(cfg.RopeBase))))
 		return nil
+	case "longrope", "su":
+		if !slices.Contains(methods, "longrope") {
+			break
+		}
+		raw, err := json.Marshal(obj)
+		if err != nil {
+			return err
+		}
+		var lr hfLongRope
+		if err := json.Unmarshal(raw, &lr); err != nil {
+			return fmt.Errorf("rope scaling longrope: %w", err)
+		}
+		if f, ok := env("original_max_position_embeddings").(float64); ok && f > 0 && lr.OrigCtx == 0 {
+			lr.OrigCtx = uint32(f)
+		}
+		return lr.apply(c, cfg)
 	case "yarn":
 		raw, err := json.Marshal(obj)
 		if err != nil {
