@@ -106,6 +106,12 @@ schema; `convert/modeljson.go` reads it. Its sections:
     by a file whose class rotates part of each head (Phi-3, GLM-4-MoE,
     Qwen3.5); every other class rotates the whole head whatever
     `partial_rotary_factor` says, so its file leaves the key unread.
+- `config.window.layers`: which layers slide, deciding after configOf --
+  `list`, each layer's type (`layer_types`), a layer sliding where its type
+  is `slides`; where the list is null, `period` (every layer but each
+  period'th) or `from` (each layer from it on); with none of them, every
+  layer. The container states it as a period (`windowPeriod`), so a pattern
+  no period describes is refused.
 - `config.defaults`: the class's config defaults, each a key of the root
   that a config.json lacking it takes, as the class's dataclass does. A key
   present as null keeps its null, and the expression maps it where the

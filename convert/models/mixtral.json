@@ -23,7 +23,7 @@
     "head": {"tensor": "lm_head.weight", "tied": "tie_word_embeddings ?? false"},
     "activation": "hidden_act ?? 'silu'",
     "rope_scaling": "rope_parameters ?? rope_scaling",
-    "window": {"size": "sliding_window", "used": "true"}
+    "window": {"size": "sliding_window", "used": "true", "layers": {}}
   },
   "tensors": {
     "block_prefix": "model.layers.",

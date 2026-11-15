@@ -92,6 +92,20 @@ func mjGatings() map[string]uint64 {
 type mjWindow struct {
 	Size string `json:"size"`
 	Used string `json:"used"`
+	// Layers states which layers slide, deciding after configOf; absent, the
+	// graph configOf builds decides.
+	Layers *mjWindowLayers `json:"layers"`
+}
+
+// mjWindowLayers is which layers slide, as a class states it: List, a list
+// of each layer's type, a layer sliding where its type is Slides; where the
+// list is null, Period (every layer but each Period'th, (i+1) % Period != 0)
+// or From (each layer from From on); with none of the three, every layer.
+type mjWindowLayers struct {
+	List   string `json:"list"`
+	Slides string `json:"slides"`
+	Period string `json:"period"`
+	From   string `json:"from"`
 }
 
 // mjActivations is each feed-forward activation the container states, by its
@@ -258,6 +272,9 @@ func parseModelJSON(b []byte, name string) (*modelJSON, error) {
 	}
 	if w := mj.Config.Window; w != nil && (w.Size == "" || w.Used == "") {
 		return nil, fmt.Errorf("convert: %s: a window states its size and whether it is used", name)
+	}
+	if w := mj.Config.Window; w != nil && w.Layers != nil && w.Layers.List != "" && w.Layers.Slides == "" {
+		return nil, fmt.Errorf("convert: %s: a window's layer list states the type that slides", name)
 	}
 	if g := mj.Config.Gating; g != "" {
 		if _, ok := mjGatings()[g]; !ok {
@@ -609,6 +626,98 @@ func (mj *modelJSON) env(c *hfConfig) (exprEnv, error) {
 	return env, nil
 }
 
+// mjWindowSlides is which of n layers slide, as l states it.
+func mjWindowSlides(l *mjWindowLayers, eval func(what, src string) (any, error), n int) ([]bool, error) {
+	slides := make([]bool, n)
+	if l.List != "" {
+		v, err := eval("window layers", l.List)
+		if err != nil {
+			return nil, err
+		}
+		if v != nil {
+			list, ok := v.([]any)
+			if !ok || len(list) != n {
+				return nil, fmt.Errorf("the window's layers are %v, not a list of %d", v, n)
+			}
+			for i, t := range list {
+				s, ok := t.(string)
+				if !ok {
+					return nil, fmt.Errorf("layer %d's type is %v, not a name", i, t)
+				}
+				slides[i] = s == l.Slides
+			}
+			return slides, nil
+		}
+	}
+	for i, src := range []string{l.Period, l.From} {
+		if src == "" {
+			continue
+		}
+		v, err := eval("window layers", src)
+		if err != nil {
+			return nil, err
+		}
+		if v == nil {
+			continue
+		}
+		k, err := exprUint("window layers", v)
+		if err != nil {
+			return nil, err
+		}
+		if i == 0 && k == 0 {
+			return nil, fmt.Errorf("a window period of 0")
+		}
+		for li := range slides {
+			if i == 0 {
+				slides[li] = uint64(li+1)%k != 0
+			} else {
+				slides[li] = uint64(li) >= k
+			}
+		}
+		return slides, nil
+	}
+	for i := range slides {
+		slides[i] = true
+	}
+	return slides, nil
+}
+
+// windowPeriod is the container's statement of which layers slide: the
+// period whose last layer (or, with first, whose first) attends to every
+// position, a period past the last layer where every layer slides, and 0
+// where none does. A pattern no period describes is refused.
+func windowPeriod(slides []bool) (uint32, bool, error) {
+	all, none := true, true
+	for _, s := range slides {
+		all, none = all && s, none && !s
+	}
+	switch {
+	case none:
+		return 0, false, nil
+	case all:
+		return allLocal(uint32(len(slides))), false, nil
+	}
+	for _, first := range []bool{false, true} {
+		for p := 2; p <= len(slides); p++ {
+			ok := true
+			for i, s := range slides {
+				want := i%p < p-1
+				if first {
+					want = i%p != 0
+				}
+				if s != want {
+					ok = false
+					break
+				}
+			}
+			if ok {
+				return uint32(p), first, nil
+			}
+		}
+	}
+	return 0, false, fmt.Errorf("the sliding layers %v follow no period the container states: %w", slides, ErrNotImplemented)
+}
+
 // mjGraphKeys are config keys that change the graph, each with the value that
 // leaves it unchanged. One a file does not read, present with another value,
 // is refused: the file does not state that graph.
@@ -839,7 +948,25 @@ func (mj *modelJSON) configIn(env exprEnv, c *hfConfig, names []string) (*Config
 		}
 	}
 	// The statements configOf does not read decide after it.
-	if window != 0 && uint64(cfg.SWAWindow) != window {
+	if w := mj.Config.Window; w != nil && w.Layers != nil {
+		slides, err := mjWindowSlides(w.Layers, eval, int(cfg.NLayer))
+		if err != nil {
+			return nil, fmt.Errorf("convert: %s: %w", c.path, err)
+		}
+		cfg.SWAWindow, cfg.Flags2 = 0, cfg.Flags2&^jlm.Flag2SWAGlobalFirst
+		if window != 0 {
+			p, first, err := windowPeriod(slides)
+			if err != nil {
+				return nil, fmt.Errorf("convert: %s: %w", c.path, err)
+			}
+			if p != 0 {
+				cfg.SWAWindow, cfg.SWAPeriod = uint32(window), p
+				if first {
+					cfg.Flags2 |= jlm.Flag2SWAGlobalFirst
+				}
+			}
+		}
+	} else if window != 0 && uint64(cfg.SWAWindow) != window {
 		return nil, fmt.Errorf("convert: %s: a sliding window of %d is not one graph %s runs: %w",
 			c.path, window, mj.Config.Arch, ErrNotImplemented)
 	}
