@@ -137,7 +137,7 @@ func (s *Instance) bidirRuns(slot int, spans []model.Span) {
 // with none -- for a model that reads the token past the embedding (per-layer
 // embeddings, ple.go), and returns its reset. A no-op elsewhere.
 func (s *Instance) tokensOf(spans []model.Span) func() {
-	if s.c.PLEDim == 0 {
+	if !s.inputsSide() {
 		return func() {}
 	}
 	s.spanTok = s.spanTok[:0]
@@ -292,18 +292,16 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 					}
 					s.trace(-1, "embd", s.x)
 				}
-				// The tap rows over the input rows' zeros.
-				if c.DeepTaps > 0 {
-					s.fillDeep(src, i, 1, s.ple)
-				}
+				// The given side rows over the input rows' zeros.
+				s.fillGivenSide(src, i, 1, s.ple)
 				return nil
 			}); err != nil {
 				return nil, err
 			}
 			s.promptRows++
 		}
-		// The decode rows after it are tokens: their tap rows are zeros.
-		if c.DeepTaps > 0 {
+		// The decode rows after it are tokens: their given side rows are zeros.
+		if s.givenSide() {
 			clear(s.ple)
 		}
 		return lg, nil
@@ -426,13 +424,13 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 			// A model of per-layer embeddings gathers on the card only with
 			// every block there: a CPU block reads the per-layer inputs the
 			// CPU's input rows write.
-			if len(src.given) == 0 && s.head != nil && s.devAt(s.lo) && (c.PLEDim == 0 || s.allOnDevice() && c.DeepTaps == 0) &&
-				(s.head.GatherRow || s.c.TiedEmbd && c.PLEDim == 0 && m.PosEmbd.E == nil) {
+			if len(src.given) == 0 && s.head != nil && s.devAt(s.lo) && (!s.inputsSide() || s.allOnDevice() && !s.givenSide()) &&
+				(s.head.GatherRow || s.c.TiedEmbd && !s.inputsSide() && m.PosEmbd.E == nil) {
 				// The card reads the per-layer inputs it writes back into the
 				// chunk's own, handed before it runs.
-				if c.PLEDim != 0 {
+				if s.inputsSide() {
 					s.growBPLE(n)
-					s.layerInputs(s.bple[:n*c.PleWidth()])
+					s.layerInputs(s.bple[:n*c.SideWidth()])
 				}
 				dst := s.bx[:n*c.ResidW()]
 				if s.ldEmbed != nil && s.ldEmbed.EmbedRows(rowIDs[base:base+n], p0, dst) {
@@ -445,7 +443,7 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 			// goroutine: a token's row, its scale, its position row and its
 			// per-layer inputs; a given row and its own.
 			var bple []float32
-			if c.PLEDim != 0 {
+			if s.inputsSide() {
 				s.growBPLE(n)
 				bple = s.bple[:n*c.SideWidth()]
 			}
@@ -457,10 +455,10 @@ func (s *Instance) prefillSrc(slot int, src rowSrc) ([]float32, error) {
 				return err
 			}
 			s.layDraft(s.bx[:n*c.ResidW()], n, base)
-			// The tap rows over the input rows' zeros.
-			if c.DeepTaps > 0 {
+			// The given side rows over the input rows' zeros.
+			if s.givenSide() {
 				s.growBPLE(n)
-				s.fillDeep(src, base, n, s.bple[:n*c.SideWidth()])
+				s.fillGivenSide(src, base, n, s.bple[:n*c.SideWidth()])
 			}
 			return nil
 		}

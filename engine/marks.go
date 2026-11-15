@@ -43,7 +43,7 @@ func (s *Instance) MarkScores(ids []int32, qtype int, marks []int, out []float32
 	defer s.setRequest(nil)
 	// The windows' buffer is kept from the last question: a warm one
 	// allocates nothing.
-	s.mark = embedMode{bidir: s.c.NonCausal, whole: true, total: n, out: out[:len(marks)], req: req, wins: s.mark.wins}
+	s.mark = embedMode{bidir: s.c.NonCausal, whole: true, total: n, out: out[:len(marks)], req: req}
 	s.emb = &s.mark
 	defer func() { s.emb = nil }()
 	_, err := s.Prefill(ids)
@@ -99,7 +99,7 @@ func (s *Instance) MarkScoresAfter(prefix []model.Span, ids []int32, qtype int, 
 	s.Reset()
 	s.setRequest(req)
 	defer s.setRequest(nil)
-	s.mark = embedMode{bidir: s.c.NonCausal, whole: true, total: n, out: out[:len(marks)], req: req, wins: s.mark.wins, rowWins: wins}
+	s.mark = embedMode{bidir: s.c.NonCausal, whole: true, total: n, out: out[:len(marks)], req: req, rowWins: wins}
 	s.emb = &s.mark
 	defer func() { s.emb = nil }()
 	_, err := s.PrefillMixed(spans...)

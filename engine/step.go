@@ -656,12 +656,7 @@ func stepTogether(runs []Run, rows int, ss nn.SessionStepper) ([][]float32, erro
 	}
 	// The rows' input rows, scale, positions and per-layer inputs through the
 	// composed graph (cpuembed.go).
-	var bple []float32
-	if c.PLEDim != 0 {
-		s0.growBPLE(rows)
-		bple = s0.bple[:rows*c.SideWidth()]
-	}
-	s0.tokenSide(rows)
+	bple := s0.inputSide(rows)
 	if why := s0.embedRows(x, bple, s0.stepTok, pos, s0.plane(rows)); why != nn.DeclineServes {
 		return nil, s0.embedDeclined(why)
 	}

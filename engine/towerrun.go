@@ -615,7 +615,7 @@ func (ts *Instance) towerBlocks(tr *towerRun, gw int, wins []nn.KeyRun) error {
 			return fmt.Errorf("the tower's blocks turn by the picture's grid on a device that holds no grid table")
 		}
 	}
-	tr.mode = embedMode{bidir: true, rows: true, total: n, out: tr.blk, wins: tr.mode.wins}
+	tr.mode = embedMode{bidir: true, rows: true, total: n, out: tr.blk}
 	// The rows each tapped block leaves, which a run ending at that block
 	// writes back.
 	tr.modeTaps = tr.modeTaps[:0]

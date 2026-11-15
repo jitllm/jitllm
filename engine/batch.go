@@ -36,12 +36,7 @@ func (s *Instance) rowsRouted(tokens []int32, seq, pos []int, nlogit, seqs int) 
 	t0 := s.tick()
 	// The rows' input rows, scale, positions and per-layer inputs through the
 	// composed graph (cpuembed.go).
-	var bple []float32
-	if c.PLEDim != 0 {
-		s.growBPLE(n)
-		bple = s.bple[:n*c.SideWidth()]
-	}
-	s.tokenSide(n)
+	bple := s.inputSide(n)
 	if why := s.embedRows(s.bx[:n*c.ResidW()], bple, tokens[:n], pos[:n], s.plane(n)); why != nn.DeclineServes {
 		return nil, s.embedDeclined(why)
 	}

@@ -291,23 +291,18 @@ func (s *Instance) bidirTellOn(r *route, p0, n int) bool {
 	return true
 }
 
-// embedTellOn is embedTell for route r's device; a device told the prompt is
-// non-causal (nn.PromptRows) makes the chunk's run itself, handed the rows'
-// windows only where the run states them (a tower's windowed blocks).
+// embedTellOn is embedTell for route r's device: the rows' windows where the
+// run states them (a tower's windowed blocks), none where it does not; a
+// device not told the prompt is non-causal (nn.PromptRows) reserves the
+// chunk's rows first.
 func (s *Instance) embedTellOn(r *route, li, n int) bool {
-	if r.prompt != nil {
-		if r.wins != nil {
-			r.wins.SetRowWindows(s.emb.rowWins)
-		}
-		return true
-	}
-	if r.resv != nil && !r.resv.ReserveRows(li, n) {
+	if r.prompt == nil && r.resv != nil && !r.resv.ReserveRows(li, n) {
 		return false
 	}
 	if r.wins == nil {
-		return false
+		return r.prompt != nil
 	}
-	r.wins.SetRowWindows(s.embedWins(n))
+	r.wins.SetRowWindows(s.emb.rowWins)
 	return true
 }
 

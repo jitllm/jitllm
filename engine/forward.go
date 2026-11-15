@@ -221,9 +221,8 @@ type Instance struct {
 	streamedOn   []bool
 	// ShOverlaps counts mixture layers whose shared expert ran behind the
 	// routed read: the selection check for WithSharedOverlap.
-	// ple is this token's per-layer embedding inputs (Config.PLEDim), pleT
-	// the table row they are built from, pleG and pleO a block's gate and
-	// projection, and bple a batched chunk's inputs, one row each. See ple.go.
+	// ple is this token's side inputs (Config.SideWidth) and bple a batched
+	// chunk's, one row each (plerun.go).
 	ple, bple []float32
 	// xa is the one-row residual's streams (x is its stream 0), on a model of
 	// several (altup.go).
@@ -1497,8 +1496,6 @@ func (s *Instance) layerWeightsAt(li int, l *model.Layer, banks *[3]nn.Weight, e
 			w.ShGate, w.ShUp, w.ShDown = model.Wt(l.ShGate), model.Wt(l.ShUp), model.Wt(l.ShDown)
 		}
 	}
-	if s.c.PLEDim != 0 {
-	}
 	if s.c.LayerKind(li).Recurrent() {
 		w.SSM = nn.SSMWeights{
 			Gate: model.Wt(l.SsmGate), BA: model.Wt(l.SsmBA), Out: model.Wt(l.SsmOut), Conv1d: l.SsmConv1d,
@@ -2020,7 +2017,7 @@ func (s *Instance) planFor(li int) *nn.LayerPlan {
 	plan.OwnGeom = c.OwnGeoms() && plan.Rotary != 0 || plan.HeadDim != c.HeadDim || plan.NKVHead != c.NKVHead || plan.NRot != c.NRot
 	plan.BidirOff = !c.BidirAt(li)
 	plan.VFromK, plan.OutScale = l.VFromK, l.OutScale
-	plan.PLEDim, plan.PLEWidth = c.PLEDim, c.SideWidth()
+	plan.SideW = c.SideWidth()
 	if c.MLA() {
 		plan.KeyW = c.KVDim() - c.KVLoraRank - c.NRot
 	} else {
@@ -2068,16 +2065,16 @@ func (s *Instance) planFor(li int) *nn.LayerPlan {
 		plan.ExpLatent = w
 	}
 	if c.NonCausal && (s.m.IsEmbedding() || c.Head != nil || s.m.Tower != nil && li >= s.m.TowerBase) {
-		// A bidirectional decoder (EmbeddingGemma) and a tower: their blocks
-		// are non-causal blocks, as an encoder's are -- the sequence (a
-		// picture's rows) one call, every row over the call's rows, a sliding
-		// layer inside each row's symmetric window (nn.RowWindowDevice;
-		// embedstate.go's embedTell). The row windows
-		// are the window, so the causal one (SWAWindow) is off: with both, a
-		// 600-row sequence read NaN past the causal window's 512 rows.
+		// A bidirectional decoder and a tower: their blocks are non-causal
+		// blocks, as an encoder's are -- the sequence (a picture's rows) one
+		// call, every row over the call's rows. A window the attention
+		// states with Bidir is the form's own (symmetric about each row); a
+		// block whose attention reads row windows reads the call's
+		// (nn.RowWindowDevice). The causal window (SWAWindow) is off: with
+		// both, a 600-row sequence read NaN past the causal window's 512 rows.
 		plan.NonCausal = true
 		plan.Tower = s.m.Tower != nil && li >= s.m.TowerBase
-		plan.Windowed = c.SWA(li)
+		plan.Windowed = readsRowWindows(plan.Graph)
 		plan.SWAWindow = 0
 	}
 	// What the block is composed from, for a device that composes it so.
@@ -3044,7 +3041,7 @@ func (s *Instance) embedOnDevice() bool {
 	}
 	// Input rows that write the per-layer inputs on the device leave the
 	// host's unfilled: no block may run on the host.
-	if s.c.PLEDim != 0 && s.c.Streams() > 1 && !s.allOnDevice() {
+	if s.inputsSide() && s.c.Streams() > 1 && !s.allOnDevice() {
 		return false
 	}
 	// The card reads the per-layer inputs it writes back into the token's

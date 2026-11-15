@@ -111,7 +111,7 @@ func (s *Instance) JointScores(spans []model.Span, qs []JointQuestion, out []flo
 	s.Reset()
 	s.setRequest(req)
 	defer s.setRequest(nil)
-	s.mark = embedMode{bidir: s.c.NonCausal, whole: true, total: n, out: out[:no], req: req, wins: s.mark.wins}
+	s.mark = embedMode{bidir: s.c.NonCausal, whole: true, total: n, out: out[:no], req: req}
 	s.emb = &s.mark
 	defer func() { s.emb = nil }()
 	var err error

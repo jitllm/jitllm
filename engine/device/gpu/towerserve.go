@@ -35,7 +35,7 @@ func (g *devTier) towerServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratc
 		return errors.New("the scratch holds no rotary table for a block that turns its rows")
 	case g.visOf(l.geo).tkv == nil || g.visOf(l.geo).tkv.kc == nil || g.visOf(l.geo).tkv.vc == nil:
 		return fmt.Errorf("%w: no transient key and value pair on the device", errStepCond)
-	case l.windowed && len(g.winRuns) == 0:
+	case l.windowed && len(g.winRuns) == 0 && !g.winPerRow:
 		return fmt.Errorf("%w: a windowed block with no windows staged", errStepCond)
 	}
 	if _, _, _, err := g.towerStep(bs, l, li, p, bs.rows); err != nil {

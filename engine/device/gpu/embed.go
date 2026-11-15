@@ -100,13 +100,28 @@ func (bs *blockScratch) embedDst(n int, dst []float32) bool {
 }
 
 // embStreams is how many residual streams the input rows' graph writes: its
-// outputs but the rows' per-layer inputs, its last where the plan has them.
+// outputs but the rows' side inputs (embWritesSide).
 func (bs *blockScratch) embStreams() int {
 	n := len(bs.embedGraph.Out)
-	if bs.p.PLEDim != 0 {
+	if bs.embWritesSide() {
 		n--
 	}
 	return n
+}
+
+// embWritesSide says the input rows' graph writes the rows' side inputs: an
+// output past the residual streams, its last.
+func (bs *blockScratch) embWritesSide() bool {
+	return bs.embedGraph != nil && bs.p.SideW != 0 && len(bs.embedGraph.Out) > bs.p.Streams()
+}
+
+// embSideWords is the side rows a batch's input rows write, 0 where they
+// write none.
+func (bs *blockScratch) embSideWords() int {
+	if !bs.embWritesSide() {
+		return 0
+	}
+	return batchWidth * bs.p.SideW
 }
 
 // embedOuts is the buffers input rows writing s streams write at R rows of
@@ -155,10 +170,10 @@ func (bs *blockScratch) outsFor(s int) []backend.Buf {
 	return bs.embOuts
 }
 
-// withPLE is the first n of embOuts, then the per-layer inputs where the
-// plan has them: the input rows' graph writes them last.
+// withPLE is the first n of embOuts, then the side inputs where the input
+// rows' graph writes them, last.
 func (bs *blockScratch) withPLE(n int) []backend.Buf {
-	if bs.p.PLEDim != 0 {
+	if bs.embWritesSide() {
 		bs.embOuts[n] = bs.pleIn
 		n++
 	}
@@ -168,8 +183,8 @@ func (bs *blockScratch) withPLE(n int) []backend.Buf {
 // readPLE reads the per-layer inputs input rows of n rows wrote in b back
 // to where the call that takes the rows writes them from (pleRows).
 func (g *devTier) readPLE(s backend.Session, b backend.Buf, n int) error {
-	w := n * g.bs.p.PLEWidth
-	if w == 0 || g.bs.p.PLEDim == 0 {
+	w := n * g.bs.p.SideW
+	if w == 0 || !g.bs.embWritesSide() {
 		return nil
 	}
 	if len(g.pleHost) < w {
@@ -405,7 +420,7 @@ func (g *devTier) materializeComposed(pe *embPend) bool {
 	for _, b := range [...]struct {
 		buf   *backend.Buf
 		words int
-	}{{&bs.embCast, batchWidth * bs.embW.k * max(bs.embStreams(), 1)}, {&bs.embPLE, batchWidth * bs.p.PLEWidth * min(bs.p.PLEDim, 1)}} {
+	}{{&bs.embCast, batchWidth * bs.embW.k * max(bs.embStreams(), 1)}, {&bs.embPLE, bs.embSideWords()}} {
 		if *b.buf != nil || b.words == 0 {
 			continue
 		}
@@ -496,7 +511,7 @@ func (g *devTier) composedSession(s backend.Session) {
 		// scratch's own residual holds its rows, not the call's. The
 		// per-layer inputs into the call's own (embPLE) likewise.
 		outs, err := bs.castStreams(ns, rd.rows)
-		if err == nil && bs.p.PLEDim != 0 {
+		if err == nil && bs.embWritesSide() {
 			outs[len(outs)-1] = bs.embPLE
 		}
 		if err == nil {
@@ -513,7 +528,7 @@ func (g *devTier) composedSession(s backend.Session) {
 	}
 	outs := bs.outsFor(1)[:1]
 	outs[0] = bs.embCast
-	if bs.p.PLEDim != 0 {
+	if bs.embWritesSide() {
 		outs = append(outs, bs.embPLE)
 	}
 	if rd.err = sv.runAs(g, &rd.lc, sv.inst, pe.kind, nil, outs); rd.err != nil {

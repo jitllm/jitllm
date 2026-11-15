@@ -723,10 +723,10 @@ type LayerPlan struct {
 	Rotary             int
 	VFromK             bool
 	OutScale           float32
-	// PLEDim is each block's per-layer embedding width (zero for none).
-	// PLEWidth is a row's whole side input to the blocks: its per-layer
-	// inputs, NLayer*PLEDim, or a tower's tap rows the first blocks add.
-	PLEDim, PLEWidth int
+	// SideW is a row's whole side input to the blocks, the input their
+	// graphs read past the residual streams, each block its own slice of it
+	// (zero for none).
+	SideW int
 	// KeyW is the width an indexer's key takes in the block's cached row
 	// after the attention's own (KVRow): a latent row's whatever the block,
 	// one more kv head where the block selects; 0 for none.
@@ -769,9 +769,9 @@ type LayerPlan struct {
 	// are this; their MLP and rotary are the text kit's fields (UngatedFFN,
 	// NRot over Layers' cs).
 	NonCausal bool
-	// Windowed says a NonCausal block attends inside the windowed key runs
-	// the call was handed (KeyRunDevice) rather than over every row
-	// (Qwen2.5-VL's tower, every block but each n'th).
+	// Windowed says a NonCausal block attends inside the windows the call
+	// was handed (KeyRunDevice, RowWindowDevice) rather than over every row:
+	// its attention states RowWindows.
 	Windowed bool
 	// HeadSet says a NonCausal block is a decision head's that attends and
 	// norms otherwise than the encoder before it (d1-omni: LayerNorm and 16
@@ -1118,10 +1118,12 @@ type KeyRunDevice interface {
 
 // RowWindowDevice is an optional LayerDevice that takes one window a row for
 // the NonCausal calls that follow, until replaced: row r attends inside
-// wins[r] on its Windowed blocks. A symmetric sliding window (ModernBERT's
-// local layers) is this; its rows' windows overlap, so it is not a partition
-// KeyRunDevice can state. It replaces whatever runs SetKeyRuns gave, and
-// false is a device that cannot take them.
+// wins[r] on its Windowed blocks (an attention stating RowWindows); the rows'
+// windows may overlap, so they are not a partition KeyRunDevice can state. A
+// window an attention states with Bidir is not this: the block's form clips
+// each row's keys to it. No windows (nil) is every row over its call. It
+// replaces whatever runs SetKeyRuns gave, and false is a device that cannot
+// take them.
 type RowWindowDevice interface {
 	SetRowWindows(wins []KeyRun)
 }
@@ -1161,10 +1163,9 @@ type RowChunker interface {
 	LayersPhase(lo, hi, pos, n, keys, phase int, x []float32, cs RopeTables) bool
 }
 
-// LayerInputDevice is an optional LayerDevice that takes a per-layer input
-// for every row beside the residual: Gemma 4's per-layer embeddings
-// (LayerPlan.PLEDim), NLayer*PLEDim floats a row, row-major, which block li
-// reads its PLEDim slice of. The caller sets them before every Layers or
+// LayerInputDevice is an optional LayerDevice that takes a side input for
+// every row beside the residual (LayerPlan.SideW floats a row, row-major),
+// which each block reads its slice of. The caller sets them before every Layers or
 // LayersRows call whose rows they belong to; the device reads them during
 // that call only.
 type LayerInputDevice interface {
