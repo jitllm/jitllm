@@ -1,0 +1,68 @@
+{
+  "classes": ["Ernie4_5_MoeForCausalLM"],
+  "config": {
+    "arch": "ernie4_5-moe",
+    "keys": {
+      "block_count":                      {"uint": "num_hidden_layers ?? 28"},
+      "context_length":                   {"uint": "max_position_embeddings ?? 131072"},
+      "embedding_length":                 {"uint": "hidden_size ?? 2560"},
+      "feed_forward_length":              {"uint": "intermediate_size ?? 12288"},
+      "attention.head_count":             {"uint": "num_attention_heads ?? 20"},
+      "attention.head_count_kv":          {"uint": "num_key_value_heads ?? 4"},
+      "attention.key_length":             {"uint": "head_dim ?? (hidden_size ?? 2560) / (num_attention_heads ?? 20)"},
+      "attention.value_length":           {"uint": "head_dim ?? (hidden_size ?? 2560) / (num_attention_heads ?? 20)"},
+      "attention.layer_norm_rms_epsilon": {"float": "rms_norm_eps ?? 1e-5"},
+      "rope.dimension_count":             {"uint": "(head_dim ?? (hidden_size ?? 2560) / (num_attention_heads ?? 20)) * (rope_parameters.partial_rotary_factor ?? partial_rotary_factor ?? 1)"},
+      "rope.freq_base":                   {"float": "rope_parameters.rope_theta ?? rope_theta ?? 500000"},
+      "expert_count":                     {"uint": "moe_num_experts ?? 64"},
+      "expert_used_count":                {"uint": "moe_k ?? 6"},
+      "expert_feed_forward_length":       {"uint": "moe_intermediate_size ?? 1536"},
+      "expert_shared_count":              {"uint": "moe_num_shared_experts ?? 2"},
+      "leading_dense_block_count":        {"uint": "moe_layer_start_index ?? 1"},
+      "interleave_moe_layer_step":        {"uint": "moe_layer_interval ?? 1"}
+    },
+    "vocab": "vocab_size ?? 103424",
+    "head": {"tensor": "lm_head.weight", "tied": "tie_word_embeddings ?? true"},
+    "activation": "hidden_act ?? 'silu'",
+    "rope_scaling": "rope_parameters ?? rope_scaling",
+    "window": {"size": "sliding_window", "used": "use_sliding_window ?? true"},
+    "gating": "softmax"
+  },
+  "tensors": {
+    "block_prefix": "model.layers.",
+    "model": {
+      "model.embed_tokens.weight": "token_embd.weight",
+      "model.norm.weight":         "output_norm.weight",
+      "lm_head.weight":            "output.weight"
+    },
+    "block": {
+      "input_layernorm.weight":                  "attn_norm.weight",
+      "post_attention_layernorm.weight":         "ffn_norm.weight",
+      "self_attn.q_proj.weight":                 "attn_q.weight",
+      "self_attn.k_proj.weight":                 "attn_k.weight",
+      "self_attn.v_proj.weight":                 "attn_v.weight",
+      "self_attn.o_proj.weight":                 "attn_output.weight",
+      "self_attn.q_proj.bias":                   "attn_q.bias",
+      "self_attn.k_proj.bias":                   "attn_k.bias",
+      "self_attn.v_proj.bias":                   "attn_v.bias",
+      "self_attn.o_proj.bias":                   "attn_output.bias",
+      "mlp.gate_proj.weight":                    "ffn_gate.weight",
+      "mlp.up_proj.weight":                      "ffn_up.weight",
+      "mlp.down_proj.weight":                    "ffn_down.weight",
+      "mlp.gate.weight":                         "ffn_gate_inp.weight",
+      "mlp.moe_statics.e_score_correction_bias": "exp_probs_b.bias",
+      "mlp.shared_experts.gate_proj.weight":     "ffn_gate_shexp.weight",
+      "mlp.shared_experts.up_proj.weight":       "ffn_up_shexp.weight",
+      "mlp.shared_experts.down_proj.weight":     "ffn_down_shexp.weight"
+    },
+    "experts": {
+      "prefix": "mlp.experts.",
+      "names": {
+        "gate_proj.weight": "ffn_gate_exps.weight",
+        "up_proj.weight":   "ffn_up_exps.weight",
+        "down_proj.weight": "ffn_down_exps.weight"
+      }
+    },
+    "ignore": ["model.rotary_emb.inv_freq", "self_attn.rotary_emb.inv_freq"]
+  }
+}

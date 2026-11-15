@@ -339,6 +339,10 @@ func hfSourceWith(dir hfDir, shards []*safetensors.File, modelJSON string) (*jlm
 	names := all2names(all)
 	sort.Strings(names)
 
+	hc.shapes = make(map[string][]uint64, len(all))
+	for n, loc := range all {
+		hc.shapes[n] = loc.t.Shape
+	}
 	cfg, err := ha.config(hc, names)
 	if err != nil {
 		return nil, err
@@ -939,6 +943,10 @@ type hfConfig struct {
 	keys map[string]json.RawMessage
 
 	path string // for error messages
+
+	// shapes is each checkpoint tensor's shape in the format's order, for a
+	// model.json's config, which hands configOf the tensor table it reads.
+	shapes map[string][]uint64
 }
 
 // absent reports whether config.json does not carry key at all.
@@ -1133,8 +1141,6 @@ func hfArchTable() map[string]*hfArch {
 		// The mixture families, each to the container its GGUF converts to. See
 		// convert/hfmoefamily.go.
 		"Glm4MoeForCausalLM":        glm4moeHF(),
-		"Qwen2MoeForCausalLM":       qwen2moeHF(),
-		"Ernie4_5_MoeForCausalLM":   ernie45moeHF(),
 		"HunYuanDenseV1ForCausalLM": hunyuanHF(),
 		"HunYuanMoEV1ForCausalLM":   hunyuanHF(),
 		// The modern text group (convert/hfmoefamily2.go).

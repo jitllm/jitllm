@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"maps"
 	"math"
 	"slices"
 	"strings"
@@ -169,6 +170,7 @@ func TestModelJSONRefuses(t *testing.T) {
 		{"unknown field", `"classes"`, `"klasses": [], "classes"`, "unknown field"},
 		{"no class", `["X"]`, `[]`, "names no class"},
 		{"unknown graph", `"qwen3next"`, `"nonesuch"`, "not one configOf builds"},
+		{"unknown gate", `"activation": "'silu'"`, `"activation": "'silu'", "gating": "sparsemixer"`, "gating \"sparsemixer\""},
 		{"no vocab", `"vocab": "vocab_size",`, ``, "no vocab"},
 		{"unknown role", `"attn_q.weight"`, `"attn_quux.weight"`, "not a tensor name"},
 		{"unknown primitive", `"attn_q.weight"`, `{"role": "attn_q.weight", "do": [{"frobnicate": 1}]}`, "unknown field"},
@@ -204,7 +206,8 @@ func TestLibraryIgnoresTheRotaryBuffers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, c := range []string{"Qwen2ForCausalLM", "Qwen3ForCausalLM", "Qwen3MoeForCausalLM", "GemmaForCausalLM"} {
+	for _, c := range []string{"Qwen2ForCausalLM", "Qwen3ForCausalLM", "Qwen3MoeForCausalLM", "GemmaForCausalLM",
+		"Ernie4_5ForCausalLM", "Qwen2MoeForCausalLM", "Ernie4_5_MoeForCausalLM"} {
 		mj := lib[c]
 		if mj == nil {
 			t.Fatalf("no %s in the library", c)
@@ -217,6 +220,106 @@ func TestLibraryIgnoresTheRotaryBuffers(t *testing.T) {
 			if _, _, _, ignored, err := a.identify(n, nil); err != nil || !ignored {
 				t.Errorf("%s: %s is not ignored (%v)", c, n, err)
 			}
+		}
+	}
+}
+
+// TestModelJSONHandsConfigOfTheTensorTable: configOf reads which blocks route
+// off the tensor table, and a file's config hands it the checkpoint's.
+// Qwen1.5-MoE states its shared expert by key and every block routes: a block
+// without its router is refused as its GGUF is, an expert's matrix stands in
+// for its bank with its shape, and the stated softmax router refuses a
+// config.json naming another gate.
+func TestModelJSONHandsConfigOfTheTensorTable(t *testing.T) {
+	lib, err := modelLibrary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mj := lib["Qwen2MoeForCausalLM"]
+	if mj == nil {
+		t.Fatal("no Qwen2MoeForCausalLM in the library")
+	}
+	js := `{"architectures": ["Qwen2MoeForCausalLM"], "vocab_size": 100, "hidden_size": 64,
+	  "intermediate_size": 128, "num_hidden_layers": 2, "num_attention_heads": 4, "num_key_value_heads": 2,
+	  "num_experts": 8, "num_experts_per_tok": 2, "moe_intermediate_size": 32,
+	  "shared_expert_intermediate_size": 48}`
+	c := hfConfigOf(t, js)
+	names := []string{"lm_head.weight", "model.layers.0.mlp.experts.3.gate_proj.weight",
+		"model.layers.1.mlp.experts.0.gate_proj.weight", "model.layers.0.mlp.gate.weight",
+		"model.layers.1.mlp.gate.weight"}
+	cfg, err := mj.config(c, names)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Arch != ArchQwen2MoE || cfg.NExpert != 8 || cfg.NExpertUsed != 2 || cfg.NFFNExp != 32 ||
+		cfg.NFFNShExp != 48 || !cfg.Flags.Has(jlm.FlagNoExpertNorm) || !cfg.Flags.Has(jlm.FlagRopeNeox) ||
+		cfg.Flags.Has(jlm.FlagExpertSigmoid) {
+		t.Errorf("mixture %d of %d experts %d wide, shared %d, flags %v", cfg.NExpertUsed, cfg.NExpert,
+			cfg.NFFNExp, cfg.NFFNShExp, cfg.Flags)
+	}
+	if _, err := mj.config(c, names[:4]); err == nil || !strings.Contains(err.Error(), "block 1 has no router") {
+		t.Errorf("a block without its router: %v", err)
+	}
+	_, err = mj.config(hfConfigOf(t, strings.Replace(js, `"num_experts"`, `"scoring_func": "sigmoid", "num_experts"`, 1)), names)
+	if err == nil || !strings.Contains(err.Error(), "scoring_func sigmoid") || !errors.Is(err, ErrNotImplemented) {
+		t.Errorf("a sigmoid scoring_func on a softmax router: %v", err)
+	}
+	// The width read off a bank, where the file states none: an expert's
+	// [24, 64] matrix is the bank's {64, 24}.
+	mj2 := *mj
+	mj2.Config.Keys = maps.Clone(mj.Config.Keys)
+	delete(mj2.Config.Keys, "expert_feed_forward_length")
+	c.shapes = map[string][]uint64{"model.layers.0.mlp.experts.3.gate_proj.weight": {24, 64}}
+	if cfg, err := mj2.config(c, names); err != nil || cfg.NFFNExp != 24 {
+		t.Errorf("the width off the bank: %v, %v", cfg, err)
+	}
+}
+
+// TestModelJSONHoldsMixturesToTheStep: a mixture's blocks carry experts and a
+// router past the dense lead and on the step its keys state, and a checkpoint
+// whose weights stand elsewhere is refused, for every file. ERNIE 4.5's lead
+// of one and step of two route blocks 1 and 3 of four. Its shared experts'
+// width is the shared expert's tensor's, as its GGUF's is.
+func TestModelJSONHoldsMixturesToTheStep(t *testing.T) {
+	lib, err := modelLibrary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mj := lib["Ernie4_5_MoeForCausalLM"]
+	if mj == nil {
+		t.Fatal("no Ernie4_5_MoeForCausalLM in the library")
+	}
+	c := hfConfigOf(t, `{"architectures": ["Ernie4_5_MoeForCausalLM"], "vocab_size": 100, "hidden_size": 64,
+	  "intermediate_size": 128, "num_hidden_layers": 4, "num_attention_heads": 4, "num_key_value_heads": 2,
+	  "head_dim": 16, "moe_num_experts": 8, "moe_k": 2, "moe_intermediate_size": 32, "moe_num_shared_experts": 2,
+	  "moe_layer_start_index": 1, "moe_layer_interval": 2, "moe_layer_end_index": 3}`)
+	sh := "model.layers.1.mlp.shared_experts.gate_proj.weight"
+	c.shapes = map[string][]uint64{sh: {64, 64}}
+	at := func(b int) []string {
+		p := "model.layers." + itoa(b) + ".mlp."
+		return []string{p + "gate.weight", p + "experts.0.gate_proj.weight"}
+	}
+	names := slices.Concat([]string{sh}, at(1), at(3))
+	cfg, err := mj.config(c, names)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.NDenseLead != 1 || cfg.MoEStep != 2 || cfg.NExpert != 8 || cfg.NExpertUsed != 2 || cfg.NFFNExp != 32 ||
+		cfg.NFFNShExp != 64 || !cfg.Flags.Has(jlm.FlagTiedEmbd) || cfg.Flags.Has(jlm.FlagNoExpertNorm) {
+		t.Errorf("lead %d step %d, %d of %d experts %d wide, shared %d, flags %v", cfg.NDenseLead, cfg.MoEStep,
+			cfg.NExpertUsed, cfg.NExpert, cfg.NFFNExp, cfg.NFFNShExp, cfg.Flags)
+	}
+	for _, r := range []struct {
+		name  string
+		names []string
+		err   string
+	}{
+		{"a mixture off the step", slices.Concat(names, at(2)), "block 2 carries experts, where"},
+		{"a router alone", append(slices.Clone(names), "model.layers.2.mlp.gate.weight"), "block 2 carries a router, where"},
+		{"a mixture missing", slices.Concat([]string{sh}, at(1)), "block 3 carries no experts, where"},
+	} {
+		if _, err := mj.config(c, r.names); err == nil || !strings.Contains(err.Error(), r.err) || !errors.Is(err, ErrNotImplemented) {
+			t.Errorf("%s: %v, want an error saying %q", r.name, err, r.err)
 		}
 	}
 }

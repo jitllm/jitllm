@@ -63,7 +63,16 @@ schema; `convert/modeljson.go` reads it. Its sections:
   is for Kimi-K3's safetensors entry.
 - `config.vocab`, `config.head` (`tensor`, `tied`) and `config.layers` (a
   list key and what each of its values is, `recurrent` or `attention`): what
-  `configOf` reads off a GGUF's tensor table, stated.
+  `configOf` reads off a GGUF's tensor table, stated. Every other fact it reads
+  there (which blocks route, a shared expert's width) it reads off the
+  checkpoint's own block tensors, each under the name the file gives its role,
+  an expert's under its bank's, with its shape.
+- `config.gating`: the class's router by name (`softmax`, `sigmoid`), written
+  as `expert_gating_func`; a config.json `scoring_func` naming another gate is
+  refused, since the class computes its own whatever the file says.
+- A mixture's blocks carry experts and a router exactly where its dense lead
+  and step (`leading_dense_block_count`, `interleave_moe_layer_step`) place
+  one; a checkpoint whose weights stand elsewhere is refused.
 - The statements `configOf` does not read, each read by generic code after
   it, so the statement decides:
   - `config.activation`: the feed-forward's activation by its transformers

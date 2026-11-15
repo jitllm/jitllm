@@ -9,9 +9,8 @@ import (
 	"github.com/jitllm/jitllm/format/jlm"
 )
 
-// The mixture families from safetensors: GLM-4.5 (Glm4MoeForCausalLM),
-// Qwen1.5-MoE (Qwen2MoeForCausalLM), ERNIE 4.5 (Ernie4_5ForCausalLM,
-// Ernie4_5_MoeForCausalLM) and Hunyuan (HunYuanDenseV1ForCausalLM,
+// The mixture families from safetensors: GLM-4.5 (Glm4MoeForCausalLM) and
+// Hunyuan (HunYuanDenseV1ForCausalLM,
 // HunYuanMoEV1ForCausalLM). Each converts to the container its GGUF converts
 // to -- the same arch, flags and tensors -- so the two inputs are one model;
 // convert/moefamily.go and convert/hunyuan.go are the GGUF half and say why
@@ -52,7 +51,7 @@ func (u *hfUint) UnmarshalJSON(b []byte) error {
 func hardcodesSoftmax(archs []string) bool {
 	for _, a := range archs {
 		switch a {
-		case "Qwen2MoeForCausalLM", "Ernie4_5_MoeForCausalLM", "HunYuanMoEV1ForCausalLM":
+		case "HunYuanMoEV1ForCausalLM":
 			return true
 		}
 	}
@@ -183,127 +182,6 @@ func glm4moeHFConfig(c *hfConfig, names []string) (*Config, error) {
 	}
 	if !cfg.Flags.Has(jlm.FlagExpertSigmoid) {
 		return nil, fmt.Errorf("convert: %s: a GLM-4.5 router that is not a sigmoid", c.path)
-	}
-	return cfg, nil
-}
-
-// --- Qwen1.5-MoE -----------------------------------------------------------
-
-// qwen2moeHF is qwen2's attention with a softmax top-k beside a shared expert
-// scaled by its own sigmoid gate (RoleShRouter, qwen3next's).
-func qwen2moeHF() *hfArch {
-	return &hfArch{
-		arch:        ArchQwen2MoE,
-		blockPrefix: llamaHF().blockPrefix,
-		model:       llamaHF().model,
-		block: blockPlus(llamaHF().block, map[string]jlm.Role{
-			"mlp.gate.weight":                    jlm.RoleRouter,
-			"mlp.shared_expert.gate_proj.weight": jlm.RoleShExpGate,
-			"mlp.shared_expert.up_proj.weight":   jlm.RoleShExpUp,
-			"mlp.shared_expert.down_proj.weight": jlm.RoleShExpDown,
-			"mlp.shared_expert_gate.weight":      jlm.RoleShRouter,
-		}),
-		expertPrefix: "mlp.experts.",
-		expert:       hfExperts(),
-		ignore:       llamaHF().ignore,
-		config:       qwen2moeHFConfig,
-	}
-}
-
-// qwen2moeHFConfig is hfMoEConfig's mixture plus the shared expert, whose
-// width hfMoEConfig refuses for every other class. The weights are not
-// renormalised unless norm_topk_prob says so (Qwen2MoeConfig's default, every
-// published config, llama.cpp's literal).
-func qwen2moeHFConfig(c *hfConfig, names []string) (*Config, error) {
-	if err := hfGateAgrees(c); err != nil {
-		return nil, err
-	}
-	sh := c.SharedExpertIntermediateSize
-	c.SharedExpertIntermediateSize = 0
-	cfg, err := hfConfigWith(ArchQwen2MoE, jlm.FlagRopeNeox, "silu")(c, names)
-	if err != nil {
-		return nil, err
-	}
-	if cfg.NExpert == 0 {
-		return nil, fmt.Errorf("convert: %s: no num_experts: qwen2moe is a mixture", c.path)
-	}
-	if sh == 0 {
-		return nil, fmt.Errorf("convert: %s: no shared_expert_intermediate_size", c.path)
-	}
-	cfg.NFFNShExp = sh
-	return cfg, nil
-}
-
-// --- ERNIE 4.5 -------------------------------------------------------------
-
-// ernie45moeHF is the mixture: a softmax top-k whose selection adds a
-// per-expert bias to the softmax probability (moe_statics), renormalised,
-// beside shared experts, after a dense lead and interleaved by a step.
-func ernie45moeHF() *hfArch {
-	return &hfArch{
-		arch:        ArchErnie45MoE,
-		blockPrefix: llamaHF().blockPrefix,
-		model:       llamaHF().model,
-		block: blockPlus(llamaHF().block, map[string]jlm.Role{
-			"mlp.gate.weight":                         jlm.RoleRouter,
-			"mlp.moe_statics.e_score_correction_bias": jlm.RoleExpProbsB,
-			"mlp.shared_experts.gate_proj.weight":     jlm.RoleShExpGate,
-			"mlp.shared_experts.up_proj.weight":       jlm.RoleShExpUp,
-			"mlp.shared_experts.down_proj.weight":     jlm.RoleShExpDown,
-		}),
-		expertPrefix: "mlp.experts.",
-		expert:       hfExperts(),
-		ignore:       llamaHF().ignore,
-		config:       ernie45moeHFConfig,
-	}
-}
-
-// ernie45moeHFConfig reads ERNIE's own key names. A block is a mixture when
-// (il+1) % moe_layer_interval == 0 and il lies in [moe_layer_start_index,
-// moe_layer_end_index]; the container's rule is the first two (NDenseLead,
-// MoEStep), so an end before the last block is refused.
-func ernie45moeHFConfig(c *hfConfig, names []string) (*Config, error) {
-	if err := hfGateAgrees(c); err != nil {
-		return nil, err
-	}
-	bad := func(f string, a ...any) error { return fmt.Errorf("convert: "+c.path+": "+f, a...) }
-	cfg, err := hfConfigWith(ArchErnie45MoE, 0, "silu")(c, names)
-	if err != nil {
-		return nil, err
-	}
-	n, k, w := c.MoENumExperts, c.MoEK, uint32(c.MoEIntermediateSize)
-	if n == 0 || k == 0 || k > n || w == 0 {
-		return nil, bad("moe_num_experts %d, moe_k %d, moe_intermediate_size %d", n, k, w)
-	}
-	cfg.NExpert, cfg.NExpertUsed, cfg.NFFNExp = n, k, w
-	cfg.NFFNShExp = c.MoENumSharedExperts * w
-	step := max(c.MoELayerInterval, 1)
-	start := uint32(0)
-	if c.MoELayerStartIndex != nil {
-		if *c.MoELayerStartIndex < 0 || uint32(*c.MoELayerStartIndex) > cfg.NLayer {
-			return nil, bad("moe_layer_start_index %d", *c.MoELayerStartIndex)
-		}
-		start = uint32(*c.MoELayerStartIndex)
-	}
-	if c.MoELayerEndIndex != nil && *c.MoELayerEndIndex >= 0 && uint32(*c.MoELayerEndIndex)+1 < cfg.NLayer {
-		return nil, fmt.Errorf("convert: %s: moe_layer_end_index %d ends the mixtures before "+
-			"block %d: %w", c.path, *c.MoELayerEndIndex, cfg.NLayer-1, ErrNotImplemented)
-	}
-	cfg.NDenseLead, cfg.MoEStep = start, step
-	// Which blocks route is read off the names as well as computed: a key that
-	// disagrees with the weights is a model nothing would read correctly.
-	for li := uint32(0); li < cfg.NLayer; li++ {
-		want := li >= start && (li+1)%step == 0
-		has := false
-		for _, nm := range names {
-			if nm == fmt.Sprintf("model.layers.%d.mlp.gate.weight", li) {
-				has = true
-				break
-			}
-		}
-		if has != want {
-			return nil, bad("block %d has a router %v and the step says %v", li, has, want)
-		}
 	}
 	return cfg, nil
 }

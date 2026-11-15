@@ -61,6 +61,15 @@ type mjConfig struct {
 	Window *mjWindow `json:"window"`
 	// Flags states named graph features (mjFlags), each a boolean.
 	Flags map[string]string `json:"flags"`
+	// Gating is the class's router by name (mjGatings): the gate it computes
+	// whatever config.json says.
+	Gating string `json:"gating"`
+}
+
+// mjGatings is each router gate a file may state, as llama.cpp's
+// expert_gating_func, which configOf reads.
+func mjGatings() map[string]uint64 {
+	return map[string]uint64{"softmax": 1, "sigmoid": 2}
 }
 
 type mjWindow struct {
@@ -208,6 +217,11 @@ func parseModelJSON(b []byte, name string) (*modelJSON, error) {
 	}
 	if w := mj.Config.Window; w != nil && (w.Size == "" || w.Used == "") {
 		return nil, fmt.Errorf("convert: %s: a window states its size and whether it is used", name)
+	}
+	if g := mj.Config.Gating; g != "" {
+		if _, ok := mjGatings()[g]; !ok {
+			return nil, fmt.Errorf("convert: %s: gating %q is not a router gate the container states", name, g)
+		}
 	}
 	return mj, nil
 }
@@ -670,6 +684,44 @@ func (mj *modelJSON) configIn(env exprEnv, c *hfConfig, names []string) (*Config
 			}
 		}
 	}
+	// configOf reads facts off a GGUF's tensor table (which blocks route, a
+	// shared expert's width), so the checkpoint's block tensors stand in, each
+	// under the name the file gives its role, its shape in the container's
+	// order.
+	have := map[string]bool{}
+	for _, t := range ts {
+		have[t.Name] = true
+	}
+	for _, n := range names {
+		role, blk, _, ok := mj.blockRole(n)
+		if !ok {
+			continue
+		}
+		gn := "blk." + itoa(blk) + "." + role
+		if have[gn] {
+			continue
+		}
+		have[gn] = true
+		shape := c.shapes[n]
+		dims := make([]uint64, len(shape))
+		for i, d := range shape {
+			dims[len(shape)-1-i] = d
+		}
+		ts = append(ts, meta.Tensor{Name: gn, Dims: dims})
+	}
+	if g := mj.Config.Gating; g != "" {
+		kvs[ns+"expert_gating_func"] = meta.MakeUint(mjGatings()[g])
+		// The class computes its gate whatever the file says, so a
+		// scoring_func naming another describes weights it never ran.
+		sf, err := eval("scoring_func", "scoring_func")
+		if err != nil {
+			return nil, err
+		}
+		if sf != nil && sf != g {
+			return nil, fmt.Errorf("convert: %s: scoring_func %v, and %s states the class's %s router: %w",
+				c.path, sf, mj.name, g, ErrNotImplemented)
+		}
+	}
 	window := uint64(0)
 	if w := mj.Config.Window; w != nil {
 		used, err := eval("window used", w.Used)
@@ -756,33 +808,78 @@ func (mj *modelJSON) configIn(env exprEnv, c *hfConfig, names []string) (*Config
 	return cfg, nil
 }
 
-// mixtureCovers refuses a mixture whose experts some block does not carry:
-// dense and mixture blocks in one model are not a pattern a file states yet.
+// mixtureCovers holds a mixture's blocks to its dense lead and step: a block
+// carries experts, and a router where the checkpoint ships routers, exactly
+// where the keys place a mixture, so a pattern the two cannot state is refused
+// rather than read as one they can.
 func (mj *modelJSON) mixtureCovers(cfg *Config, names []string) error {
-	e := mj.Tensors.Experts
-	if e == nil {
+	if mj.Tensors.Experts == nil || cfg.NExpert == 0 {
 		return nil
 	}
-	has := map[uint32]bool{}
+	experts, routers := map[int]bool{}, map[int]bool{}
 	for _, n := range names {
-		rest, ok := strings.CutPrefix(n, mj.Tensors.BlockPrefix)
+		role, blk, expert, ok := mj.blockRole(n)
 		if !ok {
 			continue
 		}
-		if b, tail, err := leadingIndex(n, rest); err == nil && strings.HasPrefix(tail, e.Prefix) {
-			has[uint32(b)] = true
+		if expert {
+			experts[blk] = true
+		} else if r, ok := roleOf(role); ok && r == jlm.RoleRouter {
+			routers[blk] = true
 		}
 	}
-	if len(has) == 0 {
+	if len(experts) == 0 {
 		return nil
 	}
-	for b := uint32(0); b < cfg.NLayer; b++ {
-		if !has[b] {
-			return fmt.Errorf("block %d carries no experts in a mixture of %d blocks: dense and mixture blocks "+
-				"in one model are not implemented: %w", b, cfg.NLayer, ErrNotImplemented)
+	step := max(cfg.MoEStep, 1)
+	for b := range int(cfg.NLayer) {
+		want := uint32(b) >= cfg.NDenseLead && uint32(b+1)%step == 0
+		var what string
+		switch {
+		case experts[b] && !want:
+			what = "carries experts"
+		case !experts[b] && want:
+			what = "carries no experts"
+		case len(routers) > 0 && routers[b] && !want:
+			what = "carries a router"
+		case len(routers) > 0 && !routers[b] && want:
+			what = "carries no router"
+		default:
+			continue
 		}
+		place := "a dense block"
+		if want {
+			place = "a mixture"
+		}
+		return fmt.Errorf("block %d %s, where a dense lead of %d and a step of %d place %s: %w",
+			b, what, cfg.NDenseLead, step, place, ErrNotImplemented)
 	}
 	return nil
+}
+
+// blockRole is a block tensor's role, by the GGUF name the file gives it,
+// its block, and whether it is an expert's matrix, which has its bank's.
+func (mj *modelJSON) blockRole(name string) (role string, blk int, expert, ok bool) {
+	t := mj.Tensors
+	rest, ok := strings.CutPrefix(name, t.BlockPrefix)
+	if t.BlockPrefix == "" || !ok {
+		return "", 0, false, false
+	}
+	b, r, err := leadingIndex(name, rest)
+	if err != nil {
+		return "", 0, false, false
+	}
+	if m, ok := t.Block[r]; ok && len(m) > 0 {
+		return m[0].Role, int(b), false, true
+	}
+	if e := t.Experts; e != nil {
+		if er, ok := strings.CutPrefix(r, e.Prefix); ok {
+			if _, en, err := leadingIndex(name, er); err == nil && e.Names[en] != "" {
+				return e.Names[en], int(b), true, true
+			}
+		}
+	}
+	return "", 0, false, false
 }
 
 // mjRopeScaling states a rope scaling object, transformers' rope_parameters
