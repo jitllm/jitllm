@@ -426,10 +426,6 @@ func configOfFile(f *meta.File) (*Config, error) {
 		if err := starcoderConfig(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
-	case ArchCommandR:
-		if err := commandRConfig(f, c, name == "cohere2"); err != nil {
-			return nil, fmt.Errorf("convert: %s: %w", name, err)
-		}
 	case ArchStableLM:
 		if err := stableLMConfig(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
@@ -568,6 +564,14 @@ func configOfFile(f *meta.File) (*Config, error) {
 		}
 	}
 
+	// A per-head q/k norm under LayerNorm blocks (command-r-plus, StableLM 2
+	// 12B: a weight per head) is refused by name: running without it would be
+	// fluent and wrong.
+	if c.Flags.Has(jlm.FlagLayerNorm) {
+		if _, ok := f.Get("blk.0.attn_q_norm.weight"); ok {
+			return nil, fmt.Errorf("convert: %s: a per-head q/k LayerNorm: %w", name, ErrNotImplemented)
+		}
+	}
 	// A rotary narrower than the head turns its leading pairs and passes the
 	// rest through, whatever the architecture.
 	if c.NRot != c.HeadDim {

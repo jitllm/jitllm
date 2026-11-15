@@ -1,6 +1,12 @@
 {
   "gguf": ["phi2", "starcoder", "starcoder2", "stablelm", "falcon", "nemotron", "command-r", "cohere2", "dbrx", "phimoe", "bert", "nomic-bert", "modern-bert"],
   "container": {
+    "command-r": {"flags": {"layer_norm": "true", "parallel": "true"}, "norm_eps": "src['attention.layer_norm_epsilon'] | default(1e-5)",
+                  "logit_div": "1 / src['logit_scale'] if (src['logit_scale'] | default(0)) not in [0, 1] else 0"},
+    "cohere2": {"flags": {"layer_norm": "true", "parallel": "true", "no_pe_global": "(src['attention.sliding_window'] | default(0)) > 0"},
+                "norm_eps": "src['attention.layer_norm_epsilon'] | default(1e-5)", "logit_div": "1 / src['logit_scale'] if (src['logit_scale'] | default(0)) not in [0, 1] else 0",
+                "window": {"size": "src['attention.sliding_window']", "pattern": "4",
+                           "rope_base": "src['rope.freq_base_swa'] if src['rope.freq_base_swa'] is defined and src['rope.freq_base_swa'] != (src['rope.freq_base'] | default(10000)) else 0"}},
     "phi2": {"flags": {"layer_norm": "true", "parallel": "true", "rope_neox": "true"}, "activation": "gelu_pytorch_tanh",
              "norm_eps": "src['attention.layer_norm_epsilon'] | default(1e-5)"},
     "nemotron": {"flags": {"layer_norm": "true", "rope_neox": "true"}, "activation": "relu2",

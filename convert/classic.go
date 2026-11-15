@@ -71,7 +71,8 @@ func starcoderConfig(f *meta.File, c *Config) error {
 	return nil
 }
 
-// commandRConfig is Cohere's graph, llama.cpp's command-r.cpp and cohere2.cpp:
+// Cohere's graph, llama.cpp's command-r.cpp and cohere2.cpp, whose containers
+// classic.json states:
 //
 //	attn_norm (LayerNorm, NO bias) feeds both branches  -> Parallel
 //	q, k, v, o unbiased; adjacent-pair rotary            -> NORM rope
@@ -88,37 +89,8 @@ func starcoderConfig(f *meta.File, c *Config) error {
 // A positive scale moves no argmax; the transformers golden gates it.
 //
 // command-r-plus's per-head q/k LayerNorm ({head_dim, n_head}, a weight per
-// head) is refused by name: running without it would be fluent and wrong.
-func commandRConfig(f *meta.File, c *Config, cohere2 bool) error {
-	layerNormEps(f, c)
-	c.Flags |= jlm.FlagLayerNorm | jlm.FlagParallel
-	if _, ok := f.Get("blk.0.attn_q_norm.weight"); ok {
-		return fmt.Errorf("a per-head q/k LayerNorm (command-r-plus): %w", ErrNotImplemented)
-	}
-	s := f.FloatKey("logit_scale", 0)
-	switch {
-	case s < 0 || math.IsInf(s, 0) || math.IsNaN(s):
-		return fmt.Errorf("logit_scale %g", s)
-	case s != 0 && s != 1:
-		c.LogitScale = float32(1 / s)
-	}
-	if !cohere2 {
-		return nil
-	}
-	if c.SWAWindow = uint32(f.UintKey("attention.sliding_window", 0)); c.SWAWindow == 0 {
-		return fmt.Errorf("no attention.sliding_window, which a cohere2 carries")
-	}
-	if err := swaPatternOf(f, c, 4); err != nil {
-		return err
-	}
-	c.Flags |= jlm.FlagNoPEGlobal
-	// The sliding layers rotate at the file's local base when it states one;
-	// llama.cpp's default is the global base, which one table serves.
-	if b := float32(f.FloatKey("rope.freq_base_swa", float64(c.RopeBase))); b != c.RopeBase {
-		c.RopeBaseSWA = b
-	}
-	return nil
-}
+// head) is refused by name in configOfFile: running without it would be
+// fluent and wrong.
 
 // stableLMConfig is llama.cpp's stablelm.cpp:
 //
@@ -135,9 +107,6 @@ func commandRConfig(f *meta.File, c *Config, cohere2 bool) error {
 func stableLMConfig(f *meta.File, c *Config) error {
 	layerNormEps(f, c)
 	c.Flags |= jlm.FlagLayerNorm | jlm.FlagRopeNeox
-	if _, ok := f.Get("blk.0.attn_q_norm.weight"); ok {
-		return fmt.Errorf("a per-head q/k LayerNorm (StableLM 2 12B): %w", ErrNotImplemented)
-	}
 	if _, ok := f.Get("blk.0.ffn_norm.weight"); !ok {
 		c.Flags |= jlm.FlagParallel
 	}

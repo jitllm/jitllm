@@ -33,6 +33,7 @@ func TestTheLibraryStatesTheContainer(t *testing.T) {
 		win, period uint32
 		ropeSWA     float32
 		acap, fcap  float32
+		logit       float32
 	}{
 		{arch: "qwen2", flags: neox},
 		{arch: "qwen2vl", flags: neox},
@@ -51,6 +52,15 @@ func TestTheLibraryStatesTheContainer(t *testing.T) {
 			flags: ln | jlm.FlagParallel, eps: 3e-7},
 		{arch: "nemotron", flags: jlm.FlagLayerNorm | neox | jlm.FlagReLU2, eps: 1e-5},
 		{arch: "phi2", flags: ln | jlm.FlagParallel, eps: 1e-5},
+		{arch: "command-r", keys: map[string]meta.Value{"logit_scale": meta.MakeFloat(0.0625)},
+			flags: jlm.FlagLayerNorm | jlm.FlagParallel, eps: 1e-5, logit: 16},
+		{arch: "command-r", keys: map[string]meta.Value{"logit_scale": meta.MakeFloat(1)},
+			flags: jlm.FlagLayerNorm | jlm.FlagParallel, eps: 1e-5},
+		{arch: "cohere2", keys: map[string]meta.Value{"attention.sliding_window": meta.MakeUint(4096), "logit_scale": meta.MakeFloat(0.25)},
+			flags: jlm.FlagLayerNorm | jlm.FlagParallel | jlm.FlagNoPEGlobal, eps: 1e-5, logit: 4, win: 4096, period: 4},
+		{arch: "cohere2", keys: map[string]meta.Value{"attention.sliding_window": meta.MakeUint(4096), "rope.freq_base_swa": meta.MakeFloat(1e4),
+			"rope.freq_base": meta.MakeFloat(5e4)},
+			flags: jlm.FlagLayerNorm | jlm.FlagParallel | jlm.FlagNoPEGlobal, eps: 1e-5, win: 4096, period: 4, ropeSWA: 1e4},
 		{arch: "gemma2", keys: gemma, flags: neox | jlm.FlagGELU, scale: float32(math.Sqrt(2048)),
 			win: 4096, period: 2, ropeSWA: 10000},
 		{arch: "gemma2", keys: with(with(with(gemma, "rope.freq_base", meta.MakeFloat(5e5)), "attn_logit_softcapping",
@@ -75,12 +85,20 @@ func TestTheLibraryStatesTheContainer(t *testing.T) {
 			t.Errorf("%s: flags %v, eps %g, scale %g; want %v, %g, %g", tc.arch, c.Flags, c.RMSEps, c.EmbdScale,
 				tc.flags, tc.eps, tc.scale)
 		}
+		if c.LogitScale != tc.logit {
+			t.Errorf("%s: logits divided by %g, want %g", tc.arch, c.LogitScale, tc.logit)
+		}
 		if c.SWAWindow != tc.win || c.SWAPeriod != tc.period || c.RopeBaseSWA != tc.ropeSWA ||
 			c.AttnSoftcap != tc.acap || c.FinalSoftcap != tc.fcap {
 			t.Errorf("%s: window %d every %d at base %g, caps %g %g; want %d every %d at %g, %g %g", tc.arch,
 				c.SWAWindow, c.SWAPeriod, c.RopeBaseSWA, c.AttnSoftcap, c.FinalSoftcap,
 				tc.win, tc.period, tc.ropeSWA, tc.acap, tc.fcap)
 		}
+	}
+	kv := map[string]meta.Value{"general.architecture": meta.MakeString("command-r"), "command-r.logit_scale": meta.MakeFloat(-2)}
+	if err := stateContainer(meta.New("command-r.gguf", kv, nil), &Config{Config: &jlm.Config{}}); err == nil ||
+		!strings.Contains(err.Error(), "logit_div is -0.5") {
+		t.Errorf("a negative logit scale: %v, want it refused", err)
 	}
 	for want, keys := range map[string]map[string]meta.Value{
 		"is undefined":                {},

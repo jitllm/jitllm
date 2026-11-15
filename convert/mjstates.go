@@ -3,6 +3,7 @@ package convert
 import (
 	"fmt"
 	"maps"
+	"math"
 	"slices"
 
 	"github.com/jitllm/jitllm/convert/meta"
@@ -28,7 +29,9 @@ type mjStates struct {
 	Window       *mjStatesWindow `json:"window"`
 	AttnSoftcap  string          `json:"attn_softcap"`
 	FinalSoftcap string          `json:"final_softcap"`
-	exprs        map[string]*jinja.Expr
+	// LogitDiv divides the logits (0 for none).
+	LogitDiv string `json:"logit_div"`
+	exprs    map[string]*jinja.Expr
 }
 
 // mjStatesWindow is a sliding window: Size positions (0 for none, and then
@@ -51,7 +54,7 @@ func (mj *modelJSON) checkStates() error {
 			return fmt.Errorf("convert: %s states the container of %s, which it names no GGUF architecture", mj.name, arch)
 		}
 		st := mj.Container[arch]
-		srcs := []string{st.NormEps, st.EmbdScale, st.AttnSoftcap, st.FinalSoftcap}
+		srcs := []string{st.NormEps, st.EmbdScale, st.AttnSoftcap, st.FinalSoftcap, st.LogitDiv}
 		if w := st.Window; w != nil {
 			if w.Size == "" || w.Period != "" && w.Pattern != "" {
 				return fmt.Errorf("convert: %s: %s: a window states its size, and a period or a pattern, not both", mj.name, arch)
@@ -186,12 +189,16 @@ func (st *mjStates) apply(by string, f *meta.File, c *Config) error {
 	for _, s := range []struct {
 		what, src string
 		to        *float32
-	}{{"attn_softcap", st.AttnSoftcap, &c.AttnSoftcap}, {"final_softcap", st.FinalSoftcap, &c.FinalSoftcap}} {
+	}{{"attn_softcap", st.AttnSoftcap, &c.AttnSoftcap}, {"final_softcap", st.FinalSoftcap, &c.FinalSoftcap},
+		{"logit_div", st.LogitDiv, &c.LogitScale}} {
 		if s.src == "" {
 			continue
 		}
 		if *s.to, err = number(s.what, s.src); err != nil {
 			return err
+		}
+		if x := float64(*s.to); x < 0 || math.IsInf(x, 0) || math.IsNaN(x) {
+			return fmt.Errorf("convert: %s: %s: %s is %g", by, arch, s.what, x)
 		}
 	}
 	w := st.Window
