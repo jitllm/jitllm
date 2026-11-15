@@ -60,6 +60,14 @@ func (s *Instance) Sample(smp *Sampler, logits []float32) (int32, error) {
 		return 0, fmt.Errorf("model: a draw over %d logits, and the vocabulary is %d", len(logits), s.c.NVocab)
 	}
 	if smp == nil || smp.Temp <= 0 {
+		if smp != nil && !smp.penalties().Off() {
+			// llama.cpp's chain penalizes before its temperature sampler keeps
+			// the largest: the walk's one candidate of the penalized row.
+			if t, ok := s.penalizedGreedy(logits, smp); ok {
+				return t, nil
+			}
+			return 0, s.sampleDeclined("the greedy token over the penalties")
+		}
 		if t, ok := s.greedy(logits); ok {
 			return t, nil
 		}
@@ -154,6 +162,18 @@ func (s *Instance) decideScores(vals, keep, params, prior, probs, stats []float3
 		return false
 	}
 	return s.heads.Decide(vals, keep, params, prior, probs, stats)
+}
+
+// penalizedGreedy is the token of the largest of logits as smp's penalties
+// leave them, the lower id of two equal: a top-k draw of one at temperature
+// 1, whose uniform picks nothing.
+func (s *Instance) penalizedGreedy(logits []float32, smp *Sampler) (int32, bool) {
+	if s.heads == nil {
+		return 0, false
+	}
+	a := plainArgs(false)
+	a.TopK, a.Penalty, a.Window = 1, smp.penalties(), smp.window(s.c.NVocab)
+	return s.heads.Draw(logits, a, 0)
 }
 
 // greedy is the token of the largest of logits, the lower id of two equal

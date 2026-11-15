@@ -613,7 +613,9 @@ func (sp *Speculator) Next(sm *Sampler) ([]int32, error) {
 		return nil, fmt.Errorf("model: Next before Start")
 	}
 	t, d, c := sp.t, sp.d, sp.t.m.Cfg
-	greedy := sm == nil || sm.Temp <= 0
+	// A greedy draw the penalties move is Sample's: it drafts nothing, as a
+	// Mirostat draw does, and the round's one token is Sample's.
+	greedy := sm == nil || sm.Temp <= 0 && sm.penalties().Off()
 	if sp.retired && len(sp.replay) == 0 {
 		return sp.decode(sm, greedy)
 	}
@@ -634,7 +636,7 @@ func (sp *Speculator) Next(sm *Sampler) ([]int32, error) {
 	}
 	// A Mirostat draw's mu moves with every token it draws: a round drafts
 	// nothing and draws its one token, plain decode.
-	if !greedy && (sm.Mirostat != 0 || sm.adaptive() || sm.staged()) {
+	if !greedy && (sm.Mirostat != 0 || sm.adaptive() || sm.staged() || sm.Temp <= 0) {
 		k = 0
 	}
 	if k < 0 {

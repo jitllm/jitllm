@@ -3114,10 +3114,18 @@ func (s *Instance) ForwardGreedy(token int32) (int32, error) {
 // the logits Forward returns: the device selects exactly the host's
 // candidates, and the softmax, cuts and draw are the host sampler's own.
 //
-// A greedy smp is ForwardGreedy.
+// A greedy smp is ForwardGreedy, and Forward and Sample where its penalties
+// move the row.
 func (s *Instance) ForwardSample(token int32, smp *Sampler) (int32, error) {
 	if smp == nil || smp.Temp <= 0 {
-		return s.ForwardGreedy(token)
+		if smp == nil || smp.penalties().Off() {
+			return s.ForwardGreedy(token)
+		}
+		logits, err := s.Forward(token)
+		if err != nil {
+			return 0, err
+		}
+		return s.Sample(smp, logits)
 	}
 	h := s.head
 	onDev := h != nil && h.Left()&(nn.HeadBias|nn.HeadScale) == 0 && smp.Bounded(s.c.NVocab) &&
