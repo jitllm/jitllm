@@ -54,11 +54,9 @@
 2 convert/safetensors_dense.go:ministral3HF
 1 convert/safetensors_dense.go:olmo2HFConfig
 2 convert/safetensors_dense.go:olmo3HF
-1 convert/safetensors.go:deepseek2HF
 1 convert/safetensors.go:deepseekHFConfigFFN
-3 convert/safetensors.go:hardcodesSigmoid
+1 convert/safetensors.go:hardcodesSigmoid
 9 convert/safetensors.go:hfArchTable
-1 convert/safetensors.go:hfYarnApply
 1 convert/safetensors.go:kimiLinearHF
 1 convert/safetensors.go:kimiLinearHFConfig
 4 convert/ssm.go:ssdArch

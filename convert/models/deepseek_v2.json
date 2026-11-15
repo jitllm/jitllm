@@ -1,0 +1,97 @@
+{
+  "classes": ["DeepseekV2ForCausalLM"],
+  "config": {
+    "defaults": {"max_position_embeddings": 2048, "q_lora_rank": 1536, "n_shared_experts": 2, "first_k_dense_replace": 0, "norm_topk_prob": false, "routed_scaling_factor": 1.0, "rms_norm_eps": 1e-6},
+    "rope_methods": ["yarn"],
+    "arch": "deepseek2",
+    "keys": {
+      "block_count":                      {"uint": "num_hidden_layers + (num_nextn_predict_layers ?? 0)"},
+      "nextn_predict_layers":             {"uint": "num_nextn_predict_layers ?? 0"},
+      "context_length":                   {"uint": "max_position_embeddings"},
+      "embedding_length":                 {"uint": "hidden_size"},
+      "feed_forward_length":              {"uint": "intermediate_size"},
+      "attention.head_count":             {"uint": "num_attention_heads"},
+      "attention.head_count_kv":          {"uint": "num_attention_heads"},
+      "attention.key_length":             {"uint": "kv_lora_rank + qk_rope_head_dim"},
+      "attention.value_length":           {"uint": "kv_lora_rank"},
+      "attention.key_length_mla":         {"uint": "qk_nope_head_dim + qk_rope_head_dim"},
+      "attention.value_length_mla":       {"uint": "v_head_dim"},
+      "attention.kv_lora_rank":           {"uint": "kv_lora_rank"},
+      "attention.q_lora_rank":            {"uint": "q_lora_rank ?? 0"},
+      "attention.layer_norm_rms_epsilon": {"float": "rms_norm_eps"},
+      "rope.dimension_count":             {"uint": "qk_rope_head_dim"},
+      "rope.freq_base":                   {"float": "rope_parameters.rope_theta ?? rope_theta ?? 10000"},
+      "expert_count":                     {"uint": "n_routed_experts"},
+      "expert_used_count":                {"uint": "num_experts_per_tok"},
+      "expert_feed_forward_length":       {"uint": "moe_intermediate_size"},
+      "expert_shared_count":              {"uint": "n_shared_experts"},
+      "leading_dense_block_count":        {"uint": "first_k_dense_replace ?? 0"},
+      "expert_weights_norm":              {"bool": "norm_topk_prob ?? false"},
+      "expert_weights_scale":             {"float": "routed_scaling_factor"},
+      "expert_group_count":               {"uint": "n_group ?? 0"},
+      "expert_group_used_count":          {"uint": "topk_group ?? 0"}
+    },
+    "vocab": "vocab_size",
+    "head": {"tensor": "lm_head.weight", "tied": "tie_word_embeddings ?? false"},
+    "activation": "hidden_act ?? 'silu'",
+    "rope_scaling": "rope_parameters ?? rope_scaling",
+    "yarn_log_multiplier": "0.1 * (rope_parameters.mscale_all_dim ?? rope_scaling.mscale_all_dim ?? 0)",
+    "require": [
+      {"that": "(num_key_value_heads ?? (num_attention_heads)) == num_attention_heads",
+       "else": "num_key_value_heads differs from the attention heads: latent attention shares one key-value latent across every head"}
+    ],
+    "gating": "softmax"
+  },
+  "tensors": {
+    "block_prefix": "model.layers.",
+    "model": {
+      "model.embed_tokens.weight": "token_embd.weight",
+      "model.norm.weight":         "output_norm.weight",
+      "lm_head.weight":            "output.weight"
+    },
+    "block": {
+      "input_layernorm.weight":              "attn_norm.weight",
+      "post_attention_layernorm.weight":     "ffn_norm.weight",
+      "self_attn.q_a_proj.weight":           "attn_q_a.weight",
+      "self_attn.q_a_layernorm.weight":      "attn_q_a_norm.weight",
+      "self_attn.q_b_proj.weight":           "attn_q_b.weight",
+      "self_attn.q_proj.weight":             "attn_q.weight",
+      "self_attn.kv_a_proj_with_mqa.weight": "attn_kv_a_mqa.weight",
+      "self_attn.kv_a_layernorm.weight":     "attn_kv_a_norm.weight",
+      "self_attn.o_proj.weight":             "attn_output.weight",
+      "self_attn.kv_b_proj.weight": [
+        {"role": "attn_k_b.weight", "do": [{"reshape": ["num_attention_heads", "qk_nope_head_dim + v_head_dim", "kv_lora_rank"]}, {"slice": [1, 0, "qk_nope_head_dim"]}, {"transpose": [0, 2, 1]}]},
+        {"role": "attn_v_b.weight", "do": [{"reshape": ["num_attention_heads", "qk_nope_head_dim + v_head_dim", "kv_lora_rank"]}, {"slice": [1, "qk_nope_head_dim", "v_head_dim"]}]}
+      ],
+      "self_attn.k_b_proj.weight":           "attn_k_b.weight",
+      "self_attn.v_b_proj.weight":           "attn_v_b.weight",
+      "mlp.gate_proj.weight":                "ffn_gate.weight",
+      "mlp.up_proj.weight":                  "ffn_up.weight",
+      "mlp.down_proj.weight":                "ffn_down.weight",
+      "mlp.gate.weight":                     "ffn_gate_inp.weight",
+      "mlp.gate.e_score_correction_bias":    "exp_probs_b.bias",
+      "mlp.shared_experts.gate_proj.weight": "ffn_gate_shexp.weight",
+      "mlp.shared_experts.up_proj.weight":   "ffn_up_shexp.weight",
+      "mlp.shared_experts.down_proj.weight": "ffn_down_shexp.weight",
+      "eh_proj.weight":                      "nextn.eh_proj.weight",
+      "enorm.weight":                        "nextn.enorm.weight",
+      "hnorm.weight":                        "nextn.hnorm.weight",
+      "shared_head.norm.weight":             "nextn.shared_head_norm.weight",
+      "shared_head.head.weight":             "nextn.shared_head_head.weight",
+      "embed_tokens.weight":                 "nextn.embed_tokens.weight"
+    },
+    "experts": {
+      "prefix": "mlp.experts.",
+      "names": {
+        "gate_proj.weight": "ffn_gate_exps.weight",
+        "up_proj.weight":   "ffn_up_exps.weight",
+        "down_proj.weight": "ffn_down_exps.weight"
+      }
+    },
+    "present": [
+      {"tensor": "self_attn.q_a_proj.weight", "if": "q_lora_rank != null"},
+      {"tensor": "self_attn.q_proj.weight", "if": "q_lora_rank == null"}
+    ],
+    "ignore": ["model.rotary_emb.inv_freq", "self_attn.rotary_emb.inv_freq"]
+  }
+}

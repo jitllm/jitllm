@@ -91,6 +91,9 @@ func statedGraphModels() []string {
 		// Attention through a latent beside DeepSeek-V3's mixture.
 		"synth-deepseek-yarn.gguf", "synth-deepseek-yarn-af.gguf", "DeepSeek-V2-Lite.Q4_K_M.gguf",
 		"Moonlight-16B-A3B-Instruct-Q4_K_M.gguf", "Kimi-VL-A3B-Thinking-2506-Q4_K_M.gguf+mmproj-Kimi-VL-A3B-Instruct-f16.gguf",
+		// The same blocks from safetensors: DeepSeek V2, V3 with and without its prediction block, YaRN, GLM-4.7-Flash.
+		"synth-deepseek", "synth-deepseek-dense", "synth-deepseek-lite", "synth-deepseek-mtp", "synth-glm4moelite",
+		"synth-deepseek-yarn-hf", "synth-deepseek-yarn-af-hf",
 		// An indexer's key cached beside the keys, attention over the positions it selects.
 		"synth-deepseek32.gguf", "synth-minimaxm3.gguf",
 		// Kimi Delta Attention beside attention through a latent, the

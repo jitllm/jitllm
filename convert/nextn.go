@@ -77,8 +77,12 @@ func nextnTensors(ts []jlm.Tensor, c *Config) ([]jlm.Tensor, error) {
 		case jlm.RoleNextnEHProj, jlm.RoleNextnENorm, jlm.RoleNextnHNorm,
 			jlm.RoleNextnHeadNorm, jlm.RoleNextnHead, jlm.RoleNextnEmbd:
 			if !mtp {
+				if c.NMTP == 0 {
+					return nil, fmt.Errorf("convert: %s is a prediction block's tensor in block %d, "+
+						"and the model declares no prediction block", t.Name, t.Block)
+				}
 				return nil, fmt.Errorf("convert: %s is a prediction block's tensor in block %d, "+
-					"and the prediction blocks are %d..%d", t.Name, t.Block, c.NLayer, c.NLayer+c.NMTP)
+					"and the prediction blocks are %d..%d", t.Name, t.Block, c.NLayer, c.NLayer+c.NMTP-1)
 			}
 		}
 		if mtp {

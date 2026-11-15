@@ -521,22 +521,22 @@ func TestDeepseekRefusals(t *testing.T) {
 		{"a mixture block with a dense feed-forward", func(m *synthModel) {
 			m.tensors[L(2, "mlp.gate_proj.weight")] = &synthTensor{safetensors.F32,
 				[]uint64{dsFFN, dsEmbd}, f32Bytes(dsFFN*dsEmbd, 1)}
-		}, "block 2 carries mlp.gate_proj.weight, which is dense"},
+		}, "block 2's stated graph: the block stores [ffn_gate], which its graph does not bind"},
 		{"a dense block with a router", func(m *synthModel) {
 			m.tensors[L(0, "mlp.gate.weight")] = &synthTensor{safetensors.F32,
 				[]uint64{dsExp, dsEmbd}, f32Bytes(dsExp*dsEmbd, 2)}
-		}, "block 0 carries mlp.gate.weight, which is a mixture"},
+		}, "block 0 carries a router, where a dense lead of 1 and a step of 1 place a dense block"},
 		{"a mixture block with no router", func(m *synthModel) {
 			delete(m.tensors, L(2, "mlp.gate.weight"))
-		}, "block 2 is a mixture block and has no mlp.gate.weight"},
+		}, "block 2 carries no router, where a dense lead of 1 and a step of 1 place a mixture"},
 		{"a dense block with no feed-forward", func(m *synthModel) {
 			delete(m.tensors, L(0, "mlp.gate_proj.weight"))
 			delete(m.tensors, L(0, "mlp.up_proj.weight"))
 			delete(m.tensors, L(0, "mlp.down_proj.weight"))
-		}, "block 0 is inside the leading dense run"},
+		}, "block 0 carries no feed-forward, where a dense lead of 1 and a step of 1 place a dense block"},
 		{"first_k_dense_replace past the model", func(m *synthModel) {
 			m.cfg["first_k_dense_replace"] = dsLayer + 1
-		}, "first_k_dense_replace 4 in a 3-block model"},
+		}, "leading_dense_block_count 4 in a 3-block model"},
 		// The shape a real DeepSeek-V3 has, a multi-token-prediction block at
 		// index num_hidden_layers, without the num_nextn_predict_layers that
 		// declares it: most of its tensors are named in the table, so the
@@ -547,11 +547,11 @@ func TestDeepseekRefusals(t *testing.T) {
 				[]uint64{dsEmbd}, f32Bytes(dsEmbd, 6)}
 			m.tensors[p+"eh_proj.weight"] = &synthTensor{safetensors.F32,
 				[]uint64{dsEmbd, 2 * dsEmbd}, f32Bytes(2*dsEmbd*dsEmbd, 7)}
-		}, "with 0 prediction block(s) (num_nextn_predict_layers)"},
+		}, "is a prediction block's tensor in block 3, and the model declares no prediction block"},
 		// The two query forms, each with the other's weights.
 		{"two-step weights and a null rank", func(m *synthModel) {
 			m.cfg["q_lora_rank"] = nil
-		}, "the query is projected in two steps and nothing would read them"},
+		}, "block 0 carries self_attn.q_a_proj.weight, and \"q_lora_rank != null\" is false"},
 		{"one-step weights and a rank", func(m *synthModel) {
 			for l := 0; l < dsLayer; l++ {
 				p := fmt.Sprintf("model.layers.%d.self_attn.", l)
@@ -561,19 +561,19 @@ func TestDeepseekRefusals(t *testing.T) {
 				m.tensors[p+"q_proj.weight"] = &synthTensor{safetensors.F32,
 					[]uint64{dsHead * dsHeadD, dsEmbd}, f32Bytes(dsHead*dsHeadD*dsEmbd, 3)}
 			}
-		}, "the query is projected in one step and the rank is unread"},
+		}, "block 0 carries no self_attn.q_a_proj.weight, and \"q_lora_rank != null\" is true"},
 		// MLA shares one latent across every head.
 		{"grouped-query latent attention", func(m *synthModel) {
 			m.cfg["num_key_value_heads"] = 1
 		}, "latent attention shares one key-value latent across every head"},
 		// The MLA geometry itself.
 		{"no kv_lora_rank", func(m *synthModel) { delete(m.cfg, "kv_lora_rank") },
-			"this architecture is multi-head latent attention"},
+			"kv_lora_rank is absent"},
 		{"kv_b_proj of the wrong height", func(m *synthModel) {
 			tt := m.tensors[L(0, "self_attn.kv_b_proj.weight")]
 			tt.shape = []uint64{dsHead * (dsNope + dsVDim + 1), dsLat}
 			tt.data = f32Bytes(dsHead*(dsNope+dsVDim+1)*dsLat, 4)
-		}, "head(s) of (4 nope + 3 value) rows over a 5-wide latent"},
+		}, "reshape [2 7 5] of [16 5]"},
 		// The output projection reads the value head: here 3 against 6, and
 		// reading the wrong one would refuse every real DeepSeek.
 		{"o_proj sized by the key head", func(m *synthModel) {
@@ -583,22 +583,23 @@ func TestDeepseekRefusals(t *testing.T) {
 		}, "attn_out wants [6 8]"},
 		// The router's three knobs.
 		{"an unimplemented gate", func(m *synthModel) { m.cfg["scoring_func"] = "softmax_topk" },
-			`scoring_func "softmax_topk"`},
+			"scoring_func softmax_topk"},
 		// DeepseekV3's router hardcodes its sigmoid: a file naming softmax
 		// describes weights the class never ran.
 		{"a softmax gate on a sigmoid class", func(m *synthModel) { m.cfg["scoring_func"] = "softmax" },
-			`scoring_func "softmax", and DeepseekV3ForCausalLM gates with a sigmoid`},
+			"scoring_func softmax, and convert/models/deepseek_v3.json states the class's sigmoid router"},
 		{"groups that do not divide the experts", func(m *synthModel) { m.cfg["n_group"] = 3 },
-			"4 experts do not divide into n_group 3"},
+			"4 experts in 3 groups, 1 used"},
 		{"more groups used than exist", func(m *synthModel) { m.cfg["topk_group"] = 3 },
-			"topk_group 3 of n_group 2"},
+			"4 experts in 2 groups, 3 used"},
 		{"no routed experts", func(m *synthModel) { delete(m.cfg, "n_routed_experts") },
-			"n_routed_experts is 0"},
-		// A scaling this architecture does not implement is still refused by
-		// name: consuming yarn must not open the door to the rest.
+			"expert_count reads \"n_routed_experts\", which is absent"},
+		// The file states the one scaling its attention is gated against, yarn,
+		// so a complete llama3 object is refused by name.
 		{"llama3 rope scaling", func(m *synthModel) {
-			m.cfg["rope_scaling"] = map[string]any{"rope_type": "llama3", "factor": 32.0}
-		}, `rope_scaling "llama3" is not implemented`},
+			m.cfg["rope_scaling"] = map[string]any{"rope_type": "llama3", "factor": 32.0,
+				"low_freq_factor": 1.0, "high_freq_factor": 4.0, "original_max_position_embeddings": 8192.0}
+		}, "rope scaling llama3 is not implemented"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

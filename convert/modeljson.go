@@ -73,6 +73,13 @@ type mjConfig struct {
 	// RopeScaling is the rope scaling object (rope_parameters or
 	// rope_scaling), null for none.
 	RopeScaling string `json:"rope_scaling"`
+	// YarnLogMultiplier is the coefficient of ln(factor) the attention's
+	// softmax scale takes where a yarn scaling applies, as a GGUF's
+	// rope.scaling.yarn_log_multiplier: absent for none.
+	YarnLogMultiplier string `json:"yarn_log_multiplier"`
+	// RopeMethods lists the scaling methods the class's attention is gated
+	// against; absent, every method the reader implements is accepted.
+	RopeMethods []string `json:"rope_methods"`
 	// Window is a sliding window: its size, and whether it is in use.
 	Window *mjWindow `json:"window"`
 	// Flags states named graph features (mjFlags), each a boolean.
@@ -197,6 +204,14 @@ type mjTensors struct {
 	IgnorePrefix []string             `json:"ignore_prefix"`
 	Experts      *mjExperts           `json:"experts"`
 	Ternary      *mjTernary           `json:"ternary"`
+	// Present states a block tensor the config says every trunk block has or
+	// lacks: Tensor, relative to the block, is shipped exactly where If holds.
+	Present []mjPresent `json:"present"`
+}
+
+type mjPresent struct {
+	Tensor string `json:"tensor"`
+	If     string `json:"if"`
 }
 
 // mjTernary names the projections a checkpoint stores as ternary weights, by
@@ -354,8 +369,13 @@ func parseModelJSON(b []byte, name string) (*modelJSON, error) {
 		}
 	}
 	for _, r := range mj.Config.Require {
-		if r.That == "" || r.Else == "" {
-			return nil, fmt.Errorf("convert: %s: a requirement states what holds and why a config without it is refused", name)
+		if _, err := parseExpr(r.That); err != nil || r.Else == "" {
+			return nil, fmt.Errorf("convert: %s: a requirement states a boolean expression and why a config without it is refused", name)
+		}
+	}
+	for _, p := range mj.Tensors.Present {
+		if _, err := parseExpr(p.If); err != nil || p.Tensor == "" {
+			return nil, fmt.Errorf("convert: %s: a presence states a block tensor and the expression that ships it", name)
 		}
 	}
 	if r := mj.Config.RotaryLayers; r != nil && (r.Each == "" || r.Every == "") {
@@ -1055,6 +1075,16 @@ func (mj *modelJSON) configIn(env exprEnv, c *hfConfig, names []string) (*Config
 		}
 	}
 
+	for _, r := range mj.Config.Require {
+		v, err := eval("require", r.That)
+		if err != nil {
+			return nil, err
+		}
+		if v != true {
+			return nil, fmt.Errorf("convert: %s: %s: %s: %w", c.path, mj.name, r.Else, ErrNotImplemented)
+		}
+	}
+
 	// configOf reads the vocabulary's size, whether the head is tied and
 	// which blocks are recurrent off the tensor table; these stand in for the
 	// checkpoint's.
@@ -1171,15 +1201,6 @@ func (mj *modelJSON) configIn(env exprEnv, c *hfConfig, names []string) (*Config
 		}
 		kvs[ns+"attention.sliding_window"] = meta.MakeUint(window)
 	}
-	for _, r := range mj.Config.Require {
-		v, err := eval("require", r.That)
-		if err != nil {
-			return nil, err
-		}
-		if v != true {
-			return nil, fmt.Errorf("convert: %s: %s: %s: %w", c.path, mj.name, r.Else, ErrNotImplemented)
-		}
-	}
 	cfg, err := configOf(meta.New(c.path, kvs, ts))
 	if err != nil {
 		return nil, err
@@ -1275,11 +1296,25 @@ func (mj *modelJSON) configIn(env exprEnv, c *hfConfig, names []string) (*Config
 		if err != nil {
 			return nil, err
 		}
-		if err := mjRopeScaling(cfg, c, v, renv); err != nil {
+		if err := mjRopeScaling(cfg, c, v, mj.Config.RopeMethods, renv); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", c.path, err)
+		}
+		if mj.Config.YarnLogMultiplier != "" && cfg.YarnFactor > 1 {
+			m, err := eval("yarn_log_multiplier", mj.Config.YarnLogMultiplier)
+			if err != nil {
+				return nil, err
+			}
+			f, ok := m.(float64)
+			if !ok {
+				return nil, fmt.Errorf("convert: %s: yarn_log_multiplier is %s, not a number", c.path, exprKind(m))
+			}
+			cfg.YarnLogMul = float32(f)
 		}
 	}
 	if err := mj.mixtureCovers(cfg, names); err != nil {
+		return nil, fmt.Errorf("convert: %s: %w", c.path, err)
+	}
+	if err := mj.presence(cfg, names, eval); err != nil {
 		return nil, fmt.Errorf("convert: %s: %w", c.path, err)
 	}
 	gk := make([]string, 0, len(mjGraphKeys()))
@@ -1295,6 +1330,33 @@ func (mj *modelJSON) configIn(env exprEnv, c *hfConfig, names []string) (*Config
 		}
 	}
 	return cfg, nil
+}
+
+// presence holds each trunk block to the tensors the config says it has: a
+// tensor a presence states is shipped by every block where its expression is
+// true and by none where it is false, so a config and weights that disagree
+// are refused rather than read as one the graph can state.
+func (mj *modelJSON) presence(cfg *Config, names []string, eval func(what, src string) (any, error)) error {
+	for _, p := range mj.Tensors.Present {
+		v, err := eval("presence of "+p.Tensor, p.If)
+		if err != nil {
+			return err
+		}
+		want, ok := v.(bool)
+		if !ok {
+			return fmt.Errorf("presence of %s is %s, not a boolean", p.Tensor, exprKind(v))
+		}
+		for b := range int(cfg.NLayer) {
+			has := slices.Contains(names, mj.Tensors.BlockPrefix+itoa(b)+"."+p.Tensor)
+			switch {
+			case has && !want:
+				return fmt.Errorf("block %d carries %s, and %q is false: nothing would read it: %w", b, p.Tensor, p.If, ErrNotImplemented)
+			case !has && want:
+				return fmt.Errorf("block %d carries no %s, and %q is true: %w", b, p.Tensor, p.If, ErrNotImplemented)
+			}
+		}
+	}
+	return nil
 }
 
 // mixtureCovers holds a mixture's blocks to its dense lead and step: a block
@@ -1527,8 +1589,9 @@ func mjRotaryLayersOf(cfg *Config, r *mjRotaryLayers, eval func(what, src string
 // as transformers computes them (hfYarnApply); longrope states its two factor
 // vectors and original context as rope_factors_short and rope_factors_long,
 // with the magnitude transformers computes (hfLongRope); a method not
-// implemented is refused by name.
-func mjRopeScaling(cfg *Config, c *hfConfig, v any, env exprEnv) error {
+// implemented, or one the file's rope_methods does not list, is refused by
+// name.
+func mjRopeScaling(cfg *Config, c *hfConfig, v any, methods []string, env exprEnv) error {
 	if v == nil {
 		return nil
 	}
@@ -1539,6 +1602,9 @@ func mjRopeScaling(cfg *Config, c *hfConfig, v any, env exprEnv) error {
 	t := obj["rope_type"]
 	if t == nil {
 		t = obj["type"]
+	}
+	if s, ok := t.(string); ok && s != "default" && len(methods) > 0 && !slices.Contains(methods, s) {
+		return fmt.Errorf("rope scaling %v is not implemented: %w", t, ErrNotImplemented)
 	}
 	switch t {
 	case nil, "default":

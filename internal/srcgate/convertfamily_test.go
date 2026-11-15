@@ -65,6 +65,7 @@ func TestConverterFamilyCodeOnlyShrinks(t *testing.T) {
 		base += w
 		if got[k] < w {
 			fell += w - got[k]
+			t.Logf("%s fell from %d to %d: lower its line", k, w, got[k])
 		}
 	}
 	t.Logf("%d references to a family's name in %d functions of convert/ (baseline %d, %d fewer)",

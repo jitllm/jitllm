@@ -89,6 +89,13 @@ schema; `convert/modeljson.go` reads it. Its sections:
     factors as `rope_freqs.weight`, as convert_hf_to_gguf.py writes them
     (gated by `synth-hf-llama3` against transformers' own class). One that is
     not implemented is refused by name.
+  - `config.rope_methods`: the methods the class's attention is gated
+    against; one outside the list is refused by name. Absent, every
+    implemented method is accepted.
+  - `config.yarn_log_multiplier`: a number expression, the coefficient of
+    ln(factor) the softmax scale takes where a yarn scaling applies (the
+    GGUF key `rope.scaling.yarn_log_multiplier`); DeepSeek's is
+    `0.1 * mscale_all_dim`.
   - `config.window`: `{"size": expr, "used": expr}`. In use, it is stated as
     `attention.sliding_window`, and a graph whose config does not carry it
     is refused.
